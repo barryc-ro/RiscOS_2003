@@ -239,12 +239,6 @@ FudgeZeroLengthPackets SETL {FALSE}	; only do it during trick play
 	GBLL	TrickPlaySupport
 TrickPlaySupport SETL {TRUE}		; enable checking for conditional support for trick play
 
-	GBLL	UnderrunFixOnlyOnOddFields
-UnderrunFixOnlyOnOddFields SETL {TRUE}	; try this cos we only want to do freeze field on odd fields too
-
-	GBLL	FreezeFieldOnTrickStop
-FreezeFieldOnTrickStop	SETL	{TRUE}	; freeze field at the same time as stopping the decoder for underrun fix
-
 	GBLL	FudgeQSIF
 FudgeQSIF SETL	{TRUE}			; if image is SIF or lower resolution, scale to 2 x xres horizontally
 
@@ -311,6 +305,8 @@ debugskip       SETL    false           ; StartVideoAtSeqHdr debug
 debugaudio      SETL    false           ; audio data handling debug
                 GBLL    debugduff
 debugduff       SETL    false           ; duff system buffer contents debug
+                GBLL    debugirq
+debugirq        SETL    false           ; for tracing interrupt ordering
 
 
 ; Structure of a PTS list entry
@@ -462,9 +458,7 @@ VideoMaxPTSDifference	#	4	; worst positive difference between PTS and SCR
 LastVideoPTSErrorSign	#	4	; SGN(last PTS-SCR) ie 0,-1 or 1; we only skip or repeat if 2 contiguous errors of same sign
 PendingFreezeState	#	4	; 1 => should be frozen, 0 => should be unfrozen
 FreezeUpdate		#	4	; 1 => freeze state has been updated
- [ FreezeFieldOnTrickStop
 TrickStopFreeze		#	4	; additional freeze flag for trick play, OR'd with PendingFreezeState
- ]
 FirstItemReceived	#	4	; 0 => not received anything since last reset, 1 => sequence, 2 => picture
  [ EOSDetect
 VideoChannelUnderruns   #       4       ; number of video channel underruns
@@ -760,13 +754,13 @@ AuxData_ExtSP           #       4       ; to save sp_irq in during the coroutine
 AuxData_Stack           #       4*40    ; fixed-size stack for coroutine - 12ish words needed for ProcessVideoSequenceData, > 25 words for Debug macro
 AuxData_StackTop        #       0
 
-PU_Countdown            #       4       ; field count until next PU boundary
-PU_EstCountdown         #       4       ; estimated field count, assuming the previous PU boundary was correctly determined
-LastAnchorAUInvalid     #       1       ; 1 => FirstField_LastAnchorAU is invalid, 0 => it is valid
-FirstField_LastAnchorAU #       1       ; \                                   /  held-over anchor frame access unit
-FirstField_FuturePU     #       1       ;  \  values of top_field_first for  /   next-but-one presentation unit
-FirstField_NextPU       #       1       ;  /                                 \   next presentation unit
-FirstField_CurrentPU    #       1       ; /                                   \  currently-displayed presentation unit
+FieldCount              #       1       ; field count until next picture decode boundary
+HeadersRead             #       1       ; 0 or 1, depending on whether headers have been parsed since last picture decode boundary
+FieldsForNextFrame      #       1       ; field length of *next* picture - 1 (not evaluated until last field of current picture decode)
+PulldownNextFrame       #       1       ; bits to ensure are set in DisplayMode0 at next picture display start
+PendingUnsetPulldown    #       1       ; nonzero => pulldown needs to be unprogrammed at next BAV interrupt
+FirstField_LastAnchorAU #       1       ; top_field_first for reordered anchor frame
+FieldRepeat_LastAnchorAU #      1       ; repeat_first_field for reordered anchor frame
 EvenOddIndicator        #       1       ; 0 => currently in an odd field, 1 => currently in an even field
 
         AlignSpace
@@ -2621,9 +2615,7 @@ VideoReset Entry "r0"
 	STR	r0, VidRecErrors
 	STR	r0, ContextErrors
 	STR	r0, VLCErrors
- [ FreezeFieldOnTrickStop
 	STR	r0, TrickStopFreeze
- ]
  [ SaveAPacket
 	STR	r0, SavedPacketLength				; throw away any saved packet
  ]
@@ -2673,16 +2665,13 @@ VideoReset Entry "r0"
       ]
 
       [ Pulldown
+        MOV     r0, #0
+        STRB    r0, FieldCount
+        STRB    r0, HeadersRead                                 ; initialise picture boundary detection state machine
+        STRB    r0, PendingUnsetPulldown
+        Debug   pulldown, "VideoReset"
         MOV     r0, #-1                                         ; won't match with any previous layer ID
         STR     r0, AuxData_LastKnownLayer
-        STR     r0, PU_Countdown                                ; this won't reach zero in a hurry
-        STR     r0, PU_EstCountdown                             ; we have no useful estimate yet
-        MOV     r0, #1
-        STRB    r0, LastAnchorAUInvalid                         ; no data for a held-over anchor frame yet
-        Debug   pulldown, "Last Anchor AU marked invalid"
-        STRB    r0, FirstField_FuturePU                         ; these all default to top field first PU's
-        STRB    r0, FirstField_NextPU
-        STRB    r0, FirstField_CurrentPU
         ReadRegI r0, DisplayControllerStatus
         AND     r0, r0, #1                                      ; extract even/odd field bit
         STRB    r0, EvenOddIndicator
@@ -2803,7 +2792,7 @@ AuxDataInitialisationTable
         =       &0F             ; f_code[1][1]                          = unused
         =       &00             ; intra_dc_precision
         =       &03             ; picture_structure                     = frame
-        =       &00             ; top_field_first
+        =       &01             ; top_field_first
         =       &01             ; frame_pred_frame_dct
         =       &00             ; concealment_motion_vectors
         =       &01             ; q_scale_type
@@ -3589,6 +3578,7 @@ KillIRQExit
 ; out:  r0-r2, r11 may be corrupted
 
 L64002IRQ Entry "r3"
+        Debug irq, "L64002IRQ"
 	LDR	r11, L64002_Registers
 	ReadReg	r0, IR0				; this clears all interrupts in Status 0
 	ReadReg r1, IR1				; ditto for Status 1
@@ -3654,6 +3644,7 @@ IgnoreIRQ
 
  [ Pulldown
 DataFIFOReadyIRQ Entry "r8"
+        Debug irq, "IRQ: DataFIFOReady"
 
 	BL	ProcessAuxFIFO			; ensure we have updated picture type before reordering User Data
       [ Captions
@@ -3812,6 +3803,7 @@ SampleRateProgTable
 ; r0-r3 can be junked
 
 PictureStartCodeIRQ Entry "r8"
+        Debug irq, "IRQ: PictureStartCode"
 
  [ Revision >= RevC
 ; Luxury - we have working picture start code read ptr, so read that instead
@@ -3839,6 +3831,44 @@ PictureStartCodeIRQ Entry "r8"
       [ Captions :LAND: :LNOT: Pulldown
         BL      ProcessUserDataFIFO             ; With Pulldown's enhanced Aux FIFO code, this can be read on the Data FIFO Ready interrupt instead
       ]
+
+ [ Pulldown
+        LDR     r1, VideoSpeedSetting
+        TST     r1, #&80000000
+        BNE     %FT10                           ; special action if still pre-buffering
+        ADRL    r14, HeadersRead
+        MOV     r1, #1
+        SWPB    r1, r1, [r14]                   ; set HeadersRead and read old state
+        TEQ     r1, #1
+        BEQ     %FT15
+        ; Normal case: if we're in the final field of the frame, we now need to calculate pulldown, otherwise take no action
+        LDRB    r1, FieldCount
+        TEQ     r1, #0
+        ADREQ   r14, %FT19
+        BEQ     CalcPulldown
+        B       %FT19
+10      ; Prefill case: this will be regarding the first I-frame, so cache top_field_first and repeat_first_field
+        Debug   pulldown, "Still pre-buffering: setting up LastAnchorAU info"
+        LDRB    r1, PictureCodingExtension_TopFieldFirst
+        STRB    r1, FirstField_LastAnchorAU
+        LDRB    r1, PictureCodingExtension_RepeatFirstField
+        STRB    r1, FieldRepeat_LastAnchorAU
+        B       %FT19
+15      ; Error case: we've had more than one set of headers in what we thought was an AU
+        ; This actually means that we're out of step with the hardware
+        ; Reset state machine as though we had just entered first field of next AU and then parsed the headers with more than a field to go until the AU boundary
+        Debug   pulldown, "Second headers received within AU"
+        LDRB    r1, PulldownNextFrame
+        EOR     r1, r1, #1:SHL:3                ; old calculation probably got it wrong way round
+        STRB    r1, PulldownNextFrame
+        BL      SetPulldown
+        LDRB    r1, FieldsForNextFrame
+        TEQ     r1, #0
+        EORNE   r1, r1, #3                      ; also invert field counts of 1 and 2 to compensate (but leave 0 alone - not that we should be here for field pictures!)
+        Debug   pulldown, "HeadersRead set to 1, FieldCount set to", r1
+        STRB    r1, FieldCount
+19
+ ]
 
 	BL	ProcessVideoReadPtr
  [ EOSDetect
@@ -3985,9 +4015,7 @@ ProcessAuxFIFO_PictureHeader
         ADRL    r1, PictureData
         ADRL    r2, PictureDataEnd
         BL      ProcessAuxFIFO_GetMultipleBytes
-        MOV     r0, #2                          ; in case it's an MPEG-1 clip with no picture coding extension,
-        STR     r0, PU_Countdown                ;   say that there are 2 fields between PUs
-;       MOV     r0, #2
+        MOV     r0, #2
         B       ProcessAuxFIFO_NewLayer         ; if it's MPEG-1, the next picture layer data may follow without any intermediate layer changes
 
 ProcessAuxFIFO_PictureCodingExtension
@@ -4244,49 +4272,10 @@ ProcessUserDataFIFO Entry "r0-r3"
 
  [ Pulldown
 ProcessPictureCodingExtensionData
-        Entry   "r0,r1"
-        LDRB    r14, Picture_PictureCodingType
-        ReadRegI r0, VideoTrickModes
-        AND     r0, r0, #VideoTrickModes_SkipAny
-        TEQ     r0, #VideoTrickModes_SkipB      ; if skipping B-pictures
-        TEQEQ   r14, #3                         ; and this is a B-picture
-        ASSERT  VideoTrickModes_SkipB = 1       ; then flag that we're going to skip this AU
-        MOVNE   r0, #0                          ; else flag that we're going to decode it
-        ASSERT  :LNOT: AllowSyncOnIFrames       ; this code isn't able to cope properly with skipping anchor frames
-
-        LDRB    r1, PictureCodingExtension_TopFieldFirst
-        TEQ     r14, #1                         ; if an I-picture
-        TEQNE   r14, #2                         ; or a P-picture
-        LDREQB  r14, SequenceExtension_Misc2
-        TSTEQ   r14, #1:SHL:7                   ; and low_delay flag is clear
-        ADREQL  r14, FirstField_LastAnchorAU
-        SWPEQB  r1, r1, [r14]                   ; then swap details with the previous anchor frame
-
-        LDREQB  r14, LastAnchorAUInvalid
-        EOREQS  r14, r14, #1                    ; so now EQ => we swapped details AND the details we got were invalid
-        STREQB  r14, LastAnchorAUInvalid        ; either validate the new held-over details and leave FuturePU alone (which will make NextPU a 2-field frame)
-        TEQNE   r0, #1                          ; or, unless we're skipping this AU (r0 remains set from above),
-        STRNEB  r1, FirstField_FuturePU         ; store the new details for FuturePU
-
-        LDRB    r0, EvenOddIndicator
-        LDRB    r1, FirstField_NextPU
-        Debug   pulldown, "New AU; EvenOddIndicator, FirstField_NextPU =", r0, r1
-        TEQ     r0, r1                          ; if these match
-        MOVEQ   r0, #2                          ; then there are definitely 2 fields to the next PU boundary
-        BEQ     %FT10
-        LDRB    r0, FirstField_CurrentPU        ; if we've got here, then there are an odd number of fields to the next PU boundary, 1 or 3
-        TEQ     r0, r1                          ; if the current PU is two fields long,
-        MOVEQ   r0, #1                          ; then it's got to be 1 field
-        BEQ     %FT10
-        LDR     r0, PU_EstCountdown             ; see if the estimate can help
-        TEQ     r0, #0                          ; if it's negative (perhaps because of stalling)
-        MOVMI   r0, #1                          ; then guess 1 field
-10      STR     r0, PU_Countdown
-        Debug   pulldown, "Countdown initialised to", r0
-
-        LDR     r0, CurrentHorizontalSize
-        CMP     r0, #292
-	EXITS   CC
+        Entry   "r0"
+        LDR     r0, CurrentVerticalSize
+        CMP     r0, #288
+	EXITS   LS
 	LDRB    r0, PictureCodingExtension_ProgressiveFrame
 	TEQ     r0, #0
 	MOVHI	r0, #DisplayMode1_HorizontalFilterEnable :OR: DisplayMode1_InterlaceChromaFieldRepeatFilterChroma
@@ -4302,6 +4291,7 @@ ProcessPictureCodingExtensionData
 ; r0-r3 can be junked
 
 BeginVerticalBlank Entry
+        Debug irq, "IRQ: BeginVerticalBlank"
 	LDR	r0, DecodedFieldCount
 	CMP	r0, #0
 	EXIT	LT
@@ -4322,11 +4312,109 @@ BeginVerticalBlank Entry
  ]
 	EXIT
 
-; DoUnderrunFix - used in Begin Active Video interrupt
 
+ [ Pulldown
+; CalcPulldown - called during the last field of an AU from PictureStartCode or BeginActiveVideo
+CalcPulldown
+        Entry   "r0,r1"
+        LDRB    r0, PictureCodingExtension_PictureStructure
+        TEQ     r0, #3
+        MOVNE   r0, #0          ; if field picture, set FieldsForNextFrame to zero and don't enable pulldown
+        BNE     %FT90
+        LDRB    r0, Picture_PictureCodingType
+        TEQ     r0, #1          ; if an I-picture
+        TEQNE   r0, #2          ; or a P-picture
+        LDREQB  r0, SequenceExtension_Misc2
+        TSTEQ   r0, #1:SHL:7    ; and not a low_delay bitstream
+        LDRB    r0, PictureCodingExtension_TopFieldFirst
+        ADREQL  r14, FirstField_LastAnchorAU
+        SWPEQB  r0, r0, [r14]   ; then swap details with last anchor frame
+        LDRB    r1, PictureCodingExtension_RepeatFirstField
+        ADDEQ   r14, r14, #FieldRepeat_LastAnchorAU - FirstField_LastAnchorAU
+        SWPEQB  r1, r1, [r14]
+        EOR     r0, r0, r1      ; r0 = opposite of polarity of last displayed field of next AU
+                                ;    = polarity of last field of next AU *decode*
+        LDRB    r1, EvenOddIndicator ; field type that (to best of our knowledge) current AU decode ends on - but opposite semantics (1 = bottom field)
+        EORS    r0, r0, r1      ; set NE when the two frames end on same field polarity (=> pulldown not required)
+        MOVNE   r0, #1          ; pulldown disabled => 2-field frame
+        MOVEQ   r0, #2          ; pulldown enabled  => 3-field frame
+90      ; r0 contains number of fields of next AU, Z set => enable pulldown
+        Debug   pulldown, "CalcPulldown: FieldsForNextFrame set to", r0
+        STRB    r0, FieldsForNextFrame
+        MOVNE   r0, #0
+        MOVEQ   r0, #1:SHL:3
+        STRB    r0, PulldownNextFrame
+        EXIT
+; SetPulldown - called during the first field of an AU == last field of a PU
+SetPulldown
+        Entry   "r0"
+        Debug   pulldown, "SetPulldown"
+        ReadRegI r0, DisplayMode0
+        BIC     r0, r0, #&1C
+        LDRB    r14, PulldownNextFrame
+        ORR     r0, r0, r14
+        WriteRegI r0, DisplayMode0, r14
+        MOV     r0, #1
+        STRB    r0, PendingUnsetPulldown
+        EXIT
+; UnsetPulldown - called during the first field of a PU from BeginActiveVideo
+UnsetPulldown
+        Entry   "r0"
+        Debug   pulldown, "UnsetPulldown"
+        ReadRegI r0, DisplayMode0
+        EOR     r0, r0, #1:SHL:3                ; invert pulldown status - so if we were wrong about the timing, the chip will still do the right thing (probably)
+        WriteRegI r0, DisplayMode0, r14
+        MOV     r0, #0
+        STRB    r0, PendingUnsetPulldown
+        EXIT
+ ]
+
+
+; Begin Active Video interrupt
+; r0-r3 can be junked
+
+BeginActiveVideo Entry "r4,r5,r8"
+        Debug irq, "IRQ: BeginActiveVideo"
+
+ [ PerformFieldInversion
+	LDR	r0, FieldInversionState		; 2 => freeze, 1 => unfreeze, 0 => do nowt
+	CMP	r0, #1
+	BCC	%FT05
+	ReadRegI r1, DisplayMode0
+	ORRHI	r1, r1, #2			; if freezing, set bit
+	BICEQ	r1, r1, #2			; if unfreezing, clear bit
+	WriteRegI r1, DisplayMode0, lr
+	Push	"r0"
+	MOVHI	r0, #0				; stop decoder
+	MOVEQ	r0, #1				; start decoder
+	MVN	r1, #1
+	BL	UpdateIR
+	Pull	"r0"
+	SUB	r0, r0, #1			; decrement state
+	STR	r0, FieldInversionState		; and store back
+05
+ ]
+	ReadRegI r0, DisplayControllerStatus
+ [ CountFieldInversions
+	AND	r0, r0, #3
+	TEQ	r0, #0				; if not 0
+	TEQNE	r0, #3				; or 3
+	LDRNE	r1, FieldInversions		; then fields have inverted
+	ADDNE	r1, r1, #1
+	STRNE	r1, FieldInversions
+ ]
+ [ Pulldown
+        ANDS    r0, r0, #1                      ; extract even/odd field indicator bit
+        STRB    r0, EvenOddIndicator            ; and cache it for reference later
+        Debug   pulldown, "EvenOddIndicator set to", r0
+        BNE     %FT20                           ; if an even field then skip all the odd field actions
+ |
+	TST	r0, #1				; check if an odd field
+	EXIT	NE				; [it's not, so exit]
+ ]
+
+	; This used to be the macro DoUnderrunFix
  [ TrickPlaySupport :LOR: SlowMotionSupport
-	MACRO
-	DoUnderrunFix
 	LDR	r0, VideoPreFilling
 	TEQ	r0, #0
 	BNE	%FT09				; [prefilling, so don't start decoder]
@@ -4373,67 +4461,15 @@ BeginVerticalBlank Entry
 	ADD	lr, lr, #1			; increment either TrickStops or TrickStarts
 	STR	lr, [r2]
 
-  [ FreezeFieldOnTrickStop
 	STR	r3, TrickStopFreeze
 	MOV	r0, #1
 	STR	r0, FreezeUpdate
-  ]
  [ :LNOT: TrickPlaySupport
 03						; jump to here if not check for trick play stuff
  ]
 09
-	MEND
  ] ; TrickPlaySupport :LOR: SlowMotionSupport
 
-; Begin Active Video interrupt
-; r0-r3 can be junked
-
-BeginActiveVideo Entry "r4,r5,r8"
-
- [ (TrickPlaySupport :LOR: SlowMotionSupport) :LAND: :LNOT: UnderrunFixOnlyOnOddFields
-	DoUnderrunFix
- ]
-
- [ PerformFieldInversion
-	LDR	r0, FieldInversionState		; 2 => freeze, 1 => unfreeze, 0 => do nowt
-	CMP	r0, #1
-	BCC	%FT05
-	ReadRegI r1, DisplayMode0
-	ORRHI	r1, r1, #2			; if freezing, set bit
-	BICEQ	r1, r1, #2			; if unfreezing, clear bit
-	WriteRegI r1, DisplayMode0, lr
-	Push	"r0"
-	MOVHI	r0, #0				; stop decoder
-	MOVEQ	r0, #1				; start decoder
-	MVN	r1, #1
-	BL	UpdateIR
-	Pull	"r0"
-	SUB	r0, r0, #1			; decrement state
-	STR	r0, FieldInversionState		; and store back
-05
- ]
-	ReadRegI r0, DisplayControllerStatus
- [ CountFieldInversions
-	AND	r0, r0, #3
-	TEQ	r0, #0				; if not 0
-	TEQNE	r0, #3				; or 3
-	LDRNE	r1, FieldInversions		; then fields have inverted
-	ADDNE	r1, r1, #1
-	STRNE	r1, FieldInversions
- ]
- [ Pulldown
-        ANDS    r0, r0, #1                      ; extract even/odd field indicator bit
-        STRB    r0, EvenOddIndicator            ; and cache it for reference in ProcessPictureCodingExtensionData
-        Debug   pulldown, "EvenOddIndicator set to", r0
-        BNE     %FT20                           ; if an even field then skip all the odd field actions
- |
-	TST	r0, #1				; check if an odd field
-	EXIT	NE				; [it's not, so exit]
- ]
-
- [ (TrickPlaySupport :LOR: SlowMotionSupport) :LAND: UnderrunFixOnlyOnOddFields
-	DoUnderrunFix
- ]
 ; now check for pending freeze update
 
 	LDR	r1, FreezeUpdate
@@ -4441,12 +4477,10 @@ BeginActiveVideo Entry "r4,r5,r8"
 	BEQ	%FT07
 	LDR	r1, PendingFreezeState
 	TEQ	r1, #0
-  [ FreezeFieldOnTrickStop
 	LDREQ	r1, TrickStopFreeze
 	TEQEQ	r1, #0
-  ]
         ReadRegI r1, DisplayMode0
-        BICEQ   r1, r1, #DisplayMode0_FreezeField ; if 0 then unfrozen, so write FreezeField bit to 0
+        BIC     r1, r1, #DisplayMode0_FreezeField :OR: DisplayMode0_FreezeFrame ; if 0 then unfrozen, so write FreezeField bit to 0
         ORRNE   r1, r1, #DisplayMode0_FreezeField ; else frozen, so write FreezeField bit to 1
 	WriteRegI r1, DisplayMode0, lr
 	MOV	r1, #0
@@ -4456,46 +4490,40 @@ BeginActiveVideo Entry "r4,r5,r8"
 
  [ Pulldown
 20
-        LDR     r0, PU_Countdown
-        LDR     r1, PU_EstCountdown
         ReadRegI r14, DisplayMode0
-        TST     r14, #DisplayMode0_FreezeField :OR: DisplayMode0_FreezeFrame
-        SUBEQ   r1, r1, #1
-        SUBEQS  r0, r0, #1                      ; only decrement field count if we're not frozen
-        STR     r0, PU_Countdown
-        STR     r1, PU_EstCountdown
-        Debug   pulldown, "BeginActiveVideo: Countdown, EstCountdown set to", r0, r1
-        EXIT    NE                              ; if frozen, or unless PU_Countdown has reached 0, exit
-
-        ReadRegI r0, VideoTrickModes
-        TST     r0, #VideoTrickModes_Repeat
-        BNE     %FT21                           ; if we're repeating a picture, we need to hang around for another two fields for the PU boundary
-        AND     r0, r0, #VideoTrickModes_SkipAny
-        TEQ     r0, #VideoTrickModes_SkipB      ; similarly if a skip has failed
-        BNE     %FT22                           ; note that the SkipB flag may also be set if we're still waiting for a B picture
-21      MOV     r0, #2
-        STR     r0, PU_Countdown
-        Debug   pulldown, "Countdown reset to 2"
-        EXIT
-22
-
-; We're at the start of a new Presentation Unit, so we can now deal with synchronisation and pulldown
-
-        LDRB    r0, FirstField_NextPU
-        LDRB    r1, FirstField_FuturePU
-        STRB    r0, FirstField_CurrentPU
-        STRB    r1, FirstField_NextPU           ; shuffle the flags along by one PU
-        Debug   pulldown, "New PU: FirstField_Current/NextPU =", r0, r1
-
-        ReadRegI r14, DisplayMode0
-        TEQ     r0, r1
-        MOVEQ   r0, #2                          ; if the next PU starts on the same field type, it should normally be a 2-field PU
-        MOVNE   r0, #3                          ; otherwise, it should normally be a 3-field PU
-        STR     r0, PU_EstCountdown
-        Debug   pulldown, "EstCountdown initialised to", r0
-        BICEQ   r14, r14, #1:SHL:3              ; disable pulldown for a 2-field PU (DisplayMode0 = 2_xxx000xx)
-        ORRNE   r14, r14, #1:SHL:3              ; enable pulldown for a 3-field PU (DisplayMode0 = 2_xxx010xx)
-        WriteRegI r14, DisplayMode0, r0
+        TST     r14, #DisplayMode0_FreezeField
+        LDREQ   r14, VideoSpeedSetting
+        TSTEQ   r14, #&80000000
+        DebugIf NE, pulldown, "Skipping because still frozen or still pre-buffering"
+        EXIT    NE                              ; if frozen or full decoding not yet started, exit
+        LDRB    r0, PendingUnsetPulldown
+        TEQ     r0, #0
+        BLNE    UnsetPulldown                   ; unset prior pulldown programming if necessary
+        LDRB    r0, FieldCount
+        Debug   pulldown, "FieldCount was", r0
+        SUBS    r0, r0, #1                      ; C clear => FieldCount was zero before subtraction
+        STRPLB  r0, FieldCount                  ; decrement unless that would make it -1
+        DebugIf PL, pulldown, "FieldCount decremented to", r0
+        DebugIf HI, pulldown, "Still two fields to wait"
+        EXIT    HI                              ; if there's still another two fields till next frame, then do nothing
+        LDRB    r0, HeadersRead
+        TEQ     r0, #0                          ; preserves C
+        DebugIf EQ, pulldown, "Not had next headers yet"
+        EXIT    EQ                              ; if we've not had the next frame's headers yet, there's nothing we can do -
+                                                ; this means that we can extend frame's length by an integer number of fields until we do get them
+        ; Here, either we have one field to the next frame and we already have the headers (so calculate pulldown for next frame)
+        ; or we have reached the next frame decode (so program pulldown and reinitialise FieldCount and HeadersRead) - differentiate using C flag
+        DebugIf CS, pulldown, "Last field of decode, headers already received: calculating pulldown"
+        ADRCS   r14, BeginActiveVideo_Exit
+        BCS     CalcPulldown
+        Debug   pulldown, "First field of new frame decode: programming pulldown"
+        BL      SetPulldown
+        LDRB    r0, FieldsForNextFrame
+        Debug   pulldown, "HeadersRead set to 0, FieldCount set to", r0
+        STRB    r0, FieldCount
+        MOV     r0, #0
+        STRB    r0, HeadersRead
+        ; Now we're at the beginning of a new AU, we can deal with synchronisation...
  ]
 
  [ CountVideoPackets
@@ -4671,6 +4699,7 @@ SkipPostedPTS
 	ADD	r4, r4, #1			; discard this PTS
 	STR	r4, AnchorPostedPTSReadPtr	; and store back read ptr
  ]
+BeginActiveVideo_Exit
 	EXIT
 
 
