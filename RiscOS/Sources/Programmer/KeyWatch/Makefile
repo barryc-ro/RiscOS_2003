@@ -118,14 +118,9 @@ rom_link:
 rm.KeyWatch: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
+KeyWatch.c: KeyWatchHd.h
+
 # Dynamic dependencies:
-o.KeyWatch:	c.KeyWatch
-o.KeyWatch:	C:h.kernel
-o.KeyWatch:	C:h.swis
-o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
-o.KeyWatch:	h.KeyWatchHd
-o.KeyWatch:	h.KeyWatch
-o.KeyWatch:	VersionNum
 o.KeyWatch:	c.KeyWatch
 o.KeyWatch:	C:h.kernel
 o.KeyWatch:	C:h.swis
