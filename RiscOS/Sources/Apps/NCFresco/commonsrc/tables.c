@@ -188,6 +188,10 @@ void table_cell_stream_origin(rid_table_item *table, rid_table_cell *cell, int *
 
   	ddy = cell->size.y - f - table->cellpadding + cell->stream.height;	/* Note height is -ve */
 
+        TABDBGN(("table_cell_stream_origin: csy=%d csh=%d ddy=%d rvt=%d\n",
+                 cell->size.y, cell->stream.height,
+                 ddy, rvt ));
+
   	switch (rvt)
   	{
   	  	case STYLE_VALIGN_TOP:

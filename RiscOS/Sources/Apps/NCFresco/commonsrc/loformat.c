@@ -58,12 +58,11 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
     {
 	const int display_width = fmt->format_width;
 	const int width = fmt->x_text_pos;
-/*    const int spare = display_width - width - new_pos->left_margin;*/
 	const int spare = new_pos->floats->right_margin - fmt->x_text_pos;
 	int flags = 0;
 
-    FMTDBGN(("center_and_right_align_adjustments: display_width %d, text_pos.x %d, flags %x, spare %d\n",
-	    display_width, width, 0 /* fmt->SOL->st.flags & rid_sf_ALIGN_MASK */, spare));
+	FMTDBGN(("center_and_right_align_adjustments: display_width %d, text_pos.x %d, flags %x, spare %d\n",
+		 display_width, width, 0 /* fmt->SOL->st.flags & rid_sf_ALIGN_MASK */, spare));
 
 	if (new_pos->first->tag == rid_tag_SCAFF && new_pos->first->next != NULL)
 	{
@@ -564,8 +563,19 @@ static void position_floating_item( RID_FMT_STATE *fmt, rid_pos_item *pi,
     }
     else
     {
-	fi->entry_margin = fl->right_margin;
-	fl->right_margin -= width;
+	if (width > fmt->format_width)
+	{
+	    FMTDBG(("position_floating_item: too wide special case\n"));
+	    fi->entry_margin = width;
+	    fl->right_margin = 0;
+	    if (width > fmt->stream->widest)
+		fmt->stream->widest = width;
+	}
+	else
+	{
+	    fi->entry_margin = fl->right_margin;
+	    fl->right_margin -= width;
+	}
 	attach_float_at_end(&fl->right, fi);
     }
 
@@ -793,7 +803,7 @@ static void set_margins_from_item( const RID_FMT_STATE *fmt, rid_pos_item *pi,
         {
             rid_text_item_text *tit = (rid_text_item_text*)ti;
             char *text = fmt->rh->texts.data + tit->data_off;
-            FMTDBG(("set_margins_from_item: text «%s»\n",text));
+            FMTDBGN(("set_margins_from_item: text «%s»\n",text));
         }
 #endif
 
@@ -835,7 +845,7 @@ static void set_text_margin_info(RID_FMT_STATE *fmt)
     emdf = excess_left_margin_due_to_floaters(pi);
     floatmargin = left_float_margin(pi);
 
-    FMTDBG(("pi%p: LEFT: text_item margin=%d, emdf=%d, float margin=%d,", pi,
+    FMTDBGN(("pi%p: LEFT: text_item margin=%d, emdf=%d, float margin=%d,", pi,
             pi->left_margin, emdf, floatmargin ));
 
     pi->left_margin -= emdf;
@@ -844,13 +854,13 @@ static void set_text_margin_info(RID_FMT_STATE *fmt)
 
     pi->left_margin += floatmargin;
 
-    FMTDBG((" result %d\n", pi->left_margin));
+    FMTDBGN((" result %d\n", pi->left_margin));
 
     emdf = excess_right_margin_due_to_floaters(fmt, pi);
     floatmargin = right_float_margin(fmt, pi);
     rindent = fmt->format_width - pi->floats->right_margin;
 
-    FMTDBG(("pi%p: RIGHT: text_item indent=%d, emdf=%d, float margin=%d,", pi,
+    FMTDBGN(("pi%p: RIGHT: text_item indent=%d, emdf=%d, float margin=%d,", pi,
             rindent, emdf, floatmargin ));
 
     rindent -= emdf;
@@ -859,7 +869,7 @@ static void set_text_margin_info(RID_FMT_STATE *fmt)
 
     pi->floats->right_margin = floatmargin - rindent;
 
-    FMTDBG((" result %d\n", pi->floats->right_margin));
+    FMTDBGN((" result %d\n", pi->floats->right_margin));
 
     /* Should be before start adding to this line */
     fmt->x_text_pos = pi->left_margin;
@@ -983,7 +993,7 @@ static void find_widest_info(RID_FMT_STATE *fmt)
 	if (used > fmt->stream->widest)
 	    fmt->stream->widest = used;
 
-    FMTDBG(("find_widest_info: LM %d, XP %d, FW %d, RM %d, used %d, widest now %d\n",
+    FMTDBGN(("find_widest_info: LM %d, XP %d, FW %d, RM %d, used %d, widest now %d\n",
 	    LM, fmt->x_text_pos, fmt->format_width, fmt->text_line->floats->right_margin, used, fmt->stream->widest));
 }
 
@@ -1483,7 +1493,7 @@ static void deal_with_unbreakable_sequence(RID_FMT_STATE *fmt)
 
 		if ( text_margin_indent_clash(fmt) || ! (usf = unbreakable_sequence_fits(fmt)) )
                 {
-                    FMTDBG(("deal_with_unbreakable_sequence: calling closedown\n"));
+                    FMTDBGN(("deal_with_unbreakable_sequence: calling closedown\n"));
 		    close_down_current_line(fmt);
 		}
 		else
@@ -1728,7 +1738,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
 		     table->userwidth.type == value_absunit)
 		{
-		    ti->width = ceil(table->userwidth.u.f);
+		    ti->width = (fmt->doc->scale_value * ceil(table->userwidth.u.f)) / 100;
 		    FMTDBG(("formatting_start: pickup user width of %d\n", ti->width));
 		    if (ti->width < table->hwidth[LAST_MIN])
 		    {
@@ -1743,7 +1753,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
 		     table->userwidth.type == value_absunit)
 		{
-		    ti->width = ceil(table->userwidth.u.f);
+		    ti->width = (fmt->doc->scale_value * ceil(table->userwidth.u.f)) / 100;
 		    FMTDBG(("formatting_start: pickup user width of %d\n", ti->width));
 		    if (ti->width < table->hwidth[LAST_MIN])
 		    {
@@ -1935,6 +1945,7 @@ extern void format_stream(antweb_doc *doc,
 	     depth, fmt, stream->fwidth));
 
     memset(fmt, 0, sizeof(*fmt));
+    fmt->doc = doc;
     format_attach_header(fmt, rh);
     format_attach_stream(fmt, stream);
     fmt->depth = depth;

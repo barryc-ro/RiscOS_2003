@@ -72,6 +72,12 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
 #endif
 	(*context->state) (context, c);
     }
+#if DEBUG
+    if (context->pending_close)
+    {
+	PRSDBG(("sgml_feed_characters(%p): aborted after %d of %d bytes\n", i, bytes));
+    }
+#endif
 }
 
 /*****************************************************************************
@@ -105,7 +111,7 @@ extern void sgml_stream_finished (SGMLCTX *context)
     }
     else
     {
-        PRSDBGN(("SGML stream (%p) finished in %s. Flushing chopper\n", context, get_state_name (context->state)));
+        PRSDBG(("SGML stream (%p) finished in %s. Flushing chopper\n", context, get_state_name (context->state)));
     
         /* Flush existing chopped stuff */
         (*context->chopper) (context, s);

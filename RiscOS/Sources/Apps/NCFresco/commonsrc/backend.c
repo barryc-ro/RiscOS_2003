@@ -1902,7 +1902,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    }
 
 #if 0
-	    fputc('\n', f);
+	    fputs("\r\n", f);
 #endif
 	    mmfclose(f);
 
@@ -2944,35 +2944,6 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
         /* Then get min|max widths for tables */
 	if ( ! gbf_active(GBF_NEW_FORMATTER) )
 	    rid_size_stream(rh, st, &fmt, 0, ti);
-
-#if 0
-	{ static int BE_REALLY_REALLY_CAUTIOUS_ABOUT_WHETHER_WANT_THIS_FEATURE; }
-#if DEBUG
-	fprintf(stderr, "Width after formatting is %d, versus fwidth %d\n",
-		*fmt.width, rh->stream.fwidth);
-#endif
-
-	if (*fmt.width > rh->stream.fwidth)
-	{
-	    FMTDBG(("\n\nSTOMPING ALL WIDTHS TO TRY TO RESTRAIN OVERALL WIDTH\n\n"));
-
-	    memset(&fmt, 0, sizeof(fmt));
-	    memset(&st->width_info, 0, sizeof(st->width_info));
-
-	    FMTDBG(("be_formater_loop(%p, %p, %d) - STOMPED sizing\n", rh, ti, scale_value));
-
-	    fmt.margin_proc = &be_margin_proc;
-	    fmt.tidy_proc = &dummy_tidy_proc;
-	    fmt.table_proc = &dummy_table_proc;
-	    fmt.text_data = rh->texts.data;
-
-	    stomp_contained_widths(&rh->stream);
-
-	    /* Then get min|max widths for tables */
-	    rid_size_stream(rh, st, &fmt, 0, ti);
-	}
-
-#endif
 
         /* Do the actual format */
 

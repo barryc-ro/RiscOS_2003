@@ -130,17 +130,25 @@ static void *emergency_memory = NULL;
 extern void mm_poll(void)
 {
     /* bring stash back to full size */
+#if !MEMLIB
     if (emergency_memory == NULL)
     {
-	(void)flex_alloc(&emergency_memory, EMERGENCY_MEMORY_STASH);
-	DBG(("mm_poll: allocate stash %d\n", EMERGENCY_MEMORY_STASH));
+	if (flex_alloc(&emergency_memory, EMERGENCY_MEMORY_STASH))
+	{
+	    DBG(("mm_poll: allocated stash %d\n", EMERGENCY_MEMORY_STASH));
+	}
+	else
+	{
+	    DBG(("mm_poll: failed to allocate stash\n"));
+	}
     }
     else
+#endif
     {
-	int size = flex_size(&emergency_memory);
+	int size = emergency_memory ? flex_size(&emergency_memory) : 0;
 	if (size < EMERGENCY_MEMORY_STASH)
 	{
-	    if (flex_extend(&emergency_memory, EMERGENCY_MEMORY_UNIT))
+	    if (flex_extend(&emergency_memory, size + EMERGENCY_MEMORY_UNIT))
 	    {
 		size += EMERGENCY_MEMORY_UNIT;
 

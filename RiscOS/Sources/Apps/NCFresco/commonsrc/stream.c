@@ -41,7 +41,7 @@
 #include "debug.h"
 
 /* Setting to 1 independent of DEBUG is *bad* */
-#if 0
+#if DEBUG
 #define LOCATEDBG(X)       fprintf X
 #else
 #define LOCATEDBG(X)

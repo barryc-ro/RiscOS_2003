@@ -3305,7 +3305,8 @@ static void image_drawfile_render(image i, int x, int y, int w, int h, int scale
 static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
 {
     sprite_factors facs;
-
+    int flags;
+    
     if ((i->flags & image_flag_RENDERABLE) == 0)
 	return;
 
@@ -3325,7 +3326,14 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 
     IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi));
 
-    _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, config_display_jpeg & 3);
+    /* SJM: workaround for OS bug with slow dithering on small images
+     * the bug may be more extensive than this...
+     */
+    flags = config_display_jpeg & 3;
+    if (flags == 3 && (w == 1 || h == 1))
+	flags = 0;
+    
+    _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, flags);
 }
 
 static void image_sprite_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
@@ -3367,6 +3375,9 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 
     IMGDBG(("im%p: rendering at %d,%d plotter %d\n", i, x, y, i->plotter));
 
+    if (w == 0 || h == 0)
+	return;
+    
     plotter = i->plotter;
     if ( (i->flags & (image_flag_FETCHED | image_flag_RENDERABLE)) == image_flag_FETCHED )
 	plotter = plotter_SPRITE;

@@ -819,7 +819,7 @@ static pcp_group new_group (pcp_cell_t * the_cells,
 
 /*****************************************************************************/
 
-static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, VALUE *vp)
+static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, VALUE *vp, int scale_value)
 {
     const int span = (horiz ? cell->span.x : cell->span.y);
     const int first = (horiz ? cell->cell.x : cell->cell.y);
@@ -852,7 +852,7 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
     {
     case value_absunit:
 	flags = colspan_flag_ABSOLUTE | colspan_flag_ABSOLUTE_GROUP;
-	z = ceil(vp->u.f);
+	z = (scale_value * ceil(vp->u.f)) / 100;
 	if (widths[ABS_MAX] < z)
 	    widths[ABS_MAX] = widths[ABS_MIN] = z;
 	break;
@@ -909,7 +909,7 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
 
 /*****************************************************************************/
 
-static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell, VALUE *vp)
+static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell, VALUE *vp, int scale_value)
 {
     const int X = horiz ? cell->cell.x : cell->cell.y;
     unsigned int *flags = & table->colspans[X].flags;
@@ -923,7 +923,7 @@ static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell,
     {
     case value_absunit:
 	*flags |= colspan_flag_ABSOLUTE | colspan_flag_ABSOLUTE_COL | colspan_flag_USED;
-	z = ceil(vp->u.f);
+	z = (scale_value * ceil(vp->u.f)) / 100;
 	if (widths[ABS_MAX] < z)
 	    widths[ABS_MAX] = widths[ABS_MIN] = z;
 	break;
@@ -970,7 +970,7 @@ static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell,
 
 /*****************************************************************************/
 
-static void colspan_init_structure1(rid_table_item *table, BOOL horiz)
+static void colspan_init_structure1(rid_table_item *table, BOOL horiz, int scale_value)
 {
     int x, y, iw;
     rid_table_cell *cell;
@@ -980,6 +980,14 @@ static void colspan_init_structure1(rid_table_item *table, BOOL horiz)
 
     /* allocate and init storage (NB now for max+1 records inc dummy last column PCP) */
     pcp_cell the_cells = (pcp_cell) mm_calloc(max+1, sizeof (struct pcp_cell_s));
+
+    /* pdh: we may get called twice in a row if autofit has occurred. The
+     * passing-in of HORIZ is *fragile* and depends on only being called
+     * twice-in-a-row (no intervening free_structure or recurse_format_table)
+     * on the same case.
+     */
+    if ( table->colspans )
+        colspan_free_structure( table, horiz );
 
     table->colspans = the_cells;
 
@@ -1014,9 +1022,9 @@ static void colspan_init_structure1(rid_table_item *table, BOOL horiz)
 	    rid_getprop(table, x, y, prop, &v);
 
 	if (span > 1)
-	    init_group(table, horiz, cell, &v);
+	    init_group(table, horiz, cell, &v, scale_value);
 	else
-	    init_column(table, horiz, cell, &v);
+	    init_column(table, horiz, cell, &v, scale_value);
     }
 
     FMTDBG(("colspan_init_structure1: the cells:\n"));
@@ -1208,9 +1216,9 @@ static BOOL have_contradictions(rid_table_item *table, BOOL horiz)
 
 */
 
-extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
+extern void colspan_init_structure(rid_table_item *table, BOOL horiz, int scale_value)
 {
-    colspan_init_structure1(table, horiz);
+    colspan_init_structure1(table, horiz, scale_value);
 
     if ( have_contradictions(table, horiz) )
     {
@@ -1218,7 +1226,7 @@ extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
            necessary. */
 	FMTDBG(("\nRebuilding colspan structure with some constraints overridden\n\n"));
 	colspan_free_structure(table, horiz);
-	colspan_init_structure1(table, horiz);
+	colspan_init_structure1(table, horiz, scale_value);
 
 	/* Should have broken ALL clashes */
 	ASSERT( ! have_contradictions(table, horiz) );
@@ -1524,7 +1532,16 @@ static int attempt_meet_rel_max(rid_table_item *table, BOOL horiz, int slop, con
   'slop' pixels MUST be shared out into the columns. We prefer to
   always do this in unconstrained columns. If there are no such
   columns, some other choice of where to put the space is
-  required. Today: round robin blunt distribution.  */
+  required. Today: round robin blunt distribution.
+
+  pdh: frobbed slightly to share space according to MAX-MIN, not
+  according to MAX. This should ensure that all columns are
+  formatted to maxwidth if this is possible. Once all columns are
+  at maxwidth, the extra pixels are still shared out round robin.
+
+  pdh: frobbed again to account for MAX<MIN case (why does this happen?)
+
+    */
 
 static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
 {
@@ -1545,28 +1562,84 @@ static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
 
     if (any_uncons)
     {
-	int total_max = 0;
+	int total_excess = 0;
 	int left = slop;
+	int my_excess;
 
 	for (x = 0; x < max; x++)
 	    if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
-		total_max += the_cells[x].width[RAW_MAX];
+	    {
+		my_excess =   the_cells[x].width[RAW_MAX]
+		            - the_cells[x].width[RAW_MIN];
+                if ( my_excess > 0 )
+                    total_excess += my_excess;
+	    }
 
-	if (total_max > 0)
+        FMTDBG(("share_raw_abs_pct: total_excess=%d\n", total_excess));
+
+	if (total_excess > 0)
 	{
 	    for (x = 0; left > 0 && x < max; x++)
 		if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
 		{
-		    const int my_max = the_cells[x].width[RAW_MAX];
-		    const int want = (slop * my_max) / total_max;
+		    const int my_excess = the_cells[x].width[RAW_MAX]
+		                          - the_cells[x].width[RAW_MIN];
+		    const int want = (slop * my_excess) / total_excess;
 
-		    the_cells[x].width[ACTUAL] += want;
-		    left -= want;
+                    if ( my_excess > 0 )
+                    {
+    		        the_cells[x].width[ACTUAL] += want;
+    		        left -= want;
+
+                        FMTDBG(("share_raw_abs_pct: col %d: my_xs=%d, want=%d, left now %d\n", x, my_excess, want, left ));
+    		    }
 		}
 
 	    slop = left;
 	}
+
+        ASSERT( slop >= 0 );
+
+	if ( slop > 0 )
+	{
+	    /* pdh: all at max now but still some slop, share it out again;
+	     * this time, according to max.
+	     */
+
+	    total_excess = 0;
+
+    	    for (x = 0; x < max; x++)
+	        if ( (the_cells[x].flags
+	                & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
+	        {
+		    total_excess += the_cells[x].width[RAW_MAX];
+	        }
+
+            FMTDBG(("share_raw_abs_pct: total_max=%d\n", total_excess));
+
+	    if (total_excess > 0)
+	    {
+	        for (x = 0; left > 0 && x < max; x++)
+		    if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
+		    {
+		        const int my_excess = the_cells[x].width[RAW_MAX];
+		        const int want = (slop * my_excess) / total_excess;
+
+    		        the_cells[x].width[ACTUAL] += want;
+    		        left -= want;
+
+                        FMTDBG(("share_raw_abs_pct: col %d: my_max=%d, want=%d, left now %d\n", x, my_excess, want, left ));
+    		    }
+
+	        slop = left;
+	    }
+	}
     }
+
+    ASSERT( slop >= 0 );
+
+    if ( slop > 0 )
+        FMTDBG(("share_raw_abs_pct: sharing %d at last resort\n", slop));
 
     /* I know! */
     while (slop > 0)
@@ -1752,8 +1825,16 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 #if 0
 	    ASSERT( -cell->stream.height <= (t - cb) );
 #endif
+
+#if 0
+            /* pdh: removed this as (a) having stream.height the size of the
+             * cell means we can't do valign, and (b) if people really want the
+             * size of the cell they should get it from cell->size.y
+             */
 	    FMTDBG(("Height was %d, now %d\n", cell->stream.height, - (t-cb)));
 	    cell->stream.height = - (t - cb);
+#endif
+
 	    /*cell->stream.height -= table->cellspacing + table->cellpadding;*/
 	    if (cell->span.y == 0)
 	    {
@@ -1900,7 +1981,7 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
 		if (want <= the_cells[x].width[ACTUAL])
 		{
 		    used += the_cells[x].width[ACTUAL];
-		    FMTDBG(("reflect_percentages: want %d smaller actual %d, using actual\n", 
+		    FMTDBG(("reflect_percentages: want %d smaller actual %d, using actual\n",
 			    want, the_cells[x].width[ACTUAL]));
 		}
 		else
@@ -1955,7 +2036,8 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
 
 extern void colspan_share_extra_space (rid_table_item *table,
 				       int fwidth,
-				       BOOL horiz)
+				       BOOL horiz,
+				       int scale_value)
 {
     int *master = HORIZCELLS(table, horiz);
     int user_width = 0;
@@ -1971,12 +2053,15 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    FMTDBG(("colspan_share_extra_space: abs userwidth is present\n"));
 	    if (table->flags & rid_tf_HAVE_WIDTH)
 	    {
-		user_width = ceil(table->userwidth.u.f);
+		user_width = (scale_value * ceil(table->userwidth.u.f)) / 100;
 		if (user_width < table->hwidth[REL_MIN])
 		    user_width = table->hwidth[REL_MIN];
 
-		/* pdh: clip this if necessary
-		 */
+#if 0
+		/* pdh: clip this if necessary DAF: You can't just do
+		   this - no check against real minwidth to start
+		   with. Plus it's not the behaviour we want, plus
+		   there should be a nesting level check.  */
 		if ( gbf_active( GBF_AUTOFIT )
 		     && user_width > fwidth )
 		{
@@ -1984,7 +2069,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 		            table, user_width, fwidth ));
 		    user_width = fwidth;
 		}
-
+#endif
 		fwidth = user_width;
 
 		FMTDBG(("colspan_share_extra_space: still active - new fwidth %d\n", fwidth));
@@ -1994,7 +2079,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 		FMTDBG(("colspan_share_extra_space: been stomped - ignoring\n"));
 		user_width = fwidth = master[RAW_MIN];
 	    }
-	    break;
+ 	    break;
 
 	case value_pcunit:
 	    FMTDBG(("colspan_share_extra_space: pct userwidth is present\n"));
@@ -2017,7 +2102,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	switch (table->userheight.type)
 	{
 	case value_absunit:
-	    user_width = ceil(table->userheight.u.f);
+	    user_width = (scale_value * ceil(table->userheight.u.f)) / 100;
 	    break;
 
 	case value_pcunit:
@@ -2105,6 +2190,26 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	/* Share in order raw, abs then pct */
 	share_raw_abs_pct(table, horiz, slop);
     }
+
+
+    {
+	const int max = HORIZMAX(table, horiz);
+	int x, tot;
+
+	for (x = 0, tot = 0; x < max; x++)
+	    tot += table->colspans[x].width[ACTUAL];
+
+	tot += TABLE_OUTSIDE_BIAS(table);
+	tot = fwidth - tot;
+
+	if (tot != 0)
+	{
+	    FMTDBG(("colspan_share_extra_space: SEEM TO HAVE %d PIXELS NOT ACCOUNTED FOR\n", tot));
+
+	    share_raw_abs_pct(table, horiz, tot);
+	}
+    }
+
 
     master[ACTUAL] = fwidth;
 

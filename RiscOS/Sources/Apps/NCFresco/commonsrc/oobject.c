@@ -141,7 +141,7 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
 	    
 	    /* position plugin initially off screen */
-	    if (!objects_bbox(doc, ti, (wimp_box *)obj->state.plugin.box))
+/* 	    if (!objects_bbox(doc, ti, (wimp_box *)obj->state.plugin.box)) */
 	    {
 		obj->state.plugin.box[0] = 0;
 		obj->state.plugin.box[1] = 0x1000;

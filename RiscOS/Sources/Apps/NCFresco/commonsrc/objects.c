@@ -46,8 +46,12 @@ BOOL objects_bbox(be_doc doc, be_item ti, wimp_box *box)
     rid_text_item_object *tio = (rid_text_item_object *)ti;
     rid_object_item *obj = tio->object;
 
-    if (backend_doc_item_bbox(doc, ti, box) == NULL)
+    OBJDBGN(("objects_bbox: doc%p ti%p obj%p\n", doc, ti, obj));
+    
+    if (obj && backend_doc_item_bbox(doc, ti, box) == NULL)
     {
+	OBJDBGN(("objects_bbox: got box\n"));
+
 	box->x0 += obj->hspace + obj->bwidth;
 	box->x1 -= obj->hspace + obj->bwidth;
 	box->y0 += obj->vspace + obj->bwidth;

@@ -165,8 +165,14 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     {
 	/* @@@@ Borris asks if this will get freed correctly. 15/10/96 */
 
+        /* #*$@ Peter discovers that it doesn't. 9/6/97 */
+
 	if (oi->text == NULL)
-	    oi->text = strdup(""); /* OK, so it uses loads of memory, but it should not happen in the first place */
+#if 0
+	    oi->text = strdup("");
+#else
+            oi->text = "";
+#endif
 
 	/* Start at the end; while not before the start and on a space; work backwards */
 	for(i = strlen(oi->text)-1; i>=0 && isspace(oi->text[i]); i--)

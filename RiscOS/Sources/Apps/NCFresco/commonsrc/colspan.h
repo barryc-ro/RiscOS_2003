@@ -283,11 +283,11 @@ typedef struct
 
   */
 
-extern void colspan_init_structure(rid_table_item *table, BOOL horiz);
+extern void colspan_init_structure(rid_table_item *table, BOOL horiz, int scale_value);
 extern void colspan_trace_cells (rid_table_item *table, BOOL horiz);
 extern int colspan_algorithm(rid_table_item *table, int slot, BOOL horiz);
 extern void colspan_bias(rid_table_item *table, int bias, BOOL horiz);
-extern void colspan_share_extra_space (rid_table_item *table, int fwidth, BOOL horiz);
+extern void colspan_share_extra_space (rid_table_item *table, int fwidth, BOOL horiz, int scale_value);
 extern void colspan_free_structure(rid_table_item *table, BOOL horiz);
 
 /*

@@ -211,7 +211,7 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
 	return;
     }
 
-    for (ix = 0; ix < input.bytes; ix++)
+    for (ix = 0; ix < input.bytes && !context->pending_close; ix++) /* SJM: added check for close pending */
     {
 	char c = input.ptr[ix];
 	BOOL discard = FALSE;
@@ -316,6 +316,12 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
 	if (! discard)
 	    add_to_buffer(&context->prechop, TIDY(c));
     }
+#if DEBUG
+    if (context->pending_close)
+    {
+	PRSDBG(("sgml_pre_word_chopper(%p): aborted after %d of %d bytes\n", context, ix, input.bytes));
+    }
+#endif
 }
 
 /*****************************************************************************

@@ -160,7 +160,7 @@ int fe_popup_open(void)
 
 int fe_external_popup_open(void)
 {
-    return main_view->next != NULL && strcmp(main_view->next->name, TARGET_DBOX) == 0;
+    return main_view->next != NULL && strncmp(main_view->next->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0;
 }
 
 /* ------------------------------------------------------------------------------------------- */

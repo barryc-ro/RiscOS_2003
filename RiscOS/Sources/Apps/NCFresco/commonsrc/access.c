@@ -154,7 +154,6 @@ typedef struct _access_item {
 	    int had_proxy_auth;	/* Set when the proxy access was made with authentication */
 	    int had_passwd;     /* Set if we hav eto ask the user for a password */
 	    fe_passwd pw;	/* Used while we are waiting for a userid/passwd pair. */
-            char *windowtarget; /* if we are targeting at a particular window */
             int cookie_count;   /* number of cookies received in headers */
 	    unsigned last_modified;	/* from headers */
 	    unsigned expires;		/* from headers */
@@ -459,7 +458,6 @@ static void access_free_item(access_handle d)
     {
     case access_type_HTTP:
 	FREE(d->data.http.body_file);
-	FREE(d->data.http.windowtarget);
 	break;
     case access_type_FTP:
 	FREE(d->data.ftp.user);
@@ -766,21 +764,21 @@ static os_error *access_http_fetch_start(access_handle d)
 	content_type_hdr.next = hlist;
 	hlist = &content_type_hdr;
     }
-
+    
     if (d->referer)
     {
 	referer_hdr.next = hlist;
 	referer_hdr.value = d->referer;
 	hlist = &referer_hdr;
     }
-
+#ifndef NO_LICENSEE
     if (licensee_string)
     {
 	licence_hdr.next = hlist;
 	licence_hdr.value = licensee_string;
 	hlist = &licence_hdr;
     }
-
+#endif
     if (config_email_addr)
     {
 	from_hdr.next = hlist;
@@ -1414,11 +1412,7 @@ static void access_http_fetch_alarm(int at, void *h)
         {
 	    for (list = si.out.headers; list; list = list->next)
 	    {
-		if (strcasecomp("WINDOW-TARGET", list->key) == 0)
-                {
-                    d->data.http.windowtarget = strdup(list->value);
-                }
-		else if (strcasecomp("SET-COOKIE", list->key) == 0)
+		if (strcasecomp("SET-COOKIE", list->key) == 0)
                 {
 		    if (config_cookie_enable)
 		    {

@@ -97,7 +97,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
 		files.o fvpr.o remote.o coalesce.o keyhl.o \
 		buildtime.o format.o colspan.o loformat.o cs2.o \
-		highlight.o frameutils.o csgraph.o event2.o rdebug.o
+		highlight.o frameutils.o csgraph.o rdebug.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -183,14 +183,14 @@ FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
 FRESCO_CFLAGS_COMMON = -DFRESCO $(FRESCO_INCS) -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DFRAMES=1
 FRESCO_CFLAGS_REL=	-DDEVELOPMENT=0 $(FRESCO_CFLAGS_COMMON)
-FRESCO_CFLAGS_DBG=	-DDEVELOPMENT=1 $(FRESCO_CFLAGS_COMMON) -DMEMWATCH=4
+FRESCO_CFLAGS_DBG=	-DDEVELOPMENT=1 $(FRESCO_CFLAGS_COMMON) -DMEMWATCH=2
 
 FRESCO_CFLAGS=  $(FRESCO_CFLAGS_DBG)
 
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
-		listfonts2.o history.o rlib_alloc.o \
+		listfonts2.o history.o rlib_alloc.o event2.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
@@ -743,7 +743,7 @@ NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 				-I$(RISCOS_BUILD_EXPORT)/C \
 				-J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS) -DFRAMES=1 -DITERATIVE_PANIC=1
+NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS) -DFRAMES=1 -DITERATIVE_PANIC=1 -DNO_LICENSEE
 
 # several alternative flag sets
 NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
@@ -846,6 +846,7 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Messages		$(NCFRESCO_BUILD_RESOURCES)
 		@-mkdir $(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
+		$(CP) $(CPOPTIONS) commonsrc/plugin.h $(RISCOS_BUILD_OBJECTS)/h/plugin
 
 
 # NCFresco application in the new style CVS controlled RISC OS build tree

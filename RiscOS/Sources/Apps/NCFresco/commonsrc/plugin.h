@@ -209,7 +209,6 @@ typedef struct
 {
     int				flags;
     plugin_private_data		instance;
-    plugin_w			window_handle;
     int				width;
     int				height;
 } message_plugin_reshape_request;

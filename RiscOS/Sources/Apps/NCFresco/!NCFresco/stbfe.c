@@ -3077,7 +3077,7 @@ os_error *fe_status_unstack(fe_view source_v)
 
 	if (v && v->open_transient)
 	{
-	    if (strcmp(v->name, TARGET_DBOX) != 0) /* can't close external dboxes */
+	    if (strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) != 0) /* can't close external dboxes */
 	    {
 		fe_internal_deleting_view(v);
 		fe_dispose_view(v);
@@ -3106,7 +3106,7 @@ BOOL fe_status_unstack_possible(fe_view source_v)
 
     if (v && v->open_transient)
     {
-	return strcmp(v->name, TARGET_DBOX) != 0; /* externally opened boxes cannot be opened by this method */
+	return strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) != 0; /* externally opened boxes cannot be opened by this method */
     }
     
     if (tb_status_unstack_possible())
@@ -5593,8 +5593,8 @@ static BOOL fe_initialise(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if STBWEB_ROM || 1
-int __root_stack_size = 8*1024;
+#if STBWEB_ROM
+int __root_stack_size = 64*1024;
 /* extern int disable_stack_extension; */
 #endif
 

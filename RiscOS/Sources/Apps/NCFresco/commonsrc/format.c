@@ -452,7 +452,13 @@ static int largest_implied_table_width(rid_table_item *table,
 	    x = (100 * width_non_pct) / (100 - pct_used);
 
 	    if (x > widest)
+	    {
+		if (horiz)
+		    table->flags |= rid_tf_NON_PCT_GREW_HORIZ;
+		else
+		    table->flags |= rid_tf_NON_PCT_GREW_VERT;
 		widest = x;
+	    }
 	}
 	else if (width_non_pct > 0)
 	{
@@ -1116,7 +1122,7 @@ static void basic_size_table(antweb_doc *doc,
 
     FMTDBG(("basic_size_table: id %d: now do colspan calculations\n", table->idnum));
 
-    colspan_init_structure(table, HORIZONTALLY);
+    colspan_init_structure(table, HORIZONTALLY, doc->scale_value);
 
     for (x = 0; x < table->cells.x; x++)
 	if (table->colspans[x].width[RAW_MIN] == NOTINIT)
@@ -1156,7 +1162,7 @@ static void basic_size_table(antweb_doc *doc,
     {
     case value_absunit:
 	table->flags |= rid_tf_HAVE_WIDTH;
-	uwidth = ceil(table->userwidth.u.f);
+	uwidth = (doc->scale_value * ceil(table->userwidth.u.f)) / 100;
 	if (uwidth >= table->hwidth[RAW_MIN])
 	{
 	    FMTDBG(("User width of %d being applied (RAW_MIN=%d)\n", uwidth, table->hwidth[RAW_MIN]));
@@ -1218,7 +1224,7 @@ static void allocate_widths_table(antweb_doc *doc,
     FMTDBG(("allocate_widths_table(%p %p %p %d): depth %d, id %d\n",
 	    doc, rh, table, fwidth, table->depth, table->idnum));
 
-    colspan_share_extra_space (table, fwidth, HORIZONTALLY);
+    colspan_share_extra_space (table, fwidth, HORIZONTALLY, doc->scale_value);
 
     /* now run down stream recursing to nested tables */
 
@@ -1427,7 +1433,7 @@ static void recurse_format_table(antweb_doc *doc,
 	switch (v.type)
 	{
 	case value_absunit:
-	    z = - ceil(v.u.f);
+	    z = - (doc->scale_value * ceil(v.u.f)) / 100;
 	    if (z < cell->stream.height)
 		cell->stream.height = z;
 	    break;
@@ -1450,7 +1456,7 @@ static void recurse_format_table(antweb_doc *doc,
 
     /* This is wasteful - the shape remains the same! */
     colspan_free_structure(table, HORIZONTALLY);
-    colspan_init_structure(table, VERTICALLY);
+    colspan_init_structure(table, VERTICALLY, doc->scale_value);
 
     for (x = 0; x < table->cells.y; x++)
 	if (table->colspans[x].width[RAW_MIN] == NOTINIT)
@@ -1484,7 +1490,7 @@ static void recurse_format_table(antweb_doc *doc,
 
     /* Format so we have just enough room */
     height = table->vwidth[REL_MIN];
-    colspan_share_extra_space (table, height, VERTICALLY);
+    colspan_share_extra_space (table, height, VERTICALLY, doc->scale_value);
 
     orig_item = &table->parent->base;
     orig_item->max_up = table->size.y;
@@ -1550,7 +1556,8 @@ static void recurse_format_stream(antweb_doc *doc,
  */
 
 /* Never scale things to under this percentage */
-#define MIN_SCALE 60
+/* 576/640 = 0.9 = ideal ratio. go for less though! */
+#define MIN_SCALE 80
 
 extern void rid_toplevel_format(antweb_doc *doc,
 				rid_header *rh,
@@ -1559,10 +1566,8 @@ extern void rid_toplevel_format(antweb_doc *doc,
 				int fheight)
 {
     rid_text_stream *root_stream;
-    int old_scale_value;
 
     FMTDBG(("\n\n\n\n\n\nrid_toplevel_format(%p) entered, fwidth initially %d\n\n", rh, fwidth));
-
 
     format_one_off_assertions();
 
@@ -1585,18 +1590,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
     }
     else
     {
-        if ( gbf_active( GBF_AUTOFIT ) )
-        {
-            /* always attempt at standard size first; this ensures we never
-             * re-reformat even if scrunching attempt fails.
-             */
-            old_scale_value = doc->scale_value;
-            doc->scale_value = config_display_scale_image;
-
-	    /* DAF: Mainly for builders, but good sanity check */
-	    if (doc->scale_value < MIN_SCALE)
-		doc->scale_value = MIN_SCALE;
-        }
+	doc->scale_value = 100;
 
 	FMTDBG(("Sizing root stream\n"));
 	basic_size_stream(doc, rh, root_stream, 0);
@@ -1613,45 +1607,26 @@ extern void rid_toplevel_format(antweb_doc *doc,
 	{
 	    if ( gbf_active(GBF_AUTOFIT) )
 	    {
-	        int scale = (int)((double) doc->scale_value * fwidth
-	                                 / rh->stream.width_info.minwidth );
+		doc->scale_value = MIN_SCALE;
 
-                if ( scale < MIN_SCALE )
-                {
-                    FMTDBG(("st%p: autofit wants %d%% but that's not very much, using %d%%\n",
-                            root_stream,
-                            scale, MIN_SCALE ));
-                    scale = MIN_SCALE;
-                }
-
-                if ( scale < doc->scale_value )
-                {
 #ifndef BUILDERS
-                    if ( scale != old_scale_value
-                         && doc->parent )
-                    {
-                        /* It's all changed -- force a redraw of a view (using
-                         * Wimp_ForceRedraw so it won't actually happen until
-                         * the next poll)
-                         */
-                        frontend_view_redraw( doc->parent, NULL );
-                    }
+		/* It's all changed -- force a redraw of a view (using
+		 * Wimp_ForceRedraw so it won't actually
+		 * happen until the next poll) */
+		frontend_view_redraw( doc->parent, NULL );
 #endif
-
-                    doc->scale_value = scale;
-
-                    FMTDBG(("st%p: minwidth %d > fwidth %d, autofit to %d%%\n",
+		
+		FMTDBG(("st%p: RESIZING: minwidth %d > fwidth %d, autofit to %d%%\n",
                         root_stream, rh->stream.width_info.minwidth, fwidth,
                         doc->scale_value ));
 
-                    rid_zero_widest_height( root_stream );
-                    fvpr_forget( root_stream );
-                    basic_size_stream( doc, rh, root_stream, 0 );
-	            FMTDBG(("st%p: resized due to autofit, min now %d, max %d\n",
-	                    root_stream,
-                            root_stream->width_info.minwidth,
-		            root_stream->width_info.maxwidth));
-		}
+		rid_zero_widest_height( root_stream );
+		fvpr_forget( root_stream );
+		basic_size_stream( doc, rh, root_stream, 0 );
+		FMTDBG(("st%p: RESIZED due to autofit, min now %d, max %d\n",
+			root_stream,
+			root_stream->width_info.minwidth,
+			root_stream->width_info.maxwidth));
 	    }
 	    else
 	    {
@@ -1671,7 +1646,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
 	FMTDBG(("Formatting root stream with fwidth %d\n", rh->stream.fwidth));
 	recurse_format_stream(doc, rh, &rh->stream, 0);
-	FMTDBG(("\nDone formatting root stream with fwidth %d:\n", rh->stream.fwidth));
+	FMTDBG(("\nDone formatting root stream with fwidth %d, widest %d:\n", rh->stream.fwidth, rh->stream.widest));
 
 #if 0
 	dump_header(rh);

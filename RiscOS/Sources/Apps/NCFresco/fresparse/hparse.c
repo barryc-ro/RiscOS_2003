@@ -418,7 +418,10 @@ static int pparse_html_data(void *h, char *buffer, int len, int more)
     /* SJM: mark as unthreaded and check for close */
     htmlctx->sgmlctx->threaded = 0;
     if (htmlctx->sgmlctx->pending_close)
+    {
+	PRSDBG(("pparse_html_data (%p): pending close\n", htmlctx));
 	close_actions(htmlctx);
+    }
 #if 0
     HTStream *new = h;
 
@@ -508,6 +511,7 @@ static rid_header *pparse_html_close(void *h, char *cfile)
     /* SJM: if threaded then mark as pending close */
     if (htmlctx->sgmlctx->threaded)
     {
+	PRSDBG(("pparse_html_close(%p) close called whilst threaded\n", htmlctx));
 	htmlctx->sgmlctx->pending_close = 1;
 	return htmlctx->rh;
     }
@@ -584,7 +588,10 @@ static int pparse_text_data(void *h, char *buffer, int len, int more)
     /* SJM: mark as unthreaded and check for close */
     sgmlctx->threaded = 0;
     if (sgmlctx->pending_close)
+    {
+	PRSDBG(("pparse_text_data (%p): pending close\n", htmlctx));
 	close_actions(htmlctx);
+    }
 
     return 1;
 }
@@ -605,6 +612,7 @@ static rid_header *pparse_text_close(void *h, char *cfile)
     /* SJM: if threaded then mark as pending close */
     if (htmlctx->sgmlctx->threaded)
     {
+	PRSDBG(("pparse_text_close (%p): marking pending close\n", htmlctx));
 	htmlctx->sgmlctx->pending_close = 1;
 	return htmlctx->rh;
     }
