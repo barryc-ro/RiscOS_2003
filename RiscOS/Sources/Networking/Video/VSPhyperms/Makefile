@@ -1,3 +1,4 @@
+
 # Project:   VSPHyperms
 
 COMPONENT = VSPHyperms
@@ -9,7 +10,9 @@ EXP_HDR = <export$dir>
 
 # Libraries
 #
-TCPIPLib   = TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm 
+TCPIPLib   = TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
+DebugLib   = 
+#<Lib$Dir>.DebugLib.o.DebugLibZM 
 CLIB       = CLIB:o.stubs
 CPPLIB	   = CLIB:o.c++lib
 RLIB       = RISCOSLIB:o.risc_oslib
@@ -37,9 +40,9 @@ CD	= dir
 AWK	= awk
 
 # Debug flags
-DEBUG	= -Debug
 
-DEFINES = ${DEBUG} -DCOMPAT_INET4 ${THROWBACK}
+#DEFINES = ${DEBUG} -DCOMPAT_INET4 ${THROWBACK}
+DEFINES = ${DEBUG} ${THROWBACK}
 COMMONFLAGS = -zM -c -Wp -depend !Depend ${INCLUDES} ${DEFINES}
 
 AFLAGS = -depend !Depend -Stamp -quit
@@ -58,6 +61,7 @@ INCLUDES = -ITCPIPLibs:,C:
 TARGET    = rm.${COMPONENT}
 
 OBJS      =	\
+o.Pdebug	\
 o.VSPHdr	\
 o.main		\
 o.Interface	\
@@ -65,6 +69,7 @@ o.List		\
 o.Stream	\
 o.ServCtrl	\
 o.Source	\
+o.SourceMem	\
 o.Sink		\
 o.Error         \
 o.vspSocket	\
@@ -72,12 +77,14 @@ o.NECstruct	\
 o.htonstruct
 
 OBJSI     =	\
+i.Pdebug	\
 i.main		\
 i.Interface	\
 i.List		\
 i.Stream	\
 i.ServCtrl	\
 i.Source	\
+i.SourceMem	\
 i.Sink		\
 i.Error         \
 i.vspSocket	\
@@ -85,13 +92,15 @@ i.htonstruct	\
 i.NECstruct
 
 OBJSINST   =	\
-o.VSPHdr	\
+oi.Pdebug	\
+oi.VSPHdr	\
 oi.main		\
 oi.Interface	\
 oi.List		\
 oi.Stream	\
 oi.ServCtrl	\
 oi.Source	\
+oi.SourceMem	\
 oi.Sink		\
 oi.Error        \
 oi.vspSocket	\
@@ -147,7 +156,7 @@ clean:
 
 # Final targets:
 ${TARGET}: ${OBJS} o.VSPHdr
-        ${LD} ${Linkflags} -s syms ${OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${TCPIPLib}
+        ${LD} ${Linkflags} -s syms ${OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${TCPIPLib} ${DebugLib}
         
 h.VSPHdr:	cmhg.VSPHdr
 		${CMHG} ${CMHGFLAGS} -o o.$* $? $@
