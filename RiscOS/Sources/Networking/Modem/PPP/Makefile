@@ -77,12 +77,16 @@ OBJS=		o.if_ppp o.slcompress o.pppmodule \
 		${SOCKLIB} ${INETLIB} ${UNIXLIB} \
 		#o.svcprint
 
+HDRS = 		h.PPPHdr
+
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .s .c
+.SUFFIXES:	.o .h .s .c .cmhg
 .c.o:;		$(CC) $(CFLAGS) -o $@ $<
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
+.cmhg.o:;	${CMHG} ${CMHGFLAGS} $< -o $@
+.cmhg.h:;	${CMHG} ${CMHGFLAGS} $< -d $@
 
 all: ${TARGET}
         @echo ${COMPONENT}: all complete
@@ -101,6 +105,7 @@ install_rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+		$(RM)	$(HDRS)
 		$(WIPE) o.*      $(WFLAGS)
 		$(WIPE) pppd.o.* $(WFLAGS)
                 $(WIPE) rm.*     $(WFLAGS)
