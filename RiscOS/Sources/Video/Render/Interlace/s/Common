@@ -89,6 +89,11 @@
 ;                               knowledge of Kernel workspace.
 ;                               32-bit compatible.
 ;                               Service call fast rejection code was wrong.
+; 28-Jun-00  BJGA 0.61          Added support for high-resolution teletext.
+;                               Now intercepts the dynamic area handler entries for the screen dynamic area,
+;                               to stop the kernel (a) copying screen memory around and (b) resetting
+;                               DisplayStart, DriverBankAddr and DisplayBankAddr. This works for all kernels
+;                               that support OS_ReadSysInfo 6, and also STB-3 (as a special case).
 ;
 
                 GBLL    FixHWScroll
@@ -171,6 +176,13 @@ CallBackRequested	#	4	; NZ => callback requested
 
  [ MakeCFSCountPhase
 CFSTimeAddr	#	4
+ ]
+
+ [ FixGrowShrink
+DANodePointer   #       4               ; where the dynamic area node is stored, or 0 if we don't know where
+DAHandlerKernelWs #     4               ; the workspace pointer of the kernel routine
+DAHandlerKernelRout #   4               ; the address of the DA handler in the kernel, so we can restore it on exit
+DAHandlerIntercept #    4               ; 1 if we need to intercept for this mode, 0 otherwise
  ]
 
  [ international
@@ -384,6 +396,47 @@ Mod_Init Entry "r7, r8"
 	STR	r1, DynAreaNumber	; save number so we can remove area later
 	STR	r3, PageTableLogAddr	; save log address for later poking
 
+ [ FixGrowShrink
+        MOV     r0, #0                  ; don't actually intercept the handler
+        STR     r0, DAHandlerIntercept  ; until we change into an interlaced mode
+
+        MOV     r0, #6                  ; read kernel values
+        MOV     r1, #0                  ; just one value required
+        MOV     r2, #7                  ; DAList required
+        SWI     XOS_ReadSysInfo
+        BVC     %FT30                   ; nice new kernel has returned DAList in r2
+
+        MOV     r0, #ModHandReason_EnumerateROM_ModulesWithInfo
+        MOV     r1, #0                  ; find 1st ROM module (UtilityModule)
+        MOV     r2, #-1                 ; system ROM
+        SWI     XOS_Module
+        LDRVC   r0, =&47100             ; STB-3 OS kernel version is 4.71
+        TEQVC   r6, r0                  ; preserves V
+        MOVEQ   r2, #&170               ; the address of DAList in STB-3
+        MOVNE   r2, #0                  ; don't currently know the address for anything else
+        MOVVS   r2, #0                  ; if error from OS_Module, don't intercept DA handler
+        TEQ     r2, #0
+        BEQ     %FT40
+30
+        LDR     r2, [r2, #DANode_Link]
+        TEQ     r2, #0                  ; have we got to the end yet? (shouldn't happen)
+        BEQ     %FT40
+        LDR     r3, [r2, #DANode_Number]
+        TEQ     r3, #2                  ; screen DA?
+        BNE     %BT30
+
+        ADD     r3, r2, #DANode_Workspace
+        ADR     r4, DAHandlerKernelWs
+        ASSERT  DANode_Workspace = DANode_Handler - 4
+        ASSERT  :INDEX: DAHandlerKernelWs = :INDEX: DAHandlerKernelRout - 4
+        LDMIA   r3, {r0, r1}
+        STMIA   r4, {r0, r1}
+        ADR     r14, ScreenDynAreaHandler
+        STMIA   r3, {r12, r14}          ; claim the handler for ourselves
+40
+        STR     r2, DANodePointer
+ ]
+
         CLRV
         EXIT
 
@@ -468,6 +521,105 @@ CantShrinkErrorBlock
         &	1
 	=	"Can't shrink this area", 0
         ALIGN
+
+ [ FixGrowShrink
+ScreenDynAreaHandler ROUT
+        Push    "r14"
+        LDR     r14, DAHandlerIntercept
+        TEQ     r14, #0
+        BEQ     ScreenDynArea_PassToKernel
+        CMP     r0, #4
+        ADDCC   pc, pc, r0, LSL #2
+        Pull    "pc"            ; would generate an error if they tried it in a non-interlaced mode
+        B       ScreenDynArea_PreGrow
+        B       ScreenDynArea_PostGrow
+        B       ScreenDynArea_PreShrink
+        B       ScreenDynArea_PostShrink
+
+;Pregrow entry parameters
+; R0 = 0 (reason code)
+; R1 -> page block (entries set to -1)
+; R2 = number of entries in page block == number of pages area is growing by
+; R3 = number of bytes area is growing by (r2 * pagesize)
+; R4 = current size (bytes)
+; R5 = page size
+;
+; exit with V clear, all preserved
+
+ScreenDynArea_PreGrow
+        Push    "r0-r2,r4"
+        SWI     XOS_RemoveCursors
+
+        ADRL    r0, PageShifts-1
+        LDRB    r0, [r0, r5, LSR #12]           ; grab log2Pagesize for shifting
+        MOV     r4, r4, LSR r0                  ; change present size into number of pages
+                                                ; since page numbers are 0 to n-1 thus n
+                                                ; is the first page number we want to insist on
+10
+        STR     r4, [r1], #12                   ; store physical page number and increment to next
+        SUBS    r2, r2, #1                      ; one less to do
+        ADDNE   r4, r4, #1                      ; next physical page number
+        BNE     %BT10                           ; continue until all pages done
+
+        VDWS    WsPtr
+        LDR     r14, [WsPtr, #TotalScreenSize]
+        ADD     r14, r14, R3
+        STR     r14, [WsPtr, #TotalScreenSize]
+
+        CLRV                                    ; ok, so I'm paranoid...
+        Pull    "r0-r2,r4,pc"
+
+PageShifts
+        =       12, 13, 0, 14           ; 1 2 3 4
+        =       0,  0,  0, 15           ; 5 6 7 8
+
+;PreShrink Entry parameters
+;R0 = 2 (reason code)
+;R3 = number of bytes area is shrinking by
+;R4 = current size of area (bytes)
+;R5 = page size
+
+ScreenDynArea_PreShrink
+        Push    "r1-r2,r5,r12"
+        VDWS    WsPtr
+
+        ;need to check whether the proposed shrink still leaves enough for
+        ;the current amount needed by the vdu drivers, if it doesn't we
+        ;reduce R3 to be the most we can spare (in whole pages)
+
+        SUB     R2, R5, #1                      ;make a page mask
+
+        LDR     R5, [WsPtr, #ScreenSize]          ;get current minimum size
+
+        SUB     R1, R4, R5                      ;R1 = maximum shrink (current - screensize)
+        CMP     R3, R1                          ;if requested shrink > max...
+        MOVHI   R3, R1                          ;...then limit it, and...
+        BICS    R3, R3, R2                      ;...round down to multiple of page size
+
+        LDR     R14, [WsPtr, #TotalScreenSize]
+        SUB     R14, R14, R3
+        STR     R14, [WsPtr, #TotalScreenSize]
+
+        SWINE   XOS_RemoveCursors
+        CLRV
+        Pull    "r1-r2,r5,r12,pc"
+
+ScreenDynArea_PostGrow
+ScreenDynArea_PostShrink
+        SWI     XOS_RestoreCursors
+        CLRV
+        Pull    "pc"
+
+ScreenDynArea_PassToKernel
+        Push    "r6"
+        ADR     r14, DAHandlerKernelWs
+        ASSERT  :INDEX: DAHandlerKernelWs = :INDEX: DAHandlerKernelRout - 4
+        LDR     r12, [r14]
+        LDR     r6, [r14, #4]   ; wrong way round to do an LDM
+        MOV     r14, pc
+        MOV     pc, r6          ; jump into the kernel
+        Pull    "r6,pc"
+ ]
 
  [ PhaseDetectBit <> 0
   [ PhaseDetectOnPodule
@@ -588,6 +740,17 @@ Mod_Die Entry
 	LDR	r1, DynAreaNumber
 	SWI	XOS_DynamicArea
 
+ [ FixGrowShrink
+        LDR     r2, DANodePointer
+        TEQ     r2, #0                  ; have we claimed the screen DA handler?
+        ADDNE   r3, r2, #DANode_Workspace
+        ADRNE   r4, DAHandlerKernelWs
+        ASSERT  DANode_Workspace = DANode_Handler - 4
+        ASSERT  :INDEX: DAHandlerKernelWs = :INDEX: DAHandlerKernelRout - 4
+        LDMNEIA r4, {r0, r1}
+        STMNEIA r3, {r0, r1}            ; restore the original routine and workspace pointers if so
+ ]
+
         CLRV
         EXIT
 
@@ -696,7 +859,7 @@ svc_ModeExtension Entry "r0"
 						; if claimed, r1 will have be set to 0, and r3->VIDClist, r4 probably 0 (wslist)
   ]
 
-svc_ModeChange  Entry "r0-r2"
+svc_ModeChange  Entry "r0-r3"
 	BL	FindMode
 	EXIT	EQ
 
@@ -712,13 +875,23 @@ svc_ModeChange  Entry "r0-r2"
 	Pull	"r2"
 	LDR	r0, [r2, #OtherIndex_ScreenSize]
 	VDWS	lr
+      [ FixGrowShrink ; this option is a prerequisite for this enhancement
+	LDR	r3, [lr, #ScreenSize]		; if ScreenSize is already as big as we need, leave it
+	CMP	r0, r3				; (this allows teletext mode to work)
+	BLO	%FT20
+      ]
 	STR	r0, [lr, #ScreenSize]
 	SUBS	r1, r0, r1			; needed size - current size
 
+      [ FixGrowShrink
+	MOVGT	r0, #2				; increase the screen size to cope, if necessary
+	SWIGT	XOS_ChangeDynamicArea
+      |
 	MOV	r0, #2				; always set to exactly the right size (may be too big *or too little* now)
 	SWI	XOS_ChangeDynamicArea		; so Wimp doesn't do it itself after we've screwed the variables up
+      ]
 
-        MOV     r0, #&C0000000
+20      MOV     r0, #&C0000000
         STR     r0, Phase
 
 	; Claim the vectors early so that if anyone calls OS_SpriteOP 60 (Switch output to Sprite) we can override the
@@ -753,9 +926,21 @@ ModifyVars Entry "r2"
 
 	LDR	r1, [r2, #OtherIndex_LineLength]
 	STR	r1, [r0, #LineLength]
+      [ HiResTTX ; do it properly!
+        LDR     lr, [r0, #RowMult]
+        MUL     lr, r1, lr
+      |
 	MOV	lr, r1, LSL #3
+      ]
 	STR	lr, [r0, #RowLength]
+      [ HiResTTX
+        LDR     r2, [r0, #ModeFlags]
+        TST     r2, #Flag_DoubleVertical
+        SUBNE   r1, lr, r1, LSL #1              ; cursor is double height in these modes
+        SUBEQ   r1, lr, r1
+      |
 	SUB	r1, lr, r1
+      ]
 	ADD	r2, r0, #CursorStartOffset
 	ASSERT	CursorEndOffset = CursorStartOffset +4
 	STMIA	r2, {r1, lr}
@@ -795,6 +980,11 @@ AddressInputCursor Entry
 AddressR0R1 ROUT
 	LDR	r4, [r12, #RowLength]
 	LDR	r3, [r12, #Log2BPC]
+      [ HiResTTX
+        LDR     R2, [r12, #ModeFlags]
+        TST     R2, #Flag_Teletext
+        ADDNE   R3, R3, #1
+      ]
 	LDR	r2, [r12, #ScreenStart]		; start address of top of screen
 	ADD	r2, r2, r0, LSL r3		; add in X component
 	MLA	r2, r4, r1, r2			; add in Y * RowLength
@@ -1064,6 +1254,11 @@ ClaimVectors Entry "r0-r6"
         SWI     XOS_Claim
  ]
 
+ [ FixGrowShrink
+        MOV     r0, #1
+        STR     r0, DAHandlerIntercept          ; intercept DA handler for this mode
+ ]
+
         MOV     r0, #1
         STR     r0, VectorsClaimed
         EXIT
@@ -1124,6 +1319,12 @@ ReleaseVectors Entry "r0-r2"
 	MOV	r0, #0
 	STR	r0, CallBackRequested
  ]
+
+ [ FixGrowShrink
+        MOV     r0, #0
+        STR     r0, DAHandlerIntercept          ; don't intercept DA handler for this mode
+ ]
+
         MOV     r0, #0
         STR     r0, VectorsClaimed
         EXIT
@@ -1396,6 +1597,64 @@ InterlaceCallBack Entry "r0-r2"
  ]
 
 
+ [ {FALSE}
+InterlaceDebug_Code Entry
+        LDR     wp, [r12]
+        SUB     sp, sp, #12
+
+        SWI     XOS_WriteS
+        =       "YRes = ", 0
+        ALIGN
+        LDR     r0, FindModeOtherStuff+OtherIndex_YRes
+        MOV     r1, sp
+        MOV     r2, #12
+        SWI     XOS_ConvertHex8
+        SWI     XOS_Write0
+        SWI     XOS_NewLine
+
+        SWI     XOS_WriteS
+        =       "LineLength = ", 0
+        ALIGN
+        LDR     r0, FindModeOtherStuff+OtherIndex_LineLength
+        MOV     r1, sp
+        MOV     r2, #12
+        SWI     XOS_ConvertHex8
+        SWI     XOS_Write0
+        SWI     XOS_NewLine
+
+        SWI     XOS_WriteS
+        =       "PageOffset2ndField = ", 0
+        ALIGN
+        LDR     r0, FindModeOtherStuff+OtherIndex_PageOffset2ndField
+        MOV     r1, sp
+        MOV     r2, #12
+        SWI     XOS_ConvertHex8
+        SWI     XOS_Write0
+        SWI     XOS_NewLine
+
+        SWI     XOS_WriteS
+        =       "Offset1To2 = ", 0
+        ALIGN
+        LDR     r0, FindModeOtherStuff+OtherIndex_Offset1To2
+        MOV     r1, sp
+        MOV     r2, #12
+        SWI     XOS_ConvertHex8
+        SWI     XOS_Write0
+        SWI     XOS_NewLine
+
+        SWI     XOS_WriteS
+        =       "ScreenSize = ", 0
+        ALIGN
+        LDR     r0, FindModeOtherStuff+OtherIndex_ScreenSize
+        MOV     r1, sp
+        MOV     r2, #12
+        SWI     XOS_ConvertHex8
+        SWI     XOS_Write0
+        SWI     XOS_NewLine
+
+        ADD     sp, sp, #12
+        EXIT
+ ]
 InterlaceSwap_Code Entry
         LDR     wp, [r12]
  [ PhaseDetectBit = 0
