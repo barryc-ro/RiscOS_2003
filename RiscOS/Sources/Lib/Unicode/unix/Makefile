@@ -3,7 +3,7 @@
 CC = armcc
 AS = armasm
 CCflags = -c -I$(RISCOS_BUILD_EXPORT)/Lib/CLib \
-	-ffa -Ospace -DRISCOS -Fn
+	-ffa -Ws -Ospace -DRISCOS -Fn
 
 ASflags = -Stamp -quit
 
@@ -23,6 +23,7 @@ Objects =  autojp.o unictype.o \
 	iso2022.o \
 	eightbit.o \
 	shiftjis.o \
+	johab.o \
 	bigfive.o \
 	enc_utf8.o \
 	enc_ascii.o \
@@ -37,6 +38,7 @@ ObjectsD =  autojp.od unictype.od \
 	iso2022.od \
 	eightbit.od \
 	shiftjis.od \
+	johab.od \
 	bigfive.od \
 	enc_utf8.od \
 	enc_ascii.od \
@@ -51,6 +53,7 @@ ObjectsZ =  autojp.oz unictype.oz \
 	iso2022.oz \
 	eightbit.oz \
 	shiftjis.oz \
+	johab.oz \
 	bigfive.oz \
 	enc_utf8.oz \
 	enc_ascii.oz \

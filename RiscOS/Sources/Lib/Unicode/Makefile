@@ -28,7 +28,7 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 
-CCFLAGS = -c -depend !Depend -fah ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -fah -Ws ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -69,6 +69,7 @@ OBJS = autojp.o \
 	iso2022.o \
 	eightbit.o \
 	shiftjis.o \
+	johab.o \
 	bigfive.o \
 	enc_utf8.o \
 	enc_ascii.o \
@@ -85,6 +86,7 @@ OBJSZ = \
 	oz.iso2022 \
 	oz.eightbit \
 	oz.shiftjis \
+	oz.johab \
 	oz.bigfive \
 	oz.enc_utf8 \
 	oz.enc_ascii \
@@ -102,6 +104,7 @@ OBJSD = \
 	od.iso2022 \
 	od.eightbit \
 	od.shiftjis \
+	od.johab \
 	od.bigfive \
 	od.enc_utf8 \
 	od.enc_ascii \
