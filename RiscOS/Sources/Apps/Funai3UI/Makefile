@@ -79,9 +79,20 @@ dirs:
         $(MKDIR) $(RESRES).ICAClient
         IfThere Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.${APP} Then \
           $(CP) Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.${APP} ${RESAPP} T~V~CFQR
-        IfThere <Translate_UIResources$Dir>.$(LOCALE).$(APP) Then \
-          $(CP) <Translate_UIResources$Dir>.$(LOCALE).$(APP) $(RESAPP) T~V~CFQR
-        $(CP) <Translate_UIResources$Dir>.UK.$(APP) $(RESAPP) T~V~CFQR
+        IfThere Resources.${USERIF}.${LOCALE}.${APP} Then \
+          $(CP) Resources.${USERIF}.${LOCALE}.${APP} ${RESAPP} T~V~CFQR
+        IfThere Resources.${USERIF}.UK.${UI_VARIANT}.${APP} Then \
+          $(CP) Resources.${USERIF}.UK.${UI_VARIANT}.${APP} ${RESAPP} T~V~CFQR
+        IfThere Resources.${USERIF}.UK.${APP} Then \
+          $(CP) Resources.${USERIF}.UK.${APP} ${RESAPP} T~V~CFQR
+        IfThere Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.${APP} Then \
+          $(CP) Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.${APP} $(RESAPP) T~V~CFQR
+        IfThere Translate.${USERIF}.${LOCALE}.${APP} Then \
+          $(CP) Translate.${USERIF}.${LOCALE}.${APP} $(RESAPP) T~V~CFQR
+        IfThere Translate.${USERIF}.UK.${UI_VARIANT}.${APP} Then \
+          $(CP) Translate.${USERIF}.UK.${UI_VARIANT}.${APP} $(RESAPP) T~V~CFQR
+        IfThere Translate.${USERIF}.UK.${APP} Then \
+          $(CP) Translate.${USERIF}.UK.${APP} $(RESAPP) T~V~CFQR
 
 translate:
         Set UITranslateRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.
