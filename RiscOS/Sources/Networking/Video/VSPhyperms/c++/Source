@@ -130,8 +130,8 @@ Source::calculatePosAckSequence(InternetObject *server, Statistics *stats, ULINT
 
     if (result != ErrorOccurred)
     {
-        prior_max_request = server->getMaxRequestedBlock();
-        MAX_block_request = (max_completed_block + NEC_databurstval) - prior_max_request;
+        ULINT local_max_request = server->getMaxRequestedBlock();
+        MAX_block_request = (max_completed_block + NEC_databurstval) - local_max_request;
 
         if (MAX_block_request > 0)            // if window available
         {
@@ -141,12 +141,12 @@ Source::calculatePosAckSequence(InternetObject *server, Statistics *stats, ULINT
                 if (MAX_block_request > freeblocks)
                     MAX_block_request = freeblocks;
 
-                MAX_block_request += prior_max_request;
+                MAX_block_request += local_max_request;
 
                 if ((end_block != 0) && (MAX_block_request > end_block))
                     MAX_block_request = end_block;
 
-                if (MAX_block_request > prior_max_request)
+                if (MAX_block_request > local_max_request)
                 {
                     ++(stats->acks_sent);
                     if (server->SendAck(MAX_block_request, max_completed_block, data) == ErrorOccurred)
@@ -159,7 +159,7 @@ Source::calculatePosAckSequence(InternetObject *server, Statistics *stats, ULINT
                     if (Debug(debug_ack)) Debug("send ack %i-(%i,%i)", max_completed_block, MAX_block_request, server->getMaxRequestedBlock());
 #endif
                     MAX_block_request = server->getMaxRequestedBlock();
-                    ULINT last_completed_block = prior_max_request;    // the largest block number completed ignoring incomplete blocks.
+                    ULINT last_completed_block = local_max_request;    // the largest block number completed ignoring incomplete blocks.
                     MemBlock *mb;
                     unsigned int systime;
                     _swix(OS_ReadMonotonicTime, _OUT(0), &systime);
@@ -290,6 +290,7 @@ Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_
 		       				if (min_val <= max_val){
         	      				  	local_naks += (max_val - min_val)+1;
                					  	mb->pending_nak = 1;
+							++stats->block_naks_sent;
                					  	if (server->SendNak(mb->block_id, min_val, mb->block_id, max_val) == ErrorOccurred) {
 								if (err_ptr == NULL) err_ptr = &(server->ReturnCopyOfError());
         			       				result = ErrorOccurred;
@@ -338,9 +339,7 @@ Source::Source(size_t set_nak_timeout, size_t source_recvspace, int port_num)
 // this is a copy constructor allowing the conversion from a stream live to a stream stored.
 Source::Source(Source& live)
 {
-
-  last_block_sent = live.get_most_significant_block();
-  max_completed_block = last_block_sent = prior_max_request;
+  max_completed_block = last_block_sent = prior_max_request = live.get_most_significant_block();
   most_significant_time = live.get_most_significant_time();
   nak_timeout = live.get_nakTimeout();
   current_play_id = live.get_current_play_id();		// this is the trickplay flag this changes with each new trickplay
@@ -577,10 +576,10 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
 	start_end_block = 0;
 	int i;
 	error_flag result = ErrorState();
-	
+
 #ifdef DEBUGLIB
 	if (Debug(debug_ack))
-		Debug("new play state start_end(%d) max request(%d) request(%d)\n", (*request_num), (*max_complete));
+		Debug("new play state start_end(%d) max request(%d)\n", (*request_num), (*max_complete));
 #endif
 	current_play_id &= ~0xff000000;	// use the most significant two nibbles for flagging
 
@@ -605,12 +604,14 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
         /* reuse max_complete for maximum blocks, this is in case the user requests a silly range eg. 10-12 */
         if (freebuf > (*max_complete))
                 freebuf = (*max_complete);
-
-	(*max_complete) = (int)(last_block_sent = max_completed_block = prior_max_request);
+#ifdef DEBUGLIB
+        Debug("max complete = %d", prior_max_request);
+#endif
+	(*max_complete) = (int)(last_block_sent = (max_completed_block = prior_max_request));
 
         /* reuse the request_num as the start end block */
         start_end_time = (LINT)(*request_num);
-        
+
         setStartEnd(0);
 
 	(*request_num) =  max_completed_block + freebuf;
@@ -627,11 +628,11 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
 			}
 		}
 	}
-	
+
 #ifdef DEBUGLIB
 	if (Debug(debug_ack))
 		Debug("new play state freebuf(%d) max_complete (%d) request(%d)\n", freebuf, (*max_complete), (*request_num));
-		
+
 	if (Debug(debug_blockerrors))
 		Debug("new play state mx_complete = %i", (*max_complete));
 #endif
@@ -662,23 +663,11 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
         		if (mb->special_play_id != get_current_play_id()){
         			mb->deleted_block = 1;
         			mb->completed = 1;
-#ifdef DEBUGLIB                
-                                if (Debug(debug_blocks))
-                                {
-                                    Debug("failed block not current play id\n");
-                                }
-#endif
         		}
 
         		if (mb->deleted_block){
         			++last_block_sent;
         			mb->to_be_freed = 1;
-#ifdef DEBUGLIB                
-                                if (Debug(debug_blocks))
-                                {
-                                    Debug("failed block deleted_block\n");
-                                }
-#endif
         		}
         	}
         } while (mb->deleted_block);
@@ -689,12 +678,6 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
         }
         else
         {
-#ifdef DEBUGLIB
-               if (Debug(debug_blocks))
-               {
-                   Debug("failed to find block none avail\n");
-               }
-#endif
         	mb = NULL;	// if we cannot use it
         }
 
@@ -723,10 +706,6 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
           	    (*block)->max_buffers = mb->dgrams_in_block;
           	    if ((*block)->buffers[0].buffer_length < sizeof(NECBlockHeader)){
           	    	result = MakeError(VSP_DatagramSizeError);
-#ifdef DEBUGLIB
-		    	if (Debug(debug_always))
-		    		Debug("datagram size error %i < %i", (*block)->buffers[0].buffer_length,  sizeof(NECBlockHeader));
-#endif
 		    }
           	    else
           	    {
@@ -814,7 +793,7 @@ Source::freeBlock(const NECBlock *block)
 // calculates if any blocks need to be freed
 
 error_flag
-Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pending, Statistics *stats, ULINT timeout)
+Source::calculate_freeBlocks(InternetObject*, callback_flag *callback_pending, Statistics*, ULINT)
 {
     	int i;
     	int start_end_found = 0;
@@ -832,12 +811,11 @@ Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pen
  	if ((*callback_pending) & callback_fullblocks)
  	{
   		(*callback_pending) -= callback_fullblocks;
+  		(*callback_pending) += callback_lsblkcmplt;
 #ifdef DEBUGLIB
 		if (Debug(debug_callbacks)) Debug("-callback_fullblocks fb");
 #endif
   	}
-	result = calculatePosAckSequence(server, stats, timeout);
-
         return result;
 }
 //
@@ -849,12 +827,23 @@ Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pen
 //
 //
 error_flag
-Source::foregroundExecute(InternetObject *server, Statistics *stats, ULINT *timeout)
+Source::foregroundExecute(InternetObject *server, callback_flag *callback_pending, Statistics *stats, ULINT *timeout)
 {
-   if (!ErrorExists()){
-      	calculateMaxCompleteBlock();
-        if (!ErrorExists()) calculatePosAckSequence(server, stats, (*timeout));
-       	if (!ErrorExists()) calculatePosNAKSequence(server, stats, NULL, timeout);
+   if (!ErrorExists())
+   {
+       size_t naks = 0;
+       calculateMaxCompleteBlock();
+
+       if (!ErrorExists() && ((*callback_pending) & callback_nak_now))
+       {
+           calculatePosNAKSequence(server, stats, &naks, timeout);
+       }
+
+       if (!ErrorExists() && (!naks) && (!((*callback_pending) & callback_startend)))
+       {
+           (*callback_pending) -= callback_lsblkcmplt;
+           calculatePosAckSequence(server, stats, (*timeout));
+       }
     }
     return ErrorState();
 }
@@ -980,8 +969,10 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
 						if ( (mb->dgrams_received == mb->dgrams_in_block) || (dgram->status_word & 0x01) )
 						{
 					  		// if completed or deleted
-					  		if (mb->block_id == (max_completed_block+1))
-					  			(*flags) = callback_timeout;	// set a new timeout value
+						        if (mb->block_id == max_completed_block+1)
+						        {
+					  		    (*flags) += callback_lsblkcmplt;	// set a new timeout value
+						        }
 
 							mb->completed = 1;			// assign completed block
 							mb->pending_nak = 0;
@@ -991,18 +982,35 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
 
 							MemBlock *mb2 = mem_map->findExistingBlock(max_completed_block+1);
 
-							if (mb2 != NULL)
-							{
-								 if ((*flags) == callback_timeout)
-								 { // calculate the timeout
-									unsigned int systime;
-									_swix(OS_ReadMonotonicTime, _OUT(0), &systime);
-							 		int x = mb2->nak_timeout - systime;
-									(*timeout) = (x > 0) ? x:0;
-								}
-							}
-							else
-								(*flags) = callback_fullblocks;
+                                                        if (NULL != mb2)
+                                                        {
+                                                            unsigned int systime;
+                                                            (*flags) |= callback_nak_after;
+
+                                                            _swix(OS_ReadMonotonicTime, _OUT(0), &systime);
+                                                            int x = mb2->nak_timeout - systime;
+                                                            (*timeout) = (x > 0) ? x:0;
+                                                        }
+                                                        else
+                                                        {
+                                                            size_t n;
+                                                            int one_block_free = 0;
+
+                                                            for (n = 0; n < mem_map->maxBlocks(); n++)
+                                                            {
+                                                                MemBlock *mb = mem_map->getBlock(n);
+                                                                if (!mb->completed)
+                                                                {
+                                                                    one_block_free = 1;
+                                                                    break;
+                                                                }
+                                                            }
+
+                                                            if (0 == one_block_free)
+                                                            {
+                                                                (*flags) += callback_fullblocks;
+                                                            }
+                                                        }
 
 							if (dgram->status_word & 0x01)
 							{
@@ -1021,7 +1029,7 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
 							else
 							{
        							  	if (Debug(debug_blocks))
-       							  		Debug("-------- blk [%i] complete", mb->block_id);
+       							  		Debug("blk [%i]", mb->block_id);
        							}
 #endif
 						}
@@ -1129,7 +1137,7 @@ Source::getMiscInfo(misc_info_flags flags, void *ptr)
 #ifdef DEBUGLIB
 	default:
 		{
-		Debug("MiscInfo - max comp %i-%i c_id = %i", max_completed_block, last_block_sent, current_play_id);
+		Debug("MiscInfo - max comp %i-%i c_id = %i, pmr %d", max_completed_block, last_block_sent, current_play_id, prior_max_request);
 
          		for (int i = 0; ( (i < mem_map->maxBlocks())&&(result != ErrorOccurred) ); i++) {
          		      MemBlock *mb = mem_map->getBlock(i);
@@ -1148,8 +1156,8 @@ Source::getMiscInfo(misc_info_flags flags, void *ptr)
 SourceLIVE::SourceLIVE(Source& vod):Source(0,0)
 {
   last_block_sent = 0;
-  max_completed_block = prior_max_request = 0;
-  most_significant_time = 0;
+  max_completed_block = prior_max_request = vod.get_most_significant_block();
+  most_significant_time = vod.get_most_significant_time();
   nak_timeout = vod.get_nakTimeout();
   current_play_id = 0;		// this is the trickplay flag this changes with each new trickplay
   start_end_block = start_end_time = 0;
@@ -1182,7 +1190,7 @@ SourceLIVE::calculate_freeBlocks(InternetObject *, callback_flag*, Statistics*, 
 }
 
 error_flag
-SourceLIVE::foregroundExecute(InternetObject*, Statistics*, ULINT*)
+SourceLIVE::foregroundExecute(InternetObject*, callback_flag*, Statistics*, ULINT*)
 {
   error_flag result = ErrorState();
 
