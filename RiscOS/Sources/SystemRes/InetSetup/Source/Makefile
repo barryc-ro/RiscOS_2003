@@ -86,13 +86,16 @@ all: ${FILES}
 install: ${FILES}
         ${MKDIR} ${INSTDIR}
         ${MKDIR} ${INSTDIR}.AutoSense
+        ${MKDIR} ${INSTDIR}.Blanks
         ${CP} ${RDIR}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
         ${CP} ${LDIR}.!Help      ${INSTDIR}.!Help      ${CPFLAGS}
         ${CP} ${LDIR}.!Run       ${INSTDIR}.!Run       ${CPFLAGS}
         ${CP} aif.!RunImage      ${INSTDIR}.!RunImage  ${CPFLAGS}
         ${CP} ${LDIR}.!Sprites   ${INSTDIR}.!Sprites   ${CPFLAGS}
         ${CP} ${LDIR}.!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
-        ${CP} ${LDIR}.Blanks     ${INSTDIR}.Blanks     ${CPFLAGS}
+        ${CP} ${LDIR}.Blanks.Routes   ${INSTDIR}.Blanks.Routes   ${CPFLAGS}
+        ${CP} ${LDIR}.Blanks.SetUpNet ${INSTDIR}.Blanks.SetUpNet ${CPFLAGS}
+        ${CP} ${LDIR}.Blanks.User     ${INSTDIR}.Blanks.User     ${CPFLAGS}
         ${CP} ${RDIR}.CoSprite22 ${INSTDIR}.CoSprite22 ${CPFLAGS}
         ${CP} ${LDIR}.Messages   ${INSTDIR}.Messages   ${CPFLAGS}
         ${CP} ${LDIR}.Res        ${INSTDIR}.Res        ${CPFLAGS}
