@@ -13,6 +13,7 @@
 #
 COMPONENT = WindowUtils
 TARGET    = WimpUtils2
+RESOURCES = no
 
 include StdTools
 include AAsmModule
