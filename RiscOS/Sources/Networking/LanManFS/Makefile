@@ -19,8 +19,9 @@ WIPE    = -wipe
 CD	= dir
 
 
-AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -pcc -ff -zps1 -zM -I${INCLUDES},. ${DFLAGS} -UTML -DCOMPAT_INET4
+AFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit
+CFLAGS  = -depend !Depend ${THROWBACK} -c -pcc -ff -zps1 -zM -I${INCLUDES},. ${DFLAGS} -UTML -DCOMPAT_INET4
+CMHGFLAGS = -p -depend !Depend ${THROWBACK}
 
 
 CPFLAGS = ~cfr~v
@@ -51,14 +52,26 @@ DFLAGS   =
 COMPONENT = LanManFS
 TARGET    = rm.LanManFS
 ROMTARGET = aof.LanManFS
-OBJS      = LanMan_MH.o LanMan.o Omni.o Logon.o CoreFn.o Printers.o Xlate.o Interface.o RMInfo.o buflib.o LLC.o NetBIOS.o SMB.o Errors.o Attr.o RPC.o NBIP.o Stats.o
+OBJS      = LanMan_MH.o LanMan.o Omni.o Logon.o CoreFn.o Printers.o \
+            Xlate.o Interface.o RMInfo.o buflib.o \
+            LLC.o NetBIOS.o SMB.o Errors.o Attr.o RPC.o NBIP.o Stats.o
+
+OBJSI     = i.LanMan i.Omni i.Logon i.CoreFn i.Printers \
+            i.Xlate i.buflib \
+            i.LLC i.NetBIOS i.SMB i.Attr i.RPC i.NBIP i.Stats
+
+OBJSINST  = LanMan_MH.o inst.LanMan inst.Omni inst.Logon inst.CoreFn inst.Printers \
+            inst.Xlate inst.buflib Interface.o RMInfo.o Errors.o \
+            inst.LLC inst.NetBIOS inst.SMB inst.Attr inst.RPC inst.NBIP inst.Stats
 
 #
 # Rule patterns
 #
-#  .SUFFIXES:  .o .s .c .h .cmhg
+.SUFFIXES:  .o .s .c .i .h .cmhg .inst
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.c.i:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
+.i.inst:;	$(CC) $(CFLAGS) -C++ -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -73,6 +86,22 @@ all: ${TARGET}
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
 
+preprocess: ${OBJSI} local_dirs
+	@echo ${COMPONENT}: preprocess build complete
+
+instrument: ${OBJSINST} inst.instlib local_dirs 
+	$(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJSINST) inst.instlib $(STUBS)
+	ModSqz rm.AcornPOP3u rm.AcornPOP3
+	@echo ${COMPONENT}: instrument build complete
+
+local_dirs:
+	${MKDIR} o
+	${MKDIR} aof
+	${MKDIR} rm
+	${MKDIR} i
+	${MKDIR} inst
+
+
 export: 
         @echo ${COMPONENT}: export complete
 
@@ -82,9 +111,12 @@ install_rom: ${ROMTARGET}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} i.* ${WFLAGS}
+        ${WIPE} inst.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${ROMTARGET}
         ${RM} map.${COMPONENT}
+        ${RM} linked.${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
 #
@@ -112,9 +144,3 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 # Dynamic dependencies:
-o.Interface: s.Interface
-o.Interface: Hdr.RegNames
-o.Interface: Hdr.SwiNames
-o.Interface: Hdr.ResourceFS
-o.RMInfo: s.RMInfo
-o.Errors: s.Errors
