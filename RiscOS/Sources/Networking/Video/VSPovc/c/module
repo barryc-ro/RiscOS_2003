@@ -17,12 +17,11 @@ Date      Who     Description of change
 
                   Converted all functions to ANSI style.
 
+4/9/98     CP     Overhauled SWI handler, although forced to leave the longjmp
+                  in place untouched.  It is now protected against
+                  unused/unknown SWI numbers.
+
 ***************************************************************************/
-/*
- * module.c
- *
- * RISC OS environment dependencies
- */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,11 +87,6 @@ struct eblock ovs_error_blocks[N_OVS_ERRORS] = {
 
 extern _kernel_oserror *ovs_error(int); /* fixed prototype */
 
-struct swient {
-    _kernel_oserror * (*swi_call)(_kernel_swi_regs *);      /* swi handler */
-};
-
-#define MAXSWI 8
 
 /* imports */
 extern int mn_started;
@@ -117,16 +111,6 @@ int ovs_slomo_rate;
 
 
 /* static variables */
-static struct swient vsp_ent[MAXSWI] = {
-    SetServer,
-    OpenStream,
-    CloseStream,
-    CheckEndofStream,
-    SetSpeed,
-    SetPosition,
-    ReadNPT,
-    0,
-};
 
 static void *module_wsp = 0;
 static int is_atm_mpeg = 0;
@@ -342,13 +326,26 @@ _kernel_oserror *ovs_error(int err)
     return ((_kernel_oserror *)&ebuf);
 }
 
+
+/* debug SWI tracking */
+struct LLint
+{
+   int SWInum;
+   struct LLint *next;
+};
+
+struct LLint *SWIlistHead = NULL; /* start of list */
+struct LLint *SWIlistTail = NULL; /* end of list, where you add next LLint */
+
 _kernel_oserror *
 vsp_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
 {
     int optype;
     _kernel_oserror *err = 0;
-     struct swient *callp = &vsp_ent[swinum];
 
+/* 4sep98:CP:set up longjmp to enter this conditional statement.  Dunno why this
+   is being done. :-(
+*/
     if ((optype = setjmp(ljenv)) != 0)
     {
         clr_watchdog_timer();
@@ -370,16 +367,42 @@ vsp_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
     }
 
     set_watchdog_timer();
-    err = (_kernel_oserror *)(*(callp->swi_call))(r);
-    clr_watchdog_timer();
-    return (err);
-}
 
-/*ARGSUSED*/
-_kernel_oserror *
-vsp_cli_handler(const char *arg_string, int arg_count, int cmd_no, void *pw)
-{
-    return ((_kernel_oserror *)0);
+
+    switch (swinum)
+    {
+      case (VSP_OpenStream - VSP_00):
+        err = OpenStream(r);
+      break;
+
+      case (VSP_CloseStream - VSP_00):
+        err = CloseStream(r);
+      break;
+
+      case (VSP_CheckEndOfStream - VSP_00):
+        err = CheckEndofStream(r);
+      break;
+
+      case (VSP_SetSpeed - VSP_00):
+        err = SetSpeed(r);
+      break;
+
+      case (VSP_SetPosition - VSP_00):
+        err = SetPosition(r);
+      break;
+
+      case (VSP_ReadNPT - VSP_00):
+        err = ReadNPT(r);
+      break;
+
+      default:
+        err = error_BAD_SWI;
+      break;
+    }
+
+    clr_watchdog_timer();
+
+    return (err);
 }
 
 void ovs_initstream(int handle, int skipcnt)
@@ -497,8 +520,14 @@ _kernel_oserror * callb_handler(_kernel_swi_regs *rr, void *pw)
 {
     if (callbackflag == 0)
         return (NULL);
-    mnIdle();
-    mnidle_timer = MNIDLE_TIMEOUT;
+    /* SCormie (06-Oct-98): Fix data abort problem if call back is set by ticker going off */
+    /* during VSP_CloseStream (shouldn't call mnIdle() if stream is now closed -
+       only call it if mn_started flag is set).           */
+    if (mn_started)
+    {
+        mnIdle();
+        mnidle_timer = MNIDLE_TIMEOUT;
+    }
     callbackflag = 0;
     return (NULL);
 }
