@@ -1478,9 +1478,13 @@ static void cg_fnargs_regs(ArgInfo arg[], int32 intregargs, int32 fltregargs,
                             argr, GAP, r);
 #else
                 else if (repsort == 2)   /* [am] */
-                {   usedregs = mkRegList(usedregs, argr+1);
-                    nusedregs++;
-                    emitreg(J_MOVDIR, argr, argr+1, r);
+                {   if (vregsort(r) == DBLREG)
+                    {   usedregs = mkRegList(usedregs, argr+1);
+                        nusedregs++;
+                        emitreg(J_MOVDIR, argr, argr+1, r);
+                    }
+                    else
+                        emitreg(J_MOVFIR, argr, GAP, r);
                 }
 #endif
 #endif
@@ -2537,8 +2541,7 @@ default:
 /* The trick only works if I use double precision, so for                */
 /* float I start off by widening the input.                              */
 /*                                                                       */
-/* If the back-end has a rounding-down fix, then we can omit the         */
-/* condition. This gives correct overflow checking.                      */
+/* If the back-end has a directed-rounding fix, then we do it properly.  */
 /* THIS MUST BE DONE BY THE BACK-END SOON                                */
             {   VRegnum r2;
                 LabelNumber *l1, *l2;
@@ -2549,10 +2552,38 @@ default:
                     r = rx;             /* Now treat as double case      */
                 }
             #ifdef TARGET_HAS_FIXM
+            {   /* This gets it precisely right. */
+                /* In ARM, it looks like:  LDFD   f2, TwoTo31
+                                           CMF    f0, #0
+                                           SUFD   f0, f0, f2
+                                           FIXPLM r1, f0
+                                           FIXMIP r1, f0
+                                           ADDVC  r1, r1, #&80000000 */
                 emitfloat1(J_MOVDK, r2 = fgetregister(DBLREG), GAP, fc_two_31);
+                if (fpliteral(fc_zero.d, J_CMPDK))
+                    emitfloat(J_CMPDK + Q_FXXX, GAP, r, fc_zero.d);
+                else
+                {   VRegnum r3;
+                    emitreg(J_CMPDR + Q_FXXX, GAP, r, r3 = cg_loadfpzero(DBLREG, 0));
+                    bfreeregister(r3);
+                }
+                blkflags_(bottom_block) |= BLKCCEXPORTED;
+                emitbranch(J_B + Q_FL, l1 = nextlabel());
+                blkflags_(bottom_block) |= BLKCCLIVE;
                 emitreg(J_SUBDR, r, r, r2);
                 emitreg(J_FIXDR, r1 = fgetregister(INTREG), GAP, r); /* No J_SIGNED => round down */
+                emitbranch(J_B, l2 = nextlabel());
+                blkflags_(bottom_block) |= BLKCCLIVE;
+                start_new_basic_block(l1);
+                blkflags_(bottom_block) |= BLKCCLIVE;
+                emitreg(J_SUBDR, r, r, r2);
+                emitreg(J_FIXDR+J_UNSIGNED, r1, GAP, r); /* J_UNSIGNED => round up */
+                start_new_basic_block(l2);
+                blkflags_(bottom_block) |= BLKCCLIVE;
+                emitbranch(J_B + Q_FU, l1 = nextlabel());
                 emit(J_ADDK, r1, r1, 0x80000000);
+                start_new_basic_block(l1);
+            }
             #else
                 blkflags_(bottom_block) |= BLKREXPORTED;
                 emitfloat1(J_MOVDK, r2 = fgetregister(DBLREG), GAP, fc_two_31);
@@ -4260,7 +4291,7 @@ static VRegnum open_compilable(Expr **xp, RegSort rsort, bool valneeded)
         if (i) {
             VRegnum r1 = cg_expr(a1);
             VRegnum targetreg = fgetregister(rsort);
-            emit(floatyop(rsort, J_INLINE1, J_INLINE1F, J_INLINE1D),
+            emit(floatyop(vregsort(r1), J_INLINE1, J_INLINE1F, J_INLINE1D),
                  targetreg, r1, i);
             bfreeregister(r1);
             return targetreg;
@@ -4844,7 +4875,7 @@ static Cmd *adenart_call(Cmd *c, SynBindList *formals)
 /* arranges that such things never occur by generating an explicit       */
 /* narrowing assignment in this case.                                    */
 
-static int32 cg_bindargs(BindList *args, bool ellipsis)
+static int32 cg_bindargs(BindList *args, bool ellipsis, int32 fnflags)
 /* Ellipsis is true if this function was defined with a '...' at the end */
 /* of the list of formal pars it should accept.                          */
 /* Returns number of argwords for possible use by codeseg_function_name(). */
@@ -4875,7 +4906,8 @@ static int32 cg_bindargs(BindList *args, bool ellipsis)
         }
     }
 #ifdef TARGET_FP_ARGS_IN_FP_REGS
-    if ((config & CONFIG_FPREGARGS)) {
+    if (((config & CONFIG_FPREGARGS) && !(fnflags & f_oppfpregargs)) ||
+        (!(config & CONFIG_FPREGARGS) && (fnflags & f_oppfpregargs))) {
         BindList *intargs = NULL, **intargp = &intargs,
                  *fltregargs = NULL, **fltregargp = &fltregargs;
         for (x = args; x != NULL; x = x->bindlistcdr) {
@@ -5784,7 +5816,7 @@ void cg_topdecl(TopDecl *x, FileLine fl)
             {   /* for the basic block started by J_ENTER in cg_bindargs() */
                 current_env = (BindListList *) binder_cons2(0, argument_bindlist);
             }
-            argwords = cg_bindargs(argument_bindlist, x->v_f.fn.ellipsis);
+            argwords = cg_bindargs(argument_bindlist, x->v_f.fn.ellipsis, typefnaux_(t).flags);
 #ifdef TARGET_IS_ALPHA
 /*
  * To help debug on an otherwise dodgy machine I can generate a call to
