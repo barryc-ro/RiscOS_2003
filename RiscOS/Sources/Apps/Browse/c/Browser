@@ -35,6 +35,7 @@
 #include "Frames.h"
 #include "Forms.h"
 #include "History.h"
+#include "Hotlist.h"
 #include "Images.h"
 #include "Mouse.h"
 #include "PrintStyle.h"
@@ -1479,6 +1480,8 @@ static int browser_navigate_map(browser_data * b, int key)
 /* Looks in the browser_data structure given to  */
 /* the function and returns the URL that is      */
 /* currently being fetched, or NULL for none.    */
+/* It'll try the URL writeable if it can't find  */
+/* a fetch URL or a display URL.                 */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the fetch.            */
@@ -1489,7 +1492,41 @@ static int browser_navigate_map(browser_data * b, int key)
 
 char * browser_fetch_url(browser_data * b)
 {
-  return b->urlfdata;
+  if (!b->urlfdata || !*b->urlfdata)
+  {
+    ObjectId t;
+
+    /* If we're displaying a URL but fetching nothing, return nothing */
+
+    if (b->urlddata) return NULL;
+
+    /* Must be a very early browser window - no data fetched yet, but */
+    /* stopped (so not currently fetching). Try to use the URL        */
+    /* writeable. "Who Owns What" problems mean we need a static      */
+    /* buffer here. Sigh.                                             */
+
+    t = toolbars_get_upper(b);
+
+    if (t != NULL_ObjectId)
+    {
+      static char wurl[Limits_URLBarWrit];
+
+      if (
+           writablefield_get_value(0,
+                                   t,
+                                   URLBarWrit,
+                                   wurl,
+                                   sizeof(wurl),
+                                   NULL)
+         )
+         *wurl = '\0';
+
+      if (*wurl != '\0') return wurl;
+    }
+
+    return NULL;
+  }
+  else return b->urlfdata;
 }
 
 /*************************************************/
@@ -1635,6 +1672,335 @@ void browser_destroy_source(browser_data * b)
 }
 
 /*************************************************/
+/* browser_find_matching_url()                   */
+/*                                               */
+/* Given a string in a buffer, look for this     */
+/* string within any entry in the hotlist and in */
+/* addition, the global visit history using      */
+/* both titles and URLs. The search is case      */
+/* sensitive. The buffer is updated with the     */
+/* found item, if any. Calling with that updated */
+/* buffer contents will return the next item     */
+/* matching the original search criterion,       */
+/* assuming there is more than one match, if     */
+/* you've kept the block with the list of found  */
+/* items in it (see parameters list).            */
+/*                                               */
+/* Parameters: A flex_ptr which will be used to  */
+/*             hold a block with all found       */
+/*             matches - e.g. &b->match_list;    */
+/*                                               */
+/*             Pointer to the buffer holding the */
+/*             search string;                    */
+/*                                               */
+/*             Length of the buffer.             */
+/*                                               */
+/* Returns:    1 if an item was found (the       */
+/*             buffer contents will be updated), */
+/*             else 0.                           */
+/*************************************************/
+
+int browser_find_matching_url(flex_ptr match_list, char * buffer, int buffer_size)
+{
+  int changed = 0;
+  int look    = 1;
+
+  if (!match_list) return 0;
+  if (buffer_size < 2) return 0;
+
+  /* Do we already have a list of URLs to match to? */
+
+  if (*((char **) match_list))
+  {
+    int offset = 0;
+
+    /* Does the URL writeable exactly match an entry? */
+
+    while ((*((char **) match_list))[offset])
+    {
+      int len = strlen((*((char **) match_list)) + offset) + 1;
+
+      if (!strcmp((*((char **) match_list)) + offset, buffer))
+      {
+        int old_offset = offset;
+
+        /* We have a match; jump to the next entry */
+
+        offset += len;
+        if (!(*((char **) match_list))[offset]) offset = 0;
+
+        if (old_offset != offset)
+        {
+          /* Update the URL */
+
+          strncpy(buffer, (*((char **) match_list)) + offset, buffer_size - 1);
+          buffer[buffer_size - 1] = '\0';
+
+          changed = 1;
+        }
+
+        look = 0;
+
+        break;
+      }
+      else
+      {
+        offset += len;
+      }
+    }
+  }
+
+  if (look)
+  {
+    int found;
+
+    /* We need to build a list of matches; free any */
+    /* existing list first                          */
+
+    if (*((char **) match_list)) flex_free(match_list);
+
+    /* Try and find something appropriate in the hotlist, */
+    /* then the history.                                  */
+
+    found  = hotlist_find_match(match_list, buffer);
+    found += history_find_match(match_list, buffer);
+
+    /* If we found something, use the first entry */
+
+    if (found != 0)
+    {
+      strncpy(buffer, *((char **) match_list), buffer_size - 1);
+      buffer[buffer_size - 1] = '\0';
+
+      changed = 1;
+    }
+  }
+
+  return changed;
+}
+
+/*************************************************/
+/* browser_find_match_backwards()                */
+/*                                               */
+/* Once browser_find_matching_url() has made a   */
+/* list of hits in the match_list block you gave */
+/* it a flex anchor for, you can step backwards  */
+/* through the list by giving a URL from the     */
+/* block in a buffer.                            */
+/*                                               */
+/* Parameters: A flex_ptr pointing to a block    */
+/*             with the match list in it;        */
+/*                                               */
+/*             Pointer to the buffer holding the */
+/*             search string - a URL already in  */
+/*             the match buffer;                 */
+/*                                               */
+/*             Length of the buffer.             */
+/*                                               */
+/* Returns:    1 if the item was found (the      */
+/*             buffer contents will be updated), */
+/*             else 0.                           */
+/*************************************************/
+
+int browser_find_match_backwards(flex_ptr match_list, char * buffer, int buffer_size)
+{
+  if (match_list)
+  {
+    int offset = 0;
+    int found  = 0;
+    int last   = 0;
+
+    /* Going backwards is tricky. Find the item in the URL */
+    /* writeable in the match_list for the browser (if     */
+    /* present). Remember the previous item at all times.  */
+    /* If we find it, break out of the loop.               */
+
+    while ((*((char **) match_list))[offset])
+    {
+      if (!strcmp((*((char **) match_list)) + offset, buffer))
+      {
+        found = 1;
+
+        break;
+      }
+
+      last    = offset;
+      offset += strlen((*((char **) match_list)) + offset) + 1;
+    }
+
+    /* If we found the URL writable contents in the match list... */
+
+    if (found)
+    {
+      /* ...then either we have a last entry, or the thing we found */
+      /* was right at the start of the match list.                  */
+
+      if (offset > 0)
+      {
+        strncpy(buffer, (*((char **) match_list)) + last, buffer_size - 1);
+        buffer[buffer_size - 1] = '\0';
+      }
+      else
+      {
+        /* If the item was at the start of the match list, we want to */
+        /* put last match list entry into the URL writable - so skip  */
+        /* forward to find it.                                        */
+
+        offset = 0;
+
+        while ((*((char **) match_list))[offset])
+        {
+          last    = offset;
+          offset += strlen((*((char **) match_list)) + offset) + 1;
+        }
+
+        /* Only one item in the block */
+
+        if (last == 0) return 0;
+
+        strncpy(buffer, (*((char **) match_list)) + last, buffer_size - 1);
+        buffer[buffer_size - 1] = '\0';
+      }
+
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+/*************************************************/
+/* browser_add_match_list_entry()                */
+/*                                               */
+/* A browser can have a match_list field filled  */
+/* with a pointer to a concatenated series of    */
+/* zero terminated strings. The final entry in   */
+/* this (flex allocated) block is a zero length  */
+/* string. This block was originally created to  */
+/* store a list of matches for Ctrl+Tab URL      */
+/* completion.                                   */
+/*                                               */
+/* Call this function to add an entry to the     */
+/* end of the block.                             */
+/*                                               */
+/* If the match_list block does not exist on     */
+/* entry then the terminating entry will         */
+/* automatically be written before the string is */
+/* added.                                        */
+/*                                               */
+/* NULL or empty strings are ignored (except for */
+/* possibly creating the terminating entry as    */
+/* described above) - the function will return   */
+/* claiming success, unless, of course, the      */
+/* allocation for the terminating entry itself   */
+/* should fail.                                  */
+/*                                               */
+/* Parameters: A flex_ptr for the match_list     */
+/*             list to be hung off, typically    */
+/*             (flex_ptr) &b->match_list;        */
+/*                                               */
+/*             Pointer to the string to add.     */
+/*                                               */
+/* Returns:    1 for success, else 0. If it      */
+/*             fails, the match_list list may    */
+/*             have been destroyed (any entries  */
+/*             present on entry might be lost).  */
+/*************************************************/
+
+int browser_add_match_list_entry(flex_ptr match_list, const char * add)
+{
+  int old_budge;
+  int old_size;
+  int ulen;
+
+  if (!match_list) return 0;
+
+  /* If we've no match list, add a terminating zero length */
+  /* string to start with                                  */
+
+  if (!*((char **) match_list))
+  {
+    if (!flex_alloc(match_list, 1)) return 0;
+    else (*((char **) match_list))[0] = '\0';
+
+    #ifdef TRACE
+      if (tl & (1u<<12)) Printf("browser_add_match_list_entry: flex_alloc match_list block for first (terminating) entry");
+      flexcount += 1;
+      if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+    #endif
+  }
+
+  /* Exit flagging success for empty strings or NULL pointers */
+
+  if (!add || !*add) return 1;
+
+  /* Right, we must have a valid string to add */
+
+  ulen = strlen(add) + 1; /* Include space for terminating byte */
+
+  old_size = flex_size(match_list);
+
+  if (
+       !flex_extend(match_list,
+                    old_size + ulen)
+     )
+  {
+    #ifdef TRACE
+      if (tl & (1u<<12)) Printf("browser_add_match_list_entry: flex_extend of match_list failed!\n");
+    #endif
+
+    return 0;
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<12)) Printf("browser_add_match_list_entry: flex_extend of match_list block to %d bytes successful", old_size + ulen);
+    flexcount += ulen;
+    if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+  #endif
+
+  /* Lock flex whilst copying in the entry */
+
+  old_budge = flex_set_budge(0);
+
+  strcpy( (*((char **) match_list)) + old_size - 1, add);
+  (*((char **) match_list))[old_size + ulen - 1] = '\0';
+
+  /* Restore flex and exit, flagging success */
+
+  flex_set_budge(old_budge);
+
+  return 1;
+}
+
+/*************************************************/
+/* browser_empty_match_list()                    */
+/*                                               */
+/* Free a match_list list of strings - this is   */
+/* basically a flex_free, but it updates debug   */
+/* information too.                              */
+/*                                               */
+/* Parameters: A flex_ptr that the match_list is */
+/*             hung off, typically               */
+/*             (flex_ptr) &b->match_list.        */
+/*************************************************/
+
+void browser_empty_match_list(flex_ptr match_list)
+{
+  if (match_list && *((char **) match_list))
+  {
+    #ifdef TRACE
+      if (tl & (1u<<12)) Printf("browser_empty_match_list: flex_free block %p\n",match_list);
+      flexcount -= flex_size(match_list);
+      if (tl & (1u<<13)) Printf("**   flexcount: %d\n",flexcount);
+    #endif
+
+    flex_free(match_list);
+  }
+
+  return;
+}
+
+/*************************************************/
 /* browser_pointer_entering()                    */
 /*                                               */
 /* Called when the pointer goes over a browser   */
@@ -1684,7 +2050,9 @@ int browser_pointer_entering(int eventcode, WimpPollBlock * block, IdBlock * idb
 /* windows_close_browser.                        */
 /*                                               */
 /* Parameters are as standard for a Wimp event   */
-/* handler.                                      */
+/* handler, but only the 'self_id' field of the  */
+/* ID block is used, to work out what browser    */
+/* the pointer has left.                         */
 /*************************************************/
 
 int browser_pointer_leaving(int eventcode, WimpPollBlock * block, IdBlock * idb, void * handle)
@@ -1730,12 +2098,12 @@ int browser_pointer_leaving(int eventcode, WimpPollBlock * block, IdBlock * idb,
       b->pointer_over = NULL;
     }
 
-    pointer_is_over = 0;
+    pointer_is_over = NULL_ObjectId;
 
     return 1;
   }
 
-  pointer_is_over = 0;
+  pointer_is_over = NULL_ObjectId;
 
   return 0;
 }

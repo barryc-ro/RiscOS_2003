@@ -10,7 +10,6 @@
 /*                     main browser code.          */
 /***************************************************/
 
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +29,7 @@
 #include "FromROSLib.h"
 #include "Utils.h"
 
+#include "Browser.h"
 #include "ChoiceDefs.h"
 #include "FetchPage.h"
 #include "Filetypes.h"
@@ -196,7 +196,7 @@ static _kernel_oserror * hotlist_get_selected_shape_r    (hotlist_item * list, B
 static _kernel_oserror * hotlist_select_box              (unsigned int first_item, unsigned int last_item, int minx, int maxx);
 static _kernel_oserror * hotlist_select_box_r            (unsigned int first_item, unsigned int last_item, hotlist_item *item, unsigned int *itemno, int minx, int maxx);
 
-static void              hotlist_find_match_r            (char * buffer, int buffer_size, hotlist_item * item, hotlist_item ** lowest_item, int * lowest_offset, int * lowest_diff);
+static void              hotlist_find_match_r            (flex_ptr match_list, const char * match, hotlist_item * item, int * got_any);
 
 /* Save Protocol */
 
@@ -4116,6 +4116,24 @@ static int hotlist_menu_delete_handler(int event_code, ToolboxEvent * event, IdB
 
   if (!hotlist_count_selected_items()) return 0;
 
+  /* If there's a drag in progress, cancel it */
+
+  if (
+       hotlist_dragging.drag_type == HOTLIST_BOX_DRAG          ||
+       hotlist_dragging.drag_type == HOTLIST_SOLID_DRAG_OBJECT ||
+       hotlist_dragging.drag_type == HOTLIST_SOLID_DRAG_SPRITE
+     )
+     hotlist_drag_stop_handler(0, NULL, NULL, NULL);
+
+  /* Make sure all menus are closed - a bit draconian but it */
+  /* avoids various possible combinations of things getting  */
+  /* out of date.                                            */
+
+  _swix(Wimp_CreateMenu,
+        _IN(1),
+
+        -1);
+
   /* Delete all selected items */
 
   while ((item = hotlist_find_selected_item()) != NULL)
@@ -5096,6 +5114,10 @@ static _kernel_oserror * hotlist_start_drag_backend(void)
 /* hotlist_drag_stop_handler()                   */
 /*                                               */
 /* Terminates any hotlist drag in progress.      */
+/*                                               */
+/* None of the parameters are actually used, so  */
+/* calling directly (rather than by eventlib) is */
+/* easy.                                         */
 /*************************************************/
 
 static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
@@ -7035,43 +7057,30 @@ static _kernel_oserror * hotlist_get_selected_shape_r(hotlist_item * list, BBox 
 /* if there's something in the Hotlist that      */
 /* matches it in some way.                       */
 /*                                               */
-/* If it finds something, it writes it back to   */
-/* the buffer and returns 1.                     */
+/* If it finds something it adds any hits to the */
+/* given match_list list, and returns 1.         */
 /*                                               */
-/* Parameters: Pointer to the buffer holding the */
-/*             string to try and match;          */
+/* The search is case sensitive.                 */
 /*                                               */
-/*             Size of the buffer in bytes.      */
+/* Parameters: flex_ptr to hang the list of      */
+/*             matches from;                     */
 /*                                               */
-/* Returns:    1 if the buffer is updated with a */
-/*             match string, else 0 (buffer      */
-/*             contents will be unaltered).      */
+/*             Pointer to the buffer holding the */
+/*             string to try and match.          */
+/*                                               */
+/* Returns:    1 if match_list is updated with   */
+/*             one or more matches, else 0.      */
 /*************************************************/
 
-int hotlist_find_match(char * buffer, int buffer_size)
+int hotlist_find_match(flex_ptr match_list, const char * match)
 {
-  hotlist_item * lowest_item   = NULL;
-  int            lowest_offset = -1;
-  int            lowest_diff   = 0;
+  int got_any = 0;
 
-  if (!buffer || !*buffer) return 0;
+  if (!match_list || !match || !*match) return 0;
 
-  hotlist_find_match_r(buffer,
-                       buffer_size,
-                       hotlist_root,
-                       &lowest_item,
-                       &lowest_offset,
-                       &lowest_diff);
+  hotlist_find_match_r(match_list, match, hotlist_root, &got_any);
 
-  if (lowest_item && lowest_offset >= 0)
-  {
-    strncpy(buffer, lowest_item->data.url, buffer_size);
-    buffer[buffer_size - 1] = 0;
-
-    return 1;
-  }
-
-  return 0;
+  return got_any;
 }
 
 /*************************************************/
@@ -7079,87 +7088,55 @@ int hotlist_find_match(char * buffer, int buffer_size)
 /*                                               */
 /* Recursive back-end to hotlist_find_match.     */
 /*                                               */
-/* Parameters: Pointer to the buffer holding the */
+/* Parameters: flex_ptr to hang the list of      */
+/*             matches from;                     */
+/*                                               */
+/*             Pointer to the buffer holding the */
 /*             string to try and match;          */
 /*                                               */
-/*             Size of the buffer in bytes;      */
+/*             Pointer to the hotlist_item to    */
+/*             treat as a root directory for     */
+/*             the search;                       */
 /*                                               */
-/*             Pointer to a hotlist_item at the  */
-/*             top of the directory to scan;     */
+/*             Pointer to an int, which at exit  */
+/*             is updated to hold 1 if any hits  */
+/*             were made in the search, else it  */
+/*             is left alone.                    */
 /*                                               */
-/*             Pointer to a hotlist_item * in    */
-/*             which the best match hotlist_item */
-/*             is written, if any;               */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             lowest offset into a string so    */
-/*             far is written;                   */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             lowest difference in lengths      */
-/*             between the buffer and match      */
-/*             string is written.               */
+/* Assumes: All pointers are non-NULL and valid. */
 /*************************************************/
 
-static void hotlist_find_match_r(char * buffer, int buffer_size, hotlist_item * item,
-                                 hotlist_item ** lowest_item, int * lowest_offset,
-                                 int * lowest_diff)
+static void hotlist_find_match_r(flex_ptr match_list, const char * match, hotlist_item * item, int * got_any)
 {
   while (item)
   {
     if (item->type == hl_directory)
     {
-      hotlist_find_match_r(buffer,
-                           buffer_size,
+      hotlist_find_match_r(match_list,
+                           match,
                            item->data.directory_content,
-                           lowest_item,
-                           lowest_offset,
-                           lowest_diff);
+                           got_any);
     }
     else
     {
-      int          this_offset = 0;
-      int          got_one     = 0;
-      const char * found;
+      const char * found = NULL;
 
       if (item->data.url)
       {
-        found = strstr(item->data.url, buffer);
-
-        if (found)
-        {
-          this_offset = found - item->data.url;
-          got_one     = 1;
-        }
+        found = strstr(item->data.url, match);
       }
 
-      if (!got_one && item->name)
+      if (!found && item->name)
       {
-        found = strstr(item->name, buffer);
-
-        if (found)
-        {
-          this_offset = found - item->name;
-          got_one     = 1;
-        }
+        found = strstr(item->name, match);
       }
 
-      if (got_one)
+      if (found)
       {
-        if (*lowest_offset < 0 || this_offset <= *lowest_offset)
-        {
-          int this_diff = strlen(item->data.url) - strlen(buffer);
+        int ok = browser_add_match_list_entry(match_list, item->data.url);
 
-          *lowest_offset = this_offset;
-
-          if (this_offset < *lowest_offset) *lowest_diff = 0;
-
-          if (!*lowest_diff || (this_diff && this_diff < *lowest_diff))
-          {
-            *lowest_diff = this_diff;
-            *lowest_item = item;
-          }
-        }
+        if (ok) *got_any = 1;
+        else if (!*match_list) return;
       }
     }
 

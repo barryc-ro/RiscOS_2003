@@ -177,6 +177,181 @@ _kernel_oserror * savefile_open_for(browser_data * b, savefile_open_reason reaso
 }
 
 /*************************************************/
+/* savefile_raise_from_shortcut()                */
+/*                                               */
+/* For several event codes, open the Save File   */
+/* dialogue box with parent object and component */
+/* ID set up accordingly.                        */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+int savefile_raise_from_shortcut(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  WimpGetPointerInfoBlock   info;
+  browser_data            * b;
+  ComponentId               pc;
+  ObjectId                  this;
+  ObjectId                  source;
+
+  /* Useful for some items */
+
+  if (wimp_get_pointer_info(&info)) return 0;
+
+  /* Need to know what browser to refer to */
+
+  if (idb->ancestor_id != NULL_ObjectId)    source = idb->ancestor_id;
+  else if (idb->parent_id != NULL_ObjectId) source = idb->parent_id;
+  else if (idb->self_id != NULL_ObjectId)   source = idb->self_id;
+  else return 0; /* (with a surprised look on your face) */
+
+  /* Where did we come from? */
+
+  if (
+       toolbox_get_client_handle(0,
+                                 source,
+                                 (void *) &b)
+       || !b
+     )
+     return 0;
+
+  /* First, deal with cases where we want to look at the selected */
+  /* frame or ancestor depending on what the save type is         */
+
+  switch (eventcode)
+  {
+    default: return 0; break;
+
+    case ESaveFileShortcutSaveHTML:
+    case ESaveFileShortcutSaveLocation:
+    case ESaveFileShortcutExportDraw:
+    case ESaveFileShortcutExportText:
+    case ESaveFileShortcutExportLink:
+    case ESaveFileShortcutExportPicture:
+    case ESaveFileShortcutExportBackground:
+    {
+      if (b->selected_frame) b = b->selected_frame;
+    }
+    break;
+  }
+
+  /* Now deal with the parent component for the benefit of */
+  /* savefile_to_be_shown. In addition, some sanity checks */
+  /* made when (e.g.) menus are opened or whatever, to do  */
+  /* things like greying out components so dialogues could */
+  /* not be opened in the first place, are not made when   */
+  /* a keyboard shortcut is activated; must do those here. */
+
+  switch (eventcode)
+  {
+    case ESaveFileShortcutSaveHTML:
+    {
+      if (!b->source) return 0;
+      else pc = FileSaveFrame;
+    }
+    break;
+
+    case ESaveFileShortcutSaveLocation:
+    {
+      if (!browser_current_url(b) && !browser_fetch_url(b)) return 0;
+      else pc = FileSaveFrameLocation;
+    }
+    break;
+
+    case ESaveFileShortcutExportDraw:
+    {
+      if (b->nchildren || !b->cell || !b->cell->nlines) return 0;
+      else pc = ExportAsDraw;
+    }
+    break;
+
+    case ESaveFileShortcutExportText:
+    {
+      if (b->nchildren || !b->cell || !b->cell->nlines) return 0;
+      else pc = ExportAsText;
+    }
+    break;
+
+    case ESaveFileShortcutExportLink:
+    {
+      HStream * link = browser_get_pointer_token(b, &info, NULL, NULL);
+
+      if (!link || !ISLINK(link)) return 0;
+
+      menus_set_opened_details(b, link);
+      pc = ExportLink;
+    }
+    break;
+
+    case ESaveFileShortcutExportPicture:
+    {
+      HStream * image = browser_get_pointer_token(b, &info, NULL, NULL);
+
+      /* Is this an image, which has been fetched? Need to */
+      /* allow the "save as sprite" option in the save     */
+      /* dialogue as there is no way of greying this out   */
+      /* at present, so it must have sprite data.          */
+
+      if (
+           !image ||
+           !
+           (
+             (image->style & IMG) ||
+             (
+               image->tagno == TAG_INPUT &&
+               HtmlINPUTtype(image) == inputtype_IMAGE
+             )
+             ||
+             (
+               ISOBJECT(image) &&
+               object_token_is_image(b, image)
+             )
+           )
+           || !image_token_can_be_saved_as_sprite(b, image)
+         )
+         return 0;
+
+      menus_set_opened_details(b, image);
+      pc = ExportPicture;
+    }
+    break;
+
+    case ESaveFileShortcutExportBackground:
+    {
+      if (b->background_image == -1) return 0;
+
+      menus_set_opened_details(b, NULL);
+      pc = ExportBackground;
+    }
+    break;
+
+    default:
+    {
+      pc = NULL_ObjectId;
+    }
+    break;
+  }
+
+  /* Show the object next to the pointer, which (assuming the Res */
+  /* file isn't broken!) leads to calling of savefile_to_be_shown */
+  /* - since the object is shared, creating it just returns the   */
+  /* ID of the existing item if it has been created before.       */
+
+  ChkError(toolbox_create_object(0,
+                                 "SaveFile",
+                                 &this));
+
+  ChkError(toolbox_show_object(Toolbox_ShowObject_AsMenu,
+                               this,
+                               Toolbox_ShowObject_AtPointer,
+                               NULL,
+                               b->self_id,
+                               pc));
+  return 1;
+}
+
+/*************************************************/
 /* savefile_to_be_shown()                        */
 /*                                               */
 /* Fills in the Save File dialogue prior to      */
@@ -195,6 +370,7 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
   int            first_time = !window_id;
   int            ok         = 0;
   ObjectId       pc         = idb->parent_component;
+  ObjectId       source;
 
   /* If this is the first time we've been opened, do a few */
   /* initialisation bits and pieces                        */
@@ -219,7 +395,13 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
   /* Where did we come from? */
 
-  ChkError(toolbox_get_client_handle(0, idb->ancestor_id, (void *) &b));
+  if (idb->ancestor_id != NULL_ObjectId)    source = idb->ancestor_id;
+  else if (idb->parent_id != NULL_ObjectId) source = idb->parent_id;
+  else return 0;
+
+  ChkError(toolbox_get_client_handle(0,
+                                     source,
+                                     (void *) &b));
 
   /* Deal with each parent menu item case */
 
@@ -227,9 +409,11 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
   {
     case -1:
     {
-      /* If the dialogue was raised directly from a keyboard shortcut, */
-      /* (hmm, preferable to go through an event...) want to save the  */
-      /* current page source.                                          */
+      /* -1 implies a keyboard shortcut raised the dialogue. This is an */
+      /* outdated interface (should now use events that are registered  */
+      /* to call savefile_raise_from_shortcut, see Main.c) but we       */
+      /* support it to avoid changing existing Res files where only the */
+      /* one type of Save File shortcut is required.                    */
 
       pc = FileSaveFrame;
 
@@ -436,6 +620,7 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
       b   = alt;
       url = browser_current_url(b);
 
+      if (!url) url = browser_fetch_url(b);
       if (!url) url = " ";
 
       ChkError(savefile_switch_to_option(idb->self_id));
@@ -539,6 +724,29 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
           return 0;
 
         #endif
+      }
+      else
+      {
+        if (!image_token_can_be_saved_as_sprite(b, image))
+        {
+          #ifndef TRACE
+
+            return 0;
+
+          #else
+
+            erb.errnum = Utils_Error_Custom_Normal;
+
+            sprintf(erb.errmess,
+                    "Image represented by token %p cannot be saved as a sprite savefile_to_be_shown",
+                    image);
+
+            show_error_ret(&erb);
+
+            return 0;
+
+          #endif
+        }
       }
 
       if (image->style & IMG)             src = image->src;
@@ -905,6 +1113,7 @@ static int savefile_drag_ended(int eventcode, ToolboxEvent * event, IdBlock * id
       char * url   = browser_current_url  (savefile_browser);
       char * title = browser_current_title(savefile_browser);
 
+      if (!url) url = browser_fetch_url(savefile_browser);
       if (!url) url = " ";
 
       saving = protocols_saving_frame_location;
@@ -1176,6 +1385,7 @@ static int savefile_ok(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
           char * url   = browser_current_url  (savefile_browser);
           char * title = browser_current_title(savefile_browser);
 
+          if (!url) url = browser_fetch_url(savefile_browser);
           if (!url) url = " ";
 
           e = save_save_uri(path, url, title, alt);

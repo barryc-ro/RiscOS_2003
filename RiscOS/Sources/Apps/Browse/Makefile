@@ -50,6 +50,12 @@
 #			overwrites the current exported Surfboard, Desktop
 #			or whatever build, you still probably want to keep
 #			the previous symbols table.
+# 1998-31-07	ADH	The above is insufficient; a link is still tried
+#			with MemLib, NSPRLib and JSLib even though they
+#			may ultimately not be included. So these must be
+#			built at all times. In addition, note that
+#			USE_MALLOC_REPLACEMENT is now defined in the
+#			BASEFLAGS (i.e. defined for every build).
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -99,6 +105,8 @@ WFLAGS		= ~cf~vr
 # ROM build (plus debug), the Surfboard RAM build (plus debug), and the
 # Intertalk build (plus debug).
 
+#BASEFLAGS	= -DCOMPAT_INET4 -DUSE_MALLOC_REPLACEMENT -DRISCOS -DNSPR20
+#BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUNIFONT
 BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20
 
 # Note JSUFFIX *must* be defined on the command line.
@@ -249,6 +257,11 @@ OBJS = \
  o.ItemInfo		\
  o.JavaScript		\
  o.JSconsts		\
+ o.JSdocument		\
+ o.JSnavigtr		\
+ o.JSscreen		\
+ o.JSURL		\
+ o.JSutils		\
  o.JSwindow		\
  o.LineOne		\
  o.Main			\
@@ -312,7 +325,11 @@ OBJSZ = \
  oz.ItemInfo		\
  oz.JavaScript		\
  oz.JSconsts		\
+ oz.JSdocument		\
+ oz.JSnavigtr		\
+ oz.JSscreen		\
  oz.JSURL		\
+ oz.JSutils		\
  oz.JSwindow		\
  oz.LineOne		\
  oz.Main		\
@@ -376,6 +393,11 @@ OBJSD = \
  od.ItemInfo		\
  od.JavaScript		\
  od.JSconsts		\
+ od.JSdocument		\
+ od.JSnavigtr		\
+ od.JSscreen		\
+ od.JSURL		\
+ od.JSutils		\
  od.JSwindow		\
  od.LineOne		\
  od.Main		\
@@ -441,7 +463,11 @@ OBJSDZ = \
  odz.ItemInfo		\
  odz.JavaScript		\
  odz.JSconsts		\
+ odz.JSdocument		\
+ odz.JSnavigtr		\
+ odz.JSscreen		\
  odz.JSURL		\
+ odz.JSutils		\
  odz.JSwindow		\
  odz.LineOne		\
  odz.Main		\
@@ -506,7 +532,11 @@ OBJS_SURF = \
  o_surf.ItemInfo	\
  o_surf.JavaScript	\
  o_surf.JSconsts	\
+ o_surf.JSdocument	\
+ o_surf.JSnavigtr	\
+ o_surf.JSscreen	\
  o_surf.JSURL		\
+ o_surf.JSutils		\
  o_surf.JSwindow	\
  o_surf.LineOne		\
  o_surf.Main		\
@@ -569,7 +599,11 @@ OBJSD_SURF = \
  od_surf.ItemInfo	\
  od_surf.JavaScript	\
  od_surf.JSconsts	\
+ od_surf.JSdocument	\
+ od_surf.JSnavigtr	\
+ od_surf.JSscreen	\
  od_surf.JSURL		\
+ od_surf.JSutils	\
  od_surf.JSwindow	\
  od_surf.LineOne	\
  od_surf.Main		\
@@ -635,7 +669,11 @@ OBJS_ITALK = \
  o_italk.ItemInfo	\
  o_italk.JavaScript	\
  o_italk.JSconsts	\
+ o_italk.JSdocument	\
+ o_italk.JSnavigtr	\
+ o_italk.JSscreen	\
  o_italk.JSURL		\
+ o_italk.JSutils	\
  o_italk.JSwindow	\
  o_italk.LineOne	\
  o_italk.Main		\
@@ -699,7 +737,11 @@ OBJSD_ITALK = \
  od_italk.ItemInfo	\
  od_italk.JavaScript	\
  od_italk.JSconsts	\
+ od_italk.JSdocument	\
+ od_italk.JSnavigtr	\
+ od_italk.JSscreen	\
  od_italk.JSURL		\
+ od_italk.JSutils	\
  od_italk.JSwindow	\
  od_italk.LineOne	\
  od_italk.Main		\

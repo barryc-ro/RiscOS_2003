@@ -38,12 +38,17 @@
 #include "Frames.h"
 #include "History.h"
 #include "JavaScript.h"
-#include "JSconsts.h"
 #include "URLutils.h"
 
-#include "JSURL.h"
-
 #ifdef JAVASCRIPT
+
+  #include "JSconsts.h"
+
+  #include "JSURL.h"
+
+  /* Locals */
+
+  static JSBool replace_location = JS_FALSE;
 
   /* Static function prototypes */
 
@@ -82,7 +87,7 @@
     URL_Y         = -2  /* Layout Y coordinate             */
   };
 
-  static JSPropertySpec url_props[] =
+  static JSPropertySpec jsurl_properties[] =
   {
     { "href",     URL_HREF,     JSPROP_ENUMERATE },
     { "protocol", URL_PROTOCOL, JSPROP_ENUMERATE },
@@ -111,7 +116,7 @@
 
   /* URL object methods */
 
-  static JSFunctionSpec url_methods[] =
+  static JSFunctionSpec jsurl_methods[] =
   {
     { lm_toString_str, jsurl_to_string, 0},
     { 0 }
@@ -131,7 +136,7 @@
 
   /* Location object methods */
 
-  static JSFunctionSpec loc_methods[] =
+  static JSFunctionSpec jsurl_location_methods[] =
   {
     { lm_toString_str, jsurl_location_to_string, 0 },
     { lm_assign_str,   jsurl_location_assign,    1 },
@@ -154,7 +159,7 @@
   {
     jsint             slot;
     JSURL           * url;
-    JSString        * str = NULL;
+    char            * str = NULL;
     JSString        * dup = NULL;
     char            * tmp = NULL;
     url_description * parsed;
@@ -252,6 +257,7 @@
           str = tmp;
         }
       }
+      break;
 
       /* Target string for the URL */
 
@@ -265,7 +271,7 @@
           return JS_TRUE;
         }
 
-        str = url->target;
+        str = JS_GetStringBytes(url->target);
       }
       break;
 
@@ -276,14 +282,15 @@
       {
         if (!url->text)
         {
-          urlutils_free_description(parsed);   abs
+          urlutils_free_description(parsed);
 
           *vp = JSVAL_NULL;
           return JS_TRUE;
         }
 
-        str = url->text;
+        str = JS_GetStringBytes(url->text);
       }
+      break;
 
       /* Don't modify user-defined methods or properties */
 
@@ -329,19 +336,11 @@
   /* handler (callback) function.                  */
   /*************************************************/
 
-  PR_STATIC_CALLBACK(JSBool) jsurl_get_property(JSContext * cx, JSObject * obj, jsval id, jsval * vp)
+  PR_STATIC_CALLBACK(JSBool) jsurl_set_property(JSContext * cx, JSObject * obj, jsval id, jsval * vp)
   {
-    JSURL      * url;
-    JSString   * str;
-    const char * href;
-    char       * prop_name;
-
-    jsint             slot;
-    JSURL           * url;
-    JSString        * str = NULL;
-    JSString        * dup = NULL;
-    char            * tmp = NULL;
-    url_description * parsed;
+    JSURL * url;
+    char  * prop_name;
+    jsint   slot;
 
     #ifdef TRACE
       if (tl & (1u<<24)) Printf("jsurl_set_property: Called\n");
@@ -474,7 +473,47 @@
 
   PR_STATIC_CALLBACK(JSBool) jsurl_get_location_property(JSContext * cx, JSObject * obj, jsval id, jsval * vp)
   {
-    return JS_TRUE;
+    JSURL        * url;
+    browser_data * decoder;
+    const char   * url_string;
+    JSString     * str;
+
+    /* Usual check the slot, get the object, get the */
+    /* browser rigmarole...                          */
+
+    if (!JSVAL_IS_INT(id) || JSVAL_TO_INT(id) < 0) return JS_TRUE;
+
+    url = JS_GetInstancePrivate(cx,
+                                obj,
+                                &jsurl_location_class,
+                                NULL);
+    if (!url) return JS_TRUE;
+
+    decoder = url->url_decoder;
+    if (!decoder) return JS_TRUE;
+
+    /* What is the current location URL? */
+
+    url_string = browser_current_url(decoder);
+    if (!url_string) url_string = browser_fetch_url(decoder);
+    if (!url_string) url_string = "";
+
+    /* If the location has changed, store the new value */
+
+    if (
+         !url->href ||
+         urlutils_urlsscmp(JS_GetStringBytes(url->href), url_string)
+       )
+    {
+      str = JS_NewStringCopyZ(cx, url_string);
+      if (!str) return JS_FALSE;
+
+      url->href = str;
+    }
+
+    /* Exit through the Get routine */
+
+    return jsurl_get_property(cx, obj, id, vp);
   }
 
   /*************************************************/
@@ -489,6 +528,91 @@
 
   PR_STATIC_CALLBACK(JSBool) jsurl_set_location_property(JSContext * cx, JSObject * obj, jsval id, jsval * vp)
   {
+    const char * url_string;
+    JSString   * str;
+    JSURL      * url;
+    jsint        slot;
+    JSBool       replace = replace_location;
+    jsval        val;
+
+    replace_location = JS_FALSE;
+
+    if (!JSVAL_IS_INT(id)) return JS_TRUE;
+
+    slot = JSVAL_TO_INT(id);
+
+    /* Setting these properties should not cause a fetch. */
+
+    if (slot < 0 || slot == URL_TARGET) return jsurl_set_property(cx, obj, id, vp);
+
+    /* Make sure vp is a string. */
+
+    if (
+         !JSVAL_IS_STRING(*vp) &&
+         !JS_ConvertValue(cx, *vp, JSTYPE_STRING, vp)
+       )
+       return JS_FALSE;
+
+    /* Two cases: setting href vs. setting a component property. */
+
+    if (slot == URL_HREF || slot == URL_PROTOCOL)
+    {
+      url_description * desc;
+
+      /* Make sure the URL is absolute and sanity-check its protocol. */
+
+      url_string = JS_GetStringBytes(JSVAL_TO_STRING(*vp));
+      desc       = urlutils_return_description(url_string);
+
+      if (!desc) return JS_FALSE;
+
+      urlutils_free_description(desc);
+
+      str = JS_NewStringCopyZ(cx, url_string);
+      if (!str) return JS_FALSE;
+
+      val = STRING_TO_JSVAL(str);
+      vp  = &val;
+    }
+    else
+    {
+      /* Get the href property directly */
+
+      if (
+           !jsurl_get_location_property(cx,
+                                        obj,
+                                        INT_TO_JSVAL(URL_HREF),
+                                        &val)
+         )
+         return JS_FALSE;
+    }
+
+    /* Set slot's property. */
+
+    if (!jsurl_set_property(cx, obj, id, vp)) return JS_FALSE;
+
+    url = JS_GetPrivate(cx, obj);
+
+    if (!url)              return JS_TRUE;
+    if (!url->url_decoder) return JS_TRUE;
+
+    if (url->href) url_string = JS_GetStringBytes(url->href);
+    else           url_string = "";
+
+    /* Fetch the URL */
+
+    {
+      _kernel_oserror * e = fetchpage_new(url->url_decoder,
+                                          url_string,
+                                          (replace == JS_TRUE ? 1 : 0),
+                                          1);
+      if (e)
+      {
+        show_error_ret(e);
+        return JS_FALSE;
+      }
+    }
+
     return JS_TRUE;
   }
 
@@ -514,7 +638,6 @@
   {
     JSURL        * url;
     browser_data * decoder;
-    const char   * url_string;
 
     url = JS_GetInstancePrivate(cx, obj, &jsurl_location_class, NULL);
     if (!url) return NULL;
@@ -603,7 +726,7 @@
                          &jsurl_class,
                          jsurl_constructor,
                          0,
-                         url_props,
+                         jsurl_properties,
                          NULL,
                          NULL,
                          NULL);
@@ -625,7 +748,7 @@
     obj = JS_NewObject(cx,
                        &jsurl_class,
                        b->url_prototype,
-                       b->document); // This is NOT necessarily correct!
+                       b->document); // Could be incorrect; should be result of lm_GetOuterObject, lm_init.c
 
     if (!obj || !JS_SetPrivate(cx, obj, url))
     {
@@ -638,7 +761,7 @@
     if (
          !JS_DefineFunctions(cx,
                              obj,
-                             url_methods)
+                             jsurl_methods)
        )
        return NULL;
 
@@ -649,7 +772,7 @@
     url->index       = URL_NOT_INDEXED;
     url->url_object  = obj;
 
-    if (url) str = JS_NewStringCopyZ(cx, url);
+    if (url) str = JS_NewStringCopyZ(cx, urlc);
     else     str = JS_NewStringCopyZ(cx, "");
 
     if (!str) return NULL;
@@ -660,17 +783,17 @@
     if (target) str = JS_NewStringCopyZ(cx, target);
     else        str = JS_NewStringCopyZ(cx, "");
 
-    if (!target) return NULL;
+    if (!str) return NULL;
 
-    url->target = target;
+    url->target = str;
     if (!JS_AddNamedRoot(cx, &url->target, "url.target")) return NULL;
 
     if (text) str = JS_NewStringCopyZ(cx, text);
     else      str = JS_NewStringCopyZ(cx, "");
 
-    if (!text) return NULL;
+    if (!str) return NULL;
 
-    url->text = text;
+    url->text = str;
     if (!JS_AddNamedRoot(cx, &url->text, "url.text")) return NULL;
 
     return url;
@@ -712,7 +835,7 @@
 
     /* Throw away the object */
 
-    free(url);
+    JS_free(cx, url);
 
     #ifdef TRACE
       if (tl & (1u<<24)) Printf("jsurl_finalise: Successful\n");
@@ -782,8 +905,8 @@
                        &jsurl_location_class,
                        jsurl_location_constructor,
                        0,
-                       url_props,
-                       loc_methods,
+                       jsurl_properties,
+                       jsurl_location_methods,
                        NULL,
                        NULL);
 
@@ -802,6 +925,7 @@
     /* Set up the 'location' property within the Window object */
 
     if (
+         !decoder->window_object ||
          !JS_DefineProperty(cx,
                             decoder->window_object,
                             lm_location_str,
@@ -812,18 +936,19 @@
        )
        return NULL;
 
-//    /* Set up the 'location' property within the Document object too */
-//
-//    if (
-//         !JS_DefineProperty(cx,
-//                            decoder->document,
-//                            lm_location_str,
-//                            OBJECT_TO_JSVAL(obj),
-//                            NULL,
-//                            NULL,
-//                            JSPROP_ENUMERATE | JSPROP_READONLY)
-//       )
-//       return NULL;
+    /* Set up the 'location' property within the Document object too */
+
+    if (
+         !decoder->document ||
+         !JS_DefineProperty(cx,
+                            decoder->document,
+                            lm_location_str,
+                            OBJECT_TO_JSVAL(obj),
+                            NULL,
+                            NULL,
+                            JSPROP_ENUMERATE | JSPROP_READONLY)
+       )
+       return NULL;
 
     /* Define the Location object (the current URL) */
 
@@ -869,7 +994,11 @@
     jsval   v;
 
     url = JS_GetInstancePrivate(cx, obj, &jsurl_location_class, argv);
-    if (!url) return JS_FALSE;
+    if (!url)
+    {
+      replace_location = JS_FALSE;
+      return JS_FALSE;
+    }
 
     v = argv[0];
 
@@ -881,7 +1010,8 @@
        )
        return JS_FALSE;
 
-    *rval = OBJECT_TO_JSVAL(url->url_object);
+    replace_location = JS_FALSE;
+    *rval            = OBJECT_TO_JSVAL(url->url_object);
 
     return JS_TRUE;
   }
@@ -900,8 +1030,20 @@
                                                    uint argc, jsval * argv, jsval * rval)
   {
     _kernel_oserror * e;
+    browser_data    * b;
+    JSURL           * url;
 
     if (!JS_InstanceOf(cx, obj, &jsurl_location_class, argv)) return JS_FALSE;
+
+    url = JS_GetInstancePrivate(cx,
+                                obj,
+                                &jsurl_location_class,
+                                argv);
+
+    if (!url) return JS_FALSE;
+
+    b = url->url_decoder;
+    if (!b) return JS_FALSE;
 
     if (JSVAL_IS_BOOLEAN(argv[0]) && JSVAL_TO_BOOLEAN(argv[0]))
     {
@@ -923,10 +1065,10 @@
   }
 
   /*************************************************/
-  /* jsurl_location_reload()                       */
+  /* jsurl_location_replace()                      */
   /*                                               */
   /* Implementation of the Location object         */
-  /* reload() method.                              */
+  /* replace() method.                             */
   /*                                               */
   /* Parameters are as standard for a JavaScript   */
   /* method implementation.                        */
@@ -944,7 +1086,7 @@
 
     if (!url) return JS_FALSE;
 
-    url->url_decoder->replace_location = JS_TRUE;
+    replace_location = JS_TRUE;
 
     return jsurl_location_assign(cx, obj, argc, argv, rval);
   }

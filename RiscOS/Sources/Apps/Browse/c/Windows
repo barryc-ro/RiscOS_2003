@@ -50,6 +50,7 @@
 #include "Memory.h"
 #include "Menus.h"
 #include "Meta.h"
+#include "Mouse.h"
 #include "Object.h"
 #include "OpenURL.h"
 #include "PlugIn.h"
@@ -1077,9 +1078,10 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
 
         /* Set the poll block contents to open the window in the right place. */
         /* Notice if Shift is held down and don't cover icon bar, and if Ctrl */
-        /* is held down we leave the X positions alone.                       */
+        /* is held down we leave the X positions alone (unless Choices say    */
+        /* to reverse the behaviour of Ctrl!).                                */
 
-        if (!ctrl)
+        if ((!choices.toggle_on_x_only && !ctrl) || (choices.toggle_on_x_only && ctrl))
         {
           b->open_window_request.visible_area.xmin = 2;
           b->open_window_request.visible_area.xmax = w.xmax - w.xmin + 2;
@@ -1623,6 +1625,59 @@ int windows_remember_size(int eventcode, WimpPollBlock * b, IdBlock * idb, void 
 }
 
 /*************************************************/
+/* windows_open_parent_filer()                   */
+/*                                               */
+/* Looks at browser_current_url() or if this is  */
+/* unset browser_fetch_url(), and if it finds a  */
+/* 'file:' URL, will open the corresponding      */
+/* parent filer window.                          */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the URL to examine.   */
+/*************************************************/
+
+_kernel_oserror * windows_open_parent_filer(browser_data * b)
+{
+  char * url = browser_current_url(b);
+  char * com = NULL;
+
+  if (!url || !*url) url = browser_fetch_url(b);
+  if (!url || !*url) return NULL;
+
+  if (!utils_strncasecmp(url, FileMethod, sizeof(FileMethod) - 1))
+  {
+    com = malloc(sizeof("Filer_OpenDir ") + strlen(url));
+
+    if (com)
+    {
+      _kernel_oserror * e;
+      char            * last;
+
+      strcpy(com, "Filer_OpenDir ");
+      strcat(com, url);
+
+      urlutils_url_to_pathname((char *) (((int) com) + sizeof("Filer_OpenDir")), strlen(url));
+
+      /* Deal with removing leafnames */
+
+      last = strrchr(com, '.');
+      if (last) *last = '\0';
+
+      e = _swix(OS_CLI,
+                _IN(0),
+
+                com);
+
+      free(com);
+
+      return e;
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
 /* windows_close_browser()                       */
 /*                                               */
 /* Closes a Browser window, freeing up memory    */
@@ -1759,9 +1814,25 @@ void windows_close_browser(browser_data * handle)
   if (handle->meta_refresh_at) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) meta_check_refresh, handle);
   handle->meta_refresh_at = 0;
 
-  if (handle->dragging) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_drags, handle);
-  handle->dragging = 0;
-  drag_in_progress = 0;
+  if (handle->dragging)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      StrNCpy0(erb.errmess,
+               "Shouldn't be closing the window during a drag in windows_close_browser - but attempting to recover anyway");
+
+      show_error_ret(&erb);
+
+    #endif
+
+    if (handle->dragging) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_drags, handle);
+    handle->dragging = 0;
+    drag_in_progress = 0;
+
+    mouse_set_pointer_shape(Mouse_Shape_Normal);
+  }
 
   /* If watching the dialler's status changed service call,   */
   /* or displaying online time, remove the relevant handlers. */
@@ -1819,18 +1890,13 @@ void windows_close_browser(browser_data * handle)
 
   markers_clear_markers(handle);
 
-  /* Get rid of the fetched source / stream */
+  /* Get rid of the page source andany fetching stream */
 
   browser_destroy_source(handle);
 
   if (handle->fetch_handle)
   {
     ChkError(html_close(handle->fetch_handle));
-  }
-
-  if (handle->display_handle)
-  {
-    ChkError(html_close(handle->display_handle));
   }
 
   /* Close any saving files */
@@ -1873,6 +1939,10 @@ void windows_close_browser(browser_data * handle)
   #endif
 
   if (handle->post_data) flex_free((flex_ptr) &handle->post_data);
+
+  /* Remove any match list (from Ctrl+Tab URL completion or something similar) */
+
+  if (handle->match_list) browser_empty_match_list((flex_ptr) &handle->match_list);
 
   /* Remove any Plug-In status message */
 
@@ -1961,6 +2031,14 @@ void windows_close_browser(browser_data * handle)
   /* Lose any claimed fonts */
 
   fm_lose_fonts(handle);
+
+  /* Now that almost everything else has closed down, we can get rid */
+  /* of the display stream                                           */
+
+  if (handle->display_handle)
+  {
+    ChkError(html_close(handle->display_handle));
+  }
 
   /* Sort out the linked list next and previous pointers in */
   /* the previous and next entries to this one (if they are */

@@ -44,10 +44,8 @@
 
   /* Local compilation options */
 
-  #define WATCHDOG
-  #define BRANCH_CALLBACK_GC_MASK      0
-  #define BRANCH_CALLBACK_LED_MASK     63
-  #define BRANCH_CALLBACK_INTERRUPT_AT 1000
+  #define BRANCH_CALLBACK_GC_MASK  0
+  #define BRANCH_CALLBACK_LED_MASK 63
 
   /* Static function prototypes */
 
@@ -61,6 +59,8 @@
   static unsigned int        watchdog_leds;
   static browser_data      * script_browser = NULL;
   static javascript_source   script_source  = JavaScript_Source_Unknown;
+  static char              * script_write_p = NULL;
+  static int                 script_write_l = 0;
   static int                 source_set     = 0;
   static int                 doc_write_used = 0;
   static int                 proceed        = 0;
@@ -292,6 +292,7 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
   static JSBool PR_CALLBACK javascript_watchdog(JSContext * cx, JSScript * script)
   {
     int now;
+    int esc;
 
     if (
          _swix(OS_ReadMonotonicTime,
@@ -321,12 +322,37 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       JS_MaybeGC(cx);
     }
 
-    #ifdef WATCHDOG
+    /* Check Escape */
 
+    if (!_swix(OS_Byte,
+               _INR(0, 1) | _OUT(1),
+
+               121, /* Key scan reason code */
+               112, /* Key code for Escape  */
+
+               &esc))
+    {
+      if (esc != 255)
+      {
+        erb.errnum = Utils_Error_Custom_Message;
+
+        StrNCpy0(erb.errmess,
+                 lookup_token("JSEsc:Escape (script aborted)",
+                              0,
+                              0));
+
+        show_error_cont(&erb);
+
+        return JS_FALSE;
+      }
+    }
+
+    if (choices.js_watchdog)
+    {
       /* Watchdog - if the script has taken more than a certain */
-      /* number of iterations, abort execution.                 */
+      /* length of time, ask if we should stop it.              */
 
-      if (now - watchdog_start > BRANCH_CALLBACK_INTERRUPT_AT)
+      if (now - watchdog_start > choices.js_timeout)
       {
         /* Build the query message */
 
@@ -368,10 +394,16 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
         /* Don't forget to reset the counter :-) */
 
         watchdog_counter = 0;
-        watchdog_start   = now;
-      }
 
-    #endif
+        if (
+             _swix(OS_ReadMonotonicTime,
+                   _OUT(0),
+
+                   &watchdog_start)
+           )
+           watchdog_start = now;
+      }
+    }
 
     /* Increment the counter */
 
@@ -561,10 +593,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
     /* Initialise the JavaScript system */
 
-    jsr = JS_Init(256 * 1024);
+    jsr = JS_Init(JavaScript_HeapBeforeAutoGC /* See JavaScript.h */);
 
     #ifdef TRACE
-      if (tl & (1u<<24)) Printf("Global JavaScript run-time structure %p obtained in initialise_app()\n", jsr);
+      if (tl & (1u<<24)) Printf("javascript_configure_environment: Obtained run-time structure %p\n", jsr);
     #endif
 
     if (!jsr)
@@ -714,10 +746,14 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
   _kernel_oserror * javascript_lose_context(browser_data * b)
   {
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("javascript_lose_context: Called\n");
+    #endif
+
     if (!b->bcx)
     {
       #ifdef TRACE
-        if (tl & (1u<<24)) Printf("Browser %p has no context anyway in javascript_lose_context\n", b);
+        if (tl & (1u<<24)) Printf("javascript_lose_context: Browser %p has no context anyway! Exitting\n", b);
       #endif
 
       return NULL;
@@ -728,7 +764,7 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     if (is_known_browser(b->bcx_inherited))
     {
       #ifdef TRACE
-        if (tl & (1u<<24)) Printf("Browser %p has an inherited context, which was not destroyed in javascript_lose_context\n", b);
+        if (tl & (1u<<24)) Printf("javascript_lose_context: Browser %p has an inherited context, which was not destroyed (exitting)\n", b);
       #endif
 
       return NULL;
@@ -739,6 +775,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
     b->bcx           = NULL;
     b->bcx_inherited = NULL;
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("javascript_lose_context: Successful\n");
+    #endif
 
     return NULL;
   }
@@ -788,7 +828,7 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
       return &erb;
     }
-//Printf("%p ended up with OID %p\n",b,b->window_object);
+
     return NULL;
   }
 
@@ -1074,8 +1114,11 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
           /* Now copy the result across */
 
-          flex_free(&b->source);
-          b->source = NULL;
+          if (b->source)
+          {
+            flex_free(&b->source);
+            b->source = NULL;
+          }
 
           if (flex_alloc((flex_ptr) &b->source, result_len))
           {
@@ -1134,10 +1177,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     int            len;
     const char   * si;
     const char   * url;
+    char         * ret;
     JSScript     * jss;
     jsval          result;
     int            ok;
-    char         * block = NULL;
     browser_data * b     = (browser_data *) handle;
 
     #ifdef TRACE
@@ -1194,6 +1237,8 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     }
 
     /* Set up initial information */
+
+    javascript_free_document_write_block();
 
     script_source  = JavaScript_Source_ScriptInPage;
     script_browser = b;
@@ -1253,34 +1298,6 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       JS_DestroyScript(b->bcx, jss);
     }
 
-    /* Return the results (temporary hack) */
-
-    if (
-         !ok                        ||
-         result == JSVAL_VOID       ||
-         !JS_ConvertValue(b->bcx,
-                          result,
-                          JSTYPE_STRING,
-                          &result)
-       )
-       ok = 0;
-
-    if (ok)
-    {
-      int result_len = JS_GetStringLength(JSVAL_TO_STRING(result)) + 1;
-
-      if ((block = HtmlMalloc(result_len, script_element)) != NULL) /* This zero-fills the block to ensure correct termination */
-      {
-        strncpy(block, JS_GetStringBytes(JSVAL_TO_STRING(result)), result_len);
-      }
-      else
-      {
-        show_error_ret(make_no_javascript_memory_error(3));
-
-        return NULL;
-      }
-    }
-
     /* TRACE builds will report how successful the execution was */
 
     #ifdef TRACE
@@ -1288,18 +1305,155 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       if (tl & (1u<<24))
       {
         if (ok) Printf("javascript_script_callback: \0212Script ran OK\0217\n");
-        else    Printf("javascript_script_callback: \0211Script failed or returned no result\0217\n");
+        else    Printf("javascript_script_callback: \0211Script failed\0217\n");
       }
 
     #endif
 
-    /* Finished */
+    /* Finished - copy the document.write() etc. data, or if there is */
+    /* none or the script failed, return NULL.                        */
 
-    #ifdef TRACE
-      if (tl & (1u<<24)) Printf("javascript_script_callback: Successful\n");
-    #endif
+    if (ok && script_write_l)
+    {
+      int old_budge;
 
-    return block;
+      /* The block has no terminator presently, so '+ 1' below leaves room for one*/
+
+      ret = HtmlMalloc(script_write_l + 1, script_element);
+
+      if (!ret)
+      {
+        #ifdef TRACE
+          if (tl & (1u<<24)) Printf("javascript_script_callback: Couldn't allocate memory for return data block, exitting\n");
+        #endif
+
+        return NULL;
+      }
+
+      /* Copy the existing data over, locking flex down Just In Case */
+
+      old_budge = flex_set_budge(0);
+      memcpy(ret, script_write_p, script_write_l);
+      flex_set_budge(old_budge);
+
+      /* Write the terminator */
+
+      ret[script_write_l] = '\0';
+
+      // If you think document.write is going wrong, this can help...
+      //
+      // #ifdef TRACE
+      //
+      //   {
+      //     char   f[2048];
+      //     FILE * o;
+      //
+      //     protocols_util_make_unique_name(f, sizeof(f));
+      //
+      //     o = fopen(f, "wb");
+      //     if (o)
+      //     {
+      //       fwrite(ret, 1, script_write_l+1, o);
+      //       fclose(o);
+      //     }
+      //   }
+      //
+      // #endif
+
+      /* Free the temporary block */
+
+      javascript_free_document_write_block();
+
+      #ifdef TRACE
+        if (tl & (1u<<24)) Printf("javascript_script_callback: Successful (return block %p)\n", ret);
+      #endif
+
+      return ret;
+    }
+    else
+    {
+      #ifdef TRACE
+        if (tl & (1u<<24)) Printf("javascript_script_callback: Successful with no return data, or script failed\n");
+      #endif
+
+      return NULL;
+    }
+  }
+
+  /*************************************************/
+  /* javascript_allocate_document_write_block()    */
+  /*                                               */
+  /* Allocate a block of memory for a Document     */
+  /* object (or similar) to write into. Repeated   */
+  /* calls to this function will extend the single */
+  /* block and return a pointer to the start point */
+  /* where data should be written. If allocation   */
+  /* fails, the entire block is discarded - there  */
+  /* is no need to remember your old pointer (as   */
+  /* if calling realloc(), say, directly), since   */
+  /* this function does it for you.                */
+  /*                                               */
+  /* Parameters: Amount of data to allocate in     */
+  /*             bytes.                            */
+  /*                                               */
+  /* Returns:    Pointer to start of region where  */
+  /*             data should be written - NULL     */
+  /*             terminators and the like should   */
+  /*             NOT be included.                  */
+  /*************************************************/
+
+  char ** javascript_allocate_document_write_block(int len, int * offset)
+  {
+    int success;
+    int old_l;
+
+    /* Allocate the new block */
+
+    if (script_write_p) success = flex_extend((flex_ptr) &script_write_p, script_write_l + len);
+    else                success = flex_alloc ((flex_ptr) &script_write_p, script_write_l + len);
+
+    if (!success)
+    {
+      if (script_write_p)
+      {
+        flex_free((flex_ptr) &script_write_p);
+
+        script_write_p = NULL;
+        script_write_l = 0;
+      }
+
+      return NULL;
+    }
+
+    /* Remember the new length */
+
+    old_l          = script_write_l;
+    script_write_l = script_write_l + len;
+
+    /* Give back the offset to write to */
+
+    if (offset) *offset = old_l;
+
+    return &script_write_p;
+  }
+
+  /*************************************************/
+  /* javascript_free_document_write_block()        */
+  /*                                               */
+  /* Free memory allocated through the             */
+  /* javascript_allocate_document_write_block()    */
+  /* function.                                     */
+  /*************************************************/
+
+  void javascript_free_document_write_block(void)
+  {
+    if (script_write_p)
+    {
+      flex_free((flex_ptr) &script_write_p);
+
+      script_write_p = NULL;
+      script_write_l = 0;
+    }
   }
 
   /*************************************************/

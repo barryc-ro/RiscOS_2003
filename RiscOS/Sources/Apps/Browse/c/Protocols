@@ -35,6 +35,11 @@
 /*          entity, this is kept separate, in      */
 /*          PlugIn.c.                              */
 /*                                                 */
+/*          Do NOT use MemLib here, as you will    */
+/*          hit the Wimp bug relating to message   */
+/*          blocks stored at high addresses (given */
+/*          an old enough Wimp) if you do.         */
+/*                                                 */
 /* Author : A.D.Hodgkinson                         */
 /*                                                 */
 /* History: 29-Aug-97: Created.                    */
@@ -74,6 +79,7 @@
 #include "Images.h"
 #include "JavaScript.h"
 #include "MimeMap.h"
+#include "OpenURL.h"
 #include "Printing.h"
 #include "Save.h"
 #include "SaveDraw.h"
@@ -654,6 +660,7 @@ _kernel_oserror * protocols_atats_got_ram_fetch(WimpMessage * m)
         char * url   = browser_current_url  (save_link_browser);
         char * title = browser_current_title(save_link_browser);
 
+        if (!url) url = browser_fetch_url(save_link_browser);
         if (!url) url = " ";
 
         return save_transfer_uri(url,
@@ -671,8 +678,12 @@ _kernel_oserror * protocols_atats_got_ram_fetch(WimpMessage * m)
     if (is_known_browser(save_location_browser))
     {
       char * title = browser_current_title(save_location_browser);
+      char * url   = browser_current_url(save_location_browser);
 
-      return save_transfer_uri(browser_current_url(save_location_browser),
+      if (!url) url = browser_fetch_url(save_location_browser);
+      if (!url) url = " ";
+
+      return save_transfer_uri(url,
                                title,
                                save_location_as_url,
                                &save_location_transmitted,
@@ -944,6 +955,7 @@ static _kernel_oserror * protocols_atats_got_data_save_ack(WimpMessage * m)
 
         /* Save the current location as a URI file */
 
+        if (!url) url = browser_fetch_url(save_link_browser);
         if (!url) url = " ";
 
         e = save_save_uri(path, url, title, 0);
@@ -958,8 +970,16 @@ static _kernel_oserror * protocols_atats_got_data_save_ack(WimpMessage * m)
     if (is_known_browser(save_location_browser))
     {
       char * title = browser_current_title(save_location_browser);
+      char * url   = browser_current_url(save_location_browser);
 
-      e = save_save_uri(path, browser_current_url(save_location_browser), title, save_location_as_url);
+      if (!url) url = browser_fetch_url(save_location_browser);
+      if (!url) url = " ";
+
+      e = save_save_uri(path,
+                        url,
+                        title,
+                        save_location_as_url);
+
       if (!e) ok = 1;
     }
   }
@@ -1635,6 +1655,7 @@ _kernel_oserror * protocols_atatl_got_data_open(WimpMessage * m)
 _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
 {
   ComponentId c;
+  ObjectId    this;
   int         filetype = m->data.data_load.file_type;
   int         apptoapp = m->hdr.your_ref ? 1 : 0; /* your_ref is zero if from filer, else filled in for app to app */
 
@@ -1650,7 +1671,7 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
   RetError(window_wimp_to_toolbox(0,
                                   m->data.data_save.destination_window,
                                   m->data.data_save.destination_icon,
-                                  NULL,
+                                  &this,
                                   &c));
 
   if (c == URLBarWrit && filetype == FileType_TEXT) filetype = FileType_URL;
@@ -1688,6 +1709,7 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
   {
     char url  [Limits_URL];
     char title[Limits_Title];
+    int  handled = 0;
 
     #ifdef TRACE
       if (tl & (1u<<28)) Printf("protocols_atatl_got_data_load: Can handle this filetype (0x%03x)\n", filetype);
@@ -1772,7 +1794,11 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
     }
     else
     {
-      urlutils_load_uri_file(url, sizeof(url), title, sizeof(title), m->data.data_load.leaf_name);
+      urlutils_load_uri_file(url,
+                             sizeof(url),
+                             title,
+                             sizeof(title),
+                             m->data.data_load.leaf_name);
 
       /* Delete scrap if used - we've finished with the */
       /* file now, certainly.                           */
@@ -1784,17 +1810,82 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
 
     if (m->data.data_load.destination_window <= 0)
     {
-      /* Load file to icon bar - i.e. open a new window. */
+      /* Load file to icon bar - i.e. open a new window. However, we */
+      /* first do a quick check to see if this looks like a URL...   */
+      /* If so, fetch the URL, not the file.                         */
+
+      if (filetype == FileType_TEXT)
+      {
+        char   protocol[256];
+        char * result;
+        FILE * text = fopen(m->data.data_load.leaf_name, "rb");
+
+        if (text)
+        {
+          /* fgets takes (str, n, stream) and reads n-1 bytes, so */
+          /* pass 'sizeof(array)', not 'sizeof(array) - 1', as n. */
+
+          result = fgets(protocol, sizeof(protocol), text);
+
+          fclose(text);
+
+          if (result && result == protocol) /* (After all, result *should* equal protocol, and it means we can use sizeof() in a moment) */
+          {
+            /* Just to be utterly paranoid about this... */
+
+            protocol[sizeof(protocol) - 1] = '\0';
+
+            /* Right, is there a protocol specifier at the very start */
+            /* of this file which matches protocols we can handle?    */
+
+            if (urlutils_check_protocols(protocol))
+            {
+              urlutils_load_uri_file(url,
+                                     sizeof(url),
+                                     title,
+                                     sizeof(title),
+                                     m->data.data_load.leaf_name);
+            }
+          }
+        }
+      }
 
       ChkError(windows_create_browser(url, NULL, NULL, NULL, Windows_CreateBrowser_Normal));
+
+      handled = 1;
+    }
+
+    /* If we still haven't done anything with the file, see if the target */
+    /* was the Open URL dialogue box.                                     */
+
+    if (
+         !handled      &&
+         c == OpenWrit &&
+         (
+           filetype == FileType_URI  ||
+           filetype == FileType_URL  ||
+           filetype == FileType_TEXT
+         )
+       )
+    {
+      urlutils_load_uri_file(url,
+                             sizeof(url),
+                             title,
+                             sizeof(title),
+                             m->data.data_load.leaf_name);
+
+      /* Ignore errors - most likely they'll be buffer overflow reports from the Toolbox */
+      /* if the above URL is longer than can be fitted into the icon.                    */
+
+      openurl_fill_in_url(url);
+
+      handled = 1;
     }
 
     #ifndef REMOTE_HOTLIST
 
-      else
+      if (!handled)
       {
-        int handled = 0;
-
         /* We allow two places for loading - a browser window (or bits of it), */
         /* and for URI / URL files, the hotlist window. Check the latter.      */
 
@@ -1803,46 +1894,33 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
              filetype == FileType_URL
            )
         {
-          ObjectId this;
+          /* If the target object ID  matches that of the hotlist, add the item. */
 
-          /* If we can get the window object ID... */
-
-          if (
-               !window_wimp_to_toolbox(0,
-                                       m->data.data_load.destination_window,
-                                       -1,
-                                       &this,
-                                       NULL)
-             )
+          if (this == hotlist_return_window_id())
           {
-            /* ...and it matches that of the hotlist, add the item. */
+            char * leaf = NULL;
 
-            if (this == hotlist_return_window_id())
+            /* If we have a title for the URL, use it, else try other methods... */
+
+            if (!*title)
             {
-              char * leaf = NULL;
+              /* For the description, use the source leafname, unless this */
+              /* is from another app (your_ref is non-zero), in which case */
+              /* use the URL, as <Wimp$Scrap> isn't very friendly or       */
+              /* unique.                                                   */
 
-              /* If we have a title for the URL, use it, else try other methods... */
+              if (!m->hdr.your_ref) leaf = strrchr(m->data.data_load.leaf_name, '.');
 
-              if (!*title)
-              {
-                /* For the description, use the source leafname, unless this */
-                /* is from another app (your_ref is non-zero), in which case */
-                /* use the URL, as <Wimp$Scrap> isn't very friendly or       */
-                /* unique.                                                   */
-
-                if (!m->hdr.your_ref) leaf = strrchr(m->data.data_load.leaf_name, '.');
-
-                if (!leaf) leaf = url;
-                else       leaf ++;
-              }
-
-              ChkError(hotlist_add_position(m->data.data_load.destination_x,
-                                            m->data.data_load.destination_y,
-                                            *title ? title : leaf,
-                                            url));
-
-              handled = 1;
+              if (!leaf) leaf = url;
+              else       leaf ++;
             }
+
+            ChkError(hotlist_add_position(m->data.data_load.destination_x,
+                                          m->data.data_load.destination_y,
+                                          *title ? title : leaf,
+                                          url));
+
+            handled = 1;
           }
         }
 
@@ -1876,57 +1954,57 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
             }
           }
         }
-
-        /* If not handled yet, deal with the file */
-
-        if (!handled)
-        {
-          browser_data * b = NULL;
-
-          /* Otherwise, load file to a browser window. Need to find */
-          /* its browser_data structure for this.                   */
-
-          utils_browser_from_window(m->data.data_load.destination_window, &b);
-
-          if (b && !b->small_fetch)
-          {
-            int dont_load_to_form = (filetype != FileType_TEXT);
-
-            #ifdef JAVASCRIPT
-
-              /* If this is a JavaScript URL, the script will end up    */
-              /* being executed. Tell the JavaScript interface routines */
-              /* that it came from the URL writable.                    */
-
-              if (javascript_url(url))
-              {
-                dont_load_to_form = 1;
-                javascript_set_source(JavaScript_Source_URLWritable);
-              }
-
-            #endif
-
-            /* If flagged not to try, or trying to load the file into a */
-            /* writeable forms item fails, do a conventional fetch.     */
-
-            if (
-                 dont_load_to_form ||
-                 !form_could_load_text_at_pointer(b, m->data.data_load.leaf_name)
-               )
-            {
-              ChkError(fetchpage_new(b, url, 1, 0));
-            }
-            else
-            {
-              /* If the item was sent through Scrap, we should remove it */
-
-              if (apptoapp) remove(m->data.data_load.leaf_name);
-            }
-          }
-        }
       }
 
     #endif
+
+    /* If still not handled yet, see if the target was a browser window */
+
+    if (!handled)
+    {
+      browser_data * b = NULL;
+
+      /* Otherwise, load file to a browser window. Need to find */
+      /* its browser_data structure for this.                   */
+
+      utils_browser_from_window(m->data.data_load.destination_window, &b);
+
+      if (b && !b->small_fetch)
+      {
+        int dont_load_to_form = (filetype != FileType_TEXT);
+
+        #ifdef JAVASCRIPT
+
+          /* If this is a JavaScript URL, the script will end up    */
+          /* being executed. Tell the JavaScript interface routines */
+          /* that it came from the URL writable.                    */
+
+          if (javascript_url(url))
+          {
+            dont_load_to_form = 1;
+            javascript_set_source(JavaScript_Source_URLWritable);
+          }
+
+        #endif
+
+        /* If flagged not to try, or trying to load the file into a */
+        /* writeable forms item fails, do a conventional fetch.     */
+
+        if (
+             dont_load_to_form ||
+             !form_could_load_text_at_pointer(b, m->data.data_load.leaf_name)
+           )
+        {
+          ChkError(fetchpage_new(b, url, 1, 0));
+        }
+        else
+        {
+          /* If the item was sent through Scrap, we should remove it */
+
+          if (apptoapp) remove(m->data.data_load.leaf_name);
+        }
+      }
+    }
 
     ChkError(protocols_atatl_send_data_load_ack(m));
   }
@@ -1989,7 +2067,7 @@ _kernel_oserror * protocols_atatl_got_data_save(WimpMessage * m)
 
   /* Was the URL writable targetted? In this case, if it was a text file, */
   /* assume it contained a URL - modify the Wimp Message block to contain */
-  /* an ANT URL file filetype.                                            */
+  /* an ANT URL file filetype. Do this for the Open URL dialogue box too. */
 
   RetError(window_wimp_to_toolbox(0,
                                   m->data.data_save.destination_window,
@@ -1997,7 +2075,7 @@ _kernel_oserror * protocols_atatl_got_data_save(WimpMessage * m)
                                   NULL,
                                   &c));
 
-  if (c == URLBarWrit && filetype == FileType_TEXT) filetype = FileType_URL;
+  if ((c == URLBarWrit || c == OpenWrit) && filetype == FileType_TEXT) filetype = FileType_URL;
 
   /* Can we do RAM transfer for this file type? */
 
@@ -2342,18 +2420,19 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
   if (ok && pending_data_save_ack)
   {
     ComponentId c;
+    ObjectId    this;
     int         filetype = pending_data_save_ack->data.data_save_ack.file_type;
 
-    /* Was this dragged to the URL writable, and thus should be */
-    /* treated as an ANT URL file (if text)?                    */
+    /* Was this dragged to a URL writable, and thus should be */
+    /* treated as an ANT URL file (if text)?                  */
 
     RetError(window_wimp_to_toolbox(0,
                                     pending_data_save_ack->data.data_save_ack.destination_window,
                                     pending_data_save_ack->data.data_save_ack.destination_icon,
-                                    NULL,
+                                    &this,
                                     &c));
 
-    if (c == URLBarWrit && filetype == FileType_TEXT) filetype = FileType_URL;
+    if ((c == URLBarWrit || c == OpenWrit) && filetype == FileType_TEXT) filetype = FileType_URL;
 
     switch (filetype)
     {
@@ -2478,6 +2557,8 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
 
         if (finished)
         {
+          int handled = 0;
+
           /* Remember we allocated 1 byte more than needed at the start, */
           /* so that this terminator could be inserted. This is required */
           /* for URL files, and won't hurt for URI files.                */
@@ -2493,79 +2574,74 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
             /* The original Message_DataSave was for no specific window */
 
             e = windows_create_browser(ram_load_uri_buffer, NULL, NULL, NULL, Windows_CreateBrowser_Normal);
+
+            handled = 1;
+          }
+
+          /* Was this for the Open URL dialogue? */
+
+          if (!handled && c == OpenWrit)
+          {
+            openurl_fill_in_url(ram_load_uri_buffer);
+            handled = 1;
           }
 
           #ifndef REMOTE_HOTLIST
 
-            else
+            if (!handled)
             {
-              /* As with DataLoad, this can go to a Hotlist window or a browser; */
-              /* the hotlist is the simpler case, check that first.              */
+              /* If the object ID of the window dragged to matches that of the hotlist, add the item. */
 
-              ObjectId this;
-              int      handled = 0;
-
-              /* If we can get the window object ID... */
-
-              if (
-                   !window_wimp_to_toolbox(0,
-                                           pending_data_save_ack->data.data_save_ack.destination_window,
-                                           -1,
-                                           &this,
-                                           NULL)
-                 )
+              if (this == hotlist_return_window_id())
               {
-                /* ...and it matches that of the hotlist, add the item. */
+                /* Use the title, if we have one */
 
-                if (this == hotlist_return_window_id())
+                if (*(ram_load_uri_buffer + strlen(ram_load_uri_buffer) + 1))
                 {
-                  /* Use the title, if we have one */
-
-                  if (*(ram_load_uri_buffer + strlen(ram_load_uri_buffer) + 1))
-                  {
-                    ChkError(hotlist_add_position(pending_data_save_ack->data.data_save_ack.destination_x,
-                                                  pending_data_save_ack->data.data_save_ack.destination_y,
-                                                  ram_load_uri_buffer + strlen(ram_load_uri_buffer) + 1,
-                                                  ram_load_uri_buffer));
-                  }
-                  else
-                  {
-                    ChkError(hotlist_add_position(pending_data_save_ack->data.data_save_ack.destination_x,
-                                                  pending_data_save_ack->data.data_save_ack.destination_y,
-                                                  ram_load_uri_buffer,
-                                                  ram_load_uri_buffer));
-                  }
-
-                  handled = 1;
+                  ChkError(hotlist_add_position(pending_data_save_ack->data.data_save_ack.destination_x,
+                                                pending_data_save_ack->data.data_save_ack.destination_y,
+                                                ram_load_uri_buffer + strlen(ram_load_uri_buffer) + 1,
+                                                ram_load_uri_buffer));
                 }
-              }
-
-              if (!handled)
-              {
-                browser_data * b;
-
-                /* The message was for a specific window, so find out which one */
-
-                utils_browser_from_window(pending_data_save_ack->data.data_save_ack.destination_window, &b);
-
-                if (b && !b->small_fetch)
+                else
                 {
-                  #ifdef JAVASCRIPT
-
-                    /* If this is a JavaScript URL, the script will end up    */
-                    /* being executed. Tell the JavaScript interface routines */
-                    /* that it came from the URL writable.                    */
-
-                    if (javascript_url(ram_load_uri_buffer)) javascript_set_source(JavaScript_Source_URLWritable);
-
-                  #endif
-
-                  e = fetchpage_new(b, ram_load_uri_buffer, 1, 0);
+                  ChkError(hotlist_add_position(pending_data_save_ack->data.data_save_ack.destination_x,
+                                                pending_data_save_ack->data.data_save_ack.destination_y,
+                                                ram_load_uri_buffer,
+                                                ram_load_uri_buffer));
                 }
+
+                handled = 1;
               }
             }
 
           #endif
+
+          /* Still not handled? Try a browser window. */
+
+          if (!handled)
+          {
+            browser_data * b;
+
+            /* The message was for a specific window, so find out which one */
+
+            utils_browser_from_window(pending_data_save_ack->data.data_save_ack.destination_window, &b);
+
+            if (b && !b->small_fetch)
+            {
+              #ifdef JAVASCRIPT
+
+                /* If this is a JavaScript URL, the script will end up    */
+                /* being executed. Tell the JavaScript interface routines */
+                /* that it came from the URL writable.                    */
+
+                if (javascript_url(ram_load_uri_buffer)) javascript_set_source(JavaScript_Source_URLWritable);
+
+              #endif
+
+              e = fetchpage_new(b, ram_load_uri_buffer, 1, 0);
+            }
+          }
 
           free (ram_load_uri_buffer);
           ram_load_uri_buffer = NULL;
