@@ -37,20 +37,24 @@ extern void startartbody (SGMLCTX * context, ELEMENT * element, VALUES * attribu
 
 /* DAF: 970627: ** IMPORTANT ** THIS ROUTINE CAN BE CALLED MULTIPLY
    FOR A SINGLE (BADLY FORMED) DOCUMENT. IT IS ESSENTIAL THAT THIS IS
-   HANDLED CORRECTLY. */
+   HANDLED CORRECTLY.
+
+ * SJM Changed it so that only the first occurrence of each attribute is handled.
+ * This *appears* to be Netscape 3's behaviour.
+ */
 
 extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
+    rid_header *rh = me->rh;
 
     generic_start (context, element, attributes);
 
-    if (attributes->value[HTML_BODY_BACKGROUND].type == value_string)
+    if (attributes->value[HTML_BODY_BACKGROUND].type == value_string &&
+	(rh->bgt & rid_bgt_IMAGE) == 0)
     {
-	me->rh->bgt |= rid_bgt_IMAGE;
-	if (me->rh->tile.src)
-	    mm_free(me->rh->tile.src);
-	me->rh->tile.src = stringdup(attributes->value[HTML_BODY_BACKGROUND].u.s);
+	rh->bgt |= rid_bgt_IMAGE;
+	rh->tile.src = stringdup(attributes->value[HTML_BODY_BACKGROUND].u.s);
 	
 	/* pdh: Doesn't entirely actually completely belong here, but
 	  we want the background image to be fetched first, not
@@ -68,36 +72,41 @@ extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     /* What are the implications of changing the colour values? Can we
        end up with different portions of the background, invalidated
        at different times, being different colours? */
-    if (attributes->value[HTML_BODY_BGCOLOR].type != value_none)
+    if (attributes->value[HTML_BODY_BGCOLOR].type != value_none &&
+	(rh->bgt & rid_bgt_COLOURS) == 0)
     {
-	me->rh->bgt |= rid_bgt_COLOURS;
-	htmlriscos_colour( &attributes->value[HTML_BODY_BGCOLOR], &me->rh->colours.back);
+	rh->bgt |= rid_bgt_COLOURS;
+	htmlriscos_colour( &attributes->value[HTML_BODY_BGCOLOR], &rh->colours.back);
     }
-    if (attributes->value[HTML_BODY_TEXT].type != value_none)
+    if (attributes->value[HTML_BODY_TEXT].type != value_none &&
+	(rh->bgt & rid_bgt_FCOL) == 0)
     {
-	me->rh->bgt |= rid_bgt_FCOL;
-	htmlriscos_colour( &attributes->value[HTML_BODY_TEXT], &me->rh->colours.fore);
+	rh->bgt |= rid_bgt_FCOL;
+	htmlriscos_colour( &attributes->value[HTML_BODY_TEXT], &rh->colours.fore);
     }
-    if (attributes->value[HTML_BODY_LINK].type != value_none)
+    if (attributes->value[HTML_BODY_LINK].type != value_none &&
+	(rh->bgt & rid_bgt_LCOL) == 0)
     {
-	me->rh->bgt |= rid_bgt_LCOL;
-	htmlriscos_colour( &attributes->value[HTML_BODY_LINK], &me->rh->colours.link);
+	rh->bgt |= rid_bgt_LCOL;
+	htmlriscos_colour( &attributes->value[HTML_BODY_LINK], &rh->colours.link);
     }
-    if (attributes->value[HTML_BODY_VLINK].type != value_none)
+    if (attributes->value[HTML_BODY_VLINK].type != value_none &&
+	(rh->bgt & rid_bgt_VCOL) == 0)
     {
-	me->rh->bgt |= rid_bgt_VCOL;
-	htmlriscos_colour( &attributes->value[HTML_BODY_VLINK], &me->rh->colours.vlink);
+	rh->bgt |= rid_bgt_VCOL;
+	htmlriscos_colour( &attributes->value[HTML_BODY_VLINK], &rh->colours.vlink);
     }
-    if (attributes->value[HTML_BODY_ALINK].type != value_none)
+    if (attributes->value[HTML_BODY_ALINK].type != value_none &&
+	(rh->bgt & rid_bgt_ACOL) == 0)
     {
-	me->rh->bgt |= rid_bgt_ACOL;
-	htmlriscos_colour( &attributes->value[HTML_BODY_ALINK], &me->rh->colours.alink);
+	rh->bgt |= rid_bgt_ACOL;
+	htmlriscos_colour( &attributes->value[HTML_BODY_ALINK], &rh->colours.alink);
     }
 
     if (attributes->value[HTML_BODY_LEFTMARGIN].type == value_integer)
-	me->rh->margin.left = attributes->value[HTML_BODY_LEFTMARGIN].u.i;
+	rh->margin.left = attributes->value[HTML_BODY_LEFTMARGIN].u.i;
     if (attributes->value[HTML_BODY_TOPMARGIN].type == value_integer)
-	me->rh->margin.top = attributes->value[HTML_BODY_TOPMARGIN].u.i;
+	rh->margin.top = attributes->value[HTML_BODY_TOPMARGIN].u.i;
 
 
     /* This happens in startartbody() now, as that is called where
@@ -130,6 +139,12 @@ extern void starta (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 		      &attributes->value[HTML_A_TARGET],
 		      &attributes->value[HTML_A_TITLE]
 	    );
+
+	/* emulate Netscape behaviour whereby <A><FONT COL>text</FONT></A>
+	   will set the colour but <FONT COL><A>text</A></FONT> won't
+	   by clearing the current colour in side an HREF
+	 */
+	SET_EFFECTS( context->tos, STYLE_COLOURNO, 0 );
     }
     else
     {
@@ -289,7 +304,8 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 #ifndef BUILDERS
 	int index = webfont_lookup(font);
 
-	set_font_type(context, index);
+	if (index != -1)
+	    set_font_type(context, index);
 #endif
 	mm_free(font);
     }
@@ -361,6 +377,9 @@ extern void finishnobr (SGMLCTX * context, ELEMENT * element)
     generic_finish (context, element);
 
     htmlctx->no_break = 0;
+
+    /* SJM: push a null entry to ensure there is something to break on */
+    text_item_push_word(htmlctx, 0, FALSE);
 }
 
 extern void startwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)

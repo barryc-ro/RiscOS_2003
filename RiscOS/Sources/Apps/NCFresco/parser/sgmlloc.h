@@ -83,6 +83,7 @@ extern STRING stringtok(STRING *s1, const char *p);
 extern STRING string_skip_to_chars(STRING s, const char *p);
 extern STRING string_skip_chars(STRING s, const char *p);
 extern int string_count_tokens(STRING s, char *breaks);
+extern STRING get_tab_expanded_string(STRING item, STRING inhand);
 extern void sgml_support_initialise(void);
 extern BOOL is_whitespace(char c);
 extern BOOL is_element_start_character(char c);

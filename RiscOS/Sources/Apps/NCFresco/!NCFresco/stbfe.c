@@ -183,8 +183,6 @@ extern void image_get_cooler_table(void);
 static void fe_drag(const wimp_mousestr *m);
 /* static BOOL fe_resize(const wimp_mousestr *m); */
 static void fe_status_mode(fe_view v, int mode, int override);
-static os_error *fe_status_state(fe_view v, int state);
-
 static void check_pending_scroll(fe_view v);
 
 /* static int fe_check_resize(fe_view start, int x, int y, wimp_box *box, int *handle, fe_view *resizing_v); */
@@ -606,6 +604,8 @@ static void fade_finish_wait(void)
 {
     int fading, i;
 
+    STBDBGN(("fade_finish_wait: count %d\n", fade_ref_count));
+
     do
     {
 	int status;
@@ -621,6 +621,8 @@ static void fade_finish_wait(void)
 	}
     }
     while (fading);
+
+    STBDBGN(("fade_finish_wait: releasing\n"));
 
     /* release the fades */
     for (i = 0; i < fade_ref_count; i++)
@@ -638,7 +640,6 @@ void frontend_fade_frame(fe_view v, wimp_paletteword colour)
 /*     int i, fading; */
 
     STBDBG(("fade_frame: v %p\n", v));
-
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return;
 
@@ -659,6 +660,8 @@ void frontend_fade_frame(fe_view v, wimp_paletteword colour)
     }
 
     fade_finish_wait();
+
+    STBDBG(("fade_frame: out\n"));
 }
 
 #if 0
@@ -785,6 +788,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     int toolbar_state;
     char *ncmode;
     int old_keyboard_state, linedrop;
+    BOOL is_server_push;
     
     STBDBG(( "frontend_view_visit url '%s' title '%s' doc %p\n", strsafe(url), strsafe(title), doc));
 
@@ -857,7 +861,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
  	backend_remove_highlight(v->displaying);
 
     /* fade down previous displayed frame as long as it's not the same one (server-push) */
-    if (v->displaying && v->displaying != doc)
+    is_server_push = v->displaying == doc;
+    if (v->displaying && !is_server_push)
     {
 	char *durl;
 
@@ -1136,7 +1141,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	}
 	else if (!v->from_frame)
 	{
-	    fe_history_visit(v, url, title);
+	    if (!is_server_push)
+		fe_history_visit(v, url, title);
 	}
 
 	/* redraw window - unless transient as that hasn't been opened yet */
@@ -1841,6 +1847,57 @@ int fe_check_download_finished(fe_view v)
 /* 	    if (config_display_scale_fit) */
 /* 		fe_force_fit(top, TRUE); */
 	}
+
+	/* optimise various memory uses */
+	if (1)
+	{
+	    hotlist_optimise();
+
+	    fe_global_history_optimise();
+	    fe_history_optimise(main_view);
+
+	    tb_optimise();
+	    fe_internal_optimise();
+
+	    cookie_optimise();
+/* 	    access_optimise_cache(); */
+ 	    auth_optimise();
+/* 	    plugin_list_optimise(); */
+	}
+	
+	/* optionally dump out the current memory use */
+	if (getenv("NCFresco$MemTrace"))
+	{
+	    extern char   *flexptr__base;
+	    extern char   *flexptr__free;
+	    extern char   *flexptr__slot;
+	    extern void   *heap__base;
+	    extern int malloc_size, malloc_da, heap__size, heap__da, flex__da;
+
+	    int area = -1;
+	    int us = -1, next = -1, free;
+
+	    wimp_slotsize(&us, &next, &free);
+	    usrtrc("slot: size %dK next %dK free %dK\n", us/1024, next/1024, free/1024);
+
+	    usrtrc("flex: area %dK size %dK top %dK\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), flex__da)/1024, (flexptr__slot - flexptr__base)/1024, (flexptr__free - flexptr__base)/1024);
+	    usrtrc("heap: area %dK size %dK top %dK\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), heap__da)/1024, heap__size/1024, ((int *)heap__base)[3]/1024);
+	    usrtrc("mall: area %dK size %dK\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), malloc_da)/1024, malloc_size/1024);
+
+	    do
+	    {
+		_swix(OS_DynamicArea, _INR(0,1) | _OUT(1), 3, area, &area);
+		if (area != -1)
+		{
+		    int size;
+		    char *name;
+		    _swix(OS_DynamicArea, _INR(0,1) | _OUT(2) | _OUT(8), 2, area, &size, &name);
+
+		    usrtrc("da: size %10dK name '%s'\n", size/1024, name);
+		}
+	    }
+	    while (area != -1);
+	}	
     }
 
     if (finished && pointer_mode == pointermode_OFF)
@@ -2965,7 +3022,7 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
     return movement;
 }
 
-static os_error *fe_status_state(fe_view v, int state)
+os_error *fe_status_state(fe_view v, int state)
 {
     BOOL is_open = tb_is_status_showing();
     BOOL new_state_open = state == -1 ? !is_open : state;
@@ -3996,7 +4053,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	    ti = NULL;
 	    backend_doc_locate_item(v->displaying, &m->x, &m->y, &ti);
 
-	    tb_status_show(FALSE);
+	    fe_status_state(main_view, TRUE);
 	    fe_open_info(v, ti, m->x, m->y, FALSE);
 	    frontend_complain(fe_status_open_toolbar(v, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
 	}
@@ -4958,11 +5015,19 @@ static void fe_handle_service_message(wimp_msgstr *msg)
     }
 
     case Service_ShutdownComplete:
+    {
+	BOOL toolbar = tb_is_status_showing();
+
 	/* on a shutdown flush the cache and stuff */
 	re_read_config(ncfresco_loaddata_NOT_ALL | ncfresco_loaddata_FLUSH);
 
 	fe_status_unstack_all();
+
+	/* this ensures that when we come out of standby the toolbar is as when we left it */
+	if (!toolbar)
+	    tb_status_hide(FALSE);
 	break;
+    }
     }
 }
 

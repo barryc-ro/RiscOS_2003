@@ -56,6 +56,9 @@ unsigned int string_hash(const char *s);
 /* Try and reallocate in lower memory (returns s if it can't) */
 char *optimise_string( char *s );
 
+/* Try and reallocate in lower memory, returns TRUE if it could */
+extern BOOL optimise_block( void **pblock, int size );
+
 int suffix_to_file_type(const char *suffix);
 int mime_to_file_type(const char *mime);
 

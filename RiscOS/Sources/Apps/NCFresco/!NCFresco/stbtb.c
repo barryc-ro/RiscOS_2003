@@ -1325,6 +1325,19 @@ void tb_cleanup(void)
     }
 }
 
+void tb_optimise(void)
+{
+    int i;
+    for (i = 0; i < sizeof(status_messages)/sizeof(status_messages[0]); i++)
+	status_messages[i] = optimise_string(status_messages[i]);
+
+    if (bar_list)
+    {
+	optimise_block((void **)&bar_list, sizeof(*bar_list));
+	optimise_block((void **)&bar_list->buttons, sizeof(bar_list->buttons[0]) * bar_list->n_buttons);
+    }
+}
+
 /* --------------------------------------------------------------------------*/
 
 int tb_menu_showing(void)

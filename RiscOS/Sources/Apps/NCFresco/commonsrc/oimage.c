@@ -64,9 +64,6 @@
 
 #define NONE_STRING	"[IMAGE]"
 
-#define ALT_FONT    (WEBFONT_SIZE(2) + WEBFONT_FLAG_FIXED)
-
-
 /* ----------------------------------------------------------------------------- */
 
 static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int fwidth, int *iw, int *ih, int scalefactor )
@@ -455,7 +452,7 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
 void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
-    rid_pos_item *pi = ti->line;
+    rid_pos_item *pi = fwidth == 0 ? NULL : ti->line;
     int width = -1, height = -1;
     image_flags fl;
     int min;

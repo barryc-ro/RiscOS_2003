@@ -2889,10 +2889,16 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	cell->userheight.type = value_none;
     }
 
-    /* Only take note of NOWRAP attribute when not overridden by an absolute width */
-    cell->flags |= attributes->value[HTML_TD_NOWRAP].type == value_void ? rid_cf_NOWRAP : 0;
     cell->cell.x = table->scaff.x;
     cell->cell.y = table->scaff.y;
+
+    /* Only take note of NOWRAP attribute when not overridden by an absolute width */
+    {
+	VALUE v;
+	rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_WIDTH, &v);
+	if (v.type == value_none && attributes->value[HTML_TD_NOWRAP].type == value_void)
+	    cell->flags |= rid_cf_NOWRAP;
+    }
 
     if ( (attr = &attributes->value[HTML_TD_COLSPAN])->type == value_integer)
     {

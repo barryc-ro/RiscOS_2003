@@ -99,6 +99,7 @@ extern BOOL fe_status_unstack_possible(fe_view source_v);
 extern void fe_status_unstack_all(void);
 
 extern os_error *fe_status_open_toolbar(fe_view v, int bar);
+extern os_error *fe_status_state(fe_view v, int state);
 
 extern void fe_show_mem_dump(void);
 
@@ -181,6 +182,7 @@ extern BOOL fe_passwd_abort(void);
 extern void fe_internal_deleting_view(fe_view v);
 extern os_error *fe_internal_toggle_panel(const char *panel_name);
 extern void fe_internal_flush(void);
+extern void fe_internal_optimise(void);
 
 /* from stbredraw.c*/
 

@@ -41,6 +41,7 @@
 #include "debug.h"
 
 #define AUTHDBG(a) DBG(a)
+#define AUTHDBGN(a)
 
 extern void translate_escaped_text(char *src, char *dest, int len);
 
@@ -168,6 +169,71 @@ void auth_dispose(void)
     auth_allows_dispose(deny_list);
     deny_list = NULL;
 }
+
+static void auth_realms_optimise(void)
+{
+    auth_realm *r, *last;
+    for (last = NULL, r = realm_first; r; last = r, r = r->next)
+    {
+	auth_realm *was = r;
+	if (optimise_block((void **)&r, sizeof(*r)))
+	{
+	    auth_item *a;
+
+	    if (last)
+		last->next = r;
+	    else
+		realm_first = r;
+
+	    if (realm_last == was)
+		realm_last = r;
+
+	    /* see if any items referenced this realm */
+	    for (a = auth_first; a; a = a->next)
+	    {
+		if (a->realm == was)
+		    a->realm = r;
+	    }
+	}
+
+	r->name = optimise_string(r->name);
+	switch (r->type)
+	{
+	case auth_type_BASIC:
+	    r->data.basic.user = optimise_string(r->data.basic.user);
+	    r->data.basic.passwd = optimise_string(r->data.basic.passwd);
+	    break;
+	}
+    }
+}
+
+static void auth_items_optimise(void)
+{
+    auth_item *item, *last;
+    for (last = NULL, item = auth_first; item; last = item, item = item->next)
+    {
+	auth_item *was = item;
+	if (optimise_block((void **)&item, sizeof(*item)))
+	{
+	    if (last)
+		last->next = item;
+	    else
+		auth_first = item;
+
+	    if (auth_last == was)
+		auth_last = item;
+	}
+
+	item->url = optimise_string(item->url);
+    }
+}
+
+void auth_optimise(void)
+{
+    auth_items_optimise();
+    auth_realms_optimise();
+}
+
 #endif
 
 /* ------------------------------------------------------------------------- */
@@ -321,20 +387,19 @@ realm auth_lookup_realm(char *realm)
 {
     auth_realm *a;
 
-    AUTHDBG(("Trying to look up realm '%s'... ", realm));
+    AUTHDBGN(("Trying to look up realm '%s'... ", realm));
 
     for(a = realm_first; a; a = a->next)
     {
 	if (strcmp(realm, a->name) == 0)
 	{
-
-	    AUTHDBG(("Hit!\n"));
+	    AUTHDBGN(("Hit!\n"));
 
 	    return a;
 	}
     }
 
-    AUTHDBG(("Miss.\n"));
+    AUTHDBGN(("Miss.\n"));
 
     return NULL;
 }
@@ -344,7 +409,7 @@ auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **p
 {
     auth_item *a;
 
-    AUTHDBG(("Trying to authorise URL='%s'", url));
+    AUTHDBGN(("Trying to authorise URL='%s' ", url));
 
     for(a = auth_first; a; a = a->next)
     {
@@ -356,20 +421,20 @@ auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **p
 		*user = a->realm->data.basic.user;
 		*passwd = a->realm->data.basic.passwd;
 
-		AUTHDBG(("Hit!\n"));
+		AUTHDBGN(("Hit!\n"));
 
 		return auth_lookup_SUCCESS;
 	    }
 	    else
 	    {
-		AUTHDBG(("Miss.\n"));
+		AUTHDBGN(("Miss.\n"));
 
 		return auth_lookup_NEED_DATA;
 	    }
 	}
     }
 
-    AUTHDBG(("Miss.\n"));
+    AUTHDBGN(("Miss.\n"));
 
     return auth_lookup_FAIL;
 }

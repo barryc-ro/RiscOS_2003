@@ -100,6 +100,9 @@ static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_fram
 
         size -= (n-1)*spacing*2;
 
+        if ( size<0 )
+            size = 0;
+
         if ( (totals->pcent == 0 && totals->mult == 0)
                 || ( totals->px > size ) )
         {
@@ -114,13 +117,17 @@ static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_fram
 
         remaining = size - (int)(totals->px * px_unit);
 
+        if ( remaining < 0 )
+            remaining = 0;
+
         if (totals->pcent)
         {
             /* if we have variables AND there's enough space left then percents
              * are what they say they are */
 
             if (totals->mult
-                 && ( totals->pcent/100.0 <= (remaining/(double)size) ) )
+                 && ( totals->pcent/100.0 <= (remaining/(double)size) )
+                 && remaining > 0 )
             {
                 pcent_unit = size / 100.0;
             }

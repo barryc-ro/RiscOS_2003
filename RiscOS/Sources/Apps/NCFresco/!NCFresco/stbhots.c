@@ -566,6 +566,27 @@ void hotlist_return_url(int index, char **url)
 
 /* ---------------------------------------------------------------------- */
 
+void hotlist_optimise(void)
+{
+    hotlist_item *item, *last;
+
+    for (last = NULL, item = hotlist_list; item; last = item, item = item->next)
+    {
+	if (optimise_block((void **)&item, sizeof(*item)))
+	{
+	    if (last)
+		last->next = item;
+	    else
+		hotlist_list = item;
+	}
+
+	item->url = optimise_string(item->url);
+	item->title = optimise_string(item->title);
+    }
+}
+
+/* ---------------------------------------------------------------------- */
+
 void hotlist_init(void)
 {
     hotlist_read(config_hotlist_file);

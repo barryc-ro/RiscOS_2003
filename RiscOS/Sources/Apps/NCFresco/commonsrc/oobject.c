@@ -125,6 +125,7 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	if (fl & image_flag_REALTHING)
 	    obj->iflags |= rid_image_flag_REAL;
 
+	antweb_doc_ensure_font( doc, ALT_FONT );
 	oimage_size_image(obj->standby, &obj->userwidth, &obj->userheight, obj->iflags, config_defer_images, doc->scale_value, fwidth, &width, &height);
 	break;
     }
@@ -160,6 +161,7 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	}
 	else
 	{
+	    antweb_doc_ensure_font( doc, ALT_FONT );
 	    oimage_size_image(obj->standby, &obj->userwidth, &obj->userheight, obj->iflags, config_defer_images, doc->scale_value, fwidth, &width, &height);
 	}
 	break;

@@ -24,4 +24,7 @@ extern int fe_history_move_alpha_index(fe_view v, int index, char **new_url);
 extern int fe_history_move_recent_index(fe_view v, int index, char **new_url);
 extern int fe_history_move_recent_steps(fe_view v, int steps, char **new_url);
 
+extern void fe_global_history_optimise(void);
+extern void fe_history_optimise(fe_view v);
+
 /* stbhist.c */

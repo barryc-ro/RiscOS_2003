@@ -325,6 +325,26 @@ typedef enum
 
 /* ------------------------------------------------------------------------- */
 
+static void fetching_dec(image i)
+{
+    if (i->flags & image_flag_FETCHING)
+    {
+	being_fetched--;
+	i->flags &= ~image_flag_FETCHING;
+	IMGDBG(("im%p: fetching-- %d (%s)\n", i, being_fetched, caller(1)));
+    }
+}
+
+static void fetching_inc(image i)
+{
+    if ((i->flags & image_flag_FETCHING) == 0)
+    {
+	being_fetched++;
+	i->flags |= image_flag_FETCHING;
+	IMGDBG(("im%p: fetching++ %d (%s)\n", i, being_fetched, caller(1)));
+    }
+}
+
 static void free_pt(image i)
 {
     if (i->pt)
@@ -891,10 +911,12 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    access_abort(i->ah);
 	    i->ah = NULL;
 
-	    being_fetched--;
+	    fetching_dec(i);
 	}
 
 	image_set_error(i);
+
+	do_memory_panic = FALSE;
 #else
         image_memory_panic();
 #endif
@@ -1172,9 +1194,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
     rd = i->flags & (image_flag_RENDERABLE | image_flag_ERROR);
 
-    being_fetched--;		/* I guess we should do this even if the handle is broken */
-
-    IMGDBG(("Decremented fetching count, now %d\n", being_fetched));
+    fetching_dec(i);
 
     image_fetch_next();
 
@@ -1341,7 +1361,7 @@ os_error *image_tidyup(void)
 	    IMGDBGN(("Image tidyup Aborting access\n"));
 
 	    access_abort(i->ah);
-	    being_fetched--;
+	    fetching_dec(i);
 	}
 
 	if (i->url)
@@ -1451,7 +1471,7 @@ static void image_fetch_next(void)
 
 	    i->flags &= ~(image_flag_WAITING | image_flag_TO_RELOAD);
 
-	    being_fetched++;	/* In case it comes from the cache we increment this here */
+	    fetching_inc(i);	/* In case it comes from the cache we increment this here */
 
 	    IMGDBG(("image_fetch_next: inc fetching %d\n", being_fetched));
 
@@ -1463,7 +1483,7 @@ static void image_fetch_next(void)
 		i->ah = NULL;
 		image_set_error(i);
 		usrtrc( "Error accessing image: %s\n", ep->errmess);
-		being_fetched--; /* If we failed, decrement it again */
+		fetching_dec(i); /* If we failed, decrement it again */
 	    }
 	}
     }
@@ -1704,7 +1724,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	    /* don't fetch too many at once because of the transient memory usage */
 	    if ((being_fetched < config_max_files_fetching) || (flags & image_find_flag_URGENT))
 	    {
-		being_fetched++;
+		fetching_inc(i);
 
 		IMGDBG(("image_find: inc fetching %d\n", being_fetched));
 
@@ -1722,7 +1742,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 		    image_set_error(i);
 		    usrtrc( "Error accessing image: %s\n", ep->errmess);
 
-		    being_fetched--;
+		    fetching_dec(i);
 		}
 	    }
 	}
@@ -2009,7 +2029,7 @@ os_error *image_loose(image i, image_callback cb, void *h)
 		IMGDBG(("Loose image Aborting access\n"));
 
 		access_abort(i->ah);
-		being_fetched--;
+		fetching_dec(i);
 	    }
 	    else
 	    {
@@ -2171,7 +2191,8 @@ os_error *image_flush(image i, int flags)
 	    IMGDBG(("Flush image Aborting access\n"));
 
 	    access_abort(i->ah);
-	    being_fetched--;
+	    fetching_dec(i);
+		
 	    i->ah = NULL;
 	}
 	else
@@ -2194,7 +2215,8 @@ os_error *image_flush(image i, int flags)
     i->flags &= ~image_flag_RENDERABLE;
 
     /* If we already have the image then dispose of it */
-    if (i->our_area)
+    /* SJM: add or ->data_area so that JPEGs can be reloaded */
+    if (i->our_area || i->data_area)
     {
 	IMGDBG(("im%p: flushing",i));
 
@@ -3408,8 +3430,8 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 
 static void image_sprite_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
 {
-    IMGDBGN(("Sprite area is 0x%p, image pointer is 0x%p, name is %s\n",
-	    *(i->areap), i->id.s.name, i->id.tag == sprite_id_name ? i->id.s.name : "<none>"));
+    IMGDBGN(("Sprite area is 0x%p, image pointer is 0x%p, name is '%s' flags 0x%x\n",
+	    *(i->areap), i->id.s.name, i->id.tag == sprite_id_name ? i->id.s.name : "<none>", i->flags));
 
     if (i->frame && i->cache_area)
     {

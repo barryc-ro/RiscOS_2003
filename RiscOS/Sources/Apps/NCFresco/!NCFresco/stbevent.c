@@ -119,6 +119,10 @@ static void toggle_event_handler(int event, fe_view v)
             fe_status_toggle(v);
             break;
 
+        case fevent_STATUS_OFF:
+	    frontend_complain(fe_status_state(v, FALSE));
+            break;
+
         case fevent_TOGGLE_COLOURS:
             frontend_complain(fe_doc_flag_toggle(v, be_openurl_flag_BODY_COLOURS));
             break;

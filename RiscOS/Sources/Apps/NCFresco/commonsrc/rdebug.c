@@ -102,6 +102,21 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 		}
 		while (area != -1);
 	    }
+	    else if (strcasecomp(argv[1], "files") == 0)
+	    {
+		int fh;
+		for (fh = 255; fh > 0; fh--)
+		{
+		    char buffer[256];
+		    int left;
+		    if (_swix(OS_Args, _INR(0,2)|_IN(5) | _OUT(5), 7, fh, buffer, sizeof(buffer), &left) == NULL &&
+			left != sizeof(buffer))
+		    {
+			DBG(("file: %3d '%s'\n", fh, buffer));
+		    }
+		}
+		handled = 1;
+	    }
 	}
     }
     else if (strcasecomp(argv[0], "openurl") == 0)
@@ -118,6 +133,14 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	{
 	    suspended = atoi(argv[1]) != 0;
 	    handled = 1;
+	}
+    }
+    if (strcasecomp(argv[1], "close") == 0)
+    {
+	if (argc == 2)
+	{
+	    int fh = atoi(argv[1]);
+	    handled = _swix(OS_File, _INR(0,1), 0, fh) == NULL;
 	}
     }
     else if (argc == 2)

@@ -25,7 +25,9 @@ typedef int access_url_flags;
 #define access_IMAGE            0x20    /* http fetch prefix first? */
 #define access_NO_STREAM        0x40    /* don't need data streamed - just file */
 #define access_MAX_PRIORITY     0x80    /* load whole image if possible */
+#define access_MUST_BE_FOUND    0x100   /* return error status if we didn't get the file we were expecting (ie rc != 200) */
 #define access_INTERNAL_FLAGS	0x0ffff
+
 /* Flags used internally but not used in the initial call */
 #define access_SECURE		0x10000	/* The access will be started on a secure socket */
 #define access_PROXY		0x20000	/* The access goes via a proxy */

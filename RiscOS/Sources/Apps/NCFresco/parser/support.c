@@ -423,6 +423,56 @@ extern void string_list_free(STRING_LIST *ptr)
 
 /*****************************************************************************/
 
+/*
+ * Take 'item', append to 'inhand' and expand its tabs
+ * Returns a new malloced string
+ */
+
+STRING get_tab_expanded_string(STRING item, STRING inhand)
+{
+    STRING t;
+    int i, extra = inhand.bytes;
+
+    for (i = 0; i < item.bytes; i++)
+    {
+	extra++;
+	    
+	if (item.ptr[i] == '\t')
+	{
+	    PRSDBG(("Performing tab expansion\n"));
+	    while ( (extra & 7) != 0 )
+		extra++;
+	}
+    }
+
+    t.bytes = extra;
+    t.ptr = mm_malloc(extra + 1);
+
+    if (inhand.bytes)
+	memcpy(t.ptr, inhand.ptr, inhand.bytes);
+    extra = inhand.bytes;
+
+    for (i = 0; i < item.bytes; i++)
+    {
+	if (item.ptr[i] == '\t')
+	{
+	    t.ptr[extra++] = ' ';
+	    while ( (extra & 7) != 0 )
+		t.ptr[extra++] = ' ';
+	}
+	else
+	{
+	    t.ptr[extra++] = item.ptr[i];
+	}
+    }
+
+    t.ptr[extra] = 0;
+
+    return t;
+}
+
+/*****************************************************************************/
+
 static void set_char_decode(char * chars, BITS pattern)
 {
 	while (*chars)

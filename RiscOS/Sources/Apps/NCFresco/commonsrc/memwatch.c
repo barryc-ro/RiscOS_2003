@@ -156,6 +156,12 @@ extern void mm_poll(void)
 
 		if (size >= EMERGENCY_MEMORY_STASH)
 		    gbf_flags &= ~GBF_LOW_MEMORY;
+		if (size > EMERGENCY_MEMORY_UNIT)
+		    gbf_flags &= ~GBF_VERY_LOW_MEMORY;
+	    }
+	    else
+	    {
+		DBG(("mm_poll: failed to reallocate stash to %d\n", size + EMERGENCY_MEMORY_UNIT));
 	    }
 	}
     }
@@ -200,6 +206,7 @@ extern int mm_can_we_recover(int abort)
 	    if (flex_extend(&emergency_memory, size - EMERGENCY_MEMORY_UNIT))
 	    {
 		r = 2;
+		DBG(("mm_poll: use stash, down to %d\n", size - EMERGENCY_MEMORY_UNIT));
 		if (size <= EMERGENCY_MEMORY_UNIT)
 		    gbf_flags |= GBF_VERY_LOW_MEMORY;
 	    }

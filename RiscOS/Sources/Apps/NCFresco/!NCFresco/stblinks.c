@@ -199,10 +199,24 @@ static os_error *fe__locate_view_by_position(fe_view v, void *handle)
     STBDBG(("fe__locate_view_by_position: pdist %d s1 %d s2 %d\n", pdist, s1, s2));
 
     /* in wrong direction or not overlapping  */
-    if (pdist < 0 || s1 < 0 || s2 < 0)
+    if (pdist < 0 || ((vals[4] & be_link_DONT_WRAP) && (s1 < 0 || s2 < 0)))
 	return NULL;
 
-    sdist = abs(s1 - s2);
+    if (vals[4] & be_link_DONT_WRAP)
+    {
+	sdist = abs(s1 - s2);
+    }
+    else
+    {
+	if (s1 >= 0 && s2 >= 0)
+	    sdist = 0;
+	else
+	{
+	    s1 = abs(s1);
+	    s2 = abs(s2);
+	    sdist = MIN(s1, s2);
+	}
+    }
 
     if (pdist < vals[0] || (pdist == vals[0] && sdist < vals[1]))
     {
@@ -467,16 +481,33 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	wimp_box cbox;
 	wimp_wstate state;
 
+	cbox = *box;
+	
 	/* decide which view we are going to jump into */
-	if ((v = fe_locate_view_by_position(box, flags)) == NULL)
+	if ((v = fe_locate_view_by_position(&cbox, flags & (be_link_VERT|be_link_BACK))) == NULL)
 	{
-	    STBDBG(("fe_move_highlight_xy: XY no view found\n"));
-	    return;
+#if 0
+	    if (flags & be_link_VERT)
+	    {
+		cbox.x0 = screen_box.x0;
+		cbox.x1 = screen_box.x1;
+	    }
+	    else
+	    {
+		cbox.y0 = screen_box.y0;
+		cbox.y1 = screen_box.y1;
+	    }
+
+	    if ((v = fe_locate_view_by_position(&cbox, flags)) == NULL)
+	    {
+		STBDBG(("fe_move_highlight_xy: XY no view found\n"));
+		return;
+	    }
+#endif
+	    STBDBG(("fe_move_highlight_xy: XY view found with stretched start box\n"));
 	}
 
 	/* convert coords into relative to that view */
-	cbox = *box;
-	
 	wimp_get_wind_state(v->w, &state);
 	coords_box_toworkarea(&cbox, (coords_cvtstr *)&state.o.box);
 	
@@ -566,7 +597,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	}
 
 	/* look for new frame */
-	new_v = fe_locate_view_by_position(&v->box, flags);
+	new_v = fe_locate_view_by_position(&v->box, (flags & (be_link_VERT | be_link_BACK)) | be_link_DONT_WRAP);
 
 	/* if no new frame then try moving to toolbar */
 	/* 20Jun: can't do this if it is a transient popup that is centered*/

@@ -454,7 +454,7 @@ int webfont_lookup(const char *font_name)
     if (strcasecomp(font_name, "courier") == 0)
 	return WEBFONT_FLAG_FIXED;
 
-    return 0;
+    return -1;
 }
 
 /* eof webfonts.c */

@@ -789,12 +789,6 @@ static os_error *access_http_fetch_start(access_handle d)
     }
 
     /* normal authentication */
-    if (authenticate_hdr.value)
-    {
-	mm_free(authenticate_hdr.value);
-	authenticate_hdr.value = NULL;
-    }
-
     if ((authenticate_hdr.value = auth_lookup_string(d->url)) != NULL)
     {
 	authenticate_hdr.next = hlist;
@@ -804,12 +798,6 @@ static os_error *access_http_fetch_start(access_handle d)
     }
 
     /* proxy authentication */
-    if (proxy_authenticate_hdr.value)
-    {
-	mm_free(proxy_authenticate_hdr.value);
-	proxy_authenticate_hdr.value = NULL;
-    }
-
     if ((d->flags & access_PROXY) && (proxy_authenticate_hdr.value = auth_lookup_string(d->dest_host)) != NULL)
     {
 	proxy_authenticate_hdr.next = hlist;
@@ -888,7 +876,14 @@ static os_error *access_http_fetch_start(access_handle d)
     host_hdr.value = NULL;
 #endif
 
+    mm_free(proxy_authenticate_hdr.value);
+    proxy_authenticate_hdr.value = NULL;
 
+    mm_free(authenticate_hdr.value);
+    authenticate_hdr.value = NULL;
+
+    cookie_free_headers();
+    
     if (ep == NULL)
 	d->transport_handle = httpo.out.handle;
 
@@ -1161,8 +1156,12 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     /* Temporary insertion in case the url is re-requested inside the completed call (e.g. for a GIF) */
     cache->insert(d->url, cfile, cache_flag_OURS | (si->out.data_size == -1 ? cache_flag_IGNORE_SIZE : 0));
 
+    ACCDBGN(("access: inserted\n"));
+
     /* The http close does not need to delete the file as we have already if it was removed from the cache */
     access_http_close(d->transport_handle, http_close_DELETE_BODY );
+
+    ACCDBGN(("access: closed\n"));
 
     /* What? A bug, in some Netscape software? Surely not.
      * If we've got an error, but we were in a server-push situation and
@@ -1177,7 +1176,10 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
         si->out.status = status_COMPLETED_FILE;
 
     if (d->complete)
-	cache_it = d->complete(d->h, si->out.status, si->out.status == status_COMPLETED_FILE ? cfile : NULL, d->url);
+	cache_it = d->complete(d->h,
+			       (d->flags & access_MUST_BE_FOUND) && si->out.rc != 200 ? status_FAIL_FOUND : si->out.status,
+			       si->out.status == status_COMPLETED_FILE ? cfile : NULL,
+			       d->url);
     else
 	cache_it = 0;
 

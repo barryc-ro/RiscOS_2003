@@ -304,12 +304,17 @@ static int render__text_link_colour(rid_text_item *ti, antweb_doc *doc, BOOL all
     {
 	rcol = render_colour_ACTIVATED;
     }
+    /* font colour set and allowed */
+    else if ( allow_font_colour && (no = RID_COLOUR(ti)) != 0 && doc && (doc->flags & doc_flag_DOC_COLOURS) )
+    {
+	rcol = render_colour_RGB | doc->rh->extracolourarray[no];
+    }
     /* if not a link */
     else if (ti->aref == NULL || ti->aref->href == NULL || (ti->aref->flags & rid_aref_LABEL))
     {
-	if ( allow_font_colour && (no = RID_COLOUR(ti)) != 0 && doc && (doc->flags & doc_flag_DOC_COLOURS) )
-	    rcol = render_colour_RGB | doc->rh->extracolourarray[no];
-	else
+/* 	if ( allow_font_colour && (no = RID_COLOUR(ti)) != 0 && doc && (doc->flags & doc_flag_DOC_COLOURS) ) */
+/* 	    rcol = render_colour_RGB | doc->rh->extracolourarray[no]; */
+/* 	else */
 	    rcol = render_colour_PLAIN;
     }
     /* if it is a link */
@@ -502,7 +507,7 @@ os_error *render_plot_icon(char *sprite, int x, int y)
     /* if 8bpp or more then read the colourtrans table separately */
     if (bbc_modevar(((sprite_header *)id.s.addr)->mode, bbc_Log2BPP) > 2)
     {
-	if ((ep = _swix(ColourTrans_GenerateTable, _INR(0,5), area, id.s.addr, -1, -1, pt, 1)) != NULL)
+	if ((ep = (os_error *)_swix(ColourTrans_GenerateTable, _INR(0,5), area, id.s.addr, -1, -1, pt, 1)) != NULL)
 	    return ep;
     }
 

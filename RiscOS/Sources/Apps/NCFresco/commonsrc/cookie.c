@@ -775,6 +775,56 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
     return hlist;
 }
 
+void cookie_free_headers(void)
+{
+    mm_free(cookie_http_header.value);
+    cookie_http_header.value = NULL;
+}
+
+static void cookie_optimise_domain(cookie_domain *d)
+{
+    cookie_item *c, *last_c;
+
+    CKIDBG(("cookie: optimise domain '%s'\n", d->domain));
+
+    for (last_c = NULL, c = d->cookie_list; c; last_c = c, c = c->next)
+    {
+	if (optimise_block((void **)&c, sizeof(*c)))
+	{
+	    if (last_c)
+		last_c->next = c;
+	    else
+		d->cookie_list = c;
+	}
+
+ 	c->name = optimise_string(c->name);
+ 	c->value = optimise_string(c->value);
+ 	c->path = optimise_string(c->path);
+    }
+}
+
+void cookie_optimise(void)
+{
+    cookie_domain *d, *last_d;
+
+    CKIDBG(("cookie: optimise\n"));
+
+    for (last_d = NULL, d = domain_list; d; last_d = d, d = d->next)
+    {
+	if (optimise_block((void **)&d, sizeof(*d)))
+	{
+	    if (last_d)
+		last_d->next = d;
+	    else
+		domain_list = d;
+	}
+
+ 	d->domain = optimise_string(d->domain);
+	
+	cookie_optimise_domain(d);
+    }
+}
+
 /* ---------------------------------------------------------------------------------------------------- */
 
 #ifndef FRESCO

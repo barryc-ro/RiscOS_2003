@@ -64,6 +64,7 @@
 #define fevent_TOGGLE_ANTI_ALIAS            0x2002
 #define fevent_TOGGLE_COLOURS               0x2003
 #define fevent_TOGGLE_IMAGES                0x2004
+#define fevent_STATUS_OFF	            0x2005
 
 #define fevent_HISTORY_SHOW                 0x2010 /* show combined list */
 #define fevent_HISTORY_BACK                 0x2011

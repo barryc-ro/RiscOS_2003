@@ -6,6 +6,8 @@
 extern int tb_init(int *m_list, int *wimp_version);
 extern void tb_events(int *event, fe_view v);
 extern void tb_cleanup(void);
+extern void tb_optimise(void);
+
 /* extern BOOL tb_key_handler(wimp_caretstr *cs, int key); */
 extern void tb_event_handler(int event, fe_view v);
 

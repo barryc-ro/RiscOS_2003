@@ -185,6 +185,7 @@ extern void sgml_recursion_warning_post(SGMLCTX *context);
 #define SGMLTRANS_HASH		    (1<<2) /* Do #41; => A */
 #define SGMLTRANS_PLUS_TO_SPACE     (1<<3) /* Do '+' to ' ' */
 #define SGMLTRANS_STRIP_NEWLINES    (1<<4) /* Strip \n and \r */
+#define SGMLTRANS_STRIP_CTRL	    (1<<5) /* Remove chars 1-31 */
 
 #define SGMLTRANS_WARNINGS	    (1<<6) /* Send warnings down sgml_note_message() */
 #define SGMLTRANS_STRICT	    (1<<7) /* Remove invalid translations */

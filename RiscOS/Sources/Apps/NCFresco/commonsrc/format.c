@@ -60,7 +60,8 @@
 static BOOL basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
 			      rid_text_stream *stream,
-			      int depth);
+			      int depth,
+			      BOOL nowrap);
 
 static BOOL basic_size_table(antweb_doc *doc,
 			     rid_header *rh,
@@ -137,7 +138,8 @@ static BOOL format_width_checking_assertions(rid_table_item *table, BOOL horiz)
 static BOOL basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
 			      rid_text_stream *stream,
-			      int depth)
+			      int depth,
+			      BOOL nowrap)
 {
     rid_text_item *ti;
     BOOL si1_pct = FALSE;
@@ -178,6 +180,9 @@ static BOOL basic_size_stream(antweb_doc *doc,
     stream->fwidth = 1000000000;
     format_stream(doc, rh, stream, DONT, depth);
     stream->width_info.maxwidth = stream->widest;
+
+    if ( nowrap )
+	stream->width_info.minwidth = stream->width_info.maxwidth;
 
     return si1_pct;
 }
@@ -1134,10 +1139,18 @@ static BOOL basic_size_table(antweb_doc *doc,
     FMTDBG(("basic_size_table(%p %p id %d): recurse down doing basic sizing\n", doc, rh, table->idnum));
 
     if (table->caption != NULL)
-	basic_size_stream(doc, rh, &table->caption->stream, depth);
+    {
+	FMTDBG(("basic_size_table: sizing caption for table %d\n", table->idnum));
+	basic_size_stream(doc, rh, &table->caption->stream, depth, FALSE);
+
+	FMTDBG(("basic_size_stream: caption min/max %d/%d for table %d\n",
+		table->caption->stream.width_info.minwidth,
+		table->caption->stream.width_info.maxwidth,
+		table->idnum));
+    }
 
     for (x  = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
-	basic_size_stream(doc, rh, &cell->stream, depth);
+	basic_size_stream(doc, rh, &cell->stream, depth, !!(cell->flags & rid_cf_NOWRAP) );
 
     /* All descendent streams have been sized and raw_minwidth and
        raw_maxwidth calculated for them. Initialise the colspan data
@@ -1616,7 +1629,7 @@ static void recurse_format_stream(antweb_doc *doc,
 /* Never scale things to under this percentage */
 /* 576/640 = 0.9 = ideal ratio. go for less though! */
 #define MIN_SCALE	80
-#define SCALE_UNIT	10
+#define SCALE_UNIT	4
 
 /* Allow a bit of play to avoid a few pixels over becoming a lot of pixels under */
 #define AUTOFIT_THRESHOLD 32
@@ -1657,7 +1670,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
 	FMTDBG(("Sizing root stream\n"));
 
-	if ( basic_size_stream(doc, rh, root_stream, 0) )
+	if ( basic_size_stream(doc, rh, root_stream, 0, FALSE) )
 	{
 	    FMTDBG(("\nDone sizing root stream: min %d, max %d, fwidth %d, scale_value %d, MIN_SCALE %d\n",
 		    root_stream->width_info.minwidth,
@@ -1675,7 +1688,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
                iteration and just hope it's sensible. */
 	    rid_zero_widest_height( root_stream );
 	    fvpr_forget( root_stream );
-	    basic_size_stream(doc, rh, root_stream, 0);
+	    basic_size_stream(doc, rh, root_stream, 0, FALSE);
 	}
 	FMTDBG(("\nDone sizing root stream: min %d, max %d, fwidth %d, scale_value %d, MIN_SCALE %d\n",
 		root_stream->width_info.minwidth,
@@ -1704,9 +1717,10 @@ extern void rid_toplevel_format(antweb_doc *doc,
                         root_stream, rh->stream.width_info.minwidth, fwidth,
                         doc->scale_value ));
 
+ 		antweb_uncache_image_info(doc);
 		rid_zero_widest_height( root_stream );
 		fvpr_forget( root_stream );
-		basic_size_stream( doc, rh, root_stream, 0 );
+		basic_size_stream( doc, rh, root_stream, 0, FALSE );
 		FMTDBG(("st%p: RESIZED due to autofit, min now %d, max %d\n",
 			root_stream,
 			root_stream->width_info.minwidth,

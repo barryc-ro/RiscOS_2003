@@ -121,6 +121,26 @@ static void oinput_update_box(rid_text_item *ti, wimp_box *box)
     }
 }
 
+static char *button_text(rid_input_item *ii)
+{
+    char *s = "";
+    if (ii->value)
+	s = ii->value;
+    else switch (ii->tag)
+    {
+    case rid_it_RESET:
+	s = "Reset";
+	break;
+    case rid_it_SUBMIT:
+	s = "Submit";
+	break;
+    case rid_it_IMAGE:
+	s = "Button";
+	break;
+    }
+    return s;
+}
+
 #ifndef BUILDERS
 static int string_length_upto(const char *str, int offset)
 {
@@ -192,22 +212,25 @@ static int text_displayable_width(int xsize, antweb_doc *doc)
     return n;
 }
 
-static int oinput_image_renderable(rid_input_item *ii, antweb_doc *doc)
+static int oinput_image_renderable(rid_input_item *ii, void *im, antweb_doc *doc)
 {
     int fl;
-    if (ii->data.image.im == NULL)
+    if (im == NULL)
 	return FALSE;
 
     if (doc->flags & doc_flag_NO_PICS)
 	return FALSE;
 
-    image_info((image) ii->data.image.im, 0, 0, 0, &fl, 0, 0);
+    image_info((image) im, 0, 0, 0, &fl, 0, 0);
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
-    if (/* tii->alt == NULL && */((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (ii->hh.type == value_none && ii->ww.type == value_none)))
+#if 0
+    /* welaways have some alt text now for the image buttons */
+    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (ii->hh.type == value_none && ii->ww.type == value_none)))
 	return TRUE;
-
+#endif
+    
     return FALSE;
 }
 
@@ -234,7 +257,9 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	if (fl & image_flag_REALTHING)
 	    ii->data.image.flags |= rid_image_flag_REAL;
 
-	oimage_size_image("Submit", &ii->ww, &ii->hh, ii->data.image.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
+	antweb_doc_ensure_font( doc, ALT_FONT );
+
+	oimage_size_image(button_text(ii), &ii->ww, &ii->hh, ii->data.image.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
 
 	width += ii->bw*2*2;
 	height += ii->bw*2*2;
@@ -299,7 +324,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
         antweb_doc_ensure_font( doc, WEBFONT_BUTTON );
 
-	t = ii->value ? ii->value : (ii->tag == rid_it_RESET ? "Reset" : "Submit");
+	t = button_text(ii);
 	if (ii->src)
 	{
 	    if (ii->data.button.im == NULL)
@@ -313,7 +338,10 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    if (fl & image_flag_REALTHING)
 		ii->data.button.flags |= rid_image_flag_REAL;
 
+	    antweb_doc_ensure_font( doc, ALT_FONT );
+
 	    oimage_size_image(t, &ii->ww, &ii->hh, ii->data.button.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
+
 	    ti->width = width;
 	    ti->max_up = (height - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
 	    ti->max_down = height - ti->max_up;
@@ -371,6 +399,8 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
 	    if (fl & image_flag_REALTHING)
 		ii->data.radio.flags |= rid_image_flag_REAL;
+
+	    antweb_doc_ensure_font( doc, ALT_FONT );
 
 	    oimage_size_image("*", &ii->ww, &ii->hh, ii->data.radio.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
 
@@ -442,7 +472,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	bbox.x1 = bbox.x0 + ti->width - 0 - bw*2*2;
 	bbox.y1 = bbox.y0 + ti->max_up + ti->max_down - 0 - bw*2*2;
 
-	if (oinput_image_renderable(ii, doc))
+	if (oinput_image_renderable(ii, ii->data.image.im, doc))
 	{
 	    int oox = ox, ooy = oy;
 #if USE_MARGINS
@@ -460,7 +490,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
 			  bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0, doc);
 
-	    oimage_render_text(ti, doc, fs, &bbox, "");
+	    oimage_render_text(ti, doc, fs, &bbox, button_text(ii));
 	}
 	break;
     }
@@ -602,7 +632,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    render_text_link_colour(ti, doc);
 	bg = 0;
 
-	t = ii->value ? ii->value : ii->tag == rid_it_SUBMIT ? "Submit" : "Reset";
+	t = button_text(ii);
 	t_len = strlen(t);
 
 	fontnum = WEBFONT_BUTTON;
@@ -620,11 +650,28 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    else
 		im = (image)ii->data.button.im;
 
+#if 1
+	    if (oinput_image_renderable(ii, im, doc))
+	    {
+		image_render(im,
+			 hpos, bline - ti->max_down,
+			 ti->width/2, (ti->max_up + ti->max_down)/2,
+			 doc->scale_value, antweb_render_background, doc, oox, ooy);
+	    }
+	    else
+	    {
+		render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
+			      hpos, bline - ti->max_down,
+			      ti->width, (ti->max_up + ti->max_down), doc);
+
+/* 		oimage_render_text(ti, doc, fs, &bbox, ""); */
+	    }
+#else	    
 	    image_render(im,
 			 hpos, bline - ti->max_down,
 			 ti->width/2, (ti->max_up + ti->max_down)/2,
 			 doc->scale_value, antweb_render_background, doc, oox, ooy);
-
+#endif
 	    fontnum = ti->st.wf_index;
 	    plotx = (ti->width - webfont_font_width(ti->st.wf_index, t))/2;
 	    if (plotx < INPUT_BUTTON_BORDER_X)
@@ -740,9 +787,11 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    /* try and draw a different sprite (suffix '1') for the highlighted version of the radio/check boxes */
 	    int index = (ii->tag == rid_it_RADIO ? BUTTON_NAME_RADIO : BUTTON_NAME_OPTION) + (ii->data.radio.tick ? BUTTON_NAME_ON : BUTTON_NAME_OFF);
 
+#ifdef STBWEB
 	    if (selected && have_selected_sprites)
 		render_plot_icon(button_names[index + BUTTON_NAME_HIGHLIGHT], hpos + 4, bline - ti->max_down + 4);
 	    else
+#endif
 		render_plot_icon(button_names[index], hpos + ii->bw*2, bline - ti->max_down + ii->bw*2);
 	}
 	break;
@@ -1088,7 +1137,7 @@ void oinput_astext(rid_text_item *ti, rid_header *rh, FILE *f)
     case rid_it_SUBMIT:
     case rid_it_BUTTON:
 	fputc('[', f);
-	fputs(ii->value ? ii->value : ( ii->tag == rid_it_SUBMIT ? "Submit" : "Reset" ), f);
+	fputs(button_text(ii), f);
 	fputc(']', f);
 	break;
     }
@@ -1450,8 +1499,7 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 
 	case object_image_BOX:
 	    memset(&box, 0, sizeof(box));
-	    bp = &box;
-	    break;
+	    return &box;
 	}
 	break;
 
@@ -1461,7 +1509,7 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 	switch (reason)
 	{
 	case object_image_HANDLE:
-	    return ii->data.button.im;
+	    return backend_is_selected(doc, ti) && ii->data.button.im_sel ? ii->data.button.im_sel : ii->data.button.im;
 
 	case object_image_ABORT:
 	    oimage_flush_image(ii->data.button.im);
@@ -1470,8 +1518,7 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 
 	case object_image_BOX:
 	    memset(&box, 0, sizeof(box));
-	    bp = &box;
-	    break;
+	    return &box;
 	}
 	break;
 
@@ -1489,12 +1536,10 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 
 	case object_image_BOX:
 	    memset(&box, 0, sizeof(box));
-	    bp = &box;
-	    break;
+	    return &box;
 	}
 	break;
     }
-
     return NULL;
 }
 

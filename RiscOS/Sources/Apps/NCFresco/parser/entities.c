@@ -578,6 +578,16 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 		out_bytes++;
 		in_bytes -= end - in_ptr;
 		in_ptr = end;
+
+                /* pdh: added this 'if' because &#163; was leaving the ;
+                 * in titles
+                 */
+		if (in_bytes > 0 && *in_ptr == ';')
+		{
+		    in_ptr++;
+		    in_bytes--;
+		}
+
 		used = TRUE;
 	    }
 
@@ -631,6 +641,16 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 				  in_ptr - 1);
 #endif
        	}
+	else if ((c < 32 || c == 127) && (rules & SGMLTRANS_STRIP_CTRL) != 0)
+	{
+	    /* SJM: I'm not sure whether taking NULLs out would mess stuff up */
+	    if (c != 0)
+	    {
+		*out_ptr++ = ' ';
+		out_bytes++;
+		used = TRUE;
+	    }
+	}
 
 	if (! used)
 	{

@@ -454,7 +454,9 @@ static key_list rca_web_keys[] =
 
 static key_list rca_desktop_keys[] =
 {
-/*  { kbd_handset_MENU,		fevent_OFFLINE_PAGE }, */
+    { kbd_handset_MENU,		fevent_STATUS_OFF },
+    { akbd_Fn12,		fevent_STATUS_OFF },
+    { kbd_handset_TOOLBAR,	fevent_STATUS_OFF },
 
 /*  { kbd_handset_BACK,         fevent_TOOLBAR_EXIT }, */
 

@@ -1519,11 +1519,16 @@ void antweb_update_item_trim(antweb_doc *doc, rid_text_item *ti,
 			     wimp_box *trim, BOOL wont_plot_all)
 {
     wimp_box box;
+    os_error *e;
 
     if ((doc->flags & doc_flag_DISPLAYING) == 0)
         return;
 
-    if (backend_doc_item_bbox(doc, ti, &box) == NULL)
+    e = backend_doc_item_bbox(doc, ti, &box);
+#if 0
+    DBG(("backend_doc_item_bbox returns %x %s %d,%d %d,%d\n", e ? e->errnum : 0, e ? e->errmess : "", box.x0,  box.y0,  box.x1,  box.y1));
+#endif
+    if (e == NULL)
     {
         if (trim)
         {
@@ -1781,7 +1786,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    case rid_it_RADIO:
 			if (iis->data.radio.tick)
 			{
-			    antweb_append_query(&buffer, iis->name, strsafe(iis->value), &buf_size);
+			    antweb_append_query(&buffer, iis->name, iis->value ? iis->value : "on", &buf_size);
 			}
 			break;
 		    case rid_it_SUBMIT:
@@ -1888,7 +1893,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    case rid_it_RADIO:
 			if (iis->data.radio.tick)
 			{
-			    antweb_write_query(f, iis->name, strsafe(iis->value), &first);
+			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first);
 			}
 			break;
 		    case rid_it_SUBMIT:
@@ -3421,7 +3426,12 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
     int top, bottom, line_top = 0;
     wimp_box bounds;
 
-    DICDBG(("Image change called, doc=0x%p, status %d, image 0x%p\n", doc, status, i));
+#if DEBUG
+    if (status != image_cb_status_WORLD && status != image_cb_status_NOACTION)
+    {
+	DICDBG(("Image change called, doc=0x%p, status %d, image 0x%p\n", doc, status, i));
+    }
+#endif
 
     switch (status)
     {
@@ -3441,7 +3451,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* SJM: moved to end of function as otherwise when last image
            comes in the fvpr flush happens before the fvpr checking in
            the function below and the screen isn't updated */
-/* 	be_update_image_info(doc); */
+/*  	be_update_image_info(doc); */
 	break;
     }
 
@@ -3480,17 +3490,29 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* SJM: the above is not good enough with floating images around */
 	pi = clonedposlist;
 
+#if 1
+	/* SJM: 17Jul97: went back to alowing first_ti to be NULL
+           (code below checks for this case) otherwise strange results
+           can occur with single floating tables */
+        first_ti = pi->first;
+   	line_top = pi->top;
+#else
         /* pdh: if all our items are floating, pi->first may never get set.
          * In this case we use the first item in the text list... if this is
          * null too there can't be any images and we won't be here.
          */
         first_ti = pi->first ? pi->first : doc->rh->stream.text_list;
 
- 	line_top = pi->top;
+	/* SJM: 17Jul97: set line_top based on position from first ti
+           otherwise we get spurious large shifts down below */
+  	line_top = first_ti->line ? first_ti->line->top : 0;
+/*   	line_top = pi->top; */
+#endif
 
 	ti = doc->rh->stream.text_list;
 
-	DICDBG(("Starting rescan\n"));
+	DICDBG(("Starting rescan: pi %p pi->first %p first_ti %p first_ti->line %p ti %p ti tag %d line_top %d\n",
+		pi, pi->first, first_ti, first_ti ? first_ti->line : 0, ti, ti->tag, line_top));
 
 	/* Need to scan recursively to actually find the images, but use */
 	/* the outermost item when looking for redraw sizes, etc. */
@@ -3559,7 +3581,8 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* SJM: the above is not good enough with floating images */
 	pi = doc->rh->stream.pos_list;
 
-	first_ti = pi->first;		/* This is the first displayed item in the view */
+	/* This is the first displayed item in the view */
+ 	first_ti = pi->first;
 	line_top = pi->top;
 
 	/* ... but we set changed=0 os it's OK */
@@ -3612,16 +3635,30 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	    be_set_dimensions(doc);
 	}
 
-	DICDBG(("Checking what has changed (first_ti=%p first_ti->line=%p)\n",
-	        first_ti, first_ti ? first_ti->line : NULL ));
+	DICDBG(("Checking what has changed (first_ti=%p first_ti->line=%p) top %d\n",
+	        first_ti, first_ti ? first_ti->line : NULL, first_ti && first_ti->line ? first_ti->line->top : 0 ));
 
 	if (changed & 3)
 	{
 	    net_shift = 0;
-	    shift_pending = first_ti->line->top - line_top;
-	    top_of_zone = first_ti->line->top; /* Always in new format coordinates */
+	    if (first_ti && first_ti->line)
+	    {
+		shift_pending = first_ti->line->top - line_top;
+		top_of_zone = first_ti->line->top; /* Always in new format coordinates */
 
-            is_shift_pending = TRUE;
+		is_shift_pending = TRUE;
+	    }
+	    else
+	    {
+		/* SJM: 19Jul97 if we have no first item then there
+                   are only floaters on the page (or is that just the
+                   first line?) so we do no shifts and rely on the
+                   whole area being redrawn */
+		shift_pending = 0;
+		top_of_zone = line_top;
+
+		is_shift_pending = FALSE;
+	    }
 
 	    if (shift_pending != 0)
 	    {
@@ -3647,7 +3684,10 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 		/* If there is nothing on the line or the new version of the line is out of view */
 		if ((opi->first == NULL) || (opi->first->line->top < new_bottom))
+		{
+		    DICDBG(("breaking out of loop opi->first %p\n", opi->first));
 		    break;
+		}
 
 		if ((opi->next == NULL) ||
 		    ((opi->first->line->next != NULL) &&
@@ -3788,7 +3828,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 		}
 	    }
 
-	    DICDBG(("Finished scanning viable range\n"));
+	    DICDBG(("Finished scanning viable range is_shift_pending %d shift_pending %d\n", is_shift_pending, shift_pending));
 
 	    if (is_shift_pending)
 	    {
@@ -3838,13 +3878,13 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* If told to UPDATE when we don't need a full redraw */
 	do_redraw = (status == image_cb_status_UPDATE || status == image_cb_status_UPDATE_ANIM) ? 0 : 1;
 
-	DICDBG(("Updating images with no size change.  Top=%d, borrom=%d, redraw = %d\n",
-		top, bottom, do_redraw));
+	DICDBG(("Updating images with no size change.  Top=%d, borrom=%d, redraw = %d, first_ti %p\n",
+		top, bottom, do_redraw, first_ti));
 
 	/* The new image must be the same size.  Redraw the image when on the screen. 	*/
         /* This recurses through tables as well - should work okay */
 /* 	for (ti = first_ti; ti && (ti->line->top > bottom); ti = rid_scanfr(ti)) */
-	for (ti = first_ti; ti; ti = rid_scanfr(ti))
+	for (ti = first_ti ? first_ti : doc->rh->stream.text_list; ti; ti = rid_scanfr(ti))
 	{
 	    void *imhandle = object_table[ti->tag].imh != NULL ? (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE) : NULL;
 
@@ -3884,6 +3924,8 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 		    /* We need all this but we cant get the hb/vb values from here */
                     wimp_box trim = *tbox;
 
+		    DICDBG(("trim box %d,%d %d,%d\n", trim.x0, trim.y0, trim.x1, trim.y1));
+
 		    /* SJM: masked images wont redraw all the screen
 		     * and we don't want to redraw the border
 		     * and we have animation frames to take into account
@@ -3895,6 +3937,8 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 			    xd = imw,
 			    ym = ti->max_up + ti->max_down - (tbox->y0 - tbox->y1),
 			    yd = imh;
+
+			DICDBG(("upda box %d,%d %d,%d\n", box_update->x0, box_update->y0, box_update->x1, box_update->y1));
 
 			/* this box is in os coords relative to the original image size and needs to be
 			 * scaled appropriately
@@ -4368,8 +4412,10 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     PPDBG(("doc%p: adp, so_far=%d ftype=%d fh=%d status=%d\n",
            doc, so_far, ftype, fh, status ));
 
+
+    /* SJM: 18Jul97: don't allow COMPLETED_PART here so that we don't read data until we've switched files */
     if (so_far > 0 && ftype != -1 && fh &&
-         ((status == status_GETTING_BODY) || (status == status_COMPLETED_PART) ) )
+         ((status == status_GETTING_BODY)/*  || (status == status_COMPLETED_PART) */ ) )
     {
 	int lastptr = doc->lbytes;
 
@@ -4857,6 +4903,8 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     /* new: add the url here */
     new->url = strdup(url);
 
+    new->threaded = 1;
+    
     BENDBG(( "backend_open_url: url '%s' checklist: add %p document_list %p next %p\n",
 	   strsafe(url), new, document_list, document_list ? document_list->next : NULL));
 
@@ -4902,17 +4950,22 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	frontend_view_status(v, sb_status_URL, url);
 
 	if (new->ah == NULL)
+	{
+	    /* backend_dispose_doc will have been hopefully called from complete */
 	    frontend_view_status(v, sb_status_PROGRESS, status_COMPLETED_CACHE);
+	}
 	else
 	{
+	    /* transfer is underway normally */
 	    BENDBG(( "New access handle is 0x%p\n", new->ah));
 	}
-
+#if 0
 	if (!antweb_doc_in_list(new))
 	{
 	    /* document has already been freed from within access_url() */
 	    *docp = NULL;
 	}
+#endif
     }
     else
     {
@@ -4938,6 +4991,11 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	    break;
 	}
 
+#if 1
+	/* check not already marked for deletion just in case */
+	if (!new->pending_delete)
+	    backend_dispose_doc(new);
+#else
 	/* only free if still in list in case already freed */
 	if (antweb_doc_in_list(new))
 	{
@@ -4945,8 +5003,16 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	    mm_free(new);
 	    *docp = NULL;
 	}
+#endif
     }
 
+    new->threaded--;
+    if (new->pending_delete)
+    {
+	backend_dispose_doc(new);
+	*docp = NULL;
+    }
+    
     return ep;
 }
 

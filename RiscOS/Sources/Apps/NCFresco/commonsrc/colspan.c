@@ -1065,6 +1065,11 @@ static void set_nocons_horiz(rid_table_item *table, int x, rid_cell_flags f)
 	    cell->flags |= rid_cf_NOCONS;
 	}
     }
+
+    /* Clear column header as well */
+    table->colhdrs[x]->userwidth.type = value_none;
+    /* Ditto for the group */
+    table->colhdrs[x]->colgroup->userwidth.type = value_none;
 }
 
 static void set_nocons_vert(rid_table_item *table, int y, rid_cell_flags f)

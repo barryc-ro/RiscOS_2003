@@ -1882,8 +1882,16 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
     internal_url_str *uu;
     BOOL generated = FALSE;
     char *remove = extract_value(query, "remove=");
+    char *toolbar = extract_value(query, "toolbar=");
 
     STBDBG(("frontend_internal_url(): action '%s'\n", path));
+
+    if (toolbar)
+    {
+	BOOL on = strcasecomp(toolbar, "on") == NULL;
+	fe_status_state(main_view, on);
+	mm_free(toolbar);
+    }
 
     for (uu = internal_url_info; uu->name; uu++)
     {
@@ -1902,7 +1910,7 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 	mm_free(remove);
 	remove = NULL;
     }
-
+    
     return generated;
 }
 
@@ -2041,7 +2049,7 @@ os_error *fe_internal_toggle_panel(const char *panel_name)
     else
     {
 	if (!tb_is_status_showing())
-	    tb_status_show(FALSE);
+	    fe_status_state(main_view, TRUE);
 	    
 	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE);
     }
@@ -2120,6 +2128,11 @@ void fe_internal_flush(void)
     find__backwards = find__casesense = FALSE;
 }
 
+void fe_internal_optimise(void)
+{
+    loadurl_last = optimise_string(loadurl_last);
+    find__string = optimise_string(find__string);
+}
 
 /* ------------------------------------------------------------------------------------------- */
 

@@ -110,7 +110,9 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
     {
 	const int display_width = GET_FWIDTH(fmt, new_pos);
 	const int width = fmt->x_text_pos;
-	const int spare = new_pos->floats->right_margin - fmt->x_text_pos;
+	const int spare = (fmt->fmt_method == MAYBE) ? 
+	    (new_pos->floats->right_margin - fmt->x_text_pos) :
+	    0;
 	int flags = 0;
 
 	FMTDBGN(("center_and_right_align_adjustments: display_width %d, text_pos.x %d, flags %x, spare %d\n",
@@ -167,7 +169,10 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 		FMTDBGN(("center, %d %d\n", width, display_width));
 
 		if (width < display_width)
+		{
 		    new_pos->left_margin += (spare >> 1);
+		    FMTDBG(("1 new_pos->left_margin %d\n", new_pos->left_margin));
+		}
 	    }
 	    break;
 	case rid_sf_ALIGN_RIGHT:
@@ -176,6 +181,7 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 		FMTDBGN(("Right aligned\n"));
 
 		new_pos->left_margin += spare;
+		FMTDBG(("2 new_pos->left_margin %d\n", new_pos->left_margin));
 	    }
 	    break;
 	}
@@ -589,7 +595,12 @@ static int excess_right_margin_due_to_floaters( const RID_FMT_STATE *fmt,
                                                 const rid_pos_item *pi )
 {
     int excess = 0;
-    int shouldbe = GET_FWIDTH(fmt, pi);
+    int shouldbe = fmt->format_width;
+    /* pdh: had been changed to GET_FWIDTH() but that made the function
+     * always return zero; the whole point is that 'shouldbe' refers to
+     * the galley width irrespective of floaters.
+     * GET_FWIDTH() got it wrong in the <blockquote><img align=right>... case
+     */
     rid_floats_link *fl = pi->floats;
     rid_float_item *fi;
 
@@ -602,6 +613,15 @@ static int excess_right_margin_due_to_floaters( const RID_FMT_STATE *fmt,
         if ( shouldbe != fi->entry_margin )
             FMTDBG(("ermdf: shouldbe=%d entry_margin=%d\n", shouldbe,
                     fi->entry_margin));
+
+        /* pdh: as right floaters can extend beyond fwidth, we should cater
+         * for these being the wrong way round. This should only occur when
+         * (a) this is the only right floater and (b) there are no left
+         * floaters or any text items, in which case the actual answer to
+         * the excess question is irrelevant.
+         */
+        if ( shouldbe < fi->entry_margin )
+            return 0;
 
         excess += ( shouldbe - fi->entry_margin );
         shouldbe = fi->entry_margin - fi->ti->width;
@@ -663,7 +683,7 @@ static int right_float_margin( const RID_FMT_STATE *fmt,
 static void set_margins_from_item( const RID_FMT_STATE *fmt, rid_pos_item *pi,
                                    const rid_text_item *ti, const int format_width )
 {
-    FMTDBG(("set_margins_from_item: using fwidth of %d\n", format_width));
+    FMTDBGN(("set_margins_from_item: using fwidth of %d\n", format_width));
 
     while ( ti && (FLOATING_ITEM(ti) || ti->tag == rid_tag_SCAFF) )
         ti = ti->next;
@@ -814,10 +834,38 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
     const int TW = fmt->unbreakable_width + prev_pad;
     const BOOL have_floaters = FLOATERS_THIS_LINE(line);
     const BOOL have_text = TEXT_ITEMS_THIS_LINE(line);
-    BOOL fits = (RM - fmt->x_text_pos - TW) >= 0;
+    rid_text_item *ti = fmt->unbreakable_start;
+    BOOL fits;
 
     ASSERT(fmt->text_line != NULL);
     ASSERT(fmt->text_line->left_margin != NOTINIT);
+
+    /* pdh: reappearance of the infamous DL COMPACT bodge */
+    if ( ti->tag == rid_tag_BULLET
+         && ((rid_text_item_bullet*)ti)->list_type == HTML_DL )
+    {
+        int ipos = LM + INDENT_WIDTH*INDENT_UNIT;
+        /*
+        FMTDBG(("Found fake DL bullet %d (%d,%d,%d)\n",
+                    ((rid_text_item_bullet*)ti)->list_type,
+                     width, left_margin, INDENT_WIDTH*INDENT_UNIT));
+         */
+        if ( fmt->x_text_pos > ipos )
+        {
+            FMTDBG(("unbreakable_sequence_fits: a DL COMPACT forces break\n"));
+            return FALSE;
+        }
+        else
+        {
+            FMTDBG(("unbreakable_sequence_fits: a DL COMPACT pad bodge\n"));
+            if ( llu )
+            {
+                llu->pad = ( ipos - fmt->x_text_pos );
+            }
+        }
+    }
+
+    fits = (RM - fmt->x_text_pos - TW) >= 0;
 
     if (fits)
     {
@@ -907,7 +955,7 @@ static void find_widest_info(RID_FMT_STATE *fmt)
 		fmt->CW_widest = CW;
 	}
 
-	FMTDBG(("find_widest_info: MA: LM %d, FW %d, CW %d, RM %d, LMW %d, CWW %d, RMW %d\n",
+	FMTDBGN(("find_widest_info: MA: LM %d, FW %d, CW %d, RM %d, LMW %d, CWW %d, RMW %d\n",
 		LM, FW, CW, RM,
 		fmt->LM_widest,
 		fmt->CW_widest,
@@ -1181,12 +1229,15 @@ static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
   floating lines. Floating items are always added at the end of the
   stream, so only one float pointer (float_line) is needed.  */
 
+extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+
 static void close_down_current_line(RID_FMT_STATE *fmt)
 {
     rid_pos_item *pi = fmt->text_line;
     rid_text_item *ti;
     int max_up = 0;
     int max_down = 0;
+    BOOL goRoundAgain = FALSE;
 
     ASSERT(fmt->text_line != NULL);
 
@@ -1200,27 +1251,22 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 	    if (ti->line != pi)
 		break;
 
-	    /* Lots of filth for <IMG align=top> */
-	    if ( ti->tag == rid_tag_IMAGE )
-	    {
-	        IMGDBGN((" ti%p: calling size()\n", ti ));
-	        (object_table[ti->tag].size)( ti, fmt->rh, fmt->doc );
-	    }
-
-            IMGDBGN((" ti%p: [%d] considering max_up %d\n",
-                    ti, ti->tag, ti->max_up ));
+            /* If we've got an <img align=top> then we need *first* to set
+             * max_up according to everything else, *then* go round again
+             * placing them all at max_up in order to find out what max_down
+             * is.
+             */
+	    if ( ti->tag == rid_tag_IMAGE
+	         && ( ((rid_text_item_image*)ti)->flags & rid_image_flag_ATOP)
+	       )
+	        goRoundAgain = TRUE;
 
 	    if (ti->max_up > max_up)
-	    {
 		max_up = ti->max_up;
-		pi->max_up = max_up;    /* needed so align=top works */
-	    }
 	    if (ti->max_down > max_down)
 		max_down = ti->max_down;
 	}
     }
-
-    IMGDBGN(("pi%p: ending max_up scan (%d)\n", pi, max_up));
 
     FMTDBGN(("close_down_current_line: max up/down %d/%d\n", max_up, max_down));
 #if DEBUG
@@ -1234,6 +1280,50 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     pi->top = fmt->y_text_pos;
     pi->max_up = max_up;
     pi->max_down = max_down;
+
+    /* Go round again now; only <img align=top> will change */
+    if ( goRoundAgain )
+    {
+        FMTDBGN(("close_down_current_line: recalculating max_up/down 'cos of images\n"));
+        max_up = 0;
+        max_down = 0;
+        /* Very like the loop above */
+        for (ti = pi->first; ti != NULL; ti = rid_scanf(ti))
+        {
+	    if ( ! FLOATING_ITEM(ti) )
+	    {
+	        if (ti->line != pi)
+		    break;
+
+	        /* Lots of filth for <IMG align=top> */
+	        if ( ti->tag == rid_tag_IMAGE )
+	        {
+#if 0
+	            IMGDBG((" ti%p: calling size()\n", ti ));
+ 	            (object_table[ti->tag].size)( ti, fmt->rh, fmt->doc );
+#else
+		    int reduction = ti->st.indent * INDENT_UNIT     /* left margin */
+                         + ( (ti->flag & rid_flag_RINDENT)
+                                         ? (INDENT_UNIT*INDENT_WIDTH)
+                                         : 0 );         /* right margin */
+
+	            IMGDBG((" ti%p: calling size()\n", ti ));
+		    oimage_size_allocate(ti, fmt->rh, fmt->doc, fmt->stream->fwidth - reduction);
+#endif
+	        }
+
+                /* max_up shouldn't actually be different this time round,
+                 * but max_down may well be */
+	        if (ti->max_up > max_up)
+		    max_up = ti->max_up;
+	        if (ti->max_down > max_down)
+		    max_down = ti->max_down;
+	    }
+        }
+        pi->max_up = max_up;
+        pi->max_down = max_down;
+        FMTDBGN(("close_down_current_line: max up/down %d/%d\n", max_up, max_down));
+    }
 
     /* Might want to fracture a strip here */
     if ( FLOATERS_THIS_LINE(fmt->text_line)
@@ -1689,7 +1779,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		break;
 	    }
 
-	    /* DAF: 970628: ti->wifth is SHORTISH which is currently a
+	    /* DAF: 970628: ti->width is SHORTISH which is currently a
 	       plain short, so we only have 15 bits available for
 	       horizontal widths. Perform some clipping! */
 	    if (cand_width > 0x7fff)
@@ -1801,7 +1891,7 @@ static void formatting_stop(RID_FMT_STATE *fmt)
 
     if (fmt->fmt_method != MAYBE && gbf_active(GBF_MINWIDTH_A))
     {
-#if 1
+#if 0
 	/* Attempts to not get carried away with the width to allocate */
 	const int a = fmt->LM_widest+ fmt->RM_widest;
 	const int b = fmt->CW_widest;

@@ -39,7 +39,7 @@
 #include "stream.h"
 #include "gbf.h"
 
-#define TXTDBG(a) DBG(a)
+#define TXTDBG(a) 
 
 #if !NEW_TEXTAREA
 #ifndef MAX_TEXT_LINE
@@ -897,7 +897,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
     osx = tai->sx;
     osy = tai->sy;
-    ocy = tai->cy;
+/*  ocy = tai->cy; */
 
     flags |= CHAR_USED;
 

@@ -45,3 +45,4 @@ extern int auth_supported(char *type);
 extern void auth_dispose(void);
 extern void auth_init_passwords(void);
 extern void auth_init_allow(void);
+extern void auth_optimise(void);

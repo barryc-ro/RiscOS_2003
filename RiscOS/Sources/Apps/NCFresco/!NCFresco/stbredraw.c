@@ -356,7 +356,7 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
     wimp_redrawstr r;
     fe_view selected;
 
-/*     STBDBG(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags)); */
+    STBDBG(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags));
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;

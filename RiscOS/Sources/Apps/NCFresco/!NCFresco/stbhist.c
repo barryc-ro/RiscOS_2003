@@ -378,6 +378,44 @@ static fe_global_history_item *fe_global_lookup_index(int index)
     return item;
 }
 
+/* Routines to shuffle data into lower memory */
+
+static void fe_global_frag_optimise_list(fe_global_history_fragment **plist)
+{
+    fe_global_history_fragment *f, *l;
+    for (l = NULL, f = *plist; f; l = f, f = f->next)
+    {
+	if (optimise_block((void **)&f, sizeof(*f) + strlen(f->fragment) + 1))
+	{
+	    if (l)
+		l->next = f;
+	    else
+		*plist = f;
+	}
+    }
+}
+
+void fe_global_history_optimise(void)
+{
+    fe_global_history_item *item, *last;
+
+    for (last = NULL, item = global_hist_list; item; last = item, item = item->next)
+    {
+	if (optimise_block((void **)&item, sizeof(*item)))
+	{
+	    if (last)
+		last->next = item;
+	    else
+		global_hist_list = item;
+	}
+
+	item->url = optimise_string(item->url);
+	item->title = optimise_string(item->title);
+
+	fe_global_frag_optimise_list(&item->frag_list);
+    }
+}
+
 /* ---------------------------------------------------------------------------------------------*/
 
 static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
@@ -1013,6 +1051,46 @@ char *fe_history_lookup_specifier(fe_view v, const char *specifier, int *xoffset
 	return hfi->url;
     }
     return NULL;
+}
+
+void fe_history_optimise(fe_view v)
+{
+    fe_history_item *item, *last;
+
+    for (last = NULL, item = v->first; item; last = item, item = item->next)
+    {
+	fe_history_item *was;
+	fe_history_frame_item *frame;
+	int i;
+
+	/* optimise block and reset various pointers */
+	was = item;
+	if (optimise_block((void **)&item, sizeof(*item) + (item->n_frames-1) * sizeof(item->frame[0])))
+	{
+	    if (last)
+		last->next = item;
+	    if (item->next)
+		item->next->prev = item;
+
+	    if (v->first == was)
+		v->first = item;
+
+	    if (v->hist_at == was)
+		v->hist_at = item;
+
+	    if (v->last == was)
+		v->last = item;
+
+	    if (v->fetching_data.hist == was)
+		v->fetching_data.hist = item;
+	}
+
+	item->title = optimise_string(item->title);
+
+	/* optimise the frame URLs */
+	for (i = 0, frame = item->frame; i < item->n_frames; i++, frame++)
+	    frame->url = optimise_string(frame->url);
+    }
 }
 
 /* ---------------------------------------------------------------------------------------------*/

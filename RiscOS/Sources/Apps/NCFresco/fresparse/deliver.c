@@ -522,49 +522,6 @@ static void fmt_deliver_eos(SGMLCTX *context, int reason, STRING item, ELEMENT *
   
   */
 
-static STRING get_tab_expanded_string(STRING item, STRING inhand)
-{
-    STRING t;
-    int i, extra = inhand.bytes;
-
-    for (i = 0; i < item.bytes; i++)
-    {
-	extra++;
-	    
-	if (item.ptr[i] == '\t')
-	{
-	    PRSDBG(("Performing tab expansion\n"));
-	    while ( (extra & 7) != 0 )
-		extra++;
-	}
-    }
-
-    t.bytes = extra;
-    t.ptr = mm_malloc(extra + 1);
-
-    if (inhand.bytes)
-	memcpy(t.ptr, inhand.ptr, inhand.bytes);
-    extra = inhand.bytes;
-
-    for (i = 0; i < item.bytes; i++)
-    {
-	if (item.ptr[i] == '\t')
-	{
-	    t.ptr[extra++] = ' ';
-	    while ( (extra & 7) != 0 )
-		t.ptr[extra++] = ' ';
-	}
-	else
-	{
-	    t.ptr[extra++] = item.ptr[i];
-	}
-    }
-
-    t.ptr[extra] = 0;
-
-    return t;
-}
-
 static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT *elem)
 {
     HTMLCTX *htmlctx = context->clictx;
@@ -625,6 +582,8 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	}
 	string_free(&item);
     }
+#if 0
+    /* SJM: guess what, this bit never seems to get used, finishoption() does all the work instead */
     else if (context->tos->element == HTML_SELECT)
     {
 	if (htmlctx->form && htmlctx->form->last_select && htmlctx->form->last_select->last_option)
@@ -640,7 +599,8 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	    current.bytes = opt->text ? strlen(opt->text) : /*NULL*/ 0;
 	    current.ptr = opt->text;
 
-	    opt->text = get_tab_expanded_string(item, current).ptr;
+	    /* strip space from start and end of OPTION string */
+	    opt->text = get_tab_expanded_string(string_strip_space(item), current).ptr;
 
 	    mm_free(current.ptr);
 #else
@@ -666,7 +626,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	}
 	string_free(&item);
     }
-
+#endif
     else if (htmlctx->inhand_reason == DELIVER_WORD)
     {
 	/* Need to free new data once used. Need to expand */

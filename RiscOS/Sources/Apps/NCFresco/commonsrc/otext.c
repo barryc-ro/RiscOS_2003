@@ -461,10 +461,10 @@ int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_
 	/* these values must tie up with what's in highlight_draw_text_box */
 	box->x0 = ti == ti->aref->first || ti == ti->line->first ? -d : 0;
 	box->y1 = ti->line == ti->aref->first->line ? d : 2;
-	box->x1 = ti->pad + 2;
+	box->x1 = ti->pad + 2 + d;
 	if (box->x1 < d)
 	    box->x1 = d;
-	box->y0 = 0;
+	box->y0 = -d;
     }
 #endif
     return FALSE;

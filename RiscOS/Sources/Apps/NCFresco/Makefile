@@ -48,7 +48,7 @@ POSS_TARGETS=	br bu cu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clea
 		memlib mu \
 		MOST MOST_UNIX realclean sanity srclist sr NCFRESCO \
 		NCFRESCO_RISCOS riscoslib TAGS TESTS xref \
-		pu PLOTCHECK PLOTCHECK_UNIX ru RECONS
+		PROFILE  pu PLOTCHECK PLOTCHECK_UNIX ru RECONS
 
 all:
 		@echo
@@ -76,6 +76,11 @@ RM=		rm -f
 #POSTACTS=	@$(RM) $(PREDEPS)
 PREDEPS=        #sanity
 POSTACTS=
+
+
+PROF_IN=	profile.cfg
+PROF_C=		commonsrc/profdat.c
+PROF_H=		commonsrc/profdat.h
 
 #############################################################################
 
@@ -183,14 +188,17 @@ FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
 FRESCO_CFLAGS_COMMON = -DFRESCO $(FRESCO_INCS) -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DFRAMES=1
 FRESCO_CFLAGS_REL=	-DDEVELOPMENT=0 $(FRESCO_CFLAGS_COMMON)
-FRESCO_CFLAGS_DBG=	-DDEVELOPMENT=1 $(FRESCO_CFLAGS_COMMON) -DMEMWATCH=2
+FRESCO_CFLAGS_DBG=	-DDEVELOPMENT=1 $(FRESCO_CFLAGS_COMMON) -DMEMWATCH=1
 
 FRESCO_CFLAGS=  $(FRESCO_CFLAGS_DBG)
+
+# fvpr.o is NOT NEEDED in production builds (_REL) but in debug builds (_DBG)
 
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
-		listfonts2.o history.o rlib_alloc.o event2.o ole.o \
+		listfonts2.o history.o rlib_alloc.o event2.o saveas2.o ole.o \
+		fvpr.o transfer.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
@@ -258,17 +266,17 @@ FIXL_VPATH=	../!Fresco ../commonsrc
 FIXL_OBJS=	SerialEnc.o bittabenc.o fixlicence.o
 
 PLOTCHECK_INCS=	-I../plotcheck -I../RISC_OSLib
-PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -g $(UNIX_CFLAGS)
+PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -g $(UNIX_CFLAGS) -DPROFILE=1
 PLOTCHECK_VPATH=$(RISCOS_VPATH)
 PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
-		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
+		$(SGML_OBJS) $(HTML_OBJS)  backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o csgraph.o rdebug.o
-
-#PLOTCHECK_LIBS=
+		loformat.o cs2.o oscaff.o csgraph.o rdebug.o \
+		profdat.o profile.o dump.o
+#PLOTCHECK_LIBS= #-pg 
 PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
 
 
@@ -397,6 +405,8 @@ clean:		sanity
 		-@cd ./abs && $(RM) *
 		-@cd ./aof && $(RM) *
 		-@cd ./rm && $(RM) *
+		-@cd ./fresco_rel && $(RM) *.o
+		-@cd ./fresco_mc && $(RM) *.o
 		-@cd ./plotcheck ; $(RM) plotcheck *.o
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
@@ -457,6 +467,10 @@ FIXME:		srclist
 
 fr:		FRESCO_RISCOS
 
+frel:		FRESCO_REL
+
+fmc:		FRESCO_MC
+
 fp:		FRESCO_NT
 
 FRESCO:		FRESCO_RISCOS
@@ -471,11 +485,20 @@ FRESCO_RISCOS:	$(PREDEPS)
 		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS)"
 		$(POSTACTS)
 
+FRESCO_REL:	$(PREDEPS)
+		@echo "Making FRESCO for RISCOS production build"
+		@cd ./fresco_rel; $(MAKE) FRESCO_RISCOS \
+		LIBS="$(FRESCO_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(FRESCO_CFLAGS_REL) $(RISCOS_CFLAGS_REL)"
+		$(POSTACTS)
+
 FRESCO_MC:      $(PREDEPS)
 		@echo "Making FRESCO_MC for RISCOS"
-		@cd ./fresco; $(MAKE) FRESCO_RISCOS \
+		@cd ./fresco_mc; $(MAKE) FRESCO_RISCOS \
 		LIBS="$(FRESCO_LIBS) ../memcheck/mclib $(RISCOS_LIBS)" \
-		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS) sprite.o" \
+		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(FRESCO_CFLAGS_DBG) $(RISCOS_CFLAGS_DBG) -zpc1 -DMemCheck_MEMCHECK -fw"
 		$(POSTACTS)
@@ -550,6 +573,13 @@ MOST_UNIX:	$(PREDEPS)
 mr:		MOST_RISCOS
 
 mu:		MOST_UNIX
+
+# NUKE all places that might be using profdat.c inforation. Makes up
+# for lack of proper dependencies!
+PROFILE:
+		@echo "Building profile source files from profile configuration file"
+		@bin/profgen.py $(PROF_IN) $(PROF_C) $(PROF_H)
+		@echo "You should do a make clean now!"
 
 realclean:	clean sanity
 		@cd ./RISC_OSLib && $(RM) *.o risc_oslib
@@ -667,7 +697,7 @@ sanity:		cvs-checks.py cvs-checks
 
 #############################################################################
 
-fresh:		HTML TAGS
+fresh:		HTML PROFILE TAGS
 		./makelinks
 
 #############################################################################
@@ -757,7 +787,6 @@ NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -
 NCFRESCO_ANT_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -DSTBWEB_ROM=0 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
-
 NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
@@ -767,15 +796,20 @@ NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTB
 NCFRESCO_RAM_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
+NCFRESCO_REL_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
+				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
+
 NCFRESCO_ANT_ASFLAGS=		-Ihdr
 NCFRESCO_BUILD_ASFLAGS=		-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
 NCFRESCO_ROM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS)
 NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine \"REMOVE_RAMLOAD_CHECK SETL {TRUE}\"
+NCFRESCO_REL_ASFLAGS=		-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
 
 NCFRESCO_ANT_LDFLAGS=
 NCFRESCO_BUILD_LDFLAGS=
 NCFRESCO_ROM_LDFLAGS=
 NCFRESCO_RAM_LDFLAGS=
+NCFRESCO_REL_LDFLAGS=
 
 NCFRESCO_VPATH=			../!NCFresco
 
@@ -790,6 +824,7 @@ NCFRESCO_ANT_OBJS=		$(NCFRESCO_BASE_OBJS)
 NCFRESCO_BUILD_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o
 NCFRESCO_ROM_OBJS=		$(NCFRESCO_BASE_OBJS) rolib.o ModuleWrap.o
 NCFRESCO_RAM_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o ModuleWrap.o
+NCFRESCO_REL_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o
 
 
 NCFRESCO_ANT_LIBS=		../webimage/webimage1
@@ -803,6 +838,13 @@ NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1ff.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o \
 				../memcheck/MemCheck.o
+
+NCFRESCO_REL_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
+				../RISC_OSLib/risc_oslib \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
 
 #				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 
@@ -863,6 +905,19 @@ NCFRESCO_BUILD:		$(PREDEPS)
 		ASFLAGS="$(NCFRESCO_BUILD_ASFLAGS)" \
 		CFLAGS="$(NCFRESCO_BUILD_CFLAGS)" \
 		LDFLAGS="$(NCFRESCO_BUILD_LDFLAGS)"
+		$(POSTACTS)
+
+# NCFresco production application in the new style CVS controlled RISC OS build tree
+NCFRESCO_REL:		$(PREDEPS)
+		@echo "Making NCFRESCO for RISCOS in the build tree"
+		@-mkdir abs
+		@cd ./ncfresco_rel; $(MAKE) NCFRESCO_RISCOS \
+		LIBS="$(NCFRESCO_REL_LIBS)" \
+		OBJS="$(NCFRESCO_REL_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		ASFLAGS="$(NCFRESCO_REL_ASFLAGS)" \
+		CFLAGS="$(NCFRESCO_REL_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_REL_LDFLAGS)"
 		$(POSTACTS)
 
 # NCFresco ROM aof file in the new style CVS controlled RISC OS build tree

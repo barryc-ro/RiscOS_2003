@@ -48,7 +48,8 @@ typedef enum {
     status_FAIL_VERIFY,                 /* h   Remote host identity couldn't be verified */
     status_FAIL_LOCAL,                  /* H   Local failure (eg no disc space) */
     status_COMPLETED_PART,		/* H */
-    status_COMPLETED_GENERIC_COMMAND    /*   F Generic command completed */
+    status_COMPLETED_GENERIC_COMMAND,   /*   F Generic command completed */
+    status_FAIL_FOUND                   /* H   File requested wasn't found - error page returned instead */
     } transfer_status;
 
 

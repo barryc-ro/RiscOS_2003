@@ -1081,7 +1081,7 @@ plugin_stream_private *plugin_stream_create_new(plugin pp, const char *url, cons
     psp->stream_state = plugin_stream_state_STARTED;
 
     /* start the stream going */
-    e = access_url(psp->url, 0 /* flags */, NULL /* ofile */, (char *)bfile,
+    e = access_url(psp->url, access_MUST_BE_FOUND /* flags */, NULL /* ofile */, (char *)bfile,
 		   pp->doc ? pp->doc->url : NULL,
 		   plugin_stream_progress, plugin_stream_complete, psp, &ah);
     if (!e && ah)

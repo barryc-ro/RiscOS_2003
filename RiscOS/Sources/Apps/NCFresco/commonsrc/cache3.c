@@ -502,7 +502,7 @@ static void cache_make_room(int size)
     }
 }
 
-static void cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int file_num, cache_flags flags, int size)
+static BOOL cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int file_num, cache_flags flags, int size)
 {
 #if MEMLIB
     int len = strlen(url)+1;
@@ -515,7 +515,11 @@ static void cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int fil
 
     ACCDBGN(("cache3: inserting %s\n", url));
 
-    SubFlex_Alloc( &cc->urloffset, len, &urlblock );
+    if ( SubFlex_Alloc( &cc->urloffset, len, &urlblock ) )
+    {
+        cc->urloffset = 0;
+        return FALSE;
+    }
 
     memcpy( urlblock + cc->urloffset, url, len );
 #endif /* MEMLIB */
@@ -536,6 +540,7 @@ static void cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int fil
 
     cc->size = size;
     cache_data_size += size;
+    return TRUE;
 }
 
 static void cache_optimise( void )
@@ -585,7 +590,12 @@ static void cache_insert(char *url, char *file, cache_flags flags)
     if (cc)
     {
         /* if we don't know the size as it comes in then set it to 1K */
-        cache_insert_data(dir, cc, url, cc->file_num, flags, flags & cache_flag_IGNORE_SIZE ? 1 : osf.start);
+        if ( !cache_insert_data( dir, cc, url, cc->file_num, flags,
+                                flags & cache_flag_IGNORE_SIZE ? 1
+                                                               : osf.start) )
+        {                                                                                   /* out of memory, errr, just return I suppose */
+            return;
+        }
 
 	/* if it seems to be a script then set it to expired else never expire */
 	if (strchr(url, '?') != NULL ||
@@ -810,6 +820,7 @@ static void cache_dump_dir_read(int dir)
 #endif
                     )
                 {
+                    /* Ignore errors */
 		    cache_insert_data(&cache[dir], cc, url, index, cache_flag_OURS, sizes[index]);
                 }
             }
@@ -1068,8 +1079,8 @@ static void filewatcher_poll(int called_at, void *handle)
             {
                 cache_dir *dir;
                 cache_item *item = cache_ptr_from_file(s, &dir);
-		
-		ACCDBG(("filewatcher_poll: remove '%s' item %p dir %p\n", s, item, dir));
+
+		ACCDBG(("filewatcher_poll: remove '%s' item %p dir %p '%s'\n", s, item, dir, urlblock + item->urloffset));
 
                 if (item)
                     cache_remove_file(item, dir);

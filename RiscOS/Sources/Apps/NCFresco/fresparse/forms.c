@@ -379,12 +379,12 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
 
 	PRSDBG(("Option text='%.*s'\n", me->inhand_string.bytes, me->inhand_string.ptr));
 
-        s = string_strip_space(me->inhand_string);
+        s = me->inhand_string;
 
         /* Expand the entities and strip newlines */
-        s.bytes = sgml_translation(context, s.ptr, s.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND);
+        s.bytes = sgml_translation(context, s.ptr, s.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL);
 
-	opt->text = stringdup(s);
+	opt->text = stringdup(string_strip_space(s));
     }
     else
     {

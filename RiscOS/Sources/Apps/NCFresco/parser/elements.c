@@ -16,6 +16,9 @@ extern void report_finish (SGMLCTX * context, ELEMENT * element);
 #define BIT_CLR(base, bit)	(base)[(bit)/32] &= ~(1<<((bit)%32))
 #define BIT_TST(base, bit)	((base)[(bit)/32] &  (1<<((bit)%32)))
 
+static BOOL perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *values);
+/*static void perform_element_close(SGMLCTX *context, ELEMENT *element);*/
+
 /*****************************************************************************
 
   Free any additional storage associated with the supplied attributes.
@@ -28,7 +31,7 @@ static void sgml_free_attributes(VALUES *values_array)
     VALUE *values = &values_array->value[0];
     int ix;
 
-    PRSDBGN(("sgml_free_attributes(): Clearing attributes\n"));
+    /*PRSDBGN(("sgml_free_attributes(): Clearing attributes\n"));*/
 
     for (ix = 0; ix < SGML_MAXIMUM_ATTRIBUTES; ix++)
     {
@@ -165,6 +168,8 @@ static BOOL open_within_container(SGMLCTX *context, const tag)
 
 static void force_close_to_matching (SGMLCTX *context, ELEMENT *element)
 {
+    PRSDBG(("force_close_to_matching: %s\n", elements_name(context, element->id)));
+
     while (TRUE)
     {
         STACK_ITEM *nos;
@@ -218,7 +223,7 @@ static void force_close_to_matching (SGMLCTX *context, ELEMENT *element)
 /*****************************************************************************/
 
 #if DEBUG
-static char *action_names [8] =
+static char *action_names [11] =
 {
     "one_of_enclosing",
     "last_one_of_enclosing",
@@ -228,182 +233,181 @@ static char *action_names [8] =
     "post_clear_seen_flag",
     "should_contain",
     "quietly_close_any_open"
+    "container_enclosed_within",
+    "invent_only_within",
+    "replace_with",
+    "replaces_bad"
 };
 #endif
 
-extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
+/* DAF: 970710: Decided that we actually need to iterate over the list
+ * of rules for each element to cater for certain examples of bad
+ * nesting. tabtests/misc60.html illustrates the sort of problem to be
+ * dealt with. The conceptual model is now that each element has a
+ * list of rules. This list repeats indefinitely.
+ * ensure_pre_requisites evaluates this list of rules until it
+ * completes an entire cycle without applying any of the rules. */
+
+static ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 {
     VALUES dummy_values;
-    BOOL had_enclosing = FALSE, init_dummy = FALSE;
     ACT_ELEM *req;
     const BOOL old_apply = context->applying_rules;
-    BOOL ok = TRUE, can_invent_within = FALSE;
+
+    BOOL had_enclosing = FALSE;
+    BOOL init_dummy = FALSE;
+    BOOL ok = TRUE;
+    BOOL can_invent_within = FALSE;
+    BOOL applied_rule;
     ELEMENT *invent = NULL;
 
     context->applying_rules = TRUE;
 
-    for (req = element->requirements; req->element != SGML_NO_ELEMENT; req++)
+    do
     {
-	const action = req->action, tag = req->element;
-	ELEMENT *other_elem = &context->elements[tag];
+	applied_rule = FALSE;
 
-	PRSDBGN(("Ensure prereqs <%s> act %s, elem %s\n",
-		 element->name.ptr, action_names[action], other_elem->name.ptr));
-
-	switch (action)
+	for (req = element->requirements; req->element != SGML_NO_ELEMENT; req++)
 	{
-	case ONE_OF_ENCLOSING:
-	    if ( is_element_open(context, tag) )
-		had_enclosing = TRUE;
-	    break;
-	case LAST_ONE_OF_ENCLOSING:
-	    if ( is_element_open(context, tag) )
-		had_enclosing = TRUE;
-	    if (! had_enclosing)
-	    {
-                if (element->group != other_elem->group || invent == NULL || can_invent_within)
-                {
+	    const action = req->action, tag = req->element;
+	    ELEMENT *other_elem = &context->elements[tag];
 
-		    PRSDBG(("ensure_pre_requisites(%s): %s not contained in %s\n",
-			     element->name.ptr,element->name.ptr, other_elem->name.ptr));
-		    if (! init_dummy)
-		        init_dummy = default_attributes(context, other_elem, &dummy_values);
-		    sgml_note_missing_open (context, other_elem);
-		    perform_element_open (context, other_elem, &dummy_values);
-		    had_enclosing = FALSE;
-                }
-                else
-                    ok = FALSE;
-	    }
-	    break;
-	case ENCLOSED_WITHIN:
-	    if ( !is_element_open (context, tag) )
-	    {
-                if (element->group != other_elem->group || invent == NULL || can_invent_within)
-                {
-		    PRSDBGN(("ensure_pre_requisites(%s): %s not contained in %s\n",
-			     element->name.ptr, element->name.ptr, other_elem->name.ptr));
-		    if (! init_dummy)
-		        init_dummy = default_attributes(context, other_elem, &dummy_values);
-		    sgml_note_missing_open (context, other_elem);
-		    perform_element_open (context, other_elem, &dummy_values);
-                }
-                else
-                    ok = FALSE;
-	    }
-	    break;
-	case PRECEEDED_BY:
-	    if ( element_bit_clear (context->tos->elements_seen, tag) )
-	    {
-		PRSDBGN(("ensure_pre_requisites(%s): %s not preceeded by %s\n",
-			element->name.ptr,element->name.ptr,  other_elem->name.ptr));
-		if (! init_dummy)
-		    init_dummy = default_attributes(context, other_elem, &dummy_values);
-		sgml_note_missing_open (context, other_elem);
-		perform_element_open (context, other_elem, &dummy_values);
-		sgml_note_missing_close (context, other_elem);
-		perform_element_close (context, other_elem);
-	    }
-	    break;
-	case CLOSE_ANY_OPEN:
-	    if ( open_within_container(context, tag) )
-		 /* while ( is_element_open(context, tag) ) */
-	    {
-		ELEMENT *oe = &context->elements[context->tos->element];
-		PRSDBGN(("ensure_pre_requisite(%s): implied closure </%s>\n",
-			element->name.ptr, oe->name.ptr));
-		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
-		    sgml_note_missing_close (context, oe);
+	    PRSDBGN(("Ensure prereqs <%s> act %s, elem %s\n",
+		     element->name.ptr, action_names[action], other_elem->name.ptr));
 
-		/* perform_element_close (context, oe); */
-
-#if 0
-		/* SJM: 20/5/97: this (or something liek it) is needed here as much as in perform_element_close() */
-		if (other_elem->flags & FLAG_OUT_OF_ORDER_CLOSE)
+	    switch (action)
+	    {
+	    case ONE_OF_ENCLOSING:
+		if ( is_element_open(context, tag) )
+		    had_enclosing = TRUE;
+		break;
+	    case LAST_ONE_OF_ENCLOSING:
+		if ( is_element_open(context, tag) )
+		    had_enclosing = TRUE;
+		if (! had_enclosing)
 		{
-		    STACK_ITEM *matching_close = find_element_in_stack (context, other_elem);
-  
-		    if (matching_close != NULL)
+		    if (element->group != other_elem->group || invent == NULL || can_invent_within)
 		    {
-			PRSDBG(("perform_element_close(%s): pulling close to top of stack\n",
-				other_elem->name.ptr));
-			pull_stack_item_to_top_correcting_effects (context, matching_close);
-			perform_element_close (context, other_elem);
-			sgml_note_missing_close (context, other_elem);
+			PRSDBG(("ensure_pre_requisites(%s): %s not contained in %s\n",
+				element->name.ptr,element->name.ptr, other_elem->name.ptr));
+			if (! init_dummy)
+			    init_dummy = default_attributes(context, other_elem, &dummy_values);
+			sgml_note_missing_open (context, other_elem);
+			applied_rule |= perform_element_open (context, other_elem, &dummy_values);
+			had_enclosing = FALSE;
 		    }
-		    /* Otherwise we saw it earlier and the elements_open is lying */
+		    else
+			ok = FALSE;
 		}
-		else if (element_bit_set (context->tos->elements_open, other_elem->id))
-		    force_close_to_matching (context, other_elem);
-#else
-		force_close_to_matching (context, other_elem);
-#endif
-	    }
-	    break;
-	case QUIETLY_CLOSE_ANY_OPEN:
-	    if ( open_within_container(context, tag) )
-		/* if ( is_element_open(context, tag) ) --DL: This is implied by the above */
-	    {
-		PRSDBGN(("ensure_pre_requisite%s(): quiet implied closure </%s>\n",
-			element->name.ptr, other_elem->name.ptr));
-		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
-		    sgml_note_missing_close (context, other_elem);
-		/* perform_element_close (context, &context->elements [context->tos->element] ); */
-#if 0
-		/* SJM: 20/5/97: this (or something liek it) is needed here as much as in perform_element_close() */
-		if (other_elem->flags & FLAG_OUT_OF_ORDER_CLOSE)
+		break;
+	    case ENCLOSED_WITHIN:
+		if ( !is_element_open (context, tag) )
 		{
-		    STACK_ITEM *matching_close = find_element_in_stack (context, other_elem);
-  
-		    if (matching_close != NULL)
+		    if (element->group != other_elem->group || invent == NULL || can_invent_within)
 		    {
-			PRSDBG(("perform_element_close(%s): pulling close to top of stack\n",
-				other_elem->name.ptr));
-			pull_stack_item_to_top_correcting_effects (context, matching_close);
-			perform_element_close (context, other_elem);
-			sgml_note_missing_close (context, other_elem);
+			PRSDBGN(("ensure_pre_requisites(%s): %s not contained in %s\n",
+				 element->name.ptr, element->name.ptr, other_elem->name.ptr));
+			if (! init_dummy)
+			    init_dummy = default_attributes(context, other_elem, &dummy_values);
+			sgml_note_missing_open (context, other_elem);
+			applied_rule |= perform_element_open (context, other_elem, &dummy_values);
 		    }
-		    /* Otherwise we saw it earlier and the elements_open is lying */
+		    else
+			ok = FALSE;
 		}
-		else if (element_bit_set (context->tos->elements_open, other_elem->id))
-		    force_close_to_matching (context, other_elem);
-#else
-		force_close_to_matching (context, other_elem);
-#endif
-	    }
-	    break;
-	case CONTAINER_ENCLOSED_WITHIN:
-	    if (context->tos != NULL)
-	    {
-		ELEMENT *within = &context->elements[context->tos->element];
-		if ( (within->flags & FLAG_CONTAINER) != 0 &&
-		     within->group == element->group &&
-		     within != other_elem)
+		break;
+	    case PRECEEDED_BY:
+		if ( element_bit_clear (context->tos->elements_seen, tag) )
 		{
-		    PRSDBGN(("ensure_pre_requisites(%s): container enclosed within: inserting <%s>\n",
-			    element->name.ptr, other_elem->name.ptr));
+		    PRSDBGN(("ensure_pre_requisites(%s): %s not preceeded by %s\n",
+			     element->name.ptr,element->name.ptr,  other_elem->name.ptr));
 		    if (! init_dummy)
 			init_dummy = default_attributes(context, other_elem, &dummy_values);
 		    sgml_note_missing_open (context, other_elem);
-		    perform_element_open (context, other_elem, &dummy_values);
+		    applied_rule |= perform_element_open (context, other_elem, &dummy_values);
+		    sgml_note_missing_close (context, other_elem);
+		    perform_element_close (context, other_elem);
 		}
+		break;
+	    case CLOSE_ANY_OPEN:
+		if ( open_within_container(context, tag) )
+		    /* while ( is_element_open(context, tag) ) */
+		{
+		    STACK_ITEM *old_tos = context->tos;
+		    ELEMENT *oe = &context->elements[old_tos->element];
+
+		    PRSDBGN(("ensure_pre_requisite(%s): implied closure </%s>\n",
+			     element->name.ptr, oe->name.ptr));
+
+		    if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
+			sgml_note_missing_close (context, oe);
+
+		    force_close_to_matching (context, other_elem);
+
+		    if (old_tos != context->tos)
+			applied_rule = TRUE;
+		}
+		break;
+	    case QUIETLY_CLOSE_ANY_OPEN:
+		if ( open_within_container(context, tag) )
+		    /* if ( is_element_open(context, tag) ) --DL: This is implied by the above */
+		{
+		    STACK_ITEM *old_tos = context->tos;
+
+		    PRSDBGN(("ensure_pre_requisite%s(): quiet implied closure </%s>\n",
+			     element->name.ptr, other_elem->name.ptr));
+
+		    if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
+			sgml_note_missing_close (context, other_elem);
+
+		    force_close_to_matching (context, other_elem);
+
+		    if (old_tos != context->tos)
+			applied_rule = TRUE;
+		}
+		break;
+	    case CONTAINER_ENCLOSED_WITHIN:
+		if (context->tos != NULL)
+		{
+		    ELEMENT *within = &context->elements[context->tos->element];
+
+		    if ( (within->flags & FLAG_CONTAINER) != 0 &&
+			 within->group == element->group &&
+			 within != other_elem)
+		    {
+			PRSDBGN(("ensure_pre_requisites(%s): container enclosed within: inserting <%s>\n",
+				 element->name.ptr, other_elem->name.ptr));
+			if (! init_dummy)
+			    init_dummy = default_attributes(context, other_elem, &dummy_values);
+			sgml_note_missing_open (context, other_elem);
+			applied_rule |= perform_element_open (context, other_elem, &dummy_values);
+		    }
+		}
+		break;
+	    case INVENT_ONLY_WITHIN:
+		can_invent_within = can_invent_within || is_element_open (context, tag);
+		break;
+	    case REPLACE_WITH:
+		invent = other_elem;
+		break;
 	    }
-	    break;
-        case INVENT_ONLY_WITHIN:
-            can_invent_within = can_invent_within || is_element_open (context, tag);
-            break;
-        case REPLACE_WITH:
-            invent = other_elem;
-            break;
 	}
-    }
+	
+#if DEBUG
+	if (applied_rule)
+	{
+	    PRSDBG(("ensure_pre_requisites: REAPPLYING RULESET\n"));
+	}
+#endif
+	    
+    } while (applied_rule);
 
     context->applying_rules = old_apply;
 
     return ok ? element : invent;
 }
 
-extern void ensure_post_requisites (SGMLCTX *context, ELEMENT *element)
+static void ensure_post_requisites (SGMLCTX *context, ELEMENT *element)
 {
     VALUES dummy_values;
     BOOL init_dummy = FALSE;
@@ -550,6 +554,11 @@ static void special_container_open_actions(SGMLCTX *context, ELEMENT *element)
 	PRSDBG(( "Bad special open actions for %s\n", element->name.ptr));
 	ASSERT(0==1);
     }
+
+    PRSDBG(("special_container_open_actions: on exit the stack looks like this:\n"));
+#if DEBUG
+    dump_stack(context);
+#endif
 }
 
 static void special_container_close_actions(SGMLCTX *context, ELEMENT *element)
@@ -606,18 +615,30 @@ static void special_container_close_actions(SGMLCTX *context, ELEMENT *element)
 	PRSDBG(("Bad special close actions for %s", element->name.ptr));
 	ASSERT(0==1);
     }
+
+    PRSDBG(("special_container_close_actions: on exit the stack looks like this:\n"));
+#if DEBUG
+    dump_stack(context);
+#endif
 }
 
-/*****************************************************************************/
+/*****************************************************************************
 
-extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *values)
+  Return a BOOL indicating whether we changed any state (TRUE) or not
+  (FALSE). The rules processing uses this to determine whether a
+  further iteration is required.  If TRUE is returned, then the
+  overall ruleset must have taken a step closer to the final state, or
+  we will spin. */
+
+static BOOL perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *values)
 {
     ELEMENT *other, *bad;
     BOOL nests;
+    BOOL did_anything = FALSE;
 
     PRSDBGN(("<@%s>\n", element->name.ptr));
 
-    ASSERT(context->magic == SGML_MAGIC);
+    TASSERT(context->magic == SGML_MAGIC);
 
     if (context->tos &&
 	((other = &context->elements[context->tos->element])->flags & FLAG_AUTO_CLOSE) != 0 )
@@ -630,7 +651,7 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 	 element_bit_set (context->tos->elements_seen, element->id) )
     {
 	sgml_note_not_repeatable (context, element);
-	return;
+	return did_anything;
     }
 
     /* This doesn't really belong here */
@@ -646,16 +667,23 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 
     bad = ensure_pre_requisites (context, element);
 
+    if (bad == NULL)
+    {
+	return did_anything;
+    }
+
     if (element->id != bad->id)
     {
         /* element has been remapped to a 'bad' variant */
         PRSDBG(("perform_element_open(%s): bad - opening %s instead\n", 
                 element->name.ptr, bad->name.ptr));
-        perform_element_open (context, bad, values);
-        return;
+        did_anything |= perform_element_open (context, bad, values);
+        return did_anything;
     }
 
     context->deliver(context, DELIVER_PRE_OPEN_MARKUP, empty_string, element);
+
+    did_anything = TRUE;
 
     if (context->dlist == NULL || context->force_deliver)
     {
@@ -754,6 +782,8 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 
     /* Do things like post space/break actions */
     (*context->deliver) (context, DELIVER_POST_OPEN_MARKUP, empty_string, element);
+
+    return did_anything;
 }
 
 /*****************************************************************************/
@@ -893,7 +923,7 @@ extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 
 /* This was so much more elegant in the original ALGOL version. */
 
-extern void parse_then_perform_element_open(SGMLCTX *context)
+static void parse_then_perform_element_open(SGMLCTX *context)
 {
     STRING s, attribute_string, value_string;
     ELEMENT *element;
@@ -906,7 +936,7 @@ extern void parse_then_perform_element_open(SGMLCTX *context)
 
     ASSERT(eix <= context->inhand.ix);
 
-    PRSDBGN(("parse_open '%.*s'\n", context->inhand.ix, inhand));
+    PRSDBGN(("\n-----------------------------------------------------------------------------\nparse_then_perform_element_open '%.*s'\n", context->inhand.ix, inhand));
 
     /* clear out the guessed array */
     memset(guessed, 0, sizeof(guessed));
@@ -1087,7 +1117,7 @@ static void parse_then_perform_element_close(SGMLCTX *context)
 
     ASSERT(context->magic == SGML_MAGIC);
 
-    PRSDBGN(("parse_close '%.*s'\n", context->inhand.ix, inhand));
+    PRSDBGN(("\n-----------------------------------------------------------------------------\nparse_then_perform_element_close '%.*s'\n", context->inhand.ix, inhand));
 
     while ( is_element_body_character( inhand[eix] ) )
 	eix++;

@@ -418,6 +418,20 @@ static void draw_line(int x, int baseline, int w)
 }
 #endif
 
+static rid_pos_item *last_line_of_link(rid_aref_item *aref)
+{
+    rid_text_item *ti, *last_ti;
+
+    for (last_ti = ti = aref->first;
+	 ti && ti->aref == aref;
+	 ti = rid_scanf(ti->next))
+    {
+	last_ti = ti;
+    }
+
+    return last_ti ? last_ti->line : NULL;
+}
+
 void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos, BOOL has_text)
 {
     BOOL first = ti->aref->first == ti;
@@ -425,6 +439,7 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
     BOOL first_in_line = ti == ti->line->first;
     BOOL last_in_line = ti->next == ti->line->next->first;
     BOOL on_first_line = ti->line == ti->aref->first->line;
+    BOOL on_last_line = last || last_line_of_link(ti->aref) == ti->line;
     int width, height;
 
     first = first || first_in_line;
@@ -451,6 +466,12 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	else
 	    height += 2;	/* nasty value to fill hole - should be based on leading and stuff */
 
+	if (on_last_line)
+	{
+	    ypos -= n*2/*  + IMAGE_SPACE */;
+	    height += n*2/*  + IMAGE_SPACE */;
+	}
+	
 	/* move first box left to avoid obscuring text */
 	if (first)
 	{
@@ -458,6 +479,12 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	    width += n*2 + IMAGE_SPACE;
 	}
 
+	/* move RH side right a bit to avoid obscuring text */
+	if (last)
+	{
+	    width += n*2 + IMAGE_SPACE;
+	}
+	
 	if (width < n*2)
 	    width = n*2;
 	

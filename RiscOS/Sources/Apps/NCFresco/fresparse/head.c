@@ -39,7 +39,7 @@ extern void finishtitle (SGMLCTX * context, ELEMENT * element)
     if (ss.bytes)
     {
         /* Expand the entities and strip newlines (we've already stripped spaces) */
-        ss.bytes = sgml_translation(context, ss.ptr, ss.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND);
+        ss.bytes = sgml_translation(context, ss.ptr, ss.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL);
 
 	if (htmlctx->rh->title != NULL)
 	{

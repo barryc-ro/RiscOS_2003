@@ -90,6 +90,8 @@ typedef int image_flags;
 #define image_flag_USE_LOGICAL	0x00080000	/* logical size is different from first frame size */
 #define image_flag_LOAD_AT_END	0x00100000	/* we missed the start of the stream, wait till the end and load it all in one */
 
+#define image_flag_FETCHING	0x08000000	/* for purposes of being_fetched count only */
+
 #define image_flag_STREAMING	0x10000000	/* Image is being streamed in from parser code */
 #define image_flag_NO_BLOCKS	0x20000000	/* Don't do image blocking, we have all the data */
 #define image_flag_REALTHING	0x40000000	/* Image is not a dummy 'question mark' */

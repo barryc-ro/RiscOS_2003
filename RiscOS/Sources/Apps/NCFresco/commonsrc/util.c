@@ -663,6 +663,28 @@ char *optimise_string( char *string )
     return string;
 }
 
+int optimise_block( void **pblock, int size )
+{
+    void *ptr;
+    void *block = *pblock;
+
+    if (!block)
+        return FALSE;
+
+    ptr = (char*)mm_malloc( size );
+
+    if ( ptr && ptr < block )
+    {
+        memcpy( ptr, block, size );
+        mm_free( block );
+	*pblock = ptr;
+        return TRUE;
+    }
+
+    mm_free( ptr );
+    return FALSE;
+}
+
 #define GSTRANS_BUFSIZE	1024
 
 extern char *strdup_gstrans(const char *input)
