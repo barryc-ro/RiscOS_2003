@@ -59,8 +59,8 @@ resources:
         ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-rm.BASICTrans: TransSrc
-        ${AS} ${ASFLAGS} TransSrc
+rm.BASICTrans: s.TransSrc
+        ${AS} ${ASFLAGS} s.TransSrc
 
 ${EXP_HDR}.BASICTrans: hdr.BASICTrans
         ${CP} hdr.BASICTrans $@ ${CPFLAGS}
