@@ -11,8 +11,9 @@
 #
 # Program specific options:
 #
-COMPONENT = PS2Driver
+COMPONENT  = PS2Driver
 ROM_SOURCE = s.GetAll
+SA_FLAGS   =
 
 include StdTools
 include AAsmModule
