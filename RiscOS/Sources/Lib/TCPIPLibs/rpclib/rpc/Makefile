@@ -15,6 +15,7 @@ CMHG	= cmhg
 
 WFLAGS  = ~c~v
 CPFLAGS = ~cflnr~v
+ASFLAGS = -quit -depend !Depend ${THROWBACK}
 
 INCLUDES=	TCPIPLibs:,C:
 
@@ -39,7 +40,7 @@ OFILES = o.auth_none o.auth_unix  o.authunix_p o.bindresvpo \
         o.pmap_clnt o.pmap_getma o.pmap_getpo o.pmap_prot \
         o.pmap_prot2 o.pmap_rmt o.rpc_prot o.rpc_common o.rpc_callms \
         o.xdr o.xdr_array o.xdr_mem o.clnt_tcp \
-        o.xdr_rec o.xdr_refere o.xdr_stdio o.callback
+        o.xdr_rec o.xdr_refere o.xdr_stdio o.callback o.rpclibmem 
 
 ZFILES = z.auth_none z.auth_unix  z.authunix_p z.bindresvpo \
         z.clnt_gener z.clnt_perro z.clnt_raw z.clnt_simpl \
@@ -47,14 +48,15 @@ ZFILES = z.auth_none z.auth_unix  z.authunix_p z.bindresvpo \
         z.pmap_clnt z.pmap_getma z.pmap_getpo z.pmap_prot \
         z.pmap_prot2 z.pmap_rmt z.rpc_prot z.rpc_common z.rpc_callms \
         z.xdr z.xdr_array z.xdr_mem z.clnt_tcp \
-        z.xdr_rec z.xdr_refere z.xdr_stdio o.callback
+        z.xdr_rec z.xdr_refere z.xdr_stdio o.callback o.rpclibmem 
 
 HDRS = h.auth h.auth_unix h.clnt h.pmap_clnt \
         h.pmap_prot h.pmap_rmt h.rpc h.rpc_msg h.types h.xdr
 
-.SUFFIXES:	.z .o .c
+.SUFFIXES:	.z .o .s .c
 .c.z:;       $(CC) $(CFLAGSM) -c -o $@ $<
 .c.o:;       $(CC) $(CFLAGS) -c -o $@ $<
+.s.o:;	     ${AS} ${ASFLAGS} -o $@ $<
 
 COMPONENT = rpclib
 LIBDIR = <Lib$Dir>
@@ -99,21 +101,5 @@ clean:
 	${WIPE} z.* ${WFLAGS}
         ${RM}   rpclib
         ${RM}   rpclibzm
-
-o.callback: s.callback
-             objasm -F s.callback -T o.callback -s -q
-
-#
-# clnt_udp.c does not build correctly with CC 5.06 - the symptom is
-# a broken free space display in NFS. 
-# sbrodie: incorrect diagnosis - fault was NFS module not passing the
-#          correct parameters to the XDR encoder/decoder for the string
-#          function.
-#
-#o.clnt_udp: c.clnt_udp
-#	cc400 $(CFLAGS) -c -o o.clnt_udp c.clnt_udp
-#
-#z.clnt_udp: c.clnt_udp
-#	cc400 $(CFLAGSM) -c -o z.clnt_udp c.clnt_udp
 
 # Dynamic dependencies:
