@@ -6,7 +6,7 @@ This file:	Compressed data stuffing
 		PES header reconstitution
 		Sync-to-stream management
 
-Copyright 1999 Pace Micro Technology plc. All rights reserved.
+Copyright 1999-2000 Pace Micro Technology plc. All rights reserved.
 
 This material is the confidential trade secret and proprietary information
 of Pace Micro Technology plc. It may not be reproduced, used, sold, or
@@ -27,6 +27,11 @@ Date		Who	Change
 			implemented audio sync-to-stream;
 			implemented new deferred set-speed code (which will work in either direction);
 			added code to stop audio decoding after an underrun until a minimal buffer level is attained
+11/05/2000	BJGA	Audio buffer now re-tested every 1/10 sec rather than every 1/2 sec;
+			quick-prefilling of trick-play streams implemented, by setting prefill size to buffer
+			occupation when the second PTS is encoded; byte counters made 64 bits wide; sync-to-stream
+			disabled while video is playing out; audio fasts/slows smoothed out to fill the time between
+			tests, rather than being compressed into a single-frame "warble"
 
 ***************************************************************************/
 
@@ -114,7 +119,7 @@ static bitstream_packet_t audio_PES_header_packet = { NULL, NULL, NULL, NULL, 0,
 /* Private constants */
 /*********************/
 
-#define TIME_TO_WAIT_BEFORE_RETESTING_AUDIO_BUFFER_FULLNESS (50) /* centiseconds */
+#define TIME_TO_WAIT_BEFORE_RETESTING_AUDIO_BUFFER_FULLNESS (10) /* centiseconds */
 #define STREAM_ID_VIDEO (0xE0)
 #define STREAM_ID_AUDIO (0xC0)
 
@@ -178,6 +183,16 @@ void Stuffing_VideoCallback (void)
           Stream.video.first_PTS.msb = Stream.video.packet_list_head->PTS.msb & 1;
           Stream.video.first_PTS.lsw = Stream.video.packet_list_head->PTS.lsw;
         }
+        if (Stream.video.state == stream_prefilling && Stream.video.prefill_state == ps_pre_decoding && Stream.rs_flags.trick_play_mode)
+        {
+          if (Stream.video.packet_list_head->PTS_valid && Stream.video.packet_list_head->PTS.lsw != Stream.video.first_PTS.lsw)
+          {
+            unsigned int prefill = (VID_VBL & 0x3FFF);
+            prefill = MAX(prefill, 8 * 1024 / 256);
+            /* A second, differing, PTS has been received in a trick-play stream: we can terminate prefilling early */
+            WRITE_VID_VBT(prefill); /* may cause interrupts to go off */
+          }
+        }
         if (Stream.video.packet_list_head->PTS_valid)
         {
           dprintf (("Stuffing", "Inserting video PTS %c%08X\n",
@@ -196,8 +211,15 @@ void Stuffing_VideoCallback (void)
       Stream.video.packet_list_head->length -= bytes_to_send_this_time;
       if (Stream.video.packet_list_head->private_PES_header_flag == false) /* don't count the PES headers in the amount that we've sent to the chip */
       {
-        Stream.video.since_open.amount_sent += bytes_to_send_this_time;
-        Stream.video.since_reset.amount_sent += bytes_to_send_this_time;
+        unsigned int old_value;
+        
+        old_value = Stream.video.since_open.amount_sent.lsw;
+        Stream.video.since_open.amount_sent.lsw += bytes_to_send_this_time;
+        if (Stream.video.since_open.amount_sent.lsw < old_value) Stream.video.since_open.amount_sent.msw ++;
+        
+        old_value = Stream.video.since_reset.amount_sent.lsw;
+        Stream.video.since_reset.amount_sent.lsw += bytes_to_send_this_time;
+        if (Stream.video.since_reset.amount_sent.lsw < old_value) Stream.video.since_reset.amount_sent.msw ++;
       }
       space_in_bit_buffer -= bytes_to_send_this_time;
       
@@ -280,8 +302,15 @@ void Stuffing_AudioCallback (void)
       Stream.audio.packet_list_head->length -= bytes_to_send_this_time;
       if (Stream.audio.packet_list_head->private_PES_header_flag == false) /* don't count the PES headers in the amount that we've sent to the chip */
       {
-        Stream.audio.since_open.amount_sent += bytes_to_send_this_time;
-        Stream.audio.since_reset.amount_sent += bytes_to_send_this_time;
+        unsigned int old_value;
+        
+        old_value = Stream.audio.since_open.amount_sent.lsw;
+        Stream.audio.since_open.amount_sent.lsw += bytes_to_send_this_time;
+        if (Stream.audio.since_open.amount_sent.lsw < old_value) Stream.audio.since_open.amount_sent.msw ++;
+        
+        old_value = Stream.audio.since_reset.amount_sent.lsw;
+        Stream.audio.since_reset.amount_sent.lsw += bytes_to_send_this_time;
+        if (Stream.audio.since_reset.amount_sent.lsw < old_value) Stream.audio.since_reset.amount_sent.msw ++;
       }
       space_in_bit_buffer -= bytes_to_send_this_time;
       
@@ -289,7 +318,7 @@ void Stuffing_AudioCallback (void)
     }
     
     /* Now test for the various audio buffer thresholds */
-    total_audio_queueing = ((VID_ABL & 0x3FFF) * 256) + (Stream.audio.since_reset.amount_received - Stream.audio.since_reset.amount_sent);
+    total_audio_queueing = ((VID_ABL & 0x3FFF) * 256) + (Stream.audio.since_reset.amount_received.lsw - Stream.audio.since_reset.amount_sent.lsw);
     
     /* If we've reached prefill buffer-fullness, tell control unit so */
     if (Stream.audio.state == stream_prefilling && Stream.audio.prefill_state == ps_initialising && total_audio_queueing > Stream.audio_buffer_prefill)
@@ -302,7 +331,8 @@ void Stuffing_AudioCallback (void)
     }
     
     /* Deal with audio-to-stream synchronisation */
-    if (Stream.audio.state == stream_open && Stream.s_flags.sync_to_stream && Stream.audio.speed_indicator != 0/*== 1*/)
+    if (Stream.audio.state == stream_open && (Stream.video.state == stream_open || !Stream.rs_flags.video_present)
+        && Stream.s_flags.sync_to_stream && Stream.audio.speed_indicator != 0)
     {
       if (Stream.audio_resync_delay > 0)
       {
@@ -312,17 +342,33 @@ void Stuffing_AudioCallback (void)
       {
         if (total_audio_queueing < Stream.audio_buffer_low_water_mark)
         {
-          Stream.audio.fast_slow_state = fss_next_frame_slow;
-          Stream.audio_resync_delay = TIME_TO_WAIT_BEFORE_RETESTING_AUDIO_BUFFER_FULLNESS;
+          if (Stream.audio.fast_slow_state != fss_this_frame_slow)
+          {
+            STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, false, true);
+            Stream.audio.fast_slow_state = fss_this_frame_slow;
+          }
+          Stream.audio_resync_delay = TIME_TO_WAIT_BEFORE_RETESTING_AUDIO_BUFFER_FULLNESS * Stream.audio.speed_indicator;
           Stream.audio.since_open.slows ++;
           Stream.audio.since_reset.slows ++;
         }
         else if (total_audio_queueing > Stream.audio_buffer_high_water_mark)
         {
-          Stream.audio.fast_slow_state = fss_next_frame_fast;
-          Stream.audio_resync_delay = TIME_TO_WAIT_BEFORE_RETESTING_AUDIO_BUFFER_FULLNESS;
+          if (Stream.audio.fast_slow_state != fss_this_frame_fast)
+          {
+            STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, true, false);
+            Stream.audio.fast_slow_state = fss_this_frame_fast;
+          }
+          Stream.audio_resync_delay = TIME_TO_WAIT_BEFORE_RETESTING_AUDIO_BUFFER_FULLNESS * Stream.audio.speed_indicator;
           Stream.audio.since_open.fasts ++;
           Stream.audio.since_reset.fasts ++;
+        }
+        else
+        {
+          if (Stream.audio.fast_slow_state != fss_normal_speed)
+          {
+            STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, false, false);
+            Stream.audio.fast_slow_state = fss_normal_speed;
+          }
         }
       }
     }

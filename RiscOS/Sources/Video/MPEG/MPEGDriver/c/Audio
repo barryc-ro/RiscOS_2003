@@ -4,7 +4,7 @@ Project:	STB-400
 Component:	MPEGDriver
 This file:	Audio SWI handling
 
-Copyright 1999 Pace Micro Technology plc. All rights reserved.
+Copyright 1999-2000 Pace Micro Technology plc. All rights reserved.
 
 This material is the confidential trade secret and proprietary information
 of Pace Micro Technology plc. It may not be reproduced, used, sold, or
@@ -30,6 +30,7 @@ Date		Who	Change
 06/04/2000	BJGA	New counters initialised; audio play-out now depends upon video speed;
 			audio restart moved to same time as audio reset; hardware audio attenuation
 			initialised correctly
+09/05/2000	BJGA	Now checks audio stream handles passed in; byte counters are now 64 bits wide
 
 ***************************************************************************/
 
@@ -37,6 +38,7 @@ Date		Who	Change
 /* Includes */
 /************/
 
+#include <stdio.h>
 #include "kernel.h"
 #include "swis.h"
 
@@ -45,6 +47,7 @@ Date		Who	Change
 #include "Audio.h"
 #include "Defs.h"
 #include "IRQ.h"
+#include "Mess.h"
 #include "MiscAsm.h"
 #include "Module.h"
 #include "Registers.h"
@@ -63,6 +66,7 @@ Date		Who	Change
 static unsigned int static_ReadBufferVariable (const char *name, unsigned int default_value);
 static _kernel_oserror *static_AudioStart (void);
 static unsigned int static_AudioStop (bool play_out);
+static _kernel_oserror *static_CheckHandle (stream_handle_t ash);
 
 /********************/
 /* Public variables */
@@ -115,8 +119,8 @@ _kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.rs_flags.video_present = Stream.s_flags.video_present;
   Stream.rs_flags.audio_present = Stream.s_flags.audio_present;
   Stream.rs_flags.trick_play_mode = false;
-  Stream.audio.since_open.amount_received = 0;
-  Stream.audio.since_open.amount_sent = 0;
+  Stream.audio.since_open.amount_received.lsw = Stream.audio.since_open.amount_received.msw = 0;
+  Stream.audio.since_open.amount_sent.lsw = Stream.audio.since_open.amount_sent.msw = 0;
   Stream.audio.since_open.PES_packets_sent = 0;
   Stream.audio.since_open.PTSs_in = 0;
   Stream.audio.since_open.PTSs_out = 0;
@@ -154,54 +158,62 @@ _kernel_oserror *Audio_SWIFullPackets (unsigned int flags, stream_handle_t ash, 
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
   IGNORE(flags);
-  IGNORE(ash);
+  e = static_CheckHandle (ash);
   
-  /* If we're just starting, discard bitstream packets until the beginning of the first PES packet */
-  while (Stream.audio.prefill_state == ps_searching_for_first_PES_header && packets != NULL)
+  if (!e)
   {
-    if (packets->mpeg_start == true)
+    /* If we're just starting, discard bitstream packets until the beginning of the first PES packet */
+    while (Stream.audio.prefill_state == ps_searching_for_first_PES_header && packets != NULL)
     {
-      Stream.audio.prefill_state = ps_initialising;
-      dprintf (("Audio", "SWIFullPackets: audio.prefill_state = initialising\n"));
+      if (packets->mpeg_start == true)
+      {
+        Stream.audio.prefill_state = ps_initialising;
+        dprintf (("Audio", "SWIFullPackets: audio.prefill_state = initialising\n"));
+      }
+      else
+      {
+        dprintf (("Audio", "SWIFullPackets: discarding partial packet\n"));
+        packets = MiscAsm_FreePacket (packets);
+        /* Note that the rest of the function can cope fine if this sets |packets| to NULL */      
+      }
+    }
+    
+    /* Disable IRQs for the rest of this SWI */
+    if (irqs_were_enabled) _kernel_irqs_off ();
+  
+    /* If packet list is empty, point list head at the first new packet, otherwise add it to the end */
+    if (Stream.audio.packet_list_tail == NULL)
+    {
+      Stream.audio.packet_list_head = packets;
     }
     else
     {
-      dprintf (("Audio", "SWIFullPackets: discarding partial packet\n"));
-      packets = MiscAsm_FreePacket (packets);
-      /* Note that the rest of the function can cope fine if this sets |packets| to NULL */      
+      Stream.audio.packet_list_tail->link = packets;
     }
-  }
-  
-  /* Disable IRQs for the rest of this SWI */
-  if (irqs_were_enabled) _kernel_irqs_off ();
-
-  /* If packet list is empty, point list head at the first new packet, otherwise add it to the end */
-  if (Stream.audio.packet_list_tail == NULL)
-  {
-    Stream.audio.packet_list_head = packets;
-  }
-  else
-  {
-    Stream.audio.packet_list_tail->link = packets;
-  }
-  
-  /* Step along the list of new packets */
-  while (packets != NULL)
-  {
-    /* Add the length of each bitstream packet to the amnount we've received */
-    Stream.audio.since_open.amount_received += packets->length;
-    Stream.audio.since_reset.amount_received += packets->length;
     
-    /* Update list tail pointer */
-    Stream.audio.packet_list_tail = packets;
+    /* Step along the list of new packets */
+    while (packets != NULL)
+    {
+      unsigned int old_value;
+      /* Add the length of each bitstream packet to the amnount we've received */
+      old_value = Stream.audio.since_open.amount_received.lsw;
+      Stream.audio.since_open.amount_received.lsw += packets->length;
+      if (Stream.audio.since_open.amount_received.lsw < old_value) Stream.audio.since_open.amount_received.msw ++;
+      
+      old_value = Stream.audio.since_reset.amount_received.lsw;
+      Stream.audio.since_reset.amount_received.lsw += packets->length;
+      if (Stream.audio.since_reset.amount_received.lsw < old_value) Stream.audio.since_reset.amount_received.msw ++;
+      
+      /* Update list tail pointer */
+      Stream.audio.packet_list_tail = packets;
+      
+      /* Move on to next packet */
+      packets = packets->link;
+    }
     
-    /* Move on to next packet */
-    packets = packets->link;
+    /* Restore IRQ state */
+    if (irqs_were_enabled) _kernel_irqs_on ();
   }
-  
-  /* Restore IRQ state */
-  if (irqs_were_enabled) _kernel_irqs_on ();
-  
   return e;
 }
 
@@ -217,13 +229,16 @@ _kernel_oserror *Audio_SWICloseStream (unsigned int flags, stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   IGNORE(flags);
-  IGNORE(ash);
+  e = static_CheckHandle (ash);
   dprintf (("Audio", "SWICloseStream\n"));
   
-  /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
-  static_AudioStop (Stream.rs_flags.video_present && Stream.video.speed_indicator == 1 && Stream.audio.state == stream_open);
-  
-  Stream.s_flags.audio_present = false;
+  if (!e)
+  {
+    /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
+    static_AudioStop (Stream.rs_flags.video_present && Stream.video.speed_indicator == 1 && Stream.audio.state == stream_open);
+    
+    Stream.s_flags.audio_present = false;
+  }
   return e;
 }
 
@@ -240,25 +255,29 @@ _kernel_oserror *Audio_SWIPlay (unsigned int flags, stream_handle_t ash)
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
   IGNORE(flags);
-  IGNORE(ash);
+  e = static_CheckHandle (ash);
   dprintf (("Audio", "SWIPlay\n"));
   
-  AUD_PLY = 1; /* start decoding */
-  
-  e = IRQ_EnableAudioIRQs ();
-  
-  /* Initialise synchronisation clock */
-  Stream.reference_PCR = Stream.audio.first_PTS;
-  if (irqs_were_enabled) _kernel_irqs_off ();
-  Stream.reference_STC = Clk_ReadRawSTC ();
-  if (irqs_were_enabled) _kernel_irqs_on ();
-  
-  /* Update state machine - audio starts immediately */
-  Stream.audio.state = stream_open;
-  dprintf (("Audio", "SWIPlay: audio.state = stream_open\n"));
-  
-  IRQ_UpdateMuteState ();
-  
+  if (!e)
+  {
+    AUD_PLY = 1; /* start decoding */
+    
+    e = IRQ_EnableAudioIRQs ();
+  }
+  if (!e)
+  {
+    /* Initialise synchronisation clock */
+    Stream.reference_PCR = Stream.audio.first_PTS;
+    if (irqs_were_enabled) _kernel_irqs_off ();
+    Stream.reference_STC = Clk_ReadRawSTC ();
+    if (irqs_were_enabled) _kernel_irqs_on ();
+    
+    /* Update state machine - audio starts immediately */
+    Stream.audio.state = stream_open;
+    dprintf (("Audio", "SWIPlay: audio.state = stream_open\n"));
+    
+    IRQ_UpdateMuteState ();
+  }
   return e;
 }
 
@@ -275,7 +294,7 @@ _kernel_oserror *Audio_SWISetSpeed (unsigned int flags, stream_handle_t ash, uns
 {
   _kernel_oserror *e = NULL;
   IGNORE(flags);
-  IGNORE(ash);
+  e = static_CheckHandle (ash);
   IGNORE(speed);
   dprintf (("Audio", "SWISetSpeed\n"));
   
@@ -298,27 +317,30 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWIResetStream (reset_stream_flags_t *flags, stream_handle_t ash, unsigned int *return_discarded_data_size)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(ash);
+  e = static_CheckHandle (ash);
   dprintf (("Audio", "SWIResetStream\n"));
   
-  /* Cache ResetStreamFlags */
-  Stream.rs_flags = *flags;
-  
-  /* Read audio buffer fullnesses */
-  if (Stream.discarded_audio_bit_buffer_data == -1)
+  if (!e)
   {
-    *return_discarded_data_size = (VID_ABL & 0x3FFF) * 256; /* 3520 rounds buffer fullness to 256 byte boundaries */
+    /* Cache ResetStreamFlags */
+    Stream.rs_flags = *flags;
+    
+    /* Read audio buffer fullnesses */
+    if (Stream.discarded_audio_bit_buffer_data == -1)
+    {
+      *return_discarded_data_size = (VID_ABL & 0x3FFF) * 256; /* 3520 rounds buffer fullness to 256 byte boundaries */
+    }
+    else /* 3520 has already been reset, so we have to rely on the value cached earlier */
+    {
+      *return_discarded_data_size = Stream.discarded_audio_bit_buffer_data;
+    }
+    
+    /* Stop playing the old stream immediately */
+    *return_discarded_data_size += static_AudioStop (false);
+    
+    /* Initialise the new stream */
+    e = static_AudioStart ();
   }
-  else /* 3520 has already been reset, so we have to rely on the value cached earlier */
-  {
-    *return_discarded_data_size = Stream.discarded_audio_bit_buffer_data;
-  }
-  
-  /* Stop playing the old stream immediately */
-  *return_discarded_data_size += static_AudioStop (false);
-  
-  /* Initialise the new stream */
-  e = static_AudioStart ();
   return e;
 }
 
@@ -333,9 +355,13 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWIMuteSound (unsigned int flags, stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(ash);
-  Stream.aud_flags.muted = flags & 1;
-  IRQ_UpdateMuteState ();
+  e = static_CheckHandle (ash);
+  
+  if (!e)
+  {
+    Stream.aud_flags.muted = flags & 1;
+    IRQ_UpdateMuteState ();
+  }
   return e;
 }
 
@@ -354,18 +380,22 @@ _kernel_oserror *Audio_SWISoundVolume (unsigned int flags, stream_handle_t ash, 
   _kernel_oserror *e = NULL;
   unsigned char attenuation;
   IGNORE(flags);
-  IGNORE(ash);
-  *return_old_volume = Stream.volume;
-  if (volume != -1)
+  e = static_CheckHandle (ash);
+  
+  if (!e)
   {
-    volume = MAX(volume, 0);
-    volume = MIN(volume, 256);
-    Stream.volume = volume;
-    attenuation = (256 - volume) / 4;
-    if (attenuation == 64) attenuation = 63;
-    AUD_LCA = attenuation;
-    AUD_RCA = attenuation;
-    IRQ_UpdateMuteState (); /* if maximum attenuation is selected, mute instead */
+    *return_old_volume = Stream.volume;
+    if (volume != -1)
+    {
+      volume = MAX(volume, 0);
+      volume = MIN(volume, 256);
+      Stream.volume = volume;
+      attenuation = (256 - volume) / 4;
+      if (attenuation == 64) attenuation = 63;
+      AUD_LCA = attenuation;
+      AUD_RCA = attenuation;
+      IRQ_UpdateMuteState (); /* if maximum attenuation is selected, mute instead */
+    }
   }
   return e;
 }
@@ -403,16 +433,18 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWISetAudioParameters0 (stream_handle_t ash, int new_state, int *return_old_state)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(ash);
+  e = static_CheckHandle (ash);
   
-  *return_old_state = Stream.audio_parms.mute_audio_on_errors;
-  
-  if ((int) new_state != -1) /* -1 means only return current value */
+  if (!e)
   {
-    Stream.audio_parms.mute_audio_on_errors = new_state;
-    AUD_CRC = new_state;
+    *return_old_state = Stream.audio_parms.mute_audio_on_errors;
+    
+    if ((int) new_state != -1) /* -1 means only return current value */
+    {
+      Stream.audio_parms.mute_audio_on_errors = new_state;
+      AUD_CRC = new_state;
+    }
   }
-  
   return e;
 }
 
@@ -431,38 +463,41 @@ _kernel_oserror *Audio_SWISetAudioParameters1 (stream_handle_t ash, dual_channel
   _kernel_oserror *e = NULL;
   audio_channel_type mode;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
-  IGNORE(ash);
+  e = static_CheckHandle (ash);
   
-  if (irqs_were_enabled) _kernel_irqs_off (); /* |mode| might change under our feet otherwise */
-  
-  mode = (audio_channel_type) Stream.audio_header.fields.mode;
-  *return_old_state = Stream.audio_parms.specifier;
-  if (Stream.aud_flags.first_header_received)
+  if (!e)
   {
-    *return_channel_type = mode;
-  }
-  else
-  {
-    *return_channel_type = ct_unknown;
-  }
-  
-  if ((int) new_state != -1) /* -1 means only return current values */
-  {
-    Stream.audio_parms.specifier = new_state;
+    if (irqs_were_enabled) _kernel_irqs_off (); /* |mode| might change under our feet otherwise */
+    
+    mode = (audio_channel_type) Stream.audio_header.fields.mode;
+    *return_old_state = Stream.audio_parms.specifier;
     if (Stream.aud_flags.first_header_received)
     {
-      if (mode != ct_dual_mono || new_state == dc_both)
+      *return_channel_type = mode;
+    }
+    else
+    {
+      *return_channel_type = ct_unknown;
+    }
+    
+    if ((int) new_state != -1) /* -1 means only return current values */
+    {
+      Stream.audio_parms.specifier = new_state;
+      if (Stream.aud_flags.first_header_received)
       {
-        AUD_EXT = dc_both;
-      }
-      else
-      {
-        AUD_EXT = new_state ^ 3; /* left and right channel bits are swapped in AUD_EXT and dual_channel_specifier */
+        if (mode != ct_dual_mono || new_state == dc_both)
+        {
+          AUD_EXT = dc_both;
+        }
+        else
+        {
+          AUD_EXT = new_state ^ 3; /* left and right channel bits are swapped in AUD_EXT and dual_channel_specifier */
+        }
       }
     }
+    
+    if (irqs_were_enabled) _kernel_irqs_on ();
   }
-  
-  if (irqs_were_enabled) _kernel_irqs_on ();
   return e;
 }
 
@@ -520,8 +555,8 @@ static _kernel_oserror *static_AudioStart (void)
   Stream.audio.fast_slow_state = fss_normal_speed;
   Stream.audio.packet_list_head = NULL;
   Stream.audio.packet_list_tail = NULL;
-  Stream.audio.since_reset.amount_received = 0;
-  Stream.audio.since_reset.amount_sent = 0;
+  Stream.audio.since_reset.amount_received.lsw = Stream.audio.since_reset.amount_received.msw = 0;
+  Stream.audio.since_reset.amount_sent.lsw = Stream.audio.since_reset.amount_sent.msw = 0;
   Stream.audio.since_reset.PES_packets_sent = 0;
   Stream.audio.since_reset.PTSs_in = 0;
   Stream.audio.since_reset.PTSs_out = 0;
@@ -540,7 +575,7 @@ static _kernel_oserror *static_AudioStart (void)
   Stream.aud_flags.recovering_from_underrun = false;
   Stream.volume = 256;
   AUD_LCA = AUD_RCA = 256 - Stream.volume;
-  Stream.audio_resync_delay = 100; /* wait a second before we start doing stream sync */
+  Stream.audio_resync_delay = 25; /* wait a while before we start doing stream sync */
   Stream.discarded_audio_bit_buffer_data = -1; /* flag that VID_ABL should be read on the next Audio_ResetStream */
   IRQ_UpdateMuteState ();
   AUD_CRC = Stream.audio_parms.mute_audio_on_errors;
@@ -597,4 +632,26 @@ static unsigned int static_AudioStop (bool play_out)
   IRQ_DisableAudioIRQs ();
   
   return discarded_data;
+}
+
+/******	static_CheckHandle() ***********************************************
+
+Purpose:	Checks validity of an audio stream handle
+In:		Handle to check
+Out:		Pointer to error block
+
+***************************************************************************/
+
+static _kernel_oserror *static_CheckHandle (stream_handle_t ash)
+{
+  if (ash == (stream_handle_t) &Stream)
+  {
+    return NULL;
+  }
+  else
+  {
+    char handle_string [12];
+    sprintf (handle_string, "%p", ash);
+    return Mess_GenerateError ("Err_BadAudioHandle", errno_BAD_AUDIO_HANDLE, 1, handle_string);
+  }
 }

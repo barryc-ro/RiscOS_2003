@@ -4,7 +4,7 @@ Project:	STB-400
 Component:	MPEGDriver
 This file:	MPEG chip initialisation and management
 
-Copyright 1999 Pace Micro Technology plc. All rights reserved.
+Copyright 1999-2000 Pace Micro Technology plc. All rights reserved.
 
 This material is the confidential trade secret and proprietary information
 of Pace Micro Technology plc. It may not be reproduced, used, sold, or
@@ -36,6 +36,10 @@ Date		Who	Change
 			(it doesn't work, so I'm using Timer0 instead now); uses Timer0 instead of
 			Timer1 for microsecond waits (Timer1 might not be set up); sets audio decoder
 			clock to 25MHz rather than 27MHz - fixes temperature problem!
+08/05/2000	BJGA	Error pointers (or error numbers) passed up the functions as appropriate, so
+			that disgnostic errors can be returned from module initialisation; fast/slow
+			PCM clock settings changed to be closer to the normal speed (because audio
+			fasts/slows are now smoothed out)
 
 ***************************************************************************/
 
@@ -53,6 +57,7 @@ Date		Who	Change
 
 #include "Clk.h"
 #include "Mess.h"
+#include "Module.h"
 #include "Registers.h"
 #include "STi3520L.h"
 
@@ -66,10 +71,10 @@ Date		Who	Change
 
 static void static_WaitMicroseconds (unsigned int wait);
 static void static_InitialisePLL (void);
-static void static_SelectPLLFreq (unsigned int conf_pll);
+static unsigned int static_SelectPLLFreq (unsigned int conf_pll);
 static void static_SelectSDRAM (void);
-static bool static_TestMemory (unsigned char initial_value);
-static bool static_TestBlockMove (void);
+static unsigned int static_TestMemory (unsigned char initial_value);
+static unsigned int static_TestBlockMove (void);
 
 /********************/
 /* Public variables */
@@ -123,11 +128,14 @@ static bool static_TestBlockMove (void);
 /******	STi3520L_HardReset() ***********************************************
 
 Purpose:	Perform a hard reset and full reinitialisation of the 3520L
+Out:		Pointer to error block
 
 ***************************************************************************/
 
-void STi3520L_HardReset (void)
+_kernel_oserror *STi3520L_HardReset (void)
 {
+  _kernel_oserror *e = NULL;
+  int errno;
   unsigned char outerloop;
   unsigned char innerloop;
   
@@ -154,80 +162,115 @@ void STi3520L_HardReset (void)
       static_SelectPLLFreq (0xC5);
       CFG_CCF = 0x1F;
       static_SelectSDRAM ();
-      if (false == static_TestMemory (innerloop))
+      if (static_TestMemory (innerloop) != 0)
         break;
-      if (false == static_TestBlockMove ())
+      if (static_TestBlockMove () != 0)
         break;
     }
     /* Set PLL to 243MHz (nominal) and test again */
-    static_SelectPLLFreq (0xC3);
-    if (false == static_TestMemory (innerloop))
+    errno = static_SelectPLLFreq (0xC3);
+    if (outerloop == 9 && errno != 0) /* this is only a fatal problem the last time around */
+    {
       break;
-    if (false == static_TestBlockMove ())
+    }
+    if ((errno = static_TestMemory (innerloop)) != 0) /* this is fatal at any time */
+    {
+      break;
+    }
+    if ((errno = static_TestBlockMove ()) != 0) /* this is fatal at any time */
+    {
+      break;
+    }
+  }
+  /* Convert errno to a proper error pointer */
+  switch (errno)
+  {
+    case errno_NO_PLL_LOCK:
+      e = Mess_GenerateError ("Err_NoPLLLock", errno, 0);
+      break;
+    case errno_WRITE:
+      e = Mess_GenerateError ("Err_Write", errno, 0);
+      break;
+    case errno_READ:
+      e = Mess_GenerateError ("Err_Read", errno, 0);
+      break;
+    case errno_BLOCK_MOVE:
+      e = Mess_GenerateError ("Err_BlockMove", errno, 0);
+      break;
+    case errno_BAD_DATA:
+      e = Mess_GenerateError ("Err_BadData", errno, 0);
+      break;
+    default: /* should only trap zero, since only the above 5 errors are possible at this stage */
       break;
   }
   
-  /* Set up the memory map */
-  WRITE_VID_OTP(SDRAM_OSD_START/256);
-  WRITE_VID_OBP(SDRAM_OSD_START/256);
-  WRITE_VID_ABG(SDRAM_AUDIO_BIT_BUFFER_START/256);
-  WRITE_VID_ABS(SDRAM_AUDIO_BIT_BUFFER_END/256 - 1);
-  WRITE_VID_VBG(SDRAM_VIDEO_BIT_BUFFER_START/256);
-  WRITE_VID_VBS(SDRAM_VIDEO_BIT_BUFFER_END/256 - 1);
-  
-  /* Other one-time initialisations */
-  AUD_BBE = 1;      /* enable audio bit-buffer */
-  AUD_CRC = 0;      /* disable CRC detection and error concealment */
-  AUD_EXT = 0;      /* output both left and right channels */
-  WRITE_AUD_FFL(0); /* free-format frame length is unknown */
-  AUD_IDE = 0;      /* ignore AUD_SID */
-  AUD_IFT = 0;      /* input FIFO threshold not used in this driver (set to 0) */
-  AUD_ISS = 4;      /* input is MPEG-2 PES stream */
-  AUD_LCA = 0;      /* left channel attenuation = 0 */
-  AUD_LCK = 3;      /* sync words until lock = 3 (default) */
-  AUD_MUT = 1;      /* muted */
-  AUD_PLY = 0;      /* not playing */
-  AUD_RCA = 0;      /* right channel attenuation = 0 */
-  AUD_SCM = 1;      /* sync confirmation mode = 1 (sync when first start code and stream ID found) */
-  AUD_SEM = 1;      /* sync error concealment mode = 1 (mute) */
-  AUD_SID = 0;      /* stream ID = 0 (although not used, see AUD_IDE) */
-  AUD_SKP = 0;      /* don't skip next frame! */
-  AUD_SYE = 0x3F;   /* don't use any additional fields for sync lock */
-  AUD_SYN = 1;      /* sync on any audio PES packet header */
-  AUD_DIF = 1;      /*  \                                      */
-  AUD_DIV = 1;      /*  |                                      */
-  AUD_FOR = 1;      /*  |                                      */
-  AUD_LRP = 1;      /*  |  set up PCM output to suit our DACs  */
-  AUD_ORD = 0;      /*  |                                      */
-  AUD_P18 = 1;      /*  |                                      */
-  AUD_SCP = 0;      /*  /                                      */
-  VID_CTL = VID_CTL_ERU | VID_CTL_ERS | VID_CTL_ERP;  /* automatic pipeline resets on any error type */
-  PES_CF1 = PES_CF1_IVI;                                         /* ignore video stream ID */
-  PES_CF2 = (2 << PES_CF2_MOD_SHIFT) | PES_CF2_SS | PES_CF2_IAI; /* accept twin MPEG-2 PES streams, ignore audio stream ID */
-  
-  /* Initialise the display */
-  WRITE_VID_MWV(0xFF);   /* 0% background, 100% video */
-  WRITE_VID_MWS(0xFF);   /* 0% background, 100% still picture */
-  WRITE_VID_BKC(0x0088); /* black background */
-  /* The following parameters are set up properly at display time, but it can be useful for debugging to set them up now */
-  WRITE_VID_DFP(SDRAM_FRAME_BUFFER_1_START/256);
-  WRITE_VID_YDO(22);
-  WRITE_VID_YDS(22+288-128-1); /* -1 for vertical filter mode 0 */
-  WRITE_VID_XDO(112-1);        /* -1 to get the chroma phases right on this system */
-  WRITE_VID_XDS(112+720+6-1);
-  
-  STi3520L_SoftReset (true, true); /* so the memory map changes take effect */
+  if (!e)
+  {
+    /* Set up the memory map */
+    WRITE_VID_OTP(SDRAM_OSD_START/256);
+    WRITE_VID_OBP(SDRAM_OSD_START/256);
+    WRITE_VID_ABG(SDRAM_AUDIO_BIT_BUFFER_START/256);
+    WRITE_VID_ABS(SDRAM_AUDIO_BIT_BUFFER_END/256 - 1);
+    WRITE_VID_VBG(SDRAM_VIDEO_BIT_BUFFER_START/256);
+    WRITE_VID_VBS(SDRAM_VIDEO_BIT_BUFFER_END/256 - 1);
+    
+    /* Other one-time initialisations */
+    AUD_BBE = 1;      /* enable audio bit-buffer */
+    AUD_CRC = 0;      /* disable CRC detection and error concealment */
+    AUD_EXT = 0;      /* output both left and right channels */
+    WRITE_AUD_FFL(0); /* free-format frame length is unknown */
+    AUD_IDE = 0;      /* ignore AUD_SID */
+    AUD_IFT = 0;      /* input FIFO threshold not used in this driver (set to 0) */
+    AUD_ISS = 4;      /* input is MPEG-2 PES stream */
+    AUD_LCA = 0;      /* left channel attenuation = 0 */
+    AUD_LCK = 3;      /* sync words until lock = 3 (default) */
+    AUD_MUT = 1;      /* muted */
+    AUD_PLY = 0;      /* not playing */
+    AUD_RCA = 0;      /* right channel attenuation = 0 */
+    AUD_SCM = 1;      /* sync confirmation mode = 1 (sync when first start code and stream ID found) */
+    AUD_SEM = 1;      /* sync error concealment mode = 1 (mute) */
+    AUD_SID = 0;      /* stream ID = 0 (although not used, see AUD_IDE) */
+    AUD_SKP = 0;      /* don't skip next frame! */
+    AUD_SYE = 0x3F;   /* don't use any additional fields for sync lock */
+    AUD_SYN = 1;      /* sync on any audio PES packet header */
+    AUD_DIF = 1;      /*  \                                      */
+    AUD_DIV = 1;      /*  |                                      */
+    AUD_FOR = 1;      /*  |                                      */
+    AUD_LRP = 1;      /*  |  set up PCM output to suit our DACs  */
+    AUD_ORD = 0;      /*  |                                      */
+    AUD_P18 = 1;      /*  |                                      */
+    AUD_SCP = 0;      /*  /                                      */
+    VID_CTL = VID_CTL_ERU | VID_CTL_ERS | VID_CTL_ERP;  /* automatic pipeline resets on any error type */
+    PES_CF1 = PES_CF1_IVI;                                         /* ignore video stream ID */
+    PES_CF2 = (2 << PES_CF2_MOD_SHIFT) | PES_CF2_SS | PES_CF2_IAI; /* accept twin MPEG-2 PES streams, ignore audio stream ID */
+    
+    /* Initialise the display */
+    WRITE_VID_MWV(0xFF);   /* 0% background, 100% video */
+    WRITE_VID_MWS(0xFF);   /* 0% background, 100% still picture */
+    WRITE_VID_BKC(0x0088); /* black background */
+    /* The following parameters are set up properly at display time, but it can be useful for debugging to set them up now */
+    WRITE_VID_DFP(SDRAM_FRAME_BUFFER_1_START/256);
+    WRITE_VID_YDO(22);
+    WRITE_VID_YDS(22+288-128-1); /* -1 for vertical filter mode 0 */
+    WRITE_VID_XDO(112-1);        /* -1 to get the chroma phases right on this system */
+    WRITE_VID_XDS(112+720+6-1);
+    
+    e = STi3520L_SoftReset (true, true); /* so the memory map changes take effect */
+  }
+  return e;
 }
 
 /******	STi3520L_SoftReset() ***********************************************
 
 Purpose:	Perform a soft reset of the 3520L (and stops decoding)
 In:		Whether to reset video and/or audio units
+Out:		Pointer to error block
 
 ***************************************************************************/
 
-void STi3520L_SoftReset (bool reset_video, bool reset_audio)
+_kernel_oserror *STi3520L_SoftReset (bool reset_video, bool reset_audio)
 {
+  _kernel_oserror *e = NULL;
   unsigned char temp = VID_ABT_8 & 0x3F;
   if (reset_video ^ reset_audio != 0) temp |= VID_ABT_SSR >> 8; /* select separate resets if necessary */
   if (reset_video)
@@ -264,9 +307,17 @@ void STi3520L_SoftReset (bool reset_video, bool reset_audio)
         reset_count --;
       }
     }
-    if (reset_count == 0) dprintf (("STi3520L", "SoftReset: audio restart failed\n"));
-    else dprintf (("STi3520L", "SoftReset: took %d writes and %d reads to clear AUD_RST\n", (100 - reset_count) + 1, (counter % 200) + 1));
+    if (reset_count == 0)
+    {
+      dprintf (("STi3520L", "SoftReset: audio restart failed\n"));
+      e = Mess_GenerateError ("Err_AudioRestart", errno_AUDIO_RESTART, 0);
+    }
+    else
+    {
+      dprintf (("STi3520L", "SoftReset: took %d writes and %d reads to clear AUD_RST\n", (100 - reset_count) + 1, (counter % 200) + 1));
+    }
   }
+  return e;
 }
 
 /******	STi3520L_PipelineReset() *******************************************
@@ -280,6 +331,8 @@ void STi3520L_PipelineReset (void)
   VID_CTL |= VID_CTL_PRS;
   static_WaitMicroseconds(1);
   VID_CTL &= ~VID_CTL_PRS;
+  
+  return;
 }
 
 /******	STi3520L_WriteSDRAM() **********************************************
@@ -301,7 +354,7 @@ _kernel_oserror *STi3520L_WriteSDRAM (unsigned char *from, unsigned int to, unsi
   while (((VID_STA_8<<8) & VIDEO_INT_WFE) == 0 && retry_count < MEMORY_WRITE_FIFO_EMPTY_TIMEOUT) retry_count++;
   if (retry_count == MEMORY_WRITE_FIFO_EMPTY_TIMEOUT)
   {
-    e = Mess_GenerateError ("Err_Write", 1, 0);
+    e = Mess_GenerateError ("Err_Write", errno_WRITE, 0);
   }
   while (length / 8 != 0 && !e)
   {
@@ -320,7 +373,7 @@ _kernel_oserror *STi3520L_WriteSDRAM (unsigned char *from, unsigned int to, unsi
     while (((VID_STA_8<<8) & VIDEO_INT_WFE) == 0 && retry_count < MEMORY_WRITE_FIFO_EMPTY_TIMEOUT) retry_count++;
     if (retry_count == MEMORY_WRITE_FIFO_EMPTY_TIMEOUT)
     {
-      e = Mess_GenerateError ("Err_Write", 1, 0);
+      e = Mess_GenerateError ("Err_Write", errno_WRITE, 0);
     }
   }
   return e;
@@ -352,7 +405,7 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       /* 256 * 48 kHz = 12.288 MHz */
       if (fast)
       {
-        WRITE_CKG_PCM(CLOCK(1,1,8,219,1723));
+        WRITE_CKG_PCM(CLOCK(1,1,8,632,871));
       }
       else if (!slow)
       {
@@ -360,14 +413,14 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       }
       else
       {
-        WRITE_CKG_PCM(CLOCK(1,1,9,586,745));
+        WRITE_CKG_PCM(CLOCK(1,1,9,79,1429));
       }
       break;
     case sr_44k1:
       /* 256 * 44.1 kHz = 11.2896 MHz */
       if (fast)
       {
-        WRITE_CKG_PCM(CLOCK(1,1,8,469,502));
+        WRITE_CKG_PCM(CLOCK(1,1,9,663,1132));
       }
       else if (!slow)
       {
@@ -375,7 +428,7 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       }
       else
       {
-        WRITE_CKG_PCM(CLOCK(1,1,10,331,447));
+        WRITE_CKG_PCM(CLOCK(1,1,9,647,685));
       }
       break;
     case sr_32k:
@@ -383,7 +436,7 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       /* 256 * 32 kHz = 8.192 MHz */
       if (fast)
       {
-        WRITE_CKG_PCM(CLOCK(1,1,12,643,931));
+        WRITE_CKG_PCM(CLOCK(1,1,13,619,1052));
       }
       else if (!slow)
       {
@@ -391,10 +444,12 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       }
       else
       {
-        WRITE_CKG_PCM(CLOCK(1,1,15,293,1629));
+        WRITE_CKG_PCM(CLOCK(1,1,14,169,2038));
       }
       break;
   }
+  
+  return;
 }
 
 /*********************/
@@ -428,7 +483,7 @@ static void static_WaitMicroseconds (unsigned int wait)
     oldtime = newtime;
   }
   while (count > 0);
-
+  
   return;
 }
 
@@ -452,6 +507,8 @@ static void static_InitialisePLL (void)
   WRITE_CKG_AUX(CLOCK(0,0,0,0,1));   /* disabled    */
   WRITE_CKG_PIX(CLOCK(0,0,0,0,1));   /* disabled    */
   STi3520L_SetPCMClock (sr_44k1, false, false);  /* nominal value, just to get the clock going */
+  
+  return;
 }
 
 /******	static_SelectPLLFreq() *********************************************
@@ -459,11 +516,13 @@ static void static_InitialisePLL (void)
 Purpose:	Restarts the PLL, and polls the status bit in CKG_AUX until
 		the PLL has locked
 In:		Value to be written into CKG_PLL
+Out:		Error number, or 0 if none
 
 ***************************************************************************/
 
-static void static_SelectPLLFreq (unsigned int conf_pll)
+static unsigned int static_SelectPLLFreq (unsigned int conf_pll)
 {
+  unsigned int errno = 0;
   int times;
   CKG_PLL = conf_pll;
   for (times=0; times < 0x1000; times++)
@@ -473,7 +532,9 @@ static void static_SelectPLLFreq (unsigned int conf_pll)
   if (times == 0x1000)
   {
     printf ("%s\n","Warning: MPEG PLL did not lock");
+    errno = errno_NO_PLL_LOCK;
   }
+  return errno;
 }
 
 /******	static_SelectSDRAM() ***********************************************
@@ -491,6 +552,8 @@ static void static_SelectSDRAM (void)
   static_WaitMicroseconds (1000);
   CFG_DRC = 0x63;
   static_WaitMicroseconds (1000);  
+  
+  return;
 }
 
 /******	static_TestMemory() ************************************************
@@ -498,11 +561,11 @@ static void static_SelectSDRAM (void)
 Purpose:	Tests SDRAM by writing a series of incrementing bytes, and
                 verifying that the values are read back correctly
 In:		The value of the first byte to write
-Out:		|true| if test was successful
+Out:		Error number, or 0 if none
 
 ***************************************************************************/
 
-static bool static_TestMemory (unsigned char initial_value)
+static unsigned int static_TestMemory (unsigned char initial_value)
 {
   unsigned int i;
   unsigned int counter;
@@ -522,7 +585,7 @@ static bool static_TestMemory (unsigned char initial_value)
       if (counter == MEMORY_WRITE_FIFO_EMPTY_TIMEOUT)
       {
         printf ("%s\n", "Warning: MPEG SDRAM write timeout reached");
-        return false;
+        return errno_WRITE;
       }
     }
     
@@ -554,29 +617,29 @@ static bool static_TestMemory (unsigned char initial_value)
       if (counter == MEMORY_READ_FIFO_FULL_TIMEOUT)
       {
         printf ("%s\n", "Warning: MPEG SDRAM read timeout reached");
-        return false;
+        return errno_READ;
       }
     }
     
     /* Read a 64 bit word */
     if (CFG_MRF != my_value++) 
-      return false;
+      return errno_BAD_DATA;
     if (CFG_MRF != my_value++) 
-      return false;
+      return errno_BAD_DATA;
     if (CFG_MRF != my_value++) 
-      return false;
+      return errno_BAD_DATA;
     if (CFG_MRF != my_value++)
-      return false;
+      return errno_BAD_DATA;
     if (CFG_MRF != my_value++)
-      return false;
+      return errno_BAD_DATA;
     if (CFG_MRF != my_value++)
-      return false;
+      return errno_BAD_DATA;
     if (CFG_MRF != my_value++)
-      return false;
+      return errno_BAD_DATA;
     if (CFG_MRF != my_value++)
-      return false;
+      return errno_BAD_DATA;
   }
-  return true;
+  return 0;
 }
 
 /******	static_TestBlockMove() *********************************************
@@ -585,11 +648,11 @@ Purpose:	Tests SDRAM, using the block move functionality of the 3520L
 		to repeatedly move a 128-bit pattern across memory in 64-bit
 		steps. Due to the nature of the pattern, this involves
 		toggling every bit in each 64-bit word
-Out:		|true| if test was successful
+Out:		Error number, or 0 if none
 
 ***************************************************************************/
 
-static bool static_TestBlockMove (void)
+static unsigned int static_TestBlockMove (void)
 {
   int counter;
   
@@ -607,7 +670,7 @@ static bool static_TestBlockMove (void)
     if (counter == MEMORY_WRITE_FIFO_EMPTY_TIMEOUT)
     {
       printf ("%s\n", "Warning: MPEG SDRAM write timeout reached");
-      return false;
+      return errno_WRITE;
     }
   }
   
@@ -632,7 +695,7 @@ static bool static_TestBlockMove (void)
     if (counter == MEMORY_WRITE_FIFO_EMPTY_TIMEOUT)
     {
       printf ("%s\n", "Warning: MPEG SDRAM write timeout reached");
-      return false;
+      return errno_WRITE;
     }
   }
   
@@ -654,7 +717,7 @@ static bool static_TestBlockMove (void)
     if (counter == MEMORY_WRITE_FIFO_EMPTY_TIMEOUT)
     {
       printf ("%s\n", "Warning: MPEG SDRAM write timeout reached");
-      return false;
+      return errno_WRITE;
     }
   }
   
@@ -681,7 +744,7 @@ static bool static_TestBlockMove (void)
     if (counter == BLOCK_MOVE_IDLE_TIMEOUT)
     {  
       printf ("%s\n", "Warning: MPEG SDRAM block move timeout reached");
-      return false;
+      return errno_BLOCK_MOVE;
     }
   }
   
@@ -699,27 +762,27 @@ static bool static_TestBlockMove (void)
     if (counter == MEMORY_READ_FIFO_FULL_TIMEOUT)
     {
       printf ("%s\n", "Warning: MPEG SDRAM read timeout reached");
-      return false;
+      return errno_READ;
     }
   }
   
   /* Read a 64 bit word */
   if (CFG_MRF != PATTERN_1) 
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_2) 
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_3) 
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_4)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_5)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_6)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_7)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_8)
-    return false;
+    return errno_BAD_DATA;
   
   /* Wait for the read FIFO to be full */
   counter = 0;
@@ -729,27 +792,27 @@ static bool static_TestBlockMove (void)
     if (counter == MEMORY_READ_FIFO_FULL_TIMEOUT)
     {
       printf ("%s\n", "Warning: MPEG SDRAM read timeout reached");
-      return false;
+      return errno_READ;
     }
   }
   
   /* Read a 64 bit word */
   if (CFG_MRF != PATTERN_9)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_10)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_11)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_12)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_13)
-    return false;           
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_14)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_15)
-    return false;
+    return errno_BAD_DATA;
   if (CFG_MRF != PATTERN_16)
-    return false;
+    return errno_BAD_DATA;
 
-  return true;
+  return 0;
 }

@@ -4,7 +4,7 @@ Project:	STB-400
 Component:	MPEGDriver
 This file:	Line 23 WideScreen Signalling and SCART pins 8/16 support
 
-Copyright 1999 Pace Micro Technology plc. All rights reserved.
+Copyright 1999-2000 Pace Micro Technology plc. All rights reserved.
 
 This material is the confidential trade secret and proprietary information
 of Pace Micro Technology plc. It may not be reproduced, used, sold, or
@@ -22,6 +22,8 @@ Date		Who	Change
 02/03/2000	BJGA	Implemented all SCART signalling code
 02/05/2000	BJGA	Internal settings can now be returned from WSS_Set()
 			and WSS_SetSCART()
+12/05/2000	BJGA	UpCall_MPEG &1000 and &1001 are now issued when the
+			line 23 and SCART signals change, respectively
 
 ***************************************************************************/
 
@@ -34,11 +36,14 @@ Date		Who	Change
 #include <stdbool.h>
 #include "swis.h"
 
+#include "Global/RISCOS.h"
+#include "Global/UpCall.h"
 #include "DebugLib/DebugLib.h"
 #include "MPEG/Macrovisio.h"
 #include "PortMan.h"
 
 #include "Defs.h"
+#include "Module.h"
 #include "Registers.h"
 #include "STi3520L.h"
 #include "WSS.h"
@@ -257,9 +262,14 @@ _kernel_oserror *WSS_Set (unsigned char group [4], bool internal, unsigned char 
 {
   _kernel_oserror *e = NULL;
   unsigned char *group_static_copy;
+  unsigned char *old_group_static_copy;
+  unsigned char old_controlling_groupA;
   
   if (old_groupA_ext != NULL) *old_groupA_ext = external_group [0];
   if (old_groupA_int != NULL) *old_groupA_int = internal_group [0];
+  
+  old_group_static_copy = (internal_group [0] == 0) ? external_group : internal_group;
+  old_controlling_groupA = old_group_static_copy [0];
   
   /* Write array is determined from argument */
   group_static_copy = internal ? internal_group : external_group;
@@ -280,6 +290,58 @@ _kernel_oserror *WSS_Set (unsigned char group [4], bool internal, unsigned char 
   {
     VID_DCF_0 &= ~VID_DCF_EOS<<0; /* disable OSD */
   }
+  
+  /* Do the UpCall if necessary */
+  if (group_static_copy != old_group_static_copy || group_static_copy [0] != old_controlling_groupA)
+  {
+    void *handle = Stream.csh;
+    fixed PAR = 0x11111;
+    unsigned char overscan [4] = { 0, 0, 0, 0 }; /* default to no extra overscan anywhere */
+    if (internal_group [0] == 0)
+    {
+      /* New WSS state was externally signalled - no attached stream handle */
+      handle = NULL;
+    }
+    switch (group_static_copy [0])
+    {
+      case 1:
+        /* 14:9 letterbox centre */
+      case 6 | 8:
+        /* 4:3 with 14:9 centre shoot-and-protect */
+        overscan [1] = 7;
+        overscan [3] = 7;
+        break;
+      case 2:
+        /* 14:9 letterbox top */
+        overscan [1] = 14;
+        break;
+      case 3 | 8:
+        /* 16:9 letterbox centre */
+        overscan [1] = 12;
+        overscan [3] = 12;
+        break;
+      case 4:
+        /* 16:9 letterbox top */
+        overscan [1] = 25;
+        break;
+      case 5 | 8:
+        /* 2.35:1 letterbox centre */
+        overscan [0] = 12;
+        overscan [1] = 21;
+        overscan [2] = 12;
+        overscan [3] = 21;
+        break;
+      case 7:
+        /* Anamorphic */
+        PAR = 0x16C17;
+        break;
+      default:
+        /* Anything else, just use defaults */
+        break;
+    }
+    /* Issue UpCall using OS_CallAVector to preserve interrupt state */
+    _swix (OS_CallAVector, _INR(0,9), UpCall_MPEG, 0, handle, 0x1000, PAR, overscan [0], overscan [1], overscan [2], overscan [3], UpCallV);
+  }
   return e;
 }
 
@@ -298,6 +360,9 @@ void WSS_SetSCART (scart_feature *rgb, scart_feature *tvassert, scart_feature *e
   static scart_feature static_external_anamorphic = scart_disable;
   static scart_feature static_internal_anamorphic = scart_dontcare;
   scart_feature new_value; /* a scratch value of type scart_feature */
+  scart_feature old_anamorphic = (static_internal_anamorphic == scart_dontcare) ? static_external_anamorphic : static_internal_anamorphic;
+  scart_feature new_anamorphic;
+  bool old_internal_anamorphic = static_internal_anamorphic;
   unsigned int macrovision_state;
   unsigned int macrovision_tvstandard;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
@@ -355,6 +420,8 @@ void WSS_SetSCART (scart_feature *rgb, scart_feature *tvassert, scart_feature *e
   
   /* Apply everything else to the hardware */
   
+  new_anamorphic = (static_internal_anamorphic == scart_dontcare) ? static_external_anamorphic : static_internal_anamorphic;
+  
   _swix (Macrovision_GetState, _IN(0)|_OUTR(1,2), 0, &macrovision_state, &macrovision_tvstandard);
   macrovision_state &= ~MacroStateFlags_Pin8_Bits;
   if (!static_tvassert)
@@ -363,12 +430,7 @@ void WSS_SetSCART (scart_feature *rgb, scart_feature *tvassert, scart_feature *e
   }
   else
   {
-    new_value = static_internal_anamorphic;
-    if (new_value == scart_dontcare)
-    {
-      new_value = static_external_anamorphic;
-    }
-    if (new_value == scart_enable)
+    if (new_anamorphic == scart_enable)
     {
       macrovision_state |= MacroStateFlags_Pin8_6V;
     }
@@ -379,6 +441,18 @@ void WSS_SetSCART (scart_feature *rgb, scart_feature *tvassert, scart_feature *e
   }
   _swix (Macrovision_SetState, _INR(0,2),
       MacroSetStateFlags_ChangeNow, macrovision_state, macrovision_tvstandard);
+  
+  /* Do the UpCall if necessary */
+  if (new_anamorphic != old_anamorphic || old_internal_anamorphic != static_internal_anamorphic)
+  {
+    void *handle = Stream.csh;
+    if (static_internal_anamorphic == scart_dontcare)
+    {
+      handle = NULL;
+    }
+    /* Issue UpCall using OS_CallAVector to preserve interrupt state */
+    _swix (OS_CallAVector, _INR(0,4)|_IN(9), UpCall_MPEG, 0, handle, 0x1001, new_anamorphic, UpCallV);
+  }
 }
 
 /*********************/
