@@ -68,6 +68,8 @@ static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle);
 
 static _kernel_oserror *static_CallEvery (void *handle);
 
+static void static_UpdateOperationsRegister(zoran_interface_t *zoran, uint8_t AND_mask, uint8_t EOR_mask);
+
 /********************/
 /* Public variables */
 /********************/
@@ -87,6 +89,8 @@ static void (*CallEvery_Veneer) (void);
 /*********************/
 /* Private constants */
 /*********************/
+
+/* Command specifiers */
 
 #define ZCMD_NOP          ((0<<10) | (0x00<<5) |  (0<<0))
 #define ZCMD_VER          ((0<<10) | (0x01<<5) |  (4<<0))
@@ -120,6 +124,17 @@ static void (*CallEvery_Veneer) (void);
 #define ZCMD_PLLCFG       ((1<<10) | (0x19<<5) |  (1<<0))
 #define ZCMD_GETPTC       ((0<<10) | (0x1A<<5) |  (8<<0))
 
+/* Bits in the operations register */
+
+#define ZOPREG_OP_OUT_ENABLE (1<<0) /* S/PDIF enabled when set */
+#define ZOPREG_OP_PCM_OUT    (1<<1) /* S/PDIF compressed when set, PCM when clear */
+#define ZOPREG_PACKETISED    (1<<2) /* set when data sent to Zoran is PES packetised */
+#define ZOPREG_AV_SYNC_EN    (1<<3) /* set when audio skip/repeat is to be used to match PTC to STC */
+#define ZOPREG_TONE_HILO     (1<<4) /* test tone pitch select */
+#define ZOPREG_TONE_ENABLE   (1<<5) /* test tone enable */
+#define ZOPREG_UNUSED        (1<<6)
+#define ZOPREG_IRQ_ENABLE    (1<<7) /* data pump enabled when set */
+
 /********************/
 /* Public functions */
 /********************/
@@ -139,6 +154,9 @@ _kernel_oserror *Zoran_BodgePlay(uint32_t flags, uint32_t event_handle)
 {
   IGNORE(flags);
   zoran_interface_t *zoran = (zoran_interface_t *) event_handle;
+//uint32_t length;
+//Zoran_GetBufferLength(0,(stream_handle_t){0},&length,zoran);
+//printf("initial length = %d, %dms  ",length,length/90);
   _kernel_oserror *e = Zoran_Start(0, zoran);
   typedef struct
   {
@@ -425,11 +443,13 @@ _kernel_oserror *Zoran_ComponentInfo (uint32_t tag, uintptr_t *result, zoran_int
 
 _kernel_oserror *Zoran_ClockCorrection (uint32_t flags, stream_handle_t decoder_handle, zoran_interface_t *zoran)
 {
+  IGNORE(decoder_handle);
   return NULL;
 }
 
 _kernel_oserror *Zoran_SpeedChange (uint32_t flags, stream_handle_t decoder_handle, zoran_interface_t *zoran)
 {
+  IGNORE(decoder_handle);
   return NULL;
 }
 
@@ -443,11 +463,74 @@ _kernel_oserror *Zoran_ActivateSyncControl (uint32_t flags, stream_handle_t deco
 
 _kernel_oserror *Zoran_GetBufferLength (uint32_t flags, stream_handle_t decoder_handle, uint32_t *length, zoran_interface_t *zoran)
 {
+  IGNORE(flags);
+  IGNORE(decoder_handle);
+  /* Read the current bitrate */
+  /* This should really be done by using our own internal StreamInfo routine, which would */
+  /* drop back to the characteriser function only if the hardware isn't yet ready */
+  uint32_t bitrate; /* bits/second */
+  _kernel_oserror *e = zoran->characteriser->readstreaminfo(zoran->characteriserhandle, 3, &bitrate);
+  if (e != NULL)
+  {
+    bitrate = 0;
+  }
+  if (bitrate == 0)
+  {
+    *length = 0;
+  }
+  else
+  {
+    uint32_t bytes_buffered;
+    zoran->howmuchdata(0, zoran->toplevelhandle, 0, &bytes_buffered);
+//char array[256];
+//sprintf(array,"[br=%d,bb=%d] ",bitrate,bytes_buffered);
+//DWrite_Write0(array);
+    *length = ((90 * 8) * bytes_buffered) / (bitrate / 1000); /* avoid overflows! */
+  }
   return NULL;
 }
 
 _kernel_oserror *Zoran_AdjustRate (uint32_t flags, stream_handle_t decoder_handle, zoran_interface_t *zoran)
 {
+  IGNORE(decoder_handle);
+  static struct
+  {
+    unsigned EXT: 8;
+    unsigned : 8;
+    unsigned LO_MSB: 8;
+    unsigned LO_LSB: 8;
+    unsigned : 8;
+    unsigned HI_MSB: 8;
+    unsigned HI_LSB: 8;
+  }
+  VCXO_Params =
+  {
+    8
+  };
+  switch (flags & 3)
+  {
+    case 1: /* slow */
+      VCXO_Params.LO_MSB = 500 >> 8;
+      VCXO_Params.LO_LSB = 500 & 0xFF;
+      VCXO_Params.HI_MSB = 65535 >> 8;
+      VCXO_Params.HI_LSB = 65535 & 0xFF;
+//      printf("S");
+      break;
+    case 2: /* fast */
+      VCXO_Params.LO_MSB = 65535 >> 8;
+      VCXO_Params.LO_LSB = 65535 & 0xFF;
+      VCXO_Params.HI_MSB = 500 >> 8;
+      VCXO_Params.HI_LSB = 500 & 0xFF;
+//      printf("F");
+      break;
+    default: /* normal */
+      VCXO_Params.LO_MSB = 5000 >> 8;
+      VCXO_Params.LO_LSB = 5000 & 0xFF;
+      VCXO_Params.HI_MSB = 5000 >> 8;
+      VCXO_Params.HI_LSB = 5000 & 0xFF;
+      break;
+  }
+  zoran->command(ZCMD_PARAM_2, (char *)&VCXO_Params, 0);
   return NULL;
 }
 
@@ -674,18 +757,22 @@ _kernel_oserror *Zoran_DataAvailable (unsigned int flags, void *session_id)
       static_SetSPDIF (zoran, samplerate);
       
 {
-  char DVOL_Params [4] = { 7, 0x07, 0xFF, 0xFC };
-  char PVOL_Params [7] = { 3, 0x07, 0xFF, 0xFF, 0x07, 0xFF, 0xFF };
-  char TVOL_Params [4] = { 2, 0x07, 0xFF, 0xFF };
-  char TENABLE_Params [4] = { 0, 0, 0, 0x30 };
-  char SPDIFENABLE_Params [4] = { 0, 0, 0, 0x87 }; /* 85=PCM 87=AC3 */
-  /* bodge */ SPDIFENABLE_Params[3] = 0x8F;
+//  char DVOL_Params [4] = { 7, 0x07, 0xFF, 0xFC };
+//  char PVOL_Params [7] = { 3, 0x07, 0xFF, 0xFF, 0x07, 0xFF, 0xFF };
+//  char TVOL_Params [4] = { 2, 0x07, 0xFF, 0xFF };
+//  char TENABLE_Params [4] = { 0, 0, 0, 0x30 };
 ////  zoran->command (ZCMD_PARAM_1, DVOL_Params, 0);
 //  zoran->command (ZCMD_PARAM_2, PVOL_Params, 0);
 //  zoran->command (ZCMD_PARAM_1, TVOL_Params, 0);
 //  zoran->command (ZCMD_PARAM_1, TENABLE_Params, 0);
-  zoran->command (ZCMD_PARAM_1, SPDIFENABLE_Params, 0); /* needs to be before function command! */
 }
+      
+      /* Initialise operations register (some bits need a subsequent function command to have effect) */
+      static_UpdateOperationsRegister(zoran, 0, ZOPREG_OP_OUT_ENABLE |
+                                                ZOPREG_OP_PCM_OUT |
+                                                ZOPREG_PACKETISED |
+                                                ZOPREG_AV_SYNC_EN |
+                                                ZOPREG_IRQ_ENABLE);
       
       zoran->unmaskstuffingirq ();
       
@@ -875,7 +962,7 @@ static void static_SendFunctionCommand (zoran_interface_t *zoran)
     }
     AC3_Params =
     {
-      0, 2, 0, 0,
+      0, 3/*2*/, 0, 0,
       0, 0, 0, 1, 1,
       0, 0,
       0x7F,
@@ -1108,6 +1195,8 @@ static _kernel_oserror *static_CallEvery (void *handle)
     ptc.word.lo = (response[0] << 24) | (response[1] << 16) | (response[2] << 8) | response[3];
     mpeg_time_t stc = { 0 };
     stc.word.lo = (response[4] << 24) | (response[5] << 16) | (response[6] << 8) | response[7];
+    /* Disable PTC-STC synchronisation inside Zoran for 2 seconds either side of 32-bit wraparound */
+    static_UpdateOperationsRegister(zoran, 0xFF ^ ZOPREG_AV_SYNC_EN, ZOPREG_AV_SYNC_EN * (abs((int) stc.word.lo) > 2 * 90000));
     /* Deduce the missing 33rd bit of the PTC */
     mpeg_interval_t diff = mpegtime_TimeDifference(ptc, base_stc);
     diff.word.hi = diff.word.lo >> 31; /* sign-extend from 32nd bit to 33rd bit */
@@ -1373,6 +1462,18 @@ printf ("Lo, Hi = %08X, %08X\n", lo, hi);
     zoran->command (ZCMD_PARAM_2, (char *)&VCXO_Params, 0);
   }
   return e;
+}
+
+static void static_UpdateOperationsRegister(zoran_interface_t *zoran, uint8_t AND_mask, uint8_t EOR_mask)
+{
+  static uint32_t cached = -1; /* guaranteed not to match any programming request */
+  uint32_t new_value = (cached & AND_mask) ^ EOR_mask;
+  if (new_value != cached)
+  {
+    char Params[4] = { 0, 0, 0, new_value };
+    zoran->command(ZCMD_PARAM_1, Params, 0);
+    cached = new_value;
+  }
 }
 
 #else
