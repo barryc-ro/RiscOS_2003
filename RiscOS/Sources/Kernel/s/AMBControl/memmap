@@ -50,6 +50,9 @@ AMB_LazyFixUp ROUT
         LDR     r12,[r12]
         CMP     r12,#0
         BEQ     %FT20
+        LDR     r1,AMBFlags
+        TST     r1,#AMBFlag_LazyMapIn_disable :OR: AMBFlag_LazyMapIn_suspend
+        BNE     %FT20
         SUBS    r0,r0,#ApplicationStart
         BMI     %FT20
         MOV     r0,r0,LSR #Log2PageSize                  ;address now in terms of pages from ApplicationStart
@@ -60,8 +63,24 @@ AMB_LazyFixUp ROUT
         CMP     r2,r0
         BLS     %FT20
 ;
-;need not check MappedInRegister first, since if abort has happened in range of current
-;AppSpace, then the page can be assumed to be mapped out
+; check/update the MappedIn bitmap
+;
+        ADR     r2,AMBMappedInRegister
+        ADD     r2,r2,r0,LSR #5-2
+        BIC     r2,r2,#3                                 ;r2 -> bitmap word affected
+        AND     r3,r0,#31
+        MOV     r5,#1
+        MOV     r5,r5,LSL r3                             ;mask for bit affected in bitmap word
+        LDR     r3,[r2]
+        TST     r3,r5                                    ;if page already mapped in, not a lazy abort
+        BNE     %FT20
+        ORR     r3,r3,r5                                 ;ok, mark that we are going to map this page in
+        STR     r3,[r2]
+        LDR     r2,AMBMappedInNpages                     ;count it
+        ADD     r2,r2,#1
+        STR     r2,AMBMappedInNpages
+;
+; now map in the the page that went pop
 ;
         ADD     r1,r1,#AMBNode_pages
         ADD     r1,r1,r0,LSL #2                          ;r1 -> page involved, in node page list
@@ -74,23 +93,10 @@ AMB_LazyFixUp ROUT
 ;
 ;here, r6 = page number of page involved, r4 = new L2PT entry value to map in page
 ;
-        LDR     r2,AMBMappedInNpages                     ;for convenience, update bitmap etc. here...
-        ADD     r2,r2,#1
-        STR     r2,AMBMappedInNpages
-        ADR     r2,AMBMappedInRegister
-        ADD     r2,r2,r0,LSR #5-2                        ;r2 -> bitmap word affected
-        BIC     r2,r2,#3
-        AND     r3,r0,#31
-        MOV     r5,#1
-        MOV     r5,r5,LSL r3                             ;mask for bit affected in bitmap word
-        LDR     r3,[r2]
-        ORR     r3,r3,r5
-        STR     r3,[r2]
-
         ADD     r0,r0,#ApplicationStart:SHR:Log2PageSize ;address now in terms of pages from 0
         MOV     r5,#L2PT
         STR     r4,[r5,r0,LSL #2]                        ;update L2PT
-
+;
         MOV     r5,#0
         LDR     r5,[r5,#CamEntriesPointer]
         ADD     r5,r5,r6,LSL #3                          ;r5 -> CAM entry affected
@@ -106,6 +112,74 @@ AMB_LazyFixUp ROUT
 
   ] ;AMB_LazyMapIn
 
+; ----------------------------------------------------------------------------------
+
+  [ AMB_LazyMapIn
+
+;
+; If page of given logical address (r0) is in current app space, make sure page is
+; 'honest' ie. properly mapped in. This is for things like FindMemMapEntries
+; that must return sensible info (and presumably their client needs a consistent
+; view of app space mapping, so that laziness is transparent)
+;
+AMB_MakeHonestLA  ROUT
+        CMP     r0,#AbsMaxAppSize                        ;quick dismiss if definitely not app address
+        MOVHS   pc,lr
+        Push    "r1,r12,lr"        
+        MOV     r12,#AMBControl_ws
+        LDR     r12,[r12]
+        CMP     r12,#0
+        BEQ     %FT90                                    ;we're dormant!
+        SUBS    r14,r0,#ApplicationStart
+        BMI     %FT90                                    ;below app space
+        MOV     r14,r14,LSR #Log2PageSize                ;pages from ApplicationStart
+        LDR     r1,AMBMappedInNode 
+        CMP     r1,#0
+        BEQ     %FT90                                    ;no node mapped in
+        LDR     r1,[r1,#AMBNode_Npages]
+        CMP     r1,r14                                   ;HI if log addr is in current app space
+        LDRHI   r1, [r0,#0]                              ;make honest if necessary (magic of abort fixups!)
+90
+        Pull    "r1,r12,pc"
+
+
+; similar to AMB_MakeHonestLA, but for page of given page number (r0)
+;
+AMB_MakeHonestPN  ROUT
+        Push    "r1-r3,r12,lr"
+        MOV     r12,#AMBControl_ws
+        LDR     r12,[r12]
+        CMP     r12,#0
+        BEQ     %FT90                                    ;we're dormant!
+        MOV     r14,#0
+        LDR     r1,[r14,#MaxCamEntry]
+        CMP     r0,r1
+        BHI     %FT90                                    ;invalid page number
+        LDR     r1,[r14,#CamEntriesPointer]
+        LDR     r1,[r1,r0,LSL #3]                        ;logical address from CAM
+        LDR     r14,=Nowhere
+        TEQ     r1,r14
+        BNE     %FT90                                    ;only a page at Nowhere might be dishonest
+        LDR     r1,AMBMappedInNode                       ;let's check the current node
+        CMP     r1,#0
+        BEQ     %FT90                                    ;no node mapped in
+        LDR     r14,[r1,#AMBNode_Npages]
+        MOV     r14,r14,LSL #Log2PageSize
+        ADD     r14,r14,#ApplicationStart                ;top of current app space
+        ADD     r1,r1,#AMBNode_pages                     ;[r1] is page number
+        MOV     r2,#ApplicationStart                     ;r2 is logical address for page
+10
+        CMP     r2,r14
+        BHS     %FT90
+        LDR     r3,[r1],#4                               ;next page number in node
+        TEQ     r3,r0                                    ;see if its the one that wants to be honest
+        ADDNE   r2,r2,#PageSize                          ;next logical address
+        BNE     %BT10
+        LDR     r1,[r2,#0]                               ;make honest if necessary (magic of abort fixups!)
+90
+        Pull    "r1-r3,r12,pc"
+
+  ] ;AMB_LazyMapIn
 
 ; ----------------------------------------------------------------------------------
 ;
