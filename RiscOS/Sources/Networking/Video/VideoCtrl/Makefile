@@ -250,7 +250,7 @@ clean:
 	@echo
 	@echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS}
+${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS} ${DIRS}
 	@echo
 	${MKDIR} aof
 	${LD} -o $@ -aof ${ROM_OBJS} ${LIBS} ${ROMCSTUBS}
