@@ -581,13 +581,16 @@ getencodingid Entry "R0-R5,R9"
         BL      findblockfromID         ; try to find font block
         BVS     %FT99
 
+      [ newmapping
+        BL      getalphabet_R1          ; ALWAYS use encoding for current alphabet if not specified in font string
+        B       %FT04
+      |
         LDR     R14,[R2,#lff_flags]     ; see if this is a 'language font'
-
         Debug   enc,"getencodingid: block, flags =",R2,R14
-
         TST     R14,#lfff_symfont       ; if font is symbol and language font, go for the symbol version by default
         BLEQ    getalphabet_R1          ; if so, use encoding for current alphabet
         BEQ     %FT04
+      ]
 
 05      MOV     R2,#0
         MOV     R3,#0
@@ -668,6 +671,8 @@ msf_master      #       1               ; FindFont called with R2 = -1
 
 DefineFont Entry "R0"                   ; save font handle for later
 
+        Debug   enc,"DefineFont"
+
         BL      deletefont              ; clear out any existing data - VDU 23,26,<font> etc.
         BVS     %FT100
 
@@ -745,11 +750,16 @@ DefineFont Entry "R0"                   ; save font handle for later
         ADD     R14,R6,#hdr_encoding
         STMIA   R14,{R7,R8,R9}
 
-        MOV     R14,#-2                 ; special marker which gets setleafnames_R6 to try again
+        MOV     R14,#base_unknown       ; mark so getmapping_fromR6 will work it out
         STR     R14,[R6,#hdr_base]
 
-        BL      setleafnames_R6         ; set up IntMetricsFName and OutlinesFName buffers
-        BVS     %FT99                   ; can only do any cacheing if [R6,#hdr_base] = -2
+        Debug   enc,"DefineFont: R2 =",R2
+
+      [ :LNOT: newmapping
+        ; WHY does it call this now (before even setting up the master font handle)?
+        BLVC    setleafnames_R6         ; set up IntMetricsFName and OutlinesFName buffers
+        BVS     %FT99                   ; can only do any cacheing if [R6,#hdr_base] = base_unknown
+      ]
 
 ; if this is a master font, read header information from disc
 ; NB: slave font uses pathname of master if files are loaded
@@ -758,7 +768,7 @@ DefineFont Entry "R0"                   ; save font handle for later
         BGE     slavefont
 
         MOV     R14,#msf_master
-        STRB    R14,[R6,#hdr_masterflag] ; this is a master font
+        STRB    R14,[R6,#hdr_masterflag]
 
         BL      MakePathName            ; constructs a subblock with pathname
         BLVC    GetMetricsHeader        ; read font name etc.
@@ -793,7 +803,7 @@ slavefont
 ; setup a copy of the threshold information (if needed ie. newthresholds = true)
 
       [ newthresholds
- Debug setth,"Calling Setthresholds from DefineFont... R6 =",R6
+        Debug   setth,"Calling Setthresholds from DefineFont... R6 =",R6
         BL      setthresholds           ; setup a copy of the thresholds table
       ]
 
@@ -852,6 +862,7 @@ nocharlist
         LDRB    R0,[R1,#-1]             ; master font is explicit
         BL      getfontheaderptr        ; R7 -> font header block
         BVS     %FT99
+        LDR     R14,[R7,#hdr_usage]     ; ----- added by NRaine on 15th Oct 98 !!!
         ADD     R14,R14,#1              ; 'find' font
         STR     R14,[R7,#hdr_usage]     ; errors from now on must lose this
         BL      markfontclaimed_R7      ; mark master font claimed
@@ -912,6 +923,9 @@ copyfontname
 
 ; slave font must read in one set of pixel data, to initialise font bbox
 
+        BL      setleafnames_R6         ; OK to do this now, as the master font is set up
+        BVS     %FT99
+
         BL      GetPixels4Header
         BLVS    GetPixels1Header        ; try this as a last resort
 
@@ -956,6 +970,8 @@ copyfontname
 
 getfontheaderptr Entry ""
 
+        Debuga  th,"getfontheaderptr: R0 =",R0
+
         CMP     R0,#maxf
         TEQCS   R0,R0
         TEQNE   R0,#0
@@ -968,6 +984,8 @@ getfontheaderptr Entry ""
         LDRNE   R14,[R7,#hdr_usage]
         TEQNE   R14,#0
         BLEQ    errnometricsdata        ; font does not exist
+
+        Debug   th,", R7 =",R7
 
         EXIT
 
@@ -990,11 +1008,22 @@ xerr_BadFontNumber ROUT
 ;       OutlinesFName = "IntMetrics" or "Intmetrics<n>"
 ;       No cacheing allowed in this routine (called from openmetrics)
 
-setleafnames_R6 Entry "R1,R2"
+setleafnames_R6 Entry "R1,R2,R7"
 
+      [ newmapping
+        LDRB    R0,[R6,#hdr_masterfont]
+        CMP     R0,#0
+        MOVEQ   R7,R6
+        BLNE    getfontheaderptr                ; R7 -> master font header
+
+        LDR     R2,[R7,#hdr_base]               ; must not be base_unknown at this stage
+        CMP     R2,#0
+        BGE     %FT02
+      |
         LDR     R0,[R6,#hdr_encoding]
         TEQ     R0,#0
         BNE     %FT01
+      ]
 
         ADR     R0,outlinesfname
         STR     R0,OutlinesFName
@@ -1010,13 +1039,16 @@ metricsfname    DCB     "IntMetrics",0          ; must be word-aligned (for cons
 outlinesfname   DCB     "Outlines",0            ; must be word-aligned (for constructname)
                 ALIGN
 
-01      LDR     R2,[R6,#hdr_base]               ; -2 => not yet known
-        CMP     R2,#-2                          ; note that this cannot be done unless calling from Font_FindFont
+      [ :LNOT: newmapping
+01      LDR     R2,[R6,#hdr_base]               ; base_unknown => not yet known
+        CMP     R2,#base_unknown                ; note that this cannot be done unless calling from Font_FindFont
         BLEQ    getmapping_fromR6               ; because it will involve some cacheing
         EXIT    VS                              ; R1 -> encoding, or is 0
 
-        LDR     R2,[R6,#hdr_base]               ; set up by getmapping_fromR6
-        LDR     R14,oldbaseencoding
+        LDR     R2,[R6,#hdr_base]               ; set up by GetFontBaseEncoding
+      ]
+
+02      LDR     R14,oldbaseencoding
         TEQ     R2,R14
         STRNE   R2,oldbaseencoding
 
@@ -1051,9 +1083,11 @@ outlinesfname   DCB     "Outlines",0            ; must be word-aligned (for cons
 ;;         [R6,#hdr_PathName] -> first dir containing 'IntMetrics'
 ;;         [R6,#hdr_PathName2] -> alias dir, if Outlines = font name
 ;;
+;; Only call this for the master font - the slaves can just use the master font's path info
+;;
 ;;----------------------------------------------------------------------------
 
-MakePathName Entry "R1-R5,R8,R9"
+MakePathName    Entry "R1-R5,R8,R9"
 
         Debug   path,"MakePathName: R1 -> ",R1
 
@@ -1065,11 +1099,16 @@ MakePathName Entry "R1-R5,R8,R9"
         ADDVC   R8,R6,#hdr_PathName
         BLVC    makepathblock           ; make cache block for it
 
+      [ newmapping
+        BLVC    GetFontBaseEncoding     ; must call this after [R6,#hdr_PathName] set up (see above)
+        BLVC    setleafnames_R6         ; must call this to set up "Outlines<n>"
+      ]
+
 ; check for aliased pixel files - if Outlines contains another font name
 ; NB: any outline file of length < 256 byte is assumed to contain a font name
 
-        LDRVC   R7,OutlinesFName
-        BLVC    constructname           ; R1 -> full name, R2-R5 corrupted
+        LDR     R7,OutlinesFName
+        BL      constructname           ; R1 -> full name, R2-R5 corrupted
         MOVVC   R0,#OSFile_ReadNoPath
         SWIVC   XOS_File
         TEQ     R0,#object_file
@@ -2107,9 +2146,9 @@ frommaster
 GetPixelsHeader_checknasty Entry "R1"
 
         LDRB    R14,[R7]
-        TEQ     R14,#leaf_scanfontdir
+        CMP     R14,#leaf_scanfontdir           ; CLRV
         BLEQ    GetPixelsHeader_R7
-        EXITS   VC
+        EXIT    VC
 
         LDR     R14,=ErrorNumber_FontNotFound
         LDR     R1,[R0]
@@ -2291,10 +2330,12 @@ constructname Entry "R0,R2-R7"
 
 02      LDR     R7,[sp,#6*4]            ; R7 -> leafname
         LDRB    R1,[R7]                 ; R1 = I, f, b, O, x, 0 (for Font_ReadFontPrefix)
+      [ :LNOT: newmapping
         TEQ     R1,#"b"
         TEQNE   R1,#"f"                 ; bitmap files use encoding subdirectory (if present)
         TEQNE   R1,#"x"
         BEQ     %FT04
+      ]
 
         TEQ     R1,#"O"                 ; if Outlines,
         TOGPSR  Z_bit, R14
@@ -2316,6 +2357,8 @@ constructname Entry "R0,R2-R7"
         DebugS  th,"Constructname returns ",R1
 
         EXITS                           ; must preserve flags
+
+      [ :LNOT: newmapping
 
 ; if bitmap file, try to put the encoding name before the leafname
 
@@ -2349,6 +2392,7 @@ constructname Entry "R0,R2-R7"
         DebugS  th,"Constructname returns ",R1
 
         EXITS                           ; must preserve flags
+      ]
 
 ; ............................................................................
 
