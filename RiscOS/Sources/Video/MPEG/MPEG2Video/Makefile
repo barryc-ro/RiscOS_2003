@@ -20,11 +20,11 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = mkdir -p
-AS      = aasm
+AS      = objasm
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
+ASFLAGS = -depend !Depend -Stamp -quit -module -pd "tvtype SETS \"${TV}\""
 CPFLAGS = ~cfr~v
 
 #
@@ -53,6 +53,7 @@ all: ${TARGET}
 	@echo ${COMPONENT}: disc modules built
 
 install: ${TARGET} install_dirs
+        ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: disc modules installed
 
@@ -63,11 +64,10 @@ clean:
         ${RM} ${TARGET}
         ${RM} s.Data.BinSetup
         ${RM} s.Data.BinSetupC
-        -stripdepnd
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE} s.Data.BinSetupC
-        ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
+        ${AS} -o $@ ${SOURCE} ${ASFLAGS}
 
 s.Data.BinSetup: ${SETUP} Tools.ConvSetup
 	/Tools.ConvSetup ${SETUP} s.Data.BinSetup
