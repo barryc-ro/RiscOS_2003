@@ -3,28 +3,31 @@
 /*  File: main.c                                                                    */
 /*                                                                                  */
 /*  Copyright © 1998 Acorn Computers Ltd., Cambridge, England                       */
-/*  Documents: State machine spreadsheets, drawing no.s xxxx,xxx/DS, .....          */
+/*  Documents: State machine spreadsheets, drawing no.s 2205,032/DS, 2205,033/DS,   */
+/*             2205,034/DS, 2205,035/DS,2205,036/DS.                                */
+/*             Funai NC2 OS Upgrade Software Functional Specification, 2205,011/FS  */
+/*             Funai NC2 OS Upgrade Top Level Software Design Spec'n, 2205,011/DS   */
+/*             Funai NC2 OS Upgrade Data Decompression Detailed Design 2205,019/DS  */
+/*             Funai NC2 OS Upgrade Flash Programming Detailed Design 2205,018/DS   */
+/*             Funai NC2 OS Upgrade User Interface Detailed Design, 2205,016/DS     */
 /*                                                                                  */
 /*  Modification History:                                                           */
 /*  Date         Engineer  Change                                                   */
 /*  ----         --------  ------                                                   */
-/*  xx-Jul-1998  SR        Created                                                  */
+/*  17-Jul-1998  SR        Created                                                  */
 /*                                                                                  */
 /************************************************************************************/
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-
 #include "swis.h"
 #include "kernel.h"
 #include "event.h"
-
-#include "debuglib/DebugLib.h"  /* Debug Library */
+#include "debuglib/DebugLib.h"
 #ifdef MEMCHECK
-  #include "MemCheck:MemCheck.h"
+#include "MemCheck:MemCheck.h"
 #endif
-
 #include "ui.h"
 #include "errors.h"
 #include "main.h"
@@ -34,36 +37,34 @@
 #include "ftp.h"
 #include "progrmng.h"
 
-enum engine_state {WELCOME,
-                   WAITNG_SRVR_ACCESS_INFO,
-                   DIALLING,
-                   PPP,
-                   HANGING_UP,
-                   FTP,
-                   PPP_DISCONNECTING,
-                   FTP_CLOSING,
-                   PROGRAMMING_FLASH};
+enum engine_state {WELCOME,WAITNG_SRVR_ACCESS_INFO,DIALLING,PPP,HANGING_UP,
+                   FTP,PPP_DISCONNECTING,FTP_CLOSING,PROGRAMMING_FLASH};
+enum start_close_at {FLASH_PROGRAMMING,FTP_CLOSE,PPP_DISCONNECT,DIALLER_HANGUP};
 
-enum start_close_at {FLASH_PROGRAMMING,
-                     FTP_CLOSE,
-                     PPP_DISCONNECT,
-                     DIALLER_HANGUP};
+#ifdef LOGFILE
+FILE *logfile = NULL;
+#endif
 
-static engine_state = -1;
-//static int start_upgrade_flag = FALSE; /* True if start upgrade needs to be called by the engine. */
-static int usr_abort = FALSE;
+#ifdef DEVELOPMENT
+int dialling_started = 0;
+#endif
+int quit = 0;
 int err_abort = FALSE;
+setup_details_t *usr_details = NULL;
+
+static int usr_abort = FALSE;
 static int callback_start_upgrade_flag = FALSE;
 static int callback_user_abort_flag = FALSE;
+static int suspended = FALSE;
+static engine_state = -1;
 
-int suspended = FALSE;
-int quit = 0;
-FILE *logfile = NULL;
-setup_details_t *usr_details = NULL;
+
+/************************************************************************************/
+/*                            Function Prototypes                                   */
+/************************************************************************************/
 
 static int engine_initialise(void);
 static int main_loop(int event_code,WimpPollBlock *event,IdBlock *id_block,void *handle);
-static int start_dialler_sm(void);
 static void dialling_state(void);
 static void ppp_state(void);
 static void ftp_state(void);
@@ -79,7 +80,6 @@ static void user_abort(void);
 /*            handlers for button presses.  The engine sets up a handler for        */
 /*            processing on null events.                                            */
 /************************************************************************************/
-
 int main(int argc, char *argv[])
 {
   WimpPollBlock block;
@@ -87,20 +87,23 @@ int main(int argc, char *argv[])
   _kernel_oserror *er;
   int rc;
 
-#ifdef MEMCHECK
-  MemCheck_Init();
-  MemCheck_InterceptSCLStringFunctions();
-  MemCheck_SetStoreMallocFunctions(1);
-  MemCheck_RedirectToFilename ("RAM::0.$.up_memch");
-  atexit (MemCheck_OutputBlocksInfo);
-  MemCheck_SetReadChecking (0);
-#endif
+     IGNORE(argv);
+     IGNORE(argc);
 
-  /* Initialise Debug Library */
-  debug_initialise ("NCUpgrade", "","");
-  debug_output_device (DEBUGIT_OUTPUT);
-  /* debug_output_device (PDEBUG_OUTPUT); */
-  debug_atexit ();
+     #ifdef MEMCHECK
+     MemCheck_Init();
+     MemCheck_InterceptSCLStringFunctions();
+     MemCheck_SetStoreMallocFunctions(1);
+     MemCheck_RedirectToFilename ("$.memcheck");
+     atexit (MemCheck_OutputBlocksInfo);
+     MemCheck_SetReadChecking (0);
+     #endif
+
+     /* Initialise Debug Library */
+     debug_initialise ("NCUpgrade", "","");
+     debug_output_device (DEBUGIT_OUTPUT);
+     /* debug_output_device (PDEBUG_OUTPUT); */
+     debug_atexit ();
 
      #ifdef LOGFILE
      if ((logfile = fopen("logfile","w")) == NULL)
@@ -115,6 +118,22 @@ int main(int argc, char *argv[])
 
      while (quit == 0)
      {
+         #ifdef DEVELOPMENT
+         static int last_time = 0;
+         _kernel_swi_regs regs;
+         _kernel_swi(OS_WriteI+4,&regs,&regs);
+         _kernel_swi(OS_WriteI+30,&regs,&regs);
+         _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+         printf("%d\n",regs.r[0]);
+         if ((regs.r[0] > last_time + 50) && (dialling_started == 1))
+         {
+             last_time = regs.r[0];
+             regs.r[0] = (int)"modemstats";
+             _kernel_swi(OS_CLI,&regs,&regs);
+         }
+         _kernel_swi(OS_WriteI+5,&regs,&regs);
+         #endif
+
          if ((er = event_poll(&code, &block, 0)) != NULL)
          {
               error_handler(__FILE__,__LINE__,"main()",er->errnum,
@@ -131,7 +150,6 @@ int main(int argc, char *argv[])
 /*            giving the user a chance to change default settings if required.      */
 /* Returns:   'FAILURE' if the engine has not been initialised, 'SUCCESS' if it has.*/
 /************************************************************************************/
-
 static int engine_initialise(void)
 {
   int flags = 0;
@@ -167,16 +185,16 @@ static int engine_initialise(void)
 }
 
 /************************************************************************************/
-/* Function:       main_loop()                                            */
-/* Behaviour:*/
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:       main_loop()                                                      */
+/* Behaviour:      Main polling loop.                                               */
+/* Prerequisites:  engine_initialise()                                              */
 /************************************************************************************/
-
 static int main_loop(int event_code,WimpPollBlock *event,IdBlock *id_block,void *handle)
 {
+    IGNORE(handle);
+    IGNORE(id_block);
+    IGNORE(event_code);
+    IGNORE(event);
 
     if (callback_user_abort_flag == TRUE)    /* Respond to any outstanding callback */
         user_abort();                        /* requests.                           */
@@ -187,32 +205,16 @@ static int main_loop(int event_code,WimpPollBlock *event,IdBlock *id_block,void 
 }
 
 /************************************************************************************/
-/* Function: engine_state_machine()                                                 */
+/* Function:   engine_state_machine()                                               */
+/* Behaviour:  This function and its sub-routines make up the main state machine as */
+/*             described in spreadsheet 2205,032/DS.  (Callbacks described towards  */
+/*             end of main.c).                                                      */
 /************************************************************************************/
 static void engine_state_machine(void)
 {
       switch (engine_state)
       {
-        case WELCOME: /*
-                      if (start_upgrade_flag == TRUE)
-                      {
-                           Tell the UI Library we've started upgrading.
-                           Needs to come before the actual call to start_upgrade()
-
-                          if ((er = ui_upgrade_started(flags)) != NULL)
-                          {
-                               error_handler(__FILE__,__LINE__,"main_loop()",er->errnum,
-                                 er->errmess,WARNING);
-                          }
-                          else
-                          {
-                           start_upgrade(flags,NULL);
-                           start_upgrade_flag = FALSE;
-                          }
-                      }
-                      */
-
-                      if (callback_start_upgrade_flag == TRUE)
+        case WELCOME: if (callback_start_upgrade_flag == TRUE)
                       {
                           start_upgrade();
                       }
@@ -253,16 +255,10 @@ static void engine_state_machine(void)
 
 /************************************************************************************/
 /* Function:  start_dialler_sm()                                                    */
-/* Behaviour: .... */
-/*            Calls to ui_show_error() at this level run the risk of overwriting    */
-/*            more specific error reporting that will already have taken place      */
-/*            within the appropriate sub-routines used by this function.            */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns: IN_PROGRESS, DONE, or ERROR.  The caller only needs to know whether or  */
-/*          not an error occurred.  The caller does not need to distinguish between */
-/*          done and in progress.                                                   */
-/* Outputs:*/
+/* Behaviour: Starts the dialler state machine.  Ref: 2205,032/DS.                  */
+/*            Calls to ui_show_error() happen at the lower levels.  If used here    */
+/*            you risk overwriting more specific ui_show_error()'s lower down.      */
+/* Returns:   IN_PROGRESS, DONE, or ERROR.                                          */
 /************************************************************************************/
 static int start_dialler_sm(void)
 {
@@ -281,8 +277,7 @@ static int start_dialler_sm(void)
                         engine_state = DIALLING;
                         return IN_PROGRESS;
                         break;
-      case ERROR:       /* ui_show_error() has already been called */
-                        engine_state = WAITNG_SRVR_ACCESS_INFO;
+      case ERROR:       engine_state = WAITNG_SRVR_ACCESS_INFO;
                         return ERROR;
                         break;
       case DONE:        rc = ppp_stateMachine(START);
@@ -291,8 +286,7 @@ static int start_dialler_sm(void)
                           case IN_PROGRESS: engine_state = PPP;
                                             return IN_PROGRESS;
                                             break;
-                          case ERROR:       /* ui_show_error() has already been called */
-                                            engine_state = WELCOME;
+                          case ERROR:       engine_state = WELCOME;
                                             return ERROR;
                                             break;
                           case DONE:        rc = ftp_stateMachine(START);
@@ -327,17 +321,11 @@ static int start_dialler_sm(void)
 }
 
 /************************************************************************************/
-/* Function:      dialling_state()                                                  */
-/* Behaviour:                                                                       */
-/*            Calls to ui_show_error() at this level run the risk of overwriting    */
-/*            more specific error reporting that will already have taken place      */
-/*            within the appropriate sub-routines used by this function.            */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  dialling_state()                                                      */
+/* Behaviour: As defined in the main state machine spreadsheet (2205,032/DS).       */
+/*            Calls to ui_show_error() happen at the lower levels.  If used here    */
+/*            you risk overwriting more specific ui_show_error()'s lower down.      */
 /************************************************************************************/
-
 static void dialling_state(void)
 {
   int rc;
@@ -375,15 +363,10 @@ static void dialling_state(void)
 }
 
 /************************************************************************************/
-/* Function:      ppp_state()                                                       */
-/* Behaviour:                                                                       */
-/*            Calls to ui_show_error() at this level run the risk of overwriting    */
-/*            more specific error reporting that will already have taken place      */
-/*            within the appropriate sub-routines used by this function.            */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  ppp_state()                                                           */
+/* Behaviour: As defined in the main state machine spreadsheet (2205,032/DS).       */
+/*            Calls to ui_show_error() happen at the lower levels.  If used here    */
+/*            you risk overwriting more specific ui_show_error()'s lower down.      */
 /************************************************************************************/
 static void ppp_state(void)
 {
@@ -422,15 +405,10 @@ static void ppp_state(void)
 }
 
 /************************************************************************************/
-/* Function:      ftp_state()                                                       */
-/* Behaviour:                                                                       */
-/*            Calls to ui_show_error() at this level run the risk of overwriting    */
-/*            more specific error reporting that will already have taken place      */
-/*            within the appropriate sub-routines used by this function.            */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  ftp_state()                                                           */
+/* Behaviour: As defined in the main state machine spreadsheet (2205,032/DS).       */
+/*            Calls to ui_show_error() happen at the lower levels.  If used here    */
+/*            you risk overwriting more specific ui_show_error()'s lower down.      */
 /************************************************************************************/
 static void ftp_state(void)
 {
@@ -467,15 +445,10 @@ static void ftp_state(void)
 }
 
 /************************************************************************************/
-/* Function:      programming_state()                                               */
-/* Behaviour:                                                                       */
-/*            Calls to ui_show_error() at this level run the risk of overwriting    */
-/*            more specific error reporting that will already have taken place      */
-/*            within the appropriate sub-routines used by this function.            */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  programming_state()                                                   */
+/* Behaviour: As defined in the main state machine spreadsheet (2205,032/DS).       */
+/*            Calls to ui_show_error() happen at the lower levels.  If used here    */
+/*            you risk overwriting more specific ui_show_error()'s lower down.      */
 /************************************************************************************/
 static void programming_state(void)
 {
@@ -505,17 +478,15 @@ static void programming_state(void)
 }
 
 /************************************************************************************/
-/* Function:      close()                                                           */
-/* Behaviour:     This function saves code duplication.  Enter the switch state-    */
-/*                ment at the appropriate point and then drop through to the end,   */
-/*                unless we hit IN_PROGRESS along the way in which case we return   */
-/*                to poll the wimp.  Calls to ui_show_error() happen at the lower   */
-/*                levels.  If used at the current level you risk overwriting more   */
-/*                specific error reporting by the UI Library from lower down.       */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  close()                                                               */
+/* Behaviour: Ref: main state machine spreadsheet 2205,032/DS.                      */
+/*            This function saves code duplication.  Enter the switch statement at  */
+/*            the appropriate point and then drop through to the end, unless we hit */
+/*            IN_PROGRESS along the way in which case we return to poll the wimp.   */
+/*            Calls to ui_show_error() happen at the lower levels.  If used here    */
+/*            you risk overwriting more specific error reporting by the UI Library  */
+/*            from lower down.                                                      */
+/* Requires:  'start_close_at', which is the point at which to start closing.       */
 /************************************************************************************/
 static void close(enum start_close_at start_close_at)
 {
@@ -523,7 +494,11 @@ static void close(enum start_close_at start_close_at)
   unsigned int flags = 0;
   _kernel_oserror *er = NULL;
 
-  decomp_close();
+  decomp_close();   // May be called more than once if a return to close() is required.
+                    // A return to close would be required if IN_PROGRESS was returned
+                    // from one of the closing stages contained within close().
+                    // decomp_close() will ignore our call if it has already been closed,
+                    // and knows to reset itself if the user restarts.
 
   switch (start_close_at)
   {
@@ -639,15 +614,27 @@ static void close(enum start_close_at start_close_at)
 /* callback, and the engine actually executing the callback.  Otherwise, the UI     */
 /* library cannot guarantee that the pop-up will be visible.                        */
 
-/* As a result of the above, the callback functions simply set a flag and then      */
+/* As a result of the above, some callback functions simply set a flag and then     */
 /* return for a wimp poll before actually carrying out the work associated with the */
 /* callback.                                                                        */
 
 /************************************************************************************/
-/* Function:      callback_start_upgrade()                                          */
+/* Function:  callback_start_upgrade()                                              */
+/* Behaviour: Called as a result of the user clicking on the upgrade button once    */
+/*            all setup values have been entered.  The user may have changed default*/
+/*            setup info that was previously read from nvram and passed to the UI,  */
+/*            so we need to read back the setup info and resave any new default     */
+/*            settings.  For reasons described above, we set a start upgrade        */
+/*            callback flag and return for a wimp poll before carrying out any work */
+/*            associated with the callback.                                         */
+/* Requires:  - 'flags', unused.                                                    */
+/*            - 'defaults', latest setup info as supplied by the user.              */
+/* Returns:   NULL.  (If an error occurs when the work associated with the callback */
+/*            is carried out it is properly dealt with in that context).            */
 /************************************************************************************/
 extern _kernel_oserror *callback_start_upgrade(unsigned int flags,setup_details_t *defaults)
 {
+    IGNORE(flags);
     usr_details = defaults;
     callback_start_upgrade_flag = TRUE;
     return NULL;
@@ -659,15 +646,10 @@ extern _kernel_oserror *callback_start_upgrade(unsigned int flags,setup_details_
 /*                and start the dialler state machine.  If the engine is not ready  */
 /*                to start upgrading, set a flag which reminds us that the UI       */
 /*                Library has made a start upgrade request.                         */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:      */
-/* Outputs:*/
 /************************************************************************************/
 static void start_upgrade(void)
 {
   int rc;
-  extern int program_flash_reset_flag;
 
     if (usr_details != NULL)
         write_nvram_defaults(usr_details);
@@ -698,21 +680,25 @@ static void start_upgrade(void)
 }
 
 /************************************************************************************/
-/* Function:      callback_user_abort()                                             */
+/* Function:   callback_user_abort()                                                */
+/* Behaviour:  Called as a result of the user clicking on the abort button.  For    */
+/*             reasons described above we set a flag and return for a wimp poll     */
+/*             before actually carrying out work associated with the callback.      */
+/* Returns:    NULL.  (If an error occurs when the work is carried out it is        */
+/*             properly dealt with in that context).                                */
 /************************************************************************************/
 extern _kernel_oserror *callback_user_abort(unsigned int flags)
 {
+    IGNORE(flags);
     callback_user_abort_flag = TRUE;
     return NULL;
 }
 
 /************************************************************************************/
-/* Function:      user_abort()                                                     */
-/* Behaviour:                                                  */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:      */
-/* Outputs:*/
+/* Function:   user_abort()                                                         */
+/* Behaviour:  Initiates closure as a result of user abort.  On exit from this      */
+/*             routine we unset the callback flag to say that we've responded to    */
+/*             the callback and therefore do not need to return to this routine.    */
 /************************************************************************************/
 static void user_abort(void)
 {
@@ -759,14 +745,11 @@ static void user_abort(void)
 }
 
 /************************************************************************************/
-/* Function:      engine_reboot()                                                   */
-/* Behaviour:     Reboot the box.                                                   */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:       Does not exit (PRM p.5a-162).*/
-/* Outputs:*/
+/* Function:   engine_reboot()                                                      */
+/* Behaviour:  Reboot the box.                                                      */
+/* Requires:   - 'flags', currently unused.                                         */
+/* Returns:    Does not exit (PRM p.5a-162).                                        */
 /************************************************************************************/
-
 extern _kernel_oserror *engine_reboot(unsigned int flags)
 {
   _kernel_swi_regs regs;
@@ -774,12 +757,17 @@ extern _kernel_oserror *engine_reboot(unsigned int flags)
 
     #ifdef LOGFILE
     if (logfile != NULL)
+    {
         fclose(logfile);
+        logfile = NULL;
+    }
     #endif
+
+    IGNORE(flags);
 
     if ((er = _kernel_swi(OS_Reset,&regs,&regs)) != NULL)
     {
-         error_handler(__FILE__,__LINE__,"engine_reboot()",er->errnum,er->errmess,FATAL);
+         error_handler(__FILE__,__LINE__,"engine_reboot()",er->errnum,er->errmess,WARNING);
     }
     return NULL;
 }
@@ -787,14 +775,15 @@ extern _kernel_oserror *engine_reboot(unsigned int flags)
 /************************************************************************************/
 /* Function: encountered_error()                                                    */
 /* Behaviour: The UI Library has encountered a severe error.  Attempt to display    */
-/*            the error message on screen.                                          */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:      */
-/* Outputs:*/
+/*            the error message on screen (not guaranteed).  Also attempts to save  */
+/*            what has happened to a system variable via our error handler.         */
+/* Requires:  - 'flags', currently unused.                                          */
+/*            - 'error', which points to the error numer and error message.         */
+/* Returns:   NULL                                                                  */
 /************************************************************************************/
 extern _kernel_oserror *encountered_error(unsigned int flags,_kernel_oserror *error)
 {
+    IGNORE(flags);
     puts("The NC has experienced a technical fault.");
     puts("Please contact your supplier with the following error report:");
     puts("  Severe UI error.");
@@ -805,49 +794,51 @@ extern _kernel_oserror *encountered_error(unsigned int flags,_kernel_oserror *er
 }
 
 /************************************************************************************/
-/* Function:      pause()                                                     */
-/* Behaviour:     Originally intended as a callback.  In future it may well be used */
-/*                as a callback but for now it is used to prevent the engine        */
-/*                displaying the welcome screen before the user has had a chance to */
-/*                click OK on the error pop up.                                     */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:      */
-/* Outputs:*/
+/* Function:   pause()                                                              */
+/* Behaviour:  Originally intended as a callback.  In future it may well be used as */
+/*             a callback but for now it is used to prevent the engine displaying   */
+/*             the welcome screen before the user has had a chance to  click OK on  */
+/*             the error pop up.                                                    */
+/* Requires:  'flags', currently unused.                                            */
+/* Returns:    NULL                                                                 */
 /************************************************************************************/
 extern _kernel_oserror *pause(unsigned int flags)
 {
+    IGNORE(flags);
     suspended = TRUE;
     return NULL;
 }
 
 /************************************************************************************/
-/* Function:      resume()                                                     */
-/* Behaviour:                                                  */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:      */
-/* Outputs:*/
+/* Function:   resume()                                                             */
+/* Behaviour:  Unsets pause as described above.  Called by the UI library when the  */
+/*             user acknowledges that an error has occurred.                        */
+/* Requires:  'flags', currently unused.                                            */
+/* Returns:    NULL                                                                 */
 /************************************************************************************/
 extern _kernel_oserror *resume(unsigned int flags)
 {
-  _kernel_oserror *er = NULL;
-
+    IGNORE(flags);
     suspended = FALSE;
     return NULL;
 }
 
 /************************************************************************************/
-/* Function:      setup_started()                                                   */
-/* Behaviour:                                                  */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:      */
-/* Outputs:*/
+/* Function:   setup_started()                                                      */
+/* Behaviour:  The UI calls this function to let us know that we've left the        */
+/*             welcome screen and the user has started entering setup info.         */
+/*             Ref: main state machine spreadsheet 2205,032/DS.                     */
+/* Requires:  'flags', unused.                                                      */
+/* Returns:    NULL if the engine is ready to acknowledge change of state. Otherwise*/
+/*             tells the UI Library to try again later.  This prevents the UI lib   */
+/*             from forcing the engine into a state which it is not yet ready to    */
+/*             enter.                                                               */
 /************************************************************************************/
 extern _kernel_oserror *setup_started(unsigned int flags)
 {
   static _kernel_oserror er;
+
+    IGNORE(flags);
 
     if (engine_state == WELCOME)
         engine_state = WAITNG_SRVR_ACCESS_INFO;
@@ -856,7 +847,7 @@ extern _kernel_oserror *setup_started(unsigned int flags)
         error_handler(__FILE__,__LINE__,"setup_started()",0,
           "Invalid context for calling setup_started(), try again later.",WARNING);
         er.errnum = 1;
-        strcpy(er.errmess,"Invalid context for calling setup_started().  Try again later.");
+        sprintf(er.errmess,"Invalid context for calling setup_started().  Try again later.");
         return &er;
     }
 
@@ -864,11 +855,23 @@ extern _kernel_oserror *setup_started(unsigned int flags)
 }
 
 /************************************************************************************/
-/* Function:      setup_started()                                                   */
+/* Function:  callback_error_action()                                               */
+/* Behaviour: Called by the UI Library as a result of the user clicking on an error */
+/*            pop up.                                                               */
+/* Requires:  - 'flags', unused.                                                    */
+/*            - 'error_action', which tells us whic course of action the user       */
+/*               chose.                                                             */
+/*               Action_TryAgain -> usr wishes to reattempt upgrade.                */
+/*               Action_Options -> user wishes to return t the options (setup) scrn */
+/*               Action_Cancel -> Reboot. XXX: I think - check.                     */
+/*               Action_OK -> usr has acknowledged the error.                       */
+/* Returns:   NULL                                                                  */
 /************************************************************************************/
 extern _kernel_oserror *callback_error_action(unsigned int flags,error_action_t error_action)
 {
   _kernel_oserror *er = NULL;
+
+    IGNORE(flags);
 
     if (error_action == Action_TryAgain)
     {
@@ -882,5 +885,9 @@ extern _kernel_oserror *callback_error_action(unsigned int flags,error_action_t 
          }
          ui_show_setup(0);
     }
+
+    // No need to do anything in the case of Action_OK or Action_Cancel.
+
     return NULL;
 }
+

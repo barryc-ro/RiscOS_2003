@@ -7,10 +7,11 @@
 /*  Modification History:                                                           */
 /*  Date         Engineer  Change                                                   */
 /*  ----         --------  ------                                                   */
-/*  xx-Jul-1998  SR        Created                                                  */
+/*  17-Jul-1998  SR        Created                                                  */
 /*                                                                                  */
 /************************************************************************************/
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
@@ -22,7 +23,11 @@
 #include "ftp.h"
 #include "progrmng.h"
 #include "zlib.h"
+#include "ppp.h"
 
+#ifdef DEVELOPMENT
+#include "swis.h"
+#endif
 
 enum ftp_state {IDLE,
                 OPENING_SESSION,
@@ -30,8 +35,7 @@ enum ftp_state {IDLE,
                 READING_IDLE,
                 CLOSING_SESSION};
 
-static int total = 0; // Just used for debugging.
-
+char ftp_buf[FTP_BUFFER_SIZE];
 static int ftp_state = IDLE;
 static char *p = NULL;
 static int no_more_data_to_fetch = FALSE;
@@ -51,7 +55,6 @@ static enum status status = STATUS_IDLE;
 static FILE *ftp = NULL;
 static void delay_simulation(int *timer_started,time_t *save_time,int *rc);
 #else
-extern int read_amt;
 static int build_url(char **url);
 static int parse_header(int session);
 static _kernel_oserror *readhdr(int session,char *buff,int amt,int *fetched);
@@ -78,7 +81,6 @@ extern int ftp_stateMachine(int reason)
   int flags = 0;
   static int session_id = -1;
   _kernel_oserror *er;
-  extern int err_abort;
 
     switch (ftp_state)
     {
@@ -381,6 +383,31 @@ static int e_check(int rc,int line)
     return rc;
 }
 
+/************************************************************************************/
+/* Function:  total_bytes_fetched()                                                 */
+/* Behaviour: Keeps a record of total bytes fetched so far (excluding header which  */
+/*            is not part of the downloaded image).  Useful for estimating time     */
+/*            remaining and for debugging.                                          */
+/* Requires:  - 'request', which is 0 when the caller wishes to update the existing */
+/*               record, and 1 when the caller wishes to query the number of bytes  */
+/*               fetched.  Writes will typically be performed by other routines     */
+/*               within this file.  Reads will typically be done by the progress    */
+/*               tracker.                                                           */
+/*            - 'amt', which is the number of bytes fetched so far (unused when     */
+/*               request is 1)                                                      */
+/* Returns:   Current record of the number of bytes fetched so far.                 */
+/************************************************************************************/
+extern int total_bytes_fetched(int request,int amt)
+{
+  static int running_total = 0;
+
+    if (request == 0)
+        running_total += amt;
+    else if (request != 1)
+         error_handler(__FILE__,__LINE__,"total_bytes_fetched()",0,"Unrecognised request",WARNING);
+
+    return running_total;
+}
 
 #ifndef FTP_SIMULATION
 
@@ -718,7 +745,6 @@ static int ftp_stop(int session_id)
 /************************************************************************************/
 static int ftp_status(int session_id)
 {
-  extern char ftp_buf[FTP_BUFFER_SIZE];
   extern z_stream stream;
   int flags = 0;
   _kernel_swi_regs regs;
@@ -745,30 +771,62 @@ static int ftp_status(int session_id)
             error_handler(__FILE__,__LINE__,"ftp_status()",0,"Bad memory access about to occur",FATAL);
             return ERROR;
         }
+
         regs.r[0] = flags;
         regs.r[1] = session_id;
         regs.r[2] = (int)p;
         regs.r[3] = read_amt;
         if ((er = _kernel_swi(URL_ReadData,&regs,&regs)) != NULL)
         {
-             #ifdef LOGFILE
-             fprintf(logfile,"session id: %d\n",session_id);
-             fprintf(logfile,"read_amt: %d\n",read_amt);
-             fprintf(logfile,"avail_in: %d\n",(int)stream.avail_in);
-             fflush(logfile);
-             #endif
              error_handler(__FILE__,__LINE__,"ftp_status()",er->errnum,er->errmess,WARNING);
-             //return ERROR;
+             return ERROR;
         }
         stat = (unsigned int)regs.r[0];
         bytes_transferred_to_buffer = regs.r[4];
-        total += bytes_transferred_to_buffer;
+
         if (bytes_transferred_to_buffer > 0)
         {
             bytes_read += bytes_transferred_to_buffer;
             stream.avail_in = bytes_read; // Tell zlib more data is available in its input buffer.
             read_amt -= bytes_transferred_to_buffer;
+            total_bytes_fetched(0,bytes_transferred_to_buffer);
+
+            #ifdef DEVELOPMENT
+            _kernel_swi(OS_WriteI+4,&regs,&regs);
+            _kernel_swi(OS_WriteI+30,&regs,&regs);
+            _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+            printf("%d, total = %d\n",regs.r[0],total_bytes_fetched(1,0));
+            _kernel_swi(OS_WriteI+5,&regs,&regs);
+            #endif
         }
+        else
+        {
+         /* No data was received.  Check that we still have a connection. */
+
+            #ifdef DEVELOPMENT
+            _kernel_swi(OS_WriteI+4,&regs,&regs);
+            _kernel_swi(OS_WriteI+30,&regs,&regs);
+            _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+            printf("%d, total = %d\n",regs.r[0],total_bytes_fetched(1,0));
+            _kernel_swi(OS_WriteI+5,&regs,&regs);
+            #endif
+
+            #ifndef PPP_SIMULATION
+            regs.r[0] = 1;
+            regs.r[1] = 0;  // Ben says this should be zero.
+            if ((er = _kernel_swi(PPP_Status,&regs,&regs)) != NULL)
+            {
+                 error_handler(__FILE__,__LINE__,"ftp_status()",er->errnum,er->errmess,WARNING);
+                 return ERROR;
+            }
+            if (regs.r[2] == 0)
+            {
+                error_handler(__FILE__,__LINE__,"ftp_status()",0,"Connection lost",WARNING);
+                return ERROR;
+            }
+            #endif
+        }
+
         if (stat & ALL_DATA_RECEIVED)
         {
                // End of stream, no more data to fetch
@@ -808,7 +866,6 @@ static int ftp_status(int session_id)
 /************************************************************************************/
 static int ftp_read_data(int session_id)
 {
-  extern char ftp_buf[FTP_BUFFER_SIZE];
   extern z_stream stream;
   int flags = 0;
   unsigned int stat;
@@ -838,6 +895,7 @@ static int ftp_read_data(int session_id)
         error_handler(__FILE__,__LINE__,"ftp_read_data()",0,"Bad memory access about to occur",WARNING);
         return ERROR;
     }
+
     regs.r[0] = flags;
     regs.r[1] = session_id;
     regs.r[2] = (int)p;
@@ -849,19 +907,22 @@ static int ftp_read_data(int session_id)
     }
     stat = (unsigned int)regs.r[0];
     bytes_transferred_to_buffer = regs.r[4];
-    total += bytes_transferred_to_buffer;
+
     if (bytes_transferred_to_buffer > 0)
     {
         bytes_read += bytes_transferred_to_buffer;
         stream.avail_in = bytes_read; // Tell zlib more data is available in its input buffer.
         read_amt -= bytes_transferred_to_buffer;
+        total_bytes_fetched(0,bytes_transferred_to_buffer);
     }
+
     if (stat & ALL_DATA_RECEIVED)
     {
      // End of stream, no more data to fetch.
         status = DATA_FETCHED;
         no_more_data_to_fetch = TRUE;
     }
+
     if ((bytes_read == FTP_BUFFER_SIZE) || (no_more_data_to_fetch == TRUE))
     {
         status = DATA_FETCHED;  // Reset ourselves for next time round, but as far as zlib is concerned
@@ -941,7 +1002,6 @@ static int initialise_ftp_fetcher(int *session_id)
 static int ftp_read_data(int session_id)
 {
   int simulate_amt_fetched = FTP_BUFFER_SIZE/4;
-  extern char ftp_buf[FTP_BUFFER_SIZE];
   extern z_stream stream;
 
 
@@ -1028,7 +1088,6 @@ static int ftp_status(int session_id)
   static int timer_started = 0;
   static time_t save_time;
   int rc;
-  extern char ftp_buf[FTP_BUFFER_SIZE];
   extern z_stream stream;
 
     if (status == FETCHING_DATA)
@@ -1136,8 +1195,6 @@ static int ftp_stop(int session_id)
 /*              activity.                                                           */
 /*           - 'rc', which is used to return DONE or IN_PROGRESS, depending upon    */
 /*              elapsed time.                                                       */
-/* Returns: */
-/* Outputs: */
 /* Example usage: static int ftp_read_data(void)                                    */
 /*                {                                                                 */
 /*                  #ifdef FTP_SIMULATION                                           */

@@ -3,14 +3,16 @@
 /*  File: progrmng.c                                                                */
 /*                                                                                  */
 /*  Copyright © 1998 Acorn Computers Ltd., Cambridge, England                       */
+/*  Documents: programming state machine spreadsheet, drawing no.: 2205,036/DS.     */
 /*                                                                                  */
 /*  Modification History:                                                           */
 /*  Date         Engineer  Change                                                   */
 /*  ----         --------  ------                                                   */
-/*  xx-Jul-1998  SR        Created                                                  */
+/*  17-Jul-1998  SR        Created                                                  */
 /*                                                                                  */
 /************************************************************************************/
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include "main.h"
@@ -18,7 +20,8 @@
 #include "kernel.h"
 #include "errors.h"
 #include "progrmng.h"
-#include <zlib.h>
+#include "zlib.h"
+#include "swis.h"
 
 #ifdef SIMULATE_FLASH
 #include "flashstubs.h"
@@ -31,23 +34,21 @@ enum programming_state {IDLE,
                         DECOMPRESSING,
                         PROGRAMMING};
 
-char ftp_buf[FTP_BUFFER_SIZE];
-char *flash_buf = NULL;
 z_stream stream;
 int program_flash_reset_flag = TRUE;
 
 static enum programming_state programming_state = IDLE;
+static char *flash_buf = NULL;
 static flashdeviceinfo flash;
 static int timer_on = FALSE;
 static int bytes_programmed = 0;
-//static flashdeviceinfo dev;
 static int sizeof_flash_buffer = 0;
 static int decomp_stream_end = FALSE;
 static int decomp_initialised = TRUE;
 
 static int idle_handler(int reason);
 static void progress_tracker(void);
-static int timer(enum reason_code);
+static int timer(enum reason_code,int units);
 static int e_check(int rc,int line);
 static int decomp(void);
 static int program_flash(void);
@@ -56,20 +57,15 @@ static int program_flash(void);
 int read_amt = FTP_BUFFER_SIZE;
 #endif
 
-#ifdef SIMULATE_FLASH
-//static void delay_simulation(int *timer_started,time_t *save_time,int *rc);
-#endif
-
 /************************************************************************************/
 /* Function:  programming_stateMachine()                                            */
-/* Behaviour: */
+/* Behaviour: As defined in the programming state machine spreadsheet 2205,036/DS.  */
 /*            ui_show_error() should only be called for errors returned from sub    */
 /*            routines that are not state machines.  ui_show_error() is called via  */
 /*            e_check().                                                            */
-/* Prerequisites: */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
+/* Requires:  'reason', which is START, ABORT, CLOSE, or POLL, as defined on the    */
+/*            spreadsheet.                                                          */
+/* Returns:   DONE, IN_PROGRESS, or ERROR, as defined on the spreadsheet.           */
 /************************************************************************************/
 extern int programming_stateMachine(enum reason_code reason)
 {
@@ -112,17 +108,17 @@ extern int programming_stateMachine(enum reason_code reason)
                               case ABORT:  return DONE;
                                            break;
                               case POLL:   error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Poll not valid whilst in idle state.",FATAL);
+                                             "Poll not valid whilst in idle state.",WARNING);
                                            break;
                               default:     error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Unexpected reason code passed into programming state machine.",FATAL);
+                                             "Unexpected reason code passed into programming state machine.",WARNING);
                            }
                            break;
 
        case FETCHING:      switch (reason)
                            {
                               case START: error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Start not valid whilst in fetching state.",FATAL);
+                                             "Start not valid whilst in fetching state.",WARNING);
                                           break;
                               case ABORT: /* drop through to close */
                               case CLOSE: if ((rc = ftp_stateMachine(CLOSE)) == ERROR)
@@ -164,14 +160,14 @@ extern int programming_stateMachine(enum reason_code reason)
                                           }
                                           break;
                               default:    error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Unexpected reason code passed into programming state machine.",FATAL);
+                                             "Unexpected reason code passed into programming state machine.",WARNING);
                            }
                            break;
 
        case DECOMPRESSING: switch (reason)
                            {
                               case START: error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Start not valid whilst in decompressing state.",FATAL);
+                                             "Start not valid whilst in decompressing state.",WARNING);
                                           break;
                               case ABORT: /* Drop through */
                               case CLOSE: if ((rc = ftp_stateMachine(CLOSE)) == ERROR)
@@ -215,13 +211,13 @@ extern int programming_stateMachine(enum reason_code reason)
                                           }
                                           break;
                               default:    error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Unexpected reason code passed into programming state machine.",FATAL);
+                                             "Unexpected reason code passed into programming state machine.",WARNING);
                            }
                            break;
        case PROGRAMMING:   switch (reason)
                            {
                               case START: error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Start not valid whilst in programming state.",FATAL);
+                                             "Start not valid whilst in programming state.",WARNING);
                                           break;
                               case ABORT: /* Drop through */
                               case CLOSE: ftp_stateMachine(CLOSE);
@@ -269,11 +265,11 @@ extern int programming_stateMachine(enum reason_code reason)
                                           }
                                           break;
                               default:    error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                                             "Unexpected reason code passed into programming state machine.",FATAL);
+                                             "Unexpected reason code passed into programming state machine.",WARNING);
                            }
                            break;
        default:            error_handler(__FILE__,__LINE__,"programming_stateMachine()",0,
-                              "Unrecognised programming state.",FATAL);
+                              "Unrecognised programming state.",WARNING);
     }
 
     return ERROR;
@@ -281,12 +277,14 @@ extern int programming_stateMachine(enum reason_code reason)
 
 #ifdef SIMULATE_FLASH
 /************************************************************************************/
-/* Function:       idle_handler()                                                   */
-/* Behaviour: */
-/* Prerequisites: */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
+/* Function:  idle_handler()                                                        */
+/* Behaviour: Separated out from the programming state machine (for clarity).       */
+/*            Carries out work associated with starting the programming state       */
+/*            machine, namely, uses flash stubs from the original flash API spec to */
+/*            simulate writing to Flash, and starts the FTP state machine.          */
+/* Requires:  'reason', which in this context should be 'START' (see programming_   */
+/*            stateMachine()).                                                      */
+/* Returns:   IN_PROGRESS, ERROR, or DONE (see calling context for definitions).    */
 /************************************************************************************/
 static int idle_handler(int reason)
 {
@@ -360,12 +358,14 @@ static int idle_handler(int reason)
 }
 #else
 /************************************************************************************/
-/* Function:       idle_handler()                                                   */
-/* Behaviour: */
-/* Prerequisites: */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
+/* Function:  idle_handler()                                                        */
+/* Behaviour: Separated out from the programming state machine (for clarity).       */
+/*            Carries out work associated with starting the programming state       */
+/*            machine, namely, checks that Flash is large enough, erases in         */
+/*            preparation for Flash write, starts the FTP state machine.            */
+/* Requires:  'reason', which in this context should be 'START' (see programming_   */
+/*            stateMachine()).                                                      */
+/* Returns:   IN_PROGRESS, ERROR, or DONE (see calling context for definitions).    */
 /************************************************************************************/
 static int idle_handler(int reason)
 {
@@ -387,11 +387,12 @@ static int idle_handler(int reason)
                   }
                   flash.sizeof_flash = regs.r[0];  /* byte size */
                   flash.blocksize = regs.r[2];     /* byte size */
-                  if ((er = _kernel_swi(FlashWrite_EraseFlash,&regs,&regs)) != NULL)
-                  {
-                       error_handler(__FILE__,__LINE__,"idle_handler()",er->errnum,er->errmess,WARNING);
-                       return ERROR;
-                  }
+
+                  //if ((er = _kernel_swi(FlashWrite_EraseFlash,&regs,&regs)) != NULL)
+                  //{
+                  //     error_handler(__FILE__,__LINE__,"idle_handler()",er->errnum,er->errmess,WARNING);
+                  //     return ERROR;
+                  //}
                   rc = ftp_stateMachine(START);
                   switch (rc)
                   {
@@ -402,7 +403,7 @@ static int idle_handler(int reason)
                     case DONE:        return DONE;
                                       break;
                     default:          error_handler(__FILE__,__LINE__,"idle_handler()",0,
-                                      "Unexpected return code from ftp_stateMachine()",FATAL);
+                                      "Unexpected return code from ftp_stateMachine()",WARNING);
                   }
                   break;
       default:    error_handler(__FILE__,__LINE__,"idle_handler()",0,
@@ -415,52 +416,97 @@ static int idle_handler(int reason)
 #endif
 
 /************************************************************************************/
-/* Function:       progress_tracker()                                               */
-/* Behaviour: */
-/* Prerequisites: */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
-/* Notes:          Be careful where progress_tracker is called from, otw estimates  */
-/*                 for time remaining will be inaccurate.  Make a single call on    */
-/*                 each cycle, from the same point in the cycle.                    */
+/* Function:      progress_tracker()                                                */
+/* Behaviour:     Calculates estimated time remaining and percentage complete.      */
+/* Prerequisites: Must be called once from the same place on each cycle (otherwise  */
+/*                calculated estimates will be inaccurate).  A cycle is defined as  */
+/*                a single progression through each of the three working states of  */
+/*                the programming state machine.                                    */
+/* Outputs:       Percentage complete and estimated time remaining to the UI Lib.   */
+/* Notes:         The image held on the server is compressed.  Therefore it cannot  */
+/*                be used to estimate progress.  As an example the current image    */
+/*                being used is fully downloaded at the 68% mark.  After that it    */
+/*                is all decompressing and programming to flash with no further     */
+/*                fetching required. This note is germane to anyone wanting to      */
+/*                alter the way in which progress tracking works.                   */
+/*                                                                                  */
+/*                We only work in seconds at the start of the upgrade.              */
+/*                Calculations done in seconds during later stages result in        */
+/*                overflow.                                                         */
 /************************************************************************************/
 static void progress_tracker(void)
 {
-  static int mins,secs;
-  int seconds_used;
-  int seconds_remaining;
+  int mins_used;
+  int secs_used;
+  static int mins_remaining;
+  static int secs_remaining;
   int bytes_remaining;
   double percent_complete;
-  int flags = 0;
   _kernel_oserror *er;
+  int bytes_fetched = 0;
 
     if (timer_on == FALSE)
     {
-        timer(START);
+        timer(START,1);
         timer_on = TRUE;
-    }
-
-    seconds_used = timer(POLL);
-    bytes_remaining = IMAGESIZE - bytes_programmed;
-    if (bytes_programmed != 0)
-        seconds_remaining = (seconds_used * bytes_remaining) / bytes_programmed;
-    mins = seconds_remaining / 60;
-    secs = seconds_remaining % 60;
-
-    if ((er = ui_set_estimated_download_time (flags,mins,secs)) != NULL)
-    {
-         error_handler(__FILE__,__LINE__,"programming_stateMachine()",
-           er->errnum,er->errmess,WARNING);
     }
 
     percent_complete = ((double)bytes_programmed / IMAGESIZE) * 100;
 
-    if ((er = ui_set_progress_percent(flags,(int)percent_complete)) != NULL)
+    if ((er = ui_set_progress_percent(0,(int)percent_complete)) != NULL)
     {
          error_handler(__FILE__,__LINE__,"progress_tracker()",er->errnum,er->errmess,
            WARNING);
     }
+
+    if (bytes_programmed == 0)
+    {
+     /* Base our estimated time remaining on the amount of data fetched so far. */
+     /* If no data has been fetched, clear the ui time display.                 */
+
+        bytes_fetched = total_bytes_fetched(1,0);
+
+        if (bytes_fetched > 0)
+        {
+            secs_used = timer(POLL,0);
+            bytes_remaining = IMAGESIZE - bytes_fetched;
+            secs_remaining = (secs_used * bytes_remaining) / bytes_fetched;
+
+            if (secs_remaining > 0)
+            {
+                if ((er = ui_set_estimated_download_time(0u,secs_remaining / 60,0)) != NULL)
+                {
+                     error_handler(__FILE__,__LINE__,"progress_tracker()",er->errnum,er->errmess,WARNING);
+                }
+                return;
+            }
+        }
+
+        if ((er = ui_set_estimated_download_time(0u,-1,0)) != NULL)
+        {
+             error_handler(__FILE__,__LINE__,"progress_tracker()",er->errnum,er->errmess,WARNING);
+             return;
+        }
+    }
+    else
+    {
+     /* Estimated time remaining can now include time taken to program Flash. */
+
+        mins_used = timer(POLL,1);
+        bytes_remaining = IMAGESIZE - bytes_programmed;
+        mins_remaining = (mins_used * bytes_remaining) / bytes_programmed;
+
+        if (mins_remaining == 0)
+        {
+             return;
+        }
+        else if ((er = ui_set_estimated_download_time(0u,mins_remaining,0)) != NULL)
+        {
+                  error_handler(__FILE__,__LINE__,"progress_tracker()",er->errnum,er->errmess,WARNING);
+        }
+    }
+
+    return;
 }
 
 /************************************************************************************/
@@ -468,18 +514,31 @@ static void progress_tracker(void)
 /* Behaviour: */
 /* Prerequisites: */
 /* Requires: */
-/* Returns: seconds used, or 0 on start or error. */
+/* Returns: minutes used, or 0 on start or error. */
 /* Outputs: */
 /************************************************************************************/
-static int timer (enum reason_code reason)
+static int timer (enum reason_code reason,int units)
 {
   static time_t save_time;
+  int seconds = 0;
+  int minutes = 1;
 
     switch (reason)
     {
       case START: save_time = time(NULL);
                   break;
-      case POLL:  return (int)(difftime(time(NULL),save_time));
+      case POLL:  if (units == minutes)
+                  {
+                      return (int) ((difftime(time(NULL),save_time))/60);
+                  }
+                  else if (units == seconds)
+                  {
+                      return (int) (difftime(time(NULL),save_time));
+                  }
+                  else
+                  {
+                      error_handler(__FILE__,__LINE__,"timer()",0,"Unrecognised units request",WARNING);
+                  }
                   break;
       default:    error_handler(__FILE__,__LINE__,"timer()",0,
                   "Unexpected reason code.",FATAL);
@@ -532,8 +591,9 @@ extern int decomp_init(void)
   #ifndef SIMULATE_FLASH
   _kernel_oserror *er = NULL;
   _kernel_swi_regs regs;
-  #endif
+  #else
   int rc;
+  #endif
 
     decomp_stream_end = FALSE;
 
@@ -544,6 +604,7 @@ extern int decomp_init(void)
          return ERROR;
     }
     #else
+
     if ((er = _kernel_swi(FlashWrite_DeviceInfo,&regs,&regs)) != NULL)
     {
          // XXX: need to insert a ui_show_err() here and then get back to the welcome screen
@@ -577,14 +638,6 @@ extern int decomp_init(void)
     stream.zalloc = Z_NULL; stream.zfree = NULL; stream.opaque = Z_NULL;
     stream.next_in = (Bytef *)ftp_buf; stream.next_out = (Bytef *)flash_buf;
 
-    /* stream.avail_in will have been set in the preceeding FTP fetch state */
-    //if (stream.avail_in != FTP_BUFFER_SIZE)
-    //{
-    //    error_handler(__FILE__,__LINE__,"decomp()",stream.avail_in,
-    //      "FTP input buffer to zlib should be full on initialisation",WARNING);
-    //    return ERROR;
-    //}
-
     /* We start with an empty output buffer */
     stream.avail_out = sizeof_flash_buffer;
 
@@ -604,7 +657,7 @@ extern int decomp_init(void)
 }
 
 /************************************************************************************/
-/* Function: decomp()                                                               */
+/* Function:  decomp()                                                              */
 /* Behaviour: The zlib decompression library is used to consume compressed data     */
 /*            from the FTP buffer. It inflates the data into an output buffer which */
 /*            is of a size that when full allows the Flash library to take it as a  */
@@ -612,9 +665,7 @@ extern int decomp_init(void)
 /*            programming state machine (which translates internal error codes to   */
 /*            those recognised by the UI Library).                                  */
 /* Prerequisites: decomp_init()                                                     */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
+/* Returns:   DONE, ERROR, or a more specific error code recognised by the UI.      */
 /************************************************************************************/
 static int decomp(void)
 {
@@ -633,7 +684,7 @@ static int decomp(void)
     {
         if (rc == Z_STREAM_END)
         {
-         /* End of compressed data ha been reached and all uncompressed data has been produced */
+         /* End of compressed data has been reached and all uncompressed data has been produced */
             decomp_stream_end = TRUE;
         }
         else if (rc == Z_DATA_ERROR)
@@ -804,7 +855,7 @@ static int program_flash(void)
 static int program_flash(void)
 {
   static int stream_end = FALSE;
-  static int byte_offset = 0;
+  static unsigned int byte_offset = 0;
   _kernel_swi_regs regs;
   _kernel_oserror *er = NULL;
 
@@ -820,11 +871,14 @@ static int program_flash(void)
     {
         return DONE;  // Nothing left to program.  We've finished.
     }
+
     if (stream.avail_out == 0)
     {
+
      /* The Flash buffer is full and ready to be programmed into Flash as a single block of data. */
         regs.r[0] = byte_offset;       /* Offset from base of Flash */
         regs.r[1] = (int)flash_buf;    /* Block of data             */
+
         if ((er = _kernel_swi(FlashWrite_WriteBlock,&regs,&regs)) != NULL)
         {
              error_handler(__FILE__,__LINE__,"program_flash()",er->errnum,er->errmess,WARNING);
@@ -837,7 +891,8 @@ static int program_flash(void)
         }
 
         bytes_programmed += sizeof_flash_buffer;
-        byte_offset += sizeof_flash_buffer;
+
+        byte_offset += (unsigned int)sizeof_flash_buffer;
 
         if (bytes_programmed == IMAGESIZE)
         {
@@ -862,39 +917,3 @@ extern void program_flash_reset(void)
     return;
 }
 
-#ifdef SIMULATE_FLASH
-/************************************************************************************/
-/* Function:       delay_simulation()                                               */
-/* Behaviour: */
-/* Prerequisites: */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
-/************************************************************************************/
-/*
-static void delay_simulation(int *timer_started,time_t *save_time,int *rc)
-{
-  int lapsed_time;  in seconds
-
-    if (*timer_started == 0)
-    {
-        *save_time = time(NULL);
-        *timer_started = 1;
-        *rc = IN_PROGRESS;
-    }
-    else
-    {
-        lapsed_time = (int)(difftime(time(NULL),*save_time));
-        if (lapsed_time > TIME_DELAY)
-        {
-            *rc = DONE;
-            *timer_started = 0;
-        }
-        else
-        {
-            *rc = IN_PROGRESS;
-        }
-    }
-}
-*/
-#endif

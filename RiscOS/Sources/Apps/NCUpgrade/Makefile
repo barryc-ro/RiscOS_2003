@@ -8,8 +8,13 @@
 
 # Date		Name	Description
 # ====		====	===========
-# ??-Jul-1998   SR      Created
+# 14-Jul-1998   SR      Created
 # 14-Aug-1998   JPB	Tided up, and made MemCheck builds possible
+
+# -----------------------------------------------------------------------------
+# Paths
+#
+EXP_C_H = <Cexport$dir>.h
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -20,6 +25,7 @@ APP		= !Upgrade
 MODULE		= rm.!Upgrade
 ROM_MODULE	= aof.Upgrade
 LDIR		= Resources.${LOCALE}
+EXPORTS		= ${EXP_C_H}.${COMPONENT}
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -78,10 +84,14 @@ TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
 TOOLACTIONLIB   = <CExport$Dir>.o.Toolaction
 
+ZLIB		= ${LIBDIR}.zlib
 MSGLIB		= ${LIBDIR}.MsgLib.o.MsgLib
 DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
-ZLIB		= ${LIBDIR}.zlib.zlib
 MEMCHECKLIB	= MemCheck:o.MC
+
+INETLIB		= TCPIPLibs:o.inetlibzm
+SOCKLIB		= TCPIPLibs:o.socklibzm
+UNIXLIB		= TCPIPLibs:o.unixlibzm
 
 LIBSM = \
  ${MSGLIB}zm \
@@ -99,7 +109,9 @@ LIBS = \
  ${EVENTLIB} \
  ${TOOLACTIONLIB} \
  ${CLIB} \
- ${ZLIB} \
+ ${ZLIB}.o.zlib \
+ ${SOCKLIB} \
+ ${INETLIB} \
  ${MEMCHECKLIB} \
 
 
@@ -110,10 +122,10 @@ LIBSD = \
  ${EVENTLIB} \
  ${TOOLACTIONLIB} \
  ${CLIB} \
+ ${ZLIB}.o.zlib \
  ${DEBUGLIB} \
- ${ZLIB} \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.inetlib \
+ ${SOCKLIB} \
+ ${INETLIB} \
  ${MEMCHECKLIB} \
 
 
@@ -121,7 +133,7 @@ LIBSD = \
 # Include files (libraries and resources)
 #
 
-INCLUDES	= -Itbox:,C:
+INCLUDES	= -Itbox:,C:,TCPIPLibs:,TCPIPLibs:sys,TCPIPLibs:net,${ZLIB}
 
 FILES = \
  ${LDIR}.!Boot \
@@ -129,7 +141,10 @@ FILES = \
  ${LDIR}.!Sprites \
  ${LDIR}.Messages \
  ${LDIR}.Res \
- ${TARGET}
+ ${TARGET} \
+ ${UNIXLIB} \
+ ${INETLIB} \
+ ${SOCKLIB} \
 
 # Include these in the ROM module
 RESFILES = \
@@ -147,8 +162,8 @@ OBJS = \
  o.ui_misc \
  o.dial \
  o.error \
- o.flashstubs \
  o.ftp \
+ o.flashstubs \
  o.nvram \
  o.ppp \
  o.progrmng \
@@ -229,6 +244,9 @@ all: ${FILES}
 
 rom: ${ROM_MODULE}
 	@echo ${COMPONENT}: Module built (ROM)
+	
+export: ${EXPORTS}
+	@echo ${COMPONENT}: export complete
 
 install_common: ${FILES}
 	@echo
@@ -368,3 +386,473 @@ rm.!GUID: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
+od.main:	c.main
+od.main:	C:h.string
+od.main:	C:h.stdio
+od.main:	C:h.stdlib
+od.main:	C:h.swis
+od.main:	C:h.kernel
+od.main:	C:h.kernel
+od.main:	tbox:h.event
+od.main:	tbox:h.wimp
+od.main:	tbox:h.toolbox
+od.main:	C:debuglib.h.DebugLib
+od.main:	MemCheck:h.MemCheck
+od.main:	C:h.stddef
+od.main:	C:h.stdio
+od.main:	C:h.stdarg
+od.main:	h.ui
+od.main:	h.errors
+od.main:	h.main
+od.main:	C:h.kernel
+od.main:	h.ui
+od.main:	tbox:h.toolbox
+od.main:	C:h.stdio
+od.main:	h.nvram
+od.main:	h.dial
+od.main:	h.ppp
+od.main:	h.ftp
+od.main:	h.progrmng
+od.main:	<Lib$Dir>.zlib.h.zlib
+od.main:	<Lib$Dir>.zlib.h.zconf
+od.strings:	c.strings
+od.strings:	C:h.string
+od.strings:	C:h.stdlib
+od.strings:	C:h.ctype
+od.strings:	C:h.stdio
+od.strings:	h.strings
+od.ui_main:	c.ui_main
+od.ui_main:	C:h.time
+od.ui_main:	h.ui_include
+od.ui_main:	C:h.stdio
+od.ui_main:	C:h.stdlib
+od.ui_main:	C:h.string
+od.ui_main:	C:h.swis
+od.ui_main:	C:h.kernel
+od.ui_main:	h.ui_tbox
+od.ui_main:	tbox:h.event
+od.ui_main:	tbox:h.wimp
+od.ui_main:	tbox:h.toolbox
+od.ui_main:	tbox:h.toolbox
+od.ui_main:	tbox:h.window
+od.ui_main:	tbox:h.gadgets
+od.ui_main:	tbox:h.gadgets
+od.ui_main:	tbox:h.menu
+od.ui_main:	tbox:h.proginfo
+od.ui_main:	tbox:h.iconbar
+od.ui_main:	tbox:h.quit
+od.ui_main:	tbox:h.wimplib
+od.ui_main:	C:msglib.h.MsgLib
+od.ui_main:	C:debuglib.h.DebugLib
+od.ui_main:	h.ui_menu
+od.ui_main:	h.ui_misc
+od.ui_main:	h.ui_main
+od.ui_main:	h.ui_types
+od.ui_main:	h.strings
+od.ui_main:	h.ui_globals
+od.ui_menu:	c.ui_menu
+od.ui_menu:	h.ui_include
+od.ui_menu:	C:h.stdio
+od.ui_menu:	C:h.stdlib
+od.ui_menu:	C:h.string
+od.ui_menu:	C:h.swis
+od.ui_menu:	C:h.kernel
+od.ui_menu:	h.ui_tbox
+od.ui_menu:	tbox:h.event
+od.ui_menu:	tbox:h.wimp
+od.ui_menu:	tbox:h.toolbox
+od.ui_menu:	tbox:h.toolbox
+od.ui_menu:	tbox:h.window
+od.ui_menu:	tbox:h.gadgets
+od.ui_menu:	tbox:h.gadgets
+od.ui_menu:	tbox:h.menu
+od.ui_menu:	tbox:h.proginfo
+od.ui_menu:	tbox:h.iconbar
+od.ui_menu:	tbox:h.quit
+od.ui_menu:	tbox:h.wimplib
+od.ui_menu:	C:msglib.h.MsgLib
+od.ui_menu:	C:debuglib.h.DebugLib
+od.ui_menu:	h.ui_menu
+od.ui_menu:	h.ui_globals
+od.ui_misc:	c.ui_misc
+od.ui_misc:	h.ui_include
+od.ui_misc:	C:h.stdio
+od.ui_misc:	C:h.stdlib
+od.ui_misc:	C:h.string
+od.ui_misc:	C:h.swis
+od.ui_misc:	C:h.kernel
+od.ui_misc:	h.ui_tbox
+od.ui_misc:	tbox:h.event
+od.ui_misc:	tbox:h.wimp
+od.ui_misc:	tbox:h.toolbox
+od.ui_misc:	tbox:h.toolbox
+od.ui_misc:	tbox:h.window
+od.ui_misc:	tbox:h.gadgets
+od.ui_misc:	tbox:h.gadgets
+od.ui_misc:	tbox:h.menu
+od.ui_misc:	tbox:h.proginfo
+od.ui_misc:	tbox:h.iconbar
+od.ui_misc:	tbox:h.quit
+od.ui_misc:	tbox:h.wimplib
+od.ui_misc:	C:msglib.h.MsgLib
+od.ui_misc:	C:debuglib.h.DebugLib
+od.ui_misc:	h.ui_misc
+od.dial:	c.dial
+od.dial:	C:h.stdio
+od.dial:	C:h.string
+od.dial:	C:h.stdlib
+od.dial:	C:h.time
+od.dial:	C:h.kernel
+od.dial:	C:h.swis
+od.dial:	h.ui
+od.dial:	h.errors
+od.dial:	h.main
+od.dial:	C:h.kernel
+od.dial:	h.ui
+od.dial:	tbox:h.toolbox
+od.dial:	tbox:h.wimp
+od.dial:	C:h.stdio
+od.dial:	h.dial
+od.dial:	h.dialler
+od.error:	c.error
+od.error:	C:h.stdio
+od.error:	C:h.stdlib
+od.error:	C:h.string
+od.error:	C:h.time
+od.error:	C:h.swis
+od.error:	C:h.kernel
+od.error:	C:h.signal
+od.error:	C:h.kernel
+od.error:	h.ui
+od.error:	h.errors
+od.error:	h.main
+od.error:	C:h.kernel
+od.error:	h.ui
+od.error:	tbox:h.toolbox
+od.error:	tbox:h.wimp
+od.error:	C:h.stdio
+od.error:	<Lib$Dir>.zlib.h.zlib
+od.error:	<Lib$Dir>.zlib.h.zconf
+od.error:	h.ftp
+od.error:	h.progrmng
+od.error:	<Lib$Dir>.zlib.h.zlib
+od.error:	h.ppp
+od.error:	h.dial
+od.error:	h.flashstubs
+od.error:	C:h.kernel
+od.flashstubs:	c.flashstubs
+od.flashstubs:	C:h.kernel
+od.flashstubs:	h.ui
+od.flashstubs:	h.flashstubs
+od.flashstubs:	C:h.kernel
+od.flashstubs:	h.main
+od.flashstubs:	C:h.kernel
+od.flashstubs:	h.ui
+od.flashstubs:	tbox:h.toolbox
+od.flashstubs:	tbox:h.wimp
+od.flashstubs:	C:h.stdio
+od.ftp:	c.ftp
+od.ftp:	C:h.stdio
+od.ftp:	C:h.stdlib
+od.ftp:	C:h.time
+od.ftp:	C:h.string
+od.ftp:	C:h.ctype
+od.ftp:	C:h.kernel
+od.ftp:	h.ui
+od.ftp:	h.main
+od.ftp:	C:h.kernel
+od.ftp:	h.ui
+od.ftp:	tbox:h.toolbox
+od.ftp:	tbox:h.wimp
+od.ftp:	C:h.stdio
+od.ftp:	h.errors
+od.ftp:	h.ftp
+od.ftp:	h.progrmng
+od.ftp:	<Lib$Dir>.zlib.h.zlib
+od.ftp:	<Lib$Dir>.zlib.h.zconf
+od.ftp:	<Lib$Dir>.zlib.h.zlib
+od.ftp:	h.ppp
+od.ftp:	C:h.swis
+od.nvram:	c.nvram
+od.nvram:	C:h.stdio
+od.nvram:	C:h.stdlib
+od.nvram:	C:h.string
+od.nvram:	C:h.math
+od.nvram:	C:h.ctype
+od.nvram:	C:h.kernel
+od.nvram:	h.ui
+od.nvram:	h.errors
+od.nvram:	h.main
+od.nvram:	C:h.kernel
+od.nvram:	h.ui
+od.nvram:	tbox:h.toolbox
+od.nvram:	tbox:h.wimp
+od.nvram:	C:h.stdio
+od.nvram:	h.nvram
+od.nvram:	TCPIPLibs:h.inetlib
+od.nvram:	TCPIPLibs:sys.h.types
+od.nvram:	TCPIPLibs:sys.h.cdefs
+od.nvram:	TCPIPLibs:machine.h.endian
+od.nvram:	TCPIPLibs:machine.h.ansi
+od.nvram:	TCPIPLibs:machine.h.types
+od.nvram:	C:h.time
+od.nvram:	TCPIPLibs:netinet.h.in
+od.ppp:	c.ppp
+od.ppp:	C:h.stdlib
+od.ppp:	C:h.time
+od.ppp:	C:h.string
+od.ppp:	C:h.stdio
+od.ppp:	C:h.kernel
+od.ppp:	C:h.swis
+od.ppp:	h.ppp
+od.ppp:	h.ui
+od.ppp:	h.errors
+od.ppp:	h.main
+od.ppp:	C:h.kernel
+od.ppp:	h.ui
+od.ppp:	tbox:h.toolbox
+od.ppp:	tbox:h.wimp
+od.ppp:	C:h.stdio
+od.progrmng:	c.progrmng
+od.progrmng:	C:h.stdio
+od.progrmng:	C:h.stdlib
+od.progrmng:	C:h.time
+od.progrmng:	h.main
+od.progrmng:	C:h.kernel
+od.progrmng:	h.ui
+od.progrmng:	tbox:h.toolbox
+od.progrmng:	tbox:h.wimp
+od.progrmng:	C:h.stdio
+od.progrmng:	h.ftp
+od.progrmng:	C:h.kernel
+od.progrmng:	h.errors
+od.progrmng:	h.progrmng
+od.progrmng:	<Lib$Dir>.zlib.h.zlib
+od.progrmng:	<Lib$Dir>.zlib.h.zconf
+od.progrmng:	<Lib$Dir>.zlib.h.zlib
+od.progrmng:	C:h.swis
+od.progrmng:	h.flashstubs
+od.progrmng:	C:h.kernel
+o.main:	c.main
+o.main:	C:h.swis
+o.main:	C:h.kernel
+o.main:	C:h.kernel
+o.main:	tbox:h.event
+o.main:	tbox:h.wimp
+o.main:	tbox:h.toolbox
+o.main:	C:debuglib.h.DebugLib
+o.main:	h.ui
+o.main:	h.errors
+o.main:	h.main
+o.main:	C:h.kernel
+o.main:	h.ui
+o.main:	tbox:h.toolbox
+o.main:	h.nvram
+o.main:	h.dial
+o.main:	h.ppp
+o.main:	h.ftp
+o.main:	h.progrmng
+o.main:	<Lib$Dir>.zlib.h.zlib
+o.main:	<Lib$Dir>.zlib.h.zconf
+o.strings:	c.strings
+o.strings:	h.strings
+o.ui_menu:	c.ui_menu
+o.ui_menu:	h.ui_include
+o.ui_menu:	C:h.swis
+o.ui_menu:	C:h.kernel
+o.ui_menu:	h.ui_tbox
+o.ui_menu:	tbox:h.event
+o.ui_menu:	tbox:h.wimp
+o.ui_menu:	tbox:h.toolbox
+o.ui_menu:	tbox:h.toolbox
+o.ui_menu:	tbox:h.window
+o.ui_menu:	tbox:h.gadgets
+o.ui_menu:	tbox:h.gadgets
+o.ui_menu:	tbox:h.menu
+o.ui_menu:	tbox:h.proginfo
+o.ui_menu:	tbox:h.iconbar
+o.ui_menu:	tbox:h.quit
+o.ui_menu:	tbox:h.wimplib
+o.ui_menu:	C:msglib.h.MsgLib
+o.ui_menu:	C:debuglib.h.DebugLib
+o.ui_menu:	h.ui_menu
+o.ui_menu:	h.ui_globals
+o.ui_misc:	c.ui_misc
+o.ui_misc:	h.ui_include
+o.ui_misc:	C:h.swis
+o.ui_misc:	C:h.kernel
+o.ui_misc:	h.ui_tbox
+o.ui_misc:	tbox:h.event
+o.ui_misc:	tbox:h.wimp
+o.ui_misc:	tbox:h.toolbox
+o.ui_misc:	tbox:h.toolbox
+o.ui_misc:	tbox:h.window
+o.ui_misc:	tbox:h.gadgets
+o.ui_misc:	tbox:h.gadgets
+o.ui_misc:	tbox:h.menu
+o.ui_misc:	tbox:h.proginfo
+o.ui_misc:	tbox:h.iconbar
+o.ui_misc:	tbox:h.quit
+o.ui_misc:	tbox:h.wimplib
+o.ui_misc:	C:msglib.h.MsgLib
+o.ui_misc:	C:debuglib.h.DebugLib
+o.ui_misc:	h.ui_misc
+o.dial:	c.dial
+o.dial:	C:h.kernel
+o.dial:	C:h.swis
+o.dial:	h.ui
+o.dial:	h.errors
+o.dial:	h.main
+o.dial:	C:h.kernel
+o.dial:	h.ui
+o.dial:	tbox:h.toolbox
+o.dial:	tbox:h.wimp
+o.dial:	h.dial
+o.dial:	h.dialler
+o.error:	c.error
+o.error:	C:h.swis
+o.error:	C:h.kernel
+o.error:	C:h.signal
+o.error:	C:h.kernel
+o.error:	h.ui
+o.error:	h.errors
+o.error:	h.main
+o.error:	C:h.kernel
+o.error:	h.ui
+o.error:	tbox:h.toolbox
+o.error:	tbox:h.wimp
+o.error:	<Lib$Dir>.zlib.h.zlib
+o.error:	<Lib$Dir>.zlib.h.zconf
+o.error:	h.ftp
+o.error:	h.progrmng
+o.error:	<Lib$Dir>.zlib.h.zlib
+o.error:	h.ppp
+o.error:	h.dial
+o.error:	h.flash
+o.ftp:	c.ftp
+o.ftp:	C:h.kernel
+o.ftp:	h.ui
+o.ftp:	h.main
+o.ftp:	C:h.kernel
+o.ftp:	h.ui
+o.ftp:	tbox:h.toolbox
+o.ftp:	tbox:h.wimp
+o.ftp:	h.errors
+o.ftp:	h.ftp
+o.ftp:	h.progrmng
+o.ftp:	<Lib$Dir>.zlib.h.zlib
+o.ftp:	<Lib$Dir>.zlib.h.zconf
+o.ftp:	<Lib$Dir>.zlib.h.zlib
+o.ftp:	h.ppp
+o.flashstubs:	c.flashstubs
+o.flashstubs:	C:h.kernel
+o.flashstubs:	h.ui
+o.flashstubs:	h.flashstubs
+o.flashstubs:	C:h.kernel
+o.flashstubs:	h.main
+o.flashstubs:	C:h.kernel
+o.flashstubs:	h.ui
+o.flashstubs:	tbox:h.toolbox
+o.flashstubs:	tbox:h.wimp
+o.nvram:	c.nvram
+o.nvram:	C:h.kernel
+o.nvram:	h.ui
+o.nvram:	h.errors
+o.nvram:	h.main
+o.nvram:	C:h.kernel
+o.nvram:	h.ui
+o.nvram:	tbox:h.toolbox
+o.nvram:	tbox:h.wimp
+o.nvram:	h.nvram
+o.nvram:	TCPIPLibs:h.inetlib
+o.nvram:	TCPIPLibs:sys.h.types
+o.nvram:	TCPIPLibs:sys.h.cdefs
+o.nvram:	TCPIPLibs:machine.h.endian
+o.nvram:	TCPIPLibs:machine.h.ansi
+o.nvram:	TCPIPLibs:machine.h.types
+o.nvram:	TCPIPLibs:netinet.h.in
+o.progrmng:	c.progrmng
+o.progrmng:	h.main
+o.progrmng:	C:h.kernel
+o.progrmng:	h.ui
+o.progrmng:	tbox:h.toolbox
+o.progrmng:	tbox:h.wimp
+o.progrmng:	h.ftp
+o.progrmng:	C:h.kernel
+o.progrmng:	h.errors
+o.progrmng:	h.progrmng
+o.progrmng:	<Lib$Dir>.zlib.h.zlib
+o.progrmng:	<Lib$Dir>.zlib.h.zconf
+o.progrmng:	<Lib$Dir>.zlib.h.zlib
+o.progrmng:	C:h.swis
+o.progrmng:	h.flash
+o.ui_main:	c.ui_main
+o.ui_main:	h.ui_include
+o.ui_main:	C:h.swis
+o.ui_main:	C:h.kernel
+o.ui_main:	h.ui_tbox
+o.ui_main:	tbox:h.event
+o.ui_main:	tbox:h.wimp
+o.ui_main:	tbox:h.toolbox
+o.ui_main:	tbox:h.toolbox
+o.ui_main:	tbox:h.window
+o.ui_main:	tbox:h.gadgets
+o.ui_main:	tbox:h.gadgets
+o.ui_main:	tbox:h.menu
+o.ui_main:	tbox:h.proginfo
+o.ui_main:	tbox:h.iconbar
+o.ui_main:	tbox:h.quit
+o.ui_main:	tbox:h.wimplib
+o.ui_main:	C:msglib.h.MsgLib
+o.ui_main:	C:debuglib.h.DebugLib
+o.ui_main:	h.ui_menu
+o.ui_main:	h.ui_misc
+o.ui_main:	h.ui_main
+o.ui_main:	h.ui_types
+o.ui_main:	h.strings
+o.ui_main:	h.ui_globals
+o.ppp:	c.ppp
+o.ppp:	C:h.kernel
+o.ppp:	C:h.swis
+o.ppp:	h.ppp
+o.ppp:	TCPIPLibs:sys.h.types
+o.ppp:	TCPIPLibs:sys.h.cdefs
+o.ppp:	TCPIPLibs:machine.h.endian
+o.ppp:	TCPIPLibs:machine.h.ansi
+o.ppp:	TCPIPLibs:machine.h.types
+o.ppp:	TCPIPLibs:sys.h.dcistructs
+o.ppp:	C:h.errno
+o.ppp:	TCPIPLibs:sys.h.socket
+o.ppp:	TCPIPLibs:sys.h.cdefs
+o.ppp:	TCPIPLibs:sys.h.ioctl
+o.ppp:	TCPIPLibs:sys.h.ttycom
+o.ppp:	TCPIPLibs:sys.h.ioccom
+o.ppp:	TCPIPLibs:sys.h.ioccom
+o.ppp:	TCPIPLibs:sys.h.filio
+o.ppp:	TCPIPLibs:sys.h.ioccom
+o.ppp:	TCPIPLibs:sys.h.sockio
+o.ppp:	TCPIPLibs:sys.h.ioccom
+o.ppp:	TCPIPLibs:sys.h.cdefs
+o.ppp:	TCPIPLibs:net.h.if
+o.ppp:	TCPIPLibs:sys.h.socket
+o.ppp:	TCPIPLibs:sys.h.time
+o.ppp:	TCPIPLibs:sys.h.cdefs
+o.ppp:	TCPIPLibs:net.h.if_arp
+o.ppp:	TCPIPLibs:sys.h.socket
+o.ppp:	TCPIPLibs:h.socklib
+o.ppp:	TCPIPLibs:sys.h.types
+o.ppp:	TCPIPLibs:sys.h.socket
+o.ppp:	TCPIPLibs:sys.h.stat
+o.ppp:	TCPIPLibs:sys.h.time
+o.ppp:	TCPIPLibs:sys.h.cdefs
+o.ppp:	TCPIPLibs:sys.h.time
+o.ppp:	TCPIPLibs:sys.h.uio
+o.ppp:	TCPIPLibs:sys.h.cdefs
+o.ppp:	C:h.kernel
+o.ppp:	h.ui
+o.ppp:	h.errors
+o.ppp:	h.main
+o.ppp:	C:h.kernel
+o.ppp:	h.ui
+o.ppp:	tbox:h.toolbox
+o.ppp:	tbox:h.wimp

@@ -3,21 +3,38 @@
 /*  File: ppp.c                                                                     */
 /*                                                                                  */
 /*  Copyright © 1998 Acorn Computers Ltd., Cambridge, England                       */
+/*  Documents: PPP state machine spreadsheet, drawing no.: 2205,035/DS.             */
 /*                                                                                  */
 /*  Modification History:                                                           */
 /*  Date         Engineer  Change                                                   */
 /*  ----         --------  ------                                                   */
-/*  xx-Jul-1998  SR        Created                                                  */
+/*  17-Jul-1998  SR        Created                                                  */
+/*  14-Aug-1998  RML       Actual PPP code added.                                   */
 /*                                                                                  */
 /************************************************************************************/
 
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
+#include <stdio.h>
 #include "kernel.h"
+#include "swis.h"
+#include "ppp.h"
+
+#ifndef PPP_SIMULATION
+#include "types.h"
+#include "dcistructs.h"
+#include "errno.h"
+#include "socket.h"
+#include "ioctl.h"
+#include "if.h"
+#include "socklib.h"
+#endif
+
 #include "ui.h"
 #include "errors.h"
 #include "main.h"
-#include "ppp.h"
+
 
 enum ppp_state {IDLE,
                 CONNECTING,
@@ -33,15 +50,17 @@ static int e_check(int rc,int line);
 
 #ifdef PPP_SIMULATION
 static void delay_simulation(int *timer_started,time_t *save_time,int *rc);
+#else
+static int create_secrets_files(void);
 #endif
 
 /************************************************************************************/
-/* Function:       ppp_stateMachine()                                               */
-/* Behaviour: */
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  ppp_stateMachine()                                                    */
+/* Behaviour: Code contained within the PPP state machine maps directly onto the    */
+/*            state machine spreadsheet for PPP, drawing no: 2205,035/DS.           */
+/* Requires:  'reason', which is START, ABORT, CLOSE, or POLL, as defined on the    */
+/*            spreadsheet.                                                          */
+/* Returns:   DONE, IN_PROGRESS, or ERROR, as defined on the spreadsheet.           */
 /************************************************************************************/
 
 extern int ppp_stateMachine(int reason)
@@ -54,7 +73,11 @@ extern int ppp_stateMachine(int reason)
     {
        case IDLE:          switch (reason)
                            {
-                             case START: rc = initiate_link_connection();
+                             case START: if ((er = ui_set_progress_message(flags,ISP_Connect_Stage)) != NULL)
+                                         {
+                                              error_handler(__FILE__,__LINE__,"ppp_stateMachine()",er->errnum,er->errmess,WARNING);
+                                         }
+                                         rc = initiate_link_connection();
                                          if ((e_check(rc,__LINE__)) == ERROR)
                                          {
                                               return ERROR;
@@ -81,16 +104,16 @@ extern int ppp_stateMachine(int reason)
                              case POLL:  error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
                                              "Invalid event (POLL) in state (IDLE).",WARNING);
                                          ppp_state = IDLE;
-                                         return IN_PROGRESS;  // Safest option to return since it will recover.
+                                         return IN_PROGRESS;  // This is the right code to return.
                              default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
-                                           "Unrecognised reason code passed in state (IDLE).",FATAL);
+                                           "Unrecognised reason code passed in state (IDLE).",WARNING);
                            }
                            break;
 
        case CONNECTING:    switch (reason)
                            {
                              case START: error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
-                                             "Invalid event (START) in state (CONNECTING).",FATAL);
+                                             "Invalid event (START) in state (CONNECTING).",WARNING);
                                          ppp_state = CONNECTING;
                                          return ERROR;
                                          break;
@@ -128,14 +151,14 @@ extern int ppp_stateMachine(int reason)
                                          }
                                          break;
                              default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
-                                           "Unrecognised reason code passed in state (CONNECTING).",FATAL);
+                                           "Unrecognised reason code passed in state (CONNECTING).",WARNING);
                            }
                            break;
 
        case CONNECTED:     switch (reason)
                            {
                              case START: error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
-                                             "Invalid event (START) in state (CONNECTED).",FATAL);
+                                             "Invalid event (START) in state (CONNECTED).",WARNING);
                                          return ERROR;
                                          break;
                              case ABORT: /* Drop through */
@@ -158,10 +181,10 @@ extern int ppp_stateMachine(int reason)
                              case POLL:  error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
                                              "Invalid event (POLL) in state (CONNECTED).",WARNING);
                                          ppp_state = CONNECTED;
-                                         return IN_PROGRESS; // Safest option under the circumstances. Ought to recover.
+                                         return DONE;
                                          break;
                              default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
-                                           "Unrecognised reason code passed in state (CONNECTED).",FATAL);
+                                           "Unrecognised reason code passed in state (CONNECTED).",WARNING);
                            }
                            break;
 
@@ -205,84 +228,265 @@ extern int ppp_stateMachine(int reason)
                                               return DONE;
                                          }
                              default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
-                                           "Unrecognised reason code passed in state (DISCONNECTING).",FATAL);
+                                           "Unrecognised reason code passed in state (DISCONNECTING).",WARNING);
                            }
                            break;
 
        default:            error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
-                                         "Unrecognised ppp state.",FATAL);
+                                         "Unrecognised ppp state.",WARNING);
     }
 
     return ERROR;
 }
 
 /************************************************************************************/
-/* Function:       initiate_link_connection()                                       */
-/* Behaviour:*/
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:   initiate_link_connection()                                           */
+/* Behaviour:  Open a PPP link.                                                     */
+/* Returns:    DONE, PPP_ERROR_CANT_WRITE_SECRETS, PPP_ERROR_FAILED_CONNECT, or     */
+/*             PPP_ERROR_TIMEOUT.                                                   */
 /************************************************************************************/
 static int initiate_link_connection(void)
 {
-  #ifdef PPP_SIMULATION
+#ifndef PPP_SIMULATION
+    struct ifreq ifr;
+    int    error = 0;
+    int    r;
+    int    s;
+    int    start_time;
+    int    time;
+    char   pppconnect[] = "pppconnect\0";
+    _kernel_oserror *er = NULL;
+    _kernel_swi_regs regs;
+
+    /* Create secrets files in InetDBase */
+    s = create_secrets_files();
+    if (s) return s;
+
+    /* Do a *PPPConnnect */
+    regs.r[0] = (int)pppconnect;
+    if ((er = _kernel_swi(OS_CLI,&regs,&regs)) != NULL)
+    {
+         error_handler(__FILE__,__LINE__,"initiate_link_connection()",er->errnum,er->errmess,WARNING);
+         return ERROR;
+    }
+
+    /* Try and open a socket */
+    s = socket(PF_INET, SOCK_RAW, 0);
+    if (s == -1)
+    {
+        error_handler(__FILE__,__LINE__,"initiate_link_connection()",0,"Couldn't open a socket",WARNING);
+        return PPP_ERROR_FAILED_CONNECT;
+    }
+
+    /* Length of this array is 16 bytes */
+    sprintf(ifr.ifr_name, "ppp0");
+    //temporarily replaced strcpy while memchecking (see memcheck doc'n)
+
+    /* Note our start time and only try for a given time */
+    _swix(OS_ReadMonotonicTime, _OUT(0), &start_time);
+
+    do
+    {
+        /* See if socket up and running */
+        error = socketioctl (s, SIOCGIFFLAGS, &ifr);
+
+        /* Have we timed out yet? */
+        _swix(OS_ReadMonotonicTime, _OUT(0), &time);
+        if (time > (start_time + PPP_CONNECT_TIMEOUT))
+        {
+            error_handler(__FILE__,__LINE__,"initiate_link_connection()",0,"PPP timed out",WARNING);
+            return PPP_ERROR_TIMEOUT;
+        }
+    }
+    while (error != -1 && (ifr.ifr_ifru.ifru_flags & IFF_UP) == 0);
+
+    /* Close socket now */
+    r = socketclose(s);
+
+    /* socketioctl returned an error? */
+    if (error == -1)
+    {
+        error_handler(__FILE__,__LINE__,"initate_link_connection()",0,"socketioctl returned an error",WARNING);
+        return PPP_ERROR_FAILED_CONNECT;
+    }
+
+    /* socketclose returned an error? */
+    if (r == -1)
+    {
+        error_handler(__FILE__,__LINE__,"initiate_link_connection()",0,"socketclose returned an error",WARNING);
+        return PPP_ERROR_FAILED_CONNECT;
+    }
+
+    return DONE;
+
+#else
   static int timer_started = 0;
   static time_t save_time;
   int rc;
 
     delay_simulation(&timer_started,&save_time,&rc);
     return rc;
-  #endif
+#endif
 }
 
 /************************************************************************************/
-/* Function:       tell_ppp_to_disconnect()                                         */
-/* Behaviour:*/
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  tell_ppp_to_disconnect()                                              */
+/* Behaviour: Close PPP connection.                                                 */
+/* Returns:   DONE, PPP_ERROR_TIMEOUT, or PPP_ERROR_FAILED_DISCONNECT.              */
 /************************************************************************************/
 static int tell_ppp_to_disconnect(void)
 {
-  #ifdef PPP_SIMULATION
+#ifndef PPP_SIMULATION
+    _kernel_oserror *e;
+    _kernel_swi_regs regs;
+    struct stats     ppp_stats;
+    int              start_time;
+    int              time;
+    char   pppdisconnect[] = "pppdisconnect\0";
+
+    /* Do a *PPPDisconnect */
+    regs.r[0] = (int)pppdisconnect;
+    if ((e = _kernel_swi(OS_CLI,&regs,&regs)) != NULL)
+    {
+         error_handler(__FILE__,__LINE__,"tell_ppp_to_disconnect()",e->errnum,e->errmess,WARNING);
+         return PPP_ERROR_FAILED_DISCONNECT;
+    }
+
+    /* Note our start time and only try for a given time */
+    _swix(OS_ReadMonotonicTime, _OUT(0), &start_time);
+
+    do
+    {
+        e = _swix(PPP_Stats, _INR (0, 2), 0x1, 0, &ppp_stats);
+
+        /* Have we timed out yet? */
+        _swix(OS_ReadMonotonicTime, _OUT(0), &time);
+        if (time > (start_time + PPP_DISCONNECT_TIMEOUT))
+        {
+            return PPP_ERROR_TIMEOUT;
+        }
+    }
+    while (e == NULL && (ppp_stats.st_link_status & ST_STATUS_ACTIVE) != 0);
+
+    /* If PPP still active, return an error */
+    if ((ppp_stats.st_link_status & ST_STATUS_ACTIVE) != 0)
+        return PPP_ERROR_FAILED_DISCONNECT;
+
+    return DONE;
+
+#else
   static int timer_started = 0;
   static time_t save_time;
   int rc;
 
     delay_simulation(&timer_started,&save_time,&rc);
     return rc;
-  #endif
+#endif
 }
 
 /************************************************************************************/
-/* Function:       call_ppp_stats()                                                 */
-/* Behaviour:*/
-/* Prerequisites:*/
-/* Requires:*/
-/* Returns:*/
-/* Outputs:*/
+/* Function:  call_ppp_stats()                                                      */
+/* Behaviour: Not used at present.                                                  */
+/* Returns:   DONE                                                                  */
 /************************************************************************************/
 static int call_ppp_stats(void)
 {
-  #ifdef PPP_SIMULATION
+#ifndef PPP_SIMULATION
+    return DONE;
+
+#else
   static int timer_started = 0;
   static time_t save_time;
   int rc;
 
     delay_simulation(&timer_started,&save_time,&rc);
     return rc;
-  #endif
+#endif
 }
 
 /************************************************************************************/
-/* Function:       e_check()                                                        */
-/* Behaviour: */
-/* Prerequisites: */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
+/* Function:       create_secrets_file()                                            */
+/* Behaviour:      creates the files PAPSecrets, CHAPSecrets and options            */
+/* Prerequisites:  InetDBase system variable must be set.                           */
+/* Returns:        PPP_ERROR_CANT_WRITE_SECRETS, or 0 for success.                  */
+/************************************************************************************/
+#ifndef PPP_SIMULATION
+static int create_secrets_files(void)
+{
+    FILE *fp = NULL;
+    char  line[256];
+    char  options[] = "devices:$.SoftModem\n"
+                     "115200\n"
+                     "noipdefault\n"
+                     "defaultroute\n"
+                     "modem\n"
+                     "crtscts\n"
+                     "asyncmap 0\n"
+                     "diallerb\n";
+
+    if (usr_details == NULL)
+    {
+        error_handler(__FILE__,__LINE__,"create_secrets_files()",0,"No user details",WARNING);
+        return PPP_ERROR_CANT_WRITE_SECRETS;
+    }
+
+    if ((strlen(usr_details->isp.username) + strlen(usr_details->isp.password)+ 3) > 256)
+    {
+         error_handler(__FILE__,__LINE__,"create_secrets_files()",0,"ISP username / password too long",WARNING);
+         return PPP_ERROR_CANT_WRITE_SECRETS;
+    }
+
+    /* Write line of form 'username * password' */
+    sprintf(line, "%s * %s\n", usr_details->isp.username, usr_details->isp.password);
+
+    /* Write PAPSecrets */
+    fp = fopen(PAPSecrets_File, "w");
+    if (!fp)
+    {
+        error_handler(__FILE__,__LINE__,"create_secrets_files()",0,"PPP can't write PAP secrets",WARNING);
+        return PPP_ERROR_CANT_WRITE_SECRETS;
+    }
+    fputs(line, fp);
+    fclose(fp);
+
+    /* Write CHAPSecrets */
+    fp = fopen(CHAPSecrets_File, "w");
+    if (!fp)
+    {
+        error_handler(__FILE__,__LINE__,"create_secrets_files()",0,"PPP can't write CHAP secrets",WARNING);
+        return PPP_ERROR_CANT_WRITE_SECRETS;
+    }
+    fputs(line, fp);
+    fclose(fp);
+
+    /* Write options */
+    fp = fopen(PPPOptions_File, "w");
+    if (!fp)
+    {
+        error_handler(__FILE__,__LINE__,"create_secrets_files()",0,"PPP can't write options",WARNING);
+        return PPP_ERROR_CANT_WRITE_SECRETS;
+    }
+    fputs(options, fp);
+    sprintf(line, "name %s\n", usr_details->isp.username);
+    fputs(line, fp);
+    fclose(fp);
+
+    return 0;
+}
+#endif
+
+/************************************************************************************/
+/* Function:  e_check()                                                             */
+/* Behaviour: Checks return codes for error.  Internal error codes are translated   */
+/*            to those recognised by the UI Library before it is called to display  */
+/*            the error.                                                            */
+/* Requires:  - 'rc', which is the return code to check.                            */
+/*            - 'line', which is the line at which the error occurred.              */
+/* Returns:   Return code unchanged if not an error, otherwise ERROR is returned in */
+/*            accordance with the state machine spreadsheet.                        */
+/* Outputs:   On error, an error pop-up via the UI Library, error diagnostics to a  */
+/*            log file (providing logging is turned on), and error diagnostics to a */
+/*            system variable "err".                                                */
 /************************************************************************************/
 static int e_check(int rc,int line)
 {
@@ -293,6 +497,7 @@ static int e_check(int rc,int line)
     if ((rc != IN_PROGRESS) && (rc != DONE))
     {
          report_err = translate(rc);
+         //fprintf(logfile,"calling ui_show_error\n");
          if ((er = ui_show_error(flags,report_err)) != NULL)
          {
               error_handler(__FILE__,line,"ppp_stateMachine()",er->errnum,
@@ -306,12 +511,27 @@ static int e_check(int rc,int line)
 }
 
 /************************************************************************************/
-/* Function:       delay_simulation()                                               */
-/* Behaviour: */
-/* Prerequisites: */
-/* Requires: */
-/* Returns: */
-/* Outputs: */
+/* Function: delay_simulation()                                                     */
+/* Behaviour: Allows us to simulate how long various tasks are expected to take,    */
+/*            and to exercise IN_PROGRESS return codes.  Allows the UI simulator to */
+/*            be slowed to a decent speed for observation and testing during devel- */
+/*            opment.                                                               */
+/* Prerequisites: None.                                                             */
+/* Requires: - 'timer_started', which must be 0 on the first call.                  */
+/*           - 'save_time', which is used to evauluate elapsed time for a specific  */
+/*              activity.                                                           */
+/*           - 'rc', which is used to return DONE or IN_PROGRESS, depending upon    */
+/*              elapsed time.                                                       */
+/* Example usage: static int ftp_read_data(void)                                    */
+/*                {                                                                 */
+/*                  #ifdef FTP_SIMULATION                                           */
+/*                  static int timer_started = 0;                                   */
+/*                  static time_t save_time;                                        */
+/*                  int rc;                                                         */
+/*                     delay_simulation(&timer_started,&save_time,&rc);             */
+/*                     return rc;                                                   */
+/*                  #endif                                                          */
+/*                }                                                                 */
 /************************************************************************************/
 #ifdef PPP_SIMULATION
 static void delay_simulation(int *timer_started,time_t *save_time,int *rc)
