@@ -146,8 +146,7 @@ static void dispose_pos_list(RID_FMT_STATE *fmt)
     {
 	/*FMTDBGN(("dispose_pos_list: freeing previous pos list\n"));*/
 
-        /* pdh: OI! BORRIS! NOO!
-         * this doesn't free float_links or float_items
+        /* pdh: this doesn't free float_links or float_items
 
 	while (pi != fmt->stream->pos_last)
 	{
@@ -240,8 +239,6 @@ static void no_text_line(RID_FMT_STATE *fmt)
 
 static void no_float_line(RID_FMT_STATE *fmt)
 {
-    if ( fmt->float_line )
-        FMTDBG(( "nfl: blatting float line %p\n", fmt->float_line ));
     fmt->float_line = NULL;
 }
 
@@ -290,7 +287,7 @@ static BOOL floating_item_fits(RID_FMT_STATE *fmt)
     {
 	if (fmt->fmt_method == MUST && (have_text || have_fltrs) )
 	{
-	    FMTDBG(("floating_item_fits: forcing fits=FALSE\n"));
+	    FMTDBGN(("floating_item_fits: forcing fits=FALSE\n"));
 	    fits = FALSE;
 	}
     }
@@ -402,7 +399,7 @@ static void advance_float_line(RID_FMT_STATE *fmt)
 
     new->floats = mm_calloc(1, sizeof(*new->floats));
 
-    FMTDBG(("pi%p: afl: floats=%p\n", new, new->floats ));
+    FMTDBGN(("pi%p: afl: floats=%p\n", new, new->floats ));
 
     for (carried_over = 0, item = old->floats->left, finp = &new->floats->left;
 	 item != NULL;
@@ -677,7 +674,7 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
     {
 	if ( fmt->fmt_method == MUST && ( have_floaters || have_text ) )
 	{
-	    FMTDBG(("unbreakable_sequence_fits: forcing fits=FALSE\n"));
+	    FMTDBGN(("unbreakable_sequence_fits: forcing fits=FALSE\n"));
 	    fits = FALSE;
 	}
     }
@@ -685,7 +682,7 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
     {
 	if (!have_floaters && !have_text)
 	{
-	    FMTDBG(("unbreakable_sequence_fits: forcing fits=TRUE\n"));
+	    FMTDBGN(("unbreakable_sequence_fits: forcing fits=TRUE\n"));
 	    fits = TRUE;
 	}
     }
@@ -761,12 +758,15 @@ static void fracture_float_line(RID_FMT_STATE *fmt)
 	fmt->stream->pos_last = new;
     }
 
-    new->st = fmt->stream;
-    new->left_margin = text->left_margin;
-    new->floats = mm_calloc(1, sizeof(*new->floats));
-    new->floats->right_margin = text->floats->right_margin;
+    /* pdh: Margin values will be updated in fracture_copy_*
+     */
 
-    FMTDBG(("pi%p: ffl: floats=%p\n", new, new->floats ));
+    new->st = fmt->stream;
+    new->left_margin = 0;
+    new->floats = mm_calloc(1, sizeof(*new->floats));
+    new->floats->right_margin = fmt->format_width;
+
+    FMTDBGN(("pi%p: ffl: floats=%p\n", new, new->floats ));
 
     /* Linked into chain - still need to replicate surviving floating items. */
 }
@@ -777,6 +777,7 @@ static void fracture_copy_left(RID_FMT_STATE *fmt)
     rid_pos_item *old = fmt->text_line;
     rid_pos_item *new = old->next;
     rid_float_item *fi = old->floats->left;
+    rid_float_item *last;
     rid_float_item **finp = &new->floats->left;	/* Floating Item Next Pointer */
     int carried_over = 0;
 
@@ -795,6 +796,7 @@ static void fracture_copy_left(RID_FMT_STATE *fmt)
 	    **finp = *fi;
 	    /* But update the linkage */
 	    (*finp)->next = NULL;
+	    last = *finp;
 	    /* And advance our pointer */
 	    finp = &((*finp)->next);
 	    carried_over++;
@@ -803,6 +805,8 @@ static void fracture_copy_left(RID_FMT_STATE *fmt)
     }
 
     ASSERT(finp != &new->floats->left);
+
+    new->left_margin = last->entry_margin + last->ti->width;
 
     FMTDBGN(("fracture_copy_left: carried over %d items\n", carried_over));
 }
@@ -814,6 +818,7 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
     rid_pos_item *new = old->next;
     rid_float_item *fi = old->floats->right;
     rid_float_item **finp = &new->floats->right;
+    rid_float_item *last;
     int carried_over = 0;
 
     ASSERT(new != NULL);
@@ -826,6 +831,7 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
 	if (fi->height_left > 0)
 	{
 	    *finp = mm_calloc(1, sizeof(**finp));
+	    last = *finp;
 	    **finp = *fi;
 	    (*finp)->next = NULL;
 	    finp = &((*finp)->next);
@@ -835,6 +841,8 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
     }
 
     ASSERT(finp != &new->floats->right);
+
+    new->floats->right_margin = last->entry_margin - last->ti->width;
 
     FMTDBGN(("fracture_copy_right: carried over %d items\n", carried_over));
 }
@@ -1030,7 +1038,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
        is positioned in distances from the left margin. */
     if ( ! FLOATERS_THIS_LINE(pi) )
     {
-        FMTDBG(("pi%p: freeing floats %p\n", pi, pi->floats ));
+        FMTDBGN(("pi%p: freeing floats %p\n", pi, pi->floats ));
 	mm_free(pi->floats);
 	pi->floats = NULL;
     }
@@ -1046,7 +1054,6 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     if (debug_get("FMTDBGN"))
 	dump_pos(pi);
 #endif
-
 }
 
 /*****************************************************************************
@@ -1142,7 +1149,11 @@ static void deal_with_unbreakable_sequence(RID_FMT_STATE *fmt)
     BOOL usf = FALSE;
 
     if (fmt->unbreakable_start->tag == rid_tag_SCAFF)
+    {
 	fmt->previous_pad = 0;
+    }
+
+    FMTDBGN(("deal_with_unbreakable_sequence: a %d is come\n", fmt->unbreakable_start->tag));
 
     if ( /*! only_scaffolding(fmt)*/ 1 )
     {
@@ -1366,7 +1377,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		break;
 	    }
 
-	    FMTDBG(("formatting_start: set tag %d's width to %d (%s)\n", ti->tag, ti->width, 
+	    FMTDBG(("formatting_start: set tag %d's width to %d (%s)\n", ti->tag, ti->width,
 		    fnames[fmt->fmt_method]));
 	}
     }
@@ -1629,7 +1640,8 @@ static BOOL only_whitespace(rid_text_item *ti, rid_header *rh)
     flexmem_noshift();		/* no shift whilst accessing text array */
 
     s = rh->texts.data + tit->data_off;
-    if ( s[0] == ' ' && s[1] == '\0' )
+    if ( ( s[0] == ' ' && s[1] == '\0' )
+         || s[0] == '\0' )
 	only = TRUE;
 
     flexmem_shift();		/* no shift whilst accessing text array */
@@ -1648,12 +1660,12 @@ static void scaffold_check(rid_text_item *ti, rid_header *rh)
     {
 	rid_text_item *other = ti;
 
-	FMTDBGN(("scaffold_check: worth scanning\n"));
+	FMTDBG(("scaffold_check: worth scanning\n"));
 
 	while (1)
 	{
 	    other = other->next;
-	    FMTDBGN(("scanning: other now %p\n", other));
+	    FMTDBG(("scanning: other now %p\n", other));
 	    if (other->next == NULL)
 		break;
 	    if (FLOATING_ITEM(other->next))
@@ -1662,18 +1674,18 @@ static void scaffold_check(rid_text_item *ti, rid_header *rh)
 		break;
 	    if (! only_whitespace(other, rh) )
 		break;
-	    FMTDBGN(("scaffold_check: continue looping\n"));
+	    FMTDBG(("scaffold_check: continue looping\n"));
 	}
 
-	FMTDBGN(("scaffold_check: other %p, other->next %p\n", other, other->next));
+	FMTDBG(("scaffold_check: other %p, other->next %p\n", other, other->next));
 
 	if ( other->next != NULL && FLOATING_ITEM(other->next) )
 	{
-	    FMTDBGN(("scaffold_check: converting intervening whitespace to scaffold\n"));
+	    FMTDBG(("scaffold_check: converting intervening whitespace to scaffold\n"));
 	    do
 	    {
 		ti = ti->next;
-		FMTDBGN(("scaffold_check: convert %p to rid_tag_SCAFF\n", ti));
+		FMTDBG(("scaffold_check: convert %p to rid_tag_SCAFF\n", ti));
 		ti->tag = rid_tag_SCAFF;
 		ti->flag = rid_flag_NO_BREAK;
 		ti->max_up = ti->max_down = 0;

@@ -4035,6 +4035,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
 
     rh = doc->rh;
+    rh->doc = doc;
 
     ti = rh->stream.text_last;
     PPDBG(("Old last item is 0x%p\n", ti));

@@ -221,14 +221,14 @@ typedef struct rid_pos_item {
 
 /* Note that one can have overhangs. If F is float, T text and E
    empty, this is quite possible:
- 
+
    FFT
    EFT
 
    This means that just adding up the floating images on a line with
    floating items does not necessarily get the right answer. One has
    to take the rightmost floating item's entry margin plus its width.  */
-typedef struct rid_float_item 
+typedef struct rid_float_item
 {
     struct rid_float_item *	next;	/* next L/R float item */
     struct rid_text_item *	ti;	/* The item that is floating */
@@ -946,6 +946,8 @@ typedef struct rid_header {
 #ifdef BUILDERS
     int cwidth;			/* Width of monospaced text font */
 #endif
+
+    struct _antweb_doc *doc;            /* link back upward */
 
 } rid_header;
 

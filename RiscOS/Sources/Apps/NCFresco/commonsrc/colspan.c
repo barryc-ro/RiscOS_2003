@@ -56,12 +56,12 @@ static void generate_constraints_summary(rid_table_item *table,
 		ptr->with_percent += 1;
 	    else
 		ptr->without_percent += 1;
-	    
+
 	    if (flags & colspan_flag_RELATIVE)
 		ptr->with_relative += 1;
 	    else
 		ptr->without_relative += 1;
-	    
+
 	    if (flags & colspan_flag_FINISHED)
 		ptr->finished += 1;
 	    else
@@ -78,7 +78,7 @@ static void generate_constraints_summary(rid_table_item *table,
 
   An array of integer values. An each <= 0 is considered 'notched out'
 
-(int *array, int max, int slop  
+(int *array, int max, int slop
 
  */
 
@@ -89,7 +89,7 @@ static void generate_constraints_summary(rid_table_item *table,
 
 static void print_colspan_flags(unsigned int flags)
 {
-    static struct { unsigned int f; char *n; } 
+    static struct { unsigned int f; char *n; }
     names[] =
     {
 	{ colspan_flag_ABSOLUTE		, "colspan_flag_ABSOLUTE" } ,
@@ -182,7 +182,7 @@ extern void colspan_trace_cells (rid_table_item *table, BOOL horiz)
 	    FMTDBG(("GRP %2d ST %3d EN %3d\n", x, group->istart, group->iend));
 	    group = group->next_start;
 	}
-    }	
+    }
     FMTDBG(("\n"));
 
     /* Column flags */
@@ -205,7 +205,7 @@ extern void colspan_trace_cells (rid_table_item *table, BOOL horiz)
 	    print_colspan_flags(group->flags);
 	    group = group->next_start;
 	}
-    }	
+    }
 
     FMTDBG(("\n"));
     }
@@ -258,7 +258,7 @@ extern void colspan_bias(rid_table_item *table, int bias, BOOL horiz)
     {
 	pcp_group grp;
 	pcp_cell cell = the_cells + X;
-	
+
 	if ( (cell->flags & colspan_flag_USED) != 0 )
 	{
 	    /* Column used directly - bias */
@@ -323,7 +323,7 @@ extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array
     {
 	pcp_cell cell = table->colspans + x;
 	const int z = (cell+1)->leftmost;
-	
+
 	cell->width[slot] = z - prev;
 	prev = z;
     }
@@ -331,8 +331,8 @@ extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array
 
 /*****************************************************************************/
 
-extern void colspan_column_and_eql_bitset(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_column_and_eql_bitset(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int AND,
 					unsigned int EQL,
@@ -351,8 +351,8 @@ extern void colspan_column_and_eql_bitset(rid_table_item *table,
     }
 }
 
-extern void colspan_column_and_eql_set(rid_table_item *table, 
-				       BOOL horiz, 
+extern void colspan_column_and_eql_set(rid_table_item *table,
+				       BOOL horiz,
 				       width_array_e slot,
 				       unsigned int AND,
 				       unsigned int EQL,
@@ -371,8 +371,8 @@ extern void colspan_column_and_eql_set(rid_table_item *table,
     }
 }
 
-extern void colspan_column_and_eql_copy(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_column_and_eql_copy(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int AND,
 					unsigned int EQL,
@@ -391,8 +391,8 @@ extern void colspan_column_and_eql_copy(rid_table_item *table,
     }
 }
 
-extern void colspan_column_and_eql_lt_copy(rid_table_item *table, 
-					   BOOL horiz, 
+extern void colspan_column_and_eql_lt_copy(rid_table_item *table,
+					   BOOL horiz,
 					   width_array_e slot,
 					   unsigned int AND,
 					   unsigned int EQL,
@@ -413,7 +413,7 @@ extern void colspan_column_and_eql_lt_copy(rid_table_item *table,
 }
 
 extern void colspan_column_and_eql_upwards(rid_table_item *table,
-					   BOOL horiz, 
+					   BOOL horiz,
 					   width_array_e slot,
 					   unsigned int AND,
 					   unsigned int EQL,
@@ -437,7 +437,7 @@ extern void colspan_column_and_eql_upwards(rid_table_item *table,
 }
 
 extern void colspan_column_and_eql_downwards(rid_table_item *table,
-					     BOOL horiz, 
+					     BOOL horiz,
 					     width_array_e slot,
 					     unsigned int AND,
 					     unsigned int EQL,
@@ -461,7 +461,7 @@ extern void colspan_column_and_eql_downwards(rid_table_item *table,
 }
 
 extern void colspan_column_and_eql_halve(rid_table_item *table,
-					     BOOL horiz, 
+					     BOOL horiz,
 					     width_array_e slot,
 					     unsigned int AND,
 					     unsigned int EQL)
@@ -482,7 +482,7 @@ extern void colspan_column_and_eql_halve(rid_table_item *table,
 }
 
 extern void colspan_column_and_eql_double(rid_table_item *table,
-					     BOOL horiz, 
+					     BOOL horiz,
 					     width_array_e slot,
 					     unsigned int AND,
 					     unsigned int EQL)
@@ -504,7 +504,7 @@ extern void colspan_column_and_eql_double(rid_table_item *table,
 
 
 extern void colspan_column_and_eql_scale(rid_table_item *table,
-					 BOOL horiz, 
+					 BOOL horiz,
 					 width_array_e slot,
 					 unsigned int AND,
 					 unsigned int EQL,
@@ -526,7 +526,7 @@ extern void colspan_column_and_eql_scale(rid_table_item *table,
 }
 
 extern int colspan_sum_columns(rid_table_item *table,
-				BOOL horiz, 
+				BOOL horiz,
 				width_array_e slot)
 {
     const int max = horiz ? table->cells.x : table->cells.y;
@@ -548,8 +548,8 @@ extern int colspan_sum_columns(rid_table_item *table,
 /*****************************************************************************/
 
 
-extern void colspan_all_and_eql_bitclr(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_all_and_eql_bitclr(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int AND,
 					unsigned int EQL,
@@ -578,8 +578,8 @@ extern void colspan_all_and_eql_bitclr(rid_table_item *table,
     }
 }
 
-extern void colspan_all_and_eql_lt_copy(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_all_and_eql_lt_copy(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int AND,
 					unsigned int EQL,
@@ -608,8 +608,8 @@ extern void colspan_all_and_eql_lt_copy(rid_table_item *table,
     }
 }
 
-extern void colspan_all_and_eql_copy(rid_table_item *table, 
-				     BOOL horiz, 
+extern void colspan_all_and_eql_copy(rid_table_item *table,
+				     BOOL horiz,
 				     width_array_e slot,
 				     unsigned int AND,
 				     unsigned int EQL,
@@ -637,7 +637,7 @@ extern void colspan_all_and_eql_copy(rid_table_item *table,
 }
 
 extern void colspan_all_and_eql_set(rid_table_item *table,
-				    BOOL horiz, 
+				    BOOL horiz,
 				    width_array_e slot,
 				    unsigned int AND,
 				    unsigned int EQL,
@@ -666,7 +666,7 @@ extern void colspan_all_and_eql_set(rid_table_item *table,
 
 
 extern void colspan_all_and_eql_halve(rid_table_item *table,
-				      BOOL horiz, 
+				      BOOL horiz,
 				      width_array_e slot,
 				      unsigned int AND,
 				      unsigned int EQL)
@@ -694,7 +694,7 @@ extern void colspan_all_and_eql_halve(rid_table_item *table,
 
 
 extern void colspan_all_and_eql_double(rid_table_item *table,
-				       BOOL horiz, 
+				       BOOL horiz,
 				       width_array_e slot,
 				       unsigned int AND,
 				       unsigned int EQL)
@@ -722,7 +722,7 @@ extern void colspan_all_and_eql_double(rid_table_item *table,
 
 
 extern void colspan_all_and_eql_scale(rid_table_item *table,
-				      BOOL horiz, 
+				      BOOL horiz,
 				      width_array_e slot,
 				      unsigned int AND,
 				      unsigned int EQL,
@@ -769,7 +769,7 @@ extern void colspan_free_structure(rid_table_item *table, BOOL horiz)
 	int x;
 	for (x = 0; x < max; x++)
 	{
-	    pcp_group grp = the_cells[x].first_start; 
+	    pcp_group grp = the_cells[x].first_start;
 	    while (grp != NULL)
 	    {
 		pcp_group nxt = grp->next_start;
@@ -787,14 +787,14 @@ extern void colspan_free_structure(rid_table_item *table, BOOL horiz)
   Create a new group record and chain it in (NB this means that
   multiple groups which start and end in the same places will lead to
   multiple records; this is deliberate to keep both space and time
-  linear in (cells+groups) 
+  linear in (cells+groups)
 
   Returns a pointer to the widths array for further initialistion.
 
 */
 
 static pcp_group new_group (pcp_cell_t * the_cells,
-			    int istart, 
+			    int istart,
 			    int iend)
 {
     int iw;
@@ -803,7 +803,7 @@ static pcp_group new_group (pcp_cell_t * the_cells,
     result->istart = istart;
     result->iend = iend;
 
-    for (iw = 0; iw < N_COLSPAN_WIDTHS; iw++) 
+    for (iw = 0; iw < N_COLSPAN_WIDTHS; iw++)
 	result->width[iw] = NOTINIT;
 
     /* chain it in to the cell array in two places (one for each end) */
@@ -846,7 +846,7 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
     {
 	widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
     }
-    
+
     switch (vp->type)
     {
     case value_absunit:
@@ -879,17 +879,17 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
     {
 	if (widths[RAW_MIN] < cell->stream.width_info.minwidth)
 	    widths[RAW_MIN] = cell->stream.width_info.minwidth;
-	
+
 	if (widths[RAW_MAX] < cell->stream.width_info.maxwidth)
 	    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
-	
+
 	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
     }
     else
     {
 	if (widths[RAW_MIN] < - cell->stream.height )
 	    widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
-    }	        
+    }
 
     flags |= colspan_flag_USED;
     group->flags |= flags;
@@ -902,7 +902,7 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
 	   constraints contribute to them, but don;t get flagged as
 	   being used just because they have received a constraint
 	   contribution. */
-	table->colspans[z].flags |= flags; 
+	table->colspans[z].flags |= flags;
     }
 }
 
@@ -954,17 +954,17 @@ static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell,
     {
 	if (widths[RAW_MIN] < cell->stream.width_info.minwidth)
 	    widths[RAW_MIN] = cell->stream.width_info.minwidth;
-	
+
 	if (widths[RAW_MAX] < cell->stream.width_info.maxwidth)
 	    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
-	
+
 	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
     }
     else
     {
 	if (widths[RAW_MIN] < - cell->stream.height )
 	    widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
-    }	        
+    }
 }
 
 /*****************************************************************************/
@@ -990,7 +990,7 @@ static void colspan_init_structure1(rid_table_item *table, BOOL horiz)
     {
 	/*the_cells[x].first_start = NULL;*/
 	/*the_cells[x].first_end = NULL;*/
-	for (iw = 0; iw < N_COLSPAN_WIDTHS; iw++) 
+	for (iw = 0; iw < N_COLSPAN_WIDTHS; iw++)
 	    the_cells[x].width[iw] = NOTINIT;
 	the_cells[x].leftmost = NOTINIT;
 	the_cells[x].rightmost = NOTINIT;
@@ -1196,7 +1196,7 @@ static BOOL have_contradictions(rid_table_item *table, BOOL horiz)
 
   NOTE: colspan_flag_USED should be used to determine whether a column
   header value is supplied from the user or inferred from surrounding
-  information.  
+  information.
 
   This version takes what we consider to be a simplistic approach to
   constraints and overrides percentage constraints by absolute
@@ -1204,7 +1204,7 @@ static BOOL have_contradictions(rid_table_item *table, BOOL horiz)
   absolute constraints. This extends over the entire group, if
   applicable. This means we end up with each column receiving ZOm user
   constraints, and no groups have holes in them.
-  
+
 */
 
 extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
@@ -1230,10 +1230,10 @@ extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
 
 /*****************************************************************************/
 
-static BOOL notch(rid_table_item *table, 
-		  BOOL horiz, 
-		  width_array_e slot, 
-		  unsigned int AND, 
+static BOOL notch(rid_table_item *table,
+		  BOOL horiz,
+		  width_array_e slot,
+		  unsigned int AND,
 		  unsigned int EQL)
 {
     const int max = HORIZMAX(table, horiz);
@@ -1455,7 +1455,7 @@ static void padding_only_share(rid_table_item *table,
 }
 
 /*****************************************************************************
-       
+
   Add space only to columns with an absolute width specification. May
   or may not satisfy all the absolute width constraints.
 
@@ -1473,7 +1473,7 @@ static int attempt_meet_abs_min(rid_table_item *table, BOOL horiz, int slop, con
 }
 
 /*****************************************************************************
-  
+
   Add space only to columns with a percetnage width specification. May
   or may not satisfy all these.
 
@@ -1558,11 +1558,11 @@ static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
 		{
 		    const int my_max = the_cells[x].width[RAW_MAX];
 		    const int want = (slop * my_max) / total_max;
-		    
+
 		    the_cells[x].width[ACTUAL] += want;
 		    left -= want;
 		}
-	    
+
 	    slop = left;
 	}
     }
@@ -1599,7 +1599,7 @@ static void most_constraints_then_share_fairly(rid_table_item *table,
        constraints (if there are any, and it's possible).  slop is
        remaining space still to share out */
 
-    FMTDBG(("\nAdd %d slop pixels onto %s slot, fwidth %d, %s\n\n", 
+    FMTDBG(("\nAdd %d slop pixels onto %s slot, fwidth %d, %s\n\n",
 	    slop, WIDTH_NAMES[best], fwidth, HORIZVERT(horiz)));
 
     ASSERT(slop >= 0);
@@ -1719,8 +1719,8 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 	    y += table->rowhdrs[x]->sizey;
 	}
     }
-    
-    
+
+
     /* Sum up cell sizes. Can probably do this better! */
     for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
     {
@@ -1768,7 +1768,7 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 	    }
 	}
     }
-    
+
     if (horiz)
     {
 	FMTDBG(("offx values : "));
@@ -1777,7 +1777,7 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 	    FMTDBG(("%3d ", table->colhdrs[x]->offx));
 	}
 	FMTDBG(("\n"));
-	
+
 	FMTDBG(("sizex values: "));
 	for (x = 0; x < table->cells.x; x++)
 	{
@@ -1793,7 +1793,7 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 	    FMTDBG(("%3d ", table->rowhdrs[x]->offy));
 	}
 	FMTDBG(("\n"));
-	
+
 	FMTDBG(("sizey values: "));
 	for (x = 0; x < table->cells.y; x++)
 	{
@@ -1801,7 +1801,7 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 	}
 	FMTDBG(("\n"));
     }
-    
+
     if (horiz)
 	table->size.x = master[ACTUAL];
     else
@@ -1931,7 +1931,7 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
   to actual position of right cell boundary.
 
   Remember, the value in ACTUAL fields and the fwidth given include
-  TABLE_OUTSIDE_BIAS.  
+  TABLE_OUTSIDE_BIAS.
 
   FIRST_MIN: FIRST_MIN > fwidth ? FIRST_MIN : fwidth;
 
@@ -1940,7 +1940,7 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
   LAST_MAX: sized ? sized size : LAST_MAX
 */
 
-extern void colspan_share_extra_space (rid_table_item *table, 
+extern void colspan_share_extra_space (rid_table_item *table,
 				       int fwidth,
 				       BOOL horiz)
 {
@@ -1964,6 +1964,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    else
 	    {
 		FMTDBG(("colspan_share_extra_space: been stomped - ignoring\n"));
+		user_width = fwidth = master[RAW_MIN];
 	    }
 	    break;
 
@@ -1978,6 +1979,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    else
 	    {
 		FMTDBG(("colspan_share_extra_space: can't use it - STRANGE\n"));
+		user_width = fwidth = master[RAW_MIN];
 	    }
 	    break;
 	}
@@ -2073,9 +2075,9 @@ extern void colspan_share_extra_space (rid_table_item *table,
 
     /* Reflect the values calculated in the existing colhdr structure. */
     reflect_into_table(table, horiz);
-    
+
     FMTDBG(("colspan_share_extra_space: Table %d, final fwidth %d, done\n", table->idnum, fwidth));
-	
+
     colspan_trace_cells(table, horiz);
 
 

@@ -733,7 +733,8 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
 	else
 	    frontend_pointer_set_position(NULL, x, on_screen_kbd_pos.y1 - 16);
 
-	_swix(IconHigh_Start, _IN(0), 0);
+	/* It is now up to the OSK to enable iconhigh */
+/*  	_swix(IconHigh_Start, _IN(0), 0); */
 
 	/* move highlight back into main window at old position */
 	fe_move_highlight(fe_selected_view(), flags | be_link_INCLUDE_CURRENT | be_link_VISIBLE | be_link_TEXT);

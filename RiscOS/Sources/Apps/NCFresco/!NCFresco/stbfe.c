@@ -249,7 +249,7 @@ static char *pending_error_retry = NULL;
 pointermode_t pointer_mode = (pointermode_t)-1;
 
 static wimp_mousestr pointer_last_pos = { 0 };
-static BOOL pointer_ignore_next = FALSE;
+static int pointer_ignore_next = 0;		/* 0= no ignore, 1=just ignore, 2 = ignore and read position */
 
 void fe_pointer_mode_update(pointermode_t mode)
 {
@@ -289,7 +289,9 @@ void frontend_pointer_set_position(fe_view v, int x, int y)
 
     pointer_set_position(p.x, p.y);
 
-    pointer_ignore_next = TRUE;
+    pointer_ignore_next = 1;
+    pointer_last_pos.x = p.x &~ 1;
+    pointer_last_pos.y = p.y &~ 1;
 
     STBDBG(("pointer_set_position: %d,%d\n", p.x, p.y));
 }
@@ -3371,8 +3373,9 @@ static void fe_idle_handler(void)
 
 	    if (pointer_ignore_next)
 	    {
-		frontend_fatal_error(wimp_get_point_info(&pointer_last_pos));
-		pointer_ignore_next = FALSE;
+		if (pointer_ignore_next == 2)
+		    frontend_fatal_error(wimp_get_point_info(&pointer_last_pos));
+		pointer_ignore_next = 0;
 	    }
 	    else
 	    {
@@ -3941,7 +3944,7 @@ static void fe_keyboard_closed(void)
 
 static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
 {
-    STBDBG(("fe_keyboard_set_position\n"));
+    STBDBG(("fe_keyboard_set_position: %d,%d %d,%d\n", box->x0, box->y0, box->x1, box->y1));
 
     /* record task handle and bounding box */
     on_screen_kbd = t;
@@ -4289,7 +4292,7 @@ static void fe_mode_changed(void)
 	fe_refresh_window(-1, NULL);
 
     /* re read the pointer position as the OS tends to move it around at this point */
-    pointer_ignore_next = TRUE;
+    pointer_ignore_next = 2;
 }
 
 static void fe_handle_dataopen(wimp_msgstr *msg)

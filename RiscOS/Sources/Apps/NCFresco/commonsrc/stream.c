@@ -196,14 +196,30 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
     else
     {
 	rid_text_item *float_l, *float_r;
+	rid_float_item *rfi;
 	int found = FALSE;
 
 	hpos = pi->left_margin;
 
 	float_l = float_r = NULL;
 
-	if (pi->floats)
+	if (pi->floats && *x < pi->left_margin)
 	{
+	    rfi = pi->floats->left;
+
+	    while ( rfi && !found )
+	    {
+	        if ( *x >= rfi->entry_margin
+	             && *x < (rfi->entry_margin + rfi->ti->width) )
+	        {
+	            *x -= rfi->entry_margin;
+	            ti2 = rfi->ti;
+	            *y -= (ti2->line->top - ti2->max_up);
+	            found = TRUE;
+	        }
+	        rfi = rfi->next;
+	    }
+
 	    if (pi->floats->left)
 	    {
 		float_l = pi->floats->left->ti;
@@ -215,20 +231,22 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	    if (pi->floats->right)
 		float_r = pi->floats->right->ti;
 	}
+	else if ( pi->floats && *x > pi->floats->right_margin )
+	{
+	    rfi = pi->floats->right;
 
-	if (float_l && (*x < float_l->width))
-	{
-	    /* *x -= 0; */
-	    ti2 = float_l;
-	    *y -= (ti2->line->top - ti2->max_up);
-	    found = TRUE;
-	}
-	else if (float_r && (*x >= (pi->st->fwidth - float_r->width)))
-	{
-	    *x -= (pi->st->fwidth - float_r->width);
-	    ti2 = float_r;
-	    *y -= (ti2->line->top - ti2->max_up);
-	    found = TRUE;
+	    while ( rfi && !found )
+	    {
+	        if ( *x < rfi->entry_margin
+	             && *x >= (rfi->entry_margin - rfi->ti->width ) )
+	        {
+	            *x -= (rfi->entry_margin - rfi->ti->width);
+	            ti2 = rfi->ti;
+	            *y -= (ti2->line->top - ti2->max_up);
+	            found = TRUE;
+	        }
+	        rfi = rfi->next;
+	    }
 	}
 	else
 	{
@@ -238,9 +256,15 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	    }
 	    else
 	    {
-		for(ti2 = pi->first; ti2 != pi->next->first; ti2 = ti2->next)
+		for( ti2 = pi->first; ti2; ti2 = ti2->next )
 		{
 		    int ohpos = hpos;
+
+                    if ( FLOATING_ITEM(ti2) )
+                        continue;
+
+                    if ( ti2->line != pi )
+                        break;
 
 		    if ((ti2->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0)
 		    {
@@ -423,14 +447,13 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 		   const int right, const int bot,
 		   object_font_state *fs, wimp_box *g, const int update )
 {
-    rid_pos_item *pi;
+    rid_pos_item *pi, *firstpi;
     rid_text_item *ti;
-    rid_text_item *float_l, *float_r;
 
     if (stream == NULL || stream->pos_list == NULL)
 	return;
 
-    RENDBG(("Rendering rectangle.  ox=%d, oy=%d.\n", ox, oy));
+    RENDBG(("st%p: rendering rectangle.  ox=%d, oy=%d.\n", stream, ox, oy));
     RENDBG(("Top work area = %d, bottom = %d\n", top, bot));
     RENDBG(("Left = %d, right = %d\n", left, right));
     RENDBG(("Scanning down\n"));
@@ -443,51 +466,46 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 	RENDBGN(("Skipping line, top=%d\n", pi->top));
     }
 
-    float_l = float_r = NULL;
+    firstpi = pi;
 
     for( ; pi && pi->top > bot; pi = pi->next)
     {
 	int hpos, bline;
+	rid_float_item *rfi;
 
 	RENDBGN(("Got line in range, top=%d\n", pi->top));
 
-	hpos = ox + pi->left_margin;
+        hpos = ox;
 	bline = pi->top - pi->max_up + oy;
 
 	if (pi->floats)
 	{
-	    if (pi->floats->left)
+	    rfi = pi->floats->left;
+	    while ( rfi )
 	    {
-		if (pi->floats->left->ti != float_l)
+		if ( pi == firstpi || rfi->pi == pi )
 		{
-		    float_l = pi->floats->left->ti;
-		    (object_table[float_l->tag].redraw)
-			(float_l, doc->rh, doc,
-			 ox,
-			 pi->floats->left->pi->top - float_l->max_up + oy,
+		    (object_table[rfi->ti->tag].redraw)
+			(rfi->ti, doc->rh, doc,
+			 ox + rfi->entry_margin,
+			 rfi->pi->top - rfi->ti->max_up + oy,
 			 fs, g, ox, oy, update);
 		}
-	    }
-	    else
-	    {
-		float_l = NULL;
+		rfi = rfi->next;
 	    }
 
-	    if (pi->floats->right)
+            rfi = pi->floats->right;
+            while ( rfi )
 	    {
-		if (pi->floats->right->ti != float_r)
+		if ( pi == firstpi || rfi->pi == pi )
 		{
-		    float_r = pi->floats->right->ti;
-		    (object_table[float_r->tag].redraw)
-			(float_r, doc->rh, doc,
-			 ox + pi->st->fwidth - float_r->width,
-			 pi->floats->right->pi->top - float_r->max_up + oy,
+		    (object_table[rfi->ti->tag].redraw)
+			(rfi->ti, doc->rh, doc,
+			 ox + rfi->entry_margin - rfi->ti->width,
+			 rfi->pi->top - rfi->ti->max_up + oy,
 			 fs, g, ox, oy, update);
 		}
-	    }
-	    else
-	    {
-		float_r = NULL;
+		rfi = rfi->next;
 	    }
 
             /* pdh: left_margin now includes float width
@@ -496,20 +514,34 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
              */
 	}
 
+	hpos = ox + pi->left_margin;
+
 	RENDBGN(("Base line at %d, hpos starts at %d\n", bline, hpos));
 
-	for (ti = pi->first; ti && ti != pi->next->first; ti = rid_scanf(ti) /*ti->next*/ )
+        /* pdh: fiddled a bit to look like the New Loop Style (see
+         * html/formatter.html)
+         */
+
+	for (ti = pi->first; ti; ti = rid_scanf(ti) )
 	{
 	    RENDBGN(("%s item at %p hpos=%d, width=%d\n", item_names[ti->tag], ti, hpos, ti->width));
 
-	    if (hpos >= right)
+            if ( FLOATING_ITEM(ti) )
+                continue;
+
+	    if ( hpos >= right || ti->line != pi )
 		break;
+
 	    if ((ti->flag & rid_flag_CLEARING) ||
 		(ti->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0)
 	    {
 		if ((ti->width == MAGIC_WIDTH_HR) || ((hpos + ti->width + ti->pad) >= left) )
 		{
 		    RENDBGN(("Rendering item at %d,%d\n", hpos, bline));
+
+                    if ( ti->tag == rid_tag_TABLE )
+                        RENDBGN(("st%p: rendering table %p at %d,%d pos=%p\n",
+                                stream, ti, hpos, bline, pi ));
 
 		    (object_table[ti->tag].redraw)(ti, doc->rh, doc, hpos, bline,
 						   fs, g, ox, oy, update);

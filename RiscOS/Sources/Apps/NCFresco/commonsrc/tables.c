@@ -2229,7 +2229,7 @@ extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
 	}
     }
 
-    table->flags &= ~( rid_tf_COLGROUPSECTION | 
+    table->flags &= ~( rid_tf_COLGROUPSECTION |
 		       rid_tf_NO_MORE_CELLS |
 		       rid_tf_IMPLIED_COLGROUP        /* pdh: added this */
                          );
@@ -3044,14 +3044,14 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		    table->cells.x, cell->span.x, cell->cell.x, cell->cell.y));
 	}
 	else
-	{    
+	{
 	    /* Try to fit */
 #if NEWGROW
 	    if (cell->cell.x + cell->swant.x > table->cells.x)
 	    {       /* Filled up. Reduce span. */
 		/*table->flags |= rid_tf_NO_MORE_CELLS;*/
 		TABDBG(("cell %d,%d wanted span.x %d, but table is %d,%d, so limited to %d\n",
-			cell->cell.x, cell->cell.y, 
+			cell->cell.x, cell->cell.y,
 			cell->swant.x, cell->swant.y,
 			table->cells.x, table->cells.y,
 			table->cells.x - cell->cell.x));
@@ -3062,7 +3062,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    {       /* Filled up. Reduce span. */
 		/*table->flags |= rid_tf_NO_MORE_CELLS;*/
 		TABDBG(("cell %d,%d wanted span.x %d, but table is %d,%d, so limited to %d\n",
-			cell->cell.x, cell->cell.y, 
+			cell->cell.x, cell->cell.y,
 			cell->span.x, cell->span.y,
 			table->cells.x, table->cells.y,
 			table->cells.x - cell->cell.x));
@@ -3167,10 +3167,10 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    cell->span.x = x;
 #else
 	    if ( gbf_active(GBF_NETSCAPE_OVERLAPS) )
-	    { 
+	    {
 		/* SJM: netscape overlaps in the other order so try stomping over cell to see if it works */
-		/* DAF: wasn't good enough - consider 
-		   <TABLE> <TR> <TD> <TD rowspan=2 colspan=2> 
+		/* DAF: wasn't good enough - consider
+		   <TABLE> <TR> <TD> <TD rowspan=2 colspan=2>
 		   <TR> <TD colspan=2> </TABLE> */
 		rid_table_cell *oldcell = *cellp;
 		{ /* DAF: 970424: */ static int THIS_DOES_NOT_WORK_SO_DO_NOT_USE_UNLESS_PYSCHOTIC; }
@@ -3182,7 +3182,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		    oldcell->sleft = 0;
 		}
 		oldcell->flags |= rid_cf_COMPLETE;
-		
+
 		/* DAF: Clear out ALL preceeding traces of the ealier
 		   growth. To see why, work through this example:  */
 		/* DAF: Mark ourselves for this cell */

@@ -20,7 +20,7 @@
 #include "object.h"
 #include "coalesce.h"
 
-#if DEBUG && 0
+#if DEBUG
 #define fdebugf fprintf
 #else
 #define fdebugf 1?0:fprintf
@@ -66,6 +66,19 @@ static int strcount( const char *s, char c )
  * it goes.
  */
 
+/* Flags which, if set, mean two items can't be coalesced */
+#define LEFT_CANT (rid_flag_LINE_BREAK+rid_flag_NO_BREAK+rid_flag_SELECTED+ \
+                   rid_flag_LEFTWARDS+rid_flag_RIGHTWARDS+rid_flag_CLEARING+ \
+                   rid_flag_EXPLICIT_BREAK)
+#define RIGHT_CANT (rid_flag_NO_BREAK+rid_flag_SELECTED+ \
+                   rid_flag_LEFTWARDS+rid_flag_RIGHTWARDS+rid_flag_CLEARING)
+
+/* Flags which, if clear, mean two items can't be coalesced */
+#define REQUIRE (rid_flag_FVPR)
+
+/* Flags which must be the same if two items are to be coalesced */
+#define SAME (rid_flag_COLOUR_MASK+rid_flag_RINDENT+rid_flag_WIDE_FONT)
+
 void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont )
 {
 #ifndef BUILDERS
@@ -98,12 +111,13 @@ void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont )
         {
             if ( tit->base.tag == rid_tag_TEXT
                  && tit2->base.tag == rid_tag_TEXT
-                 && (tit->base.flag & ~0x2003) == (tit2->base.flag & ~0x2003)
+                 && !(tit->base.flag & LEFT_CANT)
+                 && !(tit2->base.flag & RIGHT_CANT)
+                 && (tit->base.flag & REQUIRE)
+                 && (tit2->base.flag & REQUIRE)
+                 && ( (tit->base.flag & SAME) == (tit2->base.flag & SAME) )
                  && *((int*)&tit->base.st) == *((int*)&tit2->base.st)
                  && tit->base.aref == tit2->base.aref
-                 && (tit->base.flag & 0x10FF) == rid_flag_FVPR
-                 && (tit->base.flag & 0xFF) == 0
-                 && (tit2->base.flag & 3) != 2
                  && tit->base.pad
                  && tit2->base.pad)   /* if there's a space */
             {
@@ -280,12 +294,11 @@ void un_coalesce( rid_header *rh, rid_text_item *ti )
         fdebugf( stderr, " «%s»", s );
         ptr->data_off = s - rh->texts.data;
 
-        /* @@@@ double bodge
-         * otext_size  (a) doesn't shift the flex area
-         *         and (b) doesn't use its third argument.
-         * If either of those facts changes, this will go wrong
+        /* @@@@ bodge
+         * otext_size doesn't shift the flex area... if that changes, this will
+         * go wrong.
          */
-        otext_size( (rid_text_item*)ptr, rh, NULL );
+        otext_size( (rid_text_item*)ptr, rh, rh->doc );
 
         ptr = (rid_text_item_text*)ptr->base.next;
     }

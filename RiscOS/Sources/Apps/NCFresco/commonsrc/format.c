@@ -683,9 +683,9 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 	    break;
 	}
     }
-    
+
     /*colspan_trace_cells(table, horiz);*/
-    
+
     n_components =  find_connected_components (table, colspan_flag_ABSOLUTE_COL, colspan_flag_ABSOLUTE_GROUP, horiz);
     FMTDBG(("%d absolute components\n", n_components));
     /*csg_examine(table->colspans, max);*/
@@ -1465,7 +1465,7 @@ static void recurse_format_table(antweb_doc *doc,
     /* Perform vertical and horizontal positioning of cells within table */
     /*format_position_table_cells(table);*/
 
-    FMTDBG(("recurse_format_table: Chosen size %d,%d for table id=%d at depth %d\n", 
+    FMTDBG(("recurse_format_table: Chosen size %d,%d for table id=%d at depth %d\n",
 	    table->size.x, table->size.y, table->idnum, depth));
 
     /* pdh: here? */
@@ -1553,7 +1553,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
     {
 	FMTDBG(("Sizing root stream\n"));
 	basic_size_stream(doc, rh, root_stream, 0);
-	FMTDBG(("\nDone sizing root stream: min %d, max %d\n", 
+	FMTDBG(("\nDone sizing root stream: min %d, max %d\n",
 		root_stream->width_info.minwidth,
 		root_stream->width_info.maxwidth));
 
