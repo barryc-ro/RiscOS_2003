@@ -7,8 +7,6 @@
 EXP_HDR = <CExport$Dir>
 RESAPP = <Resource$Dir>.Apps.!NCFresco
 RESRES = <Resource$Dir>.Resources.NCFresco
-SRCCOMMON = Resources.Common.${Locale}
-SRCLOCALE = Resources.${UserIf}.${Locale}
 #
 # Generic options:
 #
@@ -43,28 +41,20 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
+	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.,Resources.Common.UK.
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
-	${CP} ${SRCCOMMON}.!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
-	${CP} ${SRCCOMMON}.!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
-	${CP} ${SRCCOMMON}.!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} ${SRCCOMMON}.SpritesROM  ${RESRES}.Sprites ${CPFLAGS}
-	${CP} ${SRCCOMMON}.Messages    ${RESRES}.Messages ${CPFLAGS}
-	${CP} ${SRCCOMMON}.Res         ${RESRES}.Res      ${CPFLAGS}
-	${CP} ${SRCCOMMON}.Welcome     ${RESRES}.Welcome  ${CPFLAGS}
-	${CP} ${SRCCOMMON}.SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
-	${CP} ${SRCCOMMON}.MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
-	${CP} ${SRCCOMMON}.Config      ${RESRES}.Config   ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} ${SRCLOCALE}.SpritesROM  ${RESRES}.Sprites ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Messages    ${RESRES}.Messages ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Res         ${RESRES}.Res      ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Welcome     ${RESRES}.Welcome  ${CPFLAGS}
-	${CP} ${SRCLOCALE}.SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
-	${CP} ${SRCLOCALE}.MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Config      ${RESRES}.Config   ${CPFLAGS}
+	${CP} NCFrescoRORes:!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
+	${CP} NCFrescoRORes:!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
+	${CP} NCFrescoRORes:!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} NCFrescoRORes:SpritesROM  ${RESRES}.Sprites  ${CPFLAGS}
+	${CP} NCFrescoRORes:Messages    ${RESRES}.Messages ${CPFLAGS}
+	${CP} NCFrescoRORes:Res         ${RESRES}.Res      ${CPFLAGS}
+	${CP} NCFrescoRORes:Welcome     ${RESRES}.Welcome  ${CPFLAGS}
+	${CP} NCFrescoRORes:SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
+	${CP} NCFrescoRORes:MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
+	${CP} NCFrescoRORes:Config      ${RESRES}.Config   ${CPFLAGS}
+	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
 
 #resources:
