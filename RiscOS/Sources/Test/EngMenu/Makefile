@@ -143,6 +143,8 @@ resources: ${TARGET} dirs
         access ${RESAPP}.!Run WR/r
         ${CP} ${RDIR}.Pace	${RESAPP}.Pace ${CPFLAGS}
         access ${RESAPP}.Pace WR/r
+        ${CP} ${RDIR}.CheckKey	${RESAPP}.CheckKey ${CPFLAGS}
+        access ${RESAPP}.CheckKey WR/r
         ${CP} ${LDIR}Messages   ${RESAPP}.Messages ${CPFLAGS}
         access ${RESAPP}.Messages WR/r
         ${CP} ${LDIR}Config     ${RESAPP}.Config ${CPFLAGS}
@@ -164,6 +166,7 @@ clean:
         ${WIPE} inst ${WFLAGS}
         ${WIPE} ${RESAPP}.!Run ${WFLAGS}
         ${WIPE} ${RESAPP}.Pace ${WFLAGS}
+        ${WIPE} ${RESAPP}.CheckKey ${WFLAGS}
         ${WIPE} ${RESAPP}.!RunImage ${WFLAGS}
         ${WIPE} ${RESAPP}.Messages ${WFLAGS}
         ${WIPE} ${RESAPP}.Config ${WFLAGS}
