@@ -44,11 +44,12 @@ SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 INETLIB_NORM=TCPIPLibs:o.inetlib
 SOCKLIB_NORM=TCPIPLibs:o.socklib
+REMOTEDB  = <Lib$Dir>.debug.o.remotezm
 #
 # Include files
 #
 
-INCLUDES  = -IC:,TCPIPLibs:
+INCLUDES  = -IC:,TCPIPLibs:,<Lib$Dir>.
 
 DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -DFTP_PUT -DCSFS ${FTP_DB} ${FTP_REMOTE_DB}
 
@@ -105,8 +106,8 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -117,8 +118,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
         Access rm.${COMPONENT} RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
@@ -132,63 +133,6 @@ o.test1: c.test1
         ${CC} -c ${INCLUDES} ${DFLAGS} -o $@ c.test1
 
 # Dynamic dependencies:
-o.files:	c.files
-o.files:	h.tcplibs
-o.files:	TCPIPLibs:sys.h.types
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	TCPIPLibs:machine.h.endian
-o.files:	TCPIPLibs:machine.h.ansi
-o.files:	TCPIPLibs:machine.h.types
-o.files:	TCPIPLibs:sys.h.socket
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	TCPIPLibs:sys.h.errno
-o.files:	C:h.kernel
-o.files:	TCPIPLibs:net.h.if
-o.files:	TCPIPLibs:sys.h.socket
-o.files:	TCPIPLibs:sys.h.time
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	TCPIPLibs:net.h.if_arp
-o.files:	TCPIPLibs:sys.h.socket
-o.files:	TCPIPLibs:netinet.h.in
-o.files:	TCPIPLibs:sys.h.ioctl
-o.files:	TCPIPLibs:sys.h.ttycom
-o.files:	TCPIPLibs:sys.h.ioccom
-o.files:	TCPIPLibs:sys.h.ioccom
-o.files:	TCPIPLibs:sys.h.filio
-o.files:	TCPIPLibs:sys.h.ioccom
-o.files:	TCPIPLibs:sys.h.sockio
-o.files:	TCPIPLibs:sys.h.ioccom
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	TCPIPLibs:h.netdb
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	TCPIPLibs:netns.h.ns
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	TCPIPLibs:sys.h.time
-o.files:	TCPIPLibs:h.socklib
-o.files:	TCPIPLibs:sys.h.types
-o.files:	TCPIPLibs:sys.h.socket
-o.files:	TCPIPLibs:sys.h.stat
-o.files:	TCPIPLibs:sys.h.time
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	TCPIPLibs:sys.h.time
-o.files:	TCPIPLibs:sys.h.uio
-o.files:	TCPIPLibs:sys.h.cdefs
-o.files:	C:h.kernel
-o.files:	TCPIPLibs:h.inetlib
-o.files:	TCPIPLibs:sys.h.types
-o.files:	TCPIPLibs:netinet.h.in
-o.files:	C:h.kernel
-o.files:	C:h.swis
-o.files:	h.files
-o.files:	h.q
-o.files:	h.status
-o.files:	h.webftp
-o.files:	h.pads
-o.files:	h.privwebftp
-o.files:	h.autofns
-o.support: s.support
-o.support: hdr.swinames
-o.support: hdr.regnames
 o.webftp:	c.webftp
 o.webftp:	h.all
 o.webftp:	h.tcplibs
@@ -244,6 +188,7 @@ o.webftp:	h.status
 o.webftp:	h.webftp
 o.webftp:	h.pads
 o.webftp:	h.privwebftp
+o.webftp:	<Lib$Dir>.debug.h.remote
 o.webftp:	h.autofns
 o.webftp:	h.csfs
 o.q:	c.q
@@ -301,8 +246,67 @@ o.q:	h.status
 o.q:	h.webftp
 o.q:	h.pads
 o.q:	h.privwebftp
+o.q:	<Lib$Dir>.debug.h.remote
 o.q:	h.autofns
 o.q:	h.csfs
+o.files:	c.files
+o.files:	h.tcplibs
+o.files:	TCPIPLibs:sys.h.types
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	TCPIPLibs:machine.h.endian
+o.files:	TCPIPLibs:machine.h.ansi
+o.files:	TCPIPLibs:machine.h.types
+o.files:	TCPIPLibs:sys.h.socket
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	TCPIPLibs:sys.h.errno
+o.files:	C:h.kernel
+o.files:	TCPIPLibs:net.h.if
+o.files:	TCPIPLibs:sys.h.socket
+o.files:	TCPIPLibs:sys.h.time
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	TCPIPLibs:net.h.if_arp
+o.files:	TCPIPLibs:sys.h.socket
+o.files:	TCPIPLibs:netinet.h.in
+o.files:	TCPIPLibs:sys.h.ioctl
+o.files:	TCPIPLibs:sys.h.ttycom
+o.files:	TCPIPLibs:sys.h.ioccom
+o.files:	TCPIPLibs:sys.h.ioccom
+o.files:	TCPIPLibs:sys.h.filio
+o.files:	TCPIPLibs:sys.h.ioccom
+o.files:	TCPIPLibs:sys.h.sockio
+o.files:	TCPIPLibs:sys.h.ioccom
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	TCPIPLibs:h.netdb
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	TCPIPLibs:netns.h.ns
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	TCPIPLibs:sys.h.time
+o.files:	TCPIPLibs:h.socklib
+o.files:	TCPIPLibs:sys.h.types
+o.files:	TCPIPLibs:sys.h.socket
+o.files:	TCPIPLibs:sys.h.stat
+o.files:	TCPIPLibs:sys.h.time
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	TCPIPLibs:sys.h.time
+o.files:	TCPIPLibs:sys.h.uio
+o.files:	TCPIPLibs:sys.h.cdefs
+o.files:	C:h.kernel
+o.files:	TCPIPLibs:h.inetlib
+o.files:	TCPIPLibs:sys.h.types
+o.files:	TCPIPLibs:netinet.h.in
+o.files:	C:h.kernel
+o.files:	C:h.swis
+o.files:	h.files
+o.files:	h.q
+o.files:	h.status
+o.files:	h.webftp
+o.files:	h.pads
+o.files:	h.privwebftp
+o.files:	<Lib$Dir>.debug.h.remote
+o.files:	h.autofns
+o.support: s.support
+o.support: hdr.swinames
+o.support: hdr.regnames
 o.misc:	c.misc
 o.misc:	h.all
 o.misc:	h.tcplibs
@@ -358,6 +362,7 @@ o.misc:	h.status
 o.misc:	h.webftp
 o.misc:	h.pads
 o.misc:	h.privwebftp
+o.misc:	<Lib$Dir>.debug.h.remote
 o.misc:	h.autofns
 o.misc:	h.csfs
 o.dirparse:	c.dirparse
@@ -415,5 +420,6 @@ o.dirparse:	h.status
 o.dirparse:	h.webftp
 o.dirparse:	h.pads
 o.dirparse:	h.privwebftp
+o.dirparse:	<Lib$Dir>.debug.h.remote
 o.dirparse:	h.autofns
 o.dirparse:	h.csfs
