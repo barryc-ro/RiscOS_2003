@@ -15,11 +15,11 @@ AS      = aasm
 CP      = -copy
 RM      = remove
 LD	= link
-TR	= translator
+TR	= translate
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
-TRFLAGS = $(THROWBACK) -o "´´" -c "ªª" -htmlo "êê" -htmlc "ëë" -t Translate.<UserIF>.<Locale>.Tokenised
+TRFLAGS = $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m TranslateRes:Mappings
 
 #
 # Program specific options:
@@ -43,7 +43,7 @@ install_rom: ${TARGET}
 clean:
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources_old:
 	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.,Resources.Common.UK.
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
@@ -75,7 +75,7 @@ resources:
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
 
-resources_translated:
+resources:
 	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.,Resources.Common.UK.
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
@@ -84,28 +84,28 @@ resources_translated:
 	${CP} NCFrescoRORes:!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
 	${CP} NCFrescoRORes:!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
 	${CP} NCFrescoRORes:SpritesROM  ${RESRES}.Sprites  ${CPFLAGS}
-	${TR} -m TranslateRes:Messages  -s ${RESRES}.Messages ${TRFLAGS}
+	${TR} -i TranslateRes:Messages  -o ${RESRES}.Messages ${TRFLAGS}
 	${CP} NCFrescoRORes:Res         ${RESRES}.Res      ${CPFLAGS}
 	${CP} NCFrescoRORes:Welcome     ${RESRES}.Welcome  ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
 	${CP} NCFrescoRORes:Config      ${RESRES}.Config   ${CPFLAGS}
-	${TR} -m TranslateRes:html.badurl    -s ${RESRES}.html.badurl    ${TRFLAGS}
-	${TR} -m TranslateRes:html.favs      -s ${RESRES}.html.favs      ${TRFLAGS}
-	${TR} -m TranslateRes:html.favsd     -s ${RESRES}.html.favsd     ${TRFLAGS}
-	${TR} -m TranslateRes:html.hista     -s ${RESRES}.html.hista     ${TRFLAGS}
-	${TR} -m TranslateRes:html.histr     -s ${RESRES}.html.histr     ${TRFLAGS}
-	${TR} -m TranslateRes:html.jsalert   -s ${RESRES}.html.jsalert   ${TRFLAGS}
-	${TR} -m TranslateRes:html.jsprompt  -s ${RESRES}.html.jsprompt  ${TRFLAGS}
-	${TR} -m TranslateRes:html.jsokcncl  -s ${RESRES}.html.jsokcncl  ${TRFLAGS}
-	${TR} -m TranslateRes:html.optfonts  -s ${RESRES}.html.optfonts  ${TRFLAGS}
-	${TR} -m TranslateRes:html.opttext   -s ${RESRES}.html.opttext  ${TRFLAGS}
-	${TR} -m TranslateRes:html.password  -s ${RESRES}.html.password  ${TRFLAGS}
-	${TR} -m TranslateRes:html.printopts -s ${RESRES}.html.printopts ${TRFLAGS}
-	${TR} -m TranslateRes:html.sslcert   -s ${RESRES}.html.sslcert   ${TRFLAGS}
-	${TR} -m TranslateRes:html.sslpin    -s ${RESRES}.html.sslpin    ${TRFLAGS}
-	${TR} -m TranslateRes:html.sslserv   -s ${RESRES}.html.sslserv   ${TRFLAGS}
-	${TR} -m TranslateRes:html.ssltoken  -s ${RESRES}.html.ssltoken  ${TRFLAGS}
-	${TR} -m TranslateRes:html.url       -s ${RESRES}.html.url       ${TRFLAGS}
+	${TR} -i TranslateRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
+	${TR} -i TranslateRes:html.favs      -o ${RESRES}.html.favs      ${TRFLAGS}
+	${TR} -i TranslateRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
+	${TR} -i TranslateRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
+	${TR} -i TranslateRes:html.histr     -o ${RESRES}.html.histr     ${TRFLAGS}
+	${TR} -i TranslateRes:html.jsalert   -o ${RESRES}.html.jsalert   ${TRFLAGS}
+	${TR} -i TranslateRes:html.jsprompt  -o ${RESRES}.html.jsprompt  ${TRFLAGS}
+	${TR} -i TranslateRes:html.jsokcncl  -o ${RESRES}.html.jsokcncl  ${TRFLAGS}
+	${TR} -i TranslateRes:html.optfonts  -o ${RESRES}.html.optfonts  ${TRFLAGS}
+	${TR} -i TranslateRes:html.opttext   -o ${RESRES}.html.opttext  ${TRFLAGS}
+	${TR} -i TranslateRes:html.password  -o ${RESRES}.html.password  ${TRFLAGS}
+	${TR} -i TranslateRes:html.printopts -o ${RESRES}.html.printopts ${TRFLAGS}
+	${TR} -i TranslateRes:html.sslcert   -o ${RESRES}.html.sslcert   ${TRFLAGS}
+	${TR} -i TranslateRes:html.sslpin    -o ${RESRES}.html.sslpin    ${TRFLAGS}
+	${TR} -i TranslateRes:html.sslserv   -o ${RESRES}.html.sslserv   ${TRFLAGS}
+	${TR} -i TranslateRes:html.ssltoken  -o ${RESRES}.html.ssltoken  ${TRFLAGS}
+	${TR} -i TranslateRes:html.url       -o ${RESRES}.html.url       ${TRFLAGS}
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
 
