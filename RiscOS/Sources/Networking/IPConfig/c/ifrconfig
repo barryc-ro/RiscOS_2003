@@ -248,6 +248,7 @@ static int use_configured_info( int s, char *ifname, ip_data *ip )
 
             		SetVarVal( SYSVAR_INET_BOOTFILE, ip->boot_mount);
             		SetVarVal( SYSVAR_INET_MOUNTPATH, ip->boot_mount );
+            		SetVarVal( SYSVAR_INET_SERVERNAME2, ip->boot_mount );
 
 	    		ifrconfig_set_var(SYSVAR_INET_BOOTSERVER, ip->server_ip);
 	    		ifrconfig_set_var(SYSVAR_INET_GATEWAY, ip->gateway_ip);
@@ -257,6 +258,7 @@ static int use_configured_info( int s, char *ifname, ip_data *ip )
 	    		ifrconfig_set_extra_var(ip->addr3_ip, 3);
 	    		ifrconfig_set_extra_var(ip->addr4_ip, 4);
 	    		ifrconfig_set_var(SYSVAR_INET_ETHERIPMASK, ip->netmask_ip);
+	    		ifrconfig_set_var(SYSVAR_NBNS_IP_ADDR, ip->nbns_ip);
             		return 1;
                 }
                 else {
@@ -299,15 +301,22 @@ static void ifrconfig_get_extra_var_ip(struct in_addr *ip, int varno)
 }
 
 /* Searches the comma-separated string for the given keyword, case insensitively.
- * Returns 1 if it found it, 0 if it did not.  env may not be NULL on entry.
+ * Returns NULL if it did not find the keyword, else a pointer to the value after the
+ * = terminator, else a pointer to the keyword within env.
+ * Neither env nor keyword may be NULL on entry.
  */
-static int ifrconfig_find_keyword(const char *env, const char *keyword)
+static const char *ifrconfig_find_keyword(const char *env, const char *keyword)
 {
         const size_t len = strlen(keyword);
 
         while (*env != '\0') {
         	if (Strncmp_ci(env, keyword, len) == 0) {
-                	if (env[len] == '\0' || env[len] == ',' || env[len] == '=') return 1;
+                	if (env[len] == '\0' || env[len] == ','){
+                                return env;
+                        }
+                        else if (env[len] == '=') {
+                                return env + len + 1;
+                        }
                 }
                 /* Skip to next keyword */
                 while (*env != '\0' && *env != ',') {
@@ -318,17 +327,28 @@ static int ifrconfig_find_keyword(const char *env, const char *keyword)
         return 0;
 }
 
+static const char *ifrconfig_locate_keyword(const char *keyword)
+{
+        const char *env = getenv(SYSVAR_INET_PRIVATEDATA);
+
+        if (env == NULL) {
+                return env;
+        }
+        else {
+        	return ifrconfig_find_keyword(env, keyword);
+        }
+}
+
 /*
  *  This function examines the private data returned by the boot server (if any)
  *  to determine whether we are required to write the dynamically discovered
  *  data into the NVRAM and switch to static booting for future boot attempts.
+ *  It also looks for a filesystem reset command in the response too.
  */
 static void check_switch_to_static_boot(ip_data *ip)
 {
-        const char *env = getenv(SYSVAR_INET_PRIVATEDATA);
-
-        if (env == NULL) return;
-        if (!ifrconfig_find_keyword(env, "static")) return;
+        const char *env;
+        if (!ifrconfig_locate_keyword("static")) return;
 
 	#ifdef TRACE
 	write_tag_msg_nl("IFRStore");
@@ -340,6 +360,7 @@ static void check_switch_to_static_boot(ip_data *ip)
 	(void) GetIPVar(&ip->server_ip, SYSVAR_INET_BOOTSERVER);
 	(void) GetIPVar(&ip->gateway_ip, SYSVAR_INET_GATEWAY);
 	(void) GetIPVar(&ip->dns_ip, SYSVAR_INET_RESOLVERS);
+	(void) GetIPVar(&ip->nbns_ip, SYSVAR_NBNS_IP_ADDR);
 	ifrconfig_get_extra_var_ip(&ip->addr1_ip, 1);
 	ifrconfig_get_extra_var_ip(&ip->addr1_ip, 2);
 	ifrconfig_get_extra_var_ip(&ip->addr1_ip, 3);
@@ -347,7 +368,19 @@ static void check_switch_to_static_boot(ip_data *ip)
 	if (GetIPVar(&ip->netmask_ip, SYSVAR_INET_ETHERIPMASK)) {
 	        GetMask(&ip->netmask_ip, (int *) &ip->netmask);
 	}
-	env = getenv(SYSVAR_INET_BOOTFILE);
+	if (ip->configured_fs == filesystem_LANMANFS) {
+		env = getenv(SYSVAR_INET_SERVERNAME);
+		if (env != NULL) {
+		        (void) strncpy(ip->nbns_bootserver, env, cmos_NB_BOOT_SERVER_SZ);
+		}
+	        env = getenv(SYSVAR_INET_SERVERNAME2);
+	}
+	else {
+	        env = NULL;
+	}
+	if (env == NULL) {
+		env = getenv(SYSVAR_INET_BOOTFILE);
+	}
 	if (env != NULL) {
 	        (void) strncpy(ip->boot_mount, env, cmos_BOOT_MOUNT_SZ);
 	}
@@ -521,6 +554,18 @@ int ifrconfig(int s, char *ifname)
 		check_switch_to_static_boot(&ip);
 	}
 #endif
+
+	/* Test private data to see if we were asked to switch configured filesystems */
+	{
+	        const char *fs_cmos = ifrconfig_locate_keyword("FS");
+	        if (fs_cmos) {
+	                #ifdef TRACE
+	                module_printf(stderr, "Server requested filesystem switch to %s\n",
+	                	fs_cmos);
+	                #endif
+	                editconfig_write_configured_fs_by_name(fs_cmos);
+	        }
+	}
 
         #ifdef TRACE
         module_printf(stderr, "ifrconfig() exits at end of routine (returns 1)\n");

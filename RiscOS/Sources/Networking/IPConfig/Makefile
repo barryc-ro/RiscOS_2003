@@ -37,9 +37,15 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 TOUCH	= stamp
+AWK     = awk
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
+
+AWKVARS  = -v cpflags="${CPFLAGS}" -v resdir="${RESDIR}" -v resfsdir="${RESFSDIR}"
+AWKFLAGS = -f LocalRes:^.awk-script ${AWKVARS}
+AWKTMP1   = awkexec
+AWKTMP2   = awkramres
 
 #
 # Include files
@@ -65,11 +71,11 @@ CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 
 ROM_OBJS	= o.iicpoke or.module or.ifrconfig or.editconfig or.utils\
-		  or.lineedit or.Strncmp_ci o.ipconfhdr
+		  or.lineedit or.Strncmp_ci o.atmconfig  o.ipconfhdr
 RAM_OBJS	= o.iicpoke o.module  o.ifrconfig  o.editconfig  o.utils \
-		  o.lineedit  o.Strncmp_ci  o.ipconfhdr  ${RESF}
+		  o.lineedit  o.Strncmp_ci  o.atmconfig  o.ipconfhdr  ${RESF}
 DBG_OBJS	= o.iicpoke od.module od.ifrconfig od.editconfig od.utils\
-		  od.lineedit od.Strncmp_ci od.ipconfhdr ${DBGRESF}
+		  od.lineedit od.Strncmp_ci od.atmconfig od.ipconfhdr ${DBGRESF}
 
 RESF		= o.msgs
 
@@ -116,11 +122,22 @@ install_rom: ${ROM_MODULE}
 
 resources: LocalRes:Messages
         TokenCheck LocalRes:Messages
+        IfThere LocalSystemRes:Custom Then TokenCheck LocalSystemRes:Custom
         ${MKDIR} ${RESDIR}
         ${CP} LocalRes:Messages ${RESDIR}.Messages ${CPFLAGS}
+        IfThere LocalSystemRes:Custom Then\
+        	${CP} LocalSystemRes:Custom ${RESDIR}.Custom
+        ${AWK} ${AWKFLAGS} -v phase=$@ -v awkexec="${AWKTMP1}"
+        SetType ${AWKTMP1} Obey
+        Run ${AWKTMP1}
         @echo ${COMPONENT}: resource files copied to Messages module
 
-clean:
+cleanres:
+        ${RM}   ${AWKTMP1}
+        ${RM}   ${AWKTMP2}
+        @echo ${COMPONENT}: resource via files cleaned
+
+clean: cleanres
         ${WIPE} o ${WFLAGS}
         ${WIPE} od ${WFLAGS}
         ${WIPE} or ${WFLAGS}
@@ -145,7 +162,7 @@ export:
 #
 ${RAM_MODULE}:	${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 	${MKDIR} rm
-	$(LD) -o $@ -Map -rmf ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+	$(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
         ${MODSQZ} $@
         Access $@ RW/R
 
@@ -158,17 +175,23 @@ ${DBG_MODULE}:	${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 	$(LD) -o $@ -rmf ${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
         Access $@ RW/R
 
-${RESF}: LocalRes:Messages
-	TokenCheck LocalRes:Messages
-	resgen messages_file $@ LocalRes:Messages ${RESFSDIR}.Messages
+${AWKTMP2}: LocalRes:^.awk-script
+        ${AWK} ${AWKFLAGS} -v phase=ramresources -v awkexec="${AWKTMP2}"
 
-${DBGRESF}: LocalRes:Messages
+${RESF}: LocalRes:Messages ${AWKTMP2}
+	TokenCheck LocalRes:Messages
+	resgen messages_file $@ \
+		LocalRes:Messages ${RESFSDIR}.Messages\
+		-via ${AWKTMP2}
+
+${DBGRESF}: LocalRes:Messages ${AWKTMP2}
 	TokenCheck LocalRes:Messages
 	resgen messages_file $@ \
 		LocalRes:Messages ${RESFSDIR}.Messages \
 		Inet:bin.IfConfig IfConfig \
 		Inet:bin.InetStat InetStat \
-		Inet:bin.Route Route
+		Inet:bin.Route Route \
+		-via ${AWKTMP2}
 
 #
 # Final link for the ROM Image (using given base address)
