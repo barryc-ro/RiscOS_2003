@@ -70,7 +70,7 @@ Module    = ${OM}.header ${OM}.module ${OM}.usermode ${OM}.UnitTest
 Applic    = ${OM}.AppMain
 BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedinfo ${OM}.veneer
 Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib \
-            ${OM}.CheckIC ${OM}.serflash
+            ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
 
 OBJS      = ${Morris2}
 
