@@ -83,6 +83,7 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 install: rm.${COMPONENT} 
+        ${MKDIR} ${INSTDIR}
 	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
