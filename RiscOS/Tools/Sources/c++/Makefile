@@ -88,7 +88,7 @@ CMD_O=cmd.o.c++
 #
 # build a the library:
 #
-all:	${TARGET} ${CMD}
+all:	${TARGET}
 
 #
 # RISC OS ROM build rules:
