@@ -1,0 +1,425 @@
+/**************************************************************/
+/* File:    Play.c                                            */
+/*          (C) 1999 Pace Micro Technology PLC                */
+/*          All rights reserved                               */
+/*                                                            */
+/* Purpose: Implement RTSPOVS_Play.                           */
+/*                                                            */
+/* Author : A.D.Hodgkinson. Based on URL_Fetcher source by    */
+/*          S.N.Brodie and P. Wain.                           */
+/*                                                            */
+/* History: 08-Nov-1999 (ADH): Created.                       */
+/**************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
+
+#include <swis.h>
+
+#ifdef TRACE2
+  #define TRACE
+#endif
+#ifdef TRACE
+  #define DEBUGLIB
+#endif
+#include <debuglib/debuglib.h>
+
+#include <VideoCtrl.h>
+
+#include "CallOut.h"
+#include "Connect.h"
+#include "Generic.h"
+#include "Headers.h"
+#include "Module.h"
+#include "RTSPOErrors.h"
+#include "Session.h"
+#include "Status.h"
+#include "Utils.h"
+
+#include "Play.h"
+
+/**************************************************************/
+/* play_play()                                                */
+/*                                                            */
+/* Implement RTSPOVS_Play. See the Video Control              */
+/* specification, 2501,817/FS, for more.                      */
+/**************************************************************/
+
+_kernel_oserror * play_play(_kernel_swi_regs * r)
+{
+  session * s         = session_find_by_id(r->r[1]);
+  bool      fail      = false;
+//  char    * range     = NULL;
+//  int       range_len = 0;
+  char    * port;
+  bool      play;
+
+  dprintf(("", "play_play: Called\n"));
+
+  if (s == NULL)
+  {
+    dprintf(("", "play_play: ID not found\n"));
+
+    return make_error(rtspovs_ERROR_CLIENT_ID_NOT_FOUND, 0);
+  }
+
+  if (
+       s->state == protostate_DNS       ||
+       s->state == protostate_CONNECTED ||
+       s->state == protostate_SENDING   ||
+       s->state == protostate_RECEIVING ||
+       s->state == protostate_PUMPING
+     )
+  {
+    dprintf(("", "play_play: In progress\n"));
+
+    return make_error(rtspovs_ERROR_IN_PROGRESS, 0);
+  }
+
+  if (s->server_session == NULL)
+  {
+    dprintf(("", "play_play: No server session\n"));
+
+    return make_error(rtspovs_ERROR_NO_SERVER_SESSION, 0);
+  }
+
+  /* Ensure everything is reset for a new command */
+
+  session_reset_session(s);
+
+  /* Build the headers. First, the PLAY or PAUSE command */
+
+  if (r->r[3] != 0 && !strcmp((char *) r->r[3], "0")) play = false;
+  else                                                play = true;
+
+//  /* Work out the Range header. OVS kludges looping in the range */
+//  /* the range value, rather than adding x-Loop or similar. Ick. */
+//
+//  if (r->r[2] != 0)
+//  {
+//    range_len = strlen((char *) r->r[2]) + 1;
+//    if (s->loop != 0) range_len += 1; /* The ';' separator */
+//  }
+//  else if (s->loop != 0) range_len = sizeof(Headers_HeaderValue_Loop);
+//
+//  if (range_len != 0)
+//  {
+//    range = malloc(range_len);
+//
+//    if (range == NULL)
+//    {
+//      fail = true;
+//    }
+//    else
+//    {
+//      if (r->r[2] != 0)
+//      {
+//        strcpy(range, (char *) r->r[2]);
+//
+//        if (s->loop != 0)
+//        {
+//          strcat(range, ";");
+//          strcat(range, Headers_HeaderValue_Loop);
+//        }
+//      }
+//      else if (s->loop != 0) strcpy(range, Headers_HeaderValue_Loop);
+//    }
+//  }
+
+  /* Copy R3 away */
+
+  s->play_record = Strdup(r->r[3] == 0 ? "" : (char *) r->r[3]);
+
+  if (s->play_record == NULL) fail = true;
+
+  else if (
+            headers_add_header(&s->headers,
+                               play ? Headers_CommandName_Play : Headers_CommandName_Pause,
+                               s->url->full)
+            == NULL
+          )
+          fail = true;
+
+  /* A sequence header */
+
+  else if (headers_add_sequence_header(&s->headers) == NULL) fail = true;
+
+  /* Range */
+
+  else if (
+            r->r[2] != 0 &&
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Range,
+                               (char *) r->r[2])
+            == NULL
+          )
+          fail = true;
+
+//  else if (
+//            range_len != 0 &&
+//
+//            headers_add_header(&s->headers,
+//                               Headers_HeaderName_Range,
+//                               range)
+//            == NULL
+//          )
+//          fail = true;
+
+  /* If we're not pausing, the playback rate */
+
+  else if (
+            play         &&
+            r->r[3] != 0 &&
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Scale,
+                               (const char *) r->r[3])
+            == NULL
+          )
+          fail = true;
+
+  /* No AEN, so Connection: close */
+
+  else if (
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Connection,
+                               Headers_HeaderValue_Connection)
+            == NULL
+          )
+          fail = true;
+
+  /* Lastly, the session header */
+
+  else if (
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Session,
+                               s->server_session)
+            == NULL
+          )
+          fail = true;
+
+//  /* Free the temporary Range header buffer */
+//
+//  free(range);
+
+  /* Did anything fail? */
+
+  if (fail)
+  {
+    dprintf(("", "play_play: Out of memory\n"));
+    return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  /* Open a connection to send the command down */
+
+  if (s->url->port && *s->url->port) port = s->url->port;
+  else                               port = NULL;
+
+  s->sd = opensock(s->url->host,
+                   RTSPOVS_DefaultPort,
+                   port,
+                   &s->state,
+                   -1);
+
+  s->last = utils_read_time();
+
+  dprintf(("", "play_play: Socket descriptor %d, state %d\n", s->sd, s->state));
+
+  /* Set the state machine going to see errors and DNS stuff. The call */
+  /* to session_reset_session should've cleared the callout but it     */
+  /* never hurts to be sure (in future maybe stuff could go on in the  */
+  /* background that could have set a callout between the reset and    */
+  /* this part of the code).                                           */
+
+  if (s->callout_set == 0)
+  {
+    s->callout_set = 1;
+    timeout(status_proceed_on_callout, s, 50);
+  }
+
+  dprintf(("", "play_play: Successful\n"));
+
+  return NULL;
+}
+
+/**************************************************************/
+/* play_replay()                                              */
+/*                                                            */
+/* Issue an "in-the-background" PLAY command to loop video    */
+/* playback at the client end.                                */
+/*                                                            */
+/* Parameters: Pointer to a session struct for the video to   */
+/*             loop.                                          */
+/**************************************************************/
+
+_kernel_oserror * play_replay(session * s)
+{
+  _kernel_oserror * e;
+  bool              fail = false;
+  char            * port;
+  char            * range;
+  char            * scale;
+  session         * new_s;
+
+  dprintf(("", "play_replay: Called for %p\n", s));
+
+  if (s->server_session == NULL)
+  {
+    dprintf(("", "play_replay: No server session\n"));
+
+    return make_error(rtspovs_ERROR_NO_SERVER_SESSION, 0);
+  }
+
+  /* Create a new session */
+
+  e = session_new_session(&new_s);
+
+  if (e)
+  {
+    dprintf(("", "play_replay: session_new_session error '%s'\n", e->errmess));
+    return e;
+  }
+
+  if (new_s == NULL)
+  {
+    dprintf(("", "play_replay: Out of memory for new_s\n"));
+    return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  new_s->id     = (int) new_s;
+
+  new_s->parent = s;
+  s->child      = new_s;
+
+  /* We *should* have the play scale (speed) stored */
+
+  scale = s->play_record == NULL ? Headers_HeaderValue_Scale : s->play_record;
+  if (*scale == '\0') scale = Headers_HeaderValue_Scale;
+
+  /* Range will depend on direction of play */
+
+  if (*scale == '-')
+  {
+    range = Headers_HeaderValue_Range_Rwd;
+  }
+  else
+  {
+    range = Headers_HeaderValue_Range_Fwd;
+  }
+
+  /* Ensure everything is initialised for a new command in this clean session */
+
+  session_reset_session(new_s);
+
+  if (
+       headers_add_header(&new_s->headers,
+                          Headers_CommandName_Play,
+                          s->url->full)
+       == NULL
+     )
+     fail = true;
+
+  /* A sequence header */
+
+  else if (headers_add_sequence_header(&new_s->headers) == NULL) fail = true;
+
+  /* No AEN, so Connection: close */
+
+  else if (
+            headers_add_header(&new_s->headers,
+                               Headers_HeaderName_Connection,
+                               Headers_HeaderValue_Connection)
+            == NULL
+          )
+          fail = true;
+
+  /* Content length */
+
+  else if (
+            headers_add_header(&new_s->headers,
+                               Headers_HeaderName_ContentLength,
+                               "0")
+            == NULL
+          )
+          fail = true;
+
+  /* Range */
+
+  else if (
+            headers_add_header(&new_s->headers,
+                               Headers_HeaderName_Range,
+                               range)
+            == NULL
+          )
+          fail = true;
+
+  /* The Scale header value should be stored... */
+
+  else if (
+            headers_add_header(&new_s->headers,
+                               Headers_HeaderName_Scale,
+                               scale)
+            == NULL
+          )
+          fail = true;
+
+  /* Lastly, the session header */
+
+  else if (
+            headers_add_header(&new_s->headers,
+                               Headers_HeaderName_Session,
+                               s->server_session)
+            == NULL
+          )
+          fail = true;
+
+  /* Did anything fail? */
+
+  if (fail)
+  {
+    dprintf(("", "play_replay: Out of memory\n"));
+    session_free_item(new_s);
+    return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  /* This session should self destruct */
+
+  new_s->destruct = 1;
+
+  /* Open a connection to send the command down */
+
+  if (s->url->port && *s->url->port) port = s->url->port;
+  else                               port = NULL;
+
+  new_s->sd = opensock(s->url->host,
+                       RTSPOVS_DefaultPort,
+                       port,
+                       &new_s->state,
+                       -1);
+
+  new_s->last = utils_read_time();
+
+  dprintf(("", "play_replay: Socket descriptor %d, state %d\n", s->sd, s->state));
+
+  /* Set the state machine going to see errors and DNS stuff; */
+  /* in addition, rerun it for the parent session to get      */
+  /* another GET_PARAMETER scheduled.                         */
+
+  new_s->callout_set = 1;
+  timeout(status_proceed_on_callout, new_s, 50);
+
+  if (s->callout_set == 0)
+  {
+    s->callout_set = 1;
+    timeout(status_proceed_on_callout, s, 50);
+  }
+
+  dprintf(("", "play_replay: Successful\n"));
+
+  return NULL;
+
+  return NULL;
+}
