@@ -60,7 +60,6 @@ rom: ${TARGET}
 	@echo ${COMPONENT}: rom module built
 
 ram: ${TARGET}
-	${SQUEEZE} ${TARGET}
 	@echo ${COMPONENT}: ram module built
 
 install_rom: ${TARGET}
@@ -78,7 +77,10 @@ dirs:
 	${MKDIR} rm
 
 ${TARGET}: versionvar dirs
-	${MOD} ${TARGET} ${COMPONENT} ${COMPONENT} ${VERSION} -via ${VIAFILE}
+        Set WimpRes$Path ^.^.^.^.Desktop.Wimp.Resources.<Locale>.,^.^.^.^.Desktop.Wimp.Resources.UK.
+	${MOD} ${TARGET}u ${COMPONENT} ${COMPONENT} ${VERSION} -via ${VIAFILE}
+	${SQUEEZE} ${TARGET}u ${TARGET}
+	Unset WimpRes$Path
 	Access $@ rw/r
 
 versionvar:
