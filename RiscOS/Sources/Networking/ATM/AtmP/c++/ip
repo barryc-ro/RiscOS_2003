@@ -2,12 +2,12 @@
    Purpose:
    Author:  Ben Laughton
 
-   Copyright 1999 Element 14 Ltd.
+   Copyright 1999 Pace Micro Techology plc.
 
-   This material is the confidential trade secret and proprietary information
-   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
-   any third party without the prior written consent of Element 14 Ltd.
-   All rights reserved.
+   This material is the confidential trade secret and proprietary
+   information of Pace Micro Techology plc.  It may not be reproduced,
+   used sold, or transferred to any third party without the prior
+   written consent of Pace Micro Techology plc. All rights reserved.
 
    History:
 
@@ -33,6 +33,7 @@ extern "C"
     #include "sys/errno.h"
     #include "inetlib.h"
     #include "netinet/in.h"
+    #include "sys/socket.h"
     #include "net/if.h"
     #include "netinet/if_ether.h"
     #include "sys/dcistructs.h"
@@ -40,9 +41,11 @@ extern "C"
 }
 
 // Local
+#include "address.h"
+#include "dcisock.h"
 #include "defs.h"
 #include "ip.h"
-#include "mbuf.h"
+#include "nic.h"
 #include "socket.h"
 #include "utils.h"
 
@@ -111,7 +114,8 @@ Connection *  IPConnection::CheckConflict (
 
 
 
-IPConnection *  IPConnection::Create (const ATML_SOCKADDR *const  atm_addr,
+IPConnection *  IPConnection::Create (NIC &                 nic,
+                                      const ATML_SOCKADDR *const  atm_addr,
                                       const Connection::Service   service,
                                       const Connection::Origin    origin,
                                       int &                       error)
@@ -123,7 +127,7 @@ IPConnection *  IPConnection::Create (const ATML_SOCKADDR *const  atm_addr,
     ((ATML_SOCKADDR *) atm_addr)->atm.blli[0] = 0xcc;
 
     IPConnection *  connection =
-        new IPConnection (atm_addr, service, origin, error);
+        new IPConnection (nic, atm_addr, service, origin, error);
     if (connection)
     {
         if (error)
@@ -143,15 +147,18 @@ IPConnection *  IPConnection::Create (const ATML_SOCKADDR *const  atm_addr,
 
 
 
-IPConnection::IPConnection (const ATML_SOCKADDR *const  atm_addr,
+IPConnection::IPConnection (NIC &                       nic,
+                            const ATML_SOCKADDR *const  atm_addr,
                             const Connection::Service   service,
                             const Connection::Origin    origin,
                             int &                       error)
-    : Connection (atm_addr,
-                  service,
-                  origin,
-                  error),
+    : Connection (nic, atm_addr, service, origin, error),
+      dci_if (nic.GetSocketsIF()),
+      ip_map (dci_if.GetIPMap()),
+      mac_map (dci_if.GetMACMap()),
+      MBCTL (dci_if.GetMBCTL ()),
       mac_mapping (0),
+      remote_mac_addr (0),
       m (0),
       m_next (&m),
       rx_packet_size (0),
@@ -191,10 +198,10 @@ IPConnection::IPConnection (const ATML_SOCKADDR *const  atm_addr,
         if (origin == Connection::Local)
         {
             // Extract MAC address from ATM address
-            const unsigned char *  mac_addr = mac_from_atm (atm_addr);
-            if (mac_addr)
+            remote_mac_addr = ip_map.MACFromATM (atm_addr);
+            if (remote_mac_addr)
             {
-                error = mac_map_add (mac_addr, this, 0);
+                error = mac_map.Add (remote_mac_addr, this, 0);
             }
             else
             {
@@ -209,24 +216,27 @@ IPConnection::IPConnection (const ATML_SOCKADDR *const  atm_addr,
 
 IPConnection::~IPConnection ()
 {
-    const unsigned char *  mac_addr = mac_from_atm (vc->GetATMAddr());
+    const unsigned char *  mac_addr = ip_map.MACFromATM (vc->GetATMAddr());
     if (mac_addr)
     {
-        mac_map_remove (mac_addr, this);
+        mac_map.Remove (mac_addr, this);
 
-        if (mac_map_count (mac_addr) == 0)
+        if (mac_map.Count (mac_addr) == 0)
         {
             /* No other connections to this address, so can remove
              * IP<->ATM address mapping for this address.
              */
-            ip_map_remove (mac_addr);
+            ip_map.Remove (mac_addr);
         }
     }
 
-    llc_snap_mbuf->m_next = 0;
-    m_free (llc_snap_mbuf);
+    if (llc_snap_mbuf)
+    {
+        llc_snap_mbuf->m_next = 0;
+        m_free (llc_snap_mbuf);
+    }
 
-    dci_flush_cache (this);
+    dci_if.FlushCachedConnection (this);
 }
 
 
@@ -250,7 +260,7 @@ int  IPConnection::Listen ()
     // Pre-allocate MAC mapping to avoid having to try to allocate memory
     // in the interrupt handler (difficult to sort out at that point if it
     // fails).
-    mac_mapping = mac_map_alloc ();
+    mac_mapping = mac_map.Alloc ();
     if (mac_mapping)
     {
         error = Connection::Listen ();
@@ -271,11 +281,11 @@ void  IPConnection::StateChanged (const SocketService::State  state)
     if (state == SocketService::Connected && GetOrigin() == Remote)
     {
         // Get the MAC address of the calling party
-        const unsigned char *  mac_addr = mac_from_atm (vc->GetATMAddr ());
+        remote_mac_addr = ip_map.MACFromATM (vc->GetATMAddr ());
 
-        if (mac_map_find_conn (mac_addr) == 0)
+        if (mac_map.Find (remote_mac_addr) == 0)
         {
-            (void) mac_map_add (mac_addr, this, mac_mapping);
+            (void) mac_map.Add (remote_mac_addr, this, mac_mapping);
         }
     }
 
@@ -317,22 +327,24 @@ int  IPConnection::Data (unsigned int  data_size)
     while (data_size)
     {
         dprintf (("", "%d bytes remaining\n", data_size));
+
         // Work out how much data we can transfer in one go - either all the
         // data will fill into current mbuf, or just fill the current mbuf.
         dprintf (("", "data_size=%d, mbuf space=%d\n",
                   data_size,  (*m_next)->m_inilen - (*m_next)->m_len));
         bytes = M_min (data_size, (*m_next)->m_inilen - (*m_next)->m_len);
+
         dprintf (("", "copying %d bytes\n", bytes));
-        ASM_GET_MSG (Boson_CommitFromARMAddr,
-                     mtod (*m_next, unsigned char *) + (*m_next)->m_len,
-                     bytes);
+        boson_rx_data (boson_address,
+                       mtod (*m_next, unsigned char *) + (*m_next)->m_len,
+                       bytes);
         (*m_next)->m_len += bytes;
 
         // If we've filled the current mbuf then move on to the next
-        if ((*m_next)->m_len == (*m_next)->m_inilen)
+        if ( (*m_next)->m_len == (*m_next)->m_inilen)
         {
             dprintf (("", "advancing to next mbuf\n"));
-            m_next = &((*m_next)->m_next);
+            m_next = &( (*m_next)->m_next);
             if (*m_next)
             {
                 (*m_next)->m_type = MT_DATA;
@@ -351,7 +363,7 @@ int  IPConnection::Data (unsigned int  data_size)
 
 void  IPConnection::DataEnd ()
 {
-    int              frame_type;
+    u_short  frame_type;
 
     if (llc)
     {
@@ -366,18 +378,21 @@ void  IPConnection::DataEnd ()
     }
     else
     {
+        // VC multiplexing
         frame_type = ETHERTYPE_IP;
     }
 
-    if (dci_receive (this, m, frame_type) < 0)
+    int  rc = dci_if.Receive (frame_type, remote_mac_addr, m, this);
+    if (rc < 0)
     {
         DataAbort ();
     }
-    else
+    else if (rc > 0)
     {
-        ++ip_rx;
+        m_freem (m);
     }
 
+    ++dci_if.stats.st_rx_frames;
     m = 0;
     m_next = &m;
     rx_packet_size = 0;
@@ -398,8 +413,7 @@ void  IPConnection::DataLength (unsigned int  length)
 
 void  IPConnection::DataAbort ()
 {
-    ++irq_ip_pkts_dropped;
-    data_lost += mbctl.count_bytes (&mbctl, m);
+    data_lost += MBCTL.count_bytes (&MBCTL, m);
     m_freem (m);
     m = 0;
     m_next = &m;
@@ -426,9 +440,9 @@ const char *  IPConnection::GetTextService ()
 // Safe for this routine to return mid-way without freeing mbufs
 // as caller will free if we don't.
 
-int  IPConnection::TxMBufChain (const int       frame_type,
-                                struct mbuf *&  m0,
-                                const bool      free_mbufs)
+int  IPConnection::TxMBufChain (const u_short    frame_type,
+                                struct mbuf *&   m0,
+                                const bool       free_mbufs)
 {
     struct mbuf *    m;
 
@@ -484,12 +498,13 @@ int  IPConnection::TxMBufChain (const int       frame_type,
         if (vc->TxData (m0, datalen) < 0)
         {
             dprintf (("", "ran out of FIFO space!\n"));
+            error = ENOBUFS;
             // Consider doing interrupt-driven write-out if not enough
             // space straight away?
         }
         else
         {
-            ip_tx++;
+            dci_if.stats.st_tx_frames++;
             used = true;
         }
 
@@ -502,12 +517,6 @@ int  IPConnection::TxMBufChain (const int       frame_type,
         m  = m0;           // keep pointer to current mbuf chain
         m0 = m->m_list;    // point to next mbuf chain in list
 
-        /* 1999-03-19: BAL
-         * Not required because m_freem only works on MBuf chains, not lists
-         * of chains.
-         */
-        /* m->m_list = 0; */
-
         if (free_mbufs)
         {
             m_freem (m);
@@ -515,4 +524,15 @@ int  IPConnection::TxMBufChain (const int       frame_type,
     } while (m0);
 
     return 0;
+}
+
+
+
+
+struct in_addr  IPConnection::GetDestIPAddr ()
+{
+    struct in_addr  ip_addr;
+
+    ip_addr.s_addr = ip_map.IPFromATM (vc->GetATMAddr ());
+    return ip_addr;
 }

@@ -1,13 +1,14 @@
 /* File:    lane.c++
-   Purpose: LAN Emulation
+   Purpose: Drive the NIC using the LANE API (can do Forum LANE, IPOA or
+            Virata LANE depending on the image/configuration of the NIC).
    Author:  Ben Laughton
 
-   Copyright 1999 Element 14 Ltd.
+   Copyright 1999 Pace Micro Techology plc.
 
-   This material is the confidential trade secret and proprietary information
-   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
-   any third party without the prior written consent of Element 14 Ltd.
-   All rights reserved.
+   This material is the confidential trade secret and proprietary
+   information of Pace Micro Techology plc.  It may not be reproduced,
+   used sold, or transferred to any third party without the prior
+   written consent of Pace Micro Techology plc. All rights reserved.
 
    History:
 
@@ -22,6 +23,7 @@
 // Include header files
 
 // CLib
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,19 +36,25 @@ extern "C"
     #include "sys/dcistructs.h"
     #include "inetlib.h"
     #include "netinet/in.h"
+    #include "sys/socket.h"
     #include "net/if.h"
     #include "net/if_arp.h"
     #include "netinet/if_ether.h"
 }
 
 // Misc
+#include "DCILib/dcifilter.h"
+#include "DCILib/dciif.h"
 #include "DebugLib/debuglib.h"
+#include "MemCheck/MemCheck.h"
 
 // Local
 #include "boson.h"
-#include "dci.h"
+#include "dcilane.h"
 #include "defs.h"
 #include "lane.h"
+#include "nic.h"
+#include "utils.h"
 
 
 
@@ -54,14 +62,22 @@ extern "C"
 // =============================================================================
 // Constants definitions
 
-#define MAX_PACKET_SIZE      1514
-#define RX_BUFFS             10
-#define ETHER_HDR_SIZE       14
-#define ETHER_SRC_ADR_OFFSET 6
-#define ETHER_DST_ADR_OFFSET 0
-#define ETHER_ADR_SIZE       6
-#define ETHER_TYPE_OFFSET    12
-#define ETHER_TYPE_SIZE      2
+enum
+{
+    MaxPacketSize = ETHER_MAX_LEN - ETHER_CRC_LEN,
+
+    // This value is arbitrary because we don't have a fixed number of receive
+    // buffer.  This value matches what's in Virata's endpoint PC code.
+    MaxRxBuffers  = 32,
+
+    // Also found mention in Virata's endpoint PC code that:
+    // "NIC advertises too many buffers, giving rise to ALE_TX_DROPPED
+    //  in times of high load. Therefore limit to kMaximumSendPackets".
+    // At the time of writing this is defined as 18 in Virata's code.  If you
+    // ever see nic_buffer_exhaustions at a significantly large value then you
+    // may want to consider increasing this.
+    MaxTxBuffers  = 18
+};
 
 enum
 {
@@ -79,88 +95,82 @@ enum
 
 
 // =============================================================================
-// Macro definitions
-
-
-
-
-// =============================================================================
-// Global variable declarations
-
-static unsigned int     lane_rxdropped = 0;
-static unsigned int     lane_txdropped = 0;
-static unsigned int     lane_oktorecv_invalid = 0;
-static unsigned int     nic_buffers = 0;
-static unsigned int     lane_rx_buffs = 0;
-static unsigned int     lane_min_rx_buffs = RX_BUFFS;
-
-LANEService *  lane_service;
-
-
-
-
-// =============================================================================
-// Function prototype declarations
-
-extern int callproto (Dib *, struct mbuf *, void (*pi_handler)(), int);
-
-static struct mbuf *  convert_to_dci4_header (const unsigned int  type,
-                                              struct mbuf *       m0,
-                                              u_char *            raw_hdr);
-
-static void dumpm(struct mbuf *m0, int pktlen);
-
-static void dump_pkt (u_char *  rptr, int pktlen);
-
-
-
-
-// =============================================================================
 // Member function definitions
 
 /* -----------------------------------------------------------------------------
+   LANEService::LANEService
+
+   Constructor.
+
+   Inputs
+   NIC &                    nic    : NIC that this service is being used on.
+   ATM25LANEDCIInterface &  dci_if : DCI-4 Interface this service is being used
+                                     for.
+   struct mbctl &           MBCTL  : Context for Mbuf Manager operations
+
+   Outputs
+   int &  error                    : error number
  */
 
-int  LANEService::Create ()
-{
-    int  error = 0;
+LANEService::LANEService (NIC &                    nic,
+                          ATM25LANEDCIInterface &  dci_if,
+                          struct mbctl &           MBCTL,
+                          int &                    error)
+    : Service (nic.GetServiceManager(),
+               nic.GetHardwareAddress(),
+               LAN_SERVICE,
+               error),
+      dci_if (&dci_if),
+      dib (dci_if.GetDIB()),
+      nic_buffers (0),
+      nic_buffer_exhaustions (0),
+      rx_buffers (0),
+      rx_buffers_lwm (MaxRxBuffers),
+      rx_dropped (0),
+      tx_dropped (0),
+      MBCTL (MBCTL)
 
-    if (!lane_service)
-    {
-        lane_service = new LANEService (error);
-        if (lane_service)
-        {
-            if (error)
-            {
-                delete lane_service;
-                lane_service = 0;
-            }
-            else
-            {
-                lane_service->Attach ();
-            }
-        }
-    }
-
-    return error;
-}
-
-
-
-
-LANEService::LANEService (int &  error)
-    : Service (LAN_SERVICE, error)
 {
     if (!error)
     {
         Attach ();
 
-        // Tell the NIC about the number of receive buffers we have free.  This is
-        // 'fake' because we write the data straight into MBUFs anyway - if an
-        // MBUF allocation fails we tell the NIC we have run out of buffers.
-        for (int i = 0; i < RX_BUFFS; ++i)
-        {
+        // Start by setting the hardware filter level to be as strict as
+        // possible.
+        TxSetMcast (0, 0);
+
+        // Tell the NIC about the number of receive buffers we have
+        // free.  This is 'fake' because we write the data straight into
+        // MBUFs anyway - if an MBUF allocation fails we tell the NIC we
+        // have run out of buffers completely.
+        //for (int i = 0; i < MaxRxBuffers; ++i)
+        //{
             TxOKToRecv();
+        //}
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   LANEService::TxOKToRecv
+
+   Tell the NIC that we have another receive buffer free (we 'fake' the number
+   free since we claim buffers on-the-fly from the Mbuf Manager).
+ */
+
+void  LANEService::TxOKToRecv ()
+{
+    while (rx_buffers < MaxRxBuffers)
+    {
+        if (!boson_block_write (boson_address, CMD_MSG (handle, ALE_OKTORECV, 0)))
+        {
+            ++rx_buffers;
+        }
+        else
+        {
+            return;
         }
     }
 }
@@ -168,77 +178,108 @@ LANEService::LANEService (int &  error)
 
 
 
-void  LANEService::TxOKToRecv ()
+/* -----------------------------------------------------------------------------
+   LANEService::TxSetMcast
+
+   Enable hardware multicast filtering on the NIC and set the list of
+   multicast addresses which it filters.
+
+   Inputs
+   unsigned char  multicast_addr[][ETHER_ADDR_LEN] : array of MAC address to
+                                                     filter
+   const int      count                            : number of addresses in
+                                                     array
+ */
+
+void  LANEService::TxSetMcast (unsigned char  multicast_addr[][ETHER_ADDR_LEN],
+                               const int      count)
 {
-    boson_block_write (CMD_MSG (handle, ALE_OKTORECV, 0));
-    ++lane_rx_buffs;
+    TxConfig (ALE_CONFIG_ENABLE_MULTICAST);
+
+    #ifdef DEBUGLIB
+    char  addr[ETHER_ADDR_LEN * 3];
+
+    dprintf (("", "filtering %d multicast addresses:\n", count));
+    for (int i = 0; i < count; ++i)
+    {
+        num_to_sep_str (multicast_addr[i], ETHER_ADDR_LEN, addr, ':');
+        dprintf (("", "%s\n", addr));
+    }
+    #endif
+
+    boson_tx_msg (boson_address,
+                  handle,
+                  ALE_SET_MCAST,
+                  (unsigned char *) multicast_addr,
+                  count * ETHER_ADDR_LEN);
 }
 
 
 
 
-int  LANEService::TxData (const int            new_header,
-                          const u_char *const  src,
-                          const u_char *const  dst,
-                          int                  type,
-                          struct mbuf *        m)
+/* -----------------------------------------------------------------------------
+   LANEService::TxConfig
+
+   Set the LANE Service configuration flags.
+
+   Inputs
+   const unsigned int  flags : configuraion flags word
+ */
+
+void  LANEService::TxConfig (const unsigned int  flags)
 {
-    static unsigned char  txbuff[MAX_PACKET_SIZE];
-    unsigned int          size;
+    dprintf (("", "%s multicast filtering\n",
+              (flags & ALE_CONFIG_DISABLE_MULTICAST) ? "disabling" :
+                                                       "enabling"));
+
+    boson_block_write (boson_address, CMD_MSG (handle, ALE_CONFIG, flags));
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   LANEService::TxData
+
+   Transmit an Mbuf chain.
+
+   Inputs
+   struct mbuf *       m    : mbuf chain
+   const unsigned int  size : number of bytes in mbuf chain
+
+   Returns  int
+   success : 0
+   failure : errno error code
+ */
+
+int  LANEService::TxData (struct mbuf *       m,
+                          const unsigned int  size)
+
+{
+    static unsigned char  tx_buff[MaxPacketSize];
 
     if (nic_buffers == 0)
     {
+        // The event of nic_buffers reaching 0 does not count as an exhaustion
+        // in itself - only count it if it prevents us sending data.
+        ++nic_buffer_exhaustions;
         return ENOBUFS;
     }
 
-    /* Copy MBUF chain into contiguous block in memory for sending to the
-     * NIC.
-     * !!! This is inefficient - should write a routine to transfer data
-     * directly from MBUF to NIC.
-     */
+    dprintf (("", "%d bytes into contig buffer\n", size));
+    EXPORT (m, size, tx_buff);
 
-    size = mbctl.count_bytes (&mbctl, m);
-    dprintf (("", "packet size: %u\n", size + ETHER_HDR_SIZE));
-    if (size + ETHER_HDR_SIZE > MAX_PACKET_SIZE)
-    {
-        return EMSGSIZE;
-    }
-
-    if (new_header)
-    {
-        /* Header info. has changed from previous call */
-        memcpy (txbuff + ETHER_DST_ADR_OFFSET,
-                dst,
-                ETHER_ADR_SIZE);
-
-        memcpy (txbuff + ETHER_SRC_ADR_OFFSET,
-                src,
-                ETHER_ADR_SIZE);
-
-        type = htons (type);
-
-        memcpy (txbuff + ETHER_TYPE_OFFSET,
-                &type,
-                ETHER_TYPE_SIZE);
-    }
-
-    EXPORT (m, size, txbuff + ETHER_HDR_SIZE);
-
-    size += ETHER_HDR_SIZE;
-    dump_pkt (txbuff, size);
-
-    if (asm_write_fifo (handle,
-                        ALE_DATA,
-                        txbuff,
-                        size,
-                        BlockToARMAddr) < 0)
+    if (boson_tx_msg (boson_address,
+                      handle,
+                      ALE_DATA,
+                      tx_buff,
+                      size) < 0)
     {
         /* run out of FIFO space */
         dprintf (("", "no space in FIFO\n"));
         return ENOBUFS;
     }
 
-    ++ip_tx;
     --nic_buffers;
 
     return 0;
@@ -247,28 +288,41 @@ int  LANEService::TxData (const int            new_header,
 
 
 
+/* -----------------------------------------------------------------------------
+   LANEService::MessageHandler
+
+   Message handler and dispatcher for LANE service messages received from the
+   NIC.
+
+   Inputs
+   NICMessage    msg : message header
+   NICExtension  ext : message extension word
+
+   Returns  MessageHandlerRC
+   HandledMsg : message data was read from the NIC
+   DiscardMsg : message data was not read from the NIC - discard it
+*/
+
 MessageHandlerRC  LANEService::MessageHandler (NICMessage    msg,
                                                NICExtension  ext)
 {
-    typedef  MessageHandlerRC (LANEService::*  lane_handler) (NICMessage);
+    typedef  MessageHandlerRC (LANEService::*  lane_handler) (NICMessage,
+                                                              unsigned int);
     static lane_handler  handler[] =
     {
-        0,
-        0,
+        &LANEService::RxInvalid,
+        &LANEService::RxInvalid,
         &LANEService::RxRxDropped,
         &LANEService::RxTxDropped,
         &LANEService::RxData,
-        0,
+        &LANEService::RxInvalid,
         &LANEService::RxOKToRecv
     };
     MessageHandlerRC  rc;
 
-    M_unused (total_size);
-
-    if (msg.common.command < M_array_size (handler) &&
-        handler[msg.common.command])
+    if (msg.common.command < M_array_size (handler))
     {
-        rc = (this->*(handler[msg.common.command])) (msg);
+        rc = (this->*(handler[msg.common.command])) (msg, ext.bits.size);
     }
     else
     {
@@ -281,40 +335,124 @@ MessageHandlerRC  LANEService::MessageHandler (NICMessage    msg,
 
 
 
-MessageHandlerRC  LANEService::RxRxDropped (NICMessage  msg)
+/* -----------------------------------------------------------------------------
+   LANEService::RxDiscard
+
+   Dummy message handler for messages which we should never receive, or messages
+   that we're not interested in.
+
+   Inputs
+   NICMessage    msg        : message header
+   unsigned int  total_size : total size of message data if being sent as a
+                              number of sub-blocks
+
+   Returns  MessageHandlerRC
+   DiscardMsg : message data was not read from the NIC - discard it
+ */
+
+MessageHandlerRC  LANEService::RxInvalid (NICMessage    msg,
+                                          unsigned int  total_size)
 {
     M_unused (msg);
-    ++lane_rxdropped;
+    M_unused (total_size);
+    return DiscardMsg;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   LANEService::RxRxDropped
+
+   Handle an RxDropped message - NIC is informing us that it has discarded
+   received data because it beleives we have no buffer space for it.
+
+   Inputs
+   NICMessage    msg        : message header
+   unsigned int  total_size : total size of message data if being sent as a
+                              number of sub-blocks
+
+   Returns  MessageHandlerRC
+   HandledMsg : message has no data, so handled by definition
+ */
+
+MessageHandlerRC  LANEService::RxRxDropped (NICMessage    msg,
+                                            unsigned int  total_size)
+{
+    M_unused (msg);
+    M_unused (total_size);
+    ++dci_if->stats.st_rx_general_errors;
+    ++rx_dropped;
     return HandledMsg;
 }
 
 
 
-MessageHandlerRC  LANEService::RxTxDropped (NICMessage  msg)
+/* -----------------------------------------------------------------------------
+   LANEService::RxTxDropped
+
+   Handle an TxDropped message - NIC is informing us that it has not sent data
+   because there are insufficient buffers on the NIC - "should never occur
+   unless there has been a failure of the NIC or network" according to the NIC
+   documentation.
+
+   Inputs
+   NICMessage    msg        : message header
+   unsigned int  total_size : total size of message data if being sent as a
+                              number of sub-blocks
+
+   Returns  MessageHandlerRC
+   HandledMsg : message has no data, so handled by definition
+ */
+
+MessageHandlerRC  LANEService::RxTxDropped (NICMessage    msg,
+                                            unsigned int  total_size)
 {
     M_unused (msg);
-    ++lane_txdropped;
+    M_unused (total_size);
+    ++dci_if->stats.st_rx_general_errors;
+    ++tx_dropped;
     return HandledMsg;
 }
 
 
 
-MessageHandlerRC  LANEService::RxOKToRecv (NICMessage  msg)
+/* -----------------------------------------------------------------------------
+   LANEService::RxOKToRecv
+
+   Sent by NIC to inform us that it has another buffer available, or that all
+   its buffers have been removed.
+
+   Inputs
+   NICMessage    msg        : message header
+   unsigned int  total_size : total size of message data if being sent as a
+                              number of sub-blocks
+
+   Returns  MessageHandlerRC
+   HandledMsg : message has no data, so handled by definition
+ */
+
+MessageHandlerRC  LANEService::RxOKToRecv (NICMessage    msg,
+                                           unsigned int  total_size)
 {
+    M_unused (total_size);
+
     switch (msg.command.param)
     {
         case 0:
-            /* a buffer has become available */
-            ++nic_buffers;
+            // a buffer has become available
+            if (nic_buffers < MaxTxBuffers)
+            {
+                ++nic_buffers;
+            }
             break;
 
         case 0xffff:
-            /* all buffers have been removed */
+            // all buffers have been removed
             nic_buffers = 0;
             break;
 
         default:
-            ++lane_oktorecv_invalid;
             break;
     }
 
@@ -324,292 +462,278 @@ MessageHandlerRC  LANEService::RxOKToRecv (NICMessage  msg)
 
 
 
-MessageHandlerRC  LANEService::RxData (NICMessage  msg)
-{
-    static struct mbuf *    m0 = NULL;
-    static struct mbuf *    m1 = NULL;
-    struct mbuf *           m;
-    static unsigned int     total_bytes = 0;
-    static unsigned int     discard = 0;
-    static void *           p;
+/* -----------------------------------------------------------------------------
+   LANEService::RxData
 
+   Receive a packet from the NIC.  A single packet may be received over the
+   course of several messages.
+
+   Inputs
+   NICMessage    msg        : message header
+   unsigned int  total_size : total size of message data if being sent as a
+                              number of sub-blocks
+
+   Returns  MessageHandlerRC
+   HandledMsg : message data was read from the NIC
+   DiscardMsg : message data was not read from the NIC - discard it
+ */
+
+MessageHandlerRC  LANEService::RxData (NICMessage    msg,
+                                       unsigned int  packet_size)
+{
+    static struct mbuf *  m_first = 0;
+    static struct mbuf *  m = 0;
+    static int            total_bytes = 0;
+    static bool           discard = false;
+    static DCIFilter *    filter;
+    static int            m_inilen;
+    int                   bytes;
+    int                   bytes_remaining;
+    MessageHandlerRC      rc = DiscardMsg;
 
     if (discard)
     {
-        dprintf (("", "discarding rx data\n"));
-        if (msg.data.last)
+        goto discard;
+    }
+    else if (msg.data.first)
+    {
+        // Allocate an mbuf chain to store the new packet.
+        // The 14 byte Ethernet header (which we eventually have to strip off)
+        // complicates things for word-alignment, so we use the following
+        // strategy to try to increase data-transfer efficiency:
+        //
+        // Allocate a single mbuf of size MINCONTIG, which will be enough to
+        // store the Ethernet header and some payload data (Internet module
+        // makes various assumptions such as enough data in first mbuf for
+        // complete ARP packet header etc.).  Want to offset data in this
+        // packet by two bytes (so payload after 14 byte Ethernet header starts
+        // word aligned after we strip theheader off).  Also ensure we read
+        // a whole number of words, so that for subsequent mbufs in the chain
+        // we can do fast word-aligned transfers rather than having to 'skew'
+        // the data.  These contraints mean we write at most MINCONTIG - 4
+        // bytes into this first mbuf.
+
+        dprintf (("", "\nnew packet\n"));
+        m = ALLOC_S (MINCONTIG, 0);
+        if (m)
         {
-            /* Inform the NIC that we have another buffer available */
-            TxOKToRecv();
-            discard = 0;
+            memcheck_registermbuf (m);
+            // Increment offset of first mbuf's data by two, and adjust its
+            // length.
+            m->m_off += 2;
+            m_inilen  = m->m_inilen - 4;
+            m->m_type = MT_DATA;
+            m->m_len  = 0;
+
+            m_first = m;
+
+            // Calculate remaining number of bytes to allocate
+            if (m_inilen < packet_size)
+            {
+                m = ALLOC (packet_size - m_inilen, 0);
+                if (m)
+                {
+                    memcheck_registermbufm (m);
+                    m = CAT (m_first, m);
+                }
+                else
+                {
+                    memcheck_deregistermbuf (m_first);
+                    m_free (m_first);
+                }
+            }
         }
 
-        return DiscardMsg;
-    }
-
-    /* See if we can squeeze this data into the last mbuf on the chain
-     * before we go to the expense of allocating a new mbuf.
-     */
-    if (msg.data.first || M_TRAILINGSPACE (m1) < msg.data.size)
-    {
-        dprintf (("", "allocating single MBUF for %u bytes\n", msg.data.size));
-        m = ALLOC_S (msg.data.size, NULL);
         if (!m)
         {
-            dprintf (("", "couldn't allocate MBUF\n"));
-            /* Our buffers have become full!  Maybe Inform the NIC ??? */
-            /* BlockWrite (CMD_MSG (handle, ALE_OKTORECV, 0xffff)); */
-            if (!msg.data.first)
-            {
-                mbctl.freem (&mbctl, m0);
-            }
+            dprintf (("", "mbuf alloc failed\n"));
+            discard = true;
+            goto discard;
+        }
 
-            if (msg.data.last)
+        total_bytes = 0;
+
+        if (--rx_buffers < rx_buffers_lwm)
+        {
+            rx_buffers_lwm = rx_buffers;
+        }
+    }
+
+    // Definitely going to read data for this message
+    rc = HandledMsg;
+
+    // Read data from NIC into mbuf chain
+    bytes_remaining = msg.data.size;
+    while (bytes_remaining)
+    {
+        dprintf (("", "%d bytes remaining\n", bytes_remaining));
+
+        // Work out how much data we can transfer in one go - either all the
+        // data will fill into current mbuf, or just fill the current mbuf.
+        dprintf (("", "data size=%d, mbuf space=%d\n",
+                  bytes_remaining, m_inilen - m->m_len));
+
+        bytes = M_min (bytes_remaining, m_inilen - m->m_len);
+
+        dprintf (("", "copying %d bytes\n", bytes));
+        boson_rx_data (boson_address,
+                       mtod (m, unsigned char *) + m->m_len,
+                       bytes);
+        m->m_len += bytes;
+
+        // If we've filled the current mbuf then move on to the next
+        if (m->m_len == m_inilen)
+        {
+            dprintf (("", "advancing to next mbuf\n"));
+            m = m->m_next;
+            if (m)
             {
-                /* Inform the NIC that we have another buffer available */
-                TxOKToRecv();
+                m->m_type = MT_DATA;
+                m->m_len  = 0;
+                m_inilen  = m->m_inilen;
+            }
+        }
+
+        bytes_remaining -= bytes;
+    }
+
+    if (total_bytes < Ether_HdrSize &&
+        total_bytes + msg.data.size >= Ether_HdrSize)
+    {
+        u_short   frame_type;
+        u_char *  raw_hdr;
+
+        dprintf (("", "have header\n"));
+        // Now have a full ethernet header.  Examine frame type immediately so
+        // we can start throwing data away ASAP if required, without bothering
+        // to add it to the mbuf chain.
+
+        // Ensure that Ethernet frame header is contiguous at start of
+        // mbuf chain.
+        raw_hdr = mtod (m_first, u_char *);
+
+        // Find out if any protocol module wants this packet.
+        frame_type = (raw_hdr[Ether_TypeOffset] << 8) +
+                      raw_hdr[Ether_TypeOffset + 1];
+        filter = dci_if->FindFilter (frame_type);
+        if ( filter &&
+             !(dci_if->*(dci_if->address_filter)) (filter->address_level,
+                                                   raw_hdr) )
+        {
+            // Make DCI header
+            RxHdr *        hdr;
+            struct mbuf *  m_hdr;
+
+            //ddump_mbuf (m_first, MBCTL.count_bytes (&MBCTL, m_first));
+
+            m_hdr = ALLOC_S (sizeof (RxHdr), NULL);
+            if (!m_hdr)
+            {
+                dprintf (("", "mbuf alloc failed\n"));
+                discard = true;
             }
             else
             {
-                discard = 1;
-            }
+                memcheck_registermbuf (m_hdr);
+                m_hdr->m_len = sizeof (RxHdr);
+                m_hdr->m_type = MT_HEADER;
 
-            return HandledMsg;
-        }
+                // Fill in the header data for the protocol receive handler
+                hdr = mtod (m_hdr, RxHdr *);
+                hdr->rx_tag = 0;
+                memcpy (hdr->rx_src_addr,
+                        raw_hdr + Ether_SrcAddrOffset,
+                        sizeof (hdr->rx_src_addr));
 
-        m->m_type = MT_DATA;
-        if (msg.data.first)
-        {
-            dprintf (("", "first data in new packet\n"));
-            /* Setup mbuf chain and byte count for new packet */
-            m0 = m;
-            if (--lane_rx_buffs < lane_min_rx_buffs)
-            {
-                lane_min_rx_buffs = lane_rx_buffs;
+                memcpy (hdr->rx_dst_addr,
+                        raw_hdr + Ether_DstAddrOffset,
+                        sizeof (hdr->rx_dst_addr));
+
+                hdr->_spad[0] = hdr->_spad[1] = 0;
+                hdr->_dpad[0] = hdr->_dpad[1] = 0;
+                hdr->rx_frame_type = frame_type;
+                hdr->rx_error_level = 0;
+
+                // Remove the original frame's Ethernet/IEEE header
+                memcheck_deregistermbuf (m_first);
+                m_first = TRIM (m_first, Ether_HdrSize, 0);
+                memcheck_registermbuf (m_first);
+
+                // Join the new header and the original MBUF chain */
+                m_first = CAT (m_hdr, m_first);
             }
-            total_bytes = 0;
         }
         else
         {
-            /* Link this new mbuf to the end of the existing chain */
-            m1->m_next = m;
+            // Not interested in this packet.  Free any resources already
+            // consumed and ensure that the rest of the frame is discarded.
+
+            ++dci_if->stats.st_unwanted_frames;
+            dprintf (("", "frame rejected\n"));
+            discard = true;
         }
 
-        asm_get_msg (CommitFromARMAddr, mtod (m, unsigned char *), msg.data.size);
-        m->m_len = msg.data.size;
-    }
-    else
-    {
-        dprintf (("", "adding %u bytes to last MBUF\n", msg.data.size));
-        asm_get_msg (CommitFromARMAddr,
-                     mtod (m1, unsigned char *) + m1->m_len,
-                     msg.data.size);
-        m1->m_len += msg.data.size;
-    }
-
-    if (total_bytes < ETHER_HDR_SIZE && total_bytes + msg.data.size >= ETHER_HDR_SIZE)
-    {
-        unsigned int     type;
-        u_char *         raw_hdr;
-
-        dprintf (("", "have header\n"));
-        /* Now have a full ethernet header.  Examine frame type immediately so
-         * we can start throwing data away ASAP if required, without bothering
-         * to add it to the mbuf chain.
-         */
-
-        /* Ensure that Ethernet frame header is contiguous at start of
-         * mbuf chain.
-         */
-        PULLUP (m0, ETHER_HDR_SIZE);
-        raw_hdr = mtod (m0, u_char *);
-
-        memcpy (&type, raw_hdr + ETHER_TYPE_OFFSET, ETHER_TYPE_SIZE);
-        type = ntohs (type & 0xffff);
-        dprintf (("", "frame type: %x\n", type));
-
-        /* Find out if a protocol module has registered an interest in this
-         * frame type.
-         */
-        p = dci_want_frame_type (type);
-        if (!p)
+        if (discard)
         {
-            /* Not interested in this frame type.  Free any resources already
-             * consumed and ensure that the rest of the frame is discarded.
-             */
-
-            dprintf (("", "not interested in this frame type\n"));
-            mbctl.freem (&mbctl, m0);
-            if (msg.data.last)
-            {
-                /* Inform the NIC that we have another buffer available */
-                TxOKToRecv();
-            }
-            else
-            {
-                discard = 1;
-            }
-
-            return HandledMsg;
+            memcheck_deregistermbufm (m_first);
+            m_freem (m_first);
+            goto discard;
         }
 
-        m0 = convert_to_dci4_header (type,
-                                     m0,
-                                     raw_hdr);
-        if (!m0)
-        {
-            m1 = NULL;
-
-            if (msg.data.last)
-            {
-                /* Inform the NIC that we have another buffer available */
-                TxOKToRecv();
-            }
-            else
-            {
-                discard = 1;
-            }
-
-            return DiscardMsg;
-        }
-
-        /* May be a different mbuf at end of chain after all this
-         * fiddling around.
-         */
-        for (m1 = m0; m1->m_next; m1 = m1->m_next)
-        {
-            /* Empty loop */
-        }
     }
-
     total_bytes += msg.data.size;
 
     if (msg.data.last)
     {
-        /* Pass MBUF chain to protocol module - don't need to free it because
-         * protocol module takes ownership at this point.
-         */
-        dprintf (("", "passing packet to protocol module\n"));
-        dumpm (m0, total_bytes);
+        ++dci_if->stats.st_rx_frames;
 
-        dci_send_chain (m0, p);
-        //callproto (&dib, m0, p->pi_handler, p->pi_handle);
-        m0 = NULL;
-        m1 = NULL;
-        total_bytes = 0;
+        // Pass mbuf chain to protocol module - don't need to free it because
+        // protocol module takes ownership at this point.
+        //ddump_mbuf (m_first, MBCTL.count_bytes (&MBCTL, m_first));
+        memcheck_deregistermbufm (m_first);
+        callproto (dib, m_first, filter->rx_handler, filter->pw);
+        dprintf (("", "->proto\n\n"));
 
-        /* Inform the NIC that we have another buffer available */
+        // Inform the NIC that we have another buffer available
         TxOKToRecv();
     }
 
     return HandledMsg;
+
+discard:
+    dprintf (("", "discarding rx data\n"));
+    if (msg.data.last)
+    {
+        ++dci_if->stats.st_rx_frames;
+        ++dci_if->stats.st_dropped_frames;
+
+        // Inform the NIC that we have another buffer available
+        // (doesn't really make sense given that we have no mbufs,
+        // but if we don't, successive mbuf allocation failures will
+        // cause the NICs view of our number of buffers to decrease
+        // and it'll eventually stop sending us data).
+        TxOKToRecv();
+        discard = false;
+    }
+    return rc;
 }
 
-static struct mbuf *  convert_to_dci4_header (const unsigned int  type,
-                                              struct mbuf *       m,
-                                              u_char *            raw_hdr)
+
+
+
+/* -----------------------------------------------------------------------------
+   LANEService::DisplayInfo
+
+   Display useful statistics about the LANE service.
+ */
+
+void  LANEService::DisplayInfo ()
 {
-    RxHdr *        hdr;
-    struct mbuf *  m0;
-
-    m0 = ALLOC_S (sizeof (RxHdr), NULL);
-    if (!m0)
-    {
-        /* Dump any previous data in this packet */
-        dprintf (("", "couldn't allocate MBUF for header\n"));
-        mbctl.freem (&mbctl, m);
-    }
-    else
-    {
-        m0->m_len = sizeof (RxHdr);
-        m0->m_type = MT_HEADER;
-
-        /* Fill in the header data for the protocol receive handler */
-        hdr = mtod (m0, RxHdr *);
-        hdr->rx_tag = 0;
-        memcpy (hdr->rx_src_addr,
-                raw_hdr + ETHER_SRC_ADR_OFFSET,
-                sizeof (hdr->rx_src_addr));
-        memcpy (hdr->rx_dst_addr,
-                raw_hdr + ETHER_DST_ADR_OFFSET,
-                sizeof (hdr->rx_dst_addr));
-        hdr->_spad[0] = hdr->_spad[1] = 0;
-        hdr->_dpad[0] = hdr->_dpad[1] = 0;
-        hdr->rx_frame_type = type;
-        hdr->rx_error_level = 0;
-
-        /* Remove the original frame's header */
-        m = TRIM (m, ETHER_HDR_SIZE, NULL);
-        PULLUP (m, m->m_len);
-
-        /* Join the new header and the original MBUF chain */
-        m0 = CAT (m0, m);
-    }
-
-    return m0;
-}
-
-#define MAX_DUMP_BYTES  128
-
-static void dumpm(struct mbuf *m0, int pktlen)
-{
-    char buf[3*MAX_DUMP_BYTES+4];
-    char *bp = buf;
-    struct mbuf *m;
-    static const char digits[] = "0123456789abcdef";
-
-    for (m = m0; m && pktlen; m = m->m_next)
-    {
-        int l = m->m_len;
-        u_char *rptr = mtod(m, u_char *);
-
-        if (pktlen > 0)
-        {
-            if (l > pktlen)
-                l = pktlen;
-            pktlen -= l;
-        }
-        while (l--)
-        {
-            if (bp > buf + sizeof(buf) - 4)
-                goto done;
-            *bp++ = digits[*rptr >> 4]; /* convert byte to ascii hex */
-            *bp++ = digits[*rptr++ & 0xf];
-            *bp++ = ' ';
-        }
-
-        if (m->m_next)
-        {
-            if (bp > buf + sizeof(buf) - 3)
-                goto done;
-            *bp++ = '|';
-        }
-        else
-            *bp++ = ' ';
-    }
-done:
-    if (m && pktlen)
-        *bp++ = '>';
-    *bp = 0;
-    dprintf (("", "%s\n", buf));
-}
-
-static void dump_pkt (u_char *  rptr, int pktlen)
-{
-    char buf[3*MAX_DUMP_BYTES+4];
-    char *bp = buf;
-    static const char digits[] = "0123456789abcdef";
-
-    while (pktlen--)
-    {
-        if (bp > buf + sizeof(buf) - 3)
-            goto done;
-        *bp++ = digits[*rptr >> 4]; /* convert byte to ascii hex */
-        *bp++ = digits[*rptr++ & 0xf];
-        *bp++ = ' ';
-    }
-
-done:
-    *bp = 0;
-    dprintf (("", "%s\n", buf));
+    printf ("LANE Service\n");
+    printf ("NIC buffers available       : %u\n", nic_buffers);
+    printf ("NIC buffer exhaustions      : %u\n", nic_buffer_exhaustions);
+    printf ("Host buffers available      : %u\n", rx_buffers);
+    printf ("Host buffers low watermark  : %u\n", rx_buffers_lwm);
+    printf ("Rx packets discarded by NIC : %u\n", rx_dropped);
+    printf ("Tx packets discarded by NIC : %u\n", tx_dropped);
 }

@@ -2,12 +2,12 @@
    Purpose: Socket service
    Author:  Ben Laughton
 
-   Copyright 1999 Element 14 Ltd.
+   Copyright 1999 Pace Micro Techology plc.
 
-   This material is the confidential trade secret and proprietary information
-   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
-   any third party without the prior written consent of Element 14 Ltd.
-   All rights reserved.
+   This material is the confidential trade secret and proprietary
+   information of Pace Micro Techology plc.  It may not be reproduced,
+   used sold, or transferred to any third party without the prior
+   written consent of Pace Micro Techology plc. All rights reserved.
 
    History:
 
@@ -27,10 +27,13 @@
 #include "DebugLib/DebugLib.h"
 
 // Local
+#include "asyncop.h"
 #include "atm.h"
 #include "boson.h"
+#include "dci.h"
 #include "defs.h"
 #include "flowspec.h"
+#include "nic.h"
 #include "service.h"
 #include "vc.h"
 
@@ -117,12 +120,16 @@ const static FLOWSPEC  default_qos =
 /* -----------------------------------------------------------------------------
  */
 
-SocketService::SocketService (VC *          vc,
-                              VCReceiver *  vc_receiver,
+SocketService::SocketService (NIC &         nic,
+                              VC &          vc,
+                              VCReceiver &  vc_receiver,
                               int &         error)
-    : Service (SOCK_SERVICE, error),
-      vc (vc),
-      vc_receiver (vc_receiver),
+    : Service (nic.GetServiceManager(),
+               nic.GetHardwareAddress(),
+               SOCK_SERVICE,
+               error),
+      vc (&vc),
+      vc_receiver (&vc_receiver),
       state (Creating),
       discarding_packet (false),
       close_op (0)
@@ -161,11 +168,11 @@ void  SocketService::TxSocket (const S32  af)
     SetState (Exists);
 
     /* Send message to NIC */
-    asm_write_fifo (handle,
-                    AS_SOCKET,
-                    (unsigned char *) &socket_message,
-                    sizeof (socket_message),
-                    Boson_BlockToARMAddr);
+    boson_tx_msg (boson_address,
+                  handle,
+                  AS_SOCKET,
+                  (unsigned char *) &socket_message,
+                  sizeof (socket_message));
 }
 
 
@@ -190,11 +197,11 @@ void  SocketService::TxBind (const ATML_SOCKADDR_PVC *const  atm_addr)
     SetState (Connected);
 
     /* Send message to NIC */
-    asm_write_fifo (handle,
-                    AS_BIND,
-                    (unsigned char *) &bind_message,
-                    sizeof (bind_message),
-                    Boson_BlockToARMAddr);
+    boson_tx_msg (boson_address,
+                  handle,
+                  AS_BIND,
+                  (unsigned char *) &bind_message,
+                  sizeof (bind_message));
 }
 
 
@@ -259,12 +266,12 @@ void  SocketService::TxConnect (const ATML_SOCKADDR_ATM *const  atm_addr,
     SetState (Connecting);
 
     /* Send message to NIC */
-    asm_write_fifo (handle,
-                    AS_CONNECT,
-                    (unsigned char *) connect_message,
-                    (unsigned int) raw_message -
-                        (unsigned int) connect_message,
-                    Boson_BlockToARMAddr);
+    boson_tx_msg (boson_address,
+                  handle,
+                  AS_CONNECT,
+                  (unsigned char *) connect_message,
+                  (unsigned int) raw_message -
+                      (unsigned int) connect_message);
 }
 
 
@@ -294,12 +301,12 @@ void  SocketService::TxConnectAck (const S32  status)
 
     SetState (Accepting);
 
-    asm_write_fifo (handle,
-                    AS_CONNECT_ACK,
-                    (unsigned char *) connectack_message,
-                    (unsigned int) raw_message -
-                        (unsigned int) connectack_message,
-                    Boson_BlockToARMAddr);
+    boson_tx_msg (boson_address,
+                  handle,
+                  AS_CONNECT_ACK,
+                  (unsigned char *) connectack_message,
+                  (unsigned int) raw_message -
+                      (unsigned int) connectack_message);
 }
 
 
@@ -327,21 +334,21 @@ void  SocketService::TxListen (const ATML_SOCKADDR_ATM *const  atm_addr)
     SetState (Listening);
 
     /* Send message to NIC */
-    asm_write_fifo (handle,
-                    AS_LISTEN,
-                    (unsigned char *) listen_message,
-                    (unsigned int) raw_message -
-                        (unsigned int) listen_message,
-                    Boson_BlockToARMAddr);
+    boson_tx_msg (boson_address,
+                  handle,
+                  AS_LISTEN,
+                  (unsigned char *) listen_message,
+                  (unsigned int) raw_message -
+                      (unsigned int) listen_message);
 }
 
 
 
 
-int  SocketService::TxData (const unsigned int *  data,
-                            int                   data_bytes)
+int  SocketService::TxData (const unsigned char *  data,
+                            int                    data_bytes)
 {
-    return boson_tx_data (handle, data, data_bytes);
+    return boson_tx_msg (boson_address, handle, AS_DATA_END, data, data_bytes);
 }
 
 
@@ -350,7 +357,11 @@ int  SocketService::TxData (const unsigned int *  data,
 int  SocketService::TxData (struct mbuf *  m,
                             int            data_bytes)
 {
-    return boson_tx_data_mbuf (handle, m, data_bytes);
+    return boson_tx_msg_mbuf (boson_address,
+                              handle,
+                              AS_DATA_END,
+                              m,
+                              data_bytes);
 }
 
 
@@ -384,11 +395,11 @@ void  SocketService::TxClose ()
 
     SetState (Closing);
 
-    asm_write_fifo (handle,
-                    AS_CLOSE,
-                    (unsigned char *) &close_message,
-                    sizeof (AS_CLOSE_PARAMS),
-                    Boson_BlockToARMAddr);
+    boson_tx_msg (boson_address,
+                  handle,
+                  AS_CLOSE,
+                  (unsigned char *) &close_message,
+                  sizeof (AS_CLOSE_PARAMS));
 }
 
 
@@ -507,7 +518,7 @@ void  SocketService::ProcessConnect (NICMessage  msg)
     FLOWSPEC *             rx_qos      = 0;
 
 
-    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
+    boson_rx_data (boson_address, irq_buffer, msg.data.size);
 
     /* Read size of address structure from message */
     memcpy (&addr_size, raw_message, sizeof (S32));
@@ -599,7 +610,7 @@ void  SocketService::ProcessConnectAck (NICMessage  msg)
     const unsigned char *  tx_qos = NULL;
     const unsigned char *  rx_qos = NULL;
 
-    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
+    boson_rx_data (boson_address, irq_buffer, msg.data.size);
 
     /* Extract error code from message */
     memcpy (&status, raw_message, sizeof (int));
@@ -653,7 +664,7 @@ MessageHandlerRC  SocketService::RxClose (NICMessage  msg)
     int  status;
 
     dprintf (("", "RxClose %d\n", msg.common.handle));
-    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
+    boson_rx_data (boson_address, irq_buffer, msg.data.size);
     memcpy (&status, irq_buffer, sizeof (int));
 
     if (status != 0)
@@ -680,7 +691,7 @@ MessageHandlerRC  SocketService::RxCloseAck (NICMessage  msg)
     /* There is a parameter which indicates the reason for closure, but we're
      * not interested in it.
      */
-    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
+    boson_rx_data (boson_address, irq_buffer, msg.data.size);
     SetState (Closed);
     irq_closeds++;
 
@@ -780,7 +791,7 @@ MessageHandlerRC  SocketService::RxDataLength (NICMessage  msg)
     M_unused (msg);
     ++irq_data_lengths;
     /* Read true length of streamed data */
-    ASM_GET_MSG (Boson_CommitFromARMAddr, (unsigned char *) &length, sizeof (length));
+    boson_rx_data (boson_address, (unsigned char *) &length, sizeof (length));
     vc_receiver->DataLength (length);
     vc_receiver->DataEnd ();
     return HandledMsg;

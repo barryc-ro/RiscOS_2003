@@ -1,440 +1,475 @@
- ; Ant's ARM routines for getting data out of the BOSON FIFO
- ;
- ; This routine will be called to read between 0 and 2047 bytes from
- ; the FIFO, that is, a maximum of 512 words. 512 is a pretty small
- ; number, so I've gone totally overboard on the optimizing.
- ;
- ; On Entry, we have: r0 = addr. to get FIFO data from (EASI space)
- ;		     r1 = addr. to write data to (buffer)
- ;                    r2 = number of bytes to transfer
- ;
- ; this means we have 11 registers free, after we've stashed all the
- ; APCS bindings somewhere safe. Therefore, where possible, block data
- ; transfer is done in batches of 11 registers (or 44 bytes).
- ;
- ; we round r2 up to the next word boundary, and then convert to no. of words
- ; this is a 10 bit quantity, so we have 10 special cases for data fetching.
- ; by testing each bit in turn & calling the relevant routine, we ensure the
- ; correct amount of data is read (every msg in the FIFO is padded to a
- ; word boundary).
- ;
- ; We use:
- ;           23 instructions in the pre/postamble (2 MemOps)
- ;          196 instructions for special case transfer (all MemOps)
- ;            9 instructions for special case branching
- ;          ---
- ;          228 instructions, (198 MemOps)
- ;         =912 bytes of code (small enough to cache, & not too big an EPROM hit)
- ;
- ; worst case with all bits in r2 set (ie transfer 2048 bytes from FIFO) we will
- ; execute 237 instructions (198 MemOps, 18 branches, + arithmetic)
- ; c.f. a simple loop algorithm which would execute 4 instructions for every word
- ; fetched.
+	GET	Hdr:ListOpts
+	GET	Hdr:Macros
+	GET	Hdr:System
+	GET	Hdr:Proc
+	GET	Hdr:HostFS
+	GET	Hdr:NdrDebug
+	GET	Hdr:DDVMacros
+	GET	Hdr:Machine.<Machine>
+	$GetIO
 
-		GET		s.ddi_macros
+	GET	s.ddi_macros
 
-		AREA		ddi_xfer, PIC, CODE, REL
+	AREA	|C$$Code|, CODE, READONLY
 
-		EXPORT		asm_get_msg
-		EXPORT		asm_junk_msg
-		EXPORT		asm_write_fifo
-		EXPORT		asm_enable_podule_irqs
-		EXPORT		asm_disable_podule_irqs
-		EXPORT		asm_buffer_recover
-		EXPORT		multi_status
-		EXPORT		ensure_irqs_on
-		EXPORT		ensure_irqs_off
-		EXPORT		restore_irqs
+	IMPORT	|boson_irq_entry|
 
-N_bit_number		*	31                      ; Processor condition flags
-Z_bit_number		*	30
-C_bit_number		*	29
-V_bit_number		*	28
-I_bit_number		*	27
-F_bit_number		*	26
+	EXPORT	|boson_irq_pre_entry|
+	EXPORT	|boson_rx_data|
+	EXPORT	|boson_tx_data|
+	EXPORT	|boson_junk_data|
+	EXPORT	|boson_recover_fifo|
+	[ DEBUG
+	EXPORT	|boson_multi_status|
+	]
 
-N_bit			*	1 :SHL: N_bit_number    ; Processor condition flags
-Z_bit			*	1 :SHL: Z_bit_number
-C_bit			*	1 :SHL: C_bit_number
-V_bit			*	1 :SHL: V_bit_number
-I_bit			*	1 :SHL: I_bit_number
-F_bit			*	1 :SHL: F_bit_number
 
-USR_mode		*	2_00                    ; Processor mode bits
-FIQ_mode		*	2_01
-IRQ_mode		*	2_10
-SVC_mode		*	2_11
+	GBLL	debug
+	GBLL	hostvdu
 
-IOC_IRQMSKB		*	&28				; IRQ Mask
-IOC_FIQMASK		*	&38				; FIQ Mask
-IOC_ECTCR		*	&c8				; EASI bus timing control register
-podule_IRQ_bit		*	1 :SHL: 5			; Podule IRQ request
-podule_FIQ_bit		*	1 :SHL: 6			; Podule FIQ request
+	; have kept this separate from DEBUG - the latter is for knocking out
+	; or including entire routines
+debug	SETL	false
+hostvdu	SETL	true
+
+xfer	SETD	true
+
 
 DATA_FIRST		*	&8000
 DATA_LAST		*	&10000
 DATA_EXTEND		*	&20000
 
-IOC			*	&03200000
+Base16			*	&c00000
+Base32			*	&800000
+
+BlockToARM		*	&280
+CommitFromARM		*	&2c0
+CommitToARM		*	&2c0
+Status			*	&340
 
 Status_TX384		*	&1
 Status_RXBlock		*	&8
-
 Status_RXNotEmpty	*	&10
 
 
 
 
-asm_get_msg	STMDB		sp!, {r4-r11, lr}		; stash APCS stuff
-		ADD		r2, r2, #3
-		MOV		r2, r2, LSR#2			; round up to word boundary
-
-
-bit9		TST		r2, #512
-		BNE		move_512
-
-bit8		TST		r2, #256
-		BNE		move_256
-
-bit7		TST		r2, #128
-		BNE		move_128
-
-bit6		TST		r2, #64
-		BNE		move_64
-
-bit5		TST		r2, #32
-		BNE		move_32
-
-bit4		TST		r2, #16
-		BNE		move_16
-
-bit3		TST		r2, #8
-		BNE		move_8
-
-bit2		TST		r2, #4
-		BNE		move_4
-
-bit1		TST		r2, #2
-		BNE		move_2
-
-bit0		TST		r2, #1
-
-move_1		LDRNE		r3, [r0]
-		STRNE		r3, [r1]!
-
-exit		LDMIA		sp!, {r4-r11, pc}^
-
-move_2		LDMIA		r0, {r3, r4}
-		STMIA		r1!, {r3, r4}
-		B		bit0
-
-move_4		LDMIA		r0, {r3-r6}
-		STMIA		r1!, {r3-r6}
-		B		bit1
-
-move_8		LDMIA		r0, {r3-r10}
-		STMIA		r1!, {r3-r10}
-		B		bit2
-
-move_16		DO_ELEVEN		1
-		LDMIA		r0, {r3-r7}
-		STMIA		r1!, {r3-r7}
-		B		bit3
-
-move_32		DO_ELEVEN		2
-		LDMIA		r0, {r3-r12}
-		STMIA		r1!, {r3-r12}
-		B		bit4
-
-move_64		DO_ELEVEN		5
-		LDMIA		r0, {r3-r11}
-		STMIA		r1!, {r3-r11}
-		B		bit5
-
-move_128	DO_ELEVEN		11
-		LDMIA		r0, {r3-r9}
-		STMIA		r1!, {r3-r9}
-		B		bit6
-
-move_256	DO_ELEVEN		23
-		LDMIA		r0, {r3-r5}
-		STMIA		r1!, {r3-r5}
-		B		bit7
-
-move_512	DO_ELEVEN		46
-		LDMIA		r0, {r3-r8}
-		STMIA		r1!, {r3-r8}
-		B		bit8
-
-
-
- ; code for junking blocks is similar, but happily faster, coz we don't need to store
- ; anything, just get it the hell out of the FIFO.
- ; as an additional bonus, we only have 2 args, so we get an extra register to use in
- ; the block move ops.
- ;
- ; On Entry:
- ;           r0 = addr. to read FIFO data from (EASI space)
- ;           r1 = number of bytes to junk
- ;
- ; so we have:
- ;             23 instruction pre/post-amble (2 MemOps)
- ;             91 instructions for special case transfer (all MemOps)
- ;              9 instructions for special case branching
- ;            ---
- ;            123 instructions (93 MemOps)
- ;           =492 bytes of code
- ;
- ; worst case (all bits in r2 set, ie junk the entire FIFO, heaven forbid) we execute
- ; 131 instructions (93 MemOps, 18 branches, +arithemetic).
-
-asm_junk_msg	STMDB		sp!, {r4-r11, lr}	; stash APCS stuff
-		ADD		r2, r2, #3
-		MOV		r2, r2, LSR#2		; round up to word boundary
-
-
-jbit9		TST		r2, #512
-		BNE		junk_512
-
-jbit8		TST		r2, #256
-		BNE		junk_256
-
-jbit7		TST		r2, #128
-		BNE		junk_128
-
-jbit6		TST		r2, #64
-		BNE		junk_64
-
-jbit5		TST		r2, #32
-		BNE		junk_32
-
-jbit4		TST		r2, #16
-		BNE		junk_16
-
-jbit3		TST		r2, #8
-		BNE		junk_8
-
-jbit2		TST		r2, #4
-		BNE		junk_4
-
-jbit1		TST		r2, #2
-		BNE		junk_2
-
-jbit0		TST		r2, #1
-
-junk_1		LDRNE		r3, [r0]
-
-exit_junk	LDMIA		sp!, {r4-r11, pc}^
-
-junk_2		LDMIA		r0, {r3, r4}
-		B		jbit0
-
-junk_4		LDMIA		r0, {r3-r6}
-		B		jbit1
-
-junk_8		LDMIA		r0, {r3-r10}
-		B		jbit2
-
-junk_16		DO_TWELVE		1
-		LDMIA		r0, {r3-r6}
-		B		jbit3
-
-junk_32		DO_TWELVE		2
-		LDMIA		r0, {r3-r10}
-		B		jbit4
-
-junk_64		DO_TWELVE		5
-		LDMIA		r0, {r3-r6}
-		B		jbit5
-
-junk_128	DO_TWELVE		10
-		LDMIA		r0, {r3-r10}
-		B		jbit6
-
-junk_256	DO_TWELVE		21
-		LDMIA		r0, {r3-r6}
-		B		jbit7
-
-junk_512	DO_TWELVE		42
-		LDMIA		r0, {r3-r10}
-		B		jbit8
-
-; asm_buffer_recover - in the event that we have got out of step with the FIFO, this routine
-;		       attempts to revert to a sane state. While there are words still in the
-;		       FIFO, but no Blocks are registered, we junk the FIFO data.
-;		       As soon as the FIFO is empty, or a Block appears, we stop.
-
-; On entry: r0 is the address of the Boson commit from ARM register (adjusted for podule)
-
-asm_buffer_recover
-		ADD		r2, r0, #&80
-;		ADD		r2, r2, #&400000		; r2 = r_Boson_Status (in 16bit space)
-10              LDR		r1, [r2]			; get status register
-		AND		r1, r1, #(Status_RXBlock:OR:Status_RXNotEmpty)	; mask out the 2 bits we want
-		TEQ		r1, #Status_RXNotEmpty		; ensure a new block hasn't arrived
-                MOVNE		pc, lr
-;		BNE		buffer_recover_exit
-		LDR		r1, [r0]			; junk word
-		B		%BT10
-;buffer_recover_exit MOV		pc, lr
-
-; asm_write_fifo: writes stuff to the fifo, not very elegant code, but quicker than C
-; on entry:
-;		    r0 = handle
-;		    r1 = command
-;		    r2 = addr. of data to write
-;		    r3 = no. of bytes to write
-;		  [sp] = EASI addr. of BlockToARM register (adjusted for relevant podule slot)
+; ------------------------------------------------------------------------------
+; boson_irq_pre_entry
 ;
-; on exit:
-;		    r0 = -1 if we ran out of FIFO buffer space
+; Setup registers for the interrupt handler before entry into the CMHG veneer.
+;
+; On entry
+; r12 = workspace pointer
 
-asm_write_const1	DCD		&3ff
-asm_write_const2	DCD		&7ff
-
-asm_write_fifo	STMDB		sp!, {r4-r11, lr}
-		LDR		r10, asm_write_const1
-		LDR		r11, asm_write_const2
-
-		AND		r0, r0, r10
-		AND		r1, r1, #&f
-		ORR		r0, r0, r1, LSL#11		; build handle & cmd word in r0
-		ORR		r9, r0, #DATA_FIRST		; first time version
-
-		LDR		r4, [sp, #36]			; get the BlockToARM address
-		ADD		lr, r4, #&c0
-		ADD		lr, lr, #&400000		; lr is now addr. of status reg (in 16bit space)
-
-write_block_loop	LDR		r5, [lr]			; get status register contents
-
-		MOV		r6, #0				; start by assuming no free fifo space
-		TST		r5, #4				; 16 words free?
-		MOVNE		r6, #64				; convert to free bytes
-		TST		r5, #2				; 128 words free?
-		MOVNE		r6, #512			; convert to free bytes
-		TST		r5, #1				; 384 words free?
-		MOVNE		r6, #1536			; convert to free bytes
-
-		CMP		r6, #0				; no fifo space?
-		BEQ		write_block_loop    ; EXPERIMENTAL HACK!
-		; proper behaviour is given in the following 2 lines - ie signal an error
-		; to the packet driver. But the internet module seems to ignore this when
-		; it's passed back up, so we'll handle it locally.
-
-		;MVNEQ		r0, #0
-		;BEQ		asm_write_exit			; return error
-
-		SUB		r6, r6, #8			; take off 8 bytes for potential headers
-
-		CMP		r3, r6
-		BGT		extend				; bytes > fifo space
-
-no_extend	ORR 		r9, r9, #DATA_LAST		; it's the last message block
-		AND 		r6, r3, r11			; num. of bytes in this message block
-		ORR 		r9, r9, r6, LSL#21		; mask packet size into header word
-		STR 		r9, [r4, #&40]			; CommitToARM(header word)
-		B		begin_write_data
-
-extend		TST		r9, #DATA_FIRST			; if it's the first msg block...
-		ORRNE 		r9, r9, #DATA_EXTEND		; ...set extension flag
-		ORR 		r9, r9, r6, LSL#21		; mask in packet size
-		STR 		r9, [r4, #&40]			; CommitToARM(header word)
-		MOVNE 		r9, r3, LSL#16			; generate extension word
-		STRNE 		r9, [r4, #&40]			; CommitToARM(ext. word)
-
-begin_write_data	SUB		r3, r3, r6			; calc. total bytes left
-		MOV		r9, r0				; restore hdr word for potential subsequent blox
-
-write_data_loop	LDR		r5, [r2], #4			; get next data word, update ptr
-		CMP		r6, #4				; is this gonna be the last word in this packet?
-		BLE 		write_last_word			; YES - deal with it
-		STR  		r5, [r4, #&40]			; NO: CommitToARM(data)
-		SUB 		r6, r6, #4
-		B		write_data_loop			; next word in packet
-
-write_last_word	RSB		r6, r6, #4			; r6 = 4 - bytes_left
-		MOVS		r6, r6, LSL#3			; r6 = 8 * (4 - bytes_left)
-		MOVNE		r5, r5, LSL r6			; clear that number of bits
-		MOVNE		r5, r5, LSR r6			; shift back to original pos.
-		STR		r5, [r4]			; BlockToARM(last_word)
-
-		CMP		r3, #0				; do we need to start another msg?
-		BGT		write_block_loop
-
-asm_write_exit	LDMIA		sp!, {r4-r11, pc}^
-
-; stuff to turn on podule IRQs, and also to enable type C memory cycles for our podule
-; we need r0 = podule slot number on entry to do this.
-
-asm_enable_podule_irqs
-		STMDB		sp!, {r0-r2, lr}
-		MOV		r1, #1
-		MOV		r0, r1, LSL r0			; convert podule num to bit
-
-		MOV		lr,pc 				;Hold current I_bit & F_bit & Mode
-		SWI		&20016				;XOS_EnterOS
-		TEQP		pc, #I_bit+F_bit+SVC_mode	;Disable IRQs & FIRQs
-
-		MOV		r2, #IOC			;whilst enabling Podule IRQs
-		;LDRB		r1, [r2, #IOC_ECTCR]		; get expansion card timing control
-		;ORR		r1, r1, r0			; mask in bit for our podule
-		;STRB		r1, [r2, #IOC_ECTCR]
-
-		LDRB		r1, [r2, #IOC_IRQMSKB]		;in IOC
-		ORR		r1, r1, #podule_IRQ_bit
-		STRB		r1, [r2, #IOC_IRQMSKB]
-		TEQP		pc, lr				;Restore original I_bit & F_bit
-		MOV		r0, r0				;And the Mode.
-		LDMIA		sp!, {r0-r2, pc}^
+|boson_irq_pre_entry|
+	LDMIA		r12, { r0, r1, r12 }
+	B		boson_irq_entry
 
 
 
-asm_disable_podule_irqs
-		STMDB		sp!, {r0-r2, lr}
-		MOV		r1, #1
-		MOV		r0, r1, LSL r0
 
-		MOV		lr, pc				;Hold current I_bit & F_bit &Mode
-		SWI		&20016				;XOS_EnterOS
-		TEQP		pc, #I_bit+F_bit+SVC_mode	;Disable IRQs & FIRQs
+; ------------------------------------------------------------------------------
+; boson_rx_data
+;
+; Read data from the Boson FIFO.
+; The destination address must be 32bit or 16bit aligned.
+; If the destination address and number of bytes to read indicate that there
+; is an 'incomplete' word at the end then the caller must allow for up to 3
+; bytes of wastage.
+;
+; On entry
+; r0 = base address of hardware
+; r1 = address of buffer to store data in
+; r2 = number of bytes to read
 
-		MOV		r2, #IOC			; whilst disabling Podule IRQs
-		LDRB		r1, [r2, #IOC_ECTCR]		; get expansion card timing register
-		BIC		r1, r1, r0			; turn off bit for our podule
-		STRB		r1, [r2, #IOC_ECTCR]
+|boson_rx_data|
+	TEQ	r2, #0
+	MOVEQS	pc, lr
 
-		LDRB		r1, [r2, #IOC_IRQMSKB]		; in IOC
-		BIC		r1, r1, #podule_IRQ_bit
-		STRB		r1, [r2, #IOC_IRQMSKB]
-		TEQP		pc, lr				;Restore original I_bit & F_bit
-		MOV		r0, r0				;And mode.
+	STMDB	sp!, {r4-r11, lr}	; stash APCS stuff
 
-		LDMIA		sp!, {r0-r2, pc}^
+	ADD	r0, r0, #Base32
+	ADD	r0, r0, #CommitFromARM
+
+	ANDS	r3, r1, #3
+	BNE	Rx_Unaligned
+
+	Debug	xfer, "aligned"
+	Debug	xfer, "ragged bytes", r2
+	ADD	r2, r2, #3
+	MOV	r2, r2, LSR#2		; round up to word boundary
+	Debug	xfer, "rounded words", r2
+
+; Boson is only 2k and we'll already have read a header word,
+; so this should be impossible.
+;bit9	TST	r2, #512
+;	BEQ	bit8
+;	Read11	46
+;	LDMIA	r0, {r3-r8}
+;	STMIA	r1!, {r3-r8}
+
+bit8	TST	r2, #256
+	BEQ	bit7
+	Debug	xfer, "256"
+	Read11	23
+	LDMIA	r0, {r3-r5}
+	STMIA	r1!, {r3-r5}
+
+bit7	TST	r2, #128
+	BEQ	bit6
+	Debug	xfer, "128"
+	Read11	11
+	LDMIA	r0, {r3-r9}
+	STMIA	r1!, {r3-r9}
+
+bit6	TST	r2, #64
+	BEQ	bit5
+	Debug	xfer, "64"
+	Read11	5
+	LDMIA	r0, {r3-r11}
+	STMIA	r1!, {r3-r11}
+
+bit5	TST	r2, #32
+	BEQ	bit4
+	Debug	xfer, "32"
+	Read11	2
+	LDMIA	r0, {r3-r12}
+	STMIA	r1!, {r3-r12}
+
+bit4	TST	r2, #16
+	BEQ	bit3
+	Debug	xfer, "16"
+	Read11	1
+	LDMIA	r0, {r3-r7}
+	STMIA	r1!, {r3-r7}
+
+bit3	TST	r2, #8
+	BEQ	bit2
+	Debug	xfer, "8"
+	LDMIA	r0, {r3-r10}
+	STMIA	r1!, {r3-r10}
+
+bit2	TST	r2, #4
+	BEQ	bit1
+	Debug	xfer, "4"
+	LDMIA	r0, {r3-r6}
+	STMIA	r1!, {r3-r6}
+
+bit1	TST	r2, #2
+	BEQ	bit0
+	Debug	xfer, "2"
+	LDMIA	r0, {r3, r4}
+	STMIA	r1!, {r3, r4}
+
+bit0	TST	r2, #1
+	DebugIf	NE, xfer, "1"
+	LDRNE	r3, [r0]
+	STRNE	r3, [r1]!
+
+	LDMIA	sp!, {r4-r11, pc}^
+
+Rx_Unaligned
+	; Read the first word from the Boson
+	BIC	r1, r1, #3		; round dest address down to word boundary
+	LDR	lr, [r0]
+	CMP	r3, #2			; check precice alignment
+	BGT	Rx_OneByte		; 1 leading byte
+	BEQ	Rx_TwoBytes		; 2 leading bytes
+
+	; 3 leading bytes
+Rx_ThreeBytes
+	Debug	xfer, "3 initial"
+	RxUnaligned	3
+	LDMIA	sp!, {r4-r11, pc}^
+
+Rx_TwoBytes
+	Debug	xfer, "2 initial"
+	RxUnaligned	2
+	LDMIA	sp!, {r4-r11, pc}^
+
+Rx_OneByte
+	Debug	xfer, "1 initial"
+	RxUnaligned	1
+	LDMIA	sp!, {r4-r11, pc}^
+
+
+
+
+; ------------------------------------------------------------------------------
+; boson_junk_data
+;
+; Junk data from the Boson FIFO.
+;
+; Code for junking blocks is similar to reading, but happily faster, because we
+; don't need to store anything, just get it out of the FIFO.  As an additional
+; bonus, we only have 2 args, so we get an extra register to use in the block
+; move ops.
+;
+; So we have:
+;             23 instruction pre/post-amble (2 MemOps)
+;             91 instructions for special case transfer (all MemOps)
+;              9 instructions for special case branching
+;            ---
+;            123 instructions (93 MemOps)
+;           =492 bytes of code
+;
+; Worst case (all bits in r2 set, ie junk the entire FIFO, heaven forbid) we
+; execute 131 instructions (93 MemOps, 18 branches, +arithemetic).
+;
+; On entry
+; r0 = base address of hardware
+; r1 = number of bytes to junk
+
+|boson_junk_data|
+	STMDB	sp!, {r4-r11, lr}	; stash APCS stuff
+
+	ADD	r0, r0, #Base32
+	ADD	r0, r0, #CommitFromARM
+
+	ADD	r2, r1, #3
+	MOV	r2, r2, LSR#2		; round up to word boundary
+
+jbit9	TST	r2, #512
+	BEQ	jbit8
+	Junk12	42
+	LDMIA	r0, {r3-r10}
+
+jbit8	TST	r2, #256
+	BEQ	jbit7
+	Junk12	21
+	LDMIA	r0, {r3-r6}
+
+jbit7	TST	r2, #128
+	BEQ	jbit6
+	Junk12	10
+	LDMIA	r0, {r3-r10}
+
+jbit6	TST	r2, #64
+	BEQ	jbit5
+	Junk12	5
+	LDMIA	r0, {r3-r6}
+
+jbit5	TST	r2, #32
+	BEQ	jbit4
+	Junk12	2
+	LDMIA	r0, {r3-r10}
+
+jbit4	TST	r2, #16
+	BEQ	jbit3
+	Junk12	1
+	LDMIA	r0, {r3-r6}
+
+jbit3	TST	r2, #8
+	BEQ	jbit2
+	LDMIA	r0, {r3-r10}
+
+jbit2	TST	r2, #4
+	BEQ	jbit1
+	LDMIA	r0, {r3-r6}
+
+jbit1	TST	r2, #2
+	BEQ	jbit0
+	LDMIA	r0, {r3, r4}
+
+jbit0	TST	r2, #1
+	LDRNE	r3, [r0]
+
+	LDMIA	sp!, {r4-r11, pc}^
+
+
+
+
+; ------------------------------------------------------------------------------
+; boson_recover_fifo
+;
+; In the event that we have got out of step with the FIFO, this routine
+; attempts to revert to a sane state. While there are words still in the
+; FIFO, but no Blocks are registered, we junk the FIFO data. As soon as
+; the FIFO is empty, or a Block appears, we stop.
+;
+; On entry
+; r0 = base address of hardware
+
+|boson_recover_fifo|
+
+	ADD	r2, r0, #Base16
+	ADD	r2, r2, #Status
+
+	ADD	r0, r0, #Base32
+	ADD	r0, r0, #CommitFromARM
+
+10	LDR	r1, [r2]		; get status register
+
+	; mask out the 2 bits we want
+	AND	r1, r1, #(Status_RXBlock:OR:Status_RXNotEmpty)
+
+	; ensure a new block hasn't arrived
+	TEQ	r1, #Status_RXNotEmpty
+	MOVNE	pc, lr
+	LDR	r1, [r0]		; junk word
+	B	%BT10
+
+
+
+
+; ------------------------------------------------------------------------------
+; boson_tx_data
+;
+; Write data from memory to the Boson FIFO.
+;
+; If the source address and amount of data to be written are such that there is
+; an incomplete word at the end of data, then the caller must allow for up to 3
+; bytes wastage.
+;
+; On entry
+; r0 = base address of hardware
+; r1 = source address of data in memory
+; r2 = number of bytes to write
+; r3 = last data in block? (0 = no)
+
+|boson_tx_data|
+	TEQ	r2, #0
+	MOVEQS	pc, lr
+
+	STMDB	sp!, {r4-r11, lr}	; stash APCS stuff
+
+	ADD	r0, r0, #Base32
+	ADD	r0, r0, #CommitToARM
+
+	ANDS	r4, r1, #3		; check alignment
+	BNE	Tx_Unaligned
+
+	; Source address is word aligned
+
+	Debug	xfer, "aligned"
+	; Round down to whole number of words
+	Debug	xfer, "length", r2
+	SUB	r2, r2, #1
+	BIC	r2, r2, #3		; round down to whole word
+	Debug	xfer, "rounded length", r2
+
+	STMDB	sp!, {r3}
+
+	; Try 256 bytes
+	SUBS	r2, r2, #256
+	BMI	%F10
+1	LDMIA	r1!, {r3-r12, lr}
+	Debug	xfer, "256"
+	STMIA	r0, {r3-r12, lr}
+	LDMIA	r1!, {r3-r12, lr}
+	STMIA	r0, {r3-r12, lr}
+	LDMIA	r1!, {r3-r12, lr}
+	STMIA	r0, {r3-r12, lr}
+	LDMIA	r1!, {r3-r12, lr}
+	STMIA	r0, {r3-r12, lr}
+	LDMIA	r1!, {r3-r12, lr}
+	STMIA	r0, {r3-r12, lr}
+	LDMIA	r1!, {r3-r11}
+	STMIA	r0, {r3-r11}
+	SUBS	r2, r2, #256
+	BGE	%B1
+
+	; Try 64 bytes
+10	ADDS	r2, r2, #256-64
+	BMI	%F20
+11	LDMIA	r1!, {r3-r12, lr}
+	Debug	xfer, "64"
+	STMIA	r0, {r3-r12, lr}
+	LDMIA	r1!, {r3-r7}
+	STMIA	r0, {r3-r7}
+	SUBS	r2, r2, #64
+	BGE	%B11
+
+	; Try 16 bytes
+20	ADDS	r2, r2, #64-16
+	BMI	%F30
+21	LDMIA	r1!, {r3-r6}
+	Debug	xfer, "16"
+	STMIA	r0, {r3-r6}
+	SUBS	r2, r2, #16
+	BGE	%B21
+
+	; Try 4 bytes
+30	ADDS	r2, r2, #16-4
+	BMI	%F40
+31	LDR	r3, [r1], #4
+	Debug	xfer, "4"
+	STR	r3, [r0]
+	SUBS	r2, r2, #4
+	BGE	%B31
+
+40	LDMIA	sp!, {r3}
+	LDR	r4, [r1], #4
+	CMP	r3, #0			; last data in block?
+	DebugIf	NE, xfer, "last word block"
+	STRNE	r4, [r0, #BlockToARM-CommitToARM]	; yes? use BlockToARM
+	DebugIf	EQ, xfer, "last word commit"
+	STREQ	r4, [r0]		; no? use CommitToARM as normal
+
+	Debug	xfer, "finished"
+
+	LDMIA	sp!, {r4-r11, pc}^
+
+Tx_Unaligned
+	BIC	r1, r1, #3		; round down to word boundary
+	LDR	lr, [r1], #4		; read first word: 1-3 useful bytes
+	CMP	r4, #2
+	BGT	Tx_OneByte		; one leading byte
+	BEQ	Tx_TwoBytes		; two leading bytes
+
+	; three leading bytes
+Tx_ThreeBytes
+	Debug	xfer, "3 initial"
+	TxUnaligned	1		; one byte offset
+	LDMIA	sp!, {r4-r11, pc}^
+
+Tx_TwoBytes
+	Debug	xfer, "2 initial"
+	TxUnaligned	2		; two byte offset
+	LDMIA	sp!, {r4-r11, pc}^
+
+
+Tx_OneByte
+	Debug	xfer, "1 initial"
+	TxUnaligned	3		; three byte offset
+	LDMIA	sp!, {r4-r11, pc}^
+
+
+
 
 ; multi_status investigates weird goings-on with the status register
-; on entry r0 = address to read, r1 = buffer to store results, r2 = no. words to read
-multi_status
-		STMDB		sp!, {r4-r11, lr}
-		MOV		lr, pc				;Hold current I_bit & F_bit &Mode
-		SWI		&20016				;XOS_EnterOS
-		TEQP		pc, #I_bit+F_bit+SVC_mode	;Disable IRQs & FIRQs
-multi_loop	LDR		r3, [r0]
-		STR		r3, [r1], #4
-		SUBS		r2, r2, #1
-		BNE		multi_loop
-		TEQP		pc, lr				;Restore original I_bit & F_bit
-		MOV		r0, r0				;And mode.
-		LDMIA		sp!, {r4-r11, pc}^
+;
+; On entry
+; r0 = base address of hardware
+; r1 = buffer to store results
+; r2 = no. words to read
 
-ensure_irqs_on	AND		r0, lr, # I_bit			; irqs on, previous state in r0
-		BICS		pc, lr, # I_bit
+	[ DEBUG
+|boson_multi_status|
+	STMDB	sp!, {r4-r11, lr}
+	MOV	lr, pc			;Hold current I_bit & F_bit &Mode
+	SWI	XOS_EnterOS
+	;Disable IRQs &FIRQs
+	TEQP	pc, #I_bit+F_bit+SVC_mode
 
-ensure_irqs_off	AND		r0, lr, # I_bit			; irqs off, previous state in r0
-		ORRS		pc, lr, # I_bit
+	ADD	r0, r0, #Status
+multi_loop
+	LDR	r3, [r0]
+	STR	r3, [r1], #4
+	SUBS	r2, r2, #1
+	BNE	multi_loop
+	TEQP	pc, lr			;Restore original I_bit & F_bit
+	MOV	r0, r0			;And mode.
+	LDMIA	sp!, {r4-r11, pc}^
+	]
 
-restore_irqs	BIC		lr, lr, # I_bit			; restore previous state from r0
-		ORRS		pc, lr, r0
+	[ debug
+	InsertNDRDebugRoutines
+	]
 
-		END
+	LTORG
+
+	END
 
 

@@ -2,12 +2,12 @@
    Purpose:
    Author:  Ben Laughton
 
-   Copyright 1999 Element 14 Ltd.
+   Copyright 1999 Pace Micro Techology plc.
 
-   This material is the confidential trade secret and proprietary information
-   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
-   any third party without the prior written consent of Element 14 Ltd.
-   All rights reserved.
+   This material is the confidential trade secret and proprietary
+   information of Pace Micro Techology plc.  It may not be reproduced,
+   used sold, or transferred to any third party without the prior
+   written consent of Pace Micro Techology plc. All rights reserved.
 
    History:
 
@@ -29,63 +29,9 @@
 // Local
 #include "atm.h"
 #include "command.h"
+#include "nic.h"
 #include "service.h"
-
-
-
-
-// =============================================================================
-// Constants definitions
-
-#define UNSIGNED_INT_BITS  (sizeof (unsigned int) * CHAR_BIT)
-
-/* Assembler code uses 1 bit per socket handle - need to ensure we allocate a
- * whole number of words.  2 extra words needed for housekeeping.
- */
-
-#define WORKSPACE_SIZE     (((MaxHandles + (UNSIGNED_INT_BITS - 1)) / \
-                             UNSIGNED_INT_BITS) + 2)
-
-
-
-
-// =============================================================================
-// Macro definitions
-
-
-
-
-// =============================================================================
-// Global variables
-
-ServiceManager *  service_manager;
-
-
-
-
-// =============================================================================
-// Static declarations
-
-ServiceManager *  ServiceManager::instance = 0;
-Service *         ServiceManager::service[MaxHandles];
-unsigned int      ServiceManager::handle_wspace[WORKSPACE_SIZE];
-
-
-
-
-// =============================================================================
-// Function prototype declarations
-
-extern "C"
-{
-    extern int init_handle_handler (unsigned int *, unsigned int, unsigned int);
-    extern int get_handle (unsigned int *);
-    extern int free_handle (unsigned int *, int);
-    extern int free_cmd_handle (unsigned int *);
-    extern int enumerate_free_handles (unsigned int *);
-    extern int enumerate_busy_handles (unsigned int *);
-}
-
+#include "utils.h"
 
 
 
@@ -102,36 +48,21 @@ extern "C"
    Find out which service a message is destined for and despatch it.
  */
 
-extern "C"  MessageHandlerRC  ServiceManager_DespatchMessage (NICMessage    msg,
-                                                              NICExtension  ext)
+extern "C"  MessageHandlerRC  ServiceManager_DespatchMessage (
+                                  NICMessage        msg,
+                                  NICExtension      ext,
+                                  ServiceManager *  service_manager)
 {
-    MessageHandlerRC  rc;
-
-    Service *  service = service_manager->GetService (msg.common.handle);
-    if (service)
-    {
-        rc = service->MessageHandler (msg, ext);
-    }
-    else
-    {
-        /* Unknown / unsupported service - no sockets bound to it so
-         * should be impossible - probably junk data.
-         */
-        rc = FlushFIFO;
-    }
-
-    return rc;
+    return service_manager->DespatchMessage (msg, ext);
 }
 
 
 
 
-ServiceManager *  ServiceManager::Create (int &  error)
+ServiceManager *  ServiceManager::Create (NIC &  nic,
+                                          int &  error)
 {
-    ServiceManager *  service_manager;
-
-    error = 0;
-    service_manager = new ServiceManager (error);
+    ServiceManager *  service_manager = new ServiceManager (error);
     if (service_manager)
     {
         if (error)
@@ -145,6 +76,36 @@ ServiceManager *  ServiceManager::Create (int &  error)
         error = Error_ATM_NoMemory;
     }
 
+    if (!error)
+    {
+        CommandService *  command_service =
+            new CommandService (*service_manager,
+                                nic.GetHardwareAddress (),
+                                error);
+        if (command_service)
+        {
+            if (error)
+            {
+                delete command_service;
+                command_service = 0;
+            }
+            else
+            {
+                service_manager->SetCommandService (command_service);
+            }
+        }
+        else
+        {
+            error = Error_ATM_NoMemory;
+        }
+
+        if (error)
+        {
+            delete service_manager;
+            service_manager = 0;
+        }
+    }
+
     return service_manager;
 }
 
@@ -154,17 +115,13 @@ ServiceManager *  ServiceManager::Create (int &  error)
 ServiceManager::ServiceManager (int &  error)
 {
     error = 0;
+
     for (int i = 0; i < MaxHandles; ++i)
     {
         service[i] = 0;
     }
 
-    if (init_handle_handler (handle_wspace,
-                             MaxHandles,
-                             sizeof (handle_wspace)) < 0)
-    {
-        error = Error_ATM_ServiceManager;
-    }
+    next_handle = 1;    // 0 pre-allocated to command service
 }
 
 
@@ -172,20 +129,61 @@ ServiceManager::ServiceManager (int &  error)
 
 ServiceManager::~ServiceManager ()
 {
+    if (command_service)
+    {
+        delete command_service;
+    }
 }
 
 
 
 
-int  ServiceManager::GetHandle (int &  handle)
+int  ServiceManager::RegisterService (Service &  new_service,
+                                      int &      handle)
 {
-    int error = 0;
+    int  error  = 0;
 
-    handle = get_handle (handle_wspace);
-    if (handle < 0)
+    handle = -1;
+
+    int  service_number = new_service.GetNumber();
+    if (service_number == CMD_SERVICE)
     {
-        error = Error_ATM_HandleAlloc;
+        handle = 0;
+        service[0] = &new_service;
     }
+    else
+    {
+        // Must have interrupts off whilst trying to allocate handle so
+        // a foreground allocation can't get interrupted by a background
+        // allocation, with both ending up trying to use the same
+        // handle (foreground one would end up overwriting background one).
+        int  irq_state      = ensure_irqs_off ();
+        int  start_handle   = next_handle;
+        do
+        {
+            handle = next_handle++;
+            if (next_handle == MaxHandles)
+            {
+                next_handle = 1;    // skip pre-allocated command service handle
+            }
+        }
+        while (service[handle] != 0 && next_handle != start_handle);
+
+        if (service[handle] == 0)
+        {
+            service[handle] = &new_service;
+        }
+        else
+        {
+            // No free handles
+            handle = -1;
+            error  = Error_ATM_HandleAlloc;
+        }
+        restore_irqs (irq_state);
+    }
+
+    dprintf (("", "handle %d -> service %d\n",
+              handle, service_number));
 
     return error;
 }
@@ -193,28 +191,30 @@ int  ServiceManager::GetHandle (int &  handle)
 
 
 
-void  ServiceManager::RegisterService (Service *  service)
+void  ServiceManager::DeregisterService (Service &  service)
 {
-    this->service[service->GetHandle()] = service;
+    int  handle = service.GetHandle ();
+    if (handle > 0 && handle < MaxHandles)
+    {
+        service.Detach ();
+        this->service[handle] = 0;
+    }
 }
 
 
 
 
-void  ServiceManager::DeregisterService (Service *  service)
+void  ServiceManager::AttachService (Service &  service)
 {
-    int  handle = service->GetHandle ();
-    command_service->TxDetach (handle);
-    (void) free_handle (handle_wspace, handle);
-    this->service[handle] = 0;
+    command_service->TxAttachx (service.GetNumber(), service.GetHandle());
 }
 
 
 
 
-Service *  ServiceManager::GetService (const int  handle)
+void  ServiceManager::DetachService (Service &  service)
 {
-    return handle < MaxHandles ? service[handle] : 0;
+    command_service->TxDetach (service.GetHandle());
 }
 
 
@@ -222,7 +222,16 @@ Service *  ServiceManager::GetService (const int  handle)
 
 int  ServiceManager::GetNumberFree ()
 {
-    return enumerate_free_handles (handle_wspace);
+    int  count = 0;
+
+    for (int i = 0; i < MaxHandles; ++i)
+    {
+        if (service[i] == 0)
+        {
+            ++count;
+        }
+    }
+    return count;
 }
 
 
@@ -230,40 +239,59 @@ int  ServiceManager::GetNumberFree ()
 
 int  ServiceManager::GetNumberInUse ()
 {
-    return enumerate_busy_handles (handle_wspace);
+    return ( MaxHandles - GetNumberFree() );
 }
 
 
 
 
-Service::Service (const int   service_number,
-                  int &       error,
-                  int         handle)
-    : service_number (service_number)
+MessageHandlerRC  ServiceManager::DespatchMessage (NICMessage    msg,
+                                                   NICExtension  ext)
 {
-    error = 0;
+    MessageHandlerRC  rc;
 
-    if (handle == -1)
+    if (msg.common.handle < MaxHandles && service[msg.common.handle])
     {
-        error = service_manager->GetHandle (handle);
+        rc = service[msg.common.handle]->MessageHandler (msg, ext);
+    }
+    else
+    {
+        // Unknown / unsupported service - no sockets bound to it so
+        // should be impossible - probably junk data.
+        rc = FlushFIFO;
     }
 
-    if (!error)
-    {
-        this->handle = handle;
+    return rc;
+}
 
-        dprintf (("", "allocating handle %d to service %d\n",
-                  handle, service_number));
-    }
+
+
+void  ServiceManager::SetCommandService (CommandService *  command_service)
+{
+    this->command_service = command_service;
 }
 
 
 
 
-void  Service::Attach ()
+CommandService &  ServiceManager::GetCommandService () const
 {
-    service_manager->RegisterService (this);
-    command_service->TxAttachx (service_number, handle);
+    return *command_service;
+}
+
+
+
+
+Service::Service (ServiceManager &  service_manager,
+                  unsigned int      boson_address,
+                  const int         service_number,
+                  int &             error)
+    : service_manager (&service_manager),
+      boson_address (boson_address),
+      service_number (service_number)
+{
+    error = service_manager.RegisterService (*this, handle);
+    dprintf (("", "handle is %d\n", handle));
 }
 
 
@@ -271,13 +299,37 @@ void  Service::Attach ()
 
 Service::~Service ()
 {
-    service_manager->DeregisterService (this);
+    service_manager->DeregisterService (*this);
 }
 
 
 
 
-int  Service::GetHandle ()
+void  Service::Attach ()
+{
+    service_manager->AttachService (*this);
+}
+
+
+
+
+void  Service::Detach ()
+{
+    service_manager->DetachService (*this);
+}
+
+
+
+
+int  Service::GetNumber () const
+{
+    return service_number;
+}
+
+
+
+
+int  Service::GetHandle () const
 {
     return handle;
 }

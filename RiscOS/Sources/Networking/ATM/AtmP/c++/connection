@@ -2,12 +2,12 @@
    Purpose: Connection superclass
    Author:  Ben Laughton
 
-   Copyright 1999 Element 14 Ltd.
+   Copyright 1999 Pace Micro Techology plc.
 
-   This material is the confidential trade secret and proprietary information
-   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
-   any third party without the prior written consent of Element 14 Ltd.
-   All rights reserved.
+   This material is the confidential trade secret and proprietary
+   information of Pace Micro Techology plc.  It may not be reproduced,
+   used sold, or transferred to any third party without the prior
+   written consent of Pace Micro Techology plc. All rights reserved.
 
    History:
 
@@ -40,15 +40,8 @@ extern "C"
 #include "defs.h"
 #include "ip.h"
 #include "mpeg.h"
+#include "nic.h"
 #include "socket.h"
-
-
-
-
-// =============================================================================
-// Static attribute definitions
-
-Connection::ConnectionListItem *  Connection::connection_list = 0;
 
 
 
@@ -56,7 +49,7 @@ Connection::ConnectionListItem *  Connection::connection_list = 0;
 // =============================================================================
 // Function prototype declarations
 
-extern "C" void  asm_status_changed ();
+extern "C" void  status_changed ();
 
 
 
@@ -67,11 +60,13 @@ extern "C" void  asm_status_changed ();
 /* -----------------------------------------------------------------------------
  */
 
-Connection::Connection (const ATML_SOCKADDR *const  atm_addr,
+Connection::Connection (NIC &                 nic,
+                        const ATML_SOCKADDR *const  atm_addr,
                         const Service               service,
                         const Origin                origin,
                         int &                       error)
-    : usage (0),
+    : VCReceiver (nic),
+      usage (0),
       service (service),
       origin (origin),
       client_list (0),
@@ -79,22 +74,10 @@ Connection::Connection (const ATML_SOCKADDR *const  atm_addr,
       error (0)
 {
     error = 0;
-    vc = VC::Create (atm_addr, this, error);
+    vc = VC::Create (nic, atm_addr, *this, error);
     if (vc)
     {
-        if (!error)
-        {
-            ConnectionListItem *  item = new ConnectionListItem ();
-            if (item)
-            {
-                item->connection = this;
-                item->next = connection_list;
-                connection_list = item;
-            }
-            //socket = vc->GetSocket ();
-            // Add ourselves to the list of known connections
-            //known_connections[next_free++] = this;
-        }
+        error = nic.GetConnectionManager().Add (this);
     }
     else
     {
@@ -107,23 +90,10 @@ Connection::Connection (const ATML_SOCKADDR *const  atm_addr,
 
 Connection::~Connection ()
 {
-    // Remove ourselves from the list of known connections
-    ConnectionListItem **  item_ptr = &connection_list;
-
-    while (*item_ptr && (*item_ptr)->connection != this)
+    if (vc)
     {
-        item_ptr = &(*item_ptr)->next;
+        delete vc;
     }
-
-    if (*item_ptr)
-    {
-        ConnectionListItem *  item = *item_ptr;
-        *item_ptr = item->next;
-        delete item;
-    }
-    //known_connections[socket->GetHandle()] = 0;
-
-    delete vc;
 }
 
 
@@ -205,31 +175,6 @@ void  Connection::StateChanged (const SocketService::State  state)
 
 
 
-Connection *  Connection::Find (const ATML_SOCKADDR *const  atm_addr,
-                                const Service               service,
-                                const Connection::Origin    origin,
-                                int &                       error)
-{
-    Connection *  connection = 0;
-    ConnectionListItem *item = Connection::connection_list;
-
-    error = 0;
-
-    while (item && !connection && !error)
-    {
-        connection = item->connection->CheckConflict (atm_addr,
-                                                      service,
-                                                      origin,
-                                                      error);
-        item = item->next;
-    }
-
-    return connection;
-}
-
-
-
-
 VC *  Connection::GetVC ()
 {
     return vc;
@@ -305,40 +250,12 @@ Connection::Origin  Connection::GetOrigin ()
 
 
 
-void  Connection::CloseUnused ()
+struct in_addr  Connection::GetDestIPAddr ()
 {
-    ConnectionListItem *item = Connection::connection_list;
+    struct in_addr  ip_addr;
 
-    while (item)
-    {
-        if (item->connection->Unused())
-        {
-            item->connection->Close ();
-        }
-        item = item->next;
-    }
-}
-
-
-
-
-_kernel_oserror *  Connection::DisplayAll (int     argc,
-                                           char *  argv[])
-{
-    ConnectionListItem *  item = Connection::connection_list;
-
-    M_unused (argc);
-    M_unused (argv);
-
-    printf ("Type  IP address       Flags  Service  State       ATM address\n");
-
-    while (item)
-    {
-        item->connection->Display ();
-        item = item->next;
-    }
-
-    return NULL;
+    ip_addr.s_addr = 0;
+    return ip_addr;
 }
 
 
@@ -352,7 +269,7 @@ void  Connection::Display ()
     char *  p_flags = flags;
 
     // Get text IP address
-    ip_addr.s_addr = ip_map_ip_from_atm (vc->GetATMAddr ());
+    ip_addr = GetDestIPAddr ();
     if (ip_addr.s_addr)
     {
         s_ip_addr = inet_ntoa (ip_addr);
@@ -432,13 +349,15 @@ void  Connection::Display ()
 
 
 
-ClientConnection::ClientConnection (const ATML_SOCKADDR *const  atm_addr,
+ClientConnection::ClientConnection (NIC &                       nic,
+                                    const ATML_SOCKADDR *const  atm_addr,
                                     const Connection::Service   service,
                                     const ATMStatusFn           status_fn,
                                     void *const                 status_pw,
                                     Connection::Origin          origin,
                                     int &                       error)
 
+    : connection_manager (nic.GetConnectionManager())
 {
     error = 0;
 
@@ -451,18 +370,20 @@ ClientConnection::ClientConnection (const ATML_SOCKADDR *const  atm_addr,
     // Force no BLLI to start with
     ((ATML_SOCKADDR *) atm_addr)->atm.blli_len = 0;
 
-    connection = Connection::Find (atm_addr, service, origin, error);
+    connection = connection_manager.Find (atm_addr, service, origin, error);
     if (!connection && !error)
     {
         switch (service)
         {
             case Connection::Service_MPEG_AAL5:
-                connection = MPEGConnection::Create (atm_addr, service, origin, error);
+                connection = MPEGConnection::Create (
+                                 nic, atm_addr, service, origin, error);
                 break;
 
             case Connection::Service_IP_LLC:
             case Connection::Service_IP_VC:
-                connection = IPConnection::Create (atm_addr, service, origin, error);
+                connection = IPConnection::Create (
+                                 nic, atm_addr, service, origin, error);
                 dprintf (("", "error = %d\n", error));
                 break;
         }
@@ -512,8 +433,196 @@ void  ClientConnection::Notify (SocketService::State  state)
             _swix (OS_AddCallBack,
                    _INR (0, 1),
 
-                   asm_status_changed,
+                   status_changed,
                    &callback_data);
         }
     }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ConnectionManager::ConnectionManager
+
+   Constructor.
+ */
+
+ConnectionManager::ConnectionManager ()
+    : connection_list (0)
+{
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ConnectionManager::~ConnectionManager
+
+   Destructor.
+ */
+
+ConnectionManager::~ConnectionManager ()
+{
+    // Remove all connections
+    ConnectionListItem *  item = connection_list;
+    ConnectionListItem *  next;
+
+    for (item = connection_list; item; item = next)
+    {
+        next = item->next;
+        item->connection->Close();
+        delete item;
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ConnectionManager::Add
+
+   Add a connection.
+
+   Inputs
+   Connection *const  connection : connection to add
+
+   Returns  int
+   success : 0
+   failure : error number
+ */
+
+int  ConnectionManager::Add (Connection *const  connection)
+{
+    int  error = 0;
+
+    ConnectionListItem *  item = new ConnectionListItem ();
+    if (item)
+    {
+        item->connection = connection;
+        item->next = connection_list;
+        connection_list = item;
+    }
+    else
+    {
+        error = Error_ATM_NoMemory;
+    }
+    return error;
+}
+
+
+
+void  ConnectionManager::Remove (Connection *const  connection)
+{
+    // Remove a connection from the list of known connections
+    ConnectionListItem **  item_ptr = &connection_list;
+
+    while (*item_ptr && (*item_ptr)->connection != connection)
+    {
+        item_ptr = &(*item_ptr)->next;
+    }
+
+    if (*item_ptr)
+    {
+        ConnectionListItem *  item = *item_ptr;
+        *item_ptr = item->next;
+        item->connection->Close();
+        delete item;
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ConnectionManager::CloseUnused
+
+   Close all unused Connections managed by this ConnectionManager.
+ */
+
+void  ConnectionManager::CloseUnused ()
+{
+    ConnectionListItem *item = connection_list;
+
+    while (item)
+    {
+        if (item->connection->Unused())
+        {
+            item->connection->Close ();
+        }
+        item = item->next;
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ConnectionManager::DisplayAll
+
+   Display information for all Connections managed by this ConnectionManager.
+ */
+
+void  ConnectionManager::DisplayAll (void)
+{
+    ConnectionListItem *  item            = connection_list;
+    bool                  any_connections = false;
+
+    printf ("Type  IP address       Flags  Service  State       ATM address\n");
+
+    while (item)
+    {
+        any_connections = true;
+        item->connection->Display ();
+        item = item->next;
+    }
+
+    if (!any_connections)
+    {
+        printf ("none");
+    }
+    printf ("\n");
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ConnectionManager::Find
+
+   Find a Connection matching the given parameters.
+
+   Inputs
+   const ATML_SOCKADDR *const  atm_addr : ATM address to match
+   const Service               service  : service to match
+   const Connection::Origin    origin   : origin of connection
+
+   Outputs
+   int &                       error    : error number
+
+   Returns  Connection *
+   no match : 0
+   match    : pointer to matched Connection
+ */
+
+Connection *  ConnectionManager::Find (const ATML_SOCKADDR *const  atm_addr,
+                                       const Connection::Service   service,
+                                       const Connection::Origin    origin,
+                                       int &                       error)
+{
+    Connection *  connection = 0;
+    ConnectionListItem *item = connection_list;
+
+    error = 0;
+
+    while (item && !connection && !error)
+    {
+        connection = item->connection->CheckConflict (atm_addr,
+                                                      service,
+                                                      origin,
+                                                      error);
+        item = item->next;
+    }
+
+    return connection;
 }

@@ -1,4 +1,4 @@
-/*	BUFFERS.C
+/*	.C
 
 Project : ATML ATM25 VL1000 ('Panther') card driver
 
@@ -57,6 +57,9 @@ Date      Who     Description of change
 #include <string.h>
 #include "swis.h"
 
+/* Misc */
+#include "callx/callx.h"
+
 /* Local */
 #include "boson.h"
 #include "defs.h"
@@ -66,6 +69,7 @@ extern "C"
 }
 #include "module.h"
 #include "mpeg.h"
+#include "utils.h"
 
 
 
@@ -227,7 +231,8 @@ static struct bs_buffer *  get_empty_buffer (void);
  * Function definitions
  */
 
-MPEGConnection *  MPEGConnection::Create (const ATML_SOCKADDR *const  atm_addr,
+MPEGConnection *  MPEGConnection::Create (NIC &                 nic,
+                                          const ATML_SOCKADDR *const  atm_addr,
                                           const Connection::Service   service,
                                           const Connection::Origin    origin,
                                           int &                       error)
@@ -235,7 +240,7 @@ MPEGConnection *  MPEGConnection::Create (const ATML_SOCKADDR *const  atm_addr,
     error = 0;
     if (!instance)
     {
-        instance = new MPEGConnection (atm_addr, service, origin, error);
+        instance = new MPEGConnection (nic, atm_addr, service, origin, error);
         if (instance)
         {
             if (error)
@@ -259,11 +264,12 @@ MPEGConnection *  MPEGConnection::Create (const ATML_SOCKADDR *const  atm_addr,
 
 
 
-MPEGConnection::MPEGConnection (const ATML_SOCKADDR *const  atm_addr,
+MPEGConnection::MPEGConnection (NIC &                 nic,
+                                const ATML_SOCKADDR *const  atm_addr,
                                 const Connection::Service   service,
                                 const Connection::Origin    origin,
                                 int &                       error)
-    : Connection (atm_addr, service, origin, error),
+    : Connection (nic, atm_addr, service, origin, error),
       buffer_offset (0),
       data_count (0),
       data_lost (0)
@@ -277,6 +283,42 @@ MPEGConnection::MPEGConnection (const ATML_SOCKADDR *const  atm_addr,
         reinit_bs_buffers ();
         buffer = get_empty_buffer ();
     }
+}
+
+
+
+
+MPEGConnection::~MPEGConnection ()
+{
+    #ifdef USE_DYNAMIC_AREAS
+
+    _swix (OS_DynamicArea,
+           _INR (0, 1),
+           1,    // free
+           dynamic_area_handle);
+
+    bs_empty_q = 0;
+    bs_emptyp = 0;
+    bs_full_q = 0;
+    bs_fullp = 0;
+
+    free (bprotos); /* 20/1/97:CP:free memory used by array of pointers */
+
+    #else
+
+    struct bs_buffer *b;
+
+    while ((b = bs_empty_q) != 0)
+    {
+        assert(b >= first_bs_bufferG);
+        assert(b <= last_bs_bufferG);
+
+        bs_empty_q = b->bs_next;
+        free ((char *) b);
+    }
+    bs_fullp = 0;
+
+    #endif
 }
 
 
@@ -357,9 +399,9 @@ int  MPEGConnection::Data (unsigned int  data_size)
             /* 28/1/97:CP:bs->bs_data is no longer an array,
              * so need to explicitly define address
              */
-            ASM_GET_MSG (Boson_CommitFromARMAddr,
-                         (unsigned char *) buffer->bs_data + buffer_offset,
-                         data_size);
+            boson_rx_data (boson_address,
+                           (unsigned char *) buffer->bs_data + buffer_offset,
+                           data_size);
             buffer_offset += data_size;
             data_count += data_size;
         }
@@ -504,7 +546,8 @@ static int mpeg_alloc_init_buffers (void)
   printf("Buffer checking turned ON\n");
 #endif
 
-  assert(((int)last_bs_bufferG - (int)first_bs_bufferG + bs_buffer_sizeG) == current_pool_size);
+  assert ( ( (int) last_bs_bufferG - (int) first_bs_bufferG + bs_buffer_sizeG) ==
+           current_pool_size);
 
 
   /* 3/2/97:CP:always re-init buffers when the size changes */
@@ -615,50 +658,15 @@ void reinit_bs_buffers(void)
 
 
 
-#ifdef USE_DYNAMIC_AREAS
-void mpeg_free_buffers (void)
-{
-  _kernel_swi_regs r;
-
-  r.r[0] = 1; /* reason code FREE */
-  r.r[1] = dynamic_area_handle; /* get our area handler */
-  _kernel_swi(XOS_Bit | OS_DynamicArea, &r, &r); /* do it */
-
-  bs_empty_q = 0;
-  bs_emptyp = 0;
-  bs_full_q = 0;
-  bs_fullp = 0;
-
-  free(bprotos); /* 20/1/97:CP:free memory used by array of pointers */
-}
-
-#else
-
-void mpeg_free_buffers (void)
-{
-    struct bs_buffer *b;
-
-    while ((b = bs_empty_q) != 0)
-    {
-        assert(b >= first_bs_bufferG);
-        assert(b <= last_bs_bufferG);
-
-        bs_empty_q = b->bs_next;
-        free((char *)b);
-    }
-    bs_fullp = 0;
-}
-
-#endif
-
 struct bs_buffer *  get_empty_buffer (void)
 {
     struct bs_buffer *b = bs_empty_q;
     int irq_state;
 
-    if (b == NULL) {
+    if (b == NULL)
+    {
         wasempty++;
-        return ((struct bs_buffer *)NULL);
+        return ((struct bs_buffer *) NULL);
     }
 
     assert(b >= first_bs_bufferG);
@@ -751,7 +759,7 @@ void  mpeg_send_buffers(void)
 
 void  bswait_init (void)
 {
-    memset((char *)&bsw, 0, sizeof(bsw));
+    memset ((char *) &bsw, 0, sizeof (bsw));
 }
 
 
@@ -784,13 +792,27 @@ static struct bs_buffer *  bswait_consume (void)
 
 
 
+static _kernel_oserror *  mpeg_callback (_kernel_swi_regs *  r,
+                                         void *              pw,
+                                         void *              handle)
+{
+    M_unused (r);
+    M_unused (pw);
+    M_unused (handle);
+
+    mpeg_send_buffers ();
+    return 0;
+}
+
+
+
 extern "C" void  mpeg_check_feed (void)
 {
     if(bs_full_q && bswait_supply(bs_full_q))
     {
         bs_full_q = NULL;
         bs_fullp = NULL;
-        setcallback();
+        callx_add_callback (mpeg_callback, 0);
     }
 }
 
@@ -927,6 +949,6 @@ void  mpeg_flush_full_queue (void)
     {
         bs_full_q = 0;
         bs_fullp = 0;
-        setcallback();
+        callx_add_callback (mpeg_callback, 0);
     }
 }

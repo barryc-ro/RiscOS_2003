@@ -62,24 +62,21 @@ Date      Who     Description of change
 
 extern "C"
 {
+    #include "sys/errno.h"
     #include "sys/types.h"
     #include "sys/mbuf.h"
     #include "sys/dcistructs.h"
 }
 
+#include "callx/callx.h"
 #include "DebugLib/DebugLib.h"
 #include "MemCheck/MemCheck.h"
 
-#include "address.h"
-#include "arp.h"
+#include "DCILib/dciif.h"
+
 #include "atmswis.h"
-#include "boson.h"
-#include "command.h"
 #include "commands.h"
-#include "configure.h"
-#include "console.h"
 #include "error.h"
-#include "dci.h"
 #include "defs.h"
 #include "dhcpboot.h"
 extern "C"
@@ -87,25 +84,25 @@ extern "C"
     #include "header.h"
 }
 #include "module.h"
-#include "lane.h"
-#include "mpeg.h"
 #include "mbuf.h"
+#include "mpeg.h"
 #include "nic.h"
-#include "nvparams.h"
 #include "utils.h"
 
-#define  PODULE_DEFAULT 1
 #define PnP_RegisterDDI 0xc07c0
 
-int podule = PODULE_DEFAULT;
-int do_start = 0;
-int do_arp = 0;
-int do_atmarp = 0;
-int do_vc = 0;
-int do_pvc = 0;
-volatile int do_local_arp = 0;
-int echo_ack = 0;
+enum
+{
+    ATM25_ProductType = 0x11b
+};
 
+enum
+{
+    Podule_ReadInfo_ROMBaseAddress  = 0x00000010,
+    Podule_ReadInfo_ProductType     = 0x00000040,
+    Podule_ReadInfo_HardwareAddress = 0x00000080,
+    Podule_ReadInfo_EASISpace       = 0x00000200
+};
 
 int ip_rx = 0;
 int ip_tx = 0;
@@ -127,19 +124,9 @@ int local_arp_count = 0;
 int discard_arp_count = 0;
 int bcast_arp_count = 0;
 
-int ticker_period = 0; /* cS delay before circuit_checker kicks in */
-int ticker_tally = 0;
 int streamhandle;
 
-extern int atmcnt;
-
-volatile int callbackflag = 0;
-volatile int do_check_happy = 0;
-int check_happy_interval = 0;
-
-void *module_wsp = 0;
-
-int nextblock = 0;
+void *  module_wsp = 0;
 
 
 
@@ -153,6 +140,7 @@ extern "C" void *  messages_data (void);
 static void  service_internet_status (_kernel_swi_regs *  r);
 #endif
 
+extern "C" void  ______main ();
 
 
 
@@ -177,15 +165,45 @@ int main (void)
     return 0;
 }
 
+#ifdef DEBUG
+_kernel_oserror *  debugon (int argc, char *  argv[])
+{
+    M_unused (argc);
+    M_unused (argv);
+    debug_initialise ("", "atm", NULL);
+    debug_set_options (0, 0, 0);
+    debug_output_device (TML_OUTPUT);
+    //debug_initialise_trace (TML_OUTPUT, "memcheck*");
+    return 0;
+}
+
+
+
+
+_kernel_oserror *  debugoff (int argc, char *  argv[])
+{
+    M_unused (argc);
+    M_unused (argv);
+    debug_terminate ();
+    return 0;
+}
+#endif
+
+
+
+
 /*
  * Module Initialization code.
  */
 _kernel_oserror *module_init (const char *cmd_tail, int pbase, void *pw)
 {
-    _kernel_swi_regs   r;
     _kernel_oserror *  e;
+    int                podule;
+    int                product_type;
+    int                number_podules;
+    unsigned int       podule_address;
     int                error = 0;
-    NIC *              nic = 0;
+    //NIC *              nic;
 
     M_unused (cmd_tail);
     M_unused (pbase);
@@ -196,11 +214,7 @@ _kernel_oserror *module_init (const char *cmd_tail, int pbase, void *pw)
 
     module_wsp = pw;
 
-    debug_initialise ("", "atm", NULL);
-    debug_set_options (0, 0, 0);
-    debug_output_device (TML_OUTPUT);
-    //debug_initialise_trace (TML_OUTPUT, "memcheck_vprintf");
-    //debug_output_buffer_on (0, 64*1024);
+    //debugon (0, 0);
 
     MemCheck_Init ();
     MemCheck_RedirectToFunction (memcheck_vprintf, 0);
@@ -228,131 +242,57 @@ _kernel_oserror *module_init (const char *cmd_tail, int pbase, void *pw)
         goto os_error;
     }
 
-    /* We need to know the podule number of the ATM25 card. Plug'n'play
-     * hasthis info, and passes it to us using one of 2 mechanisms. On a
-     * STB, Plug'n'Play exits immediately after it has finished to
-     * conserve memory in the RMA. In this case, it sets the environment
-     * variable PnP$Podule to be the podule number. On a RPC, PnP
-     * doesn't exit, because this causes a nasty error box. PnP stays
-     * alive, and _doesn't_ set the PnP$Podule variable. In this case,
-     * the atm25driver communicates with it using the PnP_RegisterDDI to
-     * obtain information about the card.
-    */
+    callx_init (pw);
 
-    /* see if the plug and play module has set PnP$Podule */
-
-    r.r[0] = (int) "PnP$Podule";
-    r.r[1] = (int) &podule;
-    r.r[2] = 4;
-    r.r[3] = 0;
-    r.r[4] = 0;
-    _kernel_swi (XOS_Bit | OS_ReadVarVal, &r, &r);
-
-    if(r.r[2] == 0)
-    {
-        int  pnp_result;
-
-        /* variable didn't exist, try the SWI */
-        /* talk to the Plug'n'Play module, to get card status & podule no.  */
-
-        dprintf(("", "Failed reading PnP$Podule - trying PnP SWI\n"));
-
-        if (_swix (PnP_RegisterDDI, _OUT (0), &pnp_result))
-        {
-            error = Error_ATM_PnPComms;
-            goto internal_error;
-        }
-
-        switch (pnp_result)
-        {
-            case -1:
-                error = Error_ATM_PnPUninit;
-                goto internal_error;
-
-            case -2:
-                error = Error_ATM_NoCards;
-                goto internal_error;
-
-            default:
-                podule = pnp_result;
-                break;
-        }
-        dprintf (("", "Read PnP podule number as %d\n", podule));
-    }
-    else
-    {
-        dprintf (("", "Read PnP$Podule as %d\n", podule));
-    }
-
-
-    if (nvparams_init (podule))
-    {
-        error = Error_ATM_NoCards;
-        goto internal_error;
-    }
-
-    dprintf (("", "Reading NVRAM parameters...\n"));
-
-    do_vc  = nvparams_read_multiproto_enc ();
-    do_arp = nvparams_read_dynamic_arp ();
-    do_pvc = nvparams_read_pvc ();
-
-    dprintf (("", "Read NVRAM parameters.\n"));
-
-
-    service_manager = ServiceManager::Create (error);
-    if (!service_manager)
-    {
-        goto internal_error;
-    }
-
-    nic = NIC::Instance (e);
+    // Find all ATM25 podules
+    e = _swix (Podule_ReturnNumber, _OUT (0), &number_podules);
     if (e)
     {
-        goto os_error;
-    }
-
-    command_service = CommandService::Create (error);
-    if (!command_service && error)
-    {
-        goto internal_error;
-    }
-
-    // Get UNI address - don't care about the result for now, can try again
-    // later if it doesn't work.
-    nic->GetUNIAddr ();
-
-    //error = LANEService::Create ();
-    //if (error)
-    //{
-    //    goto internal_error;
-    //}
-
-    if (ticker_period && enable_ticker_handler () < 0)
-    {
-        error = Error_ATM_TickerAlloc;
-        goto internal_error;
-    }
-
-    /* Initialize Driver Information Block */
-    dci_init ();
-
-    if (!managerstarted && mb_present())
-    {
-        /* mbuf manager is loaded - initialise entry points */
-        e = mb_entryinit ();
         if (e)
         {
-            /* open an mbufman session - register our control block */
             goto os_error;
         }
-
-         /* OK - set a callback to issue Service_DCIDriverStatus */
-
-        do_start = 1;
-        setcallback ();
-        managerstarted = 1;
     }
+
+    for (podule = 0; podule < number_podules; ++podule)
+    {
+        if (_swix (Podule_ReadInfo,
+                   _INR (0, 3),
+                   Podule_ReadInfo_ProductType,
+                   &product_type,
+                   sizeof (int),
+                   podule) == NULL && product_type == ATM25_ProductType)
+        {
+            e = _swix (Podule_ReadInfo,
+                   _INR (0, 3),
+                   Podule_ReadInfo_EASISpace,
+                   &podule_address,
+                   sizeof (unsigned int),
+                   podule);
+            if (e)
+            {
+                goto os_error;
+            }
+
+            dprintf (("", "found ATM25 NIC in slot %d, address %x\n",
+                      podule, podule_address));
+
+            if (new NIC (podule, podule_address, e))
+            {
+                if (e)
+                {
+                    goto os_error;
+                }
+            }
+            else
+            {
+                error = Error_ATM_NoMemory;
+                goto internal_error;
+            }
+        }
+    }
+
+    MbufController::Start ();
 
     return NULL;
 
@@ -364,10 +304,7 @@ os_error:
     // probably the least grotty solution given than the finalisation code
     // doesn't get called in this case.
 
-    if (nic)
-    {
-        delete nic;
-    }
+    NIC::DestroyAll ();
 
     message_close_file ();
 
@@ -387,20 +324,13 @@ _kernel_oserror * module_final (int fatal, int podule, void *pw)
     M_unused (podule);
 
 
-    delete NIC::Instance ();
+    NIC::DestroyAll ();
 
-
-    (void) mb_closesession();
-
-    disable_ticker_handler();
-
-    dci_driver_status (1);
-
-    mpeg_free_buffers ();
-    delete service_manager;
+    callx_remove_all_callafters ();
+    callx_remove_all_calleverys ();
+    callx_remove_all_callbacks ();
 
     message_close_file ();
-
     MemCheck_OutputBlocksInfo ();
     MemCheck_Finalise ();
 
@@ -431,29 +361,19 @@ void module_sc_handler (int sn, _kernel_swi_regs *r, void *pw)
         #endif
 
         case Service_EnumerateNetworkDrivers:
-        {
-            static int init = 0;
-
-            if (!init)
-            {
-                init = 1;
-            }
-            dci_chain_dib (r);
+            r->r[0] = (int) DCIInterface::EnumerateNetworkDrivers (
+                                (struct chaindib *) r->r[0]);
             break;
-        }
 
         case Service_MbufManagerStatus:
-            if (!managerstarted)
-            {
-                handle_managerstatus(r);
-            }
+            MbufController::ManagerStatus (r->r[0]);
             break;
 
         /*
          * Service_PreReset - reset card prior to system shutdown
          */
         case Service_PreReset:
-            NIC::Instance()->Reset ();
+            NIC::ResetAll ();
             break;
 
         /* add pre_reset code to handle stb2 standby state */
@@ -466,88 +386,46 @@ void module_sc_handler (int sn, _kernel_swi_regs *r, void *pw)
 /* Module SWI handler */
 _kernel_oserror *module_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
 {
-/*
-   5jun98:CP:restructured SWI handler to cope with bad SWIs.
-             Simplified structure, too.
-             Links in with cmhg.h (which is auto-generated from cmhg.header)
-*/
+    typedef  int (*swi_handler_t) (_kernel_swi_regs *const );
 
-    int error                 = 0;
-    _kernel_oserror *os_error = NULL;
+    int                error         = 0;
+    _kernel_oserror *  os_error      = NULL;
+    static swi_handler_t  swi[] =
+    {
+        swi_dci_version,
+        swi_dci_inquire,
+        swi_dci_getnetworkmtu,
+        swi_dci_setnetworkmtu,
+        swi_dci_transmit,
+        swi_dci_filter,
+        swi_dci_stats,
+        swi_dci_multicastrequest,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        swi_get_uni_address,
+        atm_empty_buf,
+        atm_associateaddress,
+        atm_vcconnect,
+        atm_vclisten,
+        atm_vcclose,
+        atm_vcstatus,
+        atm_bootconfig
+    };
 
     M_unused (pw);
     MemCheck_RegisterMiscBlock (r, sizeof (_kernel_swi_regs));
 
-    switch (swinum)
+    if (swinum < M_array_size (swi) && swi[swinum])
     {
-       case ATM_DCIVersion - ATM_00:
-           error = dci_version (r);
-           break;
-
-       case ATM_Inquire - ATM_00:
-           error = dci_inquire (r);
-           break;
-
-       case ATM_GetNetworkMTU - ATM_00:
-           error = dci_getmtu (r);
-           break;
-
-       case ATM_SetNetworkMTU - ATM_00:
-           error = dci_setmtu (r);
-           break;
-
-       case ATM_Transmit - ATM_00:
-           error = dci_transmit (r);
-           break;
-
-       case ATM_Filter - ATM_00:
-           error = dci_filter (r);
-           break;
-
-       case ATM_Stats - ATM_00:
-           error = dci_stats (r);
-           break;
-
-       case ATM_ReadMacAddr - ATM_00:
-           error = dci_readmacadr(r);
-           break;
-
-       case ATM_GetUNIAddress - ATM_00:
-           error = swi_get_uni_address (r);
-           break;
-
-       case ATM_EmptyBuffer - ATM_00:
-           error = atm_empty_buf (r);
-           break;
-
-       case ATM_AssociateAddress - ATM_00:
-           error = atm_associateaddress (r);
-           break;
-
-       case ATM_VCConnect - ATM_00:
-           error = atm_vcconnect (r);
-           break;
-
-        case ATM_VCListen - ATM_00:
-           error = atm_vclisten (r);
-           break;
-
-       case ATM_VCClose - ATM_00:
-           error = atm_vcclose (r);
-           break;
-
-       case ATM_VCStatus - ATM_00:
-           error = atm_vcstatus (r);
-           break;
-
-       case ATM_BootConfig - ATM_00:
-           error = atm_bootconfig (r);
-           break;
-
-      default:
-          dprintf (("", "unknown SWI %d\n", swinum - ATM_00));
-          os_error = error_BAD_SWI;
-          break;
+        error = (*swi[swinum]) (r);
+    }
+    else
+    {
+        dprintf (("", "unknown SWI %d\n", swinum - ATM_00));
+        os_error = error_BAD_SWI;
     }
 
     if (error != 0)
@@ -631,7 +509,7 @@ static char **  arg_array_from_string (char *      arg_string,
     }
 
     /* Create and fill argument array */
-    argv = (char **) malloc (((*argc) + 1) * sizeof (char *));
+    argv = (char **) malloc ( ((*argc) + 1) * sizeof (char *));
     if (argv)
     {
         char **  arg = argv;
@@ -673,35 +551,6 @@ static char **  arg_array_from_string (char *      arg_string,
 
 
 
-#ifdef DEBUGLIB
-_kernel_oserror *  debugon (int argc, char *  argv[])
-{
-    M_unused (argc);
-    M_unused (argv);
-    debug_initialise ("ATM25", "", NULL);
-    debug_set_options (0, 0, 0);
-    debug_output_buffer_on (0, 64*1024);
-    debug_output_device (TML_OUTPUT);
-    //debug_initialise_trace (TML_OUTPUT, "memcheck_vprintf");
-    return 0;
-}
-
-
-
-
-_kernel_oserror *  debugoff (int argc, char *  argv[])
-{
-    M_unused (argc);
-    M_unused (argv);
-    debug_output_buffer_off (0, PRINTF_OUTPUT);
-    debug_terminate ();
-    return 0;
-}
-#endif
-
-
-
-
 _kernel_oserror *atm_cli_handler (const char *arg_string, int argc, int cmd_no, void *pw)
 {
     typedef _kernel_oserror *  (*command_handler_t) (int, char *[]);
@@ -721,28 +570,28 @@ _kernel_oserror *atm_cli_handler (const char *arg_string, int argc, int cmd_no, 
     }
     command[] =
     {
-        { NormalCommand, 0, ATM25info_Syntax,		atm_info },
-        { NormalCommand, 0, ATM25connections_Syntax,	Connection::DisplayAll },
-        { NormalCommand, 0, ATM25boson_Syntax,		boson_display_info },
-        { NormalCommand, 0, ATM25pibs_Syntax,		dci_enumerate_pibs },
-        { NormalCommand, 0, ATM25trail_Syntax,		boson_display_trail },
-        { NormalCommand, 1, ATM25cci_Syntax,		atm_cci },
-        { NormalCommand, 0, ATM25listen_Syntax,		NULL },
-        { NormalCommand, 0, ATM25status_Syntax,		boson_display_status },
+        // The order of commands in this array must match the order the commands
+        // are defined in the CMHG header file.
+
+        { NormalCommand, 0, ATM25info_Syntax,		command_info },
+        { NormalCommand, 0, ATM25connections_Syntax,	command_connections },
+        { NormalCommand, 0, ATM25boson_Syntax,		command_boson },
+        { NormalCommand, 0, ATM25trail_Syntax,		command_trail },
+        { NormalCommand, 1, ATM25cci_Syntax,		command_cci },
         { NormalCommand, 0, ATM25buffers_Syntax,	mpeg_display_buffers },
-        { NormalCommand, 1, ATM25pvc_Syntax,		atm_pvc },
-        { NormalCommand, 1, ATM25pvcdelete_Syntax,	atm_pvcdelete },
-        { ConfigCommand, 1, ATM25arp_Syntax,		atm_conf_arp },
-        { ConfigCommand, 0, ATM25llc_Syntax,		atm_conf_llc },
-        { ConfigCommand, 0, ATM25vc_Syntax,		atm_conf_vc },
-        { NormalCommand, 0, ATM25data_Syntax,		NULL },
-        { NormalCommand, 1, ATM25changebufs_Syntax,	atm_changebufferpool },
-        { ConfigCommand, 1, ATM25bw_Syntax,		atm_changeupstreambandwidth },
+        { NormalCommand, 1, ATM25pvc_Syntax,		command_pvc },
+        { NormalCommand, 1, ATM25pvcdelete_Syntax,	command_pvcdelete },
+        { ConfigCommand, 1, ATM25arp_Syntax,		command_configure_arp },
+        { ConfigCommand, 0, ATM25llc_Syntax,		command_configure_llc },
+        { ConfigCommand, 0, ATM25vc_Syntax,		command_configure_vc },
+        { NormalCommand, 1, ATM25changebufs_Syntax,	command_changebufs },
+        { ConfigCommand, 1, ATM25bw_Syntax,		command_configure_bw },
         { NormalCommand, 1, ATM25svc_Syntax,		command_svc },
         { NormalCommand, 1, ATM25svcdelete_Syntax,	command_svcdelete }
 
-        #ifdef DEBUGLIB
+        #ifdef DEBUG
         ,
+        { NormalCommand, 0, ATM25status_Syntax,		command_status },
         { NormalCommand, 1, NULL,			debugon },
         { NormalCommand, 1, NULL,			debugoff }
         #endif
@@ -857,110 +706,6 @@ error:
     MemCheck_UnRegisterMiscBlock (arg_string);
     return e;
 }
-
-void setcallback(void)
-{
-    if (callbackflag == 0) {
-        callbackflag = 1;
-        if (callback((int (*)(void)) callb_entry) != 0)
-            callbackflag = 0;
-    }
-}
-
-int callback(int (* func)(void))
-{
-    _kernel_swi_regs r;
-
-    r.r[0] = (int)func;
-    r.r[1] = (int)module_wsp;
-    return (_kernel_swi(XOS_Bit | OS_AddCallBack, &r, &r) != 0 ? -1 : 0);
-}
-
-_kernel_oserror * callb_handler(_kernel_swi_regs *r, void *pw)
-{
-    static char echo_msg[] = "OK\n";
-
-    M_unused (r);
-    M_unused (pw);
-
-    if (callbackflag == 0)
-    {
-        return (NULL);
-    }
-
-    callbs++;
-    callbackflag = 0;
-
-    if (do_start) {  /* DCI Start-up callback from module init code */
-        callb_startups++;
-
-        do_start = 0;
-        dci_driver_status (0);
-    }
-
-    #if 0
-    if(echo_ack)
-    {
-      echo_ack = 0;
-      callb_echos++;
-      asm_write_fifo(ip_echo, AS_DATA_END, (unsigned char *)echo_msg, 3, BlockToARMAddr);
-    }
-    #endif
-
-
-    if (do_local_arp)
-    {
-       callb_arps++;
-       do_local_arp = 0;
-       local_arp();
-    }
-
-    if (do_atmarp)
-    {
-        inatmarp_request ();
-        do_atmarp = 0;
-    }
-
-    mpeg_send_buffers ();
-    return (NULL);
-}
-
-/* this routine sits on tickerV (OS_CallEvery) and clears any unused MAST connections */
-_kernel_oserror *ticker_handler(_kernel_swi_regs *r, void *pw)
-{
-    M_unused (r);
-    M_unused (pw);
-
-    ticker_tally++;
-
-    Connection::CloseUnused ();
-
-    return NULL;
-}
-
-/* this routine sets it up */
-int enable_ticker_handler(void)
-{
-  _kernel_swi_regs r;
-
-  r.r[0] = ticker_period;
-  r.r[1] = (int)ticker_entry;
-  r.r[2] = (int)module_wsp;
-  return (_kernel_swi(XOS_Bit | OS_CallEvery, &r, &r) != 0 ? -1 : 0);
-
-}
-
-/* this routine shuts it down */
-int disable_ticker_handler(void)
-{
-  _kernel_swi_regs r;
-
-  r.r[0] = (int)ticker_entry;
-  r.r[1] = (int)module_wsp;
-  return (_kernel_swi(XOS_Bit | OS_RemoveTickerEvent, &r, &r) != 0 ? -1 : 0);
-}
-
-
 #ifdef DHCP
 
 void  service_internet_status (_kernel_swi_regs *  r)
