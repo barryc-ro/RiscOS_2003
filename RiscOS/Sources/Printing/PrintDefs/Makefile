@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 19-Jul-96  SMC          Created
+# 06-May-99  SBF          Included additional printer defintions
 
 #
 # Generic options:
@@ -60,7 +61,13 @@ RESFILES =			\
  ${RDIR}.Printers.PS_BW		\
  ${RDIR}.Printers.PS_Col	\
  ${RDIR}.Printers.Lex_BW	\
- ${RDIR}.Printers.Lex_Col
+ ${RDIR}.Printers.Lex_Col	\
+ ${RDIR}.Printers.BJC80V_BW	\
+ ${RDIR}.Printers.BJC80V_Col	\
+ ${RDIR}.Printers.BJF100_BW	\
+ ${RDIR}.Printers.BJF100_Col	\
+ ${RDIR}.Printers.BJF200_BW	\
+ ${RDIR}.Printers.BJF200_Col
 
 #
 # RISC OS ROM build rules:
@@ -196,6 +203,26 @@ ${RDIR}.Printers.Lex_BW:	${RSRC}.Printers.Lex_BW
 
 ${RDIR}.Printers.Lex_Col:	${RSRC}.Printers.Lex_Col
 	${COMPRESS}	${RSRC}.Printers.Lex_Col	${RDIR}.Printers.Lex_Col
+
+${RDIR}.Printers.BJC80V_BW:	${RSRC}.Printers.BJC80V_BW
+	${COMPRESS}	${RSRC}.Printers.BJC80V_BW	${RDIR}.Printers.BJC80V_BW
+
+${RDIR}.Printers.BJC80V_Col:	${RSRC}.Printers.BJC80V_Col
+	${COMPRESS}	${RSRC}.Printers.BJC80V_Col	${RDIR}.Printers.BJC80V_Col
+
+${RDIR}.Printers.BJF100_BW:	${RSRC}.Printers.BJF100_BW
+	${COMPRESS}	${RSRC}.Printers.BJF100_BW	${RDIR}.Printers.BJF100_BW
+
+${RDIR}.Printers.BJF100_Col:	${RSRC}.Printers.BJF100_Col
+	${COMPRESS}	${RSRC}.Printers.BJF100_Col	${RDIR}.Printers.BJF100_Col
+
+${RDIR}.Printers.BJF200_BW:	${RSRC}.Printers.BJF200_BW
+	${COMPRESS}	${RSRC}.Printers.BJF200_BW	${RDIR}.Printers.BJF200_BW
+
+${RDIR}.Printers.BJF200_Col:	${RSRC}.Printers.BJF200_Col
+	${COMPRESS}	${RSRC}.Printers.BJF200_Col	${RDIR}.Printers.BJF200_Col
+
+
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
