@@ -37,8 +37,6 @@ LDIR       = ${RDIR}.${LOCALE}
 INSTAPP    = ${INSTDIR}.${APP}
 RESOURCES  = ${INSTAPP}.Resources
 
-VPATH = @ <Support$Dir>
-
 #
 # Generic options:
 #
@@ -54,7 +52,7 @@ SQUEEZE = squeeze
 WIPE    = -wipe
 
 AFLAGS  = ${THROWBACK} -depend !Depend -nocache -stamp -quit
-CFLAGS  = ${THROWBACK} -c -depend !Depend -fafh ${INCLUDES} ${DFLAGS} -wp
+CFLAGS  = ${THROWBACK} ${COMPAT} -c -depend !Depend -fafh ${INCLUDES} ${DFLAGS} -wp ${OPTIONS}
 CPFLAGS = ~cfr~v
 SQFLAGS = -f
 WFLAGS  = ~c~vr
@@ -64,16 +62,19 @@ WFLAGS  = ~c~vr
 #
 CLIB      = CLib:o.Stubs
 OSLIB     = OSLib:o.OSLib
+SOCKLIB	  = TCPIPLibs:o.socklib
 ROMSTUBS  = RISC_OSLib:o.ROMStubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 WRAPPER   = RISC_OSLib:s.ModuleWrap
 
 LIBSD     = ${RLIB} ${CLIB}
 
+COMPAT = -DCOMPAT_INET4
+
 #
 # Include files
 #
-INCLUDES  = -IOS:,Support:
+INCLUDES  = -ITCPIPLibs:,C:
 
 FILES = \
    Library.AddApp \
@@ -228,12 +229,10 @@ clean:
    ${WIPE} Library.AppSize ${WFLAGS}
    ${WIPE} Utils.BootVars ${WFLAGS}
    ${WIPE} Source.BootVars.o.main ${WFLAGS}
-   ${WIPE} Source.BootVars.o.x ${WFLAGS}
    ${WIPE} Library.Do ${WFLAGS}
    ${WIPE} Library.IfThere ${WFLAGS}
    ${WIPE} Library.LoadCMOS ${WFLAGS}
    ${WIPE} Source.LoadCMOS.o.main ${WFLAGS}
-   ${WIPE} Source.LoadCMOS.o.x ${WFLAGS}
    ${WIPE} Library.SafeLogon ${WFLAGS}
    ${WIPE} Source.SafeLogon.o.main ${WFLAGS}
    ${WIPE} ClrMonitor ${WFLAGS}
@@ -245,9 +244,9 @@ clean:
 
 clean_all:
    -Destroy Library.AddApp Library.AppSize Utils.BootVars \
-         Source.BootVars.o.main Source.BootVars.o.x Library.Do \
+         Source.BootVars.o.main Library.Do \
          Library.IfThere Library.LoadCMOS Source.LoadCMOS.o.main \
-         Source.LoadCMOS.o.x Library.SafeLogon Source.SafeLogon.o.main \
+         Library.SafeLogon Source.SafeLogon.o.main \
          ClrMonitor Source.ClrMonitor.o.main Utils.FreePool Utils.VProtect \
          RO350Hook.Boot.PreDesk.MemFix
    ${ATTR} -ol ${INSTAPP}
@@ -256,7 +255,7 @@ clean_all:
 # Static dependencies:
 #
 Source.BootVars.o.main: Source.BootVars.c.main
-   cc410 ${CFLAGS} -D__swi -ff -o Source.BootVars.o.main Source.BootVars.c.main
+   cc ${CFLAGS} -ffah -o Source.BootVars.o.main Source.BootVars.c.main
 
 Library.AddApp: Source.AddApp.Source.AddApp
    AAsm ${AFLAGS} Source.AddApp.Source.AddApp Library.AddApp -stamp -quit
@@ -266,9 +265,8 @@ Library.AppSize: Source.AppSize.Source.AppSize
    AAsm ${AFLAGS} Source.AppSize.Source.AppSize Library.AppSize -stamp -quit
    SetType Library.AppSize Utility
 
-Utils.BootVars: Source.BootVars.o.main Source.BootVars.o.x
-   ${LD} ${LDFLAGS} -o Utils.BootVars Source.BootVars.o.main Source.BootVars.o.x \
-         ${OSLIB} CLib:o.ANSILib
+Utils.BootVars: Source.BootVars.o.main
+   ${LD} ${LDFLAGS} -o Utils.BootVars Source.BootVars.o.main C:RMVersion.o.RMVersion ${SOCKLIB} ${CLIB}
    ${SQUEEZE} $@
 
 Library.Do: Source.Do.Source.Do
@@ -279,8 +277,8 @@ Library.IfThere: Source.IfThere.Source.IfThere
    AAsm ${AFLAGS} Source.IfThere.Source.IfThere Library.IfThere -stamp -quit
    SetType Library.IfThere Utility
 
-Library.LoadCMOS: Source.LoadCMOS.o.main Source.LoadCMOS.o.x
-   ${LD} ${LDFLAGS} -o $@ Source.LoadCMOS.o.main Source.LoadCMOS.o.x ${OSLIB} ${CLIB}
+Library.LoadCMOS: Source.LoadCMOS.o.main
+   ${LD} ${LDFLAGS} -o $@ Source.LoadCMOS.o.main ${CLIB}
    ${SQUEEZE} $@
 
 Library.SafeLogon: Source.SafeLogon.o.main
@@ -302,117 +300,6 @@ RO350Hook.Boot.PreDesk.MemFix: Source.MemFix.Source.MemFix
    AAsm ${AFLAGS} Source.MemFix.Source.MemFix RO350Hook.Boot.PreDesk.MemFix -stamp -quit
    SetType RO350Hook.Boot.PreDesk.MemFix Utility
 
-Source.LoadCMOS.o.x: <Support$Dir>.c.x
-   ${CC} ${CFLAGS} -ff -o Source.LoadCMOS.o.x <Support$Dir>.c.x
-
-Source.BootVars.o.x: <Support$Dir>.c.x
-   ${CC} ${CFLAGS} -ff -o Source.BootVars.o.x <Support$Dir>.c.x
-
 #---------------------------------------------------------------------------
 # Library.AddApp: Hdr:ListOpts
 # Dynamic dependencies:
-Library.AddApp: Hdr:ListOpts
-Library.AddApp: Hdr:Macros
-Library.AddApp: Hdr:System
-Library.AddApp: Hdr:SWIs
-Library.AddApp: Hdr:CPU.Generic26
-Library.AddApp: Hdr:IO.GenericIO
-Library.AddApp: Hdr:RISCOS
-Library.AddApp: Hdr:Proc
-Library.AddApp: Hdr:ModHand
-Library.AddApp: Hdr:ResourceFS
-Library.AppSize: Hdr:ListOpts
-Library.AppSize: Hdr:Macros
-Library.AppSize: Hdr:System
-Library.AppSize: Hdr:SWIs
-Library.AppSize: Hdr:CPU.Generic26
-Library.AppSize: Hdr:IO.GenericIO
-Library.AppSize: Hdr:RISCOS
-Library.AppSize: Hdr:Proc
-Library.AppSize: Hdr:ModHand
-Library.AppSize: Hdr:NDRDebug
-Source.BootVars.o.main:	Source.BootVars.c.main
-Source.BootVars.o.main:	C:h.swis
-Source.BootVars.o.main:	C:h.kernel
-Source.BootVars.o.main:	Support:h.trace
-Source.BootVars.o.main:	OS:h.os
-Source.BootVars.o.main:	OS:h.types
-Source.BootVars.o.main:	Support:h.x
-Source.BootVars.o.main:	OS:h.econet
-Source.BootVars.o.main:	OS:h.netfs
-Source.BootVars.o.main:	OS:h.fileswitch
-Source.BootVars.o.main:	OS:h.macros
-Source.BootVars.o.main:	OS:h.os
-Source.BootVars.o.main:	OS:h.osbyte
-Source.BootVars.o.main:	OS:h.osfscontrol
-Source.BootVars.o.main:	OS:h.osmodule
-Source.BootVars.o.main:	OS:h.socket
-Source.BootVars.o.main:	OS:h.wimpreadsysinfo
-Source.BootVars.o.main:	OS:h.wimp
-Source.BootVars.o.main:	OS:h.osspriteop
-Source.BootVars.o.main:	OS:h.font
-Source.BootVars.o.x:	<Support$Dir>.c.x
-Source.BootVars.o.x:	C:h.kernel
-Source.BootVars.o.x:	C:h.swis
-Source.BootVars.o.x:	OS:h.macros
-Source.BootVars.o.x:	OS:h.os
-Source.BootVars.o.x:	OS:h.types
-Source.BootVars.o.x:	<Support$Dir>.h.x
-Library.Do: Hdr:ListOpts
-Library.Do: Hdr:Macros
-Library.Do: Hdr:System
-Library.Do: Hdr:SWIs
-Library.Do: Hdr:CPU.Generic26
-Library.Do: Hdr:IO.GenericIO
-Library.Do: Hdr:RISCOS
-Library.IfThere: Hdr:ListOpts
-Library.IfThere: Hdr:Macros
-Library.IfThere: Hdr:System
-Library.IfThere: Hdr:SWIs
-Library.IfThere: Hdr:CPU.Generic26
-Library.IfThere: Hdr:IO.GenericIO
-Library.IfThere: Hdr:RISCOS
-Library.IfThere: Hdr:Proc
-Library.IfThere: Hdr:ModHand
-Library.IfThere: Hdr:ResourceFS
-Source.LoadCMOS.o.main:	Source.LoadCMOS.c.main
-Source.LoadCMOS.o.main:	OS:h.os
-Source.LoadCMOS.o.main:	OS:h.types
-Source.LoadCMOS.o.main:	OS:h.osbyte
-Source.LoadCMOS.o.main:	OS:h.osfile
-Source.LoadCMOS.o.main:	OS:h.fileswitch
-Source.LoadCMOS.o.main:	OS:h.osfind
-Source.LoadCMOS.o.main:	OS:h.osgbpb
-Source.LoadCMOS.o.main:	Support:h.x
-Source.LoadCMOS.o.x:	<Support$Dir>.c.x
-Source.LoadCMOS.o.x:	C:h.kernel
-Source.LoadCMOS.o.x:	C:h.swis
-Source.LoadCMOS.o.x:	OS:h.macros
-Source.LoadCMOS.o.x:	OS:h.os
-Source.LoadCMOS.o.x:	OS:h.types
-Source.LoadCMOS.o.x:	<Support$Dir>.h.x
-Source.SafeLogon.o.main:	Source.SafeLogon.c.main
-Source.SafeLogon.o.main:	OS:h.econet
-Source.SafeLogon.o.main:	OS:h.types
-Source.SafeLogon.o.main:	OS:h.os
-Source.SafeLogon.o.main:	OS:h.netfs
-Source.SafeLogon.o.main:	OS:h.fileswitch
-Source.SafeLogon.o.main:	OS:h.os
-Source.SafeLogon.o.main:	OS:h.territory
-Source.SafeLogon.o.main:	Support:h.trace
-RO350Hook.Boot.PreDesk.MemFix: Hdr:ListOpts
-RO350Hook.Boot.PreDesk.MemFix: Hdr:Macros
-RO350Hook.Boot.PreDesk.MemFix: Hdr:System
-RO350Hook.Boot.PreDesk.MemFix: Hdr:SWIs
-RO350Hook.Boot.PreDesk.MemFix: Hdr:CPU.Generic26
-RO350Hook.Boot.PreDesk.MemFix: Hdr:IO.GenericIO
-RO350Hook.Boot.PreDesk.MemFix: Hdr:RISCOS
-Utils.FreePool: OS:Hdr.Macros
-Utils.FreePool: OS:Hdr.OS
-Utils.FreePool: OS:Hdr.Types
-Utils.FreePool: OS:Hdr.Wimp
-Utils.FreePool: OS:Hdr.OSSpriteOp
-Utils.FreePool: OS:Hdr.Font
-Source.ClrMonitor.o.main:	Source.ClrMonitor.c.main
-Source.ClrMonitor.o.main:	C:h.swis
-Source.ClrMonitor.o.main:	C:h.kernel
