@@ -374,13 +374,11 @@ o.ModuleWrap:   h.nfscmhg
 od.Commands:    h.nfscmhg
 od.ModuleWrap:  h.nfscmhg
 
-# Note, cannot replace -bin -base 0 with -rmf here otherwise you get all sorts
-# of extra relocation code inserted into the final image.
+# The dummy empty module
 ${XTARGET}: o.${XCOMPONENT}
-	${LD} -o $@ -bin -base 0 o.${XCOMPONENT}
-	SetType $@ Module
-	
+	${LD} -o $@ -rmf o.${XCOMPONENT}
 
+# Use the -zo flag on the RPC calls in the V2 support code
 o.V2support: c.V2support
         ${CC} ${RPCCCFLAGS} -o $@ $*.c
 
