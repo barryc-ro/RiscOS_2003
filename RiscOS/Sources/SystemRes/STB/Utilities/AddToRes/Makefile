@@ -25,6 +25,7 @@ Module.o: Module.c ModHdr.h
 
 local_dirs:
         ${MKDIR} o
+        ${MKDIR} h
 
 clean:
         ${RM} h.ModHdr
