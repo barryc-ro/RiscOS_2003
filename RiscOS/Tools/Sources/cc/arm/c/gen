@@ -269,11 +269,12 @@ dosingly:
     int32 regset = p->regset;
     for (; (rbit = (regset & -regset)) != 0; p->startoff += 4, regset ^= rbit) {
       RealRegister r = power_of_two(rbit);
-      int32 offx = p->startoff - s->baseadjusted;
+      int32 offx = p->startoff - s->baseadjusted, abs_offx;
       int32 op = (s->isload ? OP_LDR : OP_STR);
       ldm_printf("-- flushing %s r%ld, [r%ld, #%ld]\n",
                 s->isload ? "LDR" : "STR",
                 r, basereg, offx);
+      ldm_printf("-- dosingly: (A) offx=%#lx s->baseadjust=%#lx s->baseadjusted=%#lx\n", offx, s->baseadjust, s->baseadjusted);
       if (offx == 0 && s->baseadjust != 0) {
         if (cdr_(p) == NULL)
           offx = s->baseadjust;
@@ -284,20 +285,31 @@ dosingly:
             offx = nextoff;
         }
         if (offx != 0) {
+          /* So this is definitely going to be a post-increment, optimise partial address adjustments by
+           * still using the bottom twelve bits to aim in the right direction.  This may help avoid a
+           * later ADD/SUB adjustment to the base register
+           */
           op ^= (OP_PREN ^ OP_POSTN);
+          if (offx >= 0x1000) {
+            offx &= 0xFFF;
+          }
+          else if (offx <= -0x1000) {
+            offx = -(0xFFF & -offx);
+          }
           s->baseadjusted += offx;
           s->baseadjust -= offx;
+          ldm_printf("-- switched to a post-increment: %#lx %#lx\n", s->baseadjusted, s->baseadjust);
         }
       } else if ((s->baseadjust > 0 && offx <= s->baseadjust) ||
                  (s->baseadjust < 0 && offx >= s->baseadjust)) {
         /* SNB 2000-04-18: This must not be done when s->basereg is the
-           stack pointer, otherwise the stack pointer can be about the LWM of
+           stack pointer, otherwise the stack pointer can be above the LWM of
            the stack, and SVC mode code is stuffed if an interrupt occurs
            at the vital moments whilst frameregs[R_SP] doesn't point at the lowest
            required memory.
 
            When basereg is the stack pointer, we must ensure that we are
-           going in the right directionm otherwise we must prevent the writeback.
+           going in the right direction, otherwise we must prevent the writeback.
          */
         if (basereg == frameregs[R_SP] && (offx ^ s->baseadjust) < 0) {
           ldm_printf("-- avoid writeback: basereg R%ld, SGN offx != SGN baseadjust (%ld %ld)\n",
@@ -311,12 +323,24 @@ dosingly:
           s->baseadjust -= offx;
         }
       }
+      ldm_printf("-- dosingly: (B) offx=%#lx s->baseadjust=%#lx\n", offx, s->baseadjust);
       if (offx < 0) {
         op |= F_DOWN;
-        offx = -offx;
-      } else
+        abs_offx = -offx;
+      } else {
         op |= F_UP;
-      outinstr(op | F_RN(basereg) | F_RD(r) | offx);
+        abs_offx = offx;
+      }
+      if (abs_offx > 0xfff && (op & OP_PREN) == OP_PREN) {
+        ldm_printf("-- dosingly: pre increment extra (offset = %ld)\n", offx);
+        add_integer(basereg, basereg, offx, 0);
+      }
+      ldm_printf("-- dosingly: (C) offx=%#lx s->baseadjust=%#lx\n", offx, s->baseadjust);
+      outinstr(op | F_RN(basereg) | F_RD(r) | (abs_offx & 0xFFF));
+      if (abs_offx > 0xfff && (op & OP_PREN) != OP_PREN) {
+        ldm_printf("-- dosingly: post increment extra (offset = %ld)\n", offx);
+        add_integer(basereg, basereg, offx, 0);
+      }
     }
   }
 }
@@ -331,7 +355,7 @@ static void ldm_flush_r(int32 regbits)
 
   if (s->state == PENDING_NONE) return;
 
-  ldm_printf("-- ldm_flush: %lx\n", regbits);
+  ldm_printf("-- ldm_flush: %lx (s->baseadjust=%#lx)\n", regbits, s->baseadjust);
 
   /* s describes a set of loads/stores to be done.  s->regbits has bit r set if
      register r is to be loaded/stored (at offset s->offset[r] from the initial
@@ -408,12 +432,18 @@ static void ldm_flush_r(int32 regbits)
       }
     }
 
+  ldm_printf("-- ldm_flush: (A) s->regbits = %#lx; s->baseadjusted = %#lx; s->baseadjust = %#lx\n",
+    s->regbits, s->baseadjusted, s->baseadjust);
+
   if (s->regbits == 0) {
     s->state = PENDING_NONE;
   }
   s->baseadjusted = 0;
   for (; ldmp != NULL; ldmp = cdr_(ldmp))
     ldmstm_generate(ldmp, s);
+
+  ldm_printf("-- ldm_flush: (B) s->regbits = %#lx; s->baseadjusted = %#lx; s->baseadjust = %#lx\n",
+    s->regbits, s->baseadjusted, s->baseadjust);
 
   if (s->regbits != 0) {
     for (r = 0; r < 16; r++)
