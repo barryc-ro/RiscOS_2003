@@ -57,6 +57,7 @@ TARGET    = !RunImage
 
 OBJS      =	\
 o.main		\
+o.cmdline	\
 
 #
 # Rule patterns
@@ -75,6 +76,7 @@ dirs:
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${RM} o
         ${WIPE} ${TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
@@ -86,17 +88,3 @@ ${TARGET}: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB}
 
 #
 # Dynamic dependencies:
-o.main:	c.main
-o.main:	Tbox:h.wimp
-o.main:	Tbox:h.toolbox
-o.main:	C:h.kernel
-o.main:	Tbox:h.event
-o.main:	Tbox:h.wimplib
-o.main:	Tbox:h.gadgets
-o.main:	Tbox:h.menu
-o.main:	Tbox:h.proginfo
-o.main:	Tbox:h.window
-o.main:	Tbox:h.iconbar
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	h.constants
