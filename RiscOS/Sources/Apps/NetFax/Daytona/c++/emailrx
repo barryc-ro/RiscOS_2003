@@ -47,6 +47,26 @@
  * code in certain areas.  Added new document flags to assist with fixing cover
  * sheet problems, not deleting messages before they've been printed, missing
  * page reports etc.
+ *
+ * 1998-05-18: BAL
+ * Fixed bug: if non-NetFax messages were downloaded, then you reconnected to
+ * the email account before the messages were printed, then the messages would
+ * be downloaded again.  A side-effect of this is that all documents which are
+ * not NetFax fax documents have their uniqueness determined by the POP3 UID
+ * of the message and not by the document id, device class and serial number.
+ *
+ * 1998-05-20: BAL
+ * Fixed bug: will no longer attempt to download emails which we would never
+ * have enough space to download and decode.  Previously if such an email was
+ * encountered Daytona would constantly redial the ISP in the hope that there
+ * would be enough memory later.
+ *
+ * Fixed bug: partially supported documents (non-NetFax messages) only have
+ * the first page or so downloaded and printed, but the watermark code was
+ * treating these messages as if the *whole* message would be downloaded.
+ *
+ * Now uses the 'official' High Water-Mark system rather than our homegrown
+ * one.
  */
 
 
@@ -56,7 +76,7 @@
  * Include header files
  */
 
-/* CLib */
+// CLib
 #include <assert.h>
 #include "kernel.h"
 #include <stdio.h>
@@ -67,17 +87,36 @@
 
 // Email
 #include "Email/EmailLib/date.h"
+extern "C"
+{
+    #include "AcornPOP3.h"
+}
 
-/* NetFax specific libraries */
+// NetFax specific libraries
 #include "NetFax/NFELib/NFELib.h"
 
-/* Daytona */
+// Toolbox
+#include "tboxlibs/toolbox.h"
+#include "tboxlibs/wimp.h"
+
+// Daytona
 #include "emailrx.h"
 #include "list.h"
-#include "SetupIF.h"
+extern "C"
+{
+    // This little block of headers are order dependent because they don't
+    // include the other headers that they need - yuk!  All I wanted was
+    // QuCommon :-(.
+    #include "BuildFlags.h"
+    #include "PageList.h"
+    #include "AddrBookIF.h"
+    #include "QuStruct.h"
+    #include "QuCommon.h"
 
-/* Toolbox */
-#include "tboxlibs/toolbox.h"
+    #include "SetupIF.h"
+}
+
+
 
 
 /* =============================================================================
@@ -85,10 +124,11 @@
  */
 
 #define PartialDownloadLines    56
+#define PartialMaxSizeEstimate  (PartialDownloadLines * 1024)
 #define MaxParamSize            81
-#define MaxReportSize         4096
-#define MessageBufferSize     1024
-#define ReportsPath           ("Daytona:Reports")
+#define MaxReportSize           4096
+#define MessageBufferSize       1024
+#define ReportsPath             ("Daytona:Reports")
 
 #define MessageFlags_Download        0x00000001
 #define MessageFlags_Downloaded      0x00000002
@@ -131,30 +171,38 @@ class document_t
     // Methods
     public:
         document_t (const NFE_header &  header,
+                    const char *const   id,
                     bool &              success);
 
         ~document_t (void);
 
-        virtual int operator== (const netfax_document_id &) const
-            { return 0; }
-
-        virtual message_t *add_message (const unsigned int      size,
-                                        const char *const       unique_id,
-                                        const NFE_message_id &  nf_message_id);
+        int operator== (const char *) const;
 
         virtual message_t *add_message (
                                const unsigned int      size,
                                const char *const       unique_id,
                                const NFE_message_id &  nf_message_id,
-                               bool &                  delete_message);
+                               const unsigned int      max_free_space,
+                               bool &                  delete_message,
+                               bool &                  impossible);
 
         virtual void remove_message (const message_t &  message);
+
+        virtual bool  download_possible (const unsigned int  max_free_space,
+                                         const unsigned int  message_size);
 
         list_item_handle add_to_list (list_handle list);
 
         void remove_from_list (list_handle list);
 
-        virtual int add_to_download (unsigned int  &free_space,
+        virtual bool  check_free_space (message_t *const    message,
+                                        const unsigned int  largest_message);
+
+        void  update_free_space (message_t *const  message,
+                                 unsigned int &    free_space,
+                                 unsigned int &    largest_message);
+
+        virtual int add_to_download (unsigned int  &space_reserved,
                                      unsigned int  &largest_message);
 
         list_handle get_message_list (void);
@@ -203,12 +251,17 @@ class document_t
         virtual void  dump_message_list_to_file (FILE *const  file);
 #endif
 
+        static int  match_doc (const void *const  data1,
+                               const void *const  data2);
+
     // Data
     protected:
         list_item_handle  item_handle;
         list_handle       message_list;
         NFE_msg_class     message_class;
         char *            return_receipt_address;
+
+        char              unique_id[AcornPOP3_UIDL_SIZE];
 
         struct
         {
@@ -222,19 +275,16 @@ class netfax_document_t : public document_t
     // Methods
     public:
         netfax_document_t (const NFE_header &  header,
+                           const char *const   id,
                            bool &              success);
-
-        int operator== (const netfax_document_id &  id) const;
-
-        virtual message_t *add_message (const unsigned int      size,
-                                        const char *const       unique_id,
-                                        const NFE_message_id &  nf_message_id);
 
         virtual message_t *add_message (
                                const unsigned int      size,
                                const char *const       unique_id,
                                const NFE_message_id &  nf_message_id,
-                               bool &                  delete_message);
+                               const unsigned int      max_free_space,
+                               bool &                  delete_message,
+                               bool &                  impossible);
 
 #ifdef TEST
         virtual void  dump_to_file (FILE *const  file);
@@ -242,7 +292,6 @@ class netfax_document_t : public document_t
 
     // Data
     protected:
-        netfax_document_id  document_id;
         NFE_NF_msg_class    netfax_message_class;
 };
 
@@ -251,21 +300,29 @@ class netfax_fax_document_t : public netfax_document_t
     // Methods
     public:
         netfax_fax_document_t (const NFE_header &  header,
+                               const char *const   id,
                                bool &              success);
 
-        virtual message_t *add_message (const unsigned int      size,
-                                        const char *const       unique_id,
-                                        const NFE_message_id &  nf_message_id);
+        int operator== (const netfax_document_id &  id) const;
 
         virtual message_t *  add_message (
                                  const unsigned int      size,
                                  const char *const       unique_id,
                                  const NFE_message_id &  nf_message_id,
-                                 bool &                  delete_message);
+                                 const unsigned int      max_free_space,
+                                 bool &                  delete_message,
+                                 bool &                  impossible);
+
+        virtual bool  download_possible (const unsigned int  max_free_space,
+                                         const unsigned int  message_size);
+
 
         void  remove_message (const message_t &  message);
 
-        int  add_to_download (unsigned int  &free_space,
+        virtual bool  check_free_space (message_t *const    message,
+                                        const unsigned int  largest_message);
+
+        int  add_to_download (unsigned int  &space_reserved,
                               unsigned int  &largest_message);
 
         virtual int  get_number_pages (const unsigned int  flags_mask,
@@ -291,6 +348,9 @@ class netfax_fax_document_t : public netfax_document_t
 #ifdef TEST
         virtual void  dump_to_file (FILE *const  file);
 #endif
+
+        static int  match_doc (const void *const  data1,
+                               const void *const  data2);
 
     private:
         int page_range_report (char *const         report,
@@ -318,6 +378,7 @@ class netfax_fax_document_t : public netfax_document_t
 
     // Data
     protected:
+        netfax_document_id  document_id;
         struct
         {
             bool  split_download     : 1;
@@ -348,30 +409,20 @@ static list_handle  document_list;
  * Declare function prototypes
  */
 
-static document_t *create_doc (const NFE_header &  header);
+static document_t *create_doc (const NFE_header &  header,
+                               const char *const   id);
 
-static int match_doc (void *const  data1,
-                      void *const  data2);
+static int match_message (const void *const  data1,
+                          const void *const  data2);
 
-static int match_message (void *const  data1,
-                          void *const  data2);
-
-static int compare_page_nums (void *const  data1,
-                              void *const  data2);
+static int compare_page_nums (const void *const  data1,
+                              const void *const  data2);
 
 static void free_document (void *  document);
 
 static void free_message (void *  message);
 
 static int truncate_doc_list (void);
-
-static bool check_free_space (const unsigned int  message_size,
-                              const unsigned int  free_space,
-                              const unsigned int  largest_message);
-
-static void update_free_space (const unsigned int  message_size,
-                               unsigned int &      free_space,
-                               unsigned int &      largest_message);
 
 static message_t *add_message_common (const unsigned int  size,
                                       const char *const   unique_id);
@@ -383,8 +434,9 @@ static message_t *add_message_common (const unsigned int  size,
  * Class method implementations
  */
 
-document_t::document_t (const NFE_header  &header,
-                        bool              &success)
+document_t::document_t (const NFE_header &  header,
+                        const char *const   id,
+                        bool &              success)
 {
     success = true;
 
@@ -393,6 +445,12 @@ document_t::document_t (const NFE_header  &header,
 
     flags.printing_required = false;
     flags.is_new            = true;
+
+    if (id)
+    {
+        strcpy (unique_id,
+                id);
+    }
 
     if (header.return_receipt_to.address != NULL)
     {
@@ -436,6 +494,43 @@ document_t::~document_t (void)
 
 
 
+/* -----------------------------------------------------------------------------
+   document_t::match_doc
+
+   Single page document matching routine for document list searching.
+
+   Inputs
+   data1: pointer to current document in list
+   data2: pointer to details of document being searched for
+
+   Returns
+   1: match
+   0: no match
+ */
+
+int  document_t::match_doc (const void *const  data1,
+                            const void *const  data2)
+{
+    const document_t &  document  = *((document_t *const) data1);
+    const char *        unique_id = (const char *) data2;
+
+
+    return (document == unique_id);
+}
+
+
+
+
+
+int document_t::operator== (const char *  test_unique_id) const
+{
+    return (strcmp (unique_id,
+                    test_unique_id) == 0);
+}
+
+
+
+
 list_item_handle document_t::add_to_list (list_handle list)
 {
     item_handle = list_add_item (list,
@@ -459,14 +554,29 @@ void document_t::remove_from_list (list_handle list)
 
 
 message_t *document_t::add_message (
-               const unsigned int    size,
-               const char *const     unique_id,
-               const NFE_message_id  &nf_message_id)
+               const unsigned int      size,
+               const char *const       unique_id,
+               const NFE_message_id &  nf_message_id,
+               const unsigned int      max_free_space,
+               bool &                  delete_message,
+               bool &                  impossible)
 {
+    M_unused (size);
     M_unused (nf_message_id);
 
+    delete_message = false;
+
+    if (!download_possible (max_free_space,
+                            PartialMaxSizeEstimate))
+    {
+        impossible = true;
+        return NULL;
+    }
+
+    impossible = false;
+
     // Create new message information structure
-    message_t *  message = add_message_common (size,
+    message_t *  message = add_message_common (PartialMaxSizeEstimate,
                                                unique_id);
     if (message == NULL)
     {
@@ -505,26 +615,124 @@ message_t *document_t::add_message (
 
 
 
-message_t *document_t::add_message (
-               const unsigned int      size,
-               const char *const       unique_id,
-               const NFE_message_id &  nf_message_id,
-               bool &                  delete_message)
+void document_t::remove_message (const message_t &message)
 {
-    delete_message = false;
-
-    return add_message (size,
-                        unique_id,
-                        nf_message_id);
+    list_remove_item (message_list,
+                      message.item_handle);
 }
 
 
 
 
-void document_t::remove_message (const message_t &message)
+/* -----------------------------------------------------------------------------
+   document_t::download_possible
+
+   Determine whether it would ever be possible to download and decode a
+   message of a certain size (ie. whether there could ever be enough free
+   space).
+
+   Inputs
+   max_free_space: maximum possible amount of free space (bytes)
+   message_size:   size of this message
+
+   Returns
+   false: impossible to download this message
+   true:  possible to download this message
+ */
+
+bool  document_t::download_possible (const unsigned int  max_free_space,
+                                     const unsigned int  message_size)
 {
-    list_remove_item (message_list,
-                      message.item_handle);
+    bool possible = true;
+
+    // Needs to be enough free space to hold raw message and decoded message
+    // at the same time.  Decoded message is roughly same size as raw
+    // message (may be a bit less).
+
+    if (message_size > max_free_space / 2)
+    {
+        possible = false;
+    }
+
+    return possible;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   check_free_space
+
+   Check if there is enough free space to add a message to the download list.
+
+   Inputs
+   message_size:    size of message
+   free_space:      free space
+   largest_message: largest message added to download list so far
+
+   Returns
+   true:  enough free space to add message
+   false: not enough free space to add message
+ */
+
+bool  document_t::check_free_space (message_t *const    message,
+                                    const unsigned int  largest_message)
+{
+    unsigned int  temp_largest_message;
+
+    if (message->size > largest_message)
+    {
+        temp_largest_message = message->size;
+    }
+    else
+    {
+        temp_largest_message = largest_message;
+    }
+
+    if (HWM_MailRx_Extra (message->decoded_size_estimate +
+                          (temp_largest_message - largest_message)) == 0)
+    {
+        // Enough space to add this message to the download and decode the
+        // largest message added to this download so far.
+        return true;
+    }
+
+    return false;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   update_free_space
+
+   Update the amount of free space given the size of a message that has been
+   added to the download list.
+
+   Inputs
+   message_size:    size of message just added
+   space_reserved:  total amount of space reserved for this download so far
+   largest_message: largest message added to download list so far
+
+   Outputs
+   space_reserved:  total amount of space reserved for this download so far
+   largest_message: possibly updated largest message
+ */
+
+void  document_t::update_free_space (message_t *const  message,
+                                     unsigned int &    space_reserved,
+                                     unsigned int &    largest_message)
+{
+    if (message->size > largest_message)
+    {
+        space_reserved += message->size - largest_message;
+        largest_message = message->size;
+    }
+
+    space_reserved += message->decoded_size_estimate;
+
+    HWM_MailRx_Usage (0,
+                      space_reserved);
 }
 
 
@@ -537,7 +745,7 @@ void document_t::remove_message (const message_t &message)
    flag it to indicate this.
 
    Inputs
-   free_space:      free space in message store (bytes)
+   space_reserved:  space reserved for this download so far (bytes)
    largest_message: largest email message in this download so far (bytes)
 
    Outputs
@@ -550,7 +758,7 @@ void document_t::remove_message (const message_t &message)
    1: document needs downloading but there's not enough free space
  */
 
-int document_t::add_to_download (unsigned int  &free_space,
+int document_t::add_to_download (unsigned int  &space_reserved,
                                  unsigned int  &largest_message)
 {
     // Only one message per document for all documents except netfax fax
@@ -562,15 +770,14 @@ int document_t::add_to_download (unsigned int  &free_space,
 
     if (message->flags.bits.downloaded == 0)
     {
-        if (check_free_space (message->size,
-                              free_space,
+        if (check_free_space (message,
                               largest_message))
         {
             message->flags.bits.download = 1;
             flags.printing_required = true;
 
-            update_free_space (message->size,
-                               free_space,
+            update_free_space (message,
+                               space_reserved,
                                largest_message);
 
         }
@@ -897,45 +1104,45 @@ bool  document_t::is_new (void)
 
 
 netfax_document_t::netfax_document_t (const NFE_header &  header,
+                                      const char *const   id,
                                       bool &              success)
     : document_t (header,
+                  id,
                   success)
 {
-    memcpy (document_id.serial_num,
-            header.details.serial_num,
-            SERIAL_LEN);
-
-    document_id.device_class    = header.details.device_class;
-    document_id.document_number = header.id.doc_num;
-
     netfax_message_class        = header.netfax_msg_class;
 }
 
 
 
 
-int netfax_document_t::operator== (const netfax_document_id &  id) const
-{
-    return (document_id.device_class == id.device_class &&
-            document_id.document_number == id.document_number &&
-            memcmp (document_id.serial_num,
-                    id.serial_num,
-                    SERIAL_LEN) == 0);
-}
-
-
-
-
 message_t *netfax_document_t::add_message (
-               const unsigned int    size,
-               const char *const     unique_id,
-               const NFE_message_id  &nf_message_id)
+               const unsigned int      size,
+               const char *const       unique_id,
+               const NFE_message_id &  nf_message_id,
+               const unsigned int      max_free_space,
+               bool &                  delete_message,
+               bool &                  impossible)
 {
+    delete_message = false;
+
+    if (!download_possible (max_free_space,
+                            size))
+    {
+        impossible = true;
+        return NULL;
+    }
+
+    impossible = false;
+
+
     // Create new message information structure
     message_t *  message = add_message_common (size,
                                                unique_id);
     if (message == NULL)
+    {
         return NULL;
+    }
 
 
     // All types of netfax messages must always have meaningful information in
@@ -962,27 +1169,20 @@ message_t *netfax_document_t::add_message (
 
 
 
-message_t *netfax_document_t::add_message (
-               const unsigned int      size,
-               const char *const       unique_id,
-               const NFE_message_id &  nf_message_id,
-               bool &                  delete_message)
-{
-    delete_message = false;
-
-    return add_message (size,
-                        unique_id,
-                        nf_message_id);
-}
-
-
-
-
 netfax_fax_document_t::netfax_fax_document_t (const NFE_header &  header,
+                                              const char *const   id,
                                               bool &              success)
     : netfax_document_t (header,
+                         id,
                          success)
 {
+    memcpy (document_id.serial_num,
+            header.details.serial_num,
+            SERIAL_LEN);
+
+    document_id.device_class    = header.details.device_class;
+    document_id.document_number = header.id.doc_num;
+
     nf_fax_flags.split_download     = false;
     nf_fax_flags.exact_number_pages = (bool) header.id.exact_num_pages;
     nf_fax_flags.physically_split   = false;
@@ -995,18 +1195,43 @@ netfax_fax_document_t::netfax_fax_document_t (const NFE_header &  header,
 
 
 
-message_t *netfax_fax_document_t::add_message (
-               const unsigned int      size,
-               const char *const       unique_id,
-               const NFE_message_id &  nf_message_id)
+/* -----------------------------------------------------------------------------
+   netfax_fax_document_t::match_doc
+
+   NetFax fax document matching routine for document list searching.
+
+   Inputs
+   data1: pointer to current document in list
+   data2: pointer to details of document being searched for
+
+   Returns
+   1: match
+   0: no match
+ */
+
+int  netfax_fax_document_t::match_doc (const void *const  data1,
+                                       const void *const  data2)
 {
-    bool  delete_message;
+    const netfax_fax_document_t &  document    =
+        *((netfax_fax_document_t *const) data1);
+
+    const netfax_document_id &     document_id =
+        *((netfax_document_id *) data2);
 
 
-    return add_message (size,
-                        unique_id,
-                        nf_message_id,
-                        delete_message);
+    return (document == document_id);
+}
+
+
+
+
+int netfax_fax_document_t::operator== (const netfax_document_id &  id) const
+{
+    return (document_id.device_class == id.device_class &&
+            document_id.document_number == id.document_number &&
+            memcmp (document_id.serial_num,
+                    id.serial_num,
+                    SERIAL_LEN) == 0);
 }
 
 
@@ -1016,16 +1241,27 @@ message_t *netfax_fax_document_t::add_message (
                const unsigned int      size,
                const char *const       unique_id,
                const NFE_message_id &  nf_message_id,
-               bool &                  delete_message)
+               const unsigned int      max_free_space,
+               bool &                  delete_message,
+               bool &                  impossible)
 {
     message_t *  message;
 
     delete_message = false;
+    impossible     = false;
+
 
     // Don't want to actually add message to this document's message list if
     // the message is a dcs.
     if (nf_message_id.first_page_num != 0 && nf_message_id.last_page_num != 0)
     {
+        if (!download_possible (max_free_space,
+                                size))
+        {
+            impossible = true;
+            return NULL;
+        }
+
         // Create new message information structure
         message = add_message_common (size,
                                       unique_id);
@@ -1116,13 +1352,96 @@ void netfax_fax_document_t::remove_message (const message_t &  message)
 
 
 /* -----------------------------------------------------------------------------
+   document_t::download_possible
+
+   Determine whether it would ever be possible to download and decode a
+   message of a certain size (ie. whether there could ever be enough free
+   space).
+
+   Inputs
+   max_free_space: maximum possible amount of free space (bytes)
+   message_size:   size of this message
+
+   Returns
+   false: impossible to download this message
+   true:  possible to download this message
+ */
+
+bool  netfax_fax_document_t::download_possible (
+          const unsigned int  max_free_space,
+          const unsigned int  message_size)
+{
+    bool  possible = true;
+
+    // Needs to be enough free space to hold raw message and decoded message
+    // at the same time.  If raw message contains only fax pages then the
+    // decoded message will be at most 75% the size of the original message.
+    // If the message is a mixture of fax pages and other NetFax data (eg.
+    // RText) then all we can say that the decoded message will be at most the
+    // same size as the original message.
+
+    if ((netfax_message_class & ~NFE_NFMC_FAX) == 0)
+    {
+        if (message_size + (unsigned int) ((double) message_size * 0.75) >
+                max_free_space)
+        {
+            possible = false;
+        }
+    }
+    else
+    {
+        if (message_size > max_free_space / 2)
+        {
+            possible = false;
+        }
+    }
+
+    return possible;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   check_free_space
+
+   Check if there is enough free space to add a message to the download list.
+
+   Inputs
+   message_size:    size of message
+   free_space:      free space
+   largest_message: largest message added to download list so far
+
+   Returns
+   true:  enough free space to add message
+   false: not enough free space to add message
+ */
+
+bool  netfax_fax_document_t::check_free_space (
+          message_t *const    message,
+          const unsigned int  largest_message)
+{
+    if ((netfax_message_class & ~NFE_NFMC_FAX) == 0)
+    {
+        message->decoded_size_estimate =
+            (unsigned int) ((double) message->size * 0.75);
+    }
+
+    return document_t::check_free_space (message,
+                                         largest_message);
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
    netfax_fax_document_t::add_to_download
 
    Check whether a document should be included in the download and if so,
    flag it to indicate this.
 
    Inputs
-   free_space:      free space in message store (bytes)
+   space_reserved:  space reserved for this download so far (bytes)
    largest_message: largest email message in this download so far (bytes)
 
    Outputs
@@ -1137,7 +1456,7 @@ void netfax_fax_document_t::remove_message (const message_t &  message)
       it to be downloaded
  */
 
-int netfax_fax_document_t::add_to_download (unsigned int &  free_space,
+int netfax_fax_document_t::add_to_download (unsigned int &  space_reserved,
                                             unsigned int &  largest_message)
 {
     if (++connection_count == g_missing_page_threshold &&
@@ -1165,16 +1484,15 @@ int netfax_fax_document_t::add_to_download (unsigned int &  free_space,
 
         if (message->flags.bits.downloaded == 0)
         {
-            if (check_free_space (message->size,
-                                  free_space,
+            if (check_free_space (message,
                                   largest_message))
             {
                 message->flags.bits.download = 1;
                 flags.printing_required      = true;
                 download                     = true;
 
-                update_free_space (message->size,
-                                   free_space,
+                update_free_space (message,
+                                   space_reserved,
                                    largest_message);
             }
             else
@@ -2450,8 +2768,7 @@ extern void emailrx_finalise (void)
     size:             size of message in bytes
     header:           pointer to message headers
     unique_id:        unqiue id returned by POP3 UIDL command
-    message_class:    class of message
-    nf_message_class: class of netfax message
+    max_free_space:   maximum conceivable amount of free space
 
     Outputs
     delete_message:   flag indicating whether the message be marked for
@@ -2463,10 +2780,11 @@ extern void emailrx_finalise (void)
     2: couldn't add message and couldn't recover memory
  */
 
-extern int emailrx_new_message (const unsigned int        size,
-                                const NFE_header *const   header,
-                                const char *const         unique_id,
-                                int *const                delete_message)
+extern int emailrx_new_message (const unsigned int       size,
+                                const NFE_header *const  header,
+                                const char *const        unique_id,
+                                const unsigned int       max_free_space,
+                                int *const               delete_message)
 {
     unsigned int  message_flags        = 0;
     unsigned int  message_number_lines = 0;
@@ -2480,47 +2798,75 @@ extern int emailrx_new_message (const unsigned int        size,
                                            header->netfax_msg_class);
     if (support == EmailSupport_None)
     {
+#if 0
         *delete_message = 1;
+#endif
         return 0;
     }
 
 
-    netfax_document_id new_document_id;
-
-    new_document_id.device_class = header->details.device_class;
-    new_document_id.document_number = header->id.doc_num;
-    memcpy (new_document_id.serial_num,
-            header->details.serial_num,
-            SERIAL_LEN);
-
-    // If a message has no fax pages then it is
-    // treated as a completely separate document, even if it is 'logically'
-    // part of a document with fax pages.  (eg. if you sent a fax document
-    // with an email tagged on the end, but the email got put in a separate
-    // message).  This is all hypothetical at the moment because documents
-    // cannot yet be split this way, but they may be in the future...
-
+    // Check whether the document that this message belongs to is already in
+    // the document list.
     if (header->msg_class == NFE_MC_NETFAX_DATA &&
         (header->netfax_msg_class & NFE_NFMC_FAX))
     {
-        // This message has fax pages, so check to see if we already have
-        // other fax pages that are part of this document in our document
-        // list.
-        document = (document_t *) list_find_item (document_list,
-                                                  match_doc,
-                                                  &new_document_id);
+        // Document contains fax pages, so the document may be made up from
+        // multiple messages.  In this case, can't use the unique-id of a
+        // single message to determine document uniqueness.
+
+        netfax_document_id new_document_id;
+
+        new_document_id.device_class = header->details.device_class;
+        new_document_id.document_number = header->id.doc_num;
+        memcpy (new_document_id.serial_num,
+                header->details.serial_num,
+                SERIAL_LEN);
+
+        document = (document_t *) list_find_item (
+                                      document_list,
+                                      netfax_fax_document_t::match_doc,
+                                      &new_document_id);
     }
+    else
+    {
+        // If a message has no fax pages then it is treated as a completely
+        // separate document, even if it is 'logically' part of a document with
+        // fax pages.  (eg. if you sent a fax document with an email tagged on
+        // the end, but the email got put in a separate message).  This is all
+        // hypothetical at the moment because documents cannot yet be split this
+        // way, but they may be in the future...
+
+        // All non-fax documents do not have a concept of pages, so each
+        // document only has a single message.  This means that we can use the
+        // unique-id of the message to determine the document's uniqueness.
+        // We can't use the document id, device class etc. for uniqueness of
+        // NetFax documents (as we do in NetFax fax documents) because
+        // text/plain MIME messages are faked as NetFax rich text by the email
+        // library; all text/plain MIME messages are given the same fake
+        // document ID, device class etc.
+
+        document = (document_t *) list_find_item (
+                                      document_list,
+                                      document_t::match_doc,
+                                      unique_id);
+    }
+
+    bool  document_created = false;
+    bool  impossible = false;
 
     if (document == NULL)
     {
         // document not in document list
-        document = create_doc (*header);
+        document = create_doc (*header,
+                               unique_id);
 
         if (document == NULL ||
             document->add_to_list (document_list) == NULL)
         {
             goto no_mem;
         }
+
+        document_created = true;
     }
     else
     {
@@ -2537,13 +2883,31 @@ extern int emailrx_new_message (const unsigned int        size,
     }
 
 
+
     if (document->add_message (size,
                                unique_id,
                                header->id,
-                               *((bool *) delete_message)) == NULL)
+                               max_free_space,
+                               *((bool *) delete_message),
+                               impossible) == NULL)
     {
-        goto no_mem;
+        if (impossible)
+        {
+            // Given the maximum possible amount of free space that could ever
+            // be available for message downloads, we would never be able to
+            // download and decode this message.
+
+            if (document_created)
+            {
+                document->remove_from_list (document_list);
+            }
+        }
+        else
+        {
+            goto no_mem;
+        }
     }
+
 
     return 0;
 
@@ -2570,15 +2934,15 @@ no_mem:
 
    Build the list of documents to download given an amount of free space.
 
-   Inputs
-   free_space: amount of free workspace available in bytes
+   Outputs
+   space_reserved: amount of space reserved for this download (bytes)
 
    Returns
    0: all messages on server dealt with successfully
    1: not enough space to download all messages; reconnect ASAP
  */
 
-extern int  emailrx_decide_download (unsigned int  free_space)
+extern int  emailrx_decide_download (unsigned int *const  space_reserved)
 {
     int              rc = 0;
     unsigned int     largest_message = 0;
@@ -2593,7 +2957,7 @@ extern int  emailrx_decide_download (unsigned int  free_space)
          !M_list_finished (i);
          document = (document_t *) M_list_next (i))
     {
-        switch (document->add_to_download (free_space,
+        switch (document->add_to_download (*space_reserved,
                                            largest_message))
         {
             case 1:
@@ -3143,13 +3507,15 @@ extern char *emailrx_generate_report_from_message (char *  message_token,
    Mark a message as downloaded.
 
    Inputs
-   message: pointer to message
+   message:        pointer to message
+
+   Outputs
  */
 
-extern void  emailrx_message_downloaded (message_t *const  message)
+extern void  emailrx_message_downloaded (message_t *const     message)
 {
-    message->flags.bits.downloaded      = 1;
-    message->flags.bits.download        = 0;
+    message->flags.bits.downloaded = 1;
+    message->flags.bits.download   = 0;
 }
 
 
@@ -3164,7 +3530,7 @@ extern void  emailrx_message_downloaded (message_t *const  message)
    message: pointer to message
  */
 
-extern void  emailrx_message_printed (message_t  *const  message)
+extern void  emailrx_message_printed (message_t *const  message)
 {
     message->flags.bits.printing     = 0;
     message->flags.bits.printed      = 1;
@@ -3276,13 +3642,15 @@ extern int  emailrx_get_number_messages (document_handle     document,
 
    Inputs
    header: header structure
+   id:     unique id to use for document
 
    Returns
    success: pointer to document object
    failure: NULL
  */
 
-static document_t *create_doc (const NFE_header &  header)
+static document_t *create_doc (const NFE_header &  header,
+                               const char *const   id)
 {
     bool          success;
     document_t *  document;
@@ -3294,17 +3662,20 @@ static document_t *create_doc (const NFE_header &  header)
             if (header.netfax_msg_class & NFE_NFMC_FAX)
             {
                 document = new netfax_fax_document_t (header,
+                                                      NULL,
                                                       success);
             }
             else
             {
                 document = new netfax_document_t (header,
+                                                  id,
                                                   success);
             }
             break;
 
         default:
             document = new document_t (header,
+                                       id,
                                        success);
             break;
     }
@@ -3317,34 +3688,6 @@ static document_t *create_doc (const NFE_header &  header)
 
     return document;
 }
-
-
-
-
-/* -----------------------------------------------------------------------------
-   match_doc
-
-   Document matching routine for document list searching.
-
-   Inputs
-   data1: pointer to current document in list
-   data2: pointer to details of document being searched for
-
-   Returns
-   1: match
-   0: no match
- */
-
-static int match_doc (void *const  data1,
-                      void *const  data2)
-{
-    const document_t &          document    = *((document_t *const) data1);
-    const netfax_document_id &  document_id = *((netfax_document_id *) data2);
-
-
-    return (document == document_id);
-}
-
 
 
 
@@ -3363,8 +3706,8 @@ static int match_doc (void *const  data1,
    0: no match
  */
 
-static int match_message (void *const  data1,
-                          void *const  data2)
+static int match_message (const void *const  data1,
+                          const void *const  data2)
 {
     const message_t &  message   = *((message_t *const) data1);
     const char *const  unique_id = (const char *const)  data2;
@@ -3397,11 +3740,11 @@ static int match_message (void *const  data1,
     1: message1 comes after message2
  */
 
-static int compare_page_nums (void *const  data1,
-                              void *const  data2)
+static int compare_page_nums (const void *const  data1,
+                              const void *const  data2)
 {
-    message_t *const  message1 = (message_t *const) data1;
-    message_t *const  message2 = (message_t *const) data2;
+    const message_t *const  message1 = (message_t *const) data1;
+    const message_t *const  message2 = (message_t *const) data2;
 
 
     if (message1->nf_message_id.first_page_num <
@@ -3459,6 +3802,7 @@ static void free_document (void *  document)
 {
     delete document;
 }
+
 
 
 
@@ -3549,72 +3893,6 @@ static int truncate_doc_list (void)
 
 
 /* -----------------------------------------------------------------------------
-   check_free_space
-
-   Check if there is enough free space to add a message to the download list.
-
-   Inputs
-   message_size:    size of message
-   free_space:      free space
-   largest_message: largest message added to download list so far
-
-   Returns
-   true:  enough free space to add message
-   false: not enough free space to add message
- */
-
-static bool check_free_space (const unsigned int  message_size,
-                              const unsigned int  free_space,
-                              const unsigned int  largest_message)
-{
-    unsigned int  temp_largest_message;
-
-    if (message_size > largest_message)
-    {
-        temp_largest_message = message_size;
-    }
-    else
-    {
-        temp_largest_message = largest_message;
-    }
-
-    return (bool) (free_space - message_size >
-                      (unsigned int) ((double) temp_largest_message * 0.75));
-}
-
-
-
-
-/* -----------------------------------------------------------------------------
-   update_free_space
-
-   Update the amount of free space given the size of a message that has been
-   added to the download list.
-
-   Inputs
-   message_size:    size of message just added
-   free_space:      free space before adding message
-   largest_message: largest message added to download list so far
-
-   Outputs
-   free_space:      free space after adding message
-   largest_message: possibly updated largest message
- */
-
-static void update_free_space (const unsigned int  message_size,
-                               unsigned int &      free_space,
-                               unsigned int &      largest_message)
-{
-    if (message_size > largest_message)
-        largest_message = message_size;
-
-    free_space -= message_size;
-}
-
-
-
-
-/* -----------------------------------------------------------------------------
    add_message_common
 
    Common code used when adding a new message to a document regardless of the
@@ -3627,7 +3905,7 @@ static void update_free_space (const unsigned int  message_size,
 
    Returns
    success: pointer to message structure
-   failure: NULL-
+   failure: NULL
  */
 
 static message_t *  add_message_common (const unsigned int  size,
@@ -3640,7 +3918,8 @@ static message_t *  add_message_common (const unsigned int  size,
         return NULL;
     }
 
-    message->size = size;
+    message->size                  = size;
+    message->decoded_size_estimate = size;
 
     message->unique_id = malloc (strlen (unique_id) + 1);
     if (message->unique_id == NULL)
