@@ -11,7 +11,7 @@
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR = <CExport$Dir>.h
 
 #
 # Generic options:
@@ -51,7 +51,8 @@ DFLAGS   =
 # Program specific options:
 #
 COMPONENT = Standby
-TARGET    = aof.Standby
+TARGET    = aof.${COMPONENT}
+RAMTARGET = rm.${COMPONENT}
 OBJS      = header.o module.o veneer.o standby.o
 EXPORTS   = 
 
@@ -65,7 +66,7 @@ EXPORTS   =
 #
 # build a relocatable module:
 #
-all: rm.Standby
+all: ${RAMTARGET}
 
 #
 # RISC OS ROM build rules:
@@ -82,10 +83,10 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} ${RAMTARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -108,11 +109,11 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.Standby: ${OBJS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
+        ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
 o.module:	c.module
@@ -135,6 +136,5 @@ o.standby:	C:h.kernel
 o.standby:	C:h.swis
 o.standby:	h.module
 o.standby:	h.standby
+o.standby:	C:h.led
 o.standby:	h.veneer
-o.standby:	h.iomd
-o.standby:	h.error
