@@ -5,65 +5,16 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 07-Mar-01  SNB          Recreated
 #
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
+COMPONENT = SoundChannels
+TARGET    = Sound1
+HELPSRC   = HelpSrc
+TOKHELPSRC= ${TOKENSOURCE}
+RESFSDIR  = ${RESDIR}.SoundChann
 
-#
-# Program specific options:
-#
-COMPONENT = Sound1
-SOURCE    = s.Sound1
-TARGET    = rm.${MACHINE}.Sound1
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: 
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} s.TokHelpSrc
-        @echo ${COMPONENT}: cleaned
-
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
-        ${MKDIR} ${RESDIR}.SoundChann
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.SoundChann.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.SoundChann.Messages }
-
-${TARGET}: ${SOURCE} s.TokHelpSrc
-        ${MKDIR} rm.${MACHINE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-s.TokHelpSrc: Hdr:Tokens HelpSrc
-        tokenise Hdr:Tokens HelpSrc $@
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
