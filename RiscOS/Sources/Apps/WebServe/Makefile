@@ -6,7 +6,9 @@
 # Date	     Name   Description
 # ----	     ----   -----------
 # 11-Feb-98  SNB    Created
+# 30-Apr-98  SNB    Added trace build option
 #
+.SUFFIXES: .c .o .od
 
 #
 # Component specific options:
@@ -19,14 +21,14 @@ TARGET = aif.!RunImage
 #
 # Generic options:
 #
-CHMOD   = access
+CHMOD	= access
 MKDIR	= cdir
 CC	= cc
 CMHG	= cmhg
 CP	= copy
 LD	= link
 RM	= remove
-SQZ     = squeeze
+SQZ	= squeeze
 WIPE	= -wipe
 
 CPFLAGS = ~cfr~v
@@ -34,7 +36,7 @@ WFLAGS  = ~c~vr
 
 SQZFLAGS =
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -ffah -Wp ${DFLAGS}
-DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UTRACE
+DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -UTML
 INCLUDES = -ITbox:,TCPIPLibs:,C:
 
 #
@@ -64,10 +66,30 @@ OBJS =\
  o.snprintf\
  o.URLclient
 
+DEBOBJS =\
+ od.cache\
+ od.checkloop\
+ od.config\
+ od.debug\
+ od.dialler\
+ od.filemanage\
+ od.generic\
+ od.headers\
+ od.italkmsg\
+ od.main\
+ od.messages\
+ od.network\
+ od.process\
+ od.quit\
+ od.serve\
+ od.snprintf\
+ od.URLclient
+
 #
 # Rule patterns
 #
 .c.o:;	  ${CC} ${CFLAGS} -o $@ $<
+.c.od:;	  ${CC} ${CFLAGS} -DTRACE -DUSE_SYSLOG -fn -o $@ $<
 
 #
 # Main rules:
@@ -75,6 +97,8 @@ OBJS =\
 #
 all: ${TARGET}
 	@echo ${COMPONENT}: !RunImage built
+
+trace: ${TARGET}T
 
 export: all
 	${MKDIR} ${EXPDIR}
@@ -86,11 +110,17 @@ clean:
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} aif ${WFLAGS}
 	${WIPE} ${EXPDIR} ${WFLAGS}
+	${WIPE} od.* ${WFLAGS}
 	@echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${OBJS} ${CLIB} ${TBOXLIBS} ${TCPIPLIBS}
 	${mkdir} aif
 	${LD} -aif -o $@ ${OBJS} ${TBOXLIBS} ${TCPIPLIBS} ${CLIB}
+	Access $@ RW/R
+
+${TARGET}T: ${DEBOBJS} ${CLIB} ${TBOXLIBS} ${TCPIPLIBS}
+        ${mkdir} aif
+	${LD} -aif -o $@ ${DEBOBJS} ${TBOXLIBS} ${TCPIPLIBS} ${CLIB} -Symbols symtab
 	Access $@ RW/R
 
 
