@@ -61,7 +61,7 @@ resources_alt:
 	Set NCFrescoROAltRes$Path NCFrescoRORes:Alt.,NCFrescoRORes:
 	Set NCFrescoROAltTransRes$Path NCFrescoROTransRes:Alt.,NCFrescoROTransRes:
 	${MKDIR} ${RESRES_ALT}
-	IfThere NCFrescoRORes:Alt.Sprites \
+	IfThere NCFrescoRORes:Alt.Sprites Then \
 	  ${CP} NCFrescoRORes:Alt.Sprites          ${RESRES_ALT}.Sprites  ${CPFLAGS}
 	${TR} -i NCFrescoROAltTransRes:Messages -o ${RESRES_ALT}.Messages ${TRFLAGS}
 	${CP} NCFrescoROAltRes:Res                 ${RESRES_ALT}.Res      ${CPFLAGS}
