@@ -141,10 +141,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
   switch(trans) { /* global transitions that apply to all states (except maybe State_Sleep) */
 
     case Trans_Shutdown:
-    	 pre_shutdown_state = ncma_state;
-    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: shutdown imminent - pushed state \"%s\"\n", state_string(ncma_state));
-    	 ncma_dbox_open(URL_PATH(poweroff.html));
-    	 return(State_NCMAShutdown);
+         if(ncma_state != State_NCMAShutdown) { /* if we're not already in shutdown state, save context */
+    	   pre_shutdown_state = ncma_state;
+    	   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: shutdown imminent - pushed state \"%s\"\n", state_string(ncma_state));
+    	   ncma_dbox_open(URL_PATH(poweroff.html));
+    	   return(State_NCMAShutdown);
+    	 }
 
     case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
          if(registry_status_cleared(BB_STATUS_INSERTED)) goto card_removed;
@@ -152,9 +154,14 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     case Trans_CardRemoved:
          card_removed:
-    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard removed\n");
+    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard removed, hanging up, flushing cache\n");
+#ifdef POINTLESS_BUTTONS
     	 run_from_powerup = 0;
-    	 unlock_cache();
+    	 pointless_button_clicked = 0;
+    	 ncma_hourglass_off(); /* might be on, if we're in chimp mode */
+#endif
+	 ncma_hangup();
+    	 reset_cache(); /* was unlock_cache() */
 
 #ifdef POINTLESS_BUTTONS
          if(ncma_state == State_NCMABadCard) return(State_NCMABadCard); /* oh, how hatefully poor */
@@ -257,7 +264,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		    if(card_attempts>0) {
 #ifdef CHIMPANZEE_INTERFACE
        		      default_pin();
-       		      if(virgin_smartcard()) goto proceed_after_pin;
+       		      //if(virgin_smartcard()) goto proceed_after_pin;
        		      /* a virgin card doesn't generate any status calls on authentication, because NCBootblock has
        		         already given up reading at this point, since it cannot construct a file sequence from the
        		         empty index file. Virgin smartcards will always ship with PIN (0000), so we call default_pin
@@ -283,8 +290,20 @@ NCMA_STATE machine(NCMA_TRANS trans)
                   return(State_NCMANoCard);
                 }
 
-		ncma_dbox_open(URL_PATH(connect.html));
-		return(State_NCMAConnect);
+#ifdef POINTLESS_BUTTONS
+       		/* clear the hourglass and click condition from 'insert s/c' OSD */
+		DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard ready - hourglass off\n");
+                ncma_hourglass_off();
+                pointless_button_clicked = 0;
+
+#endif
+		if(ram_empty() && !nvram_empty()) {
+		    ncma_dbox_open(URL_PATH(moved.html));
+		    return(State_NCMAMoved);
+		} else {
+		    ncma_dbox_open(URL_PATH(connect.html));
+		    return(State_NCMAConnect);
+		}
 
 
 	 } /* end state_ncmainit */
@@ -318,7 +337,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 /*********************************************************************************
 
-    STATE_NCMANOCARD
+    +STATE_NCMANOCARD
 
  *********************************************************************************/
     case State_NCMANoCard: /* waiting for a smartcard to be inserted */
@@ -329,14 +348,33 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	         smartcard_status(NULL);
 	    	 return(State_NCMANoCard);
 
+	    case Trans_Timeout: /* user clicked 'Continue' with no card inserted */
+	    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Card check timer expired\n");
+	    	 pointless_button_clicked = 0;
+	    	 ncma_hourglass_off();
+	    	 return(State_NCMANoCard);
+
             case Trans_Registry: /* card activity */
 
 #ifdef POINTLESS_BUTTONS
-       		 if(run_from_powerup == 0) return(State_NCMANoCard);
+       		 if((run_from_powerup | pointless_button_clicked)==0) return(State_NCMANoCard);
+       		 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: cancel card scan timer\n");
+       		 canceltimeout();
        		 /* else deliberate fall through to next case */
 
             case Trans_URLSmartcardAck:
             case Trans_URLStart: /* repeat click on "continue" from cancel setup screen */
+
+                 if(!pointless_button_clicked) { /* continue not already pressed */
+                     pointless_button_clicked = 1;
+                     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Got click\n");
+                     ncma_hourglass_on();
+                     if(!smartcard_present()) {
+                         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no card ; starting timer\n");
+                         settimeout(CARD_SCAN_TIMEOUT);
+                         return(State_NCMANoCard);
+                     }
+                 }
 
                  if(!smartcard_present()) {
                      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: pointless button clicked with no scard inserted - ignoring\n");
@@ -346,15 +384,20 @@ NCMA_STATE machine(NCMA_TRANS trans)
                  if(!smartcard_valid()) {
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: invalid smartcard - bailing\n");
 		    ncma_dbox_open(URL_PATH(invalid.html));
+                    ncma_hourglass_off();
+                    pointless_button_clicked = 0;
 		    return(State_NCMABadCard);
 		}
 
+
 		if(smartcard_pin_protected()) {
+                    ncma_hourglass_off();
+                    pointless_button_clicked = 0;
 		    card_attempts = smartcard_blocked();
 		    if(card_attempts>0) {
 #ifdef CHIMPANZEE_INTERFACE
        		      default_pin();
-       		      if(virgin_smartcard()) goto proceed_after_pin; /* see top for explanation of this */
+       		      //if(virgin_smartcard()) goto proceed_after_pin; /* see top for explanation of this */
        		      return(State_NCMADefaultPIN);
 #else
 
@@ -369,10 +412,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		    }
 		}
 
-
-
 #else
-
+		/* NOT POINTLESS_BUTTONS */
 
 		if(!registry_status_changed(BB_STATUS_LOCKED)) {
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: not ready reading PIN status\n");
@@ -386,11 +427,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		}
 
 	    	if(registry_status_asserted(BB_STATUS_LOCKED)) { /* PIN protected */
+
 	    	    card_attempts = smartcard_blocked();
 	    	    if(card_attempts>0) {
 #ifdef CHIMPANZEE_INTERFACE
        		      default_pin();
-       		      if(virgin_smartcard()) got proceed_after_pin; /* see top for explanation of this */
+       		      //if(virgin_smartcard()) goto proceed_after_pin; /* see top for explanation of this */
        		      return(State_NCMADefaultPIN);
 #else
  		      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected (%d attempts) - fetching page\n", card_attempts);
@@ -412,6 +454,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
                      return(State_NCMABadCard);
                 }
 #endif
+		/* ENDIF POINTLESS_BUTTONS */
+
 
 		goto proceed_after_pin;
 
@@ -421,6 +465,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
             	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: bad card re-inserted\n");
             	 ncma_dbox_open(URL_PATH(damaged.html));
+#ifdef POINTLESS_BUTTONS
+                 ncma_hourglass_off();
+                 pointless_button_clicked = 0;
+#endif
             	 return(State_NCMABadCard);
          } /* end state_ncmanocard */
          break;
@@ -467,7 +515,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  }
 		  /* default PIN succeeded */
 	     	  if(registry_status_clear(BB_STATUS_LOCKED) && registry_status_clear(BB_STATUS_AUTHFAIL)) { /* PIN was right */
-	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN succeeeded\n");
+	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN succeeded\n");
                       strncpy(old_chv_pin, chv_pin, chv_pin_size);
                       old_chv_pin_size = chv_pin_size;
 
@@ -555,9 +603,15 @@ NCMA_STATE machine(NCMA_TRANS trans)
                   return(State_NCMAApresPIN);
                 }
 
-		ncma_dbox_open(URL_PATH(connect.html));
-		return(State_NCMAConnect);
-	 }
+		if(ram_empty() && !nvram_empty()) {
+		    ncma_dbox_open(URL_PATH(moved.html));
+		    return(State_NCMAMoved);
+		} else {
+		    ncma_dbox_open(URL_PATH(connect.html));
+		    return(State_NCMAConnect);
+		}
+
+ 	 }
 	 break;
 #endif
 
@@ -632,7 +686,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		        goto call_relationship_server;
 		       } else { /* RAM empty, but NVRAM isn't */
 		         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: NVRAM details available\n");
-		         ncma_dbox_open(URL_PATH(moved.html)); /* find out whether we've moved or not */
+			 if(box_moved) {
+			     goto call_relationship_server;
+			 } else {
+			     copy_nvram_to_ram();
+			     goto connect_from_ram;
+			 }
 		         return(State_NCMAMoved);
 		       }
 
@@ -680,10 +739,9 @@ NCMA_STATE machine(NCMA_TRANS trans)
                      break;
 
                 case Trans_URLConnectNak:
-                     prevent_shutdown = 0;
-                     ncma_url_open(BLANK_SCREEN_URL);
-                     shutdown_nc();
-                     return(State_NCMAShutdown);
+		     ncma_url_open(WELCOME_SCREEN_URL);
+     		     run_from_powerup = 0;
+             	     return(State_NCMAInit);
                      break;
          } /* end state_ncmaconnect */
          break;
@@ -840,8 +898,17 @@ NCMA_STATE machine(NCMA_TRANS trans)
              	  return(State_NCMADownload);
              	  break;
 
-             case Trans_URLDownloadSched:
              case Trans_URLDownloadNak:
+             	  ncma_hangup();
+             	  return(State_NCMADownload);
+
+             case Trans_HUP:
+             	  ncma_url_open(WELCOME_SCREEN_URL);
+             	  run_from_powerup = 0;
+             	  return(State_NCMAInit);
+
+             case Trans_URLDownloadSched:
+
              	  prevent_shutdown = 0;
              	  shutdown_nc();
              	  return(State_NCMAShutdown);
@@ -884,8 +951,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
          switch(trans) {
 
              case Trans_URLShutdown:
+             case Trans_Shutdown:
                   prevent_shutdown = 0;
                   shutdown_nc();
+                  ncma_dbox_close();
                   if(ui_present()) ncma_url_gsopen(TOPLEVEL_UI_URL);
                   else ncma_url_open(BLANK_SCREEN_URL);
                   return(State_NCMAShutdown);
@@ -1079,14 +1148,17 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	 switch(trans) {
 
     	     case Trans_URLMovedNak:
-    	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: box not moved - connecting from NVRAM\n");
-    	     	  copy_nvram_to_ram();
-    	     	  goto connect_from_ram;
+    	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: box not moved\n");
+    	     	  box_moved = 0;
+		  ncma_dbox_open(URL_PATH(connect.html));
+		  return(State_NCMAConnect);
     	     	  break;
 
     	     case Trans_URLMovedAck:
-    	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: box moved - calling RelServer\n");
-    	     	  goto call_relationship_server;
+    	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: box moved\n");
+    	     	  box_moved = 1;
+    	     	  ncma_dbox_open(URL_PATH(connect.html));
+    	     	  return(State_NCMAConnect);
     	     	  break;
     	 }
 
