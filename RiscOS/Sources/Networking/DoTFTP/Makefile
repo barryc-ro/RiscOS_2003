@@ -33,7 +33,7 @@ SOURCE    = s.DoTFTP
 OBJECT    = o.DoTFTP
 TARGET    = rm.DoTFTP
 
-.s.o:;      ${AS} ${AFLAGS} $< $@
+.s.o:;      ${AS} ${ASFLAGS} $< $@
 
 #
 # Generic rules:
