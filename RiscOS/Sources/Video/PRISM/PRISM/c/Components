@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include <kernel.h>
 #include <swis.h>
@@ -28,6 +29,7 @@
 #include "PRISM.h"
 
 #include "Lists.h"
+#include "PRISMErr.h"
 #include "Utils.h"
 
 #include "Components.h"
@@ -38,7 +40,8 @@ static component * component_list = NULL;
 
 /* Local functions */
 
-static component * components_find_by_id (unsigned int id);
+static _kernel_oserror * components_print_subset  (unsigned int mask, unsigned int match, const char * t1, const char * t2);
+static const char      * components_return_status (const component * compo);
 
 /**************************************************************/
 /* components_print_list()                                    */
@@ -109,6 +112,171 @@ _kernel_oserror * components_print_list(void)
 }
 
 /**************************************************************/
+/* components_return_status()                                 */
+/*                                                            */
+/* Return the status of a given component.                    */
+/*                                                            */
+/* Parameters: Pointer to the relevant component structure.   */
+/*                                                            */
+/* Returns:    Pointer to a MessageTrans token to look up for */
+/*             the relevant status string.                    */
+/**************************************************************/
+
+const char * components_return_status(const component * compo)
+{
+  component * find  = component_list;
+  bool        found = false;
+
+  /* Are there zeros where none are expected? */
+
+  if (
+       (compo->prism_id & 0x00fff000) == 0 ||
+       (compo->prism_id & 0xff000000) == 0
+     )
+     return "PStS4"; /* "Unknown" */
+
+  /* Is this a protocol module? */
+
+  if ((compo->prism_id & 0xfff) != 0)
+  {
+    unsigned int parent_id = compo->prism_id & 0xfffff000;
+
+    while (find != NULL)
+    {
+      if (find->prism_id == parent_id)
+      {
+        found = true;
+        break;
+      }
+
+      find = find->next;
+    }
+
+    if (found == false) return "PStS3"; /* "Asleep" */
+  }
+
+  /* Since there is no concept of active yet, return "Idle" */
+
+  return compo->clients == 0 ? "PStS1" /* "Idle" */ : "PStS2" /* "Active" */; 
+}
+
+/**************************************************************/
+/* components_print_subset()                                  */
+/*                                                            */
+/* Print a subset of the component list in a space format     */
+/* appropriate for "*PRISMStatus".                            */
+/*                                                            */
+/* Parameters: Mask to apply to PRISM ID of each component;   */
+/*                                                            */
+/*             Value to match after masking in order to print */
+/*             this item;                                     */
+/*                                                            */
+/*             Messages token for string to print before the  */
+/*             list is shown;                                 */
+/*                                                            */
+/*             Messages token for string to print if nothing  */
+/*             is found given the mask and match numbers.     */
+/**************************************************************/
+
+static _kernel_oserror * components_print_subset(unsigned int mask, unsigned int match, const char * t1, const char * t2)
+{
+  bool              found  = false;
+  const component * compo;
+  const char      * buffer = NULL;
+  size_t            len;
+  char              local[12];
+
+  /* Show the heading */
+
+  RetError(read_message(t1, &buffer, &len));
+  printf("%.*s\n\n", len, buffer);
+
+  /* List the required subset */
+
+  found = false;
+
+  for (compo = component_list; compo; compo = compo->next)
+  {
+    if ((compo->prism_id & mask) == match)
+    {
+      if (found == false)
+      {
+        /* Get the header "PRISM ID  SWI base" etc. */
+
+        buffer = NULL;
+        RetError(read_message("PSt01", &buffer, &len));
+        printf("%.*s\n", len, buffer);
+
+        /* Print 79 '=' signs (pre-assumes an 80 column or wider display) */
+
+        for (len = 0; len < 9; ++len) printf("========");
+        printf("=======\n");
+
+        found = true;
+      }
+
+      buffer = NULL;
+      RetError(read_message(components_return_status(compo), &buffer, &len));
+
+      if (len > sizeof(local) - 1) len = sizeof(local) - 1;
+      strncpy(local, buffer, len);
+      local[len] = '\0';
+
+      printf("&%08X  %-11s  %03d  %s\n",
+             compo->prism_id,
+             local,
+             compo->clients,
+             compo->info);
+    }
+  }
+
+  /* None found? Complain */
+
+  if (found == false)
+  {
+    buffer = NULL;
+    RetError(read_message(t2, &buffer, &len));
+    printf("%.*s\n", len, buffer);
+  }
+
+  return NULL;
+}
+
+/**************************************************************/
+/* components_print_status()                                  */
+/*                                                            */
+/* Print a list of currently registered components and their  */
+/* current status, as for "*PRISMStatus".                     */
+/**************************************************************/
+
+_kernel_oserror * components_print_status(void)
+{
+  const char * buffer = NULL;
+  size_t       len;
+
+  if (component_list == NULL)
+  {
+    RetError(read_message("PCo00", &buffer, &len));
+
+    /* Print it - length-limit as we're using MessageTrans_Lookup */
+    /* (albeit indirectly) in its "give us the buffer" mode, so   */
+    /* the string is terminated by char 10 rather than NUL.       */
+
+    printf("%.*s\n", len, buffer);
+  }
+  else
+  {
+    /* Show each section */
+
+    RetError(components_print_subset(0xff000000, PRISM_Class_PFC, "PStPFC", "PStPF0")); printf("\n");
+    RetError(components_print_subset(0xff000000, PRISM_Class_SI,  "PStSI",  "PStS0" )); printf("\n");
+    RetError(components_print_subset(0xff000000, PRISM_Class_PTL, "PStPTL", "PStPT0"));
+  }
+
+  return NULL;
+}
+
+/**************************************************************/
 /* components_find_by_id()                                    */
 /*                                                            */
 /* Find a registered component by its PRISM ID.               */
@@ -119,7 +287,7 @@ _kernel_oserror * components_print_list(void)
 /*             or NULL if not found.                          */
 /**************************************************************/
 
-static component * components_find_by_id(unsigned int id)
+component * components_find_by_id(unsigned int id)
 {
   component * c = component_list;
 
@@ -184,7 +352,15 @@ _kernel_oserror * components_component_register(_kernel_swi_regs * r)
   }
   else
   {
-    RetError(lists_add_to_tail((void **) &component_list, (void *) &added, sizeof(component)));
+    component * find = component_list;
+
+    while (find != NULL)
+    {
+      if (find->prism_id < r->r[2]) find = find->next;
+      else break;
+    }
+
+    RetError(lists_add_at_given((void **) &component_list, (void *) &added, (void *) find, sizeof(component)));
   }
 
   added->prism_id = r->r[2];
@@ -210,15 +386,16 @@ _kernel_oserror * components_component_register(_kernel_swi_regs * r)
 
 _kernel_oserror * components_component_deregister(_kernel_swi_regs * r)
 {
-  component * c = components_find_by_id(r->r[2]);
+  component * c;
 
   dprintf(("Components",
            "components_component_deregister: Called (&%08X, &%08X)\n",
            r->r[1],
            r->r[2]));
 
-  if      (c == NULL)              return make_error(prism_ERROR_PRISM_ID_NOT_KNOWN,     0);
-  else if (c->swi_base != r->r[1]) return make_error(prism_ERROR_COMPONENT_SWI_ID_CLASH, 0);
+  c = components_find_by_id(r->r[2]);
+
+  if (c == NULL) return make_error(prism_ERROR_PRISM_ID_NOT_KNOWN,     0);
 
   dprintf(("Components",
            "components_component_deregister: Exitting through lists_remove()\n"));
