@@ -52,7 +52,7 @@ resources:
 ${TARGET}: ${SOURCE} s.TokHelpSrc
         ${AS} ${ASFLAGS} ${SOURCE}
 
-s.TokHelpSrc: Hdr:Tokens HelpSrc
-        tokenise Hdr:Tokens HelpSrc s.TokHelpSrc
+s.TokHelpSrc: Hdr:Tokens s.HelpSrc
+        tokenise Hdr:Tokens s.HelpSrc s.TokHelpSrc
 
 # Dynamic dependencies:
