@@ -21,6 +21,9 @@
 #                     and correct "3.50" to "350".
 # 10-Aug-98      SNB  Added DDEUtils source and removed binary imports.
 # 04-Oct-99      SNB  Removed dependency on Support lib.
+# 22-Nov-99      SNB  Removed DDEUtils: now in RiscOS/Sources/Programmer/DDEUtils
+
+EXP_HDR = <export$dir>
 
 #
 # Program specific options:
@@ -71,11 +74,7 @@ MODULES = \
       310.Modules.Network.URL.URL \
       310.Modules.SCSIFiler \
       310.Modules.SerialUtil \
-      ${DDEUTILS} \
       370.Modules.DDT
-
-DDEUTILS =\
- rm.DDEUtils
 
 FILES =\
  ${LDIR}.!Boot\
@@ -129,14 +128,12 @@ install: ${FILES}
         ${CP} 310.Modules.ABIMod           ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.BASIC64          ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.Colours          ${INSTDIR}.310.Modules.* ${CPFLAGS}
-        ${CP} ${DDEUTILS}                  ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.DDT              ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.FrontEnd         ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.SCSIFiler        ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.SerialUtil       ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.Network.URL.File ${INSTDIR}.310.Modules.Network.URL.* ${CPFLAGS}
         ${CP} 310.Modules.Network.URL.URL  ${INSTDIR}.310.Modules.Network.URL.* ${CPFLAGS}
-        ${CP} ${DDEUTILS}                  ${INSTDIR}.370.Modules.* ${CPFLAGS}
         ${CP} 370.Modules.DDT              ${INSTDIR}.370.Modules.* ${CPFLAGS}
         ${CP} Modules.SSound               ${INSTDIR}.Modules.*     ${CPFLAGS} # shouldn't be in here
         |
@@ -154,7 +151,6 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} od.* ${WFLAGS}
-        ${RM} ${DDEUTILS}
         ${RM} abs.SysPaths
         @echo ${COMPONENT}: cleaned
 
@@ -171,12 +167,15 @@ clean_all:
         Access ${INSTDIR}.350.Modules.* rw/
         -Destroy ${OBJS} ${OBJSD} abs.SysPaths ${INSTDIR}.!Boot \
               ${INSTDIR}.!Help ${INSTDIR}.!Run ${INSTDIR}.!Sprites \
-              ${INSTDIR}.!Sprites22 ${INSTDIR}.SysPaths ${DDEUTILS} o.DDEUtils 
+              ${INSTDIR}.!Sprites22 ${INSTDIR}.SysPaths 
         Wipe ${INSTDIR}.200 ${WFLAGS}R
         Wipe ${INSTDIR}.300 ${WFLAGS}R
         Wipe ${INSTDIR}.310 ${WFLAGS}R
         Wipe ${INSTDIR}.350 ${WFLAGS}R
         @echo ${COMPONENT}: cleaned
+
+export: ${EXPORTS}
+        @echo ${COMPONENT}: export complete
 
 #
 # Static dependencies:
@@ -187,9 +186,6 @@ abs.SysPaths: ${OBJS} ${LIBS} ${CLIB}
 
 abs.SysPathsD: ${OBJSD} ${LIBS} ${CLIB}
         ${LD} -o $@ -debug ${OBJSD} ${LIBS} ${CLIB}
-
-${DDEUTILS}: o.DDEUtils
-	${LD} -m -o $@ o.DDEUtils
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
