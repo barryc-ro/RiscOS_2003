@@ -49,9 +49,10 @@ extern int system();
 /* Compile-time configuration */
 #define  COLON            1     /* anything < ' ' bar EOF, 0 and '\n' */
 #define  COLONCOLON       2
-#define  EQUALS           3
-#define  DOTEQUALS        4
+#define  EQUALS           3     /* recursively expanded definition */
+#define  QUERYEQUALS      4     /* conditional recursively expanded definition */
 #define  PLUSEQUALS       5
+#define  COLONEQUALS      6     /* simply expanded definitions */
 #define  MAXDIRS        512     /* IDJ:18-Oct-94:bug-fix AQU-00041: was 100 */
 #define  MAXVPATHS      100     /* VPATH elements */
 #define  NODETABSZ      257     /* hash table size for node table */
@@ -65,6 +66,7 @@ extern int system();
 #define  MACRODEPTH      10
 #define  CMDLENLIM      255     /* imposed by RISC OS / Arthur, worse luck */
 #define  INCLUDEDEPTH    32     /* Limit on nesting of included sub-makefiles */
+#define  SUBSTDEPTH       2     /* Maximum of one substitution in force at once */
 
 /* Node state flags */
 #define  PROCESSED        1     /* Set if a node is up to date */
@@ -133,22 +135,39 @@ typedef struct
 } Makefile;
 #endif
 
+typedef struct {
+  char *pre;
+  char *post;
+  int pre_len;
+  int post_len;
+  int has_percents;
+  char *pop;
+} pattern_substitution;
+
+typedef struct {
+  int idx;
+  pattern_substitution patterns[1];
+} pattern_table;
+
+
 /* Amu state flags */
-#define TOUCHING          1     /* amu -t */
-#define HAS_CYCLES        2
-#define GETTING_CMD       4
-#define IN_MACRO          8
-#define IGNORE_RC        16     /* Amu -i, .IGNORE */
-#define CONTINUE         32     /* Amu -k */
-#define NO_ACTION        64     /* Amu -n */
-#define SILENT          128     /* Amu -s, .SILENT */
-#define UNIX_NAMES      256     /* set by .UNIXNAMES */
-#define CMDS_OUTPUT     512     /* set if any cmds have been sent to 'out' */
-#define STATE_REASONS  1024     /* State reasons without -n */
-#define USE_GETENV     2048     /* Try environment if macros are undefined */
+#define TOUCHING       (1<<0)    /* amu -t */
+#define HAS_CYCLES     (1<<1)
+#define GETTING_CMD    (1<<2)
+#define IN_RE_MACRO    (1<<3)    /* Parsing value of a recursively expanded macro */
+#define IN_SE_MACRO    (1<<4)    /* Parsing value of a sinply expanded macro */
+#define IGNORE_RC      (1<<5)    /* Amu -i, .IGNORE */
+#define CONTINUE       (1<<6)    /* Amu -k */
+#define NO_ACTION      (1<<7)    /* Amu -n */
+#define SILENT         (1<<8)    /* Amu -s, .SILENT */
+#define UNIX_NAMES     (1<<9)    /* set by .UNIXNAMES */
+#define CMDS_OUTPUT    (1<<10)   /* set if any cmds have been sent to 'out' */
+#define STATE_REASONS  (1<<11)   /* State reasons without -n */
+#define USE_GETENV     (1<<12)   /* Environment variables override file macros */
+
 /* The debugging values must be last, to allow -x -x -x to simply be additive */
-#define DEBUGGING      4096     /* set if debugging */
-#define DEBUGGING2     8192     /* very detailed debugging */
+#define DEBUGGING      (1<<24)   /* set if debugging */
+#define DEBUGGING2     (1<<25)   /* very detailed debugging */
 
 static int dir_sep = '.';
 
@@ -181,13 +200,20 @@ static Node *default_rule;
 static char *ebuf, *ebufbase;
 static int  ebuflen;
 
-static HashTable node_tab, dir_tab, tag_tab;
+static HashTable node_tab, dir_tab, tag_tab, cli_tab;
+static pattern_table patterns;
 
 static int  n_dirs, n_vpaths;
 static char **dirs, **vpaths;
 static Node *nodep, *nodeq;
 static char *vpathbuf;
 
+/* Support for GNU name keyword "override" */
+static int temporary_override;
+
+static int strong_definitions = ~0;
+
+static void getch(void);
 static void get_string(
 #ifdef __STDC__
                        char *buffer, int maxlen, int termchar
@@ -233,7 +259,7 @@ static void dde_exit(void)
     }
 }
 
-static void define_macro(char *name, char *value);
+static void define_macro(char *name, char *value, int strong);
 
 static void prefix_init(char *fname)
 {
@@ -246,7 +272,7 @@ static void prefix_init(char *fname)
     {  char *ldot = strrchr(prefix, dir_sep);
        if (ldot)
        {  *ldot=0;
-          define_macro("MAKEFILEDIR", prefix);
+          define_macro("MAKEFILEDIR", prefix, 0);
        }
     }
 
@@ -400,6 +426,19 @@ static void push_include(char *name, int includeline, char *ptr)
 }
 #endif
 
+static void push_macro_direct(char *value)
+{
+  if (macro_depth < MACRODEPTH)
+  {
+    macro_stack[macro_depth++] = macro;
+    macro = value;
+  }
+  else
+  {
+    err_fail("macro invocations nested too deeply (> %u)", MACRODEPTH);
+  }
+}
+
 static void push_macro(name)
 char *name;
 {
@@ -407,12 +446,14 @@ char *name;
 
   if (!hash_lookup(tag_tab, name, &h))
   {
+    char *env = getenv(name);
+
     if (amu_flags & DEBUGGING) err_report("INVOKE (undef): %s", name);
-    if (amu_flags & USE_GETENV) {
-      char *env = getenv(name);
-      if (env) {
-        define_macro(name, env);
-      }
+    if (env) {
+      /* Enter this environment variable into the macro table, marking it as
+       * indelible if we are using environment override.
+       */
+      define_macro(name, env, amu_flags & USE_GETENV & strong_definitions);
     }
 
     if (!hash_lookup(tag_tab, name, &h)) {
@@ -421,26 +462,117 @@ char *name;
     }
   }
 
-  if (macro_depth < MACRODEPTH)
-  {
-    macro_stack[macro_depth++] = macro;
-    macro = hash_value(tag_tab, h);
-    if (amu_flags & DEBUGGING) err_report("INVOKE: %s = %s", name, macro);
+  push_macro_direct(hash_value(tag_tab, h));
+  if (amu_flags & DEBUGGING) err_report("INVOKE: %s = %s", name, macro);
+}
+
+static void define_macro(name, value, strong)
+char *name, *value;
+int strong;
+{
+  HashId h;
+  int existed;
+
+  existed = !hash_enter(tag_tab, name, &h);
+  if (!strong) {
+    /* We weren't trying a strong definition (ie. a CLI definition), so prefer
+     * to not knock out existing entries, and prefer to read the environment if
+     * USE_GETENV if set (amu -e).
+     */
+    if (existed && !temporary_override) {
+      /* We are attempting a non-strong definition - was the existing definition
+       * strong?  if so, we prefer the existing definition unless temporary_override
+       * was set (by the GNU-make override directive).
+       */
+      HashId s;
+      if (hash_lookup(cli_tab, name, &s)) {
+        /* Prevent the re-definition! */
+        if (amu_flags & DEBUGGING)
+          err_report("REDEFINE **BLOCKED**: %s = %s", name, value);
+        return;
+      }
+    }
+    else if (amu_flags & USE_GETENV) {
+      char *env_value = getenv(name);
+      if (env_value) value = env_value;
+    }
   }
-  else
-  {
-    err_fail("macro invocations nested too deeply (> %u)", MACRODEPTH);
+  hash_assoc(tag_tab, h, Strdup_fail(value));
+  if (strong) {
+    (void) hash_enter(cli_tab, name, &h);
+  }
+  if (amu_flags & DEBUGGING) {
+    err_report("DEFINE: %s = %s%s", name, value,
+      strong ? " **FUTURE REDEFINITIONS LOCKED OUT**":"");
   }
 }
 
-static void define_macro(name, value)
-char *name, *value;
+static int one_percent(const char *s)
 {
-  HashId h;
+  char *next_percent = strchr(s, '%');
+  return next_percent && !strchr(next_percent + 1, '%');
+}
 
-  (void) hash_enter(tag_tab, name, &h);
-  hash_assoc(tag_tab, h, Strdup_fail(value));
-  if (amu_flags & DEBUGGING) err_report("DEFINE: %s = %s", name, value);
+static void push_substitution(char *pre, char *post)
+{
+  if (patterns.idx >= SUBSTDEPTH) {
+    err_fail("Too many substitutions");
+  }
+  else {
+    char *emacro = NULL;
+    int depth;
+
+    if (amu_flags & DEBUGGING) err_report("push_substitution(%s,%s)", pre, post);
+
+    for (depth = macro_depth - 1; depth > 0; --depth) {
+      if (macro_stack[depth]) {
+        emacro = macro_stack[depth-1]+1;
+        break;
+      }
+    }
+
+    patterns.patterns[patterns.idx].has_percents = one_percent(pre) && one_percent(post);
+    patterns.patterns[patterns.idx].pop = emacro;
+    patterns.patterns[patterns.idx].pre_len = strlen(pre);
+    patterns.patterns[patterns.idx].post_len = strlen(post);
+    patterns.patterns[patterns.idx].pre = Strdup_fail(pre);
+    patterns.patterns[patterns.idx].post = Strdup_fail(post);
+
+    ++patterns.idx;
+  }
+}
+
+static void pop_substitution(void)
+{
+  if (amu_flags & DEBUGGING) err_report("pop_substitution");
+  if (patterns.idx > 0) {
+    --patterns.idx;
+    free(patterns.patterns[patterns.idx].pre);
+    free(patterns.patterns[patterns.idx].post);
+  }
+}
+
+static int try_substitution(char *buffer, int tch)
+{
+  char *colon, equals[MACROLEN];
+
+  if ((colon = strchr(buffer, ':')) == NULL) return 0;
+  *colon++ = '\0';
+
+  if (ch == EQUALS) {
+    /* In the middle of a IN_SE_MACRO definition */
+    getch();
+    get_string(equals, MACROLEN, tch);
+  }
+  else {
+    char *eqptr = strchr(colon, '=');
+    if (eqptr == NULL) return 0;
+    *eqptr = '\0';
+    (void) strcpy(equals, eqptr + 1);
+  }
+  push_substitution(colon, equals);
+  push_macro(buffer);
+  return 1;
 }
 
 static int getch0()
@@ -461,9 +593,20 @@ static int getch0()
       if (macro == NULL) break;
       ch0 = *macro++;
     }
+
+    while (macro && patterns.idx > 0 && macro == patterns.patterns[patterns.idx-1].pop) {
+      pop_substitution();
+    }
   }
   /* Input from the input file - first deal with lookahead */
-  if (nch0) {ch0 = nch0;  nch0 = 0;} else ch0 = getc(in);
+  if (nch0) {
+    ch0 = nch0;
+    nch0 = 0;
+  }
+  else {
+    ch0 = getc(in);
+    while (patterns.idx > 0) pop_substitution();
+  }
   splicing = 0;
   if (ch0 == '\\')
   { /* handle long logical lines spanning several physical lines */
@@ -487,6 +630,7 @@ static int getch0()
   return ch0;
 }
 
+
 static void getch()
 {
   int tch;
@@ -500,14 +644,15 @@ static void getch()
   { /* all other control chars translated to ' ' */
     ch = ' ';
   }
-  else if (!(amu_flags & IN_MACRO) && (ch == '$'))
+  else if (!(amu_flags & IN_RE_MACRO) && (ch == '$'))
   { /* macro invocation */
     nch = getch0();
     if ((nch == '(') || (nch == '{'))
-    { if (nch == '(') tch = ')'; else tch = '}';
+    {
+      if (nch == '(') tch = ')'; else tch = '}';
       ch = getch0();  nch = 0;
       get_string(name, NAMELEN, tch);
-      push_macro(name);
+      if (!try_substitution(name, tch)) push_macro(name);
       nch = getch0();
       getch();
     }
@@ -520,14 +665,14 @@ static void getch()
   { /* treat as end of line... */
     ch = '\n';  nch = ' ';
   }
-  else if (!((GETTING_CMD | IN_MACRO) & amu_flags))
+  else if (!((GETTING_CMD | IN_RE_MACRO | IN_SE_MACRO) & amu_flags))
   {
-    if (ch == '.')
+    if (ch == '.' || ch == '?')
     { /* Look for an = character */
       nch = getch0();
       if (nch == '=')
       {
-        ch = DOTEQUALS;
+        ch = QUERYEQUALS;
         nch = getch0();
       }
     }
@@ -540,8 +685,9 @@ static void getch()
         nch = getch0();
       }
     }
-    if (ch == '=')
+    if (ch == '=') {
       ch = EQUALS;
+    }
     else if (ch == ':')
     { /* ':' and '::' are only recognised if followed by wh-space or ';' */
       nch = getch0();
@@ -555,7 +701,7 @@ static void getch()
       }
       else if (nch == '=')
       {
-        ch = DOTEQUALS;
+        ch = COLONEQUALS;
         nch = getch0();
       }
       else if (isspace(nch) || (nch == ';')) ch = COLON;
@@ -573,6 +719,41 @@ static void skip_whitespace()
   while (ch == ' ' || ch == '\n') getch();
 }
 
+static int do_substitutions(char *buffer, int curr_len, int max_len)
+{
+  int sub;
+
+  for (sub = 0; sub < patterns.idx; ++sub) {
+    pattern_substitution *const p = &patterns.patterns[sub];
+    if (p->has_percents && 0) { /* Not implemented yet */
+      printf("WARNING: %% subst\n");
+      if (p->pre[0] == '%') {
+
+      }
+      else {
+      }
+    }
+    else {
+      int prefix = curr_len - p->pre_len;
+      if (prefix < 0) continue; /* word was not long enough! */
+      if (hash_cistrcmp(p->pre, &buffer[prefix]) == 0) {
+        /* Apply the substitution */
+        if (prefix + p->post_len >= max_len) {
+          strncpy(&buffer[prefix], p->post, max_len - prefix - 1);
+          buffer[max_len-1] = 0;
+        }
+        else {
+          strcpy(&buffer[prefix], p->post);
+          curr_len = prefix + p->post_len;
+          buffer[curr_len] = 0;
+        }
+      }
+    }
+  }
+
+  return curr_len;
+}
+
 static void get_string(s, max_len, extra_terminator)
 char *s;
 int max_len;
@@ -587,6 +768,7 @@ int extra_terminator;
   }
   if (j >= max_len) j = max_len -1;
   s[j] = 0;
+  do_substitutions(s, j, max_len);
 }
 
 static Cmd *get_cmds()
@@ -765,7 +947,7 @@ char *name;
 static void build_graph()
 {
   HashId h;
-  int j, nt, delete_suffix_list;
+  int j, nt, delete_suffix_list, recursive_vardefn, expanded_vardefn;
   Node *src, *target[MAXTARGETS];
   char name[NAMELEN];
 
@@ -778,31 +960,60 @@ static void build_graph()
 next_source_line:
     /* Assert: ch != EOF && ch != ' ' && ch != '\n' */
     nt = delete_suffix_list = 0;
+    temporary_override = 0;
     do
     {
       get_string(name, NAMELEN, 0);
       skip_spaces();
-      if ((nt == 0) && (ch == EQUALS || ch == PLUSEQUALS || ch == DOTEQUALS))
+      if ((nt == 0) && hash_cistrcmp(name, "OVERRIDE") == 0)
+     { /* override directive permits temporary override of -e */
+        temporary_override = 1;
+        continue;
+      }
+      recursive_vardefn = ch == EQUALS || ch == PLUSEQUALS || ch == QUERYEQUALS;
+      expanded_vardefn = ch == COLONEQUALS;
+      if ((nt == 0) && (recursive_vardefn || expanded_vardefn))
       { /* name = <rest-of-line> */
         const int c = ch;
         char macro_body[MACROLEN];
+
+        if (recursive_vardefn) {
+          /* Prevent expansion of macros whilst parsing this definition */
+          amu_flags |= IN_RE_MACRO;
+        }
+        else {
+          amu_flags |= IN_SE_MACRO;
+        }
+
         if (ch == PLUSEQUALS && hash_lookup(tag_tab, name, &h)) {
                 push_macro("__SPACE");
                 push_macro(name);
         }
         getch();
-        if (c != PLUSEQUALS) skip_spaces();
-        amu_flags |= IN_MACRO;
+        skip_spaces();
         j = 0;
         while (ch != '\n' && ch != EOF)
-        { if (j < MACROLEN) macro_body[j++] = ch;
+        {
+          if (j < MACROLEN) {
+            macro_body[j] = '\0';
+            if (ch == ' ' || ch == '\n') {
+              j = do_substitutions(macro_body, j, MACROLEN);
+            }
+            macro_body[j++] = ch;
+          }
           getch();
         }
         if (j >= MACROLEN) j = MACROLEN-1;
         macro_body[j] = 0;
-        amu_flags &= ~IN_MACRO;
-        if (c != DOTEQUALS || !hash_lookup(tag_tab, name, &h))
-          define_macro(name, macro_body);
+        amu_flags &= ~IN_RE_MACRO;
+        if (recursive_vardefn) {
+          amu_flags &= ~IN_RE_MACRO;
+        }
+        else {
+          amu_flags &= ~IN_SE_MACRO;
+        }
+        if (c != QUERYEQUALS || !hash_lookup(tag_tab, name, &h))
+          define_macro(name, macro_body, 0);
         skip_whitespace();
         goto next_source_line;
       }
@@ -1561,6 +1772,7 @@ static void initialise()
   dir_tab = hash_cinew(MAXDIRS);
   node_tab = hash_cinew(NODETABSZ);
   tag_tab = hash_cinew(TAGTABSZ);
+  cli_tab = hash_cinew(TAGTABSZ);
   dirs = (char **) malloc(MAXDIRS * sizeof(char *));
   vpaths = (char **) malloc(MAXVPATHS * sizeof(char *));
   now = filestamp_now();
@@ -1592,7 +1804,9 @@ static void give_help()
     "%s  [options] [target1 target2...]\n"
     "\n"
     "Options:-\n"
-    "-e Environment variables are read to resolve undefined macro invocations\n"
+    "-e Environment variables override macro definitions in the Makefile\n"
+    "-E Macro definitions in the Makefile override definitions on the command-line\n"
+    "   or in the environment (when -e is also specified)\n"
     "-f makefile\n"
     "   (makefile defaults to 'Makefile' if omitted).\n"
     "-i Ignore return codes from commands (equivalent to .IGNORE).\n"
@@ -1656,6 +1870,11 @@ char *argv[];
       if (arg[1] == 'D')
       {
         amu_flags |= STATE_REASONS;
+      }
+      else if (arg[1] == 'E')
+      {
+        strong_definitions = 0;          /* Prevent any new strong definitions */
+        cli_tab = hash_cinew(TAGTABSZ);  /* Wipe out the hash table - leaks, sorry */
       }
       else
       switch (safe_tolower(arg[1]))
@@ -1740,11 +1959,11 @@ default:  err_report("unrecognised option '%s'", arg);
         }
         *s++ = '\0';
         while (isspace(*s)) ++s;
-        define_macro(arg, s);
+        define_macro(arg, s, strong_definitions);
       }
       else
       { arg = real_file_name(arg, buf, NAMELEN);
-        targets[ntargets++] = strcpy(malloc(strlen(arg)+1), arg);
+        targets[ntargets++] = Strdup_fail(arg);
       }
     }
   }
@@ -1757,7 +1976,7 @@ default:  err_report("unrecognised option '%s'", arg);
 
 #ifdef NESTEDMAKEFILES
   push_include(in_file, 1, NULL);
-  define_macro("__SPACE", " ");
+  define_macro("__SPACE", " ", 1);
 #elif defined(DDE)
   {
     char *eof;
@@ -1772,7 +1991,7 @@ default:  err_report("unrecognised option '%s'", arg);
 
   s = NULL;
   if (argc > 1) s = strstr(_kernel_command_string(), argv[1]);
-  if (s != NULL) define_macro("MFLAGS", s);
+  if (s != NULL) define_macro("MFLAGS", s, 0);
 
   make_default_suffixes();
   build_graph();

@@ -12,6 +12,7 @@
 #
 # Paths
 #
+
 CLXDIR  = C:CLX
 LIBDIR  = ${INSTDIR}.Library.Acorn
 INSTAPP = ${INSTDIR}.Apps.!AMU
@@ -33,7 +34,7 @@ DIRS=o._dirs
 # Program specific options:
 #
 COMPONENT  = amu
-TARGET     = ${COMPONENT}
+TARGET     = amu
 
 OBJS       = amu.o
 LIBS       = ${CLXLIB} ${CLIB}
@@ -67,6 +68,7 @@ install: install_tool install_dirs
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
 	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
 	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
 install_dirs:
