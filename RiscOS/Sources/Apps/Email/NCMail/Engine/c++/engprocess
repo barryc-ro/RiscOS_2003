@@ -39,7 +39,7 @@
 Account *POPaccount, *SMTPaccount;
 Mailbox *inbox;
 SendQMailbox *outbox;
-bool newmail = false;
+bool newmail = false, sendpending = false;
 
 void ProcessDone(bool changed);
 void ReconcileMailbox(uint32 n);
@@ -122,7 +122,8 @@ void StartProcess(void)
 
   newmail = false;
   ourmboxin->flags &= ~MBOXINCOMPLETE;
-  StopCountDown();
+  StopTimeoutCount();
+  StopReconnectCount();
 
   /*
   ** Set up initial contexts depending on whether POP
@@ -131,7 +132,7 @@ void StartProcess(void)
 
   if (popstatus != acctnonexistent)
   {
-    popprocessstate.context = readytoexpunge;
+    popprocessstate.context = readytodisconnect;
     state |= PROCESSPOP;
     inbox = POPaccount->GetInbox();
   }
@@ -169,6 +170,24 @@ void DeadSMTP(bool b)
 }
 
 
+void CleanupOutbox(void)
+{
+
+  MessageDescriptor *msgptr, *nextptr;
+
+  dprintf(("Eng", "Cleaning up outbox\n"));
+  msgptr = ourmboxout->list;
+  while (msgptr)
+  {
+    nextptr = msgptr->next;
+    if (!FileExists(SetFilename(msgptr->ID, true)))
+      DestroyDescriptor(msgptr, ourmboxout);
+    msgptr = nextptr;
+  }
+
+}
+
+
 void DoSMTPProcess(void)
 {
 
@@ -181,22 +200,7 @@ void DoSMTPProcess(void)
 
       dprintf(("Eng", "SMTP context = readytosend\n"));
       smtpprocessstate.context = idle;
-      smtpprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
-      code = (eng_rcode) outbox->GetNumberMessages(smtpprocessstate.getnumobj);
-      if (code < 0)
-      {
-        smtpprocessstate.context = getnumfailure;
-        smtpprocessstate.rc = code;
-      }
-
-    case gotnumber :
-
-      dprintf(("Eng", "SMTP context = gotnumber\n"));
-      smtpprocessstate.context = idle;
-      n = smtpprocessstate.getnumobj->number_messages;
-      dprintf(("Eng", "Number of messages in send queue=%d\n",n));
-      RemoveObj((MBoxOpCB**) &smtpprocessstate.getnumobj);
-      if (true)
+      if (sendpending)
       {
         code = SMTPAccountConnect();
         if (code < 0)
@@ -211,14 +215,6 @@ void DoSMTPProcess(void)
         /* no messages in send queue, so don't connect */
         smtpprocessstate.context = disconnected;
       }
-
-      break;
-
-    case getnumfailure :
-
-      dprintf(("Eng", "SMTP context = getnumfailure\n"));
-      RemoveObj((MBoxOpCB**) &smtpprocessstate.getnumobj);
-      smtpprocessstate.context = disconnected;
 
       break;
 
@@ -265,8 +261,8 @@ void DoSMTPProcess(void)
       smtpprocessstate.context = idle;
       if (state & SEND)
       {
-        (*callbacklist.sendfunc)(ENG_SENDFAILED, callbacklist.sendhandle);
-        state &= ~SEND;
+        smtpprocessstate.rc = ENG_SENDFAILED;
+        smtpprocessstate.context = readytodisconnect;
       }
       else
         (*callbacklist.statusfunc)(smtpprocessstate.rc, callbacklist.statushandle, DeadSMTP);
@@ -275,16 +271,78 @@ void DoSMTPProcess(void)
 
     case smtpdone :
 
-      /*
-      ** SMTP process completed.
-      ** We need to alter following code to call
-      ** GetNumberMessages again to see if queue is now empty.
-      ** If it is, do an expunge. If not, report to UI?
-      */
       dprintf(("Eng", "SMTP context = smptdone\n"));
       RemoveObj((MBoxOpCB**) &smtpprocessstate.processobj);
-      smtpprocessstate.context = idle;
+      if (smtpstatus == acctconnected)
+      {
+        smtpprocessstate.context = idle;
+        smtpprocessstate.expungeobj = new MBoxOpCB_expunge((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
+        code = (eng_rcode) outbox->Expunge(smtpprocessstate.expungeobj);
+        dprintf(("Eng", "Expunging SMTP mailbox, rc=%d\n",code));
+
+        if (code < 0)
+        {
+          /* error expunging SMTP */
+          smtpprocessstate.context = expunged;
+        }
+      }
+      else
+        smtpprocessstate.context = disconnected;
+
+      break;
+
+    case expunged :
+
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.expungeobj);
+      smtpprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
+      code = (eng_rcode) outbox->GetNumberMessages(smtpprocessstate.getnumobj);
+      if (code < 0)
+      {
+        smtpprocessstate.context = getnumfailure;
+        smtpprocessstate.rc = code;
+      }
+
+      break;
+
+    case gotnumber :
+
+      dprintf(("Eng", "SMTP context = gotnumber\n"));
+      n = smtpprocessstate.getnumobj->number_messages;
+      dprintf(("Eng", "Number of messages still in send queue=%d\n",n));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.getnumobj);
+      smtpprocessstate.context = readytodisconnect;
+      if (n)
+      {
+        /* send has failed for some reason */
+        smtpprocessstate.rc = ENG_SENDFAILED;
+      }
+
+      else
+      {
+        /* all messages have been sent */
+        sendpending = false;
+        smtpprocessstate.rc = ENG_SENTMSG;
+      }
+
+      /*
+      ** We need to destroy descriptors and delete files 
+      ** for all messages that have been sent
+      */
+      
+      break;
+
+    case readytodisconnect :
+
       SMTPAccountDisconnect();
+
+      break;
+
+    case getnumfailure :
+
+      dprintf(("Eng", "SMTP context = getnumfailure\n"));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.getnumobj);
+      smtpprocessstate.context = readytodisconnect;
+
       break;
 
     case disconnected :
@@ -292,11 +350,12 @@ void DoSMTPProcess(void)
 
       dprintf(("Eng", "SMTP context = disconnected\n"));
       RemoveObj((MBoxOpCB**) &smtpprocessstate.disconnectobj);
+      CleanupOutbox();
       smtpstatus = acctcreated;
-      state &= ~(PROCESSSMTP + TIMEOUT);
+      state &= ~(TIMEOUT + PROCESSSMTP);
       if (state & SEND)
       {
-        (*callbacklist.sendfunc)(ENG_COMPLETED, callbacklist.sendhandle);
+        (*callbacklist.sendfunc)(smtpprocessstate.rc, callbacklist.sendhandle);
         state &= ~SEND;
       }        
       if ((state & DISCONNECT) && (!(state & PROCESSPOP)))
@@ -321,27 +380,35 @@ void DoPOPProcess(void)
 
   switch (popprocessstate.context)
   {
+
+    case readytodisconnect :
+
+      /* need to ensure we are disconnected before processing */
+      if (popstatus == acctcreated)
+      {
+        /* OK, we're not connected, go ahead */
+        dprintf(("Eng", "POP not connected\n"));
+        popprocessstate.context = readytoexpunge;
+      }
+
+      else
+      {
+        popprocessstate.context = idle;
+        POPAccountDisconnect();
+      }
+
+      break;        
+        
     case readytoexpunge :
 
       dprintf(("Eng", "POP context = readytoexpunge\n"));
-      /* it may be already connected... */
-      if (popstatus == acctconnected)
+      popprocessstate.context = idle;
+      markstate.context = idle;
+      POPAccountConnect();
+      if (code < 0)
       {
-        dprintf(("Eng", "Already connected\n"));
-        popprocessstate.context = connected;
-      }
-
-      /* ...but if not, connect to it if it exists */
-      else if (popstatus == acctcreated)
-      {
-        popprocessstate.context = idle;
-        markstate.context = idle;
-        POPAccountConnect();
-        if (code < 0)
-        {
-          popprocessstate.rc = ENG_POPCONNECTFAIL;
-          popprocessstate.context = connectfailure;
-        }
+        popprocessstate.rc = ENG_POPCONNECTFAIL;
+        popprocessstate.context = connectfailure;
       }
 
       break;
@@ -445,12 +512,15 @@ void DoPOPProcess(void)
       dprintf(("Eng", "POP context = disconnected\n"));
       RemoveObj((MBoxOpCB**) &popprocessstate.disconnectobj);
       popstatus = acctcreated;
-      state &= ~(PROCESSPOP + TIMEOUT);
-      if ((state & DISCONNECT) && (!(state & PROCESSSMTP)))
+      if (state & TIMEOUT)
+        state &= ~(PROCESSPOP + TIMEOUT);
+      else if ((state & DISCONNECT) && (!(state & PROCESSSMTP)))
       {
-        state &= ~DISCONNECT;
+        state &= ~(DISCONNECT + PROCESSPOP);
         DisconnectFromISP();
       }
+      else
+        popprocessstate.context = readytoexpunge;
 
       break;
 
@@ -555,7 +625,7 @@ void ReconcileMailbox(uint32 n)
      from mailbox's list, and destroy them */
 
   msgptr = ourmboxin->list;
-  dprintf(("Eng", "message list starts at 0x%x\n",ourmboxin->list));
+/*   dprintf(("Eng", "message list starts at 0x%x\n",ourmboxin->list)); */
   while (msgptr)
   {
     nextptr = msgptr->next;
@@ -566,7 +636,7 @@ void ReconcileMailbox(uint32 n)
       DestroyDescriptor(msgptr, ourmboxin);
     }
     else
-      dprintf(("Eng", "Message %d is on mailbox list\n",msgptr->ID));
+/*       dprintf(("Eng", "Message %d is on mailbox list\n",msgptr->ID)); */
     msgptr = nextptr;
   }
 
@@ -588,11 +658,11 @@ void ReconcileMailbox(uint32 n)
     {
       msglist.Next();
       obj = (Message *) msglist.Current();
-      dprintf(("Eng", "Examining message %d on mailbox list\n",i));
+/*       dprintf(("Eng", "Examining message %d on mailbox list\n",i)); */
       if (!OnOurList(obj))
       {
         /* must be an unknown message so create new descriptor */
-        dprintf(("Eng", "Message is not on our list\n"));
+/*         dprintf(("Eng", "Message is not on our list\n")); */
 
         if ((msgptr = NewDescriptor(0, tempmbox)) == 0)
         {
@@ -620,7 +690,6 @@ void ReconcileMailbox(uint32 n)
       }
     }
   }
-  dprintf(("Eng", "Total for mboxin %d, for tempmbox %d\n",ourmboxin->total,tempmbox->total));
 
   if (errorflag)
   {
@@ -914,8 +983,17 @@ void SendMessage(void)
   sendstate.context = idle;
   outbox = (SendQMailbox *) SMTPaccount->GetInbox();
   code = outbox->AddMessage(file, msg->to, msg->fromaddr);
-  dprintf(("Eng", "Added message to %s, from %s to send queue, rc=%d\n",msg->to,msg->fromaddr,code));
+  dprintf(("Eng", "Added message to %s, from %s, cc'd to %s, rc=%d\n",msg->to,msg->fromaddr,msg->cc,code));
+  if (code < 0)
+  {
+    /* error adding message to send queue */
+  }
 
+  LockFile(file);
+  sendpending = true;
+  UnlockFile(sendstate.bodyname);
+  remove(sendstate.bodyname);
+  free(sendstate.bodyname);
   if ((smtpstatus != acctnonexistent) && (online))
   {
     smtpprocessstate.context = readytosend;
@@ -924,7 +1002,7 @@ void SendMessage(void)
   else
   {
     state &= ~SEND;
-    (*callbacklist.sendfunc)(ENG_COMPLETED, callbacklist.sendhandle);
+    (*callbacklist.sendfunc)(ENG_ADDEDMSG, callbacklist.sendhandle);
   }
 
 }
