@@ -100,8 +100,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -112,31 +111,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	h.play_scode
-o.main:	OS:h.types
-o.main:	OS:h.os
-o.main:	OS:h.osspriteop
-o.main:	OS:h.osgbpb
-o.main:	C:h.replay
-o.main:	C:h.soundfile
-o.main:	h.utils
-o.play_scode:	c.play_scode
-o.play_scode:	h.play_scode
-o.play_scode:	OS:h.types
-o.play_scode:	OS:h.os
-o.play_scode:	OS:h.osspriteop
-o.play_scode:	OS:h.osgbpb
-o.play_scode:	C:h.replay
-o.play_scode:	C:h.soundfile
-o.utils:	c.utils
-o.utils:	h.utils
-o.utils:	h.play_scode
-o.utils:	OS:h.types
-o.utils:	OS:h.os
-o.utils:	OS:h.osspriteop
-o.utils:	OS:h.osgbpb
-o.utils:	C:h.replay
-o.utils:	C:h.soundfile
-o.utils:	C:h.kernel
