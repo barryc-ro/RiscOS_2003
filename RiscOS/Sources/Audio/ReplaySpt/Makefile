@@ -75,7 +75,8 @@ EXPORTS   = h.replay hdr.replay o.replay
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.h:;   ${CMHG} -d h.$* $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
@@ -102,17 +103,24 @@ o.replay: Documents.def.replay
 	${RM} viafile
 	${WIPE} Defmod ~cr
 
+o.main oz.main: h.modhdr
+
 #
 # RISC OS ROM build rules:
 #
 rom: ${TARGET} local_dirs
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: export_${PHASE}
+
+export_hdrs: h.replay hdr.replay
         ${CP} h.replay ${EXP_HDR}.h.replay ${CPFLAGS}
         ${CP} hdr.replay ${EXP_HDR1}.replay ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (hdrs)
+
+export_libs: o.replay
         ${CP} o.replay ${EXP_HDR}.o.replay ${CPFLAGS}
-        @echo ${COMPONENT}: export complete
+        @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -128,7 +136,10 @@ clean:
         ${IGNORE} ${WIPE}    linked.${COMPONENT} ${WFLAGS}
         ${IGNORE} ${WIPE}    map.${COMPONENT} ${WFLAGS}
         ${IGNORE} ${RM}      ${TARGET}
-	${IGNORE} ${RM} oz
+	${RM} h.modhdr
+	${RM} h.replay
+	${RM} hdr.replay
+	${RM} o.replay
         @echo ${COMPONENT}: cleaned
 
 local_dirs:
@@ -136,7 +147,8 @@ local_dirs:
 
 resources:
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.Messages ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -148,161 +160,14 @@ ${TARGET}: ${ROMOBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS}
-        ${TLD} -o $@ -module ${OBJS}
+rm.${COMPONENT}: ${OBJS} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 # Dynamic dependencies:
-o.resourcesz: s.resources
-o.resourcesz: hdr:ListOpts
-o.resourcesz: hdr:Macros
-o.resourcesz: hdr:System
-o.resourcesz: Hdr:SWIs
-o.resourcesz: Hdr:CPU.Generic26
-o.resourcesz: Hdr:IO.GenericIO
-o.resourcesz: Hdr:RISCOS
-o.resourcesz: hdr:ModHand
-o.resourcesz: hdr:MsgTrans
-o.resourcesz: hdr:ResourceFS
-o.resourcesz: hdr:Proc
-o.resources: s.resources
-o.resources: hdr:ListOpts
-o.resources: hdr:Macros
-o.resources: hdr:System
-o.resources: Hdr:SWIs
-o.resources: Hdr:CPU.Generic26
-o.resources: Hdr:IO.GenericIO
-o.resources: Hdr:RISCOS
-o.resources: hdr:ModHand
-o.resources: hdr:MsgTrans
-o.resources: hdr:ResourceFS
-o.resources: hdr:Proc
-o.main:	c.main
-o.main:	C:h.swis
-o.main:	C:h.kernel
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.resourcefs
-o.main:	h.modhdr
-o.main:	h.main
-o.main:	h.replay
-o.main:	OS:h.osspriteop
-o.main:	h.msgs
-o.main:	h.resources
-o.main:	h.soundplay
-o.main:	C:h.soundfile
-o.main:	OS:h.osgbpb
-o.main:	h.play
-o.main:	h.utils
-o.main:	h.stream
-o.main:	OS:h.osfile
-o.muldiv: s.muldiv
-o.access:	c.access
-o.access:	h.msgs
-o.access:	OS:h.os
-o.access:	OS:h.types
-o.access:	h.replay
-o.access:	OS:h.osspriteop
-o.access:	h.utils
-o.access:	h.stream
-o.access:	OS:h.osfile
-o.access:	OS:h.fileswitch
-o.access:	h.main
-o.arhdr:	c.arhdr
-o.arhdr:	h.replay
-o.arhdr:	OS:h.types
-o.arhdr:	OS:h.os
-o.arhdr:	OS:h.osspriteop
-o.arhdr:	h.arline
-o.arhdr:	h.main
-o.arhdr:	h.msgs
-o.arhdr:	h.stream
-o.arhdr:	OS:h.osfile
-o.arhdr:	OS:h.fileswitch
-o.arhdr:	h.utils
-o.arinfo:	c.arinfo
-o.arinfo:	h.msgs
-o.arinfo:	OS:h.os
-o.arinfo:	OS:h.types
-o.arinfo:	h.replay
-o.arinfo:	OS:h.osspriteop
-o.arinfo:	h.utils
-o.arinfo:	h.stream
-o.arinfo:	OS:h.osfile
-o.arinfo:	OS:h.fileswitch
-o.arinfo:	h.main
-o.arsnd:	c.arsnd
-o.arsnd:	h.msgs
-o.arsnd:	OS:h.os
-o.arsnd:	OS:h.types
-o.arsnd:	h.replay
-o.arsnd:	OS:h.osspriteop
-o.arsnd:	h.utils
-o.arsnd:	h.stream
-o.arsnd:	OS:h.osfile
-o.arsnd:	OS:h.fileswitch
-o.arsnd:	h.main
-o.arsndcode:	c.arsndcode
-o.arsndcode:	C:h.swis
-o.arsndcode:	C:h.kernel
-o.arsndcode:	OS:h.osfile
-o.arsndcode:	OS:h.types
-o.arsndcode:	OS:h.os
-o.arsndcode:	OS:h.fileswitch
-o.arsndcode:	h.msgs
-o.arsndcode:	h.utils
-o.arsndcode:	h.stream
-o.arsndcode:	OS:h.osfile
-o.arsndcode:	h.main
-o.arsndcode:	h.replay
-o.arsndcode:	OS:h.osspriteop
-o.arsndcode:	h.play
-o.arsndcode:	C:h.soundfile
-o.arsndcode:	OS:h.osgbpb
-o.arsndcode:	C:h.soundfile
-o.arsndcode:	h.soundplay
-o.play:	c.play
-o.play:	C:h.swis
-o.play:	C:h.kernel
-o.play:	C:h.kernel
-o.play:	OS:h.macros
-o.play:	OS:h.osgbpb
-o.play:	OS:h.types
-o.play:	OS:h.os
-o.play:	OS:h.fileswitch
-o.play:	h.replay
-o.play:	OS:h.osspriteop
-o.play:	C:h.soundfile
-o.play:	h.msgs
-o.play:	h.main
-o.play:	h.play
-o.play:	h.utils
-o.play:	h.stream
-o.play:	OS:h.osfile
-o.play:	h.soundplay
-o.rpspt_s: s.rpspt_s
-o.rpspt_s: hdr:ListOpts
-o.rpspt_s: hdr:Macros
-o.rpspt_s: hdr:System
-o.rpspt_s: Hdr:SWIs
-o.rpspt_s: Hdr:CPU.Generic26
-o.rpspt_s: Hdr:IO.GenericIO
-o.rpspt_s: Hdr:RISCOS
-o.rpspt_s: hdr:ModHand
-o.rpspt_s: hdr:Proc
-o.rpspt_s: hdr:Sprite
-o.msgs:	c.msgs
-o.msgs:	C:h.swis
-o.msgs:	C:h.kernel
-o.msgs:	h.replay
-o.msgs:	OS:h.types
-o.msgs:	OS:h.os
-o.msgs:	OS:h.osspriteop
-o.msgs:	h.msgs
 o.stream:	c.stream
 o.stream:	C:h.swis
 o.stream:	C:h.kernel
@@ -317,7 +182,7 @@ o.stream:	h.utils
 o.stream:	h.stream
 o.stream:	OS:h.osfile
 o.stream:	h.msgs
-o.stream:	h.replay
+o.stream:	C:h.replay
 o.stream:	OS:h.osspriteop
 o.stream:	h.stream
 o.utils:	c.utils
@@ -342,7 +207,7 @@ o.soundplay:	C:h.kernel
 o.soundplay:	OS:h.osmodule
 o.soundplay:	OS:h.types
 o.soundplay:	OS:h.os
-o.soundplay:	h.replay
+o.soundplay:	C:h.replay
 o.soundplay:	OS:h.osspriteop
 o.soundplay:	C:h.soundfile
 o.soundplay:	OS:h.osgbpb
@@ -375,7 +240,7 @@ oz.main:	OS:h.resourcefs
 oz.main:	OS:h.fileswitch
 oz.main:	h.modhdr
 oz.main:	h.main
-oz.main:	h.replay
+oz.main:	C:h.replay
 oz.main:	OS:h.osspriteop
 oz.main:	h.msgs
 oz.main:	h.resources
