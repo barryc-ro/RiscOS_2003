@@ -7,6 +7,7 @@
 # ----       ----   -----------
 # 10-Feb-98  SNB    Created
 #
+.SUFFIXES: .c .o .od
 
 #
 # Component specific options:
@@ -14,6 +15,7 @@
 COMPONENT  = Finger
 ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
+DBG_MODULE = rm.d_${COMPONENT}
 
 
 RESFSDIR   = Resources.URL.${COMPONENT}
@@ -89,12 +91,31 @@ RAM_OBJS =\
  o.writedata\
  o.FingerHdr
 
+DEB_OBJS =\
+ od.commands\
+ od.connect\
+ od.dns\
+ od.generic\
+ od.headers\
+ od.module\
+ od.protocol\
+ od.readdata\
+ od.ses_ctrl\
+ od.start\
+ od.status\
+ od.stop\
+ od.URLclient\
+ od.utils\
+ od.writedata\
+ o.FingerHdr
+
 MSGSF=o.msgs
 
 #
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
+.c.od:;    ${CC} ${CFLAGS} -DTRACE -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $< -d $*.h
 
 FingerHdr.h: FingerHdr.o
@@ -154,6 +175,13 @@ ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 o.moduleRAM: module.c
 	$(CC) ${CFLAGS} -o $@ module.c
 
+debug: ${DBG_MODULE}
+        @echo ${COMPONENT}: Module built (RAM - DEBUG)
+
+${DBG_MODULE}: ${DEB_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+        ${mkdir} rm
+       	${LD} -o $@ -module ${DEB_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+        Access $@ RW/R
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
