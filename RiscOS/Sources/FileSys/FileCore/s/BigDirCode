@@ -681,6 +681,56 @@ ReadBigDirIntAtts ROUT
 
         Pull    "PC",,^
 
+ [ BinaryChop
+; =========
+; WildCheck
+; =========
+
+; check if wild card spec term has any wild cards
+
+; entry:
+;  R1   -> term, terminated by control codes, delete, space or delimiter
+
+; exit:  EQ -> is wild card
+;        NE -> no wild card
+
+WildCheck ROUT
+ [ DebugXb
+	DREG	r1, "WildCheck(wild=",cc
+	DLINE	")"
+ ]
+
+	Push	"R0, R1, LR"
+
+	SUB	R1, R1, #1	; get to just before term (NextChar skips one)
+10
+	BL	NextChar	; get next wild character
+	BCS	%FT20
+	TEQS	R0, #DelimChar
+	BEQ	%FT20
+
+	TEQS	R0, #OneWildChar	; is this a wildcard?
+	TEQNES	R0, #MultiWildChar
+        BNE	%BT10
+
+; here when found a wild ard
+ [ DebugXb
+	DLINE	"wildcard found"
+ ]
+	Pull	"R0, R1, PC"
+
+20
+; here when reched end; need to exit NE
+	MOVS	R0, #1
+
+ [ DebugXb
+	DLINE	"no wildcard"
+ ]
+
+	Pull	"R0, R1, PC"
+ ]
+
+
 ; ============
 ; LookUpBigDir
 ; ============
@@ -712,6 +762,11 @@ LookUpBigDir    ROUT
 
         SUBCC   r4,r4,#BigDirEntrySize  ; caller asked to start at this entry
         MOV     R7, #0
+
+ [ BinaryChop
+	BL	WildCheck		; is it wildcarded?
+	BNE	%FT99			; no!
+ ]
 10
         ADD     r4,r4,#BigDirEntrySize
         BL      BigDirFinished          ; (R4,R5->eq->dir finished)
@@ -779,6 +834,149 @@ LookUpBigDir    ROUT
  ]
 95
         Pull    "R7,PC"
+
+ [ BinaryChop
+99
+; name was not wildcarded; we can binary chop it!
+
+; register allocation.
+
+; r8 = offset of entry of interest
+; r9 = number of entries in range being considered
+; r4 = ptr to current entry being examined
+; r5 = start of dir
+
+	Push	"r8, r9"
+
+	ADD	r4, r4, #BigDirEntrySize
+
+; first, work out offset of r4 in dir
+	MOV	r8, r4				; R4 = size of an entry
+	BL	GetDirFirstEntry		; (R3,R5->R4)
+
+	SUB	lr, r8, r4			; offset in bytes between start entry and thing
+
+	MOV	r9, #BigDirEntrySize		; size of a dir entry
+
+ [ DebugX
+	DREG	r8, "r8 : "
+	DREG	lr, "lr : "
+	DREG	r9, "r9 : "
+	DREG	r4, "r4 : "
+ ]
+
+	DivRem	r8, lr, r9, r4			; r8 = offset into dir
+
+ [ DebugXb
+	DREG	r8, "init offset: "
+ ]
+
+	LDR	r9, [r5, #BigDirEntries]	; number of entries in the dir
+	SUB	r9, r9, r8			; difference
+
+ [ DebugXb
+	DREG	r9, "init range: "
+ ]
+
+	CMPS	r9, #0
+	BNE	%FT05
+
+	; not found
+
+	BL	GetDirFirstEntry		; (R3,R5->R4)
+	ASSERT	BigDirEntrySize=28
+
+        RSB     R8, R8, R8, LSL #3              ; *7
+        ADD     R4, R4, R8, LSL #2              ; 7*4=28
+
+	SEC
+
+	Pull	"r8, r9"
+
+	B	%BT90
+
+05
+
+; here we have to check the middle item in the
+
+;	ADD	lr, r9, #1
+ [ DebugXb
+	DREG	r8, "start: "
+	DREG	r9, "len: "
+ ]
+	ADD	r8, r8, r9, LSR #1		; r8 <- offset of entry to look into
+
+	BL	GetDirFirstEntry		; (R3,R5->R4)
+	ASSERT	BigDirEntrySize=28
+
+        RSB     LR, R8, R8, LSL #3              ; *7
+        ADD     R4, R4, LR, LSL #2              ; 7*4=28
+
+; now R4->entry of interest
+
+        Push    "R4,R5,R6"
+        LDR     R6, [R4, #BigDirObNameLen]
+        BL      GetBigDirName           ; get the name's address (in LR)
+        MOV     R4, LR
+        MOV     r5, #&ff                ; mask is ff
+        BL      BigLexEqv               ; (R1,R4,R5->LO/EQ/HI)
+        Pull    "R4,R5,R6"
+
+	BEQ	%FT80			; name=wild
+
+	BCC	%FT20			; name<wild
+
+	CMPS	r9, #1
+	BEQ	%FT75
+
+; name>wild.  range becomes below r8
+	SUB	r8, r8, r9, LSR #1
+	MOV	r9, r9, LSR #1
+	B	%BT05
+
+20
+	CMPS	r9, #1
+	BEQ	%FT70
+; name<wild.  range becomes above r8
+	ADD	r8, r8, #1
+	SUB	r9, r9, #1
+	MOVS	r9, r9, LSR #1
+	BNE	%BT05			; if it's zero then it's not found
+
+
+70
+	; not found
+	ADD	R4, R4, #BigDirEntrySize
+75
+	SEC
+	Pull	"R8, R9"
+	B	%BT90
+
+
+80
+        ; Match, but...
+        BL      ReadBigDirIntAtts       ; read the attributes
+
+;LR=Atts
+        TSTS    LR, #DirBit
+        BNE     %FT85                   ; found a dir
+;found a file
+
+        TSTS    R2, #MustBeDir
+        BNE     %BT70
+;fall through next few instructions as EQ
+85
+        TSTNES  R2, #MustBeFile
+        BNE     %BT70
+
+        TSTS    LR, #DirBit :SHL: 2,2 ;restore Z=1 <=> file, C=0
+
+	Pull	"R8, R9"
+
+	B	%BT90
+
+
+ ]
 
 ; ================
 ; GetDirFirstEntry
@@ -2526,7 +2724,8 @@ ReallySharedNotFudged ROUT
         BEQ     %FT95           ;sharing with parent dir
         MOV     R0, R4
 
-        MOV     R4, R6          ;get first dir entry to start at
+        SUB     R4, R6, #BigDirEntrySize          ;get first dir entry to start at
+	B	%FT10
 05
         TEQS    R4, R0
         BEQ     %FT10
