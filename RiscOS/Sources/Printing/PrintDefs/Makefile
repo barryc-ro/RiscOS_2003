@@ -108,6 +108,16 @@ resources: ${RESFILES} dirs
 	${CP} ${RDIR}.Printers.*           ${RESDIR}.Printers.*           ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied
 
+BBETYPE = printdefs
+bbe-printdefs: bbe-generic-rom bbe-generic-resources-get-alias
+  BBE_Export_Dir Resources.Printers
+  BBE_Export_Dir Resources.Palettes
+  BBE_Export_Dir Resources.ps
+  BBE_Export_Dir Resources.${LOCALE}.${SYSTEM}
+  ${CP} ${RDIR}.PaperA4 ${BBEDIR}.Resources.PaperA4 ${CPFLAGS}
+  ${CP} ${RDIR}.PaperLet ${BBEDIR}.Resources.PaperLet ${CPFLAGS}
+  ${CP} ${RDIR}.PaperLegal ${BBEDIR}.Resources.PaperLegal ${CPFLAGS}
+
 #
 # Squash resource files
 #
