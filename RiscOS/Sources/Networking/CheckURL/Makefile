@@ -238,7 +238,7 @@ ${EXPORTS}: h.${CMHG_HDR} h.CheckURL
 
 ${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
-	resgen messages_file ${MSGSF}
+	resgen messages_file ${MSGSF} LocalRes:Messages Resources.${COMPONENT}.Messages
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	@echo
