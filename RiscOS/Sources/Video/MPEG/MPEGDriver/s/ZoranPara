@@ -76,6 +76,7 @@ pp_ctrl_strobe          * 1:SHL:0
                         ^       0
 Interface_Command       #       4
 Interface_UnmaskIRQ     #       4
+Interface_MaskIRQ       #       4
 Interface_ConsumeData   #       4
 Interface_TopLevel      #       4
 Interface_Buffer        #       4
@@ -93,6 +94,7 @@ Interface_Flags         #       4
 Interface_CharacterisationPTS # 8
 Interface_OldPTC        #       4
 Interface_OldPTCErr     #       4
+Interface_STCRetestHoldoff #    4
 Interface_BlockQueueHead #      4
 Interface_BlockQueueTail #      4
 Interface_PRISMID       #       4
@@ -116,6 +118,8 @@ InterfaceFlags_ClockSessionBegun                *       1 :SHL: 5
 InterfaceFlags_SyncMaster                       *       1 :SHL: 6
 InterfaceFlags_OldPTCValid                      *       1 :SHL: 7
 InterfaceFlags_OldPTCErrValid                   *       1 :SHL: 8
+InterfaceFlags_Resetting                        *       1 :SHL: 9
+InterfaceFlags_IRQSincePoll                     *       1 :SHL: 10
 InterfaceFlags_DongleFitted                     *       1 :SHL: 31 ; private flag
 
 ; Layout of common_toplevel_fns_t C struct
@@ -847,10 +851,23 @@ ZoranPara_Discontinue
 
 ZoranPara_ConsumeData
         LDR     ip, [a2, #Interface_Flags]
-        TST     ip, #InterfaceFlags_ReceivingCharacterisationData
-        BNE     %FT50
+        TST     ip, #InterfaceFlags_ReceivingCharacterisationData :OR: InterfaceFlags_Resetting
+        BEQ     %FT10
+        TST     ip, #InterfaceFlags_Resetting
+        BNE     %FT60
 
-        ; Normal decoding case: send to hardware
+        ; Normal characterising case: send to recogniser via the generic Zoran code
+        TST     ip, #InterfaceFlags_Characterising
+        BNE     Zoran_ConsumeData       ; pass data on to characteriser
+
+        ; A rare case where the characteriser reaches recognition at the very end of
+        ; the previous block, and the buffer manager has sent another block
+        LDR     a2, [sp, #4*0]          ; retrieve not_consumed pointer
+        STR     a4, [a2]                ; have not consumed any of the new data
+        MOV     a1, #0                  ; no error
+        Return  , LinkNotStacked
+
+10      ; Normal decoding case: send to hardware
         FunctionEntry
         StaticBaseFromSL ip
         LDRVar  a2, ip, StuffingBytesRemaining
@@ -866,15 +883,10 @@ ZoranPara_ConsumeData
         MOV     a1, #0                  ; no error
         Return
 
-50      ; Normal characterising case: send to recogniser via the generic Zoran code
-        TST     ip, #InterfaceFlags_Characterising
-        BNE     Zoran_ConsumeData       ; pass data on to characteriser
-
-        ; A rare case where the characteriser reaches recognition at the very end of
-        ; the previous block, and the buffer manager has sent another block
+60      ; During a reset, flush all data away
         LDR     a2, [sp, #4*0]          ; retrieve not_consumed pointer
-        STR     a4, [a2]                ; have not consumed any of the new data
         MOV     a1, #0                  ; no error
+        STR     a1, [a2]                ; all consumed
         Return  , LinkNotStacked
 
 
@@ -898,14 +910,32 @@ ZoranPara_UnmaskStuffingIRQ
         STRB    a2, [a3, #IOCIRQMSKA]
         MSR     CPSR_c, a4              ; restore IRQs and FIQs
 
-     Push "r0,r1"
-     MOV     r0, #IOMD_Base
-     MOV     r1, #IOMDr_printer_IRQ_bit
-     STRB    r1, [r0, #IOCIRQCLRA]
-     Pull "r0,r1"
+        ; Clear the IRQ in IOMD (well, it can't hurt)
+        Push    "r0,r1"
+        MOV     r0, #IOMD_Base
+        MOV     r1, #IOMDr_printer_IRQ_bit
+        STRB    r1, [r0, #IOCIRQCLRA]
+        Pull    "r0,r1"
 
-       Return
+        Return
 
+
+; extern void ZoranPara_MaskStuffingIRQ (void);
+
+ZoranPara_MaskStuffingIRQ
+        FunctionEntry
+
+        ; Mask parallel IRQs
+        MOV     a3, #IOMD_Base
+        MRS     a4, CPSR
+        ORR     a2, a4, #I32_bit :OR: F32_bit
+        MSR     CPSR_c, a2              ; IRQs and FIQs off to manipulate IRQMSKA
+        LDRB    a2, [a3, #IOCIRQMSKA]
+        BIC     a2, a2, #IOMDr_printer_IRQ_bit
+        STRB    a2, [a3, #IOCIRQMSKA]
+        MSR     CPSR_c, a4              ; restore IRQs and FIQs
+
+        Return
 
 
         ; IRQs are disabled on entry to ParallelIRQHandler
@@ -922,6 +952,20 @@ ParallelIRQHandler
         STMIA   sl, {v1, v2}
         ADD     sl, sl, #540
         MOV     fp, #0
+
+ [ {FALSE}
+        Push    "r3,lr"
+        MOV     r3, #&03500000
+        MOV     lr, #&10000008
+        STR     lr,[r3]
+        MOV     lr, #&0F000000
+        STR     lr, [r3]
+        LDR     lr, =&10000080
+        STR     lr, [r3]
+        MOV     lr, #&00FF0000
+        STR     lr, [r3]
+        Pull    "r3,lr"
+ ]
 
         SUB     sp, sp, #4              ; allocate one word of scratch workspace on stack
 
@@ -977,6 +1021,22 @@ ParallelIRQHandler
         MOV     a2, sp
         MOV     a1, #4
         BL      IntConsumeData
+
+        ; Mollify watchdog
+        LDR     a1, [v2, #Interface_Flags]
+        TST     a1, #InterfaceFlags_IRQSincePoll
+        ORREQ   a1, a1, #InterfaceFlags_IRQSincePoll
+        STREQ   a1, [v2, #Interface_Flags]
+
+ [ {FALSE}
+        Push    "r3,lr"
+        MOV     r3, #&03500000
+        MOV     lr, #&10000008
+        STR     lr,[r3]
+        MOV     lr, #0
+        STR     lr,[r3]
+        Pull    "r3,lr"
+ ]
 
         ; Tidy up and exit
         ADD     sp, sp, #4
@@ -1060,6 +1120,27 @@ ZoranPara_Command
         BL      IIC_OpV
         ADD     sp, sp, #4*13
         Return
+
+
+
+; Static variable indirection table
+; ---------------------------------
+
+        IMPORTVar Module_PrivateWord
+        LocalVar Interface
+        LocalVar InUseSemaphore
+        LocalVar ParallelHardwareAddress
+        LocalVar OldKeyboardIRQBits
+        LocalVar OldKeyboardEnable
+        LocalVar SoftCopyCtrl
+        LocalVar SoftCopyData
+        LocalVar ParallelFileHandle
+        LocalVar OldParallelIRQBit
+        LocalVar OldParallelCtrl
+        LocalVar ParallelSemaphore
+        LocalVar Aborted
+        LocalVar StuffingBytesRemaining
+        LocalVar IICNoAckError
 
 
 
@@ -1753,26 +1834,6 @@ interrupt_protected_end
 
 
 
-; Static variable indirection table
-; ---------------------------------
-
-        IMPORTVar Module_PrivateWord
-        LocalVar Interface
-        LocalVar InUseSemaphore
-        LocalVar ParallelHardwareAddress
-        LocalVar OldKeyboardIRQBits
-        LocalVar OldKeyboardEnable
-        LocalVar SoftCopyCtrl
-        LocalVar SoftCopyData
-        LocalVar ParallelFileHandle
-        LocalVar OldParallelIRQBit
-        LocalVar OldParallelCtrl
-        LocalVar ParallelSemaphore
-        LocalVar Aborted
-        LocalVar StuffingBytesRemaining
-        LocalVar IICNoAckError
-
-
 ; Some const strings
 ; ------------------
 
@@ -1794,6 +1855,7 @@ ShortInfo
 Interface                               ; struct to pass to generic Zoran code
         DCD     ZoranPara_Command
         DCD     ZoranPara_UnmaskStuffingIRQ
+        DCD     ZoranPara_MaskStuffingIRQ
         DCD     ZoranPara_ConsumeData
         DCD     0
         DCD     0
@@ -1809,6 +1871,7 @@ Interface                               ; struct to pass to generic Zoran code
         DCD     0
         DCD     0
         DCD     0, 0
+        DCD     0
         DCD     0
         DCD     0
         DCD     0

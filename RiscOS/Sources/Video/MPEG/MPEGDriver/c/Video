@@ -376,6 +376,9 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   static_CompleteScalingTypeParameters (true);
   
 #ifdef GENERIC
+#ifdef BODGEOVS
+  Module_UseGenericAudio = (Module_DongleFitted && Stream.s_flags.ovs_npt_descriptors==false);
+#endif
   if (Module_UseGenericAudio)
   {
     /* Start up the sync system */
@@ -478,6 +481,12 @@ _kernel_oserror *Video_SWIFullPackets (unsigned int flags, mpeg_stream_handle_t 
     /* If we're just starting, discard bitstream packets until the beginning of the first PES packet */
     while (Stream.video.prefill_state == ps_searching_for_first_PES_header && packets != NULL)
     {
+      if (!Stream.vid_flags.prefill_stiff_callafter_set)
+      {
+        /* Set a CallAfter to catch cases where the MPEG chip jams during prefill */
+        _swix (OS_CallAfter, _INR(0,2), 1000, video_prefill_stiff_detected, Module_PrivateWord);
+        Stream.vid_flags.prefill_stiff_callafter_set = true;
+      }
       if (packets->mpeg_start == true)
       {
         Stream.video.prefill_state = ps_searching_for_first_sequence_header;
@@ -756,13 +765,17 @@ Out:		Pointer to error block
 _kernel_oserror *Video_SWISetSpeed (unsigned int flags, mpeg_stream_handle_t vsh, unsigned int speed)
 {
   _kernel_oserror *e = NULL;
-  bool irqs_were_enabled = !_kernel_irqs_disabled ();
-  bool issue_the_upcall = false;
-  e = static_CheckHandle (vsh);
   dprintf (("Video", "SWISetSpeed\n"));
 #if Debugging==1 && DebugSWIs==1
   DWrite_Write0("Video_SWISetSpeed ");
 #endif
+  e = static_CheckHandle (vsh);
+#ifdef BODGEOVS
+  IGNORE(flags);
+  IGNORE(speed);
+#else
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  bool issue_the_upcall = false;
   
   if (!e)
   {
@@ -808,6 +821,7 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, mpeg_stream_handle_t vsh
       _swix (OS_UpCall, _INR(0,4), UpCall_MPEG, 0, Stream.csh, UpCallMPEG_SpeedChange, Stream.video.speed_indicator);
     }
   }
+#endif
   return e;
 }
 
@@ -910,26 +924,48 @@ Out:		Pointer to error block
 
 _kernel_oserror *Video_SWIReadParameters3 (unsigned int *return_PCR_lo, unsigned int *return_PCR_hi)
 {
-  _kernel_oserror *e = NULL;
-  bool irqs_were_enabled = !_kernel_irqs_disabled ();
-  clk my_PCR;
-  
-  if (irqs_were_enabled) _kernel_irqs_off ();
-  my_PCR = Clk_ReadRawSTC ();
-  if (irqs_were_enabled) _kernel_irqs_on ();
-  my_PCR = Clk_ConvertSTCtoPCR (my_PCR);
-  
-  if (Stream.audio.state == stream_open || Stream.audio.state == stream_closing)
+#ifdef GENERIC
+  if (Module_UseGenericAudio)
   {
-    *return_PCR_lo = my_PCR.lsw;
-    *return_PCR_hi = my_PCR.msb;
+    _kernel_oserror *e;
+    mpeg_time_t time;
+    e = Stream.clock->StreamInfo(12, Stream.clock_handle, &time);
+    if (e)
+    {
+      *return_PCR_lo = 0;
+      *return_PCR_hi = 0;
+    }
+    else
+    {
+      *return_PCR_lo = time.word.lo;
+      *return_PCR_hi = time.word.hi;
+    }
+    return NULL;
   }
   else
+#endif
   {
-    *return_PCR_lo = 0;
-    *return_PCR_hi = 0;
+    _kernel_oserror *e = NULL;
+    bool irqs_were_enabled = !_kernel_irqs_disabled ();
+    clk my_PCR;
+    
+    if (irqs_were_enabled) _kernel_irqs_off ();
+    my_PCR = Clk_ReadRawSTC ();
+    if (irqs_were_enabled) _kernel_irqs_on ();
+    my_PCR = Clk_ConvertSTCtoPCR (my_PCR);
+    
+    if (Stream.audio.state == stream_open || Stream.audio.state == stream_closing)
+    {
+      *return_PCR_lo = my_PCR.lsw;
+      *return_PCR_hi = my_PCR.msb;
+    }
+    else
+    {
+      *return_PCR_lo = 0;
+      *return_PCR_hi = 0;
+    }
+    return e;
   }
-  return e;
 }
 
 /******	Video_SWIReadParameters4() *****************************************
@@ -1566,6 +1602,7 @@ static _kernel_oserror *static_VideoStart (void)
 #ifdef GENERIC
   Stream.vid_flags.clock_session_begun = false;
 #endif
+  Stream.vid_flags.prefill_stiff_callafter_set = false;
   Stream.fields_till_next_AU = -1; /* can't accidentally take value +1 before display is properly initialised */
   Stream.consecutive_pipeline_stalls = 0;
   Stream.decode_frames = NULL;
