@@ -52,9 +52,11 @@ static ObjectId window_for_focus = NULL_ObjectId;
 
 /* Local functions */
 
-static _kernel_oserror * breakpoint_set_up        (ObjectId o, list_add_for * attached);
-static int               breakpoint_gain_focus    (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
-static int               breakpoint_parent_hidden (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static _kernel_oserror * breakpoint_set_up           (ObjectId o, list_add_for * attached);
+static int               breakpoint_gain_focus       (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
+static int               breakpoint_parent_hidden    (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+
+static _kernel_oserror * breakpoint_grey_from_radios (ObjectId self, ComponentId selected);
 
 /**************************************************************/
 /* breakpoint_set_up()                                        */
@@ -345,6 +347,13 @@ _kernel_oserror * breakpoint_set_up(ObjectId o, list_add_for * attached)
     }
   }
 
+  /* Third thing (and this is the slightly hacky part), having already */
+  /* ensured that unavailable feature related items are greyed, we     */
+  /* also want to grey out anything not related to the selected radio, */
+  /* because of the slightly odd UI mechanisms employed.               */
+
+  RetError(breakpoint_grey_from_radios(o, def));
+
   /* Need to give input focus? We can't just set it here, as the window */
   /* isn't actually open yet. Giving a default input focus will lead to */
   /* a "can't place focus anywhere" Toolbox error if all the writeables */
@@ -588,12 +597,13 @@ int breakpoint_add(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
              )
           {
             /* Oh dear; we're in the top writeable but none of its radios are selected. */
-            /* It's actually bad GUI design - writeables ought to grey out if the radio */
-            /* isn't selected - but that has problems. The Toolbox first sends the      */
-            /* deselect event then the select one, so you temporarily have all fields   */
-            /* greyed and lose the caret. I attempted several workarounds and was       */
-            /* fought by the Toolbox every step of the way as usual, and I eventually   */
-            /* gave up. History lesson ends.                                            */
+            /* This should actually never happen, because of the grey-out code...       */
+
+            #ifdef TRACE
+              errors_ret(errors_frontend_error(fee_should_never_happen,
+                                               "in top writeable with no top radios selected",
+                                               "breakpoint_add"));
+            #endif
 
             ChkError(errors_frontend_error(fee_do_not_be_a_muppet));
           }
@@ -785,48 +795,96 @@ int breakpoint_radios(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
                                  &state,
                                  NULL));
 
-  if (state != 0)
-  {
-    unsigned int flags;
-    ComponentId  focus = NULL_ComponentId;
+  /* If so, grey/ungrey stuff and move the caret as needed */
 
-    /* Can't select a greyed item - but that really should never happen */
-
-    ChkError(gadget_get_flags(0,
-                              idb->self_id,
-                              idb->self_component,
-                              &flags));
-
-    if ((flags & Gadget_Faded) != 0) ChkError(errors_frontend_error(fee_should_never_happen,
-                                                                    "disabled item was selected",
-                                                                    "breakpoint_radios"));
-
-    switch (idb->self_component)
-    {
-      default:
-      {
-        ChkError(errors_frontend_error(fee_invalid_parameters,
-                                       "breakpoint_radios"));
-      }
-      break;
-
-      case Breakpoint_CID_WimpEventRadio:
-      break;
-
-      case Breakpoint_CID_Function:
-      case Breakpoint_CID_Address:
-      case Breakpoint_CID_SWI:
-      case Breakpoint_CID_Line:             focus = Breakpoint_CID_MainWriteable;        break;
-      case Breakpoint_CID_ServiceCallRadio: focus = Breakpoint_CID_ServiceCallWriteable; break;
-      case Breakpoint_CID_UpCallRadio:      focus = Breakpoint_CID_UpCallWriteable;      break;
-    }
-
-    if (focus != NULL_ComponentId) ChkError(utils_place_focus(idb->self_id, focus));
-  }
+  if (state != 0) ChkError(breakpoint_grey_from_radios(idb->self_id, idb->self_component));
 
   /* Finished */
 
   dprintf(("BrkP", "breakpoint_radios: Successful\n"));
 
   return 0;
+}
+
+/**************************************************************/
+/* breakpoint_grey_from_radios()                              */
+/*                                                            */
+/* Grey out items in the Breakpoint dialogue box according to */
+/* the radio button selection state. Originally designed for  */
+/* initial dialogue box set-up and for radio button selection */
+/* events (so the caret is moved as required, too).           */
+/*                                                            */
+/* Parameters: Object ID of the Breakpoint dialogue box;      */
+/*                                                            */
+/*             Component ID of the selected radio.            */
+/**************************************************************/
+
+static _kernel_oserror * breakpoint_grey_from_radios(ObjectId self, ComponentId selected)
+{
+  unsigned int flags;
+  ComponentId  focus = NULL_ComponentId;
+
+  dprintf(("BrkP", "breakpoint_grey_from_radios: Called\n"));
+
+  /* Can't select a greyed item - but that really should never happen */
+
+  RetError(gadget_get_flags(0,
+                            self,
+                            selected,
+                            &flags));
+
+  if ((flags & Gadget_Faded) != 0) RetError(errors_frontend_error(fee_should_never_happen,
+                                                                  "disabled item was selected",
+                                                                  "breakpoint_grey_from_radios"));
+
+  switch (selected)
+  {
+    default:
+    {
+      RetError(errors_frontend_error(fee_invalid_parameters,
+                                     "breakpoint_grey_from_radios"));
+    }
+    break;
+
+    case Breakpoint_CID_WimpEventRadio:
+    break;
+
+    case Breakpoint_CID_Function:
+    case Breakpoint_CID_Address:
+    case Breakpoint_CID_SWI:
+    case Breakpoint_CID_Line:             focus = Breakpoint_CID_MainWriteable;        break;
+    case Breakpoint_CID_ServiceCallRadio: focus = Breakpoint_CID_ServiceCallWriteable; break;
+    case Breakpoint_CID_UpCallRadio:      focus = Breakpoint_CID_UpCallWriteable;      break;
+  }
+
+  /* Ungrey the target item and place an appropriate input focus. Order */
+  /* is important - if you grey first, input focus can be lost as the   */
+  /* Toolbox can be left briefly with no gadget to place the caret in.  */
+
+  if (focus != NULL_ComponentId)
+  {
+    RetError(set_gadget_state(self, focus, 0));
+    RetError(utils_place_focus(self, focus));
+
+    /* Grey the Wimp display if we're using any writeable */
+
+    RetError(set_gadget_state(self, Breakpoint_CID_WimpEventDisplay, 1));
+  }
+  else
+  {
+    RetError(set_gadget_state(self, Breakpoint_CID_WimpEventDisplay, 0));
+    RetError(utils_place_focus(self, NULL_ComponentId));
+  }
+
+  /* Grey any unused writeable */
+
+  if (focus != Breakpoint_CID_MainWriteable)        RetError(set_gadget_state(self, Breakpoint_CID_MainWriteable,        1));
+  if (focus != Breakpoint_CID_ServiceCallWriteable) RetError(set_gadget_state(self, Breakpoint_CID_ServiceCallWriteable, 1));
+  if (focus != Breakpoint_CID_UpCallWriteable)      RetError(set_gadget_state(self, Breakpoint_CID_UpCallWriteable,      1));
+
+  /* Finished */
+
+  dprintf(("BrkP", "breakpoint_grey_from_radios: Successful\n"));
+
+  return NULL;
 }
