@@ -74,6 +74,11 @@ RESDIR = <resource$dir>.Resources.${COMPONENT}
 #
 all: rm.SoundFX
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_Dir Resources.${USERIF}.Sounds
+
 #
 # RISC OS ROM build rules:
 #
