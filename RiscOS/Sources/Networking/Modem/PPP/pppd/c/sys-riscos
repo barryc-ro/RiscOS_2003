@@ -26,22 +26,34 @@
 
 #include <string.h>
 
-#include "socklib.h"
-#include "inetlib.h"
-
+#include "sys/types.h"
 #include <sys/syslog.h>
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 
+#include "net/if.h"
+#include "net/if_dl.h"
 #include "net/route.h"
 
+#include "netinet/in.h"
+#include "netinet/in_systm.h"
+#include "netinet/if_ether.h"
+
 #include "^.if_ppp.h"
+#include "^.pppmodule.h"
 #include "pppd.h"
 
 #include "minixlib.h"
+#include "main.h"
+#include "socklib.h"
+#include "inetlib.h"
+
 
 static int initdisc = -1;		/* Initial TTY discipline */
 extern int kdebugflag;
+extern int internet_version;
+
+static int dodefaultroute(u_long g, int cmd);
 
 /*
  * establish_ppp - Turn the serial port into a ppp interface.
@@ -312,29 +324,51 @@ int sifdown(int u)
 
     IGNORE(u);
 
-    rv = 1;
-    if (pppioctl(fd, PPPIOCGFLAGS, (caddr_t) &x) < 0) {
-	syslog(LOG_ERR, "ioctl (PPPIOCGFLAGS): %m");
-	rv = 0;
-    } else {
-	x &= ~SC_ENABLE_IP;
-	if (pppioctl(fd, PPPIOCSFLAGS, (caddr_t) &x) < 0) {
-	    syslog(LOG_ERR, "ioctl(PPPIOCSFLAGS): %m");
-	    rv = 0;
-	}
+    if ((dialler_flags & DiallerFlags_UsingDialler) == 0 || finalising)
+    {
+        rv = 1;
+        if (pppioctl(fd, PPPIOCGFLAGS, (caddr_t) &x) < 0)
+        {
+            syslog(LOG_ERR, "ioctl (PPPIOCGFLAGS): %m");
+            rv = 0;
+        }
+
+        else
+        {
+            x &= ~SC_ENABLE_IP;
+            if (pppioctl(fd, PPPIOCSFLAGS, (caddr_t) &x) < 0)
+            {
+                syslog(LOG_ERR, "ioctl(PPPIOCSFLAGS): %m");
+                rv = 0;
+            }
+        }
+        strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
+
+        if (socketioctl(s, SIOCGIFFLAGS, (caddr_t) &ifr) < 0)
+        {
+            syslog(LOG_ERR, "ioctl (SIOCGIFFLAGS): %m");
+            rv = 0;
+        }
+
+        else
+        {
+            ifr.ifr_flags &= ~IFF_UP;
+            ppp_softc[u].moreflags &= ~IFF_UP;
+
+            if (socketioctl(s, SIOCSIFFLAGS, (caddr_t) &ifr) < 0)
+            {
+                syslog(LOG_ERR, "ioctl(SIOCSIFFLAGS): %m");
+                rv = 0;
+            }
+        }
     }
-    strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
-    if (socketioctl(s, SIOCGIFFLAGS, (caddr_t) &ifr) < 0) {
-	syslog(LOG_ERR, "ioctl (SIOCGIFFLAGS): %m");
-	rv = 0;
-    } else {
-	ifr.ifr_flags &= ~IFF_UP;
+
+    else
+    {
         ppp_softc[u].moreflags &= ~IFF_UP;
-	if (socketioctl(s, SIOCSIFFLAGS, (caddr_t) &ifr) < 0) {
-	    syslog(LOG_ERR, "ioctl(SIOCSIFFLAGS): %m");
-	    rv = 0;
-	}
     }
+
+
     return rv;
 }
 
@@ -344,8 +378,12 @@ int sifdown(int u)
  */
 #define SET_SA_FAMILY(addr, family)		\
     BZERO((char *) &(addr), sizeof(addr));	\
-    addr.sa_family = (family);/* 			\
-    addr.sa_len = sizeof(addr);*/
+    addr.sa_family = (family);
+
+#define NSET_SA_FAMILY(addr, family)		\
+    BZERO((char *) &(addr), sizeof(addr));	\
+    addr.sa_family = (family); 			\
+    addr.sa_len = sizeof(addr);
 
 /*
  * sifaddr - Config the interface IP addresses and netmask.
@@ -356,6 +394,29 @@ int sifaddr(int u, u_long o, u_long h, u_long m)
     struct ifreq ifr;
 
     IGNORE(u);
+
+    if (internet_version >= 414) {
+        struct ifaliasreq ifra;
+
+        strncpy(ifra.ifra_name, ifname, sizeof(ifra.ifra_name));
+        NSET_SA_FAMILY(ifra.ifra_addr, AF_INET);
+        ((struct nsockaddr_in *) &ifra.ifra_addr)->sin_addr.s_addr = o;
+        NSET_SA_FAMILY(ifra.ifra_broadaddr, AF_INET);
+        ((struct nsockaddr_in *) &ifra.ifra_broadaddr)->sin_addr.s_addr = h;
+        if (m != 0) {
+    	NSET_SA_FAMILY(ifra.ifra_mask, AF_INET);
+    	((struct nsockaddr_in *) &ifra.ifra_mask)->sin_addr.s_addr = m;
+        } else
+    	BZERO(&ifra.ifra_mask, sizeof(ifra.ifra_mask));
+        if (ioctl(s, SIOCAIFADDR, (caddr_t) &ifra) < 0) {
+    	    if (errno != EEXIST) {
+    	        syslog(LOG_ERR, "ioctl(SIOCAIFADDR): %m");
+    	        return 0;
+    	    }
+    	    syslog(LOG_WARNING, "ioctl(SIOCAIFADDR): Address already exists");
+        }
+        return 1;
+    }
 
     SET_SA_FAMILY(ifr.ifr_addr, AF_INET);
 
@@ -420,6 +481,7 @@ int cifaddr(int u, u_long o, u_long h)
     IGNORE(u);
     IGNORE(o);
 
+#if 0
 /*
  *  Delete the route through the device
  */
@@ -437,6 +499,23 @@ int cifaddr(int u, u_long o, u_long h)
         syslog (LOG_ERR, "ioctl(SIOCDELRT) device route: %m");
         return (0);
     }
+#endif
+    if (internet_version >= 414)
+    {
+        struct ifaliasreq ifra;
+
+        strncpy(ifra.ifra_name, ifname, sizeof(ifra.ifra_name));
+        NSET_SA_FAMILY(ifra.ifra_addr, AF_INET);
+        ((struct nsockaddr_in *) &ifra.ifra_addr)->sin_addr.s_addr = o;
+        NSET_SA_FAMILY(ifra.ifra_broadaddr, AF_INET);
+        ((struct nsockaddr_in *) &ifra.ifra_broadaddr)->sin_addr.s_addr = h;
+        BZERO(&ifra.ifra_mask, sizeof(ifra.ifra_mask));
+        if (ioctl(s, SIOCDIFADDR, (caddr_t) &ifra) < 0) {
+    	    syslog(LOG_WARNING, "ioctl(SIOCDIFADDR): %m");
+    	    return 0;
+    	}
+    }
+
     return 1;
 }
 
@@ -474,9 +553,12 @@ int cifaddr(int u, u_long o, u_long h)
  */
 int sifdefaultroute(int u, u_long g)
 {
-    struct rtentry rt;
+    struct ortentry rt;
 
     IGNORE(u);
+
+    if (internet_version >= 414)
+        return dodefaultroute(g, 'a');
 
     /*if (defaultroute_exists())
         return 0;*/
@@ -500,9 +582,12 @@ int sifdefaultroute(int u, u_long g)
  */
 int cifdefaultroute(int u, u_long g)
 {
-    struct rtentry rt;
+    struct ortentry rt;
 
     IGNORE(u);
+
+    if (internet_version >= 414)
+        return dodefaultroute(g, 'd');
 
     SET_SA_FAMILY (rt.rt_dst,     AF_INET);
     SET_SA_FAMILY (rt.rt_gateway, AF_INET);
@@ -518,77 +603,234 @@ int cifdefaultroute(int u, u_long g)
 }
 
 /*
- * CAN'T IMPLEMENT THIS YET (EASILY) AS WE ARE LACKING THE SIOCGIFHWADDR
- * IOCTL (OR AN EASY EQUIVALENT)
+ * chifdefaultroute - change a default route through the address given.
  */
+int chifdefaultroute(int u, u_long g)
+{
+    int result;
 
-#ifndef __riscos
+    IGNORE(u);
+
+    if (internet_version >= 414)
+        return dodefaultroute(g, 'c');
+
+    /* delete then add the route */
+    if ((result = cifdefaultroute (u, g)) == 1);
+        result = sifdefaultroute (u, g);
+
+    return result;
+}
+
+
+
+
+static int rtm_seq;
+
+/*
+ * dodefaultroute - talk to a routing socket to add/delete/change a default route.
+ */
+static int
+dodefaultroute(g, cmd)
+    u_long g;
+    int cmd;
+{
+    int routes;
+    struct {
+	struct rt_msghdr	hdr;
+	struct nsockaddr_in	dst;
+	struct nsockaddr_in	gway;
+	struct nsockaddr_in	mask;
+    } rtmsg;
+
+    if ((routes = socket(PF_ROUTE, SOCK_RAW, AF_INET)) < 0) {
+	syslog(LOG_ERR, "%cifdefaultroute: opening routing socket: %m", cmd);
+	return 0;
+    }
+
+    memset(&rtmsg, 0, sizeof(rtmsg));
+    switch (cmd)
+    {
+        case 'a':
+            rtmsg.hdr.rtm_type = RTM_ADD;
+            break;
+
+        case 'c':
+            rtmsg.hdr.rtm_type = RTM_CHANGE;
+            break;
+
+        case 'd':
+            rtmsg.hdr.rtm_type = RTM_DELETE;
+            break;
+
+        default:
+            rtmsg.hdr.rtm_type = RTM_DELETE;
+            break;
+    }
+    rtmsg.hdr.rtm_flags = RTF_UP | RTF_GATEWAY;
+    rtmsg.hdr.rtm_version = RTM_VERSION;
+    rtmsg.hdr.rtm_seq = ++rtm_seq;
+    rtmsg.hdr.rtm_addrs = RTA_DST | RTA_GATEWAY | RTA_NETMASK;
+    rtmsg.dst.sin_len = sizeof(rtmsg.dst);
+    rtmsg.dst.sin_family = AF_INET;
+    rtmsg.gway.sin_len = sizeof(rtmsg.gway);
+    rtmsg.gway.sin_family = AF_INET;
+    rtmsg.gway.sin_addr.s_addr = g;
+    rtmsg.mask.sin_len = sizeof(rtmsg.dst);
+    rtmsg.mask.sin_family = AF_INET;
+
+    rtmsg.hdr.rtm_msglen = sizeof(rtmsg);
+    if (socketwrite(routes, &rtmsg, sizeof(rtmsg)) < 0) {
+        char *cmd_str[] = {"add", "change", "delete"};
+        int cmd_i = 0;
+
+        switch (cmd)
+        {
+            case 'a':
+                cmd_i = 0;
+                break;
+
+            case 'c':
+                cmd_i = 1;
+                break;
+
+            case 'd':
+                cmd_i = 2;
+                break;
+
+            default:
+                cmd_i = 2;
+                break;
+        }
+
+	syslog(LOG_ERR, "%s default route: %m", cmd_str[cmd_i]);
+	socketclose(routes);
+	return 0;
+    }
+
+    socketclose(routes);
+    return 1;
+}
+
+
 /*
  * sifproxyarp - Make a proxy ARP entry for the peer.
  */
-int sifproxyarp (int unit, u_long his_adr)
-{
-    struct arpreq arpreq;
+static struct {
+    struct rt_msghdr		hdr;
+    struct sockaddr_inarp	dst;
+    struct sockaddr_dl		hwa;
+    char			extra[128];
+} arpmsg;
 
-    memset(&arpreq, 0, sizeof(arpreq));
+static int arpmsg_valid;
+
+int
+sifproxyarp(unit, hisaddr)
+    int unit;
+    u_long hisaddr;
+{
+    int routes;
+    int l;
+
+    if (internet_version < 414) {
+        syslog(LOG_ERR, "Proxy ARP requires Internet 4.14 or later");
+        return 0;
+    }
+
     /*
      * Get the hardware address of an interface on the same subnet
      * as our local address.
      */
-    if (!get_ether_addr(his_adr, &arpreq.arp_ha)) {
+    memset(&arpmsg, 0, sizeof(arpmsg));
+    if (!get_ether_addr(hisaddr, &arpmsg.hwa)) {
 	syslog(LOG_ERR, "Cannot determine ethernet address for proxy ARP");
 	return 0;
     }
 
-    SET_SA_FAMILY(arpreq.arp_pa, AF_INET);
-    ((struct sockaddr_in *) &arpreq.arp_pa)->sin_addr.s_addr = his_adr;
-    arpreq.arp_flags = ATF_PERM | ATF_PUBL;
-
-    if (socketioctl(s, SIOCSARP, (caddr_t)&arpreq) < 0)
-    {
-	syslog(LOG_ERR, "ioctl(SIOCSARP): %m");
+    if ((routes = socket(PF_ROUTE, SOCK_RAW, AF_INET)) < 0) {
+	syslog(LOG_ERR, "sifproxyarp: opening routing socket: %m");
 	return 0;
     }
+
+    arpmsg.hdr.rtm_type = RTM_ADD;
+    arpmsg.hdr.rtm_flags = RTF_ANNOUNCE | RTF_HOST | RTF_STATIC;
+    arpmsg.hdr.rtm_version = RTM_VERSION;
+    arpmsg.hdr.rtm_seq = ++rtm_seq;
+    arpmsg.hdr.rtm_addrs = RTA_DST | RTA_GATEWAY;
+    arpmsg.hdr.rtm_inits = RTV_EXPIRE;
+    arpmsg.dst.sin_len = sizeof(struct sockaddr_inarp);
+    arpmsg.dst.sin_family = AF_INET;
+    arpmsg.dst.sin_addr.s_addr = hisaddr;
+    arpmsg.dst.sin_other = SIN_PROXY;
+
+    arpmsg.hdr.rtm_msglen = (char *) &arpmsg.hwa - (char *) &arpmsg
+	+ arpmsg.hwa.sdl_len;
+    if (socketwrite(routes, &arpmsg, arpmsg.hdr.rtm_msglen) < 0) {
+	syslog(LOG_ERR, "add proxy arp entry: %m");
+	socketclose(routes);
+	return 0;
+    }
+
+    socketclose(routes);
+    arpmsg_valid = 1;
     return 1;
 }
 
 /*
  * cifproxyarp - Delete the proxy ARP entry for the peer.
  */
-int cifproxyarp (int unit, u_long his_adr)
+int
+cifproxyarp(unit, hisaddr)
+    int unit;
+    u_long hisaddr;
 {
-    struct arpreq arpreq;
+    int routes;
 
-    memset (&arpreq, '\0', sizeof(arpreq));
-    SET_SA_FAMILY(arpreq.arp_pa, AF_INET);
+    if (!arpmsg_valid)
+	return 0;
+    arpmsg_valid = 0;
 
-    ((struct sockaddr_in *) &arpreq.arp_pa)->sin_addr.s_addr = his_adr;
-    if (socketioctl(s, SIOCDARP, (caddr_t)&arpreq) < 0)
-    {
-	syslog(LOG_WARNING, "ioctl(SIOCDARP): %m");
+    arpmsg.hdr.rtm_type = RTM_DELETE;
+    arpmsg.hdr.rtm_seq = ++rtm_seq;
+
+    if ((routes = socket(PF_ROUTE, SOCK_RAW, AF_INET)) < 0) {
+	syslog(LOG_ERR, "sifproxyarp: opening routing socket: %m");
 	return 0;
     }
+
+    if (socketwrite(routes, &arpmsg, arpmsg.hdr.rtm_msglen) < 0) {
+	syslog(LOG_ERR, "delete proxy arp entry: %m");
+	socketclose(routes);
+	return 0;
+    }
+
+    socketclose(routes);
     return 1;
 }
+
+
 
 /*
  * get_ether_addr - get the hardware address of an interface on the
  * the same subnet as ipaddr.
- * Adapted from Linux version
  */
 #define MAX_IFS		32
 
-int get_ether_addr(u_long ipaddr, struct sockaddr *hwaddr)
+int
+get_ether_addr(ipaddr, hwaddr)
+    u_long ipaddr;
+    struct sockaddr_dl *hwaddr;
 {
-    struct ifreq *ifr, *ifend;
+    struct ifreq *ifr, *ifend, *ifp;
     u_long ina, mask;
+    struct sockaddr_dl *dla;
     struct ifreq ifreq;
     struct ifconf ifc;
     struct ifreq ifs[MAX_IFS];
 
     ifc.ifc_len = sizeof(ifs);
     ifc.ifc_req = ifs;
-    if (socketioctl(s, SIOCGIFCONF, &ifc) < 0) {
+    if (ioctl(s, NSIOCGIFCONF, &ifc) < 0) {
 	syslog(LOG_ERR, "ioctl(SIOCGIFCONF): %m");
 	return 0;
     }
@@ -597,11 +839,9 @@ int get_ether_addr(u_long ipaddr, struct sockaddr *hwaddr)
      * Scan through looking for an interface with an Internet
      * address on the same subnet as `ipaddr'.
      */
-    ifend = ifs + (ifc.ifc_len / sizeof(struct ifreq));
-    for (ifr = ifc.ifc_req; ifr < ifend; ifr++)
-    {
-	if (ifr->ifr_addr.sa_family == AF_INET)
-	{
+    ifend = (struct ifreq *) (ifc.ifc_buf + ifc.ifc_len);
+    for (ifr = ifc.ifc_req; ifr < ifend; ) {
+	if (ifr->ifr_addr.sa_family == AF_INET) {
 	    ina = ((struct sockaddr_in *) &ifr->ifr_addr)->sin_addr.s_addr;
 	    strncpy(ifreq.ifr_name, ifr->ifr_name, sizeof(ifreq.ifr_name));
 	    /*
@@ -619,33 +859,38 @@ int get_ether_addr(u_long ipaddr, struct sockaddr *hwaddr)
 	     */
 	    if (socketioctl(s, SIOCGIFNETMASK, &ifreq) < 0)
 		continue;
-	    mask = ((struct sockaddr_in *) &ifreq.ifr_addr)->sin_addr.s_addr;
+	    mask = ((struct sockaddr_in *) &ifr->ifr_addr)->sin_addr.s_addr;
 	    if ((ipaddr & mask) != (ina & mask))
 		continue;
 
 	    break;
 	}
-	ifr = (struct ifreq *) ((char *)&ifr->ifr_addr + 16/*ifr->ifr_addr.sa_len*/);
+	//ifr = (struct ifreq *) ((char *)&ifr->ifr_addr + ifr->ifr_addr.sa_len);
+	ifr = (struct ifreq *) ((char *)&ifr->ifr_addr + 16);
     }
 
     if (ifr >= ifend)
 	return 0;
-    syslog(LOG_INFO, "found interface %s for proxy arp", ifreq.ifr_name);
+    syslog(LOG_INFO, "found interface %s for proxy arp", ifr->ifr_name);
 
     /*
-     * Now get the hardware address.
+     * Now scan through again looking for a link-level address
+     * for this interface.
      */
-    if (socketioctl(s, SIOCGIFHWADDR, &ifreq) < 0)
-    {
-        syslog(LOG_ERR, "SIOCGIFHWADDR(%s): %m", ifreq.ifr_name);
-        return 0;
+    ifp = ifr;
+    for (ifr = ifc.ifc_req; ifr < ifend; ) {
+	if (strcmp(ifp->ifr_name, ifr->ifr_name) == 0
+	    && ifr->ifr_addr.sa_family == AF_LINK) {
+	    /*
+	     * Found the link-level address - copy it out
+	     */
+	    dla = (struct sockaddr_dl *) &ifr->ifr_addr;
+	    BCOPY(dla, hwaddr, dla->sdl_len);
+	    return 1;
+	}
+	//ifr = (struct ifreq *) ((char *)&ifr->ifr_addr + ifr->ifr_addr.sa_len);
+	ifr = (struct ifreq *) ((char *)&ifr->ifr_addr + 16);
     }
 
-    hwaddr->sa_family = ARPHRD_ETHER;
-    memcpy(hwaddr->sa_data, &ifreq.ifr_addr, 6);
-
-    return 1;
+    return 0;
 }
-
-#endif /*__riscos*/
-
