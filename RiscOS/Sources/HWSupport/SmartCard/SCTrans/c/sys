@@ -334,13 +334,13 @@ timer_handler(_kernel_swi_regs *r, void *pw)
  * handle events, select ones of interest to us and setup a callback to handle
  * them later.
  *
- * due to the way received data flushed from the buffer, ingore any rx data
- * events if there is two or more events already pending in the queue.
+ * due to the way received data flushed from the buffer, ignore any rx data
+ * events if there are two or more events already pending in the queue.
  */
 int
 upcall_handler(_kernel_swi_regs *r, void *pw)
 {
-  int	nbytes=0;
+  int	eof=0;
 
   switch (r->r[0])
   {
@@ -366,41 +366,50 @@ upcall_handler(_kernel_swi_regs *r, void *pw)
 	  g_event_busy = EVENT_BUSY;
 #endif
 #ifdef FUNAI_TWINSLOT
-	  if(g_uc_state != UC_BUSY)
+	  if(g_uc_state != UC_BUSY)   /* New serial data is Funai header */
           {
             do {
+              /* We have new serial data bytes to process and we are expecting a 2 byte header from
+                 the Funai microcontroller.
+                 com_ReadFunaiHeader reads the two header header bytes from the microcontroller
+                 (one byte per call), and if both bytes are read and it represents new data for
+                 slot 2 then it reads and processes the data from the slot 2 Smart Card.
+                 Note that slot 1 is treated differently and is not processed by com_ReadFunaiHeader */
               com_ReadFunaiHeader();
-  	      /** Find out the extent of our stream, to see if there
-  	          are still any characters in it **/
-  	      _swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 5, r->r[1], &nbytes);
-  	      /** If so, go round again **/
-	    } while(nbytes==0);
-          }
-          else if(g_slot2_state != IDLE)
-          {
-#ifdef EVENT_RETRY
-	    _kernel_irqs_off();
-	    if(g_event_busy == EVENT_BUSYCB)
-	    {
-	      g_callback_block = *r; /** Store the register block **/
-	      _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);
-	    }
-	    g_event_busy = EVENT_IDLE;
-	    _kernel_irqs_on();
-#endif
-            return(0);
-          }
-          else
-#endif
-          //sys_CancelWaitTimer();
-          if (num_data_events_pending<2)
-          {
-            num_data_events_pending++;
+  	      _swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 5, r->r[1], &eof);  /* Any more bytes in input stream? */
 
-            if (flags&flag_debouncing)  /* if currently debouncing, defer */
-              SET_FLAG(flags,flag_data_pending);
+	    } while(!eof && g_uc_state != UC_BUSY); /* If so, go round again, UNLESS our state has changed and we
+	                                               have data to process (bug fix in v0.46) */
+          }
+
+          if (g_uc_state == UC_BUSY && !eof)  /* We have unprocessed serial data which is from Smart Card itself */
+          {
+            if(g_slot2_state != IDLE)
+            {
+#ifdef EVENT_RETRY
+  	      _kernel_irqs_off();
+	      if(g_event_busy == EVENT_BUSYCB)
+  	      {
+  	        g_callback_block = *r; /** Store the register block **/
+  	        _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);
+  	      }
+  	      g_event_busy = EVENT_IDLE;
+  	      _kernel_irqs_on();
+#endif
+              return(0);   /* Handled */
+            }
             else
-              setup_event(SC_Event_DataPresent);
+#endif
+            //sys_CancelWaitTimer();
+            if (num_data_events_pending<2)
+            {
+              num_data_events_pending++;
+
+              if (flags&flag_debouncing)  /* if currently debouncing, defer */
+                SET_FLAG(flags,flag_data_pending);
+              else
+                setup_event(SC_Event_DataPresent);
+            }
           }
         }
         else
