@@ -24,7 +24,7 @@ CMHG    = cmhg
 CP      = copy
 LD      = link
 TLD     = tlink
-RM      = remove
+RM      = rm
 WIPE    = -wipe
 DEFMOD  = DefMod
 
@@ -132,11 +132,11 @@ install: rm.${COMPONENT}
         @echo ${COMPONENT}: installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} oz.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} aof.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
+        ${RM} ${OBJS}
+        ${RM} ${ROMOBJS}
+        ${WIPE} rm.${COMPONENT} ${WFLAGS}
+        ${WIPE} aof.${COMPONENT} ${WFLAGS}
+        ${WIPE} linked.${COMPONENT} ${WFLAGS}
         ${RM} h.filewatch
         ${RM} hdr.filewatch
         ${RM} ${TARGET}
