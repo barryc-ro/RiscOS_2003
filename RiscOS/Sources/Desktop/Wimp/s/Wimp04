@@ -2596,6 +2596,70 @@ textwidth_current_font_known
 ;;===================================================================
 
 my_StringBBox
+ [ true
+; Let's do the job properly this time:
+;  * Font_ScanString *can* be used to return the width instead of the bounding box
+;  * if_fancyfont icons might as well be measured the same way as the desktop font
+;  * icons with text above the sprite don't need the height trimming down
+
+        Entry   "R1,R7,R8"
+        MOV     R2, #0
+        MOV     R3, #bignum
+        MOV     R4, #bignum
+        SWI     XFont_ScanString        ; pushfontstring always puts font-selection control at start, so R0 not needed
+        MOV     R1, R3                  ; x offset to end of string
+        MOV     R2, #0                  ; dummy value
+        SWI     XFont_ConverttoOS       ; results are already pixel-aligned
+
+        LDR     R3, tempworkspace+28    ; retrieve icon flags
+        EOR     R3, R3, #if_rjustify :OR: if_vcentred :OR: if_hcentred  ; flip bits to make comparisons easier
+        TST     R3, #if_sprite
+        TSTNE   R3, #if_vcentred
+        TSTNE   R3, #if_rjustify :OR: if_hcentred
+        LDREQ   R2, systemfonty1        ; unless we've got a text+sprite icon with text below sprite, use full system font height
+
+        LDRNE   R5, [sp]                ; get original R1 (if we're dropping through)
+        STR     R1, [sp]                ; store width where it will be reloaded into R1
+        EXITS   EQ
+
+        ; Now we've still got to find the height using a Font_CharBBox loop, due to rounding errors in the
+        ; Font Manager's string bounding box code (PRM 3-463). However, we can make some simplifications, based upon
+        ; knowledge of what pushfontstring will have given us (ie only printable characters and font changes)
+
+        MOV     R7, #0                  ; cumulative maximum (starts at 0, so we'll always go up to the baseline at least)
+      [ UTF8
+        LDRB    R8, alphabet            ; set up for us by pushfontstring
+01      TEQ     R8, #ISOAlphabet_UTF8
+        LDRNEB  R1, [R5], #1
+        MOVEQ   R4, #6
+        MOVEQ   R6, R5
+        BLEQ    convert_UTF8_to_UCS4    ; may return -1 for malformed characters
+        MOVEQ   R1, R6
+        ADDEQ   R5, R5, R4
+        CMP     R1, #-1                 ; malformed character?
+        LDREQ   R1, =&FFFD              ; use special glyph for the purpose
+      |
+01      LDRB    R1, [R5], #1
+      ]
+        TEQ     R1, #0                  ; pushfontstring always null-terminates
+        BEQ     %FT02
+        TEQ     R1, #26                 ; font change?
+        LDREQB  R0, [R5], #1            ; set R0 to hold font handle
+        BEQ     %BT01
+
+        MOV     R2, #1:SHL:4            ; return OS units
+        SWI     XFont_CharBBox
+        LDRVS   R4, systemfonty1
+        CMP     R4, R7                  ; compare top of bbox with cumulative maximum
+        MOVGT   R7, R4
+        B       %BT01
+
+02      MOV     R2, R7
+        EXITS
+
+        LTORG
+
+ |
         Push    "R7,lr"
         [ {FALSE}
 ; unfortunately this can be a few pixels out, so we can't use it.
@@ -2715,6 +2779,7 @@ my_scan_end
         MOV     R2,R7
 
         Pull    "R7,PC"
+ ] ; end of horrible old string-width code
 
 
 
@@ -6586,16 +6651,6 @@ State_CurrentFont       *       0
 State_IconFont          *       1
 State_SymbolFont        *       2
 
-      [ UTF8
-        MACRO
-$lab    TEST_ARROW2 $c
-$lab
-        ; like TEST_ARROW, but always returns NE if R11 "Z" bit is clear (ie if alphabet is UTF-8)
-        TEST_ARROW $c
-        TEQEQP  PC, R11
-        MEND
-      ]
-
 pushfontstring TraceL font
       [ UTF8
         Push    "R0, R2-R6, R8-R11, LR"
@@ -6620,10 +6675,12 @@ pushfontstring TraceL font
         TraceNL font
 
       [ UTF8
-; check current alphabet - if it's UTF-8, we mustn't map characters to the symbol font, as they will be part of a multi-byte sequence
+; Initialise R11 (flag word, containing list of characters that need mapping to WimpSymbol)
         BL      read_current_alphabet
-        TOGPSR  Z_bit, R14 ; NE => alphabet is UTF-8
-        MOV     R11, PC    ; referred back to in TEST_ARROW2
+        LDR     R14, systemfont
+        TEQ     R3, R14                         ; is it a desktop font icon?
+        LDREQ   R11, systemfont_wimpsymbol_map  ; get the cached map if so (speedup)
+        BLNE    measure_symbols
       ]
 
         MOV     R8, R2
@@ -6671,22 +6728,34 @@ pushfontstring TraceL font
 
       [ UTF8
         TEQ     R10, #0
-        TEQNEP  PC, R11
-        BNE     pushfontstring_scan_UTF8_string   ; special code for passworded UTF-8 sequences
+        BEQ     pushfontstring_scan_string
+        LDRB    R14, alphabet
+        TEQ     R14, #ISOAlphabet_UTF8
+        BEQ     pushfontstring_scan_UTF8_string   ; special code for passworded UTF-8 sequences
       ]
 
 pushfontstring_scan_string TraceL font
         MOV     R0, #0
         MOV     R1, #State_CurrentFont
+      [ UTF8
+        LDRB    R2, alphabet
+      ]
         MOV     R6, #0
 ; R0 = index into destination
 ; R1 = state (State_CurrentFont, State_IconFont or State_SymbolFont)
+; R2 = alphabet
+; R3 = handle of icon font
 ; R6 = index into source
+; R8 -> source
+; R9 = "source buffer length" (bignum if indirected, else 12)
+; R10 = replacement character
+; R11 = WimpSymbol map
 
         B       pushfontstring_end_scan_loop
-; R5 = current character
 
 pushfontstring_start_scan_loop
+; R4 = width of current character
+; R5 = current character
         TEQ     R1, #State_SymbolFont
         BEQ     pushfontstring_scanning_symbol_font
         TEQ     R1, #State_CurrentFont
@@ -6694,10 +6763,10 @@ pushfontstring_start_scan_loop
 
 pushfontstring_scanning_icon_font
       [ UTF8
-        TEQ     R5, #' '
-        TSTEQ   R11, #Z_bit
-        ADDEQ   R0, R0, #1  ; may need expanding to UTF-8 &C2 &A0 in fixupfontstring
-        TEST_ARROW2 R5
+        Push    "R9"
+        MOV     R9, R5
+        BL      test_arrow
+        Pull    "R9"
       |
         TEST_ARROW R5
       ]
@@ -6707,10 +6776,10 @@ pushfontstring_scanning_icon_font
 
 pushfontstring_scanning_current_font
       [ UTF8
-        TEQ     R5, #' '
-        TSTEQ   R11, #Z_bit
-        ADDEQ   R0, R0, #1  ; may need expanding to UTF-8 &C2 &A0 in fixupfontstring
-        TEST_ARROW2 R5
+        Push    "R9"
+        MOV     R9, R5
+        BL      test_arrow
+        Pull    "R9"
       |
         TEST_ARROW R5
       ]
@@ -6721,10 +6790,10 @@ pushfontstring_scanning_current_font
 
 pushfontstring_scanning_symbol_font
       [ UTF8
-        TEQ     R5, #' '
-        TSTEQ   R11, #Z_bit
-        ADDEQ   R0, R0, #1  ; may need expanding to UTF-8 &C2 &A0 in fixupfontstring
-        TEST_ARROW2 R5
+        Push    "R9"
+        MOV     R9, R5
+        BL      test_arrow
+        Pull    "R9"
       |
         TEST_ARROW R5
       ]
@@ -6732,15 +6801,37 @@ pushfontstring_scanning_symbol_font
         MOVNE   R1, #State_IconFont
 
 pushfontstring_reinitialise_scan_loop
+      [ UTF8
+        ADD     R0, R0, R4
+        ADD     R6, R6, R4
+        TEQ     R5, #' '
+        ADDEQ   R0, R0, #1  ; may need expanding to UTF-8 &C2 &A0 in fixupfontstring
+      |
         ADD     R0, R0, #1
         ADD     R6, R6, #1
+      ]
 
 pushfontstring_end_scan_loop
         CMP     R6, R9
         BGE     pushfontstring_scan_loop_done
+      [ UTF8
+        LDRB    R5, [R8, R6]                    ; get byte
+        MOV     R4, #1
+        TEQ     R2, #ISOAlphabet_UTF8
+        TEQEQ   R5, #&E2                        ; optimisation: unless first byte is &E2 (as with all WimpSymbol characters),
+        Push    "R6", EQ                        ;               treat as a byte stream, even if alphabet is UTF-8
+        ADDEQ   R6, R8, R6
+        MOVEQ   R4, #6
+        BLEQ    convert_UTF8_to_UCS4
+        MOVEQ   R5, R6
+        Pull    "R6", EQ                        ; keep R4 returned from convert routine
+        CMP     R5, #" "
+        BHS     pushfontstring_start_scan_loop  ; must use unsigned in order to handle malformed characters!
+      |
         LDRB    R5, [R8, R6]
         CMP     R5, #" "
         BGE     pushfontstring_start_scan_loop
+      ]
 pushfontstring_scan_loop_done
 
 ; R6 = length of source
@@ -6794,30 +6885,51 @@ pushfontstring_copy_string TraceL font
 05
         Pull    "R2-R3"
         ]
-; R1 -> destination
 
         MOV     R0, #0
         MOV     R4, #0
         MOV     R5, #State_CurrentFont
 ; R0 = index into destination
+; R1 -> destination
+; R2 = alphabet
+; R3 = handle of icon font
 ; R4 = index into source
 ; R5 = state (State_CurrentFont, State_IconFont or State_SymbolFont)
+; R6 = maximum index into source (either index of terminator, or max length of buffer)
+; R7 = stack alignment
+; R8 -> source
+; R11 = WimpSymbol map
 
         B       pushfontstring_end_copy_loop
 
 pushfontstring_start_copy_loop
+      [ UTF8
+        LDRB    R9, [R8, R4]                    ; get byte
+        MOV     R10, #1
+        TEQ     R2, #ISOAlphabet_UTF8
+        TEQEQ   R9, #&E2                        ; optimisation: unless first byte is &E2 (as with all WimpSymbol characters),
+        Push    "R4,R6", EQ                     ;               treat as a byte stream, even if alphabet is UTF-8
+        ADDEQ   R6, R8, R4
+        MOVEQ   R4, #6
+        BLEQ    convert_UTF8_to_UCS4
+        MOVEQ   R9, R6
+        MOVEQ   R10, R4
+        Pull    "R4,R6", EQ
+; R10 = width of current character
+; R9 = current character
+      ]
         TEQ     R5, #State_SymbolFont
         BEQ     pushfontstring_copying_symbol_font
         TEQ     R5, #State_CurrentFont
         BEQ     pushfontstring_copying_current_font
 
 pushfontstring_copying_icon_font
+      [ UTF8
+        BL      test_arrow
+      |
         ;R9 := current character
         LDRB    R9, [R8, R4]
 
-      [ UTF8
-        TEST_ARROW2 R9
-      |
         TEST_ARROW R9
       ]
         BNE     pushfontstring_reinitialise_copy_loop
@@ -6839,12 +6951,12 @@ pushfontstring_copying_icon_font
         B       pushfontstring_reinitialise_copy_loop
 
 pushfontstring_copying_symbol_font
+      [ UTF8
+        BL      test_arrow
+      |
         ;R9 := current character
         LDRB    R9, [R8, R4]
 
-      [ UTF8
-        TEST_ARROW2 R9
-      |
         TEST_ARROW R9
       ]
         BEQ     pushfontstring_reinitialise_copy_loop
@@ -6862,13 +6974,13 @@ pushfontstring_copying_symbol_font
         B       pushfontstring_reinitialise_copy_loop
 
 pushfontstring_copying_current_font
+        [ outlinefont
+      [ UTF8
+        BL      test_arrow
+      |
         ;R9 := current character
         LDRB    R9, [R8, R4]
 
-        [ outlinefont
-      [ UTF8
-        TEST_ARROW2 R9
-      |
         TEST_ARROW R9
       ]
 
@@ -6879,23 +6991,25 @@ pushfontstring_copying_current_font
 
         MOVNE   R9, R3
         LDREQ   R9, symbolfont
-        ]
         STRB    R9, [R1, R0]
         ADD     R0, R0, #1
 
         ;set new state
         MOVNE   R5, #State_IconFont
         MOVEQ   R5, #State_SymbolFont
+        ]
 
 pushfontstring_reinitialise_copy_loop
         ;copy a byte
         LDRB    R9, [R8, R4]
-;        TEQ    R9,#160                 ; hard space
-;        MOVEQ  R9,#32                  ; doesn't screw the font manager up too much
         STRB    R9, [R1, R0]
         ;update both indexes
         ADD     R0, R0, #1
         ADD     R4, R4, #1
+      [ UTF8
+        SUBS    R10, R10, #1
+        BNE     pushfontstring_reinitialise_copy_loop  ; copy the other bytes in the character!
+      ]
 
 pushfontstring_end_copy_loop
         CMP     R4, R6
@@ -7105,5 +7219,106 @@ font_matrix
         DCD     32768,0,0,32768,0,0
         DCD     0
         ]
+
+      [ UTF8
+
+; This table cunningly works both as character strings and character numbers
+
+wimpsymbols
+        = "€", 0, 0, 0
+        = "„", 0, 0, 0
+        = "ˆ", 0, 0, 0
+        = "‰", 0, 0, 0
+        = "Š", 0, 0, 0
+        = "‹", 0, 0, 0
+
+; The next two tables *must* be kept in the same order!
+
+wimpsymbols_UTF8
+        = "âœ”", 0  ; €
+        = "âœ˜", 0  ; „
+        = "â‡", 0  ; ˆ
+        = "â‡’", 0  ; ‰
+        = "â‡“", 0  ; Š
+        = "â‡‘", 0  ; ‹
+
+wimpsymbols_UCS4
+        & &2714     ; €
+        & &2718     ; „
+        & &21D0     ; ˆ
+        & &21D2     ; ‰
+        & &21D3     ; Š
+        & &21D1     ; ‹
+
+; Work out which characters need mapping to WimpSymbol in this font
+; Entry: R3 = font handle
+; Exit:  R11 contains bits, bit n *clear* means index-n character in wimpsymbols table needs mapping
+measure_symbols
+        Entry   "R0-R8"
+        MOV     R11, #-1                ; start off assuming no glyphs need mapping
+        LDRB    R14, alphabet
+        TEQ     R14, #ISOAlphabet_UTF8
+        ADRNE   R7, wimpsymbols
+        ADREQ   R7, wimpsymbols_UTF8
+        MOV     R8, #0                  ; index into symbol list
+        MOV     R0, R3
+01      SUB     sp, sp, #16             ; space for returned bbox block
+        MOV     R1, #-1
+        Push    "R1"                    ; no split character
+        MOV     R1, #0
+        Push    "R1"                    ; no offsets
+        Push    "R1"
+        Push    "R1"
+        Push    "R1"
+        ADD     R1, R7, R8, LSL#2
+        LDR     R2, = 1:SHL:18 :OR: 1:SHL:8 :OR: 1:SHL:5
+        MOV     R3, #bignum
+        MOV     R4, #bignum
+        MOV     R5, sp
+        SWI     XFont_ScanString
+        ADD     sp, sp, #20
+        Pull    "R1-R2,R5-R6"           ; load bounding box from stack
+        SUBS    R5, R5, R1              ; calc bbox width/height
+        SUBLES  R6, R6, R2
+        SETPSR  Z_bit, R14, LE
+        TEQEQ   R3, #0
+        TEQEQ   R4, #0                  ; now EQ => offsets are both zero, and bbox has zero or negative width and height
+        MOVEQ   R14, #1
+        BICEQ   R11, R11, R14, LSL R8   ; if character is *not* defined, then clear its bit in R11 (=> test_arrow returns EQ)
+        ADD     R8, R8, #1
+        CMP     R8, #6                  ; six characters in the table
+        BLT     %BT01
+        EXITS
+
+; Compare a UCS-4 character against the WimpSymbol mapping bitmap, to see if it needs to be mapped
+; Entry: R2 = alphabet
+;        R9 = UCS-4 character
+;        R11 = mapping bitmap (as set up in measure_symbols)
+; Exit:  EQ => needs mapping
+test_arrow
+        ROUT
+        Push    "LR"
+        CMP     R9, #&80
+        Pull    "PC", LT                ; optimisation for ASCII: return NE
+        Push    "R0,R1"
+        TEQ     R2, #ISOAlphabet_UTF8
+        ADRNE   R0, wimpsymbols
+        ADREQ   R0, wimpsymbols_UCS4
+        MOV     R1, #0                  ; index into symbol list
+01      LDR     R14, [R0, R1, LSL#2]
+        CMP     R9, R14
+        BEQ     %FT02
+        ADD     R1, R1, #1
+        CMP     R1, #6                  ; six characters in table
+        BNE     %BT01
+        CMP     PC, #0
+        Pull    "R0,R1,PC"              ; return NE
+02      ; we've found a character from the list - what does R11 say?
+        MOV     R14, #1
+        TST     R11, R14, LSL R1        ; set Z according to R1-th bit of R11
+        Pull    "R0,R1,PC"
+
+        LTORG
+      ]
 
         END
