@@ -11,6 +11,7 @@
 /* Author:  A.D.Hodgkinson.                                   */
 /*                                                            */
 /* History: 09-Sep-1999: Created.                             */
+/*          09-Jul-2001: PRISM compliant.                     */
 /**************************************************************/
 
 #include <stdio.h>
@@ -77,10 +78,11 @@ client * client_list = NULL;
 /* Local statics */
 
 static void * module_wsp                        = NULL;
-
-static bool   callback_pending_flag             = false;
 static bool   clibrary_realloc_routine_is_buggy = false;
+
+static bool   registered                        = false;
 static bool   upcallv_claimed                   = false;
+static bool   callback_pending_flag             = false;
 
 /* Local functions */
 
@@ -91,6 +93,10 @@ static void              module_tear_down             (void);
 
 static _kernel_oserror * module_claim_upcall_vector   (void);
 static _kernel_oserror * module_release_upcall_vector (void);
+
+static _kernel_oserror * module_try_to_register       (void);
+static _kernel_oserror * module_try_to_deregister     (void);
+static _kernel_oserror * module_register              (void);
 
 /**************************************************************/
 /* module_check_os_version()                                  */
@@ -188,6 +194,12 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
 
     if (e != NULL) return e;
 
+    /* Register with PRISM - No Such SWI is hidden, other */
+    /* errors are reported.                               */
+
+    e = module_register();
+    if (e != NULL && e->errnum != 0x1E6) return e;
+
   #endif
 
   if (
@@ -220,6 +232,18 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
 
 static void module_atexit(void)
 {
+  /* Ensure pending callbacks are cancelled */
+
+  if (callback_pending_flag == true)
+  {
+    (void) _swix(OS_RemoveCallBack,
+                 _INR(0,1),
+                 callback_entry,
+                 module_wsp);
+
+    callback_pending_flag = false;
+  }
+
   callout_final(module_wsp);
   messages_file_close();
 
@@ -235,38 +259,15 @@ static void module_atexit(void)
   /* Get rid of the UpCallV handler */
 
   module_release_upcall_vector();
+  module_try_to_deregister();
 
   /* Shut down everything else */
 
   module_tear_down();
   protocol_free_protocols();
   register_free_clients();
-}
 
-/**************************************************************/
-/* module_kill()                                              */
-/*                                                            */
-/* Closedown code, usual finalisation entry point stuff.      */
-/*                                                            */
-/* Parameters: As normal for a CMHG finalisation function.    */
-/**************************************************************/
-
-_kernel_oserror * module_kill(int fatal, int podule, void * pw)
-{
-  (void) fatal;
-  (void) podule;
-
-  /* Ensure pending callbacks are cancelled */
-
-  if (callback_pending_flag == true)
-  {
-    (void) _swix(OS_RemoveCallBack,
-                 _INR(0,1),
-                 callback_entry,
-                 pw);
-
-    callback_pending_flag = false;
-  }
+  /* Send the "dying" service call for Video Control */
 
   (void) _swix(OS_ServiceCall,
                _INR(0,2),
@@ -275,7 +276,18 @@ _kernel_oserror * module_kill(int fatal, int podule, void * pw)
                Service_VideoControl,
                Module_VersionNumber);
 
-  return NULL;
+  /* Send the "dying" service call for PRISM */
+
+  (void) _swix(OS_ServiceCall,
+               _INR(0,4),
+
+               PRISMModuleDying,
+               Service_PRISM_Core,
+               0,
+               VideoControl_PRISMID,
+               Module_VersionNumber);
+
+  return;
 }
 
 /**************************************************************/
@@ -334,11 +346,115 @@ _kernel_oserror * module_release_upcall_vector(void)
 }
 
 /**************************************************************/
+/* module_try_to_register()                                   */
+/*                                                            */
+/* Attempts to register with PRISM. Exits if already          */
+/* registered. "registered" is set to 1 if registration is    */
+/* successful, else left at its previous value.               */
+/**************************************************************/
+
+static _kernel_oserror * module_try_to_register(void)
+{
+  _kernel_oserror * e;
+
+  dprintf(("", "module_try_to_register: Called\n"));
+
+  if (registered)
+  {
+    dprintf(("", "module_try_to_register: Already registered, exitting\n"));
+    return NULL;
+  }
+
+  e = _swix(PRISM_ComponentRegister,
+            _INR(0,4),
+
+            0,
+            VideoControl_00,
+            VideoControl_PRISMID,
+            Module_VersionNumber,
+            Module_Help " © Pace 2000 (" Module_Date ")");
+
+  if (e == NULL) registered = true;
+
+  dprintf(("", "module_try_to_register: Finished, registered = %d\n", registered));
+
+  return e;
+}
+
+/**************************************************************/
+/* module_try_to_deregister()                                 */
+/*                                                            */
+/* Attempts to deregister with PRISM. Exits if not            */
+/* registered. "registered" is set to 0 whether or not the    */
+/* call to PRISM to deregister raises an error.               */
+/**************************************************************/
+
+static _kernel_oserror * module_try_to_deregister(void)
+{
+  _kernel_oserror * e;
+
+  dprintf(("", "module_try_to_deregister: Called\n"));
+
+  if (registered == false)
+  {
+    dprintf(("", "module_try_to_deregister: Not registered, exitting\n"));
+    return NULL;
+  }
+
+  e = _swix(PRISM_ComponentDeregister,
+            _INR(0,2),
+
+            0,
+            VideoControl_00,
+            VideoControl_PRISMID);
+
+  registered = false;
+
+  dprintf(("", "module_try_to_deregister: Finished, e = %p\n", e));
+  if (e) dprintf(("", "module_try_to_register: '%s'\n", e->errmess));
+
+  return e;
+}
+
+/**************************************************************/
+/* module_register()                                          */
+/*                                                            */
+/* Attempts to register with PRISM. If we get "SWI not known" */
+/* and this isn't a ROM build, try loading PRISM. That should */
+/* send the "started" service call around which leads to      */
+/* another attempt to register later.                         */
+/**************************************************************/
+
+static _kernel_oserror * module_register(void)
+{
+  _kernel_oserror * e = module_try_to_register();
+
+  if (e == NULL) return NULL;
+  if (e->errnum != PRISM_NoSuchSWI) return e;
+
+  #ifndef ROM
+
+    /* Try to load PRISM - if it starts it should send round a       */
+    /* service call that'll prompt us to attempt registration again. */
+
+    _swix(OS_Module,
+          _INR(0,1),
+
+          1, /* Load */
+          "System:Modules.PRISM.PRISM");
+
+  #endif
+
+  return NULL;
+}
+
+/**************************************************************/
 /* callback_handler()                                         */
 /*                                                            */
 /* Standard callback handler. When invoked, assumes the       */
 /* module has just started, and issues Service_VideoControl   */
-/* / VideoControlModuleStarted.                               */
+/* / VideoControlModuleStarted and Service_PRISM_Core /       */
+/* ModuleStarted.                                             */
 /*                                                            */
 /* Parameters: As normal for a CMHG callback handler.         */
 /**************************************************************/
@@ -355,11 +471,24 @@ int callback_handler(_kernel_swi_regs * r, void * pw)
 
   callback_pending_flag = false;
 
+  /* Send the "started" service call for Video Control */
+
   _swix(OS_ServiceCall,
         _INR(0,2),
 
         VideoControlModuleStarted,
         Service_VideoControl,
+        Module_VersionNumber);
+
+  /* Send the "started" service call for PRISM */
+
+  _swix(OS_ServiceCall,
+        _INR(0,4),
+
+        PRISMModuleStarted,
+        Service_PRISM_Core,
+        0,
+        VideoControl_PRISMID,
         Module_VersionNumber);
 
   return 1;
@@ -738,10 +867,44 @@ void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
 
   dprintf(("", "service_handler: Called for %08x (%d, %d)\n", service_number, r->r[0], r->r[2]));
 
-  if (service_number == Service_Standby)
+  switch (service_number)
   {
-    if (r->r[0] & (1u<<0)) module_tear_down();
-  }
+    case Service_Standby:
+    {
+      if (r->r[0] & (1u<<0)) module_tear_down();
+    }
+    break;
+
+    case Service_PRISM_Core:
+    {
+      switch (r->r[0])
+      {
+        case PRISMSessionAborting:
+        case PRISMCleanShutdown:
+        case PRISMAbortiveShutdown:
+        {
+          //// Presently undefined
+        }
+        break;
+
+        case PRISMModuleDying:
+        {
+          /* If this is PRISM, note that we're not registered anymore */
+
+          if (r->r[3] == PRISM_PRISMID) registered = false;
+        }
+        break;
+
+        case PRISMModuleStarted:
+        {
+          /* If this is PRISM, re-register with it */
+
+          if (r->r[3] == PRISM_PRISMID) module_try_to_register();
+        }
+      }
+    }
+
+  } /* 'switch (service_number)' */
 }
 
 /**************************************************************/
