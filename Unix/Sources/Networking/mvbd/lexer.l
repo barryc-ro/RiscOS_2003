@@ -58,7 +58,7 @@ CIDR    {NUMBER}{IPCOMP}*"/"{NUMBER}
 
 COMMENT #.*$
 
-FILENAME [A-Za-z0-9/:\\\-.]+
+FILENAME [A-Za-z0-9/:\\\-._]+
 
 %%
 

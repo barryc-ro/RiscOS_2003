@@ -30,7 +30,7 @@ YACC	= bison
 COMPONENT = mvbd
 
 DEFINES = ${COMPAT} ${OPTIONS}
-CFLAGS  = -c -g ${DEFINES} ${INCLUDES} ${DEPENDS} -Wall
+CFLAGS  = -c -g ${DEFINES} ${INCLUDES} ${DEPENDS} -Wall 
 WFLAGS  = -rf
 LEXFLAGS= -i
 

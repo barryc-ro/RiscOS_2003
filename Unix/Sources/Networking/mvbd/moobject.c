@@ -268,17 +268,19 @@ static void multicaster_get_time(struct timeval *tv)
 
 void multicaster_run(multicaster_object *mo)
 {
-        int loop, max_loops = 5000;
-        struct timeval now, start_sample;
-        int current_pps, packet_count, packets_per_loop;
-        double packets_per_second;
+        int loop;
+        struct timeval now, started_block;
+        int packet_count, packets_per_loop;
         int rate_bps = configure_read_specific_master_rate(mo->f); /* rate in bits per second */
-        unsigned long desired_delay, current_delay, usec_lap;
+        unsigned long desired_delay, current_delay;
+        static double total_bit_deviation = 0;
+        static int last_periodic_deviation_check;
 
+        const int bits_per_packet = (mo->size_of_buffer) * 8.0;
+        /* number of packets required per second */
+        const double packets_per_second = (double) rate_bps / (double) bits_per_packet;
         /* number of packets per delay period */
         packets_per_loop = 1;
-        /* number of packets required per second */
-        packets_per_second = (double) rate_bps / (mo->size_of_buffer * 8.0);
 
         platform_debug((LOG_DEBUG, "\nMulticaster for %s to %s",
                 multicast_file_get_filename(mo->f),
@@ -295,114 +297,156 @@ void multicaster_run(multicaster_object *mo)
 
         /* Initialise the current variables so everything looks rosy */
         current_delay = desired_delay;
-        current_pps = packets_per_second;
         packet_count = 0;
 
-        multicaster_get_time(&start_sample);
+        multicaster_get_time(&started_block);
+        last_periodic_deviation_check = started_block.tv_sec;
 
         platform_log(LOG_INFO, "Initial delay period: %lu; ppl: %d\n", current_delay, packets_per_loop);
 
-        for (;max_loops;) {
-                /* Packet count is the total number of packets transmitted in this sample period */
-                for (loop = 0; loop < packets_per_loop; ++loop) {
-                        multicaster_send_part(mo);
-                        ++packet_count;
-                        fflush(stdout);
+        while (1)
+        {
+            unsigned int sample_bits_sent = 0;
+            unsigned int sample_time_usec = 0;
+            signed int   sample_bit_deviation   = 0;
+            signed int   packet_correction_up   = 0;
+            signed int   packet_correction_down = 0;
+            signed int   adjust;
+            double sample_bit_ratio, sample_bits_expected, old_delay, new_delay;
+
+            do
+            {
+                unsigned int packets_this_loop, bits_sent, usec_elapse;
+                double bits_expected;
+
+                packets_this_loop = packets_per_loop;
+                if (total_bit_deviation > ((double) bits_per_packet * 1.15))
+                {
+                    packets_this_loop--;
+                    packet_correction_down--;
                 }
-                //putchar('.');
+                if (total_bit_deviation < (0.0 - ((double) bits_per_packet) * 1.15))
+                {
+                    packets_this_loop++;
+                    packet_correction_up++;
+                }
+
+                for (loop = 0; loop < packets_this_loop; ++loop)
+                {
+                    multicaster_send_part(mo);
+                    ++packet_count;
+                    fflush(stdout);
+                }
                 usleep(current_delay);
                 multicaster_get_time(&now);
-                /* Calculate the number of microseconds since we last examined a sample */
-                usec_lap = ((now.tv_usec - start_sample.tv_usec) +
-                             1000000 * (now.tv_sec - start_sample.tv_sec));
 
-                {
-                        /* Calculate the ratio of elapsed time to one second so that we can scale
-                         * all the values appropriately for the actual real time elapsed
-                         */
-                        const double usec_d = ((double) usec_lap) / 1000000.0;
+                /* Calculate the number of microseconds elapsed sending this block */
+                usec_elapse = ((now.tv_usec - started_block.tv_usec) +
+                                1000000 * (now.tv_sec - started_block.tv_sec));
 
-                        /* The expected number of packets is the total number of packets that we expect
-                         * to have been able to transmit in the current sample period
-                         */
-                        const double bits_expected = usec_d * (double) rate_bps;
+                /* Get number of bits transmitted - it'll be useful
+                 */
+                bits_sent = packet_count * bits_per_packet;
 
-                        /* Calculate the deviation of the actual number of bits in this sample period
-                         * and the expected number of packets in this period
-                         */
-                        const double bit_deviation = bits_expected -
-                                                     (packet_count * (mo->size_of_buffer) * 8.0);
+                /* The expected number of bits is the number of bits that we *should*
+                 * have been able to transmit in the current sample period.
+                 */
+                bits_expected = (double) rate_bps * (((double) usec_elapse) / 1000000.0);
 
-                        {
-                                /* We now alter packet delays to adjust the bitrate      */
+                total_bit_deviation += (bits_sent - bits_expected);
+                sample_bit_deviation += (bits_sent - bits_expected);
+                sample_bits_sent += bits_sent;
+                sample_time_usec += usec_elapse;
 
-                                /* Divide bits we actually transmitted by bits we really wanted to, giving
-                                 * the fraction of bits transmitted in this sample period.
-                                 */
-                                double ratio = ((double) (packet_count * (mo->size_of_buffer) * 8.0)) / bits_expected;
+                platform_log(LOG_DEBUG,
+                    "beat; usecs %7u (%7u); sent: %6u (%.0f); total_dev: %.0f; packets:%2d ",
+                    usec_elapse, current_delay, bits_sent, bits_expected, total_bit_deviation,
+                    packets_this_loop);
 
-                                /* Get hold of a double holding the current sleep period */
-                                double old_delay = (double) current_delay;
-                                /* Get hold of a double holding the optimum sleep period */
-                                double target_delay = (double) desired_delay;
+                packet_count = 0;
+                started_block = now;
 
-                                double adjust, new_delay, delay_diff;
+            } while (now.tv_sec == last_periodic_deviation_check);
+            /* *** End of inner transmission loop *** */
+
+            /* We now alter packet delays to adjust the bitrate      */
+
+            sample_bits_expected = ((double) rate_bps) * (double) sample_time_usec / 1000000.0;
+
+            /* Divide bits we actually transmitted by bits we really wanted to, giving
+             * the fraction of bits transmitted in this sample period.
+             */
+            sample_bit_ratio = sample_bits_sent / sample_bits_expected;
+
+            /* Get hold of a double holding the current sleep period */
+            old_delay = (double) current_delay;
 
 
-                                /* The division allows us to gradually tend towards the
-                                 * correct speed gradually.
-                                 */
-                                /*adjust = (old_delay * ratio - old_delay) / 8.0;*/
-                                adjust = (ratio - 1 / (pow(ratio, 2/3)));
-                                new_delay = (old_delay + old_delay * adjust);
-                                current_delay = (unsigned long) (new_delay + 0.5);
+            /* The division allows us to gradually tend towards the
+             * correct speed gradually.
+             */
+            /*adjust = (old_delay * ratio - old_delay) / 8.0;*/
+            /*adjust = (sample_bit_ratio - (1.0 / (sample_bit_ratio)));*/
 
-                                platform_debug((LOG_INFO,
-                                        "tick(%d/%.0f); usecs %lu; bit ratio: %f; "
-                                        "old_delay: %f; new_delay: %f (%f); ppl:%2d ",
-                                        packet_count * (mo->size_of_buffer) * 8, bits_expected, usec_lap,
-                                        ratio, old_delay, new_delay, adjust, packets_per_loop));
+            adjust    = total_bit_deviation;
+            while (fabs(adjust) > old_delay)
+            {
+                adjust = adjust / 2;
+            }
+            new_delay = (old_delay + adjust / 10.0);
 
-                                platform_debug((LOG_DEBUG,
-                                        "tick(%3d/%3d); usec is %lu; ratio is %f; "
-                                        "old_rate is %f; new_rate is %f; \n",
-                                        packet_count, (int) ((packet_count / usec_d)), usec_lap,
-                                        ratio, old_delay, new_delay));
+            /* new_delay = old_delay + (total_bit_deviation / 100.0);*/
 
-                                /* Check to see if we are approaching the target.  If not, then the
-                                 * likelihood is that the machine is not accurate enough to enable the
-                                 * timings to work, so increase the number of packets we send per tick,
-                                 * and reduce the number of ticks required per second accordingly.
-                                 */
+            current_delay = (unsigned long) (new_delay + 0.5);
 
-                                /* Calculate the difference between the desired delay and the actual delay */
-                                /*delay_diff = new_delay - 1200;  was target_delay;*/
-                                /* if (delay_diff < 0 ) delay_diff = 0.0 - delay_diff;*/
+            platform_log(LOG_INFO,
+                    "tick; usecs:%8u; bit dev:%7d (%6.4f); total_dev:%7.0f; "
+                    "old_delay:%5.0f; new_delay:%5.0f (%6.3f%%); ppl:%2d (%3d) corrected:%4d:%4d",
+                     sample_time_usec, sample_bit_deviation, sample_bit_ratio, total_bit_deviation,                    
+                     old_delay, new_delay, ((new_delay / old_delay) * 100) - 100,
+                     packets_per_loop, sample_bits_sent / bits_per_packet, packet_correction_down,
+                     packet_correction_up);
 
-                                /*platform_log(LOG_INFO, "Delay difference = %f", delay_diff);*/
+            /*platform_debug((LOG_DEBUG,
+                    "tick(%3d/%3d); usec is %lu; ratio is %f; "
+                    "old_rate is %f; new_rate is %f; \n",
+                    packet_count, (int) ((packet_count / usec_d)), usec_lap,
+                    ratio, old_delay, new_delay));
+            */
+            /* Check to see if we are approaching the target.  If not, then the
+             * likelihood is that the machine is not accurate enough to enable the
+             * timings to work, so increase the number of packets we send per tick,
+             * and reduce the number of ticks required per second accordingly.
+             */
 
-                                        if (new_delay < 200 && packets_per_loop < 16) {
-                                               platform_debug((LOG_DEBUG, "  DIVERGE.  Increment packets/loop"));
-                                               ++packets_per_loop;
-                                               desired_delay = packets_per_loop * 1000000 / packets_per_second;
-                                               current_delay = desired_delay;
-                                        }
-                                        if (0 && new_delay > 100000 && packets_per_loop > 1) {
-                                                --packets_per_loop;
-                                               desired_delay = packets_per_loop * 1000000 / packets_per_second;
-                                               current_delay = desired_delay;
-                                        }
+            /* Calculate the difference between the desired delay and the actual delay */
+            /*delay_diff = new_delay - 1200;  was target_delay;*/
+            /* if (delay_diff < 0 ) delay_diff = 0.0 - delay_diff;*/
 
-                                /* platform_log(LOG_INFO, "Desired delay= %d", desired_delay);*/
+            /*platform_log(LOG_INFO, "Delay difference = %f", delay_diff);*/
 
-                                /* For safety! */
-                                if (current_delay == 0) {
-                                        current_delay = desired_delay;
-                                }
-                        }
+                    if (new_delay < 800 && packets_per_loop < 8) {
+                           platform_debug((LOG_DEBUG, "  DIVERGE.  Increment packets/loop"));
+                           ++packets_per_loop;
+                           desired_delay = packets_per_loop * 1000000 / packets_per_second;
+                           current_delay = desired_delay;
+                    }
+                    if (new_delay > 10000 && packets_per_loop > 1) {
+                            --packets_per_loop;
+                           desired_delay = packets_per_loop * 1000000 / packets_per_second;
+                           current_delay = desired_delay;
+                    }
 
-                        packet_count = 0;
-                        start_sample = now;
-                }
-        }
+            /* platform_log(LOG_INFO, "Desired delay= %d", desired_delay);*/
+
+            /* For safety! */
+            if (current_delay <= 0) {
+                    current_delay = desired_delay;
+            }
+
+            last_periodic_deviation_check = now.tv_sec;
+            sample_bits_sent = 0;
+            sample_time_usec = 0;
+            sample_bit_deviation = 0;
+      }
 }
