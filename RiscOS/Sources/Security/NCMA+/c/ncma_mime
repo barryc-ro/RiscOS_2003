@@ -58,6 +58,8 @@ int handle_mime_object(char *file)
 
     unsigned char *time_ptr, *date_ptr, *dst_ptr;
     unsigned int time_bytes, date_bytes, dst_bytes;
+    unsigned char *arg_block_ptr;
+    unsigned int arg_block_bytes = 4096;
 
     int dst_val;
 
@@ -110,13 +112,18 @@ int handle_mime_object(char *file)
         return(-1);
     }
 
+    ram_content_bytes = 0;
     fread(&buff, sizeof(char), 2, fp);
     ram_content_bytes = read_big_short((char *)&buff);
 
     DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: RAM contents: %d bytes\n", ram_content_bytes);
 
-    ram_filepos = ftell(fp);
-    fseek(fp, (long)ram_content_bytes, SEEK_CUR); /* skip the RAM block */
+    if(ram_content_bytes != 0) {
+      ram_filepos = ftell(fp);
+      fseek(fp, (long)ram_content_bytes, SEEK_CUR); /* skip the RAM block */
+    } else {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: downloaded RAM block is empty - skipping\n");
+    }
 
     fgetpos(fp, &checkpoint);
     fread(&buff, sizeof(unsigned int), 1, fp);
@@ -142,22 +149,29 @@ int handle_mime_object(char *file)
 
     }
 
-    if(ram_block_ptr != NULL) {
+    if(ram_content_bytes != 0) {
+      if(ram_block_ptr != NULL) {
         DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: freeing old RAM connection matrix...\n");
         rmfree(ram_block_ptr); /* release the old connection matrix */
+      }
+
+      if((ram_block_ptr = (unsigned char *)rmalloc(ram_content_bytes, "Connect Matrix"))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't claim memory for connection matrix\n");
+        fclose(fp);
+        return(-1);
+      }
     }
 
-    if((ram_block_ptr = (unsigned char *)rmalloc(ram_content_bytes, "Connect Matrix"))==NULL) {
-        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't claim memory for connection matrix\n");
+    if((arg_block_ptr = (unsigned char *)rmalloc(arg_block_bytes, "Arg Block"))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't claim memory for arg block\n");
         fclose(fp);
         return(-1);
     }
 
-
-    if((fbytes=fread(ram_block_ptr, 1, ram_content_bytes, fp)) != 0) { /* trailing data */
+    if((fbytes=fread(arg_block_ptr, 1, arg_block_bytes, fp)) != 0) { /* trailing data */
        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: read %d bytes of trailing data\n", fbytes);
 
-       if((dptr = strstr((char *)ram_block_ptr, DONE_URL_SENTINEL))!=NULL) {
+       if((dptr = strstr((char *)arg_block_ptr, DONE_URL_SENTINEL))!=NULL) {
          if(done_url_ptr != NULL) free(done_url_ptr);
 
          if((done_url_ptr = (char *)malloc(strlen(dptr)))!=NULL) {
@@ -165,7 +179,7 @@ int handle_mime_object(char *file)
              DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: got DONE_URL=%s\n", done_url_ptr);
          }
 
-         if((dptr = strstr((char *)ram_block_ptr, ERROR_URL_SENTINEL))!=NULL) {
+         if((dptr = strstr((char *)arg_block_ptr, ERROR_URL_SENTINEL))!=NULL) {
            if(error_url_ptr != NULL) free(error_url_ptr);
 
            if((error_url_ptr = (char *)malloc(strlen(dptr)))!=NULL) {
@@ -175,22 +189,22 @@ int handle_mime_object(char *file)
          }
        } else { /* no URL info, must be time stuff */
          DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: no URLs, searching for TimeZone info\n");
-         if((tptr = find_tag_in_block(ram_block_ptr, fbytes, NCITimeZoneTag, &tbytes, NULL))!=NULL) { /* aha, got a time zone */
+         if((tptr = find_tag_in_block(arg_block_ptr, fbytes, NCITimeZoneTag, &tbytes, NULL))!=NULL) { /* aha, got a time zone */
            DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: found - setting TimeZone to '%d'\n", *(signed char *)(tptr+1));
          } else {
              DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: no TimeZone information\n");
          }
 
-	 if((dst_ptr = find_tag_in_block(ram_block_ptr, fbytes, NCIDSTFlagTag, &dst_bytes, NULL))!=NULL) {
+	 if((dst_ptr = find_tag_in_block(arg_block_ptr, fbytes, NCIDSTFlagTag, &dst_bytes, NULL))!=NULL) {
 	     dst_val = read_big_short((char *)dst_ptr);
-	     DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_onject: DST Flag is %sSET\n", dst_val?"":"UN");
+	     DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: DST Flag is %sSET\n", dst_val?"":"UN");
 	     //ncma_nvram_set_dst(dst_val);
 	 } else {
 	     DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: no DST information in block\n");
 	 }
 
-         if(((time_ptr = find_tag_in_block(ram_block_ptr, fbytes, NCITimeTag, &time_bytes, NULL))!=NULL) &&
-            ((date_ptr = find_tag_in_block(ram_block_ptr, fbytes, NCIDateTag, &date_bytes, NULL))!=NULL)) {
+         if(((time_ptr = find_tag_in_block(arg_block_ptr, fbytes, NCITimeTag, &time_bytes, NULL))!=NULL) &&
+            ((date_ptr = find_tag_in_block(arg_block_ptr, fbytes, NCIDateTag, &date_bytes, NULL))!=NULL)) {
                 *(time_ptr + time_bytes) = 0; /* terminate, will overwrite timezone tag */
                 *(date_ptr + date_bytes) = 0; /* terminate, will overwrite time tag */
                 set_time_now((char *)date_ptr, (char *)time_ptr);
@@ -201,15 +215,22 @@ int handle_mime_object(char *file)
 
     } /* endif trailing data */
 
+    rmfree(arg_block_ptr);
+
     /* ok, now rewind and slurp in the RAM contents */
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: loading RAM content\n");
 
-    fseek(fp, ram_filepos, SEEK_SET);
+    if(ram_content_bytes != 0) {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: loading RAM content\n");
 
-    if(fread(ram_block_ptr, ram_content_bytes, 1, fp) != 1) { /* oh dear */
-      DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't read RAM contents\n");
-      fclose(fp);
-      return(-1);
+      fseek(fp, ram_filepos, SEEK_SET);
+
+      if(fread(ram_block_ptr, ram_content_bytes, 1, fp) != 1) { /* oh dear */
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't read RAM contents\n");
+        fclose(fp);
+        return(-1);
+      }
+    } else {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: skipping RAM phase\n");
     }
 
     /* fast forward, and slurp in the smartcard contents */
@@ -376,15 +397,16 @@ int handle_mime_object(char *file)
 
     ram_block_bytes = ram_content_bytes;
 
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: seeking RAM enterprise block\n");
-    if(find_ram_enterprise_block()<0) {
+    if(ram_content_bytes) {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: seeking RAM enterprise block\n");
+      if(find_ram_enterprise_block()<0) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: RAM enterprise block lookup failed\n");
         return(-1);
-    }
+      }
 
-    /* verify the RAM contents here */
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: authenticating RAM contents\n");
-    if(ncma_auth(ram_eb_ptr, ram_eb_bytes, ram_sig_ptr, ram_sig_bytes, ram_cert_ptr, ram_cert_bytes)<0) {
+      /* verify the RAM contents here */
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: authenticating RAM contents\n");
+      if(ncma_auth(ram_eb_ptr, ram_eb_bytes, ram_sig_ptr, ram_sig_bytes, ram_cert_ptr, ram_cert_bytes)<0) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: RAM authentication failed\n");
 
 #ifdef AUTHENTICATE_SIGNATURES
@@ -401,9 +423,10 @@ int handle_mime_object(char *file)
 
     DBUG_PRINTF(DBUG_LVL_DIAG,"handle_mime_object: rebuilding RAM cache\n");
 
-    if(build_ram_cache()<0) {
+      if(build_ram_cache()<0) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: rebuild ram cache failed\n");
         return(-1);
+      }
     }
 #if 0
     /* it'd be nice to do this here, but there are now too many cases to make it general */
