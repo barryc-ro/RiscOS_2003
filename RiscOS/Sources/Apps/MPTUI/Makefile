@@ -41,8 +41,9 @@ TARGET		=
 #
 # Export Paths for Messages module
 #
-RESAPP		= ${RESDIR}.${APP}
-RESRES 		= ${RESDIR}.Resources
+EXPORTDIR	= <Resource$Dir>
+RESAPP		= ${EXPORTDIR}.${APP}
+RESRES 		= ${EXPORTDIR}.Resources
 
 #
 # Generic rules:
@@ -65,15 +66,15 @@ local_clean:
 
 dirs:
         @echo ** Creating directory structure
-        ${MKDIR} ${RESDIR}
-        ${MKDIR} ${RESDIR}.${APP}
+        ${MKDIR} ${EXPORTDIR}
+        ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESRES}
         ${MKDIR} ${RESRES}.NVRAM
         ${MKDIR} ${RESRES}.Wimp
         IfThere Resources.${USERIF}.${LOCALE}.${APP} Then \
-	  ${CP} Resources.${USERIF}.${LOCALE}.${APP} ${RESDIR}.${APP} T~V~CFQR \
+	  ${CP} Resources.${USERIF}.${LOCALE}.${APP} ${RESAPP} T~V~CFQR \
 	Else \
-	  ${CP} Resources.${USERIF}.UK.${APP} ${RESDIR}.${APP} T~V~CFQR
+	  ${CP} Resources.${USERIF}.UK.${APP} ${RESAPP} T~V~CFQR
 
 translate: dirs
         @echo ** Translating NCDialler...
