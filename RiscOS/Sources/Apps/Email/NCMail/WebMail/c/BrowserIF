@@ -4,40 +4,455 @@
 /*          This takes the form of receiving display request messages   */
 /*          and opening/closing web pages.                              */
 /*                                                                      */
-/* Author:  Neil Bingham <mailto:nbingham@acorn.com>                    */
-/* History: 0.01  Wed 16th September 1998                               */
+/* Author:  Ben Laughton <mailto:blaughton@acorn.com>                   */
+/* History: 0.01  Mon 21st September 1998                               */
 /*                Created.                                              */
+/*          0.02  Thu 24th September 1998                               */
+/*                SNB: Added some NCMail specific bits to original code.*/
 /************************************************************************/
 
+/* Copyright 1998 Acorn Computers Ltd
+
+   This material is the confidential trade secret and proprietary information
+   of Acorn Computers. It may not be reproduced, used sold, or transferred to
+   any third party without the prior written consent of Acorn Computers.
+   All rights reserved.
+ */
 
 /* -------------------------------------- LIBRARY IMPORTS --------------------------------------- */
 #include "WebMail.h"
 
+/* Miscellaneous */
+#include "URI.h"
+
+/* Local */
+#include "BrowserIF.h"
+#include "URLOpen.h"		/* From NCFresco's source */
+#include "Inbox.h"
+#include "Entry.h"
+
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
+#define URL_OFFSET       236
+#define URL_PTR          (char *) 0x01800000
+
+#define DBOX             "remove=\"__dbox\""
+
+#define ARG_GRANULARITY  5
+
+#define OS_Module_Claim  6
+#define OS_Module_Free   7
+
+/* Macro definitions */
+#define M_unused(a) (void) (a)
+
+/* -------------------------------------- TYPE DEFINITIONS -------------------------------------- */
+typedef struct
+{
+    char *  name;
+    bool (*handler) (char *);
+} scheme_handler_t;
+
+typedef struct
+{
+    char *  page;
+    bool (*fn) (int, url_param *);
+} url_handler_t;
+
+
+/* ------------------------------------ FUNCTION PROTOTYPES ------------------------------------- */
+
+static bool  process_url (char *const  url);
+static bool  process_ncmail (char *  vars);
+static bool  process_mailto (char *  s);
+
 
 /* -------------------------------------- GLOBAL VARIABLES -------------------------------------- */
+
+static scheme_handler_t  scheme[] =
+{
+    { "NCMail", process_ncmail },
+    { "mailto", process_mailto }
+};
+
+static url_handler_t  url_handler[] =
+{
+  /* Structure should be 'Page Type', 'Function to call ' */
+    { "Enter", entry_message_received } ,
+    { "Inbox", inbox_message_received }
+};
 
 
 /* ----------------------------------------- FUNCTIONS ------------------------------------------ */
 
 /************************************************************************/
-/* ncfresco_close_page                                                  */
+/* browserif_sendurl                                                    */
 /*                                                                      */
-/* Function is called when some component of the library needs the      */
-/* browser to close a page.  This is most commonly a popup dialogue     */
-/* page, but will also be the main page when the user selects Exit from */
-/* the Inbox.  In this case the page last on screen when the user       */
-/* enters the email client must be displayed.                           */
+/* Function sends the URL to the browser to open using the URI protocol.*/
 /*                                                                      */
-/* Parameters: flags    - Bit 0: Set   - Pop-up dialogue style message. */
-/*                               Unset - conventional full-screen page. */
+/* Parameters: url   - url to display.                                  */
+/*             dbox  - Set to true if the page is a popup dialogue.     */
 /*                                                                      */
-/* Returns:    void.                                                    */
+/* Returns:    TRUE (sent URL), FALSE (error).                          */
 /*                                                                      */
 /************************************************************************/
-void ncfesco_close_page(uint32 flags)
+extern bool  browserif_sendurl (const char *const  url,
+                                const bool         dbox)
 {
+    const char *  _url = url;
+    char *        s    = NULL;
+    bool          rc   = false;
 
+
+    if (dbox)
+    {
+        /* Append information to the URL to indicate that it is being used to
+         * control a dialogue box.
+         */
+        size_t  url_len = strlen (url);
+
+        if (url[url_len - 1] != '?')
+        {
+            /* Need to add '&' to separate variables */
+            ++url_len;
+        }
+
+        s = malloc (url_len + sizeof (DBOX));
+        if (s)
+        {
+            memcpy (s,
+                    url,
+                    url_len + 1);
+
+            if (url[url_len - 1] != '?')
+            {
+                strcat (s,
+                        "&");
+            }
+
+            strcat (s,
+                    DBOX);
+
+            _url = s;
+        }
+        else
+        {
+            _url = NULL;
+        }
+    }
+
+    if (_url)
+#if 1
+    {
+        WimpMessage     message;
+        urlopen_data *  open = (urlopen_data *) &message.data;
+        size_t          url_size = strlen (_url) + 1;
+
+        /* TEMPORARILY USE THE ANT URL PROTOCOL UNTIL FRESCO'S HANDLING OF THE
+         * ACORN URI PROTOCOL IS FIXED.  THIS WILL *NOT* ACCEPT URLS LONGER
+         * THAN 236 BYTES.
+         */
+
+       if (url_size <= 236)
+       {
+           message.hdr.size = sizeof (WimpMessage);
+           message.hdr.your_ref = 0;
+           message.hdr.action_code = wimp_MOPENURL;
+           memcpy (open->url,
+                   _url,
+                   url_size);
+
+           if (wimp_send_message (Wimp_EUserMessageRecorded,
+                                  &message,
+                                  0,
+                                  0,
+                                  NULL) == NULL)
+           {
+               rc = true;
+           }
+       }
+
+    }
+#else
+    {
+        if (uri_dispatch (0,
+                          (char *) _url,
+                          0,
+
+                          NULL,
+                          NULL,
+                          NULL) == NULL)
+        {
+            rc = true;
+        }
+    }
+#endif
+
+    if (s)
+    {
+        free (s);
+    }
+
+    return rc;
 }
+
+
+/************************************************************************/
+/* browserif_openurl_msg_handler                                        */
+/*                                                                      */
+/* Handle OpenURL Wimp messages from the web browser.  If we handle     */
+/* the URL type then ack the message.                                   */
+/*                                                                      */
+/* Parameters: Wimp message params.                                     */
+/*                                                                      */
+/* Returns:    TRUE (handled message), FALSE (didn't handle message).   */
+/*                                                                      */
+/************************************************************************/
+extern int  browserif_openurl_msg_handler (WimpMessage *  message,
+                                           void *         handle)
+{
+    urlopen_data *  openurl = (urlopen_data *) &message->data;
+    char *          url = NULL;
+    int             rc = 0;
+
+    dprintf(("UI", "browserif_openurl_msg_handler entered\n"));
+
+    M_unused (handle);
+
+    if (openurl->indirect.tag == 0)
+    {
+        /* Indirect URL */
+        if (openurl->indirect.url.offset < URL_OFFSET)
+        {
+            url = ((char *) openurl) + openurl->indirect.url.offset;
+        }
+        else if (openurl->indirect.url.ptr >= URL_PTR)
+        {
+            url = openurl->indirect.url.ptr;
+        }
+    }
+    else
+    {
+        /* Wimp message contains URL */
+        url = openurl->url;
+        dprintf(("UI", "URL is: %s\n", url));
+    }
+
+    if (url)
+    {
+        /* Not clear whether it is acceptable to overwrite the URL, so take a
+         * copy for manipulation.
+         */
+        char *  working_copy_url;
+        size_t  url_size = strlen (url) + 1;
+
+        working_copy_url = malloc (url_size);
+        if (working_copy_url)
+        {
+            memcpy (working_copy_url,
+                    url,
+                    url_size);
+
+            rc = (int) process_url (working_copy_url);
+
+            free (working_copy_url);
+
+            if (rc)
+            {
+                /* We handled the URL so we must acknowledge the Wimp message */
+                dprintf(("UI", "sending URL message back\n"));
+
+                message->hdr.your_ref = message->hdr.my_ref;
+
+                (void) wimp_send_message (Wimp_EUserMessageAcknowledge,
+                                          message,
+                                          message->hdr.sender,
+                                          0,
+                                          NULL);
+            }
+        }
+    }
+
+    return rc;
+}
+
+
+/************************************************************************/
+/* process_url                                                          */
+/*                                                                      */
+/* Process a zero terminated URL, deciding whether or not we should     */
+/* handle it.                                                           */
+/*                                                                      */
+/* Parameters: url  - pointer to URL.                                   */
+/*                                                                      */
+/* Returns:    true (handled URL), false (didn't handle URL).           */
+/*                                                                      */
+/************************************************************************/
+static bool  process_url (char *const  url)
+{
+    bool  rc = false;
+    char *  s;
+
+    if (url)
+    {
+        /* Search for scheme delimiter ':' */
+        s = strchr (url, ':');
+        if (s)
+        {
+            int  i = 0;
+
+            *s++ = 0;
+
+            while (i < sizeof (scheme) / sizeof (scheme_handler_t) )
+            {
+                if (nb_case_insensitive_strcmp (url, scheme[i].name) == 0)
+                {
+                    rc = (*scheme[i].handler) (s);
+                    break;
+                }
+                i++;
+            }
+        }
+    }
+
+    return rc;
+}
+
+
+/************************************************************************/
+/* process_ncmail                                                       */
+/*                                                                      */
+/* Extract the variables from an NCMail URL and forward them to the     */
+/* appropriate handling function.  Variables are of the form            */
+/* variable=value and are separated by '&'.                             */
+/*                                                                      */
+/* Parameters: vars  - pointer to zero terminated variable string.      */
+/*                                                                      */
+/* Returns:    true (handled), false (not handled).                     */
+/*                                                                      */
+/************************************************************************/
+static bool  process_ncmail (char *  vars)
+{
+    bool    rc = false;
+    char *  s;
+
+
+    /* Skip over "/?" */
+    if (vars[0] == '/' && vars[1] == '?')
+    {
+        vars += 2;
+
+        /* First variable is expected to be page */
+        s = strchr (vars, '=');
+        if (s)
+        {
+            *s = 0;
+
+            if (nb_case_insensitive_strcmp (vars, "page") == 0)
+            {
+                int          i;
+                int          count = 0;
+                char *       page  = ++s;
+                url_param *  arg   = NULL;
+
+                /* Stuff pointers to remaining parameters in an array.  Will
+                 * give the parameters in the order they appear in the URL and
+                 * assumes that the order they appear in the URL is the same
+                 * as the order they were specified in the source HTNL.
+                 */
+
+                /* Disclaimer: I wrote a version of this loop without the gotos,
+                 * but it was more difficult to follow, produced larger code and
+                 * would have been slower (though these last two would not have
+                 * been significant).
+                 */
+
+                while (s = strchr (s, '&'), s != NULL)
+                {
+                    /* Allocate space for arguments in blocks */
+                    if (count % ARG_GRANULARITY == 0)
+                    {
+                        url_param *  temp =
+                            realloc (
+                                arg,
+                                sizeof (url_param) * (count + ARG_GRANULARITY));
+
+                        if (temp)
+                        {
+                            arg = temp;
+                        }
+                        else
+                        {
+                            goto cleanup;
+                        }
+                    }
+
+                    /* Replace '&' with 0 to terminate previous
+                     * variable. */
+                    *s++ = 0;
+
+                    /* Store pointer to parameter name */
+                    arg[count].name = s;
+
+                    /* Find value of variable */
+                    s = strchr (s, '=');
+                    if (s)
+                    {
+                        *s = 0;
+                        arg[count++].value = ++s;
+                    }
+                    else
+                    {
+                        goto cleanup;
+                    }
+                };
+
+                /* Call handler function for this page */
+                arg[count].name  = NULL;
+                arg[count].value = NULL;
+                i                = 0;
+
+                while (i < sizeof (url_handler) / sizeof (url_handler[0]))
+                {
+                    if (nb_case_insensitive_strcmp (page, url_handler[i].page) == 0)
+                    {
+                        (*url_handler[i].fn) (count,
+                                              arg);
+                        rc = true;
+                        break;
+                    }
+
+                    i++;
+                }
+
+cleanup:
+                if (arg)
+                {
+                    free (arg);
+                }
+            }
+        }
+    }
+
+    return rc;
+}
+
+
+
+/************************************************************************/
+/* process_mailto                                                       */
+/*                                                                      */
+/* Process mailto: URL messages.                                        */
+/*                                                                      */
+/* Parameters: s  - contents of mailto: URL.                            */
+/*                                                                      */
+/* Returns:    true (handled), false (not handled).                     */
+/*                                                                      */
+/************************************************************************/
+static bool  process_mailto (char *const  s)
+{
+    /* Not implemented yet, so pass on URL */
+    return false;
+}
+

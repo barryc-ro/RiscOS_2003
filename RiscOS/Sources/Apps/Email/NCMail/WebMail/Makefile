@@ -60,7 +60,7 @@ SQUEEZE         = squeeze
 WIPE            = -wipe
 
 AFLAGS          = $(THROWBACK) -depend !Depend -nocache -stamp -quit
-CFLAGS          = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
+CFLAGS          = $(THROWBACK) -depend !Depend -ffah $(INCLUDES) -wp
 C++FLAGS        = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
 LDFLAGS		= -c++ -aof
 CPFLAGS         = ~cfr~v~n
@@ -117,21 +117,24 @@ OBJS = 	o.EscapeHTML 	\
         o.Parser 	\
         o.WebMail	\
 	o.BrowserIF	\
-	o.Entry
+	o.Entry		\
+	o.WimpReg
 
 OBJSD = od.EscapeHTML 	\
         od.InBox 	\
         od.Parser 	\
         od.WebMail	\
 	od.BrowserIF	\
-	od.Entry
+	od.Entry	\
+	od.WimpReg
 
 OBJSZ = oz.EscapeHTML 	\
         oz.InBox 	\
         oz.Parser 	\
         oz.WebMail	\
 	oz.BrowserIF	\
-	oz.Entry
+	oz.Entry	\
+	oz.WimpReg
 
 
 # -----------------------------------------------------------------------------
@@ -231,7 +234,7 @@ install_rom: $(ROM_MODULE)
 
 install_common: $(FILES)
         @echo
-        $(CP) $(LPATH)Messages                  ^.Build.$(INSTDIR).Messages $(CPFLAGS)
+        $(CP) $(LPATH)*                  ^.Build.$(INSTDIR).* $(CPFLAGS)
 
 install: install_common
         @echo
@@ -262,6 +265,10 @@ clean:
         @echo $(COMPONENT): Cleaned
 
 o.dirs:
+        @$(MKDIR) ^.Build.h
+        @$(MKDIR) ^.Build.o
+        @$(MKDIR) ^.Build.od
+        @$(MKDIR) ^.Build.oz
         @$(MKDIR) o
         @$(MKDIR) od
         @$(MKDIR) oz
