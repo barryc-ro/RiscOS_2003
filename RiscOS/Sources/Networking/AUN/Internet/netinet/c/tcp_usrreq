@@ -1,62 +1,88 @@
-/* -*-C-*-
- *
- * $Header$
- * $Source$
- *
- * Copyright(c) 1994 Acorn Computers Ltd., Cambridge, England
- *
- * $Log$
- * Revision 1.1  94/12/02  11:24:07  kwelton
- * Initial revision
- * 
- */
 /*
- * Copyright (c) 1983, 1986 Regents of the University of California.
- * All rights reserved.
+ * Copyright (c) 1982, 1986, 1988, 1993
+ *	The Regents of the University of California.  All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted
- * provided that the above copyright notice and this paragraph are
- * duplicated in all such forms and that any documentation,
- * advertising materials, and other materials related to such
- * distribution and use acknowledge that the software was developed
- * by the University of California, Berkeley.  The name of the
- * University may not be used to endorse or promote products derived
- * from this software without specific prior written permission.
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
- * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
  *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ *	From: @(#)tcp_usrreq.c	8.2 (Berkeley) 1/3/94
+ *	$Id$
  */
-#include "sys/param.h"
-#include "sys/systm.h"
-#include "sys/stat.h"
-#include "sys/mbuf.h"
-#include "sys/socket.h"
-#include "sys/socketvar.h"
-#include "sys/protosw.h"
-#include "sys/errno.h"
 
-#include "net/if.h"
-#include "net/route.h"
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/kernel.h>
+#include <sys/malloc.h>
+#include <sys/mbuf.h>
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/protosw.h>
+#include <sys/errno.h>
+#include <sys/stat.h>
+#ifdef __riscos
+#include <sys/queue.h>
+#else
+#include <vm/vm.h>
+#endif
+#include <sys/sysctl.h>
 
-#include "netinet/in.h"
-#include "netinet/in_pcb.h"
-#include "netinet/in_systm.h"
-#include "netinet/ip.h"
-#include "netinet/ip_var.h"
-#include "netinet/tcp.h"
-#include "netinet/tcp_fsm.h"
-#include "netinet/tcp_seq.h"
-#include "netinet/tcp_timer.h"
-#include "netinet/tcp_var.h"
-#include "netinet/tcpip.h"
-#include "netinet/tcp_debug.h"
+#include <net/if.h>
+#include <net/route.h>
+
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/ip.h>
+#include <netinet/in_pcb.h>
+#include <netinet/in_var.h>
+#include <netinet/ip_var.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_fsm.h>
+#include <netinet/tcp_seq.h>
+#include <netinet/tcp_timer.h>
+#include <netinet/tcp_var.h>
+#include <netinet/tcpip.h>
+#ifdef TCPDEBUG
+#include <netinet/tcp_debug.h>
+#endif
+
+#include "module.h"
 
 /*
  * TCP protocol interface to socket abstraction.
  */
 extern	char *tcpstates[];
-struct	tcpcb *tcp_newtcpcb();
+
+static int	tcp_attach(struct socket *);
+static int	tcp_connect(struct tcpcb *, struct mbuf *);
+static struct tcpcb *
+		tcp_disconnect(struct tcpcb *);
+static struct tcpcb *
+		tcp_usrclosed(struct tcpcb *);
 
 /*
  * Process a TCP user request for TCP tb.  If this is a send request
@@ -64,26 +90,29 @@ struct	tcpcb *tcp_newtcpcb();
  * (called from the software clock routine), then timertype tells which timer.
  */
 /*ARGSUSED*/
-tcp_usrreq(so, req, m, nam, rights)
+int
+tcp_usrreq(so, req, m, nam, control)
 	struct socket *so;
 	int req;
-	struct mbuf *m, *nam, *rights;
+	struct mbuf *m, *nam, *control;
 {
 	register struct inpcb *inp;
-	register struct tcpcb *tp;
+	register struct tcpcb *tp = 0;
+	struct sockaddr_in *sinp;
 	int error = 0;
+#ifdef TCPDEBUG
 	int ostate;
-
-#if BSD>=43
-	if (req == PRU_CONTROL)
-		return (in_control(so, (int)m, (caddr_t)nam,
-			(struct ifnet *)rights));
-#else
-	if (req == PRU_CONTROL)
-		return(EOPNOTSUPP);
 #endif
-	if (rights && rights->m_len)
+
+	if (req == PRU_CONTROL)
+		return (in_control(so, (u_long)m, (caddr_t)nam,
+			(struct ifnet *)control));
+	if (control && control->m_len) {
+		m_freem(control);
+		if (m)
+			m_freem(m);
 		return (EINVAL);
+	}
 
 	inp = sotoinpcb(so);
 	/*
@@ -92,6 +121,18 @@ tcp_usrreq(so, req, m, nam, rights)
 	 * structure will point at a subsidary (struct tcpcb).
 	 */
 	if (inp == 0 && req != PRU_ATTACH) {
+#if 0
+		/*
+		 * The following corrects an mbuf leak under rare
+		 * circumstances, but has not been fully tested.
+		 */
+		if (m && req != PRU_SENSE)
+			m_freem(m);
+#else
+		/* safer version of fix for mbuf leak */
+		if (m && (req == PRU_SEND || req == PRU_SENDOOB))
+			m_freem(m);
+#endif
 		return (EINVAL);		/* XXX */
 	}
 	if (inp) {
@@ -100,9 +141,14 @@ tcp_usrreq(so, req, m, nam, rights)
 #ifdef KPROF
 		tcp_acounts[tp->t_state][req]++;
 #endif
+#ifdef TCPDEBUG
 		ostate = tp->t_state;
 	} else
 		ostate = 0;
+#else /* TCPDEBUG */
+	}
+#endif /* TCPDEBUG */
+
 	switch (req) {
 
 	/*
@@ -118,7 +164,7 @@ tcp_usrreq(so, req, m, nam, rights)
 		if (error)
 			break;
 		if ((so->so_options & SO_LINGER) && so->so_linger == 0)
-			so->so_linger = TCP_LINGERTIME;
+			so->so_linger = TCP_LINGERTIME * hz;
 		tp = sototcpcb(so);
 		break;
 
@@ -140,6 +186,16 @@ tcp_usrreq(so, req, m, nam, rights)
 	 * Give the socket an address.
 	 */
 	case PRU_BIND:
+		/*
+		 * Must check for multicast addresses and disallow binding
+		 * to them.
+		 */
+		sinp = mtod(nam, struct sockaddr_in *);
+		if (sinp->sin_family == AF_INET &&
+		    IN_MULTICAST(ntohl(sinp->sin_addr.s_addr))) {
+			error = EAFNOSUPPORT;
+			break;
+		}
 		error = in_pcbbind(inp, nam);
 		if (error)
 			break;
@@ -150,7 +206,7 @@ tcp_usrreq(so, req, m, nam, rights)
 	 */
 	case PRU_LISTEN:
 		if (inp->inp_lport == 0)
-			error = in_pcbbind(inp, (struct mbuf *)0);
+			error = in_pcbbind(inp, NULL);
 		if (error == 0)
 			tp->t_state = TCPS_LISTEN;
 		break;
@@ -163,26 +219,18 @@ tcp_usrreq(so, req, m, nam, rights)
 	 * Send initial segment on connection.
 	 */
 	case PRU_CONNECT:
-		if (inp->inp_lport == 0) {
-			error = in_pcbbind(inp, (struct mbuf *)0);
-			if (error)
-				break;
-		}
-		error = in_pcbconnect(inp, nam);
-		if (error)
-			break;
-		tp->t_template = tcp_template(tp);
-		if (tp->t_template == 0) {
-			in_pcbdisconnect(inp);
-			error = ENOBUFS;
+		/*
+		 * Must disallow TCP ``connections'' to multicast addresses.
+		 */
+		sinp = mtod(nam, struct sockaddr_in *);
+		if (sinp->sin_family == AF_INET
+		    && IN_MULTICAST(ntohl(sinp->sin_addr.s_addr))) {
+			error = EAFNOSUPPORT;
 			break;
 		}
-		soisconnecting(so);
-		tcpstat.tcps_connattempt++;
-		tp->t_state = TCPS_SYN_SENT;
-		tp->t_timer[TCPT_KEEP] = TCPTV_KEEP_INIT;
-		tp->iss = tcp_iss; tcp_iss += TCP_ISSINCR/2;
-		tcp_sendseqinit(tp);
+
+		if ((error = tcp_connect(tp, nam)) != 0)
+			break;
 		error = tcp_output(tp);
 		break;
 
@@ -213,15 +261,9 @@ tcp_usrreq(so, req, m, nam, rights)
 	 * done at higher levels; just return the address
 	 * of the peer, storing through addr.
 	 */
-	case PRU_ACCEPT: {
-		struct sockaddr_in *sin = mtod(nam, struct sockaddr_in *);
-
-		nam->m_len = sizeof (struct sockaddr_in);
-		sin->sin_family = AF_INET;
-		sin->sin_port = inp->inp_fport;
-		sin->sin_addr = inp->inp_faddr;
+	case PRU_ACCEPT:
+		in_setpeeraddr(inp, nam);
 		break;
-		}
 
 	/*
 	 * Mark the connection as being incapable of further output.
@@ -244,9 +286,33 @@ tcp_usrreq(so, req, m, nam, rights)
 	 * Do a send by putting data in output queue and updating urgent
 	 * marker if URG set.  Possibly send more data.
 	 */
+	case PRU_SEND_EOF:
 	case PRU_SEND:
 		sbappend(&so->so_snd, m);
-		error = tcp_output(tp);
+		if (nam && tp->t_state < TCPS_SYN_SENT) {
+			/*
+			 * Do implied connect if not yet connected,
+			 * initialize window to default value, and
+			 * initialize maxseg/maxopd using peer's cached
+			 * MSS.
+			 */
+			error = tcp_connect(tp, nam);
+			if (error)
+				break;
+			tp->snd_wnd = TTCP_CLIENT_SND_WND;
+			tcp_mss(tp, -1);
+		}
+
+		if (req == PRU_SEND_EOF) {
+			/*
+			 * Close the send side of the connection after
+			 * the data is sent.
+			 */
+			socantsendmore(so);
+			tp = tcp_usrclosed(tp);
+		}
+		if (tp != NULL)
+			error = tcp_output(tp);
 		break;
 
 	/*
@@ -263,9 +329,7 @@ tcp_usrreq(so, req, m, nam, rights)
 	case PRU_RCVOOB:
 		if ((so->so_oobmark == 0 &&
 		    (so->so_state & SS_RCVATMARK) == 0) ||
-#ifdef SO_OOBINLINE
 		    so->so_options & SO_OOBINLINE ||
-#endif
 		    tp->t_oobflags & TCPOOB_HADDATA) {
 			error = EINVAL;
 			break;
@@ -282,11 +346,7 @@ tcp_usrreq(so, req, m, nam, rights)
 
 	case PRU_SENDOOB:
 		if (sbspace(&so->so_snd) < -512) {
-#ifdef OldCode
 			m_freem(m);
-#else
-			FREEM(m);
-#endif
 			error = ENOBUFS;
 			break;
 		}
@@ -319,7 +379,11 @@ tcp_usrreq(so, req, m, nam, rights)
 	 */
 	case PRU_SLOWTIMO:
 		tp = tcp_timers(tp, (int)nam);
+#ifdef TCPDEBUG
 		req |= (int)nam << 8;		/* for debug's sake */
+#endif
+		/* This hack seems to be needed by tcp_timer.c */
+		error = (int) tp;
 		break;
 
 	default:
@@ -327,12 +391,111 @@ tcp_usrreq(so, req, m, nam, rights)
 		return (EFAULT);
 
 	}
+#ifdef TCPDEBUG
 	if (tp && (so->so_options & SO_DEBUG))
 		tcp_trace(TA_USER, ostate, tp, (struct tcpiphdr *)0, req);
+#endif
 	return (error);
 }
 
-#if BSD>=43
+/*
+ * Common subroutine to open a TCP connection to remote host specified
+ * by struct sockaddr_in in mbuf *nam.  Call in_pcbbind to assign a local
+ * port number if needed.  Call in_pcbladdr to do the routing and to choose
+ * a local host address (interface).  If there is an existing incarnation
+ * of the same connection in TIME-WAIT state and if the remote host was
+ * sending CC options and if the connection duration was < MSL, then
+ * truncate the previous TIME-WAIT state and proceed.
+ * Initialize connection parameters and enter SYN-SENT state.
+ */
+static int
+tcp_connect(tp, nam)
+	register struct tcpcb *tp;
+	struct mbuf *nam;
+{
+	struct inpcb *inp = tp->t_inpcb, *oinp;
+	struct socket *so = inp->inp_socket;
+	struct tcpcb *otp;
+	struct sockaddr_in *sin = mtod(nam, struct sockaddr_in *);
+	struct sockaddr_in *ifaddr;
+	int error;
+	struct rmxp_tao *taop;
+	struct rmxp_tao tao_noncached;
+
+	if (inp->inp_lport == 0) {
+		error = in_pcbbind(inp, NULL);
+		if (error)
+			return error;
+	}
+
+	/*
+	 * Cannot simply call in_pcbconnect, because there might be an
+	 * earlier incarnation of this same connection still in
+	 * TIME_WAIT state, creating an ADDRINUSE error.
+	 */
+	error = in_pcbladdr(inp, nam, &ifaddr);
+	if (error)
+		return error;
+	oinp = in_pcblookup(inp->inp_pcbinfo->listhead,
+	    sin->sin_addr, sin->sin_port,
+	    inp->inp_laddr.s_addr != INADDR_ANY ? inp->inp_laddr
+						: ifaddr->sin_addr,
+	    inp->inp_lport,  0);
+	if (oinp) {
+		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
+		otp->t_state == TCPS_TIME_WAIT &&
+		    otp->t_duration < TCPTV_MSL &&
+		    (otp->t_flags & TF_RCVD_CC))
+			otp = tcp_close(otp);
+		else
+			return EADDRINUSE;
+	}
+	if (inp->inp_laddr.s_addr == INADDR_ANY)
+		inp->inp_laddr = ifaddr->sin_addr;
+	inp->inp_faddr = sin->sin_addr;
+	inp->inp_fport = sin->sin_port;
+	in_pcbrehash(inp);
+
+	tp->t_template = tcp_template(tp);
+	if (tp->t_template == 0) {
+		in_pcbdisconnect(inp);
+		return ENOBUFS;
+	}
+
+	/* Compute window scaling to request.  */
+	while (tp->request_r_scale < TCP_MAX_WINSHIFT &&
+	    (TCP_MAXWIN << tp->request_r_scale) < so->so_rcv.sb_hiwat)
+		tp->request_r_scale++;
+
+	soisconnecting(so);
+	tcpstat.tcps_connattempt++;
+	tp->t_state = TCPS_SYN_SENT;
+	tp->t_timer[TCPT_KEEP] = TCPTV_KEEP_INIT;
+	tp->iss = tcp_iss; tcp_iss += TCP_ISSINCR/2;
+	tcp_sendseqinit(tp);
+
+	/*
+	 * Generate a CC value for this connection and
+	 * check whether CC or CCnew should be used.
+	 */
+	if ((taop = tcp_gettaocache(tp->t_inpcb)) == NULL) {
+		taop = &tao_noncached;
+		bzero(taop, sizeof(*taop));
+	}
+
+	tp->cc_send = CC_INC(tcp_ccgen);
+	if (taop->tao_ccsent != 0 &&
+	    CC_GEQ(tp->cc_send, taop->tao_ccsent)) {
+		taop->tao_ccsent = tp->cc_send;
+	} else {
+		taop->tao_ccsent = 0;
+		tp->t_flags |= TF_SENDCCNEW;
+	}
+
+	return 0;
+}
+
+int
 tcp_ctloutput(op, so, level, optname, mp)
 	int op;
 	struct socket *so;
@@ -340,12 +503,21 @@ tcp_ctloutput(op, so, level, optname, mp)
 	struct mbuf **mp;
 {
 	int error = 0;
-	struct inpcb *inp = sotoinpcb(so);
-	register struct tcpcb *tp = intotcpcb(inp);
+	struct inpcb *inp;
+	register struct tcpcb *tp;
 	register struct mbuf *m;
+	register int i;
 
+	inp = sotoinpcb(so);
+	if (inp == NULL) {
+		if (op == PRCO_SETOPT && *mp)
+			(void) m_free(*mp);
+		return (ECONNRESET);
+	}
 	if (level != IPPROTO_TCP)
 		return (ip_ctloutput(op, so, level, optname, mp));
+
+	tp = intotcpcb(inp);
 
 	switch (op) {
 
@@ -362,38 +534,43 @@ tcp_ctloutput(op, so, level, optname, mp)
 				tp->t_flags &= ~TF_NODELAY;
 			break;
 
-		case TCP_MAXSEG:	/* not yet */
+		case TCP_MAXSEG:
+			if (m && (i = *mtod(m, int *)) > 0 && i <= tp->t_maxseg)
+				tp->t_maxseg = i;
+			else
+				error = EINVAL;
+			break;
+
+		case TCP_NOOPT:
+			if (m == NULL || m->m_len < sizeof (int))
+				error = EINVAL;
+			else if (*mtod(m, int *))
+				tp->t_flags |= TF_NOOPT;
+			else
+				tp->t_flags &= ~TF_NOOPT;
+			break;
+
+		case TCP_NOPUSH:
+			if (m == NULL || m->m_len < sizeof (int))
+				error = EINVAL;
+			else if (*mtod(m, int *))
+				tp->t_flags |= TF_NOPUSH;
+			else
+				tp->t_flags &= ~TF_NOPUSH;
+			break;
+
 		default:
-			error = EINVAL;
+			error = ENOPROTOOPT;
 			break;
 		}
 		if (m)
-		{
-#ifdef OldCode
-		    (void) m_free(m);
-#else
-		    FREE(m);
-#endif
-		}
+		        (void) m_free(m);
 		break;
 
 	case PRCO_GETOPT:
-#ifdef OldCode
 		*mp = m = m_get(M_WAIT, MT_SOOPTS);
-		if (m == 0)
+		if (m == NULL)
 			return (ENOBUFS);
-#else
-		if( (*mp = m = ALLOC_S(MINCONTIG, NULL)) == NULL )
-		{
-#ifdef DEBUG
-		    if( DODEBUG(DBGMMAN) )
-			Printf("tcp_ctloutput: ALLOC_S failed\n");
-#endif
-		    return(ENOBUFS);
-		}
-
-		m->m_type = MT_SOOPTS;
-#endif
 		m->m_len = sizeof(int);
 
 		switch (optname) {
@@ -403,23 +580,35 @@ tcp_ctloutput(op, so, level, optname, mp)
 		case TCP_MAXSEG:
 			*mtod(m, int *) = tp->t_maxseg;
 			break;
+		case TCP_NOOPT:
+			*mtod(m, int *) = tp->t_flags & TF_NOOPT;
+			break;
+		case TCP_NOPUSH:
+			*mtod(m, int *) = tp->t_flags & TF_NOPUSH;
+			break;
 		default:
-			error = EINVAL;
+			error = ENOPROTOOPT;
 			break;
 		}
 		break;
 	}
 	return (error);
 }
-#endif
 
-u_long	tcp_sendspace = 1024*12;
-u_long	tcp_recvspace = 1024*12;
+/*
+ * tcp_sendspace and tcp_recvspace are the default send and receive window
+ * sizes, respectively.  These are obsolescent (this information should
+ * be set by the route).
+ */
+u_long	tcp_sendspace = 1024*16;
+u_long	tcp_recvspace = 1024*16;
+
 /*
  * Attach TCP protocol to socket, allocating
  * internet protocol control block, tcp control block,
  * bufer space, and entering LISTEN state if to accept connections.
  */
+static int
 tcp_attach(so)
 	struct socket *so;
 {
@@ -432,7 +621,7 @@ tcp_attach(so)
 		if (error)
 			return (error);
 	}
-	error = in_pcballoc(so, &tcb);
+	error = in_pcballoc(so, &tcbinfo);
 	if (error)
 		return (error);
 	inp = sotoinpcb(so);
@@ -457,7 +646,7 @@ tcp_attach(so)
  * current input data; switch states based on user close, and
  * send segment to peer (with FIN).
  */
-struct tcpcb *
+static struct tcpcb *
 tcp_disconnect(tp)
 	register struct tcpcb *tp;
 {
@@ -487,7 +676,7 @@ tcp_disconnect(tp)
  * for peer to send FIN or not respond to keep-alives, etc.
  * We can let the user exit from the close as soon as the FIN is acked.
  */
-struct tcpcb *
+static struct tcpcb *
 tcp_usrclosed(tp)
 	register struct tcpcb *tp;
 {
@@ -496,12 +685,15 @@ tcp_usrclosed(tp)
 
 	case TCPS_CLOSED:
 	case TCPS_LISTEN:
-	case TCPS_SYN_SENT:
 		tp->t_state = TCPS_CLOSED;
 		tp = tcp_close(tp);
 		break;
 
+	case TCPS_SYN_SENT:
 	case TCPS_SYN_RECEIVED:
+		tp->t_flags |= TF_NEEDFIN;
+		break;
+
 	case TCPS_ESTABLISHED:
 		tp->t_state = TCPS_FIN_WAIT_1;
 		break;
@@ -510,9 +702,60 @@ tcp_usrclosed(tp)
 		tp->t_state = TCPS_LAST_ACK;
 		break;
 	}
-	if (tp && tp->t_state >= TCPS_FIN_WAIT_2)
+	if (tp && tp->t_state >= TCPS_FIN_WAIT_2) {
 		soisdisconnected(tp->t_inpcb->inp_socket);
+		/* To prevent the connection hanging in FIN_WAIT_2 forever. */
+		if (tp->t_state == TCPS_FIN_WAIT_2)
+			tp->t_timer[TCPT_2MSL] = tcp_maxidle;
+	}
 	return (tp);
 }
 
-/* EOF tcp_usrreq.c */
+/*
+ * Sysctl for tcp variables.
+ */
+int
+tcp_sysctl(name, namelen, oldp, oldlenp, newp, newlen)
+	int *name;
+	u_int namelen;
+	void *oldp;
+	size_t *oldlenp;
+	void *newp;
+	size_t newlen;
+{
+	/* All sysctl names at this level are terminal. */
+	if (namelen != 1)
+		return (ENOTDIR);
+
+	switch (name[0]) {
+	case TCPCTL_DO_RFC1323:
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+		    &tcp_do_rfc1323));
+	case TCPCTL_DO_RFC1644:
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+		    &tcp_do_rfc1644));
+	case TCPCTL_MSSDFLT:
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+		    &tcp_mssdflt));
+	case TCPCTL_STATS:
+		return (sysctl_rdstruct(oldp, oldlenp, newp, &tcpstat,
+					sizeof tcpstat));
+	case TCPCTL_RTTDFLT:
+		return (sysctl_int(oldp, oldlenp, newp, newlen, &tcp_rttdflt));
+	case TCPCTL_KEEPIDLE:
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+				   &tcp_keepidle));
+	case TCPCTL_KEEPINTVL:
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+				   &tcp_keepintvl));
+	case TCPCTL_SENDSPACE:
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+				   (int *)&tcp_sendspace)); /* XXX */
+	case TCPCTL_RECVSPACE:
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+				   (int *)&tcp_recvspace)); /* XXX */
+	default:
+		return (ENOPROTOOPT);
+	}
+	/* NOTREACHED */
+}

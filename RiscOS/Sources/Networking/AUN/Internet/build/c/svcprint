@@ -19,6 +19,7 @@
  *	     %b - binary
  *	     %D - reverses order of bytes if >2 (or >4) specified as width
  *	     %d - decimal
+ *	     %p - pointer ("@xxxxxxxx")
  *
  * field width can be specified by placing a decimal number after the "%"
  * character... if the width is started by a "0" then numbers are padded
@@ -29,10 +30,10 @@
  * $Log$
  * Revision 1.2  95/03/31  11:36:04  kwelton
  * Added new debugging function ctosym().
- * 
+ *
  * Revision 1.1  94/12/02  09:57:20  kwelton
  * Initial revision
- * 
+ *
  */
 #include "kernel.h"
 #include "swis.h"
@@ -45,7 +46,7 @@
 #endif
 
 #ifdef DEBUG
-int debug = 1;
+/*int debug = 1;*/
 #endif
 
 /**********************************************************************/
@@ -204,6 +205,14 @@ static void prf(char *format, unsigned *argp, ...)
 	b = 16;
 	goto number;
 
+      case 'p':
+      	/* pointer */
+      	oswrch('@');
+      	w = 8;
+      	pad = '0';
+      	b = 16;
+      	goto number;
+
       case 'B':
 	/* binary number */
 	if (w > 4)
@@ -259,18 +268,6 @@ static void prf(char *format, unsigned *argp, ...)
     goto loop;
 }
 
-/**********************************************************************/
-
-/*
- * strprint - print a string to the tube podule
- */
-static void strprint(char *s)
-{
-    _kernel_swi_regs r;
-
-    r.r[0] = (int)s;
-    (void)_kernel_swi(0x40104, &r, &r);
-}
 
 /**********************************************************************/
 
@@ -281,6 +278,7 @@ static void strprint(char *s)
 void Printf(char *format, ...)
 {
     unsigned *argp = (unsigned *)&format;
+    static int inprf;
 
 #ifdef USETUBE
     _kernel_swi_regs reglist;
@@ -296,9 +294,14 @@ void Printf(char *format, ...)
     }
 #endif /* USETUBE */
 
-    int s = splhi();
+    /*int s = splhi();*/
+    if (inprf)
+        return;
+
+    inprf=1;
     prf(format, (argp + 1));
-    splx(s);
+    inprf=0;
+    /*splx(s);*/
 
 #ifdef USETUBE
     if( (err = _kernel_swi(0x40101, &reglist, &reglist)) != NULL )
@@ -312,136 +315,6 @@ void Printf(char *format, ...)
 #endif /* USETUBE */
 }
 
-/**********************************************************************/
-
-/*
- * ctosym - convert an address to an entry in the module's symbol
- * table
- */
-int ctosym(caddr_t ptr)
-{
-    /*
-     * XXX
-     *
-     * declare __module_header as an external *function*
-     * -- this stops it being incorrectly relocated
-     */
-    extern void __module_header(void);
-    caddr_t address = (caddr_t)__module_header;
-
-    /*
-     * the hard part has alredy been done (finding the start
-     * address of the module) - all that remains is to convert
-     * passed pointer to an offset within the module.
-     *
-     * XXX
-     *
-     * the linker assumes a default offset of 32k, even for
-     * modules, when writing the symbol table; this could
-     * be considered a bug, but it is easily overcome.
-     */
-    return((ptr - address) + 0x8000);
-}
-
-/**********************************************************************/
-
-#define	FCMAX	40
-#ifdef	GPROF
-#define FN_ENTRY_SIZE (5+3)	/* -p adds an extra 3 words to procedure entry */
-#else	GPROF
-#define FN_ENTRY_SIZE (5)
-#endif	GPROF
-
-backtrace(int dummy)
-{
-    int frames = FCMAX;
-    int *fp, *ip, i;
-    int linechars = 0;
-    char *sep = "\021\004Stack backtrace: ";
-    char card[81];
-
-    fp = (int *)&dummy - 1;  /* Points at stacked entry mask pointer */
-    fp = (int *)fp[-3];	 /* Points at	  ditto of caller */
-
-    /*
-     * NOTE
-     *
-     * this stack backtracing loop works only
-     * for code from the Norcroft compiler.
-     */
-
-    /* limit the scan number of frames backtraced  */
-    while( frames-- >= 0 )
-    {
-	int *next_fp;
-	char *name = NULL;
-
-	ip = ((int *)(fp[0] & 0x03fffffc)) - 3;
-
-	/* ip now points at stmdb sp!, { .., fp, ip, lr, pc } */
-	for( i = FN_ENTRY_SIZE; i > 0; i-- )
-	{
-	    if( (ip[0] & 0xffffff00) == 0xff000000 )
-	    {
-		int len = ip[0] & 0xff;
-		if( (len % 4) == 0 )
-		{
-		    name = (char *)ip - len;
-		    break;
-		}
-	    }
-	    ip--;
-	}
-
-	if (name == NULL)
-	    sprintf(card, "%s<fn@%08x>", sep, ip+3);
-	else
-	    sprintf(card, "%s%s", sep, name);
-
-	sep = ", ";
-
-	linechars += strlen(card);
-	if( linechars >= 80 )
-	{
-	    strprint(",\r\n	");
-	    strprint(card + 2);
-	    linechars = 5;
-	}
-	else
-	    strprint(card);
-
-	/* TRACE */
-	if( !strcmp(name, "callb_handler") )
-	{
-	    /*
-	     * I think this is what is breaking
-	     * the debugging module
-	     */
-	    strprint(" (and that's as far as we're going)");
-	    break;
-	}
-
-	next_fp = (int *)(fp[-3]);
-	if (next_fp == 0)
-	    break;
-	else
-	{
-#ifdef __KERNEL__
-	    if( (next_fp < fp) ||
-	       (next_fp > (int *)((int)&u + (UPAGES*NBPG))) )
-#else
-	    if( (next_fp < fp ) )
-#endif
-	    {
-		Printf("**** broken stack frame fp %08x, next fp %08x ****\n",
-		       fp, next_fp);
-		break;
-	    }
-	    fp = next_fp;
-	}
-    }
-    Printf("\021\007\n");
-}
 
 /**********************************************************************/
 

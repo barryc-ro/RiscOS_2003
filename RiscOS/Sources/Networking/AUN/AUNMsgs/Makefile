@@ -26,7 +26,7 @@ WFLAGS  = ~cr~v
 # Program specific options:
 #
 COMPONENT   = AUNMsgs
-VERSION     = 0.06
+VERSION     = 0.07
 TARGET      = rm.AUNMsgs
 MODULE_HELP = "AUN Messages"
 FILELIST    = Resources.${LOCALE}.List
