@@ -1,0 +1,929 @@
+/***************************************************/
+/* File   : PlugIn.c                               */
+/*                                                 */
+/* Purpose: Supporting the generic RISC OS browser */
+/*          Plug-In interface.                     */
+/*                                                 */
+/* Author : A.D.Hodgkinson                         */
+/*                                                 */
+/* History: 05-Oct-97: Created.                    */
+/***************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "swis.h"
+#include "flex.h"
+
+#include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
+
+#include "wimp.h"
+#include "wimplib.h"
+#include "event.h"
+
+#include "toolbox.h"
+
+#include "svcprint.h"
+#include "Global.h"
+#include "FromROSLib.h"
+#include "Utils.h"
+
+#include "Browser.h"
+#include "Fetch.h" /* (Which itself includes URLstat.h) */
+#include "FetchHTML.h"
+#include "Filetypes.h"
+#include "Handlers.h"
+#include "Images.h"
+#include "MimeMap.h"
+#include "MiscDefs.h"
+#include "Object.h"
+#include "Protocols.h"
+#include "Redraw.h"
+#include "Reformat.h"
+#include "TokenUtils.h"
+#include "URLveneer.h"
+
+#include "PlugIn.h"
+
+/* Statics */
+
+static int       plugin_open_reference  = 0;
+static int       plugin_open_tried_once = 0;
+static char    * plugin_open_filename   = NULL;
+static HStream * plugin_open_token      = NULL;
+
+static int       plugin_close_reference = 0;
+
+/* Static function prototypes */
+
+static _kernel_oserror * plugin_write_params_word   (int fh, int word);
+static _kernel_oserror * plugin_write_params_string (int fh, const char * string);
+static _kernel_oserror * plugin_write_params_entry  (int fh, int type, const char * name, const char * data, const char * mime);
+
+/*************************************************/
+/* plugin_return_string()                        */
+/*                                               */
+/* Takes a message block and string_value from   */
+/* within it, and returns the string it points   */
+/* to.                                           */
+/*                                               */
+/* Parameters: Pointer to a WimpMessage struct   */
+/*             holding the string_value field;   */
+/*                                               */
+/*             Pointer to the string_value field */
+/*             inside that message.              */
+/*                                               */
+/* Returns:    Pointer to the string the         */
+/*             string_value references, or NULL  */
+/*             if the value seems invalid.       */
+/*************************************************/
+
+const char * plugin_return_string(WimpMessage * m, string_value * sv)
+{
+  int offset = ((char *) sv) - ((char *) m);
+
+  if (!m || !sv || !sv->offset) return NULL;
+
+  /* Is the offset of the string_value field within the message */
+  /* block out of range (i.e. the string_value does not appear  */
+  /* to lie in the given message block)?                        */
+
+  if (offset >= m->hdr.size || offset < sizeof(m->hdr)) return NULL;
+
+  /* Now read the string_value field itself */
+
+  if (sv->offset < 256)
+  {
+    if (sizeof(m->hdr) + offset >= m->hdr.size) return NULL;
+
+    else return (const char *) (((char *) m) + sizeof(m->hdr) + sv->offset);
+  }
+  else return (const char *) sv->offset;
+}
+
+/*************************************************/
+/* plugin_write_params_word()                    */
+/*                                               */
+/* Writes a word to a given parameters file,     */
+/* in little-endian order.                       */
+/*                                               */
+/* Parameters: RISC OS file handle of the file;  */
+/*                                               */
+/*             Word to write.                    */
+/*************************************************/
+
+static _kernel_oserror * plugin_write_params_word(int fh, int word)
+{
+  _kernel_oserror * e;
+  char              integer[4];
+
+  /* #define Brain_Off... */
+
+  integer[0] = (word & 0xff);
+  integer[1] = ((word & 0xff00) >> 8);
+  integer[2] = ((word & 0xff0000) >> 16);
+  integer[3] = ((word & 0xff000000) >> 24);
+
+  RetError(_swix(OS_BPut,
+                 _INR(0,1),
+
+                 integer[0],
+                 fh));
+
+  RetError(_swix(OS_BPut,
+                 _INR(0,1),
+
+                 integer[1],
+                 fh));
+
+  RetError(_swix(OS_BPut,
+                 _INR(0,1),
+
+                 integer[2],
+                 fh));
+
+  RetError(_swix(OS_BPut,
+                 _INR(0,1),
+
+                 integer[3],
+                 fh));
+
+  return NULL;
+}
+
+/*************************************************/
+/* plugin_write_params_string()                  */
+/*                                               */
+/* Writes a string to a given parameters file,   */
+/* padding with zeros to a length which is a     */
+/* multiple of 4. If the string length, not      */
+/* including terminator, is already a multiple   */
+/* of four, no extra bytes are written.          */
+/*                                               */
+/* Parameters: RISC OS file handle of the file;  */
+/*                                               */
+/*             Pointer to the string.            */
+/*************************************************/
+
+static _kernel_oserror * plugin_write_params_string(int fh, const char * string)
+{
+  _kernel_oserror * e;
+  const char      * s;
+  int               i = 0;
+  int               pad;
+
+  /* Write the main string */
+
+  s = string ? string : "";
+
+  while (s[i])
+  {
+    RetError(_swix(OS_BPut,
+                   _INR(0,1),
+
+                   s[i],
+                   fh));
+
+    i++;
+  }
+
+  /* Pad if necessary */
+
+  pad = 4 - (strlen(s) % 4);
+
+  if (pad < 4)
+  {
+    for (i = 0; i < pad; i ++)
+    {
+      RetError(_swix(OS_BPut,
+                     _INR(0,1),
+
+                     '\0',
+                     fh));
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* plugin_write_params_entry()                   */
+/*                                               */
+/* Writes an entry to the given parameters file. */
+/*                                               */
+/* Parameters: RISC OS file handle of the file;  */
+/*                                               */
+/*             Type of the entry (see            */
+/*             PlugIn.h);                       */
+/*                                               */
+/*             Pointer to the name string;       */
+/*                                               */
+/*             Pointer to the data string;       */
+/*                                               */
+/*             Pointer to the Mime string.       */
+/*                                               */
+/* Assumes:    Any of the pointers may be NULL   */
+/*             or a zero length string to write  */
+/*             a zero length field for that      */
+/*             item.                             */
+/*************************************************/
+
+static _kernel_oserror * plugin_write_params_entry(int fh, int type, const char * name, const char * data, const char * mime)
+{
+  _kernel_oserror * e;
+  int               length;
+  const char      * n;
+  const char      * d;
+  const char      * m;
+
+  /* Make life easier */
+
+  n = name ? name : "";
+  d = data ? data : "";
+  m = mime ? mime : "";
+
+  /* Write the type */
+
+  RetError(plugin_write_params_word(fh, type));
+
+  /* Calculate and write the entry length */
+
+  length = 4 + strlen(n);
+  length = (int) WordAlign(length);
+
+  length += 4 + strlen(d);
+  length = (int) WordAlign(length);
+
+  length += 4 + strlen(m);
+  length = (int) WordAlign(length);
+
+  RetError(plugin_write_params_word(fh, length));
+
+  /* The name field */
+
+  RetError(plugin_write_params_word(fh, strlen(n)));
+  RetError(plugin_write_params_string(fh, n));
+
+  /* The data field */
+
+  RetError(plugin_write_params_word(fh, strlen(d)));
+  RetError(plugin_write_params_string(fh, d));
+
+  /* The mime type field */
+
+  RetError(plugin_write_params_word(fh, strlen(m)));
+  RetError(plugin_write_params_string(fh, m));
+
+  return NULL;
+}
+
+/*************************************************/
+/* plugin_write_params()                         */
+/*                                               */
+/* Writes a parameters file to a unique filename */
+/* based on the given HStream.                   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the HStream;          */
+/*                                               */
+/*             Pointer to the HStream struct     */
+/*             representing the OBJECT, APPLET   */
+/*             or EMBED tag that the parameters  */
+/*             file is for;                      */
+/*                                               */
+/*             Buffer for the filename that was  */
+/*             used, or if the buffer size given */
+/*             is zero, pointer to the filename  */
+/*             to use;                           */
+/*                                               */
+/*             Size of the buffer, or zero if    */
+/*             the above parameter is a pointer  */
+/*             to the filename to use instead of */
+/*             a pointer to a buffer to receive  */
+/*             a locally generated system unique */
+/*             filename.                         */
+/*************************************************/
+
+_kernel_oserror * plugin_write_params(browser_data * b, HStream * t, char * buffer, int buffer_size)
+{
+  _kernel_oserror * e  = NULL;
+  int               fh = 0;
+  char            * data;
+  char              version[5];
+
+  if (buffer_size) protocols_util_make_unique_name(buffer, buffer_size);
+
+  RetError(_swix(OS_Find,
+                 _INR(0,1) | _OUT(0),
+
+                 0x8c, /* Create empty file with r/w access, return errors */
+                 buffer,
+
+                 &fh));
+
+  /* Write the browser special fields */
+
+  data = browser_current_url(b);
+  if (!data) data = browser_fetch_url(b);
+
+  e = plugin_write_params_entry(fh,
+                                PlugIn_ParamType_BrowserSpecial,
+                                "BASEHREF",
+                                data,
+                                NULL);
+
+  if (e) goto plugin_write_params_exit;
+
+  data = lookup_token("_TaskName", 1, 0);
+
+  e = plugin_write_params_entry(fh,
+                                PlugIn_ParamType_BrowserSpecial,
+                                "USERAGENT",
+                                data,
+                                NULL);
+
+  if (e) goto plugin_write_params_exit;
+
+  data = lookup_token("Version", 1, 0);
+  StrNCpy0(version, data);
+
+  e = plugin_write_params_entry(fh,
+                                PlugIn_ParamType_BrowserSpecial,
+                                "UAVERSION",
+                                version,
+                                NULL);
+
+  if (e) goto plugin_write_params_exit;
+
+  e = plugin_write_params_entry(fh,
+                                PlugIn_ParamType_BrowserSpecial,
+                                "APIVERSION",
+                                "1.10",
+                                NULL);
+
+  if (e) goto plugin_write_params_exit;
+
+  /* Now write details based on the Object type */
+
+  if (HtmlOBJECTclassid(t) && !strncmp(HtmlOBJECTclassid(t), "java:", 5))
+  {
+    char         number[64];
+    const char * cis = HtmlOBJECTclassid(t);
+    const char * cie;
+
+    /* A Java applet. First entry should be called 'code' to match   */
+    /* an APPLET tag; we get the details from the ClassID attribute, */
+    /* giving just the leafname.                                     */
+
+    cie = cis + strlen(cis) - 1;
+
+    while (cie > cis && *cie != '/') cie --;
+    if (*cie == '/') cie++;
+
+    e = plugin_write_params_entry(fh,
+                                  PlugIn_ParamType_URLFromOBJECT,
+                                  "CLASSID",
+                                  cie,
+                                  HtmlOBJECTcodetype(t));
+
+    if (e) goto plugin_write_params_exit;
+
+    /* Codebase, if we have it */
+
+    if (HtmlOBJECTcodebase(t) && *HtmlOBJECTcodebase(t))
+    {
+      e = plugin_write_params_entry(fh,
+                                    PlugIn_ParamType_DataFromOBJECT,
+                                    "CODEBASE",
+                                    HtmlOBJECTcodebase(t),
+                                    NULL);
+
+      if (e) goto plugin_write_params_exit;
+    }
+
+    /* Write 'alt' for the 'standby' text */
+
+    e = plugin_write_params_entry(fh,
+                                  PlugIn_ParamType_DataFromOBJECT,
+                                  "STANDBY",
+                                  HtmlOBJECTstandby(t) ? HtmlOBJECTstandby(t) : "Java",
+                                  NULL);
+
+    if (e) goto plugin_write_params_exit;
+
+    /* Width and height */
+
+    sprintf(number, "%d", t->rows);
+
+    e = plugin_write_params_entry(fh,
+                                  PlugIn_ParamType_DataFromOBJECT,
+                                  "HEIGHT",
+                                  number,
+                                  NULL);
+
+    if (e) goto plugin_write_params_exit;
+
+    sprintf(number, "%d", t->cols);
+
+    e = plugin_write_params_entry(fh,
+                                  PlugIn_ParamType_DataFromOBJECT,
+                                  "WIDTH",
+                                  number,
+                                  NULL);
+
+    if (e) goto plugin_write_params_exit;
+  }
+
+  /* Various actions for different builds, if we don't understand */
+  /* the token at all.                                            */
+
+  else
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Message;
+
+      strcpy(erb.errmess,
+        "OBJECT tag type not understood in plugin_write_params");
+
+      e = &erb;
+
+    #else
+
+      data = data;
+
+    #endif
+  }
+
+  /* Write the terminating entry */
+
+  RetError(plugin_write_params_word(fh, PlugIn_ParamType_Terminator));
+
+plugin_write_params_exit:
+
+  /* Exit by closing the file and returning any */
+  /* generated error.                           */
+
+  if (fh)
+  {
+    _swix(OS_Find,
+     _INR(0,1),
+
+     0, /* Close file */
+     fh);
+
+    /* Set the filetype */
+
+    _swix(OS_File,
+     _INR(0,2),
+
+     18,
+     buffer,
+     FileType_DATA);
+  }
+
+  return e;
+}
+
+/*************************************************/
+/* plugin_broadcast_plugin_open()                */
+/*                                               */
+/* Where it all starts - broadcast a             */
+/* Message_PlugIn_Open for a given Object.       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Pointer to the HStream struct     */
+/*             representing the OBJECT, APPLET   */
+/*             or EMBED tag (Object) that the    */
+/*             message is for;                   */
+/*                                               */
+/*             Pointer to a BBox describing the  */
+/*             where the Plug-In should open, in */
+/*             window coordinates.               */
+/*************************************************/
+
+_kernel_oserror * plugin_broadcast_plugin_open(browser_data * b, HStream * t, BBox * position)
+{
+  _kernel_oserror * e;
+  char              params[Limits_OS_Pathname];
+  WimpMessage       m;
+  MPlugIn_Open    * open = (MPlugIn_Open *) &m.data;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_broadcast_plugin_open: Called for %p, token %p\n",b,t);
+  #endif
+
+  RetError(plugin_write_params(b, t, params, sizeof(params)));
+
+  // For debugging, this may be useful...
+  //
+  // plugin_write_params(b, t, "ADFS::4.$.DebugParam", 0);
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_broadcast_plugin_open: Params file is at '%s'\n",params);
+  #endif
+
+  /* Fill in the header */
+
+  m.hdr.size        = sizeof(MPlugIn_Open) + sizeof(m.hdr);
+  m.hdr.your_ref    = 0;
+  m.hdr.action_code = Message_PlugIn_Open;
+
+  /* Fill in the body */
+
+  open->flags                   = 0;
+  open->reserved                = 0;
+  open->browser_instance_handle = (int) b;
+  open->parent_window_handle    = b->window_handle;
+  open->parent_area             = *position;
+
+  plugin_open_token = t;
+
+  open->file_type = 0;
+  mimemap_mime_to_riscos(HtmlOBJECTcodetype(t), &open->file_type);
+  if (!open->file_type) open->file_type = FileType_DATA;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_broadcast_plugin_open: Filetype to use: %03x\n", open->file_type);
+  #endif
+
+  /* If we already have RMA space for the filename, free it */
+
+  _swix(OS_Module,
+        _IN(0) | _IN(2),
+
+        7,
+        plugin_open_filename);
+
+  plugin_open_filename = NULL;
+
+  /* (Re)claim RMA space for the filename */
+
+  e = _swix(OS_Module,
+            _IN(0) | _IN(3) | _OUT(2),
+
+            6,
+            strlen(params) + 1,
+
+            &plugin_open_filename);
+
+  if (e) return e;
+  if (!plugin_open_filename) return NULL;
+
+  /* Copy it in and fill in the message field */
+
+  strcpy(plugin_open_filename, params);
+
+  open->file_name.ptr = plugin_open_filename;
+
+  /* Broadcast the message */
+
+  RetError(wimp_send_message(Wimp_EUserMessageRecorded, &m, 0, 0, NULL));
+
+  /* Record my_ref in case it bounces */
+
+  plugin_open_reference  = m.hdr.my_ref;
+  plugin_open_tried_once = 0; /* We haven't tried once until we get the first bounce */
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_broadcast_plugin_open: Successful\n",b,t);
+  #endif
+
+  return NULL;
+}
+
+/*************************************************/
+/* plugin_plugin_open_bounced()                  */
+/*                                               */
+/* Handle a Message_PlugIn_Open bounce.          */
+/*                                               */
+/* Parameters: Pointer to a Wimp_Message struct  */
+/*             holding the bounced message.      */
+/*************************************************/
+
+_kernel_oserror * plugin_plugin_open_bounced(WimpMessage * m)
+{
+  _kernel_oserror * e;
+  MPlugIn_Open    * open = (MPlugIn_Open *) &m->data;
+
+  #ifdef TRACE
+    if (!plugin_open_tried_once)
+    {
+      if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Called\n");
+    }
+    else
+    {
+      if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Called again\n");
+    }
+  #endif
+
+  if (m->hdr.my_ref == plugin_open_reference)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Message reference %x is known\n", m->hdr.my_ref);
+    #endif
+
+    if (plugin_open_tried_once)
+    {
+      /* Yuk, everything collapsed in a nasty great heap */
+
+      #ifdef TRACE
+        if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Plug-In launch failed\n");
+      #endif
+
+      /* Delete the parameters file */
+
+      remove(plugin_open_filename);
+
+      /* Need to free up the RMA space used for the filename */
+
+      _swix(OS_Module,
+            _IN(0) | _IN(2),
+
+            7,
+            plugin_open_filename);
+
+      plugin_open_reference  = 0;
+      plugin_open_tried_once = 0;
+      plugin_open_filename   = NULL;
+      plugin_open_token      = NULL;
+    }
+    else
+    {
+      char             combuf[16]; /* Size of '@PlugInType_xxx' plus terminator */
+      char             sysvar[22]; /* As above, preceeded by 'Alias$'           */
+      _kernel_swi_regs r;
+      int              required;
+
+      /* Try launching the Plug-In through Wimp_StartTask */
+
+      #ifdef TRACE
+        if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Attempting Plug-In launch\n");
+      #endif
+
+      plugin_open_tried_once = 1;
+
+      if (open->file_type >= 0 && open->file_type <= 4095) sprintf(combuf, "@PlugInType_%03x", open->file_type);
+      else                                                 sprintf(combuf, "@PlugInType_%03x", FileType_DATA);
+
+      strcpy(sysvar, "Alias$");
+      strcat(sysvar, combuf);
+
+      /* Does the system variable exist? */
+
+      r.r[0] = (int) sysvar;
+      r.r[1] = (int) NULL;
+      r.r[2] = -1;
+      r.r[3] = 0;
+      r.r[4] = 0;
+
+      /* _swix will not work correctly for this particular SWI if */
+      /* requiring the returned R2 value. Something to do with    */
+      /* the call relying on generating an error, but _swix spots */
+      /* it and pulls out earlier than the call expects. Or some  */
+      /* such thing...                                            */
+
+      _kernel_swi(OS_ReadVarVal, &r, &r);
+
+      required = -r.r[2];
+
+      if (required)
+      {
+        show_error_ret(_swix(Wimp_StartTask,
+                             _IN(0),
+
+                             combuf));
+      }
+
+      #ifdef TRACE
+
+        else
+        {
+          if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: System variable '%s' is not set\n", sysvar);
+        }
+
+      #endif
+
+      /* Now rebroadcast the message */
+
+      #ifdef TRACE
+        if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Rebroadcasting Message_PlugIn_Open\n");
+      #endif
+
+      m->hdr.my_ref = m->hdr.your_ref = 0;
+
+      e = wimp_send_message(Wimp_EUserMessageRecorded, m, 0, 0, NULL);
+
+      /* Record my_ref in case it bounces for a second time */
+
+      if (!e) plugin_open_reference = m->hdr.my_ref;
+      else return e;
+    }
+  }
+
+  #ifdef TRACE
+
+    else
+    {
+      if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Message reference %x is not known\n", m->hdr.my_ref);
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Unknown message reference %x in plugin_broadcast_plugin_open",
+              m->hdr.my_ref);
+
+      return &erb;
+    }
+
+  #endif
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_plugin_open_bounced: Successful\n");
+  #endif
+
+  return NULL;
+}
+
+/*************************************************/
+/* plugin_got_plugin_opening()                   */
+/*                                               */
+/* Handle reception of a Message_PlugIn_Opening. */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Pointer to the HStream struct     */
+/*             representing the OBJECT, APPLET   */
+/*             or EMBED tag (Object) that the    */
+/*             message is for;                   */
+/*                                               */
+/*             Pointer to a BBox describing the  */
+/*             where the Plug-In should open, in */
+/*             window coordinates.               */
+/*************************************************/
+
+_kernel_oserror * plugin_got_plugin_opening(WimpMessage * m)
+{
+  MPlugIn_Opening * opening = (MPlugIn_Opening *) &m->data;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_got_plugin_opening: Called\n");
+  #endif
+
+  if (plugin_open_filename)
+  {
+    if (!(opening->flags & MPlugIn_Opening_WillDeleteParamsItself))
+    {
+      #ifdef TRACE
+        if (tl & (1u<<30)) Printf("plugin_got_plugin_opening: Removing parameters file\n");
+      #endif
+
+      remove(plugin_open_filename);
+    }
+
+    /* Need to free up the RMA space used for the filename */
+
+    _swix(OS_Module,
+          _IN(0) | _IN(2),
+
+          7,
+          plugin_open_filename);
+  }
+
+  /* Tell the Object the PlugIn details */
+
+  object_set_token_object_plugin(opening->browser_instance_handle,
+                                 plugin_open_token,
+                                 opening->plugin_instance_handle,
+                                 m->hdr.sender);
+
+  plugin_open_reference  = 0;
+  plugin_open_tried_once = 0;
+  plugin_open_filename   = NULL;
+  plugin_open_token      = NULL;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_got_plugin_opening: Successful\n");
+  #endif
+
+  return NULL;
+}
+
+/*************************************************/
+/* plugin_send_plugin_close()                    */
+/*                                               */
+/* Tell a Plug-In to close down.                 */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Plug-In (this is  */
+/*             used for the browser instance     */
+/*             handle in the Close message);     */
+/*                                               */
+/*             Plug-In instance handle;          */
+/*                                               */
+/*             Plug-In task handle.              */
+/*************************************************/
+
+_kernel_oserror * plugin_send_plugin_close(browser_data * b, unsigned int instance, unsigned int task)
+{
+  _kernel_oserror * e;
+  WimpMessage       m;
+  MPlugIn_Close   * close = (MPlugIn_Close *) &m.data;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_send_plugin_close: Called\n");
+  #endif
+
+  /* Fill in the header... */
+
+  m.hdr.size        = sizeof(MPlugIn_Close) + sizeof(m.hdr);
+  m.hdr.your_ref    = 0;
+  m.hdr.action_code = Message_PlugIn_Close;
+
+  /* ...and the body... */
+
+  close->flags                   = 0;
+  close->plugin_instance_handle  = instance;
+  close->browser_instance_handle = (int) b;
+
+  /* ...then send it. */
+
+  e = wimp_send_message(Wimp_EUserMessageRecorded, &m, task, 0, NULL);
+
+  /* Remember the reference for any replies */
+
+  if (!e) plugin_close_reference = m.hdr.my_ref;
+
+  #ifdef TRACE
+    if (tl & (1u<<30))
+    {
+      if (e) Printf("plugin_send_plugin_close: Exitting with error\n");
+      else   Printf("plugin_send_plugin_close: Successful\n");
+    }
+  #endif
+
+  return e;
+}
+
+/*************************************************/
+/* plugin_send_original_plugin_reshape()         */
+/*                                               */
+/* Tell a Plug-In to reposition or resize itself */
+/* - not as part of a Plug-In request to resize. */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Plug-In (this is  */
+/*             used for the browser instance     */
+/*             handle in the Close message);     */
+/*                                               */
+/*             Plug-In instance handle;          */
+/*                                               */
+/*             Plug-In task handle;              */
+/*                                               */
+/*             New bounding box for the Plug-In  */
+/*             child window (in (parent) window  */
+/*             coordinates).                     */
+/*************************************************/
+
+_kernel_oserror * plugin_send_original_plugin_reshape(browser_data * b, unsigned int instance, unsigned int task, BBox * position)
+{
+  _kernel_oserror * e;
+  WimpMessage       m;
+  MPlugIn_Reshape * reshape = (MPlugIn_Reshape *) &m.data;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_send_original_plugin_reshape: Called\n");
+  #endif
+
+  /* Fill in the header... */
+
+  m.hdr.size        = sizeof(MPlugIn_Reshape) + sizeof(m.hdr);
+  m.hdr.your_ref    = 0;
+  m.hdr.action_code = Message_PlugIn_Reshape;
+
+  /* ...and the body... */
+
+  reshape->flags                   = 0;
+  reshape->plugin_instance_handle  = instance;
+  reshape->browser_instance_handle = (int) b;
+  reshape->parent_window_handle    = b->window_handle;
+  reshape->parent_area             = *position;
+
+  /* ...then send it. */
+
+  e = wimp_send_message(Wimp_EUserMessage, &m, task, 0, NULL);
+
+  #ifdef TRACE
+    if (tl & (1u<<30))
+    {
+      if (e) Printf("plugin_send_original_plugin_reshape: Exitting with error\n");
+      else   Printf("plugin_send_original_plugin_reshape: Successful\n");
+    }
+  #endif
+
+  return e;
+}
