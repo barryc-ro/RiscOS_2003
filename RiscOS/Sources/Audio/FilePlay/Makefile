@@ -92,7 +92,7 @@ resources:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
