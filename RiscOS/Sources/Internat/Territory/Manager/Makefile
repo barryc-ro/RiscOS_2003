@@ -10,74 +10,23 @@
 # 26-Feb-01  SBF          StripDepnd support moved to MkClean
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT  = TerritoryManager
+TARGET     = TerrMgr
+HEADER1    = Territory
+SPRITEFILE = z.SystemDisc
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = objasm
-LD      = link
-CP      = copy
-RM      = remove
-WIPE    = -wipe
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit ${OPTS} -To $@ -From
-LDFLAGS = -bin -o $@
-CPFLAGS = ~cfr~v
-WFLAGS  = ~cfr~v
+ASFLAGS    = -PD "SpriteDisc SETS \"${SPRITEFILE}\""
 
-#
-# Program specific options:
-#
-COMPONENT = TerrMgr
-OBJECT    = o.TerrMgr
-SOURCE    = s.TerrMgr
-TARGET    = rm.TerrMgr
-EXPORTS   = ${EXP_HDR}.Territory
+include StdTools
+include AAsmModule
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+${SA_OBJECT} ${DBG_OBJECT} ${ROM_OBJECT}: ${SPRITEFILE}
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+${SPRITEFILE}: SystemDisc
+        ${SQUASH} SystemDisc z.SystemDisc
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+clean ::
+        ${RM} ${SPRITEFILE}
 
-clean:
-        ${RM} ${TARGET}
-	${WIPE} o ${WFLAGS}
-        ${RM} z.SystemDisc
-        @echo ${COMPONENT}: cleaned
-
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${OBJECT}: ${SOURCE} z.SystemDisc
-	${MKDIR} o
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${TARGET}: ${OBJECT}
-	${LD} ${LDFLAGS} ${OBJECT}
-	SetType $@ &FFA
-
-z.SystemDisc: SystemDisc
-        @echo Compressing sprite
-        MakeSprite
-        stamp $@
-
-${EXP_HDR}.Territory: hdr.Territory
-        ${CP} hdr.Territory $@ ${CPFLAGS}
 
 # Dynamic dependencies:
