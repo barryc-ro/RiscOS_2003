@@ -1,0 +1,804 @@
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "lookup.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "debug.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "program.h"
+#include "cplusplus.h"
+#include "inst.h"
+
+#define DATAPROC_RS0_INST       0
+#define DATAPROC_RS1_INST       1
+#define DATAPROC_IMM0_INST      2
+#define DATAPROC_IMM1_INST      3
+#define LDRSTR_POST_OFF_INST    4
+#define LDRSTR_PRE_OFF_INST     5
+#define LDRSTR_POST_RM_INST     6
+#define LDRSTR_PRE_RM_INST      7
+#define LDMSTM_A_INST           8
+#define LDMSTM_B_INST           9
+#define B_INST                  10
+#define B_L_INST                11
+#define CO_PROC1_INST           12
+#define CO_PROC2_INST           13
+#define CO_PROC3_INST           14
+#define SWI_INST                15
+
+#define OP_FIELD      28
+#define COMMENT_FIELD 51
+
+#define OS_BREAKPOINT 17
+
+static char conditions[16][2] = {
+    "eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc",
+    "hi", "ls", "ge", "lt", "gt", "le", "  ", "nv"
+};
+
+static char shifts[4][6] = { ",lsl ", ",lsr ", ",asr ", ",ror " };
+
+static char dataops[16][4] = {
+    "and", "eor", "sub", "rsb", "add", "adc", "sbc", "rsc",
+    "tst", "teq", "cmp", "cmn", "orr", "mov", "bic", "mvn"
+};
+
+static char fp_stxfertab[4][5] = { "cmf\0", "cnf\0", "cmfe", "cnfe" };
+
+static char fp_xfertab[16][4] = {
+    "flt", "fix", "wfs", "rfs", "wfc", "rfc", "ft6", "ft7",
+    "ft8", "ft9", "fta", "ftb", "ftc", "ftd", "fte", "fte"
+};
+
+static char fp_optab[32][4] = {
+    "adf", "muf", "suf", "rsf", "dvf", "rdf", "pow", "rpw",
+    "rmf", "fml", "fdv", "frd", "pol", "f0d", "f0e", "f0f",
+    "mvf", "mnf", "abs", "rnd", "sqt", "log", "lgn", "exp",
+    "sin", "cos", "tan", "asn", "acs", "atn", "urd", "nrm"
+};
+
+static char *tab_op(char *s, char *start)
+{
+    do {
+        *s++ = ' ';
+    } while (s - start < OP_FIELD);
+    return s;
+}
+
+static char *tab_comment(char *s, char *start)
+{
+    do {
+        *s++ = ' ';
+    } while (s - start < COMMENT_FIELD);
+    *s++ = ';';
+    *s++ = ' ';
+    return s;
+}
+
+static char *add_str_cc(char *s, char *add, int inst)
+{
+    while ((*s++ = *add++) != 0);
+    s--;
+    inst = (inst >> 28) & 0x0f;
+    if (inst != 14) {
+        *s++ = conditions[inst][0];
+        *s++ = conditions[inst][1];
+    }
+    return s;
+}
+
+static char *add_regnum(char *s, int r)
+{
+    r &= 0x0f;
+    if (r >= 10) {
+        *s++ = '1';
+        r -= 10;
+    }
+    *s++ = '0' + r;
+    return s;
+}
+
+static char *add_reg(char *s, int r)
+{
+    r &= 0x0f;
+    if (r < 10) {
+        *s++ = 'r';
+        *s++ = r + '0';
+    } else
+        s = add_str(s, regnames[bindings][r - 10]);
+    return s;
+}
+
+static char *add_coproc_reg(char *s, int r)
+{
+    *s++ = 'c';
+    return add_regnum(s, r);
+}
+
+static char *add_fp_reg(char *s, int r)
+{
+    *s++ = 'f';
+    *s++ = '0' + (r & 7);
+    return s;
+}
+
+static char *add_fp_precandround(char *s, int inst)
+{
+    int c;
+
+    *s++ = inst & (1 << 19) ?
+               (inst & (1 << 7) ? '?' : 'e') : (inst & (1 << 7) ? 'd' : 's');
+    c = 'z';
+    if (!(inst & (1 << 5)))
+        c = 'm';
+    if (!(inst & (2 << 5)))
+        c = 'p';
+    if (inst & (3 << 5))
+        *s++ = c;
+    return s;
+}
+
+static char *add_fp_fmorconst(char *s, int inst)
+{
+    int n;
+
+    *s++ = ',';
+    if (inst & (1 << 3)) {
+        *s++ = '#';
+        n = inst & 7;
+        if (n >= 6)
+            return add_str(s, n == 6 ? "0.5" : "10.0");
+        *s++ = '0' + n;
+        *s++ = '.';
+        *s++ = '0';
+        return s;
+    }
+    return add_fp_reg(s, inst);
+}
+
+static char *add_fp_fn_fmorconst(char *s, int inst)
+{
+    s = add_fp_reg(s, inst >> 16);
+    return add_fp_fmorconst(s, inst);
+}
+
+static char *add_shiftfield(char *s, int inst)
+{
+    int shift;
+
+    shift = (inst >> 4) & 0xff;
+    if (!shift)
+        return s;
+    if (shift == 0x06)  /* ROR #0 -> RRX */
+        return add_str(s, ",rrx");
+    s = add_str(s, shifts[(shift & 0x06) >> 1]);
+    if (shift & 1)
+        return add_reg(s, shift >> 4);
+    *s++ = '#';
+    *s++ = '&';
+    if (shift == 2 || shift == 4)
+        shift = 32;
+    else
+        shift >>= 3;
+    return write_hex(s, shift, 2);
+}
+
+static char *add_contents(char *s, int loc, int b, char *start)
+{
+    ItemSymbol *sy;
+    int word;
+
+    s = tab_comment(s, start);
+    *s++ = '=';
+    dataaccessflag = 0;
+#ifdef PRAGMA_C1
+    enable_access = 1;
+#endif
+    word = *((int *)loc);
+#ifdef PRAGMA_C1
+    enable_access = 0;
+#endif
+    if (dataaccessflag)
+        s = add_str(s, b ? "**" : "********");
+    else if (b) {
+        *s++ = '&';
+        s = write_hex(s, word, 2);
+    } else {
+        sy = sym_lookup(word);
+        if (sy && sy->value == word)
+            s = add_str(s, cplusplus(&string_tab[STR_INDEX(sy->sym)]));
+        else {
+#ifdef PRAGMA_C1
+            enable_access = 1;
+#endif
+            if (isstring((char *)loc)) {
+                *s++ = '\"';
+#ifdef PRAGMA_C1
+                enable_access = 1;
+#endif
+                s = add_str(s, (char *)loc);
+                *s++ = '\"';
+            } else {
+                *s++ = '&';
+                s = write_hex(s, word, 8);
+            }
+#ifdef PRAGMA_C1
+            enable_access = 0;
+#endif
+        }
+    }
+    dataaccessflag = 1;
+    return s;
+}
+
+static char *add_datatransfer_addr(char *s, int inst,
+                                   int contents, int pc, char *start)
+{
+    int dest;
+    ItemSymbol *sy;
+
+    if (!(inst & (1 << 25))) {
+        dest = inst & 0xfff;
+        if (inst & (1 << 27))
+            dest <<= 2;
+        if (((inst >> 16) & 0x0f) == 15) {
+            if (!(inst & (1 << 23)))
+                dest = -dest;
+            dest += pc + 8;
+            sy = sym_lookup(dest);
+            if (sy && sy->value == dest)
+                s = add_str(s, cplusplus(&string_tab[STR_INDEX(sy->sym)]));
+            else {
+                *s++ = '&';
+                s = write_hex(s, dest, 8);
+            }
+            if (contents)
+                s = add_contents(s, dest, inst & (1 << 22), start);
+            return s;
+        }
+    }
+    *s++ = '[';
+    s = add_reg(s, inst >> 16);
+    if (!(inst & (1 << 24)))
+        *s++ = ']';
+    *s++ = ',';
+    if (!(inst & (1 << 25))) {
+        *s++ = '#';
+        if (!(inst & (1 << 23)))
+            *s++ = '-';
+        *s++ = '&';
+        s = write_hex(s, dest, 3);
+    } else {
+        if (!(inst & (1 << 23)))
+            *s++ = '-';
+        s = add_reg(s, inst);
+        s = add_shiftfield(s, inst);
+    }
+    if (inst & (1 << 24)) {
+        *s++ = ']';
+        if (inst & (1 << 21))
+            *s++ = '!';
+    }
+    return s;
+}
+
+static char *add_new_contents(char *s, int loc, int si, int h, char *start)
+{
+    int word;
+
+    s = tab_comment(s, start);
+    *s++ = '=';
+    dataaccessflag = 0;
+#ifdef PRAGMA_C1
+    enable_access = 1;
+#endif
+    word = *((int *)loc);
+#ifdef PRAGMA_C1
+    enable_access = 0;
+#endif
+    if (dataaccessflag)
+        s = add_str(s, si ? "********" : (h ? "****" : "**"));
+    else if (!h) {
+        *s++ = '&';
+        if (si)
+            s = write_hex(s, (word << 24) >> 24, 8);
+        else
+            s = write_hex(s, word, 2);
+    } else {
+        *s++ = '&';
+        if (si)
+            s = write_hex(s, (word << 16) >> 16, 8);
+        else
+            s = write_hex(s, word, 4);
+    }
+    dataaccessflag = 1;
+    return s;
+}
+
+static char *add_new_datatransfer_addr(char *s, int inst, int contents,
+                                         int pc, char *start)
+{
+    int dest;
+    ItemSymbol *sy;
+
+    if (inst & (1 << 22)) {
+        dest = ((inst & 0xf00) >> 4) | (inst & 0xf);
+        if ((inst & 0xf0000) == 0xf0000) {
+            if (!(inst & (1 << 23)))
+                dest = -dest;
+            dest += pc + 8;
+            sy = sym_lookup(dest);
+            if (sy && sy->value == dest)
+                s = add_str(s, cplusplus(&string_tab[STR_INDEX(sy->sym)]));
+            else {
+                *s++ = '&';
+                s = write_hex(s, dest, 8);
+            }
+            if (contents)
+                s = add_new_contents(s, dest, inst & (1 << 6), inst & (1 << 5),
+                                     start);
+            return s;
+        }
+    }
+    *s++ = '[';
+    s = add_reg(s, inst >> 16);
+    if (!(inst & (1 << 24)))
+        *s++ = ']';
+    *s++ = ',';
+    if (inst & (1 << 22)) {
+        *s++ = '#';
+        if (!(inst & (1 << 23)))
+            *s++ = '-';
+        *s++ = '&';
+        s = write_hex(s, dest, 2);
+    } else {
+        if (!(inst & (1 << 23)))
+            *s++ = '-';
+        s = add_reg(s, inst);
+        s = add_shiftfield(s, inst);
+    }
+    if (inst & (1 << 24)) {
+        *s++ = ']';
+        if (inst & (1 << 21))
+            *s++ = '!';
+    }
+    return s;
+}
+
+static char *tab_coproc(char *s, char *start, int inst)
+{
+    s = tab_op(s, start);
+    *s++ = 'c';
+    *s++ = 'p';
+    s = add_regnum(s, inst >> 8);
+    *s++ = ',';
+    return s;
+}
+
+void inst_dis(char *s, int pc)
+{
+    char *s_start;
+    char *op_str;
+    int rc;
+    int dest;
+    int i, c;
+    int op;
+    ItemSymbol *sy;
+    char *inst_buff;
+    int inst;
+    BreakPoint *bp;
+    int access;
+
+    access = readword(pc, &inst);
+    inst_buff = (char *)pc;
+    s_start = s;
+    *s = ' ';
+    if ((inst & 0x0f000000) == BRANCH_OPCODE &&
+            (bp = break_lookup(pc)) != 0) {
+        *s = DDT_BREAK_CHAR;
+        inst = bp->inst;
+    }
+    if (pc == current_context.address)
+        *s = DDT_ARROW_CHAR;
+    s++;
+    s = write_hex(s, pc, 8);
+    *s++ = ':';
+    *s++ = ' ';
+    if (access) {
+        s = add_str(s, "********");
+        *s = 0;
+        return;
+    }
+    s = write_hex(s, inst, 8);
+    *s++ = ' ';
+    if (inst >= 0) {
+        if (inst == 0x6c6d6e6f) {
+            s = add_str(s, "dcd");
+            s = tab_op(s, s_start);
+            s = add_str(s, "undef_pattern");
+            *s = 0;
+            return;
+        }
+        if (inst == 0 || ((sy = sym_lookup(inst)) != 0 && sy->value == inst)) {
+            s = add_str(s, "dcd");
+            s = tab_op(s, s_start);
+            if (inst == 0)
+                *s++ = '0';
+            else
+                s = add_str(s, cplusplus(&string_tab[STR_INDEX(sy->sym)]));
+            *s = 0;
+            return;
+        }
+        if ((inst & 0x80808080) == 0) {
+            for (i = 0; i < 16; i++) {
+                access = readbyte((int)(inst_buff + i), &c);
+                if (access) c = 0x80;
+                if ((c & 0x80) || (c < ' ' && c != '\n' && c != '\r'))
+                    break;
+            }
+#ifdef PRAGMA_C1
+            enable_access = 1;
+#endif
+            if (i == 16 || c == 0) {
+                while (i < 4) {
+                    if (inst_buff[i])
+                        break;
+                    i++;
+                }
+                if (i >= 4) {
+                    s = add_str(s, "dcb");
+                    s = tab_op(s, s_start);
+                    *s++ = '\"';
+                    for (i = 0; i < 4; i++)
+                        if (inst_buff[i]) {
+                            if (inst_buff[i] == '\n') {
+                                *s++ = '\\';
+                                *s++ = 'n';
+                            } else if (inst_buff[i] == '\r') {
+                                *s++ = '\\';
+                                *s++ = 'r';
+                            } else
+                                *s++ = inst_buff[i];
+                        }
+                    *s++ = '\"';
+                    for (i = 0; i < 4; i++)
+                        if (inst_buff[i] == 0)
+                            s = add_str(s, ", 0");
+                    *s = 0;
+                    return;
+                }
+            }
+#ifdef PRAGMA_C1
+            enable_access = 0;
+#endif
+        }
+    }
+    switch ((inst >> 24) & 0x0f) {
+        case SWI_INST:
+            s = add_str_cc(s, "swi", inst);
+            s = tab_op(s, s_start);
+            s = os_swinumbertostring(inst, s, 256 - OP_FIELD);
+            break;
+        case B_INST:
+        case B_L_INST:
+            op_str = "b";
+            if (inst & (1 << 24))
+                op_str = "bl";
+            s = add_str_cc(s, op_str, inst);
+            s = tab_op(s, s_start);
+            dest = ((inst << 2) + pc + 8) & ~0xfc000003;
+            sy = sym_lookup(dest);
+            if (sy && SYM_TYPE(sy->sym) == CODE_SYM) {
+                s = add_str(s, cplusplus(&string_tab[STR_INDEX(sy->sym)]));
+                if (sy->value < dest) {
+                    s = add_str(s, " + &");
+                    s = write_hex(s, dest - sy->value, 4);
+                }
+                s = tab_comment(s, s_start);
+            }
+            *s++ = '&';
+            s = write_hex(s, dest, 8);
+            break;
+        case LDMSTM_A_INST:
+        case LDMSTM_B_INST:
+            s = add_str_cc(s, inst & (1 << 20) ? "ldm" : "stm", inst);
+            *s++ = inst & (1 << 23) ? 'i' : 'd';
+            *s++ = inst & (1 << 24) ? 'b' : 'a';
+            s = tab_op(s, s_start);
+            s = add_reg(s, inst >> 16);
+            if (inst & (1 << 21))
+                *s++ = '!';
+            *s++ = ',';
+            *s++ = '{';
+            rc = 0;
+            for (i = 0; i < 16; i++) {
+                if (inst & (1 << i)) {
+                    if (rc)
+                        *s++ = ',';
+                    s = add_reg(s, i);
+                    rc = 0;
+                    do {
+                        rc++;
+                    } while (++i < 10 && (inst & (1 << i)));
+                    i--;
+                    if (rc > 1) {
+                        *s++ = rc > 2 ? '-' : ',';
+                        s = add_reg(s, i);
+                    }
+                }
+            }
+            *s++ = '}';
+            if (inst & (1 << 22))
+                *s++ = '^';
+            break;
+        case LDRSTR_POST_OFF_INST:
+        case LDRSTR_PRE_OFF_INST:
+        case LDRSTR_POST_RM_INST:
+        case LDRSTR_PRE_RM_INST:
+            if ((inst & (1 << 25)) && (inst & (1 << 4))) {
+                s = add_str(s, "???");
+                break;
+            }
+            s = add_str_cc(s, inst & (1 << 20) ? "ldr" : "str", inst);
+            if (inst & (1 << 22))
+                *s++ = 'b';
+            if (!(inst & (1 << 24)) && (inst & (1 << 21)))
+                *s++ = 't';
+            s = tab_op(s, s_start);
+            s = add_reg(s, inst >> 12);
+            *s++ = ',';
+            s = add_datatransfer_addr(s, inst, 1, pc, s_start);
+            break;
+        case DATAPROC_RS0_INST:
+        case DATAPROC_RS1_INST:
+        case DATAPROC_IMM0_INST:
+        case DATAPROC_IMM1_INST:
+            op = (inst >> 21) & 0x0f;
+            if ((op == 8 || op == 10) && !(inst & (0x21 << 20))
+                  && (inst & 0xfff) == 0) {
+                /* TST or CMP without S bit => MRS */
+                s = add_str_cc(s, "mrs", inst);
+                s = tab_op(s, s_start);
+                s = add_reg(s, inst >> 12);
+                *s++ = ',';
+                s = add_str(s, inst & (1 << 22) ? "spsr" : "cpsr");
+                break;
+            }
+            if ((op == 9 || op == 11) && !(inst & (1 << 20))
+                  && ((inst & (1 << 25)) || (inst & 0xff0) == 0)) {
+                /* TEQ or CMN without S bit => MSR */
+                s = add_str_cc(s, "msr", inst);
+                s = tab_op(s, s_start);
+                s = add_str(s, inst & (1 << 22) ? "spsr" : "cpsr");
+                *s++ = '_';
+                if (inst & (1 << 16)) *s++ = 'c';
+                if (inst & (1 << 17)) *s++ = 'x';
+                if (inst & (1 << 18)) *s++ = 's';
+                if (inst & (1 << 19)) *s++ = 'f';
+                *s++ = ',';
+                if (inst & (1 << 25)) {
+                    *s++ = '#';
+                    *s++ = '&';
+                    dest = rotate_right(inst & 0xff, (inst >> 7) & 0x1e);
+                    s = write_hex0(s, dest);
+                } else
+                    s = add_reg(s, inst);
+                break;
+            }
+            if (inst & (1 << 25)) {
+                if ((op == 2 || op == 4) &&    /* Add / Sub with Rn = 15 */
+                        ((inst >> 16) & 0x0f) == 15 && !(inst & (1 << 20))) {
+                    s = add_str_cc(s, "adr", inst);
+                    s = tab_op(s, s_start);
+                    s = add_reg(s, inst >> 12);
+                    *s++ = ',';
+                    dest = rotate_right(inst & 0xff, (inst >> 7) & 0x1e);
+                    if (op == 2)
+                        dest = -dest;
+                    dest += pc + 8;
+                    sy = sym_lookup(dest);
+                    if (sy && sy->value == dest)
+                        s = add_str(s, cplusplus(&string_tab[STR_INDEX(sy->sym)]));
+                    else {
+                        *s++ = '&';
+                        s = write_hex(s, dest, 8);
+                    }
+                    s = add_contents(s, dest, 0, s_start);
+                    break;
+                }
+            } else {
+                if ((inst & 0xf0) == 0x90) {
+                    if ((inst & (0x3f << 22)) == 0) {
+                        s = add_str_cc(s, inst & (1 << 21) ? "mla" : "mul", inst);
+                        if (inst & (1 << 20))
+                            *s++ = 's';
+                        s = tab_op(s, s_start);
+                        s = add_reg(s, inst >> 16);
+                        *s++ = ',';
+                        s = add_reg(s, inst);
+                        *s++ = ',';
+                        s = add_reg(s, inst >> 8);
+                        if (inst & (1 << 21)) {
+                            *s++ = ',';
+                            s = add_reg(s, inst >> 12);
+                        }
+                        break;
+                    }
+                    if ((inst & (0x3e << 22)) == (2 << 22)) {
+                        *s++ = inst & (1 << 22) ? 's' : 'u';
+                        s = add_str_cc(s, inst & (1 << 21) ? "mlal" : "mull", inst);
+                        if (inst & (1 << 20))
+                            *s++ = 's';
+                        s = tab_op(s, s_start);
+                        s = add_reg(s, inst >> 12);
+                        *s++ = ',';
+                        s = add_reg(s, inst >> 16);
+                        *s++ = ',';
+                        s = add_reg(s, inst);
+                        *s++ = ',';
+                        s = add_reg(s, inst >> 8);
+                        break;
+                    }
+                    if ((inst & (0x3e << 22)) == (0x4 << 22)) {
+                        s = add_str_cc(s, "swp", inst);
+                        if (inst & (1 << 22))
+                            *s++ = 'b';
+                        s = tab_op(s, s_start);
+                        s = add_reg(s, inst >> 12);
+                        *s++ = ',';
+                        s = add_reg(s, inst);
+                        *s++ = ',';
+                        *s++ = '[';
+                        s = add_reg(s, inst >> 16);
+                        *s++ = ']';
+                        break;
+                    }
+                    s = add_str(s, "???");
+                    break;
+                }
+                else if ((inst & 0x90) == 0x90) {
+                    s = add_str_cc(s, inst & (1 << 20) ? "ldr" : "str", inst);
+                    if (inst & (1 << 6))
+                        *s++ = 's';
+                    if (inst & (1 << 5))
+                        *s++ = 'h';
+                    else
+                        *s++ = 'b';
+                    s = tab_op(s, s_start);
+                    s = add_reg(s, inst >> 12);
+                    *s++ = ',';
+                    s = add_new_datatransfer_addr(s, inst, 1, pc, s_start);
+                    break;
+                }
+            }
+            s = add_str_cc(s, dataops[(inst >> 21) & 0x0f], inst);
+            if (op >= 8 && op < 12) {           /* CMN, CMP, TEQ, TST */
+                if (((inst >> 12) & 0x0f) == 15)
+                    *s++ = 'p';
+                s = tab_op(s, s_start);
+            } else {
+                if (inst & (1 << 20))
+                    *s++ = 's';
+                s = tab_op(s, s_start);
+                s = add_reg(s, inst >> 12);
+                *s++ = ',';
+            }
+            if (op != 13 && op != 15) {         /* MOV, MVN */
+                s = add_reg(s, inst >> 16);
+                *s++ = ',';
+            }
+            if (!(inst & (1 << 25))) {
+                s = add_reg(s, inst);
+                s = add_shiftfield(s, inst);
+                break;
+            }
+            *s++ = '#';
+            dest = rotate_right(inst & 0xff, (inst >> 7) & 0x1e);
+            *s++ = '&';
+            s = write_hex0(s, dest);
+            break;
+        case CO_PROC1_INST:
+        case CO_PROC2_INST:
+        case CO_PROC3_INST:
+            if (((inst >> 8) & 0x0f) == 2) {
+                if (((inst >> 24) & 0x0f) == CO_PROC1_INST ||
+                    ((inst >> 24) & 0x0f) == CO_PROC2_INST) {
+                    int n;
+                    s = add_str_cc(s, inst & (1 << 20) ? "lfm" : "sfm", inst);
+                    s = tab_op(s, s_start);
+                    s = add_fp_reg(s, inst >> 12);
+                    *s++ = ',';
+                    n = ((inst >> 15) & 1) | ((inst >> 21) & 2);
+                    if (n == 0) n = 4;
+                    *s++ = '0' + n;
+                    *s++ = ',';
+                    s = add_datatransfer_addr(s, inst & ~0x0f00, 0, pc, s_start);
+                    break;
+                }
+            }
+            if (((inst >> 8) & 0x0f) != 1) {
+                if (!(inst & (1 << 25))) {
+                    s = add_str_cc(s, inst & (1 << 20) ? "ldc" : "stc", inst);
+                    if (inst & (1 << 22))
+                        *s++ = 'l';
+                    s = tab_coproc(s, s_start, inst);
+                    s = add_coproc_reg(s, inst >> 12);
+                    *s++ = ',';
+                    s = add_datatransfer_addr(s, inst & ~0x0f00, 0, pc, s_start);
+                    break;
+                }
+                if (inst & (1 << 4)) {
+                    s = add_str_cc(s, inst & (1 << 20) ? "mrc" : "mcr", inst);
+                    s = tab_coproc(s, s_start, inst);
+                    *s++ = '0' + ((inst >> 21) & 7);
+                    *s++ = ',';
+                    s = add_reg(s, inst >> 12);
+                } else {
+                    s = add_str_cc(s, "cdp", inst);
+                    s = tab_coproc(s, s_start, inst);
+                    s = add_regnum(s, inst >> 20);
+                    *s++ = ',';
+                    s = add_coproc_reg(s, inst >> 12);
+                }
+                *s++ = ',';
+                s = add_coproc_reg(s, inst >> 16);
+                *s++ = ',';
+                s = add_coproc_reg(s, inst);
+                dest = (inst >> 5) & 7;
+                if (dest) {
+                    *s++ = ',';
+                    *s++ = '0' + dest;
+                }
+                break;
+            }
+            if (!(inst & (1 << 25))) {
+                s = add_str_cc(s, inst & (1 << 20) ? "ldf" : "stf", inst);
+                *s++ = inst & (1 << 22) ?
+                           (inst & (1 << 15) ? 'p' : 'e') :
+                           (inst & (1 << 15) ? 'd' : 's');
+                s = tab_op(s, s_start);
+                s = add_fp_reg(s, inst >> 12);
+                *s++ = ',';
+                s = add_datatransfer_addr(s, inst & ~0x0f00, 0, pc, s_start);
+                break;
+            }
+            if (inst & (1 << 4)) {
+                if ((inst & 0x90ff10) == 0x90f110) {
+                    s = add_str_cc(s, fp_stxfertab[(inst >> 21) & 3], inst);
+                    /* Precision and Rounding? */
+                    s = tab_op(s, s_start);
+                    s = add_fp_fn_fmorconst(s, inst);
+                    break;
+                }
+                dest = (inst >> 20) & 0xf;
+                s = add_str_cc(s, fp_xfertab[dest], inst);
+                if (dest < 2 || dest > 5) /* Not [WR]F[CS] */
+                    s = add_fp_precandround(s, inst);
+                s = tab_op(s, s_start);
+                if (dest == 0) { /* FLT */
+                    s = add_fp_reg(s, (inst >> 16) & 7);
+                    *s++ = ',';
+                }
+                s = add_reg(s, inst >> 12);
+                if (dest == 1)  /* FIX */
+                    s = add_fp_fmorconst(s, inst);
+                break;
+            }
+            s = add_str_cc(s, fp_optab[((inst >> 20) & 0x0f) +
+                                       (inst & (1 << 15) ? 0x10 : 0)], inst);
+            s = add_fp_precandround(s, inst);
+            s = tab_op(s, s_start);
+            s = add_fp_reg(s, inst >> 12);
+            if (inst & (1 << 15)) {
+                s = add_fp_fmorconst(s, inst);
+                break;
+            }
+            *s++ = ',';
+            s = add_fp_fn_fmorconst(s, inst);
+            break;
+    }
+    *s = 0;
+}

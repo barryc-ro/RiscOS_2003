@@ -1,0 +1,386 @@
+#include "defs.h"
+#include "asd.h"
+#include "os.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "evaluate.h"
+#include "output.h"
+#include "lib.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "respond.h"
+#include "lookup.h"
+#include "debug.h"
+#include "program.h"
+#include "errors.h"
+#include "ddt.h"
+#include "templates.h"
+#include "cplusplus.h"
+#include "print.h"
+
+#define TYPE_FIX 1
+
+
+/* IDJ; 4-Oct-94: now that typenames are supported by compiler debug format
+ *      each time you print a datum, its type needs "pruning".  Hence
+ *      the code below resets the datumtype field for "compound" types
+ *      for each member of the compound type
+ */
+
+int print_datum(Datum *d, int indent, int base, Context *c)
+{
+    Number num;
+    ItemSection *object;
+    Datum subd;
+    int err;
+
+    if (TYPE_PTR(d->type) == 0 && TYPE_CODE(d->type) == TYPEFUNCTION) {
+        output_str("Function");
+        return 0;
+    }
+    err = datumtonum(d, &num);
+    if (err) return err;
+    if (TYPE_PTR(d->type) == 0 && TYPE_CODE(d->type) < 0) {
+        object = (ItemSection *)((char *)d->section - TYPE_CODE(d->type));
+        switch (object->code) {
+#ifdef TYPE_FIX
+            case ITEMTYPE:
+            case ITEMENUMC:
+            case ITEMENUMD: {
+                ItemType *item = (ItemType *)object;
+
+                subd.datumtype = d->datumtype;
+                subd.type = item->type;
+                if (TYPE_PTR(subd.type) == 0 && TYPE_CODE(subd.type) < 0)
+                {
+                    ItemType *t = (ItemType *)((char *)d->section - TYPE_CODE(subd.type));
+                    if (t->code == ITEMARRAY || t->code == ITEMSTRUCT)
+                        subd.datumtype = CONST_DATUM;
+                }
+                subd.section = d->section;
+                subd.value = d->value;
+                print_datum (&subd, indent, base, c);
+                break;
+            }
+#endif
+            case ITEMSTRUCT: {
+                ItemStruct *item;
+                StructField *field;
+                int f, i;
+
+                item = (ItemStruct *)object;
+                f = 0;
+                field = item->fieldtable;
+                for (i = 0; i < item->fields; i++) {
+                    if (field->offset) {
+                        f = 1;
+                        break;
+                    }
+                    field = (StructField *)((char *)(field + 1) +
+                                                   (strlen(field->name) & ~3));
+                }
+                /* If 0 or 1 items treat it as a struct */
+                if (item->fields <= 1)
+                    f = 1;
+                if (f)
+                    output_line("struct {");
+                else
+                    output_line("union {");
+                field = item->fieldtable;
+                for (i = 0; i < item->fields; i++) {
+                    if (i)
+                        output_line(",");
+                    output_tab(indent + 4);
+                    output_str(cplusplus(field->name));
+                    output_str(" = ");
+                    subd.datumtype = MEMORY_DATUM;
+                    subd.type = field->type;
+                    if (TYPE_PTR(subd.type) == 0 && TYPE_CODE(subd.type) < 0)
+                    {
+                        ItemType *t = (ItemType *)((char *)d->section - TYPE_CODE(subd.type));
+                        if (t->code == ITEMARRAY || t->code == ITEMSTRUCT)
+                        subd.datumtype = CONST_DATUM;
+                    }
+                    subd.section = d->section;
+                    subd.value.address = num.value.ptr + field->offset;
+                    err = print_datum(&subd, indent + 4, base, c);
+                    if (err) return err;
+                    field = (StructField *)((char *)(field + 1) +
+                                                   (strlen(field->name) & ~3));
+                }
+                output_ch(0);
+                output_tab(indent);
+                output_ch('}');
+                break;
+            }
+            case ITEMARRAY: {
+                ItemArray *item;
+                int lwb, upb;
+                int els, i;
+
+                item = (ItemArray *)object;
+                lwb = findlwb(item, c);
+                upb = findupb(item, c);
+                output_str("array[");
+                output_uns(lwb, 10, 1);
+                output_str("..");
+                output_uns(upb, 10, 1);
+                output_str("] ");
+                if (TYPE_CODE(item->basetype) == TYPEUBYTE &&
+                                                    isstring(num.value.ptr)) {
+                    output_ch('\"');
+                    output_str(num.value.ptr);
+                    output_ch('\"');
+                } else {
+                    output_line("{");
+                    els = upb - lwb + 1;
+                    if (els > 10) els = 10;
+                    subd.datumtype = MEMORY_DATUM;
+                    subd.type = item->basetype;
+                    if (TYPE_PTR(subd.type) == 0 && TYPE_CODE(subd.type) < 0)
+                    {
+                        ItemType *t = (ItemType *)((char *)d->section - TYPE_CODE(subd.type));
+                        if (t->code == ITEMARRAY || t->code == ITEMSTRUCT)
+                            subd.datumtype = CONST_DATUM;
+                    }
+                    subd.section = d->section;
+                    subd.value.address = num.value.ptr;
+                    i = els;
+                    while (i--) {
+                        output_tab(indent + 4);
+                        err = print_datum(&subd, indent + 4, base, c);
+                        if (err) return err;
+                        if (i)
+                            output_line(",");
+                        subd.value.address =
+                                       (char *)subd.value.address + item->size;
+                    }
+                    if (els > 10) {
+                        output_line(",");
+                        output_tab(indent + 4);
+                        output_str("...");
+                    }
+                    output_ch(0);
+                    output_tab(indent);
+                    output_ch('}');
+                }
+                break;
+            }
+            case ITEMSET: {
+                ItemSet *item;
+
+                item = (ItemSet *)object;
+                output_str("set: (size = ");
+                output_uns(item->size, 10, 1);
+                output_str(", address = ");
+                output_uns(num.value.u, 16, 8);
+                output_ch(')');
+                break;
+            }
+            case ITEMSUBR: {
+                ItemSubrange *item;
+
+                item = (ItemSubrange *)object;
+                output_str("subrange ");
+                output_uns(item->lb, base ? base : 10, 1);
+                output_str("..");
+                output_uns(item->hb, base ? base : 10, 1);
+                output_str(": ");
+                output_uns(num.value.i, base ? base : 10, 1);
+                break;
+            }
+        }
+        return 0;
+    } else if (TYPE_PTR(d->type) == 1 &&
+               TYPE_CODE(d->type) == TYPEUBYTE &&
+               isstring(num.value.ptr)) {
+        output_uns(num.value.i, base ? base : 16, 8);
+        output_str(" -> \"");
+#ifdef PRAGMA_C1
+        enable_access = 1;
+#endif
+        output_str(num.value.ptr);
+#ifdef PRAGMA_C1
+        enable_access = 0;
+#endif
+        output_ch('\"');
+        return 0;
+    }
+    if (TYPE_PTR(d->type) || TYPE_CODE(d->type) < 0) {
+        output_uns(num.value.i, base ? base : 16, 8);
+        return 0;
+    }
+    switch (num.typecode) {
+        case TYPESWORD:
+            output_int(num.value.i, base ? base : 10);
+            break;
+        case TYPEUWORD:
+            output_uns(num.value.u, base ? base : 10, 1);
+            break;
+        case TYPEDOUBLE:
+            output_dbl(num.value.d);
+            break;
+    }
+    return 0;
+}
+
+int print_vardef(VarDef *def, int indent, int base, Context *c)
+{
+    Datum d;
+    int err;
+
+    err = vardeftodatum(def, c, &d);
+    if (err) return err;
+    err = print_datum(&d, indent, base, c);
+    if (err) return err;
+    output_ch(0);
+    return 0;
+}
+
+void context_to_str(Context *c, int len, char *cs)
+{
+    ItemSymbol *sy;
+    char *s;
+
+    s = cs;
+    if (c->proc && c->proc->item && source_level) {
+        s = add_str(s, cplusplus(c->proc->item->name));
+        if (c->file) {
+            *s++ = ',';
+            do {
+                *s++ = ' ';
+            } while (s - cs < len + 2);
+            s = add_str(s, "line ");
+            s = write_uns_lj(s, c->line, 10);
+            s = add_str(s, " of ");
+            s = add_str(s, c->file->filename);
+        }
+    } else {
+        s = add_str(s, "PC = ");
+        s = write_uns(s, c->address, 8, 16);
+        sy = sym_lookup(c->address);
+        if (sy && c->address - sy->value < 0x10000) {
+            *s++ = ' ';
+            *s++ = '(';
+            s = add_str(s, cplusplus(string_tab + STR_INDEX(sy->sym)));
+            s = add_str(s, " + ");
+            s = write_uns_lj(s, c->address - sy->value, 16);
+            *s++ = ')';
+        }
+    }
+    *s = 0;
+}
+
+void print_context(Context *c, int len)
+{
+    context_to_str(c, len, line_buffer);
+    output_line(line_buffer);
+}
+
+void update_context_window(void)
+{
+    char *s;
+    Rect r;
+
+    s = get_icon_buffer(context_window, I_Context_Name);
+    context_to_str(&current_context, 0, s);
+    icon_rect(&r, context_window, I_Context_Name);
+    invalid_rect(context_window, r);
+}
+
+void print_locals(int base)
+{
+    VarDef *v;
+    Context *c;
+    int maxlen, l;
+    int err;
+
+    c = &current_context;
+    maxlen = 0;
+
+    if (!c->proc || !FLAG_VARS(c->proc->section->flags)) {
+        report(ERR_NOVARINFO);
+        return;
+    }
+
+    for (v = c->proc->varlist; v; v = (VarDef *)v->n.sibling) {
+        l = strlen(cplusplus(v->item->name));
+        if (l > maxlen) maxlen = l;
+    }
+
+    maxlen += 3;
+    v = c->proc->varlist;
+    if (!v)
+        report(ERR_NOLOCALS);
+    for (; v; v = (VarDef *)v->n.sibling) {
+        output_str(cplusplus(v->item->name));
+        output_str(" =");
+        output_tab(maxlen);
+        err = print_vardef(v, maxlen, base, c);
+        if (err) {
+            report(err);
+            return;
+        }
+    }
+}
+
+void print_arguments(int base)
+{
+    VarDef *v;
+    Context *c;
+    int maxlen, l;
+    int err;
+    int i;
+
+    c = &current_context;
+    maxlen = 0;
+
+    if (!c->proc || !FLAG_VARS(c->proc->section->flags)) {
+        report(ERR_NOVARINFO);
+        return;
+    }
+
+    for (i = c->proc->item->args, v = c->proc->varlist;
+                                     i && v; i--, v = (VarDef *)v->n.sibling) {
+        l = strlen(cplusplus(v->item->name));
+        if (l > maxlen) maxlen = l;
+    }
+
+    maxlen += 3;
+    i = c->proc->item->args;
+    if (!i)
+        report(ERR_NOARGS);
+    for (v = c->proc->varlist; i && v; i--, v = (VarDef *)v->n.sibling) {
+        output_str(cplusplus(v->item->name));
+        output_str(" =");
+        output_tab(maxlen);
+        err = print_vardef(v, maxlen, base, c);
+        /* FIXME - Should we stop just because one var is wrong */
+        if (err) {
+            report(err);
+            return;
+        }
+    }
+}
+
+int print_backtrace(void)
+{
+    Context this;
+    int maxlen, l, err;
+
+    this = current_context;
+    maxlen = 0;
+    do {
+        if (this.proc && this.proc->item) {
+            l = strlen(cplusplus(this.proc->item->name));
+            if (l > maxlen) maxlen = l;
+        }
+        err = outerstack(&this, &this);
+    } while (!err);
+    this = current_context;
+    do {
+        print_context(&this, maxlen);
+        err = outerstack(&this, &this);
+    }  while (!err);
+    return 0;
+}

@@ -1,0 +1,470 @@
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "evaluate.h"
+#include "lib.h"
+#include "lookup.h"
+#include "program.h"
+#include "errors.h"
+#include "setjmp.h"
+#include "cplusplus.h"
+#include "readexpr.h"
+
+#define SYM_PRIMARY   1
+#define SYM_SELECTOR  2
+
+#define sym_times       0
+#define sym_div         1
+#define sym_rem         2
+#define sym_plus        3
+#define sym_minus       4
+#define sym_lshift      5
+#define sym_rshift      6
+#define sym_lt          7
+#define sym_le          8
+#define sym_gt          9
+#define sym_ge         10
+#define sym_eq         11
+#define sym_neq        12
+#define sym_and        13
+#define sym_xor        14
+#define sym_or         15
+#define sym_logand     16
+#define sym_logor      17
+
+#define sym_dot        18
+#define sym_arrow      19
+#define sym_contents   20
+#define sym_addrof     21
+#define sym_subscript  22
+#define sym_negate     23
+#define sym_lognot     24
+#define sym_compl      25
+
+#define sym_bra        26
+#define sym_ket        27
+#define sym_sqbra      sym_subscript
+#define sym_sqket      28
+#define sym_name       29
+#define sym_number     30
+
+#define sym_end        31
+
+static ExpTree *readprimary(void);
+static ExpTree *readmonadic(void);
+static ExpTree *readdyadic(int priority);
+
+static int errorcode;
+static Context *exprcontext;
+static char *string;
+static int symbol;
+static int numbase;
+static ExpTree *current_node;
+static int priorities[] = {
+    10, 10, 10,             /* op_times, op_div, op_rem */
+    9, 9,                   /* op_plus, op_minus */
+    8, 8,                   /* op_lshift, op_rshift */
+    7, 7, 7, 7,             /* op_lt, op_le, op_gt, op_ge */
+    6, 6,                   /* op_eq, op_neq */
+    5,                      /* op_and */
+    4,                      /* op_xor */
+    3,                      /* op_or */
+    2,                      /* op_logand */
+    1                       /* op_logor */
+};
+static jmp_buf readexpr_buf;
+
+static void experror(int err)
+{
+    if (err) longjmp(readexpr_buf, err);
+}
+
+static int readnumber(char **string, Number *res)
+{
+    char *s;
+    FPExtended fp;
+    int err;
+
+    res->ptrcount = 0;
+    res->typecode = TYPESWORD;
+    s = *string;
+    if (s[0] == '0' && (s[1] == 'x' && s[2] == 'X')) {
+        *string += 2;
+        err = atoi(string, 16, &res->value.i, 0);
+    } else {
+        while (*s >= '0' && *s <= '9') s++;
+        if (*s == '.') {
+            err = eval_fpconst(string, &fp, 0);
+            res->value.d = 0.0;
+            if (!err)
+                res->value.d = loadfpextended(&fp);
+            res->typecode = TYPEDOUBLE;
+        } else
+            err = atoi(string, numbase, &res->value.i, 0);
+    }
+    return err;
+}
+
+static void newnode(int nodetype)
+{
+    int *ip;
+    int i;
+
+    ip = (int *)(current_node = malloc(sizeof(ExpTree), "Expression node"));
+    for (i = 1; i < sizeof(ExpTree) / sizeof(int); i++)
+        ip[i] = 0;
+    current_node->nodetype = nodetype;
+}
+
+void freenode(ExpTree *node)
+{
+    if (node) {
+        if (node->nodetype == node_operator) {
+            freenode(node->e.o.left);
+            freenode(node->e.o.right);
+        }
+        free(node);
+    }
+}
+
+static int cvt_char(char **string, int *res)
+{
+    int c;
+    int err = 0;
+
+    switch(*(*string)++) {
+        case 'n': c = '\n'; break;
+        case 't': c = '\t'; break;
+        case 'v': c = '\v'; break;
+        case 'b': c = '\b'; break;
+        case 'r': c = '\r'; break;
+        case 'f': c = '\f'; break;
+        case 'a': c = '\a'; break;
+        case '\\': c = '\\'; break;
+        case '\?': c = '\?'; break;
+        case '\'': c = '\''; break;
+        case '\"': c = '\"'; break;
+        case 'x':
+            err = atoi(string, 16, &c, 0);
+            break;
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+            err = atoi(string, 8, &c, 0);
+            break;
+        default:
+            (*string)--;
+            err = atoi(string, 8, &c, 0);
+            break;
+    }
+    *res = c;
+    return err;
+}
+
+static void nextsym(int flags)
+{
+    int sy;
+    Number n;
+    Variable v;
+    char *s;
+    int err;
+    int i, c;
+
+    while (*string == ' ') string++;
+    switch (*string++) {
+        case   0: sy = sym_end; string--; break;
+        case '(': sy = sym_bra; break;
+        case ')': sy = sym_ket; break;
+        case '[': sy = sym_sqbra; break;
+        case ']': sy = sym_sqket; break;
+        case '+': sy = sym_plus; break;
+        case '/': sy = sym_div; break;
+        case '%': sy = sym_rem; break;
+        case '.': sy = sym_dot; break;
+        case '~': sy = sym_compl; break;
+        case '*': sy = (flags & SYM_PRIMARY) ? sym_contents : sym_times; break;
+        case '-':
+            if (*string == '>') {
+                string++;
+                sy = sym_arrow;
+            } else if (flags & SYM_PRIMARY)
+                sy = sym_negate;
+            else
+                sy = sym_minus;
+            break;
+        case '&':
+            if (*string == '&') {
+                string++;
+                sy = sym_logand;
+            } else if (*string >= '0' && *string <= '9') {
+                n.ptrcount = 0;
+                n.typecode = TYPESWORD;
+                err = atoi(&string, 16, &n.value.i, 0);
+                experror(err);
+                newnode(node_number);
+                current_node->e.n = n;
+                sy = sym_number;
+            } else if (flags & SYM_PRIMARY)
+                sy = sym_addrof;
+            else
+                sy = sym_and;
+            break;
+        case '|':
+            if (*string == '|') {
+                string++;
+                sy = sym_logor;
+            } else
+                sy = sym_or;
+            break;
+        case '!':
+            if (*string == '=') {
+                string++;
+                sy = sym_neq;
+            } else
+                sy = sym_lognot;
+            break;
+        case '<':
+            if (*string == '=') {
+                string++;
+                sy = sym_le;
+            } else if (*string == '<') {
+                string++;
+                sy = sym_lshift;
+            } else
+                sy = sym_lt;
+            break;
+        case '>':
+            if (*string == '=') {
+                string++;
+                sy = sym_ge;
+            } else if (*string == '>') {
+                string++;
+                sy = sym_rshift;
+            } else
+                sy = sym_gt;
+            break;
+        case '=':
+            if (*string == '=')
+                sy = sym_eq;
+            else
+                experror(ERR_ASSGOP);
+            break;
+        case '\'':
+            n.typecode = TYPEUBYTE;
+            n.ptrcount = 0;
+            if (*string == '\\') {
+                string++;
+                err = cvt_char(&string, &n.value.i);
+                experror(err);
+            } else {
+                if (!*string || *string == '\'')
+                    experror(ERR_SYNTAX);
+                else
+                    n.value.i = *string;
+                string++;
+            }
+            if (*string == '\'')
+                string++;
+            else
+                experror(ERR_SYNTAX);
+            newnode(node_number);
+            current_node->e.n = n;
+            sy = sym_number;
+            break;
+        case '\"':
+            s = string;
+            c = 0;
+            while (*s && *s != '\"') {
+                if (*s == '\\') {
+                    s++;
+                    cvt_char(&s, &i);
+                } else
+                    s++;
+                c++;
+            }
+            s = n.value.ptr = malloc(c + 1, "Expression string");
+            n.typecode = TYPEUBYTE;
+            n.ptrcount = 1;
+            while (*string && *string != '\"') {
+                if (*string == '\\') {
+                    string++;
+                    err = cvt_char(&string, &i);
+                    experror(err);
+                    *s++ = i;
+                } else
+                    *s++ = *string++;
+            }
+            *s = 0;
+            if (*string != '\"')
+                experror(ERR_SYNTAX);
+            string++;
+            newnode(node_number);
+            current_node->e.n = n;
+            sy = sym_number;
+            break;
+        default:
+            string--;
+            s = string;
+            if (*s >= '0' && *s <= '9') {
+                i = 0;
+                do {
+                    s++;
+                } while (*s >= '0' && *s <= '9');
+                if (*s != ':') {
+                    err = readnumber(&string, &n);
+                    experror(err);
+                    newnode(node_number);
+                    current_node->e.n = n;
+                    sy = sym_number;
+                    break;
+                }
+            }
+            if (flags & SYM_SELECTOR) {
+                int len;
+
+                newnode(node_field);
+                s = mangle(&string, &len);
+                if (!len) experror(ERR_SYNTAX);
+                current_node->e.f.name = malloc(len + 1, "selector name");
+                memcpy(current_node->e.f.name, s, len);
+                current_node->e.f.name[len] = 0;
+            } else {
+                err = stringtovardef(&string, &(v.con), &(v.def), exprcontext);
+                experror(err);
+                newnode(node_variable);
+                current_node->e.v = v;
+            }
+            sy = sym_name;
+            break;
+    }
+    symbol = sy;
+    if (is_dyadic(sy) || is_monadic(sy)
+            || sy == sym_dot || sy == sym_arrow || sy == sym_sqbra) {
+        newnode(node_operator);
+        current_node->e.o.op = sy;
+    }
+}
+
+int readexpr(char **s, ExpTree **restree, Context *c, int base)
+{
+    exprcontext = c;
+    string = *s;
+    numbase = base;
+    errorcode = setjmp(readexpr_buf);
+    if (!errorcode) {
+        nextsym(SYM_PRIMARY);
+        *restree = readdyadic(0);
+        report(errorcode);
+        errorcode = 0;
+    }
+    *s = string;
+    return errorcode;
+}
+
+static ExpTree *readdyadic(int priority)
+{
+    ExpTree *tree;
+
+    tree = readmonadic();
+    while (is_dyadic(symbol)) {
+        if (priorities[current_node->e.o.op] <= priority)
+            break;
+        current_node->e.o.left = tree;
+        tree = current_node;
+        nextsym(SYM_PRIMARY);
+        tree->e.o.right = readdyadic(priorities[tree->e.o.op]);
+    }
+    return tree;
+}
+
+static ExpTree *readmonadic(void)
+{
+    ExpTree *tree;
+
+    if (is_monadic(symbol)) {
+        tree = current_node;
+        nextsym(SYM_PRIMARY);
+        tree->e.o.left = readmonadic();
+        if (tree->e.o.op == sym_addrof && !checklv(tree->e.o.left))
+            experror(ERR_LVALUE);
+        return tree;
+    } else
+        return readprimary();
+}
+
+static ExpTree *readprimary(void)
+{
+    ExpTree *tree;
+    int selector;
+
+    switch (symbol) {
+        case sym_name:
+        case sym_number:
+            tree = current_node;
+            break;
+        case sym_bra:
+            nextsym(SYM_PRIMARY);
+            tree = readdyadic(0);
+            if (symbol != sym_ket)
+                experror(ERR_BRACKETS);
+            break;
+        default:
+           experror(ERR_SYNTAX);
+           break;
+    }
+    nextsym(0);
+    while (symbol == sym_dot || symbol == sym_arrow || symbol == sym_sqbra) {
+        selector = !(symbol == sym_sqbra);
+        current_node->e.o.left = tree;
+        tree = current_node;
+        nextsym(SYM_PRIMARY | (selector ? SYM_SELECTOR : 0));
+        if (selector) {
+            if (symbol != sym_name || current_node->nodetype != node_field)
+                experror(ERR_SELECT);
+            tree->e.o.right = current_node;
+            if (tree->e.o.op == sym_dot && !checklv(tree->e.o.left))
+                experror(ERR_LVALUE);
+        } else {
+            tree->e.o.right = readdyadic(0);
+            if (symbol != sym_sqket)
+                experror(ERR_SQBRACKETS);
+        }
+        nextsym(0);
+    }
+    return tree;
+}
+
+int checklv(ExpTree *tree)
+{
+    int op;
+
+    if (tree->nodetype == node_variable)
+        return 1;
+    if (tree->nodetype == node_operator) {
+        op = tree->e.o.op;
+        if (op == op_subscript || op == op_arrow ||
+                                            op == op_dot || op == op_contents)
+            return 1;
+    }
+    return 0;
+}
+
+int readandevaluate(char **s, Context *c, Datum *res, int base)
+{
+    ExpTree *tree;
+    int readerr, evalerr;
+
+    readerr = readexpr(s, &tree, c, base);
+    if (readerr && readerr != ERR_TYPEWARN) return readerr;
+    evalerr = evaluate(tree, c, res);
+    return evalerr ? evalerr : readerr;
+}

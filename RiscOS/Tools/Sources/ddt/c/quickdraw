@@ -1,0 +1,216 @@
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "bin.h"
+#include "ddt.h"
+#include "quickdraw.h"
+
+int screen_maxx, screen_maxy;
+int log2bpp;
+
+static int ddt_palette[16];             /* {} */
+
+/* MEDUSA - must be int instead of char for > 256 cols */
+static unsigned gcols[16];              /* {} */
+static unsigned char pixtrans0[2];      /* {} */
+static unsigned char pixtrans1[4];      /* {} */
+static unsigned char pixtrans2[16];     /* {} */
+
+void qd_set_palette(char *palette)
+{
+    int entry;
+    int i;
+
+    for (i = 0; i < 16; i++, palette += 6) {
+        entry = (palette[5] << 20) | (palette[4] << 12) | (palette[3] << 4);
+        entry &= 0x0f0f0f00;
+        entry |= entry << 4;
+        ddt_palette[i] = entry;
+    }
+}
+
+static int current_wimp_colours[2];
+
+void qd_read_gcols(void)
+{
+    int i;
+    int palette[16];
+
+    current_wimp_colours[0] = -1;
+    current_wimp_colours[1] = -1;
+    for (i = 0; i < 16; i++)
+        gcols[i] = colourtrans_returngcol(ddt_palette[i]);
+    if (gcols[1] == gcols[3])
+        gcols[3] = colourtrans_returnoppgcol(ddt_palette[3]);
+    if (gcols[1] == gcols[7])
+        gcols[7] = colourtrans_returnoppgcol(ddt_palette[7]);
+    if (gcols[0] == gcols[4])
+        gcols[4] = colourtrans_returnoppgcol(ddt_palette[4]);
+    /* MEDUSA - Handle 10^6 colours using generate table */
+    if (1 /*log2bpp > 3 */) {
+        palette[0] = ddt_palette[0];
+        palette[1] = ddt_palette[7];
+        colourtrans_generatetable(0, palette, pixtrans0);
+        palette[0] = ddt_palette[0];
+        palette[1] = ddt_palette[2];
+        palette[2] = ddt_palette[5];
+        palette[3] = ddt_palette[7];
+        colourtrans_generatetable(1, palette, pixtrans1);
+        colourtrans_generatetable(12, ddt_palette, pixtrans2);
+    } else if (log2bpp == 3) {
+        pixtrans0[0] = munge256(gcols[0]);
+        pixtrans0[1] = munge256(gcols[7]);
+        pixtrans1[0] = munge256(gcols[0]);
+        pixtrans1[1] = munge256(gcols[2]);
+        pixtrans1[2] = munge256(gcols[5]);
+        pixtrans1[3] = munge256(gcols[7]);
+        for (i = 0; i < 16; i++)
+            pixtrans2[i] = munge256(gcols[i]);
+    } else {
+        pixtrans0[0] = gcols[0];
+        pixtrans0[1] = gcols[7];
+        pixtrans1[0] = gcols[0];
+        pixtrans1[1] = gcols[2];
+        pixtrans1[2] = gcols[5];
+        pixtrans1[3] = gcols[7];
+        /* MEDUSA - Use loop instead of memcpy as size of gcol has changed */
+        for (i = 0; i < 16; i++)
+            pixtrans2[i] = gcols[i];
+    }
+}
+
+unsigned char *qd_pixtrans(int sprite_log2bpp)
+{
+    switch (sprite_log2bpp) {
+        case 0:
+            return pixtrans0;
+        case 1:
+            return pixtrans1;
+        case 2:
+            return pixtrans2;
+        case 3:
+            fatal(BAD_SPRITE, "DDT: 256 colour sprite");
+    }
+}
+
+void qd_setcolour(int wimp_colour)
+{
+    char cset[13];
+    int bgrnd;
+
+    bgrnd = wimp_colour >> 7;
+    wimp_colour &= 0x0f;
+    if (current_wimp_colours[bgrnd] == wimp_colour)
+        return;
+    current_wimp_colours[bgrnd] = wimp_colour;
+    cset[0] = SET_GRAPHICS_COLOUR;
+    cset[1] = 0;
+    /* MEDUSA - handle 10^6 colours */
+    if (log2bpp > 3) {
+        colourtrans_setcolour(gcols[wimp_colour], bgrnd << 7, 0);
+    } else if (log2bpp != 3) {
+        cset[2] = (bgrnd << 7) | gcols[wimp_colour];
+        os_writen(cset, 3);
+    } else {
+        cset[2] = (bgrnd << 7) | (gcols[wimp_colour] >> 2);
+        cset[3] = 23;
+        cset[4] = VDU23_SET_TINT;
+        cset[5] = bgrnd ? SET_TINT_GRAPHICS_BGRND : SET_TINT_GRAPHICS_FGRND;
+        cset[6] = (gcols[wimp_colour] & 3) << 6;
+        cset[7] = 0;
+        *((int *)(cset + 8)) = 0;
+        cset[12] = 0;
+        os_writen(cset, 13);
+    }
+}
+
+static void write_word(int w)
+{
+    os_writec(w & 0xff);
+    os_writec(w >> 8);
+}
+
+static void write_point(int x, int y)
+{
+    write_word(x);
+    write_word(y);
+}
+
+int set_graphics_window(Rect *r)
+{
+    if (r->maxx < 0 || r->maxy < 0 ||
+            r->minx > screen_maxx || r->miny > screen_maxy ||
+            r->minx > r->maxx || r->miny > r->maxy)
+        return 0;
+    os_writec(DEFINE_GRAPHICS_WINDOW);
+    write_point(r->minx < 0 ? 0 : r->minx,
+                r->miny < 0 ? 0 : r->miny);
+    write_point(r->maxx > screen_maxx ? screen_maxx : r->maxx,
+                r->maxy > screen_maxy ? screen_maxy : r->maxy);
+    return 1;
+}
+
+void qd_fill_rect(int minx, int maxy, int maxx, int miny)
+{
+    os_plot(PLOT_POINT + MOVE_ABS, minx, maxy);
+    os_plot(PLOT_RECT_FILL + PLOT_ABS_BGRND, maxx, miny);
+}
+
+void qd_rect(int minx, int maxy, int maxx, int miny)
+{
+    os_plot(PLOT_POINT + MOVE_ABS, minx, maxy);
+    os_plot(PLOT_LINE_INCLUSIVE + PLOT_ABS_FGRND, minx, miny);
+    os_plot(PLOT_LINE_INCLUSIVE + PLOT_ABS_FGRND, maxx, miny);
+    os_plot(PLOT_LINE_INCLUSIVE + PLOT_ABS_FGRND, maxx, maxy);
+    os_plot(PLOT_LINE_INCLUSIVE + PLOT_ABS_FGRND, minx, maxy);
+}
+
+void qd_copy_rect(Rect *src, Rect *dest)
+{
+    Rect r;
+    int minx, miny;
+
+    r.minx = 0;
+    r.miny = 0;
+    r.maxx = screen_maxx;
+    r.maxy = screen_maxy;
+    set_graphics_window(&r);
+    minx = dest->minx;
+    miny = dest->miny;
+    r = *src;
+    if (r.minx < 0) {
+        minx -= r.minx;
+        r.minx = 0;
+    }
+    if (r.maxy > screen_maxy)
+        r.maxy = screen_maxy;
+    if (r.maxx > screen_maxx)
+        r.maxx = screen_maxx;
+    if (r.miny < 0) {
+        miny -= r.miny;
+        r.miny = 0;
+    }
+    os_plot(MOVE_ABS, r.minx, r.maxy);
+    os_plot(MOVE_ABS, r.maxx, r.miny);
+    os_plot(PLOT_ABS_COPY, minx, miny);
+}
+
+void qd_hline(int y, int minx, int maxx)
+{
+    os_plot(PLOT_POINT + MOVE_ABS, minx, y);
+    os_plot(PLOT_LINE_INCLUSIVE + PLOT_ABS_FGRND, maxx, y);
+}
+
+void qd_vline(int x, int miny, int maxy)
+{
+    os_plot(PLOT_POINT + MOVE_ABS, x, miny);
+    os_plot(PLOT_LINE_INCLUSIVE + PLOT_ABS_FGRND, x, maxy);
+}
+
+void qd_load_palette(void)
+{
+    qd_set_palette((char *)&palette_base);
+}

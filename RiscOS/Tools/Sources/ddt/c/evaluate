@@ -1,0 +1,911 @@
+#include "defs.h"
+#include "asd.h"
+#include "lookup.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "respond.h"
+#include "os.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "errors.h"
+#include "program.h"
+#include "setjmp.h"
+#include "print.h"
+#include "evaluate.h"
+#include "output.h"
+
+#define TYPE_FIX 1
+
+/* IDJ: 6-Jan-95: AQU-00718 - strip type for items of dbg type ITEMTYPE when evaluating expressions
+ * guarded by TYPE_FIX
+ */
+
+typedef void (*vfunction)(Number *res, Number *leftval, Number * rightval, int op);
+
+static void evalexpr(ExpTree *tree, Datum *res);
+
+static Context *evalcontext;
+static int errorcode;
+static jmp_buf evaluate_buf;
+
+int low_eval(char **ps, int *res, int terminate)
+{
+    int l, r, c;
+    int err;
+    ItemSymbol *sy;
+    char *sym, *s;
+
+    s = *ps;
+    while (*s == ' ') s++;
+    if (*s == '&') {
+        s++;
+        err = atoi(&s, 16, &l, 0);
+        if (err) return err;
+    } else if (*s >= '0' && *s <= '9') {
+        err = atoi(&s, default_base ? default_base : 16, &l, 0);
+        if (err) return err;
+    } else if (issymdigit(*s)) {
+        sym = s;
+        while (issymdigit(*++s));
+        c = *s; *s = 0;
+        sy = symname_lookup(sym);
+        *s = c;
+        if (!sy) return SYMBOL_NOT_FOUND;
+        l = sy->value;
+    } else return ERR_LOWEXPR;
+    while (*s == ' ') s++;
+    if (*s == '+' || *s == '-') {
+        c = *s++;
+        err = low_eval(&s, &r, terminate);
+        if (err) return err;
+        if (c == '-')
+            r = -r;
+        l = l + r;
+    }
+    if (terminate && *s) return ERR_LOWTERM;
+    *res = l;
+    *ps = s;
+    return 0;
+}
+
+int datumtonum(Datum *d, Number *num)
+{
+    int tcode;
+    int reg;
+    int *stackframe;
+
+    num->ptrcount = 0;
+    tcode = TYPE_CODE(d->type);
+    if (TYPE_PTR(d->type)) {
+        tcode = TYPEUWORD;
+        num->typecode = TYPE_CODE(d->type);
+        num->ptrcount = TYPE_PTR(d->type);
+    } else if (type_integral(tcode))
+        num->typecode = type_signed(tcode) ? TYPESWORD : TYPEUWORD;
+    else if (type_fpoint(tcode))
+        num->typecode = TYPEDOUBLE;
+    else {
+        tcode = TYPEUWORD;
+        num->typecode = TYPEUWORD;
+    }
+    switch (d->datumtype) {
+        case CONST_DATUM:
+            num->value = d->value.val;
+            break;
+        case MEMORY_DATUM:
+            dataaccessflag = 0;
+#ifdef PRAGMA_C1
+            enable_access = 1;
+#endif
+            switch (tcode) {
+                case TYPESBYTE:
+                    num->value.i = *((signed char *)d->value.address);
+                    break;
+                case TYPEUBYTE:
+                    num->value.u = *((unsigned char *)d->value.address);
+                    break;
+                case TYPESHALF:
+                    num->value.i = *((signed short *)d->value.address);
+                    break;
+                case TYPEUHALF:
+                    num->value.u = *((unsigned short *)d->value.address);
+                    break;
+                case TYPESWORD:
+                    num->value.i = *((signed int *)d->value.address);
+                    break;
+                case TYPEUWORD:
+                    num->value.u = *((unsigned int *)d->value.address);
+                    break;
+                case TYPEFLOAT:
+                    num->value.d = *((float *)d->value.address);
+                    break;
+                case TYPEDOUBLE:
+                    num->value.d = *((double *)d->value.address);
+                    break;
+                case 0:
+#ifdef PRAGMA_C1
+                    enable_access = 0;
+#endif
+                    return ERR_VOIDACCESS;
+                default:
+#ifdef PRAGMA_C1
+                    enable_access = 0;
+#endif
+                    return ERR_DBGTABLE;
+            }
+#ifdef PRAGMA_C1
+            enable_access = 0;
+#endif
+            if (dataaccessflag)
+                return ERR_ACCESS;
+            dataaccessflag = 1;
+            break;
+        case REG_DATUM:
+            reg = d->value.regdata.regnum;
+            stackframe = d->value.regdata.stackframe;
+            if (type_integral(tcode))
+                num->value.i = progregister(reg, stackframe);
+            else
+                num->value.d = progfpregister(reg, stackframe);
+            break;
+        default:
+            return ERR_INTERNAL;
+    }
+    return 0;
+}
+
+int vardeftodatum(VarDef *def, Context *c, Datum *res)
+{
+    int class;
+    ItemArray *s;
+    int err;
+    Context vc;
+
+    vc = *c;
+    c = &vc;
+    res->datumtype = MEMORY_DATUM;
+    res->type = def->item->type;
+    res->section = def->n.parent->section;
+
+#ifdef TYPE_FIX
+    if (TYPE_CODE(res->type) < 0 && TYPE_PTR(res->type) == 0)
+    {
+        ItemSection *object = (ItemSection *)((char *)res->section - TYPE_CODE(res->type));
+
+        while (TYPE_CODE(res->type) < 0 && TYPE_PTR(res->type) == 0 && object->code == ITEMTYPE)
+        {
+            ItemType *item = (ItemType *)object;
+
+            res->type = item->type;
+
+            if (TYPE_CODE(res->type) < 0 && TYPE_PTR(res->type) == 0)
+                object = (ItemSection *)((char *)res->section - TYPE_CODE(res->type));
+        }
+    }
+#endif
+
+    class = def->item->storageclass;
+    if (class != C_EXTERN && class != C_STATIC) {
+        err = checkact(c, &current_context);
+        if (err) return err;
+    }
+    switch (class) {
+        case C_EXTERN:
+        case C_STATIC:
+            res->value.address = def->item->location.address;
+            break;
+        case C_AUTO:
+        case C_VAR:
+            res->value.address = (char *)c->stackframe +
+                                 def->item->location.offset;
+            break;
+        case C_REG:
+            res->datumtype = REG_DATUM;
+            res->value.regdata.regnum = def->item->location.offset;
+            res->value.regdata.stackframe = c->stackframe;
+            break;
+        default:
+            return ERR_DBGTABLE;
+    }
+    if (TYPE_CODE(res->type) < 0 && TYPE_PTR(res->type) == 0) {
+        s = (ItemArray *)((char *)res->section - TYPE_CODE(res->type));
+        if (s->code == ITEMARRAY || s->code == ITEMSTRUCT)
+            res->datumtype = CONST_DATUM;
+    }
+    return 0;
+}
+
+int findlwb(ItemArray *item, Context *c)
+{
+    if (ARRAY_UNDEF_LBOUND(item->flags))
+        return 0;
+    if (ARRAY_CONST_LBOUND(item->flags))
+        return item->lowerbound;
+    else
+        return *(c->stackframe + item->lowerbound);
+}
+
+int findupb(ItemArray *item, Context *c)
+{
+    if (ARRAY_UNDEF_UBOUND(item->flags))
+        return findlwb(item, c);
+    if (ARRAY_CONST_LBOUND(item->flags))
+        return item->upperbound;
+    else
+        return *(c->stackframe + item->upperbound);
+}
+
+int typesize(Datum *d, Context *c)
+{
+    ItemSection *object;
+
+    if (TYPE_PTR(d->type))
+        return 4;
+    if (TYPE_CODE(d->type) < 0) {
+        object = (ItemSection *)((char *)d->section - TYPE_CODE(d->type));
+        switch (object->code) {
+#ifdef TYPE_FIX
+            case ITEMTYPE:
+            {    Datum subd = *d;
+                 ItemType *item = (ItemType *)object;
+
+                 subd.type = item->type;
+                 return typesize(&subd, c);
+            }
+#endif
+            case ITEMSTRUCT: return ((ItemStruct *)object)->size;
+            case ITEMSUBR:   return ((ItemSubrange *)object)->size;
+            case ITEMSET:    return ((ItemSet *)object)->size;
+            case ITEMARRAY: {
+                ItemArray *item;
+                int lwb, upb;
+                Datum dt;
+
+                item = (ItemArray *)object;
+                if (ARRAY_UNDEF_LBOUND(item->flags) ||
+                        ARRAY_UNDEF_UBOUND(item->flags))
+                    return 0;
+                lwb = findlwb(item, c);
+                upb = findupb(item, c);
+                dt.type = item->basetype;
+                dt.section = d->section;
+                return (upb - lwb + 1) * typesize(&dt, c);
+            }
+        }
+    }
+    switch (TYPE_CODE(d->type)) {
+        case TYPESBYTE:
+        case TYPEUBYTE:
+            return 1;
+        case TYPESHALF:
+        case TYPEUHALF:
+            return 2;
+        case TYPESWORD:
+        case TYPEUWORD:
+            return 4;
+        case TYPEFLOAT:
+            return sizeof(float);
+        case TYPEDOUBLE:
+            return sizeof(double);
+    }
+    return 0;
+}
+
+int eval_fpconst(char **ps, FPExtended *fp, int terminate)
+{
+    unsigned packed[3];
+    int n, exp, c, d;
+    char exp_digits[8];
+    char *s;
+    int err;
+
+    packed[0] = 0;
+    packed[1] = 0;
+    packed[2] = 0;
+    s = *ps;
+    while (*s == ' ') s++;
+    if (*s == '-' || *s == '+') {
+        if (*s == '-')
+            packed[0] |= 0x80000000;
+        s++;
+    }
+    if (*s < '0' || *s > '9')
+        return ERR_FPEXPECTED;
+    while (*s == '0') s++;
+    exp = 0;
+    d = 18;
+    while (*s >= '0' && *s <= '9') {
+        set_digit(packed, d, *s);
+        d--;
+        exp++;
+        s++;
+    }
+    if (*s == '.') {
+        s++;
+        if (*s < '0' || *s > '9')
+            return ERR_FRACTEXPECTED;
+        if (!exp) {
+            while (*s == '0') {
+                s++;
+                exp--;
+            }
+        }
+        while (*s >= '0' && *s <= '9') {
+            set_digit(packed, d, *s);
+            d--;
+            s++;
+        }
+    }
+    exp--;
+    if (*s == 'E' || *s == 'e') {
+        s++;
+        c = *s;
+        if (c == '-' || c == '+')
+            s++;
+        err = atoi(&s, 10, &n, 0);
+        if (err) return err;
+        if (c == '-')
+            n = -n;
+        exp += n;
+    }
+    if (d == 18)
+        exp = 0;
+    if (exp < 0) {
+        packed[0] |= 0x40000000;
+        exp = -exp;
+    }
+    if (exp >= 10000)
+        return ERR_NUMTOOBIG;
+    write_uns(exp_digits, exp, 4, 10);
+    for (n = 0; n < 4; n++)
+        set_digit(packed, 22 - n, exp_digits[n]);
+    if (terminate && *s)
+        return ERR_FPTERM;
+    cvt_fp(fp, packed);
+    *ps = s;
+    return 0;
+}
+
+static void evalerror(int err)
+{
+    if (err) longjmp(evaluate_buf, err);
+}
+
+static void dereferenceptr(Datum *dat)
+{
+    Number n;
+    int err;
+    ItemArray *item;
+
+    if (!TYPE_PTRCOUNT(dat->type))
+        errorcode = ERR_TYPEWARN;
+    err = datumtonum(dat, &n);
+    evalerror(err);
+    dat->datumtype = MEMORY_DATUM;
+    dat->value.address = n.value.ptr;
+    if (TYPE_PTRCOUNT(dat->type))
+        dat->type--;
+
+#ifdef TYPE_FIX
+    if (TYPE_TYPECODE(dat->type) < 0 && !TYPE_PTRCOUNT(dat->type))
+    {
+        ItemSection *object = (ItemSection *)((char *)dat->section - TYPE_CODE(dat->type));
+
+        while (TYPE_TYPECODE(dat->type) < 0 && !TYPE_PTRCOUNT(dat->type) && object->code == ITEMTYPE)
+        {
+            ItemType *item = (ItemType *)object;
+
+            dat->type = item->type;
+
+            if (TYPE_TYPECODE(dat->type) < 0 && !TYPE_PTRCOUNT(dat->type))
+                object = (ItemSection *)((char *)dat->section - TYPE_CODE(dat->type));
+        }
+    }
+#endif
+
+    if (TYPE_TYPECODE(dat->type) < 0 && !TYPE_PTRCOUNT(dat->type)) {
+        item = (ItemArray *)((char *)dat->section - TYPE_TYPECODE(dat->type));
+        if (item->code == ITEMARRAY || item->code == ITEMSTRUCT)
+            dat->datumtype = CONST_DATUM;
+    }
+}
+
+static void simplify(Datum *dat)
+{
+    ItemArray *arr;
+
+    if (TYPE_TYPECODE(dat->type) > 0 || TYPE_PTRCOUNT(dat->type))
+        return;
+    arr = (ItemArray *)((char *)dat->section - TYPE_TYPECODE(dat->type));
+    if (arr->code == ITEMARRAY) {
+        dat->type = arr->basetype;
+        dat->type++;
+    }
+}
+
+static void floatop(Number *res, Number *leftval, Number *rightval, int op)
+{
+    double d;
+    int i;
+
+    if (is_dyadic(op)) {
+        if (leftval->typecode == TYPEUWORD)
+             leftval->value.d = leftval->value.u;
+        else if (leftval->typecode == TYPESWORD)
+             leftval->value.d = leftval->value.i;
+        if (rightval->typecode == TYPEUWORD)
+             rightval->value.d = rightval->value.u;
+        else if (leftval->typecode == TYPESWORD)
+             rightval->value.d = rightval->value.i;
+    }
+
+    if (op == op_div && rightval->value.d == 0.0)
+        evalerror(ERR_DIVBYZERO);
+
+    switch (op) {
+        case op_times:  d = leftval->value.d *  rightval->value.d; break;
+        case op_div:    d = leftval->value.d /  rightval->value.d; break;
+        case op_rem:    evalerror(ERR_TYPE)                     ; break;
+        case op_plus:   d = leftval->value.d +  rightval->value.d; break;
+        case op_minus:  d = leftval->value.d -  rightval->value.d; break;
+        case op_negate: d = - leftval->value.d;                    break;
+
+        case op_lt:     i = leftval->value.d <  rightval->value.d; break;
+        case op_le:     i = leftval->value.d <= rightval->value.d; break;
+        case op_gt:     i = leftval->value.d >  rightval->value.d; break;
+        case op_ge:     i = leftval->value.d >= rightval->value.d; break;
+        case op_eq:     i = leftval->value.d == rightval->value.d; break;
+        case op_neq:    i = leftval->value.d != rightval->value.d; break;
+    }
+
+    if (op >= op_lt && op <= op_neq) {
+        res->typecode = TYPESWORD;
+        res->value.i  = i;
+    } else {
+        res->typecode = TYPEDOUBLE;
+        res->value.d = d;
+    }
+}
+
+static void unsignedop(Number *res, Number *leftval, Number *rightval, int op)
+{
+    unsigned u;
+    int i;
+
+    if ((op == op_div || op == op_rem) && rightval->value.u == 0)
+        evalerror(ERR_DIVBYZERO);
+
+    switch (op) {
+        case op_times:  u = leftval->value.u *  rightval->value.u; break;
+        case op_div:    u = leftval->value.u /  rightval->value.u; break;
+        case op_rem:    u = leftval->value.u %  rightval->value.u; break;
+        case op_plus:   u = leftval->value.u +  rightval->value.u; break;
+        case op_minus:  u = leftval->value.u -  rightval->value.u; break;
+        case op_negate: u = - leftval->value.u;                    break;
+
+        case op_lt:     i = leftval->value.u <  rightval->value.u; break;
+        case op_le:     i = leftval->value.u <= rightval->value.u; break;
+        case op_gt:     i = leftval->value.u >  rightval->value.u; break;
+        case op_ge:     i = leftval->value.u >= rightval->value.u; break;
+        case op_eq:     i = leftval->value.u == rightval->value.u; break;
+        case op_neq:    i = leftval->value.u != rightval->value.u; break;
+
+        case op_and:    u = leftval->value.u &  rightval->value.u; break;
+        case op_xor:    u = leftval->value.u ^  rightval->value.u; break;
+        case op_or:     u = leftval->value.u |  rightval->value.u; break;
+        case op_compl:  u = ~ leftval->value.u;                    break;
+
+        case op_lshift: u = leftval->value.u << rightval->value.u; break;
+        case op_rshift: u = leftval->value.u >> rightval->value.u; break;
+    }
+
+    if (op >= op_lt && op <= op_neq) {
+        res->typecode = TYPESWORD;
+        res->value.i  = i;
+    } else {
+        res->typecode = TYPEDOUBLE;
+        res->value.u = u;
+    }
+}
+
+static void intop(Number *res, Number *leftval, Number *rightval, int op)
+{
+    int i;
+
+    if ((op == op_div || op == op_rem) && rightval->value.i == 0)
+        evalerror(ERR_DIVBYZERO);
+
+    switch (op)
+    {
+        case op_times:  i = leftval->value.i *  rightval->value.i; break;
+        case op_div:    i = leftval->value.i /  rightval->value.i; break;
+        case op_rem:    i = leftval->value.i %  rightval->value.i; break;
+        case op_plus:   i = leftval->value.i +  rightval->value.i; break;
+        case op_minus:  i = leftval->value.i -  rightval->value.i; break;
+        case op_negate: i = - leftval->value.i;                    break;
+
+        case op_lt:     i = leftval->value.i <  rightval->value.i; break;
+        case op_le:     i = leftval->value.i <= rightval->value.i; break;
+        case op_gt:     i = leftval->value.i >  rightval->value.i; break;
+        case op_ge:     i = leftval->value.i >= rightval->value.i; break;
+        case op_eq:     i = leftval->value.i == rightval->value.i; break;
+        case op_neq:    i = leftval->value.i != rightval->value.i; break;
+
+        case op_and:    i = leftval->value.i &  rightval->value.i; break;
+        case op_xor:    i = leftval->value.i ^  rightval->value.i; break;
+        case op_or:     i = leftval->value.i |  rightval->value.i; break;
+        case op_compl:  i = ~ leftval->value.i;                    break;
+
+        case op_lshift: i = leftval->value.i << rightval->value.u; break;
+        case op_rshift: i = leftval->value.i >> rightval->value.u; break;
+    }
+
+    res->typecode = TYPESWORD;
+    res->value.i = i;
+}
+
+static vfunction get_type_op(int leftcode, int rightcode)
+{
+    if (leftcode == TYPEDOUBLE || rightcode == TYPEDOUBLE)
+        return floatop;
+    else if (leftcode == TYPEUWORD || rightcode == TYPEUWORD)
+        return unsignedop;
+    else
+        return intop;
+}
+
+static void evalop(ExpTree *tree, Datum *res)
+{
+    int op;
+    Datum left, right, d;
+    Number leftval, rightval, n;
+    int size;
+    vfunction op_fn;
+    int err = 0;
+    //char s[12];
+
+    op = tree->e.o.op;
+    evalexpr(tree->e.o.left, &left);
+    if (op == op_addrof) {
+        if (left.datumtype == REG_DATUM)
+            evalerror(ERR_REG_ADDR);
+        simplify(&left);
+        left.datumtype = CONST_DATUM;
+        left.type++;
+        *res = left;
+        return;
+    }
+    if (is_dyadic(op) || op == op_subscript) {
+        evalexpr(tree->e.o.right, &right);
+        if (op != op_subscript) {
+            simplify(&right);
+            err = datumtonum(&right, &rightval);
+            evalerror(err);
+        }
+    }
+    if (is_dyadic(op) || is_monadic(op)) {
+        simplify(&left);
+        err = datumtonum(&left, &leftval);
+        evalerror(err);
+        res->datumtype = CONST_DATUM;
+    } else if (op != op_subscript)
+        simplify(&left);
+    res->type = TYPESWORD << 8;
+    switch (op) {
+        case op_plus:
+        case op_minus:
+            if (TYPE_PTRCOUNT(left.type) || TYPE_PTRCOUNT(right.type)) {
+                if (!(TYPE_PTRCOUNT(right.type) &&
+                        (op == op_plus) == TYPE_PTRCOUNT(left.type))) {
+                    if (!TYPE_PTRCOUNT(left.type)) {
+                        d = left; left = right; right = d;
+                        n = leftval; leftval = rightval; rightval = n;
+                    }
+                    if (TYPE_PTRCOUNT(right.type)) {
+                        if (left.type != right.type)
+                            errorcode = ERR_TYPEWARN;
+                        left.type--;
+                        size = typesize(&left, evalcontext);
+                        left.type++;
+                        if (!size) evalerror(ERR_TYPESIZE);
+                        evalerror(err);
+                        res->value.val.i =
+                                 (leftval.value.i - rightval.value.i) / size;
+                    } else {
+                        if (!type_integral(rightval.typecode))
+                            errorcode = ERR_TYPEWARN;
+                        left.type--;
+                        size = typesize(&left, evalcontext);
+                        left.type++;
+                        if (!size) evalerror(ERR_TYPESIZE);
+                        res->type = left.type;
+                        res->value.address = leftval.value.ptr +
+                                                (op == op_plus ? size : -size);
+                    }
+                    break;
+                }
+            }
+        case op_times: case op_div: case op_rem:
+        case op_lt: case op_le: case op_gt: case op_ge:
+        case op_eq: case op_neq:
+        case op_negate:
+        case op_and: case op_xor: case op_or: case op_compl:
+            op_fn = get_type_op(leftval.typecode,
+                                is_dyadic(op) ? rightval.typecode : TYPESWORD);
+            if (op_fn == floatop &&
+                    ((op >= op_and && op <= op_or) || op == op_compl)) {
+                op_fn = unsignedop;
+                errorcode = ERR_TYPEWARN;
+            }
+            op_fn(&n, &leftval, &rightval, op);
+            res->value.val = n.value;
+            res->type = (n.typecode << 8);
+            break;
+        case op_lshift: case op_rshift:
+            if (!type_integral(leftval.typecode))
+                errorcode = ERR_TYPEWARN;
+            rightval.typecode = TYPEUWORD;
+            op_fn = get_type_op(leftval.typecode, TYPESWORD);
+            op_fn(&n, &leftval, &rightval, op);
+            res->value.val = n.value;
+            res->type = left.type;
+            break;
+        case op_logand: case op_logor: case op_lognot:
+            res->type = TYPESWORD << 8;
+            if (type_fpoint(leftval.typecode))
+                leftval.value.i = (int)leftval.value.d;
+            if (op == op_lognot) {
+                res->value.val.i = !leftval.value.i;
+            } else {
+                if (type_fpoint(rightval.typecode))
+                    rightval.value.i = (int)rightval.value.d;
+                leftval.value.i = op == op_logand ?
+                                        (leftval.value.i && rightval.value.i) :
+                                        (leftval.value.i || rightval.value.i);
+            }
+            break;
+        case op_arrow:
+            dereferenceptr(&left);
+        case op_dot: {
+            ItemStruct *str;
+            StructField *field;
+            char *s;
+            int i;
+
+            if (TYPE_PTRCOUNT(left.type) || TYPE_TYPECODE(left.type) >= 0)
+                evalerror(ERR_TYPE);
+#ifdef TYPE_FIX
+            {
+                ItemSection *object = (ItemSection *)((char *)left.section - TYPE_CODE(left.type));
+
+                while (TYPE_TYPECODE(left.type) < 0 && !TYPE_PTRCOUNT(left.type) && object->code == ITEMTYPE)
+                {
+                    ItemType *item = (ItemType *)object;
+
+                    left.type = item->type;
+
+                    if (TYPE_TYPECODE(left.type) < 0 && !TYPE_PTRCOUNT(left.type))
+                        object = (ItemSection *)((char *)left.section - TYPE_CODE(left.type));
+                }
+            }
+#endif
+            str = (ItemStruct *)((char *)left.section -
+                                                     TYPE_TYPECODE(left.type));
+            if (str->code != ITEMSTRUCT)
+                evalerror(ERR_TYPE);
+            if (tree->e.o.right->nodetype != node_field)
+                evalerror(ERR_SELECT);
+            s = tree->e.o.right->e.f.name;
+            field = str->fieldtable;
+            for (i = 0; i < str->fields; i++) {
+                if (!cistrcmp(s, field->name))
+                    break;
+                field = (StructField *)((char *)(field + 1) +
+                                                   (strlen(field->name) & ~3));
+            }
+            if (i == str->fields)
+                evalerror(ERR_BADFIELD);
+            err = datumtonum(&left, &leftval);
+            evalerror(err);
+            left.datumtype = CONST_DATUM;
+            left.type = field->type;
+            left.type++;
+            left.value.address = leftval.value.ptr + field->offset;
+        }
+        case op_contents:
+            dereferenceptr(&left);
+            *res = left;
+            break;
+        case op_subscript: {
+            int subscript;
+            ItemArray *arr;
+            int lwb, upb;
+
+            if (TYPE_PTRCOUNT(right.type) ||
+                                   !type_integral(TYPE_TYPECODE(right.type))) {
+#ifdef DEBUG
+                output_str("Index type = ");
+                output_uns(TYPE_PTRCOUNT(right.type), 16, 1);
+                output_str(", ");
+                output_uns(TYPE_TYPECODE(right.type), 16, 1);
+                output_ch(0);
+#endif
+                evalerror(ERR_TYPE);
+            }
+            err = datumtonum(&right, &n);
+            evalerror(err);
+            subscript = n.value.i;
+            if (!TYPE_PTRCOUNT(left.type)) {
+                if (TYPE_TYPECODE(left.type) >= 0)
+                    evalerror(ERR_TYPE);
+                arr = (ItemArray *)((char *)left.section -
+                                                     TYPE_TYPECODE(left.type));
+                if (arr->code != ITEMARRAY)
+                    evalerror(ERR_TYPE);
+                upb = findupb(arr, evalcontext);
+                if (subscript > upb)
+                    errorcode = ERR_BOUNDS;
+                lwb = findlwb(arr, evalcontext);
+                if (subscript < lwb)
+                    errorcode = ERR_BOUNDS;
+                subscript -= lwb;
+                left.type = arr->basetype;
+                left.type++;
+            }
+            left.type--;
+            size = typesize(&left, evalcontext);
+            left.type++;
+            if (!size) evalerror(ERR_TYPESIZE);
+            err = datumtonum(&left, &n);
+            evalerror(err);
+            left.value.address = n.value.ptr + subscript * size;
+            left.datumtype = CONST_DATUM;
+            dereferenceptr(&left);
+            *res = left;
+            break;
+        }
+    }
+}
+
+static void evalexpr(ExpTree *tree, Datum *res)
+{
+    int err;
+
+#ifdef DEBUG
+    output_str("In evalexpr, node type = ");
+#endif
+    switch (tree->nodetype) {
+        case node_variable:
+#ifdef DEBUG
+            output_str("variable, typecode = ");
+            output_uns(TYPE_TYPECODE(tree->e.v.def->item->type), 16, 1);
+            output_str(", ptrcount = ");
+            output_uns(TYPE_PTRCOUNT(tree->e.v.def->item->type), 16, 1);
+            output_ch(0);
+#endif
+            err = vardeftodatum(tree->e.v.def, &tree->e.v.con, res);
+#ifdef DEBUG
+            output_str("Result datum: typecode = ");
+            output_uns(TYPE_TYPECODE(res->type), 16, 1);
+            output_str(", ptrcount = ");
+            output_uns(TYPE_PTRCOUNT(res->type), 16, 1);
+            output_ch(0);
+#endif
+            evalerror(err);
+            break;
+        case node_number:
+#ifdef DEBUG
+            output_str("number, typecode = ");
+            output_uns(tree->e.n.typecode, 16, 1);
+            output_str(", ptrcount = ");
+            output_uns(tree->e.n.ptrcount, 16, 1);
+            output_ch(0);
+#endif
+            res->datumtype = CONST_DATUM;
+            res->value.val = tree->e.n.value;
+            res->type = (tree->e.n.typecode << 8) | tree->e.n.ptrcount;
+            break;
+        case node_operator:
+#ifdef DEBUG
+            output_line("operator");
+#endif
+            evalop(tree, res);
+#ifdef DEBUG
+            output_str("Result datum: typecode = ");
+            output_uns(TYPE_TYPECODE(res->type), 16, 1);
+            output_str(", ptrcount = ");
+            output_uns(TYPE_PTRCOUNT(res->type), 16, 1);
+            output_ch(0);
+#endif
+            break;
+        default:
+            evalerror(ERR_INTERNAL);
+            break;
+    }
+}
+
+#ifdef DEBUG_EXPRS
+static char print_buf[20];
+
+void print_tree(ExpTree *tree, int indent)
+{
+    int op;
+    int i;
+
+    for (i = 0; i < indent; i++)
+        output_ch(' ');
+    switch (tree->nodetype) {
+        case node_variable:
+            output_str("Variable = ");
+            print_vardef(tree->e.v.def, 11, 10, &(tree->e.v.con));
+            break;
+        case node_number:
+            output_str("Number = (");
+            *write_uns_lj(print_buf, tree->e.n.value.i, 10) = 0;
+            output_str(print_buf);
+            output_line(")");
+            break;
+        case node_operator:
+            output_str("Operator = ");
+            op = tree->e.o.op;
+            switch (op) {
+                case op_times: output_ch('*'); break;
+                case op_div: output_ch('/'); break;
+                case op_rem: output_ch('%'); break;
+                case op_plus: output_ch('+'); break;
+                case op_minus: output_ch('-'); break;
+                case op_lshift: output_str("<<"); break;
+                case op_rshift: output_str(">>"); break;
+                case op_lt: output_ch('<'); break;
+                case op_le: output_str("<="); break;
+                case op_gt: output_ch('>'); break;
+                case op_ge: output_str(">="); break;
+                case op_neq: output_str("!="); break;
+                case op_and: output_ch('&'); break;
+                case op_xor: output_ch('^'); break;
+                case op_or: output_ch('|'); break;
+                case op_logand: output_str("&&"); break;
+                case op_logor: output_str("||"); break;
+                case op_dot: output_ch('.'); break;
+                case op_arrow: output_str("->"); break;
+                case op_contents: output_ch('*'); break;
+                case op_addrof: output_ch('&'); break;
+                case op_subscript: output_str("[]"); break;
+                case op_negate: output_ch('-'); break;
+                case op_lognot: output_ch('!'); break;
+                case op_compl: output_ch('~'); break;
+                default:
+                    output_str("??? (");
+                    *write_uns_lj(print_buf, tree->e.o.op, 10) = 0;
+                    output_str(print_buf);
+                    output_str(")");
+                    break;
+            }
+            output_ch(0);
+            output_line("  Left tree:");
+            print_tree(tree->e.o.left, indent + 4);
+            if (is_dyadic(op) || op == op_dot || op == op_arrow || op == op_subscript) {
+                output_line("  Right tree:");
+                print_tree(tree->e.o.right, indent + 4);
+            }
+            break;
+        case node_field:
+            output_str("Field = ");
+            output_line(tree->e.f.name);
+            break;
+    }
+}
+#endif
+
+int evaluate(ExpTree *tree, Context *c, Datum *res)
+{
+    evalcontext = c;
+    errorcode = setjmp(evaluate_buf);
+    if (!errorcode) {
+        evalexpr(tree, res);
+        report(errorcode);
+        errorcode = 0;
+    }
+    return errorcode;
+}

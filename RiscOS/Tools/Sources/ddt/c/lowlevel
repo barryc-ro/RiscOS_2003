@@ -1,0 +1,383 @@
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "errors.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "ddt.h"
+#include "lib.h"
+#include "output.h"
+
+char regnames[2][6][3] = {
+    { "sl", "fp", "ip", "sp", "lr", "pc" },
+    { "fp", "ip", "sp", "sl", "lr", "pc" }
+};
+
+static int wrch, wrch_r12;
+static int byte, byte_r12;
+static int event, event_r12;
+#if 0
+/* Have to think more about this */
+/* Must claim the following three vectors in case we stop while the debuggee
+ * in a print loop in which case these vectors will be directed to the printer
+ */
+static int sprite, sprite_r12;
+static int draw, draw_r12;
+static int colour, colour_r12;
+#endif
+
+void claim_wrchv(void)
+{
+#if 0
+    int *vecptrtable;
+    int oldv;
+#endif
+
+    os_addtovector(WRCH_VECTOR, wrch, wrch_r12);
+    os_addtovector(BYTE_VECTOR, byte, byte_r12);
+#if 0
+    /* MEDUSA - Removed because of problems with AUN */
+    os_addtovector(EVENT_VECTOR, event, event_r12);
+#endif
+#if 0
+    vecptrtable = (int *)0x8d8;
+    oldv = vecptrtable[SPRITE_VECTOR];
+    vecptrtable[SPRITE_VECTOR] = sprite;
+    sprite = oldv;
+    oldv = vecptrtable[DRAW_VECTOR];
+    vecptrtable[DRAW_VECTOR] = draw;
+    draw = oldv;
+    oldv = vecptrtable[COLOUR_VECTOR];
+    vecptrtable[COLOUR_VECTOR] = colour;
+    colour = oldv;
+#endif
+}
+
+void release_wrchv(void)
+{
+#if 0
+    int *vecptrtable;
+    int oldv;
+#endif
+
+    os_release(WRCH_VECTOR, wrch, wrch_r12);
+    os_release(BYTE_VECTOR, byte, byte_r12);
+#if 0
+    /* MEDUSA - See os_addtovector above */
+    os_release(EVENT_VECTOR, event, event_r12);
+#endif
+#if 0
+    vecptrtable = (int *)0x8d8;
+    oldv = vecptrtable[SPRITE_VECTOR];
+    vecptrtable[SPRITE_VECTOR] = sprite;
+    sprite = oldv;
+    oldv = vecptrtable[DRAW_VECTOR];
+    vecptrtable[DRAW_VECTOR] = draw;
+    draw = oldv;
+    oldv = vecptrtable[COLOUR_VECTOR];
+    vecptrtable[COLOUR_VECTOR] = colour;
+    colour = oldv;
+#endif
+}
+
+#pragma -c0
+
+void find_wrch(void)
+{
+    int *addr;
+
+    addr = (int *)0x3800000;
+    do {
+        addr = find_word(addr, (int *)0x3ffffe0, 0xe92d1fff);
+        if (addr >= (int *)0x3ffffe0)
+            fatal(NO_WRCHV_ROUTINE, "DDT: Unable to find default WRCHV routine");
+        if ((addr[1] & ~0xfff) == 0xe3a0c000 &&
+            (addr[2] & ~0xfff) == 0xe5dc1000 &&
+            (addr[3] & ~0xfff) == 0xe5dc2000 && addr[4] == 0xe1913002 &&
+            (addr[5] & 0xff000000) == 0x1a000000)
+           break;
+        addr++;
+    } while (1);
+    wrch = (int)addr;
+    addr = (int *)0x3800000;
+    do {
+        addr = find_word(addr, (int *)0x3ffffe0, 0xe92d4009);
+        if (addr >= (int *)0x3ffffe0)
+            fatal(NO_BYTEV_ROUTINE, "DDT: Unable to find default ByteV routine");
+        if ((addr[1] & 0xff000000) == 0xeb000000 && addr[2] == 0xe8bd0009 &&
+            addr[3] == 0xe92d001f && addr[4] == 0xe89d001c &&
+            addr[5] == 0xe3a01007)
+           break;
+        addr++;
+    } while (1);
+    byte = (int)addr;
+    addr = (int *)0x3800000;
+    do {
+        addr = find_word(addr, (int *)0x3ffffe0, wrch);
+        if (addr >= (int *)0x3ffffe0)
+            fatal(NO_VECTOR_TABLE, "DDT: Unable to find ROM vector table");
+        if (addr[-2] == 0 && addr[7] == 0 && addr[9] == byte)
+            break;
+        addr++;
+    } while (1);
+    addr -= 11;
+/* Addr now points to the ROM vector table (we hope), format of each vector
+ * entry is :-
+ *     Word 0 : Pointer to next chained vector (0 for ROM vector entries)
+ *     Word 1 : R12 value for vector routine
+ *     Word 2 : Address of vector routine
+ */
+    wrch_r12 = addr[3 * WRCH_VECTOR + 1];
+    byte_r12 = addr[3 * BYTE_VECTOR + 1];
+    event = addr[3 * EVENT_VECTOR + 2];
+    event_r12 = addr[3 * EVENT_VECTOR + 1];
+}
+
+int readbyte(int address, int *byte)
+{
+    int r;
+
+    dataaccessflag = 0;
+    *byte = *((char *)address);
+    r = dataaccessflag;
+    dataaccessflag = 1;
+    return r;
+}
+
+int readword(int address, int *word)
+{
+    int r;
+
+    dataaccessflag = 0;
+    *word = *((int *)address);
+    r = dataaccessflag;
+    dataaccessflag = 1;
+    return r;
+}
+
+int writeword(int address, int word)
+{
+    int r;
+
+    dataaccessflag = 0;
+    *((int *)address) = word;
+    r = dataaccessflag;
+    dataaccessflag = 1;
+    return r;
+}
+
+#ifdef PRAGMA_C1
+#pragma -c1
+#endif
+
+BreakPoint *swi_break_lookup(int swino)
+{
+    BreakPoint *l;
+
+    l = breaklist;
+    while (l) {
+        if (!l->addr && l->save_lr == swino)
+            return l;
+        l = l->next;
+    }
+    return 0;
+}
+
+BreakPoint *break_lookup(int addr)
+{
+    BreakPoint *l;
+
+    l = breaklist;
+    while (l) {
+        if (l->addr && l->addr == addr)
+            break;
+        l = l->next;
+    }
+    return l;
+}
+
+void swi_break_set(int swino, char *s)
+{
+    BreakPoint *l, **pbp;
+
+    if (swi_break_lookup(swino))
+        return;
+    pbp = &breaklist;
+    while ((l = *pbp) != 0) pbp = &(l->next);
+    *pbp = l = rma_malloc(sizeof(BreakPoint) + strlen(s), "BreakPoint");
+    l->next = 0;
+    l->addr = 0;
+    l->save_lr = swino;
+    l->proc = 0;
+    l->file = 0;
+    l->line = 0;
+    strcpy(l->str, s);
+    output_str("Breakpoint set at SWI ");
+    output_line(s);
+}
+
+int break_set(int addr, char *s, char *file, int line)
+{
+    int inst;
+    BreakPoint *l, **pbp;
+
+    if (readword(addr, &inst))
+        return ERR_BREAK_SET;
+    if (break_lookup(addr)) {
+        pbp = &breaklist;
+        while ((l = *pbp) != 0) {
+            if (addr == l->addr) {
+                *pbp = l->next;
+                inst = l->inst;
+                rma_free(l);
+                break;
+            }
+            pbp = &(l->next);
+        }
+    }
+    pbp = &breaklist;
+    while ((l = *pbp) != 0) pbp = &(l->next);
+    *pbp = l = rma_malloc(sizeof(BreakPoint) + strlen(s), "Breakpoint");
+    if (writeword(addr, (int)(&(l->str_lr) - (int *)addr - 2) &
+                            ~0xff000000 | BRANCH_OPCODE | inst & 0xf0000000)) {
+        *pbp = 0;
+        rma_free(l);
+        return ERR_BREAK_SET;
+    }
+    /* StrongARM */
+    os_synchronisecodeareas((void *) addr, (void *) addr);
+    l->next = 0;
+    l->addr = addr;
+    l->str_lr = BREAK_STRLR;
+    l->adr_lr = BREAK_ADRLR;
+    l->b_svc_break = (int)(&svc_break_handler - &(l->b_svc_break) - 2) &
+                                                   ~0xff000000 | BRANCH_INST;
+    /* StrongARM */
+    os_synchronisecodeareas(&l->str_lr, &l->b_svc_break);
+    l->inst = inst;
+    l->proc = 0;
+    l->file = file;
+    l->line = line;
+    strcpy(l->str, s);
+    return 0;
+}
+
+int pbreak_set(int addr, ProcDef *proc)
+{
+    int inst;
+    BreakPoint *l;
+
+    if (readword(addr, &inst))
+        return ERR_BREAK_SET;
+    if (break_lookup(addr))
+        return 0;
+    l = rma_malloc(sizeof(BreakPoint), "PBreakPoint");
+    if (writeword(addr, (int)(&(l->str_lr) - (int *)addr - 2) &
+                                                ~0xff000000 | BRANCH_INST)) {
+        rma_free(l);
+        return ERR_BREAK_SET;
+    }
+    /* StrongARM */
+    os_synchronisecodeareas((void *) addr, (void *) addr);
+    l->next = breaklist;
+    l->addr = addr;
+    l->str_lr = BREAK_STRLR;
+    l->adr_lr = BREAK_ADRLR;
+    l->b_svc_break = (int)(&svc_break_handler - &(l->b_svc_break) - 2) &
+                                                   ~0xff000000 | BRANCH_INST;
+    /* StrongARM */
+    os_synchronisecodeareas(&l->str_lr, &l->b_svc_break);
+    l->inst = inst;
+    l->proc = proc;
+    l->file = 0;
+    l->line = -1;
+    l->str[0] = 0;
+    breaklist = l;
+    return 0;
+}
+
+WatchPoint *watch_lookup(int addr, int *stackframe)
+{
+    WatchPoint *l;
+
+    l = watchlist;
+    while (l) {
+        if (l->addr == addr && (stackframe == l->stackframe ||
+                addr < (int)&registers || addr >= (int)&registers + 160))
+            break;
+        l = l->next;
+    }
+    return l;
+}
+
+int watch_set(int addr, int size, int *stackframe,
+              char *s, Context *c, Datum *d, int base)
+{
+    int i;
+    WatchPoint *l, **pwp;
+
+    if (readword(addr, &i))
+        return ERR_WATCH_SET;
+    if (watch_lookup(addr, stackframe))
+        return 0;
+    pwp = &watchlist;
+    while ((l = *pwp) != 0) pwp = &(l->next);
+    *pwp = l = rma_malloc(sizeof(WatchPoint) + size - 4, "WatchPoint");
+    l->str = malloc(strlen(s) + 1, "WatchPoint str");
+    l->next = 0;
+    l->addr = addr;
+    l->n = size;
+    l->stackframe = stackframe;
+    l->c = *c;
+    if (d)
+        l->d = *d;
+    else
+        l->d.datumtype = -1;
+    l->base = base;
+    strcpy(l->str, s);
+    return 0;
+}
+
+void read_memmap(int image_base, int image_rosize)
+{
+    int pages;
+    int size;
+    int i, j, n;
+    MemInfo *entries;
+    int image_top, image_start;
+
+    i = os_readmemmapinfo();
+    size = i & 0xffff;
+    pages = (i >> 16) & 0xffff;
+    image_start = image_base;
+    image_top = image_start + image_rosize;
+    image_top = image_top & ~(size - 1);
+    n = (0x8000 + image_top - (image_start & ~(size - 1))) / size;
+    size = n * sizeof(MemInfo) + 4;
+    unprot_list = entries = salloc(size);
+    prot_list = salloc(size);
+    j = 0;
+    entries[1].pageno = -1;
+    for (i = 0; i < pages; i++) {
+        entries->pageno = i;
+        os_readmemmapentries(entries);
+        if (entries->address < 0x8000 ||
+                (entries->address >= image_start &&
+                 entries->address < image_top)) {
+             prot_list[j].pageno = entries->pageno;
+             prot_list[j].address = entries->address;
+#ifdef READ_PROTECT_ZP
+             prot_list[j].protection = entries->address < 0x8000 ?
+                                                           PROT_NONE : PROT_RO;
+#else
+             prot_list[j].protection = PROT_RO;
+#endif
+             if (++j == n)
+                 break;
+             entries++;
+             entries[1].pageno = -1;
+        }
+    }
+    unprot_list[j].pageno = -1;
+    prot_list[j].pageno = -1;
+}

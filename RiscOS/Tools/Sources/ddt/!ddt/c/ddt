@@ -1,0 +1,359 @@
+#include "os.h"
+#include "lib.h"
+#include "templates.h"
+
+static int task;
+static int icon_handle;
+
+#define DI_OK       0
+#define DI_IMAGE    1
+#define DI_ARGS     2
+
+static int dialog_handle;
+static Window *dialog_window;
+static int dialog_open = 0;
+
+static int loaded = 0;
+
+#define IF_MENUITEM (IF_TEXT | IF_FILLED | IF_VCENTRED | (7 << 24))
+
+#define MI_INFO     0
+#define MI_DEBUG    1
+#define MI_QUIT     2
+
+#define MENU_HEIGHT (3 * 44)
+
+DDT_Menu icon_menu = {
+    "DDT", 7, 2, 7, 0, 6 * 16, 44, 0,
+    {
+        { 0, -1, IF_MENUITEM, "Info" },
+        { 0, -1, IF_MENUITEM, "Debug" },
+        { MF_LAST, -1, IF_MENUITEM, "Quit" }
+    }
+};
+
+static DDT_Menu *current_menu_tree;
+static int current_menu_x, current_menu_y;
+
+Icon asd_icon = {
+    { 0, 0, 70, 76 },
+    IF_SPRITE + IF_INDIRECTED + IF_HCENTRED + (B_CLICKONCE << 12),
+    0,
+    (char *)1,
+    1
+};
+
+static void exit(void)
+{
+    wimp_closedown(task);
+    if (loaded)
+        xos_module(OSMODULE_DELETE, "DDT");
+    os_exit();
+}
+
+static void wait_null(void);
+
+static void start_task(char *cmd)
+{
+    OS_Error_Block *err;
+
+    if (dialog_open)
+        wimp_closewindow(dialog_handle);
+    dialog_open = 0;
+    wait_null();
+    err = xwimp_starttask(cmd);
+    if (err)
+        wimp_reporterror(err, ERROR_OK | ERROR_CMD, "DDT");
+}
+
+static void start_debug(char *image, char *args)
+{
+    char cmd[256];
+    char imagefile[80];
+    OS_File_Block fb;
+    int len;
+    int object, type;
+
+    object = xos_file(OS_FILE_READ_ATTR, image, &fb);
+    if (object <= 0) {
+        error(0x1000, "Unable to read file attributes");
+        return;
+    }
+    len = strlen(image);
+    if (object == 2) {
+        strcpy(cmd, image);
+        strcpy(imagefile, image);
+        cmd[len] = ' ';
+        strcpy(&cmd[len + 1], args);
+        strcpy(imagefile + len, ".!Run");
+        object = xos_file(OS_FILE_READ_ATTR, imagefile, &fb);
+        if (object != 1) {
+            error(0x1000, "Unable to read !Run attributes");
+            return;
+        }
+        type = (fb.r2 & 0xfff00) >> 8;
+        if (type == 0xfd3) {
+            start_task(cmd);
+        } else if (type == 0xff8) {
+            strcpy(cmd, "debugaif ");
+            strcpy(cmd + 9, imagefile);
+            strcpy(cmd + len + 9 + 6, args);
+            start_task(cmd);
+        } else {
+            strcpy(imagefile + len, ".!RunImage");
+            object = xos_file(OS_FILE_READ_ATTR, imagefile, &fb);
+            if (object != 1) {
+                error(0x1000, "Unable to read !RunImage attributes");
+                return;
+            }
+            type = (fb.r2 & 0xfff00) >> 8;
+            if (type == 0xfd3) {
+                start_task(cmd);
+            } else if (type == 0xff8) {
+                fb.r2 = (fb.r2 & ~0xfff00) | 0xfd300;
+                object = xos_file(OS_FILE_WRITE_LOAD, imagefile, &fb);
+                if (object < 0) {
+                    error(0x1000, "Unable to set !RunImage filetype");
+                    return;
+                }
+                start_task(cmd);
+                fb.r2 = (fb.r2 & ~0xfff00) | 0xff800;
+                xos_file(OS_FILE_WRITE_LOAD, imagefile, &fb);
+            } else {
+                error(0x1000, "Unable to debug files of this type");
+                return;
+            }
+        }
+    } else {
+        strcpy(cmd, "debugaif ");
+        strcpy(cmd + 9, image);
+        cmd[len + 9] = ' ';
+        strcpy(cmd + len + 10, args);
+        start_task(cmd);
+    }
+}
+
+static void delete_file(char *name)
+{
+    OS_Error_Block *err;
+
+    err = os_delete(name);
+    if (err)
+        wimp_reporterror(err, ERROR_OK | ERROR_CMD, "DDT");
+}
+
+static void process_dialog(void)
+{
+    start_debug(dialog_window->icons[DI_IMAGE].buffer,
+                dialog_window->icons[DI_ARGS].buffer);
+}
+
+static void open_dialog(int minx, int miny)
+{
+    EventOpen open;
+
+    open.window_handle = dialog_handle;
+    open.vis_rect.maxx = minx + dialog_window->r.maxx - dialog_window->r.minx;
+    open.vis_rect.maxy = miny + dialog_window->r.maxy - dialog_window->r.miny;
+    open.vis_rect.minx = minx;
+    open.vis_rect.miny = miny;
+    open.scx = 0;
+    open.scy = 0;
+    open.behind_handle = -1;
+    wimp_openwindow(&open);
+    dialog_open = 1;
+    wimp_seticonposition(dialog_handle, DI_IMAGE,
+                         strlen(dialog_window->icons[DI_IMAGE].buffer));
+}
+
+static void create_menu(DDT_Menu *m, int x, int y)
+{
+    current_menu_tree = m;
+    current_menu_x = x;
+    current_menu_y = y;
+    wimp_createmenu(m, x, y);
+}
+
+static void menu_select(int *m)
+{
+    EventClick mouse;
+
+    switch (m[0]) {
+        case MI_DEBUG:
+            wimp_getpointerinfo(&mouse);
+            open_dialog(mouse.screen_x - 64, 96);
+            break;
+        case MI_QUIT:
+            exit();
+    }
+}
+
+static void process_event(int reason, WimpEvent *event)
+{
+    EventClick mouse;
+    int icon;
+
+    switch (reason) {
+        case E_USER_MESSAGE:
+        case E_USER_MESSAGE_RECORDED: {
+            if (event->msg.action == 0)
+                exit();
+            if (event->msg.action == MESSAGE_DATALOAD) {
+                if (event->msg.data[0] == dialog_handle) {
+                    if (event->msg.data[1] == DI_IMAGE) {
+                        strcpy(dialog_window->icons[DI_IMAGE].buffer,
+                               (char *)&(event->msg.data[6]));
+                        wimp_seticonposition(dialog_handle, DI_IMAGE,
+                               strlen(dialog_window->icons[DI_IMAGE].buffer));
+                        wimp_seticonstate(dialog_handle, DI_IMAGE, 0, 0);
+                    }
+                } else {
+                    start_debug((char *)&(event->msg.data[6]), "");
+                    if (!cistrcmp((char *)&(event->msg.data[6]),
+                            "<Wimp$Scrap>"))
+                        delete_file("<Wimp$Scrap>");
+                }
+                event->msg.your_ref = event->msg.my_ref;
+                event->msg.action = MESSAGE_DATALOADACK;
+                wimp_sendmessage(E_USER_MESSAGE,
+                                 &(event->msg), event->msg.sender_handle);
+            } else if (event->msg.action == MESSAGE_DATASAVE) {
+                event->msg.your_ref = event->msg.my_ref;
+                event->msg.action = MESSAGE_DATASAVEACK;
+                event->msg.data[4] = -1;
+                event->msg.size = (44 + sizeof("<Wimp$Scrap>") + 3) & ~3;
+                strcpy((char *)&(event->msg.data[6]), "<Wimp$Scrap>");
+                wimp_sendmessage(E_USER_MESSAGE,
+                                 &(event->msg), event->msg.sender_handle);
+            }
+            break;
+        }
+        case E_CLICK: {
+            if (event->click.window_handle == -2 &&
+                    event->click.icon_handle == icon_handle) {
+                if (event->click.buttons & MB_MENU) {
+                    create_menu(&icon_menu,
+                                event->click.screen_x - 64, 96 + MENU_HEIGHT);
+                } else if (event->click.buttons & (MB_ADJUST | MB_SELECT)) {
+                    open_dialog(event->click.screen_x - 64, 96);
+                }
+            }
+            if (event->click.window_handle == dialog_handle &&
+                    event->click.icon_handle == DI_OK)
+                process_dialog();
+            break;
+        }
+        case E_OPEN: {
+            if (event->open.window_handle == dialog_handle)
+                dialog_open = 1;
+            wimp_openwindow(&(event->open));
+            break;
+        }
+        case E_CLOSE: {
+            if (event->window_handle == dialog_handle)
+                dialog_open = 0;
+            wimp_closewindow(event->window_handle);
+            break;
+        }
+        case E_MENU: {
+            wimp_getpointerinfo(&mouse);
+            menu_select(event->menu);
+            if (mouse.buttons & MB_ADJUST)
+                wimp_createmenu(current_menu_tree,
+                                current_menu_x, current_menu_y);
+            break;
+        }
+        case E_KEY: {
+            if (event->key.window_handle == dialog_handle) {
+                switch (event->key.ch) {
+                    case 0x1b:
+                        wimp_closewindow(dialog_handle);
+                        dialog_open = 0;
+                        return;
+                    case 0x0d:
+                        if (event->key.icon_handle == DI_ARGS) {
+                            process_dialog();
+                            return;
+                        }
+                    case 0x18e:
+                    case 0x18f:
+                        icon = DI_ARGS;
+                        if (event->key.icon_handle == DI_ARGS)
+                            icon = DI_IMAGE;
+                        wimp_seticonposition(dialog_handle, icon,
+                            strlen(dialog_window->icons[icon].buffer));
+                        return;
+                }
+            }
+            wimp_processkey(event->key.ch);
+            break;
+        }
+    }
+}
+
+TemplateFile *parse_cmd(char *cmd)
+{
+    char name[256];
+    char *s, *dot;
+    OS_File_Block fb;
+    int object;
+
+    os_gstrans(cmd, name, 256 + (1 << 29));
+    object = os_file(OS_FILE_READ_ATTR, name, &fb);
+    s = dot = name;
+    while (*s >= ' ') {
+        if (*s == ':' || *s == '.')
+            dot = s + 1;
+        s++;
+    }
+    if (object == 2) {
+        dot = s;
+        *dot++ = '.';
+    }
+    strcpy(dot, "!Sprites");
+    wimp_mergesprites(name);
+    strcpy(dot, "Templates");
+    return load_templates(name);
+}
+
+static void wait_null(void)
+{
+    int reason;
+    WimpEvent event;
+
+    while ((reason = wimp_poll(0, &event)) != 0)
+        process_event(reason, &event);
+}
+
+int cstart(char *cmd, int sp)
+{
+    TemplateFile *templates;
+    int reason;
+    WimpEvent event;
+    int info_handle;
+    OS_Error_Block *err;
+
+    lwm = sp;
+    hwm = (sp + 0x8000) & ~0x7fff;
+    wimp_currentslot(0x8000);
+    if (wimp_readsysinfo(0) == 0)
+        fatal(0x1000, "Not in desktop");
+    templates = parse_cmd(cmd);
+    task = wimp_initialise("DDT");
+    if (xos_module(OSMODULE_LOOKUP, "DDT")) {
+        err = xos_module(OSMODULE_LOAD, "System:Modules.DDT");
+        if (err)
+            os_generateerror(err);
+        loaded = 1;
+    }
+    info_handle = wimp_createwindow(get_template(templates, "Info"));
+    dialog_window = get_template(templates, "Dialog");
+    dialog_handle = wimp_createwindow(dialog_window);
+    icon_menu.items[MI_INFO].submenu = info_handle;
+    asd_icon.buffer = "!ddt";
+    icon_handle = wimp_createicon(-1, &asd_icon);
+    do {
+        reason = wimp_poll(1 << E_NULL, &event);
+        process_event(reason, &event);
+    } while (1);
+}

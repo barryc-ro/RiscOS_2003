@@ -1,0 +1,2214 @@
+#include <stddef.h>
+
+#include "defs.h"
+#include "os.h"
+#include "quickdraw.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "window.h"
+#include "debug.h"
+#include "output.h"
+#include "templates.h"
+#include "ddt.h"
+#include "respond.h"
+#include "program.h"
+#include "evaluate.h"
+#include "errors.h"
+#include "source.h"
+#include "print.h"
+#include "help.h"
+#include "cplusplus.h"
+#include "display.h"
+#include "readexpr.h"
+
+int finished;
+
+int default_base;
+
+int trace_procedures, trace_execution;
+int trace_watchpoints, trace_breakpoints;
+int trace_swibreaks, trace_wimpevents;
+
+int source_line_numbers;
+int source_level, machine_level;
+int stop_at_entry;
+char *prefix;
+
+WindowHandle *wimpevent_window;
+WindowHandle *step_window, *call_window, *return_window;
+WindowHandle *breakpoint_window, *watchpoint_window, *trace_window;
+WindowHandle *context_window, *display_window, *change_window;
+WindowHandle *log_window, *find_window, *options_window, *help_window;
+WindowHandle *command_window;
+
+static WindowHandle **menu_windows[16] = {
+    0,
+    &step_window, &call_window, &return_window, &breakpoint_window,
+    &watchpoint_window, &trace_window, &context_window, &display_window,
+    &change_window, &log_window, &find_window, &options_window,
+    &command_window, &help_window,
+    0
+};
+
+static int prog_finished;
+
+static void update_status(int status)
+{
+    if (FINISHED(status)) {
+        prog_finished = 1;
+        set_icon_flags(mainmenu, I_Menu_Continue, IF_SHADED, IF_SHADED);
+        set_icon_flags(mainmenu, I_Menu_Step, IF_SHADED, IF_SHADED);
+        set_icon_flags(mainmenu, I_Menu_Call, IF_SHADED, IF_SHADED);
+        set_icon_flags(mainmenu, I_Menu_Return, IF_SHADED, IF_SHADED);
+        set_icon_flags(mainmenu, I_Call_Arrow, IF_SHADED, IF_SHADED);
+        set_icon_flags(mainmenu, I_Return_Arrow, IF_SHADED, IF_SHADED);
+    }
+}
+
+void continue_cmd(WindowHandle *we, int i, int b)
+{
+    int res;
+
+    if (prog_finished) {
+        window_alert();
+        return;
+    }
+    irq_abort = 0;
+    abort_flag = 0;
+    do {
+        if (trace_execution) {
+            if (machine_level)
+                res = cont(SINGLE_STEP | STEP_INTO, 1);
+            else
+                res = cont(STEP_SOURCE | SINGLE_STEP | STEP_INTO, 1);
+        } else if (watchlist)
+            res = cont(SINGLE_STEP | STEP_INTO, 0x7fffffff);
+        else
+            res = cont(0, 0);
+        window_resume();
+    } while (stopped(res));
+    update_status(res);
+}
+
+void quit_cmd(WindowHandle *we, int i, int b)
+{
+    finished = 1;
+}
+
+void menu_cmd(WindowHandle *we, int i, int b)
+{
+    Rect r;
+    int x, y, dx, dy;
+
+    we = *(menu_windows[i]);
+    if (we == help_window) help_text = help_messages[0];
+    visible_rect(&r, we);
+    os_mouse(&x, &y, 0);
+    dx = r.maxx - r.minx;
+    dy = r.maxy - r.miny;
+    r.minx = x - 64;
+    r.maxx = r.minx + dx;
+    r.maxy = y;
+    r.miny = r.maxy - dy;
+    if (we == step_window || we == context_window || we == help_window) {
+        open_window(we, &r, 0);
+    } else
+        open_menu(we, &r, 0, 0);
+    if (we == context_window)
+        update_context_window();
+}
+
+void wimpevent_ok(WindowHandle *we, int i, int b)
+{
+    int em = 0;
+    int n, l;
+    char *s;
+
+    for (i = I_WimpEvent_Null; i <= I_WimpEvent_Gain; i++)
+        em |= get_icon_state(we, i) << (i - I_WimpEvent_Null);
+    for (i = I_WimpEvent_Message; i <= I_WimpEvent_ACK; i++)
+        em |= get_icon_state(we, i) << (i - I_WimpEvent_Message + 17);
+    event_break_mask = em;
+    if (!em) {
+        output_line("Break on Wimp events disabled");
+    } else {
+        output_str("Break on Wimp events:");
+        n = 0;
+        l = 60;
+        for (i = I_WimpEvent_Null; i <= I_WimpEvent_ACK; i++) {
+            if (get_icon_state(we, i)) {
+                if (l >= 60) {
+                    if (n)
+                        output_ch(',');
+                    output_ch(0);
+                    output_str("    ");
+                    l = 4;
+                } else {
+                    output_str(", ");
+                    l += 2;
+                }
+                n++;
+                s = get_icon_buffer(we, i);
+                l += strlen(s);
+                output_str(s);
+            }
+        }
+        output_ch(0);
+    }
+}
+
+void trace_ok(WindowHandle *we, int i, int b)
+{
+    int err;
+
+    trace_execution = get_icon_state(we, I_Trace_Execution);
+    trace_breakpoints = get_icon_state(we, I_Trace_Breakpoints);
+    trace_watchpoints = get_icon_state(we, I_Trace_Watchpoints);
+    trace_swibreaks = get_icon_state(we, I_Trace_SWIBreaks);
+    trace_wimpevents = get_icon_state(we, I_Trace_WimpEvents);
+    i = get_icon_state(we, I_Trace_Procedures);
+    if (trace_procedures != i) {
+        trace_procedures = i;
+        if (i) {
+            err = makepblist(root);
+            if (err) {
+                report(err);
+                clearpblist();
+            }
+        } else {
+            clearpblist();
+        }
+    }
+    if (!(trace_execution || trace_breakpoints || trace_swibreaks ||
+            trace_watchpoints || trace_procedures || trace_wimpevents)) {
+        output_line("No trace options selected, trace disabled");
+        return;
+    }
+    output_str("Trace options selected:");
+    if (trace_execution) {
+        output_str(" Execution");
+        if (trace_breakpoints || trace_watchpoints ||
+                trace_procedures || trace_swibreaks || trace_wimpevents)
+            output_ch(',');
+    }
+    if (trace_breakpoints) {
+        output_str(" Breakpoints");
+        if (trace_watchpoints || trace_procedures ||
+                trace_swibreaks || trace_wimpevents)
+            output_ch(',');
+    }
+    if (trace_watchpoints) {
+        output_str(" Watchpoints");
+        if (trace_procedures || trace_swibreaks || trace_wimpevents)
+            output_ch(',');
+    }
+    if (trace_procedures) {
+        output_str(" Procedures");
+        if (trace_swibreaks || trace_wimpevents)
+            output_ch(',');
+    }
+    if (trace_swibreaks) {
+        output_str(" SWI Breakpoints");
+        if (trace_wimpevents)
+            output_ch(',');
+    }
+    if (trace_wimpevents)
+        output_str(" Wimp events");
+    output_ch(0);
+}
+
+void step_ok(WindowHandle *we, int i, int b)
+{
+    char *s;
+    int res, cont_flags;
+    int err;
+    int old_trace;
+
+    if (prog_finished) {
+        window_alert();
+        return;
+    }
+    s = get_icon_buffer(we, I_Step_Count);
+    err = atoi(&s, 10, &step_count, 2 | 1);
+    if (err) {
+        report(err);
+        return;
+    }
+    if (!step_count) step_count = 1;
+    cont_flags = STEP_SOURCE | SINGLE_STEP;
+    if (get_icon_state(we, I_Step_Into))
+        cont_flags |= STEP_INTO;
+    if (get_icon_state(we, I_Step_Inst))
+        cont_flags &= ~STEP_SOURCE;
+    irq_abort = 0;
+    abort_flag = 0;
+    old_trace = trace_execution;
+    trace_execution = 0;
+    do {
+        res = cont(cont_flags, step_count);
+        window_resume();
+    } while (stopped(res));
+    trace_execution = old_trace;
+    update_status(res);
+}
+
+static int get_register(char *s, int *pi)
+{
+    int n;
+    int err;
+
+    while (*s == ' ') s++;
+    if (*s == 'r' || *s == 'R') {
+        s++;
+        err = atoi(&s, 10, &n, 1);
+        if (err) return err;
+        if (n >= 16) return ERR_BADARMREG;
+    } else if (*s == 'f' || *s == 'F') {
+        s++;
+        err = atoi(&s, 10, &n, 1);
+        if (err) return err;
+        if (n >= 8) return ERR_BADFPREG;
+        n += 16;
+    } else {
+        for (n = 0; n < 6; n++)
+            if (!cistrcmp(regnames[bindings][n], s))
+                break;
+        if (n == 6) return ERR_BADREG;
+        n += 10;
+    }
+    *pi = n;
+    return 0;
+}
+
+void change_ok(WindowHandle *we, int i, int b)
+{
+    char *name, *contents, *name_buffer, *contents_buffer;
+    int err;
+    int *wp, *sav_wp;
+    int addr, word;
+    FPExtended fp;
+    Context where;
+    VarDef *v;
+    Datum d;
+    int tcode;
+    double dbl;
+
+    name = get_icon_buffer(we, I_Change_Name);
+    contents = get_icon_buffer(we, I_Change_Contents);
+    while (*name == ' ') name++;
+    name_buffer = name;
+    while (*contents == ' ') contents++;
+    if (!*contents) {
+       report(ERR_CHANGECONTENTS);
+       return;
+    }
+    contents_buffer = contents;
+    if (get_icon_state(we, I_Change_Variable)) {
+        err = stringtovardef(&name, &where, &v, &current_context);
+        if (err) {
+            report(err);
+            return;
+        }
+        while (*name == ' ') name++;
+        if (*name) {
+            report(ERR_VARTERM);
+            return;
+        }
+        err = vardeftodatum(v, &where, &d);
+        if (err) {
+            report(err);
+            return;
+        }
+        if (d.datumtype == CONST_DATUM) {
+            report(ERR_LVALUE);
+            return;
+        }
+        tcode = TYPE_CODE(d.type);
+        if (TYPE_PTR(d.type))
+            tcode = TYPEUWORD;
+        if (!type_fpoint(tcode)) {
+            err = atoi(&contents, default_base ? default_base : 10, &word, 1);
+            if (err) {
+                report(err);
+                return;
+            }
+        } else {
+            err = eval_fpconst(&contents, &fp, 1);
+            if (err) {
+                report(err);
+                return;
+            }
+            dbl = loadfpextended(&fp);
+        }
+        switch (d.datumtype) {
+            case CONST_DATUM:
+                report(ERR_LVALUE);
+                return;
+            case MEMORY_DATUM:
+                dataaccessflag = 0;
+#ifdef PRAGMA_C1
+                enable_access = 1;
+#endif
+                switch (tcode) {
+                    case TYPESBYTE:
+                        *((char *)d.value.address) = word;
+                        break;
+                    case TYPEUBYTE:
+                        *((unsigned char *)d.value.address) = word;
+                        break;
+                    case TYPESHALF:
+                        *((short *)d.value.address) = word;
+                        break;
+                    case TYPEUHALF:
+                        *((unsigned short *)d.value.address) = word;
+                        break;
+                    case TYPESWORD:
+                        *((int *)d.value.address) = word;
+                        break;
+                    case TYPEUWORD:
+                        *((unsigned int *)d.value.address) = word;
+                        break;
+                    case TYPEFLOAT:
+                        *((float *)d.value.address) = (float)dbl;
+                        break;
+                    case TYPEDOUBLE:
+                        *((double *)d.value.address) = dbl;
+                        break;
+                    default:
+#ifdef PRAGMA_C1
+                        enable_access = 0;
+#endif
+                        report(ERR_DBGTABLE);
+                        return;
+                }
+#ifdef PRAGMA_C1
+                enable_access = 0;
+#endif
+                /* Service_MemoryChanged :-) */
+                memory_changed(d.value.address, 8);
+                if (dataaccessflag) {
+                    report(ERR_ACCESS);
+                    return;
+                }
+                dataaccessflag = 1;
+                break;
+            case REG_DATUM:
+                alterregvar(d.value.regdata.regnum,
+                            d.value.regdata.stackframe, &fp, word);
+                break;
+        }
+        output_str("Variable ");
+    }
+    if (get_icon_state(we, I_Change_Register)) {
+        err = get_register(name, &addr);
+        if (err) {
+            report(err);
+            return;
+        }
+        if (addr >= 16) {
+            err = eval_fpconst(&contents, &fp, 1);
+            if (err) {
+                report(err);
+                return;
+            }
+            registers.f[addr - 16] = fp;
+        } else {
+            err = low_eval(&contents, &word, 1);
+            if (err) {
+                report(err);
+                return;
+            }
+            registers.r[addr] = word;
+        }
+        memory_changed(&registers, sizeof(registers));
+        output_str("Register ");
+    }
+    if (get_icon_state(we, I_Change_Memory)) {
+        err = low_eval(&name, &addr, 1);
+        if (err) {
+            report(err);
+            return;
+        }
+        sav_wp = wp = (int *)addr;
+#ifdef PRAGMA_C1
+        enable_access = 1;
+#endif
+        do {
+            err = low_eval(&contents, &word, 0);
+            if (err) {
+                report(err);
+                return;
+            }
+            *wp++ = word;
+            if (*contents != ',')
+                break;
+            contents++;
+        } while (1);
+#ifdef PRAGMA_C1
+        enable_access = 0;
+#endif
+        if (*contents) {
+            report(ERR_CHANGETERM);
+            return;
+        }
+        memory_changed(sav_wp, (wp - sav_wp) * 4);
+        output_str("Memory at ");
+    }
+    output_str(name_buffer);
+    output_str(" changed to ");
+    output_line(contents_buffer);
+}
+
+static void break_list(void)
+{
+    BreakPoint *bp;
+    int n;
+
+    n = 0;
+    bp = breaklist;
+    if (!bp)
+        output_line("No breakpoints set");
+    while (bp) {
+        if (!IS_PBREAK(bp)) {
+            n++;
+            output_ch('#');
+            output_uns(n, 10, 1);
+            output_ch(' ');
+            output_line(bp->str);
+        }
+        bp = bp->next;
+    }
+}
+
+static int remove_breakpoint_n(int break_no)
+{
+    BreakPoint **pbp, *bp;
+    int n;
+
+    n = 0;
+    pbp = &breaklist;
+    while (bp = *pbp) {
+        if (!IS_PBREAK(bp)) {
+            n++;
+            if (n == break_no) {
+                *pbp = bp->next;
+                writeword(bp->addr, bp->inst);
+                /* StrongARM */
+                os_synchronisecodeareas((void *) bp->addr, (void *) bp->addr);
+                rma_free(bp);
+                return 0;
+            }
+        }
+        pbp = &(bp->next);
+    }
+    return ERR_NOSUCHBREAK;
+}
+
+static int remove_breakpoint(char *s)
+{
+    BreakPoint **pbp, *bp;
+
+    pbp = &breaklist;
+    while (bp = *pbp) {
+        if (!IS_PBREAK(bp) && !cistrcmp(bp->str, s)) {
+            *pbp = bp->next;
+            writeword(bp->addr, bp->inst);
+            /* StrongARM */
+            os_synchronisecodeareas((void *) bp->addr, (void *) bp->addr);
+            rma_free(bp);
+            return 0;
+        }
+        pbp = &(bp->next);
+    }
+    return ERR_NOSUCHBREAK;
+}
+
+static char *skip_filename(char *s)
+{
+    char *p, *t;
+
+    p = s;
+    if (*p >= '0' && *p <= '9')
+        return p;
+    while (*p > ' ') {
+        if (*p == ':') {
+            t = p + 1;
+            if (*t >= '0' && *t <= '9') {
+                do {
+                    t++;
+                } while (*t >= '0' && *t <= '9');
+                if (*t <= ' ') return p;
+            }
+        }
+        p++;
+    }
+    return p;
+}
+
+static int find_swi(int lb, int hb, char *s)
+{
+    char swi_str[80];
+    char *t;
+
+    t = s;
+    while (*t) {
+        if (*t == '*' || *t == '#') {
+            while (lb < hb) {
+                t = os_swinumbertostring(lb, swi_str, 80);
+                if (!(lb & 0x3f)) {
+                    if (!strcmp(swi_str, "User")) {
+                        lb += 64;
+                        continue;
+                    }
+                }
+                if (!match(s, swi_str))
+                    swi_break_set(lb, swi_str);
+                lb++;
+            }
+            return -1;
+        }
+        t++;
+    }
+    while (lb < hb) {
+        t = os_swinumbertostring(lb, swi_str, 80);
+        if (!(lb & 0x3f)) {
+            if (!strcmp(swi_str, "User")) {
+                lb += 64;
+                continue;
+            }
+        }
+        if (!cistrcmp(swi_str, s)) {
+            swi_break_set(lb, swi_str);
+            return 0;
+        }
+        lb++;
+    }
+    return -2;
+}
+
+void break_action(WindowHandle *we, int i, int b)
+{
+    char *cs, *s, *type;
+    int addr, err;
+    Context where;
+    int break_no;
+    BreakPoint *bp, **pbp;
+    char *file;
+    int line;
+    Rect r;
+
+    s = get_icon_buffer(we, I_Break_Name);
+    while (*s == ' ') s++;
+    cs = s;
+    if (i == I_Break_WimpEvents) {
+        visible_rect(&r, wimpevent_window);
+        open_menu(wimpevent_window, &r, 0, 0);
+        return;
+    }
+    if (i == I_Break_RemoveAll) {
+        pbp = &breaklist;
+        if (!*pbp) {
+            output_line("No breakpoints to remove");
+            return;
+        }
+        while ((bp = *pbp) != 0) {
+            if (!bp->proc) {
+                *pbp = bp->next;
+                if (bp->addr) {
+                    writeword(bp->addr, bp->inst);
+                    /* StrongARM */
+                    os_synchronisecodeareas((void *) bp->addr, (void *) bp->addr);
+                }
+                rma_free(bp);
+            } else
+                pbp = &(bp->next);
+        }
+        display_show_bp(-1);
+        output_line("All breakpoints removed");
+        return;
+    }
+    if (i == I_Break_Remove) {
+        if (*s == '#') {
+            s++;
+            if (!*s) {
+                report(ERR_NOBREAKNO);
+                return;
+            }
+            err = atoi(&s, 10, &break_no, 1);
+            if (err) {
+                report(err);
+                return;
+            }
+            err = remove_breakpoint_n(break_no);
+        } else
+            err = remove_breakpoint(s);
+        if (err) {
+            report(err);
+            return;
+        }
+        display_show_bp(-1);
+        output_str("Breakpoint at ");
+        output_str(cs);
+        output_line(" removed");
+        return;
+    }
+    where.file = 0;
+    file = 0;
+    line = -1;
+    if (i == I_Break_Address) {
+        err = low_eval(&s, &addr, 1);
+        if (!err) {
+            where.address = addr;
+            if (where.proc = codetoproc(addr)) {
+                if (getsourceinfo(&where)) {
+                    file = where.file->filename;
+                    line = where.line;
+                }
+            }
+            err = break_set(addr, cs, file, line);
+        }
+        if (err) {
+            report(err);
+            return;
+        }
+        type = "Address ";
+    }
+    if (i == I_Break_SWI) {
+        int swino, xbit;
+
+        xbit = 0;
+        if (*s == 'x' || *s == 'X') {
+            xbit = 1 << 17;
+            s++;
+        }
+        swino = find_swi(0, 0x100, s);
+        if (swino < 0)
+            swino = find_swi(0x200, 0x20000, s);
+        if (swino < 0)
+            swino = find_swi(1 << 18, (1 << 18) + 0x20000, s);
+        if (swino < 0)
+            swino = find_swi(2 << 18, (2 << 18) + 0x20000, s);
+        if (swino < 0)
+            swino = find_swi(3 << 18, (3 << 18) + 0x20000, s);
+        if (swino == -2)
+            report(ERR_NOSUCHSWI);
+        return;
+    }
+    if (i == I_Break_Procedure) {
+        err = stringtopath(&s, &where, current_context.proc, 1);
+        if (err) {
+            report(err);
+            return;
+        }
+        while (*s == ' ') s++;
+        if (*s) {
+            report(ERR_CONTEXTTERM);
+            return;
+        }
+        if (where.proc == root || where.proc->n.parent == root) {
+            report(ERR_NOTAPROC);
+            return;
+        }
+        where.address = where.proc->item->entry;
+        if (getsourceinfo(&where)) {
+            file = where.file->filename;
+            line = where.line;
+        }
+        err = break_set(where.address, cs, file, line);
+        if (err) {
+            report(err);
+            return;
+        }
+        type = "Procedure ";
+    }
+    if (i == I_Break_Line) {
+        char *name, *p;
+        int l, line;
+
+        p = skip_filename(s);
+        name = dis_source_file;
+        if (p > s) {
+            l = p - s;
+            name = memcpy(salloc(l + 1), s, l);
+            name[l] = 0;
+            while (*p == ' ' || *p == ':') p++;
+        }
+        err = atoi(&p, 10, &line, 1);
+        if (err) {
+            report(err);
+            return;
+        }
+        if (!filepostocode(&where, name, line)) {
+            line--;
+            if (!filepostocode(&where, name, line)) {
+                report(ERR_LINENOTFOUND);
+                return;
+            }
+        }
+        err = break_set(where.address, cs, where.file->filename, line);
+        if (err) {
+            report(err);
+            return;
+        }
+        type = "Line ";
+    }
+    if (i == I_Break_List) {
+        break_list();
+        return;
+    }
+    display_show_bp(-1);
+    output_str("Breakpoint set at ");
+    output_str(type);
+    output_line(cs);
+}
+
+static void watch_list(void)
+{
+    WatchPoint *wp;
+    int n;
+
+    n = 0;
+    wp = watchlist;
+    if (!wp)
+        output_line("No watchpoints set");
+    while (wp) {
+        n++;
+        output_ch('#');
+        output_uns(n, 10, 1);
+        output_ch(' ');
+        output_line(wp->str);
+        wp = wp->next;
+    }
+}
+
+static int remove_watchpoint_n(int watch_no)
+{
+    WatchPoint **pwp, *wp;
+    int n;
+
+    n = 0;
+    pwp = &watchlist;
+    while ((wp = *pwp) != 0) {
+        n++;
+        if (n == watch_no) {
+            *pwp = wp->next;
+            free(wp->str);
+            rma_free(wp);
+            return 0;
+        }
+        pwp = &(wp->next);
+    }
+    return ERR_NOSUCHWATCH;
+}
+
+static int remove_watchpoint(char *s)
+{
+    WatchPoint **pwp, *wp;
+
+    pwp = &watchlist;
+    while ((wp = *pwp) != 0) {
+        if (!cistrcmp(s, wp->str)) {
+            *pwp = wp->next;
+            free(wp->str);
+            rma_free(wp);
+            return 0;
+        }
+        pwp = &(wp->next);
+    }
+    return ERR_NOSUCHWATCH;
+}
+
+void watch_action(WindowHandle *we, int i, int b)
+{
+    WatchPoint *wp, *l;
+    int err;
+    int watch_no, addr, size;
+    char *s, *cs;
+    int *stackframe;
+    int regnum;
+    Datum d;
+    Context where;
+
+    s = get_icon_buffer(we, I_Watch_Name);
+    while (*s == ' ') s++;
+    cs = s;
+    if (i == I_Watch_RemoveAll) {
+        l = watchlist;
+        if (!l) {
+            output_line("No watchpoints to remove");
+            return;
+        }
+        while ((wp = l) != 0) {
+            l = l->next;
+            rma_free(wp);
+        }
+        watchlist = 0;
+        output_line("All watchpoints removed");
+    }
+    if (i == I_Watch_Remove) {
+        if (*s == '#') {
+            s++;
+            if (!*s) {
+                report(ERR_NOWATCHNO);
+                return;
+            }
+            err = atoi(&s, 10, &watch_no, 1);
+            if (err) {
+                report(err);
+                return;
+            }
+            err = remove_watchpoint_n(watch_no);
+        } else
+            err = remove_watchpoint(s);
+        if (err) {
+            report(err);
+            return;
+        }
+        output_str("Watchpoint ");
+        output_str(cs);
+        output_line(" removed");
+    }
+    if (i == I_Watch_Variable || i == I_Watch_Memory) {
+        stackframe = 0;
+        where = current_context;
+        d.datumtype = -1;
+        if (i == I_Watch_Memory) {
+            err = low_eval(&s, &addr, 0);
+            if (err) {
+                report(err);
+                return;
+            }
+            size = 4;
+            if (*s == ',') {
+                s++;
+                err = low_eval(&s, &size, 0);
+                if (err) {
+                    report(err);
+                    return;
+                }
+                size = size - addr;
+            }
+            if (*s) {
+                report(ERR_LOWTERM);
+                return;
+            }
+        }
+        if (i == I_Watch_Variable) {
+            int readerr, evalerr;
+            ExpTree *tree;
+
+            readerr = readexpr(&s, &tree, &where, default_base ? default_base : 10);
+            if (readerr && readerr != ERR_TYPEWARN) {
+                report(readerr);
+                return;
+            }
+            if (!checklv(tree)) {
+                report(ERR_LVALUE);
+                return;
+            }
+            evalerr = evaluate(tree, &where, &d);
+            err = evalerr ? evalerr : readerr;
+            while (*s == ' ') s++;
+            if (*s) {
+                report(ERR_VARTERM);
+                return;
+            }
+            if (err) {
+                report(err);
+                if (err != ERR_TYPEWARN) return;
+            }
+            if (d.datumtype == MEMORY_DATUM || d.datumtype == CONST_DATUM) {
+                size = typesize(&d, &where);
+                if (!size) size = 4;
+                addr = (int)d.value.address;
+                stackframe = where.stackframe;
+            } else {
+                regnum = d.value.regdata.regnum;
+                size = 4;
+                if (regnum >= 16)
+                    size = 12;
+                stackframe = d.value.regdata.stackframe;
+                addr = (int)savedregvar(regnum, stackframe);
+                if (!addr) {
+                    if (regnum < 16)
+                        addr = (int)&(registers.r[regnum]);
+                    else
+                        addr = (int)&(registers.f[regnum - 16]);
+                }
+            }
+        }
+        watch_set(addr, size, stackframe, cs, &where, &d, default_base);
+        output_str("Watchpoint set on ");
+        output_str(i == I_Watch_Variable ? "Variable " : "Address ");
+        output_line(cs);
+    }
+    if (i == I_Watch_List)
+        watch_list();
+}
+
+static void set_protection(int i)
+{
+    int size;
+
+    memory_protection = i;
+    if (i) {
+        size = os_readmemmapinfo() & 0xffff;
+        if (image_base & (size - 1))
+            report(ERR_RO_BASE);
+        if ((image_base + image_rosize) & (size - 1))
+            report(ERR_RO_LIMIT);
+    }
+}
+
+static void output_switch(char *s, int i)
+{
+    output_str(s);
+    output_line(i ? " enabled": " disabled");
+}
+
+static int break_entry(int i)
+{
+    int err;
+    Context where;
+    char *p;
+
+    stop_at_entry = i;
+    if (!i)
+        return remove_breakpoint("main");
+    p = "main";
+    err = stringtopath(&p, &where, root, 1);
+    if (err) return err;
+    if (where.proc == root || where.proc->n.parent == root)
+        return ERR_NOTAPROC;
+    break_set(where.proc->item->entry, "main", 0, -1);
+    return 0;
+}
+
+void options_ok(WindowHandle *we, int i, int b)
+{
+    Rect r;
+    char *s, *cmd_line;
+    int *start_time;
+    int l, c;
+    int base;
+    int err;
+    char new_prefix[80];
+    Window *w;
+
+    if ((i = get_icon_state(we, I_Options_LineNos)) != source_line_numbers) {
+        source_line_numbers = i;
+        if (dis_type == DISPLAY_SOURCE) {
+            visible_rect(&r, source_window);
+            invalid_rect(0, r);
+        } else {
+            output_switch("Source line number display", i);
+        }
+    }
+    if ((i = get_icon_state(we, I_Options_Source)) != source_level) {
+        source_level = i;
+        display_set_context(&home_context);
+        output_switch("Source level debugging", i);
+    }
+    if ((i = get_icon_state(we, I_Options_Machine)) != machine_level) {
+        machine_level = i;
+        display_set_context(&home_context);
+        output_switch("Machine level debugging", i);
+    }
+    if ((i = get_icon_state(we, I_Options_MemProt)) != memory_protection) {
+        set_protection(i);
+        output_switch("Memory protection", i);
+    }
+    i = get_icon_state(we, I_Options_StopMain);
+    if (i != stop_at_entry) {
+        if (!break_entry(i))
+            output_switch("Stop in main", i);
+    }
+    cplusplusflag = get_icon_state(we, I_Options_C_Plus_Plus);
+    cmd_line = os_getenv(0, &start_time);
+    if (strcmp(s = get_icon_buffer(we, I_Options_CmdLine), cmd_line)) {
+        os_writeenv(s, start_time);
+        output_str("New command line: ");
+        output_line(s);
+    }
+    s = get_icon_buffer(we, I_Options_Prefix);
+    l = strlen(s);
+    strcpy(new_prefix, s);
+    c = l ? s[l - 1] : '.';
+    if (c != '.' && c != ':') {
+        new_prefix[l] = '.';
+        new_prefix[l + 1] = 0;
+    }
+    if (strcmp(prefix, new_prefix)) {
+        prefix = strcpy(salloc(l + 2), new_prefix);
+        output_str("New source tree: ");
+        output_line(s);
+        close_current_src();
+        s = dis_source_file;
+        source_init();
+        if (dis_type == DISPLAY_SOURCE) {
+            w = get_window_info(source_window);
+            if (!new_source_file(s, -(w->scy / Y_CHAR))) {
+                report(ERR_OPEN_SOURCE);
+                dis_type = DISPLAY_NONE;
+                visible_rect(&r, source_window);
+                invalid_rect(0, r);
+            }
+        }
+    }
+    if ((i = get_icon_state(we, I_Options_Arthur)) != bindings) {
+        bindings = i;
+        if (dis_type == DISPLAY_DISASSEMBLY) {
+            visible_rect(&r, source_window);
+            invalid_rect(0, r);
+        }
+        output_str(i ? "Arthur" : "RiscOS");
+        output_line(" bindings selected");
+    }
+    s = get_icon_buffer(we, I_Options_Base);
+    err = atoi(&s, 10, &base, 2 | 1);
+    if (err) {
+        report(err);
+        return;
+    }
+    if (base && (base < 2 || base > 36)) {
+        report(ERR_BADBASE);
+    } else {
+        if (default_base != base) {
+            output_str("Default base = ");
+            if (base)
+                output_int(base, 10);
+            else
+                output_str("None");
+            output_ch(0);
+        }
+        default_base = base;
+    }
+    s = get_icon_buffer(we, I_Options_Base);
+    *s = 0;
+    if (default_base)
+        *write_uns_lj(s, default_base, 10) = 0;
+}
+
+typedef struct Choices {
+    int source_line_numbers;
+    int source_level;
+    int machine_level;
+    int memory_protection;
+    int stop_at_entry;
+    int bindings;
+    int default_base;
+    int cplusplusflag;
+} Choices;
+
+void options_save(WindowHandle *we, int i, int b)
+{
+    OS_File_Block fb;
+    Choices options;
+
+    options_ok(we, i, b);
+    options.source_line_numbers = source_line_numbers;
+    options.source_level = source_level;
+    options.machine_level = machine_level;
+    options.memory_protection = memory_protection;
+    options.stop_at_entry = stop_at_entry;
+    options.bindings = bindings;
+    options.default_base = default_base;
+    options.cplusplusflag = cplusplusflag;
+    fb.r2 = 0xffd;
+    fb.r4 = (int)&options;
+    fb.r5 = fb.r4 + sizeof(Choices);
+    xos_file(OS_FILE_SAVE, "<DDT$Dir>.Choices", &fb);
+    if (os_vs())
+        report(ERR_CHOICES);
+    else
+        output_line("Options saved in <DDT$Dir>.Choices");
+}
+
+static int callproc(char *args)
+{
+    FPorInt arglist[16];
+    char argtypes[16];
+    int nargs = 0;
+    int err;
+    int procaddr;
+    int fp;
+    int i;
+    char *s;
+    int *sp;
+    int argsize;
+    double d;
+
+    err = low_eval(&args, &procaddr, 0);
+    if (err) return err;
+    while (*args == ' ') args++;
+    argsize = 0;
+    if (*args == '(') {
+        ++args;
+        while (*args == ' ') args++;
+        while (*args != ')') {
+            if (nargs == 16)
+                return ERR_TOOMANYARGS;
+            s = args;
+            fp = 0;
+            while (*s && *s != ',' && *s != ')') {
+                if (*s == '.') {
+                    fp = 1;
+                    break;
+                }
+                s++;
+            }
+            argtypes[nargs] = fp;
+            if (fp) {
+                err = eval_fpconst(&args, &(arglist[nargs].f), 0);
+                argsize += 2;
+            } else {
+                err = atoi(&args, default_base ? default_base : 10,
+                           &(arglist[nargs].i), 0);
+                argsize += 1;
+            }
+            if (err) return err;
+            while (*args == ' ') args++;
+            nargs++;
+            if (*args != ',') break;
+            args++;
+        }
+        if (*args != ')') return ERR_RPARENEXPECTED;
+    }
+    sp = (int *)(registers.r[bindings ? 12 : 13]);
+    *--sp = registers.r[15];
+    *--sp = registers.r[14];
+    *--sp = registers.r[13];
+    *--sp = registers.r[12];
+    *--sp = registers.r[11];
+    *--sp = registers.r[10];
+    for (i = 3; i >= 0; i--)
+        *--sp = registers.r[i];
+    for (i = 3; i >= 0; i--) {
+        *--sp = registers.f[i].word[2];
+        *--sp = registers.f[i].word[1];
+        *--sp = registers.f[i].word[0];
+    }
+    *--sp = ARG_GUARD;
+    for (i = nargs - 1; i >= 0; i--) {
+        if (argtypes[i]) {
+            d = loadfpextended(&(arglist[i].f));
+            argsize -= 1;
+            if (argsize >= 4)
+                *--sp = *(((int *)&d) + 1);
+            else
+                registers.r[argsize] = *(((int *)&d) + 1);
+            argsize -= 1;
+            if (argsize >= 4)
+                *--sp = *(((int *)&d) + 0);
+            else
+                registers.r[argsize] = *(((int *)&d) + 0);
+        } else {
+            argsize -= 1;
+            if (argsize >= 4)
+                *--sp = arglist[i].i;
+            else
+                registers.r[argsize] = arglist[i].i;
+        }
+    }
+    registers.r[bindings ? 12 : 13] = (int)sp;
+    registers.r[14] = (int)&retfromcall;
+    registers.r[15] = procaddr;
+    return 0;
+}
+
+void call_ok(WindowHandle *we, int i, int b)
+{
+    int err;
+
+    if (prog_finished) {
+        window_alert();
+        return;
+    }
+    err = callproc(get_icon_buffer(we, I_Call_Name));
+    if (err)
+        report(err);
+    else
+        continue_cmd(0, 0, 0);
+}
+
+static void list_syms(char *s, int base)
+{
+    ItemSymbol *sy, *syend;
+    char *name;
+    int gotmatch;
+
+    sy = symbol_tab;
+    syend = sy + symbols;
+    gotmatch = 0;
+    for (; sy < syend; sy++) {
+        name = cplusplus(string_tab + STR_INDEX(sy->sym));
+        if (match(s, name) == 0) {
+            gotmatch = 1;
+            output_uns(sy->value, base, 8);
+            output_ch(' ');
+            if (SYM_GLOBAL(sy->sym))
+                output_str("Global ");
+            else
+                output_str("Local  ");
+            switch (SYM_TYPE(sy->sym)) {
+                case ABSOLUTE_SYM:
+                    output_str("ABS  ");
+                    break;
+                case CODE_SYM:
+                    output_str("CODE ");
+                    break;
+                case DATA_SYM:
+                    output_str("DATA ");
+                    break;
+                case ZI_SYM:
+                    output_str("ZERO ");
+                    break;
+            }
+            output_str(name);
+            output_ch(0);
+        }
+    }
+    if (!gotmatch)
+        error("No matching symbol names");
+}
+
+static char *mode_names[4] = { "User", "FIQ", "IRQ", "SVC" };
+
+static void list_regs(RegSet *regs, int base)
+{
+    int i;
+
+    for (i = 0; i < 16;) {
+        if (i < 10) {
+            output_ch('R');
+            output_ch('0' + i);
+        } else
+            output_str(regnames[bindings][i - 10]);
+        output_str(" = ");
+        output_uns(i == 15 ? (regs->r15.pc & ~3) : regs->r[i], base, 8);
+        i++;
+        if (i & 3)
+            output_str("  ");
+        else
+            output_ch(0);
+    }
+    if (regs->r15.pc & 3) {
+        output_str("User sp = ");
+        output_uns(user_sp, base, 8);
+        output_str(", User lr = ");
+        output_uns(user_lr, base, 8);
+        output_ch(0);
+    }
+    output_str("Flags: N = ");
+    output_ch('0' + regs->r15.n);
+    output_str(", Z = ");
+    output_ch('0' + regs->r15.z);
+    output_str(", C = ");
+    output_ch('0' + regs->r15.c);
+    output_str(", V = ");
+    output_ch('0' + regs->r15.v);
+    output_str(", Mode = ");
+    output_str(mode_names[regs->r15.pc & 3]);
+    output_ch(0);
+}
+
+static void list_fpregs(RegSet *regs, int base)
+{
+    int i;
+
+    output_line("     S Exp  J Mantissa                 S Exp  J Mantissa");
+    for (i = 0; i < 8;) {
+        output_ch('F');
+        output_ch('0' + i);
+        output_str(" = ");
+        output_ch('0' + ((regs->f[i].word[0] & 0x80000000) != 0));
+        output_ch(' ');
+        output_uns(regs->f[i].word[0] & 0x7fff, 16, 4);
+        output_ch(' ');
+        output_ch('0' + ((regs->f[i].word[1] & 0x80000000) != 0));
+        output_ch(' ');
+        output_uns(regs->f[i].word[1] & 0x7fffffff, 16, 8);
+        output_uns(regs->f[i].word[2] & 0xffffffff, 16, 8);
+        i++;
+        if (i & 1)
+            output_str("    ");
+        else
+            output_ch(0);
+    }
+    output_str("FPSR = ");
+    output_uns(*((unsigned *)&(regs->fpstatus)), 16, 8);
+    output_str("   Flags: IVO = ");
+    output_ch('0' + regs->fpstatus.ivo);
+    output_str(", DVZ = ");
+    output_ch('0' + regs->fpstatus.dvz);
+    output_str(", OFL = ");
+    output_ch('0' + regs->fpstatus.ofl);
+    output_str(", UFL = ");
+    output_ch('0' + regs->fpstatus.ufl);
+    output_str(", INX = ");
+    output_ch('0' + regs->fpstatus.inx);
+    output_ch(0);
+    output_ch(0);
+    for (i = 0; i < 8;) {
+        output_ch('F');
+        output_ch('0' + i);
+        output_str(" = ");
+        output_fp(&(regs->f[i]));
+        i++;
+        if (i & 1)
+            output_tab(30);
+        else
+            output_ch(0);
+    }
+}
+
+void display_action(WindowHandle *we, int i, int b)
+{
+    char *s, *p, *cs;
+    char *file;
+    int base;
+    int addr;
+    int err;
+    Context where;
+    int line;
+    Datum d;
+    ExpTree *tree;
+    int display_update;
+
+    display_update = get_icon_state(we, I_Display_Update);
+    set_icon_flags(we, I_Display_Update, IF_INVERTED, 0);
+    tree = 0;
+    s = get_icon_buffer(we, I_Display_Base);
+    err = atoi(&s, 10, &base, 2 | 1);
+    if (err) {
+        report(err);
+        return;
+    }
+    if (base && (base < 2 || base > 36)) {
+        report(ERR_BADBASE);
+        return;
+    }
+    cs = s = get_icon_buffer(we, I_Display_Name);
+    if (i == I_Display_Symbols) {
+        list_syms(s, base ? base : 16);
+        return;
+    }
+    if (i == I_Display_Registers)
+    {
+        setupcontextregs();
+        list_regs(contextregs, base ? base : 16);
+    }
+    if (i == I_Display_FPRegs)
+    {
+        setupcontextregs();
+        list_fpregs(contextregs, base ? base : 16);
+    }
+    if (i == I_Display_Source) {
+        while (*s == ' ') s++;
+        if (!*s)
+            return;
+        p = skip_filename(s);
+        file = dis_source_file;
+        if (p > s) {
+            i = p - s;
+            file = memcpy(salloc(i + 1), s, i);
+            file[i] = 0;
+            while (*p == ' ' || *p == ':') p++;
+        }
+        err = atoi(&p, 10, &line, 2 | 1);
+        if (err) {
+            report(err);
+            return;
+        }
+        if (!*file)
+            report(ERR_NOFILE);
+        if (!line) line = 1;
+        if (!new_source_file(file, line))
+            report(ERR_OPEN_SOURCE);
+        return;
+    }
+    if (i == I_Display_Disassembly) {
+        err = low_eval(&s, &addr, 1);
+        if (err) {
+            report(err);
+            return;
+        }
+        new_disassembly_display(addr, 0);
+        return;
+    }
+    if (i == I_Display_Memory) {
+        err = low_eval(&s, &addr, 1);
+        if (err) {
+            report(err);
+            return;
+        }
+        new_memory_display(addr, base ? base : 16);
+        return;
+    }
+    if (i == I_Display_Backtrace)
+        print_backtrace();
+    if (i == I_Display_Variable) {
+        int readerr, evalerr;
+
+        where = current_context;
+        readerr = readexpr(&s, &tree, &where, base ? base : 10);
+        if (readerr && readerr != ERR_TYPEWARN) {
+            report(readerr);
+            return;
+        }
+#ifdef DEBUG_EXPRS
+        output_line("Expression tree:-");
+        print_tree(tree, 0);
+#endif
+        evalerr = evaluate(tree, &where, &d);
+        err = evalerr ? evalerr : readerr;
+        while (*s == ' ') s++;
+        if (*s) {
+            report(ERR_VARTERM);
+            return;
+        }
+        if (err) {
+            report(err);
+            if (err != ERR_TYPEWARN) return;
+        }
+        output_str(cs);
+        output_str(" = ");
+        err = print_datum(&d, strlen(cs) + 3, base, &where);
+        output_ch(0);
+        if (err) report(err);
+    }
+    if (i == I_Display_Arguments)
+        print_arguments(base);
+    if (i == I_Display_Locals)
+        print_locals(base);
+    if (display_update) {
+        UpdateItem *ui, **pui;
+
+        pui = &updatelist;
+        while ((ui = *pui) != 0) {
+            if (ui->object == i) {
+                if (i != I_Display_Variable) return;
+                if (!strcmp(cs, ui->name)) return;
+            }
+            pui = &(ui->next);
+        }
+        *pui = ui = malloc(offsetof(UpdateItem, name) +
+                           (i == I_Display_Variable ? strlen(cs) + 1 : 0),
+                           "UpdateItem");
+        ui->next = 0;
+        ui->object = i;
+        if (i == I_Display_Variable)
+            strcpy(ui->name, cs);
+    }
+}
+
+void list_updates(void)
+{
+    UpdateItem *ui;
+    int err;
+    int base;
+
+    ui = updatelist;
+    do {
+        base = default_base;
+        switch (ui->object) {
+            case I_Display_Registers:
+                list_regs(&registers, base ? base : 16);
+                break;
+            case I_Display_FPRegs:
+                list_fpregs(&registers, base ? base : 16);
+                break;
+            case I_Display_Backtrace:
+                print_backtrace();
+                break;
+            case I_Display_Arguments:
+                print_arguments(base);
+                break;
+            case I_Display_Locals:
+                print_locals(base);
+                break;
+            case I_Display_Variable: {
+                char *s;
+                Context where;
+                ExpTree *tree;
+                Datum d;
+
+                where = current_context;
+                s = ui->name;
+                err = readexpr(&s, &tree, &where, base ? base : 10);
+                if (err && err != ERR_TYPEWARN)
+                    return;
+                while (*s == ' ') s++;
+                if (*s) return;
+                err = evaluate(tree, &where, &d);
+                if (err && err != ERR_TYPEWARN)
+                    return;
+                output_str(ui->name);
+                output_str(" = ");
+                err = print_datum(&d, strlen(ui->name) + 3, base, &where);
+                if (err) output_str("???");
+                output_ch(0);
+                break;
+            }
+        }
+        ui = ui->next;
+    } while (ui);
+}
+
+int returnexp(char *args)
+{
+    FPExtended fp;
+    char *s;
+    int err;
+    int word;
+
+    fp.word[0] = 0;
+    fp.word[1] = 0;
+    fp.word[2] = 0;
+    word = 0;
+    while (*args == ' ') args++;
+    if (*args) {
+        s = args;
+        err = eval_fpconst(&s, &fp, 1);
+        if (err)
+            return err;
+        atoi(&args, default_base ? default_base : 10, &word, 1);
+    }
+    err = outerstack(&current_context, &current_context);
+    if (err)
+        return err;
+    setupcontextregs();
+    registers = *contextregs;
+    registers.f[0] = fp;
+    registers.r[0] = word;
+    home_context = current_context;
+    display_set_context(&current_context);
+    update_context_window();
+    return 0;
+}
+
+void return_ok(WindowHandle *we, int i, int b)
+{
+    int err;
+
+    if (prog_finished) {
+        window_alert();
+        return;
+    }
+    err = returnexp(get_icon_buffer(we, I_Return_Name));
+    if (err)
+        report(err);
+}
+
+void log_ok(WindowHandle *we, int i, int b)
+{
+    char *s;
+    OS_File_Block fb;
+
+    if (logfile) os_find_close(logfile);
+    s = get_icon_buffer(we, I_Log_Name);
+    logfile = xos_find_open(OS_FIND_CREATE | OS_FIND_NO_PATH, s, 0);
+    if (!logfile)
+        report(ERR_OPENLOG);
+    fb.r2 = 0xfff;
+    xos_file(OS_FILE_SETTYPE, s, &fb);
+}
+
+void context_action(WindowHandle *we, int i, int b)
+{
+    int err;
+    Context new, next;
+
+    if (i == I_Context_Out) {
+        err = outerstack(&current_context, &current_context);
+        if (err) {
+            report(err);
+            return;
+        }
+    }
+    if (i == I_Context_In) {
+        if (current_context.stackframe == home_context.stackframe) {
+            report(ERR_STACKHOME);
+            return;
+        }
+        next = home_context;
+        while (next.stackframe != current_context.stackframe) {
+            new = next;
+            err = outerstack(&new, &next);
+            if (err) {
+                report(err);
+                return;
+            }
+        }
+        current_context = new;
+    }
+    if (i == I_Context_Home) {
+        current_context = home_context;
+    }
+    setupcontextregs();
+    display_set_context(&current_context);
+    update_context_window();
+}
+
+void help_action(WindowHandle *we, int i, int b)
+{
+    Rect r;
+
+    help_text = help_messages[i];
+    icon_rect(&r, help_window, I_Help_Border);
+    invalid_rect(we, r);
+}
+
+static int found_display(int found, int addr)
+{
+    if (!found)
+        output_str("Found at");
+    if (!(found & 7))
+        output_ch(0);
+    output_str(" ");
+    output_uns(addr, default_base ? default_base : 16, 8);
+    return found + 1;
+}
+
+#pragma -c0
+
+static char *find_string(char *addr, char *memorylimit, char *s)
+{
+    char *p1, *p2;
+
+    /* /* FIXME - The repeated checks on dataaccessflag slow this down horribly,
+     * could improve this by only checking once per memory page.
+     */
+    dataaccessflag = 0;
+    do {
+        if (*s == *addr) {
+            p1 = s + 1;
+            p2 = addr + 1;
+            do {
+                if (dataaccessflag)
+                    return memorylimit;
+                if (!*p1) {
+                    dataaccessflag = 1;
+                    return addr;
+                }
+            } while (p2 < memorylimit && *p1++ == *p2++);
+        }
+        if (dataaccessflag)
+            return memorylimit;
+        addr++;
+    } while (addr < memorylimit);
+    dataaccessflag = 1;
+    return addr;
+}
+
+static int *find_words(int *addr, int *memorylimit, int *words, int n)
+{
+    int *p1, *p2;
+    int count;
+
+    dataaccessflag = 0;
+    do {
+        if (*words == *addr) {
+            p1 = words + 1;
+            p2 = addr + 1;
+            count = n;
+            do {
+                if (dataaccessflag)
+                    return memorylimit;
+                if (!--count) {
+                    dataaccessflag = 1;
+                    return addr;
+                }
+            } while (p2 < memorylimit && *p1++ == *p2++);
+        }
+        if (dataaccessflag)
+            return memorylimit;
+        addr++;
+    } while (addr < memorylimit);
+    dataaccessflag = 1;
+    return addr;
+}
+
+static char *find_bytes(char *addr, char *memorylimit, char *words, int n)
+{
+    char *p1, *p2;
+    int count;
+
+    dataaccessflag = 0;
+    do {
+        if (*words == *addr) {
+            p1 = words + 1;
+            p2 = addr + 1;
+            count = n;
+            do {
+                if (dataaccessflag)
+                    return memorylimit;
+                if (!--count) {
+                    dataaccessflag = 1;
+                    return addr;
+                }
+            } while (p2 < memorylimit && *p1++ == *p2++);
+        }
+        if (dataaccessflag)
+            return memorylimit;
+        addr++;
+    } while (addr < memorylimit);
+    dataaccessflag = 1;
+    return addr;
+}
+
+#ifdef PRAGMA_C1
+#pragma -c1
+#endif
+
+void find_action(WindowHandle *we, int i, int b)
+{
+    char *s, *cs;
+    int addr, found;
+    char byte_buffer[64];
+    char *bp;
+    int *ip;
+    int word;
+    int err;
+    int memorylimit;
+
+    s = cs = get_icon_buffer(we, I_Find_Name);
+    if (!*s)
+        return;
+    addr = 0x8000;
+    found = 0;
+    memorylimit = (int)os_changeenvironment(N_MemoryLimit_Handler, 0, 0, 0);
+    if (i == I_Find_String) {
+        do {
+            addr = (int)find_string((char *)addr, (char *)memorylimit, s);
+            if (addr >= memorylimit)
+                break;
+            found = found_display(found, addr);
+            addr++;
+        } while (1);
+#ifdef FIND_RMA
+        addr = 0x1800000;
+        memorylimit = 0x1c00000;
+        do {
+            addr = (int)find_string((char *)addr, (char *)memorylimit, s);
+            if (addr >= memorylimit)
+                break;
+            found = found_display(found, addr);
+            addr++;
+        } while (1);
+#endif
+    }
+    if (i == I_Find_Word) {
+        ip = (int *)byte_buffer;
+        do {
+            if ((char *)ip > byte_buffer + 64)
+                break;
+            err = low_eval(&s, ip, 0);
+            ip++;
+            if (err) {
+                report(err);
+                return;
+            }
+            if (*s != ',')
+                break;
+            s++;
+        } while (1);
+        if (*s) {
+            report(ERR_FINDTERM);
+            return;
+        }
+        do {
+            addr = (int)find_words((int *)addr, (int *)memorylimit,
+                                  (int *)byte_buffer, ip - (int *)byte_buffer);
+            if (addr >= memorylimit)
+                break;
+            found = found_display(found, addr);
+            addr+=4;
+        } while (1);
+#ifdef FIND_RMA
+        addr = 0x1800000;
+        memorylimit = 0x1c00000;
+        do {
+            addr = (int)find_words((int *)addr, (int *)memorylimit,
+                                  (int *)byte_buffer, ip - (int *)byte_buffer);
+            if (addr >= memorylimit)
+                break;
+            found = found_display(found, addr);
+            addr+=4;
+        } while (1);
+#endif
+    }
+    if (i == I_Find_Byte) {
+        bp = byte_buffer;
+        do {
+            if (bp > byte_buffer + 64)
+                break;
+            err = low_eval(&s, &word, 0);
+            *bp++ = word;
+            if (err) {
+                report(err);
+                return;
+            }
+            if (*s != ',')
+                break;
+            s++;
+        } while (1);
+        if (*s) {
+            report(ERR_FINDTERM);
+            return;
+        }
+        do {
+            addr = (int)find_bytes((char *)addr, (char *)memorylimit,
+                                                byte_buffer, bp - byte_buffer);
+            if (addr >= memorylimit)
+                break;
+            found = found_display(found, addr);
+            addr++;
+        } while (1);
+#ifdef FIND_RMA
+        addr = 0x1800000;
+        memorylimit = 0x1c00000;
+        do {
+            addr = (int)find_bytes((char *)addr, (char *)memorylimit,
+                                                byte_buffer, bp - byte_buffer);
+            if (addr >= memorylimit)
+                break;
+            found = found_display(found, addr);
+            addr++;
+        } while (1);
+#endif
+    }
+    if (!found) {
+        output_ch('\"');
+        output_str(cs);
+        output_line("\" Not found");
+    } else
+        output_ch(0);
+}
+
+void command_ok(WindowHandle *we, int i, int b)
+{
+    char *s;
+    OS_Error_Block *err;
+
+    s = get_icon_buffer(we, I_Command_Cmd);
+    window_closedown();
+    err = cmd_cli(s);
+    window_resume();
+    if (err) {
+        output_str("Error: (");
+        output_uns(err->errno, default_base ? default_base : 16, 0);
+        output_str(") ");
+        output_line(err->errmsg);
+    }
+}
+
+#if 0
+static char *handler_names[N_Handlers] = {
+    "MemoryLimit",
+    "Undefined ins.",
+    "Prefetch abort",
+    "Data abort",
+    "Address exception",
+    "Other exceptions",
+    "Error",
+    "Callback",
+    "BreakPoint",
+    "Escape",
+    "Event",
+    "Exit",
+    "Unused SWI",
+    "Exception registers",
+    "Application space",
+    "CAO",
+    "UpCall"
+};
+
+#ifdef PRAGMA_C1
+#pragma -c0
+#endif
+static char *get_module_name(int addr)
+{
+    ModuleInfoStr mi;
+
+    mi.mod_no = 0;
+    do {
+        mi.ins_no = 0;
+        if (xos_module(OS_MODULE_EXTRACT_INFO, &mi) < 0)
+            return "";
+        if (addr >= mi.base && addr < mi.base + *((int *)(mi.base - 4)))
+            return (char *)(mi.base + *((int *)(mi.base + 16)));
+        if (mi.ins_no)
+            mi.mod_no++;
+    } while (1);
+}
+#ifdef PRAGMA_C1
+#pragma -c1
+#endif
+
+static void display_handlers(void)
+{
+    int i, j;
+    int *handler;
+    int r12;
+    void *buffer;
+
+    swap_dbge_handlers();
+    output_line("Handler                 Address  R2       R3       Module");
+    for (i = 0; i < N_Handlers; i++) {
+        r12 = 0;
+        buffer = 0;
+        handler = os_changeenvironment(i, 0, &r12, &buffer);
+        output_str(handler_names[i]);
+        j = 24 - strlen(handler_names[i]);
+        while (j--)
+            output_ch(' ');
+        output_uns((int)handler, 16, 8);
+        output_ch(' ');
+        output_uns(r12, 16, 8);
+        output_ch(' ');
+        output_uns((int)buffer, 16, 8);
+        output_ch(' ');
+#ifdef PRAGMA_C1
+        enable_access = 1;
+#endif
+        output_str(get_module_name((int)handler));
+#ifdef PRAGMA_C1
+        enable_access = 0;
+#endif
+        output_ch(0);
+    }
+    swap_dbge_handlers();
+}
+
+static char *vector_names[N_Vectors] = {
+    "UserV",
+    "ErrorV",
+    "IrqV",
+    "WrchV",
+    "ReadCV",
+    "CLIV",
+    "ByteV",
+    "WordV",
+    "FileV",
+    "ArgsV",
+    "BGetV",
+    "BPutV",
+    "GBPBV",
+    "FindV",
+    "ReadLineV",
+    "FSControlV",
+    "EventV",
+    0,
+    0,
+    0,
+    "InsV",
+    "RemV",
+    "CnpV",
+    "UKVDU23V",
+    "UKSWIV",
+    "UKPlotV",
+    "MouseV",
+    "VDUXYV",
+    "TickerV",
+    "UpcallV",
+    "ChangeEnvV",
+    "SpriteV",
+    "DrawV",
+    "EconetV",
+    "ColourV"
+};
+
+static void display_vectors(void)
+{
+    int i, j;
+    int *vblock;
+
+    output_line("Vector     -> Address  R12      Module");
+    for (i = 0; i < N_Vectors; i++) {
+        if (!vector_names[i])
+            continue;
+        vblock = find_vector(i);
+        if (vblock) {
+            output_str(vector_names[i]);
+            j = 10 - strlen(vector_names[i]);
+            while (j--)
+                output_ch(' ');
+        }
+#ifdef PRAGMA_C1
+        enable_access = 1;
+#endif
+        while (vblock) {
+            output_str(" -> ");
+            output_uns(vblock[2], 16, 8);
+            output_ch(' ');
+            output_uns(vblock[1], 16, 8);
+            output_ch(' ');
+            output_str(get_module_name(vblock[2]));
+            vblock = (int *)vblock[0];
+            output_ch(0);
+            if (vblock)
+                output_str("          ");
+        }
+#ifdef PRAGMA_C1
+        enable_access = 0;
+#endif
+    }
+}
+#endif
+
+int respond_key(int key)
+{
+    int cont_flags;
+    WindowHandle *we;
+    Rect r;
+    int res;
+
+    switch (key) {
+        case 'C' - '@':
+            continue_cmd(0, 0, 0);
+            return 0;
+        case 'S' - '@': {
+            int old_trace;
+
+            if (prog_finished) {
+                window_alert();
+                return 0;
+            }
+            close_menus(0);
+            cont_flags = STEP_SOURCE | SINGLE_STEP;
+            if (get_icon_state(step_window, I_Step_Into))
+                cont_flags |= STEP_INTO;
+            if (get_icon_state(step_window, I_Step_Inst))
+                cont_flags &= ~STEP_SOURCE;
+            irq_abort = 0;
+            abort_flag = 0;
+            old_trace = trace_execution;
+            trace_execution = 0;
+            do {
+                res = cont(cont_flags, 1);
+                window_resume();
+            } while (stopped(res));
+            trace_execution = old_trace;
+            update_status(res);
+            return 0;
+        }
+        case 'B' - '@':
+        case 'W' - '@':
+        case 'D' - '@':
+            close_menus(0);
+            we = key == 'B' - '@' ? breakpoint_window :
+                      (key == 'W' - '@' ? watchpoint_window : display_window);
+            visible_rect(&r, we);
+            open_menu(we, &r, 0, 0);
+            return 0;
+        case 'Q' - '@':
+            quit_cmd(0, 0, 0);
+            return 0;
+#if 0
+        case 'H' - '@':
+            display_handlers();
+            return 0;
+        case 'V' - '@':
+            display_vectors();
+            return 0;
+#endif
+    }
+    return -1;
+}
+
+void respond_init(int debugswi, int flags)
+{
+    char *s, *cmd_line;
+    Window *w;
+    int l, c;
+    Choices options;
+    OS_File_Block fb;
+
+    prog_finished = 0;
+    s = get_icon_buffer(options_window, I_Options_Base);
+    options.cplusplusflag = 1;
+    fb.r2 = (int)&options;
+    fb.r3 = 0;
+    xos_file(OS_FILE_LOAD, "<DDT$Dir>.Choices", &fb);
+    if (!os_vs()) {
+        set_icon_state(options_window,
+                       I_Options_LineNos, options.source_line_numbers);
+        set_icon_state(options_window,
+                       I_Options_Source, options.source_level);
+        set_icon_state(options_window,
+                       I_Options_Machine, options.machine_level);
+        set_icon_state(options_window,
+                       I_Options_MemProt, options.memory_protection);
+        set_icon_state(options_window,
+                       I_Options_Arthur, options.bindings);
+        set_icon_state(options_window,
+                       I_Options_StopMain, options.stop_at_entry);
+        set_icon_state(options_window,
+                       I_Options_C_Plus_Plus, options.cplusplusflag);
+        *s = 0;
+        if (options.default_base)
+            *write_uns_lj(s, options.default_base, 10) = 0;
+    }
+    if (debugswi) {
+        options.stop_at_entry = (flags & BREAKMAIN_FLAG) != 0;
+        options.memory_protection = (flags & PROTMEM_FLAG) != 0;
+        set_icon_state(options_window,
+                       I_Options_StopMain, options.stop_at_entry);
+        set_icon_state(options_window,
+                       I_Options_MemProt, options.memory_protection);
+    }
+    atoi(&s, 10, &default_base, 2 | 1);
+    source_line_numbers = get_icon_state(options_window, I_Options_LineNos);
+    source_level = get_icon_state(options_window, I_Options_Source);
+    machine_level = get_icon_state(options_window, I_Options_Machine);
+    cplusplusflag = get_icon_state(options_window, I_Options_C_Plus_Plus);
+    stop_at_entry = get_icon_state(options_window, I_Options_StopMain);
+    if (stop_at_entry && flags)
+    {
+        if (break_entry(1))
+            error("Can't set breakpoint on procedure main");
+    }
+    set_protection(get_icon_state(options_window, I_Options_MemProt));
+    bindings = get_icon_state(options_window, I_Options_Arthur);
+    set_icon_state(options_window, I_Options_RiscOS, !bindings);
+    cmd_line = os_getenv(0, 0);
+    s = get_icon_buffer(options_window, I_Options_CmdLine);
+    while ((*s = *cmd_line) >= ' ') s++, cmd_line++;
+    *s = 0;
+    s = get_icon_buffer(options_window, I_Options_Prefix);
+    if (debugswi) {
+        prefix = "";
+        *s = 0;
+    } else {
+        l = strlen(imagename);
+        strcpy(prefix = salloc(l), imagename);
+        c = 0;
+        while (l--) {
+            c = prefix[l];
+            if (c == '.' || c == ':')
+                break;
+            prefix[l] = 0;
+        }
+        strcpy(s, prefix);
+        if (c == '.' || c == ':')
+            s[l] = 0;
+    }
+    s = get_icon_buffer(step_window, I_Step_Count);
+    strcpy(s, "1");
+
+    trace_execution = get_icon_state(trace_window, I_Trace_Execution);
+    trace_breakpoints = get_icon_state(trace_window, I_Trace_Breakpoints);
+    trace_watchpoints = get_icon_state(trace_window, I_Trace_Watchpoints);
+    trace_procedures = get_icon_state(trace_window, I_Trace_Procedures);
+    trace_swibreaks = get_icon_state(trace_window, I_Trace_SWIBreaks);
+    trace_wimpevents = get_icon_state(trace_window, I_Trace_WimpEvents);
+
+    w = get_window_info(source_window);
+    w->buffer = progname;
+    w = get_window_info(output_window);
+    w->buffer = salloc(80);
+    strcpy(w->buffer, "Status: Initialisation");
+}

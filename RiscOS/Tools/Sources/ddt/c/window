@@ -1,0 +1,2198 @@
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "quickdraw.h"
+#include "bin.h"
+#include "ddt.h"
+#include "source.h"
+#include "window.h"
+
+#define TITLE_H       44
+#define MENU_H        36
+
+#define ADJUST_BOX_CHAR 131
+#define CLOSE_BOX_CHAR 132
+#define LEFT_ARROW_CHAR 136
+#define RIGHT_ARROW_CHAR 137
+#define DOWN_ARROW_CHAR 138
+#define UP_ARROW_CHAR 139
+
+#define WIMP_PALETTE_SIZE 80
+
+typedef struct VDU_Save_State {
+    int spriteop;
+    Sprite_Area *area;
+    void *sprite;
+    void *save_area;
+    int pointer_shape;
+    int bank;
+    int mouse_palette[3];
+    int fn_keys;
+    int shift_keys;
+    int ctrl_keys;
+    int shift_keys2;
+    int print_job;
+} VDU_Save_State;
+
+struct WindowHandle {
+    struct WindowHandle *next;
+    Rect r;
+    Window *w;
+    Get_Line_Fn getline;
+    Mouse_Click_Fn mouse_click;
+    Scroll_Request_Fn scroll_request;
+    union Icon_Click_Fn_or_WindowHandle {
+        Icon_Click_Fn icon_click;
+        WindowHandle *sub_window;
+    } icon_action[1];
+};
+
+WindowHandle *windowlist;
+int window_initialised;
+
+static VDU_Save_State vdu_saved_state; /* {} */
+static int spritesize;
+static Sprite_Area *sprite;
+static void *sprite_ptr;
+static int no_entry_status;
+static int buttons, mouse_x, mouse_y;
+static int last_buttons, last_mouse_x, last_mouse_y;
+static int cursor_key_state;
+static char ddt_chars[8][10] = {
+    { 23, DDT_ARROW_CHAR,   0x00, 0x1c, 0x1e, 0xff, 0xff, 0x1e, 0x1c, 0x00 },
+    { 23, DDT_BREAK_CHAR,   0x00, 0x3c, 0x7e, 0x7e, 0x7e, 0x7e, 0x3c, 0x00 },
+    { 23, ADJUST_BOX_CHAR,  0xfe, 0x92, 0x92, 0xf2, 0x82, 0x82, 0xfe, 0x00 },
+    { 23, CLOSE_BOX_CHAR,   0x66, 0x99, 0x81, 0x42, 0x81, 0x99, 0x66, 0x00 },
+    { 23, LEFT_ARROW_CHAR,  0x18, 0x28, 0x4f, 0x81, 0x4f, 0x28, 0x18, 0x00 },
+    { 23, RIGHT_ARROW_CHAR, 0x18, 0x14, 0xf2, 0x81, 0xf2, 0x14, 0x18, 0x00 },
+    { 23, DOWN_ARROW_CHAR,  0x3c, 0x24, 0x24, 0xe7, 0x42, 0x24, 0x18, 0x00 },
+    { 23, UP_ARROW_CHAR,    0x18, 0x24, 0x42, 0xe7, 0x24, 0x24, 0x3c, 0x00 }
+};
+static char saved_chars[8][10] = {
+    { 23, DDT_ARROW_CHAR },
+    { 23, DDT_BREAK_CHAR },
+    { 23, ADJUST_BOX_CHAR },
+    { 23, CLOSE_BOX_CHAR },
+    { 23, LEFT_ARROW_CHAR },
+    { 23, RIGHT_ARROW_CHAR },
+    { 23, DOWN_ARROW_CHAR },
+    { 23, UP_ARROW_CHAR }
+};
+
+static Icon *caret_icon;
+static int caret_pos;
+
+#define MAX_MENUS 4
+
+static WindowHandle *menus[MAX_MENUS];
+static int nmenus;
+
+static Key_Press_Fn key_event_handler;
+
+static Rect *rect_intersection(Rect *dest_rect, Rect *r1, Rect *r2)
+{
+    *dest_rect = *r2;
+    if (dest_rect->minx < r1->minx)
+        dest_rect->minx = r1->minx;
+    if (dest_rect->maxx > r1->maxx)
+        dest_rect->maxx = r1->maxx;
+    if (dest_rect->miny < r1->miny)
+        dest_rect->miny = r1->miny;
+    if (dest_rect->maxy > r1->maxy)
+        dest_rect->maxy = r1->maxy;
+    return dest_rect;
+}
+
+#define L_FLAG  (1 << 0)
+#define R_FLAG  (1 << 1)
+#define H_FLAG  (1 << 2)
+#define T_FLAG  (1 << 3)
+#define B_FLAG  (1 << 4)
+#define V_FLAG  (1 << 5)
+#define X_FLAG  (1 << 6)
+
+static int sprite_lookup[16] = {
+       L_FLAG | B_FLAG, L_FLAG | T_FLAG, R_FLAG | B_FLAG, R_FLAG | T_FLAG,
+       H_FLAG | B_FLAG, H_FLAG | T_FLAG, H_FLAG | B_FLAG, H_FLAG | B_FLAG,
+       L_FLAG | V_FLAG, L_FLAG | V_FLAG, R_FLAG | V_FLAG, R_FLAG | V_FLAG,
+       H_FLAG | V_FLAG, H_FLAG | V_FLAG, H_FLAG | V_FLAG, L_FLAG | V_FLAG
+};
+
+static int text_lookup[16] = {
+       L_FLAG | V_FLAG, L_FLAG | B_FLAG, R_FLAG | V_FLAG, R_FLAG | B_FLAG,
+       H_FLAG | V_FLAG, H_FLAG | B_FLAG, H_FLAG | V_FLAG, H_FLAG | T_FLAG,
+       L_FLAG | V_FLAG, X_FLAG | V_FLAG, R_FLAG | V_FLAG, L_FLAG | V_FLAG,
+       H_FLAG | V_FLAG, H_FLAG | V_FLAG, H_FLAG | V_FLAG, R_FLAG | V_FLAG
+};
+
+static int log2px;
+static int log2py;
+
+static int output_stream;
+static int first_flash_duration, second_flash_duration;
+static int old_screenmode;
+static int screenmode;
+static int lastmode = -1;
+static int sprite_log2bpp = -1;
+static int sprite_log2px = -1;
+static int sprite_log2py = -1;
+
+void get_spritesize(Icon *i, char *name, int *dx, int *dy)
+{
+    OS_SpriteOP_Block sb;
+
+    sb.sprite = name;
+    wimp_spriteop(OS_SPRITEOP_READ_SPRITE_INFO, &sb);
+    if (lastmode != sb.r6) {
+        lastmode = sb.r6;
+        sprite_log2bpp = os_readmodevariable(lastmode, OS_READMODE_LOG2BPP);
+        sprite_log2px = os_readmodevariable(lastmode, OS_READMODE_XEIGFACTOR);
+        sprite_log2py = os_readmodevariable(lastmode, OS_READMODE_YEIGFACTOR);
+    }
+    *dx = sb.r3 << sprite_log2px;
+    *dy = sb.r4 << sprite_log2py;
+    if (i->flags & IF_HALFSIZE) {
+        *dx = *dx / 2;
+        *dy = *dy / 2;
+    }
+}
+
+void plot_sprite(Icon *i, char *name, int x, int y)
+{
+    OS_SpriteOP_Block sb;
+    int factors[4];
+    unsigned char *pixtrans;
+
+/*
+    wimp_readpixtrans(OS_SPRITEOP_USER_NAME_PTR, 1, name, factors, pixtrans);
+*/
+    factors[0] = 1 << sprite_log2px;
+    factors[1] = 1 << sprite_log2py;
+    factors[2] = 1 << log2px;
+    factors[3] = 1 << log2py;
+    pixtrans = qd_pixtrans(sprite_log2bpp);
+    if (i->flags & IF_HALFSIZE) {
+        factors[2] = factors[2] * 2;
+        factors[3] = factors[3] * 2;
+    }
+    sb.sprite = name;
+    sb.r3 = x;
+    sb.r4 = y;
+    sb.r5 = 8;
+    if (1 || screenmode != lastmode || i->flags & IF_HALFSIZE) {
+        sb.r6 = (int)factors;
+        sb.r7 = (int)pixtrans;
+        wimp_spriteop(OS_SPRITEOP_PUT_SPRITE_SCALED, &sb);
+    } else {
+        wimp_spriteop(OS_SPRITEOP_PUT_SPRITE_USER, &sb);
+    }
+}
+
+static void draw_icon(Rect *r, Icon *i, int minx, int maxy)
+{
+    int maxx, miny;
+    int dx, dy;
+    int tmp;
+    int sprite_x, sprite_y;
+    int text_x, text_y;
+    int text_width, spaceinicon;
+    int flags;
+    int eorpending;
+    char *spritename, *cs, *ct;
+    Rect ir;
+    char name_buffer[16];
+
+    eorpending = 0;
+    maxx = minx + (i->r.maxx - i->r.minx);
+    miny = maxy - (i->r.maxy - i->r.miny);
+    /* Compare icon with clip rect, return if completely outside */
+    if (maxx < r->minx || minx > r->maxx || maxy < r->miny || miny > r->maxy)
+        return;
+    flags = i->flags;
+    if (flags & IF_DELETED)
+        return;
+    if (flags & IF_SPRITE) {
+        spritename = i->buffer;
+        if (flags & IF_TEXT &&
+                i->validstring && (*(i->validstring) & 0xdf) == 'S') {
+            ct = i->validstring + 1;
+            cs = name_buffer;
+            while (*ct >= ' ' && *ct != ',' && *ct != ';')
+                *cs++ = *ct++;
+            if (*ct++ == ',' && (flags & IF_INVERTED)) {
+                flags &= ~IF_INVERTED;
+                cs = name_buffer;
+                while (*ct >= ' ' && *ct != ',' && *ct != ';')
+                    *cs++ = *ct++;
+            }
+            *cs = 0;
+            spritename = name_buffer;
+        }
+        qd_setcolour(128 + IF_BACKGROUND(flags));
+        if ((flags & IF_TEXT) && (flags & IF_INVERTED)) {
+            if (flags & IF_FILLED) {
+                qd_fill_rect(minx, maxy, maxx, miny);
+                flags &= ~IF_FILLED;
+            }
+            qd_setcolour(128 + IF_FOREGROUND(flags));
+            qd_setcolour(IF_BACKGROUND(flags));
+        } else qd_setcolour(IF_FOREGROUND(flags));
+    } else if (flags & IF_FILLED) {
+        if (flags & IF_SHADED) flags &= IF_SHADECOLS;
+        if (flags & IF_INVERTED) {
+            qd_setcolour(IF_BACKGROUND(flags));
+            qd_setcolour(128 + IF_FOREGROUND(flags));
+        } else {
+            qd_setcolour(IF_FOREGROUND(flags));
+            qd_setcolour(128 + IF_BACKGROUND(flags));
+        }
+    } else {
+        qd_setcolour(IF_FOREGROUND(flags));
+        eorpending = 1;
+    }
+    if (flags & IF_FILLED)
+        qd_fill_rect(minx, maxy, maxx, miny);
+    if (flags & IF_SPRITE) {
+        get_spritesize(i, spritename, &dx, &dy);
+        tmp = flags & ~(IF_BORDER | IF_SPRITE);
+        if (flags & IF_RJUSTIFY)
+            tmp |= IF_BORDER;
+        if (flags & IF_TEXT)
+            tmp |= IF_SPRITE;
+        tmp = sprite_lookup[(tmp >> 1) & 0x0f];
+        if (tmp & L_FLAG)
+            sprite_x = minx;
+        if (tmp & H_FLAG)
+            sprite_x = (minx + maxx - dx) / 2;
+        if (tmp & R_FLAG)
+            sprite_x = maxx - dx;
+        if (tmp & T_FLAG)
+            sprite_y = maxy - dy;
+        if (tmp & V_FLAG)
+            sprite_y = (miny + maxy - dy) / 2;
+        if (tmp & B_FLAG)
+            sprite_y = miny;
+        plot_sprite(i, spritename, sprite_x, sprite_y);
+    }
+    if (flags & IF_TEXT) {
+        text_width = strlen(i->buffer) * X_CHAR;
+        spaceinicon = maxx - minx - text_width;
+        tmp = flags & ~IF_BORDER;
+        if (flags & IF_RJUSTIFY)
+            tmp |= IF_BORDER;
+        tmp = text_lookup[(tmp >> 1) & 0x0f];
+        if (tmp & X_FLAG) {
+            get_spritesize(i, spritename, &dx, &dy);
+            text_x = minx + dx + 6;
+        }
+        if (tmp & L_FLAG)
+            text_x = minx + 6;
+        if (tmp & H_FLAG)
+            text_x = minx + (maxx - minx - text_width) / 2;
+        if (tmp & R_FLAG)
+            text_x = maxx - text_width - 6;
+        if (tmp & T_FLAG)
+            text_y = maxy - Y_OS;
+        if (tmp & V_FLAG)
+            text_y = maxy - (maxy - miny - Y_CHAR) / 2;
+        if (tmp & B_FLAG)
+            text_y = miny + Y_CHAR + Y_OS;
+        if (spaceinicon < 6) {
+            ir.minx = minx;
+            ir.maxy = maxy;
+            ir.maxx = maxx;
+            ir.miny = miny;
+            set_graphics_window(rect_intersection(&ir, r, &ir));
+            if (caret_icon == i) {
+                tmp = text_x + caret_pos * X_CHAR;
+                if (tmp < minx + 6)
+                    text_x = minx + 6 - caret_pos * X_CHAR;
+                if (tmp > maxx - 6)
+                    text_x = maxx - 6 - caret_pos * X_CHAR;
+            }
+        }
+        if ((flags & IF_SPRITE) &&
+                ((flags & IF_INVERTED) || !(flags & IF_FILLED))) {
+            if (!*(i->buffer)) {
+                flags &= ~IF_FILLED;
+            } else {
+                qd_fill_rect((text_x - X_OS < minx) ? minx : text_x - X_OS,
+                    (text_y + Y_OS > maxy) ? maxy : text_y + Y_OS,
+                    (text_x + text_width > maxx) ? maxx : text_x + text_width,
+                    (text_y - Y_CHAR < miny) ? miny : text_y - Y_CHAR);
+            }
+        }
+        os_plot(PLOT_POINT + MOVE_ABS, text_x, text_y);
+        os_write0(i->buffer);
+        if (caret_icon == i) {
+            tmp = text_x + caret_pos * X_CHAR;
+            qd_vline(tmp, text_y, text_y - Y_CHAR + Y_OS);
+            os_plot(PLOT_POINT + PLOT_ABS_FGRND, tmp - X_OS, text_y + Y_OS);
+            os_plot(PLOT_POINT + PLOT_ABS_FGRND, tmp + X_OS, text_y + Y_OS);
+            os_plot(PLOT_POINT + PLOT_ABS_FGRND, tmp - X_OS, text_y - Y_CHAR);
+            os_plot(PLOT_POINT + PLOT_ABS_FGRND, tmp + X_OS, text_y - Y_CHAR);
+        }
+        if (spaceinicon < 6)
+            set_graphics_window(r);
+    }
+    if (flags & IF_BORDER)
+        qd_rect(minx, maxy, maxx, miny);
+    if (eorpending) {
+        if (flags & IF_INVERTED) {
+            qd_setcolour(128 + PLOT_ACTION_EOR + IF_BACKGROUND(flags));
+            qd_fill_rect(minx, maxy, maxx, miny);
+        }
+        if (flags & IF_SHADED) {
+            qd_setcolour(128 + PLOT_ACTION_AND + IF_BACKGROUND(flags));
+            qd_fill_rect(minx, maxy, maxx, miny);
+        }
+    }
+}
+
+static void set_window_bounds(WindowHandle *we, Rect *r)
+{
+    Window *w;
+    int d;
+    int x_os, y_os;
+
+    w = we->w;
+    x_os = 1 << log2px;
+    y_os = 1 << log2py;
+    d = ~(x_os - 1);
+    r->minx &= d;
+    r->maxx &= d;
+    d = ~(y_os - 1);
+    r->miny &= d;
+    r->maxy &= d;
+    we->r.minx = r->minx - X_OS;
+    we->r.maxy = r->maxy + ((w->flags & WF_TITLE) ? TITLE_H : y_os);
+    we->r.maxx = r->maxx + ((w->flags & WF_VSCROLL) ? TITLE_H : x_os);
+    we->r.miny = r->miny - ((w->flags & WF_HSCROLL) ? TITLE_H : y_os);
+    if (!(w->flags & WF_NOBOUNDS)) {
+        if (we->r.minx < 0) {
+            r->minx -= we->r.minx;
+            r->maxx -= we->r.minx;
+            we->r.maxx -= we->r.minx;
+            we->r.minx = 0;
+        }
+        if (we->r.miny < 0) {
+            r->miny -= we->r.miny;
+            r->maxy -= we->r.miny;
+            we->r.maxy -= we->r.miny;
+            we->r.miny = 0;
+        }
+        if (we->r.maxx > screen_maxx) {
+            d = we->r.maxx - screen_maxx;
+            r->minx -= d;
+            r->maxx -= d;
+            we->r.maxx -= d;
+            we->r.minx -= d;
+        }
+        if (we->r.maxy > screen_maxy) {
+            d = we->r.maxy - screen_maxy;
+            r->miny -= d;
+            r->maxy -= d;
+            we->r.maxy -= d;
+            we->r.miny -= d;
+        }
+    }
+    w->r = *r;
+}
+
+static void draw_window(WindowHandle *we, Rect *r)
+{
+    Window *w;
+    Rect ir;
+    int minx, maxy, maxx, miny;
+    int spaceinicon, text_width;
+    int scroll_t, scroll_b, scroll_w, scroll_o;
+    int x_os, y_os;
+
+    if (!set_graphics_window(r))
+        return;
+    x_os = 1 << log2px;
+    y_os = 1 << log2py;
+    w = we->w;
+    /* Paranoid set graphics mode here */
+    os_writec(SET_GRAPHICS_MODE);
+    qd_setcolour(w->frame);
+    qd_setcolour(128 + w->title_bgrnd);
+    qd_rect(we->r.minx, we->r.maxy, we->r.maxx, we->r.miny);
+    if (w->flags & WF_TITLE) {
+        minx = we->r.minx;
+        maxy = we->r.maxy;
+        maxx = we->r.maxx;
+        miny = w->r.maxy + y_os;
+        qd_fill_rect(minx + x_os, maxy - y_os, maxx - x_os, miny + y_os);
+        qd_hline(miny, minx, maxx);
+        if (w->flags & WF_CLOSE) {
+            os_plot(MOVE_ABS,
+                 minx + (TITLE_H - X_CHAR) / 2, maxy - (TITLE_H - Y_CHAR) / 2);
+            os_writec(CLOSE_BOX_CHAR);
+            os_plot(MOVE_ABS, minx + TITLE_H, maxy);
+            os_plot(PLOT_LINE_INCLUSIVE + PLOT_REL_FGRND, 0, -TITLE_H);
+            minx += TITLE_H;
+        }
+        text_width = strlen(w->buffer) * X_CHAR;
+        spaceinicon = maxx - minx - text_width;
+        if (spaceinicon < 6) {
+            ir.minx = minx;
+            ir.maxy = maxy;
+            ir.maxx = maxx;
+            ir.miny = miny;
+            set_graphics_window(rect_intersection(&ir, r, &ir));
+        }
+        os_plot(MOVE_ABS, minx + (maxx - minx - text_width) / 2,
+                                                maxy - (TITLE_H - Y_CHAR) / 2);
+        os_write0(w->buffer);
+        if (spaceinicon < 6)
+            set_graphics_window(r);
+    }
+    if (w->flags & WF_VSCROLL) {
+        minx = w->r.maxx + x_os;
+        maxy = w->r.maxy + y_os;
+        maxx = we->r.maxx;
+        miny = we->r.miny;
+        qd_vline(minx, miny, maxy);
+        if (w->flags & WF_ADJUST || w->flags & WF_HSCROLL)
+            miny += TITLE_H - y_os;
+        scroll_t = maxy - TITLE_H;
+        scroll_b = miny + TITLE_H;
+        scroll_w = ((w->r.maxy - w->r.miny) *
+                 (scroll_t - scroll_b - 2 * y_os)) / (w->ex.maxy - w->ex.miny);
+        if (scroll_w < 4 * Y_OS) scroll_w = 4 * y_os;
+        scroll_o = w->scy /
+                    ((w->ex.maxy - w->ex.miny) / (scroll_b - scroll_t)) + y_os;
+        if (scroll_o > scroll_t - scroll_b - scroll_w)
+            scroll_o = scroll_t - scroll_b - scroll_w;
+        qd_setcolour(128 + w->scroll_bgrnd);
+        qd_fill_rect(minx + x_os, scroll_t, maxx - x_os, scroll_b);
+        qd_rect(minx + 3 * x_os, scroll_t - scroll_o,
+                maxx - 3 * x_os, scroll_t - scroll_o - scroll_w + y_os);
+        qd_setcolour(128 + w->scroll_fgrnd);
+        qd_fill_rect(minx + 4 * x_os, scroll_t - scroll_o - y_os,
+                maxx - 4 * x_os, scroll_t - scroll_o - scroll_w + 2 * y_os);
+        qd_hline(scroll_t + y_os, minx, maxx);
+        qd_hline(scroll_b - y_os, minx, maxx);
+        qd_setcolour(128 + w->title_bgrnd);
+        qd_fill_rect(minx + x_os, maxy - y_os,
+                     maxx - x_os, scroll_t + 2 * y_os);
+        qd_fill_rect(minx + x_os, scroll_b - 2 * y_os,
+                     maxx - x_os, miny + y_os);
+        os_plot(MOVE_ABS, minx + (TITLE_H - X_CHAR) / 2,
+                          maxy - (TITLE_H - Y_CHAR) / 2);
+        os_writec(UP_ARROW_CHAR);
+        os_plot(MOVE_ABS, minx + (TITLE_H - X_CHAR) / 2,
+                          miny + TITLE_H - y_os - (TITLE_H - Y_CHAR) / 2);
+        os_writec(DOWN_ARROW_CHAR);
+    }
+    if (w->flags & WF_HSCROLL) {
+        minx = we->r.minx;
+        maxy = w->r.miny - y_os;
+        maxx = we->r.maxx;
+        miny = we->r.miny;
+        qd_hline(maxy, minx, maxx);
+        if (w->flags & WF_ADJUST || w->flags & WF_VSCROLL)
+            maxx -= TITLE_H - x_os;
+        scroll_t = minx + TITLE_H;
+        scroll_b = maxx - TITLE_H;
+        scroll_w = ((w->r.maxx - w->r.minx) *
+                 (scroll_b - scroll_t - 2 * x_os)) / (w->ex.maxx - w->ex.minx);
+        if (scroll_w < 4 * x_os) scroll_w = 4 * x_os;
+        scroll_o = (w->scx * (scroll_b - scroll_t)) /
+                                              (w->ex.maxx - w->ex.minx) + x_os;
+        if (scroll_o > scroll_b - scroll_t - scroll_w - 2 * x_os)
+            scroll_o = scroll_b - scroll_t - scroll_w - 2 * x_os;
+        qd_setcolour(128 + w->scroll_bgrnd);
+        qd_fill_rect(scroll_t, maxy - y_os, scroll_b, miny + y_os);
+        qd_rect(scroll_t + scroll_o, maxy - 2 * y_os,
+                scroll_t + scroll_o + scroll_w - x_os, miny + 2 * y_os);
+        qd_setcolour(128 + w->scroll_fgrnd);
+        qd_fill_rect(scroll_t + scroll_o + x_os, maxy - 3 * y_os,
+                scroll_t + scroll_o + scroll_w - 2 * X_OS, miny + 3 * y_os);
+        qd_vline(scroll_t - x_os, miny, maxy);
+        qd_vline(scroll_b + x_os, miny, maxy);
+        qd_setcolour(128 + w->title_bgrnd);
+        qd_fill_rect(minx + x_os, maxy - y_os,
+                     scroll_t - 2 * x_os, miny + y_os);
+        qd_fill_rect(scroll_b + 2 * x_os, maxy - y_os,
+                     maxx - x_os, miny + y_os);
+        os_plot(MOVE_ABS, minx + (TITLE_H - X_CHAR) / 2,
+                          maxy - (TITLE_H - Y_CHAR) / 2);
+        os_writec(LEFT_ARROW_CHAR);
+        os_plot(MOVE_ABS, maxx - TITLE_H + x_os + (TITLE_H - X_CHAR) / 2,
+                          maxy - (TITLE_H - Y_CHAR) / 2);
+        os_writec(RIGHT_ARROW_CHAR);
+    }
+    if (w->flags & WF_ADJUST ||
+            (w->flags & WF_HSCROLL && w->flags & WF_VSCROLL)) {
+        qd_fill_rect(we->r.maxx - TITLE_H + 2 * x_os,
+                     we->r.miny + TITLE_H - 2 * y_os,
+                     we->r.maxx - x_os,
+                     we->r.miny + y_os);
+    }
+    if (w->flags & WF_ADJUST) {
+        os_plot(MOVE_ABS,
+                we->r.maxx + x_os - TITLE_H + (TITLE_H - X_CHAR) / 2,
+                we->r.miny + TITLE_H - y_os - (TITLE_H - Y_CHAR) / 2);
+        os_writec(ADJUST_BOX_CHAR);
+    }
+}
+
+static void redraw_window(WindowHandle *we, Rect *r)
+{
+    int x, y;
+    int cxl, cyt, cxr, cyb;
+    int minx, maxy, maxx, miny;
+    int len, j;
+    char *line;
+    Get_Line_Fn getline;
+    Window *w;
+    Icon *i;
+
+    if (!set_graphics_window(r))
+        return;
+    w = we->w;
+    qd_setcolour(128 + w->work_bgrnd);
+    os_writec(CLEAR_GRAPHICS_WINDOW);
+    if ((getline = we->getline) != 0) {
+        qd_setcolour(w->work_fgrnd);
+        minx = w->scx + r->minx - w->r.minx;
+        maxy = w->r.maxy - r->maxy - w->scy;
+        maxx = minx + (r->maxx - r->minx);
+        miny = maxy + (r->maxy - r->miny);
+        cxl = minx >> 4;
+        cyt = maxy >> 5;
+        cxr = maxx >> 4;
+        cyb = miny >> 5;
+        x = r->minx - (minx & 0x0f);
+        y = r->maxy + (maxy & 0x1f);
+        for (j = cyt; j <= cyb; j++) {
+            line = getline(j);
+            len = strlen(line);
+            if (len > cxl) {
+                if (len > cxr)
+                    len = cxr + 1;
+                os_plot(PLOT_POINT + MOVE_ABS, x, y);
+                os_writen(line + cxl, len - cxl);
+            }
+            y -= 32;
+        }
+    }
+    i = w->icons;
+    for (j = 0; j < w->nicons; j++) {
+        minx = i->r.minx - w->scx + w->r.minx;
+        maxy = i->r.maxy - w->scy + w->r.maxy;
+/*
+        os_writec(4);
+        os_write0("Draw icon ");
+        wrhex(j);
+        os_write0("\r\n");
+        os_writec(5);
+*/
+        draw_icon(r, i, minx, maxy);
+        i++;
+    }
+}
+
+static void redraw_background(void)
+{
+    OS_SpriteOP_Block sb;
+
+    sb.area = sprite;
+    sb.sprite = sprite_ptr;
+    sb.r3 = 0;
+    sb.r4 = 0;
+    sb.r5 = 0;
+    os_spriteop(OS_SPRITEOP_PUT_SPRITE_USER | OS_SPRITEOP_USER_AREA_PTR, &sb);
+}
+
+#define SPRITE_OVERHEAD 0x400
+
+static void save_screen(void)
+{
+  OS_SpriteOP_Block sb;
+  int screensize;
+
+/* Screen size could have changed due to, for example, a mode change. If
+ * so free the old sprite area and allocate a new sprite area of the
+ * appropriate size. Note, the 1st time this is called the sprite size is 0 so
+ * a sprite area is allocated (the sprite area pointer must also be 0 for free
+ * to work)
+ */
+  screensize =
+          os_readmodevariable(-1, OS_READMODE_SCREENSIZE) + SPRITE_OVERHEAD;
+  if (screensize != spritesize) {
+      free(sprite);
+      spritesize = screensize;
+      sprite = malloc(spritesize, "Screen sprite");
+      sprite->size = spritesize;
+      sprite->nsprites = 0;
+      sprite->sproffset = 16;
+      sprite->freeoffset = 16;
+  }
+  screen_maxx = os_readmodevariable(-1, OS_READMODE_XWINDLIMIT) << log2px;
+  screen_maxy = os_readmodevariable(-1, OS_READMODE_YWINDLIMIT) << log2py;
+  sb.area = sprite;
+  sb.sprite = "dbgescreen";
+  /* MEDUSA - fix 0.5 size char problem */
+  sb.r3 = 0;
+  sb.r4 = 0;
+  sb.r5 = 0;
+  sb.r6 = screen_maxx;
+  sb.r7 = screen_maxy;
+  os_spriteop(OS_SPRITEOP_GET_SPRITE_USER | OS_SPRITEOP_USER_NAME_PTR, &sb);
+  sprite_ptr = sb.sprite;
+}
+
+static void resume_redraw(WindowHandle *we)
+{
+    if (we) {
+        resume_redraw(we->next);
+        draw_window(we, &(we->r));
+        redraw_window(we, &(we->w->r));
+    }
+}
+
+static char scale_vdu[2][10] = {
+    { 23, 17, 7, 2, 0, 0, 0, 0, 0, 0 },
+    { 23, 17, 7, 4, 0, 0, 0, 0, 0, 0 }
+};
+
+static char ptr_size_tbl[47] = {
+    0, 1, 1, 0, 0, 1, 0, 0,
+    0, 1, 1, 0, 0, 1, 0, 0,
+    0, 0, 3, 3, 3, 3, 0, 2,
+    0, 3, 3, 3, 3, 3, 3, 3,
+    3, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0,
+};
+
+static char arrow_data[] = {
+    0x05, 0x00, 0x00,
+    0x5d, 0x00, 0x00,
+    0xfd, 0x05, 0x00,
+    0xfd, 0x5f, 0x01,
+    0xfd, 0xff, 0x17,
+    0xfd, 0x5f, 0x15,
+    0x5d, 0x6d, 0x00,
+    0x15, 0xf4, 0x01,
+    0x00, 0xd0, 0x07,
+    0x00, 0x40, 0x1f,
+    0x00, 0x00, 0x15
+};
+
+static char small_arrow[] = {
+    0x01, 0x00,
+    0x05, 0x00,
+    0x1d, 0x00,
+    0x7d, 0x01,
+    0xfd, 0x07,
+    0x7d, 0x05,
+    0xd5, 0x00,
+    0xc5, 0x01,
+    0x40, 0x03,
+    0x00, 0x07,
+    0x00, 0x05
+};
+
+static char mode23_arrow[] = {
+    0x01, 0x00,
+    0x01, 0x00,
+    0x07, 0x00,
+    0x07, 0x00,
+    0x1f, 0x00,
+    0x1f, 0x00,
+    0x7f, 0x00,
+    0x7f, 0x00,
+    0xff, 0x01,
+    0xff, 0x01,
+    0x7f, 0x01,
+    0x7f, 0x01,
+    0x77, 0x00,
+    0x77, 0x00,
+    0xd1, 0x00,
+    0xd1, 0x00,
+    0xc0, 0x01,
+    0xc0, 0x01,
+    0x40, 0x03,
+    0x40, 0x03,
+    0x00, 0x01,
+    0x00, 0x01
+};
+
+static char mode20_arrow[] = {
+    0x05, 0x00, 0x00,
+    0x1d, 0x00, 0x00,
+    0x7d, 0x00, 0x00,
+    0xfd, 0x01, 0x00,
+    0xfd, 0x07, 0x00,
+    0xfd, 0x1f, 0x00,
+    0xfd, 0x7f, 0x00,
+    0xfd, 0xff, 0x01,
+    0xfd, 0xff, 0x07,
+    0xfd, 0xff, 0x1f,
+    0xfd, 0xff, 0x5f,
+    0xfd, 0xff, 0x05,
+    0xfd, 0xff, 0x01,
+    0x7d, 0x7d, 0x00,
+    0x1d, 0xf4, 0x01,
+    0x05, 0xf4, 0x01,
+    0x00, 0xd0, 0x07,
+    0x00, 0xd0, 0x07,
+    0x00, 0x40, 0x1f,
+    0x00, 0x40, 0x1f,
+    0x00, 0x00, 0x1d,
+    0x00, 0x00, 0x14
+};
+
+static char arrow_palette[] = {
+    19, 1, 25, 0x00, 0xff, 0xff,
+    19, 3, 25, 0x00, 0x00, 0x90
+};
+
+static void pointer_arrow(void)
+{
+    int word_block[3];
+    char *cp;
+    int size;
+
+    no_entry_status = 0;
+    os_writen(arrow_palette, sizeof(arrow_palette));
+    cp = ((char *)word_block) + 2;
+    cp[0] = MOUSEOP_DEFPTR;
+    cp[1] = 1;
+    cp[2] = 3;
+    cp[3] = 11;
+    cp[4] = 0;
+    cp[5] = 0;
+    if (screenmode > 255) {
+        if (os_readmodevariable(-1, OS_READMODE_YEIGFACTOR) <= 1)
+            size = 3;
+        else
+            size = 0;
+    }
+    else
+        size = screenmode > 46 ? 0 : ptr_size_tbl[screenmode];
+    switch (size) {
+        default:
+            word_block[2] = (int)arrow_data;
+            break;
+        case 1:
+            cp[2] = 2;
+            word_block[2] = (int)small_arrow;
+            break;
+        case 2:
+            cp[2] = 2;
+            cp[3] = 22;
+            word_block[2] = (int)mode23_arrow;
+            break;
+        case 3:
+            cp[3] = 22;
+            word_block[2] = (int)mode20_arrow;
+            break;
+    }
+    os_word(128 + OSWORD_MOUSEOP, cp);
+}
+
+static char no_entry_data[] = {
+    0x00, 0xc0, 0xff, 0xff, 0x00, 0x00,
+    0x00, 0xff, 0xff, 0xff, 0x3f, 0x00,
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0x03,
+    0xfc, 0xff, 0xff, 0xff, 0xff, 0x0f,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0xfc, 0xff, 0xff, 0xff, 0xff, 0x0f,
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0x03,
+    0x00, 0xff, 0xff, 0xff, 0x3f, 0x00,
+    0x00, 0xc0, 0xff, 0xff, 0x00, 0x00
+};
+
+static char small_no_entry[] = {
+    0x00, 0xff, 0x00,
+    0xf0, 0xff, 0x0f,
+    0xfc, 0xff, 0x3f,
+    0xfc, 0xff, 0x3f,
+    0x57, 0x55, 0xd5,
+    0x57, 0x55, 0xd5,
+    0x57, 0x55, 0xd5,
+    0xfc, 0xff, 0x3f,
+    0xfc, 0xff, 0x3f,
+    0xf0, 0xff, 0x0f,
+    0x00, 0xff, 0x00
+};
+
+static char mode23_no_entry[] = {
+    0xf0, 0x0f,
+    0xf0, 0x0f,
+    0xfc, 0x3f,
+    0xfc, 0x3f,
+    0xff, 0xff,
+    0xff, 0xff,
+    0x57, 0xd5,
+    0x57, 0xd5,
+    0x57, 0xd5,
+    0x57, 0xd5,
+    0xff, 0xff,
+    0xff, 0xff,
+    0xfc, 0x3f,
+    0xfc, 0x3f,
+    0xf0, 0x0f,
+    0xf0, 0x0f
+};
+
+static char mode20_no_entry[] = {
+    0x00, 0xc0, 0xff, 0xff, 0x00, 0x00,
+    0x00, 0xc0, 0xff, 0xff, 0x00, 0x00,
+    0x00, 0xff, 0xff, 0xff, 0x3f, 0x00,
+    0x00, 0xff, 0xff, 0xff, 0x3f, 0x00,
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0x03,
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0x03,
+    0xfc, 0xff, 0xff, 0xff, 0xff, 0x0f,
+    0xfc, 0xff, 0xff, 0xff, 0xff, 0x0f,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0x5f, 0x55, 0x55, 0x55, 0x55, 0x3d,
+    0xfc, 0xff, 0xff, 0xff, 0xff, 0x0f,
+    0xfc, 0xff, 0xff, 0xff, 0xff, 0x0f,
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0x03,
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0x03,
+    0x00, 0xff, 0xff, 0xff, 0x3f, 0x00,
+    0x00, 0xff, 0xff, 0xff, 0x3f, 0x00,
+    0x00, 0xc0, 0xff, 0xff, 0x00, 0x00,
+    0x00, 0xc0, 0xff, 0xff, 0x00, 0x00
+};
+
+static char no_entry_palette[] = {
+    19, 1, 25, 0xff, 0xff, 0xff,
+    19, 3, 25, 0xff, 0x00, 0x00
+};
+
+static void pointer_no_entry(void)
+{
+    int word_block[3];
+    char *cp;
+    int size;
+
+    no_entry_status = 1;
+    os_writen(no_entry_palette, sizeof(no_entry_palette));
+    cp = ((char *)word_block) + 2;
+    cp[0] = MOUSEOP_DEFPTR;
+    cp[1] = 1;
+    cp[2] = 6;
+    cp[3] = 11;
+    cp[4] = 11;
+    cp[5] = 5;
+    if (screenmode > 255) {
+        if (os_readmodevariable(-1, OS_READMODE_YEIGFACTOR) <= 1)
+            size = 3;
+        else
+            size = 0;
+    }
+    else
+        size = screenmode > 46 ? 0 : ptr_size_tbl[screenmode];
+    switch (size) {
+        default:
+            word_block[2] = (int)no_entry_data;
+            break;
+        case 1:
+            cp[2] = 3;
+            cp[4] = 5;
+            word_block[2] = (int)small_no_entry;
+            break;
+        case 2:
+            cp[2] = 2;
+            cp[3] = 16;
+            cp[4] = 4;
+            cp[5] = 8;
+            word_block[2] = (int)mode23_no_entry;
+            break;
+        case 3:
+            cp[3] = 22;
+            cp[5] = 11;
+            word_block[2] = (int)mode20_no_entry;
+            break;
+    }
+    os_word(128 + OSWORD_MOUSEOP, cp);
+}
+
+void window_cleanup(void)
+{
+    OS_SpriteOP_Block sb;
+
+    if (!(os_readmodevariable(-1, 0) & 1) && xwimp_readsysinfo(0) > 0) {
+        sb.area = 0;
+        sb.sprite = 0;
+        sb.r3 = 1;
+        os_spriteop(OS_SPRITEOP_SWITCH_OUTPUT, &sb);
+/*    FIXME - Note, may be in VDU 5 mode, but can't write VDU 4 because of WRCH
+              redirection.
+        os_writec(4);
+*/
+    }
+}
+
+void window_resume(void)
+{
+    OS_SpriteOP_Block sb;
+    int i;
+    char word_block[10];
+
+/* Save screen context (graphics window, colours, vdu queue ...) by redirecting
+ * output to screen. Context is saved in system save area so if a debuggee is
+ * using this then the screen may get garbled.
+ */
+    if (window_initialised)
+        return;
+    vdu_saved_state.print_job = pdriver_selectjob(0, 0);
+    claim_wrchv();
+    sb.area = 0;
+    sb.sprite = 0;
+    sb.r3 = 0;
+    vdu_saved_state.spriteop = os_spriteop(OS_SPRITEOP_SWITCH_OUTPUT, &sb);
+    vdu_saved_state.area = sb.area;
+    vdu_saved_state.sprite = sb.sprite;
+    vdu_saved_state.save_area = (void *)sb.r3;
+    vdu_saved_state.bank = os_byte(OSBYTE_WRITE_VDU_BANK,
+            os_byte(OSBYTE_READ_DISPLAY_BANK, 0, 255) & 0xff, 0);
+    output_stream = os_byte(OSBYTE_SPECIFY_OUTPUT, (1 << 4) | (1 << 2), 0) & 0xff;
+    first_flash_duration = os_byte(OSBYTE_1ST_FLASH_DURATION, 0, 0) & 0xff;
+    second_flash_duration = os_byte(OSBYTE_2ND_FLASH_DURATION, 1, 0) & 0xff;
+    screenmode = os_byte2(OSBYTE_READ_TEXT_CHAR, 0, 0);
+    old_screenmode = screenmode;
+    if (os_readmodevariable(-1, 0) & 1) {
+        os_writec(22);
+        os_writec(0);
+        screenmode = os_byte2(OSBYTE_READ_TEXT_CHAR, 0, 0);
+    }
+    cursor_key_state = os_byte(OSBYTE_CURSOR_KEYS, 2, 0) & 0xff;
+    for (i = 0; i < 8; i++)
+        os_word(WORD_READCHAR, &(saved_chars[i][1]));
+    os_writen((char *)ddt_chars, sizeof(ddt_chars));
+    vdu_saved_state.pointer_shape = os_byte(OSBYTE_POINTER, 1, 0);
+    for (i = 0; i < 3; i++)
+        vdu_saved_state.mouse_palette[i] = os_readpalette(i + 1, 25);
+    vdu_saved_state.fn_keys = os_byte(OSBYTE_PROG_FN_KEYS, 0x80, 0);
+    vdu_saved_state.shift_keys = os_byte(OSBYTE_PROG_SHIFT_FN_KEYS, 0x90, 0);
+    vdu_saved_state.ctrl_keys = os_byte(OSBYTE_PROG_CTRL_FN_KEYS, 0xa0, 0);
+    vdu_saved_state.shift_keys2 = os_byte(OSBYTE_PROG_SHIFT_KEYS2, 0xd0, 0);
+    log2bpp = os_readmodevariable(-1, OS_READMODE_LOG2BPP);
+    log2px = os_readmodevariable(-1, OS_READMODE_XEIGFACTOR);
+    log2py = os_readmodevariable(-1, OS_READMODE_YEIGFACTOR);
+    save_screen();
+    qd_read_gcols();
+    colourtrans_invalidatecache();
+    os_writec(RESTORE_DEFAULT_WINDOWS);
+    os_writec(SET_GRAPHICS_MODE);
+    scale_vdu[1][4] = scale_vdu[0][4] = 16 >> log2px;
+    scale_vdu[1][6] = scale_vdu[0][6] = 32 >> log2py;
+    os_writen((char *)scale_vdu, sizeof(scale_vdu));
+    no_entry_status = -1;
+    window_initialised = 1;
+    word_block[1] = MOUSEOP_SETBOUNDBOX;
+    *((short *)(word_block + 2)) = 0;
+    *((short *)(word_block + 4)) = 0;
+    *((short *)(word_block + 6)) = screen_maxx;
+    *((short *)(word_block + 8)) = screen_maxy;
+    os_word(OSWORD_MOUSEOP, word_block + 1);
+    resume_redraw(windowlist);
+}
+
+void window_init(void)
+{
+    sprite = 0;
+    spritesize = 0;
+    windowlist = 0;
+    caret_icon = 0;
+    nmenus = 0;
+    poll_intercept_flag = 1;
+    key_event_handler = 0;
+    window_resume();
+}
+
+void window_startup(void)
+{
+    window_initialised = 0;
+}
+
+static void restore_screen(void)
+{
+    redraw_background();
+#if 0
+    sb.area = sprite;
+    sb.sprite = sprite_ptr;
+    sb.r3 = 0;
+    sb.r4 = 0;
+    sb.r5 = 0;
+    os_spriteop(OS_SPRITEOP_PUT_SPRITE_USER | OS_SPRITEOP_USER_AREA_PTR, &sb);
+#endif
+}
+
+void window_closedown(void)
+{
+    OS_SpriteOP_Block sb;
+    int i;
+    char palette_str[6];
+    int entry;
+    extern int finished;
+
+    if (!window_initialised)
+        return;
+    window_initialised = 0;
+    os_writec(RESTORE_DEFAULT_WINDOWS);
+    restore_screen();
+    os_byte(OSBYTE_PROG_FN_KEYS, vdu_saved_state.fn_keys, 0);
+    os_byte(OSBYTE_PROG_SHIFT_FN_KEYS, vdu_saved_state.shift_keys, 0);
+    os_byte(OSBYTE_PROG_CTRL_FN_KEYS, vdu_saved_state.ctrl_keys, 0);
+    os_byte(OSBYTE_PROG_SHIFT_KEYS2, vdu_saved_state.shift_keys2, 0);
+    os_byte(OSBYTE_WRITE_VDU_BANK, vdu_saved_state.bank, 0);
+    palette_str[0] = 19;
+    palette_str[2] = 25;
+    for (i = 0; i < 3; i++) {
+        entry = vdu_saved_state.mouse_palette[i];
+        palette_str[1] = i + 1;
+        palette_str[3] = (entry >> 8) & 0xff;
+        palette_str[4] = (entry >> 16) & 0xff;
+        palette_str[5] = (entry >> 24) & 0xff;
+        os_writen(palette_str, sizeof(palette_str));
+    }
+    restore_mouse();
+    os_byte(OSBYTE_POINTER, vdu_saved_state.pointer_shape, 0);
+    sb.area = vdu_saved_state.area;
+    sb.sprite = vdu_saved_state.sprite;
+    sb.r3 = (int)vdu_saved_state.save_area;
+    os_spriteop(vdu_saved_state.spriteop, &sb);
+    os_writen((char *)saved_chars, sizeof(saved_chars));
+    os_byte(OSBYTE_CURSOR_KEYS, cursor_key_state, 0);
+    colourtrans_invalidatecache();
+    if (old_screenmode != screenmode) {
+        if (old_screenmode < 256) {
+            os_writec(22);
+            os_writec(old_screenmode);
+        }
+        else
+            os_screenmode(0, old_screenmode);
+    }
+    os_byte(OSBYTE_1ST_FLASH_DURATION, first_flash_duration, 0);
+    os_byte(OSBYTE_2ND_FLASH_DURATION, second_flash_duration, 0);
+    os_byte(OSBYTE_SPECIFY_OUTPUT, output_stream, 0);
+    release_wrchv();
+
+    if (vdu_saved_state.print_job)
+    {
+        if (finished)
+            pdriver_abortjob(vdu_saved_state.print_job);
+        else
+            pdriver_selectjob(vdu_saved_state.print_job, 0);
+    }
+
+    poll_intercept_flag = 0;
+}
+
+static void redraw_intersection(WindowHandle *we, Rect *r)
+{
+    Rect ir;
+
+    rect_intersection(&ir, &(we->r), r);
+    draw_window(we, &ir);
+    rect_intersection(&ir, &(we->w->r), r);
+    redraw_window(we, &ir);
+}
+
+static void invalrect(WindowHandle *l, Rect *r)
+{
+    if (l) {
+        if (r->minx <= l->r.minx || r->maxx >= l->r.maxx ||
+                r->miny <= l->r.miny || r->maxy >= l->r.maxy)
+            invalrect(l->next, r);
+        redraw_intersection(l, r);
+        return;
+    }
+    if (!set_graphics_window(r))
+        return;
+    redraw_background();
+}
+
+extern void invalid_rect(WindowHandle *we, Rect r)
+{
+    Window *w;
+
+    if (we) {
+        w = we->w;
+        r.minx = r.minx - w->scx + w->r.minx;
+        r.maxy = r.maxy - w->scy + w->r.maxy;
+        r.maxx = r.maxx - w->scx + w->r.minx;
+        r.miny = r.miny - w->scy + w->r.maxy;
+    }
+    invalrect(windowlist, &r);
+}
+
+static WindowHandle *find_icons_window(Icon *i)
+{
+    WindowHandle *l;
+    Window *w;
+
+    l = windowlist;
+    while (l) {
+        w = l->w;
+        if (i >= w->icons && i < w->icons + w->nicons)
+            return l;
+        l = l->next;
+    }
+    return 0;
+}
+
+void close_window(WindowHandle *we)
+{
+    WindowHandle **lp, *l;
+
+    lp = &windowlist;
+    while ((l = *lp) != 0) {
+        if (l == we) {
+            *lp = l->next;
+            invalid_rect(0, l->r);
+            return;
+        }
+        lp = &(l->next);
+    }
+}
+
+void open_window(WindowHandle *we, Rect *r, int update)
+{
+    Rect old_r, new_r, inv_r;
+    Icon *ip, *tmpi;
+    int i;
+    WindowHandle *l, **lp;
+
+    if (we == windowlist && !update) {
+        old_r = we->r;
+        set_window_bounds(we, r);
+        new_r = we->r;
+        if (old_r.minx != new_r.minx || old_r.maxy != new_r.maxy) {
+            qd_copy_rect(&old_r, &new_r);
+            if (new_r.miny >= old_r.miny) {
+                inv_r = old_r;
+                if (old_r.maxy > new_r.miny)
+                    inv_r.maxy = new_r.miny;
+                invalid_rect(0, inv_r);
+            }
+            if (new_r.maxy <= old_r.maxy) {
+                inv_r = old_r;
+                if (old_r.miny < new_r.maxy)
+                    inv_r.miny = new_r.maxy;
+                invalid_rect(0, inv_r);
+            }
+            if (new_r.minx >= old_r.minx) {
+                inv_r = old_r;
+                if (old_r.maxx > new_r.minx)
+                    inv_r.maxx = new_r.minx;
+                if (inv_r.miny < new_r.miny)
+                    inv_r.miny = new_r.miny;
+                if (inv_r.maxy > new_r.maxy)
+                    inv_r.maxy = new_r.maxy;
+                invalid_rect(0, inv_r);
+            }
+            if (new_r.maxx <= old_r.maxx) {
+                inv_r = old_r;
+                if (old_r.minx < new_r.maxx)
+                    inv_r.minx = new_r.maxx;
+                if (inv_r.miny < new_r.miny)
+                    inv_r.miny = new_r.miny;
+                if (inv_r.maxy > new_r.maxy)
+                    inv_r.maxy = new_r.maxy;
+                invalid_rect(0, inv_r);
+            }
+#if 0
+/*  FIXME - If windows are bounded to screen delete the following */
+            if (old_r.miny < 0) {
+                inv_r = new_r;
+                inv_r.maxy = inv_r.miny - old_r.miny;
+                invalid_rect(0, inv_r);
+            }
+            if (old_r.maxy > screen_maxy) {
+                inv_r = new_r;
+                inv_r.miny = inv_r.maxy - (old_r.maxy - screen_maxy);
+                invalid_rect(0, inv_r);
+            }
+            if (old_r.minx < 0) {
+                inv_r = new_r;
+                inv_r.maxx = inv_r.minx - old_r.minx;
+                if (old_r.miny < 0)
+                    inv_r.miny -= old_r.miny;
+                if (old_r.maxy > screen_maxy)
+                    inv_r.maxy -= old_r.maxy - screen_maxy;
+                invalid_rect(0, inv_r);
+            }
+            if (old_r.maxx > screen_maxx) {
+                inv_r = new_r;
+                inv_r.minx = inv_r.maxx - (old_r.maxx - screen_maxx);
+                if (old_r.miny < 0)
+                    inv_r.miny -= old_r.miny;
+                if (old_r.maxy > screen_maxy)
+                    inv_r.maxy -= old_r.maxy - screen_maxy;
+                invalid_rect(0, inv_r);
+            }
+#endif
+        } else if (old_r.maxx != new_r.maxx || old_r.miny != new_r.miny) {
+            draw_window(we, &(we->r));
+            if (new_r.miny > old_r.miny) {
+                inv_r = old_r;
+                inv_r.maxy = new_r.miny;
+                invalid_rect(0, inv_r);
+            }
+            if (new_r.maxx < old_r.maxx) {
+                inv_r = old_r;
+                inv_r.minx = new_r.maxx;
+                if (new_r.miny > old_r.miny)
+                    inv_r.miny = new_r.miny;
+                invalid_rect(0, inv_r);
+            }
+            if (we->w->flags & WF_VSCROLL) {
+                old_r.maxx -= TITLE_H;
+                new_r.maxx -= TITLE_H;
+            }
+            if (we->w->flags & WF_HSCROLL) {
+                old_r.miny += TITLE_H;
+                new_r.miny += TITLE_H;
+            }
+            if (new_r.miny < old_r.miny) {
+                inv_r = new_r;
+                inv_r.maxy = old_r.miny;
+                invalid_rect(0, inv_r);
+            }
+            if (new_r.maxx > old_r.maxx) {
+                inv_r = new_r;
+                inv_r.minx = old_r.maxx;
+                if (new_r.miny < old_r.miny)
+                    inv_r.miny = old_r.miny;
+                invalid_rect(0, inv_r);
+            }
+        }
+    } else {
+        lp = &windowlist;
+        while ((l = *lp) != 0) {
+            if (l == we) {
+                *lp = l->next;
+                if (r->minx != we->w->r.minx || r->maxy != we->w->r.maxy ||
+                        r->maxx != we->w->r.maxx || r->miny != we->w->r.miny)
+                    invalid_rect(0, we->r);
+                break;
+            }
+            lp = &(l->next);
+        }
+        we->next = windowlist;
+        windowlist = we;
+        set_window_bounds(we, r);
+        for (ip = we->w->icons, i = 0; i < we->w->nicons; i++, ip++) {
+            if (IF_BUTTON(ip->flags) == B_WRITEABLE) {
+                if (caret_icon != ip) {
+                    tmpi = caret_icon;
+                    caret_icon = 0;
+                    l = find_icons_window(tmpi);
+                    if (l != we)
+                        invalid_rect(l, tmpi->r);
+                }
+                caret_icon = ip;
+                caret_pos = strlen(ip->buffer);
+                break;
+            }
+        }
+        draw_window(we, &(we->r));
+        redraw_window(we, r);
+    }
+}
+
+/* Open a window as a menu, the window handles are stored in the menus array
+ * so they can be closed when the user clicks outside the menu tree.
+ * The level argument indicates the depth of the menu in the tree. All menu
+ * at or deeper than this are closed before the new menu is opened.
+ */
+void open_menu(WindowHandle *we, Rect *r, int update, int level)
+{
+    int i;
+
+    if (level == MAX_MENUS)
+        fatal(TOO_MANY_MENUS, "DDT: Too many menus");
+    for (i = nmenus - 1; i > level; i--)
+        close_window(menus[i]);
+    if (i == level && we != menus[i])
+        close_window(menus[i]);
+    open_window(we, r, update);
+    nmenus = level;
+    menus[nmenus++] = we;
+}
+
+void close_menus(WindowHandle *we)
+{
+    int i;
+
+    for (i = 0; i < nmenus; i++)
+        if (we == menus[i])
+            return;
+    for (i = nmenus - 1; i >= 0; i--)
+        close_window(menus[i]);
+    nmenus = 0;
+}
+
+void set_scroll_offsets(WindowHandle *we, int scx, int scy)
+{
+    Window *w;
+    int minx, maxy, maxx, miny;
+    Rect old_r, new_r;
+    int dx, dy;
+    int x_os, y_os;
+
+    w = we->w;
+    scx &= ~(X_OS - 1);
+    scy &= ~(Y_OS - 1);
+    minx = w->ex.minx;
+    maxx = w->ex.maxx - (w->r.maxx - w->r.minx);
+    maxy = w->ex.maxy;
+    miny = w->ex.miny + (w->r.maxy - w->r.miny);
+    if (scx < minx) scx = minx;
+    if (scx > maxx) scx = maxx;
+    if (scy < miny) scy = miny;
+    if (scy > maxy) scy = maxy;
+    if (we != windowlist) {
+        we->w->scx = scx;
+        we->w->scy = scy;
+        new_r = we->w->r;
+        open_window(we, &new_r, 1);
+/*
+        close_window(we);
+        we->w->scx = scx;
+        we->w->scy = scy;
+        we->next = windowlist;
+        windowlist = we;
+        set_window_bounds(we, &(we->w->r));
+        draw_window(we, &(we->r));
+        redraw_window(we, &(we->w->r));
+*/
+        return;
+    }
+    dx = scx - w->scx;
+    dy = scy - w->scy;
+    x_os = 1 << log2px;
+    y_os = 1 << log2py;
+    if (dy) {
+        old_r = w->r;
+        new_r = w->r;
+        if (dy < w->r.maxy - w->r.miny && dy > w->r.miny - w->r.maxy) {
+            if (dy > 0) {
+                old_r.miny += dy;
+                new_r.maxy -= dy;
+            } else {
+                old_r.maxy -= -dy;
+                new_r.miny += -dy;
+            }
+            qd_copy_rect(&old_r, &new_r);
+        }
+        if (dy > 0) {
+            old_r.miny = old_r.maxy - dy + y_os;
+            if (old_r.miny < w->r.miny)
+                old_r.miny = w->r.miny;
+        } else {
+            old_r.maxy = old_r.miny + -dy - y_os;
+            if (old_r.maxy > w->r.maxy)
+                old_r.maxy = w->r.maxy;
+        }
+        w->scy = scy;
+        invalid_rect(0, old_r);
+        if (w->flags & WF_VSCROLL) {
+            old_r.maxx = we->r.maxx - x_os;
+            old_r.minx = w->r.maxx + 2 * x_os;
+            old_r.maxy = w->r.maxy - TITLE_H;
+            old_r.miny = we->r.miny + TITLE_H;
+            if (w->flags & WF_ADJUST || w->flags & WF_HSCROLL)
+                old_r.miny += TITLE_H;
+            invalid_rect(0, old_r);
+        }
+    }
+    if (dx) {
+        old_r = w->r;
+        new_r = w->r;
+        if (dx < w->r.maxx - w->r.minx && dx > w->r.minx - w->r.maxx) {
+            if (dx > 0) {
+                old_r.minx += dx;
+                new_r.maxx -= dx;
+            } else {
+                old_r.maxx -= -dx;
+                new_r.minx += -dx;
+            }
+            qd_copy_rect(&old_r, &new_r);
+        }
+        if (dx > 0) {
+            old_r.minx = old_r.maxx - dx + x_os;
+            if (old_r.minx < w->r.minx)
+                old_r.minx = w->r.minx;
+        } else {
+            old_r.maxx = old_r.minx + -dx - x_os;
+            if (old_r.maxx > w->r.maxx)
+                old_r.maxx = w->r.maxx;
+        }
+        w->scx = scx;
+        invalid_rect(0, old_r);
+        if (w->flags & WF_HSCROLL) {
+            old_r.maxy = w->r.miny - 2 * y_os;
+            old_r.miny = we->r.miny + y_os;
+            old_r.minx = we->r.minx + TITLE_H;
+            old_r.maxx = we->r.maxx - TITLE_H;
+            if (w->flags & WF_ADJUST || w->flags & WF_VSCROLL)
+                old_r.maxx -= TITLE_H;
+            invalid_rect(0, old_r);
+        }
+    }
+}
+
+WindowHandle *create_window(Window *w)
+{
+    WindowHandle *we;
+    int i;
+
+    we = malloc(sizeof(WindowHandle) + w->nicons * sizeof(Icon_Click_Fn), "WindowHandle");
+    we->w = w;
+    we->getline = 0;
+    we->mouse_click = 0;
+    we->scroll_request = 0;
+    for (i = 0; i < w->nicons; i++)
+        we->icon_action[i].icon_click = 0;
+    return we;
+}
+
+void set_window_fns(WindowHandle *we,
+                    Get_Line_Fn getline,
+                    Mouse_Click_Fn mouse_click,
+                    Scroll_Request_Fn scroll_request)
+{
+    we->getline = getline;
+    we->mouse_click = mouse_click;
+    we->scroll_request = scroll_request;
+}
+
+void set_icon_proc(WindowHandle *we, int icon, Icon_Click_Fn fn)
+{
+    we->icon_action[icon].icon_click = fn;
+}
+
+void set_icon_window(WindowHandle *we, int icon, WindowHandle **sub)
+{
+    we->icon_action[icon].sub_window = *sub;
+}
+
+void set_icon_procs(WindowHandle *we, IconProcList *iconprocs)
+{
+    while (iconprocs->fn) {
+        set_icon_proc(we, iconprocs->icon, iconprocs->fn);
+        iconprocs++;
+    }
+}
+
+void set_icon_flags(WindowHandle *we, int icon, int mask, int value)
+{
+    Icon *i;
+    int flags;
+
+    i = &(we->w->icons[icon]);
+    flags = i->flags;
+    flags = (flags & ~mask) ^ value;
+    if (flags != i->flags) {
+        if (i == caret_icon && (flags & IF_SHADED))
+            caret_icon = 0;
+        i->flags = flags;
+        if (window_is_open(we))
+            invalid_rect(we, i->r);
+    }
+}
+
+WindowHandle *create_menu(char *title, MenuStr *menus)
+{
+    Window *w;
+    WindowHandle *we;
+    MenuStr *ms;
+    int n, m;
+    int l, maxlen;
+    Icon *ip;
+    int i;
+
+    maxlen = strlen(title);
+    n = 0;
+    m = 0;
+    ms = menus;
+    while (ms->item) {
+        l = strlen(ms->item);
+        if (l > maxlen)
+            maxlen = l;
+        n++;
+        if (ms->window)
+            m++;
+        ms++;
+    }
+    w = malloc(sizeof(Window) + (n + m) * sizeof(Icon), "Window");
+    w->scx = 0;
+    w->scy = 0;
+    w->flags = WF_TITLE;
+    w->frame = 0;
+    w->title_bgrnd = 4;
+    w->work_bgrnd = 0;
+    w->title_flags = IF_TEXT + IF_HCENTRED + IF_VCENTRED + IF_FILLED;
+    w->buffer = title;
+    w->nicons = n + m;
+    w->r.minx = 0;
+    w->r.maxy = 0;
+    w->r.miny = -n * MENU_H;
+    w->r.maxx = (maxlen + 2) * X_CHAR;
+    if (m) w->r.maxx += X_CHAR;
+    w->ex = w->r;
+    we = create_window(w);
+    ms = menus;
+    ip = w->icons;
+    l = 0;
+    i = 0;
+    while (ms->item) {
+        ip->buffer = ms->item;
+        ip->flags = IF_TEXT | IF_VCENTRED | IF_FILLED |
+                    (B_MENU << 12) | (7 << 24) | (0 << 28);
+        ip->r.minx = X_CHAR - 2 * X_OS;
+        ip->r.maxx = (maxlen + 1) * X_CHAR + X_OS;
+        ip->r.maxy = l;
+        ip->r.miny = l - MENU_H + Y_OS;
+        set_icon_proc(we, i, ms->fn);
+        l -= MENU_H;
+        i++;
+        ip++;
+        ms++;
+    }
+    ms = menus;
+    l = -Y_OS;
+    while (ms->item) {
+        if (ms->window) {
+            ip->buffer = "\211";  /* 137 decimal = right arrow char */
+            ip->flags = IF_TEXT | IF_VCENTRED | IF_FILLED |
+                        (B_ALWAYS << 12) | (7 << 24) | (0 << 28);
+            ip->r.minx = w->r.maxx - X_CHAR - 4 * X_OS;
+            ip->r.maxx = w->r.maxx - X_OS;
+            ip->r.maxy = l;
+            ip->r.miny = l - MENU_H + Y_OS;
+            set_icon_window(we, i, ms->window);
+            i++;
+            ip++;
+        }
+        l -= MENU_H;
+        ms++;
+    }
+    return we;
+}
+
+void delete_window(WindowHandle *we)
+{
+    close_window(we);
+    free(we);
+}
+
+static int readmouse(int *x, int *y)
+{
+    last_buttons = buttons;
+    last_mouse_x = mouse_x;
+    last_mouse_y = mouse_y;
+    buttons = os_mouse(&mouse_x, &mouse_y, 0);
+    *x = mouse_x;
+    *y = mouse_y;
+    return buttons;
+}
+
+WindowHandle *window_is_open(WindowHandle *we)
+{
+    WindowHandle *l;
+
+    l = windowlist;
+    while (l) {
+        if (l == we)
+            return l;
+        l = l->next;
+    }
+    return 0;
+}
+
+Rect *visible_rect(Rect *r, WindowHandle *we)
+{
+    *r = we->w->r;
+    return r;
+}
+
+Rect *icon_rect(Rect *r, WindowHandle *we, int i)
+{
+    *r = we->w->icons[i].r;
+    return r;
+}
+
+char *get_icon_buffer(WindowHandle *we, int i)
+{
+    return we->w->icons[i].buffer;
+}
+
+int get_icon_state(WindowHandle *we, int i)
+{
+    return (we->w->icons[i].flags & IF_INVERTED) != 0;
+}
+
+void set_icon_state(WindowHandle *we, int i, int state)
+{
+    we->w->icons[i].flags &= ~IF_INVERTED;
+    if (state)
+        we->w->icons[i].flags |= IF_INVERTED;
+}
+
+Window *get_window_info(WindowHandle *we)
+{
+    return we->w;
+}
+
+#define MOUSE_DELAY 10
+
+static void mouse_delay(int b)
+{
+    int t;
+    int x, y;
+
+    t = os_readmonotonictime() + MOUSE_DELAY;
+    while ((readmouse(&x, &y) & b) && os_readmonotonictime() < t);
+}
+
+static void mouse_click_frame(WindowHandle *we, int x, int y, int b)
+{
+    Window *w;
+    int flags;
+    Rect r;
+    int dx, dy;
+    int minx, maxy, maxx, miny;
+    int scroll_t, scroll_b, scroll_w, scroll_o;
+
+    if (b & MIDDLE_BUTTON) return;
+    w = we->w;
+    flags = w->flags;
+    if ((flags & WF_TITLE) && y > we->r.maxy - TITLE_H) {
+        if ((flags & WF_CLOSE) && x < we->r.minx + TITLE_H) {
+            close_window(we);
+            return;
+        }
+        dx = x - w->r.minx;
+        dy = y - w->r.maxy;
+        while (readmouse(&x, &y) & b) {
+            r.minx = x - dx;
+            r.maxy = y - dy;
+            r.maxx = r.minx + (w->r.maxx - w->r.minx);
+            r.miny = r.maxy - (w->r.maxy - w->r.miny);
+            open_window(we, &r, 0);
+        }
+        return;
+    }
+    if (flags & WF_ADJUST) {
+        if (x > we->r.maxx - TITLE_H && y < we->r.miny + TITLE_H) {
+            dx = x - w->r.maxx;
+            dy = y - w->r.miny;
+            r.minx = w->r.minx;
+            r.maxy = w->r.maxy;
+            while (readmouse(&x, &y) & b) {
+                r.maxx = x - dx;
+                r.miny = y - dy;
+                maxx = r.maxx + ((w->flags & WF_VSCROLL) ? TITLE_H : X_OS) + X_OS;
+                miny = r.miny - ((w->flags & WF_HSCROLL) ? TITLE_H : Y_OS);
+                if (!(w->flags & WF_NOBOUNDS)) {
+                    if (maxx > screen_maxx)
+                        r.maxx -= maxx - screen_maxx;
+                    if (miny < 0)
+                        r.miny -= miny;
+                }
+                if (r.maxx - r.minx < 5 * TITLE_H)
+                    r.maxx = r.minx + 5 * TITLE_H;
+                if (r.maxy - r.miny < 3 * TITLE_H)
+                    r.miny = r.maxy - 3 * TITLE_H;
+                if (r.maxx - r.minx > w->ex.maxx - w->ex.minx)
+                    r.maxx = r.minx + (w->ex.maxx - w->ex.minx);
+                if (r.maxy - r.miny > w->ex.maxy - w->ex.miny)
+                    r.miny = r.maxy - (w->ex.maxy - w->ex.miny);
+                if (w->scy - (r.maxy - r.miny) < w->ex.miny)
+                    set_scroll_offsets(we, w->scx, w->ex.miny);
+                if (w->scx + (r.maxx - r.minx) > w->ex.maxx)
+                    set_scroll_offsets(we, w->ex.maxx, w->scy);
+                open_window(we, &r, 0);
+            }
+            return;
+        }
+    }
+    /* Don't allow vertical scroll if click on single pixel left edge */
+    if (flags & WF_VSCROLL && x > w->r.minx) {
+        maxy = w->r.maxy + Y_OS;
+        miny = we->r.miny;
+        if (flags & WF_ADJUST || flags & WF_HSCROLL)
+            miny += TITLE_H - Y_OS;
+        scroll_t = maxy - TITLE_H;
+        scroll_b = miny + TITLE_H;
+        scroll_w = ((w->r.maxy - w->r.miny) *
+                 (scroll_t - scroll_b - 2 * Y_OS)) / (w->ex.maxy - w->ex.miny);
+        if (scroll_w < 4 * Y_OS) scroll_w = 4 * Y_OS;
+        scroll_o = w->scy /
+                    ((w->ex.maxy - w->ex.miny) / (scroll_b - scroll_t)) + Y_OS;
+        if (scroll_o > scroll_t - scroll_b - scroll_w)
+            scroll_o = scroll_t - scroll_b - scroll_w;
+        dy = y - (scroll_t - scroll_o);
+        if (y <= scroll_t - scroll_o && y > scroll_t - scroll_o - scroll_w) {
+            while (readmouse(&x, &y) & b) {
+                scroll_o = scroll_t - (y - dy);
+                set_scroll_offsets(we, w->scx, scroll_o *
+                          ((w->ex.miny - w->ex.maxy) / (scroll_t - scroll_b)));
+            }
+            return;
+        } else {
+            dy = 0;
+            if (y > scroll_t) dy = 1;
+            if (y <= scroll_b && y > miny) dy = -1;
+            if (y <= scroll_t && y > scroll_t - scroll_o) dy = 2;
+            if (y > scroll_b && y <= scroll_t - scroll_o - scroll_w) dy = -2;
+            if (dy) {
+                if (b & RIGHT_BUTTON) dy = -dy;
+                we->scroll_request(we, w->scx, w->scy, 0, dy);
+                mouse_delay(b);
+                while (dy & 1 && readmouse(&x, &y) & b)
+                    we->scroll_request(we, w->scx, w->scy, 0, dy);
+                return;
+            }
+        }
+    }
+    if (flags & WF_HSCROLL && x > w->r.minx) {
+        maxx = we->r.maxx;
+        minx = we->r.minx;
+        if (flags & WF_ADJUST || flags & WF_VSCROLL)
+            maxx -= TITLE_H - X_OS;
+        scroll_t = minx + TITLE_H;
+        scroll_b = maxx - TITLE_H;
+        scroll_w = ((w->r.maxx - w->r.minx) *
+                 (scroll_b - scroll_t - 2 * X_OS)) / (w->ex.maxx - w->ex.minx);
+        if (scroll_w < 4 * X_OS) scroll_w = 4 * X_OS;
+        scroll_o = (w->scx * (scroll_b - scroll_t)) /
+                                              (w->ex.maxx - w->ex.minx) + X_OS;
+        if (scroll_o > scroll_b - scroll_t - scroll_w - 2 * X_OS)
+            scroll_o = scroll_b - scroll_t - scroll_w - 2 * X_OS;
+        if (x >= scroll_t + scroll_o && x < scroll_t + scroll_o + scroll_w) {
+            dx = x - (scroll_t + scroll_o);
+            while (readmouse(&x, &y) & b) {
+                scroll_o = (x - dx) - scroll_t;
+                set_scroll_offsets(we, (scroll_o * (w->ex.maxx -
+                                 w->ex.minx)) / (scroll_b - scroll_t), w->scy);
+            }
+            return;
+        } else {
+            dx = 0;
+            if (x < scroll_t) dx = -1;
+            if (x >= scroll_b && x < maxx) dx = 1;
+            if (x >= scroll_t && x < scroll_t + scroll_o) dx = -2;
+            if (x < scroll_b && x >= scroll_t + scroll_o + scroll_w) dx = 2;
+            if (dx) {
+                if (b & RIGHT_BUTTON) dx = -dx;
+                we->scroll_request(we, w->scx, w->scy, dx, 0);
+                mouse_delay(b);
+                while (dx & 1 && readmouse(&x, &y) & b)
+                    we->scroll_request(we, w->scx, w->scy, dx, 0);
+                return;
+            }
+        }
+    }
+}
+
+static int insert_ch(Icon *ci, int i, int c)
+{
+    int l;
+    char *s;
+
+    s = ci->buffer;
+    l = strlen(s);
+    if (l < ci->bufflen) {
+        s[l+1] = 0;
+        while (l > i) {
+            s[l] = s[l-1];
+            l--;
+        }
+        s[i] = c;
+        i++;
+    }
+    return i;
+}
+
+static int delete_ch(Icon *ci, int i)
+{
+    int l, j;
+    char *s;
+
+    s = ci->buffer;
+    l = strlen(s);
+    if (i) {
+        j = i;
+        while (j <= l) {
+            s[j-1] = s[j];
+            j++;
+        }
+        i--;
+    }
+    return i;
+}
+
+static void remove_ch(Icon *ci, int i)
+{
+    int l;
+
+    l = strlen(ci->buffer);
+    while (i < l) {
+        ci->buffer[i] = ci->buffer[i + 1];
+        i++;
+    }
+}
+
+void register_key_handler(Key_Press_Fn key_handler)
+{
+    key_event_handler = key_handler;
+}
+
+void window_alert(void)
+{
+    os_writec(7);
+}
+
+void flush_buffers(void)
+{
+    os_byte(OSBYTE_FLUSH_BUFFER, N_BUFFER_KEYBOARD, 0);
+    os_byte(OSBYTE_FLUSH_BUFFER, N_BUFFER_MOUSE, 0);
+}
+
+int window_poll(void)
+{
+    WindowHandle *l, *we;
+    Window *w;
+    Icon *ip, *thisicon;
+    int b, x, y;
+    int wx, wy;
+    int i, k;
+    int icon_b, icon_esg;
+    int newmenu;
+    Rect r;
+
+    if (abort_flag)
+        return EVENT_SUSPEND;
+    i = os_byte(OSBYTE_READ_KBD, 0, 0);
+    k = (i & 0xff);
+    i = (i >> 8) & 0xff;
+    if (i == 0x1b)
+        os_byte(OSBYTE_CLEAR_ESC, 0, 0);
+#ifdef WINDOW_KEYS
+    if (i == 0 && k == 25) {
+        OS_SpriteOP_Block sb;
+        char screen_name[2];
+
+        l = windowlist;
+        screen_name[1] = 0;
+        screen_name[0] = 'A';
+        while (l) {
+            set_graphics_window(&(l->r));
+            sb.sprite = screen_name;
+            sb.r3 = 1;
+            os_spriteop(2, &sb);
+            screen_name[0]++;
+            l = l->next;
+        }
+    }
+    if (i == 0 && k == 26) {
+        OS_SpriteOP_Block sb;
+
+        l = windowlist;
+        set_graphics_window(&(l->r));
+        sb.sprite = l->w->buffer;
+        sb.r3 = 1;
+        os_spriteop(2, &sb);
+    }
+    if (i == 0 && k == 24) {
+        OS_SpriteOP_Block sb;
+
+        r.minx = 0;
+        r.maxx = screen_maxx;
+        r.miny = 0;
+        r.maxy = screen_maxy;
+        set_graphics_window(&r);
+        sb.sprite = "ScreenDump";
+        sb.r3 = 1;
+        os_spriteop(2, &sb);
+    }
+#endif
+    if (i == 0) {
+        if (key_event_handler && (i = key_event_handler(k)) >= 0) {
+            return i;
+        } else if (caret_icon) {
+            l = find_icons_window(caret_icon);
+            if (!l) return 0;
+            w = l->w;
+            if (k >= ' ' && k <= '~') {
+                caret_pos = insert_ch(caret_icon, caret_pos, k);
+            } else switch (k) {
+                case 8:
+                case 0x7f:
+                    caret_pos = delete_ch(caret_icon, caret_pos);
+                    break;
+                case LEFT_ARROW:
+                    if (caret_pos) caret_pos--;
+                    break;
+                case SHIFT_FN + LEFT_ARROW:
+                    while (caret_pos && caret_icon->buffer[--caret_pos] == 32);
+                    while (caret_pos) {
+                        caret_pos--;
+                        if (caret_icon->buffer[caret_pos] == 32) {
+                            caret_pos++;
+                            break;
+                        }
+                    }
+                    break;
+                case CTRL_FN + LEFT_ARROW:
+                    caret_pos = 0;
+                    break;
+                case RIGHT_ARROW:
+                    if (caret_pos < strlen(caret_icon->buffer)) caret_pos++;
+                    break;
+                case SHIFT_FN + RIGHT_ARROW:
+                    while (caret_icon->buffer[caret_pos] > 32)
+                        caret_pos++;
+                    while (caret_icon->buffer[caret_pos] == 32)
+                        caret_pos++;
+                    break;
+                case CTRL_FN + RIGHT_ARROW:
+                    caret_pos = strlen(caret_icon->buffer);
+                    break;
+                case COPY:
+                    remove_ch(caret_icon, caret_pos);
+                    break;
+                case SHIFT_FN + COPY:
+                    while (caret_icon->buffer[caret_pos] > ' ')
+                        remove_ch(caret_icon, caret_pos);
+                    while (caret_icon->buffer[caret_pos] == ' ')
+                        remove_ch(caret_icon, caret_pos);
+                    break;
+                case CTRL_FN + COPY:
+                    caret_icon->buffer[caret_pos] = 0;
+                    break;
+                case UP_ARROW:
+                    ip = caret_icon;
+                    ip--;
+                    for (i = ip - w->icons; ip != caret_icon; i--, ip--) {
+                        if (i < 0)
+                        {
+                            i = w->nicons;
+                            ip = w->icons + i;
+                            continue;
+                        }
+                        if (IF_BUTTON(ip->flags) == B_WRITEABLE &&
+                                                    !(ip->flags & IF_SHADED)) {
+                            if (l) {
+                                thisicon = caret_icon;
+                                caret_icon = 0;
+                                invalid_rect(l, thisicon->r);
+                            }
+                            caret_icon = ip;
+                            caret_pos = strlen(ip->buffer);
+                            if (l) invalid_rect(l, ip->r);
+                            return 0;
+                        }
+                    }
+                    break;
+                case DOWN_ARROW:
+                    ip = caret_icon;
+                    ip++;
+                    for (i = ip - w->icons; ip != caret_icon; i++, ip++) {
+                        if (i == w->nicons)
+                        {
+                            i = -1;
+                            ip = w->icons + i;
+                            continue;
+                        }
+                        if (IF_BUTTON(ip->flags) == B_WRITEABLE &&
+                                                    !(ip->flags & IF_SHADED)) {
+                            if (l) {
+                                thisicon = caret_icon;
+                                caret_icon = 0;
+                                invalid_rect(l, thisicon->r);
+                            }
+                            caret_icon = ip;
+                            caret_pos = strlen(ip->buffer);
+                            if (l) invalid_rect(l, ip->r);
+                            return 0;
+                        }
+                    }
+                    break;
+                case '\r':
+                    ip = caret_icon;
+                    ip++;
+                    for (i = ip - w->icons; i < w->nicons; i++, ip++) {
+                        if (IF_BUTTON(ip->flags) == B_WRITEABLE &&
+                                                    !(ip->flags & IF_SHADED)) {
+                            if (l) {
+                                thisicon = caret_icon;
+                                caret_icon = 0;
+                                invalid_rect(l, thisicon->r);
+                            }
+                            caret_icon = ip;
+                            caret_pos = strlen(ip->buffer);
+                            if (l) invalid_rect(l, ip->r);
+                            return 0;
+                        }
+                    }
+                    if (l->icon_action[0].icon_click) {
+                        close_menus(0);
+                        (l->icon_action[0].icon_click)(l, 0, 0);
+                    }
+                    return 0;
+                case 'U' & 0x1f:
+                    caret_icon->buffer[0] = 0;
+                    caret_pos = 0;
+                    break;
+            }
+            if (l) invalid_rect(l, caret_icon->r);
+            return 0;
+        }
+    }
+    b = readmouse(&x, &y);
+    thisicon = 0;
+    l = windowlist;
+    while (l) {
+        if (x >= l->r.minx && x <= l->r.maxx &&
+                y >= l->r.miny && y <= l->r.maxy) {
+            newmenu = 0;
+            if (no_entry_status != 0)
+                pointer_arrow();
+            w = l->w;
+            if (x >= w->r.minx && x <= w->r.maxx &&
+                    y >= w->r.miny && y <= w->r.maxy) {
+                wx = w->scx + (x - w->r.minx);
+                wy = w->scy - (w->r.maxy - y);
+                for (i = w->nicons - 1, ip = w->icons + i; i >= 0; i--, ip--) {
+                    if (ip->flags & IF_DELETED)
+                        continue;
+                    if (wx >= ip->r.minx && wx <= ip->r.maxx &&
+                            wy >= ip->r.miny && wy <= ip->r.maxy) {
+                        thisicon = ip;
+                        icon_b = IF_BUTTON(ip->flags);
+                        if (!(ip->flags & (IF_INVERTED | IF_SHADED)) &&
+                                                            icon_b == B_MENU) {
+                            ip->flags |= IF_INVERTED;
+                            invalid_rect(l, ip->r);
+                        }
+                        break;
+                    }
+                }
+                if (thisicon &&
+                        icon_b == B_ALWAYS && !(ip->flags & IF_SHADED)) {
+                    we = l->icon_action[i].sub_window;
+                    if (we) {
+                        r.minx = l->w->r.minx + thisicon->r.maxx + X_OS;
+                        r.maxx = r.minx + (we->w->r.maxx - we->w->r.minx);
+                        r.maxy = l->w->r.maxy + thisicon->r.maxy;
+                        r.miny = r.maxy - (we->w->r.maxy - we->w->r.miny);
+                        newmenu = 1;
+                        for (k = nmenus - 1; k >= 0; k--)
+                            if (menus[k] == l)
+                                break;
+                        open_menu(we, &r, 0, k + 1);
+                    }
+                } else if (b && !last_buttons) {
+                    if (thisicon && !(thisicon->flags & IF_SHADED)) {
+                        if (!((b & MIDDLE_BUTTON) && l->mouse_click &&
+                                                 l->mouse_click(l, x, y, b))) {
+                            if (icon_b == B_CLICKONCE || icon_b == B_MENU) {
+                                if (!(b & RIGHT_BUTTON))
+                                    close_menus(0);
+                                newmenu = 1;
+                                if (l->icon_action[i].icon_click)
+                                    (l->icon_action[i].icon_click)(l, i, b);
+                            } else if (icon_b == B_RADIO) {
+                                thisicon->flags ^= IF_INVERTED;
+                                icon_esg = IF_ESG(thisicon->flags);
+                                if (icon_esg) {
+                                    thisicon->flags |= IF_INVERTED;
+                                    for (i = 0, ip = w->icons; i < w->nicons;
+                                                                   i++, ip++) {
+                                        if (ip->flags & IF_INVERTED &&
+                                                ip != thisicon &&
+                                                IF_ESG(ip->flags)==icon_esg) {
+                                            ip->flags &= ~IF_INVERTED;
+                                            invalid_rect(l, ip->r);
+                                        }
+                                    }
+                                }
+                                invalid_rect(l, thisicon->r);
+                            } else if (icon_b == B_WRITEABLE) {
+                                int text_len;
+                                if (caret_icon && caret_icon != thisicon) {
+                                    ip = caret_icon;
+                                    caret_icon = 0;
+                                    invalid_rect(find_icons_window(ip), ip->r);
+                                }
+                                caret_icon = thisicon;
+                                text_len = strlen(caret_icon->buffer);
+                                caret_pos = (wx - caret_icon->r.minx + X_CHAR/2 - 6) / X_CHAR;
+                                if (caret_pos < 0)
+                                    caret_pos = 0;
+                                else if (caret_pos > text_len)
+                                    caret_pos = text_len;
+                                invalid_rect(l, caret_icon->r);
+                            }
+                        }
+                    } else if (l->mouse_click) {
+                        if (!(b & MIDDLE_BUTTON))
+                            close_menus(l);
+                        l->mouse_click(l, x, y, b);
+                    }
+                }
+            } else {
+                if (b && !last_buttons) {
+                    if (!(b & MIDDLE_BUTTON))
+                        close_menus(l);
+                    mouse_click_frame(l, x, y, b);
+                }
+            }
+            if (!newmenu) {
+                for (k = nmenus - 1; k >= 0; k--) {
+                    if (menus[k] == l) {
+                        k++;
+                        while (nmenus > k)
+                            close_window(menus[--nmenus]);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        l = l->next;
+    }
+    if (!l) {
+        if (no_entry_status != 1)
+            pointer_no_entry();
+        if ((b & ~MIDDLE_BUTTON) && !last_buttons)
+            close_menus(0);
+    }
+    l = windowlist;
+    while (l) {
+        w = l->w;
+        for (i = 0, ip = w->icons; i < w->nicons; i++, ip++) {
+            if (ip->flags & IF_DELETED)
+                continue;
+            if ((ip->flags & IF_INVERTED) &&
+                    IF_BUTTON(ip->flags) == B_MENU && ip != thisicon) {
+                ip->flags &= ~IF_INVERTED;
+                invalid_rect(l, ip->r);
+            }
+        }
+        l = l->next;
+    }
+    return 0;
+}

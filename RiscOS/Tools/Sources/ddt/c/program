@@ -1,0 +1,1254 @@
+#include "defs.h"
+#include "asd.h"
+#include "os.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "output.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "respond.h"
+#include "lookup.h"
+#include "debug.h"
+#include "errors.h"
+#include "display.h"
+#include "print.h"
+#include "cplusplus.h"
+#include "program.h"
+
+#define IAN_FIX 1
+
+#ifdef IAN_FIX
+#define Asd_LineInfo_Short_MaxLine 63
+
+/* short form lineinfo items have code and file position increments < 256.
+ * If the current file position is (line, col), a file position increment
+ * fpinc describes a new file position
+ *   (line+fpinc, 1) if inc <= Asd_LineInfo_Short_MaxLine
+ *   (line, col+fpinc-Asd_LineInfo_Short_MaxLine-1) otherwise
+ *
+ * fpinc = 0, codeinc = 0 indicates that the item is in long format 1:
+ * new file position is (line+lineinc, 1)
+ *
+ * fpinc = Asd_LineInfo_Short_MaxLine+1, codeinc = 0 indicates that the
+ * item is in long format 2. new file position is
+ *   (line+lineinc, newcol)
+ */
+
+typedef struct
+{   unsigned char codeinc;
+    unsigned char lineinc;
+} asd_LineInfo_Short;
+
+typedef struct
+{   unsigned short marker;
+    unsigned short lineinc; /* (in target byte order) */
+    unsigned short codeinc; /* (in target byte order) */
+} asd_LineInfo_Long_1;
+
+typedef struct
+{   unsigned short marker;
+    unsigned short lineinc; /* (in target byte order) */
+    unsigned short codeinc; /* (in target byte order) */
+    unsigned short newcol;  /* (in target byte order) */
+} asd_LineInfo_Long_2;
+
+#endif
+
+UpdateItem *updatelist;
+
+ProcDef *root;
+HashEntry **proctable;
+HashEntry **vartable;
+
+Context home_context, current_context;
+RegSet *contextregs;
+static RegSet otherregs = {};
+
+ProcDef *codeinproc(int address, ProcDef *proc)
+{
+    ItemProc *ip;
+    ProcDef *p;
+
+    while (proc) {
+        p = codeinproc(address, proc->childlist);
+        if (p) return p;
+        ip = proc->item;
+        if (ip->endproc &&
+                address >= ip->entry && address <= ip->endproc->endpoint)
+            return proc;
+        proc = (ProcDef *)proc->n.sibling;
+    }
+    return 0;
+}
+
+ProcDef *codetoproc(int address)
+{
+    ProcDef *outer, *p;
+    ItemSection *section;
+
+    outer = root->childlist;
+    while (outer) {
+        section = outer->section;
+        if (address >= section->codestart &&
+                address < section->codestart + section->codesize) {
+            p = codeinproc(address, outer->childlist);
+            return p ? p : outer;
+        }
+        outer = (ProcDef *)outer->n.sibling;
+    }
+    return 0;
+}
+
+Context *getsourceinfo(Context *context)
+{
+    ItemSection *section;
+    ItemFileEntry *entry;
+    Fragment *frag;
+    unsigned char *lineinfo, *lineinfoend;
+    int addr, startaddr, endaddr;
+    int line, statement, linediff;
+    int nfrags, *ptr;
+#ifdef IAN_FIX
+    unsigned char asdversion;
+#endif
+
+    section = context->proc->section;
+#ifdef IAN_FIX
+    asdversion = section->asdversion;
+#endif
+    addr = context->address;
+    entry = section->fileinfo->entries;
+    if (!entry) return 0;
+    while (entry->len) {
+        ptr = (int *)((char *)(entry + 1) + (strlen(entry->filename) & ~3));
+        nfrags = *ptr++;
+        frag = (Fragment *)ptr;
+        while (nfrags--) {
+            startaddr = frag->codestart;
+            lineinfo = frag->lineinfo;
+            lineinfoend = (unsigned char *)frag + frag->size;
+            if (addr >= startaddr && addr < startaddr + frag->codesize) {
+                line = frag->firstline;
+                statement = 1;
+                while (lineinfo < lineinfoend) {
+                    if (lineinfo[0] == 0 && lineinfo[1] == 0) {
+                        lineinfo += 2;
+                        linediff = *((unsigned short *)lineinfo);
+                        lineinfo += 2;
+                        endaddr = startaddr + *((unsigned short *)lineinfo);
+                        lineinfo += 2;
+#ifdef IAN_FIX
+                    } else if (asdversion > 2 && lineinfo[0] == 0 && lineinfo[1] == Asd_LineInfo_Short_MaxLine+1) {
+                        linediff = ((asd_LineInfo_Long_2 *)lineinfo)->lineinc;
+                        endaddr = startaddr + ((asd_LineInfo_Long_2 *)lineinfo)->codeinc;
+                        lineinfo += 8;
+                    } else {
+                        endaddr = startaddr + *lineinfo++;
+                        linediff = *lineinfo++;
+                        if (asdversion > 2 && linediff > Asd_LineInfo_Short_MaxLine)
+                            linediff = 0;
+#else
+                    } else {
+                        endaddr = startaddr + *lineinfo++;
+                        linediff = *lineinfo++;
+#endif
+                    }
+                    if (addr >= startaddr && addr < endaddr) {
+                        context->file = entry;
+                        context->line = line;
+                        context->statement = statement;
+                        return context;
+                    }
+                    line += linediff;
+                    statement += 1;
+                    if (linediff)
+                        statement = 1;
+                    startaddr = endaddr;
+                }
+                return 0;
+            }
+            frag = (Fragment *)(((int)lineinfoend + 3) & ~3);
+        }
+        entry = (ItemFileEntry *)((char *)entry + entry->len);
+    }
+    return 0;
+}
+
+void initname(char *name, HashEntry **table, NameDef *def)
+{
+    int hash;
+    HashEntry *h;
+    char *s;
+
+/*
+    os_write0("initname ");
+    os_write0(name);
+    os_write0("\r\n");
+*/
+    hash = 0;
+    s = name;
+    while (*s) {
+        hash += (hash << 5) + (hash << 2) + (*s++ | 0x20);
+    }
+    hash &= HASHSIZE - 1;
+    h = table[hash];
+    while (h && cistrcmp(h->name, name)) {
+        h = h->nextname;
+    }
+    if (!h) {
+        h = salloc(sizeof(HashEntry) + strlen(name));
+        strcpy(h->name, name);
+        h->nextname = table[hash];
+        table[hash] = h;
+        h->deflist = 0;
+    }
+    def->next = h->deflist;
+    h->deflist = def;
+}
+
+#define DATA_SAVE_MASK 0xfffee800
+#define DATA_SAVE_INST 0xe92cc800
+
+void getcontext(int pc)
+{
+    int memorylimit, addr, stackframe, maskp;
+
+    home_context.address = pc;
+    home_context.file = 0;
+
+/* Now try to guess which register is the frame pointer.
+ * Stack by looking at candidates for SL by checking 1st word of stack chunk
+ * contains IS_A_STACK_CHUNK marker.
+ * SL = 10 => APCS_R, FP = 11; SL = 13 => APCS_A, FP = 10
+ */
+    memorylimit = (int)os_changeenvironment(N_Space_Handler, 0, 0, 0);
+    addr = registers.r[10] - SC_SLOFFSET + SC_MARK;
+    stackframe = 0;
+    if (addr >= image_base && addr < memorylimit &&
+            (*((int *)addr) & ~0x80000000) == IS_A_STACK_CHUNK) {
+        stackframe = registers.r[11];
+    } else {
+        addr = registers.r[13] - SC_SLOFFSET + SC_MARK;
+        if (addr >= image_base && addr < memorylimit &&
+                (*((int *)addr) & ~0x80000000) == IS_A_STACK_CHUNK) {
+            stackframe = registers.r[10];
+        }
+    }
+    if (!stackframe) {
+        /* No luck with SL, try looking at FP.
+         * [FP] points 12 bytes beyond the data save word.
+         * FP = 11 => APCS_R, FP = 10 => APCS_A
+         */
+         addr = registers.r[10];
+         if (addr >= image_base && addr < memorylimit) {
+             maskp = (*((int *)addr) - StoredPCOffset) & 0x3fffffc;
+             if (maskp >= image_base && maskp < memorylimit &&
+                     (*((int *)maskp) & DATA_SAVE_MASK) == DATA_SAVE_INST)
+                 stackframe = addr;
+         }
+         if (!stackframe) {
+             addr = registers.r[11];
+             if (addr >= image_base && addr < memorylimit) {
+                 maskp = (*((int *)addr) - StoredPCOffset) & 0x3fffffc;
+                 if (maskp >= image_base && maskp < memorylimit &&
+                         (*((int *)maskp) & DATA_SAVE_MASK) == DATA_SAVE_INST)
+                     stackframe = addr;
+             }
+         }
+    }
+    home_context.stackframe = (int *)stackframe;
+    contextregs = &registers;
+    if ((home_context.proc = codetoproc(pc)) != 0) {
+        getsourceinfo(&home_context);
+    }
+    current_context = home_context;
+}
+
+#if 0
+static void dumptable(HashEntry **table)
+{
+    int hash;
+    HashEntry *h;
+
+    os_writec(4); os_writec(30);
+    os_write0("Table dump\r\n");
+    for (hash = 0; hash < HASHSIZE; hash++) {
+        h = table[hash];
+        if (h) {
+            os_write0("Hash value = ");
+            wrhex(hash);
+            os_write0("\r\n");
+        }
+        while (h) {
+            os_write0(h->name);
+            os_write0("\r\n");
+            h = h->nextname;
+        }
+    }
+    os_writec(5);
+}
+#endif
+
+int lookup(char *name, HashEntry **table, ProcDef *parent, NameDef **res)
+{
+    int hash;
+    HashEntry *h;
+    char *s;
+    NameDef *def;
+    int found;
+
+    hash = 0;
+    s = name;
+    while (*s) hash += (hash << 5) + (hash << 2) + (*s++ | 0x20);
+    hash &= HASHSIZE - 1;
+    h = table[hash];
+    while (h && cistrcmp(h->name, name)) {
+        h = h->nextname;
+    }
+    if (!h) return NOTFOUND;
+    found = 0;
+    for (def = h->deflist; def; def = def->next) {
+        if (!parent || def->parent == parent) {
+            if (found)
+                return AMBIGUOUS;
+            found = 1;
+            *res = def;
+        }
+    }
+    return found ? 0 : NOTFOUND;
+}
+
+int lookupvar(char *name, Context *c, VarDef **res)
+{
+    int err;
+    VarDef *def;
+    int found;
+    int line;
+
+    err = lookup(name, vartable, c->proc, (NameDef **)res);
+    if (err != AMBIGUOUS || !c->line || !c->file)
+        return err;
+    found = 0;
+    line = c->line;
+    for (def = *res; def; def = (VarDef *)def->n.next) {
+        if (LINE_NUMBER(def->item->sourcepos) <= line) {
+            line = LINE_NUMBER(def->item->sourcepos);
+            found = 1;
+            *res = def;
+        }
+    }
+    return found ? 0 : NOTFOUND;
+}
+
+static int findproc(char *name, ProcDef *parent,
+                    ProcDef **resproc, ProcDef *curproc)
+{
+    int found;
+    ProcDef *p;
+    int err;
+
+    err = lookup(name, proctable, parent, (NameDef **)resproc);
+    if (parent || err != AMBIGUOUS) return err;
+
+    for (p = curproc; p != root; p = p->n.parent) {
+        err = lookup(name, proctable, p, (NameDef **)resproc);
+        if (err != NOTFOUND) return err;
+    }
+
+    found = 0;
+    for (p = root->childlist; p; p = (ProcDef *)p->n.sibling) {
+        err = lookup(name, proctable, p, (NameDef **)resproc);
+        if (!err) {
+            if (found)
+                return AMBIGUOUS;
+            found = 1;
+        } else if (err != NOTFOUND)
+            return err;
+    }
+
+    return found ? 0 : AMBIGUOUS;
+}
+
+int stringtopath(char **ps, Context *c, ProcDef *curproc, int terminate)
+{
+    char *s, *name;
+    int err;
+    int ch;
+    ProcDef *proc;
+
+    s = *ps;
+    proc = 0;
+    do {
+        if (!*s || (*s >= '0' && *s <= '9'))
+            break;
+        if (!isvardigit(*s))
+            return terminate ? ERR_PROCEXPECTED : ERR_LINEEXPECTED;
+        name = s;
+        while (isvardigit(*++s));
+        ch = *s; *s = 0;
+        err = findproc(name, proc, &proc, curproc);
+        *s = ch;
+        if (err) return err;
+        if (ch != ':')
+            break;
+        s++;
+    } while (1);
+    *ps = s;
+    if (terminate && !proc) return ERR_PROCEXPECTED;
+    c->proc = proc ? proc : curproc;
+    return 0;
+}
+
+static int filetocode(Context *c)
+{
+    int nfrags, *ptr;
+    Fragment *frag;
+    unsigned char *lineinfo, *lineinfoend;
+    int addr;
+    int line, statement;
+    int linediff;
+
+    if (!c)
+        fatal(0x1000, "Null context in filetocode");
+    if (!(c->file))
+        fatal(0x1000, "Null file in context");
+    ptr = (int *)((char *)(c->file + 1) + (strlen(c->file->filename) & ~3));
+    nfrags = *ptr++;
+    frag = (Fragment *)ptr;
+    while (nfrags--) {
+        lineinfo = frag->lineinfo;
+        lineinfoend = (unsigned char *)frag + frag->size;
+        if (c->line >= frag->firstline && c->line <= frag->lastline) {
+            addr = frag->codestart;
+            line = frag->firstline;
+            statement = 1;
+            c->address = 0;
+            while (addr <= frag->codestart + frag->codesize &&
+                                                      lineinfo < lineinfoend) {
+                if (c->line >= line) {
+                    c->address = addr;
+                    if (c->line == line && c->statement == statement)
+                        return 0;
+                } else {
+                    if (c->address)
+                        return 0;
+                    return ERR_LINENOTFOUND;
+                }
+#ifdef IAN_FIX
+                if (lineinfo[0] == 0 && lineinfo[1] == 0) {
+                    lineinfo += 2;
+                    linediff = *((unsigned short *)lineinfo);
+                    lineinfo += 2;
+                    addr += *((unsigned short *)lineinfo);
+                    lineinfo += 2;
+                } else if (lineinfo[0] == 0 && lineinfo[1] == Asd_LineInfo_Short_MaxLine+1) {
+                    linediff = ((asd_LineInfo_Long_2 *)lineinfo)->lineinc;
+                    addr += ((asd_LineInfo_Long_2 *)lineinfo)->codeinc;
+                    lineinfo += 8;
+                } else {
+                    addr += *lineinfo++;
+                    linediff = *lineinfo++;
+                    if (linediff > Asd_LineInfo_Short_MaxLine)
+                        linediff = 0;
+                }
+#else
+                if (*lineinfo == 0) {
+                    lineinfo += 2;
+                    linediff = *((unsigned short *)lineinfo);
+                    lineinfo += 2;
+                    addr += *((unsigned short *)lineinfo);
+                    lineinfo += 2;
+                } else {
+                    addr += *lineinfo++;
+                    linediff = *lineinfo++;
+                }
+#endif
+                line += linediff;
+                statement += 1;
+                if (linediff)
+                    statement = 1;
+            }
+            return ERR_LINENOTFOUND;
+        }
+        frag = (Fragment *)(((int)lineinfoend + 3) & ~3);
+    }
+    return ERR_LINENOTFOUND;
+}
+
+int filenamecmp(char *cs, char *ct)
+{
+    char *t;
+    int ls, lt, i;
+
+    ls = strlen(cs);
+    lt = strlen(ct);
+    if (ls > lt) {
+        t = cs; cs = ct; ct = t;
+        i = ls; ls = lt; lt = i;
+    }
+    i = lt - ls;
+    if (!cistrcmp(cs, ct + i) && (!i || ct[i-1] == '.' || ct[i-1] == ':'))
+        return 0;
+    return 1;
+}
+
+Context *filepostocode(Context *c, char *fname, int line)
+{
+    ProcDef *outer;
+    ItemFileEntry *entry;
+    Fragment *frag;
+    unsigned char *lineinfo, *lineinfoend;
+    int startaddr, endaddr;
+    int l, st, ldiff;
+    int nfrags, *ptr;
+
+    outer = root->childlist;
+    while (outer) {
+        entry = outer->section->fileinfo->entries;
+        if (!entry) return 0;
+        while (entry->len) {
+            if (!filenamecmp(fname, entry->filename)) {
+                ptr = (int *)((char *)(entry + 1) + (strlen(entry->filename) & ~3));
+                nfrags = *ptr++;
+                frag = (Fragment *)ptr;
+                while (nfrags--) {
+                    startaddr = frag ->codestart;
+                    lineinfo = frag->lineinfo;
+                    lineinfoend = (unsigned char *)frag + frag->size;
+                    if (line >= frag->firstline && line <= frag->lastline) {
+                        l = frag->firstline;
+                        st = 1;
+                        while (lineinfo < lineinfoend) {
+                            if (l == line) {
+                                c->file = entry;
+                                c->line = line;
+                                c->statement = st;
+                                c->address = startaddr;
+                                c->proc = outer;
+                                c->stackframe = 0;
+                                return c;
+                            }
+#ifdef IAN_FIX
+                            if (lineinfo[0] == 0 && lineinfo[1] == 0) {
+                                lineinfo += 2;
+                                ldiff = *((unsigned short *)lineinfo);
+                                lineinfo += 2;
+                                endaddr = startaddr + *((unsigned short *)lineinfo);
+                                lineinfo += 2;
+                            } else if (lineinfo[0] == 0 && lineinfo[1] == Asd_LineInfo_Short_MaxLine+1) {
+                                ldiff = ((asd_LineInfo_Long_2 *)lineinfo)->lineinc;
+                                endaddr = startaddr + ((asd_LineInfo_Long_2 *)lineinfo)->codeinc;
+                                lineinfo += 8;
+                            } else {
+                                endaddr = startaddr + *lineinfo++;
+                                ldiff = *lineinfo++;
+                                if (ldiff > Asd_LineInfo_Short_MaxLine)
+                                    ldiff = 0;
+                            }
+#else
+                            if (*lineinfo == 0) {
+                                lineinfo += 2;
+                                ldiff = *((unsigned short *)lineinfo);
+                                lineinfo += 2;
+                                endaddr = startaddr + *((unsigned short *)lineinfo);
+                                lineinfo += 2;
+                            } else {
+                                endaddr = startaddr + *lineinfo++;
+                                ldiff = *lineinfo++;
+                            }
+#endif
+                            l += ldiff;
+                            st += 1;
+                            if (ldiff)
+                                st = 1;
+                            startaddr = endaddr;
+                        }
+                        return 0;
+                    }
+                    frag = (Fragment *)(((int)lineinfoend + 3) & ~3);
+                }
+            }
+            entry = (ItemFileEntry *)((char *)entry + entry->len);
+        }
+        outer = (ProcDef *)outer->n.sibling;
+    }
+    return 0;
+}
+
+int stringtocode(char **ps, Context *c, Context *current)
+{
+    int line, err;
+
+    err = stringtopath(ps, c, current->proc, 0);
+    if (err) return err;
+    if (c->proc == root)
+        return AMBIGUOUS;
+    c->file = 0;
+    if (c->proc) {
+        c->file = c->proc->item->fileentry;
+        c->line = LINE_NUMBER(c->proc->item->sourcepos);
+    }
+    c->statement = 1;
+    err = atoi(ps, 10, &line, 2 | 1);
+    if (err) return err;
+    c->line = line;
+    if (c->file)
+        return filetocode(c);
+    return 0;
+}
+
+int stringtovardef(char **ps, Context *c, VarDef **res, Context *current)
+{
+    char *s, *p, *name;
+    int search;
+    int ch;
+    int err;
+
+    s = *ps;
+    p = 0;
+    while (*s) {
+        if (*s == ':')
+            p = s;
+        s++;
+    }
+    s = *ps;
+    search = 0;
+    if (!p) {
+        *c = *current;
+        search = 1;
+    } else {
+        c->file = 0;
+        c->line = 0;
+        ch = *p; *p = 0;
+        err = stringtocode(&s, c, current);
+        *p = ch;
+        if (err && err != ERR_LINENOTFOUND)
+            return err;
+        if (s < p)
+            return ERR_VARTERM;
+        s++;
+    }
+    name = s;
+    if (!isvardigit(*s)) return ERR_VAREXPECTED;
+    while (isvardigit(*++s));
+    *ps = s;
+    ch = *s; *s = 0;
+    err = lookupvar(name, c, res);
+    if (err != NOTFOUND || !search) {
+        *s = ch;
+        return err;
+    }
+    while (c->proc) {
+        err = lookup(name, vartable, c->proc, (NameDef **)res);
+        if (err != NOTFOUND) {
+            *s = ch;
+            return err;
+        }
+        c->proc = c->proc->n.parent;
+    }
+    *s = ch;
+    return NOTFOUND;
+}
+
+#define SAVEMASKPTR     0
+#define RETURNLINK      -1
+#define RETURNSP        -2
+#define RETURNFP        -3
+#define SAVEDREGS       -4
+
+typedef struct STFE_Instruction {
+    unsigned lowpart : 12;
+    unsigned regnum : 4;
+    unsigned highpart : 16;
+} STFE_Instruction;
+
+#define STFE_LOW        0x103
+#define STFE_HIGH       0xed6c
+
+typedef unsigned int SFM_Instruction;
+
+#define SFM_MASK        0xFFBF7FF0
+#define SFM_PROTOTYPE   0xED2D4200
+#define SFM_REGS        0x0000000F
+
+void setupcontextregs(void)
+{
+    int *fp;
+    int *saveptr;
+    int mask;
+    int *ptr;
+    STFE_Instruction *stfeptr;
+    SFM_Instruction *sfmptr;
+    int i;
+
+    contextregs = &otherregs;
+    *contextregs = registers;
+
+    for (fp = home_context.stackframe;
+            fp && fp != current_context.stackframe; fp = (int *)fp[RETURNFP]) {
+        saveptr = (int *)((fp[SAVEMASKPTR] & 0x03fffffc) - StoredPCOffset);
+        mask = *saveptr;
+        ptr = fp + RETURNLINK;
+        contextregs->r[15] = *ptr--;
+        contextregs->r[bindings ? 12 : 13] = *ptr--;
+        contextregs->r[bindings ? 10 : 11] = *ptr--;
+        for (i = 9; i >= 0; i--, mask <<= 1) {
+            if (mask & 0x200) {
+                contextregs->r[i] = *ptr;
+                ptr--;
+            }
+        }
+        stfeptr = (STFE_Instruction *)(saveptr + 2);
+        ptr++;
+        ptr = (int *)((FPExtended *)ptr - 1);
+        for (; stfeptr->lowpart == STFE_LOW &&
+               stfeptr->highpart == STFE_HIGH; stfeptr++) {
+            contextregs->f[stfeptr->regnum] = *((FPExtended *)ptr);
+            ptr = (int *)((FPExtended *)ptr - 1);
+        }
+        sfmptr = (SFM_Instruction *) saveptr;
+        for (; ((*sfmptr) & SFM_MASK) == SFM_PROTOTYPE; sfmptr++) {
+            for (i = 4 + ((*sfmptr) & SFM_REGS) / 3; i >= 4; i--) {
+            	cvt_fpinternal(&contextregs->f[i], ptr);
+            	ptr -= 3;
+            }
+        }
+    }
+}
+
+FPorInt *savedregvar(int n, int *stackframe)
+{
+    int *fp, *fplimit;
+    FPorInt *foundptr;
+    int *saveptr;
+    int mask;
+    int *ptr;
+    STFE_Instruction *stfeptr;
+    int i;
+
+    fplimit = stackframe;
+    foundptr = 0;
+    for (fp = home_context.stackframe;
+                 fp && fp != fplimit; fp = (int *)fp[RETURNFP]) {
+        saveptr = (int *)((fp[SAVEMASKPTR] & 0x03fffffc) - StoredPCOffset);
+        mask = *saveptr;
+        ptr = fp + SAVEDREGS;
+        for (i = 9; i >= 0; i--, mask <<= 1) {
+            if (mask & 0x200) {
+                if (i == n) {
+                    foundptr = (FPorInt *)ptr;
+                    break;
+                }
+                ptr--;
+            }
+        }
+        if (n >= 16) {
+            stfeptr = (STFE_Instruction *)(saveptr + 2);
+            ptr++;
+            ptr = (int *)((FPExtended *)ptr - 1);
+            for (; stfeptr->lowpart == STFE_LOW &&
+                   stfeptr->highpart == STFE_HIGH; stfeptr++) {
+                if (stfeptr->regnum == n - 16) {
+                    foundptr = (FPorInt *)ptr;
+                    break;
+                }
+                ptr = (int *)((FPExtended *)ptr - 1);
+            }
+        }
+    }
+    return foundptr;
+}
+
+void alterregvar(int n, int *stackframe, FPExtended *fp, int word)
+{
+    FPorInt *ptr;
+
+    ptr = savedregvar(n, stackframe);
+    if (!ptr) {
+        if (n < 16)
+            registers.r[n] = word;
+        else
+            registers.f[n - 16] = *fp;
+    } else {
+        if (n < 16)
+            ptr->i = word;
+        else
+            ptr->f = *fp;
+    }
+    setupcontextregs();
+}
+
+int progregister(int n, int *stackframe)
+{
+    FPorInt *p;
+
+    if (stackframe == current_context.stackframe)
+        return n == 24 ? *((int *)&(contextregs->fpstatus)) :
+                         contextregs->r[n];
+    p = savedregvar(n, stackframe);
+    if (!p)
+        return n == 24 ? *((int *)&(registers.fpstatus)) :
+                         registers.r[n];
+    return p->i;
+}
+
+double progfpregister(int n, int *stackframe)
+{
+    FPorInt *p;
+
+    if (stackframe == current_context.stackframe)
+        return loadfpextended(&contextregs->f[n-16]);
+    p = savedregvar(n, stackframe);
+    if (!p) return loadfpextended(&registers.f[n-16]);
+    return loadfpextended(&p->f);
+}
+
+int outerstack(Context *old, Context *new)
+{
+    int *stackframe;
+
+    stackframe = old->stackframe;
+    if (!stackframe) return ERR_STACKEMPTY;
+#ifdef PRAGMA_C1
+    enable_access = 1;
+#endif
+    dataaccessflag = 0;
+    new->stackframe = (int *)stackframe[RETURNFP];
+    if (dataaccessflag) return 0;
+    new->address = stackframe[RETURNLINK] & 0x03fffffc;
+    dataaccessflag = 1;
+#ifdef PRAGMA_C1
+    enable_access = 0;
+#endif
+    new->proc = codetoproc(new->address);
+    new->file = 0;
+    if (new->proc) getsourceinfo(new);
+    return 0;
+}
+
+int checkact(Context *c, Context *current)
+{
+    int err;
+    Context temp;
+
+    c->stackframe = 0;
+    if (!c->proc) return ERR_NOACT;
+    temp = *current;
+    do {
+        if (temp.proc == c->proc) {
+            c->stackframe = temp.stackframe;
+            return 0;
+        }
+        err = outerstack(&temp, &temp);
+    } while (!err);
+    if (err == ERR_STACKEMPTY)
+        err = ERR_NOACT;
+    return err;
+}
+
+int makepblist(ProcDef *parent)
+{
+    ProcDef *def;
+    int err;
+
+    for (def = parent->childlist; def; def = (ProcDef *)def->n.sibling) {
+        if (def->item && def->item->entry && def->item->endproc &&
+                                 def->item->endproc != parent->item->endproc) {
+            err = pbreak_set(def->item->entry, def);
+            if (err) return err;
+        }
+        err = makepblist(def);
+        if (err) return err;
+    }
+    return 0;
+}
+
+void clearpblist(void)
+{
+    BreakPoint **pbp, *bp;
+
+    pbp = &breaklist;
+    while ((bp = *pbp) != 0) {
+        if (bp->proc) {
+            *pbp = bp->next;
+            writeword(bp->addr, bp->inst);
+            /* StrongARM */
+            os_synchronisecodeareas((void *) bp->addr, (void *) bp->addr);
+            rma_free(bp);
+        } else
+            pbp = &(bp->next);
+    }
+}
+
+static void lose_watchpoints(void)
+{
+    WatchPoint **pwp, *wp;
+    int *stackframe;
+    int w;
+
+    pwp = &watchlist;
+    while (wp = *pwp) {
+        stackframe = current_context.stackframe;
+        if (wp->stackframe && stackframe) {
+            do {
+                if (stackframe == wp->stackframe)
+                    break;
+                if (readword((int)stackframe, &w))
+                    break;
+                w &= ~0xfc000003;
+                if (readword(w - StoredPCOffset, &w))
+                    break;
+                if ((w & 0xfffee800) != 0xe92cc800)
+                    break;
+                stackframe = (int *)(stackframe[RETURNFP]);
+            } while (stackframe);
+            if (!stackframe) {
+                *pwp = wp->next;
+                output_str("Watchpoint \'");
+                output_str(wp->str);
+                output_line("\' discarded on exit from procedure");
+                free(wp->str);
+                rma_free(wp);
+                continue;
+            }
+        }
+        pwp = &(wp->next);
+    }
+}
+
+static void set_status(char *status)
+{
+    Window *w;
+    Rect r;
+
+    w = get_window_info(output_window);
+    strcpy(w->buffer + 8, status);
+    if (current_status != status) {
+        current_status = status;
+        r.minx = w->r.minx;
+        r.maxx = w->r.maxx;
+        r.miny = w->r.maxy + Y_OS;
+        r.maxy = w->r.maxy + TITLE_H;
+        invalid_rect(0, r);
+    }
+}
+
+static void print_window_title(int handle)
+{
+    Window *w;
+    int buffer[256];
+    char *title;
+
+    if (handle == -1) {
+        output_str(" background");
+        return;
+    }
+    if (handle == -2) {
+        output_str(" icon bar");
+        return;
+    }
+    output_str(" window \"");
+    buffer[0] = handle;
+    wimp_getwindowinfo(buffer);
+    w = (Window *)(buffer + 1);
+    title = (char *)&(w->buffer);
+    if (w->title_flags & IF_INDIRECTED)
+        title = w->buffer;
+    while (*title >= ' ')
+        output_ch(*title++);
+    output_ch('\"');
+}
+
+static int show_status(int status)
+{
+    int cont_flag;
+    int word;
+
+    getcontext(registers.r15.pc & ~3);
+    cont_flag = 0;
+    switch (status) {
+        case N_Undef_Inst:
+            set_status("Undefined Instruction Encountered");
+            output_str("Undefined instruction at ");
+            print_context(&current_context, 0);
+            break;
+        case N_Prefetch_Abort:
+            set_status("Abort on Instruction Fetch");
+            output_str("Instruction fetch abort at ");
+            print_context(&current_context, 0);
+            break;
+        case N_Data_Abort:
+            set_status("Abort on Data Access");
+            output_str("Data abort at ");
+            print_context(&current_context, 0);
+            break;
+        case N_Address_Ex:
+            set_status("Illegal Address");
+            output_str("Address exception at ");
+            print_context(&current_context, 0);
+            break;
+        case N_Error:
+            set_status("Error");
+            output_str("Error: (");
+            output_uns(error_buffer.error.errno,
+                      default_base ? default_base : 16, 0);
+            output_str(") ");
+            output_line(error_buffer.error.errmsg);
+            break;
+        case N_Exit:
+            set_status("Terminated");
+            output_line("Program terminated with no return code");
+            break;
+        case N_Exit_ABEX:
+            set_status("Abnormal Termination");
+            output_str("Program terminated with return code ");
+            output_uns(registers.r[2], default_base ? default_base : 10, 0);
+            output_ch(0);
+            break;
+        case N_Hit_Break: {
+            BreakPoint *bp;
+
+            bp = break_lookup(registers.r15.pc & ~3);
+            if (bp) {
+                if (IS_PBREAK(bp)) {
+                    if (trace_procedures) {
+                        output_str("Entered ");
+                        output_line(cplusplus(bp->proc->item->name));
+                        return 1;
+                    }
+                } else {
+                    set_status("Stopped at Breakpoint");
+                    output_str("Breakpoint at ");
+                    print_context(&current_context, 0);
+                    if (trace_breakpoints) return 1;
+                    break;
+                }
+            }
+            output_line("Unknown breakpoint encountered");
+            break;
+        }
+        case N_SWI_Break: {
+            BreakPoint *sbp;
+            int swino;
+
+            if (!readword(current_context.address, &swino)) {
+                swino &= 0x00fdffff;
+
+                if (swino == 0x6F) /* OS_CallASWI */
+                    swino = registers.r[10] & 0x00fdffff;
+                else if (swino == 0x71) /* OS_CallASWIR12 */
+                    swino = registers.r[12] & 0x00fdffff;
+
+                if (sbp = swi_break_lookup(swino)) {
+                    set_status("Stopped at SWI");
+                    output_str("SWI breakpoint at ");
+                    print_context(&current_context, 0);
+                    if (trace_swibreaks) return 1;
+                    break;
+                }
+            }
+            output_line("Unknown SWI breakpoint encountered");
+            break;
+        }
+        case N_Break_Event: {
+            int event;
+            int *eventstr;
+
+            set_status("Stopped on Wimp event");
+            event = registers.r[0];
+            eventstr = (int *)registers.r[1];
+            switch (event) {
+               case WimpEvent_Null:
+                   output_line("Null event");
+                   break;
+               case WimpEvent_Redraw:
+                   output_str("Redraw window request for");
+                   print_window_title(eventstr[0]);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Open:
+                   output_str("Open window request for");
+                   print_window_title(eventstr[0]);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Close:
+                   output_str("Close window request for");
+                   print_window_title(eventstr[0]);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Leaving:
+                   output_str("Pointer leaving");
+                   print_window_title(eventstr[0]);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Entering:
+                   output_str("Pointer entering");
+                   print_window_title(eventstr[0]);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Click:
+                   output_str("Mouse click at x = ");
+                   output_int(eventstr[0], 10);
+                   output_str(", y = ");
+                   output_int(eventstr[1], 10);
+                   output_str(", buttons = ");
+                   output_uns(eventstr[2], 2, 8);
+                   output_str(", ");
+                   print_window_title(eventstr[3]);
+                   if (eventstr[4] >= 0) {
+                       output_str(", icon #");
+                       output_int(eventstr[4], 10);
+                   }
+                   output_ch(0);
+                   break;
+               case WimpEvent_Drag:
+                   output_str("Drag box: min. x = ");
+                   output_int(eventstr[0], 10);
+                   output_str(", min. y = ");
+                   output_int(eventstr[1], 10);
+                   output_str(", max. x = ");
+                   output_int(eventstr[2], 10);
+                   output_str(", max. y = ");
+                   output_int(eventstr[3], 10);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Key:
+                   output_str("Key pressed: input focus in ");
+                   print_window_title(eventstr[0]);
+                   if (eventstr[1] >= 0) {
+                       output_str(", icon #");
+                       output_int(eventstr[1], 10);
+                   }
+                   if (eventstr[6] >= 32 && eventstr[6] < 127) {
+                       output_str(", character = \'");
+                       output_ch(eventstr[6]);
+                       output_ch('\'');
+                   } else {
+                       output_str(", character code = &");
+                       output_int(eventstr[6], 16);
+                   }
+                   output_ch(0);
+                   break;
+               case WimpEvent_Menu:
+                   output_str("Menu selection: Item ");
+                   do {
+                       output_int(*eventstr, 10);
+                       eventstr++;
+                       if (*eventstr >= 0)
+                           output_str("->");
+                   } while (*eventstr >= 0);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Scroll:
+                   output_str("Scroll request for");
+                   print_window_title(eventstr[0]);
+                   output_str(", scroll x = ");
+                   output_int(eventstr[8], 10);
+                   output_str(", scroll y = ");
+                   output_int(eventstr[9], 10);
+                   output_ch(0);
+                   break;
+               case WimpEvent_Gain:
+               case WimpEvent_Lose:
+                   if (event == WimpEvent_Gain)
+                       output_str("Gain");
+                   else
+                       output_str("Lose");
+                   output_str(" caret: ");
+                   print_window_title(eventstr[0]);
+                   if (eventstr[1] >= 0) {
+                       output_str(", icon #");
+                       output_int(eventstr[1], 10);
+                   }
+                   output_ch(0);
+                   break;
+               case WimpEvent_Message:
+               case WimpEvent_Recorded:
+               case WimpEvent_ACK:
+                   if (event == WimpEvent_Message)
+                       output_str("Message");
+                   else if (event == WimpEvent_Recorded)
+                       output_str("Message recorded");
+                   else
+                       output_str("Message acknowledge");
+                   output_str(": action = &");
+                   output_uns(eventstr[4], 16, 1);
+                   output_ch(0);
+                   break;
+               default:
+                   output_str("Unknown event code = ");
+                   output_int(event, 10);
+                   output_ch(0);
+                   break;
+            }
+            if (trace_wimpevents) return 1;
+            break;
+        }
+        case N_Watch_Changed: {
+            WatchPoint *wp;
+
+            set_status("Watchpoint Changed");
+            wp = last_watch;
+            output_str("Watchpoint on ");
+            output_str(wp->str);
+            output_str(" changed at ");
+            print_context(&current_context, 0);
+            output_str("New contents: ");
+            if (wp->d.datumtype >= 0)
+                print_datum(&(wp->d), 14, wp->base, &(wp->c));
+            else {
+                if (readword(wp->addr, &word))
+                    output_str("********");
+                else
+                    output_uns(word, wp->base ? wp->base : 16, 1);
+            }
+            output_ch(0);
+            if (trace_watchpoints) return 1;
+            break;
+        }
+        case N_Step_Count:
+            if (trace_execution)
+                cont_flag = 1;
+            else {
+                set_status("Stopped after Single Stepping");
+                output_str("Stepped to ");
+                print_context(&current_context, 0);
+            }
+            break;
+        case N_ShiftF12:
+            flush_buffers();
+            set_status("Stopped by User Interrupt");
+            output_str("User interrupt at ");
+            print_context(&current_context, 0);
+            abort_flag = 0;
+            break;
+        case N_RetFromCall:
+            set_status("Returned from Call");
+            output_str("Returned from call to ");
+            print_context(&current_context, 0);
+            break;
+        case N_LostWatch:
+            set_status("Stopped after single stepping");
+            lose_watchpoints();
+            break;
+    }
+    if (!cont_flag && window_is_open(context_window))
+        update_context_window();
+    display_set_context(&current_context);
+    return cont_flag;
+}
+
+int stopped(int status)
+{
+    int cont_flag;
+
+    cont_flag = show_status(status);
+    if (abort_flag && cont_flag) {
+        show_status(N_ShiftF12);
+        cont_flag = 0;
+    }
+    if (!cont_flag && updatelist)
+        list_updates();
+    return cont_flag;
+}

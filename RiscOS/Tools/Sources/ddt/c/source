@@ -1,0 +1,200 @@
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "respond.h"
+#include "display.h"
+#include "program.h"
+
+typedef struct SourceStr {
+    struct SourceStr *next;
+    int lines;
+    int **slots;
+    char name[1];
+} SourceStr;
+
+SourceStr *sourcelist;
+SourceStr *current_src;
+int current_file_handle;
+
+void close_current_src()
+{
+    if (current_src) os_find_close(current_file_handle);
+    current_src = 0;
+}
+
+static int try_open_src(SourceStr *src)
+{
+    int f;
+
+    if (is_abs_fname(src->name)) {
+        return xos_find_open(OS_FIND_READ | OS_FIND_NO_PATH, src->name, 0);
+    }
+    f = xos_find_open(OS_FIND_READ | OS_FIND_PATH, src->name, prefix);
+    if (!f)
+        f = xos_find_open(OS_FIND_READ | OS_FIND_NO_PATH, src->name, 0);
+    return f;
+}
+
+static int open_src(SourceStr *src)
+{
+    int f;
+
+    if (current_src) close_current_src();
+    if (current_file_handle = f = try_open_src(src))
+        current_src = src;
+    return f;
+}
+
+/* The following buffer size is very carefully choosen */
+#define BUFFER_SIZE 10240
+
+static int readsource(SourceStr *src)
+{
+    int f;
+    int sl_no, sl_line;
+    int where, newline, n;
+    char *buffer, *s;
+
+    if ((f = open_src(src)) == 0)
+        return 0;
+    src->slots = malloc(256 * sizeof(long *), "source slots");
+    sl_line = 0;
+    sl_no = 0;
+    buffer = malloc(BUFFER_SIZE, "temp source buffer");
+    where = 0;
+    newline = 1;
+    do {
+        n = xos_gbpb_read(f, buffer, BUFFER_SIZE, -1);
+        if (n < 0) return 0;
+        n = BUFFER_SIZE - n;
+        if (n == 0) break;
+        s = buffer;
+        do {
+            if (newline) {
+                if (sl_line == 0)
+                src->slots[sl_no] = malloc(256 * sizeof(long), "source line idxs");
+                src->slots[sl_no][sl_line] = where + (s - buffer);
+                newline = 0;
+            }
+            if (*s++ == '\n') {
+                newline = 1;
+                if (++sl_line == 256) {
+                    sl_line = 0;
+                    sl_no++;
+                }
+            }
+        } while (--n);
+        where += s - buffer;
+    } while (1);
+    if (sl_line == 0)
+        src->slots[sl_no] = malloc(256 * sizeof(long), "source line idxs");
+    src->slots[sl_no][sl_line] = where;
+    free(buffer);
+    return (sl_no << 8) + sl_line;
+}
+
+int get_source(char *fname)
+{
+    SourceStr *src;
+
+    if (current_src) close_current_src();
+    src = sourcelist;
+    while (src) {
+        if (cistrcmp(fname, src->name) == 0)
+            break;
+        src = src->next;
+    }
+    if (!src) {
+        src = salloc(sizeof(SourceStr) + strlen(fname));
+        strcpy(src->name, fname);
+        src->lines = readsource(src);
+        src->next = sourcelist;
+        sourcelist = src;
+    }
+    if (!(src->lines))
+        return 0;
+    if (!current_src)
+        if (!open_src(src))
+                return 0;
+    return current_src->lines;
+}
+
+char *get_source_line(char *fname, int line, char *line_buffer)
+{
+    int where, n;
+    char *s, *p;
+    BreakPoint *l;
+
+    line++;
+    s = line_buffer;
+    *s = ' ';
+    l = breaklist;
+    while (l) {
+        if (line == l->line && l->file && !cistrcmp(dis_source_file, l->file)) {
+            *s = DDT_BREAK_CHAR;
+            break;
+        }
+        l = l->next;
+    }
+    if (current_context.file && line == current_context.line &&
+            !cistrcmp(dis_source_file, current_context.file->filename))
+        *s = DDT_ARROW_CHAR;
+    s++;
+    if (source_line_numbers) {
+        s = write_uns(s, line, 5, 10);
+        *s++ = ' ';
+    }
+    if (!current_src || cistrcmp(fname, current_src->name) != 0) {
+        if (!get_source(fname)) {
+            s = add_str(s, "********");
+            *s = 0;
+            return line_buffer;
+        }
+    }
+    if (line > current_src->lines)
+        return "~";
+    where = current_src->slots[(line - 1) >> 8][(line - 1) & 0xff];
+    n = current_src->slots[line >> 8][line & 0xff] - where - 1;
+    if (n > 248) n = 248;
+    if (xos_gbpb_read(current_file_handle, s, n, where) != 0) {
+        s = add_str(s, "********");
+        *s = 0;
+        return line_buffer;
+    }
+    s[n] = 0;
+    p = s;
+    while (*p) {
+        if (*p == 9)
+        {
+            int tomove = 7 - ((p-s) & 7);
+            *p = ' ';
+
+            if (tomove && n+tomove <= 248)
+            {
+                int i;
+
+                memmove(p+tomove+1, p+1, s+n-p);
+                n += tomove;
+
+                for (i=1; i<=tomove; i++)
+                    *++p = ' ';
+            }
+        }
+        else if (*p < 32)
+            *p = '.';
+        p++;
+    }
+    return line_buffer;
+}
+
+void source_init(void)
+{
+    sourcelist = 0;
+    current_src = 0;
+    dis_source_file = "";
+}

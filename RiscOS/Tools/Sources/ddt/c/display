@@ -1,0 +1,412 @@
+#include "defs.h"
+#include "os.h"
+#include "ddt.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "program.h"
+#include "source.h"
+#include "lookup.h"
+#include "inst.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "debug.h"
+#include "respond.h"
+#include "lib.h"
+#include "errors.h"
+#include "cplusplus.h"
+#include "display.h"
+#include "output.h"
+
+static int dis_start;
+static int dis_end;
+static int dis_line;
+
+int dis_type;
+char *dis_source_file;
+
+int dis_base;
+
+static int pc_line;
+
+char *current_status;
+
+extern WindowHandle *source_window;
+
+extern int line_to_addr(int *lp)
+{
+    int m;
+    int line;
+
+    line = *lp;
+    m = line_lookup(line + dis_line + (dis_start >> 2));
+    line -= (m - dis_line);
+    if (labeltab && line + (dis_start >> 2) == labeltab[m]) (*lp)++;
+    return (line << 2) + dis_start;
+}
+
+char *get_dbge_line(int line)
+{
+    int addr;
+    int m, w;
+    int access;
+    ItemSymbol *sy;
+    char *s;
+
+    if (dis_type == DISPLAY_SOURCE) {
+        return get_source_line(dis_source_file, line, line_buffer);
+    } else if (dis_type == DISPLAY_DISASSEMBLY) {
+        m = line_lookup(line + dis_line + (dis_start >> 2));
+        line -= (m - dis_line);
+        addr = (line << 2) + dis_start;
+        if (labeltab && line + (dis_start >> 2) == labeltab[m]) {
+            sy = sym_lookup(addr);
+            return cplusplus(string_tab + STR_INDEX(sy->sym));
+        }
+        inst_dis(line_buffer, addr);
+        return line_buffer;
+    } else if (dis_type == DISPLAY_MEMORY) {
+        addr = dis_start + (line * 16);
+        s = line_buffer;
+        s = write_uns(s, addr, 8, dis_base);
+        *s++ = ':';
+        *s++ = ' ';
+        for (m = 0; m < 4; m++) {
+            access = readword(addr + m * 4, &w);
+            if (access) {
+                s = add_str(s, "********");
+                *s = 0;
+                return line_buffer;
+            }
+            s = write_uns(s, w, 8, dis_base);
+            *s++ = ' ';
+        }
+        s = add_str(s, "  \"");
+#ifdef PRAGMA_C1
+        enable_access = 1;
+#endif
+        for (m = 0; m < 16; m++) {
+            w = *((char *)addr + m);
+            if (w < 32 || w >= 0x7F && w < 0x8C)
+                w = '.';
+            *s++ = w;
+        }
+#ifdef PRAGMA_C1
+        enable_access = 0;
+#endif
+        *s++ = '"';
+        *s = 0;
+        return line_buffer;
+    }
+    return "";
+}
+
+int new_source_file(char *file, int line)
+{
+    Window *w;
+    Rect r;
+    int lines;
+
+    if ((lines = get_source(file)) == 0)
+        return 0;
+    w = get_window_info(source_window);
+    w->ex.miny = -32 * lines;
+    if (w->ex.miny >= -screen_maxy)
+        w->ex.miny = -screen_maxy;
+    pc_line = line - 1;
+    w->scx = 0;
+    w->scy = -(pc_line - 3) * 32;
+    if (w->scy > 0) w->scy = 0;
+    dis_type = DISPLAY_SOURCE;
+    dis_source_file = file;
+    visible_rect(&r, source_window);
+    open_window(source_window, &r, 1);
+    return 1;
+}
+
+static unsigned int disassembly_start(unsigned int addr)
+{
+    unsigned int append = (unsigned int) os_changeenvironment(N_Space_Handler, 0, 0, 0);
+    int n = -1;
+
+    if (addr < append)
+        return 0;
+
+    do
+    {
+        n = os_dynamicarea_enumerate(n);
+        if (n != -1)
+        {
+            unsigned int start, size;
+            os_dynamicarea_read_info(n, &start, &size);
+            if (addr >= start && addr < start + size)
+                return start;
+        }
+    } while (n != -1);
+
+    if (addr < 0x2000000)
+        return 0x1800000;
+    if (addr < 0x3000000)
+        return 0x2000000;
+    if (addr < 0x3400000)
+        return 0x3000000;
+    if (addr < 0x3800000)
+        return 0x3400000;
+    if (addr < 0x4000000)
+        return 0x3800000;
+
+    return (addr &~ 0xFFFF);
+}
+
+static unsigned int disassembly_end(unsigned int addr)
+{
+    unsigned int append = (unsigned int) os_changeenvironment(N_Space_Handler, 0, 0, 0);
+    int n = -1;
+
+    if (addr < append)
+        return append;
+
+    do
+    {
+        n = os_dynamicarea_enumerate(n);
+        if (n != -1)
+        {
+            unsigned int start, size;
+            os_dynamicarea_read_info(n, &start, &size);
+            if (addr >= start && addr < start + size)
+                return start + size;
+        }
+    } while (n != -1);
+
+    if (addr < 0x2000000)
+        return 0x2000000;
+    if (addr < 0x3000000)
+        return 0x3000000;
+    if (addr < 0x3400000)
+        return 0x3400000;
+    if (addr < 0x3800000)
+        return 0x3800000;
+    if (addr < 0x4000000)
+        return 0x4000000;
+
+    return (addr &~ 0xFFFF) + 0x10000;
+}
+
+void new_disassembly_display(int address, int offset)
+{
+    Window *w;
+    Rect r;
+    int line;
+
+    w = get_window_info(source_window);
+    dis_start = disassembly_start(address);
+    dis_end = disassembly_end(address);
+    dis_line = addr_lookup(dis_start);
+    dis_type = DISPLAY_DISASSEMBLY;
+    line = addr_lookup(address);
+    pc_line = line + ((address - dis_start) >> 2) - dis_line;
+    if (!offset && line && labeltab[line - 1] == (address >> 2))
+        offset++;
+    line = addr_lookup(dis_end) - dis_line;
+    w->ex.miny = -(line + ((dis_end - dis_start) >> 2)) * 32;
+    w->scx = 0;
+    w->scy = -(pc_line - offset) * 32;
+    if (w->scy > 0) w->scy = 0;
+    visible_rect(&r, source_window);
+    open_window(source_window, &r, 1);
+}
+
+void new_memory_display(int addr, int base)
+{
+     Window *w;
+     Rect r;
+
+     w = get_window_info(source_window);
+     dis_start = disassembly_start(addr);
+     dis_end = disassembly_end(addr);
+     dis_base = base;
+     dis_type = DISPLAY_MEMORY;
+     w->ex.miny = -((dis_end - dis_start) >> 4) * 32;
+     w->scx = 0;
+     w->scy = -((addr - dis_start) >> 4) * 32;
+     visible_rect(&r, source_window);
+     open_window(source_window, &r, 1);
+}
+
+void display_set_context(Context *c)
+{
+    Window *w;
+    int line, nline;
+    int y;
+    Rect r;
+
+    w = get_window_info(source_window);
+    if (c->file && source_level) {
+         if (dis_type != DISPLAY_SOURCE ||
+                 dis_source_file != c->file->filename) {
+             if (!new_source_file(c->file->filename, c->line)) {
+                 source_level = 0;
+                 display_set_context(c);
+                 source_level = 1;
+                 report(ERR_READSOURCE);
+             }
+         } else {
+             if (pc_line != c->line - 1) {
+                 line = -pc_line * 32;
+                 r.minx = 0;
+                 r.maxx = 15;
+                 r.maxy = line;
+                 r.miny = line - 31;
+                 invalid_rect(source_window, r);
+                 pc_line = c->line - 1;
+                 line = -pc_line * 32;
+                 r.maxy = line;
+                 r.miny = line - 31;
+                 invalid_rect(source_window, r);
+             }
+             line = (-w->scy) >> 5;
+             if (pc_line < line) {
+                 y = -(pc_line - 3) * 32;
+                 if (y > 0) y = 0;
+                 set_scroll_offsets(source_window, w->scx, y);
+             } else {
+                 nline = (w->r.maxy - w->r.miny) >> 5;
+                 if (pc_line > line + nline - 3) {
+                     y = -(pc_line - nline + 3) * 32;
+                     if (y > 0) y = 0;
+                     set_scroll_offsets(source_window, w->scx, y);
+                 }
+             }
+         }
+    } else {
+        if (dis_type != DISPLAY_DISASSEMBLY ||
+                    dis_start != disassembly_start(c->address) ||
+                    dis_end != disassembly_end(c->address)) {
+            new_disassembly_display(c->address, 3);
+        } else {
+            dis_line = addr_lookup(dis_start);
+            line = -pc_line * 32;
+            r.minx = 0;
+            r.maxx = 15;
+            r.maxy = line;
+            r.miny = line - 31;
+            invalid_rect(source_window, r);
+            pc_line = addr_lookup(c->address) +
+                                     ((c->address -dis_start) >> 2) - dis_line;
+            line = -pc_line * 32;
+            r.maxy = line;
+            r.miny = line - 31;
+            invalid_rect(source_window, r);
+            line = (-w->scy) >> 5;
+            if (pc_line < line) {
+                y = -(pc_line - 3) * 32;
+                if (y > 0) y = 0;
+                set_scroll_offsets(source_window, w->scx, y);
+            } else {
+                nline = (w->r.maxy - w->r.miny) >> 5;
+                if (pc_line > line + nline - 3) {
+                    y = -(pc_line - nline + 3) * 32;
+                    if (y > 0) y = 0;
+                    set_scroll_offsets(source_window, w->scx, y);
+                }
+            }
+        }
+    }
+}
+
+void display_show_bp(int line)
+{
+    Rect r;
+    Window *w;
+
+    r.minx = 0;
+    r.maxx = 15;
+    if (line >= 0) {
+        line = -line * 32;
+        r.maxy = line;
+        r.miny = line - 31;
+    } else {
+        w = get_window_info(source_window);
+        r.maxy = w->scy;
+        r.miny = w->scy - (w->r.maxy - w->r.miny);
+    }
+    invalid_rect(source_window, r);
+}
+
+void memory_changed(void *addr, int n)
+{
+    Window *w;
+    unsigned dis_lb, dis_ub;
+    unsigned lb, ub;
+    int line, m;
+
+    if (dis_type == DISPLAY_MEMORY || dis_type == DISPLAY_DISASSEMBLY) {
+        w = get_window_info(source_window);
+        lb = (unsigned)addr;
+        ub = lb + n - 1;
+        if (dis_type == DISPLAY_MEMORY) {
+            dis_lb = dis_start + (-w->scy / 32) * 16;
+            dis_ub = dis_lb + ((w->r.maxy - w->r.miny) / 32 + 1) * 16 - 1;
+        } else {
+            line = -w->scy / 32;
+            m = line_lookup(line + dis_line + (dis_start >> 2));
+            line -= (m - dis_line);
+            dis_lb = (line << 2) + dis_start;
+            dis_ub = dis_lb + ((w->r.maxy - w->r.miny) / 32 + 1) * 4 - 1;
+        }
+        if ((lb >= dis_lb && lb <= dis_ub) ||
+                (ub >= dis_lb && ub <= dis_ub))
+            invalid_rect(0, w->r);
+    }
+}
+
+void missing_media(MediaChangeInfo *sp)
+{
+    char fsname[16];
+    OS_FSControl_Block cb;
+    int c;
+
+    if (sp->reason == 4) {
+        return;
+    }
+    if (!window_initialised) {
+        sp->reason = -1;
+        return;
+    }
+    cb.r1 = sp->fsno;
+    cb.r2 = (int)fsname;
+    cb.r3 = 16;
+    os_fscontrol(OS_FSCONTROL_FSNO_TO_FSNAME, &cb);
+    output_str("Please insert");
+#ifdef PRAGMA_C1
+    enable_access = 1;
+#endif
+    if ((int)sp->media_type >= 0) {
+        output_ch(' ');
+        output_str(sp->media_type);
+    }
+#ifdef PRAGMA_C1
+    enable_access = 0;
+#endif
+    c = ' ';
+    if (fsname[0]) {
+        output_ch(' ');
+        output_str(fsname);
+        c = ':';
+    }
+    if ((int)sp->media_name >= 0) {
+        output_ch(c);
+        output_ch(':');
+#ifdef PRAGMA_C1
+        enable_access = 1;
+#endif
+        output_str(sp->media_name);
+#ifdef PRAGMA_C1
+        enable_access = 0;
+#endif
+    }
+    output_line(" and click Select (Adjust to abort)");
+    sp->reason = 0;
+    if (!xos_confirm())
+        sp->reason = -1;
+}

@@ -1,0 +1,832 @@
+#include <stddef.h>
+
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "ddt.h"
+#include "lookup.h"
+#include "inst.h"
+#include "lib.h"
+#include "program.h"
+#include "source.h"
+#include "output.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "display.h"
+#include "templates.h"
+#include "respond.h"
+#include "help.h"
+#include "bin.h"
+#include "errors.h"
+#include "debug.h"
+#include "cplusplus.h"
+
+#define IAN_FIX 1
+
+#ifdef IAN_FIX
+#define Asd_LineInfo_Short_MaxLine 63
+
+/* short form lineinfo items have code and file position increments < 256.
+ * If the current file position is (line, col), a file position increment
+ * fpinc describes a new file position
+ *   (line+fpinc, 1) if inc <= Asd_LineInfo_Short_MaxLine
+ *   (line, col+fpinc-Asd_LineInfo_Short_MaxLine-1) otherwise
+ *
+ * fpinc = 0, codeinc = 0 indicates that the item is in long format 1:
+ * new file position is (line+lineinc, 1)
+ *
+ * fpinc = Asd_LineInfo_Short_MaxLine+1, codeinc = 0 indicates that the
+ * item is in long format 2. new file position is
+ *   (line+lineinc, newcol)
+ */
+
+typedef struct
+{   unsigned char codeinc;
+    unsigned char lineinc;
+} asd_LineInfo_Short;
+
+typedef struct
+{   unsigned short marker;
+    unsigned short lineinc; /* (in target byte order) */
+    unsigned short codeinc; /* (in target byte order) */
+} asd_LineInfo_Long_1;
+
+typedef struct
+{   unsigned short marker;
+    unsigned short lineinc; /* (in target byte order) */
+    unsigned short codeinc; /* (in target byte order) */
+    unsigned short newcol;  /* (in target byte order) */
+} asd_LineInfo_Long_2;
+
+#endif
+
+
+typedef struct AIFHeader {
+    int bl_unsqueeze;
+    int bl_reloc;
+    int bl_zinit;
+    int bl_entry;
+    int swi_exit;
+    int rosize;
+    int rwsize;
+    int debugsize;
+    int zinitsize;
+    int debugtype;
+    int imagebase;
+    int workspace;
+    int debug_swi;           /* address_mode */
+    int fix_r14;
+    int alt_zinit_br;
+    int reserved;
+    int zinitcode[16];
+} AIFHeader;
+
+WindowHandle *mainmenu;
+WindowHandle *source_window, *output_window;
+
+typedef struct WindowInitStr {
+    char           *identifier;
+    WindowHandle   **window_h;
+    Get_Line_Fn    getline;
+    Mouse_Click_Fn click_fn;
+} WindowInitStr;
+
+static WindowInitStr init_windows[18] = {
+    { "Source",         &source_window },
+    { "Output",         &output_window },
+    { "Step",           &step_window },
+    { "Call",           &call_window },
+    { "Return",         &return_window },
+    { "Breakpoint",     &breakpoint_window },
+    { "Watchpoint",     &watchpoint_window },
+    { "Trace",          &trace_window },
+    { "Context",        &context_window },
+    { "Display",        &display_window },
+    { "Change",         &change_window },
+    { "Log",            &log_window },
+    { "Find",           &find_window },
+    { "Options",        &options_window },
+    { "Help",           &help_window },
+    { "Command",        &command_window },
+    { "Wimpevents",     &wimpevent_window },
+    { 0, 0 }
+};
+
+static MenuStr menu[17] = {
+    { "Continue    ^C", continue_cmd, 0 },
+    { "Single step ^S", menu_cmd, 0 },
+    { "Call",           menu_cmd, &call_window },
+    { "Return",         menu_cmd, &return_window },
+    { "Breakpoint  ^B", menu_cmd, &breakpoint_window },
+    { "Watchpoint  ^W", menu_cmd, &watchpoint_window },
+    { "Trace",          menu_cmd, &trace_window },
+    { "Context",        menu_cmd, 0 },
+    { "Display     ^D", menu_cmd, &display_window },
+    { "Change",         menu_cmd, &change_window },
+    { "Log",            menu_cmd, &log_window },
+    { "Find",           menu_cmd, &find_window },
+    { "Options",        menu_cmd, &options_window },
+    { "*Commands",      menu_cmd, &command_window },
+    { "Help",           menu_cmd, 0 },
+    { "Quit        ^Q", quit_cmd, 0 },
+    { 0, 0, 0 }
+};
+
+typedef struct IconInitStr {
+    WindowHandle   **window_h;
+    int            icon;
+    Icon_Click_Fn  icon_proc;
+} IconInitStr;
+
+static IconInitStr init_icons[17] = {
+    { &wimpevent_window,  I_WimpEvent_OK,    wimpevent_ok },
+    { &trace_window,      I_Trace_OK,        trace_ok },
+    { &step_window,       I_Step_OK,         step_ok },
+    { &change_window,     I_Change_OK,       change_ok },
+    { &options_window,    I_Options_OK,      options_ok },
+    { &options_window,    I_Options_Save,    options_save },
+    { &call_window,       I_Call_OK,         call_ok },
+    { &command_window,    I_Command_OK,      command_ok },
+    { &return_window,     I_Return_OK,       return_ok },
+    { &log_window,        I_Log_OK,          log_ok },
+    { &context_window,    I_Context_Out,     context_action },
+    { &context_window,    I_Context_In,      context_action },
+    { &context_window,    I_Context_Home,    context_action },
+    { &find_window,       I_Find_String,     find_action },
+    { &find_window,       I_Find_Word,       find_action },
+    { &find_window,       I_Find_Byte,       find_action },
+    { 0, 0, 0}
+};
+
+ItemSymbol *symbol_tab;
+unsigned *labeltab;
+int nlabels;
+char *string_tab;
+int symbols;
+char *progname;
+char *imagename;
+
+static int languages;
+
+#if 0
+static void update_source_window(Context *context)
+{
+    int nline;
+
+    nline = addr_lookup(context->address) + (context->address >> 2);
+    source_scroll_y = nline * 32;
+}
+#endif
+
+static ProcDef *initproc(char *name, ProcDef *parent,
+                         ItemProc *item, ItemSection *section)
+{
+    ProcDef *p;
+
+    p = salloc(sizeof(ProcDef));
+    if (!item) {
+        item = salloc(offsetof(ItemProc, name) + strlen(name));
+        strcpy(item->name, name);
+        item->endproc = 0;
+        item->entry = 0;
+        item->fileentry = 0;
+    }
+    p->item = item;
+    p->n.sibling = 0;
+    if (parent) {
+        p->n.sibling = &(parent->childlist->n);
+        parent->childlist = p;
+    }
+    p->childlist = 0;
+    p->varlist = 0;
+    p->section = section;
+    p->n.parent = parent;
+    initname(name, proctable, &(p->n));
+    return p;
+}
+
+static VarDef *initvar(char *name, ProcDef *parent, ItemVar *item)
+{
+    VarDef *v, **pv;
+
+    v = salloc(sizeof(VarDef));
+    v->item = item;
+    v->n.sibling = 0;
+    pv = &(parent->varlist);
+    while (*pv) pv = (VarDef **)&((*pv)->n.sibling);
+    *pv = v;
+    v->n.parent = parent;
+    initname(name, vartable, &(v->n));
+    return v;
+}
+
+static char *initsection(char *debugdata)
+{
+    ItemSection *section;
+    ProcDef *thisproc;
+    char *dataend, *cs;
+    int c, i;
+#ifdef IAN_FIX
+    unsigned char asdversion;
+#endif
+
+    section = (ItemSection *)debugdata;
+#ifdef IAN_FIX
+    asdversion = section->asdversion;
+#endif
+    if (section->code != ITEMSECTION)
+        fatal(BAD_DBG_DATA, "Badly formatted debugging tables");
+    dataend = debugdata + (section->debugsize + 3 & ~3);
+    if (!section->lang) {
+        ItemSymbol *symtab;
+        unsigned int i;
+
+        symbols = ((ItemSymbols *)debugdata)->nsyms;
+        symbol_tab = (ItemSymbol *)(debugdata + sizeof(ItemSymbols));
+        string_tab = ((char *)symbol_tab) + symbols * sizeof(ItemSymbol);
+        symtab = symbol_tab;
+        for (i = 0; i < symbols; i++, symtab++) {
+/*
+            os_write0("Symbol ");
+            os_write0(string_tab + STR_INDEX(symbol_tab[i].sym));
+            os_write0("\r\n");
+*/
+            if (SYM_TYPE(symtab->sym) != ABSOLUTE_SYM)
+                symtab->value += image_base - 0x8000;
+        }
+        sym_sort(symbol_tab, symbols);
+        labeltab = malloc((symbols + 1) * sizeof(unsigned), "labeltab");
+        nlabels = build_labeltab(symbol_tab, symbols, labeltab, string_tab);
+        return dataend;
+    }
+    languages |= 1 << section->lang;
+    section->fileinfo = (ItemFileInfo *)(debugdata + (int)section->fileinfo);
+    cvt_str(section->name);
+    munge_filename(section->name);
+    cs = section->name;
+    while ((c = *cs++) != 0) {
+        if (c == ':' || c == '.') {
+            strcpy(section->name, cs);
+            cs = section->name;
+        }
+    }
+    thisproc = initproc(section->name, root, 0, section);
+    debugdata += section->len;
+    while (debugdata < dataend) {
+        switch (((ItemSection *)debugdata)->code) {
+            case ITEMPROC: {
+                ItemProc *item;
+
+                item = (ItemProc *)debugdata;
+                item->fileentry = (ItemFileEntry *)((int)section +
+                                                    (int)item->fileentry);
+                cvt_str(item->name);
+                thisproc = initproc(item->name, thisproc, item, section);
+                if (item->endproc == 0)
+                    thisproc = thisproc->n.parent;
+                else
+                    item->endproc = (ItemEndProc *)((int)section +
+                                                           (int)item->endproc);
+                break;
+            }
+            case ITEMENDPROC: {
+                ItemEndProc *item;
+
+                item = (ItemEndProc *)debugdata;
+                item->fileentry = (ItemFileEntry *)((int)section +
+                                                    (int)item->fileentry);
+                thisproc = thisproc->n.parent;
+                break;
+            }
+            case ITEMVAR: {
+                ItemVar *item;
+
+                item = (ItemVar *)debugdata;
+                cvt_str(item->name);
+                initvar(item->name, thisproc, item);
+                break;
+            }
+            case ITEMTYPE:
+                cvt_str(((ItemType *)debugdata)->name);
+                break;
+            case ITEMSTRUCT: {
+                ItemStruct *item;
+                StructField *field;
+
+                item = (ItemStruct *)debugdata;
+                i = item->fields;
+                field = item->fieldtable;
+                while (i) {
+                    cvt_str(field->name);
+                    field = (StructField *)((char *)(field + 1) +
+                                                   (strlen(field->name) & ~3));
+                    i--;
+                }
+                break;
+            }
+            case ITEMARRAY:
+            case ITEMSUBR:
+            case ITEMSET:
+                break;
+            case ITEMFILEINFO: {
+                debugdata = (char *)(((ItemFileInfo *)debugdata)->entries);
+                while (1) {
+                    ItemFileEntry *entry;
+                    int *ptr;
+                    Fragment *frag;
+                    int nfrags;
+                    unsigned char *lineinfo, *lineinfoend;
+                    int addr;
+
+                    entry = (ItemFileEntry *)debugdata;
+                    if (entry->len == 0)
+                        break;
+                    cvt_str(entry->filename);
+                    munge_filename(entry->filename);
+                    ptr = (int *)((char *)(entry + 1) +
+                                               (strlen(entry->filename) & ~3));
+                    nfrags = *ptr++;
+                    frag = (Fragment *)ptr;
+                    while (nfrags--) {
+                        lineinfo = frag->lineinfo;
+                        lineinfoend = (unsigned char *)frag + frag->size;
+                        addr = frag->codestart - image_base;
+                        while (lineinfo < lineinfoend) {
+                            code_table[addr >> 5] |= 1 << ((addr >> 2) & 7);
+#ifdef IAN_FIX
+                            if (lineinfo[0] == 0 && lineinfo[1] == 0) {
+                                lineinfo += 2 + 2;
+                                addr += *((unsigned short *)lineinfo);
+                                lineinfo += 2;
+                            } else if (asdversion > 2 && lineinfo[0] == 0 && lineinfo[1] == Asd_LineInfo_Short_MaxLine+1) {
+                                addr += ((asd_LineInfo_Long_2 *)lineinfo)->codeinc;
+                                lineinfo += 8;
+                            } else {
+                                addr += *lineinfo++;
+                                lineinfo++;
+                            }
+#else
+                            if (*lineinfo == 0) {
+                                lineinfo += 2 + 2;
+                                addr += *((unsigned short *)lineinfo);
+                                lineinfo += 2;
+                            } else {
+                                addr += *lineinfo++;
+                                lineinfo++;
+                            }
+#endif
+                        }
+                        frag = (Fragment *)(((int)lineinfoend + 3) & ~3);
+                    }
+                    debugdata += entry->len;
+                }
+                return dataend;
+            }
+            default:
+                /*fatal(BAD_DBG_DATA, "Badly formatted debugging tables");*/
+                break;   /* IDJ 25-May-94: ignore unknown debug types */
+        }
+        debugdata += ((ItemSection *)debugdata)->len;
+    }
+    return dataend;
+}
+
+static void initroot(void)
+{
+    int i;
+
+    proctable = malloc(HASHSIZE * sizeof(HashEntry *), "proctable");
+    vartable = malloc(HASHSIZE * sizeof(HashEntry *), "vartable");
+    for (i = 0; i < HASHSIZE; i++) {
+        proctable[i] = 0;
+        vartable[i] = 0;
+    }
+    root = initproc(ROOTNAME, 0, 0, 0);
+}
+
+#ifdef SELF_CHECKS
+static void *debugtable;
+static int debugtablesize;
+#endif
+
+static void new_image(int robase, int rosize,
+                      int rwbase, int rwsize,
+                      int debugbase, int debugsize)
+{
+    char *debugdata, *debugend;
+    int *ptr, *code_end;
+
+    languages = 0;
+    image_base = robase;
+    image_rosize = rosize;
+    initroot();
+    /* Allocate space for code table, a bit set indicating if there is a source
+     * statement corresponding to the memory location. + 2 allows for maximum
+     * wastage on either side
+     */
+    code_table = malloc((image_rosize >> 5) + 2, "code_table");
+    code_end = (int *)(code_table + (image_rosize >> 5) + 2);
+    ptr = (int *)code_table;
+    while (ptr < code_end) *ptr++ = 0;
+    symbol_tab = 0;
+    labeltab = 0;
+    nlabels = 0;
+    symbols = 0;
+    string_tab = 0;
+    bindings = 0;
+    source_init();
+    if (debugsize == 0) {
+        error("No debugging information available");
+    } else {
+#ifdef SELF_CHECKS
+        debugtable = debugdata = page_alloc(debugsize);
+        debugtablesize = debugsize;
+#else
+        debugdata = malloc(debugsize, "debugdata");
+#endif
+        debugend = debugdata + debugsize;
+        memcpy(debugdata, (char *)debugbase, debugsize);
+        while (debugdata < debugend) {
+            debugdata = initsection(debugdata);
+            if (!debugdata)
+                break;
+        }
+#ifdef SELF_CHECKS
+        prot_mem(debugtable, debugsize);
+#endif
+        if (languages)
+            return;
+        error("No source level debugging information");
+    }
+    set_icon_state(step_window, I_Step_Source, 0);
+    set_icon_state(step_window, I_Step_Inst, 1);
+}
+
+static int remove_bp(int addr)
+{
+    BreakPoint **pbp, *bp;
+
+    pbp = &breaklist;
+    while (bp = *pbp) {
+        if (!IS_PBREAK(bp) && bp->addr == addr) {
+            *pbp = bp->next;
+            writeword(bp->addr, bp->inst);
+            os_synchronisecodeareas((void *) bp->addr, (void *) bp->addr);
+            rma_free(bp);
+            return 0;
+        }
+        pbp = &(bp->next);
+    }
+    return ERR_NOSUCHBREAK;
+}
+
+int window_click(WindowHandle *we, int x, int y, int b)
+{
+    Rect r;
+    int w, h;
+    Window *wind;
+    Context where;
+    int err;
+    char *file;
+    int ln, line;
+
+/* We're not interested in clicks on the menu, returning 0 means that the
+ * window manager will call icon_click for the appropriate menu item
+ */
+    if (we == mainmenu) return 0;
+/* If clicked select or adjust do nothing, but return 1 to indicate
+ * we've handled it
+ */
+    wind = get_window_info(we);
+    if (!(b & MIDDLE_BUTTON)) {
+        char bp_buff[128];
+        BreakPoint *bp;
+
+        if (we != source_window) return 1;
+        line = (-wind->scy + (wind->r.maxy - y)) / 32;
+        if (dis_type == DISPLAY_SOURCE) {
+            if (!filepostocode(&where, dis_source_file, line + 1)) {
+                line--;
+                if (!filepostocode(&where, dis_source_file, line + 1)) {
+                    report(ERR_LINENOTFOUND);
+                    return 1;
+                }
+            }
+            if (bp = break_lookup(where.address)) {
+                err = remove_bp(where.address);
+                if (err) {
+                    report(err);
+                    return 1;
+                }
+            } else {
+                strcpy(bp_buff, dis_source_file);
+                w = strlen(bp_buff);
+                bp_buff[w++] = ':';
+                *write_uns_lj(bp_buff + w, line + 1, 10) = 0;
+                err = break_set(where.address, bp_buff,
+                                dis_source_file, line + 1);
+                if (err) {
+                    report(err);
+                    return 1;
+                }
+            }
+        } else if (dis_type == DISPLAY_DISASSEMBLY) {
+            h = line_to_addr(&line);
+            if (bp = break_lookup(h)) {
+                err = remove_bp(h);
+                if (err) {
+                    report(err);
+                    return 1;
+                }
+            } else {
+                write_uns(bp_buff, h, 8, 16);
+                where.file = 0;
+                where.address = h;
+                file = 0;
+                ln = -1;
+                if (where.proc == codetoproc(h)) {
+                    if (getsourceinfo(&where)) {
+                        file = where.file->filename;
+                        ln = where.line;
+                    }
+                }
+                err = break_set(h, bp_buff, file, ln);
+                if (err) {
+                    report(err);
+                    return 1;
+                }
+            }
+        } else
+            return 1;
+        display_show_bp(line);
+        return 1;
+    }
+/* Otherwise, if the window does not have a close box or vertical scroll bar
+ * then it is a transient dialog box so return 1 to ignore click
+ */
+    if (!(wind->flags & (WF_CLOSE | WF_VSCROLL))) return 1;
+    visible_rect(&r, mainmenu);
+    w = r.maxx - r.minx;
+    h = r.maxy - r.miny;
+    r.minx = x - 64;
+    r.maxx = r.minx + w;
+    r.maxy = y;
+    r.miny = y - h;
+    open_menu(mainmenu, &r, 0, 0);
+    return 1;
+}
+
+void scroll_req(WindowHandle *we, int scx, int scy, int dirx, int diry)
+{
+    Rect r;
+    int ofs;
+
+    visible_rect(&r, we);
+    if (dirx & 1) {
+        ofs = X_CHAR;
+        if (dirx < 0) ofs = -ofs;
+        scx += ofs;
+    } else if (dirx) {
+        ofs = (r.maxx - r.minx) + X_OS;
+        if (dirx < 0) ofs = -ofs;
+        scx += ofs;
+    }
+    if (diry & 1) {
+        if (diry < 0)
+            ofs = ((r.maxy - r.miny - scy + Y_OS) & (Y_CHAR - 1)) - 32;
+        else
+            ofs = 32 - (scy & 31);
+        scy += ofs;
+    } else if (diry) {
+        ofs = (r.maxy - r.miny) + Y_OS;
+        if (diry < 0) ofs = -ofs;
+        scy += ofs;
+    }
+    set_scroll_offsets(we, scx, scy);
+}
+
+static void interact(void)
+{
+    Rect r;
+    int e;
+
+    open_window(source_window, visible_rect(&r, source_window), 0);
+    open_window(output_window, visible_rect(&r, output_window), 0);
+    finished = 0;
+    abort_flag = 0;
+    do {
+        if ((e = window_poll()) != 0) {
+            if (e == EVENT_SUSPEND) {
+/*
+                window_closedown();
+*/
+                abort_flag = 0;
+                e = cont(EXEC_SUSPEND, 0);
+                abort_flag = 0;
+                window_resume();
+                if (e != N_Resume)
+                    stopped(e);
+            }
+        }
+    } while (!finished);
+#ifdef SELF_CHECKS
+    unprot_mem(debugtable, debugtablesize);
+#endif
+    delete_window(output_window);
+    delete_window(source_window);
+    close_current_src();
+    output_close();
+}
+
+#define CONTINUE_FLAG (1 << 8)
+
+void debug_aif(int *regs, int debugswi)
+{
+    AIFHeader *header;
+    WindowInitStr *iw;
+    IconInitStr *ii;
+    int i;
+    int *t;
+    int *start_time;
+    char *s, *p, *cmd_line;
+    TemplateFile *tf;
+    int robase, rosize, rwbase, rwsize, debugbase, debugsize;
+    int r0;
+
+#ifdef PRAGMA_C1
+    enable_access = 0;
+#endif
+    window_startup();
+    swap_in_handlers();
+    claim_dbgr_vectors();
+    cplusplus_init();
+
+    StoredPCOffset = (os_platformfeatures_code() & 8) ? 8 : 12;
+
+    if (os_readmodevariable(-1, 0) & 1)
+        fatal(0x703, "Not a graphics mode");
+    tf = (TemplateFile *)&template_base;
+    r0 = BREAKMAIN_FLAG;   /* bug-fix AQU-00707: IDJ 20-Dec-94: break at main by default */
+    if (debugswi) {
+        if (regs[8])
+            memcpy(&registers, (void *)regs[8], 16 * sizeof(int));
+        else for (i = 0; i < 16; i++)
+            registers.r[i] = regs[i];
+        r0 = regs[0];
+        s = (char *)regs[1];
+        progname = salloc(strlen(s) + 1 + 5);
+        strcpy(progname, "DDT: ");
+        strcpy(progname + 5, s);
+        strcpy(cmd_buffer, "");
+    } else {
+        s = cmd_buffer + 256;
+        p = cmd_buffer;
+        while ((*p = *--s) > ' ') p++;
+        *p = 0;
+        i = strlen(cmd_buffer);
+        progname = salloc(i + 1 + 5);
+        strcpy(progname, "DDT: ");
+        strcpy(progname + 5, cmd_buffer);
+        cmd_line = os_getenv(0, &start_time);
+        s = cmd_line;
+        while (*s > ' ') s++;
+        while (*s == ' ') s++;
+        *p++ = ' ';
+        strcpy(p, s);
+        os_writeenv(cmd_buffer, start_time);
+    }
+    imagename = progname + 5;
+    dis_type = -1;
+    find_wrch();
+    watchlist = 0;
+    breaklist = 0;
+    updatelist = 0;
+    current_status = 0;
+    event_break_mask = 0;
+    if (debugswi) {
+        robase = regs[2];
+        rosize = regs[3];
+        rwbase = regs[4];
+        rwsize = regs[5];
+        debugbase = regs[6];
+        debugsize = regs[7];
+    } else {
+        t = (int *)((regs[15] & ~0xfc000003) - 4);
+        header = (AIFHeader *)(t - 0x0c);
+        if (debug_swi_inst) {
+            *t = debug_swi_inst;
+            debug_swi_inst = 0;
+        }
+        if (header->swi_exit != EXIT_SWI)
+            header = (AIFHeader *)t;
+        if (header->swi_exit == EXIT_SWI) {
+            header->bl_unsqueeze = /*BLNV_INST*/ AIF_NOOP;
+            header->bl_reloc = /*BLNV_INST*/ AIF_NOOP;
+            if (header->alt_zinit_br == RET_INST)
+                header->bl_zinit = /*BLNV_INST*/ AIF_NOOP;
+            else
+                header->bl_zinit = BL_INST |
+                               ((header->alt_zinit_br + 12) & 0xffffff);
+            header->debug_swi = 0;
+            header->fix_r14 = 0;
+            header->alt_zinit_br = 0;
+
+        }
+        robase = (int)header;
+        rosize = 4;
+        rwsize = 0;
+        debugsize = 0;
+        if (header->swi_exit == EXIT_SWI) {
+            rosize = header->rosize;
+            rwsize = header->rwsize;
+            debugsize = header->debugsize;
+        }
+        rwbase = robase + rosize;
+        debugbase = rwbase + rwsize;
+        for (i = 0; i < 16; i++)
+            registers.r[i] = 0;
+        for (i = 0; i < 8; i++) {
+            registers.f[i].word[0] = 0;
+            registers.f[i].word[1] = 0;
+            registers.f[i].word[2] = 0;
+        }
+        *((int *)&registers.fpstatus) = 0x00070000;
+        registers.r[14] = (int)&exit_swi;
+        registers.r[15] = (int)header;
+    }
+    iw = init_windows;
+    while (iw->identifier) {
+        *(iw->window_h) = create_window(get_template(tf, iw->identifier));
+        set_window_fns(*(iw->window_h), 0, window_click, 0);
+        iw++;
+    }
+    ii = init_icons;
+    while(ii->window_h) {
+        set_icon_proc(*(ii->window_h), ii->icon, ii->icon_proc);
+        ii++;
+    }
+    for (i = I_Help_Continue; i <= I_Help_Find; i++)
+        set_icon_proc(help_window, i, help_action);
+    for (i = I_Break_RemoveAll; i <= I_Break_WimpEvents; i++)
+        set_icon_proc(breakpoint_window, i, break_action);
+    for (i = I_Watch_Memory; i <= I_Watch_Variable; i++)
+        set_icon_proc(watchpoint_window, i, watch_action);
+    for (i = I_Display_Backtrace; i <= I_Display_FPRegs; i++)
+        set_icon_proc(display_window, i, display_action);
+    set_window_fns(source_window, get_dbge_line, window_click, scroll_req);
+    set_window_fns(output_window, get_output_line, window_click, scroll_req);
+    set_window_fns(help_window, get_help_line, window_click, 0);
+    mainmenu = create_menu("DDT", menu);
+    output_init();
+    /* MEDUSA ? - ? */
+    claim_wrchv();
+    os_cli("*Pointer");
+    release_wrchv();
+    window_init();
+    register_key_handler(respond_key);
+    if (r0 & CONTINUE_FLAG)
+        output_disable();
+    new_image(robase, rosize, rwbase, rwsize, debugbase, debugsize);
+    if (!debugswi && header->swi_exit == EXIT_SWI) {
+        i = (int)os_changeenvironment(N_MemoryLimit_Handler, 0, 0, 0);
+        /* Initialise the rest of the application space with a suitable pattern
+         * which will cause an address exception if dereferenced. The pattern
+         * is carefully chosen so we can tell the alignment from the address
+         * given by the address exception and so that it will given a data
+         * abort if the top bit is lost (for example by loading into pc or lr).
+         * The pattern will also cause an illegal instruction if executed.
+         */
+        wordset(debugbase, 0x6c6d6e6f, i - debugbase);
+    }
+    read_memmap(robase, rosize);
+    respond_init(debugswi, r0);
+    getcontext(registers.r15.pc & ~3);
+    if (!(r0 & CONTINUE_FLAG))
+        display_set_context(&current_context);
+    else {
+        output_enable();
+        continue_cmd(0, 0, 0);
+    }
+    interact();
+    window_closedown();
+    window_cleanup();
+    hourglass_smash();
+    swap_out_handlers();
+    release_dbgr_vectors();
+    debugger_exit();
+}
+
+void debug_init(void)
+{
+#ifdef PRAGMA_C1
+    enable_access = 0;
+#endif
+    poll_intercept_flag = 0;
+    load_templates();
+    qd_load_palette();
+    xos_setvarval("File$Type_FD3", "DebImage");
+    xos_setvarval("Alias$@RunType_FD3", "DebugAIF %*0");
+    xos_setvarval("Alias$@LoadType_FD3", "Load %0 8000");
+}

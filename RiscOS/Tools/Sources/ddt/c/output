@@ -1,0 +1,195 @@
+#include "defs.h"
+#include "os.h"
+#include "asd.h"
+#include "lowlevel.h"
+#include "control.h"
+#include "lib.h"
+#include "quickdraw.h"
+#include "window.h"
+#include "output.h"
+
+#define OUTPUT_SIZE     16384
+#define N_OUTPUT_LINES    512
+
+static char *output_buffer;
+static int *output_lines;
+
+static int output_pos;
+static int first_line;
+
+static int output_pending;
+
+int logfile;
+
+extern WindowHandle *output_window;
+
+void output_init(void)
+{
+    int i;
+
+    output_lines = malloc((N_OUTPUT_LINES + 1) * sizeof(char *), "output_lines");
+    output_buffer = malloc(OUTPUT_SIZE * sizeof(char), "output_buffer");
+    for (i = 0; i < N_OUTPUT_LINES; i++) {
+        output_lines[i] = -1;
+    }
+    output_lines[N_OUTPUT_LINES] = 0;
+    output_pos = 0;
+    first_line = N_OUTPUT_LINES;
+    logfile = 0;
+    output_pending = 0;
+}
+
+void output_disable(void)
+{
+    output_pending = 1;
+}
+
+void output_enable(void)
+{
+    output_pending = 0;
+}
+
+void output_close(void)
+{
+    if (logfile)
+        os_find_close(logfile);
+}
+
+void output_ch(char c)
+{
+    int i;
+    int old_logfile;
+    Window *w;
+
+    if (c && c < 32) {
+        c = quotechar(c);
+        if (c >='a')
+            output_ch('\\');
+        else
+            output_ch('|');
+    }
+    if (logfile) {
+        if (!c) c = '\n';
+        xos_bput(c, logfile);
+        if (os_vs()) {
+            os_find_close(logfile);
+            logfile = 0;
+        }
+    }
+    if (c == '\n') c = 0;
+    output_buffer[output_pos++] = c;
+    output_pos &= OUTPUT_SIZE - 1;
+    if (!c) {
+        memcpy(&output_lines[0], &output_lines[1],
+                                     N_OUTPUT_LINES * sizeof(char *));
+        if (first_line) first_line--;
+        output_lines[N_OUTPUT_LINES] = output_pos;
+        w = get_window_info(output_window);
+        w->scy += Y_CHAR;
+        if (!output_pending)
+            set_scroll_offsets(output_window,
+                           w->scx, w->ex.miny + (w->r.maxy - w->r.miny));
+    }
+    if (output_pos == output_lines[first_line]) {
+        output_lines[first_line] = -1;
+        first_line++;
+    }
+    if (c && output_pos == 0) {
+        old_logfile = logfile;
+        logfile = 0;
+        i = output_lines[N_OUTPUT_LINES];
+        output_lines[N_OUTPUT_LINES] = 0;
+        while (i < OUTPUT_SIZE)
+            output_ch(output_buffer[i++]);
+        logfile = old_logfile;
+    }
+}
+
+void output_str(char *s)
+{
+    int c;
+
+    while (c = *s++)
+        output_ch(c);
+}
+
+void output_line(char *s)
+{
+    int c;
+
+    while (c = *s++)
+        output_ch(c);
+    output_ch(0);
+}
+
+void output_tab(int n)
+{
+    while (output_pos - output_lines[N_OUTPUT_LINES] < n)
+        output_ch(' ');
+}
+
+void output_uns(unsigned n, int base, int w)
+{
+    if (n >= base)
+        output_uns(n / base, base, w - 1);
+    else
+        while (--w > 0) output_ch(base == 10 ? ' ' : '0');
+    output_ch(digits[n % base]);
+}
+
+void output_int(int n, int base)
+{
+    unsigned int u;
+
+    if (base != 10) {
+        output_uns(n, base, 1);
+        return;
+    }
+    u = n;
+    if (n < 0) {
+        u = -n;
+        output_ch('-');
+    }
+    output_uns(u, base, 1);
+}
+
+void output_fp(FPExtended *fp)
+{
+    unsigned packed[3];
+    int j, k;
+
+    cvt_packed(packed, fp);
+    if (packed[0] & (0x80000000))
+        output_ch('-');
+    output_ch('0' + ((packed[0] >> 8) & 0x0f));
+    output_ch('.');
+    for (j = 0; j < 17; j++)
+        if (extract_digit(packed, j))
+            break;
+    for (k = 17; k >= j; k--)
+        output_ch('0' + extract_digit(packed, k));
+    for (j = 22; j >= 19; j--) {
+        if (extract_digit(packed, j)) {
+            output_ch('E');
+            output_ch((packed[0] & (1 << 30)) ? '-' : '+');
+            for (k = j; k >= 19; k--)
+                output_ch('0' + extract_digit(packed, k));
+            break;
+        }
+    }
+}
+
+void output_dbl(double d)
+{
+    FPExtended fp;
+
+    output_fp(cvt_fpextended(&d, &fp));
+}
+
+char *get_output_line(int line)
+{
+    if (line >= N_OUTPUT_LINES || output_lines[line] < 0)
+        return "";
+    output_buffer[output_pos] = 0;
+    return output_buffer + output_lines[line];
+}
