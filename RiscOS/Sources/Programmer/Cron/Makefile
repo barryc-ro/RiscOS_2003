@@ -38,6 +38,7 @@ EXPORTS    = ${EXP_HDR}.${COMPONENT}
 TOKENISED  = Resources.${LOCALE}.Tokenised
 MESSAGES   = Resources.${LOCALE}.Messages
 TOKENFILE  = ${RESDIR}.Resources.Kernel.Dictionary
+RESDIR	   = <resource$dir>.Resources.Cron
 
 #
 # Generic rules:
@@ -56,6 +57,11 @@ clean:
 
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
+
+resources:
+	${MKDIR} ${RESDIR}
+	${CP} ${MESSAGES} ${RESDIR}.Messages ${CPFLAGS}
+	@echo Cron: Messages copied
 
 ${TARGET}: ${SOURCE}
 	${MKDIR} rm
@@ -88,7 +94,6 @@ rm.SACron: Hdr:MsgTrans
 rm.SACron: Hdr:FSNumbers
 rm.SACron: Hdr:NewErrors
 rm.SACron: Hdr:Territory
-rm.SACron: Hdr:Debug
 rm.SACron: Version
 rm.SACron: s.error
 rm.SACron: s.main
