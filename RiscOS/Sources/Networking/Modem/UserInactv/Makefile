@@ -210,7 +210,7 @@ ${TARGET_D}: ${OBJSD} ${LIBSD} ${EXTRALIBS} ${ROMCSTUBS} ${DIRS}
 rom_link:
         ${LD} -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} \
               > map.${COMPONENT}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.UserInactivity ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 # ------------------------------------------------------------------------------
