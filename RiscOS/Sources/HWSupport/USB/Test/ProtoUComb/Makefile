@@ -1,27 +1,26 @@
 COMPONENT	= ProtoUComb
-RAM_MODULE	= rm.ProtoUComb
-DIRS		= o._dummy
+TARGET		= ${COMPONENT}
+DIRS		= o._dirs
 RAM_OBJS	= o.modhead o.cmodule
-RAM_LIBS	= 	\
-c:o.stubs		\
-c:tboxlibint.o.tboxlibm \
-c:debuglib.o.debuglibzm	\
-tcpiplibs:o.socklib5zm	\
-tcpiplibs:o.inetlibzm	\
-c:callx.o.callx		\
-c:asmutils.o.asmutils
+ROM_OBJS	= ${RAM_OBJS}
+RAM_LIBS	= ${DEBUGLIB} ${SOCK5LIB} ${INETLIB} c:callx.o.callx ${ASMUTILS}
+ROM_LIBS        = ${RAM_LIBS}
 
-CFLAGS	.= -throwback -zm -ffah
+CFLAGS	.= -zM -ffah
 #CDEFINES = -DDEBUGLIB -DEMULATE
 CINCLUDES = -IOS:,C:
 
 include makefiles:StdTools
 include makefiles:ModStdRule
-include makefiles:RAMModule
+include makefiles:ModuleLibs
+include makefiles:RAMCModule
+include makefiles:ROMCModule
 
 clean:
+	${WIPE} aof ${WFLAGS}
 	${WIPE}	o ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
+	${WIPE} linked ${WFLAGS}
 	${RM}	h.modhead
 
 o._dirs:
