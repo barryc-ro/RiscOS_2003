@@ -2346,6 +2346,9 @@ BOOL fe_internal_check_popups(BOOL clear)
 {
     fe_view popup;
 
+    STBDBG(("fe_internal_check_popups(%s): main_view=%p popup=%p osk=%d\n",
+            clear ? "TRUE" : "FALSE", main_view, main_view->next, on_screen_kbd ));
+
     /* check for closing other window or aborting */
     popup = main_view->next;
     if (clear)

@@ -18,6 +18,7 @@
 #include "rid.h"
 #include "stream.h"
 #include "util.h"
+#include "config.h"
 
 /* ----------------------------------------------------------------------------- */
 
@@ -1063,6 +1064,8 @@ BOOL be_item_has_caret(be_doc doc, be_item ti)
 
 void backend_set_highlight(be_doc doc, be_item item, BOOL bPersist)
 {
+    /* pdh 03/03/98: don't allow non-persistent highlights if style is SIMPLE
+     */
     if (item == NULL)
     {
 	backend_remove_highlight(doc);

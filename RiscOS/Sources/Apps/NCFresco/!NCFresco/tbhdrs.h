@@ -164,4 +164,9 @@ struct gadget_object
 /*  int gadget [UNKNOWN]; */
 };
 
+/* pdh: one-man crusade to make toolbox code look more sensible starts here */
+#define toolactionflag_HASFADESPRITE 0x00000100
+#define gadgetflag_FADED             0x80000000
+
 /* eof tbhdrs.c */
+

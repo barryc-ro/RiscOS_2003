@@ -389,15 +389,21 @@ cu: CHECKERS_UNIX
 # directory (as happened to me!!!).
 clean:		sanity
 		@echo "Cleaning out objects and executables"
+		-@cd ./fresco_file && $(RM) *.o *,ff8 *,fd3
+		-@cd ./fresco_tm && $(RM) *.o *,ff8 *,fd3 LinkMap Symbols
+		-@cd ./fresco_mc && $(RM) *.o *,ff8 *,fd3 LinkMap Symbols
+		-@cd ./fresco_rel && $(RM) *.o *,ff8 *,fd3 LinkMap Symbols
 		-@cd ./fresco_pc && $(RM) *.o *,ff8 *,fd3
-		-@cd ./fresco && $(RM) *.o *,ff8 *,fd3
+		-@cd ./fresco && $(RM) *.o *,ff8 *,fd3 linkmap symbols
 		-@cd ./cbfresco && $(RM) *.o
 		-@cd ./cbfresco_pc && $(RM) *.o
 		-@cd ./cbfresco_zm && $(RM) *.o
 		-@cd ./unix && $(RM) *.o
-		-@cd ./ncfresco && $(RM) *.o
-		-@cd ./ncfresco_zm && $(RM) *.o
-		-@cd ./ncfresco_rel && $(RM) *.o
+		-@cd ./http && $(RM) *.o *.oo *.o3
+		-@cd ./memlib && $(RM) *.o
+		-@cd ./RISC_OSLib && $(RM) *.o
+		-@cd ./ncfresco && $(RM) *.o Symbols linkmap depend2
+		-@cd ./ncfresco_dbg && $(RM) *.o Symbols linkmap depend2
 		-@cd ./stdalone && $(RM) *.o htmlcheck
 		-@cd ./bunix && $(RM) *.o builders
 		-@cd ./cunix && $(RM) *.o builders parse_check format_check check_all
@@ -718,7 +724,8 @@ WEBGOPHER:
 # NB: CURE THE PROBLEM - DON'T JUST STOP THIS REPORTING IT!
 
 sanity:		cvs-checks.py cvs-checks
-		@./cvs-checks
+		echo not sanity checking due to CVS format change
+		echo @./cvs-checks
 
 #############################################################################
 

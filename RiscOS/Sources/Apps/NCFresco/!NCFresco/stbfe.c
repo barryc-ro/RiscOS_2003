@@ -4028,8 +4028,12 @@ static void fe_idle_handler(void)
 
 	/* try dragging highlight */
 	if ( !akbd_pollctl() && pointer_moved && v->displaying
-	     && ti != oldti )
+	     && ti != oldti
+	     && config_display_highlight_style != highlight_style_SIMPLE )
     	{
+    	    /* pdh: added preceding highlight_style condition */
+    	    STBDBG(("feih: cdhs=%d\n", config_display_highlight_style ));
+
 #ifdef ANT_NCFRESCO
             if ( oldti == NULL || !be_item_has_caret(v->displaying,oldti)
                  && (ti || !backend_highlight_is_persistent(v->displaying) ) )
@@ -4037,6 +4041,7 @@ static void fe_idle_handler(void)
     	    {
         	if (ti)
                 {
+                    STBDBG(("fe_idle_handler calls set_highlight(FALSE)\n"));
     		    backend_set_highlight(v->displaying, ti, FALSE );
     	        }
     	        else
