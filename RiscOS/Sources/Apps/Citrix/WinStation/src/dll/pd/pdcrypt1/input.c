@@ -100,7 +100,7 @@ int STATIC PdNext( PPD, USHORT, PVOID );
  *
  ******************************************************************************/
 
-int STATIC 
+static int
 WriteReset( PPD pPd )
 {
     PPDCRYPT pPdCrypt;

@@ -194,16 +194,14 @@ install_base:
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Res,fae	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/ini/appsrv			${INSTALLDIR}/${APPNAME}/ini/AppSrv
 	${CP} ${CPFLAGS} Resources/ini/module			${INSTALLDIR}/${APPNAME}/ini/Module
 	${CP} ${CPFLAGS} Resources/ini/wfclient			${INSTALLDIR}/${APPNAME}/ini/WFClient
 
-#	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${INSTALLDIR}/${APPNAME}/
-
 install: ${APP} install_base
 	${CP} ${CPFLAGS} ${APP}					${INSTALLDIR}/${APPNAME}/!RunImage,ff8
+	@restool merge ${INSTALLDIR}/${APPNAME}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_desktop,fae
 	@echo Installed ${COMPONENT}
 
 installd: ${APPD} install_base
@@ -227,16 +225,14 @@ installrom: ${APPZ}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Res,fae	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/ini/appsrv			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} Resources/ini/module			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} Resources/ini/wfclient			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
+	@restool merge ${ROMDIR}/Resources/${COUNTRY}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_nc2,fae
 	@echo Installed ${COMPONENT} aof in ${ROMDIR}
 	${CP} ${CPFLAGS} src/app/icaclient.h			${ROMDIR}/h/icaclient
-
-#	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
 
 cleaninstall:
 	-${RM}	  ${APPNAME}/ini/*
@@ -265,6 +261,19 @@ makepass,ff8: src/app/makepass.o ${CITRIXLIB}
 cleanmakepass:
 	${RM} src/app/makepass.o 'makepass,ff8'
 	@echo cleaned makepass
+
+# ----------------------------------------------------------------------------------------------------
+
+mergetb: mergetb,ff8
+
+mergetb,ff8: src/app/mergetb.o ${CITRIXLIB}
+	${LD} ${LDFLAGS} -o 'mergetb,ff8' src/app/mergetb.o ${CITRIXLIB} $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
+	ls -l '$@'
+
+
+cleanmergetb:
+	${RM} src/app/mergetb.o 'mergetb,ff8'
+	@echo cleaned mergetb
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -449,10 +458,15 @@ TDTCPROLIBOBJS=		src/dll/td/comtcp/tdtcpcom.o  src/dll/td/tdtcpro/tdtcpro.o  src
 TDTCPROLIBOBJSD=	src/dll/td/comtcp/tdtcpcom.od src/dll/td/tdtcpro/tdtcpro.od src/dll/td/tdtcpro/sock.od
 TDTCPROLIBOBJSZ=	src/dll/td/comtcp/tdtcpcom.oz src/dll/td/tdtcpro/tdtcpro.oz src/dll/td/tdtcpro/sock.oz
 
-TDLIBSRC=	${TDCOMMONLIBSRC} ${TDTCPROLIBSRC}
-TDLIBOBJS=	${TDCOMMONLIBOBJS} ${TDTCPROLIBOBJS}
-TDLIBOBJSD=	${TDCOMMONLIBOBJSD} ${TDTCPROLIBOBJSD}
-TDLIBOBJSZ=	${TDCOMMONLIBOBJSZ} ${TDTCPROLIBOBJSZ}
+TDASYNCLIBSRC=		src/dll/td/tdasync/tdasync.c
+TDASYNCLIBOBJS=		src/dll/td/tdasync/tdasync.o
+TDASYNCLIBOBJSD=	src/dll/td/tdasync/tdasync.od
+TDASYNCLIBOBJSZ=	src/dll/td/tdasync/tdasync.oz
+
+TDLIBSRC=	${TDCOMMONLIBSRC} ${TDTCPROLIBSRC} ${TDASYNCLIBSRC}
+TDLIBOBJS=	${TDCOMMONLIBOBJS} ${TDTCPROLIBOBJS} ${TDASYNCLIBOBJS}
+TDLIBOBJSD=	${TDCOMMONLIBOBJSD} ${TDTCPROLIBOBJSD} ${TDASYNCLIBOBJSD}
+TDLIBOBJSZ=	${TDCOMMONLIBOBJSZ} ${TDTCPROLIBOBJSZ} ${TDASYNCLIBOBJSZ}
 
 ${TDLIB}:	${TDLIBOBJS}
 	${LIBFILE} ${LIBFILEFLAGS} -o ${TDLIB} ${TDLIBOBJS}
@@ -484,6 +498,11 @@ PDRFRAMELIBOBJS=src/dll/pd/pdrframe/pdrframe.o src/dll/pd/pdrframe/callup.o src/
 PDRFRAMELIBOBJSD=src/dll/pd/pdrframe/pdrframe.od src/dll/pd/pdrframe/callup.od src/dll/pd/pdrframe/input.od
 PDRFRAMELIBOBJSZ=src/dll/pd/pdrframe/pdrframe.oz src/dll/pd/pdrframe/callup.oz src/dll/pd/pdrframe/input.oz
 
+PDFRAMELIBSRC=	src/dll/pd/pdframe/pdframe.c src/dll/pd/pdframe/callup.c src/dll/pd/pdframe/crc16.c src/dll/pd/pdframe/input.c
+PDFRAMELIBOBJS= src/dll/pd/pdframe/pdframe.o src/dll/pd/pdframe/callup.o src/dll/pd/pdframe/crc16.o src/dll/pd/pdframe/input.o
+PDFRAMELIBOBJSD=src/dll/pd/pdframe/pdframe.od src/dll/pd/pdframe/callup.od src/dll/pd/pdframe/crc16.od src/dll/pd/pdframe/input.od
+PDFRAMELIBOBJSZ=src/dll/pd/pdframe/pdframe.oz src/dll/pd/pdframe/callup.oz src/dll/pd/pdframe/crc16.oz src/dll/pd/pdframe/input.oz
+
 PDCRYPT1LIBSRC=	src/dll/pd/pdcrypt1/pdcrypt.c src/dll/pd/pdcrypt1/callup.c src/dll/pd/pdcrypt1/input.c src/dll/pd/pdcrypt1/encrypt.c
 PDCRYPT1LIBOBJS=src/dll/pd/pdcrypt1/pdcrypt.o src/dll/pd/pdcrypt1/callup.o src/dll/pd/pdcrypt1/input.o src/dll/pd/pdcrypt1/encrypt.o
 PDCRYPT1LIBOBJSD=src/dll/pd/pdcrypt1/pdcrypt.od src/dll/pd/pdcrypt1/callup.od src/dll/pd/pdcrypt1/input.od src/dll/pd/pdcrypt1/encrypt.od
@@ -494,10 +513,15 @@ PDMODEMLIBOBJS=	src/dll/pd/pdmodem/pdmodem.o src/dll/pd/pdmodem/callup.o src/dll
 PDMODEMLIBOBJSD=src/dll/pd/pdmodem/pdmodem.od src/dll/pd/pdmodem/callup.od src/dll/pd/pdmodem/input.od src/dll/pd/pdmodem/dsm.od src/dll/pd/pdmodem/util.od
 PDMODEMLIBOBJSZ=src/dll/pd/pdmodem/pdmodem.oz src/dll/pd/pdmodem/callup.oz src/dll/pd/pdmodem/input.oz src/dll/pd/pdmodem/dsm.oz src/dll/pd/pdmodem/util.oz
 
-PDLIBSRC=	${PDCOMMONLIBSRC} ${PDRFRAMELIBSRC} ${PDCRYPT1LIBSRC} ${PDMODEMLIBSRC}
-PDLIBOBJS=	${PDCOMMONLIBOBJS} ${PDRFRAMELIBOBJS} ${PDCRYPT1LIBOBJS} ${PDMODEMLIBOBJS}
-PDLIBOBJSD=	${PDCOMMONLIBOBJSD} ${PDRFRAMELIBOBJSD} ${PDCRYPT1LIBOBJSD} ${PDMODEMLIBOBJSD}
-PDLIBOBJSZ=	${PDCOMMONLIBOBJSZ} ${PDRFRAMELIBOBJSZ} ${PDCRYPT1LIBOBJSZ} ${PDMODEMLIBOBJSZ}
+PDRELILIBSRC=  src/dll/pd/pdreli/pdreli.c src/dll/pd/pdreli/callup.c src/dll/pd/pdreli/buffer.c src/dll/pd/pdreli/input.c src/dll/pd/pdreli/output.c src/dll/pd/pdreli/timers.c
+PDRELILIBOBJS= src/dll/pd/pdreli/pdreli.o src/dll/pd/pdreli/callup.o src/dll/pd/pdreli/buffer.o src/dll/pd/pdreli/input.o src/dll/pd/pdreli/output.o src/dll/pd/pdreli/timers.o
+PDRELILIBOBJSD=src/dll/pd/pdreli/pdreli.od src/dll/pd/pdreli/callup.od src/dll/pd/pdreli/buffer.od src/dll/pd/pdreli/input.od src/dll/pd/pdreli/output.od src/dll/pd/pdreli/timers.od
+PDRELILIBOBJSZ=src/dll/pd/pdreli/pdreli.oz src/dll/pd/pdreli/callup.oz src/dll/pd/pdreli/buffer.oz src/dll/pd/pdreli/input.oz src/dll/pd/pdreli/output.oz src/dll/pd/pdreli/timers.oz
+
+PDLIBSRC=	${PDCOMMONLIBSRC} ${PDRFRAMELIBSRC} ${PDFRAMELIBSRC} ${PDCRYPT1LIBSRC} ${PDMODEMLIBSRC} ${PDRELILIBSRC}
+PDLIBOBJS=	${PDCOMMONLIBOBJS} ${PDRFRAMELIBOBJS}  ${PDFRAMELIBOBJS} ${PDCRYPT1LIBOBJS} ${PDMODEMLIBOBJS} ${PDRELILIBOBJS}
+PDLIBOBJSD=	${PDCOMMONLIBOBJSD} ${PDRFRAMELIBOBJSD} ${PDFRAMELIBOBJSD} ${PDCRYPT1LIBOBJSD} ${PDMODEMLIBOBJSD} ${PDRELILIBOBJSD}
+PDLIBOBJSZ=	${PDCOMMONLIBOBJSZ} ${PDRFRAMELIBOBJSZ} ${PDFRAMELIBOBJSZ} ${PDCRYPT1LIBOBJSZ} ${PDMODEMLIBOBJSZ} ${PDRELILIBOBJSZ}
 
 ${PDLIB}:	${PDLIBOBJS}
 	${LIBFILE} ${LIBFILEFLAGS} -o ${PDLIB} ${PDLIBOBJS}

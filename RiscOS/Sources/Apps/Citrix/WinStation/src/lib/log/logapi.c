@@ -82,6 +82,7 @@ void logWrite( char far * Format, ... );
 
 #if defined(REMOTE_DEBUG) && defined(DEBUG)
 static void rdebug_open(void);
+static void LogMem(void);
 #endif
 
 /*=============================================================================
@@ -498,9 +499,11 @@ void *LogErr( void *err, PCHAR pFileName, int LineNumber )
 
 #define HELP_INFO_1	\
 			"help\n" \
+			"dump (flex|heap)\n" \
 			"message <message>\n" \
 			"set log (class|enable|twenable) x\n" \
-			"set log (file|remote) (1|0)\n"
+			"set log (file|remote) (1|0)\n" \
+			"show (da|mem)\n"
 
 static void cleanup(void)
 {
@@ -532,9 +535,43 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	    handled = 1;
 	}
     }
+    else if (stricmp(argv[0], "dump") == 0)
+    {
+	if (stricmp(argv[1], "flex") == 0)
+	{
+	    MemFlex_Dump(NULL);
+	    handled = 1;
+	}
+	else if (stricmp(argv[1], "heap") == 0)
+	{
+	    malloc_stats();
+	    handled = 1;
+	}
+    }
     else if (stricmp(argv[0], "show") == 0)
     {
-	handled = 1;
+	if (stricmp(argv[1], "mem") == 0)
+	{
+	    LogMem();
+	    handled = 1;
+	}
+	else if (stricmp(argv[1], "da") == 0)
+	{
+	    int area = -1;
+	    do
+	    {
+		_swix(OS_DynamicArea, _INR(0,1) | _OUT(1), 3, area, &area);
+		if (area != -1)
+		{
+		    int size;
+		    char *name;
+		    _swix(OS_DynamicArea, _INR(0,1) | _OUT(2) | _OUT(8), 2, area, &size, &name);
+		    LogPrintf(TC_ALL, TT_ERROR, "da: size %10d name '%s'", size, name);
+		}
+	    }
+	    while (area != -1);
+	    handled = 1;
+	}
     }
     else if (stricmp(argv[0], "set") == 0)
     {
@@ -595,6 +632,31 @@ void LogPoll(void)
 {
     if (db_sess)
 	debug_poll(db_sess);
+}
+
+static void LogMem(void)
+{
+    extern char *flexptr__base;
+    extern char *flexptr__free;
+    extern char *flexptr__slot;
+    extern int malloc_size, malloc_da, flex__da;
+
+    int area = -1;
+    int us, next, free;
+
+    _swix(Wimp_SlotSize, _INR(0,1) | _OUTR(0,2), -1, -1, &us, &next, &free);
+    LogPrintf(TC_ALL, TT_ERROR,
+	      "slot: size %dK next %dK free %dK",
+	      us/1024, next/1024, free/1024);
+
+    LogPrintf(TC_ALL, TT_ERROR,
+	      "flex: area %dK size %dK top %dK",
+	      _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), flex__da)/1024,
+	      (flexptr__slot - flexptr__base)/1024, (flexptr__free - flexptr__base)/1024);
+
+    LogPrintf(TC_ALL, TT_ERROR,
+	      "mall: area %dK size %dK",
+	      _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), malloc_da)/1024, malloc_size/1024);
 }
 
 #endif

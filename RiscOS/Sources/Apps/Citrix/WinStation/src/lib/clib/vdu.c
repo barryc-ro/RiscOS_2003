@@ -62,9 +62,9 @@ int GetSafeModeSpec(int *width, int *height)
 		     &x0, &y0, &x1, &y1)) == NULL)
     {
 	if (width)
-	    *width = x1 - x0;
+	    *width = (x1 - x0)/2;
 	if (height)
-	    *height = y1 - y0;
+	    *height = (y1 - y0)/2;
 
 	return TRUE;
     }

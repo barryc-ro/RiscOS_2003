@@ -191,7 +191,7 @@ void IcaClientData( PWD, LPBYTE, USHORT );
 /*
  *  ICA state table array
  */
-ICASTATE StateTable[ sNUMSTATES ] = {
+static ICASTATE StateTable[ sNUMSTATES ] = {
 
     /* 0 - sTYPE  */    sTYPE,   dTYPE,
     /* 1 - sLEN1  */    sDATA,   dLEN1,
@@ -272,7 +272,7 @@ static ICADATA ICAData[] =
    -1, IcaSetText,                         // PACKET_SET_TEXT         0x34
     1, IcaSetGlobalAttr,                   // PACKET_SET_GLOBAL_ATTR  0x35
     3, IcaSetVideoMode,                    // PACKET_SET_VIDEO_MODE   0x36
-    1, IcaSetLed,                          // PACKET_SET_LED          0x37
+    1, 0 /* IcaSetLed */,		   // PACKET_SET_LED          0x37
     2, IcaVirtualFlush,                    // PACKET_VIRTUAL_FLUSH    0x38
    -2, NULL,                               // PACKET_MOUSE2           0x39
     0, NULL,                               // PACKET_COMMAND_CACHE    0x3A

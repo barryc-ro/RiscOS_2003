@@ -8,7 +8,12 @@
 *
 *  Author: Kurt Perry
 *
-*  $Log$
+*  kbdapi.h,v
+*  Revision 1.1  1998/01/12 11:36:50  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.10   15 Apr 1997 18:45:16   TOMA
 *  autoput for remove source 4/12/97
@@ -86,6 +91,7 @@ int WFCAPI KbdReadChar( int * pCharCode, int * pShiftState );
 int WFCAPI KbdReadScan( int * pScanCode, int * pShiftState );
 int WFCAPI KbdPush( int ScanCode, int ShiftState, int Char );
 int WFCAPI KbdSetLeds( int ShiftState );
+int KbdGetLeds( void );
 int WFCAPI KbdRegisterHotkey( int HotkeyId, int ScanCode, int ShiftState );
 int WFCAPI KbdAddHook( LPVOID pProcedure );
 int WFCAPI KbdRemoveHook( LPVOID pProcedure );

@@ -148,6 +148,7 @@ static int ToolBox_EventList[] =
 
 static int Wimp_MessageList[] =
 {
+    wimp_MSERVICE,
     message_PSPrinterQuery,
     message_PSPrinterNotPS,
     message_PSPrinterAck,
@@ -603,6 +604,12 @@ static int quit_handler(WimpMessage *message, void *handle)
     NOT_USED(handle);
 }
 
+static int key_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+{
+    LOGERR(wimp_process_key(event->key_pressed.key_code));
+    return 1;
+}
+
 static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
 {
     DTRACE((TC_UI, TT_API1, "null_handler: sess %p\n", current_session));
@@ -1048,7 +1055,7 @@ static void printinfo_deregister(void)
 {
     err_fatal(event_deregister_message_handler(message_PSPrinterNotPS, printer_handler, NULL));
     err_fatal(event_deregister_message_handler(message_PSPrinterAck, printer_handler, NULL));
-    err_fatal(event_deregister_wimp_handler(0, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
+    err_fatal(event_deregister_wimp_handler(-1, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
 
     printinfo_state = initop_COMPLETED;
     
@@ -1059,7 +1066,7 @@ static void printinfo_register(void)
 {
     err_fatal(event_register_message_handler(message_PSPrinterNotPS, printer_handler, NULL));
     err_fatal(event_register_message_handler(message_PSPrinterAck, printer_handler, NULL));
-    err_fatal(event_register_wimp_handler(0, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
+    err_fatal(event_register_wimp_handler(-1, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
 
     printinfo_state = initop_RUNNING;
 }
@@ -1374,7 +1381,7 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass    = LOG_ASSERT | TC_UI;
+   EMLogInfo.LogClass    = LOG_ASSERT | TC_TD;
    EMLogInfo.LogEnable   = TT_ERROR;
    EMLogInfo.LogTWEnable = TT_TW_DIM | TT_TW_CACHE;
 #else
@@ -1539,7 +1546,8 @@ static void initialise(int argc, char *argv[])
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONFIRM, confirm_handler, NULL));
 
     /* other general handlers */
-    err_fatal(event_register_wimp_handler(0, Wimp_ENull, null_handler, NULL));
+    err_fatal(event_register_wimp_handler(-1, Wimp_ENull, null_handler, NULL));
+    err_fatal(event_register_wimp_handler(-1, Wimp_EKeyPressed, key_handler, NULL));
 
     err_fatal(event_register_message_handler(Wimp_MDataOpen, dataopen_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));

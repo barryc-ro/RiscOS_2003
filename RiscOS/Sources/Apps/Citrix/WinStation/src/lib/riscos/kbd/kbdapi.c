@@ -500,6 +500,27 @@ KbdSetLeds( int ShiftState )
     return( CLIENT_STATUS_SUCCESS );
 }
 
+int KbdGetLeds( void )
+{
+    int state;
+    int ShiftState = 0;
+
+    LOGERR(_swix(OS_Byte, _INR(0,2) | _OUT(1),
+		 202, 0, 255,
+		 &state));
+
+    if (state & led_SCROLL_LOCK_ON)
+	ShiftState |= KSS_SCROLLLOCKON;
+
+    if ((state & led_NUM_LOCK_OFF) == 0)
+	ShiftState |= KSS_NUMLOCKON;
+
+    if ((state & led_CAPS_LOCK_OFF) == 0)
+	ShiftState |= KSS_CAPSLOCKON;
+
+    return ShiftState;
+}
+
 /*******************************************************************************
  *
  * KbdRegisterHotkey

@@ -43,6 +43,7 @@
 
 #include "swis.h"
 #include "tboxlibs/toolbox.h"
+#include "vdu.h"
 
 #include "session.h"
 #include "sessionp.h"
@@ -635,6 +636,7 @@ static int session__open(icaclient_session sess)
     
     // initialise this here as it is statically inited in wengine
     gbContinuePolling = TRUE;
+    bPDError = FALSE;
 
     return rc;
 }
@@ -1072,7 +1074,7 @@ int session_poll(icaclient_session sess)
 	LogPoll();
 #endif
     }
-    while (!sess->HaveFocus && gbContinuePolling);
+    while (!sess->HaveFocus && gbContinuePolling && !bPDError);
     
     return gbContinuePolling;
 }
@@ -1149,8 +1151,11 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
     } modules[] =
     {
 	{ "tdtcpro",	(PLIBPROCEDURE)TdLoad/*, TdTcpRODeviceProcedures */ },
+	{ "tdasync",	(PLIBPROCEDURE)TdLoad/*, TdAsyncDeviceProcedures */ },
 	{ "pdcrypt",	(PLIBPROCEDURE)PdLoad/*, PdCryptDeviceProcedures */ },
 	{ "pdrfram",	(PLIBPROCEDURE)PdLoad/*, PdRFrameDeviceProcedures */ },
+	{ "pdframe",	(PLIBPROCEDURE)PdLoad/*, PdFrameDeviceProcedures */ },
+	{ "pdreli",	(PLIBPROCEDURE)PdLoad/*, PdReliDeviceProcedures */ },
 	{ "pdmodem",	(PLIBPROCEDURE)PdLoad/*, PdModemDeviceProcedures */ },
 	{ "wdica30",	(PLIBPROCEDURE)WdLoad/*, WdICA30EmulProcedures */ },
 	{ "wdtty",	(PLIBPROCEDURE)WdLoad/*, WdTTYEmulProcedures */ },
@@ -1174,20 +1179,27 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
     if (!inited)
     {
 	modules[0].fnTable = TdTcpRODeviceProcedures;
-	modules[1].fnTable = PdCryptDeviceProcedures;
-	modules[2].fnTable = PdRFrameDeviceProcedures;
+#ifdef INCL_ASYNC
+	modules[1].fnTable = TdAsyncDeviceProcedures;
+#endif
+	modules[2].fnTable = PdCryptDeviceProcedures;
+	modules[3].fnTable = PdRFrameDeviceProcedures;
+#ifdef INCL_ASYNC
+	modules[4].fnTable = PdFrameDeviceProcedures;
+	modules[5].fnTable = PdReliDeviceProcedures;
+#endif
 #ifdef INCL_MODEM
-	modules[3].fnTable = PdModemDeviceProcedures;
+	modules[6].fnTable = PdModemDeviceProcedures;
 #endif
-	modules[4].fnTable = WdICA30EmulProcedures;
-	modules[5].fnTable = WdTTYEmulProcedures;
+	modules[7].fnTable = WdICA30EmulProcedures;
+	modules[8].fnTable = WdTTYEmulProcedures;
 #ifdef INCL_ENUM
-	modules[7].fnTable = NeICADeviceProcedures;
+	modules[10].fnTable = NeICADeviceProcedures;
 #endif
-	modules[8].fnTable = VdTW31DriverProcedures;
+	modules[11].fnTable = VdTW31DriverProcedures;
 #ifdef INCL_PRINTER
-	modules[9].fnTable = VdCpmDriverProcedures;
-	modules[10].fnTable = VdSplDriverProcedures;
+	modules[12].fnTable = VdCpmDriverProcedures;
+	modules[13].fnTable = VdSplDriverProcedures;
 #endif
 	inited = TRUE;
     }

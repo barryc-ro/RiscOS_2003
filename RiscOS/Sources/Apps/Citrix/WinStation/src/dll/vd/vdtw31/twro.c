@@ -1752,6 +1752,12 @@ static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int acti
     reason = coltrans == NULL && bitmap->data.sprite.bpp == dc->data.bpp ? 34 + 512 : 52 + 512;
     while (set__clip(dc, info->rgn, &context))
     {
+	TRACE((TC_TW, TT_TW_res5, "plotbitmap: reason %d area %p sprite %p x %d y %d action %d coltrans %p",
+	       reason,
+   	       bitmap->data.sprite.area, first_sprite(bitmap->data.sprite.area),
+	       x, y, action,
+	       coltrans));
+
 	LOGERR(_swix(OS_SpriteOp, _INR(0,7),
 		     reason,
 		     bitmap->data.sprite.area, first_sprite(bitmap->data.sprite.area),
@@ -1761,6 +1767,14 @@ static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int acti
     }
 
     free(coltrans);
+
+#if DEBUG
+    {    
+    extern ULONG guLogTWEnable;
+    if (guLogTWEnable & TT_TW_res8)
+	save_sprite(&bitmap->data.sprite, "pb");
+    }
+#endif
 }
 
 static BOOL tilesolidbrush(HDC dc, const bitblt_info *info, int rop3)
@@ -2035,7 +2049,7 @@ static int pixel(line_info *line)
 	pixel = line->solid_colour;
     }
     
-    TRACE((TC_TW, TT_TW_res5, "pixel: line %p pixel %2x phase %2d word %8x", line, pixel, line->phase, line->word));
+    DTRACE((TC_TW, TT_TW_res5, "pixel: line %p pixel %2x phase %2d word %8x", line, pixel, line->phase, line->word));
 
     return pixel;
 }

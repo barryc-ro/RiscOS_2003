@@ -79,7 +79,7 @@ static char szThinwire30Sect[] =
  "WindowsCache=3072\0" \
  "ClickTicks=5\0" \
  "DesiredColor=0x0001\0" \
- "ScreenPercent=0" \
+ "ScreenPercent=0\0" \
 "\0\0";
 
 
@@ -216,6 +216,7 @@ static char szWFThinWireSect[] =
 "DesiredVRES=480\0" \
 "DesiredColor=0x0002\0" \
 "ScreenPercent=0" \
+"UseSafeArea=Off\0" \
 "\0\0";
 
 

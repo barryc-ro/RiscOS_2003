@@ -284,12 +284,13 @@ EmulOpen( PWD pWd, PWDOPEN pWdOpen )
     pIca->fMouse = TRUE;
 #ifdef RISCOS
     pIca->fDoubleClickDetect = FALSE;
+    /*pIca->ShiftState = KbdGetLeds();*/
 #else
     pIca->fDoubleClickDetect = TRUE;
 #endif
 #endif
 
-    /*
+/*
      *  Put keyboard into default mode (ascii)
      */
     return( WdKbdSetMode( pIca, Kbd_Ascii ) );
@@ -876,6 +877,8 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
 
 	    /* close down the keyboard support */
 	    KbdClose();
+
+	    pIca->ShiftState = KbdGetLeds();
 	    
             if ( pWd->fConnected ) {
                 pIca->fSendStopRequest = TRUE;

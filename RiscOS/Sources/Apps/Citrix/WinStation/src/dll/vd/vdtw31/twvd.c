@@ -355,6 +355,8 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         vSVGAmode = 1;
     }
 
+    TRACE((TC_TW,TT_API1, "VDTW: PrefRes %dx%d", PrefHRes, PrefVRes));
+    
     if (PrefHRes == -1 || PrefVRes == -1)
     {
         vfFullScreen = TRUE;
@@ -364,6 +366,8 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 	else
 	    UnderScanEnabled = bGetPrivateProfileBool( pVdOpen->pIniSection,
 						       "UseSafeArea", FALSE);
+
+	TRACE((TC_TW,TT_API1, "VDTW: Underscan %d, is a tv %d", UnderScanEnabled, IsATV()));
 
 	if (!UnderScanEnabled ||
 	    !GetSafeModeSpec(&PrefHRes, &PrefVRes))

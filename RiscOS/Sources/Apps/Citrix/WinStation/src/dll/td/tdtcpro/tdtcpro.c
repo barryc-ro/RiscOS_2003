@@ -514,12 +514,14 @@ DeviceWrite( PPD pPd, POUTBUF pOutBuf, PUSHORT pBytesWritten )
      */
     pPdTcp = (PPDTCP) pPd->pPrivate;
 
+    TRACE((TC_TD,TT_API3, "TcpSend: CNum %u, bc=%u", pPdTcp->CNum, pOutBuf->ByteCount ));
+
     /*
      *  Write data to network
      */
     rc = Send( pPd, pPdTcp->CNum, pOutBuf->pBuffer, pOutBuf->ByteCount, pBytesWritten );
 
-    TRACE((TC_TD,TT_API3, "TcpSend: CNum %u, bc=%u, bs=%u, rc=0x%x", pPdTcp->CNum, pOutBuf->ByteCount, *pBytesWritten, rc ));
+    TRACE((TC_TD,TT_API3, "       : bs %u rc=0x%x", *pBytesWritten, rc ));
 
     if ( rc ) {
         if ( rc == EWOULDBLOCK )
@@ -625,6 +627,8 @@ DeviceSendBreak( PPD pPd )
 int
 SetLastError( PPD pPd, int Error )
 {
+    TRACE((TC_TD,TT_API3, "SetLastError(tdtcpro): %d", Error ));
+
     if ( Error == 0 )
         return( CLIENT_STATUS_SUCCESS );
 
