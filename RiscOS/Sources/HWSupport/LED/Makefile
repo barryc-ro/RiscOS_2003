@@ -29,7 +29,7 @@ WIPE    = -wipe
 STRIP   = -stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -D${MACHINE}=1 ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~cfr~v
 
@@ -54,24 +54,24 @@ DFLAGS   =
 # Program specific options:
 #
 COMPONENT = LED
-OM        = o${MACHINE}
-TDIR      = aof.${MACHINE}
+TDIR      = aof
 TARGET    = ${TDIR}.${COMPONENT}
-RAMTDIR   = rm.${MACHINE}
+RAMTDIR   = rm
 RAMTARGET = ${RAMTDIR}.${COMPONENT}
-LINKEDDIR = linked.${MACHINE}
-MAPDIR    = map.${MACHINE}
-OBJS      = ${OM}.header ${OM}.module ${OM}.veneer ${OM}.led ${OM}.msgfile
+LINKEDDIR = linked
+MAPDIR    = map
+OBJS      = o.header o.module o.led o.msgfile
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
-
-.SUFFIXES: .${OM}
 
 #
 # Rule patterns
 #
-.c.${OM}:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.${OM}:;   ${CMHG} -p -DMachine=${Machine} -o $@ $<
-.s.${OM}:;      ${AS} ${AFLAGS} $< $@
+.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d $@ $<
+.s.o:;      ${AS} ${AFLAGS} $< $@
+
+o.led o.module: h.header
 
 #
 # build a relocatable module:
@@ -92,11 +92,12 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} ${OM} ${WFLAGS}
+        ${WIPE} o.* ${WFLAGS}
         ${WIPE} ${LINKEDDIR} ${WFLAGS}
         ${WIPE} ${MAPDIR} ${WFLAGS}
         ${WIPE} ${TDIR} ${WFLAGS}
         ${WIPE} ${RAMTDIR} ${WFLAGS}
+        ${RM} h.header
         @echo Stripping dependencies from makefile...
         ${STRIP}
         @echo ${COMPONENT}: cleaned
@@ -109,7 +110,7 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${OM}
+${TARGET}: ${OBJS} ${ROMCSTUBS}
         ${MKDIR} ${TDIR}
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
@@ -124,14 +125,11 @@ rom_link:
         ${CP} ${LINKEDDIR}.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${RAMTARGET}: ${OBJS} ${CLIB} ${OM}
+${RAMTARGET}: ${OBJS} ${CLIB}
         ${MKDIR} ${RAMTDIR}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
-
-${OM}:
-        ${MKDIR} ${OM}
 
 # Dynamic dependencies:

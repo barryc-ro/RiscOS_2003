@@ -8,10 +8,12 @@
 #include "kernel.h"
 #include "swis.h"
 
+#include "PortMan.h"
+
+#include "header.h"
 #include "module.h"
 #include "led.h"
 #include "veneer.h"
-#include "iomd.h"
 #include "error.h"
 #include "msgfile.h"
 
@@ -20,33 +22,12 @@
 static unsigned int Flags = 0;
 static led LEDs[ LED_COUNT ];
 
-static void
+static _kernel_oserror *
 SetLED( led *pled )
 {
-	/* Must only update IOLINES with IRQs off. */
-	int old_irqs = veneer_irqs_off();
-
-	/* Get current IOLINES and or in inputs so we don't break anything. */
-	int iolines = (*(char *)IOMD_IOLINES) | IOMD_IOLINES_INPUTS;
-
-	/* Set what we think should be the current state. */
-#if defined (Boca)
-	iolines = (pled->flags & LED_ON_PRIVATE) ? (iolines | pled->control_bit) : (iolines & ~pled->control_bit);
-#elif defined (Funai)
-	/*  Funai NC2 has the sense of the left LED inverted wrt the right LED!
-         */
-        if (pled == &LEDs[1])
-		iolines = (pled->flags & LED_ON_PRIVATE) ? (iolines & ~pled->control_bit) : (iolines | pled->control_bit);
-	else
-		iolines = (pled->flags & LED_ON_PRIVATE) ? (iolines | pled->control_bit) : (iolines & ~pled->control_bit);
-#else
-	iolines = (pled->flags & LED_ON_PRIVATE) ? (iolines & ~pled->control_bit) : (iolines | pled->control_bit);
-#endif
-
-	*(char *)IOMD_IOLINES = iolines;
-
-	/* Restore interrupts. */
-	veneer_irqs_on( old_irqs );
+	return _swix(PortMan_AccessBit, _INR(0,1),
+		     (pled->flags & LED_ON_PRIVATE) ? PORTMAN_FLAG_SET : PORTMAN_FLAG_CLEAR,
+		     pled->name);
 }
 
 
@@ -116,7 +97,7 @@ Lower( char c )
 /* Perform case insensitive string comparison - returns true if the same */
 /**/
 static int
-StrNoCaseCmp( char *str1, char *str2 )
+StrNoCaseCmp( const char *str1, const char *str2 )
 {
 	/* Only need to check for one string terminator as the second condition	*/
 	/* catches the other string terminating when the first does not.	*/
@@ -130,7 +111,7 @@ StrNoCaseCmp( char *str1, char *str2 )
 }
 
 
-void
+int
 led_ticker( _kernel_swi_regs *r, void *pw )
 {
 	int i;
@@ -152,6 +133,8 @@ led_ticker( _kernel_swi_regs *r, void *pw )
 			}
 		}
 	}
+
+	return 1;
 }
 
 
@@ -182,25 +165,17 @@ led_initialise( void *pw )
         if (msgfile_lookup("led1flashrate", buffer, BUF_SIZE, NULL) != NULL )
           led1_flashrate = atoi(buffer);
 
-#if defined(Boca) || defined(Funai)
 	/* Set up data for both LEDs and turn them both off. */
 
 	LEDs[0].flags = led0_state;
-	LEDs[0].control_bit = IOMD_IOLINES_LEFTLED;
+	LEDs[0].name = PortMan_LED_Left;
 	LEDs[0].flash_rate = LEDs[0].flash_count = led0_flashrate;
 	SetLED( &LEDs[0] );
 
 	LEDs[1].flags = led1_state;
-	LEDs[1].control_bit = IOMD_IOLINES_RIGHTLED;
+	LEDs[1].name = PortMan_LED_Right;
 	LEDs[1].flash_rate = LEDs[1].flash_count = led1_flashrate;
 	SetLED( &LEDs[1] );
-#else
-        /* Effectively only one LED in model 1 h/w. */
-        LEDs[0].flags = led0_state;
-        LEDs[0].control_bit = IOMD_IOLINES_LED;
-        LEDs[0].flash_rate = LEDs[0].flash_count = led0_flashrate;
-	SetLED( &LEDs[0] );
-#endif
 
 	ClaimOrReleaseTicker(pw);
 
@@ -215,26 +190,26 @@ led_finalise( void *pw )
 	LEDs[0].flags = 0;
 	SetLED( &LEDs[0] );
 
-#if defined(Boca) || defined(Funai)
 	LEDs[1].flags = 0;
 	SetLED( &LEDs[1] );
-#endif
 
 	/* Release TickerV if necessary. */
 	ReleaseTicker( pw );
 }
 
 
+void
+led_refresh( void )
+{
+	int i;
+	for ( i = 0; i < LED_COUNT; i++ )
+		SetLED( &LEDs[i] );
+}
+
+
 _kernel_oserror *
 led_control( _kernel_swi_regs *r, void *pw )
 {
-/* On Omega and MPT hardware ignore all LED numbers other than 1 and set that to 0. (NB: Standby uses 1) */
-#if defined(Omega) || defined(MPT)
-	if ((unsigned int)r->r[0] != 1)
-		r->r[0] = 1;
-	else
-		r->r[0] = 0;
-#endif
 	/* Make sure LED number is in range. Doesn't seem worth returning an error if not... */
 	if ( (unsigned int)r->r[0] < LED_COUNT )
 	{
