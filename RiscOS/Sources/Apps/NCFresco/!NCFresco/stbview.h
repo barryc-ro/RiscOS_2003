@@ -142,6 +142,8 @@ struct _frontend_view
     char *selected_id;
 
     int is_selected;		/* this view is the selected one */
+
+    int open_transient;
 };
 
 #define fe_keyboard_UNKNOWN	(-1)

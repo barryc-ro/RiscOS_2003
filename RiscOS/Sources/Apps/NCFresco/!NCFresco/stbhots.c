@@ -143,7 +143,7 @@ static void hotlist__unlink(hotlist_item *last, hotlist_item *item)
     if (last)
 	last->next = item->next;
     else
-	hotlist_list = item;
+	hotlist_list = item->next;
 
     if (hotlist_last == item)
 	hotlist_last = last;
@@ -223,32 +223,35 @@ void hotlist__remove_list(const char *list_orig)
     char *list_copy = strdup(list_orig), *list;
     int current = 0;
 
-    list = strtok(list_copy, "&");
+    list = strtok(list_copy, "&");	/* init strtok, skip initial & */
     if (list) do
     {
-	int index = atoi(list);
-
-	while (item && index >= current)
+	if (isdigit(*list))		/* check we don't have another parameter */
 	{
-	    hotlist_item *next = item->next;
+	    int index = atoi(list);
+
+	    while (item && index >= current)
+	    {
+		hotlist_item *next = item->next;
 	    
-	    if (index == current)
-	    {
-		/* remove */
-		hotlist__unlink(last, item);
-		hotlist__free_item(item);
+		if (index == current)
+		{
+		    /* remove */
+		    hotlist__unlink(last, item);
+		    hotlist__free_item(item);
 
-		hotlist_changed = TRUE;
+		    hotlist_changed = TRUE;
+		}
+		else
+		{
+		    last = item;
+		}
+
+		/* always increment current as query info is referenced to original list */
+		current++;
+
+		item = next;
 	    }
-	    else
-	    {
-		last = item;
-	    }
-
-	    /* always increment current as query info is referenced to original list */
-	    current++;
-
-	    item = next;
 	}
     }
     while ((list = strtok(NULL, "&")) != NULL);
@@ -279,12 +282,20 @@ static void hotlist__write(FILE *out)
 
     for (item = hotlist_list; item; item = item->next)
     {
-	fputs(item->url, out);
-	fputc('\n', out);
+	STBDBG(("hotlist__write: item %p url %p title %p\n", item, item->url, item->title));
 
-	if (item->title)
-	    fputs(item->title, out);
-	fputc('\n', out);
+	STBDBG(("hotlist__write: url %s\n", item->url));
+	STBDBG(("hotlist__write: title %s\n", item->title));
+
+	if (item->url)
+	{
+	    fputs(item->url, out);
+	    fputc('\n', out);
+
+	    if (item->title)
+		fputs(item->title, out);
+	    fputc('\n', out);
+	}
     }
 }
 
@@ -395,7 +406,7 @@ void hotlist_write_list(FILE *fout, BOOL del)
 	char *ttl = item->title ? item->title : item->url;
 
 	if (del)
-	    fprintf(fout, msgs_lookup("hotsI1"), i, ttl);
+	    fprintf(fout, msgs_lookup("hotsI1"), i, ttl, i, i);
 	else
 	{
 	    fprintf(fout, msgs_lookup("hotsI2a"));

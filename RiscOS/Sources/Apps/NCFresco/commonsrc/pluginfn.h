@@ -15,6 +15,7 @@ extern int plugin_send_focus(plugin pp);
 extern int plugin_send_action(plugin pp, int action);
 
 extern void plugin_info(plugin pp, int *flags, int *state);
+extern plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *parent, const char *cfile);
 
 extern int plugin_message_handler(wimp_eventstr *e, void *handle);
 

@@ -107,6 +107,12 @@ struct plugin_private
 	char *classid;
 	char *codebase;
     } objd;
+
+    struct
+    {
+	void *parent;
+	char *cfile;
+    } helper;
 };
 
 /* ----------------------------------------------------------------------------- */
@@ -1029,6 +1035,9 @@ void plugin_destroy(plugin pp)
 	mm_free(pp->objd.codebase);
 	mm_free(pp->objd.data);
 
+	/* free helper info */
+	mm_free(pp->helper.cfile);
+
 	/* unlink from list */
 	if (pp == helper_list)
 	    helper_list = pp->next;
@@ -1047,13 +1056,17 @@ void plugin_destroy(plugin pp)
 	    }
 	}
 	
+	/* remove the message handler for helpers */
+	if (helper_list == NULL)
+	    frontend_message_remove_handler(plugin_message_handler, NULL);
+
 	mm_free(pp);
     }
 }
 
 /* ----------------------------------------------------------------------------- */
 
-plugin plugin_helper(const char *url, int ftype, const char *mime_type)
+plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *parent, const char *cfile)
 {
     plugin pp;
     rid_object_item obj;
@@ -1070,9 +1083,16 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type)
 
     if (pp)
     {
+	/* add a message handler for helpers */
+	if (helper_list == NULL)
+	    frontend_message_add_handler(plugin_message_handler, NULL);
+
 	/* add to helper list */
 	pp->next = helper_list;
 	helper_list = pp;
+
+	pp->helper.parent = parent;
+	pp->helper.cfile = strdup(cfile);
 
 	pp->priv_flags |= plugin_priv_HELPER;
 
@@ -1196,6 +1216,10 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			if (pp->parent_item)
 			    ((rid_text_item_object *)pp->parent_item)->object->state.plugin.pp = NULL;
 
+			/* remove the message handler */
+			if (pp->doc && --pp->doc->object_handler_count == 0)
+			    frontend_message_remove_handler(plugin_message_handler, pp->doc);
+			
 			/* and zero the document and parent item handles */
 			pp->doc = NULL;
 			pp->parent_item = NULL;
@@ -1497,8 +1521,17 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		/* message has bounced a second time - mark the plugin as dead */
 		else
 		{
-		    pp->state = plugin_state_ABORTED;
-		    remove_parameter_file(pp);
+		    /* if we tried as a helper then pass to frontend and remove */
+		    if (pp->priv_flags & plugin_priv_HELPER)
+		    {
+			frontend_pass_doc(pp->helper.parent, pp->objd.data, pp->helper.cfile, pp->objd.data_ftype);
+			plugin_destroy(pp);
+		    }
+		    else
+		    {
+			pp->state = plugin_state_ABORTED;
+			remove_parameter_file(pp);
+		    }
 		}
 	    }
 	    break;

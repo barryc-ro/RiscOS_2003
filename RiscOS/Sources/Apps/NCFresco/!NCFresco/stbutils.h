@@ -30,7 +30,7 @@ extern void feutils_init_2(void);
 extern void fe_message(const char *msg);
 extern void fe_report_error(const char *msg);
 
-extern os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_frame_info *ip, int bgcol, wimp_w *w_out);
+extern os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_frame_info *ip, int bgcol, BOOL open, wimp_w *w_out);
 extern int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scroll_bar, int *old_y_scroll_bar, int bgcol);
 extern void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *box, int *x_scroll_bar, int *y_scroll_bar, int width, int height, int scrolling, int bgcol);
 

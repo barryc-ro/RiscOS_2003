@@ -51,6 +51,7 @@
 #include "imagemap.h"
 #include "object.h"
 #include "version.h"
+#include "oimage.h"
 
 /* ----------------------------------------------------------------------------- */
 

@@ -85,7 +85,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static int internal_decode_display_options(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static void internal_decode_display_options(const char *query)
 {
     fe_view v;
     char *s;
@@ -113,11 +113,6 @@ static int internal_decode_display_options(const char *query, const char *bfile,
 	    fe_refresh_screen(NULL);
 	}
     }
-    
-    *new_url = strdup("ncfrescointernal:cancel");
-    *flags |= access_NOCACHE;
-
-    return fe_internal_url_REDIRECT;
 }
 
 static os_error *fe_display_options_write_file(FILE *f)
@@ -136,7 +131,7 @@ static os_error *fe_display_options_write_file(FILE *f)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static int internal_decode_print_options(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static void internal_decode_print_options(const char *query)
 {
     char *s;
     BOOL cancel;
@@ -173,11 +168,6 @@ static int internal_decode_print_options(const char *query, const char *bfile, c
 
 	print__ul = strstr(query, "f=ul") != 0;
     }
-
-    *new_url = strdup("ncfrescointernal:cancel");
-    *flags |= access_NOCACHE;
-
-    return fe_internal_url_REDIRECT;
 }
 
 static os_error *fe_print_options_write_file(FILE *f)
@@ -351,7 +341,7 @@ static int find__backwards;
 static int find__casesense;
 static fe_view find__v = NULL;
 
-static int internal_decode_find(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_decode_find(const char *query)
 {
     char *text, *dir, *casesense, *s;
     BOOL cancel;
@@ -392,15 +382,8 @@ static int internal_decode_find(const char *query, const char *bfile, const char
     }
 
     find__v = NULL;
-    
-    *new_url = strdup("ncfrescointernal:cancel");
-    *flags |= access_NOCACHE;
 
-    return fe_internal_url_REDIRECT;
-    NOT_USED(bfile);
-    NOT_USED(referer);
-    NOT_USED(file);
-    NOT_USED(flags);
+    return fe_internal_url_NO_ACTION;
 }
 
 static os_error *fe_find_write_file(FILE *f)
@@ -485,10 +468,133 @@ void fe_find(fe_view v, const char *text, int backwards, int casesense)
 }
 
 /* ------------------------------------------------------------------------------------------- */
+  
+static int vals_to_bits(int n_vals)
+{
+    int n_bits = 0;
+    do
+    {
+	n_vals >>= 1;
+	n_bits++;
+    }
+    while (n_vals > 1);
+    return n_bits;
+}
+
+static int nvram_do(int bit_start, int n_bits, int new_val)
+{
+    int mask, byte, offset, r;
+
+    mask = (1<<n_bits) - 1;
+    byte = bit_start/8;
+    offset = bit_start%8;
+
+    /* read current value */
+    r = _kernel_osbyte(0xA1, byte, 0);
+    if (r == _kernel_ERROR)
+	return -1;
+
+    r = (r >> 8) & 0xff;
+
+    if (new_val != -1)
+    {
+	r &= ~(mask << offset);
+	r |= new_val << offset;
+	_kernel_osbyte(0xA2, byte, r);
+    }
+    
+    return r;
+}
+
+static int nvram_read(int bit_start, int n_bits)
+{
+    return nvram_do(bit_start, n_bits, -1);
+}
+
+static void nvram_write(int bit_start, int n_bits, int val)
+{
+    nvram_do(bit_start, n_bits, val);
+}
+
+#define NVRAM_FONTS	(131*8 + 0)
+#define NVRAM_SOUND	(131*8 + 2)
+#define NVRAM_BEEPS     (131*8 + 3)
+
+/* ------------------------------------------------------------------------------------------- */
+
+static os_error *fe_custom_write_file(FILE *f, const char *tag, int bit_start, int n_vals)
+{
+    char tag_buf[8];
+    int val, i;
+
+    val = nvram_read(bit_start, vals_to_bits(n_vals));
+    
+    sprintf(tag_buf, "m%sT", tag);
+    fputs(msgs_lookup(tag_buf), f);
+
+    for (i = 0; i < n_vals; i++)
+    {
+	sprintf(tag_buf, "m%s%d", tag, i);
+ 	fprintf(f, msgs_lookup(tag_buf), val == i ? "radioon" : "radiooff");
+/* 	fprintf(f, msgs_lookup(tag_buf), val == i ? "CHECKED" : ""); */
+    }
+
+    sprintf(tag_buf, "m%sF", tag);
+    fputs(msgs_lookup(tag_buf), f);
+
+    return NULL;
+}
+
+static int internal_decode_custom(const char *query, char **url, int *flags)
+{
+    char *font = extract_value(query, "font.");
+    char *sound = extract_value(query, "sound.");
+    char *beeps = extract_value(query, "beep.");
+    int generated = fe_internal_url_NO_ACTION;
+    
+    if (font)
+    {
+	int font_val = atoi(font);
+	nvram_write(NVRAM_FONTS, 2, font_val);
+
+	fe_font_size_set(font_val, TRUE);
+
+	*url = strdup("ncfrescointernal:openpanel?name=customfonts");
+	generated = fe_internal_url_REDIRECT;
+    }
+
+    if (sound)
+    {
+	int sound_val = atoi(sound);
+	nvram_write(NVRAM_SOUND, 1, sound_val);
+
+	*url = strdup("ncfrescointernal:openpanel?name=customsound");
+	generated = fe_internal_url_REDIRECT;
+    }
+    
+    if (beeps)
+    {
+	int beeps_val = atoi(beeps);
+	nvram_write(NVRAM_BEEPS, 1, beeps_val);
+
+	*url = strdup("ncfrescointernal:openpanel?name=custombeeps");
+	generated = fe_internal_url_REDIRECT;
+    }
+
+    *flags = access_NOCACHE;
+    
+    mm_free(font);
+    mm_free(sound);
+    mm_free(beeps);
+
+    return generated;
+}
+
+/* ------------------------------------------------------------------------------------------- */
 /* password handling    */
 /* ------------------------------------------------------------------------------------------- */
 
-static int internal_decode_password(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_decode_password(const char *query)
 {
     char *name, *pass, *s;
     fe_passwd pw;
@@ -522,11 +628,8 @@ static int internal_decode_password(const char *query, const char *bfile, const 
 	mm_free(name);
 	mm_free(pass);
     }
+
     return fe_internal_url_NO_ACTION;
-    NOT_USED(bfile);
-    NOT_USED(referer);
-    NOT_USED(file);
-    NOT_USED(flags);
 }
 
 static os_error *fe_passwd_write_file(FILE *f)
@@ -766,7 +869,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}    
 	else if (strcasecomp(panel_name, "info") == 0)
 	{
-	    v = get_source_view(query, FALSE);
+	    v = get_source_view(query, TRUE);
 	    if (v)
 	    {
 		e = fe_version_write_file(f, v->displaying);
@@ -791,6 +894,18 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "urlfavs") == 0)
 	{
 	    e = fe_hotlist_and_openurl_write_file(f);
+	}    
+	else if (strcasecomp(panel_name, "customfonts") == 0)
+	{
+	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS, 3);
+	}    
+	else if (strcasecomp(panel_name, "customsound") == 0)
+	{
+	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND, 2);
+	}    
+	else if (strcasecomp(panel_name, "custombeeps") == 0)
+	{
+	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS, 2);
 	}    
     
 	fclose(f);
@@ -1064,6 +1179,27 @@ static int internal_action_keyboard(const char *query, const char *bfile, const 
     NOT_USED(flags);
 }
 
+static int internal_action_select(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+{
+    fe_view v = get_source_view(query, FALSE);
+    char *id = extract_value(query, "id=");
+
+    if (v && v->displaying && id)
+    {
+	be_item ti = backend_locate_id(v->displaying, id);
+	if (ti)
+	    backend_activate_link(v->displaying, ti, 0);
+    }
+
+    mm_free(id);
+    
+    return fe_internal_url_NO_ACTION;
+    NOT_USED(bfile);
+    NOT_USED(referer);
+    NOT_USED(file);
+    NOT_USED(flags);
+}
+
 /* ----------------------------------------------------------------------------------------------------- */
 
 
@@ -1100,17 +1236,13 @@ static int internal_action_opentoolbar(const char *query, const char *bfile, con
     {
 	event = fevent_TOOLBAR_DETAILS;
     }
-    else if (strcasecomp(bar, "related") == NULL)
-    {
-	event = fevent_TOOLBAR_RELATED;
-    }
-    else if (strcasecomp(bar, "openurl") == NULL)
-    {
-	event = fevent_TOOLBAR_OPENURL;
-    }
     else if (strcasecomp(bar, "vcr") == NULL)
     {
 	event = fevent_TOOLBAR_CODEC;
+    }
+    else if (strcasecomp(bar, "custom") == NULL)
+    {
+	event = fevent_TOOLBAR_CUSTOM;
     }
 
     if (event != -1)
@@ -1150,19 +1282,40 @@ static int internal_decode_cancel(const char *query, const char *bfile, const ch
  * We know they will be in order
  */
 
-static int internal_decode_hotlist_delete(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_decode_process(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
-    hotlist_remove_list(query);
+    char *page = extract_value(query, "name=");
+    int generated = fe_internal_url_NO_ACTION;
 
-    /* reload the delete page so we can see it has happened */
-    *new_url = strdup("ncfrescointernal:openpanel?name=favsdelete");
-    *flags |= access_NOCACHE;
+    if (strcasecomp(page, "custom") == 0)
+    {
+	generated = internal_decode_custom(query, new_url, flags);
+    }
+    else if (strcasecomp(page, "favsdelete") == 0)
+    {
+	hotlist_remove_list(query);
+    }
+    else if (strcasecomp(page, "displayoptions") == 0)
+    {
+	internal_decode_display_options(query);
+    }
+    else if (strcasecomp(page, "printoptions") == 0)
+    {
+	internal_decode_print_options(query);
+    }
+    else if (strcasecomp(page, "find") == 0)
+    {
+	generated = internal_decode_find(query);
+    }
+    else if (strcasecomp(page, "password") == 0)
+    {
+	generated = internal_decode_password(query);
+    }
     
-    return fe_internal_url_REDIRECT;
+    return generated;
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);
-    NOT_USED(flags);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -1186,14 +1339,11 @@ static internal_url_str internal_url_info[] =
     { "opentoolbar", internal_action_opentoolbar },
     { "printpage", internal_action_printpage },
     { "keyboard", internal_action_keyboard },
+    { "select", internal_action_select },
 
     /* These are used to process the results of generated pages. Not usually set by the user */
     { "cancel", internal_decode_cancel },
-    { "displayoptions", internal_decode_display_options },
-    { "find", internal_decode_find },
-    { "password", internal_decode_password },
-    { "printoptions", internal_decode_print_options },
-    { "favsdelete", internal_decode_hotlist_delete },
+    { "process", internal_decode_process },
 
     { "back", internal_action_back },
     { "forward", internal_action_forward },
@@ -1261,7 +1411,7 @@ os_error *fe_hotlist_and_url_open(fe_view v)
 
 os_error *fe_url_open(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=url", v, TARGET_FAVS, NULL, fe_open_url_NO_CACHE);
+    return frontend_open_url("ncfrescointernal:openpanel?name=url", v, TARGET_OPEN, NULL, fe_open_url_NO_CACHE);
 }
 
 void fe_show_mem_dump(void)

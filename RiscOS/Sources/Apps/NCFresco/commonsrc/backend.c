@@ -4179,7 +4179,10 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     {
 	BEDBG((stderr, "Got document of type 0x%03x, passing to the front end.\n", ft));
 
-	frontend_pass_doc(doc->parent, doc->url, cfile, ft);
+	if (frontend_plugin_handle_file_type(ft))
+	    plugin_helper(doc->url, ft, NULL, doc->parent, cfile);
+	else
+	    frontend_pass_doc(doc->parent, doc->url, cfile, ft);
 
 	BEDBG((stderr, "Returned from frontend\n"));
 
@@ -4735,6 +4738,9 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 
     if (ti->tag == rid_tag_TEXTAREA)
     {
+	if (((rid_text_item_textarea *)ti)->area->base.tabindex == -1)
+	    return FALSE;
+
 	if ((flags & be_link_TEXT) == 0)
 	{
 	    if (aref_valid && !aref_changed_enough)
@@ -4745,6 +4751,9 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 
     if (ti->tag == rid_tag_INPUT)
     {
+	if (((rid_text_item_input *)ti)->input->base.tabindex == -1)
+	    return FALSE;
+
 	if (flags & be_link_TEXT)
 	{
 	    rid_input_tag tag = ((rid_text_item_input *)ti)->input->tag;

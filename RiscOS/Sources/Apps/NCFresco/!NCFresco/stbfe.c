@@ -133,7 +133,7 @@
 #define CLIP_FILE       "<Wimp$ScrapDir>."PROGRAM_NAME"Clip"
 #define CLIP_FILE_LEN   sizeof(CLIP_FILE)
 
-#define AUTOSCROLL_EDGE_THRESHOLD	64	/* closeness to edge to start auto-scrolling in OS units */
+#define AUTOSCROLL_EDGE_THRESHOLD	24	/* closeness to edge to start auto-scrolling in OS units */
 #define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
 
 /* -------------------------------------------------------------------------- */
@@ -580,7 +580,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     if (v->fetching == doc)
 	v->fetching = NULL;
     else
-	fprintf(stderr, "Erroneous call to view visit\n");
+	usrtrc("Erroneous call to view visit\n");
 
     previous_url = NULL;
     previous_mode = v->browser_mode;
@@ -609,7 +609,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     
     if (previous_url)
 	frontend_fade_frame(v, render_get_colour(render_colour_BACK, v->displaying));
-
+    
     /* check for special page instructions - but only on top page   */
     if (v->parent == NULL)
     {
@@ -620,15 +620,17 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
 	{
-	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP" };
+	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP", "POSITION" };
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" }; /* order must agree with #defines in stbview.h */
-	    name_value_pair vals[4];
+	    name_value_pair vals[5];
+	    wimp_box box;
 
 	    parse_http_header(ncmode, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
 
 	    mm_free(v->selected_id);
 	    v->selected_id = strdup(vals[0].value);
+
 	    toolbar_state = decode_string(vals[1].value, on_off_list, sizeof(on_off_list)/sizeof(on_off_list[0]));
 	    keyboard_state = decode_string(vals[1].value, on_off_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]));
 	    
@@ -645,6 +647,20 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 /* 		set line drop default */
 	    }
 
+	    /* read position for window, safe area relative */
+	    box.x0 = box.x1 = box.y0 = box.y1 = -1;
+	    sscanf(vals[4].value, "%d,%d,%d,%d", &box.x0, &box.y0, &box.x1, &box.y1);
+
+	    if (box.x0 != -1 && box.x1 != -1 && box.y0 != -1 && box.y1 != -1)
+	    {
+		v->box.x0 = text_safe_box.x0 + box.x0;
+		v->box.y0 = text_safe_box.y0 + box.y0;
+		v->box.x1 = text_safe_box.x0 + box.x1; 
+		v->box.y1 = text_safe_box.y0 + box.y1;
+
+		memset(&v->margin , 0, sizeof(v->margin));
+	    }
+	    
 	    mm_free(ncmode);
 	}
 
@@ -699,6 +715,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     {
         fe_status_mode(v, v->parent->browser_mode, -1);
     }
+
+    /* if it is a transient window then open here */
+    if (v->open_transient && v->w)
+	feutils_resize_window(&v->w, &v->margin, &v->box, &v->x_scroll_bar, &v->y_scroll_bar, 0, 0, fe_scrolling_NO, fe_bg_colour(v));
 
     v->pending_scroll = fe_history_visit(v, url, title);
 
@@ -796,23 +816,40 @@ fe_view fe_dbox_view(const char *name)
 	box.x1 = (text_safe_box.x0   + text_safe_box.x1*3)/4;
 	box.y0 = (text_safe_box.y0*3 + text_safe_box.y1  )/4;
 	box.y1 = (text_safe_box.y0   + text_safe_box.y1*3)/4;
+
+	memset(&info.margin, 0, sizeof(info.margin));
     }
     else if (strcasecomp(name, TARGET_INFO) == 0)
     {
 	box.x0 = text_safe_box.x0;
 	box.x1 = text_safe_box.x1;
-	box.y0 = text_safe_box.y0 + tb_status_height() + 32;
-	box.y1 = (text_safe_box.y0 + text_safe_box.y1)/2;
+	box.y0 = text_safe_box.y0 + tb_status_height();
+	box.y1 = (text_safe_box.y0 + text_safe_box.y1)/3;
+
+    	memset(&info.margin, 0, sizeof(info.margin));
+    }
+    else if (strcasecomp(name, TARGET_OPEN) == 0)
+    {
+	box.x0 = text_safe_box.x0;
+	box.x1 = text_safe_box.x1;
+	box.y0 = text_safe_box.y0 + tb_status_height();
+	box.y1 = box.y0 + 128;
+
+    	memset(&info.margin, 0, sizeof(info.margin));
     }
     else			/* favs, history, help */
     {
+#if 1
+	box = screen_box;
+#else
 	box.x0 = text_safe_box.x0;
 	box.x1 = (text_safe_box.x0 + text_safe_box.x1*3)/4;
 	box.y0 = text_safe_box.y0 + tb_status_height() + 32;
 	box.y1 = text_safe_box.y1 - 32;
+#endif
     }	
 
-    frontend_complain(fe_new_view(NULL, &box, &info, &view));
+    frontend_complain(fe_new_view(NULL, &box, &info, FALSE, &view));
 
     if (view)
     {
@@ -829,6 +866,8 @@ fe_view fe_dbox_view(const char *name)
 	v->next = view;
 	view->prev = v;
 #endif
+
+	view->open_transient = TRUE;
     }
 
     return view;
@@ -1552,7 +1591,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
                 coords_offsetbox(&box, -v->margin.x0, -v->margin.y1, &box);
 		*/
 
-            frontend_complain(fe_new_view(v, &box, ip, &vv));
+            frontend_complain(fe_new_view(v, &box, ip, TRUE, &vv));
             if (ip->src)
 	    {
                 os_error *e = frontend_open_url(ip->src, vv, NULL, NULL, fe_open_url_FROM_FRAME);
@@ -2492,11 +2531,21 @@ os_error *fe_status_info_level(fe_view v, int level)
     return NULL;
 }
 
-os_error *fe_status_unstack(fe_view v)
+/* new multipurpose unstack/remove window/close popups */
+
+os_error *fe_status_unstack(fe_view source_v)
 {
-    tb_status_unstack();
+    if (!tb_status_unstack())
+    {
+	fe_view v = fe_find_top_popup(source_v ? source_v : main_view);
+
+	if (v && v->open_transient)
+	    fe_dispose_view(v);
+	else
+            fe_history_move(source_v, history_PREV);
+    }	
+	
     return NULL;
-    NOT_USED(v);
 }
 
 /*
@@ -4478,7 +4527,7 @@ static BOOL fe_initialise(void)
         info.noresize = TRUE;
         info.scrolling = fe_scrolling_NO;
         *(wimp_box *)&info.margin = margin_box;
-        frontend_fatal_error(fe_new_view(NULL, &screen_box, &info, &main_view));
+        frontend_fatal_error(fe_new_view(NULL, &screen_box, &info, TRUE, &main_view));
         main_view->status_open = TRUE;
     }
 

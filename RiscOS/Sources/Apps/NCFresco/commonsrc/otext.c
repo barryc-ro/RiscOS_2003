@@ -209,10 +209,15 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     int tfc, tbc;
     struct webfont *wf;
     int b;
-    BOOL no_text;
+    BOOL no_text, draw_highlight_box;
 
     if ((ti->flag & rid_flag_FVPR) == 0)
 	return;
+
+#ifdef STBWEB
+    draw_highlight_box = ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&
+	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED);
+#endif
 
     wf = &webfonts[ti->st.wf_index];
 
@@ -232,10 +237,6 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	render_set_font_colours(fs->lfc, fs->lbc, doc);
     }
 
-#if 0
-    fprintf(stderr, "rh = 0x%p, texts = 0x%p, data = 0x%p\n", rh, &(rh->texts), rh->texts.data);
-#endif
-
     /* adjust base line for subscipts and superscripts */
     b = bline;
     switch (ti->st.flags & (rid_sf_SUB|rid_sf_SUP))
@@ -251,26 +252,30 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
+#ifdef STBWEB
+    if (draw_highlight_box && 0xdd000000 != -1)
+    {
+	render_set_colour(0xdd000000 | render_colour_RGB, doc);
+	bbc_rectanglefill(hpos, bline - ti->max_down, ti->width + ti->pad, ti->max_up + ti->max_down);
+    }
+#endif
+    
     {
 	char *s = rh->texts.data + tit->data_off;
 
 	if ( s && *s )
-	font_paint(s,
+	    font_paint(s,
 	               font_OSCOORDS + (config_display_blending ? 0x800 : 0),
 	               hpos, b/*,
 	               ti->width + ti->pad*/ );
 
 	no_text = *s == '\0' && ti->pad == 0;
-#if 0
-	fprintf(stderr, "'%s'\n", s);
-#endif
     }
 
     flexmem_shift();
 
 #ifdef STBWEB
-    if (ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&
-	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED) )
+    if (draw_highlight_box && 0xdd000000 == -1)
     {
 	BOOL first = ti->aref->first == ti;
 	BOOL last = ti->next == NULL || ti->next->aref == NULL || ti->next->aref != ti->aref;

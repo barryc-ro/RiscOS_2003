@@ -439,12 +439,15 @@ static void open_event_handler(int event, fe_view v)
 	break;
 
     case fevent_OPEN_FONT_SIZE:
+	frontend_open_url("ncfrescointernal:openpanel?name=customfonts", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_MUSIC:
+	frontend_open_url("ncfrescointernal:openpanel?name=customsound", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_BEEPS:
+	frontend_open_url("ncfrescointernal:openpanel?name=custombeeps", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
     }
 }
@@ -498,6 +501,10 @@ static void codec_event_handler(int event, fe_view v)
 	backend_plugin_action(v->displaying, item, codec_actions[action]);
     }
     else if (event == fevent_CODEC_MUTE)
+    {
+	/* do something else... */
+    }
+    else if (event == fevent_CODEC_CLOSE)
     {
 	/* do something else... */
     }

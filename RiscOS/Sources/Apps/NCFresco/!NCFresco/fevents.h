@@ -149,8 +149,8 @@
 #define fevent_TOOLBAR_HISTORY		    0x20A3
 #define fevent_TOOLBAR_PRINT		    0x20A4
 #define fevent_TOOLBAR_DETAILS		    0x20A5
-#define fevent_TOOLBAR_RELATED		    0x20A6
-#define fevent_TOOLBAR_OPENURL		    0x20A7
+/* #define fevent_TOOLBAR_RELATED		    0x20A6 */
+/* #define fevent_TOOLBAR_OPENURL		    0x20A7 */
 #define fevent_TOOLBAR_NC1		    0x20A8
 #define fevent_TOOLBAR_CODEC		    0x20A9
 #define fevent_TOOLBAR_CUSTOM		    0x20AA
@@ -169,6 +169,7 @@
 #define fevent_CODEC_FAST_FORWARD	    0x20C4
 #define fevent_CODEC_RECORD		    0x20C5
 #define fevent_CODEC_MUTE		    0x20C6
+#define fevent_CODEC_CLOSE		    0x20C7
 
 #define fevent_TOOLBAR_MOVE_LEFT	    0x20D0
 #define fevent_TOOLBAR_MOVE_RIGHT	    0x20D1

@@ -51,6 +51,7 @@
 #include "object.h"
 
 #include "stream.h"
+#include "oimage.h"
 
 #ifndef OI_DEBUG
 #define OI_DEBUG DEBUG
@@ -74,10 +75,6 @@
 /* ---------------------------------------------------------------------- */
 
 extern void translate_escaped_text(char *src, char *dest, int len);
-
-extern void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int *iw, int *ih);
-extern image oimage_fetch_image(antweb_doc *doc, const char *src);
-extern void oimage_flush_image(image im);
 
 /* ---------------------------------------------------------------------- */
 
@@ -344,7 +341,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 	bg = ii->base.colours.back == -1 ? render_colour_WRITE :
 	    doc->input == ti && ii->base.colours.select != -1 ?
-	    ii->base.colours.select : ii->base.colours.back;
+	    ii->base.colours.select | render_colour_RGB : ii->base.colours.back | render_colour_RGB;
     
 	if (fs->lf != webfonts[WEBFONT_TTY].handle)
 	{
@@ -436,7 +433,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_RESET:
     case rid_it_BUTTON:
 	fg = ii->base.colours.back == -1 && ii->data.button.im == NULL ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
-	bg = ii->data.button.tick ? render_colour_ACTION : ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back;
+	bg = ii->data.button.tick ? render_colour_ACTION : ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB;
 	t = ii->value ? ii->value : ii->tag == rid_it_SUBMIT ? "Submit" : "Reset";
 
 	if (ii->data.button.im)

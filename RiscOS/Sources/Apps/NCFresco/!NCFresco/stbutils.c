@@ -489,7 +489,7 @@ void fe_report_error(const char *msg)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_frame_info *ip, int bgcol, wimp_w *w_out)
+os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_frame_info *ip, int bgcol, BOOL open, wimp_w *w_out)
 {
     os_error *e;
     wimp_wind bg_win;
@@ -552,11 +552,14 @@ os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_
     bg_win.workflags = (wimp_iconflags)(wimp_IBTYPE*wimp_BDEBOUNCEDRAG);
     e = wimp_create_wind(&bg_win, w_out);
 
-    if (!e) e = wimp_get_wind_state(*w_out, &state);
-    if (!e)
+    if (open)
     {
-        state.o.behind = fe_status_window_handle();
-        e = wimp_open_wind(&state.o);
+	if (!e) e = wimp_get_wind_state(*w_out, &state);
+	if (!e)
+	{
+	    state.o.behind = fe_status_window_handle();
+	    e = wimp_open_wind(&state.o);
+	}
     }
 
     return e;
@@ -782,7 +785,7 @@ void feutils_init_2(void)
 {
     int offset;
 
-    if (!is_a_tv())
+    if (config_display_margin_auto && !is_a_tv())
     {
 	memset(&margin_box, 0, sizeof(margin_box));
 	text_safe_box = screen_box;

@@ -723,6 +723,12 @@ static void tb_bar_details_exit_fn(void)
 
 static void tb_bar_codec_exit_fn(void)
 {
+    fevent_handler(fevent_CODEC_CLOSE, NULL);
+}
+
+static void tb_bar_custom_exit_fn(void)
+{
+    fe_dispose_view(fe_locate_view(TARGET_CUSTOM));
 }
 
 static void tb_bar_related_exit_fn(void)
@@ -733,11 +739,6 @@ static void tb_bar_related_exit_fn(void)
 static void tb_bar_details_entry_fn(fe_view v)
 {
     frontend_open_url("ncfrescointernal:openpanel?name=info", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
-}
-
-static void tb_bar_related_entry_fn(fe_view v)
-{
-    frontend_open_url("ncfrescointernal:openpanel?name=related", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
 }
 
 /* --------------------------------------------------------------------------*/
@@ -764,11 +765,11 @@ static tb_bar_descriptor bar_names[] =
     { "historyT", NULL, 0, tb_bar_history_exit_fn, I_DIRECTION },
     { "printT", NULL, 0, 0, I_DIRECTION },
     { "detailsT", NULL, tb_bar_details_entry_fn, tb_bar_details_exit_fn, I_DIRECTION },
-    { "relatedT", NULL, tb_bar_related_entry_fn, tb_bar_related_exit_fn, I_DIRECTION },
-    { "openurlT", NULL, 0, 0, I_DIRECTION },
+    {  0 },
+    {  0 },
     { "statusWn", "statusW", 0, 0, fevent_MENU },
     { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION },
-    { "customT", NULL, 0, 0, I_DIRECTION }
+    { "customT", NULL, 0, tb_bar_custom_exit_fn, I_DIRECTION }
 };
 
 static tb_bar_info *tb_bar_init(int bar_num)
@@ -869,7 +870,7 @@ static void tb_bar_dispose(void)
 
 /* --------------------------------------------------------------------------*/
 
-void tb_status_unstack(void)
+BOOL tb_status_unstack(void)
 {
     tb_status_state_t old_state = status_state;
     
@@ -884,13 +885,15 @@ void tb_status_unstack(void)
 	    tb_status_show(old_state == status_OPEN_SMALL);
 	    setfocus(bar_list->object_handle);
 	}
-    }
-    else
-    {
-	tb_status_hide(FALSE);
+
+	STBDBG(("tb_status_unstack(): out\n"));
+
+	return TRUE;
     }
 
     STBDBG(("tb_status_unstack(): out\n"));
+
+    return FALSE;
 }
 
 void tb_status_unstack_all(void)

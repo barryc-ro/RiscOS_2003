@@ -16,10 +16,13 @@
 #define TARGET_FAVS	"__favs"
 #define TARGET_HISTORY	"__history"
 #define TARGET_INFO	"__info"
+#define TARGET_OPEN	"__open"
+#define TARGET_CUSTOM	"__custom"
 
 extern fe_view fe_find_top(fe_view v);
 extern fe_view fe_find_window(fe_view start, wimp_w w);
 extern fe_view fe_find_target(fe_view start, const char *target);
+extern fe_view fe_find_top_popup(fe_view v);
 
 extern os_error *fe_show_file_in_frame(fe_view v, char *file, char *frame);
 extern os_error *fe_show_file(fe_view v, char *file, int no_history);
@@ -27,7 +30,7 @@ extern os_error *fe_show_file(fe_view v, char *file, int no_history);
 extern int fe_reload_possible(fe_view v);
 extern os_error *fe_reload(fe_view v);
 
-extern os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_info *ip, fe_view *vp);
+extern os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_info *ip, BOOL open, fe_view *vp);
 extern void fe_dispose_view_children(fe_view v);
 extern void fe_dispose_view(fe_view v);
 

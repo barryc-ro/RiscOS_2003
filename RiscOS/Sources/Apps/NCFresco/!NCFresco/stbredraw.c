@@ -348,6 +348,8 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
     wimp_wstate ws;
     BOOL old_y_scroll_bar;
 
+    STBDBGN(("stbredraw: v %p set dimensions to %d x %d\n", v, width, height));
+
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 0;
 
@@ -373,7 +375,8 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
         {
             if (v->w)
             {
-    STBDBGN(("delete window %x of %p\n", v->w, v));
+		STBDBGN(("delete window %x of %p\n", v->w, v));
+
                 wimp_delete_wind(v->w);
                 v->w = 0;
 
@@ -387,8 +390,9 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
             if (!v->w)
             {
                 wimp_box box = v->box;
-                feutils_window_create(&box, &v->margin, NULL, fe_bg_colour(v), &v->w);
-    STBDBGN(("recreate win %x from view %p\n", v->w, v));
+                feutils_window_create(&box, &v->margin, NULL, fe_bg_colour(v), TRUE, &v->w);
+
+		STBDBGN(("recreate win %x from view %p\n", v->w, v));
             }
         }
     }
@@ -457,19 +461,18 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
         }
         else
         {
+	    STBDBGN(("stbredraw: set extent %d,%d %d,%d\n", r.box.x0, r.box.y0, r.box.x1, r.box.y1));
+
 	    r.w = v->w;
 	    wimp_set_extent(&r);
 
 	    if (need_reopen)
 	    {
-/*	    ws.o.behind = statusbar_fix_pos(&ws.o, v->sb);*/
-#if DEBUG
-                fprintf(stderr, "set dimensions %d,%d %d,%d (%d,%d)\n",
-                    ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1, ws.o.x, ws.o.y);
-#endif
+                STBDBGN(("stbredraw: set dimensions %d,%d %d,%d (%d,%d)\n",
+                    ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1, ws.o.x, ws.o.y));
+
 	        frontend_fatal_error(wimp_open_wind(&ws.o));
                 fe_scroll_changed(v, 0, 0);
-/*	    statusbar_fix_pos(&ws.o, v->sb);*/
             }
 	}
     }
@@ -503,9 +506,9 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
 
     box->x0 = ws.o.x;
     box->x1 = ws.o.x + (ws.o.box.x1 - ws.o.box.x0);
-#if 0
-fprintf(stderr, "stbredraw: view bounds  %d,%d %d,%d (status %d)\n", box->x0, box->y0, box->x1, box->y1, fe_status_height_top(v));
-#endif
+
+    STBDBGN(("stbredraw: view bounds  %d,%d %d,%d (status %d)\n", box->x0, box->y0, box->x1, box->y1, fe_status_height_top(v)));
+
     return 1;
 }
 
@@ -593,7 +596,7 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 
     if (need_to_reopen)
     {
-	STBDBGN(("ensure %d-%d visible %d,%d %d,%d (%d,%d) height %d\n",
+	STBDBGN(("stbredraw: ensure %d-%d visible %d,%d %d,%d (%d,%d) height %d\n",
 		 top, bottom,
 		 state.o.box.x0, state.o.box.y0, state.o.box.x1, state.o.box.y1, state.o.x, state.o.y, v->doc_height));
 

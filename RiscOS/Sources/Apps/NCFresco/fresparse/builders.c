@@ -809,7 +809,7 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
 
 /*****************************************************************************/
 
-extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor)
+extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor, VALUE *tabindex)
 {
     rid_text_item_textarea *new;
     rid_text_item *nb;
@@ -839,6 +839,9 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
 	ta->rows = rows->u.i;
     if (cols->type == value_integer)
 	ta->cols = cols->u.i;
+
+    if (tabindex->type == value_integer)
+	ta->base.tabindex = tabindex->u.i;
 
     if (ta->rows == 0)
 	ta->rows = 1;

@@ -51,7 +51,7 @@ extern void tb_status_rotate(void);
 extern void tb_status_rotate_reset(void);
 extern void tb_status_init(void);
 
-extern void tb_status_unstack(void);
+extern BOOL tb_status_unstack(void);
 extern void tb_status_new(fe_view v, int bar_num);
 extern BOOL tb_status_highlight(BOOL gain);
 extern void tb_status_unstack_all(void);

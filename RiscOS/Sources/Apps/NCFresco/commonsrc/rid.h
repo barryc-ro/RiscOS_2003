@@ -290,6 +290,7 @@ typedef struct rid_form_element
 	int select;
 	int cursor;
     } colours;
+    int tabindex;
 } rid_form_element;
 
 

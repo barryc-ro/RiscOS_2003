@@ -107,6 +107,7 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     VALUE *maxlength;
     VALUE *size;
     VALUE *width, *height;
+    VALUE *tabindex;
 
     generic_start (context, element, attributes);
 
@@ -207,6 +208,9 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     in->xsize = size->type == value_integer ? size->u.i : -1;
 #endif
 
+    tabindex = &attributes->value[HTML_INPUT_TABINDEX];
+    in->base.tabindex = tabindex->type == value_integer ? tabindex->u.i : -1;
+    
     width = &attributes->value[HTML_INPUT_WIDTH];
     in->ww = width->type == value_integer ? width->u.i : -1;
     
@@ -396,7 +400,8 @@ extern void starttextarea (SGMLCTX * context, ELEMENT * element, VALUES * attrib
 			    &attributes->value[HTML_TEXTAREA_ID],
 			    &attributes->value[HTML_TEXTAREA_BGCOLOR],
 			    &attributes->value[HTML_TEXTAREA_SELCOLOR],
-			    &attributes->value[HTML_TEXTAREA_CURSOR]);
+			    &attributes->value[HTML_TEXTAREA_CURSOR],
+			    &attributes->value[HTML_TEXTAREA_TABINDEX]);
 
     ASSERT(me->last_mode == HTMLMODE_BOGUS);
 

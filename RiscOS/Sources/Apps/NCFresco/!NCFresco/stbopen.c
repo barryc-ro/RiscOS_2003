@@ -77,6 +77,16 @@ fe_view fe_find_top(fe_view v)
     return v;
 }
 
+fe_view fe_find_top_popup(fe_view v)
+{
+    v = fe_find_top(v);
+
+    if (v) while (v->next)
+	v = v->next;
+
+    return v;
+}
+
 /* ------------------------------------------------------------------------------------------- */
 
 /*
@@ -137,7 +147,6 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     os_error *ep;
     char *referer = NULL, *title = NULL;
     int oflags;
-    BOOL open_transient;
     
 #if DEBUG
     fprintf(stderr, "frontend_open_url '%s' in window '%s'\n", url ? url : "<none>", target ? target : "<none>");
@@ -170,12 +179,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     /* Special targets open up a transient window */
     if (target && parent == NULL && strncmp(target, "__", 2) == 0 && strcasecomp(target, "__top") != 0)
-    {
 	parent = fe_dbox_view(target);
-	open_transient = TRUE;
-    }
-    else
-	open_transient = FALSE;
     
     /* don't check recursion unless this was initiated from a frameset */
     if (parent && (flags & fe_open_url_FROM_FRAME) && check_recursion(parent->parent, url))
@@ -278,7 +282,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     ep = backend_open_url(parent, &parent->fetching, url, bfile, referer, oflags);
 
-    if (ep && open_transient)
+    if (ep && parent->open_transient)
 	fe_dispose_view(parent);
     else 
 	fe_check_download_finished(parent);
@@ -383,7 +387,7 @@ os_error *fe_reload(fe_view v)
 
 /* ------------------------------------------------------------------------------------------- */
 
-os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_info *ip, fe_view *vp)
+os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_info *ip, BOOL open, fe_view *vp)
 {
     os_error *e;
     fe_view view = mm_calloc(1, sizeof(*view));
@@ -426,7 +430,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
     visible = *extent;
 
-    e = feutils_window_create(&visible, &view->margin, ip, fe_bg_colour(parent), &view->w); /* modifies extent*/
+    e = feutils_window_create(&visible, &view->margin, ip, fe_bg_colour(parent), open, &view->w); /* modifies extent*/
     if (e)
     {
         mm_free(view);
