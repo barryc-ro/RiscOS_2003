@@ -80,7 +80,7 @@ export_hdrs:
        @|
 
 var:
-       Set CryptBase$Dir <Obey$Dir>.crypto
+       Set CryptBase$Dir <build$dir>.Sources.Lib.SSLeay.crypto
 
 crypto: var
        ${MKDIR} ${LIBDIR}
@@ -99,7 +99,7 @@ export: export_libs export_hdrs
        @Echo SSLeay: export complete
 
 clean:
-       Set CryptBase$Dir <Obey$Dir>.crypto
+       Set CryptBase$Dir <build$dir>.Sources.Lib.SSLeay.crypto
        ${WIPE} ${LIBDIR} ${WPFLAGS}
        Obey crypto.!mkclean
        Obey <CryptBase$Dir>.^.ssl.!MkClean
