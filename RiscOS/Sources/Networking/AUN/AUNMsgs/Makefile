@@ -17,6 +17,7 @@ MODGEN   = modgen
 MODSQZ   = modsqz
 RM       = remove
 SCANRES  = scanres
+PL       = perl
 WIPE    = -wipe
 
 CPFLAGS  = ~cfr~v
@@ -26,10 +27,14 @@ WFLAGS  = ~cr~v
 # Program specific options:
 #
 COMPONENT   = AUNMsgs
-VERSION     = 0.10
+VERSIONVAR  = AUNMsgs$Version
+VERSION     = <AUNMsgs$Version>
 TARGET      = rm.AUNMsgs
 MODULE_HELP = "AUN Messages"
-FILELIST    = Resources.${LOCALE}.<System>
+FILELIST    = Resources.${LOCALE}.<Machine>
+PLSCRIPT    = build:getversion
+
+
 
 #
 # Generic rules:
@@ -45,7 +50,10 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${FILELIST}
-        ${MODGEN} $@ ${COMPONENT} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
+${TARGET}: ${FILELIST} versionvar
+        Do ${MODGEN} $@ ${COMPONENT} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
+
+versionvar:
+        ${PL} ${PLSCRIPT} ${VERSIONVAR}
 
 # Dynamic dependencies:
