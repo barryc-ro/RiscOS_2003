@@ -10,6 +10,9 @@
 # ====		====	===========
 # 14-Jul-1998   SR      Created
 # 14-Aug-1998   JPB	Tided up, and made MemCheck builds possible
+# 1998-10-16	BAL	Removed -zps1 from suffix rules for module-wrapped
+#                       builds.  Module-wrapped apps. run in User mode and
+#                       so they *can* extend the stack if necessary.
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -211,11 +214,11 @@ OBJSD = \
 
 .c.o:;		${CC} ${CFLAGS} ${DFLAGS} ${EXTRAFLAGS} -c -o $@ $<
 
-.c.oz:;		${CC} ${CFLAGS} ${DZFLAGS} ${EXTRAFLAGS} -c -zM -zps1 -DROM -o $@ $<
+.c.oz:;		${CC} ${CFLAGS} ${DZFLAGS} ${EXTRAFLAGS} -c -zM -DROM -o $@ $<
 
 .c.od:;		${CC} ${CFLAGS} ${DDFLAGS} ${EXTRAFLAGS} -c -o $@ $<
 
-.c.odz:;	${CC} ${CFLAGS} ${DDZFLAGS} ${EXTRAFLAGS} -c -zM -zps1 -DROM -o $@ $<
+.c.odz:;	${CC} ${CFLAGS} ${DDZFLAGS} ${EXTRAFLAGS} -c -zM -DROM -o $@ $<
 
 .s.o:;		${AS} ${AFLAGS} $< $@
 
