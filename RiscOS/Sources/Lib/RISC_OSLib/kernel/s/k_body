@@ -2527,7 +2527,11 @@ alloc_return_block
         ADR     v6, StkOvfPseudoEntry+12
         ]
         STMDA   a1, {v3-v6}             ; new return frame in old chunk...
-        ADR     lr, StackOverflowExit
+        LoadStaticAddress APCS_A_Client, v1, v2
+        LDRB    v1, [v1]                ; determine which exit routine to use
+        TEQ     v1, #0
+        ADREQ   lr, StackOverflowExit   ; non APCS-A
+        ADRNE   lr, StackOverflowExitA  ; APCS-A
         MOV     a2, sp                  ; saved sp in old frame = NEW sp
                                         ; (otherwise exit call is fatal)
         STMDB   fp, {a1, a2, lr}        ; pervert old frame to return here...
@@ -2588,7 +2592,11 @@ DoneArgumentCopy
         MOV     v1, fp                  ; old chunk's frame pointer
         SUB     ip, v4, #SC_SLOffset    ; needed frame size, no margin
         LDMDA   v1!, {a1, a2, v2-v6}    ; 1st 7 of possible 14 saved regs
-        ADR     v5, StackOverflowExit   ; return address...
+        LoadStaticAddress APCS_A_Client, v5, v4
+        LDRB    v5, [v5]
+        TEQ     v5, #0
+        ADREQ   v5, StackOverflowExit   ; return address... (non APCS-A)
+        ADRNE   v5, StackOverflowExitA  ; return address... (APCS-A)
         MOV     v4, sp                  ; SP in NEW chunk
         ORR     v3, fp, #ChunkChange    ; new FP in old chunk
         SUB     fp, sp, #4              ; FP in new chunk
@@ -2615,6 +2623,15 @@ DoneArgumentCopy
 StkOvfPseudoEntry
         STMFD   sp!, {fp, ip, lr, pc}   ; A register save mask
 
+StackOverFlowExitA Keep
+; We return here when returning from an APCS_A function - perform the register
+; munging
+        MOV     fp, r10
+        MOV     sl, r13
+        MOV     sp, r12
+        MOV     r14, #PSRZBit           ; ensure register munging on exit
+        B       StackOverflowExitCommon
+
 StackOverflowExit Keep
 ; We return here when returning from the procedure which caused the
 ; stack to be extended. FP is in the old chunk SP and SL are still
@@ -2624,11 +2641,8 @@ StackOverflowExit Keep
 ; stack-description registers here and permute them back at the end.
 ; We do not do the expected ..EQ operations here, in order to keep the
 ; event handler happy - APCS change expected to be unconditional or NE.
-        MOV     r14, pc
-        TST     r14, #PSRZBit
-        MOVNE   fp, r10
-        MOVNE   sl, r13
-        MOVNE   sp, r12
+        MOV     r14, #0                 ; don't munge registers later on
+StackOverflowExitCommon
         ; We need to move sp and sl back into the old chunk.  Since this happens
         ; in two operations, we need precautions against events while we're
         ; doing it.
@@ -2651,12 +2665,14 @@ DeallocateChunkLoop
         LDR     v3, [v2, #SC_next]      ; next chunk
         MOV     a1, v2
         LDR     ip, [v2,#SC_deallocate] ; deallocate proc for this chunk
-        CMPS    ip, #0                  ; if there is one...
-        MOV     lr, pc
-        MOVNE   pc, ip                  ; then call it...
-        MOVNE   a2, #0
-        STRNE   a2, [v1, #SC_next-SC_SLOffset] ; and unhook next chunk
+        CMPS    ip, #0                  ; is there a proc?
         MOVEQ   v1, v2                  ; no deallocate proc: try next chunk
+        BEQ     DeallocateChunkLoopSkip ; go around next chunk
+        MOV     lr, pc
+        MOV     pc, ip                  ; there was, so call it...
+        MOV     a2, #0
+        STR     a2, [v1, #SC_next-SC_SLOffset] ; and unhook next chunk
+DeallocateChunkLoopSkip
         MOV     v2, v3
         B       DeallocateChunkLoop
 DoneDeallocateChunks
