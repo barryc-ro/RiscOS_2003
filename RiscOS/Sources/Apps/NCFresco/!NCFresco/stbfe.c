@@ -1889,8 +1889,12 @@ int fe_check_download_finished(fe_view v)
 		frontend_view_redraw(top, NULL); /* put inside because of ncint:select */
 	    }
 #endif
+
+#if 0
+	    /* 04/11/97: don't do this as then OSK doesn't work */
 	    if (strncmp(top->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
 		pointer_limit(top->box.x0, top->box.y0, top->box.x1-frontend_dx, top->box.y1-frontend_dy);
+#endif
 	}
 	else
 	{
@@ -3112,7 +3116,7 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
 	}
     }
 
-    STBDBG(("fe_status_set_margins: y %d to %d dy %d\n", v->margin.y0, v->margin.y1, movement));
+    STBDBG(("fe_status_set_margins: v %p y %d to %d dy %d\n", v, v->margin.y0, v->margin.y1, movement));
 
     wimp_open_wind(&state.o);
 
@@ -4379,6 +4383,8 @@ static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
 	    state.o.box.y0 += dy;
 	    frontend_fatal_error(wimp_open_wind(&state.o));
 
+	    STBDBG(("fe_keyboard_set_position: moved dbox %p by %+d to %d/%d\n", v, dy, state.o.box.y0, state.o.box.y1));
+	    
 	    v->box = state.o.box;
 	}
     }
@@ -5360,6 +5366,7 @@ static void setup_allocs(void)
 void fe_event_process(void)
 {
     wimp_eventstr e;
+    wimp_t sender;
 
 #if 0
     if (fe_pending_url)
@@ -5394,7 +5401,8 @@ void fe_event_process(void)
     /* do the standard poll loop    */
     if (fast_poll)
     {
-        frontend_fatal_error(wimp_poll((wimp_emask)(wimp_EMPTRLEAVE), &e));
+/* 	frontend_fatal_error((os_error *)_swix(Wimp_Poll, _INR(0,1) | _OUT(0) | _OUT(2), (wimp_emask)(wimp_EMPTRLEAVE), &e.data, &e.e, &sender)); */
+	frontend_fatal_error(wimp_poll((wimp_emask)(wimp_EMPTRLEAVE), &e));
     }
     else
     {
@@ -5407,7 +5415,8 @@ void fe_event_process(void)
                 next = next_alarm_time;
         }
 
-        frontend_fatal_error(wimp_pollidle((wimp_emask)(wimp_EMPTRLEAVE), &e, next));
+/* 	frontend_fatal_error((os_error *)_swix(Wimp_PollIdle, _INR(0,2) | _OUT(0) | _OUT(2), (wimp_emask)(wimp_EMPTRLEAVE), &e.data, next, &e.e, &sender)); */
+	frontend_fatal_error(wimp_pollidle((wimp_emask)(wimp_EMPTRLEAVE), &e, next)); 
     }
 
     switch (e.e)
@@ -5430,6 +5439,9 @@ void fe_event_process(void)
         case wimp_EOPEN:
         {
             fe_view v = find_view(e.data.o.w);
+
+	    STBDBGN(("EOPEN: v%p %d,%d %d,%d sender %x\n", v, e.data.o.box.x0, e.data.o.box.y0, e.data.o.box.x1, e.data.o.box.y1, sender));
+
 	    if (v && v->pending_mode_change)
 	    {
 		if (v->parent == NULL)
@@ -5459,7 +5471,7 @@ void fe_event_process(void)
 	    }
 	    else
 	    {
-		wimp_open_wind(&e.data.o);
+ 		wimp_open_wind(&e.data.o);
 	    }
             break;
 	}
