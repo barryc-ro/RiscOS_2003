@@ -63,6 +63,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${C_EXP_HDR}.h.VSP \
             ${C_EXP_HDR}.h.Macrovisio \
             ${C_EXP_HDR}.h.UpCallMPEG \
+            ${C_EXP_HDR}.h.TTextSubs \
 
 #
 # Generic rules:
@@ -168,6 +169,9 @@ ${C_EXP_HDR}.h.Macrovisio: Hdr.Macrovisio
 
 ${C_EXP_HDR}.h.UpCallMPEG: Hdr.UpCallMPEG
 	${PERL} Hdr.UpCallMPEG $@
+
+${C_EXP_HDR}.h.TTextSubs: h.TTextSubs
+        ${CP} h.TTextSubs $@ ${CPFLAGS}
 
 
 # Dynamic dependencies:
