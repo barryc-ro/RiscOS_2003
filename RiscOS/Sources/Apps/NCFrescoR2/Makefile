@@ -1,4 +1,4 @@
-# Makefile for NCFresco - resource export and final link only
+# Makefile for NCFresco2, HTTP2, WebFTP2 - resource export and final link only
 #
 
 #
@@ -17,8 +17,9 @@ AS      = aasm
 CP      = copy
 SQ      = squeeze
 RM      = remove
-LD	= link
-TR	= translate
+WIPE    = -wipe
+LD      = link
+TR      = translate
 GETVERS = perl bin.GetVersion
 
 CCFLAGS = -c -depend !Depend -IC:
@@ -26,12 +27,13 @@ ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 TRFLAGS = ${THROWBACK} -marko "{<" -markc ">}" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
 SQFLAGS = 
+WFLAGS  = ~CFR~V
 
 #
 # Program specific options:
 #
-COMPONENT = NCFresco
-TARGET    = aof.ncfre-${TYPE}
+COMPONENT ?= NCFresco
+TARGET    ?= NCFresco
 
 ABSSYM    = RISC_OSLib:o.c_abssym
 
@@ -42,15 +44,21 @@ rom:
         @echo ${COMPONENT}: rom module built
 
 clean:
+        ${WIPE} linked ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-resources: resources_${RES} resources_base
-        @echo ${COMPONENT}: all resource files copied
+resources: resources_${TARGET}
 
 resources_:
+        @echo Need a defined target!
+
+resources_NCFresco: resources_NCFresco_${RES} resources_base
+        @echo ${COMPONENT}: all resource files copied
+
+resources_NCFresco_:
         @echo ${COMPONENT}: dummy alt resource files copied
 
-resources_alt:
+resources_NCFresco_alt:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
 	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	Set NCFrescoROAltRes$Path NCFrescoRORes:Alt.,NCFrescoRORes:
@@ -66,7 +74,7 @@ resources_alt:
 	Unset NCFrescoROAltTransRes$Path
         @echo ${COMPONENT}: alt resource files copied
 
-resources_base:
+resources_NCFresco_base:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
 	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${RESAPP}
@@ -101,7 +109,18 @@ resources_base:
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
 
-install:
+resources_HTTP:
+        @echo ${COMPONENT}: resources files copied
+
+resources_WebFTP:
+        @echo ${COMPONENT}: resources files copied
+
+install: install_${TARGET}
+
+install_:
+        @echo Need a defined target!
+
+install_NCFresco:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
 	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${INSTALLDIR}
@@ -132,32 +151,60 @@ install:
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLDIR}.html.sslserv   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLDIR}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLDIR}.html.url       ${TRFLAGS}
-	${SQ} abs.!RunIm-${ITYPE}                     ${INSTALLDIR}.!RunImage      ${SQFLAGS}
+	${SQ} abs.!RunIm-${TYPE}                      ${INSTALLDIR}.!RunImage      ${SQFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
 
-export: export_${PHASE}
+install_HTTP:
+        ${CP} rm.HTTP ${INSTDIR}.${TARGET}mod ${CPFLAGS}
+        ${CP} rm.HTTPs ${INSTDIR}.${TARGET}smod ${CPFLAGS}
+        ${CP} rm.HTTPsx ${INSTDIR}.${TARGET}sxmod ${CPFLAGS}
 
-export_libs:
-	@echo ${COMPONENT}: export complete(libs)
+install_WebFTP:
+        ${CP} rm.WebFTP ${INSTDIR}.${TARGET} ${CPFLAGS}
 
-export_hdrs:
+export: export_${TARGET}
+
+export_NCFresco: export_NCFresco_${PHASE}
+
+export_NCFresco_libs:
+        @echo ${COMPONENT}: export complete(libs)
+
+export_NCFresco_hdrs:
         ${CP} h.plugin ${EXP_HDR}.h.plugin ${CPFLAGS}
         ${CP} h.ANT_URL ${EXP_HDR}.h.ANT_URL ${CPFLAGS}
         ${CP} h.ANT_Msg ${EXP_HDR}.h.ANT_Msg ${CPFLAGS}
         @echo ${COMPONENT}: export complete(hdrs)
 
+export_HTTP:
+        @echo ${COMPONENT}: export complete
+
+export_WebFTP:
+        @echo ${COMPONENT}: export complete
+
 #
 # Final link for the ROM Image (using given base address)
 #
 
-rom_link: dirs
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
+rom_link: rom_link_${TARGET}
+
+rom_link_NCFresco: dirs
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} aof.ncfre-${TYPE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link for ${ITYPE} build complete
+        @echo ${COMPONENT}: rom_link for ${TYPE} build complete
+
+rom_link_HTTP: dirs
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} aof.HTTP${TYPE} ${ABSSYM}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link for ${TYPE} build complete
+
+rom_link_WebFTP: dirs
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} aof.WebFTP ${ABSSYM}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 
 dirs:
-	${MKDIR} linked
+        ${MKDIR} linked
 
 # Dynamic dependencies:
