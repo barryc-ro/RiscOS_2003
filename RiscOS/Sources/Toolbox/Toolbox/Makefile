@@ -90,7 +90,7 @@ RAM_OBJS =\
  o.task
 
 DBG_OBJS =\
- o.Modhdr_NoD\
+ o.Modhdr\
  o.base\
  o.callback\
  od.event\
@@ -170,7 +170,7 @@ ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${CLIB}
 
 ${DBG_MODULE}: ${DBG_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${CLIB}
 	${mkdir} rm
-        ${LD} -o $@ -module ${DBG_OBJS} ${TBOXLIB} ${RESF} ${CLIB} <Lib$Dir>.tboxlibint.o.debuglibm 
+        ${LD} -o $@ -module ${DBG_OBJS} ${TBOXLIB} ${RESF} ${CLIB} <Lib$Dir>.tboxlibint.o.debuglibm
         Access $@ RW/R
 
 o.mainRAM: main.c
