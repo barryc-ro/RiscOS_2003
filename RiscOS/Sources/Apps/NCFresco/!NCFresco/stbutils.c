@@ -802,7 +802,9 @@ void fe_get_wimp_caret(wimp_w w)
 
 void feutils_init_1(void)
 {
-   /* global vars for rest of system*/
+    char *s;
+    
+    /* global vars for rest of system*/
     frontend_dx = 1<<bbc_vduvar(bbc_XEigFactor);
     frontend_dy = 1<<bbc_vduvar(bbc_YEigFactor);
 
@@ -810,6 +812,11 @@ void feutils_init_1(void)
     screen_box.x0 = screen_box.y0 = 0;
     screen_box.x1 = (bbc_vduvar(bbc_XWindLimit) + 1) * frontend_dx;
     screen_box.y1 = (bbc_vduvar(bbc_YWindLimit) + 1) * frontend_dy;
+
+    /* override to check out particular screen sizes */
+    s = getenv("NCFresco$Screen");
+    if (s)
+	sscanf(s, "%d,%d,%d,%d", &screen_box.x0, &screen_box.y0, &screen_box.x1, &screen_box.y1);
 }
 
 /* init_2 must be done after config_init*/

@@ -687,6 +687,7 @@ void *oimage_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
     switch (reason)
     {
     case object_image_HANDLE:
+    case object_image_OBJECT:
 	return tii->im;
 
     case object_image_ABORT:

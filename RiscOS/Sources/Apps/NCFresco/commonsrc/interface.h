@@ -67,7 +67,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *windowname, char *b
  * the view where possible.  The function makes no allowances for
  * other windows on top. */
 int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom);
-int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, int bottom);
+int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, int bottom, int flags);
 
 /* Force the redraw for the view.  If bb is NULL redraw the whole lot.
  * The view is assumed to have the origin at the top left corner. */

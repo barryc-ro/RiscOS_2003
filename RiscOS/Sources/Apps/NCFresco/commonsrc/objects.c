@@ -11,6 +11,7 @@
 #include "antweb.h"
 #include "images.h"
 #include "objects.h"
+#include "gbf.h"
 
 #include "filetypes.h"
 #include "interface.h"
@@ -62,6 +63,41 @@ BOOL objects_bbox(be_doc doc, be_item ti, wimp_box *box)
     return FALSE;
 }
 
+void objects_set_position(be_doc doc, be_item ti, const wimp_box *box)
+{
+#ifndef BUILDERS
+    rid_text_item_object *tio = (rid_text_item_object *)ti;
+    rid_object_item *obj = tio->object;
+
+    OBJDBGN(("objects_set_position: doc %p ti %p pp %p set to %d,%d,%d,%d\n", doc, ti, obj->state.plugin.pp, box->x0, box->y0, box->x1, box->y1));
+
+    if (obj->state.plugin.pp == NULL)
+    {
+	if (!gbf_active(GBF_LOW_MEMORY))				/* don't start in low memory */
+	{
+	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
+
+	    *(wimp_box *)obj->state.plugin.box = *box;
+
+	    plugin_send_open(obj->state.plugin.pp, box, 0 /* open_flags */);
+
+	    if (doc->object_handler_count++ == 0)
+		frontend_message_add_handler(plugin_message_handler, doc);
+	}
+    }
+    else
+    {
+	if (box->x0 != obj->state.plugin.box[0] || box->x1 != obj->state.plugin.box[2] || 
+	    box->y0 != obj->state.plugin.box[1] || box->y1 != obj->state.plugin.box[3])
+	{
+	    *(wimp_box *)obj->state.plugin.box = *box;
+
+	    plugin_send_reshape(obj->state.plugin.pp, box);
+	}
+    }
+#endif
+}
+
 void objects_check_movement(be_doc doc)
 {
     rid_text_item *ti;
@@ -75,22 +111,28 @@ void objects_check_movement(be_doc doc)
 	rid_text_item_object *tio = (rid_text_item_object *)ti;
 	rid_object_item *obj = tio->object;
 
-	if (obj->type == rid_object_type_PLUGIN && obj->state.plugin.pp)
+	if (obj->type == rid_object_type_PLUGIN)
 	{
 	    wimp_box box;
 	    objects_bbox(doc, ti, &box);
-
-	    /* new - check for change in box */
-	    if (box.x0 != obj->state.plugin.box[0] || box.x1 != obj->state.plugin.box[2] || 
-		box.y0 != obj->state.plugin.box[1] || box.y1 != obj->state.plugin.box[3])
-	    {
-		*(wimp_box *)obj->state.plugin.box = box;
-
-#ifndef BUILDERS
-		plugin_send_reshape(obj->state.plugin.pp, &box);
-#endif
-	    }
+	    objects_set_position(doc, ti, &box);
 	}
+    }
+}
+
+void objects_resize(be_doc doc, be_item ti, int width, int height)
+{
+    rid_text_item_object *tio = (rid_text_item_object *)ti;
+    rid_object_item *obj = tio->object;
+
+    if (obj->type == rid_object_type_PLUGIN)
+    {
+	obj->userwidth.u.i = width;
+	obj->userwidth.type = value_integer;
+	obj->userheight.u.i = height;
+	obj->userheight.type = value_integer;
+    
+	antweb_doc_image_change(doc, obj->state.plugin.pp, image_cb_status_REFORMAT, NULL);
     }
 }
 

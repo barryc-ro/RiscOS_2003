@@ -908,11 +908,13 @@ NCFRESCO_BUILD_ROM_EXPORT_OLD:
 		$(CP) $(CPOPTIONS) commonsrc/plugin.h $(RISCOS_BUILD_HEADERS)/plugin
 
 
+FINDOPTIONS=-name CVS -prune -o -name '*~' -prune -o -type f -print
+
 # copy the files in each wanted directory except for the links and CVS directories
 NCFRESCO_BUILD_ROM_EXPORT:
-		find Resources/Common/UK -name CVS -prune -o -type f -print -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Common/UK/ \;
-		find Resources/RCA/UK -name CVS -prune -o -type f -print -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/RCA/UK/ \;
-		find Resources/NC2/UK -name CVS -prune -o -type f -print -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/NC2/UK/ \;
+		find Resources/Common/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Common/UK/ \;
+		find Resources/RCA/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/RCA/UK/ \;
+		find Resources/NC2/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/NC2/UK/ \;
 		$(CP) $(CPOPTIONS) aof/ncfresco				$(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) commonsrc/plugin.h			$(RISCOS_BUILD_HEADERS)/plugin
 

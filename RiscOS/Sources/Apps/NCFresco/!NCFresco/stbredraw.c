@@ -720,10 +720,10 @@ extern wimp_box on_screen_kbd_pos;
 
 int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 {
-    return frontend_view_ensure_visable_full(v, x, x, top, bottom);
+    return frontend_view_ensure_visable_full(v, x, x, top, bottom, 0);
 }
 
-int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, int bottom)
+int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, int bottom, int dir_flags)
 {
     wimp_wstate state;
     int w, h;
@@ -815,15 +815,6 @@ int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, i
 	STBDBGN(("ensure_visible: force on bottom\n"));
     }
 
-    if ((left != -1) && (left < state.o.x + v->margin.x0))
-    {
-	/* It is off the left, put it at the left edge */
-	state.o.x = left - v->margin.x0;
-	need_to_reopen = 1;
-
-	STBDBGN(("ensure_visible: off left\n"));
-    }
-
     if ((right != -1) && (right > state.o.x + w + v->margin.x1))
     {
 	/* It is off the right, put it at the right */
@@ -831,6 +822,16 @@ int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, i
 	need_to_reopen = 1;
 
 	STBDBGN(("ensure_visible: off right\n"));
+    }
+
+    /* let the left override the right */
+    if ((left != -1) && (left < state.o.x + v->margin.x0))
+    {
+	/* It is off the left, put it at the left edge */
+	state.o.x = left - v->margin.x0;
+	need_to_reopen = 1;
+
+	STBDBGN(("ensure_visible: off left\n"));
     }
 
     if (need_to_set_dims)

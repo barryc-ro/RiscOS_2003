@@ -40,7 +40,7 @@
 #include "mallinfo.h"
 #else
 #include "../memlib/memheap.h"
-#include "../memlib/mallinfo.h"
+/* #include "../memlib/mallinfo.h" */
 #endif
 
 /* ISTR that ANSI sez you shouldn't do this... */
@@ -715,7 +715,7 @@ void mm__check(FILE *f)
 
 void mm__summary(FILE *f)
 {
-#if MEMLIB
+#if MEMLIB && defined(STBWEB)
     struct mallinfo info = MemHeap_mallinfo();
 
     FDBG((f, "total space:            %dK\n", info.arena/1024));
@@ -963,7 +963,7 @@ extern void mm__dump(FILE *f)
 
 extern void mm__summary(FILE *f)
 {
-#if MEMLIB
+#if MEMLIB && defined(STBWEB)
     struct mallinfo info = MemHeap_mallinfo();
 
     fprintf(f, "total space:            %dK\n", info.arena/1024);

@@ -860,7 +860,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 #if USE_MARGINS
 		frontend_view_ensure_visable_full(doc->parent,
 						  x + doc->margin.x0, x + doc->margin.x0 + ti->width,
-						  y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
+						  y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1, flags);
 #else
 		frontend_view_ensure_visable(doc->parent, x, y + ti->max_up, y - ti->max_down);
 #endif

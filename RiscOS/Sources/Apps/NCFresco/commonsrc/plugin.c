@@ -12,6 +12,7 @@
 #include "interface.h"
 #include "status.h"
 #include "url.h"
+#include "objects.h"
 
 #include "plugin.h"
 #include "pluginfn.h"
@@ -566,7 +567,7 @@ static int helpers_open(void)
  * 2) Send message (via frontend)
  */
 
-int plugin_send_open(plugin pp, wimp_box *box, int open_flags)
+int plugin_send_open(plugin pp, const wimp_box *box, int open_flags)
 {
     wimp_msgstr msg;
     message_plugin_open *open = (message_plugin_open *) &msg.data;
@@ -609,7 +610,7 @@ int plugin_send_open(plugin pp, wimp_box *box, int open_flags)
     return 1;
 }
 
-int plugin_send_reshape(plugin pp, wimp_box *box)
+int plugin_send_reshape(plugin pp, const wimp_box *box)
 {
     wimp_msgstr msg;
     message_plugin_reshape *reshape;
@@ -1653,10 +1654,11 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	case MESSAGE_PLUGIN_RESHAPE_REQUEST:
 	{
-/* 	    message_plugin_reshape_request *reshape_request = (message_plugin_reshape_request *)&msg->data; */
+ 	    message_plugin_reshape_request *reshape_request = (message_plugin_reshape_request *)&msg->data;
 
 	    OBJDBG(("plugin: msg reshape request %p state %d\n", pp, pp->state));
 
+ 	    objects_resize(pp->doc, pp->parent_item, reshape_request->width, reshape_request->height);
 	    break;
 	}
 

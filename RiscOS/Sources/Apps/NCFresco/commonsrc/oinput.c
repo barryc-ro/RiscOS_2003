@@ -1504,6 +1504,7 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 	switch (reason)
 	{
 	case object_image_HANDLE:
+	case object_image_OBJECT:
 	    return ii->data.image.im;
 
 	case object_image_ABORT:
@@ -1522,6 +1523,7 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 	switch (reason)
 	{
 	case object_image_HANDLE:
+	case object_image_OBJECT:
 	    return backend_is_selected(doc, ti) && ii->data.button.im_sel ? ii->data.button.im_sel : ii->data.button.im;
 
 	case object_image_ABORT:
@@ -1540,6 +1542,7 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 	switch (reason)
 	{
 	case object_image_HANDLE:
+	case object_image_OBJECT:
 	    return ii->data.radio.tick ? ii->data.radio.im_off : ii->data.radio.im_on;
 
 	case object_image_ABORT:

@@ -405,12 +405,12 @@ void fe_set_pointer(int item_flags)
 
         if (info->name)
         {
-	    if (_swix(OS_SpriteOp, _INR(0,6),
+	    if (_swix(OS_SpriteOp, _INR(0,7),
 		      256+36,
 		      resspr_area(), info->name,
 		      2, info->x, info->y,
 		      0, 0) == NULL ||
-		_swix(Wimp_SpriteOp, _INR(0,6),
+		_swix(Wimp_SpriteOp, _INR(0,7),
 		      36,
 		      0, info->name,
 		      2, info->x, info->y,
@@ -1613,7 +1613,7 @@ static int fe_transient_set_size(fe_view v)
     case fe_position_CENTERED:
     case fe_position_UNSET:
     {
-	int h = -v->doc_height - v->backend_margin.y1 + v->backend_margin.y0;
+	int h = -v->doc_height/*  - v->backend_margin.y1 + v->backend_margin.y0 */;
 	int ww, hh;
 
 	ww = v->transient_position == fe_position_CENTERED_WITH_COORDS ? v->dbox_x : DBOX_SIZE_X;

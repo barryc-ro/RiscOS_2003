@@ -75,11 +75,15 @@ typedef BOOL (*object_process_key)(rid_text_item *ti, rid_header *rh, antweb_doc
  * ABORT: If the image is partially loaded then abort it and cleanup
  * BOX: Return a pointer to a box describing the offset of the actual image
  * within the rid_text_item. In OS units. in trim form.
+ * OBJECT: return an image handle if this is an image or the plugin handle if
+ * this is a plugin. Be careful not to pass this value to an image_ functions.
+ * Only to be used for comparisons with similarly ambiguous values.
  */
 
 #define object_image_HANDLE	0
 #define object_image_ABORT	1
 #define object_image_BOX	2
+#define object_image_OBJECT	3
 
 typedef void *(*object_image_handle)(rid_text_item *ti, antweb_doc *doc, int reason);
 

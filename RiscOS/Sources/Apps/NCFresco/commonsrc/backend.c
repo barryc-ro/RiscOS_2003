@@ -359,7 +359,7 @@ static int rid_table_holds_image(rid_text_item *item, void *i, antweb_doc *doc)
 			    }
                         }
                         else if (object_table[tabscan->tag].imh != NULL &&
-                                (object_table[tabscan->tag].imh)(tabscan, doc, object_image_HANDLE) == i)
+                                (object_table[tabscan->tag].imh)(tabscan, doc, object_image_OBJECT) == i)
                         {
                                 have_image = TRUE;
                                 break;
@@ -384,7 +384,7 @@ static int rid_table_holds_image(rid_text_item *item, void *i, antweb_doc *doc)
 			    }
                         }
                         else if (object_table[tabscan->tag].imh != NULL &&
-                           (object_table[tabscan->tag].imh)(tabscan, doc, object_image_HANDLE) == i)
+                           (object_table[tabscan->tag].imh)(tabscan, doc, object_image_OBJECT) == i)
                         {
                                 have_image = TRUE;
                                 break;
@@ -2299,12 +2299,28 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 
         FMTDBG(("be_formater_loop - building\n"));
 
+#ifdef RISCOS
+	if (doc->encoding != be_encoding_LATIN1)
+	    _swix(Font_WideFormat, _IN(0), doc->encoding);
+#endif
+
+/*     fvpr_progress_stream(&doc->rh->stream); */
+
 	{
 	    fe_view_dimensions fvd;
 	    frontend_view_get_dimensions(doc->parent, &fvd);
 	    rid_toplevel_format(doc, rh, NULL, rh->stream.fwidth, fvd.layout_height);
 	}
 
+	objects_check_movement(doc);
+#ifndef BUILDERS
+	antweb_build_selection_list(doc);
+#endif
+
+#ifdef RISCOS
+	if (doc->encoding != be_encoding_LATIN1)
+	    _swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
+#endif
         FMTDBG(("be_formater_loop done\n"));
 
 #if DEBUG > 2
@@ -2330,27 +2346,12 @@ static os_error *antweb_document_format_no_fvpr(antweb_doc *doc, int user_width)
     if (ti == NULL)
 	return NULL;
 
-#ifdef RISCOS
-    if (doc->encoding != be_encoding_LATIN1)
-	_swix(Font_WideFormat, _IN(0), doc->encoding);
-#endif
-
     /* Zero w|h for all table descendent streams as well */
     rid_zero_widest_height(&doc->rh->stream);
 
     be_formater_loop(doc, doc->rh, ti, doc->scale_value);
 
 /*     fvpr_progress_stream(&doc->rh->stream); */
-
-    objects_check_movement(doc);
-#ifndef BUILDERS
-    antweb_build_selection_list(doc);
-#endif
-
-#ifdef RISCOS
-    if (doc->encoding != be_encoding_LATIN1)
-	_swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
-#endif
 
 #if DEBUG && 0
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
@@ -2663,7 +2664,7 @@ static void be_update_image_size(antweb_doc *doc, void *i)
     for (ti = doc->rh->stream.text_list; ti; ti = rid_scanfr(ti))
     {
 	if ((object_table[ti->tag].imh != NULL) &&
-	    ((object_table[ti->tag].imh)(ti, doc, object_image_HANDLE) == i) )
+	    ((object_table[ti->tag].imh)(ti, doc, object_image_OBJECT) == i) )
 	{
             assert(ti->tag !=rid_tag_TABLE);
 	    (object_table[ti->tag].size)(ti, doc->rh, doc);
@@ -2718,9 +2719,10 @@ static void be_update_image_size(antweb_doc *doc, void *i)
 */
 /* pdh: F/X: sacrifices goat before attempting to debug this function
  */
+/* SJM: ihandle is only used to compare against the value of the image
+   handle read via the object method. */
 
-
-static void antweb_doc_image_change2( void *h, void *i, int status,
+static void antweb_doc_image_change2( void *h, void *ihandle, int status,
                                       wimp_box *box_update )
 {
     antweb_doc *doc = (antweb_doc *) h;
@@ -2735,7 +2737,7 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 #if DEBUG
     if (status != image_cb_status_WORLD && status != image_cb_status_NOACTION)
     {
-	DICDBG(("Image change called, doc=0x%p, status %d, image 0x%p\n", doc, status, i));
+	DICDBG(("Image change called, doc=0x%p, status %d, image 0x%p\n", doc, status, ihandle));
     }
 #endif
 
@@ -2764,7 +2766,7 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
     if ( ((doc->flags & doc_flag_DISPLAYING) == 0)
           || doc->parent == NULL )
     {
-	be_update_image_size(doc, i);
+	be_update_image_size(doc, ihandle);
 
 	/* SJM: moved from top of function */
 	if (status != image_cb_status_UPDATE_ANIM)
@@ -2827,7 +2829,7 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 
 	while (ti)
 	{
-	    if (object_table[ti->tag].imh != NULL && (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE) == i)
+	    if (object_table[ti->tag].imh != NULL && (object_table[ti->tag].imh)(ti, doc, object_image_OBJECT) == ihandle)
 	    {
 		int ow, omu, omd;
 		BOOL fvpr = FALSE;
@@ -2870,7 +2872,7 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 			changed |= (1 << 0); /* Set bit for in view */
 
                     DICDBG(("im%p: has changed (%d-%d %d-%d %d-%d %s)\n",
-                            i, ow, ti->width, omu, ti->max_up,
+                            ihandle, ow, ti->width, omu, ti->max_up,
                             omd, ti->max_down, fvpr ? "yes" : "no" ));
 		}
 	    }
@@ -3012,15 +3014,15 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 			((opi->first->line->floats->left != 0) &&
 			 ((tiscan = opi->first->line->floats->left->ti) != 0) &&
 			 (tiscan->tag == rid_tag_TABLE ?
-			  rid_table_holds_image(tiscan, i, doc) :
+			  rid_table_holds_image(tiscan, ihandle, doc) :
 			  ((object_table[tiscan->tag].imh != NULL) &&
-			   (object_table[tiscan->tag].imh)(tiscan, doc, object_image_HANDLE) == i)) ||
+			   (object_table[tiscan->tag].imh)(tiscan, doc, object_image_OBJECT) == ihandle)) ||
 			 (opi->first->line->floats->right != 0) &&
 			 ((tiscan = opi->first->line->floats->right->ti) != 0) &&
 			 (tiscan->tag == rid_tag_TABLE ?
-			  rid_table_holds_image(tiscan, i, doc) :
+			  rid_table_holds_image(tiscan, ihandle, doc) :
 			  ((object_table[tiscan->tag].imh != NULL) &&
-			   (object_table[tiscan->tag].imh)(tiscan, doc, object_image_HANDLE) == i) ) ) )
+			   (object_table[tiscan->tag].imh)(tiscan, doc, object_image_OBJECT) == ihandle) ) ) )
 		    {
 			have_image = TRUE;
 		    }
@@ -3035,13 +3037,13 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 
 			    if (tiscan->tag == rid_tag_TABLE)
 			    {
-                                if (rid_table_holds_image(tiscan, i, doc))
+                                if (rid_table_holds_image(tiscan, ihandle, doc))
                                 {
 				    have_image = TRUE;
 				    break;
                                 }
 			    }
-			    else if (object_table[tiscan->tag].imh != NULL && (object_table[tiscan->tag].imh)(tiscan, doc, object_image_HANDLE) == i)
+			    else if (object_table[tiscan->tag].imh != NULL && (object_table[tiscan->tag].imh)(tiscan, doc, object_image_OBJECT) == ihandle)
 			    {
 				have_image = TRUE;
 				break;
@@ -3174,9 +3176,9 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 	/* SJM: changes to use frame_info to get right mask value */
 #if 0
 	wimp_box bbox;
-	image_info_frame((image)i, &bbox, NULL, &flags);
+	image_info_frame((image)ihandle, &bbox, NULL, &flags);
 #else
-	image_info((image)i, &imw, &imh, NULL, &flags, NULL, NULL);
+	image_info((image)ihandle, &imw, &imh, NULL, &flags, NULL, NULL);
 #endif
 
 /* 	real_thing_flag = (flags & image_flag_REALTHING) ? rid_image_flag_REAL : 0; */
@@ -3192,11 +3194,11 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 /* 	for (ti = first_ti; ti && (ti->line->top > bottom); ti = rid_scanfr(ti)) */
 	for (ti = first_ti ? first_ti : doc->rh->stream.text_list; ti; ti = rid_scanfr(ti))
 	{
-	    void *imhandle = object_table[ti->tag].imh != NULL ? (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE) : NULL;
+	    void *imhandle = object_table[ti->tag].imh != NULL ? (object_table[ti->tag].imh)(ti, doc, object_image_OBJECT) : NULL;
 
 	    DICDBGN(("ti=%p, line=%p, top=%d, imh=0x%p\n", ti, ti->line, ti->line->top, imhandle));
 
-	    if (imhandle == i)
+	    if (imhandle == ihandle)
 	    {
 		wimp_box *tbox = object_table[ti->tag].imh(ti, doc, object_image_BOX);
 
@@ -3496,9 +3498,16 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 	PPDBG(("setting margins to %d,%d\n", doc->margin.x0, doc->margin.y1));
 #endif
     if (rh->margin.left != -1)
+    {
 	doc->margin.x0 = rh->margin.left*2;
+	doc->margin.x1 = -doc->margin.x0;
+    }
+
     if (rh->margin.top != -1)
-	doc->margin.y1 = -rh->margin.top*2;
+    {
+	doc->margin.y0 = rh->margin.top*2;
+	doc->margin.y1 = -doc->margin.y0;
+    }
 #endif
 
     if (ti == NULL)
