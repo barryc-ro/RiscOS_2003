@@ -1,0 +1,197 @@
+#/*
+ * network.c
+ *
+ * This routine contains a number of network related routines.
+ * These create/bind/destroy/read from and write to sockets.
+ *
+ * © Acorn Computers Ltd. 1993-1997
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "sys/types.h"
+#include "sys/socket.h" /* for the socket stuff */
+#include "sys/ioctl.h"
+#include "sys/uio.h"
+#include "sys/socket.h"
+#include "sys/time.h"
+#include "sys/ioctl.h"
+#include "sys/errno.h"
+#include "netinet/in.h" /* for sockaddr_in */
+#include "sys/dcistructs.h"
+#include "netdb.h"
+#include "unixlib.h"
+#include "structs.h"
+#include "include.h"
+#include "network.h"
+#include "arpa/inet.h"
+#include "generic.h"
+#include "socklib.h"
+#include "checkloop.h"
+#include "debug.h"
+
+#include "MemCheck:MemCheck.h"
+
+char nohost[]="UNKNOWN_HOST";
+
+/* because most routines dont need to know about struct.h */
+char *local_host_name(void);
+
+/*
+ * Create, bind and return a non-blocking socket.
+ * (It must be non-blocking for the write routines to work!)
+ *
+ */
+SD create_socket(int port /* tcp/ip port number - stack assigned if 0 */, int local)
+{
+  	struct sockaddr_in addr;
+  	int sock, on = 1;
+
+  	/* create the socket */
+  	if( (sock = socket(PF_INET, SOCK_STREAM, 0)) < 0 ) {
+    		/* failed - no need to tidy up */
+    		return (-1);
+        }
+
+  	/* set the socket non-blocking and async */
+  	if( socketioctl(sock, FIONBIO, &on) < 0 || socketioctl(sock, FIOASYNC, &on) < 0 ) {
+    		/* failed so tidy up and return */
+    		socketclose(sock);
+    		return (-1);
+        }
+
+  	/* set the socket to be reusable */
+  	on = 1;
+  	if( setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0 ) {
+    		/* failed, but we don't care (0.39 and later) */
+        }
+  	if( setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on)) < 0 ) {
+    		/* failed, but we don't care (0.39 and later) */
+        }
+
+  	/* set the port number */
+  	addr.sin_family      = AF_INET;
+  	addr.sin_addr.s_addr = local ? checkloop_loopback_address().s_addr : htonl(INADDR_ANY);
+  	addr.sin_port        = htons((u_short)port);
+  	
+  	/* FX: maniacal laughter.  Read TCP/IP Illustrated in the bit about in_pcbbind to
+  	 * find out why the bind will fail (if local != 0) unless this memset is not
+  	 * present.  ARGH.
+  	 */
+	memset(addr.sin_zero, '\0', sizeof(addr.sin_zero));
+
+  	/* bind the socket to the port */
+  	if( bind(sock, (struct sockaddr *)&addr, sizeof (addr)) < 0 ) {
+    		/* failed so tidy up and return */
+    		debug(("Failed to bind the server socket (%s,%d)- errno = %d\n",
+    			inet_ntoa(addr.sin_addr), htons(addr.sin_port),
+    			errno));
+    		socketclose(sock);
+    		return (-1);
+        }
+
+  	listen(sock, SOMAXCONN);
+
+  	/* return the socket we ended up with */
+  	return(sock);
+}
+
+/* Close down and flush a socket.*/
+void destroy_socket(SD s)
+{
+	(void) shutdown(s, 2);
+  	(void) socketclose(s);
+}
+
+/*
+ * Read from a socket.
+ *
+ * Returns number of bytes read. Buffer is of length
+ * buffer_length. If the buffer would overflow, only
+ * buffer_length-1 bytes are read and buffer is zero
+ * terminated.
+ */
+int read_socket(char **buffer, int buffer_length)
+{
+        (void) buffer;
+        (void) buffer_length;
+  	return 0;
+}
+
+/*
+ * Write a number of bytes to a socket. If not all the bytes
+ * can be written, the number of bytes that were written
+ * are returned. The buffer is not affected in ANY way.
+ */
+int write_socket(char *buffer, int buffer_length)
+{
+        (void) buffer;
+        (void) buffer_length;
+  	return 0;
+}
+
+/*
+ * Given just a socket return something meaningful for the host at the
+ * other end
+ */
+void remote_host_name(SD sd, process_list proc)
+{
+  	struct sockaddr addr;
+  	int len;
+  	struct in_addr *iaddr;
+  	struct hostent *host;
+  	char *remote_host;
+  	char *remote_ip;
+
+  	/* Set the default host name imediatly! */
+  	proc->hostname=nohost;
+
+  	/* */
+  	len=sizeof(struct sockaddr);
+
+  	/* get the information about the host connected to the socket */
+  	if (( getpeername(sd,&addr,&len))<0) {
+    		proc->hostname=nohost;
+    		return;
+        }
+
+  	/* turn it into a host entry */
+  	iaddr=&(((struct sockaddr_in *)&addr)->sin_addr);
+  	host=gethostbyaddr((char *)iaddr,sizeof(struct in_addr), AF_INET);
+
+  	/* if we can, get the host name */
+  	if (host) {
+  	        MemCheck_RegisterMiscBlock(host, sizeof(struct hostent));
+  	        MemCheck_RegisterMiscBlock_String(host->h_name);
+    		remote_host=Strdup(host->h_name);
+    		MemCheck_UnRegisterMiscBlock(host->h_name);
+    		MemCheck_UnRegisterMiscBlock(host);
+        }
+  	else {
+  	        remote_host=NULL;
+  	}
+
+  	/* get the remote ip address */
+  	remote_ip = inet_ntoa(*iaddr);
+
+  	/* if we dont have a name, make it the address too */
+  	if(remote_host==NULL) remote_host=remote_ip;
+
+  	/* format it nicely */
+  	proc->hostname=(char *)calloc(strlen(remote_host)+strlen(remote_ip)+5,sizeof(char));
+  	proc->hostname[0]='\0';
+  	sprintf(proc->hostname,"%s (%s)",remote_host,remote_ip);
+}
+
+
+char *local_host_name(void)
+{
+	static char buffer[128];
+	static int done = 0;
+	if (!done) {
+	  	gethostname(buffer, sizeof(buffer));
+	  	buffer[sizeof(buffer)-1] = '\0';
+	  	done = 1;
+	}
+  	return(buffer);
+}

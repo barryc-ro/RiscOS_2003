@@ -1,0 +1,1702 @@
+/*
+ * WebServe (cache.c)
+ *
+ * File cacheing for received data
+ *
+ * © Acorn Computers Ltd. 1995-1997
+ *
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <time.h>
+#include "kernel.h"
+#include "swis.h"
+#include "structs.h"
+#include "include.h"
+#include "limits.h"
+#include "cache_glob.h"
+#include "serve_glob.h"
+#include "generic.h"
+#include "filemanage.h"
+#include "URLstruct.h"
+#include "URLclient.h"
+
+#include "debug.h"
+
+
+/* allocate space for exported variables */
+int global_cache_writeback_delayed = 0;
+host_list global_cacheroot;
+static name_allocator host_alloc;
+
+/* allocate space for private variables */
+int global_cachesizemax = INT_MAX;	       /* unknown */
+static int	 global_cachesize;
+
+static void	 free_host_record(host_list hostentry);
+static char	*create_host_dir(void);
+static void	 delete_host_dir(host_list hostentry);
+
+/* HostIndex file read (with validate)/write*/
+static void cache__read_hostindex(void);
+static void cache__write_hostindex(void);
+
+
+static void	  urllist_flush(host_list hostentry);
+static void	  urllist_minimise(host_list hostentry);
+
+static void	  free_url_record(cache_list cacheentry);
+static char	 *create_url_file(host_list hostentry);
+static void	  delete_url_file(cache_list cacheentry);
+
+
+/* CacheIndex file read (with validate)/write*/
+static void cache__read_cacheindex(host_list hostentry);
+static void cache__write_cacheindex(host_list hostentry);
+static void cache__delayedwrite_cacheindex(host_list hostentry);
+
+static void setflags_for_host(int parent_dir);
+int find_free_name_in_dir(name_allocator * alloc);
+void setflags_for_url(host_list hostentry, int parent_dir);
+
+static int extract_date(char *buffer, char *line_prefix, time_t *p_date);
+static int extract_number(char *buffer, char *line_prefix, int *p_number);
+static int convert_text_to_time(char *date_start, /*out*/time_t *p_date);
+
+
+
+
+
+/*********************************************************************************************************/
+
+
+cache_list cache_new_entry(char *hostname, char *url, int port)
+{
+	host_list   hostentry;
+	cache_list  cacheentry;
+	char	   *filename;
+
+	hostentry = hostlist_search(global_cacheroot,  hostname, port);
+	if (hostentry == NULL) {
+		char *dirname;
+
+		/* generate a new directory name 'aa.bb' */
+		dirname = create_host_dir();			    /* will need to be freed */
+		if (dirname == NULL) {
+			return(NULL);
+		}
+
+		hostentry = new_host_record(hostname, dirname, port);
+		free(dirname);					    /* no longer required */
+		if (hostentry == NULL) {
+			return(NULL);
+		}
+
+		/* insert our new host at the head of the list */
+		hostentry->next  = global_cacheroot;
+		global_cacheroot = hostentry;
+
+		cache__write_hostindex();    /*>>>needed somewhere - should it be here???*/
+	}
+
+	filename = create_url_file(hostentry);		      /* will need to be freed */
+	if (filename == NULL) {
+		return(NULL);
+	}
+
+	cacheentry = new_url_record(hostentry, filename, url);
+	free(filename);					      /* no longer required */
+	if (cacheentry) {
+		cacheentry->time_created = time(NULL);	    /* record time of creation */
+
+		/* insert our new URL entry at the head of the hosts URL list */
+		cacheentry->next = hostentry->cache;
+		hostentry->cache = cacheentry;
+	}
+
+	return cacheentry;
+}
+
+
+
+cache_list cache_search(char *hostname, char *url, int port)
+{
+	host_list hostentry = hostlist_search(global_cacheroot, hostname, port);
+
+	if (hostentry) {
+		cache_list cacheentry = urllist_search(hostentry, url);
+
+		if (cacheentry) {
+			if (cacheentry->time_expire != 0) {
+				cacheentry->expired |= (time(NULL) > cacheentry->time_expire);
+			}
+		}
+
+		return cacheentry;
+	}
+
+	return NULL;
+}
+
+
+#define seconds_per_minute (60)
+#define seconds_per_hour   (60 * seconds_per_minute)
+#define seconds_per_day	   (24 * seconds_per_hour)
+
+void cache_setURLExpire_time(char *url, int days_from_now)
+{
+	char	   *hostname;
+	host_list   hostentry;
+	int	    minutes_from_now = 0;
+	int 	    port;
+
+	/* Expiry time is normally expressed in 'days from now' */
+	/* we treat zero days as meaning one hour		*/
+	if (days_from_now == 0) {
+		minutes_from_now = 60;
+	}
+
+	http_get_request(url, &hostname, &port);     /* hostname will need to be freed */
+	hostentry = hostlist_search(global_cacheroot, hostname, port);
+	free(hostname);		/* no longer needed */
+
+	if (hostentry) {
+		cache_list cacheentry = urllist_search(hostentry, url);
+
+		if (cacheentry) {
+			cacheentry->expired = 0;
+			#if 1
+			cacheentry->time_expire = time(NULL) + (days_from_now * seconds_per_day)
+				+ (minutes_from_now * seconds_per_minute);
+			#else
+			/* testing only */
+			cacheentry->time_expire = time(NULL) + days_from_now * seconds_per_minute;
+			#endif
+			/* The CacheIndex file for this host needs writing back sometime, */
+			/* so we retain most of our cached data if we fall off our perch! */
+			cache__delayedwrite_cacheindex(cacheentry->host);
+		}
+	}
+}
+
+
+/*
+ * Delete the given entry.
+ *
+ * If the entry is in use (usage_count non-zero) mark for
+ * later deletion else delete it now.
+ *
+ */
+void cache_delete_entry(cache_list cacheentry)
+{
+	cacheentry->delete = 1;
+
+	debug(("Cacheentry %p> marked for deletion (usage count = %d)\n", cacheentry, cacheentry->usage_count));
+
+	if (cacheentry->usage_count == 0) {
+		host_list hostentry = cacheentry->host;
+		cache_list *insert   = &hostentry->cache;
+
+		/* The CacheIndex file for this host needs writing back sometime, */
+		/* so we retain most of our cached data if we fall off our perch! */
+		cache__delayedwrite_cacheindex(hostentry);
+
+		while (*insert != NULL) {
+			if (*insert == cacheentry) {
+				/* space accounting */
+				hostentry->dirsize -= cacheentry->filesize;	/* update running total */
+				global_cachesize -= cacheentry->filesize;	/* update running total */
+
+				*insert = cacheentry->next;	/* cut entry from list */
+
+				delete_url_file(cacheentry);	/* update name allocator and delete file */
+				free_url_record(cacheentry);
+
+				return;
+			}
+			else {
+				insert = &((*insert)->next);
+			}
+		}
+	}
+}
+
+
+filemanage_FILE * cache_openfile(cache_list cacheentry, char *access)
+{
+	char buffer[256];     /* plenty big enough */
+
+	/* This checking of dirnames and hostnames is very cheesey */
+	/* it would be much better to register a host type via	   */
+	/* new_host_record eg HOSTTYPE_CACHED/SERVE/ERROR	   */
+	if (cacheentry->host->dirname[0]) {
+		sprintf(buffer, "<WebServe$CacheRoot>.%s.%s", cacheentry->host->dirname, cacheentry->filename);
+	}
+	else {
+		if (cacheentry->host->hostname[0]) {
+			sprintf(buffer, "<WebServe$ServeRoot>.%s", cacheentry->filename);
+		}
+		else {
+			sprintf(buffer, "<WebServe$ErrorRoot>.%s", cacheentry->filename);
+		}
+	}
+
+	return filemanage_open(buffer, access);
+}
+
+
+void cache_incfilesize(cache_list cacheentry, int incby)
+{
+	/* space accounting */
+	cacheentry->filesize += incby;
+	cacheentry->host->dirsize += incby;   /* update running total */
+	global_cachesize += incby;	      /* update running total */
+}
+
+
+void cache_incfileusage(cache_list cacheentry)
+{
+	cacheentry->usage_count++;
+        debug(("Cacheentry %p> INC USAGE (now %d)\n", cacheentry, cacheentry->usage_count));
+}
+
+
+void cache_decfileusage(cache_list cacheentry)
+{
+	cacheentry->usage_count--;
+        debug(("Cacheentry %p> DEC USAGE (now %d)\n", cacheentry, cacheentry->usage_count));
+
+	if ((cacheentry->usage_count == 0) && (cacheentry->delete)) {
+		cache_delete_entry(cacheentry);
+	}
+}
+
+void cache_entry_complete(cache_list cacheentry)
+{
+	filemanage_FILE *fp;
+	char  buffer[2049];
+	int   haveread;
+	char *terminate;
+	char *ptr;
+	time_t mod_date, exp_date;
+	int    status_code;
+	int    mod_date_valid, exp_date_valid, status_code_valid;
+
+	/* Assume something wrong - expire the data after 1 minute */
+	cacheentry->time_expire = time(NULL) + seconds_per_minute;
+
+	if (cacheentry->f == NULL) {
+		cacheentry->f = cache_openfile(cacheentry, "r+");
+	}
+	fp = cacheentry->f;
+	if (fp != NULL) {
+	        filemanage_seek(fp, 0, SEEK_SET);
+		haveread = filemanage_read(buffer, sizeof(char), sizeof(buffer)-1, fp);
+		filemanage_close_p(&cacheentry->f);
+
+		buffer[haveread] = '\0';
+		/* we now have (hopefully) the header in our buffer */
+
+		terminate = strstr(buffer,"\n\n");
+		if (!terminate) terminate = strstr(buffer,"\r\n\r\n");
+		if (!terminate) terminate = strstr(buffer,"\r\r");
+
+		if (terminate) {
+			*terminate = '\0';
+
+			/* lower-case the header cos date prefixes and date strings vary from different sources */
+			for (ptr = buffer; ptr < terminate; ptr++) {
+				*ptr = tolower(*ptr);
+			}
+
+			status_code_valid = extract_number(buffer, "http/1.0 "	    , &status_code);
+			mod_date_valid	  = extract_date(  buffer, "last-modified: ", &mod_date);
+			exp_date_valid	  = extract_date(  buffer, "expires: "	    , &exp_date);
+
+			if (exp_date_valid) {
+				if (exp_date <= cacheentry->time_created) {
+					exp_date_valid = 0;
+				}
+			}
+
+			/* check status code to see if our request was accepted/ok */
+			if ((status_code_valid) && ((status_code >= 200) && (status_code < 300))) {
+				/* Data retreived OK, look for expiry date */
+
+				/* If the data received contains a valid expiry date then use it,	  */
+				/* else launch a request to the mail server (it should reply sometime).	  */
+				/* A call of send_GetURLExpire_request() should work, but incase it gives */
+				/* an error (or no one responds) set our own expiry of one day from now.  */
+				if (exp_date_valid) {
+					cacheentry->time_expire = exp_date;
+				}
+				else {
+					cacheentry->time_expire = time(NULL) + seconds_per_day;
+					(void)send_GetURLExpire_request(cacheentry->url);
+				}
+			}
+			else {
+				#if 1
+				/* changed to delete and expire as that is better if the   */
+				/* status_code is 401 - Unauthorised as !Browse will	   */
+				/* re-issue the request with an Authorization (sic) string */
+
+				/* Something wrong - mark entry for deletion */
+				cacheentry->delete = 1;
+				#endif
+				/* Something wrong - expire the data after 1 minute */
+				cacheentry->time_expire = time(NULL) + seconds_per_minute;
+			}
+		}
+	}
+
+	/* The CacheIndex file for this host needs writing back sometime, */
+	/* so we retain most of our cached data if we fall off our perch! */
+	cache__delayedwrite_cacheindex(cacheentry->host);
+}
+
+
+/*
+ * Flush the cache
+ *
+ * Delete all cache entries and hosts not currently in use.
+ * Cache entries currently being filled or read from are
+ * retained (as are their owner hosts).
+ *
+ */
+void cache_flush(void)
+{
+	host_list *insert    = &global_cacheroot;
+	host_list  hostentry =  global_cacheroot;     /* AKA *insert */
+
+	/* flush each host in turn */
+	while (hostentry != NULL) {
+		urllist_flush(hostentry);
+
+		if (hostentry->cache == NULL) {
+			/* no files left on this host, so delete it */
+			*insert	  = hostentry->next;		  /* cut entry from list */
+
+			delete_host_dir(hostentry);
+			free_host_record(hostentry);
+		}
+		else {
+			/* one or more cache entries are in use, so keep this host */
+			insert = &hostentry->next;
+		}
+
+		hostentry = *insert;
+	}
+
+	#if 1
+	/* write new hostlist and CacheIndex files for any 'inuse' entries */
+	cache_write_index();
+	#else
+	/* write new hostlist */
+	cache__write_hostindex();
+	#endif
+
+	show_cachesize();
+}
+
+void cache_economise(void)
+{
+	#if (BUILD == ASPARTAME)
+  	if (global_cachesize > global_cachesizemax) {
+    		cache_minimise();
+    	}
+    	#endif
+}
+
+
+void cache_minimise(void)
+{
+	{
+		host_list *insert    = &global_cacheroot;
+		host_list  hostentry =  global_cacheroot;     /* AKA *insert */
+
+		/* minimise each host in turn */
+		while (hostentry != NULL) {
+			urllist_minimise(hostentry);
+
+			if (hostentry->cache == NULL) {
+				/* no files left on this host, so delete it */
+				*insert	  = hostentry->next;		  /* cut entry from list */
+
+				delete_host_dir(hostentry);
+				free_host_record(hostentry);
+			}
+			else {
+				/* one or more cache entries are in use, so keep this host */
+				insert = &hostentry->next;
+			}
+
+			hostentry = *insert;
+		}
+	}
+
+	/* if we haven't freed enough disc space, flush early hosts until we have */
+	#if 1
+	if (global_cachesize > global_cachesizemax) {
+		/* reverse the order of the host list so we have least-recently used first */
+		{
+			host_list list;
+
+			/* detatch list from root */
+			list		 = global_cacheroot;
+			global_cacheroot = NULL;
+
+			while (list != NULL) {
+				host_list hostentry;
+
+				hostentry = list;
+				list	  = list->next;
+
+				hostentry->next  = global_cacheroot;
+				global_cacheroot = hostentry;
+			}
+		}
+
+		/* flush hosts one-by-one until we've freed enough space */
+		{
+			host_list hostentry = global_cacheroot;
+
+			/* flush each host in turn */
+			while ((global_cachesize > global_cachesizemax) && (hostentry != NULL)) {
+				urllist_flush(hostentry);
+				/* we remove the host (iff empty) later on! */
+				hostentry = hostentry->next;
+			}
+		}
+
+		/* re-reverse the host list (ie back to most-recently used first) */
+		/* deleting empty hosts as we go */
+		{
+			host_list list;
+
+			/* detatch list from root */
+			list		 = global_cacheroot;
+			global_cacheroot = NULL;
+
+			while (list != NULL) {
+				host_list hostentry;
+
+				hostentry = list;
+				list	  = list->next;
+
+				if (hostentry->cache == NULL) {
+					/* no files left on this host, so delete it */
+					delete_host_dir(hostentry);
+					free_host_record(hostentry);
+				}
+				else {
+					/* one or more cache entries are in use, so keep this host */
+					hostentry->next  = global_cacheroot;
+					global_cacheroot = hostentry;
+				}
+			}
+		}
+
+	} /*if*/
+	#endif
+
+	/* write new hostlist and CacheIndex files for remaining entries */
+	cache_write_index();
+	show_cachesize();
+}
+
+/*
+ * This is where the toolbox calls cache_flush.
+ */
+static TBOX_HANDLER(flush_handler)
+{
+	tbox_ignore();
+	cache_flush();
+	return(1);
+}
+
+#define bytes_per_KB (1024)
+#define bytes_per_MB (1024 * bytes_per_KB)
+
+/* sbrodie comments:  I can find no documentation on what this "kludge" is
+ * for.  What it was doing was making sure that cache_minimise was called
+ * only once for every four times that it might have been called.  There is
+ * also an assumption about the size parameter.  In Aspartame this is in KB
+ * whereas elsewhere it is an MB.  I've now made it use KB *ALWAYS* and the
+ * Intertalk message handler must multiply up the numbers before calling
+ * this function.
+ */
+void cache_setURLCache_size(int size_KB)
+{
+	static int kludge = 0;
+
+	global_cachesizemax = size_KB * bytes_per_KB;
+	show_cachesize();
+	show_newcachelimit();
+
+	/* kludge = (kludge + 1) & 3; sbrodie: removed in version 0.31 */
+	if (kludge == 0) {
+		if (global_cachesize > global_cachesizemax) {
+			cache_minimise();
+		}
+	}
+}
+
+
+/*
+ * Scan buffer for a line that starts with the given line_prefix,
+ * if found, read the date after the prefix.
+ *
+ * Returns TRUE if conversion is successful
+ *	   FALSE if line_prefix not found, or if date string is invalid
+ *
+ */
+static int extract_date(char *buffer, char *line_prefix, time_t *p_date)
+{
+	char *date_start;
+
+	if (NULL != (date_start = scan_buffer_for_string(buffer, line_prefix))) {
+		return convert_text_to_time(date_start, p_date);
+	}
+	return FALSE;
+}
+
+
+static int extract_number(char *buffer, char *line_prefix, int *p_number)
+{
+	char *number_start;
+
+	if (NULL != (number_start = scan_buffer_for_string(buffer, line_prefix))) {
+		int   number;
+		if (sscanf(number_start, "%d", &number) == 1) {
+			*p_number = number;
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+
+/*
+ * Scan buffer for a line that starts with the given line_prefix.
+ *
+ * Returns a pointer to the first character after the prefix or
+ * NULL (if prefix not found).
+ *
+ */
+char *scan_buffer_for_string(char *buffer, char *line_prefix)
+{
+	char *line_start = buffer;
+
+	while (*line_start != '\0') {
+		if (0 == strncmp(line_start, line_prefix, strlen(line_prefix))) {
+			/* found a line starting with line_prefix */
+
+			return(line_start + strlen(line_prefix)); /* point to byte after prefix */
+		}
+
+		/* look for end of line, we allow CR, CR-LF or LF terminated lines */
+		while ((*line_start != '\0') && (*line_start != '\n') && (*line_start != '\r')) {
+			line_start++;
+		}
+
+		if (*line_start == '\r') line_start++;
+		if (*line_start == '\n') line_start++;
+
+		/* line_start now points at start of next line, or at '\0' */
+	}
+
+	return NULL; /* not found */
+}
+
+
+/*
+ * Returns a pointer to the first character after the prefix or
+ * NULL (if prefix not found).
+ *
+ */
+char *check_line_for_string(char *line_start, char *line_prefix)
+{
+	if (0 == strncmp(line_start, line_prefix, strlen(line_prefix))) {
+		/* found a line starting with line_prefix */
+		return(line_start + strlen(line_prefix)); /* point to byte after prefix */
+	}
+
+	return NULL; /* not found */
+}
+
+
+/*
+ * Our date string is of the form 'Thursday, 02-Nov-95 17:04:15 GMT'
+ *
+ */
+static int convert_text_to_time(char *date_start, /*out*/time_t *p_date)
+{
+	int format = 0;	      /* not converted */
+
+	struct tm broken;     /* yes it probably is */
+	char dayname[20];
+	char monthname[20];
+
+	/* try for 'Sun, 06 Nov 1994 08:49:37 GMT' */
+	if (7 == sscanf(date_start, "%s %d %s %d %d:%d:%d GMT",
+		   dayname,&broken.tm_mday,monthname,&broken.tm_year,&broken.tm_hour,&broken.tm_min,&broken.tm_sec)) {
+		format = 3;
+	}
+	else if (7 == sscanf(date_start,
+		/* try for 'Sunday, 06-Nov-94 08:49:37 GMT' */
+		   "%s %d-%3s-%d %d:%d:%d GMT",
+		   dayname,&broken.tm_mday,monthname,&broken.tm_year,&broken.tm_hour,&broken.tm_min,&broken.tm_sec)) {
+		format = 2;
+	}
+	else if (7 == sscanf(date_start,
+			/* try for 'Sun Nov  6 08:49:37 1994' */
+		   "%s %s %d %d:%d:%d %d",
+		   dayname,monthname,&broken.tm_mday,&broken.tm_hour,&broken.tm_min,&broken.tm_sec,&broken.tm_year)) {
+		format = 1;
+	}
+	else {
+		return(0);	   /* failed: invalid format */
+	}
+
+	if (format == 2) {
+		/* convert  0..  69 convert to 2000..2069			      */
+		/*	   70..  99 convert to 1970..1999			      */
+		/*	  100..1899 are invalid					      */
+		/*	 1900..1969 suspect since time_t is seconds past 1-Jan-70     */
+		/*	 1970..1999    1970..1999				      */
+		/*	 2000..2999    2000..2999				      */
+
+		if ((broken.tm_year >= 0) && (broken.tm_year <= 69)) {
+			broken.tm_year += 2000;
+		}
+		else {
+			if ((broken.tm_year >= 70) && (broken.tm_year <= 99)) {
+				broken.tm_year += 1900;
+			}
+		}
+	}
+
+
+	{
+		/* sbrodie: need this otherwise the strstr later fails */
+		char *p = monthname;
+		for (p=monthname; p<(monthname+sizeof(monthname)); ++p) {
+			if (!*p) break;
+			if (isupper(*p)) *p = tolower(*p);
+		}
+	}
+
+	{
+		char *all_months = "jan feb mar apr may jun jul aug sep oct nov dec";
+		char *pos	 = strstr(all_months, monthname);
+
+		if (pos == NULL) {
+			return(0);	  /* failed: invalid month */
+		}
+
+		broken.tm_mon = (pos - all_months) / 4;
+		if ((broken.tm_year < 1900) || (broken.tm_year >= 3000)) {
+			return(0);	  /* failed: naff year */
+		}
+
+		/* the structure requires years since 1900 */
+		broken.tm_year -= 1900;
+
+		/*broken.tm_wday ignored */
+		/*broken.tm_yday ignored */
+	}
+
+	/* sbrodie added this.  It seems to me that this function is rather
+	 * stuffed without this next line ....
+	 */
+	if (p_date != NULL) *p_date = mktime(&broken);
+
+	return 1;
+}
+
+
+
+
+void cache_read_index(void)
+{
+	host_list hostentry;
+
+	global_cache_writeback_delayed = 0;
+	global_cachesize    = 0;
+	global_cacheroot    = NULL;
+
+	cache__read_hostindex();      /* also validates existance of host */
+	cache__write_hostindex();     /* we may have removed naff entries */
+
+	for (hostentry = global_cacheroot; hostentry != NULL; hostentry = hostentry->next) {
+		cache__read_cacheindex(hostentry);  /* also validates entries */
+		cache__write_cacheindex(hostentry); /* we may have removed naff entries */
+	}
+
+	/* purge any junk from the Cache directory */
+	check_cachedir_against_cache();
+}
+
+
+void cache_write_index(void)
+{
+	host_list hostentry;
+
+	cache__write_hostindex();
+	for (hostentry = global_cacheroot; hostentry != NULL; hostentry = hostentry->next) {
+		cache__write_cacheindex(hostentry);
+	}
+}
+
+void cache_statistics(int *p_max_size, int *p_current_size)
+{
+	*p_max_size	= global_cachesizemax;
+	*p_current_size = global_cachesize;
+}
+
+
+/**********************************************************************************************************/
+
+
+/*
+ * Search the HostList for a named host (normal search mechanism).
+ *
+ * Returns NULL (not found) or a pointer to the host record.
+ *
+ */
+host_list hostlist_search(host_list listroot, char *hostname, int portnumber)
+{
+	host_list hostentry;
+	for (hostentry = listroot; hostentry != NULL; hostentry = hostentry->next) {
+		if (strcmp(hostname, hostentry->hostname) == 0 && portnumber == hostentry->portnumber) {
+		        return hostentry;
+		}
+	}
+
+	return NULL;
+}
+
+
+/*
+ * Search the HostList for a given dirname.
+ *
+ * Used only by check_cachedir_against_cache()/check_against_hostlist().
+ *
+ * Returns NULL (not found) or a pointer to the host record.
+ *
+ */
+host_list hostlist_search_by_dirname(host_list listroot, char *dirname)
+{
+	host_list hostentry = listroot;
+
+	for (hostentry = listroot; hostentry != NULL; hostentry = hostentry->next) {
+		if (strcmp(dirname, hostentry->dirname) == 0) return hostentry;
+	}
+
+	return NULL;
+}
+
+
+/*
+ * Create a new host record, with its own
+ * copies of the hostname and dirname strings.
+ *
+ * The record is NOT linked into the HostList.
+ *
+ */
+host_list new_host_record(char *hostname, char *dirname, int portnumber)
+{
+	host_list hostentry = host_malloc();
+
+	if (hostentry != NULL) {
+		hostentry->hostname	    = Strdup(hostname); /* take a copy of the hostname */
+		hostentry->portnumber       = portnumber;       /* store the portnumber */
+		hostentry->dirname	    = Strdup(dirname);  /* and the dirname */
+		hostentry->dirsize	    = 0;		/* zero running total of filesizes for this host */
+		hostentry->cache_changed    = 0;
+		hostentry->cache	    = NULL;		/* no cached URLs yet */
+		hostentry->file_alloc.alloc_dir = -1;		/* Nothing allocated, flags not yet initialised */
+		hostentry->next		     = NULL;
+
+		/* if either string copy failed, free all the claimed memory, then indicate failure */
+		if ((hostentry->hostname == NULL) || (hostentry->dirname == NULL)) {
+			free_host_record(hostentry);
+			return(NULL);
+		}
+	}
+
+	return(hostentry);    /* NULL or ->record */
+}
+
+
+/*
+ * Free a host record and its private strings.
+ *
+ * The record is NOT unlinked from the HostList.
+ *
+ */
+void free_host_record(host_list hostentry)
+{
+	if (hostentry) {
+		free(hostentry->hostname);
+		free(hostentry->dirname);
+		free(hostentry);
+	}
+}
+
+
+void cache__read_hostindex(void)
+{
+	filemanage_FILE	  *fp;
+	int        port;
+	char       *colon;
+	char	   line[2048];	      /* 'line at a time' file buffer */
+	char	   dirname[64];
+	char	   hostname[1024];
+
+	host_list  hostentry;
+	host_list *cacheroot_insert;
+	int objtype, filesize, filetype;
+
+	global_cache_writeback_delayed = 0;
+	global_cachesize    = 0;      /* should already be zero */
+	global_cacheroot    = NULL;   /* should already be NULL */
+	cacheroot_insert = &global_cacheroot;
+	host_alloc.alloc_dir = -1;    /* Nothing allocated, flags not yet initialised */
+
+	fp = filemanage_open("<WebServe$CacheRoot>.HostIndex", "r");
+	if (fp == NULL) return;
+
+	while (filemanage_gets(line, sizeof(line), fp)) {
+		/* Allow '|' as first character for a comment */
+		if (line[0] == '|') continue;
+
+		if (sscanf(line, "%s %s", dirname, hostname) != 2) continue;
+		colon = strrchr(hostname, ':');
+		if (colon != NULL) {
+		        port = atoi(colon + 1);
+		        *colon = '\0';
+		}
+		else {
+		        port = 80;
+		}
+		sprintf(line, "<WebServe$CacheRoot>.%s.CacheIndex", dirname);
+		os_read_catalogue_info(line, &objtype, &filesize, &filetype);
+
+		/* enter the host, only if its CacheIndex file exists and has data in it */
+		if (objtype != 1 || filesize <= 0 /*|| filetype != filetype_text*/) continue;
+		hostentry = new_host_record(hostname, dirname, port);
+		if (hostentry == NULL) continue;
+		/* insert this host at the tail of the list */
+		*cacheroot_insert = hostentry;
+		cacheroot_insert  = &(hostentry->next);
+	}
+
+	filemanage_close(fp);
+}
+
+void cache__write_hostindex(void)
+{
+	filemanage_FILE	  *fp = filemanage_open("<WebServe$CacheRoot>.HostIndex", "w");
+
+	if (fp == NULL) {
+		/* We just give up */
+		return;
+	}
+	else {
+		host_list entry;
+		for (entry = global_cacheroot; entry && !filemanage_error(fp); entry = entry->next) {
+			/* for each host entry, write the directory name and the host that it holds */
+			filemanage_printf(fp, "%s %s\n", entry->dirname, entry->hostname);
+		}
+		filemanage_close(fp);
+	}
+}
+
+
+/************************************************************************************************************/
+
+
+/*
+ * Search the given host for a given URL (normal search mechanism).
+ *
+ * Entries with the delete flag set are ignored, this
+ * ensures that any later entry for the same URL will
+ * be matched instead, even if the list is reordered.
+ *
+ */
+cache_list urllist_search(host_list hostentry, char *url)
+{
+	cache_list cacheentry;
+
+	for (cacheentry = hostentry->cache; cacheentry != NULL; cacheentry = cacheentry->next) {
+		if ((cacheentry->delete == 0) && (strcmp(url, cacheentry->url) == 0)) return cacheentry;
+	}
+	return NULL;
+}
+
+
+/*
+ * Search the given host for a given cache filename.
+ *
+ * Used only by check_cachedir_against_cache()/check_against_cachelist().
+ *
+ */
+cache_list urllist_search_by_filename(host_list hostentry, char *filename)
+{
+	cache_list cacheentry;
+
+	for (cacheentry = hostentry->cache; cacheentry != NULL; cacheentry = cacheentry->next) {
+		if ((cacheentry->delete == 0) && (strcmp(filename, cacheentry->filename) == 0)) return cacheentry;
+	}
+	return NULL;
+}
+
+
+/*
+ * Flush any currently unused cache entries on this host
+ *
+ * Cache entries currently being filled or read from are retained.
+ *
+ */
+static void urllist_flush(host_list hostentry)
+{
+	cache_list *insert     = &hostentry->cache;
+	cache_list  cacheentry =  hostentry->cache;   /* AKA *insert */
+
+	while (cacheentry != NULL) {
+		if (cacheentry->usage_count == 0) {
+			/* this entry is not currently in use */
+
+			/* space accounting */
+			hostentry->dirsize -= cacheentry->filesize;	  /* update running total */
+			global_cachesize -= cacheentry->filesize;	  /* update running total */
+
+			*insert = cacheentry->next;		  /* cut entry from list */
+
+			delete_url_file(cacheentry);		  /* update name allocator and delete file */
+			free_url_record(cacheentry);
+		}
+		else {
+			/* entry currently being filled or read, so keep it */
+			insert = &cacheentry->next;
+		}
+
+		cacheentry = *insert;
+	}
+
+	/* if the cache list for this host is now empty, delete the CacheIndex file */
+	if (hostentry->cache == NULL) {
+		char buffer[256];
+
+		sprintf(buffer, "<WebServe$CacheRoot>.%s.CacheIndex", hostentry->dirname);
+		os_delete_file(buffer);
+	}
+}
+
+
+static void urllist_minimise(host_list hostentry)
+{
+	time_t	    time_now   = time(NULL);
+	cache_list *insert     = &hostentry->cache;
+	cache_list  cacheentry =  hostentry->cache;   /* AKA *insert */
+
+	while (cacheentry != NULL) {
+		if (cacheentry->time_expire != 0) {
+			cacheentry->expired |= (time_now > cacheentry->time_expire);
+		}
+
+		cacheentry->delete |= cacheentry->expired;
+
+		if ((cacheentry->usage_count == 0) && (cacheentry->delete)) {
+			/* entry not in use, and marked for deletion */
+
+			/* space accounting */
+			hostentry->dirsize -= cacheentry->filesize;	  /* update running total */
+			global_cachesize -= cacheentry->filesize;	  /* update running total */
+
+			*insert = cacheentry->next;		  /* cut entry from list */
+
+			delete_url_file(cacheentry);		  /* update name allocator and delete file */
+			free_url_record(cacheentry);
+		}
+		else {
+			/* entry currently being filled or read, so keep it */
+			insert = &cacheentry->next;
+		}
+
+		cacheentry = *insert;
+	}
+
+	/* if the cache list for this host is now empty, delete the CacheIndex file */
+	if (hostentry->cache == NULL) {
+		char buffer[256];
+
+		sprintf(buffer, "<WebServe$CacheRoot>.%s.CacheIndex", hostentry->dirname);
+		os_delete_file(buffer);
+	}
+}
+
+
+
+
+cache_list new_url_record(host_list hostentry, char *filename, char *url)
+{
+	cache_list cacheentry = cache_malloc();
+
+	if (cacheentry != NULL) {
+		cacheentry->url		  = Strdup(url);
+		cacheentry->filename	  = Strdup(filename);
+		cacheentry->f		  = NULL;
+
+		cacheentry->filesize	  = 0;
+		cacheentry->loadcomplete  = 0;
+		cacheentry->errorloading  = 0;
+		cacheentry->expired	  = 0;
+		cacheentry->delete	  = 0;
+		cacheentry->usage_count	  = 0;
+		cacheentry->time_created  = 0;
+		cacheentry->time_accessed = 0;
+		cacheentry->time_expire	  = 0;
+		#if 1
+		cacheentry->LoadAddress	  = 0;
+		cacheentry->ExecAddress	  = 0;
+		#endif
+		cacheentry->host	  = hostentry;
+		cacheentry->next	  = NULL;
+
+		if ((cacheentry->url == NULL) || (cacheentry->filename == NULL)) {
+			free_url_record(cacheentry);
+			return NULL;
+		}
+	}
+
+	return cacheentry;
+}
+
+
+static void free_url_record(cache_list cacheentry)
+{
+	if (cacheentry == NULL) return;
+
+	if (cacheentry->f != NULL) {
+	        filemanage_close_p(&cacheentry->f);
+	}
+	free(cacheentry->url);
+	free(cacheentry->filename);
+	free(cacheentry);
+}
+
+
+void cache__read_cacheindex(host_list hostentry)
+{
+	char	    buffer[256];
+	filemanage_FILE	   *fp;
+	char	    line[2048];	      /* 'line at a time' file buffer */
+
+	char	    filename[64];
+	int	    filesize;
+	int	    time_created;
+	time_t	    time_accessed;
+	time_t	    time_expire;
+	char	    url[1024];
+
+	/*int	      error = 0;*/	/* on a good day! */
+	cache_list  cacheentry;
+	cache_list *insert;
+
+	hostentry->dirsize = 0;	      /* should already be zero */
+	hostentry->cache   = NULL;    /* should already be NULL */
+	insert		   = &(hostentry->cache);
+	hostentry->file_alloc.alloc_dir = -1; /* Nothing allocated, flags not yet initialised */
+
+	sprintf(buffer, "<WebServe$CacheRoot>.%s.CacheIndex", hostentry->dirname);
+
+	fp = filemanage_open(buffer, "r");
+	if (fp == NULL) return;
+	while (filemanage_gets(line, sizeof(line), fp) != NULL) {
+		/* Allow '|' as first character for a comment */
+		if (line[0] == '|') continue;
+
+		if (6 == sscanf(line, "%s %x %x %x %x %s",
+			filename, &filesize, &time_created, &time_accessed, &time_expire, url)) {
+			int objtype, objlength, filetype;
+
+			sprintf(buffer, "<WebServe$CacheRoot>.%s.%s", hostentry->dirname, filename);
+			os_read_catalogue_info(buffer, &objtype, &objlength, &filetype);
+
+			/* enter the file details, only if the file exists and is of the correct size and type */
+			if (objtype != 1 || objlength != filesize /*|| filetype != filetype_html*/) continue;
+			cacheentry = new_url_record(hostentry, filename, url);
+			if (cacheentry == NULL) continue;
+			cacheentry->filesize	  = filesize;
+			cacheentry->loadcomplete  = 1;
+			cacheentry->time_created  = time_created;
+			cacheentry->time_accessed = time_accessed;
+			cacheentry->time_expire	  = time_expire;
+
+			/* insert our new URL entry at the tail of the hosts URL list */
+			*insert = cacheentry;
+			insert = &(cacheentry->next);
+
+			/* space accounting */
+			hostentry->dirsize += filesize;	    /* update running total */
+			global_cachesize += filesize;	    /* update running total */
+	        }
+	}
+
+	filemanage_close(fp);
+}
+
+void cache__write_cacheindex(host_list hostentry)
+{
+	char	   buffer[256];
+	filemanage_FILE	  *fp;
+
+	sprintf(buffer, "<WebServe$CacheRoot>.%s.CacheIndex", hostentry->dirname);
+	fp = filemanage_open(buffer, "w");
+	if (fp != NULL) {
+		cache_list entry;
+
+		for (entry = hostentry->cache; entry != NULL && !filemanage_error(fp); entry = entry->next) {
+			/* Check loadcomplete flag and delete flag. Partially written files must be discarded when */
+			/* we restart as must expired files where we know that the contents need reloading	   */
+			if ((entry->loadcomplete) && (entry->delete == 0)) {
+				/* for each cache entry, write its index-name, size, creation time */
+				/* last access time and the URL that it caches */
+				filemanage_printf(fp,
+					"%s %8.8x %8.8x %8.8x %8.8x %s\n",
+					entry->filename,
+					entry->filesize,
+					entry->time_created,
+					entry->time_accessed,
+					entry->time_expire,
+					entry->url
+					);
+			}
+		}
+		filemanage_close(fp);
+		hostentry->cache_changed = 0;	    /* file on disc and list in memory are consistent */
+	}
+}
+
+static time_t global_cachewritetime;
+static void cache__delayedwrite_cacheindex(host_list hostentry)
+{
+	hostentry->cache_changed = 1;
+
+	if (global_cache_writeback_delayed == 0) {
+		global_cache_writeback_delayed = 1;
+		global_cachewritetime = time(NULL) + 1 * seconds_per_minute;
+	}
+}
+
+
+void cache_do_delayed_writeback(void)
+{
+	if (global_cache_writeback_delayed != 0) {
+		if (global_cachewritetime < time(NULL)) {
+			host_list hostentry;
+
+			for (hostentry = global_cacheroot; hostentry != NULL; hostentry = hostentry->next) {
+				if (hostentry->cache_changed) {
+					cache__write_cacheindex(hostentry);
+				}
+			}
+			global_cache_writeback_delayed = 0;
+		}
+	}
+}
+
+/*****************************************************************************************************************/
+
+/*
+ * The cache structure and support files for a Host are held in a directory within <WebServe$CacheRoot>.
+ * To overcome Filecore's restriction of 77 entries in a directory, we store our Host directories
+ * within subdirectories of <WebServe$CacheRoot>.
+ * In addition to the subdirectories, <WebServe$CacheRoot> also contains the HostIndex file. This means
+ * we can support a maximum of 5852 (ie 76*77) hosts.
+ *
+ * This routine generates a directory name for a host of the form <parent>.<child> where parent is
+ * a numeric name (0..75) and child is a numeric name (0..76).
+ *
+ * This routine also creates the directories.
+ *
+ */
+static char *create_host_dir(void)
+{
+	int   parent;
+	int   child;
+	char  buffer[256];
+
+	child = find_free_name_in_dir(&host_alloc);
+
+	while ((child < 0) && (host_alloc.alloc_dir < 76)) {
+		setflags_for_host(host_alloc.alloc_dir + 1);
+		child = find_free_name_in_dir(&host_alloc);
+	}
+
+	/* if child still < 0, we've exhausted all available dirs */
+	if (child < 0) {
+		return(NULL);
+	}
+
+	parent = host_alloc.alloc_dir;
+
+	/* parent is 0..75, child is 0..76 */
+	sprintf(buffer, "<WebServe$CacheRoot>.%d", parent);
+	if (NULL == os_create_directory(buffer)) {
+		sprintf(buffer, "<WebServe$CacheRoot>.%d.%d", parent, child);
+		if (NULL == os_create_directory(buffer)) {
+			/* c.f. sscanf in cache__read_hostindex */
+			sprintf(buffer, "%d.%d", parent, child);
+			return Strdup(buffer);
+		}
+	}
+
+	return(NULL);
+}
+
+
+static void delete_host_dir(host_list hostentry)
+{
+	int  parent;
+	int  child;
+	char buffer[256];
+
+	if (2 != sscanf(hostentry->dirname, "%d.%d", &parent, &child)) {
+		return;	    /* should never happen */
+	}
+
+	/* If freeing an entry in an earlier directory than the one we
+	 * are currently allocating in, wind the allocator back to that earlier
+	 * directory. This means we concentrate all our entries in the earliest
+	 * directories, thus saving the disk space cost of many directories.
+	 */
+	/*>>>I think we KNOW that the earlier directory MUST be full, so can
+	 *>>>just set all alloc_flags bits rather that having to scan. So...
+	 */
+	if (parent < host_alloc.alloc_dir) {
+		setflags_for_host(parent); /*>>>...optimise this!*/
+	}
+
+	if (parent == host_alloc.alloc_dir) {
+		host_alloc.alloc_flags[child] = 0;
+	}
+
+	/* now that we've freed the name with the name allocator, */
+	/* delete the child directory...  */
+	sprintf(buffer, "<WebServe$CacheRoot>.%d.%d", parent, child);
+	if (NULL == os_delete_directory(buffer)) {
+		/*... and if possible, the parent directory it is in */
+		sprintf(buffer, "<WebServe$CacheRoot>.%d", parent);
+		(void) os_delete_directory(buffer);	   /* try deleting parent, fails unless we were last file */
+	}
+}
+
+
+void setflags_for_host(int parent_dir)
+{
+	host_list hostentry;
+	int i;
+
+	host_alloc.alloc_dir = parent_dir;
+
+	for (i=0; i<77; i++) {
+		host_alloc.alloc_flags[i] = 0;
+	}
+
+	for (hostentry = global_cacheroot; hostentry != NULL; hostentry = hostentry->next) {
+		int parent, child;
+		if (sscanf(hostentry->dirname, "%d.%d", &parent, &child) == 2) {
+			/*>>>we should range check parent and child - in read cache index???*/
+			if (host_alloc.alloc_dir == parent) {
+				host_alloc.alloc_flags[child] = 1;
+			}
+		}
+	}
+}
+
+
+int find_free_name_in_dir(name_allocator * alloc)
+{
+	int i;
+
+	/* Check that the flags are initialised. Return if not, caller */
+	/* should then recall us after calling setflags_for_host()     */
+	if (alloc->alloc_dir < 0) {
+		return(-1);	    /* no entries free in this directory */
+	}
+
+	for (i=0; i<77; i++) {
+		if (alloc->alloc_flags[i] == 0) {
+			alloc->alloc_flags[i] = 1;
+			return(i);
+		}
+	}
+
+	return(-1);	      /* no entries free in this directory */
+}
+
+
+/* returns a name which excludes the cache root */
+static char *create_url_file(host_list hostentry)
+{
+	int   parent;
+	int   child;
+	char  buffer[256];
+
+	child = find_free_name_in_dir(&hostentry->file_alloc);
+
+	while ((child < 0) && (hostentry->file_alloc.alloc_dir < 76)) {
+		setflags_for_url(hostentry, hostentry->file_alloc.alloc_dir + 1);
+		child = find_free_name_in_dir(&hostentry->file_alloc);
+	}
+
+	/* if child still < 0, we've exhausted all available dirs */
+	if (child < 0) {
+		return NULL;
+	}
+
+	parent = hostentry->file_alloc.alloc_dir;
+
+	/* parent is 0..75, child is 0..76 */
+	sprintf(buffer, "<WebServe$CacheRoot>.%s.%d", hostentry->dirname, parent);
+	if (NULL == os_create_directory(buffer)) {
+		sprintf(buffer, "<WebServe$CacheRoot>.%s.%d.%d", hostentry->dirname, parent, child);
+		if (NULL == os_create_file(buffer)) {
+			/*>>>at this point, we should create the file, update the cache dates etc*/
+			sprintf(buffer, "%d.%d", parent, child);
+			return Strdup(buffer);
+		}
+	}
+
+	return(NULL);
+}
+
+
+static void delete_url_file(cache_list cacheentry)
+{
+	host_list hostentry = cacheentry->host;
+	int	  parent;
+	int	  child;
+	char	  buffer[256];
+
+	if (sscanf(cacheentry->filename, "%d.%d", &parent, &child) != 2) {
+		return;	    /* should never happen */
+	}
+
+	/* If freeing an entry in an earlier directory than the one we
+	 * are currently allocating in, wind the allocator back to that earlier
+	 * directory. This means we concentrate all our entries in the earliest
+	 * directories, thus saving the disk space cost of many directories.
+	 */
+	/*>>>I think we KNOW that the earlier directory MUST be full, so can
+	 *>>>just set all alloc_flags bits rather that having to scan. So...
+	 */
+	if (parent < hostentry->file_alloc.alloc_dir) {
+		setflags_for_url(hostentry, parent); /*>>>...optimise this!*/
+	}
+
+	if (parent == hostentry->file_alloc.alloc_dir) {
+		hostentry->file_alloc.alloc_flags[child] = 0;
+	}
+
+	/* now that we've freed the name with the name allocator, */
+	/* delete the file...  */
+	sprintf(buffer, "<WebServe$CacheRoot>.%s.%d.%d", hostentry->dirname, parent, child);
+	if (NULL == os_delete_file(buffer)) {
+		/*... and if possible, the directory it is in */
+		sprintf(buffer, "<WebServe$CacheRoot>.%s.%d", hostentry->dirname, parent);
+		(void) os_delete_directory(buffer);	   /* try deleting parent, fails unless we were last file */
+	}
+}
+
+
+void setflags_for_url(host_list hostentry, int parent_dir)
+{
+	cache_list cacheentry;
+	int i;
+
+	hostentry->file_alloc.alloc_dir = parent_dir;
+
+	for (i=0; i<77; i++) {
+		hostentry->file_alloc.alloc_flags[i] = 0;
+	}
+
+	for (cacheentry = hostentry->cache; cacheentry != NULL; cacheentry = cacheentry->next) {
+		int parent, child;
+		if (sscanf(cacheentry->filename, "%d.%d", &parent, &child) == 2) {
+			if (hostentry->file_alloc.alloc_dir == parent) {
+				hostentry->file_alloc.alloc_flags[child] = 1;
+			}
+		}
+	}
+}
+
+
+_kernel_oserror *os_create_directory(char *name)
+{
+	/* Create a directory with 77 entries (number ignored by Filecore) */
+	return _swix(OS_File, _IN(0)|_IN(1)|_IN(4), 8, name, 77);
+}
+
+
+_kernel_oserror *os_create_file(char *name)
+{
+	/* Create a zero length file, of given type (text) */
+	return _swix(OS_File, _INR(0,2)|_INR(4,5), 11, name, 0xFFF, 0, 0);
+}
+
+
+_kernel_oserror *os_delete_directory(char *name)
+{
+	return _swix(OS_File, _INR(0,1), 6, name);
+}
+
+
+_kernel_oserror *os_delete_file(char *name)
+{
+	return _swix(OS_File, _INR(0,1), 6, name);
+}
+
+/*
+ * Read catalogue information for a named object.
+ *
+ * Returns
+ *   objtype  0=not found, 1=file found, 2=directory found, 3=image file found
+ *   filetype 0..&FFF with special values of -1=untyped, &1000=directory, &2000=application directory
+ *   objlength
+ *
+ */
+_kernel_oserror *os_read_catalogue_info(char *name, int *p_objtype, int *p_objlength, int *p_filetype)
+{
+	_kernel_oserror  *error;
+	int objtype;
+	int objlength;
+	int filetype;
+
+	error = _swix(OS_File, _INR(0,1)|_OUT(0)|_OUT(4)|_OUT(6), 23, name, &objtype, &objlength, &filetype);
+	if (error != NULL) {
+		objtype = 0;
+	}
+
+	if (p_objtype)	 *p_objtype   = objtype;
+	if (p_objlength) *p_objlength = objlength;
+	if (p_filetype)  *p_filetype  = filetype;
+
+	return error;
+}
+
+
+_kernel_oserror * convert_date_and_time(char *buffer, int buffsize, unsigned int LoadAddress, unsigned int ExecAddress)
+{
+	struct { unsigned int lo; unsigned int hi; } block;
+
+	block.lo = ExecAddress;
+	block.hi = LoadAddress;
+
+	return _swix(Territory_ConvertDateAndTime, _INR(0,4), -1, &block, buffer, buffsize,
+		"%W3, %DY %M3 %CE%YR %24:%MI:%SE %TZ"); /* "Thu, 29 Feb 1996 14:01:31 GMT" */
+}
+
+
+
+/*************************************************************/
+/* static void http_get_request(char *url, char **host, ...  */
+/*************************************************************/
+/* Given a null terminated string containing a URL, extract  */
+/* the host name, port and URI to get. The URI portion needs */
+/* to be intelligent enough to know if it is actually a URL  */
+/* That is, it needs to spot if it is being used as in proxy */
+/* request mode	and thus strip any initial '/' from the URI. */
+/*************************************************************/
+void http_get_request(const char *url, char **host, int *port)
+{
+	URL		u;
+	_kernel_oserror	*e;
+	int		i;
+
+	*host = NULL;
+	*port = 80;
+
+	e = URL_find_lengths(0, url, NULL, &u);
+	if (e) {
+		debug(("http_get_request> URL_find_lengths> %s\n", e->errmess));
+		return;
+	}
+
+	for (i=0; i<URL_fields; ++i) switch (i) {
+		case urlfield_HOST:
+		case urlfield_PORT:
+			if (u.len[i]) {
+				u.field[i] = malloc(u.len[i]);
+			}
+			break;
+
+		default:
+			u.field[i] = NULL;
+			break;
+	}
+
+	e = URL_find_data(0, url, NULL, &u);
+	if (e) {
+		#ifdef TRACE
+		protocol_debug("http_get_request> URL_find_data> %s\n", e->errmess);
+		#endif
+		for (i=0; i<URL_fields; ++i) {
+			free(u.field[i]);
+		}
+		return;
+	}
+
+	*host = u.data.host;
+
+	if (u.data.port) {
+		int i = atoi(u.data.port);
+		if (i != 0) *port = i;
+		free(u.data.port);
+	}
+}
+
+
+
+#if 0
+
+
+static int http_is_proxy_request(const char *url, const char *limit)
+{
+	if (url == limit) return 0;
+
+	while (url < limit) {
+		if (*url == '\0') return 0;
+		if (isalnum(*url) || *url == '-' || *url == '+' || *url == '.' || *url == '_') {
+			++url;
+			continue;
+		}
+		return 0;
+	}
+
+	return 1;
+}
+
+
+/*************************************************************/
+/* static void http_get_request(char *url, char **host, ...  */
+/*************************************************************/
+/* Given a null terminated string containing a URL, extract  */
+/* the host name, port and URI to get. The URI portion needs */
+/* to be intelligent enough to know if it is actually a URL  */
+/* That is, it needs to spot if it is being used as in proxy */
+/* request mode	and thus strip any initial '/' from the URI. */
+/*************************************************************/
+/* StB: this code is appalling.  I'll fix it at some point.
+ */
+void http_get_request(char *url, char **host, int *port)
+{
+	char	*newurl;
+	char	*newhost=NULL;
+	char	*slash="/";
+	char	*ptr;
+	char	*proxied;
+	char	c;
+	int	newport = 80;
+	char	**uri = NULL;
+
+
+	if (uri) {
+		*uri = NULL;
+	}
+	if (port) {
+		*port = newport;
+	}
+
+	newurl=Strdup(url);
+	/* Catch the out of memory case */
+	if (newurl==NULL) {
+		*host=NULL;
+		return;
+	}
+
+	newhost=strstr(newurl,"http://"); /* The minimum requirement! */
+	if (newhost==NULL) {
+		*host=NULL;
+		free(newurl);
+		return;
+	}
+
+	newhost+=sizeof("http://")-1; /* Skip that bit! */
+	ptr=newhost;
+
+	/* Go to the next bit of interest */
+	while ((*ptr != '\0') && (*ptr != ':') && (*ptr != '/')) ptr++;
+
+	/* Grab the host name to a unique buffer */
+	c=*ptr; *ptr='\0';
+	*host=Strdup(newhost);
+	*ptr=c;
+
+	/* Decide what to do now */
+	if (*ptr == '\0') {
+		/* I reckon what they really wanted was the home page */
+		emergency_exit:
+			if (uri) *uri=Strdup(slash);
+			free(newurl);
+			return;
+	}
+
+	if (*ptr == ':') {
+		ptr++;
+		/* reuse newhost :) */
+		newhost=ptr;
+		while ((*ptr != '/') && (*ptr != '\0')) ptr++;
+		c=*ptr; *ptr='\0';
+		newport=atoi(newhost);
+		*ptr=c;
+		if (newport==0) newport=80;
+		if (port) *port=newport;
+	}
+	else {
+		if (port) *port=80;
+	}
+
+	/* If we have reached the end of the string break out nicely */
+	if (*ptr=='\0') goto emergency_exit;
+
+	/*
+	 * Finally grab the URI bit - note if the URI is actually a URL
+	 * the initial / has to be removed :)
+	 * This is the proxy stuff.
+	 */
+	proxied = strstr(ptr, "://");
+	if ((*ptr=='/') && proxied != NULL && proxied != ptr) {
+		/* Possibly a proxy - check it here */
+		if (http_is_proxy_request(ptr+1, proxied)) ++ptr;
+	}
+
+	/* reuse newhost again */
+	newhost=strchr(ptr,'#');
+	if (newhost != NULL) {
+		if (uri) *uri=Strndup(ptr, newhost-ptr);
+	}
+	else {
+		if (uri) *uri=Strdup(ptr);
+	}
+
+	free(newurl);
+}
+#endif
+
+
+void cache_init(void)
+{
+	(void) os_create_directory("<WebServe$CacheBase>");
+        (void) os_create_directory("<WebServe$CacheRoot>");
+        (void) os_create_directory("<WebServe$ServeRoot>");
+        (void) os_create_directory("<WebServe$ErrorRoot>");
+	event_register_toolbox_handler(-1,WebServe_Flush,flush_handler,NULL);
+}

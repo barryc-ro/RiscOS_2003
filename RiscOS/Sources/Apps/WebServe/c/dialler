@@ -1,0 +1,591 @@
+/*
+ *
+ * dialler.c
+ *
+ * Interface to PPP Dialler module
+ *
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#include "structs.h"
+#include "include.h"
+#include "dialler_gl.h"
+#include "filemanage.h"
+
+#if USE_DIALLER
+
+/* Dialler module SWI numbers and status codes */
+
+/* Dialler module SWI numbers */
+#define Dialler_Dial			 0x04c6c0
+#define Dialler_HangUp			 0x04c6c1
+#define Dialler_Status			 0x04c6c2
+#define Dialler_Answering		 0x04c6c3
+#define Dialler_Configure		 0x04c6c4
+#define Dialler_Register		 0x04c6c5
+#define Dialler_Arbitrate		 0x04c6c6
+#define Dialler_Timeout			 0x04c6c7
+#define Dialler_ResetCounter		 0x04c6c8
+
+#define Dialler_Arbitrate_RequestIOAccess	0
+#define Dialler_Arbitrate_RelinquishAccess	1
+#define Dialler_IOAccessGranted_BlockDrivers	0
+#define Dialler_IOAccessGranted_DualSerial	1
+#define Dialler_IOAccessDenied_ActiveClient    64
+#define Dialler_IOAccessDenied_NotConnected    65
+
+#define Service_DiallerStatus 0xB4
+
+/* Dialler module status codes */
+/* Major reason code (top two bytes of status word) */
+#define Dialler_StateChanged	       0x00010000
+#define Dialler_LineDropped	       0x00020000
+
+/* Minor reason code (2nd byte of status word) */
+#define Dialler_ConnectedFlagsMask     0x00000300
+#define Dialler_Disconnected	       0x00000000
+#define Dialler_Connected	       0x00000200
+#define Dialler_ConnectedOutgoing      0x00000200
+#define Dialler_ConnectedIncoming      0x00000300
+#define Dialler_RelinquishAccess       0x00000400
+#define Dialler_DiallerDroppedLine     0x00000000
+#define Dialler_RemoteDroppedLine      0x00000800
+
+/* General info (1st byte of status word) */
+enum
+{
+    Dialler_ExecutingScript_Dial = 1,
+    Dialler_ExecutingScript_Hangup,
+    Dialler_ExecutingScript_Answer,
+    Dialler_AbortedScript_Syntax,
+    Dialler_AbortedScript_Timeout,
+    Dialler_AbortedScript_NoCarrier,
+    Dialler_AbortedScript_Error,
+    Dialler_AbortedScript_NoDialtone,
+    Dialler_AbortedScript_Busy,
+    Dialler_AbortedScript_NoAnswer
+};
+/* end of Dialler module SWI numbers and status codes */
+
+
+/*
+ * Gadget component id's for DialUp window.
+ */
+/*#define COMPID_INTERNATIONAL 0x5*/
+#define COMPID_PREFIXFLAG    0x6
+#define COMPID_PREFIXSTRING  0x7
+
+
+/*
+ * A far as possible, we mimic the action of the 'InterTalk'
+ * messages that pass between !WebServe and !MailServe
+ * in a normal InterTalk system.
+ */
+
+
+#if (BUILD == ASPARTAME)
+struct {
+	char phone[64];
+	char user[128];
+	char pass[64];
+	char dns1[64];
+	char dns2[64];
+} isp_details;
+
+typedef struct _dial_details
+{
+	int  international;
+	int  prefixflag;
+	char prefixstring[64];
+} dial_details;
+
+static dial_details prevdial_details;
+static dial_details dialup_details;
+
+
+static void dialup(void);
+static int ReadISPConfig(void);
+static int ReadDialupConfig(void);
+static void WriteDialupConfig(void);
+static void os_setvarval(const char *varname, const char *varvalue);
+#endif
+
+/*
+ * Instead sending a 'check if user is allowed to access this url' message,
+ * just mark the access as allowed.
+ */
+_kernel_oserror *send_CheckURLAccess_request(char *user, char *url, int *ref)
+{
+	static int your_ref = 0;
+	++your_ref;
+	*ref = your_ref;
+	process_URLAccessRights(your_ref, 1/*allowed*/);
+
+	return NULL;
+}
+
+/*
+ * This mimics the sending of an 'InterTalk_Reason_Connect' message to !MailServe
+ * and its later reply with 'InterTalk_Reason_Connect'.
+ *
+ * Basically this checks for connection and triggers dialling if needed.
+ */
+#if (BUILD == ASPARTAME)
+static int	dialup_created = 0;
+static ObjectId dialup_id;
+static int	dialup_opened = 0;
+#endif
+
+
+static _kernel_oserror *dialler_sendConnect_from_state_zero(void)
+{
+	#if (BUILD == GIDEON)
+	{
+		/* R0: flags;  R1=block driver; R2=script; R3=hangup script; R4=serial speed */
+		error = _swix(Dialler_Dial, _INR(0,4), 0, "Devices:Serial2",
+			"<Dialler$Dial$Script>", "<Dialler$Hangup$Script>", 115200);
+		if (error != NULL) {
+			process_DiallingState(6)	/*failed*/;
+		}
+		else {
+			process_DiallingState(1);	/*dialling*/;
+		}
+	}
+	#endif
+	#if (BUILD == ASPARTAME)
+	
+	_kernel_oserror *error;
+	
+	ReadISPConfig();
+	if (ReadDialupConfig()) {
+		dialup();	/* file exists, so dialup without prompting */
+	}
+	else {
+		/* file doesn't exist, so put up the dial warning box */
+
+		/* create (if not already done) the about to dial warning box */
+		if (!dialup_created) {
+			if ((error = toolbox_create_object(0,"DialUp",&dialup_id)) != NULL) {
+				process_DiallingState(6) /*failed*/;
+				return error;
+			}
+			dialup_created = 1;
+		}
+
+		/* open (if not already) the about to dial warning box */
+		if (!dialup_opened) {
+			/* set/clear the two option buttons */
+			/*optionbutton_set_state(0, dialup_id, COMPID_INTERNATIONAL, dialup_details.international);*/
+			optionbutton_set_state(0, dialup_id, COMPID_PREFIXFLAG,	   dialup_details.prefixflag);
+
+			/* assign text to prefix writable icon, greying it out if prefix option is off */
+			writablefield_set_value(0, dialup_id, COMPID_PREFIXSTRING, dialup_details.prefixstring);
+			if (dialup_details.prefixflag) {
+				gadget_set_flags(0, dialup_id, COMPID_PREFIXSTRING, 0/*Gadget_NotFaded*/);
+			}
+			else {
+				gadget_set_flags(0, dialup_id, COMPID_PREFIXSTRING, Gadget_Faded);
+			}
+
+			toolbox_show_object(0,dialup_id,Toolbox_ShowObject_Default,0,0,0);
+			dialup_opened = 1;
+		}
+	}
+	#endif
+
+	return NULL;
+}
+
+_kernel_oserror *send_Connect_command(void)
+{
+	static int last_status = 0;
+	static int last_connect_good = FALSE;
+	_kernel_oserror  *error;
+	int current_status;
+
+	/* NB If any SWI calls fail, we MUST do a 'process_DiallingState(6) failed;' */
+	/*    so that the process that initiated the call reports an error cleanly.  */
+
+	/* To stop line timing out between status reporting connected */
+	/* and our data transfer starting, prod the timer now.	      */
+	/* R0 flags - must be zero OR IS IT UNUSED? */
+	if ((error = _swix(Dialler_ResetCounter, _IN(0), 0)) != NULL) {
+		process_DiallingState(6) /*failed*/;
+		return error;
+	}
+
+	/* Read line connection status.  R0=flags */
+	if ((error = _swix(Dialler_Status, _IN(0)|_OUT(0), 0, &current_status)) != NULL) {
+		process_DiallingState(6) /*failed*/;
+		return error;
+	}
+
+	/* bits 8 and 9 mean		       */
+	/*  0 0 Disconnected		       */
+	/*  0 1 Reserved (presently undefined) */
+	/*  1 0 Connected (outgoing)	       */
+	/*  1 1 Connected (incoming)	       */
+	switch (current_status & Dialler_ConnectedFlagsMask) {
+		case Dialler_Disconnected:
+			if (last_connect_good) {
+				current_status = last_status;
+			}
+
+			last_connect_good = FALSE;
+
+			/* may be quiet, dialling, answering or reporting an error */
+			switch (current_status & 0xFF) {
+				default:
+					/* error reports are sticky */
+					if (current_status != last_status) {
+						/*report error*/
+						/* 4  Script aborted due to synax error			    */
+						/* 5  Script aborted due to timeout			    */
+						/* 6  Script aborted becuase Dialler received 'NO CARRIER'  */
+						/* 7  Script aborted because Dialler received 'ERROR'	    */
+						/* 8  Script aborted because Dialler received 'NO DIALTONE' */
+						/* 9  Script aborted because Dialler received 'BUSY'	    */
+						/* 10 Script aborted because Dialler received 'NO ANSWER'   */
+						process_DiallingState(6) /*failed*/;
+						break;
+					}
+					/* error already returned drop into... */
+				case 0:
+					error = dialler_sendConnect_from_state_zero();
+					if (error != NULL) {
+					        return error;
+					}
+					break;
+
+				case Dialler_ExecutingScript_Dial:
+					process_DiallingState(1);	/*dialling*/;
+					break;
+
+				case Dialler_ExecutingScript_Answer:
+					/* Do nothing. Assume we will eventually connect, */
+					/* or the process times out first and is shot.	  */
+					break;
+			}
+			break;
+
+		case Dialler_ConnectedOutgoing:
+		case Dialler_ConnectedIncoming:
+			switch (current_status & 0xFF) {
+				case 0:
+					last_connect_good = TRUE;
+					process_DiallingState(2) /*successfull*/;
+					break;
+
+				/*case Dialler_ExecutingScript_Hangup: - do nothing.
+				When the state returns to disconnected we can redial
+				or the process times out first and is shot.
+				*/
+			}
+			break;
+
+		default:
+			break;
+	}
+
+	last_status = current_status;
+
+	return NULL;
+}
+
+
+#if (BUILD == ASPARTAME)
+TBOX_HANDLER(dialler_cont)
+{
+  	int nbytes;
+
+  	/* read the two option buttons */
+	/*optionbutton_get_state(0, dialup_id, COMPID_INTERNATIONAL, &dialup_details.international);*/
+  	optionbutton_get_state(0, dialup_id, COMPID_PREFIXFLAG,    &dialup_details.prefixflag);
+
+  	/* read the text from the prefix writable icon */
+  	writablefield_get_value(0, dialup_id, COMPID_PREFIXSTRING,
+		dialup_details.prefixstring, sizeof(dialup_details.prefixstring),
+		&nbytes);
+
+  	/* write the data to a file */
+  	WriteDialupConfig();
+  	dialup();
+
+  	/* close dialup box */
+  	toolbox_hide_object(0,dialup_id);
+  	dialup_opened = 0;
+  	return 1;
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+TBOX_HANDLER(dialler_stop)
+{
+  	process_DiallingState(4) /*disallowed*/;
+
+  	/* close dialup box */
+  	toolbox_hide_object(0,dialup_id);
+  	dialup_opened = 0;
+  	return 1;
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+/*
+ * when prefix button changes, (un)fade prefix string
+ */
+TBOX_HANDLER(dialler_prefix)
+{
+  	int set;
+
+  	optionbutton_get_state(0, dialup_id, COMPID_PREFIXFLAG, &set);
+    	gadget_set_flags(0, dialup_id, COMPID_PREFIXSTRING, set ? 0 : Gadget_Faded);
+
+  	return 1;
+}
+#endif
+
+
+
+#if (BUILD == ASPARTAME)
+static void os_setvarval(const char *varname, const char *varvalue)
+{
+	/* R0: pointer to variable name, which may be wildcarded if updating/deleting */
+	/* R1: pointer to variable value */
+	/* R2: length of value, or -ve to delete the variable */
+	/* R3: context pointer for wildcarded names, or 0 for first call */
+	/* R4: variable type: 4=literal string */
+        (void) _swix(OS_SetVarVal, _INR(0,4), varname, varvalue, strlen(varvalue), 0, 4);
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+static void dialup(void)
+{
+  	/* now set the system variables used by the dialler module */
+
+  	/* prefix flag means use prefix string else use empty string */
+    	os_setvarval("Dialler$Dial$Prefix", dialup_details.prefixflag ? dialup_details.prefixstring : "");
+
+  	/* international means skip any leading zero in the phone number else use 'as is' */
+    	os_setvarval("Dialler$Dial$Number", isp_details.phone + (dialup_details.international && (isp_details.phone[0] == '0')));
+
+  	os_setvarval("Dialler$Dial$UserName", isp_details.user);
+  	os_setvarval("Dialler$Dial$UserPassword", isp_details.pass);
+
+	#if 0
+  	os_setvarval(, isp_details.dns1);
+  	os_setvarval(, isp_details.dns2);
+	#endif
+
+	/* R0: flags; R1: block driver; R2: dial-up script; R3: hang-up script; R4: serial speed */
+	if (_swix(Dialler_Dial, _INR(0,4), 0, "InternalPC", "<Dialler$Dial$Script>", "<Dialler$Hangup$Script>", 115200) != NULL) {
+    		process_DiallingState(6) /*failed*/;
+    	}
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+static char *getline(char *buffer, int buffmax, filemanage_FILE *fp)
+{
+  	int len;
+
+  	if (filemanage_gets(buffer, buffmax, fp) == NULL) {
+  	}
+    		return(NULL);
+
+  	len = strlen(buffer);
+
+  	/* line probably has an LF on the end - strip it */
+  	if ((len > 0) && (buffer[len-1] < ' ')) {
+    		buffer[len-1] = '\0';
+    	}
+
+  	return buffer;
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+static void assign(char *buffer, int buffmax, const char *source)
+{
+  	buffer[0] = '\0';
+  	strncat(buffer, source, buffmax);
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+static int ReadISPConfig(void)
+{
+/* NVMEM:$.CFG.ISP (read only by us)
+     PHONE: 0123456789
+     USER:
+     PASS:
+     DNS1:
+     DNS2:
+ */
+  	filemanage_FILE *fp;
+  	char  line[256];	 /* 'line at a time' file input buffer */
+  	char *param;
+
+  	memset(&isp_details, 0, sizeof(isp_details));
+
+  	/*
+   	 * Read the ISP details from "NVMEM:$.CFG.ISP"
+   	 */
+  	if ((fp = filemanage_open("<WebServe$CFG>.ISP", "r")) != NULL) {
+    		while (getline(line, sizeof(line), fp) != NULL) {
+      			if ((param = check_line_for_string(line, "PHONE: ")) != NULL)
+      				assign(isp_details.phone, sizeof(isp_details.phone), param);
+      			else if ((param = check_line_for_string(line, "USER: ")) != NULL)
+				assign(isp_details.user, sizeof(isp_details.user), param);
+      			else if ((param = check_line_for_string(line, "PASS: ")) != NULL)
+				assign(isp_details.pass, sizeof(isp_details.pass), param);
+      			else if ((param = check_line_for_string(line, "DNS1: ")) != NULL)
+				assign(isp_details.dns1, sizeof(isp_details.dns1), param);
+      			else if ((param = check_line_for_string(line, "DNS2: ")) != NULL)
+				assign(isp_details.dns2, sizeof(isp_details.dns2), param);
+                }
+    		filemanage_close(fp);
+    		return(TRUE);	/* read OK */
+        }
+  	return(FALSE);	/* doesn't exist */
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+static int ReadDialupConfig(void)
+{
+/* NVMEM:$.CFG.DIAL (read/write by us)
+     INTERNATIONAL: 0
+     PREFIXFLAG: 1
+     PREFIXSTRING: P9
+ */
+  	filemanage_FILE *fp;
+  	char  line[256];	 /* 'line at a time' file input buffer */
+  	char *param;
+
+  	memset(&dialup_details, 0, sizeof(dialup_details));
+
+  	/*
+  	 * Read the 'last dialup' details from "NVMEM:$.CFG.DIAL"
+  	 */
+  	if ((fp = filemanage_open("<WebServe$CFG>.DIAL", "r")) != NULL) {
+    		while (getline(line, sizeof(line), fp) != NULL) {
+      			if ((param = check_line_for_string(line, "INTERNATIONAL: ")) != NULL)
+				dialup_details.international = (check_line_for_string(param, "1") != NULL);
+      			else if ((param = check_line_for_string(line, "PREFIXFLAG: ")) != NULL)
+				dialup_details.prefixflag = (check_line_for_string(param, "1") != NULL);
+      			else if ((param = check_line_for_string(line, "PREFIXSTRING: ")) != NULL)
+				assign(dialup_details.prefixstring, sizeof(dialup_details.prefixstring), param);
+                }
+    		filemanage_close(fp);
+    		return(TRUE);	/* read OK */
+        }
+  	return(FALSE);	/* doesn't exist */
+}
+#endif
+
+
+#if (BUILD == ASPARTAME)
+static void WriteDialupConfig(void)
+{
+	filemanage_FILE *fp;
+
+ 	if ((fp = filemanage_open("<WebServe$CFG>.DIAL", "w")) != NULL) {
+    		filemanage_printf(fp, "INTERNATIONAL: %d\n", dialup_details.international);
+    		filemanage_printf(fp, "PREFIXFLAG: %d\n", dialup_details.prefixflag);
+    		filemanage_printf(fp, "PREFIXSTRING: %s\n", dialup_details.prefixstring);
+    		filemanage_close(fp);
+        }
+}
+#endif
+
+
+#if FALSE
+/* Not used in any current build, but may be useful one day */
+/*
+ * If connected, or about to be, execute the hangup script.
+ * No action if disconnected or already executing the hangup script.
+ */
+void dialler_hangup(void)
+{
+  	_kernel_swi_regs  r;
+  	int current_status;
+  	int dohangup = 0;
+
+  	/* Read line connection status */
+	if (_swix(Dialler_Status, _IN(0)|_OUT(0), 0, &current_status) != NULL) return;
+
+  	/* bits 8 and 9 mean			 */
+  	/*  0 0 Disconnected			 */
+  	/*  0 1 Reserved (presently undefined) */
+  	/*  1 0 Connected (outgoing)		 */
+  	/*  1 1 Connected (incoming)		 */
+  	switch (current_status & Dialler_ConnectedFlagsMask) {
+    		case Dialler_Disconnected:
+      			/* may be quiet, dialling, answering or reporting an error */
+      			switch (current_status & 0xFF) {
+				case Dialler_ExecutingScript_Dial:
+				case Dialler_ExecutingScript_Answer:
+	  				dohangup = 1;
+	  				break;
+
+				default:
+	  				break;
+                        }
+      			break;
+
+    		case Dialler_ConnectedOutgoing:
+    		case Dialler_ConnectedIncoming:
+	      		switch (current_status & 0xFF) {
+				case Dialler_ExecutingScript_Hangup: /* do nothing */
+	  				break;
+
+				default:
+		  			dohangup = 1;
+	  				break;
+	                }
+	      		break;
+
+    		default:
+      			break;
+        }
+
+  	if (dohangup) {
+  	        (void) _swix(Dialler_HangUp, _IN(0), 0);
+  	}
+}
+#endif
+
+
+_kernel_oserror *send_GetURLExpire_request(char *url)
+{
+  	/* our caller, 'cache_entry_complete()' in c.cache has already */
+  	/* set a default expiry time of one day, so do nothing	 */
+  	return(NULL);
+}
+
+_kernel_oserror *send_GetURLCache_request(int force_default)
+{
+        (void) force_default;
+  	cache_setURLCache_size(max_cachesize /*size in KBytes*/);
+  	return(NULL);
+}
+
+_kernel_oserror *send_ResetTimer_command(void)
+{
+  	return _swix(Dialler_ResetCounter, _IN(0), 0);
+}
+
+#endif
+
+/* end of dialler.c */

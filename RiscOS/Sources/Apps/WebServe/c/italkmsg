@@ -1,0 +1,338 @@
+/*
+ * WebServe (italkmsg.c)
+ *
+ * © Acorn Computers Ltd. 1993-1997
+ */
+
+#include <string.h>
+#include <time.h>
+#include "structs.h"
+#include "include.h"
+#include "generic.h"
+
+#if USE_MAILSERVE
+
+#define Message_InterTalk 0x450c0
+
+#define InterTalk_Reason_Timers              1
+#define InterTalk_Reason_Connect             2
+#define InterTalk_Reason_CheckURLAccess      3
+#define InterTalk_Reason_GetUserFile         4
+#define InterTalk_Reason_FlushURLCache       5
+#define InterTalk_Reason_GetURLExpire        6
+#define InterTalk_Reason_GetURLCache         7
+
+#define InterTalk_Flag_ResetTimer  (1<<0)
+#define InterTalk_Flag_Connected   (1<<1)
+#define InterTalk_Flag_UserValid   (1<<2)
+#define InterTalk_Flag_Allowed     (1<<3)
+#define InterTalk_Flag_Dialling    (1<<4)
+#define InterTalk_Flag_Dial_Failed (1<<5)
+
+
+/*
+ *  Flags returned by InterTalk_Reason_Connect
+ *
+ *  Allowed Dialling
+ *    0       0      Connection disallowed by !MailServe
+ *    1       1      Connection allowed but poll until dialling completes
+ *    1       0      Connection allowed and established
+ *    0       1      N.A.
+ */
+
+/* Intertalk messge structure (data part of message only) */
+typedef struct
+{
+ int      reason;      /* Reason code */
+ int      flags;       /* Flags */
+ union
+ {
+  struct
+  {
+   int    timeout;     /* Idle timeout in seconds     */
+   int    remaining;   /* Time before next disconnect */
+  }timers;
+  struct
+  {
+   char user[20];      /* Zero terminated user id */
+   char url[200];      /* Zero terminated url */
+  }check_url;
+  struct
+  {
+   char user[20];      /* Zero terminated user id */
+   char file[200];     /* Zero terminated file name */
+  }file;
+  struct
+  {
+   int  days;          /* Configured expiry in days */
+   char url[200];      /* Zero terminated URL */
+  }url_expire;
+  struct
+  {
+   int  size;          /* URL cache size limit in MB */
+   char location[200]; /* Configured !PostIn path */
+  }url_cache;
+ }data;
+
+} MessageInterTalk;
+
+#define MAX_USER 19
+#define MAX_URL 199
+
+
+static int mailserv_task_id = 0;       /* initially we broadcast to the world, when someone responds we */
+                                /* keep its id, further messages are directed straight to it     */
+static int our_task_id = 0;            /* so we can spot reception of our broadcast message             */
+
+
+
+static _kernel_oserror *send_Message_InterTalk(WimpMessage *message)
+{
+  	_kernel_oserror  *error;
+
+  	message->hdr.size        = sizeof(WimpMessage);       /*256*/
+  	message->hdr.sender      = 0;                         /* not used on entry */
+  	message->hdr.my_ref      = 0;                         /* not used on entry */
+  	message->hdr.your_ref    = 0;                         /* original message, not a reply */
+  	message->hdr.action_code = Message_InterTalk;
+
+  	error = _swix(Wimp_SendMessage, _INR(0,2), Wimp_EUserMessageRecorded, message, mailserv_task_id);
+  	if (error == NULL) {
+    		our_task_id = message->hdr.sender;
+        }
+
+  	return(error);
+}
+
+
+/*
+ * This is where 'Message_InterTalk' wimp messages are processed
+ */
+static WIMP_MESSAGE(intertalk_message)
+{
+  	MessageInterTalk *m = (MessageInterTalk*)&message->data;
+
+	(void) handle;
+
+
+  	switch (m->reason) {
+    		case Wimp_MTaskCloseDown:
+      			if (mailserv_task_id == message->hdr.sender) {
+        			/* !MailServe shutdown - broadcast further messages until someone responds */
+        			mailserv_task_id = 0;
+        		}
+      			break;
+
+    		case InterTalk_Reason_FlushURLCache:
+    			/* Command sent by !MailServ */
+      			cache_flush();
+      			break;
+
+    		case InterTalk_Reason_Connect:
+      			if (our_task_id != message->hdr.sender) {
+        			/* ignore reception of our own broadcast */
+      				int state;
+        			mailserv_task_id = message->hdr.sender;
+
+        			if (m->flags & InterTalk_Flag_Dial_Failed) {
+          				state = 6;
+          			}
+        			else {
+          				if (m->flags & InterTalk_Flag_Allowed) {
+            					if (m->flags & InterTalk_Flag_Dialling) {
+              						state = 1 /*dialling*/;
+              					}
+            					else {
+              						state = 2 /*successfull*/;
+                                                }
+                                        }
+          				else {
+            					state = 4 /*disallowed*/;
+            				}
+                                }
+
+        			process_DiallingState(state);
+                        }
+      			break;
+
+    		case InterTalk_Reason_CheckURLAccess:
+      			if (our_task_id != message->hdr.sender) {
+        			int ok;
+
+        			mailserv_task_id = message->hdr.sender;
+        			ok = (m->flags & InterTalk_Flag_Allowed) != 0;
+        			process_URLAccessRights(message->hdr.your_ref, ok);
+                        }
+      			break;
+
+    		case InterTalk_Reason_GetURLExpire:
+      			if (our_task_id != message->hdr.sender) {
+        			mailserv_task_id = message->hdr.sender;
+        			cache_setURLExpire_time(m->data.url_expire.url, m->data.url_expire.days);
+                        }
+      			break;
+
+    		case InterTalk_Reason_GetURLCache:
+                        #if 0
+      			if (our_task_id != message->hdr.sender) {
+        			mailserv_task_id = message->hdr.sender;
+        			cache_setURLCache_size(m->data.url_cache.size*1024); /* Buffer val is in KB */
+        			/*m->data.url_cache.location unused */
+                        }
+                        #endif
+      			break;
+
+		default:
+			break;
+        }
+
+  	return 1;
+}
+
+
+static WIMP_HANDLER(message_bounce)
+{
+        (void) handle;
+        (void) id_block;
+
+  	 if (event_code == Wimp_EUserMessageAcknowledge) {
+    		WimpMessage *message = &event->user_message_acknowledge;
+
+    		if (message->hdr.action_code == Message_InterTalk) {
+      			MessageInterTalk *m = (MessageInterTalk*)&message->data;
+
+      			/* !MailServe gone AWOL - broadcast further messages until someone responds */
+      			mailserv_task_id = 0;
+
+      			switch (m->reason) {
+        			case InterTalk_Reason_Connect:
+	          			process_DiallingState(5 /*!MailServer AWOL*/ );
+          				return(1);
+
+        			case InterTalk_Reason_CheckURLAccess:
+          				process_URLAccessRights(message->hdr.my_ref, 2/*!MailServer AWOL*/);
+          				/*my_ref cos message went no-where */
+          				return(1);
+
+		    		case InterTalk_Reason_GetURLCache:
+		    			cache_setURLCache_size(max_cachesize);
+		    			return(1);
+                        }
+                }
+         }
+
+  	return(0);    /* not handled by us */
+}
+
+
+_kernel_oserror *send_ResetTimer_command(void)
+{
+  	WimpMessage message;
+  	MessageInterTalk *m = (MessageInterTalk*)&message.data;
+
+  	m->reason = InterTalk_Reason_Timers;
+  	m->flags  = InterTalk_Flag_ResetTimer;
+  	return(send_Message_InterTalk(&message));
+}
+
+_kernel_oserror *send_Connect_command(void)
+{
+	if (direct_connection) {
+	        process_DiallingState(2);
+	        return NULL;
+	}
+	else {
+  		WimpMessage message;
+  		MessageInterTalk *m = (MessageInterTalk*)&message.data;
+
+  		m->reason=InterTalk_Reason_Connect;
+  		m->flags=0;
+  		return(send_Message_InterTalk(&message));
+  	}
+}
+
+
+_kernel_oserror *send_CheckURLAccess_request(char *user, char *url, int *ref)
+{
+  	_kernel_oserror  *error;
+  	WimpMessage message;
+  	MessageInterTalk *m = (MessageInterTalk*)&message.data;
+
+	if (direct_connection) {
+	  	static int _ref = 20000;
+  		int newref = _ref++;
+
+		if (ref) *ref = newref;
+		process_URLAccessRights(newref, 1);
+		return NULL;
+	}
+
+  	m->reason=InterTalk_Reason_CheckURLAccess;
+  	m->flags=0;
+  	Strncpy_nz(m->data.check_url.user, user, MAX_USER);
+  	m->data.check_url.user[MAX_USER] = '\0';
+
+  	/* truncate URL to fit */
+  	Strncpy_nz(m->data.check_url.url,  url, MAX_URL);
+  	m->data.check_url.url[MAX_URL] = '\0';
+
+  	error = send_Message_InterTalk(&message);
+
+  	if (ref != NULL) {
+    		*ref = message.hdr.my_ref;
+    	}
+
+  	return(error);
+}
+
+
+_kernel_oserror *send_GetURLExpire_request(char *url)
+{
+        if (direct_connection) {
+                return NULL;
+        }
+        else {
+	  	WimpMessage message;
+  		MessageInterTalk *m = (MessageInterTalk*)&message.data;
+
+	  	m->reason=InterTalk_Reason_GetURLExpire;
+        	m->flags=0;
+	        m->data.url_expire.days = 0;
+
+	  	/* truncate URL to fit */
+     		Strncpy_nz(m->data.url_expire.url, url, MAX_URL);
+	  	m->data.url_expire.url[MAX_URL] = '\0';
+  		return(send_Message_InterTalk(&message));
+  	}
+}
+
+
+_kernel_oserror *send_GetURLCache_request(int force_default)
+{
+        if (direct_connection) {
+		if (force_default || quit_get_null_count() > 5) {
+		        cache_setURLCache_size(max_cachesize);
+		}
+	        return NULL;
+	}
+	else {
+	        #if 0
+	  	WimpMessage message;
+	  	MessageInterTalk *m = (MessageInterTalk*)&message.data;
+
+	  	m->reason=InterTalk_Reason_GetURLCache;
+  		m->flags=0;
+	  	return(send_Message_InterTalk(&message));
+                #endif
+                return NULL;
+	}
+}
+
+
+void italkmsg_init(void)
+{
+  	event_register_message_handler(Message_InterTalk,intertalk_message,0);
+  	event_register_wimp_handler(-1,Wimp_EUserMessageAcknowledge,message_bounce,0);
+}
+
+#endif /* USE_MAILSERVE */
