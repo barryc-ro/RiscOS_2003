@@ -36,8 +36,8 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 
 DEBUGLIB   = <Lib$Dir>.DebugLib.o.debuglib
-FLASHLIB_T = <Lib$Dir>.FlashLib.o.flashlib_t
-FLASHLIB   = <Lib$Dir>.FlashLib.o.flashlib
+FLASHLIB_T = <Lib$Dir>.Netfax.FlashLib.o.flashlib_t
+FLASHLIB   = <Lib$Dir>.Netfax.FlashLib.o.flashlib
 
 #
 # Include files
@@ -138,23 +138,3 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.Module:	c.Module
-o.Module:	C:h.kernel
-o.Module:	C:h.swis
-o.Module:	h.module
-o.Module:	h.flashman
-o.Module:	h.error
-o.Module:	C:debuglib.h.debuglib
-o.FlashMan:	c.FlashMan
-o.FlashMan:	C:h.kernel
-o.FlashMan:	C:h.swis
-o.FlashMan:	h.module
-o.FlashMan:	C:h.time
-o.FlashMan:	C:flashlib.h.flashlib
-o.FlashMan:	h.misc
-o.FlashMan:	C:debuglib.h.debuglib
-o.FlashMan:	h.flashman
-o.FlashMan:	h.error
-o.misc:	c.misc
-o.misc:	h.misc
-o.misc:	C:debuglib.h.debuglib
