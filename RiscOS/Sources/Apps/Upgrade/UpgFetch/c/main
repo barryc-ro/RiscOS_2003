@@ -97,6 +97,9 @@ static int return_tag_length(const char* const base_pointer, const char* end_poi
 static int return_tag_type(const char* const base_pointer, const char* end_pointer);
 tlv_list_node_type* return_tlv_of_type(const unsigned int type);
 static bool setup_proxy(const unsigned int session);
+#ifdef USE_TRUSTED_DOMAINS
+static bool validate_domain(const char* const url, const char* const allowed_domains);
+#endif /* USE_TRUSTED_DOMAINS */
 
 /* The base address for the dynamic area. */
 char *dynamic_area_base_address = NULL;
@@ -104,7 +107,7 @@ char *dynamic_area_base_address = NULL;
 /* This variable gets set if the CRC of the image has been validated. */
 bool crc_validated = false;
 
-static int memory_bank=0;     // memory bank to write to
+static int memory_bank=0;     /* memory bank to write to */
 
 typedef enum {
   TLV_TAG_TYPE_FILE_SIZE,
@@ -134,21 +137,20 @@ steps it takes
 
 int main(int argc, char *argv[])
 {
-  _kernel_swi_regs regs;                        // kernel swi regs
-  _kernel_oserror *err, *error;                 // kernel errors
+  _kernel_swi_regs regs;
+  _kernel_oserror *err, *error;
 
-  int session_identifier = 0;                   // used to pass to URL module
+  int session_identifier = 0;                   /* This stores the session identifier we have registered with the URL module. */
 
-  char *url = malloc(255);                      // url string
+  char *url = malloc(255);                      /* url string */
 
-  int dynamic_area_number;                      // dynamic area identifier
-  char *dynamic_area_current_ptr = NULL;        // pointer to current bit
+  int dynamic_area_number;                      /* dynamic area identifier */
+  char *dynamic_area_current_ptr = NULL;        /* pointer to current bit */
 
-  char command_line_arguments[255];             // used to pass args to
-                                                // child process
-  char child_task[256];                         // child task to run
+  char command_line_arguments[255];             /* used to pass args to child process */
+  char child_task[256];                         /* child task to run */
 
-  int image_size = 0;                           // size of image
+  int image_size = 0;                           /* size of image */
 
   int server_timeout;
 
@@ -166,17 +168,26 @@ int main(int argc, char *argv[])
       the second one should be the url */
   if (argc < 2)
   {
-    printf("Not enough arguments supplied\n");
+    DBUG_PRINTF(DBUG_LVL_ERROR, "main(): Not enough arguments supplied\n");
     exit(EXIT_FAILURE);
   }
 
   /* set up the url */
   strcpy(url, argv[2]);
 
+  /* Ensure that the URL is from a trusted source */
+  #ifdef USE_TRUSTED_DOMAINS
+  if (!validate_domain(url,  USE_TRUSTED_DOMAINS))
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "main(): %s is not a trusted domain. Exiting.\n", url);
+    exit(EXIT_FAILURE);
+  }
+  #endif /* USE_TRUSTED_DOMAINS */
+
   /* initialise message file */
   init_messages();
 
-  //set wimp mode to 640 X 480 so it works on any box
+  /* set wimp mode to 640 X 480 so it works on any box */
   set_wimp_mode();
 
   /* Initialise the WIMP */
@@ -279,7 +290,7 @@ int main(int argc, char *argv[])
   /* Display the linked list */
   display_linked_list();
 
-  /* Obtain a pointer to the image to be programmed from the lined list. */
+  /* Obtain a pointer to the image to be programmed from the linked list. */
   image_pointer_tlv = return_tlv_of_type(TLV_TAG_TYPE_IMAGE_DATA);
   image_pointer = image_pointer_tlv->value_pointer;
   DBUG_PRINTF(DBUG_LVL_DIAG, "main(): Pointer to the beginning of the image is %0x\n", image_pointer);
@@ -938,9 +949,9 @@ void decode_tlv_tags_after_download(void)
   }
 }
 
-/*
-// This routine scans through the list of TLV's and does what is necessary
-//after the whole file has been downloaded.
+
+#if 0
+/* This routine scans through the list of TLV's and does what is necessary after the whole file has been downloaded. Currently we do not need to do anything after the file has been downloaded. */
 void decode_tags_after_download(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "decode_tags_after_download()\n");
@@ -962,7 +973,7 @@ void decode_tags_after_download(void)
     while (tlv_node_current != NULL);
   }
 }
-*/
+#endif
 
 
 
@@ -1223,3 +1234,72 @@ static bool setup_proxy(const unsigned int session)
   return (true);
 }
 
+
+#ifdef USE_TRUSTED_DOMAINS
+/* This routine checks that the url passed in is an allowed domain. The rules for detecting a valida domain are as follows:
+   * Anything before (and including) a :// is stripped (e.g. http:// or ftp://)
+   * Anything after (and including) the next / is stripped (e.g. /upgrades/ftp)
+   * The remainder is now checked against each of the allowed domains in turn. The matching is done in a substring manner, with pace.co.uk matching both support.pace.co.uk, upgrades.pace.co.uk and pace.co.uk?upgrades, but not http://hackers_r_us@hacknet.net/pace.co.uk
+   This routine returns true if the domain mataches, false otherwise.
+*/
+
+static bool validate_domain(const char* const url, const char* const allowed_domains)
+{
+  /* Strip the URL */
+  char url_copy[255]; /* We do not wish to alter the main copy, so store the altered version seperately */
+  char* start=NULL;
+  char* end = NULL;
+  char* current_domain = NULL;
+
+  if (strlen(url) >= 255)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "validate_domain(): Error: buffer for url_copy is shorter than the url legnth.\n");
+    return (false);
+  }
+  strcpy (url_copy, url);
+
+  DBUG_PRINTF(DBUG_LVL_DIAG, "validate_domain(): url is %s domains are %s\n", url_copy, allowed_domains);
+
+  if ((start = strstr(url_copy, "://")) == NULL)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "validate_domain(): Cannot locate :// in url.\n");
+    return (false);
+  }
+  start+=3; /* Move to beyond the :// */
+
+  end = strchr(start, '/');
+  if (end != NULL)
+  {
+    /* There does not have to be a trailing slash, eg. http://www.pace.co.uk is valid. */
+    *end = '\0'; /* Convert the slash to an endline. */
+  }
+
+  DBUG_PRINTF(DBUG_LVL_DIAG, "validate_domain(): Stripped line is %s\n", start);
+
+  /* Now scan through the allowed domaind, checking if there is a substring match. */
+  current_domain=(char*)allowed_domains;
+  while (current_domain!=NULL)
+  {
+    char* new_current_domain = strchr(current_domain, ',');
+    if (new_current_domain)
+    {
+      *new_current_domain='\0';
+      new_current_domain++;
+    }
+    DBUG_PRINTF(DBUG_LVL_DIAG, "validate_domain(): current_domain is %s\n", current_domain);
+
+    /* Now attempt to match the domain.. */
+    if (strstr(start,current_domain))
+    {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "validate_domain(): domains %s and %s match\n", start, current_domain);
+      return (true);
+    }
+
+    /* Move onto the next allowed domain. */
+    current_domain = new_current_domain;
+  }
+
+  return (false);
+}
+
+#endif /* USE_TRUSTED_DOMAINS */
