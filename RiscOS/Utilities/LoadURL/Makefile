@@ -46,8 +46,8 @@ WFLAGS		= ~cf~vr
 
 # These are for the standard Desktop build (plus debug)
 
-#DFLAGS		= -fn -DDEBUGLIB
-DFLAGS		= -fn
+DFLAGS		= -fn -DDEBUGLIB
+#DFLAGS		= -fn
 DDFLAGS		= -fn -DDEBUGLIB
 DZFLAGS		= -fn -DDEBUGLIB
 DDZFLAGS	= -fn -DDEBUGLIB
