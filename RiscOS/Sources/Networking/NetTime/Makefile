@@ -29,7 +29,7 @@ DEFMOD  = DefMod
 AR	= LibFile
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
-CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 -wp
+CCFLAGS  = -c -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp
 # Falgs for debugging ...
 #CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -Throwback -DDEBUG
 CPFLAGS = ~cfr~v
