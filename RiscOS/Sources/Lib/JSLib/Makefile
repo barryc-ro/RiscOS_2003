@@ -282,6 +282,7 @@ export: export_${PHASE}
 install_rom: ${TARGET} ${TARGETZM}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: ROM module installed
+        @echo
 
 clean:
         ${WIPE} o   ${WFLAGS}
@@ -295,6 +296,7 @@ clean:
         ${RM} local_dirs
         @echo
         @echo ${COMPONENT}: Cleaned
+        @echo
 
 export_hdrs: dirs
 	@echo
@@ -303,6 +305,7 @@ export_hdrs: dirs
 	${CP} RISCOSconf.h.JSLibAPI	${JSLIBDIR}.h.*		${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Export complete (headers)
+	@echo
 
 export_libs: ${TARGET} ${TARGETZ} dirs
 	@echo
@@ -310,14 +313,17 @@ export_libs: ${TARGET} ${TARGETZ} dirs
 	${CP} ${TARGETZ}	${JSLIBDIR}.o.${TARGETZ}	${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Export complete (library)
+	@echo
 
 build_interpreter: ${TARGETI} dirs
 	@echo
 	@echo ${COMPONENT}: Build complete (non-debug stand alone interpreter)
+	@echo
 
 build_interpreter_d: ${TARGETID} dirs
 	@echo
 	@echo ${COMPONENT}: Build complete (debug stand alone interpreter)
+	@echo
 
 local_dirs:
 	${MKDIR} o
