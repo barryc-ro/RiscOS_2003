@@ -32,7 +32,7 @@ CD	= dir
 STRIP   = -stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -Throwback
+CFLAGS  =  -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 -DUSERIF${USERIF}=1 ${DFLAGS} ${EXT_FLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 DFLAGS  = -DDEBUG
