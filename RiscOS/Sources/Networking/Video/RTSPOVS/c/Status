@@ -46,41 +46,92 @@
 #include "Connect.h"
 #include "Generic.h"
 #include "GetParam.h"
+#include "Global.h"
 #include "Headers.h"
 #include "Module.h"
 #include "RTSPOErrors.h"
 #include "RTSPOHdr.h"
 #include "Session.h"
+#include "Setup.h"
 #include "Utils.h"
 
 #include "Status.h"
 
 /* Local options */
 
-#undef  DUMP_HEADERS_TO_CACHEFS
+#undef DUMP_HEADERS_TO_CACHEFS
 
 /*
  * #define DUMP_HEADERS_TO_CACHEFS "Cache:$.Test"
  */
 
+/* The GENERATE_FAKE_INTERNAL_RESPONSES option enables a series of fake server
+ * command reponses to be raised internally, to test ticketing. RTSP OVS must
+ * be commanded to generate a specific series of commands for the responses to
+ * be in sequence. The nextnonce etc. values are parsed and used to generate
+ * responses. The Authorization headers in the outgoing commands should be of
+ * this form:
+ *
+ *   Authorization:Digest username="415318",realm="OVS",
+ *                 uri="rtsp://10.1.3.102:5004/asset/vscontsrv%3a5001",
+ *                 nonce="[.x.]",opaque="142",response="[.y.]"
+ *
+ * where nonce [.x.] is part of the preprogrammed series of fake responses and
+ * challenge response string [.y.] is the following, in the given order:
+ *
+ *   6fb3e5fafaeffbe3231b9664ae2d6ef8
+ *   6726417a4cc9c638b0c3b1242765f9a9
+ *   21e96c584ecbe750e4d0c44d5509b498
+ *   17b15b9550e3796b7b23ce7873d10793
+ *   87989fd40d74f5e294d6f8ee2f80f3f8
+ *   115f69724ea8dfe5f484eae2fdf18131
+ *   57c38906b60c7f9c67ef68e7b1cf4a13
+ *
+ * Any deviation indicates a failure to generate the expected answer to the
+ * "server's" preprogrammed responses.
+ *
+ * You will need to modify opensock() in Connect.c to pretend a socket has
+ * been opened - for example, adding this right at the start will work:
+ *
+ *   *state = protostate_CONNECTED;
+ *   return <n>;
+ *
+ * where '<n>' is some socket number that is not presently in use (the module
+ * will try and close this socket on session shutdown).
+ *
+ * A BASIC program that will cause RTSP OVS to generate an appropriate series
+ * of commands is in Utils. If this is run with DUMP_HEADERS_TO_CACHEFS set
+ * up, the header output can be compared against the above strings to check
+ * that everything is working properly.
+ *
+ * Further information is in the ReadMe in the Utils directory.
+ */
+
+#undef GENERATE_FAKE_INTERNAL_RESPONSES
+
 /* Local variables */
 
-static char            recbuf[2048];
+static char            recbuf[8192];
 static _kernel_oserror final;
+
+#ifdef GENERATE_FAKE_INTERNAL_RESPONSES
+  static unsigned int comcount = 0;
+  static unsigned int comflags = 0;
+#endif
 
 /* Local functions */
 
-static bool status_proceed_completed        (session * s, bool * repeat);
-static bool status_proceed_connected        (session * s, bool * repeat);
-static bool status_proceed_default          (session * s, bool * repeat);
-static bool status_proceed_dns              (session * s, bool * repeat);
-static bool status_proceed_error            (session * s, bool * repeat);
-static bool status_proceed_initial          (session * s, bool * repeat);
-static bool status_proceed_pumping          (session * s, bool * repeat);
-static bool status_proceed_receiving        (session * s, bool * repeat);
-static bool status_proceed_sending          (session * s, bool * repeat);
+static bool              status_proceed_completed        (session * s, bool * repeat);
+static bool              status_proceed_connected        (session * s, bool * repeat);
+static bool              status_proceed_default          (session * s, bool * repeat);
+static bool              status_proceed_dns              (session * s, bool * repeat);
+static bool              status_proceed_error            (session * s, bool * repeat);
+static bool              status_proceed_initial          (session * s, bool * repeat);
+static bool              status_proceed_pumping          (session * s, bool * repeat);
+static bool              status_proceed_receiving        (session * s, bool * repeat);
+static bool              status_proceed_sending          (session * s, bool * repeat);
 
-//static void status_handle_initial_challenge (session * s);
+static _kernel_oserror * status_extract_control_url      (session * s);
 
 /**************************************************************/
 /* status_status()                                            */
@@ -522,23 +573,18 @@ static bool status_proceed_sending(session * s, bool * repeat)
 
   dprintf(("", "status_proceed_sending: Sending (%d of %d done so far) to socket %d...\n", s->reqptr, s->reqlen, s->sd));
 
-  /* printf("\nSend:\n---\n%s\n--- for %p\n",s->full_request,s); */
+  #ifdef GENERATE_FAKE_INTERNAL_RESPONSES
 
-// Hmm - should be doing a GETSO call before socketread/socketwrite, otherwise
-//       you can end up with a less meaningful error.
+    sent = s->reqlen;
+    comcount++;
 
-//
-//{
-//int so;
-//sent=sizeof(int);
-//dprintf(("", "GETSOcall: %d\n", getsockopt(s->sd, SOL_SOCKET, SO_ERROR, &so, &sent)));
-//dprintf(("", "GETSO: %d\n",so));
-//}
-//
+  #else
 
-  sent = socketwrite(s->sd,
-                     s->full_request + s->reqptr,
-                     s->reqlen - s->reqptr);
+    sent = socketwrite(s->sd,
+                       s->full_request + s->reqptr,
+                       s->reqlen - s->reqptr);
+
+  #endif
 
   dprintf(("", "status_proceed_sending: ...sent %d this time\n", sent));
 
@@ -665,9 +711,131 @@ static bool status_proceed_receiving(session * s, bool * repeat)
 
   for (;;)
   {
-    ret = socketread(s->sd,
-                     recbuf,
-                     sizeof(recbuf));
+    #ifdef GENERATE_FAKE_INTERNAL_RESPONSES
+
+      if (comflags == 0)
+      {
+        switch(comcount)
+        {
+          case 1:strcpy(recbuf, "RTSP/1.0 401 Unauthorized\r\n"
+                                "CSeq: 1\r\n"
+                                "WWW-Authenticate: Digest realm=\"OVS\",nonce=\"8a6eafb499a54f8b0690f79fa3543eea\",opaque=\"142\"\r\n"
+                                "\r\n");
+          break;
+
+          case 2:strcpy(recbuf, "RTSP/1.0 200 OK\r\n"
+                                "CSeq: 2\r\nAuthentication-info: nextnonce=\"02f74338c7bdb1135f696800552d07df\"\r\n"
+                                "Session: 28f39356e099cb1c;timeout=90\r\n"
+                                "Server: Oracle_Video_Server/3.3.1.0.0\r\n"
+                                "x-OVSExtensions: 1.1\r\n"
+                                "x-serverDate: 20011122T105114Z -0000\r\n"
+                                "Transport: OGF/OGP/UDP;control_address=10.1.2.241;destination=10.1.2.241:1207;bandwidth=6100000;packet_size=8192/8192/8192;unicast\r\n"
+                                "Content-Type: application/sdp\r\n"
+                                "Content-Length: 654\r\n"
+                                "\r\n"
+                                "v=0\r\n"
+                                "o=- 3106346879 3106346879 IN IP4 10.1.3.102:5004\r\ns=vscontsrv:5001\r\n"
+                                "t=0 0\r\n"
+                                "m=application 0 udp oracle-video\r\n"
+                                "c=IN IP4 0.0.0.0\r\n"
+                                "b=AS:1411.200\r\n"
+                                "a=control:rtsp://10.1.3.102:5004/instance/25cX1Y1\r\n"
+                                "a=X-conttype:m1s\r\n"
+                                "a=X-contstatus:Disk\r\n"
+                                "a=framerate:23.976\r\n"
+                                "a=X-framegeometry:352 240\r\n"
+                                "a=X-pelaspect:1.0950\r\n"
+                                "a=X-clip:1\r\n"
+                                "a=X-name:/mds/video1/60sec-1.mpi\r\n"
+                                "a=X-duration:3150.578\r\n"
+                                "a=X-bitrate:1411.200\r\n"
+                                "a=X-createdate:3186881851\r\n"
+                                "a=range:npt=beginning-end\r\n"
+                                "a=range:pts=39681-286852496\r\n"
+                                "a=X-clip:2\r\n"
+                                "a=X-name:/mds/video1/60sec-2.mpi\r\n"
+                                "a=X-duration:3856.768\r\n"
+                                "a=X-bitrate:1411.200\r\n"
+                                "a=X-createdate:3186882118\r\n"
+                                "a=range:npt=beginning-end\r\n"
+                                "a=range:pts=39681-351165495\r\n"
+                                "\r\n");
+          break;
+
+          case 3:strcpy(recbuf, "RTSP/1.0 200 OK\r\n"
+                                "CSeq: 3\r\n"
+                                "Session: 28f39356e099cb1c\r\n"
+                                "Authentication-info: nextnonce=\"2571f69d7e95bc963a8b7b1da6d94699\"\r\n"
+                                "Range: beginning-end\r\n"
+                                "Scale: 1.000\r\n"
+                                "Speed: 1.500000\r\n"
+                                "\r\n");
+          break;
+
+          case 4:strcpy(recbuf, "RTSP/1.0 200 OK\r\n"
+                                "CSeq: 4\r\n"
+                                "Session: 28f39356e099cb1c\r\n"
+                                "Authentication-info: nextnonce=\"a849d12164c3c7a49d44d08bb364fe93\"\r\n"
+                                "Range: 0.71-0.71\r\n"
+                                "Scale: 0.000\r\n"
+                                "Speed: 0.000000\r\n"
+                                "\r\n");
+          break;
+
+          case 5:strcpy(recbuf, "RTSP/1.0 200 OK\r\n"
+                                "CSeq: 5\r\n"
+                                "Session: 28f39356e099cb1c\r\n"
+                                "Authentication-info: nextnonce=\"f717dc872b20c86b7ca07769cba1aa1c\"\r\n"
+                                "Range: beginning-end\r\n"
+                                "Scale: 1.000\r\n"
+                                "Speed: 1.500000\r\n"
+                                "\r\n");
+          break;
+
+          case 6:strcpy(recbuf, "RTSP/1.0 200 OK\r\n"
+                                "CSeq: 6\r\n"
+                                "Session: 28f39356e099cb1c\r\n"
+                                "Authentication-info: nextnonce=\"fabaecc26827f19530fd81d92750a157\"\r\n"
+                                "Range: current-end\r\n"
+                                "Scale: 1.000\r\n"
+                                "Speed: 1.000000\r\n"
+                                "\r\n");
+          break;
+
+          case 7:strcpy(recbuf, "RTSP/1.0 200 OK\r\n"
+                                "CSeq: 7\r\n"
+                                "Session: 28f39356e099cb1c\r\n"
+                                "Authentication-info: nextnonce=\"2c3096ca8cde4a96b290cd4142303dd7\"\r\n"
+                                "Range: 28.09-28.09\r\n"
+                                "Scale: 0.000\r\n"
+                                "Speed: 0.000000\r\n"
+                                "\r\n");
+          break;
+
+          case 8:strcpy(recbuf, "RTSP/1.0 200 OK\r\n"
+                                "CSeq: 8\r\n"
+                                "Session: 28f39356e099cb1c\r\n"
+                                "Connection: close\r\n"
+                                "Authentication-info: nextnonce=\"0e0d79ce7b9807a14a779ad922a50e8d\"\r\n");
+          break;
+        }
+
+        ret      = strlen(recbuf);
+        comflags = 1;
+      }
+      else
+      {
+        ret      = 0;
+        comflags = 0;
+      }
+
+    #else /* GENERATE_FAKE_INTERAL_RESPONSES */
+
+      ret = socketread(s->sd,
+                       recbuf,
+                       sizeof(recbuf));
+
+    #endif
 
     dprintf(("", "status_proceed_receving: Retrieved %d, existing data length is %d\n", ret, s->data_len));
 
@@ -785,74 +953,45 @@ static bool status_proceed_receiving(session * s, bool * repeat)
 
             /* This is a 200 OK response - does it have an Authentication-info header? */
 
-            if (h != NULL)
+            if (h != NULL && !strncmp(h->value, Headers_HeaderValue_AINextnonce, sizeof(Headers_HeaderValue_AINextnonce) - 1))
             {
               /* Yes. Use the "nextnonce" value as our current nonce. */
 
-              free(parent->nonce);
-              parent->nonce = Strdup(h->value);
+              char * value = headers_extract_quoted_string(h->value + sizeof(Headers_HeaderValue_AINextnonce));
 
-              if (parent->nonce == NULL)
+              if (value != NULL && *value != '\0')
               {
-                s->state = protostate_ERROR_MEM;
-                *repeat  = true;
+                free(parent->nonce);
+                parent->nonce = Strdup(value);
 
-                return false;
+                if (parent->nonce == NULL)
+                {
+                  s->state = protostate_ERROR_MEM;
+                  *repeat  = true;
+
+                  return false;
+                }
               }
             }
           }
 
+          /* If this was a SETUP command and we get 401 back, we need to authenticate. So */
+          /* send another SETUP, relying on having a challenge stored from above.         */
 
+          if (
+               ticketing                                &&
+               s->response_code  == Header_Authenticate &&
+               s->server_session == NULL                &&
+               s->parent         == NULL                &&
+               s->ticket         != NULL                &&
+               s->setup_copy     != NULL
+             )
+          {
+            if (setup_resend_setup(s) != NULL) s->state = protostate_ERROR_MEM;
 
-///////////////// And so if we've a nonce, realm and opaque value, attempt to construct
-///////////////// a challenge string to put in the authorization field of - well, the parent
-///////////////// I suppose...
-
-
-
-//          /* If this was a SETUP command and we get 401 back, we need to authenticate. So */
-//          /* send another SETUP, relying on having a challenge stored from above.         */
-//
-//          if (
-//               s->response_code  == Header_Authenticate &&
-//               s->server_session == NULL                &&
-//               s->parent         == NULL                &&
-//               s->ticket         != NULL                &&
-//               s->setup_copy     != NULL
-//             )
-//          {
-//            /* Store a WWW-Authenticate header, if present - can't handle the challenge if not... */
-//
-//            h = headers_find_header(s->headers, Headers_HeaderName_Auth);
-//
-//            if (h != NULL)
-//            {
-//              free(s->challenge), s->challenge = Strdup(h->value);
-//
-//              if (s->challenge == NULL)
-//              {
-//                s->state = protostate_ERROR_MEM;
-//                *repeat  = true;
-//
-//                return false;
-//              }
-//
-//              /* Now handle the challenge */
-//
-////////////////status_handle_initial_challenge(s);
-//
-//              if (s->state != protostate_ERROR_MEM)
-//              {
-//                *repeat = false;
-//                return true;
-//              }
-//              else
-//              {
-//                *repeat = true;
-//                return false;
-//              }
-//            }
-//          }
+            *repeat = true;
+            return false;
+          }
 
           /* We've received the response that we wish to return to the client. This may */
           /* be a dropped-through 401 if we couldn't deal with it above.                */
@@ -910,6 +1049,14 @@ static bool status_proceed_receiving(session * s, bool * repeat)
 
               dprintf(("", "status_proceed_receving: New session '%s', timeout %d\n", s->server_session ? s->server_session : "<out of memory>", s->server_timeout));
             }
+
+            /* In addition, search for the control URL in the body data. If we */
+            /* find it, replace the current URL with that one; otherwise it    */
+            /* doesn't really matter. OVS doesn't seem to mind either way (I'm */
+            /* probably missing something about what it's used for), but this  */
+            /* has been added to match a packet dump for a ticketing solution. */
+
+            status_extract_control_url(s);
           }
         }
       }
@@ -1176,4 +1323,60 @@ _kernel_oserror * status_check_error(session * s)
   #endif
 
   return e;
+}
+
+/**************************************************************/
+/* status_extract_control_url()                               */
+/*                                                            */
+/* Look for a control URL in a session's data store and if    */
+/* found, extract it and replace the main session URL with    */
+/* the new item.                                              */
+/*                                                            */
+/* Parameters: Pointer to the session structure to examine.   */
+/**************************************************************/
+
+static _kernel_oserror * status_extract_control_url(session * s)
+{
+  char * found;
+  char * copy;
+
+  if (s->data == NULL) return NULL;
+
+  found = strstr(s->data, Headers_CommandResponse_ControlURL);
+
+  if (found == NULL)
+  {
+    return NULL;
+  }
+  else
+  {
+    size_t            len = 0;
+    char            * p;
+    url_description * url;
+
+    found += sizeof(Headers_CommandResponse_ControlURL) - 1;
+    p = found;
+
+    while (*p != '\0')
+    {
+      if (*p < ' ') break;
+      else len++, p++;
+    }
+
+    if (len > 0)
+    {
+      copy = malloc(len + 1);
+      if (copy == NULL) return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+
+      memcpy(copy, found, len);
+      copy[len] = '\0';
+
+      RetError(urlutils_return_description(copy, &url));
+
+      urlutils_free_description(s->url);
+      s->url = url;
+    }
+  }
+
+  return NULL;
 }
