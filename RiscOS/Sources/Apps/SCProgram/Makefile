@@ -79,25 +79,25 @@ ${APPLICATION}: ${OBJS}
 
 #
 # Dynamic dependencies:
+o.main:	c.main
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	h.error
+o.main:	C:h.kernel
+o.main:	h.constants
+o.main:	h.console
+o.main:	C:h.scinter
+o.main:	c.main
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	h.error
+o.main:	C:h.kernel
+o.main:	h.constants
+o.main:	h.console
+o.main:	C:h.scinter
 o.error:	c.error
 o.error:	C:h.kernel
 o.error:	h.constants
 o.console:	c.console
 o.console:	C:h.kernel
 o.console:	C:h.swis
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	h.error
-o.main:	C:h.kernel
-o.main:	h.constants
-o.main:	h.console
-o.main:	C:h.scinter
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	h.error
-o.main:	C:h.kernel
-o.main:	h.constants
-o.main:	h.console
-o.main:	C:h.scinter
