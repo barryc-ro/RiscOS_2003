@@ -93,7 +93,7 @@ Daytona   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${O
             ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
 
 STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
-            ${OM}.Graphics ${OM}.CMOS
+            ${OM}.Graphics ${OM}.TestCard ${OM}.CMOS
             
 OBJS      = ${STB3}
 
