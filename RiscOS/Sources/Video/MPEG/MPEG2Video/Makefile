@@ -72,32 +72,3 @@ s.Data.BinSetupC: ${SETUPC} Tools.ConvSetup
 	/Tools.ConvSetup ${SETUPC} s.Data.BinSetupC
 
 # Dynamic dependencies:
-rm.MPEG2Video: Hdr.GetAll
-rm.MPEG2Video: Hdr:ListOpts
-rm.MPEG2Video: Hdr:Macros
-rm.MPEG2Video: Hdr:System
-rm.MPEG2Video: Hdr:SWIs
-rm.MPEG2Video: Hdr:CPU.Generic26
-rm.MPEG2Video: Hdr:IO.GenericIO
-rm.MPEG2Video: Hdr:RISCOS
-rm.MPEG2Video: Hdr:Machine.<Machine>
-rm.MPEG2Video: Hdr:CMOS
-rm.MPEG2Video: Hdr:ModHand
-rm.MPEG2Video: Hdr:Services
-rm.MPEG2Video: Hdr:Proc
-rm.MPEG2Video: Hdr:FSNumbers
-rm.MPEG2Video: Hdr:NewErrors
-rm.MPEG2Video: Hdr:MsgTrans
-rm.MPEG2Video: Hdr:Debug
-rm.MPEG2Video: Hdr:VduExt
-rm.MPEG2Video: Hdr:Podule
-rm.MPEG2Video: Hdr:PoduleReg
-rm.MPEG2Video: Hdr:DevNos
-rm.MPEG2Video: Hdr:IIC
-rm.MPEG2Video: Hdr:MPEGCtrl
-rm.MPEG2Video: Hdr:MPEGVideo
-rm.MPEG2Video: Hdr:MPEGAudio
-rm.MPEG2Video: Hdr:MPEG2Card
-rm.MPEG2Video: Hdr:L64002
-rm.MPEG2Video: s.Module
-rm.MPEG2Video: s.Errors
