@@ -138,6 +138,7 @@ o.cmos:	C:h.swis
 o.cmos:	h.constants
 o.cmos:	h.error
 o.cmos:	C:h.kernel
+o.cmos:	C:h.nvram
 o.db:	c.db
 o.db:	h.constants
 o.db:	h.error
