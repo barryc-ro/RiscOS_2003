@@ -30,6 +30,8 @@
 #include "engfile.h"
 #include "engparse.h"
 
+static bool skipped;
+
 void FinishHeaders(void)
 {
   
@@ -60,15 +62,17 @@ void FinishHeaders(void)
     downloadstate.context = readytodownload;
     downloadstate.ret.code = ENG_COMPLETED;
     state |= DOWNLOADMSG;
+    skipped = false;
   }
 
   else
   {
+    /* disconnect from mail server in case user drops line
+       while outside email client */
     StartTimeoutCount();
     StartReconnectCount();
+    PreDisconnect(false);
   }
-
-  /* If email is not active, should we disconnect from POP? */
 
 }
 
@@ -95,6 +99,9 @@ void DownloadFailure(MessageDescriptor *msg, uint32 size, bool headers)
   {
     if (downloadstate.ret.code == ENG_NOMEMORY)
     {
+      /************************************
+      *** ATTENTION
+      ************************************/
       /*
       ** There has been a malloc failure so try to free memory
       ** by removing old message files.
@@ -163,7 +170,7 @@ void DownloadHeader(void)
           code = msg->mboxobj->GetHeaders(downloadstate.hdrsobj);
           if (code < 0)
           {
-            /* an error of some sort - skip this message */
+            /* an error has occurred so we'll skip this message */
             dprintf(("Eng", "***ERROR*** Error getting headers, rc=%d\n",code));
             downloadstate.context = downloadfailure;
             downloadstate.ret.code = (code == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY : ENG_GETHDRFAILED;
@@ -185,8 +192,8 @@ void DownloadHeader(void)
       dprintf(("Eng", "download context = downloadfailure msg %d\n",msg->ID));
       /*
       ** Header download or parse has failed.
-      ** If this is the second failure, skip this message.
-      ** Otherwise try to get it again.
+      ** If this is the second failure, DownloadFailure() will
+      ** cause it to be skipped, otherwise we try to get it again.
       ** The amount of memory to clear in the event of a
       ** memory failure has been set at 8K. This is a guess.
       */
@@ -209,7 +216,15 @@ void DownloadHeader(void)
       }
       else
       {
-        /* not yet ready to parse - what do we do now (if anything)? */
+        /************************************
+        *** ATTENTION
+        ************************************/
+        /*
+        ** Not yet ready to parse.
+        ** We probably don't need to do anything here but wait.
+        ** Eventually the current parse will finish and
+        ** the substate will be moved on.
+        */
       }
 
       break;
@@ -232,13 +247,18 @@ void DownloadMessage(void)
       dprintf(("Eng", "context = readytodownload\n"));
       if(!msg)
       {
-        /*
-        ** Need to check the flag to see if any have been
-        ** skipped because of size.
-        ** If so, see if we still have memory and go back to
-        ** download them.
-        */
-        
+        if (skipped)
+        {
+          /************************************
+          *** ATTENTION
+          ************************************/
+          /*
+          ** Some messages have been skipped because of size.
+          ** See if we still have memory and go back to
+          ** download them.
+          */
+        }
+
         /* all messages now downloaded */
         dprintf(("Eng", "All messages downloaded\n"));
         state &= ~DOWNLOADMSG;
@@ -296,8 +316,8 @@ void DownloadMessage(void)
           else
           {
             dprintf(("Eng", "Skipping this message - too big\n"));
-            /* set a flag so we know some have been skipped */
-            
+            /* set flag so we know some have been skipped */
+            skipped = true;
             downloadstate.msg = msg->next;
             downloadstate.context = readytodownload;
           }
@@ -321,10 +341,33 @@ void DownloadMessage(void)
 }
 
 
+void ConfirmConnect(bool conf, void *h)
+{
+
+  NB_UNUSED(h);
+  if (conf)
+  {
+    /* user has confirmed connection */
+    dprintf(("Eng", "User has confirmed connection\n"));
+    ConnectToISP();
+  }
+
+  else
+  {
+    /* Cancel RETRIEVEMSG state and clean up. */
+    dprintf(("Eng", "User has not confirmed connection\n"));
+    state &= ~(RETRIEVEMSG + DOWNLOADMSG);
+    retrievestate.ret.code = ENG_CONNECTCANCELLED;
+    (*callbacklist.getmsgfunc)(&retrievestate.ret, 0, callbacklist.getmsghandle);
+  }
+
+}
+
+
 void DoRetrieve(void)
 {
 
-  ELib_rcode code;
+  ELib_rcode rc;
   char *file;
   MessageDescriptor *msg = retrievestate.msg;
 
@@ -337,7 +380,7 @@ void DoRetrieve(void)
       /* confirmation of connection required to get message */
       retrievestate.context = idle;
       retrievestate.ret.code = ENG_CONFIRMCONNECT;
-      (*callbacklist.statusfunc)(&retrievestate.ret, callbacklist.statushandle, eng_confirm);
+      (*callbacklist.statusfunc)(&retrievestate.ret, callbacklist.statushandle, ConfirmConnect);
       break;
 
     case readytoconnect :
@@ -353,14 +396,14 @@ void DoRetrieve(void)
       uint32 size;
 
       dprintf(("Eng", "context = readytoretrieve\n"));
-      code = msg->mboxobj->GetLength(size);
+      rc = msg->mboxobj->GetLength(size);
       dprintf(("Eng", "Message size=%d\n",size));
-      if (code < 0)
+      if (rc < 0)
       {
         /* some kind of error in gettingsize */
         dprintf(("Eng", "***ERROR*** Error returned from GetSize method\n"));
         retrievestate.context = retrievefailure;
-        retrievestate.ret.code = ENG_GETMSGFAILED;
+        retrievestate.ret.rc = rc;
       }
 
       else
@@ -369,13 +412,13 @@ void DoRetrieve(void)
         file = SetFilename(msg->ID, false);
         retrievestate.context = idle;
 
-        retrievestate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) MBoxCallback, file, code, (void *) RETRIEVEMSG);
-        code = msg->mboxobj->GetMessage(retrievestate.msgobj);
-        if (code < 0)
+        retrievestate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) MBoxCallback, file, rc, (void *) RETRIEVEMSG);
+        rc = msg->mboxobj->GetMessage(retrievestate.msgobj);
+        if (rc < 0)
         {
           /* an error of some sort - skip this message */
-          retrievestate.context = downloadfailure;
-          retrievestate.ret.code = (code == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY  : ENG_GETMSGFAILED;
+          retrievestate.context = retrievefailure;
+          retrievestate.ret.rc = rc;
         }
       }
 
@@ -384,9 +427,31 @@ void DoRetrieve(void)
     case retrievefailure :
 
       dprintf(("Eng", "context = retrievefailure\n"));
-      state &= ~RETRIEVEMSG;
+      state &= ~(RETRIEVEMSG + DOWNLOADMSG);
       msg->flags &= ~(DOWNLOADED + DOWNLOADING);
       StartTimeoutCount();
+      switch (retrievestate.ret.rc)
+      {
+        case ELIB_EMALLOCFAILED :
+          retrievestate.ret.code = ENG_NOMEMORY;
+          break;
+
+        case ELIB_ECONREFUSED :
+        case ELIB_ECONFAILED :
+
+          retrievestate.ret.code = ENG_POPCONNECTFAIL;
+          break;
+
+        case ELIB_EINVALIDUSERNAME :
+        case ELIB_EINVALIDPASSWORD :
+
+          retrievestate.ret.code = ENG_AUTHORISATIONFAILED;
+          break;
+
+        default :
+          retrievestate.ret.code = ENG_GETMSGFAILED;
+      }
+
       (*callbacklist.getmsgfunc)(&retrievestate.ret, msg, callbacklist.getmsghandle);
       break;
 
@@ -452,8 +517,10 @@ void DoRetrieve(void)
     case writefailure :
 
       dprintf(("Eng", "context = writefailure\n"));
+      UnlockFile(retrievestate.ent->fname);
       free(retrievestate.ent->fname);
       retrievestate.ent->fname = 0;
+      msg->flags |= ERROR;
       retrievestate.context = writedone;
 
       break;

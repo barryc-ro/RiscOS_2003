@@ -7,6 +7,7 @@
 #include "Email/Common/bool.h"
 
 #include "DebugLib/DebugLib.h"
+#include "NBLib/NBDefs.h"
 
 #include "Email/Mailbox/SendQ/SendQAccount.h"
 #include "Email/Mailbox/SendQ/SendQMailbox.h"
@@ -38,7 +39,8 @@ void CleanupSend(void)
   remove(sendstate.bodyname);
   dprintf(("Eng", "Removing file %s\n",sendstate.bodyname));
   free(sendstate.bodyname);
-  delete sendstate.rfc;
+  if (sendstate.rfc)
+    delete sendstate.rfc;
   destroy_context(&sendstate.elibcontext);
 
 }
@@ -47,7 +49,7 @@ void CleanupSend(void)
 void SendMessage(void)
 {
 
-  ELib_rcode code;
+  ELib_rcode rc;
   MessageDescriptor *msg = sendstate.msg;
   char *file = SetFilename(msg->ID, true);
   char *reciplist, *sendlist;
@@ -55,11 +57,11 @@ void SendMessage(void)
 
   sendstate.ret.code = ENG_RUNNING;
   dprintf(("Eng", "About to get recipient list\n"));
-  code = sendstate.rfc->GetRecipients(reciplist);
-  if (code < 0)
+  rc = sendstate.rfc->GetRecipients(reciplist);
+  if (rc < 0)
   {
     /* error getting recipient list - default to To header */
-    dprintf(("Eng", "Error getting recipients, rc=%d\n",code));
+    dprintf(("Eng", "Error getting recipients, rc=%d\n",rc));
     sendlist = msg->to;
   }
   else
@@ -69,19 +71,18 @@ void SendMessage(void)
   }
   sendstate.context = idle;
   outbox = (SendQMailbox *) SMTPaccount->GetInbox();
-  code = outbox->AddMessage(file, sendlist, msg->fromaddr);
-  dprintf(("Eng", "Added message to %s, from %s, cc'd to %s, rc=%d\n",msg->to,msg->fromaddr,msg->cc,code));
-  if (code < 0)
+  rc = outbox->AddMessage(file, sendlist, msg->fromaddr);
+  dprintf(("Eng", "Added message to %s, from %s, cc'd to %s, rc=%d\n",msg->to,msg->fromaddr,msg->cc,rc));
+  if (rc < 0)
   {
     /* error adding message to send queue */
-    sendstate.ret.code = ENG_SENDFAILED;
+    sendstate.ret.rc = rc;
   }
 
-  LockFile(file);
-  sendpending = true;
   CleanupSend();
-  delete[] reciplist;
-  if (sendstate.ret.code == ENG_SENDFAILED)
+  if (reciplist)
+    delete[] reciplist;
+  if (sendstate.ret.rc < 0)
   {
     state &= ~SEND;
     sendpending = false;
@@ -89,107 +90,103 @@ void SendMessage(void)
     (*callbacklist.sendfunc)(&sendstate.ret, callbacklist.sendhandle);
   }
     
-  else if ((smtpstatus != acctnonexistent) && (online))
-  {
-    smtpprocessstate.context = readytosend;
-    state |= PROCESSSMTP;
-  }
-
   else
   {
-    state &= ~SEND;
-    sendstate.ret.code = ENG_ADDEDMSG;
-    (*callbacklist.sendfunc)(&sendstate.ret, callbacklist.sendhandle);
-  }
+    LockFile(file);
+    sendpending = true;
+    createstate.msg = 0;
+    if ((smtpstatus != acctnonexistent) && (online))
+    {
+      smtpprocessstate.context = readytosend;
+      state |= PROCESSSMTP;
+    }
 
+    else
+    {
+      state &= ~SEND;
+      sendstate.ret.code = ENG_ADDEDMSG;
+      (*callbacklist.sendfunc)(&sendstate.ret, callbacklist.sendhandle);
+    }
+  }
 }
 
 
-bool AddHeader(headers *hdrs, header *hdr, char *s)
+ELib_rcode AddHeader(headers *hdrs, header *hdr, char *s)
 {
 
-  ELib_rcode code = ELIB_COMPLETED;
+  ELib_rcode rc = ELIB_COMPLETED;
 
   if (s)
-    code = hdr->SetBody(s);
-  if (code >= 0)
+    rc = hdr->SetBody(s);
+  if (rc >= 0)
   {
-    code = hdr->ParseData(sendstate.elibcontext, 0);
-    if (code >= 0)
+    rc = hdr->ParseData(sendstate.elibcontext, 0);
+    if (rc >= 0)
     {
-      code = hdrs->AddHdr(*hdr);
+      rc = hdrs->AddHdr(*hdr);
     }
   }
 
-  if (code < 0)
+  if (rc < 0)
   {
-    delete hdr;
-    sendstate.context = parsefailure;
-    sendstate.ret.code = (eng_rcode) code;
-    return false;
+    if (hdr)
+      delete hdr;
   }
 
-  return true;
+  return rc;
 
 }
 
 
-void AssembleMessage(MessageDescriptor *msg)
+ELib_rcode AssembleMessage(MessageDescriptor *msg)
 {
 
-  ELib_rcode code;
+  ELib_rcode rc;
 
   MIMEtext *ent = new MIMEtext(true, scrapf, 0, 0, ELIB_CT_TEXT_PLAIN, true);
   if (!ent)
-  {
-    sendstate.context = parsefailure;
-    sendstate.ret.code = ENG_NOMEMORY;
-    return;
-  }
+    return ELIB_EMALLOCFAILED;
 
-  sendstate.ret.code = ENG_COMPLETED;
-  code = ent->ReplaceBody(sendstate.msgbody);
-  if (code < 0)
-  {
-    sendstate.context = parsefailure;
-    sendstate.ret.code = (eng_rcode) code;
-    return;
-  }
+  rc = ent->ReplaceBody(sendstate.msgbody);
+  if (rc < 0)
+    return rc;
 
   to *tohdr = new to(false, 0, 0, 0, true);
   cc *cchdr = new cc(false, 0, 0, 0, true);
   subject *subhdr = new subject(false, 0, 0, 0, true);
   from *fromhdr = new from(false, 0, 0, 0, true);
+  if ((!tohdr) || (!cchdr) || (!subhdr) | (!fromhdr))
+    return ELIB_EMALLOCFAILED;
 
   fromhdr->SetRealName(realname);
   fromhdr->SetAddress(emailaddr);
   rfc822msg *rfc = new rfc822msg(true, 0, 0, 0, true);
   if (!rfc)
-  {
-    sendstate.context = parsefailure;
-    sendstate.ret.code = ENG_NOMEMORY;
-    return;
-  }
+    return ELIB_EMALLOCFAILED;
 
   headers *hdrs = rfc->GetHdrs();
 
-  if (!AddHeader(hdrs, (header *) tohdr, msg->to))
-    return;
+  if ((rc = AddHeader(hdrs, (header *) tohdr, msg->to)) < 0)
+    return rc;
 
-  if (!AddHeader(hdrs, (header *) fromhdr, 0))
-    return;
+  if ((rc = AddHeader(hdrs, (header *) fromhdr, 0)) < 0)
+    return rc;
 
-  if (!AddHeader(hdrs, (header *) cchdr, msg->cc))
-    return;
+  if (msg->cc)
+  {
+    if ((rc = AddHeader(hdrs, (header *) cchdr, msg->cc)) < 0)
+      return rc;
+  }
 
-  if (!AddHeader(hdrs, (header *) subhdr, msg->subject))
-    return;
+  if ((rc = AddHeader(hdrs, (header *) subhdr, msg->subject)) < 0)
+    return rc;
 
   sendstate.file = fopen(SetFilename(msg->ID, true), "w");
   dprintf(("Eng", "File handle for writing out is %d\n",sendstate.file));
   rfc->MergeMIMEentity(ent);
   sendstate.rfc = rfc;
-  sendstate.context = readytowrite;
+  
+  return rc;
 
 }
 
@@ -198,7 +195,6 @@ void DoCreateMessage(void)
 {
 
   ELib_rcode rc;
-  eng_rcode code;
 
   switch (createstate.context)
   {
@@ -223,17 +219,24 @@ void DoCreateMessage(void)
         if (!replyent)
         {
           createstate.context = createfailure;
-          createstate.ret.code = ENG_NOMEMORY;
-          return;
+          createstate.ret.rc = ELIB_EMALLOCFAILED;
         }
 
-        dprintf(("Eng", "About to create reply from object at 0x%x into file %s\n",createstate.reply->elibobj,replyent->fname));
-        createstate.msg->entity_list = replyent;
-        dprintf(("Eng", "Msg is at 0x%x, entitynum=%d, entity list is at 0x%x\n",createstate.msg,createstate.msg->entity_num,createstate.msg->entity_list));
-        rc = createstate.reply->elibobj->CreateReply(createstate.replyobj, replyent->fname, true);
-        dprintf(("Eng", "Creating reply in %s, rc=%d\n",replyent->fname,rc));
-        
-        createstate.context = readytoparse;
+        else
+        {
+          dprintf(("Eng", "About to create reply from object at 0x%x into file %s\n",createstate.orig->elibobj,replyent->fname));
+          createstate.msg->entity_list = replyent;
+          dprintf(("Eng", "Msg is at 0x%x, entitynum=%d, entity list is at 0x%x\n",createstate.msg,createstate.msg->entity_num,createstate.msg->entity_list));
+          rc = createstate.orig->elibobj->CreateReply(createstate.replyobj, replyent->fname, true);
+          dprintf(("Eng", "Creating reply in %s, rc=%d\n",replyent->fname,rc));
+          if (rc < 0)
+          {
+            createstate.context = createfailure;
+            createstate.ret.rc = rc;
+          }
+          else
+            createstate.context = readytoparse;
+        }
       }
 
       break;
@@ -243,25 +246,36 @@ void DoCreateMessage(void)
       headers *hdrs = createstate.replyobj->GetHdrs();
       dprintf(("Eng", "Create context is readytoparse\n"));
 
-      if ((code = GetHeader(&createstate.msg->to, hdrs, ELIB_HDR_TO)) == ENG_NOMEMORY)
-        createstate.ret.code = code;
-      else if (code >= 0)
-        dprintf(("Eng", "To = %s\n",createstate.msg->to));
-
-      if ((code = GetHeader(&createstate.msg->subject, hdrs, ELIB_HDR_SUBJECT)) < 0)
-      {
-        createstate.context = createfailure;
-        createstate.ret.code = code;
-      }
+      if ((rc = GetHeader(&createstate.msg->to, hdrs, ELIB_HDR_TO)) < 0)
+        createstate.ret.rc = rc;
       else
-        dprintf(("Eng", "Subject = %s\n",(createstate.msg->subject) ? createstate.msg->subject : "none"));
+      {
+        dprintf(("Eng", "To = %s\n",createstate.msg->to));
+        if ((rc = GetHeader(&createstate.msg->subject, hdrs, ELIB_HDR_SUBJECT)) < 0)
+          createstate.ret.rc = rc;
+        else
+          dprintf(("Eng", "Subject = %s\n",(createstate.msg->subject) ? createstate.msg->subject : "none"));
+      }
+
+      if (createstate.ret.rc < 0)
+        createstate.context = createfailure;
+      else
+      {
         dprintf(("Eng", "Calling back UI with new message %d\n",createstate.msg->ID));
         createstate.ret.code = ENG_COMPLETED;
         (*callbacklist.createfunc)(&createstate.ret, createstate.msg, callbacklist.createhandle);
-      state &= ~REPLY;
+        state &= ~REPLY;
+      }
 
       break;
     }
+    case createfailure :
+      
+      /************************************
+      *** ATTENTION
+      ************************************/
+      /* need some code here */
+      break;
   }
 
 }
@@ -271,25 +285,31 @@ void DoSend(void)
 {
 
   MessageDescriptor *msg = sendstate.msg;
-  ELib_rcode code;
+  ELib_rcode rc;
 
   switch (sendstate.context)
   {
     case readytoparse :
 
       dprintf(("Eng", "Send context is readytoparse\n"));
-      if ((code = new_context(&sendstate.elibcontext)) < 0)
+      if ((rc = new_context(&sendstate.elibcontext)) < 0)
       {
         /* error setting up context */
-        dprintf(("Eng", "***ERROR*** Error setting up context, code=%d\n",code));
+        dprintf(("Eng", "***ERROR*** Error setting up context, code=%d\n",rc));
         sendstate.context = parsefailure;
-        sendstate.ret.code = (eng_rcode) code;
+        sendstate.ret.rc = rc;
       }
       else
       {
         uint32 len = GetFileLength(sendstate.bodyname);
         sendstate.msgbody = new body(true, sendstate.bodyname, 0, len, ELIB_TE_NONE, true);
-        sendstate.context = readytoencode;
+        if (!sendstate.msgbody)
+        {
+          sendstate.context = parsefailure;
+          sendstate.ret.rc = ELIB_EMALLOCFAILED;
+        }
+        else
+          sendstate.context = readytoencode;
       }
 
       break;
@@ -309,14 +329,14 @@ void DoSend(void)
 
       dprintf(("Eng", "Send context is readytoencode\n"));
 //      code = sendstate.msgbody->ApplyEncoding(sendstate.elibcontext, clock() + 25, ELIB_TE_QUOTED_PRINTABLE, scrapf1, 0x1000);
-      code = sendstate.msgbody->ParseData(sendstate.elibcontext, clock() + 25);
-      if (code < 0)
+      rc = sendstate.msgbody->ParseData(sendstate.elibcontext, clock() + 25);
+      if (rc < 0)
       {
-        dprintf(("Eng", "***ERROR*** Parsefailure rc=%d\n",code));
+        dprintf(("Eng", "***ERROR*** Parsefailure rc=%d\n",rc));
         sendstate.context = parsefailure;
-        sendstate.ret.code = (eng_rcode) code;
+        sendstate.ret.rc = rc;
       }
-      else if (code != ELIB_RUNNING)
+      else if (rc != ELIB_RUNNING)
         sendstate.context = encoded;
 
       break;
@@ -324,21 +344,29 @@ void DoSend(void)
     case encoded :
 
       dprintf(("Eng", "Send context is encoded\n"));
-      AssembleMessage(msg);
+      rc = AssembleMessage(msg);
+      if (rc >= 0)
+        sendstate.context = readytowrite;
+      else
+      {
+        sendstate.ret.rc = rc;
+        sendstate.context = parsefailure;
+      }
+
       break;
 
     case readytowrite :
 
       dprintf(("Eng", "Send context is readytowrite\n"));
 //      code = sendstate.rfc->WriteOut(sendstate.elibcontext, clock() + 25, sendstate.file);
-      code = sendstate.rfc->WriteOut(sendstate.elibcontext, clock() + 25, sendstate.file, ELIB_TE_7BIT);
+      rc = sendstate.rfc->WriteOut(sendstate.elibcontext, clock() + 25, sendstate.file, ELIB_TE_7BIT);
       dprintf(("Eng", "Writing out file\n"));
-      if (code < 0)
+      if (rc < 0)
       {
         sendstate.context = parsefailure;
-        sendstate.ret.code = (eng_rcode) code;
+        sendstate.ret.rc = rc;
       }
-      else if (code != ELIB_RUNNING)
+      else if (rc != ELIB_RUNNING)
         sendstate.context = writedone;
 
     case writedone :
@@ -351,6 +379,29 @@ void DoSend(void)
       SendMessage();
 
       break;
+  }
+
+}
+
+
+void ConfirmSend(bool conf, void *h)
+{
+
+  NB_UNUSED(h);
+  if (conf)
+  {
+    /************************************
+    *** ATTENTION
+    ************************************/
+    /* User has confirmed he wants to send mail */
+  }
+
+  else
+  {
+    /************************************
+    *** ATTENTION
+    ************************************/
+    /* user has rejected mail - restart PreQuit sequence */
   }
 
 }
