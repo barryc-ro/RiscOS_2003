@@ -91,7 +91,7 @@ TARGET_OBJS_P_V = $(PPSTUB) $(AUTOSYNC_STUB) $(IOP_V)
 # Local Flags
 #DFLAGS  = -3/32bit
 DFLAGS  = -DPODULEBASED #-DDEBUG #-DAPP
-CFLAGS  = -depend !Depend -zps -zM -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS)
+CFLAGS  = -depend !Depend -ff -zps -zM -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS)
 #CFLAGS  = -zps1 -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS)
 AFLAGS  = -LI $(A_DBG_FLAGS)
 #LFLAGS  = -map -ERRORS LINK.ERR -o $(TNAME) -via link/cmd 
