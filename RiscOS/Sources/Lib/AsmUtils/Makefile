@@ -64,13 +64,13 @@ SOURCE     =
 EXPORTS    = 
 
 OBJS=   o.callbacks o.sixtyfour o.heapswis o.rminfo o.irqs \
-        o.osvarlen o.muldiv o.modulefp o.fpsr
+        o.osvarlen o.muldiv o.modulefp o.fpsr o.escape
 
 OBJSZ=  oz.callbacks oz.sixtyfour oz.heapswis oz.rminfo oz.irqs \
-        oz.osvarlen oz.muldiv oz.modulefp oz.fpsr
+        oz.osvarlen oz.muldiv oz.modulefp oz.fpsr oz.escape
 
 HDRS=   h.callbacks h.sixtyfour h.heapswis h.rminfo h.irqs \
-        h.osvarlen h.muldiv h.modulefp h.fpsr
+        h.osvarlen h.muldiv h.modulefp h.fpsr h.escape
 
 LIBS = ${TARGET} ${TARGETZ}
 
@@ -115,6 +115,7 @@ export_hdrs: ${HDRS} export_dirs
 	${CP} h.muldiv     ${LIBDIR}.h.muldiv    ${CPFLAGS}
 	${CP} h.modulefp   ${LIBDIR}.h.modulefp  ${CPFLAGS}
 	${CP} h.fpsr       ${LIBDIR}.h.fpsr      ${CPFLAGS}
+	${CP} h.escape     ${LIBDIR}.h.escape    ${CPFLAGS}
 	${CP} VersionNum   ${LIBDIR}.LibVersion  ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
