@@ -50,7 +50,7 @@ $label  BaseAddr
         MACRO
 $label  Disable $temp
         LDRB    $temp, [a1, #UARTCON]
-        BIC     $temp, #UARTEN
+        BIC     $temp, $temp, #UARTEN
         STRB    $temp, [a1, #UARTCON]
         MEND
 
@@ -58,18 +58,18 @@ $label  Disable $temp
         MACRO
 $label  Enable $temp
         LDRB    $temp, [a1, #UARTCON]
-        ORR     $temp, #UARTEN
+        ORR     $temp, $temp, #UARTEN
         STRB    $temp, [a1, #UARTCON]
         MEND
 
 ; Swap the bottom two bits of a word
         MACRO               ;  31 30 29 28 ... 3  2  1  0   C
-$label  2BitSwap    $rn     ;
+$label  TwoBitSwap  $rn     ;
                             ;  x  x  x  x      x  x  1  0
-        MOVS Rn,Rn,ROR#1    ;  0  x  x  x      x  x  x  1   0
-        MOVS Rn,Rn,RRX      ;  0  0  x  x      x  x  x  x   1
-        MOV Rn,Rn,ROR#31    ;  0  x  x  x      x  x  x  0   1
-        ADC Rn,Rn,Rn        ;  x  x  x  x      x  x  0  1   1
+        MOVS $rn,$rn,ROR#1  ;  0  x  x  x      x  x  x  1   0
+        MOVS $rn,$rn,RRX    ;  0  0  x  x      x  x  x  x   1
+        MOV $rn,$rn,ROR#31  ;  0  x  x  x      x  x  x  0   1
+        ADC $rn,$rn,$rn     ;  x  x  x  x      x  x  0  1   1
         MEND
 
 ; int Ports(void)
@@ -123,7 +123,7 @@ HAL_UARTFeatures
 ;   received byte is available (bit 0 of *status will be set).
 ;
 HAL_UARTReceiveByte
-        ENTRY   "v1,v2"
+        Entry   "v1,v2"
         BaseAddr
         MOVS    v2, a2
         LDRNEB  a3, [a1, #UARTINTSTAT]      ; Read int state if retrning status
@@ -139,6 +139,11 @@ HAL_UARTReceiveByte
 HAL_UARTTransmitByte
         BaseAddr
         STRB    a2, [a1, #UARTDR]
+        PHPSEI  a3, a4
+        LDRB    a2, [a1, #UARTINTMASK]      ; Fudgetastic
+        ORR     a2, a2, #TXINT
+        STRB    a2, [a1, #UARTINTMASK]
+        PLP     a3
         MOV     pc, lr
 
 ; int LineStatus(int port)
@@ -175,18 +180,18 @@ HAL_UARTLineStatus_internal
         MOVEQ   a1, #0 :SHL: 0
         MOVNE   a1, #1 :SHL: 0
         TST     a2, #OVERRUN
-        ORRNE   a1, #1 :SHL: 1
+        ORRNE   a1, a1, #1 :SHL: 1
         TST     a2, #PARITY
-        ORRNE   a1, #1 :SHL: 2
+        ORRNE   a1, a1, #1 :SHL: 2
         TST     a2, #FRAME
 
         ; This chip doesn't recognise break conditions...
 
-        ORRNE   a1, #1 :SHL: 3
+        ORRNE   a1, a1, #1 :SHL: 3
         TST     a3, #TXINT
-        ORRNE   a1, #1 :SHL: 5
+        ORRNE   a1, a1, #1 :SHL: 5
         TST     a3, #UTXEINT
-        ORRNE   a1, #1 :SHL: 6
+        ORRNE   a1, a1, #1 :SHL: 6
 
         ; ... nor can it detect errors in the FIFO.
 
@@ -205,18 +210,20 @@ HAL_UARTLineStatus_internal
 ;
 HAL_UARTInterruptEnable
         BaseAddr
+        PHPSEI  ip, a4
         LDRB    a4, [a1, #UARTINTMASK]
 
         ; Swap bottom two bits
-        2BitSwap    a4
+        TwoBitSwap  a4
 
         AND     a3, a4, a3
         EOR     a3, a2, a3
 
         ; Swap bottom two bits
-        2BitSwap    a3
+        TwoBitSwap  a3
 
         STRB    a3, [a1, #UARTINTMASK]
+        PLP     ip
         MOV     a1, a4
         MOV     pc, lr
 
@@ -230,19 +237,27 @@ HAL_UARTRate
         BaseAddr
         LDRB    a3, [a1, #L_UBRLCR]    ; Read the current baud rate
         LDRB    a4, [a1, #M_UBRLCR]
-        LDR     v1, =UART_Crystal16
-        ADD     a3, a3, a4, LSL#8
+        LDR     v1, =UARTCLK
+        ADD     a3, a3, a4
+        ADD     a3, a3, #1
+        MOV     a3, a3, LSL #4
         MUL     a3, v1, a3              ; a3 now contains baud rate * 16
         CMN     a2, #1                 ; Don't write if we're reading!
         BEQ     %FT10
 
+; We need to program 3.6864MHz / (16 * baud rate) - 1
+
         DivRem  a4, v1, a2, lr
         CMP     v1, a2, LSR#1           ; If the remainder is greater than 1/2
-        ADDGE   a4, a4, #1              ; the divisor, increment the result
-        Disable a2
+        SUBLT   a4, a4, #1              ; the divisor, don't subtract the 1
+        Disable a2                      ; to make it round up
         STRB    a4, [a1, #L_UBRLCR]
         MOV     a4, a4, LSR#8
         STRB    a4, [a1, #M_UBRLCR]
+        PHPSEI  , a4
+        LDRB    a4, [a1, #H_UBRLCR]
+        STRB    a4, [a1, #H_UBRLCR]     ; Kick this register to relatch M+L
+        PLP
         Enable  a2
 
 10      MOV     a3, a1                  ; Return previous state
@@ -340,16 +355,16 @@ HAL_UARTFIFOClear
 ;
 HAL_UARTFIFOEnable
         BaseAddr
-        LDRB    a2, [a1, #H_UBRLCR]
+        LDRB    a3, [a1, #H_UBRLCR]
         CMP     a2, #0
         BLT     %FT10
-        BICEQ   a3, a2, #FIFOEN
-        ORREQ   a3, a2, #FIFOEN
+        BICEQ   a3, a3, #FIFOEN
+        ORRNE   a3, a3, #FIFOEN
         Disable a4
         STRB    a3, [a1, #H_UBRLCR]
         Enable  a4
 
-10      TST     a2, #FIFOEN
+10      TST     a3, #FIFOEN
         MOVEQ   a1, #0
         MOVNE   a1, #1
         MOV     pc, lr
@@ -383,26 +398,36 @@ HAL_UARTFIFOThreshold
 ;
 HAL_UARTInterruptID
         BaseAddr
-        LDRB    a1, [a1, #UARTINTSTAT]
+        LDRB    a4, [a1, #UARTINTSTAT]
+        LDRB    a3, [a1, #UARTINTMASK]
+        AND     a4, a4, a3
 
-        TST     a1, #RXERRINT
+        TST     a4, #RXERRINT
         MOVNE   a1, #3
-        MOVNE   lr, pc
+        MOVNE   pc, lr
 
-        TST     a1, #RXINT
+        TST     a4, #RXINT
         BEQ     %FT10
-        TST     a1, #URXTINT
+        TST     a4, #URXTINT
         MOVEQ   a1, #2
         MOVNE   a1, #6
-        MOV     lr, pc
+        MOV     pc, lr
 
-10      TST     a1, #TXINT      ; This interrupt is only cleared upon
-        MOVNE   a1, #1          ; filling the transmit fifo more than
-        MOVNE   lr, pc          ; half full.
+10      TST     a4, #TXINT
+        BEQ     %FT20
 
-        TST     a1, #MSINT
+        PHPSEI  a3, a4
+        LDRB    a2, [a1, #UARTINTMASK]          ; this call must clear the interrupt
+        BIC     a2, a2, #TXINT                  ; so we must mask it out temporarily
+        STRB    a2, [a1, #UARTINTMASK]
+        PLP     a3
+
+        MOV     a1, #1
+        MOV     pc, lr
+
+20      TST     a4, #MSINT
         MOVNE   a1, #0
-        MOVNE   lr, pc
+        MOVNE   pc, lr
 
         MOV     a1, #-1
         MOV     pc, lr
@@ -441,13 +466,37 @@ HAL_UARTBreak
 ;
 TVILink_RTS             *   1 :SHL: 5
 TVILink_DTR             *   1 :SHL: 6
+SDB_RTS                 *   1 :SHL: 2
+SDB_DTR                 *   1 :SHL: 3
 
 HAL_UARTModemControl
-        Entry
+        Entry   "v1"
+        BaseAddr
 
+        ; The modem interrupt can take a while to clear.
+        MOV     a4, #MSINT
+        STRB    a4, [a1, #UARTINTCLR]
+        MOV     a4, #&10000                     ; Timeout
+10      LDRB    lr, [a1, #UARTINTSTAT]
+        SUBS    a4, a4, #1
+        TSTNE   lr, #MSINT
+        BNE     %BT10
+
+ [ SDB
+        LDR     ip, AUX_REG_Address
+        PHPSEI  v1, a4
+        LDRB    a4, AUX_REG_SoftCopy
+
+        ; Convert into API format
+        TST     a4, #SDB_DTR
+        MOVEQ   lr, #0
+        MOVNE   lr, #1
+        TST     a4, #SDB_RTS
+        ORRNE   lr, lr, #2
+ |
         ; Read GPIO register containing modem bits
-        LDR     a1, GPIO_BASE_Address
-        LDRB    a4, [a1, #PEDR]
+        LDR     ip, GPIO_BASE_Address
+        LDRB    a4, [ip, #PEDR]
 
         ; Convert into API format
         TST     a4, #TVILink_DTR
@@ -455,18 +504,31 @@ HAL_UARTModemControl
         MOVNE   lr, #1
         TST     a4, #TVILink_RTS
         ORRNE   lr, lr, #2
+ ]
 
         ; Apply the bit switching
         AND     a3, a3, lr
         EOR     a3, a3, a2
 
+ [ SDB
+        ; Convert back into SDB format and write it back
+        BIC     a4, a4, #SDB_RTS:OR:SDB_DTR
+        TST     a3, #1
+        ORRNE   a4, a4, #SDB_DTR
+        TST     a3, #2
+        ORRNE   a4, a4, #SDB_RTS
+        STRB    a4, [ip]
+        STRB    a4, AUX_REG_SoftCopy
+        PLP     v1
+ |
         ; Convert back into TViLink format and write it back
         BIC     a4, a4, #TVILink_RTS:OR:TVILink_DTR
         TST     a3, #1
         ORRNE   a4, a4, #TVILink_DTR
         TST     a3, #2
         ORRNE   a4, a4, #TVILink_RTS
-        STRB    a4, [a1, #PEDR]
+        STRB    a4, [ip, #PEDR]
+ ]
 
         ; Return original value
         MOV     a1, lr
@@ -502,7 +564,6 @@ HAL_UARTModemStatus
         TST     a3, #nDCD
         BIC     a3, a3, #nDCD
         ORRNE   a3, a3, #2_1000
-        EOR     a3, a3, #2_1011                 ; Invert bits
         LDR     a2, UART1_ModemFlags
         STR     a3, UART1_ModemFlags
         ORR     a3, a3, a3, LSL#4
@@ -510,7 +571,9 @@ HAL_UARTModemStatus
         MOV     a4, #&10000                     ; Timeout
 10      LDRB    a2, [a1, #UARTINTSTAT]
         SUBS    a4, a4, #1
-        TSTNE   a2, a2, #MSINT
+        TSTNE   a2, #MSINT
+        BNE     %BT10
+        MOV     a1, a3
 
         MOV     pc, lr
 

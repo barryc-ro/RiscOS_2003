@@ -2621,18 +2621,9 @@ DoTheGrowPagesSpecified
         LDR     r6, [r8, #0]                    ; r6 = page number required
         LDR     lr, [r8, #PageBlockSize+0]      ; lr = page number of replacement page
         TEQ     r6, lr                          ; if the same
-        BNE     %FT21
+        Pull    "r0-r4,r7-r12", EQ              ; then restore registers
+        BEQ     %FT76                           ; and skip copy and first page move
 
-        ; if the same page, we can skip copy and just move needed page to destination
-        ;
-        Pull    "r0-r4,r7-r12"                  ; restore registers
-        LDR     r2, [r8, #0]
-        MOV     r3, r1
-        LDR     r11, DestFlags
-        BL      Call_CAM_Mapping                ; move needed page
-        B       %FT76                           ; and continue
-
-21
         ;mjs
         ; - if the old page is currently mapped in, copy normally
         ; - if the old page is not mapped in, copy via temporary mapping
@@ -2695,20 +2686,19 @@ DoTheGrowPagesSpecified
 74
         Pull    "r0-r4,r7-r12"                  ; restore registers
 
-        ; mjs: old code moved pages in wrong order for MMU, creating a temporary degeneracy
-        ; of two physical pages at same logical address - eg. undefined behaviour for cache writebacks
-        ;
-        ; so do it this way now:
-        ; first, move needed page to destination (nothing there at present)
-        ; this also moves page out of way for moving the replacement page in, see below
-        ;
-        LDR     r2, [r8, #0]
-        MOV     r3, r1
-        LDR     r11, DestFlags
-        BL      Call_CAM_Mapping 
+        ; mjs
+        ; OK, what we are about to do is:
+        ;   1) move replacement page in (to replace needed page)
+        ;   2) move needed page to required destination
+        ; This order means that we don't leave a temporary hole at the logical address we're substituting,
+        ; which is vital at least in the horrendous case where the logical page is itself used for L2PT.
+        ; However, this means there is a potential temporary degeneracy in the caches, two physical pages
+        ; having been seen at the same logical address (undefined behaviour).
+        ; So, to be safe, we do a MMUChangingEntry first, for the logical page, which will clean/invalidate
+        ; caches and invalidate TLBs, to avoid degeneracy. This is slight overkill in some cases, but vital
+        ; to avoid serious grief in the awkward cases. Fortunately, these page substitutions are relatively
+        ; rare, so performance is not critical.
 
-        ; next, move replacement page in
-        ;
         MOV     lr, #0
         LDR     lr, [lr, #CamEntriesPointer]    ; lr -> soft cam map
         ADD     lr, lr, #4                      ; point at PPLs, not addresses
@@ -2718,9 +2708,20 @@ DoTheGrowPagesSpecified
 
         ADD     lr, r8, #PageBlockSize
         LDMIA   lr, {r2, r3}                    ; get page number, logical address
-        BL      Call_CAM_Mapping
 
+        Push    "r0, r4"
+        MOV     r0, r3
+        MOV     r4, #0
+        ARMop   MMU_ChangingEntry,,,r4
+        Pull    "r0, r4"
+
+        BL      Call_CAM_Mapping                ; move replacement page in
 76
+        LDR     r2, [r8, #0]
+        MOV     r3, r1
+        LDR     r11, DestFlags
+        BL      Call_CAM_Mapping                ; move needed page to destination
+
         LDR     lr, SavedPSR
         MSR     CPSR_cf, lr
 
