@@ -106,6 +106,10 @@ ${APP}: ${OBJS}
 o.error:	c.error
 o.error:	C:h.kernel
 o.error:	h.constants
+o.sc:	c.sc
+o.sc:	C:h.kernel
+o.sc:	C:h.swis
+o.sc:	C:h.scinter
 o.main:	c.main
 o.main:	C:h.kernel
 o.main:	C:h.swis
@@ -120,7 +124,3 @@ o.support:	c.support
 o.support:	C:h.kernel
 o.support:	C:h.swis
 o.support:	h.constants
-o.sc:	c.sc
-o.sc:	C:h.kernel
-o.sc:	C:h.swis
-o.sc:	C:h.scinter
