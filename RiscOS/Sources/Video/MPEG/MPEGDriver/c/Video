@@ -38,6 +38,10 @@ Date		Who	Change
 28/01/2000	BJGA	Implemented ReadParameters 4 and 5 - allows OVS to work!
 09/02/2000	BJGA	Changed stream initialisation as per new frame buffer
 			allocation algorithm
+17/02/2000	BJGA	MPEG video is now blanked on CloseStream; first frame is
+			decoded into framebuffer 2 if framebuffer 1 is being displayed
+			(important now that blanking on ResetStream has been disabled);
+			support added for deferred SetSpeed calls
 
 ***************************************************************************/
 
@@ -123,10 +127,10 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.video.since_open.slows = 0;
   Stream.video.since_open.fasts = 0;
   Stream.video.since_open.stalls = 0;
-  Stream.video.since_open.underruns = 0;
   Stream.video.since_open.picture_decode_errors = 0;
   Stream.video.since_open.severe_errors = 0;
   Stream.video.since_open.pipeline_errors = 0;
+  Stream.video.since_open.underruns = 0;
   
   /* Initialise the new stream */
   e = static_VideoStart ();
@@ -251,6 +255,9 @@ _kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
   
   /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
   static_VideoStop (Stream.video.speed_indicator == 1 && Stream.video.state == stream_open);
+  
+  /* We now only blank the video output on CloseStream, not on ResetStream */
+  VID_DCF_0 &= ~ VID_DCF_EVD;
   return e;
 }
 
@@ -292,12 +299,20 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, stream_handle_t vsh, uns
   dprintf (("Video", "SWISetSpeed\n"));
   
   if (irqs_were_enabled) _kernel_irqs_off ();
+  /* The next time we stall, this is unconditionally the speed that should be asserted */
+  Stream.video.deferred_speed_indicator = speed;
+  /* Coming out of pause requires a little trickery */
   if (Stream.video.speed_indicator == 0 && speed != 0)
   {
-    /* Coming out of pause requires a little trickery */
     Stream.fields_till_next_AU = (Stream.fields_till_next_AU & 1) + (2 * speed); /* maintain odd/evenness */
   }
-  Stream.video.speed_indicator = speed;
+  /* If defer flag is clear, or if we're moving to a faster speed, we can switch immediately */
+  if ((flags & SetSpeedFlags_DeferSetSpeed) == 0 ||
+      (speed < Stream.video.deferred_speed_indicator && speed != 0) ||
+      Stream.video.deferred_speed_indicator == 0)
+  {
+    Stream.video.speed_indicator = speed;
+  }
   if (irqs_were_enabled) _kernel_irqs_on ();
   
   return e;
@@ -516,10 +531,10 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.video.since_reset.slows = 0;
   Stream.video.since_reset.fasts = 0;
   Stream.video.since_reset.stalls = 0;
-  Stream.video.since_reset.underruns = 0;
   Stream.video.since_reset.picture_decode_errors = 0;
   Stream.video.since_reset.severe_errors = 0;
   Stream.video.since_reset.pipeline_errors = 0;
+  Stream.video.since_reset.underruns = 0;
   Stream.prev_picture_structure = ps_frame_picture;
   Stream.current_picture_structure = ps_frame_picture_extension; /* magic value should start off all types of clips correctly */
   Stream.vid_flags.default_intra_quantizer_matrix_loaded = false;
@@ -543,7 +558,14 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.unused_frames->decode_link->decode_link->decode_link = &(Stream.frame[3]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link = &(Stream.frame[4]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link->decode_link = NULL;
-  Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_1_START/256;
+  if ((VID_DFP & 0x3FFF) == SDRAM_FRAME_BUFFER_1_START/256)
+  {
+    Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_2_START/256; /* only start decoding into frame 1 if we're sure we're not currently displaying it */
+  }
+  else
+  {
+    Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_1_START/256;
+  }
   Stream.next_B_frame_buffer = SDRAM_FRAME_BUFFER_4_START/256;
   
   /* Claim interrupts */

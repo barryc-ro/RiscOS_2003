@@ -89,6 +89,14 @@ Date		Who	Change
 			(fix for 3520 bug) even though the possibility of us needing
 			three buffers simultaneously for anchor frames means that we
 			now need five frame buffers in total!!
+17/02/2000	BJGA	Counts audio CRC errors and PCM output buffer underflows;
+			for added resilience to bitstream errors, any pictures with
+			illegal picture_coding_types, and all pictures immediately
+			following a GOP header, are interpreted as I-pictures;
+			picture_coding_type is set to I-picture before initial sequence
+			header search, to prevent corruption of the 3520 B-frame
+			pointers during the now unblanked ResetStream interval;
+			implemented deferred SetSpeed calls
 
 ***************************************************************************/
 
@@ -137,7 +145,8 @@ static void static_INT_PER (void);
 static void static_INT_SER (void);
 static void static_INT_PDE (void);
 static void static_INT_VHR (void);
-static void static_INT_SFC (void);
+static void static_INT_CRC (void);
+static void static_INT_POU (void);
 static void static_INT_FNP (void);
 static void static_ProcessVideoHdr (void *argument);
 static void static_NewPictureDecode (void);
@@ -313,17 +322,17 @@ void IRQ_HandleAudioIRQ (void)
   {
     audio_ints = AUD_ITR;
 //    dprintf (("IRQ", "IRQ_HandleAudioIRQ: AUD_ITR before masking = %04X\n", audio_ints));
-    audio_ints  &= AUD_ITM;
+    audio_ints &= AUD_ITM;
     
     if (audio_ints != 0)  /* quick reject if no audio interrupts */
     {
 /*    if (audio_ints & AUDIO_INT_CSS) static_INT_CSS ();*/
       if (audio_ints & AUDIO_INT_VHR) static_INT_VHR ();
 /*    if (audio_ints & AUDIO_INT_VPR) static_INT_VPR ();*/
-/*    if (audio_ints & AUDIO_INT_CRC) static_INT_CRC ();*/
+      if (audio_ints & AUDIO_INT_CRC) static_INT_CRC ();
 /*    if (audio_ints & AUDIO_INT_ADF) static_INT_ADF ();*/
-/*    if (audio_ints & AUDIO_INT_POU) static_INT_POU ();*/
-      if (audio_ints & AUDIO_INT_SFC) static_INT_SFC ();
+      if (audio_ints & AUDIO_INT_POU) static_INT_POU ();
+/*    if (audio_ints & AUDIO_INT_SFC) static_INT_SFC ();*/
 /*    if (audio_ints & AUDIO_INT_DCH) static_INT_DCH ();*/
 /*    if (audio_ints & AUDIO_INT_IFT) static_INT_IFT ();*/
 /*    if (audio_ints & AUDIO_INT_IFF) static_INT_IFF ();*/
@@ -415,6 +424,7 @@ _kernel_oserror *IRQ_EnableVideoPrefillIRQs (void)
     /* Enable appropriate interrupts (BBE is deferred until we've parsed the first headers, PSD until we enable decoding) */
     WRITE_VID_ITM(VID_ITM | VIDEO_INT_SCH | VIDEO_INT_BBF | VIDEO_INT_PER | VIDEO_INT_PID | VIDEO_INT_SER | VIDEO_INT_PDE);
     VID_CTL &= ~VID_CTL_EDC;              /* don't start decoding the first frame until we've reached buffer threshold */
+    VID_PPR1 = I_PICTURE << 4;            /* make sure we don't scramble the internal B-frame pointers in the next instruction - fixes occasional glitches on stream boundaries */
     VID_TIS = VID_TIS_FIS | VID_TIS_EXE;  /* kick off the sequence header search */
   }
   
@@ -491,18 +501,16 @@ _kernel_oserror *IRQ_EnableAudioPrefillIRQs (void)
   
   if (!e)
   {
+    /* Assume a 44.1 kHz sample rate unless told otherwise */
+    STi3520L_SetPCMClock (sr_44k1, false, false);
+    
     /* Enable nINT6 in IOMD */
     if (irqs_were_enabled) _kernel_irqs_off ();
     * (volatile unsigned char *) (IOC + IOCIRQMSKB) |= IOMDr_MPEGAudio_IRQ_bit;
     if (irqs_were_enabled) _kernel_irqs_on ();
     
     /* Enable appropriate interrupts */
-    AUD_ITM_8 |= AUDIO_INT_SFC>>8;
-    AUD_ITM_0 |= AUDIO_INT_VHR>>0;
-    AUD_ITM_8 |= AUDIO_INT_FNP>>8;
-    
-    /* Assume a 44.1 kHz sample rate unless told otherwise */
-    STi3520L_SetPCMClock (sr_44k1, false, false);
+    WRITE_AUD_ITM(AUDIO_INT_VHR | AUDIO_INT_CRC | AUDIO_INT_POU | AUDIO_INT_FNP);
   }
   
   return e;
@@ -724,6 +732,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
         Stream.fields_till_next_AU = 2;
         if (Stream.current_picture_structure == ps_second_field_picture) /* ie first decode within the PU */ Stream.field_to_trigger_second_decode_on += 2;
         if (Stream.video.state == stream_closing) Stream.vid_flags.stalled_while_closing = true;
+        Stream.video.speed_indicator = Stream.video.deferred_speed_indicator; /* may start slow-mo at this point */
         if ((VID_VBL & 0x3FFF) >= (VID_VBT & 0x3FFF))
         {
           /* The pipeline has stalled, but there's plenty of data in the buffer. */
@@ -972,6 +981,8 @@ static void static_INT_VHR (void)
   
   /* If sample rate has changed, or if this is the first header, set up PCMCLK */
   /* Also mute for an audio frame, so as to mask the transitional glitch - but not on the first header! */
+  /* Note that we are unable to use audio interrupt SFC for this purpose, it's as good as useless because */
+  /* the 3520 doesn't reset its internal copy of the latest sampling frequency on any software resets! */
   if ((sample_rate) Stream.audio_header.fields.sampling_frequency != old_sampling_frequency || !Stream.aud_flags.first_header_received)
   {
     STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, false, false);
@@ -999,17 +1010,32 @@ static void static_INT_VHR (void)
   Stream.aud_flags.first_header_received = true;
 }
 
-/******	static_INT_SFC() ***************************************************
+/******	static_INT_CRC() ***************************************************
 
-Purpose:	Handles Sampling Frequency Changed audio IRQ
+Purpose:	Handles CRC error detected audio IRQ
 Notes:		This is enabled throughout prefill and normal play.
 
 ***************************************************************************/
 
-static void static_INT_SFC (void)
+static void static_INT_CRC (void)
 {
-  dprintf (("IRQ", "INT_SFC\n"));
-  /* The 3520 doesn't reset its internal copy of the latest sampling frequency on any software resets, so this interrupt is as good as useless! */
+  dprintf (("IRQ", "INT_CRC\n"));
+  Stream.audio.since_open.crc_errors += 1;
+  Stream.audio.since_reset.crc_errors += 1;
+}
+
+/******	static_INT_POU() ***************************************************
+
+Purpose:	Handles PCM Output buffer Underflow audio IRQ
+Notes:		This is enabled throughout prefill and normal play.
+
+***************************************************************************/
+
+static void static_INT_POU (void)
+{
+  dprintf (("IRQ", "INT_POU\n"));
+  Stream.audio.since_open.underruns += 1;
+  Stream.audio.since_reset.underruns += 1;
 }
 
 /******	static_INT_FNP() ***************************************************
@@ -1191,7 +1217,7 @@ static void static_ProcessVideoSequenceHdr (void)
   Stream.decode_frames->seq.chroma_format = 1;                 /* MPEG-1 only uses 4:2:0 */
   Stream.decode_frames->seq.low_delay = false;                 /* typically */
   Stream.decode_frames->seq.video_format = 5;                  /* unspecified */
-  Stream.decode_frames->seq.color_primaries = 1;               /* ITU-R BT.709 */
+  Stream.decode_frames->seq.colour_primaries = 1;              /* ITU-R BT.709 */
   Stream.decode_frames->seq.transfer_characteristics = 1;      /* ITU-R BT.709 */
   Stream.decode_frames->seq.matrix_coefficients = 1;           /* ITU-R BT.709 */
 }
@@ -1235,7 +1261,7 @@ static void static_ProcessVideoSequenceDisplayExt (void)
   Stream.decode_frames->seq.video_format = static_GetVideoHdrBits (3);
   if (static_GetVideoHdrBits (1) == 1)
   {
-    Stream.decode_frames->seq.color_primaries = static_GetVideoHdrBits (8);
+    Stream.decode_frames->seq.colour_primaries = static_GetVideoHdrBits (8);
     Stream.decode_frames->seq.transfer_characteristics = static_GetVideoHdrBits (8);
     Stream.decode_frames->seq.matrix_coefficients = static_GetVideoHdrBits (8);
   }
@@ -1278,13 +1304,19 @@ static void static_ProcessVideoPictureHdr (void)
     if (!Stream.vid_flags.sequence_header_received_since_picture_header) Stream.decode_frames->seq = Stream.decode_frames->decode_link->seq;
     if (!Stream.vid_flags.gop_header_received_since_picture_header) Stream.decode_frames->gop = Stream.decode_frames->decode_link->gop;
   }
-  /* Set decoding state flags */
-  Stream.last_video_header_layer_decoded = lvhld_picture;
-  Stream.vid_flags.sequence_header_received_since_picture_header = false;
-  Stream.vid_flags.gop_header_received_since_picture_header = false;
   
   Stream.decode_frames->temporal_reference = static_GetVideoHdrBits (10);
-  Stream.decode_frames->lastpic->picture_coding_type = static_GetVideoHdrBits (3);
+  if (Stream.vid_flags.gop_header_received_since_picture_header)
+  {
+    /* MPEG requires that the first picture after a GOP header is intra coded */
+    /* Forcing this to be the case gives us better error resilience */
+    Stream.decode_frames->lastpic->picture_coding_type = I_PICTURE;
+    static_GetVideoHdrBits (3); /* discard 3 bits */
+  }
+  else
+  {
+    Stream.decode_frames->lastpic->picture_coding_type = static_GetVideoHdrBits (3);
+  }
   Stream.decode_frames->lastpic->vbv_delay = static_GetVideoHdrBits (16);
   if (Stream.decode_frames->lastpic->picture_coding_type == P_PICTURE ||
       Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE)
@@ -1398,7 +1430,7 @@ static void static_ProcessVideoPictureHdr (void)
   {
     frame_t *frame = Stream.display_frames;
     int items = 0;
-    const char *coding_names = " IPB";
+    const char *coding_names = "0IPB4567";
     dprintf (("IRQ", "ProcessVideoPictureHdr: display frames list = "));
     while (frame != NULL)
     {
@@ -1409,6 +1441,11 @@ static void static_ProcessVideoPictureHdr (void)
   }
   dprintf (("IRQ", "\n"));
 #endif
+  
+  /* Set decoding state flags */
+  Stream.last_video_header_layer_decoded = lvhld_picture;
+  Stream.vid_flags.sequence_header_received_since_picture_header = false;
+  Stream.vid_flags.gop_header_received_since_picture_header = false;
 }
 
 /******	static_ProcessVideoPictureCodingExt() ******************************
@@ -1797,6 +1834,7 @@ static void static_PerhapsWriteNewInstruction (void)
   bool time_to_write_instruction = false;
   bool use_FIS_bit = false;
   dprintf (("IRQ", "PerhapsWriteNewInstruction\n"));
+  dprintf (("IRQ", "PerhapsWriteNewInstruction: VBL = %d bytes, VBT = %d bytes\n", (VID_VBL & 0x3FFF) * 256, (VID_VBT & 0x3FFF) * 256));
   if (Stream.vid_flags.next_frames_headers_have_been_decoded &&
       Stream.vid_flags.this_frames_data_have_been_decoded &&
       (VID_VBL & 0x3FFF) >= (VID_VBT & 0x3FFF))
@@ -1917,7 +1955,7 @@ static void static_SetUpDisplayForNewAU (void)
 // PAL
         WRITE_VID_XDS(112+actual_display_width+6-1);
       }
-      WRITE_VID_DCF(VID_DCF | VID_DCF_EVD);
+      VID_DCF_0 |= VID_DCF_EVD>>0;
       WRITE_VID_DFP(Stream.display_frames->frame_buffer);
       /* Set state flags/variables */
       Stream.fields_into_this_PU = -1; /* start an incrementing count of how many fields the frame has been displayed for */
@@ -1955,6 +1993,7 @@ In:		Whether to set the FIS bit, to cause the instruction to be executed immedia
 
 static void static_WriteDecodeInstruction (bool FIS)
 {
+  unsigned char picture_coding_type;
   dprintf (("IRQ", "WriteDecodeInstruction%s\n", FIS ? ", FIS" : ""));
   /* debug-only code for stopping decode after a fixed number of pictures
   {
@@ -1971,9 +2010,13 @@ static void static_WriteDecodeInstruction (bool FIS)
   /* (Otherwise the 3520's internal B-frame pointers can be corrupted when the sequence header search is launched for the next stream.) */
   WRITE_VID_RFP(Stream.decode_frames->frame_buffer);
   
+  /* Attempt at bitstream error resilience: if picture_coding_type is an illegal value, assume it's really an I-picture */
+  picture_coding_type = Stream.decode_frames->lastpic->picture_coding_type;
+  if (picture_coding_type < I_PICTURE || picture_coding_type > B_PICTURE) picture_coding_type = I_PICTURE;
+  
   VID_PFH = (Stream.decode_frames->lastpic->backward_horizontal_f_code << 4) | Stream.decode_frames->lastpic->forward_horizontal_f_code;
   VID_PFV = (Stream.decode_frames->lastpic->backward_vertical_f_code << 4) | Stream.decode_frames->lastpic->forward_vertical_f_code;
-  VID_PPR1 = (Stream.decode_frames->lastpic->picture_coding_type << 4) | (Stream.decode_frames->lastpic->intra_dc_precision << 2) | Stream.decode_frames->lastpic->picture_structure;
+  VID_PPR1 = (picture_coding_type << 4) | (Stream.decode_frames->lastpic->intra_dc_precision << 2) | Stream.decode_frames->lastpic->picture_structure;
   VID_PPR2 = Stream.decode_frames->lastpic->picture_flags.byte;
   VID_TIS = (Stream.decode_frames->seq.mpeg2 ? VID_TIS_MP2 : 0) | ((Stream.next_picture_structure != ps_frame_picture || FIS) ? 0 : VID_TIS_RPT) | (FIS ? VID_TIS_FIS : 0) | VID_TIS_EXE;
   Stream.vid_flags.last_instruction_was_a_decode = true;
