@@ -209,6 +209,7 @@ OBJS = \
  o.Mouse		\
  o.Object		\
  o.OpenURL		\
+ o.PlugIn		\
  o.Printing		\
  o.PrintStyle		\
  o.Protocols		\
@@ -258,6 +259,7 @@ OBJSZ = \
  oz.Mouse		\
  oz.Object		\
  oz.OpenURL		\
+ oz.PlugIn		\
  oz.Printing		\
  oz.PrintStyle		\
  oz.Protocols		\
@@ -307,6 +309,7 @@ OBJSD = \
  od.Mouse		\
  od.Object		\
  od.OpenURL		\
+ od.PlugIn		\
  od.Printing		\
  od.PrintStyle		\
  od.Protocols		\
@@ -358,6 +361,7 @@ OBJSDZ = \
  odz.Mouse		\
  odz.Object		\
  odz.OpenURL		\
+ odz.PlugIn		\
  odz.Printing		\
  odz.PrintStyle		\
  odz.Protocols		\
@@ -408,6 +412,7 @@ OBJS_SURF = \
  o_surf.Mouse		\
  o_surf.Object		\
  o_surf.OpenURL		\
+ o_surf.PlugIn		\
  o_surf.Printing	\
  o_surf.PrintStyle	\
  o_surf.Protocols	\
@@ -456,6 +461,7 @@ OBJSD_SURF = \
  od_surf.Mouse		\
  od_surf.Object		\
  od_surf.OpenURL	\
+ od_surf.PlugIn		\
  od_surf.Printing	\
  od_surf.PrintStyle	\
  od_surf.Protocols	\
@@ -507,6 +513,7 @@ OBJS_ITALK = \
  o_italk.Mouse		\
  o_italk.Object		\
  o_italk.OpenURL	\
+ o_italk.PlugIn		\
  o_italk.Printing	\
  o_italk.PrintStyle	\
  o_italk.Protocols	\
@@ -556,6 +563,7 @@ OBJSD_ITALK = \
  od_italk.Mouse		\
  od_italk.Object	\
  od_italk.OpenURL	\
+ od_italk.PlugIn	\
  od_italk.Printing	\
  od_italk.PrintStyle	\
  od_italk.Protocols	\
@@ -737,7 +745,7 @@ o.dirs:
 	@${MKDIR} syms
 	@${MKDIR} Targets
 	@${MKDIR} Targets.Argonet
-	@${MKDIR} Targets.Argonet.!Voyager
+	@${MKDIR} Targets.Argonet.!VoyBrowse
 	@${MKDIR} Targets.Browse
 	@${MKDIR} Targets.Browse.!Browse
 	@${MKDIR} Targets.Intertalk
