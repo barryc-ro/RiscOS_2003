@@ -11,6 +11,8 @@
 # 03-Apr-2000	ADH	Created from Browse Makefile.
 # 28-Apr-2000	ADH	Significant alterations and extensions to support
 #			ROM and RAM module builds, and applications.
+# 06-Sep-2001	ADH	Added ability to build the SGI demo application
+#			variant.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -224,6 +226,29 @@ OBJSPPD = \
  o.ROSLib		\
  o.SetPW
 
+# SGI RAM demo application
+
+OBJSPPS = \
+ opps.Filter		\
+ opps.FromROSLib	\
+ opps.FullScreen	\
+ opps.Global		\
+ opps.Handlers		\
+ opps.Main		\
+ opps.ModeInfo		\
+ opps.Mouse		\
+ opps.Overlay		\
+ opps.Parameters	\
+ opps.Play		\
+ opps.PlugIn		\
+ opps.Protocols		\
+ opps.RMA		\
+ opps.URLutils		\
+ opps.Utils		\
+ o.Fixed		\
+ o.ROSLib		\
+ o.SetPW
+
 # RAM module "PlugPlay"
 
 OBJSPPRZ = \
@@ -300,7 +325,7 @@ OBJSPPZ = \
 # Rule patterns
 #
 
-.SUFFIXES: .o .opp .oppd .oppz .opprz .opprdz .s .c
+.SUFFIXES: .o .opp .oppd .opps .oppz .opprz .opprdz .s .c
 
 .c.opp:;	@echo
 		@echo Compiling $< (application)
@@ -311,6 +336,11 @@ OBJSPPZ = \
 		@echo Compiling $< (debug application)
 		@echo ${PPFLAGSD}
 		@${CC} ${CFLAGS} ${PPFLAGSD}       -c -UROM -DAPPLICATION -g -o $@ $<
+
+.c.opps:;	@echo
+		@echo Compiling $< (application, SGI demo build)
+		@echo ${PPFLAGS} -DSGI
+		@${CC} ${CFLAGS} ${PPFLAGS}        -c -UROM -DAPPLICATION -DSGI -o $@ $<
 
 .c.oppz:;	@echo
 		@echo Compiling $< (ROM module)
@@ -377,6 +407,15 @@ installd: install_common
 	@echo
 	@echo ${COMPONENT}: Debug application installed to ${INSTDIR}
 
+installs: install_common
+	${XWIPE} ${INSTDIR}.Sprites	${WFLAGS}
+	${CP} ${LDIR}.SpritesSGI		${INSTDIR}.Sprites		${CPFLAGS}~n
+	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
+	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
+	${CP} ${LDIR}.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
+	@echo
+	@echo ${COMPONENT}: SGI demo application installed to ${INSTDIR}
+
 install_ram: install_common
 	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
 	${CP} ${LDIR}.RAM.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
@@ -425,6 +464,7 @@ clean:
 	${XWIPE}	oz		${WFLAGS}
 	${XWIPE}	opp		${WFLAGS}
 	${XWIPE}	oppd		${WFLAGS}
+	${XWIPE}	opps		${WFLAGS}
 	${XWIPE}	oppz		${WFLAGS}
 	${XWIPE}	opprz		${WFLAGS}
 	${XWIPE}	opprdz		${WFLAGS}
@@ -449,6 +489,7 @@ ${DIRS}:
 	@${MKDIR} oz
 	@${MKDIR} opp
 	@${MKDIR} oppd
+	@${MKDIR} opps
 	@${MKDIR} oppz
 	@${MKDIR} opprz
 	@${MKDIR} opprdz
@@ -459,6 +500,9 @@ ${DIRS}:
 	@${MKDIR} Targets.PlugPlayRM.!PlugPlay
 	@${MKDIR} Targets.PlugPlayAp
 	@${MKDIR} Targets.PlugPlayAp.!PlugPlay
+	@${MKDIR} Targets.PlugPlaySG
+	@${MKDIR} Targets.PlugPlaySG.!PlugPlay
+	@echo
 	create ${DIRS}
 	stamp  ${DIRS}
 
@@ -499,6 +543,11 @@ abs.!RI_PP: ${OBJSPP} ${LIBS} ${DIRS}
 abs.!RI_PPD: ${OBJSPPD} ${LIBSD} ${DIRS}
 	@echo
 	${LD} -debug -s syms.!RI_PPD -o $@ ${OBJSPPD} ${LIBSD}
+
+abs.!RI_PPS: ${OBJSPPS} ${LIBS} ${DIRS}
+	@echo
+	${LD} -s syms.!RI_PPS -o $@ ${OBJSPPS} ${LIBS}
+	${SQUEEZE} ${SQFLAGS} $@
 
 ${MODULE}: o.ModuleWrap ${OBJSPPRZ} ${LIBSZ} ${CLIB} ${DIRS}
 	@echo

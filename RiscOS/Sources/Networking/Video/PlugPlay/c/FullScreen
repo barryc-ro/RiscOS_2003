@@ -108,6 +108,13 @@ static unsigned int      fullscreen_autodt  = 0;
 static overlay         * fullscreen_ov1     = NULL;
 static overlay         * fullscreen_ov2     = NULL;
 
+/* SGI demo variables */
+
+#ifdef SGI
+  static overlay * fullscreen_sgi_large = NULL;
+  static overlay * fullscreen_sgi_small = NULL;
+#endif
+
 /* Our overlay handle is self-allocated as "FULL" */
 
 static unsigned int fullscreen_overlay_handle = 0x4C4C5546;
@@ -116,6 +123,11 @@ static unsigned int fullscreen_overlay_handle = 0x4C4C5546;
 
 static _kernel_oserror * fullscreen_play_callback            (play_session * s, unsigned int response);
 static const char      * fullscreen_determine_icon           (play_session * s);
+
+static int               fullscreen_overlay_callback         (void * v);
+#ifdef SGI
+  static int             fullscreen_sgi_overlay_callback     (void * v);
+#endif
 
 static int               fullscreen_keypress                 (int eventcode, WimpPollBlock * block, IdBlock * idb, void * handle);
 
@@ -267,7 +279,7 @@ _kernel_oserror * fullscreen_start(const char * url, unsigned int launcher)
     }
   }
 
-  /* Maybe it's a file URL */
+  /* Failing that, try for the URL leaf instead */
 
   else if (!utils_strncasecmp(url, MPEGMethod3, sizeof(MPEGMethod3) - 1))
   {
@@ -287,6 +299,36 @@ _kernel_oserror * fullscreen_start(const char * url, unsigned int launcher)
     }
   }
 
+  /* Failing that, try for the URL leaf instead */
+
+  else if (fullscreen_url->path != NULL)
+  {
+    char * found;
+
+    end = strrchr(fullscreen_url->path, '/');
+
+    if (end != NULL)
+    {
+      end ++;
+      if (*end == '\0') end = NULL;
+    }
+
+    if (end == NULL) fullscreen_name = malloc(strlen(fullscreen_url->path) + 3);
+    else             fullscreen_name = malloc(strlen(end)                  + 3);
+
+    if (fullscreen_name != NULL)
+    {
+      sprintf(fullscreen_name, "\"%s", end != NULL ? end : fullscreen_url->path);
+
+      /* Suppress filename extensions */
+
+      found = strrchr(fullscreen_name, '.');
+      if (found != NULL && found != fullscreen_name) *found = '\0';
+
+      strcat(fullscreen_name, "\"");
+    }
+  }
+
   /* If we got a name, show it */
 
   if (fullscreen_name != NULL)
@@ -298,6 +340,25 @@ _kernel_oserror * fullscreen_start(const char * url, unsigned int launcher)
                 NULL,
                 fullscreen_overlay_handle);
   }
+
+  /* Show the large SGI logo if required */
+
+  #ifdef SGI
+
+    fullscreen_sgi_large = fullscreen_sgi_small = NULL;
+
+    overlay_add("sgilarge",
+                NULL,
+                oa_middle_centre,
+                0,
+                &fullscreen_sgi_large,
+                fullscreen_overlay_handle);
+
+    fullscreen_sgi_large->callback    = fullscreen_sgi_overlay_callback;
+    fullscreen_sgi_large->cbhandle    = (void *) fullscreen_session;
+    fullscreen_sgi_large->call_on_die = 1;
+
+  #endif
 
   /* If we're not looking at multicast data, put up the clock. */
   /* The "not multicast" exclusion is there because there's a  */
@@ -468,7 +529,79 @@ _kernel_oserror * fullscreen_handle_eos(_kernel_swi_regs * r)
     else if (
               state != vc_play_state_normal_eos
             )
-            return NULL; /* I.e, "huh?" - this is one of those Should Never Happen things */
+    {
+      #ifdef SGI
+
+        if (state == vc_play_state_streaming)
+        {
+          /* If the large SGI logo is up, swap it for the small one - */
+          /* the callback function for the large logo will deal with  */
+          /* showing the small.                                       */
+
+          if (fullscreen_sgi_large != NULL)
+          {
+            overlay * o = fullscreen_sgi_large;
+
+            fullscreen_sgi_large = NULL;
+            overlay_remove(o, NULL);
+          }
+
+          /* If the large logo isn't up, then we must be going into */
+          /* streaming after a loop point - the EOS report is not   */
+          /* always reliable, so have to make the assumption based  */
+          /* on previous state... :-/                               */
+
+          else
+          {
+            if (fullscreen_sgi_small != NULL)
+            {
+              overlay * o = fullscreen_sgi_small;
+
+              fullscreen_sgi_small = NULL;
+              overlay_remove(o, NULL);
+
+              overlay_add("sgilarge",
+                          NULL,
+                          oa_middle_centre,
+                          300,
+                          &o,
+                          fullscreen_overlay_handle);
+
+              o->callback    = fullscreen_sgi_overlay_callback;
+              o->cbhandle    = (void *) fullscreen_session;
+              o->call_on_die = 1;
+            }
+
+            overlay_poll(0, NULL, NULL, NULL);
+          }
+
+          /* As a hack for the SGI demo, if we loop we assume RTSP MB */
+          /* drops to normal play mode                                */
+
+          if (fullscreen_session->swi_base == RTSPMBSWI_Base)
+          {
+            if (
+                 fullscreen_session->current       != play_mode_normal ||
+                 fullscreen_session->current_speed != 1
+               )
+            {
+              fullscreen_session->current       = fullscreen_session->destination       = play_mode_normal;
+              fullscreen_session->current_speed = fullscreen_session->destination_speed = 1;
+
+              overlay_add("play",
+                          NULL,
+                          oa_top_right,
+                          200,
+                          NULL,
+                          fullscreen_overlay_handle);
+            }
+          }
+        }
+
+      #endif
+
+      return NULL;
+    }
   }
 
   /* We often briefly see EOS for looping playback since the looping is done */
@@ -727,45 +860,6 @@ _kernel_oserror * fullscreen_wait(unsigned int * response)
 }
 
 /**************************************************************/
-/* fullscreen_get_channel_name                                */
-/*                                                            */
-/* Get a given channel number's name.                         */
-/*                                                            */
-/* Parameters: Channel number;                                */
-/*                                                            */
-/*             Pointer to a char *, updated to point to a     */
-/*             malloc block holding the name or NULL for some */
-/*             unforseen circumstance. Out of memory is       */
-/*             reported directly. The caller must free the    */
-/*             malloc block when appropriate.                 */
-/**************************************************************/
-
-static _kernel_oserror * fullscreen_get_channel_name(unsigned int channel, char ** name)
-{
-  channel_description buffer;
-  int                 done;
-
-  *name = NULL;
-
-  RetError(_swix(SVB_EnumerateChannels,
-                 _INR(0,4) | _OUT(4),
-
-                 1u<<1, /* Read specific channel number */
-                 channel,
-                 &buffer,
-                 sizeof(buffer),
-                 1,
-
-                 &done));
-
-  if (done == 0) return NULL;
-  else *name = utils_strdup(buffer.name);
-
-  if (*name == NULL) return make_no_memory_error(7);
-  else               return NULL;
-}
-
-/**************************************************************/
 /* fullscreen_overlay_callback()                              */
 /*                                                            */
 /* An overlay callback function set up from the key handler   */
@@ -832,6 +926,7 @@ static int fullscreen_overlay_callback(void * v)
         }
         else
         {
+          free(ot);
           o->antiflicker = 1;
           return 1;
         }
@@ -841,6 +936,41 @@ static int fullscreen_overlay_callback(void * v)
 
   return 0;
 }
+
+#ifdef SGI
+
+  /**************************************************************/
+  /* fullscreen_sgi_overlay_callback()                          */
+  /*                                                            */
+  /* An overlay callback function set up to swap from the large */
+  /* SGI logo to the small one.                                 */
+  /*                                                            */
+  /* Parameters: Pointer to the overlay structure in question,  */
+  /*             cast to void *.                                */
+  /*                                                            */
+  /* Returns:    0 for any internal failure, else 1.            */
+  /**************************************************************/
+
+  static int fullscreen_sgi_overlay_callback(void * v)
+  {
+    overlay * o = (overlay *) v;
+
+    (void) o;
+
+    if (fullscreen_sgi_small == NULL)
+    {
+      overlay_add("sgismall",
+                  NULL,
+                  oa_top_left,
+                  0,
+                  &fullscreen_sgi_small,
+                  fullscreen_overlay_handle);
+    }
+
+    return 1;
+  }
+
+#endif
 
 /**************************************************************/
 /* fullscreen_keypress()                                      */
@@ -888,10 +1018,10 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
     case 105: /* "?", "I", "i" */
     case 386: /* Info */
     {
-      bool   done_mode = false;
-      bool   done_name = false;
-      bool   done_time = false;
-      bool   persist;
+      bool         done_mode = false;
+      bool         done_name = false;
+      bool         done_time = false;
+      unsigned int persist;
 
       char   number    [24];
       char * use       = number;
@@ -902,7 +1032,7 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
       /* now, remove the information                                          */
 
       if (
-           persist == true &&
+           persist == 0 &&
            (
              fullscreen_ov1 != NULL ||
              fullscreen_ov2 != NULL
@@ -958,8 +1088,8 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
                overlay_add("tv",
                            fullscreen_name,
                            oa_bottom_left,
-                           persist ? 0 : 200,
-                           persist ? &fullscreen_ov1 : NULL,
+                           persist,
+                           persist == 0 ? &fullscreen_ov1 : NULL,
                            fullscreen_overlay_handle)
                != NULL
              )
@@ -1010,7 +1140,7 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
                  overlay_add(done_name ? "blank_tv" : NULL,
                              n,
                              oa_bottom_right,
-                             persist ? 0 : 200,
+                             persist,
                              &o,
                              fullscreen_overlay_handle)
                  != NULL
@@ -1021,7 +1151,7 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
             }
             else
             {
-              fullscreen_ov2 = persist ? o : NULL;
+              fullscreen_ov2 = persist == 0 ? o : NULL;
               done_time      = true;
 
               o->callback = fullscreen_overlay_callback;
@@ -1242,12 +1372,21 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
         {
           unsigned int speed;
 
-          switch (fullscreen_session->current_speed)
+          /* Temporary hack - RTSP MB won't do variable speed FFWD/FRWD */
+
+          if (fullscreen_session->swi_base == RTSPMBSWI_Base)
           {
-            default: speed = 8;  break;
-            case 8:  speed = 16; break;
-            case 16: speed = 32; break;
-            case 32: speed = 1;  break;
+            speed = 1;
+          }
+          else
+          {
+            switch (fullscreen_session->current_speed)
+            {
+              default: speed = 8;  break;
+              case 8:  speed = 16; break;
+              case 16: speed = 32; break;
+              case 32: speed = 1;  break;
+            }
           }
 
           if (speed == 1)
@@ -1312,12 +1451,21 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
         {
           unsigned int speed;
 
-          switch (fullscreen_session->current_speed)
+          /* Temporary hack - RTSP MB won't do variable speed FFWD/FRWD */
+
+          if (fullscreen_session->swi_base == RTSPMBSWI_Base)
           {
-            default: speed = 8;  break;
-            case 8:  speed = 16; break;
-            case 16: speed = 32; break;
-            case 32: speed = 1;  break;
+            speed = 1;
+          }
+          else
+          {
+            switch (fullscreen_session->current_speed)
+            {
+              default: speed = 8;  break;
+              case 8:  speed = 16; break;
+              case 16: speed = 32; break;
+              case 32: speed = 1;  break;
+            }
           }
 
           if (speed == 1)
@@ -1441,6 +1589,34 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
 
     #endif
 
+    #ifdef SGI
+
+      case 404: /* Blue fast-text, Shift+F4 */
+      {
+        /* Toggle logo displays */
+
+        if (fullscreen_sgi_small != NULL)
+        {
+          overlay * o = fullscreen_sgi_small;
+
+          fullscreen_sgi_small = NULL;
+          overlay_remove(o, NULL);
+        }
+        else
+        {
+          overlay_add("sgismall",
+                      NULL,
+                      oa_top_left,
+                      0,
+                      &fullscreen_sgi_small,
+                      fullscreen_overlay_handle);
+        }
+      }
+      break;
+
+    #endif
+
+
     /* Anything left over gets passed on */
 
     default:
@@ -1451,6 +1627,45 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
   }
 
   return 1;
+}
+
+/**************************************************************/
+/* fullscreen_get_channel_name                                */
+/*                                                            */
+/* Get a given channel number's name.                         */
+/*                                                            */
+/* Parameters: Channel number;                                */
+/*                                                            */
+/*             Pointer to a char *, updated to point to a     */
+/*             malloc block holding the name or NULL for some */
+/*             unforseen circumstance. Out of memory is       */
+/*             reported directly. The caller must free the    */
+/*             malloc block when appropriate.                 */
+/**************************************************************/
+
+static _kernel_oserror * fullscreen_get_channel_name(unsigned int channel, char ** name)
+{
+  channel_description buffer;
+  int                 done;
+
+  *name = NULL;
+
+  RetError(_swix(SVB_EnumerateChannels,
+                 _INR(0,4) | _OUT(4),
+
+                 1u<<1, /* Read specific channel number */
+                 channel,
+                 &buffer,
+                 sizeof(buffer),
+                 1,
+
+                 &done));
+
+  if (done == 0) return NULL;
+  else *name = utils_strdup(buffer.name);
+
+  if (*name == NULL) return make_no_memory_error(7);
+  else               return NULL;
 }
 
 /**************************************************************/

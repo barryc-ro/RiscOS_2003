@@ -305,94 +305,112 @@ void overlay_hide(void)
 int overlay_poll(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
 {
   unsigned int time, count, i;
+  bool         rescan;
 
   _swix(OS_ReadMonotonicTime,
         _OUT(0),
 
         &time);
 
-  count = 0;
-
-  for (i = 0; i < oa__end; i++)
+  do
   {
-    overlay * current = overlays[i];
-    bool      undraw  = true;
+    count  = 0;
+    rescan = false;
 
-    while (current)
+    for (i = 0; i < oa__end; i++)
     {
-      if (
-           ((current->flags & Overlay_Deleted) != 0) ||
-           (
-             current->duration != 0 &&
-             time - current->start_time > current->duration
+      overlay * current = overlays[i];
+      bool      undraw  = true;
+
+      while (current)
+      {
+        if (
+             ((current->flags & Overlay_Deleted) != 0) ||
+             (
+               current->duration != 0 &&
+               time - current->start_time > current->duration
+             )
            )
-         )
-      {
-        /* This item should possibly be undrawn and should be deleted */
-
-        if (undraw)
         {
-          /* Ignore errors from the undraw attempt */
+          /* This item should possibly be undrawn and should be deleted */
 
-          overlay_draw_item(current, true);
-          undraw = false;
-        }
+          if (undraw)
+          {
+            /* Ignore errors from the undraw attempt */
 
-        overlay_free_item(current);
+            overlay_draw_item(current, true);
+            undraw = false;
+          }
 
-        /* Go around again to see if the next item should be removed too */
+          /* Is there a die-time callback? */
 
-        current = overlays[i];
-        continue;
-      }
-      else if ((current->flags & Overlay_Drawn) == 0)
-      {
-        _kernel_oserror * e = overlay_draw_item(current, false);
+          if (current->callback != NULL && current->call_on_die != 0)
+          {
+            /* NB this MUST NOT RE-ENTER OVERLAY_POLL, but may safely */
+            /* add new overlays into this position or any other.      */
 
-        if (e != NULL)
-        {
-          /* Couldn't draw it so ditch it, fast! */
+            if ((current->callback)((void *) current) != 0) rescan = true;
+          }
+
+          /* Delete the item */
 
           overlay_free_item(current);
+
+          /* Go around again to see if the next item should be removed too */
 
           current = overlays[i];
           continue;
         }
-
-        current = NULL;
-      }
-      else
-      {
-        /* Items that aren't deleted may have a callback function set up */
-
-        if ((current->flags & Overlay_Deleted) == 0)
+        else if ((current->flags & Overlay_Drawn) == 0)
         {
-          if (current->callback != NULL)
+          _kernel_oserror * e = overlay_draw_item(current, false);
+
+          if (e != NULL)
           {
-            int redraw = (current->callback)((void *) current);
+            /* Couldn't draw it so ditch it, fast! */
 
-            if (redraw != 0)
+            overlay_free_item(current);
+
+            current = overlays[i];
+            continue;
+          }
+
+          current = NULL;
+        }
+        else
+        {
+          /* Items that aren't deleted may have a callback function set up */
+
+          if ((current->flags & Overlay_Deleted) == 0)
+          {
+            if (current->callback != NULL && current->call_on_die == 0)
             {
-              _swix(OS_Byte,
-                    _IN(0),
+              int redraw = (current->callback)((void *) current);
 
-                    19);
+              if (redraw != 0)
+              {
+                _swix(OS_Byte,
+                      _IN(0),
 
-              if (current->antiflicker == 0) overlay_draw_item(current, true); /* Undraw */
+                      19);
 
-              overlay_draw_item(current, false); /* Redraw */
+                if (current->antiflicker == 0) overlay_draw_item(current, true); /* Undraw */
+
+                overlay_draw_item(current, false); /* Redraw */
+              }
             }
           }
+
+          break;
         }
-
-        break;
       }
+
+      /* Keep track of how many empty lists there were */
+
+      if (overlays[i] == NULL) count++;
     }
-
-    /* Keep track of how many empty lists there were */
-
-    if (overlays[i] == NULL) count++;
   }
+  while (rescan == true);
 
   /* If all lists were empty, stop polling */
 
