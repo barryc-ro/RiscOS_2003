@@ -28,7 +28,6 @@ CMHGNAME  = header
 DEFINES = ${COMPAT} ${OPTIONS}
 
 CFLAGS    = -ffca -c -zM -zps1 -wp ${DEFINES} ${INCLUDES}
-CMHGFLAGS = -p ${DEPENDS}
 
 include Makefiles:StdTools
 
@@ -58,7 +57,6 @@ OBJS      =\
  o.ADTs\
  o.driver\
  o.keyboard\
- o.test\
  $(CMHGOBJ)
 
 #
@@ -116,7 +114,7 @@ ${TARGET}: ${OBJS} ${RAMLIBS} ${DIRS}
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} ${ROMLIBS}
+${ROMTARGET}: ${OBJS} ${ROMLIBS} ${DIRS}
 	${MKDIR} aof
         ${LD} -c++ -o $@ -aof ${OBJS} ${ROMLIBS}
 
