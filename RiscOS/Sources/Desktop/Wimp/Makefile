@@ -10,6 +10,8 @@
 #                    Now correctly copies Tools3D to Resources:...Tools
 # 26-Jun-95  JRH     Now copies STB (ie hacked-down) versions of Tools,
 #                    Templates and Sprites. Doesn't copy Sprites22
+# 23-Oct-98  BJGA    Changed to use objasm, so that we can override the
+#                    choice of options file using an argument to amu
 #
 
 #
@@ -21,19 +23,24 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = aasm
+AS      = objasm
+LD      = link
 CP      = copy
 RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+WIPE    = -wipe
+ASFLAGS = -ABSolute -NOWarn -depend !Depend ${THROWBACK} ${OPTS} -o $@
+LDFLAGS = -bin -o $@
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
 #
 COMPONENT = Wimp
 SOURCE    = s.Wimp
+OBJECT    = o.Wimp
 TARGET    = rm.Wimp
+OPTS      = -PreDefine "Options SETS \"${OPTIONS}\""
 EXPORTS   = ${EXP_HDR}.Wimp \
             ${EXP_HDR}.WimpSpace
 
@@ -52,6 +59,7 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${WIPE} o ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources: resources-${CMDHELP}
@@ -73,9 +81,14 @@ resources-None: resources_common
 resources-: resources_common
 	print LocalRes:<UserIF>.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
-${TARGET}: ${SOURCE}
+${OBJECT}: ${SOURCE}
+        ${MKDIR} o
         ${AS} ${ASFLAGS} ${SOURCE}
-        Access ${TARGET} rw/rw
+
+${TARGET}: ${OBJECT}
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
+        Access $@ rw/r
 
 ${EXP_HDR}.Wimp: hdr.Wimp
         ${CP} hdr.Wimp $@ ${CPFLAGS}
