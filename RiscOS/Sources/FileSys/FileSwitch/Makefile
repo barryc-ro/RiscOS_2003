@@ -56,13 +56,15 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE} s.TokHelpSrc
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -86,6 +88,7 @@ rm.FileSwitch: Hdr:CPU.Generic26
 rm.FileSwitch: Hdr:IO.GenericIO
 rm.FileSwitch: Hdr:RISCOS
 rm.FileSwitch: Hdr:Machine.<Machine>
+rm.FileSwitch: Hdr:Machine.Machine
 rm.FileSwitch: Hdr:CMOS
 rm.FileSwitch: Hdr:ModHand
 rm.FileSwitch: Hdr:Services
