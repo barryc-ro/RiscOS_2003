@@ -65,12 +65,7 @@ resources_common:
        -${CP} Resources.${LOCALE}.<Machine>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
        -${CP} Resources.${LOCALE}.<Machine>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<Machine>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -133,6 +128,7 @@ rm.Wimp: s.Iconbar
 rm.Wimp: s.Wimp07
 rm.Wimp: s.ProgErrs
 rm.Wimp: s.Wimp08
+rm.Wimp: s.Wimp08s
 rm.Wimp: s.Wimp09
 rm.Wimp: s.Wimp10
 rm.Wimp: s.NewSWIs

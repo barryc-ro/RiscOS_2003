@@ -555,15 +555,15 @@ repollwimp
 
 ; Skip backwindow and iconbarwindow
 
-	[ true
-	B	%FT22
-	|
+      [ true
+        B       %FT22
+      |
         LDR     R14,backwindowhandle    ; if back window, open at full size
         TEQ     R0,R14
         LDRNE   R14,iconbarhandle
         TEQNE   R0,R14
         BEQ     %FT22                   ; ignore these (already done first)
-        ]
+      ]
 11
         Rel     R2,handle               ; must send the handle, so that
         MOV     R0,#Open_Window_Request ; the message is lost if window deleted
@@ -580,12 +580,19 @@ nomodechange
 
 check_redraw
       ]
-
+;
+; flush pending opens - make sure this is done BEFORE redraw stuff
+;
+      [ ChildWindows
+        BL      int_flush_opens         ; may cause a braindead panic redraw
+      ]
 ;
 ; look at invalid list to see if a redraw is necessary
 ;
         BL      checkredrawhandle
+      [ :LNOT: ChildWindows             ; this is pointless - can't get an error from checkredrawhandle!
         BVS     ExitPoll                ; <<<< wot?
+      ]
 ;
 ; Improved handling of rectangle area full:
 ; Redraw whole screen intelligently first, then, if that fails, draw
@@ -613,26 +620,89 @@ check_redraw
       ]
 ;
         LDR     R1,activewinds+lh_forwards
+
 pollredrawlp
         LDR     R2,[R1,#ll_forwards]
         CMP     R2,#nullptr
         BEQ     clearrects
-        SUB     handle,R1,#w_active_link
-        Push    "R2"
 
+        SUB     handle,R1,#w_active_link
+
+        Push    "R2"
         BL      invalidouterportion
         Pull    "R1"
-;
+
         LDR     R2,rlinks+windowrects
         CMP     R2,#nullptr
         BEQ     pollredrawlp
 
-process_redrawable_window
+;
+; Right - windowrects is the intersection of this window's outer portion with the invalid list
+; We need to check whether any of the window's children should be redrawn first
+;
 
+process_redrawable_window ROUT
+
+        Debug   child,"process_redrawable_window",handle
+
+      [ ChildWindows
+        LDR     R2,[handle,#w_children + lh_forwards]           ; start from the top
+
+01      LDR     R14,[R2,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     %FT04
+
+        Push    "R2"
+
+        LDR     R14,[R2,#w_flags - w_active_link]
+        TST     R14,#wf_inborder
+        ADDNE   R14,handle,#w_x0                ; clip to outer box if it can go in the border
+        ADDEQ   R14,handle,#w_wax0              ; clip to work area otherwise
+        LDMIA   R14,{x0,y0,x1,y1}
+
+        ADD     R14,R2,#w_x0 - w_active_link
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+
+        max     cx0,x0                          ; intersect child's outer box with parent's work area or outline
+        max     cy0,y0
+        min     cx1,x1
+        min     cy1,y1
+
+        Debug   child,"process_redrawable: child rectangle",cx0,cy0,cx1,cy1
+        MOV     R0,#windowrects
+        MOV     R1,#torects
+        BL      intrect                         ; see if this intersects with the invalid list
+
+        Pull    "R2"
+
+        LDR     R14,rlinks+torects
+        CMP     R14,#nullptr
+        BNE     %FT03
+
+02      LDR     R2,[R2,#ll_forwards]
+        B       %BT01
+
+; Right - redraw the child first, rather than the parent
+
+03      MOV     R0,#windowrects
+        BL      assign_set                      ; calls SetRectPtrs internally
+        SUB     handle,R2,#w_active_link
+      [ debug
+        LDR     R14,rlinks + windowrects
+        Debug   child,"Detected redraw for child window,rects",handle,R14
+      ]
+        B       process_redrawable_window       ; in case of nested child windows
+04
+
+process_redrawable_window_actually ROUT
+
+        Debug   child,"Actually redraw window",handle
+      ]
 ;
 ; check for auto-redraw bit in window flags
 ;
         LDR     R14,[handle,#w_flags]
+        Debug   child,"window flags are",R14
         TST     R14,#wf_autoredraw
         BEQ     tryreturnit
 ;
@@ -666,6 +736,10 @@ tryreturnit
         Rel     R14,handle
         STR     R14,[userblk]
         STR     R14,redrawhandle
+      [ debug
+        LDR     R14,rlinks + windowrects
+        Debug   child,"Returning Redraw_Window_Request for window,rects",#redrawhandle,R14
+      ]
         MOV     R0,#Redraw_Window_Request
         B       ExitPoll
 
@@ -746,7 +820,7 @@ continue_braindead_panic_redraw
         TEQ     handle,#BPR_notatall
         BEQ     repollwimp
 
-        Debug   bpr,"Continuing braindead panic readraw on handle",handle
+        Debug   bpr,"Continuing braindead panic redraw on handle",handle
 
 ; Window gone? - start from the start again
 
@@ -756,11 +830,40 @@ continue_braindead_panic_redraw
 ; Window closed? - start from the start again
 
         LDR     R14,[handle,#w_flags]
+        Debug   bpr,"handle, flags are",handle,R14
         TST     R14,#ws_open
         BEQ     start_braindead_panic_redraw
 
-; Move to next window in stack
+; Move BPR_indication to next window in stack (must deal with child window stacks as well)
 
+      [ ChildWindows
+        Push    "handle"
+
+        LDR     R0,[handle,#w_children + lh_backwards]          ; go for backmost child window first
+        LDR     R14,[R0,#ll_backwards]
+        CMP     R14,#nullptr
+        BNE     %FT02
+
+01      LDR     R0,[handle,#w_active_link + ll_backwards]       ; then go for next sibling
+        Debug   bpr,"Next sibling",handle,R0
+        LDR     R14,[R0,#ll_backwards]
+        CMP     R14,#nullptr
+        BNE     %FT02
+
+        LDR     handle,[handle,#w_parent]                       ; else go for parent's next sibling, etc.
+        Debug   bpr,"Move up to parent",handle
+        CMP     handle,#nullptr
+        BNE     %BT01
+
+02      MOVEQ   R0,#BPR_notatall
+        SUBNE   R0,R0,#w_active_link
+        Rel     R0,R0,NE
+        STR     R0,BPR_indication
+
+        Pull    "handle"
+
+        Debug   bpr,"Braindead redraw: this,next",handle,R0
+      |
         LDR     R0,[handle,#w_active_link+ll_backwards]
         LDR     R14,[R0,#ll_backwards]
         CMP     R14,#nullptr
@@ -768,19 +871,48 @@ continue_braindead_panic_redraw
         SUBNE   R0,R0,#w_active_link
         Rel     R0,R0,NE
         STR     R0,BPR_indication
+      ]
 
 ; Process this window (exactly)
 
         BL      initrectptrs
         ADD     R0,handle,#w_x0
         LDMIA   R0,{cx0,cy0,cx1,cy1}
+
+; If this is a child window, clip to parent's work area/outline
+
+      [ ChildWindows
+        MOV     R1,handle
+        B       %FT12
+
+11      TST     R0,#wf_inborder
+        ADDNE   R14,R1,#w_x0            ; clip to outer box if allowed to overlap border
+        ADDEQ   R14,R1,#w_wax0          ; clip to parent's work area otherwise
+        LDMIA   R14,{x0,y0,x1,y1}
+        max     cx0,x0
+        max     cy0,y0
+        min     cx1,x1
+        min     cy1,y1
+
+12      LDR     R0,[R1,#w_flags]
+        LDR     R1,[R1,#w_parent]
+        CMP     R1,#nullptr
+        BNE     %BT11
+      ]
+
+; make one-rectangle list of the window's outer box (clipped to its parent's work area)
+
         MOV     R0,#windowrects
         MOV     R1,R0
         BL      addrect
         LDR     R14,rlinks+windowrects
         CMP     R14,#nullptr
         BEQ     continue_braindead_panic_redraw
+      [ ChildWindows
+        B       process_redrawable_window_actually      ; DON'T consider the children this time
+      |
         B       process_redrawable_window
+      ]
 
 
 ;;----------------------------------------------------------------------------
@@ -1966,6 +2098,8 @@ trymenuupdown
         TST     r0, #mif_lastone
         BEQ     %BT00
 
+        CMP     r1, #-1
+        SUBEQ   r1, r7, #1
         MOV     r0, r1                  ; start with current menu item
 trynextupdown
         TEQ     r6, #138                ; check for down
@@ -2301,6 +2435,20 @@ setwimpicon
         Pull    "R2,R3,x0,y0,x1,y1,PC",,^
 
 check_v_arrows
+      [ ChildWindows
+        LDR     R14,up_height           ; if scrollbar is small, only the arrows are shown (scaled down)
+        LDR     R5,down_height
+        ADD     R5,R14,R5
+        SUB     R14,y1,y0
+        CMP     R5,R14
+        BLE     %FT10
+
+        ADD     R14,y0,R14,LSR #1
+        CMP     R1,R14
+        ADDLT   R4,R4,#2                ; down arrow
+        B       %BT03
+10
+      ]
         LDR     R14,up_height
         SUB     R14,y1,R14
         CMP     R1,R14
@@ -2312,6 +2460,20 @@ check_v_arrows
         B       %BT03
 
 check_h_arrows
+      [ ChildWindows
+        LDR     R14,left_width          ; if scrollbar is small, only the arrows are shown (scaled down)
+        LDR     R5,right_width
+        ADD     R5,R14,R5
+        SUB     R14,x1,x0
+        CMP     R5,R14
+        BLE     %FT11
+
+        ADD     R14,x0,R14,LSR #1
+        CMP     R0,R14
+        ADDGT   R4,R4,#2                ; right arrow
+        B       %BT03
+11
+      ]
         LDR     R14,left_width
         ADD     R14,x0,R14
         CMP     R0,R14
@@ -2426,6 +2588,12 @@ wicon_toggle
 
         Push    "R0-R2,R4"
 
+      [ ChildWindows
+        LDR     R14,[handle,#w_parent]
+        CMP     R14,#nullptr
+        BNE     %FT01                   ; this stuff only applies to top-level windows
+      ]
+
         LDR     R4,hscroll_height
         ADD     R4,R4,#168              ; area not to be obscured
 
@@ -2501,8 +2669,15 @@ makesmall
         BEQ     %FT20                           ; then open it there.
 
         Push    "r2,r3"
+      [ ChildWindows
+        LDR     r14, [handle, #w_parent]            ; depending on whether this window is at the top-level,
+        CMP     r14, #nullptr
+        LDREQ   r2, activewinds+lh_forwards         ; scan the list of topmost windows
+        LDRNE   r2, [r14, #w_children+lh_forwards]  ; or the list of siblings
+      |
         LDR     r2, activewinds+lh_forwards     ; Otherwise, scan down the list of windows.
-        BIC     r3, x1, #3                      ; Align bhandle for comparisons.
+      ]
+        BIC     r3, x1, #3                      ; Align bhandle for comparisons (should really use the Abs macro)
 10
         LDR     r2, [r2, #ll_forwards]
         CMP     r2, #nullptr                    ; If we hit the end,
@@ -3007,36 +3182,65 @@ bodgetime
 ; Exit :   R3 = window handle (relative)
 ;          R4 = button index (or -1 if none)
 ;          handle --> window definition (if any)
+;          If clicked in work area, [mousexyrel] = relative coordinates
 ;-----------------------------------------------------------------------------
 
 int_get_pointer_info
-        Push    "LR"
-;
-; look for a suitable window
-;
+
         ADRL    R4,activewinds+lh_forwards-ll_forwards
+      [ ChildWindows
+        MOV     R3,#0                   ; ignore wf_inborder bit for top-level windows
+      ]
+
+; In:   R4 -> list head ( activewinds or [handle,#w_children] )
+;       R3 = wf_inborder if we're to search only windows which have this bit
+;       R3 = 0 if we're to search all windows in the list
+
+int_get_pointer_info_R4                 ; for ChildWindows
+
+      [ ChildWindows
+        Push    "userblk,LR"
+
+        MOV     userblk,R3              ; userblk = wf_inborder or 0
+      |
+        Push    "LR"
+      ]
+
 findwlp
         LDR     R4,[R4,#ll_forwards]
         LDR     R14,[R4,#ll_forwards]
         CMP     R14,#nullptr
         MOVEQ   R3,#nullptr
         MOVEQ   R4,#nullptr
+      [ ChildWindows
+        Pull    "userblk,PC",EQ
+      |
         Pull    "PC",EQ
+      ]
         SUB     handle,R4,#w_active_link
         Rel     R3,handle
-;
+
+      [ ChildWindows
+        LDR     R14,[handle,#w_flags]
+        AND     R14,R14,userblk
+        TEQ     R14,userblk                     ; ignore window if userblk = wf_inborder and bit not
+        BNE     findwlp
+      ]
+
         ADD     R14,handle,#w_x0
         LDMIA   R14,{x0,y0,x1,y1}
-;
+
         CMP     R0,x0
         CMPGE   R1,y0
         BLT     findwlp
         CMP     x1,R0
         CMPGT   y1,R1
         BLE     findwlp
-;
-; now see if any icons match up
-;
+
+        Debug   child,"Click within outer box of",handle
+
+; decide whether the click is inside or outside the work area
+
         Push    "R0-R3,R5-R9"
         ADD     R14,handle,#w_wax0
         LDMIA   R14,{cx0,cy0,cx1,cy1,x0,y0}
@@ -3051,7 +3255,30 @@ findwlp
         CMPGE   cx1,R0
         CMPGE   cy1,R1
         Pull    "cx0,cy0,cx1,cy1"
+      [ :LNOT: ChildWindows
         BLT     noficon2
+      ]
+
+; right - a click inside the work area
+; first check to see if it's inside any of the window's children
+
+      [ ChildWindows
+        Push    "cx0,cy0,cx1,cy1,x0,y0,x1,y1,handle,userblk"
+        MOVLT   R3,#wf_inborder                 ; click was in border area (so only scan children that overlap the border)
+        MOVGE   R3,#0                           ; click was in work area (scan all children)
+        MOV     userblk,R3
+        ADD     R4,handle,#w_children + lh_forwards - ll_forwards
+        BL      int_get_pointer_info_R4         ; scan child window stack for a hit
+        CMP     R3,#nullptr
+        ADDNE   SP,SP,#10*4
+        STRNE   R3,[SP,#3*4]
+        BNE     exitp4                          ; click found in one of the children
+        TEQ     userblk,#0
+        Pull    "cx0,cy0,cx1,cy1,x0,y0,x1,y1,handle,userblk"
+        BNE     noficon2                        ; click was in border area
+      ]
+;
+; now scan the icon list for a hit (starting at the frontmost, ie. the highest-numbered)
 ;
         SUB     x1,cx0,x0                       ; coords of top-left
         SUB     y1,cy1,y0
@@ -3094,7 +3321,11 @@ noficon
 endficon
         STR     R0,mousexrel            ; may be needed later
         STR     R1,mouseyrel
-;
+exitp4                                  ; for ChildWindows
+      [ ChildWindows
+        Pull    "R0-R3,R5-R9,userblk,PC" ; restore mouse coords etc.
+      |
         Pull    "R0-R3,R5-R9,PC"        ; restore mouse coords etc.
+      ]
 
         END
