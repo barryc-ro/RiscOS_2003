@@ -24,6 +24,7 @@ WIPE    = -wipe
 LD      = link
 TR      = translate
 GETVERS = perl bin.GetVersion
+NOP     = @|
 
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
@@ -218,11 +219,26 @@ install_NCFresco_: install_NCFresco_application
 
 # HTTP install
 
-install_HTTP:
+install_HTTP: install_HTTP_${TYPE} install_dir
+        ${NOP}
+
+install_dir:
+        ${MKDIR} ${INSTDIR}
+
+install_HTTP_: install_HTTP_i install_HTTP_sx install_HTTP_s
+        ${NOP}
+
+install_HTTP_i:
         ${CP} rm.HTTP ${INSTDIR}.${TARGET}Mod ${CPFLAGS}
-        ${CP} rm.HTTPs ${INSTDIR}.${TARGET}sMod ${CPFLAGS}
+        @echo ${COMPONENT} (insecure): file installed
+
+install_HTTP_sx:
         ${CP} rm.HTTPsx ${INSTDIR}.${TARGET}sxMod ${CPFLAGS}
-        @echo ${COMPONENT}: files installed
+        @echo ${COMPONENT} (export): file installed
+
+install_HTTP_s:
+        ${CP} rm.HTTPs ${INSTDIR}.${TARGET}sMod ${CPFLAGS}
+        @echo ${COMPONENT} (strong): file installed
 
 # WebFTP install
 
@@ -234,6 +250,7 @@ install_WebFTP:
 # Export phases
 
 export: export_${TARGET}
+        ${NOP}
 
 export_NCFresco: export_NCFresco_${PHASE}
         @echo ${COMPONENT}: export complete
@@ -248,7 +265,7 @@ export_NCFresco_hdrs:
         @echo ${COMPONENT}: export complete(hdrs)
 
 export_HTTP: export_HTTP_${PHASE}
-        @echo ${COMPONENT}: export complete
+        ${NOP}
 
 export_HTTP_libs:
         @echo ${COMPONENT}: export complete(libs)
