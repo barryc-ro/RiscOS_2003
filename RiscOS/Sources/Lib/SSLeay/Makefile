@@ -94,8 +94,8 @@ ssl:   var
 
 export_libs: ssl crypto
 	@echo SSLeay: exported libs
-       
-export: export_libs export_hdrs
+
+export: export_${PHASE}
        @Echo SSLeay: export complete
 
 clean:
