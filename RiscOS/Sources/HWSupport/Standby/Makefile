@@ -11,7 +11,8 @@
 #
 # Paths
 #
-EXP_HDR = <CExport$Dir>.h
+EXP_HDR  = <export$dir>2
+EXPC_HDR = <CExport$Dir>.h
 
 #
 # Generic options:
@@ -54,7 +55,7 @@ COMPONENT = Standby
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
 OBJS      = header.o module.o veneer.o standby.o
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   = ${EXP_HDR}.${COMPONENT} ${EXPC_HDR}.${COMPONENT}
 
 #
 # Rule patterns
@@ -112,7 +113,10 @@ rom_link:
 ${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
+${EXP_HDR}.${COMPONENT}: export.hdr.${COMPONENT}
+        ${CP} export.hdr.${COMPONENT} $@ ${CPFLAGS}
+
+${EXPC_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
