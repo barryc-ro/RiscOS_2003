@@ -98,8 +98,6 @@ rm.FileCore: Hdr:MultiFS
 rm.FileCore: Hdr:NewErrors
 rm.FileCore: Hdr:Territory
 rm.FileCore: s.DebugOpts
-rm.FileCore: Hdr:Debug
-rm.FileCore: Hdr:HostFS
 rm.FileCore: s.MyMacros
 rm.FileCore: s.Defns
 rm.FileCore: s.FileCore00
@@ -126,3 +124,4 @@ rm.FileCore: s.FileCore80
 rm.FileCore: s.FormSrvcs
 rm.FileCore: s.FormSWIs
 rm.FileCore: s.Identify
+rm.FileCore: s.BigDirCode
