@@ -161,6 +161,9 @@
 ; 10-May-99  BJGA 2.83          Folded in the 2.81 development branch. NB: the v2.82 change is better expressed as:
 ;                                (a) the system variable can override the default prefill VBVSize; (b) the sequence header VBVSize is capped at the prefill VBVSize
 ; 12-May-99  BJGA 2.84          Fixed a bit of null pointer dereferencing that crept in when no caption handlers were registered.
+; 28-May-99  BJGA 2.85          Moved the part of the code that extracts data about a new access unit and schedules it for use in calculating the future 3:2 pulldown
+;                                state away from the picture start code interrupt code, and into the auxiliary FIFO parsing code. Fixes field inversion artifacts.
+; 21-Jun-99  BJGA 2.86          Added MPEG2$HorizontalShift variable.
 ;
 
 	LEADR	Module_LoadAddr
@@ -274,6 +277,11 @@ Captions SETL   {TRUE}                  ; extract closed captions and exended da
 
         GBLL    Pulldown
 Pulldown SETL   {TRUE}                  ; work around L64002's bugs in 3:2 pull-down support
+
+        GBLL    HShiftVariable
+HShiftVariable  SETL    {TRUE}          ; allow horizontal shifting of MPEG video under system variable control
+
+DefaultHShift   *       -11
 
 debug           SETL    false           ; false turns off all NdrDebug debugging
 dadebug_module  SETL    true            ; the only debug output method that'll work in IRQ mode
@@ -691,7 +699,7 @@ AuxData_LastKnownLayer  #       4       ; used to determine when to reset corout
 AuxData_CoPC            #       4       ; return address in coroutine (preserved across calls to ProcessAuxFIFO)
 AuxData_CoSP            #       4       ; stack pointer for coroutine (preserved across calls to ProcessAuxFIFO)
 AuxData_ExtSP           #       4       ; to save sp_irq in during the coroutine
-AuxData_Stack           #       4*30    ; fixed-size stack for coroutine - 11ish words needed for ProcessVideoSequenceData, 25 words for Debug macro
+AuxData_Stack           #       4*30    ; fixed-size stack for coroutine - 12ish words needed for ProcessVideoSequenceData, 25 words for Debug macro
 AuxData_StackTop        #       0
 
 PU_Countdown            #       4       ; field count until next PU boundary
@@ -704,6 +712,10 @@ FirstField_CurrentPU    #       1       ; /                                   \ 
 EvenOddIndicator        #       1       ; 0 => currently in an odd field, 1 => currently in an even field
 
         AlignSpace
+ ]
+
+ [ HShiftVariable
+HShift                  #       4       ; shift displayed frame right by this (signed) amount; measured in 1/720th of displayed frame width
  ]
 
 ; Large blocks
@@ -1352,6 +1364,23 @@ VideoOpenStream Entry "r1,r2, r11"
 	Pull	"r1, r2"
  ]
 
+ [ HShiftVariable
+        Push    "r3, r4"                        ; preserve r3, r4 over call
+        Push    "r0-r3"                         ; preserve r0-r2 over call, plus one word for buffer
+        ADR     r0, HorizontalShiftString       ; variable name
+        ADD     r1, sp, #3*4                    ; buffer is on stack
+        MOV     r2, #4                          ; space for the expected signed integer
+        MOV     r3, #0                          ; first call
+        MOV     r4, #0                          ; don't expand to string
+        SWI     XOS_ReadVarVal                  ; read variable
+        Pull    "r0-r3"                         ; restore r0-r2 and load result into r3
+        MOVVS   r3, #DefaultHShift              ; default if variable undefined
+        TEQ     r4, #1
+        MOVNE   r3, #DefaultHShift              ; also default if it wasn't an integer variable
+        STR     r3, HShift
+        Pull    "r3, r4"                        ; restore r3, r4
+ ]
+
 	TST	r1, #VideoStructureFlags_DontCLS
 	BNE	%FT30
 
@@ -1432,6 +1461,12 @@ VideoOpenStream Entry "r1,r2, r11"
 	Pull	"r2, r3, r4, r9"
 	SETV
 	EXIT
+
+ [ HShiftVariable
+HorizontalShiftString
+        =       "MPEG2$HorizontalShift", 0
+        ALIGN
+ ]
 
 xdebug  SETL    {FALSE}
 
@@ -4280,8 +4315,21 @@ SetupScreenMode Entry "r2-r7"
 	BIC	r4, r4, r5, LSL #16		; numerator
 	MUL	r4, r0, r4			; numerator * xres
 	DivRem	r6, r4, r5, lr			; numerator * xres / denominator
+ [ HShiftVariable
+        ; We shift displayed frame right by pretending that the displayed frame encompasses a larger proportion of
+        ; the decoded frame (actually, double the increase specified by the system variable, once for each side)
+        ; to have the effect of reducing the number of undisplayed pixels we calculate for the left-hand edge.
+        ; Moving the displayed frame left falls out naturally, just by using a negative value for the system variable.
+        LDR     r3, HShift
+        ADD     r3, r3, #360                    ; multiply by (720 + 2 * shift)
+        MUL     r4, r6, r3
+        MOV     r3, #360                        ; divide by 720
+        DivRem  r5, r4, r3, lr
+        SUB     r4, r0, r5                      ; total number of undisplayed pixels on LHS (I'm not really bothered if it's -ve)
+ |
 	SUBS	r4, r0, r6			; total number of undisplayed pixels
 	MOVCC	r4, #0				; if -ve then put it at left-hand edge, too complicated to blank LHS
+ ]
 	MOV	r4, r4, LSL #2			; undisplayed width at LHS, in 1/8th pixel units
 	MOV	r5, r4, LSR #6			; amount in whole (8-byte) words
 	BIC	r4, r4, r5, LSL #6		; remainder
