@@ -54,7 +54,7 @@ COMPONENT = Standby
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
 OBJS      = header.o module.o veneer.o standby.o
-EXPORTS   = 
+EXPORTS   = ${EXP_HDR}.${COMPONENT}
 
 #
 # Rule patterns
@@ -116,6 +116,13 @@ ${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+o.standby:	c.standby
+o.standby:	C:h.kernel
+o.standby:	C:h.swis
+o.standby:	h.module
+o.standby:	h.standby
+o.standby:	C:h.led
+o.standby:	h.veneer
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -131,10 +138,3 @@ o.veneer: Hdr:CPU.Generic26
 o.veneer: Hdr:IO.GenericIO
 o.veneer: Hdr:RISCOS
 o.veneer: Hdr:ModHand
-o.standby:	c.standby
-o.standby:	C:h.kernel
-o.standby:	C:h.swis
-o.standby:	h.module
-o.standby:	h.standby
-o.standby:	C:h.led
-o.standby:	h.veneer
