@@ -16,7 +16,7 @@ EXP_HDR = <Cexport$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -26,7 +26,6 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
-STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -ffah -zM ${INCLUDES} ${THROWBACK} ${DFLAGS} -wpc
@@ -58,7 +57,7 @@ DFLAGS   = -DCOMPAT_INET4
 #
 # Program specific options:
 #
-COMPONENT = webgopher
+COMPONENT = WebGopher
 COMPONENTD= ${COMPONENT}D
 TARGET    = aof.${COMPONENT}
 OBJS      = modhead.o files.o gopher.o
@@ -93,6 +92,11 @@ export: ${EXPORTS}
         ${CP} h.gopherpub ${EXP_HDR}.h.webgopher ${CPFLAGS}
         @echo ${COMPONENT}: export complete
 
+install: ${TARGET}
+	${MKDIR} ${INSTDIR}
+	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: installed
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
@@ -104,7 +108,6 @@ clean:
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${RM} h.ModHead
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${DIRS}:
