@@ -43,11 +43,12 @@ UNIXLIB    = TCPIPLibs:o.unixlibzm
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
+ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Include files
 #
-INCLUDES = -IC:,TCPIPLibs:
+INCLUDES = -IC:,TCPIPLibs: -IC:AsmUtils
 
 
 
@@ -119,19 +120,19 @@ resources:
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
 	${MKDIR} aof
-	${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
+	${LD} -o $@ -aof ${OBJS} ${LIBS} ${ASMUTILS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
 	${MKDIR} linked
-	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB} ${ASMUTILS}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
 ${TARGETSA}: ${OBJS} ${CLIB}
-	${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
+	${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB} ${ASMUTILS}
 #	${LD} -v -map -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
