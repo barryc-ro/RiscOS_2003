@@ -5,58 +5,15 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 14-mar-01  SNB          Recreated
 #
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
+COMPONENT     = Filer
+RESOURCEEXTRA = resources_templates
+HELPSRC       = s.HelpSrc
+TOKHELPSRC    = ${TOKENSOURCE}
 
-#
-# Program specific options:
-#
-COMPONENT = Filer
-SOURCE    = s.Filer
-TARGET    = rm.Filer
-
-TOKHELP   = s.TokHelpSrc
-HELPSRC   = s.HelpSrc
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export:
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-	${RM} ${TOKHELP}
-        @echo ${COMPONENT}: cleaned
-
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${SOURCE} ${TOKHELP}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${TOKHELP}: Hdr:Tokens ${HELPSRC}
-        tokenise Hdr:Tokens ${HELPSRC} $@
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
