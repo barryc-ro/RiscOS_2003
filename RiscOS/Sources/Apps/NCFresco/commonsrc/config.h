@@ -113,6 +113,8 @@ struct config_str
     int history_global_length;
 
     char *sound_click;
+    int sound_fx;
+    int sound_background;
 
     wimp_paletteword colours[render_colour_COUNT];
 
@@ -243,6 +245,8 @@ extern struct config_str config_array;
 #define config_history_global_length (config_array.history_global_length)
 
 #define config_sound_click (config_array.sound_click)
+#define config_sound_fx (config_array.sound_fx)
+#define config_sound_background (config_array.sound_background)
 #define config_mode_keyboard (config_array.mode_keyboard)
 #define config_mode_cursor_toolbar (config_array.mode_cursor_toolbar)
 #define config_mode_platform (config_array.mode_platform)

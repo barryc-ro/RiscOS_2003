@@ -131,10 +131,6 @@
 #define BE_DEBUG DEBUG
 #endif
 
-#ifndef LINK_DEBUG
-#define LINK_DEBUG 0
-#endif
-
 #if 0   /* pdh: done the usual XXXDBG way now */
 #if PP_DEBUG
 #define PPDBG(a) fprintf a
@@ -147,12 +143,6 @@
 #define BEDBG(a) fprintf a
 #else
 #define BEDBG(a)
-#endif
-
-#if LINK_DEBUG
-#define LKDBG(a) fprintf a
-#else
-#define LKDBG(a)
 #endif
 
 /* This is on its own because the include file that it is in includes lots of others */
@@ -1039,6 +1029,9 @@ static os_error *backend__dispose_doc(be_doc doc)
     /* SJM if an imagemap is fetching then dispose of it */
     if (doc->fetching)
         backend_dispose_doc(doc->fetching);
+
+    /* free selection list */
+    mm_free(doc->selection_list.list);
 
     doc->magic = 0;
 
@@ -2851,7 +2844,7 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
     fvpr_progress_stream(&doc->rh->stream);
 
     objects_check_movement(doc);
-
+    antweb_build_selection_list(doc);
 
 #if DEBUG
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
@@ -3936,6 +3929,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 
 		doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
 
+		/* can this ever be called? */
 		if (doc->rh->stream.text_last)
 		{
 		    PPDBG(("Sizing the first few items...\n"));
@@ -4747,6 +4741,12 @@ os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetch
 }
 #endif
 
+/* ============================================================================= */
+
+/* This code has all been moved into keyhl.c */
+
+#if 0
+
 static int adjust_flag(int old_flag, int select, BOOL *changed)
 {
     int new_flag = 0;
@@ -4850,6 +4850,8 @@ void backend_update_link_activate(be_doc doc, be_item item, int activate)
 	be_update_item_highlight(doc, ti);
     }
 }
+
+/* ----------------------------------------------------------------------------- */
 
 static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int flags)
 {
@@ -4979,45 +4981,50 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
     bounds.x1 += margins.x1;
     bounds.y1 += margins.y1;
 
-    while (ti)
+    if ((flags & (be_link_ONLY_CURRENT|be_link_TEXT)) == 0)
+	ti = backend_highlight_link_2D(doc, item, flags);
+    else
     {
-	if (match_item(ti, flags, aref))
-	{
-	    if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
-	        break;
-	}
-
-	if (flags & be_link_ONLY_CURRENT)
-	{
-	    ti = NULL;
-	    break;
-	}
-	else
-	{
-	    ti = rid_scan(ti, scan_flags);
-	    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
-	}
-    }
-
-    if (ti == NULL && (flags & (be_link_DONT_WRAP | be_link_ONLY_CURRENT)) == 0)
-    {
-	ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
-
-	LKDBG((stderr, "No link found, ti wraped to %p\n", ti));
-
 	while (ti)
 	{
-	    if (match_item(ti, flags | be_link_INCLUDE_CURRENT, aref))
-            {
-	        if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
-	            break;
-            }
+	    if (match_item(ti, flags, aref))
+	    {
+		if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
+		    break;
+	    }
 
-            ti = rid_scan(ti, scan_flags);
-	    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
+	    if (flags & be_link_ONLY_CURRENT)
+	    {
+		ti = NULL;
+		break;
+	    }
+	    else
+	    {
+		ti = rid_scan(ti, scan_flags);
+		LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
+	    }
+	}
+
+	if (ti == NULL && (flags & (be_link_DONT_WRAP | be_link_ONLY_CURRENT)) == 0)
+	{
+	    ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
+
+	    LKDBG((stderr, "No link found, ti wraped to %p\n", ti));
+
+	    while (ti)
+	    {
+		if (match_item(ti, flags | be_link_INCLUDE_CURRENT, aref))
+		{
+		    if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
+			break;
+		}
+
+		ti = rid_scan(ti, scan_flags);
+		LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
+	    }
 	}
     }
-
+    
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
     {
 	BOOL item_changed = item != ti && (item == NULL || item->aref != ti->aref);
@@ -5050,6 +5057,7 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 
     return ti;
 }
+#endif
 
 os_error *backend_activate_link(be_doc doc, be_item item, int flags)
 {
@@ -5129,6 +5137,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
 }
 #endif
 
+#if 0
 void backend_clear_selected(be_doc doc)
 {
     be_item ti = doc->rh->stream.text_list;
@@ -5145,6 +5154,7 @@ void backend_clear_selected(be_doc doc)
 
     doc->selection.data.text = NULL;
 }
+#endif
 
 #if 0
 void backend_select_item(be_doc doc, be_item item, int select)

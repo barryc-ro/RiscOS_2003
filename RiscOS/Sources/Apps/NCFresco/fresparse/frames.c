@@ -206,15 +206,15 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     {
 	htmlriscos_colour( attr, &container->bordercolour);
 
-	/* use the outermost frameset to set the background colour for the page */
-	if (me->frameset == NULL)
-	{
-	    me->rh->bgt |= rid_bgt_COLOURS;
-	    me->rh->colours.back = container->bordercolour;
-	}
     }
 
-    /* save last frameset for when we unstack */
+    /* use the outermost frameset to set the background colour for the page */
+    if (me->frameset == NULL)
+    {
+	me->rh->bgt |= rid_bgt_COLOURS;
+	me->rh->colours.back = container->bordercolour;
+    }    /* save last frameset for when we unstack */
+
     frameset->old_frameset = me->frameset;
 
     /* link into the list of framesets */

@@ -160,57 +160,66 @@ extern input_key_action lookup_key_action(int key);
 extern int cmos_op(int bit_start, int n_bits, int new_val, BOOL write);
 extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write);
 
-typedef enum
-{
-    snd_TOOLBAR_SHOW,
-    snd_TOOLBAR_HIDE,
-    snd_TOOLBAR_SHOW_SUB,
-    snd_TOOLBAR_HIDE_SUB,
+#define snd_NONE		0
+    
+#define snd_TOOLBAR_SHOW	1
+#define snd_TOOLBAR_HIDE	1
+#define snd_TOOLBAR_SHOW_SUB	1
+#define snd_TOOLBAR_HIDE_SUB	1
 
-    snd_HISTORY_SHOW,
-    snd_HISTORY_BACK,
-    snd_HISTORY_FORWARD,
+#define snd_HISTORY_SHOW	1
+#define snd_HISTORY_BACK	1
+#define snd_HISTORY_FORWARD	1
 
-    snd_HOTLIST_SHOW,
-    snd_HOTLIST_ADD,
-    snd_HOTLIST_REMOVE,
+#define snd_HOTLIST_SHOW	2
+#define snd_HOTLIST_DELETE_SHOW	2
+#define snd_HOTLIST_ADD		2
+#define snd_HOTLIST_REMOVE	2
 
-    snd_GO_HOME,
-    snd_STOP,
-    snd_RELOAD,
+#define snd_HOME		3
+#define snd_SEARCH		3
+#define snd_OFFLINE		3
+#define snd_ABORT		3
+#define snd_RELOAD		3
 
-    snd_HELP_SHOW,
-    snd_PASSWORD_SHOW,
+#define snd_OPEN_URL_SHOW	4
+#define snd_HELP_SHOW		4
+#define snd_PASSWORD_SHOW	4	
+#define snd_INFO_SHOW		4
+#define snd_FIND_SHOW		4
+    
+#define snd_SCROLL_LINE		5
+#define snd_SCROLL_PAGE		5
+#define snd_SCROLL_LIMIT	5
+#define snd_SCROLL_FAILED	5
 
-    snd_SCROLL_LINE,
-    snd_SCROLL_PAGE,
-    snd_SCROLL_LIMIT,
-    snd_SCROLL_HAND_START,
-    snd_SCROLL_HAND_END,
+#define snd_CHANGE_FRAME	6
+#define snd_CHANGE_HIGHLIGHT	6
 
-    snd_CHANGE_FRAME,
-    snd_CHANGE_HIGHLIGHT,
+#define snd_WARN_NO_SCROLL	7
+#define snd_WARN_NO_FIELD	7
+#define snd_WARN_BAD_KEY	7
 
-    snd_WARN_NO_SCROLL,
-    snd_WARN_NO_FIELD,
-    snd_WARN_BAD_KEY,
+#define snd_MENU_SHOW		8
+#define snd_MENU_HIDE		8
+#define snd_MENU_SELECT		8
 
-    snd_MENU_SHOW,
-    snd_MENU_HIDE,
-    snd_MENU_SELECT,
+#define snd_CHECKBOX_TOGGLE	9
+#define snd_RADIO_TOGGLE	9
+#define snd_FORM_SUBMIT		9
+#define snd_FORM_RESET		9
 
-    snd_CHECKBOX_TOGGLE,
-    snd_RADIO_TOGGLE,
-    snd_FORM_SUBMIT,
-    snd_FORM_RESET,
+#define snd_LINK_FOLLOW		10
+    
+#define snd_MODE_MAP_START	11
+#define snd_MODE_MAP_END	11
 
-    snd_LINK_FOLLOW,
+#define snd_BEEPS_ON		12
+#define snd_BEEPS_OFF		12
+    
+#define snd_ERROR		13
 
-    snd_MODE_MAP_START,
-    snd_MODE_MAP_END,
-
-    snd_ERROR
-} sound_event_t;
+typedef int sound_event_t;
 
 #if STBWEB
 extern void sound_event(sound_event_t event_num);

@@ -15,8 +15,6 @@
  * Note PX is now OS units due to the parser change so all values are held accordingly
  */
 
-#define PX_TO_OS    1
-
 /* ---------------------------------------------------------------------------------------------------------- */
 
 typedef struct layout_spacing_info layout_spacing_info;
@@ -31,9 +29,6 @@ struct layout_spacing_info
     int index;                      /* row or column number */
     BOOL resize_heights;
 };
-
-#define XSPACING    (2*2)   /* spacing includes one pixel for the window border and one pixel for actual spacing */
-#define YSPACING    (2*2)   /* spacing includes one pixel for the window border and one pixel for actual spacing */
 
 /* ---------------------------------------------------------------------------------------------------------- */
 
@@ -53,7 +48,7 @@ static int be_get_frame_size(const rid_stdunits *val, double pcent_unit, double 
             return (int)(val->u.f*mult_unit) &~ 1;
 
         case rid_stdunit_PX:    /* pixels */
-            return (int)(val->u.f*px_unit*PX_TO_OS) &~ 1;
+            return (int)(val->u.f*px_unit) &~ 1;
 
         case rid_stdunit_PCENT:
             return (int)(val->u.f*pcent_unit) &~ 1;
@@ -91,7 +86,7 @@ static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_fram
         {
             /* if only pixels then we might have to scale them up */
             /* remember size is in OS coords */
-            px_unit = ((double)size/PX_TO_OS)/totals->px;
+            px_unit = ((double)size)/totals->px;
         }
 
         if (totals->pcent)
@@ -102,12 +97,12 @@ static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_fram
             /* otherwise we have to scale the percent unit to fill the space */
             /* taking into account what has been used by pixels (as a percentage) */
             else
-                pcent_unit = size / (totals->pcent + totals->px*100.0*PX_TO_OS/size);
+                pcent_unit = size / (totals->pcent + totals->px*100.0/size);
         }
 
         /* if we have variables then divide up space not used by pixels and percents. */
         if (totals->mult)
-            mult_unit = ((double)size - (double)totals->px*PX_TO_OS - totals->pcent*pcent_unit) / totals->mult;
+            mult_unit = ((double)size - (double)totals->px - totals->pcent*pcent_unit) / totals->mult;
 
         for (i = 1; i <= n; i++)
         {
@@ -139,11 +134,11 @@ static void fix_frame_sizes(rid_stdunits *vals, int n, rid_frame_unit_totals *to
     for (i = 1, val = vals; i <= n; i++, val++)
     {
         val->type = rid_stdunit_PX;
-        val->u.f = ((double)pos[i] - pos[i-1])/PX_TO_OS;     /* /2 for OS coords to pixels */
+        val->u.f = ((double)pos[i] - pos[i-1]);     /* /2 for OS coords to pixels */
         if (i == 1 || i == n)
-           val->u.f -= (double)spacing/PX_TO_OS;
+           val->u.f -= (double)spacing;
         else
-           val->u.f -= (double)spacing*2/PX_TO_OS;
+           val->u.f -= (double)spacing*2;
 
         totals->px += (int)val->u.f;
     }
@@ -388,6 +383,19 @@ void layout_free_spacing_list(antweb_doc *doc)
 #define MIN_X_SIZE  0
 #define MIN_Y_SIZE  0
 
+#if DEBUG >= 2
+static void dump_list(int n, VALUE *list)
+{
+    int i;
+    fprintf(stderr, "layout: update heights to");
+    for (i = 0; i < n; i++)
+        fprintf(stderr, " %g", list[i].u.f);
+    fprintf(stderr, "\n");
+}
+#else
+#define dump_list(n, list)
+#endif
+
 #ifdef STBWEB
 void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
 {
@@ -404,20 +412,12 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
             y = spc->bbox.y1 - MIN_Y_SIZE;
 
         fix_frame_sizes(fs->heights, fs->nrows, &fs->height_totals,
-            spc->container_box.y1 - spc->container_box.y0, YSPACING);
+            spc->container_box.y1 - spc->container_box.y0, fs->bwidth);
 
-        fs->heights[spc->index - 1].u.f = (spc->bbox.y1 - (double)y - fs->bwidth)/PX_TO_OS;
-        fs->heights[spc->index].u.f     = ((double)y - spc->bbox.y0 - fs->bwidth)/PX_TO_OS;
+        fs->heights[spc->index - 1].u.f = (spc->bbox.y1 - (double)y - fs->bwidth);
+        fs->heights[spc->index].u.f     = ((double)y - spc->bbox.y0 - fs->bwidth);
 
-#if DEBUG >=2
-{
-    int i;
-    fprintf(stderr, "layout: update heights to");
-    for (i = 0; i < fs->nrows; i++)
-        fprintf(stderr, " %g", fs->heights[i].u.f);
-    fprintf(stderr, "\n");
-}
-#endif
+	dump_list(fs->nrows, fs->heights);
     }
     else
     {
@@ -427,20 +427,12 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
             x = spc->bbox.x1 - MIN_X_SIZE;
 
         fix_frame_sizes(fs->widths, fs->ncols, &fs->width_totals,
-            spc->container_box.x1 - spc->container_box.x0, XSPACING);
+            spc->container_box.x1 - spc->container_box.x0, fs->bwidth);
 
-        fs->widths[spc->index - 1].u.f  = ((double)x - spc->bbox.x0 - fs->bwidth)/PX_TO_OS;
-        fs->widths[spc->index].u.f      = (spc->bbox.x1 - (double)x - fs->bwidth)/PX_TO_OS;
+        fs->widths[spc->index - 1].u.f  = ((double)x - spc->bbox.x0 - fs->bwidth);
+        fs->widths[spc->index].u.f      = (spc->bbox.x1 - (double)x - fs->bwidth);
 
-#if DEBUG >= 2
-{
-    int i;
-    fprintf(stderr, "layout: update widths to");
-    for (i = 0; i < fs->ncols; i++)
-        fprintf(stderr, " %g", fs->widths[i].u.f);
-    fprintf(stderr, "\n");
-}
-#endif
+	dump_list(fs->ncols, fs->widths);
     }
 
     backend_reset_width(doc, 0);

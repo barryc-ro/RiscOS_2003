@@ -285,8 +285,13 @@ static key_list nc_movement2_keys[] =
 
 static key_list nc_movement1_keys[] =
 {
+#if 0
     { akbd_LeftK,           fevent_SCROLL_LEFT, key_list_REPEAT },
     { akbd_RightK,          fevent_SCROLL_RIGHT, key_list_REPEAT },
+#else
+    { akbd_LeftK,           fevent_HIGHLIGHT_BACK, key_list_REPEAT },
+    { akbd_RightK,          fevent_HIGHLIGHT_FORWARD, key_list_REPEAT },
+#endif
     { akbd_UpK,             fevent_HIGHLIGHT_UP, key_list_REPEAT },
     { akbd_DownK,           fevent_HIGHLIGHT_DOWN, key_list_REPEAT },
     { 13,                   fevent_HIGHLIGHT_ACTIVATE },

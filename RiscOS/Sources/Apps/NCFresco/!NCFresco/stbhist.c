@@ -517,6 +517,19 @@ int fe_history_possible(fe_view v, int direction)
 os_error *fe_history_move(fe_view v, int direction)
 {
     char *url = fe_history_get_url(v, direction);
+
+    if (url) switch (direction)
+    {
+    case history_FIRST:
+    case history_PREV:
+	sound_event(snd_HISTORY_BACK);
+	break;
+    case history_NEXT:
+    case history_LAST:
+	sound_event(snd_HISTORY_FORWARD);
+	break;
+    }
+
     return url == NULL ? makeerror(ERR_NO_HISTORY) : frontend_open_url(url, v, NULL, 0, fe_open_url_FROM_HISTORY);
 }
 

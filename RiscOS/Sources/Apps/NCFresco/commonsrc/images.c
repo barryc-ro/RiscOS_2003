@@ -3033,7 +3033,7 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
 
     need_scaling = image_reduce_scales(&facs);
 
-    IMGDBGN(("img: __render need scale %d table_type %d\n", need_scaling, table_type));
+    IMGDBGN(("img: __render need scale %d table_type %d flags %x\n", need_scaling, table_type, sp_op));
 
     if (!need_scaling && table_type == pixtrans_NONE_NEEDED)
 	ep = sprite_put_given(area, &id, sp_op, x, y);
@@ -3985,7 +3985,7 @@ static void image_animation_render_frame(image i, int flags)
 	cache_id.tag = sprite_id_name;
 	cache_id.s.name = (flags & image_frame_TO_PLOT_SPRITE) || !i->cache_mask ? CACHE_SPRITE_PLOT_NAME : CACHE_SPRITE_BUILD_NAME;
 
-	IMGDBGN(("animation: plot to image %p '%.12s' area %p sprite ptr %p\n", i->cache_area, cache_id.s.name, *i->areap, our_id.s.addr));
+	IMGDBGN(("animation: plot to image %p '%.12s' area %p sprite ptr %p mask %d table %d\n", i->cache_area, cache_id.s.name, *i->areap, our_id.s.addr, rec->mask, table_type));
 
 	e = sprite_outputtosprite(i->cache_area, &cache_id, NULL, &state);
 	if (!e)
@@ -4008,7 +4008,8 @@ static void image_animation_render_frame(image i, int flags)
 	cache_id.s.name = CACHE_SPRITE_BUILD_NAME;
 
 	IMGDBGN(("animation: plot to mask\n"));
-	e = sprite_outputtomask(i->cache_area, &cache_id, NULL, &state);
+	e = (os_error *)_swix(OS_SpriteOp, _INR(0,3) | _OUTR(0,3), 0x13d, i->cache_area, cache_id.s.name, NULL, &state.r[0], &state.r[1], &state.r[2], &state.r[3]);
+/* 	e = sprite_outputtomask(i->cache_area, &cache_id, NULL, &state); */
 	if (!e)
 	{
 	    if (flags & image_frame_CLEAR_MASK)
@@ -4167,7 +4168,7 @@ static void image_animation_render(image i, int x, int y, int w, int h, int scal
 #if 0
     {
 	char buffer[64];
-	sprintf(buffer, "<NCFresco$Dir>.^.spr.%02d", i->cur_frame);
+	sprintf(buffer, "<NCFresco$Dir>.^.spr1.%02d", i->cur_frame);
 	sprite_area_save(i->cache_area, buffer);
     }
 #endif

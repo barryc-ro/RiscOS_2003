@@ -70,7 +70,8 @@ RM=		rm -f
 
 #############################################################################
 
-PREDEPS=	builddate.h sanity
+#PREDEPS=	builddate.h sanity
+PREDEPS=	builddate.h
 POSTACTS=	@$(RM) $(PREDEPS)
 #PREDEPS=
 #POSTACTS=
@@ -93,7 +94,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
-		files.o rlib_alloc.o fvpr.o remote.o coalesce.o
+		files.o rlib_alloc.o fvpr.o remote.o coalesce.o keyhl.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -191,7 +192,7 @@ NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=0 -DSGML_PC_UN
 # NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
 
 # standard debug set
-NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0
+NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=1
 
 # MemCheck debug set
 # NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g

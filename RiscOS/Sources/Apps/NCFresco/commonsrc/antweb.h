@@ -46,9 +46,59 @@ typedef struct awp_page_str {
 #define doc_flag_INCOMPLETE	(1<<17)	/* The document fetch was haltedc before it was done */
 #define doc_flag_SECURE		(1<<18)	/* A secure method, such as SSL, was used. */
 
+
 #define doc_selection_tag_TEXT	0
 #define doc_selection_tag_AREF	1
 #define doc_selection_tag_AREA	2
+
+typedef struct			/* the currently selected item. Could be an anchor or a text item */
+{				
+    int tag;		       
+    union			
+    {			
+	rid_text_item *text;	/* a TEXT covers the other highlightable objects */
+	rid_aref_item *aref;	/* an AREF covers an anchor linking several text items, or */
+				/* a label anchor linking text and inputs  */
+	struct
+	{
+	    rid_area_item *area;	/* an AREA covers an individual item in a client-side imagemap or SHAPED OBJECT */
+	    rid_text_item *item;
+	} map;
+    } data;
+} antweb_selection_t;
+
+typedef struct antweb_selection_descr antweb_selection_descr;
+typedef struct antweb_selection_list_descr antweb_selection_list_descr;
+
+#define LINK_SORT 0		/* future expansion... */
+
+struct antweb_selection_descr
+{
+    wimp_box bbox;		/* bounding box of this item */
+    antweb_selection_t item;	/* could be AREA or TEXT; AREFS are listed individually */
+    
+#if LINK_SORT
+    int x, y;			/* hotspot to move off from */
+
+    antweb_selection_descr *prev_x;		/* link to prev item horizontally */
+    antweb_selection_descr *next_x;		/* link to next item horizontally */
+    antweb_selection_descr *prev_y;		/* link to prev item vertically */
+    antweb_selection_descr *next_y;		/* link to next item vertically */
+#endif
+};
+
+struct antweb_selection_list_descr
+{
+    antweb_selection_descr *list;	/* pointer to base of link array */
+    int count;			/* count of number of items in link array */
+    
+#if LINK_SORT
+    antweb_selection_descr *left;		/* pointer to left most link item (counting from left edge) */
+    antweb_selection_descr *right;		/* pointer to right most link item (counting from right edge) */
+    antweb_selection_descr *top;		/* pointer to top most link item (counting from top edge) */
+    antweb_selection_descr *bottom;		/* pointer to bottom most link item (counting from bottom edge) */
+#endif
+};
 
 typedef struct _antweb_doc {
     struct _antweb_doc *next;
@@ -82,17 +132,9 @@ typedef struct _antweb_doc {
     rid_text_item *input;
     int text_input_offset;
 
-    struct			/* the currently selected item. Could be an anchor or a text item */
-    {				/* an AREF covers an anchor linking several text items  */
-	int tag;		/* a label anchor linking text and inputs  */
-	union			/* an AREA covers an individual item in a client-side imagemap or SHAPED OBJECT */
-	{			/* a TEXT covers the other highlightable objects */
-	    rid_text_item *text;
-	    rid_aref_item *aref;
-	    rid_area_item *area;
-	} data;
-    } selection;
-
+    antweb_selection_t selection; /* holds currently selected object */
+    antweb_selection_list_descr selection_list;	/* array to help move selection around */
+    
     awp_page_str *paginate, *last_page;
     struct _antweb_doc *fetching; /* currently fetching imagemap */
     struct layout_spacing_info *spacing_list;
@@ -124,11 +166,14 @@ extern os_error *antweb_document_format(antweb_doc *doc, int user_width);
 extern os_error *antweb_handle_url(antweb_doc *doc, rid_aref_item *aref, const char *query, const char *target);
 extern void antweb_update_item_trim(antweb_doc *doc, rid_text_item *ti, wimp_box *box, BOOL wont_plot_all);
 
-extern void be_update_link(antweb_doc *doc, rid_aref_item *aref, int selected);
 extern int antweb_get_edges(const rid_text_item *ti, int *left, int *right);
 extern int antweb_render_background(wimp_redrawstr *rr, void *h, int update);
 extern int antweb_doc_abort_all(void);
 extern os_error *antweb_document_sizeitems(antweb_doc *doc);
+
+/* from keyhl.c */
+
+extern void antweb_build_selection_list(antweb_doc *doc);
 
 #endif
 

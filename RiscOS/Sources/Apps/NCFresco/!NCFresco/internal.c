@@ -586,6 +586,8 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
 	int sound_val = atoi(sound);
 	nvram_op(NVRAM_SOUND_TAG, NVRAM_SOUND, 1, sound_val, TRUE);
 
+	config_sound_background = sound_val;
+	
 	*url = strdup("ncfrescointernal:openpanel?name=customsound");
 	generated = fe_internal_url_REDIRECT;
     }
@@ -595,6 +597,17 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
 	int beeps_val = atoi(beeps);
 	nvram_op(NVRAM_BEEPS_TAG, NVRAM_BEEPS, 1, beeps_val, TRUE);
 
+	if (beeps_val)
+	{
+	    config_sound_fx = TRUE;
+	    sound_event(snd_BEEPS_ON);
+	}
+	else
+	{
+	    sound_event(snd_BEEPS_OFF);
+	    config_sound_fx = FALSE;
+	}
+	
 	*url = strdup("ncfrescointernal:openpanel?name=custombeeps");
 	generated = fe_internal_url_REDIRECT;
     }
@@ -853,21 +866,25 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "favs") == 0)
 	{
+	    sound_event(snd_HOTLIST_SHOW);
 	    tb_status_button(fevent_HOTLIST_SHOW, TRUE);
 	    e = fe_hotlist_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "favsdelete") == 0)
 	{
+	    sound_event(snd_HOTLIST_DELETE_SHOW);
 	    tb_status_button(fevent_HOTLIST_SHOW_DELETE, TRUE);
 	    e = fe_hotlist_delete_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "find") == 0)
 	{
 	    tb_status_button(fevent_OPEN_FIND, TRUE);
+	    sound_event(snd_FIND_SHOW);
 	    e = fe_find_write_file(f, query);
 	}
 	else if (strcasecomp(panel_name, "historyalpha") == 0)
 	{
+	    sound_event(snd_HISTORY_SHOW);
 	    tb_status_button(fevent_HISTORY_SHOW_ALPHA, TRUE);
 	    e = fe_global_write_list(f);
 	}    
@@ -876,6 +893,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    v = get_source_view(query, TRUE);
 	    if (v)
 	    {
+		sound_event(snd_HISTORY_SHOW);
 		tb_status_button(fevent_HISTORY_SHOW_RECENT, TRUE);
 		e = fe_history_write_list(f, v->first);
 	    }
@@ -885,6 +903,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    v = get_source_view(query, TRUE);
 	    if (v)
 	    {
+		sound_event(snd_HISTORY_SHOW);
 		tb_status_button(fevent_HISTORY_SHOW, TRUE);
 		e = fe_history_write_combined_list(f, v->first);
 	    }
@@ -892,6 +911,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "info") == 0)
 	{
 	    v = get_source_view(query, FALSE);
+	    sound_event(snd_INFO_SHOW);
 	    tb_status_button(fevent_INFO_PAGE, TRUE);
 	    e = fe_version_write_file(f, v ? v->displaying : NULL, query);
 	}
@@ -906,30 +926,36 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "password") == 0)
 	{
+	    sound_event(snd_PASSWORD_SHOW);
 	    e = fe_passwd_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "url") == 0)
 	{
+	    sound_event(snd_OPEN_URL_SHOW);
 	    tb_status_button(fevent_OPEN_URL, TRUE);
 	    e = fe_openurl_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "urlfavs") == 0)
 	{
+	    sound_event(snd_HOTLIST_SHOW);
 	    tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, TRUE);
 	    e = fe_hotlist_and_openurl_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "customfonts") == 0)
 	{
+	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_FONT_SIZE, TRUE);
 	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS_TAG, NVRAM_FONTS, 3);
 	}    
 	else if (strcasecomp(panel_name, "customsound") == 0)
 	{
+	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_SOUND, TRUE);
 	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND_TAG, NVRAM_SOUND, 2);
 	}    
 	else if (strcasecomp(panel_name, "custombeeps") == 0)
 	{
+	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_BEEPS, TRUE);
 	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS_TAG, NVRAM_BEEPS, 2);
 	}    
@@ -987,6 +1013,7 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
     {
 	if (config_doc_default)
 	{
+	    sound_event(snd_HOME);
 	    fe_file_to_url(config_doc_default, new_url);
 	    generated = fe_internal_url_REDIRECT;
 	}
@@ -995,6 +1022,7 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
     {
 	if (config_document_search)
 	{
+	    sound_event(snd_SEARCH);
 	    fe_file_to_url(config_document_search, new_url);
 	    generated = fe_internal_url_REDIRECT;
 	}
@@ -1003,6 +1031,7 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
     {
 	if (config_document_offline)
 	{
+	    sound_event(snd_OFFLINE);
 	    fe_file_to_url(config_document_offline, new_url);
 	    generated = fe_internal_url_REDIRECT;
 	}
@@ -1062,6 +1091,7 @@ static int internal_action_back(const char *query, const char *bfile, const char
 
     if (v)
     {
+	sound_event(snd_HISTORY_BACK);
 	*new_url = strdup(fe_history_get_url(v, history_PREV));
 	*flags &= ~access_CHECK_EXPIRE;
     }
@@ -1078,6 +1108,7 @@ static int internal_action_forward(const char *query, const char *bfile, const c
 
     if (v)
     {
+	sound_event(snd_HISTORY_FORWARD);
 	*new_url = strdup(fe_history_get_url(v, history_NEXT));
 	*flags &= ~access_CHECK_EXPIRE;
     }
@@ -1444,6 +1475,21 @@ os_error *fe_url_open(fe_view v)
 void fe_show_mem_dump(void)
 {
     frontend_open_url("ncfrescointernal:openpanel?name=memdump", NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+}
+
+os_error *fe_search_page(fe_view v)
+{
+    return frontend_open_url("ncfrescointernal:openpage?name=search", v, NULL, NULL, 0);
+}
+
+os_error *fe_home(fe_view v)
+{
+    return frontend_open_url("ncfrescointernal:openpage?name=home", v, NULL, NULL, 0);
+}
+
+os_error *fe_offline_page(fe_view v)
+{
+    return frontend_open_url("ncfrescointernal:openpage?name=offline", v, NULL, NULL, 0);
 }
 
 /* ------------------------------------------------------------------------------------------- */

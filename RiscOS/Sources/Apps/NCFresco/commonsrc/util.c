@@ -762,9 +762,12 @@ int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write
 
 /* trigger an event */
 
+#define SoundFX_Play 0x4ef41
+
 void sound_event(sound_event_t event_num)
 {
-/*     _swix(SoundFX_Play, _INR(0,1), 0, event_num); */
+    if (config_sound_fx && event_num != snd_NONE)
+	_swix(SoundFX_Play, _INR(0,1), 0, event_num);
 }
 
 #endif

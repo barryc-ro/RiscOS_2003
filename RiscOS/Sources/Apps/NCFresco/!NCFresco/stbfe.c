@@ -477,6 +477,128 @@ void frontend_saver_last_name(char *fname)
 #define ScreenFade_GetFadeInfo		0x4e5c2
 #define ScreenFade_ReleaseFade		0x4e5c3
 
+#if 1
+
+static int *fade_ref_list = NULL;
+static int fade_ref_count = 0;
+
+static int fade_frame_rectangle(wimp_redrawstr *r, void *h, int update)
+{
+    int colour = (int)h;
+    int ref;
+
+    STBDBG(("fade_frame_rectangle: %d,%d %d,%d\n", r->g.x0, r->g.y0, r->g.x1, r->g.y1));
+    
+    if (_swix(ScreenFade_FadeRectangle, _INR(0,7) | _OUT(1),
+	  0 + (1<<8),
+	  r->g.x0, r->g.y0, r->g.x1, r->g.y1,
+	  config_display_time_fade,
+	  colour,
+	  FADE_LINE_SPACING,
+	  &ref) != NULL)
+    {
+	return 0;
+    }
+
+    fade_ref_list = mm_realloc(fade_ref_list, ++fade_ref_count * sizeof(*fade_ref_list));
+    fade_ref_list[fade_ref_count-1] = ref;
+
+    return 0;
+}
+
+static os_error *fade_frame_child(fe_view v, void *handle)
+{
+    STBDBG(("fade_frame_child: v %p\n", v));
+
+    if (v->children == NULL && v->w)
+    {
+	int colour = (int)handle;
+	wimp_box box;
+	
+	box.x0 = box.y0 = -0x4000;
+	box.x1 = box.y1 =  0x4000;
+    
+	/* set up fades */
+	frontend_view_update(v, &box, fade_frame_rectangle, (void *)colour, fe_update_IMAGE_RENDERING);
+    }    
+    return NULL;
+}
+
+/* wait for fades to finish */
+static void fade_finish_wait(void)
+{
+    int fading, i;
+    
+    do
+    {
+	int status;
+
+	fading = 0;
+	for (i = 0; i < fade_ref_count; i++)
+	{
+	    _swix(ScreenFade_GetFadeInfo, _INR(0,1) | _OUT(0),
+		  0, fade_ref_list[i], &status);
+
+	    if ((status & 0xff) != 0xff)
+		fading++;
+	}
+    }
+    while (fading);
+
+    /* release the fades */
+    for (i = 0; i < fade_ref_count; i++)
+	_swix(ScreenFade_ReleaseFade, _INR(0,1), 0, fade_ref_list[i]);
+
+    /* free up list */
+    mm_free(fade_ref_list);
+    fade_ref_list = NULL;
+    fade_ref_count = 0;
+}
+
+void frontend_fade_frame(fe_view v, wimp_paletteword colour)
+{
+    wimp_box box;
+/*     int i, fading; */
+
+    STBDBG(("fade_frame: v %p\n", v));
+
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return;
+    
+    if (config_display_time_fade == 0)
+	return;
+    
+    if (v->children)
+    {
+	iterate_frames(v->children, fade_frame_child, (void *)colour.word);
+    }
+    else
+    {
+	box.x0 = box.y0 = -0x4000;
+	box.x1 = box.y1 =  0x4000;
+
+	/* set up fades */
+	frontend_view_update(v, &box, fade_frame_rectangle, (void *)colour.word, fe_update_IMAGE_RENDERING);
+    }
+
+    fade_finish_wait();
+}
+
+#if 0
+void frontend_fade_frame_dispose(fe_view v)
+{
+    wimp_wstate state;
+    wimp_get_wind_state(v->w, &state);
+
+    iterate_frames(main_view, fade_frame_child, (void *)colour.word);
+
+    frontend_view_update(NULL, state.o.box, fade_frame_rectangle, NULL, fe_update_IMAGE_RENDERING);
+
+    fade_finish_wait();	
+}
+#endif
+
+#else
 void frontend_fade_frame(fe_view v, wimp_paletteword colour)
 {
     wimp_wstate state;
@@ -524,6 +646,7 @@ void frontend_fade_frame(fe_view v, wimp_paletteword colour)
     
     tb_status_refresh_if_small();
 }
+#endif
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -596,6 +719,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	if (fe_map_view() == v)
             fe_map_mode(NULL, NULL);
 
+	/* do before disposing */
+	frontend_fade_frame(v, render_get_colour(render_colour_BACK, v->displaying));
+    
         backend_dispose_doc(v->displaying);
     }
 
@@ -608,9 +734,6 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     /* really not sure about this one */
     if (frontend_view_has_caret(v))
 	backend_place_caret(v->displaying, NULL);
-    
-    if (previous_url)
-	frontend_fade_frame(v, render_get_colour(render_colour_BACK, v->displaying));
     
     /* check for special page instructions - but only on top page   */
     if (v->parent == NULL)
@@ -813,7 +936,7 @@ fe_view fe_dbox_view(const char *name)
 
 /*     fe_dbox_dispose(); */
 
-    STBDBG(( "fe_dbox_view: \n"));
+    STBDBG(( "fe_dbox_view: %s\n", name));
 
     info.name = (char *)name;
     info.noresize = TRUE;
@@ -1966,11 +2089,13 @@ static os_error *fe__abort_fetch(fe_view v, void *handle)
 
 os_error *fe_abort_fetch(fe_view v)
 {
+    sound_event(snd_ABORT);
     return iterate_frames(v, fe__abort_fetch, NULL);
 }
 
 /* ------------------------------------------------------------------------------------------- */
 
+#if 0
 os_error *fe_home(fe_view v)
 {
     os_error *e;
@@ -2023,6 +2148,7 @@ os_error *fe_offline_page(fe_view v)
 
     return e;
 }
+#endif
 
 void fe_open_info(fe_view v, be_item ti, int x, int y)
 {
@@ -2030,8 +2156,9 @@ void fe_open_info(fe_view v, be_item ti, int x, int y)
     {
 	char *link, *title;
 	char buffer[1024];
-	int len;
 	    
+	sound_event(snd_INFO_SHOW);
+
 	strcpy(buffer, "ncfrescointernal:openpanel?name=info&source=");
 	fe_frame_specifier_create(v, buffer, sizeof(buffer));
 
@@ -2634,7 +2761,11 @@ os_error *fe_status_info_level(fe_view v, int level)
 
 os_error *fe_status_unstack(fe_view source_v)
 {
-    fe_view top = source_v ? fe_find_top(source_v) : main_view; 
+    fe_view top = source_v ? fe_find_top_nopopup(source_v) : main_view; 
+
+    STBDBG(("fe_status_unstack: source %p %s top %p %s\n",
+	    source_v, source_v ? source_v->name : NULL,
+	    top, top ? top->name : NULL));
 
     if (!fe_passwd_abort() &&
 	!tb_status_unstack())

@@ -346,6 +346,7 @@ static os_error *sethelp(int obj, int cmp, const char *msg)
     return e;
 }
 #endif
+
 static os_error *setfield(int obj, int cmp, const char *msg, int check)
 {
     int type;
@@ -417,6 +418,7 @@ static char *getwriteable(int obj, int cmp)
     return s;
 }
 
+#if 0
 static int getval(int obj, int cmp)
 {
     int type, val;
@@ -453,6 +455,7 @@ static int getval(int obj, int cmp)
     }
     return e ? 0 : val;
 }
+#endif
 
 static os_error *setval(int obj, int cmp, int val)
 {
@@ -896,6 +899,8 @@ BOOL tb_status_unstack(void)
 
     if (bar_list && bar_list->next)
     {
+	sound_event(snd_TOOLBAR_HIDE_SUB);
+
 	tb_bar_dispose();
 
 	if (old_state != status_CLOSED)
@@ -938,7 +943,7 @@ void tb_status_new(fe_view v, int bar_num)
     if (bar_list && bar_list->num == bar_num)
 	return;
 
-    tb_status_hide(FALSE);
+/*     tb_status_hide(FALSE); */
 
     tbi = tb_bar_init(bar_num);
 
@@ -958,6 +963,8 @@ void tb_status_new(fe_view v, int bar_num)
 	setfocus(bar_list->object_handle);
     }
 
+    sound_event(snd_TOOLBAR_SHOW_SUB);
+    
     STBDBG(("tb_status_new(): out\n"));
 }
 
@@ -1438,6 +1445,9 @@ void tb_status_show(int small_only)
 
         open = TRUE;
         status_state = status_OPEN;
+
+	if (status_state != status_OPEN)
+	    sound_event(snd_TOOLBAR_SHOW);
     }
     else
     {
@@ -1491,6 +1501,8 @@ void tb_status_hide(int only_if_small)
 
     if ((status_state != status_CLOSED && !only_if_small) || status_state == status_OPEN_SMALL)
     {
+	sound_event(snd_TOOLBAR_HIDE);
+
         frontend_complain((os_error *)_swix(Toolbox_HideObject, _INR(0,1), 0, bar_list->object_handle));
         status_state = status_CLOSED;
     }
@@ -1678,6 +1690,7 @@ void tb_status_rotate(void)
 	turn_ctr = ((alarm_timenow() - turn_start) * TURN_SPEED / 100) % config_animation_frames;
 	
 	sprintf(sprite_name1, "%s%02d,%ss%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
+
 	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
     }
 }

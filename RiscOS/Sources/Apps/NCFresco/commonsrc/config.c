@@ -189,6 +189,8 @@ config_item citems[] = {
 { config_BOOL,	"print.collated",	(void *)offsetof(struct config_str, print_collated),	"Collate multiple copies",	(void *) 0  },
 { config_BOOL,	"print.reversed",	(void *)offsetof(struct config_str, print_reversed),	"Print pages in reverse order",	(void *) 0  },
 { config_STRING, "sound.click", 	(void *)offsetof(struct config_str, sound_click),	"Command to run when selecting", (void *)0  },
+{ config_BOOL, "sound.fx", 	(void *)offsetof(struct config_str, sound_fx),	"User audio feedback sounds", (void *)0  },
+{ config_BOOL, "sound.background", 	(void *)offsetof(struct config_str, sound_background),	"Play background sounds", (void *)0  },
 { config_BOOL, "mode.keyboard", 	(void *)offsetof(struct config_str, mode_keyboard),	"Are we mouseless", (void *)1  },
 { config_BOOL, "mode.cursor.toolbar", 	(void *)offsetof(struct config_str, mode_cursor_toolbar),	"Move cursor to toolbar", (void *)1  },
 { config_INT, "mode.platform", 	(void *)offsetof(struct config_str, mode_platform),	"Platform type", (void *)0  },

@@ -38,6 +38,7 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
     BOOL scrolled = FALSE;
     int old_x = o->x;
     int old_y = o->y;
+    int snd = snd_NONE;
 
     signx = +1;
     dx = 0;
@@ -47,10 +48,12 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
             signx = -1;
 	    o->x = v->doc_width + (o->box.x1 - o->box.x0) - v->margin.x1;
 	    smooth_scroll = 0;
+	    snd = snd_SCROLL_LIMIT;
 	    break;
         case -3:
 	    o->x = -v->margin.x0;
 	    smooth_scroll = 0;
+	    snd = snd_SCROLL_LIMIT;
 	    break;
 
         case -2:
@@ -58,6 +61,7 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
             /* deliberate*/
         case 2:
             dx = ((o->box.x1 - o->box.x0)&~mask) - 8;
+	    snd = snd_SCROLL_PAGE;
             break;
 
         case -1:
@@ -65,6 +69,7 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
             /* deliberate*/
         case 1:
             dx = 32;
+	    snd = snd_SCROLL_LINE;
             break;
 
     default:
@@ -93,6 +98,7 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
             dy = ( ( (o->box.y1+v->margin.y1) - (o->box.y0+v->margin.y0) ) &~ mask ) - 32;
 /*             if (dy < 0) */
 /*  	        dy = 32; */
+	    snd = snd_SCROLL_PAGE;
             break;
 
         case -1:
@@ -100,16 +106,19 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
             /* deliberate*/
         case 1:
             dy = 32;
+	    snd = snd_SCROLL_LINE;
             break;
 
         case -3:
             signy = -1;
 	    o->y = v->doc_height + (o->box.y1 - o->box.y0) - v->margin.y0;
 	    smooth_scroll = 0;
+	    snd = snd_SCROLL_LIMIT;
 	    break;
         case 3:
 	    o->y = -v->margin.y1;
 	    smooth_scroll = 0;
+	    snd = snd_SCROLL_LIMIT;
 	    break;
 
     default:
@@ -137,7 +146,14 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
 	scrolled = TRUE;
 
     if (scrolled)
+    {
+	sound_event(snd);
 	fe_scroll_changed(v, x, y);
+    }
+    else
+    {
+	sound_event(snd_SCROLL_FAILED);
+    }
 
     if (v->stretch_document && signy > 0)
     {

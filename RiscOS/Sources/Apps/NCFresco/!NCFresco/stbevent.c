@@ -15,6 +15,7 @@
 #include "interface.h"
 #include "version.h"
 #include "plugin.h"
+#include "util.h"
 
 #include "fevents.h"
 
@@ -40,6 +41,7 @@ static void global_event_handler(int event)
             break;
 
         case fevent_GLOBAL_SHOW_HELP:
+	    sound_event(snd_HELP_SHOW);
 	    frontend_complain(fe_show_file_in_frame(main_view, config_help_file, TARGET_HELP));
             break;
 

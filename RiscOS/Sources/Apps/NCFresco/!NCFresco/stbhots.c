@@ -354,6 +354,8 @@ os_error *hotlist_add(const char *url, const char *title)
     if (url == NULL)
 	return NULL;
     
+    sound_event(snd_HOTLIST_ADD);
+
     hotlist__add(strdup(url), strdup(title), TRUE);
     hotlist__sort();
 
@@ -370,6 +372,8 @@ os_error *hotlist_remove(const char *url)
 {
     os_error *ep;
     
+    sound_event(snd_HOTLIST_REMOVE);
+
     hotlist__remove(NULL, url);
     
     if ((ep = ensure_modem_line()) != NULL)

@@ -137,6 +137,16 @@ fe_view fe_find_top_popup(fe_view v)
     return v;
 }
 
+fe_view fe_find_top_nopopup(fe_view v)
+{
+    v = fe_find_top(v);
+
+    if (v) while (v->prev)
+	v = v->prev;
+
+    return v;
+}
+
 /* ------------------------------------------------------------------------------------------- */
 
 /*
@@ -198,9 +208,8 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     char *referer = NULL, *title = NULL;
     int oflags;
     
-#if DEBUG
-    fprintf(stderr, "frontend_open_url '%s' in window '%s'\n", url ? url : "<none>", target ? target : "<none>");
-#endif
+    STBDBG(("frontend_open_url '%s' in window '%s'\n", url ? url : "<none>", target ? target : "<none>"));
+
     if (target && parent)
     {
         if (strcasecomp(target, TARGET_SELF) == 0)
@@ -436,6 +445,7 @@ int fe_reload_possible(fe_view v)
 
 os_error *fe_reload(fe_view v)
 {
+    sound_event(snd_RELOAD);
     return iterate_frames(v, fe__reload, NULL);
 }
 
@@ -465,9 +475,9 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 	view->backend_margin.y0 =  16;
 	view->backend_margin.y1 = -16;
 
- 	if (is_a_tv())
+ 	if (view->margin.x0)	/* was is_a_tv() - really 'do we have a safe area?' */
 	{
-/* 	    view->margin.x0 -= view->backend_margin.x0; */
+ 	    view->margin.x0 -= view->backend_margin.x0;
 	    view->margin.x1 -= view->backend_margin.x1;
 	    view->margin.y0 -= view->backend_margin.y0;
 	    view->margin.y1 -= view->backend_margin.y1;
@@ -617,7 +627,7 @@ static BOOL iconised = FALSE;
 
 void fe_iconise(BOOL iconise)
 {
-    fe_view v = main_view;
+/*     fe_view v = main_view; */
 
     if (iconise != iconised)
     {
