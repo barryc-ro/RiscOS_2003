@@ -1,9 +1,9 @@
 # Project:   PDumperHPS
 
 COMPONENT = PDumperHPS
-TARGET    = PDumperHPS
+TARGET = ${COMPONENT}
 
-OBJS = o.PDumpServices o.Init o.Services o.StarCmds o.Routines o.PaceServices o.Variables o.Swi o.header
+OBJS = o.PDumpServices o.Init o.Services o.StarCmds o.Routines o.PaceServices o.Variables o.Swi o.modheader
 
 LIBS = HP_SDK_LIB.HP_SDK_LIB ${C++LIB} 
        
@@ -17,12 +17,35 @@ LDFLAGS += -c++
 
 # Final targets:
 
-clean:
-        ${WIPE} ${WPREFLAGS} o.*           ${WFLAGS}
-        ${WIPE} ${WPREFLAGS} rm.PDumperHPS ${WFLAGS} 
-        ${WIPE} ${WPREFLAGS} h.header      ${WFLAGS}
-        ${STRIPDEPEND}
+all: ${RAM_MODULE}  h.modheader dirs HP_SDK_LIB.HP_SDK_LIB
 
+clean:
+        ${WIPE} ${WPREFLAGS} o             ${WFLAGS}
+        ${WIPE} ${WPREFLAGS} rm            ${WFLAGS} 
+        ${WIPE} ${WPREFLAGS} h.modheader   ${WFLAGS}
+        set pdumperhps$dir <obey$dir>
+        dir HP_SDK_LIB
+        amu_machine clean
+        set obey$dir <pdumperhps$dir>
+        dir <pdumperhps$dir>
+        unset pdumperhps$dir
+        @echo ${COMPONENT}: cleaned
+
+dirs:
+        ${MKDIR} o
+
+HP_SDK_LIB.HP_SDK_LIB:
+        set pdumperhps$dir <obey$dir>
+        dir HP_SDK_LIB
+        amu_machine library THROWBACK=-throwback CDEFINES=${CDEFINES}
+        set obey$dir <pdumperhps$dir>
+        dir <pdumperhps$dir>
+        unset pdumperhps$dir
+
+export: ${EXPORTS}
+        @echo ${COMPONENT}: export complete
+
+        
 # User-editable dependencies:
 
 # Static dependencies:
