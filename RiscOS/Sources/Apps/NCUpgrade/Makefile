@@ -62,7 +62,7 @@ WFLAGS		= ~cf~vr
 # These are for the standard Desktop build (plus debug)
 
 DFLAGS		= 
-DDFLAGS		= -fn -DDEBUGLIB
+DDFLAGS		= -fn -DDEBUGLIB -DDEBUG
 DZFLAGS		= 
 DDZFLAGS	= -fn -DDEBUGLIB
 
@@ -86,8 +86,8 @@ TOOLACTIONLIB   = <CExport$Dir>.o.Toolaction
 
 ZLIB		= ${LIBDIR}.zlib
 MSGLIB		= ${LIBDIR}.MsgLib.o.MsgLib
-#DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
-#MEMCHECKLIB	= MemCheck:o.MC
+DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
+#MEMCHECKLIB	= ${LIBDIR}.MemCheck.o.MC
 
 INETLIB		= TCPIPLibs:o.inetlibzm
 SOCKLIB		= TCPIPLibs:o.socklibzm
@@ -99,6 +99,7 @@ LIBSM = \
  ${TOOLBOXLIB} \
  ${EVENTLIB}m \
  ${TOOLACTIONLIB} \
+ ${ZLIB}.o.zlibzm \
  ${MEMCHECKLIB} \
 
 
@@ -253,10 +254,11 @@ install_common: ${FILES}
 	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}
 	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}
 	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}
-	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}
+	
 
 install: install_common
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}
+	${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}
 	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}
 	-Access ${INSTDIR}.!Boot	lr/r
 	-Access ${INSTDIR}.!Run		lr/r
@@ -268,6 +270,7 @@ install: install_common
 
 installd: install_common
 	${CP} ${LDIR}.!RunT		${INSTDIR}.!RunT	${CPFLAGS}
+	${CP} ${LDIR}.ResT		${INSTDIR}.Res		${CPFLAGS}
 	${CP} ${TARGET}			${INSTDIR}.!RunImageT	${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
