@@ -36,9 +36,9 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 AFLAGS   = -depend !Depend -Stamp -quit -CloseExec
-CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -fah -zps1 ${DFLAGS}
+CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -fa -zps1 ${DFLAGS}
 DFLAGS   = -DROM
-INCLUDES = -Itbox:,C:
+INCLUDES = -I<Lib$Dir>.tboxlibint.,<Lib$Dir>.tboxlibs:,C:
 
 #
 # Libraries
@@ -48,7 +48,7 @@ CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
-TBOXLIB   = tbox:tboxlib
+TBOXLIB   = <Lib$Dir>.tboxlibint.o.tboxlibm
 
 OBJS =\
  o.ModHdr\
@@ -73,9 +73,9 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
-resources: Messages
+resources: Resources.${LOCALE}.Messages
         ${MKDIR} ${RESDIR}
-        ${CP} Messages ${RESDIR}.Messages ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
@@ -108,8 +108,8 @@ o.main:	C:h.kernel
 o.main:	C:h.swis
 o.main:	C:h.errno
 o.main:	C:h.ctype
-o.main:	tbox:h.messages
+o.main:	<Lib$Dir>.tboxlibint.h.messages
 o.main:	C:h.kernel
-o.main:	tbox:objects.h.toolbox
+o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
 o.main:	h.main
 o.main:	C:h.kernel

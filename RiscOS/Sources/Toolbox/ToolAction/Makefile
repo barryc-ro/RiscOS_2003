@@ -154,31 +154,6 @@ rm.${COMPONENT}: ${OBJS} ${OSLIB}
         ${LD} -o $@ -module ${OBJS} ${OSLIB} ${CLIB}
 
 # Dynamic dependencies:
-o.resources: s.resources
-o.resources: hdr:ListOpts
-o.resources: hdr:Macros
-o.resources: hdr:System
-o.resources: Hdr:SWIs
-o.resources: Hdr:CPU.Generic26
-o.resources: Hdr:IO.GenericIO
-o.resources: Hdr:RISCOS
-o.resources: hdr:ModHand
-o.resources: hdr:MsgTrans
-o.resources: hdr:ResourceFS
-o.resources: hdr:Proc
-o.resources: hdr.CVars
-o.main:	c.main
-o.main:	C:h.swis
-o.main:	C:h.kernel
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.resourcefs
-o.main:	OS:h.fileswitch
-o.main:	h.modhdr
-o.main:	h.msgs
-o.main:	h.resources
-o.main:	h.utils
-o.main:	h.toolact
 oz.resources: s.resources
 oz.resources: hdr:ListOpts
 oz.resources: hdr:Macros
@@ -198,7 +173,6 @@ oz.main:	C:h.kernel
 oz.main:	OS:h.os
 oz.main:	OS:h.types
 oz.main:	OS:h.resourcefs
-oz.main:	OS:h.fileswitch
 oz.main:	h.modhdr
 oz.main:	h.msgs
 oz.main:	h.resources

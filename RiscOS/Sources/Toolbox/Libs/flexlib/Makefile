@@ -17,7 +17,6 @@
 # Paths
 #
 
-EXP_HDR		= <export$dir>
 LIBDIR		= <Lib$Dir>
 
 
@@ -100,14 +99,7 @@ all:	${COMPONENT} ${COMPONENTZ}
 # RISC OS ROM build rules
 #
 
-rom: ${TARGET} ${TARGETZ}
-	@echo ${COMPONENT}: rom module built
-
 export: export_${PHASE}
-
-install_rom: ${TARGET} ${TARGETZ}
-	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-	@echo ${COMPONENT}: rom module installed
 
 clean:
 	${WIPE} o.* ${WFLAGS}
@@ -146,9 +138,18 @@ ${TARGET}: ${OBJS} local_dirs
 ${TARGETZ}: ${OBJSZ} local_dirs
 	${LB} ${LBFLAGS} -o ${TARGETZ} ${OBJSZ}
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
+o.flex:	c.flex
+o.flex:	C:h.kernel
+o.flex:	C:h.swis
+o.flex:	h.opts
+o.flex:	h.flex
+o.flex:	h.swiextra
+z.flex:	c.flex
+z.flex:	C:h.kernel
+z.flex:	C:h.swis
+z.flex:	h.opts
+z.flex:	h.flex
+z.flex:	h.swiextra
