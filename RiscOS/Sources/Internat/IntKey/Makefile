@@ -58,4 +58,6 @@ keyconvert: keyconvert.o unicdata.o
         ${MKDIR} s
         ${CC} -o $@ keyconvert.o unicdata.o
 
+install: ${LAYOUTS}
+
 # Dynamic dependencies:
