@@ -18,12 +18,15 @@
 //      VCXO moved to GPIO2, and given sensible mark/gap defaults
 //      TOGGLE_DBG_ON_FRAME turned off (also added as an option on AC-3 as well as MPEG)
 //
+//      17-07-02 Version 1.4 b avison
+//      changed PLL settings so serial master clock output frequency is 256 fs (was 384 fs)
+//
 //*****************************************************************************************
 
 #include "macros.inc"
 
 // code revision
-#define VERSION                 {0x4132,0x3331,0x7631,0x2e33 } // A231v1.3
+#define VERSION                 {0x4132,0x3331,0x7631,0x2e34 } // A231v1.4
 
 // hard coded locations
 #define VERSION_LOC     0x2600
@@ -157,12 +160,12 @@
 #define FS_44                   1
 #define FS_48                   0
 #define FS_UNKNOWN              0x0c
-#define FS_32_DIV               0x0002
+#define FS_32_DIV               0x0003
 #define FS_32_MUL               0x0001
-#define FS_44_DIV               0x0500
-#define FS_44_MUL               0x0372
-#define FS_48_DIV               0x0004
-#define FS_48_MUL               0x0003
+#define FS_44_DIV               0x0280
+#define FS_44_MUL               0x0126
+#define FS_48_DIV               0x0002
+#define FS_48_MUL               0x0001
 #define RST_AUDPLL_BIT          1
 // SPDIF channel status bits sample rates
 #define SPDIF_48KHZ             0x20000
