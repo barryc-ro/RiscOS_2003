@@ -16,6 +16,7 @@ APP	   = !$(COMPONENT)
 ROM_MODULE = aof.$(COMPONENT)
 
 RESDIR = <resource$dir>.Resources2.$(COMPONENT)
+RESAPP = <resource$dir>.Apps.$(APP)
 RDIR   = Resources
 
 SYMFILTER = filter
@@ -83,23 +84,16 @@ SYMBOLS = syms
 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
-
-install: $(FILES)
-	$(MKDIR) $(INSTDIR).$(APP)
-	$(CP) $(RDIR).!Boot $(INSTDIR).$(APP).!Boot $(CPFLAGS)
-	$(CP) $(RDIR).!Run $(INSTDIR).$(APP).!Run $(CPFLAGS)
-	$(CP) $(RDIR).CallASWI $(INSTDIR).$(APP).CallASWI $(CPFLAGS)
-	$(CP) $(RDIR).!Sprites22 $(INSTDIR).$(APP).!Sprites22 $(CPFLAGS)
-	Access $(INSTDIR).$(APP).* lr/r
-	@echo $(COMPONENT): Application installed
 	
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
-resources: indexes
+resources: indexes $(FILES)
 	$(MKDIR) $(RESDIR)
+	$(MKDIR) $(RESAPP)
 	$(CP) $(INDEX).* $(RESDIR).* $(CPFLAGS)
+	$(CP) $(RDIR).* $(RESAPP).* $(CPFLAGS)
 	@echo $(COMPONENT): resource files copied to Messages module
 
 
