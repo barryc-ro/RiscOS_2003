@@ -384,6 +384,7 @@ o.ncma_bootb:	h.ncma_url
 o.ncma_bootb:	h.ncma_uid
 o.ncma_bootb:	h.ncma_utils
 o.ncma_bootb:	h.smcard
+o.ncma_bootb:	h.machine
 o.ncma_bootb:	C:h.DBUG
 o.ncma_tags:	c.ncma_tags
 o.ncma_tags:	h.ncma_tags

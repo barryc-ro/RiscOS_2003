@@ -32,6 +32,25 @@ unsigned int bCardVerified = 0;    /* Card is intially unverified */
 NCMA_STATE   uiPreviousState = State_NCMAInit;
 NCMA_STATE   card_removed_in_state = State_NCMAInit;
 unsigned int bRedialRequested = 0; /* No redial has been requested */
+
+extern int num_bytes;  // This variable is used to store the number of bytes held in the cache.
+extern char* memory_area; // This holds a copy of the memory area.
+#endif // SC_SWAPPING
+
+
+
+#ifdef SC_SWAPPING
+  /* Routine to free memory used in checking whether the smartcard is the
+      same one as the session started with. This routine should be called at
+      the end of a session. */
+void tidy_memory(void)
+{
+  if (memory_area) /* memory has been allocated */
+  {
+    free(memory_area);
+    memory_area = NULL;
+  }
+}
 #endif // SC_SWAPPING
 
 
@@ -96,6 +115,7 @@ char *trans_string(NCMA_TRANS trans)
      "Trans_LogoutAck",
      "Trans_LogoutNak",
      "Trans_NCMADialUI_Start",
+     "Trans_WrongISPCard",
 #endif /* SC_SWAPPING */
      "Trans_HangUp"
   };
@@ -134,6 +154,7 @@ char *state_string(NCMA_STATE state)
     "State_NCMABadUnblockPIN",
 #ifdef SC_SWAPPING
     "State_NCMALogout",
+    "State_NCMAWrongISPCard",
 #endif /* SC_SWAPPING */
     "State_Cron"
   };
@@ -147,10 +168,30 @@ char *state_string(NCMA_STATE state)
 NCMA_STATE PreConnect_in_NCMA_Connect()
 {
   DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: PreConnect_in_NCMA_Connect() called\n");
-  if(fetch_sc_bootblock()<0) {
-      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, couldn't read sc bootblock\n");
-      return(State_NCMAConnect);
-  }
+
+#ifdef SC_SWAPPING
+/* Check that sc_bootblock returns that the cards are the same. */
+                   {
+                     int temp_return_value = fetch_sc_bootblock();
+		     if(temp_return_value == -1)
+		     {
+		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+                         return(State_NCMAConnect);
+		     }
+		     if(temp_return_value == -2)
+		     {
+		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard is not the same one as at start of session.\n");
+                         ncma_dbox_open(URL_PATH(correct.html));
+                         return(State_NCMAWrongISPCard);
+		     }
+                   }
+#else
+		     if(fetch_sc_bootblock()<0)
+		     {
+		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+                         return(State_NCMAConnect);
+		     }
+#endif /* SC_SWAPPING */
 
   if(virgin_smartcard()) {
       DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, nothing on card\n");
@@ -176,8 +217,27 @@ NCMA_STATE URLConnect_in_NCMA_Connect(void)
 #ifdef ETHERNET
        		     ncma_dbox_close();
 #endif
-		     if(fetch_sc_bootblock()<0) {
+
+#ifdef SC_SWAPPING
+/* Check that sc_bootblock returns that the cards are the same. */
+                   {
+                     int temp_return_value = fetch_sc_bootblock();
+		     if(temp_return_value == -1)
+		     {
 		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+		     }
+		     if(temp_return_value == -2)
+		     {
+		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard is not the same one as at start of session.\n");
+                         ncma_dbox_open(URL_PATH(correct.html));
+                         return(State_NCMAWrongISPCard);
+		     }
+                   }
+#else
+		     if(fetch_sc_bootblock()<0)
+		     {
+		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+
 #ifdef ISP_CAPTURE
        			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
        			 ncma_isp_capture();
@@ -187,6 +247,7 @@ NCMA_STATE URLConnect_in_NCMA_Connect(void)
 		         return(State_NCMABadCard);
 #endif
 		     }
+#endif /* SC_SWAPPING */
 
 
 		     if(virgin_smartcard()) { /* smartcard never been written to */
@@ -805,13 +866,22 @@ from changing, as the card we removed during the current session. */
                 {
                   if (bCardVerified)
                   {
+                    NCMA_STATE new_state;
                     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Screens cannot change, but card is now verified\n");
                     if (bRedialRequested)
                     {
-                      URLConnect_in_NCMA_Connect(); // Rebuild all caches.
+                      new_state = URLConnect_in_NCMA_Connect(); // Rebuild all caches.
                     }
-                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Setting state to State_NCMADiallingISP\n");
-                    return(State_NCMADiallingISP);
+                    if (new_state == State_NCMAWrongISPCard)
+                    {
+                      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Setting state to %s\n", state_string(new_state));
+                      return (new_state);
+                    }
+                    else
+                    {
+                      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Setting state to State_NCMADiallingISP\n");
+                      return(State_NCMADiallingISP);
+                    }
                   }
                   else
                   {
@@ -1101,6 +1171,9 @@ from changing, as the card we removed during the current session. */
                   ncma_standby_dbox_close(); /* close my dbox */
                   ncma_dbox_close(); /* close any other dbox. Yuck. */
                   ncma_url_open(BLANK_SCREEN_URL);
+#ifdef SC_SWAPPING
+                  tidy_memory();
+#endif // SC_SWAPPING
                   return(State_NCMAShutdown);
                   break;
 
@@ -1284,6 +1357,9 @@ from changing, as the card we removed during the current session. */
           	 ncma_hangup();
         	 ncma_dbox_close();
         	 reset_cache(); /* was unlock_cache() */
+#ifdef SC_SWAPPING
+                 tidy_memory();
+#endif // SC_SWAPPING
 
 #ifdef LOCAL_URL_PATHS
   	   	  ncma_url_open(URL_PATH(welcome.html));
@@ -1304,7 +1380,35 @@ from changing, as the card we removed during the current session. */
     	 }
     	 break;
 
+
+/*********************************************************************************
+
+    STATE_NCMAWrongISPCard
+
+ *********************************************************************************/
+   case State_NCMAWrongISPCard:
+    	switch(trans)
+        {
+	    case Trans_CardOK:
+	         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card_ok event in State_NCMAWrongISPCard - clearing status delta register\n");
+	         smartcard_status(NULL);
+	    	 return(State_NCMANoCard);
+
+	    case Trans_CardRemoved:
+	         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: cCardRemoved event in State_NCMAWrongISPCard - Opening splash.html and going to State_NCMANoCard\n");
+	    	 ncma_dbox_open(URL_PATH(splash.html));
+	    	 return(State_NCMANoCard);
+
+	    case Trans_Timeout: /* user clicked 'Continue' with no card inserted */
+	    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Card check timer expired\n");
+	    	 pointless_button_clicked = 0;
+	    	 ncma_hourglass_off();
+	    	 ncma_dbox_open(URL_PATH(splash.html));
+	    	 return(State_NCMANoCard);        }
+
+        break;
 #endif /* SC_SWAPPING */
+
 
 
 /*********************************************************************************
