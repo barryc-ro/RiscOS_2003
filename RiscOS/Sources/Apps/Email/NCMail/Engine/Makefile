@@ -27,6 +27,7 @@ LIBDIR	= <Lib$Dir>
 #
 
 COMPONENT       = Engine
+RES_COMPONENT   = NCMail
 APP             = !NCMail
 MODULE		= rm.!NCMail
 ROM_MODULE	= aof.NCMail
@@ -39,7 +40,7 @@ LPATH            = LocalUserIFRes:
 # Export Paths for Messages module
 #
 
-RESDIR          = $(RESDIR).$(COMPONENT)
+RESDIR          = $(RESDIR).$(RES_COMPONENT)
 RESAPP          = <Resource$Dir>.Apps.$(APP)
 
 
