@@ -68,7 +68,7 @@ COMPONENT = ConfigUpd
 TARGET    = aof.ConfigUpd
 TARGETSA  = rm.ConfigUpd
 EXPORTS   = 
-OBJS      = o.main o.nvram o.utils o.exclusions o.header o.module o.errors o.validation
+OBJS      = o.main o.nvram o.utils o.exclusions o.header o.module o.errors o.validation o.output
 
 
 #

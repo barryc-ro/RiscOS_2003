@@ -28,7 +28,6 @@
 static int exclusions_file_valid = -1; /* No attempt as been made to load file. */
 
 static bool parse_exclusions_file_line(const char* const line, const unsigned int line_number);
-static void debug_display_exclusions_list(void);
 
 
 
@@ -36,27 +35,20 @@ static void debug_display_exclusions_list(void);
 #define EXCLUSION_RULE_TYPE_INCLUDED 1
 #define EXCLUSION_RULE_TYPE_EXCLUDED 2
 
-typedef enum
-{
-  E_TARGET_TYPE_NO_TARGET = -1,
-  E_TARGET_TYPE_MAIN_BB = 0,
-  E_TARGET_TYPE_DEFAULT_BB,
-  E_TARGET_TYPE_NVRAM
-} TARGET_TYPE;
-
 
 /* This file uses the queue functionality provided by TCPIPLibs inthe file sys.queue.h.
    The code scans an exclusions file and places any rules found into a singly-linked lists. This list cmprises of rules for tags that must be present (included) or not be present (excluded).
 */
 
-static SLIST_HEAD(list2, list) *inclusions;
+static SLIST_HEAD(list2, list) *inclusions = NULL;
 
 struct list
 {
   SLIST_ENTRY(list) list_link; /* list macro glue */
   int rule_type;         /* 1 = include, 2 = exclude */
   int nci_tag_number;    /* The nci_tag number of the tag this rule represents. */
-  TARGET_TYPE target;   /* 0 = main bb, 1 = default bb, 2 = NVRAM. */
+  TARGET_TYPE target;    /* 0 = main bb, 1 = default bb, 2 = NVRAM. */
+  bool included;         /* Set to true if this flag was included. */
   char* rule_text;       /* An additional rule (e.g. a DNS range ) */
 };
 
@@ -102,7 +94,6 @@ bool read_exclusions_file(const char* const filename)
   {
     dprintf(("", "read_exclusions_file(): Error, exclusions file is invalid.\n"));
     /* Now do what we need to do... Remove the list so no rules are visible to the rest of the system. */
-    clear_all_lists();
     exclusions_file_valid = 0;
     return (false);
   }
@@ -111,8 +102,6 @@ bool read_exclusions_file(const char* const filename)
     dprintf(("", "read_exclusions_file(): exclusions file was valid. Rules are now available for use.\n"));
     exclusions_file_valid = 1;
 
-    /* Debug display contents of lists. */
-    debug_display_exclusions_list();
   }
 
   /* Close the file */
@@ -157,7 +146,6 @@ static bool parse_exclusions_file_line(const char* const line, const unsigned in
   if (strlen(line_ptr) > 1)
   {
     convert_linefeeds(line_ptr);
-    dprintf(("", "parse_exclusions_file_line(): Line is \'%s\'\n", line_ptr));
   }
   else
   {
@@ -312,6 +300,8 @@ static bool parse_exclusions_file_line(const char* const line, const unsigned in
     p->target = target;
     /* Store the rule_type. */
     p->rule_type = line_type;
+    /* Store whether it has been mentioned in CU file yet. (default false) */
+    p->included = false;
     /* Convert the tag string to an nci_tag number and store. */
     p->nci_tag_number = return_nci_tag_number_from_tag_string(fragment[2]);
     if (p->nci_tag_number == -1)
@@ -359,7 +349,7 @@ static bool parse_exclusions_file_line(const char* const line, const unsigned in
 bool clear_exclusions_file(void)
 {
   /* Clear all memory */
-  clear_all_lists();
+  clear_exclusions_list();
   /* Reset state of flag so that file has not been read. */
   exclusions_file_valid = -1;
 
@@ -369,7 +359,7 @@ bool clear_exclusions_file(void)
 
 
 /* This routine displays a debug list of all the known rules. */
-static void debug_display_exclusions_list(void)
+void debug_display_exclusions_list(void)
 {
   struct list *p;
   unsigned int count = 0;
@@ -378,12 +368,12 @@ static void debug_display_exclusions_list(void)
   SLIST_FOREACH(p, inclusions, list_link)
   {
     count++;
-    dprintf(("", "debug_display_exclusions_list(): Node %d is: %d %d %d \"", count, p->target, p->rule_type, p->nci_tag_number));
+    dprintf(("", "debug_display_exclusions_list(): Node %d is: %d %d %d \'\n", count, p->target, p->rule_type, p->nci_tag_number));
     if (p->rule_text)
     {
       dprintf(("", "%s", p->rule_text));
     }
-    dprintf(("", "\"\n"));
+    dprintf(("", "\' %s\n", p->included?"Included":"Not included"));
   }
 
   dprintf(("", "debug_display_exclusions_list(): There were %d nodes.\n", count));
@@ -393,27 +383,31 @@ static void debug_display_exclusions_list(void)
 
 
 /* This routine clears the inclusion and exclusion lists, tidying up all memory as it goes. */
-void clear_all_lists(void)
+void clear_exclusions_list(void)
 {
   struct list *p, *next;
 
-  /* Initially free all data held within the nodes. */
-  SLIST_FOREACH(p, inclusions, list_link)
+  if (inclusions)
   {
-    if (p->rule_text)
+    /* Initially free all data held within the nodes. */
+    SLIST_FOREACH(p, inclusions, list_link)
     {
-      rmfree((unsigned char*)p->rule_text);
-      p->rule_text = NULL;
+      if (p->rule_text)
+      {
+        rmfree((unsigned char*)p->rule_text);
+        p->rule_text = NULL;
+      }
     }
-  }
 
-  /* Now free the memory of the nodes themsleves. */
-  p = SLIST_FIRST(inclusions);
-  while (p)
-  {
-    next = SLIST_NEXT(p, list_link);
-    rmfree((unsigned char*) p);
-    p = next;
+    /* Now free the memory of the nodes themsleves. */
+    p = SLIST_FIRST(inclusions);
+    while (p)
+    {
+      next = SLIST_NEXT(p, list_link);
+      rmfree((unsigned char*) p);
+      p = next;
+    }
+    inclusions = NULL;
   }
 }
 
@@ -551,18 +545,19 @@ unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
 bool is_tag_excluded(const unsigned int nci_tag_number, TARGET_TYPE target)
 {
   struct list *p = NULL;
-  dprintf(("", "is_tag_excluded(): \n"));
+  dprintf(("", "is_tag_excluded()\n"));
 
   /* Ensure that all tags that need including are included. */
   SLIST_FOREACH(p, inclusions, list_link)
   {
-    if (p->rule_type == EXCLUSION_RULE_TYPE_INCLUDED)
+    if (p->nci_tag_number == nci_tag_number && p->target == target)
     {
-      /* This tag should be included in the CU file. */
-      dprintf(("", "is_tag_excluded(): \n"));
-      if (p->nci_tag_number == nci_tag_number && p->target == target)
+      p->included = true;
+      if (p->rule_type == EXCLUSION_RULE_TYPE_EXCLUDED)
       {
-
+        /* This tag should not be present in the CU file. */
+        dprintf(("", "is_tag_excluded(): Tag is excluded.\n"));
+        return (true);
       }
     }
   }
