@@ -131,11 +131,11 @@ socklib5zm:	${ZFILES5} local_dirs
 	${LIB} -c socklib5zm ${ZFILES5}
 	${LIB} -o socklib5zm
 
-veneers:	mkveneers Prototypes local_dirs
+veneers:	mkveneers Prototypes
 	mkveneers Prototypes
 	Create veneers
 
-mkveneers:	c.mkveneers local_dirs
+mkveneers:	c.mkveneers
 	cc mkveneers -LC:o.Stubs
 
 export: export_${PHASE}
