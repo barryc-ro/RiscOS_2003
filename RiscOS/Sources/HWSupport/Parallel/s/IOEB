@@ -12,6 +12,12 @@ pp_base                 * C710 + (&278 * 4)
 pp_data                 * pp_base +0                    ; data port in non-FIFO mode
 pp_stat                 * pp_base +4                    ; status register
 pp_ctrl                 * pp_base +8                    ; control register
+;pp_EPP			* pp_base +12			; EPP mode available only
+;pp_EPP_Data0		* pp_base +16
+;pp_EPP_Data1		* pp_base +20
+;pp_EPP_Data2		* pp_base +24
+;pp_EPP_Data3		* pp_base +28
+
 pp_fifo                 * pp_base + (&400 * 4)          ; FIFO data port (may depend on the chip being used)
 pp_ecr                  * pp_base + (&402 * 4)          ; extended control register
 
@@ -20,13 +26,23 @@ pp_stat_ack             * 1:SHL:6       ; goes low during acknowledge pulse
 pp_stat_pe              * 1:SHL:5       ; set => no paper,                      clear => paper
 pp_stat_slct            * 1:SHL:4       ; set => online,                        clear => off line
 pp_stat_error           * 1:SHL:3       ; set => no error,                      clear => error
+;pp_stat_2		* 1:SHL:2	; hardwired low
+;pp_stat_1		* 1:SHL:1	; hardwired low
+pp_EPP_timeout		* 1:SHL:0	; set => >= 10 us timout occurred 	clear => no timeout
 
+;pp_ctrl_7		* 1:SHL:7	; hardwired low
+;pp_ctrl_6		* 1:SHL:6	; hardwired low
 pp_ctrl_dir             * 1:SHL:5       ; set => input, clear => output
 pp_ctrl_irqen           * 1:SHL:4       ; set => irq gen when ACK low,          clear => irq disabled
 pp_ctrl_slctin          * 1:SHL:3       ; set => select printer,                clear => off line
 pp_ctrl_init            * 1:SHL:2       ; set => normal operation,              clear => reset printer (min 50µs)
 pp_ctrl_autofd          * 1:SHL:1       ; set => generate auto feed,            clear => no autofeed
 pp_ctrl_strobe          * 1:SHL:0       ; set => active low pulse,              clear => no strobe
+
+; these flags control the mode at which the parallel device should be driven, see the COMBO chip spec
+; pg. 99 FDC37C669 specification.
+pp_ecr_flag_FIFO	* 2_010:SHL:5	; use FIFO mode
+pp_ecr_flag_default	* 2_001:SHL:5	; use default parallel mode
 
 pp_ecr_mode             * 7:SHL:5       ; mask out mode bits
 pp_ecr_errintdis        * 1:SHL:4       ; set => irq disabled,                  clear => irq gen on error
@@ -38,11 +54,15 @@ pp_ecr_empty            * 1:SHL:0       ; set => FIFO is empty,                 
 ; Define default settings for control registers.
 
 pp_ctrl_default         * pp_ctrl_init :OR: pp_ctrl_slctin
-pp_ecr_default          * 2_001:SHL:5 :OR: pp_ecr_errintdis
+pp_ecr_default          * pp_ecr_flag_default :OR: pp_ecr_errintdis
 
 ioeb_ctrl_output        * pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init
 ioeb_ctrl_input         * pp_ctrl_dir :OR: pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init :OR: pp_ctrl_autofd
 
+ioctl_reason_size	* 1
+ioctl_reason_data	* 2
+ioctl_reason_mask	* &FFFF
+ioctl_group_parallel	* 1
 
 ; Clear printer interrupt depending on hardware type (IOMD has clear bit).
                 MACRO
@@ -52,6 +72,18 @@ $label          LDRB    $v0, InterruptBit
                 LDR     $v1, InterruptClear
                 STRB    $v0, [$v1]
                 MEND
+
+; this macro delays for 5us
+		MACRO
+$label		PulseDelay $v0
+
+$label		ROUT
+		LDR	$v0, LoopFactor		; get the processor speed
+		MOV	$v0, $v0, LSR #3
+10
+		SUBS	$v0, $v0, #1
+		BGT	%BT10
+		MEND
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -94,7 +126,7 @@ IOEBdevice      ROUT
                 B       ioeb_created                            ; output or input stream created
                 B       ioeb_monitorTX                          ; check sending is okay
                 MOV     pc, lr                                  ; monitor rx
-                MOV     pc, lr                                  ; ioctl
+                B       ioeb_ioctl                              ; ioctl
 10
                 ADRL    r0, ErrorBlock_Parallel_BadCall         ; if not within valid range
               [ international
@@ -835,6 +867,63 @@ ioeb_resume     ALTENTRY                        ; needs to push same stuff as io
                 B       buffer_byte             ; try again
 
 
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: ioeb_ioctl
+;
+; this implements the io control call as implemented in the serial device. At
+; present this only implements calls used to get the DEVICE ID.
+;
+; dumps the contents b0 least significant byte
+ioeb_ioctl
+                ROUT
+                ENTRY "r0, r5-r7"
+
+                LDRB    r5, [r3, #2]
+                LDR     r6, =ioctl_group_parallel       ; make sure we are in the right group
+                CMP     r6, r5
+                BNE     ioctl_error
+
+                LDRB    r5, [r3, #3]
+                CMP     r5, #1:SHL:7                    ; read flag must be set
+                BEQ     ioctl_error
+
+                LDR     r5, [r3]
+                LDR     r0, =ioctl_reason_mask
+                AND     r5, r5, r0                      ; the least significant word is the reason
+                CMP     r5, #ioctl_reason_data
+                BGT     ioctl_error
+
+                MOVLT   r7, #2                          ; to read the size read only two bytes
+                BLT     %FT10
+                LDR     r7, [r3, #4]
+                LDR     r5, [r3, #3]
+                CMP     r5, #1:SHL:6;
+                CMPEQ   r7, #2
+                BLE     ioctl_error
+10
+                ADD     r6, r3, #6                      ; r6 is the address of the data
+
+                BL      IEEE1284_negotiate
+                BVS     ioctl_error_xlate
+
+                LDRB    r5, [r3, #7]                    ; byte swap the size, zero the most significant two.
+                LDRB    r4, [r3, #6]
+                ORR     r5, r5, r4, LSL #8
+                STR     r5, [r3, #4]
+
+                EXIT
+ioctl_error
+                ADRL    r0, ErrorBlock_Parallel_BadParm ; this must be set
+ioctl_error_xlate
+                [ international
+                BL      MakeError
+                |
+                SETV
+                ]
+                STRVS   r0, [sp, #Proc_RegOffset]
+                EXIT
+
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -941,5 +1030,181 @@ UpdateIOEBCtrl  EntryS  "r2"
                 STRB    lr, [r2]                                ; update control register (hardware)
 
                 EXITS   ,cf                                     ; exit, restoring original IRQ state
+
+; This method implements section 7.4 of the IEEE std 1284-1994 specification.
+;
+; reg usage;
+; on entry r6 is the buffer to write to
+; r7 is the size to read including the size.
+
+IEEE1284_negotiate
+                ROUT
+                ENTRY "r0-r5"
+
+                LDR     lr, =pp_ecr             ; make sure we are in compatability mode
+                LDRB    r5, [lr]
+
+                [  FastCentronics               ; if we are in fast mode get out of it and store
+                TST     r5, #pp_ecr_flag_FIFO
+                TSTNE   r5, #pp_ecr_empty
+                ADRNEL  r0, ErrorBlock_Parallel_InUse
+                STRNE   r0, [sp, #Proc_RegOffset]
+                EXIT    NE
+                ]
+
+                MOV     r0, #pp_ecr_default     ; mode 001 as we may want to tri-state the data lines
+                STRB    r0, [lr]                ; this sets the combo into compatability mode (turns FIFO off)
+
+                LDR     r2, =pp_ctrl            ; r2 now always contains the address of the control byte
+                MOV     r0, #pp_ctrl_default
+                STRB    r0, [r2]                ; pull the strobe line up
+                LDR     lr, =pp_data
+                MOV     r3, #&04                ; request Device Id string using reverse nibble mode
+                STRB    r3, [lr]                ; set the data to Extensibility Request Value
+                ORR     r0, r0, #pp_ctrl_autofd
+                BIC     r0, r0, #pp_ctrl_slctin
+                STRB    r0, [r2]                ; set the stimulus event 1.
+
+                LDR     r1, =pp_stat
+                LDR     r0, LoopFactor          ; wait for peripheral response
+                MOV     r0, r0, LSL #10         ; 40 us * &400
+10
+                LDRB    r3, [r1]                ; negotiation phase
+                TST     r3, #pp_stat_error
+                TSTNE   r3, #pp_stat_pe
+                BNE     %FT20                   ; IEEE 1284 compatabiility
+                SUBS    r0, r0, #1
+                BGT     %BT10
+                MOV     r0, #0                  ; data read is zero.
+                B       negotiate_tidy          ; 1284 failed
+20
+                LDRB    r3, [r2]                ; event 3 pull strobe down
+                ORR     r3, r3, #pp_ctrl_strobe
+                STRB    r3, [r2]
+
+                PulseDelay r0                   ; delay for 5 us to ensure the peripheral sees it.
+
+                BIC     r3, r3, #pp_ctrl_autofd :OR: pp_ctrl_strobe
+                STRB    r3, [r2]                ; event 4 on map
+
+                LDR     r0, LoopFactor          ; wait for peripheral response
+                MOV     r0, r0, LSL #10
+30
+                LDRB    r3, [r1]
+                TST     r3, #pp_stat_ack        ; wait for the ACK to come up.
+                BNE     %FT40
+                SUBS    r0, r0, #1
+                BGT     %BT30
+                B       negotiate_tidy
+40
+                ; read data from peripheral
+                MOV     r4, #0                  ; set up the counts, avoiding the always blank first two bytes
+50
+                LDRB    r3, [r1]                ; main read loop
+                TST     r3, #pp_stat_error      ; determine if there is data to read
+                BNE     negotiate_tidy          ; no data left
+
+                BL      reverse_nibble_read     ; read the byte
+
+                BVS     negotiate_tidy
+
+                STRB    r0, [r6, r4]            ; this stores the data at the buffer including the first two bytes
+
+                ADD     r4, r4, #1
+                CMP     r7, r4
+                BGT     %BT50
+negotiate_tidy
+                LDR     lr, =pp_ecr             ; tidyup restore the ecr state to what it was.
+                STRB    r5, [lr]
+                LDR     r1, =pp_ctrl
+                MOV     r5, #pp_ctrl_default
+                STRB    r5, [r1]
+
+                EXIT
+
+; register usage
+; r0 returns byte or error on error
+; r1 status, byte address
+; r2 control, byte address
+reverse_nibble_read
+                ROUT
+                ENTRY   "r3-r5"
+
+                LDRB    r3, [r2]
+                ORR     r3, r3, #pp_ctrl_autofd                 ; pull the autofd line down
+                STRB    r3, [r2]
+
+                LDR     r4, LoopFactor                          ; maximum of 35 milliseconds peripheral response
+                MOV     r4, r4, LSL #10                         ; 40 us * 1000 ~=(&400)
+50
+                LDRB    r3, [r1]
+                TST     r3, #pp_stat_ack                        ; wait for data, ack low
+                BEQ     %FT55
+                SUBS    r4, r4, #1
+                BGT     %BT50
+                B       nibble_error
+55
+                LDRB    r4, [r1]                                ; read the first nibble from the status byte
+                AND     r0, r4, #pp_stat_pe :OR: pp_stat_slct :OR: pp_stat_error ; find bits 2, 1 and 0 resp. masked as 5, 4 & 3
+                MOV     r0, r0, LSR #3
+                TST     r4, #pp_stat_notbusy                    ; see if bit seven is set
+                ORREQ   r0, r0, #&08                            ; make that bit 3
+
+                LDRB    r3, [r2]                                ; pull the autofd up again first nibble complete
+                BIC     r3, r3, #pp_ctrl_autofd
+                STRB    r3, [r2]
+
+                LDR     r4, LoopFactor                          ; wait for ack to come back up again
+                MOV     r4, r4, LSL #10
+65
+                LDRB    r3, [r1]
+                TST     r3, #pp_stat_ack                        ; wait for data
+                BNE     %FT70
+                SUBS    r4, r4, #1
+                BGT     %BT65
+                B       nibble_error
+70
+                LDRB    r3, [r2]                                ; ready to read the second nibble, similar cycle as above
+                ORR     r3, r3, #pp_ctrl_autofd                 ; pull the autofd line down
+                STRB    r3, [r2]
+
+                LDRB    r3, [r2]
+
+                LDR     r4, LoopFactor
+                MOV     r4, r4, LSL #10
+75
+                LDRB    r3, [r1]
+                TST     r3, #pp_stat_ack                        ; wait for the lowering of the ack
+                BEQ     %FT80
+                SUBS    r4, r4, #1
+                BGT     %BT75
+                B       nibble_error
+80
+                LDRB    r4, [r1]
+                TST     r4, #pp_stat_notbusy                    ; see if bit seven is set
+                ORREQ   r0, r0, #&80
+                AND     r3, r4, #pp_stat_pe :OR: pp_stat_slct :OR: pp_stat_error ; find bits 2, 1 & 0, masked as 5 , 4 & 3
+                ORR     r0, r0, r3, LSL #1                      ; set the top nibble
+
+                LDRB    r3, [r2]
+                BIC     r3, r3, #pp_ctrl_autofd
+                STRB    r3, [r2]
+
+                LDR     r4, LoopFactor
+                MOV     r4, r4, LSL #10
+85
+                LDRB    r3, [r1]
+                TST     r3, #pp_stat_ack                        ; wait for the raising of the ack
+                BNE     %FT90
+                SUBS    r4, r4, #1
+                BGT     %BT85
+                B       nibble_error
+90
+                EXIT
+nibble_error
+                ADRL    r0, ErrorBlock_Parallel_BadHardware     ; timeout
+                SETV
+                STRVS   r0, [sp, #Proc_RegOffset]
+                EXIT
 
                 END
