@@ -24,6 +24,7 @@
 #  4th Jul 1995  JRC    socket.h now in OSLib
 #  7th Jul 1995  JRC    Changed INSTDIR to INSTAPP, except in 1 vital place
 #  1st Aug 1995  JRC    Added BootVars target, for installation of BootVars in Scrap
+#  4th Oct 1999  NB     Added FreePool, Do & IfThere targets for installation of tools into INSTDIR.
 
 #
 # Program specific options:
@@ -218,6 +219,15 @@ install_Configure:
 install_BootVars: Utils.BootVars
    ${CP} Utils.BootVars ${INSTDIR}.BootVars ${CPFLAGS}
 
+install_FreePool: Utils.FreePool
+   ${CP} Utils.FreePool ${INSTDIR}.FreePool ${CPFLAGS}
+
+install_Do: Library.Do
+   ${CP} Library.Do ${INSTDIR}.Do ${CPFLAGS}
+
+install_IfThere: Library.IfThere
+   ${CP} Library.IfThere ${INSTDIR}.IfThere ${CPFLAGS}
+
 set_access:
    ${ATTR} -directories +wr ${INSTAPP}
    ${ATTR} -files +ol +or -ow +wr ${INSTAPP}
@@ -303,3 +313,26 @@ RO350Hook.Boot.PreDesk.MemFix: Source.MemFix.Source.MemFix
 #---------------------------------------------------------------------------
 # Library.AddApp: Hdr:ListOpts
 # Dynamic dependencies:
+Library.Do: Hdr:ListOpts
+Library.Do: Hdr:Macros
+Library.Do: Hdr:System
+Library.Do: Hdr:SWIs
+Library.Do: Hdr:CPU.Generic26
+Library.Do: Hdr:IO.GenericIO
+Library.Do: Hdr:RISCOS
+Library.IfThere: Hdr:ListOpts
+Library.IfThere: Hdr:Macros
+Library.IfThere: Hdr:System
+Library.IfThere: Hdr:SWIs
+Library.IfThere: Hdr:CPU.Generic26
+Library.IfThere: Hdr:IO.GenericIO
+Library.IfThere: Hdr:RISCOS
+Library.IfThere: Hdr:Proc
+Library.IfThere: Hdr:ModHand
+Library.IfThere: Hdr:ResourceFS
+Utils.FreePool: OS:Hdr.Macros
+Utils.FreePool: OS:Hdr.OS
+Utils.FreePool: OS:Hdr.Types
+Utils.FreePool: OS:Hdr.Wimp
+Utils.FreePool: OS:Hdr.OSSpriteOp
+Utils.FreePool: OS:Hdr.Font
