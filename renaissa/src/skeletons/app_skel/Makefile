@@ -1,12 +1,4 @@
 # Skeleton OBJASM/C Makefile for application
-#
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date       	Name         	Description
-# ----       	----         	-----------
-# 17 Sep 1997	RWB		Created
-
 
 #
 # Paths
@@ -26,8 +18,8 @@ RM      = remove
 WIPE    = -wipe
 CD	= dir
 
-AFLAGS = -depend !Depend -Stamp -quit -To $@ -From
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS}
+AFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit -To $@ -From
+CFLAGS  = -c -depend !Depend ${THROWBACK} ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 DFLAGS  = ${DEBUG}
@@ -41,13 +33,13 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-EVENTLIB   = Tbox:o.eventlib
-TOOLBOXLIB = Tbox:o.toolboxlib
-WIMPLIB	   = Tbox:o.wimplib
+EVENTLIB   = C:Tboxlibs.o.eventlib
+TOOLBOXLIB = C:Tboxlibs.o.toolboxlib
+WIMPLIB	   = C:Tboxlibs.o.wimplib
 #
 # Include files
 #
-INCLUDES = -ITbox: -IC:
+INCLUDES = -IC:Tboxlibs. -IC:
 
 
 # Program specific options:
@@ -89,3 +81,18 @@ ${TARGET}: ${OBJS}
         ${LD} -o $@ ${OBJS} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB}
 #
 # Dynamic dependencies:
+o.main:	c.main
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	C:Tboxlibs.h.wimp
+o.main:	C:Tboxlibs.h.toolbox
+o.main:	C:Tboxlibs.h.event
+o.main:	C:Tboxlibs.h.wimplib
+o.main:	C:Tboxlibs.h.gadgets
+o.main:	C:Tboxlibs.h.window
+o.main:	C:Tboxlibs.h.menu
+o.main:	C:Tboxlibs.h.proginfo
+o.main:	C:Tboxlibs.h.iconbar
+o.main:	h.constants
+o.main:	VersionNum
+o.main:	h.resources
