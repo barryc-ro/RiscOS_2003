@@ -49,7 +49,7 @@ RESAPP          = <Resource$Dir>.Apps.$(APP)
 # Generic options
 #
 
-MKDIR           = cdir
+MKDIR           = do mkdir -p
 AS              = objasm
 CC              = $(MemCheckCC) cc
 C++             = $(MemCheckCC) c++
@@ -412,6 +412,7 @@ o.dirs:
         @$(MKDIR) syms
         @$(MKDIR) Targets
         @$(MKDIR) Targets.$(APP)
+        @$(MKDIR) $(INSTDIR)
         @$(TOUCH) $@
 
 localdirs:
