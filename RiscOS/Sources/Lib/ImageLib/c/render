@@ -159,7 +159,7 @@ static _kernel_oserror* render_whole_scaled_fast(int handle);
 static _kernel_oserror* render_generate_colourtrans_table(int handle);
 static _kernel_oserror* render_save_area(void);
 static _kernel_oserror* render_vdu_back_to_screen(void);
-static int              render_valid_handle(int handle);
+static int              render_valid_handle(unsigned int handle);
 static void             render_initialise(void);
 static int              render_which_interlace_offset(int handle, unsigned int n, int *pass);
 static void             render_which_row_and_pass_is_this(int handle, int n, unsigned int* row, int* pass);
@@ -249,7 +249,8 @@ _kernel_oserror* render_start(char type, int w, int h, int i, int tp, render_fla
     im->width         = w;                  // width
     im->height        = h;                  // height
     im->type          = type;               // type
-    im->scanline      = 0;                  // current scanline being recompressed
+    im->scanline      = 0;                  // current scanline of block being recompressed
+    im->subscanline   = 0;                  // current scanline in block
     im->interlace     = i;                  // interlace flag
     im->row           = 0;                  // row being plotted (not = scanline if interlaced)
     im->blk_off[0]    = 0;                  // first block offset is zero
@@ -264,8 +265,8 @@ _kernel_oserror* render_start(char type, int w, int h, int i, int tp, render_fla
     im->lzw_handle    = -1;                 // handle for lzw compressor/decompressor
     im->last_sprite_row = -1;
 
-    /* Get memory to store single row of uncompressed data (for recompression) */
-    size=((w/4)*4) + 16;
+    /* Get memory to store lpb row of uncompressed data (for recompression) */
+    size=((w/4)*4)*lpb + 16;
     if (!flex_alloc((flex_ptr)&im->rgb_data, size))
         return render_error_and_abandon(handle, "Can't allocate memory for rgb_data.");
 
@@ -432,11 +433,12 @@ static _kernel_oserror* render_start_fast(int handle)
  * Returns: return_address - (possibly new) location to put bitstream                         *
  *--------------------------------------------------------------------------------------------*/
 
-_kernel_oserror* render_row(int handle, char **return_address)
+_kernel_oserror* render_row(int handle, char **return_address, int *inc)
 {
     _kernel_oserror *e;
     internal_header *im=images[handle];
     int              nb, y, size, spare, extend;
+    int              oldscanline = im->scanline;
 
     debug_value("  render row ",handle);
 
@@ -448,6 +450,7 @@ _kernel_oserror* render_row(int handle, char **return_address)
     {
         e=render_row_fast(handle);
         *return_address = im->rgb_data;
+        *inc = 1;
         if (e) return render_error_and_abandon(handle, e->errmess);
         return NULL;
     }
@@ -471,37 +474,37 @@ _kernel_oserror* render_row(int handle, char **return_address)
         }
     }
 
-    /* If we're running low on space for the lzw data, try and extend it... */
-    /* ... so how many bytes do we need to have spare to be sure of fitting a row of data? */
-    spare  = (im->width < 256) ? 4096 : (im->width * LinesInBlock * 2);
-    /* and if this isn't free, how much should we extend the area by? */
-    extend = 2 * spare;
-
-    if  ( (im->lzw_ptr > (im->lzw_data_size-spare) ) || (im->lzw_data_size<spare) )
+    im->subscanline++;
+    if ((im->subscanline) % im->flags.lpb == 0 || im->scanline+im->subscanline >= im->height)
     {
-        debug_print("    extending flex area");
-        size = im->lzw_data_size + extend;
-        if (!flex_extend((flex_ptr)&im->lzw_data, size))
-            return render_error_and_abandon(handle, "No memory to extend lzw data area.");
-        im->lzw_data_size=size;
-    }
+        /* If we're running low on space for the lzw data, try and extend it... */
+        /* ... so how many bytes do we need to have spare to be sure of fitting a block of data? */
+        spare  = (im->width*im->flags.lpb < 256) ? 4096 : (im->width * LinesInBlock * 2);
+        /* and if this isn't free, how much should we extend the area by? */
+        extend = 2 * spare;
 
-    /* If this is the first row, then start the compressor */
-    if (im->scanline==0)
-    {
-        im->lzw_handle = LZW_compress_new();
+        if  ( (im->lzw_ptr > (im->lzw_data_size-spare) ) || (im->lzw_data_size<spare) )
+        {
+            debug_print("    extending flex area");
+            size = im->lzw_data_size + extend;
+            if (!flex_extend((flex_ptr)&im->lzw_data, size))
+                return render_error_and_abandon(handle, "No memory to extend lzw data area.");
+            im->lzw_data_size=size;
+        }
+
+        /* If this is the first row, then start the compressor */
         if (im->lzw_handle==-1)
-            return render_error_and_abandon(handle, "Compressor is working on too many images already.");
-        e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, im->lzw_handle);
-        if (e) return render_error_and_abandon(handle, e->errmess);
-    }
+        {
+            im->lzw_handle = LZW_compress_new();
+            if (im->lzw_handle==-1)
+                return render_error_and_abandon(handle, "Compressor is working on too many images already.");
+            e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, im->lzw_handle);
+            if (e) return render_error_and_abandon(handle, e->errmess);
+        }
 
-    /* Compress the next row */
-    LZW_compress_next( (uint8*)im->lzw_data + im->lzw_ptr, (uint8*)im->rgb_data, im->width, im->lzw_handle);
+        /* Compress these rows */
+        LZW_compress_next( (uint8*)im->lzw_data + im->lzw_ptr, (uint8*)im->rgb_data, im->width * im->flags.lpb, im->lzw_handle);
 
-    /* If we're at the end of a block, then flush and start again */
-    if (((im->scanline+1) % im->flags.lpb)==0)
-    {
         /* Flush compression table, so beginning a new block */
         LZW_compress_flush(&nb, im->lzw_handle, (uint8*)im->lzw_data + im->lzw_ptr);
         /* Move the data pointer on */
@@ -515,15 +518,21 @@ _kernel_oserror* render_row(int handle, char **return_address)
             e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, im->lzw_handle);
             if (e) return render_error_and_abandon(handle, e->errmess);
         }
+
+        /* Increment scanline */
+        im->scanline+=im->flags.lpb;
+        im->subscanline = 0;
+
+        /* Check if this is the bottom of the image */
+        if (im->scanline>=im->height)
+        {
+            im->scanline = im->height;
+            render_end(handle);
+        }
     }
 
-    /* Increment scanline */
-    im->scanline++;
-
-    /* Check if this is the bottom of the image */
-    if (im->scanline>=im->height) render_end(handle);
-
-    *return_address = im->rgb_data;
+    *return_address = im->rgb_data + im->width * im->subscanline;
+    *inc = im->scanline - oldscanline;
 
     return NULL;
 }
@@ -582,7 +591,7 @@ char* render_return_address_for_rgb_data(int handle)
 {
     internal_header *im=images[handle];
 
-    return (char*)im->rgb_data;
+    return (char*)im->rgb_data + im->subscanline * im->width;
 }
 
 
@@ -1392,11 +1401,8 @@ static _kernel_oserror* render_between(int handle, int first_line, int last_line
         /* Setup mask */
         if (tp!=-1)
         {
-            for (x=0; x<width; x++)
-            {
-                if (row_img[x]==tp) row_msk[x]=0;
-                else row_msk[x]=255;
-            }
+            for (x=width; x; x--)
+                row_msk[x] = row_img[x] == tp ? 0 : 255;
         }
 
         /* If line is within the two limits specified, then plot it */
@@ -3988,14 +3994,8 @@ static _kernel_oserror* render_vdu_back_to_screen(void)
  * Returns: 1 if valid, 0 if not valid.                                                       *
  *--------------------------------------------------------------------------------------------*/
 
-static int render_valid_handle(int handle)
+static int render_valid_handle(unsigned int handle)
 {
-    if (handle<0)
-    {
-        debug_print("*** INVALID RENDER HANDLE ***");
-        return 0;
-    }
-
     if (handle>MaxImages)
     {
         debug_print("*** INVALID RENDER HANDLE ***");
