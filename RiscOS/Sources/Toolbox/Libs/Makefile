@@ -70,6 +70,7 @@ export_hdrs:
 	${CD}   renderlib
 	${MAKE} export PHASE=hdrs
 	${CD}   ^
+        ${CP}   VersionNum ${LIBDIR}.tboxlibs.LibVersion ${CPFLAGS}
 	@echo	Library $(COMPONENT): export headers complete.
 	
 
