@@ -122,6 +122,11 @@ o.IPConfHdr: VersionNum
 
 od.IPConfHdr: VersionNum
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_File Resources.awk-script
+
 #
 # Main rules:
 #
