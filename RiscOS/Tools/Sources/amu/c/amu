@@ -1,0 +1,1516 @@
+/*
+  Title:        Acorn 'make' utility - amu
+  Copyright:    (C) 1987, Acorn Computers Ltd., Cambridge, England.
+  $Revision$  LDS 01-Aug-89
+*/
+
+/*
+ * The Acorn Make Utility (amu) processes a restricted makefile which textually
+ * describes dependencies between 'targets' and 'sources'. Each block in the
+ * makefile describes the dependency of some list of targets on a list of
+ * sources and lists commands to be executed to bring the targets up to
+ * date with respect to the sources.
+ *
+ * Amu operates by building a graph describing the dependencies between
+ * sources and targets, obtaining time-stamps for each object (node) in the
+ * graph, then processing the graph to generate the minimum file of commands
+ * needed to bring all the targets up to date.
+ *
+ * Host dependent functions are isolated in host.c.
+ */
+
+#ifdef __STDC__
+#  include <string.h>
+#  include <stdlib.h>
+#  define  DATE       __DATE__
+#else
+#  include <strings.h>
+extern char *malloc();
+extern int system();
+#  define  DATE      "Apr  9 1991"
+#endif
+#include <stdio.h>
+#include <signal.h>
+#include <ctype.h>
+#include <kernel.h>
+#include "hash.h"
+#include "filestamp.h"
+#include "fname.h"
+#include "host.h"
+#include "err.h"
+#ifdef DDE
+#include "wholefiles.h"
+#endif
+
+#define  VERSION          "5.02"
+#define  SELFNAME         "AMU"
+
+/* Compile-tine configuration */
+#define  COLON            1     /* anything < ' ' bar EOF, 0 and '\n' */
+#define  COLONCOLON       2
+#define  EQUALS           3
+#define  MAXDIRS        512     /* IDJ:18-Oct-94:bug-fix AQU-00041: was 100 */
+#define  MAXVPATHS      100     /* VPATH elements */
+#define  NODETABSZ      257     /* hash table size for node table */ 
+#define  MAXTARGETS     100
+#define  TAGTABSZ       127     /* size of hash table for macros */
+#define  FALSE            0
+#define  TRUE             1
+#define  NAMELEN        128
+#define  CMDLEN        2048
+#define  MACROLEN      4096     /* IDJ:18-Oct-94:bug-fix AQU-00041: was 1024 */
+#define  MACRODEPTH      10
+#define  CMDLENLIM      255     /* imposed by RISC OS / Arthur, worse luck */
+
+/* Node state flags */
+#define  PROCESSED        1     /* Set if a node is up to date */
+#define  VISITED          2     /* Used by cycle-detection code */
+#define  MARKED           4     /* --- ditto ------------------ */
+#define  IS_COLONCOLON   16     /* marks a '::' rule node */
+#define  HAS_CLONES      32     /* if multiple targets... */
+#define  UPTODATE        64     /* when node is up to date... */
+#define  IS_DEPENDED_ON 128     /* when something depends on the node... */
+#define  CMDS_FAILED    256     /* if cmds, or dependee cmds, have failed */ 
+#define  CMDS_EXECUTED  512     /* set if the node's cmds have been executed */
+#define  HAS_TIMESTAMP 1024     /* set if node has timestamp */
+
+/* give up if too many time-stamp errors */
+#define  ERRORLIMIT      15
+
+#define  TOUCH_CMD       "Stamp"
+
+#ifdef __STDC__
+#  define safe_tolower(ch) tolower(ch)
+#else
+#  define safe_tolower(ch) (isupper(ch) ? tolower(ch) : ch)
+#endif
+
+struct Node;
+
+typedef struct Link
+{
+  struct Link *link;
+  struct Node *node;
+} Link;
+
+typedef struct Cmd
+{
+  struct Cmd *next;
+  char txt[1];
+} Cmd;
+
+typedef struct Node
+{
+  struct Node *next;
+  int flags;
+  TimeStamp time;
+  Link *depends_on;
+  Cmd  *cmds;
+  char *name;
+  char **file;
+} Node;
+
+/* Amu state flags */
+#define TOUCHING          1     /* amu -t */
+#define HAS_CYCLES        2
+#define GETTING_CMD       4
+#define IN_MACRO          8
+#define IGNORE_RC        16     /* Amu -i, .IGNORE */
+#define CONTINUE         32     /* Amu -k */
+#define NO_ACTION        64     /* Amu -n */
+#define SILENT          128     /* Amu -s, .SILENT */
+#define UNIX_NAMES      256     /* set by .UNIXNAMES */
+#define CMDS_OUTPUT     512     /* set if any cmds have been sent to 'out' */
+#define DEBUGGING      1024     /* set if debugging */
+
+static int dir_sep = '.';
+
+static int  ch, nch, nch0, lineno, nerrors, amu_flags;
+#ifdef DDE
+#undef getc
+#define getc(in) (*(in) ? *(in)++ : EOF)
+static char *makefile, *in, *input_file;
+static FILE *out;
+#else
+static FILE *in, *out;
+#endif
+static TimeStamp now;
+static char *current_target;
+static Node *suffixes;
+static char *suffix_list;
+static Node *default_rule;
+static char *ebuf, *ebufbase;
+static int  ebuflen;
+
+static HashTable node_tab, dir_tab, tag_tab;
+
+static int  n_dirs, n_vpaths;
+static char **dirs, **vpaths;
+static Node *nodep, *nodeq;
+static char *vpathbuf;
+
+static void get_string(
+#ifdef __STDC__
+                       char *buffer, int maxlen, int termchar
+#endif
+                       );
+
+static char *macro;
+static char *macro_stack[MACRODEPTH];
+static int  macro_depth;
+
+/* IDJ: 29-Dec-94: bug fix AQU-00608: add C++ suffix */
+
+static char *fname_suffixes = "o c s f p l h pas aof cmhg c++";
+static int  fname_type = FNAME_DFLT;
+
+static char amu[] = SELFNAME;
+
+#ifdef DDE
+
+#include "md.c"
+
+#define DDEUtils_Prefix    0x42580
+#define DDEUtils_GetCLSize 0x42583
+
+static int desktop_prefix = 0;
+static int exit_handler = 0;
+
+static int dde_extended_cmdline(void)
+{
+    _kernel_swi_regs r;
+
+    return !((int)_kernel_swi(DDEUtils_GetCLSize, &r, &r));
+}
+
+static void dde_exit(void)
+{
+    _kernel_swi_regs r;
+
+    if (desktop_prefix) {
+        r.r[0] = 0;
+        _kernel_swi(DDEUtils_Prefix, &r, &r);
+    }
+}
+
+static void prefix_init(char *fname)
+{
+    char *s, *p, *t;
+    char c;
+    char prefix[256];
+    _kernel_swi_regs r;
+
+    if (desktop_prefix) {
+        if (!exit_handler && atexit(dde_exit)) {
+            err_report("Can't install atexit handler");
+            exit(1);
+        }
+        exit_handler = 1;
+        s = fname;
+        p = t = prefix;
+        while ((c = *t++ = *s++) > ' ')
+            if (c == ':' || c == '.')
+                p = t;
+        *p = 0;
+        r.r[0] = (int)prefix;
+        _kernel_swi(DDEUtils_Prefix, &r, &r);
+    }
+}
+#endif
+
+static void push_macro(name)
+char *name;
+{
+  HashId h;
+  if (hash_lookup(tag_tab, name, &h))
+  {   if (macro_depth < MACRODEPTH)
+      {   macro_stack[macro_depth++] = macro;
+          macro = hash_value(tag_tab, h);
+      }
+      else
+          err_fail("macro invocations nested too deeply (> %u)", MACRODEPTH);
+  }
+}
+
+static void define_macro(name, value)
+char *name, *value;
+{
+  HashId h;
+  int l;
+
+  (void) hash_enter(tag_tab, name, &h);
+  l = strlen(value);
+  hash_assoc(tag_tab, h, strcpy(malloc(l+1), value));
+}
+
+static int getch0()
+{ 
+  int ch0, splicing;
+  /* This procedure deals with input from macros, handling end-of-line   */
+  /* sequences, counting input lines, and splicing physical input lines  */
+  /* together into longer logical lines. It uses the global nch0 to hold */
+  /* a single character of lookahead.                                    */
+  if (macro != NULL)
+  { /* input from macro */
+    ch0 = *macro++;
+    for(;;)
+    {
+      if (ch0 != 0)
+          return ch0;
+      macro = macro_stack[--macro_depth];
+      if (macro == NULL) break;
+      ch0 = *macro++;
+    }
+  }
+  /* Input from the input file - first deal with lookahead */
+  if (nch0) {ch0 = nch0;  nch0 = 0;} else ch0 = getc(in);
+  splicing = 0;
+  if (ch0 == '\\')
+  { /* handle long logical lines spanning several physical lines */
+    nch0 = getc(in);
+    if (nch0 == '\n' || nch0 == '\r')
+    { /* got \ EOL-marker... */
+      splicing = ch0 = nch0;
+    }
+  }
+  if (ch0 == '\n' || ch0 == '\r')
+  { /* NL, CR, NL-CR, CR-NL all translated to '\n' */
+    nch0 = getc(in);
+    if ((ch0 + nch0) == ('\n' + '\r')) nch0 = getc(in);
+    if (splicing && amu_flags & GETTING_CMD)
+    { /* skip leading white-space on command continuation */
+      while (nch0 == ' ') nch0 = getc(in); 
+    }
+    if (splicing) {ch0 = nch0;  nch0 = 0;} else ch0 = '\n';
+    ++lineno;
+  }
+  return ch0;
+}
+
+static void getch()
+{
+  int tch;
+  char name[NAMELEN];
+  /* EOF is persistent... */
+  if (ch == EOF) return;
+  /* now handle the look-ahead character... */
+  if (nch != 0) {ch = nch;  nch = 0;} else ch = getch0();
+  if (ch == '\n' || ch == EOF) return;
+  if (ch < ' ')
+  { /* all other control chars translated to ' ' */
+    ch = ' ';
+  }
+  else if (!(amu_flags & IN_MACRO) && (ch == '$'))
+  { /* macro invocation */
+    nch = getch0();
+    if ((nch == '(') || (nch == '{'))
+    { if (nch == '(') tch = ')'; else tch = '}';
+      ch = getch0();  nch = 0;
+      get_string(name, NAMELEN, tch);
+      push_macro(name);
+      ch = getch0();  nch = 0;
+    }
+  }
+  else if (ch == '#')
+  { /* comment to end of line... */
+    do {ch = getch0();} while ((ch != '\n') && (ch != '\r') && (ch != EOF));
+  }
+  else if (ch == ';')
+  { /* treat as end of line... */
+    ch = '\n';  nch = ' ';
+  }
+  else if (!((GETTING_CMD | IN_MACRO) & amu_flags))
+  {
+    if (ch == '=')
+      ch = EQUALS;
+    else if (ch == ':')
+    { /* ':' and '::' are only recognised if followed by wh-space or ';' */
+      nch = getch0();
+      if (nch == ':')
+      { tch = getch0();
+        if (isspace(tch) || (tch == ';'))
+        {
+          ch = COLONCOLON;  nch = tch;
+        }
+        else nch0 = tch;                             /* !!!UNSTRUCTURED!!! */
+      }
+      else if (isspace(nch) || (nch == ';')) ch = COLON;
+    }
+  }
+}
+
+static void skip_spaces()
+{
+  while (ch == ' ') getch();
+}
+
+static void skip_whitespace()
+{
+  while (ch == ' ' || ch == '\n') getch();
+}
+
+static void get_string(s, max_len, extra_terminator)
+char *s;
+int max_len;
+int extra_terminator;
+{
+  int j = 0;
+  skip_spaces();
+  while ((ch > ' ') && (ch != extra_terminator))
+  {
+    if (j < max_len) s[j++] = ch;
+    getch();
+  }
+  if (j >= max_len) j = max_len -1;
+  s[j] = 0;
+}
+
+static Cmd *get_cmds()
+{
+  Cmd *cmdp = NULL, *cmdq = NULL;
+  char cmd[CMDLEN];
+
+  amu_flags |= GETTING_CMD;
+  do
+  {   char *s = cmd;
+      int max_len = CMDLEN-1, l;
+      do
+      {   get_string(s, max_len, 0);
+          l = strlen(s);
+          s += l;  max_len -= l;
+          while (ch == ' ')
+          {   if (max_len > 0) *s++ = ' ', --max_len;
+              getch();
+          }
+      } while (ch != '\n' && ch != EOF);
+      *s = 0;
+      getch();
+      if (cmd[0] != 0)
+      {   Cmd *c = (Cmd *) malloc(sizeof(Cmd) + strlen(cmd));
+          strcpy(c->txt, cmd);
+          c->next = NULL;
+          if (cmdq == NULL) cmdp = cmdq = c; else cmdq->next = c;
+          cmdq = c;
+      }
+  } while (ch == ' ');
+  /* skip white-space between end of command and start of next dependency */
+  skip_whitespace();
+  while (ch == '\n' || ch == ' ') getch();
+  amu_flags &= ~GETTING_CMD;
+  return cmdp;
+}
+
+static void accumulate_dirname(s)
+char *s;
+{
+  int l;
+  HashId h;
+
+  l = strlen(s);
+  for(;;)
+  {
+    if (l == 0) break;
+    --l;
+    if (s[l] == dir_sep) break;
+  }
+  s[l] = 0;
+  if (hash_enter(dir_tab, s, &h))
+  { if (n_dirs >= MAXDIRS)
+      err_fail("too many directories (> %u)", MAXDIRS);
+    dirs[n_dirs++] = strcpy(malloc(l+1), s);
+  }
+}
+
+static char *real_file_name(s, buf, maxlen)
+char s[];
+char *buf;
+int maxlen;
+{
+  UnparsedName un;
+  int type = fname_type;
+
+  if (type == FNAME_DFLT) {
+    switch (host_system()) {
+case _kernel_A_UNIX:       type = FNAME_UNIX;   break;
+case _kernel_SPRINGBOARD:  type = FNAME_MSDOS;  break;
+default:                   type = FNAME_ACORN;  break;
+    }
+    fname_type = type;
+  }
+  fname_parse(s, type, fname_suffixes, &un);
+  fname_unparse(&un, type, buf, maxlen);
+  return buf;
+}
+
+static Node *find_node(s)
+char *s;
+{
+  HashId h;
+  Node *n;
+  char buf[NAMELEN];
+
+  if (s[0] != '.') s = real_file_name(s, buf, NAMELEN);
+  if (hash_enter(node_tab, s, &h))
+  {
+    n = (Node *) malloc(sizeof(Node) + strlen(s) + 1);
+    if (s[0] != '.')                               /* omit 'special' nodes */
+    { if (nodep == NULL) nodep = n; else nodeq->next = n;
+      nodeq = n;
+    }
+    n->next = NULL;
+    n->name = (char *)n + sizeof(Node);
+    strcpy(n->name, s);
+    n->file = &(n->name);
+    n->cmds = NULL;
+    n->depends_on = NULL;
+    n->time = FILESTAMP_NEVER;
+    n->flags = 0;
+    hash_assoc(node_tab, h, n);
+    if (s[0] != '.') accumulate_dirname(s);
+  }
+  else n = (Node *) hash_value(node_tab, h);
+  return n;
+}
+
+static void make_depend(target, src)
+Node *target, *src;
+{
+  Link *link;
+
+  if ((src->flags & IS_COLONCOLON) &&
+      (target->depends_on != NULL) &&
+      (target->flags & HAS_CLONES) == 0)
+    err_report("%s '::' rule clashes with earlier ':' rule at line %u",
+               target->name, lineno);
+  else if ((target->flags & HAS_CLONES) &&
+             (src->name != target->name))
+    err_report("%s ':' rule clashes with earlier '::' rule at line %u",
+               target->name, lineno);
+  else
+  {
+    link = (Link *) malloc(sizeof(Link));
+    link->node = src;
+    link->link = target->depends_on;
+    target->depends_on = link;
+    src->flags |= IS_DEPENDED_ON;
+  }
+}
+
+static Node *clone_node(n)
+Node *n;
+{
+  Node *clone;
+
+  clone = (Node *) malloc(sizeof(Node));
+  nodeq->next = clone;
+  nodeq = clone;
+  clone->name = n->name;
+  clone->file = n->file;
+  clone->cmds = NULL;
+  clone->depends_on = NULL;
+  clone->time = FILESTAMP_NEVER;
+  clone->flags = IS_COLONCOLON;
+  make_depend(n, clone);
+  n->flags |= HAS_CLONES;
+  return clone;
+}
+
+static Node *make_rule(name)
+char *name;
+{
+  char *t;
+  Link *l = NULL;
+  if (suffixes != NULL) l = suffixes->depends_on;
+  for (t = name+1;  *t != 0;  ++t) if (*t == '.') break;
+  if (*t != '.')
+    err_fail("mal-formed rule at line %u?", lineno);
+  while (l != NULL)
+  { if (strcmp(t, l->node->name) == 0)
+    { /* found the target extension in the list of suffixes */
+      Node *n = find_node(name);
+      make_depend(l->node, n);
+      return n;
+    }
+    l = l->link;
+  }
+  err_fail("rule at line %u mentions non-suffix '%s'", lineno, t);
+  return NULL;
+}
+
+static void build_graph()
+{
+  int j, nt, delete_suffix_list;
+  Node *src, *target[MAXTARGETS];
+  char name[NAMELEN];
+
+  nt = 0;
+  getch();
+  skip_whitespace(); 
+
+  while (ch != EOF)
+  {
+next_source_line:
+    /* Assert: ch != EOF && ch != ' ' && ch != '\n' */
+    nt = delete_suffix_list = 0;
+    do
+    { get_string(name, NAMELEN, 0);
+      skip_spaces();
+      if ((nt == 0) && (ch == EQUALS))
+      { /* name = <rest-of-line> */
+        char macro_body[MACROLEN];
+        getch();
+        skip_spaces();
+        amu_flags |= IN_MACRO;
+        j = 0;
+        while (ch != '\n' && ch != EOF)
+        { if (j < MACROLEN) macro_body[j++] = ch;
+          getch();
+        }
+        while (ch == ' ' || ch == '\n') getch();
+        if (j >= MACROLEN) j = MACROLEN-1;
+        macro_body[j] = 0;
+        define_macro(name, macro_body);
+        amu_flags &= ~IN_MACRO;
+        goto next_source_line;
+      }
+      if (name[0] == '.')
+      { if (hash_cistrcmp(name, ".SILENT") == 0)
+          amu_flags |= SILENT;
+        else if (hash_cistrcmp(name, ".IGNORE") == 0)
+          amu_flags |= IGNORE_RC;
+        else if (hash_cistrcmp(name, ".UNIXNAMES") == 0)
+          amu_flags |= UNIX_NAMES;
+        else if (hash_cistrcmp(name, ".SUFFIXES") == 0)
+        { suffixes = target[nt++] = find_node(name);
+          delete_suffix_list = 1;
+        }
+        else if (hash_cistrcmp(name, ".DEFAULT") == 0)
+        { default_rule = target[nt++] = find_node(name);
+        }
+        else target[nt++] = make_rule(name);
+      }
+      else if (name[0] == 0) break;
+      else
+      { target[nt++] = find_node(name); 
+        if (nt == MAXTARGETS)
+          err_fail("too many targets (> %u) in source line %u",
+                    MAXTARGETS, lineno);
+      }
+    } while ((ch != COLON) && (ch != COLONCOLON) && (ch != '\n'));
+
+    if (ch == '\n')
+      err_fail("missing ':' or '::' at line %u", lineno-1);
+
+    if (ch == COLONCOLON)
+      for (j = 0;  j < nt;  ++j) target[j] = clone_node(target[j]);
+
+    getch();
+    skip_spaces();
+    while (ch > ' ')
+    { get_string(name, NAMELEN, 0);
+      if (*name)
+      { src = find_node(name);
+        for (j = 0;  j < nt;  ++j) make_depend(target[j], src);
+        delete_suffix_list = 0;      /* only if depends_on list is empty */
+      }
+      skip_spaces();
+    }
+    if (delete_suffix_list) suffixes->depends_on = NULL;
+
+    if (ch == EOF) break;
+
+    getch();
+    if (ch == '\n')
+      skip_whitespace();
+    else if (ch == ' ')
+    { skip_spaces();
+      if (ch == '\n')
+        skip_whitespace();
+      else
+      { Cmd *cmds = get_cmds();
+        for (j = 0;  j < nt;  ++j)
+        {
+          if (target[j]->cmds == NULL)
+              target[j]->cmds = cmds;
+          else
+err_report("'%s' already has commands (commands at line %d ignored)",
+              target[j]->name, lineno);
+        }
+      }
+    }
+  }
+}
+
+static void e_ensure(n)
+int n;
+{ int p = (ebuf - ebufbase);
+  while (n >= (ebuflen - (ebuf - ebufbase)))
+  { ebuflen *= 2;
+    ebufbase = realloc(ebufbase, ebuflen);
+  }
+  ebuf = ebufbase + p;
+}
+ 
+static void e_save(s, n)
+char *s;
+int n;
+{ e_ensure(n);
+  strncpy(ebuf, s, n);
+  ebuf += n;
+}
+
+static int is_extn(const char *e, int elen)
+{
+  char *s = suffix_list;
+  int e0 = *e;
+
+  while (*s)
+  { if (*s == e0)
+    { int j = 1, ch = e0;
+      while (j < elen && (ch = s[j]) == e[j]) ++j;
+      ch = s[j];
+      if ((ch == 0 || ch == ' ') && j == elen) return 1;
+    }
+    ++s;
+  }
+  return 0;
+}
+
+static char *expand(cmdtxt, target_node, is_pattern)
+char *cmdtxt;
+Node *target_node;
+int is_pattern;
+{
+  char *s = cmdtxt;
+  char *target_name = *(target_node->file);
+  int ch;
+  UnparsedName un;
+
+  while (*s)
+  {
+    if (*s == '$' && strchr("<*@?", s[1]) != NULL) break;
+    ++s;
+  }
+  if (*s == 0) return cmdtxt;
+  /* something to do */
+  if (ebuf == NULL) ebufbase = malloc(ebuflen = CMDLEN);
+  ebuf = ebufbase;
+  while ((ch = *s++) != 0)
+  {
+    if (ch == '$' && strchr("<*@?", *s) != NULL)
+    { e_save(cmdtxt, (s - cmdtxt) - 1);
+      switch (*s)
+      {
+case '@': e_save(target_name, (int)strlen(target_name));
+          ++s;
+          break;
+case '*': {
+          char *s1, *extn, *name;
+
+          s1 = target_name;
+          name = s1;
+          extn = 0;
+          while (*s1) {
+              if (*s1++ == '.') {
+                  extn = name;
+                  name = s1;
+              }
+          };
+          e_ensure(NAMELEN);
+          if (extn && is_extn(extn, name - extn - 1)) {
+              memcpy(ebuf, target_name, extn - target_name);
+              ebuf += extn - target_name;
+              strcpy(ebuf, name);
+          } else
+              strcpy(ebuf, target_name);
+          ebuf += strlen(ebuf);
+          while (*++s && !isspace(*s))
+              *ebuf++ = *s;
+          *ebuf = 0;
+#if 0
+          fname_parse(target_name, fname_type, suffix_list, &un);
+          ++s;
+          if (un.elen != 0 && is_extn(un.extn, un.elen))
+          { if (*s == '.')
+            { un.extn = ++s;
+              while (*s && !isspace(*s)) ++s;
+              un.elen = s - un.extn;
+            }
+            else
+            { un.extn = NULL;
+              un.elen = 0;
+            }
+          }
+          ch = *s;  *s = 0;
+          e_ensure(NAMELEN);xxxx
+          fname_unparse(&un, fname_type, ebuf, NAMELEN);
+          ebuf += strlen(ebuf);
+          *s = ch;
+#endif
+          break;
+      }
+case '<': if (is_pattern)
+          { char *prereq_name;
+            if (target_node->depends_on == NULL)
+              /* treat as $@ ... */
+              prereq_name = target_name;
+            else
+              prereq_name = *(target_node->depends_on->node->file);
+            e_save(prereq_name, (int)strlen(prereq_name));
+          }
+          ++s;
+          break;
+case '?': { Link *l = target_node->depends_on;
+            while (l != NULL)
+            { if (target_node->time == FILESTAMP_NEVER ||
+                      l->node->time >  target_node->time)
+              { char *prereq_name = *(l->node->file);
+                e_save(prereq_name, (int)strlen(prereq_name));
+              }
+              l = l->link;
+              if (l != NULL) e_save(" ", 1);
+            }
+          }
+          ++s;
+          break;
+      }
+      cmdtxt = s;
+    }
+  }
+  e_save(cmdtxt, (s - cmdtxt) + 1);
+  return ebufbase;
+}
+
+static void copy_cmds(rule_node, target_node)
+Node *rule_node, *target_node;
+{ Cmd *cmdp = NULL, *cmdq = NULL, *cmd = rule_node->cmds;
+  while (cmd != NULL)
+  { char *cmdtxt = expand(cmd->txt, target_node, 1);
+    Cmd *c = malloc(sizeof(struct Cmd) + strlen(cmdtxt));
+    strcpy(c->txt, cmdtxt);
+    c->next = NULL; 
+    if (cmdq == NULL) cmdp = c; else cmdq->next = c;
+    cmdq = c;
+    cmd = cmd->next;
+  }
+  target_node->cmds = cmdp;
+}
+
+static Node *suffix_of(const char *extn, int elen)
+{ Link *l;
+  if (suffixes == NULL || (l = suffixes->depends_on) == NULL) return NULL;
+  while (l != NULL)
+  { char *s = l->node->name+1;
+    if (strncmp(s, extn, elen) == 0) return l->node;
+    l = l->link;
+  }
+  return NULL;
+}
+
+static int has_src_suffix(n, s)
+Node *n;
+char *s;
+{ char *name = n->name;
+  int l = strlen(s);
+  if (strncmp(name, s, l) == 0 && name[l]  == '.') return 1;
+  return 0;
+}
+
+static TimeStamp get_filestamp(name, vpath)
+char *name;
+int vpath;
+{ TimeStamp ts;
+  if (vpath)
+  { if (n_vpaths > 0)
+    { int j, len = strlen(name);
+      char *s = vpathbuf;
+      ts = FILESTAMP_NEVER;
+      for (j = 0;  j < n_vpaths;  ++j)
+      { strcpy(s, vpaths[j]);
+        if ((strlen(s) + len) >= NAMELEN)
+          err_fail("name too long: %s%s\n", s, name);
+        strcat(s, name);
+        ts = filestamp_get(s);
+        if (ts != 0 && ts != FILESTAMP_NEVER) break;
+      }
+      return ts;
+    }
+    else vpathbuf = name;
+  }
+  ts = filestamp_get(name);
+  return ts;
+}
+
+static void make_inferences_for(node)
+Node *node;
+{
+  Node *rules;
+  Link *p, *l;
+  UnparsedName un;
+  char new_name[NAMELEN];
+
+  rules = NULL;
+  if (suffix_list != NULL)
+  { fname_parse(node->name, fname_type, suffix_list, &un);
+    rules = suffix_of(un.extn, un.elen);
+  }
+  if (rules == NULL)
+  { if (default_rule != NULL) copy_cmds(default_rule, node);
+    return;
+  }
+  /* Do the following search this way to ensure correct search order. */
+  /* Seek the first suffix (in the reversed - i.e. correctly ordered) */
+  /* list of suffixes for which there is a rule and a source file...  */
+  for (p = suffixes->depends_on;  p != NULL;  p = p->link)
+  { TimeStamp ts;
+    Node *new;
+    /* search the list of rules with the target suffix of node->name  */
+    /* for one with the same source suffix as the current suffix from */
+    /* the list of all applicable suffixes.                           */
+    for (l = rules->depends_on;  l != NULL;  l = l->link)
+      if (has_src_suffix(l->node, p->node->name)) break;  /* found it */
+    if (l == NULL) continue;                             /* not found */
+    /* See if a file with the found source suffix exists */
+    un.extn = p->node->name+1;
+    un.elen = strlen(un.extn);
+    fname_unparse(&un, fname_type, new_name, NAMELEN);
+    ts = get_filestamp(new_name, 1);
+    if (ts == 0 || ts == FILESTAMP_NEVER) continue;  /* doesn't exist */
+    /* Made a successful inference - so set up the source node */
+    new = find_node(vpathbuf);
+    new->time = ts;
+    new->flags |= HAS_TIMESTAMP;
+    make_depend(node, new);
+    copy_cmds(l->node, node);
+    break;
+  }
+}
+
+static int out_of_date(n, t)
+Node *n;
+TimeStamp t;
+{
+  Link *l;
+
+  for (l = n->depends_on;  l != NULL;  l = l->link)
+    n->flags |= (l->node->flags & CMDS_FAILED);
+
+  if (n->flags & (CMDS_FAILED|HAS_CLONES)) return FALSE;
+
+  if (n->time == FILESTAMP_NEVER)
+  { if (n->flags & IS_DEPENDED_ON &&
+        ((amu_flags & (NO_ACTION|SILENT)) == NO_ACTION))
+      fprintf(stderr, "%s does not yet exist\n", n->name);
+    return TRUE;
+  }
+
+  for (l = n->depends_on;  l != NULL;  l = l->link)
+  { Node *nd = l->node;
+    if (n->cmds != NULL && nd->time > t ||
+        n->cmds == NULL && out_of_date(nd, t))
+    {
+        if ((amu_flags & (NO_ACTION|SILENT)) == NO_ACTION) 
+fprintf(stderr, "%s is out of date w.r.t. %s\n", n->name, l->node->name);
+        return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static TimeStamp newest_source_time(target)
+Node *target;
+{
+  Link *l;
+  Node *s;
+  TimeStamp t, t_default;
+
+  t = t_default = ++now;
+  for (l = target->depends_on;  l != NULL;  l = l->link) {
+    s = l->node;
+    if (s->time == FILESTAMP_NEVER) {
+      return t_default;
+    } else {
+      if (t == t_default || (s->time > t)) t = s->time;
+    }
+  }
+  return t;
+}
+
+static int execute(cmd, node)
+Cmd *cmd;
+Node *node;
+{
+  if (node->time == FILESTAMP_NEVER &&
+      node->flags & IS_DEPENDED_ON  &&
+      cmd == NULL)
+  {
+    err_report("Don't know how to make '%s'", node->name);
+    return -1;
+  }
+
+  if (cmd == NULL)
+    node->time = newest_source_time(node);       /* no updating command... */
+
+  while (cmd != NULL)
+  { int flags = amu_flags;
+    char *cmdtxt = cmd->txt;
+    if (*cmdtxt == '@')
+    { flags |= SILENT;  ++cmdtxt;
+    }
+    /* N.B. '?' MUST be first or it won't get expanded */
+    cmdtxt = expand(cmdtxt, node, 0);
+    if (strlen(cmdtxt) > CMDLENLIM)
+    {
+#ifdef DDE
+      if (!dde_extended_cmdline()) {
+          putc('\n', stderr);
+          err_fail("command too long (must be shorter than %d chars)\n%s\n\n",
+               CMDLENLIM, cmdtxt);
+      }
+#else
+      putc('\n', stderr);
+      err_fail("command too long (must be shorter than %d chars)\n%s\n\n",
+               CMDLENLIM, cmdtxt);
+#endif
+    }
+    if (!(flags & SILENT)) fprintf(stderr, "%s\n", cmdtxt);
+    if (*cmdtxt == '-')
+    { flags |= IGNORE_RC;  ++cmdtxt;
+    }
+    if (out)
+    { fprintf(out, "%s\n", cmdtxt);
+      amu_flags |= CMDS_OUTPUT;
+    }
+    else if (!(flags & NO_ACTION))
+    { int rc;
+      _kernel_setenv("Sys$ReturnCode", "0");
+#ifdef DDE
+      md_start_cmd();
+#endif
+      rc = system(cmdtxt);
+      if (rc == _kernel_ERROR)
+         err_report("*** %s ***\n", _kernel_last_oserror()->errmess);
+      else if (rc != 0)
+         err_report("*** exit (%u)%s ***\n", rc,
+                    (flags & IGNORE_RC ? " (ignored)" : ""));
+      if (rc != 0 && !(flags& IGNORE_RC)) return rc;
+#ifdef DDE
+      md_end_cmd();
+#endif
+    }
+    cmd = cmd->next;
+  }
+  return 0;
+}
+
+static void process_node(n)
+Node *n;
+{
+  Link *l;
+  int uptodate = UPTODATE;
+
+  if (n->flags & PROCESSED) return;
+
+  if (n->cmds == NULL) make_inferences_for(n);
+
+  for (l = n->depends_on;  l != NULL;  l= l->link)
+  { process_node(l->node);
+    uptodate &= l->node->flags;
+  }
+  if (out_of_date(n, n->time))
+  {
+    if (amu_flags & TOUCHING)
+    { int buf[NAMELEN/sizeof(int)+4];
+      Cmd *cmd = (Cmd *)buf;
+      sprintf(cmd->txt, "%s %s", TOUCH_CMD, n->name);
+      cmd->next = NULL;
+      execute(cmd, n);
+    }
+    else if (!(n->flags & CMDS_EXECUTED))
+    {
+      if (execute(n->cmds, n) != 0)
+      { n->flags |= CMDS_FAILED;
+        if (!(amu_flags & CONTINUE)) {
+#ifdef DDE
+          md_merge();
+          md_delete();
+#endif
+          err_fail("*** '%s' not re-made because of errors ***\n",
+                   current_target);
+        }
+      }
+      else if (n->cmds == NULL)
+        n->flags |= uptodate;
+      n->flags |= CMDS_EXECUTED;
+    }
+    else if ((amu_flags & (NO_ACTION|SILENT)) == NO_ACTION)
+      fprintf(stderr, "(target updated by an earlier command)\n");
+    n->time = ++now;
+  }
+  else if (!(n->flags & CMDS_FAILED)) n->flags |= uptodate;
+  n->flags |= PROCESSED;
+}
+
+static int is_a_cycle_from(n)
+Node *n;
+{
+  int cyclic;
+  Link *l;
+
+  if (n->flags & MARKED)
+  {
+    err_report("*** WARNING: cycle in dependency graph ***\n  to %s", n->name);
+    cyclic = TRUE;
+    amu_flags |= HAS_CYCLES;
+  }
+  else cyclic = FALSE;
+  
+  if (!(n->flags & VISITED))
+  { n->flags |= VISITED + MARKED;
+    for (l = n->depends_on;  l != NULL;  l = l->link)
+        if (is_a_cycle_from(l->node)) {
+            cyclic = TRUE;
+            n->flags |= PROCESSED;
+        }
+    if (cyclic)
+        fprintf(stderr, "from %s\n", n->name);
+    if (cyclic && !(n->flags & MARKED))
+    {   cyclic = FALSE;
+        err_report("*** end of cycle ***\n");
+    }
+  }
+  n->flags &= ~MARKED;
+  return cyclic;
+}
+
+static int process_graph(ntargets, targets)
+int ntargets;
+char *targets[];
+{
+  int t, rc;
+  char *target;
+  Node *n;
+
+  rc = 0;
+  if (ntargets == 0) target = nodep->name; else target = targets[0];
+  t = 1;
+  for(;;)
+  { current_target = target;
+    for (n = nodep;  n != NULL;  n = n->next)
+    {
+      if (!(n->flags & PROCESSED) && (hash_cistrcmp(target, n->name) == 0))
+      { (void) is_a_cycle_from(n);
+        process_node(n);
+        if (n->flags & UPTODATE)
+        {
+          if (!(n->flags & IS_COLONCOLON) &&
+              (amu_flags & (NO_ACTION|SILENT)) != (NO_ACTION|SILENT))
+            fprintf(stderr, "'%s' is up to date\n", n->name);
+        }
+        else rc = 1;
+      }
+    }
+    if (t >= ntargets) break;
+    target = targets[t++];
+  }
+    
+  if (amu_flags & HAS_CYCLES) {
+    err_report("*** There are cyclic dependencies in 'makefile' ***");
+    err_report("***    which have been broken arbitrarily.      ***\n");
+  }
+  return rc;
+}
+
+static void make_suffix_list()
+{ Link *l, *p, *q;
+  int n;
+  if (suffixes != NULL && (l = suffixes->depends_on) != NULL)
+  /* Reverse the suffix list, calculating the length of a character buffer */
+  /* needed to hold a space-separated list of extensions as we go.         */
+  {
+    q = NULL;  n = 0;
+    while (l != NULL)
+    {
+      p = l->link;  l->link = q;  q = l;  n += strlen(l->node->name);  l = p;
+    }
+    suffixes->depends_on = q;
+    /* Allocate a buffer to hold the space-separated list of extensions    */
+    /* and fill it up with extensions from the list of extension nodes.    */
+    suffix_list = malloc(n + 1);
+    n = 0;
+    while (q != NULL)
+    { strcpy(suffix_list+n, q->node->name+1);       /* don't copy the '.'s */
+      n += strlen(suffix_list+n);
+      suffix_list[n++] = ' ';
+      q = q->link;
+    }
+    suffix_list[n-1] = 0;
+  }
+}
+
+static void make_default_suffixes()
+{
+  /* Create the default suffix list from fname_suffixes */
+  char *slist, *s;
+  int n;
+  Link *l;
+  char buf[NAMELEN];
+  suffixes = find_node(".SUFFIXES");
+  slist = fname_suffixes;
+  buf[0] = '.';
+  for (;;)
+  { while (isspace(*slist)) ++slist;
+    if (*slist == 0) break;
+    s = slist;
+    while (*s && !isspace(*s)) ++s;
+    n = s - slist;
+    strncpy(buf+1, slist, n);
+    buf[n+1] = 0;
+    l = (Link *) malloc(sizeof(Link));
+    l->node = find_node(buf);
+    l->link = suffixes->depends_on;
+    suffixes->depends_on = l;
+    slist = s;
+  }
+}
+
+static int dir_match(dir, file)
+char *dir, *file;
+{
+  while (*dir) {
+    if (safe_tolower(*dir++) != safe_tolower(*file++)) return 0;
+  }
+  return (*file == dir_sep);
+}
+
+static void get_time_stamps_in(dir, vpath)
+char *dir;
+int vpath;
+{
+  Node *node;
+  char *file;
+  TimeStamp ts;
+  Link *l;
+
+  for (node = nodep;  node != NULL;  node = node->next)
+  { if (node->flags & (HAS_TIMESTAMP | IS_COLONCOLON)) continue;
+    file = node->name;
+    if (dir == NULL || vpath || dir_match(dir, file))
+    { node->time = ts = get_filestamp(file, vpath);
+      if (ts == 0)
+      { if (vpath == 0)
+        { err_report("failed to read time stamp for '%s'", file);
+          ++nerrors;
+        }
+      }
+      else if (ts != FILESTAMP_NEVER)
+      { node->flags |= HAS_TIMESTAMP;
+        if (vpath && strcmp(file, vpathbuf) != 0)
+          node->name = strcpy(malloc(strlen(vpathbuf)+1), vpathbuf);
+        if (node->flags & HAS_CLONES)
+          for (l = node->depends_on;  l != NULL;  l = l->link)
+            l->node->time = ts;
+      }
+      if (nerrors > ERRORLIMIT) break;
+    }
+  }
+}
+
+static void get_time_stamps()
+{
+  int j, null_dir;
+
+  /* Getting time stamps is more efficient if all references to the same */
+  /* directory are bunched. Ergo, we do an inefficient sort on the fly.  */
+  nerrors = null_dir = 0;
+  for (j = 0;  j < n_dirs && nerrors <= ERRORLIMIT;  ++j)
+  { char *dir = dirs[j];
+    if (*dir == 0) null_dir = 1; else get_time_stamps_in(dir, 0);
+  }
+  if (nerrors <= ERRORLIMIT && null_dir) get_time_stamps_in((char *)NULL, 0);
+  for (j = 0;  j < n_vpaths && nerrors <= ERRORLIMIT;  ++j)
+    get_time_stamps_in(vpaths[j], 1);
+}
+
+static void expand_vpath()
+{
+  HashId h;
+  char *path, *s;
+  int ch, len;
+  UnparsedName un;
+  char buf[NAMELEN];
+  if (hash_lookup(tag_tab, "VPATH", &h))
+  { path = (char *) hash_value(tag_tab, h);
+    vpathbuf = (char *) malloc(NAMELEN);
+    for (;;)
+    { while (isspace(*path)) ++path;
+      if (*path == 0) break;
+      s = path;
+      while (*s != 0 && !isspace(*s)) ++s;
+      ch = *s;  *s = 0;
+      fname_parse(path, fname_type, fname_suffixes, &un);
+      fname_unparse(&un, fname_type, buf, NAMELEN);
+      *s = ch;
+      path = s;
+      len = strlen(buf);
+      if (n_vpaths >= MAXVPATHS)
+        err_fail("too many VPATH elements (> %u)", MAXVPATHS);
+      vpaths[n_vpaths++] = s = strncpy(malloc(len+2), buf, len+2);
+      s[len] = un.pathsep;
+    }
+  }
+}
+  
+static void handle_escape(int signo)
+{
+  signal(signo, handle_escape);
+  exit(EXIT_FAILURE);
+}
+
+static void initialise()
+{
+  signal(SIGINT, handle_escape);
+  (void) host_init();
+  err_init(amu);
+  n_dirs = n_vpaths = 0;
+  nch = nch0 = 0;
+  ch = ' ';
+  macro = NULL;
+  macro_depth = 0;
+  amu_flags = 0;
+  lineno = 1;
+  nerrors = 0;
+  nodep = nodeq = NULL;
+  dir_tab = hash_cinew(MAXDIRS);
+  node_tab = hash_cinew(NODETABSZ);
+  tag_tab = hash_cinew(TAGTABSZ);
+  dirs = (char **) malloc(MAXDIRS * sizeof(char *));
+  vpaths = (char **) malloc(MAXVPATHS * sizeof(char *));
+  now = filestamp_now();
+  if (now == FILESTAMP_NEVER) err_fail("can't read the current time");
+  suffixes = default_rule = NULL;
+  suffix_list = fname_suffixes;
+  ebuf = NULL;
+}
+
+static void give_help()
+{
+  fprintf(stderr, "\n%s vsn %s [%s] - Acorn 'make' utility\n\n",
+          amu, VERSION, DATE);
+  fprintf(stderr,"%s  [options] [target1 target2...]\n", amu);
+  fprintf(stderr, "\n\
+Options:-\n\
+-f makefile\n\
+   (makefile defaults to 'Makefile' if omitted).\n\
+-i Ignore return codes from commands (equivalent to .IGNORE).\n\
+-k On encountering a bad return code, don't give up, but continue with\n\
+   each branch of the makefile that doesn't depend on the failing command.\n\
+-n Don't execute any commands - just show on the screen what commands\n\
+   would be executed, giving a reason for wanting to execute each one.\n\
+-o commandfile\n\
+   Don't execute commands to make the target[s] up to date - write them to\n\
+   commandfile for later execution (*EXEC or *OBEY commandfile).\n\
+-s Don't echo commands to be executed (equivalent to .SILENT).\n\
+-t Generate commands to make target[s] up to date by setting source\n\
+   time-stamps consistently (only guaranteed to succeed if all sources\n\
+   exist). The '%s' command is used to set time stamps.\n", TOUCH_CMD);
+  fprintf(stderr, "\n\
+target1 target2 ...\n\
+   A list of targets to be made or macro pre-definitions of the form\n\
+   name=string. Targets are made in the order given. If no targets are\n\
+   given, the first target found in makefile is used.\n\
+\nExamples:-\n\
+   %s ucc CC=cc31B     %s Link=Lnk650Exp     %s install\n", amu, amu, amu);
+  exit(0);
+}
+
+int main(argc, argv)
+int argc;
+char *argv[];
+{
+  char *in_file  = "Makefile",
+       *out_file = NULL;
+  char *arg, *s;
+  int j, ntargets;
+  char buf[NAMELEN];
+  char *targets[MAXTARGETS];
+  
+  initialise();
+
+  /* Force output of commands to file under Brazil */
+  if (_kernel_hostos() != _kernel_ARTHUR) out_file = "!Make";
+  
+  for (j = 1;  j < argc;  ++j)
+  { arg = argv[j];
+    if (hash_cistrcmp("-help", arg) == 0 || hash_cistrcmp("-h", arg) == 0)
+      give_help();
+  }
+
+  ntargets = 0;
+  for (j = 1;  j < argc;  ++j)
+  { arg = argv[j];
+    if (*arg == '-')
+    {
+      switch (safe_tolower(arg[1]))
+      {
+#ifdef DDE
+case 'x': /* -d is now -desktop */
+#else
+case 'd':
+#endif
+          amu_flags |= DEBUGGING;
+          break;
+#ifdef DDE
+case 'd':
+          desktop_prefix = 1;
+          break;
+#endif
+case 'f':
+          if (arg[2] == 0) {
+            ++j;
+            if (j < argc)
+              in_file = argv[j];
+            else
+              err_report("missing argument to %s option", arg);
+          } else in_file = arg+2;
+          break;
+case 'i':
+          amu_flags |= IGNORE_RC;
+          break;
+case 'k':
+          amu_flags |= CONTINUE;
+          break;
+case 'n':
+          amu_flags |= NO_ACTION;
+          break;
+case 'o':
+          if (arg[2] == 0)
+          { ++j;
+            if (j < argc)
+              out_file = argv[j];
+            else
+              err_report("missing argument to %s option", arg);
+          }
+          else out_file = arg+2;
+          break;
+case 'q': amu_flags |= SILENT+NO_ACTION;
+          break;
+case 's':
+          amu_flags |= SILENT;
+          break;
+case 't':
+          amu_flags |= TOUCHING;
+          break;
+default:  err_report("unrecognised option '%s'", arg);
+          break;
+      }
+    }
+    else
+    { /* filename or 'X=Y' type of argument... */
+      while (isspace(*arg)) ++arg;
+      s = arg;
+      while (*s)
+      { if (*s == '=') break;
+        ++s;
+      }
+      if (*s)
+      { /* 'X=Y' macro pre-definition */
+        while (s != arg) {
+          --s;
+          if (!isspace(*s)) {++s;  break;}
+        }
+        *s++ = '\0';
+        while (isspace(*s)) ++s;
+        define_macro(arg, s);
+      }
+      else
+      { arg = real_file_name(arg, buf, NAMELEN);
+        targets[ntargets++] = strcpy(malloc(strlen(arg)+1), arg);
+      }
+    }
+  }
+
+#ifdef DDE
+  prefix_init(in_file);
+#endif
+
+#ifdef DDE
+  {
+    int32 size;
+
+    size = wf_filesize(in_file);
+    if (size < 0) err_fail("can't find %s", in_file);
+    makefile = malloc((size_t)(size + 1));
+    if (!makefile) err_fail("out of memory");
+    if (wf_load(in_file, makefile, size) < 0)
+        err_fail("error reading %s", in_file);
+    makefile[size] = 0;
+    in = makefile;
+    input_file = malloc(strlen(in_file) + 1);
+    strcpy(input_file, in_file);
+  }
+#else
+  in = fopen(in_file, "r");
+  if (in == NULL) err_fail("can't find %s", in_file);         /* NO Return */
+#endif
+
+  s = NULL;
+  if (argc > 1) s = strstr(_kernel_command_string(), argv[1]);
+  if (s != NULL) define_macro("MFLAGS", s);
+
+  make_default_suffixes();
+  build_graph();
+#ifndef DDE
+  fclose(in);
+#endif
+  expand_vpath();
+  get_time_stamps();
+
+  if (nerrors > 0)
+  { if ((NO_ACTION & amu_flags) || (out == NULL)) return 2;
+    err_fail("'%s' not written because of errors", out_file);
+  }                                                           /* NO Return */
+
+  if ((amu_flags & NO_ACTION) || (out_file == NULL))
+    out = NULL;
+  else
+  { out = fopen(out_file, "w");
+    if (out == NULL)
+    { err_report("can't create command file '%s'", out_file);
+      err_fail("(disk full? directory full? bad file name?)");
+    }                                                         /* NO Return */
+  }
+
+  make_suffix_list();
+  j = process_graph(ntargets, targets);
+#ifdef DDE
+  md_merge();
+  md_delete();
+#endif
+  if ((amu_flags & (SILENT|NO_ACTION)) == (SILENT|NO_ACTION)) return j;
+
+  if (out != NULL)
+  { if (ferror(out) || fclose(out) != 0)
+    { err_report("error writing or closing command file '%s'", out_file);
+      err_fail("(disk full? map full? map too fragmented?)"); 
+    }                                                         /* NO Return */
+
+    if (amu_flags & CMDS_OUTPUT)
+    { if (_kernel_hostos() == _kernel_ARTHUR)
+      {
+fprintf(stderr, "\n*** Don't forget to *OBEY or *EXEC '%s' ***\n\n", out_file);
+      }
+      else
+      { /* Make a command guaranteed not to overflow buf... */
+        strcpy(buf, "CHAIN:*EXEC ");
+        j = strlen(buf);
+        strncpy(buf+j, out_file, (NAMELEN-1)-j);
+        buf[NAMELEN-1] = 0;
+        /* and execute it... */
+        system(buf);
+      }
+    }
+  }
+
+  return 0;
+}
