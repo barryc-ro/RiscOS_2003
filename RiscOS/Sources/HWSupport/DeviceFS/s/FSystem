@@ -8,6 +8,7 @@
                 MakeErrorBlock DeviceFS_Escape
                 MakeErrorBlock DeviceFS_CannotDetach
 		MakeErrorBlock DeviceFS_BadIOCtlReasonCode
+                MakeErrorBlock DeviceFS_Timeout
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -43,9 +44,69 @@ checkescape     Entry
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+ [ TWSleep
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call this timeout after the delay time.  it must wake up the task and make
+; it non-blocking so as to return to the user.
+;
+; On entry, r12 = context, IRQs disabled
+; must preserve all registers
+;
+
+timeout
+                Entry   "r0"
+                MOV     r0, #ff_TimedOut
+                STR     r0, [r12, #file_PollWord]
+                EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; sleep until pollword non-zero
+;
+
+sleep
+                Entry   "r0-r2"
+
+                LDR     r0, [fr, #file_Timeout]
+                TEQ     r0, #0
+                BEQ     %f10
+
+                ADR     r1, timeout
+                MOV     r2, fr
+                SWI     XOS_CallAfter
+
+                ADD     r1, fr, #file_PollWord
+                MOV     r0, #UpCall_Sleep
+                Debug   fs, "Pollword", r1
+                SWI     XOS_UpCall
+
+                LDR     r0, [fr, #file_PollWord]
+                TEQ     r0, #ff_TimedOut
+                BEQ     %f90
+
+                ADR     r0, timeout
+                MOV     r1, r12
+                SWI     XOS_RemoveTickerEvent
+                EXIT
+10
+                ADD     r1, fr, #file_PollWord
+                MOV     r0, #UpCall_Sleep
+                Debug   fs, "Pollword", r1
+                SWI     XOS_UpCall
+                CLRV
+
+                EXIT
+90
+                PullEnv
+                ADR     r0, ErrorBlock_DeviceFS_Timeout         ; so set r0 -> error block
+                DoError                                         ; translate error and return V set
 
 
-
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ ]
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; StartFSystem, this simply registers the filing system with FileSwitch, no
@@ -207,6 +268,10 @@ fs_open         ROUT
                 STR     r0, [fr, #file_InternalHandle]          ; magic value that allows the finalise to be issued
                 STR     dr, [fr, #file_Device]
                 STR     pr, [fr, #file_Parent]
+ [ TWSleep
+                MOV     r0, #ff_DontSleep
+                STR     r0, [fr, #file_PollWord]
+ ]
 
                 MOV     r0, #-1                                 ; and indicate that no pending data
                 STR     r0, [fr, #file_RXTXWord]
@@ -241,6 +306,7 @@ fs_open         ROUT
                 LDR     r1, [fr, #file_Parent]                  ; handle to call is the parents
                 LDR     r2, [fr, #file_InternalHandle]          ; giving it the internal handle
                 LDR     r3, [fr, #file_BufferHandle]
+                MOV     r5, r3                                  ; save buffer handle for the UpCall
                 BL      CallDevice
                 BVS     %FT90
 
@@ -567,6 +633,12 @@ wakeup_rx	Entry	"r0-r9"				; Stack everything, in case CallAVector corrupts it
                 RestPSR r2,,cf
 		NOP
 
+ [ TWSleep
+                LDR     r0, [r8, #file_PollWord]
+                TEQ     r0, #ff_DontSleep
+                MOVNE   r0, #ff_WakeUp
+                STRNE   r0, [r8, #file_PollWord]
+ ]
 		EXIT
  ]
 ; detach code, this is called when someone tries to deregister the buffer, or link it some other device
@@ -684,6 +756,7 @@ fs_get          Entry   "r0-r2, fr,pr"
                 BCS     %FT40                                   ; give up if EOF
 
 01
+
                 BL      checkescape                             ; is escape pressed
                 BVS     %FT30                                   ; yes then return the escape error
 
@@ -710,9 +783,26 @@ fs_get          Entry   "r0-r2, fr,pr"
                 Pull    "r1-r2, r9"                             ; preserve important registers
  ]
                 BVS     %FT30                                   ; return any errors
+ [ TWSleep
 20
-                BCS     %BT00                                   ; loop again to make sure actually received data
 
+                BCC     %FT25                                   ; if data was returned don't loop
+                LDR     r1, [fr, #file_PollWord]
+                TEQ     r1, #ff_DontSleep
+                BEQ     %BT00                                   ; we don't want to sleep
+
+                ASSERT  (BufferReason_RemoveByte <> -1)
+                CMP     r0, #-1                                 ; if we're not buffered, r0 = -1 here.
+                MOVNE   r1, #ff_Sleeping                        ; reset pollword if we're buffered, if not then
+                STRNE   r1, [fr, #file_PollWord]                ; we can't set a pollword to wake us up
+                BL      sleep
+                BVS     %FT30
+
+                B       %BT00                                   ; loop again to make sure actually received data
+25
+ |
+                BCS     %BT00                                   ; loop again to make sure actually received data
+ ]
                 STR     r0, [sp, #CallerR0]                     ; write to return frame
 
                 BL      %FT80                                   ; SleepRX - ignore error returned
@@ -835,8 +925,20 @@ fs_put		Entry	"r0-r2, fr, r9"
 
 		LDR	r1, [fr, #file_RXTXWord]
 		CMP	r1, #-1					; is the RX/TX word free yet?
-		BNE	%00					; no, so loop again
+ [ TWSleep
+		BEQ	%05					; yes, so don't loop again
+                LDR     r1, [fr, #file_PollWord]
+                TEQ     r1, #ff_DontSleep
+                BEQ     %00                                     ; we don't want to sleep
 
+                BL      sleep
+                BVS     %FT99
+
+                B       %00                                     ; loop again
+5
+ |
+		BNE	%00					; no, so loop again
+ ]
 		STR	r0, [fr, #file_RXTXWord]		; yes, so write the word in now
 
 		MOV	r0, #DeviceCall_WakeUpTX
@@ -862,7 +964,23 @@ fs_put		Entry	"r0-r2, fr, r9"
 		SWI	XOS_CallAVector
  ]
 		BVS	%99					; return any errors that may occur
+ [ TWSleep
+		BCC	%20					; don't loop if inserted
+                LDR     r1, [fr, #file_PollWord]
+                TEQ     r1, #ff_DontSleep
+                BEQ     %10                                     ; we don't want to sleep
+
+                MOV     r1, #ff_Sleeping                        ; reset pollword
+                STR     r1, [fr, #file_PollWord]
+
+                BL      sleep
+                BVS     %FT99
+
+		B	%10					; keep looping
+20
+ |
 		BCS	%10					; keep looping until inserted
+ ]
 
 		CLRV
 99		STRVS	r0, [sp]
@@ -957,6 +1075,10 @@ ioctl_miscop	ROUT
 10
 		MOV	pc, lr				; 0 nothing
 		B	ioctl_miscop_nonblock		; 1 set non-blocking I/O
+                MOV     pc, lr                          ; 2 buffer threshold
+                MOV     pc, lr                          ; 3 flush stream buffers
+                B       ioctl_miscop_sleep              ; 4 sleeping I/O (Calls UpCall 6)
+                B       ioctl_miscop_timeout            ; 5 timeout if sleeping, 0 means sleep forever
 20
                 PullEnv
                 MOVEQ   pc, lr                          ; V must be clear to get here
@@ -992,6 +1114,52 @@ ioctl_miscop_nonblock
                 CLRV
 		MOV	pc, lr
 
+ioctl_miscop_sleep
+                ROUT
+
+		MOV	fr, r1				; -> file record
+		LDR	r1, [fr, #file_PollWord]
+
+		TST	r0, #&80000000			; test write flag
+		BEQ	%10
+
+		LDR	r3, [r2, #4]			; load ioctl data word
+		CMP	r3, #0
+                MOV     r1, #ff_DontSleep               ; sleeping disabled
+		CMP	r3, #1
+                MOV     r1, #ff_WakeUp                  ; sleeping enabled
+		STR	r1, [fr, #file_PollWord]	; write back
+10
+		TST	r0, #&40000000			; test read flag
+		BEQ	%20
+
+                TEQ     r1, #ff_DontSleep               ; test if we're not going to sleep
+		MOVEQ	r0, #1				; sleeping disabled
+		MOVNE	r0, #0				; sleeping enabled
+		STR	r0, [r2, #4]			; store result in ioctl block
+20
+                CLRV
+		MOV	pc, lr
+
+ioctl_miscop_timeout
+                ROUT
+
+		MOV	fr, r1				; -> file record
+		LDR	r1, [fr, #file_Timeout]
+
+		TST	r0, #&80000000			; test write flag
+		BEQ	%10
+
+		LDR	r3, [r2, #4]			; load ioctl data word
+		STR	r3, [fr, #file_Timeout]	        ; write back
+10
+		TST	r0, #&40000000			; test read flag
+		BEQ	%20
+
+		STR	r1, [r2, #4]			; store result in ioctl block
+20
+                CLRV
+		MOV	pc, lr
 
 ; handle checking of the file extent
 
@@ -1132,15 +1300,30 @@ args_flush      Entry   "r1-r3,fr"
                 TST     r0, #ff_FileForTX                       ; is the file an output object
                 EXIT    EQ                                      ; no, so return now
 10
-                BL      checkeof                                ; CS = exit loop until EOF or Escape pressed
+                BLVC    checkeof                                ; CS = exit loop until EOF or Escape pressed
 		DebugIf CS, flush, "Exited  Flush EOF"
                 EXIT    CS                                      ; normal exit eof found
 
                 BLVC    checkescape                             ; VS = exit not always enabled
                 BLVC    checkfileTXOK                           ; VS = exit Monitor TX for errors call 12.
-
 		DebugE  flush, "Exited  Flush forced exit"
                 EXIT    VS                                      ; return the error (if one)
+ [ TWSleep
+                MOV     fr, r1
+                LDR     r0, [fr, #file_PollWord]
+                TEQ     r0, #ff_DontSleep
+                BEQ     %BT10                                   ; we don't want to sleep
+
+                LDR     r1, [fr, #file_BufferHandle]
+                CMP     r1, #-1                                 ; is the device buffered?
+
+                MOVNE   r1, #ff_Sleeping                        ; reset pollword if we're buffered, if not then
+                STRNE   r1, [fr, #file_PollWord]                ; we can't set a pollword to wake us up
+
+                BL      sleep
+
+                MOV     r1, fr
+ ]
                 B       %BT10                                   ; if C clear then still no end of data
 
 ; get load and exec address of a stream and return them back to the caller.
@@ -1163,19 +1346,32 @@ args_loadexec   MOV     r2, #0
 ; unlinking the device from the buffer and then closing down the device.
 ;
 
-fs_close        Entry   "dr, pr"
+fs_close        Entry   "r0, dr, pr"
 
                 Debug   close,"Closing file"
                 Debug   fs, "fs_close"
 
                 MOV     fr, r1                                  ; fr is the file handle to be used
                 BL      removefileblock                         ; and then remove the block associated with it
+
+ [ TWSleep
+                STRVS   r0, [sp, #Proc_RegOffset]
+ ]
                 EXIT
 
 
 removefileblock Entry   "r0-r5, dr, pr"                         ; attempt to zap record at 'FR'
 
                 Debug   close,"removing file block"
+
+ [ TWSleep
+                MOV     r0, #UpCall_SleepNoMore
+                ADD     r1, fr, #file_PollWord
+                Debug   fs, "Unsleeping pollword", r1
+                SWI     XOS_UpCall
+                STRVS   r0, [sp, #Proc_RegOffset]
+                EXIT    VS
+ ]
 
                 ADD     dr, fr, #file_Device
                 LDMIA   dr, {dr, pr}                            ; get parent + device records
@@ -1650,7 +1846,7 @@ gbpb_get        Entry   "r0-r3, fr, r9, pr"
                 B       %FT12
 
 10
-                BL      checkfileRXOK
+                BLVC    checkfileRXOK
                 BVS     %FT90
 
                 LDR     r1, [pr, #parent_Flags]
@@ -1680,8 +1876,21 @@ gbpb_get        Entry   "r0-r3, fr, r9, pr"
                 BVS     %FT90                                   ; either escape pressed or REMV gave error
 
                 TEQ     r3, #0                                  ; all the data obtained?
-                BNE     %BT10                                   ; no, so loop again until done
+ [ TWSleep
+                BEQ     %FT20
+                LDR     r1, [fr, #file_PollWord]
+                TEQ     r1, #1
+                BEQ     %BT10
 
+                MOV     r1, #ff_Sleeping                        ; reset pollword
+                STR     r1, [fr, #file_PollWord]
+
+                BL      sleep
+
+                B       %BT10
+ |
+                BNE     %BT10                                   ; no, so loop again until done
+ ]
 20
                 LDR     r4, [sp, #CallerR3]                     ; How many did we ask for?
                 SUB     r4, r4, r3                              ; file ptr = 0 + initial request - amount left
@@ -1765,7 +1974,7 @@ gbpb_put        Entry   "r0-r3, fr, r9"
 		;Loop till data written
 00
 		Debug	fs, "fsgbpb_put", r3
-                BL      checkescape
+                BLVC    checkescape
 		DebugIf	VS, fs, "detected escape---purging output buffer"
 		BLVS	purgeoutputbuffer
 		BVS	%90
@@ -1786,7 +1995,28 @@ gbpb_put        Entry   "r0-r3, fr, r9"
 		BNE	%FT02					; if so, finish now
 
                 TEQ     r3, #0                                  ; all written yet?
+ [ TWSleep
+                BEQ     %01
+                LDR     r0, [fr, #file_PollWord]
+                TEQ     r1, #ff_DontSleep
+                BEQ     %00
+
+                MOV     r1, #ff_Sleeping                        ; reset pollword
+                STR     r1, [fr, #file_PollWord]
+
+                BL      sleep
+
+ [ FastBufferMan
+                LDR     r1, [fr, #file_BufferPrivId]            ; get buffer managers private buffer id
+ |
+                LDR     r1, [fr, #file_BufferHandle]
+                ORR     r1, r1, #1:SHL:31                       ; it is a block insert
+ ]
+                B       %00
+01
+ |
                 BNE     %00
+ ]
 		Debug	fs, "fsgbpb_put done"
 
 02
@@ -1978,6 +2208,18 @@ findobject      Entry   "r1,r6,r7"
 ; contents.
 ;
 
+                        ^ 0, r6
+sp_buffer               # 4             ; Buffer number
+sp_block                # 4             ; blocking
+sp_sleep                # 4             ; sleep
+sp_timeout              # 4             ; time to sleep for
+sp_size                 * :INDEX:@
+
+; decoding validation string for internal commands.
+
+internal        = "buffer/Nblock,noblock/Snosleep,sleep/Stimeout/N", 0
+                ALIGN
+
 HandleSpecial   Entry   "r0-r6"
 
                 BL      DecodeSpecial
@@ -1987,7 +2229,7 @@ HandleSpecial   Entry   "r0-r6"
                 LDR     r5, =&DEADDEAD
                 STR     r6, [fr, #file_SpecialField]            ; -> decoded special field string
 
-                LDR     r0, [r6], #4
+                LDR     r0, sp_buffer
                 TEQ     r0, r5                                  ; did they specifiy a 'buffer/n' parameter
                 BEQ     %10                                     ; obviously not....
 
@@ -1996,6 +2238,28 @@ HandleSpecial   Entry   "r0-r6"
                 MOVEQ   r0, #-1                                 ; if not then stuff the user buffer handle
                 STR     r0, [fr, #file_BufferHandle]
 10
+                LDR     r0, sp_block                            ; maybe set the non-blocking bit
+                TEQ     r0, #1
+                BNE     %20
+                LDR     r0, [fr, #file_Flags]
+                ORR     r0, r0, #ff_NonBlocking
+                STR     r0, [fr, #file_Flags]
+ [ TWSleep
+20
+                LDR     r0, sp_sleep                            ; maybe set the sleeping word
+                TEQ     r0, #1
+                BNE     %30
+                MOV     r0, #ff_Sleeping
+                STR     r0, [fr, #file_PollWord]
+30
+                LDR     r0, sp_timeout                          ; set the timeout for sleeping
+                TEQ     r0, r5
+                MOVEQ   r0, #0
+                STR     r0, [fr, #file_Timeout]
+ |
+20
+ ]
+                ADD     r6, r6, #sp_size
                 LDR     r0, [pr, #parent_Validation]
                 CMP     r0, #0                                  ; do I need to pass the decoded block? (clears V)
                 LDREQ   r6, [sp, #CallerR6]                     ; no, so -> original version
@@ -2004,10 +2268,6 @@ HandleSpecial   Entry   "r0-r6"
                 EXIT                                            ; V bit is set/clear as required by here
 
 
-; decoding validation string for internal commands.
-
-internal        = "buffer/N", 0
-                ALIGN
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
