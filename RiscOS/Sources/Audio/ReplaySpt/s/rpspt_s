@@ -7,11 +7,7 @@
 			GET	hdr:ListOpts
 			GET	hdr:Macros
 			GET	hdr:System
-
-;			GET	os:hdr.types
-;			GET	os:hdr.os
-;			GET	os:hdr.osmodule
-;			GET	os:hdr.osspriteop
+			GET     hdr:APCS.<APCS>
 
 			GET	hdr:ModHand
 			GET	hdr:Proc
@@ -87,8 +83,6 @@ WorkspaceSize	*	:INDEX:@
 
 		AREA	|ASM$$CODE|,CODE,READONLY
 
-WorkspaceAddr	DCD	Workspace		; address of our workspace
-
 ; ===================================================================================================
 
 ; INPUT
@@ -104,9 +98,11 @@ WorkspaceAddr	DCD	Workspace		; address of our workspace
 
 		EXPORT	RegisterSprites
 
-RegisterSprites	Entry	"r1-r12"
+RegisterSprites
+                FunctionEntry "v1-fp"
 
-		LDR	r12, WorkspaceAddr
+                StaticBaseFromSL r11
+                ADRVar  r12, r11, Workspace
 
 		MOV	r11, r0			; r11 -> register block
 		LDMIA	r11, {r0-r4}
@@ -118,13 +114,13 @@ RegisterSprites	Entry	"r1-r12"
 		STR	r3, OldState
 
 		BL	DeRegisterSprites	; just in case
-		EXIT	VS
+                Return  "v1-fp",, VS
 
 ; claim space for sprites
 		MOV     r0, #ModHandReason_Claim
 		LDR	r3, [r10]		; get size of area
 		SWI     XOS_Module
-		EXIT    VS
+                Return  "v1-fp",, VS
 
 ; save ptr
 		STR	r2, ButtonSprites
@@ -144,7 +140,7 @@ RegisterSprites	Entry	"r1-r12"
 
 20		LDR     r2, [r8], #4
 		SWI	XOS_SpriteOp
-		EXIT	VS
+                Return  "v1-fp",, VS
 
 		LDR	r4, [r9], #4
 		BIC	r4, r4, #3
@@ -154,11 +150,12 @@ RegisterSprites	Entry	"r1-r12"
 		BGT	%bt20
 
 ; setup ptr to routine for foreground
-		ADR	r0, PlayerMouseInterface
+                StaticBaseFromSP r14
+                ADRVar  r0, r14, Trampoline_Mouse
 		STR	r0, [r11]
 
 		MOV	r0, #0
-		EXITS
+                Return  "v1-fp"
 
 ; INPUT
 ;  none
@@ -170,19 +167,20 @@ RegisterSprites	Entry	"r1-r12"
 		EXPORT	DeRegisterSprites
 
 DeRegisterSprites
-		Entry	"r1-r3,r12"
-		LDR	r12, WorkspaceAddr
+                FunctionEntry
+                StaticBaseFromSP r14 ; sl will be corrupt if we're being called from RegisterSprites
+                ADRVar  r12, r14, Workspace
 
 		LDR	r2, ButtonSprites
 		CMP	r2, #0
 		MOVEQ	r0, #0
-		EXITS	EQ
+                Return  ,, EQ
 
 		MOV     r0, #ModHandReason_Free
 		SWI     XOS_Module
 		MOVVC	r0, #0
 		STRVC	r0, ButtonSprites
-		EXIT
+                Return
 
 
 ; ===============================================================================
@@ -191,7 +189,6 @@ DeRegisterSprites
 ; r3 row bytes
 ; r4 base screen address
 ; r9 sprite hdr ptr
-; r14 return
 
 ; Work
 ; r0,r1,r2 scrap
@@ -290,6 +287,7 @@ $L		LDR	r5, [r9, #spImage]
 ;     r7..r12: nothing
 ;    r13: RISC OS Irq stack
 ;    r14: return address
+;    flags need not be preserved - Player ignores them
 
 ; r0 state bits
 
@@ -315,13 +313,13 @@ oFPS		# 4
 
 		ALIGN	16
 
-PlayerMouseInterface	Entry	"r12"
+PlayerMouseInterface Entry
 
-		LDR	wp, WorkspaceAddr
+;		LDR	wp, WorkspaceAddr
 
 		LDRB	r7, Semaphore		; check for reentry
 		CMP	r7, #0
-		EXITS	NE
+		EXIT	NE
 
 		MOV	r7, #1
 		STRB    r7, Semaphore		; mark entered
@@ -355,7 +353,7 @@ PlayerMouseInterface	Entry	"r12"
 		MOV	r7, #0
 		STRB    r7, Semaphore		; mark exited
 
-		EXITS
+		EXIT
 
 
 ; r0 = current state
@@ -375,7 +373,7 @@ UpdateSprite	Entry	"r0-r7"
 ; setup values for PlotSprite, checking that button is on screen
 		LDR	r4, [r0, #sprOffset]	; offset from screen base
 		CMP	r4, #0
-		EXITS	LT
+		EXIT	LT
 
 		LDR	r2, [r5, #oScreenBase]
 		ADD	r4, r4, r2
@@ -385,7 +383,7 @@ UpdateSprite	Entry	"r0-r7"
 
 		PlotSprite
 
-		EXITS
+		EXIT
 
 ; ===============================================================================
 
@@ -425,6 +423,73 @@ masks		DCD	&00000000
 
 ; ===============================================================================
 
+; CreateTrampolines
+
+; Needed in order to compensate for the lack of any sort of handle passed from
+; Player to the toolbar paint and mouse handler routines - they need to access
+; Workspace, but we have nowhere to get the static data relocation offset from
+
+; extern void CreateTrampolines(void);
+
+                EXPORT  CreateTrampolines
+
+CreateTrampolines
+                FunctionEntry
+
+                StaticBaseFromSL ip
+
+                ADRVar  a2,ip,Trampoline_Mouse  ; preserve for SynchroniseCodeAreas call
+                MOV     a3,a2                   ; a3 points to base of each trampoline in turn
+                SUB     a1,a2,#WorkspaceSize+8  ; a1->Workspace, compensate for PC advancement in ADR
+                SUB     a1,a3,a1                ; offset to be subtracted from PC to locate Workspace
+                LDR     lr,ADRR12_template
+                ORR     a1,a1,lr                ; a1 now holds ADR R12,Workspace
+                MOV     lr,#&00FFFFFF           ; useful constant for building B instructions
+                ADR     a4,PlayerMouseInterface-8-4 ; compensate for advanced value in PC when
+                SUB     a4,a4,a3                    ; executed, and offset of a3 behind instruction
+                AND     a4,lr,a4,ASR#2
+                ORR     a4,a4,#B_template       ; a4 now holds B PlayerMouseInterface
+                STMIA   a3!,{a1,a4}             ; store the two instructions in Trampoline_Mouse
+
+                ADD     a1,a1,#8                ; ADR must now subtract 8 bytes *more* from PC
+                ADR     a4,TimebarPaint4-8-4
+                SUB     a4,a4,a3
+                AND     a4,lr,a4,ASR#2
+                ORR     a4,a4,#B_template
+                STMIA   a3!,{a1,a4}
+
+                ADD     a1,a1,#8                ; ADR must now subtract 8 bytes *more* from PC
+                ADR     a4,TimebarPaint8-8-4
+                SUB     a4,a4,a3
+                AND     a4,lr,a4,ASR#2
+                ORR     a4,a4,#B_template
+                STMIA   a3!,{a1,a4}
+
+                ADD     a1,a1,#8                ; ADR must now subtract 8 bytes *more* from PC
+                ADR     a4,TimebarPaint16-8-4
+                SUB     a4,a4,a3
+                AND     a4,lr,a4,ASR#2
+                ORR     a4,a4,#B_template
+                STMIA   a3!,{a1,a4}
+
+                ADD     a1,a1,#8                ; ADR must now subtract 8 bytes *more* from PC
+                ADR     a4,TimebarPaint32-8-4
+                SUB     a4,a4,a3
+                AND     a4,lr,a4,ASR#2
+                ORR     a4,a4,#B_template
+                STMIA   a3!,{a1,a4}
+
+                MOV     a1,#1
+                SUB     a3,a3,#1                ; r2 points to *inclusive* top address to synchronise
+                SWI     XOS_SynchroniseCodeAreas
+
+                Return
+
+ADRR12_template &       &E24FC000
+B_template      *       &EA000000
+
+; ===============================================================================
+
 ; SWI
 
 ; INPUT
@@ -449,9 +514,10 @@ masks		DCD	&00000000
 
 		EXPORT	TimebarPaintAddress
 TimebarPaintAddress
-		Entry	"r4-r6,r10,r11"
+                FunctionEntry "v1-v3,sl,fp"
 
-		LDR	r12, WorkspaceAddr
+                StaticBaseFromSL r14
+                ADRVar  r12, r14, Workspace
 		MOVS	r11, r1			; r11 = new_call
 
 		LDMIA	r0, {r0-r6}
@@ -481,15 +547,15 @@ TimebarPaintAddress
 		STR	r0, LastPixel
 
 		CMP	r5, #2
-		ADREQ	r0, TimebarPaint4
+                ADRVar  r0, r14, Trampoline_TimebarPaint4, EQ
 		CMP	r5, #3
-		ADREQ	r0, TimebarPaint8
+                ADRVar  r0, r14, Trampoline_TimebarPaint8, EQ
 		CMP	r5, #4
-		ADREQ	r0, TimebarPaint16
+                ADRVar  r0, r14, Trampoline_TimebarPaint16, EQ
 		CMP	r5, #5
-		ADREQ	r0, TimebarPaint32
+                ADRVar  r0, r14, Trampoline_TimebarPaint32, EQ
 
-		EXITS
+                Return  "v1-v3,sl,fp"
 
 ;	InsertNewDebugRoutines
 
@@ -519,7 +585,7 @@ TimebarPaintAddress
 
 TimebarPaint4	ROUT
 
-		LDR	wp, WorkspaceAddr
+;		LDR	wp, WorkspaceAddr
 
 		; see if frame needs painting
 		LDR	r5, PixelsPerFrame
@@ -579,7 +645,7 @@ TimebarPaint4	ROUT
 
 TimebarPaint8	ROUT
 
-		LDR	wp, WorkspaceAddr
+;		LDR	wp, WorkspaceAddr
 
 		; see if frame needs painting
 		LDR	r5, PixelsPerFrame
@@ -630,7 +696,7 @@ TimebarPaint8	ROUT
 
 TimebarPaint16	ROUT
 
-		LDR	wp, WorkspaceAddr
+;		LDR	wp, WorkspaceAddr
 
 		; see if frame needs painting
 		LDR	r5, PixelsPerFrame
@@ -687,7 +753,7 @@ TimebarPaint16	ROUT
 
 TimebarPaint32	ROUT
 
-		LDR	wp, WorkspaceAddr
+;		LDR	wp, WorkspaceAddr
 
 		; see if frame needs painting
 		LDR	r5, PixelsPerFrame
@@ -738,14 +804,14 @@ TimebarPaint32	ROUT
 ; ===============================================================================
 
 ; OUT:
-;   VC, r0 = ARMovie version
-;   VS, r0 -> error
+;     r0 = 0, contents of first argument = ARMovie version
+; or  r0 -> error
 
 ; extern os_error *ReplayGetVersion(int *version, void *ws, int ws_size);
 
 		EXPORT	ReplayGetVersion
 ReplayGetVersion
-		Entry	"r1-r5"
+                FunctionEntry "v1-v2"
 
 		MOV	r5, r0
 
@@ -755,15 +821,15 @@ ReplayGetVersion
 		MOV	r3, #0
 		MOV	r4, #0
 		SWI	XOS_ReadVarVal
-		EXITS	VS
+                Return  "v1-v2",, VS
 
 		BL	ReadVersion	; get ARMovie version
-		EXITS	VS
+                Return  "v1-v2",, VS
 
 		CMP	r5, #0
 		STR	r0, [r5]
 		MOV	r0, #0
-		EXITS
+                Return
 
 ; ===============================================================================
 
@@ -777,7 +843,7 @@ ReplayGetVersion
 		EXPORT	ReplayCheckVer_Code
 
 ReplayCheckVer_Code
-		Entry	"r1-r11"
+                FunctionEntry "v1-v6,sl,fp"
 		MOV	r11, r0		; r11 -> command line
 
 		ADR	r0, ReplayVersionVar
@@ -788,25 +854,25 @@ ReplayCheckVer_Code
 		MOV	r3, #0
 		MOV	r4, #0
 		SWI	XOS_ReadVarVal
-		EXIT	VS
+                Return  "v1-v6,sl,fp",, VS
 
 		BL	ReadVersion	; get ARMovie version
-		EXIT	VS
+                Return  "v1-v6,sl,fp",, VS
 		MOV	r10, r0		; r10 = ARMovie version
 
 		MOV	r1, r11		; get requested version
 		BL	ReadVersion
-		EXIT	VS
+                Return  "v1-v6,sl,fp",, VS
 
 		CMP	r10, r0		; if OK then exit
 		MOVGE	r0, #0
-		EXITS	GE
+                Return  "v1-v6,sl,fp",, GE
 
 		MOV	r0, r1		; else call OSCLI with remainder of line
 		SWI	XOS_CLI
 
 		MOVVC	r0, #0
-		EXIT			; return any error from OSCLI
+                Return  "v1-v6,sl,fp"   ; return any error from OSCLI
 
 ReplayVersionVar =	"ARMovie$Version", 0
 		ALIGN
@@ -820,7 +886,7 @@ ReplayVersionVar =	"ARMovie$Version", 0
 ;  VC, r1 -> end of version string
 ;      r0 = value
 
-ReadVersion	BIC	lr, lr, #V_bit
+ReadVersion
 		Entry	"r2,r3"
 
 		MOV	r0, #10		; return first part of version
@@ -831,8 +897,8 @@ ReadVersion	BIC	lr, lr, #V_bit
 		MUL	r0, r2, lr	; r0 = version*100
 
 		LDRB	r3, [r1]	; if terminator is not a dot then return
-		CMP	r3, #"."
-		EXITS	NE
+		CMP	r3, #"."        ; this always clears V
+                EXIT    NE
 
 		ADD	r1, r1, #1	; inc over .
 		MOV	r3, r0		; move value into r3
@@ -844,10 +910,24 @@ ReadVersion	BIC	lr, lr, #V_bit
 
 ; ===============================================================================
 
+                LocalVar Workspace
+                LocalVar Trampoline_Mouse
+                LocalVar Trampoline_TimebarPaint4
+                LocalVar Trampoline_TimebarPaint8
+                LocalVar Trampoline_TimebarPaint16
+                LocalVar Trampoline_TimebarPaint32
+
 		AREA	|ASM$$DATA|,DATA
 
                 =       "WSPC"
 Workspace	%	WorkspaceSize
+; Trampoline_Mouse must follow immediately
+Trampoline_Mouse                %       2*4     ; These are actually code generated
+Trampoline_TimebarPaint4        %       2*4     ; during module initialisation -
+Trampoline_TimebarPaint8        %       2*4     ; two instructions each:
+Trampoline_TimebarPaint16       %       2*4     ;   ADR     R12,Workspace
+Trampoline_TimebarPaint32       %       2*4     ;   B       appropriate_code
+Trampoline_End                  %       0
 
 		END
 
