@@ -438,6 +438,16 @@ Chaining_Sequence(int datalength)
 
 Returns error code on exit (added in v0.42).
 
+Note that slot 2 is handled separately. This function is only ever called for slot 1.
+
+The type of block is determined by the top two bits, b8 and b7 (note bits are numbered b1 to b8 in ISO 7816).
+
+  b8  b7   Block type
+   0   X   I-block, Information Block (X is the "send sequence number" and toggles between 0 and 1)
+   1   0   R-block, Receive Ready Block - contains positive or negative acknowledgments and expected
+           number of next I-block
+   0   1   S-block, Supervisory Block contains transmission control information.
+
 */
 
 int t1_DecodeBlk(void)
@@ -612,6 +622,27 @@ Process_RBlk(void)
 }
 
 /******************************************************************************/
+/*
+      Process S-Block
+      ---------------
+
+Supervisory Blocks are defined in figure 15 on page 8 of the ISO/IEC7816-3 spec:
+
+    C0     Resynch request
+    E0     Resynch response
+    C1     Information Field Size (IFS) Request
+    E1     IFS Response
+    C2     Abort request - used to stop I-block chaining
+    E2     Abort response
+    C3     Waiting Time Extension (WTX) request
+    E3     WTX response
+    C4     Vpp error response
+           Other values are reserved
+
+This routine processes an incoming S-block from the card.
+We respond by sending an S-block acknowledgment back to the card.
+Usuually the response had no data
+*/
 int
 Process_SBlk(void)
 {
@@ -619,6 +650,7 @@ Process_SBlk(void)
   int err;
 
   debug_printf(db, "Entering Process_SBlk()\n");
+  pms_debug("S_blk PCB %X", RXPckt.PCB);
 
   if (RXPckt.PCB >= 0xC0 && RXPckt.PCB < 0xE0) {// S-Blk is a request
     switch (RXPckt.PCB) {
@@ -637,7 +669,7 @@ Process_SBlk(void)
 	return err;
 	//break;
 
-      case 0xC1:		// Information field size request
+      case 0xC1:		// Information Field Size (IFS) request
 	if (IFS_Count == 2) {	// 3rd successive time sent?
 	  return SCI_FAIL;	// yes
 	} else {
@@ -657,8 +689,8 @@ Process_SBlk(void)
 	    Xor_Result = t1_Check(&Command);	// calculate checksum
 	    Command.TCK = Xor_Result;	// add to end of Blk
             #ifdef FUNAI_TWINSLOT
-              com_SendAck(); /* Ack the last response first! */
-              g_uc_state = UC_IDLE; /** Finito, can get insert/remove events now **/
+              com_SendAck();            // Ack the last response first!
+              g_uc_state = UC_IDLE;     // Finito, can get insert/remove events now
             #endif
 	    err = SendBlk(&Command);	// transmit S(Response)Blk
 
@@ -667,8 +699,22 @@ Process_SBlk(void)
 	}
 	// break;
 
-      case 0xC2:		// Abort request
-	return SCI_FAIL;
+      case 0xC2:		// Abort request. We need to send an Abort response (added in v0.44)
+        Command.NAD = 00;	// NAD will always be 0
+        Command.PCB = 0xE2;	// PCB set for Abort Response
+        Command.LEN = 0;        // No data
+
+       pms_debug("Sending E2 response", g_slot2_state);
+
+        LRC_Len = 3;	        // NAD, PCB, LEN
+        Xor_Result = t1_Check(&Command); // calculate checksum
+        Command.TCK = Xor_Result;	 // add to end of Blk
+        #ifdef FUNAI_TWINSLOT
+          com_SendAck();        /* Ack the last response first! */
+          g_uc_state = UC_IDLE; /* Finito, can get insert/remove events now */
+        #endif
+        err = SendBlk(&Command);	// transmit S(Response)Blk
+        return SCI_FAIL;
 
       case 0xC3:		// Extension of BWT (SWTX) request
 	Command.NAD = 00;	// NAD will always be 0
