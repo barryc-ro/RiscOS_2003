@@ -27,9 +27,8 @@ WFLAGS  = ~cfr~v
 #
 # Program specific options:
 #
-COMPONENT = ROMFonts
 SOURCE    = s.ROMFonts
-TARGET    = rm.ROMFonts
+TARGET    = rm.${COMPONENT}
 
 #
 # Generic rules:
@@ -53,8 +52,13 @@ o.ROMFonts: ${SOURCE}
         ${MKDIR} o
         ${AS} ${ASFLAGS} ${SOURCE}
 
-${TARGET}: o.ROMFonts
+rm.ROMFonts: o.ROMFonts
         ${LD} ${LDFLAGS} o.ROMFonts
         SetType ${TARGET} &FFA
+
+o.MaruGothic:
+	ResGen Data o.MaruGothic -via via.MaruGothic
+rm.MaruGothic: o.MaruGothic
+	${LD} ${LDFLAGS} o.MaruGothic
 
 # Dynamic dependencies:
