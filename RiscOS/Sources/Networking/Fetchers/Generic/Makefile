@@ -5,7 +5,7 @@
 # ***********************************
 # Date       Name   Description
 # ----       ----   -----------
-# 05-Feb-98  SNB    Created
+# 10-Feb-98  SNB    Created
 #
 
 #
@@ -16,7 +16,7 @@ ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
 
 
-RESFSDIR   = Resources.GenericFetcher
+RESFSDIR   = Resources.URL.${COMPONENT}
 
 #
 # Export Paths for Messages module
@@ -39,7 +39,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -wp -zM -ffah -zps1 ${DFLAGS}
-DFLAGS   = -D${SYSTEM}
+DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UTRACE
 ROMFLAGS = -DROM
 INCLUDES = -ITCPIPLibs:,C:
 
@@ -49,9 +49,9 @@ INCLUDES = -ITCPIPLibs:,C:
 ANSILIB   = CLib:o.ansilib
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
-#ROMCSTUBS = RISCOSLIB:o.romcstubs
+ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
-INETLIB   = TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
+TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
 
 OBJS =\
  o.commands\
@@ -69,7 +69,7 @@ OBJS =\
  o.URLclient\
  o.utils\
  o.writedata\
- o.GenericMod
+ o.GenericHdr
 
 RAM_OBJS =\
  o.commands\
@@ -87,7 +87,7 @@ RAM_OBJS =\
  o.URLclient\
  o.utils\
  o.writedata\
- o.GenericMod
+ o.GenericHdr
 
 MSGSF=o.msgs
 
@@ -95,6 +95,7 @@ MSGSF=o.msgs
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
+.cmhg.o:; ${CMHG} -o $@ $< -d $*.h
 
 #
 # Main rules:
@@ -112,14 +113,15 @@ install_rom: ${ROM_MODULE}
 
 resources: Resources.${LOCALE}.Messages
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.* ${RESDIR}.* ${CPFLAGS}
+        ${MKDIR} ${RESDIR}.URL
+        ${CP} Resources.${LOCALE}.* ${RESDIR}.URL.* ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
-        ${WIPE} h.GenericMod ${WFLAGS}
+        ${WIPE} h.${COMPONENT}Hdr ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
@@ -141,17 +143,12 @@ rom_link:
 ${MSGSF}: @.Resources.${LOCALE}.Messages
 	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages ${RESFSDIR}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${INETLIB}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
 	${mkdir} rm
-        ${TLD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${INETLIB}
+        ${TLD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
         Access $@ RW/R
 
-GenericMod.o GenericMod.h: cmhg.GenericMod
-	   ${CMHG} -o GenericMod.o $? -d GenericMod.h
-
-o.module: GenericMod.h
-
-o.moduleRAM: module.c GenericMod.h
+o.moduleRAM: module.c
 	$(CC) ${CFLAGS} -o $@ module.c
 
 
