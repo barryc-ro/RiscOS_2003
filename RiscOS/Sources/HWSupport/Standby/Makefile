@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
+# 06-Jan-00  SBF          Added support for StripDepnd.
 #
 
 #
@@ -25,9 +26,10 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ffah -strict ${CFLAGSEXTRA} ${INCLUDES} ${DFLAGS} ${DLFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ffah -strict ${CFLAGSEXTRA} ${INCLUDES} ${DFLAGS} ${DLFLAGS} -DUserIF_${USERIF}
 CMHGFLAGS = -p -depend !Depend
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -64,18 +66,18 @@ LIBS      = <Lib$Dir>.tboxlibs.o.wimplib
 # DebugLib support.
 # Uncomment these or pass to AMU to enable debug build.
 #
-#DLFLAGS	= -Throwback -fn -DDEBUGLIB
+#DLFLAGS = -Throwback -fn -DDEBUGLIB
 #LIBSDL = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklibzm TCPIPLibs:o.inetlibzm
 
 
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .s .c .cmhg .h
-.c.o:;		${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;	${CMHG} ${CMHGFLAGS} -o $@ $<
-.cmhg.h:;	${CMHG} ${CMHGFLAGS} -d $@ $<
-.s.o:;		${AS} ${AFLAGS} $< $@
+.SUFFIXES:      .o .s .c .cmhg .h
+.c.o:;          ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;       ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;       ${CMHG} ${CMHGFLAGS} -d $@ $<
+.s.o:;          ${AS} ${AFLAGS} $< $@
 
 
 HDR: cmhg.header
@@ -99,12 +101,13 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-	${RM} ${HDR}
+        ${RM} ${HDR}
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
