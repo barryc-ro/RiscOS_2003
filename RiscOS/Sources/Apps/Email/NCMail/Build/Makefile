@@ -11,6 +11,8 @@
 # 1998-09-22    RDW     Created
 # 1998-09-28	RDW	LIBS completed for module build
 # 1998-10-08	RDW	NETLINKLIB added
+# 1998-10-14	RDW	amu changed to amu_machine and o.dirs dependancy added
+#			to rom target rule
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -389,28 +391,28 @@ rm.$(APP)D: odz.ModuleWrap  $(LIBSM) o.dirs
 Engine:
 	@echo Calling Engine Makefile
 	dir ^.Engine
-	@amu -f Makefile $(MFLAGS)
+	@amu_machine -f Makefile $(MFLAGS)
 	@echo Returned from Engine Makefile
 	dir ^.Build
 
 $(UI):
 	@echo Calling $(UI) Makefile
 	dir ^.$(UI)
-	@amu -f Makefile $(MFLAGS)
+	@amu_machine -f Makefile $(MFLAGS)
 	@echo Returned from $(UI) Makefile
 	dir ^.Build
 
 cleanWebMail:
 	@echo Calling WebMail Makefile
 	dir ^.WebMail
-	@amu -f Makefile $(MFLAGS)
+	@amu_machine -f Makefile $(MFLAGS)
 	@echo Returned from WebMail Makefile
 	dir ^.Build
 
 cleanTestUI:
 	@echo Calling TestUI Makefile
 	dir ^.TestUI
-	@amu -f Makefile $(MFLAGS)
+	@amu_machine -f Makefile $(MFLAGS)
 	@echo Returned from TestUI Makefile
 	dir ^.Build
 
