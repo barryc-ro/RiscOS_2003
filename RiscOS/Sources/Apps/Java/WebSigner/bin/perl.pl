@@ -5,6 +5,7 @@ $PATH_SRC = "./Resources/src";
 $PATH_BASE = "./Resources/classes";
 
 @files=`find $PATH_SRC -print`;
+@files = sort @files;
 $last_trunc="";
 $suffix = 0;
 
