@@ -45,14 +45,16 @@ INCLUDES= -IC: -ITCPIPLibs:
 # use REMOTE_DEBUG to enable remote debugging
 # use ENABLE_DEBUGGING if you want to enable debugging!
 # use LOCAL_URL_PATHS to get pages from ispc: instead of ispcScr:
+# use DIAL_ON_COMPLETION to dial immediately ISPCapture is completed
+  (orthogonal behaviour is to return to the connect to service screen)
 
 # debugging
 
-ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DLOCAL_URL_PATHS
+ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DLOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
-ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -ULOCAL_URL_PATHS
+ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
-NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DLOCAL_URL_PATHS
+NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DLOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
 #
 # select one of these
