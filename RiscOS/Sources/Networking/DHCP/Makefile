@@ -158,8 +158,7 @@ h.${CMHGNAME}: ${CMHGOBJ}
 
 ${EXPORTS}: h.${CMHGNAME} h.dhcpextern ${DIRS}
 	${CP} h.dhcpextern $@ ${CPFLAGS}
-	${AWK} -- "/.define DHCP\_00/,/endif/" h.${CMHGNAME} { >> $@ }
-
+	Do ${AWK} -- "/.define DHCP\_00/,/endif/" h.${CMHGNAME} >>$@
 
 o.module: VersionNum
 
