@@ -20,7 +20,9 @@ RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 RESDIR    = ^.^.AUNMsgs.Resources.${Locale}.Resources.${COMPONENT}
 
-VPATH     = @ ^.net ^.netinet ^.sys ^.riscos ^.lib ^.whoami
+# amu version 5.02 can't cope with @ in VPATH so we have to use ^.build
+#
+VPATH     = ^.build ^.net ^.netinet ^.sys ^.riscos ^.lib ^.whoami
 
 #
 # Generic options:
@@ -99,6 +101,11 @@ OBJS =\
 #
 # Main rules:
 #
+all: ${TARGET}
+ 
+${TARGET}: ${OBJS}
+        ${LD} -o $@ -rmf ${OBJS} ${CLIB}
+ 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
