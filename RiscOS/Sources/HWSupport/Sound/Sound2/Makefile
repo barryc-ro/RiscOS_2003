@@ -49,13 +49,15 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.SoundSched
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.SoundSched.Messages  ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.SoundSched.Messages  ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.SoundSched.Messages }
+	TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.SoundSched.Messages }
 
 ${TARGET}: ${SOURCE} s.TokHelpSrc
         ${AS} ${ASFLAGS} ${SOURCE}
