@@ -26,6 +26,7 @@
  * pdh 04-Jun-97 Allow spaces at the beginning of headers (sigh)
  * SJM 11-Jun-97 Only strip multiple copies of headers if it's not set-cookie.
  * SJM 10-Jul-97 if ensure_size fails then return an error.
+ * pdh 14-Jul-97 Cope with "Content-type: text/html; charset=foo"
  * SJM 18-Jul-97 Maybe found occaisional server-push crash. malloc for boundary
  *		 wasn't allocating a byte for the terminator
  */
@@ -169,7 +170,7 @@ http_connection *http_cons_list;        /* Absolutely all connections */
 http_queue      *http_queues_list;
 
 volatile int callback_pending;
-volatile int threaded;
+volatile int threaded = 0;
 
 static int keptalive;
 
@@ -192,7 +193,7 @@ static SSL_CTX *ssl_context = NULL;
 static BOOL verify_error = FALSE;
 #endif
 
-#define TMP_BUF_SIZE        1024
+#define TMP_BUF_SIZE        1028
 char tmp_buffer[TMP_BUF_SIZE];
 
 static char http_version[] = HTTP_VERSION;
@@ -258,10 +259,12 @@ debug_session *db=NULL;
 extern void *db;
 #endif
 
+void fprintf_and_flush( FILE *f, char *format, ... );
+
 #ifdef REMOTE_DEBUG
 # define fdebugf  _debug_printf
 #elif DEBUG
-# define fdebugf fprintf
+# define fdebugf fprintf_and_flush
 #else
 # define fdebugf 1?0:fprintf
 #endif
@@ -346,7 +349,7 @@ static _kernel_oserror *make_error(int err)
     httperror.errnum = err;
     strncpy(httperror.errmess, err_strings[err], 252);
 
-/*     fdebugf(log_file, "Making error number %d: %s\n", err, err_strings[err]); */
+    fdebugf(log_file, "Making error number %d: %s\n", err, err_strings[err]);
 
     return &httperror;
 }
@@ -424,7 +427,7 @@ const char *memfind( const char *area, int len, char *search, int *nearly )
     *nearly = 0;
 
     /* Check for partial match at the end <sigh> */
-    while ( len )
+    while ( len >= 0 )
     {
         if ( !strncmp( area, search, len ) )
         {
@@ -556,6 +559,20 @@ _debug_printf(FILE *file, char *format, ...)
   va_end(list);
 
   debug_printf(db,"%s",debug_line);
+}
+#endif
+
+#if DEBUG
+void fprintf_and_flush(FILE *file, char *format, ...)
+{
+  char debug_line[256];
+  va_list list;
+
+  va_start (list, format);
+  vfprintf(file,format, list);
+  va_end(list);
+
+  fflush(file);
 }
 #endif
 
@@ -961,7 +978,7 @@ http_csfs_service(_kernel_swi_regs *r)
       {
         file_progress.total = handle->data_size;
         file_progress.sofar = handle->data_so_far;
-/*      fdebugf(log_file,"(7) Returning data total %d",file_progress.total); */
+        fdebugf(log_file,"(7) Returning data total %d",file_progress.total);
       }
       r->r[3] = (int)&file_progress;
 
@@ -1170,7 +1187,13 @@ extern int callback_handler(_kernel_swi_regs *regs, void *pw)
     fdebugf(log_file, "Callback handler entered\n");
 #endif
 
-    callback_pending = 0;
+    if ( threaded )
+    {
+        fdebugf( log_file, "**** Considerable disaster\n" );
+        return VIA_R14;
+    }
+
+    threaded = 1;
 
     for ( i=0; i < FD_SETSIZE; i++ )
     {
@@ -1196,6 +1219,8 @@ extern int callback_handler(_kernel_swi_regs *regs, void *pw)
     }
 
     threaded = 0;
+
+    callback_pending = 0;
 
     return VIA_R14;
 
@@ -1253,7 +1278,7 @@ static void clear_ticker_and_event(void)
 
 static void setup_callback(void)
 {
-    if (callback_pending == 0)
+    if (callback_pending == 0 && threaded == 0)
     {
         _kernel_swi_regs r;
 
@@ -1303,9 +1328,18 @@ int http_file_size(char *fname)
         return fb.start;
 }
 
+#ifndef mmmtype_MIME
+#define mmmtype_RISCOS       0  /* file type as int */
+#define mmmtype_RISCOSSTRING 1 /* file type as char* */
+#define mmmtype_MIME         2 /* MIME content-type passed as a char* */
+#define mmmtype_DOTEXTN      3 /* .xxx extension (don't pass the .) */
+#endif
+
 _kernel_oserror *http_set_file_type(http_connection *c, int *ftptr)
 {
     _kernel_osfile_block fb;
+
+    fdebugf( log_file, "%p: checking out file type\n", c );
 
     if (c->fname)
     {
@@ -1313,30 +1347,70 @@ _kernel_oserror *http_set_file_type(http_connection *c, int *ftptr)
 
         for (hi = c->headers; hi != NULL; hi = hi->next)
         {
-            if (strcasecmp(hi->key, "CONTENT-TYPE") == 0)
+
+	    fdebugf( log_file, "%p: examining header %p, '%p: %p'\n",
+		     c, hi, hi->key, hi->value );
+
+	    fdebugf( log_file, "%p:   that is, \xAB%s: %s\xBB\n",
+		     c, hi->key, hi->value );
+
+            if (hi->key
+		&& hi->value
+		&& strcasecmp(hi->key, "CONTENT-TYPE") == 0)
             {
                 int ft;
+                char *semic = strchr( hi->value, ';' );
 
+		fdebugf( log_file, "%p: calling mime_map_to_riscos(%s)\n",
+			 c, hi->value );
+
+                /* pdh: blat any "charset=foo" or what-have-you after the
+                 * mime type itself
+                 */
+                if ( semic )
+                    *semic = 0;
+#if 1
                 ft = mime_map_to_riscos(hi->value);
+#else
+		/* pdh: *much* simpler to do this, but I've left in the old
+		 * way for now in case it's not appropriate for NCFresco. Also
+		 * it didn't fix the bug I'd hoped it would.
+		 */
+
+		/* SWI XMimeMap_Translate */
+		_swix( 0xBCD00, _INR(0,2)|_OUT(3), mmmtype_MIME, hi->value,
+		                                   mmmtype_RISCOS, &ft );
+#endif
+                /* pdh: remember to un-blat */
+                if ( semic )
+                    *semic = ';';
+
+		fdebugf( log_file, "%p: map_to_riscos returns %d\n", c, ft );
+
                 if (ft != -1)
                 {
-                    fdebugf(log_file, "Setting file type of '%s' to 0x%03X\n",
-                                      c->fname, ft);
+                    fdebugf(log_file, "%p: setting file type of '%s' to 0x%03X\n",
+                                      c, c->fname, ft);
                     fb.load = ft;
                     if (ftptr)
                         *ftptr = fb.load;
-                    _kernel_osfile(18, c->fname, &fb);
+                    if ( _kernel_osfile(18, c->fname, &fb) < 0 )
+		        return _kernel_last_oserror();
+		    return NULL;
                 }
-                break;
             }
         }
-        if (hi == NULL)
-        {
-            fb.load = FILETYPE_HTML;
-            if (ftptr)
-                *ftptr = fb.load;
-            _kernel_osfile(18, c->fname, &fb);
-        }
+
+	/* Not found... give it a default type */
+        fb.load = FILETYPE_HTML;
+
+	fdebugf( log_file, "%p: no relevant header, giving %s default type\n",
+		 c, c->fname );
+
+        if (ftptr)
+            *ftptr = fb.load;
+        if ( _kernel_osfile(18, c->fname, &fb) < 0 )
+	    return _kernel_last_oserror();
     }
     return NULL;
 }
@@ -1712,7 +1786,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             if ( block > TMP_BUF_SIZE || c->data_size < 0 || c->boundary )
                 block = TMP_BUF_SIZE;
 
-            if ( c->boundary && c->nearlyboundary )
+            if ( c->boundary != NULL && c->nearlyboundary > 0 )
             {
                 char *buf = tmp_buffer + c->nearlyboundary;
                 block -= c->nearlyboundary;
@@ -1726,7 +1800,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             else
                 rc = http_recv( c, tmp_buffer, block );
 
-/*             fdebugf(log_file, "%p: recv (body %d) gave %d\n", c, block, rc); */
+            fdebugf(log_file, "%p: recv (body %d) gave %d\n", c, block, rc);
 
             if (rc <= 0)
             {
@@ -1776,9 +1850,10 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
                         http_set_status( c, status_COMPLETED_FILE );
                         if ( c->flags &
-                             (http_open_flags_IMAGE | http_flags_RANGEBROKEN ) )
+                               (http_open_flags_IMAGE|http_flags_RANGEBROKEN ))
                         {
-                            fdebugf( log_file, "%p: this image was wrecked\n", c );
+                            fdebugf( log_file, "%p: this image was wrecked\n",
+				     c );
                             c->flags |= http_flags_GOTFIRST;
                             c->data_so_far = 0;
                             /* break from the while loop, then falls through
@@ -1802,6 +1877,9 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
                     wrote = bound - tmp_buffer;
 
+		    if ( wrote > rc )
+		        wrote = rc;
+
                     memcpy( c->buffer, bound, rc - wrote );
                     c->buf_used = 0;
                     c->buf_off = rc - wrote;
@@ -1816,9 +1894,14 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 else
                 {
                     /* See whether there may be one straddling 2 packets */
+		    if ( nearly != 0 )
+		        fdebugf( log_file, "%p: nearly=%d\n", c, nearly );
                     c->nearlyboundary = nearly;
                     rc -= nearly;
                 }
+
+		/* pdh: bodge */
+		break;
             }
 
             if (c->fh)
@@ -2878,13 +2961,19 @@ static _kernel_oserror *http_completedpart( http_completedpart_args *args )
 
         if (c->fh != NULL)
         {
-            fdebugf(log_file, "%p: closing output file in completedpart\n", c);
+            fdebugf(log_file, "%p: closing output file %d in completedpart\n", c, c->fh);
             ro_fclose(c->fh);
             c->fh = NULL;
         }
 
+	fdebugf(log_file, "%p: close file succeeded\n",c );
+
         if (flags & http_close_SET_TYPE)
+	{
+	    fdebugf( log_file, "%p: setting file type\n", c );
             http_set_file_type(c, NULL);
+	    fdebugf( log_file, "%p: set type succeeded\n", c );
+	}
 
         if ( flags & http_close_DELETE_FILE )
         {
@@ -2901,6 +2990,9 @@ static _kernel_oserror *http_completedpart( http_completedpart_args *args )
 
         fdebugf(log_file, "%p: http_completed_part opening file '%s'\n", c, c->fname);
         c->fh = ro_fopen(c->fname, RO_OPEN_WRITE);
+
+	fdebugf(log_file, "%p:   file handle %d\n", c->fh );
+
         if (c->fh == NULL)
             return http_destroy(c,err_CANT_OPEN_FILE);
     }
@@ -3066,7 +3158,7 @@ int http_send_request_headers( http_connection *c )
                 sprintf(tmp_buffer, "Content-length: %d\r\n", c->data_size);
 #if ADD_CRLF
 		c->data_size += 2;
-#endif		
+#endif
                 fdebugf( log_file, "(7) %p: txheader Content-length: %d\n",
                                    c, c->data_size );
             }
@@ -3403,7 +3495,7 @@ static http_header_item *http_add_header_line( http_connection *c,
 	    }
 	}
     }
-    
+
     hi = malloc(sizeof(http_header_item));
     if (hi)
     {
@@ -3442,6 +3534,7 @@ void http_process_header_line(http_connection *c, char *l)
         {
             /* Nasty hack 'cos server-push starts off in the "wrong" state
              */
+	    fdebugf( log_file, "%p: blank line 'cos of multipart\n", c );
             c->nearlyboundary = 0;
         }
         else
@@ -3822,7 +3915,7 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
 
                         fdebugf(log_file, "%p: server push, boundary is '%s'"
                                            " total_size is %d\n",
-                                c, c->boundary+1, c->total_size );
+                                c, c->boundary, c->total_size );
 
                         /* client doesn't see this header (important for
                          * set_file_type to work)
