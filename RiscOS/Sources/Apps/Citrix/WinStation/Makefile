@@ -92,8 +92,7 @@ COMMONLIBS=	$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/toolboxlib.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/eventlib.o
 
-COMMONLIBSZ=	$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-		${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/inetlibzm.o \
+COMMONLIBSZ=	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/inetlibzm.o \
 		${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/socklibzm.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/wimplib.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/toolboxlib.o \
@@ -119,7 +118,12 @@ BASELIBSD=	$(RISCOS_BUILD_EXPORT)/Lib/debug/lremote.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o
 
 BASELIBSZ=	${COMMONLIBSZ} \
-		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
+		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
+		$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o
+
+BASELIBSRM=	${COMMONLIBSZ} \
+		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
+		$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
 
 SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} ${VDLIBSRC}
 
@@ -766,8 +770,8 @@ ${APPZ}: ${APPOBJSZ} ${MODULEWRAP_ROM} ${APPLIBSZ} ${BASELIBSZ} local_dirs
 	${LD} -aof -o ${APPZ} ${APPOBJSZ} ${MODULEWRAP_ROM} ${APPLIBSZ} ${BASELIBSZ}
 	ls -l $@
 
-${APPRM}: ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSZ} local_dirs
-	${LD} -rmf -o ${APPRM} ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSZ}
+${APPRM}: ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM} local_dirs
+	${LD} -rmf -o ${APPRM} ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM}
 	ls -l $@
 
 cleanapp:
