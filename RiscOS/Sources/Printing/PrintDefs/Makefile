@@ -40,6 +40,8 @@ RESFILES =			\
  ${RDIR}.PaperLet		\
  ${RDIR}.PaperLegal		\
  ${RDIR}.Printers.JP-150	\
+ ${RDIR}.Printers.JP-192_BW	\
+ ${RDIR}.Printers.JP-192_Col	\
  ${RDIR}.Printers.BubbleJet	\
  ${RDIR}.Printers.BJC600_BW	\
  ${RDIR}.Printers.BJC600_Col	\
@@ -125,6 +127,12 @@ ${RDIR}.PaperLegal:		${RSRC}.Legal.PaperSizes
 
 ${RDIR}.Printers.JP-150:	${RSRC}.Printers.JP-150
 	${COMPRESS}	${RSRC}.Printers.JP-150		${RDIR}.Printers.JP-150
+
+${RDIR}.Printers.JP-192_BW:	${RSRC}.Printers.JP-192_BW
+	${COMPRESS}	${RSRC}.Printers.JP-192_BW		${RDIR}.Printers.JP-192_BW
+
+${RDIR}.Printers.JP-192_Col:	${RSRC}.Printers.JP-192_Col
+	${COMPRESS}	${RSRC}.Printers.JP-192_Col		${RDIR}.Printers.JP-192_Col
 
 ${RDIR}.Printers.BubbleJet:	${RSRC}.Printers.BubbleJet
 	${COMPRESS}	${RSRC}.Printers.BubbleJet	${RDIR}.Printers.BubbleJet
