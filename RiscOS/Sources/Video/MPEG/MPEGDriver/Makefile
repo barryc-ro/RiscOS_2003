@@ -152,7 +152,7 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-ModHdr.o: cmhg.ModHdr
+ModHdr.o: ModHdr.h cmhg.ModHdr
 	${CMHG} ${CMHGFLAGS} -o $@ $?
 
 ModHdr.h: cmhg.ModHdr
