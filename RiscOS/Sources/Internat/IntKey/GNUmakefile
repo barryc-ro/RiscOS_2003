@@ -5,11 +5,7 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
-# 23-Aug-94  AMcC         Updated to build International Version (from Opal)
-# 01-Sep-98  KJB          Changed for new keygen tool
-# 21-Nov-00  SBF          Added support for StripDepnd
-# 22-Mar-01  SNB          Updated for portability
+# 14-Jun-01  SNB          Temporary makefile
 #
 
 #
@@ -17,17 +13,22 @@
 #
 COMPONENT  = InternationalKeyboard
 TARGET     = IntKey
-ROM_SOURCE = Source.IntKeyMod
+ROM_SOURCE = Source/IntKeyMod
 RESOURCES  = no
 
 .SUFFIXES:
 .SUFFIXES: .o .s .c .layout
 
 KBD       = -PD "Keyboard SETS \"${KEYBOARD}\""
-ASFLAGS   = ${KBD} -I<hdr$dir>
+ASFLAGS   = ${KBD}
 
 include StdTools
 include AAsmModule
+
+KEYGEN     = ./keygen
+KEYCONVERT = ./keyconvert
+NCC        = gcc
+NCCFLAGS   = -I${APCSExportDir}/Lib -c -DUNIX
 
 #
 # Static dependencies and specialist rules
@@ -41,21 +42,30 @@ LAYOUTS   = UK.s Italy.s Spain.s France.s Germany.s Esperanto.s Greece.s \
 ${ROM_OBJECT}: ${LAYOUTS}
 ${LAYOUTS}: keygen
 
-.layout.s:;  keygen ${STDTOOLOPTIONS} ${EXTRAKEYS} $< $@
-.c.o:;  ${MKDIR} o ; ${CC} ${CFLAGS} -o $@ $<
+.layout.s:
+	${KEYGEN} ${STDTOOLOPTIONS} ${EXTRAKEYS} $< $@
+.c.o:
+	${NCC} ${NCCFLAGS} -o $@ $<
 
 clean::
-        ${WIPE} s ${WFLAGS}
-        ${RM} keygen
-        ${RM} keyconvert
-        @echo ${COMPONENT}: cleaned
+	${RM} -f ${KEYGEN} ${KEYCONVERT} *.s *.o
+	find . -type l -exec rm -f {} \;
+	@echo ${COMPONENT}: cleaned
 
 keygen: keygen.o throwback.o unicdata.o
-        ${MKDIR} s
-        ${CC} -o $@ keygen.o throwback.o unicdata.o
+	${NCC} -o $@ keygen.o throwback.o unicdata.o
 
 keyconvert: keyconvert.o unicdata.o
-        ${MKDIR} s
-        ${CC} -o $@ keyconvert.o unicdata.o
+	${NCC} -o $@ keyconvert.o unicdata.o
+
+links:
+	for i in layout/*; do ln -s $$i `basename $$i`.layout; done
+	ln -s c/unicdata unicdata.c
+	ln -s h/unicdata unicdata.h
+	ln -s c/keygen keygen.c
+	ln -s c/keyconvert keyconvert.c
+	ln -s h/structures structures.h
+	ln -s h/throwback throwback.h
+	ln -s c/throwback throwback.c
 
 # Dynamic dependencies:
