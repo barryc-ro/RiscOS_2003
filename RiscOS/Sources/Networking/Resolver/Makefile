@@ -26,10 +26,10 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -throwback -pcc -ff ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
+CFLAGS  = -c -depend !Depend -zM -zps1 -throwback -pcc -fn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-LDFLAGS = 
+LDFLAGS = -map -v
 
 #
 # Libraries
