@@ -39,7 +39,7 @@ DBGTARGET = aif.IOMD
 GPATARGET = gpa.IOMD
 EXPORTS   = 
 
-OBJECTS   = o.Boot o.IIC
+OBJECTS   = o.Boot o.IIC o.Video o.Interrupts o.MachineID o.Timers
 
 .s.o:;	${ARMASM} ${ARMASMFLAGS} $< $@
 
@@ -94,4 +94,8 @@ ${GPATARGET}: ${DBGTARGET}
 # Dynamic dependencies:
 o.IOMD: s.IOMD Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:CPU.ARM600 Hdr:IO.IOMD Hdr:IO.IOMD Hdr:MEMM.ARM600 Hdr:VIDC.VIDC20 Hdr:Proc Hdr:OSEntries
 o.IIC: s.IIC Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
+o.Video: s.Video Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
+o.MachineID: s.MachineID Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:Proc Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
+o.Timers: s.Timers Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
 o.Boot: s.Boot Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:CPU.ARM600 Hdr:IO.IOMD Hdr:IO.IOMD Hdr:MEMM.ARM600 Hdr:VIDC.VIDC20 Hdr:Proc Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
+o.Interrupts: s.Interrupts Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:DevNos Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
