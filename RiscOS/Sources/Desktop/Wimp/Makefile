@@ -82,6 +82,12 @@ resources-None: resources_common
 resources-: resources_common
 	IfThere LocalRes:CmdHelp Then Print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
+BBETYPE = wimp
+bbe-wimp: bbe-generic-resources-get-alias
+        BBE_Export_File_In_Dir Resources.${LOCALE} Messages
+        BBE_Export_File_In_Dir Resources.${LOCALE} CmdHelp
+        BBE_Export_Dir Resources.${LOCALE}.${USERIF}
+
 ${OBJECT}: ${SOURCE}
         ${MKDIR} o
         ${AS} ${ASFLAGS} ${SOURCE}
