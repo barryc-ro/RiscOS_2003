@@ -85,6 +85,10 @@
 ;                               Added Interlq variant for STB-400 (untested).
 ; 13-Dec-99  KJB  0.58          0.57 was doing odd things on Service_ScreenRestored, as it hadn't been
 ;                               totally removed from the service entry code.
+; 11-May-00  KJB  0.60          Removed the need to do strange things with OS_ClaimDeviceVector and intimate
+;                               knowledge of Kernel workspace.
+;                               32-bit compatible.
+;                               Service call fast rejection code was wrong.
 ;
 
                 GBLL    FixHWScroll
@@ -95,6 +99,9 @@ Use1MBPerField	SETL	{TRUE}		; use 1MB per field, not 1MB per frame
 
 		GBLL	TryToDoModeNumbers
 TryToDoModeNumbers SETL {FALSE}		; doesn't work yet so comment out
+
+                GBLL    UseVSyncEvent
+UseVSyncEvent   SETL    {TRUE}          ; use VSync event instead of hacking Vsync device
 
 ; when initially turning on interlace, use a callback to wait until not in vsync
 
@@ -129,8 +136,10 @@ CFSTime		*	&B0
 VectorsClaimed  #       4
 DummyScreenStart #      4
 Phase           #       4
+ [ :LNOT: UseVSyncEvent
 OldDeviceWS     #       4
 OldDeviceCode   #       4
+ ]
                 #       3
 OSWord16Block   #       5
 
@@ -187,6 +196,8 @@ Module_BaseAddr
         &       0 ; Mod_SWIHandler-Module_BaseAddr
         &       0 ; Mod_SWITable-Module_BaseAddr
         &       0                               ; no swi name decode entry
+        &       0                               ; no messages file
+        &       Mod_Flags   -Module_BaseAddr
 
 Mod_Title
         =       "Interlace", 0
@@ -214,6 +225,9 @@ InterlaceLog_Syntax
         =       "Syntax: *InterlaceLog", 0
         ALIGN
  ]
+
+Mod_Flags
+        &       ModuleFlag_32bit
 
  [ TryToDoModeNumbers
 	OutputModeInfo
@@ -427,8 +441,8 @@ DynAreaHandler ROUT
         SUBS    r2, r2, #1
         BNE     %BT10
         LDMFD   r13!, {r0-r2}
-20
-        BICS    pc, r14, #V_bit
+20      ; V must be clear
+        MOV     pc, r14
 
 30
         STMFD   r13!, {r14}
@@ -609,7 +623,9 @@ Mod_ServiceTable
         DCD     Mod_ServiceEntry - Module_BaseAddr
         DCD     Service_Reset
         DCD     Service_ModeChange
+ [ TryToDoModeNumbers
         DCD     Service_ModeExtension
+ ]
         DCD     Service_ValidateAddress
  [ FixHWScroll
         DCD     Service_SwitchingOutputToSprite
@@ -620,17 +636,17 @@ Mod_ServiceTable
         DCD     Mod_ServiceTable - Module_BaseAddr
 Mod_Service ROUT
         MOV     r0, r0
-  [ TryToDoModeNumbers
-        TEQ     r1, #Service_ModeExtension
-  ]
+        TEQ     r1, #Service_Reset
         TEQNE   r1, #Service_ModeChange
-        TEQNE   r1, #Service_Reset
-        TEQNE   r1, #Service_ModeChanging
+ [ TryToDoModeNumbers
+        TEQNE   r1, #Service_ModeExtension
+ ]
         TEQNE   r1, #Service_ValidateAddress
  [ FixHWScroll
         TEQNE   r1, #Service_SwitchingOutputToSprite
  ]
-        MOVNES  pc, lr
+        TEQNE   r1, #Service_ModeChanging
+        MOVNE   pc, lr
 
 Mod_ServiceEntry
         LDR     wp, [r12]
@@ -730,7 +746,7 @@ svc_ModeChange  Entry "r0-r2"
         STR     r1, [r0, #DisplayYEigFactor]
 
         SWI     XOS_WriteI+12
-        EXITS
+        EXIT
 
 ModifyVars Entry "r2"
 	SWI	XOS_RemoveCursors		; remove flashing cursor while we mess about
@@ -754,7 +770,7 @@ ModifyVars Entry "r2"
         LDR     r1, [r0, #VduStatus]
         ORR     r1, r1, #Windowing
         STR     r1, [r0, #VduStatus]
-	EXITS
+	EXIT
 
         LTORG
 
@@ -824,9 +840,8 @@ svc_SwitchingOutputToSprite Entry "r0-r2"
         EXIT
  ]
 
-svc_ModeChanging Entry
-        BL      ReleaseVectors
-        EXITS
+svc_ModeChanging
+        B       ReleaseVectors
 
 svc_Reset Entry "r0-r2"
 	MOV	r0, #&FD
@@ -835,17 +850,17 @@ svc_Reset Entry "r0-r2"
 	SWI	XOS_Byte
 	TEQ	r1, #0
         BLEQ    ReleaseVectors
-        EXITS
+        EXIT
 
 svc_ValidateAddress Entry "r0"
 	LDR	lr, VectorsClaimed	; TMD 22-Jun-98: first check if we're in interlaced mode, so that
 	TEQ	lr, #0			; indirection off OtherStuffPtr doesn't go bang!
-	EXITS	EQ
+	EXIT	EQ
 
         LDR     lr, DummyScreenStart
         CMP     r2, lr
         CMPCS   r3, lr
-        EXITS   CC
+        EXIT    CC
 
 	LDR	r0, OtherStuffPtr
 	LDR	r0, [r0, #OtherIndex_YRes]
@@ -857,7 +872,7 @@ svc_ValidateAddress Entry "r0"
         CMP     r2, lr
         CMPLS   r3, lr
         MOVLS   r1, #0
-        EXITS
+        EXIT
 
         LTORG
 
@@ -977,7 +992,7 @@ SetupMemoryMap Entry "r0,r1,r3-r5"
 ClaimVectors Entry "r0-r6"
         LDR     r0, VectorsClaimed
         TEQ     r0, #0
-        EXITS   NE
+        EXIT    NE
 
  [ UseTimer1
         MOV     r0, #6          ; Timer 1 device
@@ -986,7 +1001,8 @@ ClaimVectors Entry "r0-r6"
         SWI     XOS_ClaimDeviceVector
  ]
 
- [ {TRUE}
+ [ :LNOT: UseVSyncEvent
+   [ {TRUE}
 ; check version number of UtilityModule (1st module) is < 360, 360/361, or > 361
 ; (don't use presence of ARM7500, as 3.60 is available on RISC PC)
 	MOV	r0, #ModHandReason_EnumerateROM_ModulesWithInfo
@@ -1000,22 +1016,34 @@ ClaimVectors Entry "r0-r6"
 	LDRHI	r2, =&36100
 	CMPHI	r6, r2				; if version > 3.61
 	LDRHI	r0, =VSyncDeviceWSwIRQC		; then use new address
- |
+   |
 	MOV	r0, #2
 	SWI	XOS_ReadSysInfo
 	TST	r2, #&FF :SHL: 8		; test IOMD variant (EQ => old IOMD)
 	LDREQ	r0, =VSyncDeviceWS		; if old then use old address
         LDRNE   r0, =VSyncDeviceWS7500		; if new then use new address
- ]
+   ]
 
         LDMIA   r0, {r1, r2}
         ADR     r0, OldDeviceWS
         STMIA   r0, {r1, r2}
+ ]
 
+ [ UseVSyncEvent
+        MOV     r0, #EventV
+        ADR     r1, MyVSyncDevice
+        MOV     r2, wp
+        SWI     XOS_Claim
+
+        MOV     r0, #14
+        MOV     r1, #Event_VSync
+        SWI     XOS_Byte
+ |
         MOV     r0, #3
         ADR     r1, MyVSyncDevice
         MOV     r2, wp
         SWI     XOS_ClaimDeviceVector
+ ]
 
  [ {FALSE}
         MOV     r0, #ByteV
@@ -1038,14 +1066,14 @@ ClaimVectors Entry "r0-r6"
 
         MOV     r0, #1
         STR     r0, VectorsClaimed
-        EXITS
+        EXIT
 
         LTORG
 
 ReleaseVectors Entry "r0-r2"
         LDR     r0, VectorsClaimed
         TEQ     r0, #0
-        EXITS   EQ
+        EXIT    EQ
 
  [ PhaseDetectBit = 0
         MOV     r0, #PaletteV
@@ -1066,10 +1094,21 @@ ReleaseVectors Entry "r0-r2"
         SWI     XOS_Release
  ]
 
+ [ UseVSyncEvent
+        MOV     r0, #13
+        MOV     r1, #Event_VSync
+        SWI     XOS_Byte
+
+        MOV     r0, #EventV
+        ADR     r1, MyVSyncDevice
+        MOV     r2, wp
+        SWI     XOS_Release
+ |
         MOV     r0, #3
         ADR     r1, MyVSyncDevice
         MOV     r2, wp
         SWI     XOS_ReleaseDeviceVector
+ ]
 
  [ UseTimer1
         MOV     r0, #6          ; Timer 1 device
@@ -1087,23 +1126,26 @@ ReleaseVectors Entry "r0-r2"
  ]
         MOV     r0, #0
         STR     r0, VectorsClaimed
-        EXITS
+        EXIT
 
 MyVSyncDevice ROUT
-        SUB     sp, sp, #8
-        Push    "r0-r3, lr"
+ [ UseVSyncEvent
+        TEQ     r0, #Event_VSync
+        MOVNE   pc, lr
+        STR     lr, [sp, #-4]!
+ ]
  [ UseTimer1
         BL      StartTimer1
  |
         BL      DoInterlace
  ]
+ [ UseVSyncEvent
+        MOV     r0, #Event_VSync
+        LDR     pc, [sp], #4
+ |
         ADR     r0, OldDeviceWS
-        LDMIA   r0, {r0, r1}
-        STR     r0, [sp, #5*4]
-        STR     r1, [sp, #6*4]
-        Pull    "r0-r3, lr"
-        Pull    "r12, pc"
-        EXIT
+        LDMIA   r0, {r12, pc}
+ ]
 
  [ UseTimer1
 ; On entry, r3 -> IOC
@@ -1117,9 +1159,9 @@ StartTimer1     Entry   "r0-r1"
         MOV     r0, #timer1_bit
         STRB    r0, [r3, #IOCIRQCLRA]           ; clear the latched IRQ
         STRB    r0, [r3, #IOCIRQCLRA]           ; and again in case it just underflowed
-        MOV     r0, pc
-        TEQP    pc, #SVC_mode + I_bit + F_bit   ; disable IRQs round enabling of timer1 IRQ
-        NOP
+        mrs    ,r0, CPSR                        ; disable IRQs round enabling of timer1 IRQ
+        ORR     r1, r0, #I32_bit + F32_bit + SVC_mode
+        msr    ,CPSR_c, r1
         LDRB    r1, [r3, #IOCIRQMSKA]
         ORR     r1, r1, #timer1_bit
         STRB    r1, [r3, #IOCIRQMSKA]
@@ -1130,8 +1172,7 @@ StartTimer1     Entry   "r0-r1"
         SWI     XOS_Word
         Pull    "r0,r1,lr"
   ]
-        TEQP    r0, #0
-        NOP
+        msr    ,CPSR_c, r0
         EXIT
 
   [ {FALSE}
@@ -1143,9 +1184,9 @@ BlueBlock
   ]
 
 MyTimer1Device  Entry "r0-r3"
-        MOV     r0, pc
-        TEQP    pc, #SVC_mode + I_bit + F_bit   ; disable IRQs round disabling of timer1 IRQ
-        NOP
+        mrs    ,r0, CPSR                        ; disable IRQs round disabling of timer1 IRQ
+        ORR     r1, r0, #I32_bit + F32_bit + SVC_mode
+        msr    ,CPSR_c, r1
         LDRB    r1, [r3, #IOCIRQMSKA]
         BIC     r1, r1, #timer1_bit             ; disable IRQ in mask
         STRB    r1, [r3, #IOCIRQMSKA]
@@ -1156,8 +1197,7 @@ MyTimer1Device  Entry "r0-r3"
         SWI     XOS_Word
         Pull    "r0,r1,lr"
   ]
-        TEQP    r0, #0
-        NOP
+        msr    ,CPSR_c, r0
         MOV     r0, #timer1_bit
         STRB    r0, [r3, #IOCIRQCLRA]           ; and clear IRQ latch
         BL      DoInterlace
@@ -1179,18 +1219,18 @@ MyPalette
 
 ; Vector will return here
         LDMFD   sp!, {wp}                       ; get our workspace pointer back
-        SavePSR lr                              ; don't break the exit flags (just in case)
+        mrs    ,lr, CPSR                        ; don't break the exit flags (just in case)
         TEQ     r4, #paletteV_Complete          ; operation complete?
         TEQEQ   r0, #1                          ; and the previous state was blanked?
         BNE     %FT20
 
-        RestPSR lr,,f                           ; get the PSR flags back
+        msr    ,CPSR_f, lr                      ; get the PSR flags back
         MOV     lr, #&C0000000
         STR     lr, Phase                       ; and rejig interlace
         LDMFD   sp!, {pc}
 
 20
-        RestPSR lr,,f
+        msr    ,CPSR_f, lr
         LDMFD   sp!, {pc}
   ]
 
@@ -1243,22 +1283,24 @@ DoInterlace Entry
         STR     r0, OSWord16Block +1
 
  [ MakeCFSCountPhase
-        Push    "lr"
+        LDR     r3, OSByteVarBase
         MOVS    r1, r0
         MOVNE   r1, #1                                  ; r1 = 0 if next field is top, else r1 = 1
-        LDR     r3, OSByteVarBase
-        LDRB    lr, [r3, #CFSTime]                      ; load OS's counter which decrements each field
-        EOR     r1, r1, lr                              ; check relative parity
-        TST     r1, #1                                  ; if doing top field next then counter needs to be odd now
-        SUBEQ   lr, lr, #1                              ; so it will be even after the vsync
-        STREQB  lr, [r3, #CFSTime]
-        Pull    "lr"
+        LDRB    r0, [r3, #CFSTime]                      ; load OS's counter which decrements each field
+        EOR     r1, r1, r0                              ; check relative parity
+        TST     r1, #1
+   [ UseVSyncEvent :LAND: :LNOT: UseTimer1
+        SUBNE   r0, r0, #1                              ; if doing top field next then counter needs to be even now,
+        STRNEB  r0, [r3, #CFSTime]                      ; as the Kernel's already updated CFS for this vsync
+   |
+        SUBEQ   r0, r0, #1                              ; if doing top field next then counter needs to be odd now
+        STREQB  r0, [r3, #CFSTime]                      ; so it will be even after the vsync
+   ]
  ]
 
-        MOV     r3, pc
-        ORR     r0, r3, #3
-        TEQP    r0, #0
-        NOP
+        mrs    ,r3, CPSR
+        ORR     r0, r3, #SVC_mode
+        msr    ,CPSR_c, r0
 
         Push    "lr"
         MOV     r0, #&16
@@ -1266,8 +1308,7 @@ DoInterlace Entry
         SWI     XOS_Word
         Pull    "lr"
 
-        TEQP    r3, #0
-        NOP
+        msr    ,CPSR_c, r3
         EXIT
 
 EnableInterlace ROUT
@@ -1289,17 +1330,15 @@ EnableInterlace ROUT
 	MOVNE	r0, #&80000000		; still waiting for callback
 	MOVNE	pc, r14			; so keep phase at &80000000
 
-	MOV	r0, pc
-	ORR	r1, r0, #SVC_mode
-	TEQP	r1, #0
-	NOP
+        mrs    ,r0, CPSR
+        ORR     r1, r0, #SVC_mode
+        msr    ,CPSR_c, r1
 	Push	"r0,lr"
 	ADR	r0, InterlaceCallBack
 	MOV	r1, wp
 	SWI	XOS_AddCallBack
 	Pull	"r0,lr"
-	TEQP	r0, #0
-	NOP
+        msr    ,CPSR_c, r0
 	MOV	r0, #1
 	STR	r0, CallBackRequested
   |
@@ -1331,15 +1370,20 @@ ProgramControlRegister
  [ UseInitialCallBack
 InterlaceCallBack Entry "r0-r2"
 	MOV	r0, #IOC
-	MOV	r1, PC
-	ORR	r2, r1, #I_bit
+        mrs    ,r2, CPSR
+        ORR     r1, r2, #I32_bit
 10
 	LDRB	lr, [r0, #IOCControl]
 	TST	lr, #vsync_state_bit
 	BEQ	%BT10			; wait until vsync
 20
-	TEQP	r1, #0
-	TEQP	r2, #0
+        msr    ,CPSR_c, r2
+        NOP                             ; give StrongARM time to trigger interrupts
+        NOP
+        NOP
+        NOP
+        NOP
+        msr    ,CPSR_c, r1
 	LDRB	lr, [r0, #IOCControl]
 	TST	lr, #vsync_state_bit
 	BNE	%BT20			; wait until not vsync
@@ -1347,48 +1391,51 @@ InterlaceCallBack Entry "r0-r2"
 	STR	r0, Phase
 	MOV	r0, #0
 	STR	r0, CallBackRequested
-	EXITS
+        msr    ,CPSR_c, r2
+        EXIT
  ]
 
 
 InterlaceSwap_Code Entry
         LDR     wp, [r12]
  [ PhaseDetectBit = 0
-        TEQP    pc, #SVC_mode + I_bit
+        mrs    ,r0, CPSR
+        ORR     r1, r0, #I32_bit
+        msr    ,CPSR_c, r1
         LDR     lr, Phase
         EOR     lr, lr, #1
         STR     lr, Phase
+        msr    ,CPSR_c, r0
  ]
-        EXITS
+        EXIT
 
  [ PhaseDetectBit <> 0
-InterlaceLog_Code Entry "r0-r3"
+InterlaceLog_Code Entry "r0-r3", 16
         LDR     wp, [r12]
         SWI     XOS_WriteS
         DCB     "Fields: ", 0
         ALIGN
-        LDR     r0, FieldCount                          ; load current value
-        LDR     r3, PhaseErrors                         ; of total & error counts
-        MOV     r1, #0                                  ; zero them to reset counts
-        STR     r1, FieldCount
-        STR     r1, PhaseErrors
-        SUB     sp, sp, #16                             ; <<< claim space from stack
-        MOV     r1, sp
-        MOV     r2, #16
-        SWI     XOS_ConvertCardinal4
-        MOV     r0, sp
-        SWI     XOS_Write0
+        LDRVC   r0, FieldCount                          ; load current value
+        LDRVC   r3, PhaseErrors                         ; of total & error counts
+        MOVVC   r1, #0                                  ; zero them to reset counts
+        STRVC   r1, FieldCount
+        STRVC   r1, PhaseErrors
+        MOVVC   r1, sp
+        MOVVC   r2, #16
+        SWIVC   XOS_ConvertCardinal4
+        MOVVC   r0, sp
+        SWIVC   XOS_Write0
+        EXIT    VS
         SWI     XOS_WriteS
         DCB     ", errors: ", 0
-        MOV     r0, r3
-        MOV     r1, sp
-        MOV     r2, #16
-        SWI     XOS_ConvertCardinal4
-        MOV     r0, sp
-        SWI     XOS_Write0
-        ADD     sp, sp, #16                             ; >>> release stack space
-        SWI     XOS_NewLine
-        EXITS
+        MOVVC   r0, r3
+        MOVVC   r1, sp
+        MOVVC   r2, #16
+        SWIVC   XOS_ConvertCardinal4
+        MOVVC   r0, sp
+        SWIVC   XOS_Write0
+        SWIVC   XOS_NewLine
+        EXIT
  ]
 
 ; *****************************************************************************
@@ -1467,6 +1514,6 @@ write_r0_message Entry "r0"
         EXIT
  ]
 
-        InsertDebugRoutines
+;        InsertDebugRoutines
 
         END
