@@ -47,13 +47,13 @@ SSLDIR    = C:SSLeay
 REMOTEDB  = C:debug.o.lremotezm
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB}
-BASESECURELIBS=C:CryptoLib.o.cryptolib $(SSLDIR).o.libcrypto ${UNIXLIB} ${INSECURELIBS}
+BASESECURELIBS=C:CryptoBox.o.cryptolib $(SSLDIR).o.libcrypto ${UNIXLIB} ${INSECURELIBS}
 SECURELIBS= $(SSLDIR).o.ssl ${BASESECURELIBS}
 SECUREXLIBS= $(SSLDIR).o.sslx ${BASESECURELIBS}
 #
 # Include files
 #
-INCLUDES  = -IC:CryptoLib,C:,C:TCPIPLibs.,${SSLDIR}.
+INCLUDES  = -IC:CryptoBox,C:,C:TCPIPLibs.,${SSLDIR}.
 DFLAGS =  ${DB} -DCOMPAT_INET4 -DFLAVOUR_TRANSPORT_MODULES=0 -DHTTPMOD -DRISCOS -DACORN_BUILD ${D}
 #
 # Program specific options:
@@ -154,61 +154,19 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.predirect:	c.predirect
-o.predirect:	h.http
-o.predirect:	C:h.swis
-o.predirect:	C:h.kernel
-o.predirect:	C:TCPIPLibs.sys.h.types
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:TCPIPLibs.machine.h.endian
-o.predirect:	C:TCPIPLibs.machine.h.ansi
-o.predirect:	C:TCPIPLibs.machine.h.types
-o.predirect:	C:TCPIPLibs.sys.h.socket
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:TCPIPLibs.sys.h.errno
-o.predirect:	C:h.kernel
-o.predirect:	C:TCPIPLibs.net.h.if
-o.predirect:	C:TCPIPLibs.sys.h.socket
-o.predirect:	C:TCPIPLibs.sys.h.time
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:TCPIPLibs.net.h.if_arp
-o.predirect:	C:TCPIPLibs.sys.h.socket
-o.predirect:	C:TCPIPLibs.netinet.h.in
-o.predirect:	C:TCPIPLibs.sys.h.ioctl
-o.predirect:	C:TCPIPLibs.sys.h.ttycom
-o.predirect:	C:TCPIPLibs.sys.h.ioccom
-o.predirect:	C:TCPIPLibs.sys.h.ioccom
-o.predirect:	C:TCPIPLibs.sys.h.filio
-o.predirect:	C:TCPIPLibs.sys.h.ioccom
-o.predirect:	C:TCPIPLibs.sys.h.sockio
-o.predirect:	C:TCPIPLibs.sys.h.ioccom
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:TCPIPLibs.h.netdb
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:TCPIPLibs.netns.h.ns
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:TCPIPLibs.sys.h.time
-o.predirect:	C:TCPIPLibs.h.socklib
-o.predirect:	C:TCPIPLibs.sys.h.types
-o.predirect:	C:TCPIPLibs.sys.h.socket
-o.predirect:	C:TCPIPLibs.sys.h.stat
-o.predirect:	C:TCPIPLibs.sys.h.time
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:TCPIPLibs.sys.h.time
-o.predirect:	C:TCPIPLibs.sys.h.uio
-o.predirect:	C:TCPIPLibs.sys.h.cdefs
-o.predirect:	C:h.kernel
-o.predirect:	C:TCPIPLibs.h.inetlib
-o.predirect:	C:TCPIPLibs.sys.h.types
-o.predirect:	C:TCPIPLibs.netinet.h.in
-o.predirect:	h.files
-o.predirect:	h.file
-o.predirect:	h.notlayer
-o.predirect:	h.mimemap
-o.predirect:	h.status
-o.predirect:	h.httppub
-o.predirect:	h.pads
-o.predirect:	h.platforms
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
+os.files:	c.files
+os.files:	C:h.kernel
+os.files:	h.types
+os.files:	h.files
+os.file:	c.file
+os.file:	C:h.swis
+os.file:	C:h.kernel
+os.file:	C:h.kernel
+os.file:	h.types
+os.file:	h.file
 o.mimemap:	c.mimemap
 o.mimemap:	C:h.kernel
 o.mimemap:	h.mimemap
@@ -277,7 +235,6 @@ o.http:	h.mimemap
 o.http:	h.status
 o.http:	h.httppub
 o.http:	h.pads
-o.http:	h.platforms
 o.module:	c.module
 o.module:	h.http
 o.module:	C:h.swis
@@ -333,7 +290,6 @@ o.module:	h.mimemap
 o.module:	h.status
 o.module:	h.httppub
 o.module:	h.pads
-o.module:	h.platforms
 o.csfs:	c.csfs
 o.csfs:	h.http
 o.csfs:	C:h.swis
@@ -389,7 +345,6 @@ o.csfs:	h.mimemap
 o.csfs:	h.status
 o.csfs:	h.httppub
 o.csfs:	h.pads
-o.csfs:	h.platforms
 o.certs:	c.certs
 o.certs:	h.http
 o.certs:	C:h.swis
@@ -445,7 +400,6 @@ o.certs:	h.mimemap
 o.certs:	h.status
 o.certs:	h.httppub
 o.certs:	h.pads
-o.certs:	h.platforms
 o.layershttp:	c.layershttp
 o.layershttp:	h.http
 o.layershttp:	C:h.swis
@@ -501,20 +455,6 @@ o.layershttp:	h.mimemap
 o.layershttp:	h.status
 o.layershttp:	h.httppub
 o.layershttp:	h.pads
-o.layershttp:	h.platforms
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
-os.files:	c.files
-os.files:	C:h.kernel
-os.files:	h.types
-os.files:	h.files
-os.file:	c.file
-os.file:	C:h.swis
-os.file:	C:h.kernel
-os.file:	C:h.kernel
-os.file:	h.types
-os.file:	h.file
 os.http:	c.http
 os.http:	h.http
 os.http:	C:h.swis
@@ -578,11 +518,11 @@ os.http:	C:ssleay.h.ssl23
 os.http:	C:ssleay.h.x509
 os.http:	C:ssleay.h.crypto
 os.http:	C:ssleay.h.err
-os.http:	C:CryptoLib.h.pkcs11
-os.http:	C:CryptoLib.h.pkcs11t
-os.http:	C:CryptoLib.h.pkcs11f
-os.http:	C:CryptoLib.h.pkcs11f
-os.http:	C:CryptoLib.h.pkcs11f
+os.http:	C:CryptoBox.h.pkcs11
+os.http:	C:CryptoBox.h.pkcs11t
+os.http:	C:CryptoBox.h.pkcs11f
+os.http:	C:CryptoBox.h.pkcs11f
+os.http:	C:CryptoBox.h.pkcs11f
 os.http:	C:TCPIPLibs.sys.h.types
 os.http:	C:TCPIPLibs.sys.h.cdefs
 os.http:	C:TCPIPLibs.machine.h.endian
@@ -633,8 +573,6 @@ os.http:	h.mimemap
 os.http:	h.status
 os.http:	h.httppub
 os.http:	h.pads
-os.http:	h.platforms
-os.http:	C:debug.h.remote
 os.module:	c.module
 os.module:	h.http
 os.module:	C:h.swis
@@ -698,11 +636,11 @@ os.module:	C:ssleay.h.ssl23
 os.module:	C:ssleay.h.x509
 os.module:	C:ssleay.h.crypto
 os.module:	C:ssleay.h.err
-os.module:	C:CryptoLib.h.pkcs11
-os.module:	C:CryptoLib.h.pkcs11t
-os.module:	C:CryptoLib.h.pkcs11f
-os.module:	C:CryptoLib.h.pkcs11f
-os.module:	C:CryptoLib.h.pkcs11f
+os.module:	C:CryptoBox.h.pkcs11
+os.module:	C:CryptoBox.h.pkcs11t
+os.module:	C:CryptoBox.h.pkcs11f
+os.module:	C:CryptoBox.h.pkcs11f
+os.module:	C:CryptoBox.h.pkcs11f
 os.module:	C:TCPIPLibs.sys.h.types
 os.module:	C:TCPIPLibs.sys.h.cdefs
 os.module:	C:TCPIPLibs.machine.h.endian
@@ -753,8 +691,6 @@ os.module:	h.mimemap
 os.module:	h.status
 os.module:	h.httppub
 os.module:	h.pads
-os.module:	h.platforms
-os.module:	C:debug.h.remote
 os.csfs:	c.csfs
 os.csfs:	h.http
 os.csfs:	C:h.swis
@@ -818,11 +754,11 @@ os.csfs:	C:ssleay.h.ssl23
 os.csfs:	C:ssleay.h.x509
 os.csfs:	C:ssleay.h.crypto
 os.csfs:	C:ssleay.h.err
-os.csfs:	C:CryptoLib.h.pkcs11
-os.csfs:	C:CryptoLib.h.pkcs11t
-os.csfs:	C:CryptoLib.h.pkcs11f
-os.csfs:	C:CryptoLib.h.pkcs11f
-os.csfs:	C:CryptoLib.h.pkcs11f
+os.csfs:	C:CryptoBox.h.pkcs11
+os.csfs:	C:CryptoBox.h.pkcs11t
+os.csfs:	C:CryptoBox.h.pkcs11f
+os.csfs:	C:CryptoBox.h.pkcs11f
+os.csfs:	C:CryptoBox.h.pkcs11f
 os.csfs:	C:TCPIPLibs.sys.h.types
 os.csfs:	C:TCPIPLibs.sys.h.cdefs
 os.csfs:	C:TCPIPLibs.machine.h.endian
@@ -873,8 +809,6 @@ os.csfs:	h.mimemap
 os.csfs:	h.status
 os.csfs:	h.httppub
 os.csfs:	h.pads
-os.csfs:	h.platforms
-os.csfs:	C:debug.h.remote
 os.certs:	c.certs
 os.certs:	h.http
 os.certs:	C:h.swis
@@ -938,11 +872,11 @@ os.certs:	C:ssleay.h.ssl23
 os.certs:	C:ssleay.h.x509
 os.certs:	C:ssleay.h.crypto
 os.certs:	C:ssleay.h.err
-os.certs:	C:CryptoLib.h.pkcs11
-os.certs:	C:CryptoLib.h.pkcs11t
-os.certs:	C:CryptoLib.h.pkcs11f
-os.certs:	C:CryptoLib.h.pkcs11f
-os.certs:	C:CryptoLib.h.pkcs11f
+os.certs:	C:CryptoBox.h.pkcs11
+os.certs:	C:CryptoBox.h.pkcs11t
+os.certs:	C:CryptoBox.h.pkcs11f
+os.certs:	C:CryptoBox.h.pkcs11f
+os.certs:	C:CryptoBox.h.pkcs11f
 os.certs:	C:TCPIPLibs.sys.h.types
 os.certs:	C:TCPIPLibs.sys.h.cdefs
 os.certs:	C:TCPIPLibs.machine.h.endian
@@ -993,8 +927,6 @@ os.certs:	h.mimemap
 os.certs:	h.status
 os.certs:	h.httppub
 os.certs:	h.pads
-os.certs:	h.platforms
-os.certs:	C:debug.h.remote
 os.predirect:	c.predirect
 os.predirect:	h.http
 os.predirect:	C:h.swis
@@ -1058,11 +990,11 @@ os.predirect:	C:ssleay.h.ssl23
 os.predirect:	C:ssleay.h.x509
 os.predirect:	C:ssleay.h.crypto
 os.predirect:	C:ssleay.h.err
-os.predirect:	C:CryptoLib.h.pkcs11
-os.predirect:	C:CryptoLib.h.pkcs11t
-os.predirect:	C:CryptoLib.h.pkcs11f
-os.predirect:	C:CryptoLib.h.pkcs11f
-os.predirect:	C:CryptoLib.h.pkcs11f
+os.predirect:	C:CryptoBox.h.pkcs11
+os.predirect:	C:CryptoBox.h.pkcs11t
+os.predirect:	C:CryptoBox.h.pkcs11f
+os.predirect:	C:CryptoBox.h.pkcs11f
+os.predirect:	C:CryptoBox.h.pkcs11f
 os.predirect:	C:TCPIPLibs.sys.h.types
 os.predirect:	C:TCPIPLibs.sys.h.cdefs
 os.predirect:	C:TCPIPLibs.machine.h.endian
@@ -1113,8 +1045,6 @@ os.predirect:	h.mimemap
 os.predirect:	h.status
 os.predirect:	h.httppub
 os.predirect:	h.pads
-os.predirect:	h.platforms
-os.predirect:	C:debug.h.remote
 os.layershttp:	c.layershttp
 os.layershttp:	h.http
 os.layershttp:	C:h.swis
@@ -1178,11 +1108,11 @@ os.layershttp:	C:ssleay.h.ssl23
 os.layershttp:	C:ssleay.h.x509
 os.layershttp:	C:ssleay.h.crypto
 os.layershttp:	C:ssleay.h.err
-os.layershttp:	C:CryptoLib.h.pkcs11
-os.layershttp:	C:CryptoLib.h.pkcs11t
-os.layershttp:	C:CryptoLib.h.pkcs11f
-os.layershttp:	C:CryptoLib.h.pkcs11f
-os.layershttp:	C:CryptoLib.h.pkcs11f
+os.layershttp:	C:CryptoBox.h.pkcs11
+os.layershttp:	C:CryptoBox.h.pkcs11t
+os.layershttp:	C:CryptoBox.h.pkcs11f
+os.layershttp:	C:CryptoBox.h.pkcs11f
+os.layershttp:	C:CryptoBox.h.pkcs11f
 os.layershttp:	C:TCPIPLibs.sys.h.types
 os.layershttp:	C:TCPIPLibs.sys.h.cdefs
 os.layershttp:	C:TCPIPLibs.machine.h.endian
@@ -1233,8 +1163,6 @@ os.layershttp:	h.mimemap
 os.layershttp:	h.status
 os.layershttp:	h.httppub
 os.layershttp:	h.pads
-os.layershttp:	h.platforms
-os.layershttp:	C:debug.h.remote
 os.client:	c.client
 os.client:	h.http
 os.client:	C:h.swis
@@ -1298,11 +1226,11 @@ os.client:	C:ssleay.h.ssl23
 os.client:	C:ssleay.h.x509
 os.client:	C:ssleay.h.crypto
 os.client:	C:ssleay.h.err
-os.client:	C:CryptoLib.h.pkcs11
-os.client:	C:CryptoLib.h.pkcs11t
-os.client:	C:CryptoLib.h.pkcs11f
-os.client:	C:CryptoLib.h.pkcs11f
-os.client:	C:CryptoLib.h.pkcs11f
+os.client:	C:CryptoBox.h.pkcs11
+os.client:	C:CryptoBox.h.pkcs11t
+os.client:	C:CryptoBox.h.pkcs11f
+os.client:	C:CryptoBox.h.pkcs11f
+os.client:	C:CryptoBox.h.pkcs11f
 os.client:	C:TCPIPLibs.sys.h.types
 os.client:	C:TCPIPLibs.sys.h.cdefs
 os.client:	C:TCPIPLibs.machine.h.endian
@@ -1353,8 +1281,6 @@ os.client:	h.mimemap
 os.client:	h.status
 os.client:	h.httppub
 os.client:	h.pads
-os.client:	h.platforms
-os.client:	C:debug.h.remote
-os.client:	C:CryptoLib.h.rsa_id2
+os.client:	C:CryptoBox.h.rsa_id2
 os.client:	C:SSLeay.h.rsa
-os.client:	C:CryptoLib.h.pkcs11
+os.client:	C:CryptoBox.h.pkcs11

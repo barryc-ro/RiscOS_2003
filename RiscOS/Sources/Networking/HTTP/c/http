@@ -78,6 +78,8 @@
  *		 more source * files. #define ACORN_BUILD for building
  *		 within the Acorn source tree. Restored fallback of
  *		 direct mimemap access if module not there ACORN_BUILD only.
+ * pdh 15-Jul-98 Renamed make_error to make_httperror, as now it's not static
+ *		 it clashes in Win32 builds with the WebFTP one.
  */
 
 #ifdef HTTPMOD
@@ -220,6 +222,7 @@ static BOOL http_go_ssl( http_connection *c );
 
 /* SJM: This shouldn't be here but I don't know how to get it defined without severe upset otherwise */
 extern int layers_make_socket_asynchronous( int s, void (*cb) (int s, void *cp), void *cp );
+extern int layers_async_change_handle( int s, void *cp );
 
 #ifdef NO_SECURE
 #define http_send(c,m,s) send((c)->socket,m,s,0)
@@ -313,7 +316,7 @@ static void http_bzero(void *p, int s)
 
 static os_error httperror;
 
-os_error *make_error(int err)
+os_error *make_httperror(int err)
 {
     if ( err == err_NO_ERROR )
         return NULL;
@@ -515,7 +518,7 @@ http_connection *http_connection_for_socket( int socket )
 #if DEBUG
 int http_return_errno(void)
 {
-    return errno;
+    return socket_errno;
 }
 #endif
 
@@ -523,7 +526,7 @@ os_error *http_check_handle(http_connection *c)
 {
     if (c == NULL || c->magic != HTTP_MAGIC)
     {
-        return make_error(err_BAD_MAGIC);
+        return make_httperror(err_BAD_MAGIC);
     }
 
     return 0;
@@ -610,7 +613,7 @@ os_error *http_set_file_type(http_connection *c, int *ftptr)
 
             fdebugf(log_file, "%p: closing fh=%d to reopen\n", c, c->fh );
 	    ro_fclose( c->fh );
-	    c->fh = NULL;
+	    c->fh = 0;
 	}
 #endif
 	
@@ -776,6 +779,7 @@ os_error *http_prosecute( http_connection *c )
     /*int needToRead = 1;*/  /* used in "line reading" states */
     char *l;            /* ditto */
     int rc;
+    int theerror;
 
     /*fdebugf(log_file,"http_prosecute status %d\n",c->status); */
 
@@ -786,7 +790,9 @@ os_error *http_prosecute( http_connection *c )
         rc = connect( c->socket, (struct sockaddr *) &(c->sa),
                       sizeof(struct sockaddr));
 
-        fdebugf( log_file, "http_prosecute: connect returned %d errno is %d\n", rc, socket_errno );
+	theerror = socket_errno;
+
+        fdebugf( log_file, "http_prosecute: connect returned %d errno is %d\n", rc, theerror );
 
         if (rc > -1)
         {
@@ -796,7 +802,7 @@ os_error *http_prosecute( http_connection *c )
         }
         else
         {
-            switch ( socket_errno )
+            switch ( theerror )
             {
             case EISCONN:
                 /* The connection is through now */
@@ -805,12 +811,25 @@ os_error *http_prosecute( http_connection *c )
 #ifdef WSAEINVAL
             case WSAEINVAL:
 #endif
+#ifdef WSAEINPROGRESS
+            case WSAEINPROGRESS:
+#endif
+#ifdef WSAEWOULDBLOCK
+            case WSAEWOULDBLOCK:
+#endif
             case EALREADY:
                 /* The connection is still going through */
                 /* Do nothing */
                 return NULL;
             default:
                 /* The connection failed */
+#if 0
+		{
+		    os_error e;
+		    sprintf( e.errmess, "connect failed, socket_errno %d\n", theerror );
+		    frontend_complain( &e );
+		}
+#endif
                 http_fail( c, status_FAIL_CONNECT );
                 return NULL;
             }
@@ -1293,7 +1312,7 @@ static os_error *http_destroy( http_connection *c, int error )
         fdebugf( log_file, "%p: being closed by http_destroy(%d)\n", c, error );
         http_close_handle( c, 0 );
     }
-    return make_error( error );
+    return make_httperror( error );
 }
 
 /*****************************************************************************
@@ -1341,7 +1360,7 @@ os_error *http_open(http_open_args *args)
 #endif
 
     if (new == 0)
-        return make_error(err_NO_MEMORY);
+        return make_httperror(err_NO_MEMORY);
 
     fdebugf( log_file, "%p: New connection, host=0x%08lx, port=0x%04x (%d)\n",
                        new, args2.in.addr->sin_addr.s_addr,
@@ -1376,6 +1395,11 @@ os_error *http_open(http_open_args *args)
      */
     if (new->flags & (http_open_flags_TUNNEL|http_open_flags_SECURE) )
 	new->flags &= ~http_open_flags_IMAGE;
+
+#ifdef WIN32
+    /* Seems problematic at present */
+    new->flags &= ~http_open_flags_IMAGE;
+#endif
 
 #if EXTEND_BUFFER
     new->buffer = mm_malloc(HEADER_MAX_INPUT);
@@ -1638,6 +1662,7 @@ static void http_async_callback( int s, void *handle )
 static int http_open_socket( http_connection *c )
 {
     int rc;
+    int theerror;
 
     /* SJM: set the tunnelling flag here, so that it is always in step
        with the original request */
@@ -1674,20 +1699,10 @@ static int http_open_socket( http_connection *c )
     if (rc != 0)
 	return err_BAD_IOCTL;
 
-#if 0
-    i = 1;
-    rc = socketioctl( c->socket, FIONBIO, &i );
-
-    i = 1;
-    if ( rc != -1 )
-        rc = socketioctl( c->socket, FIOASYNC, &i );
-
-    if ( rc < 0 )
-        return err_BAD_IOCTL;
-#endif
-
     rc = connect( c->socket, (struct sockaddr *) &(c->sa),
                   sizeof(struct sockaddr));
+
+    theerror = socket_errno;
 
     /* Legal return values are:
      *
@@ -1708,8 +1723,13 @@ static int http_open_socket( http_connection *c )
                            rc, socket_errno );
 
     if ( rc < 0
-         && (socket_errno != EINPROGRESS && socket_errno != EWOULDBLOCK) )
+         && (theerror != EINPROGRESS && theerror != EWOULDBLOCK) )
     {
+#if 0
+	os_error e;
+	sprintf( e.errmess, "connect2 failed, rc=%d, socket_errno=%d\n", rc, theerror );
+	frontend_complain(&e);
+#endif
         return err_CANT_CONNECT;
     }
 
@@ -1972,7 +1992,7 @@ static void http_queue_allow_write( http_connection *c )
     if ( c2->status != status_AWAITING_CONNECTION )
         return;     /* already been done */
 
-    fdebugf( log_file, "%p: handing socket %d writes over to %p\n", c,
+    fdebugf( log_file, "%p: handing socket 0x%x writes over to %p\n", c,
                         c->socket, c2 );
 
     c2->onthissocket = c->onthissocket+1;
@@ -2030,7 +2050,7 @@ static void http_queue_allow_read( http_connection *c )
     c->queuenext = NULL;
     c2->queueprev = NULL;
 
-    fdebugf( log_file, "%p: handing socket %d reads over to %p\n", c,
+    fdebugf( log_file, "%p: handing socket 0x%x reads over to %p\n", c,
                        c->socket, c2 );
 
     c2->onthissocket = c->onthissocket+1;
@@ -2054,6 +2074,7 @@ static void http_queue_allow_read( http_connection *c )
     }
 
 /*    http_cons[ c2->socket ] = c2; */
+    layers_async_change_handle( c2->socket, c2 );
 
     if ( c2->status == status_AWAITING_CONNECTION )
         http_set_status( c2, status_REQUESTING );
@@ -2099,9 +2120,17 @@ static void http_requeue( http_connection *c )
         {
             /* Must start a new connection */
             http_open_socket( c );
+
+	    /* pdh 15-Jul-98: needs to be kicked here */
+	    http_prosecute( c );
         }
         else
+	{
             http_set_status( c, status_REQUESTING );
+
+	    /* pdh 15-Jul-98: needs to be kicked here */
+	    http_prosecute( c );
+	}
 
         return;
     }
@@ -2503,7 +2532,7 @@ os_error *http_completedpart( http_completedpart_args *args )
         return ep;
 
     if ( c->status != status_COMPLETED_PART )
-        return make_error( err_NOT_WAITING );
+        return make_httperror( err_NOT_WAITING );
 
     /* Get rid of the existing file if required */
 
@@ -2893,9 +2922,9 @@ char* http_getline(http_connection *c, int read)
 
 	    if ( rc < 0 )
 	    {
-		if (errno != EWOULDBLOCK)
+		if (socket_errno != EWOULDBLOCK)
 		{
-		    if ( errno == ECONNRESET )
+		    if ( socket_errno == ECONNRESET )
 		    {
 			/* This is Netscape's ever-so-polite way of telling us
 			 * not to do any more fetches down this socket
@@ -2907,8 +2936,8 @@ char* http_getline(http_connection *c, int read)
 		    }
 		    else
 		    {
-			fdebugf( log_file, "%p: *** failed in getline (errno=%d)\n",
-				 c, errno );
+			fdebugf( log_file, "%p: *** failed in getline (socket_errno=%d)\n",
+				 c, socket_errno );
 
 			http_fail( c, status_FAIL_REQUEST );
 		    }
