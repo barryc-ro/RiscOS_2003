@@ -27,6 +27,7 @@ LD      = link
 LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
+SQUEEZE = squeeze
 
 CCFLAGS = -c -depend !Depend -fah -Ws ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
@@ -208,6 +209,8 @@ mkunictype: mkunictype.o ${CLIB}
 
 TextConv: textconv.o ${TARGET}
 	${LD} -o $@ textconv.o ${TARGET} ${CLIB}
+        ${SQUEEZE} $@
+
 links:
 	./mklinks
 	echo Made links
