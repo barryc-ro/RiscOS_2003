@@ -30,7 +30,7 @@ modsqz: clx
 	cp Tools/Sources/modsqz/ports/solaris/modsqz ${TARDIR}/modsqz
 
 mtftpd:
-	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make)
+	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make ARCH=${ARCH})
 	cp RiscOS/Sources/Networking/TFTPserver/ports/solaris/mtftpd ${TARDIR}/mtftpd
  
 clx:
