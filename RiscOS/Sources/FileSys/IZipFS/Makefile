@@ -31,7 +31,7 @@ CPFLAGS = ~cfr~v
 #
 COMPONENT  = IZipFS
 TARGET     = rm.${COMPONENT}
-SRC	   = s.${COMPONENT}
+SRC        = s.${COMPONENT}
 
 #
 # Generic rules:
@@ -55,7 +55,13 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resources-${TYPE}
+
+resources-install: ${TARGET} dirs
+        ${CP} ${TARGET} ${RESDIR}.^.${RES}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied into ResourceFS at ${COMPONENT}
+
+resources-:
         @echo ${COMPONENT}: resource files copied
 
 dirs:
