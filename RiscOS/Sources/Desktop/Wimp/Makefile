@@ -59,18 +59,18 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.<UserIF>.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.<UserIF>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.<UserIF>.Sprites ${RESDIR}.${COMPONENT}.Sprites ${CPFLAGS}
-       -${CP} Resources.${LOCALE}.<UserIF>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
-       -${CP} Resources.${LOCALE}.<UserIF>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.<UserIF>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Sprites ${RESDIR}.${COMPONENT}.Sprites ${CPFLAGS}
+       -${CP} LocalRes:<UserIF>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
+       -${CP} LocalRes:<UserIF>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.<UserIF>.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+	print LocalRes:<UserIF>.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
