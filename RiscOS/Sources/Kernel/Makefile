@@ -40,7 +40,10 @@ EXPORTS   = ${EXP_HDR}.EnvNumbers \
             ${EXP_HDR}.RISCOS \
             ${EXP_HDR}.Variables \
             ${EXP_HDR}.VduExt \
-            ${C_EXP_HDR}.RISCOS
+            ${C_EXP_HDR}.EnvNumbers \
+            ${C_EXP_HDR}.ModHand \
+            ${C_EXP_HDR}.RISCOS \
+            ${C_EXP_HDR}.Variables
 
 #
 # Generic rules:
@@ -113,8 +116,20 @@ ${EXP_HDR}.VduExt: hdr.VduExt
 ${EXP_HDR}.Variables: hdr.Variables
         ${CP} hdr.Variables $@ ${CPFLAGS}
         
+${C_EXP_HDR}.EnvNumbers: hdr.EnvNumbers
+	${MKDIR} ${C_EXP_HDR}
+	perl Build:Hdr2H hdr.EnvNumbers $@
+
+${C_EXP_HDR}.ModHand: hdr.ModHand
+	${MKDIR} ${C_EXP_HDR}
+	perl Build:Hdr2H hdr.ModHand $@
+
 ${C_EXP_HDR}.RISCOS: hdr.RISCOS
 	${MKDIR} ${C_EXP_HDR}
 	perl Build:Hdr2H hdr.RISCOS $@
+
+${C_EXP_HDR}.Variables: hdr.Variables
+	${MKDIR} ${C_EXP_HDR}
+	perl Build:Hdr2H hdr.Variables $@
 
 # Dynamic dependencies:
