@@ -67,6 +67,7 @@ FILESDC=\
  $(RDIR).Decomp6.Info\
  $(RDIR).Decomp6.DecompresH\
  $(RDIR).Decomp6.Decompress\
+ $(RDIR).Decomp7.BatchComp\
  $(RDIR).Decomp7.Info\
  $(RDIR).Decomp7.Decompress\
  $(RDIR).Decomp8.Makedecomp\
@@ -79,7 +80,12 @@ FILESDC=\
  $(RDIR).Decomp9.DecompresH\
  $(RDIR).Decomp9.Decompress\
  $(RDIR).Decomp9.Info\
-
+ $(RDIR).Decomp17.BatchComp\
+ $(RDIR).Decomp17.Dec16\
+ $(RDIR).Decomp17.DecompresB\
+ $(RDIR).Decomp17.DecompresH\
+ $(RDIR).Decomp17.Decompress\
+ $(RDIR).Decomp17.Info
 
 FILESTOOLS=\
  $(RDIR).Documents.AE7doc\
@@ -106,6 +112,7 @@ FILESML=\
  $(RDIR).MovingLine.8yuv22\
  $(RDIR).MovingLine.16yuv\
  $(RDIR).MovingLine.32yuv\
+ $(RDIR).MovingLine.BatchComp\
  $(RDIR).MovingLine.Info\
  $(RDIR).MovingLine.Make4col11\
  $(RDIR).MovingLine.Make8col11\
@@ -150,6 +157,8 @@ FILES3=\
  $(RDIR).Shapes.TallFilm.Film16\
  $(RDIR).Shapes.TallFilm.Film8\
  $(RDIR).Shapes.TallFilm.Film0
+# If you think I'm going to add all the crap for the new Bounce,Film,FilmB
+# and ZoomUp files, just to provide dependency, you are sadly mistaken
 
 FILESS16=\
  ${RDIR}.Sound16.adpcm.Info \
@@ -197,6 +206,7 @@ install: $(FILES) $(FILESDC) $(FILESTOOLS) $(FILESML) $(FILES3) ${FILES16}
          ${CP} ${RDIR}.Decomp7    ${INSTDIR}.Decomp7    ${CPFLAGS}
          ${CP} ${RDIR}.Decomp8    ${INSTDIR}.Decomp8    ${CPFLAGS}
          ${CP} ${RDIR}.Decomp9    ${INSTDIR}.Decomp9    ${CPFLAGS}
+         ${CP} ${RDIR}.Decomp17   ${INSTDIR}.Decomp17   ${CPFLAGS}
          ${CP} ${RDIR}.Documents  ${INSTDIR}.Documents  ${CPFLAGS}
          ${CP} ${RDIR}.MovingLine ${INSTDIR}.MovingLine ${CPFLAGS}
          ${CP} ${RDIR}.Shapes     ${INSTDIR}.Shapes     ${CPFLAGS}
