@@ -23,7 +23,7 @@ RESD       = ${RESDIR}.Internet
 
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 ATTR    = -attr
 CP      = copy
 RM      = remove
@@ -43,7 +43,9 @@ COMMONFILES=\
  ${SDIR}.showstat.ShowStat\
  ${SDIR}.sysctl.SysCtl\
  ${SDIR}.traceroute.TraceRoute\
- ${SDIR}.utils.utl.X\
+ ${SDIR}.utils.utl.X
+
+STBFILES=${SDIR}.pong.Pong
 
 DISCFILES= ${RDIR}.!Boot\
  ${LDIR}.!Help\
@@ -70,7 +72,8 @@ DISCFILES= ${RDIR}.!Boot\
 
 FILES=\
   ${COMMONFILES} \
-  ${DISCFILES}
+  ${DISCFILES} \
+  ${STBFILE}
   
 NETUTILS = \
         ${SDIR}.arp.ARP              \
@@ -116,12 +119,17 @@ install_common: ${COMMONFILES}
         ${CP} ${SDIR}.traceroute.TraceRoute ${INSTAPP}.bin.TraceRoute   ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.X           ${INSTAPP}.bin.X            ${CPFLAGS}
 
-install_STB:
-        ${MKDIR} ${INSTAPP}.etc
-        ${CP} LocalUserIFRes:!Boot     ${INSTAPP}.!Boot         ${CPFLAGS}
-        ${CP} ${RDIR}.files.Hosts      ${INSTAPP}.etc.hosts     ${CPFLAGS}
-        ${CP} ${RDIR}.files.protocols  ${INSTAPP}.etc.protocols ${CPFLAGS}
-        ${CP} ${RDIR}.files.services   ${INSTAPP}.etc.services  ${CPFLAGS}
+install_STB: ${STBFILES}
+        ${MKDIR} ${INSTAPP}.files
+        ${CP} LocalUserIFRes:!Boot     ${INSTAPP}.!Boot           ${CPFLAGS}
+        ${CP} LocalUserIFRes:CopyLocal ${INSTAPP}.CopyLocal       ${CPFLAGS}
+        ${CP} LocalUserIFRes:RTime     ${INSTAPP}.bin.RTime       ${CPFLAGS}
+        ${CP} ${SDIR}.pong.Pong        ${INSTAPP}.bin.Pong        ${CPFLAGS}
+        ${CP} ${RDIR}.files.Hosts      ${INSTAPP}.files.Hosts     ${CPFLAGS}
+        ${CP} LocalUserIFRes:MimeMap   ${INSTAPP}.files.MimeMap   ${CPFLAGS}
+        ${CP} ${RDIR}.files.Networks   ${INSTAPP}.files.Networks  ${CPFLAGS}
+        ${CP} ${RDIR}.files.Protocols  ${INSTAPP}.files.Protocols ${CPFLAGS}
+        ${CP} ${RDIR}.files.Services   ${INSTAPP}.files.Services  ${CPFLAGS}
 
 install_: ${DISCFILES} dirs
         ${CP} ${RDIR}.!Boot      ${INSTAPP}.!Boot      ${CPFLAGS}
