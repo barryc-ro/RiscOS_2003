@@ -73,13 +73,22 @@ clean:
 	${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
+        ${RM} Resources.Repeat
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}
-        ${CP} Resources.Messages ${RESDIR}.Messages ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo BootCmds: Resources copied to Messages module
+
+resources_common:
+        ${MKDIR} ${RESDIR}
+        ${CP} Resources.Messages  ${RESDIR}.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	print Resources.CmdHelp { >> ${RESDIR}.Messages }
 
 #
 # ROM target (re-linked at ROM Image build time)
