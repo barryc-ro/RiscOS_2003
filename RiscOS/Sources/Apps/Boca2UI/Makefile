@@ -51,6 +51,7 @@ resources:
         ${CP} Resources.<UserIf>.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
         ${CP} Resources.<UserIf>.${LOCALE}.SetMAC ${RESRES}.^.SetMAC ${CPFLAGS}
         ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.LED.InitState ${RESRES}.LED.InitState ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
         
 # Dynamic dependencies:
