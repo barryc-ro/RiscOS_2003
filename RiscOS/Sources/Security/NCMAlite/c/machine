@@ -4,6 +4,7 @@
 
 #include "kernel.h"
 #include "swis.h"
+#include "os.h"
 
 #define PROTOTYPES_INTERNAL /* make prototypes and globals internal to this file */
 #include "machine.h"
@@ -19,14 +20,18 @@
 #include "ncma_fx.h"
 #include "vectors.h"
 
+
 #include "DBUG.h"
 
 
-
 #ifdef SC_SWAPPING
-unsigned int bNoScreenChanges = 0; /* Screen chnages are allowed */
-unsigned int bCardVerified = 0;   /* Card is intially unverified */
-unsigned int uiPreviousState = State_NCMAInit;
+/* Declare all global variables required for the cmartcard swapping version
+    of the module.*/
+unsigned int bNoScreenChanges = 0; /* Screen changes are allowed */
+unsigned int bCardVerified = 0;    /* Card is intially unverified */
+NCMA_STATE   uiPreviousState = State_NCMAInit;
+NCMA_STATE   card_removed_in_state = State_NCMAInit;
+unsigned int bRedialRequested = 0; /* No redial has been requested */
 #endif // SC_SWAPPING
 
 
@@ -90,6 +95,7 @@ char *trans_string(NCMA_TRANS trans)
      "Trans_Logout",
      "Trans_LogoutAck",
      "Trans_LogoutNak",
+     "Trans_NCMADialUI_Start",
 #endif /* SC_SWAPPING */
      "Trans_HangUp"
   };
@@ -135,6 +141,100 @@ char *state_string(NCMA_STATE state)
   return(s_table[state]);
 }
 
+
+
+/* build tag cache without connecting, to allow ISPCapture to display current sc values */
+NCMA_STATE PreConnect_in_NCMA_Connect()
+{
+  DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: PreConnect_in_NCMA_Connect() called\n");
+  if(fetch_sc_bootblock()<0) {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, couldn't read sc bootblock\n");
+      return(State_NCMAConnect);
+  }
+
+  if(virgin_smartcard()) {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, nothing on card\n");
+      return(State_NCMAConnect);
+  }
+
+  if(build_ram_cache()<0) {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, couldn't build RAM cache\n");
+      return(State_NCMAConnect);
+  }
+  return(State_NCMAConnect);
+}
+
+
+
+
+/*
+  Connect to ISP, reading smartcard values.
+*/
+NCMA_STATE URLConnect_in_NCMA_Connect(void)
+{
+  DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: URLConnect_in_NCMA_Connect() called\n");
+#ifdef ETHERNET
+       		     ncma_dbox_close();
+#endif
+		     if(fetch_sc_bootblock()<0) {
+		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+#ifdef ISP_CAPTURE
+       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
+       			 ncma_isp_capture();
+       			 return(State_NCMAConnect);
+#else
+		         ncma_dbox_open(URL_PATH(invalid.html)); // was dmaged.html
+		         return(State_NCMABadCard);
+#endif
+		     }
+
+
+		     if(virgin_smartcard()) { /* smartcard never been written to */
+		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+#ifdef ISP_CAPTURE
+       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
+       			 ncma_isp_capture();
+       			 return(State_NCMAConnect);
+#else
+		         ncma_dbox_open(URL_PATH(invalid.html)); // was damaged.html
+		         return(State_NCMABadCard);
+#endif
+		     }
+
+
+
+      		     if(build_ram_cache()<0) { /* insufficient connect details, call RS */
+      		             DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: insufficient connection details - calling RS\n");
+#ifdef ISP_CAPTURE
+       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
+       			 ncma_isp_capture();
+       			 return(State_NCMAConnect);
+#else
+
+		         ncma_dbox_open(URL_PATH(invalid.html)); // was damaged.html
+		         return(State_NCMAConnect);
+#endif
+
+      		     }
+
+      		       /* dial based on connection details in RAM/SC */
+      		       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: RAM/SC DIALLING...\n");
+      		       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling ncma_dial() automatically.\n");
+      		       if(ncma_dial()<0)
+                       {
+      		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: ISP dial initiation failed\n");
+      		         ncma_dbox_close();
+      		         ncma_url_open(URL_PATH(connect.html));
+      		         return(State_NCMAConnect);
+      		       }
+		     return(State_NCMADiallingISP);
+}
+
+
+
+
+
+
 /* this is the NCMA ASM */
 NCMA_STATE machine(NCMA_TRANS trans)
 {
@@ -164,7 +264,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	 break;
 
     case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
-
          if(registry_status_cleared(BB_STATUS_INSERTED)) goto card_removed;
          break;
 
@@ -172,11 +271,16 @@ NCMA_STATE machine(NCMA_TRANS trans)
          card_removed:
 
 #ifdef SC_SWAPPING
+         /* Set the state the card was removed in. This is used to detect if
+the card was removed whilst dialling, and therefore prevents bNoScreenChnages
+from changing, as the card we removed during the current session. */
+         card_removed_in_state = ncma_state;
+
          /* We only want the line to be dropped globally if we are not in
-state NCMA_Booted, as that state handles the situation itself. Otherwise do
-as below.
-         */
-         if (ncma_state != State_NCMABooted)
+             state NCMA_Booted, as that state handles the situation itself.
+             Otherwise do as below. Also, it hould not be dropped if the
+             bNoScreenChanges flag is set. */
+         if (ncma_state != State_NCMABooted && !bNoScreenChanges)
          {
 #endif // SC_SWAPPING
 
@@ -206,10 +310,6 @@ as below.
         } else return(State_NCMAInit); /* sc layer kicks off with a card removed event */
 
 #ifdef SC_SWAPPING
-       }
-       else
-       {
-    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Ignoring global Trans_CardRemoved as currently in State_NCMABooted, which should deal with it itself.\n");
        }
 #endif // SC_SWAPPING
 
@@ -350,8 +450,8 @@ as below.
 
 #ifdef SC_SWAPPING
              /* The transition below copes with the explicit disconnect
-button on the toolbar of Funai NC 2's being pressed. It exhibits the same
-behaviour as occured with the smartcard being removed on other NC's. */
+                 button on the toolbar of Funai NC 2's being pressed. It exhibits the same
+                 behaviour as occured with the smartcard being removed on other NC's. */
              case Trans_Logout:
                ncma_dbox_open(URL_PATH(logout.html)); /* Open the logout window */
                uiPreviousState = ncma_state;
@@ -653,17 +753,23 @@ behaviour as occured with the smartcard being removed on other NC's. */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization successful\n");
                       strncpy(old_chv_pin, chv_pin, chv_pin_size);
                       old_chv_pin_size = chv_pin_size;
+#ifdef SC_SWAPPING
+	              DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified. #2\n");
+                      bCardVerified = 1; // Card is known to be valid
+#endif /* SC_SWAPPING */
+
 #ifdef CHIMPANZEE_INTERFACE
        		      ncma_trans = Trans_Registry; /* cue on up */
        		      setcallback();
 
 #ifdef SC_SWAPPING
-	              DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified. #2\n");
-                      bCardVerified = 1; /* Card is known to be valid */
-#endif /* SC_SWAPPING */
+	              DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified. #3\n");
+                      bCardVerified = 1; // Card is known to be valid
+#endif // SC_SWAPPING
 
        		      return(State_NCMAApresPIN);
 #else
+
 		      goto proceed_after_pin;
 	     	      break;
 #endif
@@ -690,7 +796,31 @@ behaviour as occured with the smartcard being removed on other NC's. */
                 }
 
 		ncma_dbox_close();
+#ifdef SC_SWAPPING
+                if (!bNoScreenChanges) /* Screens can change */
+                {
+		  ncma_url_open(URL_PATH(connect.html));
+                }
+                else /* Screens cannot change */
+                {
+                  if (bCardVerified)
+                  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Screens cannot change, but card is now verified\n");
+                    if (bRedialRequested)
+                    {
+                      URLConnect_in_NCMA_Connect(); // Rebuild all caches.
+                    }
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Setting state to State_NCMADiallingISP\n");
+                    return(State_NCMADiallingISP);
+                  }
+                  else
+                  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Screens cannot change, and card is unverified\n");
+                  }
+                }
+#else
 		ncma_url_open(URL_PATH(connect.html));
+#endif /* SC_SWAPPING */
 		return(State_NCMAConnect);
 
 
@@ -734,95 +864,27 @@ behaviour as occured with the smartcard being removed on other NC's. */
 	     	  return(State_NCMANewPIN);
 
              case Trans_PreConnect: /* byild tag cache without connecting, to allow ISPCapture to display current sc values */
-             	  if(fetch_sc_bootblock()<0) {
-             	      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, couldn't read sc bootblock\n");
-             	      return(State_NCMAConnect);
-             	  }
-
-             	  if(virgin_smartcard()) {
-             	      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, nothing on card\n");
-             	      return(State_NCMAConnect);
-             	  }
-
-             	  if(build_ram_cache()<0) {
-             	      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, couldn't build RAM cache\n");
-             	      return(State_NCMAConnect);
-             	  }
-             	  return(State_NCMAConnect);
-
+                  return(PreConnect_in_NCMA_Connect());
 
 	     case Trans_URLConnect:
-#ifdef ETHERNET
-       		     ncma_dbox_close();
-#endif
-		     if(fetch_sc_bootblock()<0) {
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
-#ifdef ISP_CAPTURE
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
-       			 ncma_isp_capture();
-       			 return(State_NCMAConnect);
-#else
-		         ncma_dbox_open(URL_PATH(invalid.html)); // was dmaged.html
-		         return(State_NCMABadCard);
-#endif
-		     }
+                  return (URLConnect_in_NCMA_Connect());
 
-
-		     if(virgin_smartcard()) { /* smartcard never been written to */
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
-#ifdef ISP_CAPTURE
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
-       			 ncma_isp_capture();
-       			 return(State_NCMAConnect);
-#else
-		         ncma_dbox_open(URL_PATH(invalid.html)); // was damaged.html
-		         return(State_NCMABadCard);
-#endif
-		     }
-
-
-
-      		     if(build_ram_cache()<0) { /* insufficient connect details, call RS */
-      		             DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: insufficient connection details - calling RS\n");
-#ifdef ISP_CAPTURE
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
-       			 ncma_isp_capture();
-       			 return(State_NCMAConnect);
-#else
-
-		         ncma_dbox_open(URL_PATH(invalid.html)); // was damaged.html
-		         return(State_NCMAConnect);
-#endif
-
-      		     }
-
-      		       /* dial based on connection details in RAM/SC */
-      		       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: RAM/SC DIALLING...\n");
-      		       if(ncma_dial()<0) {
-      		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: IAP dial initiation failed\n");
-      		         ncma_dbox_close();
-      		         ncma_url_open(URL_PATH(connect.html));
-      		         return(State_NCMAConnect);
-      		       }
-
-		     return(State_NCMADiallingISP);
-                     break;
 
 #ifdef SC_SWAPPING
              /* The transition below copes with the explicit disconnect
-button on the toolbar of Funai NC 2's being pressed. It exhibits the same
-behaviour as occured with the smartcard being removed on other NC's. */
+                 button on the toolbar of Funai NC 2's being pressed. It exhibits the same
+                 behaviour as occured with the smartcard being removed on other NC's. */
              case Trans_Logout:
-               ncma_dbox_open(URL_PATH(logout.html)); // Open the logout window
-               uiPreviousState = ncma_state;
-               return (State_NCMALogout);
+                  ncma_dbox_open(URL_PATH(logout.html)); // Open the logout window
+                  uiPreviousState = ncma_state;
+                  return (State_NCMALogout);
 #endif /* SC_SWAPPING */
 
-                case Trans_URLConnectNak:
-		     ncma_url_open(WELCOME_SCREEN_URL);
-     		     run_from_powerup = 0;
-             	     return(State_NCMAInit);
-                     break;
+             case Trans_URLConnectNak:
+                  ncma_url_open(WELCOME_SCREEN_URL);
+     	          run_from_powerup = 0;
+             	  return(State_NCMAInit);
+                  break;
          } /* end state_ncmaconnect */
          break;
 
@@ -851,18 +913,48 @@ behaviour as occured with the smartcard being removed on other NC's. */
        		  set_ppp_timeout();
 #endif
 
+#ifdef SC_SWAPPING
+                  if (bRedialRequested)
+                  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: A redial was requested, so not calling ncma_network_init() and resetting bRedialRequested\n");
+                    bRedialRequested = 0;
+                  }
+                  else
+                  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: No redial requested, so calling ncma_network_init()\n");
+#endif /* SC_SWAPPING */
+    	     	    ncma_network_init(NCMA_NET_RAM | NCMA_NET_POST_DIAL); /* set resolver variables */
 
-    	     	  ncma_network_init(NCMA_NET_RAM | NCMA_NET_POST_DIAL); /* set resolver variables */
-
-      	     	  if (ncma_url_user() != 0)
-		  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling ncma_url_user\n");
+                    if (ncma_url_user() != 0)
+    		    {
+          	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Hanging up due to ncma_url_user() != 0, and returning State_NCMAConnect\n");
 		        ncma_hangup();
 			ncma_dbox_open( URL_PATH(badurldbox.html) );
 			return(State_NCMAConnect);
-		  }
+		    }
+#ifdef SC_SWAPPING
+                  }
+                  if (card_removed_in_state != State_NCMADiallingISP)
+                  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "Resetting bNoScreenChanges to 0 and moving to State_NCMABooted.\n");
+                    bNoScreenChanges = 0;
+                  }
+                  else
+                  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "Not resetting bNoScreenChanges as the card was removed whilst in State_NCMADiallingISP. Moving to State_NCMABooted.\n");
+                  }
+#endif /* SC_SWAPPING */
 
     	     	  return(State_NCMABooted);
  		  break;
+
+#ifdef SC_SWAPPING
+             case Trans_CardRemoved:  /* Ignoring this case. */
+               DBUG_PRINTF(DBUG_LVL_DIAG, "Ignoring transition Trans_CardRemoved in State_NCMADIallingISP.\n");
+               return(State_NCMADiallingISP);
+#endif /* SC_SWAPPING */
+
  	 } /* end state_ncmadiallingisp */
  	 break;
 
@@ -874,8 +966,41 @@ behaviour as occured with the smartcard being removed on other NC's. */
     case State_NCMABooted:
 
     	 switch(trans) {
+#ifdef SC_SWAPPING
+             /* The transition below is called when the browser wants to
+                 restart a dial. If the card is currently verified, then it calls
+                 NCDialUI_Start, otherwise it notes that a redial has been requested and
+                 prompts for a card to be inserted. */
+               case Trans_NCMADialUI_Start:
+	         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: DiallerUI_Start has been called in State_NCMABooted\n");
+                 if (!bCardVerified) /* Card is unverified */
+                 {
+	           DBUG_PRINTF(DBUG_LVL_DIAG, "Card is unverified; setting bNoScreenChanges and bRedialRequested and going to State_NCMANoCard\n");
+	           reset_cache(); /* was unlock_cache() */
+	           bNoScreenChanges = 1;
+	           bRedialRequested = 1;
+	           ncma_dbox_open(URL_PATH(splash.html));
+  	           DBUG_PRINTF(DBUG_LVL_DIAG, "Changing to State_NCMANoCard \n");
+	           ncma_state = State_NCMANoCard;
+                   return (State_NCMANoCard);
+                 }
+                 else
+                 {
+                   /* Card is verified, send a NCDialUI_Start */
+                   DBUG_PRINTF(DBUG_LVL_DIAG, "Card is verified; sending a NCDialUI_Start\n");
+      	           ncma_dial();
+                 }
+                 return (State_NCMABooted);
+
+               case Trans_DialOK:
+                 // Ignoring this case as it is produced after a Trans_NCMADialUI_Start if the redial was successful.
+	         DBUG_PRINTF(DBUG_LVL_DIAG, "Ignoring Trans_DialOK\n");
+               return (State_NCMABooted);
+
+#endif /* SC_SWAPPING */
 
     	     case Trans_NCMASurf:
+ 	         DBUG_PRINTF(DBUG_LVL_DIAG, "Trans_NCMASurf in State_NCMABooted : calling ncma_url_user() and returning State_NCMABooted\n");
 		  ncma_url_user();	/* this can happen when the user presses home - just let it fail if it must */
     	     	  return(State_NCMABooted);
 
@@ -910,11 +1035,7 @@ behaviour as occured with the smartcard being removed on other NC's. */
        		     a macro which evaluates to ncma:userhome, which fires Trans_NCMASurf,
        		     which calls the browser (first trans above) which brings the line
        		     up. :) */
-#ifndef SC_SWAPPING
        		  return(State_NCMABooted);
-#else
-       		  return(State_NCMAInit);
-#endif /* SC_SWAPPING */
 #else
 		  /* alternatively, bung the 'connect to isp' screen up and do all that pallaver */
        		  ncma_url_open(URL_PATH(connect.html));
@@ -945,8 +1066,8 @@ behaviour as occured with the smartcard being removed on other NC's. */
 
 #ifdef SC_SWAPPING
              /* The transition below copes with the explicit disconnect
-button on the toolbar of Funai NC 2's being pressed. It exhibits the same
-behaviour as occured with the smartcard being removed on other NC's. */
+                 button on the toolbar of Funai NC 2's being pressed. It exhibits the same
+                 behaviour as occured with the smartcard being removed on other NC's. */
              case Trans_Logout:
                uiPreviousState = ncma_state;
                ncma_dbox_open(URL_PATH(logout.html)); // Open the logout window
@@ -954,11 +1075,9 @@ behaviour as occured with the smartcard being removed on other NC's. */
 
 
              case Trans_CardRemoved:
-               /* Card has been removed. From now on the card will be flagged
-as being unverified. */
+               /* Card has been removed. From now on the card will be flagged as being unverified. */
                bCardVerified = 0;
                return (State_NCMABooted);
-
 #endif /* SC_SWAPPING */
 
 
