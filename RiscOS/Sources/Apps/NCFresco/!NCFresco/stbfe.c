@@ -1780,10 +1780,11 @@ void fe_ensure_highlight_after_fetch(fe_view v)
 	}
 	    
 	/* if there was anything to move to then set the caret in the window */
-	if (backend_highlight_link(vcaret->displaying, item, flags | movepointer()) != NULL)
+	if (backend_highlight_link(vcaret->displaying, item, flags | movepointer()) != NULL ||
+	    backend_highlight_link(vcaret->displaying, NULL, flags | movepointer()) != NULL)
 	    fe_get_wimp_caret(vcaret->w);
 
-	STBDBG(( "stbfe: current link %p\n", vcaret));
+	STBDBG(( "stbfe: selected view %p\n", vcaret));
     }
 }
 
@@ -1825,6 +1826,9 @@ int fe_check_download_finished(fe_view v)
 	    if (changed)
 	    {
 		backend_reset_width(top->displaying, 0);
+
+		/* resize again in case document got longer */
+		feutils_resize_window(&top->w, &top->margin, &top->box, &top->x_scroll_bar, &top->y_scroll_bar, v->doc_width, -v->doc_height, fe_scrolling_NO, fe_bg_colour(top));
 
 		frontend_view_redraw(top, NULL); /* put inside because of ncint:select */
 	    }
@@ -2038,13 +2042,12 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	void *pp = va_arg(ap, void *);
 	int busy = va_arg(ap, int);
 	int state = va_arg(ap, int);
-	int opening = va_arg(ap, int);
-	int closing = va_arg(ap, int);
+	int helpers_open = va_arg(ap, int);
 
-	STBDBG(("stbfe_view_status: pp %p busy %d state %d opening %d closing %d\n", pp, busy, state, opening, closing));
+	STBDBG(("stbfe_view_status: pp %p busy %d state %d helpers_open %d\n", pp, busy, state, helpers_open));
 
 	if (use_toolbox)
-	    tb_codec_state_change(state, opening, closing);
+	    tb_codec_state_change(state, helpers_open != 0, helpers_open == 0);
 	break;
     }
     }
@@ -2352,8 +2355,11 @@ static os_error *reformat_view(fe_view v, void *handle)
 {
     if (v->w)
     {
-	backend_doc_reformat(v->displaying);
-	fe_refresh_window(v->w, NULL);
+	if (v->had_completed)
+	{
+	    backend_doc_reformat(v->displaying);
+	    fe_refresh_window(v->w, NULL);
+	}
     }
     return NULL;
 }
@@ -2409,11 +2415,11 @@ static os_error *fe__bgsound_set(fe_view v, void *handle)
 {
     if (config_sound_background)
     {
-	backend_plugin_action(v->displaying, be_plugin_action_item_ALL, plugin_state_STOP);
+	backend_plugin_action(v->displaying, be_plugin_action_item_ALL, plugin_state_PLAY);
     }
     else
     {
-	backend_plugin_action(v->displaying, be_plugin_action_item_ALL, plugin_state_PLAY);
+	backend_plugin_action(v->displaying, be_plugin_action_item_ALL, plugin_state_STOP);
     }
 
     return NULL;
@@ -3953,7 +3959,8 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
             if (use_toolbox &&
 		v->browser_mode != fe_browser_mode_DESKTOP &&
 		v->browser_mode != fe_browser_mode_DBOX &&
-		v->browser_mode != fe_browser_mode_APP)
+		v->browser_mode != fe_browser_mode_APP &&
+		keyboard_state == fe_keyboard_ONLINE)
                 fe_status_toggle(v);
             break;
 
@@ -4262,6 +4269,11 @@ static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
 
 		frontend_view_ensure_visable(v, box.x0, box.y1, box.y0);
 	    }
+	    else
+	    {
+		/* 30Jun097 - ensure caret is somewhere */
+		backend_highlight_link(v->displaying, NULL, caretise() | movepointer() | be_link_TEXT);
+	    }
 	}
     }
 }
@@ -4529,13 +4541,26 @@ static void read_gbf(void)
 {
     char *s;
     char buf[12];
+    int eor, bic;
 
     /* reread gbf values */
-    if ((s = getenv("NCFresco$GBFEOR")) != NULL)
+    if ((s = getenv("NCFresco$GbfEor")) != NULL)
     {
-	gbf_flags ^= (int)strtoul(s, NULL, 0);
-	_swix(OS_SetVarVal, _INR(0,2), "NCFresco$GBFEOR", NULL, -1);
+	eor = (int)strtoul(s, NULL, 0);
+	_swix(OS_SetVarVal, _INR(0,2), "NCFresco$GbfEor", NULL, -1);
     }
+    else
+	eor = 0;
+
+    if ((s = getenv("NCFresco$GbfBic")) != NULL)
+    {
+	bic = (int)strtoul(s, NULL, 0);
+	_swix(OS_SetVarVal, _INR(0,2), "NCFresco$GbfBic", NULL, -1);
+    }
+    else
+	bic = 0;
+
+    gbf_flags = (gbf_flags &~ bic) ^ eor;
 
     sprintf(buf, "0x%x", gbf_flags);
     _kernel_setenv("NCFresco$GBF", buf);
@@ -5425,11 +5450,16 @@ static void handler(int signal)
    er.errnum = 0;
    sprintf(
        er.errmess,
-       msgs_lookup("fatal1:%s has suffered a fatal internal error (type=%i) and must exit immediately"),
-       program_title,
+       msgs_lookup("fatal1:"),
        signal);
 
-   frontend_fatal_error(&er);
+#if DEVELOPMENT
+   usrtrc("fatal signal %d\n", signal);
+   usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
+#endif
+   _swix(Wimp_ReportError, _INR(0,5), &er, wimp_EOK | (1<<8), PROGRAM_NAME, NULL, NULL, 0);
+/*    wimp_reporterror(&er, wimp_EOK, PROGRAM_NAME); */
+/*    frontend_fatal_error(&er); */
 }
 
 static void signal_init(void)
@@ -5461,7 +5491,7 @@ static int my_wimp_initialise(int *message_list, int *wimp_version)
 
 static void fe_tidyup(void)
 {
-    STBDBG(( "\n*** Exit function called ***\n\n"));
+    DBG(( "\n*** Exit function called ***\n\n"));
 
     MemCheck_SetChecking(0,0);
 

@@ -299,12 +299,23 @@ void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
 	break;
 
     case doc_selection_tag_AREF:
+#if 1
+	for (ti = doc->selection.data.aref->first;
+	     ti && ti->aref == doc->selection.data.aref;
+	     ti = ti->next)
+	{
+	    if (object_table[ti->tag].redraw &&
+		stream_find_item_location(ti, &hpos, &bline))
+		object_table[ti->tag].redraw(ti, doc->rh, doc, ox + hpos, oy + bline, &fs, &rr->g, ox, oy, object_redraw_HIGHLIGHT);
+	}	
+#else
 	/* this may or may not be quicker that finding each item individually - I'm not sure */
 	stream_render(&doc->rh->stream, doc,
 		      ox, oy,
 		      rr->g.x0, rr->g.y1 - oy,
 		      rr->g.x1, rr->g.y0 - oy,
 		      &fs, &rr->g, object_redraw_HIGHLIGHT);
+#endif
 	break;
     }
 }

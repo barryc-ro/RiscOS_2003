@@ -132,8 +132,8 @@ static void plugin_stream_dispose(plugin_stream_private *psp);
 /* ----------------------------------------------------------------------------- */
 
 static plugin_string_rma_ptr *rma_ptr_list = NULL;
-static plugin helper_list = NULL; /* all helpers */
-static plugin plugin_list = NULL; /* all plugins */
+static plugin plugin_list = NULL;	/* all plugins and helpers */
+static int helper_count = 0;		/* count of helpers open */
 
 /* ----------------------------------------------------------------------------- */
 
@@ -503,8 +503,8 @@ static plugin_private *locate_object(antweb_doc *doc, plugin_private *pp)
     else
     {
 	plugin ppp;
-	for (ppp = helper_list; ppp; ppp = ppp->next)
-	    if (ppp == pp)
+	for (ppp = plugin_list; ppp; ppp = ppp->next)
+	    if ((ppp->priv_flags & plugin_priv_HELPER) && ppp == pp)
 		return pp;
 
 	OBJDBG(("plugin: can't locate pp %p in helper list\n", pp));
@@ -523,6 +523,32 @@ static plugin_stream_private *locate_stream(plugin_private *pp, plugin_stream_pr
     OBJDBG(("plugin: can't locate psp %p in pp %p\n", psp1, pp));
 
     return NULL;
+}
+
+/* return as helper if we launched it as a helper or it was 'converted' into a helper */
+
+static plugin first_helper(void)
+{
+    plugin pp;
+    for (pp = plugin_list; pp; pp = pp->next)
+	if ((pp->priv_flags & plugin_priv_HELPER) || (pp->opening_flags & plugin_opening_HELPER))
+	    return pp;
+    return NULL;
+}
+
+static int helpers_open(void)
+{
+    plugin pp;
+    int count = 0;
+    for (pp = plugin_list; pp; pp = pp->next)
+    {
+	if (((pp->priv_flags & plugin_priv_HELPER) || (pp->opening_flags & plugin_opening_HELPER)) &&
+	    pp->state == plugin_state_OPEN)
+	{
+	    count++;
+	}
+    }
+    return count;
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -545,6 +571,8 @@ int plugin_send_open(plugin pp, wimp_box *box, int open_flags)
     else
 	OBJDBG(("\n"));
 #endif
+
+    memset(open, 0, sizeof(*open));
     
     /* Write message header */
     msg.hdr.size = sizeof(msg.hdr) + sizeof(*open);
@@ -613,7 +641,9 @@ int plugin_send_close(plugin pp)
     message_plugin_close *close = (message_plugin_close *) &msg.data;
 
     if (pp == NULL)
-	pp = helper_list;
+	pp = first_helper();
+
+    OBJDBG(("plugin: send close %p state %d\n", pp, pp ? pp->state : -1));
 
     /* only send close if it is actually open - this stops the problem
        with the toolbar closing killing off the sound that is just
@@ -621,8 +651,6 @@ int plugin_send_close(plugin pp)
     if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
     
-    OBJDBG(("plugin: send close %p state %d\n", pp, pp->state));
-
     if (!pp->instance)
 	return 0;
 
@@ -646,13 +674,13 @@ int plugin_send_focus(plugin pp)
     message_plugin_focus *focus = (message_plugin_focus *) &msg.data;
 
     if (pp == NULL)
-	pp = helper_list;
+	pp = first_helper();
     
+    OBJDBG(("plugin: send focus %p state %d\n", pp, pp ? pp->state : -1));
+
     if (pp == NULL)
 	return 0;
     
-    OBJDBG(("plugin: send focus %p state %d\n", pp, pp->state));
-
     if ((pp->opening_flags & plugin_opening_CAN_FOCUS) == 0)
 	return 0;
     
@@ -677,13 +705,14 @@ int plugin_send_action(plugin pp, int new_action)
 
     /* if no plugin specified then use the top of the helper list */
     if (pp == NULL)
-	pp = helper_list;
+	pp = first_helper();
     
+    OBJDBG(("plugin: send action %p action %d state %d helper %d\n",
+	    pp, new_action, pp ? pp->state : -1, pp ? pp->priv_flags & plugin_priv_HELPER : -1));
+
     if (pp == NULL)
 	return 0;
     
-    OBJDBG(("plugin: send action %p state %d\n", pp, pp->state));
-
     /* Build message block */
     action->flags = 0;
     action->new_state = new_action;
@@ -704,7 +733,7 @@ int plugin_send_abort(plugin pp)
 
     /* if no plugin specified then use the top of the helper list */
     if (pp == NULL)
-	pp = helper_list;
+	pp = first_helper();
 
     if (pp == NULL)
 	return 0;
@@ -835,7 +864,7 @@ static void plugin_stream_progress(void *h, int status, int size, int so_far, in
 {
     plugin_stream_private *psp = h;
 
-    OBJDBG(("plugin: stream progress psp %p\n", psp));
+    OBJDBGN(("plugin: stream progress psp %p status %d size %d so_far %d fh %d ftype %03x\n", psp, status, size, so_far, fh, ftype));
 
     psp->size = size;
     psp->status = (transfer_status)status;
@@ -1128,13 +1157,10 @@ void plugin_destroy(plugin pp)
 	mm_free(pp->helper.cfile);
 
 	/* unlink from list */
-	if (pp->priv_flags & plugin_priv_HELPER)
-	    unlink(&helper_list, pp);
-	else
-	    unlink(&plugin_list, pp);
+	unlink(&plugin_list, pp);
 	
 	/* remove the message handler for helpers */
-	if (helper_list == NULL)
+	if ((pp->priv_flags & plugin_priv_HELPER) && --helper_count == 0)
 	    frontend_message_remove_handler(plugin_message_handler, NULL);
 
 	mm_free(pp);
@@ -1166,16 +1192,14 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *pa
 
     obj.params = &param;
     
+    /* this adds us to the plugin_list */
     pp = plugin_new(&obj, NULL, NULL);
 
     if (pp)
     {
 	/* add a message handler for helpers */
-	if (helper_list == NULL)
+	if (helper_count++ == 0)
 	    frontend_message_add_handler(plugin_message_handler, NULL);
-
-	/* add to helper list */
-	link(&helper_list, pp);
 
 	pp->helper.parent = parent;
 	pp->helper.cfile = strdup(cfile);
@@ -1284,6 +1308,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		{
 		    char *url;
 
+		    OBJDBG(("plugin: opening flags %x - helper before %d after %d\n", opening->flags, pp->priv_flags & plugin_priv_HELPER ? 1 : 0, opening->flags & plugin_opening_HELPER ? 1 : 0));
+
 		    pp->state = plugin_state_OPEN;
 		    pp->instance = opening->instance.plugin;
 		    pp->task = msg->hdr.task;
@@ -1292,6 +1318,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    /* if it wasn't asked to be a helper but it is  */
 		    if ((opening->flags & plugin_opening_HELPER) && (pp->priv_flags & plugin_priv_HELPER) == 0)
 		    {
+#if 0
 			/* check for enabling the helper message handler before adding to that list */
 			if (helper_list == NULL)
 			    frontend_message_add_handler(plugin_message_handler, NULL);
@@ -1299,7 +1326,6 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			/* then swap list */
 			unlink(&plugin_list, pp);
 			link(&helper_list, pp);
-
 			/* remove from the page - can't do this as NULL means not fetched */
 /* 			if (pp->parent_item) */
 /* 			    ((rid_text_item_object *)pp->parent_item)->object->state.plugin.pp = NULL; */
@@ -1307,7 +1333,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			/* check for removing the page message handler */
 			if (pp->doc && --pp->doc->object_handler_count == 0)
 			    frontend_message_remove_handler(plugin_message_handler, pp->doc);
-			
+#endif			
 			/* transfer the view handle */
 			if (pp->doc)
 			    pp->helper.parent = pp->doc->parent;
@@ -1355,7 +1381,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    /* tell the front end about the plugin opening */
 		    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
 					 (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state,
-					 pp->opening_flags & plugin_opening_HELPER, 0);
+					 helpers_open());
 
 		    break;
 		}
@@ -1372,15 +1398,19 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	    pp->state = plugin_state_HAD_CLOSED;
 
+	    plugin_stream_dispose_all(pp);
+
 	    if (closed->flags & plugin_closed_ERROR_MSG)
 		frontend_complain((os_error *)&closed->errnum);
 
     	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
 				 FALSE, pp->play_state,
-				 0, (pp->opening_flags & plugin_opening_HELPER));
+				 helpers_open());
 
 	    /* if this is a helper then after this it ceases to exist as far as we are concerned */
-	    if (pp->opening_flags & plugin_opening_HELPER)
+	    /* only if it was opened as a helper otherwise it is still attached to the page */
+/* 	    if (pp->opening_flags & plugin_opening_HELPER) */
+	    if (pp->priv_flags & plugin_priv_HELPER)
 		plugin_destroy(pp);
 	    break;
 	}
@@ -1594,7 +1624,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		pp->opening_flags &= ~plugin_opening_BUSY;
 
 	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
-				 (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state, 0, 0);
+				 (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state, helpers_open());
 
 	    break;
 	}
@@ -1627,6 +1657,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		{
 		    plugin ppp;
 
+		    OBJDBG(("plugin: sent open check for already running\n"));
+
 		    /* check and see if an application is in the process of being run for this file type already */
 		    for (ppp = plugin_list; ppp; ppp = ppp->next)
 			if (open->file_type == (ppp->objd.classid_ftype != -1 ? ppp->objd.classid_ftype : ppp->objd.data_ftype) &&
@@ -1638,8 +1670,12 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			
 		    if (!ppp)
 		    {
-			frontend_plugin_start_task(open->file_type);
 			OBJDBG(("plugin: msg open run filetype %03x\n", open->file_type));
+			frontend_plugin_start_task(open->file_type);
+		    }
+		    else
+		    {
+			OBJDBG(("plugin: already started running task for type %03x\n", open->file_type));
 		    }
 
 		    plugin_send_open(pp, (wimp_box *)&pp->box, open->flags);
@@ -1648,11 +1684,14 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		/* message has bounced a second time - mark the plugin as dead */
 		else
 		{
+		    OBJDBG(("plugin: second bounce helper %d\n", pp->priv_flags & plugin_priv_HELPER ? 1 : 0));
+
 		    /* if we tried as a helper then pass to frontend and remove */
 		    if (pp->priv_flags & plugin_priv_HELPER)
 		    {
 			frontend_pass_doc(pp->helper.parent, pp->objd.data, pp->helper.cfile, pp->objd.data_ftype);
 			plugin_destroy(pp);
+			pp = NULL;
 		    }
 		    else
 		    {
@@ -1661,6 +1700,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    }
 		}
 	    }
+	    OBJDBG(("plugin: msg open bounce out state %d\n", pp ? pp->state : -1));
 	    break;
 	}
 
@@ -1676,6 +1716,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    if ((psp = locate_stream(pp, stream_new->stream.instance.parent)) != NULL)
 	    {
 		/* abort stream? */
+		plugin_stream_dispose(psp);
 	    }
 	    break;
 	}
@@ -1703,6 +1744,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    if ((psp = locate_stream(pp, stream_write->stream.instance.parent)) != NULL)
 	    {
 		/* abort stream? */
+		plugin_stream_dispose(psp);
 	    }
 	    break;
 	}

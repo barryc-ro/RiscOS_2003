@@ -50,8 +50,8 @@ static char char_decode[256];
 
 static void dump_elements_open(BITS *bits)
 {
-    /* Enable this when wanted - it consumes lots of resources and distorts profiling values. */
-#if 0
+    /* DAF: Enable this when wanted - it consumes lots of resources and distorts profiling values. */
+#if 1
     int i;
 
     for (i = 0; i < NUMBER_SGML_ELEMENTS; i++)
@@ -93,7 +93,7 @@ static void dump_stack(SGMLCTX *ctx)
 	PRSDBGN(("This %p, outer %p(%p), inner %p(%p)\n",
 		item, item->outer, &item->outer, item->inner, &item->inner));
 #else
-	PRSDBGN(("%s %p, fx %08x, outer %p, inner %p: %s\n",
+	PRSDBGN(("%s %p, fx %08x, outer %p, inner %p: ## %s ##\n",
 		dir, item, item->effects_active[0], item->outer, item->inner, ctx->elements[abs (item->element)].name.ptr));
 #endif
 
@@ -560,6 +560,14 @@ extern void element_set_bit(BITS *elems, int tag)
     elems[word] |= bit;
 }
 
+extern void element_bitset_or(BITS *elem_inout, BITS *elem_in, const size_t n_elems)
+{
+    int x;
+
+    for (x = 0; x < n_elems; x++)
+	elem_inout[x] |= elem_in[x];
+}
+
 /*****************************************************************************
 
   Element matching now does a best-guess, much as attribute matching does.
@@ -844,7 +852,7 @@ extern void reset_lexer_state(SGMLCTX *context)
     context->apply_heuristics = FALSE;
 }
 
-#if 0 /*not called? - debugging and htmlcheck *can* use this */
+#if DEBUG /*not called? - debugging and htmlcheck *can* use this */
 extern char *elements_name(SGMLCTX *context, int ix)
 {
     static char buf[32];
@@ -1008,7 +1016,22 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
         STACK_ITEM *inner = tos->inner;
         STACK_ITEM *above = item->outer;
         STACK_ITEM *below = item->inner;
-	BOOL do_clear;
+	BOOL do_clear = FALSE, do_or = FALSE;
+
+#if DEBUG
+	PRSDBG(("item: %s\n", elements_name(context, item->element)));
+	if (tos) PRSDBG(("tos: %s\n", elements_name(context, tos->element)));
+	if (inner) PRSDBG(("inner: %s\n", elements_name(context, inner->element)));
+	if (above) PRSDBG(("above: %s\n", elements_name(context, above->element)));
+	if (below) PRSDBG(("below: %s\n", elements_name(context, below->element)));
+
+#endif
+
+	if (elements[item->element].flags & FLAG_CONTAINER)
+	{
+	    PRSDBG(("pull_stack_item_to_top: going past container - orring flags\n"));
+	    do_or = TRUE;
+	}
 
 	if (item->outer == NULL)
 	{
@@ -1018,7 +1041,6 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 	else if ( element_bit_set(item->outer->elements_open, item->element) )
 	{
 	    PRSDBG(("pull_stack_item_to_top: item is open in outer as well - do_clear is clear\n"));
-	    do_clear = FALSE;
 	}
 	else
 	{
@@ -1026,9 +1048,45 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 	    do_clear = TRUE;
 	}
 
+	if (do_or)
+	{
+	    /* Should only ever be non-NULL, but can be safer for
+               production code */
+	    BITS *in = item->outer == NULL ?
+		tos->elements_open :
+		item->outer->elements_open;
+
+#if DEBUG
+	    ASSERT(item->outer != NULL);
+	    PRSDBG(("LHS ORR bitset: "));
+	    dump_elements_open(tos->elements_open);
+	    PRSDBG(("\nRHS ORR bitset: "));
+	    dump_elements_open(in);
+#endif
+	    element_bitset_or(tos->elements_open, 
+			      in,
+			      sizeof(item->elements_open) / sizeof(item->elements_open[0]) );
+#if DEBUG
+	    PRSDBG(("\nYields    : "));
+	    dump_elements_open(tos->elements_open);
+	    PRSDBG(("\n"));
+#endif
+
+	}
+
 	if (do_clear)
 	{
+#if DEBUG
+	    ASSERT(item->outer != NULL);
+	    PRSDBG(("LHS CLR bitset: "));
+	    dump_elements_open(tos->elements_open);
+	    PRSDBG(("\nRHS CLR bitset: %s\nYields   :", elements[item->element].name.ptr));
+#endif
 	    element_clear_bit(tos->elements_open, item->element);
+#if DEBUG
+	    dump_elements_open(tos->elements_open);
+	    PRSDBG(("\n"));
+#endif
 	}
 
         /*  We must get the elements_seen vaguely right - since
@@ -1041,7 +1099,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 
         memcpy (item->elements_seen, tos->elements_seen, sizeof (item->elements_seen));
 #if DEBUG_STACK
-        PRSDBG(("Stack before pull of %p:\n", item));
+        PRSDBG(("Stack before pull of %s (%p):\n", elements[item->element].name.ptr, item));
         dump_stack (context);
 #endif
         if (above != NULL) above->inner = below;

@@ -18,6 +18,7 @@
 #include "wimp.h"
 #include "font.h"
 #include "bbc.h"
+#include "msgs.h"
 
 #include "interface.h"
 #include "antweb.h"
@@ -100,7 +101,7 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
     rid_object_item *obj = tio->object;
     int width, height;
 
-     OBJDBG(("oobject_size_allocate: ti%p fwidth %d\n", ti, width));
+     OBJDBG(("oobject_size_allocate: ti%p fwidth %d\n", ti, fwidth));
 /*     OBJDBG(("oobject: sizing line %p fwidth %d floats %p\n", ti->line,  */
 /* 	    ti->line && ti->line->st ? ti->line->st->fwidth : 0,  */
 /* 	    ti->line ? ti->line->floats : 0)); */
@@ -134,10 +135,12 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	width = get_value(ti, &obj->userwidth, 0, fwidth);
 	height = get_value(ti, &obj->userheight, 0, fwidth);
 
+	OBJDBG(("oobject_size_allocate: %dx%d\n", width, height));
+	
 	if (obj->state.plugin.pp == NULL &&
 	    (obj->classid_ftype != -1 || obj->data_ftype != -1) &&
 	    !gbf_active(GBF_LOW_MEMORY) &&				/* don't start in low memory */
-	    (config_sound_background || width > 1 || height > 1))	/* don't start if invisible(ish) and bgsound configured off */
+	    (config_sound_background || width > 2 || height > 2))	/* don't start if invisible(ish) and bgsound configured off */
 	{
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
 	    
@@ -172,6 +175,11 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
     width += (obj->bwidth + obj->hspace) * 2;
     height += (obj->bwidth + obj->vspace) * 2;
 
+    if (width < 1)
+	width = 1;
+    if (height < 1)
+	height = 1;
+    
     ti->width = width;
     ti->pad = 0;
 
@@ -214,6 +222,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
 /*  OBJDBG(("oobject: plugin type %d\n", obj->type)); */
 
+    alt = NULL;
     switch (obj->type)
     {
     case rid_object_type_IMAGE:
@@ -252,6 +261,8 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	    alt = obj->classid_mime_type;
 	if (!alt)
 	    alt = obj->data_mime_type;
+	if (!alt)
+	    alt = msgs_lookup("noplugin");
 
 	do_plinth = ti->width != 0;
 	break;

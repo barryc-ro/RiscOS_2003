@@ -333,7 +333,16 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
         char *frag = strrchr(url, '#');
 	if (frag && strncmp(referer, url, frag ? frag - url : strlen(url)) == 0)
 	{
-	    fe_history_visit(parent, url, strsafe(title));
+	    /* 30Jun97 added frame and fetching_data check*/
+	    if (parent->fetching_data.hist)
+	    {
+		parent->hist_at = parent->fetching_data.hist;
+		parent->fetching_data.hist = NULL;
+	    }
+	    else if ((flags & fe_open_url_FROM_FRAME) == 0)
+	    {
+		fe_history_visit(parent, url, title);
+	    }
 
 	    frontend_view_status(parent, sb_status_URL, url);
 

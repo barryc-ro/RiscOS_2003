@@ -175,15 +175,13 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 
     obj->standby = valuestringdup(standby);
 #ifndef BUILDERS
-#ifndef BUILDERS
-    /* if no standbyu message given then use the file type name */
+    /* if no standby message given then use the file type name */
     if (obj->standby == NULL)
     {
 	char *s = get_plugin_type_name(obj->classid_ftype != -1 ? obj->classid_ftype : obj->data_ftype);
 	if (s)
 	    obj->standby = strdup(s);
     }
-#endif
 #endif
     obj->name = valuestringdup(name);
 
@@ -650,6 +648,16 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	add_param(obj, &(element->attributes[HTML_EMBED_SERVER])->name, &attributes->value[HTML_EMBED_SERVER], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_TYPE])->name, &attributes->value[HTML_EMBED_TYPE], &none, &param);
 
+	add_param(obj, &(element->attributes[HTML_EMBED_HIDDEN])->name, &attributes->value[HTML_EMBED_HIDDEN], &none, &param);
+
+	/* if hidden then force to 0 size */
+	if (attributes->value[HTML_EMBED_HIDDEN].type != value_none)
+	{
+	    obj->userwidth.type = value_integer;
+	    obj->userwidth.u.i = 0;
+	    obj->userheight = obj->userwidth;
+	}
+	
 	me->discard_noembed = 1;
     }
     else

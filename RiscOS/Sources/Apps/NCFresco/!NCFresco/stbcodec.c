@@ -64,13 +64,17 @@ static int recording = FALSE;
 
 static void send_action(fe_view v, int action)
 {
+#if 0
     be_item item = v && v->displaying ? backend_read_highlight(v->displaying, NULL) : NULL;
     if (item == NULL)
-	item = be_plugin_action_item_HELPERS;
-
+	item = be_plugin_action_item_ALL;
     STBDBG(("codec_event: v%p item %p action %x\n", v, item, action));
 
     backend_plugin_action(v ? v->displaying : NULL, item, action);
+#else
+    STBDBG(("codec_event: v%p action %x\n", v, action));
+    backend_plugin_action(NULL, be_plugin_action_item_HELPERS, action);
+#endif
 }
 
 void codec_event_handler(int event, fe_view v)

@@ -1004,19 +1004,16 @@ void frontend_fatal_error(os_error *e)
     if (e && (e->errnum &~ 0xff000000) != 0x288)
     {
         os_error er;
-        er.errnum = e->errnum;
-
-        sprintf(er.errmess,
-                msgs_lookup("fatal2:%s has suffered a fatal internal error (%s) and must exit immediately"),
-                program_title,
-                e->errmess);
 
 #if DEVELOPMENT
         usrtrc("fatal %x '%s'\n", e->errnum, e->errmess);
         usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
 #endif
 
-	wimp_reporterror(e, wimp_EOK, PROGRAM_NAME);
+        er.errnum = e->errnum;
+        sprintf(er.errmess, msgs_lookup("fatal2:"), e->errmess);
+	
+	_swix(Wimp_ReportError, _INR(0,5), &er, wimp_EOK | (1<<8), PROGRAM_NAME, NULL, NULL, 0);
         exit(0);
     }
 }

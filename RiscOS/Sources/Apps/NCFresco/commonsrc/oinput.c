@@ -84,6 +84,10 @@ static char *button_names[] =
     "opton", "opton1"
 };
 
+#ifdef STBWEB
+static int have_selected_sprites = -1;
+#endif
+
 /* ---------------------------------------------------------------------- */
 
 extern void translate_escaped_text(char *src, char *dest, int len);
@@ -258,22 +262,31 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     case rid_it_TEXT:
     case rid_it_PASSWD:
     {
-        antweb_doc_ensure_font( doc, WEBFONT_TTY );
+	int whichfont = WEBFONT_TTY;
+
+#if 0
+	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
+	     doc->scale_value < 100 )
+	{
+	    whichfont -= (1<<WEBFONT_SIZE_SHIFT);
+	}
+#endif
+        antweb_doc_ensure_font( doc, whichfont );
 
 	if (ii->ww.type == value_absunit)
 	    ti->width = (int)ii->ww.u.f;
 	else
 	{
 	    int n = ii->flags & rid_if_NUMBERS ? (ii->xsize == -1 ? DEFAULT_XSIZE : ii->xsize) : text_displayable_width(ii->xsize, doc);
-	    ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
+	    ti->width = webfonts[whichfont].space_width*n + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
 	}
 
-	ti->max_up = webfonts[WEBFONT_TTY].max_up + INPUT_TEXT_BORDER_Y;
-	ti->max_down = webfonts[WEBFONT_TTY].max_down + INPUT_TEXT_BORDER_Y;
+	ti->max_up = webfonts[whichfont].max_up + INPUT_TEXT_BORDER_Y;
+	ti->max_down = webfonts[whichfont].max_down + INPUT_TEXT_BORDER_Y;
 
 	if (ii->hh.type == value_absunit)
 	{
-	    int extra = (int)ii->hh.u.f - (webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down + 2*INPUT_TEXT_BORDER_Y);
+	    int extra = (int)ii->hh.u.f - (webfonts[whichfont].max_up + webfonts[whichfont].max_down + 2*INPUT_TEXT_BORDER_Y);
 	    ti->max_up += extra/2;
 	    ti->max_down += extra/2;
 	}
@@ -340,6 +353,10 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
     case rid_it_CHECK:
     case rid_it_RADIO:
+#ifdef STBWEB
+	if (have_selected_sprites == -1)
+	    have_selected_sprites = render_sprite_locate(button_names[ 0 + BUTTON_NAME_HIGHLIGHT ], NULL) != NULL;
+#endif
 	if (ii->src && ii->src_sel)
 	{
 	    antweb_doc_ensure_font( doc, WEBFONT_BUTTON );
@@ -451,6 +468,14 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_PASSWD:
     {
 	int has_caret;
+	int whichfont = WEBFONT_TTY;
+#if 0
+	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
+	     doc->scale_value < 100 )
+	{
+	    whichfont -= (1<<WEBFONT_SIZE_SHIFT);
+	}
+#endif
 	plotx = hpos + 10;
 
 	slen = strlen(ii->data.str);
@@ -463,9 +488,9 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    ii->base.colours.back != -1 ? ii->base.colours.back | render_colour_RGB :
 	    render_colour_WRITE;
 
-	if (fs->lf != webfonts[WEBFONT_TTY].handle)
+	if (fs->lf != webfonts[whichfont].handle)
 	{
-	    fs->lf = webfonts[WEBFONT_TTY].handle;
+	    fs->lf = webfonts[whichfont].handle;
 	    font_setfont(fs->lf);
 	}
 
@@ -486,7 +511,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 #ifdef STBWEB
 	if (ii->flags & rid_if_NUMBERS)
 	{
-	    int i, char_width = webfont_tty_width(1, TRUE); /* webfonts[WEBFONT_TTY].space_width; */
+	    int i, char_width = webfonts[whichfont].space_width;
 	    int n = ii->xsize != -1 ? ii->xsize : DEFAULT_XSIZE;
 	    int bg1 = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back | render_colour_RGB;
 
@@ -715,11 +740,10 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    /* try and draw a different sprite (suffix '1') for the highlighted version of the radio/check boxes */
 	    int index = (ii->tag == rid_it_RADIO ? BUTTON_NAME_RADIO : BUTTON_NAME_OPTION) + (ii->data.radio.tick ? BUTTON_NAME_ON : BUTTON_NAME_OFF);
 
-	    if (!selected ||
-		render_plot_icon(button_names[index + BUTTON_NAME_HIGHLIGHT], hpos + 4, bline - ti->max_down + 4) != NULL)
-	    {
+	    if (selected && have_selected_sprites)
+		render_plot_icon(button_names[index + BUTTON_NAME_HIGHLIGHT], hpos + 4, bline - ti->max_down + 4);
+	    else
 		render_plot_icon(button_names[index], hpos + ii->bw*2, bline - ti->max_down + ii->bw*2);
-	    }
 	}
 	break;
     }
@@ -1568,7 +1592,7 @@ void oinput_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
     rid_input_item *ii = ((rid_text_item_input *) ti)->input;
-    BOOL own = FALSE;
+    BOOL own_hl = FALSE;
 
     if (box)
 	memset(box, 0, sizeof(*box));
@@ -1585,7 +1609,7 @@ int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp
     case rid_it_SUBMIT:
     case rid_it_BUTTON:
     case rid_it_RESET:
-	own = (ii->data.button.im && ii->data.button.im_sel) ||
+	own_hl = (ii->data.button.im && ii->data.button.im_sel) ||
 	    ii->base.colours.select != -1 ||
 	    config_colours[render_colour_INPUT_S].word != config_colours[render_colour_INPUT_B].word;
 	break;
@@ -1594,23 +1618,16 @@ int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp
     case rid_it_RADIO:
     {
 #ifdef STBWEB
-	static int have_selected_sprites = -1;
-	if (have_selected_sprites != -1)
-	    own = !have_selected_sprites;
-	else
-	{
-	    have_selected_sprites = render_sprite_locate(button_names[ 0 + BUTTON_NAME_HIGHLIGHT ], NULL) != NULL;
-	    own = !have_selected_sprites;
-	}
+	own_hl = have_selected_sprites;
 #endif
 	break;
     }
 
     case rid_it_HIDDEN:
-	own = TRUE;
+	own_hl = TRUE;
 	break;
     }
-    return !own;
+    return !own_hl;
 }
 #else
 void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)

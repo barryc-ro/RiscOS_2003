@@ -116,7 +116,7 @@ extern void dbglist(void);
 /* -------------------------------------------------------------------------------- */
 
 #if DEBUG && defined(REMOTE_DEBUG)
-extern void *db_sess;
+extern void *rdebug_session(void);
 extern void rdebug_open(void);
 extern void rdebug_poll(void);
 #endif

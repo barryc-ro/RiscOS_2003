@@ -106,7 +106,7 @@ static void write_url_with_breaks(FILE *f, const char *url)
 	}
 	else
 	{
-	    if (ispunct(c) || count == 16)
+	    if (ispunct(c) || isspace(c) || count == 16)
 	    {
 		fputs("<WBR>", f);
 		count = 0;

@@ -19,7 +19,8 @@
 
 #include "debug/remote.h"
 
-void *db_sess = NULL;
+static void *db_sess = NULL;
+static BOOL suspended = FALSE;
 
 static void cleanup(void)
 {
@@ -85,6 +86,22 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 
 		handled = 1;
 	    }
+	    else if (strcasecomp(argv[1], "da") == 0)
+	    {
+		int area = -1;
+		do
+		{
+		    _swix(OS_DynamicArea, _INR(0,1) | _OUT(1), 3, area, &area);
+		    if (area != -1)
+		    {
+			int size;
+			char *name;
+			_swix(OS_DynamicArea, _INR(0,1) | _OUT(2) | _OUT(8), 2, area, &size, &name);
+			DBG(("da: size %10d name '%s'\n", size, name));
+		    }
+		}
+		while (area != -1);
+	    }
 	}
     }
     else if (strcasecomp(argv[0], "openurl") == 0)
@@ -92,6 +109,14 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	if (argc == 2)
 	{
 	    frontend_open_url(argv[1], NULL, NULL, NULL, 0);
+	    handled = 1;
+	}
+    }
+    else if (strcasecomp(argv[0], "suspend") == 0)
+    {
+	if (argc == 2)
+	{
+	    suspended = atoi(argv[1]) != 0;
 	    handled = 1;
 	}
     }
@@ -118,6 +143,11 @@ void rdebug_poll(void)
     debug_poll((debug_session *)db_sess);
 }
 
+void *rdebug_session(void)
+{
+    return suspended ? NULL : db_sess;
+}
+
 /* ----------------------------------------------------------------------------- */
 
 #else
@@ -129,6 +159,12 @@ void rdebug_open(void)
 
 void rdebug_poll(void)
 {
+}
+
+
+void *rdebug_session(void)
+{
+    return NULL;
 }
 
 #endif

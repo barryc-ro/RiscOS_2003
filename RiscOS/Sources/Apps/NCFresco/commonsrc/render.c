@@ -442,7 +442,7 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
 void *render_sprite_locate(const char *sprite, void **sptr_out)
 {
     sprite_id id;
-    sprite_ptr sph;
+    sprite_ptr sph = NULL;
     sprite_area *area;
     os_regset r;
     os_error *ep;
@@ -474,9 +474,8 @@ void *render_sprite_locate(const char *sprite, void **sptr_out)
     if (sptr_out)
 	*sptr_out = sph;
 
-    return area;
+    return sph ? area : NULL;
 }
-
 
 os_error *render_plot_icon(char *sprite, int x, int y)
 {
@@ -486,9 +485,16 @@ os_error *render_plot_icon(char *sprite, int x, int y)
     sprite_id id;
     os_error *ep;
 
+/*  DBG(("render_plot_icon: %s\n", sprite)); */
+    
     id.tag = sprite_id_addr;
     area = render_sprite_locate(sprite, &id.s.addr);
 
+/*  DBG(("render_plot_icon: area %p addr %p\n", area, id.s.addr)); */
+
+    if (area == NULL)
+	return NULL;
+    
     /* read the scaling factors */
     if ((ep = wimp_readpixtrans(area, &id, &facs, pt)) != NULL)
 	return ep;

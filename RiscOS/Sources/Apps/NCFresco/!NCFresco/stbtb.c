@@ -911,15 +911,33 @@ static tb_bar_descriptor bar_names[] =
     { "historyT", NULL,
       0, tb_bar_history_exit_fn,
       I_DIRECTION, fevent_HISTORY_SHOW_ALPHA, fevent_TOOLBAR_HISTORY,
-      FALSE, BAR_EXTRAS },
+      FALSE,
+#if BOCA
+      BAR_MAIN
+#else
+      BAR_EXTRAS
+#endif
+    },
     { "printT", NULL,
       0, 0,
       I_DIRECTION, fevent_PRINT_LETTER, fevent_TOOLBAR_PRINT,
-      FALSE, BAR_EXTRAS },
+      FALSE,
+#if BOCA
+      BAR_MAIN
+#else
+      BAR_EXTRAS
+#endif
+    },
     { "detailsT", NULL,
       tb_bar_details_entry_fn, tb_bar_details_exit_fn,
       I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_DETAILS,
-      FALSE, BAR_EXTRAS },
+      FALSE,
+#if BOCA
+      BAR_MAIN
+#else
+      BAR_EXTRAS
+#endif
+    },
     {  0 },
     {  0 },
     { "statusWn", "statusW",
@@ -2361,14 +2379,14 @@ static int codec_component[] =
     fevent_CODEC_RECORD
 };
 
-static int codecs_open = 0;
+/* static int codecs_open = 0; */
 
 void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 {
-    if (opening)
-	codecs_open++;
-    if (closing)
-	codecs_open--;
+/*     if (opening) */
+/* 	codecs_open++; */
+/*     if (closing) */
+/* 	codecs_open--; */
 
     if (opening && (bar_list == NULL || bar_list->num != BAR_CODEC))
 	tb_status_new(NULL, BAR_CODEC);
@@ -2381,7 +2399,7 @@ void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 	    setstate(bar_list->object_handle, codec_component[i], state == i);
 
 	/* we disable the exit fn here as the codec should already have stopped itself */
-	if (closing && codecs_open == 0)
+	if (closing/*  && codecs_open == 0 */)
 	    tb_status_unstack(FALSE);
     }
 }
@@ -2390,7 +2408,7 @@ void tb_codec_kill(void)
 {
     if (bar_list && bar_list->num == BAR_CODEC)
     {
-	codecs_open = 0;
+/* 	codecs_open = 0; */
 	tb_status_unstack(TRUE);
     }
 }

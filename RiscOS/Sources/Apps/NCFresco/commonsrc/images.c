@@ -898,8 +898,11 @@ static char *image_thread_end(image i)
 {
     char *res;
 
-    IMGDBG(("im%p: image_thread_end (status=%d)\n", i, i->tt->status));
+    IMGDBG(("im%p: image_thread_end (status=%d)\n", i, i->tt ? i->tt->status : -1));
 
+    if (!i->tt)
+	return "";
+    
     /* thread doesn't seem to die in two calls when called from image_flush or the like */
     _kernel_osbyte(0xE5, 0, 0);
     _kernel_escape_seen();

@@ -45,8 +45,9 @@ void fdbg(void *f, const char *fmts, ...)
 void vfdbg(void *f, const char *fmts, void *arglist)
 {
 #ifdef REMOTE_DEBUG
-    if (f == NULL && db_sess)
-	debug_vprintf(db_sess, fmts, arglist);
+    void *r;
+    if (f == NULL && (r = rdebug_session()) != 0)
+	debug_vprintf(r, fmts, arglist);
     else
 #endif
 	vfprintf(f ? f : stderr, fmts, arglist);

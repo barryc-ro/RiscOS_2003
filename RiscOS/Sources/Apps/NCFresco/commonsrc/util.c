@@ -906,6 +906,10 @@ void mmfclose(FILE *f)
 char *get_file_type_name(int ftype)
 {
     char buf[sizeof(FILETYPE_NAME_FMT)];
+
+    if (ftype == -1)
+	return NULL;
+
     sprintf(buf, FILETYPE_NAME_FMT, ftype & 0xfff);
     return getenv(buf);
 }
@@ -913,6 +917,10 @@ char *get_file_type_name(int ftype)
 char *get_plugin_type_name(int ftype)
 {
     char buf[sizeof(PLUGIN_NAME_FMT)], *s;
+
+    if (ftype == -1)
+	return NULL;
+
     sprintf(buf, PLUGIN_NAME_FMT, ftype & 0xfff);
     s = getenv(buf);
     if (!s)

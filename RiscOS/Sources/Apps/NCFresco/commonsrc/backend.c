@@ -501,7 +501,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
 	backend_activate_link(doc, ti, 0);
     }
     else
-#ifndef STBWEB
+#ifndef STBWEB			/* NCFresco handles the fragment link through open_url */
     if (!href)
     {
 	return NULL;
@@ -518,6 +518,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
 	char *dest;
 
 	base = url_join(BASE(doc), (char *)href);
+#ifndef STBWEB			/* NCFresco handles the fragment link through open_url */
 	if ( doc->url
 	     && *(doc->url)
 	     && strncmp( base, doc->url, strlen(doc->url) ) == 0
@@ -529,7 +530,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
             mm_free( base );
             return backend_goto_fragment( doc, 1+(char*)strchr(href,'#') );
         }
-
+#endif
 	if (query && *query)
 	{
 	    dest = url_join(base, (char *)query);
@@ -5190,11 +5191,15 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action)
     }
     else if (item == be_plugin_action_item_ALL)
     {
-	be_item ti = doc ? doc->rh->stream.text_list : NULL;
-	while (ti)
+	if (doc)
 	{
-	    be__plugin_abort_or_action(ti, action);
-	    ti = rid_scan(ti, SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_OBJECT);
+	    be_item ti = rid_scan(doc->rh->stream.text_list, SCAN_THIS | SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_OBJECT);
+	    while (ti)
+	    {
+		be__plugin_abort_or_action(ti, action);
+
+		ti = rid_scan(ti, SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_OBJECT);
+	    }
 	}
     }
     else

@@ -151,6 +151,7 @@ static key_list stb_function_keys[] =
     { akbd_Fn11,            fevent_STOP_LOADING+fevent_WINDOW,    key_list_CLICK },
     { akbd_PrintK,          fevent_PRINT,           key_list_CLICK },
 
+#if 0				/* removed as CM are using this map */
     { '1',                  fevent_STATUS_INFO_LEVEL+0, key_list_CLICK },
     { '2',                  fevent_STATUS_INFO_LEVEL+1, key_list_CLICK },
     { '3',                  fevent_STATUS_INFO_LEVEL+2, key_list_CLICK },
@@ -158,6 +159,7 @@ static key_list stb_function_keys[] =
     { '6',                  fevent_TOGGLE_FRAMES,       key_list_CLICK },
     { '8',                  fevent_TOGGLE_COLOURS,      key_list_CLICK },
     { '9',                  fevent_GLOBAL_TOGGLE_ANTI_TWITTER,  key_list_CLICK },
+#endif
     { 27,                   fevent_GLOBAL_QUIT },
 
     { ctrl('d'),            fevent_GLOBAL_SHOW_VERSION },

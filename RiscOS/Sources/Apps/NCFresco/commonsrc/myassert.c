@@ -7,7 +7,7 @@
 #include "menu.h"
 #include "interface.h"
 #include "myassert.h"
-
+#include "debug.h"
 
 extern void __ASSERT(int v, const char *expr, const char *file, int line)
 {
@@ -15,7 +15,7 @@ extern void __ASSERT(int v, const char *expr, const char *file, int line)
         {
                 os_error e;
 		fflush(stderr);
-		dbg("Assertion failure: %s, %s, %d\n", expr, file, line);
+		DBG(("Assertion failure: %s, %s, %d\n", expr, file, line));
 		fflush(stderr);
                 memset(&e, 0, sizeof(e));
                 sprintf(e.errmess, "Internal error: %s: line %d of %s", expr, line, file);
