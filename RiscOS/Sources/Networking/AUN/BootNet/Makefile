@@ -5,62 +5,16 @@
 # ***********************************
 # Date       Name    Description
 # ----       ----    -----------
-# 25-May-94  AMcC    Created.
-# 21-Feb-95  AMcC    Resources now copied to AUNMsgs 
+# 14-May-01  SNB     Recreated.
 #
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-TOKENISE = tokenise
-TOKENS   = Hdr:Tokens
-
-#
-# Program specific options:
-#
 COMPONENT = BootNet
-SOURCE    = s.Module
-TARGET    = rm.BootNet
-RESDIR    = ^.AUNMsgs.Resources.${Locale}.Resources.${COMPONENT}
 
-#
-# AUN build rules:
-#
-all: ${TARGET}
+TOKHELPSRC = ${TOKENSOURCE}
+HELPSRC    = HelpTexts
+ROM_SOURCE = Module.s
 
-#
-# RISC OS ROM build rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-resources:
-        @echo ${COMPONENT}: Resources in AUNMsgs
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} HelpTokens
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE} HelpTokens
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-HelpTokens: ${TOKENS} HelpTexts
-        ${TOKENISE} ${TOKENS} HelpTexts $@
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
