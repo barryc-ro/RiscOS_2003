@@ -106,16 +106,13 @@ local_clean:
 	@echo $(COMPONENT): cleaned local resources directory
 
 dirs:
-	$(MKDIR) $(OUTRESDIR).Resources.220.Misc
 	$(MKDIR) $(OUTRESDIR).Resources.300.Misc
 	$(MKDIR) $(OUTRESDIR).Resources.400.Misc
 	$(MKDIR) $(OUTCHOICEDIR)
 	$(MKDIR) $(OUTLIBDIR)
 	$(MKDIR) $(OUTUTILDIR)
-	$(MKDIR) $(OUTDESKDIR).220
 	$(MKDIR) $(OUTDESKDIR).300
 	$(MKDIR) $(OUTDESKDIR).400
-	$(MKDIR) $(OUTPREDIR).220
 	$(MKDIR) $(OUTPREDIR).300
 	$(MKDIR) $(OUTPREDIR).400
 	$(MKDIR) $(OUTVSNDIR)
