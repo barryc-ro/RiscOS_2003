@@ -46,9 +46,13 @@ typedef struct tftp_client {
 	unsigned int		connected:1;
 	unsigned int		unicast_only:1;
 	unsigned int		timeout_pending:1;
+	unsigned int		timing:1;
 	int			current_part_number;
-	unsigned int		rtt_estimate;
-	unsigned int		rtt_variance;
+	platform_time   	rtt_average_8;
+	platform_time   	rtt_deviation_4;
+	platform_time   	last_rtt;
+	platform_time   	rto;
+	platform_time		last_transmission;
 	platform_time		timeout;
 	platform_time		discard_time;
 } tftp_client;
@@ -122,11 +126,12 @@ struct sockaddr_in *multicaster_get_target(multicaster_object *mo)
 	return &mo->target;
 }
 
-static void multicaster_set_retransmit_timeout(multicaster_object *mo, tftp_client *client)
+static void multicaster_timeout_retransmitted(multicaster_object *mo, tftp_client *client)
 {
 	(void) mo;
-	client->timeout_pending = 1;
-	client->timeout = platform_time_current_time() + 1 * 100; /* XXX: !! */
+
+	client->timeout = platform_time_current_time() + (client->rto *= 2);
+	client->timing = 0;
 }
 
 static void multicaster_set_discard_timeout(multicaster_object *mo, tftp_client *client)
@@ -139,11 +144,74 @@ static void multicaster_set_discard_timeout(multicaster_object *mo, tftp_client 
 static void multicaster_cancel_timeouts(multicaster_object *mo, tftp_client *client)
 {
 	client->timeout_pending = 0;
+	client->timing = 0;
+}
+
+static void multicaster_initialise_rtt(multicaster_object *mo, tftp_client *client)
+{
+	client->rtt_average_8 = 0;
+	client->rtt_deviation_4 = 300;
+	client->rto = 300;
+	client->last_rtt = 0;
+	platform_log(LOG_DEBUG, "Initialising: RTT=%.1f, Var=%.1f, RTO=%d\n", client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto);
+}
+
+static void multicaster_start_rtt(multicaster_object *mo, tftp_client *client)
+{
+    	platform_time now = platform_time_current_time();
+
+	client->timing = 1;
+	client->timeout_pending = 1;
+	client->last_transmission = now;
+	client->timeout = now + client->rto;
 }
 
 static void multicaster_timeout_ack_received(multicaster_object *mo, tftp_client *client)
 {
+	platform_time now = platform_time_current_time();
+	platform_time rtt = now - client->last_transmission;
+
         multicaster_set_discard_timeout(mo, client);
+
+	if (client->timing)
+	{
+		platform_time_diff err;
+
+		platform_log(LOG_DEBUG, "Measured=%d, ", rtt);
+
+                /* Update our smoothed RTT estimators as per Van Jacobsen's
+                 * paper "Congestion Avoidance and Control (1988)"
+                 */
+
+    		err = rtt - (client->rtt_average_8 >> 3);
+
+    		client->rtt_average_8 += err;
+    		if (err < 0)
+    			err = -err;
+    		client->rtt_deviation_4 += err - (client->rtt_deviation_4 >> 2);
+        }
+
+        /* Always update our "last rtt", even if retransmitted. This is the time
+         * between the first transmission of a packet and the first received
+         * ACK. This allows us to recover if we end up with a drastically
+         * low estimate RTT, as we can only update our RTT estimate if
+         * we get an ACK before we retransmit.
+         */
+        client->last_rtt = rtt;
+
+        /* RTO is calculated as average + 4 times deviation */
+        client->rto = (client->rtt_average_8 >> 3) + client->rtt_deviation_4;
+
+        /* Clamp it a little - must allow a reasonable response time.
+         * Also, must be > 0 or exponential back-off doesn't work :)
+         */
+        if (client->rto <= client->last_rtt )
+                client->rto = client->last_rtt + 1;
+
+        client->timeout = now + client->rto;
+ 	client->last_transmission = now;
+        client->timing = 1;
+	platform_log(LOG_DEBUG, "RTT=%.1f, Var=%.1f, RTO=%d, Last RTT=%d\n", client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto, client->last_rtt);
 }
 
 
@@ -329,8 +397,8 @@ static void multicaster_activate_master_client(multicaster_object *mo)
 			mo->iov[1].iov_len = multicaster_format_oack(mo->buffer, 1);
 			mo->header.th_opcode = htons(OACK);
 			platform_transmit_to(mo, &mo->master_client->client);
+			multicaster_start_rtt(mo, mo->master_client);
 			multicaster_set_discard_timeout(mo, mo->master_client);
-			multicaster_set_retransmit_timeout(mo, mo->master_client);
 			break;
 		}
 	}
@@ -408,9 +476,7 @@ static void multicaster_init_client(multicaster_object *mo, tftp_client *c, stru
 	c->connected = 0;
 	c->unicast_only = 0;
 	c->timeout_pending = 0;
-	c->rtt_variance = 0;
-	c->rtt_estimate = 0;
-	multicaster_cancel_timeouts(mo, c);
+	multicaster_initialise_rtt(mo, c);
 }
 
 bmc_status multicaster_add_client(multicaster_object *mo, struct sockaddr_in *sin, int unicast)
@@ -467,6 +533,7 @@ bmc_status multicaster_add_client(multicaster_object *mo, struct sockaddr_in *si
 	}
 
 	if (client->unicast_only || mo->master_client == client) {
+		multicaster_start_rtt(mo, mo->master_client);
 		multicaster_set_discard_timeout(mo, client);
 	}
 
@@ -572,10 +639,6 @@ static void multicaster_send_part(multicaster_object *mo, int block, tftp_client
 				&client->client);
 			multicaster_remove_client(mo, client);
 		}
-		else {
-			/* Transmission went OK - reset retransmission timeout */
-			multicaster_set_retransmit_timeout(mo, client);
-		}
 	}
 	else {
 		/* Client has finished - if there are no clients left, the
@@ -631,6 +694,8 @@ void multicaster_process_ack(multicaster_object *mo, int block, struct sockaddr_
 		}
 		else if (!client->oack_acked) {
 			/* Client has acked our OACK */
+			multicaster_timeout_ack_received(mo, client);
+			multicaster_cancel_timeouts(mo, client);
 			client->oack_acked = 1;
 			if (mo->master_client == NULL) {
 				multicaster_activate_master_client(mo);
@@ -665,6 +730,8 @@ static int multicaster_process_timeout(multicaster_object *mo, int *pidx, platfo
 		}
 		else {
 			multicaster_send_part(mo, client->current_part_number - 1, client);
+			multicaster_timeout_retransmitted(mo, client);
+			platform_log(LOG_DEBUG, "Retransmitted: RTO=%d", client->rto);
 		}
 	}
 
