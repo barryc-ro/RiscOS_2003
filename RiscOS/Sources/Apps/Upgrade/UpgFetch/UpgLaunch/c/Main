@@ -1,0 +1,645 @@
+/**************************************************************/
+/* File:    Main.c                                            */
+/*          (C) 2001 Pace Micro Technology PLC                */
+/*          All rights reserved                               */
+/*                                                            */
+/* Purpose: To run.                                           */
+/*                                                            */
+/* Author:  Andrew Hodgkinson.                                */
+/*                                                            */
+/* History: 31-May-2001 (ADH): Created.                       */
+/**************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <time.h>
+
+#include <kernel.h>
+#include <swis.h>
+
+#include <tcpiplibs/dirent.h>
+#include <tboxlibs/wimp.h>
+
+#include "VersionNum"
+
+#include "Dirs.h"
+#include "Utils.h"
+
+#include "Main.h"
+
+/* Just in case... */
+
+#define Main_Replace_Timeout 300
+
+/* Local variables */
+
+static char * er     = NULL;
+
+static bool   tidy   = false;
+static char * launch = NULL;
+static bool   wipe   = false;
+static bool   unlock = false;
+
+/* Local functions */
+
+static void main_exit         (void);
+
+static void main_syntax       (void);
+static void main_error        (bool bye);
+
+static int  main_poll         (int * buf);
+
+static void main_handle_task  (char * task, bool abort);
+static void main_tidy_up      (char * launch, bool wipe, bool unlock);
+static int  main_unlock_files (const char * top_path, const char * current);
+
+/**************************************************************/
+/* main()                                                     */
+/*                                                            */
+/* That which runs before all others.                         */
+/**************************************************************/
+
+int main(int argc, char * argv[])
+{
+  _kernel_oserror * e;
+  unsigned int      child, me;
+  unsigned int      carg;
+  char            * dot;
+
+  char            * run     = NULL;
+  char            * name    = NULL;
+
+  char            * task    = NULL;
+  bool              abort   = false;
+
+  int               mlist[] = {
+                                Wimp_MTaskCloseDown,
+                                0
+                              };
+
+  /* Exit handler */
+
+  if (atexit(main_exit) != 0) exit(EXIT_FAILURE);
+
+  /* Name for the Task Manager */
+
+  name = malloc(sizeof(Module_ComponentName) + 10); /* 10 for space, &, 8 digits */
+
+  if (name == NULL)
+  {
+    er = "Out of memory.";
+    main_error(true);
+  }
+
+  sprintf(name, "%s &%08X", Module_ComponentName, (int) time(NULL));
+
+  /* Process the other arguments */
+
+  carg = 1;
+
+  while (carg < argc)
+  {
+    if (!utils_strcasecmp(argv[carg], "-run"))
+    {
+      if (carg + 1>= argc) main_syntax();
+
+      run = utils_strdup(argv[++carg]);
+      if (run != NULL) launch = utils_strdup(run);
+
+      if (run == NULL || launch == NULL)
+      {
+        er = "Out of memory.";
+        main_error(true);
+      }
+    }
+    else if (!utils_strcasecmp(argv[carg], "-unlock"))
+    {
+      unlock = true;
+      if (wipe == true) main_syntax();
+    }
+    else if (!utils_strcasecmp(argv[carg], "-wipe"))
+    {
+      wipe = true;
+      if (unlock == true) main_syntax();
+    }
+    else if (!utils_strcasecmp(argv[carg], "-task"))
+    {
+      if (carg + 2 >= argc) main_syntax();
+
+      task = utils_strdup(argv[++carg]);
+
+      if (task == NULL)
+      {
+        er = "Out of memory.";
+        main_error(true);
+      }
+
+      if (!utils_strcasecmp(argv[++carg], "abort")) abort = true;
+      else if (utils_strcasecmp(argv[carg], "replace") != 0) main_syntax();
+    }
+    else main_syntax();
+
+    carg++;
+  }
+
+  /* Do we at least have a run path? */
+
+  if (run == NULL) main_syntax();
+
+  /* Can we wipe / unlock from this? */
+
+  dot = strrchr(launch, '.');
+  if (dot != 0) *dot = '\0', dot = strrchr(launch, '.');
+
+  if (dot == 0)
+  {
+    er = "Run paths must be at least two levels deep for wiping or unlocking.";
+    main_error(true);
+  }
+
+  *dot = '\0';
+
+  /* Should we let the exit handler try to tidy up? */
+
+  if (launch && *launch && (wipe || unlock)) tidy = true;
+
+  /* Make sure we're started as a task ourselves first; don't */
+  /* want to miss any rapid task quit from a short-lived      */
+  /* multitasking application, for example.                   */
+
+  e = _swix(Wimp_Initialise,
+            _INR(0,3) | _OUT(1),
+
+            310,
+            0x4B534154,
+            name,
+            mlist,
+
+            &me);
+
+  if (e != NULL)
+  {
+    er = e->errmess;
+    main_error(true);
+  }
+
+  /* Besides, need to be a Wimp application if we need to quit */
+  /* an existing application...                                */
+
+  main_handle_task(task, abort);
+
+  /* OK, now launch the external application */
+
+  e = _swix(Wimp_StartTask,
+            _IN(0) | _OUT(0),
+
+            run,
+
+            &child);
+
+  if (e != NULL)
+  {
+    er = e->errmess;
+    main_error(false); /* Allow tidy-up afterwards */
+  }
+
+  /* Tidy up now, or wait? */
+
+  if (child == 0)
+  {
+    /* Finished; just let the exit handler tidy up */
+
+    exit(EXIT_SUCCESS);
+  }
+  else /* 'if (child == 0)' */
+  {
+    /* Wait */
+
+    int buf[64];
+    int reason;
+
+    do
+    {
+      reason = main_poll(buf);
+
+      /* What reason code? */
+
+      switch(reason)
+      {
+        case 17:
+        case 18:
+        case 19: /* Message received */
+        {
+          if (
+               buf[0] >= 20                  &&
+               buf[4] == Wimp_MTaskCloseDown &&
+               buf[1] == child
+             )
+          {
+            /* The child task just went; off we go */
+
+            exit(EXIT_SUCCESS);
+          }
+          else if (
+                    buf[0] >= 20 &&
+                    buf[4] == Wimp_MQuit
+                  )
+          {
+            /* Been told to quit ourselves! */
+
+            exit(EXIT_SUCCESS);
+          }
+        }
+        break;
+      }
+    }
+    while (true);
+
+  } /* 'else' if 'if (child == 0)' */
+
+  /* Should never reach here */
+
+  return EXIT_FAILURE;
+}
+
+/**************************************************************/
+/* main_exit()                                                */
+/*                                                            */
+/* Exit handler, called by registration with atexit().        */
+/**************************************************************/
+
+void main_exit(void)
+{
+  if (tidy && launch != NULL && *launch != NULL)
+  {
+    main_tidy_up(launch, wipe, unlock);
+  }
+
+  return;
+}
+
+/**************************************************************/
+/* main_poll()                                                */
+/*                                                            */
+/* Poll the Wimp.                                             */
+/*                                                            */
+/* Parameters: Pointer to a 64-word block.                    */
+/*                                                            */
+/* Returns:    Reason code from Wimp_Poll.                    */
+/**************************************************************/
+
+static int main_poll(int * buf)
+{
+  _kernel_oserror * e;
+  int               reason;
+
+  e = _swix(Wimp_Poll,
+            _INR(0,1) | _IN(3) | _OUT(0),
+
+            0,
+            buf,
+            0,
+
+            &reason);
+
+  if (e != NULL)
+  {
+    er = e->errmess;
+    main_error(true);
+  }
+
+  return reason;
+}
+
+/**************************************************************/
+/* main_syntax()                                              */
+/*                                                            */
+/* Print out utility syntax and exit with EXIT_FAILURE.       */
+/**************************************************************/
+
+static void main_syntax(void)
+{
+  const char * syntax = "Syntax: " Module_ComponentName " -run <filename> [-<unlock|wipe>] [-task <Wimp task name> <abort|replace>]";
+
+  if (
+       _swix(OS_PrettyPrint,
+             _INR(0,2),
+
+             syntax,
+             0,
+             0)
+
+       != NULL
+     )
+     printf("%s", syntax);
+
+  printf("\n");
+
+  exit(EXIT_FAILURE);
+}
+
+/**************************************************************/
+/* main_error()                                               */
+/*                                                            */
+/* Report an error with Wimp_ReportError offering only 'Quit' */
+/* and exit with EXIT_FAILURE if requested.                   */
+/*                                                            */
+/* Parameters: true to exit, else false.                      */
+/**************************************************************/
+
+static void main_error(bool bye)
+{
+  _kernel_oserror e;
+
+  _swix(Hourglass_Smash, 0);
+
+  if (er != NULL && *er != '\0')
+  {
+    e.errnum = 0;
+    StrNCpy0(e.errmess, er);
+
+    _swix(Wimp_ReportError,
+          _INR(0,5),
+
+          &e,
+          (1u<<8) | (3u<<9),
+          Module_ComponentName,
+          0,
+          0,
+          "Quit");
+  }
+
+  if (bye) exit(EXIT_FAILURE);
+}
+
+/**************************************************************/
+/* main_handle_task()                                         */
+/*                                                            */
+/* Deal with the -task argument from the command line.        */
+/*                                                            */
+/* Parameters: Pointer to the task name;                      */
+/*                                                            */
+/*             true to abort if this task is running, else    */
+/*             replace it.                                    */
+/*                                                            */
+/* Assumes:    If the task parameter is NULL or points to an  */
+/*             empty string, the function just returns.       */
+/**************************************************************/
+
+static void main_handle_task(char * task, bool abort)
+{
+  _kernel_oserror * e;
+  int               buf[64];
+  int               reason;
+  unsigned int      start, end;
+  unsigned int      running;
+
+  if (task == NULL || *task == '\0') return;
+
+  e = utils_get_task_handle(task, &running);
+
+  if (e != NULL)
+  {
+    er = e->errmess;
+    main_error(true);
+  }
+
+  if (running == 0) return;
+  if (abort) exit(EXIT_SUCCESS);
+
+  /* Tell it to quit */
+
+  buf[0] = 20;
+  buf[1] = 0;
+  buf[2] = 0;
+  buf[3] = 0;
+  buf[4] = Wimp_MQuit;
+
+  e = _swix(Wimp_SendMessage,
+            _INR(0,2),
+
+            17,
+            buf,
+            running);
+
+  if (e != NULL)
+  {
+    er = e->errmess;
+    main_error(true);
+  }
+
+  /* Wait for it to go */
+
+  _swix(OS_ReadMonotonicTime,
+        _OUT(0),
+
+        &start);
+  do
+  {
+    reason = main_poll(buf);
+
+    switch (reason)
+    {
+      case 17:
+      case 18:
+      case 19:
+      {
+        if (
+             buf[0] >= 20                  &&
+             buf[4] == Wimp_MTaskCloseDown &&
+             buf[1] == running
+           )
+        {
+          /* It's gone */
+
+          return;
+        }
+        else if (
+                  buf[0] >= 20 &&
+                  buf[4] == Wimp_MQuit
+                )
+        {
+          /* Been told to quit ourselves! */
+
+          exit(EXIT_SUCCESS);
+        }
+      }
+      break;
+
+      case 0:
+      {
+        unsigned int check;
+
+        /* There's a chance we missed it going, so keep checking for it */
+
+        e = utils_get_task_handle(task, &check);
+
+        if (e != NULL)
+        {
+          er = e->errmess;
+          main_error(true);
+        }
+
+        /*Gone? */
+
+        if (check == 0) return;
+      }
+      break;
+    }
+
+    _swix(OS_ReadMonotonicTime,
+          _OUT(0),
+
+          &end);
+  }
+  while (end - start < Main_Replace_Timeout);
+
+  /* Oh well... */
+
+  er = "Timed out waiting for existing copy of task to exit.";
+  main_error(true);
+}
+
+/**************************************************************/
+/* main_tidy_up()                                             */
+/*                                                            */
+/* Unlock or wipe files down the path given.                  */
+/*                                                            */
+/* Parameters: Path to unlock or wipe down;                   */
+/*                                                            */
+/*             true to wipe, else don't;                      */
+/*                                                            */
+/*             true to unlock, else don't.                    */
+/*                                                            */
+/* Assumes:    Since wiping uses F[orce], 'unlock' is ignored */
+/*             if 'wipe' is given.                            */
+/**************************************************************/
+
+static void main_tidy_up(char * launch, bool wipe, bool unlock)
+{
+  _kernel_oserror * e;
+
+  _swix(Hourglass_On, 0);
+
+  if (wipe)
+  {
+    e = _swix(OS_FSControl,
+              _INR(0,1) | _IN(3),
+
+              27,    /* 27 = Wipe objects */
+              launch,
+              3);    /* Flags; bits 0 and 1 set -> Recurse, Force */
+
+    if (e != NULL)
+    {
+      er = e->errmess;
+      main_error(false);
+      return;
+    }
+  }
+  else if (unlock)
+  {
+    if (main_unlock_files(launch, NULL) == EXIT_FAILURE)
+    {
+      main_error(false);
+      return;
+    }
+  }
+
+  _swix(Hourglass_Off, 0);
+
+  return;
+}
+
+/**************************************************************/
+/* main_unlock_files()                                        */
+/*                                                            */
+/* Go down the given path, setting permissions to "WR/".      */
+/*                                                            */
+/* Parameters: Pathname of the top level directory to look    */
+/*             inside;                                        */
+/*                                                            */
+/*             NULL for outer level call, else a pathname for */
+/*             inner recursion during directory scanning.     */
+/*                                                            */
+/* Returns:    EXIT_SUCCESS or EXIT_FAILURE as appropriate.   */
+/**************************************************************/
+
+static int main_unlock_files(const char * top_path, const char * current)
+{
+  /* Note the restrictions that using this static buffer places on the */
+  /* order we rely on calling ourselves recursively with respect to    */
+  /* directory contents.                                               */
+
+  _kernel_oserror * e;
+  static char       path[MAXNAMLEN * 2 + 1];
+
+  if (current == NULL) current = top_path;
+
+  /* Set permissions */
+
+  e = _swix(OS_File,
+            _INR(0,1) | _IN(5),
+
+            4,       /* Set attributes */
+            current,
+            3);      /* Bits 0 and 1 set -> "WR/" */
+
+  if (e != NULL)
+  {
+    er = e->errmess;
+    return EXIT_FAILURE;
+  }
+
+  if (dirs_is_dir(current))
+  {
+    DIR           * dir;
+    struct dirent * entry;
+    unsigned int    len;
+
+    /* This is a directory; open it and dive in */
+
+    dir = dirs_open_dir(current);
+
+    if (dir == NULL)
+    {
+      er = "Out of memory.";
+      return EXIT_FAILURE;
+    }
+
+    /* Write the basic path to the static buffer and remember */
+    /* the length of it.                                      */
+
+    StrNCpy0(path, current);
+    len = strlen(path);
+
+    /* Go round all entries */
+
+    while ((entry = dirs_read_dir(dir)) != NULL)
+    {
+      /* Will the full pathname of this item fit in the buffer? */
+
+      if (len + 2 + strlen(entry->d_name) > sizeof(path))
+      {
+        /* No - bail out */
+
+        er = "Pathname buffer overflow.";
+        return EXIT_FAILURE;
+      }
+      else
+      {
+        /* Yes - write the leaf in */
+
+        path[len] = '.';
+        strcpy(path + len + 1, entry->d_name);
+
+        if (main_unlock_files(top_path, path) == EXIT_FAILURE) return EXIT_FAILURE;
+      }
+    }
+
+    dirs_close_dir(dir);
+  }
+
+  return EXIT_SUCCESS;
+}
