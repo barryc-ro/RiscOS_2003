@@ -1,0 +1,424 @@
+#include "encoding.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "swis.h"
+
+#include "iso2022.h"
+
+struct ISO2022_Set
+{
+    UCS4 (*next_code)(struct ISO2022_Set *s, int c, int invoker, char *sync);
+};
+
+#define G0 0
+#define G1 1
+#define G2 2
+#define G3 3
+#define C0 4
+#define C1 5
+
+#define G94_ISO646_IRV 0x42
+#define C0_ISO646 0x40
+#define C1_ISO6429 0x43
+
+#define _GL 0
+#define _GR 1
+#define _CL 2
+#define _CR 3
+
+typedef struct simple_set
+{
+    ISO2022_Set s;
+    UCS2 *table;
+} simple_set;
+
+static UCS2 *table94[0x3F], *table96[0x3F], *table128[0x3F], *table94x94[0x3F];
+static UCS2 *tableC0[0x3F], *tableC1[0x3F];
+
+static UCS4 simple_double_next_code_94(ISO2022_Set *s, int c, int invoker, char *sync)
+{
+    simple_set *ss = (simple_set *) s;
+
+    if (c == 0x00 || c == 0x5F)
+    {
+        *sync = 0;
+        return c + 0x20;
+    }
+
+    if (!*sync)
+    {
+        *sync = c;
+        return NULL_UCS4;
+    }
+    else
+    {
+        UCS4 u = ss->table[94*(*sync-1) + c-1];
+        *sync = 0;
+        return u;
+    }
+}
+
+static UCS4 null_double_next_code(ISO2022_Set *s, int c, int invoker, char *sync)
+{
+    return 0xFFFD;
+}
+
+static UCS4 simple_next_code_94(ISO2022_Set *s, int c, int invoker, char *sync)
+{
+    if (c > 0 && c < 0x5F)
+        return ((simple_set *)s)->table[c];
+
+    if (invoker != _GL)
+        return 0xFFFD;
+
+    return c == 0 ? 0x20 : 0x7F;
+}
+
+static UCS4 simple_next_code_96(ISO2022_Set *s, int c, int invoker, char *sync)
+{
+    return ((simple_set *)s)->table[c];
+}
+
+static UCS4 null_next_code_94(ISO2022_Set *s, int c, int invoker, char *sync)
+{
+    if (invoker == _GL)
+    {
+        if (c == 0) return 0x20;
+        if (c == 0x5F) return 0x7F;
+    }
+
+    return 0xFFFD;
+}
+
+static UCS4 null_next_code_96(ISO2022_Set *s, int c, int invoker, char *sync)
+{
+    return 0xFFFD;
+}
+
+static void iso2022_ls(ISO2022_Encoding *i, int n)
+{
+    i->GL = i->Set[n];
+    i->GL_s = n;
+}
+
+static void iso2022_lsr(ISO2022_Encoding *i, int n)
+{
+    i->GR = i->Set[n];
+    i->GR_s = n;
+}
+
+static void iso2022_ss(ISO2022_Encoding *i, int n)
+{
+    if (i->ssarea)
+    {
+        i->tempset = 2;
+        i->oldset = i->GR;
+        i->GR = i->Set[n];
+    }
+    else
+    {
+        i->tempset = 1;
+        i->oldset = i->GL;
+        i->GL = i->Set[n];
+    }
+}
+
+UCS2 *iso2022_find_table(int type, int id)
+{
+    UCS2 **table;
+    const char *dir;
+    char fname[256];
+
+    switch (type)
+    {
+        case 32:
+          table = tableC0 + id - 0x40;
+          dir = "C0";
+          break;
+        case 32+1:
+          table = tableC1 + id - 0x40;
+          dir = "C1";
+          break;
+        case 94:
+          table = table94 + id - 0x40;
+          dir = "G94";
+          break;
+        case 96:
+          table = table96 + id - 0x40;
+          dir = "G96";
+          break;
+        case 94*94:
+          table = table94x94 + id - 0x40;
+          dir = "G94x94";
+          break;
+        default:
+          return NULL;
+    }
+
+    if (!*table)
+    {
+        sprintf(fname, "ISO2022.%s.%02X*", dir, id);
+        *table = encoding_load_map_file(fname);
+    }
+
+    return *table;
+}
+
+static void iso2022_select_set(ISO2022_Encoding *i, int setno, int type, int id)
+{
+    UCS2 *t;
+    ISO2022_Set *set;
+
+    t = iso2022_find_table(type, id);
+
+    set = calloc(sizeof(simple_set), 1);
+    if (!set) return;
+
+    if (type == 94*94)
+    {
+        if (t)
+            set->next_code = simple_double_next_code_94;
+        else
+            set->next_code = null_double_next_code;
+    }
+    else if (type == 94)
+    {
+        if (t)
+        {
+            set->next_code = simple_next_code_94;
+            t--;
+        }
+        else
+            set->next_code = null_next_code_94;
+    }
+    else
+    {
+        if (t)
+            set->next_code = simple_next_code_96;
+        else
+            set->next_code = null_next_code_96;
+    }
+
+    ((simple_set *)set)->table = t;
+
+    free(i->Set[setno]);
+    i->Set[setno] = set;
+
+    if (i->CL_s == setno) i->CL = i->Set[setno];
+    if (i->GL_s == setno) i->GL = i->Set[setno];
+    if (i->CR_s == setno) i->CR = i->Set[setno];
+    if (i->GR_s == setno) i->GR = i->Set[setno];
+}
+
+void iso2022_reset(Encoding *e)
+{
+    ISO2022_Encoding *i = (ISO2022_Encoding *) e;
+
+    memset(i->Set, 0, sizeof i->Set);
+    i->CL_s = C0;
+    i->GL_s = G0;
+    i->CR_s = C1;
+    i->GR_s = G1;
+
+    i->esc_disabled = 0;
+    i->esc_pending = i->esc_revision = 0;
+    i->tempset = 0;
+    i->oldset = NULL;
+    i->ssarea = 0;
+    i->sync[_GL] = i->sync[_GR] = 0;
+
+    iso2022_select_set(i, G0, 94, G94_ISO646_IRV);
+    iso2022_select_set(i, G1, 96, 0x7E);
+    iso2022_select_set(i, G2, 96, 0x7E);
+    iso2022_select_set(i, G3, 96, 0x7E);
+    iso2022_select_set(i, C0, 32, C0_ISO646);
+    iso2022_select_set(i, C1, 32+1, C1_ISO6429);
+}
+
+void iso2022_delete(Encoding *e)
+{
+    ISO2022_Encoding *i = (ISO2022_Encoding *) e;
+    free(i->Set[G0]);
+    free(i->Set[G1]);
+    free(i->Set[G2]);
+    free(i->Set[G3]);
+    free(i->Set[C0]);
+    free(i->Set[C1]);
+}
+
+void iso2022_disable_escapes(Encoding *i)
+{
+    ((ISO2022_Encoding *)i)->esc_disabled = 1;
+}
+
+static void iso2022_esc(ISO2022_Encoding *i)
+{
+    i->esc_pending = 1;
+    i->esc_multi = 0;
+    i->esc_inter1 = 0;
+    i->esc_inter2 = 0;
+    i->esc_inter3 = 0;
+}
+
+static UCS4 iso2022_esc_cont(ISO2022_Encoding *i, char c)
+{
+    if (c >= 0x7F || c < 0x20)
+    {
+        /* Illegal. Yuck */
+        i->esc_pending = 0;
+        return 0xFFFD;
+    }
+
+    if (c >= 0x20 && c <= 0x2F)
+    {
+        /* A continuation byte */
+        switch (c)
+        {
+            case 0x24:
+              if (!i->esc_inter1)
+              {
+                  i->esc_multi = 0x24;
+                  break;
+              }
+              /* else fall through */
+            default:
+              if (!i->esc_inter1)
+                 i->esc_inter1 = c;
+              else if (!i->esc_inter2)
+                 i->esc_inter2 = c;
+              break;
+        }
+        return NULL_UCS4;
+    }
+
+    /* The final byte (yippee) */
+    i->esc_pending = 0;
+
+    /* Special: ESC $ <c> == ESC $ ( <c> */
+    if (i->esc_multi && !i->esc_inter1)
+        i->esc_inter1 = 0x28;
+
+    if (!i->esc_multi && !i->esc_inter1)
+    {
+        /* A single character escape sequence */
+        if (c >= 0x40 && c <= 0x5F)
+            return i->Set[C1]->next_code(i->Set[C1], c - 0x40, _GL, NULL);
+        else if (c == 0x6E)
+            iso2022_ls(i, G2);
+        else if (c == 0x6F)
+            iso2022_ls(i, G3);
+        else if (c == 0x7E)
+            iso2022_lsr(i, G1);
+        else if (c == 0x7D)
+            iso2022_lsr(i, G2);
+        else if (c == 0x7C)
+            iso2022_lsr(i, G3);
+
+        return NULL_UCS4;
+    }
+
+    switch (i->esc_inter1)
+    {
+        case 0x20:
+          switch (c)
+          {
+            case 0x5C:
+              i->ssarea = 1;
+              break;
+          }
+          break;
+        case 0x21: iso2022_select_set(i, C0, 32, c); break;
+        case 0x22: iso2022_select_set(i, C1, 32+1, c); break;
+        case 0x25: /* Non-ISO2022 set */ break;
+        case 0x26: i->esc_revision = c; break;
+        case 0x28: iso2022_select_set(i, G0, i->esc_multi ? 94*94 : 94, c); break;
+        case 0x29: iso2022_select_set(i, G1, i->esc_multi ? 94*94 : 94, c); break;
+        case 0x2A: iso2022_select_set(i, G2, i->esc_multi ? 94*94 : 94, c); break;
+        case 0x2B: iso2022_select_set(i, G3, i->esc_multi ? 94*94 : 94, c); break;
+        case 0x2D: iso2022_select_set(i, G1, i->esc_multi ? 96*96 : 96, c); break;
+        case 0x2E: iso2022_select_set(i, G2, i->esc_multi ? 96*96 : 96, c); break;
+        case 0x2F: iso2022_select_set(i, G3, i->esc_multi ? 96*96 : 96, c); break;
+    }
+
+    return NULL_UCS4;
+}
+
+unsigned int iso2022_read(struct Encoding *e,
+                          int (*ucs_out)(void *, UCS4),
+                          const char *s,
+                          unsigned int n,
+                          void *handle)
+{
+    ISO2022_Encoding *i = (ISO2022_Encoding *) e;
+    unsigned int count;
+
+    for (count = n; count; count--)
+    {
+        char c = *s++;
+        UCS4 u;
+
+        if (i->esc_pending)
+            u = iso2022_esc_cont(i, c);
+        else if (c < 0x20)
+        {
+            i->sync[_GL] = i->sync[_GR] = 0;
+            u = i->CL->next_code(i->CL, c       , _CL, NULL);
+        }
+        else if (c < 0x80)
+        {
+            i->sync[_GR] = 0;
+            u = i->GL->next_code(i->GL, c - 0x20, _GL, i->sync + _GL);
+        }
+        else if (c < 0xA0)
+        {
+            i->sync[_GL] = i->sync[_GR] = 0;
+            u = i->CR->next_code(i->CR, c - 0x80, _CR, NULL);
+        }
+        else
+        {
+            i->sync[_GL] = 0;
+            u = i->GR->next_code(i->GR, c - 0xA0, _GR, i->sync + _GR);
+        }
+
+        switch (u)
+        {
+            case 0x1B: if (!i->esc_disabled) { iso2022_esc(i); continue; }
+                       break;
+            case 0x0F: if (!i->esc_disabled) { iso2022_ls(i, G0); continue; }
+                       break;
+            case 0x0E: if (!i->esc_disabled) { iso2022_ls(i, G1); continue; }
+                       break;
+            case 0x8E: if (!i->esc_disabled) { iso2022_ss(i, G2); continue; }
+                       break;
+            case 0x8F: if (!i->esc_disabled) { iso2022_ss(i, G3); continue; }
+                       break;
+        }
+
+        if (u != NULL_UCS4)
+        {
+            if (i->tempset)
+            {
+                if (i->tempset == 1)
+                    i->GL = i->oldset;
+                else
+                    i->GR = i->oldset;
+                i->tempset = 0;
+            }
+
+            if (ucs_out)
+                if (ucs_out(handle, u))
+                    break;
+        }
+    }
+
+    return n - count;
+}
+
+Encoding enc_iso2022 =
+{
+    iso2022_read,
+    iso2022_reset,
+    sizeof (ISO2022_Encoding) - sizeof(Encoding),
+    iso2022_delete
+};
