@@ -17,7 +17,7 @@ EXP_HDR = <cexport$dir>
 # Generic options:
 #
 AWK     = awk
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -110,6 +110,11 @@ rom: ${ROMTARGET}
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
+
+install: ${TARGET}
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
 
 install_rom: ${ROMTARGET}
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
