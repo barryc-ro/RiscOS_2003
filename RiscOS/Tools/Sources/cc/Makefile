@@ -12,8 +12,8 @@
 # Paths
 #
 VPATH   = @ arm cfe mip riscos util
-LIBDIR	= ${INSTDIR}.Library.Acorn
-INSTAPP    = ${INSTDIR}.Apps.!CC
+LIBDIR  = ${INSTDIR}.Library.Acorn
+INSTAPP = ${INSTDIR}.Apps.!CC
 #
 # Generic options:
 #
@@ -30,7 +30,7 @@ SQZ     = squeeze
 WIPE    = -wipe
 TIDYDESC= do perl Build:TidyDesc
 
-CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK} ${OPTIONS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -55,6 +55,14 @@ INCLUDES  = -Iriscos -IC:CLX -Iarm -Icfe -Imip -Iutil -Iccacorn -IC:
 DFLAGS    =
 
 #
+# Default procedure call standard flags
+#
+OPTIONS26 = -DPCS_DEFAULTS=0
+OPTIONS32 = -DPCS_DEFAULTS=PCS_CALLCHANGESPSR+PCS_FPE3
+
+OPTIONS  ?= ${OPTIONS26}
+
+#
 # Program specific options:
 #
 COMPONENT  = cc
@@ -69,7 +77,7 @@ INTERNALHEADERS =\
 OBJS= o.driver o.aaof o.asd o.asm o.gen o.mcdep o.peephole o.aetree o.bind \
     o.builtin o.cg o.codebuf o.compiler o.cse o.csescan o.sr o.flowgraf \
     o.jopprint o.misc o.regalloc o.regsets o.store o.lex o.pp o.sem o.simplify \
-    o.syn o.vargen o.version o.dde o.dem
+    o.syn o.vargen o.version o.dde
 
 HDRS=ccacorn.c.headers ccacorn.c.peeppat ccacorn.h.errors
 
@@ -174,10 +182,5 @@ install_dirs:
 ${TARGET}: ${OBJS} ${LIBS} ${HDRS} o._dirs
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
 	${SQZ} ${SQZFLAGS} $@
-
-# Static dependencies:
-
-o.dem: riscos.c.dem
-    ${CC} ${CCFLAGS} -Wd -o $@ riscos.c.dem
 
 # Dynamic dependencies:
