@@ -20,6 +20,7 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+STRIP   = -stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
@@ -57,15 +58,16 @@ install_rom: ${TARGETS}
 clean:
         ${RM} rm.BASIC64
         ${RM} rm.BASIC105
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
         @echo ${COMPONENT}: resource files copied
 
-rm.BASIC105: ModuleAB
-        ${AS} ${ASFLAGS} ModuleAB
+rm.BASIC105: s.ModuleAB
+        ${AS} ${ASFLAGS} s.ModuleAB
 
-rm.BASIC64: ModuleAB64
-        ${AS} ${ASFLAGS} ModuleAB64
+rm.BASIC64: s.ModuleAB64
+        ${AS} ${ASFLAGS} s.ModuleAB64
 
 # Dynamic dependencies:
