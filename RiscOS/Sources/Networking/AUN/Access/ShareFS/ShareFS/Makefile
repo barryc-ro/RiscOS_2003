@@ -58,9 +58,9 @@ C_ABSSYM  = RISCOSLIB:o.c_abssym
 FSLIB     = ^.fslib.o.fslib
 RMALIB    = ^.rmalib.o.rmalib
 TCPLIB	  = TCPIPLibs:o.socklibzm TCPIPLibs:o.inetlibzm
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 OBJS =\
- irqs.o\
  ShareFShdr.o\
  resourcefs.o\
  sharep.o\
@@ -110,11 +110,11 @@ clean:
         ${WIPE} map.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${RMALIB} ${FSLIB} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${RMALIB} ${FSLIB} ${TCPLIB} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${RMALIB} ${FSLIB} ${ROMCSTUBS} ${ASMUTILS}
+        ${LD} -o $@ -aof ${OBJS} ${RMALIB} ${FSLIB} ${TCPLIB} ${ROMCSTUBS} ${ASMUTILS}
 
-${RAM_MODULE}: ${OBJS} ${RMALIB} ${FSLIB} ${CLIB}
-        ${LD} -o $@ -rmf ${OBJS} ${RMALIB} ${FSLIB} ${TCPLIB} ${CLIB}
+${RAM_MODULE}: ${OBJS} ${RMALIB} ${FSLIB} ${CLIB} ${ASMUTILS}
+        ${LD} -o $@ -rmf ${OBJS} ${RMALIB} ${FSLIB} ${TCPLIB} ${CLIB} ${ASMUTILS}
 
 ${FSLIB}:
         dir ^.fslib; amu fslib.o; back
