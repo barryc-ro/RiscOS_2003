@@ -65,6 +65,14 @@ static void get_form_size(int *width, int *height)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+static BOOL should_we_display_url(const char *url)
+{
+    return url &&
+	strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0 &&
+	strncasecomp(url, "ncint:", sizeof("ncint:")-1) != 0 && 
+	strncasecomp(url, "file:/cache:", sizeof("file:/cache:")-1) != 0;
+}
+
 static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
     char *qlink, *qtitle;
@@ -86,9 +94,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	if (title)
 	    fprintf(f, msgs_lookup("version2"), title);
 
-	if (url &&
-	    strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0 &&
-	    strncasecomp(url, "ncint:", sizeof("ncint:")-1) != 0)
+	if (should_we_display_url(url))
 	    fprintf(f, msgs_lookup("version3"), url);
 
 	if ((s = backend_check_meta(doc, "last-modified")) != NULL)
@@ -109,14 +115,15 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 
     if (qlink)
     {
-	char *link = qlink;
+	char *link;
 
-	if (qlink &&
-	    (strncasecomp(qlink, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) == 0 ||
-	    strncasecomp(qlink, "ncint:", sizeof("ncint:")-1) == 0))
+	if (strncasecomp(qlink, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) == 0 ||
+	    strncasecomp(qlink, "ncint:", sizeof("ncint:")-1) == 0)
 	    link = extract_value(qlink, "url=");
+	else
+	    link = qlink;
 	
-	if (link)
+	if (should_we_display_url(link))
 	    fprintf(f, msgs_lookup("version3a"), link);
 
 	if (qtitle)

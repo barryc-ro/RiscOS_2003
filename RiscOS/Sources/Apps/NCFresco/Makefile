@@ -112,7 +112,7 @@ RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS)  -I..
 RISCOS_CFLAGS_DBG=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
 RISCOS_CFLAGS_REL=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
 
-RISCOS_CFLAGS=  $(RISCOS_CFLAGS_REL)
+RISCOS_CFLAGS=  $(RISCOS_CFLAGS_DBG)
 RISCOS_VPATH=	$(BASE_VPATH)
 RISCOS_OBJS=	$(BASE_OBJS)
 RISCOS_LIBS=	../RISC_OSLib/risc_oslib \
@@ -180,7 +180,7 @@ FRESCO_INCS=	-I../\!Fresco
 FRESCO_CFLAGS_REL=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=1
 FRESCO_CFLAGS_DBG=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=1
 
-FRESCO_CFLAGS=  $(FRESCO_CFLAGS_REL)
+FRESCO_CFLAGS=  $(FRESCO_CFLAGS_DBG)
 
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
@@ -219,7 +219,7 @@ BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
-BUILDERS_LIBS=	
+BUILDERS_LIBS=
 
 CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1  -DNEWGROW=1
 CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
@@ -257,7 +257,7 @@ PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
-PLOTCHECK_LIBS=
+PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
 
 
 RECONS_INCS=	-I../reconsparse -I../RISC_OSLib
@@ -754,8 +754,8 @@ NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine \"REMOVE_RAMLOAD_CHE
 
 NCFRESCO_ANT_LDFLAGS=
 NCFRESCO_BUILD_LDFLAGS=		-v
-NCFRESCO_ROM_LDFLAGS=	
-NCFRESCO_RAM_LDFLAGS=	
+NCFRESCO_ROM_LDFLAGS=
+NCFRESCO_RAM_LDFLAGS=
 
 NCFRESCO_VPATH=			../!NCFresco
 

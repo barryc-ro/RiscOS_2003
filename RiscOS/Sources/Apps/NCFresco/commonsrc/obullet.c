@@ -5,6 +5,9 @@
 /*
  * 21/3/96: SJM: obullet_size comes from indent.h, bullet character from BULLET_CHAR
  * 04/7/96: SJM: added list types
+
+Borris totally dislikes the use of ti->width for bullets!
+
  */
 
 /* Methods for bullet objects */
@@ -38,7 +41,6 @@
 /* You don't want to set this to 1 */
 #define DEBUG_DLCOMPACT 0
 
-#ifndef BUILDERS
 static void roman_one_five_ten(char *s, int n, char *oft)
 {
     char *p = s + strlen(s);
@@ -68,9 +70,9 @@ static void roman_one_five_ten(char *s, int n, char *oft)
 
     *p = 0;
 }
-#endif
 
-#ifndef BUILDERS
+
+
 static char *roman_numeral(int n, int caps)
 {
     /* Worst case 3888 = "MMMDCCCLXXXVIII" = 15 chars */
@@ -100,9 +102,9 @@ static char *roman_numeral(int n, int caps)
 
     return buffer;
 }
-#endif
 
-#ifndef BUILDERS
+
+
 static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 {
     static char buffer[24];		/* Big enough that it can be padded to a full word. */
@@ -180,7 +182,7 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 
     return buffer;
 }
-#endif
+
 
 void obullet_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
@@ -223,7 +225,7 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
-
+            
 #if !DEBUG_DLCOMPACT
     if ( tib->list_type == HTML_DL )
         return;

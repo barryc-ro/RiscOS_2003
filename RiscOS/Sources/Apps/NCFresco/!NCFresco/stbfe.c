@@ -4143,6 +4143,7 @@ static void fe_mode_changed(void)
 {
     int dx, dy;
     wimp_box old_screen, old_text;
+    char *s;
 
     dx = frontend_dx;
     dy = frontend_dy;
@@ -4156,6 +4157,10 @@ static void fe_mode_changed(void)
 
     STBDBG(( "modechange: old eig %d,%d new %d,%d\n", dx, dy, frontend_dx, frontend_dy));
     STBDBG(( "modechange: new size %d,%d\n", screen_box.x1, screen_box.y1));
+
+    /* reread gbf values */
+    if ((s = getenv("NCFresco$GBF")) != NULL)
+	gbf_flags = (int)strtoul(s, NULL, 10);
 
     /* Inform backend to recache fonts and colours */
     if ((frontend_dx != dx) || (frontend_dy != dy))
@@ -5105,7 +5110,7 @@ static BOOL fe_initialise(void)
 #endif
     atexit(&fe_tidyup);
 
-    gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED);
+    gbf_flags &= ~(GBF_FVPR);
     gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; /* this needs to not be defined to build a japanese version */
     
     if ((s = getenv("NCFresco$GBF")) != NULL)

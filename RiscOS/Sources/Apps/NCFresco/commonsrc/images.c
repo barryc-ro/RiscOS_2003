@@ -1061,7 +1061,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
     char *err = NULL;
     int rd;
 
-    rd = i->flags & image_flag_RENDERABLE;
+    rd = i->flags & (image_flag_RENDERABLE | image_flag_ERROR);
 
     being_fetched--;		/* I guess we should do this even if the handle is broken */
 
@@ -1153,7 +1153,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
     }
     else
     {
-	rd ^= i->flags & image_flag_RENDERABLE;
+	rd ^= i->flags & (image_flag_RENDERABLE | image_flag_ERROR);
 
 	if (i->cblist)
 	{
@@ -1310,10 +1310,10 @@ static void image_fetch_next(void)
 
 	    if (i->find_flags & image_find_flag_CHECK_EXPIRE) /* only check for expiry if image_find() was called with CHECK_EXPIRE on */
 		aflags |= access_CHECK_EXPIRE;
-	    if (i->find_flags & image_find_flag_NEED_SIZE)
-		aflags |= access_IMAGE;
 	    if (i->find_flags & image_find_flag_URGENT)
 		aflags |= access_MAX_PRIORITY;
+            else if (i->find_flags & image_find_flag_NEED_SIZE)
+		aflags |= access_IMAGE;
 
 	    i->flags &= ~(image_flag_WAITING | image_flag_TO_RELOAD);
 
@@ -1514,6 +1514,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->plotter = plotter_SPRITE;
 	i->find_flags = flags;
 
+#ifndef BUILDERS
 	if (sprite_readsize(i->their_area, &i->id, &info) == NULL)
 	{
 	    i->width = info.width;
@@ -1522,6 +1523,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	    fillin_scales(i, info.mode);
 	}
 	else
+#endif
 	{
 	    i->width = i->height = 34;
 	    fillin_scales(i, 27);
@@ -2230,10 +2232,11 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
     {
 	MemCheck_checking checking;
 
+	flexmem_noshift();
+
+#ifndef BUILDERS
 	if (i->plotter == plotter_SPRITE)
 	{
-	    flexmem_noshift();
-
 	    if (i->id.tag == sprite_id_name)
 		ep = sprite_select_rp(*(i->areap), &(i->id), (sprite_ptr *) &sph);
 	    else
@@ -2250,6 +2253,7 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
 	    MemCheck_RestoreChecking(checking);
 	}
 	else
+#endif
 	{
 	    ex = ey = 1;
 	    l2bpp = 5;
@@ -3220,7 +3224,7 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 
     if (i->plotter == plotter_UNKNOWN)
 	plotter = plotter_SPRITE;
-    
+
     flexmem_noshift();
 
     if (plotters[plotter].render)

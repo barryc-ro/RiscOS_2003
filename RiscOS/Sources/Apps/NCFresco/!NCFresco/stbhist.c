@@ -26,6 +26,8 @@
 
 #define N_RECENT_SITES  7
 
+#define MAX_SPECIFIER_SIZE	16
+
 /* --------------------------------------------------------------------------------------------- */
 
 typedef struct fe_global_history_item fe_global_history_item;
@@ -34,28 +36,18 @@ typedef struct fe_history_frame_item fe_history_frame_item;
 
 struct fe_history_frame_item
 {
-    char *url;	    	    	    /* url without fragment */
+    char specifier[MAX_SPECIFIER_SIZE];	/* which frame this is */
+    char *url;				/* url without fragment */
     int url_hash;
-    int x_scroll, y_scroll; 	    /* offsets */
+    int x_scroll, y_scroll;		/* offsets */
 };    
 
 struct fe_history_item
 {
     fe_history_item *next, *prev;
 
-    int n_frames;   	    	    /* n-1 are current, n is replacement */
-
-    union
-    {
-        struct
-        {
-	    char *title;
-        } noframes;
-        struct
-        {
-    	    char *frame_specifier;  	    /* frame top for replacement */
-    	} frames;
-    } data;
+    int n_frames;   	    	    /* number of frames appended */
+    char *title;		    /* if top frame then this is it's title */
 
     fe_history_frame_item frame[1];
 };
@@ -348,13 +340,13 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
 
     url_escape_to_file(hfi->url, f);
 
-    if (item->data.noframes.title)
+    if (item->title)
     {
         char *frag = strrchr(hfi->url, '#');
         if (frag)
-            fprintf(f, msgs_lookup("histRIb"), item->data.noframes.title, frag);
+            fprintf(f, msgs_lookup("histRIb"), item->title, frag);
         else
-            fprintf(f, msgs_lookup("histAIb"), item->data.noframes.title);
+            fprintf(f, msgs_lookup("histAIb"), item->title);
     }
     else
     {
@@ -441,13 +433,12 @@ static void fe_free_hist_item(fe_history_item *item)
 	int i;
 
 	for (i = 0; i < item->n_frames; i++)
+	{
+/* 	    mm_free(item->frame[i].specifier); */
 	    mm_free(item->frame[i].url);
+	}
 
-	if (item->n_frames > 1)
-	    mm_free(item->data.frames.frame_specifier);
-	else
-	    mm_free(item->data.noframes.title);
-
+	mm_free(item->title);
 	mm_free(item);
     }
 }
@@ -497,7 +488,7 @@ static fe_history_item *find_entry(const char *url, fe_history_item *start, int 
     return NULL;
 }
 
-static fe_history_item *fe_history_add(fe_view v, const char *url, const char *title)
+static fe_history_item *fe_history_add(fe_view v, const char *url, const char *title, const char *specifier)
 {
     fe_history_item *h;
 
@@ -510,9 +501,10 @@ static fe_history_item *fe_history_add(fe_view v, const char *url, const char *t
 
     h->frame[0].url = strdup(url);
     h->frame[0].url_hash = string_hash(url);
+    strcpy(h->frame[0].specifier, specifier);
 
     h->n_frames = 1;
-    h->data.noframes.title = strdup(title);
+    h->title = strdup(title);
 
     v->hist_count++;
     
@@ -630,7 +622,7 @@ os_error *fe_history_move(fe_view v, int direction)
     v->fetching_data.hist = dest;
     
     /* open the new url */
-    return frontend_open_url(dest->frame[0].url, v, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
+    return frontend_open_url(dest->frame[0].url, v, dest->frame[0].specifier, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
 }
 
 void fe_history_dispose(fe_view v)
@@ -657,13 +649,19 @@ void fe_history_dispose(fe_view v)
 
 int fe_history_visit(fe_view v, const char *url, const char *title)
 {
-    fe_history_item *item = v->hist_at;
+    fe_history_item *item;
+    fe_view top;
+    char specifier[MAX_SPECIFIER_SIZE];
 
     STBDBG(("history: visit '%s'\n", url));
 
     if (v->dont_add_to_history)
         return 0;
 
+    top = fe_find_top(v);
+    item = top->hist_at;
+    
+#if 0
     if (item)
     {
 	STBDBG(("history: prev '%s' current '%s' next '%s'\n", 
@@ -689,33 +687,98 @@ int fe_history_visit(fe_view v, const char *url, const char *title)
 	    return 0;
         }
     }
-
+#endif
+    
     /* otherwise add it to the history */
-    item = fe_history_add(v, url, title);
+    fe_frame_specifier_create(v, specifier, sizeof(specifier));
+
+    /* don't bother with title if not the top frame */
+    item = fe_history_add(top, url, v == top ? title : NULL, specifier);
     if (item)
-        v->hist_at = item;
+        top->hist_at = item;
 
     /* and to the global history if not a frame element */
-    if (v->parent == NULL)
+    if (v == top)
         fe_global_add(url, title);
 
     return 0;
+}
+
+static int locate_item(fe_history_item *hist, const char *specifier)
+{
+    fe_history_frame_item *hfi;
+    int i;
+    for (i = 0, hfi = hist->frame; i < hist->n_frames; i++, hfi++)
+	if (strcmp(specifier, hfi->specifier) == 0)
+	    return i;
+    return -1;
 }
 
 /* Store the current state of the view in 'hist_at' */
 
 void fe_history_update_current_state(fe_view v)
 {
-    if (v->children == NULL && v->parent == NULL && v->hist_at && v->w)
+    fe_view top;
+    fe_history_item *hist;
+    fe_history_frame_item *hfi;
+    wimp_wstate state;
+    int index;
+    char specifier[MAX_SPECIFIER_SIZE];
+
+    if (!v->dont_add_to_history && !v->open_transient)
+	return;
+    
+    /* don't bother storing state for frameset documents */
+    if (!v->w)
+	return;
+
+    top = fe_find_top(v);
+    hist = top->hist_at;
+    
+    if (!hist)
+	return;
+
+    /* see if we have values for this frame */
+    fe_frame_specifier_create(v, specifier, sizeof(specifier));
+    if ((index = locate_item(hist, specifier)) == -1)
     {
-	wimp_wstate state;
-	wimp_get_wind_state(v->w, &state);
+	/* if not then need to extend block */
+	char *url;
 
-	STBDBG(("history: %p '%s' write scroll pos %d\n", v->hist_at, v->hist_at->frame[0].url, state.o.box.y1));
+	/* resize block - *newh includes 1 frame */
+	hist = mm_realloc(hist, sizeof(*hist) + hist->n_frames * sizeof(hist->frame[0]));
 
-	v->hist_at->frame[0].x_scroll = state.o.x + v->margin.x0;
-	v->hist_at->frame[0].y_scroll = state.o.y + v->margin.y1;
+	/* update various forward and back pointers */
+	if (hist->prev)
+	    hist->prev->next = hist;
+	else
+	    v->first = hist;
+
+	if (hist->next)
+	    hist->next->prev = hist;
+	else
+	    v->last = hist;
+	
+	/* set new index and increment count */
+	index = hist->n_frames++;
+
+	hfi = &hist->frame[index];
+
+	/* write in initial type values */
+	backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
+	hfi->url = strdup(url);
+	memcpy(hfi->specifier, specifier, sizeof(specifier));
     }
+    else
+	hfi = &hist->frame[index];
+    
+    /* write updated values in */
+    wimp_get_wind_state(v->w, &state);
+
+    hfi->x_scroll = state.o.x + v->margin.x0;
+    hfi->y_scroll = state.o.y + v->margin.y1;
+
+    STBDBG(("history: %p '%s' write scroll pos %d\n", hist, hfi->url, state.o.y));
 }
 
 /* ---------------------------------------------------------------------------------------------*/

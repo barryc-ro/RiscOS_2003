@@ -252,7 +252,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     case rid_it_TEXT:
     case rid_it_PASSWD:
     {
-	int n = text_displayable_width(ii->xsize, doc);
+	int n = ii->flags & rid_if_NUMBERS ? ii->xsize : text_displayable_width(ii->xsize, doc);
 	ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
 	ti->max_up = webfonts[WEBFONT_TTY].max_up + INPUT_TEXT_BORDER_Y;
 	ti->max_down = webfonts[WEBFONT_TTY].max_down + INPUT_TEXT_BORDER_Y;
@@ -447,7 +447,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	if (ii->flags & rid_if_NUMBERS)
 	{
 	    int i, char_width = webfont_tty_width(1, TRUE); /* webfonts[WEBFONT_TTY].space_width; */
-	    int n = text_displayable_width(ii->xsize, doc);
+	    int n = ii->xsize;
 	    int bg1 = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back | render_colour_RGB;
 
 	    for (i = 0; i < n; i++)

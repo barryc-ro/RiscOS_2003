@@ -1671,8 +1671,12 @@ static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
     for (x = 0; ! any_uncons && x < max; x++)
 	any_uncons = (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0;
 
-    FMTDBG(("share_raw_abs_pct: %s, id %d, slop %d, any_uncons %d\n",
-	    HORIZVERT(horiz), table->idnum, slop, any_uncons));
+    FMTDBG(("share_raw_abs_pct: %s, id %d, slop %d, any_uncons %d, max %d\n",
+	    HORIZVERT(horiz), table->idnum, slop, any_uncons, max));
+
+    /* What else can we do? */
+    if (max == 0)
+	return;
 
     if (any_uncons)
     {

@@ -182,9 +182,8 @@ typedef SHORTISH rid_flag;
 #define MUST_BREAK(ti)	(((ti)->flag & (rid_flag_EXPLICIT_BREAK | rid_flag_LINE_BREAK)) != 0)
 #define DONT_BREAK(ti)	( ! MUST_BREAK(ti) && ((ti)->flag & (rid_flag_NO_BREAK)) != 0)
 
-#define NO_TEXT_ITEMS_THIS_LINE(pi)	( (pi)->first == NULL )
-#define NO_FLOATERS_THIS_LINE(pi)	( (pi)->floats == NULL ? TRUE : ( (pi)->floats->left == NULL && (pi)->floats->right == NULL ) )
-#define NEITHER_TEXT_FLOATERS(pi)	( NO_TEXT_ITEMS_THIS_LINE(pi) && NO_FLOATERS_THIS_LINE(pi) )
+#define TEXT_ITEMS_THIS_LINE(pi)	( (pi)->first != NULL )
+#define FLOATERS_THIS_LINE(pi)		( (pi)->floats == NULL ? FALSE : ( (pi)->floats->left != NULL || (pi)->floats->right != NULL ) )
 
 #define CLEARING_ITEM(ti) (((ti)->flag & rid_flag_CLEARING) != 0)
 
@@ -202,37 +201,51 @@ typedef SHORTISH rid_flag;
 #define MAGIC_LEADING_PENDING	-2
 
 typedef struct rid_pos_item {
-#if DEBUG && 0
-    MAGIC tag;
-    int line_number;
-#endif
-    struct rid_pos_item *next, *prev;   /* Next line down */
-    struct rid_text_stream *st; /* Parent */
-    int top;                    /* The vertical starting position of the line */
-    SHORTISH left_margin;	/* Space to the left of the items */
-    SHORTISH leading;		/* Inter-word leading used in justified text */
-    int max_up;			/* The height of the tallest riser - used to find the base line. */
-    int max_down;		/* The depth of the lowest decender - I guess we could just use the next line. */
-    struct rid_text_item *first; /* The first item on the line */
-    struct rid_floats_link *floats; /* Non-null if either end of the line has any floats */
+    struct rid_pos_item *	prev;		/* Line before this line */
+    struct rid_pos_item *	next;		/* Line after this line  */
+    struct rid_text_stream *	st; 		/* Parent */
+    int				top; 		/* the vertical starting position of the line */
+    SHORTISH			left_margin; 	/* Space to the left of the text items */
+    SHORTISH			leading; 	/* Inter-word leading used in justified text */
+    int				max_up;		/* the height of the tallest riser - used to find the base line. */
+    int				max_down; 	/* The depth of the lowest decender - I guess we could just use the next line. */
+    struct rid_text_item *	first; 		/* The first item on the line */
+    struct rid_floats_link *	floats; 	/* Non-null if either end of the line has any floats */
 } rid_pos_item;
 
-typedef struct rid_float_item {
-    struct rid_text_item *ti;	/* The item that is floating */
-    struct rid_pos_item *pi;	/* The FIRST line that it floats on */
-    int height;			/* The height of the floating object */
-    int left;			/* Left X for starting point */
-    struct rid_float_item *next;
+/* Note that one can have overhangs. If F is float, T text and E
+   empty, this is quite possible:
+ 
+   FFT
+   EFT
+
+   This means that just adding up the floating images on a line with
+   floating items does not necessarily get the right answer. One has
+   to take the rightmost floating item's entry margin plus its width.  */
+typedef struct rid_float_item 
+{
+    struct rid_float_item *	next;	/* next L/R float item */
+    struct rid_text_item *	ti;	/* The item that is floating */
+    struct rid_pos_item *	pi;	/* The FIRST line that it floats on */
+    int				height;	/* The height of the floating object */
+    int				height_left;
+    int				entry_margin;
 } rid_float_item;
 
+/* Now used to hold various state during formatting as well. If there
+   are no float items, then discarded after line has been finished. If
+   there are float items, then all retained and we have a bit of
+   wastage. Should be tolerable though. Each line can have its own set
+   of left and right margins - the left margin is stored in the pos,
+   the right margin here. */
 typedef struct rid_floats_link {
     struct rid_float_item *	left; /* going rightwards */
     struct rid_float_item *	right; /* going leftwards */
-    int				left_margin;
     int				right_margin;
 } rid_floats_link;
 
-/* This is just a hold-all used during formatting */
+/* This is just a hold-all used during formatting - only for old
+   formatter. */
 typedef struct {
     struct rid_text_item *ti;	/* Text item to float */
     struct rid_float_item *fi;	/* Float item when building list */
@@ -342,7 +355,7 @@ typedef int rid_image_flags;
 #define rid_image_flag_ABOT     0x04
 #define rid_image_flag_ABSALIGN 0x08
 #define rid_image_flag_REAL     0x10 /* We are displaying the real image (not a dummy) */
-/* #define rid_image_flag_PERCENT  0x20 */ /* size is a percent value not pixels */
+/*#define rid_image_flag_PERCENT  0x20 */ /* size is a percent value not pixels */
 
 typedef struct rid_input_item {
     struct rid_form_element base;

@@ -196,6 +196,7 @@ char *access_schemes[] = {
     "file",
 #ifndef FILEONLY
     "http",
+    "https",            /* pdh: added this */
     "gopher",
     "ftp",
     "icontype",
@@ -203,10 +204,6 @@ char *access_schemes[] = {
 
     NULL
     };
-
-#ifdef STBWEB
-http_header_item *last_http_headers = NULL;
-#endif
 
 /***************************************************************************/
 
@@ -876,10 +873,9 @@ static os_error *access_http_fetch_start(access_handle d)
 	{
 	    ACCDBGN(( " %s: %s\n", h->key, h->value));
 	}
-        httpo.in.flags &= ~http_open_flags_IMAGE;
-    }    
+    }
 #endif
-    
+
     ep = os_swix(HTTP_Open, (os_regset *) &httpo);
 
     ACCDBG(("HTTP_Open returned %p\n", ep ));
@@ -1168,10 +1164,6 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     /* The http close does not need to delete the file as we have already if it was removed from the cache */
     access_http_close(d->transport_handle, http_close_DELETE_BODY );
 
-#ifdef STBWEB
-    last_http_headers = si->out.headers;
-#endif
-
     /* What? A bug, in some Netscape software? Surely not.
      * If we've got an error, but we were in a server-push situation and
      * the previous part finished fine, kid ourselves that the previous part
@@ -1188,10 +1180,6 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
 	cache_it = d->complete(d->h, si->out.status, si->out.status == status_COMPLETED_FILE ? cfile : NULL, d->url);
     else
 	cache_it = 0;
-
-#ifdef STBWEB
-    last_http_headers = NULL;
-#endif
 
     access_done_flag = 1;
 
@@ -1516,8 +1504,11 @@ static void access_http_fetch_alarm(int at, void *h)
         /* pdh: removed the rc=2xx condition, 'cos long 404 pages weren't
          * being displayed. (e.g. www.infoseek.com, all of whose pages are
          * 404 in some kind of lumpen attempt at cache evasion)
+         *
+         * pdh: me again, reinstated condition (it meant bits of 302 redirect
+         * pages turned up in the main document) but rephrased it as rc != 3xx
          */
-	int readable = d->ft_is_set; /* && ((si.out.rc / 100) == 2); */
+	int readable = d->ft_is_set && ((si.out.rc / 100) != 3);
 
         ACCDBG(("Calling progress function (st=%d data=%d/%d rd=%d ft=%d)\n",
                 si.out.status, si.out.data_so_far, si.out.data_size, readable,
@@ -3494,6 +3485,21 @@ os_error *access_abort(access_handle d)
 
     return NULL;
 }
+
+void *access_get_headers(access_handle d)
+{
+    http_status_args si;
+
+    if (!d)
+	return NULL;
+    
+    si.in.handle = d->transport_handle;
+    if (os_swix(HTTP_Status, (os_regset *) &si) != NULL)
+	return NULL;
+
+    return si.out.headers;
+}
+
 
 /* wrappers for exporting cache functions */
 

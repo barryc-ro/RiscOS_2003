@@ -110,13 +110,13 @@ static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, con
 
     /* SJM: 4/3/96: remove check for whether we know about plugin or not */
     ftype = classid_ftype != -1 ? classid_ftype : data_ftype;
-#if 0
+#if 1
     if (ftype == -1)		/* Unknonw mime type or extension */
 	return NULL;
 #endif
 				/* Known type but no plugin present */
     objtype = objects_type_test(ftype);
-#if 0
+#if 1
     if (objtype == rid_object_type_UNKNOWN)
 	return NULL;
 #endif

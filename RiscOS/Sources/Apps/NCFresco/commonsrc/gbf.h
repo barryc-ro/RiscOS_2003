@@ -20,6 +20,7 @@
 #define GBF_NEW_FORMATTER		0x00000040
 #define GBF_AUTOFIT			0x00000080
 #define GBF_NETSCAPE_OVERLAPS		0x00000100 /* DAF: At your own peril! */
+#define GBF_HARD_TABLES			0x00000200
 
 extern int gbf_flags;
 extern int gbf_active(int gbf);

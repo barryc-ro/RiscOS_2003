@@ -1160,6 +1160,9 @@ static void be_update_image_info(be_doc doc)
 			     doc->im_fetched, doc->im_fetching, doc->im_unfetched,
 			     doc->im_error, doc->im_so_far, doc->im_in_transit);
     }
+
+/*     if ( doc->im_fetching == 0 && doc->ah == 0 && doc->ph == 0 ) */
+/*         fvpr_progress_stream_flush( &doc->rh->stream ); */
 }
 
 os_error *backend_screen_changed(int flags)
@@ -1190,7 +1193,7 @@ static void be_view_redraw(antweb_doc *doc, wimp_box *box)
        */
 /*
 #ifndef BUILDERS
-    fvpr_progress_stream(&doc->rh->stream);
+    fvpr_proess_stream(&doc->rh->stream);
 #endif
 */
 #if USE_MARGINS
@@ -2842,7 +2845,7 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 	    fmt.table_proc = &rid_table_share_width;
 	    fmt.text_data = rh->texts.data;
 	    fmt.scale_value = scale_value;
-	    
+
 	    be_formater_loop_core(rh, st, ti, &fmt, rid_fmt_BUILD_POS);
 	}
 
@@ -2855,7 +2858,7 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 }
 
 
-os_error *antweb_document_format(antweb_doc *doc, int user_width)
+static os_error *antweb_document_format_no_fvpr(antweb_doc *doc, int user_width)
 {
     rid_text_item *ti;
 
@@ -2882,7 +2885,7 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
 
     be_formater_loop(doc, doc->rh, ti, doc->scale_value);
 
-    fvpr_progress_stream(&doc->rh->stream);
+/*     fvpr_progress_stream(&doc->rh->stream); */
 
     objects_check_movement(doc);
 #ifndef BUILDERS
@@ -2914,6 +2917,14 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
     fprintf(stderr, "margin left=%d, top=%d\n", doc->rh->margin.left, doc->rh->margin.top);
 #endif
 
+    return NULL;
+}
+
+os_error *antweb_document_format(antweb_doc *doc, int user_width)
+{
+    antweb_document_format_no_fvpr( doc, user_width );
+    /* pdh: always returns NULL (sigh) */
+    fvpr_progress_stream( &doc->rh->stream );
     return NULL;
 }
 
@@ -3037,7 +3048,10 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
     bb.y0 = doc->rh->stream.height;
 
     if (doc->parent && (doc->flags & doc_flag_DISPLAYING))
+    {
+        DICDBG(("docrt: redrawing view from %d to %d\n", bb.y0, bb.y1 ));
 	be_view_redraw(doc, &bb);
+    }
 }
 
 /*
@@ -3230,6 +3244,8 @@ static void be_update_image_size(antweb_doc *doc, void *i)
     the format operation.
 
 */
+/* pdh: F/X: sacrifices goat before attempting to debug this function
+ */
 
 
 void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
@@ -3292,8 +3308,9 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* SJM: the above is not good enough with floating images around */
 	pi = clonedposlist;
 
-	first_ti = pi->first;		/* This is the first displayed item in the view */
-	line_top = pi->top;
+        first_ti = pi->first;
+
+ 	line_top = pi->top;
 
 	ti = doc->rh->stream.text_list;
 
@@ -3309,6 +3326,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	    if (object_table[ti->tag].imh != NULL && (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE) == i)
 	    {
 		int ow, omu, omd;
+		BOOL fvpr = FALSE;
 
 		ow = ti->width;
 		omu = ti->max_up;
@@ -3316,7 +3334,20 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 		(object_table[ti->tag].size)(ti, doc->rh, doc);
 
-		if (ow != ti->width || omu != ti->max_up || omd != ti->max_down)
+		/* pdh: Test for same size not good enough, as an image may
+		 * go from being *maybe* 68x68 to *definitely* 68x68 and thus
+		 * will not have been fvpr'd. We must test for not being
+		 * fvpr'd as well.
+		 *     Good job the final image on gi/~dean *is* 68x68 or I'd
+		 * not have spotted this!
+		 */
+		if ( gbf_active( GBF_FVPR )
+		     && !(ti->flag & rid_flag_FVPR) )
+		    fvpr = TRUE;
+
+		if ( ( ow != ti->width || omu != ti->max_up
+		       || omd != ti->max_down )
+		     || fvpr )
 		{
 		    rid_text_item *outeritem = rid_outermost_item(ti);
 
@@ -3360,10 +3391,11 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	int old_height;
 	int net_shift, shift_pending;
 	int top_of_zone;
-	int is_shift_pending;
+	int is_shift_pending = FALSE;
 	rid_pos_item *opi;
 	int new_bottom;
 	wimp_box box;
+	int fvprstatus = 0;   /* 1 = fvpr has changed 2 = fvpr changed above */
 
 	/* If we have the caret, hide it for the moment */
 	if (frontend_view_has_caret(doc->parent))
@@ -3379,10 +3411,15 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 	DICDBG(("About to reformat\n"));
 
-	antweb_document_format(doc, doc->rh->stream.fwidth);
+	antweb_document_format_no_fvpr(doc, doc->rh->stream.fwidth);
 
         /* pdh: added this */
-        fvpr_progress_stream( &doc->rh->stream );
+        if ( fvpr_progress_stream( &doc->rh->stream ) )
+        {
+            changed = 7;
+            fvprstatus = 1;
+            DICDBG(("Fvpr has changed\n"));
+        }
 
 	DICDBG(("Reformat done\n"));
 
@@ -3399,14 +3436,15 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	if (changed & 3)
 	{
 	    net_shift = 0;
-	    is_shift_pending = TRUE;
 	    shift_pending = first_ti->line->top - line_top;
 	    top_of_zone = first_ti->line->top; /* Always in new format coordinates */
+
+
+            is_shift_pending = TRUE;
 
 	    if (shift_pending != 0)
 	    {
 		DICDBG(("Shift = %d\n", shift_pending));
-
 #if USE_MARGINS
 		frontend_view_ensure_visable(doc->parent, -1, top + shift_pending + doc->margin.y1, bottom + shift_pending + doc->margin.y1);
 #else
@@ -3493,6 +3531,15 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 		DICDBG(("Line reuse = %d\n", reuse));
 
+		if ( fvprstatus == 1 && !reuse )
+		{
+		    /* We must give up, we've not rendered any lines below here
+		     */
+		    DICDBG(("We've not rendered any lines below here\n"));
+		    is_shift_pending = FALSE;
+		    break;
+		}
+
 		/* 	if the line is reusable: */
 		if (reuse)
 		{
@@ -3505,9 +3552,11 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 			box.y1 = top_of_zone;
 			box.y0 = opi->first->line->top;
 
-			DICDBG(("Force redraw from %d to %d\n", box.y1, box.y0));
+                        /* pdh: do we want this? */
+			DICDBG(("Force redraw %d..%d\n", box.y1, box.y0));
 
 			be_view_redraw(doc, &box);
+			/* */
 			/*	set shift pending to shift needed for this line minus net shift so far */
 			top_of_zone = opi->first->line->top;
 			shift_pending = (opi->first->line->top - opi->top) - net_shift;
@@ -3515,6 +3564,15 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 			DICDBG(("Set shift of %d pending from %d down\n", shift_pending, top_of_zone));
 
+		    }
+		    /* pdh: FIXME: commenting this back in makes it redraw
+		     * less, but some pages, e.g. ant.ant.co.uk, don't fully
+		     * appear. Sacrificed wrong sort of goat I expect.
+		     */
+		    else
+		    {
+		        if ( shift_pending == 0 && net_shift == 0 )
+		            top_of_zone = opi->first->line->top;
 		    }
 		}
 		/* 	if the line is not reusable: */
@@ -3551,7 +3609,6 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 	    DICDBG(("Finished scanning viable range\n"));
 
-	    /* if shift pending: */
 	    if (is_shift_pending)
 	    {
 		if (shift_pending)
@@ -3566,7 +3623,6 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 		    be_view_block_move(doc, &box, box.x0, box.y0 + shift_pending );
 		}
 	    }
-	    /* else: */
 	    else
 	    {
 		/* 	redraw from top of dirty to bottom of view */
@@ -4132,6 +4188,29 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 	}
     }
 
+#ifndef BUILDERS
+    /* can't put this code in complete as http_close will have been called */
+    if (status == status_GETTING_BODY && doc->rh && (doc->flags & doc_flag_HAD_HEADERS) == 0)
+    {
+	http_header_item *list = access_get_headers(doc->ah);
+
+	BENDBG(( "doc%p: add meta ah %p list %p\n", doc, doc->ah, list));
+
+	for (; list; list = list->next)
+	{
+	    rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
+
+	    BENDBG(( "doc%p: add meta rh %p list %p\n", doc, doc->rh, list));
+
+	    m->httpequiv = strdup(list->key);
+	    m->content = strdup(list->value);
+
+	    rid_meta_connect(doc->rh, m);
+	}
+	doc->flags |= doc_flag_HAD_HEADERS;
+    }
+#endif
+
     doc->lstatus = status;
     doc->lbytes = so_far;
 
@@ -4208,30 +4287,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	return 0;
     }
 
-#if 0
-    /* very grubby way of passing information from access.c - to be removed when possible */
-    {
-	extern http_header_item *last_http_headers;
-	http_header_item *list;
-	for (list = last_http_headers; list; list = list->next)
-	{
-	    rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
-
-	    BENDBG(( "doc_complete: add meta rh %p list %p\n", doc->rh, list));
-
-	    m->httpequiv = strdup(list->key);
-	    m->content = strdup(list->value);
-
-	    rid_meta_connect(doc->rh, m);
-	}
-    }
-#endif
-
     /* pdh: @@@@ FIXME
      * This doesn't belong here (there may be images arriving) but I can't
      * see some pages without it!
      */
-    fvpr_progress_stream_flush( &doc->rh->stream );
+    if ( doc->im_fetching == 0 )
+        fvpr_progress_stream_flush( &doc->rh->stream );
 
     doc->cfile = strdup(cfile);
     if (doc->url == NULL)
@@ -4739,6 +4800,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
             return m->content;
     }
 
+    /* when document is loaded from cache and these headers aren't available then reconstruct them from cache data */
     if (strcasecomp(name, "expires") == 0)
     {
 	unsigned expires = UINT_MAX;

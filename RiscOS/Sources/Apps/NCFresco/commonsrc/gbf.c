@@ -11,13 +11,14 @@
 #include "htmlparser.h"
 
 int gbf_flags =	( GBF_TABLES_UNEXPECTED * 0 ) +
-		( GBF_FVPR * 0 ) +
+		( GBF_FVPR * 1 ) +
 		( GBF_GUESS_ELEMENTS * 0 ) +
 		( GBF_GUESS_ATTRIBUTES * 1 ) +
 		( GBF_GUESS_ENUMERATIONS * 1 ) +
 		( GBF_NEW_FORMATTER * 1 ) +
 		( GBF_AUTOFIT * 1 ) +
-		( GBF_NETSCAPE_OVERLAPS * 0 )
+		( GBF_NETSCAPE_OVERLAPS * 0 ) +
+		( GBF_HARD_TABLES * 0 )
 ;
 
 extern int gbf_active(int gbf)

@@ -1225,6 +1225,8 @@ extern void text_item_push_hr(HTMLCTX *me, VALUE *align, VALUE *noshade, VALUE *
     rid_text_item_hr *item;
     rid_text_item *ti;
 
+    /* This implies LINE_BREAK overrides NO_BREAK. Don't forget this
+       when altering the formatter! */
     if ( (ti = me->rh->curstream->text_last) != NULL )
 	ti->flag |= rid_flag_LINE_BREAK;
 

@@ -6,8 +6,6 @@
 
 *****************************************************************************/
 
-#define V2	0
-
 #define FORMAT_PRIVATE_BITS
 
 #include <limits.h>
@@ -29,210 +27,39 @@
 #define NOTWRITTEN	ASSERT(!"FACILITY NOT YET IMPLEMENTED")
 #endif
 
-#define pbreak_maybe	generic_maybe
-#define pbreak_must	generic_must
-#define pbreak_dont	generic_dont
-#define hline_maybe	generic_maybe
-#define hline_must	generic_must
-#define hline_dont	generic_dont
-#define text_maybe	generic_maybe
-#define text_must	generic_must
-#define text_dont	generic_dont
-#define bullet_maybe	generic_maybe
-#define bullet_must	generic_must
-#define bullet_dont	generic_dont
-
-#define image_maybe	generic_maybe
-#define image_must	generic_must
-#define image_dont	generic_dont
-
-#define input_maybe	generic_maybe
-#define input_must	generic_must
-#define input_dont	generic_dont
-#define textarea_maybe	generic_maybe
-#define textarea_must	generic_must
-#define textarea_dont	generic_dont
-#define select_maybe	generic_maybe
-#define select_must	generic_must
-#define select_dont	generic_dont
-
-#define object_maybe	generic_maybe
-#define object_must	generic_must
-#define object_dont	generic_dont
-
-/*
-pbreak_maybe pbreak_must pbreak_dont hline_maybe hline_must hline_dont
-text_maybe text_must text_dont bullet_maybe bullet_must bullet_dont
-image_maybe image_must image_dont input_maybe input_must input_dont
-textarea_maybe textarea_must textarea_dont select_maybe select_must
-select_dont table_maybe table_must table_dont object_maybe object_must
-object_dont
-*/
-
-
-
-
 #ifdef DEBUG
 static const char * WIDTH_NAMES[N_COLSPAN_WIDTHS] = WIDTH_NAMES_ARRAY;
 #endif
-
-/*****************************************************************************
-
-  Get ready for a new horizontal strip of non-floating items. This
-  will always result in fmt->WOP existing.
-
-  */
-
-static void prepare_for_text_line(RID_FMT_STATE *fmt)
-{
-    ASSERT(fmt->WOP == NULL);
-
-    fmt->WOP = mm_calloc(1, sizeof(*fmt->WOP));
-
-    /*FMTDBGN(("prepare_for_text_line: adding pos %p\n", fmt->WOP));*/
-
-    rid_pos_item_connect(fmt->stream, fmt->WOP);
-    fmt->WOP->st = fmt->stream;
-    fmt->WOP->top = fmt->text_pos.y;
-    fmt->SOL = NULL;
-    fmt->text_pos.x = 0;
-    fmt->max_pos.y = 0;
-    fmt->brkstate = fmt->fmt_method;
-}
-
-/*****************************************************************************
-
-  Does the current word (fmt->WIT) fit in the current margins? This decision
-  is made independent of the ti->pad value. If there are no floating images,
-  we can always fit one item. If floating images are present, then we might
-  not be able to fit our widest word until we get back to the real margins.
-
-  */
-
-static BOOL current_word_fits(RID_FMT_STATE *fmt)
-{
-    BOOL b;
-
-    ASSERT(fmt->WIT != NULL);
-
-    b = (fmt->center_width - fmt->text_pos.x - fmt->WIT->width - fmt->previous_pad) >= 0;
-
-    if (!b && fmt->FOP == NULL && fmt->SOL == NULL)
-    {
-	/* Not floating and starting line - override rule */
-	b = TRUE;
-    }
-
-    return b;
-}
-
-/*****************************************************************************/
-
-static void advance_WIT(RID_FMT_STATE *fmt)
-{
-    fmt->WIT = rid_scanf(fmt->WIT);
-}
-
-static void advance_WIT_and_set_brkstate(RID_FMT_STATE *fmt)
-{
-    int x;
-
-    if (fmt->WIT == NULL)
-	return;
-
-    x = fmt->WIT->flag;
-
-    if ( (x & (rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK)) != 0 )
-    {
-	fmt->brkstate = MUST;
-    }
-    else if ( (x & rid_flag_NO_BREAK) != 0 )
-    {
-	fmt->brkstate = DONT;
-    }
-    else
-    {
-	fmt->brkstate = fmt->fmt_method;
-    }
-
-    advance_WIT(fmt);
-}
-
-/*****************************************************************************
-
-  We have decided to add the current word to the current text line. Someone
-  else has made the tests for correctness for this. 
-
-  The addition of the padding is not correct when the next word forces
-  us on to a new line. Might wish to alter this to retrospectively
-  subtract the padding again?
-
-  */
-
-static void add_word_to_current_line(RID_FMT_STATE *fmt)
-{
-
-    if (fmt->WOP == NULL)
-	prepare_for_text_line(fmt);
-
-    fmt->text_pos.x += fmt->previous_pad;
-    fmt->text_pos.x += fmt->WIT->width;
-    fmt->previous_pad = 0;
-
-    /*FMTDBGN(("add_word_to_current_line: now %d\n", fmt->text_pos.x));*/
-
-    if ( fmt->center_width - fmt->text_pos.x - fmt->WIT->pad >= 0 )
-    {
-	/* Padding between words. Add in iff we stay on the same line
-           and have another word. */
-	fmt->previous_pad = fmt->WIT->pad;
-    }
-
-    if (fmt->WIT->max_up > fmt->WOP->max_up)
-	fmt->WOP->max_up = fmt->WIT->max_up;
-
-    if (fmt->WIT->max_down > fmt->WOP->max_down)
-	fmt->WOP->max_down = fmt->WIT->max_down;
-
-    if (fmt->SOL == NULL)
-	fmt->SOL = fmt->WIT;
-
-    fmt->WIT->line = fmt->WOP;
-    if (fmt->WOP->first == NULL)
-	fmt->WOP->first = fmt->WIT;
-
-    advance_WIT_and_set_brkstate(fmt);
-}
 
 /*****************************************************************************/
 
 static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 {
-    rid_pos_item *new = fmt->WOP;
-    const int display_width = fmt->center_width;
-    const int width = fmt->text_pos.x;
+    rid_pos_item *new_pos = fmt->text_line; /* fmt->WOP; */
+    const int display_width = fmt->format_width; /* fmt->center_width; */
+    const int width = fmt->x_text_pos; /* fmt->text_pos.x; */
     const int spare = display_width - width;
 
     FMTDBGN(("center_and_right_align_adjustments: center_width %d, text_pos.x %d, flags %x, spare %d\n",
-	    display_width, width, fmt->SOL->st.flags & rid_sf_ALIGN_MASK, spare));
+	    display_width, width, 0 /* fmt->SOL->st.flags & rid_sf_ALIGN_MASK */, spare));
 
-    switch (new->first->st.flags & rid_sf_ALIGN_MASK)
+    switch (new_pos->first->st.flags & rid_sf_ALIGN_MASK)
     {
     case rid_sf_ALIGN_JUSTIFY:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
+	if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
 	{
 	    rid_text_item *ti, *lti;
 	    int n;
 
-	    for(n=0, lti = NULL, ti = new->first; ti; ti = ti->next)
+	    for(n=0, lti = NULL, ti = new_pos->first; ti; ti = ti->next)
 	    {
 		FMTDBG(("Item=%p, pos=%p, line=%p, flags=0x%02x\n",
-			ti, new, ti->line, ti->flag));
+			ti, new_pos, ti->line, ti->flag));
 
 		if ( CLEARING_ITEM(ti) || ! FLOATING_ITEM(ti) )
 		{
 		    /* Not a floater */
-		    if (ti->line != new)
+		    if (ti->line != new_pos)
 			break;
 		    n++;
 		    lti = ti;
@@ -246,270 +73,33 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 		((lti->flag & (rid_flag_CLEARING | rid_flag_LINE_BREAK)) == 0) &&
 		ti != NULL )
 	    {
-		new->leading = spare / (n-1);
+		new_pos->leading = spare / (n-1);
 
-		FMTDBG(("Leading=%d\n", new->leading));
+		FMTDBG(("Leading=%d\n", new_pos->leading));
 	    }
 	}
 	break;
     case rid_sf_ALIGN_CENTER:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
+	if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
 	{
 	    /* Only center things that can fit on the display */
 
 	    FMTDBGN(("center, %d %d\n", width, display_width));
 
 	    if (width < display_width)
-		new->left_margin += (spare >> 1);
+		new_pos->left_margin += (spare >> 1);
 	}
 	break;
     case rid_sf_ALIGN_RIGHT:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
+	if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
 	{
 	    FMTDBGN(("Right aligned\n"));
 
-	    new->left_margin += spare;
+	    new_pos->left_margin += spare;
 	}
 	break;
     }
-
 }
-
-/*****************************************************************************
-
-  For whatever reason, we have decided the current line is
-  complete. fmt->WIT is hence the first item not to be part of this
-  line.
-  
- */
-
-static void complete_current_line(RID_FMT_STATE *fmt)
-{
-    rid_text_item *ti;
-
-    /*FMTDBGN(("complete_current_line:\n"));*/
-
-    ASSERT(fmt->SOL != NULL);
-    ASSERT(fmt->WOP != NULL);
-
-    if (fmt->WOP->first == NULL)
-	fmt->WOP->first = fmt->SOL;
-
-    /* Pad from last word does not figure in the widths - otherwise it
-       would start the next line, which is obviously wrong. */
-    fmt->previous_pad = 0;
-
-    for (ti = fmt->SOL; ti != fmt->WIT; ti = rid_scanf(ti) )
-    {
-	/* Only connect non-floating items */
-	if ( ! FLOATING_ITEM(ti) )
-	{
-	    ti->line = fmt->WOP;
-	}
-    }
-
-    fmt->text_pos.y -= fmt->WOP->max_up + fmt->WOP->max_down;
-
-    if (fmt->text_pos.x > fmt->max_pos.x)
-	fmt->max_pos.x = fmt->text_pos.x;
-
-    center_and_right_align_adjustments(fmt);
-
-    /* No output pos or start of line anymore */
-    fmt->WOP = NULL;
-    fmt->SOL = NULL;
-
-    /*FMTDBGN(("complete_current_line: done\n\n"));*/
-}
-
-/*****************************************************************************
-
- */
-
-static void generic_maybe(RID_FMT_STATE *fmt)
-{
-    FMTDBGN(("generic_maybe:\n"));
-
-    if ( current_word_fits(fmt) )
-    {
-	add_word_to_current_line(fmt);
-    }
-    else
-    {
-	complete_current_line(fmt);
-	prepare_for_text_line(fmt);
-	/*FMTDBGN(("generic_maybe: expecting this item to be tried again\n"));*/
-    }
-}
-
-static void generic_must(RID_FMT_STATE *fmt)
-{
-    FMTDBGN(("generic_must:\n"));
-
-    complete_current_line(fmt);
-    prepare_for_text_line(fmt);
-    add_word_to_current_line(fmt);
-}
-
-static void generic_dont(RID_FMT_STATE *fmt)
-{
-    FMTDBGN(("generic_dont:\n"));
-
-    add_word_to_current_line(fmt);
-}
-
-/*****************************************************************************
-
- */
-
-static void table_maybe(RID_FMT_STATE *fmt)
-{
-    rid_table_item *table = ((rid_text_item_table*)fmt->WIT)->table;
-
-    FMTDBGN(("table_maybe: %d\n", table->hwidth[ACTUAL]));
-
-    generic_maybe(fmt);
-}
-
-static void table_must(RID_FMT_STATE *fmt)
-{
-    rid_table_item *table = ((rid_text_item_table*)fmt->WIT)->table;
-
-    FMTDBGN(("table_must: %d\n", table->hwidth[RAW_MIN]));
-
-    generic_must(fmt);
-}
-
-static void table_dont(RID_FMT_STATE *fmt)
-{
-    rid_table_item *table = ((rid_text_item_table*)fmt->WIT)->table;
-
-    FMTDBGN(("table_dont: %d\n", table->hwidth[RAW_MAX]));
-
-    generic_dont(fmt);
-}
-
-/*****************************************************************************
-
-  Do initialisations for when not yet started formatting a stream.
-
-  */
-
-static void stream_first_use_init(RID_FMT_STATE *fmt)
-{
-    rid_text_item *ti;
-
-    for (ti = fmt->WIT = fmt->stream->text_list;
-	 ti != NULL;
-	 ti = rid_scanf(ti))
-    {
-	if (ti->tag == rid_tag_TABLE)
-	{
-	    rid_table_item *table = ((rid_text_item_table*)ti)->table;
-
-	    switch (fmt->fmt_method)
-	    {
-	    case MAYBE:
-		ti->width = table->hwidth[ACTUAL];
-		break;
-	    case DONT:
-		ti->width = table->hwidth[RAW_MAX];
-		break;
-	    case MUST:
-		ti->width = table->hwidth[RAW_MIN];
-		break;
-	    }
-
-	    FMTDBG(("stream_first_use_init: set table's width to %d (%d)\n", ti->width, fmt->fmt_method));
-	}
-    }
-}
-
-/*****************************************************************************
-
-  There might be a small number of items whose line is incomplete and hence
-  cannot be properly finished with yet. Either further HTML arrives at some
-  stage in the future or a specific flush action is required at the end of
-  the stream.
-
-  We indicate items are pending by creating an extra rid_pos_item with
-  a magic leading value of MAGIC_LEADING_PENDING. At present, there is
-  a strong desire to not add any new fields to this structure as the
-  memory overheads can be quite significant. All items from fmt->WIT
-  onwards are pended, independent of whether they are considered
-  floating or not.
-
-  */
-
-#if 0
-static void pend_inhand_items(RID_FMT_STATE *fmt)
-{
-    rid_pos_item *pi = fmt->WOP;
-
-    FMTDBG(("pend_inhand_items:\n"));
-
-    if (pi == NULL)
-    {
-	FMTDBG(("No output pos item, no text, nothing to do\n"));
-
-	ASSERT(fmt->stream->pos_list == NULL);
-	ASSERT(fmt->stream->pos_last == NULL);
-	ASSERT(fmt->stream->text_list == NULL);
-	ASSERT(fmt->stream->text_last == NULL);
-
-	return;
-    }
-
-    ASSERT(fmt->stream->text_list != NULL);
-    ASSERT(fmt->stream->text_last != NULL);
-    ASSERT(pi->leading != MAGIC_LEADING_PENDING);
-    ASSERT(fmt->SOL != NULL);
-    ASSERT(pi->first == fmt->SOL);
-
-    pi->leading = MAGIC_LEADING_PENDING;
-}  
-#endif
-
-/*****************************************************************************
-
-  The end of the stream has been reached. Any trailing pos item marked
-  as MAGIC_LEADING_PENDING can now be finalised.
- */
-
-#if 0
-static void flush_format_stream(RID_FMT_STATE *fmt)
-{
-    rid_pos_item *pi;
-
-    FMTDBG(("flush_format_stream(%p:%p)\n", fmt, fmt->stream));
-
-    if (fmt->stream == NULL)
-	return;
-
-    pi = fmt->stream->pos_last;
-
-    if (pi == NULL || pi->leading != MAGIC_LEADING_PENDING)
-    {
-	FMTDBG(("No MAGIC_LEADING_PENDING pos item so no pending\n"));
-	return;
-    }
-
-    ASSERT(pi->leading == MAGIC_LEADING_PENDING);
-    ASSERT(pi == fmt->stream->pos_last);
-    ASSERT(pi->first == fmt->SOL);
-
-    /* Clear this before might get used for justification */
-    pi->leading = 0;
-    
-    complete_current_line(fmt);
-
-    FMTDBG(("\nWidest line is %d pixels, total height is %d pixels\n",
-	    fmt->max_pos.x, fmt->text_pos.y));
-
-    fmt->stream->widest = fmt->max_pos.x;
-    fmt->stream->height = fmt->text_pos.y;
-}
-#endif
 
 /*****************************************************************************/
 
@@ -537,25 +127,84 @@ static void dispose_pos_list(RID_FMT_STATE *fmt)
     }
 }
 
+static rid_pos_item *new_pos_item(RID_FMT_STATE *fmt)
+{
+    rid_pos_item *new = mm_calloc(1, sizeof(*new));
+
+    new->st = fmt->stream;
+    new->floats = mm_calloc(1, sizeof(*new->floats));
+    new->left_margin = NOTINIT;
+
+    rid_pos_item_connect(fmt->stream, new);
+
+    return new;
+}
+
+
 /*****************************************************************************/
 
-#if V2
+/*
+  
+  IMPORTANT: ANY UBS MIGHT CONTAIN FLOATING ITEMS. THESE ARE NOT PART
+  OF THE SEQUENCE AND MUST ALWAYS BE FACTORED OUT.
 
-static void init_indentation_unbreakable(RID_FMT_STATE *fmt)
+ */
+
+/*****************************************************************************/
+
+static void get_ubs_width(RID_FMT_STATE *fmt)
 {
-    const int indent = UNPACK(&fmt->unbreakable_start->st, STYLE_INDENT);
+    rid_text_item *ti = fmt->unbreakable_start;
+    int width = 0;
+    int last_pad = 0;
 
-    ASSERT(fmt->left_margin == NOTINIT);
-
-    fmt->left_margin = indent;
-
-    fmt->center_width = fmt->format_width - fmt->left_margin - fmt->right_margin;
-
-    if (indent > 0)
+    while (1)
     {
-	FMTDBG(("init_indentation_unbreakable: LM %d, CW %d, RM %d\n",
-		fmt->left_margin, fmt->center_width, fmt->right_margin));
+	if (! FLOATING_ITEM(ti))
+	{
+	    if (ti->width == -1)
+	    {
+		ASSERT(width == 0 || width == -1);
+		width = -1;
+	    }
+	    else
+	    {
+		ASSERT(width != -1);
+		width += last_pad + ti->width;
+	    }
+	    last_pad = ti->pad;
+	    if (ti == fmt->unbreakable_stop)
+		break;
+	}
+	ti = rid_scanf(ti);
     }
+
+    fmt->unbreakable_width = width;
+
+    FMTDBGN(("get_ubs_width: sequence's width is %d\n", width));
+}
+
+/*****************************************************************************/
+
+static void no_text_line(RID_FMT_STATE *fmt)
+{
+    /* Check can't loose partially done float lines here */
+    fmt->last_last_unbreakable = NULL;
+    fmt->text_line = NULL;
+    fmt->x_text_pos = 0;
+}
+
+static void no_float_line(RID_FMT_STATE *fmt)
+{
+    fmt->float_line = NULL;
+}
+
+static void no_unbreakable(RID_FMT_STATE *fmt)
+{
+    fmt->last_last_unbreakable = fmt->unbreakable_stop;
+    fmt->unbreakable_start = NULL;
+    fmt->unbreakable_stop = NULL;
+    fmt->unbreakable_width = 0;
 }
 
 /*****************************************************************************
@@ -564,59 +213,97 @@ static void init_indentation_unbreakable(RID_FMT_STATE *fmt)
   similar type fitting operation to text words, except, if we place
   the floating item, it will end up outside the resulting margins.
   minwidth rules can force a break. maxwidth is what we are always
-  striving for anyway though. */
-
-
-
+  striving for anyway though. UNCERTAIN ABOUT PAD VALUES HERE. The
+  line we are attempting to fit the floater within should not have any
+  words present, hence there is no need for per-pos x_text_item
+  values, and they don't feature in this calculation. */
 
 static BOOL floating_item_fits(RID_FMT_STATE *fmt)
 {
-    rid_floats_link *fl;
+    rid_text_item *fltr = fmt->next_item;
+    rid_pos_item *line = fmt->float_line;
+    rid_floats_link *floater = line->floats;
+    const int LM = line->left_margin;
+    const int RM = floater->right_margin;
+    const int FW = fmt->format_width;
+    const int MW = fltr->width;
+    const int have_text = TEXT_ITEMS_THIS_LINE(line);
+    const int have_fltrs = FLOATERS_THIS_LINE(line);
+    BOOL fits = (FW - LM - RM - MW) >= 0;
 
     ASSERT(fmt->next_item != NULL);
     ASSERT(fmt->float_line != NULL);
     ASSERT(fmt->float_line->floats != NULL);
+    ASSERT(fmt->float_line->first == NULL);
+    ASSERT(line->left_margin != NOTINIT);
 
-    fl = fmt->float_line->floats;
-
-    FMTDBGN(("floating_item_fits: item width %d, margins L=%d C=%d R=%d F=%d, floats L=%d R=%d\n",
-	     fmt->next_item->width, 
-	     fmt->left_indent, fmt->center_width, fmt->right_indent,
-	     fmt->format_width,
-	     fl->left_margin, fl->right_margin));
-
-    if ( (fmt->center_width - 
-	  fl->left_margin -
-	  fl->right_margin)
-	 < 0 )
+    if (fits)
     {
-	/* Force the case that we can always get a sole floating item
-           in a horizontal strip. */
-	if (fmt->float_line->first == NULL &&
-	    fl->left == NULL &&
-	    fl->right == NULL)
-	    return TRUE;
-	return FALSE;
+	if (fmt->fmt_method == MUST && (have_text || have_fltrs) )
+	    fits = FALSE;
+    }
+    else
+    {
+	if (!have_text && !have_fltrs)
+	    fits = TRUE;
     }
 
-    if ( fmt->fmt_method == MUST )
-	return FALSE;
+    FMTDBGN(("floating_item_fits: %s: LM/RM %d/%d, FW %d, MW %d, txt %d, fltrs %d",
+	     fits ? "FITS" : "DOESN'T FIT", LM, RM, FW, MW, have_text, have_fltrs));
 
-    if ( fmt->fmt_method == DONT )
-	return TRUE;
-
-    return TRUE;
+    return fits;
 }
 
-/*****************************************************************************/
+/*****************************************************************************
+
+  We have a floating item that needs placing and no line to place it
+  on. Create a suitable line at the end of the document. Initialise
+  the margin information from the preceeding text/float line, or
+  zeroes if no information available (ie sensible default margins).  */
+
+static void pickup_float_line(RID_FMT_STATE *fmt)
+{
+    rid_pos_item *pi = new_pos_item(fmt);
+
+    ASSERT(fmt->float_line == NULL);
+
+    fmt->float_line = pi;
+
+    if (pi->prev == NULL)
+    {
+	FMTDBGN(("pickup_float_line: no prev so default margin information\n"));
+	pi->left_margin = 0;
+    }
+    else
+    {
+	pi->left_margin = pi->prev->left_margin;
+	FMTDBGN(("pickup_float_line: prev item so use margin %d\n", pi->left_margin));
+    }
+}
+
+/*****************************************************************************
+ 
+  We have decided that the floating item will not fit on the current
+  line. Create another candidate line to try fitting it on. We inherit
+  margin information from the line preceeding us (all zeroes if no
+  preceeding line). This can create intervening float lines that the
+  text line has yet to encounter. They can be tracked through
+  pos->next as normal. We cannot set the correct top field until this
+  line is closed, which only happens when the text line passes it. We
+  have to replicate the chain of floating items, excluding those that
+  are now entirely above this line. The starting floater line should
+  always be the current one, which means it is the last thing in the
+  pos list. */
 
 static void advance_float_line(RID_FMT_STATE *fmt)
 {
+    rid_pos_item *new = new_pos_item(fmt);
 
     ASSERT(fmt->float_line != NULL);
-    ASSERT(fmt->float_line->floats != NULL);
+    ASSERT(fmt->float_line->next == NULL);
 
-
+    no_float_line(fmt);
+    pickup_float_line(fmt);
 }
 
 /*****************************************************************************/
@@ -641,12 +328,16 @@ static void attach_float_at_end(rid_float_item **flp, rid_float_item *fi)
     }
 }
 
-/*****************************************************************************/
+/*****************************************************************************
+
+  We have a floating item and have decided that it will fit on the
+  currently known float line. Append it to the L/R list and update
+  information (margins especially) accordingly.  */
 
 static void position_floating_item(RID_FMT_STATE *fmt)
 {
     rid_text_item *ti = fmt->next_item;
-    const BOOL leftwards = (ti->flag & rid_flag_LEFTWARDS) !=- 0;
+    const BOOL leftwards = (ti->flag & rid_flag_LEFTWARDS) != 0;
     rid_pos_item *pi = fmt->float_line;
     rid_float_item *fi = mm_calloc(1, sizeof(*fi));
     rid_floats_link *fl = pi->floats;
@@ -655,155 +346,105 @@ static void position_floating_item(RID_FMT_STATE *fmt)
     ASSERT(ti != NULL);
     ASSERT(pi != NULL);
     ASSERT(fl != NULL);
+    ASSERT(pi->left_margin != NOTINIT);
 
     FMTDBGN(("position_floating_item: %s, ti %p, pi %p, fi %p, fl %p, LM %d, RM %d\n",
 	     leftwards ? "LEFTWARDS" : "RIGHTWARDS",
 	     ti, pi, fi, fl, 
-	     fl->left_margin, fl->right_margin ));
+	     pi->left_margin, fl->right_margin ));
 
     ti->line = pi;
     fi->ti = ti;
     fi->pi = pi;
     fi->height = ti->max_up + ti->max_down; /* ? */
+    fi->height_left = fi->height;
 
     if (leftwards)
     {
-	fi->left = fl->left_margin;
-	fl->left_margin += width;
+	fi->entry_margin = pi->left_margin;
+	pi->left_margin += width;
 	attach_float_at_end(&fl->left, fi);
     }
     else
     {
-	fi->left = (fmt->format_width - fl->right_margin - width);
+	fi->entry_margin = fl->right_margin;
+	/*fi->left = (fmt->format_width - fl->right_margin - width);*/
 	fl->right_margin += width;
 	attach_float_at_end(&fl->right, fi);
     }
+
+    /* This shouldn't have caused us to cross the margins! */
+    ASSERT( (fmt->format_width - pi->left_margin - fl->right_margin) >= 0 );
+
+    FMTDBGN(("position_floating_item: now got LM %d, RM %d\n",
+	     pi->left_margin, fl->right_margin ));
 }
 
 /*****************************************************************************/
 
-static rid_pos_item *new_pos_item(RID_FMT_STATE *fmt)
+/*****************************************************************************
+
+  If have no floating lines, creating a line at the end of the pos
+  list with no margin information, else advance into an existing pos
+  item with existing margin information.  */
+
+static void create_new_text_line(RID_FMT_STATE *fmt)
 {
-    rid_pos_item *new = mm_calloc(1, sizeof(*new));
-    new->st = fmt->stream;
+    ASSERT(fmt->text_line == NULL);
+    ASSERT(fmt->unbreakable_start != NULL);
 
-    rid_pos_item_connect(fmt->stream, new);
-    
-    /* Might not always be the eventual answer? */
-    new->top = fmt->y_text_pos;
-
-    return new;
-}
-
-/*****************************************************************************/
-#if 0
-static void new_pos_at_very_end(RID_FMT_STATE *fmt)
-{
-    rid_pos_item *pi = fmt->current_text_line = new_pos_item();
-
-    pi->prev = fmt->stream->pos_last;
-    fmt->stream->pos_last = pi->prev->next = pi;
-
-    if (fmt->stream->pos_list == NULL)
-	fmt->stream->pos_list = pi;
-}
-
-	{
-	    /* There is (at least one) floating line that we have yet
-	       to place text items into. Make this the next text line
-	       and advance for next time around.  */
-	    fmt->current_text_line = fmt->first_float_line;
-	    /* There either is or isn't a next floating line */
-	    fmt->first_float_line = fmt->first_float_line->next;
-	    if (fmt->first_float_line == NULL)
-		fmt->last_float_line = NULL;
-	    FMTDGBN(("pre_unbreakable_sequence: taken a floating line %p, leaving %p next\n",
-		     fmt->current_text_line, fmt->first_float_line));
-	}
-#endif
-
-
-/*****************************************************************************/
-
-static void pickup_next_text_line(RID_FMT_STATE *fmt)
-{
-    if (fmt->text_pickup == NULL)
+    if (fmt->float_line == NULL)
     {
+	/* Create at end, no margin info */
 	rid_pos_item *new = new_pos_item(fmt);
 	fmt->text_line = new;
     }
     else
     {
-	/* Need to consider fracturing a line */
+	/* Pickup existing floating line and its margin info. Advance
+           float pointers accordingly. */
+	fmt->text_line = fmt->float_line;
+	ASSERT(fmt->text_line->left_margin != NOTINIT);
+	fmt->float_line = NULL;
     }
-}
-
-/*****************************************************************************/
-
-static void pickup_float_line(RID_FMT_STATE *fmt)
-{
-    rid_pos_item *pi;
-
-    ASSERT(fmt->float_line == NULL);
-
-    pi = fmt->stream->pos_last;
-
-    if (pi == NULL)
-    {
-	rid_floats_link *fl = mm_calloc(1, sizeof(*fl));
-	pi = new_pos_item(fmt);
-	pi->floats = fl;
-	fmt->float_line = pi;
-	fmt->text_pickup = pi;
-    }
-    else
-    {
-    }
-
 }
 
 /*****************************************************************************
 
-  If there is no line to try fitting the sequence in to, create a
-  suitable starting line.
+  A text line exists but has no margin information. Initialise this
+  from the start of the unbreakable sequence.  */
 
-  Sum the widths of the unbreakable sequence, including padding
-  between multiple objects in the sequence.
-									     */
-
-static void pre_unbreakable_sequence(RID_FMT_STATE *fmt)
+static void set_text_margin_info(RID_FMT_STATE *fmt)
 {
-    rid_text_item *ti = fmt->unbreakable_start;
-    int width = 0;
-    int last_pad = 0;
+    const int indent = fmt->unbreakable_start->st.indent;
 
-    if (fmt->text_line == NULL)
-    {
-	pickup_next_text_line(fmt);
-	set_list_indentation(fmt);
-    }
+    ASSERT(fmt->text_line != NULL);
+    ASSERT(fmt->text_line->left_margin == NOTINIT);
 
-    while (1)
-    {
-	if (ti->width == -1)
-	{
-	    ASSERT(width == 0 || width == -1);
-	    width = -1;
-	}
-	else
-	{
-	    ASSERT(width != -1);
-	    width += last_pad + ti->width;
-	}
-	last_pad = ti->pad;
-	if (ti == fmt->unbreakable_stop)
-	    break;
-	ti = rid_scanf(ti);
-    }
+    /* Doesn't account for INDENT_SIZE */
+    fmt->text_line->left_margin = indent;
+    /* @@@@ FIXME: Needs attention. */
+    fmt->text_line->floats->right_margin = 0;
 
-    fmt->unbreakable_width = width;
+    FMTDBGN(("set_text_margin_info: LM %d, RM %d\n",
+	     fmt->text_line->left_margin, fmt->text_line->floats->right_margin));
 
-    FMTDBGN(("pre_unbreakable_sequence: sequence's width is %d\n", width));
+    /* Should be before start adding to this line */
+    fmt->x_text_pos = indent;
+}
+
+/*****************************************************************************/
+
+static BOOL no_text_margin_info(RID_FMT_STATE *fmt)
+{
+    return fmt->text_line->left_margin == NOTINIT;
+}
+
+/*****************************************************************************/
+
+static BOOL text_margin_indent_clash(RID_FMT_STATE *fmt)
+{
+    return FALSE;
 }
 
 /*****************************************************************************
@@ -813,8 +454,9 @@ static void pre_unbreakable_sequence(RID_FMT_STATE *fmt)
 
   Unbreakable sequences have already been factored out, with the
   resulting chain being stored in unbreakable_start to
-  unbreakable_stop. This means places where we cannot break have been
-  done. Places where we MUST break remain though.
+  unbreakable_stop. This means places where we CANNOT have a break
+  have been attended to. Places where we MUST break remain to be
+  handled though.
 
   If the simple widths sum says there is no room, we always answer
   FALSE.
@@ -824,7 +466,9 @@ static void pre_unbreakable_sequence(RID_FMT_STATE *fmt)
   During pos items with floating items, we accept zero words per
   line. During left margin indented eg due to <LI>, we require one
   item minimum per line. When there are no floating items and no left
-  margin indents we require one word minimum
+  margin indents we require one word minimum. Basically, a text word
+  fits if there are no floating items on that line, whatever any other
+  bits of logic say.
 
   Return FALSE for doesn't fit meaning 'must not go on this line', and
   TRUE for does fit meaning 'must go on this line'.
@@ -833,47 +477,116 @@ static void pre_unbreakable_sequence(RID_FMT_STATE *fmt)
   the need for DONT is lost: we just won't break unless we need to. Of
   course, this is based upon the line not wanting to be longer than
   about 2^31, which is a perfectly reasonable limitation for a 32 bit
-  implementation to my view.
-
-  */
-
+  implementation to my view.  */
 
 static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
 {
-    rid_text_item *ti = fmt->last_last_unbreakable;
-    const BOOL ntf = NEITHER_TEXT_FLOATERS(fmt->text_line);
-    BOOL fits;
-
-    if (fmt->left_indent == NOTINIT)
-	init_indentation_unbreakable(fmt);
-
-    fits = (fmt->center_width - fmt->x_text_pos - fmt->unbreakable_width - (ti == NULL ? 0 : ti->pad)) >= 0;
+    rid_pos_item *line = fmt->text_line;
+    rid_text_item *llu = fmt->last_last_unbreakable;
+    const int prev_pad = llu == NULL ? 0 : llu->pad;
+    const int LM = line->left_margin;
+    const int RM = line->floats->right_margin;
+    const int FW = fmt->format_width;
+    const int TW = fmt->unbreakable_width + prev_pad;
+    const BOOL have_floaters = FLOATERS_THIS_LINE(line);
+    const BOOL have_text = TEXT_ITEMS_THIS_LINE(line);
+    BOOL fits = (FW - LM - RM - TW - fmt->x_text_pos) >= 0;
 
     ASSERT(fmt->text_line != NULL);
+    ASSERT(fmt->text_line->left_margin != NOTINIT);
 
     if (fits)
     {
-	if (fmt->fmt_method == MUST && !ntf)
+	if ( fmt->fmt_method == MUST && ( have_floaters || have_text ) )
 	    fits = FALSE;
     }
     else
     {
-	if (ntf)
+	if (!have_floaters && !have_text)
 	    fits = TRUE;
     }
 
-    FMTDBGN(("unbreakable_sequence_fits: pi %p %s: cw %d xt %d uw %d p%d, ntf %d\n",
-	     fmt->text_line,
-	     fits ? "Fits" : "Does not fit",
-	     fmt->center_width, fmt->x_text_pos, fmt->unbreakable_width,
-	     (ti == NULL ? 0 : ti->pad),
-	     ntf
-	));
+    FMTDBGN(("unbreakable_sequence_fits: %s: pp %d, LM/RM %d/%d, FW %d, TW %d, flt %d, txt %d\n",
+	     fits ? "FITS" : "DOESN'T FIT", 
+	     prev_pad,  LM, RM, FW, TW, have_floaters, have_text));
 
     return fits;
 }
 
-/*****************************************************************************/
+/*****************************************************************************
+
+  Update the 'widest' field of the stream. This is complicated when
+  there are right floating items.  */
+
+static void find_widest_info(RID_FMT_STATE *fmt)
+{
+    if (fmt->x_text_pos > fmt->stream->widest)
+	fmt->stream->widest = fmt->x_text_pos;
+}
+
+/*****************************************************************************
+
+  THIS IS MESSY. The text line being finished also has zOM floating
+  items. We might need to fracture the current line to continue the
+  floating item(s).
+
+  For floating items that finish on our base line or above it, this
+  text line represents the last of the processing required for them,
+  and the point they cease contributing to the L/R margins and hence
+  don't need replicating.
+
+  For floating items where the base line of this text line is still
+  above their base line (bottom pixels), we need to fracture the
+  current text into a text line with height dictated by the text
+  contents of the text line and a second line to continue the height
+  of the floating items. This second line might itself get fractured
+  in the future, and so on until the height of the floating item is
+  used up. Such a new fractured float line is past the point of having
+  floating items added to it - we just need to flow the text
+  correctly. */
+
+static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
+{
+    rid_pos_item *pi = fmt->text_line;
+    const int this_height = pi->max_up + pi->max_down;
+    rid_float_item *fi;
+    BOOL l_fracture = FALSE;
+    BOOL r_fracture = FALSE;
+
+    /* Scan all floating items of this line and see if there are any
+       that require us to fracture this line */
+    for (fi = pi->floats->left; !l_fracture && fi != NULL; fi = fi->next)
+	l_fracture = (fi->height_left > this_height);
+
+    for (fi = pi->floats->right; !r_fracture && fi != NULL; fi = fi->next)
+	r_fracture = (fi->height_left > this_height);
+
+    if (l_fracture || r_fracture)
+    {
+	
+    }
+    else
+    {
+	
+    }
+}
+
+
+/*****************************************************************************
+
+  The current text line is finished with. We can determine its height
+  and performing center/right adjustments. If there is a following
+  float line that we can pickup on, we use that for text_line else
+  NULL and a new item needs creating when a text item is next
+  encounted.
+
+  Given height information, we can determine whether any current the
+  floating items have their bottom pixel within this line or a line
+  yet to come. If the latter, we need to fracture the current line
+  into two lines. Remember that there might already be a floating line
+  after us, so this means we can get multiple partially completed
+  floating lines. Floating items are always added at the end of the
+  stream, so only one float pointer (float_line) is needed.  */
 
 static void close_down_current_line(RID_FMT_STATE *fmt)
 {
@@ -882,6 +595,9 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     int max_up = 0;
     int max_down = 0;
 
+    ASSERT(fmt->text_line != NULL);
+
+    /* Find height info for this line according to text items */
     for (ti = pi->first; ti != NULL && ti->line == pi; ti = rid_scanf(ti))
     {
 	if (ti->max_up > max_up)
@@ -890,66 +606,94 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 	    max_down = ti->max_down;
     }
 
+    FMTDBGN(("close_down_current_line: max up/down %d/%d\n", max_up, max_down));
+
     /* Can now set the height information for this strip */
+    pi->top = fmt->y_text_pos;
     pi->max_up = max_up;
     pi->max_down = max_down;
     fmt->y_text_pos -= pi->max_up + pi->max_down;
 
     /* Might want to fracture a strip here */
-
+    if ( FLOATERS_THIS_LINE(fmt->text_line) )
+	consider_fracturing_float_line(fmt);
 
     /* Close down line information */
-    fmt->text_line = NULL;
-    fmt->last_last_unbreakable = NULL;
-    fmt->left_margin = NOTINIT;
+    find_widest_info(fmt);
 
-    if (fmt->x_text_pos > fmt->stream->widest)
-	fmt->stream->widest = fmt->x_text_pos;
+    /* SJM: add call to horizontal alignment code - is this in the right place */
+    center_and_right_align_adjustments(fmt);
+    
+    /* Auto advance text_line if have floating lines to advance in to */
+    if (pi->next != NULL)
+    {
+	FMTDBGN(("close_down_current_line: got float line to use now\n"));
+	if (pi->next == fmt->float_line)
+	{
+	    FMTDBGN(("close_down_current_line: have caught float line up - no float line now\n"));
+	    no_float_line(fmt);
+	}
+	no_text_line(fmt);
+	fmt->text_line = pi->next;
+    }
+    else
+	no_text_line(fmt);
 
-    fmt->x_text_pos = 0;
+    /* Note: this frees the right_margin value. This is needed in
+       find_widest_info(), so this MUST happen afterwards, even
+       although above looks like having a natural else part to attach
+       this to. */
+    if ( ! FLOATERS_THIS_LINE(pi) )
+    {
+	mm_free(pi->floats);
+	pi->floats = NULL;
+    }
 
-    FMTDBGN(("close_down_current_line: widest now %d, height %d:%d\n\n",
+    FMTDBGN(("close_down_current_line: widest now %d, height %d/%d, line now %p\n\n",
 	     fmt->stream->widest, 
 	     pi->max_up,
-	     pi->max_down));
+	     pi->max_down,
+	     fmt->text_line));
 }
 
 /*****************************************************************************
 
-  We need to find another line for text items. Once finished,
-  fmt->current_text_line is the next candidate line for where the next
-  text item goes.  */
-
-static void advance_another_line(RID_FMT_STATE *fmt)
-{
-    FMTDBGN(("advance_another_line: from %p\n", fmt->text_line));
-
-    if (fmt->text_line != NULL)
-	close_down_current_line(fmt);
-
-    pickup_next_text_line(fmt);
-
-    FMTDBGN(("advance_another_line: to %p\n", fmt->text_line));
-}
-
-/*****************************************************************************/
+  We have determined that the current ubs will fit on the current
+  line. Margin information was initialised ages ago. Each item in the
+  ubs needs attaching to the current line - note that there may be
+  floaters in the sequence. If the ubs indicates it must be followed
+  by a break, we perform this NOW. Having a break overrides not having
+  a break. */
 
 static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
 {
     rid_text_item *ti = fmt->unbreakable_start;
+    rid_pos_item *line = fmt->text_line;
 
     ASSERT(fmt->unbreakable_start != NULL);
     ASSERT(fmt->unbreakable_stop != NULL);
+    ASSERT(fmt->text_line != NULL);
 
-    if (fmt->text_line->first == NULL)
-	fmt->text_line->first = ti;
+    /* Point line at start if currently empty */
+    if (line->first == NULL)
+	line->first = ti;
 
     /* Attach text items to their assigned line */
     while (1)
     {
-	ti->line = fmt->text_line;
-	if (ti == fmt->unbreakable_stop)
-	    break;
+	if (!FLOATING_ITEM(ti))
+	{
+	    ASSERT(ti->line == NULL);
+	    ti->line = fmt->text_line;
+	    if (ti == fmt->unbreakable_stop)
+		break;
+	}
+	else
+	{
+	    /* Floaters should have been attached during the scan that
+               yielded the last item in the ubs. */
+	    ASSERT(ti->line != NULL);
+	}
 	ti = rid_scanf(ti);
     }
 
@@ -957,13 +701,16 @@ static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
     if (fmt->unbreakable_width != -1)
     {
 	fmt->x_text_pos += fmt->unbreakable_width;
+	FMTDBGN(("append_unbreakable_sequence: ubs contributes %d, giving %d\n",
+		 fmt->unbreakable_width, fmt->x_text_pos));
     }
-
+    
     if (fmt->last_last_unbreakable != NULL)
+    {
 	fmt->x_text_pos += fmt->last_last_unbreakable->pad;
-
-    /* Remember for next time around */
-    fmt->last_last_unbreakable = fmt->unbreakable_stop;
+	FMTDBGN(("append_unbreakable_sequence: prev pad contributes %d, giving %d\n",
+		 fmt->last_last_unbreakable->pad, fmt->x_text_pos));
+    }
 
     FMTDBGN(("append_unbreakable_sequence: this line %d, widest %d from %d\n",
 	     fmt->x_text_pos, fmt->stream->widest, fmt->unbreakable_width));
@@ -971,35 +718,50 @@ static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
     /* If we must be followed by a break, ensure it now */
     if ( MUST_BREAK(fmt->unbreakable_stop) )
     {
-	advance_another_line(fmt);
+	FMTDBGN(("append_unbreakable_sequence: forcing BREAK\n"));
+	no_unbreakable(fmt);
+	close_down_current_line(fmt);
     }
-
-    fmt->unbreakable_start = fmt->unbreakable_stop = NULL;
+    else
+	no_unbreakable(fmt);    
 }
 
-/*****************************************************************************/
+/*****************************************************************************
+
+  We have a new unbreakable sequence of text items to place. We need
+  to find a line which meets our margin criteria and into which we can
+  fit. We might need to create lines or step past lines to achieve
+  this.  */
 
 static void deal_with_unbreakable_sequence(RID_FMT_STATE *fmt)
 {
-    BOOL usf;
+    BOOL usf = FALSE;
 
-    pre_unbreakable_sequence(fmt);
+    get_ubs_width(fmt);
 
-    if ( ! unbreakable_sequence_fits(fmt) )
+    FMTDBGN(("deal_with_unbreakable_sequence: ubs width is %d\n", fmt->unbreakable_width));
+
+    do
     {
-	do
+	while (1)
 	{
-	    advance_another_line(fmt);
-	    usf = unbreakable_sequence_fits(fmt);
-#if DEBUG
-	    if (fmt->text_line->floats == NULL)
-	    {
-		ASSERT( usf );
-	    }
-#endif
+	    FMTDBGN(("deal_with_unbreakable_sequence: looking for text line without margin clash\n"));
+
+	    if ( fmt->text_line == NULL )
+		create_new_text_line(fmt);
+	    
+	    if ( no_text_margin_info(fmt) )
+		set_text_margin_info(fmt);
+
+	    if ( text_margin_indent_clash(fmt) || ! (usf = unbreakable_sequence_fits(fmt)) )
+		close_down_current_line(fmt);
+	    else 
+		break;
 	}
-	while ( ! usf );
-    }
+	FMTDBGN(("deal_with_unbreakable_sequence: found: looking for line with enough room\n"));
+    } while ( ! usf );
+
+    FMTDBGN(("deal_with_unbreakable_sequence: found: appending ubs to line\n"));
 
     append_unbreakable_sequence(fmt);
 }
@@ -1018,17 +780,15 @@ static void next_nonfloating_item(RID_FMT_STATE *fmt)
     if (fmt->unbreakable_start == NULL)
     {
 	FMTDBGN(("next_nonfloating_item: Starting a new unbreakable sequence\n"));
-
 	fmt->unbreakable_start = ti;
     }
 
     /* Just track as each item goes by */
     fmt->unbreakable_stop = ti;
 
+    /* Hence only spit out entire unbreakable sequences */
     if ( ! DONT_BREAK(ti) )
-    {
 	deal_with_unbreakable_sequence(fmt);
-    }
 }
 
 /*****************************************************************************
@@ -1069,17 +829,14 @@ static void next_nonfloating_item(RID_FMT_STATE *fmt)
 static void next_floating_item(RID_FMT_STATE *fmt)
 {
     rid_text_item *ti = fmt->next_item;
-    /*const BOOL left = (ti->flag & rid_flag_LEFTWARDS) != 0;*/
 
     /* Find initial place to think about placing floating item */
     if (fmt->float_line == NULL)
 	pickup_float_line(fmt);
 
-    /* Move to the current margin if already got some text on that line. */
-    if (fmt->float_line->first != NULL)
-	advance_float_line(fmt);
-
-    /* Should be ZOm for float lines with text on them. */
+    /* If a line is a floating line, should have no text. If started
+       putting text in it, have finished having this line viewable as
+       being a floating line. */
     ASSERT(fmt->float_line->first == NULL);
 
     /* We might not be able to fit the floating item within the
@@ -1094,6 +851,12 @@ static void next_floating_item(RID_FMT_STATE *fmt)
 
 /*****************************************************************************/
 
+static void perform_clearing(RID_FMT_STATE *fmt)
+{
+}
+
+/*****************************************************************************/
+
 static void formatting_start(RID_FMT_STATE *fmt)
 {
     rid_text_item *ti;
@@ -1101,39 +864,35 @@ static void formatting_start(RID_FMT_STATE *fmt)
     /* Pick up the stream we are formatting */
     fmt->next_item = fmt->stream->text_list;
 
-    if (fmt->next_item == NULL)
-    {
-	FMTDBGN(("formatting_start: WARNING: empty text stream\n"));
-    }
-
     /* Not expecting to partially reformat at present. */
     ASSERT(fmt->stream->pos_list == NULL);
 
     /* Nothing in hand to start with */
-    fmt->unbreakable_width = 0;
-    fmt->unbreakable_start = fmt->unbreakable_stop = NULL;
-    fmt->last_last_unbreakable = NULL;
-
-    fmt->text_line = NULL;
-    fmt->float_line = NULL;
-    fmt->text_pickup = NULL;
-/*    fmt->last_float_line = NULL;*/ /* Needed? */
-
-    fmt->x_text_pos = 0;
-
-    fmt->text_pos.x = 0;
-    fmt->text_pos.y = 0;
-    fmt->max_pos.x = 0;
-    fmt->max_pos.y = 0;
+    no_unbreakable(fmt);
+    no_text_line(fmt);
+    no_float_line(fmt);
 
     /* Initialise bits and pieces */
-    fmt->left_margin = NOTINIT
+    fmt->format_width = fmt->stream->fwidth;
+    fmt->y_text_pos = 0;
     fmt->stream->widest = 0;
+    fmt->stream->width = 0;
 
+    if (fmt->next_item == NULL)
+    {
+	FMTDBGN(("formatting_start: WARNING: empty text stream\n"));
+	return;
+    }
+
+    /* Set width of all tables to actual/min/max according to reason
+       being formatted. */
     for (ti = fmt->stream->text_list;
 	 ti != NULL;
 	 ti = rid_scanf(ti))
     {
+	/* Might be reformatting - used for assertions elsewhere. */
+	ti->line = NULL;
+
 	if (ti->tag == rid_tag_TABLE)
 	{
 	    rid_table_item *table = ((rid_text_item_table*)ti)->table;
@@ -1153,16 +912,45 @@ static void formatting_start(RID_FMT_STATE *fmt)
 
 	    FMTDBG(("stream_first_use_init: set table's width to %d (%d)\n", ti->width, fmt->fmt_method));
 	}
+
+	/* SJM: do the stuff for other scaleable items */
+    	if ((ti->tag == rid_tag_IMAGE &&
+	     ((rid_text_item_image *)ti)->ww.type == value_pcunit) ||
+	    (ti->tag == rid_tag_INPUT &&
+	     (((rid_text_item_input *)ti)->input)->tag == rid_it_IMAGE && (((rid_text_item_input *)ti)->input)->ww.type == value_pcunit) ||
+	    (ti->tag == rid_tag_OBJECT &&
+	     (((rid_text_item_object *)ti)->object)->userwidth.type == value_pcunit)
+	    )
+	{
+	    switch (fmt->fmt_method)
+	    {
+	    case MAYBE:
+		break;
+	    case DONT:
+	    case MUST:
+		ti->width = 1;
+		break;
+	    }
+
+	    FMTDBG(("stream_first_use_init: set tag %d's width to %d (%d)\n", ti->tag, ti->width, fmt->fmt_method));
+	}
     }
 
     FMTDBG(("\nformatting_start: initialised formatting state, width %d\n",
-	    fmt->center_width));
+	    fmt->format_width));
 }
 
-/*****************************************************************************/
+/*****************************************************************************
+ 
+  The stream is finished. Flush until we get a pos item with nothing
+  on it, thus ensuring all lines with something on them get properly
+  completed. We could use pseudo_html(, "<BR CLEAR=ALL>"), but this
+  either messes up progressive rendering or is of no use until the end
+  of the stream. */
 
 static void formatting_stop(RID_FMT_STATE *fmt)
 {
+    rid_text_item fudge_ti;
     rid_text_stream *stream = fmt->stream;
 
     ASSERT(fmt->next_item == NULL);
@@ -1174,14 +962,26 @@ static void formatting_stop(RID_FMT_STATE *fmt)
 	deal_with_unbreakable_sequence(fmt);
     }
 
-    /* Flush any line */
-    if (fmt->text_line != NULL && fmt->text_line->first != NULL)
-	advance_another_line(fmt);
+    if (fmt->text_line != NULL)
+    {
+	FMTDBGN(("formatting_stop: closing down current line\n"));
+	close_down_current_line(fmt);
+    }
 
-    /* Force us to finish all floating lines */
-    while (fmt->float_line != NULL)
-	advance_another_line(fmt);
+    while (fmt->text_line != NULL)
+    {
+	FMTDBGN(("formatting_stop: close line to get past floaters\n"));
+	close_down_current_line(fmt);
+    }
 
+    /* Then force a last pos item to give the stream a final height
+       and so that we can do certain grubby list following things that
+       now relay upon there being a final, empty pos item. */
+
+    fmt->unbreakable_start = fmt->unbreakable_stop = &fudge_ti;
+    create_new_text_line(fmt);
+    no_unbreakable(fmt);
+    close_down_current_line(fmt);
 
     if (stream->widest > stream->fwidth)
 	stream->width = stream->widest;
@@ -1202,15 +1002,16 @@ static void formatting_loop(RID_FMT_STATE *fmt)
 	if ( FLOATING_ITEM(fmt->next_item) )
 	    next_floating_item(fmt);
 	else
+	{
+	    if ( CLEARING_ITEM(fmt->next_item) )
+		perform_clearing(fmt);
 	    next_nonfloating_item(fmt);
-
+	}
 	fmt->next_item = fmt->next_item->next;
     }
 
     formatting_stop(fmt);
 }
-
-#endif /* V2 */
 
 /*****************************************************************************
 
@@ -1220,31 +1021,15 @@ static void formatting_loop(RID_FMT_STATE *fmt)
   giving minwidth and maxwidth respectively.
 
   On entry, stream->fwidth indicates the width we are formatting
-  within. If fmt_method is DONT or MUST, then this should hold zero.
+  within. If fmt_method is DONT or MUST, then this should hold ?.
 
   On exit, stream->widest is the lenght of the widest line. Displaying
   this stream in less width will cause some of its contents to be
   obscured in some fashion. stream->height is the height of the
   formatted stream (find out if +ve or -ve height!). fmt->width is the
-  size we formatted in, and may be the<. == or > widest.
+  size we formatted in, and may be the <, == or > widest.
 
   */
-
-typedef void (*brkstate_fn) (RID_FMT_STATE *);
-
-static brkstate_fn fn_tuple_table [3 * rid_tag_LAST_TAG] =
-{
-    pbreak_maybe,	pbreak_must,	pbreak_dont ,
-    hline_maybe,	hline_must,	hline_dont ,
-    text_maybe,		text_must,	text_dont ,
-    bullet_maybe,	bullet_must,	bullet_dont ,
-    image_maybe,	image_must,	image_dont ,
-    input_maybe,	input_must,	input_dont ,
-    textarea_maybe,	textarea_must,	textarea_dont ,
-    select_maybe,	select_must,	select_dont ,
-    table_maybe,	table_must,	table_dont ,
-    object_maybe,	object_must,	object_dont 
-};
 
 extern void format_stream(antweb_doc *doc,
 			  rid_header *rh,
@@ -1263,57 +1048,9 @@ extern void format_stream(antweb_doc *doc,
     format_attach_header(fmt, rh);
     format_attach_stream(fmt, stream);
     dispose_pos_list(fmt);
-    fmt->brkstate = fmt->fmt_method = fmt_method;
+    fmt->fmt_method = fmt_method;
 
-#if ! V2
-    if (fmt->stream != NULL && fmt->stream->text_list != NULL)
-    {
-	/* Pick up the text item thread if not already got it */
-	if (fmt->WIT == NULL)
-	    stream_first_use_init(fmt);
-
-	ASSERT(fmt->WIT != NULL);
-
-	if ( ! FLOATING_ITEM(fmt->WIT) )
-	{
-	    add_word_to_current_line(fmt);
-	}
-
-	/* The action routine advances fmt->WIT if appropriate */
-	while (fmt->WIT != NULL)
-	{
-	    rid_text_item *ti = fmt->WIT;
-
-	    if ( FLOATING_ITEM(ti) )
-	    {
-		/* Floating item handling, without traditional break stuff */
-
-	    }
-	    else
-	    {
-		/* Standard formatting with the break state machine */
-		fn_tuple_table[ ti->tag * 3 + fmt->brkstate ] (fmt);
-	    }
-	}
-
-	if (fmt->SOL != NULL)
-	    complete_current_line(fmt);
-	prepare_for_text_line(fmt);
-
-	FMTDBG(("Widest line is %d pixels, total height is %d pixels\n",
-		fmt->max_pos.x, fmt->text_pos.y));
-
-	fmt->stream->widest = fmt->max_pos.x;
-	fmt->stream->width = /*fmt->max_pos.x;*/ fmt->stream->fwidth;
-	fmt->stream->height = fmt->text_pos.y;
-    }
-    else
-    {
-	FMTDBGN(("format_stream: nothing to format at this level\n"));
-    }
-#else
     formatting_loop(fmt);
-#endif
 
     FMTDBGN(("format_stream(%p): Format complete: width %d, height %d, widest %d.\n", 
 	     fmt, fmt->stream->width, fmt->stream->height, fmt->stream->widest));
@@ -1352,7 +1089,7 @@ extern void format_attach_stream(RID_FMT_STATE *fmt, rid_text_stream *stream)
 	     fmt, stream));
 
     fmt->stream = stream;
-    fmt->center_width = stream->fwidth;
+    fmt->format_width = stream->fwidth;
 }
 
 /*****************************************************************************/

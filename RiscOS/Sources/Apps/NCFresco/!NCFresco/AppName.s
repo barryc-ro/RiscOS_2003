@@ -6,6 +6,6 @@
         GBLS    ApplicationName
 ApplicationName SETS    "NCFresco"
         GBLS    ApplicationVersion
-ApplicationVersion SETS "1.12 (23 Apr 1997)"
+ApplicationVersion SETS "1.12 (30 Apr 1997)"
 
         END

@@ -45,7 +45,7 @@ typedef struct awp_page_str {
 #define doc_flag_DISPLAYING	(1<<16)	/* The document is being displayed, it's safe to try updating the view */
 #define doc_flag_INCOMPLETE	(1<<17)	/* The document fetch was haltedc before it was done */
 #define doc_flag_SECURE		(1<<18)	/* A secure method, such as SSL, was used. */
-
+#define doc_flag_HAD_HEADERS	(1<<19)	/* Have we transferred HTTP headers into the META list */
 
 #define doc_selection_tag_NONE	0
 #define doc_selection_tag_TEXT	1

@@ -110,6 +110,12 @@ extern void access_abort_all_items(void);
 extern BOOL access_is_scheme_supported(const char *scheme);
 extern void access_set_streaming(access_handle d, int stream);
 
+/*
+ * Calls HTTP_Status to read the headers for the current connection
+ * Actually returns http_header_item *
+ */
+extern void *access_get_headers(access_handle d);
+
 #ifdef ACCESS_INTERNAL
 
 typedef struct
