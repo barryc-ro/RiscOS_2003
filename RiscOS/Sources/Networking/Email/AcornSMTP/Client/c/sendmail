@@ -4,7 +4,7 @@
 
 	FILE:		sendmail.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.12 for RISC OS
+	VERSION:	0.15 for RISC OS
 
 	OVERVIEW
 	========
@@ -53,6 +53,17 @@
 					states and moved into INIT state so it's tried first
 					removed CRLF on end of CRLF.CRLF string in END_OF_DATA
 					state as the command_response FSM will add it.
+	23/03/98	0.13	RDW	sendmail_CAhandler and sendmail_CBhandler unused params.
+					tidied up
+	06/04/98	0.14	RDW	#ifdef MEMCHECK changed to MemCheck_MEMCHECK
+				RDW	Elib_priv.h taken from EmailLib now
+					DebugLib taken from exported lib now
+	28/05/98	0.15	RDW	moved switch to process1.state CONNECTING to
+					exit from CONNECT state where it should be!
+					And ensure on end of FSM CallAfter/Backs
+					are removed and process1.state = PROCESSING
+					Fixed MemCheck faulting on read in GET_HOST_NB
+					Re-entracy changes as per cmdresp.c 0.05
 */
 
 
@@ -71,7 +82,7 @@
 #include "inetlib.h"
 #include "unixlib.h"
 #include "sys/filio.h"
-#ifdef MEMCHECK
+#ifdef MemCheck_MEMCHECK
   #include "MemCheck:MemCheck.h"
 #endif
 
@@ -81,8 +92,8 @@
 /* Include header files - External Libraries                                  */
 /*                                                                            */
 /* ************************************************************************** */
-#include "DebugLib.h"
-#include "Elib_priv.h"
+#include "DebugLib/DebugLib.h"
+#include "Email/EmailLib/Elib_priv.h"
 
 
 /* ************************************************************************** */
@@ -155,6 +166,9 @@ typedef enum
 
 typedef struct
 {
+  BOOL                in_FSM;							/* Thread currently executing in FSM                   */
+  BOOL                pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
+  BOOL                need_CB;							/* There needs to be a CallBack set to re-enter the FSM*/
   time_t              t_slice;							/* timeslice, time to exit FSM by for re-entracy later */
   _kernel_oserror    *error;							/* OS error                                            */
   int                 errno;							/* Internet errno copy                                 */
@@ -228,7 +242,10 @@ static void sendmail_FSM_QUIT_RESPONSE(sendmail_context *c);
 static void sendmail_FSM_COMPLETED(sendmail_context *c);
 static void sendmail_FSM_ERROR(sendmail_context *c);
 static void sendmail_FSM_FATALERROR(sendmail_context *c);
-static _kernel_oserror *sendmail_FSM(sendmail_context *context);
+/*static _kernel_oserror *sendmail_FSM(sendmail_context *context);*/		/* commented out to stop compiler warning about unused earlier
+										   declaration of 'sendmail_.....'  Why should it complain?  Surely it's
+										   good practice to declare func. prototypes always, whether they
+										   are really needed or not...*/
 static _kernel_oserror *sendmail_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror *sendmail_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror* lookup_sys_var2char(const char var[], char *string, int *len);
@@ -236,6 +253,7 @@ static void strip_CRLF(char *string);						/* function to walk down a null termi
 void do_senders(int timeout, sendmail_context *c);
 void do_recipients(int timeout, sendmail_context *c);
 void data(int timeout, sendmail_context *c);
+static _kernel_oserror* CA_sendmail(void *data);
 
 
 /* ************************************************************************** */
@@ -243,73 +261,6 @@ void data(int timeout, sendmail_context *c);
 /* Functions                                                                  */
 /*                                                                            */
 /* ************************************************************************** */
-
-/* ************************************************************************** */
-/*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
- */
-/* ************************************************************************** */
-static sendmail_context *new_sendmail_context(void)
-{
-  sendmail_context *c = malloc(sizeof(sendmail_context));
-  dprintf(("", "new_sendmail_context\n"));
-  
-  if (c)
-  {
-    memset(c, 0, sizeof(sendmail_context));
-    c->sock = -1;
-    c->state = INIT;
-    c->new_line = TRUE;
-  }
-  
-  return c;
-}
-
-
-/* ************************************************************************** */
-/*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
- */
-/* ************************************************************************** */
-static void destroy_sendmail_context(sendmail_context **context)
-{
-  if (context)
-  {
-    if (*context)
-    {
-      sendmail_context *c = *context;
-      
-      if (c->hostname)			free(c->hostname);
-      if ((c->message) && (c->file))	free(c->message);
-      if (c->recipients)		destroy_array(&c->recipients, c->num_of_recipients);
-      if (c->senders)			destroy_array(&c->senders, c->num_of_senders);
-      if (c->fd)			fclose(c->fd);
-      if (c->buffer)			free(c->buffer);
-      if (c->localhost)			free(c->localhost);
-      destroy_response(&c->response);
-      destroy(&c->send_data);
-      free(c);
-    }
-    *context = 0;
-  }
-}
-
 
 /* ************************************************************************** */
 /*
@@ -449,7 +400,7 @@ extern _kernel_oserror* sendmail(BOOL  file,
         context->num_of_senders = num_senders;
         context->port_number = port_number;
         process1.sendmail_context = context;
-        process1.state = CONNECTING;
+        process1.state = PROCESSING;
         
         dprintf(("", "recipients: &%x\nnum_recipients: %d\nsenders: &%x\nnum_senders: %d\nport_number: %d\nhostname: %s\n", context->recipients, context->num_of_recipients, context->senders, context->num_of_senders, context->port_number, context->hostname));
         error = CB_sendmail(context);						/* set a callback to re-enter the FSM later   */
@@ -487,6 +438,73 @@ extern _kernel_oserror* sendmail(BOOL  file,
    VARIABLES:      
  */
 /* ************************************************************************** */
+static void destroy_sendmail_context(sendmail_context **context)
+{
+  if (context)
+  {
+    if (*context)
+    {
+      sendmail_context *c = *context;
+      
+      if (c->hostname)			free(c->hostname);
+      if ((c->message) && (c->file))	free(c->message);
+      if (c->recipients)		destroy_array(&c->recipients, c->num_of_recipients);
+      if (c->senders)			destroy_array(&c->senders, c->num_of_senders);
+      if (c->fd)			fclose(c->fd);
+      if (c->buffer)			free(c->buffer);
+      if (c->localhost)			free(c->localhost);
+      destroy_response(&c->response);
+      destroy(&c->send_data);
+      free(c);
+    }
+    *context = 0;
+  }
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static sendmail_context *new_sendmail_context(void)
+{
+  sendmail_context *c = malloc(sizeof(sendmail_context));
+  dprintf(("", "new_sendmail_context\n"));
+  
+  if (c)
+  {
+    memset(c, 0, sizeof(sendmail_context));
+    c->sock = -1;
+    c->state = INIT;
+    c->new_line = TRUE;
+  }
+  
+  return c;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
 static _kernel_oserror *sendmail_FSM(sendmail_context *context)
 {
   _kernel_oserror *error = 0;
@@ -498,6 +516,7 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
+    context->exit = FALSE;
     do										/* FSM do-while loop                    */
     {
       if ((context->error) && (context->state != FATALERROR))
@@ -603,16 +622,29 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
   
   if (!error)
   {
-    if (context->end)								/* if end of the FSM                          */
+    int state = smtp_irqs_off();						/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&sendmail_CAhandler, context);			/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&sendmail_CBhandler, context);			/* Ensure any pending callback is removed     */
       process1.socknum = context->sock;
       destroy_sendmail_context(&context);
       notify_client(&(process1.sendmail));
     }
-    else if (!context->exit)							/* else, if not told to exit FSM, then        */
-      error = CA_sendmail(context);						/* set a callback to re-enter the FSM later   */
-    else									/* else we were told to exit the FSM as it    */
-      context->exit = FALSE;							/* will be called back by anothe event        */
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
+    {
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_sendmail(context);						/* set a callafter to re-enter the FSM later  */
+    }
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_sendmail(context);						/* set a callback to re-enter the FSM         */
+    }
+    smtp_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
   
   return error;
@@ -621,26 +653,74 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
 
 extern _kernel_oserror* CA_sendmail(void *data)
 {
-  return callx_add_callafter(SLEEP_TIME, &sendmail_CAhandler, data);
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &sendmail_CAhandler, data);
+  else
+    return ERROR(NULLADDR);
 }
 
 
 extern _kernel_oserror* CB_sendmail(void *data)
 {
-  return callx_add_callback(&sendmail_CBhandler, data);
+  _kernel_oserror *error = 0;
+  int              state;
+  sendmail_context *context = (sendmail_context*)data;
+  
+  if (context)
+  {
+    state = smtp_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&sendmail_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    smtp_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
+  }
+  else
+    error = ERROR(NULLADDR);
+    
+  return error;
 }
 
   
 static _kernel_oserror* sendmail_CAhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  UNUSED(r);
+  UNUSED(pw);
+
   dprintf(("", "ENTERED: get_line_CAhandler\n"));
-  return callx_add_callback(&sendmail_CBhandler, data);
+
+  return CB_sendmail(data);
 }
 
 
 static _kernel_oserror *sendmail_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
-  return sendmail_FSM(data);
+  sendmail_context *context = (sendmail_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
+  dprintf(("", "ENTERED: sendmail_CBhandler\n"));
+  UNUSED(r);
+  UNUSED(pw);
+  
+  if (context)
+  {
+    state = smtp_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    smtp_restore_irqs(state);
+    error = sendmail_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
 }
 
 
@@ -730,7 +810,7 @@ static void sendmail_FSM_GET_HOST_NB(sendmail_context *c)
   }
   else										/* else, lookup has succeeded so copy out address*/
   {
-    #ifdef MEMCHECK
+    #ifdef MemCheck_MEMCHECK
       MemCheck_RegisterMiscBlock((void*)c->r.r[1], sizeof(struct hostent));
     #endif
     if (c->r.r[0] < 0)
@@ -749,16 +829,24 @@ static void sendmail_FSM_GET_HOST_NB(sendmail_context *c)
     {
       /* success */
       c->smtp_server = (struct hostent*)c->r.r[1];
+    MemCheck_SetChecking(0,0);
+      #ifdef MemCheck_MEMCHECK
+        MemCheck_RegisterMiscBlock((void*)c->smtp_server->h_addr, c->smtp_server->h_length);
+      #endif
       memcpy((char*)&(c->smtp_server_addr.sin_addr),
              c->smtp_server->h_addr,
              c->smtp_server->h_length);
       c->smtp_server_addr.sin_family = AF_INET;
       c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT               */
-      #ifdef MEMCHECK  
-        MemCheck_UnRegisterMiscBlock((void*)c->r.r[1]);
+      #ifdef MemCheck_MEMCHECK  
+        MemCheck_UnRegisterMiscBlock((void*)c->smtp_server->h_addr);
       #endif
     }
+    #ifdef MemCheck_MEMCHECK  
+      MemCheck_UnRegisterMiscBlock((void*)c->r.r[1]);
+    #endif
   }
+  MemCheck_SetChecking(1,1);
 }
 
 
@@ -876,6 +964,7 @@ static void sendmail_FSM_CONNECT(sendmail_context *c)
     else if (errno != EISCONN)							/* else if error is NOT ALREADY CONNECTED then                            */
     {
       c->state = CONNECT;							/* stay in this state                                                     */
+      process1.state = CONNECTING;      
       c->exit = TRUE;
     }
     else									/* else, we are connected so switch to GREETING state                     */
@@ -1405,6 +1494,7 @@ void do_recipients(int               timeout,
                    sendmail_context *c)
 {
   c->length = strlen(c->recipients[c->recipients_pos]) + 9;
+  dprintf(("", "do_recipients: c->length: %d\tstrlen: %d\n", c->length, strlen(c->recipients[c->recipients_pos])));
   c->send_data = (char*)malloc(c->length+1);
   if (c->send_data)
   {
