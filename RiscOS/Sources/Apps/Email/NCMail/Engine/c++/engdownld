@@ -39,10 +39,10 @@ void FinishHeaders(void)
 
   /*
   ** Tell the UI it can now display the Inbox,
-  ** but if rc is not ENG_COMPLETED, UI will know that
-  ** message list may be incomplete.
+  ** but message list may be incomplete.
   */
-  (*callbacklist.promptfunc)((ourmboxin->flags & MBOXINCOMPLETE) ? ENG_MBOXINCOMPLETE : ENG_COMPLETED, ourmboxin->list, online, callbacklist.prompthandle);
+  popprocessstate.ret.code = (ourmboxin->flags & MBOXINCOMPLETE) ? ENG_MBOXINCOMPLETE : ENG_COMPLETED;
+  (*callbacklist.promptfunc)(&popprocessstate.ret, ourmboxin->list, online, callbacklist.prompthandle);
 
   dprintf(("Eng", "Notifying UI that it can display Inbox\n"));
 
@@ -58,7 +58,7 @@ void FinishHeaders(void)
     /* we can now get on with downloading messages in the background */
     downloadstate.msg = ourmboxin->list;
     downloadstate.context = readytodownload;
-    downloadstate.rc = ENG_COMPLETED;
+    downloadstate.ret.code = ENG_COMPLETED;
     state |= DOWNLOADMSG;
   }
 
@@ -89,10 +89,11 @@ void DownloadFailure(MessageDescriptor *msg, uint32 size, bool headers)
     if (headers)
       ourmboxin->flags |= MBOXINCOMPLETE;
     downloadstate.msg = msg->next;
+    dprintf(("Eng", "Second attempt at message %d failed\n",msg->ID));
   }
   else
   {
-    if (downloadstate.rc == ENG_NOMEMORY)
+    if (downloadstate.ret.code == ENG_NOMEMORY)
     {
       /*
       ** There has been a malloc failure so try to free memory
@@ -108,6 +109,7 @@ void DownloadFailure(MessageDescriptor *msg, uint32 size, bool headers)
 
     /* try to download once more*/
     msg->flags |= ERROR;
+    dprintf(("Eng", "Setting error flag and trying again\n"));
   }
 }
 
@@ -156,7 +158,7 @@ void DownloadHeader(void)
         {
           file = SetFilename(msg->ID, true);
           dprintf(("Eng", "About to get headers for message %d\n",msg->ID));
-          downloadstate.hdrsobj = new MBoxOpCB_gethdrs_file((MBoxCBHandlerFn) eng_mbox_cbfunc, file, code, 0);
+          downloadstate.hdrsobj = new MBoxOpCB_gethdrs_file((MBoxCBHandlerFn) MBoxCallback, file, code, 0);
           downloadstate.context = idle;
           code = msg->mboxobj->GetHeaders(downloadstate.hdrsobj);
           if (code < 0)
@@ -164,7 +166,7 @@ void DownloadHeader(void)
             /* an error of some sort - skip this message */
             dprintf(("Eng", "***ERROR*** Error getting headers, rc=%d\n",code));
             downloadstate.context = downloadfailure;
-            downloadstate.rc = (code == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY : ENG_GETHDRFAILED;
+            downloadstate.ret.code = (code == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY : ENG_GETHDRFAILED;
           }
         }
         else
@@ -242,7 +244,8 @@ void DownloadMessage(void)
         state &= ~DOWNLOADMSG;
         StartTimeoutCount();
         StartReconnectCount(); 
-        (*callbacklist.promptfunc)(ENG_COMPLETED, ourmboxin->list, online, callbacklist.prompthandle);
+        downloadstate.ret.code = ENG_COMPLETED;
+        (*callbacklist.promptfunc)(&downloadstate.ret, ourmboxin->list, online, callbacklist.prompthandle);
 
       }
 
@@ -251,7 +254,8 @@ void DownloadMessage(void)
         /* a disconnect is pending */
         dprintf(("Eng", "Picking up disconnectpending while downloading\n"));
         state &= ~DOWNLOADMSG;
-        (*callbacklist.promptfunc)(ENG_COMPLETED, ourmboxin->list, online, callbacklist.prompthandle);
+        downloadstate.ret.code = ENG_COMPLETED;
+        (*callbacklist.promptfunc)(&downloadstate.ret, ourmboxin->list, online, callbacklist.prompthandle);
         PreDisconnect(true);
       }
 
@@ -280,13 +284,13 @@ void DownloadMessage(void)
             file = SetFilename(msg->ID, false);
             downloadstate.context = idle;
 
-            downloadstate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) eng_mbox_cbfunc, file, code, (void *) DOWNLOADMSG);
+            downloadstate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) MBoxCallback, file, code, (void *) DOWNLOADMSG);
             code = msg->mboxobj->GetMessage(downloadstate.msgobj);
             if (code < 0)
             {
               /* an error of some sort - skip this message */
               downloadstate.context = downloadfailure;
-              downloadstate.rc = (eng_rcode) code;
+              downloadstate.ret.code = (eng_rcode) code;
             }
           }
           else
@@ -304,9 +308,10 @@ void DownloadMessage(void)
 
     case downloadfailure :
 
-      dprintf(("Eng", "context = downloadfailure, rc = %d\n",downloadstate.rc));
+      dprintf(("Eng", "context = downloadfailure, rc = %d\n",downloadstate.ret.code));
       /* message download or parse has failed */
       RemoveObj((MBoxOpCB**) &downloadstate.msgobj);
+      downloadstate.context = readytodownload;
       msg->flags &= ~(DOWNLOADED + DOWNLOADING);
       DownloadFailure(msg, downloadstate.size, false);
 
@@ -331,7 +336,8 @@ void DoRetrieve(void)
       dprintf(("Eng", "context = reqconnect\n"));
       /* confirmation of connection required to get message */
       retrievestate.context = idle;
-      (*callbacklist.statusfunc)(ENG_CONFIRMCONNECT, callbacklist.statushandle, eng_confirm);
+      retrievestate.ret.code = ENG_CONFIRMCONNECT;
+      (*callbacklist.statusfunc)(&retrievestate.ret, callbacklist.statushandle, eng_confirm);
       break;
 
     case readytoconnect :
@@ -354,7 +360,7 @@ void DoRetrieve(void)
         /* some kind of error in gettingsize */
         dprintf(("Eng", "***ERROR*** Error returned from GetSize method\n"));
         retrievestate.context = retrievefailure;
-        retrievestate.rc = ENG_GETMSGFAILED;
+        retrievestate.ret.code = ENG_GETMSGFAILED;
       }
 
       else
@@ -363,13 +369,13 @@ void DoRetrieve(void)
         file = SetFilename(msg->ID, false);
         retrievestate.context = idle;
 
-        retrievestate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) eng_mbox_cbfunc, file, code, (void *) RETRIEVEMSG);
+        retrievestate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) MBoxCallback, file, code, (void *) RETRIEVEMSG);
         code = msg->mboxobj->GetMessage(retrievestate.msgobj);
         if (code < 0)
         {
           /* an error of some sort - skip this message */
           retrievestate.context = downloadfailure;
-          retrievestate.rc = (code == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY  : ENG_GETMSGFAILED;
+          retrievestate.ret.code = (code == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY  : ENG_GETMSGFAILED;
         }
       }
 
@@ -379,8 +385,9 @@ void DoRetrieve(void)
 
       dprintf(("Eng", "context = retrievefailure\n"));
       state &= ~RETRIEVEMSG;
+      msg->flags &= ~(DOWNLOADED + DOWNLOADING);
       StartTimeoutCount();
-      (*callbacklist.getmsgfunc)(retrievestate.rc, retrievestate.msg, callbacklist.getmsghandle);
+      (*callbacklist.getmsgfunc)(&retrievestate.ret, msg, callbacklist.getmsghandle);
       break;
 
     case downloadpending :
@@ -457,7 +464,10 @@ void DoRetrieve(void)
       /* finished downloading message,
          so we can now return it to the UI */
       state &= ~RETRIEVEMSG;
-      (*callbacklist.getmsgfunc)(ENG_COMPLETED, retrievestate.msg, callbacklist.getmsghandle);
+      msg->flags &= ~DOWNLOADING;
+      msg->flags |= DOWNLOADED;
+      retrievestate.ret.code = ENG_COMPLETED;
+      (*callbacklist.getmsgfunc)(&retrievestate.ret, msg, callbacklist.getmsghandle);
       if (disconnectpending)
       {
         dprintf(("Eng", "A disconnect is pending\n"));
