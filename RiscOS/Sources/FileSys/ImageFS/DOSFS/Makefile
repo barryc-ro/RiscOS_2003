@@ -59,7 +59,7 @@ COMPONENT = DOSFS
 TARGET    = aof.DOSFS
 EXPORTS   = ${EXP_HDR}.DOSFS
 
-OBJS =\
+OBJS_COMMON =\
  o.DOSFS\
  o.DOSFSops\
  o.DOSFSctl\
@@ -70,7 +70,14 @@ OBJS =\
  o.debug\
  o.MsgTrans\
  o.Statics\
- o.StaticDefs\
+ o.StaticDefs
+
+OBJS_RAM =\
+ ${OBJS_COMMON}\
+ o.DOSFShdrRAM
+
+OBJS_ROM =\
+ ${OBJS_COMMON}\
  o.init\
  o.DOSFShdr
 
@@ -117,8 +124,8 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS_ROM} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS_ROM} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -128,13 +135,16 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.DOSFS: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB}
+rm.DOSFS: ${OBJS_RAM} ${CLIB}
+        ${LD} -o $@ -module ${OBJS_RAM} ${CLIB}
 
 ${EXP_HDR}.DOSFS: hdr.DOSFS
         ${CP} hdr.DOSFS $@ ${CPFLAGS}
 
 # Static dependencies:
+
+o.DOSFShdrRAM: cmhg.DOSFShdr
+        ${CMHG} -p -DRAM -o $@ cmhg.DOSFShdr
 
 # recreate h.DOSFShdr if necessary
 o.DOSFS: h.DOSFShdr
