@@ -143,6 +143,7 @@ ppa_error	*	&100				; PPA error
 ppa_noconnect	*	&100				; Device not connected
 ppa_timeout	*	&104				; Device timed out
 ppa_overrun	*	&108				; Data overrun
+ppa_printerused	*	&10c				; Printer in use
 
 ; Flag registers for Tx - Do not change
 flag_bulk	*	(1<<0)				; Used if transferring blocks of data to/from the Zip drive
@@ -166,7 +167,9 @@ PPASpeed	#	1				; PPA Speed
 PPAMode		#	1				; PPA Mode (0=SPP, 1=EPP @ &3F0, 2=EPP @ &370)
 OldIOC		#	1				; Old IOC IRQ A mask value
 PPAPrinter	#	1				; Printer status
-Dummies1	#	1				; Dummy bytes to pad out the registers
+PausedCCQueue	#	1				; Flag to indicate whether we paused CC queue or not
+SCSIOperation	#	1				; Flag to indicate if we are in SCSI command mode
+DummyPad	#	3				; 3 bytes of dummy workspace
 SCSITemp	#	512				; Temporary workspace for SCSI commands
  [ cmd_history = 1
 History		#	cmd_historysize*32		; 16 bytes header, 16 bytes entry parameters
@@ -246,6 +249,8 @@ switabl	=	"PPADriver",0				; SWI Group name
  [ DoReadOp = 1
 	=	"ReadOp",0				; Perform a read operation
  ]
+	=	"PrintStatus",0				; Check the status of any print queues
+	=	"VPI0Detect",0				; Check presence of VPI0
 	=	0
 	ALIGN
 
@@ -320,8 +325,8 @@ swijump	B	Initialise
 	B	ReadOp
 	MOVS	pc,lr
  |
-	MOVS	pc,lr
-	MOVS	pc,lr
+	B	PrintStatus
+	B	VPI0Detect
  ]
 
 ukswi	ADR	r0,ukswie				; Point to error
@@ -568,6 +573,21 @@ SCRStat	ADR	r0,StatCmd
 
 SCSICommand
 	STMFD	r13!,{r1-r10,lr}
+
+	LDRB	r11,PPAPrinter
+	TEQ	r11,#0
+	BEQ	SC_noprinter
+
+	STMFD	r13!,{r0-r2}
+	BL	PrintStatus
+	TEQ	r1,#0					; Is there stuff in the CC queue?
+	LDMFD	r13!,{r0-r2}				; Nope, so let's return...
+	LDMNEFD	r13!,{r1-r10,lr}			; ...
+	MOVNE	r0,#ppa_printerused			; ...
+	BICNES	pc,lr,#1<<28				; ... back to the SWI caller
+
+SC_noprinter
+
  [ cmd_history = 1
 	BL	add_history
  ]
@@ -1357,8 +1377,17 @@ DisableIRQ
 
 	STMFD	r13!,{r0,r9}
 	MOV	r0,#0
+	STRB	r0,PausedCCQueue			; Clear the TurboDriver pause bit
+	SWI	&61446					; Call PrintQueue_Status
+	BVS	DI_menotpaused
+	TEQ	r0,#0					; Are there any bytes in the buffer?
+	BEQ	DI_menotpaused				; Nope, so we don't have to pause it
+	TST	r4,#1<<31				; Is the queue paused?
+	BNE	DI_menotpaused				; Yup, so we don't have to do it ourselves
+	MOV	r0,#0
 	MOV	r9,#0
 	SWI	&6144c					; This is PrintQueue_PauseResume - disabling queue
+DI_menotpaused
 	LDMFD	r13!,{r0,r9}
 
 	SWI	XOS_ReadMonotonicTime
@@ -1373,6 +1402,7 @@ DIL	MOV	r0,#3
 	BLT	DIL					; ...try again!
 
 	LDMFD	r13!,{r5-r7}
+
 	LDMFD	r13!,{r0-r4,r11,lr}			; Restore all the registers
 
 	ADR	r0,DI_Error
@@ -1384,6 +1414,9 @@ DI_Error
 
 EDIL
 	LDMFD	r13!,{r5-r7}
+
+	MOV	r0,#1
+	STRB	r1,SCSIOperation			; We are using the parallel port...
 
 	LDRB	r0,PPAMode
 	TEQ	r0,#0					; SPP mode doesn't need reconfiguring each time
@@ -1465,10 +1498,15 @@ EI_NotEPP
 	STRB	r0,CommandReg
 
 	STMFD	r13!,{r0,r9}
+	LDRB	r0,PausedCCQueue
+	TEQ	r0,#0
 	MOV	r0,#1
 	MOV	r9,#0
-	SWI	&6144c					; This is PrintQueue_PauseResume - resuming paused queue
+	SWINE	&6144c					; This is PrintQueue_PauseResume - resuming paused queue
 	LDMFD	r13!,{r0,r9}
+
+	MOV	r0,#0
+	STRB	r0,SCSIOperation			; Clear the SCSI operation flag
 
 	LDMFD	r13!,{r0-r4,r11,pc}^
 
@@ -1548,7 +1586,7 @@ print_commandhistory
 	=	"Total commands :",0
 	ALIGN
 	LDR	r0,Commands
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertInteger4
 	SWI	XOS_Write0
@@ -1570,35 +1608,35 @@ print_commandhistory
 pch_loop
 	LDMIA	r11!,{r5-r8}
 	RSB	r0,r10,#cmd_historysize
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex2
 	SWI	XOS_Write0
 	SWI	&20120
 
 	MOV	r0,r5
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex8
 	SWI	XOS_Write0
 	SWI	&20120
 
 	MOV	r0,r6
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex6
 	SWI	XOS_Write0
 	SWI	&20120
 
 	MOV	r0,r7
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex8
 	SWI	XOS_Write0
 	SWI	&20120
 
 	MOV	r0,r8
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex8
 	SWI	XOS_Write0
@@ -1613,7 +1651,7 @@ pch_loop
 pch_cmdl
 	LDRB	r0,[r11,r5]
 	CMP	r5,r6
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex2
 	CMP	r5,r6
@@ -1626,7 +1664,7 @@ pch_cmdl
 	SWI	&20120
 
 	LDRB	r0,[r11,#14]
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex2
 	SWI	XOS_Write0
@@ -1638,7 +1676,7 @@ pch_cmdl
 	SWINE	&20100+'-'
 	BNE	pch_nost2
 	LDRB	r0,[r11,#15]
-	ADR	r1,Numbers
+	ADRL	r1,Numbers
 	MOV	r2,#12
 	SWI	XOS_ConvertHex2
 	SWI	XOS_Write0
@@ -1693,5 +1731,72 @@ end_command
 ;	STRB	r0,History
 	LDMFD	r13!,{r0-r11,pc}^
  ]
+
+PrintStatus
+; registers not needed on exit
+; r0 is status of Acorn print queue (#bytes waiting to be sent)
+; r1 is status of CC print queue (#bytes waiting to be sent)
+	STMFD	r13!,{r3-r9,lr}
+
+; First, work out the CC print queue. This is based on the SWI information
+; that William Waghorn sent me.
+
+	MOV	r9,#0					; This is the CC queue status
+	MOV	r0,#0
+	SWI	&61446
+	BVS	PS_noccqueue
+	TEQ	r0,#0
+	BEQ	PS_noccqueue				; There's no bytes in the queue to be sent
+	TST	r4,#1<<31
+	MOVEQ	r9,r0					; If the queue's not paused, then there's stuff to print
+PS_noccqueue
+
+; Now to work out the Acorn queue status
+
+	MOV	r0,#3
+	SWI	XBuffer_GetInfo				; Find out the number of characters in the print queue
+	MOV	r0,r6					; Store these into r0
+	MOV	r1,r9					; Store the number of characters in CC print queue in r1
+	LDRB	r2,SCSIOperation			; Read the SCSI operation status...
+	LDMFD	r13!,{r3-r9,pc}^			; and exit
+
+VPI0Detect
+	STMFD	r13!,{r1-r3,lr}
+	LDR	r11,ParallelAddress
+
+	BL	DisableIRQ
+	LDMVSFD	r13!,{r1-r3,pc}
+
+	BL	ZipDisconnect
+	BL	ZipConnectSPP
+
+	LDRB	r0,CommandReg
+	BIC	r0,r0,#2
+	STRB	r0,CommandReg
+
+	LDRB	r0,StatusReg
+	TST	r0,#1<<3
+	BNE	vpi0_none
+
+	LDRB	r0,CommandReg
+	ORR	r0,r0,#2
+	STRB	r0,CommandReg
+
+	LDRB	r0,StatusReg
+	TST	r0,#1<<3
+	BEQ	vpi0_none
+
+	BL	ZipDisconnect
+	BL	EnableIRQ
+
+	MOV	r0,#1
+	LDMFD	r13!,{r1-r3,pc}^
+
+vpi0_none
+	BL	ZipDisconnect
+	BL	EnableIRQ
+
+	MOV	r0,#0
+	LDMFD	r13!,{r1-r3,pc}^
 
 	END
