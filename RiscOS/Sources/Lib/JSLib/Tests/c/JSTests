@@ -1,0 +1,430 @@
+/***************************************************/
+/* File   : JSTests.c                              */
+/*                                                 */
+/* Purpose: To test out the JavaScript API.        */
+/*                                                 */
+/* Author : A.D.Hodgkinson, based on the example   */
+/*          interactive interpreter in the         */
+/*          Mozilla JavaScript implementation.     */
+/*                                                 */
+/* History: 21-Apr-98: Created.                    */
+/***************************************************/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "jsapi.h"
+
+#include "SetFPSR.h"
+#include "svcprint.h"
+
+/* Local compilation options */
+
+#undef WATCHDOG
+
+/* Local definitions */
+
+#define fileno(f) ((f)->__file)
+#define isatty(f) (f == 0)
+
+#define JavaScript_MaximumHeapSize ((uint32) (8 * 1024 * 1024))
+
+/* Local function prototypes. These have to come before */
+/* the class definitions etc. as some of the arrays     */
+/* require pointers to some of the functions.           */
+
+static JSBool             main_get_property        (JSContext * cx, JSObject * obj, jsval id, jsval * vp);
+
+static JSBool PR_CALLBACK main_branch_callback     (JSContext * cx, JSScript * script);
+static void               main_report_errors       (JSContext * cx, const char * message, JSErrorReport * report);
+
+static JSBool             main_test_function_help  (JSContext * cx, JSObject * obj, uintN argc, jsval * argv, jsval * rval);
+static JSBool             main_test_function_print (JSContext * cx, JSObject * obj, uintN argc, jsval * argv, jsval * rval);
+static JSBool             main_test_function_quit  (JSContext * cx, JSObject * obj, uintN argc, jsval * argv, jsval * rval);
+
+/* Class definitions */
+
+static JSClass global_class =
+{
+  "global", 0,
+  JS_PropertyStub,  JS_PropertyStub, JS_PropertyStub, JS_PropertyStub,
+  JS_EnumerateStub, JS_ResolveStub,  JS_ConvertStub,  JS_FinalizeStub
+};
+
+static JSClass test_class =
+{
+  "test", 0,
+  JS_PropertyStub,  JS_PropertyStub, main_get_property, JS_PropertyStub,
+  JS_EnumerateStub, JS_ResolveStub,  JS_ConvertStub,    JS_FinalizeStub
+};
+
+enum test_tinyid
+{
+  TEST_PROPERTY1,
+  TEST_PROPERTY2
+};
+
+static JSPropertySpec test_props[] =
+{
+  { "property1", TEST_PROPERTY1, JSPROP_ENUMERATE },
+  { "property2", TEST_PROPERTY2, JSPROP_ENUMERATE },
+  { 0 }
+};
+
+/* Functions within the classes */
+
+static JSFunctionSpec test_functions[] =
+{
+  { "help",  main_test_function_help,  0 },
+  { "print", main_test_function_print, 0 },
+  { "quit",  main_test_function_quit,  0 },
+  { 0 }
+};
+
+/*************************************************/
+/* main_get_property()                           */
+/*                                               */
+/* Handler for getting a property for an object  */
+/* - except it'll be modified on the way through */
+/*************************************************/
+
+static JSBool main_get_property(JSContext * cx, JSObject * obj, jsval id, jsval * vp)
+{
+  printf("JSVal id: %x, *vp: %x\n",(int) id, (int) *vp);
+
+  return JS_TRUE;
+}
+
+/*************************************************/
+/* main_branch_callback()                        */
+/*                                               */
+/* Periodically called by JavaScript interpreter */
+/* - handles occasional garbage collection,      */
+/* watchdog timing, etc.                         */
+/*                                               */
+/* Parameters are as standard for a JavaScript   */
+/* callback handler. Ahem.                       */
+/*************************************************/
+
+JSBool PR_CALLBACK main_branch_callback(JSContext * cx, JSScript * script)
+{
+  static unsigned int count = 0;
+
+  /* Garbage collect very often; allow a million iterations */
+  /* before complaining                                     */
+
+  #define BRANCH_CALLBACK_GC_MASK      0
+  #define BRANCH_CALLBACK_INTERRUPT_AT 1000000
+
+  /* Handle periodic garbage collection */
+
+  if (!(++count & BRANCH_CALLBACK_GC_MASK))
+  {
+    JS_MaybeGC(cx);
+  }
+
+  #ifdef WATCHDOG
+
+    /* Watchdog - if the script has taken more than a certain */
+    /* number of iterations, abort execution.                 */
+
+    if (count > BRANCH_CALLBACK_INTERRUPT_AT)
+    {
+      printf("JS interpreter probably locked; forcing an exit\n");
+      return JS_FALSE;
+    }
+
+  #endif
+
+  return JS_TRUE;
+}
+
+/*************************************************/
+/* main_report_errors()                          */
+/*                                               */
+/* Report errors from the JavaScript             */
+/* interpreter.                                  */
+/*                                               */
+/* Parameters are as standard for a JavaScript   */
+/* error handling function.                      */
+/*************************************************/
+
+static void main_report_errors(JSContext * cx, const char * message, JSErrorReport * report)
+{
+  int i, j, k, n;
+
+  fputs("js: ", stderr);
+
+  /* If there's no more information from JavaScript than the */
+  /* basic error message, just give the error.               */
+
+  if (!report)
+  {
+    fprintf(stderr, "%s\n", message);
+
+    return;
+  }
+
+  /* If we have a filename and/or line number, report them */
+
+  if (report->filename) fprintf(stderr, "%s, ", report->filename);
+  if (report->lineno)   fprintf(stderr, "line %u: ", report->lineno);
+
+  /* Output the basic error message */
+
+  fputs(message, stderr);
+
+  /* If that's all we have, exit */
+
+  if (!report->linebuf)
+  {
+    putc('\n', stderr);
+
+    return;
+  }
+
+  /* Otherwise, print out the contents of the error report block's line buffer */
+
+  fprintf(stderr, ":\n%s\n", report->linebuf);
+
+  n = report->tokenptr - report->linebuf;
+
+  for (i = j = 0; i < n; i++)
+  {
+    if (report->linebuf[i] == '\t')
+    {
+      for (k = (j + 8) & ~7; j < k; j++) putc('.', stderr);
+
+      continue;
+    }
+
+    putc('.', stderr);
+    j++;
+  }
+
+  fputs("^\n", stderr);
+
+  /* Finished */
+
+  return;
+}
+
+/*************************************************/
+/* main_test_function_help()                     */
+/*                                               */
+/* Provide the shell 'help()' function.          */
+/*                                               */
+/* Paramters are as standard for a JavaScript    */
+/* function call handler.                        */
+/*************************************************/
+
+static JSBool main_test_function_help(JSContext * cx, JSObject * obj,
+                                      uintN argc, jsval * argv, jsval * rval)
+{
+  printf("Help function called...\n");
+
+  return JS_TRUE;
+}
+
+/*************************************************/
+/* main_test_function_print()                    */
+/*                                               */
+/* Provide the shell 'print()' function. Adapted */
+/* from Core.c.js.                               */
+/*                                               */
+/* Paramters are as standard for a JavaScript    */
+/* function call handler.                        */
+/*************************************************/
+
+static JSBool main_test_function_print(JSContext * cx, JSObject * obj,
+                                       uintN argc, jsval * argv, jsval * rval)
+{
+  uintN      i, n;
+  JSString * str;
+
+  for (i = n = 0; i < argc; i++)
+  {
+    str = JS_ValueToString(cx, argv[i]);
+
+    if (!str) return JS_FALSE;
+
+    printf("%s%s", i ? " " : "", JS_GetStringBytes(str));
+
+    n++;
+  }
+
+  if (n) putchar('\n');
+
+  return JS_TRUE;
+}
+
+/*************************************************/
+/* main_test_function_quit()                     */
+/*                                               */
+/* Provide the shell 'quit()' function.          */
+/*                                               */
+/* Paramters are as standard for a JavaScript    */
+/* function call handler.                        */
+/*************************************************/
+
+static JSBool main_test_function_quit(JSContext * cx, JSObject * obj,
+                                      uintN argc, jsval * argv, jsval * rval)
+{
+  exit(EXIT_SUCCESS);
+
+  return JS_FALSE;
+}
+
+/*************************************************/
+/* main()                                        */
+/*                                               */
+/* That which runs before all others.            */
+/*************************************************/
+
+int main(int argc, char * argv[])
+{
+  JSRuntime * rt;
+  JSContext * cx;
+  JSObject  * global;
+  JSObject  * test;
+  JSScript  * script;
+  JSBool      successful;
+  jsval       script_result;
+
+  /* Configure the floating point environment to act in a manner expected */
+  /* by the JavaScript parser - turn off all exceptions.                  */
+
+  set_fpsr(0, fpsr_trap_INX |
+              fpsr_trap_UFL |
+              fpsr_trap_OFL |
+              fpsr_trap_DVZ |
+              fpsr_trap_IVO);
+
+  /* Initialise the JavaScript system */
+
+  rt = JS_Init(JavaScript_MaximumHeapSize);
+
+  if (!rt)
+  {
+    fprintf(stderr, "Cannot initialise JavaScript engine");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Get an instantiation context */
+
+  cx = JS_NewContext(rt, 8192); /* All ops should now be done in context 'cx' */
+
+  if (!cx)
+  {
+    fprintf(stderr, "Cannot gain a JavaScript instantiation context");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Define the global object. We don't give an object prototype as */
+  /* this is the underlying global object and in a moment, the      */
+  /* standard (core) JavaScript classes will be initialised within  */
+  /* it. Until we do that, the context ('cx') does not hold any     */
+  /* information on the standard classes.                           */
+
+  global = JS_NewObject(cx,            /* Context                                  */
+                        &global_class, /* Pointer to class descriptor              */
+                        NULL,          /* JSObject pointer, for object's prototype */
+                        NULL);         /* JSObject pointer, for object's parent    */
+
+  if (!global)
+  {
+    fprintf(stderr, "Could not define global object");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Initialise the standard classes within the global object */
+
+  if (
+       !JS_InitStandardClasses(cx,     /* Context                                            */
+                               global) /* Object to set as global, if one is not already set */
+     )
+  {
+    fprintf(stderr, "Could not initialise standard classes");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Set up a watchdog-type function, and a function to report */
+  /* errors through                                            */
+
+  JS_SetBranchCallback(cx, main_branch_callback);
+  JS_SetErrorReporter (cx, main_report_errors);
+
+  /* JavaScript is now up and running. We have a context in which */
+  /* operations may be carried out, and a global object holding   */
+  /* the standard classes. We may now go on to define further     */
+  /* functions with the global object, make new objects, execute  */
+  /* scripts, etc.                                                */
+
+  /* Define some test functions within the global object. */
+
+  if (
+       !JS_DefineFunctions(cx,             /* Context                         */
+                           global,         /* Object to define in             */
+                           test_functions) /* Pointer to JSFunctionSpec array */
+     )
+  {
+    fprintf(stderr, "Could not define global object's extra test functions");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Define the 'test' object within the global object */
+
+  test = JS_DefineObject(cx,
+                         global,
+                         "test",
+                         &test_class,
+                         NULL,
+                         0);
+
+  if (!test)
+  {
+    fprintf(stderr, "Could not set up 'test' object");
+    exit(EXIT_FAILURE);
+  }
+
+  if (
+       !JS_DefineProperties(cx,
+                            test,
+                            test_props)
+     )
+  {
+    fprintf(stderr, "Could not set 'test' object's properties");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Try a script... :-) */
+
+  script = JS_CompileFile(cx, global, "script/js");
+
+  if (!script)
+  {
+    fprintf(stderr, "Could not load script");
+    exit(EXIT_FAILURE);
+  }
+
+  successful = JS_ExecuteScript(cx, global, script, &script_result);
+
+  JS_DestroyScript(cx, script);
+
+  if (!successful)
+  {
+    fprintf(stderr, "Did not run script successfully");
+    exit(EXIT_FAILURE);
+  }
+
+  printf("Completed OK\n");
+
+  /* Clean up */
+
+  JS_DestroyContext(cx);
+
+  JS_Finish(rt);
+
+  exit(EXIT_SUCCESS);
+}
