@@ -57,7 +57,6 @@ APP       = abs.!RunImage
 OBJS      = o.kill o.main o.mainwindow o.screen
 OBJSZ     = oz.kill oz.main oz.mainwindow oz.screen oz.ModuleWrap
 OBJSZRAM  = oz.kill oz.main oz.mainwindow oz.screen oz.ModuleWra1
-RDIR      = Resources.${LOCALE}
 EXPORTS   = 
 
 .SUFFIXES: .oz .d
@@ -108,15 +107,14 @@ clean:
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${APP}
         @echo ${COMPONENT}: cleaned
 
 resources:
         ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run ${CPFLAGS}
+        ${CP} LocalRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
+        ${CP} LocalRes:!RunROM ${RESAPP}.!Run ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -148,9 +146,7 @@ ${TARGET}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -158,99 +154,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-oz.ModuleWra1: s.ModuleWrap
-oz.ModuleWra1: s.AppName
-oz.ModuleWra1: Hdr:ListOpts
-oz.ModuleWra1: Hdr:Macros
-oz.ModuleWra1: Hdr:System
-oz.ModuleWra1: Hdr:SWIs
-oz.ModuleWra1: Hdr:CPU.Generic26
-oz.ModuleWra1: Hdr:IO.GenericIO
-oz.ModuleWra1: Hdr:RISCOS
-oz.ModuleWra1: Hdr:ModHand
-oz.ModuleWra1: Hdr:EnvNumbers
-oz.ModuleWra1: Hdr:Proc
-oz.ModuleWra1: Hdr:FSNumbers
-oz.ModuleWra1: Hdr:NewErrors
-oz.ModuleWra1: Hdr:Services
-oz.ModuleWra1: Hdr:ResourceFS
-oz.ModuleWra1: Hdr:MsgTrans
-oz.ModuleWra1: Hdr:Variables
-oz.ModuleWra1: Hdr:UpCall
-oz.ModuleWra1: s.ResFiles
-oz.ModuleWra1: s.sutil
-o.kill:	c.kill
-o.kill:	h.defs
-o.kill:	C:h.kernel
-o.kill:	h.inlines
-o.kill:	C:h.swis
-o.kill:	h.wimp
-o.kill:	h.defs
-main:	c.main
-main:	h.defs
-main:	C:h.kernel
-main:	h.inlines
-main:	C:h.swis
-main:	h.screen
-main:	h.defs
-main:	h.SmartCard
-main:	h.wimp
-main:	h.defs
-o.screen:	c.screen
-o.screen:	h.defs
-o.screen:	C:h.kernel
-o.screen:	h.inlines
-o.screen:	C:h.swis
-o.main:	c.main
-o.main:	h.defs
-o.main:	C:h.kernel
-o.main:	h.inlines
-o.main:	C:h.swis
-o.main:	h.screen
-o.main:	h.defs
-o.main:	h.SmartCard
-o.main:	h.wimp
-o.main:	h.defs
-oz.kill:	c.kill
-oz.kill:	h.defs
-oz.kill:	C:h.kernel
-oz.kill:	h.inlines
-oz.kill:	C:h.swis
-oz.kill:	h.wimp
-oz.kill:	h.defs
-oz.main:	c.main
-oz.main:	h.defs
-oz.main:	C:h.kernel
-oz.main:	h.inlines
-oz.main:	C:h.swis
-oz.main:	h.screen
-oz.main:	h.defs
-oz.main:	h.SmartCard
-oz.main:	h.wimp
-oz.main:	h.defs
-oz.screen:	c.screen
-oz.screen:	h.defs
-oz.screen:	C:h.kernel
-oz.screen:	h.inlines
-oz.screen:	C:h.swis
-oz.ModuleWrap: s.ModuleWrap
-oz.ModuleWrap: s.AppName
-oz.ModuleWrap: Hdr:ListOpts
-oz.ModuleWrap: Hdr:Macros
-oz.ModuleWrap: Hdr:System
-oz.ModuleWrap: Hdr:SWIs
-oz.ModuleWrap: Hdr:CPU.Generic26
-oz.ModuleWrap: Hdr:IO.GenericIO
-oz.ModuleWrap: Hdr:RISCOS
-oz.ModuleWrap: Hdr:ModHand
-oz.ModuleWrap: Hdr:EnvNumbers
-oz.ModuleWrap: Hdr:Proc
-oz.ModuleWrap: Hdr:FSNumbers
-oz.ModuleWrap: Hdr:NewErrors
-oz.ModuleWrap: Hdr:Services
-oz.ModuleWrap: Hdr:ResourceFS
-oz.ModuleWrap: Hdr:MsgTrans
-oz.ModuleWrap: Hdr:Variables
-oz.ModuleWrap: Hdr:UpCall
-oz.ModuleWrap: s.ResFiles
-oz.ModuleWrap: s.sutil
