@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include "VersionNum"
 
@@ -33,6 +34,7 @@ static uint16 crc_table[CRC_TABLE_SIZE];
 struct module {
   struct module *next;
   char *name;
+  uint32 fixed_pos;
 };
 
 /* Global info on where we are in the ROM, what the current checksum is,
@@ -130,7 +132,7 @@ static void put_word(struct file_info *finfo, uint32 word) {
 /* Write a module to the output file preceded by the length (if not the
  * kernel),
  */
-static void add_module(struct file_info *finfo, char *mod, int kernel) {
+static void add_module(struct file_info *finfo, char *mod, int kernel, int unlinked) {
   int c;
   int modsize;
   uint16 wb_crc,wb_indx;
@@ -147,7 +149,7 @@ static void add_module(struct file_info *finfo, char *mod, int kernel) {
     exit(1);
   }
   modsize=4+(int)ftell(in);
-  if(!kernel)
+  if(!kernel&&!unlinked)
     put_word(finfo,(modsize+3)&~3);
   rewind(in);
   printf("Adding module at 0x%.8x: %s\n",finfo->fi_pos,mod);
@@ -187,6 +189,7 @@ static void read_splitfile(char *forbigsplit, struct module **modptr,
                            char **image, uint32 *imagesize) {
   FILE *splitfile;
   char *name, *size, *extra;
+  uint32 pos=0;
 
   splitfile=fopen(forbigsplit,"r");
   if(!splitfile) {
@@ -194,7 +197,7 @@ static void read_splitfile(char *forbigsplit, struct module **modptr,
             strerror(errno));
     exit(1);
   };
-  
+
   /* Read the header lines */
   if(!(name=getline(splitfile),name)) {
     printf("%s: Could not get mosfile\n",progname);
@@ -219,9 +222,15 @@ static void read_splitfile(char *forbigsplit, struct module **modptr,
     /* Add the last name */
     *modptr=malloc(sizeof(struct module));
     (*modptr)->name=name;
+    (*modptr)->fixed_pos=pos;
     modptr=&(*modptr)->next;
     /* Get the next one */
     name=getline(splitfile);
+    if(name && isdigit(name[0])) {
+      pos=atoi(name);
+      name=getline(splitfile);
+    }
+    else pos=0;
     if(!name||!name[0]) {
       if(name) free(name);
       *modptr=NULL;
@@ -237,9 +246,23 @@ static void write_modules(struct module *modlist, struct file_info *finfo,
                           int maxsize) {
   int kernel=1;
   struct module *tmp;
+  int chain_terminated = 0;
 
   while(modlist) {
-    add_module(finfo,modlist->name,kernel);
+    if (modlist->fixed_pos) {
+      if (!chain_terminated) {
+        put_word(finfo,0); /* End module chain */
+        chain_terminated = 1;
+      }
+      if (finfo->fi_pos>modlist->fixed_pos) {
+        fprintf(stderr, "%s: component overlaps previous data\n", progname);
+        exit(1);
+      }
+      printf("%.2fK free before %s - padding with 0xff\n", (modlist->fixed_pos-finfo->fi_pos)/1024.0, modlist->name);
+      while(finfo->fi_pos<modlist->fixed_pos)
+        put_word(finfo,0xffffffff); /* Pad with 0xff */
+    }
+    add_module(finfo,modlist->name,kernel,modlist->fixed_pos);
     kernel=0;
     /* Check for overflow after every module */
     if(finfo->fi_pos>maxsize) {
@@ -252,7 +275,8 @@ static void write_modules(struct module *modlist, struct file_info *finfo,
     modlist=tmp->next;
     free(tmp);
   };
-  put_word(finfo,0); /* End module chain */
+  if (!chain_terminated)
+    put_word(finfo,0); /* End module chain */
 }
 
 static void usage() {
@@ -279,7 +303,7 @@ int main(int argc,char **argv) {
   make_crc_table();
   while(1) {
     if(argc<2) usage(); /* Make sure argv[1] exists */
-  
+
     if(!strcmp(argv[1],"-sigstr")) {
       if(argc<4) usage();
       if(strlen(argv[2])!=4) {
@@ -343,7 +367,7 @@ int main(int argc,char **argv) {
            finfo->fi_pos-(finfo->fi_imagesize-endblock));
     exit(1);
   };
-  printf("ROM image has %.2fk unused\n",
+  printf("ROM image has %.2fK unused\n",
          ((double)(finfo->fi_imagesize-endblock-finfo->fi_pos))/1024);
   printf("Padding with 0xff\n");
   while(finfo->fi_pos<finfo->fi_imagesize-endblock)

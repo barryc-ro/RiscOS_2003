@@ -131,6 +131,3 @@ abs.CRC: o.CRC ${CLIB}
 
 #
 # Dynamic dependencies:
-o.bigsplit2:	c.bigsplit2
-o.bigsplit2:	VersionNum
-o.CRC:	c.CRC
