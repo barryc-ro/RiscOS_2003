@@ -42,6 +42,19 @@
  * SJM 27-Feb-98 Removed sendv() use in send request and send request headers as they fail to work
  *		 (When using ssl) with the lotus domino server.
  * SJM 02-Mar-98 Split off the PROXY_REDIRECT code to its own file. Changed MimeMap Module numbers.
+ * SJM 27-Apr-98 Split off the csfs and certificates stuff into their own files.
+ *		 Put the Netscape CONNRESET handling into a separate
+ *		 function (close_and_reopen). This is now called when
+ *		 receiving body as well as headers if CONNRESET or
+ *		 recv()==0 occurs.  open_socket() now zeroes
+ *		 data_so_far, buf_off and buf_used in case the fetch
+ *		 was restarted after receiving some data.  If
+ *		 byteranges are broken it also calls close and reopen to
+ *		 restart fetch (as comment said but didn't appear to
+ *		 do). Added HTTP_Config SWI and *command. Enabled use of mimemap module.
+ *		 Put a check in for servers that return no content-range when asked.
+ *		 Made new_queue copy the server flags into the new connection.
+ *		 Took out callback from Internet event.
  */
 
 #include <errno.h>
@@ -100,7 +113,8 @@ extern void riscos_SSLLib_Init( void );
 #define FILETYPE_HTML	0xfaf
 #endif
 
-#define SSL_VERSION_VAR	"HTTP$SSLVersion"
+#define SSL_VERSION_VAR	"HTTP$SSLVersion"	/* this variable gets set with the next value */
+#define SSL_VERSION	2			/* current version of SSL supported */
 
 /**********************************************************************/
 /*
@@ -119,36 +133,15 @@ extern void riscos_SSLLib_Init( void );
 
 #define MAXSOCKETS 12        /* Can be overridden */
 
+#define REOPEN_ON_SETTYPE	1
+#define SEPARATE_ALLOW_WRITE	0
+
 /**********************************************************************/
 /*
  * Error definitions
  */
 
-/* Error definitions */
-typedef enum {
-    err_NO_SUCH_HOST,
-    err_CANT_FIND_SERVICE,
-    err_CANT_FIND_PROTOCOL,
-    err_CANT_MAKE_SOCKET,
-    err_CANT_CONNECT,
-    err_BAD_IOCTL,
-    err_NO_MEMORY,
-    err_BAD_MAGIC,
-    err_CANT_OPEN_FILE,
-    err_CANT_OPEN_BODY,
-    err_SSL_NOT_AVAILABLE,
-    err_SSL_CANT_CONNECT,
-    err_NOT_WAITING,
-#ifdef CSFS
-    err_CSFS,
-#else
-    err_RESERVED,
-#endif
-
-    err_LAST_ERROR
-    } error_numbers;
-
-#define err_NO_ERROR -1
+/* Keep in step with error definitions in http.h */
 
 static char *err_strings[] = {
     "Can't find host in database",
@@ -188,7 +181,10 @@ http_queue      *http_queues_list;
 volatile int callback_pending;
 volatile int threaded = 0;
 
+/* usage tracking variables */
 static int keptalive;
+static int connresets;
+static int keepalivelies;
 
 static int maxsockets;
 
@@ -215,6 +211,8 @@ char tmp_buffer[TMP_BUF_SIZE];
 static char http_version[] = HTTP_VERSION;
 static char http_version_check[] = HTTP_VERSION_CHECK;
 
+static int allow = http_config_ALLOW_KEEPALIVE | http_config_ALLOW_RANGES | http_config_ALLOW_SERVERPUSH | http_config_USE_MIMEMAPMOD;
+
 FILE *log_file;
 
 /**********************************************************************/
@@ -229,22 +227,24 @@ static void clear_callback(void);
 
 static _kernel_oserror *http_open(http_open_args *args);
 static _kernel_oserror *http_status(http_status_args *args);
-static _kernel_oserror *http_converttopem(_kernel_swi_regs *r);
 static _kernel_oserror *http_close(http_close_args *args);
 static _kernel_oserror *http_maptoriscos(http_maptoriscos_args *args);
 static _kernel_oserror *http_mapfromriscos(http_mapfromriscos_args *args);
 static _kernel_oserror *http_setfiletype(http_setfiletype_args *args);
 static _kernel_oserror *http_completedpart(http_completedpart_args *args);
-static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *r);
 static http_header_item *http_add_header_line( http_connection *c,
                                         char *key, char *value );
 static _kernel_oserror *http_prosecute( http_connection *c );
+static _kernel_oserror *http_config(_kernel_swi_regs *r);
 
 static void http_orphan_queue( http_connection *c );
 static void http_queue_allow_read( http_connection *c );
 static void http_queue_allow_write( http_connection *c );
 static void http_requeue( http_connection *c );
 static void http_queue_dec_nsockets( http_connection *c );
+static void http_close_and_reopen_socket(http_connection *c);
+
+void http_set_server_flag( http_connection *c, int flag );
 
 #if DEBUG
 static void http_show_flags( http_connection *c );
@@ -275,15 +275,7 @@ debug_session *db=NULL;
 extern void *db;
 #endif
 
-void fprintf_and_flush( FILE *f, char *format, ... );
 
-#ifdef REMOTE_DEBUG
-# define fdebugf  _debug_printf
-#elif DEBUG
-# define fdebugf fprintf_and_flush
-#else
-# define fdebugf 1?0:fprintf
-#endif
 
 /**********************************************************************/
 /*
@@ -354,7 +346,7 @@ void http_bzero(void *p, int s)
 
 static _kernel_oserror httperror;
 
-static _kernel_oserror *make_error(int err)
+_kernel_oserror *make_error(int err)
 {
     if ( err == err_NO_ERROR )
         return NULL;
@@ -512,24 +504,9 @@ static int SSL_writev( SSL *s, struct iovec *iov, int iovcnt )
 #ifdef CSFS
 void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 {
-  _kernel_swi_regs reg;
-
-  reg.r[0] = 0;
-  reg.r[1] = (int)CSFS_ServiceName;
-  reg.r[2] = HTTP_CSFSService;
-  reg.r[3] = HTTP_CSFSFeatures;
-  _kernel_swi(CSFS_Register,&reg,&reg);
-#ifndef NO_SECURE
-  reg.r[0] = 0;
-  reg.r[1] = (int)CSFS_ServiceNameSecure;
-  reg.r[2] = HTTP_CSFSServiceSecure;
-  reg.r[3] = HTTP_CSFSFeatures;
-  _kernel_swi(CSFS_Register,&reg,&reg);
-#endif
+    csfs_service();
 }
 #endif
-
-
 
 /**********************************************************************/
 /*
@@ -537,9 +514,6 @@ void module_service(int service_number, _kernel_swi_regs *r, void *pw)
  */
 static void module_final(void)
 {
-#ifdef CSFS
-    _kernel_swi_regs reg;
-#endif
     http_connection *c, *next_one;
 
     fdebugf(log_file, "Module finalisation called\n");
@@ -560,14 +534,7 @@ static void module_final(void)
 #endif
 
 #ifdef CSFS
-    reg.r[0] = 0;
-    reg.r[1] = (int)CSFS_ServiceName;
-    _kernel_swi(CSFS_DeRegister,&reg,&reg);
-#ifndef NO_SECURE
-    reg.r[0] = 0;
-    reg.r[1] = (int)CSFS_ServiceNameSecure;
-    _kernel_swi(CSFS_DeRegister,&reg,&reg);
-#endif
+    csfs_finalise();
 #endif
 
 #ifndef NO_SECURE
@@ -658,9 +625,6 @@ static void bio_debug_open(SSL *s)
 extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
 {
     _kernel_oserror *ep;
-#ifdef CSFS
-    _kernel_swi_regs reg;
-#endif
 
     private_word = pw;
 
@@ -691,6 +655,8 @@ extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
     keptalive = 0;
     totalsockets = 0;
     maxsockets = MAXSOCKETS;
+    connresets = 0;
+    keepalivelies = 0;
 
 #ifndef NO_SECURE
     ssl_present = TRUE;
@@ -727,20 +693,13 @@ extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
         goto err;
 
 #ifdef CSFS
-    reg.r[0] = 0;
-    reg.r[1] = (int)CSFS_ServiceName;
-    reg.r[2] = HTTP_CSFSService;
-    reg.r[3] = HTTP_CSFSFeatures;
-    _kernel_swi(CSFS_Register,&reg,&reg);
-#ifndef NO_SECURE
-    reg.r[0] = 0;
-    reg.r[1] = (int)CSFS_ServiceNameSecure;
-    reg.r[2] = HTTP_CSFSServiceSecure;
-    reg.r[3] = HTTP_CSFSFeatures;
-    _kernel_swi(CSFS_Register,&reg,&reg);
-#endif
+    csfs_initialise();
 #endif
 
+    /* if mimemap mod is not around then disable its use */
+    if (_swix(OS_SWINumberFromString, _IN(1), "MimeMap_Translate") != NULL)
+	allow &= ~http_config_USE_MIMEMAPMOD;
+    
     atexit(&module_final);
 
     return 0;
@@ -761,7 +720,7 @@ extern _kernel_oserror *module_cli_handler(char *arg_string, int arg_count, unsi
     http_connection *c;
     http_queue *q;
 
-    fdebugf(log_file, "CLI handler called, command number %d\n", cmd_no);
+    fdebugf(log_file, "CLI handler called, command number %d args %d\n", cmd_no, arg_count);
 
     switch(cmd_no)
     {
@@ -826,7 +785,76 @@ extern _kernel_oserror *module_cli_handler(char *arg_string, int arg_count, unsi
 
         if ( keptalive )
                 printf( "Uses of keep-alive: %d\n", keptalive );
+	if ( connresets )
+                printf( "Connections reset : %d\n", connresets );
+	if ( keepalivelies )
+                printf( "Keep alives killed: %d\n", keepalivelies );
         break;
+
+    case 1:
+	if (arg_count == 0)
+	{
+	    printf("HTTP support module config information\n");
+	    printf("  %skeepalive %sranges %sserverpush %smimemapmod\n",
+		   allow & http_config_ALLOW_KEEPALIVE ? "" : "no",
+		   allow & http_config_ALLOW_RANGES ? "" : "no",
+		   allow & http_config_ALLOW_SERVERPUSH ? "" : "no",
+		   allow & http_config_USE_MIMEMAPMOD ? "" : "no");
+	    printf("  maxsockets %d\n", maxsockets);
+	}
+	else
+	{
+	    char *s;
+	    int len = strcspn(arg_string, "\r\n");
+	    char *ss = malloc(len+1);
+	    memcpy(ss, arg_string, len);
+	    ss[len] = 0;
+
+	    if ((s = strtok(ss, " ")) != NULL)
+	    {
+		BOOL next_is_maxsockets = FALSE;
+		do
+		{
+		    if (next_is_maxsockets && isdigit(s[0]))
+		    {
+			maxsockets = atoi(s);
+			next_is_maxsockets = FALSE;
+		    }
+		    else if (strcasecmp(s, "maxsockets") == 0)
+		    {
+			next_is_maxsockets = TRUE;
+		    }
+		    else
+		    {
+			BOOL disable = FALSE;
+			int flag = 0;
+			
+			if (strlen(s) >= 2 && toupper(s[0]) == 'N' && toupper(s[1]) == 'O')
+			{
+			    disable = TRUE;
+			    s += 2;
+			}
+
+			if (strcasecmp(s, "keepalive") == 0)
+			    flag = http_config_ALLOW_KEEPALIVE;
+			else if (strcasecmp(s, "ranges") == 0)
+			    flag = http_config_ALLOW_RANGES;
+			else if (strcasecmp(s, "serverpush") == 0)
+			    flag = http_config_ALLOW_SERVERPUSH;
+			else if (strcasecmp(s, "mimemapmod") == 0)
+			    flag = http_config_USE_MIMEMAPMOD;
+
+			if (flag)
+			    allow = disable ? (allow &~ flag) : (allow | flag);
+
+			fdebugf(log_file, "SetFlags: disable %d flag %x allow %x s '%s'\n", disable, flag, allow, s);
+		    }
+		}
+		while ((s = strtok(NULL, " ")) != NULL);
+	    }
+	    free(ss);
+	}
+	break;
     }
 
     return 0;
@@ -835,338 +863,7 @@ extern _kernel_oserror *module_cli_handler(char *arg_string, int arg_count, unsi
     UNUSED(arg_count);
     UNUSED(pw);
 }
-#ifdef CSFS
-/*
- * munge filename and append it to given string
- */
-void
-munge_filename(char *output, char *filename, int file_type)
-{
-  int i;
 
-  if (filename)
-  {
-    i=strlen(output);
-    strcat(output,filename);
-    while (output[i]!=0)    /* swap '.' with '/' */
-    {
-      if (output[i]=='.')
-        output[i]='/';
-      else if (output[i]=='/')
-        output[i]='.';
-      i++;
-    }
-  }
-  /*
-   * sort filetype out
-   */
-  if (file_type!=0 && file_type !=0xfff)  /* append the file type to filename */
-  {
-    char exten[6];
-    sprintf(exten,",%03x",file_type);
-    strcat(output,exten);
-  }
-}
-
-/*
- * munge the url
- */
-_kernel_oserror *
-munge_url(char *mount_path, char *path1, int file_type1, char *username,
-	  char *passwd, char *cmd, char *path2, int file_type2,
-	  char **output_file)
-{
-  char *output_path=NULL;
-  char *input_path1=path1;  /* make sure we don't trash input string */
-  char *input_path2=path2;
-
-  if (input_path1!=NULL)       /* is it a null string */
-    if (*input_path1==0)
-      input_path1=NULL;
-
-  if (input_path2!=NULL)
-    if (*input_path2==0)
-      input_path2=NULL;
-
-  /*
-   * need our own copy of string to play with
-   */
-  output_path = malloc((mount_path ==NULL?0:strlen(mount_path ))+
-  	      	       (input_path1==NULL?1:strlen(input_path1))+
-  	      	       (input_path2==NULL?1:strlen(input_path2))+
-  	      	       (username   ==NULL?0:strlen(username   ))+
-  	      	       (passwd     ==NULL?0:strlen(passwd     ))+
-  	      	       (cmd        ==NULL?0:strlen(cmd        ))+50);
-
-  if (output_path==NULL)
-    return (make_error(err_NO_MEMORY));
-
-  if (mount_path)
-  {
-    strcpy(output_path,mount_path);
-    strcat(output_path,"?");
-  }
-  else
-    strcpy(output_path,"");
-
-  if (cmd)
-  {
-    strcat(output_path,"cmd=");
-    strcat(output_path,cmd);
-    strcat(output_path,"&");
-  }
-
-  strcat(output_path,"path=/");
-  munge_filename(output_path,input_path1,file_type1);
-
-  if (username)
-  {
-    strcat(output_path,"&");
-    strcat(output_path,"username=");
-    strcat(output_path,username);
-  }
-  if (passwd)
-  {
-    strcat(output_path,"&");
-    strcat(output_path,"password=");
-    strcat(output_path,passwd);
-  }
-  if (input_path2)
-  {
-    strcat(output_path,"&extra=/");
-    munge_filename(output_path,input_path2,file_type2);
-  }
-
-  *output_file = output_path;
-
-  return (NULL);
-}
-
-/*
- * implement the CSFS service swi
- */
-extern _kernel_oserror *
-http_csfs_service(_kernel_swi_regs *r, int secure)
-{
-  http_open_args open_args;
-  http_close_args close_args;
-  http_status_args status_args;
-  _kernel_oserror *err=NULL;
-  struct sockaddr_in sockaddr_in;
-  char *path=NULL;
-  char *remote_filename=NULL;
-  char *username=NULL;
-  char *passwd=NULL;
-  char *cmd=NULL;
-  char *extra=NULL;
-  int file_type1;
-  int file_type2;
-  csfs_info *file_info;
-  settype_info *type_info;
-  char *mount_path=NULL;
-#if DEBUG
-  static int status=0;
-#endif
-  http_connection *handle;
-  static progress_info file_progress;
-
-  memset(&sockaddr_in, 0, sizeof(sockaddr_in));
-  handle = (http_connection*)r->r[2];
-
-  switch (r->r[0])
-  {
-    case CSFS_CLOSE :
-      fdebugf(log_file,"(7) initial action = %d\n",handle->action);
-      close_args.in.flags = 0;
-      if (handle->action != CSFS_GET)
-        close_args.in.flags |= http_close_DELETE_FILE;
-
-      close_args.in.handle = handle;
-      ERR_GOTO(err,http_close(&close_args));
-
-      break;
-    case CSFS_STATUS :
-      status_args.in.handle = handle;
-      ERR_GOTO(err,http_status(&status_args));
-#if DEBUG
-      if (status_args.out.status!=status)
-      {
-        status=status_args.out.status;
-        fdebugf(log_file,"(7) CSFS new status %d\n",status);
-      }
-#endif
-      if (status_args.out.status >= status_COMPLETED_FILE)
-      {
-        http_header_item *hdr=status_args.out.headers;
-        switch (status_args.out.status)
-        {
-          case status_COMPLETED_FILE : case status_COMPLETED_DIR :
-            r->r[0] = 0;
-            /*
-             * check for return status from server
-             */
-            while (hdr)
-            {
-              if (strcasecmp(hdr->key,"CONTENT-TYPE")==0)
-                if (strcasecmp(hdr->value,MIME_CSFSStatus)==0)
-                {
-                  int i=0;
-                  char *p;
-	          char status_str[252];
-
-                  /* fill-in the error message from status file */
-        	  err=make_error(err_CSFS); /* defer jump till later */
-                  ro_write_ptr(handle->fh, 0);
-                  while (!ro_eof(handle->fh) && i<252)
-                    status_str[i++]= _kernel_osbget(handle->fh);
-                  status_str[i-1] = 0; /* terminate */
-
-		  fdebugf(log_file,"Status %s\n",status_str);
-                  /* look for status code, expect nnn:error_string*/
-                  if ((p=strchr(status_str,':'))!=NULL)
-                  {
-                    *(p++) = 0; /* terminate status code */
-                    if (atoi(status_str) == status_COMPLETED_FILE)
-                    {
-                      err = NULL;
-                      break;
-                    }
-                    else
-                    {
-                      strcpy(err->errmess,p); /* copy into error structure */
-                      goto exit_gracefully;
-                    }
-                  }
-                  else
-                  {
-                    /* copy into error structure */
-                    strcpy(err->errmess,status_str);
-                    goto exit_gracefully;
-                  }
-                }
-              hdr = hdr->next;
-            }
-            break;
-          default :
-            ERR_GOTO(err,make_error(err_CSFS));
-            r->r[0] = 1;
-	}
-      }
-      else
-       r->r[0] = -1;  /* still progressing */
-
-      if (handle->data_size == -1)
-      {
-        file_progress.total = 0;
-        file_progress.sofar = 0;
-      }
-      else
-      {
-        file_progress.total = handle->data_size;
-        file_progress.sofar = handle->data_so_far;
-        fdebugf(log_file,"(7) Returning data total %d",file_progress.total);
-      }
-      r->r[3] = (int)&file_progress;
-
-      break;
-    default :
-      open_args.in.action = r->r[0];
-      open_args.in.flags  = http_open_flags_ACTION;
-      open_args.in.fname  = NULL;   	/* default value */
-      open_args.in.bname  = NULL;	/* default value */
-
-      if (r->r[0]==CSFS_SETTYPE)
-      {
-        type_info = (settype_info*)r->r[8];
-        file_type2 = type_info->new;
-        file_type1 = type_info->old;
-      }
-      else
-      {
-        file_info = (csfs_info*)r->r[8];
-        /*
-         * extract file type info from supplied data
-         */
-        if (file_info==NULL)
-          file_type1 = 0;
-        else
-          file_type1 = (file_info->load_addr)>>8&0xfff; /* load addr */
-        file_type2 = file_type1;
-      }
-      username        = (char*)r->r[5];
-      passwd          = (char*)r->r[6];
-      mount_path      = (char*)r->r[3];
-      remote_filename = (char*)r->r[4];
-      switch (r->r[0])
-      {
-        case CSFS_GET :
-          cmd = "GET";
-          open_args.in.fname = (char*)r->r[7];
-          break;
-        case CSFS_PUT :
-          cmd = "PUT";
-          open_args.in.bname = (char*)r->r[7];
-          break;
-        case CSFS_DELETE :
-          cmd = "DELETE";
-          break;
-        case CSFS_MKDIR :
-          cmd = "MKDIR";
-          break;
-        case CSFS_RMDIR :
-          cmd = "RMDIR";
-          break;
-        case CSFS_RENAME :
-          cmd = "RENAME";
-          extra = (char*)r->r[7];
-          break;
-        case CSFS_SETTYPE :
-          cmd = "RENAME";
-          extra = remote_filename;
-          break;
-        default :
-          ERR_GOTO(err,make_error(err_CSFS));
-      }
-      ERR_GOTO(err,munge_url(mount_path,remote_filename,file_type1,username,passwd,cmd,extra,file_type2,&path));
-
-      sockaddr_in.sin_family = AF_INET;
-      /*
-       * deal with port number being specified
-       */
-      if (r->r[1] & 1<<0)
-      {
-        host_info *host = (host_info*)r->r[2];
-        /* default to port 80 */
-        sockaddr_in.sin_port = htons((host->port==0)?80:host->port);
-        sockaddr_in.sin_addr.s_addr = (unsigned int)htonl(host->addr);
-      }
-      else
-      {
-        sockaddr_in.sin_port = htons(80);
-        sockaddr_in.sin_addr.s_addr = (unsigned int)htonl(r->r[2]);
-      }
-
-      open_args.in.addr = &sockaddr_in;
-
-      fdebugf(log_file,"(7) path (%s)\n",path);
-      /*
-       * fill in the args
-       */
-      open_args.in.object = path;
-      open_args.in.headers = NULL;
-      if (secure) {
-	open_args.in.flags |= http_open_flags_SECURE;
-      }
-      ERR_GOTO(err,http_open(&open_args));
-      r->r[0] = (int)open_args.out.handle;
-  }
-exit_gracefully:
-  if (path)
-    free(path);
-
-  return (err);
-}
-#endif
 /**********************************************************************/
 /*
  * Module SWI handler function
@@ -1222,6 +919,9 @@ extern _kernel_oserror *module_swi_handler(int swinum, _kernel_swi_regs *regs, v
 #endif
     case HTTP_ConvertToPEM - HTTP_SWI_Base:
     	return http_converttopem(regs);
+
+    case HTTP_Config - HTTP_SWI_Base:
+	return http_config(regs);
     }
 
     return NULL;
@@ -1241,7 +941,7 @@ extern _kernel_oserror *module_swi_handler(int swinum, _kernel_swi_regs *regs, v
  */
 extern int inetevent_handler(_kernel_swi_regs *regs, void *pw)
 {
-    if ((regs->r[0] == Event_Internet) && (regs->r[1] >=0) && (regs->r[1] <= 2))
+    if ((regs->r[0] == Event_Internet) && (regs->r[1] == 1 || regs->r[1] == 2))
     {
         if ( regs->r[2] >= 0 && regs->r[2] < FD_SETSIZE )
         {
@@ -1249,8 +949,12 @@ extern int inetevent_handler(_kernel_swi_regs *regs, void *pw)
             http_connection *c = http_cons[ regs->r[2] ];
             if ( c )
             {
+#if 1
+                http_prosecute( c );
+#else
                 c->data_pending = 1;
                 setup_callback();
+#endif
             }
         }
     }
@@ -1465,18 +1169,14 @@ _kernel_oserror *http_set_file_type(http_connection *c, int *ftptr)
                  */
                 if ( semic )
                     *semic = 0;
-#if !USE_MIMEMAPMOD
-                ft = mime_map_to_riscos(hi->value);
-#else
-		/* pdh: *much* simpler to do this, but I've left in the old
-		 * way for now in case it's not appropriate for NCFresco. Also
-		 * it didn't fix the bug I'd hoped it would.
-		 */
 
-		/* SWI XMimeMap_Translate */
-		_swix( 0x70B00, _INR(0,2)|_OUT(3), mmmtype_MIME, hi->value,
-		                                   mmmtype_RISCOS, &ft );
-#endif
+		if (allow & http_config_USE_MIMEMAPMOD)
+		    /* SWI XMimeMap_Translate */
+		    _swix( 0x70B00, _INR(0,2)|_OUT(3), mmmtype_MIME, hi->value,
+			   mmmtype_RISCOS, &ft );
+		else
+		    ft = mime_map_to_riscos(hi->value);
+
                 /* pdh: remember to un-blat */
                 if ( semic )
                     *semic = ';';
@@ -1493,24 +1193,29 @@ _kernel_oserror *http_set_file_type(http_connection *c, int *ftptr)
         fdebugf(log_file, "%p: setting file type of '%s' to 0x%03X\n",
                           c, c->fname, ft);
 
+#if REOPEN_ON_SETTYPE
 	if ( c->fh )
 	{
 	    reopen = TRUE;
 
+	    fdebugf(log_file, "%p: closing %d\n", c, c->fh);
 	    ro_fclose( c->fh );
 	    c->fh = NULL;
 	}
-
+#endif
+	
         if (ftptr)
             *ftptr = fb.load;
 
          result = _kernel_osfile(18, c->fname, &fb);
 
+#if REOPEN_ON_SETTYPE
 	 if ( reopen )
 	 {
 	     c->fh = ro_fopen(c->fname, RO_OPEN_RW);
 	 }
-
+#endif
+	 
 	 if ( result < 0 )
 	    return _kernel_last_oserror();
     }
@@ -1626,6 +1331,7 @@ static void http_fail( http_connection *c, transfer_status status )
 
     if ( c->fh )
     {
+	fdebugf(log_file, "%p: closing %d\n", c, c->fh);
         ro_fclose( c->fh );
         c->fh = NULL;
     }
@@ -1661,7 +1367,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
     char *l;            /* ditto */
     int rc;
 
-/*     fdebugf(log_file,"http_prosecute status %d\n",c->status); */
+    fdebugf(log_file,"%p; http_prosecute status %d\n",c, c->status);
 
     switch (c->status)
     {
@@ -1818,17 +1524,23 @@ static _kernel_oserror *http_prosecute( http_connection *c )
         if (c->status != status_GETTING_BODY)
             return NULL;
 
-#if 0
-	/* some kind of check is needed here but I don't know quite what */
-	if ((c->flags & (http_open_flags_IMAGE | http_flags_RANGEBROKEN | http_flags_GOTFIRST)) ==
-	    http_open_flags_IMAGE)
+	/* if no content-range found when expected, start again */
+	if ((c->flags & http_open_flags_IMAGE) &&		/* we sent range: */
+	    !(c->flags & http_flags_DOESRANGE))			/* we didn't get a content-range */
 	{
-	    http_set_server_flag( c, http_flags_RANGEBROKEN );
             fdebugf( log_file, "%p: BYTE RANGES ARE BROKEN (no CONTENT-RANGE))\n", c );
+
+	    http_set_server_flag( c, http_flags_RANGEBROKEN );
+
+	    c->data_so_far = c->buf_off = c->buf_used = 0;
+	    c->total_size = 0;
+	    c->data_size = -1;
+		
             http_requeue( c );
+
 	    return NULL;
 	}
-#endif
+
         /* else we can drop through */
 
         rc = c->flags;
@@ -1845,8 +1557,10 @@ static _kernel_oserror *http_prosecute( http_connection *c )
         if ( /*(rc & http_flags_HTTP11) ?  ( rc & http_flags_NOTALIVE )
                                       :*/ !( rc & http_flags_KEPTALIVE ) )
             http_orphan_queue( c );
+#if SEPARATE_ALLOW_WRITE
         else
             http_queue_allow_write( c );
+#endif
 
     case status_GETTING_BODY:
 #ifndef NO_SECURE
@@ -1930,11 +1644,21 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             else
                 rc = http_recv( c, tmp_buffer, block );
 
-            fdebugf(log_file, "%p: recv (body %d) gave %d\n", c, block, rc);
+            fdebugf(log_file, "%p: recv (socket %d) (body %d) gave %d\n", c, c->socket, block, rc);
 
             if (rc <= 0)
             {
-                if (rc == 0 || errno != EWOULDBLOCK)
+		if (rc < 0 && errno == ECONNRESET)
+		{
+		    /* This is Netscape's ever-so-polite way of telling us
+		     * not to do any more fetches down this socket
+		     */
+		    fdebugf( log_file, "%p: ECONNRESET, retrying on new socket\n", c );
+
+		    http_close_and_reopen_socket(c);
+		    connresets++;
+		}
+		else if (rc == 0 || errno != EWOULDBLOCK)
                 {
                     fdebugf(log_file, "%p: Connection closed on socket %d, errno=%d\n", c, c->socket, errno);
                     http_set_status( c, status_COMPLETED_FILE );
@@ -2021,7 +1745,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                     http_set_status( c, status_COMPLETED_PART );
                     return NULL;
                 }
-                else
+                else /* if !bound */
                 {
                     /* See whether there may be one straddling 2 packets */
 		    if ( nearly != 0 )
@@ -2038,7 +1762,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 		/* pdh: bodge */
 		break;
 #endif
-            }
+            } /* endif (c->boundary) */
 
             if (c->fh)
             {
@@ -2055,7 +1779,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
 /*             fdebugf( log_file, "%p: adding %d to so_far (now %d)\n",
                      c, rc, c->data_so_far ); */
-        }
+        } /* end while */
 
         if ( c->status != status_COMPLETED_FILE )
             return NULL;
@@ -2085,6 +1809,10 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             else
             {
                 fdebugf( log_file, "%p: calling allow read from status_c_f\n", c );
+		
+#if !SEPARATE_ALLOW_WRITE
+                http_queue_allow_write( c );
+#endif
                 http_queue_allow_read( c );
             }
             return NULL;
@@ -2247,7 +1975,6 @@ static _kernel_oserror *http_open(http_open_args *args)
         fdebugf(log_file, "%p: http_open Opening file '%s'\n", new, new->fname);
 
         new->fh = ro_fopen(new->fname, RO_OPEN_WRITE);
-
         fdebugf( log_file, "%p: file handle is %d\n", new, new->fh );
 
         if (new->fh == NULL)
@@ -2464,6 +2191,11 @@ static int http_open_socket( http_connection *c )
 
     c->onthissocket = 1;
 
+    /* SJM: zero various values in case data had been part read before we restarted the fetch */
+    c->data_so_far = 0;
+    c->buf_off = 0;
+    c->buf_used = 0;
+    
     return err_NO_ERROR;
 }
 
@@ -2491,6 +2223,9 @@ static BOOL http_queue_new( http_connection *me )
             /* Found a suitable queue */
             me->queue = q;
 
+	    /* SJM: copy over any saved flags to avoid us making the same mistakes again */
+	    me->flags |= (q->flags & http_flags_SERVER);
+	    
             if ( ( q->nsockets < 2
                    && totalsockets < maxsockets )
                  || ( me->flags & http_open_flags_PRIORITY ) )
@@ -2945,14 +2680,14 @@ _kernel_oserror *http_close_handle(http_connection *c, int flags)
 
     if (c->fh != NULL)
     {
-        fdebugf(log_file, "Closing output file\n");
+	fdebugf(log_file, "%p: closing %d finally\n", c, c->fh);
         ro_fclose(c->fh);
 	c->fh = NULL;
     }
 
     if (c->bh != NULL)
     {
-        fdebugf(log_file, "Closing body file\n");
+	fdebugf(log_file, "%p: closing body file %d\n", c, c->fh);
         ro_fclose(c->bh);
 	c->bh = NULL;
     }
@@ -3086,28 +2821,28 @@ static _kernel_oserror *http_status(http_status_args *args)
 
 static _kernel_oserror *http_maptoriscos(http_maptoriscos_args *args)
 {
-#if USE_MIMEMAPMOD
-    /* SWI XMimeMap_Translate */
-    return _swix( 0x70B00, _INR(0,2)|_OUT(3), mmmtype_MIME, args->in.extn,
-		  mmmtype_RISCOS, &arg->out.ft );
-#else
+    if (allow & http_config_USE_MIMEMAPMOD)
+	/* SWI XMimeMap_Translate */
+	return _swix( 0x70B00, _INR(0,2)|_OUT(3), mmmtype_MIME, args->in.extn,
+		      mmmtype_RISCOS, &args->out.ft );
+    
     args->out.ft = mime_map_to_riscos(args->in.extn);
     return NULL;
-#endif
 }
 
 static _kernel_oserror *http_mapfromriscos(http_mapfromriscos_args *args)
 {
-#if USE_MIMEMAPMOD
-    static char result[128];
+    if (allow & http_config_USE_MIMEMAPMOD)
+    {
+	static char result[128];
 
-    /* SWI XMimeMap_Translate */
-    return _swix( 0x70B00, _INR(0,3)|_OUT(3), mmmtype_RISCOS, args->in.ft,
-		  mmmtype_MIME, result,
-		  &arg->out.extn );
-#else
+	/* SWI XMimeMap_Translate */
+	return _swix( 0x70B00, _INR(0,3)|_OUT(3), mmmtype_RISCOS, args->in.ft,
+		      mmmtype_MIME, result,
+		      &args->out.extn );
+    }
+
     args->out.extn = mime_map_from_riscos(args->in.ft);
-#endif
     return NULL;
 }
 
@@ -3125,6 +2860,35 @@ static _kernel_oserror *http_setfiletype(http_setfiletype_args *args)
     return http_set_file_type(c, &args->out.ftype);
 }
 
+static _kernel_oserror *http_config(_kernel_swi_regs *r)
+{
+    switch (r->r[0] & http_config_REASON_MASK)
+    {
+    case http_config_SET_FLAGS:
+	allow = (allow & r->r[1]) ^ r->r[2];
+	r->r[1] = allow;
+	break;
+
+    case http_config_GET_MAX_SOCKETS:
+	r->r[1] = maxsockets;
+	break;
+
+    case http_config_SET_MAX_SOCKETS:
+	maxsockets = r->r[1];
+	break;
+
+    case http_config_IS_SSL_AVAILABLE:
+#ifdef NO_SECURE
+	r->r[1] = http_ssl_NONE;
+	r->r[2] = 0;
+#else
+	r->r[1] = http_ssl_EXPORT;
+	r->r[2] = SSL_VERSION;
+#endif
+	break;
+    }
+    return NULL;
+}
 
 /*--------------------------------------------------------------------------*
  * SWI HTTP_CompletedPart                                                   *
@@ -3348,8 +3112,9 @@ int http_send_request_headers( http_connection *c )
             /* Don't send keep-alive to proxies unless they do HTTP/1.1
              * (for rationale see RFC2068)
              */
-            if ( (c->flags & http_flags_HTTP11)
-                 || !strchr( c->object, ':' ) )
+            if ( (allow & http_config_ALLOW_KEEPALIVE) &&
+		 ( (c->flags & http_flags_HTTP11) || !strchr( c->object, ':' ) )
+	       )
             {
                 strcat( tmp_buffer, "Connection: Keep-Alive\r\n" );
                 fdebugf( log_file, "(7) %p: txheader Connection: Keep-Alive\n", c );
@@ -3375,7 +3140,8 @@ int http_send_request_headers( http_connection *c )
                                    "-%d\n", c, c->total_size-1 );
                 c->flags &= ~http_open_flags_IMAGE;
             }
-            else if ( ( c->flags & http_open_flags_IMAGE )
+            else if ( ( allow & http_config_ALLOW_RANGES)
+		      && ( c->flags & http_open_flags_IMAGE )
                       && !( c->flags & ( http_open_flags_HEAD
                                          | http_flags_RANGEBROKEN ) )
                       && !c->bh )
@@ -3565,24 +3331,12 @@ char* http_getline(http_connection *c, int readResponse)
 			 * *CAREFUL* not to cause infinite loops here, the
 			 * use of onthissocket makes sure of it.
 			 */
-			fdebugf( log_file,
-				 "%p: server lied about keep-alive\n", c );
+			fdebugf( log_file, "%p: server lied about keep-alive\n", c );
 
-			/* Don't let socket_close delete the queue! */
-			if ( c->queue )
-			    c->queue->nsockets++;
-
-			http_socket_close( c );
-
-			c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
-				      | http_flags_GOTFIRST );
-
-			http_open_socket( c );
+			http_close_and_reopen_socket(c);
+			keepalivelies++;
 
 			c->onthissocket = 1;
-
-			if ( c->queue )
-			    c->queue->nsockets--;
 		    }
 		    else
 		    {
@@ -3601,22 +3355,10 @@ char* http_getline(http_connection *c, int readResponse)
 			/* This is Netscape's ever-so-polite way of telling us
 			 * not to do any more fetches down this socket
 			 */
-			fdebugf( log_file,
-				 "%p: ECONNRESET, retrying on new socket\n", c );
+			fdebugf( log_file, "%p: ECONNRESET, retrying on new socket\n", c );
 
-			/* Don't let socket_close delete the queue! */
-			if ( c->queue )
-			    c->queue->nsockets++;
-
-			http_socket_close( c );
-
-			c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
-				      | http_flags_GOTFIRST );
-
-			http_open_socket( c );
-
-			if ( c->queue )
-			    c->queue->nsockets--;
+			http_close_and_reopen_socket(c);
+			connresets++;
 		    }
 		    else
 		    {
@@ -3632,7 +3374,7 @@ char* http_getline(http_connection *c, int readResponse)
 	    {
 #if DEBUG
 		fdebugf(log_file, "%p: read %d bytes\n", c, rc);
-		dump(log_file, c->buffer + c->buf_off, rc);
+		/*dump(log_file, c->buffer + c->buf_off, rc); */
 #endif
 		c->buf_off += rc;
 	    }
@@ -3835,6 +3577,8 @@ void http_set_server_flag( http_connection *c, int flag )
     {
         if ( !memcmp( &c->sa, &c2->sa, sizeof( struct sockaddr_in ) ) )
         {
+	    fdebugf(log_file, "set_server_flag: c%p flags %x\n", c2, flag);
+
             c2->flags |= flag;
             if ( c2->queue )
                 c2->queue->flags |= flag;
@@ -4046,6 +3790,8 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
                         http_oserror( c, _kernel_last_oserror() );
 			return TRUE;
 		    }
+
+		    fdebugf(log_file, "%p: closing %d to reopen\n", c, c->fh);
 		    ro_fclose(c->fh);
 		    c->fh = ro_fopen(c->fname, RO_OPEN_RW);
                 }
@@ -4086,7 +3832,7 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
                 http_orphan_queue( c );
             }
 
-            if ( prefixcmp( p, "KEEP-ALIVE" ) == 0 )
+            if ( (allow & http_config_ALLOW_KEEPALIVE) && prefixcmp( p, "KEEP-ALIVE" ) == 0 )
             {
                 c->flags |= http_flags_KEPTALIVE;
 
@@ -4134,8 +3880,15 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
              * against this server in future.
              */
             http_set_server_flag( c, http_flags_RANGEBROKEN );
+
             fdebugf( log_file, "%p: BYTE RANGES ARE BROKEN\n", c );
 
+	    /* SJM: 30/4/98 Added the requeue and return */
+	    c->data_so_far = c->buf_off = c->buf_used = 0;
+	    c->data_size = -1;
+		
+	    http_requeue(c);
+	    return FALSE;
         }
 
         if ( p )
@@ -4230,420 +3983,21 @@ int cert_verify_callback( int ok, X509 *xs, X509 *xi, int depth, int error)
 }
 #endif
 
-/*
- * New function to use the crypto routines to verify a message digest against
- * a public key and maybe a certificate.
-
-API:
-
-VerifyMessageDigest
-
- IN
-   int    : flags
-          : type of key.certificate
-          : fetch DER encoded public certificate from memory or disc
-   char * : message data
-   int    : message data length
-   int    : digest type
-   char * : digest received
-   int    : digest received length
-   char * : ptr to DER encoded public key / ptr to DER encoded public key certificate (depends on flags)
-   char * : filename of X509 certificate in PEM, or DER, or ptr to X509 DER certificate in RAM (depends on flags)
-   int    : RAM X509 DER certificate length or 0 (depends on flags)
-
- OUT
-   Does it match or not? or error
-
-Here is what was sent to the NSA
-
-   API extension for HTTP-SSL module.
-   ==================================
-
-A new interface is created called HTTP_VerifyMessageDigest.
-
-The parameters to this are
-
-      flags word
-      pointer to and length of message
-      pointer to and length of encrypted message digest
-      message digest type
-      pointer to DER encoded public key
-      optional pointer to filename of X509 certificate in PEM or DER encoding
-
-If the X509 certificate is given then the public key is used to
-verify the certificate and extract a new public key. This public
-key is then used to verify the message digest.
-
-If no certificate is given then the public key given is used to verify
-the message digest.
-
-A given X509 certificate may be PEM or DER encoded - in the latter case
-it may reside in RAM or on disc
-
-The root public key may be PEM or DER encoded - in the latter case it may be just a plain RSA public key or an x.509 certificate
-containing an RSA public key.
-
-The routine will return success or an error code giving at what point
-the failure to verify occurred. This will be one of
-   Input values bad in some way
-   Certificate failed to verify
-   Digest failed to verify
-
-   */
-
-static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *r)
+static void http_close_and_reopen_socket(http_connection *c)
 {
-#if defined(NO_SECURE)
-    return make_error(err_SSL_NOT_AVAILABLE);
-    r = r;
-#elif !defined(VERIFY_MD)
-    r->out.rc = http_vmd_rc_NOT_SUPPORTED;
-    return NULL;
-    r = r;
-#else
-    _kernel_oserror *e = NULL;
-    EVP_PKEY *pkey = NULL, *pkey2 = NULL;
-    RSA *rsa = NULL;
-    X509 *xcert = NULL;
-    FILE *f;
-    EVP_MD_CTX md_ctx;
-    int i;
+    /* Don't let socket_close delete the queue! */
+    if ( c->queue )
+	c->queue->nsockets++;
 
-    int rc = http_vmd_rc_BAD_INPUT;
-    unsigned char *certificate_ptr, *pubkey_ptr;
-    unsigned char **certificate_ptr_ptr, **pubkey_ptr_ptr;
-    unsigned char *rsa_buff = NULL;
-    unsigned int rsa_bytes;
+    http_socket_close( c );
 
-    fdebugf(log_file, "HTTP_VerifyMessageDigest:\n  flags %08x\n  key '%s'\n  cert '%s'\n  message @ 0x%p/%d\n  digest @ 0x%p/%d\n",
-	    r->in.flags,
-	    r->in.public_key ? r->in.public_key : "<none>",
-	    r->in.certificate ? r->in.certificate : "<none>",
-	    r->in.message_data, r->in.message_data_len,
-	    r->in.digest_data, r->in.digest_data_len);
-
-    /* check some initial values */
-    if (r->in.message_data == NULL || r->in.message_data_len == 0 ||
-	r->in.digest_data == NULL || r->in.digest_data_len == 0)
-    {
-	r->out.rc = rc;
-	return NULL;
-    }
-
-    /* get the initial public key from the file */
-    if (r->in.public_key)
-    {
-	if ((f = fopen(r->in.public_key, "rb")) != NULL)
-	{
-	    if(r->in.flags & http_vmd_flag_RAW_PKEY) { /* root file is raw (ie DER) RSA public key */
-	      fdebugf(log_file, "reading raw DER public key from file\n");
-	      if((rsa_buff = (unsigned char *)malloc(512))==NULL) {
-	          fdebugf(log_file, "couldn't get new RSA buffer\n");
-	          fclose(f);
-	          r->out.rc = http_vmd_rc_NO_FREE_RSA;
-	          return NULL;
-	      }
-
-	      rsa_bytes = fread(rsa_buff, 1, 512, f);
-
-	      fclose(f);
-
-	      pubkey_ptr = rsa_buff;
-	      pubkey_ptr_ptr = &pubkey_ptr;
-
-	      if((rsa = d2i_RSAPublicKey(NULL, pubkey_ptr_ptr, rsa_bytes))==NULL) {
-	          fdebugf(log_file, "couldn't unpack RSA public key\n");
-	          r->out.rc = http_vmd_rc_BAD_RSA;
-	          return NULL;
-	      }
-
-	      if((pkey = EVP_PKEY_new())==NULL) {
-	          fdebugf(log_file, "couldn't get new EVP_PKEY buffer\n");
-	          r->out.rc = http_vmd_rc_NO_FREE_EVP;
-	          return NULL;
-	      }
-
-	      pkey->type = EVP_PKEY_RSA;
-	      pkey->pkey.rsa = rsa;
-
-	    } else { /* root file is a certificate (PEM or DER) */
-
-	      /* extract X509 certificate from file */
-	      if (r->in.flags & http_vmd_flag_KEY_DER)
-	      {
-		  if((xcert = d2i_X509_fp(f, NULL))==NULL) {
-		      fdebugf(log_file, "couldn't claim x509 cert\n");
-		      r->out.rc = http_vmd_rc_NO_FREE_X509;
-		      return NULL;
-		  }
-	      }
-	      else
-	      {
-		  if((xcert = PEM_read_X509(f, NULL, 0))==NULL) { /* specify default callback function - could be awkward if it was called */
-		      fdebugf(log_file, "couldn't claim x509 cert\n");
-		      r->out.rc = http_vmd_rc_NO_FREE_X509;
-		      return NULL;
-		  }
-	      }
-
-	      fclose(f);
-
-	      fdebugf(log_file, "key cert @ 0x%p\n", xcert);
-
-	      if (xcert)
-	      {
-		  pkey = X509_extract_key(xcert);
-
-		  fdebugf(log_file, "key @ 0x%p\n", pkey);
-
-		  X509_free(xcert);
-	      }
-	  }
-	}
-    }
-
-    /* if there's a certificate given then extract the public key from it to use instead */
-    if (pkey && r->in.certificate)
-    {
-
-        if((r->in.flags & http_vmd_flag_CERT_INCORE) && (r->in.flags & http_vmd_flag_CERT_DER)) { /* it's DER, and it's in RAM */
-          certificate_ptr = (unsigned char *)r->in.certificate;
-          certificate_ptr_ptr = &certificate_ptr; /* yuk. d2i_X509() made me do it */
-
-          if((xcert = d2i_X509(NULL, certificate_ptr_ptr, (long)r->in.certificate_len))==NULL) {
-              fdebugf(log_file, "DER parsing of in-core cert. failed\n");
-              rc = http_vmd_rc_BAD_INPUT;
-              return NULL;
-          }
-        } else { /* it's not DER, or it's not in RAM */
-	  FILE *f;
-	  if ((f = fopen(r->in.certificate, "rb")) != NULL)
-	  {
-
-
-	     /* extract X509 certificate from file */
-	     if (r->in.flags & http_vmd_flag_CERT_DER)
-	     {
-		if((xcert = d2i_X509_fp(f, NULL))==NULL) {
-		  fdebugf(log_file, "couldn't claim x509 cert\n");
-		  r->out.rc = http_vmd_rc_NO_FREE_X509;
-		  return NULL;
-		}
-	     }
-	     else
-	     {
-		if((xcert = PEM_read_X509(f, NULL, 0))==NULL) { /* specify default callback function - could be awkward if it was called */
-		  fdebugf(log_file, "couldn't claim x509 cert\n");
-		  r->out.rc = http_vmd_rc_NO_FREE_X509;
-		  return NULL;
-		}
-	     }
-
-	     fclose(f);
-
-
-	  } else {
-	      fdebugf(log_file, "couldn't open certificate file %s\n", r->in.certificate);
-	      rc = http_vmd_rc_BAD_INPUT;
-	      return NULL;
-	  }
-	}
-
-	     if (xcert)
-	     {
-		fdebugf(log_file, "new cert @ 0x%p\n", xcert);
-
-		if(r->in.flags & http_vmd_flag_EXPIRE_BEFORE) { /* expire-before checking */
-        		i = X509_cmp_current_time(xcert->cert_info->validity->notBefore);
-        		if(i==0) {
-        		    fdebugf(log_file, "error in notBefore field of cert\n");
-        		    rc = http_vmd_rc_CERT_NBERROR;
-        		    X509_free(xcert);
-        		    return NULL;
-        		}
-
-        		if(i>0) {
-        		    fdebugf(log_file, "certificate not yet valid\n");
-        		    rc = http_vmd_rc_CERT_NOTYET;
-        		    X509_free(xcert);
-        		    return NULL;
-        		}
-        	} /* endif expire-before checking */
-
-        	if(r->in.flags & http_vmd_flag_EXPIRE_AFTER) { /* expire-after checking */
-        		i = X509_cmp_current_time(xcert->cert_info->validity->notAfter);
-        		if(i==0) {
-        		    fdebugf(log_file, "error in notAfter field of cert\n");
-        		    rc = http_vmd_rc_CERT_NAERROR;
-        		    X509_free(xcert);
-        		    return NULL;
-        		}
-
-        		if(i<0) {
-        		    fdebugf(log_file, "certificate has expired\n");
-        		    rc = http_vmd_rc_CERT_EXPIRED;
-        		    X509_free(xcert);
-        		    return NULL;
-        		}
-        	} /* endif expire-after checking */
-
-		if (X509_verify(xcert, pkey))
-		{
-		    /* claim a  new key */
-		    pkey2 = X509_extract_key(xcert);
-
-		    fdebugf(log_file, "new key @ 0x%p\n", pkey);
-
-		    if (!pkey2) {
-		        fdebugf(log_file, "new cert has no key! Reverting to old one.\n");
-			rc = http_vmd_rc_BAD_CERT; /* pkey still intact, so fall through */
-		    } else { /* new key is ok, free old one, use new one */
-		      if(pkey) EVP_PKEY_free(pkey);
-		      rsa = NULL;
-		      pkey = pkey2;
-		    }
-		}
-		else
-		{
-		    fdebugf(log_file, "new cert failed to verify, reverting to old key\n");
-		    rc = http_vmd_rc_BAD_CERT; /* pkey still intact, so fall through */
-		    X509_free(xcert);
-		    return NULL; /* optionally, we could omit this, and continue with the original pubkey,
-		    	   	    which is still intact up to this point */
-
-		}
-
-		X509_free(xcert);
-	     }
-
-    }
-
-    /* if we have a public key by this point */
-    if (pkey)
-    {
-
-	/* set up and verify the message digest
-	 * assume MD5 only for now unless we need others
-	 */
-	fdebugf(log_file, "VerifyInit\n");
-	EVP_VerifyInit(&md_ctx, EVP_md5());
-
-	fdebugf(log_file, "VerifyUpdate\n");
-	EVP_VerifyUpdate(&md_ctx, (unsigned char *)r->in.message_data, r->in.message_data_len);
-
-	fdebugf(log_file, "VerifyFinal\n");
-	if (EVP_VerifyFinal(&md_ctx, (unsigned char *)r->in.digest_data, r->in.digest_data_len, pkey))
-	    rc = http_vmd_rc_VERIFIED;
-	else
-	    rc = http_vmd_rc_FAILED;
-
-	fdebugf(log_file, "rc=%d\n", rc);
-
-	/* free any key we have open */
-	EVP_PKEY_free(pkey);
-	rsa = NULL; /* if this existed, evp_pkey_free will have freed it for us */
-    }
-
-    if(rsa) RSA_free(rsa);
-
-    r->out.rc = rc;
-
-#if DEBUG
-    if (rc)
-    {
-	fdebugf(log_file, "** crypto error log\n");
-	ERR_print_errors_fp(log_file);
-	fdebugf(log_file, "** end\n");
-    }
-#endif
-
-    return e;
-#endif
+    c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
+		  | http_flags_GOTFIRST );
+	
+    http_open_socket( c );
+	
+    if ( c->queue )
+	c->queue->nsockets--;
 }
 
-/* given a DER certificate and a path, covert it to PEM and save it to the path.
-   the filename used is a hash of the certificate's subject name
-
-   on entry:
-
-   r0 = ptr to DER certificate
-   r1 = cert. bytes
-   r2 = ptr to path, null terminated
-
-   on exit:
-
-   r0 = 0 or -n for error
-      	     -1 = DER parsing failed
-      	     -2 = couldn't open o/p file
-      	     -3 = (WARNING) current time < cert. notBefore field
-      	     -4 = (WARNING) current time > cert. notAfter field
-      	     -5 = error in cert. notBefore field
-      	     -6 = error in cert. notAfter field
-
-*/
-static _kernel_oserror *http_converttopem(_kernel_swi_regs *r)
-{
-#if defined(NO_SECURE) || !defined(VERIFY_MD)
-    return make_error(err_SSL_NOT_AVAILABLE);
-    r = r;
-#else
-  char hashname[12];
-  char outfile[256];
-  unsigned char *certificate_ptr;
-  unsigned char **certificate_ptr_ptr;
-  X509 *xcert = NULL;
-  FILE *fout;
-  int i;
-
-  certificate_ptr = (unsigned char *)r->r[0];
-  certificate_ptr_ptr = &certificate_ptr;
-
-  strncpy(outfile, (char *)r->r[2], 240);
-
-  if((xcert = d2i_X509(NULL, certificate_ptr_ptr, (long)r->r[1]))==NULL) {
-      fdebugf(log_file, "http_converttopem: DER parsing failed\n");
-      r->r[0] = -1;
-      return(NULL);
-  }
-
-  sprintf(hashname, "%08lx", X509_subject_name_hash(xcert));
-  strcat(outfile, hashname);
-
-  if((fout=fopen(outfile, "w"))==NULL) {
-      fdebugf(log_file, "http_converttopem: couldn't open file\n");
-      r->r[0] = -2;
-      return(NULL);
-  }
-
-  PEM_write_X509(fout, xcert);
-
-  r->r[0] = 0;
-
-  i = X509_cmp_current_time(xcert->cert_info->validity->notBefore);
-  if(i==0) {
-      fdebugf(log_file, "error in notBefore field of cert\n");
-      r->r[0] = -5;
-  }
-
-  if(i>0) {
-      fdebugf(log_file, "certificate not yet valid\n");
-      r->r[0] = -3;
-  }
-
-  i = X509_cmp_current_time(xcert->cert_info->validity->notAfter);
-  if(i==0) {
-      fdebugf(log_file, "error in notAfter field of cert\n");
-      r->r[0] = -6;
-  }
-
-  if(i<0) {
-      fdebugf(log_file, "certificate has expired\n");
-      r->r[0] = -4;
-  }
-
-  if(xcert) X509_free(xcert);
-  fclose(fout);
-  return(NULL);
-#endif
-}
 /* eof http.c */

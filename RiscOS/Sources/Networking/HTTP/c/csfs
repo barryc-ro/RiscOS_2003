@@ -1,0 +1,413 @@
+
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <ctype.h>
+#include <stdarg.h>
+
+#include "kernel.h"
+#include "swis.h"
+#include "tcplibs.h"
+
+#ifndef NO_SECURE
+
+#define HEADER_DES_LOCL_H	/* prevents crypt() warning */
+#include "SSL/objects.h"		/* for NID */
+#include "SSL/pem.h"		/* for PEM_ */
+#include "SSL/rsa.h"
+
+#include "SSL/ssl.h"
+#include "SSL/x509.h"
+#endif
+
+#include "status.h"
+
+#include "httppub.h"
+#include "http.h"
+
+#ifdef CSFS
+
+#include "csfs.h"
+
+void csfs_service(void)
+{
+    _kernel_swi_regs reg;
+
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceName;
+    reg.r[2] = HTTP_CSFSService;
+    reg.r[3] = HTTP_CSFSFeatures;
+    _kernel_swi(CSFS_Register,&reg,&reg);
+#ifndef NO_SECURE
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceNameSecure;
+    reg.r[2] = HTTP_CSFSServiceSecure;
+    reg.r[3] = HTTP_CSFSFeatures;
+    _kernel_swi(CSFS_Register,&reg,&reg);
+#endif
+};
+
+void csfs_finalise(void)
+{
+    _kernel_swi_regs reg;
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceName;
+    _kernel_swi(CSFS_DeRegister,&reg,&reg);
+#ifndef NO_SECURE
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceNameSecure;
+    _kernel_swi(CSFS_DeRegister,&reg,&reg);
+#endif
+}
+
+void csfs_initialise(void)
+{
+    _kernel_swi_regs reg;
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceName;
+    reg.r[2] = HTTP_CSFSService;
+    reg.r[3] = HTTP_CSFSFeatures;
+    _kernel_swi(CSFS_Register,&reg,&reg);
+#ifndef NO_SECURE
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceNameSecure;
+    reg.r[2] = HTTP_CSFSServiceSecure;
+    reg.r[3] = HTTP_CSFSFeatures;
+    _kernel_swi(CSFS_Register,&reg,&reg);
+#endif
+}
+
+/*
+ * munge filename and append it to given string
+ */
+void
+munge_filename(char *output, char *filename, int file_type)
+{
+  int i;
+
+  if (filename)
+  {
+    i=strlen(output);
+    strcat(output,filename);
+    while (output[i]!=0)    /* swap '.' with '/' */
+    {
+      if (output[i]=='.')
+        output[i]='/';
+      else if (output[i]=='/')
+        output[i]='.';
+      i++;
+    }
+  }
+  /*
+   * sort filetype out
+   */
+  if (file_type!=0 && file_type !=0xfff)  /* append the file type to filename */
+  {
+    char exten[6];
+    sprintf(exten,",%03x",file_type);
+    strcat(output,exten);
+  }
+}
+
+/*
+ * munge the url
+ */
+_kernel_oserror *
+munge_url(char *mount_path, char *path1, int file_type1, char *username,
+	  char *passwd, char *cmd, char *path2, int file_type2,
+	  char **output_file)
+{
+  char *output_path=NULL;
+  char *input_path1=path1;  /* make sure we don't trash input string */
+  char *input_path2=path2;
+
+  if (input_path1!=NULL)       /* is it a null string */
+    if (*input_path1==0)
+      input_path1=NULL;
+
+  if (input_path2!=NULL)
+    if (*input_path2==0)
+      input_path2=NULL;
+
+  /*
+   * need our own copy of string to play with
+   */
+  output_path = malloc((mount_path ==NULL?0:strlen(mount_path ))+
+  	      	       (input_path1==NULL?1:strlen(input_path1))+
+  	      	       (input_path2==NULL?1:strlen(input_path2))+
+  	      	       (username   ==NULL?0:strlen(username   ))+
+  	      	       (passwd     ==NULL?0:strlen(passwd     ))+
+  	      	       (cmd        ==NULL?0:strlen(cmd        ))+50);
+
+  if (output_path==NULL)
+    return (make_error(err_NO_MEMORY));
+
+  if (mount_path)
+  {
+    strcpy(output_path,mount_path);
+    strcat(output_path,"?");
+  }
+  else
+    strcpy(output_path,"");
+
+  if (cmd)
+  {
+    strcat(output_path,"cmd=");
+    strcat(output_path,cmd);
+    strcat(output_path,"&");
+  }
+
+  strcat(output_path,"path=/");
+  munge_filename(output_path,input_path1,file_type1);
+
+  if (username)
+  {
+    strcat(output_path,"&");
+    strcat(output_path,"username=");
+    strcat(output_path,username);
+  }
+  if (passwd)
+  {
+    strcat(output_path,"&");
+    strcat(output_path,"password=");
+    strcat(output_path,passwd);
+  }
+  if (input_path2)
+  {
+    strcat(output_path,"&extra=/");
+    munge_filename(output_path,input_path2,file_type2);
+  }
+
+  *output_file = output_path;
+
+  return (NULL);
+}
+
+/*
+ * implement the CSFS service swi
+ */
+extern _kernel_oserror *
+http_csfs_service(_kernel_swi_regs *r, int secure)
+{
+  http_open_args open_args;
+  http_close_args close_args;
+  http_status_args status_args;
+  _kernel_oserror *err=NULL;
+  struct sockaddr_in sockaddr_in;
+  char *path=NULL;
+  char *remote_filename=NULL;
+  char *username=NULL;
+  char *passwd=NULL;
+  char *cmd=NULL;
+  char *extra=NULL;
+  int file_type1;
+  int file_type2;
+  csfs_info *file_info;
+  settype_info *type_info;
+  char *mount_path=NULL;
+#if DEBUG
+  static int status=0;
+#endif
+  http_connection *handle;
+  static progress_info file_progress;
+
+  memset(&sockaddr_in, 0, sizeof(sockaddr_in));
+  handle = (http_connection*)r->r[2];
+
+  switch (r->r[0])
+  {
+    case CSFS_CLOSE :
+      fdebugf(log_file,"(7) initial action = %d\n",handle->action);
+      close_args.in.flags = 0;
+      if (handle->action != CSFS_GET)
+        close_args.in.flags |= http_close_DELETE_FILE;
+
+      close_args.in.handle = handle;
+      ERR_GOTO(err,http_close(&close_args));
+
+      break;
+    case CSFS_STATUS :
+      status_args.in.handle = handle;
+      ERR_GOTO(err,http_status(&status_args));
+#if DEBUG
+      if (status_args.out.status!=status)
+      {
+        status=status_args.out.status;
+        fdebugf(log_file,"(7) CSFS new status %d\n",status);
+      }
+#endif
+      if (status_args.out.status >= status_COMPLETED_FILE)
+      {
+        http_header_item *hdr=status_args.out.headers;
+        switch (status_args.out.status)
+        {
+          case status_COMPLETED_FILE : case status_COMPLETED_DIR :
+            r->r[0] = 0;
+            /*
+             * check for return status from server
+             */
+            while (hdr)
+            {
+              if (strcasecmp(hdr->key,"CONTENT-TYPE")==0)
+                if (strcasecmp(hdr->value,MIME_CSFSStatus)==0)
+                {
+                  int i=0;
+                  char *p;
+	          char status_str[252];
+
+                  /* fill-in the error message from status file */
+        	  err=make_error(err_CSFS); /* defer jump till later */
+                  ro_write_ptr(handle->fh, 0);
+                  while (!ro_eof(handle->fh) && i<252)
+                    status_str[i++]= _kernel_osbget(handle->fh);
+                  status_str[i-1] = 0; /* terminate */
+
+		  fdebugf(log_file,"Status %s\n",status_str);
+                  /* look for status code, expect nnn:error_string*/
+                  if ((p=strchr(status_str,':'))!=NULL)
+                  {
+                    *(p++) = 0; /* terminate status code */
+                    if (atoi(status_str) == status_COMPLETED_FILE)
+                    {
+                      err = NULL;
+                      break;
+                    }
+                    else
+                    {
+                      strcpy(err->errmess,p); /* copy into error structure */
+                      goto exit_gracefully;
+                    }
+                  }
+                  else
+                  {
+                    /* copy into error structure */
+                    strcpy(err->errmess,status_str);
+                    goto exit_gracefully;
+                  }
+                }
+              hdr = hdr->next;
+            }
+            break;
+          default :
+            ERR_GOTO(err,make_error(err_CSFS));
+            r->r[0] = 1;
+	}
+      }
+      else
+       r->r[0] = -1;  /* still progressing */
+
+      if (handle->data_size == -1)
+      {
+        file_progress.total = 0;
+        file_progress.sofar = 0;
+      }
+      else
+      {
+        file_progress.total = handle->data_size;
+        file_progress.sofar = handle->data_so_far;
+        fdebugf(log_file,"(7) Returning data total %d",file_progress.total);
+      }
+      r->r[3] = (int)&file_progress;
+
+      break;
+    default :
+      open_args.in.action = r->r[0];
+      open_args.in.flags  = http_open_flags_ACTION;
+      open_args.in.fname  = NULL;   	/* default value */
+      open_args.in.bname  = NULL;	/* default value */
+
+      if (r->r[0]==CSFS_SETTYPE)
+      {
+        type_info = (settype_info*)r->r[8];
+        file_type2 = type_info->new;
+        file_type1 = type_info->old;
+      }
+      else
+      {
+        file_info = (csfs_info*)r->r[8];
+        /*
+         * extract file type info from supplied data
+         */
+        if (file_info==NULL)
+          file_type1 = 0;
+        else
+          file_type1 = (file_info->load_addr)>>8&0xfff; /* load addr */
+        file_type2 = file_type1;
+      }
+      username        = (char*)r->r[5];
+      passwd          = (char*)r->r[6];
+      mount_path      = (char*)r->r[3];
+      remote_filename = (char*)r->r[4];
+      switch (r->r[0])
+      {
+        case CSFS_GET :
+          cmd = "GET";
+          open_args.in.fname = (char*)r->r[7];
+          break;
+        case CSFS_PUT :
+          cmd = "PUT";
+          open_args.in.bname = (char*)r->r[7];
+          break;
+        case CSFS_DELETE :
+          cmd = "DELETE";
+          break;
+        case CSFS_MKDIR :
+          cmd = "MKDIR";
+          break;
+        case CSFS_RMDIR :
+          cmd = "RMDIR";
+          break;
+        case CSFS_RENAME :
+          cmd = "RENAME";
+          extra = (char*)r->r[7];
+          break;
+        case CSFS_SETTYPE :
+          cmd = "RENAME";
+          extra = remote_filename;
+          break;
+        default :
+          ERR_GOTO(err,make_error(err_CSFS));
+      }
+      ERR_GOTO(err,munge_url(mount_path,remote_filename,file_type1,username,passwd,cmd,extra,file_type2,&path));
+
+      sockaddr_in.sin_family = AF_INET;
+      /*
+       * deal with port number being specified
+       */
+      if (r->r[1] & 1<<0)
+      {
+        host_info *host = (host_info*)r->r[2];
+        /* default to port 80 */
+        sockaddr_in.sin_port = htons((host->port==0)?80:host->port);
+        sockaddr_in.sin_addr.s_addr = (unsigned int)htonl(host->addr);
+      }
+      else
+      {
+        sockaddr_in.sin_port = htons(80);
+        sockaddr_in.sin_addr.s_addr = (unsigned int)htonl(r->r[2]);
+      }
+
+      open_args.in.addr = &sockaddr_in;
+
+      fdebugf(log_file,"(7) path (%s)\n",path);
+      /*
+       * fill in the args
+       */
+      open_args.in.object = path;
+      open_args.in.headers = NULL;
+      if (secure) {
+	open_args.in.flags |= http_open_flags_SECURE;
+      }
+      ERR_GOTO(err,http_open(&open_args));
+      r->r[0] = (int)open_args.out.handle;
+  }
+exit_gracefully:
+  if (path)
+    free(path);
+
+  return (err);
+}
+
+#endif
