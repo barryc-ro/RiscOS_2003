@@ -15,9 +15,9 @@
 # Things are done in this way so that different builds of the component 
 # can be inside !* directories, for debugging purposes. Only the 
 # '!ROM_AOF' directory is used in actual ROM builds (Note that putting 
-# the ROM build into the root directory while having debug builds in 
-# sub-directories doesn't work as AMU's VPATH will cause the ROM 
-# build's .o files to be used in Debug builds.)
+# the ROM build into the root # directory while having debug builds in 
+# sub-directories # doesn't work as AMU's VPATH will cause the ROM 
+# build's # .o files to be used in Debug builds.)
 
 
 # This is the only project-specific thing in this makefile.
@@ -25,18 +25,18 @@
 COMPONENT	= IconHigh
 
 
-ROM_AOF_FILE	= @.!ROM_AOF.Output_M
+ROM_AOF_FILE	= !ROM_AOF.Output_M
 
 
 all:
 	Echo	Component $(COMPONENT): AMU target required.
 
 
-# rom_aof_file is a label for an internal target, consisting of all source 
-# files partially linked with all required libraries and RISCOSLIB:o.romcstubs 
-# (not C:o.stubs).
+# ROM_AOF_FILE is an internal target, consisting of all source files 
+# partially linked with all required libraries and 
+# RISCOSLIB:o.romcstubs (not C:o.stubs).
 #
-rom_aof:
+$(ROM_AOF_FILE):
 	Obey		@.!ROM_AOF.!Run
 
 
@@ -61,20 +61,20 @@ export:
 
 
 resources:
-	IfThere		@.resources.$(LOCALE)	Then Copy @.resources.$(LOCALE) <resource$dir>.Resources.$(COMPONENT) ~cfr~v
+	Copy		@.resources.$(LOCALE) <resource$dir>.Resources.$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'resources' finished.
 
 
-rom:	rom_aof
+rom:	$(ROM_AOF_FILE)
 	Echo		Component $(COMPONENT): 'rom' finished.
 
 
-install_rom:	rom_aof
+install_rom:	$(ROM_AOF_FILE)
 	Copy		$(ROM_AOF_FILE) $(INSTDIR).$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'install_rom' finished.
 
 
-rom_link:	rom_aof
+rom_link:	$(ROM_AOF_FILE)
 	CDir		linked
 	CDir		map
         Link		-o linked.$(COMPONENT) -map -bin -base ${ADDRESS} $(ROM_AOF_FILE) RISC_OSLib:o.AbsSym > map.$(COMPONENT)

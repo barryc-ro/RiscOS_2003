@@ -1,199 +1,267 @@
-# Makefile for TextGadgets
+# Makefile for TextGadget
 #
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date       	Name         	Description
-# ----       	----         	-----------
-# 1997-12-16	BAL		Created
-
-# ------------------------------------------------------------------------------
-# Paths
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name   Description
+# ----       ----   -----------
+# 12/5/97  RLougher  Created
 #
 
-EXP_HDR = <export$dir>.^.Interface2
-EXP_C_H = <Cexport$dir>.h
-EXP_C_O = <Cexport$dir>.o
-
-
-# ------------------------------------------------------------------------------
-# Generic options
 #
+# Component specific options:
+#
+COMPONENT  = JavaGadget
+ROM_MODULE = aof.${COMPONENT}
 
+#
+# Generic options:
+#
 MKDIR   = cdir
-AS      = objasm
 CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
-CD	= dir
-CHMOD	= access
+ASM	= objasm
 
-FEATURES   = -zM -zps1 -ffah ${DFLAGS}
-AFLAGS     = ${THROWBACK} -depend !Depend
-CFLAGS     = ${THROWBACK} -depend !Depend -c ${FEATURES} ${INCLUDES}
-CMHGFLAGS  = ${THROWBACK} -depend !Depend -p ${DFLAGS}
-CPFLAGS    = ~cfr~v
-WFLAGS     = ~c~vr
-CHMODFLAGS = RW/R
+CPFLAGS = ~cfr~v
+WFLAGS  = ~c~v
 
-DFLAGS  = -D${SYSTEM}_BUILD #-DUSE_TINY ${DEBUG}
+CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffa -zps1
+INCLUDES = -I<Lib$Dir>.tboxlibs.,C:
 
-
-# ------------------------------------------------------------------------------
+#
 # Libraries
 #
+ANSILIB   = CLib:o.ansilib
+CLIB      = CLIB:o.stubs
+RLIB      = RISCOSLIB:o.risc_oslib
+ROMCSTUBS = RISCOSLIB:o.romcstubs
+ABSSYM    = RISC_OSLib:o.c_abssym
+TBOXLIB   = <Lib$Dir>.tboxlibs.o.toolboxlib
+WIMPLIB   = <Lib$Dir>.tboxlibs.o.wimplib
 
-CLIB       = CLIB:o.stubs
-RLIB       = RISCOSLIB:o.risc_oslib
-RSTUBS     = RISCOSLIB:o.rstubs
-ROMSTUBS   = RISCOSLIB:o.romstubs
-ROMCSTUBS  = RISCOSLIB:o.romcstubs
-ABSSYM     = RISC_OSLib:o.AbsSym
-REMOTEDB   = <Lib$Dir>.debug.o.remotezm
-
-LIBS =\
- <Lib$Dir>.tboxlibs.o.toolboxlib\
- <Lib$Dir>.tboxlibs.o.wimplib\
-
-
-# ------------------------------------------------------------------------------
-# Include files
+OBJS =\
+	o.Modhdr \
+	o.TextGadget \
+	o.TextArea \
+	o.ScrollList \
+	o.Scrollbar \
+	o.riscos_uti \
+	o.riscos_gra \
+	o.Font \
+	o.debug \
+	o.TextMan \
+	o.MemMan \
+	o.Text \
+	o.ScrollLisS \
+	o.Utils \
+	o.TAsel_ven \
+	o.glib \
+	o.glib3 \
+	o.rmensure \
+	o.string32
 #
-
-INCLUDES = -Itbox:,C:,<Lib$Dir>.
-
-
-# ------------------------------------------------------------------------------
-# Program specific options:
-#
-
-COMPONENT = TextGadget
-ROMTARGET = aof.${COMPONENT}
-RAMTARGET = rm.${COMPONENT}
-#EXPORTS   = ${EXP_C_H}.${COMPONENT}
-
-OBJS      =	\
- o.Modhdr \
- o.TextGadget \
- o.TextArea \
- o.ScrollList \
- o.Scrollbar \
- o.riscos_uti \
- o.riscos_gra \
- o.Font \
- o.debug \
- o.TextMan \
- o.MemMan \
- o.Text \
- o.ScrollLisS \
- o.Utils \
- o.TAsel_ven \
- o.glib \
- o.glib3 \
- o.rmensure \
- o.string32 \
-
-
-HDR = h.ModHdr
-
-
-# ------------------------------------------------------------------------------
 # Rule patterns
 #
+.c.o:;    ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:; ${CMHG} -o $@ $<
+.s.o:;    $(ASM) $< $@
 
-.SUFFIXES:	.o .h .s .c .cmhg
-
-.c.o:;		@echo
-		@echo Compiling $< ( ${FEATURES})
-		@${CC} ${CFLAGS} -o $@ $<
-
-.cmhg.o:;	@echo
-		@echo Generating module C veneers ( -p ${DFLAGS})
-		@${CMHG} ${CMHGFLAGS} $< -o $@
-
-.cmhg.h:;	@echo
-		@echo Generating module C veneers' header file ( -p ${DFLAGS})
-		@${CMHG} ${CMHGFLAGS} $< -d $@
-
-.s.o:;		@echo
-		@echo Assembling $<
-		@${AS} ${AFLAGS} -o $@ $<
-
-
-# ------------------------------------------------------------------------------
-# build a relocatable module:
 #
-
-all: ${RAMTARGET}
-	@echo
-	@echo ${COMPONENT}: Module built (RAM) in ${RAMTARGET}
-	
-
-# ------------------------------------------------------------------------------
-# RISC OS ROM build rules:
+# Main rules:
 #
+#
+rom: ${ROM_MODULE}
+        @echo ${COMPONENT}: Module built (ROM)
 
-rom: ${ROMTARGET}
-	@echo
-        @echo ${COMPONENT}: Module built (ROM) in ${ROMTARGET}
-
-export: ${EXPORTS}
-	@echo
-        @echo ${COMPONENT}: No exports
-
-install_rom: ${ROMTARGET}
-        ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+install_rom: ${ROM_MODULE}
+        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: Module installed (ROM)
 
 clean:
-	@echo
-        ${WIPE} o.*      ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.*    ${WFLAGS}
-	${RM} ${HDR}
-        ${RM} ${RAMTARGET}
-        ${RM} ${ROMTARGET}
-        @echo
-        @echo ${COMPONENT}: Cleaned
-        
+        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        @echo ${COMPONENT}: cleaned
 
-# ------------------------------------------------------------------------------
-# ROM target (re-linked at ROM Image build time)
-#
+${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
+        ${MKDIR} aof
+        ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
 
-${ROMTARGET}: ${OBJS} ${HDR} ${LIBS} ${ROMCSTUBS} 
-	@echo
-	@echo Linking $@ ( ${OBJS} )
-        @${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
-
-
-# ------------------------------------------------------------------------------
-# Final link for the ROM Image (using given base address)
-#
-
+# final link for ROM Image (using given base address)
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
+        ${MKDIR} linked
+        ${MKDIR} map
+        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
+              -map > map.${COMPONENT}
+        truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-
-# ------------------------------------------------------------------------------
-# Relocatable module target
-#
-
-${RAMTARGET}: ${OBJS} ${HDR} ${LIBS} ${CLIB}
-	@echo
-	@echo Linking $@ ( ${OBJS} )
-        @${LD} -rmf -o $@ ${OBJS} ${LIBS} ${CLIB}
-        @echo
-        ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
-
-${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
-        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
-
-
-# ------------------------------------------------------------------------------
+#---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.TextGadget:	c.TextGadget
+o.TextGadget:	C:h.string
+o.TextGadget:	C:h.kernel
+o.TextGadget:	C:h.swis
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.toolbox
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.wimp
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.window
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.gadgets
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.wimplib
+o.TextGadget:	h.TextGadgets
+o.TextGadget:	h.myswis
+o.TextGadget:	h.glib
+o.TextGadget:	C:h.kernel
+o.TextGadget:	h.rmensure
+o.TextGadget:	h.TextArea
+o.TextGadget:	h.TextAreaP
+o.TextGadget:	h.modmem
+o.TextGadget:	h.TextArea
+o.TextGadget:	h.TextMan
+o.TextGadget:	h.MemMan
+o.TextGadget:	C:h.kernel
+o.TextGadget:	h.ScrollList
+o.TextGadget:	h.ScrollLisP
+o.TextGadget:	h.modmem
+o.TextGadget:	h.ScrollList
+o.TextGadget:	h.Scrollbar
+o.TextGadget:	h.ScrollbarP
+o.TextGadget:	h.modmem
+o.TextGadget:	h.Scrollbar
+o.TextGadget:	h.riscos_utils
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.toolbox
+o.TextGadget:	h.modmem
+o.TextArea:	c.TextArea
+o.TextArea:	C:h.kernel
+o.TextArea:	C:h.swis
+o.TextArea:	<Lib$Dir>.tboxlibs.h.toolbox
+o.TextArea:	<Lib$Dir>.tboxlibs.h.wimp
+o.TextArea:	<Lib$Dir>.tboxlibs.h.window
+o.TextArea:	<Lib$Dir>.tboxlibs.h.gadgets
+o.TextArea:	<Lib$Dir>.tboxlibs.h.wimplib
+o.TextArea:	h.glib
+o.TextArea:	C:h.kernel
+o.TextArea:	h.string32
+o.TextArea:	h.riscos_utils
+o.TextArea:	<Lib$Dir>.tboxlibs.h.toolbox
+o.TextArea:	h.TextGadgets
+o.TextArea:	h.TextArea
+o.TextArea:	h.TextAreaP
+o.TextArea:	h.modmem
+o.TextArea:	h.TextArea
+o.TextArea:	h.TextMan
+o.TextArea:	h.MemMan
+o.TextArea:	C:h.kernel
+o.TextArea:	h.Font
+o.TextArea:	h.Text
+o.TextArea:	h.Scrollbar
+o.TextArea:	h.ScrollbarP
+o.TextArea:	h.modmem
+o.TextArea:	h.Scrollbar
+o.TextArea:	h.myswis
+o.TextArea:	h.utils
+o.ScrollList:	c.ScrollList
+o.ScrollList:	C:h.kernel
+o.ScrollList:	C:h.swis
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.toolbox
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.wimp
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.window
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.gadgets
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.wimplib
+o.ScrollList:	h.glib
+o.ScrollList:	C:h.kernel
+o.ScrollList:	h.string32
+o.ScrollList:	h.riscos_utils
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.toolbox
+o.ScrollList:	h.Font
+o.ScrollList:	h.TextGadgets
+o.ScrollList:	h.ScrollList
+o.ScrollList:	h.ScrollLisP
+o.ScrollList:	h.modmem
+o.ScrollList:	h.ScrollList
+o.ScrollList:	h.ScrollLisS
+o.ScrollList:	h.modmem
+o.ScrollList:	h.ScrollList
+o.ScrollList:	h.debug
+o.ScrollList:	h.myswis
+o.ScrollList:	h.utils
+o.Scrollbar:	c.Scrollbar
+o.Scrollbar:	C:h.kernel
+o.Scrollbar:	C:h.swis
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.toolbox
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.wimp
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.window
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.gadgets
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.wimplib
+o.Scrollbar:	h.glib
+o.Scrollbar:	C:h.kernel
+o.Scrollbar:	h.string32
+o.Scrollbar:	h.riscos_utils
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.toolbox
+o.Scrollbar:	h.TextGadgets
+o.Scrollbar:	h.Scrollbar
+o.Scrollbar:	h.ScrollbarP
+o.Scrollbar:	h.modmem
+o.Scrollbar:	h.Scrollbar
+o.Scrollbar:	h.debug
+o.Scrollbar:	h.myswis
+o.Scrollbar:	h.Utils
+o.riscos_uti:	c.riscos_uti
+o.riscos_uti:	C:h.kernel
+o.riscos_uti:	C:h.swis
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.wimp
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.wimplib
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.toolbox
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.window
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.gadgets
+o.riscos_uti:	h.riscos_utils
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.toolbox
+o.TextMan:	c.TextMan
+o.TextMan:	C:h.kernel
+o.TextMan:	C:h.swis
+o.TextMan:	h.TextMan
+o.TextMan:	h.MemMan
+o.TextMan:	C:h.kernel
+o.MemMan:	c.MemMan
+o.MemMan:	C:h.swis
+o.MemMan:	C:h.kernel
+o.MemMan:	C:h.kernel
+o.MemMan:	h.MemMan
+o.MemMan:	C:h.kernel
+o.glib:	c.glib
+o.glib:	C:h.kernel
+o.glib:	C:h.swis
+o.glib:	h.glib
+o.glib:	C:h.kernel
+o.glib:	<Lib$Dir>.tboxlibs.h.wimp
+o.glib:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib:	<Lib$Dir>.tboxlibs.h.window
+o.glib:	<Lib$Dir>.tboxlibs.h.gadgets
+o.glib:	h.glibP
+o.glib:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib:	<Lib$Dir>.tboxlibs.h.window
+o.glib:	<Lib$Dir>.tboxlibs.h.wimplib
+o.glib3:	c.glib3
+o.glib3:	C:h.kernel
+o.glib3:	C:h.swis
+o.glib3:	h.glib
+o.glib3:	C:h.kernel
+o.glib3:	<Lib$Dir>.tboxlibs.h.wimp
+o.glib3:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib3:	<Lib$Dir>.tboxlibs.h.window
+o.glib3:	<Lib$Dir>.tboxlibs.h.gadgets
+o.glib3:	h.glibP
+o.glib3:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib3:	<Lib$Dir>.tboxlibs.h.window
+o.glib3:	<Lib$Dir>.tboxlibs.h.wimplib
+o.rmensure:	c.rmensure
+o.rmensure:	C:h.kernel
+o.rmensure:	C:h.swis
+o.rmensure:	h.rmensure
+o.string32:	c.string32
+o.string32:	h.string32
