@@ -3,8 +3,13 @@
  * Author:  IDJ
  * History: 24-Apr-90: IDJ: created
  *          04-Apr-91: IDJ: made running out of memory safer
+ *          11-May-01: ADH: redraws lines as they are written, rather than
+ *                          afterwards; [xx]-style escaping, hiding, or substitution
+ *                          with a '?' for control characters; supports tabs now
  *
  */
+
+#include <stdio.h>
 
 #include "swis.h"
 
@@ -25,21 +30,102 @@
 
 #define  LINEBUFSIZ  256
 
-static void FEtxtwin__printtext(char *text, int leftmost, int rightmost, int atx, int aty)
+static void FEtxtwin__printtext(unsigned char *text, int leftmost, int rightmost, int atx, int aty)
 {
-   int len=0;
+   unsigned char * i;
+   unsigned char   c;
+   unsigned int    len = 0;
+   unsigned int    col = 0;
+   char            esc [5];
+
+   /* Count how many characters there are on this line */
 
    while (text[len] != '\n' && text[len] != '\r' && text[len] != '\0') len++;
 
-   bbc_move(atx, aty);
-   if (len > leftmost)
+   /* In modes where there's a 1:1 mapping between input bytes and redrawn
+    * bytes we can use the leftmost/rightmost indicators. Otherwise, draw
+    * the entire line - it's faster than trying to work out where to start
+    * and end based on counting control characters and so-on...
+    */
+
+   if ((application.flags & AF_ESCAPE_CTRL_CHARS) != 0)
    {
-      os_regset r;
+      /* Escape control characters, support 8 column tabs */
+
+      bbc_move(atx - leftmost * sysfont_width, aty);
+
+      for (i = text; i < text + len; i++)
+      {
+         c = *i;
+         if (c >= ' ' && c != 127) _swix(OS_WriteI + c, 0), col++;
+         else if (c != '\t' || application.tab_width == 0)
+         {
+            sprintf(esc, "[%02x]", c);
+            col += 4;
+
+            _swix(OS_Write0,
+                  _IN(0),
+
+                  esc);
+         }
+         else
+         {
+            do
+            {
+              _swix(OS_WriteI + ' ', 0);
+              col++;
+            }
+            while (col % application.tab_width != 0);
+         }
+      }
+   }
+
+   else if ((application.flags & AF_HIDE_CTRL_CHARS) != 0)
+   {
+     /* Hide control characters completely */
+
+      bbc_move(atx - leftmost * sysfont_width, aty);
+
+      for (i = text; i < text + len; i++)
+      {
+         c = *i;
+         if (c >= ' ' && c != 127) _swix(OS_WriteI + c, 0), col++;
+         else if (c == 9 && application.tab_width != 0)
+         {
+            do
+            {
+              _swix(OS_WriteI + ' ', 0);
+              col++;
+            }
+            while ((col % application.tab_width) != 0);
+         }
+      }
+   }
+
+   else if (len > leftmost)
+   {
+     /* Otherwise, default mode - show control chars as "?" */
+
+      bbc_move(atx, aty);
+
       if (len > rightmost)
           len = rightmost + 1;
-      r.r[0] = (int)(text + leftmost);
-      r.r[1] = len - leftmost;
-      wimpt_noerr(os_swix(OS_WriteN, &r));
+
+      for (i = text + leftmost; i < text + len; i++)
+      {
+         c = *i;
+         if (c >= ' ' && c != 127) _swix(OS_WriteI + c, 0), col++;
+         else if (c != 9 || application.tab_width == 0) _swix(OS_WriteI + '?', 0), col++;
+         else
+         {
+            do
+            {
+              _swix(OS_WriteI + ' ', 0);
+              col++;
+            }
+            while (col % application.tab_width != 0);
+         }
+      }
    }
 }
 
@@ -79,9 +165,9 @@ extern void FEtxtwin_refresh(wimp_redrawstr *r, BOOL more,
       ploty = r->g.y1 + (topspot & (cheight-1)) - 1;
 
       /* now do the redrawing line by line */
-      for (j = topline; j<=bottomline && j<nlines; j++)
+      for (j = topline; j <= bottomline && j < nlines; j++)
       {
-          FEtxtwin__printtext(&buffer[(j==0)?0:line_offsets[j-1]], leftmost, rightmost, plotx, ploty);
+          FEtxtwin__printtext((unsigned char *) &buffer[line_offsets[j]], leftmost, rightmost, plotx, ploty);
           ploty -= cheight;
       }
       wimp_get_rectangle(r, &more);
@@ -124,11 +210,27 @@ extern void FEtxtwin_scroll(wimp_openstr *o, int x, int y)
    FEtxtwin_open(o);
 }
 
-
 extern BOOL FEtxtwin_linecount(int len, char *msg, int *nlines, int **line_offsets, int bufsize, int *lastchar)
 {
    int pos = 0;
    BOOL rc = TRUE;
+
+   /* Make sure we allocate line 0 to start with */
+
+   if (len == bufsize)
+   {
+      rc = flex_alloc((flex_ptr)line_offsets, LINEBUFSIZ * sizeof(int));
+      if (rc)
+      {
+         (*nlines)++;
+         (*line_offsets)[*nlines-1] = 0;
+      }
+      else
+      {
+         werr(FALSE, msgs_lookup("FEoutput1:No more memory for output display - requesting %d bytes"), LINEBUFSIZ);
+         return FALSE;
+      }
+   }
 
    /* The last buffer ending with a singular \r or \n, and this buffer starting with the
     * other line terminator, so this is NOT an extra blank line!
@@ -162,17 +264,11 @@ extern BOOL FEtxtwin_linecount(int len, char *msg, int *nlines, int **line_offse
             }
          }
 
-         if ((*nlines+1) == 1)
+         if ((*nlines+1) * sizeof(int) >= flex_size((flex_ptr)line_offsets))
          {
-            rc = flex_alloc((flex_ptr)line_offsets, LINEBUFSIZ * sizeof(int));
+            rc = flex_extend((flex_ptr)line_offsets, flex_size((flex_ptr)line_offsets) + LINEBUFSIZ * sizeof(int));
          }
-         else
-         {
-            if ((*nlines+1) * sizeof(int) >= flex_size((flex_ptr)line_offsets))
-            {
-               rc = flex_extend((flex_ptr)line_offsets, flex_size((flex_ptr)line_offsets) + LINEBUFSIZ * sizeof(int));
-            }
-         }
+
          if (rc)
          {
             (*nlines)++;
