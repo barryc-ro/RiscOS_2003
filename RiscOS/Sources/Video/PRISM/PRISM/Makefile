@@ -52,8 +52,8 @@ AWK		= awk
 CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
 
-AFLAGS		= -depend !Depend -throwback
-CFLAGS		= -c -throwback -depend !Depend ${INCLUDES} -zM -Wpce -ffah -zps1 ${DFLAGS}
+AFLAGS		= -depend !Depend ${THROWBACK}
+CFLAGS		= -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -Wpce -ffah -zps1 ${DFLAGS}
 DFLAGS		= -D${SYSTEM} -DCOMPAT_INET4 -UDIRECTSWI
 ROMFLAGS	= -DROM
 RAMFLAGS	= -UROM
