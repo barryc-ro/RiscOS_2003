@@ -510,6 +510,72 @@ clean:
         $(RM) Video.Decomp27.DecompresH
         $(RM) Video.Decomp27.Decompress
         |
+        $(RM) Video.Decomp600.Dec8
+        $(RM) Video.Decomp600.DecompresH
+        $(RM) Video.Decomp600.Decompress
+        |
+        $(RM) Video.Decomp601.DecompresH
+        $(RM) Video.Decomp601.Decompress
+        |
+        $(RM) Video.Decomp602.Dec21
+        $(RM) Video.Decomp602.Dec24
+        $(RM) Video.Decomp602.DecompresH
+        $(RM) Video.Decomp602.Decompress
+        |
+        $(RM) Video.Decomp603.DecompresH
+        $(RM) Video.Decomp603.Decompress
+        |
+        $(RM) Video.Decomp604.Dec8
+        $(RM) Video.Decomp604.DecompresH
+        $(RM) Video.Decomp604.Decompress
+        |
+        $(RM) Video.Decomp605.Dec16
+        $(RM) Video.Decomp605.DecompresB
+        $(RM) Video.Decomp605.Decompress
+        |
+        $(RM) Video.Decomp606.Dec8
+        $(RM) Video.Decomp606.Decompress
+        |
+        $(RM) Video.Decomp607.Dec8
+        $(RM) Video.Decomp607.Decompress
+        |
+        $(RM) Video.Decomp608.Dec21
+        $(RM) Video.Decomp608.Dec24
+        $(RM) Video.Decomp608.DecompresH
+        $(RM) Video.Decomp608.Decompress
+        |
+        $(RM) Video.Decomp609.Dec8
+        $(RM) Video.Decomp609.DecompresH
+        $(RM) Video.Decomp609.Decompress
+        |
+        $(RM) Video.Decomp610.Dec8
+        $(RM) Video.Decomp610.Decompress
+        |
+        $(RM) Video.Decomp613.Dec8
+        $(RM) Video.Decomp613.Decompress
+        |
+        $(RM) Video.Decomp614.DecompresH
+        $(RM) Video.Decomp614.Decompress
+        |
+        $(RM) Video.Decomp615.Dec21
+        $(RM) Video.Decomp615.Dec24
+        $(RM) Video.Decomp615.DecompresH
+        $(RM) Video.Decomp615.Decompress
+        |
+        $(RM) Video.Decomp622.Dec8
+        $(RM) Video.Decomp622.Decompress
+        |
+        $(RM) Video.Decomp623.Dec8
+        $(RM) Video.Decomp623.Decompress
+        |
+        $(RM) Video.Decomp624.Dec8
+        $(RM) Video.Decomp624.Decompress
+        |
+        $(RM) Video.Decomp626.Dec21
+        $(RM) Video.Decomp626.Dec24
+        $(RM) Video.Decomp626.DecompresH
+        $(RM) Video.Decomp626.Decompress
+        |
         $(RM) Video.Decomp699.Decompress
         |
         @Dir Video.Decomp901
@@ -542,7 +608,7 @@ Core_Decode:          Resources.!Boot \
         CMF LocalRes:Messages                      $(MSGSDIR).Messages
         MMD $(SETSNDDIR)
         CMF bas.SetSndDir                          $(SETSNDDIR).SetSndDir
-Player: crunched.Player crunch.Keep
+Player: crunched.Player
         squish -nolist -warn 0 -keep crunch.Keep -from crunched.Player -to $@
 crunched.Player: bas.Player
         $(MKDIR) crunched
@@ -2766,13 +2832,21 @@ Decomp500_Decode:     Video.Decomp500.bas.!RunImage \
         CMF Video.Decomp500.rm.EuclidX             $(VIDDIR).Decomp500.EuclidX
         CMF Video.Decomp500.rm.IotaSound           $(VIDDIR).Decomp500.IotaSound
 
-Decomp600_Decode:     Video.Decomp600.DecompresH \
+Decomp600_Decode:     Video.Decomp600.Dec8 \
+                      Video.Decomp600.DecompresH \
                       Video.Decomp600.Decompress \
                       Video.Decomp600.Resources.Info
         MMD $(VIDDIR).Decomp600
+        CMF Video.Decomp600.Dec8                   $(VIDDIR).Decomp600.Dec8
         If4˜16bpp CMF Video.Decomp600.DecompresH   $(VIDDIR).Decomp600.DecompresH
         If8˜32bpp CMF Video.Decomp600.Decompress   $(VIDDIR).Decomp600.Decompress
         CMF Video.Decomp600.Resources.Info         $(VIDDIR).Decomp600.Info
+Video.Decomp600.Dec8: Video.Decomp600.bas.MakeDec8
+        /Video.Decomp600.bas.MakeDec8
+Video.Decomp600.DecompresH: Video.Decomp600.bas.MakeDecomH
+        /Video.Decomp600.bas.MakeDecomH
+Video.Decomp600.Decompress: Video.Decomp600.bas.MakeDecomp
+        /Video.Decomp600.bas.MakeDecomp
 
 Decomp601_Decode:     Video.Decomp601.DecompresH \
                       Video.Decomp601.Decompress \
@@ -2781,6 +2855,10 @@ Decomp601_Decode:     Video.Decomp601.DecompresH \
         If4˜16bpp CMF Video.Decomp601.DecompresH   $(VIDDIR).Decomp601.DecompresH
         If8˜32bpp CMF Video.Decomp601.Decompress   $(VIDDIR).Decomp601.Decompress
         CMF Video.Decomp601.Resources.Info         $(VIDDIR).Decomp601.Info
+Video.Decomp601.DecompresH: Video.Decomp601.bas.MakeDecomH
+        /Video.Decomp601.bas.MakeDecomH
+Video.Decomp601.Decompress: Video.Decomp601.bas.MakeDecomp
+        /Video.Decomp601.bas.MakeDecomp
 
 Decomp602_Decode:     Video.Decomp602.DecompresH \
                       Video.Decomp602.Decompress \
@@ -2789,11 +2867,19 @@ Decomp602_Decode:     Video.Decomp602.DecompresH \
         If4˜16bpp CMF Video.Decomp602.DecompresH   $(VIDDIR).Decomp602.DecompresH
         If8˜32bpp CMF Video.Decomp602.Decompress   $(VIDDIR).Decomp602.Decompress
         CMF Video.Decomp602.Resources.Info         $(VIDDIR).Decomp602.Info
+Video.Decomp602.DecompresH: Video.Decomp602.bas.MakeDpDitH
+        /Video.Decomp602.bas.MakeDpDitH
+Video.Decomp602.Decompress: Video.Decomp602.bas.MakeDpDit
+        /Video.Decomp602.bas.MakeDpDit
 
 Decomp602_Encode:     Video.Decomp602.Dec21 \
                       Video.Decomp602.Dec24
         CMF Video.Decomp602.Dec21                  $(VIDDIR).Decomp602.Dec21
         CMF Video.Decomp602.Dec24                  $(VIDDIR).Decomp602.Dec24
+Video.Decomp602.Dec21: Video.Decomp602.bas.MakeDec21
+        /Video.Decomp602.bas.MakeDec21
+Video.Decomp602.Dec24: Video.Decomp602.bas.MakeDec24
+        /Video.Decomp602.bas.MakeDec24
 
 Decomp603_Decode:     Video.Decomp603.DecompresH \
                       Video.Decomp603.Decompress \
@@ -2802,6 +2888,10 @@ Decomp603_Decode:     Video.Decomp603.DecompresH \
         If4˜16bpp CMF Video.Decomp603.DecompresH   $(VIDDIR).Decomp603.DecompresH
         If8˜32bpp CMF Video.Decomp603.Decompress   $(VIDDIR).Decomp603.Decompress
         CMF Video.Decomp603.Resources.Info         $(VIDDIR).Decomp603.Info
+Video.Decomp603.DecompresH: Video.Decomp603.bas.MakeDecomH
+        /Video.Decomp603.bas.MakeDecomH
+Video.Decomp603.Decompress: Video.Decomp603.bas.MakeDecomp
+        /Video.Decomp603.bas.MakeDecomp
 
 Decomp604_Decode:     Video.Decomp604.Dec8 \
                       Video.Decomp604.DecompresH \
@@ -2812,26 +2902,40 @@ Decomp604_Decode:     Video.Decomp604.Dec8 \
         If4˜16bpp CMF Video.Decomp604.DecompresH   $(VIDDIR).Decomp604.DecompresH
         If8˜32bpp CMF Video.Decomp604.Decompress   $(VIDDIR).Decomp604.Decompress
         CMF Video.Decomp604.Resources.Info         $(VIDDIR).Decomp604.Info
+Video.Decomp604.Dec8: Video.Decomp604.bas.MakeDec8
+        /Video.Decomp604.bas.MakeDec8
+Video.Decomp604.DecompresH: Video.Decomp604.bas.MakeDecomH
+        /Video.Decomp604.bas.MakeDecomH
+Video.Decomp604.Decompress: Video.Decomp604.bas.MakeDecomp
+        /Video.Decomp604.bas.MakeDecomp
 
-Decomp605_Decode:     Video.Decomp605.DecompresB \
-                      Video.Decomp605.DecompresH \
+Decomp605_Decode:     Video.Decomp605.Dec16 \
+                      Video.Decomp605.DecompresB \
                       Video.Decomp605.Decompress \
                       Video.Decomp605.Resources.Info
         MMD $(VIDDIR).Decomp605
+        CMF Video.Decomp605.Dec16                  $(VIDDIR).Decomp605.Dec16
         If1˜8bpp CMF Video.Decomp605.DecompresB    $(VIDDIR).Decomp605.DecompresB
-        If4˜16bpp CMF Video.Decomp605.DecompresH   $(VIDDIR).Decomp605.DecompresH
         If8˜32bpp CMF Video.Decomp605.Decompress   $(VIDDIR).Decomp605.Decompress
         CMF Video.Decomp605.Resources.Info         $(VIDDIR).Decomp605.Info
+Video.Decomp605.Dec16: Video.Decomp605.bas.MakeDec16
+        /Video.Decomp605.bas.MakeDec16
+Video.Decomp605.DecompresB: Video.Decomp605.bas.MakeDecomB
+        /Video.Decomp605.bas.MakeDecomB
+Video.Decomp605.Decompress: Video.Decomp605.bas.MakeDecomp
+        /Video.Decomp605.bas.MakeDecomp
 
 Decomp606_Decode:     Video.Decomp606.Dec8 \
-                      Video.Decomp606.DecompresH \
                       Video.Decomp606.Decompress \
                       Video.Decomp606.Resources.Info
         MMD $(VIDDIR).Decomp606
         CMF Video.Decomp606.Dec8                   $(VIDDIR).Decomp606.Dec8
-        If4˜16bpp CMF Video.Decomp606.DecompresH   $(VIDDIR).Decomp606.DecompresH
         If8˜32bpp CMF Video.Decomp606.Decompress   $(VIDDIR).Decomp606.Decompress
         CMF Video.Decomp606.Resources.Info         $(VIDDIR).Decomp606.Info
+Video.Decomp606.Dec8: Video.Decomp606.bas.MakeDec8
+        /Video.Decomp606.bas.MakeDec8
+Video.Decomp606.Decompress: Video.Decomp606.bas.MakeDecomp
+        /Video.Decomp606.bas.MakeDecomp
 
 Decomp607_Decode:     Video.Decomp607.Dec8 \
                       Video.Decomp607.Decompress \
@@ -2840,36 +2944,70 @@ Decomp607_Decode:     Video.Decomp607.Dec8 \
         CMF Video.Decomp607.Dec8                   $(VIDDIR).Decomp607.Dec8
         If8˜32bpp CMF Video.Decomp607.Decompress   $(VIDDIR).Decomp607.Decompress
         CMF Video.Decomp607.Resources.Info         $(VIDDIR).Decomp607.Info
+Video.Decomp607.Dec8: Video.Decomp607.bas.MakeDec8
+        /Video.Decomp607.bas.MakeDec8
+Video.Decomp607.Decompress: Video.Decomp607.bas.MakeDecomp
+        /Video.Decomp607.bas.MakeDecomp
 
-Decomp608_Decode:     Video.Decomp608.Dec24 \
+Decomp608_Decode:     Video.Decomp608.Dec21 \
+                      Video.Decomp608.Dec24 \
                       Video.Decomp608.DecompresH \
                       Video.Decomp608.Decompress \
                       Video.Decomp608.Resources.Info
         MMD $(VIDDIR).Decomp608
+        If32bpp CMF Video.Decomp608.Dec21          $(VIDDIR).Decomp608.Dec21
         If32bpp CMF Video.Decomp608.Dec24          $(VIDDIR).Decomp608.Dec24
         If4˜16bpp CMF Video.Decomp608.DecompresH   $(VIDDIR).Decomp608.DecompresH
         If8˜32bpp CMF Video.Decomp608.Decompress   $(VIDDIR).Decomp608.Decompress
         CMF Video.Decomp608.Resources.Info         $(VIDDIR).Decomp608.Info
+Video.Decomp608.Dec21: Video.Decomp608.bas.MakeDec21
+        /Video.Decomp608.bas.MakeDec21
+Video.Decomp608.Dec24: Video.Decomp608.bas.MakeDec24
+        /Video.Decomp608.bas.MakeDec24
+Video.Decomp608.DecompresH: Video.Decomp608.bas.MakeDecH
+        /Video.Decomp608.bas.MakeDecH
+Video.Decomp608.Decompress: Video.Decomp608.bas.MakeDecomp
+        /Video.Decomp608.bas.MakeDecomp
 
-Decomp609_Decode:     Video.Decomp609.DecompresH \
+Decomp609_Decode:     Video.Decomp609.Dec8 \
+                      Video.Decomp609.DecompresH \
                       Video.Decomp609.Decompress \
                       Video.Decomp609.Resources.Info
         MMD $(VIDDIR).Decomp609
+        CMF Video.Decomp609.Dec8                   $(VIDDIR).Decomp609.Dec8
         If4˜16bpp CMF Video.Decomp609.DecompresH   $(VIDDIR).Decomp609.DecompresH
         If8˜32bpp CMF Video.Decomp609.Decompress   $(VIDDIR).Decomp609.Decompress
         CMF Video.Decomp609.Resources.Info         $(VIDDIR).Decomp609.Info
+Video.Decomp609.Dec8: Video.Decomp609.bas.MakeDec8
+        /Video.Decomp609.bas.MakeDec8
+Video.Decomp609.DecompresH: Video.Decomp609.bas.MakeDecomH
+        /Video.Decomp609.bas.MakeDecomH
+Video.Decomp609.Decompress: Video.Decomp609.bas.MakeDecomp
+        /Video.Decomp609.bas.MakeDecomp
 
-Decomp610_Decode:     Video.Decomp610.Decompress \
+Decomp610_Decode:     Video.Decomp610.Dec8 \
+                      Video.Decomp610.Decompress \
                       Video.Decomp610.Resources.Info
         MMD $(VIDDIR).Decomp610
+        CMF Video.Decomp610.Dec8                   $(VIDDIR).Decomp610.Dec8
         If8˜32bpp CMF Video.Decomp610.Decompress   $(VIDDIR).Decomp610.Decompress
         CMF Video.Decomp610.Resources.Info         $(VIDDIR).Decomp610.Info
+Video.Decomp610.Dec8: Video.Decomp610.bas.MakeDec8
+        /Video.Decomp610.bas.MakeDec8
+Video.Decomp610.Decompress: Video.Decomp610.bas.MakeDecomp
+        /Video.Decomp610.bas.MakeDecomp
 
-Decomp613_Decode:     Video.Decomp613.Decompress \
+Decomp613_Decode:     Video.Decomp613.Dec8 \
+                      Video.Decomp613.Decompress \
                       Video.Decomp613.Resources.Info
         MMD $(VIDDIR).Decomp613
+        CMF Video.Decomp613.Dec8                   $(VIDDIR).Decomp613.Dec8
         If8˜32bpp CMF Video.Decomp613.Decompress   $(VIDDIR).Decomp613.Decompress
         CMF Video.Decomp613.Resources.Info         $(VIDDIR).Decomp613.Info
+Video.Decomp613.Dec8: Video.Decomp613.bas.MakeDec8
+        /Video.Decomp613.bas.MakeDec8
+Video.Decomp613.Decompress: Video.Decomp613.bas.MakeDecomp
+        /Video.Decomp613.bas.MakeDecomp
 
 Decomp614_Decode:     Video.Decomp614.DecompresH \
                       Video.Decomp614.Decompress \
@@ -2878,14 +3016,30 @@ Decomp614_Decode:     Video.Decomp614.DecompresH \
         If4˜16bpp CMF Video.Decomp614.DecompresH   $(VIDDIR).Decomp614.DecompresH
         If8˜32bpp CMF Video.Decomp614.Decompress   $(VIDDIR).Decomp614.Decompress
         CMF Video.Decomp614.Resources.Info         $(VIDDIR).Decomp614.Info
+Video.Decomp614.DecompresH: Video.Decomp614.bas.MakeDecomH
+        /Video.Decomp614.bas.MakeDecomH
+Video.Decomp614.Decompress: Video.Decomp614.bas.MakeDecomp
+        /Video.Decomp614.bas.MakeDecomp
 
-Decomp615_Decode:     Video.Decomp615.DecompresH \
+Decomp615_Decode:     Video.Decomp615.Dec21 \
+                      Video.Decomp615.Dec24 \
+                      Video.Decomp615.DecompresH \
                       Video.Decomp615.Decompress \
                       Video.Decomp615.Resources.Info
         MMD $(VIDDIR).Decomp615
+        If32bpp CMF Video.Decomp615.Dec21          $(VIDDIR).Decomp615.Dec21
+        If32bpp CMF Video.Decomp615.Dec24          $(VIDDIR).Decomp615.Dec24
         If4˜16bpp CMF Video.Decomp615.DecompresH   $(VIDDIR).Decomp615.DecompresH
         If8˜32bpp CMF Video.Decomp615.Decompress   $(VIDDIR).Decomp615.Decompress
         CMF Video.Decomp615.Resources.Info         $(VIDDIR).Decomp615.Info
+Video.Decomp615.Dec21: Video.Decomp615.bas.MakeDec21
+        /Video.Decomp615.bas.MakeDec21
+Video.Decomp615.Dec24: Video.Decomp615.bas.MakeDec24
+        /Video.Decomp615.bas.MakeDec24
+Video.Decomp615.DecompresH: Video.Decomp615.bas.MakeDecomH
+        /Video.Decomp615.bas.MakeDecomH
+Video.Decomp615.Decompress: Video.Decomp615.bas.MakeDecomp
+        /Video.Decomp615.bas.MakeDecomp
 
 Decomp622_Decode:     Video.Decomp622.Dec8 \
                       Video.Decomp622.Decompress \
@@ -2894,6 +3048,10 @@ Decomp622_Decode:     Video.Decomp622.Dec8 \
         CMF Video.Decomp622.Dec8                   $(VIDDIR).Decomp622.Dec8
         If8˜32bpp CMF Video.Decomp622.Decompress   $(VIDDIR).Decomp622.Decompress
         CMF Video.Decomp622.Resources.Info         $(VIDDIR).Decomp622.Info
+Video.Decomp622.Dec8: Video.Decomp622.bas.MakeDec8
+        /Video.Decomp622.bas.MakeDec8
+Video.Decomp622.Decompress: Video.Decomp622.bas.MakeDecomp
+        /Video.Decomp622.bas.MakeDecomp
 
 Decomp623_Decode:     Video.Decomp623.Dec8 \
                       Video.Decomp623.Decompress \
@@ -2902,26 +3060,42 @@ Decomp623_Decode:     Video.Decomp623.Dec8 \
         CMF Video.Decomp623.Dec8                   $(VIDDIR).Decomp623.Dec8
         If8˜32bpp CMF Video.Decomp623.Decompress   $(VIDDIR).Decomp623.Decompress
         CMF Video.Decomp623.Resources.Info         $(VIDDIR).Decomp623.Info
+Video.Decomp623.Dec8: Video.Decomp623.bas.MakeDec8
+        /Video.Decomp623.bas.MakeDec8
+Video.Decomp623.Decompress: Video.Decomp623.bas.MakeDecomp
+        /Video.Decomp623.bas.MakeDecomp
 
-Decomp624_Decode:     Video.Decomp624.DecompresB \
-                      Video.Decomp624.DecompresH \
+Decomp624_Decode:     Video.Decomp624.Dec8 \
                       Video.Decomp624.Decompress \
                       Video.Decomp624.Resources.Info
         MMD $(VIDDIR).Decomp624
-        If1˜8bpp CMF Video.Decomp624.DecompresB    $(VIDDIR).Decomp624.DecompresB
-        If4˜16bpp CMF Video.Decomp624.DecompresH   $(VIDDIR).Decomp624.DecompresH
+        CMF Video.Decomp624.Dec8                   $(VIDDIR).Decomp624.Dec8
         If8˜32bpp CMF Video.Decomp624.Decompress   $(VIDDIR).Decomp624.Decompress
         CMF Video.Decomp624.Resources.Info         $(VIDDIR).Decomp624.Info
+Video.Decomp624.Dec8: Video.Decomp624.bas.MakeDec8
+        /Video.Decomp624.bas.MakeDec8
+Video.Decomp624.Decompress: Video.Decomp624.bas.MakeDecomp
+        /Video.Decomp624.bas.MakeDecomp
 
 Decomp626_Decode:     Video.Decomp626.Dec21 \
                       Video.Decomp626.Dec24 \
+                      Video.Decomp626.DecompresH \
                       Video.Decomp626.Decompress \
                       Video.Decomp626.Resources.Info
         MMD $(VIDDIR).Decomp626
         If32bpp CMF Video.Decomp626.Dec21          $(VIDDIR).Decomp626.Dec21
         If32bpp CMF Video.Decomp626.Dec24          $(VIDDIR).Decomp626.Dec24
+        If4˜16bpp CMF Video.Decomp626.DecompresH   $(VIDDIR).Decomp626.DecompresH
         If8˜32bpp CMF Video.Decomp626.Decompress   $(VIDDIR).Decomp626.Decompress
         CMF Video.Decomp626.Resources.Info         $(VIDDIR).Decomp626.Info
+Video.Decomp626.Dec21: Video.Decomp626.bas.MakeDec21
+        /Video.Decomp626.bas.MakeDec21
+Video.Decomp626.Dec24: Video.Decomp626.bas.MakeDec24
+        /Video.Decomp626.bas.MakeDec24
+Video.Decomp626.DecompresH: Video.Decomp626.bas.MakeDecH
+        /Video.Decomp626.bas.MakeDecH
+Video.Decomp626.Decompress: Video.Decomp626.bas.MakeDecomp
+        /Video.Decomp626.bas.MakeDecomp
 
 Decomp627_Decode:     Video.Decomp627.Decompress \
                       Video.Decomp627.Resources.Info
@@ -3018,6 +3192,10 @@ Video.Decomp902.Decompress:
 AVI_QT_WSS_Decode:    Fetchers.AVI_QT_WSS.Universal
         MMD $(FETCHDIR)
         CMF Fetchers.AVI_QT_WSS.Universal          $(FETCHDIR).Universal
+
+MFSStream_Decode:     Fetchers.MFSStream.Stream
+        MMD $(FETCHDIR)
+        CMF Fetchers.MFSStream.Stream              $(FETCHDIR).Stream
 
 PNA_Decode:           Fetchers.PNA.PNA
         MMD $(FETCHDIR)

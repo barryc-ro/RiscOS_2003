@@ -63,7 +63,7 @@ clean:
         $(WIPE) o $(WFLAGS)
         $(RM) Play
         $(RM) Playx2
-        @echo $(COMPONENT) and $(LIBCOMPONENT): cleaned
+        @echo $(COMPONENT): cleaned
 
 local_dirs:
         $(MKDIR) o
