@@ -1,297 +1,169 @@
-# Makefile for RTSPHSAC
-# =====================
+# Makefile for RTSP HSAC
+#
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date         Name    Description
+# ----         ----    -----------
+# 13-Aug-2002  JRB     Created from RTSPOVS Makefile
+# 13-Mar-2003  JRB     New version using standard rules and macros
+
+COMPONENT  = RTSPHSAC
+TARGET     = ${COMPONENT}
+RESFSDIR   = <Resource$Dir>.Resources2.VideoCtrl.${TARGET}
+DBG_MODULE = rm.${TARGET}-tr
+
+OBJS =          \
+ o.RTSPHHdr     \
+ o.Announce     \
+ o.CallOut      \
+ o.Connect      \
+ o.DNS          \
+ o.Generic      \
+ o.Global       \
+ o.Headers      \
+ o.MoreInfo     \
+ o.Options      \
+ o.Play         \
+ o.Setup        \
+ o.Session      \
+ o.Status       \
+ o.TearDown     \
+ o.URLutils     \
+ o.Utils
+
+MSGSF_OBJ  = o.messages
+
+RAM_OBJS   = ${OBJS} o.Module ${MSGSF_OBJ}
+
+ROM_OBJS   = ${OBJS} o_rom.Module
+
+DBG_OBJS =      \
+ o.RTSPHHdr     \
+ o_dbg.Announce \
+ o_dbg.CallOut  \
+ o_dbg.Connect  \
+ o_dbg.DNS      \
+ o_dbg.Generic  \
+ o_dbg.Global   \
+ o_dbg.Headers  \
+ o_dbg.Module   \
+ o_dbg.MoreInfo \
+ o_dbg.Options  \
+ o_dbg.Play     \
+ o_dbg.Setup    \
+ o_dbg.Session  \
+ o_dbg.Status   \
+ o_dbg.TearDown \
+ o_dbg.URLutils \
+ o_dbg.Utils    \
+ ${MSGSF_OBJ}
+
+DIRS       = o._dirs_
+
+# Description of extra compilation options:
+# ROM                           When compiling ROM module.
+#
+# TRACE                         Do DebugLib based message outputting.
+#
+# TRACE2                        Defines TRACE for you and also enables extra
+#                               debugging.
+#
+# ALWAYS_CLAIM_EVENTV           The module will sit on EventV from the moment
+#                               it starts to the moment it dies if this is
+#                               defined. Otherwise, it'll only claim it for
+#                               as long as any sessions exist (which should
+#                               be more efficient).
+
+#
+# Build options
+#
+CINCLUDES  = -ITCPIPLibs:,C:
+CDEFINES   = -D${SYSTEM} -DCOMPAT_INET4 -UALWAYS_CLAIM_EVENTV
+CFLAGS     = -Wp -ffah -zM -zps1
+
+#
+# Libraries
+#
+include Makefiles:ModuleLibs
+LIBS       = $(INETLIB) $(SOCK4LIB) $(UNIXLIB) $(ASMUTILS)
+DBG_LIBS   = $(DEBUGLIB) $(LIBS)
+ABSSYM     = $(C_ABSSYM)
+
+#
+# Include standard rules and macros
+#
+include Makefiles:StdTools
+include Makefiles:ModStdRule
+include Makefiles:RAMCModule
+include Makefiles:ROMCModule
+
+#
+# Extra rule patterns
+#
+.SUFFIXES: .o_rom .o_dbg
+.c.o_rom:;      ${CC} ${CFLAGS} -DROM -o $@ $<
+.c.o_dbg:;      ${CC} ${CFLAGS} -fn -DTRACE2 -o $@ $<
+
+#
+# Rule for actually making the linked RAM debug target
+# (based on rule for RAM_MODULE from Makefiles:RAMCModule)
+#
+${DBG_MODULE}: ${DBG_OBJS} ${DBG_LIBS} ${CLIB} ${DIRS}
+        ${MKDIR} rm
+        ${LD} ${LDFLAGS} ${LDRAMFLAGS} -o $@ -rmf ${DBG_OBJS} ${DBG_LIBS} ${CLIB}
+        ${CHMOD} -R a+rx rm
+
+#
+# Resources
 #
 
-# -----------------------------------------------------------------------------
-# Change List
+# Rule to generate messages object file for RAM builds
+${MSGSF_OBJ}: LocalRes:Messages
+        resgen messages_file ${MSGSF_OBJ} LocalRes:Messages Resources.VideoCtrl.${COMPONENT}.Messages
+
+#
+# Targets
 #
 
-# Date		Name	Description
-# ====		====	===========
-# 13-Aug-2002	JRB	Created from RTSPOVS Makefile
-
-# -----------------------------------------------------------------------------
-# Component specific options
-#
-
-COMPONENT	= RTSPHSAC
-ROM_MODULE	= aof.${COMPONENT}
-RAM_MODULE	= rm.${COMPONENT}
-DBG_MODULE	= rm.${COMPONENT}-tr
-
-# -----------------------------------------------------------------------------
-# Export Paths for Messages module
-#
-
-RESDIR		= <resource$dir>.Resources2.VideoCtrl
-
-# -----------------------------------------------------------------------------
-# Generic options
-#
-
-MKDIR		= do mkdir -p
-CC		= cc
-CMHG		= cmhg
-CP		= copy
-LD		= link
-TLD		= tlink
-RM		= remove
-WIPE		= -wipe
-MODSQZ		= modsqz
-
-CPFLAGS		= ~cfr~v
-WFLAGS		= ~c~v
-
-CFLAGS		= -c -depend !Depend ${INCLUDES} -zM -Wp -ffa -zps1
-DFLAGS		= -D${SYSTEM} -DCOMPAT_INET4 -UDIRECTSWI ${EXTRAFLAGS}
-ROMFLAGS	= -DROM
-RAMFLAGS	= -UROM
-INCLUDES	= -ITCPIPLibs:,C:
-
-DIRS		= o._dirs_
-
-# Extra compilation options:
-# ALWAYS_CLAIM_EVENTV		The module will sit on EventV from the moment
-#				it starts to the moment it dies if this is
-#				defined. Otherwise, it'll only claim it for
-#				as long as any sessions exist (which should
-#				be more efficient).
-
-EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV
-
-# -----------------------------------------------------------------------------
-# Libraries and objects lists
-#
-
-ANSILIB		= CLib:o.ansilib
-CLIB		= CLIB:o.stubs
-RLIB		= RISCOSLIB:o.risc_oslib
-ROMCSTUBS	= RISCOSLIB:o.romcstubs
-ABSSYM		= RISC_OSLib:o.abssym
-TCPIPLIBS	= TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm TCPIPLIBS:o.unixlibzm
-DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglibzm
-ASMUTILS	= <Lib$Dir>.AsmUtils.o.AsmUtilszm
-
-LIBS = ${DEBUGLIB} \
-       ${TCPIPLIBS} \
-       ${ASMUTILS}
-
-ROM_OBJS =		\
- o.Announce		\
- o.CallOut		\
- o.Connect		\
- o.DNS			\
- o.Generic		\
- o.Global		\
- o.Headers		\
- o.Module		\
- o.MoreInfo		\
- o.Options		\
- o.Play			\
- o.Setup		\
- o.Session		\
- o.Status		\
- o.TearDown		\
- o.URLutils		\
- o.Utils		\
- o.RTSPHHdr
-
-# oSL -> Soft Load
-
-RAM_OBJS =		\
- oSL.Announce		\
- oSL.CallOut		\
- oSL.Connect		\
- oSL.DNS		\
- oSL.Generic		\
- oSL.Global		\
- oSL.Headers		\
- oSL.Module		\
- oSL.MoreInfo		\
- oSL.Options		\
- oSL.Play		\
- oSL.Setup		\
- oSL.Session		\
- oSL.Status		\
- oSL.TearDown		\
- oSL.URLutils		\
- oSL.Utils		\
- o.RTSPHHdr
-
-# oSLd -> Soft Load deug
-
-DBG_OBJS =		\
- oSLd.Announce		\
- oSLd.CallOut		\
- oSLd.Connect		\
- oSLd.DNS		\
- oSLd.Generic		\
- oSLd.Global		\
- oSLd.Headers		\
- oSLd.Module		\
- oSLd.MoreInfo		\
- oSLd.Options		\
- oSLd.Play		\
- oSLd.Setup		\
- oSLd.Session		\
- oSLd.Status		\
- oSLd.TearDown		\
- oSLd.URLutils		\
- oSLd.Utils		\
- o.RTSPHHdr
-
-# Defining TRACE just does debuglib based message outputting. Defining
-# TRACE2 defines TRACE for you and also enables various extra bits and
-# pieces such as the clients list command (a CMHG header alteration is
-# needed for this too).
-
-MSGSF		= o.msgs
-DBGFLAGS	= -DTRACE2
-
-# -----------------------------------------------------------------------------
-# Rule patterns
-#
-
-.SUFFIXES:
-.SUFFIXES: .o .oSL .oSLd .i .s .c .h .cmhg
-
-.c.o:;		@echo
-		@echo Compiling $<
-		@echo ${DFLAGS} ${ROMFLAGS}
-		@${CC} ${CFLAGS} ${DFLAGS} ${ROMFLAGS} -o $@ $<
-
-.c.oSL:;	@echo
-		@echo Compiling $<
-		@echo ${DFLAGS} ${RAMFLAGS}
-		@${CC} ${CFLAGS} ${DFLAGS} ${RAMFLAGS} -o $@ $<
-
-.c.oSLd:;	@echo
-		@echo Compiling $<
-		@echo ${DFLAGS} ${RAMFLAGS} ${DBGFLAGS}
-		@${CC} ${CFLAGS} ${DFLAGS} ${RAMFLAGS} ${DBGFLAGS} -o $@ $<
-
-.c.i:;		@echo
-		@echo Creating $<
-		@echo ${DFLAGS} ${RAMFLAGS} -C -E
-		@${CC} ${CFLAGS} ${DFLAGS} ${RAMFLAGS} -C -E $< >$@
-
-.s.o .s.oSL .s.oSLd:; \
-		@echo
-		@echo Assembling $<
-		@echo -depend !Depend -throwback
-		@objasm -depend !Depend -throwback -o $@ $<
-
-.cmhg.o .cmhg.oSL .cmhg.oSLd:; \
-		@echo
-		@echo CMHG generating $@
-		@echo -p -o
-		@${CMHG} -p -o $@ $<
-
-.cmhg.h:;	@echo
-		@echo CMHG generating $@
-		@echo -p -d
-		@${CMHG} -p -d $@ $<
-
-# -----------------------------------------------------------------------------
-# Main rules
-#
-
-all: ${RAM_MODULE} ${DIRS}
-	@echo
-	@echo ${COMPONENT}: Module built (RAM)
-
-install: ${RAM_MODULE}
-	${MKDIR} ${INSTDIR}
-	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Module installed (Disc)
-
-ramtrace: ${DBG_MODULE} ${DIRS}
-	@echo
-	@echo ${COMPONENT}: Module built (RAM debug)
-
-rom: ${ROM_MODULE} ${DIRS}
-	@echo
-	@echo ${COMPONENT}: Module built (ROM)
-
-install_rom: ${ROM_MODULE}
-	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Module installed (ROM)
-
-resources: LocalRes:Messages
-	@echo
-	${MKDIR} ${RESDIR}
-	${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-	${CP} LocalRes:Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Resource files copied to Messages module
-
+# Target to create object directories
 ${DIRS}:
-	@echo
-	${MKDIR} o
-	${MKDIR} oSL
-	${MKDIR} oSLd
-	${MKDIR} i
-	${MKDIR} linked
-	create ${DIRS}
+        ${MKDIR} o
+        ${MKDIR} o_rom
+        ${MKDIR} o_dbg
+        ${TOUCH} ${DIRS}
 
+# Target to clean component
 clean:
-	${WIPE} o		${WFLAGS}
-	${WIPE} oSL		${WFLAGS}
-	${WIPE} oSLd		${WFLAGS}
-	${WIPE} i		${WFLAGS}
-	${WIPE} linked		${WFLAGS}
-	${WIPE} aof		${WFLAGS}
-	${WIPE} rm		${WFLAGS}
-	${WIPE} h.RTSPHHdr	${WFLAGS}
-	@echo ${COMPONENT}: cleaned
+        ${RM} h.RTSPHHdr
+        ${XWIPE} o ${WFLAGS}
+        ${XWIPE} o_rom ${WFLAGS}
+        ${XWIPE} o_dbg ${WFLAGS}
+        ${XWIPE} rm ${WFLAGS}
+        ${XWIPE} aof ${WFLAGS}
+        ${XWIPE} linked ${WFLAGS}
+        @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS} ${DIRS}
-	@echo
-	${MKDIR} aof
-	${LD} -o $@ -aof ${ROM_OBJS} ${LIBS} ${ROMCSTUBS}
+# Target to build debug RAM module
+ramtrace: ${DBG_MODULE}
+        @${ECHO} ${COMPONENT}: debug ram module built
 
-# -----------------------------------------------------------------------------
-# Final link for ROM Image (using given base address)
+# Target to export resources
+resources: LocalRes:Messages
+        ${MKDIR} ${RESFSDIR}
+        ${TOKENCHECK} LocalRes:Messages
+        ${CP} LocalRes:Messages ${RESFSDIR}.Messages ${CPFLAGS}
+        @echo ${COMPONENT}: Resource files copied
+
+#
+# Dependencies for and on RTSPHHdr.h need to be defined explicitly as it is
+# generated by cmhg.
 #
 
-rom_link: ${DIRS} ${ROM_MODULE}
-	@echo
-	${MKDIR} aof
-	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
-	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-	@echo ${COMPONENT}: rom_link complete
+h.RTSPHHdr: VersionNum
 
-${MSGSF}: LocalRes:Messages
-	TokenCheck LocalRes:Messages
-	resgen messages_file ${MSGSF} LocalRes:Messages Resources.VideoCtrl.${COMPONENT}.Messages
+o.CallOut o_dbg.CallOut: RTSPHHdr.h
+o.Module o_dbg.Module o_rom.Module: RTSPHHdr.h
+o.Status o_dbg.Status: RTSPHHdr.h
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB} ${DIRS}
-	@echo
-	${MKDIR} rm
-	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
-	${MODSQZ} $@
-	Access $@ RW/R
-
-${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB} ${DIRS}
-	@echo
-	${MKDIR} rm
-	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB}
-	Access $@ RW/R
-
-# -----------------------------------------------------------------------------
-# Specialised static dependencies
-#
-
-o.RTSPHHdr h.RTSPHHdr: VersionNum
-
-o.CallOut oSL.CallOut oSLd.CallOut: RTSPHHdr.h
-
-o.Module oSL.Module oSLd.Module: RTSPHHdr.h
-
-o.Status oSL.Status oSLd.Status: RTSPHHdr.h
-
-# -----------------------------------------------------------------------------
 # Dynamic dependencies:

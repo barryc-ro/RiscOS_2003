@@ -415,6 +415,8 @@ static bool status_proceed_default(session * s, bool * repeat)
 
 static bool status_proceed_error(session * s, bool * repeat)
 {
+  (void)repeat;
+  
   dprintf(("State_0,Error_0", "status_proceed_error: General error\n"));
 
   if (s->destruct)
@@ -499,6 +501,9 @@ static bool status_proceed_error(session * s, bool * repeat)
 
 static bool status_proceed_initial(session * s, bool * repeat)
 {
+  (void)s;
+  (void)repeat;
+  
   dprintf(("State_0", "status_proceed_initial: Initial state\n"));
 
   return false;
@@ -754,82 +759,65 @@ static bool status_proceed_sending(session * s, bool * repeat)
 
   now = utils_read_time();
 
-  if (sent < 0)
+  if (sent <= 0)
   {
-    if (
-         errno != ENOTCONN    &&
-         errno != EWOULDBLOCK
+    /* No data was sent */
+
+    if ( sent  == 0           ||
+         errno == ENOTCONN    ||
+         errno == EWOULDBLOCK
        )
     {
+      /* Check timeout and retry */
+
+      if (utils_time_difference(s->last, now) > Headers_Timeout_General)
+      {
+        s->state = protostate_ERROR_TIMEOUT;
+        *repeat  = true;
+      }
+      else if (s->callout_set == 0)
+      {
+        dprintf(("State_1,RTSP_5", "status_proceed_sending: Setting %dcs callout for send timeout\n", Session_State_Retry));
+
+        s->callout_set = 1;
+        timeout(status_proceed_on_callout, s, Session_State_Retry);
+      }
+    }
+    else
+    {
+      /* An error occurred */
+
       dprintf(("State_1,RTSP_0,Error_0", "status_proceed_sending: Error %d\n", errno));
 
       s->state  = protostate_ERROR_WRITE;
       s->err_no = errno;
       *repeat   = true;
     }
-    else
-    {
-      /* Check timeout */
-
-      if (utils_time_difference(s->last, now) > Headers_Timeout_General)
-      {
-        s->state = protostate_ERROR_TIMEOUT;
-        *repeat  = true;
-      }
-      else if (s->callout_set == 0)
-      {
-        dprintf(("State_1,RTSP_5", "status_proceed_sending: Setting %dcs callout for send timeout (1)\n", Session_State_Retry));
-
-        s->callout_set = 1;
-        timeout(status_proceed_on_callout, s, Session_State_Retry);
-      }
-    }
   }
   else
   {
+    /* Some data was sent */
+
     s->reported_state |= VC_Status_ConnectionEstablished;
+    s->last            = now;
     s->reqptr         += sent;
 
-    if (sent != 0)
+    #ifdef DUMP_HEADERS_TO_CACHEFS
     {
-      #ifdef DUMP_HEADERS_TO_CACHEFS
+      FILE * f = fopen(DUMP_HEADERS_TO_CACHEFS, "ab");
+ 
+      if (f != NULL)
       {
-        FILE * f = fopen(DUMP_HEADERS_TO_CACHEFS, "ab");
-
-        if (f != NULL)
-        {
-          fprintf(f, "SEND (%p):\r\n", s);
-          fwrite(s->full_request, 1, s->reqlen, f);
-          fclose(f);
-        }
-      }
-      #endif
-
-      s->last = now;
-    }
-    else
-    {
-      /* Check timeout */
-
-      if (utils_time_difference(s->last, now) > Headers_Timeout_General)
-      {
-        s->state = protostate_ERROR_TIMEOUT;
-        *repeat  = true;
-
-        return false;
-      }
-      else if (s->callout_set == 0)
-      {
-        dprintf(("State_1,RTSP_5", "status_proceed_sending: Setting a %dcs callout for send timeout (2)\n", Session_State_Retry));
-
-        s->callout_set = 1;
-        timeout(status_proceed_on_callout, s, Session_State_Retry);
+        fprintf(f, "SEND (%p):\r\n", s);
+        fwrite(s->full_request, 1, s->reqlen, f);
+        fclose(f);
       }
     }
+    #endif
 
     if (s->reqptr >= s->reqlen)
     {
-      dprintf(("State_1,RTSP_2", "status_proceed_sending: Full message sent, moving to "));
+      dprintf(("State_1,RTSP_2", "status_proceed_sending: Full message sent\n"));
 
       /* If response_code is non-zero it means we were sending a response */
       /* to a server message (i.e. ANNOUNCE), so we've now finished.      */
@@ -860,6 +848,12 @@ static bool status_proceed_sending(session * s, bool * repeat)
   
         s->state = protostate_RECEIVING;
       }
+      *repeat  = true;
+    }
+    else
+    {
+      /* Some data left to send - try again */
+
       *repeat  = true;
     }
   }
@@ -1162,6 +1156,8 @@ static bool status_proceed_receiving(session * s, bool * repeat)
 
 static bool status_proceed_sent(session * s, bool * repeat)
 {
+  (void)repeat;
+  
   /* Is there another response waiting? */
 
   if (s->child != NULL)
