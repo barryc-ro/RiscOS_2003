@@ -22,8 +22,10 @@ WFLAGS  = ~cfr~v
 # Program specific options:
 #
 COMPONENT = MPlay
-TARGET    = rm.${COMPONENT}
-OBJS      = TempObj.DIn TempObj.DPro TempObj.Out TempObj.Sched
+TARGET    = Modules.${COMPONENT}
+SOURCE    = Source
+O         = ${SOURCE}.TempObj
+OBJS      = ${O}.DIn ${O}.DPro ${O}.Out ${O}.Sched
 
 #
 # Generic rules:
@@ -39,7 +41,7 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} TempObj.* ${WFLAGS}
+        ${WIPE} ${O}.* ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
@@ -47,21 +49,21 @@ resources:
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${OBJS} vars
-        Run b.MPlayCode
+        Run ${SOURCE}.MPlayCode
 
 vars:
-        Set MPlayBuild$Dir @
+        Set MPlayBuild$Dir ${SOURCE}
 
-TempObj.Din: b.DInCode
-        Run b.DInCode
+${O}.Din: ${SOURCE}.DInCode
+        Run ${SOURCE}.DInCode
 
-TempObj.DPro: b.Process
-        Run b.Process
+${O}.DPro: ${SOURCE}.Process
+        Run ${SOURCE}.Process
 
-TempObj.Out: b.OutputCode
-        Run b.OutputCode
+${O}.Out: ${SOURCE}.OutputCode
+        Run ${SOURCE}.OutputCode
 
-TempObj.Sched: b.Schedule
-        Run b.Schedule
+${O}.Sched: ${SOURCE}.Schedule
+        Run ${SOURCE}.Schedule
 
 # Dynamic dependencies:
