@@ -16,6 +16,7 @@ MKDIR    = cdir
 AS       = aasm
 CP       = copy
 RM       = remove
+STRIP    = stripdepnd
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -Stamp -quit -module
@@ -50,18 +51,10 @@ resources:
 
 clean:
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Philips: hdr.Hashes
-rm.Philips: hdr.Macros
-rm.Philips: Version
-rm.Philips: s.Strings
-rm.Philips: s.DriverCode
-rm.Philips: s.Extras
-rm.Philips: s.OnError
-rm.Philips: s.Module
-rm.Philips: s.Variables
