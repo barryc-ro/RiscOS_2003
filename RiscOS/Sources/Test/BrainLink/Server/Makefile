@@ -6,7 +6,6 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 30-Apr-01  NB           Created
-#
 
 #
 # Paths
@@ -18,7 +17,7 @@
 #
 include Makefiles:StdTools
 
-COMPONENT = Brainlink
+COMPONENT = BLServer
 CMHGNAME  = header  
 
 EXPORTS = ${EXP_HDR}.h.${COMPONENT}
