@@ -93,7 +93,7 @@ resources:
         ${CP} Global.${LOCALE}.Messages ${RESDIR}.Resources.Global.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} ${DATA}.Tokenised dirs
+${TARGET}: ${SOURCE} ${DATA}.Tokenised
         ${MKDIR} rm.${BUILD}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
@@ -109,6 +109,7 @@ ${DATA}.Tokenised: ${DICTIONARY} ${HELPTAGS}
         ${TOUCH} ${DATA}.Tokenised; settype ${DATA}.Tokenised fff
 
 ${HELPTAGS}: ${TAGEXT}
+	${MKDIR} ${DATA}
         ${TAGEXT} ${RESDIR} ${DICTTAGS} ${HELPTAGS}
 
 ${DICTIONARY}:
@@ -121,9 +122,6 @@ ${TAGEXT}:
         Dir ${UTILS}
         ${MAKE}
         Up
-
-dirs:
-	${MKDIR} ${DATA}
 
 # Dynamic dependencies:
 rm.Morris2.Messages: Hdr:ListOpts
@@ -191,19 +189,6 @@ rm.RCA.Messages: Hdr:Proc
 rm.RCA.Messages: Hdr:ResourceFS
 rm.RCA.Messages: Version
 rm.RCA.Messages: Hdr:NDRDebug
-rm.RCA8.Messages: Hdr:ListOpts
-rm.RCA8.Messages: Hdr:Macros
-rm.RCA8.Messages: Hdr:System
-rm.RCA8.Messages: Hdr:SWIs
-rm.RCA8.Messages: Hdr:CPU.Generic26
-rm.RCA8.Messages: Hdr:IO.GenericIO
-rm.RCA8.Messages: Hdr:RISCOS
-rm.RCA8.Messages: Hdr:ModHand
-rm.RCA8.Messages: Hdr:Services
-rm.RCA8.Messages: Hdr:Proc
-rm.RCA8.Messages: Hdr:ResourceFS
-rm.RCA8.Messages: Version
-rm.RCA8.Messages: Hdr:NDRDebug
 rm.Boca8.Messages: Hdr:ListOpts
 rm.Boca8.Messages: Hdr:Macros
 rm.Boca8.Messages: Hdr:System
@@ -217,3 +202,16 @@ rm.Boca8.Messages: Hdr:Proc
 rm.Boca8.Messages: Hdr:ResourceFS
 rm.Boca8.Messages: Version
 rm.Boca8.Messages: Hdr:NDRDebug
+rm.RCA8.Messages: Hdr:ListOpts
+rm.RCA8.Messages: Hdr:Macros
+rm.RCA8.Messages: Hdr:System
+rm.RCA8.Messages: Hdr:SWIs
+rm.RCA8.Messages: Hdr:CPU.Generic26
+rm.RCA8.Messages: Hdr:IO.GenericIO
+rm.RCA8.Messages: Hdr:RISCOS
+rm.RCA8.Messages: Hdr:ModHand
+rm.RCA8.Messages: Hdr:Services
+rm.RCA8.Messages: Hdr:Proc
+rm.RCA8.Messages: Hdr:ResourceFS
+rm.RCA8.Messages: Version
+rm.RCA8.Messages: Hdr:NDRDebug
