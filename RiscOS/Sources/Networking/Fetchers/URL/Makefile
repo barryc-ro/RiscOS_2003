@@ -129,7 +129,7 @@ all: ${RAM_MODULE} o.dirs
 
 install: ${RAM_MODULE} o.dirs
 	${MKDIR} ${INSTDIR}
-        ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT}
+        ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: Module installed (Disc)
 
 ramtrace: ${DBG_MODULE} o.dirs
