@@ -19,7 +19,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES} -DFORCE_OWN_WINDOW=1 ${DFLAGS} -wp
+CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS} -wp
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -41,9 +41,10 @@ LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
 LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM = ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
-# Swap these lines to choose which version to make.
-#DFLAGS   = -DDEBUG=1 -throwback
-#DFLAGS   =
+# Swap these lines to choose which version to make (only the second takes effect). Also,
+# m.c is only needed when making a DEBUG version.
+DFLAGS   = -DDEBUG=2 -throwback
+DFLAGS   =
 
 #
 # Program specific options:
@@ -53,9 +54,10 @@ APPNAME   = !CodecCtl
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
 APP       = abs.!RunImage
-OBJS      = o.plugclient o.utils o.client_rep o.clientmidi
-OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap
-OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1
+OBJS      = o.plugclient o.utils o.client_rep o.clientmidi #o.m o.event o.tbevent o.wimpevent o.wimpmsg
+OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap #oz.m oz.event oz.tbevent oz.wimpevent oz.wimpmsg
+OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1 #oz.m oz.event oz.tbevent oz.wimpevent oz.wimpmsg
+
 # CodecCtl was System specific but not any more.
 RDIR      = Resources.RCA.${LOCALE}
 EXPORTS   =
@@ -156,26 +158,148 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-oz.ModuleWrap: s.ModuleWrap
-oz.ModuleWrap: s.AppName
-oz.ModuleWrap: Hdr:ListOpts
-oz.ModuleWrap: Hdr:Macros
-oz.ModuleWrap: Hdr:System
-oz.ModuleWrap: Hdr:SWIs
-oz.ModuleWrap: Hdr:CPU.Generic26
-oz.ModuleWrap: Hdr:IO.GenericIO
-oz.ModuleWrap: Hdr:RISCOS
-oz.ModuleWrap: Hdr:ModHand
-oz.ModuleWrap: Hdr:EnvNumbers
-oz.ModuleWrap: Hdr:Proc
-oz.ModuleWrap: Hdr:FSNumbers
-oz.ModuleWrap: Hdr:NewErrors
-oz.ModuleWrap: Hdr:Services
-oz.ModuleWrap: Hdr:ResourceFS
-oz.ModuleWrap: Hdr:MsgTrans
-oz.ModuleWrap: Hdr:Variables
-oz.ModuleWrap: Hdr:UpCall
-oz.ModuleWrap: s.ResFiles
+o.plugclient:	c.plugclient
+o.plugclient:	C:h.swis
+o.plugclient:	C:h.kernel
+o.plugclient:	tbox:h.toolbox
+o.plugclient:	tbox:h.wimp
+o.plugclient:	tbox:h.window
+o.plugclient:	tbox:h.gadgets
+o.plugclient:	tbox:h.quit
+o.plugclient:	h.event
+o.plugclient:	tbox:h.wimplib
+o.plugclient:	h.m
+o.plugclient:	C:h.plugin
+o.plugclient:	h.plugclient
+o.plugclient:	h.version
+o.plugclient:	h.client
+o.plugclient:	h.utils
+o.plugclient:	h.utils
+o.utils:	c.utils
+o.utils:	C:h.kernel
+o.utils:	C:h.swis
+o.utils:	h.m
+o.utils:	tbox:h.wimp
+o.utils:	tbox:h.wimplib
+o.utils:	h.version
+o.utils:	h.utils
+o.client_rep:	c.client_rep
+o.client_rep:	C:h.swis
+o.client_rep:	C:h.kernel
+o.client_rep:	tbox:h.wimplib
+o.client_rep:	tbox:h.wimp
+o.client_rep:	tbox:h.window
+o.client_rep:	tbox:h.toolbox
+o.client_rep:	tbox:h.gadgets
+o.client_rep:	h.event
+o.client_rep:	h.m
+o.client_rep:	h.plugclient
+o.client_rep:	C:h.plugin
+o.client_rep:	h.client
+o.client_rep:	h.utils
+o.client_rep:	h.utils
+o.clientmidi:	c.clientmidi
+o.clientmidi:	C:h.swis
+o.clientmidi:	C:h.kernel
+o.clientmidi:	tbox:h.wimplib
+o.clientmidi:	tbox:h.wimp
+o.clientmidi:	tbox:h.window
+o.clientmidi:	tbox:h.toolbox
+o.clientmidi:	tbox:h.gadgets
+o.clientmidi:	h.event
+o.clientmidi:	h.m
+o.clientmidi:	h.plugclient
+o.clientmidi:	C:h.plugin
+o.clientmidi:	h.client
+o.clientmidi:	h.utils
+o.clientmidi:	h.version
+o.clientmidi:	h.utils
+o.m:	c.m
+o.m:	C:h.kernel
+o.m:	h.m
+o.m:	h.utils
+o.event:	c.event
+o.event:	C:h.kernel
+o.event:	h.m
+o.event:	h.utils
+o.event:	h.types
+o.event:	tbox:h.wimp
+o.event:	tbox:h.toolbox
+o.event:	h.event
+o.event:	h.event
+o.event:	h.wimpevent
+o.event:	h.tbevent
+o.event:	h.wimpmsg
+o.tbevent:	c.tbevent
+o.tbevent:	C:h.kernel
+o.tbevent:	h.m
+o.tbevent:	h.event
+o.tbevent:	tbox:h.wimp
+o.tbevent:	tbox:h.toolbox
+o.tbevent:	h.utils
+o.tbevent:	h.types
+o.tbevent:	h.tbevent
+o.wimpevent:	c.wimpevent
+o.wimpevent:	C:h.kernel
+o.wimpevent:	h.m
+o.wimpevent:	h.utils
+o.wimpevent:	h.event
+o.wimpevent:	tbox:h.wimp
+o.wimpevent:	tbox:h.toolbox
+o.wimpevent:	h.types
+o.wimpevent:	h.wimpevent
+o.wimpmsg:	c.wimpmsg
+o.wimpmsg:	C:h.kernel
+o.wimpmsg:	h.m
+o.wimpmsg:	h.utils
+o.wimpmsg:	h.event
+o.wimpmsg:	tbox:h.wimp
+o.wimpmsg:	tbox:h.toolbox
+o.wimpmsg:	h.types
+o.wimpmsg:	h.wimpmsg
+oz.m:	c.m
+oz.m:	C:h.kernel
+oz.m:	h.m
+oz.m:	h.utils
+oz.event:	c.event
+oz.event:	C:h.kernel
+oz.event:	h.m
+oz.event:	h.utils
+oz.event:	h.types
+oz.event:	tbox:h.wimp
+oz.event:	tbox:h.toolbox
+oz.event:	h.event
+oz.event:	h.event
+oz.event:	h.wimpevent
+oz.event:	h.tbevent
+oz.event:	h.wimpmsg
+oz.tbevent:	c.tbevent
+oz.tbevent:	C:h.kernel
+oz.tbevent:	h.m
+oz.tbevent:	h.event
+oz.tbevent:	tbox:h.wimp
+oz.tbevent:	tbox:h.toolbox
+oz.tbevent:	h.utils
+oz.tbevent:	h.types
+oz.tbevent:	h.tbevent
+oz.wimpevent:	c.wimpevent
+oz.wimpevent:	C:h.kernel
+oz.wimpevent:	h.m
+oz.wimpevent:	h.utils
+oz.wimpevent:	h.event
+oz.wimpevent:	tbox:h.wimp
+oz.wimpevent:	tbox:h.toolbox
+oz.wimpevent:	h.types
+oz.wimpevent:	h.wimpevent
+oz.wimpmsg:	c.wimpmsg
+oz.wimpmsg:	C:h.kernel
+oz.wimpmsg:	h.m
+oz.wimpmsg:	h.utils
+oz.wimpmsg:	h.event
+oz.wimpmsg:	tbox:h.wimp
+oz.wimpmsg:	tbox:h.toolbox
+oz.wimpmsg:	h.types
+oz.wimpmsg:	h.wimpmsg
 oz.plugclient:	c.plugclient
 oz.plugclient:	C:h.swis
 oz.plugclient:	C:h.kernel
@@ -184,8 +308,9 @@ oz.plugclient:	tbox:h.wimp
 oz.plugclient:	tbox:h.window
 oz.plugclient:	tbox:h.gadgets
 oz.plugclient:	tbox:h.quit
-oz.plugclient:	tbox:h.event
+oz.plugclient:	h.event
 oz.plugclient:	tbox:h.wimplib
+oz.plugclient:	h.m
 oz.plugclient:	C:h.plugin
 oz.plugclient:	h.plugclient
 oz.plugclient:	h.version
@@ -193,11 +318,11 @@ oz.plugclient:	h.client
 oz.plugclient:	h.utils
 oz.plugclient:	h.utils
 oz.utils:	c.utils
-oz.utils:	C:h.swis
 oz.utils:	C:h.kernel
+oz.utils:	C:h.swis
+oz.utils:	h.m
 oz.utils:	tbox:h.wimp
 oz.utils:	tbox:h.wimplib
-oz.utils:	C:h.kernel
 oz.utils:	h.version
 oz.utils:	h.utils
 oz.client_rep:	c.client_rep
@@ -208,7 +333,8 @@ oz.client_rep:	tbox:h.wimp
 oz.client_rep:	tbox:h.window
 oz.client_rep:	tbox:h.toolbox
 oz.client_rep:	tbox:h.gadgets
-oz.client_rep:	tbox:h.event
+oz.client_rep:	h.event
+oz.client_rep:	h.m
 oz.client_rep:	h.plugclient
 oz.client_rep:	C:h.plugin
 oz.client_rep:	h.client
@@ -222,7 +348,8 @@ oz.clientmidi:	tbox:h.wimp
 oz.clientmidi:	tbox:h.window
 oz.clientmidi:	tbox:h.toolbox
 oz.clientmidi:	tbox:h.gadgets
-oz.clientmidi:	tbox:h.event
+oz.clientmidi:	h.event
+oz.clientmidi:	h.m
 oz.clientmidi:	h.plugclient
 oz.clientmidi:	C:h.plugin
 oz.clientmidi:	h.client
