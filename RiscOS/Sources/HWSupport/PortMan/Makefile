@@ -92,6 +92,10 @@ rom: ${TARGET} dirs
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
+install: ${RMTARGET} dirs
+        ${CP} ${RMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGET} dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
@@ -118,10 +122,10 @@ dirs:
 	${MKDIR}	sao
 
 
-resources:
+resources: LocalRes:Messages Resources.<Machine>.Tags
         ${MKDIR} ${RDIR}
-        ${CP} resources.<Machine>.Tags ${RDIR}.Tags ${CPFLAGS}
-        ${CP} resources.<Locale>.Messages ${RDIR}.Messages ${CPFLAGS}
+        ${CP} Resources.<Machine>.Tags ${RDIR}.Tags ${CPFLAGS}
+        ${CP} LocalRes:* ${RDIR}.* ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # dummy target
@@ -159,7 +163,7 @@ ${EXP_HDR}.${COMPONENT}:	hdr.${COMPONENT}
 o.module: h.header
 sao.module: h.saheader
 o<Machine>.resfiles: Resources.<Machine>.Tags
-o<Machine>.resfiles: Resources.<Machine>.Messages
+o<Machine>.resfiles: LocalRes:Messages
 
 #
 # Dynamic dependencies:
