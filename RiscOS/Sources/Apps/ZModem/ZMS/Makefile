@@ -81,8 +81,6 @@ WIMPLIB		= tbox:o.wimplib
 ERRORLIB	= ${LIBDIR}.ErrorLib.o.ErrorLib
 MSGLIB		= ${LIBDIR}.MsgLib.o.MsgLib
 
-DEBUGLIB	= ${LIBDIR}.DebugLib.o.DebugLib
-
 LIBSM = \
  ${MSGLIB}zm \
  ${ERRORLIB} \
@@ -92,7 +90,6 @@ LIBSM = \
 
 
 LIBS = \
- ${DEBUGLIB} \
  ${MSGLIB} \
  ${ERRORLIB} \
  ${WIMPLIB} \
@@ -253,6 +250,7 @@ clean:
 	${WIPE}	oz		${WFLAGS}
 	${WIPE}	odz		${WFLAGS}
 	${WIPE}	rm		${WFLAGS}
+	${WIPE} syms		${WFLAGS}
 	${RM}	s.AppName
 	${RM}	s.ModuleWrap
 	${RM}	o.dirs
