@@ -47,19 +47,19 @@ WFLAGS  = ~c~vr
 export:
 	cdir aif
 	dir sources.common
-	-amu ${MFLAGS} 
+	-amu ${MFLAGS} ${MAKECMDGOALS}
 	dir ^.^
         dir sources.shell
-        -amu TARGET=^.^.${TGT_MAIN} ${MFLAGS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.Templates
+        -amu TARGET=^.^.${TGT_MAIN} ${MFLAGS} ${MAKECMDGOALS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.Templates
         dir ^.^
         dir sources.misc
-        -amu TARGET=^.^.${TGT_MISC} ${MFLAGS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.CSE.!Misc.Templates
+        -amu TARGET=^.^.${TGT_MISC} ${MFLAGS} ${MAKECMDGOALS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.CSE.!Misc.Templates
         dir ^.^
         dir sources.window
-        -amu TARGET=^.^.${TGT_WIND} ${MFLAGS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.CSE.!Window.Templates
+        -amu TARGET=^.^.${TGT_WIND} ${MFLAGS} ${MAKECMDGOALS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.CSE.!Window.Templates
         dir ^.^
         dir sources.menu
-        -amu TARGET=^.^.${TGT_MENU} ${MFLAGS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.CSE.!Menu.Templates
+        -amu TARGET=^.^.${TGT_MENU} ${MFLAGS} ${MAKECMDGOALS} ${WINEDIT} TEMPLATES=${TEMP_BASE}.CSE.!Menu.Templates
         dir ^.^
 	${MKDIR} ${EXPDIR}
 	${MKDIR} ${EXPDIR}.!${COMPONENT}
