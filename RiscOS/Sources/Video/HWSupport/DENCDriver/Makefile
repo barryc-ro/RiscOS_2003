@@ -81,11 +81,19 @@ ram: ${RAM_MODULE}
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
+install: install_${TYPE}
+
 install_ram: ${RAM_MODULE}
         ${MKDIR} ${INSTDIR}
         ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         ${ATTR} -files +or +ow +wr -ww ${INSTDIR}.${COMPONENT}
         @echo ${COMPONENT}: Module installed (RAM)
+
+install_keys: keys
+        ${MKDIR} ${INSTDIR}
+        ${CP} key ${INSTDIR} ${CPFLAGS}
+        ${ATTR} -files +or +ow +wr -ww ${INSTDIR}
+        @echo ${COMPONENT}: Module (keys) installed (RAM)
 
 install_rom: ${ROM_MODULE}
         ${MKDIR} ${INSTDIR}
