@@ -40,6 +40,7 @@ CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
+TBOXLIB   = tbox:o.toolboxlib
 WIMPLIB   = tbox:o.wimplib
 
 OBJS =\
@@ -59,6 +60,7 @@ OBJS =\
 	o.point \
 	o.rect \
 	o.setAtts \
+	o.setFont \
 	o.sprite \
 	o.triangle \
 	o.clearRect \
@@ -70,7 +72,9 @@ OBJS =\
 	o.redraw \
 	o.setClpRect \
 	o.task \
-	o.utils
+	o.utils \
+	o.memory \
+	o.antiTwit
 #
 # Rule patterns
 #
