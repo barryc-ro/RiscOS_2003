@@ -136,10 +136,10 @@ ${RAMTARGET}: ${OBJSZRAM} ${LIBSZRAM}
 	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
 	Access $@ rw/rw
 
-oz.ModuleWrap: src.ModuleWrap hdr.AppName
+oz.ModuleWrap: src.ModuleWrap s.AppName
 	${AS} ${AFLAGS} src.ModuleWrap $@
 
-oz.ModuleWra1: src.ModuleWrap hdr.AppName
+oz.ModuleWra1: src.ModuleWrap s.AppName
 	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" src.ModuleWrap $@
 
 src.ModuleWrap: ${WRAPPER}
