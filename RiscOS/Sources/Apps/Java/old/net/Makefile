@@ -11,7 +11,7 @@
 #
 # Component specific options:
 #
-COMPONENT  = net
+COMPONENT  = JavaNet
 ROM_MODULE = aof.$(COMPONENT)
 
 #
