@@ -164,7 +164,7 @@ DBGFLAGS	= -DTRACE2
 # Main rules
 #
 
-all: ${RAM_MODULE} ${DIRS}
+all: ${RAM_MODULE} export ${DIRS}
 	@echo
 	@echo ${COMPONENT}: Module built (RAM)
 	@echo
@@ -176,12 +176,12 @@ install: ${RAM_MODULE}
 	@echo ${COMPONENT}: Module installed (Disc)
 	@echo
 
-ramtrace: ${DBG_MODULE} ${DIRS}
+ramtrace: ${DBG_MODULE} export ${DIRS}
 	@echo
 	@echo ${COMPONENT}: Module built (RAM debug)
 	@echo
 
-rom: ${ROM_MODULE} ${DIRS}
+rom: ${ROM_MODULE} export ${DIRS}
 	@echo
 	@echo ${COMPONENT}: Module built (ROM)
 	@echo
