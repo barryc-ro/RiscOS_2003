@@ -139,7 +139,6 @@ ${TARGET}: ${OBJS} dirs
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	Run b.PreTestSrc
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
-	${CP} PreTest ${APP}.* ${CPFLAGS} 
 	${MKDIR} ${RESDIR}
 	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
 	@echo ${COMPONENT}: built & installed
