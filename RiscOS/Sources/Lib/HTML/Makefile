@@ -33,14 +33,14 @@ export:	export_$(PHASE)
 export_hdrs:
 	CDir		<Lib$Dir>.$(COMPONENT)
 	Copy		@.h		<Lib$Dir>.$(COMPONENT).h		$(CopyFlags)
-	Copy		@.$(COMPONENT)	<Lib$Dir>.$(COMPONENT).$(COMPONENT)	$(CopyFlags)
+	IfThere		@.$(COMPONENT)	Then Copy @.$(COMPONENT) <Lib$Dir>.$(COMPONENT).$(COMPONENT) $(CopyFlags)
 	Echo		Library $(COMPONENT): 'export_hdrs' finished.
 
 
 export_libs:
 	CDir		<Lib$Dir>.$(COMPONENT)
 	CDir		<Lib$Dir>.$(COMPONENT).o
-	Every.Every2	-c "@.o.Sources.!* -x ..!MemCheck ..!Mod_D ..!Debug" Obey %0.!Run
+	Every.Every2	-c "@.o.Sources.!Module.!Run @.o.Sources.!Normal.!Run" Obey %0
 	Every.Every2	-c @.o.lib* copy %0 <Lib$Dir>.$(COMPONENT).o.%1		$(CopyFlags)
 	Echo		Library $(COMPONENT): 'export_libs' finished.
 
