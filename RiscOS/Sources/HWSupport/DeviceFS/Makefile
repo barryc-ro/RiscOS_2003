@@ -5,77 +5,17 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 07-Mar-01  SNB          Recreated
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
-C_EXP_HDR = <cexport$dir>.Interface.h
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend $(THROWBACK) -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
 COMPONENT = DeviceFS
-SOURCE    = s.DeviceFS
-TARGET    = rm.DeviceFS
-TARGETSA  = rm.DeviceFSSA
-EXPORTS   = ${EXP_HDR}.${COMPONENT} \
-            ${C_EXP_HDR}.${COMPONENT}
-RESOURCES = LocalRes:Messages
+HEADER1   = DeviceFS
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+# C headers to generate from the assembler sources
+ASMCHEADER1  = DeviceFS
+EXPORTS      = ${C_EXP_HDR}.${ASMCHEADER1}
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} ${TARGETSA}
-        @echo ${COMPONENT}: cleaned
-
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
-${C_EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-	perl Build:Hdr2H hdr.${COMPONENT} $@
-
-#
-# Makes a stand-alone version with messages bound in
-#
-standalone: ${TARGETSA}
-        @echo ${COMPONENT}: standalone module built
-
-${TARGETSA}: s.StandAlone ${RESOURCES}
-        ${AS} ${ASFLAGS} s.StandAlone
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
