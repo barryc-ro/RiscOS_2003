@@ -49,13 +49,12 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 SOCKLIB	   = TCPIPLibs:o.socklibzm
 INETLIB	   = TCPIPLibs:o.inetlibzm
 
-DEBUGLIB  = <Lib$Dir>.DebugLib.o.debuglibzm
-
 #
-# DebugLib support :- comment out both lines for production.
+# DebugLib support.
+# Uncomment these or pass to AMU to enable debug build.
 #
-#DFLAGS	= -Throwback -fn -DDEBUGLIB
-#LIBSD 	= ${DEBUGLIB}
+#DFLAGS	= -Throwback -fn -DDEBUGLI
+#LIBSD = <Lib$Dir>.DebugLib.o.debuglibzm
 
 
 #
@@ -73,7 +72,7 @@ COMPONENT = NetTime
 TARGET    = aof.NetTime
 TARGETSA  = rm.NetTime
 EXPORTS   = 
-OBJS      = mul64.o machine.o module.o header.o nt_nvram.o
+OBJS      = mul64.o machine.o module.o header.o nt_nvram.o dns.o
 
 #
 # Generic rules:

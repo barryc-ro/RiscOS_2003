@@ -9,6 +9,7 @@
 #include "nettime.h"
 #include "nt_nvram.h"
 #include "header.h"
+#include "dns.h"
 #include <string.h>
 
 /*
@@ -16,12 +17,32 @@
  */
 int sockno;
 char env_time_server[MAX_ENV_TIME_SERVER];
+struct sockaddr_in sockaddr;
 
+#ifdef DEBUGLIB
+char inet_resolvers[128];
+#endif
+
+#ifdef DEBUGLIB
+/* State and transition names for debug output - keep these in step with definitions
+ * in nettime.h
+ */
+char *states[] = {"Dormant", "NoLink", "Sleeping", "Expecting", "DNSWait"};
+char *transitions[] = {"NoTrans", "Init", "Die", "PostInit", "Response", "Failure", "Timer", "LinkUp", "LinkDown", "RegistryChanged", "DoDNS"};
+
+#define STATENAME(i) ((((i) < 0) || ((i) > sizeof(states)/sizeof(char *))) ? \
+			"Invalid state" : states[i])
+
+#define TRANSNAME(i) ((((i) < 0) || ((i) > sizeof(transitions)/sizeof(char *))) ? \
+			"Invalid transition" : transitions[i])
+			
+#endif
 
 /*
  * Private function defs
  */
-static int tryconnect(void);
+static int tryresolve(struct sockaddr_in *sa);
+static int tryconnect(struct sockaddr_in *sa);
 static int isdialup(void);
 static int local_settimeofday(void);
 static void settimer(int duration);
@@ -35,6 +56,7 @@ static void closeconnect(void);
  * Description of states:
  *	Dormant:	Waiting for other modules to load / smartcard info
  *	NoLink:		Waiting for link to come up on dial-up machine
+ *	DNSWait:	Waiting for DNS lookup of time server host name
  *	Expecting:	Waiting for socket response or failure
  *	Sleeping:	Waiting for timer callback because either:
  *			a) Successfully set the time (long Timer)
@@ -43,114 +65,166 @@ static void closeconnect(void);
 void machine(transition_t transition)
 {
   static state_t state = Dormant;
-
-  dprintf(("debug", "State:%d, transition %d\n", state, transition));
-
-  switch(state)
+  transition_t next_trans;
+  int status;
+    
+  for (; transition != NoTrans; transition = next_trans)
   {
-  case Dormant:
-    switch(transition)
+    dprintf(("debug", "State %d (%s), transition %d (%s)\n", 
+    	state, STATENAME(state), transition, TRANSNAME(transition)));
+
+    /* There is no "next transition" unless set whilst handling current transition */
+    next_trans = NoTrans;
+    
+    switch(state)
     {
-    case PostInit:
-      if (isdialup())
+    case Dormant:
+      switch(transition)
+      {
+        case PostInit:
+        if (isdialup())
+          state = NoLink;
+        continue;
+
+      case LinkUp:
+      case RegistryChanged:
+        next_trans = DoDNS;
+        state = DNSWait;
+        continue;
+        
+      case Init:
+      case Die:
+      case LinkDown:
+        continue;
+      }
+      break;
+
+    case NoLink:
+      switch(transition)
+      {
+      case LinkUp:
+        next_trans = DoDNS;
+        state = DNSWait;
+        continue;
+
+      case LinkDown:
+      case RegistryChanged:
+        continue;
+
+      case Die:
+        state = Dormant;
+        continue;
+      }
+      break;
+
+    case Sleeping:
+      switch(transition)
+      {
+      case Timer:
+      case LinkUp:
+      case RegistryChanged:
+        next_trans = DoDNS;
+        state = DNSWait;
+        continue;
+
+      case LinkDown:
+        canceltimer();
         state = NoLink;
-      return;
+        continue;
 
-    case LinkUp:
-    case RegistryChanged:
-      if (tryconnect())
-        state = Expecting;
-      else
-      {
-        settimer(SHORT_TIMER);
-        state = Sleeping;
+      case Die:
+        canceltimer();
+        state = Dormant;
+        continue;
       }
-      return;
+      break;
 
-    case Init:
-    case Die:
-    case LinkDown:
-      return;
-    }
-    break;
-
-  case NoLink:
-    switch(transition)
-    {
-    case LinkUp:
-      if (tryconnect())
-        state = Expecting;
-      else
+    case DNSWait:
+      switch(transition)
       {
-        settimer(SHORT_TIMER);
-        state = Sleeping;
+      case DoDNS:
+      case Timer:
+        status = tryresolve(&sockaddr);
+        switch (status)
+        {
+          case EINPROGRESS:
+            /* Resolve in progress - poll again shortly */
+	    settimer(POLL_TIMER);
+            continue;
+
+          case 0:
+	    /* Resolve complete - connect to server */
+            if (tryconnect(&sockaddr))
+              state = Expecting;
+            else {
+              settimer(SHORT_TIMER);
+              state = Sleeping;
+            }
+            continue;
+            
+	  default:
+            /* Resolve failed - retry later */
+	    settimer(SHORT_TIMER);
+	    state = Sleeping;
+	    continue;
+        }
+      
+      case LinkDown:
+        canceltimer();
+        state = NoLink;
+        continue;
+
+      case Die:
+        canceltimer();
+        state = Dormant;
+        continue;
+
+      case RegistryChanged:
+        /* Registry changed whilst waiting for DNS completion.  Stop poll timer
+         * and try again with (possibly) new timeserver.
+         */
+        canceltimer();
+        next_trans = DoDNS;
+        continue;
       }
-      return;
-
-    case LinkDown:
-    case RegistryChanged:
-      return;
-
-    case Die:
-      state = Dormant;
-      return;
-    };
-    break;
-
-  case Sleeping:
-    switch(transition)
-    {
-    case Timer:
-    case LinkUp:
-    case RegistryChanged:
-      if (tryconnect())
-        state = Expecting;
-      else
-        settimer(SHORT_TIMER);
-      return;
-
-    case LinkDown:
-      canceltimer();
-      state = NoLink;
-      return;
-
-    case Die:
-      canceltimer();
-      state = Dormant;
-      return;
-    };
-    break;
-
-  case Expecting:
-    switch(transition)
-    {
-    case Response:
-      if (local_settimeofday())
+      break;
+          
+    case Expecting:
+      switch(transition)
       {
-        state = Sleeping;
-        settimer(LONG_TIMER);
+      case Response:
+        if (local_settimeofday())
+        {
+          state = Sleeping;
+          settimer(LONG_TIMER);
+        }
+        continue;
+
+      case Failure:
+        closeconnect();
+        settimer(SHORT_TIMER);
+        continue;
+
+      case LinkDown:
+        closeconnect();
+        state = NoLink;
+        continue;
+
+      case Die:
+        closeconnect();
+        state = Dormant;
+        continue;
       }
-      return;
+      break;
+      
+    } /* end of switch(state) */
+    
+    dprintf(("debug", "Bogus state/transition combo: state=%d, transition=%d\n",
+    	     state, transition));
+        
+  } /* for (; transition != NoTrans; transition = next_trans) */
 
-    case Failure:
-      closeconnect();
-      settimer(SHORT_TIMER);
-      return;
-
-    case LinkDown:
-      closeconnect();
-      state = NoLink;
-      return;
-
-    case Die:
-      closeconnect();
-      state = Dormant;
-      return;
-    };
-    break;
-  }
-  dprintf(("debug", "Bogus state/transition combo: state=%d, transition=%d\n",
-          state, transition));
+  dprintf(("debug", "Machine resting in state=%d\n", state));
 }
 
 
@@ -161,19 +235,26 @@ static int isdialup(void)
   return(_swix(PPP_DCIVersion, _IN(0), 0) == NULL);
 }
 
-
-/* Returns non-0 if connect successfully initiated */
-static int tryconnect(void)
+/* tryresolve()
+ *   Try to resolve the TimeServer hostname to an IP address.
+ *   The hostname is read from the system variable "NetTime$Server"
+ *   if set, or the smart card tag "TIME_PRIMARY" otherwise.
+ *
+ * Returns:
+ *   0		 - Address resolved, result in 'sockaddr'.
+ *   EINPROGRESS - DNS lookup in progress; waiting for response.  To
+ *                 collect the response this routine should be
+ *                 polled on a timer until it returns 0 or another 
+ *                 error.
+ *   Otherwise	 - Request failed.
+ *
+ */
+static int tryresolve(struct sockaddr_in *sockaddr)
 {
   dialler_status_t dialler_status;
   int ipaddress, i;
-  struct sockaddr_in sa;
-  struct servent *service;
-  unsigned long host_ip;
-  struct hostent *hp;
-
-  dprintf(("debug", "trying to connect\n"));
-
+  int status;
+  
   /*
    * Ensure that if the dialler module is around to return a status,
    * the status returned is a connected status
@@ -182,7 +263,7 @@ static int tryconnect(void)
       !CONNECTED(dialler_status))
   {
     dprintf(("debug", "Dialler bailed! r0=%x\n", dialler_status));
-    return 0;
+    return -1;
   }
   dprintf(("debug", "checking environment variable %s\n", ENV_TIME_SERVER));
 
@@ -196,33 +277,64 @@ static int tryconnect(void)
                 &i))
       {
         dprintf(("debug", "NCAccessManager bailed! r0=%x\n", i));
-        return 0;
+        return -1;
       }
 
       if(i == 4) { /* packed IP address */
         ipaddress = *(int *)env_time_server;
-        dprintf(("debug", "NCAccessManager says timeserver is %08x\n", ipaddress));
+        dprintf(("debug", "NCAccessManager says timeserver IP address is %08x\n", ipaddress));
         if (ipaddress == 0) return 0;
-        sa.sin_addr.s_addr = ipaddress; /* address already in network order */
-        goto skip_addr_decode;
+        sockaddr->sin_addr.s_addr = ipaddress; /* address already in network order */
+        return 0; /* complete */
+      } else {
+        dprintf(("debug", "NCAccessManager says timeserver host is %s\n", env_time_server));
       }
   }
 
+#ifdef DEBUGLIB
+  if (read_os_var("Inet$Resolvers", inet_resolvers, sizeof(inet_resolvers)) > 0)
+    dprintf(("debug", "Inet$Resolvers: %s\n", inet_resolvers));
+  else
+    dprintf(("debug", "Inet$Resolvers not set!\n"));
+#endif
+  
 
-    if((hp = gethostbyname(env_time_server)) != NULL) { /* it's an IP name */
-      dprintf(("debug", "got natural IP name \"%s\"\n", env_time_server));
-      memcpy((char *)&sa.sin_addr, hp->h_addr, hp->h_length);
-    } else if((host_ip = inet_addr(env_time_server)) != INADDR_NONE) { /* must be a dot quad then */
-          dprintf(("debug", "got dot-quad IP name \"%s\"\n", env_time_server));
-          memcpy((char *)&sa.sin_addr, &host_ip, sizeof(unsigned long));
-    } else {
-        dprintf(("debug", "dammit, couldn't figure out time server address\n"));
-        return 0;
-    }
+  /*  Lookup server as a dot-quad IP string or hostname.
+   */  
+  status = dns_find_ip_address(env_time_server, &sockaddr->sin_addr);
+  if (status == EINPROGRESS) {
+    dprintf(("debug", "tryresolve: DNS says EINPROGRESS\n"));
+  } else if (status == 0) {
+    dprintf(("debug", "tryresolve: DNS says done\n"));
+  } else {
+    dprintf(("debug", "tryresolve: DNS says failed (status = %d)\n", status));
+  }
+  
+  return status;  
+}
 
-    skip_addr_decode:
 
-  dprintf(("debug", "Using time server 0x%x\n", (int)sa.sin_addr.s_addr));
+/* Returns non-0 if connect successfully initiated */
+static int tryconnect(struct sockaddr_in *sa)
+{
+  dialler_status_t dialler_status;
+  int i;
+  struct servent *service;
+
+  /*
+   * Ensure that if the dialler module is around to return a status,
+   * the status returned is a connected status
+   */
+  if ((_swix(Dialler_Status, _IN(0)|_OUT(0), 0, &dialler_status) == NULL) &&
+      !CONNECTED(dialler_status))
+  {
+    dprintf(("debug", "Dialler bailed! r0=%x\n", dialler_status));
+    return -1;
+  }
+  
+  dprintf(("debug", "trying to connect\n"));
+
+  dprintf(("debug", "Using time server 0x%x\n", (int)sa->sin_addr.s_addr));
 
   if ((service=getservbyname("time", "tcp")) == NULL)
   {
@@ -230,8 +342,8 @@ static int tryconnect(void)
     return 0;
   }
 
-  sa.sin_family = AF_INET;
-  sa.sin_port = service->s_port;
+  sa->sin_family = AF_INET;
+  sa->sin_port = service->s_port;
 
   /* Make a non-blocking async socket */
   sockno = socket(AF_INET, SOCK_STREAM, 0);
@@ -240,7 +352,7 @@ static int tryconnect(void)
   socketioctl(sockno, FIOASYNC, &i);
 
   dprintf(("debug", "Connecting\n"));
-  if ((connect(sockno, (struct sockaddr*) &sa, sizeof sa) < 0) &&
+  if ((connect(sockno, (struct sockaddr*) sa, sizeof *sa) < 0) &&
       (errno != EINPROGRESS) && (errno != EWOULDBLOCK))
     {
       dprintf(("debug", "Connect error %d\n", errno));
