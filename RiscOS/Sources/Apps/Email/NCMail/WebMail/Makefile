@@ -120,6 +120,10 @@ OBJS = 	o.EscapeHTML 	\
 	o.Entry		\
 	o.ReadMsg	\
 	o.WimpReg	\
+	o.PopUp		\
+	o.Feedback	\
+ 	o.Compose	\
+	o.SendMsg	\
 	o.Errors
 
 OBJSD = od.EscapeHTML 	\
@@ -130,6 +134,10 @@ OBJSD = od.EscapeHTML 	\
 	od.Entry	\
 	od.ReadMsg	\
 	od.WimpReg	\
+	od.Feedback	\
+	odPopUp		\
+	od.SendMsg	\
+	od.Compose	\
 	od.Errors
 
 OBJSZ = oz.EscapeHTML 	\
@@ -140,6 +148,10 @@ OBJSZ = oz.EscapeHTML 	\
 	oz.Entry	\
 	oz.ReadMsg	\
 	oz.WimpReg	\
+	oz.Feedback	\
+	oz.Compose	\
+	oz.PopUp	\
+	oz.SendMsg	\
 	oz.Errors
 
 
