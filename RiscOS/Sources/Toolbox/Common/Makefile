@@ -17,7 +17,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -106,6 +106,8 @@ export_hdrs: dirs
         ${CP} objects   ${EXPORTS}.objects   ${CPFLAGS}
         ${CP} h.*       ${EXPORTS}.h.*   ${CPFLAGS}
         ${CP} hdr.*	${EXP_HDR}.*	${CPFLAGS}
+        ${CP} TboxMake  ${EXPORTS}.TboxMake ${CPFLAGS}
+        ${CP} VersionNum ${EXPORTS}.LibVersion ${CPFLAGS}
         @echo ${DEBUGLIB} and ${TBOXLIB}: export complete (hdrs)
 
 export_libs: ${TBOXLIB} ${TBOXLIBZM} ${DEBUGLIB} ${DEBUGLIBZM} dirs
