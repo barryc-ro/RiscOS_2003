@@ -59,7 +59,6 @@ TARGET    = ${TDIR}.${COMPONENT}
 RAMTDIR   = rm
 RAMTARGET = ${RAMTDIR}.${COMPONENT}
 LINKEDDIR = linked
-MAPDIR    = map
 OBJS      = o.header o.module o.led o.msgfile
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
 
@@ -94,7 +93,6 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} ${LINKEDDIR} ${WFLAGS}
-        ${WIPE} ${MAPDIR} ${WFLAGS}
         ${WIPE} ${TDIR} ${WFLAGS}
         ${WIPE} ${RAMTDIR} ${WFLAGS}
         ${RM} h.header
@@ -119,9 +117,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
         ${MKDIR} ${LINKEDDIR}
-        ${MKDIR} ${MAPDIR}
-        ${LD} -o ${LINKEDDIR}.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > ${MAPDIR}.${COMPONENT}
-        truncate ${MAPDIR}.${COMPONENT} ${LINKEDDIR}.${COMPONENT}
+        ${LD} -o ${LINKEDDIR}.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} ${LINKEDDIR}.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
