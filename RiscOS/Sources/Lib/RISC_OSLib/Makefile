@@ -44,7 +44,7 @@ CMHG    = cmhg
 CP      = copy
 LD      = link
 LIBFILE = libfile
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 MODSQZ  = modsqz
 OBJASM  = objasm
 RM      = remove
@@ -437,6 +437,28 @@ resources:
         IfThere rlib.Resources.${LOCALE}.<System>.Messages Then Set MessagesFile rlib.Resources.${LOCALE}.<System>.Messages else Set MessagesFile rlib.Resources.${LOCALE}.Messages
         ${CP} <MessagesFile> ${RESDIR}.RISC_OSLib.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
+
+BBETYPE = clibrary
+bbe-clibrary: bbe-generic
+  ${MKDIR} ${BBEDIR}.clib.Resources.${LOCALE}
+  ${MKDIR} ${BBEDIR}.rlib.Resources.${LOCALE}
+  ${MKDIR} ${BBEDIR}.aof
+  ${MKDIR} ${BBEDIR}.map
+  ${MKDIR} ${BBEDIR}.syms
+  ${MKDIR} ${BBEDIR}.linked
+  ${MKDIR} ${BBEDIR}.kernel.s
+  ${MKDIR} ${BBEDIR}.clib.s
+  ${MKDIR} ${BBEDIR}.rlib.s
+  BBE_Export_Dir clib.Resources.${LOCALE}.${SYSTEM}
+  BBE_Export_File clib.Resources.${LOCALE}.Messages
+  BBE_Export_Dir rlib.Resources.${LOCALE}.${SYSTEM}
+  BBE_Export_File rlib.Resources.${LOCALE}.Messages
+  BBE_Export_File rlib.swi
+  BBE_Export_File kernel.s.k_entries
+  BBE_Export_File clib.s.cl_entries
+  BBE_Export_File rlib.s.rl_entries
+  BBE_Export_File aof.${TARGET}
+  ${CP} clib.rom_link_v ${VERBATIMROMLINK} ${CPFLAGS}
 
 dirs:
         ${MKDIR} ${LIBDIR}
