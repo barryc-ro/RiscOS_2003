@@ -74,9 +74,11 @@ ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.abssym
 TCPIPLIBS	= TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
 DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglibzm
+ASMUTILS	= <Lib$Dir>.AsmUtils.o.AsmUtilszm
 
 LIBS = ${DEBUGLIB} \
-       ${TCPIPLIBS}
+       ${TCPIPLIBS} \
+       ${ASMUTILS}
 
 ROM_OBJS =	\
  o.CallOut	\

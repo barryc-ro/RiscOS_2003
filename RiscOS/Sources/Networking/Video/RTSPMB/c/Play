@@ -17,6 +17,7 @@
 #include <stdlib.h>
 
 #include <swis.h>
+#include <AsmUtils/modulefp.h>
 
 #ifdef TRACE2
   #define TRACE
@@ -55,28 +56,33 @@ play_state;
 
 /* Local functions - miscellaneous */
 
-static bool              play_slowmofwd           (const char * scale);
-static int               play_process_speed       (const char * scale);
+static bool              play_slowmofwd            (const char * scale);
+static int               play_process_speed        (const char * scale);
 
 /* Local functions - general command sending assitance */
 
-static _kernel_oserror * play_preamble            (session * s);
-static _kernel_oserror * play_send                (session * s);
+static _kernel_oserror * play_preamble             (session * s);
+static _kernel_oserror * play_send                 (session * s);
 
 /* Local functions - stuff called from the state machine as callback */
 /* functions during execution of a command chain                     */
 
-static _kernel_oserror * play_send_set_playmode   (session * s);
-static _kernel_oserror * play_send_play           (session * s);
-static _kernel_oserror * play_send_state_command  (session * s, play_state state);
+static _kernel_oserror * play_send_set_playmode    (session * s);
+static _kernel_oserror * play_send_play            (session * s);
+static _kernel_oserror * play_send_state_command   (session * s, play_state state);
 
 /* Local functions - stuff used to build a set of command headers */
 /* ready for sending out                                          */
 
-static _kernel_oserror * play_build_pause         (session * s);
-static _kernel_oserror * play_build_set_playmode  (session * s);
-static _kernel_oserror * play_build_play          (session * s);
-static _kernel_oserror * play_build_play_or_pause (session * s, bool force_pause);
+static _kernel_oserror * play_build_pause          (session * s);
+static _kernel_oserror * play_build_set_playmode   (session * s);
+static _kernel_oserror * play_build_play           (session * s);
+static _kernel_oserror * play_build_play_or_pause  (session * s, bool force_pause);
+
+/* Local functions - floating point code used within */
+
+static unsigned int      play_get_frame_number     (session * s, unsigned int seconds);
+static unsigned int      play_get_trick_stream_npt (session * s, unsigned int npt);
 
 /**************************************************************/
 /* play_slowmofwd()                                           */
@@ -315,7 +321,7 @@ _kernel_oserror * play_replay(session * s)
     return make_error(rtspmb_ERROR_NO_SERVER_SESSION, 0);
   }
 
-  /* Cancel and GET_PARAMETER manually - it won't be done automatically */
+  /* Cancel any GET_PARAMETER manually - it won't be done automatically */
   /* as we're not resetting this session, we're spawning a new one      */
 
   if (s->gp_set != 0)
@@ -405,15 +411,15 @@ _kernel_oserror * play_replay(session * s)
 
   /* Range */
 
-  else if (
-            *range != '\0' &&
-
-            headers_add_header(&new_s->headers,
-                               Headers_HeaderName_Range,
-                               range)
-            == NULL
-          )
-          fail = true;
+//  else if (
+//            *range != '\0' &&
+//
+//            headers_add_header(&new_s->headers,
+//                               Headers_HeaderName_Range,
+//                               range)
+//            == NULL
+//          )
+//          fail = true;
 
   /* The Scale/Speed header value was worked out above */
 
@@ -744,8 +750,6 @@ static _kernel_oserror * play_build_set_playmode(session * s)
   char * playmode = NULL;
   bool   fail     = false;
 
-//printf("set_playmode ");
-
   /* Start adding headers */
 
   if (s->play_record == NULL) fail = true;
@@ -838,7 +842,6 @@ static _kernel_oserror * play_build_set_playmode(session * s)
     _kernel_oserror * e;
     int               opts     [4];
     char              temp     [1024]; //// Fix me, temporary Friday hack; use malloc
-    char              playmode [1024]; //// Fix me, temporary Friday hack; use malloc
     unsigned int      frame;
 
     opts[0] = vc_tags_npt;
@@ -856,15 +859,46 @@ static _kernel_oserror * play_build_set_playmode(session * s)
     if (e != NULL) frame = 0;
     else           frame = (unsigned int) opts[2];
 
-    //// Fix me, read the proper frame numbers and do frame conversion
-    //// via. DESCRIBE and whatever that other magic command is
+    /* If that fails, try MPEGVideo_ReadParameters for time code */
 
-    frame = frame * (s->playmode == Play_MB_Trick_Play || s->playmode == Play_MB_Trick_Freeze ? 25 : 5);
+    if (frame == 0)
+    {
+      unsigned int tc;
+
+      e = _swix(MPEGVideo_ReadParameters,
+                _INR(0,2) | _OUT(1),
+
+                0,
+                0,
+                0,
+
+                &tc);
+
+      /* This is in hours, minute and seconds - convert to seconds */
+
+      if (tc != 0xffffffff) /* (indicates unknown time) */
+      {
+        frame =           ((tc & 0x000FC0) >> 6)  +
+                60 *      ((tc & 0x03F000) >> 12) +
+                60 * 60 * ((tc & 0xFC0000) >> 18);
+      }
+    }
+
+    /* Convert the time in seconds (currently held in 'frame') */
+    /* into a real - if approximate! - frame number            */
+
+    {
+      modulefp_buf buf;
+
+      modulefp_enable(&buf);
+      frame = play_get_frame_number(s, frame);
+      modulefp_disable(&buf);
+    }
 
     sprintf(temp,
-            "Playmode:%d\r\nFrame:%d\r\n",
-            s->playmode,
-            frame);
+            "Playmode:%d\r\n", //Frame:%d\r\n",
+            s->playmode);      //,
+                               //frame);
 
     sprintf(playmode,
             "%d\r\n\r\n%s",
@@ -974,31 +1008,103 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
 
   /* Range */
 
-  else if (
-            s->range_record  != NULL &&
-            *s->range_record != '\0' &&
+  else if (play)
+  {
+    _kernel_oserror * e;
+    int               opts [4];
+    char              temp [sizeof("npt = 0-0") + 24]; /* Ensure we overestimate */
+    unsigned int      secs, tc;
 
-            headers_add_header(&s->headers,
-                               Headers_HeaderName_Range,
-                               s->range_record)
-            == NULL
-          )
-          fail = true;
+    /* Read NPT */
+
+    opts[0] = vc_tags_npt;
+    opts[1] = 1;
+    opts[2] = 0;
+    opts[3] = vc_tags__end;
+
+    e = _swix(VideoControl_ProtocolOptions,
+              _INR(0,2),
+
+              0,
+              s->vcid,
+              opts);
+
+    if (e != NULL) secs = 0;
+    else           secs = (unsigned int) opts[2] * 100; /* seconds -> centiseconds */
+
+    /* Read timecode */
+
+    e = _swix(MPEGVideo_ReadParameters,
+              _INR(0,2) | _OUT(1),
+
+              0,
+              0,
+              0,
+
+              &tc);
+
+    /* This is in hours, minute and seconds - convert to seconds; */
+    /* use timecode if available. If not, and NPT is zero, use a  */
+    /* cached value - i.e. assume we're at a transition point and */
+    /* had no data to work on.                                    */
+
+    if (e == NULL)
+    {
+      if (tc != 0xffffffff) /* (indicates unknown time) */
+      {
+        secs =           ((tc & 0x000FC0) >> 6)  +
+               60 *      ((tc & 0x03F000) >> 12) +
+               60 * 60 * ((tc & 0xFC0000) >> 18) +
+               1; /* Fudge factor...! :-( */
+
+        secs *= 100; /* seconds -> centiseconds */
+      }
+      else if (secs == 0) /* I.e. NPT = 0 */
+      {
+        secs = s->cached_npt;
+      }
+    }
+
+    /* Set the cached value */
+
+    s->cached_npt = secs;
+
+    /* Work around apparent MediaBase trick mode seek bug */
+
+    if (s->playmode != Play_MB_Trick_Play && s->playmode != Play_MB_Trick_Freeze)
+    {
+      modulefp_buf buf;
+
+      modulefp_enable(&buf);
+      secs = play_get_trick_stream_npt(s, secs);
+      modulefp_disable(&buf);
+    }
+
+    sprintf(temp, "npt = %d.%d-", secs / 100, secs % 100);
+
+    if (
+         headers_add_header(&s->headers,
+                            Headers_HeaderName_Range,
+                            temp)
+         == NULL
+       )
+       fail = true;
+  }
 
   /* If we're not pausing, the playback rate - first, Scale playback (trick play) */
 
-  else if (
-            play           &&
-            !slowmofwd     &&
-            scale != NULL  &&
-            *scale != '\0' &&
+  if (fail == false  &&
+      play           &&
+      !slowmofwd     &&
+      scale != NULL  &&
+      *scale != '\0' &&
 
-            headers_add_header(&s->headers,
-                               Headers_HeaderName_Scale,
-                               scale)
-            == NULL
-          )
-          fail = true;
+      headers_add_header(&s->headers,
+                         Headers_HeaderName_Scale,
+                         scale)
+      == NULL
+    )
+    fail = true;
 
   /* Second, Speed playback (alter data delivery rate, for slowmo forwards play) */
 
@@ -1029,4 +1135,86 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
 
   if (fail) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
   else      return NULL;
+}
+
+/**************************************************************/
+/* play_get_frame_number()                                    */
+/*                                                            */
+/* Given a time in seconds, return a frame number based on    */
+/* the frames/second value read from DESCRIBE (if present,    */
+/* else assume 25fps or 30fps depending on PAL / NTSC         */
+/* options).                                                  */
+/*                                                            */
+/* Must only be used after modulefp_enable has been called.   */
+/*                                                            */
+/* Parameters: Pointer to the session relating to the time;   */
+/*                                                            */
+/*             Play time in seconds from start of clip.       */
+/*                                                            */
+/* Returns:    Approximate frame number.                      */
+/**************************************************************/
+
+static unsigned int play_get_frame_number(session * s, unsigned int seconds)
+{
+  if (s->frames_per_sec != 0)
+  {
+    double d = s->frames_per_sec * seconds;
+
+    return (unsigned int) d;
+  }
+  else
+  {
+    _kernel_oserror * e;
+    int               opts[4];
+    int               fps;
+
+    opts[0] = vc_tags_ntsc;
+    opts[1] = 1;
+    opts[2] = 0;
+    opts[3] = vc_tags__end;
+
+    e = _swix(VideoControl_ProtocolOptions,
+              _INR(0,2),
+
+              0,
+              s->vcid,
+              opts);
+
+    if (e == NULL) fps = (opts[2] == 0) ? 25 : 30; /* That's slightly inaccurate for NTSC of course... */
+    else           fps = 25;
+
+    return fps * seconds;
+  }
+}
+
+/**************************************************************/
+/* play_get_trick_stream_npt()                                */
+/*                                                            */
+/* Hackery to "adjust" NPT value for a trick stream based on  */
+/* a normal play stream play time.                            */
+/*                                                            */
+/* Must only be used after modulefp_enable has been called.   */
+/*                                                            */
+/* Parameters: Pointer to the session relating to the time;   */
+/*                                                            */
+/*             Play time in seconds from start of clip.       */
+/*                                                            */
+/* Returns:    Approximate trick play stream time relating to */
+/*             the normal stream time given, *in cs*.         */
+/**************************************************************/
+
+static unsigned int play_get_trick_stream_npt(session * s, unsigned int npt)
+{
+  if (s->frames_per_sec == 0 || s->i_frame_ratio == 0)
+  {
+    /* If we're missing any values, assume a 2:1 ratio... :-/ */
+
+    return npt / 2;
+  }
+  else
+  {
+    double d = s->frames_per_sec / s->i_frame_ratio;
+
+    return (unsigned int) ((double) npt / d);
+  }
 }

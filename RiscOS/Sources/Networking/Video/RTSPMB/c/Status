@@ -85,8 +85,21 @@ _kernel_oserror * status_status(_kernel_swi_regs * r)
     return make_error(rtspmb_ERROR_CLIENT_ID_NOT_FOUND, 0);
   }
 
-  r->r[0] = s->reported_state;
-  r->r[2] = s->response_code;
+  /* If we have no command queue, return the real state */
+
+  if (s->next_command_cb == NULL)
+  {
+    r->r[0] = s->reported_state;
+    r->r[2] = s->response_code;
+  }
+
+  /* Otherwise, return a "connected and waiting" indication */
+
+  else
+  {
+    r->r[0] = VC_Status_ConnectionEstablished;
+    r->r[2] = 0;
+  }
 
   /* Error, or normal state? */
 
@@ -231,24 +244,24 @@ void status_proceed(session * s)
   }
   while (repeat);
 
-//  /* If we've got a server session, no callout set and a timeout value, */
-//  /* set a callout to keep the session up (ensuring we're idling).      */
-//
-//  if (
-//       (
-//         s->state == protostate_COMPLETED ||
-//         s->state == protostate_INITIAL
-//       )
-//       && s->gp_set         == 0
-//       && s->server_session != NULL
-//       && s->server_timeout != 0
-//     )
-//  {
-//    dprintf(("","status_proceed: Setting GET_PARAMETER callout\n"));
-//
-//    s->gp_set = 1;
-//    timeout(getparam_proceed_on_callout, s, s->server_timeout);
-//  }
+  /* If we've got a server session, no callout set and a timeout value, */
+  /* set a callout to keep the session up (ensuring we're idling).      */
+
+  if (
+       (
+         s->state == protostate_COMPLETED ||
+         s->state == protostate_INITIAL
+       )
+       && s->gp_set         == 0
+       && s->server_session != NULL
+       && s->server_timeout != 0
+     )
+  {
+    dprintf(("","status_proceed: Setting GET_PARAMETER callout (1)\n"));
+
+    s->gp_set = 1;
+    timeout(getparam_proceed_on_callout, s, s->server_timeout);
+  }
 
   dprintf(("", "status_proceed: Successful\n"));
 }
@@ -566,9 +579,12 @@ static bool status_proceed_sending(session * s, bool * repeat)
     {
 //printf("Sent %d (reqptr, reqlen = %d, %d)   ",sent,s->reqptr,s->reqlen);
 {FILE*f=fopen("Cache:$.Test","ab");
-if(f!=NULL){fprintf(f,"SEND:\r\n");fwrite(s->full_request,1,s->reqlen,f);
+if(f!=NULL){fprintf(f,"SEND (%p):\r\n", s);fwrite(s->full_request,1,s->reqlen,f);
 fclose(f);}
 }
+
+if (!strncmp(s->full_request, "RTSP/1.0", 8)) printf("\n********* FAIL\n\n");
+
       s->last = now;
     }
     else
@@ -693,7 +709,7 @@ static bool status_proceed_receiving(session * s, bool * repeat)
         /* We've received the response now */
 
 {FILE*f=fopen("Cache:$.Test","ab");
-if(f!=NULL){fprintf(f,"RECEIVE:\r\n");fwrite(s->data,1,s->data_len,f);
+if(f!=NULL){fprintf(f,"RECEIVE (%p):\r\n", s);fwrite(s->data,1,s->data_len,f);
 fclose(f);}
 }
         s->reported_state |= VC_Status_NewStatus;
@@ -862,6 +878,30 @@ static bool status_proceed_completed(session * s, bool * repeat)
     /* We're on the way out - no status change to Video Control... */
 
     dprintf(("", "status_proceed_completed: Session self-destructing (completed), state machine exitting\n"));
+
+    /* Set the next callout */
+
+    if (s->parent != NULL)
+    {
+      if (
+           (
+             s->parent->state == protostate_COMPLETED ||
+             s->parent->state == protostate_INITIAL
+           )
+           && s->parent->gp_set         == 0
+           && s->parent->server_session != NULL
+           && s->parent->server_timeout != 0
+         )
+      {
+        dprintf(("","status_proceed: Setting GET_PARAMETER callout (2)\n"));
+
+        s->parent->gp_set = 1;
+        timeout(getparam_proceed_on_callout, s->parent, s->parent->server_timeout);
+      }
+    }
+
+    /* Destroy the session */
+
     session_free_item(s);
     return true;
   }
@@ -958,7 +998,6 @@ static bool status_proceed_completed(session * s, bool * repeat)
           {
             if (s->playmode == Play_MB_Trick_Freeze)
             {
-//printf("SET SPEED 0 FOR PAUSE ");
               /* Immediate set speed to 0 */
 
               _swix(MPEGControl_SetSpeed,
@@ -985,9 +1024,6 @@ static bool status_proceed_completed(session * s, bool * repeat)
 
                 flags = MPEGCtrl_MCRS_VideoPresent |
                         MPEGCtrl_MCRS_AudioPresent;
-
-
-    printf("RESET FOR NORMAL ");
               }
               else
               {
@@ -995,8 +1031,6 @@ static bool status_proceed_completed(session * s, bool * repeat)
 
                 flags = MPEGCtrl_MCRS_VideoPresent |
                         MPEGCtrl_MCRS_NewIsTrickPlay;
-
-    printf("RESET FOR TRICK ");
               }
 
               _swix(MPEGControl_ResetStream,
