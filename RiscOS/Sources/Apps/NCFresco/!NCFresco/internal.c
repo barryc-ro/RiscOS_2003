@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <locale.h>
 
 #include "bbc.h"
 #include "msgs.h"
@@ -42,6 +43,8 @@
 #include "gbf.h"
 
 #if UNICODE
+#include "Unicode/encoding.h"
+#include "Unicode/utf8.h"
 #include "Unicode/charsets.h"
 #endif
 
@@ -156,7 +159,63 @@ static void write_url_with_breaks(FILE *f, const char *url)
 /*     fputs("</NOBR>", f); */
 }
 
-#define TIME_FORMAT	"%a, %d %b %Y %H:%M:%S %Z"
+#if UNICODE
+static int riscos_alphabet_to_mib(int a)
+{
+    static int lookup[] =
+    {
+	csASCII,
+	csISOLatin1,
+	csISOLatin2,
+	csISOLatin3,
+	csISOLatin4,
+
+	csISOLatinCyrillic,
+	csISOLatinArabic,
+	csISOLatinGreek,
+	csISOLatinHebrew,
+	csISOLatin5,
+
+	csWelsh,
+	csUTF8,
+	csISOLatin9,
+	csISOLatin6
+    };
+
+    if (a < 100)
+	return csASCII;
+
+    a -= 100;
+    if (a > sizeof(lookup)/sizeof(lookup[0])-1)
+	return csASCII;
+
+    return lookup[a];
+}
+
+static int callback_fn(void *handle, UCS4 c)
+{
+    char **ps = handle;
+    *ps = UCS4_to_UTF8(*ps, c);
+    return 0;
+}
+
+static void convert_text(const char *in, char *out)
+{
+    int alphabet;
+    Encoding *enc;
+    
+    _swix(Territory_Alphabet, _IN(0) | _OUT(0), -1, &alphabet);
+
+    enc = encoding_new(riscos_alphabet_to_mib(alphabet), encoding_READ);
+
+    encoding_read(enc, callback_fn, in, strlen(in), &out);
+    *out = 0;
+    
+    encoding_delete(enc);
+}
+#endif
+
+#define TIME_FORMAT	msgs_lookup("timeformat:%a, %d %b %Y %H:%M:%S %Z")
 
 static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
@@ -191,7 +250,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 
 	if (access_get_header_info(url, NULL, &last_modified, &expires, NULL))
 	{
-	    char rbuf[32];
+	    char rbuf[32], rbuf2[6*32];
 	    int dst, timezone;
 
 	    /* get current daylight savings time flag */
@@ -201,18 +260,35 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	    _swix(Territory_ReadTimeZones, _IN(0) | _OUT(dst ? 3 : 2), -1, &timezone);
 	    timezone /= 100;
 
+#if UNICODE
+	    setlocale(LC_ALL, "");
+#endif
 	    if (last_modified)
 	    {
 		last_modified += timezone;
 		strftime(rbuf, sizeof(rbuf), TIME_FORMAT, localtime((const time_t *)&last_modified));
+#if UNICODE
+		convert_text(rbuf, rbuf2);
+		fprintf(f, msgs_lookup("version4"), rbuf2);
+#else
 		fprintf(f, msgs_lookup("version4"), rbuf);
+#endif
 	    }
 	    if (expires && expires != UINT_MAX)
 	    {
 		expires += timezone;
 		strftime(rbuf, sizeof(rbuf), TIME_FORMAT, localtime((const time_t *)&expires));
+#if UNICODE
+		convert_text(rbuf, rbuf2);
+		fprintf(f, msgs_lookup("version5"), rbuf2);
+#else
 		fprintf(f, msgs_lookup("version5"), rbuf);
+#endif
 	    }
+
+#if UNICODE
+	    setlocale(LC_ALL, "C");
+#endif
 	}
 
 	if ((s = backend_check_meta(doc, "author")) != NULL)
