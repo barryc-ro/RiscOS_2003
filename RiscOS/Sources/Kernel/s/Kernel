@@ -581,7 +581,13 @@ JTABLE  & SWIWriteC             ; this entry never gets used (see ^)
         & CallASWI
         & AMBControlSWI
         & CallASWIR12
+        & NoSuchSWI         ;Ursula does not implement OS_SpecialControl
+        & EnterUSR32SWI
+        & EnterUSR26SWI
  |
+        & NoSuchSWI
+        & NoSuchSWI
+        & NoSuchSWI
         & NoSuchSWI
         & NoSuchSWI
         & NoSuchSWI
@@ -750,6 +756,72 @@ Do_CallBack                                    ; CallBack allowed:
         LDMIA   R12, {R12, PC}                ; jump to CallBackHandler
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; Ursula:
+; this is only used by the interrupt handler, to allow callbacks when
+; foreground is 32-bit user, rather than 26-bit user
+;
+; currently only supports transient callbacks - traditional callback handler
+; cannot be called because it contains its own 32-bit unaware return sequence
+;
+
+back_to_user32
+        mrs    AL, r10, CPSR_all
+        ORR    r10, r10, #I32_bit :OR: SVC32_mode ;move up to SVC32 from SVC26, interrupts off
+        msr    AL, CPSR_all, r10
+        Pull   "r10"
+        msr    AL, SPSR_all, r10                  ;PSR for return, stacked by interrupt handler
+        Pull   "r10-r12"
+        MOVS    PC, lr                            ;return to address in lr, restoring CPSR from SPSR
+
+Do_CallBack32                                  ; CallBack allowed:
+        TST     r11, #CBack_VectorReq          ; now process any vector entries
+        Push    lr, NE
+        BLNE    process_callback_chain
+        Pull    lr, NE
+
+  [ {TRUE}   ;currently can't allow call to Callback handler
+
+        B       back_to_user32
+
+  |
+        ;this won't work with traditional callback handler (which has its own
+        ;return code that won't return successfully to 32-bit user mode)
+
+        TST     r11, #CBack_OldStyle
+        BEQ     back_to_user32
+
+; Check that SVC_sp is empty (apart from r10-r12), i.e. system truly is idle
+        LDR     r11, =SVCSTK-3*4                ; What SVC_sp should be if system idle
+        CMP     sp, r11                         ; Stack empty?
+        BLO     back_to_user32                  ; No then no call back
+
+        TEQP    PC, #SVC_mode+I_bit             ; ints off while flag updated
+        LDRB    r11, [r10, #CallBack_Flag]
+        BIC     r11, r11, #CBack_Postpone+CBack_OldStyle
+        STRB    r11, [r10, #CallBack_Flag]
+
+        MOV     r12, #0
+        LDR     R12, [R12, #CallBf]
+        STR     r14, [r12, #4*15]             ; user PC
+        MOV     r14, r12
+        Pull   "r10-r12"
+  [ SASTMhatbroken ;arse!
+        STMIA   r14!,{r0-r12}
+        STMIA   r14,{r13,r14}^                ; user registers
+        NOP
+        SUB     r14,r14,#13*4
+  |
+        STMIA   r14, {r0-r14}^                ; user registers
+  ]
+
+        MOV     R12, #CallAd_ws
+        LDMIA   R12, {R12, PC}                ; jump to CallBackHandler
+
+  ]
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Also called from source.pmf.key, during readc
 
 process_callback_chain ROUT
@@ -761,12 +833,6 @@ process_callback_chain ROUT
         LDRB    r11, [r10, #CallBack_Flag]
         BIC     r11, r11, #CBack_VectorReq
         STRB    r11, [r10, #CallBack_Flag]
-
- [ True
-
-; TMD 11-Sep-89; used to free the wrong node here - usually would try to free
-; a null node, and claimed node would not get freed - however, if more than one
-; request, then it could free the 2nd node before it was used.
 
 01      TEQP    PC, #SVC_mode+I_bit             ; ints off while head updated
         MOV     r2, #0
@@ -796,24 +862,6 @@ process_callback_chain ROUT
         MOV     pc, r11                         ; call im, with given r12
 
         B       %BT01                           ; loop
-
- | ; old one
-
-        TEQP    PC, #SVC_mode
-
-        LDR     r10, [r10, #CallBack_Vector]
-01      MOV     r2, r10                         ; for freeing
-        LDMIA   r10, {r10, r11, r12}            ; link, addr, r12
-        MOV     r0, #HeapReason_Free
-        STR     r10, [r0, #CallBack_Vector-HeapReason_Free]
-        LDR     r1, =SysHeapStart
-        SWI     XOS_Heap
-        MOV     lr, pc
-        MOV     pc, r11                         ; call im
-        CMP     r10, #0
-        BNE     %BT01
-        Pull   "r0-r6, r10-r12, PC",,^
- ]
 
         LTORG
 
@@ -1213,6 +1261,30 @@ platfeaterror
         &       0
         =       "BadPlatReas", 0
         ALIGN
+
+
+EnterUSR32SWI
+;
+;a very unusual SWI - must exit in USR32, so cannot use normal SWI exit
+;does not check for callbacks
+;
+        BIC     r10, r10, #V_bit + &0F   ;r10 has copy of SPSR from dispatcher
+                                         ;clear V and bottom 4 mode bits
+        ORR     r10, r10, #&10           ;now r10 is PSR we want to restore for USR32
+        msr     AL, SPSR_all, r10        ;ready to restore PSR with a return from SVC32
+        mrs     AL, r10, CPSR_all
+        ORR     r10, r10, #&10           ;move up to SVC32 from SVC26
+        msr     AL, CPSR_all, r10
+        Pull    r11
+        Pull    "r10-r12"                ;restore regs from SVC stack as for normal exit
+        BIC     lr, lr, #&FC000003       ;return address
+        MOVS    pc, lr                   ;return from SVC32 to USR32
+
+
+EnterUSR26SWI
+        BIC     lr,lr,#3                 ;26-bit user mode
+        B       SLVK                     ;we can do normal exit for no error
+
   ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

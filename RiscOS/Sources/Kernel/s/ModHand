@@ -1899,6 +1899,10 @@ CallInit         ROUT
         BVS     %FT02
  ]
 
+  ; if ChocolateService, we must not add to service chains yet, because we have
+  ; to make sure module's init entry is called before service entry (command
+  ; and SWI hashing don't have these worries - they won't be used yet)
+
  [ Oscli_HashedCommands
   ; see if we need to update command hash nodes
         BL      AddCmdHashEntries
@@ -1971,7 +1975,11 @@ CallInit         ROUT
 
         LDR     R4, [R3, #Module_Init]
         CMP     R4, #0
+  [ ChocolateService
+        BEQ     %FT05
+  |
         Pull   "R0-R6, R11, R12, PC", EQ      ; V clear
+  ]
 
         ADD     R12, R12, #Incarnation_Workspace
         MOV     R11, #0
@@ -1988,6 +1996,13 @@ CallInit         ROUT
         MOV     lr, PC                        ; pseudo BL
         ADD     PC, R3, R4                    ; call 'im
 
+  [ ChocolateService
+    ;now safe to try to add to service chains (init entry has been called)
+    ;note that AddToServiceChains may cause error (ran out of room)
+05
+        LDRVC   R12, [stack, #4*(6+2)]
+        BLVC    AddToServiceChains 
+  ]
         Pull   "R0-R6, R11, R12, lr", VC
         BICVCS  PC, lr, #V_bit
 
@@ -1995,6 +2010,9 @@ CallInit         ROUT
         BL      FreeIncarnation
   [ Oscli_HashedCommands
         BL      FreeCmdHashEntries
+  ]
+  [ ChocolateService
+        BL      RemoveFromServiceChains
   ]
         BL      FreeSWIEntry
         STR     R0, [stack]
@@ -2236,7 +2254,7 @@ AddCmdHashEntries ROUT
          TST     R1,R3
          BEQ     %FT50                             ;module does not occupy this hash value
          BL      CheckRoomForNewCmdHash            ;returns R1 -> cmd hash node
-         BVS     %FT90
+         BVS     %FT88
          LDR     R2,[R1,#4]                        ;current no. of entries on list
          ADD     R2,R2,#1
          STR     R2,[R1,#4]
@@ -2246,6 +2264,7 @@ AddCmdHashEntries ROUT
          ADD     R6,R6,#1                          ;next hash value
          CMP     R6,#256
          BLO     %BT42
+88
          ADD     SP,SP,#8*4                        ;drop sieve workspace
 90
          STRVS   R0,[SP]
@@ -2307,6 +2326,474 @@ FreeCmdHashEntries ROUT
          Pull    "R0-R6,R11,R12,PC",,^             ;MUST preserve flags
 ;
   ] ;Oscli_HashedCommands
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+  [ ChocolateService
+
+     LTORG
+
+; must maintain service call chains, all attached to the 3 moorings in
+; kernel workspace:
+;
+;   - Serv_SysChains holds a fixed array of chain anchors for the 'system'
+;     service calls, in the range 1..ServMinUsrNumber
+;   - Serv_UsrChains holds an array of hashed list headers, each header
+;     holds an array of chains (open ended service number handling for
+;     service numbers >= ServMinUsrNumber)
+;   - Serv_AwkwardChain is a simple anchor for a single chain of non-compliant
+;     modules (either old format, or new format without table) that do not
+;     say what service calls they are interested in
+;
+;  The order of modules on the chains is just a convenient as-seen order, so
+;  there will be subtle changes in the order of modules receiving service calls
+;  compared to their order in the active module list. This only affects cases
+;  where a service call may be claimed. Essentially, the new kernel does not
+;  guarantee who gets a chance to claim first, but this was never defined
+;  anyway.
+
+;
+;a service call chain is a block looking like this:
+;  word 0 = current capacity (max entries*entry_size before block must grow)
+;  word 1 = current size (current number of entries*entry_size)
+;  - followed by an array of the current entries in the chain (cache friendly stuff)
+;  - each entry is 3 words and looks like this:
+;  word 0 = address of client service handler code
+;  word 1 = workspace value for client service handler code
+;  word 2 = R1 value for client (will be index for branch table), or 0 meaning pass service number
+;
+                         ^  0
+ServChain_Capacity       #  4
+ServChain_Size           #  4
+ServChain_Entries        #  0
+ServChain_HdrSIZEOF      #  0
+;
+                         ^  0
+ServEntry_Code           #  4
+ServEntry_WSpace         #  4
+ServEntry_R1             #  4
+ServEntry_SIZEOF         #  0
+;
+
+;Usr service numbers are those >= ServMinUsrNumber (see below)
+;A Usr service array of chains is a block looking like this:
+;  word 0 = current capacity max entries*entry_size before block must grow)
+;  word 1 = current size (current number of entries*entry_size)
+;  - followed by an array of the current entries in the array of chains
+;  - each entry is 2 words and looks like this:
+;  word 0 = service call number for chain
+;  word 1 = anchor for chain (or 0 if no chain allocated)
+;
+                         ^  0
+ServUChArray_Capacity    #  4
+ServUChArray_Size        #  4
+ServUChArray_Entries     #  0
+ServUChArray_HdrSIZEOF   #  0
+;
+                         ^  0
+ServUChEntry_ServiceNo   #  4
+ServUChEntry_ChainAnchor #  4
+ServUChEntry_SIZEOF      #  0
+
+
+ServMinUsrNumber         * 256       ;'System' services in range 1..255, 'User' services >= 256
+ServUsrHashSize          * 16        ; power of 2
+
+ServMagicInstruction     * &E1A00000 ; (MOV R0,R0) indicates new module format with service table
+ServIndexInR1            * 1         ; bit 0 of table flags word, if set, means pass index in R1
+                                     ; to handler, rather than service number
+                                     ; index corresponds directly to the position of the service
+                                     ; number in the table, and starts at 1 (0 is reserved for service claim)
+
+ServInitChainCapacity  * 4         ;no. of entries to start at for a chain block
+ServBumpChainCapacity  * 4         ;no. of entries to grow by for a chain block
+
+
+;hashing function for Usr service numbers is (number + (number>>8)) AND (hashsize-1)
+;
+        MACRO
+        ServHashFunction $result,$service_number
+        ADD    $result,$service_number,$service_number,LSR #8
+        AND    $result,$result,#ServUsrHashSize-1
+        MEND
+
+;
+;entry: [R1] -> chain block ([R1] = 0 if no block created yet)
+;       R5 = Code for entry, R6 = WSpace for entry, R7 = R1 value for entry
+;exit:  [R1] -> chain block (may have been created, or moved if had to grow)
+;       V clear if done, V set and error if ran out of room
+;
+AddServChainEntry  ROUT
+         Push    "R0-R4,LR"
+         LDR     R2,[R1]            ;get pointer to chain block from anchor
+         CMP     R2,#0
+         BNE     %FT10
+         MOV     R3,#ServChain_HdrSIZEOF + ServInitChainCapacity*ServEntry_SIZEOF
+         Push    "R1"
+         BL      ClaimSysHeapNode   ;need to create block
+         Pull    "R1"
+         BVS     %FT90
+         STR     R2,[R1]
+         MOV     R0,#ServInitChainCapacity*ServEntry_SIZEOF
+         STR     R0,[R2,#ServChain_Capacity]
+         MOV     R0,#0
+         STR     R0,[R2,#ServChain_Size]
+10
+         LDR     R0,[R2,#ServChain_Size]
+         LDR     R3,[R2,#ServChain_Capacity]
+         CMP     R0,R3
+         BLO     %FT20
+         Push    "R0,R1"
+         MOV     R3,#ServBumpChainCapacity*ServEntry_SIZEOF
+         MOV     R0, #HeapReason_ExtendBlock
+         BL      DoSysHeapOpWithExtension   ;need to grow block
+         STRVS   R0,[SP]
+         Pull    "R0,R1"
+         BVS     %FT90
+         STR     R2,[R1]
+         LDR     R3,[R2,#ServChain_Capacity]
+         ADD     R3,R3,#ServBumpChainCapacity*ServEntry_SIZEOF
+         STR     R3,[R2,#ServChain_Capacity]
+20
+         ADD     R3,R2,#ServChain_HdrSIZEOF
+         ADD     R3,R3,R0
+         STR     R5,[R3,#ServEntry_Code]
+         STR     R6,[R3,#ServEntry_WSpace]
+         STR     R7,[R3,#ServEntry_R1]
+         LDR     R3,[R2,#ServChain_Size]
+         ADD     R3,R3,#ServEntry_SIZEOF
+         STR     R3,[R2,#ServChain_Size]
+90
+         STRVS   R0,[SP]
+         Pull    "R0-R4,PC"
+
+;
+;entry: R2 -> chain block, R5 = Code for entry to remove, R6 = WSpace for entry to remove
+;exit:  registers preserved, entry removed and chain scrunched if entry was found
+;
+RemoveServChainEntry ROUT
+         Push    "R0-R4,LR"
+         CMP     R2,#0
+         BEQ     %FT90
+         LDR     R1,[R2,#ServChain_Size]
+         CMP     R1,#0
+         BEQ     %FT90
+         ADD     R3,R2,#ServChain_HdrSIZEOF      ;start of chain
+         ADD     R1,R1,R3                        ;end of chain
+10
+         LDR     R4,[R3,#ServEntry_Code]
+         LDR     R0,[R3,#ServEntry_WSpace]
+         TEQ     R4,R5
+         TEQEQ   R0,R6
+         BEQ     %FT20
+         ADD     R3,R3,#ServEntry_SIZEOF
+         CMP     R3,R1
+         BLO     %BT10
+         B       %FT90
+20
+         ADD     R3,R3,#ServEntry_SIZEOF        ;found, scrunch up rest of chain
+         CMP     R3,R1
+         BHS     %FT30
+         LDR     R4,[R3,#ServEntry_Code]
+         STR     R4,[R3,#ServEntry_Code - ServEntry_SIZEOF]
+         LDR     R4,[R3,#ServEntry_WSpace]
+         STR     R4,[R3,#ServEntry_WSpace - ServEntry_SIZEOF]
+         LDR     R4,[R3,#ServEntry_R1]
+         STR     R4,[R3,#ServEntry_R1 - ServEntry_SIZEOF]
+         B       %BT20
+30
+         LDR     R1,[R2,#ServChain_Size]
+         SUB     R1,R1,#ServEntry_SIZEOF
+         STR     R1,[R2,#ServChain_Size]
+90
+         Pull    "R0-R4,PC"
+
+;
+;entry: R9 -> module node, R4 -> start of module, R5 -> service handler specified by module header
+;exit:  R0 is -> table, or 0 if no table
+;
+FindServTable ROUT
+        Push   "R1-R2,LR"
+        MOV    R0,#0
+        LDR    R1,[R5]
+        LDR    R2,=ServMagicInstruction
+        TEQ    R1,R2                    ;check for new format
+        BNE    %FT90                    ;nope
+        LDR    R0,[R5,#-4]              ;yes, so previous word is anchor (offset) for table
+        CMP    R0,#0                    ;if anchor is 0, new format but no table specified
+        ADDNE  R0,R0,R4                 ;else get address by adding module start to offset
+90
+        Pull   "R1-R2,PC"
+
+;
+;entry: R2 -> array of chains, R3 = service number, R5,R6,R7 = Code,WSpace,R1 for chain entry
+;exit:  R0=1 if success,service number added to array if necessary, entry added to appropriate chain,
+;       R0=0 if fail, because service number not yet in array, and array is full (grow not attempted)
+;       or V set, error returned if no room (for chain extension)
+;
+AddServUsr_Hashed ROUT
+        Push   "R1-R4,LR"
+        ADD    R1,R2,#ServUChArray_HdrSIZEOF    ;chain start
+        LDR    R0,[R2,#ServUChArray_Size]
+        ADD    R0,R0,R1                         ;chain end
+10
+        CMP    R1,R0
+        BHS    %FT20
+        LDR    R4,[R1,#ServUChEntry_ServiceNo]
+        TEQ    R4,R3
+        ADDNE  R1,R1,#ServUChEntry_SIZEOF
+        BNE    %BT10
+;found entry for this service number in array
+        ADD    R1,R1,#ServUChEntry_ChainAnchor  ;R1 is address of anchor for chain
+        BL     AddServChainEntry
+        MOVVC  R0,#1
+        B      %FT90                            ;succeeded (or OS error because no room)
+;
+20
+;entry for this service number not found, add it if array has room
+        LDR    R0,[R2,#ServUChArray_Capacity]
+        LDR    R4,[R2,#ServUChArray_Size]
+        CMP    R4,R0
+        MOVHS  R0,#0
+        BHS    %FT90                             ;failed (array needs extension)
+        STR    R3,[R1,#ServUChEntry_ServiceNo]   ;add entry at end of current list
+        MOV    R4,#0
+        STR    R4,[R1,#ServUChEntry_ChainAnchor] ;no chain yet
+        LDR    R4,[R2,#ServUChArray_Size]
+        ADD    R4,R4,#ServUChEntry_SIZEOF
+        STR    R4,[R2,#ServUChArray_Size]
+        ADD    R1,R1,#ServUChEntry_ChainAnchor   ;R1 is address of anchor for chain
+        BL     AddServChainEntry
+        MOVVC  R0,#1
+90
+        Pull   "R1-R4,PC"
+
+;
+;entry: R2 -> hash header array, R3 = service number, R5,R6,R7 = Code,WSpace,R1 for chain entry
+;exit:  service number added to array on appropriate hash list if necessary, entry added to appropriate chain,
+;       or V set, error returned if no room (for either chain or chain array extension)
+;
+AddServUsr ROUT
+        Push   "R0-R4,LR"
+        ServHashFunction R4,R3          ;result in R4
+        ADD    R1,R2,R4,LSL #2          ;R1 -> entry for this service number in hash header array
+        LDR    R2,[R1]                  ;pick up anchor for array of chains
+        CMP    R2,#0
+        BNE    %FT10
+;must create array of chains
+        Push   "R1,R3"
+        MOV    R3,#ServUChArray_HdrSIZEOF + 4*ServUChEntry_SIZEOF  ;initially room for 4 entries
+        BL     ClaimSysHeapNode
+        Pull   "R1,R3"
+        BVS    %FT90
+        STR    R2,[R1]
+        MOV    R0,#4*ServUChEntry_SIZEOF
+        STR    R0,[R2,#ServUChArray_Capacity]
+        MOV    R0,#0
+        STR    R0,[R2,#ServUChArray_Size]
+10
+        BL     AddServUsr_Hashed
+        BVS    %FT90
+        CMP    R0,#1
+        BEQ    %FT90                          ;add succeeded, done
+;add failed, so we need to grow the array of chains
+        Push   "R1,R3"
+        MOV    R3,#4*ServUChEntry_SIZEOF      ;bump up capacity by 4 entries
+        MOV    R0, #HeapReason_ExtendBlock
+        BL     DoSysHeapOpWithExtension
+        Pull   "R1,R3"
+        BVS    %FT90
+        STR    R2,[R1]
+        LDR    R0,[R2,#ServUChArray_Capacity]
+        ADD    R0,R0,#4*ServUChEntry_SIZEOF
+        STR    R0,[R2,#ServUChArray_Capacity]
+;now we can do the add and it cannot fail
+        BL     AddServUsr_Hashed
+90
+        STRVS  R0,[SP]
+        Pull   "R0-R4,PC"
+
+;
+;entry: R3 = service number, R5,R6,R7 = Code,WSpace,R1 for chain entry
+;exit:  registers preserved, entry added to appropriate chain,
+;       or V set, error returned if no room
+;
+AddServSysOrUsr ROUT
+        Push   "R0-R4,LR"
+        CMP    R3,#ServMinUsrNumber
+        BHS    %FT50
+        LDR    R1,=Serv_SysChains
+        LDR    R2,[R1]
+        CMP    R2,#0
+        BNE    %FT30
+;need to create array of service chain anchors, for service codes 0 to ServMinUserNumber-1
+;(0 is not used, because reserved for service cliamed, but done for convenience)
+        Push   "R1,R3"
+        MOV    R3,#ServMinUsrNumber*4
+        BL     ClaimSysHeapNode
+        Pull   "R1,R3"
+        BVS    %FT90
+        STR    R2,[R1]
+        MOV    R0,#0
+        MOV    LR,#ServMinUsrNumber
+        MOV    R4,R2
+10
+        STR    R0,[R4],#4             ;zero the anchors (no chains yet)
+        SUBS   LR,LR,#1
+        BNE    %BT10
+30
+        ADD    R1,R2,R3,LSL #2        ;address of anchor for this Sys service number
+        BL     AddServChainEntry      ;add to chain
+        B      %FT90
+;
+50
+        LDR    R1,=Serv_UsrChains
+        LDR    R2,[R1]
+        CMP    R2,#0
+        BNE    %FT70
+;need to create array of hash headers for Usr chain arrays
+        Push   "R1,R3"
+        MOV    R3,#ServUsrHashSize*4
+        BL     ClaimSysHeapNode
+        Pull   "R1,R3"
+        BVS    %FT90
+        STR    R2,[R1]
+        MOV    R0,#0
+        MOV    LR,#ServUsrHashSize
+        MOV    R4,R2
+60
+        STR    R0,[R4],#4             ;zero the hash headers
+        SUBS   LR,LR,#1
+        BNE    %BT60
+70
+        BL     AddServUsr
+90
+        STRVS  R0,[SP]
+        Pull   "R0-R4,PC"
+
+;
+;entry: R9 -> module node, R12 -> incarnation node
+;exit:  module incarnation added onto service call chains as necessary
+;       OR V set, error returned if no room
+;
+; IRQs are disabled during update to make sure service distribution does not happen
+; under interrupt, with possibly incomplete chains still under construction. A little
+; worrying that this may mean interrupts are sometimes off for a while, but there you go.
+;
+AddToServiceChains ROUT
+        Push   "R0-R8,LR"
+        MOV    r8,pc
+        ORR    r4,r8,#I_bit
+        TEQP   r4,#0                         ;IRQs off for update of chain structures
+        LDR    R4,[R9,#Module_code_pointer]  ;start of module
+        LDR    R5,[R4,#Module_Service]
+        CMP    R5,#0
+        BEQ    %FT90
+        ADD    R5,R5,R4
+        ADD    R6,R12,#Incarnation_Workspace
+        BL     FindServTable
+        CMP    R0,#0
+        BEQ    %FT50
+        LDR    R1,[R0],#4            ;flags word from table
+        LDR    R5,[R0],#4            ;handler code offset from table
+        ADD    R5,R5,R4              ;handler code address
+        MOV    R2,#0
+10
+        ADD    R2,R2,#1              ;next index in table (start at 1)
+        LDR    R3,[R0],#4            ;next service call number from table
+        CMP    R3,#0                 ;table terminated by 0
+        BEQ    %FT90
+        TST    R1,#ServIndexInR1
+        MOVNE  R7,R2                 ;we must pass index to handler
+        MOVEQ  R7,#0                 ;we must pass service number        
+        BL     AddServSysOrUsr
+        BVS    %FT90
+        B      %BT10
+;
+50      ;awkward customer, with no service table (arse!)
+        MOV    R7,#0                 ;must pass service number to handler (there is no index)
+        LDR    R1,=Serv_AwkwardChain
+        BL     AddServChainEntry
+90
+        STRVS  R0,[SP]
+        TEQP   r8,#0          ;restore IRQ state
+        Pull   "R0-R8,PC"
+
+;
+;entry: R9 -> module node, R12 -> incarnation node
+;exit:  module incarnation removed from service call chains as necessary
+;       flags preserved
+;
+; IRQs are disabled during update to make sure service distribution does not happen
+; under interrupt, with possibly incomplete chains still under construction. A little
+; worrying that this may mean interrupts are sometimes off for a while, but there you go.
+;
+RemoveFromServiceChains ROUT
+        Push   "R0-R8,R10,LR"
+        MOV    r10,pc
+        ORR    r4,r10,#I_bit
+        TEQP   r4,#0                         ;IRQs off for update of chain structures
+        LDR    R4,[R9,#Module_code_pointer]
+        LDR    R5,[R4,#Module_Service]
+        CMP    R5,#0
+        BEQ    %FT90
+        ADD    R5,R5,R4
+        ADD    R6,R12,#Incarnation_Workspace
+        BL     FindServTable
+        CMP    R0,#0
+        BEQ    %FT50
+        LDR    R1,[R0],#4            ;flags word from table
+        LDR    R5,[R0],#4            ;handler code offset from table
+        ADD    R5,R5,R4              ;handler code address
+10
+        LDR    R3,[R0],#4            ;next service call number from table
+        CMP    R3,#0                 ;table terminated by 0
+        BEQ    %FT90
+        CMP    R3,#ServMinUsrNumber
+        BHS    %FT20
+        LDR    R1,=Serv_SysChains
+        LDR    R1,[R1]
+        CMP    R1,#0
+        BEQ    %BT10
+        ADD    R1,R1,R3,LSL #2
+        LDR    R2,[R1]               ;pick up anchor for Sys chain
+        BL     RemoveServChainEntry
+        B      %BT10
+;
+20
+        ServHashFunction R4,R3       ;result in R4
+        LDR    R1,=Serv_UsrChains
+        LDR    R1,[R1]
+        CMP    R1,#0
+        BEQ    %BT10
+        LDR    R1,[R1,R4,LSL #2]     ;pick up anchor for array of chains
+        CMP    R1,#0
+        BEQ    %BT10
+        LDR    R8,[R1,#ServUChArray_Size]
+        ADD    R4,R1,#ServUChArray_HdrSIZEOF  ;chain start
+        ADD    R8,R8,R4                       ;chain end
+30
+        CMP    R4,R8
+        BHS    %BT10
+        LDR    LR,[R4,#ServUChEntry_ServiceNo]
+        TEQ    LR,R3
+        ADDNE  R4,R4,#ServUChEntry_SIZEOF
+        BNE    %BT30
+        LDR    R2,[R4,#ServUChEntry_ChainAnchor]
+        BL     RemoveServChainEntry    
+        B      %BT10
+;
+50
+        LDR    R1,=Serv_AwkwardChain
+        CMP    R1,#0
+        BEQ    %FT90
+        LDR    R2,[R1]
+        BL     RemoveServChainEntry    
+90
+        TEQP   r10,#0                     ;restore IRQ state
+        Pull   "R0-R8,R10,PC",,^          ;MUST preserve flags
+
+  ] ;ChocolateService
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -2446,6 +2933,11 @@ ModuleIsntCAO
          BVS     %BT01
   [ Oscli_HashedCommands
          BL      FreeCmdHashEntries
+  ]
+  [ ChocolateService
+         LDR     R12, [stack, #4*(6+2)]
+         BL      RemoveFromServiceChains
+         ADD     R12, R12, #Incarnation_Workspace
   ]
          BL      FreeSWIEntry
 

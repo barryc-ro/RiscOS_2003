@@ -35,11 +35,15 @@ AP_PageZero     *       0 :OR: PageFlags_Unavailable            ; user r/w, CB (
                                                                 ; Ursula change: pages now locked, because soft CAM doesn't represent
                                                                 ; protection on 1k sub-pages, so swapping pages would cock up access permissions
                                                                 ; Ursula applies more protection on a 1k granularity - see L1L2PTenhancements
+AP_Kbuffs       *       1 :OR: DynAreaFlags_NotUserDraggable    ; user r/- (added for Ursula, use if LongCommandLines)
 
 AP_L2PT         *       2 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_NotBufferable ; user none, ~C~B
 AP_L1PT         *       AP_L2PT :OR: PageFlags_Unavailable
 AP_UndStackSoftCam *    PageFlags_Unavailable
 
+  [ DA_Batman
+ChangeDyn_Batcall    * -3               ; special DA number to select Batman usage of OS_ChangeDynamicArea
+  ]
 ChangeDyn_FreeAndApl * -2               ; special reason code for when we're sucking out of free pool and apl space
 ChangeDyn_AplSpace   * -1
 ;system areas:
@@ -50,8 +54,9 @@ ChangeDyn_SpriteArea * 3
 ChangeDyn_FontArea   * 4
 ChangeDyn_RamFS      * 5
 ChangeDyn_FreePool   * 6
-ChangeDyn_VRescue    * 7
-ChangeDyn_MaxArea    * 7
+ChangeDyn_VRescue    * 7                ; VRAM rescue (Ursula)
+ChangeDyn_Kbuffs     * 8                ; Kernel buffers for LongCommandLines (Ursula)
+ChangeDyn_MaxArea    * 8
 
 ; Area handler reason codes
 
@@ -92,10 +97,13 @@ PageBlockChunk  *       NumPageBlockEntries * 4096
 ; - does not allow anyone to renumber a DA with a quick handle - again, reserved for system use
 ; - DA names will be truncated to a maximum of 31 characters (or as defined below)
 ;
-                                  ;Note - OS_DynamicArea reason codes 6,7 disappear if DynArea_QuickHandles is FALSE
                                   GBLL DynArea_QuickHandles
 DynArea_QuickHandles              SETL {TRUE}
 ;
+      ;various bad things happen if DynArea_QuickHandles is FALSE (eg. some new API disappears)
+      ;should remove FALSE build option to simplify source code next time kernel is updated (kept for reference/testing now)
+      ASSERT DynArea_QuickHandles
+
                                   GBLL DynArea_NullNamePtrMeansHexString
 DynArea_NullNamePtrMeansHexString SETL {TRUE} :LAND: DynArea_QuickHandles
 ;
@@ -111,6 +119,7 @@ DynArea_LastTreacleHandle # 4                       ;last non-quick handle acces
 DynArea_LastTreaclePtr    # 4                       ;ptr to DANode for last non-quick handle accessed (invalid if LastTreacleHandle = -1)
 DynArea_LastEnumHandle    # 4                       ;last handle enumerated, or -1 if none
 DynArea_LastEnumPtr       # 4                       ;ptr to DANode for last handle enumerated (invalid if LastEnumHandle = -1)
+DynArea_ShrinkableSubList # 4                       ;sub list of dynamic areas that are Shrinkable (0 if none)
 DynArea_OD6Signature      # 4                       ;signature of changes to non-system DAs since last call to OS_DynamicArea 6
                                                     ;bit  0 = 1 if any DAs have been created
                                                     ;bit  1 = 1 if any DAs have been removed
@@ -120,6 +129,12 @@ DynArea_OD6Signature      # 4                       ;signature of changes to non
                                                     ;bit 31 = 1 if next resize is not to update signature (used during create, remove)
 DynArea_OD6PrevSignature  # 4                       ;previous signature, used to distinguish single from multiple changes
 DynArea_OD6Handle         # 4                       ;handle of last DA that affected signature
+DynArea_OD8Clamp1         # 4                       ;clamp value on area max size for OS_DynamicArea 0 with R5 = -1
+                                                    ;(default -1, set by R1 of OS_DynamicArea 8)
+DynArea_OD8Clamp2         # 4                       ;clamp value on area max size for OS_DynamicArea 0 with R5 > 0 (not Sparse)
+                                                    ;(default -1, set by R2 of OS_DynamicArea 8)
+DynArea_OD8Clamp3         # 4                       ;clamp value on area max size for OS_DynamicArea 0 for a Sparse area
+                                                    ;(default 4G-4k, set by R3 of OS_DynamicArea 8)
 DynArea_SysQHandleArray   # 4*(ChangeDyn_MaxArea+1) ;for system areas 0..MaxArea, word = ptr to DANode, or 0 if not created yet
 DynArea_FreeQHandles      # 4                       ;index of first free quick handle, starting at 1 (or 0 for none)
 DynArea_QHandleArray      # 4*DynArea_NumQHandles   ;1 word per quick handle
@@ -581,48 +596,46 @@ DAReason_ReturnFree      *  5   ;if ShrinkableDAs, else reason code invalid
  [ DynArea_QuickHandles
 DAReason_GetChangeInfo   *  6   ;if DynArea_Quickhandles, else reason code invalid
 DAReason_EnumerateInfo   *  7   ;if DynArea_Quickhandles, else reason code invalid
+DAReason_SetClamps       *  8   ;if DynArea_Quickhandles, else reason code invalid
  ]
-DAReason_Limit           *  8   ;end of defined DA reasons
+ [ DA_Batman
+DAReason_SparseClaim     *  9   ;if DA_Batman, else reason code invalid
+DAReason_SparseRelease   * 10   ;if DA_Batman, else reason code invalid
+  ]
+DAReason_Limit           * 11   ;end of defined DA reasons
 
 
 DynArea_NewAreas *      &100            ; Allocated area numbers start here
 DynArea_NewAreasBase *  &04000000       ; Allocated area addresses start here
 
 ; Bits in dynamic area flags (and page flags)
-
-DynAreaFlags_APBits     *       15 :SHL: 0      ; currently only uses 2 bits, but may extend to allow svc/usr read-only
-DynAreaFlags_NotBufferable *    1 :SHL: 4
-DynAreaFlags_NotCacheable *     1 :SHL: 5
-DynAreaFlags_DoublyMapped *     1 :SHL: 6
-DynAreaFlags_NotUserDraggable * 1 :SHL: 7
-DynAreaFlags_NeedsSpecificPages *  1 :SHL: 8    ; whether area will ever require particular physical pages
- ; amg: renaissance... this is a mess!
- [ ShrinkableDAs
-DynAreaFlags_Shrinkable *       1 :SHL: 9       ; whether area should be shrunk when need more space in free pool
-DynAreaFlags_AccessMask *       DynAreaFlags_APBits :OR: DynAreaFlags_NotBufferable :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_DoublyMapped
-
+;
+; rearranged slightly for Ursula - allow room for some expansion of DA flags in future without moving page flags
+;
+DynAreaFlags_APBits             * 15 :SHL:  0   ; currently only uses 2 bits, but may extend to allow svc/usr read-only
+DynAreaFlags_NotBufferable      *  1 :SHL:  4
+DynAreaFlags_NotCacheable       *  1 :SHL:  5
+DynAreaFlags_DoublyMapped       *  1 :SHL:  6
+DynAreaFlags_NotUserDraggable   *  1 :SHL:  7
+DynAreaFlags_NeedsSpecificPages *  1 :SHL:  8   ; whether area will ever require particular physical pages
+DynAreaFlags_Shrinkable         *  1 :SHL:  9   ; whether area may be shrunk when need more space in free pool
+DynAreaFlags_SparseMap          *  1 :SHL: 10   ; whether area may have non-contiguous mapping of pages (Holy dynamic areas Batman!)
+DynAreaFlags_PiersBinding       *  1 :SHL: 11   ; whether area is bound to client application, and so may be swapped out with it (not implemented yet)
+;
+; bits 12..15 nominally reserved for future DA flags expansion
+;
+DynAreaFlags_AccessMask * DynAreaFlags_APBits :OR: DynAreaFlags_NotBufferable :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_DoublyMapped
+;
 ; The following bits are only present in page flags
-
-TempUncacheableShift    *       10
+;
+TempUncacheableShift            * 16
 PageFlags_TempUncacheableBits   * 15 :SHL: TempUncacheableShift    ; temporary count of uncacheability, used by DMA mgr
-PageFlags_Unavailable   *       1 :SHL: 14      ; physical page may not be requested by a PreShrink handler
-
+PageFlags_Unavailable           *  1 :SHL: 20                      ; physical page may not be requested by a PreShrink handler
+;
 ; Temporary flags only used by kernel
+;
+PageFlags_Required              *  1 :SHL: 21                      ; physical page asked for by handler
 
-PageFlags_Required      *       1 :SHL: 15      ; physical page asked for by handler
- |
-DynAreaFlags_AccessMask *       DynAreaFlags_APBits :OR: DynAreaFlags_NotBufferable :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_DoublyMapped
-
-; The following bits are only present in page flags
-
-TempUncacheableShift    *       9
-PageFlags_TempUncacheableBits   * 15 :SHL: TempUncacheableShift    ; temporary count of uncacheability, used by DMA mgr
-PageFlags_Unavailable   *       1 :SHL: 13      ; physical page may not be requested by a PreShrink handler
-
-; Temporary flags only used by kernel
-
-PageFlags_Required      *       1 :SHL: 14      ; physical page asked for by handler
- ]
 
 DynamicAreaSWI ENTRY
         BL      DynAreaSub
@@ -647,11 +660,19 @@ DynAreaSub
  [ DynArea_QuickHandles
         B       DynArea_GetChangeInfo
         B       DynArea_EnumerateInfo
+        B       DynArea_SetClamps
+ |
+        B       DynArea_Unknown
+        B       DynArea_Unknown
+        B       DynArea_Unknown
+ ]
+ [ DA_Batman
+        B       DynArea_SparseClaim
+        B       DynArea_SparseRelease
  |
         B       DynArea_Unknown
         B       DynArea_Unknown
  ]
-
 ; unknown OS_DynamicArea reason code
 
 DynArea_Unknown
@@ -681,7 +702,13 @@ DynArea_ReturnError
 ;               bit  6 = 0 => area is singly mapped
 ;                      = 1 => area is doubly mapped
 ;               bit  7 = 1 => area is not user draggable in TaskManager window
-;               bits 8..31 = 0 (bits 8..12 are used in page flags, but not for areas)
+;               bit  8 = 1 => area may require specific physical pages
+;               bit  9 = 1 => area is shrinkable (only implemented if ShrinkableDAs)
+;               bit 10 = 1 => area may be sparsely mapped (only implemented if DA_Batman)
+;               bit 11 = 1 => area is bound to client application (allows areas to be overlayed in address space)
+;                             not implemented yet, but declared in public API for Ursula
+;               bits 12..15 reserved for future DA flag expansion (should be 0)
+;               bits 16..31 reserved for internal page flags (should be 0)
 ;
 ;       r5 = maximum size of area, or -1 for total RAM size
 ;       r6 -> area handler routine
@@ -757,12 +784,37 @@ DynArea_ErrorTranslateAndExit
 
 ; now validate maximum size of area
 
+  [ DynArea_QuickHandles
+    ;
+    ; apply clamps on max size, as set by last call to OS_DynamicArea 8
+    ;
+        MOV     r11, #0
+        LDR     r11, [r11, #DynArea_ws]
+    [ DA_Batman
+        TST     r4, #DynAreaFlags_SparseMap
+        BEQ     DAC_notsparse
+        LDR     r10, DynArea_OD8Clamp3   ; clamp for sparse dynamic area
+        CMP     r5, r10                  ; if requested max size is > relevant clamp
+        MOVHI   r5, r10                  ; then clamp it!
+        MOV     r10, #0
+        LDR     r11, [r10, #Page_Size]
+        B       DAC_roundup
+DAC_notsparse
+    ]
+        CMP     r5, #-1
+        LDREQ   r10, DynArea_OD8Clamp1   ; clamp for max size requested of -1
+        LDRNE   r10, DynArea_OD8Clamp2   ; clamp for max size requested of some specific value
+        CMP     r5, r10                  ; if requested max size is > relevant clamp
+        MOVHI   r5, r10                  ; then clamp it!
+  ]
+
         MOV     r10, #0
         LDR     r11, [r10, #Page_Size]
         LDR     r10, [r10, #RAMLIMIT]   ; get total RAM size
         CMP     r5, r10                 ; if requested maximum size is > total
         MOVHI   r5, r10                 ; then set max to total (NB. -1 passed in always yields HI)
 
+DAC_roundup
         SUB     r10, r11, #1            ; also round up to a page multiple
         ADD     r5, r5, r10
         BIC     r5, r5, r10
@@ -805,19 +857,33 @@ DynArea_ErrorTranslateAndExit
         Pull    "r0,r1,r3"
         BVS     %BT25                           ; failed to claim node
 
-; now store data in node (could probably use STM if we shuffled things around)
+; now store data in node
 
         CMP     r7, #-1                         ; if workspace ptr = -1
         MOVEQ   r7, r3                          ; then use base address
 
         STR     r1, [r2, #DANode_Number]
         STR     r3, [r2, #DANode_Base]
+  [ DA_Batman
+        ;disallow some awkward flag options if SparseMap set (no error), and temporarily create as not sparse
+        ;also disallow a DA handler
+        TST     r4, #DynAreaFlags_SparseMap
+        STREQ   r4, [r2, #DANode_Flags]
+        BICNE   r7, r4, #DynAreaFlags_DoublyMapped + DynAreaFlags_NeedsSpecificPages + DynAreaFlags_Shrinkable + DynAreaFlags_SparseMap
+        ORRNE   r7, r7, #DynAreaFlags_NotUserDraggable
+        STRNE   r7, [r2, #DANode_Flags]
+        MOVNE   r6, #0
+        MOVNE   r7, #0
+  |
         STR     r4, [r2, #DANode_Flags]
+  ]
         STR     r5, [r2, #DANode_MaxSize]
         STR     r6, [r2, #DANode_Handler]
         STR     r7, [r2, #DANode_Workspace]
-        MOV     r7, #0                          ; initial size is zero
-        STR     r7, [r2, #DANode_Size]          ; before we grow it
+        MOV     r7, #0
+        STR     r7, [r2, #DANode_Size]          ; initial size is zero before we grow it
+        STR     r7, [r2, #DANode_SubLink]       ; initialise as not part of any sublist
+        STR     r7, [r2, #DANode_SparseHWM]     ; initial high water mark if Sparse, redundant otherwise
 
 ; now make copy of string
 
@@ -918,9 +984,26 @@ DynArea_ErrorTranslateAndExit
         BVS     %FT90                           ; deal with error - r0,r1,r2 still stacked
         Pull    "r0, r1, r2"
 
+  [ DA_Batman
+        TST     r4, #DynAreaFlags_SparseMap
+        LDRNE   r11, [r2, #DANode_Flags]
+        ORRNE   r11, r11, #DynAreaFlags_SparseMap ; set this in node now (after initial grow)
+        STRNE   r11, [r2, #DANode_Flags]
+        LDRNE   r11, [r2, #DANode_Size]
+        LDRNE   lr,  [r2, #DANode_Base]
+        ADDNE   r11, r11, lr
+        STRNE   r11, [r2, #DANode_SparseHWM]      ; initial high water mark
+  ]
+
   [ DynArea_QuickHandles
         MOV     r11, #0
         LDR     r11, [r11, #DynArea_ws]
+
+        TST     r4, #DynAreaFlags_Shrinkable
+        LDRNE   lr, DynArea_ShrinkableSubList
+        STRNE   lr, [r2, #DANode_SubLink]
+        STRNE   r2, DynArea_ShrinkableSubList   ;link onto front of Shrinkable sublist if Shrinkable
+
         MOV     lr, #-1
         STR     lr, DynArea_CreatingHandle      ;invalidate this now
         CMP     r1, #ChangeDyn_MaxArea
@@ -1011,12 +1094,28 @@ StringNodeClaimFailed
 ;
 
 DynArea_Remove ENTRY
-        CMP     r1, #ChangeDyn_MaxArea
-        BLS     %FT92                   ; must not allow a system area to be removed
 
 ;*MUST NOT USE QCheckAreaNumber* (need r11 = previous)
         BL      CheckAreaNumber         ; check that area is there
         BCC     UnknownDyn              ; [not found]
+
+  [ DA_Batman
+        Push    "r11"
+        LDR     r11,[r10,#DANode_Flags]
+        TST     r11,#DynAreaFlags_SparseMap
+        Pull    "r11"
+        BEQ     DAR_notsparse
+        Push    "r0,r2-r3"
+        MOV     r0,#DAReason_SparseRelease
+        LDR     r2,[r10,#DANode_Base]
+        LDR     r3,[r10,#DANode_MaxSize]
+        SWI     XOS_DynamicArea            ;release all pages in sparse area
+        STRVS   r0,[SP]
+        Pull    "r0,r2-r3"
+        EXIT    VS
+        B       DAR_delink
+DAR_notsparse
+  ]
 
   [ DynArea_QuickHandles
         Push    "r11"
@@ -1033,17 +1132,41 @@ DynArea_Remove ENTRY
 
         Push    "r0-r2"
         MOV     r0, r1                  ; area number
-        LDR     r2, [r10, #DANode_Size] ; get current size
-        RSB     r1, r2, #0              ; negate it
+
+        LDR     r2, [r10, #DANode_Size]       ; get current size
+        RSB     r1, r2, #0                    ; negate it
         SWI     XOS_ChangeDynamicArea
         BVS     %FT80                   ; handle shrink failure - r0-r2 still stacked
 
         Pull    "r0-r2"
 
+DAR_delink
 ; Now just de-link from list (r10 -> node, r11 -> prev)
 
         LDR     lr, [r10, #DANode_Link] ; store our link
         STR     lr, [r11, #DANode_Link] ; in prev link
+
+  [ DynArea_QuickHandles
+        ;if it is a Shrinkable area, find on Shrinkable sublist and remove it
+        Push    "r0-r2, r11"
+        LDR     r0, [r10, #DANode_Flags]
+        TST     r0, #DynAreaFlags_Shrinkable
+        BEQ     %FT06
+        MOV     r11, #0
+        LDR     r11, [r11, #DynArea_ws]
+        ADR     r1, DynArea_ShrinkableSubList
+        LDR     r2, [r1]
+04
+        CMP     r2, r10
+        LDREQ   r2, [r2, #DANode_SubLink]
+        STREQ   r2, [r1]
+        BEQ     %FT06
+        ADD     r1, r2, #DANode_SubLink
+        LDR     r2, [r2, #DANode_SubLink]
+        B       %BT04
+06
+        Pull    "r0-r2, r11"
+  ]
 
         Push    "r0-r2"
   [ :LNOT: DynArea_QuickHandles
@@ -1062,7 +1185,9 @@ DynArea_Remove ENTRY
         STR     r2, DynArea_CreatingHandle                ; invalidate these, just in case
         STR     r2, DynArea_LastTreacleHandle
         STR     r2, DynArea_LastEnumHandle
-        LDR     r2, DynArea_OD6Signature                  ; we know system areas cannot be removed
+        CMP     r1, #ChangeDyn_MaxArea
+        BLS     %FT08                                     ; system area being removed
+        LDR     r2, DynArea_OD6Signature 
         STR     r2, DynArea_OD6PrevSignature
         ORR     r2, r2, #2
         STR     r2, DynArea_OD6Signature
@@ -1076,8 +1201,14 @@ DynArea_Remove ENTRY
         LDR     r3, DynArea_FreeQHandles
         STR     r3, [r10, r2, LSL #2]
         STR     r2, DynArea_FreeQHandles                  ; put on front of free list
+        B       %FT10
+08
+        ADR     r10, DynArea_SysQHandleArray
+        MOV     r2,  #0
+        STR     r2,  [r10, r1, LSL #2]                    ; reset system Qhandle
 10
         Pull    "r2, r3"
+
   ]
 
 ; Issue service to tell TaskManager
@@ -1110,15 +1241,6 @@ UnknownDyn
         SETV
         EXIT
 
-;if you think this is worth internationalising, I pity you
-92
-        ADR     r0, DynArea_BadRemove
-        SETV
-        EXIT
-DynArea_BadRemove
-        DCD     0
-        DCB     "illegal DA remove",0
-        ALIGN
 
 ;**************************************************************************
 ;
@@ -1283,6 +1405,260 @@ DynArea_badei
 
 ;**************************************************************************
 ;
+;       DynArea_SetClamps
+;
+;       Set clamps on max size of dynamic areas created by subsequent
+;       calls to OS_DynamicArea 0
+;
+;   On entry
+;       R0 = 8 (reason code)
+;       R1 = limit on maximum size of (non-Sparse) areas created by
+;            OS_DynamicArea 0 with R5 = -1, or 0 to read only
+;       R2 = limit on maximum size of (non-Sparse) areas created by
+;            OS_DynamicArea 0 with R5 > 0, or 0 to read only
+;       R3 = limit on maximum size of Sparse areas created by
+;            OS_DynamicArea 0 with R4 bit 10 set, or 0 to read only
+;
+;   On exit
+;       R1 = previous limit for OS_DynamicArea 0 with R5 = -1
+;       R2 = previous limit for OS_DynamicArea 0 with R5 > 0
+;       R3 = previous limit for OS_DynamicArea 0 with R4 bit 10 set
+;
+;       Specifying -1 in R1 or R2 means the respective limit
+;       is the RAM limit of the machine (this is the default).
+;       Specifiying larger than the RAM limit in R1 or R2 is
+;       equivalent to specifiying -1.
+;
+  [ DynArea_QuickHandles
+
+DynArea_SetClamps ROUT
+        Push    "r9,lr"
+
+        MOV     r11, #0
+        LDR     r11, [r11, #DynArea_ws]
+
+        LDR     r10, DynArea_OD8Clamp1
+        LDR     lr,  DynArea_OD8Clamp2
+        LDR     r9,  DynArea_OD8Clamp3
+
+        CMP     r1, #0
+        STRNE   r1, DynArea_OD8Clamp1
+        CMP     r2, #0
+        STRNE   r2, DynArea_OD8Clamp2
+        CMP     r3, #0
+        STRNE   r3, DynArea_OD8Clamp3
+
+        MOV     r1, r10
+        MOV     r2, lr
+        MOV     r3, r9
+
+        CLRV
+        Pull    "r9,PC"
+
+  ] ;DynArea_QuickHandles
+
+;**************************************************************************
+
+;       DynArea_SparseClaim
+;
+;  Ensure region of sparse dynamic area is mapped to valid memory
+;
+; in:   r0 = reason code (9)
+;       r1 = area number
+;       r2 = base of region to claim
+;       r3 = size of region to claim
+;
+; out:  r0-r3 preserved (error if not all of region successfully mapped)
+;       r10-r12 may be corrupted
+;
+; action: - round base and size to page granularity
+;         - scan the L2PT for each page covered
+;         - find contiguous fragments of 1 or more pages that are not yet mapped-in
+;         - pass each of these fragments as a psuedo DANode to OS_ChangeDynamicArea
+;           via special Batcall), to 'grow' pages into each fragment
+;
+  [ DA_Batman
+
+DynArea_SparseClaim ROUT
+        Push    "r0-r9,lr"
+        MOV     r4,#1                   ; flags operation as a claim
+
+DynArea_SparseChange                    ; common entry point for claim and release
+
+  [ DynArea_QuickHandles
+        BL      QCheckAreaNumber        ; check area exists
+  |
+        BL      CheckAreaNumber         ; check area exists
+  ]
+        BCC     DA_naffsparse           ; area not there
+
+        LDR     r9,[r10,#DANode_Flags]
+        TST     r9,#DynAreaFlags_SparseMap
+        BEQ     DA_naffsparse           ; area not sparse
+
+        MOV     r9,#&1000               ;page size
+        SUB     r9,r9,#1
+        ADD     r3,r3,r2                ;base+size
+        CMP     r4,#1
+        BICEQ   r2,r2,r9                ;round base down to page granularity for claim
+        ADDEQ   r3,r3,r9
+        BICEQ   r3,r3,r9                ;round base+size up to page granularity for claim
+        ADDNE   r2,r2,r9
+        BICNE   r2,r2,r9                ;round base up to page granularity for release
+        BICNE   r3,r3,r9                ;round base+size down to page granularity for release
+        SUB     r3,r3,r2                ;rounded size
+
+        ADD     r9,r3,r2
+        LDR     r5,[r10,#DANode_Base]
+        LDR     r6,[r10,#DANode_MaxSize]
+        ADD     r6,r6,r5
+        CMP     r2,r5
+        CMPHS   r9,r5
+        BLO     DA_naffsparse
+        CMP     r2,r6
+        CMPLS   r9,r6
+        BHI     DA_naffsparse
+
+        ADD     r5,r2,r3                   ;base+size of mapping
+        LDR     r6,[r10,#DANode_SparseHWM] ;high water mark = highest claim base+size seen
+        CMP     r4,#1
+        BEQ     %FT08
+        CMP     r5,r6
+        SUBHI   r3,r6,r2                   ;for release we can save work by trimming to high water mark
+        B       %FT09                      ;r3 is now trimmed size (may be <=0 for trim to nothing)
+08
+        CMP     r5,r6
+        STRHI   r5,[r10,#DANode_SparseHWM] ;for claim remember highest base+size as high water mark
+09
+        SUB     SP,SP,#DANode_NodeSize  ;room for temporary DANode on stack
+        MOV     r9,r10                  ;actual sparse area DANode
+        MOV     r5,SP
+        MOV     r6,#DANode_NodeSize
+10
+        LDR     r7,[r9],#4           ;copy sparse area node to temp node
+        STR     r7,[r5],#4
+        SUBS    r6,r6,#4
+        BNE     %BT10
+        ADD     r3,r2,r3             ;stop address
+;
+        MOV     r5,#L2PT
+        ADD     r5,r5,r2,LSR #10     ;r5 -> L2PT for base (assumes 4k page)
+        MOV     r8,r2                ;start address
+;
+;look for next fragment of region that needs to have mapping change
+20
+        CMP     r8,r3
+        BHS     %FT50                ;done
+        LDR     r6,[r5],#4           ;pick-up next L2PT entry
+        CMP     r4,#0                ;if operation is a release...
+        CMPEQ   r6,#0                ;...and L2PT entry is 0 (not mapped)...
+        ADDEQ   r8,r8,#&1000         ;...then skip page (is ok)
+        BEQ     %BT20
+        CMP     r4,#0                ;if operation is a claim (not 0)...
+        CMPNE   r6,#0                ;...and L2PT entry is non-0 (mapped)...
+        ADDNE   r8,r8,#&1000         ;...then skip page (is ok)
+        BNE     %BT20
+        MOV     r1,#&1000            ;else we need to do a change (1 page so far)
+30
+        ADD     r9,r8,r1
+        CMP     r9,r3
+        BHS     %FT40
+        LDR     r6,[r5],#4           ;pick-up next L2PT entry
+        CMP     r4,#1                ;if operation is a release (not 1)...
+        CMPNE   r6,#0                ;...and L2PT entry is non-0 (mapped)...
+        ADDNE   r1,r1,#&1000         ;...then count page as needing change
+        BNE     %BT30
+        CMP     r4,#1                ;if operation is a claim...
+        CMPEQ   r6,#0                ;...and L2PT entry is 0 (not mapped)...
+        ADDEQ   r1,r1,#&1000         ;...then count page as needing change
+        BEQ     %BT30
+;set up pseudo DA and do Batcall to change mapping of fragment we have found
+40
+        MOV     r2,SP                  ;temp DANode
+        STR     r8,[r2,#DANode_Base]
+        ADD     r8,r8,r1
+        ADD     r8,r8,#&1000           ;next address to check after fragment
+        CMP     r4,#1
+        MOVEQ   r9,#0                  ;start size of 0 for claim
+        MOVNE   r9,r1                  ;start size of fragment size for release
+        STR     r9,[r2,#DANode_Size]
+        STR     r1,[r2,#DANode_MaxSize]
+        MOV     r0,#ChangeDyn_Batcall
+        CMP     r4,#0
+        RSBEQ   r1,r1,#0               ;batshrink for release, batgrow for claim
+        SWI     XOS_ChangeDynamicArea
+        CMP     r4,#0
+        RSBEQ   r1,r1,#0
+        LDR     r9,[r10,#DANode_Size]
+        ADD     r9,r9,r1
+        STR     r9,[r10,#DANode_Size]
+        BVC     %BT20
+;
+50
+        ADD     SP,SP,#DANode_NodeSize   ;drop temp DANode
+        BL      DA_sparse_serviceandsig
+        STRVS   r0,[SP]
+        Pull    "r0-r9,PC"
+
+DA_naffsparse
+        ADR     r0,DA_naffsparseinnit
+        SETV
+        STR     r0,[SP]
+        Pull    "r0-r9,PC"
+DA_naffsparseinnit
+        DCD     0
+        DCB     "invalid OS_DynamicArea sparse claim/release",0
+        ALIGN
+
+DA_sparse_serviceandsig ROUT
+        Push    "r0,LR"
+        LDR     r1,[r10,#DANode_Number]
+   [ DynArea_QuickHandles
+        MOV     r11,#0
+        LDR     r11,[r11, #DynArea_ws]
+        LDR     r5,DynArea_OD6Signature
+        STR     r5,DynArea_OD6PrevSignature
+        ORR     r5,r5,#4                     ;signal a resize
+        STR     r5,DynArea_OD6Signature
+        STR     r1,DynArea_OD6Handle
+   ]
+        MOV     r2,r1                    ;area number
+        MOV     r0,#0                    ;nominal 'grow/shrink' of 0 for service call
+        MOV     r1,#Service_MemoryMoved
+        BL      Issue_Service
+        Pull    "r0,PC",,^
+
+  ] ;DA_Batman
+
+;**************************************************************************
+;
+;       DynArea_SparseRelease
+;
+;  Allow region of sparse dynamic area to release memory to free pool
+;
+; in:   r0 = reason code (10)
+;       r1 = area number
+;       r2 = base of region to release
+;       r3 = size of region to release
+;
+; out:  r0-r3 preserved (error if not all of region successfully released)
+;       r10-r12 may be corrupted
+;
+;
+; action: - similar to DynArea_SparseClaim, but does 'shrinks' on fragments
+;           that are mapped in
+
+  [ DA_Batman
+
+DynArea_SparseRelease ROUT
+        Push    "r0-r9,lr"
+        MOV     r4,#0                   ; flags operation as a release
+        B       DynArea_SparseChange    ; jump to common code       
+
+  ] ;DA_Batman
+
+;**************************************************************************
+;
 ;       DynArea_Enumerate - Enumerate dynamic areas
 ;
 ;       Internal routine called by DynamicAreaSWI
@@ -1443,17 +1819,34 @@ DynArea_ReturnFree ALTENTRY
   ]
         BCC     UnknownDyn                      ; [unknown area]
 10
-        MOV     r11, #DAList
         MOV     r2, #0
         LDR     r2, [r2, #FreePoolDANode + DANode_Size] ; start with current size of free pool
+  [ DynArea_QuickHandles
+        ;traverse the Shrinkable sublist
+        MOV     r11, #0
+        LDR     r11, [r11, #DynArea_ws]
+        LDR     r11, DynArea_ShrinkableSubList
+        B       %FT21
+  |
+        MOV     r11, #DAList
+  ]
 20
+  [ DynArea_QuickHandles
+        LDR     r11, [r11, #DANode_SubLink]     ; load next area on sublist
+  |
         LDR     r11, [r11, #DANode_Link]        ; load next area
+  ]
+21
         TEQ     r11, #0                         ; if end of list
         EXIT    EQ                              ; then exit, with r2 = correct value
 
+  [ DynArea_QuickHandles
+        TEQ     r11, r10                        ; must not be the excluded area
+  |
         LDR     lr, [r11, #DANode_Flags]        ; load area flags
         TST     lr, #DynAreaFlags_Shrinkable    ; must be shrinkable
         TEQNE   r11, r10                        ; and not excluded area
+  ]
         BEQ     %BT20                           ; [don't try this one]
 
         Push    r3
@@ -1629,7 +2022,11 @@ CheckForOverlappingAreas ENTRY "r0-r5"
         ASSERT  UndStackSoftCamChunk = L2PT + 4*1024*1024
 FixedAreasTable                                         ; table of fixed areas (address, size)
         &       0,                      AplWorkMaxSize  ; application space
-        &       CursorChunkAddress,     2*1024*1024     ; cursor,Nowhere,cache cleaners and reserved
+  [ LongCommandLines
+        &       CursorChunkAddress,     1504*1024       ; cursor,Nowhere,cache cleaners and reserved
+  |
+        &       CursorChunkAddress,     2048*1024       ; cursor,Nowhere,cache cleaners and reserved
+  ]
         &       &03000000,              16*1024*1024    ; I/O + ROM
         &       L2PT,                   8*1024*1024     ; 4M for L2PT (and L1PT), 1M for UNDSTK+SoftCAM, 3M reserved
         &       PhysSpace,              256*1024*1024   ; PhysSpace excluding DRAM
@@ -2194,6 +2591,11 @@ DynArea_QHinit_loop1
         STR     r1, DynArea_CreatingHandle
         STR     r1, DynArea_LastTreacleHandle
         STR     r1, DynArea_LastEnumHandle
+        STR     r1, DynArea_OD8Clamp1
+        STR     r1, DynArea_OD8Clamp2
+        MOV     r1, #&1000
+        RSB     r1, r1, #0
+        STR     r1, DynArea_OD8Clamp3               ; 4G - 4k
 
         ADR     r1, DynArea_QHandleArray            ; init all Qhandles as free, free list = 1..DynArea_NumQHandles
         MOV     r2, #1
@@ -2230,6 +2632,8 @@ DynArea_QHinit_loop2
 
         LTORG
 
+        ASSERT DANode_NodeSize = 11*4 ;so that tables below just might be valid DANodes
+
 InitFreePoolTable
         &       0                               ; link: no more nodes on list
         &       ChangeDyn_FreePool
@@ -2240,6 +2644,8 @@ InitFreePoolTable
         &       0                               ; no workspace needed
         &       0                               ; no handler needed
         &       FreePoolString                  ; title
+        &       0                               ; no sublist
+        &       0                               ; not sparse
 
 InitSysHeapTable
         &       FreePoolDANode                  ; link -> free pool node, since FreePoolAddress > SysHeapStart
@@ -2251,6 +2657,8 @@ InitSysHeapTable
         &       SysHeapStart                    ; workspace pointer -> base of heap
         &       DynAreaHandler_SysHeap          ; area handler
         &       SysHeapString                   ; title
+        &       0                               ; no sublist
+        &       0                               ; not sparse
 
 InitAppSpaceTable
         &       0                               ; link: not on list
@@ -2262,6 +2670,8 @@ InitAppSpaceTable
         &       0                               ; no workspace needed
         &       0                               ; no handler needed
         &       AppSpaceString                  ; title
+        &       0                               ; no sublist
+        &       0                               ; not sparse
 
 FreePoolString
         =       "Free pool", 0
@@ -2282,6 +2692,16 @@ SysHeapString
 ; out:  r0   preserved
 ;       r1 = actual amount moved (in bytes, unsigned integer)
 ;
+
+  [ DA_Batman
+;OR, a special call is allowed for internal use:
+;
+; in:   r0 = ChangeDyn_Batman (-3)
+;       r1 = size of change (in bytes, signed integer)
+;       r2 -> pseudo DANode for this call - base of DA will be base of fragment to map/unmap,
+;             magnitude of r1 will give size of fragment, sign of r1 is +ve for map -ve for unmap
+  ]
+
 ChangeDynamicSWI ROUT
         Push    "r0, r2-r9, r10, lr"
 
@@ -2300,6 +2720,13 @@ ChangeDynamicSWI ROUT
         DLINE   "Entering OS_ChangeDynamicArea (new code)"
  ]
 
+  [ DA_Batman
+    ;check for special Batman call (which uses OS_ChangeDynamicArea to map or unmap a fragment of a sparse DA)
+        CMP     r0, #ChangeDyn_Batcall
+        MOVEQ   r10, r2                         ; Batman call passes a pseudo DANode in r2
+        BEQ     CDA_handlechecked
+  ]
+
         Push    "r1"
         MOV     r1, r0
  [ DebugCDA2
@@ -2311,12 +2738,23 @@ ChangeDynamicSWI ROUT
   |
         BL      CheckAreaNumber                 ; check area number is on list
   ]
+
         Pull    "r1"
         BCC     noboff_IRQgoingClearSemaphore
 
  [ DebugCDA2
         DLINE   "Found entry on list"
  ]
+
+  [ DA_Batman
+        ;a sparse area is not allowed to do an ordinary grow or shrink
+        ;
+        LDR     r11, [r10, #DANode_Flags]
+        TST     r11, #DynAreaFlags_SparseMap
+        BNE     noboff_IRQgoingClearSemaphore
+  ]
+
+CDA_handlechecked
 
   [ DynArea_QuickHandles      
         MOV     r11, #0
@@ -2749,12 +3187,19 @@ IssueServiceMemoryMoved
 ; in:   r0 = area number that was shrunk/grown
 ;       r1 = amount moved (signed)
 ;
+  [ DA_Batman
+        CMP     r0, #ChangeDyn_Batcall
+        BEQ     ISMM_BatCloak           ; cloaking device (no service issue)
+  ]
         Push    "r1"
         MOV     r2, r0                  ; r2 = area number
         MOV     r0, r1                  ; amount moved (signed)
         MOV     r1, #Service_MemoryMoved
         BL      Issue_Service
         Pull    "r1"                    ; restore amount moved
+  [ DA_Batman
+ISMM_BatCloak
+  ]
         TEQ     r1, #0
         RSBMI   r1, r1, #0              ; r1 on exit = unsigned amount
 
@@ -3735,6 +4180,10 @@ PreShrink_Heap
 
 AreaName_RMA
         =       "Module area", 0
+  [ LongCommandLines
+AreaName_Kbuffs
+        =       "Kernel buffers", 0
+  ]
         ALIGN
 
 
@@ -3805,6 +4254,7 @@ AreaName_SpriteArea
         =       "System sprites", 0
         ALIGN
 
+  [ KernelOwnsRAMFSDA
 
 DynAreaHandler_RAMDisc
         CMP     r0, #4
@@ -3890,6 +4340,8 @@ ramcolondollardotstar
 ramfsname
         =       "ramfs", 0
         ALIGN
+
+  ] ;KernelOwnsRAMFSDA
 
 
 DynAreaHandler_FontArea
