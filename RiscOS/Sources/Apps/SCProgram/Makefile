@@ -93,3 +93,11 @@ o.main:	C:h.kernel
 o.main:	h.constants
 o.main:	h.console
 o.main:	C:h.scinter
+o.main:	c.main
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	h.error
+o.main:	C:h.kernel
+o.main:	h.constants
+o.main:	h.console
+o.main:	C:h.scinter
