@@ -182,6 +182,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
     static Document transmit_document = NULL;
 #if SUPPORT_EMAIL    
     static Document encoding_document = NULL;
+    static BOOL download_suppressed = FALSE;    /* set by SendQ when it suppresses an email download - when rx_state goes rxIDLE a redial is triggered */
 #endif
     static Document NAN_document = NULL;
 
@@ -497,10 +498,23 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
                         break;
                 } /* switch (rx_state) */
 
-#if 0
+#if SUPPORT_EMAIL
 			    /* report SQ_xx_GOING_IDLE if going idle from a non-idle state */
 				if ((nextstate == rxIDLE) && (rx_state != rxIDLE))
+				{
+#if SUPPORT_EMAIL
+					if (download_suppressed)
+					{
+					    download_suppressed = FALSE;
+					    
+                        /* request immediate ISP connection. we want a receive, but are happy to allow transmit */
+                        isp_dialup_download_request = TRUE;
+					}    
+#endif
+#if 0
 					StateKicker_SendMessage(Xxxx_MessageHandler, SQ_xx_GOING_IDLE, NULL);
+#endif
+				}
 #endif
 				rx_state = nextstate;
             }
@@ -806,7 +820,12 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								    	}
 								    }
 #if SUPPORT_EMAIL
-								    if ((email_flag == TRUE) && (isp_dialup.use_next >= 0) && (isp_dialup.use_next < ISP_LIST_SIZE))
+								    if ((email_flag == TRUE) && (isp_dialup.use_next >= 0) && (isp_dialup.use_next < ISP_LIST_SIZE)
+#if 1 /*PAN-02059*/
+                                        /* dial allowed if document to send or scanner idle */
+                                        && ((transmit_document != NULL) || (rx_state == rxIDLE))
+#endif
+								       )
 								    {
 					                	SetupIF_Read_Phone_Config(); /*>>>will do for now*/
 					                	SetupIF_Read_Email_Config(); /*>>>will do for now*/
@@ -848,11 +867,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
                								
 					                		StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_DIAL_LAN, &sendMessage);
 					                		sendMessage->data.sq_rx_dial_lan.tx_flag = (transmit_document != NULL);
-#if 1
-					                		sendMessage->data.sq_rx_dial_lan.rx_flag = TRUE;
-#else
-											sendMessage->data.sq_rx_dial_lan.rx_flag = (transmit_document == NULL);									
-#endif
+					                		sendMessage->data.sq_rx_dial_lan.rx_flag = (rx_state == rxIDLE);        /* (was rx_flag = TRUE) PAN-02059 don't download while scanning */
 										}
 										else
 #endif
@@ -864,7 +879,8 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 
 											StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_DIAL_ISP, &sendMessage);
 					                		sendMessage->data.sq_rx_dial_isp.tx_flag = (BOOL)(transmit_document != NULL);
-					                		sendMessage->data.sq_rx_dial_isp.rx_flag = TRUE;
+					                		sendMessage->data.sq_rx_dial_isp.rx_flag = (BOOL)(rx_state == rxIDLE);  /* (was rx_flag =TRUE) PAN-02059 don't download while scanning */
+
 					                		strcpy(sendMessage->data.sq_rx_dial_isp.number, dial_number);
 										}
 										/* no need to call Create_Originator_File() as MimeIF builds that data into email headers */
@@ -876,7 +892,9 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 						                    /* MUST change from SendIDLE because setting Cancelled will delete the document */
 						                    transmit_document->SendState = SendRUNNING; /*SendCONNECTING*/
                                         }
-
+#if 1 /*PAN-02059*/
+                                        download_suppressed = (BOOL)(rx_state != rxIDLE);   /* PAN-02059 request download when scan completes */
+#endif
 										nextstate = txISPCONNECTING;
 								    }
 #endif								    
@@ -2008,6 +2026,8 @@ static void Log_TxConnectedErrorSendingDoc(enum _SendRoute route, PhoneConnectio
             document->SMTPSendFailures++;
 
 #if 1 /*PAN-01727*/
+      /* when the fault report came back again, I released this CANNOT work, because we've connected, */
+      /* which resets various retry counters - see state txISPCONNECTED, message RX_SQ_CONNECTED      */
             connection->RedialDelay = FIVE_MINUTES;
             connection->RetryTime   = time(NULL) + connection->RedialDelay;
 #endif
@@ -2514,7 +2534,12 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
 				            		case RouteISP:
 				            			/* don't use connection_impossible(RouteISP, &isp_dialup.Connection[isp_dialup.use_next] as our   */
 				            			/* caller uses it and always leaves structure isp_dialup looking as if connection would work */
-										if ((isp_unavailable) || (document->MimeEncodeFailures >= 2) || (document->SMTPSendFailures >= 3))
+										if ((isp_unavailable) || (document->MimeEncodeFailures >= 2) || (document->SMTPSendFailures >= 3)
+#if 1
+                                            /* if document contains a page bigger than we can encode, try immediate re-route by direct call */
+                                            || (document->BiggestPage > STREAM_300K)
+#endif
+										   )
 				            			{
 				            				/* we've dialled the ISP many times on many numbers and failed to get through */
 				            				if (document->ReRouteAvailable)
@@ -2639,7 +2664,19 @@ static void SendQ_ClearDownSendState(void)
  */
 static void SendQ_NextDocument(BOOL *p_email_flag, Document *p_document)
 {
+#if 1 /*PAN-02059*/
+    if (send_next != NULL)
+    {
+        /* any ISP connections that occur while scanning have the download phase suppressed, to stop the */
+        /* downloaded emails taking memory needed for the scan/email-encode */
+        /* if the scanned fax is to go direct, give it (or any delayed direct fax) priority over the email connect */ 
 
+		*p_email_flag = FALSE;
+    	*p_document = send_next;	/* maybe NULL */
+
+    	return;
+    }
+#endif
 	if (isp_dialup_timer_request || isp_dialup_user_request || isp_dialup_download_request ||
 	    ((isp_dialup_redial_needed || isp_dialup_watermark_reached) && connection_requested_now(RouteISP, &isp_dialup.Connection[isp_dialup.use_next]))
 	   )
