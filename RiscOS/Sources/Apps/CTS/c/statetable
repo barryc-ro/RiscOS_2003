@@ -6,50 +6,691 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "ctstypes.h"
 #include "ctsbrowser.h"
 #include "ctsintern.h"
 #include "ctsui.h"
+#include "statetable.h"
 
 #include "DebugLib/DebugLib.h"
 
 
-browser_dispatch_result cts_statetable_dispatch_browser_message(
-	cts_browser_message *m)
+static cts_statetable_result_text cts_statetable_text_SM (cts_statetable_action action_code,
+                                                          cts_browser_message *bm,
+                                                          cts_server_message *sm)
 {
-	cts_browser_parameter *p;
+  cts_statetable_result_text rc;
 
-	(void) m;
+  static cts_statetable_states_text state = S_Text_Idle;
+  static cts_server_message *text_message = NULL;
 
-	dprintf(("statetable_1", "\ncts_statetable_dispatch_browser_message:\n"));
-	dprintf(("statetable_1", "  command is %s\n", m->command));
-	for (p = m->param_list; p; p=p->next) {
-		dprintf(("statetable_1", "    Parameter: `%s' = `%s'\n", p->name, p->value));
-	}
+  if (action_code == AC_Start)
+  {
+    text_message = sm;
+    state = S_Text_Working;
+    return RC_Text_Pending;
+  }
 
-	dprintf(("statetable_1", "end of message\n\n"));
-	/* Returning bdr_FREE makes the caller free the message structure */
-	return bdr_FREE;
+  switch (state)
+  {
+    case S_Text_Idle:
+      switch (action_code)
+      {
+        case AC_Cancel:
+        case AC_Continue:
+          /* Slightly invalid actions, but let them through anyway */
+          rc = RC_Text_Pending;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          rc = RC_Text_Error;
+      }
+      break;
+
+    case S_Text_Working:
+      switch (action_code)
+      {
+        case AC_BrowserMessage:
+          if (strcmp (bm->command, "processingdbox_cancel") == 0)
+          {
+            /* Close processing window */
+            /* Open cancel confirm dbox */
+            rc = RC_Text_CancelDialogue;
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Text_Error;
+            state = S_Text_Idle;
+          }
+          /* free "bm" */
+          /* free "text_message" */
+          break;
+
+        case AC_Continue:
+          /* close processing window */
+          /* send result of command */
+          /* free "text_message" */
+          state = S_Text_Idle;
+          rc = RC_Text_Finished;
+
+        case AC_Cancel:
+          /* free "text_message" */
+          state = S_Text_Idle;
+          rc = RC_Text_Cancelled;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Text_Idle;
+          rc = RC_Text_Error;
+      }
+      break;
+
+    default:
+      /* error */
+      state = S_Text_Idle;
+      rc = RC_Text_Error;
+      break;
+  }
+
+  return rc;
 }
 
-browser_dispatch_result cts_statetable_dispatch_server_message(
-	cts_server_message *m)
+
+static cts_statetable_result_open cts_statetable_open_SM (cts_statetable_action action_code,
+                                                          cts_browser_message *bm,
+                                                          cts_server_message *sm)
 {
-	cts_command_parameter *p = &m->params[0];
-	size_t index;
+  cts_statetable_result_open rc;
 
-	(void) m;
+  static cts_statetable_states_open state = S_Open_Idle;
 
-	dprintf(("statetable_1", "\ncts_statetable_dispatch_server_message:\n"));
-	for (index = 0; index < m->param_count; ++index) {
-		dprintf(("statetable_1", "    Parameter: `%s' = `%s'\n",
-			p[index].name, p[index].value));
-	}
-	dprintf(("statetable_1", "end of message\n\n"));
-	dprintf(("statetable_1", "The command is `%s'\n",
-		ctscmd_strings[m->command]));
+  if (action_code == AC_Start)
+  {
+    state = S_Open_Idle;
+    return RC_Open_Pending;
+  }
 
-	/* Returning bdr_FREE makes the caller free the message structure */
-	return bdr_FREE;
+  switch (state)
+  {
+    /* STATE - Card open, but idle */
+    case S_Open_Idle:
+      switch (action_code)
+      {
+        /* It's a server message ... */
+        case AC_ServerMessage:
+          switch (sm->command)
+          {
+            /* "Text" command */
+            case cmd_TEXT:
+              cts_statetable_text_SM (AC_Start, NULL, sm);
+              state = S_Open_Text;
+              rc = RC_Open_Pending;
+              break;
+
+            case cmd_VERIFY:
+            case cmd_CHANGE:
+            case cmd_APDU:
+            case cmd_ADPUT:
+            case cmd_CLOSE:
+            case cmd_BASIC:
+              /* do useful stuff */
+              rc = RC_Open_Pending;
+              break;
+
+            /* Error command */
+            case cmd_ERR:
+              /* Close card */
+              /* display error webpage */
+              /* free "sm" */
+              rc = RC_Open_Closed;
+              state = S_Open_Idle;
+              break;
+
+            default:
+              /* Any other server message in this state is illegal */
+              /* free "sm" */
+              rc = RC_Open_Error;
+              state = S_Open_Idle;
+          }
+          break;
+
+        case AC_Continue:
+          /* Wait around */
+          rc = RC_Open_Pending;
+          break;
+
+        case AC_Cancel:
+          rc = RC_Open_Cancelled;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          rc = RC_Open_Error;
+          state = S_Open_Idle;
+      }
+      break;
+
+    /* STATE - We're executing a "Text" command */
+    case S_Open_Text:
+    {
+      cts_statetable_result_text result;
+      result = cts_statetable_text_SM (action_code, bm, sm);
+      switch (result)
+      {
+        case RC_Text_Finished:
+          state = S_Open_Idle;
+          rc = RC_Open_Pending;
+          break;
+
+        case RC_Text_Pending:
+          rc = RC_Open_Pending;
+          break;
+
+        case RC_Text_ErrorDialogue:
+          state = S_Open_Idle;
+          rc = RC_Open_ErrorDialogue;
+          break;
+
+        case RC_Text_Cancelled:
+          state = S_Open_Idle;
+          rc = RC_Open_Cancelled;
+          break;
+
+        case RC_Text_Error:
+        default:
+          state = S_Open_Idle;
+          rc = RC_Open_Error;
+          break;
+      }
+      break;
+    }
+
+    /* STATE - We're executing an "APDU" command */
+    case S_Open_APDU:
+    {
+      /*cts_statetable_result_apdu result;
+      result = cts_statetable_APDU_SM (action_code, bm, sm);*/
+      rc = RC_Open_Pending;
+      break;
+    }
+
+    /* INVALID STATE */
+    default:
+      /* Error */
+      state = S_Open_Idle;
+      rc = RC_Open_Error;
+  }
+
+  return rc;
 }
 
+
+static cts_statetable_result_started cts_statetable_started_SM (cts_statetable_action action_code,
+                                                                cts_browser_message *bm,
+                                                                cts_server_message *sm)
+{
+  cts_statetable_result_started rc;
+
+  static cts_statetable_states_started state = S_Started_Idle;
+  static cts_server_message* open_message = NULL;
+
+  if (action_code == AC_Start)
+  {
+    state = S_Started_Idle;
+    return RC_Started_Pending;
+  }
+
+  switch (state)
+  {
+    /* STATE - Plugin started, but idle */
+    case S_Started_Idle:
+      switch (action_code)
+      {
+        /* It's a server message ... */
+        case AC_ServerMessage:
+          switch (sm->command)
+          {
+            /* Open command */
+            case cmd_OPEN:
+              /* Display processing dialogue */
+              open_message = sm;
+              state = S_Started_OpeningCard;
+              rc = RC_Started_Pending;
+              break;
+
+            /* Error command */
+            case cmd_ERR:
+              /* display error webpage */
+              /* free (sm) */
+              state = S_Started_Idle;
+              rc = RC_Started_Stopped;
+              break;
+
+            default:
+              /* Any other server message in this state is illegal */
+              /* free (sm) */
+              state = S_Started_Idle;
+              rc = RC_Started_Error;
+          }
+          break;
+
+        case AC_Continue:
+          /* Wait around */
+          rc = RC_Started_Pending;
+          break;
+
+        case AC_Cancel:
+          rc = RC_Started_Cancelled;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Started_Idle;
+          rc = RC_Started_Error;
+      }
+      break;
+
+    /* STATE - Opening card */
+    case S_Started_OpeningCard:
+      switch (action_code)
+      {
+        /* It's a browser message ... */
+        case AC_BrowserMessage:
+          if (strcmp (bm->command, "processingdbox_cancel") == 0)
+          {
+            /* Close processing window */
+            /* Open cancel confirm dbox */
+            rc = RC_Started_CancelDialogue;
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Started_Error;
+            state = S_Started_Idle;
+          }
+          /* free "bm" */
+          /* free "open_message" */
+          break;
+
+        case AC_Continue:
+          /* Check card status, and send S block if
+             necessary, blocking in this state */
+          /* If error
+          {
+            display error dbox 03
+            state = S_Started_Idle;
+            rc = RC_Started_ErrorDialogue;
+          }
+          else
+          {*/
+            /* removed processing window */
+            /* Send result */
+            state = S_Started_Open;
+            rc = RC_Started_Pending;
+       /* }*/
+          /* free "open_message" */
+          break;
+
+        case AC_Cancel:
+          state = S_Started_Idle;
+          rc = RC_Started_Cancelled;
+          /* free "open_message" */
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          /* free "open_message" */
+          rc = RC_Started_Error;
+          state = S_Started_Idle;
+      }
+      break;
+
+    /* STATE - Smart card open */
+    case S_Started_Open:
+    {
+      cts_statetable_result_open result;
+      result = cts_statetable_open_SM (action_code, bm, sm);
+      switch (result)
+      {
+        /* The close command and been executed in the open SM,
+           we've been closed */
+        case RC_Open_Closed:
+          state = S_Started_Idle;
+          rc = RC_Started_Pending;
+          break;
+
+        /* There's been an error in the open SM, and a erro dbox
+           has been opened */
+        case RC_Open_ErrorDialogue:
+          state = S_Started_Idle;
+          rc = RC_Started_ErrorDialogue;
+          break;
+
+        /* Open SM is working, continue in this state */
+        case RC_Open_Pending:
+          /* Continue */
+          rc = RC_Started_Pending;
+          break;
+
+        /* The user's cancelled an operation in the open SM */
+        case RC_Open_Cancelled:
+          state = S_Started_Idle;
+          rc = RC_Started_Cancelled;
+          break;
+
+        /* Unrecoverable error in Open SM, or invalid return code */
+        case RC_Open_Error:
+        default:
+          /* Error */
+          rc = RC_Started_Error;
+          state = S_Started_Idle;
+      }
+      break;
+    }
+
+    /* INVALID STATE */
+    default:
+      /* Error */
+      rc = RC_Started_Error;
+      state = S_Started_Idle;
+  }
+
+  return rc;
+}
+
+
+static cts_statetable_result_base cts_statetable_base_SM (cts_statetable_action action_code,
+                                                          cts_browser_message *bm,
+                                                          cts_server_message *sm)
+{
+  cts_statetable_result_base rc;
+
+  static cts_statetable_states_base state = S_Base_Idle;
+  static cts_statetable_states_base cancel_state;
+  static cts_browser_message* start_message = NULL;
+
+  switch (state)
+  {
+    /* STATE - Plugin idle */
+    case S_Base_Idle:
+      switch (action_code)
+      {
+        /* It's a browser message ... */
+        case AC_BrowserMessage:
+          if (strcmp (bm->command, "start") == 0)
+          {
+            /* Start command */
+            /* display now processing window */
+            start_message = bm;
+            state = S_Base_Starting;
+            rc = RC_Base_Pending;
+          }
+          else
+          {
+            /* Any other browser message is illegal in this state */
+            rc = RC_Base_Error;
+          }
+        break;
+
+        case AC_Continue:
+        case AC_Start:
+          /* do nothing */
+          rc = RC_Base_Pending;
+          break;
+
+        default:
+          /* Any other action is illegal in this state */
+          rc = RC_Base_Error;
+      }
+      break;
+
+    /* STATE - Starting state machine */
+    case S_Base_Starting:
+      switch (action_code)
+      {
+        /* It's a server message ... */
+        case AC_ServerMessage:
+          switch (sm->command)
+          {
+            /* Error command */
+            case cmd_ERR:
+              /* Display error dialogue */
+              state = S_Base_ErrorDialogue;
+              rc = RC_Base_Pending;
+              break;
+
+            /* Other command */
+            default:
+              /* Any other server message is illegal in this state */
+              rc = RC_Base_Error;
+              state = S_Base_Idle;
+          }
+          break;
+
+        /* It's a browser message .. */
+        case AC_BrowserMessage:
+          if (strcmp (bm->command, "processingdbox_cancel") == 0)
+          {
+            /* Close processing window */
+            /* Open cancel confirm dbox */
+            cancel_state = state;
+            state = S_Base_CancelDialogue;
+            rc = RC_Base_Pending;
+          }
+          else
+          {
+            /* Any other browser command in this state is illegal */
+            rc = RC_Base_Error;
+            state = S_Base_Idle;
+          }
+          break;
+
+        case AC_Continue:
+          /* check for &s ..
+          if (&s in user data)
+          {
+            display error dbox 03
+            rc = RC_Base_Pending;
+            state = S_Base_ErrorDialogue;
+          }
+          else
+          { */
+            /* send start result ... */
+            /* Close processing window */
+            /* free "start_message" */
+            cts_statetable_started_SM (AC_Start, NULL, NULL);
+            state = S_Base_Started;
+            rc = RC_Base_Pending;
+       /* }*/
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          rc = RC_Base_Error;
+          state = S_Base_Idle;
+      }
+      break;
+
+    /* STATE - State machine started */
+    case S_Base_Started:
+    {
+      cts_statetable_result_started result;
+
+      result = cts_statetable_started_SM (action_code, bm, sm);
+      switch (result)
+      {
+        /* Started SM has completed, bringing the plugin back to idle */
+        case RC_Started_Stopped:
+          state = S_Base_Idle;
+          rc = RC_Base_Pending;
+          break;
+
+        /* Started SM has opened an error dialogue, wait for it to close...*/
+        case RC_Started_ErrorDialogue:
+          state = S_Base_ErrorDialogue;
+          rc = RC_Base_Pending;
+          break;
+
+        /* We're paused, waiting for result of cancel dialogue */
+        case RC_Started_CancelDialogue:
+          cancel_state = state;
+          state = S_Base_CancelDialogue;
+          rc = RC_Base_Pending;
+          break;
+
+        /* Started SM is working, continue in this state */
+        case RC_Started_Pending:
+          /* continue */
+          rc = RC_Base_Pending;
+          break;
+
+        /* Unrecoverable error in Started SM, or unknown return code */
+        case RC_Started_Error:
+        default:
+          /* Error */
+          rc = RC_Base_Error;
+          state = S_Base_Idle;
+      }
+      break;
+    }
+
+    /* STATE - Waiting for error dialogue to complete */
+    case S_Base_ErrorDialogue:
+      switch (action_code)
+      {
+        /* It's a browser message ... */
+        case AC_BrowserMessage:
+          if (strcmp (bm->command, "errordbox_ok") == 0)
+          {
+            state = S_Base_Idle;
+            rc = RC_Base_Pending;
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Base_Error;
+            state = S_Base_Idle;
+          }
+          break;
+
+        case AC_Continue:
+          /* Wait around */
+          rc = RC_Base_Pending;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          rc = RC_Base_Error;
+          state = S_Base_Idle;
+      }
+      break;
+
+    /* STATE - Waiting for user to decide whether they want to cancel */
+    case S_Base_CancelDialogue:
+      switch (action_code)
+      {
+        /* It's a browser message */
+        case AC_BrowserMessage:
+          if (strcmp (bm->command, "canceldbox_ok") == 0)
+          {
+            switch (cancel_state)
+            {
+              case S_Base_Starting:
+                state = S_Base_Idle;
+                rc = RC_Base_Pending;
+                break;
+
+              case S_Base_Started:
+                state = S_Base_Started;
+                cts_statetable_started_SM (AC_Cancel, NULL, NULL);
+                rc = RC_Base_Pending;
+                break;
+
+              default:
+                /* error */
+                rc = RC_Base_Error;
+                state = S_Base_Idle;
+            }
+          }
+          else if (strcmp (bm->command, "canceldbox_cancel") == 0)
+          {
+            /* Continue operation that's been paused */
+            state = cancel_state;
+            rc = RC_Base_Pending;
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Base_Error;
+            state = S_Base_Idle;
+          }
+          break;
+
+        case AC_Continue:
+          /* wait around */
+          rc = RC_Base_Pending;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          rc = RC_Base_Error;
+          state = S_Base_Idle;
+      }
+
+    /* INVALID STATE */
+    default:
+      /* Error, invalid state */
+      rc = RC_Base_Error;
+      state = S_Base_Idle;
+  }
+
+  return rc;
+}
+
+
+browser_dispatch_result cts_statetable_dispatch_browser_message (cts_browser_message *m)
+{
+  cts_browser_parameter *p;
+
+  (void) m;
+
+  dprintf(("statetable_1", "\ncts_statetable_dispatch_browser_message:\n"));
+  dprintf(("statetable_1", "  command is %s\n", m->command));
+  for (p = m->param_list; p; p=p->next)
+  {
+    dprintf (("statetable_1", "    Parameter: `%s' = `%s'\n", p->name, p->value));
+  }
+  dprintf (("statetable_1", "end of message\n\n"));
+
+  /* Returning bdr_FREE makes the caller free the message structure */
+  return bdr_FREE;
+}
+
+
+browser_dispatch_result cts_statetable_dispatch_server_message (cts_server_message *m)
+{
+  cts_command_parameter *p = &m->params[0];
+  size_t index;
+
+  (void) m;
+
+  dprintf (("statetable_1", "\ncts_statetable_dispatch_server_message:\n"));
+  for (index = 0; index < m->param_count; ++index)
+  {
+    dprintf(("statetable_1", "    Parameter: `%s' = `%s'\n",
+             p[index].name, p[index].value));
+  }
+  dprintf(("statetable_1", "end of message\n\n"));
+  dprintf(("statetable_1", "The command is `%s'\n",
+           ctscmd_strings[m->command]));
+
+  /* Kick state machine */
+  cts_statetable_base_SM (AC_ServerMessage, NULL, m);
+
+  /* Returning bdr_FREE makes the caller free the message structure */
+  return bdr_FREE;
+}
