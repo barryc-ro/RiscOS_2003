@@ -15,6 +15,7 @@
  *		 setting of SSL_VERSION system variable.
  * pdh 27-Jan-97 Begin Keep-Alive support
  * pdh 29-Jan-97 First internal release of keep-alive version (0.61)
+ * pdh 12-Mar-97 Frob prefix-fetch stuff to work round bug in WebSitePro/1.1f
  */
 
 #include <stdlib.h>
@@ -1415,15 +1416,6 @@ static _kernel_oserror *http_open(http_open_args *args)
     http_show_flags( new );
 #endif
 
-    /* Be nice and apply image optimisations even if we've not been told
-     * it's an image.
-     */
-    ptr = args2.in.object + strlen(args2.in.object) - 4;
-
-    if ( !strcmp( ptr, ".gif" )
-         || !strcmp( ptr, ".jpg" ) )
-        new->flags |= http_open_flags_IMAGE;
-
     /* If we're prepared only to get the first few bytes, we can run at
      * priority.
      */
@@ -1984,7 +1976,8 @@ static void http_requeue( http_connection *c )
     http_free_headers( c->headers );
     c->headers = NULL;
 
-    if ( !q || (!q->queue && !c->queuenext) )
+    if ( !q || (!q->queue && !c->queuenext)
+         || ( c->flags & http_flags_NOTALIVE ) )
     {
         fdebugf( log_file, "%p: restarting\n", c );
 
@@ -2259,11 +2252,14 @@ static _kernel_oserror *http_status(http_status_args *args)
     args->out.data_so_far = c->data_so_far ;
     args->out.headers = c->headers ;
 
-    if ( (c->flags & http_flags_GOTFIRST)
-         && c->rc == 206 )
+    if ( c->rc == 206
+         && c->data_so_far == c->total_size )
         args->out.rc = 200;     /* "OK" */
     else
         args->out.rc = c->rc;
+
+    fdebugf( log_file, "%p: http_status returning status=%d rc=%d\n",
+             c, args->out.status, args->out.rc );
 
     args->out.message = c->message ;
 
@@ -3039,9 +3035,16 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
         c->flags |= http_flags_CHUNKED;
     }
     else if ( strcasecmp( key, "CONTENT-TYPE" ) == 0
-              && prefixcmp( value, "MULTIPART/X-MIXED-REPLACE" ) == 0 )
+              && ( prefixcmp( value, "MULTIPART/X-MIXED-REPLACE" ) == 0
+                   || prefixcmp( value, "MULTIPART/X-BYTERANGES" ) == 0 ) )
     {
         /* Oooh, it's server push. Now the fun really starts. */
+
+        /* Actually we must cope with multipart byteranges as well, as at
+         * least one server (WebSitePro/1.1f) returns all this mime junk even
+         * if we've only asked for *one* byte range -- this is not as per spec!
+         */
+
         char *p = strchr( value, ';' );
 
         if ( p )

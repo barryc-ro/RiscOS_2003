@@ -73,8 +73,8 @@ EXPORTS   = h.httppub
 #
 # build a relocatable module:
 #
-#all: rm.${COMPONENT}mod rm.${COMPONENT}smod 
-all: rm.${COMPONENT}mod
+all: rm.${COMPONENT}mod rm.${COMPONENT}smod 
+#all: rm.${COMPONENT}mod
 
 #
 # RISC OS ROM build rules:
