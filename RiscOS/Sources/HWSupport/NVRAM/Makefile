@@ -79,7 +79,6 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
         @echo ${COMPONENT}: cleaned
@@ -99,8 +98,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -111,33 +109,3 @@ ${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.nvram
-o.module:	h.msgfile
-o.module:	h.error
-o.module:	h.trace
-o.nvram:	c.NVRAM
-o.nvram:	C:h.kernel
-o.nvram:	C:h.swis
-o.nvram:	h.module
-o.nvram:	h.nvram
-o.nvram:	h.msgfile
-o.nvram:	h.parse
-o.nvram:	h.error
-o.nvram:	h.trace
-o.msgfile:	c.msgfile
-o.msgfile:	C:h.kernel
-o.msgfile:	C:h.swis
-o.msgfile:	h.msgfile
-o.msgfile:	h.error
-o.msgfile:	h.trace
-o.parse:	c.parse
-o.parse:	h.nvram
-o.parse:	C:h.kernel
-o.parse:	h.trace
-o.trace:	c.trace
-o.trace:	C:h.swis
-o.trace:	C:h.kernel
