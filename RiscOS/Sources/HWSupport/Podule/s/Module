@@ -10,6 +10,7 @@
 ; Date       Name  Description
 ; ----       ----  -----------
 ; 12-Jan-00  PMS   Added fake podule header for EtherI interface.
+; 28-Apr-00  KJB   Made 32-bit compatible.
 ;
 ;
 ; Fake Podule Headers
@@ -64,7 +65,10 @@ Origin
         DCD     0
  [ International_Help <> 0
         DCD     message_filename - Origin
+ |
+        DCD     0
  ]
+        DCD     Flags - Origin
 
         GBLL    DebugModule
 DebugModule     SETL    ( :LNOT: ReleaseVersion ) :LAND: False
@@ -521,15 +525,17 @@ EtherImodend
 
 ExtensionROMLoader
         B       ROMLoaderReadByte                       ; read a byte
-        ORRS    pc, lr, #V_bit                          ; write a byte
-        BICS    pc, lr, #V_bit                          ; reset
-        BICS    pc, lr, #V_bit                          ; SWI Podule_CallLoader
+        B       ROMLoaderError                          ; write a byte
+        MOV     pc, lr                                  ; reset
+        MOV     pc, lr                                  ; SWI Podule_CallLoader
+        =       "32OK"
 
 ; ROMLoaderReadByte - Read a byte from extension ROM
 ;
 ; in:   R1 = address within ROM
 ;       R3 -> podule descriptor node *** NOTE actual address not offset from wp ***
 ;       R11 = "combined hardware address", ie ROM address in the case of extension ROMs
+;       V clear
 ;
 ; out:  R0 = byte read
 ;       R1, R4-R9, R11,R12 preserved
@@ -544,7 +550,13 @@ ROMLoaderReadByte ROUT
         LDR     r0, [r3, #PoduleNode_WordOffset]
         MLA     r10, r0, r2, r10                        ; r10 = byte offset in actual ROM
         LDRB    r0, [r11, r10]                          ; r0 = byte read
-        BICS    pc, lr, #V_bit
+        MOV     pc, lr
+
+ROMLoaderError
+        MRS     CPSR_f, #V_bit
+        MOV     r0, #0
+        MOV     pc, lr
+
 
 ExtensionROMLoaderEnd
 
@@ -558,9 +570,10 @@ ExtensionROMLoaderEnd
         [       NetworkPodule
 NetworkPoduleLoader
         B       NetworkLoaderReadByte                   ; Read a byte
-        ORRS    pc, lr, #V_bit                          ; Write a byte
+        B       NetworkLoaderError                      ; Write a byte
         B       NetworkLoaderReset                      ; Reset
-        BICS    pc, lr, #V_bit                          ; SWI Podule_CallLoader
+        MOV     pc, lr                                  ; SWI Podule_CallLoader
+        =       "32OK"
 
 ;       The network ROM lives at address 'NetworkROMAddress' (R11)
 ;       Writes to that address reset a 12 bit counter attached to the
@@ -595,7 +608,7 @@ NetworkCounterLoop
         INC     r10                                     ; Increment the soft copy
    ;     BICEQ   r10, r10, #&000FF000                    ; Make sure the counter doesn't overflow
         STREQ   r10, NetworkPageCounter                 ; Update the soft copy
-        BICEQS  pc, lr, #V_bit                          ; Return to the caller
+        MOVEQ   pc, lr                                  ; Return to the caller (V will be clear if EQ)
         BGT     NetworkCounterLoop                      ; And try again
         MOV     r10, #0
         STR     r10, NetworkPageCounter                 ; Reset the soft copy
@@ -628,9 +641,15 @@ NetworkCounterLoop
         ]
         B       NetworkCounterLoop                      ; And try again
 
+NetworkLoaderError
+        MSR     CPSR_f, #V_bit
+        MOV     r0, #0
+        MOV     pc, lr
+
 NetworkLoaderTooBig
+        MSR     CPSR_f, #V_bit
         ADR     r0, ErrorNetworkLoaderTooBig
-        ORRS    pc, lr, #VFlag
+        MOV     pc, lr
 
 ErrorNetworkLoaderTooBig
         DCD     ErrorNumber_AddressRange
@@ -651,6 +670,7 @@ BaseAddressANDMask
 ; NetworkLoaderReset
 ;
 ; in:   R11 = ROM base address
+;       V clear
 ;
 ; out:  R2, R11 corrupted
 
@@ -660,12 +680,36 @@ NetworkLoaderReset ROUT
         MOV     r2, #0
         STRB    r2, [ r11, #0 ]                         ; Reset the counter
         STR     r2, NetworkPageCounter
-        BICS    pc, lr, #V_bit
+        MOV     pc, lr
 
 NetworkLoaderEnd
 
         Byte    NetworkLoader, NetworkLoaderEnd - NetworkPoduleLoader
         ]
+
+; *****************************************************************************************************************
+;
+;       Not32bitLoader - Dummy loader substituted for non 32-bit compatible ones
+;
+
+Not32bitDummyLoader
+        B       Not32bitLoaderError                     ; read a byte
+        B       Not32bitLoaderError                     ; write a byte
+        MOV     pc, lr                                  ; reset (nothing to reset...)
+        B       Not32bitLoaderError                     ; SWI Podule_CallLoader
+        =       "32OK"
+
+; in:   We know r12 is the Podule Manager global workspace. Use it to look up
+;       the error
+
+Not32bitLoaderError
+        MSR     CPSR_f, #V_bit
+        ADR     r0, Loader26bitError
+        MOV     pc, lr
+
+Not32bitLoaderEnd
+
+        Byte    Not32bitLoader, Not32bitLoaderEnd - Not32bitDummyLoader
 
         AlignSpace      16
 
@@ -680,6 +724,7 @@ InfoBufLength * &40                                     ; buffer length for titl
 
         Byte    RMName, InfoBufLength
         Byte    RMHelp, InfoBufLength
+        Byte    Loader26bitError, InfoBufLength
 
         Word    EndOfInitialisationArea, 0
 
@@ -712,6 +757,13 @@ HelpString
         ]
         =       0
         ALIGN
+
+Flags
+  [ No32bitCode
+        DCD     0
+  |
+        DCD     ModuleFlag_32bit
+  ]
 
         SUBT    Initialisation code
         OPT     OptPage
@@ -754,6 +806,19 @@ InitialisationLoop
         INC     r3, 4                                   ; at the start of workspace
         CMP     r3, # :INDEX: EndOfInitialisationArea
         BLT     InitialisationLoop
+
+        MOV     r0, #1                                  ; We've just copied code (the ROM and
+        MOV     r1, r2                                  ; network loaders) into our workspace
+        ADD     r2, r2, r3
+        SWI     XOS_SynchroniseCodeAreas
+
+        MOV     r2, r1                                  ; Restore workspace pointer
+
+        Push    r12
+        MOV     r12, r2
+        BL      LookupLoader26bitError
+        Pull    r12
+
  [ ExtensionROMs
         BL      FindExtensionROMs
  ]
@@ -830,6 +895,7 @@ ReInitialisation ; Address of workspace in R2, Address of Private word in R12
  ]
         STR     r2, [ r12 ]
         STR     r12, [ r2, #:INDEX:AddressOfMyPrivateWord ]
+
         CLRV
 ExitInitModule
         Pull    "pc"
@@ -855,25 +921,36 @@ ResetAllLoaders
         BNE     %10
 
         BL      close_message_file                      ; close messages file if it is open, marking it closed
-        BICS    pc, r6, #VFlag
+        CLRV
+        MOV     pc, r6
 
         ASSERT  Service_Reset < Service_PreReset
+        ASSERT  Service_PreReset < Service_TerritoryStarted
 ServiceTable
         DCD     0                        ;flags
         DCD     UServiceEntry - Origin
         DCD     Service_Reset
         DCD     Service_PreReset
+        DCD     Service_TerritoryStarted
         DCD     0                        ;terminator
         DCD     ServiceTable - Origin    ;table anchor
 ServiceEntry ROUT
         MOV     r0, r0                   ;magic instruction
         TEQ     r1, #Service_PreReset
         TEQNE   r1, #Service_Reset
-        MOVNES  pc, lr
+        TEQNE   r1, #Service_TerritoryStarted
+        MOVNE   pc, lr
 UServiceEntry
+        TEQ     r1, #Service_TerritoryStarted
+        BEQ     RedoMessages
+
         Push    "r0-r6, lr"
         BL      ResetAllLoaders
-        Pull    "r0-r6, pc",,^
+        Pull    "r0-r6, pc"
+
+RedoMessages
+        LDR     wp, [r12]
+        B       LookupLoader26bitError
 
 ; ****************************************************************************
 ;
