@@ -70,10 +70,15 @@ static void              image_remove_all_data        (int image);
 static void              image_delay                  (browser_data * b, int image);
 static void              image_abandon                (browser_data * b, int image);
 static void              image_prepare                (browser_data * b, HStream * token, int image, int background);
-static void              image_delete_image_entry     (int image);
+
+static void              image_mark_as_deleted        (int i);
+static void              image_mark_as_gcable         (int i);
 static void              image_destroy                (int image);
+static int               image_renumber               (int old, int new);
+static int               image_purge_deleted_entries  (void);
 static void              image_post_deletion_clearup  (void);
 static int               image_gc_oldest              (browser_data * b);
+
 static void              image_refetch                (browser_data * b, int image, int priority, int redraw);
 
 static _kernel_oserror * image_update_area            (browser_data * b, int x, int y, BBox * ubox, int image, int redraw);
@@ -81,7 +86,7 @@ static _kernel_oserror * image_update_image           (browser_data * b, int ima
 
 static _kernel_oserror * image_register_filler        (int xref);
 
-static int               image_data_offset            (int image);
+//static int               image_data_offset            (int image);
 static int               image_count_fetches          (browser_data * b);
 
 static int               image_get_token_image_xref   (browser_data * b, HStream * token);
@@ -97,7 +102,6 @@ static int               image_can_be_saved_as_sprite (browser_data * b, int i);
 /* Locals */
 
 static image_info   * idata       = NULL; /* Flex block for image_info structures (referenced as an array) */
-static char         * ddata       = NULL; /* Flex block for in-transit fetch data, URLs, etc.              */
 static int            nimages     = 0;    /* Current number of image_info structures in idata array        */
 static int            lastimage   = 0;    /* Used to work out what image_process_null should handle next   */
 static int            animhandler = 0;    /* Flag so code knows when to (de)register GIF animation handler */
@@ -412,47 +416,21 @@ static _kernel_oserror * image_load_chunk(browser_data * b, int image, char * bu
 
 static void image_remove_data(browser_data * b, int image)
 {
-  int p, oldsize, remove;
-
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_remove_data: Called for image %d\n",image);
   #endif
 
-  /* Get the current data size */
-
-  oldsize = flex_size((flex_ptr) &ddata);
-
-  /* The alloc field holds the total amount of data associated */
-  /* with the image, and the ualloc field holds the amount     */
-  /* that the URL uses. So subtract ualloc from alloc to get   */
-  /* the amount that must be removed.                          */
-
-  remove = idata[image].alloc - idata[image].ualloc;
-
-  if (remove)
+  if (idata[image].flex->fetchdata)
   {
-    /* Need to shuffle the rest of the flex block */
-    /* down and shrink the block, if this isn't   */
-    /* the last image (i.e. p != oldsize).        */
-
-    p = image_data_offset(image) + idata[image].alloc;
-
-    if (p != oldsize) memmove(ddata + p - remove, ddata + p, oldsize - p);
-
-    flex_extend((flex_ptr) &ddata, oldsize - remove);
-
     #ifdef TRACE
-      flexcount -= remove;
+      flexcount -= flex_size(&idata[image].flex->fetchdata);
       if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
     #endif
+
+    flex_free(&idata[image].flex->fetchdata);
+
+    idata[image].flex->fetchdata = NULL;
   }
-
-  /* Subtract the amount removed from the alloc field */
-  /* and set isize to zero, i.e. we're not storing    */
-  /* any image data anymore.                          */
-
-  idata[image].alloc -= remove;
-  idata[image].isize  = 0;
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_remove_data: Successful\n");
@@ -471,45 +449,38 @@ static void image_remove_data(browser_data * b, int image)
 
 static void image_remove_all_data(int image)
 {
-  int p, oldsize, remove;
-
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_remove_all_data: Called for image %d\n",image);
   #endif
 
-  /* Get the current data size */
+  if (!idata[image].flex) return;
 
-  oldsize = flex_size((flex_ptr) &ddata);
-
-  /* The alloc field holds the total amount of data associated */
-  /* with the image.                                           */
-
-  remove = idata[image].alloc;
-
-  if (remove)
+  if (idata[image].flex->urldata)
   {
-    /* Need to shuffle the rest of the flex block */
-    /* down and shrink the block, if this isn't   */
-    /* the last image                             */
-
-    p = image_data_offset(image);
-
-    if (oldsize - p - remove) memmove(ddata + p, ddata + p + remove, oldsize - p - remove);
-
-    flex_extend((flex_ptr) &ddata, oldsize - remove);
-
     #ifdef TRACE
-      flexcount -= remove;
+      flexcount -= flex_size((flex_ptr) &idata[image].flex->urldata);
       if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
     #endif
+
+    flex_free((flex_ptr) &idata[image].flex->urldata);
+
+    idata[image].flex->urldata = NULL;
   }
 
-  /* Subtract the amount removed from the alloc field */
-  /* and set isize to zero, i.e. we're not storing    */
-  /* any image data anymore.                          */
+  if (idata[image].flex->fetchdata)
+  {
+    #ifdef TRACE
+      flexcount -= flex_size(&idata[image].flex->fetchdata);
+      if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+    #endif
 
-  idata[image].alloc = 0;
-  idata[image].isize = 0;
+    flex_free(&idata[image].flex->fetchdata);
+
+    idata[image].flex->fetchdata = NULL;
+  }
+
+  free(idata[image].flex);
+  idata[image].flex = NULL;
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_remove_all_data: Successful\n");
@@ -850,7 +821,7 @@ static void image_prepare(browser_data * b, HStream * token, int image, int back
 
 _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * token, int background, int * handle)
 {
-  int size, ok, ulen;
+  int ok, ulen;
   int xref;
   int use_xref   = 0;
   int tried_once = 0;
@@ -917,15 +888,15 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
         /* Can we simply create a cross reference to another image? */
 
         if (
-             idata[i].alloc                                            &&  /* The image has data allocated for it                 */
-             idata[i].xref < 0                                         &&  /* The image doesn't cross reference things itself     */
-             idata[i].background == !!background                       &&  /* We're not trying to make a b/g an f/g or vice versa */
-             !strcmp(url, ddata + image_data_offset(i))                &&  /* This holds a URL which matches that passed in       */
+             idata[i].flex->urldata                                  &&  /* The image has an associated URL                     */
+             idata[i].xref < 0                                       &&  /* The image doesn't cross reference things itself     */
+             idata[i].background == !!background                     &&  /* We're not trying to make a b/g an f/g or vice versa */
+             !strcmp(url, idata[i].flex->urldata)                    &&  /* This holds a URL which matches that passed in       */
              (
-               !background ||                                              /* This isn't a background image, or...                */
+               !background ||                                            /* This isn't a background image, or...                */
                (
-                 background &&                                             /* If this is a background image, the background       */
-                 idata[i].owner->background_colour == b->background_colour /* colours match in the two owner browsers             */
+                 background &&                                           /* If this is a background image, the background       */
+                 redraw_backcol(idata[i].owner) == redraw_backcol(b)     /* colours match in the two owner browsers             */
                )
              )
            )
@@ -937,14 +908,10 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     }
   }
 
-  if (xref >= 0) ulen = 0; /* Don't need any extra data for a cross referenced image. */
-  else
-  {
-    ulen = (strlen(url) + 1);
-    ulen = (int) WordAlign(ulen);
-  }
+  /* Don't need to hold the URL for a cross referenced image */
 
-  size = ulen;
+  if   (xref >= 0) ulen = 0;
+  else             ulen = strlen(url) + 1;
 
   /* Are we cross-referencing an image which is ready for garbage */
   /* collection? If so, we can just claim this one.               */
@@ -1007,38 +974,6 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   }
   while (!ok);
 
-  if (ok)
-  {
-    tried_once = 0;
-
-    do
-    {
-      /* Allocate space for the image data */
-
-      if (ddata)
-      {
-        int oldsize;
-
-        #ifdef TRACE
-          flexcount += sizeof(image_info);
-          if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-        #endif
-
-        oldsize = flex_size  ((flex_ptr) &ddata);
-        ok      = flex_extend((flex_ptr) &ddata, oldsize + size);
-      }
-      else ok   = flex_alloc ((flex_ptr) &ddata, size);
-
-      if (!ok && !tried_once)
-      {
-        tried_once = 1;
-        image_gc(NULL, 0, 0);
-      }
-      else break;
-    }
-    while (!ok);
-  }
-
   /* Throw back an error if out of memory */
 
   if (!ok)
@@ -1053,11 +988,6 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     return &erb;
   }
 
-  #ifdef TRACE
-    flexcount += size;
-    if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-  #endif
-
   /* Increment the image counter, zero the contents of the image_info structure */
   /* and fill in some of the fields where contents are known now.               */
 
@@ -1067,16 +997,60 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   idata[nimages].x          = -1;
   idata[nimages].y          = -1;
 
-  idata[nimages].alloc      = size;
-  idata[nimages].ualloc     = ulen;
-  idata[nimages].isize      = 0;
-
   idata[nimages].token      = token;
   idata[nimages].last_used  = time(NULL);
   idata[nimages].xref       = xref;
 
   idata[nimages].background = !!background;
   idata[nimages].hadfiller  = 0;
+
+  /* Allocate space for the URL */
+
+  if (ulen)
+  {
+    tried_once = 0;
+
+    do
+    {
+      /* Allocate space for the image data */
+
+      idata[nimages].flex = malloc(sizeof(image_flex));
+
+      if (!idata[nimages].flex) ok = 0;
+      else                      ok = 1;
+
+      memset(idata[nimages].flex, 0, sizeof(image_flex));
+
+      if (ok) ok = flex_alloc((flex_ptr) &idata[nimages].flex->urldata, ulen);
+
+      if (!ok && !tried_once)
+      {
+        tried_once = 1;
+        image_gc(NULL, 0, 0);
+      }
+      else break;
+    }
+    while (!ok);
+  }
+
+  /* Again, throw back an error if out of memory */
+
+  if (!ok)
+  {
+    erb.errnum = Utils_Error_Custom_Message;
+
+    StrNCpy0(erb.errmess,
+             lookup_token("NoMemImg:There is not enough free memory for any new images (%0).",
+                          0,
+                          "1"));
+
+    return &erb;
+  }
+
+  #ifdef TRACE
+    flexcount += ulen;
+    if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+  #endif
 
   /* Set the 'delayed' flag if it's not a background image and */
   /* images are flagged as not being shown right now, or if it */
@@ -1098,11 +1072,11 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   }
 
   /* If there's data for a URL, copy it into the above allocated block */
-  /* and ImageLib about the new image.                                 */
+  /* and inform ImageLib of the new image.                             */
 
   if (ulen)
   {
-    strcpy(ddata + image_data_offset(nimages), url);
+    strcpy(idata[nimages].flex->urldata, url);
 
     #ifdef ALL_FAST
       idata[nimages].istore = NewImage(NULL, IMAGE_FAST);
@@ -1202,32 +1176,43 @@ _kernel_oserror * image_process_null(browser_data * b)
            fetches < choices.max_images
          )
       {
-        const char * referer = browser_current_url(b);
+        const char * referer = browser_base_url(b);
+        char       * url     = malloc(strlen(idata[image].flex->urldata) + 1);
 
-        e = html_get(ddata + image_data_offset(image),   /* Document to fetch                */
-                     NULL,                               /* Pointer to any extra data        */
-                     (int *) &idata[image].handle,       /* Place to return the fetch handle */
-                     URL_Method_http_GET,                /* Fetch method                     */
+        if (url)
+        {
+          strcpy(url, idata[image].flex->urldata);
 
-                     #ifndef SINGLE_USER
-                       user.name,                        /* User name for MailServ, if using */
-                     #else                               /* a multiuser version              */
-                       NULL,
-                     #endif
+          e = html_get(url,                          /* Document to fetch                */
+                       NULL,                         /* Pointer to any extra data        */
+                       (int *) &idata[image].handle, /* Place to return the fetch handle */
+                       URL_Method_http_GET,          /* Fetch method                     */
 
-                     0,                                  /* 0 = Don't parse fetched data     */
-                     !b->reloading,                      /* 1 = Proxy can be used, 0 = can't */
-                     referer);                           /* URL of referring page            */
+                       #ifndef SINGLE_USER
+                         user.name,                  /* User name for MailServ, if using */
+                       #else                         /* a multiuser version              */
+                         NULL,
+                       #endif
 
-        if (e)
+                       0,                            /* 0 = Don't parse fetched data     */
+                       !b->reloading,                /* 1 = Proxy can be used, 0 = can't */
+                       referer);                     /* URL of referring page            */
+          free(url);
+        }
+        else e = NULL; /* Suppress compiler warning */
+
+        if (!url || e)
         {
           /* Don't report it; countless 'I've failed' reports for */
           /* the very beginning of a fetch are not very helpful.  */
-          /* Particularly, 'file not found' for file fetches, can */
-          /* be major pain.                                       */
+          /* Particularly, 'file not found' for file fetches can  */
+          /* be major pain!                                       */
 
           image_abandon(b, image);
+          return NULL;
         }
+
+        url = NULL;
       }
     }
     while (image != lastimage && !idata[image].handle);
@@ -1330,7 +1315,7 @@ _kernel_oserror * image_process_null(browser_data * b)
           /* called, the sprite will plot slowly resulting in       */
           /* (typically) painfully slow redraws.                    */
 
-          if (image == idata[image].owner->background_image)
+          if (image == b->background_image) // idata[image].owner->background_image)
           {
             b->antialias_colour = redraw_backcol(b);
 
@@ -1373,8 +1358,12 @@ _kernel_oserror * image_process_null(browser_data * b)
 
         int       remn, sofar, waiting;
         int       realsize;
+        int       oldsize;
         HStream * tptr;
         void    * store;
+        char    * url = malloc(strlen(idata[image].flex->urldata) + 1);
+
+        if (url) strcpy(url, idata[image].flex->urldata);
 
         /* Go in with no store; only interested in new data, as  */
         /* anything fetched so far goes into the ddata block. */
@@ -1387,28 +1376,32 @@ _kernel_oserror * image_process_null(browser_data * b)
         /* block each time, it won't be able to see the whole header      */
         /* block and the fetch fails (well, the image library keeps       */
         /* waiting for something to happen). At the time of writing this  */
-        /* is demonstrated by the images at http://www.debenhams.co.uk/'. */
+        /* is demonstrated by the images at http://www.debenhams.co.uk/.  */
 
-        if (idata[image].isize)
+        if (idata[image].flex->fetchdata)
         {
-          int p = image_data_offset(image) + idata[image].ualloc;
+          int isize = flex_size(&idata[image].flex->fetchdata);
 
           /* Complain if the flex allocation fails, else copy the data across */
 
-          if (!flex_alloc(&store, idata[image].isize))
+          if (!flex_alloc(&store, isize))
           {
             image_abandon(b, image);
-
+            free(url);
             return NULL;
           }
           else
           {
+            int budge = flex_set_budge(0);
+
             #ifdef TRACE
-              flexcount += idata[image].isize;
+              flexcount += isize;
               if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
             #endif
 
-            memcpy(store, ddata + p, idata[image].isize);
+            memcpy(store, idata[image].flex->fetchdata, isize);
+
+            flex_set_budge(budge);
           }
         }
 
@@ -1446,17 +1439,23 @@ _kernel_oserror * image_process_null(browser_data * b)
 
         /* Call the fetch routine */
 
-        e = html_get_next_token(b,
-                                idata[image].handle,
-                                &remn,
-                                &sofar,
-                                &tptr,
-                                &waiting,
-                                &store,
-                                ddata + image_data_offset(image),
-                                1);
+        if (url)
+        {
+          e = html_get_next_token(b,
+                                  idata[image].handle,
+                                  &remn,
+                                  &sofar,
+                                  &tptr,
+                                  &waiting,
+                                  &store,
+                                  url,
+                                  1);
 
-        if (e)
+          free(url);
+        }
+        else e = NULL; /* Suppress compiler warning */
+
+        if (!url || e)
         {
           /* If there's an error, free the store and ditch the image */
 
@@ -1476,8 +1475,17 @@ _kernel_oserror * image_process_null(browser_data * b)
             if (tl & (1u<<15)) Printf("image_process_null: Exitting with error\n");
           #endif
 
-          return e;
+          /* Only return errors in STRICT_PARSER builds for similar reason to */
+          /* suppression of any errors from html_get above.                   */
+
+          #ifdef STRICT_PARSER
+            return e;
+          #else
+            return NULL;
+          #endif
         }
+
+        url = NULL;
 
         #ifdef TRACE_FETCH_STORE
 
@@ -1513,23 +1521,23 @@ _kernel_oserror * image_process_null(browser_data * b)
 
         /* How much data was added? */
 
-        if (store) realsize = flex_size(&store) - idata[image].isize; /* We already had 'isize' bytes before the fetcher was entered */
-        else       realsize = 0;
+        oldsize  = idata[image].flex->fetchdata ? flex_size(&idata[image].flex->fetchdata) : 0;
+        realsize = store                        ? flex_size(&store) - oldsize              : 0;
 
         /* If we've got data in the local store, copy it to the image store. */
 
-        if (realsize >= 0)
+        if (realsize > 0)
         {
-          int p, oldsize;
+          int ok;
+          int amount = flex_size(&store);
+          int budge;
 
-          /* oldsize holds the whole image data block size (for all images) */
+          /* Make enough room for the extra data */
 
-          oldsize = flex_size((flex_ptr) &ddata);
+          if (idata[image].flex->fetchdata) ok = flex_extend(&idata[image].flex->fetchdata, amount);
+          else                              ok = flex_alloc (&idata[image].flex->fetchdata, amount);
 
-          /* Allocate 'size' extra bytes, doing the relevant error handling */
-          /* code if the allocation fails                                   */
-
-          if (!flex_extend((flex_ptr) &ddata, oldsize + realsize))
+          if (!ok)
           {
             #ifdef TRACE
               flexcount -= flex_size(&store);
@@ -1559,26 +1567,27 @@ _kernel_oserror * image_process_null(browser_data * b)
 
           #endif
 
-          /* p points to the first byte after the data used by this image */
+          /* Copy the added data from the temporary store into the image's store */
 
-          p = image_data_offset(image) + idata[image].alloc;
+          budge = flex_set_budge(0);
 
-          /* Move all data from p up to the end of the block (as was, hence */
-          /* oldsize) along the block by size bytes, effectively creating   */
-          /* a gap of that many bytes just after this image's data. If p    */
-          /* = oldsize, this was the last image in the block and there's    */
-          /* no data above it to move (so don't do the memmove).            */
+          memcpy(((char *) idata[image].flex->fetchdata) + oldsize,
+                 ((char *) store)                        + oldsize,
+                 realsize);
 
-          if (p != oldsize) memmove(ddata + p + realsize, ddata + p, oldsize - p);
+          flex_set_budge(budge);
+        }
 
-          /* Copy the new data into that gap */
+        /* Free the temporary store, if it was used */
 
-          memcpy(ddata + p, ((char *) store) + idata[image].isize, realsize);
+        if (store)
+        {
+          #ifdef TRACE
+            flexcount -= flex_size(&store);
+            if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+          #endif
 
-          /* Update the image's image data and total data pointers */
-
-          idata[image].alloc += realsize;
-          idata[image].isize += realsize;
+          flex_free(&store);
         }
 
         /* Act according to the fetch status */
@@ -1587,54 +1596,45 @@ _kernel_oserror * image_process_null(browser_data * b)
         {
           case 1: break; /* Nothing happened yet, or the HTTP response header is still coming in */
           case 2: break; /* Redirected, we can ignore and wait for the fetcher to cope */
-          case 0: /* Not awaiting delivery (shouldn't happen in this context, but here 'just in case') */
-          case 3: /* We have some data */
-          {
-            int i, n, n1;
 
-            /* Flag that a fetch has started to happen */
+          case 0:        /* Not awaiting delivery (shouldn't happen in this context, but here 'just in case') */
+          case 3:        /* We have some data */
+          {
+            int offset, remaining, this_block;
+
+            /* Flag that a fetch is in progress (rather than headers still */
+            /* arriving, waiting, or redirecting)                          */
 
             idata[image].started = 1;
 
-            /* Set 'n' to the size of data that was fetched */
-
-            if (store) n = flex_size(&store);
-            else       n = 0;
-
             /* Increment the 'bytes so far' counter for the image */
 
-            idata[image].bytesgot += n;
+            idata[image].bytesgot += realsize;
 
             /* Push the data into the library, in chunks defined by */
             /* the size of 'buffer' (allocated as a char[] above).  */
+            /* We do this as we can't be sure the ImageLib Load     */
+            /* function is flex-safe, so the recently fetched data  */
+            /* is copiedied into a temporary, non-movable block.    */
 
-            i = 0;
+            offset    = oldsize;
+            remaining = realsize;
 
-            while (n)
+            while (remaining > 0)
             {
-              n1 = n;
+              this_block = remaining;
 
-              if (n1 > sizeof(buffer)) n1 = sizeof(buffer);
-              memcpy(buffer, (char *) store + i, n1);
+              if (this_block > sizeof(buffer)) this_block = sizeof(buffer);
+              memcpy(buffer, ((char *) idata[image].flex->fetchdata) + offset, this_block);
 
-              i += n1;
-              n -= n1;
+              offset    += this_block;
+              remaining -= this_block;
 
-              e = image_load_chunk(b, image, buffer, n1);
+              e = image_load_chunk(b, image, buffer, this_block);
 
               if (e)
               {
-                /* If there's an error, free the store and ditch the image */
-
-                if (store)
-                {
-                  #ifdef TRACE
-                    flexcount -= flex_size(&store);
-                    if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-                  #endif
-
-                  flex_free(&store);
-                }
+                /* If there's an error, ditch the image */
 
                 image_abandon(b, image);
 
@@ -1652,18 +1652,6 @@ _kernel_oserror * image_process_null(browser_data * b)
             toolbars_update_progress(b);
           }
           break;
-        }
-
-        /* Free the temporary store, if it was used */
-
-        if (store)
-        {
-          #ifdef TRACE
-            flexcount -= flex_size(&store);
-            if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-          #endif
-
-          flex_free(&store);
         }
 
         /* Closure of long 'if' that deals with either continuing  */
@@ -1690,105 +1678,98 @@ _kernel_oserror * image_process_null(browser_data * b)
 }
 
 /*************************************************/
-/* image_delete_image_entry()                    */
+/* image_mark_as_deleted()                       */
 /*                                               */
-/* Deletes an image_info structure from the      */
-/* array of structures. The cross reference      */
-/* image numbers of subsequent images are        */
-/* adjusted appropriately.                       */
+/* Mark an image as deleted, but don't remove it */
+/* from the image array yet. When all images     */
+/* that are to be deleted have been thus marked, */
+/* call image_purge_deleted_entries before       */
+/* continuing.                                   */
 /*                                               */
-/* The idata flex block is not shrunk; this is   */
-/* expected to be ,one externally, to avoid      */
-/* possibly freeing many small blocks            */
-/* consecutively (which can be slow with flex).  */
-/* E.g. see image_post_deletion_clearup.         */
+/* Does not free any memory at all, in the image */
+/* array or any other blocks. Does not cancel    */
+/* fetches or sort out other image references    */
+/* such as background_image fields in            */
+/* browser_data structures either, because this  */
+/* may be called when images are renumbered      */
+/* rather than wholly removed. If completely     */
+/* wiping an image, make sure you do all of that */
+/* *before* calling here.                        */
 /*                                               */
-/* NOTE. Since this removes items from the idata */
-/* array, if you're calling during a for() loop  */
-/* scanning that array, count *backwards* from   */
-/* nimages - 1 to 0. Otherwise, clearly, things  */
-/* will go horribly wrong.                       */
-/*                                               */
-/* Parameters: Image number to remove.           */
+/* Parameters: Number of the image to mark as    */
+/*             deleted.                          */
 /*************************************************/
 
-static void image_delete_image_entry(int image)
+static void image_mark_as_deleted(int i)
 {
-  browser_data * b;
-  int            i;
+  /* Try to set the flags up so that if for some horrific */
+  /* reason this image should end up being processed as a */
+  /* "live" item, it'll do minimum damage!                */
 
-  nimages--;
+  idata[i].handle    = 0;
+  idata[i].istore    = NULL;
 
-  if (lastimage == image) lastimage--;
-  if (lastimage >= nimages) lastimage = nimages - 1;
+  idata[i].deleted   = 1;
 
-  /* Only need to alter xref numbers or move flex data */
-  /* around if this wasn't the last image in the block */
+  idata[i].fetched   = 1;
+  idata[i].delayed   = 0;
+  idata[i].success   = 1;
 
-  if (image < nimages) /* (Not 'nimages - 1' as nimages has been decremented by this point) */
-  {
-    memmove(&idata[image], &idata[image + 1], sizeof(image_info) * (nimages - image));
+  idata[i].hadfirst  = 1;
+  idata[i].reformat  = 0;
+  idata[i].hadfiller = 0;
+  idata[i].canredraw = 0;
+  idata[i].priority  = 0;
 
-    for (i = image; i < nimages; i++)
-    {
-      #ifdef TRACE
-        if (idata[i].xref == image) Printf("JUST DELETED IMAGE %d WHICH WAS XREF'D AND SHOULDN'T HAVE BEEN\n", i);
-      #endif
+  idata[i].token     = NULL;
 
-      /* Did this cross reference an image which will have changed number? */
+  return;
+}
 
-      if (idata[i].xref > image) idata[i].xref--;
+/*************************************************/
+/* image_mark_as_gcable()                        */
+/*                                               */
+/* Mark an image as suitable for garbage         */
+/* collection. Such images may exist in the      */
+/* image array for as long as required and may   */
+/* be reclaimed as working items by calls to     */
+/* image_new_image.                              */
+/*                                               */
+/* Parameters: Number of the image to mark as    */
+/*             suitable for garbage collection.  */
+/*************************************************/
 
-      /* Update the associated token */
+static void image_mark_as_gcable(int i)
+{
+  idata[i].token = NULL;
 
-      #ifdef FAST_TOKEN_REFERENCE
+  /* Yup, that was all that needs doing for now */
 
-        if (idata[i].token)
-        {
-          idata[i].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
-          idata[i].token->flags |= ((i + 1) << FAST_TOKEN_REFERENCE_SHIFT);
-        }
-
-      #endif
-
-      /* Did this have a filler function registered for it? */
-
-      if (idata[i].hadfiller)
-      {
-        /* If so, then provided the filler function is still available, */
-        /* reregister with the new image number.                        */
-
-        if (!idata[i].istore->RegisterFiller)
-        {
-          idata[i].hadfiller = 0;
-        }
-        else
-        {
-          show_error_ret(image_register_filler(i));
-        }
-      }
-    }
-  }
-
-  /* Need to also alter browser_data structures' background image */
-  /* number fields.                                               */
-
-  b = last_browser;
-
-  while (b)
-  {
-    if (b->background_image > image) b->background_image--;
-
-    b = b->previous;
-  }
+  return;
 }
 
 /*************************************************/
 /* image_discard()                               */
 /*                                               */
-/* Discards all images for a given browser       */
-/* window, freeing the memory and shutting down  */
-/* any active fetches.                           */
+/* For a given browser, discard images:          */
+/*                                               */
+/* * Any images which are xrefed by another      */
+/*   browser have their ownership transferred    */
+/*   to that other browser and the xrefing item  */
+/*   is removed instead                          */
+/*                                               */
+/* * Any images owned by the given browser which */
+/*   just xref other images are removed          */
+/*                                               */
+/* * Any remaining images holding actual image   */
+/*   data are marked for garbage collection but  */
+/*   not removed immediately.                    */
+/*                                               */
+/* When an image is removed, all data, including */
+/* fetches, ImageLib info and external refs to   */
+/* the image number is sorted out. Remaining     */
+/* items in the image_info array may end up      */
+/* renumbered.                                   */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the images.           */
@@ -1799,7 +1780,7 @@ _kernel_oserror * image_discard(browser_data * b)
   int i, xref;
 
   #ifdef TRACE
-    if (tl & (1u<<15)) Printf("\nimage_discard: Called for %p\n\n", b);
+    if (tl & (1u<<15)) Printf("\nimage_discard: Called for %p. There are %d images.\n\n", b, nimages);
   #endif
 
   if (!nimages) return NULL;
@@ -1811,15 +1792,7 @@ _kernel_oserror * image_discard(browser_data * b)
 
   _swix(Hourglass_Start, _IN(0), 1);
 
-  #ifdef TRACE
-    if (tl & (1u<<15))
-    {
-      Printf("image_discard: First pass, checking for cross referencees owned by %p\n", b);
-      Printf("               There are %d images before this pass.\n\n", nimages);
-    }
-  #endif
-
-  /* Must go backwards because we can delete items from the array */
+  /* Must go backwards because we may delete items from the array */
   /* during the loop itself                                       */
 
   for (i = nimages - 1; i >= 0; i--)
@@ -1916,51 +1889,48 @@ _kernel_oserror * image_discard(browser_data * b)
       /* Delete the cross referencer */
 
       #ifdef TRACE
-        if (tl & (1u<<15)) Printf("image_discard: Deleting entry owned by %p that cross references image %d\n", idata[i].owner, idata[i].xref);
+        if (tl & (1u<<15)) Printf("image_discard: Deleting entry owned by %p that cross references image %d\n\n", idata[i].owner, idata[i].xref);
       #endif
 
-      image_remove_all_data(i);
-
-      /* Safe because we're counting through the array backwards */
-
-      image_delete_image_entry(i);
+      image_destroy(i);
     }
-  }
 
-  #ifdef TRACE
-    if (tl & (1u<<15))
+    /* OK, so this image isn't owned by another browser but cross referencing */
+    /* one owned by ourselves. A simpler case is where we own an image that   */
+    /* just cross references another - we can delete those straight away      */
+
+    else if (idata[i].owner == b)
     {
-      Printf("\nimage_discard: First pass complete, there are now %d images\n", nimages);
-      Printf("               Second pass, removing remaining images owned by %p\n\n", b);
-    }
-  #endif
-
-  /* Now delete any remaining images owned by the given browser */
-  /* - count backwards as we might remove items from the idata  */
-  /* array during the loop.                                     */
-
-  for (i = nimages - 1; i >= 0; i--)
-  {
-    if (idata[i].owner == b)
-    {
-      if (idata[i].istore)
+      if (idata[i].xref >= 0)
       {
-        /* Mark the image as suitable for garbage collection */
-
-        idata[i].token = NULL;
-
         #ifdef TRACE
-          if (tl & (1u<<15)) Printf("\nimage_discard: Image %d marked for GC but not deleted\n", i);
+          if (tl & (1u<<15)) Printf("image_discard: Image %d is a simple cross-referencer, deleting it\n\n", i);
         #endif
+
+        image_destroy(i);
       }
+
+      /* Next case; this is owned by us but holds real data. In this case, mark */
+      /* it as suitable for garbage collection but not as deleted.              */
+
+      else if (idata[i].bytesgot)
+      {
+        #ifdef TRACE
+          if (tl & (1u<<15)) Printf("image_discard: Image %d being marked for GC\n", i);
+        #endif
+
+        image_mark_as_gcable(i);
+      }
+
+      /* Last case: Not a cross referencer, but has no data yet - get rid of it */
+
       else
       {
-        image_remove_all_data(i);
-        image_delete_image_entry(i);
-
         #ifdef TRACE
-          if (tl & (1u<<15)) Printf("\nimage_discard: Image %d deleted\n", i);
+          if (tl & (1u<<15)) Printf("image_discard: Image does not cross reference but has no bytes fetched for it yet; so deleting it\n\n", i);
         #endif
+
+        image_destroy(i);
       }
     }
   }
@@ -1968,13 +1938,13 @@ _kernel_oserror * image_discard(browser_data * b)
   _swix(Hourglass_Off, 0);
 
   #ifdef TRACE
-    if (tl & (1u<<15)) Printf("\nimage_discard: Second pass complete, there are now %d images\n\n", nimages);
+    if (tl & (1u<<15)) Printf("image_discard: Delete pass complete; there are %d images. Calling clearup function.\n\n", nimages);
   #endif
 
   image_post_deletion_clearup();
 
   #ifdef TRACE
-    if (tl & (1u<<15)) Printf("image_discard: Successful\n\n");
+    if (tl & (1u<<15)) Printf("\nimage_discard: Successful. Post-clearup, there are %d images.\n\n", nimages);
   #endif
 
   return NULL;
@@ -1983,39 +1953,26 @@ _kernel_oserror * image_discard(browser_data * b)
 /*************************************************/
 /* image_destroy()                               */
 /*                                               */
-/* image_discard gets rid of cross referencing   */
-/* images and transfers ownership of items that  */
-/* are owned by the given browser but cross      */
-/* referenced by another to that other. It does  */
-/* not delete actual, non-cross-referencing      */
-/* images owned by the given browser though, but */
-/* instead marks them as suitable for later      */
-/* garbage collection.                           */
+/* Close down any fetch associated with an       */
+/* image, deal with any references to it (e.g.   */
+/* the background_image field of a browser_data  */
+/* structure), and remove all data except for    */
+/* the actual image_info array entry. The item   */
+/* is marked as deleted.                         */
 /*                                               */
-/* image_delete_image_entry is used to remove an */
-/* item from the idata array but does not deal   */
-/* with ImageLib data or ongoing fetches.        */
-/*                                               */
-/* To actually kill an image off completely, use */
-/* this function. It's called by the garbage     */
-/* collector image_gc and used to be part of     */
-/* image_discard before the image garbage        */
-/* collection system existed.                    */
-/*                                               */
-/* Be careful what you delete (!) and remember   */
-/* to call image_post_deletion_clearup when all  */
-/* the images you want to get rid of have been   */
-/* removed by this function.                     */
-/*                                               */
-/* NB - this calls image_delete_image_entry, so  */
-/* the same restrictions on scanning through     */
-/* the idata array as for that function apply.   */
+/* Callers should be aware of the need to call   */
+/* image_post_deletion_clearup as soon as        */
+/* possible after a round of image deletions.    */
 /*                                               */
 /* Parameters: Number of the image to remove.    */
 /*************************************************/
 
 static void image_destroy(int image)
 {
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_destroy: Called for image %d\n", image);
+  #endif
+
   /* If the image was being fetched, close that session */
 
   if (idata[image].handle)
@@ -2047,71 +2004,289 @@ static void image_destroy(int image)
       idata[image].istore -> Delete(idata[image].istore);
 
     #endif
+
+    idata[image].istore = NULL;
   }
 
+  /* Get rid of associated data except the image_info struct */
+
   image_remove_all_data(image);
-  image_delete_image_entry(image);
+
+  /* Clear the background image field of the owner if necessary */
+
+  if (idata[image].owner->background_image == image)
+  {
+    idata[image].owner->background_image = -1;
+  }
+
+  /* Mark the image as deleted */
+
+  image_mark_as_deleted(image);
 
   #ifdef TRACE
-    if (tl & (1u<<15)) Printf("\nimage_destroy: Image %d deleted\n", image);
+    if (tl & (1u<<15)) Printf("image_destroy: Image %d deleted\n\n", image);
   #endif
 }
 
 /*************************************************/
-/* image_post_deletion_clearup()                 */
+/* image_renumber()                              */
 /*                                               */
-/* After deleting a set of images or image_info  */
-/* structures which had no associated data in    */
-/* ImageLib, call this to tidy up - deregister   */
-/* the animation handler, resize the idata flex  */
-/* block, etc.                                   */
+/* Move an image in the image array. Copies      */
+/* over the structure from new position to old   */
+/* and marks the old as deleted.                 */
+/*                                               */
+/* Destination image number must be a deleted    */
+/* image!                                        */
+/*                                               */
+/* Parameters: Image's current number;           */
+/*                                               */
+/*             Image's desired number.           */
+/*                                               */
+/* Returns:    1 if the item was renumbered, 0   */
+/*             if there was a problem (e.g.      */
+/*             parameters out of range,          */
+/*             destination image not deleted,    */
+/*             etc.).                            */
 /*************************************************/
 
-static void image_post_deletion_clearup(void)
+static int image_renumber(int old, int new)
 {
-  int newsize, i;
+  if (
+       old < 0        ||
+       new < 0        ||
+       old >= nimages ||
+       new >= nimages ||
+       old == new
+     )
+     return 0;
 
-  _swix(Hourglass_Start, _IN(0), 1);
-
-  /* If there is an animation handler present, but no animated */
-  /* images remain, remove that handler.                       */
-
-  if (animhandler)
+  if (!idata[new].deleted)
   {
-    int found = 0;
-
     #ifdef TRACE
-      if (tl & (1u<<15)) Printf("image_post_deletion_clearup: There is an animation handler present; checking to see if it can be removed\n");
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "In image_renumber, %d can't be renumbered to %d as the latter has not been deleted!",
+              old,
+              new);
+
+      show_error_ret(&erb);
+
     #endif
+
+    return 0;
+  }
+
+  /* First off, repoint any images which xref this one, if this */
+  /* image has image data (else it can't be xref'd)             */
+
+  if (idata[old].istore)
+  {
+    int i;
 
     for (i = 0; i < nimages; i++)
     {
-      if (idata[i].istore && idata[i].istore->animated)
+      if (idata[i].xref == old) idata[i].xref = new;
+    }
+  }
+
+  /* Sort out background images */
+
+  if (idata[old].owner->background_image == old) idata[old].owner->background_image = new;
+
+  /* Copy the old structure into the new position */
+
+  idata[new] = idata[old];
+
+  /* Reregister filler functions, if necessary */
+
+  if (idata[new].hadfiller)
+  {
+    /* If so, then provided the filler function is still available, */
+    /* reregister with the new image number.                        */
+
+    if (!idata[new].istore->RegisterFiller)
+    {
+      idata[new].hadfiller = 0;
+    }
+    else
+    {
+      show_error_ret(image_register_filler(new));
+    }
+  }
+
+  /* Update the associated token */
+
+  #ifdef FAST_TOKEN_REFERENCE
+
+    if (idata[new].token)
+    {
+      idata[new].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+      idata[new].token->flags |= ((new + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+    }
+
+  #endif
+
+  /* Mark the old item as deleted. */
+
+  image_mark_as_deleted(old);
+
+  /* Finished */
+
+  return 1;
+}
+
+/*************************************************/
+/* image_purge_deleted_entries()                 */
+/*                                               */
+/* Gets rid of items in the image array which    */
+/* are marked as deleted by renumbering things   */
+/* to fill holes and then shrinking the image    */
+/* array block.                                  */
+/*                                               */
+/* Assumes nimages is set up to include all of   */
+/* the image array entries (i.e. it hasn't been  */
+/* decremented yet) and decrements it before     */
+/* exitting.                                     */
+/*                                               */
+/* Images marked as deleted but still in the     */
+/* image array MUST ALWAYS BE REMOVED by this    */
+/* function before anything else goes on after a */
+/* round of deleting things. Deleted images will */
+/* cause significant problems if run through the */
+/* rest of the image system...!                  */
+/*                                               */
+/* This function does not touch any allocation   */
+/* blocks other than idata, holding the array of */
+/* image_info structures. The caller should      */
+/* clean up any other image related data when    */
+/* going through images marking them as deleted. */
+/*                                               */
+/* Returns:    1 if any items were deleted (so   */
+/*             nimages will have been            */
+/*             decremented appropriately), else  */
+/*             0.                                */
+/*************************************************/
+
+static int image_purge_deleted_entries(void)
+{
+  int first_space = -1;
+  int last_live   = -1;
+  int finished    = 0;
+
+  int i;
+  int newsize;
+
+  #ifdef TRACE
+    if (tl && (1u<<15)) Printf("image_purge_deleted_entries: Called\n");
+  #endif
+
+  /* Shuffle non-deleted items from higher in the image */
+  /* array down into free places currently held by      */
+  /* deleted items lower down. On the whole, we're      */
+  /* likely to shuffle less data and renumber fewer     */
+  /* images this way than by a dumb "shuffle data down  */
+  /* over the deleted hole" approach.                   */
+
+  do
+  {
+    /* Find the first deleted item in the array */
+
+    for (
+          i = first_space == -1 ? 0 : first_space;
+          i < nimages;
+          i++
+        )
+    {
+      if (idata[i].deleted)
       {
-        found = 1;
+        first_space = i;
         break;
       }
     }
 
-    if (!found)
+    if (first_space == -1)
     {
       #ifdef TRACE
-        if (tl & (1u<<15)) Printf("image_post_deletion_clearup: Removing animation handler\n\n");
+        if (tl && (1u<<15)) Printf("image_purge_deleted_entries: No images are marked as deleted, exitting\n");
       #endif
 
-      deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) image_animate_images, NULL);
-      animhandler = 0;
+      return 0;
     }
 
-    #ifdef TRACE
+    /* Find the last non-deleted (live) item in the array */
 
+    for (
+          i = last_live == -1 ? (nimages - 1) : last_live;
+          i >= 0;
+          i--
+        )
+    {
+      if (!idata[i].deleted)
+      {
+        last_live = i;
+        break;
+      }
+    }
+
+    /* If we can find a live image, proceed */
+
+    if (last_live != -1)
+    {
+      if (first_space > last_live)
+      {
+        /* If the first space is above the last live item, we */
+        /* can just shrink the array.                         */
+
+        nimages = first_space; /* I.e. last_live + 1 */
+
+        #ifdef TRACE
+
+          if (first_space - last_live != 1)
+          {
+            erb.errnum = Utils_Error_Custom_Normal;
+
+            StrNCpy0(erb.errmess,
+                     "You're imagining this error from image_purge_deleted_entries, because it is impossible for it to occur.");
+
+            show_error_ret(&erb);
+          }
+
+        #endif
+
+        finished = 1;
+      }
       else
       {
-        if (tl & (1u<<15)) Printf("image_post_deletion_clearup: The handler is still required\n\n");
-      }
+        /* If the first space is below the last live item, must start */
+        /* moving things around. Ho hum.                              */
 
-    #endif
+        #ifdef TRACE
+          if (tl && (1u<<15)) Printf("image_purge_deleted_entries: Renumbering %d to %d\n", last_live, first_space);
+        #endif
+
+        image_renumber(last_live, first_space);
+      }
+    }
+
+    /* If there are no live images, can exit the loop */
+
+    else
+    {
+      #ifdef TRACE
+        if (tl && (1u<<15)) Printf("image_purge_deleted_entries: There are no images left\n");
+      #endif
+
+      nimages  = 0;
+      finished = 1;
+    }
   }
+  while (!finished);
+
+  /* Check lastimage is OK */
+
+  if (lastimage >= nimages) lastimage = nimages - 1;
 
   /* Ensure the image_info data block matches the size of the images now present */
 
@@ -2130,9 +2305,84 @@ static void image_post_deletion_clearup(void)
 
   if (idata)
   {
-    if (newsize) flex_extend((flex_ptr) &idata, newsize);
-    else         flex_free((flex_ptr) &idata);
+    if (newsize) flex_extend ((flex_ptr) &idata, newsize);
+    else         flex_free   ((flex_ptr) &idata);
   }
+
+  #ifdef TRACE
+    if (tl && (1u<<15)) Printf("image_purge_deleted_entries: Successful, nimages now %d\n", nimages);
+  #endif
+
+  return 1;
+}
+
+/*************************************************/
+/* image_post_deletion_clearup()                 */
+/*                                               */
+/* After deleting a set of images or image_info  */
+/* structures which had no associated data in    */
+/* ImageLib, call this to tidy up - deregister   */
+/* the animation handler, resize the idata flex  */
+/* block, etc.                                   */
+/*************************************************/
+
+static void image_post_deletion_clearup(void)
+{
+  int i;
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_post_deletion_clearup: Called\n");
+  #endif
+
+  _swix(Hourglass_Start, _IN(0), 1);
+
+  /* Compact the image_info array and shrink the idata flex block; */
+  /* if the function returns 0 we've no work to do here            */
+
+  if (image_purge_deleted_entries())
+  {
+    /* If there is an animation handler present, but no animated */
+    /* images remain, remove that handler.                       */
+
+    if (animhandler)
+    {
+      int found = 0;
+
+      #ifdef TRACE
+        if (tl & (1u<<15)) Printf("image_post_deletion_clearup: There is an animation handler present; checking to see if it can be removed\n");
+      #endif
+
+      for (i = 0; i < nimages; i++)
+      {
+        if (idata[i].istore && idata[i].istore->animated)
+        {
+          found = 1;
+          break;
+        }
+      }
+
+      if (!found)
+      {
+        #ifdef TRACE
+          if (tl & (1u<<15)) Printf("image_post_deletion_clearup: Removing animation handler\n\n");
+        #endif
+
+        deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) image_animate_images, NULL);
+        animhandler = 0;
+      }
+
+      #ifdef TRACE
+
+        else
+        {
+          if (tl & (1u<<15)) Printf("image_post_deletion_clearup: The handler is still required\n\n");
+        }
+
+      #endif
+    }
+  }
+
+  /* Trace build sanity check */
 
   #ifdef FAST_TOKEN_REFERENCE
     #ifdef TRACE
@@ -2155,6 +2405,10 @@ static void image_post_deletion_clearup(void)
 
   _swix(Hourglass_Off, 0);
 
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_post_deletion_clearup: Successful\n");
+  #endif
+
   return;
 }
 
@@ -2172,6 +2426,12 @@ static void image_post_deletion_clearup(void)
 /* unique ID is given for image removal, the     */
 /* caller must remember to invoke                */
 /* image_post_deletion_clearup.                  */
+/*                                               */
+/* It is assumed that for any images marked as   */
+/* suitable for GC, the owner browser still      */
+/* exists. Consequently, this function MUST be   */
+/* called for a given browser if that browser is */
+/* about to be shut down.                        */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the images to collect */
@@ -2213,8 +2473,6 @@ _kernel_oserror * image_gc(browser_data * b, unsigned int uid, int remove_js_too
         clearup = 1;
       }
     }
-
-    if (clearup) image_post_deletion_clearup();
   }
 
   /* Find the given unique ID */
@@ -2273,6 +2531,8 @@ _kernel_oserror * image_gc(browser_data * b, unsigned int uid, int remove_js_too
 
     #endif
   }
+
+  if (clearup) image_post_deletion_clearup();
 
   return NULL;
 }
@@ -3014,8 +3274,8 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
           {
             /* Ignore errors, this isn't vital */
 
-            imghistory_record((const char **) &ddata,
-                              image_data_offset(i),
+            imghistory_record((const char **) &idata[i].flex->urldata,
+                              0,
                               idata[i].istore->width_os,
                               idata[i].istore->height_os);
           }
@@ -3074,8 +3334,8 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
               {
                 /* Ignore errors, this isn't vital */
 
-                imghistory_record((const char **) &ddata,
-                                  image_data_offset(i),
+                imghistory_record((const char **) &idata[i].flex->urldata,
+                                  0,
                                   idata[i].istore->width_os,
                                   idata[i].istore->height_os);
               }
@@ -3393,23 +3653,10 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   /* The image may exist in a table, and we should check what */
   /* background colour to draw if this is the case.           */
 
-  if (idata[image].token && idata[image].token->parent)
+  if (idata[image].token && b->use_source_cols)
   {
-    table_headdata * head  = idata[image].token->parent;
-    table_row      * row   = NULL;
-    table_stream   * table = NULL;
-
-    if (head) row   = head->parent;
-    if (row)  table = row->parent;
-
-    if (table)
-    {
-      if (TABLE_HAS_BGCOL(table)) bgcolour = TABLE_BGCOL(table), noplot = 1;
-
-      /* Individual cells can override the table */
-
-      if (TD_HAS_BGCOL(head))     bgcolour = TD_BGCOL(head),     noplot = 1;
-    }
+    int effective_bgcolour = tokenutils_background_colour(b, idata[image].token);
+    if (effective_bgcolour > -1) bgcolour = effective_bgcolour, noplot = 1;
   }
 
   /* We may still have no defined background colour, in which */
@@ -3537,6 +3784,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
     float tempx,  tempy;
     float tempw,  temph;
     int   htop;
+    int   oimage;
 
     #ifdef TRACE
       if (tl & (1u<<15)) Printf("image_fill_background: Plotting scaled background\n");
@@ -3588,12 +3836,18 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
     {
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
+        oimage          = image_redrawing;
+        image_redrawing = bimage;
+
         e = (idata[bimage].istore -> Render(idata[bimage].istore,
                                             x,
                                             y,
                                             100,
                                             w,
                                             h));
+
+        image_redrawing = oimage;
+
         if (e) break;
       }
 
@@ -3606,6 +3860,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   {
     BBox redraw;
     int  htop;
+    int  oimage;
 
     #ifdef TRACE
       if (tl & (1u<<15)) Printf("image_fill_background: Plotting unscaled background\n");
@@ -3640,12 +3895,17 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
     {
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
+        oimage          = image_redrawing;
+        image_redrawing = bimage;
+
         e = (idata[bimage].istore -> Render(idata[bimage].istore,
                                             x,
                                             y,
                                             100,
                                             -1,
                                             -1));
+        image_redrawing = oimage;
+
         if (e) break;
       }
 
@@ -3702,11 +3962,10 @@ _kernel_oserror * image_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStr
   /* image for the given token, which may cross reference 'image', which */
   /* holds the actual render data.                                       */
 
-  image = image_get_token_image_actual(b, token);
+  image = actual = image_get_token_image_actual(b, token);
 
   if (image < 0) return NULL;
 
-  actual = image;
   if (idata[actual].xref >= 0) image = idata[actual].xref;
 
   /* If the image has a fetched width and height, */
@@ -3876,7 +4135,7 @@ int image_tile_window(browser_data * b, WimpRedrawWindowBlock * r, int xorigin, 
     for (x = xmin; x <= r->redraw_area.xmax; x += w)
     {
       browser_redrawing = b;
-      image_redrawing   = image;
+      image_redrawing   = b->background_image;
 
       e = idata[image].istore -> Render(idata[image].istore,
                                         x,
@@ -4039,38 +4298,6 @@ _kernel_oserror * image_mode_change(void)
   #endif
 
   return NULL;
-}
-
-/*************************************************/
-/* image_data_offset()                           */
-/*                                               */
-/* Returns the offset into the ddata block of    */
-/* the data associated with a given image.       */
-/*                                               */
-/* Parameters: An image number, from 0 to        */
-/*             nimages - 1.                      */
-/*                                               */
-/* Returns:    Pointer to the data associated    */
-/*             with that image (as a char *).    */
-/*************************************************/
-
-static int image_data_offset(int image)
-{
-  int i, count = 0;
-
-  #ifdef TRACE
-    if (tl & (1u<<15)) Printf("image_data_offset: Called for image %d\n",image);
-  #endif
-
-  if (image <= 0) return 0; /* Image 0's data offset will be zero... */
-
-  for (i = 0; i < image; count += idata[i].alloc, i++);
-
-  #ifdef TRACE
-    if (tl & (1u<<15)) Printf("image_data_offset: Successful\n");
-  #endif
-
-  return count;
 }
 
 /*************************************************/
@@ -4249,7 +4476,7 @@ int image_total_bytes_fetched(browser_data * b)
 
     for (image = 0; image < nimages; image++)
     {
-      if (idata[image].owner == b) count += idata[image].bytesgot;
+      if (idata[image].owner == b && idata[image].token) count += idata[image].bytesgot;
     }
   }
 
@@ -4487,7 +4714,7 @@ static int image_get_token_image_xref(browser_data * b, HStream * token)
     /* is the one with render data attached, not    */
     /* just a cross reference image.                */
 
-    if (found >= 0)
+    if (found >= 0 && found < nimages)
     {
       if (idata[found].xref >= 0) found = idata[found].xref;
     }
@@ -4856,8 +5083,8 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
 
   if (real_width <= 0 && real_height <= 0)
   {
-    imghistory_return_size((const char **) &ddata,
-                           image_data_offset(actual),
+    imghistory_return_size((const char **) &idata[actual].flex->urldata,
+                           0,
                            &real_width,
                            &real_height);
   }
@@ -5286,7 +5513,6 @@ int image_set_token_image_position(browser_data * b, HStream * t, int x, int y)
 
 void image_get_background_image_url(browser_data * b, char * buffer, int size)
 {
-  int offset;
   int old_budge;
   int image = b ? b->background_image : -1;
 
@@ -5296,17 +5522,13 @@ void image_get_background_image_url(browser_data * b, char * buffer, int size)
 
   if (size < 2 || image < 0 || image >= nimages) return;
 
-  /* Find the offset of the URL in the 'ddata' block */
-
-  offset = image_data_offset(image);
-
   /* Lock flex */
 
   old_budge = flex_set_budge(0);
 
   /* Copy the URL in, ensuring termination */
 
-  strncpy(buffer, ddata + offset, size);
+  strncpy(buffer, idata[image].flex->urldata, size);
   buffer[size - 1] = 0;
 
   /* Restore flex's previous budge state */
@@ -5353,7 +5575,7 @@ void image_convert_to_pixels(browser_data * b, HStream * token, int * x, int * y
   /* If the library has got enough information to fill in the */
   /* width of the image, proceed with the conversion          */
 
-  if (image >= 0 && idata[image].istore->width > 0)
+  if (image >= 0 && idata[image].istore && idata[image].istore->width > 0)
   {
     *x = *x * idata[image].istore->width  / idata[image].istore->width_os;
     *y = *y * idata[image].istore->height / idata[image].istore->height_os;
@@ -5543,7 +5765,8 @@ int image_token_can_be_saved_as_sprite(browser_data * b, HStream * image)
 
 _kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * image)
 {
-  int i;
+  int               im, i;
+  _kernel_oserror * e;
 
   if (!path || !*path) return NULL;
 
@@ -5551,8 +5774,11 @@ _kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * i
 
   /* Find the image number */
 
-  if (!image) i = b->background_image;
-  else        i = image_get_token_image_xref(b, image);
+  if (!image) im = b->background_image;
+  else        im = image_get_token_image_actual(b, image);
+
+  if (idata[im].xref >= 0) i = idata[im].xref;
+  else                     i = im;
 
   /* Must have image data... */
 
@@ -5574,9 +5800,17 @@ _kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * i
 
   /* Export the image */
 
-  return idata[i].istore -> DumpSprite(idata[i].istore,
-                                       path,
-                                       -1);
+  browser_redrawing = b;
+  image_redrawing   = im;
+
+  e = idata[i].istore -> DumpSprite(idata[i].istore,
+                                    path,
+                                    -1);
+
+  browser_redrawing = NULL;
+  image_redrawing   = -1;
+
+  return e;
 }
 
 /*************************************************/
@@ -5623,7 +5857,7 @@ int image_sprite_size(browser_data * b, HStream * image)
 _kernel_oserror * image_export_original(char * path, browser_data * b, HStream * image)
 {
   char url[Limits_URL];
-  int  i, offset;
+  int  i;
 
   if (!path || !*path) return NULL;
 
@@ -5636,9 +5870,7 @@ _kernel_oserror * image_export_original(char * path, browser_data * b, HStream *
 
   /* Must have image data... */
 
-  offset = image_data_offset(i);
-
-  if (!ddata[offset])
+  if (!idata[i].flex->urldata)
   {
     #ifdef TRACE
 
@@ -5656,7 +5888,7 @@ _kernel_oserror * image_export_original(char * path, browser_data * b, HStream *
 
   /* Start a fetch for this URL */
 
-  strncpy(url, ddata + offset, sizeof(url));
+  strncpy(url, idata[i].flex->urldata, sizeof(url));
   url[sizeof(url) - 1] = 0;
 
   RetError(windows_create_browser(url,
@@ -5872,9 +6104,6 @@ int image_to_draw_file(browser_data * b, WimpRedrawWindowBlock * r, HStream * to
 
 //    int               image_size = 0;
 
-    browser_redrawing = b;
-    image_redrawing   = actual;
-
     if (!dont_create || !unique_name)
     {
       unique_name = malloc(Limits_OS_Pathname);
@@ -5885,9 +6114,15 @@ int image_to_draw_file(browser_data * b, WimpRedrawWindowBlock * r, HStream * to
 
         /* Output the sprite, skipping the first 12 bytes of sprite area header */
 
+        browser_redrawing = b;
+        image_redrawing   = actual;
+
         e = idata[image].istore -> DumpSprite(idata[image].istore,
                                               unique_name,
                                               -1);
+
+        browser_redrawing = NULL;
+        image_redrawing   = -1;
       }
     }
 
@@ -5943,6 +6178,9 @@ int image_to_draw_file(browser_data * b, WimpRedrawWindowBlock * r, HStream * to
       unique_name = NULL;
     }
 
+//    browser_redrawing = b;
+//    image_redrawing   = actual;
+//
 //    e       = idata[image].istore -> StartExport(idata[image].istore, &image_size);
 //    ok      = 1;
 //
@@ -5960,11 +6198,11 @@ int image_to_draw_file(browser_data * b, WimpRedrawWindowBlock * r, HStream * to
 //    }
 //
 //    e = idata[image].istore -> EndExport(idata[image].istore);
+//
+//    browser_redrawing = NULL;
+//    image_redrawing   = -1;
 
     /* Flag if we succeeded */
-
-    browser_redrawing = NULL;
-    image_redrawing   = -1;
 
     if (!e && ok) plotted = 1;
   }
@@ -6056,9 +6294,15 @@ int image_draw_file_size(browser_data * b, HStream * token, int dont_delete)
     {
       protocols_util_make_unique_name(unique_name, Limits_OS_Pathname);
 
+      browser_redrawing = b;
+      image_redrawing   = actual;
+
       e = idata[image].istore -> DumpSprite(idata[image].istore,
                                             unique_name,
                                             -1);
+
+      browser_redrawing = NULL;
+      image_redrawing   = -1;
     }
 
     if (!e && unique_name)
@@ -6150,8 +6394,8 @@ int image_tile_to_draw(browser_data * b, WimpRedrawWindowBlock * r, int xorigin,
 
   /* Work out the coordinates over which to tile the image */
 
-  xmin = coords_x_toworkarea(r->redraw_area.xmin,r);
-  ymax = coords_y_toworkarea(r->redraw_area.ymax,r);
+  xmin = coords_x_toworkarea(r->redraw_area.xmin, r);
+  ymax = coords_y_toworkarea(r->redraw_area.ymax, r);
 
   xmin -= ((xmin - xorigin) % w);
   ymax -= ((ymax - yorigin) % h) + 1;
@@ -6181,9 +6425,15 @@ int image_tile_to_draw(browser_data * b, WimpRedrawWindowBlock * r, int xorigin,
 
   protocols_util_make_unique_name(name, sizeof(name));
 
+  browser_redrawing = b;
+  image_redrawing   = b->background_image;
+
   e = idata[image].istore -> DumpSprite(idata[image].istore,
                                         name,
                                         -1);
+
+  browser_redrawing = NULL;
+  image_redrawing   = -1;
 
   if (!e)
   {
@@ -6256,14 +6506,7 @@ int image_tile_to_draw(browser_data * b, WimpRedrawWindowBlock * r, int xorigin,
 
           /* Write out the image */
 
-          browser_redrawing = b;
-          image_redrawing   = image;
-
           ok = savedraw_write_bytes(block, image_size);
-
-          browser_redrawing = NULL;
-          image_redrawing   = -1;
-
           if (!ok) goto image_tile_to_draw_exit;
 
           #ifdef STRICT_PARSER
