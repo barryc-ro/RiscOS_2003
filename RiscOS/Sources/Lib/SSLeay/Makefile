@@ -22,7 +22,7 @@ WPFLAGS=FR~C~V
 # switch all the options just by changing them here, cleaning everything, and rebuilding.
 
 INCLUDES = C:SSLeay,TCPIPLibs:,C:
-DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC
+DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA
 EFLAGS   = -zM -zps1 -Wpand
 CC       = cc
 
