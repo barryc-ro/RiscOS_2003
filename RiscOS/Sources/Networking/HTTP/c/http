@@ -83,20 +83,14 @@
 #ifndef NO_SECURE
 
 #define HEADER_DES_LOCL_H	/* prevents crypt() warning */
-#include "SSL/objects.h"		/* for NID */
-#include "SSL/pem.h"		/* for PEM_ */
-#include "SSL/rsa.h"
+#include "objects.h"		/* for NID */
+#include "pem.h"		/* for PEM_ */
+#include "rsa.h"
 
+#include "ssl.h"
+#include "x509.h"
 
-#include "SSL/ssl.h"
-#include "SSL/x509.h"
-
-/* port routines */
-extern _kernel_oserror *SSL_LibraryPresent( void );
-extern int SSL_verified(SSL *session);
-extern void riscos_ZM_Initialise( void );
-extern void *riscos_ZM_realloc( void *ptr, size_t newsize );
-extern void riscos_SSLLib_Init( void );
+#include "crypto.h"
 
 #define CERT_VERIFY_DEPTH 10
 #endif
@@ -109,7 +103,7 @@ extern void riscos_SSLLib_Init( void );
 #if DEBUG
 #include "err.h"
 #ifndef NO_SECURE
-#include "SSL/buffer.h"
+#include "buffer.h"
 extern void ERR_load_crypto_strings(void);
 extern void ERR_print_errors_fp(FILE *);
 #endif
@@ -119,13 +113,31 @@ extern void ERR_print_errors_fp(FILE *);
 #include "csfs.h"
 #endif
 
-
 #ifndef FILETYPE_HTML
 #define FILETYPE_HTML	0xfaf
 #endif
 
+#ifndef NO_SECURE
+#if defined(SSLEAY_VERSION_NUMBER) && SSLEAY_VERSION_NUMBER >= 0x0800
+# define SSLEAY8
+# define SSL_VERSION	 3			/* current version of SSL supported */
+# define SSL_errno()     errno
+# define SSL_verified(s) (0)	    	    	/* for now */
+#else
+# undef SSLEAY8
+# define SSL_VERSION	 2			/* current version of SSL supported */
+
+/* port routines */
+extern _kernel_oserror *SSL_LibraryPresent( void );
+extern int SSL_verified(SSL *session);
+extern void riscos_ZM_Initialise( void );
+extern void *riscos_ZM_realloc( void *ptr, size_t newsize );
+extern void riscos_SSLLib_Init( void );
+
+#endif
+#endif
+
 #define SSL_VERSION_VAR	"HTTP$SSLVersion"	/* this variable gets set with the next value */
-#define SSL_VERSION	2			/* current version of SSL supported */
 
 /**********************************************************************/
 /*
@@ -146,7 +158,7 @@ extern void ERR_print_errors_fp(FILE *);
 
 #define REOPEN_ON_SETTYPE	1
 #define SEPARATE_ALLOW_WRITE	1
-#define ALLOW_DIRECT_CALL_FROM_INETEVENT 1
+#define ALLOW_DIRECT_CALL_FROM_INETEVENT 0
 
 /**********************************************************************/
 /*
@@ -678,8 +690,12 @@ extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
     
 #ifndef NO_SECURE
     ssl_present = TRUE;
+
+#ifndef SSLEAY8
     riscos_ZM_Initialise();
     riscos_SSLLib_Init();
+#endif
+
 #if DEBUG && !defined(REMOTE_DEBUG)
     {
 	extern FILE *SSL_ERR;
@@ -688,20 +704,45 @@ extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
 #endif
 
     {
-        ssl_context = SSL_CTX_new();
         SSL_load_error_strings();
+
+#ifdef SSLEAY8
+    	SSLeay_add_ssl_algorithms();
+
+        ssl_context = SSL_CTX_new( SSLv2_client_method() );
+#else
+        ssl_context = SSL_CTX_new();
+#endif
+
         if ( ssl_context )
         {
 /*          X509_add_cert_dir( ssl_context->cert, "SSL:certs",
                                X509_FILETYPE_PEM );
             SSL_load_verify_locations( ssl_context, NULL, "SSL:certs" );*/
+
+#ifdef SSLEAY8
+            SSL_CTX_set_default_verify_paths( ssl_context );
+#else
             SSL_set_default_verify_paths( ssl_context );
+#endif
             SSL_CTX_set_cipher_list( ssl_context, getenv( "SSL$CipherList" ) );
         }
         else
+        {
+#if DEBUG
+    	    fdebugf(log_file, "** ssl_context returned null\n");
+    	    fdebugf(log_file, "** crypto error log\n");
+	    ERR_print_errors_fp(log_file);
+	    fdebugf(log_file, "** end\n");
+#endif
             ssl_present = FALSE;
+        }
     }
+# if SSL_VERSION == 2
     _kernel_setenv(SSL_VERSION_VAR, ssl_present ? "2" : "0");
+# else  
+    _kernel_setenv(SSL_VERSION_VAR, ssl_present ? "3" : "0");
+# endif
 #else
     _kernel_setenv(SSL_VERSION_VAR, "0");
 #endif
@@ -968,8 +1009,11 @@ extern int inetevent_handler(_kernel_swi_regs *regs, void *pw)
             if ( c )
             {
 #if ALLOW_DIRECT_CALL_FROM_INETEVENT
-		if (inet_version >= 500)
+		if (inet_version >= 500 && threaded == 0 && callback_pending == 0)
+		{
 		    http_prosecute( c );
+		    threaded = 0;
+		}
 		else
 #endif
 		{
@@ -1463,16 +1507,24 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 {
                     char *str;
 
-                        str=X509_NAME_oneline(X509_get_subject_name(peer));
-                        /* str was allocated with malloc so we must free it*/
-                        http_add_header_line( c, SSL_HEADER_CERT_SUBJECT,
-                                              str );
-			free(str);
+#ifdef SSLEAY8
+                    str=X509_NAME_oneline(X509_get_subject_name(peer), NULL, 0);
+#else
+                    str=X509_NAME_oneline(X509_get_subject_name(peer));
+#endif
+                    /* str was allocated with malloc so we must free it*/
+                    http_add_header_line( c, SSL_HEADER_CERT_SUBJECT,
+                                          str );
+		    free(str);
 
-                        str=X509_NAME_oneline(X509_get_issuer_name(peer));
-                        http_add_header_line( c, SSL_HEADER_CERT_ISSUER,
+#ifdef SSLEAY8
+                    str=X509_NAME_oneline(X509_get_issuer_name(peer), NULL, 0);
+#else                    
+                    str=X509_NAME_oneline(X509_get_issuer_name(peer));
+#endif
+                    http_add_header_line( c, SSL_HEADER_CERT_ISSUER,
                                               str );
-			free(str);
+		    free(str);
 
                     X509_free(peer);
                 }
@@ -2187,7 +2239,7 @@ static int http_open_socket( http_connection *c )
             else
                 SSL_set_verify( c->SSL, SSL_VERIFY_NONE, NULL );
 
-#if DEBUG
+#if 0 //DEBUG
 	    bio_debug_open( c->SSL );
 #endif
 	}
