@@ -70,6 +70,10 @@
 /*          11-Aug-97: RML: Fixed bug in allocation of lzw_buffer (wasn't allocating enough in */
 /*                          some circumstances)                                                */
 /*          18-Aug-97: RML: Fixed bug introduced by above change (oops!).                      */
+/*          04-Sep-97: RML: Made use of flex_set_budge to avoid stack problems on pre-RPC      */
+/*                          machines.                                                          */
+/*          04-Sep-97: RML: Corrected bug which resulted in dodgy palette for animations in    */
+/*                          16 colour screen modes.                                            */
 /*---------------------------------------------------------------------------------------------*/
 /* To do (inanimate) :                                                                         */
 /*                                                                                             */
@@ -664,10 +668,10 @@ _kernel_oserror* render_delete(int handle)
     }
 
     /* Free data */
-    if (images[handle]->lzw_data) flex_free((flex_ptr) &images[handle]->lzw_data); debug_value("    done lzw_data ", handle);
-    if (images[handle]->rgb_data) flex_free((flex_ptr) &images[handle]->rgb_data); debug_value("    done rgb_data ", handle);
-    if (images[handle]->spr_data) flex_free((flex_ptr) &images[handle]->spr_data); debug_value("    done spr_data ", handle);
-    if (images[handle]->trtab)    flex_free((flex_ptr) &images[handle]->trtab);    debug_value("    done trtab    ", handle);
+    if (images[handle]->lzw_data) flex_free((flex_ptr) &images[handle]->lzw_data);
+    if (images[handle]->rgb_data) flex_free((flex_ptr) &images[handle]->rgb_data);
+    if (images[handle]->spr_data) flex_free((flex_ptr) &images[handle]->spr_data);
+    if (images[handle]->trtab)    flex_free((flex_ptr) &images[handle]->trtab);
 
     free(images[handle]);
     images[handle]=0;
@@ -731,7 +735,7 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
     sprite_header    *row_spr;
     char             *row_msk;
     char             *row_img;
-    int               bytes, x, l, tp, first, last, top, py;
+    int               bytes, x, l, tp, first, last, top, py, l1, l2;
     int               width = im->width;
     int               height = im->height;
     int               dcb[8];
@@ -739,6 +743,12 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
     gbox              gw;
 
     debug_value("  render whole scaled ",handle);
+
+    //_swi(ColourTrans_SetGCOL,_IN(0)|_IN(3)|_IN(4), 0xFF000000, 128, 0);
+    //_swi(OS_WriteC,_IN(0),16);
+    //_swi(OS_ReadC,0);
+    //_swi(ColourTrans_SetGCOL,_IN(0)|_IN(3)|_IN(4), 0x00FF0000, 128, 0);
+    //_swi(OS_WriteC,_IN(0),16);
 
     /* Check it's a valid handle */
     if (!render_valid_handle(handle)) return NULL;
@@ -782,14 +792,22 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
     /* Read the graphics clipping window */
     gw=read_graphics_window();
 
-    y = im->y / yos;
+    y    = im->y / yos;
     top = y + ((height * im->scale.y_mul) / im->scale.y_div);
 
+    /* Calculate the first and last row of the image that we need to plot */
+    if (gw.y1 > y) last = im->height - ( (im->scale.y_div * (gw.y1 - y)) / im->scale.y_mul);
+    else last = height - 1;
+    if (gw.y2 < top) first = im->height - ( (im->scale.y_div * (gw.y2 - y)) / im->scale.y_mul);
+    else first = 0;
+    
+#if 0
     /* Calculate the first and last row of the image that we need to plot */
     if (gw.y1 > y) last = ( ((top-gw.y1)*im->scale.y_div) / im->scale.y_mul ) + 1;
     else last = height-1;
     if (gw.y2 < top) first = ( ((top-gw.y2)*im->scale.y_div) / im->scale.y_mul ) - 1;
     else first=0;
+#endif
 
     /* Add a row either side for luck */
     if (first>0) first--;
@@ -1537,12 +1555,17 @@ static _kernel_oserror* render_convert_interlace(int handle)
 
     if ((im->scanline - 1) != height) return NULL;
 
-    new_blk_off = malloc(sizeof(int)*height);
-    if (!new_blk_off) return render_error("Can't allocate memory to convert interlaced picture.");
+    if (!flex_alloc((flex_ptr)&new_blk_off, sizeof(int)*height))
+        return render_error("Can't allocate memory to convert interlaced picture.");
+    //new_blk_off = malloc(sizeof(int)*height);
+    //if (!new_blk_off) return render_error("Can't allocate memory to convert interlaced picture.");
 
     /* Get memory to store new compressed data */
-    lzw = malloc(im->lzw_data_size + 4096);
-    if (!lzw) return render_error("Can't allocate memory for compressed data");        
+    if (!flex_alloc((flex_ptr)&lzw, im->lzw_data_size + 4096))
+        return render_error("Can't allocate memory for compressed data");
+
+    //lzw = malloc(im->lzw_data_size + 4096);
+    //if (!lzw) return render_error("Can't allocate memory for compressed data");        
 
     new_ptr=0;
     for (n=0; n<height; n++)
@@ -1570,12 +1593,14 @@ static _kernel_oserror* render_convert_interlace(int handle)
     memcpy(im->lzw_data, lzw, im->lzw_data_size);
 
     /* Free the temporary store */
-    free(lzw);
+    flex_free((flex_ptr)&lzw);
+    //free(lzw);
 
     /* Copy the new blk offsets over the old ones */
     for (n=0; n<height; n++) im->blk_off[n]=new_blk_off[n];
 
-    free(new_blk_off);
+    //free(new_blk_off);
+    flex_free((flex_ptr)&new_blk_off);
 
     return NULL;
 }
@@ -1827,10 +1852,6 @@ static _kernel_oserror* render_generate_colourtrans_table(int handle)
 _kernel_oserror* render_mode_change(int handle)
 {
     render_read_mode_variables();
-
-    debug_value("  render mode change ",handle);
-    debug_value("    xos ",xos);
-    debug_value("    yos ",yos);
 
     if (images[handle]->trtab) flex_free((flex_ptr)&images[handle]->trtab);
 
@@ -2212,6 +2233,8 @@ static _kernel_oserror* render_animate_create_last_screen(int handle)
     if (bpp<8)
     {
         int buffsize;
+        
+        debug_print("Making <8bpp table");
 
         if (an->trtab) flex_free((flex_ptr)&an->trtab);
 
@@ -2747,6 +2770,7 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
     int              spr_area_size, image_size;
     int              w = an->screen_width;
     int              h = an->screen_height;
+    int              bgmode;
 
     if (!an->flags.load_ended)
     {
@@ -2769,8 +2793,11 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
 
         /* Calculate size of needed sprite area */
         spr_area_size = sizeof(sprite_area) + sizeof(sprite_header) + image_size;
-        bg_sprarea = malloc(spr_area_size);
-        if (!bg_sprarea) return render_error("Can't get memory for background image.");
+
+        if (!flex_alloc((flex_ptr)&bg_sprarea, spr_area_size))
+            return render_error("Can't get memory for background image.");
+        //bg_sprarea = malloc(spr_area_size);
+        //if (!bg_sprarea) return render_error("Can't get memory for background image.");
 
         bg_sprheader = (sprite_header*) ((char*)bg_sprarea + sizeof(sprite_area));
 
@@ -2778,9 +2805,12 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
         bg_sprarea->size   = spr_area_size;
         bg_sprarea->sproff = sizeof(sprite_area);
 
+        e=_swix(OS_Byte, _IN(0)|_OUT(2), 135, &bgmode);
+        if (e) return e;
+        if (bpp>=8) bgmode=mode;
         e=_swix(OS_SpriteOp, _INR(0,1), 256+SprInitArea, (int)bg_sprarea);
         if (e) return e;
-        e=_swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, (int)bg_sprarea, "sprite", 0, w, h, mode);
+        e=_swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, (int)bg_sprarea, "sprite", 0, w, h, bgmode);
         if (e) return e;
         
         /* Rhubarb */
@@ -2823,27 +2853,32 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
                                                    &saveprev1, &saveprev2, &saveprev3);
         if (e) return e;
 
-        e=_swix(OS_SpriteOp, _INR(0,7), 256+SprPutScaled,
-                                        (int)an->last_screen,
-                                        "sprite",
-                                        0,
-                                        0,
-                                        8,
-                                        0,
-                                        0);
 
+        /* Not sure if we can make the bpp<8 the case for ALL bpp - need to think/test */
+        if (bpp<8)
+        {
+            _swi(ColourTrans_GenerateTable, _INR(0,5), an->last_screen, "sprite", -1, -1, an->trtab, 0);
+            e=_swix(OS_SpriteOp, _INR(0,7), 256+SprPutScaled, (int)an->last_screen, "sprite", 0, 0, 8, 0, an->trtab);
+        }
+        else
+        {
+            e=_swix(OS_SpriteOp, _INR(0,7), 256+SprPutScaled, (int)an->last_screen, "sprite", 0, 0, 8, 0, 0);
+        }
         e=render_vdu_back_to_screen();
         if (e) return e;
 
-        e=_swix(OS_SpriteOp, _INR(0,7),
-                             256+SprPutScaled,
-                             (int)bg_sprarea,
-                             "sprite",
-                             plot_x,
-                             plot_y,
-                             osver>=0xa5 ? 32:0,
-                             &scale,
-                             an->trtab);
+        /* Not sure if we can make the bpp<8 the case for ALL bpp  - need to think/test */
+        if (bpp<8)
+        {
+            _swi(ColourTrans_GenerateTable, _INR(0,5), bg_sprarea, "sprite", -1, -1, an->trtab, 0);
+            e=_swix(OS_SpriteOp, _INR(0,7), 256+SprPutScaled, (int)bg_sprarea, "sprite", plot_x, plot_y,
+                                                   osver>=0xa5 ? 32:0, &scale, 0);
+        }
+        else
+        {
+            e=_swix(OS_SpriteOp, _INR(0,7), 256+SprPutScaled, (int)bg_sprarea, "sprite", plot_x, plot_y,
+                                            osver>=0xa5 ? 32:0, &scale, an->trtab);
+        }
         if (e) return e;
 
         #if SaveFrames
@@ -2851,7 +2886,8 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
         #endif
 
         /* Free the memory allocated to the background sprite */
-        free(bg_sprarea);
+        flex_free((flex_ptr)&bg_sprarea);
+        //free(bg_sprarea);
     }
     else
     {
@@ -3319,14 +3355,26 @@ static _kernel_oserror* render_animate_make_tables(int handle)
 
         /* Find out how much memory is needed for translation table */
         sprintf(sname,"frame%d",n);
-        e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4),
-                                           an->rgb_data,
-                                           sname,
-                                           -1, //newmode,
-                                           -1, //0
-                                           0,
-                                           osver>=0xa5 ? 16:0,
-                                           &buffsize);
+        
+        if (bpp<8) e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4),
+                                                      an->rgb_data,
+                                                      sname,
+                                                      newmode,
+                                                      0,
+                                                      0,
+                                                      osver>=0xa5 ? 16:0,
+                                                      &buffsize);
+
+
+        else e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4),
+                                                an->rgb_data,
+                                                sname,
+                                                -1,
+                                                -1,
+                                                0,
+                                                osver>=0xa5 ? 16:0,
+                                                &buffsize);
+                                                        
         if (e) return e;
 
         /* Is there enough space already in the colourtrans table area? */
@@ -3342,18 +3390,26 @@ static _kernel_oserror* render_animate_make_tables(int handle)
         location = an->fr_trtabs + trtab_next;
 
         /* Generate the table */
-        e=_swix(ColourTrans_GenerateTable, _INR(0,5),
-                                           an->rgb_data,
-                                           sname,
-                                           -1, //newmode,
-                                           -1, //0
-                                           location,
-                                           osver>=0xa5 ? 16:0);
+        if (bpp<8) e=_swix(ColourTrans_GenerateTable, _INR(0,5),
+                                                      an->rgb_data,
+                                                      sname,
+                                                      28,
+                                                      0,
+                                                      location,
+                                                      osver>=0xa5 ? 16:0); 
+
+        else e=_swix(ColourTrans_GenerateTable, _INR(0,5),
+                                                an->rgb_data,
+                                                sname,
+                                                -1,
+                                                -1,
+                                                location,
+                                                osver>=0xa5 ? 16:0);
+            
         if (e) return e;
 
         fr->trtab = trtab_next;
         trtab_next += buffsize;
-
     }
 
     anims[handle]->flags.regen_tables = 0;
@@ -3389,14 +3445,25 @@ static _kernel_oserror* render_animate_generate_table(int handle, int frame)
 
     /* Find out how much memory is needed for translation table */
     sprintf(sname,"frame%d",frame);
-    e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4),
-                                       an->rgb_data,
-                                       sname,
-                                       -1, //newmode,
-                                       -1, //0,
-                                       0,
-                                       osver>=0xa5 ? 16:0,
-                                       &buffsize);
+
+    if (bpp<8) e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4),
+                                                  an->rgb_data,
+                                                  sname,
+                                                  newmode,
+                                                  0,
+                                                  0,
+                                                  osver>=0xa5 ? 16:0,
+                                                  &buffsize);
+
+    else e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4),
+                                            an->rgb_data,
+                                            sname,
+                                            -1,
+                                            -1,
+                                            0,
+                                            osver>=0xa5 ? 16:0,
+                                            &buffsize);
+                                            
     if (e) return e;
 
     /* Is there enough space already in the colourtrans table area? */
@@ -3413,13 +3480,21 @@ static _kernel_oserror* render_animate_generate_table(int handle, int frame)
     location = an->fr_trtabs + an->trtab_next;
 
     /* Generate the table */
-    e=_swix(ColourTrans_GenerateTable, _INR(0,5),
-                                       an->rgb_data,
-                                       sname,
-                                       -1, //newmode,
-                                       -1, //0,
-                                       location,
-                                       osver>=0xa5 ? 16:0);
+    if (bpp<8) e=_swix(ColourTrans_GenerateTable, _INR(0,5),
+                                                  an->rgb_data,
+                                                  sname,
+                                                  newmode,
+                                                  0,
+                                                  location,
+                                                  osver>=0xa5 ? 16:0);
+
+    else e=_swix(ColourTrans_GenerateTable, _INR(0,5),
+                                            an->rgb_data,
+                                            sname,
+                                            -1,
+                                            -1,
+                                            location,
+                                            osver>=0xa5 ? 16:0);
     if (e) return e;
 
     fr->trtab = an->trtab_next;
@@ -3638,6 +3713,9 @@ _kernel_oserror* render_animate_delete(int handle)
 _kernel_oserror* render_animate_mode_change(int handle)
 {
     _kernel_oserror *e;
+    int              oldstate;
+
+    debug_print("animate_mode_change");
 
     render_read_mode_variables();
 
@@ -3656,7 +3734,11 @@ _kernel_oserror* render_animate_mode_change(int handle)
 
     /* Set a flag to say colour translation tables need regenerating, then create the last_screen sprite */
     anims[handle]->flags.regen_tables = 1;
+    
+    oldstate=flex_set_budge(0);
     e=render_animate_create_last_screen(handle);
+    flex_set_budge(oldstate);
+    
     if (e) return animate_error_and_abandon(handle, e->errmess);
 
     return NULL;
@@ -3712,7 +3794,8 @@ _kernel_oserror* render_mark_corrupt_frame(int handle)
 static _kernel_oserror* render_save_area(void)
 {
     /* Get save area for switching output to sprite */
-    if (!save_area) save_area=malloc(800);
+    if (!save_area) flex_alloc((flex_ptr)&save_area, 800);
+    //if (!save_area) save_area=malloc(800);
     if (!save_area) return render_error("Can't allocate memory for save_area\n");
     memset(save_area, 0, 4);
 
