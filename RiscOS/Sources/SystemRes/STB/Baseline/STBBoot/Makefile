@@ -61,6 +61,7 @@ CHMODFLAGS	= +ow +or +wr -ww
 TRANSFLAGS	= $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
 TRANSMAPPINGS	= TranslateRes:Mappings
 TRANSRESDIR	= TranslateRes:Applet
+TRANSDESKDIR	= TranslateRes:Desktop
 TRANSUTILDIR	= TranslateRes:Utilities
 
 #
@@ -123,6 +124,7 @@ translate: dirs
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSRESDIR).!Run        -o $(OUTRESDIR).!Run
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSUTILDIR).Desktop    -o $(OUTUTILDIR).Desktop
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSUTILDIR).PreDesktop -o $(OUTUTILDIR).PreDesktop
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSDESKDIR).NCFresco   -o $(OUTDESKDIR).NCFresco
 	@echo Translation Complete.
 
 resources:
