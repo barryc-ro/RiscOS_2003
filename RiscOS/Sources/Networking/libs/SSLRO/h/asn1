@@ -342,6 +342,8 @@ void ERR_load_ASN1_strings(void);
 ASN1_METHOD *ASN1_X509_meth(void);
 ASN1_METHOD *ASN1_RSAPrivateKey_meth(void);
 
+int 		d2i_ASN1_BOOLEAN(int *a,unsigned char **pp,long length);
+
 #else
 
 char *		ASN1_d2i_bio();
@@ -412,6 +414,7 @@ void ASN1_HEADER_free();
 ASN1_METHOD *ASN1_X509_meth();
 ASN1_METHOD *ASN1_RSAPrivateKey_meth();
 
+int 		d2i_ASN1_BOOLEAN();
 #endif
 
 /* BEGIN ERROR CODES */
@@ -531,6 +534,10 @@ ASN1_METHOD *ASN1_RSAPrivateKey_meth();
 #define ASN1_F_X509_VAL_FREE				 210
 #define ASN1_F_X509_VAL_NEW				 211
 
+#define ASN1_F_D2I_X509_EXTENSION			 212
+#define ASN1_F_X509_EXTENSION_NEW			 213
+#define ASN1_F_D2I_ASN1_BOOLEAN				 214
+
 /* Reason codes. */
 #define ASN1_R_BAD_CLASS				 100
 #define ASN1_R_BAD_GET_OBJECT				 101
@@ -579,6 +586,8 @@ ASN1_METHOD *ASN1_RSAPrivateKey_meth();
 #define ASN1_R_WRONG_EXPLICIT_TAG			 144
 #define ASN1_R_WRONG_PRINTABLE_TYPE			 145
 #define ASN1_R_WRONG_TAG				 146
+#define ASN1_R_BOOLEAN_IS_WRONG_LENGTH			 147
+#define ASN1_R_EXPECTING_A_BOOLEAN			 148
 
 #ifdef  __cplusplus
 }
