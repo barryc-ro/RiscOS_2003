@@ -39,8 +39,138 @@
 
 /* Buffers for test extraction */
 
-#define BSInput_Extract  16384
-#define BSOutput_Extract 16384
+#define BSInput_Extract  32768
+#define BSOutput_Extract 32768
+
+/* Leaf name for UID file and subdirectory for extracted archive data; */
+/* the length of the directory string MUST be equal to or greater than */
+/* that of the UID leaf. The length of the wrapper name is arbitrary.  */
+
+#define Main_Archive_Subdir  ".Data"
+#define Main_Archive_UID     ".UID"
+#define Main_Archive_Wrapper ".!Run"
+
+/* Kick-off command etc. */
+
+#define Main_Archive_Kickoff "Obey -c"
+#define Main_Archive_Append  ""
+#define Main_UpgLaunch_Run   "<" Module_ComponentName "$Dir>.UpgLaunch"
+#define Main_UpgLaunch_Slot  "WimpSlot -Min 20K -Max 20K"
+
+/* Filetypes */
+
+#define Main_FileType_Text  0xFFF
+#define Main_FileType_Obey  0xFEB
+#define Main_FileType_EPROM 0xFE5
+#define Main_FileType_Data  0xFFD
+
+/* Decoding images */
+
+typedef struct decoder_state
+{
+  unsigned int   crc;
+  bool           crc_lock;
+
+  /* State variables for reading a tag number */
+
+  bool           expecting_tag;
+  unsigned int   reading_tag;
+  unsigned int   tag;
+
+  /* State variables for reading the data size after the tag number */
+
+  bool           expecting_size;
+  unsigned int   reading_size;
+  unsigned int   size;
+
+  /* State variables for reading the data itself */
+
+  bool           expecting_data;
+  unsigned int   reading_data;
+
+  /* State variables for reading specific words */
+
+  unsigned int   reading_word;
+  unsigned int   word;
+
+  /* General operation state variables */
+
+  bool           lock_first;
+  FILE         * fout;
+  int            ptr;
+  char           extract_to [512];
+  char           uid_name   [512]; /* Must be same as extract_to */
+
+  /* Storage for information about this file */
+
+  image_type     type_of_image;
+  unsigned int   decomp_size;
+  unsigned int   file_crc;
+  unsigned int   archive_uid;
+  bool           have_uid;
+  bool           matched_uid;
+
+  char         * build;
+  char         * locale;
+  char         * display;
+
+  /* Specific image type decoding */
+
+  struct
+  {
+    bool           expecting_stubname;
+    int            reading_stubname;
+    char         * stubname;
+    char         * fullname;
+    char         * first_fullname;
+    int            subtype;
+
+    unsigned int   stage;
+
+    unsigned int   reading_word;
+    unsigned int   word;
+
+    /* Check for a multitasking application? */
+
+    char         * task_name;
+    action_type    action;
+
+    /* Decompression variables */
+
+    bool           restart_zlib;
+    z_stream       stream;
+
+    /* Storage for information about a file inside the archive */
+
+    unsigned int   itemsize;
+    unsigned int   loadaddr;
+    unsigned int   execaddr;
+    unsigned int   itemattr;
+
+    /* Cumulative file information for the UID file */
+
+    unsigned int   total_items; /* Includes all directories  */
+    unsigned int   total_size;  /* Files and image dirs only */
+
+    /* Flag to say a complete file / directory entry has been dealt with */
+    /* (tidy up and reset local state machine for the next one)          */
+
+    bool           completed;
+
+  } archive;
+
+  struct
+  {
+    unsigned int   not_tag;
+    unsigned int   total;
+
+  } image;
+
+  /* UpgCreate-specific additions go here */
+
+  config * setup; /* E.g. to get at verbose setting during test extraction routines */
+
+} decoder_state;
 
 /* Locals */
 
@@ -69,23 +199,45 @@ static char * action_names[] = {
                                  "replace"
                                };
 
+static FILE         * extract_fout        = NULL; /* We might be holding a file open when we want to wipe the partial download... */
+
+static char         * dynamic_area_base   = NULL;
+static unsigned int   dynamic_area_number = 0;
+static unsigned int   dynamic_area_size   = 0;
+
 /* Local functions */
 
-static void write_record_header       (int record, int size, FILE * fp);
-static int  write_string_record       (int record, char * string, FILE * fp);
-static int  write_word_record         (int record, int data, FILE * fp);
+static void                 write_record_header            (int record, int size, FILE * fp);
+static int                  write_string_record            (int record, char * string, FILE * fp);
+static int                  write_word_record              (int record, int data, FILE * fp);
 
-static int  main_write_word           (unsigned int word, FILE * fp);
-static int  main_output_crc           (int comp_size, FILE * fp);
+static int                  main_write_word                (unsigned int word, FILE * fp);
+static int                  main_output_crc                (int comp_size, FILE * fp);
 
-static int  main_build_upgrade_file   (config * setup);
-static int  main_build_single_file    (config * setup);
-static int  main_build_archive_file   (config * setup);
+static int                  main_build_upgrade_file        (config * setup);
+static int                  main_build_single_file         (config * setup);
+static int                  main_build_archive_file        (config * setup);
 
-static int  main_add_files_to_archive (config * setup, unsigned int slen, FILE * fout, char * current);
+static int                  main_add_files_to_archive      (config * setup, unsigned int slen, FILE * fout, char * current);
 
-static int  main_extract_files        (config * setup);
-static int  main_decode_chunk         (config * setup, const char * buf, unsigned int amount);
+static int                  main_extract_files             (config * setup);
+static void                 exit_handler                   (void);
+
+static _kernel_oserror    * main_create_directory          (const char * name);
+static void                 main_init_decoder              (decoder_state * ds, config * setup);
+static void                 main_add_word_to_crc           (decoder_state * ds, unsigned int word, bool check);
+
+static int                  main_decode_chunk              (const char * buf, unsigned int amount, bool first, decoder_state * ds, unsigned int incoming_size);
+static int                  main_decode_data_chunk         (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_data_word_chunk    (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_data_string_chunk  (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_data_image_chunk   (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_ofec               (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_trp                (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_trp_stubname       (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_trp_subtype        (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_trp_subtype_isdir  (const char * buf, unsigned int amount, bool first, decoder_state * ds);
+static int                  main_decode_trp_subtype_isfile (const char * buf, unsigned int amount, bool first, decoder_state * ds);
 
 /**************************************************************/
 /* main()                                                     */
@@ -143,6 +295,13 @@ int main(int argc, char * argv[])
            "                        omitted; if absent, no test is performed; see\n"
            "                        below for more information).\n"
            "   -v (level)           0 | 1 | 2 (\"0\" = quiet, \"2\" = verbose).\n"
+           "   -x (boolean)         1 | 0 (if \"1\", input file is taken to be a\n"
+           "                        ready-built image; just do test extraction).\n"
+           "\n"
+           "If -x is specified, -s and -e are required; all other options are\n"
+           "ignored; the input file must be a pre-built archive and UpgCreate\n"
+           "becomes nothing more than an extraction test program. Otherwise,\n"
+           "the arguments must be provided as specified below.\n"
            "\n"
            "If -s and -o must always be present; -e and -v is always optional\n"
            "(default value of -v is 0); other parameters depend on the value given\n"
@@ -170,33 +329,44 @@ int main(int argc, char * argv[])
     return 0;
   }
 
-  printf("** Creating upgrade image...\n");
-
-  if (setup.verbose != 0)
+  if (setup.extract_only == 0)
   {
-    printf("\nType:    %s"
-           "\nDisplay: \"%s\""
-           "\nBuild:   %s"
-           "\nLocale:  %s"
-           "\nBank:    %d %s"
-           "\nInput:   %s"
-           "\nOutput:  %s"
-           "\nTask:    %s (%s)"
-           "\n",
+    printf("** Creating upgrade image...\n");
 
-           setup.type >= 0 && setup.type < (sizeof(type_names) / sizeof(*type_names)) ? type_names[setup.type] : "<Unknown!>",
-           setup.display_string,
-           (*setup.build  != '\0') ? setup.build  : "<None>",
-           (*setup.locale != '\0') ? setup.locale : "<None>",
-           setup.bank,
-           setup.bank < (sizeof(bank_names) / sizeof(*bank_names) && *bank_names[setup.bank] != '\0') ? bank_names[setup.bank] : "<Unknown!>",
-           setup.image_path,
-           setup.out_path,
-           (*setup.task_name != '\0') ? setup.task_name : "<None>",
-           setup.action >=0 && setup.action < (sizeof(action_names) / sizeof(*action_names)) ? action_names[setup.action] : "<Unknown!>");
+    if (setup.verbose != 0)
+    {
+      printf("\nType:    %s"
+             "\nDisplay: \"%s\""
+             "\nBuild:   %s"
+             "\nLocale:  %s"
+             "\nBank:    %d %s"
+             "\nInput:   %s"
+             "\nOutput:  %s"
+             "\nTask:    %s (%s)"
+             "\n",
+
+             setup.type >= 0 && setup.type < (sizeof(type_names) / sizeof(*type_names)) ? type_names[setup.type] : "<Unknown!>",
+             setup.display_string,
+             (*setup.build  != '\0') ? setup.build  : "<None>",
+             (*setup.locale != '\0') ? setup.locale : "<None>",
+             setup.bank,
+             setup.bank < (sizeof(bank_names) / sizeof(*bank_names) && *bank_names[setup.bank] != '\0') ? bank_names[setup.bank] : "<Unknown!>",
+             setup.image_path,
+             setup.out_path,
+             (*setup.task_name != '\0') ? setup.task_name : "<None>",
+             setup.action >=0 && setup.action < (sizeof(action_names) / sizeof(*action_names)) ? action_names[setup.action] : "<Unknown!>");
+    }
+
+    if (setup.verbose < 2) printf("\n");
+
+    return main_build_upgrade_file(&setup);
   }
+  else
+  {
+    printf("** Extracting image contents to check integrity...\n\n");
 
-  return main_build_upgrade_file(&setup);
+    return main_extract_files(&setup);
+  }
 }
 
 
@@ -484,12 +654,15 @@ static int main_build_single_file(config * setup)
   fclose(fout);
   printf("\nSuccessful.");
 
-  /* Optional expansion test to check it all worked:
-   *
-   * expand(setup->out_path,setup->image_path);
-   */
+  /* Optional expansion test to check it all worked */
 
-return EXIT_SUCCESS;
+  if (*setup->extract_to != '\0')
+  {
+    printf("\n\n** Extracting image contents to check integrity...\n\n");
+
+    return main_extract_files(setup);
+  }
+  else return EXIT_SUCCESS;
 }
 
 /**************************************************************/
@@ -512,7 +685,7 @@ static int main_build_archive_file(config * setup)
   long int   size;
   int        slen;
 
-  printf("\n");
+  if (setup->verbose == 2) printf("\n");
 
   /* Open the output file */
 
@@ -641,7 +814,7 @@ static int main_build_archive_file(config * setup)
 
   if (*setup->extract_to != '\0')
   {
-    printf("\n\n** Expanding archive to check integrity...\n\n");
+    printf("\n\n** Extracting image contents to check integrity...\n\n");
 
     return main_extract_files(setup);
   }
@@ -844,7 +1017,7 @@ static int main_add_files_to_archive(config * setup, unsigned int slen, FILE * f
 /**************************************************************/
 /* main_extract_file()                                        */
 /*                                                            */
-/* Unpack the file to the specified location.                 */
+/* Unpack a written image to the specified location.          */
 /*                                                            */
 /* Parameters: Pointer to a config structure describing the   */
 /*             file to unpack and location to send it.        */
@@ -854,10 +1027,15 @@ static int main_add_files_to_archive(config * setup, unsigned int slen, FILE * f
 
 static int main_extract_files(config * setup)
 {
-  FILE         * fin;
-  char           buf[BSInput_Extract];
-  unsigned int   read;
-  char         * filename = setup->out_path;
+  FILE          * fin;
+  char            buf[BSInput_Extract];
+  unsigned int    read;
+  char          * filename = setup->extract_only == 0 ? setup->out_path : setup->image_path;
+  bool            first    = true;
+  decoder_state   ds;
+
+  atexit(exit_handler);
+  main_init_decoder(&ds, setup);
 
   fin = fopen(filename, "rb");
 
@@ -879,11 +1057,13 @@ static int main_extract_files(config * setup)
     }
     else
     {
-      if (main_decode_chunk(setup, buf, read) == EXIT_FAILURE)
+      if (main_decode_chunk(buf, read, first, &ds, 4) == EXIT_FAILURE)
       {
         fclose(fin);
         return EXIT_FAILURE;
       }
+
+      first = false;
     }
   }
   while (!feof(fin));
@@ -891,707 +1071,1455 @@ static int main_extract_files(config * setup)
   fclose(fin);
 
   if (setup->verbose > 0) printf("\n");
-  printf("Extraction successful.\n");
+  printf("** Extraction successful.\n");
 
   return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* exit_handler()                                             */
+/*                                                            */
+/* General cleanup function registered through atexit().      */
+/**************************************************************/
+
+static void exit_handler(void)
+{
+  _kernel_oserror * e;
+
+  /* C run-time should close things, but just in case... */
+
+  if (extract_fout != NULL) fclose(extract_fout), extract_fout = NULL;
+
+  /* Kill the dynamic area */
+
+  if (dynamic_area_base != 0)
+  {
+    e = _swix(OS_DynamicArea,
+              _INR(0,1),
+
+              1,
+              dynamic_area_number);
+
+    if (e != NULL)
+    {
+      printf("exit_handler (main.c): Error from OS_DynamicArea ('%s')\n", e->errmess);
+    }
+  }
+
+  return;
+}
+
+/**************************************************************/
+/* main_create_directory()                                    */
+/*                                                            */
+/* Create a locked directory under the given name.            */
+/*                                                            */
+/* Parameters: Full pathname of the directory.                */
+/**************************************************************/
+
+static _kernel_oserror * main_create_directory(const char * name)
+{
+  _kernel_oserror * e = _swix(OS_File,
+                              _INR(0,1) | _IN(4),
+
+                              8,        /* Create directory */
+                              name,
+                              0);       /* Initial number of entries; 0 = use default */
+
+  if (e != NULL) return e;
+
+  else return _swix(OS_File,
+                    _INR(0,1) | _IN(5),
+
+                    4,    /* Set attributes */
+                    name,
+                    3);   /* Bit pattern -> "WR/" */
+}
+
+/**************************************************************/
+/* main_init_decoder()                                        */
+/*                                                            */
+/* Prepare a decoder_state structure for starting to decode a */
+/* new image.                                                 */
+/*                                                            */
+/* Parameters: Pointer to the decoder_state structure to      */
+/*             initialise;                                    */
+/*                                                            */
+/*             Pointer to a config structure for the image.   */
+/**************************************************************/
+
+static void main_init_decoder(decoder_state * ds, config * setup)
+{
+  if (ds == NULL) return;
+
+  ds->crc = 0xFFFFFFFF, ds->crc_lock = false;
+  make_crc_tables();
+
+  ds->expecting_tag              = true;
+  ds->reading_tag                = 0;
+  ds->tag                        = 0;
+
+  ds->expecting_size             = true;
+  ds->reading_size               = 0;
+  ds->size                       = 0;
+
+  ds->expecting_data             = false;
+  ds->reading_data               = 0;
+
+  ds->reading_word               = 0;
+  ds->word                       = 0;
+
+  ds->lock_first                 = true;
+  ds->fout                       = NULL;
+  extract_fout                   = NULL;
+  ds->ptr                        = 0;
+
+  StrNCpy0(ds->extract_to, setup->extract_to != NULL ? setup->extract_to : "");
+
+  ds->type_of_image              = image_type_unknown;
+  ds->decomp_size                = 0;
+  ds->file_crc                   = 0;
+  ds->archive_uid                = 0;
+  ds->have_uid                   = false;
+  ds->matched_uid                = false;
+
+  ds->build                      = NULL;
+  ds->locale                     = NULL;
+  ds->display                    = NULL;
+
+  ds->archive.expecting_stubname = true;
+  ds->archive.reading_stubname   = NULL;
+  ds->archive.stubname           = NULL;
+  ds->archive.fullname           = NULL;
+  ds->archive.first_fullname     = NULL;
+  ds->archive.subtype            = 0;
+
+  ds->archive.task_name          = NULL;
+  ds->archive.action             = action_type_none;
+
+  ds->archive.stage              = 0;
+
+  ds->archive.reading_word       = 0;
+  ds->archive.word               = 0;
+
+  ds->archive.restart_zlib       = true;
+
+  ds->archive.itemsize           = 0;
+  ds->archive.loadaddr           = 0;
+  ds->archive.execaddr           = 0;
+  ds->archive.itemattr           = 0;
+
+  ds->archive.total_items        = 0;
+  ds->archive.total_size         = 0;
+
+  ds->archive.completed          = false;
+
+  ds->image.total                = 0;
+  ds->image.not_tag              = 0;
+
+  ds->setup                      = setup;
+
+  return;
+}
+
+/**************************************************************/
+/* main_add_word_to_crc()                                     */
+/*                                                            */
+/* Add the given word to the running CRC if crc_lock in the   */
+/* given decoder is false.                                    */
+/*                                                            */
+/* Parameters: Pointer to the decoder_state structure holding */
+/*             the running CRC value and lock flag;           */
+/*                                                            */
+/*             Word to add;                                   */
+/*                                                            */
+/*             true if this is a tag value and should be      */
+/*             checked against TLV_TAG_TYPE_FILE_CRC to end   */
+/*             CRC addition, else false.                      */
+/**************************************************************/
+
+static void main_add_word_to_crc(decoder_state * ds, unsigned int word, bool check)
+{
+  if (!ds->crc_lock)
+  {
+    if (check && word == TLV_TAG_TYPE_FILE_CRC)
+    {
+      ds->crc_lock  = true;
+      ds->crc      ^= 0xFFFFFFFF;
+
+      if (ds->setup->verbose >= 1) printf("main_add_word_to_crc          : Have CRC tag; locked running value of &%08X\n", ds->crc);
+    }
+    else
+    {
+      char c;
+
+      c = (word & 0xff);             update_crc((U8 *)(&c), (U32 *)(&ds->crc));
+      c = (word & 0xff00) >> 8;      update_crc((U8 *)(&c), (U32 *)(&ds->crc));
+      c = (word & 0xff0000) >> 16;   update_crc((U8 *)(&c), (U32 *)(&ds->crc));
+      c = (word & 0xff000000) >> 24; update_crc((U8 *)(&c), (U32 *)(&ds->crc));
+    }
+  }
+
+  return;
 }
 
 /**************************************************************/
 /* main_decode_chunk()                                        */
 /*                                                            */
 /* Decode a chunk of a compressed upgrade image. The function */
-/* is rather monolithic, but very straightforward.            */
+/* is rather monolithic, but pretty straightforward.          */
 /*                                                            */
-/* Parameters: Pointer to a config structure describing where */
-/*             any output data should be sent to;             */
-/*                                                            */
-/*             Pointer to a buffer holding a chunk of data to */
+/* Parameters: Pointer to a buffer holding a chunk of data to */
 /*             process;                                       */
 /*                                                            */
-/*             Amount of data in the buffer.                  */
+/*             Amount of data in the buffer;                  */
 /*                                                            */
-/* Returns;    EXIT_SUCCESS or EXIT_FAILURE as appropriate.   */
+/*             true if this is a first call, else false;      */
+/*                                                            */
+/*             Pointer to a decoder_state structure for this  */
+/*             session, which need not be initialsed;         */
+/*                                                            */
+/*             Total incoming data size from the server (only */
+/*             required if the data isn't a tag file, but is  */
+/*             instead a configuration update file).          */
+/*                                                            */
+/* Returns:    EXIT_SUCCESS or EXIT_FAILURE as appropriate.   */
 /**************************************************************/
 
-static int main_decode_chunk(config * setup, const char * buf, unsigned int amount)
+static int main_decode_chunk(const char * buf, unsigned int amount, bool first, decoder_state * ds, unsigned int incoming_size)
 {
-  static bool           expecting_tag  = true;
-  static unsigned int   reading_tag    = 0;
-  static unsigned int   tag            = 0;
+  if (ds->setup->verbose >= 2) printf("main_decode_chunk             : Called (&%08X, %d, %d, &%08X)\n", (int) buf, amount, first, (int) ds);
 
-  static bool           expecting_size = true;
-  static unsigned int   reading_size   = 0;
-  static unsigned int   size           = 0;
+  if (first == true) ds->lock_first = true;
 
-  static bool           expecting_data = false;
-  static unsigned int   reading_data   = 0;
+  ds->ptr = 0;
 
-  static image_type     type_of_image  = image_type_unknown;
-  static action_type    action         = action_type_none;
-
-  static FILE         * fout           = NULL;
-
-  int                   ptr            = 0;
+  /* Anything to read? */
 
   if (amount == 0) return EXIT_SUCCESS;
+
+  /* Now go around reading data */
 
   do
   {
     /* Read the tag value */
 
-    while (expecting_tag == true && reading_tag < 32 && ptr < amount)
+    while (ds->expecting_tag == true && ds->reading_tag < 32 && ds->ptr < amount)
     {
-      tag = tag | (buf[ptr++] << reading_tag);
-      reading_tag += 8;
+      ds->tag = ds->tag | (buf[ds->ptr++] << ds->reading_tag);
+      ds->reading_tag += 8;
     }
 
     /* Finished reading a tag? */
 
-    if (reading_tag == 32)
+    if (ds->reading_tag == 32)
     {
-      expecting_tag  = false;
-      reading_tag    = 0;
-      expecting_size = true;
-      reading_size   = 0;
-      size           = 0;
+      ds->expecting_tag  = false;
+      ds->reading_tag    = 0;
+      ds->expecting_size = true;
+      ds->reading_size   = 0;
+      ds->size           = 0;
 
-      if (setup->verbose > 0) printf("Tag %d acquired\n", tag);
+      if (ds->setup->verbose >= 1) printf("main_decode_chunk             : Tag %d acquired\n", ds->tag);
+
+      /* Now, if this is a plain text file, the tag won't make sense; */
+      /* kick the state machine into reading data, setting up a few   */
+      /* of the other fields we'll need.                              */
+
+      if ((ds->tag & 0xff000000) != 0)
+      {
+        printf("main_decode_chunk             : Nonsensical tag implies configuration update\n");
+
+        if (incoming_size < 4)
+        {
+          printf("main_decode_chunk             : Server did not supply data size for us...\n");
+          printf("quit() code: " "InvalidServer"); exit(EXIT_FAILURE);
+        }
+
+        ds->expecting_size = false;
+        ds->reading_size   = 0;
+        ds->expecting_data = true;
+        ds->reading_data   = 0;
+
+        ds->image.not_tag  = ds->tag;
+        ds->tag            = TLV_TAG_TYPE_IMAGE_DATA;
+        ds->type_of_image  = image_type_configuration;
+        ds->size           = incoming_size - 4; /* We've already read 4 bytes thinking it was a tag... */
+        ds->decomp_size    = incoming_size;
+        ds->lock_first     = false;
+        ds->image.total    = 0;
+      }
+
+      /* Otherwise, include it in the CRC value */
+
+      else main_add_word_to_crc(ds, ds->tag, true);
     }
 
-    if (ptr == amount) return EXIT_SUCCESS;
+    if (ds->ptr == amount)
+    {
+      if (ds->setup->verbose >= 2) printf("main_decode_chunk             : ds->ptr = amount (%d), successful\n", ds->ptr);
+      return EXIT_SUCCESS;
+    }
 
     /* Read data size */
 
-    while (expecting_size == true && reading_size < 32 && ptr < amount)
+    while (ds->expecting_size == true && ds->reading_size < 32 && ds->ptr < amount)
     {
-      size = size | (buf[ptr++] << reading_size);
-      reading_size += 8;
+      ds->size = ds->size | (buf[ds->ptr++] << ds->reading_size);
+      ds->reading_size += 8;
     }
 
     /* Finished reading size? */
 
-    if (reading_size == 32)
+    if (ds->reading_size == 32)
     {
-      expecting_size = false;
-      reading_size   = 0;
-      expecting_data = true;
-      reading_data   = 0;
+      ds->expecting_size = false;
+      ds->reading_size   = 0;
+      ds->expecting_data = true;
+      ds->reading_data   = 0;
 
-      if (setup->verbose == 2) printf("Data size %d\n", size);
+      if (ds->setup->verbose >= 2) printf("main_decode_chunk             : Data size %d\n", ds->size);
+
+      main_add_word_to_crc(ds, ds->size, false);
     }
 
-    if (ptr == amount) return EXIT_SUCCESS;
+    if (ds->ptr == amount)
+    {
+      if (ds->setup->verbose >= 2) printf("main_decode_chunk             : ds->ptr = amount (%d), successful\n", ds->ptr);
+      return EXIT_SUCCESS;
+    }
 
     /* If expecting data, read it */
 
-    if (expecting_data)
+    if (ds->expecting_data)
     {
-      if (size > 0)
+      if (ds->size > 0)
       {
-        switch (tag)
+        unsigned int ptr = ds->ptr;
+
+        if (main_decode_data_chunk(buf, amount, first, ds) == EXIT_FAILURE) return EXIT_FAILURE;
+
+        /* Incorporate whatever data that consumed in the CRC value */
+
+        if (!ds->crc_lock)
         {
-          case TLV_TAG_TYPE_FILE_SIZE:
-          case TLV_TAG_TYPE_IMAGE_LENGTH:
-          case TLV_TAG_TYPE_FILE_CRC:
-          case TLV_TAG_TYPE_RANDOM_DATA:
-          case TLV_TAG_TYPE_UID:
-          case TLV_TAG_TYPE_IMAGE_TYPE:
-          case TLV_TAG_TYPE_TASK_ACTION:
-          {
-            static unsigned int reading_word = 0;
-            static unsigned int word         = 0;
-
-            if (size != 4)
-            {
-              printf("Error: Expecting to read one word of data for this tag, but data size is %d\n", size);
-              return EXIT_FAILURE;
-            }
-
-            /* Read data word */
-
-            while (reading_word < 32 && ptr < amount)
-            {
-              word = word | (buf[ptr++] << reading_word);
-              reading_data ++;
-              reading_word += 8;
-            }
-
-            /* Finished? */
-
-            if (reading_word == 32)
-            {
-              switch (tag)
-              {
-                case TLV_TAG_TYPE_FILE_SIZE:    if (setup->verbose > 0) printf("File size is %d\n",              word); break;
-                case TLV_TAG_TYPE_IMAGE_LENGTH: if (setup->verbose > 0) printf("Compressed data length is %d\n", word); break;
-                case TLV_TAG_TYPE_FILE_CRC:     if (setup->verbose > 0) printf("File CRC is &%08X\n",            word); break;
-                case TLV_TAG_TYPE_RANDOM_DATA:  if (setup->verbose > 0) printf("Random data is &%08X\n",         word); break;
-                case TLV_TAG_TYPE_UID:          if (setup->verbose > 0) printf("UID is &%08X\n",                 word); break;
-                case TLV_TAG_TYPE_IMAGE_TYPE:
-                {
-                  if (setup->verbose > 0)
-                  {
-                    printf("Image type: %s\n",
-                           word < (sizeof(type_names) / sizeof(*type_names)) ?
-                           type_names[word]                                  :
-                           "<Unknown!>");
-                  }
-
-                  type_of_image = (image_type) word;
-                }
-                break;
-                case TLV_TAG_TYPE_TASK_ACTION:
-                {
-                  if (setup->verbose > 0)
-                  {
-                    printf("Task action: %s\n",
-                           word < (sizeof(action_names) / sizeof(*action_names)) ?
-                           action_names[word]                                    :
-                           "<Unknown!>");
-                  }
-
-                  action = (action_type) word;
-                }
-                break;
-                default:
-                {
-                  printf("Fatal internal error (1)\n");
-                  exit(EXIT_FAILURE);
-                }
-              }
-
-              /* Don't forget to reset the values... */
-
-              reading_word = 0;
-              word         = 0;
-            }
-          }
-          break;
-
-          case TLV_TAG_TYPE_DISPLAY_STRING:
-          case TLV_TAG_TYPE_BUILD_LIST:
-          case TLV_TAG_TYPE_LOCALE_LIST:
-          case TLV_TAG_TYPE_TASK_NAME:
-          {
-            while (reading_data < size && ptr < amount)
-            {
-              char c = buf[ptr++];
-
-              reading_data++;
-
-              if (reading_data == 1 && setup->verbose > 0) printf("String value is \"");
-
-              if (c != '\0')
-              {
-                if (setup->verbose > 0) printf("%c", c);
-              }
-              else
-              {
-                if (setup->verbose > 0) printf("\"\n");
-
-                if (reading_data != size)
-                {
-                  printf("Error: Reached NUL in string but haven't read all expected data yet (%d bytes left hanging)\n", size - reading_data);
-                  return EXIT_FAILURE;
-                }
-              }
-            }
-          }
-          break;
-
-          case TLV_TAG_TYPE_IMAGE_DATA:
-          {
-            switch (type_of_image)
-            {
-              default:
-              case image_type_unknown:
-              {
-                printf("Error: Reached image data before finding out the image type\n");
-                return EXIT_FAILURE;
-              }
-              break;
-
-              case image_type_transient:
-              case image_type_resident:
-              case image_type_permanent:
-              {
-                static bool           expecting_stubname = true;
-                static int            reading_stubname   = NULL;
-                static char         * stubname           = NULL;
-                static char         * fullname           = NULL;
-                static int            subtype            = 0;
-
-                static unsigned int   stage              = 0;
-
-                static unsigned int   itemsize;
-                static unsigned int   loadaddr;
-                static unsigned int   execaddr;
-                static unsigned int   itemattr;
-
-                static unsigned int   reading_word       = 0;
-                static unsigned int   word               = 0;
-
-                static bool           completed          = false;
-
-                /* For archives, we first expect the 'stub' name of the file */
-
-                while (expecting_stubname && ptr < amount && reading_data < size)
-                {
-                  if (reading_stubname == 0)
-                  {
-                    /* These are just-in-case items; the bit handling the */
-                    /* 'completed' flag way down below *should* ensure    */
-                    /* that they are always reset appropriately.          */
-
-                    free(fullname), fullname = NULL;
-                    free(stubname), stubname = NULL;
-
-                    /* OK, allocate space for the first byte of the stubname */
-
-                    stubname = malloc(1);
-
-                    if (stubname == NULL)
-                    {
-                      printf("Error: Out of memory reading file stub name\n");
-                      return EXIT_FAILURE;
-                    }
-                  }
-                  else
-                  {
-                    /* Reallocate for the next byte */
-
-                    char * temp = realloc(stubname, reading_stubname + 1);
-
-                    if (temp == NULL)
-                    {
-                      printf("Error: Out of memory reading file stub name\n");
-                      return EXIT_FAILURE;
-                    }
-                    else stubname = temp;
-                  }
-
-                  stubname[reading_stubname] = buf[ptr++];
-
-                  /* The name terminates on NUL; after that we expect the subtype byte */
-
-                  if (stubname[reading_stubname] == '\0') expecting_stubname = false;
-
-                  reading_stubname ++;
-                  reading_data     ++;
-                }
-
-                if (reading_data >= size)
-                {
-                  free(stubname);
-                  printf("Error: Ran out of data for this record during archive processing\n");
-                  return EXIT_FAILURE;
-                }
-
-                /* Once the stubname is done, need the subtype byte */
-
-                if (!expecting_stubname && subtype == 0 && ptr < amount && reading_data < size)
-                {
-                  if (setup->verbose > 0) printf("Item stub name is '%s'\n", stubname);
-
-                  subtype = buf[ptr++] + 1;
-                  reading_data++;
-
-                  if (subtype != 1 && subtype != 2)
-                  {
-                    printf("Error: Subtype byte value %d not recognised\n", subtype);
-                  }
-                  else
-                  {
-                    if (setup->verbose == 2) printf("This is a %s\n", subtype == 1 ? "file" : "directory");
-                  }
-                }
-
-                /* If this is a file, we expect more data */
-
-                if (reading_data >= size && subtype == 1)
-                {
-                  free(stubname);
-                  printf("Error: Ran out of data for this record during archive processing\n");
-                  return EXIT_FAILURE;
-                }
-
-                if (subtype != 0 && fullname == NULL)
-                {
-                  /* Construct the full name */
-
-                  fullname = malloc(strlen(setup->extract_to) + strlen(stubname) + 2); /* 1 for separating ".", 1 for NUL */
-
-                  if (fullname == NULL)
-                  {
-                    printf("Error: Out of memory creating full filename\n");
-                    return EXIT_FAILURE;
-                  }
-                  else sprintf(fullname, "%s.%s", setup->extract_to, stubname);
-
-                  if (setup->verbose == 2) printf("Full name is '%s'\n", fullname);
-                }
-
-                /* If subtype is 2 (i.e. byte in file was 2-1 = 1) -> directory; create it now */
-
-                if (subtype == 2)
-                {
-                  _kernel_oserror * e = _swix(OS_File,
-                                              _INR(0,1) | _IN(4),
-
-                                              8,        /* Create directory */
-                                              fullname,
-                                              0);       /* Initial number of entries; 0 = use default */
-
-                  if (e != NULL)
-                  {
-                    printf("Error: %s", e->errmess);
-                    return EXIT_FAILURE;
-                  }
-
-                  /* Report and flag completion for this item */
-
-                  if (setup->verbose > 0) printf("Directory created\n");
-                  completed = true;
-                }
-
-                /* If subtype is 1 (i.e. byte in file was 1-1 = 0) -> file */
-
-                else if (subtype == 1)
-                {
-                  while (ptr < amount && reading_data < size && !completed)
-                  {
-                    switch (stage)
-                    {
-                      /* Need to read words for item size, load address, exec address and attributes */
-
-                      case 0:
-                      case 1:
-                      case 2:
-                      case 3:
-                      {
-                        /* Read the word */
-
-                        while (reading_word < 32 && ptr < amount && reading_data < size)
-                        {
-                          word = word | (buf[ptr++] << reading_word);
-                          reading_data ++;
-                          reading_word += 8;
-                        }
-
-                        /* Finished? Record it in the relevant variable */
-
-                        if (reading_word == 32)
-                        {
-                          switch (stage)
-                          {
-                            case 0: itemsize = word; break;
-                            case 1: loadaddr = word; break;
-                            case 2: execaddr = word; break;
-                            case 3: itemattr = word; break;
-                            default:
-                            {
-                              printf("Fatal internal error (2)\n");
-                              exit(EXIT_FAILURE);
-                            }
-                          }
-
-                          reading_word = 0;
-                          word         = 0;
-
-                          stage++;
-                        }
-
-                        /* Out of data unexpectedly? */
-
-                        if (reading_data >= size)
-                        {
-                          free(stubname);
-                          free(fullname);
-                          printf("Error: Ran out of data for this record during archive processing\n");
-                          return EXIT_FAILURE;
-                        }
-                      }
-                      break;
-
-                      /* When we get to stage 4, all words have been read; this is file data now */
-
-                      case 4:
-                      {
-                        static bool      restart_zlib = true;
-                        static z_stream  stream;
-                        Byte             outbuf[BSOutput_Extract];
-                        int              error;
-                        size_t           write, written;
-
-                        /* If not presently open, open the output file and wake up zlib */
-
-                        if (fout == NULL)
-                        {
-                          fout = fopen(fullname, "wb+");
-
-                          if (fout == NULL)
-                          {
-                            perror(fullname);
-                            return EXIT_FAILURE;
-                          }
-                          else if (restart_zlib == true)
-                          {
-                            restart_zlib = true;
-
-                            /* Set up basic stream info */
-
-                            memset(&stream, 0, sizeof(stream));
-
-                            stream.zalloc = Z_NULL;
-                            stream.zfree  = Z_NULL;
-                            stream.opaque = Z_NULL;
-
-                            /* Initialise the inflate engine */
-
-                            error = inflateInit(&stream);
-
-                            if (error)
-                            {
-                              free(stubname);
-                              free(fullname);
-                              fclose(fout);
-                              printf("Error: ZLib error %d at initialisation (%s)\n", error, stream.msg != NULL && *stream.msg != '\0' ? stream.msg : "no further details");
-                              return EXIT_FAILURE;
-                            }
-                          }
-                        }
-
-                        /* Work out how much data we can write this time around and write it */
-
-                        if (ptr < amount)
-                        {
-                          do
-                          {
-                            /* Read a chunk */
-
-                            stream.next_in  = (Byte *) (buf + ptr);
-                            stream.avail_in = ((amount - ptr) * sizeof(char)) / sizeof(Byte);
-
-                            /* Decompressor loop */
-
-                            do
-                            {
-                              stream.next_out  = outbuf;
-                              stream.avail_out = (uInt) sizeof(outbuf);
-
-                              error = inflate(&stream, Z_SYNC_FLUSH);
-
-                              if (error && error != Z_STREAM_END)
-                              {
-                                free(stubname);
-                                free(fullname);
-                                fclose(fout);
-                                printf("Error: ZLib error %d at decompression (%s)\n", error, stream.msg != NULL && *stream.msg != '\0' ? stream.msg : "no further details");
-                                return EXIT_FAILURE;
-                              }
-
-                              /* Write out the decompressed data */
-
-                              write   = (sizeof(outbuf) / sizeof(Byte)) - stream.avail_out;
-                              written = fwrite(outbuf,
-                                               sizeof(Byte),
-                                               write,
-                                               fout);
-
-                              if (written < write)
-                              {
-                                free(stubname);
-                                free(fullname);
-                                fclose(fout);
-                                perror(fullname);
-                                return EXIT_FAILURE;
-                              }
-
-                              /* Keep going until all input data is consumed */
-                            }
-                            while (stream.avail_in > 0 && !error);
-
-                            /* Increment our local data counters */
-
-                            reading_data += (amount - ptr - stream.avail_in);
-                            ptr          += (amount - ptr - stream.avail_in);
-
-                            /* Keep going until stream end, or we run out of data */
-                          }
-                          while (error != Z_STREAM_END && ptr < amount && reading_data < size);
-
-                          /* Finished? */
-
-                          if (error == Z_STREAM_END)
-                          {
-                            _kernel_oserror * e;
-
-                            fclose(fout), fout = NULL;
-
-                            error = inflateEnd(&stream);
-
-                            if (error && error != Z_STREAM_END)
-                            {
-                              free(stubname);
-                              free(fullname);
-                              printf("Error: ZLib error %d at inflate end (%s)\n", error, stream.msg != NULL && *stream.msg != '\0' ? stream.msg : "no further details");
-                              return EXIT_FAILURE;
-                            }
-
-                            /* Flag that zlib needs restarting next time around */
-
-                            restart_zlib = true;
-
-                            /* Set the item's attributes etc. */
-
-                            e = _swix(OS_File,
-                                      _INR(0,3) | _IN(5),
-
-                                      1,
-                                      fullname,
-                                      loadaddr,
-                                      execaddr,
-                                      itemattr);
-
-                            if (e != NULL)
-                            {
-                              printf("Error: %s", e->errmess);
-                              return EXIT_FAILURE;
-                            }
-
-                            /* Report and flag completion of this item */
-
-                            if (setup->verbose > 0) printf("File created\n");
-                            completed = true;
-                          }
-                          else /* Not finished, so shouldn't have reached end of data */
-                          {
-                            if (reading_data >= size)
-                            {
-                              free(stubname);
-                              free(fullname);
-                              fclose(fout);
-                              printf("Error: Ran out of input data before decompression completed\n");
-                              return EXIT_FAILURE;
-                            }
-                          }
-                        }
-                      }
-                      break;
-
-                      default:
-                      {
-                        printf("Fatal internal error (3)\n");
-                        exit(EXIT_FAILURE);
-                      }
-                      break;
-
-                    } /* 'switch (stage)' */
-
-                  } /* 'while (ptr < amount && reading_data < size) && !completed' */
-
-                } /* 'if (subtype == 1 && ptr < amount)' */
-
-                /* Did we finish that item? If so, reset this section of the state machine */
-                /* ready for the next thing in the archive.                                */
-
-                if (completed)
-                {
-                  free(stubname), stubname = NULL;
-                  free(fullname), fullname = NULL;
-
-                  expecting_stubname = true;
-                  reading_stubname   = 0;
-                  subtype            = 0;
-                  stage              = 0;
-                  completed          = false;
-                }
-
-              } /* 'case image_type_[permanent|resident|transient]:' */
-              break;
-
-              case image_type_os:
-              case image_type_font:
-              case image_type_exec:
-              {
-                unsigned int written, write;
-
-                /* If not presently open, open the output file */
-
-                if (fout == NULL)
-                {
-                  fout = fopen(setup->extract_to, "wb+");
-                  if (fout == NULL)
-                  {
-                    perror(setup->extract_to);
-                    return EXIT_FAILURE;
-                  }
-                }
-
-                /* Work out how much data we can write this time around and write it */
-
-                write = size - reading_data;
-                if (amount - ptr < write) write = amount - ptr;
-
-                written = fwrite(buf + ptr, sizeof(char), write, fout);
-
-                if (written != write)
-                {
-                  perror(setup->extract_to);
-                  fclose(fout), fout = NULL;
-                  return EXIT_FAILURE;
-                }
-                else ptr += written, reading_data += written;
-
-                /* Finished? */
-
-                if (reading_data == size)
-                {
-                  fclose(fout), fout = NULL;
-
-                  /* Set filetype to &FE5, "EPROM" - assuming OS upgrade here since we */
-                  /* don't really suport font or exec upgrade images yet.              */
-                  /*                                                                   */
-                  /* Don't really care if this SWI returns an error.                   */
-
-                  _swix(OS_File,
-                        _INR(0,2),
-
-                        18,                /* 18 -> filetype is in R2 */
-                        setup->extract_to,
-                        Main_FileType_EPROM);
-                }
-              }
-              break;
-            }
-          }
-          break;
-
-          default:
-          {
-            /* Just discard the data */
-
-            while (reading_data < size && ptr < amount)
-            {
-              ptr++, reading_data++;
-            }
-          }
-          break;
+          while (ptr < ds->ptr) update_crc((U8 *)(buf + (ptr++)), (U32 *)(&ds->crc));
         }
       }
 
-      if (reading_data == size)
+      if (ds->reading_data == ds->size)
       {
-        if (setup->verbose > 0) printf("All data received\n");
+        if (ds->setup->verbose >= 2) printf("main_decode_chunk             : All data received\n");
 
-        tag = size = 0;
-        expecting_data = false;
-        reading_size   = 0;
-        expecting_tag  = true;
+        ds->tag = ds->size = 0;
+        ds->expecting_data = false;
+        ds->reading_size   = 0;
+        ds->expecting_tag  = true;
       }
     }
   }
-  while (ptr < amount);
+  while (ds->ptr < amount);
+
+  if (ds->setup->verbose >= 2) printf("main_decode_chunk             : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_data_chunk()                                   */
+/*                                                            */
+/* Service function for main_decode_chunk. Once a tag and     */
+/* data size have been found, decode the data part of the     */
+/* tag. Should not be called if data size is zero. Detection  */
+/* that the amount of data read equals the data size must be  */
+/* done externally, with appropriate state machine resetting  */
+/* for the next tag.                                          */
+/*                                                            */
+/* Parameters are as for main_decode_chunk.                   */
+/**************************************************************/
+
+static int main_decode_data_chunk(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_data_chunk        : Called\n");
+
+  switch (ds->tag)
+  {
+    case TLV_TAG_TYPE_FILE_SIZE:
+    case TLV_TAG_TYPE_IMAGE_TYPE:
+    case TLV_TAG_TYPE_IMAGE_LENGTH:
+    case TLV_TAG_TYPE_FILE_CRC:
+    case TLV_TAG_TYPE_RANDOM_DATA:
+    case TLV_TAG_TYPE_UID:
+    case TLV_TAG_TYPE_TASK_ACTION:
+    {
+      return main_decode_data_word_chunk(buf, amount, first, ds);
+    }
+    break; /* Safety net in case above code gets, say, changed to not call return() */
+
+    case TLV_TAG_TYPE_DISPLAY_STRING:
+    case TLV_TAG_TYPE_BUILD_LIST:
+    case TLV_TAG_TYPE_LOCALE_LIST:
+    case TLV_TAG_TYPE_TASK_NAME:
+    {
+      return main_decode_data_string_chunk(buf, amount, first, ds);
+    }
+    break;
+
+    case TLV_TAG_TYPE_IMAGE_DATA:
+    {
+      return main_decode_data_image_chunk(buf, amount, first, ds);
+    }
+    break;
+
+    default:
+    {
+      /* Just discard the data */
+
+      while (ds->reading_data < ds->size && ds->ptr < amount)
+      {
+        ds->ptr++, ds->reading_data++;
+      }
+    }
+    break;
+  }
+
+  if (ds->setup->verbose >= 2) printf("main_decode_data_chunk        : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_data_word_chunk()                              */
+/*                                                            */
+/* Service function for main_decode_data_chunk. Called on tag */
+/* types FILE_SIZE, IMAGE_TYPE, IMAGE_LENGTH, FILE_CRC, UID,  */
+/* RANDOM_DATA and TASK_ACTION. Must not be called for other  */
+/* types.                                                     */
+/*                                                            */
+/* Parameters are as for main_decode_data_chunk.              */
+/**************************************************************/
+
+static int main_decode_data_word_chunk(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_data_word_chunk   : Called\n");
+
+  if (
+       ds->tag != TLV_TAG_TYPE_FILE_SIZE    &&
+       ds->tag != TLV_TAG_TYPE_IMAGE_LENGTH &&
+       ds->tag != TLV_TAG_TYPE_FILE_CRC     &&
+       ds->tag != TLV_TAG_TYPE_RANDOM_DATA  &&
+       ds->tag != TLV_TAG_TYPE_UID          &&
+       ds->tag != TLV_TAG_TYPE_IMAGE_TYPE   &&
+       ds->tag != TLV_TAG_TYPE_TASK_ACTION
+     )
+  {
+    printf("main_decode_data_word_chunk   : Called for invalid tag type %d\n", ds->tag);
+    return EXIT_FAILURE;
+  }
+
+  if (ds->size != 4)
+  {
+    printf("main_decode_data_word_chunk   : Error: Expecting to read one word of data for this tag, but data size is %d\n", ds->size);
+    return EXIT_FAILURE;
+  }
+
+  /* Read data word */
+
+  while (ds->reading_word < 32 && ds->ptr < amount)
+  {
+    ds->word = ds->word | (buf[ds->ptr++] << ds->reading_word);
+    ds->reading_data ++;
+    ds->reading_word += 8;
+  }
+
+  /* Finished? */
+
+  if (ds->reading_word == 32)
+  {
+    switch (ds->tag)
+    {
+      case TLV_TAG_TYPE_FILE_SIZE:    if (ds->setup->verbose >= 1) printf("main_decode_data_word_chunk   : File size is %d\n",                   ds->word); break;
+      case TLV_TAG_TYPE_IMAGE_LENGTH: if (ds->setup->verbose >= 1) printf("main_decode_data_word_chunk   : Decompressed data length is %d MB\n", ds->word); ds->decomp_size = ds->word; break;
+      case TLV_TAG_TYPE_RANDOM_DATA:  if (ds->setup->verbose >= 1) printf("main_decode_data_word_chunk   : Random data is &%08X\n",              ds->word); break;
+      case TLV_TAG_TYPE_UID:          if (ds->setup->verbose >= 1) printf("main_decode_data_word_chunk   : UID is &%08X\n",                      ds->word); ds->archive_uid = ds->word, ds->have_uid = true; break;
+      case TLV_TAG_TYPE_FILE_CRC:
+      {
+        if (ds->setup->verbose >= 1) printf("main_decode_data_word_chunk   : File CRC is &%08X (running CRC is &%08X)\n", ds->word, ds->crc);
+
+        ds->file_crc = ds->word;
+
+        if (ds->file_crc != ds->crc)
+        {
+          printf("quit() code: " "CRCMismatch"); exit(EXIT_FAILURE);
+        }
+        else if (ds->setup->verbose >= 1) printf("main_decode_data_word_chunk   : CRC passed\n");
+      }
+      break;
+      case TLV_TAG_TYPE_IMAGE_TYPE:
+      {
+        if (ds->setup->verbose >= 1)
+        {
+          printf("main_decode_data_word_chunk   : Image type: %s\n",
+                 ds->word < (sizeof(type_names) / sizeof(*type_names)) ?
+                 type_names[ds->word]                                  :
+                 "<Unknown!>");
+        }
+
+        ds->type_of_image = (image_type) ds->word;
+      }
+      break;
+      case TLV_TAG_TYPE_TASK_ACTION:
+      {
+        if (ds->setup->verbose >= 1)
+        {
+          printf("main_decode_data_word_chunk   : Task action: %s\n",
+                 ds->word < (sizeof(action_names) / sizeof(*action_names)) ?
+                 action_names[ds->word]                                    :
+                 "<Unknown!>");
+        }
+
+        ds->archive.action = (action_type) ds->word;
+      }
+      break;
+
+      default:
+      {
+        printf("main_decode_data_word_chunk   : Fatal internal error (1)\n");
+        exit(EXIT_FAILURE);
+      }
+    }
+
+    /* Don't forget to reset the values... */
+
+    ds->reading_word = 0;
+    ds->word         = 0;
+  }
+
+  if (ds->setup->verbose >= 2) printf("main_decode_data_word_chunk   : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_data_string_chunk()                            */
+/*                                                            */
+/* Service function for main_decode_data_chunk. Called on tag */
+/* types DISPLAY_STRING, BUILD_LIST, LOCALE_LIST and          */
+/* TASK_NAME. Must not be called for other types.             */
+/*                                                            */
+/* Parameters are as for main_decode_data_chunk.              */
+/**************************************************************/
+
+static int main_decode_data_string_chunk(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_data_string_chunk : Called\n");
+
+  if (
+       ds->tag != TLV_TAG_TYPE_DISPLAY_STRING &&
+       ds->tag != TLV_TAG_TYPE_BUILD_LIST     &&
+       ds->tag != TLV_TAG_TYPE_LOCALE_LIST    &&
+       ds->tag != TLV_TAG_TYPE_TASK_NAME
+     )
+  {
+    printf("main_decode_data_string_chunk : Called for invalid tag type %d\n", ds->tag);
+    return EXIT_FAILURE;
+  }
+
+  while (ds->reading_data < ds->size && ds->ptr < amount)
+  {
+    char    c = buf[ds->ptr++];
+    char  * r;
+    char ** write;
+
+    switch (ds->tag)
+    {
+      case TLV_TAG_TYPE_DISPLAY_STRING: write = &ds->display;           break;
+      case TLV_TAG_TYPE_BUILD_LIST:     write = &ds->build;             break;
+      case TLV_TAG_TYPE_LOCALE_LIST:    write = &ds->locale;            break;
+      case TLV_TAG_TYPE_TASK_NAME:      write = &ds->archive.task_name; break;
+    }
+
+
+    if (ds->reading_data == 0) r = malloc(1);
+    else                       r = realloc(*write, ds->reading_data + 1);
+
+    if (r == 0)
+    {
+      printf("main_decode_data_string_chunk : Out of memory\n");
+      printf("quit() code: " "NotEnoughMemory"); exit(EXIT_FAILURE);
+    }
+    else *write = r;
+
+    r[ds->reading_data++] = c;
+    if (ds->reading_data == 1)
+    {
+      if (ds->setup->verbose >= 1) printf("main_decode_data_string_chunk : String value is \"");
+    }
+
+    if (c != '\0')
+    {
+      if (ds->setup->verbose >= 1) printf("%c", c);
+    }
+    else
+    {
+      /* Finished reading this string */
+
+      if (ds->setup->verbose >= 1) printf("\"\n");
+
+      if (ds->reading_data != ds->size)
+      {
+        printf("main_decode_data_string_chunk : Error: Reached NUL in string but haven't read all expected data yet (%d bytes left hanging)\n", ds->size - ds->reading_data);
+        return EXIT_FAILURE;
+      }
+
+      switch(ds->tag)
+      {
+        case TLV_TAG_TYPE_DISPLAY_STRING:
+        {
+          if (ds->display != NULL && *ds->display != '\0')
+          {
+            /* Update the front-end to display the string */
+
+            if (ds->setup->verbose >= 1) printf("main_decode_data_string_chunk : Would now show display string in front-end...\n");
+          }
+        }
+        break;
+
+        case TLV_TAG_TYPE_BUILD_LIST:
+        {
+          if (ds->build != NULL && *ds->build != '\0')
+          {
+            /* Check the build is correct for this OS */
+
+            if (ds->setup->verbose >= 1) printf("main_decode_data_string_chunk : Would now check the OS matches the build list...\n");
+          }
+        }
+        break;
+
+        case TLV_TAG_TYPE_LOCALE_LIST:
+        {
+          if (ds->locale != NULL && *ds->locale != '\0')
+          {
+            /* Check the locale is correct for this territory */
+
+            if (ds->setup->verbose >= 1) printf("main_decode_data_string_chunk : Would now check the territory matches the locale list...\n");
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  if (ds->setup->verbose >= 2) printf("main_decode_data_string_chunk : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_data_image_chunk()                             */
+/*                                                            */
+/* Service function for main_decode_data_chunk. Called on tag */
+/* type IMAGE_DATA only. Must not be called for other types.  */
+/*                                                            */
+/* Parameters are as for main_decode_data_chunk.              */
+/**************************************************************/
+
+static int main_decode_data_image_chunk(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_data_image_chunk  : Called\n");
+
+  if (ds->tag != TLV_TAG_TYPE_IMAGE_DATA)
+  {
+    printf("main_decode_data_image_chunk  : Called for invalid tag type %d\n", ds->tag);
+    return EXIT_FAILURE;
+  }
+
+  switch (ds->type_of_image)
+  {
+    default:
+    case image_type_unknown:
+    {
+      printf("main_decode_data_image_chunk  : Error: Reached image data before finding out the image type\n");
+      return EXIT_FAILURE;
+    }
+    break;
+
+    case image_type_transient:
+    case image_type_resident:
+    case image_type_permanent:
+    {
+      return main_decode_trp(buf, amount, first, ds);
+    }
+    break;
+
+    case image_type_os:
+    case image_type_font:
+    case image_type_exec:
+    case image_type_configuration:
+    {
+      return main_decode_ofec(buf, amount, first, ds);
+    }
+    break;
+  }
+
+  /* Should never drop through to here */
+
+  if (ds->setup->verbose >= 2) printf("main_decode_data_image_chunk  : Fatal internal error (4)\n");
+
+  return EXIT_FAILURE;
+}
+
+/**************************************************************/
+/* main_decode_ofec()                                         */
+/*                                                            */
+/* Service function for main_decode_data_image_chunk. Called  */
+/* for image types os, font, exec and configuration only.     */
+/*                                                            */
+/* Parameters are as for main_decode_data_image_chunk.        */
+/**************************************************************/
+
+static int main_decode_ofec(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  unsigned int write;
+
+  if (ds->setup->verbose >= 2) printf("main_decode_ofec              : Called\n");
+
+  if (
+       ds->type_of_image != image_type_os   &&
+       ds->type_of_image != image_type_font &&
+       ds->type_of_image != image_type_exec &&
+       ds->type_of_image != image_type_configuration
+     )
+  {
+    printf("main_decode_ofec              : Called for invalid image type %d\n", ds->type_of_image);
+    return EXIT_FAILURE;
+  }
+
+  /* If we don't have a dynamic area, now's the time to get one */
+
+  if (dynamic_area_base == 0)
+  {
+    _kernel_oserror * e;
+
+    dynamic_area_size = ds->size;
+
+    /* If this is a configuration update file, 4 bytes will have been 'eaten' */
+    /* and the remaining size indicator in ds->size adjusted. Take account    */
+    /* of this.                                                               */
+
+    if (ds->type_of_image == image_type_configuration) dynamic_area_size += 4;
+
+    /* Claim the area */
+
+    e = _swix(OS_DynamicArea,
+              _INR(0,8) | _OUT(1) | _OUT(3),
+
+              0,                            /* Reason code; 0 = claim new area     */
+              -1,                           /* Must be -1                          */
+              dynamic_area_size,            /* Initial size                        */
+              -1,                           /* Must be -1                          */
+              1<<7,                         /* Flags; bit 7 -> not user resizeable */
+              16 * 1024 * 1024,             /* Maximum size                        */
+              0,                            /* No handler routine                  */
+              -1,                           /* ...so this is irrelevant really     */
+              Module_ComponentName " data", /* Name of area, for Task Manager      */
+
+              &dynamic_area_number,
+              &dynamic_area_base);
+
+    if (e != NULL)
+    {
+      printf("main_code_ofec: Error '%s' from OS_DynamicArea\n", e->errmess);
+      return EXIT_FAILURE;
+    }
+
+    if (ds->setup->verbose >= 1) printf("main_decode_ofec              : Dynamic area %d created (%d bytes)\n", dynamic_area_number, dynamic_area_size);
+  }
+
+  if (ds->type_of_image == image_type_configuration && ds->image.total < 4)
+  {
+    /* We swallowed the first 4 bytes thinking they were a tag... */
+
+    if (dynamic_area_size < 4)
+    {
+      printf("main_decode_ofec              : DA size for configuration type should be at least 4 bytes\n");
+      return EXIT_FAILURE;
+    }
+
+    dynamic_area_base[0] = (ds->image.not_tag & 0xff);
+    dynamic_area_base[1] = (ds->image.not_tag & 0xff00) >> 8;
+    dynamic_area_base[2] = (ds->image.not_tag & 0xff0000) >> 16;
+    dynamic_area_base[3] = (ds->image.not_tag & 0xff000000) >> 24;
+
+    ds->image.total = 4;
+  }
+
+  /* Work out how much data we can write this time around and write it */
+
+  write = ds->size - ds->reading_data;
+  if (amount - ds->ptr < write) write = amount - ds->ptr;
+
+  if (write + ds->image.total > dynamic_area_size)
+  {
+    /* Since we took care to claim an area of correct size to start with, this should */
+    /* never be necessary - but it does work (e.g. set dynamic_area_size to 4 above   */
+    /* to test it) and is useful "just in case".                                      */
+
+    unsigned int      changed_by;
+    _kernel_oserror * e;
+
+    if (ds->setup->verbose >= 2) printf("main_decode_ofec              : Resize area by %d bytes\n", ds->image.total + write - dynamic_area_size);
+
+    e = _swix(OS_ChangeDynamicArea,
+              _INR(0,1) | _OUT(1),
+
+              dynamic_area_number,
+              ds->image.total + write - dynamic_area_size,
+
+              &changed_by);
+
+    if (e != NULL)
+    {
+      printf("main_code_ofec: Error '%s' from OS_ChangeDynamicArea\n", e->errmess);
+      return EXIT_FAILURE;
+    }
+
+    dynamic_area_size += changed_by;
+
+    if (ds->setup->verbose >= 1) printf("main_decode_ofec              : Dynamic area %d resized to %d bytes\n", dynamic_area_number, dynamic_area_size);
+  }
+
+  memcpy(dynamic_area_base + ds->image.total,
+         buf + ds->ptr,
+         write);
+
+  ds->image.total  += write;
+  ds->ptr          += write;
+  ds->reading_data += write;
+
+  if (ds->setup->verbose >= 2)
+  {
+    printf("main_decode_ofec              : Wrote %d bytes at offset %d...\n"
+           "main_decode_ofec              : ...to arrive at image.total %d, ptr %d and reading_data %d\n",
+           write,
+           ds->image.total - write,
+           ds->image.total,
+           ds->ptr,
+           ds->reading_data);
+  }
+
+  /* Finished? */
+
+  if (ds->reading_data == ds->size)
+  {
+    unsigned int written, type;
+
+    if (ds->setup->verbose >= 2) printf("main_decode_ofec              : Finished\n");
+
+    switch (ds->type_of_image)
+    {
+      case image_type_font:
+      case image_type_exec:
+      {
+        if (ds->setup->verbose >= 1) printf("main_decode_ofec              : This image type is not fully supported; taking no further action\n");
+        type = Main_FileType_Data;
+      }
+      break;
+
+      case image_type_os:
+      {
+        if (ds->setup->verbose >= 1) printf("main_decode_ofec              : Would now commence FLASH ROM programming from compressed OS image...\n");
+        type = Main_FileType_EPROM;
+      }
+      break;
+
+      case image_type_configuration:
+      {
+        if (ds->setup->verbose >= 1) printf("main_decode_ofec              : Would send configuration update file off now...\n");
+        type = Main_FileType_Text;
+      }
+      break;
+
+      default:
+      {
+        printf("main_decode_ofec              : Fatal internal error (6)\n");
+        return EXIT_FAILURE;
+      }
+      break;
+    }
+
+    /* Write the data to a file */
+
+    if (ds->setup->verbose >= 1) printf("main_decode_ofec              : Dumping area to disc\n");
+
+    extract_fout = fopen(ds->extract_to, "wb");
+
+    if (extract_fout == NULL)
+    {
+      printf("main_code_ofec: Can't open extract file\n");
+      return EXIT_FAILURE;
+    }
+
+    written = fwrite(dynamic_area_base, 1, ds->image.total, extract_fout);
+    fclose(extract_fout), extract_fout = NULL;
+
+    if (written != ds->image.total)
+    {
+      printf("main_code_ofec: Could only write %d bytes of %d total\n", written, ds->image.total);
+      return EXIT_FAILURE;
+    }
+
+    /* Set the filetype */
+
+    _swix(OS_File,
+          _INR(0,2),
+
+          18,
+          ds->extract_to,
+          type);
+  }
+
+  if (ds->setup->verbose >= 2) printf("main_decode_ofec              : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_trp()                                          */
+/*                                                            */
+/* Service function for main_decode_data_image_chunk. Called  */
+/* for image types transient, resident and permanent only.    */
+/*                                                            */
+/* Parameters are as for main_decode_data_image_chunk.        */
+/**************************************************************/
+
+static int main_decode_trp(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_trp               : Called\n");
+
+  if (
+       ds->type_of_image != image_type_transient &&
+       ds->type_of_image != image_type_resident  &&
+       ds->type_of_image != image_type_permanent
+     )
+  {
+    printf("main_decode_trp               : Called for invalid image type %d\n", ds->type_of_image);
+    return EXIT_FAILURE;
+  }
+
+  /* For archives, we first expect the 'stub' name of the file */
+
+  if (main_decode_trp_stubname(buf, amount, first, ds) == EXIT_FAILURE) return EXIT_FAILURE;
+
+  /* Once the stubname is done, need the subtype byte; may have to do some */
+  /* setup though, if this is the first file we've encountered.            */
+
+  if (main_decode_trp_subtype(buf, amount, first, ds) == EXIT_FAILURE) return EXIT_FAILURE;
+
+  /* If subtype is 2 (i.e. byte in file was 2-1 = 1) -> directory; create it now. */
+  /* If subtype is 1 (i.e. byte in file was 1-1 = 0) -> file...                   */
+
+  if (ds->archive.subtype == 2)
+  {
+    if (main_decode_trp_subtype_isdir(buf, amount, first, ds) == EXIT_FAILURE) return EXIT_FAILURE;
+  }
+  else if (ds->archive.subtype == 1)
+  {
+    if (main_decode_trp_subtype_isfile(buf, amount, first, ds) == EXIT_FAILURE) return EXIT_FAILURE;
+  }
+
+  /* Did we finish that item? If so, reset this section of the state machine */
+  /* ready for the next thing in the archive, or run the existant copy if a  */
+  /* UID match was made.                                                     */
+
+  if (ds->archive.completed)
+  {
+    /* Is this the first full name? */
+
+    if (ds->archive.first_fullname == NULL)
+    {
+      ds->archive.first_fullname = utils_strdup(ds->archive.fullname);
+
+      if (ds->archive.first_fullname == NULL)
+      {
+        printf("main_decode_trp               : Error: Out of memory copying first full name\n");
+        printf("quit() code: " "NotEnoughMemory"); exit(EXIT_FAILURE);
+      }
+    }
+
+    /* Reset other stuff */
+
+    free(ds->archive.stubname), ds->archive.stubname = NULL;
+    free(ds->archive.fullname), ds->archive.fullname = NULL;
+
+    ds->archive.expecting_stubname = true;
+    ds->archive.reading_stubname   = 0;
+    ds->archive.subtype            = 0;
+    ds->archive.stage              = 0;
+    ds->archive.completed          = false;
+  }
+
+  if (ds->setup->verbose >= 2) printf("main_decode_trp               : Successful; completed = %d\n", ds->archive.completed);
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_trp_stubname()                                 */
+/*                                                            */
+/* Service function for main_decode_trp. Called to extract    */
+/* the stubname from a transient, resident or permanent       */
+/* image's main data area.                                    */
+/*                                                            */
+/* Parameters are as for main_decode_trp.                     */
+/**************************************************************/
+
+static int main_decode_trp_stubname(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_stubname      : Called\n");
+
+  while (ds->archive.expecting_stubname && ds->ptr < amount && ds->reading_data < ds->size)
+  {
+    if (ds->archive.reading_stubname == 0)
+    {
+      /* These are just-in-case items; the bit handling the */
+      /* 'completed' flag way down below *should* ensure    */
+      /* that they are always reset appropriately.          */
+
+      free(ds->archive.fullname), ds->archive.fullname = NULL;
+      free(ds->archive.stubname), ds->archive.stubname = NULL;
+
+      /* OK, allocate space for the first byte of the stubname */
+
+      ds->archive.stubname = malloc(1);
+
+      if (ds->archive.stubname == NULL)
+      {
+        printf("main_decode_trp_stubname      : Error: Out of memory reading file stub name\n");
+        printf("quit() code: " "NotEnoughMemory"); exit(EXIT_FAILURE);
+      }
+    }
+    else
+    {
+      /* Reallocate for the next byte */
+
+      char * temp = realloc(ds->archive.stubname, ds->archive.reading_stubname + 1);
+
+      if (temp == NULL)
+      {
+        printf("main_decode_trp_stubname      : Error: Out of memory reading file stub name\n");
+        printf("quit() code: " "NotEnoughMemory"); exit(EXIT_FAILURE);
+      }
+      else ds->archive.stubname = temp;
+    }
+
+    ds->archive.stubname[ds->archive.reading_stubname] = buf[ds->ptr++];
+
+    /* The name terminates on NUL; after that we expect the subtype byte */
+
+    if (ds->archive.stubname[ds->archive.reading_stubname] == '\0') ds->archive.expecting_stubname = false;
+
+    ds->archive.reading_stubname ++;
+    ds->reading_data             ++;
+  }
+
+  if (ds->reading_data >= ds->size)
+  {
+    free(ds->archive.stubname);
+    printf("main_decode_trp_stubname      : Error: Ran out of data for this record during archive processing\n");
+    return EXIT_FAILURE;
+  }
+
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_stubname      : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_trp_subtype()                                  */
+/*                                                            */
+/* Service function for main_decode_trp. Called to extract    */
+/* the subtype byte from a transient, resident or permanent   */
+/* image's main data area. Once obtained, the full name using */
+/* the decoder_state structure's extract_to path is built;    */
+/* the extract_to path itself is set up here.                 */
+/*                                                            */
+/* Parameters are as for main_decode_trp.                     */
+/**************************************************************/
+
+static int main_decode_trp_subtype(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_subtype       : Called\n");
+
+  if (!ds->archive.expecting_stubname && ds->archive.subtype == 0 && ds->ptr < amount && ds->reading_data < ds->size)
+  {
+    if (ds->setup->verbose >= 1) printf("main_decode_trp_subtype       : Item stub name is '%s'\n", ds->archive.stubname);
+
+    /* Was this the first item? */
+
+    if (ds->lock_first)
+    {
+      ds->lock_first = false;
+
+      if (ds->have_uid)
+      {
+        if (ds->setup->verbose >= 1) printf("main_decode_trp_subtype       : Would try to find archive matching UID &%08X now...\n", ds->archive_uid);
+      }
+
+      if (*ds->extract_to == '\0')
+      {
+        free(ds->archive.stubname);
+        printf("main_decode_trp_subtype       : Don't have an extract path!\n");
+        return EXIT_FAILURE;
+      }
+    }
+
+    /* Get the subtype */
+
+    ds->archive.subtype = buf[ds->ptr++] + 1;
+    ds->reading_data++;
+
+    if (ds->archive.subtype != 1 && ds->archive.subtype != 2)
+    {
+      printf("main_decode_trp_subtype       : Error: Subtype byte value %d not recognised\n", ds->archive.subtype);
+    }
+    else
+    {
+      if (ds->setup->verbose >= 1) printf("main_decode_trp_subtype       : This is a %s\n", ds->archive.subtype == 1 ? "file" : "directory");
+    }
+  }
+
+  /* For files, we expect more data */
+
+  if (ds->reading_data >= ds->size && ds->archive.subtype == 1)
+  {
+    free(ds->archive.stubname);
+    printf("main_decode_trp_subtype       : Error: Ran out of data for this record during archive processing\n");
+    return EXIT_FAILURE;
+  }
+
+  if (ds->archive.subtype != 0 && ds->archive.fullname == NULL)
+  {
+    /* Construct the full name */
+
+    ds->archive.fullname = malloc(strlen(ds->extract_to) + strlen(ds->archive.stubname) + 2); /* 1 for separating ".", 1 for NUL */
+
+    if (ds->archive.fullname == NULL)
+    {
+      printf("main_decode_trp_subtype       : Error: Out of memory creating full filename\n");
+      printf("quit() code: " "NotEnoughMemory"); exit(EXIT_FAILURE);
+    }
+    else sprintf(ds->archive.fullname, "%s.%s", ds->extract_to, ds->archive.stubname);
+
+    if (ds->setup->verbose >= 1) printf("main_decode_trp_subtype       : Full name is '%s'\n", ds->archive.fullname);
+  }
+
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_subtype       : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_trp_subtype_isdir()                            */
+/*                                                            */
+/* Service function for main_decode_trp. Called to handle     */
+/* directory items (subtype byte value 1; since the value is  */
+/* incremented by 1 in the decoder_state structure to allow 0 */
+/* for 'not obtained yet', the ds->subtype value should be 2  */
+/* if this function is to be called).                         */
+/*                                                            */
+/* Parameters are as for main_decode_trp.                     */
+/**************************************************************/
+
+static int main_decode_trp_subtype_isdir(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  _kernel_oserror * e;
+
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_subtype_isdir : Called\n");
+
+  if (ds->archive.subtype != 2)
+  {
+    printf("main_decode_trp_subtype_isdir : Called for invalid subtype '%d'\n", ds->archive.subtype);
+    return EXIT_FAILURE;
+  }
+
+  e = main_create_directory(ds->archive.fullname);
+
+  if (e != NULL)
+  {
+    printf("main_decode_trp_subtype_isdir : Error: %s", e->errmess);
+    return EXIT_FAILURE;
+  }
+
+  /* Report and flag completion for this item */
+
+  if (ds->setup->verbose >= 1) printf("main_decode_trp_subtype_isdir : Directory created\n");
+
+  ds->archive.completed = true;
+  ds->archive.total_items++;
+
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_subtype_isdir : Successful\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_trp_subtype_isfile()                           */
+/*                                                            */
+/* Service function for main_decode_trp. Called to handle     */
+/* file items (subtype byte value 0; since the value is       */
+/* incremented by 1 in the decoder_state structure to allow 0 */
+/* for 'not obtained yet', the ds->subtype value should be 1  */
+/* if this function is to be called).                         */
+/*                                                            */
+/* Parameters are as for main_decode_trp.                     */
+/**************************************************************/
+
+static int main_decode_trp_subtype_isfile(const char * buf, unsigned int amount, bool first, decoder_state * ds)
+{
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_subtype_isfile: Called\n");
+
+  if (ds->archive.subtype != 1)
+  {
+    printf("main_decode_trp_subtype_isfile: Called for invalid subtype '%d'\n", ds->archive.subtype);
+    return EXIT_FAILURE;
+  }
+
+  while (ds->ptr < amount && ds->reading_data < ds->size && !ds->archive.completed)
+  {
+    switch (ds->archive.stage)
+    {
+      /* Need to read words for item size, load address, exec address and attributes */
+
+      case 0:
+      case 1:
+      case 2:
+      case 3:
+      {
+        /* Read the word */
+
+        while (ds->reading_word < 32 && ds->ptr < amount && ds->reading_data < ds->size)
+        {
+          ds->word = ds->word | (buf[ds->ptr++] << ds->reading_word);
+          ds->reading_data ++;
+          ds->reading_word += 8;
+        }
+
+        /* Finished? Record it in the relevant variable */
+
+        if (ds->reading_word == 32)
+        {
+          switch (ds->archive.stage)
+          {
+            case 0: ds->archive.itemsize = ds->word; break;
+            case 1: ds->archive.loadaddr = ds->word; break;
+            case 2: ds->archive.execaddr = ds->word; break;
+            case 3: ds->archive.itemattr = ds->word; break;
+            default:
+            {
+              printf("main_decode_trp_subtype_isfile: Fatal internal error (2)\n");
+              exit(EXIT_FAILURE);
+            }
+          }
+
+          ds->reading_word = 0;
+          ds->word         = 0;
+
+          ds->archive.stage++;
+        }
+
+        /* Out of data unexpectedly? */
+
+        if (ds->reading_data >= ds->size)
+        {
+          free(ds->archive.stubname);
+          free(ds->archive.fullname);
+          printf("main_decode_trp_subtype_isfile: Error: Ran out of data for this record during archive processing\n");
+          return EXIT_FAILURE;
+        }
+      }
+      break;
+
+      /* When we get to stage 4, all words have been read; this is file data now */
+
+      case 4:
+      {
+        Byte   outbuf[BSOutput_Extract];
+        int    error;
+        size_t write, written;
+
+        /* If not presently open, open the output file and wake up zlib */
+
+        if (ds->fout == NULL)
+        {
+          extract_fout = ds->fout = fopen(ds->archive.fullname, "wb");
+
+          if (ds->fout == NULL)
+          {
+            /* perror(ds->archive.fullname); */
+            return EXIT_FAILURE;
+          }
+          else if (ds->archive.restart_zlib == true)
+          {
+            ds->archive.restart_zlib = false;
+
+            /* Set up basic stream info */
+
+            memset(&ds->archive.stream, 0, sizeof(ds->archive.stream));
+
+            ds->archive.stream.zalloc = Z_NULL;
+            ds->archive.stream.zfree  = Z_NULL;
+            ds->archive.stream.opaque = Z_NULL;
+
+            /* Initialise the inflate engine */
+
+            error = inflateInit(&ds->archive.stream);
+
+            if (error)
+            {
+              free(ds->archive.stubname);
+              free(ds->archive.fullname);
+              fclose(ds->fout), ds->fout = extract_fout = NULL;
+              printf("main_decode_trp_subtype_isfile: Error: ZLib error %d at initialisation (%s)\n", error, ds->archive.stream.msg != NULL && *ds->archive.stream.msg != '\0' ? ds->archive.stream.msg : "no further details");
+              return EXIT_FAILURE;
+            }
+          }
+        }
+
+        /* Work out how much data we can write this time around and write it */
+
+        if (ds->ptr < amount)
+        {
+          do
+          {
+            /* Read a chunk */
+
+            ds->archive.stream.next_in  = (Byte *) (buf + ds->ptr);
+            ds->archive.stream.avail_in = ((amount - ds->ptr) * sizeof(char)) / sizeof(Byte);
+
+            /* Decompressor loop */
+
+            do
+            {
+              ds->archive.stream.next_out  = outbuf;
+              ds->archive.stream.avail_out = (uInt) sizeof(outbuf);
+
+              error = inflate(&ds->archive.stream, Z_SYNC_FLUSH);
+
+              if (error && error != Z_STREAM_END)
+              {
+                free(ds->archive.stubname);
+                free(ds->archive.fullname);
+                fclose(ds->fout), ds->fout = extract_fout = NULL;
+                printf("main_decode_trp_subtype_isfile: Error: ZLib error %d at decompression (%s)\n", error, ds->archive.stream.msg != NULL && *ds->archive.stream.msg != '\0' ? ds->archive.stream.msg : "no further details");
+                return EXIT_FAILURE;
+              }
+
+              /* Write out the decompressed data */
+
+              write   = (sizeof(outbuf) / sizeof(Byte)) - ds->archive.stream.avail_out;
+              written = fwrite(outbuf,
+                               sizeof(Byte),
+                               write,
+                               ds->fout);
+
+              if (written < write)
+              {
+                free(ds->archive.stubname);
+                free(ds->archive.fullname);
+                fclose(ds->fout), ds->fout = extract_fout = NULL;
+                printf("quit() code: " "NotEnoughMemory"); exit(EXIT_FAILURE);
+              }
+
+              /* Keep going until all input data is consumed */
+            }
+            while (ds->archive.stream.avail_in > 0 && !error);
+
+            /* Increment our local data counters */
+
+            ds->reading_data += (amount - ds->ptr - ds->archive.stream.avail_in);
+            ds->ptr          += (amount - ds->ptr - ds->archive.stream.avail_in);
+
+            /* Keep going until stream end, or we run out of data */
+          }
+          while (error != Z_STREAM_END && ds->ptr < amount && ds->reading_data < ds->size);
+
+          /* Finished? */
+
+          if (error == Z_STREAM_END)
+          {
+            _kernel_oserror * e;
+
+            fclose(ds->fout), ds->fout = extract_fout = NULL;
+
+            error = inflateEnd(&ds->archive.stream);
+
+            if (error && error != Z_STREAM_END)
+            {
+              free(ds->archive.stubname);
+              free(ds->archive.fullname);
+              printf("main_decode_trp_subtype_isfile: Error: ZLib error %d at inflate end (%s)\n", error, ds->archive.stream.msg != NULL && *ds->archive.stream.msg != '\0' ? ds->archive.stream.msg : "no further details");
+              return EXIT_FAILURE;
+            }
+
+            /* Reset the byte counter for the state machine */
+
+            ds->archive.restart_zlib = true;
+
+            /* Set the item's attributes etc. */
+
+            e = _swix(OS_File,
+                      _INR(0,3) | _IN(5),
+
+                      1,
+                      ds->archive.fullname,
+                      ds->archive.loadaddr,
+                      ds->archive.execaddr,
+                      ds->archive.itemattr);
+
+            if (e != NULL)
+            {
+              printf("main_decode_trp_subtype_isfile: Error: %s", e->errmess);
+              return EXIT_FAILURE;
+            }
+
+            /* Report and flag completion of this item */
+
+            if (ds->setup->verbose >= 1) printf("main_decode_trp_subtype_isfile: File created\n");
+
+            ds->archive.completed   = true;
+            ds->archive.total_items ++;
+            ds->archive.total_size  += ds->archive.itemsize;
+          }
+          else
+          {
+            /* If not at stream end, expect more data */
+
+            if (ds->reading_data >= ds->size)
+            {
+              free(ds->archive.stubname);
+              free(ds->archive.fullname);
+              fclose(ds->fout), ds->fout = extract_fout = NULL;
+              printf("main_decode_trp_subtype_isfile: Error: Ran out of input data before decompression ds->archive.completed\n");
+              return EXIT_FAILURE;
+            }
+          }
+        }
+      }
+      break;
+
+      default:
+      {
+        printf("main_decode_trp_subtype_isfile: Fatal internal error (3)\n");
+        exit(EXIT_FAILURE);
+      }
+      break;
+
+    } /* 'switch (ds->archive.stage)' */
+
+  } /* 'while (ds->ptr < amount && ds->reading_data < ds->size) && !ds->archive.completed' */
+
+  if (ds->setup->verbose >= 2) printf("main_decode_trp_subtype_isfile: Successful\n");
 
   return EXIT_SUCCESS;
 }
