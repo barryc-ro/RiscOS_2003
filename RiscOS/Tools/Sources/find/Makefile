@@ -1,126 +1,61 @@
-# File:    Makefile
-# Purpose: Makefile for find
-# Author:  Neil Bingham
+# Makefile for find
 #
-# History:
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+# 01-Mar-01  SNB          Created
 #
-# 09-Nov-99   NB         Created.
-# 17-Nov-99   BAL        Builds actual find tool as well.  Gets versions and
-#                          dates from VersionNum.
-# 18-Nov-99   BAL        Added missing -DDDE so that throwback is supported.
 
-
-
-
-# ------------------------------------------------------------------------------
+#
 # Paths
 #
+COMPONENT = find
+TARGET    = find
 
-LIBDIR		= <Lib$Dir>
-LIBINSTDIR	= ${INSTDIR}.Library.Acorn
-INSTAPP		= ${INSTDIR}.Apps.!Find
+CFLAGS    = -Wpc -ffah -IC:CLX -DDDE
+DIRS      = o._dirs
 
+INSTAPP   = ${INSTDIR}.Apps.!Find
+LIBDIR    = ${INSTDIR}.Library.Acorn
 
-
-
-# ------------------------------------------------------------------------------
-# Generic options
 #
-
-MKDIR		= mkdir -p
-AS		= objasm
-CP		= copy
-CC		= cc
-RM		= remove
-LD		= link
-WIPE		= -wipe
-SQZ		= squeeze
-
-CCFLAGS		= -c -depend !Depend -ffah -strict\
-		  -I$(INCLUDES) $(DFLAGS) $(THROWBACK) $(CCEXTRA)
-ASFLAGS		= -depend !Depend -Stamp -quit
-CPFLAGS		= ~clfnr~v
-LBFLAGS		= -c
-WFLAGS		= ~CF~V
-LDFLAGS		= -c++
-SQZFLAGS	= -f
-
-
-
-
-# -----------------------------------------------------------------------------
-# Libraries
+# Program specific options:
 #
+OBJS       = find.o
+LIBS       = ${CLXLIB} ${CLIB}
 
-CLIB		= CLib:o.stubs
-CLXLIB		= C:CLX.o.clxlib
+include Makefiles:StdTools
+include Makefiles:AppLibs
+include Makefiles:AppStdRule
 
-LIBS =\
- $(CLIB) 	\
- $(CLXLIB)	\
-
-
-
-
-# ------------------------------------------------------------------------------
-# Include files
 #
-
-INCLUDES	= C:
-
-
-
-
-# ------------------------------------------------------------------------------
-# Program specific options
+# build a the library:
 #
+all:    ${TARGET}
 
-COMPONENT	= find
-TARGET		= find
-
-DFLAGS		= -DDDE
-
-OBJS =\
- o.find\
-
-
-
-
-# ------------------------------------------------------------------------------
-# Rule patterns
 #
-
-.SUFFIXES: .o .c
-.c.o:;		$(CC)  $(CCFLAGS)  -o $@ $<
-
-
-
-
-# ------------------------------------------------------------------------------
-# Build rules
+# RISC OS ROM build rules:
 #
+rom: ${TARGET}
+        @echo ${COMPONENT}: rom module built
 
-all:	$(TARGET)
-        @echo $(COMPONENT): build complete
+export: export_${PHASE}
 
-export: $(TARGET)
-        @echo $(COMPONENT): export complete
-
-clean:
-	$(WIPE) o $(WFLAGS)
-	$(RM) o
-	$(RM) $(TARGET)
-	@echo $(COMPONENT): cleaned
-
-$(TARGET): $(OBJS) $(LIBS) local_dirs
-	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
-	${SQZ} ${SQZFLAGS} $@
-
+install_rom: ${TARGET}
+        @echo ${COMPONENT}: rom module installed
+        
 install_tool: ${TARGET}
-	${CP} ${TARGET} ${LIBINSTDIR}.${TARGET} ${CPFLAGS}
-	@echo ${COMPONENT}: tool and docs installed in library
+	${MKDIR} ${LIBDIR}.Docs
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	@echo ${COMPONENT}: tool installed in library
 
-install: install_tool install_dirs
+install: install_resources install_tool
+	@echo ${COMPONENT}: install complete
+
+install_resources:
+	${MKDIR} ${INSTAPP}
 	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
 	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
 	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
@@ -128,20 +63,32 @@ install: install_tool install_dirs
 	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
-	do perl Build:GetVersion Find$MajorVersion
-	do sed s/VersionNumber/<Find$MajorVersion> LocalRes:Desc >${INSTAPP}.Desc
-	@unset Find$MajorVersion
+        ${GETVERSION} FindTool$Version FindTool$FullVersion
+        Set FindTool$FullVersion s/Module_FullVersion/<FindTool$FullVersion>/g
+        do ${SED} "<FindTool$FullVersion>" > ${INSTAPP}.Desc < LocalRes:Desc
 	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
+clean:
+        ${WIPE} o ${WFLAGS}
+        ${RM} ${COMPONENT}
+        @echo ${COMPONENT}: cleaned
 
-install_dirs:
-	${MKDIR} ${INSTAPP}
-	${MKDIR} ${LIBINSTDIR}
-	${MKDIR} ${LIBDIR}.Docs
+export_hdrs: 
+	@echo ${COMPONENT}: export complete (hdrs)
 
-local_dirs:
-	$(MKDIR) o
+export_libs: 
+        @echo ${COMPONENT}: export complete (libs)
 
+${DIRS}:
+	${MKDIR} o
+	${TOUCH} $@
 
-# ------------------------------------------------------------------------------
+#
+# Final link
+#
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
+        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
+
 # Dynamic dependencies:
