@@ -183,6 +183,7 @@ os_error * loadfile(Font_Block *font, const char *filename, int estsize)
   for (i=0;i<font->nchars;i++)
   {
     int chaddr = charaddr(font,i);
+    hourglass_percentage((int) i*100 / font->nchars);
     if (chaddr) {
       if (i<32) font->grid.skip = 0;            /* we need chunk 0 if there are any chars in it */
       er(newchar(font,i));                      /* this sets up bitmap links if possible */
@@ -194,6 +195,7 @@ os_error * loadfile(Font_Block *font, const char *filename, int estsize)
       }
     }
   }
+  hourglass_percentage(100);
   er(setextent(wlink));                         /* in case the grid skip has changed */
 
   if (font->filedata->bpp == 0) er(loadscaffold(font));
@@ -207,6 +209,12 @@ os_error * loadfile(Font_Block *font, const char *filename, int estsize)
     char buffer[256];
     er(findmetrics(font, buffer, sizeof(buffer)));
     if (*buffer) loadfile2(font, buffer, 0);            /* updates the name if successful */
+  }
+
+  {
+    char buffer[256];
+    er(findencoding(font, buffer, sizeof(buffer)));
+    if (*buffer) loadencoding(font, buffer, 0);
   }
 
   if (handle) invalidate(handle,-big,-big,big,big);     /* invalidate font window */
@@ -299,7 +307,10 @@ os_error *findmetrics(Font_Block *font, char *outbuffer, int size)
 
   for (ch = font->filename + len-1; *ch != '.' && ch >= font->filename; ch--) {};
   if (*ch++ == '.') {
-    if (sscanf(ch, "%s%d", leafname, &alphabet)==2) {
+    char *ch2 = ch;
+    while (*ch2 && !isdigit(*ch2)) ch2++;
+    if (isdigit(*ch2)) {
+      alphabet=atoi(ch2);
       sprintf(numbuff, "%d", alphabet);
       len = strlen("IntMetrics") + strlen(numbuff) - 10; if (len < 0) len=0;
       strcpy(leafname, "IntMetrics");
@@ -309,6 +320,33 @@ os_error *findmetrics(Font_Block *font, char *outbuffer, int size)
   }
 
   return(findleaf(font,outbuffer,size,"IntMetrics"));
+}
+
+/* Find default encoding filename to load with this font */
+
+os_error *findencoding(Font_Block *font, char *outbuffer, int size)
+{
+  char *ch;
+  int len = strlen(font->filename);
+  int alphabet;
+
+  for (ch = font->filename + len-1; *ch != '.' && ch >= font->filename; ch--) {};
+  if (*ch++ == '.') {
+    char *ch2 = ch;
+    while (*ch2 && !isdigit(*ch2)) ch2++;
+    if (isdigit(*ch2)) {
+      os_filestr filestr;
+      alphabet=atoi(ch2);
+      sprintf(outbuffer, "Font:Encodings./Base%d", alphabet);
+      filestr.action = 17;    /* read info without using File$Path */
+      filestr.name = outbuffer;
+      if (os_file(&filestr) == NULL) { /* if error, just treat it as 'not found' */
+        if (filestr.action == 1) return(NULL);
+      }
+    }
+  }
+
+  return(findleaf(font,outbuffer,size,"Encoding"));
 }
 
 /* Find default outlines filename to load with this font (used as a base font) */
@@ -710,11 +748,12 @@ os_error *loadscaffold(Font_Block *font)
       inp = ((char *)table)+temp;
       ch->scaffold.basechar = *inp++;
       if (bit16) ch->scaffold.basechar += *inp++ << 8;
-      baseword = *inp++ | (*inp++ << 8);
-      localword = *inp++ | (*inp++ << 8);
+      baseword = *inp++; baseword |= (*inp++ << 8);
+      localword = *inp++; localword |= (*inp++ << 8);
       for (i=0;i<16;i++) {
         if (localword & (1<<i)) {
-          xcoord[i] = ((*inp++ << 20) | (*inp++ << 28)) >> 20;
+          int xc = *inp++ << 20; xc |= *inp++ << 28;
+          xcoord[i] = xc >> 20;
           xlink[i] = (version == 2) ? 0 : (inp[-1] >> 4);   /* scaffold link index / linear bit */
           xwidth[i] = *inp++;
         } else if (baseword & (1<<i)) {
@@ -1188,7 +1227,7 @@ os_error * savechar(Char_Block *charptr)
           } else {
             firstpt = endp = subpath->firstpoint;
             ctrl2 = NULL;
-        
+
             *outptr++ = FF_MOVETO
                       | (endp->scaffoldx<<FB_SCAFFOLDX)
                       | (endp->scaffoldy<<FB_SCAFFOLDY);
@@ -1282,7 +1321,7 @@ static void putcoord(int x, int y)
 
 
 /*  Take a chunk of data and store it in the filedata
- *  File is separated into 8 chunks, each word-aligned
+ *  File is separated into up to 2048 chunks, each word-aligned
  *  Each chunk contains 32 character offsets (0 ==> no char)
  *  Wastage is stored BEFORE the first char, so it can be calculated again
  */
@@ -1296,6 +1335,7 @@ os_error * savechardata(Char_Block * charptr,char * newdata,int newsize)
   int        chunkoff, chunkend, chrstart, chrend, i;
   int        *chunkindex, indexsize;
   int        pixflags = (f->bpp ? f->designsize : FLG_DEPENDENCIES) | FLG_PRESENT;
+  int        dependsize = ((nchunks(f)+7)/8+3)&~3;
 
 /*
   mytracef("Saving chardata for char %d\n",charptr->charno);
@@ -1309,7 +1349,7 @@ os_error * savechardata(Char_Block * charptr,char * newdata,int newsize)
 
   indexsize = 32*4;
   if (f->version >= 7) { chunkindex++; indexsize = 33*4; }      /* first word is flag data */
-  if (pixflags & FLG_DEPENDENCIES) indexsize += 4;              /* word after index is dependencies */
+  if (pixflags & FLG_DEPENDENCIES) indexsize += dependsize;     /* extra byte(s) for dependencies */
 
   if (chunkend == chunkoff)        /* create null chunk if nec. */
   {
@@ -1318,7 +1358,7 @@ os_error * savechardata(Char_Block * charptr,char * newdata,int newsize)
     for (i=chunk+1;i<=nchunks(f);i++) chunkoffset(f,i) += indexsize; /* relocate other chunks */
     for (i=0;i<=31;i++) chunkindex[i] = 0;                      /* initialise index */
     if (f->version >= 7) chunkindex[-1] = pixflags;             /* initialise pixflags */
-    if (pixflags & FLG_DEPENDENCIES) chunkindex[32] = 0;        /* initialise dependencies */
+    if (pixflags & FLG_DEPENDENCIES) memset(chunkindex+32, 0, dependsize); /* initialise dependencies */
   }
 
   /* calculate start and end addresses of current char data */
@@ -1493,11 +1533,10 @@ os_error * alter_inheritance(Font_Block *font, int chunk)
 }
 
 
-void abortf(font)
-Font_Block *font;
+void abortf(Font_Block *f)
 {
-  font->currchar = -1;                  /* should really mark font invalid */
-  font->filedata->fontid = FONT_READY;  /* so you can salvage something */
+  f->currchar = -1;                  /* should really mark font invalid */
+  f->filedata->fontid = FONT_READY;  /* so you can salvage something */
 }
 
 
@@ -1541,33 +1580,32 @@ os_error * heapalloc(int size, void **ptrptr)
 /* ---- Debug font --------------------------------------------------------- */
 
 
-void debugfont(font)
-Font_Block * font;
+void debugfont(Font_Block *f)
 {
   int        charnumber;
   Char_Block *charptr;
 
   bbc_vdu(4); bbc_vdu(12); bbc_tab(0,1); bbc_vdu(14);
 
-  printf( "Font block at &%p\n",(void *) font);
-  printf( "Font data at  &%p\n\n",(void *) font->filedata);
+  printf( "Font block at &%p\n", f);
+  printf( "Font data at  &%p\n\n", f->filedata);
 
-  if (font->filedata->bpp) {
-    fontsizestr *fsiz = (fontsizestr *)&font->filedata->table[1];
+  if (f->filedata->bpp) {
+    fontsizestr *fsiz = (fontsizestr *)&f->filedata->table[1];
     printf("Font is %dx%d points at %dx%d dpi\n",
               fsiz->xpoints,fsiz->ypoints,fsiz->xres,fsiz->yres);
   } else {
-    printf("Design size = %d\n",font->filedata->designsize);
+    printf("Design size = %d\n",f->filedata->designsize);
     printf("#### File's scaffold debugging not implemented ####\n");
   }
 
   printf("Font bounding box: x0=%d, y0=%d, xs=%d, ys=%d\n",
-           font->filedata->x0, font->filedata->y0, font->filedata->xs, font->filedata->ys);
+           f->filedata->x0, f->filedata->y0, f->filedata->xs, f->filedata->ys);
 
-  for(charnumber = 0; charnumber<font->nchars; charnumber++)
+  for(charnumber = 0; charnumber<f->nchars; charnumber++)
   {
     if (bbc_inkey(-2)) break;
-    if ((charptr = font->chars[charnumber]) != NULL)
+    if ((charptr = f->chars[charnumber]) != NULL)
       debugchar(charptr,NULL);
   }
   restorescreen();
@@ -1749,7 +1787,7 @@ os_error *savescaffold(Font_Block *font)
 {
   Char_Block *ch, **charray = font->chars;
   char outputarray[4096], *outptr;
-  unsigned short offset[1024];              /* ##### max chars = 1024 */
+  unsigned short offset[65536];
   int c, i;
   int *xchar, *xlink;
   int *xcoord;
@@ -1767,7 +1805,7 @@ os_error *savescaffold(Font_Block *font)
     *outptr++ = font->skeleton_threshold;           /* version 5 onwards */
 
     for (c=1; c<font->nchars; c++)    /* character 0 is different */
-    { 
+    {
       offset[c] = 0xFFFF;      /* impossible value */
       if ((chunkoffset(font->filedata,c>>5) & IN_BASE_FILE)==0 && (ch=charray[c]) != NULL) {
         baseword = localword = 0;
@@ -1860,6 +1898,7 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
   int *chunkindex;
   int i, j, jj, flags, skip, code;
   char *ptr, *stopby;
+  int dependsize = (nchunks(filedata)+7)/8;
 
   if (bbc_inkey(-2)) return(NULL);  /* don't check file if CTRL key held down - for salvaging data */
 
@@ -1927,13 +1966,17 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
     case 1:
     case 4: if (filedata->table[0] != 10) returnerr("Font table size must be 10 bytes unless outlines");
               for (i=1; i<=4; i++) if (filedata->table[i] < 1) returnerr("Invalid font size / resolution");
-              switch(filedata->designsize) {
+              switch(filedata->designsize & ~FLG_FLGINCHUNKS) {
                 case 0: indexsize = 32; break;
                 case 1: indexsize = 128; break;
                 case 2: indexsize = 128; break;
                 case 3: indexsize = 512; break;
                 default: returnerr("Reserved bit(s) in flags non-zero");
               }
+              if ((filedata->designsize & FLG_FLGINCHUNKS) && filedata->version < 7)
+                returnerr("\"Flag words present\" bit must be clear for version 6 or earlier")
+              if (!(filedata->designsize & FLG_FLGINCHUNKS) && filedata->version >= 7)
+                returnerr("\"Flag words present\" bit must be set for version 7 or later");
               if (indexsize != 32 && filedata->bpp != 4) {
                 returnerr("Subpixel scaling flags must be zero unless 4-bpp");
               }
@@ -1944,12 +1987,14 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
   /* check char offsets within chunks: indexsize = no of chars in each chunk */
 
   for (i=0; i<nchunks(filedata); i++) {
-    int chunkdep = 0;     /*  bit n set => chunk n is required when loading this chunk */
-    int pixflags;
+    bitset chunkdep = { 0 };     /*  bit n set => chunk n is required when loading this chunk */
+    int pixflags = 0;
     int prevchar = -1;
     BOOL anychars = FALSE;
     int mask = 0;
     int x0,y0,width,height, charaddr;
+
+    hourglass_percentage(100*i / nchunks(filedata));
 
     chunkoff = chunkoffset(filedata,i) & ~IN_BASE_FILE;
     chunkend = chunkoffset(filedata,i+1) & ~IN_BASE_FILE;
@@ -1957,34 +2002,31 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
       int charoffset = 4*indexsize;
       chunkindex = (int *) (((char *) filedata) + chunkoff);
 
-      if (filedata->bpp) {
-        pixflags = filedata->designsize;
-        if (filedata->version >= 7 && *chunkindex++ != pixflags) returnerr("Invalid flag word at start of chunk");
-      } else {
-        switch(filedata->version) {
-          case 0:
-          case 1:
-          case 2:
-          case 3:
-          case 4:
-          case 5: pixflags = 0; break;
-          case 6: pixflags = FLG_DEPENDENCIES; break;
-          case 7:
-          case 8: pixflags = *chunkindex++;
-                  if (pixflags & FLG_PRESENT) {
-                    switch (filedata->bpp) {
-                      case 0: mask = FLG_DEPENDENCIES; break;
-                      case 1: mask = 0; break;
-                      case 4: mask = FLG_HSUBPIXEL | FLG_VSUBPIXEL;
-                    }
-                    if (pixflags & ~(FLG_PRESENT | mask)) returnerr("Reserved bits in chunk flags must be 0");
-                  } else {
-                    returnerr("Bit 31 of chunk flags must be set");
+      switch(filedata->version) {
+        case 0:
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 5: pixflags = 0; break;
+        case 6: pixflags = filedata->bpp ? 0 : FLG_DEPENDENCIES; break;
+        case 7:
+        case 8: pixflags = *chunkindex++;
+                if (pixflags & FLG_PRESENT) {
+                  switch (filedata->bpp) {
+                    case 0: mask = FLG_DEPENDENCIES; break;
+                    case 1: mask = 0; break;
+                    case 4: mask = FLG_HSUBPIXEL | FLG_VSUBPIXEL;
                   }
-        }
+                  if (pixflags & ~(FLG_PRESENT | mask)) returnerr("Reserved bits in chunk flags must be 0");
+                  if (filedata->bpp && filedata->designsize != (pixflags & ~FLG_PRESENT | FLG_FLGINCHUNKS))
+                    returnerr("Invalid flag word at start of chunk");
+                } else {
+                  returnerr("Bit 31 of chunk flags must be set");
+                }
       }
 
-      if (pixflags & FLG_DEPENDENCIES) charoffset+=(nchunks(filedata)+7)/8;   /* extra byte(s) for dependencies */
+      if (pixflags & FLG_DEPENDENCIES) charoffset+=dependsize;   /* extra byte(s) for dependencies */
       for (j=0; j<indexsize; j++) {
         if ((chunkoff2 = chunkindex[j]) != 0) {
           anychars = TRUE;
@@ -2015,12 +2057,12 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
               if (flags & CHAR_COMPOSITE) {
                 if (flags & CHAR_COMPOSITE1) {
                   code = *ptr++; if (flags & CHAR_16BITCODES) code += *ptr++ << 8;
-                  chunkdep |= (1 << (code >> 5));    /* base char dependency */
+                  bitset_set(code >> 5, &chunkdep); /* base char dependency */
                 }
                 if (flags & CHAR_COMPOSITE2) {
                   code = *ptr++; if (flags & CHAR_16BITCODES) code += *ptr++ << 8;
-                  chunkdep |= (1 << (code >> 5));    /* accent dependency */
-                  ptr += skip;                       /* skip coord offset */
+                  bitset_set(code >> 5, &chunkdep); /* accent dependency */
+                  ptr += skip;                             /* skip coord offset */
                 }
                 if (ptr > stopby) returnerr("Char outside range");
               } else {
@@ -2042,8 +2084,8 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
                 if (ptr[-1] & 0x08) {
                   code = *ptr++; if (flags & CHAR_16BITCODES) code += *ptr++ << 8;
                   while(ptr <=stopby && code) {
-                    chunkdep |= (1 << (code >> 5));    /* set up dependency flags */
-                    ptr += skip;                       /* composite offset */
+                    bitset_set(code >> 5, &chunkdep); /* set up dependency flags */
+                    ptr += skip;                             /* composite offset */
                     code = *ptr++; if (flags & CHAR_16BITCODES) code += *ptr++ << 8;
                   }
                   if (ptr > stopby) return(verr("Char at &%X outside range",charaddr));
@@ -2056,7 +2098,7 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
               if ((flags & (CHAR_1BPP | CHAR_OUTLINE))!=CHAR_1BPP)
                 return(verr("Invalid character flags at offset &%X",charaddr));
               if ((flags & CHAR_FVALUE) == 0) {
-                if (flags & CHAR_INITSTATE) return(verr("Invalid character flags at offset &%X",charaddr));
+                /*if (flags & CHAR_INITSTATE) return(verr("Invalid character flags at offset &%X",charaddr));*/
                 read_xywh(flags,&ptr,&x0,&y0,&width,&height);
                 charoffset = ptr + (width * height + 7) / 8 - (char *) chunkindex;
               } else {
@@ -2077,17 +2119,20 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
         } /* if */
       } /* for (chars within chunk) */
 
-      /* the dependencies are filled in when saving - we can guarantee there is a spare word after the index */
+      /* the dependencies are filled in when saving - we can guarantee there is enough space after the index */
 
       if (fillindependencies) {
         if (pixflags & FLG_PRESENT) {
-          if (chunkdep) pixflags |= FLG_DEPENDENCIES; else pixflags &= ~FLG_DEPENDENCIES;
+          bitset zero = { 0 };
+          if (memcmp(&chunkdep, &zero, sizeof chunkdep))
+            pixflags |= FLG_DEPENDENCIES;
+          else
+            pixflags &= ~FLG_DEPENDENCIES;
           chunkindex[-1] = pixflags;
         }
+
         if (pixflags & FLG_DEPENDENCIES) {
-          register char *dptr = (char *)&chunkindex[32];
-          register int i;
-          for (i=0; i<nchunks(filedata); i+=8) *dptr++ = chunkdep >> i;    /* update dependency byte(s) */
+          memcpy(chunkindex+32, &chunkdep, dependsize);       /* update dependency byte(s) */
         }
       }
 
@@ -2099,6 +2144,8 @@ os_error *validatefont(FFile_FontHdr **filedatap, int fsize, BOOL fillindependen
 
     } /* if (non-null chunk) */
   } /* for (chunks) */
+
+  hourglass_percentage(100);
 
   if (indexsize != 32 || filedata->bpp > 1)
     returnerr("Anti-aliased bitmap font seems OK, but this version of !FontEd can't load it");
@@ -2344,8 +2391,10 @@ os_error * grungefiledata(FFile_FontHdr **filepp)
   int chunk;
   int chunkoff0 = f->chunk.offsets[0] & ~IN_BASE_FILE;
   int chunkoff1 = f->chunk.offsets[1] & ~IN_BASE_FILE;
+  int chunkoff7 = f->chunk.offsets[7] & ~IN_BASE_FILE;
   int *newchunkarray = (int *) ((char *)f + chunkoff0);
   int i;
+  int dependsize = ((nchunks(f)+7)/8 + 3) &~ 3;
 
   if (f->version < 6) f->version = 6;
 
@@ -2358,7 +2407,7 @@ os_error * grungefiledata(FFile_FontHdr **filepp)
     er(myflex_midextend("Removing crap at end",(flex_ptr)filepp, fsize, chunkoffset(f,8)-fsize));
   }
 
-  if (f->version >= 8 && chunkoff1 >= chunkoff0) {
+  if (f->version >= 8 && chunkoff1 >= chunkoff0 && chunkoff7 >= chunkoff1) {
     er(myflex_midextend("New chunk section",(flex_ptr)filepp, chunkoff0, 9*sizeof(int)));
     for (i=0; i<=8; i++) newchunkarray[i] = f->chunk.offsets[i] + 9*sizeof(int);
     f->chunk.new.nchunks = 8;
@@ -2371,6 +2420,7 @@ os_error * grungefiledata(FFile_FontHdr **filepp)
     int chunkoff = chunkoffset(f,chunk) & ~IN_BASE_FILE;
     int chunkend = chunkoffset(f,chunk+1) & ~IN_BASE_FILE;
     int *chunkindex = (int *) ((char *)f + chunkoff);
+    hourglass_percentage(chunk * 100 / nchunks(f));
     if (chunkend > chunkoff) {        /* don't bother with null chunk */
       int wastage, i;
       int oldflagsize = (chunkindex[0] & FLG_PRESENT) ? 4 : 0;
@@ -2390,16 +2440,17 @@ os_error * grungefiledata(FFile_FontHdr **filepp)
       for (i=0;i<=31;i++) if (chunkindex[i]) { wastage = chunkindex[i]-32*4; break; }
       wastage &= ~3;                            /* assume chunk is word-aligned already */
 
-      if (f->bpp == 0) wastage -= 4;            /* dependency word present if outlines */
+      if (f->bpp == 0) wastage -= dependsize;
 
       if (wastage) {
-        er(myflex_midextend("Dependencies",(flex_ptr)filepp, chunkoff+32*4+4+wastage, -wastage));
+        er(myflex_midextend("Dependencies",(flex_ptr)filepp, chunkoff+32*4+dependsize+wastage, -wastage));
         for (i=0;i<=31;i++) if (chunkindex[i]) chunkindex[i] -= wastage;
-        if (f->bpp == 0) chunkindex[32] = 0;    /* 4 extra bytes at end of index */
+        if (f->bpp == 0) memset(chunkindex+32, 0, dependsize); /* extra bytes at end of index */
         for (i=chunk+1;i<=nchunks(f);i++) chunkoffset(f,i) -= wastage;
       }
     } /* if */
   } /* for */
+  hourglass_percentage(100);
 
   return(NULL);
 }
@@ -2540,3 +2591,81 @@ os_error *myflex_midextend(char *debug, flex_ptr p, int offset, int amount)
 #endif
   if (flex_midextend(p, offset, amount)) return(NULL); else returnerr("Flex area full");
 }
+
+os_error * loadencoding(Font_Block *font, const char *filename, int estsize)
+{
+  FILE *infile;
+  char buffer[64];
+  int c;
+  int i;
+  static const bitset alpha = { 0, 0xA7FF7CDE, 0xD7FFFFFF, 0xD7FFFFFF };
+
+  if ((infile = fopen(filename,"r")) == NULL)
+    returnerr("Couldn't open encoding file");
+
+  if (font->charnames)
+  {
+    for (i=0; i<font->nnames; i++)
+      if (font->charnames[i])
+        heap_free(font->charnames[i]);
+    heap_free(font->charnames);
+  }
+
+  font->nnames = 0;
+
+  /* First, count the file */
+  do {
+    c = fgetc(infile);
+    if (c == EOF) break;
+    if (c == '%') {
+      while (fgetc(infile) >= 32) continue; /* Comment: Skip to end of line */
+    }
+    else if (c == '/') {
+      do {
+        c = fgetc(infile);
+      } while (c != EOF && bitset_isset(c, &alpha));
+      if (c != EOF)
+        ungetc(c, infile);
+      font->nnames++;
+    }
+  } while (c != EOF);
+
+  rewind(infile);
+
+  /* Allocate the name array */
+  font->charnames = heap_alloc(sizeof(char *) * font->nnames);
+  if (!font->charnames) goto exit;
+  memset(font->charnames, 0, sizeof(char *) * font->nnames);
+
+  /* And fill it in */
+  i = 0;
+  do {
+    c = fgetc(infile);
+    if (c == EOF) break;
+    if (c == '%') {
+      while (fgetc(infile) >= 32) continue; /* Comment: Skip to end of line */
+    }
+    else if (c == '/') {
+      char *p = buffer;
+      c = fgetc(infile);
+      while (c != EOF && bitset_isset(c, &alpha)) {
+        if (p-buffer < 63) *p++ = c;
+        c = fgetc(infile);
+      }
+      *p++='\0';
+      if (c != EOF)
+        ungetc(c, infile);
+      if (strcmp(buffer, ".notdef") && strcmp(buffer, ".NotDef")) {
+        font->charnames[i] = heap_alloc(p-buffer);
+        if (font->charnames[i]) strcpy(font->charnames[i], buffer);
+      }
+      i++;
+    }
+  } while (c != EOF && i < font->nnames);
+
+exit:
+  fclose(infile);
+
+  return NULL;
+}
+

@@ -1,7 +1,7 @@
 /* > c.main
  * Authors: Neil Raine, David De Vorchik
  * Title: CheckCache
- * History: 
+ * History:
  *      16-Nov-91 DDV 3.01 Adjusted to cope with new font cache structures
  */
 
@@ -9,14 +9,15 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <assert.h>
 #include "h.kernel"
 
-#define Version 301
-#define MinVersion 301
-#define MaxVersion 301
+#define Version 341
+#define MinVersion 341
+#define MaxVersion 341
 
-#define CACHEHEADER   0x0000001C
-#define FONTCACHE    (0x01E00000 - CACHEHEADER)
+#define CACHEHEADER   0x00000020
+#define FONTCACHE    (fontcache_base - CACHEHEADER)
 #define LOCKED        0x80000000
 #define CLAIMED       0x40000000
 #define ISCHAR        0x20000000
@@ -99,6 +100,20 @@ typedef struct {
 } transform;
 #endif
 
+typedef struct {
+  header        header;
+  char          leafptrandname[1];
+} pathname;
+
+
+#if Version >= 341
+typedef struct {
+        unsigned int    min;
+        unsigned int    n:15;
+        unsigned int    table:1;
+        unsigned int    offset:16;
+} lookupentry;
+#endif
 
 #if Version >= 288
 
@@ -110,28 +125,49 @@ typedef struct {
         header          header;
         addr            link;
         map_flags       flags;
+#if Version < 341
         int             base;
+#endif
         int             alphabet;
         char            encoding[12];
+#if Version >= 341
+        int             base;
+        int             entries;
+        lookupentry     entry[1];         /* Variable length */
+#else
         int             spare[1];
         int             lookup[256];
+#endif
 } mapblock;
+#endif
+
+#if Version >= 341
+typedef struct {
+        header          header;
+        addr            pointers[1];     /* <nchunks> block pointers */
+     /* int             offsets[1]; */   /* optional <nchunks+1> file offsets */
+} pixoblock;
 #endif
 
 
 typedef struct {
         char    leafname[11];
         char    flags;
+#if Version >= 341
+        int     PixOffStart;            /* file offset of chunk offset table */
+#endif
 #if Version >= 288
         int     nchunks;
         int     nscaffolds;
 #endif
         addr    address;                /* address of data if in ROM */
         box     box;
+#if Version < 341
         int     PixOffsets[9];          /* file offsets of pixel data */
+#endif
 } fdata;
 
-#if Version >= 301     
+#if Version >= 301
 typedef struct {
         int     threshold1, threshold2, threshold3, threshold4, threshold5;
 } thresh;
@@ -163,7 +199,7 @@ typedef struct {
 #if Version >= 288
         char    encoding[12];
         int     base;
-#endif                          
+#endif
 
         int     xmag, ymag;
 
@@ -173,7 +209,7 @@ typedef struct {
 
 #if Version >= 301
         thresh  thresholds;
-#endif    
+#endif
 
         int     MetOffset, MetSize;
         int     PixOffset, PixSize;
@@ -192,7 +228,7 @@ typedef struct {
 
         fdata   file4;
         fdata   file1;
-#if Version >= 288
+#if Version >= 288 && Version < 341
         int     extraoffsets[16];
 #endif
 
@@ -206,8 +242,16 @@ typedef struct {
 #if Version >= 280
         addr    FontMatrix;
 #endif
+#if Version >= 341
+        addr    maps[4];
+#endif
+#if Version >= 341
+        addr    PixoPtr4;
+        addr    PixoPtr1;
+#else
         addr    PixelsPtrs4[8];
         addr    PixelsPtrs1[8];
+#endif
 #if Version >= 286
         addr    transforms[16];
 #endif
@@ -219,6 +263,9 @@ typedef struct {
   short int     FontManagerVersion;             /* version no of FontManager module that saved this */
   short int     FileVersion;                    /* version no of FontManager required to load this */
         int     thresholds[5];                  /* FontMax1..FontMax5 parameters */
+#if Version>=341
+        addr    base;                           /* base address of font cache */
+#endif
         addr    item[256];                      /* item[0] = end address of cache */
         int     unclaimed_size;
         addr    unclaimed_head, unclaimed_tail;
@@ -238,6 +285,8 @@ typedef enum {
         blk_PathName,
         blk_PathName2,
         blk_FontMatrix,
+        blk_PixoPtr4,
+        blk_PixoPtr1,
         blk_4bpp,
         blk_1bpp,
         blk_Outlines,
@@ -250,6 +299,7 @@ typedef enum {
 /* ---- The program! -------------------------------------------------------- */
 
 
+static addr fontcache_base;
 static addr fontcache_min;
 static addr fontcache_min2;
 static addr fontcache_max;
@@ -266,7 +316,8 @@ _kernel_oserror * checkcache(const char *filename);
 _kernel_oserror * checkaddr(int fontaddr, addr *xp, blocktype type);
 _kernel_oserror * checkblock(int fontaddr, int blockno, addr *bxp, blocktype type);
 _kernel_oserror * checktransform(int fontaddr, int blockno, addr *bxp, blocktype type);
-_kernel_oserror * checkmap(int blockno, addr *bxp, blocktype type);
+_kernel_oserror * checkpixo(int fontaddr, addr *bxp, blocktype type, blocktype subtype, int PixOffStart, int nchunks);
+_kernel_oserror * checkmap(int fontaddr, int blockno, addr *bxp, blocktype type);
 void * fileaddress(addr address);
 addr fileoffset(void * pointer);
 _kernel_oserror * make_oserror(int errnum, const char *format, ...);
@@ -278,6 +329,10 @@ void dump_block(header *block, blocktype type);
 int main(int argc, char **argv)
 {
   _kernel_oserror *err = NULL;
+
+#if Version >= 341
+  assert(sizeof(fontheader) == 448);
+#endif
 
   if (argc < 2 || argc > 3) err = make_oserror(1, "Syntax: *checkcache <filename> [-full]\n");
 
@@ -314,7 +369,13 @@ _kernel_oserror * checkcache(const char *filename)
   fseek(infile, 0, SEEK_SET);
   fread(megablock, filesize, 1, infile);
 
-  index = fileaddress(FONTCACHE);
+  index = (fontindex *) megablock;
+
+#if Version>=341
+  fontcache_base = index->base;
+#else
+  fontcache_base = index->item[0] - (filesize - CACHEHEADER);
+#endif
 
   if (index->identifier != *((int *)"Font")) return(make_oserror(1, "Invalid font file"));
 
@@ -333,6 +394,9 @@ _kernel_oserror * checkcache(const char *filename)
 
   for (i=1; i<256; i++) {
     addr fontaddr = index->item[i];
+#if Version >= 341
+    int nchunks;
+#endif
     if (fontaddr) {
       checkaddr(fontaddr, &index->item[i], blk_FontHeader);
 
@@ -346,10 +410,54 @@ _kernel_oserror * checkcache(const char *filename)
       checkaddr(fontaddr, &font->PathName2,  blk_PathName2);
       checkaddr(fontaddr, &font->FontMatrix, blk_FontMatrix);
 
+#if Version >= 341
+      for (j=0; j<4; j++) {
+        checkmap(fontaddr, j, &font->maps[j], blk_Map);
+      }
+#endif
+
+#if Version >= 341
+      /*if (font->file4.PixOffStart)
+        nchunks = font->file4.nchunks;
+      else {
+        int master = font->masterfont;
+        if (master == 0 && font->PixoPtr4) {
+          printf("Font at 0x%X: PixOffStart zero, but no master font\n", fontaddr);
+        }
+        else {
+          addr mfontaddr = index->item[master];
+          fontheader *mfont = fileaddress(mfontaddr);
+
+          nchunks = mfont->file1.nchunks;
+        }
+      }*/
+      nchunks = font->file4.nchunks;
+      checkpixo(fontaddr, &font->PixoPtr4, blk_PixoPtr4, blk_4bpp, font->file4.PixOffStart, nchunks);
+#else
       for (j=0; j<8; j++) {
         checkblock(fontaddr, j, &font->PixelsPtrs4[j], blk_4bpp);
       }
+#endif
 
+#if Version >= 341
+      /*if (font->file1.PixOffStart)
+        nchunks = font->file1.nchunks;
+      else {
+        int master = font->masterfont;
+        if (master == 0 && font->PixoPtr1) {
+          printf("Font at 0x%X: PixOffStart zero, but no master font\n", fontaddr);
+        }
+        else {
+          addr mfontaddr = index->item[master];
+          fontheader *mfont = fileaddress(mfontaddr);
+
+          nchunks = mfont->file1.nchunks;
+        }
+      }*/
+      nchunks = font->file1.nchunks;
+      checkpixo(fontaddr, &font->PixoPtr1, blk_PixoPtr1, font->masterflag==MSF_MASTER ? blk_Outlines : blk_1bpp,
+                           font->file1.PixOffStart, nchunks);
+#else
 #if Version >= 286
       k = font->masterflag==MSF_MASTER ? 24 : 8;
 #else
@@ -358,6 +466,7 @@ _kernel_oserror * checkcache(const char *filename)
       for (j=0; j<k; j++) {
         checkblock(fontaddr, j, &font->PixelsPtrs1[j], font->masterflag==MSF_MASTER ? blk_Outlines : blk_1bpp);
       }
+#endif
 
 #if Version >= 286
       if (font->masterflag != MSF_MASTER) {
@@ -371,7 +480,7 @@ _kernel_oserror * checkcache(const char *filename)
 
 #if Version >= 288
   for (i=0; i<16; i++) {
-    checkmap(i, &index->maps[i], blk_Map);
+    checkmap(0, i, &index->maps[i], blk_Map);
   }
 #endif
 
@@ -392,7 +501,7 @@ _kernel_oserror * checkcache(const char *filename)
                                                  count_array[i],
                                                  percent(count_array[i],total_count,5),
                                                  ratio(size_array[i],count_array[i],8),
-                                                 blockname(i));
+                                                 blockname((blocktype) i));
   }
 
   printf("  ----  ------  ------   ----   -------  ----------\n");
@@ -487,19 +596,21 @@ const char *ratio(int a, int b, int size)
 const char * blockname(blocktype type)
 {
   switch(type) {
-    case blk_FontHeader: return("font header");
-    case blk_MetricsPtr: return("metricsptr");
-    case blk_Kerns     : return("kerning");
-    case blk_Charlist  : return("charlist");
-    case blk_Scaffold  : return("scaffold");
-    case blk_PathName  : return("pathname");
-    case blk_PathName2 : return("pathname2");
-    case blk_FontMatrix: return("fontmatrix");
-    case blk_4bpp      : return("4-bpp pixels");
-    case blk_1bpp      : return("1-bpp pixels");
-    case blk_Outlines  : return("outlines");
-    case blk_Transform : return("transform");
-    case blk_Map       : return("map");
+    case blk_FontHeader : return("font header");
+    case blk_MetricsPtr : return("metricsptr");
+    case blk_Kerns      : return("kerning");
+    case blk_Charlist   : return("charlist");
+    case blk_Scaffold   : return("scaffold");
+    case blk_PathName   : return("pathname");
+    case blk_PathName2  : return("pathname2");
+    case blk_FontMatrix : return("fontmatrix");
+    case blk_PixoPtr4   : return("4-bpp pixel offsets");
+    case blk_PixoPtr1   : return("1-bpp pixel offsets");
+    case blk_4bpp       : return("4-bpp pixels");
+    case blk_1bpp       : return("1-bpp pixels");
+    case blk_Outlines   : return("outlines");
+    case blk_Transform  : return("transform");
+    case blk_Map        : return("map");
     default: return("<unknown block type>");
 
   }
@@ -598,13 +709,19 @@ _kernel_oserror * checktransform(int fontaddr, int blockno, addr *bxp, blocktype
 
 
 #if Version >= 288
-_kernel_oserror * checkmap(int blockno, addr *bxp, blocktype type)
+_kernel_oserror * checkmap(int fontaddr, int blockno, addr *bxp, blocktype type)
 {
   addr bx = *bxp;
+  char fontname[200];
+  if (fontaddr) {
+    sprintf(fontname, "Font at &%0X: ", fontaddr);
+  }
+  else
+    fontname[0] = '\0';
 
   if (bx < fontcache_min || bx >= fontcache_max) {
     if (bx != 0) {
-      printf("Map block outside cache: %s[%d] = 0x%X\n", blockname(type), blockno, bx);
+      printf("Map block outside cache: %s%s[%d] = 0x%X\n", fontname, blockname(type), blockno, bx);
     }
   } else {
     int blocklen;
@@ -619,23 +736,23 @@ _kernel_oserror * checkmap(int blockno, addr *bxp, blocktype type)
     blockptr->header.size |= MARKER;          /* for checkagelinks */
 
     if (bx+blocklen > fontcache_max) {
-      printf("Map block extends outside cache: %s[%d] = 0x%X (0x%X)\n", blockname(type), blockno, bx, blocklen);
+      printf("Map block extends outside cache: %s%s[%d] = 0x%X (0x%X)\n", fontname, blockname(type), blockno, bx, blocklen);
     }
 
-    if (blocklen > sizeof(mapblock)) {
+    /*if (blocklen > sizeof(mapblock)) {
       printf("Map block 0x%X size = %d (should be %d)\n",bx,blocklen,sizeof(mapblock));
-    }
+    }*/
 
     anchor = blockptr->header.anchor;
     if (anchor < fontcache_min2 || anchor >= fontcache_max || fileaddress(anchor) != bxp) {
-      printf("%s[%d] = 0x%X (anchor = 0x%X, should be 0x%X)\n",blockname(type), blockno,
+      printf("%s%s[%d] = 0x%X (anchor = 0x%X, should be 0x%X)\n", fontname, blockname(type), blockno,
                                                                         bx, anchor, fileoffset(bxp));
     }
 
     size_array[type] += blocklen;
     count_array[type]++;
 
-    return(checkmap(blockno, &blockptr->link, type));
+    return(checkmap(fontaddr, blockno, &blockptr->link, type));
   }
 
   return(NULL);
@@ -706,6 +823,57 @@ _kernel_oserror * checkblock(int fontaddr, int blockno, addr *bxp, blocktype typ
 
   return(NULL);
 }
+
+#if Version>=341
+_kernel_oserror * checkpixo(int fontaddr, addr *bxp, blocktype type, blocktype subtype, int PixOffStart, int nchunks)
+{
+  addr bx = *bxp;
+
+  if (bx < fontcache_min || bx >= fontcache_max) {
+    if (bx != 0) {
+      printf("Block outside cache: Font at 0x%X: %s = 0x%X\n", fontaddr, blockname(type), bx);
+    }
+  } else {
+    int blocklen, correctsize;
+    pixoblock *blockptr;
+    addr anchor;
+    int i;
+
+    blockptr = fileaddress(bx);
+    blocklen = blockptr->header.size & ~SIZEFLAGS;
+
+    if (fullinfo) dump_block((header *)blockptr,type);
+
+    blockptr->header.size |= MARKER;          /* for checkagelinks */
+
+    if (bx+blocklen > fontcache_max) {
+      printf("Block extends outside cache: Font at 0x%X: %s = 0x%X (0x%X)\n", fontaddr, blockname(type), bx, blocklen);
+    }
+
+    correctsize = sizeof(header) + nchunks * sizeof(addr);
+    if (PixOffStart) correctsize += (nchunks+1) * sizeof(int);
+
+    if (blocklen > correctsize) {
+      printf("Font at 0x%X: %s 0x%X size = %d (should be %d)\n", fontaddr, blockname(type), bx,blocklen,correctsize);
+    }
+
+    anchor = blockptr->header.anchor;
+    if (anchor < fontcache_min2 || anchor >= fontcache_max || fileaddress(anchor) != bxp) {
+      printf("Bad anchor: Font at 0x%X: %s = 0x%X (anchor = 0x%X)\n", fontaddr, blockname(type), bx, anchor);
+    }
+
+    size_array[type] += blocklen;
+    count_array[type]++;
+
+    for (i=0; i<nchunks; i++) {
+      checkblock(fontaddr, i, &blockptr->pointers[i], subtype);
+    }
+
+  }
+
+  return(NULL);
+}
+#endif
 
 
 void *fileaddress(addr address)
@@ -784,27 +952,39 @@ void printfdata(char *title, fdata * f)
 {
   static char buffer[64];
 
-  printf("  %s file data", title);
-  if (f->leafname[0] <= 1) {
-    printf(" = %d\n", f->leafname[0]);
-  } else {
-    if (f->leafname[0] < 32) {
-      printf(" = %d",f->leafname[0]);
-    } else {
-      printf(" = '%s'",readstr(f->leafname));
-      printf("    flags = &%X addr = &%X\n", f->flags, f->address);
+  printf("  %s file data = ", title);
+  if (f->leafname[0] < 32) {
+    switch (f->leafname[0]) {
+      case 0: printf("<none>\n"); break;
+      case 1: printf("<undecided>\n"); break;
+      case 2: printf("<use 4-bpp master>\n"); break;
+      case 3: printf("<use master outlines direct>\n"); break;
+      case 4: printf("<make bitmaps (no subpixel)>\n"); break;
+      case 5: printf("<make bitmaps (x-subpixel)>\n"); break;
+      case 6: printf("<make bitmaps (y-subpixel)>\n"); break;
+      case 7: printf("<make bitmaps (x&y-subpixel)>\n"); break;
+      default: printf("<unknown (%d)>\n", f->leafname[0]); break;
     }
+  } else {
+    printf("'%s'",readstr(f->leafname));
+    printf("    flags = &%X addr = &%X\n", f->flags, f->address);
+  }
+  if (f->leafname[0] >= 2) {
 #if Version >= 288
     printf("    nchunks = %d, nscaffolds = %d\n",f->nchunks,f->nscaffolds);
 #endif
     sprintf(buffer, "%s bbox", title);
     printbbox(buffer, &f->box);
+#if Version >= 341
+    printf("  PixOffStart = &%X\n", f->PixOffStart);
+#else
     if (f->leafname[0] >= 32) {
       printf("  PixOffsets = &%X &%X &%X &%X &%X &%X &%X &%X &%X\n",
               f->PixOffsets[0], f->PixOffsets[1], f->PixOffsets[2], f->PixOffsets[3],
               f->PixOffsets[4], f->PixOffsets[5], f->PixOffsets[6], f->PixOffsets[7],
               f->PixOffsets[8]);
     }
+#endif
   }
 }
 
@@ -820,6 +1000,9 @@ void dump_fontheader(fontheader * font)
 #else
   printf("  nchars=%d masterfont=%d masterflag=%d skelthresh=%d x/ymag = %d,%d\n",
             font->nchars, font->masterfont, font->masterflag, font->skelthresh, font->xmag, font->ymag);
+#endif
+#if Version >= 301
+  printf("  thresholds=%d,%d,%d,%d,%d\n", font->thresholds.threshold1, font->thresholds.threshold2, font->thresholds.threshold3, font->thresholds.threshold4, font->thresholds.threshold5);
 #endif
   if (font->masterflag != 2) {
     printf("  x/yscale=(%d,%d) x/yres=(%d,%d)\n", font->xscale, font->yscale, font->xres, font->yres);
@@ -874,6 +1057,7 @@ void dump_map(mapblock * map)
   printf("  flags = 0x%X, base = %d, alphabet = %d\n", map->flags, map->base, map->alphabet);
   printf("  encoding name = '%s'\n", map->encoding);
   if ((map->flags & mapf_DIRECT) == 0) {
+#if Version < 341
     for (i=0; i<256; i+=16) {
       printf("    %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
              map->lookup[i+0], map->lookup[i+1], map->lookup[i+2], map->lookup[i+3],
@@ -881,9 +1065,59 @@ void dump_map(mapblock * map)
              map->lookup[i+8], map->lookup[i+9], map->lookup[i+10], map->lookup[i+11],
              map->lookup[i+12], map->lookup[i+13], map->lookup[i+14], map->lookup[i+15]);
     }
+#else
+    unsigned short *table = (unsigned short *) (map->entry+map->entries);
+
+    printf("  ranges = %d\n", map->entries);
+    for (i=0; i<map->entries; i++) {
+      printf("    [&%08X..&%08X] -> ", map->entry[i].min, map->entry[i].min + map->entry[i].n - 1);
+      if (map->entry[i].table) {
+        int j;
+        unsigned short *t;
+        t = table + map->entry[i].offset;
+        for (j=0; j<map->entry[i].n; j++) {
+          printf("&%04X ", (map->entry[i].min + j + t[j]) & 0xFFFF);
+          if ((j & 7) == 7 && j<map->entry[i].n-1)
+          printf("\n                              ");
+        }
+        printf("\n");
+      }
+      else {
+        printf("[&%04X..&%04X]\n", (map->entry[i].min + map->entry[i].offset) & 0xFFFF,
+                                   (map->entry[i].min + map->entry[i].n - 1 + map->entry[i].offset) & 0xFFFF);
+      }
+    }
+#endif
   }
 }
 
+#if Version >= 341
+void dump_pixo(pixoblock *block)
+{
+  int i;
+  const int *p, *end;
+
+  end = (const int *)((char *) block + (block->header.size & ~SIZEFLAGS));
+
+  printf("  ");
+  for (i = 0, p = (int *) block->pointers; p < end; p++, i++) {
+    printf("&%X ", *p);
+    if ((i & 7) == 7 && p < end - 1)
+      printf("\n  ");
+  }
+
+  printf("\n");
+}
+#endif
+
+void dump_pathname(pathname *block)
+{
+  int i;
+  printf("  '%s'\n", block->leafptrandname+1);
+  for (i=-3; i < block->leafptrandname[0]; i++)
+    putchar(' ');
+  printf("^\n");
+}
 
 void dump_block(header *block, blocktype type)
 {
@@ -891,17 +1125,21 @@ void dump_block(header *block, blocktype type)
   switch (type) {
     case blk_FontHeader: dump_fontheader((fontheader *)block); break;
     case blk_FontMatrix: dump_matrixblock((matrixblock *)block); break;
-    case blk_4bpp:       dump_chunk((chunk *)block); break;
-    case blk_1bpp:       dump_chunk((chunk *)block); break;
+    case blk_4bpp:
+    case blk_1bpp:
     case blk_Outlines:   dump_chunk((chunk *)block); break;
     case blk_Transform:  dump_transform((transform *)block); break;
     case blk_Map:        dump_map((mapblock *)block); break;
+#if Version >= 341
+    case blk_PixoPtr1:
+    case blk_PixoPtr4:   dump_pixo((pixoblock *)block); break;
+#endif
+    case blk_PathName:
+    case blk_PathName2:  dump_pathname((pathname *)block); break;
     case blk_MetricsPtr:
     case blk_Kerns:
     case blk_Charlist:
-    case blk_Scaffold:
-    case blk_PathName:
-    case blk_PathName2: break;
+    case blk_Scaffold: break;
   }
 
   printf("\n");
