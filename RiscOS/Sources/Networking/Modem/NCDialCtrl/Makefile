@@ -18,8 +18,11 @@ LD	= link
 RM	= remove
 WIPE	= -wipe
 
+DFLAGS	 = ${OPTS}
+
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -Wp -ff ${INCLUDES} -DDONT_BUILD_RESOURCES -DSTRING_SCRIPT ${DFLAGS} ${DEVICE}
+CMHGFLAGS = ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 Datatoaofflags = -d "" -l _len -dp -s -p
@@ -41,7 +44,6 @@ INCLUDES = -IC:,TCPIPLibs:
 
 LIBS	 = TCPIPLibs:o.inetlibzm
 
-DFLAGS	 = ${OPTS}
 
 #
 # Program specific options:
@@ -60,7 +62,7 @@ EXPORTS	  =
 # Rule patterns
 #
 .c.o:;	    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -p $< -o $@
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -p $< -o $@
 .s.o:;	    ${AS} ${AFLAGS} $< $@
 .d.o:;	    datatoaof -f $< -o $@ $(Datatoaofflags)
 
@@ -70,7 +72,7 @@ EXPORTS	  =
 all: ${TARGETSA}
 
 h.cmhg_modem: cmhg.HeaderMod
-        ${CMHG} -p cmhg.HeaderMod -d h.cmhg_modem
+        ${CMHG} ${CMHGFLAGS} -p cmhg.HeaderMod -d h.cmhg_modem
 
 c.module: h.cmhg_modem
 
