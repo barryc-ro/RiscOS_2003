@@ -49,8 +49,8 @@ eng_rcode POPAccountConnect(void)
 
   eng_rcode code;
 
-  state.popprocess.connectobj = new MBoxOpCB_connect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
-  code = (eng_rcode) POPaccount->Connect(state.popprocess.connectobj);
+  popprocessstate.connectobj = new MBoxOpCB_connect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
+  code = (eng_rcode) POPaccount->Connect(popprocessstate.connectobj);
   dprintf(("Eng", "Trying to connect to POP, rc=%d\n",code));
 
   return code;
@@ -63,8 +63,8 @@ eng_rcode SMTPAccountConnect(void)
 
   eng_rcode code;
 
-  state.smtpprocess.connectobj = new MBoxOpCB_connect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
-  code = (eng_rcode) SMTPaccount->Connect(state.smtpprocess.connectobj);
+  smtpprocessstate.connectobj = new MBoxOpCB_connect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
+  code = (eng_rcode) SMTPaccount->Connect(smtpprocessstate.connectobj);
   dprintf(("Eng", "Trying to connect to SMTP, rc=%d\n",code));
 
   return code;
@@ -75,10 +75,10 @@ eng_rcode SMTPAccountConnect(void)
 eng_rcode POPAccountDisconnect(void)
 {
 
-  if (state.popstatus == acctconnected)
+  if (popstatus == acctconnected)
   {
-    state.popprocess.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
-    return (eng_rcode) POPaccount->Disconnect(state.popprocess.disconnectobj);
+    popprocessstate.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
+    return (eng_rcode) POPaccount->Disconnect(popprocessstate.disconnectobj);
   }
   else
     return ENG_COMPLETED;
@@ -89,13 +89,13 @@ eng_rcode POPAccountDisconnect(void)
 eng_rcode SMTPAccountDisconnect(void)
 {
 
-  if (state.smtpstatus == acctconnected)
+  if (smtpstatus == acctconnected)
   {
-    state.smtpprocess.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
-    return (eng_rcode) SMTPaccount->Disconnect(state.smtpprocess.disconnectobj);
+    smtpprocessstate.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
+    return (eng_rcode) SMTPaccount->Disconnect(smtpprocessstate.disconnectobj);
   }
-  else if (state.state & DISCONNECT)
-    state.smtpprocess.substate = disconnected;
+  else if (state & DISCONNECT)
+    smtpprocessstate.context = disconnected;
 
   return ENG_COMPLETED;
 
@@ -123,21 +123,21 @@ void StartProcess(void)
   ourmboxin->flags &= ~MBOXINCOMPLETE;
 
   /*
-  ** Set up initial substates depending on whether POP
+  ** Set up initial contexts depending on whether POP
   ** and/or SMTP accounts have been successfully created.
   */
 
-  if (state.popstatus != acctnonexistent)
+  if (popstatus != acctnonexistent)
   {
     inbox = POPaccount->GetInbox();
-    state.popprocess.substate = readytoexpunge;
-    state.state |= PROCESSPOP;
+    popprocessstate.context = readytoexpunge;
+    state |= PROCESSPOP;
   }
-  if (state.smtpstatus != acctnonexistent)
+  if (smtpstatus != acctnonexistent)
   {
     outbox = (SendQMailbox *) SMTPaccount->GetInbox();
-    state.smtpprocess.substate = readytosend;
-    state.state |= PROCESSSMTP;
+    smtpprocessstate.context = readytosend;
+    state |= PROCESSSMTP;
   }
 
 }
@@ -145,13 +145,13 @@ void StartProcess(void)
 
 void DefunctPOP(bool b)
 {
-  state.state &= ~PROCESSPOP;
+  state &= ~PROCESSPOP;
 }
 
 
 void DefunctSMTP(bool b)
 {
-  state.state &= ~PROCESSSMTP;
+  state &= ~PROCESSSMTP;
 }
 
 
@@ -171,43 +171,70 @@ void DoSMTPProcess(void)
 {
 
   eng_rcode code;
+  uint32 n;
 
-  switch (state.smtpprocess.substate)
+  switch (smtpprocessstate.context)
   {
     case readytosend :
 
-      /*
-      ** Need to find out if any messages in send queue.
-      ** If not, we should set substate to smtpdisconnected
-      ** and ignore the following.
-      */
-
-      dprintf(("Eng", "SMTP substate = readytosend\n"));
-      state.smtpprocess.substate = idle;
-      code = SMTPAccountConnect();
+      dprintf(("Eng", "SMTP context = readytosend\n"));
+      smtpprocessstate.context = idle;
+      smtpprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
+      code = (eng_rcode) outbox->GetNumberMessages(smtpprocessstate.getnumobj);
       if (code < 0)
       {
-        state.smtpprocess.rc = ENG_SMTPCONNECTFAIL;
-        state.smtpprocess.substate = connectfailure;
+        smtpprocessstate.context = getnumfailure;
+        smtpprocessstate.rc = code;
       }
+
+    case gotnumber :
+
+      dprintf(("Eng", "SMTP context = gotnumber\n"));
+      smtpprocessstate.context = idle;
+      n = smtpprocessstate.getnumobj->number_messages;
+      dprintf(("Eng", "Number of messages in send queue=%d\n",n));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.getnumobj);
+      if (true)
+      {
+        code = SMTPAccountConnect();
+        if (code < 0)
+        {
+          smtpprocessstate.rc = ENG_SMTPCONNECTFAIL;
+          smtpprocessstate.context = connectfailure;
+        }
+      }
+
+      else
+      {
+        /* no messages in send queue, so don't connect */
+        smtpprocessstate.context = disconnected;
+      }
+
+      break;
+
+    case getnumfailure :
+
+      dprintf(("Eng", "SMTP context = getnumfailure\n"));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.getnumobj);
+      smtpprocessstate.context = disconnected;
 
       break;
 
     case connected :
 
-      dprintf(("Eng", "SMTP substate = connected\n"));
-      RemoveObj((MBoxOpCB**) &state.smtpprocess.connectobj);
-      state.smtpstatus = acctconnected;
+      dprintf(("Eng", "SMTP context = connected\n"));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.connectobj);
+      smtpstatus = acctconnected;
 
-      state.smtpprocess.substate = idle;
-      state.smtpprocess.processobj = new MBoxOpCB_process((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
-      code = (eng_rcode) outbox->Process(state.smtpprocess.processobj);
+      smtpprocessstate.context = idle;
+      smtpprocessstate.processobj = new MBoxOpCB_process((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
+      code = (eng_rcode) outbox->Process(smtpprocessstate.processobj);
       dprintf(("Eng", "Processing SMTP mailbox, rc=%d\n",code));
 
       if (code < 0)
       {
-        state.smtpprocess.rc = ENG_CANTPROCESSSMTP;
-        state.smtpprocess.substate = processfailure;
+        smtpprocessstate.rc = ENG_CANTPROCESSSMTP;
+        smtpprocessstate.context = processfailure;
       }
 
       break;
@@ -215,19 +242,32 @@ void DoSMTPProcess(void)
     case connectfailure :
 
       /* connection has failed */
-      dprintf(("Eng", "SMTP substate = connectfailure\n"));
-      RemoveObj((MBoxOpCB**) &state.smtpprocess.connectobj);
-      state.smtpprocess.substate = idle;
-      (*callbacklist.statusfunc)(state.smtpprocess.rc, callbacklist.statushandle, DefunctSMTP);
+      dprintf(("Eng", "SMTP context = connectfailure\n"));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.connectobj);
+      smtpprocessstate.context = idle;
+      if (state & SEND)
+      {
+        (*callbacklist.sendfunc)(ENG_SENDFAILED, callbacklist.sendhandle);
+        state &= ~SEND;
+      }
+      else
+        (*callbacklist.statusfunc)(smtpprocessstate.rc, callbacklist.statushandle, DefunctSMTP);
+
       break;
 
     case processfailure :
 
       /* processing has failed */
-      dprintf(("Eng", "SMTP substate = processfailure\n",));
-      RemoveObj((MBoxOpCB**) &state.smtpprocess.processobj);
-      state.smtpprocess.substate = idle;
-      (*callbacklist.statusfunc)(state.smtpprocess.rc, callbacklist.statushandle, DeadSMTP);
+      dprintf(("Eng", "SMTP context = processfailure\n",));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.processobj);
+      smtpprocessstate.context = idle;
+      if (state & SEND)
+      {
+        (*callbacklist.sendfunc)(ENG_SENDFAILED, callbacklist.sendhandle);
+        state &= ~SEND;
+      }
+      else
+        (*callbacklist.statusfunc)(smtpprocessstate.rc, callbacklist.statushandle, DeadSMTP);
 
       break;
 
@@ -235,22 +275,27 @@ void DoSMTPProcess(void)
 
       /* SMTP process completed -
          do we have a means to check that mail has been sent? */
-      dprintf(("Eng", "SMTP substate = smptdone\n"));
-      RemoveObj((MBoxOpCB**) &state.smtpprocess.processobj);
-      state.smtpprocess.substate = idle;
+      dprintf(("Eng", "SMTP context = smptdone\n"));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.processobj);
+      smtpprocessstate.context = idle;
       SMTPAccountDisconnect();
       break;
 
     case disconnected :
     case disconnectfailure :
 
-      dprintf(("Eng", "SMTP substate = disconnected\n"));
-      RemoveObj((MBoxOpCB**) &state.smtpprocess.disconnectobj);
-      state.smtpstatus = acctcreated;
-      state.state &= ~PROCESSSMTP;
-      if ((state.state & DISCONNECT) && (!(state.state & PROCESSPOP)))
+      dprintf(("Eng", "SMTP context = disconnected\n"));
+      RemoveObj((MBoxOpCB**) &smtpprocessstate.disconnectobj);
+      smtpstatus = acctcreated;
+      state &= ~PROCESSSMTP;
+      if (state & SEND)
       {
-        state.state &= ~DISCONNECT;
+        (*callbacklist.sendfunc)(ENG_COMPLETED, callbacklist.sendhandle);
+        state &= ~SEND;
+      }        
+      if ((state & DISCONNECT) && (!(state & PROCESSPOP)))
+      {
+        state &= ~DISCONNECT;
         DisconnectFromISP();
       }
 
@@ -268,28 +313,28 @@ void DoPOPProcess(void)
   uint32 n;
   bool changed;
 
-  switch (state.popprocess.substate)
+  switch (popprocessstate.context)
   {
     case readytoexpunge :
 
-      dprintf(("Eng", "POP substate = readytoexpunge\n"));
+      dprintf(("Eng", "POP context = readytoexpunge\n"));
       /* it may be already connected... */
-      if (state.popstatus == acctconnected)
+      if (popstatus == acctconnected)
       {
         dprintf(("Eng", "Already connected\n"));
-        state.popprocess.substate = connected;
+        popprocessstate.context = connected;
       }
 
       /* ...but if not, connect to it if it exists */
-      else if (state.popstatus == acctcreated)
+      else if (popstatus == acctcreated)
       {
-        state.popprocess.substate = idle;
-        state.mark.substate = idle;
+        popprocessstate.context = idle;
+        markstate.context = idle;
         POPAccountConnect();
         if (code < 0)
         {
-          state.popprocess.rc = ENG_POPCONNECTFAIL;
-          state.popprocess.substate = connectfailure;
+          popprocessstate.rc = ENG_POPCONNECTFAIL;
+          popprocessstate.context = connectfailure;
         }
       }
 
@@ -297,40 +342,40 @@ void DoPOPProcess(void)
 
     case connected :
 
-      dprintf(("Eng", "POP substate = connected\n"));
-      RemoveObj((MBoxOpCB**) &state.popprocess.connectobj);
-      state.popstatus = acctconnected;
+      dprintf(("Eng", "POP context = connected\n"));
+      RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
+      popstatus = acctconnected;
 
-      state.popprocess.substate = idle;
-      state.mark.substate = idle;
+      popprocessstate.context = idle;
+      markstate.context = idle;
       dprintf(("Eng", "About to create expunge object\n"));
-      state.popprocess.expungeobj = new MBoxOpCB_expunge((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
+      popprocessstate.expungeobj = new MBoxOpCB_expunge((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
       dprintf(("Eng", "About to call Expunge\n"));
-      code = (eng_rcode) inbox->Expunge(state.popprocess.expungeobj);
+      code = (eng_rcode) inbox->Expunge(popprocessstate.expungeobj);
       dprintf(("Eng", "Expunging POP mailbox, rc=%d\n",code));
 
       if (code < 0)
       {
         ourmboxin->flags |= MBOXINCOMPLETE;
-        state.popprocess.substate = readytoprocess;
+        popprocessstate.context = readytoprocess;
       }
 
       break;
 
     case readytoprocess :
 
-      dprintf(("Eng", "POP substate = readytoprocess\n"));
-      RemoveObj((MBoxOpCB**) &state.popprocess.expungeobj);
+      dprintf(("Eng", "POP context = readytoprocess\n"));
+      RemoveObj((MBoxOpCB**) &popprocessstate.expungeobj);
 
-      state.popprocess.substate = idle;
-      state.popprocess.processobj = new MBoxOpCB_process((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
-      code = (eng_rcode) inbox->Process(state.popprocess.processobj);
+      popprocessstate.context = idle;
+      popprocessstate.processobj = new MBoxOpCB_process((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
+      code = (eng_rcode) inbox->Process(popprocessstate.processobj);
       dprintf(("Eng", "Processing POP mailbox, rc=%d\n",code));
 
       if (code < 0)
       {
-        state.popprocess.rc = ENG_CANTPROCESSPOP;
-        state.popprocess.substate = processfailure;
+        popprocessstate.rc = ENG_CANTPROCESSPOP;
+        popprocessstate.context = processfailure;
       }
 
       break;
@@ -338,30 +383,30 @@ void DoPOPProcess(void)
     case connectfailure :
 
       /* connection has failed */
-      dprintf(("Eng", "POP substate = connectfailure\n",));
-      RemoveObj((MBoxOpCB**) &state.popprocess.connectobj);
-      state.popprocess.substate = idle;
-      (*callbacklist.statusfunc)(state.popprocess.rc, callbacklist.statushandle, DefunctPOP);
+      dprintf(("Eng", "POP context = connectfailure\n",));
+      RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
+      popprocessstate.context = idle;
+      (*callbacklist.statusfunc)(popprocessstate.rc, callbacklist.statushandle, DefunctPOP);
       break;
 
     case processfailure :
 
       /* processing has failed */
-      dprintf(("Eng", "POP substate = processfailure\n",));
-      RemoveObj((MBoxOpCB**) &state.popprocess.processobj);
-      state.popprocess.substate = idle;
-      (*callbacklist.statusfunc)(state.popprocess.rc, callbacklist.statushandle, DeadPOP);
+      dprintf(("Eng", "POP context = processfailure\n",));
+      RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
+      popprocessstate.context = idle;
+      (*callbacklist.statusfunc)(popprocessstate.rc, callbacklist.statushandle, DeadPOP);
 
       break;
 
     case popdone :
 
-      dprintf(("Eng", "POP substate = popdone\n"));
-      if (state.popprocess.processobj)
-        changed = state.popprocess.processobj->mailbox_changed;
-      RemoveObj((MBoxOpCB**) &state.popprocess.processobj);
-      state.popprocess.substate = idle;
-      if (state.state & DISCONNECT)
+      dprintf(("Eng", "POP context = popdone\n"));
+      if (popprocessstate.processobj)
+        changed = popprocessstate.processobj->mailbox_changed;
+      RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
+      popprocessstate.context = idle;
+      if (state & DISCONNECT)
         POPAccountDisconnect();
 
       else
@@ -369,12 +414,12 @@ void DoPOPProcess(void)
         dprintf(("Eng", "Mailbox has %schanged\n",(changed) ? "" : "not "));
         if (changed)
         {
-          state.popprocess.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
-          code = (eng_rcode) inbox->GetNumberMessages(state.popprocess.getnumobj);
+          popprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
+          code = (eng_rcode) inbox->GetNumberMessages(popprocessstate.getnumobj);
           if (code < 0)
           {
-            state.popprocess.substate = getnumfailure;
-            state.popprocess.rc = code;
+            popprocessstate.context = getnumfailure;
+            popprocessstate.rc = code;
           }
         }
 
@@ -390,15 +435,15 @@ void DoPOPProcess(void)
     case disconnected :
     case disconnectfailure :
 
-      dprintf(("Eng", "POP substate = disconnected\n"));
+      dprintf(("Eng", "POP context = disconnected\n"));
       /* we should only be disconnecting from POP on an error
          or when the line is taken down */
-      RemoveObj((MBoxOpCB**) &state.popprocess.disconnectobj);
-      state.popstatus = acctcreated;
-      state.state &= ~PROCESSPOP;
-      if ((state.state & DISCONNECT) && (!(state.state & PROCESSSMTP)))
+      RemoveObj((MBoxOpCB**) &popprocessstate.disconnectobj);
+      popstatus = acctcreated;
+      state &= ~PROCESSPOP;
+      if ((state & DISCONNECT) && (!(state & PROCESSSMTP)))
       {
-        state.state &= ~DISCONNECT;
+        state &= ~DISCONNECT;
         DisconnectFromISP();
       }
 
@@ -406,18 +451,18 @@ void DoPOPProcess(void)
 
     case gotnumber :
 
-      dprintf(("Eng", "POP substate = gotnumber\n"));
-      n = state.popprocess.getnumobj->number_messages;
+      dprintf(("Eng", "POP context = gotnumber\n"));
+      n = popprocessstate.getnumobj->number_messages;
       dprintf(("Eng", "Number of messages=%d\n",n));
-      RemoveObj((MBoxOpCB**) &state.popprocess.getnumobj);
+      RemoveObj((MBoxOpCB**) &popprocessstate.getnumobj);
       ReconcileMailbox(n);
       break;
 
     case getnumfailure :
 
-      dprintf(("Eng", "POP substate = getnumfailure\n"));
-      state.popprocess.substate = idle;
-      RemoveObj((MBoxOpCB**) &state.popprocess.getnumobj);
+      dprintf(("Eng", "POP context = getnumfailure\n"));
+      popprocessstate.context = idle;
+      RemoveObj((MBoxOpCB**) &popprocessstate.getnumobj);
       (*callbacklist.statusfunc)(ENG_CANTPROCESSPOP, callbacklist.statushandle, DeadPOP);
 
     default :
@@ -572,19 +617,20 @@ void ProcessDone(bool changed)
 {
 
   dprintf(("Eng", "Entering ProcessDone(), mailbox is %schanged\n",(changed) ? "" : "not "));
-  state.state &= ~PROCESSPOP;
+  state &= ~PROCESSPOP;
   if (changed)
   {
-    if (state.connected)
+    if (online)
     {
       /* go off and get headers for Inbox */
-      state.download.msg = ourmboxin->list;
-      state.download.substate = readytodownload;
-      state.download.rc = ENG_COMPLETED;
-      state.state |= DOWNLOADHDR;
+      downloadstate.msg = ourmboxin->list;
+      downloadstate.context = readytodownload;
+      parsehdrstate.context = idle;
+      downloadstate.rc = ENG_COMPLETED;
+      state |= DOWNLOADHDR;
     }
 
-    if (!state.emailactive)
+    if (!emailactive)
     {
       if (newmail)
       {
@@ -600,7 +646,7 @@ void ProcessDone(bool changed)
   else
   {
     ourmboxin->flags |= MBOXPROCESSED;
-    (*callbacklist.promptfunc)(ENG_COMPLETED, ourmboxin->list, state.connected, callbacklist.prompthandle);
+    (*callbacklist.promptfunc)(ENG_COMPLETED, ourmboxin->list, online, callbacklist.prompthandle);
   }
 
 }
@@ -663,52 +709,52 @@ void DoMark(void)
 
   ELib_rcode code;
 
-  switch (state.mark.substate)
+  switch (markstate.context)
   {
     case readytomark :
 
-      dprintf(("Eng", "Mark substate = readytomark\n"));
-      state.mark.substate = idle;
-      if (state.state & MARKDELETE)
+      dprintf(("Eng", "Mark context = readytomark\n"));
+      markstate.context = idle;
+      if (state & MARKDELETE)
       {
         /* mark for delete process */
         
-        if (state.mark.current == state.mark.total)
+        if (markstate.current == markstate.total)
         {
           /* all messages marked for deletion */
           dprintf(("Eng", "All messages marked\n"));
-          free(state.mark.list);
-          if (state.connected)
+          free(markstate.list);
+          if (online)
           {
             /* expunge mailbox now */
             dprintf(("Eng", "About to expunge\n"));
-            state.popprocess.substate = readytoexpunge;
-            state.state |= PROCESSPOP;
+            popprocessstate.context = readytoexpunge;
+            state |= PROCESSPOP;
           }
           else
-            state.mark.substate = readytodisplay;
+            markstate.context = readytodisplay;
         }
 
         else
         {
-          MessageDescriptor *msg = FindDescriptor(state.mark.list[state.mark.current], ourmboxin);
+          MessageDescriptor *msg = FindDescriptor(markstate.list[markstate.current], ourmboxin);
           if (!msg)
           {
             dprintf(("Eng", "Unknown message ID %d\n",msg->ID));
-            state.mark.substate = markfailure;
+            markstate.context = markfailure;
           }
           else
           {
-            state.mark.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
+            markstate.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
 
-            state.mark.msg = msg;
-            state.mark.substate = idle;
-            code = msg->mboxobj->SetFlags(state.mark.setobj, Message::Delete, Message::Set);
+            markstate.msg = msg;
+            markstate.context = idle;
+            code = msg->mboxobj->SetFlags(markstate.setobj, Message::Delete, Message::Set);
             if (code < 0)
             {
               /* mailbox has signalled an error in marking */
               dprintf(("Eng", "Error calling SetFlags, rc=%d\n",code));
-              state.mark.substate = markfailure;
+              markstate.context = markfailure;
             }
           }
         }
@@ -718,14 +764,14 @@ void DoMark(void)
       {
         /* mark as read process */
 
-        state.mark.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
-        state.mark.substate = idle;
-        code = state.mark.msg->mboxobj->SetFlags(state.mark.setobj, Message::Read, Message::Set);
+        markstate.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
+        markstate.context = idle;
+        code = markstate.msg->mboxobj->SetFlags(markstate.setobj, Message::Read, Message::Set);
         if (code < 0)
         {
           /* mailbox has signalled an error in marking */
           dprintf(("Eng", "Error calling SetFlags, rc=%d\n",code));
-          state.mark.substate = markfailure;
+          markstate.context = markfailure;
         }
       }
 
@@ -733,39 +779,39 @@ void DoMark(void)
 
     case markfailure :
 
-      dprintf(("Eng", "Mark substate = markfailure\n"));
-      RemoveObj((MBoxOpCB**) &state.mark.setobj);
-      state.mark.rc = ENG_MARKFAILED;
-      if (state.state & MARKDELETE)
+      dprintf(("Eng", "Mark context = markfailure\n"));
+      RemoveObj((MBoxOpCB**) &markstate.setobj);
+      markstate.rc = ENG_MARKFAILED;
+      if (state & MARKDELETE)
       {
-        ++state.mark.current;
-        state.mark.substate = readytomark;
+        ++markstate.current;
+        markstate.context = readytomark;
       }
       else
-        state.mark.substate = readdone;
+        markstate.context = readdone;
 
       break;
 
     case readdone :
 
-      RemoveObj((MBoxOpCB**) &state.mark.setobj);
-      state.state &= ~MARKREAD;
+      RemoveObj((MBoxOpCB**) &markstate.setobj);
+      state &= ~MARKREAD;
 
       break;
 
     case deletedone :
     {
-      MessageDescriptor *msg = state.mark.msg;
+      MessageDescriptor *msg = markstate.msg;
       char *file = SetFilename(msg->ID, false);
 
-      dprintf(("Eng", "Mark substate = deletedone\n"));
-      RemoveObj((MBoxOpCB**) &state.mark.setobj);
+      dprintf(("Eng", "Mark context = deletedone\n"));
+      RemoveObj((MBoxOpCB**) &markstate.setobj);
       msg->flags |= MARKED;
       DestroyDescriptor(msg, ourmboxin);
       UnlockFile(SetFilename(msg->ID, false));
       remove(file);
-      ++state.mark.current;
-      state.mark.substate = readytomark;
+      ++markstate.current;
+      markstate.context = readytomark;
     
       break;
     }
@@ -773,8 +819,8 @@ void DoMark(void)
 
       /* send message to UI to display Inbox */
       dprintf(("Eng", "Prompting UI to display Inbox\n"));
-      state.state &= ~MARKDELETE;
-      (*callbacklist.promptfunc)(state.mark.rc, ourmboxin->list, state.connected, callbacklist.prompthandle);
+      state &= ~MARKDELETE;
+      (*callbacklist.promptfunc)(markstate.rc, ourmboxin->list, online, callbacklist.prompthandle);
       break;
 
   }
@@ -786,17 +832,23 @@ void SendMessage(void)
 {
 
   ELib_rcode code;
-  MessageDescriptor *msg = state.send.msg;
+  MessageDescriptor *msg = sendstate.msg;
   char *file = SetFilename(msg->ID, true);
 
+  sendstate.context = idle;
   code = outbox->AddMessage(file, msg->to, msg->fromaddr);
   dprintf(("Eng", "Added message to %s, from %s to send queue, rc=%d\n",msg->to,msg->fromaddr,code));
 
-  if ((state.smtpstatus != acctnonexistent) && (state.connected))
+  if ((smtpstatus != acctnonexistent) && (online))
   {
     outbox = (SendQMailbox *) SMTPaccount->GetInbox();
-    state.smtpprocess.substate = readytosend;
-    state.state |= PROCESSSMTP;
+    smtpprocessstate.context = readytosend;
+    state |= PROCESSSMTP;
+  }
+  else
+  {
+    state &= ~SEND;
+    (*callbacklist.sendfunc)(ENG_COMPLETED, callbacklist.sendhandle);
   }
 
 }

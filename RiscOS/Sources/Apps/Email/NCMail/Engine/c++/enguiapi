@@ -28,13 +28,13 @@ CallBackList callbacklist;
 extern "C" eng_rcode eng_connect(void)
 {
 
-  if (state.connected)
+  if (online)
     return ENG_ALREADYCONNECTED;
 
-  else if (state.state & CONNECT)
+  else if (state & CONNECT)
     return ENG_ALREADYCONNECTING;
 
-  else if (!(state.state & DISCONNECT))
+  else if (!(state & DISCONNECT))
   {
     ConnectToISP();
     return ENG_RUNNING;
@@ -53,13 +53,13 @@ extern "C" eng_rcode eng_connect(void)
 extern "C" eng_rcode eng_disconnect(void)
 {
 
-  if (!state.connected)
+  if (!online)
     return ENG_ALREADYDISCONNECTED;
 
-  else if (state.state & DISCONNECT)
+  else if (state & DISCONNECT)
     return ENG_ALREADYDISCONNECTING;
 
-  else if ((state.state == IDLE) || (state.state & (PROCESSPOP | PROCESSSMTP)))
+  else if ((state == IDLE) || (state & (PROCESSPOP | PROCESSSMTP)))
   {
     PreDisconnect();
     return ENG_RUNNING;
@@ -71,12 +71,12 @@ extern "C" eng_rcode eng_disconnect(void)
     ** Set disconnectpending so that if any other process
     ** is active we will know to disconnect when finished.
     */
-    state.disconnectpending = true;
-    if (state.state & SEND)
+    disconnectpending = true;
+    if (state & SEND)
       return ENG_SENDINGMAIL;
-    else if (state.state & RETRIEVEMSG)
+    else if (state & RETRIEVEMSG)
       return ENG_FETCHINGMESSAGE;
-    else if (state.state & (DOWNLOADHDR | DOWNLOADMSG))
+    else if (state & (DOWNLOADHDR | DOWNLOADMSG))
       return ENG_DOWNLOADINGMAIL;
     else  
       return ENG_WILLDISCONNECTASAP;
@@ -146,14 +146,14 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
   if (!(ourmboxin->flags & MBOXPROCESSED))
     return ENG_UNPROCESSED;
 
-  if (state.state & (PROCESSPOP | RETRIEVEMSG))
+  if (state & (PROCESSPOP | RETRIEVEMSG))
     return ENG_BUSY;
 
-  if ((state.retrieve.msg = FindDescriptor(msg_id, ourmboxin)) == 0)
+  if ((retrievestate.msg = FindDescriptor(msg_id, ourmboxin)) == 0)
     return ENG_UNKNOWNID;
 
   dprintf(("Eng", "Message no. %d requested\n",msg_id));
-  state.state |= RETRIEVEMSG;
+  state |= RETRIEVEMSG;
   callbacklist.getmsgfunc = func;
   callbacklist.getmsghandle = handle;
 
@@ -163,27 +163,27 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
   ** Otherwise user will be asked to confirm connection.
   */
 
-  if ((state.retrieve.msg->flags & DOWNLOADED) && (FileExists(msg_id)))
+  if ((retrievestate.msg->flags & DOWNLOADED) && (FileExists(msg_id)))
   {
     dprintf(("Eng", "File is already downloaded\n"));
-    state.retrieve.substate = readytoparse;
+    retrievestate.context = readytoparse;
   }
 
-  else if (state.retrieve.msg->flags & DOWNLOADING)
+  else if (retrievestate.msg->flags & DOWNLOADING)
   {
     /* message is in process of being downloaded */
     dprintf(("Eng", "Message is already being downloaded\n"));
-    state.retrieve.substate = downloadpending;
+    retrievestate.context = downloadpending;
   }
 
   else
   {
     dprintf(("Eng", "Fetching file from server\n"));
-    state.retrieve.msg->flags &= ~DOWNLOADED;
-    if (state.connected)
-      state.retrieve.substate = readytoretrieve;
+    retrievestate.msg->flags &= ~DOWNLOADED;
+    if (online)
+      retrievestate.context = readytoretrieve;
     else
-      state.retrieve.substate = reqconnect;
+      retrievestate.context = reqconnect;
   }
 
   return ENG_RUNNING;
@@ -202,35 +202,35 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
 extern "C" eng_rcode eng_create_message(uint32 msg_id, void *handle, eng_cbf_getmsg func)
 {
 
-  if (state.state & (CREATE | REPLY))
+  if (state & (CREATE | REPLY))
     return ENG_BUSY;
 
-  else if ((state.create.msg = NewDescriptor(0, ourmboxout)) == 0)
+  else if ((createstate.msg = NewDescriptor(0, ourmboxout)) == 0)
   {
     /* not enough memory for new message */
     return ENG_NOMEMORY;
   }
 
-  if ((state.create.msg->fromreal = malloc(strlen(realname) + 1)) == 0)
+  if ((createstate.msg->fromreal = malloc(strlen(realname) + 1)) == 0)
   {
     /* not enough memory for new message */
     return ENG_NOMEMORY;
   }
 
-  if ((state.create.msg->fromaddr = malloc(strlen(emailaddr) + 1)) == 0)
+  if ((createstate.msg->fromaddr = malloc(strlen(emailaddr) + 1)) == 0)
   {
     /* not enough memory for new message */
     return ENG_NOMEMORY;
   }
 
-  strcpy(state.create.msg->fromreal, realname);
-  strcpy(state.create.msg->fromaddr, emailaddr);
-  state.state |= (msg_id > 0) ? REPLY : CREATE;
+  strcpy(createstate.msg->fromreal, realname);
+  strcpy(createstate.msg->fromaddr, emailaddr);
+  state |= (msg_id > 0) ? REPLY : CREATE;
   callbacklist.createfunc = func;
   callbacklist.createhandle = handle;
   if (msg_id)
-    state.create.reply = FindDescriptor(msg_id, ourmboxin);
-  state.create.substate = readytocreate;
+    createstate.reply = FindDescriptor(msg_id, ourmboxin);
+  createstate.context = readytocreate;
   return ENG_RUNNING;
 
 }
@@ -242,22 +242,24 @@ extern "C" eng_rcode eng_create_message(uint32 msg_id, void *handle, eng_cbf_get
 ** It activates the SEND state.
 */
 
-extern "C" eng_rcode eng_send_message(uint32 msg_id, char *bodyfile)
+extern "C" eng_rcode eng_send_message(uint32 msg_id, char *bodyfile, void *handle, eng_cbf_sendstatus func)
 {
 
-  if (state.state & (CREATE | REPLY))
+  if (state & (CREATE | REPLY))
     return ENG_BUSY;
 
   else
   {
-    state.state |= SEND;
-    state.send.msg = FindDescriptor(msg_id, ourmboxout);
-    if ((state.send.bodyname = malloc(strlen(bodyfile) + 1)) == 0)
+    callbacklist.sendfunc = func;
+    callbacklist.sendhandle = handle;
+    state |= SEND;
+    sendstate.msg = FindDescriptor(msg_id, ourmboxout);
+    if ((sendstate.bodyname = malloc(strlen(bodyfile) + 1)) == 0)
       return ENG_NOMEMORY;
 
-    strcpy(state.send.bodyname, bodyfile);
-    state.send.substate = readytoparse;
-    dprintf(("Eng", "Sending message %d, body in file %s\n",msg_id,state.send.bodyname));
+    strcpy(sendstate.bodyname, bodyfile);
+    sendstate.context = readytoparse;
+    dprintf(("Eng", "Sending message %d, body in file %s\n",msg_id,sendstate.bodyname));
     return ENG_RUNNING;
   }
 
@@ -288,18 +290,18 @@ extern "C" eng_rcode eng_cancel_message(uint32 msg_id)
 extern "C" eng_rcode eng_mark_as_read(uint32 msg_id)
 {
 
-  if (state.state & (MARKREAD | MARKDELETE))
+  if (state & (MARKREAD | MARKDELETE))
     return ENG_BUSY;
 
-  state.mark.msg = FindDescriptor(msg_id, ourmboxin);
-  if (!state.mark.msg)
+  markstate.msg = FindDescriptor(msg_id, ourmboxin);
+  if (!markstate.msg)
     return ENG_UNKNOWNID;
 
   dprintf(("Eng", "About to mark message %d as read\n",msg_id));
-  state.mark.msg->flags |= READ;
-  state.state |= MARKREAD;
-  state.mark.rc = ENG_COMPLETED;
-  state.mark.substate = readytomark;
+  markstate.msg->flags |= READ;
+  state |= MARKREAD;
+  markstate.rc = ENG_COMPLETED;
+  markstate.context = readytomark;
   return ENG_RUNNING;
 
 }
@@ -315,15 +317,15 @@ extern "C" eng_rcode eng_mark_as_read(uint32 msg_id)
 extern "C" eng_rcode eng_mark_for_deletion(uint32 number, uint32 *message_list)
 {
 
-  if (state.state & (MARKREAD | MARKDELETE))
+  if (state & (MARKREAD | MARKDELETE))
     return ENG_BUSY;
 
-  state.mark.list = message_list;
-  state.mark.total = number;
-  state.mark.current = 0;
-  state.mark.substate = readytomark;
-  state.mark.rc = ENG_COMPLETED;
-  state.state |= MARKDELETE;
+  markstate.list = message_list;
+  markstate.total = number;
+  markstate.current = 0;
+  markstate.context = readytomark;
+  markstate.rc = ENG_COMPLETED;
+  state |= MARKDELETE;
   dprintf(("Eng", "About to mark %d messages for deletion\n",number));
 
   return ENG_RUNNING;
@@ -357,9 +359,9 @@ extern "C" eng_rcode eng_email_active(bool status)
 
   MessageDescriptor *msgptr = ourmboxin->list;
 
-  if (status == state.emailactive)
+  if (status == emailactive)
     dprintf(("Eng", "Already in that state\n"));
-  state.emailactive = status;    
+  emailactive = status;    
   dprintf(("Eng", "Email Client is now %sactive\n",(status) ? "" : "in"));
 
   /*
@@ -371,7 +373,7 @@ extern "C" eng_rcode eng_email_active(bool status)
     if (FileExists(msgptr->ID))
     {
       msgptr->flags |= DOWNLOADED;
-      if (state.emailactive)
+      if (emailactive)
       {
         dprintf(("Eng", "Locking file %d\n",msgptr->ID));
         LockFile(SetFilename(msgptr->ID, false));
@@ -435,7 +437,7 @@ extern "C" void eng_confirm(bool conf)
   else
   {
     /* Cancel RETRIEVEMSG state and clean up. */
-    state.state &= ~(RETRIEVEMSG + DOWNLOADMSG);
+    state &= ~(RETRIEVEMSG + DOWNLOADMSG);
     (*callbacklist.getmsgfunc)(ENG_CONNECTCANCELLED, 0, callbacklist.getmsghandle);
   }
 
