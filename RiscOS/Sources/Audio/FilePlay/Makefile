@@ -9,7 +9,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -72,8 +72,14 @@ export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
+
+install: rm.${COMPONENT}
+        ${MKDIR} ${INSTDIR}
+	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: installed
 
 clean:
         ${WIPE} o.* ${WFLAGS}
