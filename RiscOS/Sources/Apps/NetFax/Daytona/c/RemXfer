@@ -5,9 +5,14 @@
  * - with additions by S B Forrest
  *
  * Started 29 July 1997
+ *
+ * 1998-02-25: BAL
+ * Fixed bug: original POP3 messages were not being deleted.
+ * Made 'Out of memory' error messages be more specific. 
  */
 
 
+#include "BuildFlags.h"
 #include "StdTypes.h"
 
 #include <stdio.h>
@@ -21,13 +26,14 @@
                     */
 
 
-#include "NFELib.h"
+#include "NetFax/NFELib/NFELib.h"
 #include "acornpop3.h"
+#include "PageList.h"
 #include "StateKicker.h"
-#include "RemModem.h"
-#include "RemXfer.h"
 #include "PrintQ.h"
 #include "SendQ.h"
+#include "RemXfer.h"
+#include "RemModem.h"
 #include "Screen.h"
 
 #include "wimp.h"
@@ -40,12 +46,12 @@
 #include "MimeQ.h"
 
 #include "DebugLib.h"
-#include "NFELib.h"
+#include "NetFax/NFELib/NFELib.h"
 #include "MimeIF.h"
 
 #include "SetupIF.h"
 #include "FileOps.h"
-
+#include "AddrFile.h"
 
 #include "list.h"
 #include "emailrx.h"
@@ -94,7 +100,15 @@ static int start_message_download (void);
 
 static void file_error (void);
 
-static int send_report_to_printq (char *const report);
+static int send_memory_report_to_printq (const PageClasses  page_class,
+                                         const PageTypes    page_type,
+                                         char *const        report);
+
+static void send_file_report_to_printq (const PageClasses  page_class,
+                                        const PageTypes    page_type,
+                                        char *const        filename);
+
+static int do_missing_page_reports (const NFE_address *const  from);
 
 /*
  * N.B.  THE FOLLOWING ARE CITED FOR REMOVAL!
@@ -175,17 +189,19 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 {
 	static States state = IDLE;
 	static BOOL	  aborting = FALSE;
+	static unsigned int stash_Process_Id;
 	static char   directory[256];			/* Document directory */
 	static unsigned int stash_loPage;
-
+	static unsigned int stash_hiPage;
+    static BOOL   stash_pageStream;
 #if SUPPORT_EMAIL
     /* Email send/retrieve variables */
     static BOOL isp_via_dialler = TRUE;	/* when FALSE, using LAN */
     static BOOL tx_flag = FALSE;
     static BOOL rx_flag = FALSE;
     static BOOL tx_error = FALSE;
-    static unsigned int stash_Process_Id = 0;
-    static unsigned int stash_hiPage;
+  /*static unsigned int stash_Process_Id = 0;*/
+  /*static unsigned int stash_hiPage;*/
     static char stash_to_emailaddress[256];
 #endif
 
@@ -214,8 +230,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 				case SQ_RX_DIAL_FAX:
 				case SQ_RX_DIAL_DAYTONA:
 				case SQ_RX_DIAL_ISP:
-				case SQ_RX_DIAL_ISP_rx:
+#if SUPPORT_LAN
 				case SQ_RX_DIAL_LAN:
+#endif
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
 					return;
 
@@ -245,15 +262,25 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					break;
 
 				case RM_RX_INCOMING_FAX:
-					/* request creation of a document directory to hold the incoming fax */
-					StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_NEW_DOCUMENT, NULL);
-					nextstate = INCOMING_2a;
+				    {
+				        messageDataBlock *sendMessage;
+
+					    /* request creation of a document directory to hold the incoming fax */
+					    StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_NEW_DOCUMENT, &sendMessage);
+					    sendMessage->data.rx_pq_new_document.Source = PqRxDIRECT;
+					    nextstate = INCOMING_2a;
+					}
 					break;
 
 				case RM_RX_INCOMING_DAYTONA:
-					/* request creation of a document directory to hold the incoming fax/text */
-					StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_NEW_DOCUMENT, NULL);
-					nextstate = INCOMING_3a;
+				    {
+				        messageDataBlock *sendMessage;
+
+					    /* request creation of a document directory to hold the incoming fax/text */
+					    StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_NEW_DOCUMENT, &sendMessage);
+					    sendMessage->data.rx_pq_new_document.Source = PqRxDIRECT;
+					    nextstate = INCOMING_3a;
+					}
 					break;
 
                 case RM_RX_INCOMING_VOICE:
@@ -287,8 +314,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 						messageDataBlock *sendMessage;
 
 						isp_via_dialler = TRUE;
-                        tx_flag = TRUE;
-                        rx_flag = FALSE;
+                        tx_flag = messageData->data.sq_rx_dial_isp.tx_flag;
+                        rx_flag = messageData->data.sq_rx_dial_isp.rx_flag;
                         tx_error = FALSE;
                         /* tx_flag  rx_flag                                                */
                         /*  TRUE     TRUE   - normal connect, send mail then retrieve mail */
@@ -298,32 +325,10 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 							StateKicker_SendMessage(MimeEncode_StateMachine, RX_ME_PREFETCH_START, NULL);	/* Kick off the MIME encoding while the dial-up and LogOn happens */
 
 						StateKicker_SendMessage(RemModem_StateMachine, RX_RM_DIAL_ISP, &sendMessage);
-						strcpy(sendMessage->data.dial.number, messageData->data.dial.number);
+						strcpy(sendMessage->data.dial.number, messageData->data.sq_rx_dial_isp.number);
 						nextstate = OUTGOING_6a;
 					}
 					break;
-
-				case SQ_RX_DIAL_ISP_rx:
-					{
-						messageDataBlock *sendMessage;
-
-						isp_via_dialler = TRUE;
-                        tx_flag = FALSE;
-                        rx_flag = TRUE;
-                        tx_error = FALSE;
-                        /* tx_flag  rx_flag                                                */
-                        /*  TRUE     TRUE   - normal connect, send mail then retrieve mail */
-                        /*  TRUE     FALSE  - send only (water mark triggered)             */
-                        /*  FALSE    TRUE   - retrieve only                                */
-						if (tx_flag)
-							StateKicker_SendMessage(MimeEncode_StateMachine, RX_ME_PREFETCH_START, NULL);	/* Kick off the MIME encoding while the dial-up and LogOn happens */
-
-						StateKicker_SendMessage(RemModem_StateMachine, RX_RM_DIAL_ISP, &sendMessage);
-						strcpy(sendMessage->data.dial.number, messageData->data.dial.number);
-						nextstate = OUTGOING_6a;
-					}
-					break;
-
 #if SUPPORT_LAN
 				/* not quite the right message name, but everything else is SQ_RX_DIAL_xxx */
 				case SQ_RX_DIAL_LAN:
@@ -352,12 +357,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_2a:			/* waiting for PrintQ to tell us where to put the fax being received */
 			switch (messageNumber)
 			{
-				case SQ_RX_DIAL_FAX:
-				case SQ_RX_DIAL_DAYTONA:
-				case SQ_RX_DIAL_ISP:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-					nextstate = state;
-					break;
+                case RM_RX_ERROR:
+					/* Be paranoid: It should be impossible for any error to be reported between the sending of */
+                    /* RX_PQ_NEW_DOCUMENT and the reply PQ_RX_NEW_DOCUMENT_DIR (or PQ_RX_ABORT_INCOMING).       */
+					/* If it does happen, assume !Fax will report an error, and recover then.                   */ 
+                    RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);	/* forward the error to PrintQ */
+                    break;
 
 				case PQ_RX_ABORT_INCOMING:
 					StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
@@ -365,7 +370,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					break;
 
 				case PQ_RX_NEW_DOCUMENT_DIR:
-					/* Capture directory details */
+					/* Capture PId & directory details */
+					stash_Process_Id = messageData->data.new_document_dir.pid;
                     strcpy(directory, messageData->data.new_document_dir.directory);
 
 					/* pass modem ownership to !Fax, telling !Fax where to place the scanned pages */
@@ -378,15 +384,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_2b:
 			switch (messageNumber)
 			{
-				case SQ_RX_DIAL_FAX:
-				case SQ_RX_DIAL_DAYTONA:
-				case SQ_RX_DIAL_ISP:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-					nextstate = state;
-					break;
-
 				case PQ_RX_ABORT_INCOMING:
-					/*>>>tell !Fax to abort reception??? */
+					/* tell !Fax to abort reception */
+					FaxIF_Abort(REMMODEM);
 					StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
 					StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
 					nextstate = INCOMING_2d;	/* wait for RemModem to go Idle */
@@ -437,16 +437,10 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_2c:
 			switch (messageNumber)
 			{
-				case SQ_RX_DIAL_FAX:
-				case SQ_RX_DIAL_DAYTONA:
-				case SQ_RX_DIAL_ISP:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-					nextstate = state;
-					break;
-
 				case PQ_RX_ABORT_INCOMING:
-					/*>>>tell !Fax to abort reception */
-					StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_ABORTED, NULL);
+					/* tell !Fax to abort reception */
+					FaxIF_Abort(REMMODEM);
+				  /*StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_ABORTED, NULL);*/
 					StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
 					StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
 					nextstate = INCOMING_2d;	/* wait for RemModem to go Idle */
@@ -455,7 +449,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 				case FX_ERROR:
 				    /*>>>report error*/
 					RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);	/* forward the error to PrintQ */
-                    StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_ABORTED, NULL);
+                  /*StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_ABORTED, NULL);*/
                     StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
 					StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
                     nextstate = INCOMING_2d;
@@ -465,10 +459,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					{
 						messageDataBlock *sendMessage;
 
-						set_filetypeDN(directory, messageData->data.fx_received_page.lastpage, FILETYPE_TIFF);	/*>>>should this be done by PrintQ???*/
+						/*set_filetypeDN(directory, messageData->data.fx_received_page.lastpage, FILETYPE_TIFF);*/	/*done by PrintQ*/
 				    	StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_COMPLETE, &sendMessage);
 				    	sendMessage->data.rx_pq_page_complete.pageNum  = messageData->data.fx_received_page.lastpage;
-				    	sendMessage->data.rx_pq_page_complete.pageType = FILETYPE_TIFF;
+				    	sendMessage->data.rx_pq_page_complete.pageClass = PageClass_TIFF;
+				    	sendMessage->data.rx_pq_page_complete.pageType = PageType_TIFF_2DMMR;
+				    	sendMessage->data.rx_pq_page_complete.fileType = FILETYPE_TIFF;
 
 				    	nextstate = INCOMING_2b;	/* wait for next page, or end of document */
 				    }
@@ -480,13 +476,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_2d:           /* waiting for RemModem to disconnect */
 			switch (messageNumber)
 			{
-				case SQ_RX_DIAL_FAX:
-				case SQ_RX_DIAL_DAYTONA:
-				case SQ_RX_DIAL_ISP:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-					nextstate = state;
-					break;
-
 				case PQ_RX_ABORT_INCOMING:
 					nextstate = state;		/* doing our best, so ignore */
 					break;
@@ -501,13 +490,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_SWITCHOVER:
 			switch (messageNumber)
 			{
-				case SQ_RX_DIAL_FAX:
-				case SQ_RX_DIAL_DAYTONA:
-				case SQ_RX_DIAL_ISP:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-					nextstate = state;
-					break;
-
 				case PQ_RX_ABORT_INCOMING:
 					StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
 					StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
@@ -527,13 +509,14 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     {
                         ZModemMessage zmodemtx;
 
-                        /* directory was setup in INCOMING_2a PQ_RX_NEW_DOCUMENT_DIR */
+                        /* PId & directory was captured in INCOMING_2a PQ_RX_NEW_DOCUMENT_DIR */
 
                         /* Reset page counter ready for receipt of new document */
                         page_counter = 1;
                         dprintf((NULL, "ZModem page counter reset\n"));
-
-                        /* Send our address book details, so that the remote machine may identify us */
+/*>>>here*/
+                        /* Send our address book details and capabilities, so that the remote (caller) machine may identify us */
+                        AddrFile_Create_Recipient_AddressRecord(LOC_ADDR_BOOK);	/* should already exist, but will re-create if setup has changed */
                         ZModemIF_SendMessage(REMMODEM, LOC_ADDR_BOOK, WM_ZMODEM_TX, &zmodemtx);
                         nextstate = INCOMING_3b;
                     }
@@ -548,13 +531,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_3a:           /* waiting for PrintQ to tell us where to put the document being received */
 	        switch (messageNumber)
 	        {
-                case SQ_RX_DIAL_FAX:
-                case SQ_RX_DIAL_DAYTONA:
-                case SQ_RX_DIAL_ISP:
-                    StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-                    nextstate = state;        /* unchanged */
-                    break;
-
                 case PQ_RX_ABORT_INCOMING:
                     StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
                     nextstate = INCOMING_3e;
@@ -565,14 +541,16 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     {
                         ZModemMessage zmodemtx;
 
-                        /* Capture directory details */
+                        /* Capture PId & directory details */
+                        stash_Process_Id = messageData->data.new_document_dir.pid;
                         strcpy(directory, messageData->data.new_document_dir.directory);
 
                         /* Reset page counter ready for receipt of new document */
                         page_counter = 1;
                         dprintf((NULL, "ZModem page counter reset\n"));
-
-                        /* Send our address book details, so that the remote machine may identify us */
+/*>>>here*/
+                        /* Send our address book details, so that the remote (caller) machine may identify us */
+                        AddrFile_Create_Recipient_AddressRecord(LOC_ADDR_BOOK);	/* should already exist, but will re-create if setup has changed */
                         ZModemIF_SendMessage(REMMODEM, LOC_ADDR_BOOK, WM_ZMODEM_TX, &zmodemtx);
                         nextstate = INCOMING_3b;
                     }
@@ -583,13 +561,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_3b:           /* waiting for ZModem to confirm transmission of local address */
 	        switch (messageNumber)
 	        {
-                case SQ_RX_DIAL_FAX:
-                case SQ_RX_DIAL_DAYTONA:
-                case SQ_RX_DIAL_ISP:
-                    StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-                    nextstate = state;        /* unchanged */
-                    break;
-
                 case ZM_RX_ERROR:  /* Error condition (failed to transfer local address details) */
 					RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);	/* forward the error to PrintQ */
                     StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
@@ -601,7 +572,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     {
                         ZModemMessage zmodemrx;
 
-                        /* Fetch recipients address book details */
+                        /* Fetch caller's address book details and list of files it wishes to send */
                         ZModemIF_SendMessage(REMMODEM, REM_ADDR_BOOK, WM_ZMODEM_RX, &zmodemrx);  /*>>>receive into directory.Remote*/
                         nextstate = INCOMING_3c;
                     }
@@ -612,13 +583,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_3c:           /* waiting for ZModem to confirm receipt of remote address */
 	        switch (messageNumber)
 	        {
-	            case SQ_RX_DIAL_FAX:
-	            case SQ_RX_DIAL_DAYTONA:
-	            case SQ_RX_DIAL_ISP:
-	                StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-	                nextstate = state;        /* unchanged */
-	                break;
-
 	            case ZM_RX_ERROR:  /* Error condition (failed to transfer remote address details) */
 					RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);	/* forward the error to PrintQ */
 	                StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
@@ -629,8 +593,35 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 	            case ZM_RX_NORMAL_TERMINATION:  /* Received remote address book details OK */
 	                {
 	                    ZModemMessage zmodemrx;
-/*>>>tell PrintQ about received address book details */
+
+                        if (aborting)
+                        {
+                            remove(REM_ADDR_BOOK);
+                            StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
+                            StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
+                            nextstate = INCOMING_3e;
+                            break;
+                        }
+
+						/* Decode received caller details - add address details to document */
+						if (AddrFile_Decode_Originator_File(REM_ADDR_BOOK, stash_Process_Id))
+						{
+							/*>>>report some sort of incompatibility error*/
+							remove(REM_ADDR_BOOK);
+							StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
+							StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
+							nextstate = INCOMING_3e;
+                        	break;
+						}
+
+						/* tell PrintQ to display received address book details */
+                        StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_DETAILS, NULL);
+                        
+						/* Having decided to accept the incoming files, open the received filelist, so we can classify */
+						/* each file as it arrives. NB it MUST be closed & deleted on completion or error */
+						AddrFile_Originator_FileList_Open(REM_ADDR_BOOK);
 /*>>>we need to decode the file list here? or can we just receive files and let the PrintQ characterise them based on the file list?*/
+
 	                    /* Construct the full pathname for the page (file) to receive */
                         sprintf(pathname, "%s.%d", directory, page_counter);
 
@@ -648,13 +639,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_3d:           /* waiting for ZModem to confirm receipt of page */
 	        switch (messageNumber)
 	        {
-                case SQ_RX_DIAL_FAX:
-                case SQ_RX_DIAL_DAYTONA:
-                case SQ_RX_DIAL_ISP:
-                    StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-                    nextstate = state;        /* unchanged */
-                    break;
-
                 case PQ_RX_ABORT_INCOMING:
                     {
                         ZModemMessage zmodemabort;
@@ -662,6 +646,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         /* Inform ZModem, asking it to abort the current transfer */
                         ZModemIF_SendMessage(REMMODEM, NULL, WM_ZMODEM_ABORT, &zmodemabort);
 
+						AddrFile_Originator_FileList_Close(REM_ADDR_BOOK);		/* close filelist (and delete REM_ADDR_BOOK?) */
+						remove(REM_ADDR_BOOK);
                         StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
                         StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
                         nextstate = INCOMING_3e;
@@ -672,7 +658,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 #if 0
 					RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);	/* forward the error to PrintQ */
 #endif
-                    StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_ABORTED, NULL);
+                  /*StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_ABORTED, NULL);*/
+                    AddrFile_Originator_FileList_Close(REM_ADDR_BOOK);		/* close filelist (and delete REM_ADDR_BOOK?) */
+                    remove(REM_ADDR_BOOK);
                     StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_COMPLETE, NULL);
                     StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
                     nextstate = INCOMING_3e;
@@ -682,12 +670,19 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     {
                     	messageDataBlock *sendMessage;
                         ZModemMessage zmodemrx;
+                        PageClasses pageClass = PageClass_TIFF;
+                        PageTypes pageType = PageType_TIFF_2DMMR; 
+                        int fileType = FILETYPE_TIFF;
+
+						AddrFile_Originator_FileList_GetClassAndType(page_counter, &pageClass, &pageType, &fileType);	/*>>>what about errors*/
 
 						/*>>>NB assume TIFF for now*/
-                        set_filetypeDN(directory, page_counter, FILETYPE_TIFF);	/*>>>should this be done by PrintQ???*/
+                        /*set_filetypeDN(directory, page_counter, fileType);*/	/*should this be done by PrintQ*/
                         StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_PAGE_COMPLETE, &sendMessage);
 				    	sendMessage->data.rx_pq_page_complete.pageNum  = page_counter;
-				    	sendMessage->data.rx_pq_page_complete.pageType = FILETYPE_TIFF;
+				    	sendMessage->data.rx_pq_page_complete.pageClass = pageClass;
+				    	sendMessage->data.rx_pq_page_complete.pageType = pageType;
+				    	sendMessage->data.rx_pq_page_complete.fileType = fileType;
 
                         /* Increment page counter; construct full pathname of next page (file) to receive */
                         page_counter += 1;
@@ -708,13 +703,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 		case INCOMING_3e:           /* waiting for RemModem to disconnect */
 	        switch (messageNumber)
 	        {
-                case SQ_RX_DIAL_FAX:
-                case SQ_RX_DIAL_DAYTONA:
-                case SQ_RX_DIAL_ISP:
-                    StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DIAL_REJECTED, NULL);
-                    nextstate = state;        /* unchanged */
-                    break;
-
                 case PQ_RX_ABORT_INCOMING:
                     nextstate = state;        /* doing our best, so ignore */
                     break;
@@ -744,6 +732,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					break;
 
 				case RM_RX_TXCONNECTED:
+					/* When dialling in fax mode, RM_RX_TXCONNECTED is reported when the dial completes, */
+					/* not when a connection has been established */
+					
 					/* ask SendQ which document is to be sent to the number we connected too */
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_WHICH_DOCUMENT, NULL);
 					nextstate = OUTGOING_4b;
@@ -755,9 +746,13 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 			switch (messageNumber)
 			{
 				case SQ_RX_THIS_DOCUMENT:
-					/* Capture name of directory containing document (fax or text) to send */
-                    strcpy(directory, messageData->data.this_document.directory);	/*>>>is directory used???*/
-					stash_loPage = messageData->data.this_document.loPage;	/* for the benefit of ZMODEM, capture loPage, incase a data switchover occurs */
+					/* Capture details of document (fax or text) to send */
+					stash_Process_Id = messageData->data.this_document.pid;
+                    strcpy(directory, messageData->data.this_document.directory);
+					stash_loPage = messageData->data.this_document.loPage;	
+                    stash_hiPage = messageData->data.this_document.hiPage;
+                    stash_pageStream = messageData->data.this_document.pageStream;
+                    /* the above is for the benefit of ZMODEM, incase a data switchover occurs */
 
 					/* pass modem ownership to !Fax, telling !Fax which pages to send */
 					FaxIF_SendFax(REMMODEM, messageData->data.this_document.directory,
@@ -783,6 +778,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 			{
 #if SUPPORT_SWITCHOVER
 				case FX_SWITCHOVER:
+					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_CONNECTED, NULL);			/* special frame indicates call answered by a Daytona or TFax */
+
 					/* Tell SendQ we are switching from fax to Daytona data transfer mode */
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SWITCHTO_DAYTONA, NULL);	/* ie tell address book recipient is a Daytona */
 
@@ -814,8 +811,17 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					break;
 
 				case FX_SENDING_PAGE:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
-					nextstate = OUTGOING_4e;
+					{
+						messageDataBlock *sendMessage;
+						
+						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_CONNECTED, NULL);                   /* connected to a fax machine */
+	
+						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_DOCUMENT, &sendMessage);	/* starting to send document */
+						sendMessage->data.rx_sq_sending_document.pid = stash_Process_Id;
+					
+						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
+						nextstate = OUTGOING_4e;
+					}
 					break;
 			}
 			break;
@@ -906,7 +912,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         page_counter = stash_loPage;	/* stashed by OUTGOING_4b message SQ_RX_THIS_DOCUMENT, usually 1 */
                         dprintf((NULL, "ZModem page counter reset\n"));
 
-                        /* Fetch recipients address book details */
+                        /* Fetch recipients address and capabilities details */
                         ZModemIF_SendMessage(REMMODEM, REM_ADDR_BOOK, WM_ZMODEM_RX, &zmodemrx);
 						nextstate = OUTGOING_5c;
 					}
@@ -932,6 +938,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					break;
 
 				case RM_RX_TXCONNECTED:
+					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_CONNECTED, NULL);
+					
 					/* ask SendQ which document is to be sent to the number we connected to */
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_WHICH_DOCUMENT, NULL);
 					nextstate = OUTGOING_5b;
@@ -946,15 +954,18 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     {
                         ZModemMessage zmodemrx;
 
-                        /* Capture name of directory containing document (fax or text) to send */
+                        /* Capture details of document (fax or text) to send */
+						stash_Process_Id = messageData->data.this_document.pid;
                         strcpy(directory, messageData->data.this_document.directory);
                         stash_loPage = messageData->data.this_document.loPage;
+                        stash_hiPage = messageData->data.this_document.hiPage;
+                        stash_pageStream = messageData->data.this_document.pageStream;
 
                         /* Reset page counter ready for new document */
                         page_counter = stash_loPage;	/*>>>what about text files*/
                         dprintf((NULL, "ZModem page counter reset\n"));
 
-                        /* Fetch recipients address book details */
+                        /* Fetch recipients address and capabilities details */
                         ZModemIF_SendMessage(REMMODEM, REM_ADDR_BOOK, WM_ZMODEM_RX, &zmodemrx);
                         nextstate = OUTGOING_5c;
                     }
@@ -963,7 +974,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
             break;
 
         case OUTGOING_5c:
-            switch (messageNumber)          /* waiting for ZModem to confirm receipt of remote address */
+            switch (messageNumber)          /* waiting for ZModem to confirm receipt of remote address and capabilities details */
             {
                 case ZM_RX_ERROR:  /* Error condition (failed to transfer remote address details) */
                     RemXfer_ForwardError(SendQ_MessageHandler, RX_SQ_ERROR, messageNumber, messageData);	/* forward the error to SendQ */
@@ -972,14 +983,39 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     nextstate = OUTGOING_5f;
                     break;
 
-                case ZM_RX_NORMAL_TERMINATION:  /* Received remote address book details OK, so send ours */
+                case ZM_RX_NORMAL_TERMINATION:  /* Received remote address book capabilities details OK, so send our address and filelist */
                     {
                         ZModemMessage zmodemtx;
 
-						/*>>>update screen to show sender details */
+						/*>>>update screen to show recipient details */
+#if 1
+						/*>>>decode address book and capabilities, make sure we can talk to the remote recipient*/
+						/*>>>*/
+#if 1
+                        if (AddrFile_Decode_Recipient_AddressRecord(REM_ADDR_BOOK, stash_Process_Id))
+                        {
+                            /*>>>report some sort of incompatibility error*/
+                            remove(REM_ADDR_BOOK);
+                            StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DOCUMENT_SENT, NULL);
+                            StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
+                            nextstate = OUTGOING_5f;
+                            break;
+                        }
+#endif
+                        /* Send our address book details, so that the remote machine may identify us */
+                        /* plus a list of the files we are sending ie create and send an originator file */
 
+						strcpy(pathname, directory);	/* Construct the full pathname of the file */
+						strcat(pathname, ".Local");
+						if (AddrFile_Create_Originator_File(stash_Process_Id, pathname, stash_loPage, stash_hiPage, stash_pageStream))
+						{	/*>>>errors!*/
+							/* unable to create originator file */
+						}
+						ZModemIF_SendMessage(REMMODEM, pathname, WM_ZMODEM_TX, &zmodemtx);	/* send file */
+#else
                         /* Send our address book details, so that the remote machine may identify us */
                         ZModemIF_SendMessage(REMMODEM, LOC_ADDR_BOOK, WM_ZMODEM_TX, &zmodemtx);
+#endif
                         nextstate = OUTGOING_5d;
                     }
                     break;
@@ -990,6 +1026,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
             switch (messageNumber)          /* waiting for ZModem to confirm transmission of local address */
             {
                 case ZM_RX_ERROR:  /* Error condition (failed to transfer local address details) */
+                	remove(pathname);   /* delete our originator_File */
                     RemXfer_ForwardError(SendQ_MessageHandler, RX_SQ_ERROR, messageNumber, messageData);	/* forward the error to SendQ */
                     StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DOCUMENT_SENT, NULL);
                     StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
@@ -998,12 +1035,18 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
                 case ZM_RX_NORMAL_TERMINATION:  /* Sent local address book details OK */
                     {
+                    	messageDataBlock *sendMessage;
                         ZModemMessage zmodemtx;
+
+	                	remove(pathname);   /* delete our originator file */
+
+                        /* Tell SendQ that the document send is about to commence */
+						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_DOCUMENT, &sendMessage);
+						sendMessage->data.rx_sq_sending_document.pid = stash_Process_Id;
 
                         /* Construct the full pathname of the page (file) to send */
                         sprintf(pathname, "%s.%d", directory, page_counter);
 
-                        /* Tell SendQ that the send is about to commence */
                         StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
 
                         /* Send the page using ZModem protocols */
@@ -1182,7 +1225,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                             SendQ_emailaddress_from_pid(stash_to_emailaddress, stash_Process_Id);
 
                     		StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_DOCUMENT, &sendMessage);	/* starting to send first/next document */
-                    		sendMessage->data.sending_document.pid = stash_Process_Id;
+                    		sendMessage->data.rx_sq_sending_document.pid = stash_Process_Id;
                     	}
 
 						stash_loPage = messageData->data.this_mailfile.loPage;
@@ -1206,6 +1249,11 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 			{
 				case SP_RX_SENDMAIL_ERROR:	/* SmtpIF_SendMail failed */
 					tx_error = TRUE;
+#if 1
+                    /* tell the MailQ to delete the mailfile - MUST do this to allow MailQ to go Idle */
+                    /* one could argue that a different message name should be used */
+                    StateKicker_SendMessage(MailQ_StateMachine, RX_MQ_MAILFILE_SENT, NULL);
+#endif
 					RemXfer_ForwardError(SendQ_MessageHandler, RX_SQ_ERROR, messageNumber, messageData);	/* forward the error to SendQ */
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DOCUMENT_SENT, NULL);               /* we've stopped sending current document */
 					SmtpIF_DeRegister();
@@ -1814,7 +1862,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 							StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 							send_message->data.os_error.err.errnum = 0;
-							strcpy (send_message->data.os_error.err.errmess, "Out of memory.");
+							strcpy (send_message->data.os_error.err.errmess, "Not enough memory to scan mailbox.");
 							free_pop3_resources ();
 							Pop3IF_Disconnect();
 							nextstate = INCOMING_9c;
@@ -1859,9 +1907,10 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 					else
 					{
-						StateKicker_SendMessage (PrintQ_MessageHandler,
-						                         RX_PQ_NEW_DOCUMENT,
-						                         NULL);
+					    messageDataBlock *sendMessage;
+					    
+						StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_NEW_DOCUMENT, &sendMessage);
+						sendMessage->data.rx_pq_new_document.Source = PqRxISP;
 
 						nextstate = INCOMING_8j;
 					}
@@ -1893,7 +1942,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 				case PQ_RX_NEW_DOCUMENT_DIR:
 				{
 					char report[4097];
-
+   					char *  return_receipt_to = NULL;
 
 					pop3.document_directory = malloc (strlen (messageData->data.new_document_dir.directory) + 1);
 					if (pop3.document_directory == NULL)
@@ -1902,7 +1951,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 						StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 						send_message->data.os_error.err.errnum = 0;
-						strcpy (send_message->data.os_error.err.errmess, "Out of memory.");
+						strcpy (send_message->data.os_error.err.errmess, "Not enough memory to print document.");
 						free_pop3_resources ();
 						Pop3IF_Disconnect();
 						nextstate = INCOMING_9c;
@@ -1921,6 +1970,36 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 					pop3.page_index = 0;
 
+					return_receipt_to = emailrx_construct_full_address (&pop3.message_header.return_receipt_to,
+					                                                    0);
+
+					if (return_receipt_to && *return_receipt_to == '\0')
+					{
+						free (return_receipt_to);
+						return_receipt_to = NULL;
+					}
+#if 1
+                    {
+                        AddrFile_FillAddressRecord(messageData->data.new_document_dir.pid,
+                            /* serial number */    pop3.message_header.details.serial_num,
+                            /* company name  */    pop3.message_header.config.organisation,
+                            /* contact name  */    pop3.message_header.from.real_name,
+                            /* fax number    */    pop3.message_header.config.fax_num,     /* NB email format */
+                            /* voice number  */    pop3.message_header.config.phone_num,   /* NB email format */
+                            /* email address */    pop3.message_header.from.address,
+                            /* software rev. */    pop3.message_header.details.software_rev_major, pop3.message_header.details.software_rev_minor,
+                            /* device class  */    pop3.message_header.details.device_class,
+                            /* receipt_to    */    return_receipt_to
+                                                  );
+                    }
+                    StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_DETAILS, NULL);
+#endif
+					if (return_receipt_to != NULL)
+					{
+						free (return_receipt_to);
+						return_receipt_to = NULL;
+					}
+					
 					StateKicker_SendMessage (RemXfer_StateMachine,
 					                         RX_RX_GET_MESSAGE,
 					                         NULL);
@@ -1936,17 +2015,14 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					{
 						++pop3.page_index;	/*RCM put in to make cover sheet page 1*/
 						
-						if (send_report_to_printq (report))
+						if (send_memory_report_to_printq (PageClass_Text,
+						                                  PageType_Text_CoverPage,
+						                                  report))
 						{
 							/* error occured */
 							nextstate = INCOMING_9c;
 							break;
 						}
-#if 0
-						StateKicker_SendMessage (PrintQ_MessageHandler,
-						                         RX_PQ_PAGE_COMPLETE,
-						                         NULL);
-#endif
 					}
 
 					++pop3.page_index;
@@ -1968,24 +2044,32 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 				case RX_RX_GET_MESSAGE:
 					if ((pop3.message_list_iter.finished) (&pop3.message_list_iter))
 					{
-						char local_report[4097];
-						char remote_report[4097];
+						char  delivery_conf_report_filename[257];
 
 						/* Check if a missing page report is required for this document */
-						if (emailrx_missing_page_report (pop3.document_handle,
-						                                 local_report,
-						                                 remote_report,
-						                                 sizeof (local_report),
-						                                 sizeof (remote_report),
-						                                 &pop3.message_header))
+						if (emailrx_need_missing_page_report (pop3.document_handle))
 						{
-							if (send_report_to_printq (local_report))
+							if (do_missing_page_reports (&pop3.message_header.from) != 0)
 							{
 								/* error occured */
 								nextstate = INCOMING_9c;
 								break;
 							}
-							++pop3.page_index;
+						}
+
+						sprintf (delivery_conf_report_filename,
+						         "%s.%d",
+						         pop3.document_directory,
+						         pop3.page_index);
+
+						/* Check if a delivery confirmation report is required for this document */
+						if (emailrx_printed_page_report (pop3.document_handle,
+						                                 delivery_conf_report_filename,
+						                                 &pop3.message_header))
+						{
+							send_file_report_to_printq (PageClass_SendReceipt,
+							                            PageType_SendReceipt,
+							                            delivery_conf_report_filename);
 						}
 
 						StateKicker_SendMessage (PrintQ_MessageHandler,
@@ -2011,7 +2095,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 							StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 							send_message->data.os_error.err.errnum = 0;
-							strcpy (send_message->data.os_error.err.errmess, "Out of memory.");
+							strcpy (send_message->data.os_error.err.errmess, "Not enough memory to download EMail message.");
 
 							free_pop3_resources ();
 							Pop3IF_Disconnect();
@@ -2158,10 +2242,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 						set_filetypeDN (pop3.document_directory,
 						                messageData->data.md_rx_page_complete.pageNum,
-						                messageData->data.md_rx_page_complete.pageType);	/*>>>should this be done by PrintQ???*/
+						                messageData->data.md_rx_page_complete.fileType);	/*>>>should this be done by PrintQ???*/
 						StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_PAGE_COMPLETE, &sendMessage);
-						sendMessage->data.rx_pq_page_complete.pageNum  = messageData->data.md_rx_page_complete.pageNum;
-						sendMessage->data.rx_pq_page_complete.pageType = messageData->data.md_rx_page_complete.pageType; /* FILETYPE_TIFF, FILETYPE_TEXT or FILETYPE_CONFIG */
+						sendMessage->data.rx_pq_page_complete.pageNum   = messageData->data.md_rx_page_complete.pageNum;
+						sendMessage->data.rx_pq_page_complete.pageClass = messageData->data.md_rx_page_complete.pageClass;
+						sendMessage->data.rx_pq_page_complete.pageType  = messageData->data.md_rx_page_complete.pageType;
+						sendMessage->data.rx_pq_page_complete.fileType  = messageData->data.md_rx_page_complete.fileType; /* FILETYPE_TIFF, FILETYPE_TEXT or FILETYPE_CONFIG */
 
 						nextstate = INCOMING_8n;
 						break;
@@ -2169,6 +2255,16 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 				case MD_RX_DECODE_MSG_DONE:
 				{
+					/* Check to see if a delivery recepit should be generated for this email
+					 * and if so place a tokenised file in the PrintQ.
+					 */
+
+					/* Delete the original message */
+#ifndef PRESERVE_POP3
+					_swix (OS_File, _INR (0, 1), 6, pop3.message_filename);
+#endif
+
+					/* Mark the message for deletion from the server on the next connection */
 					pop3.delete_list[pop3.delete_list_size] = malloc (strlen (pop3.message->unique_id) + 1);
 					if (pop3.delete_list[pop3.delete_list_size] != NULL)
 					{
@@ -2183,11 +2279,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					pop3.message_filename = NULL;
 
 					pop3.page_index = messageData->data.message_decoded.next_page;
-
-					/* Delete the original message */
-#ifndef PRESERVE_POP3
-					_swix (OS_File, _INR (0, 1), 6, pop3.message_filename);
-#endif
 
 					++pop3.message_index;
 					(void) (pop3.message_list_iter.next) (&pop3.message_list_iter);
@@ -2419,6 +2510,12 @@ static void free_header (NFE_header *header)
 
 	header->date = 0;
 
+	if (header->date_hdr != NULL)
+	{
+		free (header->date_hdr);
+		header->date_hdr = NULL;
+	}
+
 	if (header->subject != NULL)
 	{
 		free (header->subject);
@@ -2622,7 +2719,6 @@ static void free_pop3_resources (void)
 }
 
 
-
 static int start_message_download (void)
 {
 	unsigned int free_space;
@@ -2662,7 +2758,7 @@ static int start_message_download (void)
 
 		StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 		send_message->data.os_error.err.errnum = 0;
-		strcpy (send_message->data.os_error.err.errmess, "Out of memory.");
+		strcpy (send_message->data.os_error.err.errmess, "Not enough memory to download EMail messages.");
 		free_pop3_resources ();
 		Pop3IF_Disconnect();
 		return 1;
@@ -2711,13 +2807,16 @@ static void file_error (void)
 }
 
 
-static int send_report_to_printq (char *const report)
-{
-	char report_filename[257];
-	FILE *fp;
-	messageDataBlock *sendMessage;
 
-	/* Report required.  Write report out to PrintQ */
+
+static int send_memory_report_to_printq (const PageClasses  page_class,
+                                         const PageTypes    page_type,
+                                         char *const        report)
+{
+	char                report_filename[257];
+	FILE *              fp;
+	messageDataBlock *  sendMessage;
+
 	StateKicker_SendMessage (PrintQ_MessageHandler,
 	                         RX_PQ_NEW_PAGE,
 	                         NULL);
@@ -2727,7 +2826,8 @@ static int send_report_to_printq (char *const report)
 	         pop3.document_directory,
 	         pop3.page_index);
 
-	fp = fopen (report_filename, "w");
+	fp = fopen (report_filename,
+	            "w");
 	if (fp == NULL)
 	{
 		file_error ();
@@ -2747,15 +2847,127 @@ static int send_report_to_printq (char *const report)
 		return 1;
 	}
 
-	set_filetypeDN(pop3.document_directory, pop3.page_index, FILETYPE_TEXT);	/*>>>should this be done by PrintQ???*/
-	StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_PAGE_COMPLETE, &sendMessage);
-	sendMessage->data.rx_pq_page_complete.pageNum  = pop3.page_index;
-	sendMessage->data.rx_pq_page_complete.pageType = FILETYPE_TEXT;
+	set_filetypeDN (pop3.document_directory,
+	                pop3.page_index,
+	                FILETYPE_TEXT);	/*>>>should this be done by PrintQ???*/
+
+	StateKicker_SendMessage (PrintQ_MessageHandler,
+	                         RX_PQ_PAGE_COMPLETE,
+	                         &sendMessage);
+
+	sendMessage->data.rx_pq_page_complete.pageNum   = pop3.page_index;
+	sendMessage->data.rx_pq_page_complete.pageClass = page_class;
+	sendMessage->data.rx_pq_page_complete.pageType  = page_type;
+	sendMessage->data.rx_pq_page_complete.fileType  = FILETYPE_TEXT;
+
+	return 0;
+}
+
+
+
+
+static void send_file_report_to_printq (const PageClasses  page_class,
+                                        const PageTypes    page_type,
+                                        char *const        filename)
+{
+	messageDataBlock *sendMessage;
+
+
+	StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_NEW_PAGE, NULL);
+
+	set_filetypeDN (pop3.document_directory,
+	                pop3.page_index,
+	                FILETYPE_TEXT);	/*>>>should this be done by PrintQ???*/
+
+	StateKicker_SendMessage (PrintQ_MessageHandler,
+	                         RX_PQ_PAGE_COMPLETE,
+	                         &sendMessage);
+
+	sendMessage->data.rx_pq_page_complete.pageNum   = pop3.page_index;
+	sendMessage->data.rx_pq_page_complete.pageClass = page_class;
+	sendMessage->data.rx_pq_page_complete.pageType  = page_type;
+	sendMessage->data.rx_pq_page_complete.fileType  = FILETYPE_TEXT;
+}
+
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   do_missing_page_reports
+
+   Generate missing page reports for the remote and local machines and place
+   them in the approproate queues for sending / printing.
+
+   Returns
+   -1: failure
+    0: success
+-
+ */
+
+static int do_missing_page_reports (const NFE_address *const  from)
+{
+	char *        email_address = NULL;
+	char          remote_report_filename[257];
+	char *        local_report;
+	int           rc;
+	unsigned int  pid;
+
+
+	email_address = emailrx_construct_full_address (from,
+	                                                0);
+	if (email_address == NULL)
+	{
+		return -1;
+	}
+
+	pid = SendQ_ExtIF_NewDocument (remote_report_filename,
+                                   email_address,
+                                   FALSE,				/* don't print a hardcopy */
+                                   FALSE);				/* don't want a receipt */
+
+	free (email_address);
+
+	SendQ_ExtIF_Subject (pid,
+	                     "Missing page report");
+
+	strcat (remote_report_filename,
+	        "RemMissing");
+
+	local_report = emailrx_generate_missing_page_report (pop3.document_handle,
+	                                                     remote_report_filename,
+	                                                     &pop3.message_header);
+	if (local_report != NULL)
+	{
+		/* may need different class and type */
+		SendQ_ExtIF_FileComplete (pid,
+		                          "RemMissing",
+		                          PageClass_Text,
+		                          PageType_Text_ENote,
+		                          FILETYPE_TEXT);
+	}
+
+	SendQ_ExtIF_DocumentComplete (pid);
+	if (local_report == NULL)
+	{
+	    return -1;
+	}
+
+	/* call it a cover sheet for now, but ideally it should have its own type */
+	rc = send_memory_report_to_printq (PageClass_Text,
+	                                   PageType_Text_CoverPage,
+	                                   local_report);
+	free (local_report);
+
+	if (rc != 0)
+	{
+		return -1;
+	}
+	++pop3.page_index;
 
 	return 0;
 }
 
 
 /* end of RemXfer.c */
-
-

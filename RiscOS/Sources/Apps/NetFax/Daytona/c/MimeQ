@@ -21,13 +21,14 @@
 #include <string.h>
 #include "kernel.h"
 
+#include "PageList.h"
 #include "StateKicker.h"
 #include "RemXfer.h"
 #include "SendQ.h"
 #include "PrintQ.h"
 #include "MimeQ.h"
 
-#include "NFELib.h"
+#include "NetFax/NFELib/NFELib.h"
 #include "MimeIF.h"
 
 #include "functions.h"
@@ -37,12 +38,12 @@
 #include "SetupIF.h"
 #include "FileOps.h"
 
-#define SPLIT 1
 
-int configured_pages_per_email = 3;
-int configured_max_message_size = 100*1024;
 
 static int estimate_mime_size(int original_filesize);
+static void MimeEncode_ForwardError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
+                                    int forwardNumber, messageDataBlock *forwardData);
+
 
 /* A multi-page document is delivered as one or more email messages, */
 /* each email message holding one or more pages.                     */
@@ -120,6 +121,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
     static char stash_to_realname[256];
     static char stash_subject[256];
     static unsigned int stash_document_number;
+    static BOOL stash_request_receipt;
     static unsigned int stash_hiPage;
 	static BOOL stash_pageStream;
 
@@ -182,6 +184,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 						SendQ_contactname_from_pid(stash_to_realname, ProcessId);
 						SendQ_subject_from_pid(stash_subject, ProcessId);
 						SendQ_documentnumber_from_pid(&stash_document_number, ProcessId);
+						SendQ_requestreceipt_from_pid(&stash_request_receipt, ProcessId);
 
 						current_page     = messageData->data.this_document.loPage;	/* usually 1 */
 						stash_hiPage     = messageData->data.this_document.hiPage;
@@ -196,32 +199,10 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 	                    hiPage = 0;
 
 					/* encode first entity of email message */
-#if SPLIT
+
 						/* encode first page of new document as first entity of an email message */
 						StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_FIRST_ENTITY, NULL);
 						nextstate = ME_extra;
-#else					
-						sprintf(current_page_leafname, "%d", current_page);
-	                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
-	                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
-
-						/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
-	                    if ((error == NULL) && (objecttype == 1/*file found*/))
-	                    {
-	                    	/* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
-	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
-	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
-	                    	                         );
-
-	                    	nextstate = ME_S4;
-	                    }
-	                    else
-	                    {
-	                    	/* appears to be an empty document - is there another document we can encode */
-	                    	StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_NEXT_DOCUMENT, NULL);
-	                    	nextstate = ME_S2;
-	                    }
-#endif
                     }
         			break;
         	}
@@ -239,7 +220,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 					break;
 			}
 			break;
-#if SPLIT
+
 		case ME_extra:
 			switch (messageNumber)
 			{
@@ -249,19 +230,20 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 
 				case ME_ME_FIRST_ENTITY:
 					{
-	                	_kernel_oserror *error = NULL;
-	        			int objecttype, filelength, filetype;
-	                	char current_page_leafname[32];
-	        			
-						sprintf(current_page_leafname, "%d", current_page);
-	                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
-	                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
+                        PageClasses  pageClass;
+                        PageTypes    pageType;
+                        /*unsigned*/ int fileSize;
 
-						/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
-	                    if ((error == NULL) && (objecttype == 1/*file found*/))
+	                	char current_page_leafname[32];
+
+						sprintf(current_page_leafname, "%d", current_page);
+						
+	                    /* object "<directory>.<current_page>" may not exist, but if it does, lets find out what it is */
+                        if (SendQ_Page_ClassTypeSize(ProcessId, current_page, &pageClass, &pageType, &fileSize) == 0)
 	                    {
 	                    	/* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
-	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
+	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname,
+	                    	                          pageClass, pageType, stash_document_number, current_page,
 	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
 	                    	                         );
 
@@ -289,7 +271,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 					break;
 			}		
 			break;
-#endif
+
         case ME_S4:
         	switch (messageNumber)
         	{
@@ -300,6 +282,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 					break;
 
 				case MI_ME_CREATE_MIME_ENTITY_ERROR:
+				    MimeEncode_ForwardError(SendQ_MessageHandler, ME_SQ_ERROR, messageNumber, messageData);     /* forward the error to the SendQ */
 				    /*>>>should we parcel up the earlier entities and try this one later???*/
 				    flush_entities = TRUE;	/* indictes flush entity list, leaves mail queue intact */
 					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */					
@@ -307,70 +290,79 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 
         		case MI_ME_CREATE_MIME_ENTITY_DONE:
         			{
-        				BOOL do_another = FALSE;
-        				_kernel_oserror *error = NULL;
-        				char current_page_leafname[32];
-        				int objecttype, filelength, filetype;
-#if 1
-						error = osfile_ReadCatInfoDL(ENTITYQ_DIR, current_page_leafname /*dst_leafname*/, &objecttype, &filelength, &filetype); 
-#endif
-	        		    {
+                        {
+                            char current_page_leafname[32];
+                            _kernel_oserror *error = NULL;
+        				    int objecttype, filelength, filetype;
+        				    
+        				    sprintf(current_page_leafname, "%d", current_page);
+                            /* how big is the MIME entity file just created? */
+						    error = osfile_ReadCatInfoDL(ENTITYQ_DIR, current_page_leafname /*dst_leafname*/, &objecttype, &filelength, &filetype); 
+
 	        		    	/* put entity file in entity list - list WILL have space */
 							entity.list[entity.count].page   = current_page;	/* src_leafname */
 							entity.list[entity.count].fileNo = current_page;  	/* dst_leafname */
 
 							entity.count += 1;
 	                  		entity.total_size += filelength;
-	                    }
 
-	                    if (loPage == 0)
-	                    	loPage = current_page;	/* record first page in this group */
+    	                    if (loPage == 0)
+    	                    	loPage = current_page;	/* record first page in this group */
+    
+    						hiPage = current_page;		/* we've encoded pages loPage..hiPage inclusive */
+    
+    	        			current_page += 1;    		/* next page to encode */
+                        }
 
-						hiPage = current_page;		/* we've encoded pages loPage..hiPage inclusive */
+                        {
+                            char current_page_leafname[32];
 
-	        			current_page += 1;    		/* next page to encode */
-	                    sprintf(current_page_leafname, "%d", current_page);
+                            PageClasses  pageClass;
+                            PageTypes    pageType;
+                            /*unsigned*/ int fileSize;
 
-	                    do_another = FALSE;
+                            BOOL do_another = FALSE;
 
-	                    if ((entity.count < ENTITY_LIST_SIZE) && (entity.count < configured_pages_per_email))
-	                    {
+	                        sprintf(current_page_leafname, "%d", current_page);
 
-
-		                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
-		                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
-
-							/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
-		                    if ((error == NULL) && (objecttype == 1/*file found*/))
-	                    	{
-	                    	    if ((entity.total_size + estimate_mime_size(filelength)) < configured_max_message_size)
-	                    	    	do_another = TRUE;
-							}
-	                    }
-
-	                    if (do_another)
-	                    {
-	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
-	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
-	                    	                         );
-
-	                        nextstate = ME_S4;
-	                    }
-	                    else
-	                    {
-	                    	char mailfileNo_leafname[32];
-
-							mailfileNo = mail.qtail + 1; /*N.B. when queue wraps this gives MAIL_QUEUE_SIZE rather than 0*/
-                            sprintf(mailfileNo_leafname, "%d", mailfileNo);
-
-							MimeIF_create_RFC822_msg(MAILQ_DIR, mailfileNo_leafname,
-							                         stash_to_emailaddress, stash_to_realname, setup_from_mailaddress, setup_domainname,
-                                                     stash_subject,
-                                                     stash_document_number, stash_hiPage, ((BOOL)(stash_pageStream == FALSE)), loPage, hiPage,
-							                         entity.count, &entity.object[0], &entity.class[0]
-							                        );
-	                        nextstate = ME_S5;
-	                    }
+    	                    if ((entity.count < ENTITY_LIST_SIZE) && (entity.count < configured_pages_per_email))
+    	                    {
+    		                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
+                                if (SendQ_Page_ClassTypeSize(ProcessId, current_page, &pageClass, &pageType, &fileSize) == 0)
+    	                    	{
+    	                    	    if ((entity.total_size + estimate_mime_size(fileSize)) < configured_max_message_size)
+    	                    	    	do_another = TRUE;
+    							}
+    	                    }
+    
+    	                    if (do_another)
+    	                    {
+    	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname,
+    	                    	                          pageClass, pageType, stash_document_number, current_page,
+    	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
+    	                    	                         );
+    
+    	                        nextstate = ME_S4;
+    	                    }
+    	                    else
+    	                    {
+    	                    	char mailfileNo_leafname[32];
+    
+    							mailfileNo = mail.qtail + 1; /*N.B. when queue wraps this gives MAIL_QUEUE_SIZE rather than 0*/
+                                sprintf(mailfileNo_leafname, "%d", mailfileNo);
+    
+    							MimeIF_create_RFC822_msg(MAILQ_DIR, mailfileNo_leafname,
+    							                         stash_to_emailaddress, stash_to_realname, setup_from_mailaddress, setup_domainname,
+                                                         stash_subject,
+                                                         stash_document_number, stash_hiPage, ((BOOL)(stash_pageStream == FALSE)), loPage, hiPage,
+    							                         entity.count, &entity.object[0], &entity.class[0],
+    							                         stash_request_receipt
+    							                        );
+    							                        /*>>>RCM says: why do we pass setup_from_mailaddress, setup_domainname when MimeIF_create_RFC822_msg() */
+    							                        /*>>>          directly uses other setup_xxxx variables?. Suggest we don't read these two here */
+    	                        nextstate = ME_S5;
+    	                    }
+    	                }
                     }
         			break;
         	}
@@ -383,6 +375,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			{
 				case MI_ME_CREATE_MIME_ENTITY_ERROR:
 					/* report the error??? maybe not, since a later try may succeed */
+					MimeEncode_ForwardError(SendQ_MessageHandler, ME_SQ_ERROR, messageNumber, messageData);     /* forward the error to the SendQ */
 				case MI_ME_CREATE_MIME_ENTITY_DONE:
                     flush_entities = TRUE;	/* indicates flush entity list */
 					stopping = TRUE;        /* indicates flush queue, then send ME_RX_STOPPED */
@@ -401,7 +394,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 					break;
 
 				case MI_ME_CREATE_RFC822_MSG_ERROR:
-					/*>>>report the error*/
+				    MimeEncode_ForwardError(SendQ_MessageHandler, ME_SQ_ERROR, messageNumber, messageData);     /* forward the error to the SendQ */
 					flush_entities = TRUE;	/* indictes flush entity list, leaves mail queue intact */
 					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */					
 					break;
@@ -453,7 +446,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			{
 				case MI_ME_CREATE_RFC822_MSG_ERROR:
 					/* report the error??? maybe not, since a later try may succeed */
-
+                    MimeEncode_ForwardError(SendQ_MessageHandler, ME_SQ_ERROR, messageNumber, messageData);     /* forward the error to the SendQ */
 				case MI_ME_CREATE_RFC822_MSG_DONE:
                     flush_entities = TRUE;	/* indicates flush entity list */
 					stopping = TRUE;        /* indicates flush queue, then send ME_RX_STOPPED */
@@ -496,33 +489,10 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
         				    char current_page_leafname[32];
 
 						/* encode first entity of another email message */
-#if SPLIT
+
 							/* encode next page of document as first entity of another email message */
 							StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_FIRST_ENTITY, NULL);
 							nextstate = ME_extra;
-#else
-							sprintf(current_page_leafname, "%d", current_page);
-		                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
-		                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
-
-							/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
-		                    if ((error == NULL) && (objecttype == 1/*file found*/))
-		                    {
-		                    	/* new mailfile is a continuation of the current document */
-  		                    	/* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
-	                    		MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
-	                    		                          &(entity.object[entity.count]), &(entity.class[entity.count])
-	                    		                         );
-
-		                    	nextstate = ME_S4;
-		                    }
-		                    else
-		                    {
-		                    	/* current document complete - is there another document we can encode */
-		                    	StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_NEXT_DOCUMENT, NULL);
-		                    	nextstate = ME_S2;
-		                    }
-#endif
 	                    }
 	                    else
 	                    	nextstate = ME_S6;	/* stall in this state until an item is removed from head of the queue ie MQ_ME_SPACE_AVAILABLE */
@@ -605,19 +575,6 @@ extern void MailQ_StateMachine(int messageNumber, messageDataBlock *messageData)
 #endif
 				case MQ_MQ_TRYAGAIN:
     			case RX_MQ_WHICH_MAILFILE:
-#if 0
-					{
-						messageDataBlock *sendMessage;
-
-    			        StateKicker_SendMessage(RemXfer_StateMachine, MQ_RX_THIS_MAILFILE, &sendMessage);
-    			        sendMessage->data.this_mailfile.pid = 42;
-    			        sendMessage->data.this_mailfile.loPage = 1;
-    			        sendMessage->data.this_mailfile.hiPage = 1;
-    			        sprintf(sendMessage->data.this_mailfile.filename, "%s.%s", "ADFS::RCManby.$.Work.Daytona.Software.TestFiles", "EmailMessa");
-
-
-					}
-#endif
     				if (mail.qhead == mail.qtail)
     				{
     					/* queue is empty */
@@ -708,6 +665,16 @@ static int estimate_mime_size(int original_filesize)
 {
 	return(((original_filesize / 3) + 1) * 4);	/*>>>no allowence for CR/LF every 75ish characters*/
 
+}
+
+
+static void MimeEncode_ForwardError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
+                                    int forwardNumber, messageDataBlock *forwardData)
+{
+	messageDataBlock *sendMessage;
+
+    StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
+    sendMessage->data = forwardData->data;
 }
 
 
