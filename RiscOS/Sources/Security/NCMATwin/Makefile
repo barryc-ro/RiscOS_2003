@@ -143,7 +143,7 @@ DBUGLIB	   =
 COMPONENT = NCMATwin
 TARGET    = aof.NCMATwin
 TARGETSA  = rm.NCMATwin
-EXPORTS   =
+EXPORTS   = ${EXP_C_H}.smtagsCCIJ
 BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	  dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
 	  ncma_utils.o ncma_dial.o kprintf.o  \
@@ -215,6 +215,8 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB} localdirs.o header.h
 #
 # Exported interface headers
 #
+${EXP_C_H}.smtagsCCIJ:	h.smtagsCCIJ
+	${CP} h.smtagsCCIJ $@ ${CPFLAGS}
 
 #
 # ROM target (re-linked at ROM Image build time)
