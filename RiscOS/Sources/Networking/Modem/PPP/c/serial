@@ -2,6 +2,10 @@
  *
  * Copyright (c) 1995 Acorn Computers Ltd., Cambridge, England
  *
+ * 1998-03-09: BAL
+ * Idle timer was mistakenly being incremented twice in hangup check handler.
+ * Removed reliance on Dialler for hangup check if dialler option is used on
+ * command line.
  */
 #include <stdlib.h>
 #include <stdio.h>
@@ -39,6 +43,7 @@
 #include "serial.h"
 
 #include "dialler.h"
+#include "MemCheck/MemCheck.h"
 
 #define TickerV 0x1C
 #define UpCallV 0x1D
@@ -88,10 +93,7 @@ extern void *module_wsp;
  */
 static void release_ticker(void)
 {
-    if ((dialler_flags & DiallerFlags_UsingDialler) == 0)
-    {
-        _swix(OS_RemoveTickerEvent, _INR(0,1), hupcheck_entry, module_wsp);
-    }
+    _swix(OS_RemoveTickerEvent, _INR(0,1), hupcheck_entry, module_wsp);
     _swix(OS_Release, _INR(0,2), TickerV, ticker_handler, module_wsp);
 }
 
@@ -99,10 +101,7 @@ static void release_ticker(void)
 
 static void release_upcall (void)
 {
-    if ((dialler_flags & DiallerFlags_UsingDialler) == 0)
-    {
-        _swix(OS_RemoveTickerEvent, _INR(0,1), hupcheck_entry, module_wsp);
-    }
+    _swix(OS_RemoveTickerEvent, _INR(0,1), hupcheck_entry, module_wsp);
     _swix(OS_Release, _INR (0, 2), UpCallV, upcall_entry, module_wsp);
 }
 
@@ -120,11 +119,10 @@ static _kernel_oserror *claim_ticker(void)
 {
     _kernel_oserror *e = NULL;
 
-    if ((dialler_flags & DiallerFlags_UsingDialler) == 0)
+    e=_swix(OS_CallEvery, _INR(0,2), 99, hupcheck_entry, module_wsp);
+    if (e)
     {
-        e=_swix(OS_CallEvery, _INR(0,2), 99, hupcheck_entry, module_wsp);
-        if (e)
-            return e;
+        return e;
     }
 
     return _swix(OS_Claim, _INR(0,2), TickerV, ticker_handler, module_wsp);
@@ -138,13 +136,10 @@ static _kernel_oserror *claim_upcall (void)
     _kernel_oserror *e = NULL;
 
 
-    if ((dialler_flags & DiallerFlags_UsingDialler) == 0)
+    e = _swix(OS_CallEvery, _INR(0,2), 99, hupcheck_entry, module_wsp);
+    if (e)
     {
-        e = _swix(OS_CallEvery, _INR(0,2), 99, hupcheck_entry, module_wsp);
-        if (e)
-        {
-            return e;
-        }
+        return e;
     }
 
     e = _swix (OS_Claim, _INR (0, 2), UpCallV, upcall_entry, module_wsp);
@@ -167,35 +162,42 @@ static _kernel_oserror *claim_upcall (void)
 
 /**********************************************************************/
 
-#ifdef BLOCKDRIVERS
-
 _kernel_oserror *hupcheck_handler(_kernel_swi_regs *r, void *pw)
 {
     NOT_USED (r);
     NOT_USED (pw);
 
-    if (modem && (driver_modemcontrol() & 8) == 0)
+    /* Check DCD line */
+    if (modem && serial_dcd == 0)
+    {
+        /* DCD has been dropped */
         _swix(OS_AddCallBack, _INR(0,1), hup_entry, module_wsp);
-
+    }
     else
     {
         int interrupt_status;
 
 
-        /* atomic update of counter */
+        /* atomic update and test of counter */
         interrupt_status = splhi ();
         idle_time++;
 
-        if (idle_time_limit && ++idle_time >= idle_time_limit)
+        if (idle_time_limit > 0 && idle_time >= idle_time_limit)
         {
             int not_claimed;
 
             restore_irqs (interrupt_status);
+
+            /* Issue Servive Call to indicate PPP is about to timeout.  If this
+             * Service Call is claimed then do not timeout.
+             */
             _swix (OS_ServiceCall, _IN (1) | _OUT (1),
                    Service_PPPTimingOut, &not_claimed);
-            if (not_claimed)
-                _swix (OS_AddCallBack, _INR (0,1), term_entry, module_wsp);
 
+            if (not_claimed)
+            {
+                _swix (OS_AddCallBack, _INR (0,1), term_entry, module_wsp);
+            }
             else
             {
                 /* another atomic counter update */
@@ -204,72 +206,14 @@ _kernel_oserror *hupcheck_handler(_kernel_swi_regs *r, void *pw)
                 restore_irqs (interrupt_status);
             }
         }
-
         else
-            restore_irqs (interrupt_status);
-    }
-
-    return NULL;
-}
-
-#else
-
-_kernel_oserror *hupcheck_handler(_kernel_swi_regs *r, void *pw)
-{
-    ioctl_t ioctl;
-
-
-    NOT_USED (r);
-    NOT_USED (pw);
-
-
-    ioctl.reason = IOCtl_control_lines;
-    ioctl.group = 0;
-    ioctl.reserved = 0;
-    ioctl.read = 1;
-    ioctl.write = 0;
-
-    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
-
-    if (modem && (ioctl.data & IOCtl_control_line_DCD) == 0)
-        _swix(OS_AddCallBack, _INR (0, 1), hup_entry, module_wsp);
-
-    else
-    {
-        int interrupt_status;
-
-
-        /* atomic update of counter */
-        interrupt_status = splhi ();
-        idle_time++;
-
-        if (idle_time_limit && ++idle_time >= idle_time_limit)
         {
-            int not_claimed;
-
             restore_irqs (interrupt_status);
-            _swix (OS_ServiceCall, _IN (1) | _OUT (1),
-                   Service_PPPTimingOut, &not_claimed);
-            if (not_claimed)
-                _swix (OS_AddCallBack, _INR (0,1), term_entry, module_wsp);
-
-            else
-            {
-                /* another atomic counter update */
-                interrupt_status = splhi ();
-                idle_time = 0;
-                restore_irqs (interrupt_status);
-            }
         }
-
-        else
-            restore_irqs (interrupt_status);
     }
 
     return NULL;
 }
-
-#endif
 
 /**********************************************************************/
 
@@ -611,9 +555,22 @@ _kernel_oserror *serial_finalise(void)
     }
 #endif
 
-    if ((dialler_flags & DiallerFlags_UsingDialler))
+    if (dialler_flags & DiallerFlags_UsingDialler)
     {
-        _swix (Dialler_Arbitrate, _IN (0), Dialler_Arbitrate_RelinquishAccess);
+        if (dialler_flags & DiallerFlags_DiallerB)
+        {
+            _swix (DiallerB_Arbitrate,
+                   _IN (0),
+
+                   Dialler_Arbitrate_RelinquishAccess);
+        }
+        else
+        {
+            _swix (Dialler_Arbitrate,
+                   _IN (0),
+
+                   Dialler_Arbitrate_RelinquishAccess);
+        }
     }
 
     return(NULL);
@@ -642,8 +599,24 @@ _kernel_oserror *serial_initialise(struct ppp_softc *sc)
         int io_access_granted;
 
 
-        e = _swix (Dialler_Arbitrate, _IN (0) | _OUT (0),
-                   Dialler_Arbitrate_RequestIOAccess, &io_access_granted);
+        if (dialler_flags & DiallerFlags_DiallerB)
+        {
+            e = _swix (DiallerB_Arbitrate,
+                       _IN (0) | _OUT (0),
+
+                       Dialler_Arbitrate_RequestIOAccess,
+
+                       &io_access_granted);
+        }
+        else
+        {
+            e = _swix (Dialler_Arbitrate,
+                       _IN (0) | _OUT (0),
+
+                       Dialler_Arbitrate_RequestIOAccess,
+
+                       &io_access_granted);
+        }
 
         if (e)
             return (e);
@@ -692,9 +665,28 @@ _kernel_oserror *serial_initialise(struct ppp_softc *sc)
 
 
         /* Get the serial file handles from the dialler */
-        e = _swix (Dialler_Arbitrate, _IN (0) | _OUTR (0, 2),
-                   Dialler_Arbitrate_RequestIOAccess,
-                   &io_access_granted, &serial_in, &serial_out);
+        if (dialler_flags & DiallerFlags_DiallerB)
+        {
+            e = _swix (DiallerB_Arbitrate,
+                       _IN (0) | _OUTR (0, 2),
+
+                       Dialler_Arbitrate_RequestIOAccess,
+
+                       &io_access_granted,
+                       &serial_in,
+                       &serial_out);
+        }
+        else
+        {
+            e = _swix (Dialler_Arbitrate,
+                       _IN (0) | _OUTR (0, 2),
+
+                       Dialler_Arbitrate_RequestIOAccess,
+
+                       &io_access_granted,
+                       &serial_in,
+                       &serial_out);
+        }
 
         if (e)
             return (e);
@@ -722,11 +714,6 @@ _kernel_oserror *serial_initialise(struct ppp_softc *sc)
         if (e)
             return (e);
 
-        /* Hack around a dual serial problem: it should let you modify buffer
-         * thresholds on-the-fly, but they only take effect *next* time you open
-         * a stream.  Solution is to open stream, set threshold, close stream and
-         * reopen it.
-         */
         ioctl.reason = IOCtl_buffer_threshold;
         ioctl.group = 0;
         ioctl.reserved = 0;
@@ -736,11 +723,19 @@ _kernel_oserror *serial_initialise(struct ppp_softc *sc)
 
         _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
 
+#if 0
+        /* This hack was to work around a bug in the dual serial module whereby if
+         * the buffer threshold was changed, the change would only take effect the
+         * next time a stream was opened.  This has been fixed in versions of
+         * dual serial from 0.19.
+         */
+
         _swix (OS_Find, _INR (0, 1), 0, serial_out);    /* close stream */
 
         e = _swix (OS_Find, _INR (0, 1) | _OUT (0), 0xcf, devname, &serial_out);
         if (e)
             return (e);
+#endif
     }
 
     return (claim_upcall ());
@@ -755,6 +750,7 @@ _kernel_oserror *serial_initialise(struct ppp_softc *sc)
 extern unsigned int get_pc (void);
 int upcall_handler (_kernel_swi_regs *r, void *pw)
 {
+    MemCheck_RegisterMiscBlock (r, sizeof (_kernel_swi_regs));
     switch (r->r[0])
     {
         case 15:    /* DeviceRxDataPresent */
@@ -762,6 +758,7 @@ int upcall_handler (_kernel_swi_regs *r, void *pw)
             /* Only interested in the serial input stream */
             if (r->r[1] != serial_in)
             {
+                MemCheck_UnRegisterMiscBlock (r);
                 return (1);    /* Pass on the call */
             }
 
@@ -771,8 +768,8 @@ int upcall_handler (_kernel_swi_regs *r, void *pw)
 
         case 16:    /* DeviceThresAbove */
             pdebug ((LOG_DEBUG, "DeviceThresAbove (%d)", r->r[1]));
+            MemCheck_UnRegisterMiscBlock (r);
             return (1);    /* Pass on call */
-            break;
 
 
         case 17:    /* DeviceThresBelow */
@@ -781,7 +778,8 @@ int upcall_handler (_kernel_swi_regs *r, void *pw)
             /* Only interested in the serial output stream */
             if (r->r[1] != serial_out)
             {
-                return (1);    /* Pass on the call */
+                 MemCheck_UnRegisterMiscBlock (r);
+                 return (1);    /* Pass on the call */
             }
 
             if (serialevents_active)
@@ -808,10 +806,60 @@ int upcall_handler (_kernel_swi_regs *r, void *pw)
             break;
 
         default:
+            MemCheck_UnRegisterMiscBlock (r);
             return (1);    /* Pass on call */
     }
 
+    MemCheck_UnRegisterMiscBlock (r);
     return (0);    /* Intercept call */
+}
+
+#endif
+
+/* -----------------------------------------------------------------------------
++
+   serial_dcd
+
+   Get the status of the DCD line.
+
+   Returns
+   0: DCD not asserted (ie. no carrier)
+   1: DCD asserted
+-
+ */
+
+#ifdef BLOCKDRIVERS
+
+extern serial_dcd (void)
+{
+    if ((driver_modemcontrol() & 8) == 0)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+#else
+
+extern serial_dcd (void)
+{
+    ioctl_t ioctl;
+
+    ioctl.reason = IOCtl_control_lines;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+
+    if ((ioctl.data & IOCtl_control_line_DCD) == 0)
+    {
+        return 0;
+    }
+
+    return 1;
 }
 
 #endif

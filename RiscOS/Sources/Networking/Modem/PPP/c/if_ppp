@@ -69,11 +69,16 @@
  * Paul Mackerras (paulus@cs.anu.edu.au).
  */
 
+/* 1998-03-09: BAL
+ * Removed support for using the Dialler for idle-timeout.  This was completely
+ * pointless as PPP's built-in idle timer works fine.
+ */
+
 /* from if_sl.c,v 1.11 84/10/04 12:54:47 rick Exp */
 
 
-char *ack_if_ppp="Copyright (c) 1989 Carnegie Mellon University. "
-                 "All rights reserved.";
+static char *ack_if_ppp="Copyright (c) 1989 Carnegie Mellon University. "
+                        "All rights reserved.";
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,6 +140,7 @@ char *ack_if_ppp="Copyright (c) 1989 Carnegie Mellon University. "
 
 #include "pppd/minixlib.h"
 #include "pppd/main.h"
+#include "MemCheck/MemCheck.h"
 
 
 
@@ -299,11 +305,17 @@ void pppclose(int fd)
     /* Do some sort of buffer flush/ serial close */
     s = splimp();		/* paranoid; splnet probably ok */
     serial_finalise();
-                    MBCTL.freem(&MBCTL, sc->sc_outm);
-                    sc->sc_outm = NULL;
-                    MBCTL.freem(&MBCTL, sc->sc_m);
-                    sc->sc_m = NULL;
-                    pppdealloc(sc);
+
+    MBCTL.freem(&MBCTL, sc->sc_outm);
+    sc->sc_outm = NULL;
+    if (sc->sc_m)
+    {
+        MRESET(sc->sc_m);
+        free(mtod(sc->sc_m, void *));
+        MBCTL.freem(&MBCTL, sc->sc_m);
+        sc->sc_m = NULL;
+    }
+    pppdealloc(sc);
 
 
     unsplimp(s);
@@ -346,6 +358,7 @@ int pppread(int fd, u_char *p, int n)
 /*
  * Line specific (tty) write routine.
  */
+
 int pppwrite(int s, u_char *p, int nbytes)
 {
     struct ppp_softc *sc = &ppp_softc[s];
@@ -532,16 +545,31 @@ int pppoutput(struct dib *ifp, struct mbuf *m0, const struct sockaddr *dst)
     if ((sc->moreflags & IFF_RUNNING) == 0
 	|| (sc->moreflags & IFF_UP) == 0 && dst->sa_family != AF_UNSPEC)
     {
-        if ((dialler_flags & DiallerFlags_UsingDialler))
+        if ((dialler_flags & DiallerFlags_UsingDialler) &&
+            (dialler_flags & DiallerFlags_AutoDial))
         {
             unsigned int status;
 
-            _swix (Dialler_Status, _OUT (0), &status);
+            if (dialler_flags & DiallerFlags_DiallerB)
+            {
+                _swix (DiallerB_Status, _OUT (0), &status);
+            }
+            else
+            {
+                _swix (Dialler_Status, _OUT (0), &status);
+            }
 
             if ((status & (Dialler_ExecutingScript_Dial | Dialler_Connected)) == 0)
             {
                 /* Dial up using previous settings */
-                _swix (Dialler_Dial, _INR (0, 4), 0, 0, 0, 0, 0);
+                if (dialler_flags & DiallerFlags_DiallerB)
+                {
+                    _swix (DiallerB_Dial, _INR (0, 4), 0, 0, 0, 0, 0);
+                }
+                else
+                {
+                    _swix (Dialler_Dial, _INR (0, 4), 0, 0, 0, 0, 0);
+                }
             }
             error = ENETUNREACH;
         }
@@ -552,12 +580,6 @@ int pppoutput(struct dib *ifp, struct mbuf *m0, const struct sockaddr *dst)
 	goto bad;
     }
 
-#if 0
-    if ((dialler_flags & DiallerFlags_UsingDialler) == 0)
-    {
-        idle_time=0;
-    }
-#endif
     idle_time = 0;
 
     /*
@@ -589,13 +611,6 @@ int pppoutput(struct dib *ifp, struct mbuf *m0, const struct sockaddr *dst)
                 INTERACTIVE(ntohs(tcp->th_dport)))
                 ifq = &sc->sc_fastq;
 	}
-
-        /* If the packet is TCP or UDP then prod the dialler to keep the line alive */
-        if ((dialler_flags & DiallerFlags_UsingDialler) &&
-            (ip->ip_p == IPPROTO_TCP || ip->ip_p == IPPROTO_UDP))
-        {
-            _swix (Dialler_ResetCounter, 0);
-        }
 
 	break;
 #endif
@@ -801,6 +816,7 @@ static struct mbuf *ppp_dequeue(struct ppp_softc *sc)
 	/* If the first mbuf is < or smaller than a PPP header, skip
 	   to the next one
 	 */
+
 	if (mp->m_len <= PPP_HDRLEN)
 	{
 	    mp = mp->m_next;
@@ -946,13 +962,20 @@ _kernel_oserror *start_handler(_kernel_swi_regs *r, void *pw)
 
     _kernel_irqs_on();
 
+    MemCheck_RegisterMiscBlock (r, sizeof (_kernel_swi_regs));
+
     pdebug ((LOG_DEBUG, "in_pppstart: %d", in_pppstart));
     if (!in_pppstart)
         pppstart(0);
    /* else
         serial_enableevents();*/
 
+    MemCheck_UnRegisterMiscBlock (r);
+
     return (NULL);
+
+    NOT_USED (r);
+    NOT_USED (pw);
 }
 
 /*
@@ -1153,7 +1176,9 @@ void pppstart(int fd)
                 if (p > endseq)
                 {
                     int bufspace;
+                  #ifndef BLOCKDRIVERS
                     _kernel_oserror *e = NULL;
+                  #endif
 
                   #ifdef BLOCKDRIVERS
                     bufspace=driver_checktx();
@@ -1210,6 +1235,7 @@ void pppstart(int fd)
 /*
  * Allocate enough mbuf to handle current MRU.
  */
+
 static int pppgetm(struct ppp_softc *sc)
 {
     int len = HDROFF + sc->sc_mru + PPP_HDRLEN + PPP_FCSLEN;
@@ -1242,6 +1268,8 @@ static int pppgetm(struct ppp_softc *sc)
     unsplimp(s);
     return 1;
 }
+
+
 
 /*
  * PPP packet input routine.
@@ -1552,7 +1580,9 @@ void pppinput(int c, int fd)
 
         /* Paranoia */
         if (!m)
+        {
             return;
+        }
 
         m->m_type = 0; /* Mark packet as unread */
         m->m_len = 0;
@@ -1768,7 +1798,8 @@ static void update_flags(struct ppp_softc *sc, unsigned change, unsigned newval)
 
     sc->moreflags=(sc->moreflags &~ change) | newval;
 
-    if ((dialler_flags & DiallerFlags_UsingDialler) && !finalising)
+    if ((dialler_flags & DiallerFlags_UsingDialler) &&
+        (dialler_flags & DiallerFlags_AutoDial) && !finalising)
     {
         sc->st.st_link_status |= ST_STATUS_ACTIVE;
     }
