@@ -103,13 +103,19 @@ clean:
         ${RM} h.${CMHGNAME}
         @echo ${COMPONENT}: cleaned
 
+resources:
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+        ${CP} Resources.Layouts.${LAYOUT} ${RESDIR}.${COMPONENT}.Layout ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
+
+
 #
 # Target 
 #
 ${TARGET}: ${OBJS} ${RAMLIBS} ${DIRS}
 	${MKDIR} rm
         ${LD} -c++ -o $@ -rmf ${OBJS} ${RAMLIBS}
-        $(MODSQZ) $@
+        #$(MODSQZ) $@
 
 #
 # ROM Target 
