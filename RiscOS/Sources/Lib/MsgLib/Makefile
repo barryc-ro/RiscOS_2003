@@ -100,8 +100,8 @@ install_rom: ${TARGET}
 	@echo ${COMPONENT}: rom module installed
 
 clean:
-	${WIPE} o.* ${WFLAGS}
-	${WIPE} z.* ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} z ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGETZ}
 	@echo ${COMPONENT}: cleaned
