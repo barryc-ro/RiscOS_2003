@@ -608,29 +608,14 @@ com_ProcessAPDU
   {
     switch(g_slot2_state)
     {
-      case CMD_RESPONSE_HDR:    com_IncomingResponse();
-                                break;
-
-      case CMD_RESPONSE_BODY:   com_IncomingResponse();
-                                break;
-
-      case CMD_CHAIN_LINK:      com_HandleChainLink(); /* Deals with R block chain link or S block */
+      case CMD_RESPONSE_HDR:
+      case CMD_RESPONSE_BODY:
+      case CMD_CHAIN_LINK:      com_IncomingResponse();
                                 break;
 
       default:                  com_StartReadSlot2();
                                 break;
     }
-#if 0
-    if((g_slot2_state == CMD_RESPONSE_HDR) || (g_slot2_state == CMD_RESPONSE_BODY))
-    {
-      com_IncomingResponse();
-    }
-    else
-    {
-      com_StartReadSlot2(); /** It's for yooo-hooo! **/
-      debug_printf(db, "Returned from StartReadSlot2\n");
-    }
-#endif
   }
   else
   {
@@ -720,163 +705,174 @@ com_ProcessError
 }
 
 
+/* Process Slot 2 S-block
+*/
 
-/*
- *  com_IncomingResponse - Reads an APDU response, and buffers it away.
- */
-void
-com_IncomingResponse
-(
-  void
-)
+void com_slot2_Sblock(BYTE *data)
 {
-  BYTE           rblock[5];
-  int len;
-  /** Get NAD/PCB/LEN and remember how many more we want **/
-  g_slot2_apdu.NAD = blocking_readbyte();
-  g_slot2_apdu.PCB = blocking_readbyte();
-  g_slot2_apdu.LEN = blocking_readbyte();
-  g_slot2_state = CMD_RESPONSE_BODY;
+  BYTE rblock[5];         /* Block to build our reply */
 
-  debug_printf(db, "Read NAD/PCB/LEN as &%02X, &%02X, &%02X\n",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
-  pms_debug("Incoming Repsonse NAD &%02X, PCB &%02X, LEN &%02X",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
-  pms_debug("  slot2_dataptr: %08X", (int)g_slot2_dataptr);
-  len=g_slot2_apdu.LEN;  /* Debug for pms_debug below */
+  pms_debug("  Rcvd S-block: %s", pms_convert_hex(g_slot2_datablock, g_slot2_apdu.LEN));
+  g_uc_state = UC_IDLE;
+  if (g_slot2_state ==CMD_CHAIN_LINK) g_slot2_state = CMD_RESPONSE_HDR; /* In case it's the end of the chain */
 
-  do
-  {
-    *g_slot2_dataptr = blocking_readbyte();
-    debug_printf(db, "Read a data byte of &%02X into &%08X\n",*g_slot2_dataptr,(int)g_slot2_dataptr);
-    g_slot2_dataptr++;
-    g_slot2_apdu.LEN--;
-  } while(g_slot2_apdu.LEN > 0);
-
-  g_slot2_apdu.LRC = blocking_readbyte();
-  pms_debug("  Rcvd: %s", pms_convert_hex(g_slot2_datablock, len));
-
-
-  com_SendAck(); /* Ack the last response... */
-  pms_debug("  Ack sent");
-
-  if((g_slot2_apdu.PCB & 0xA0) == 0x20) /** Was it a chained I-block response? **/
-  {
-    /** Create 'next element' command, and send it **/
-    rblock[0] = 0; /* Always 0 for R-blocks */
-    if(g_slot2_apdu.PCB & 0x40)
-    {
-      rblock[1] = 0x80; /** Got a Seq1, so send Seq0 **/
-//      Exp_SeqNo = 0;
-//      TX_SeqNo[SLOT_2] = 1;
-    }
-    else
-    {
-      rblock[1] = 0x90; /** Got a Seq0, so send Seq1 **/
-//      Exp_SeqNo = 1; /** We want a 1 back **/
-//      TX_SeqNo[SLOT_2] = 0; /** Next time, we send a 0 **/
-    }
-    rblock[2] = 0; /** LEN */
-    rblock[3] = rblock[1]; /* Bound to be! */
-    g_uc_state = UC_IDLE;
-    g_slot2_state = CMD_RESPONSE_HDR;
-    com_SendFunaiHeader(SLOT_2, CMD_APDU);
-    com_SendBytes(rblock, 4);
-  }
-  else if(g_slot2_apdu.PCB == 0xE1)
+  if(g_slot2_apdu.PCB == 0xE1)
   {
     /* It's an IFSC S-block response we update our Interface Field Size for Card (see ISO/IEC7816-3 page 4) */
     /* The card is telling us what field size it can accept  */
-   IFSC_Value[SLOT_2] = *(g_slot2_dataptr-1); /** 'Know' there was only one data byte **/
-   if(IFSC_Value[SLOT_2] > max_ifsc) IFSC_Value[SLOT_2] = max_ifsc; /** Check it's not too long **/
+    IFSC_Value[SLOT_2] = data[0];        /* There is only one data byte and this is new IFSC */
+    if(IFSC_Value[SLOT_2] > max_ifsc) IFSC_Value[SLOT_2] = max_ifsc; /* Check it's not too long */
 
-    g_uc_state = UC_IDLE;
-    g_slot2_state = IDLE;
     sys_SigBroadcast(SCI_CMD2_DONE); /** Data is ready for collection **/
   }
-  else
+
+  if(g_slot2_apdu.PCB >=0xC0 && g_slot2_apdu.PCB<0xE0 )  /* Test for S-block request */
   {
-    g_uc_state = UC_IDLE;
-    g_slot2_state = IDLE;
-    sys_SigBroadcast(SCI_CMD2_DONE); /** Data is ready for collection **/
-  }
-}
-
-
-
-/*
- *  com_HandleChainLink - Deals with a chainlink R-block on Slot 1
- */
-void
-com_HandleChainLink
-(
-  void
-)
-{
-  BYTE           rblock[5];
-  /** Get NAD/PCB/LEN and remember how many more we want **/
-  rblock[0] = blocking_readbyte(); /* NAD */
-  rblock[1] = blocking_readbyte(); /* PCB */
-  rblock[2] = blocking_readbyte(); /* LEN */
-  rblock[3] = blocking_readbyte(); /* LRC */
-
-  com_SendAck(); /* Ack this response... */
-  g_uc_state = UC_IDLE;
-  g_slot2_state = CMD_RESPONSE_HDR; /* In case it's the end of the chain */
-
-  if((rblock[1] & 0xC0) == 0xC0)
-  {
-    /** It's an S-block, so send an S-block response back to slot2 **/
+    /** Send an S-block response back to slot2 **/
     /** This code doesn't fully conform to the ISO spec - we should take further action in some cases, eg WTX */
     rblock[0]=0x00;             /* NAD */
-    rblock[1]=rblock[1] | 0x20; /* PCB of response is received PCB with this bit set */
-    rblock[2]=0x00;             /* Len i 0 - no more data */
+    rblock[1]=g_slot2_apdu.PCB | 0x20; /* PCB of response is received PCB with this bit set */
+    rblock[2]=0x00;             /* Len is 0 - no more data */
     rblock[3]=rblock[1];        /* XOR Checksum */
     com_SendFunaiHeader(SLOT_2, CMD_APDU);
     com_SendBytes(rblock, 4);
     g_uc_state = UC_IDLE;
-    g_slot2_state = IDLE;
+    /* g_slot2_state = IDLE; DO NOT CHANGE OUR STATE - ERRORS ARE RECOVERABLE */
     /* Should we be generating an error here? Certainly not for S(RESYNCH request), S(WTX request) */
-    sys_SigBroadcast(SCI_ERROR2); /** Error for slot2 command **/
+    /* sys_SigBroadcast(SCI_ERROR2); REMOVED IN V0.45 *//** Error for slot2 command **/
+  }
+}
+
+/*  Process Slot 2 R-block
+*/
+
+void com_slot2_Rblock(void)
+{
+  pms_debug("  Rcvd R-block: %s", pms_convert_hex(g_slot2_datablock, g_slot2_apdu.LEN));
+  g_uc_state = UC_IDLE;
+
+  /* Decode R-block - it will be "next block" or "re-send last block" */
+  if(((g_slot2_apdu.PCB & 0x10)>>4) == TX_SeqNo[Command.slot])
+  {
+    /** It says 'next block please!' **/
+    if (g_slot2_state == CMD_CHAIN_LINK)      /* Only respond to "next block" response if we are sending a chain */
+    {
+      retry_cmd=0; /* Reset it in case it got off 0 */
+      g_uc_state = UC_IDLE;
+      SendIBlock();
+    }
   }
   else
   {
-    /* It's not an S-block, so it's an R-block. Right? */
-    if((rblock[1] && 0x80) && (rblock[2] == 0))
+    /** We either want the last block again, and/or there's been an error **/
+    retry_cmd++;
+    if(retry_cmd<2)
     {
-      /** Yep, it's an R-block, but what does it say? **/
-      if(((rblock[1] & 0x10)>>4) == TX_SeqNo[Command.slot])
-      {
-        /** It says 'next block please!' **/
-        retry_cmd=0; /* Reset it in case it got off 0 */
-//        TX_SeqNo[Command.slot] = Binary_Increment(TX_SeqNo[Command.slot]); /* toggle the sequence number */
-        g_uc_state = UC_IDLE;
-        g_slot2_state = CMD_CHAIN_LINK;
-        SendIBlock();
-      }
-      else
-      {
-        /** We either want the last block again, and/or there's been an error **/
-        retry_cmd++;
-        if(retry_cmd<2)
-        {
-          g_uc_state = UC_IDLE;
-          g_slot2_state = CMD_CHAIN_LINK;
-          Command.data_start -= Command.LEN; /** Rewind! **/
-          Command.len_sent   -= Command.LEN; /** Rewind! **/
-          SendBlk(&Command);
-        }
-        else
-        {
-          /** Give in, it's really not happy! **/
-          retry_cmd=0;
-          g_uc_state = UC_IDLE;
-          g_slot2_state = IDLE;
-          sys_SigBroadcast(SCI_ERROR2); /** Error for slot2 command **/
-        }
-      }
+      g_uc_state = UC_IDLE;
+      Command.data_start -= Command.LEN; /** Rewind! **/
+      Command.len_sent   -= Command.LEN; /** Rewind! **/
+      SendBlk(&Command);
+    }
+    else
+    {
+      /** Give in, it's really not happy! **/
+      retry_cmd=0;
+      g_uc_state = UC_IDLE;
+      g_slot2_state = IDLE;
+      sys_SigBroadcast(SCI_ERROR2); /** Error for slot2 command **/
     }
   }
 }
 
+void com_slot2_Iblock(BYTE *data)
+{
+  BYTE rblock[5];         /* Block to build our reply */
+
+  memcpy(g_slot2_dataptr, data, g_slot2_apdu.LEN);    /* Copy data into our buffer */
+  g_slot2_dataptr+=g_slot2_apdu.LEN;                  /* Update the pointer - may be chained I block sequence */
+
+  pms_debug("  Rcvd I-block: %s", pms_convert_hex(g_slot2_datablock, g_slot2_apdu.LEN));
+  g_slot2_state = CMD_RESPONSE_BODY;
+
+  if (g_slot2_apdu.PCB & 0x20) /** Was it a chained I-block response? **/
+  {
+    /** Create 'next element' command, and send it **/
+    rblock[0] = 0;               /* Always 0 for R-blocks */
+    if(g_slot2_apdu.PCB & 0x40)  /* Send sequence number */
+      rblock[1] = 0x80;    /* Got a Seq1, so send Seq0 */
+    else
+      rblock[1] = 0x90;    /* Got a Seq0, so send Seq1 */
+    rblock[2] = 0;         /* LEN */
+    rblock[3] = rblock[1]; /* XOR checksum, must be same as byte 1 */
+    g_uc_state = UC_IDLE;
+    g_slot2_state = CMD_RESPONSE_HDR;
+    com_SendFunaiHeader(SLOT_2, CMD_APDU);
+    com_SendBytes(rblock, 4);  /* Send 4 byte R-block */
+  }
+  else  /* Last I-block, I-block data exchange is complete */
+  {
+    g_uc_state = UC_IDLE;
+    g_slot2_state = IDLE;
+    pms_debug("  Signalling transaction complete");
+
+    sys_SigBroadcast(SCI_CMD2_DONE); /** Data is ready for collection **/
+  }
+}
+
+
+/*  Read and Process Incoming Response
+    ----------------------------------
+
+Read and process an S-block, I-block or R-block.
+g_slot2_state indicates our current state:
+
+    CMD_RESPONSE_HDR     Expect header
+    CMD_RESPONSE_BODY    Expect body
+    CMD_CHAIN_LINK       We have just sent a chained I-block
+
+OUTSTANDING WORK:
+
+We should verify the checksum and send an R-block error if it fails.
+We should also check that the response matches our current state (above)
+and complain if we get data that we are not expecting.
+
+*/
+
+void com_IncomingResponse(void)
+{
+  int i;
+  static BYTE slot2_INF[256];         /* Slot 2 INF data. Static to avoid using too much stack space. */
+  BYTE Xor_Check;                     /* Exclusive OR checksum - Longitudinal Redundancy Check */
+
+  /** Get NAD/PCB/LEN from block header **/
+  g_slot2_apdu.NAD = blocking_readbyte();
+  g_slot2_apdu.PCB = blocking_readbyte();
+  g_slot2_apdu.LEN = blocking_readbyte();   /* Length of data that follows */
+
+  debug_printf(db, "Read NAD/PCB/LEN as &%02X, &%02X, &%02X\n",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
+  pms_debug("Incoming Response NAD &%02X, PCB &%02X, LEN &%02X",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
+
+  Xor_Check=g_slot2_apdu.NAD ^ g_slot2_apdu.PCB ^ g_slot2_apdu.LEN;
+
+  for (i=0; i<g_slot2_apdu.LEN; i++)
+  {
+    slot2_INF[i] = blocking_readbyte();       /* Read INF data (if any) */
+    Xor_Check^=slot2_INF[i];
+  }
+  g_slot2_apdu.LRC = blocking_readbyte();     /* Read XOR checksum */
+  com_SendAck();                              /* Ack this response */
+  pms_debug("  Ack sent");
+
+  /***  OUTSTANDING: NEED TO CHECK CHECKSUM AND SEND R-BLOCK ERROR IF IT FAILS. NOT IMPLEMENTED YET ***/
+
+
+  switch (g_slot2_apdu.PCB & 0xC0)         /* Bits b8 and b7 of PCB indicate type of block (note ISO7816 numbers bits b8-b1) */
+  {
+    case 0xC0:   com_slot2_Sblock(slot2_INF); break;  /* S-block */
+    case 0x80:   com_slot2_Rblock(); break;           /* R-block, no INF field in R block*/
+    default:     com_slot2_Iblock(slot2_INF); break;  /* I-block */
+  }
+}
 
 
 /*
