@@ -297,6 +297,10 @@ debug_irqsafe   SETL    true            ; only conditional so that other users o
 debugpulldown   SETL    false           ; 3:2 pulldown debug
                 GBLL    debugskip
 debugskip       SETL    false           ; StartVideoAtSeqHdr debug
+                GBLL    debugaudio
+debugaudio      SETL    false           ; audio data handling debug
+                GBLL    debugduff
+debugduff       SETL    false           ; duff system buffer contents debug
 
 
 ; Structure of a PTS list entry
@@ -306,8 +310,8 @@ PTSList_PTS		#	4	; bits 31..0 of PTS
 PTSList_AddressPointer	#	4	; bit 0 = bit 32 of PTS, bits 10..31 = address pointer (in units of 8 bytes)
 PTSListSize		*	@
 
-VideoPTSListEntries	*	256	; for now
-AudioPTSListEntries	*	256	; for now
+VideoPTSListEntries	*	512	; for now
+AudioPTSListEntries	*	512	; for now
 
 MaxPTSError		*	3600	; at 25 frames/second, this is 1 frame
 
@@ -453,6 +457,7 @@ TrickStopFreeze		#	4	; additional freeze flag for trick play, OR'd with PendingF
 FirstItemReceived	#	4	; 0 => not received anything since last reset, 1 => sequence, 2 => picture
  [ CountUnderruns
 VideoChannelUnderruns	#	4	; number of video channel underruns
+AudioChannelUnderruns	#	4	; number of audio channel underruns
 UnderrunIRQState	#	4	; 0 => still waiting to start
 					; 1 => on next active field enable the underrun IRQ
 					; 2 => already enabled it once
@@ -1017,8 +1022,8 @@ Mod_Init Entry
 	; Some systems have the scart control bits in IOMD
  [ SCARTCTRLRegistersAreInIOMD
 	; The flags should still be set from that TEQ up there.
-	MOVEQ	r0, #1					; var doesn't exist, so TV off
-	MOVNE	r0, #3					; var exists, TV on
+	MOVEQ	r0, #3					; var doesn't exist, so TV off
+	MOVNE	r0, #1					; var exists, TV on
 	ADR	r1, SCART_TV_String
 	MOV	r2, r0
 	SWI	XPortMan_AccessBit
@@ -1358,6 +1363,7 @@ VideoOpenStream Entry "r1,r2, r11"
  ]
  [ CountUnderruns
 	STR	r1, VideoChannelUnderruns
+	STR	r1, AudioChannelUnderruns
 	STR	r1, UnderrunIRQState
  ]
  [ StartVideoAtSeqHdr
@@ -1365,6 +1371,7 @@ VideoOpenStream Entry "r1,r2, r11"
         TEQ     lr, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
         MOVEQ   lr, #1                                          ; only skip to sequence header if there are both video and audio in the new stream
         MOVNE   lr, #0
+        Debug   audio, "VideoOpenStream: initialising SkippingToSeqHdr to", lr
         STRB    lr, SkippingToSeqHdr
  ]
 	BL	VideoReset
@@ -1881,6 +1888,7 @@ ProcessQueuedVideoPackets
 50      ; We've found the first sequence header!
         ; Note that we don't need to queue FullPackets calls from now on
         MOV     r0, #0
+        Debug   audio, "Resetting SkippingToSeqHdr to 0"
         STRB    r0, SkippingToSeqHdr
 
         ; Pass all remaining packets to int_video/audio_full_packets, freeing FullPackets links when done
@@ -2498,6 +2506,7 @@ VideoResetStream Entry "r0-r2, r11"
         TEQ     lr, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
         MOVEQ   lr, #1                                  ; only skip to sequence header if there are both video and audio in the new stream
         MOVNE   lr, #0
+        Debug   audio, "VideoResetStream: initialising SkippingToSeqHdr to", lr
         STRB    lr, SkippingToSeqHdr
  ]
 	LDR	lr, AudioControlStreamHandle		; is there an audio stream open?
@@ -3208,7 +3217,7 @@ VideoEnabledIRQs * IR_UserDataFIFOReady :OR: IR_PictureStartCodeDetect :OR: IR_B
 VideoEnabledIRQs * IR_PictureStartCodeDetect :OR: IR_BeginVerticalBlank :OR: IR_BeginActiveVideo
  ]
  [ CountUnderruns
-VideoIRQsToDisable * VideoEnabledIRQs :OR: IR_VideoChannelBufferUnderflow
+VideoIRQsToDisable * VideoEnabledIRQs :OR: IR_VideoChannelBufferUnderflow :OR: IR_AudioChannelBufferUnderflow
  |
 VideoIRQsToDisable * VideoEnabledIRQs
  ]
@@ -3239,6 +3248,7 @@ VideoClaimInterruptVectors Entry "r0-r2,r11"
 	EXIT
 
 AudioClaimInterruptVectors Entry "r0-r2,r11"
+        Debug   audio, "AudioClaimInterruptVectors called"
 	LDR	r0, AudioInterruptVectorsClaimed
 	CMP	r0, #0				; V:=0
 	EXIT	NE				; non-zero => already claimed
@@ -3556,7 +3566,11 @@ IRQDespatchTable
 	&	IgnoreIRQ - IRQDespatchTable		; DRAM Transfer Done
 	&	IgnoreIRQ - IRQDespatchTable		; Audio Channel Buffer Overflow
 	&	IgnoreIRQ - IRQDespatchTable		; Video Channel Buffer Overflow
+ [ true
+	&	AudioChannelUnderrunIRQ - IRQDespatchTable ; Audio Channel Buffer Underflow
+ |
 	&	IgnoreIRQ - IRQDespatchTable		; Audio Channel Buffer Underflow
+ ]
  [ CountUnderruns
 	&	VideoChannelUnderrunIRQ - IRQDespatchTable ; Video Channel Buffer Underflow
  |
@@ -3612,6 +3626,7 @@ AudioSyncCodeIRQ Entry "r8"
 	ORR	r0, r0, lr, LSL #16
  ]
 	ADR	r8, AudioInfoStructure
+        Debug   duff, "Checking audio system buffer"
 	BL	CheckSystemBuffer		; read any audio system buffer data
 
 	BL	ProcessAudioReadPtr		; compare audio channel buffer read ptr in r0 with audio PTS list entries
@@ -3741,6 +3756,7 @@ PictureStartCodeIRQ Entry "r8"
 	ORR	r0, r0, lr, LSL #16
  ]
 	ADR	r8, VideoInfoStructure
+        Debug   duff, "Checking video system buffer"
 	BL	CheckSystemBuffer		; read any video system buffer data
 
 	BL	ProcessAuxFIFO			; ensure we have updated picture type before checking for PTS being valid
@@ -4346,7 +4362,7 @@ BeginActiveVideo Entry "r4,r5,r8"
 	MOVEQ	r1, #2				; indicate complete
 	STREQ	r1, UnderrunIRQState
 	MOVEQ	r0, #0				; enable underrun IRQ
-	MVNEQ	r1, #IR_VideoChannelBufferUnderflow
+	MVNEQ	r1, #IR_VideoChannelBufferUnderflow :OR: IR_AudioChannelBufferUnderflow
 	BLEQ	UpdateIR
  ]
 
@@ -4400,6 +4416,7 @@ BeginActiveVideo Entry "r4,r5,r8"
 	BEQ	%FT10
 
 	ADR	r8, VideoInfoStructure
+        Debug   duff, "Checking video system buffer"
 	BL	CheckSystemBuffer		; read any video system buffer data, in case we're stalled
 
 	LDR	r1, VideoPacketsReceived
@@ -4604,6 +4621,56 @@ SCRStatusIRQ Entry "r0"
 	MEND
 
  [ CountUnderruns
+AudioChannelUnderrunIRQ Entry "r8"
+	LDR	lr, AudioChannelUnderruns
+	ADD	lr, lr, #1
+	STR	lr, AudioChannelUnderruns
+;        ReadRegI r0, AudioTrickModes
+;        BIC     r0, r0, #1:SHL:2
+;        WriteRegI r0, AudioTrickModes, lr
+;        ORR     r0, r0, #1:SHL:2
+;        WriteRegI r0, AudioTrickModes, lr
+	MOV	r0, #IR_AudioChannelBufferUnderflow ; set the bit to disable the IRQ
+	MVN	r1, #IR_AudioChannelBufferUnderflow
+	BL	UpdateIR
+	Push    "r5"
+	MOV     r5, pc
+	ORR     lr, r5, #SVC_mode
+	TEQP    lr, #0
+	NOP
+	Push    "lr"
+
+;	ADR     r0, AudioUnderrunCallBack
+;	MOV     r1, wp
+;	SWI     XOS_AddCallBack
+
+	Pull    "lr"
+	TEQP    r5, #0
+	NOP
+	Pull    "r5"
+        EXIT
+
+;AudioUnderrunCallBack Entry "r0-r4"
+;        SUB     sp, sp, #5*4
+;        MOV     r0, #&000A  ; tag for control stream handle
+;        MOV     r1, #-1     ; list terminator
+;        STMIA   sp, {r0, r1}
+;        MOV     r0, #0
+;        MOV     r1, #0
+;        MOV     r2, sp
+;        ADD     r3, sp, #2*4
+;        MOV     r4, #3*4
+;        SWI     XMPEGControl_Stats
+;        LDR     r1, [sp, #4*4] ; load CSH from filled-in block
+;        ADD     sp, sp, #5*4
+;        LDR     r0, TrickPlayMode
+;        TEQ     r0, #0
+;        MOVEQ   r0, #ResetStreamFlags_VideoPresent :OR: ResetStreamFlags_AudioPresent ; will be ANDed with StreamFlags
+;        MOVEQ   r0, #ResetStreamFlags_VideoPresent :OR: ResetStreamFlags_AudioPresent :OR: ResetStreamFlags_TrickPlayMode
+;        SWI     XMPEGControl_ResetStream
+;        EXIT
+
+
 ; Video Channel underrun IRQ
 
 VideoChannelUnderrunIRQ Entry
@@ -4847,15 +4914,19 @@ CheckSystemBuffer Entry "r0-r9"
 10
 	STR	r1, [r9, #SIS_SystemBufferReadPtr] ; save where we're at
 	TEQ	r0, r1				; is there any data for us?
+        DebugIf EQ, duff, "Exiting CheckSystemBuffer normally"
 	EXIT	EQ				; [no, then exit]
 	DoDRAMGetByte UnderrunExit
 	TEQ	r5, #0
+        DebugIf NE, duff, "1st byte of start code is duff:", r5
 	BNE	%FT70				; not a system start code, skip to next word
 	DoDRAMGetByte UnderrunExit
 	TEQ	r5, #0
+        DebugIf NE, duff, "2nd byte of start code is duff:", r5
 	BNE	%FT70
 	DoDRAMGetByte UnderrunExit
 	TEQ	r5, #1
+        DebugIf NE, duff, "3rd byte of start code is duff:", r5
 	BNE	%FT70
 	DoDRAMGetByte UnderrunExit
 	MOV	r8, #0				; by default indicate not a packet header we're interested in
@@ -4950,12 +5021,14 @@ CheckSystemBuffer Entry "r0-r9"
 	B	%BT10
 
 UnderrunExit
+        Debug   duff, "Underrun exit"
 	EXIT
 
 ; not MPEG 2, and not just &0F, and not just PTS, so check for PTS+DTS
 
 50
 	TEQ	lr, #3				; check if PTS+DTS
+        DebugIf NE, duff, "Duff MPEG-1 syntax (DTS and no PTS)"
 	BNE	%FT70				; [not that]
 
 ; it's PTS + DTS
@@ -5035,6 +5108,7 @@ UnderrunExit
 
 80
 	TEQ	r5, #&BB			; is it a system header
+        DebugIf NE, duff, "Unrecognised start code:", r5
 	BNE	%BT70				; if not then rubbish
 	DoDRAMGetByte UnderrunExit		; get high byte of length
 	MOV	r7, r5
@@ -5106,6 +5180,7 @@ DRAMGetByte Entry "r2,r3"
 	STR	lr, DRAMBufferAddress			; save base address of buffer
 
 	DRAMRead r2, r3, r1, lr				; perform read from location (r1 BIC 7) and put contents in r2,r3
+        Debug   duff, "DRAMRead got ", r3, r2
 	STMIA	r5, {r2, r3}				; store 8-bytes in buffer
 	B	%BT05
 
@@ -6467,6 +6542,8 @@ VideoInfo_Code Entry "r8"
  [ CountUnderruns
 	LDR	r0, VideoChannelUnderruns
 	DREG	r0, "Video channel underruns = "
+	LDR	r0, AudioChannelUnderruns
+	DREG	r0, "Audio channel underruns = "
  ]
 	DLINE	"** Audio info **"
 	ADR	r8, AudioInfoStructure
@@ -7073,6 +7150,7 @@ CallHandler Entry "r9"
 ;
 
 AudioOpenStream Entry "r1,r2, r11"
+        Debug   audio, "MPEGAudio_OpenStream"
  [ {FALSE}
 	Push	"r0"
 	SWI	XOS_WriteI+22
@@ -7155,6 +7233,7 @@ AudioBufferHighWaterMarkString
 ;	r2 -> one or more linked bitstream packets
 
 AudioFullPackets Entry "r0,r11"
+        Debug   audio, "MPEGAudio_FullPackets called, r0-r2 =", r0, r1, r2
  [ DiscardPartialPackets
 	LDR	lr, AudioHadFirstPacket
 	TEQ	lr, #0
@@ -7165,6 +7244,7 @@ AudioFullPackets Entry "r0,r11"
 	MOVNE	lr, #1					; it is, so indicate we've had 1st packet
 	STRNE	lr, AudioHadFirstPacket
 	BNE	%FT20					; then continue
+        Debug   audio, "Discarding partial audio packet"
 	BL	DiscardPacket				; it isn't the start, so throw packet away
 	TEQ	r2, #0					; if more packets
 	BNE	%BT10					; then loop
@@ -7178,6 +7258,7 @@ AudioFullPackets Entry "r0,r11"
         BL      int_audio_full_packets                  ; if we're not skipping video, process packets normally
         EXIT
 21
+        Debug   audio, "Queuing AudioFullPackets"
         Push    "r3"                                    ; otherwise, just queue the call
         BL      NewFullPacketsLink
         MOVVC   lr, #1
@@ -7192,6 +7273,7 @@ AudioFullPackets Entry "r0,r11"
 
 int_audio_full_packets Entry "r0,r11"
  ]
+        Debug   audio, "int_audio_full_packets"
  [ AudioDebug
 	Push	"r1-r5"
 	MOV	r0, r2
@@ -7272,6 +7354,7 @@ int_audio_full_packets Entry "r0,r11"
 
 	LDR	r0, AudioPacketListTailPtr
 	TEQ	r0, #0					; if nothing on list
+        Debug   audio, "Sticking r2 on AudioPacketList:", r2
 	STREQ	r2, AudioPacketListHeadPtr		; then point head at new packets
 	STRNE	r2, [r0, #PacketDescriptor_Link]	; else tail!link = packet
  [ AudioStats
@@ -7355,6 +7438,7 @@ DiscardPacket	Entry "r0"
 ;
 
 AudioCloseStream Entry "r0-r2,r11"
+        Debug   audio, "MPEGAudio_CloseStream"
 	LDR	r11, L64002_Registers
 
 	LDR	r0, AudioSpeedSetting
@@ -7420,6 +7504,7 @@ AudioCloseStream Entry "r0-r2,r11"
 ;
 
 AudioPlay Entry "r0,r2, r11"
+        Debug   audio, "Audio_Play, r0 =", r0
 	LDR	r2, AudioSpeedSetting
 	BIC	r2, r2, #&80000000	; clear pre-buffering bit
 	STR	r2, AudioSpeedSetting
@@ -7505,6 +7590,7 @@ AudioIssuePlaySWI Entry "r0,r1"
 ; out:	r2 = estimate of number of bytes discarded
 
 AudioResetStream Entry "r0-r2"
+        Debug   audio, "MPEGAudio_ResetStream, r0 =", r0
 	LDR	r11, L64002_Registers
 
 	MOV	r2, #2				; pretend we're closing, so we don't send any more data to it in background
@@ -7849,6 +7935,7 @@ AudioGetBufferFullness Entry "r0, r1"
 ;	AudioTickerV - Audio TickerV routine
 
 AudioTickerV Entry "r0-r2"
+        Debug   audio, "AudioTickerV called"
 	LDR	r0, AudioCallBackRequested	; is a callback already requested
 	TEQ	r0, #0
 	EXIT	NE				; if so, don't ask for another
@@ -7881,6 +7968,7 @@ AudioTickerV Entry "r0-r2"
 	LTORG
 
 AudioTickerVCallBack Entry "r0,r1, r11"
+        Debug   audio, "AudioTickerVCallBack called"
  [ EnableIRQsInTickerV
 	MOV	lr, pc
 	BIC	lr, lr, #I_bit		; enable IRQs
@@ -7895,12 +7983,15 @@ AudioTickerVCallBack Entry "r0,r1, r11"
 	LTORG
 
 AudioDoStuffWithData Entry "r0"
+        Debug   audio, "AudioDoStuffWithData called"
 	LDR	r0, AudioStreamClosing	; if stream closing (ie value = 2)
 	CMP	r0, #1			; don't send any more data
+        DebugIf HI, audio, "exiting AudioDoStuffWithData because AudioStreamClosing"
 	EXIT	HI
 05
 	LDR	r0, AudioPacketListHeadPtr
 	TEQ	r0, #0			; do we have any data?
+        DebugIf EQ, audio, "skipping AudioSendData because AudioPacketListHeadPtr is null"
 	BEQ	%FT50			; [no, so skip]
 
  [ UseWholePackets
@@ -8176,6 +8267,7 @@ AudioWaitAndSendByte
 ; out:	EQ => used up all data in this packet
 
 AudioSendData Entry "r0-r4"
+        Debug   audio, "AudioSendData called, r0 =", r0
 	LDR	r1, [r0, #PacketDescriptor_Start]
 	LDR	r3, [r0, #PacketDescriptor_Length]
 	CMP	r3, #0					; zero length?
@@ -8205,6 +8297,7 @@ AudioSendData Entry "r0-r4"
 	LDR	r4, [r0, #PacketDescriptor_Length]
 	SUB	r4, r4, r2				; decrement remaining length
 	STR	r4, [r0, #PacketDescriptor_Length]
+        Debug   audio, "AudioSendData: bytes sent, bitstream packet size =", r2, r4
 
 	LDR	lr, AudioAmountSent
 	ADD	lr, lr, r2
