@@ -152,6 +152,9 @@ resources: LocalRes:Messages LocalRes:ResList ${PNGS}
 
 export: export_${PHASE}
 
+export_libs:
+	@echo ${COMPONENT}: export complete
+
 export_hdrs: ${EXP_HDR}.h.${COMPONENT}
 	@echo ${COMPONENT}: export complete
 
