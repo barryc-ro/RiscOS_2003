@@ -16,6 +16,15 @@
  *                     event just before exitting now. Can also ask the
  *                     select/deselect routines to operate on all items
  *                     rather than just one (Select All, Clear Selection).
+ * ADH      30/03/1999 Added scrolllist_set_item_text. Tweak to extent
+ *                     setting to account for window border. _add_item fix
+ *                     ('>' should've read '>=' in index range check). Can
+ *                     now tell _add_item to make the new item visible
+ *                     (flag ScrollList_AddItem_MakeVisible), else it will
+ *                     try to maintain the y scroll position. _delete_items
+ *                     continues to jump to the top as before, but you can
+ *                     ask it to try and maintain the y scroll position too
+ *                     (flag ScrollList_DeleteItems_DoNotJumpToTop).
  */
 
 #include <stdio.h>
@@ -57,10 +66,13 @@ static unsigned int vscroll_width = SCROLLBAR_SIZE;
 
 static PrivateScrollList **scrolllist_list = NULL;
 
-static _kernel_oserror	bad_index = {0, "Bad index"};
+static _kernel_oserror bad_index = {0, "Bad index"};
 
 // Cannot be a const, 'cos of the stupid blimmin' tbox header files
 static BBox		redraw_box = {0, -0xffff, 0xffff, 0};
+
+static _kernel_oserror *_make_visible(const PrivateScrollList *sdata,
+			int visible);
 
 static const WindowTemplate window_template =
 {
@@ -332,15 +344,17 @@ static void _set_extent(const PrivateScrollList *sdata)
 {
     BBox		new;
     unsigned int	entry_height;
+    unsigned int	limit;
 
     _get_item_size(sdata, NULL, &entry_height, NULL);
 
     new.xmin = 0;
     new.xmax = 0xfff;
     new.ymin = -sdata->no_entries * entry_height;
-    if (new.ymin > (sdata->box.ymin - sdata->box.ymax))
-        new.ymin = sdata->box.ymin - sdata->box.ymax;
     new.ymax = 0;
+
+    limit = sdata->box.ymin - sdata->box.ymax + sizes_y_scale() * 2;
+    if (new.ymin > limit) new.ymin = limit;
 
     window_set_extent(0, sdata->object_id, &new);
 }
@@ -556,8 +570,9 @@ static _kernel_oserror *_add_item(PrivateScrollList *sdata,
 	const char *text, const void *sprite_area, const char *sprite_name,
 	int index, unsigned int flags)
 {
-    _kernel_oserror	no_mem = {0, "Not enough memory to add item"};
-    struct _entries	*new_list;
+    WimpGetWindowStateBlock	state;
+    _kernel_oserror		no_mem = {0, "Not enough memory to add item"};
+    struct _entries		*new_list;
 
     // Alloc array of char *s
     if (sdata->entries == NULL)
@@ -570,7 +585,7 @@ static _kernel_oserror *_add_item(PrivateScrollList *sdata,
 
     sdata->entries = new_list;
 
-    if ((index < 0) || (index > sdata->no_entries) ||
+    if ((index < 0) || (index >= sdata->no_entries) ||
     	(sdata->no_entries == 0))
     {
         // Add item at end of list
@@ -652,8 +667,34 @@ static _kernel_oserror *_add_item(PrivateScrollList *sdata,
 
     sdata->no_entries++;
 
-    // Update window extent
+    // Remember existing window details
+    window_get_wimp_handle(0, sdata->object_id, &state.window_handle);
+    wimp_get_window_state(&state);
+
+    // Update window extent (this scrolls to the top of the display too)
     _show(sdata);
+
+    if (flags & ScrollList_AddItem_MakeVisible)
+    {
+        // Been asked to make the new item visible
+        if ((index < 0) || (index >= sdata->no_entries - 1))
+            _make_visible(sdata, sdata->no_entries - 1);
+        else
+            _make_visible(sdata, index);
+    }
+    else
+    {
+        int x = state.xscroll, y = state.yscroll;
+
+        // Restore scroll position
+        if (!wimp_get_window_state(&state))
+        {
+            state.xscroll = x;
+            state.yscroll = y;
+
+            wimp_open_window((WimpOpenWindowBlock *) &state);
+        }
+    }
 
 //    scrolllist_update(sdata, sdata->box.xmin, sdata->box.ymin,
 //    		sdata->box.xmax - vscroll_width, sdata->box.ymax);
@@ -686,7 +727,8 @@ static _kernel_oserror *_send_selection_event(const PrivateScrollList *sdata,
 static _kernel_oserror *_delete_items(PrivateScrollList *sdata,
 				unsigned int flags, int start, int end)
 {
-    unsigned int	i, j;
+    WimpGetWindowStateBlock	state;
+    unsigned int		i, j;
 
     if (start < 0)
         start = 0;
@@ -723,8 +765,27 @@ static _kernel_oserror *_delete_items(PrivateScrollList *sdata,
 
     sdata->no_entries -= end - start + 1;
 
-    // Update extent
+
+    // Remember existing window details
+    window_get_wimp_handle(0, sdata->object_id, &state.window_handle);
+    wimp_get_window_state(&state);
+
+    // Update window extent (this scrolls to the top of the display too)
     _show(sdata);
+
+    if (flags & ScrollList_DeleteItems_DoNotJumpToTop)
+    {
+        int x = state.xscroll, y = state.yscroll;
+
+        // Restore scroll position
+        if (!wimp_get_window_state(&state))
+        {
+            state.xscroll = x;
+            state.yscroll = y;
+
+            wimp_open_window((WimpOpenWindowBlock *) &state);
+        }
+    }
 
 //    scrolllist_update(sdata, sdata->box.xmin, sdata->box.ymin,
 //    		sdata->box.xmax - vscroll_width, sdata->box.ymax);
@@ -940,6 +1001,68 @@ static _kernel_oserror *_get_item_text(const PrivateScrollList *sdata,
     return NULL;
 }
 
+static _kernel_oserror *_set_item_text(const PrivateScrollList *sdata,
+			char *new_text, int index)
+{
+    char            * new_item;
+    _kernel_oserror   no_mem = {0, "Not enough memory"};
+    unsigned int      item_height;
+    BBox              box;
+
+    /* Sanity checks */
+
+    if (index < 0 || index >= sdata->no_entries)
+        return &bad_index;
+
+    if (!new_text) return NULL;
+
+    /* Do nothing if the string hasn't changed */
+
+    if (!strcmp(new_text, sdata->entries[index].text)) return NULL;
+
+    /* Ditch the existing text */
+
+#ifdef MemCheck_MEMCHECK
+    MemCheck_UnRegisterMiscBlock(sdata->entries[index].text);
+#endif
+    mem_free(sdata->entries[index].text);
+
+    /*
+     * Make sure things aren't going to fall over horribly if
+     * the allocation fails below
+     */
+
+    sdata->entries[index].text = "";
+
+    /* Allocate and copy in the new string */
+
+    new_item = mem_allocate(strlen(new_text) + 1);
+    if (new_item == NULL)
+        return &no_mem;
+
+#ifdef MemCheck_MEMCHECK
+    MemCheck_RegisterMiscBlock(new_item, strlen(new_text) + 1);
+#endif
+
+    strcpy(new_item, new_text);
+    sdata->entries[index].text = new_item;
+
+    /* Redraw it */
+
+    _get_item_size(sdata, NULL, &item_height, NULL);
+
+    box.xmin = 0;
+    box.xmax = 0xfff;
+    box.ymin = -(index + 1) * item_height;
+    box.ymax = -index * item_height;
+
+    window_force_redraw(0, sdata->object_id, &box);
+
+    /* Finished */
+
+    return NULL;
+}
+
 _kernel_oserror *scrolllist_method(PrivateScrollList *sdata,
 				_kernel_swi_regs *regs)
 {
@@ -1024,6 +1147,10 @@ _kernel_oserror *scrolllist_method(PrivateScrollList *sdata,
         case ScrollList_GetItemText:
             e = _get_item_text(sdata, (char*)regs->r[4], regs->r[5],
             			regs->r[6], &(regs->r[5]));
+            break;
+
+        case ScrollList_SetItemText:
+            e = _set_item_text(sdata, (char*)regs->r[4], regs->r[5]);
             break;
 
         case ScrollList_CountItems:
