@@ -95,6 +95,7 @@ resources_NCFresco_base:
 	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${RESRES}.html.alert     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.error     -o ${RESRES}.html.error     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favmove   -o ${RESRES}.html.favmove   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename -o ${RESRES}.html.favrename ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${RESRES}.html.favs      ${TRFLAGS}
@@ -150,6 +151,7 @@ install_NCFresco:
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLRESLOCALEDIR}.html.alert     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLRESLOCALEDIR}.html.badurl    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.error     -o ${INSTALLRESLOCALEDIR}.html.error     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favmove   -o ${INSTALLRESLOCALEDIR}.html.favmove   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename -o ${INSTALLRESLOCALEDIR}.html.favrename ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLRESLOCALEDIR}.html.favs      ${TRFLAGS}
