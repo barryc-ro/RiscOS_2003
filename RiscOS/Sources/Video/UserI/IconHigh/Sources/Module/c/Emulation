@@ -1,3 +1,5 @@
+#include <time.h>
+
 #include "swis.h"
 
 #include "Desk.Error2.h"
@@ -43,8 +45,9 @@ static	Desk_bool	keydown_right	= Desk_bool_FALSE;
 static	Desk_bool	keydown_up	= Desk_bool_FALSE;
 static	Desk_bool	keydown_down	= Desk_bool_FALSE;
 
-static	Desk_bool	keydown_detected_from_keyv	= Desk_bool_FALSE;
-	// So we know whether to ignore InsV key insertions.
+static	int	keydown_detected_from_keyv	= 0;
+	// So we know whether to ignore InsV key insertions. This variable contains the number of important KeyV
+	//keys that are currently known to be depressed from looking at the KeyV vector.
 
 /*
 Note that the frame rate will effect how fast the pointer-emulated mouse
@@ -57,6 +60,7 @@ static int		mouse_speed_min	= 1*mousespeed_SCALE;
 static int		mouse_accel	= 16;
 static int		mouse_speed	= mousespeed_SCALE;
 
+static clock_t		mouse_lasttime	= 0;
 
 
 void	SetMomentum( int* min, int* max, int* accel)
@@ -161,49 +165,60 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 			}
 		
 		if ( !IconHigh_globals.paused && IconHigh_globals.currentemulation==IconHigh_newemulation_default_POINTER)	{
-			if ( keydown_left)	dpos.x -= mouse_speed / mousespeed_SCALE;
-			if ( keydown_right)	dpos.x += mouse_speed / mousespeed_SCALE;
-			if ( keydown_down)	dpos.y -= mouse_speed / mousespeed_SCALE;
-			if ( keydown_up)	dpos.y += mouse_speed / mousespeed_SCALE;
 			
-			if ( keydown_left || keydown_right || keydown_down || keydown_up)	{
-				if ( mouse_speed < mouse_speed_max)	mouse_speed += mouse_accel;
-				}
-			else	{
-				mouse_speed = mouse_speed_min;
-				// Stops accelaration immediately if all buttons are released.
-				}
+			clock_t		t	= clock();
+			int		dt	= (mouse_lasttime) ? t - mouse_lasttime : 0;
 			
-				{
-				#ifdef TIME_PTRV
-					{
-					static unsigned int	last_t = 0;
-					
-					unsigned int	t;
-					unsigned int	dt;
-					
-					t = Timer1_GetTime();
-					
-					dt = t-last_t;
-					last_t = t;
-					
-					if ( time_ptrv_bufferend==NULL)	time_ptrv_bufferend = time_ptrv_buffer;
-					
-					time_ptrv_bufferend += sprintf( time_ptrv_bufferend, "dt=%8i	stack approx= 0x%p  %s\n", 
-						dt, 
-						r, 
-						(dt < 30000) ? "*" : ""
-						);
-					if ( time_ptrv_bufferend-time_ptrv_buffer > 256)	{
-						_swix( OS_AddCallBack, _INR(0,1), SaveDtInfo, pw);
-						}
+			mouse_lasttime = t;
+			
+			if ( dt<0 || dt>10)	dt=0;	// For when clock() wraps (after 6 months I think 8)
+			
+			if ( dt>0)	{
+				
+				if ( keydown_left)	dpos.x -= dt * mouse_speed / mousespeed_SCALE;
+				if ( keydown_right)	dpos.x += dt * mouse_speed / mousespeed_SCALE;
+				if ( keydown_down)	dpos.y -= dt * mouse_speed / mousespeed_SCALE;
+				if ( keydown_up)	dpos.y += dt * mouse_speed / mousespeed_SCALE;
+				
+				if ( keydown_left || keydown_right || keydown_down || keydown_up)	{
+					if ( mouse_speed < mouse_speed_max)	mouse_speed += mouse_accel;
 					}
-				#endif
-					
-				r->r[2] += dpos.x;
-				r->r[3] += dpos.y;
+				else	{
+					mouse_speed = mouse_speed_min;
+					// Stops accelaration immediately if all buttons are released.
+					}
+				
+					{
+					#ifdef TIME_PTRV
+						{
+						static unsigned int	last_t = 0;
+						
+						unsigned int	t;
+						unsigned int	dt;
+						
+						t = Timer1_GetTime();
+						
+						dt = t-last_t;
+						last_t = t;
+						
+						if ( time_ptrv_bufferend==NULL)	time_ptrv_bufferend = time_ptrv_buffer;
+						
+						time_ptrv_bufferend += sprintf( time_ptrv_bufferend, "dt=%8i	stack approx= 0x%p  %s\n", 
+							dt, 
+							r, 
+							(dt < 30000) ? "*" : ""
+							);
+						if ( time_ptrv_bufferend-time_ptrv_buffer > 256)	{
+							_swix( OS_AddCallBack, _INR(0,1), SaveDtInfo, pw);
+							}
+						}
+					#endif
+						
+					r->r[2] += dpos.x;
+					r->r[3] += dpos.y;
+					}
+				IconHigh_globals.lastmovement = dpos;
 				}
-			IconHigh_globals.lastmovement = dpos;
 			}
 		
 		MemCheck_RestoreChecking( oldchecking);
@@ -291,9 +306,13 @@ int	Pointer_KeyV_handler( _kernel_swi_regs* r, void* pw)
 			if ( r->r[1]==KEY_KEYV_DOWN)	{ keydown_down	= (r->r[0]==2) ? Desk_bool_TRUE : Desk_bool_FALSE; /*return 0;*/	}
 			
 			if ( r->r[1]==KEY_KEYV_RIGHT || r->r[1]==KEY_KEYV_LEFT || r->r[1]==KEY_KEYV_UP || r->r[1]==KEY_KEYV_DOWN)	{
-				keydown_detected_from_keyv = (r->r[0]==2) ? Desk_bool_TRUE : Desk_bool_FALSE;
+				keydown_detected_from_keyv += (r->r[0]==2) ? 1 : -1;
 					// So we know that keydown is from detection of a KeyV, rather than insertion into
 					// keyboard buffer.
+				if ( keydown_detected_from_keyv < 0)	{	// Shouldn't happen
+					keydown_detected_from_keyv = 0;
+					Desk_Debug_Printf( Desk_error_PLACE "*** keydown_detected_from_keyv < 0\n");
+					}
 				}
 			}
 		
@@ -655,6 +674,7 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 		);
 	
 	mouse_speed	= mouse_speed_min;
+	mouse_lasttime	= 0;	// This is time of last PtrV interception, used to calculate how far to move the mouse.
 	
 	keydown_left	= KeyDown( KEY_INTERNAL_LEFT);
 	keydown_right	= KeyDown( KEY_INTERNAL_RIGHT);
