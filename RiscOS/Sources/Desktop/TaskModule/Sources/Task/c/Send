@@ -1,16 +1,22 @@
 #include "swis.h"
 #include "kernel.h"
 
-#include "Desk.WimpSWIs.h"
-#include "Desk.Debug.h"
-#include "Desk.DeskMem.h"
-#include "Desk.Event.h"
+#include "Desk/WimpSWIs.h"
+#include "Desk/Debug.h"
+#include "Desk/DeskMem.h"
+#include "Desk/Event.h"
+#include "Desk/LinkList.h"
 
 #include "^.Interface.h"
 #include "^.Send.h"
+#include "^.Task.h"
 
 
-typedef struct	{
+
+typedef void*	TaskModule_messagehandler;
+
+typedef struct
+{
 	Desk_linklist_header		header;
 	Desk_event_type			eventtype;
 	Desk_message_block		message;
@@ -19,28 +25,34 @@ typedef struct	{
 	TaskModule_messagehandler	handler;
 	void*				reference;
 	Desk_bool			sent;
-	}
-	TaskModule_messageblock;
-
-
-static void	TaskModule_Send_ClaimReleaseNull( Desk_event_claimorreleasefn fn, TaskModule_messageblock* m);
-
-
-static void	TaskModule_Send_FreeMessage( TaskModule_messageblock* m)
+	
+	union
 	{
-	TaskModule_block*		app	= &TaskModule_globalblock;
-	Desk_LinkList_Unlink( &app->messages, &m->header);
-	Desk_DeskMem_Free( m);
+		int	value;
+		struct
+		{
+			unsigned int	pollword	: 1;
+			unsigned int	null		: 1;
+			unsigned int	messages	: 1;
+		}
+		data;
 	}
+	handlers;	// Used to keep track of which events need to be released.
+}
+TaskModule_messageblock;
 
-static Desk_bool	TaskModule_Send_NullHandler( Desk_event_pollblock* event, void* reference)
+
+
+static void	FreeMessage( TaskModule_messageblock* m);
+
+
+static Desk_bool	NullHandler( Desk_event_pollblock* event, void* reference)
 	{
 	TaskModule_messageblock*	m	= (TaskModule_messageblock*) reference;
 	
 	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_NullHandler: freeing message at 0x%p\n", m);
 	Desk_Debug_Printf( Desk_error_PLACE "action = %i\n", m->message.header.action);
-	TaskModule_Send_FreeMessage( m);
-	TaskModule_Send_ClaimReleaseNull( Desk_Event_Release, m);
+	FreeMessage( m);
 	
 	return Desk_bool_FALSE;
 	
@@ -48,141 +60,108 @@ static Desk_bool	TaskModule_Send_NullHandler( Desk_event_pollblock* event, void*
 	}
 
 
-static void	TaskModule_Send_ClaimReleaseNull( Desk_event_claimorreleasefn fn, TaskModule_messageblock* m)
-	{
-	fn( Desk_event_NULL, Desk_event_ANY, Desk_event_ANY, TaskModule_Send_NullHandler, m);
-	}
-
-
-
-static void	TaskModule_Send_SendUnsentMessages( TaskModule_block* app)
-	{
-	TaskModule_messageblock*	m;
-	
-	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_SendUnsentMessages called\n");
-	
-	for ( m = Desk_LinkList_FirstItem( &app->messages); m;)	{
-		
-		TaskModule_messageblock*	next = Desk_LinkList_NextItem( &m->header);
-		
-		Desk_Debug_Printf( Desk_error_PLACE "m=0x%p\n", m);
-		
-		if ( !m->sent /*m->message.header.myref == 0*/)	{	/* This message hasn't been sent yet...	*/
-			
-			Desk_Debug_Printf( Desk_error_PLACE "Calling Wimp_SendMessage, next=0x%p\n", next);
-			Desk_Debug_Printf( Desk_error_PLACE "Message data is:\n");
-			Desk_Debug_PrintMemory( &m->message, sizeof m->message);
-			
-				{
-				Desk_os_error*	e = (Desk_os_error*) _swix(
-					Wimp_SendMessage, _INR(0,3),
-					//(m->handler) ? Desk_event_USERMESSAGERECORDED : Desk_event_USERMESSAGE, 
-					m->eventtype,
-					&m->message, 
-					m->destinee, 
-					m->icon
-					);
-				Desk_Debug_Printf( Desk_error_PLACE "Wimp_SendMessage returned %p\n", e);
-				if ( e)	Desk_Debug_Printf( Desk_error_PLACE "This is os error %i, '%s'\n", e->errnum, e->errmess);
-				}
-			
-			/* m->event is updated to contain yourref.	*/
-			Desk_Debug_Printf( Desk_error_PLACE "myref=%i\n", m->message.header.myref);
-			
-			app->pollword--;
-			m->sent	= Desk_bool_TRUE;
-			Desk_Debug_Printf( Desk_error_PLACE "pollword = %i\n", app->pollword);
-			
-			if ( m->eventtype == Desk_event_USERMESSAGERECORDED)	{
-				TaskModule_Send_ClaimReleaseNull( Desk_Event_Claim, m);
-				}
-			else	{	/* Not expecting a reply...	*/
-				Desk_Debug_Printf( Desk_error_PLACE "Freeing linklist item\n");
-				TaskModule_Send_FreeMessage( m);
-				}
-			/*
-			else	{
-				TaskModule_Send_ClaimReleaseNull( Desk_Event_Claim, m);
-				}
-			*/
-			}
-		
-		m = next;
-		}
-	
-	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_SendUnsentMessages returning\n");
-	}
-
-
-
-Desk_bool	TaskModule_Send_NonZeroPollWordHandler( Desk_event_pollblock* event, void* reference)
-	{
-	TaskModule_block*		app = (TaskModule_block*) reference;
-	
-	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_NonZeroPollWordHandler called, pollword=%i\n", app->pollword);
-	
-	TaskModule_Send_SendUnsentMessages( app);
-	
-	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_NonZeroPollWordHandler returning\n");
-	return Desk_bool_FALSE;
-	
-	Desk_UNUSED( event);
-	}
 
 
 
 
-Desk_bool	TaskModule_Send_MessageHandler( Desk_event_pollblock* event, void* reference)
-	{
-	TaskModule_block*		app = (TaskModule_block*) reference;
-	TaskModule_messageblock*	m;
+
+void		TaskModule_Send_CallHandler( Desk_event_type type, Desk_message_block* message, void* pw, TaskModule_messagehandler handler);
+/*
+Assembler veneer for calling handler function in SVC mode, and setting r12=pw.
+ */
+
+
+
+
+static Desk_bool	MessageHandler( Desk_event_pollblock* event, void* reference)
+{
+	TaskModule_messageblock*	m	= (TaskModule_messageblock*) reference;
 	
 	Desk_Debug3_Printf( Desk_error_PLACE "TaskModule_Send_MessageHandler called\n");
 	
-	/*if ( event->data.message.header.yourref == 0)	 return Desk_bool_FALSE;*/	/* We're only interested in replies	*/
-	
-	for ( m = Desk_LinkList_FirstItem( &app->messages); m;)	{
-		
-		TaskModule_messageblock*	next = Desk_LinkList_NextItem( &m->header);
-		
-		if	(
-				(
-				event->type != Desk_event_ACK 
-				&& event->data.message.header.yourref != 0 
-				&& event->data.message.header.yourref == m->message.header.myref
-				)
-			||
-				(
-				event->type == Desk_event_ACK
-				&& event->data.message.header.myref == m->message.header.myref
-				)
+	if	(
+			(
+			event->type != Desk_event_ACK 
+			&& event->data.message.header.yourref != 0 
+			&& event->data.message.header.yourref == m->message.header.myref
 			)
-			{
-			/* A reply to message in 'm'.	*/
-			
-			if ( m->handler)	{
-				Desk_Debug_Printf( Desk_error_PLACE "Calling external message-handler at 0x%p, pw=0x%p\n", m->handler, m->reference);
-				Desk_Debug_Printf( Desk_error_PLACE "Message is type %i\n", event->type);
-				/*Desk_Debug_DumpRegistersToFile();*/
-				TaskModule_Send_CallHandler( event->type, &event->data.message, m->reference, m->handler);
-				Desk_Debug_Printf( Desk_error_PLACE "Called external message-handler\n");
-				}
-			else	{
-				Desk_Debug_Printf( Desk_error_PLACE "m->handler = 0 (myref=%i)\n", m->message.header.myref);
-				}
-			
-			TaskModule_Send_FreeMessage( m);
-			TaskModule_Send_ClaimReleaseNull( Desk_Event_Release, m);
-			/* So we don't try to free this message at next event_NULL - it is already freed now we've received its reply.	*/
-			
-			return Desk_bool_TRUE;
+		||
+			(
+			event->type == Desk_event_ACK
+			&& event->data.message.header.myref == m->message.header.myref
+			)
+		)
+	{
+		/* A reply to message in 'm'.	*/
+		
+		if ( m->handler)	{
+			Desk_Debug_Printf( Desk_error_PLACE "Calling external message-handler at 0x%p, pw=0x%p\n", m->handler, m->reference);
+			Desk_Debug_Printf( Desk_error_PLACE "Message is type %i\n", event->type);
+			TaskModule_Send_CallHandler( event->type, &event->data.message, m->reference, m->handler);
+			Desk_Debug_Printf( Desk_error_PLACE "Called external message-handler\n");
+			}
+		else	{
+			Desk_Debug_Printf( Desk_error_PLACE "m->handler = 0 (myref=%i)\n", m->message.header.myref);
 			}
 		
-		m = next;
-		}
+		FreeMessage( m);
+		
+		return Desk_bool_TRUE;
+	}
 	
 	return Desk_bool_FALSE;
+}
+
+
+
+
+static Desk_bool	NonZeroPollWordHandler( Desk_event_pollblock* event, void* reference)
+{
+	TaskModule_messageblock*	m	= (TaskModule_messageblock*) reference;
+	Desk_Debug_Printf( Desk_error_PLACE "NonZeroPollWordHandler called, messageblock = 0x%p\n", m);
+	
+	if ( m->sent)	Desk_Debug_Printf( Desk_error_PLACE "m->sent = %i - should never happen\n", m->sent);
+	
+	if ( !m->sent)
+	{	/* This message hasn't been sent yet...	*/
+		
+		Desk_Debug_Printf( Desk_error_PLACE "Calling Wimp_SendMessage. Message data is:\n");
+		Desk_Debug_PrintMemory( &m->message, sizeof m->message);
+		
+		{
+			Desk_os_error*	e = _swix( Wimp_SendMessage, _INR(0,3), m->eventtype, &m->message,  m->destinee, m->icon);
+			Desk_Debug_Printf( Desk_error_PLACE "Wimp_SendMessage returned %p\n", e);
+			if ( e)	Desk_Debug_Printf( Desk_error_PLACE "This is os error %i, '%s'\n", e->errnum, e->errmess);
+		}
+		
+		/* m->event is updated to contain yourref.	*/
+		Desk_Debug_Printf( Desk_error_PLACE "myref=%i\n", m->message.header.myref);
+		
+		TaskModule_globalblock.pollword--;
+		m->sent	= Desk_bool_TRUE;
+		
+		Desk_Debug_Printf( Desk_error_PLACE "pollword = %i\n", TaskModule_globalblock.pollword);
+		
+		Desk_Event_Release( Desk_event_NONZEROPOLLWORD, Desk_event_ANY, Desk_event_ANY, NonZeroPollWordHandler, m);
+		m->handlers.data.pollword	= 0;
+		
+		if ( m->eventtype == Desk_event_USERMESSAGERECORDED)
+		{
+			Desk_Event_Claim( Desk_event_NULL, Desk_event_ANY, Desk_event_ANY, NullHandler, m);
+			Desk_Event_MessagesClaim( MessageHandler, m);
+			m->handlers.data.null		= 1;
+			m->handlers.data.messages	= 1;
+		}
+		else
+		{	/* Not expecting a reply...	*/
+			Desk_Debug_Printf( Desk_error_PLACE "Freeing linklist item\n");
+			FreeMessage( m);
+		}
 	}
+	Desk_Debug_Printf( Desk_error_PLACE "NonZeroPollWordHandler returning\n");
+	return Desk_bool_FALSE;
+	Desk_UNUSED( event);
+}
 
 
 
@@ -197,32 +176,23 @@ typedef union	{
 	}
 	send_flags;
 
-void	TaskModule_Send_SendMessage( 
-			int				flags0,
-			Desk_message_block*		message, 
-			Desk_task_handle		destinee, 
-			Desk_icon_handle		icon,
-			TaskModule_messagehandler	handler, 
-			void*				reference,
-			Desk_event_type			eventtype
-			)
+void	TaskModule_Send_SendMessage( _kernel_swi_regs* r, void* pw)
 	{
-	TaskModule_block*		app = &TaskModule_globalblock;
-	TaskModule_messageblock*	m = Desk_DeskMem_MallocType( TaskModule_messageblock);
+	int				flags0		= (int)				r->r[0];
+	Desk_message_block*		message		= (Desk_message_block*) 	r->r[1];
+	Desk_task_handle		destinee	= (Desk_task_handle)		r->r[2];
+	Desk_icon_handle		icon		= (Desk_icon_handle)		r->r[3];
+	TaskModule_messagehandler	handler		= (TaskModule_messagehandler)	r->r[4];
+	void*				reference	= (void*)			r->r[5];
+	Desk_event_type			eventtype	= (Desk_event_type)		r->r[6];
+	
+	TaskModule_block*		app	= &TaskModule_globalblock;
+	TaskModule_messageblock*	m	= Desk_DeskMem_MallocType( TaskModule_messageblock);
 	send_flags			flags;
 	
 	flags.value = flags0;
 	
 	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_SendMessage called\n");
-	Desk_Debug_Printf( Desk_error_PLACE "app->messages = %p,%p, m=%p\n", 
-		app->messages.next,
-		app->messages.previous,
-		m
-		);
-	
-	
-	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_SendMessage called\n");
-	
 	
 	if ( flags.data.use_eventtype)	{
 		m->eventtype	= eventtype;
@@ -240,13 +210,15 @@ void	TaskModule_Send_SendMessage(
 	m->handler			= handler;
 	m->reference			= reference;
 	m->sent				= Desk_bool_FALSE;
+	m->handlers.value		= 0;
 	
 	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Send_SendMessage called\n");
 	
-	{	// Disable interrupts while we update our linked list.
+	{	// Disable interrupts while Desk_Event_Claim updates its list of event claiments.
 		int	irqoff = _kernel_irqs_disabled();
 		if ( !irqoff)	_kernel_irqs_off();
-		Desk_LinkList_AddToTail( &app->messages, &m->header);
+		Desk_Event_Claim( Desk_event_NONZEROPOLLWORD, Desk_event_ANY, Desk_event_ANY, NonZeroPollWordHandler, m);
+		m->handlers.data.pollword	= 1;
 		app->pollword++;
 		if ( !irqoff)	_kernel_irqs_on();
 	}
@@ -255,4 +227,16 @@ void	TaskModule_Send_SendMessage(
 	Desk_Debug_Printf( Desk_error_PLACE "pollword = %i\n", app->pollword);
 	
 	return;
+	
+	Desk_UNUSED( pw);
 	}
+
+
+static void	FreeMessage( TaskModule_messageblock* m)
+	{
+	if ( m->handlers.data.null)	Desk_Event_Release( Desk_event_NULL, Desk_event_ANY, Desk_event_ANY, NullHandler, m);
+	if ( m->handlers.data.pollword)	Desk_Event_Release( Desk_event_NONZEROPOLLWORD, Desk_event_ANY, Desk_event_ANY, NonZeroPollWordHandler, m);
+	if ( m->handlers.data.messages)	Desk_Event_MessagesRelease( MessageHandler, m);
+	Desk_DeskMem_Free( m);
+	}
+
