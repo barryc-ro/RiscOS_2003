@@ -9,7 +9,7 @@
 # Date          Name    Description
 # ====          ====    ===========
 # 1998-09-22    RDW     Created
-
+# 1998-09-28	RDW	LIBS completed for module build
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -121,13 +121,17 @@ LIBS = \
 
 #these are not complete
 LIBSM = \
- $(WIMPLIB) \
- $(TOOLBOXLIB) \
- $(EVENTLIB)m \
- $(ACORNPOP3)\
- $(C++LIB)\
  $(NBLIB)zm\
  $(ERRORLIB)zm\
+ $(WIMPLIB)\
+ $(TOOLBOXLIB)\
+ $(EVENTLIB)m\
+ $(MBOXLIB)zm\
+ $(ACORNPOP3)\
+ $(ACORNSMTP)\
+ $(ELIB)zm\
+ $(EXTRALIBS)\
+ $(C++LIB)\
 
 
 LIBSD = \
