@@ -15,7 +15,7 @@ HEADER1     = TaskWindow
 #
 # Generic rules:
 #
-include Makefiles:StdTools
-include Makefiles:AAsmModule
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
