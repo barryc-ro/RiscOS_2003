@@ -1059,6 +1059,7 @@ static void error_finished(int ConfirmAction)
     }
 }
 
+#if SUPPORT_UI
 
 extern void Screen_ReportError(char *Title_Tag, messageDataBlock *messageData)
 {
@@ -1120,7 +1121,192 @@ extern void Screen_ReportError(char *Title_Tag, messageDataBlock *messageData)
     }
 #endif
 }
+#else
 
+
+// Lookup_Message_Token
+// uses MessageTrans to translate message tokens
+  
+void Lookup_Message_Token(char* Token,char* result)
+{
+ 
+ //structure used by msgtrans
+ typedef struct
+  {
+    int data[4];
+  } 
+  msgtrans_filedesc;
+  msgtrans_filedesc block;
+  msgtrans_filedesc *desc = &block;
+    
+  _kernel_swi_regs  r;
+  _kernel_oserror *e;
+  
+  	//now open 'messages' file
+	//had to use SWIs 'cos I couldn't get Neil's message library to work
+	//because it uses the message block created by toolbox.
+	//ne	  
+	r.r[0] = (int)desc;
+	r.r[1] = (int)"<Daytona$Dir>.Messages";
+	r.r[2] = 0;	  
+	e=_kernel_swi(MessageTrans_OpenFile, &r, &r);
+	if(e)
+	  dprintf((NULL,"MessageTransError %s\n",e->errmess));
+	else  //messages file opened ok so lookup token
+	  {
+	    r.r[0] = (int)desc;
+	    r.r[1] = (int)Token;
+	    r.r[2] = (int)result;
+	    r.r[3] = 256;
+	    r.r[4] = 0;
+	    r.r[5] = 0;
+	    r.r[6] = 0;
+	    r.r[7] = 0;
+	    
+	    _kernel_swi(MessageTrans_Lookup,&r,&r);
+	    	     
+	    //close message file
+	    r.r[0] =(int)desc;
+	    _kernel_swi(MessageTrans_CloseFile,&r,&r);
+	  }       
+}
+
+
+
+// Fax_ReportError must cope with the following errors:
+//
+//	RX_PQ_ERROR/RX_SQ_ERROR (printing/sending to remote fax)
+//		-FX_ERROR    - errors from !Fax
+//		-RM_RX_ERROR - remote modem errors
+//		-ZM_RX_ERROR - Zmodem errors
+//              -P3_         - POP3 , email stuff, ignore it, remove it?
+//		-RFC822      -  ditto
+//		-MD          -  ditto
+//
+//  Local modem errors should be indicated by flashing & beeping.
+//  Do not attempt to print to the local Fax when we get a problem with it! 	
+
+
+extern void Fax_ReportError(int local_error,char *Title_Tag, messageDataBlock *messageData,char* failed_fax_dir,int SendCount)
+{
+  char directory[256];
+  char filename[256];
+  
+  //char text[256] = NULL;
+  char text[256] = NULL;
+  char temp[256];
+  
+  FILE *fp;
+  
+  int l;
+  unsigned int pid;
+   
+  _kernel_swi_regs  r;
+  
+  dprintf((NULL,"\nFax_Report_Error %d,%s,%s \n",local_error,Title_Tag,failed_fax_dir));
+  ErrorLight_On();
+  if(local_error)
+    {
+      //put active light on for two seconds
+      //didn't use ActiveLight_On() cos it leaves the active light on permantly
+      //perhaps ActiveLight_On(duration) would be more useful?   
+      //ne
+      
+      r.r[0] = 0;
+      r.r[1] = DaytonaHW_LED_Active;
+      r.r[2] = 200;    /* on for two seconds */
+      r.r[3] = 25;
+      r.r[4] = 25;
+      _kernel_swi(DaytonaHW_LED, &r, &r);
+      
+      Buzzer_On(200);   
+    }
+   else  //if remote error print a report
+    {
+      //now print error to Fax
+      strcpy(directory,DIRECTORY_SENDQ);
+      pid = PrintQ_ExtIF_NewDocument(directory);
+      dprintf((NULL,"pid directory %s \n",directory));
+
+      if (pid != 0)
+        { 
+	  sprintf(filename , "%s.Errors", directory);	  
+	  fp=fopen(filename,"w");
+          //lookup message header and underline it
+	  Lookup_Message_Token("TFax_mess_hdr",text);  //'Message from TFax'
+	  //get version number and aapend it to TFax header
+	  r.r[0] = (int)"version$minor";
+	  r.r[1] = (int)temp;
+	  r.r[2] = 256;
+	  r.r[3] = 0;
+	  r.r[4] = 0;
+	  
+	  _kernel_swi(OS_ReadVarVal, &r, &r);
+	  
+	  temp[3]='\0';
+	  
+	  fprintf(fp,"\n\t\t%s (%s)\n\t\t",text,temp);
+	  for (l=0;l<(strlen(text)+6);l++)
+	  fprintf(fp,"-");
+	  fprintf(fp,"\n\n");
+	  //lookup title - e.g 'error sending document'  		    
+	  Lookup_Message_Token(Title_Tag,text);
+	  fprintf(fp,"\t%s\n\n",text);
+	  //now look up error: what type is it?
+	  if(!strncmp(messageData->data.os_error.err.errmess,"Fax",3))
+	    {
+	      //lookup error message in the form:
+	      //Fax error (0x11)
+	      //extract the hex code
+	      strncpy(temp,strchr(messageData->data.os_error.err.errmess,'0'),4);
+	      //add a terminaling NULL !
+	      temp[4]='\0';
+	      Lookup_Message_Token(temp,text);
+	      fprintf(fp,"\t%s\n\n",text);
+	      //only print 2nd line of error message if trying to send a Fax
+	      //most of the messages are only relevent to sending!
+	      if(!strcmp(Title_Tag,"Title_RX_SQ_ERROR"))  
+	        {
+	          //lookup line 2 for this error as 0x112
+	          strcat(temp,"2");
+	          Lookup_Message_Token(temp,text);
+	          fprintf(fp,"\t%s\n\n",text);
+	        }  
+	    }
+	  else
+	    //if not a fax error don't bother to parse the error message!
+	    fprintf(fp,"\t%s\n\n",messageData->data.os_error.err.errmess);    
+	  //lookup footer
+//	  if(!strcmp(Title_Tag,"Title_RX_SQ_ERROR"))
+//	  {
+//	    Lookup_Message_Token("Error_Sending",text);   //first page attatched
+//	    fprintf(fp,"\n\t%s\n\n",text);
+//	    fprintf(fp,"\ntransmit_document->SendCount %d",SendCount);
+//	  }
+             
+	  fclose(fp); 
+	  PrintQ_ExtIF_FileComplete(pid, "Errors", FILETYPE_TEXT);
+
+//printing the first page doesn't work....Yet!
+//its NOT a problem with multiple documents
+//line seems to not get dropped? 	
+//	if(!strcmp(Title_Tag,"Title_RX_SQ_ERROR"))
+//	  {
+	    //now print 1st page of fax to local fax machine
+	    //move page 1 of Fax to printq									    
+//            sprintf(temp, "rename %s.1 %s.2",failed_fax_dir,directory);
+//       	    _kernel_oscli(temp);
+//      	    PrintQ_ExtIF_FileComplete(pid, "2", FILETYPE_TIFF);  
+//	  }   	        
+           PrintQ_ExtIF_DocumentComplete(pid);     
+         } 
+      else
+        dprintf((NULL,"Unable to create errors directory"));
+    }            
+}
+
+
+#endif
 
 /*
  * Ask user which route to use - Fast Fax (RouteDIRECT) or Email (RouteISP)
@@ -1354,6 +1540,7 @@ extern void Screen_Force_Open(void)
  */
 extern void Screen_LocalFax_NotConnected(void)
 {
+#if SUPPORT_UI  
 //@@ TBD new scheme!
       ui_deregister_animation(10); //@@ This looks wrong to me (10 = 8 + 2; maybe better as 4 + 2)
       ui_register_animation(1, "plug");
@@ -1373,6 +1560,21 @@ extern void Screen_LocalFax_NotConnected(void)
       ui_home_set_sprite(4, "exclaim_r");
       ui_home_set_status(1, "Line1_8_0", NULL, NULL);
       ui_home_set_status(2, "Line2_8_0", NULL, NULL);
+#else
+//flash 'n' beep!
+      _kernel_swi_regs  r;
+
+      ErrorLight_On();
+        
+      r.r[0] = 0;
+      r.r[1] = DaytonaHW_LED_Active;
+      r.r[2] = 200;    /* on for two seconds */
+      r.r[3] = 25;
+      r.r[4] = 25;
+      _kernel_swi(DaytonaHW_LED, &r, &r);
+      
+      Buzzer_On(200);   
+#endif
 }
 #endif
 
@@ -1820,6 +2022,19 @@ static int strxcpy (char *out, const char *in, size_t n)
    *out = '\0';
 
    return nout;
+}
+
+
+extern void Buzzer_On(int time)
+{
+     _kernel_swi_regs  r;
+
+    r.r[0] = 0; 	//must be 0
+    r.r[1] = 1; 	//buzzer state (On)
+    r.r[2] = time;    
+  
+    _kernel_swi(DaytonaHW_Buzzer, &r, &r); 
+    
 }
 
 
