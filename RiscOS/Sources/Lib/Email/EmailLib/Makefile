@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.11 for RISC OS
+#	VERSION:	0.12 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -27,6 +27,7 @@
 #	25/02/98	0.10	RDW	Commented out DEBUG so it can be passed from
 #					amu commandline
 #	27/05/98	0.11	RDW	-ffa added to C++FLAGS
+#	28/08/98	0.12	RDW	clean removes o, od and z dirs.
 
 #
 # Paths
@@ -153,6 +154,9 @@ clean:		cleanqautils
 		$(WIPE) o.*		$(WFLAGS)
 		$(WIPE) od.*		$(WFLAGS)
 		$(WIPE) z.*		$(WFLAGS)
+		$(RM)   o
+		$(RM)   od
+		$(RM)   z
 		@echo $(COMPONENT): cleaned out
 
 export: export_${PHASE}

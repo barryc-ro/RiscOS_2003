@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.06 for RISC OS
+#	VERSION:	0.07 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -22,6 +22,7 @@
 #	18/02/98	0.04	RDW	throwback now from define
 #	24/03/98	0.05	RDW	local_dirs didn't create l dir. does now
 #	27/05/98	0.06	RDW	-ffa added to C++FLAGS
+#	28/08/98	0.07	RDW	clean removes o, od and z dirs.
 
 #
 # Paths
@@ -105,6 +106,9 @@ clean:
 		$(WIPE) o.*		$(WFLAGS)
 		$(WIPE) z.*		$(WFLAGS)
 		$(WIPE) l.*		$(WFLAGS)
+		$(RM)   o
+		$(RM)   z
+		$(RM)   l
                 @echo ${COMPONENT}: cleaned out
 
 local_dirs:
@@ -122,21 +126,4 @@ ${TARGETZ}:	$(OBJSZ) local_dirs
 		$(LIBFILE) -c -o $(TARGETZ) $(OBJSZ)
 
 # Dynamic dependencies:
-o.list:	c++.list
-o.list:	h.list
-o.olist:	c++.olist
-o.olist:	h.olist
-o.olist:	h.indxlist
-o.olist:	h.list
-o.indxlist:	c++.indxlist
-o.indxlist:	h.indxlist
-o.indxlist:	h.list
-o.list:	c++.list
-o.list:	h.list
-o.olist:	c++.olist
-o.olist:	h.olist
-o.olist:	h.indxlist
-o.olist:	h.list
-o.indxlist:	c++.indxlist
-o.indxlist:	h.indxlist
-o.indxlist:	h.list
+
