@@ -26,8 +26,6 @@ RAM_MODULE	= rm.${COMPONENT}
 DBG_MODULE	= rm.${COMPONENT}-tr
 EXPORTS		= <CExport$Dir>.h.${COMPONENT}
 
-RESFSDIR	= Resources.${COMPONENT}
-
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
 #
