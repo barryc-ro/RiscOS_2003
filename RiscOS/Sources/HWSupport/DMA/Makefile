@@ -60,30 +60,3 @@ ${EXP_HDR}.DMA: hdr.DMA
         ${CP} hdr.DMA $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.DMA: Hdr:ListOpts
-rm.DMA: Hdr:Macros
-rm.DMA: Hdr:System
-rm.DMA: Hdr:SWIs
-rm.DMA: Hdr:CPU.Generic26
-rm.DMA: Hdr:IO.GenericIO
-rm.DMA: Hdr:RISCOS
-rm.DMA: Hdr:ModHand
-rm.DMA: Hdr:IO.IOMD
-rm.DMA: Hdr:Services
-rm.DMA: Hdr:MsgTrans
-rm.DMA: Hdr:ResourceFS
-rm.DMA: Hdr:DevNos
-rm.DMA: Hdr:Proc
-rm.DMA: Hdr:FSNumbers
-rm.DMA: Hdr:NewErrors
-rm.DMA: Hdr:HostFS
-rm.DMA: Hdr:NdrDebug
-rm.DMA: Hdr:DDVMacros
-rm.DMA: Version
-rm.DMA: s.Front
-rm.DMA: s.Macros
-rm.DMA: s.Errors
-rm.DMA: s.ModHead
-rm.DMA: s.SWI
-rm.DMA: s.DMA
-rm.DMA: s.Tail

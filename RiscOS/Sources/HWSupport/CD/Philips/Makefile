@@ -56,12 +56,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Philips: hdr.Hashes
-rm.Philips: hdr.Macros
-rm.Philips: Version
-rm.Philips: s.Strings
-rm.Philips: s.DriverCode
-rm.Philips: s.Extras
-rm.Philips: s.OnError
-rm.Philips: s.Module
-rm.Philips: s.Variables

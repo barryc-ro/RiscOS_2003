@@ -52,20 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.StringLib: Hdr:ListOpts
-rm.StringLib: Hdr:Macros
-rm.StringLib: Hdr:System
-rm.StringLib: Hdr:SWIs
-rm.StringLib: Hdr:CPU.Generic26
-rm.StringLib: Hdr:IO.GenericIO
-rm.StringLib: Hdr:RISCOS
-rm.StringLib: Hdr:ModHand
-rm.StringLib: Hdr:PublicWS
-rm.StringLib: Hdr:Sound
-rm.StringLib: Hdr:Proc
-rm.StringLib: Hdr:MsgTrans
-rm.StringLib: Hdr:Services
-rm.StringLib: Hdr:HostFS
-rm.StringLib: Hdr:Debug
-rm.StringLib: Version
-rm.StringLib: s.MsgCode

@@ -72,28 +72,3 @@ ${EXP_HDR}.CDErrors: hdr.CDErrors
         ${CP} hdr.CDErrors $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.CDFSDriver: Hdr:ListOpts
-rm.CDFSDriver: Hdr:Macros
-rm.CDFSDriver: Hdr:System
-rm.CDFSDriver: Hdr:SWIs
-rm.CDFSDriver: Hdr:CPU.Generic26
-rm.CDFSDriver: Hdr:IO.GenericIO
-rm.CDFSDriver: Hdr:RISCOS
-rm.CDFSDriver: Hdr:SCSI
-rm.CDFSDriver: Hdr:CDROM
-rm.CDFSDriver: Hdr:MsgTrans
-rm.CDFSDriver: Hdr:HostFS
-rm.CDFSDriver: hdr.Hashes
-rm.CDFSDriver: hdr.CDMacros
-rm.CDFSDriver: Version
-rm.CDFSDriver: S.Strings
-rm.CDFSDriver: S.Tables
-rm.CDFSDriver: S.Module
-rm.CDFSDriver: S.Register
-rm.CDFSDriver: S.Unregister
-rm.CDFSDriver: S.Identify
-rm.CDFSDriver: S.CD_Routs
-rm.CDFSDriver: S.OnError
-rm.CDFSDriver: S.ExtraBits
-rm.CDFSDriver: S.ByteCopy
-rm.CDFSDriver: S.Variables

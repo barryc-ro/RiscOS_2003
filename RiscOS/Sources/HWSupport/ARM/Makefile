@@ -52,28 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.ARM: Hdr:ListOpts
-rm.ARM: Hdr:Macros
-rm.ARM: Hdr:System
-rm.ARM: Hdr:SWIs
-rm.ARM: Hdr:CPU.Generic26
-rm.ARM: Hdr:IO.GenericIO
-rm.ARM: Hdr:RISCOS
-rm.ARM: Hdr:ModHand
-rm.ARM: Hdr:Services
-rm.ARM: Hdr:MsgTrans
-rm.ARM: Hdr:ResourceFS
-rm.ARM: Hdr:NdrDebug
-rm.ARM: Hdr:DDVMacros
-rm.ARM: Hdr:Proc
-rm.ARM: Hdr:CMOS
-rm.ARM: Hdr:MEMM.ARM600
-rm.ARM: Hdr:FSNumbers
-rm.ARM: Hdr:NewErrors
-rm.ARM: Version
-rm.ARM: s.Front
-rm.ARM: s.Errors
-rm.ARM: s.Module
-rm.ARM: s.Cache
-rm.ARM: s.ARM810clk
-rm.ARM: s.MsgTrans

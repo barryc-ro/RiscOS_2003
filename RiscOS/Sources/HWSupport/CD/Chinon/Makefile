@@ -56,12 +56,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Chinon: hdr.Hashes
-rm.Chinon: hdr.Macros
-rm.Chinon: Version
-rm.Chinon: s.Strings
-rm.Chinon: s.DriverCode
-rm.Chinon: s.Extras
-rm.Chinon: s.OnError
-rm.Chinon: s.Module
-rm.Chinon: s.Variables

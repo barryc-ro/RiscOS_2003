@@ -47,13 +47,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.IRQUtils2: Hdr:ListOpts
-rm.IRQUtils2: Hdr:Macros
-rm.IRQUtils2: Hdr:System
-rm.IRQUtils2: Hdr:SWIs
-rm.IRQUtils2: Hdr:CPU.Generic26
-rm.IRQUtils2: Hdr:IO.GenericIO
-rm.IRQUtils2: Hdr:RISCOS
-rm.IRQUtils2: Hdr:ModHand
-rm.IRQUtils2: Hdr:NdrDebug
-rm.IRQUtils2: Version2

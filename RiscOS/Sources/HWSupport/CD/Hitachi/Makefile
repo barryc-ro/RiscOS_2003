@@ -56,12 +56,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Hitachi: hdr.Hashes
-rm.Hitachi: hdr.Macros
-rm.Hitachi: Version
-rm.Hitachi: s.Strings
-rm.Hitachi: s.DriverCode
-rm.Hitachi: s.Extras
-rm.Hitachi: s.OnError
-rm.Hitachi: s.Module
-rm.Hitachi: s.Variables

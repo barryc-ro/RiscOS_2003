@@ -56,12 +56,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Sony: Version
-rm.Sony: hdr.Hashes
-rm.Sony: hdr.Macros
-rm.Sony: s.Strings
-rm.Sony: s.DriverCode
-rm.Sony: s.Extras
-rm.Sony: s.OnError
-rm.Sony: s.Module
-rm.Sony: s.Variables

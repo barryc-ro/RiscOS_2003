@@ -56,12 +56,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Toshiba: hdr.Hashes
-rm.Toshiba: hdr.Macros
-rm.Toshiba: Version
-rm.Toshiba: s.Strings
-rm.Toshiba: s.DriverCode
-rm.Toshiba: s.Extras
-rm.Toshiba: s.OnError
-rm.Toshiba: s.Module
-rm.Toshiba: s.Variables

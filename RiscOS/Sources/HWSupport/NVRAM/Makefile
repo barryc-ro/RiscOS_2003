@@ -109,32 +109,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.nvram
-o.module:	h.msgfile
-o.module:	h.error
-o.NVRAM:	c.NVRAM
-o.NVRAM:	C:h.kernel
-o.NVRAM:	C:h.swis
-o.NVRAM:	h.module
-o.NVRAM:	h.nvram
-o.NVRAM:	h.msgfile
-o.NVRAM:	h.parse
-o.NVRAM:	h.error
-o.NVRAM:	h.trace
-o.msgfile:	c.msgfile
-o.msgfile:	C:h.kernel
-o.msgfile:	C:h.swis
-o.msgfile:	h.msgfile
-o.msgfile:	h.error
-o.msgfile:	h.trace
-o.parse:	c.parse
-o.parse:	h.nvram
-o.parse:	C:h.kernel
-o.parse:	h.trace
-o.trace:	c.trace
-o.trace:	C:h.swis
-o.trace:	C:h.kernel

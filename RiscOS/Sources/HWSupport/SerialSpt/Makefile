@@ -47,28 +47,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.SerialSpt: Hdr:ListOpts
-rm.SerialSpt: Hdr:Macros
-rm.SerialSpt: Hdr:DDVMacros
-rm.SerialSpt: Hdr:System
-rm.SerialSpt: Hdr:SWIs
-rm.SerialSpt: Hdr:CPU.Generic26
-rm.SerialSpt: Hdr:IO.GenericIO
-rm.SerialSpt: Hdr:RISCOS
-rm.SerialSpt: Hdr:ModHand
-rm.SerialSpt: Hdr:FSNumbers
-rm.SerialSpt: Hdr:NewErrors
-rm.SerialSpt: Hdr:CMOS
-rm.SerialSpt: Hdr:Symbols
-rm.SerialSpt: Hdr:Services
-rm.SerialSpt: Hdr:DeviceFS
-rm.SerialSpt: Hdr:Serial
-rm.SerialSpt: Hdr:RS423
-rm.SerialSpt: Hdr:HostFS
-rm.SerialSpt: Hdr:NdrDebug
-rm.SerialSpt: Hdr:MsgTrans
-rm.SerialSpt: Hdr:UpCall
-rm.SerialSpt: Hdr:Proc
-rm.SerialSpt: Version
-rm.SerialSpt: s.Macros
-rm.SerialSpt: s.Errors

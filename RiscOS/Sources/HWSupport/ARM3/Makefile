@@ -56,17 +56,3 @@ ${EXP_HDR}.ARM3Cache: hdr.ARM3Cache
         ${CP} hdr.ARM3Cache $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.ARM3: Hdr:ListOpts
-rm.ARM3: Hdr:Macros
-rm.ARM3: Hdr:System
-rm.ARM3: Hdr:SWIs
-rm.ARM3: Hdr:CPU.Generic26
-rm.ARM3: Hdr:IO.GenericIO
-rm.ARM3: Hdr:RISCOS
-rm.ARM3: Hdr:CMOS
-rm.ARM3: Hdr:ModHand
-rm.ARM3: Hdr:Services
-rm.ARM3: Hdr:Proc
-rm.ARM3: Hdr:FSNumbers
-rm.ARM3: Hdr:NewErrors
-rm.ARM3: Hdr:MsgTrans

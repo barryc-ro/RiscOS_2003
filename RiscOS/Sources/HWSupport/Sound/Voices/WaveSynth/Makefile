@@ -53,35 +53,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.Jordan.WaveSynth: Hdr:ListOpts
-rm.Jordan.WaveSynth: Hdr:Macros
-rm.Jordan.WaveSynth: Hdr:System
-rm.Jordan.WaveSynth: Hdr:SWIs
-rm.Jordan.WaveSynth: Hdr:CPU.Generic26
-rm.Jordan.WaveSynth: Hdr:IO.GenericIO
-rm.Jordan.WaveSynth: Hdr:RISCOS
-rm.Jordan.WaveSynth: Hdr:Machine.<Machine>
-rm.Jordan.WaveSynth: Hdr:ModHand
-rm.Jordan.WaveSynth: Hdr:PublicWS
-rm.Jordan.WaveSynth: Hdr:Sound
-rm.Jordan.WaveSynth: Hdr:Proc
-rm.Jordan.WaveSynth: Hdr:MsgTrans
-rm.Jordan.WaveSynth: Hdr:Services
-rm.Jordan.WaveSynth: Version
-rm.Jordan.WaveSynth: s.MsgCode
-rm.Omega.WaveSynth: Hdr:ListOpts
-rm.Omega.WaveSynth: Hdr:Macros
-rm.Omega.WaveSynth: Hdr:System
-rm.Omega.WaveSynth: Hdr:SWIs
-rm.Omega.WaveSynth: Hdr:CPU.Generic26
-rm.Omega.WaveSynth: Hdr:IO.GenericIO
-rm.Omega.WaveSynth: Hdr:RISCOS
-rm.Omega.WaveSynth: Hdr:Machine.<Machine>
-rm.Omega.WaveSynth: Hdr:ModHand
-rm.Omega.WaveSynth: Hdr:PublicWS
-rm.Omega.WaveSynth: Hdr:Sound
-rm.Omega.WaveSynth: Hdr:Proc
-rm.Omega.WaveSynth: Hdr:MsgTrans
-rm.Omega.WaveSynth: Hdr:Services
-rm.Omega.WaveSynth: Version
-rm.Omega.WaveSynth: s.MsgCode

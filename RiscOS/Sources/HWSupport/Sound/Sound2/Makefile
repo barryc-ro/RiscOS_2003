@@ -56,21 +56,3 @@ s.TokHelpSrc: Hdr:Tokens HelpSrc
         tokenise Hdr:Tokens HelpSrc $@
 
 # Dynamic dependencies:
-rm.Sound2: Hdr:ListOpts
-rm.Sound2: Hdr:Macros
-rm.Sound2: Hdr:System
-rm.Sound2: Hdr:SWIs
-rm.Sound2: Hdr:CPU.Generic26
-rm.Sound2: Hdr:IO.GenericIO
-rm.Sound2: Hdr:RISCOS
-rm.Sound2: Hdr:ModHand
-rm.Sound2: Hdr:Services
-rm.Sound2: Hdr:FSNumbers
-rm.Sound2: Hdr:NewErrors
-rm.Sound2: Hdr:PublicWS
-rm.Sound2: Hdr:Proc
-rm.Sound2: Hdr:Tokens
-rm.Sound2: Hdr:MsgTrans
-rm.Sound2: Hdr:Sound
-rm.Sound2: Version
-rm.Sound2: s.TokHelpSrc

@@ -65,16 +65,3 @@ ${EXP_HDR}.ATAPI: hdr.ATAPI
         ${CP} hdr.ATAPI $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.ATAPI: Version
-rm.ATAPI: hdr.Hashes
-rm.ATAPI: hdr.IDEdefs
-rm.ATAPI: hdr.Macros
-rm.ATAPI: hdr:ListOpts
-rm.ATAPI: hdr:CMOS
-rm.ATAPI: s.DriverCode
-rm.ATAPI: s.ATAPIStuff
-rm.ATAPI: s.Extras
-rm.ATAPI: s.OnError
-rm.ATAPI: s.Module
-rm.ATAPI: s.Variables
-rm.ATAPI: s.Strings

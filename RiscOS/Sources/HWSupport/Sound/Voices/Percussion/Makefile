@@ -52,18 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.Percussion: Hdr:ListOpts
-rm.Percussion: Hdr:Macros
-rm.Percussion: Hdr:System
-rm.Percussion: Hdr:SWIs
-rm.Percussion: Hdr:CPU.Generic26
-rm.Percussion: Hdr:IO.GenericIO
-rm.Percussion: Hdr:RISCOS
-rm.Percussion: Hdr:ModHand
-rm.Percussion: Hdr:PublicWS
-rm.Percussion: Hdr:Sound
-rm.Percussion: Hdr:Proc
-rm.Percussion: Hdr:MsgTrans
-rm.Percussion: Hdr:Services
-rm.Percussion: Version
-rm.Percussion: s.MsgCode

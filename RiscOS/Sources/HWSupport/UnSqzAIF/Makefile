@@ -41,16 +41,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.UnSqzAIF: Hdr:ListOpts
-rm.UnSqzAIF: Hdr:Macros
-rm.UnSqzAIF: Hdr:System
-rm.UnSqzAIF: Hdr:SWIs
-rm.UnSqzAIF: Hdr:CPU.Generic26
-rm.UnSqzAIF: Hdr:IO.GenericIO
-rm.UnSqzAIF: Hdr:RISCOS
-rm.UnSqzAIF: Hdr:Services
-rm.UnSqzAIF: Hdr:ModHand
-rm.UnSqzAIF: Hdr:MsgTrans
-rm.UnSqzAIF: Hdr:NdrDebug
-rm.UnSqzAIF: Version
-rm.UnSqzAIF: s.ModHead
