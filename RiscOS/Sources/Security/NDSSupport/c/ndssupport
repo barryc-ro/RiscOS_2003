@@ -167,14 +167,19 @@ int NDS_OS_CreateProcess (char                  *process_abbreviation,
 
       strcpy (Str, process_abbreviation);
       strcat (Str, " Thread");
-
+      
+      /* this needs to be assigned before forking the process otherwise it doesn't know its id */
+      *process_handle = free_slot;
+      
       {
             char buf[255];
             _kernel_stack_chunk* sc = calloc ((size_t) stack_size, 1);
             if (sc == 0) {
-//                dprintf (("", "not enough memory for new stack\n"));
+                dprintf (("", "not enough memory for new stack\n"));
                 return 0;
             }
+            
+            dprintf(("", "calloc stack chunk @ (0x%p)\n", sc));
 
             memcpy (sc + 1, _kernel_current_stack_chunk () + 1, 28);
             sc->sc_mark = CHUNK_MAGIC;
@@ -233,7 +238,8 @@ int NDS_OS_CreateProcess (char                  *process_abbreviation,
 
       this_task->queue_count = 0;
       this_task->max_queue_count = (int)queue_size;
-      *process_handle = free_slot;
+      
+      dprintf(("", "assigned process handle (%d) to task (%d)\n", free_slot, this_task->task_handle));
 #ifdef DEBUG_OUTPUT_ON         /* Debug output enabled */
 #ifdef OS_FLOW_CONTROL        /* Feature control level */
       {
@@ -375,6 +381,8 @@ int NDS_OS_CreateSemaphore (void **sem_handle, int  init_val)
 
    /* under RISC OS a semaphore is just a 32 bit word, passed to UpCall 6 */
    *sem_handle = malloc (sizeof (int));
+   
+   dprintf(("", "malloc semaphore handle @ (0x%p)\n", sem_handle));
 #ifdef DEBUG_OUTPUT_ON         /* Debug output enabled */
 #ifdef OS_FLOW_CONTROL        /* Feature control level */
       {
@@ -392,6 +400,27 @@ int NDS_OS_CreateSemaphore (void **sem_handle, int  init_val)
    }
 
    return result;
+}
+
+/**************************************************
+ *   NDS_OS_DestroySemaphore
+ **************************************************
+ * frees memory allocated for the semaphore
+ **************************************************
+ * Parameters sem_handle - handle to be freed
+ **************************************************
+ * Return values none
+ */
+void NDS_OS_DestroySemaphore(void ** sem_handle)
+{
+    if (sem_handle)
+    {
+        if (*sem_handle)
+        {
+            free (sem_handle);
+            (*sem_handle) = NULL;
+        }
+    }
 }
 
 /**************************************************
@@ -599,7 +628,6 @@ int NDS_OS_Get_MessageEx  (unsigned long process_handle, void *item, int max_len
    return 1;
 }
 
-
 /**************************************************
  *   RISC OS Specific code
  **************************************************
@@ -614,8 +642,11 @@ void unresolved (void) {
 extern int da_mem = -1;
 int da_number;
 #define NOTUSED(A) ((A)=(A))
-static int pollword = 0;
+/* this was not used instead the poll word has been used for passing messages */
+/* static int pollword = 0; */
 int task_id = -1;
+
+static FILE* f = NULL;
 
 int main (int argc, char* argv[]) {
     unsigned short ird_version = 1;
@@ -623,19 +654,19 @@ int main (int argc, char* argv[]) {
     unsigned long ver_version;
     WimpMessage block;
     int event_code;
-    FILE* f;
     _kernel_oserror* e;
     int messages[8] = {TaskWindow_Output,
                        TaskWindow_Ego,
                        ANT_MScriptRegister,
                        ANT_MScriptSend,
+                       ANT_MScriptClosed,
                        0};
     NOTUSED(argc);
     NOTUSED(argv);
 
     /* don't attempt to start the task again */
     if (task_id != -1) return 0;
-
+    
     e = wimp_initialise (310, thread_manager_task_name, messages, 0, &task_id);
     if (e) {
         _swi (OS_GenerateError, _IN (0), e);
@@ -643,29 +674,45 @@ int main (int argc, char* argv[]) {
     }
 
     dprintf (("","current stack chunk: %p\n", _kernel_current_stack_chunk ()));
+    
+    if (NDS_OS_STATUS_FAIL == NDS_OS_AppMsgr_Create())
+    {
+        return 0;
+    }
+    
     InitVerifier (ird_version, ird_id, &ver_version);
-
+    
     f = fopen ("pipe:out", "wb");
+    
+    if (f)
+    {
+        fprintf(f, "opened pipe:out for output\n");
+    }
     for (;;) {
         wimp_poll (
-            Wimp_Poll_NullMask | Wimp_Poll_PollWord,
+            Wimp_Poll_NullMask | Wimp_Poll_PollWord | Wimp_Poll_PollWordHighPriority,
             (WimpPollBlock*) &block,
-            &pollword,
+            &msgr_poll_word,
             &event_code);
 
         switch (event_code) {
+        /* the pollword is set at high priority to ensure it occurs before a message */
+        case Wimp_EPollWordNonZero:
+             msgr_poll_word_handler();
+             break;
         case Wimp_EUserMessage:
         case Wimp_EUserMessageRecorded:
             switch (block.hdr.action_code) {
             case Wimp_MQuit:
                 /* free any existing msgr structures */
-                NDS_OS_AppMsgr_TidyUp();
                 fclose (f);
                 exit (0);
                 break;
             case TaskWindow_Output:
                 fwrite (block.data.bytes + 4, block.data.words[0], 1, f);
                 fflush (f);
+                block.data.bytes[block.data.words[0]+4] = '\0';
+                dprintf(("", "thread message = (%s)\n", block.data.bytes+4));
                 break;//taskwindow_output (&block); break;
             case TaskWindow_Ego:
                 fprintf (f, "task %x started, thread %d\n",
@@ -674,13 +721,13 @@ int main (int argc, char* argv[]) {
                 NDS_task[block.data.words[0]].task_handle = block.hdr.sender;
                 break;
             case ANT_MScriptRegister:
-                msgr_register_handler(block.data.words);
+                msgr_register_handler((int*)&block);
                 break;
             case ANT_MScriptSend:
-                msgr_send_handler(block.data.words);
+                msgr_send_handler((int*)&block);
                 break;
             case ANT_MScriptClosed:
-                msgr_closed_handler(block.data.words);
+                msgr_closed_handler((int*)&block);
                 break;
             }
         }
@@ -726,13 +773,15 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void
         &da_number,         /* dynamic area number */
         &da_mem);           /* base address of area */
     if (e) return e;
+    
     memset ((char*) da_mem, 0, size);
+    
     debug_initialise ("Thread", "", "");
     debug_set_unbuffered_files (TRUE);
+    
     _kernel_register_slotextend (&thread_slotextend);
 
     dprintf (("", "da_mem at %x\n", da_mem));
-    printf ("da_mem at %x\n", da_mem);
 
     return 0;
 }
@@ -752,7 +801,12 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
     for (i = 0; i < NDS_MAX_TASK; ++i)
         if (NDS_task[i].status == NDS_IN_USE)
             if (!e) e = wimp_close_down (NDS_task[i].task_handle);
-
+    
+    NDS_OS_AppMsgr_TidyUp();
+    if (NULL != f)
+    {
+        fclose(f);
+    }
 //    if (!e) e = _swix (OS_DynamicArea, _INR(0, 1), 1, handle);
     return e;
 }

@@ -38,6 +38,11 @@ typedef struct
       int reason_code;
 } browser_message;
 
+int msgr_poll_word = 0;
+unsigned long msg_sender = 0;
+void *msgr_semaphore = NULL;
+
+static ncfresco_scriptmsg static_msg;
 /* the following structures are used held in the following order.
  *    - there exists one list of msgr_nds_structures.  There is a one to one relationship
  *    between this structure and a process id, bound to javascript by its unique id string.
@@ -98,10 +103,10 @@ static msgr_nds_struct *msgr_list = NULL;
 #else
 
 
-void  mem_check(void);
-void* msgr_malloc(size_t size);
-void* msgr_calloc(size_t n, size_t size);
-void  msgr_free(void* ptr);
+static void  mem_check(void);
+static void* msgr_malloc(size_t size);
+static void* msgr_calloc(size_t n, size_t size);
+static void  msgr_free(void* ptr);
 
 /* the following functions are for memory calculations they are done as part of
  * diagnostic builds to ensure that memory is not leaked in release builds.
@@ -142,6 +147,8 @@ static void* msgr_malloc(size_t size)
   ((int*)tmp)[1] = size;
 
   outstanding_data += size;
+  
+  dprintf(("", "msgr_malloc @ (%p)\n", tmp));
 
   return (tmp + initial_offset);
 }
@@ -194,6 +201,8 @@ static void msgr_free(void* ptr)
           }
       }
       outstanding_data -= size;
+      
+      dprintf(("", "msgr_free @ (%p)\n", tmp));
       free (tmp);
   }
 }
@@ -337,6 +346,8 @@ static int delete_msgr_jsos(msgr_nds_struct *idstr)
     {
         tmp2 = ((msgr_jso_struct*)(tmp))->next;
         ((msgr_jso_struct*)tmp)->next = NULL;
+        
+        dprintf(("", "deleting javascript objects (%p) next (%p)\n", tmp, tmp2));
 
         delete_msgr_msgs(tmp);
 
@@ -350,26 +361,31 @@ static int delete_msgr_jsos(msgr_nds_struct *idstr)
     return NDS_OS_STATUS_OK;
 }
 
-static int send_message_by_jso_struct(msgr_jso_struct* jso_id, const char* message_string)
+static int send_message_by_jso_struct(msgr_jso_struct* jso_id, unsigned long p_id, const char* message_string)
 {
     int ret_val = NDS_OS_STATUS_FAIL;
 
     if ((NULL != jso_id) &&
         (jso_id->task_num != 0))
-    {
-        ncfresco_scriptmsg msg;
+    {        
+        unsigned long block = 0;
 
-        memset(&msg, 0, sizeof(ncfresco_scriptmsg));
+        memset(&static_msg, 0, sizeof(ncfresco_scriptmsg));
 
-        memcpy(msg.data.strng, message_string, MAX_MSG_LENGTH);
+        memcpy(static_msg.data.strng, message_string, MAX_MSG_LENGTH);
 
-        msg.hdr.action_code = ANT_MScriptSend;
-        msg.hdr.size = sizeof(msg.hdr) + sizeof(msg.data.handle) + strlen(msg.data.strng) +1;
-        msg.hdr.size = ((msg.hdr.size) + 3) & ~3;
+        static_msg.hdr.action_code = ANT_MScriptSend;
+        static_msg.hdr.size = sizeof(static_msg.hdr) + sizeof(static_msg.data.handle) + strlen(static_msg.data.strng) +1;
+        static_msg.hdr.size = ((static_msg.hdr.size) + 3) & ~3;
 
-        msg.data.handle = jso_id->js_object_id;
-
-        wimp_send_message(wimp_USER_MESSAGE, (wimp_message*)&msg, jso_id->task_num);
+        static_msg.data.handle = jso_id->js_object_id;
+        
+        msgr_poll_word = (int)jso_id->task_num;
+        msg_sender    = p_id;
+        
+        dprintf(("", "sent message waiting for root process to send it\n"));
+        NDS_OS_Get_Message (p_id, &block);
+        dprintf(("", "sent message sent\n"));
 
         ret_val = NDS_OS_STATUS_OK;
     }
@@ -402,19 +418,22 @@ static int find_or_add_id_string_struct(const char* id_string, msgr_nds_struct**
     if (NULL == (*tmp))
     {
         msgr_nds_struct *tmp2 = msgr_calloc(1, sizeof(msgr_nds_struct)+strlen(id_string));
-
+        
         if (tmp2)
         {
             strcpy(tmp2->id_string, id_string);
 
-            tmp2->next = (*tmp);
-
+            tmp2->next = NULL;
+            
             (*tmp) = (void*)tmp2;
 
             (*ret_ptr) = (msgr_nds_struct*)(tmp2);
 
             ret_val = NDS_OS_STATUS_OK;
         }
+        
+        dprintf(("", "allocating new nds structure @ (%p) next (%p)\n",
+                       (*ret_ptr), (*ret_ptr)->next));
     }
 
     return ret_val;
@@ -427,7 +446,7 @@ static int remove_id_string_struct(const char* id_string)
     void **tmp = (void**)&msgr_list;
 
     while (NULL != (*tmp))
-    {
+    {        
         if (0 == strcmp(id_string, ((msgr_nds_struct*)(*tmp))->id_string))
         {
             break;
@@ -440,9 +459,9 @@ static int remove_id_string_struct(const char* id_string)
     {
         void *tmp2 = (*tmp);
 
-        (*tmp) = ((msgr_nds_struct*)(*tmp))->next;
-        ((msgr_nds_struct*)(*tmp))->next = NULL;
-
+        (*tmp) = (((msgr_nds_struct*)(*tmp))->next);
+        ((msgr_nds_struct*)(tmp2))->next = NULL;
+        
         delete_msgr_jsos(tmp2);
 
         msgr_free(tmp2);
@@ -478,6 +497,8 @@ static int assign_js_object_by_string(const char* id_string, wimp_t task, unsign
     {
         if (0 == strcmp(tmp->id_string, id_string))
         {
+            dprintf(("", "found registered listener p_id (%d)\n", (int)tmp->p_id));
+            
             ret_val = add_msgr_jso(tmp, handle, task);
             
             break;
@@ -508,6 +529,7 @@ static int assign_message_by_handle_and_task(const char* message, wimp_t task, u
                 
                 if (NDS_OS_STATUS_OK == ret_val)
                 {
+                    dprintf(("", "send message P_id (%d) JSO_id (%d)\n", (int)tmp->p_id, (int)jso_ptr->js_object_id));
                     ret_val = NDS_OS_Send_Message (tmp->p_id, jso_ptr->js_object_id);
                 }
                 
@@ -559,6 +581,9 @@ int msgr_register_handler(int *block)
     ncfresco_scriptmsg* data = (ncfresco_scriptmsg*)block;
     ncfresco_scriptmsg msg;
 
+    dprintf(("","got registration event from (%p) object (0x%x) (%s)\n",
+                       data->hdr.sender, data->data.handle, data->data.strng));
+    
     memset(&msg, 0, sizeof(ncfresco_scriptmsg));
 
     if (NDS_OS_STATUS_OK ==
@@ -580,9 +605,6 @@ int msgr_register_handler(int *block)
         msg.hdr.action_code = ANT_MScriptRegister;
 
         wimp_send_message(wimp_USER_MESSAGE, (wimp_message*)&msg,  data->hdr.sender);
-
-        dprintf(("","got registration event from (%p) object (0x%x) (%s)\n",
-                                data->hdr.sender, data->data.handle, data->data.strng));
     }
 
     return NDS_OS_STATUS_OK;
@@ -600,7 +622,7 @@ int msgr_send_handler(int* block)
 
     assign_message_by_handle_and_task(data->data.strng, data->hdr.sender, data->data.handle);    
 
-    dprintf(("", "got JSMessage handle (%d)\nmsg (%s)\n", data->handle, data->strng));
+    dprintf(("", "got JSMessage handle (%d)\nmsg (%s)\n", data->data.handle, data->data.strng));
 
     return NDS_OS_STATUS_OK;
 }
@@ -613,6 +635,8 @@ int msgr_closed_handler  (int *block)
     msgr_nds_struct* tmp = msgr_list;
     ncfresco_scriptmsg* data = (ncfresco_scriptmsg*)block;
 
+    dprintf(("", "tmp (%p) closed handler\n", tmp));
+    
     while (NULL != tmp)
     {
         if (0 == strcmp(data->data.strng, tmp->id_string))
@@ -625,25 +649,41 @@ int msgr_closed_handler  (int *block)
     return ret_val;
 }
 
-
-int NDS_OS_AppMsgr_TidyUp(void)
+int msgr_poll_word_handler (void)
 {
-    int ret_val = NDS_OS_STATUS_OK;
+    dprintf(("", "msgr_poll_word_handler: sending message from parent\n"));
+    
+    wimp_send_message(wimp_USER_MESSAGE, (wimp_message*)&static_msg, (wimp_t)msgr_poll_word);
+    
+    msgr_poll_word = 0;
+    
+    return NDS_OS_Send_Message (msg_sender, 0);
+}
 
+int NDS_OS_AppMsgr_Create(void)
+{    
+    dprintf(("", "creating semaphore\n"));    
+    
+    return NDS_OS_CreateSemaphore(&msgr_semaphore, 1);
+}
+
+void NDS_OS_AppMsgr_TidyUp(void)
+{
 #ifdef DEBUGLIB
-    ret_val = delete_id_string_structs();
 
     if (msgr_list)
     {
-        dprintf(("msgr", "AppMsgr_TidyUp is deleting objects left behind (error?(%d))\n", (ret_val == NDS_OS_STATUS_FAIL)));
+        dprintf(("", "AppMsgr_TidyUp is deleting objects left behind\n"));
     }
+    
+    delete_id_string_structs();
 
     mem_check();
 #else
-    ret_val = delete_id_string_structs();
+    delete_id_string_structs();
 #endif
 
-    return ret_val;
+    NDS_OS_DestroySemaphore(&msgr_semaphore);
 }
 
 int NDS_OS_AppMsgr_Register(const char* id_string, unsigned long p_id, unsigned int *msgr_handle)
@@ -653,13 +693,21 @@ int NDS_OS_AppMsgr_Register(const char* id_string, unsigned long p_id, unsigned 
 
     if (NULL != msgr_handle)
     {
+        dprintf(("", "requesting semaphore\n"));
+        
+        NDS_OS_RequestSemaphore(msgr_semaphore);
+        
+        dprintf(("", "NDS_OS_AppMsgr_Register: (%s) (%d) (%p)\n", id_string, (int)p_id, msgr_handle));
+        
         ret_val = find_or_add_id_string_struct(id_string, &nds_ptr);
 
         if (NDS_OS_STATUS_OK == ret_val)
         {
             nds_ptr->p_id = p_id;
             (*msgr_handle) = (unsigned int) nds_ptr;
-        }
+        }        
+        
+        NDS_OS_ReleaseSemaphore(msgr_semaphore);
     }
 
     return ret_val;
@@ -670,13 +718,20 @@ int NDS_OS_AppMsgr_Deregister(unsigned int msgr_handle)
     int ret_val = NDS_OS_STATUS_FAIL;
     void *tmp = (void*)&msgr_list;
 
+    dprintf(("", "NDS_OS_AppMsgr_Deregister: (%d)\n", msgr_handle));
+    
     while (NULL != tmp)
     {
         msgr_nds_struct* cmp = (msgr_nds_struct*)msgr_handle;
 
         if (cmp == tmp)
         {
+            NDS_OS_RequestSemaphore(msgr_semaphore);
+            
             ret_val = remove_id_string_struct(((msgr_nds_struct*)tmp)->id_string);
+            
+            NDS_OS_ReleaseSemaphore(msgr_semaphore);
+            
             break;
         }
         tmp = ((msgr_nds_struct*)tmp)->next;
@@ -689,6 +744,8 @@ int NDS_OS_AppMsgr_Read(unsigned int msgr_handle, unsigned int JSObjectID, char 
     int ret_val = NDS_OS_STATUS_FAIL;
     msgr_nds_struct* nds_ptr = NULL;
 
+    dprintf(("", "NDS_OS_AppMsgr_Read: (%d) (%d)\n", msgr_handle, JSObjectID));
+    
     ret_val = msgr_handle_check(msgr_handle, &nds_ptr);
 
     if (NDS_OS_STATUS_OK == ret_val)
@@ -700,6 +757,8 @@ int NDS_OS_AppMsgr_Read(unsigned int msgr_handle, unsigned int JSObjectID, char 
        {
            if (jso_ptr->js_object_id == JSObjectID)
            {
+               NDS_OS_RequestSemaphore(msgr_semaphore);
+               
                ret_val =  return_disconnected_top_msgr_msg(jso_ptr, &msg_ptr);
 
                if (NDS_OS_STATUS_OK == ret_val)
@@ -707,6 +766,8 @@ int NDS_OS_AppMsgr_Read(unsigned int msgr_handle, unsigned int JSObjectID, char 
                    memcpy(message_string, msg_ptr->msg, MAX_MSG_LENGTH);
                    msgr_free(msg_ptr);
                }
+               
+               NDS_OS_ReleaseSemaphore(msgr_semaphore);
                break;
            }
            jso_ptr = (msgr_jso_struct*)jso_ptr->next;
@@ -720,19 +781,22 @@ int NDS_OS_AppMsgr_Send(unsigned int msgr_handle, unsigned int JSObjectID, const
     int ret_val = NDS_OS_STATUS_FAIL;
     msgr_nds_struct* nds_ptr = NULL;
 
+    dprintf(("", "NDS_OS_AppMsgr_Send: (%d) (%d) (%s)\n", msgr_handle, JSObjectID, message_string));
+    
     ret_val = msgr_handle_check(msgr_handle, &nds_ptr);
 
     if (NDS_OS_STATUS_OK == ret_val)
     {
        msgr_jso_struct* jso_ptr = (msgr_jso_struct*)nds_ptr->jsos;
-
+       
        while (NULL != jso_ptr)
-       {
+       {           
            if (jso_ptr->js_object_id == JSObjectID)
            {
-               ret_val = send_message_by_jso_struct(jso_ptr, message_string);
+               ret_val = send_message_by_jso_struct(jso_ptr, nds_ptr->p_id, message_string);
                break;
            }
+           
            jso_ptr = (msgr_jso_struct*)jso_ptr->next;
        }
     }
@@ -745,13 +809,15 @@ int NDS_OS_AppMsgr_Broadcast(const char* message_string)
     int ret_val = NDS_OS_STATUS_OK;
     msgr_nds_struct* nds_ptr = msgr_list;
 
+    dprintf(("", "NDS_OS_AppMsgr_Broadcast: (%s)\n", message_string));
+
     while (NULL != nds_ptr)
     {
        msgr_jso_struct* jso_ptr = (msgr_jso_struct*)nds_ptr->jsos;
 
        while (NULL != jso_ptr)
        {
-           ret_val = send_message_by_jso_struct(jso_ptr, message_string);
+           ret_val = send_message_by_jso_struct(jso_ptr, nds_ptr->p_id, message_string);
            jso_ptr = (msgr_jso_struct*)jso_ptr->next;
        }
 

@@ -21,7 +21,7 @@ include ModuleLibs
 AIFDBG = aif.${COMPONENT}
 GPADBG = gpa.${COMPONENT}
 
-CFLAGS    += -throwback -zM -g
+CFLAGS    += -throwback -zM -g ${DEBUG}
 CINCLUDES = -IOS:,C:,tbox:
 ASFLAGS   += -G
 
