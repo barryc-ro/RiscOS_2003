@@ -20,9 +20,11 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+WIPE    = wipe
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
+WFLAGS  = ~c~v
 
 TOKENISE = tokenise
 TOKENS   = Hdr:Tokens
@@ -38,7 +40,7 @@ EXPORTS   = ${EXP_HDR}.Debugger
 #
 # Generic rules:
 #
-rom: $(TARGET)
+rom: $(TARGET) local_dirs
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -49,6 +51,8 @@ install_rom: $(TARGET)
         @echo ${COMPONENT}: rom module installed
 
 clean:
+        ${WIPE} rm.${MACHINE} ${WFLAGS}
+        ${RM} rm.${MACHINE}
         $(RM) $(TARGET)
         $(RM) TokHelpSrc
         @echo ${COMPONENT}: cleaned
@@ -68,6 +72,9 @@ resources-: resources_common
 	TokenCheck LocalRes:CmdHelp
 	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
+local_dirs:
+        ${MKDIR} rm.${MACHINE}
+
 $(TARGET): $(SOURCE) TokHelpSrc
         ${MKDIR} rm.${MACHINE}
         $(AS) $(ASFLAGS) $(SOURCE)
@@ -77,5 +84,6 @@ ${EXP_HDR}.Debugger: hdr.Debugger
 
 TokHelpSrc: $(TOKENS) HelpSrc
         $(TOKENISE) $(TOKENS) HelpSrc $@
+
 
 # Dynamic dependencies:
