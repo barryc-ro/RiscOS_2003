@@ -1,12 +1,12 @@
-# Makefile for WinFrame - resource export and final link only
+# Makefile for ICAClient - resource export and final link only
 #
 
 #
 # Paths
 #
 EXP_HDR = <CExport$Dir>
-RESAPP = <Resource$Dir>.Apps.!WinFrame
-RESRES = <Resource$Dir>.Resources.WinFrame
+RESAPP = <Resource$Dir>.Apps.!ICAClient
+RESRES = <Resource$Dir>.Resources.ICAClient
 SRC = Resources.${Locale}
 #
 # Generic options:
@@ -23,7 +23,7 @@ CPFLAGS = ~cfr~v
 #
 # Program specific options:
 #
-COMPONENT = WinFrame
+COMPONENT = ICAClient
 TARGET    = aof.${COMPONENT}
 
 ABSSYM    = RISC_OSLib:o.AbsSym
@@ -49,7 +49,7 @@ resources:
 	${CP} ${SRC}.!Help       ${RESAPP}.!Help    ${CPFLAGS}
 	${CP} ${SRC}.!Run        ${RESAPP}.!Run     ${CPFLAGS}
 	${CP} ${SRC}.!Sprites    ${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} ${SRC}.Sprites     ${RESRES}.Sprites ${CPFLAGS}
+	${CP} ${SRC}.EnsureTB    ${RESRES}.EnsureTB ${CPFLAGS}
 	${CP} ${SRC}.Messages    ${RESRES}.Messages ${CPFLAGS}
 	${CP} ${SRC}.Res         ${RESRES}.Res      ${CPFLAGS}
 	${CP} ${SRC}.Splash      ${RESRES}.Splash   ${CPFLAGS}
@@ -64,6 +64,7 @@ export_libs:
 	@echo ${COMPONENT}: export complete(libs)
 
 export_hdrs:
+	${CP} h.icaclient ${EXP_HDR}.h.icaclient ${CPFLAGS}
         @echo ${COMPONENT}: export complete(hdrs)
 
 #
