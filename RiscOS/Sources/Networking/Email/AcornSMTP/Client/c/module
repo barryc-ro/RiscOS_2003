@@ -1,0 +1,537 @@
+/*	Project Post (769)
+	Acorn Risc Technologies
+	Copyright © 1996. All Rights Reserved.
+
+	FILE:		module.c
+	AUTHOR:		Richard D. Warren
+	VERSION:	0.07 for RISC OS
+
+	OVERVIEW
+	========
+	Source file for implementation of relocatable module support code for
+	the AcornSMTP sending module.
+
+	HISTORY
+	=======
+	07/02/97	0.01	RDW	Initial version
+	10/02/97	0.02	RDW	Use of SWI_Nums enum added to make code more readable on case statements
+	10/02/97	0.03	RDW	Code added for timeout callafter setup/cancel
+	30/09/97	0.04	RDW	Setup of event handlers and cleanup in init_module and kill_module
+					removed because of bug on RMKilling the module
+	17/11/97	0.05	RDW	Merged in module.c from AcornPOP3 0.15
+	03/12/97	0.06	RDW	Fix swi_handler which had releasedata missing!
+	17/12/197	0.07	RDW	#include for callx fixed
+*/
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - System                                              */
+/*                                                                            */
+/* ************************************************************************** */
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "socklib.h"
+#ifdef TRACE
+  #include "TML_Podule.h"
+  #include "trace.h"
+#endif
+#ifdef MEMCHECK
+  #include "MemCheck:MemCheck.h"
+#endif
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - Project defined                                     */
+/*                                                                            */
+/* ************************************************************************** */
+#include "common.h"
+#include "module.h"
+#include "swihndlers.h"
+#include "errortable.h"
+#include "callx/callx.h"
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Preprocessor Stuff                                                         */
+/*                                                                            */
+/* ************************************************************************** */
+#if CMHG_VERSION < 500
+  #error "Deliberate Error: Need CMHG version 5.xx"
+#endif
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Constants                                                                  */
+/*                                                                            */
+/* ************************************************************************** */
+static const char str_Register[]           = "AcornSMTP_Register";
+static const char str_DeRegister[]         = "AcornSMTP_DeRegister";
+static const char str_ReleaseData[]        = "AcornSMTP_ReleaseData";
+static const char str_SendMail[]           = "AcornSMTP_SendMail";
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Global variables                                                           */
+/*                                                                            */
+/* ************************************************************************** */
+void *module_wsp;								// module workspace pointer
+BOOL  timeout_set;								// timeout set?
+BOOL  timeout_flag;								// timeout occured?
+int   timeouts[TIMEOUT_QUIT+1];							// value in [] must be last defined in timeout_name enum +1
+process_details process1;							// only one process in this version
+BOOL  inuse = FALSE;								// process1 in use by a client?
+static BOOL  EventV_claimed = FALSE;						// Event claimed?
+static BOOL  Internet_Event_enabled = FALSE;					// Registered for Internet event?
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Function Prototypes - Functions internal to source file                    */
+/*                                                                            */
+/* ************************************************************************** */
+static void set_timeouts(void);							// Function to set up default timeouts
+static _kernel_oserror *enable_eventhandler(void);				// Enable events and handler
+static _kernel_oserror *disable_eventhandler(void);				// Disablve events and handler
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* DEBUG Trace functions                                                      */
+/*                                                                            */
+/* ************************************************************************** */
+#ifdef TRACE
+  static in = 0;
+
+  void DebugStart(const char* fname)
+  {
+    int i = 0;
+    
+    for (i=0;i<in;i++)
+      Printf(" ");
+      
+    Printf("%s\n", fname);
+    in++;
+  }
+
+
+  void DebugStop(const char* fname)
+  {
+    int i = 0;
+    
+    for (i=0;i<in;i++)
+      Printf(" ");
+      
+    Printf("~%s\n", fname);
+    in--;
+  }
+#endif
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       swi_handler
+   DESCRIPTION:    Function to handle SWIs of this module.  Calls appropriate
+                   function for the given SWI number or returns error_BAD_SWI.
+                   Returns error_BAD_SWI if SWI number not recognised or returns
+                   value returned by SWI implementation function.
+   DEPENDENCIES:   function             handle_swi_AcornSMTP_Register		swihndlers.h
+                   function             handle_swi_AcornSMTP_DeRegister		swihndlers.h
+                   function             handle_swi_AcornSMTP_SendMail		swihndlers.h
+                   constant             error_BAD_SWI                   	header.h
+                   enum                 SWI_Nums                        	module.h
+   DEPENDED ON BY: 
+   INPUT PARAMS:   int                  swi_no          The SWI number
+                   _kernel_swi_regs*    r               registers
+                   void*                pw              pointer to workspace for this module
+   OUTPUT PARAMS:  none
+   RETURN VALUE:   			NULL		if SWI handled successfully,
+   							else ptr to error block
+   CONSTANTS:      
+   VARIABLES:      _kernel_oserror*     result          result to return
+                   SWI_Nums             swi_number      SWI number to use in case statement
+ */
+/* ************************************************************************** */
+_kernel_oserror* swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *result     = error_BAD_SWI;
+  SWI_Nums         swi_number = (SWI_Nums)swi_no;
+
+#ifdef MEMCHECK  
+  MemCheck_RegisterMiscBlock(r, sizeof(_kernel_swi_regs));
+#endif
+  
+  switch (swi_number)
+  {
+    case Register:								// AcornSMTP_Register
+      result = handle_swi_AcornSMTP_Register(r, pw);
+      break;
+    case DeRegister:								// AcornSMTP_DeRegister
+      result = handle_swi_AcornSMTP_DeRegister(r, pw);
+      break;
+    case ReleaseData:								// AcornSMTP_ReleaseData
+      result = handle_swi_AcornSMTP_ReleaseData(r, pw);
+      break;
+    case SendMail:								// AcornSMTP_SendMail
+      result = handle_swi_AcornSMTP_SendMail(r, pw);
+      break;
+    default:									// Catch unknown SWI
+      result = error_BAD_SWI;
+      break;
+  }
+
+#ifdef MEMCHECK  
+  MemCheck_UnRegisterMiscBlock(r);
+#endif
+  
+  return result;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       swi_decode_text_to_number
+   DESCRIPTION:    Function to return the SWI number offset from the SWI base 
+   		   number of the given SWI name.
+   DEPENDENCIES:   function		strncmp		<string.h>
+   		   function		strlen		<string.h>
+   		   const char[]		str_SendMail	module.c
+   DEPENDED ON BY: 
+   INPUT PARAMS:   const char*		string		name to convert, terminated
+   							by a control char.
+   		   void*		pw		Pointer to workspace
+   OUTPUT PARAMS:  
+   RETURN VALUE:   			-1		if SWI name not recognised
+   							else offset (0..63) of SWI
+   CONSTANTS:      
+   VARIABLES:      int			result		result to return
+ */
+/* ************************************************************************** */
+int swi_decode_text_to_number(const char *string, void *pw)
+{
+  int result = -1;
+  
+  if (strncmp(str_Register, string, strlen(str_Register)) == 0)
+    result = 0;
+  else if (strncmp(str_DeRegister, string, strlen(str_DeRegister)) == 0)
+    result = 1;
+  else if (strncmp(str_ReleaseData, string, strlen(str_ReleaseData)) == 0)
+    result = 2;
+  else if (strncmp(str_SendMail, string, strlen(str_SendMail)) == 0)
+    result = 3;
+
+  return result;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       swi_decode_number_to_text
+   DESCRIPTION:    Function to, given a SWI number, return the SWI name
+   DEPENDENCIES:   function             strlen		<string.h>
+   		   function		strncpy		<string.h>
+   		   constant		str_SendMail	module.c
+                   enum                 SWI_Nums                        module.h
+   DEPENDED ON BY: 
+   INPUT PARAMS:   int			swi_no		SWI number offset from SWI base for this module
+                   char*		buffer		buffer to copy string into
+                   int                  offset          offset position in buffer to copy string to
+                   int			end		end of buffer position
+                   void*                pw		Pointer to workspace
+   OUTPUT PARAMS:  char*                buffer          buffer holding string
+   RETURN VALUE:   int					new offset value
+   CONSTANTS:      none
+   VARIABLES:      SWI_Nums		swi_number	SWI number to use in case statement
+ */
+/* ************************************************************************** */
+int swi_decode_number_to_text(int swi_no, char *buffer, int offset, int size, void *pw)
+{
+  SWI_Nums         swi_number = (SWI_Nums)swi_no;
+  int      length     = 0;
+  char*    string     = 0;
+  
+  switch (swi_number)
+  {
+    case Register:					// AcornSMTP_Register
+      length = strlen(str_Register);
+      string = (char*)str_Register;
+      break;
+    case DeRegister:					// AcornSMTP_DeRegister
+      length = strlen(str_DeRegister);
+      string = (char*)str_DeRegister;
+      break;
+    case ReleaseData:					// AcornSMTP_ReleaseData
+      length = strlen(str_ReleaseData);
+      string = (char*)str_ReleaseData;
+      break;    
+    case SendMail:					// AcornSMTP_SendMail
+      length = strlen(str_SendMail);
+      string = (char*)str_SendMail;
+      break;
+    default:						// Catch all
+      length = 0;
+      string = 0;
+      break;
+  }
+  
+  if (string == 0)					// SWI number not recognised
+    offset = offset;
+  else
+  {
+    int space = size - offset;				// Calculate end of space in buffer for our string
+    strncpy(buffer+offset, string, space);		// Copy our string into buffer
+    if (space < length)					// If space available was smaller than the length of our string, then
+      offset += space;					//   offset is increased by space as we'll have used it all
+    else						// else
+      offset += length;					//   offset is increased by the length of our string
+  }
+  
+  return offset;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       init_module
+   DESCRIPTION:    Function to initialise module global vars, etc. on startup
+		   Return NULL if your initialisation succeeds; otherwise return a pointer
+		   to an error block. cmd_tail points to the string of arguments with which
+		   the module is invoked (may be "").
+		   podule_base is 0 unless the code has been invoked from a podule.
+		   pw is the 'R12' value established by module initialisation. You may
+		   assume nothing about its value (in fact it points to some RMA space
+		   claimed and used by the module veneers). All you may do is pass it back
+		   for your module veneers via an intermediary such as SWI OS_CallEvery
+		   (use _swix() to issue the SWI call).
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+   		   BOOL			in_use			process1 in use flag
+   		   process_details	process1		client process state
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error			result to return
+   		   _kernel_oserror*	error2			rcode from disable_eventhandler
+ */
+/* ************************************************************************** */
+_kernel_oserror *init_module(char *cmd_tail, int podule_base, void *pw)
+{
+  _kernel_oserror *error  = 0;
+  _kernel_oserror *error2 = 0;
+  module_wsp = pw;
+
+#ifdef MEMCHECK
+  MemCheck_InitNoDebug();
+  MemCheck_RedirectToFilename(tmpnam(0));
+  MemCheck_SetStoreMallocFunctions(1);
+  MemCheck_InterceptSCLStringFunctions();
+#endif
+
+  UNUSED(podule_base);
+  UNUSED(cmd_tail);
+  
+#ifdef TRACE
+  Trace_IgnoreFunctions("DebugStart DebugStop Printf event_handler handle_Socket_Async_Event _dprintf");
+  Trace_SetHandlers((Trace_fnstarthandler)DebugStart, (Trace_fnstophandler)DebugStop);
+  Trace_InterceptAllFunctions();
+#endif
+
+  callx_init(module_wsp);
+  // INIT globals
+  inuse = FALSE;  
+  process1.socknum = -1;
+  process1.read_buf_pos = 0;
+  process1.read_buf_size = READBUFLEN;
+  memset(process1.read_buffer, 0, process1.read_buf_size);
+  process1.pollword = 0;  
+  process1.state = PROCESSING;
+  set_timeouts();								// Use hardcoded timeouts  
+  EventV_claimed         = FALSE;
+  Internet_Event_enabled = FALSE;
+
+  error = enable_eventhandler();						// Enable Event handler for Internet Event
+  if (error)									// If failed then
+    error2 = disable_eventhandler();						// Disable the event
+  
+  if (error2)									// If disable_eventhandler returned an error then report that error
+    error = error2;								// else report the error from enabling the event handler
+    
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       kill_module
+   DESCRIPTION:    Function to close down module 
+		   Return NULL if your finalisation succeeds. Otherwise return a pointer to
+		   an error block if your finalisation handler does not wish to die (e.g.
+		   toolbox modules return a 'Task(s) active' error).
+		   fatal, podule and pw are the values of R10, R11 and R12 (respectively)
+		   on entry to the finalisation code.
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+		   process_details	process1		client process state
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      _kernel_oserror*	error			result to return
+ */
+/* ************************************************************************** */
+_kernel_oserror *kill_module(int fatal, int podule, void *pw)
+{
+  _kernel_oserror *error = 0;
+  module_wsp = pw;
+
+  UNUSED(podule);
+  UNUSED(fatal);
+  
+  if (process1.socknum != -1)							// If process has a valid socket allocated, then
+  {
+    shutdown(process1.socknum, 2);						// ensure it's connection is closed
+    socketclose(process1.socknum);						// deallocate the socket
+  }
+  
+  error = callx_remove_all_callafters();
+  error = callx_remove_all_callbacks();
+  error = disable_eventhandler();						// disable event handlers
+
+#ifdef MEMCHECK
+  MemCheck_OutputBlocksInfo();
+#endif
+    
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       set_timeouts
+   DESCRIPTION:    Function to setup default timeouts (UNUSED ATM) Needs to be
+   		   finished.
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void set_timeouts(void)
+{
+  timeouts[RETRY_1]           = 2;	// Retry X times in 1st hour
+  timeouts[RETRY_2]           = 3;	// Wait X hours between each retry after RETRY_1 has failed
+  timeouts[RETRY_3]           = 4;	// Number of days to repeat RETRY_2 before giving up
+  timeouts[TIMEOUT_default]   = 5;	// Number of minutes
+  timeouts[TIMEOUT_connect]   = 5;	// Number of minutes to wait for 220 response on initial connection to server
+  timeouts[TIMEOUT_DATAblock] = 3;	// Number of minutes to wait before giving up sending a block of data
+  timeouts[TIMEOUT_msgACKed]  = 10;	// Number of minutes to wait for 250 okay or error response from server after sending CRLF.CRLF
+  timeouts[TIMEOUT_MAIL]      = 5;	// Number of minutes to wait after sending MAIL command
+  timeouts[TIMEOUT_RCPT]      = 5;	// Number of minutes to wait after sending RCPT command
+  timeouts[TIMEOUT_DATA]      = 2;	// Number of minutes to wait after sending DATA command
+  timeouts[TIMEOUT_HELO]      = 5;	// Number of minutes to wait after sending HELO command
+  timeouts[TIMEOUT_QUIT]      = 2;	// Number of minutes to wait after sending QUIT command
+}
+    
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       enable_eventhandler
+   DESCRIPTION:    Function to claim events and enable Internet Event
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+   		   type			_kernel_oserror		kernel.h
+   		   type			_kernel_swi_regs	kernel.h
+   		   global		EventV_claimed		module.c
+   		   global		Internet_Event_enabled	module.c
+   		   constant		EventV			common.h
+   		   constant		Internet_Event		common.h
+   		   constant		Event_Enable		common.h
+   DEPENDED ON BY: function		init_module		module.c
+   INPUT PARAMS:   NONE
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   _kernel_oserror*	NULL			if all okay, else error block
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error			result to return
+   		   _kernel_swi_regs	r			SWI registers
+ */
+/* ************************************************************************** */
+static _kernel_oserror *enable_eventhandler(void)
+{
+  _kernel_oserror *error = 0;							// Error to return
+  _kernel_swi_regs r;								// Processor registers
+  
+  r.r[0] = EventV;
+  r.r[1] = (int)event_entry;
+  r.r[2] = (int)module_wsp;
+  error = _kernel_swi(OS_Claim, &r, &r);					// Claim EventV
+
+  if (!error)
+  {
+    EventV_claimed = TRUE;							// set claimed global to TRUE
+    r.r[0] = Event_Enable;
+    r.r[1] = Internet_Event;
+    error = _kernel_swi(OS_Byte, &r, &r);					// Enable Internet Event
+  }
+  
+  if (!error)
+    Internet_Event_enabled = TRUE;						// enabled global to TRUE
+    
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       disable_eventhandler
+   DESCRIPTION:    Function to release claimed events and disable event handler
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+   		   type			_kernel_oserror		kernel.h
+   		   type			_kernel_swi_regs	kernel.h
+   		   global		EventV_claimed		module.c
+   		   global		Internet_Event_enabled	module.c
+   		   constant		EventV			common.h
+   		   constant		Internet_Event		common.h
+   		   constant		Event_Disable		common.h
+   DEPENDED ON BY: function		kill_module		module.c
+   INPUT PARAMS:   NONE
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   _kernel_oserror*	NULL			if all okay, else error block
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error			result to return
+   		   _kernel_swi_regs	r			SWI registers
+ */
+/* ************************************************************************** */
+static _kernel_oserror *disable_eventhandler(void)
+{
+  _kernel_oserror *error = 0;							// Error to return
+  _kernel_swi_regs r;								// Processor registers
+  
+  if (Internet_Event_enabled)
+  {
+    r.r[0] = Event_Disable;							// Disable Internet Event
+    r.r[1] = Internet_Event;
+    error = _kernel_swi(OS_Byte, &r, &r);					// Call SWI
+    if (!error)									// If no error then
+      Internet_Event_enabled = FALSE;						// set enabled global to FALSE
+  }
+    
+  if ((!error) && (EventV_claimed))
+  {
+    r.r[0] = EventV;
+    r.r[1] = (int)event_entry;							// Entry point defined by cmhg
+    r.r[2] = (int)module_wsp;							// Our workspace ptr
+    error = _kernel_swi(OS_Release, &r, &r);					// Release EventV
+    if (!error)									// If no error then
+      EventV_claimed = FALSE;							// set claimed global to FALSE
+  }
+
+  return error;
+}
