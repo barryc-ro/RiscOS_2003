@@ -29,6 +29,7 @@ AR	= LibFile
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
+CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
 DFLAGS  = ${DEBUG}
@@ -53,9 +54,7 @@ INCLUDES = -IC:,TCPIPLibs:,<Lib$Dir>.
 COMPONENT = CSFS
 TARGET    = aof.${COMPONENT}
 
-OBJS      =	\
-o.modulewrap \
-o.header   \
+BASEOBJS      =	\
 o.RMInfo   \
 o.csfserr  \
 o.sfs      \
@@ -85,15 +84,23 @@ o.args	    \
 o.getbytes  \
 o.putbytes  \
 o.xstr	    \
-o.usermode  \
+o.usermode
+
+OBJS =    oz.header oz.modulewrap oz.resources ${BASEOBJS}
+ROMOBJS = o.header o.modulewrap o.resources ${BASEOBJS}
 
 
 #
 # Rule patterns
 #
+.SUFFIXES: .oz
+
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} $< $@
-.s.o:;      ${AS} ${AFLAGS} $< $@
+.c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DSTANDALONE
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} $< $@
+.cmhg.oz:;  ${CMHG} ${CMHGFLAGS} $< $@ -DSTANDALONE
+.s.o:;      ${AS} ${AFLAGS}  $< $@ -Predefine "STANDALONE SETL {FALSE}"
+.s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "STANDALONE SETL {TRUE}"
 
 #
 # build a relocatable module:
@@ -120,6 +127,7 @@ resources:
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} oz.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
@@ -128,6 +136,7 @@ clean:
 dirs:
 	${MKDIR} rm
 	${MKDIR} o
+	${MKDIR} oz
 	${MKDIR} linked
 	${MKDIR} map
 	${MKDIR} aof
@@ -135,8 +144,8 @@ dirs:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${INETLIB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${INETLIB}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -165,6 +174,7 @@ o.modulewrap:	h.veneers
 o.modulewrap:	h.Interface
 o.modulewrap:	h.fsentries
 o.modulewrap:	h.modulewrap
+o.modulewrap:	h.resources
 o.modulewrap:	h.str
 o.modulewrap:	h.etc
 o.modulewrap:	h.csfserr
@@ -177,6 +187,17 @@ o.modulewrap:	h.mem
 o.modulewrap:	h.mount
 o.modulewrap:	h.update
 o.modulewrap:	h.service
+o.resources: s.resources
+o.resources: hdr:ListOpts
+o.resources: hdr:Macros
+o.resources: hdr:System
+o.resources: Hdr:SWIs
+o.resources: Hdr:CPU.Generic26
+o.resources: Hdr:IO.GenericIO
+o.resources: Hdr:RISCOS
+o.resources: hdr:ModHand
+o.resources: hdr:ResourceFS
+o.resources: hdr:Proc
 o.RMInfo: s.RMInfo
 o.csfserr:	c.csfserr
 o.csfserr:	C:h.kernel
@@ -641,3 +662,37 @@ o.xstr:	C:h.swis
 o.xstr:	h.flex
 o.xstr:	h.xstr
 o.usermode: s.usermode
+oz.modulewrap:	c.modulewrap
+oz.modulewrap:	C:h.kernel
+oz.modulewrap:	C:h.swis
+oz.modulewrap:	h.Consts
+oz.modulewrap:	<Lib$Dir>.debug.h.remote
+oz.modulewrap:	h.RMInfo
+oz.modulewrap:	h.veneers
+oz.modulewrap:	h.Interface
+oz.modulewrap:	h.fsentries
+oz.modulewrap:	h.modulewrap
+oz.modulewrap:	h.resources
+oz.modulewrap:	h.str
+oz.modulewrap:	h.etc
+oz.modulewrap:	h.csfserr
+oz.modulewrap:	h.fs
+oz.modulewrap:	h.sfs
+oz.modulewrap:	h.arcs
+oz.modulewrap:	h.cat
+oz.modulewrap:	h.link
+oz.modulewrap:	h.mem
+oz.modulewrap:	h.mount
+oz.modulewrap:	h.update
+oz.modulewrap:	h.service
+oz.resources: s.resources
+oz.resources: hdr:ListOpts
+oz.resources: hdr:Macros
+oz.resources: hdr:System
+oz.resources: Hdr:SWIs
+oz.resources: Hdr:CPU.Generic26
+oz.resources: Hdr:IO.GenericIO
+oz.resources: Hdr:RISCOS
+oz.resources: hdr:ModHand
+oz.resources: hdr:ResourceFS
+oz.resources: hdr:Proc
