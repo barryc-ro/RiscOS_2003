@@ -1,0 +1,346 @@
+/****************************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC  27615
+/               (919) 846-7171
+/
+/
+/       This document contains material confidential to RSA its contents must
+/       not be revealed, used or disclosed to anyone or company with out
+/       written permission by RSA.  The information contained herein is solely
+/       for the use of RSA.
+/
+/       File:           M10_BTLZ.C
+/
+/       Module Version: 4.02
+/
+/       Function:       MNP10 Controller for the V.42bis (BTLZ) code.
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:    9/10/92
+/                       11/1/94 (V4.01) - Add ETC and MNP10 updates
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "btdecode.edf"
+#include "btencode.edf"
+#include "mnp_if.edf"
+#include "mnp_def.h"
+#include "mnp_stru.h"
+#include "dte.edf"
+
+extern ubyte send_credits;
+extern ubyte *tx_data_ptr;
+extern ubyte *rx_data_ptr;
+extern ubyte process_que__in;
+extern ubyte process_que__out;
+extern uword lna_delay_count;
+extern uword max_chars;
+extern struct buffer_entry transmit_buffer [NUMBER_OF_MNP_BUFFERS];
+extern ubyte transmit_working_frame;
+extern uword i_count;
+extern ubyte *empty_lt_status_holder;
+extern struct buffer_entry *rx_buf_ptr;
+extern ubyte empty_lt_in_progress;
+extern ubyte tx_packet_to_finish;
+extern ubyte tx_input_pointer;
+extern ubyte *btlzdataptr;
+extern ubyte tx_send_pointer;
+extern ubyte need_tx_frame;
+extern ubyte tx_ready;
+extern ubyte rx_needed;
+extern ubyte V42bis_P0;
+extern ubyte V42bis_P2;
+extern uword dte_to_block_free_count;
+extern ubyte *dte_tx_block_pointer;
+extern uword dte_to_block_update_count;
+extern ubyte btlzrx_done;
+extern ubyte reenter_decode;
+extern ubyte index_max;
+extern uword dte_from_block_num_count;
+extern uword dte_from_block_update_count;
+extern ubyte *dte_rx_block_pointer;
+extern ubyte index;
+extern ubyte btlztx_done;
+
+void M10_BTLZ_Balance(void);
+void M10_BTDecode_driver(void);
+void M10_BTEncode_driver(void);
+void M10_build_v42bis(void);
+ubyte M10_check_v42bis_flush(void);
+
+
+/*****************************************************************************
+/									     /
+/	ROUTINE: M10_BTLZ_balance					     /
+/									     /
+/	Uses V42bis_P0 to determine if compression is used and if so in      /
+/	what direction. 						     /
+/									     /
+/	PARAMETERS IN:	none						     /
+/									     /
+/	PARAMETERS OUT: none						     /
+/									     /
+*****************************************************************************/
+void M10_BTLZ_Balance(void)
+{
+	need_tx_frame = ((send_credits) && (mpg_tx_buffer_available()==OK));
+
+	mmu_open_btlz_win
+
+	do
+	{
+		tx_ready = rx_needed = FALSE;
+
+		if (V42bis_P0 & 1)
+		{
+			if (tx_data_ptr)
+			{
+				if (dte_from_block_num())
+					tx_ready = TRUE;
+			}
+			else
+			{
+				if ((need_tx_frame) && (dte_from_num()))
+					break;
+			}
+		}
+
+		if ((dte_to_free() > V42bis_P2 + 2) && (rx_data_ptr) &&
+		    (V42bis_P0 & 2))
+			rx_needed = TRUE;
+
+		if (rx_needed)
+			M10_BTDecode_driver();
+
+		if (tx_ready)
+			M10_BTEncode_driver();
+
+/*		if (process_dce_bg_flag) */ /* Needed with sofware UARTs */
+/*			break;		 */
+/*			mnp_line_bg();	 */
+
+	}
+	while ((tx_ready) || (rx_needed));
+
+	mmu_close_btlz_win
+}
+
+
+/*****************************************************************************
+/									     /
+/	ROUTINE: M10_BTDecode_driver					     /
+/									     /
+/	PARAMETERS IN:	none						     /
+/									     /
+/	PARAMETERS OUT: none						     /
+/									     /
+*****************************************************************************/
+void M10_BTDecode_driver(void)
+{
+	dte_to_block_free_count = dte_to_block_free();
+	if (dte_to_block_free_count > 255)
+		dte_to_block_free_count = 255;
+
+	dte_tx_block_pointer = dte_to_block_pointer();
+
+	dte_to_block_update_count = 0;
+
+	BTDecode();
+
+	dte_to_block_update(dte_to_block_update_count);
+
+	if ((btlzrx_done) && (!reenter_decode))
+	{
+		rx_data_ptr = NUL;
+		*empty_lt_status_holder = MNP_BUFFER_EMPTY;
+		empty_lt_in_progress = FALSE;
+	}
+}
+
+
+/*****************************************************************************
+/									     /
+/	ROUTINE: M10_BTEncode_driver					     /
+/									     /
+/	PARAMETERS IN:	none						     /
+/									     /
+/	PARAMETERS OUT: none						     /
+/									     /
+/	Author & Date: RSA/keh 10/31/96
+/	Description: add code to close outgoing frames if a no non-expedited
+/              mnp+v42bis break is buffered in the  DTE
+/	Reason: non-expedited mnp+v42bis breaks are misplaced in the data stream
+/
+*****************************************************************************/
+void M10_BTEncode_driver(void)
+{
+	if (max_chars > 248)
+		index_max = 248;
+	else
+		index_max = (ubyte)max_chars - 7;
+
+	dte_from_block_num_count = dte_from_block_num();
+
+	if ((lna_delay_count) && (dte_from_block_num_count > lna_delay_count))
+		dte_from_block_num_count = lna_delay_count;
+
+	if (dte_from_block_num_count > 255)
+		dte_from_block_num_count = 255;
+
+	dte_from_block_update_count = 0;
+	dte_rx_block_pointer = dte_from_block_pointer();
+
+	BTEncode();
+
+	dte_from_block_update(dte_from_block_update_count);
+
+/* start change keh 10/31/96 1/2 => non-expedited mnp+v42bis breaks are misplaced */
+/*****
+	if (lna_delay_count)
+		lna_delay_count -= dte_from_block_update_count;
+******/
+/* end change keh 10/31/96 1/2 => non-expedited mnp+v42bis breaks are misplaced */
+
+	transmit_buffer[(uword)transmit_working_frame].pdu_length = index + i_count;
+	tx_packet_to_finish = TRUE;
+
+/* start change keh 10/31/96 2/2 => non-expedited mnp+v42bis breaks are misplaced */
+   /* Waiting on a break in the dte receive buffer? */
+	if (lna_delay_count)
+   {
+       /* Update break position with # chars removed from the DTE buffer
+           by V.42bis */
+		lna_delay_count -= dte_from_block_update_count;
+
+       /* If the break is here, finish-off the current frame
+           so the break is sent chronologically */
+		if (lna_delay_count == 0)
+       {
+           /* Let V.42bis finish it's work on the current frame */
+			BTFlush();
+			transmit_buffer[(uword)transmit_working_frame].pdu_length = i_count + index;
+			tx_packet_to_finish = FALSE;
+           btlztx_done = TRUE;
+       }
+   }
+/* end change keh 10/31/96 2/2 => non-expedited mnp+v42bis breaks are misplaced */
+
+	if (btlztx_done)
+	{
+		mmu_close_btlz_win
+		tx_data_ptr = NUL;
+		tx_input_pointer = mpg_inc_ring_ptr(tx_input_pointer);
+		mmu_open_btlz_win
+	}
+}
+
+
+/*******************************************************************************
+/
+/	Routine: M10_build_v42bis
+/
+/	Author : RSA
+/
+/	Creation Date: 03/13/92
+/
+/	Description : This Routine will set up to encode V.42bis data.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: None
+/
+/	Global Variables Changed:  tx_input_pointer, max_chars, btlztx_done,
+/				   index, btlzdataptr
+/
+/	Users: build_lt()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+void M10_build_v42bis(void)
+{
+	if (tx_data_ptr == 0)
+	{
+		mpg_init_tx_frame();
+
+		tx_input_pointer = transmit_working_frame;
+		max_chars-=5;
+
+		/* set up */
+		btlztx_done = FALSE;
+		index = 0;
+		btlzdataptr = tx_data_ptr;
+	}
+}
+
+
+/*******************************************************************************
+/
+/	Routine: M10_check_v42bis_flush
+/
+/	Author : RSA
+/
+/	Creation Date: 03/13/92
+/
+/	Description : This Routine will determine if the current LT packet
+/		      should be sent and the V.42bis dictionary flushed.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: None
+/
+/	Global Variables Changed:  None
+/
+/	Users: mnp_bg()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+ubyte M10_check_v42bis_flush(void)
+{
+      	if ((V42bis_P0 & 1) && (tx_send_pointer == tx_input_pointer))
+	{
+		if ((dte_from_num() == 0) && (tx_packet_to_finish))
+		{
+			BTFlush();
+			tx_packet_to_finish = FALSE;
+			tx_data_ptr = 0;
+			tx_input_pointer = mpg_inc_ring_ptr(tx_input_pointer);
+			transmit_buffer[(uword)transmit_working_frame].pdu_length = i_count + index;
+			return(TRUE);
+		}
+		else
+			return(FALSE);
+	}
+	return(TRUE);
+}
+
