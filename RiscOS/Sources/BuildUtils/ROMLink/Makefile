@@ -8,7 +8,7 @@
 # 27-Jul-94  AMcC         Created.
 #
 
-TOOLSDIR = <Tools$Dir>
+TOOLSDIR = ${INSTDIR}
 #
 # Generic options:
 #
@@ -75,5 +75,3 @@ symgen: symgen.o
         ${LD} -o $@ symgen.o ${CLIB}
 
 # Dynamic dependencies:
-o.xtentries:	c.xtentries
-o.symgen:	c.symgen
