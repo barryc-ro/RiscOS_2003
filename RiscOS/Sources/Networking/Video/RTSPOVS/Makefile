@@ -21,13 +21,11 @@ ROM_MODULE	= aof.${COMPONENT}
 RAM_MODULE	= rm.${COMPONENT}
 DBG_MODULE	= rm.${COMPONENT}-tr
 
-RESFSDIR	= Resources.${COMPONENT}
-
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
 #
 
-RESDIR		= <resource$dir>.Resources2.RTSPOVS
+RESDIR		= <resource$dir>.Resources2.VideoCtrl
 
 # -----------------------------------------------------------------------------
 # Generic options
@@ -53,7 +51,6 @@ RAMFLAGS	= -UROM
 INCLUDES	= -ITCPIPLibs:,C:
 
 # Extra compilation options:
-#
 # ALWAYS_CLAIM_EVENTV		The module will sit on EventV from the moment
 #				it starts to the moment it dies if this is
 #				defined. Otherwise, it'll only claim it for
