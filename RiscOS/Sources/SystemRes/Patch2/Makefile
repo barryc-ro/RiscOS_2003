@@ -26,7 +26,9 @@ dirs:
 
 install: ram
         ${MKDIR} ${INSTDIR}
+        Access ${INSTDIR} RW/R
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        Access ${INSTDIR}.${COMPONENT} RW/R
         @echo ${COMPONENT}: module installed (disc).
 
 # User-editable dependencies:
