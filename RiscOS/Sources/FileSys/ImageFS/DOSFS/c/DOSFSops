@@ -35,6 +35,12 @@
 #include "h.ADFSshape"
 #include "h.Statics"
 
+#define MimeMap_Translate       0x50B00
+#define MMM_TYPE_RISCOS         0
+#define MMM_TYPE_RISCOS_STRING  1
+#define MMM_TYPE_MIME           2
+#define MMM_TYPE_DOT_EXTN       3
+
 #define ReadOnlyMapsLocked 1
  /* JRS 9/3/92 map DOS ReadOnly bit to RISC OS Locked bit only.
   * This is to fix problem with FilerAction setting access 0 to force-delete.
@@ -288,26 +294,54 @@ static int DOS_image_RW(int op,word sec,int off,byte *ma,word nbytes,DOSdisc *ih
  return(0) ;
 }
 
+static void map_FILE_ROStype(DOS_direntry *dentry,word dosext,time5byte *le)
+{
+ _kernel_swi_regs rset ;
+ int value = TRUE;
+
+ /* Try to determine whether this really is a ROS filetype or a win95 'creation time' */
+ if ((dentry->FILE_reserved[1] & 0xF0) == 0)
+  {
+  tracef1("filetype lookup,found in spare bytes 0x%X3\n", value);
+  value = get_FILE_ROStype(dentry);
+  }
+ /* No filetype in the spare bytes,so have a look through DOSmap */
+ if (value == TRUE)
+  {
+  mapentry *cmap ;
+  for (cmap = maplist; (cmap); cmap = cmap->next)
+   if (cmap->dosext == dosext)
+    {
+    value = cmap->ROtype;
+    tracef1("filetype lookup,found in dosmap 0x%X3\n", value);
+    break; /* the for loop */
+    }
+  }
+ /* Found neither a filetype nor an override mapping,try MimeMap */
+ if (value == TRUE)
+  {
+  rset.r[0] = MMM_TYPE_DOT_EXTN;
+  rset.r[1] = (int)&dosext;
+  rset.r[2] = MMM_TYPE_RISCOS;
+  if (_kernel_swi(MimeMap_Translate, &rset, &rset) == NULL)
+   {
+   value = rset.r[3];
+   tracef1("filetype lookup,found in mimemap 0x%X3\n", value);
+   }
+  }
+ /* Give up,just set it as 'DOStype' */
+ if (value == TRUE) value = DOStype;
+
+ le->hi = (le->hi & ~ADFStypemask) | (value << ADFStypeshift) ;
+ return;
+}
+
 /*---------------------------------------------------------------------------*/
 
 static void read_loadexec(DOS_direntry *dentry,word dosext,time5byte *le)
 {
- int value ;
-
  MSDOStoRISCOS(get_FILE_time(dentry),get_FILE_date(dentry),le) ;
- value = get_FILE_ROStype(dentry) ;
- if (value != 0)
-  le->hi = (le->hi & ~ADFStypemask) | (value << 8) ;
- else
-  {
-   mapentry *cmap ;
-   for (cmap = maplist; (cmap); cmap = cmap->next)
-   if (cmap->dosext == dosext)
-    {
-     le->hi = (le->hi & ~ADFStypemask) | (cmap->ROtype << 8) ;
-     break ;
-    }
-  }
+ map_FILE_ROStype(dentry,dosext,le);
  return ;
 }
 
@@ -1676,20 +1710,8 @@ static FS_dir_block *read_dir(int rtype,char *fname,word dest,word num,word off,
            /* check if the file has RISC OS information in its spare bytes */
            if (rtype)
             {
-             int value = get_FILE_ROStype(dentry) ;
-             if (value != 0) /* non-NULL then this is the RISC OS filetype */
-              le.hi = (le.hi & ~ADFStypemask) | (value << 8) ;
-             else
-              {
-               mapentry *cmap ;
-               /* NO so use the calculated DOS extension */
-               for (cmap = maplist; (cmap); cmap = cmap->next)
-                if (cmap->dosext == dosext)
-                 {
-                  le.hi = (le.hi & ~ADFStypemask) | (cmap->ROtype << 8) ;
-                  break ; /* the for loop */
-                 }
-              }
+             /* Try to find the filetype */
+             map_FILE_ROStype(dentry,dosext,&le);
 
              /* RISC OS required information */
              entries->loadaddr = le.hi ;
@@ -2351,22 +2373,8 @@ FS_open_block *DOSFS_open_file(word op,char *fname,DOSdisc *ihand)
  tracef1("DOSFS_open_file: FILE_list (after)  = &%08X\n",(int)FILE_list) ;
 
  /* convert the MSDOS timestamp to a RISC OS 5byte value */
- MSDOStoRISCOS(get_FILE_time(dentry),get_FILE_date(dentry),&le) ;
- {
-  int value = get_FILE_ROStype(dentry) ;
-  if (value != 0)
-   le.hi = (le.hi & ~ADFStypemask) | (value << 8) ;
-  else
-   {
-    mapentry *cmap ;
-    for (cmap = maplist; (cmap); cmap = cmap->next)
-     if (cmap->dosext == dosext)
-      {
-       le.hi = (le.hi & ~ADFStypemask) | (cmap->ROtype << 8) ;
-       break ;
-      }
-   }
- }
+ read_loadexec(dentry,dosext,&le);
+
  fdesc->loadaddr = le.hi ; /* load address */
  fdesc->execaddr = le.lo ; /* exec address */
 
@@ -3129,21 +3137,7 @@ FS_cat_entry *DOSFS_delete(char *fname,DOSdisc *ihand)
    (void)after((char *)&dosext,DOSname,file_sep,1) ;
 
    /* construct return information */
-   MSDOStoRISCOS(get_FILE_time(dentry),get_FILE_date(dentry),&le) ;
-
-   value = get_FILE_ROStype(dentry) ;
-   if (value != 0)
-    le.hi = (le.hi & ~ADFStypemask) | (value << 8) ;
-   else
-    {
-     mapentry *cmap ;
-     for (cmap = maplist; (cmap); cmap = cmap->next)
-      if (cmap->dosext == dosext)
-       {
-        le.hi = (le.hi & ~ADFStypemask) | (cmap->ROtype << 8) ;
-        break ;
-       }
-    }
+   read_loadexec(dentry,dosext,&le);
 
    {
      byte status = dentry->FILE_status;
