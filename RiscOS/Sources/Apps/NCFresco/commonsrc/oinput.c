@@ -237,6 +237,9 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 	oimage_size_image("Submit", ii->ww, ii->hh, ii->data.image.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
 
+	width += ii->bw*2*2;
+	height += ii->bw*2*2;
+	
 	ti->width = width;
 	ti->pad = 0;
 
@@ -290,12 +293,22 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	else
 	{
 #ifdef STBWEB
-	    ti->width = webfont_font_width(WEBFONT_BUTTON, t) + 20;
+	    ti->width = ii->ww != -1 ? ii->ww*2 : webfont_font_width(WEBFONT_BUTTON, t) + 20;
+	    if (ii->hh == -1)
+	    {
+		ti->max_up = webfonts[WEBFONT_BUTTON].max_up + 4;
+		ti->max_down = webfonts[WEBFONT_BUTTON].max_down + 4;
+	    }
+	    else
+	    {
+		ti->max_up = (ii->hh*2 - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
+		ti->max_down = ii->hh*2 - ti->max_up;
+	    }
 #else
 	    ti->width = webfont_tty_width(strlen(t), 1) + 20;
-#endif
 	    ti->max_up = webfonts[WEBFONT_BUTTON].max_up + 4;
 	    ti->max_down = webfonts[WEBFONT_BUTTON].max_down + 4;
+#endif
 	}
 	break;
 
@@ -316,8 +329,11 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 	    oimage_size_image("*", ii->ww, ii->hh, ii->data.radio.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
 
+	    width += ii->bw*2*2;
+	    height += ii->bw*2*2;
+
 	    ti->width = width;
-	    ti->max_up = (height + webfonts[WEBFONT_BASE].max_up) / 2;
+	    ti->max_up = (height - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
 	    ti->max_down = height - ti->max_up;
 	}
 	else
@@ -357,7 +373,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_IMAGE:
     {
 	wimp_box bbox;
-	int bw = 1;
+	int bw = ii->bw;
 
 	bbox.x0 = hpos + 0 + bw*2;
 	bbox.y0 = bline - ti->max_down + 0 + bw*2;
@@ -599,8 +615,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    ooy -= doc->margin.y1;
 #endif
 	    image_render(im,
-		     hpos, bline - ti->max_down,
-		     ti->width/2, (ti->max_up + ti->max_down)/2,
+			 hpos + ii->bw*2, bline - ti->max_down + ii->bw*2,
+			 ti->width/2 - ii->bw*2, (ti->max_up + ti->max_down)/2 - ii->bw*2,
 			 doc->scale_value, antweb_render_background, doc, oox, ooy);
 	}
 	else
@@ -615,7 +631,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    }
 	    else
 	    {
-		render_plot_icon(button_names[index], hpos + 4, bline - ti->max_down + 4);
+		render_plot_icon(button_names[index], hpos + ii->bw*2, bline - ti->max_down + ii->bw*2);
 	    }
 	}
 	break;
@@ -695,8 +711,8 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 #endif
 	else
 	{
-	    x = x-2;
-	    y = (ti->max_up-2)-y;
+	    x = x - ii->bw*2;
+	    y = (ti->max_up - ii->bw*2)-y;
 
             image_os_to_pixels((image) ii->data.image.im, &x, &y, doc->scale_value);
 
@@ -1210,7 +1226,9 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 			antweb_submit_form(doc, ii->base.parent, 0);	/* No such thing as a right click here */
 			if (first)
 			    first->data.button.tick = 0;
-			used = redraw = TRUE;
+
+			used = be_doc_key_SUBMIT;
+			redraw = TRUE;
 		    }
 		}
 		break;
@@ -1483,10 +1501,10 @@ void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)
     }
     case rid_tag_SELECT:
     {
-	rid_select_item *sel = ((rid_text_item_select *)ti)->select;
 #ifdef STBWEB
 	update_full = TRUE;
 #else
+	rid_select_item *sel = ((rid_text_item_select *)ti)->select;
 	update_full = sel->base.colours.select != -1;
 #endif
 	break;

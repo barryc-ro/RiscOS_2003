@@ -590,6 +590,8 @@ void fe_dispose_view(fe_view v)
     else if (--v->delete_pending > 0)
 	return;
 
+/*     fe_internal_deleting_view(v); */
+    
 #if 1
     /* unlink from chain before deleting */
     if (v->prev)

@@ -966,59 +966,93 @@ void fe_cursor_movement(fe_view v, int x, int y)
 
 /* ------------------------------------------------------------------------------------------- */
 
-os_error *fe_handle_enter(fe_view v)
+/*
+ * Activate a link, called from a mouse click and a press of enter (bbits == 0)
+ * Passes through to backend except for
+ *   Imagemap with key press - go into map mode
+ *   Text input item with no keyboard - bring up OSK
+ */
+
+os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 {
-    int flags;
-    char *link;
+    be_item ti;
     os_error *e;
-    void *im;
     wimp_box box;
+    int flags;
 
-    STBDBG(( "stbfe: handle enter in %p\n", v->current_link));
+    if (!v || !v->displaying)
+	return NULL;
 
-    if (!v || !v->displaying || !v->current_link)
-        return NULL;
-
-    e = backend_item_info(v->displaying, v->current_link, &flags, &link, &im);
-    if (!e)
-        e = backend_doc_item_bbox(v->displaying, v->current_link, &box);
-    if (!e)
+    if (bbits)
     {
-        if ((flags & (be_item_info_ISMAP | be_item_info_USEMAP)))
-        {
-            coords_pointstr p;
-/*             coords_cvtstr cvt = fe_get_cvt(v); */
+	wimp_wstate state;
+	coords_pointstr p;
 
-            p.x = (box.x0 + box.x1)/2;
-            p.y = (box.y0 + box.y1)/2;
-/*             coords_point_toscreen(&p, &cvt); */
+	wimp_get_wind_state(v->w, &state);
+	p.x = x;
+	p.y = y;
+	coords_point_toworkarea(&p, (coords_cvtstr *)&state.o.box);
+	x = p.x;
+	y = p.y;
+	if ((e = backend_doc_locate_item(v->displaying, &p.x, &p.y, &ti)) != NULL)
+	    return e;
+    }
+    else
+	ti = v->current_link;
+    
+    STBDBG(( "stbfe: activate link %p x %d y %d bbits %d\n", ti, x, y, bbits));
 
-            frontend_pointer_set_position(v, p.x, p.y);
-            fe_map_mode(v, v->current_link);
-        }
-        else if (flags & be_item_info_INPUT)
-        {
-	    STBDBG(( "stbfe: activate link in %p\n", v->current_link));
+    if ((e = backend_item_info(v->displaying, ti, &flags, NULL, NULL)) != NULL)
+	return e;
+    
+    if ((e = backend_doc_item_bbox(v->displaying, ti, &box)) != NULL)
+	return e;
 
-/*             e = backend_activate_link(v->displaying, v->current_link, 0); */
+    if (bbits == 0 && (flags & (be_item_info_ISMAP | be_item_info_USEMAP)))
+    {
+	frontend_pointer_set_position(v, (box.x0 + box.x1)/2, (box.y0 + box.y1)/2);
+	fe_map_mode(v, ti);
+    }
+    else if (flags & be_item_info_INPUT)
+    {
+	BOOL had_caret;
 
-	    v->current_link = backend_highlight_link(v->displaying, v->current_link, movepointer() | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
-
-	    fe_keyboard_open(v);
+	if (backend_read_highlight(v->displaying, &had_caret) == v->current_link && had_caret)
+	{
+	    e = backend_doc_click(v->displaying, x, y, (wimp_bbits)bbits);
 	}
-        else
-        {
-            last_click_x = box.x0;
-            last_click_y = box.y0;
-            last_click_view = v;
+	else
+	{
+	    v->current_link = backend_highlight_link(v->displaying, v->current_link,
+						     movepointer() | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
 
-	    STBDBG(( "stbfe: activate link in %p\n", v->current_link));
-
-	    e = backend_activate_link(v->displaying, v->current_link, 0);
+	    if (!caretise())
+		fe_keyboard_open(v);
 	}
+    }
+    else if (bbits)
+    {
+	last_click_x = x;
+	last_click_y = y;
+	last_click_view = v;
+	
+	e = backend_doc_click(v->displaying, x, y, (wimp_bbits)bbits);
+    }
+    else
+    {
+	last_click_x = box.x0;
+	last_click_y = box.y0;
+	last_click_view = v;
+	
+	e = backend_activate_link(v->displaying, ti, 0);
     }
 
     return e;
+}
+
+os_error *fe_handle_enter(fe_view v)
+{
+    return fe_activate_link(v, 0, 0, 0);
 }
 
 /* ------------------------------------------------------------------------------------------- */

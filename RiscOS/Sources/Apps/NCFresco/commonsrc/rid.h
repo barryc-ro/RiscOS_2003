@@ -340,6 +340,7 @@ typedef struct rid_input_item {
     char *src_sel;		/* URL of image */
     int ww, hh;			/* specified size for IMAGE or BORDERIMAGE */
     int max_len;		/* max buffer size in characters */
+    int bw;			/* border width */
     union {
         char *str;              /* Used for TEXT and PASSWORD */
 /*         int tick;  */              /* Used for RADIO and CHECKBOX */

@@ -3216,6 +3216,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    {
 	    case '&':
 	    case '?':
+	    case '=':
 		break;
 	    default:
 		strcat(buffer, "?");
@@ -3224,7 +3225,10 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 	    /* add on the mailto details */
 	    if (path)
+	    {
+		strcat(buffer, "to=");
 		strcat(buffer, path);
+	    }
 
 	    if (query)
 	    {

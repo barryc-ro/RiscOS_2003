@@ -675,6 +675,15 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
         need_to_set_dims = 1;
     }
 
+#if 1
+    if (bottom - h < -mh /*- sbh*/)
+    {
+        v->stretch_document = (-mh/* - sbh*/) - (bottom - h);
+        need_to_set_dims = 1;
+
+	STBDBGN(("ensure_visible: stretch\n"));
+    }
+#else
     if (top == bottom && top - h < -mh /*- sbh*/)
     {
         v->stretch_document = (-mh/* - sbh*/) - (top - h);
@@ -682,7 +691,8 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 
 	STBDBGN(("ensure_visible: stretch\n"));
     }
-
+#endif
+    
     if (top == bottom ||	/* Special case: force to the top is top and bottom equal */
 	top > (state.o.y - bbh))
     {

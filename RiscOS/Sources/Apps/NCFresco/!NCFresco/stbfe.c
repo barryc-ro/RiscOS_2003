@@ -159,9 +159,6 @@
 #define KeyWatch_Register		0x4E940
 #define KeyWatch_Unregister		0x4E941
 
-#define IconHigh_GetDirection		0x4E701
-#define IconHigh_Stop			0x4E703
-
 #define PPP_AlterSettings		0x4B620
 #define PPP_Status			0x4B621
 
@@ -937,7 +934,7 @@ fe_view fe_dbox_view(const char *name)
     {
 	box.x0 = text_safe_box.x0;
 	box.x1 = text_safe_box.x1;
-	box.y0 = text_safe_box.y0 + tb_status_height();
+	box.y0 = text_safe_box.y0 + tb_status_height() - 8;
 	box.y1 = (text_safe_box.y0 + text_safe_box.y1)/3;
 
     	memset(&info.margin, 0, sizeof(info.margin));
@@ -946,8 +943,8 @@ fe_view fe_dbox_view(const char *name)
     {
 	box.x0 = text_safe_box.x0;
 	box.x1 = text_safe_box.x1;
-	box.y0 = text_safe_box.y0 + tb_status_height();
-	box.y1 = box.y0 + 88;
+	box.y0 = text_safe_box.y0 + tb_status_height() - 8;
+	box.y1 = box.y0 + 88 + 2*8;
 
     	memset(&info.margin, 0, sizeof(info.margin));
     }
@@ -1297,6 +1294,7 @@ int fe_check_download_finished(fe_view v)
 		flags = be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise();
 		if (pointer_mode != pointermode_OFF)
 		    flags |= be_link_TEXT;
+		flags |= be_link_ONLY_CURRENT;
 	    }
 	    
 	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags | movepointer());
@@ -1996,9 +1994,9 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
 
     STBDBG(("fe_writeable_handle_keys: v %p key %d used %d\n", v, key, used));
 
-    if (!used && on_screen_kbd)
+    if (used == be_doc_key_SUBMIT && on_screen_kbd)
     {
-	
+	fe_keyboard_close();
     }
     
     return used;
@@ -2477,7 +2475,10 @@ os_error *fe_status_unstack(fe_view source_v)
 	fe_view v = fe_find_top_popup(source_v ? source_v : main_view);
 
 	if (v && v->open_transient)
+	{
+	    fe_internal_deleting_view(v);
 	    fe_dispose_view(v);
+	}
 	else if (tb_status_unstack())
 	{
 	}
@@ -3268,7 +3269,10 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
     if (!v)
     {
 	if (m->bbits == wimp_BRIGHT)
-	    fe_open_version(NULL);
+	{
+	    frontend_complain(fe_status_open_toolbar(main_view, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
+/* 	    fe_open_version(NULL); */
+	}
         return FALSE;
     }
 
@@ -3314,19 +3318,10 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
             }
             break;
 
-        case wimp_BLEFT:
-            if (v->displaying)
-            {
-                wimp_wstate state;
-                wimp_get_wind_state(m->w, &state);
-                coords_point_toworkarea((coords_pointstr *)&m->x, (coords_cvtstr *)&state.o.box);
-
-                last_click_x = m->x;
-                last_click_y = m->y;
-                last_click_view = v;
-                backend_doc_click(v->displaying, m->x, m->y, m->bbits);
-            }
-            break;
+    case wimp_BLEFT:
+	if (v->displaying)
+	    fe_activate_link(v, m->x, m->y, m->bbits);
+	break;
 
     case wimp_BRIGHT:
 	if (v->displaying)
@@ -3341,6 +3336,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	    backend_doc_locate_item(v->displaying, &m->x, &m->y, &ti);
 
 	    fe_open_info(v, ti, m->x, m->y);
+	    frontend_complain(fe_status_open_toolbar(v, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
 	}
 	break;
     }
@@ -3543,10 +3539,26 @@ static void fe_keyboard_closed(void)
 
 static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
 {
+    /* record task handle and bounding box */
     on_screen_kbd = t;
     on_screen_kbd_pos = *box;
 
     tb_status_button(fevent_OPEN_KEYBOARD, TRUE);
+
+    /* check that item with caret in it is still in view */
+    {
+	fe_view v = fe_selected_view();
+	if (v)
+	{
+	    wimp_box box;
+	    be_item ti;
+
+	    ti = backend_read_highlight(v->displaying, NULL);
+	    backend_doc_item_bbox(v->displaying, ti, &box);
+
+	    frontend_view_ensure_visable(v, box.x0, box.y1, box.y0);
+	}
+    }
 }
 
 static void fe_keyboard__open(void)
@@ -4281,7 +4293,10 @@ void fe_event_process(void)
 	    v = find_view(e.data.key.c.w);
 	    STBDBG(( "\nkey: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
 
-	    fe_key_handler(v, &e, use_toolbox, v ? v->browser_mode : main_view->browser_mode);
+	    fe_key_handler(v, &e, use_toolbox,
+			   keyboard_state == fe_keyboard_OFFLINE ? fe_browser_mode_DESKTOP :
+			   v ? v->browser_mode :
+			   main_view->browser_mode);
             break;
         }
 
@@ -4299,9 +4314,11 @@ void fe_event_process(void)
 
 	    if (v)
             {
+		/* remove the highlighting from the view but keep a record of where it was (in current_link) */
 		backend_remove_highlight(v->displaying);
-                v->current_link = NULL;
+/*              v->current_link = NULL; */
 
+		/* if it was selected then clear and redraw the frame links */
                 if (v->is_selected)
                 {
                     fe_view v_top = fe_find_top(v);
@@ -4309,7 +4326,8 @@ void fe_event_process(void)
 			fe_frame_link_clear_all(v);
                 }
             }
-	    else
+	    /* if status bar then remove the highlight from it */
+	    else if (e.data.c.w == tb_status_w())
 	    {
 		tb_status_highlight(FALSE);
 	    }
@@ -4319,24 +4337,30 @@ void fe_event_process(void)
 
         case wimp_EGAINCARET:
         {
-            fe_view v_old, v_new;
-	    fe_view v_top;
+	    fe_view v_new;
 
-	    v_old = fe_selected_view();
 	    v_new = find_view(e.data.c.w);
 
-	    STBDBGN(("gaincaret: w %x v %p old %p kw %p\n", e.data.c.w, v_new, v_old, keywatch_pollword));
+	    STBDBGN(("gaincaret: w %x v %p\n", e.data.c.w, v_new));
 
-	    if (v_old)
-	    {
-		v_old->is_selected = FALSE;
-		fe_frame_link_array_free(v_old);
-	    }
-
+	    /* if a new view is getting the input focus */
 	    if (v_new)
 	    {
+		fe_view v_old, v_top;
+
+		v_old = fe_selected_view();
+
+		/* remove the input focus from the last selected view */
+		if (v_old)
+		{
+		    v_old->is_selected = FALSE;
+		    fe_frame_link_array_free(v_old);
+		}
+
+		/* set the new view as the selected one */
 		v_new->is_selected = TRUE;
 
+		/* if this isn't the top view then build and redraw the frame link array */
 		v_top = fe_find_top(v_new);
 		if (v_new != v_top)
 		{
@@ -4349,23 +4373,37 @@ void fe_event_process(void)
         }
 
         case wimp_EPTRENTER:
+	{
+	    int mode;
+
             fe_update_page_info(find_view(e.data.c.w));
 
 	    fe_get_wimp_caret(e.data.c.w);
 
-	    /* disable iconhigh if enabled */
+	    /* see if iconhigh is running */
+	    _swix(IconHigh_GetDirection, _IN(0) | _OUT(3), 0, &mode);
+	    if (mode != 0)
 	    {
-		int mode;
-		_swix(IconHigh_GetDirection, _IN(0) | _OUT(3), 0, &mode);
-		if (mode != 0)
-		    _swix(IconHigh_Stop, _IN(0), 0);
+		/* disable iconhigh */
+		_swix(IconHigh_Stop, _IN(0), 0);
+
+		/* if moving onto the toolbar */
+		if (e.data.c.w == tb_status_w())
+		{
+		    /* take the highlight */
+		    tb_status_highlight(TRUE);
+		}
+		else
+		{
+		    /* close OSK if open */
+		    fe_keyboard_close();
+		}
 	    }
-
-	    /* close osk if open */
-	    fe_keyboard_close();
 	    break;
-
+	}
+	
         case wimp_EPTRLEAVE:
+	    /* currently masked out */
             break;
 
         case wimp_ESEND:

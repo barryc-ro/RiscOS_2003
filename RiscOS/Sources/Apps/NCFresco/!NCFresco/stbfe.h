@@ -5,11 +5,8 @@
 
 typedef enum
 {
-/*    pointermode_REFRESH = -1,*/
     pointermode_OFF,
     pointermode_ON
-/*    pointermode_MAP,*/
-/*    pointermode_INPUT*/
 } pointermode_t;
 
 extern pointermode_t pointer_mode;
@@ -20,6 +17,10 @@ extern wimp_t on_screen_kbd;
 extern wimp_box on_screen_kbd_pos;
 
 #define TASK_MAGIC	0x4B534154
+
+#define IconHigh_GetDirection		0x4E701
+#define IconHigh_Start			0x4E702
+#define IconHigh_Stop			0x4E703
 
 extern void fe_pointer_mode_update(pointermode_t mode);
 extern void fe_set_pointer(int item_flags);
@@ -42,8 +43,6 @@ extern void fe_move_highlight(fe_view v, int flags);
 extern void fe_move_highlight_frame(fe_view v, BOOL next);
 extern void fe_move_highlight_frame_direction(fe_view v, int flags);
 extern void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags);
-
-extern os_error *fe_handle_enter(fe_view v);
 
 extern int fe_print_possible(fe_view v);
 
@@ -162,6 +161,7 @@ extern int print__copies, print__ul;
 extern fe_passwd fe_current_passwd;
 
 extern BOOL fe_passwd_abort(void);
+extern void fe_internal_deleting_view(fe_view v);
 
 /* from stbredraw.c*/
 
@@ -216,6 +216,9 @@ extern void fe_frame_link_activate(fe_view v);
 extern int fe_frame_link_selected(fe_view v);
 extern void fe_frame_link_clear_all(fe_view v);
 extern void fe_frame_link_redraw_all(fe_view v);
+
+extern os_error *fe_handle_enter(fe_view v);
+extern os_error *fe_activate_link(fe_view v, int x, int y, int bbits);
 
 /* stbfe.h*/
 

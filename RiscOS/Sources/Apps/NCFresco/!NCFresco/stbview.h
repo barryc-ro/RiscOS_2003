@@ -179,6 +179,10 @@ struct _frontend_view
 
 /* ----------------------------------------------------------------------------- */
 
+#define PROFILE_NAME_VAR	"User$Profile"
+
+/* ----------------------------------------------------------------------------- */
+
 #define fe_keyboard_UNKNOWN	(-1)
 #define fe_keyboard_ONLINE	0
 #define fe_keyboard_OFFLINE	1

@@ -410,7 +410,7 @@ void hotlist_write_list(FILE *fout, BOOL del)
 	char *ttl = item->title ? item->title : item->url;
 
 	if (del)
-	    fprintf(fout, msgs_lookup("hotsI1"), i, ttl, i, i);
+ 	    fprintf(fout, msgs_lookup("hotsdI"), i, ttl, i, i);
 	else
 	{
 	    fprintf(fout, msgs_lookup("hotsI2a"));

@@ -110,7 +110,7 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
     {
         diff = strcmp(strsafe(item->title), strsafe(title));
 
-    STBDBG(("hist: compare %s %s diff=%d\n", strsafe(item->title), strsafe(title), diff));
+	STBDBG(("hist: compare %s %s diff=%d\n", strsafe(item->title), strsafe(title), diff));
 
         /* if the title and the URL are the same */
         if (diff == 0 && item->url_hash == h && strcmp(item->url, bare_url) == 0)
@@ -185,8 +185,9 @@ static void fe_global_add(const char *url, const char *title)
 os_error *fe__global_write_list(FILE *f)
 {
     fe_global_history_item *item;
+    int i;
 
-    for (item = global_hist_list; item; item = item->next)
+    for (item = global_hist_list, i = 0; item; item = item->next, i++)
     {
 #if 0
         fe_global_history_fragment *fp;
@@ -195,7 +196,7 @@ os_error *fe__global_write_list(FILE *f)
             fprintf(stderr, "hist: frag '%s'\n", fp->fragment);
 #endif
 
-	fprintf(f, msgs_lookup("histAIa"));
+	fprintf(f, msgs_lookup("histAIa"), i);
 
 	url_escape_to_file(item->url, f);
 
@@ -209,9 +210,11 @@ os_error *fe__global_write_list(FILE *f)
 os_error *fe_global_write_list(FILE *f)
 {
     os_error *e;
+    char *s;
 
-    fputs(msgs_lookup("histAT"), f);
-    fputs(msgs_lookup("histA1"), f);
+    fprintf(f, msgs_lookup("histAT"), 0);
+    s = getenv(PROFILE_NAME_VAR);
+    fprintf(f, msgs_lookup("histA1"), strsafe(s));
 
     e = fe__global_write_list(f);
     
@@ -269,9 +272,9 @@ void fe_global_history_dispose(void)
 
 /* ---------------------------------------------------------------------------------------------*/
 
-static void fe_hist_write_item(FILE *f, const fe_history_item *item)
+static void fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
 {
-    fprintf(f, msgs_lookup("histRIa"));
+    fprintf(f, msgs_lookup("histRIa"), i);
 
     url_escape_to_file(item->url, f);
 
@@ -291,35 +294,40 @@ static void fe_hist_write_item(FILE *f, const fe_history_item *item)
     fputc('\n', f);
 }
 
-os_error *fe_history_write_list(FILE *f, void *handle)
+os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_history_item *current)
 {
     const fe_history_item *item;
-    const fe_history_item *current = (const fe_history_item *)handle;
+    int i;
 
-    fputs(msgs_lookup("histRT"), f); 
-    fputs(msgs_lookup("histR1"), f);
+    /* count how far through the list we are */
+    for (i = 0, item = start; item && item != current; i++, item = item->next)
+	;
+	
+    fprintf(f, msgs_lookup("histRT"), i);
+    fprintf(f, msgs_lookup("histR1"), getenv(PROFILE_NAME_VAR));
 
-    for (item = current; item; item = item->next)
-        fe_hist_write_item(f, item);
+    for (i = 0, item = start; item; i++, item = item->next)
+        fe_hist_write_item(f, item, i);
 
     fputs(msgs_lookup("histRF"), f);
     fputc('\n', f);
     return NULL;
 }
 
-os_error *fe_history_write_combined_list(FILE *f, void *handle)
+os_error *fe_history_write_combined_list(FILE *f, const fe_history_item *start, const fe_history_item *current)
 {
     const fe_history_item *item;
-    const fe_history_item *current = (const fe_history_item *)handle;
     int i;
-
-    fputs(msgs_lookup("histCT"), f);
-    fputs(msgs_lookup("histC1"), f);
+    char *s;
 
     /* back track to place to start */
     /* ANC-00288: added check on item in case current == NULL */
     for (i = 0, item = current; i < N_RECENT_SITES/2 && item && item->next; i++, item = item->next)
         ;
+
+    fprintf(f, msgs_lookup("histCT"), i);
+    s = getenv(PROFILE_NAME_VAR);
+    fprintf(f, msgs_lookup("histC1"), strsafe(s));
 
     /* write current places */
     for (i = 0; i < N_RECENT_SITES && item; i++, item = item->prev)
@@ -327,14 +335,13 @@ os_error *fe_history_write_combined_list(FILE *f, void *handle)
         if (item == current && i != 0)
             fputs(msgs_lookup("histS1"), f);
 
-        fe_hist_write_item(f, item);
+        fe_hist_write_item(f, item, i);
 
         if (item == current && i != N_RECENT_SITES - 1)
             fputs(msgs_lookup("histS2"), f);
     }
 
-    fputs(msgs_lookup("histC2"), f);
-    fputc('\n', f);
+    fprintf(f, msgs_lookup("histC2"), strsafe(s));
 
     /* write global list */
     fe__global_write_list(f);

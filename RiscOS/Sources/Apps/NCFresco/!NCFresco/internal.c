@@ -294,10 +294,13 @@ static os_error *fe_hotlist_and_openurl_write_file(FILE *f)
 
 static os_error *fe_hotlist_write_file(FILE *f)
 {
+    char *s;
+
     fputs(msgs_lookup("hotsT"), f);
     fputc('\n', f);
 
-    fprintf(f, msgs_lookup("hots1"));
+    s = getenv(PROFILE_NAME_VAR);
+    fprintf(f, msgs_lookup("hots1"), strsafe(s));
 
     hotlist_write_list(f, FALSE);
 
@@ -309,10 +312,13 @@ static os_error *fe_hotlist_write_file(FILE *f)
 
 static os_error *fe_hotlist_delete_write_file(FILE *f)
 {
+    char *s;
+
     fputs(msgs_lookup("hotsdT"), f);
     fputc('\n', f);
 
-    fprintf(f, msgs_lookup("hotsd1"));
+    s = getenv(PROFILE_NAME_VAR);
+    fprintf(f, msgs_lookup("hotsd1"), strsafe(s));
 
     hotlist_write_list(f, TRUE);
 
@@ -659,6 +665,39 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     return generated;
 }
 
+static int internal_decode_hotlist_delete(const char *query)
+{
+    char *id = extract_value(query, "select.");
+    char *source = extract_value(query, "source=");
+
+    if (id)
+    {
+	fe_view v = fe_find_target(main_view, source);
+	if (!v) v = fe_selected_view();
+	if (!v) v = main_view;
+
+	strtok(id, "=");
+	
+	if (v && v->displaying)
+	{
+	    be_item ti = backend_locate_id(v->displaying, id);
+
+	    STBDBG(("internal_action_select: v %p id '%s' ti %p\n", v, id, ti));
+
+	    if (ti)
+		backend_activate_link(v->displaying, ti, 0);
+	}
+    }
+    else
+    {
+	hotlist_remove_list(query);
+    }
+    
+    mm_free(id);
+    mm_free(source);
+    return fe_internal_url_NO_ACTION;
+}
+
 /* ------------------------------------------------------------------------------------------- */
 /* password handling    */
 /* ------------------------------------------------------------------------------------------- */
@@ -947,7 +986,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    {
 		sound_event(snd_HISTORY_SHOW);
 		tb_status_button(fevent_HISTORY_SHOW_RECENT, TRUE);
-		e = fe_history_write_list(f, v->first);
+		e = fe_history_write_list(f, v->first, v->hist_at);
 	    }
 	}
 	else if (strcasecomp(panel_name, "historycombined") == 0)
@@ -957,7 +996,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    {
 		sound_event(snd_HISTORY_SHOW);
 		tb_status_button(fevent_HISTORY_SHOW, TRUE);
-		e = fe_history_write_combined_list(f, v->first);
+		e = fe_history_write_combined_list(f, v->first, v->hist_at);
 	    }
 	}    
 	else if (strcasecomp(panel_name, "info") == 0)
@@ -1048,6 +1087,13 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
     char *url = extract_value(query, "url=");
     int generated = fe_internal_url_NO_ACTION;
 
+    if (url == NULL)
+    {
+	url = extract_value(query, "url.");
+	if (url)
+	    strtok(url, "=");
+    }
+    
     if (url && url[0])
     {
 	char *nocache = extract_value(query, "opt=");
@@ -1439,7 +1485,7 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     }
     else if (strcasecomp(page, "favsdelete") == 0)
     {
-	hotlist_remove_list(query);
+	internal_decode_hotlist_delete(query);
     }
     else if (strcasecomp(page, "displayoptions") == 0)
     {
@@ -1529,6 +1575,62 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
     }
 
     return generated;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+/*
+ * special internal actions on removeall of particular pages
+ */
+
+void fe_internal_deleting_view(fe_view v)
+{
+    if (strcasecomp(v->name, TARGET_FAVS) == 0)
+    {
+	tb_status_button(fevent_HOTLIST_SHOW, 0);
+	tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, 0);
+	tb_status_button(fevent_HOTLIST_SHOW_DELETE, 0);
+    }
+    else if (strcasecomp(v->name, TARGET_HISTORY) == 0)
+    {
+	tb_status_button(fevent_HISTORY_SHOW, 0);
+	tb_status_button(fevent_HISTORY_SHOW_ALPHA, 0);
+	tb_status_button(fevent_HISTORY_SHOW_RECENT, 0);
+    }
+    else if (strcasecomp(v->name, TARGET_INFO) == 0)
+    {
+	tb_status_button(fevent_INFO_PAGE, 0);
+    }
+    else if (strcasecomp(v->name, TARGET_OPEN) == 0)
+    {
+	tb_status_button(fevent_OPEN_URL, 0);
+    }
+    else if (strcasecomp(v->name, TARGET_CUSTOM) == 0)
+    {
+	tb_status_button(fevent_OPEN_FONT_SIZE, 0);
+	tb_status_button(fevent_OPEN_SOUND, 0);
+	tb_status_button(fevent_OPEN_BEEPS, 0);
+	tb_status_button(fevent_OPEN_SCALING, 0);
+    }
+}
+
+void fe_internal_opening_view(fe_view v)
+{
+    if (strcasecomp(v->name, TARGET_FAVS) == 0)
+    {
+    }
+    else if (strcasecomp(v->name, TARGET_HISTORY) == 0)
+    {
+    }
+    else if (strcasecomp(v->name, TARGET_INFO) == 0)
+    {
+    }
+    else if (strcasecomp(v->name, TARGET_OPEN) == 0)
+    {
+    }
+    else if (strcasecomp(v->name, TARGET_CUSTOM) == 0)
+    {
+    }
 }
 
 /* ------------------------------------------------------------------------------------------- */

@@ -31,6 +31,7 @@
 #include "stbtb.h"
 #include "stbutils.h"
 #include "stbfe.h"
+#include "stbview.h"
 #include "stbhist.h"
 #include "stbopen.h"
 #include "fevents.h"
@@ -664,11 +665,33 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
     wimp_get_wind_state(tbi->window_handle, &state);
     coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
 
-    /* dehighlight current item */
-/*     setstate(tbi->object_handle, cmp, 0); */
+    if (on_screen_kbd)
+    {
+	int x;
 
-    fe_move_highlight_xy(v, &box, flags | be_link_XY);
+	/* move pointer back into keyboard and restart iconhigh */
+	x = (state.o.box.x0 + state.o.box.x1) / 2;
 
+	if (x < on_screen_kbd_pos.x0 + 8)
+	    x = on_screen_kbd_pos.x0 + 8;
+	if (x > on_screen_kbd_pos.x1 - 8)
+	    x = on_screen_kbd_pos.x1 - 8;
+	
+	if (flags & be_link_BACK)
+	    frontend_pointer_set_position(NULL, x, on_screen_kbd_pos.y0 + 16);
+	else
+	    frontend_pointer_set_position(NULL, x, on_screen_kbd_pos.y1 - 16);
+
+	_swix(IconHigh_Start, _IN(0), 0);
+
+	/* move highlight back into main window at old position */
+	fe_move_highlight(fe_selected_view(), flags | be_link_INCLUDE_CURRENT);
+    }
+    else
+    {
+	fe_move_highlight_xy(v, &box, flags | be_link_XY);
+    }
+    
     return TRUE;
 }
 
@@ -788,21 +811,14 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
 
 static void tb_bar_favs_exit_fn(void)
 {
-    fe_view v = fe_locate_view(TARGET_FAVS);
-
-    fe_submit_form(v, "favsd");
-
-    fe_dispose_view(v);
 }
 
 static void tb_bar_history_exit_fn(void)
 {
-    fe_dispose_view(fe_locate_view(TARGET_HISTORY));
 }
 
 static void tb_bar_details_exit_fn(void)
 {
-    fe_dispose_view(fe_locate_view(TARGET_INFO));
 }
 
 static void tb_bar_codec_exit_fn(void)
@@ -812,7 +828,6 @@ static void tb_bar_codec_exit_fn(void)
 
 static void tb_bar_custom_exit_fn(void)
 {
-    fe_dispose_view(fe_locate_view(TARGET_CUSTOM));
 }
 
 static void tb_bar_details_entry_fn(fe_view v)

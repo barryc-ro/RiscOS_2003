@@ -652,7 +652,7 @@ fresh:		HTML TAGS
 #Two possibilities for exporting to
 #RISCOS_BUILD_RESOURCES=../../../../Install
 #RISCOS_BUILD_OBJECTS=../../../../Objects
-RISCOS_BUILD_RESOURCES=../NCFrescoRO
+RISCOS_BUILD_RESOURCES=../NCFrescoRO/Resources
 RISCOS_BUILD_OBJECTS=../NCFrescoRO/aof
 
 CP=				cp

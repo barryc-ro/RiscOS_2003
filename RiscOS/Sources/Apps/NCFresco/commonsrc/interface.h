@@ -319,6 +319,11 @@ os_error *backend_doc_click(be_doc doc, int x, int y, wimp_bbits bb);
 /* Inform the backend that a key has been pressed.  The backend will
  * update the 'used' value if to indicate the truth of whether the key
  * press was used */
+
+#define be_doc_key_NOT_USED	0
+#define be_doc_key_USED		1
+#define be_doc_key_SUBMIT	2 /* key was used and submitted a form */
+
 os_error *backend_doc_key(be_doc doc, int key, int *used);
 
 /* Inform the backend that the user wants to move the caret. */

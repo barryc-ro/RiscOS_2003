@@ -21,9 +21,9 @@
 
 #include "stbfe.h"
 #include "stbopen.h"
+#include "stbview.h"
 #include "stbhist.h"
 #include "stbutils.h"
-#include "stbview.h"
 #include "stbtb.h"
 
 static void global_event_handler(int event)
@@ -256,9 +256,8 @@ static void misc_event_handler(int event, fe_view v)
 	frontend_complain(fe_offline_page(v));
 	break;
 
-    case fevent_INFO_PAGE:
-	frontend_complain(fe_status_open_toolbar(v, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
-	frontend_complain(fe_open_version(v));
+    case fevent_INFO_PAGE: /* this just opens the info page and not the toolbar */
+ 	frontend_complain(fe_open_version(v));
 	break;
 
     case fevent_SEND_URL:

@@ -108,6 +108,7 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     VALUE *size;
     VALUE *width, *height;
     VALUE *tabindex;
+    VALUE *border;
 
     generic_start (context, element, attributes);
 
@@ -216,6 +217,9 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     
     height = &attributes->value[HTML_INPUT_HEIGHT];
     in->hh = height->type == value_integer ? height->u.i : -1;
+    
+    border = &attributes->value[HTML_INPUT_BORDER];
+    in->bw = border->type == value_integer ? border->u.i : 2; /* default border of 2 pixels on all input items */
     
     maxlength = &attributes->value[HTML_INPUT_MAXLENGTH];
     if (maxlength->type == value_integer)
