@@ -28,6 +28,9 @@ CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
 PLFLAGS = -swi
+WIPE    = -wipe
+WFLAGS  = FR~C~V
+CAT     = print
 
 PERL    = perl Build:Hdr2H ${PLFLAGS}
 
@@ -78,9 +81,11 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+        ${WIPE} MPEG ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 Dirs:
+        ${MKDIR} MPEG.h
         ${MKDIR} <lib$dir>.MPEG.h
 
 #
@@ -134,17 +139,29 @@ ${C_EXP_HDR}.h.AV110: hdr.AV110
 ${C_EXP_HDR}.h.CL450: hdr.CL450
 	${PERL} Hdr.CL450 $@
 
-${C_EXP_HDR}.h.MPEGAudio: hdr.MPEGAudio
-	${PERL} Hdr.MPEGAudio $@
+${C_EXP_HDR}.h.MPEGAudio: MPEG.h.MPEGAudio h.MPEGAudio
+        ${CP} h.MPEGAudio $@ ${CPFLAGS}
+        ${CAT} MPEG.h.MPEGAudio { >> $@ }
+
+MPEG.h.MPEGAudio:
+        ${PERL} Hdr.MPEGAudio $@
 
 ${C_EXP_HDR}.h.MPEGCard: hdr.MPEGCard
 	${PERL} Hdr.MPEGCard $@
 
-${C_EXP_HDR}.h.MPEGCtrl: hdr.MPEGCtrl
-	${PERL} Hdr.MPEGCtrl $@
+${C_EXP_HDR}.h.MPEGCtrl: MPEG.h.MPEGCtrl h.MPEGCtrl
+        ${CP} h.MPEGCtrl $@ ${CPFLAGS}
+        ${CAT} MPEG.h.MPEGCtrl { >> $@ }
 
-${C_EXP_HDR}.h.MPEGVideo: hdr.MPEGVideo
-	${PERL} Hdr.MPEGVideo $@
+MPEG.h.MPEGCtrl:
+        ${PERL} Hdr.MPEGCtrl $@
+
+${C_EXP_HDR}.h.MPEGVideo: MPEG.h.MPEGVideo h.MPEGVideo
+        ${CP} h.MPEGVideo $@ ${CPFLAGS}
+        ${CAT} MPEG.h.MPEGVideo { >> $@ }
+
+MPEG.h.MPEGVideo:
+        ${PERL} Hdr.MPEGVideo $@
 
 ${C_EXP_HDR}.h.L64002: hdr.L64002
 	${PERL} Hdr.L64002 $@
