@@ -10,6 +10,10 @@
 /* Author : A.D.Hodgkinson                         */
 /*                                                 */
 /* History: 03-Sep-97: Created.                    */
+/*                                                 */
+/*          08-Dec-97: Added code for option or    */
+/*                     radio buttons and auto      */
+/*                     widthing of the dialogue.   */
 /***************************************************/
 
 #include <stdlib.h>
@@ -43,6 +47,7 @@
 #include "Object.h"
 #include "Protocols.h"
 #include "Save.h"
+#include "SaveDraw.h"
 #include "SaveText.h"
 #include "Toolbars.h"
 #include "URLutils.h"
@@ -60,27 +65,48 @@ static ObjectId       window_id        = 0;
 static ComponentId    parent_component = -1;
 static ObjectId       ancestor_id      = 0;
 
+/* These are to remember the state of the 'alternative'  */
+/* selector (option button or radio buttons) for when    */
+/* the Save File dialogue is opened for a particular     */
+/* parent component. The 'mhso' etc. represent the first */
+/* letters of the component name from Menus.h (so in the */
+/* above example, mhso = MiscHotlistSaveObject). Where   */
+/* several components lead to the same section of code   */
+/* in a 'switch' statement, the name of the first        */
+/* as appearing in savefile_to_be_shown is used.         */
+
+static int alt_mhso = 0; /* MiscHotlistSaveObject  */
+static int alt_ead  = 0; /* ExportAsDraw           */
+static int alt_fsfl = 0; /* FrameSaveFrameLocation */
+static int alt_el   = 0; /* ExportLink             */
+static int alt_ep   = 0; /* ExportPicture          */
+static int alt_eb   = 0; /* ExportBackground       */
+
 /* Static function prototypes */
 
-static int               savefile_drag_ended                (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
-static int               savefile_ok                        (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
-static int               savefile_cancel                    (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               savefile_drag_ended                         (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               savefile_ok                                 (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               savefile_cancel                             (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 
-static _kernel_oserror * savefile_switch_to_normal          (ObjectId window);
-static _kernel_oserror * savefile_switch_to_option          (ObjectId window);
-static _kernel_oserror * savefile_switch_to_radios          (ObjectId window);
+static _kernel_oserror * savefile_switch_to_normal                   (ObjectId window);
+static _kernel_oserror * savefile_switch_to_option                   (ObjectId window);
+static _kernel_oserror * savefile_switch_to_radios                   (ObjectId window);
 
-static int               savefile_option_changed            (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
-static int               savefile_radio_changed             (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
-static int               savefile_item_changed              (IdBlock * idb);
+static _kernel_oserror * savefile_set_items                          (ObjectId window, int selected);
 
-static _kernel_oserror * savefile_text_uri_or_url           (ObjectId window);
-static _kernel_oserror * savefile_toggle_uri_or_url         (ObjectId window);
-static _kernel_oserror * savefile_text_sprite_or_original   (ObjectId window);
-static _kernel_oserror * savefile_toggle_sprite_or_original (ObjectId window, const char * src);
+static int               savefile_option_changed                     (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               savefile_radio_changed                      (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               savefile_item_changed                       (IdBlock * idb);
 
-static _kernel_oserror * savefile_set_correct_extent        (ObjectId window, BBox * ra1);
-static _kernel_oserror * savefile_auto_width                (ObjectId window);
+static _kernel_oserror * savefile_text_uri_or_url                    (ObjectId window);
+static _kernel_oserror * savefile_toggle_uri_or_url                  (ObjectId window);
+static _kernel_oserror * savefile_text_sprite_or_original            (ObjectId window);
+static _kernel_oserror * savefile_toggle_sprite_or_original          (ObjectId window, const char * src);
+static _kernel_oserror * savefile_text_without_backgrounds_or_with   (ObjectId window);
+static _kernel_oserror * savefile_toggle_without_backgrounds_or_with (ObjectId window);
+
+static _kernel_oserror * savefile_set_correct_extent                 (ObjectId window, BBox * ra1);
+static _kernel_oserror * savefile_auto_width                         (ObjectId window);
 
 /*************************************************/
 /* savefile_open_for()                           */
@@ -170,14 +196,14 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
   /* If the parent ID is the same as a toolbar, this was */
   /* from a toolbar button - in which case, use a parent */
-  /* ID of FileSaveParent, as that is what we actually    */
+  /* ID of FileSaveAncestor, as that is what we actually */
   /* want to do.                                         */
 
   if (
        idb->parent_id == toolbars_get_upper(b) ||
        idb->parent_id == toolbars_get_lower(b)
      )
-     pc = FileSaveParent;
+     pc = FileSaveAncestor;
 
   /* Deal with each parent menu item case */
 
@@ -199,21 +225,27 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
       /* No 'break' - let this drop through... */
     }
 
-    /* Save the page source */
+    /* Save a page's source */
 
-    case FileSaveFrame: /* Fall through to FileSaveParent */
+    case FileSaveFrame:
     case FileSaveParent:
+    case FileSaveAncestor:
     {
-      ChkError(savefile_switch_to_normal(idb->self_id));
+      browser_data * alt = b;
 
       /* For saving a frameset, work out the required browser_data struct */
 
       if (pc == FileSaveParent)
       {
-        if      (b->parent      && b->parent     ->source) b = b->parent;
-        else if (b->real_parent && b->real_parent->source) b = b->real_parent;
-        else if (b->ancestor    && b->ancestor   ->source) b = b->ancestor;
+        alt = utils_parent(b);
+        if (!alt) alt = utils_ancestor(b);
       }
+
+      else if (pc == FileSaveAncestor) alt = utils_ancestor(b);
+
+      b = alt;
+
+      ChkError(savefile_switch_to_normal(idb->self_id));
 
       /* Reset the transferred data counter */
 
@@ -264,6 +296,7 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
           if (items == 1 && source->type == hl_url)
           {
             ChkError(savefile_switch_to_option(idb->self_id));
+            ChkError(savefile_set_items(idb->self_id, alt_mhso));
             ChkError(savefile_set_leafname_from_url(idb->self_id, SaveFileWrit, source->data.url));
             ChkError(savefile_text_uri_or_url(idb->self_id));
             ChkError(savefile_toggle_uri_or_url(idb->self_id));
@@ -314,10 +347,17 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
     case ExportAsDraw:
     {
-      ChkError(savefile_switch_to_normal(idb->self_id));
-      ChkError(writablefield_set_value(0, idb->self_id, SaveFileWrit, "(NotDone!)"));
-      ChkError(savefile_set_filetype(idb->self_id, SaveFileDrag, FileType_DRAW));
+      ChkError(savefile_switch_to_option(idb->self_id));
+      ChkError(savefile_set_items(idb->self_id, alt_ead));
+      ChkError(savefile_set_leafname_from_url(idb->self_id, SaveFileWrit, browser_current_url(b)));
+      ChkError(savefile_text_without_backgrounds_or_with(idb->self_id));
+      ChkError(savefile_toggle_without_backgrounds_or_with(idb->self_id));
       ChkError(savefile_auto_width(idb->self_id));
+
+      savefile_browser = b;
+      savefile_token   = NULL;
+
+      ok = 1;
     }
     break;
 
@@ -335,15 +375,32 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
     }
     break;
 
-    /* Save the current location as a URI file */
+    /* Save a location as a URI file */
 
-    case FileSaveCurrentLocation:
+    case FileSaveFrameLocation:
+    case FileSaveParentLocation:
+    case FileSaveAncestorLocation:
     {
-      char * url = browser_current_url(b);
+      browser_data * alt = b;
+      char         * url;
+
+      /* For saving a frameset, work out the required browser_data struct */
+
+      if (pc == FileSaveParentLocation)
+      {
+        alt = utils_parent(b);
+        if (!alt) alt = utils_ancestor(b);
+      }
+
+      else if (pc == FileSaveAncestorLocation) alt = utils_ancestor(b);
+
+      b   = alt;
+      url = browser_current_url(b);
 
       if (!url) url = " ";
 
       ChkError(savefile_switch_to_option(idb->self_id));
+      ChkError(savefile_set_items(idb->self_id, alt_fsfl));
       ChkError(savefile_set_leafname_from_url(idb->self_id, SaveFileWrit, url));
       ChkError(savefile_text_uri_or_url(idb->self_id));
       ChkError(savefile_toggle_uri_or_url(idb->self_id));
@@ -386,6 +443,7 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
       /* Set the leafname and filetype */
 
       ChkError(savefile_switch_to_option(idb->self_id));
+      ChkError(savefile_set_items(idb->self_id, alt_el));
       ChkError(savefile_set_leafname_from_url(idb->self_id, SaveFileWrit, link->anchor));
       ChkError(savefile_text_uri_or_url(idb->self_id));
       ChkError(savefile_toggle_uri_or_url(idb->self_id));
@@ -406,6 +464,7 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
       const char * src   = NULL;
 
       ChkError(savefile_switch_to_radios(idb->self_id));
+      ChkError(savefile_set_items(idb->self_id, alt_ep));
 
       if (
            !image ||
@@ -466,6 +525,7 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
       char src[Limits_URL];
 
       ChkError(savefile_switch_to_radios(idb->self_id));
+      ChkError(savefile_set_items(idb->self_id, alt_eb));
 
       if (b->background_image == -1)
       {
@@ -770,6 +830,7 @@ static int savefile_drag_ended(int eventcode, ToolboxEvent * event, IdBlock * id
 
     case FileSaveFrame:
     case FileSaveParent:
+    case FileSaveAncestor:
     {
       saving = protocols_saving_document_source;
 
@@ -778,9 +839,11 @@ static int savefile_drag_ended(int eventcode, ToolboxEvent * event, IdBlock * id
     }
     break;
 
-    /* Size of a URI file for the current location */
+    /* Size of a URI file for a location */
 
-    case FileSaveCurrentLocation:
+    case FileSaveFrameLocation:
+    case FileSaveParentLocation:
+    case FileSaveAncestorLocation:
     {
       char * url = browser_current_url(savefile_browser);
 
@@ -798,6 +861,17 @@ static int savefile_drag_ended(int eventcode, ToolboxEvent * event, IdBlock * id
       saving = protocols_saving_document_as_text;
 
       if (is_known_browser(savefile_browser)) size = savetext_text_size(savefile_browser);
+      else                                    size = 0;
+    }
+    break;
+
+    /* Size of a Draw file */
+
+    case ExportAsDraw:
+    {
+      saving = protocols_saving_document_as_draw;
+
+      if (is_known_browser(savefile_browser)) size = savedraw_draw_size(savefile_browser, alt);
       else                                    size = 0;
     }
     break;
@@ -961,6 +1035,7 @@ static int savefile_ok(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
 
     case FileSaveFrame:
     case FileSaveParent:
+    case FileSaveAncestor:
     {
       if (is_known_browser(savefile_browser))
       {
@@ -982,10 +1057,24 @@ static int savefile_ok(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
     }
     break;
 
+    /* Save as Draw */
+
+    case ExportAsDraw:
+    {
+      if (is_known_browser(savefile_browser))
+      {
+        e = savedraw_save_draw(savefile_browser, path, alt);
+        if (!e) ok = 1;
+      }
+    }
+    break;
+
     /* Save the current location or a link as a URI or URL file */
 
     case ExportLink:
-    case FileSaveCurrentLocation:
+    case FileSaveFrameLocation:
+    case FileSaveParentLocation:
+    case FileSaveAncestorLocation:
     {
       if (is_known_browser(savefile_browser))
       {
@@ -1225,8 +1314,10 @@ void savefile_return_dialogue_info(ObjectId * window, ObjectId * ancestor)
   if (ancestor) *ancestor = ancestor_id;
 }
 
-
-
+/*************************************************/
+/* savefile_switch_to_normal()                   */
+/*                                               */
+/*************************************************/
 
 static _kernel_oserror * savefile_switch_to_normal(ObjectId window)
 {
@@ -1309,6 +1400,11 @@ savefile_switch_to_normal_set_extent:
   return NULL;
 }
 
+/*************************************************/
+/* savefile_switch_to_option()                   */
+/*                                               */
+/*************************************************/
+
 static _kernel_oserror * savefile_switch_to_option(ObjectId window)
 {
   BBox opt, ra1, ra2, wri;
@@ -1387,6 +1483,11 @@ savefile_switch_to_option_set_extent:
 
   return NULL;
 }
+
+/*************************************************/
+/* savefile_switch_to_radios()                   */
+/*                                               */
+/*************************************************/
 
 static _kernel_oserror * savefile_switch_to_radios(ObjectId window)
 {
@@ -1473,20 +1574,51 @@ savefile_switch_to_radios_set_extent:
   return NULL;
 }
 
+/*************************************************/
+/* savefile_set_items()                          */
+/*                                               */
+/*************************************************/
+
+static _kernel_oserror * savefile_set_items(ObjectId window, int selected)
+{
+  optionbutton_set_state(0, window, SaveFileOption, selected);
+
+  radiobutton_set_state (0, window, SaveFileRadio1, !selected);
+  radiobutton_set_state (0, window, SaveFileRadio2, selected);
+
+  return NULL;
+}
+
+/*************************************************/
+/* savefile_option_changed()                     */
+/*                                               */
+/*************************************************/
+
 static int savefile_option_changed(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
   return savefile_item_changed(idb);
 }
+
+/*************************************************/
+/* savefile_radio_changed()                      */
+/*                                               */
+/*************************************************/
 
 static int savefile_radio_changed(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
   return savefile_item_changed(idb);
 }
 
+/*************************************************/
+/* savefile_item_changed()                       */
+/*                                               */
+/*************************************************/
+
 static int savefile_item_changed(IdBlock * idb)
 {
   browser_data * b;
-  ComponentId    pc = idb->parent_component;
+  ComponentId    pc  = idb->parent_component;
+  int            alt = savefile_alternative_selected();
 
   /* Where did we come from? */
 
@@ -1509,10 +1641,10 @@ static int savefile_item_changed(IdBlock * idb)
   {
     case FileSaveFrame:
     case FileSaveParent:
+    case FileSaveAncestor:
     case HotlistSaveHotlist:
     case HistorySaveLocal:
     case HistorySaveGlobal:
-    case ExportAsDraw:
     case ExportAsText:
     {
       /* Nothing to do at the moment, shouldn't be able to access */
@@ -1541,6 +1673,8 @@ savefile_item_changed_gripe:
       hotlist_item * source = hotlist_find_selected_item();
       unsigned int   items  = hotlist_count_selected_items();
 
+      alt_mhso = alt;
+
       if (items && source)
       {
         if (items == 1 && source->type == hl_url)
@@ -1561,9 +1695,22 @@ savefile_item_changed_gripe:
     }
     break;
 
-    case FileSaveCurrentLocation:
+    case ExportAsDraw:
+    {
+      alt_ead = alt;
+
+      ChkError(savefile_toggle_without_backgrounds_or_with(idb->self_id));
+    }
+    break;
+
+    case FileSaveFrameLocation:
+    case FileSaveParentLocation:
+    case FileSaveAncestorLocation:
     case ExportLink:
     {
+      if (pc == ExportLink) alt_el   = alt;
+      else                  alt_fsfl = alt;
+
       ChkError(savefile_toggle_uri_or_url(idb->self_id));
     }
     break;
@@ -1572,6 +1719,8 @@ savefile_item_changed_gripe:
     {
       HStream    * image = menus_document_opened_over();
       const char * src   = NULL;
+
+      alt_ep = alt;
 
       if (image->style & IMG)             src = image->src;
       else if (image->tagno == TAG_INPUT) src = HtmlINPUTsrc(image);
@@ -1584,6 +1733,8 @@ savefile_item_changed_gripe:
     case ExportBackground:
     {
       char src[Limits_URL];
+
+      alt_eb = alt;
 
       if (b->background_image == -1)
       {
@@ -1632,6 +1783,11 @@ savefile_item_changed_gripe:
   return 1;
 }
 
+/*************************************************/
+/* savefile_alternative_selected()               */
+/*                                               */
+/*************************************************/
+
 int savefile_alternative_selected(void)
 {
   int  alt_set    = 0;
@@ -1677,6 +1833,11 @@ int savefile_alternative_selected(void)
   return alt_set;
 }
 
+/*************************************************/
+/* savefile_text_uri_or_url()                    */
+/*                                               */
+/*************************************************/
+
 static _kernel_oserror * savefile_text_uri_or_url(ObjectId window)
 {
   /* These can all fail silently if the gadget isn't present */
@@ -1699,6 +1860,11 @@ static _kernel_oserror * savefile_text_uri_or_url(ObjectId window)
   return 0;
 }
 
+/*************************************************/
+/* savefile_toggle_uri_or_url()                  */
+/*                                               */
+/*************************************************/
+
 static _kernel_oserror * savefile_toggle_uri_or_url(ObjectId window)
 {
   int set_url = savefile_alternative_selected();
@@ -1706,6 +1872,11 @@ static _kernel_oserror * savefile_toggle_uri_or_url(ObjectId window)
   if (set_url) return savefile_set_filetype(window, SaveFileDrag, FileType_URL);
   else         return savefile_set_filetype(window, SaveFileDrag, FileType_URI);
 }
+
+/*************************************************/
+/* savefile_text_sprite_or_original()            */
+/*                                               */
+/*************************************************/
 
 static _kernel_oserror * savefile_text_sprite_or_original(ObjectId window)
 {
@@ -1728,6 +1899,11 @@ static _kernel_oserror * savefile_text_sprite_or_original(ObjectId window)
 
   return 0;
 }
+
+/*************************************************/
+/* savefile_toggle_sprite_or_original()          */
+/*                                               */
+/*************************************************/
 
 static _kernel_oserror * savefile_toggle_sprite_or_original(ObjectId window, const char * src)
 {
@@ -1752,6 +1928,50 @@ static _kernel_oserror * savefile_toggle_sprite_or_original(ObjectId window, con
     return savefile_set_filetype(window, SaveFileDrag, filetype);
   }
 }
+
+/*************************************************/
+/* savefile_text_without_backgrounds_or_with()   */
+/*                                               */
+/*************************************************/
+
+static _kernel_oserror * savefile_text_without_backgrounds_or_with(ObjectId window)
+{
+  /* These can all fail silently if the gadget isn't present */
+
+  optionbutton_set_label(0,
+                         window,
+                         SaveFileOption,
+                         lookup_token("SaveFileOpBack:With background",0,0));
+
+  radiobutton_set_label (0,
+                         window,
+                         SaveFileRadio1,
+                         lookup_token("SaveFileRaNoBack:No background",0,0));
+
+  radiobutton_set_label (0,
+                         window,
+                         SaveFileRadio2,
+                         lookup_token("SaveFileRaBack:With background",0,0));
+
+  return 0;
+}
+
+/*************************************************/
+/* savefile_toggle_without_backgrounds_or_with() */
+/*                                               */
+/*************************************************/
+
+static _kernel_oserror * savefile_toggle_without_backgrounds_or_with(ObjectId window)
+{
+  /* There's very little to do here presently */
+
+  return savefile_set_filetype(window, SaveFileDrag, FileType_DRAW);
+}
+
+/*************************************************/
+/* savefile_set_correct_extent()                 */
+/*                                               */
+/*************************************************/
 
 static _kernel_oserror * savefile_set_correct_extent(ObjectId window, BBox * ra1)
 {
@@ -1804,6 +2024,11 @@ static _kernel_oserror * savefile_set_correct_extent(ObjectId window, BBox * ra1
 
   return NULL;
 }
+
+/*************************************************/
+/* savefile_auto_width()                         */
+/*                                               */
+/*************************************************/
 
 static _kernel_oserror * savefile_auto_width(ObjectId window)
 {

@@ -16,6 +16,8 @@
 /*          15-Mar-97: Reorganised a bit, putting  */
 /*                     functions in a more logical */
 /*                     order to aid legibility.    */
+/*          17-Dec-97: Added support for saving as */
+/*                     a Draw file.                */
 /***************************************************/
 
 #include <stdlib.h>
@@ -47,9 +49,11 @@
 #include "FontManage.h"
 #include "ImgHistory.h"
 #include "PrintStyle.h"
+#include "Protocols.h"
 #include "Redraw.h"
 #include "Reformat.h"
 #include "Save.h"
+#include "SaveDraw.h"
 #include "TokenUtils.h"
 #include "Toolbars.h"
 #include "URLutils.h"
@@ -91,6 +95,8 @@ static char       * ddata       = NULL;
 static int          nimages     = 0;
 static int          lastimage   = 0;
 static int          animhandler = 0;
+
+static char       * unique_name = NULL;
 
 /* For animated images, the filler function for the background of a   */
 /* transparent image will get called only for the main image with the */
@@ -942,7 +948,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
       imghistory_return_size(&url, 0, &ih_w, &ih_h);
 
-      if (ih_w > 0 && ih_h > 0) w = ih_w, h = ih_h;
+      if (ih_w > 0 && ih_h > 0) w = ih_w, h = ih_h, idata[nimages].fromhistory = 1;
     }
 
     /* Record the image's size, if we have it */
@@ -953,7 +959,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     /* If we knew the sizes, flag that the image size should not alter */
     /* from here on and it can be redrawn immediately.                 */
 
-    if (w > 0 && h > 0) idata[nimages].fixedsize = 1, idata[nimages].canredraw = 1;
+    if (!idata[nimages].fromhistory && w > 0 && h > 0) idata[nimages].fixedsize = 1, idata[nimages].canredraw = 1;
   }
 
   if (!choices.refo_wait) idata[nimages].canredraw = 1; /* If not waiting, reformats are immediate so canredraw is always true */
@@ -973,21 +979,35 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   }
   else
   {
-    /* If this is a cross-referencing image, and it hasn't got  */
-    /* its fixedsize flag set, then it has no size info yet.    */
-    /* In that case, get it from the image it cross references. */
+    /* Since we aren't starting a fetch for this image, must call image_update_image  */
+    /* on it to make sure any required reformats etc. (e.g. because a width or height */
+    /* but not both was specified in the HTML) are carried out.                       */
 
-    if (!idata[nimages - 1].fixedsize)
-    {
-      int xref = idata[nimages - 1].xref;
-
-      if (xref >= 0 && idata[xref].istore)
-      {
-        idata[nimages - 1].currw = idata[xref].istore->width_os;
-        idata[nimages - 1].currh = idata[xref].istore->height_os;
-      }
-    }
+    image_update_image(b, nimages - 1, NULL);
   }
+
+// This cross referencing trick to help unknown image sizes
+// looks to be deprecated in the face of the image history,
+// and may cause problems when one and only one dimension for
+// a particular image is specified in the HTML source.
+//
+//  else
+//  {
+//    /* If this is a cross-referencing image, and it hasn't got  */
+//    /* its fixedsize flag set, then it has no size info yet.    */
+//    /* In that case, get it from the image it cross references. */
+//
+//    if (!idata[nimages - 1].fixedsize && !idata[nimages - 1].currw && !idata[nimages - 1].currh)
+//    {
+//      int xref = idata[nimages - 1].xref;
+//
+//      if (xref >= 0 && idata[xref].istore)
+//      {
+//        idata[nimages - 1].currw = idata[xref].istore->width_os;
+//        idata[nimages - 1].currh = idata[xref].istore->height_os;
+//      }
+//    }
+//  }
 
   /* Reflect any change of status */
 
@@ -1080,7 +1100,7 @@ _kernel_oserror * image_process_null(browser_data * b)
         }
       }
     }
-    while (image != lastimage && idata[image].handle == 0);
+    while (image != lastimage && !idata[image].handle);
 
     lastimage = image;
 
@@ -1521,7 +1541,6 @@ _kernel_oserror * image_process_null(browser_data * b)
         /* of data for a fetch. (The code immediately above is for */
         /* getting the first chunk).                               */
       }
-
       /* Closure of long 'if' that sees if a fetch has started */
       /* for an image. (The code immediately above excutes if  */
       /* it has, else a fetch is started).                     */
@@ -2270,7 +2289,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
   /* currh with the new values.                                      */
 
   if (
-       !idata[image].hadfirst              &&
+       !idata[actual].hadfirst             &&
        idata[image].istore->width_os  >= 0 &&
        idata[image].istore->height_os >= 0
      )
@@ -2285,8 +2304,40 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
            && !idata[i].fixedsize
          )
       {
-        idata[i].currw = idata[image].istore->width_os;
-        idata[i].currh = idata[image].istore->height_os;
+        /* Had neither a width nor a height, or the image size came */
+        /* from the image history originally.                       */
+
+        if ((!idata[i].currw && !idata[i].currh) || idata[i].fromhistory)
+        {
+          idata[i].fromhistory = 0;
+
+          if (
+               idata[i].currw != idata[image].istore->width_os ||
+               idata[i].currh != idata[image].istore->height_os
+             )
+             idata[i].reformat = 1;
+
+          idata[i].currw = idata[image].istore->width_os;
+          idata[i].currh = idata[image].istore->height_os;
+        }
+
+        /* Had a height but no width - scale by the height */
+
+        else if (!idata[i].currw)
+        {
+          if (idata[i].currw != idata[image].istore->width_os) idata[i].reformat = 1;
+
+          idata[i].currw = (idata[image].istore->width_os * idata[i].currh) / idata[image].istore->height_os;
+        }
+
+        /* Had a width but no height - scale by the width */
+
+        else
+        {
+          if (idata[i].currh != idata[image].istore->height_os) idata[i].reformat = 1;
+
+          idata[i].currh = (idata[image].istore->height_os * idata[i].currw) / idata[image].istore->width_os;
+        }
       }
     }
   }
@@ -2404,10 +2455,16 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
                               idata[i].istore->height_os);
           }
 
-          /* Now do the reformat */
+          /* Now do the reformat, if the size changed */
 
           idata[i].hadfirst = 1;
-          reformat_format_from(idata[i].owner, l - 1, 0, i);
+
+          if (idata[i].reformat)
+          {
+            idata[i].reformat = 0;
+
+            reformat_format_from(idata[i].owner, l - 1, 0, i);
+          }
         }
       }
       else
@@ -2426,21 +2483,14 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
 
           if (!idata[i].hadfirst)
           {
+            int do_redraw = 1;
+
             idata[i].hadfirst = 1;
 
-            /* If the image size was specified in the HTML, just do a redraw  */
-            /* (which clears the background first, see the very large comment */
-            /* earlier on). Otherwise, the image size has changed so do a     */
-            /* reformat here.                                                 */
+            /* Is the image size fixed in the HTML? If not, may need to do a */
+            /* reformat.                                                     */
 
-            if (idata[i].fixedsize) image_update_area(idata[i].owner,
-                                                      x,
-                                                      y,
-                                                      &partial,
-                                                      i,
-                                                      1);
-
-            else
+            if (!idata[i].fixedsize)
             {
               /* As above, this is the first time we've known how big the image is */
               /* since it was encountered in the HTML, so record it in the image   */
@@ -2456,14 +2506,33 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
                                   idata[i].istore->height_os);
               }
 
-              /* Now do the reformat */
+              /* If the size changed, do a reformat */
 
-              reformat_format_from(idata[i].owner, l - 1, 0, i);
+              if (idata[i].reformat)
+              {
+                idata[i].reformat = 0;
+                do_redraw         = 0; /* Reformatting - no extra redraws needed */
+
+                reformat_format_from(idata[i].owner, l - 1, 0, i);
+              }
+            }
+
+            /* If no reformat was needed, just do a redraw (which clears the  */
+            /* background first; see the very large comment earlier on).      */
+
+            if (do_redraw)
+            {
+              image_update_area(idata[i].owner,
+                                x,
+                                y,
+                                &partial,
+                                i,
+                                1);
             }
           }
 
-          /* Otherwise, work out what region to redraw (may only require */
-          /* a partial area update)                                      */
+          /* Work out what region to redraw (may only require */
+          /* a partial area update)                           */
 
           else if (partial.ymax < partial.ymin)
           {
@@ -2891,7 +2960,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
     /* Render the image over the redraw region, with a scaled plot */
 
-    for (y = redraw.ymax; y >= redraw.ymin; y -= h)
+    for (y = redraw.ymax - h + 4; y >= redraw.ymin; y -= h)
     {
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
@@ -2943,7 +3012,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
     /* Render the image over the redraw region, with an unscaled plot */
 
-    for (y = redraw.ymax; y >= redraw.ymin; y -= h)
+    for (y = redraw.ymax - h + 4; y >= redraw.ymin; y -= h)
     {
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
@@ -3174,7 +3243,7 @@ int image_tile_window(browser_data * b, WimpRedrawWindowBlock * r, int xorigin, 
 
   /* Render the image over the redraw region */
 
-  for (y = ymax; y >= r->redraw_area.ymin - h; y -= h)
+  for (y = ymax - h + 4; y >= r->redraw_area.ymin - h; y -= h)
   {
     for (x = xmin; x <= r->redraw_area.xmax; x += w)
     {
@@ -3914,7 +3983,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
   box->xmax = idata[image].canredraw ? idata[image].currw & ~(wimpt_dx() - 1) : -1;
   box->ymax = idata[image].canredraw ? idata[image].currh & ~(wimpt_dy() - 1) : -1;
 
-  if (box->xmax < 1)
+  if (box->xmax < 1 || box->ymax < 1)
   {
     /* Don't have precise image dimensions, so work it out from */
     /* any ALT text present or go for a default value.          */
@@ -4660,7 +4729,536 @@ _kernel_oserror * image_export_original(char * path, browser_data * b, HStream *
 
 int image_original_size(browser_data * b, HStream * image)
 {
-  /* ...And for now, we don't know this either! */
+  int size = image_draw_file_size(b, image, 0);
 
-  return 4096;
+  if (size <= 0) return 0;
+  else           return size + 12;
+}
+
+/*************************************************/
+/* image_to_draw_file()                          */
+/*                                               */
+/* As image_redraw, but will output a sprite     */
+/* to the Draw file being output by SaveDraw.c   */
+/* (which must be active at the time this is     */
+/* called). Assumes that the appropriate Draw    */
+/* file object header has already been written.  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image;            */
+/*                                               */
+/*             Pointer to a RedrawWindowBlock    */
+/*             struct which holds information    */
+/*             about the current redraw session; */
+/*                                               */
+/*             Address of the token representing */
+/*             the image;                        */
+/*                                               */
+/*             The X offset in window coords (so */
+/*             OS units) of the left hand edge   */
+/*             of the image;                     */
+/*                                               */
+/*             The Y offset in window coords (so */
+/*             OS units) of the bottom edge of   */
+/*             the image;                        */
+/*                                               */
+/*             1 to assume the image is already  */
+/*             present as a sprite in            */
+/*             'unique_name' else create the     */
+/*             image first.                      */
+/*                                               */
+/* Returns:    0 if failed, 1 if successful; if  */
+/*             failed, caller should try some    */
+/*             alternative representation (e.g.  */
+/*             write out a placeholder).         */
+/*************************************************/
+
+int image_to_draw_file(browser_data * b, WimpRedrawWindowBlock * r, HStream * token, int x, int y, int dont_create)
+{
+  int image, actual;
+  int plotted = 0;
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_to_draw_file: Called with token %d\n", token);
+  #endif
+
+  /* Get the image number for the given token; 'actual' holds the actual */
+  /* image for the given token, which may cross reference 'image', which */
+  /* holds the actual render data.                                       */
+
+  image = image_get_token_image_actual(b, token);
+
+  if (image < 0) return NULL;
+
+  actual = image;
+  if (idata[actual].xref >= 0) image = idata[actual].xref;
+
+  /* If the image has a fetched width and height, */
+  /* and the browser choices specify that images  */
+  /* should be shown (or the image itself has a   */
+  /* high priority show bit set), display part or */
+  /* all of the image.                            */
+
+  if (
+       image  >= 0 &&
+       actual >= 0 &&
+       (
+         b->show_foreground                     ||
+         b->displayed == Display_External_Image ||
+         idata[actual].priority
+       )
+       && idata[actual].canredraw
+       && idata[image].istore             /* Must check istore here, as if width / height are <= 0, */
+       && idata[image].istore->width  > 0 /* the image library has no data for the image and will   */
+       && idata[image].istore->height > 0 /* not have filled in (e.g.) the Render field. So you'd   */
+       && idata[image].istore->DumpSprite /* get a rather nasty abort trying to call it!            */
+       && image_can_be_saved_as_sprite(b, image)
+
+//       && idata[image].istore->StartExport
+//       && idata[image].istore->Export
+//       && idata[image].istore->EndExport
+     )
+  {
+    FILE            * input = NULL;
+    _kernel_oserror * e     = NULL;
+
+    int               written, ok;
+    char              buffer[10240];
+
+//    int               image_size = 0;
+
+    browser_redrawing = b;
+    image_redrawing   = actual;
+
+    if (!dont_create || !unique_name)
+    {
+      unique_name = malloc(Limits_OS_Pathname);
+
+      if (unique_name)
+      {
+        protocols_util_make_unique_name(unique_name, Limits_OS_Pathname);
+
+        /* Output the sprite, skipping the first 12 bytes of sprite area header */
+
+        e = idata[image].istore -> DumpSprite(idata[image].istore,
+                                              unique_name,
+                                              -1);
+      }
+    }
+
+    if (e || !unique_name) ok = 0;
+    else
+    {
+      ok = 1;
+
+      input = fopen(unique_name, "rb");
+
+      if (!input || !input->__file) ok = 0;
+    }
+
+    if (ok)
+    {
+      e = _swix(OS_Args,
+                _INR(0,2),
+
+                1,
+                input->__file,
+                12);
+
+      if (e) ok = 0;
+    }
+
+    if (ok)
+    {
+      do
+      {
+        e = _swix(OS_GBPB,
+                  _INR(0,3) | _OUT(3),
+
+                  4,
+                  input->__file,
+                  buffer,
+                  sizeof(buffer),
+
+                  &written);
+
+        if (!e && written < sizeof(buffer)) ok = savedraw_write_bytes(buffer, sizeof(buffer) - written);
+        else                                ok = e ? 0 : 1;
+      }
+      while (!e && written < sizeof(buffer));
+    }
+
+    if (input)
+    {
+      fclose(input);
+
+      if (unique_name) remove(unique_name);
+
+      free(unique_name);
+      unique_name = NULL;
+    }
+
+//    e       = idata[image].istore -> StartExport(idata[image].istore, &image_size);
+//    ok      = 1;
+//
+//    written = 12;
+//    e       = idata[image].istore -> Export(idata[image].istore, buffer, &written);
+//
+//    while (!e && ok && written)
+//    {
+//      written = sizeof(buffer);
+//
+//      e = idata[image].istore -> Export(idata[image].istore, buffer, &written);
+//
+//      if (!e) ok = savedraw_write_bytes(buffer, written);
+//      else    ok = 0;
+//    }
+//
+//    e = idata[image].istore -> EndExport(idata[image].istore);
+
+    /* Flag if we succeeded */
+
+    browser_redrawing = NULL;
+    image_redrawing   = -1;
+
+    if (!e && ok) plotted = 1;
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_to_draw_file: Exitting with %d\n", plotted);
+  #endif
+
+  return plotted;
+}
+
+/*************************************************/
+/* image_draw_file_size()                        */
+/*                                               */
+/* Returns the amount of data that               */
+/* image_to_draw_file would write to the output  */
+/* file.                                         */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image;            */
+/*                                               */
+/*             Address of the token representing */
+/*             the image;                        */
+/*                                               */
+/*             1 to not delete the scrap file    */
+/*             in 'unique_name' that this        */
+/*             writes, else 0.                   */
+/*                                               */
+/* Returns:    0 if failed, else the amount of   */
+/*             data that image_to-draw_file      */
+/*             would write to the output file.   */
+/*************************************************/
+
+int image_draw_file_size(browser_data * b, HStream * token, int dont_delete)
+{
+  int image, actual;
+
+  /* Get the image number for the given token; 'actual' holds the actual */
+  /* image for the given token, which may cross reference 'image', which */
+  /* holds the actual render data.                                       */
+
+  image = image_get_token_image_actual(b, token);
+
+  if (image < 0) return NULL;
+
+  actual = image;
+  if (idata[actual].xref >= 0) image = idata[actual].xref;
+
+  /* If the image has a fetched width and height, */
+  /* and the browser choices specify that images  */
+  /* should be shown (or the image itself has a   */
+  /* high priority show bit set), display part or */
+  /* all of the image.                            */
+
+  if (
+       image  >= 0 &&
+       actual >= 0 &&
+       (
+         b->show_foreground                     ||
+         b->displayed == Display_External_Image ||
+         idata[actual].priority
+       )
+       && idata[actual].canredraw
+       && idata[image].istore             /* Must check istore here, as if width / height are <= 0, */
+       && idata[image].istore->width  > 0 /* the image library has no data for the image and will   */
+       && idata[image].istore->height > 0 /* not have filled in (e.g.) the Render field. So you'd   */
+       && idata[image].istore->DumpSprite /* get a rather nasty abort trying to call it!            */
+       && image_can_be_saved_as_sprite(b, image)
+
+//       && idata[image].istore->StartExport
+//       && idata[image].istore->Export
+//       && idata[image].istore->EndExport
+     )
+  {
+    _kernel_oserror * e          = NULL;
+    int               image_size = 0;
+
+    if (unique_name)
+    {
+      remove(unique_name);
+
+      free(unique_name);
+      unique_name = NULL;
+    }
+
+    unique_name = malloc(Limits_OS_Pathname);
+
+    if (unique_name)
+    {
+      protocols_util_make_unique_name(unique_name, Limits_OS_Pathname);
+
+      e = idata[image].istore -> DumpSprite(idata[image].istore,
+                                            unique_name,
+                                            -1);
+    }
+
+    if (!e && unique_name)
+    {
+      e = _swix(OS_File,
+                _INR(0,1) | _OUT(4),
+
+                17,
+                unique_name,
+
+                &image_size);
+
+      if (!dont_delete)
+      {
+        remove(unique_name);
+
+        free(unique_name);
+        unique_name = NULL;
+      }
+    }
+
+//    e = idata[image].istore -> StartExport(idata[image].istore, &image_size);
+//
+//    if (!e) idata[image].istore -> EndExport(idata[image].istore);
+
+    /* Remember, we'd skip the first 12 bytes of sprite area header */
+    /* in the output Draw file.                                     */
+
+    if (!e && image_size > 12) return image_size - 12;
+  }
+
+  return 0;
+}
+
+/*************************************************/
+/* image_tile_to_draw()                          */
+/*                                               */
+/* For a given redraw rectangle, tiles the       */
+/* background image within that rectangle.       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the window and image; */
+/*                                               */
+/*             Pointer to a WimpRedrawWindow-    */
+/*             Block structure defining the area */
+/*             over which to tile the image;     */
+/*                                               */
+/*             The X and Y coordinates to take   */
+/*             as the tile origin, in OS units;  */
+/*                                               */
+/*             Pointer to an int if wanting to   */
+/*             know the size of the item only,   */
+/*             else NULL (NB the int contents    */
+/*             are not updated - the pointer is  */
+/*             acting like a flag, basically).   */
+/*                                               */
+/* Returns:    0 if failed, else the amount of   */
+/*             data that was output.             */
+/*************************************************/
+
+int image_tile_to_draw(browser_data * b, WimpRedrawWindowBlock * r, int xorigin, int yorigin, int * size)
+{
+  char              name[Limits_OS_Pathname];
+  _kernel_oserror * e;
+  FILE            * input = NULL;
+  void            * block = NULL;
+  int               image;
+  int               tsize = 0;
+  int               x, y, w, h;
+  int               xmin, ymax;
+  int               image_size;
+
+  /* Can only tile if there's a background image defined and fully fetched */
+
+  if (b->background_image < 0) return 0;
+
+  image = b->background_image;
+  if (idata[image].xref >= 0) image = idata[image].xref;
+
+  if (!idata[image].fetched || !idata[image].istore) return 0;
+
+  /* Round the width and height to pixel boundaries */
+
+  w = idata[image].istore->width_os  & ~(wimpt_dx() - 1);
+  h = idata[image].istore->height_os & ~(wimpt_dy() - 1);
+
+  if (w < 1 || h < 1) return 0;
+
+  /* Work out the coordinates over which to tile the image */
+
+  xmin = coords_x_toworkarea(r->redraw_area.xmin,r);
+  ymax = coords_y_toworkarea(r->redraw_area.ymax,r);
+
+  xmin -= ((xmin - xorigin) % w);
+  ymax -= ((ymax - yorigin) % h) + 1;
+
+  xmin = coords_x_toscreen(xmin, r);
+  ymax = coords_y_toscreen(ymax, r);
+
+  /* Do a blank rectangle if the image is transparent (has a mask) */
+
+  if (idata[image].istore->transparent)
+  {
+    redraw_set_colour(redraw_backcol(b));
+
+    tsize += DSIZE_FRECT;
+
+    if (!size)
+    {
+      if (!savedraw_rectangle_fill(OTD(r->redraw_area.xmin),
+                                   OTD(r->redraw_area.ymin),
+                                   OTD(r->redraw_area.xmax - r->redraw_area.xmin),
+                                   OTD(r->redraw_area.ymax - r->redraw_area.ymin),
+                                   redraw_backcol(b))) return 0;
+    }
+  }
+
+  /* How big is each image going to be? */
+
+  protocols_util_make_unique_name(name, sizeof(name));
+
+  e = idata[image].istore -> DumpSprite(idata[image].istore,
+                                        name,
+                                        -1);
+
+  if (!e)
+  {
+    e = _swix(OS_File,
+              _INR(0,1) | _OUT(4),
+
+              17,
+              name,
+
+              &image_size);
+  }
+
+  if (e || image_size <= 12) return 0;
+
+  /* Subtract the sprite file header size */
+
+  image_size -= 12;
+
+  input = fopen(name, "rb");
+  block = malloc(image_size);
+
+  if (block && input && input->__file)
+  {
+    /* Load the image */
+
+    e = _swix(OS_Args,
+              _INR(0,2),
+
+              1,
+              input->__file,
+              12);
+
+    if (e) goto image_tile_to_draw_exit;
+
+    e = _swix(OS_GBPB,
+              _INR(0,3),
+
+              4,
+              input->__file,
+              block,
+              image_size);
+
+    if (e) goto image_tile_to_draw_exit;
+
+    fclose(input);
+    input = NULL;
+
+    /* Render the image over the redraw region */
+
+    for (y = ymax - h + 4; y >= r->redraw_area.ymin - h; y -= h)
+    {
+      for (x = xmin; x <= r->redraw_area.xmax; x += w)
+      {
+        if (!size)
+        {
+          draw_spristrhdr hdr;
+          int             ok;
+
+          /* Write the item header */
+
+          hdr.tag  = draw_OBJSPRITE;
+          hdr.size = image_size + sizeof(hdr);
+
+          hdr.bbox.xmin = OTD(x);
+          hdr.bbox.ymin = OTD(y);
+          hdr.bbox.xmax = OTD(x + w);
+          hdr.bbox.ymax = OTD(y + h);
+
+          if (!savedraw_write_bytes((char *) &hdr, sizeof(hdr))) goto image_tile_to_draw_exit;
+
+          /* Write out the image */
+
+          browser_redrawing = b;
+          image_redrawing   = image;
+
+          ok = savedraw_write_bytes(block, image_size);
+
+          browser_redrawing = NULL;
+          image_redrawing   = -1;
+
+          if (!ok) goto image_tile_to_draw_exit;
+
+          #ifdef STRICT_PARSER
+
+            if (e)
+            {
+              e->errnum = Utils_Error_Custom_Message;
+              show_error_ret(e);
+
+              goto image_tile_to_draw_exit;
+            }
+
+          #else
+
+            if (e) goto image_tile_to_draw_exit;
+
+          #endif
+        }
+
+        tsize += image_size + sizeof(draw_spristrhdr);
+      }
+    }
+  }
+
+  /* Successful exit */
+
+  if (input) fclose(input);
+  if (block) free(block);
+
+  remove(name);
+
+  return tsize;
+
+  /* Error condition exit */
+
+image_tile_to_draw_exit:
+
+  if (input) fclose(input);
+  if (block) free(block);
+
+  remove(name);
+
+  return 0;
 }
