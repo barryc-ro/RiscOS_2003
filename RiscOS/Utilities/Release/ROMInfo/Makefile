@@ -69,4 +69,5 @@ clean:
 
 # Dynamic dependencies:
 o.ROMinfo:	c.ROMinfo
-o.ROMinfo:	c.ROMinfo
+o.ROMinfo:	C:h.swis
+o.ROMinfo:	C:h.kernel
