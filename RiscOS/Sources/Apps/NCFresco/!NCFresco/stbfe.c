@@ -1020,6 +1020,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    /* check no scroll flag - note this can override that specified in the frameset */
 	    if (vals[content_tag_NOSCROLL].value)
 		v->scrolling = fe_scrolling_NO;
+	    /* if this is top level then ensure it is set to invisible */
+	    else if (v->parent == NULL)
+		v->scrolling = fe_scrolling_INVISIBLE;
 
 	    /* check fast load flag */
 	    v->fast_load = vals[content_tag_FASTLOAD].value != 0;

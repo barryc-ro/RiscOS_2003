@@ -441,7 +441,7 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
 
 os_error *render_plot_icon(char *sprite, int x, int y)
 {
-    sprite_pixtrans pt[16], *ptp;
+    sprite_pixtrans pt[256];
     sprite_factors facs;
     sprite_header *sph;
     sprite_area *area;
@@ -480,15 +480,18 @@ os_error *render_plot_icon(char *sprite, int x, int y)
     id.tag = sprite_id_addr;
     id.s.addr = sph;
 
+    /* read the scaling factors */
     if ((ep = wimp_readpixtrans(area, &id, &facs, pt)) != NULL)
 	return ep;
 
+    /* if 8bpp or more then read the colourtrans table separately */
     if (bbc_modevar(sph->mode, bbc_Log2BPP) > 2)
-	ptp = NULL;
-    else
-	ptp = pt;
+    {
+	if ((ep = _swix(ColourTrans_GenerateTable, _INR(0,5), area, sph, -1, -1, pt, 1)) != NULL)
+	    return ep;
+    }
 
-    return sprite_put_scaled(area, &id, 0x8, x, y, &facs, ptp);
+    return sprite_put_scaled(area, &id, 0x8, x, y, &facs, pt);
 }
 
 

@@ -784,12 +784,14 @@ int fe_history_visit(fe_view v, const char *url, const char *title)
     top = frameutils_find_top(v);
     item = top->hist_at;
 
+#if 0
     if (v == top && item)
     {
         /* If the url is of the current page, ignore it */
         if (item->frame[0].url && strcmp(url, item->frame[0].url) == 0)
 	    return 0;
     }
+#endif
 
 #if 0
     if (item)

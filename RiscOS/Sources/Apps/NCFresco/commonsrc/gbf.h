@@ -25,9 +25,20 @@
 #define GBF_LOW_MEMORY			0x00000800 /* have started discarding images/using emergency cache */
 #define GBF_ANTI_TWITTER		0x00001000 /* using s/w anti-twitter */
 #define GBF_VERY_LOW_MEMORY		0x00002000 /* have almost exhausted emergency cache */
+#define GBF_SI1_PCT			0x00004000 /* Hack for Si for %ages and minwidth */
 
 extern int gbf_flags;
+
+#if defined(STBWEB) || defined(BUILDERS)
 extern int gbf_active(int gbf);
+#elif defined(FRESCO)
+/* pdh: try and make it compile-time constant */
+/* daf: BTW, this is already out of date :-) */
+#define gbf_active(arg) ( (arg==GBF_GUESS_ATTRIBUTES)           \
+                          || (arg==GBF_GUESS_ENUMERATIONS)      \
+                          || (arg==GBF_NEW_FORMATTER) )
+#endif
+
 extern void gbf_init(void);	/* Don't ask why needed! */
 
 #endif /* included_gbf_h */

@@ -270,7 +270,7 @@ extern int nvram_write(const char *tag, int new_val);
 #define snd_BEEPS_OFF		0
 
 #define snd_SOUND_ON		soundfx_BROWSER_SOUND_ON
-#define snd_SOUND_OFF		soundfx_BROWSER_SOUND_ON
+#define snd_SOUND_OFF		soundfx_BROWSER_SOUND_OFF
 
 #define snd_ERROR		soundfx_ACTION_FAIL
 

@@ -345,9 +345,20 @@ extern void finishnobr (SGMLCTX * context, ELEMENT * element)
 
 extern void startwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
+    HTMLCTX *htmlctx = htmlctxof(context);
+    BOOL old_no_break;
+
     generic_start (context, element, attributes);
 
-    text_item_push_break(htmlctxof(context));
+/*  text_item_push_break(htmlctxof(context)); */
+    
+    /* cancel the NOBR stuff */
+    old_no_break = htmlctx->no_break;
+    htmlctx->no_break = FALSE;
+
+    text_item_push_word(htmlctx, 0, FALSE);
+
+    htmlctx->no_break = old_no_break;
 }
 
 /*****************************************************************************/

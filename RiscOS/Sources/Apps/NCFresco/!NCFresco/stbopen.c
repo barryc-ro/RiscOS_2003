@@ -507,11 +507,13 @@ static os_error *fe__reload(fe_view v, void *handle)
 	/* We have to take a copy because if the file is from local disc
 	 * the 'displaying' doc will be removed before
 	 * the operation has completed
+	 * We use the FROM HISTORY flag so that it doesn't get entered into the history.
 	 */
         if (!ep)
         {
             url = strdup(url);
-            ep = frontend_complain(frontend_open_url(url, v, TARGET_SELF, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_REFERER));
+            ep = frontend_complain(frontend_open_url(url, v, TARGET_SELF, NULL,
+						     fe_open_url_NO_CACHE | fe_open_url_NO_REFERER | fe_open_url_FROM_HISTORY));
             mm_free(url);
         }
     }

@@ -78,6 +78,21 @@ static BOOL should_we_display_url(const char *url)
 	strncasecomp(url, "file:/cache:", sizeof("file:/cache:")-1) != 0;
 }
 
+static void write_url_with_breaks(FILE *f, const char *url)
+{
+    const char *s = url;
+    int c;
+
+    fputs("<NOBR>", f);
+    for (c = *s++; c; c = *s++)
+    {
+	fputc(c, f);
+	if (c == '/')
+	    fputs("<WBR>", f);
+    }
+    fputs("</NOBR>", f);
+}
+
 static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
     char *qlink, *qtitle;
@@ -100,7 +115,10 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	    fprintf(f, msgs_lookup("version2"), title);
 
 	if (should_we_display_url(url))
-	    fprintf(f, msgs_lookup("version3"), url);
+	{
+	    fputs(msgs_lookup("version3"), f);
+	    write_url_with_breaks(f, url);
+	}
 
 	if ((s = backend_check_meta(doc, "last-modified")) != NULL)
 	    fprintf(f, msgs_lookup("version4"), s);
@@ -129,7 +147,10 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	    link = qlink;
 
 	if (should_we_display_url(link))
-	    fprintf(f, msgs_lookup("version3a"), link);
+	{
+	    fputs(msgs_lookup("version3a"), f);
+	    write_url_with_breaks(f, link);
+	}
 
 	if (qtitle)
 	    fprintf(f, msgs_lookup("version2"), qtitle);
