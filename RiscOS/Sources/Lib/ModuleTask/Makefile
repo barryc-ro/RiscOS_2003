@@ -40,7 +40,7 @@ export_hdrs:
 export_libs:
 	CDir		<Lib$Dir>.$(COMPONENT)
 	CDir		<Lib$Dir>.$(COMPONENT).o
-	Every.Every2	-c "@.o.Sources.!Module.!Run @.o.Sources.!Normal.!Run" Obey %0.!Run
+	Every.Every2	-c "@.o.Sources.!Module.!Run @.o.Sources.!Normal.!Run" Obey %0
 	Every.Every2	-c @.o.lib* copy %0 <Lib$Dir>.$(COMPONENT).o.%1		$(CopyFlags)
 	Echo		Library $(COMPONENT): 'export_libs' finished.
 
