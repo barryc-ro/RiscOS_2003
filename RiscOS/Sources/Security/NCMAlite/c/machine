@@ -1,11 +1,24 @@
+/************************************************************************/
+/* File:    machine.c                                                   */
+/* Purpose: Deals with the main state machine for the NCMAlite module   */
+/*           and associated routines.                                   */
+/*                                                                      */
+/* Author:  David Cotton <mailto:david.cotton@pacemicro.com>            */
+/*                                                                      */
+/************************************************************************/
+
+/* ANSI includes */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
+/* Library includes */
 #include "kernel.h"
 #include "swis.h"
 #include "os.h"
 
+/* Local includes */
 #define PROTOTYPES_INTERNAL /* make prototypes and globals internal to this file */
 #include "options.h"
 #include "machine.h"
@@ -22,18 +35,58 @@
 #include "vectors.h"
 #include "init.h"
 #include "dynalloc.h"
-
 #include "DBUG.h"
 #include "task.h"
-
 #include "options.h"
 
 
 
+#ifdef ENABLE_DEBUGGING
+  extern const int DebugOutputDevice;
+#endif /* ENABLE_DEBUGGING */
+
+
+/***************************
+  Foward prototypes:
+***************************/
+NCMA_STATE start_redial(void);
+static NCMA_STATE default_pin_failed(void);
+static char* store_current_browser_url(void);
+static char* store_current_browser_url(void);
+static char* misc_getenv_malloc (const char *variable);
+static bool open_current_browser_url(void);
 #ifdef SC_SWAPPING
-  /* Routine to free memory used in checking whether the smartcard is the
-      same one as the session started with. This routine should be called at
-      the end of a session. */
+static NCMA_STATE after_pin(void); /* Declare this routine */
+static NCMA_STATE default_pin_failed(void);
+#endif /* SC_SWAPPING */
+
+
+
+
+/***************************
+ Statc (file-scope) variables:
+***************************/
+/* This variable stores the URL that the browser was at when a redial was requested. */
+static char* current_url_store = NULL;
+/* This variable holds whether or not a redial failed. */
+bool redial_failed = false;
+
+
+
+
+#ifdef SC_SWAPPING
+/*********************************************************************************/
+/* tidy_memory                                                                   */
+/*                                                                               */
+/* Routine to free memory used in checking whether the smartcard is the          */
+/*  same one as the session started with. This routine should be called at       */
+/*  the end of a session. */                                                     */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    None                                                              */
+/*                                                                               */
+/*********************************************************************************/
 void tidy_memory(void)
 {
   if (bootblock_copy) /* memory has been allocated */
@@ -42,16 +95,8 @@ void tidy_memory(void)
     bootblock_copy = NULL;
   }
 }
-
-static NCMA_STATE after_pin(void); /* Declare this routine */
-static NCMA_STATE default_pin_failed(void);
-
 #endif /* SC_SWAPPING */
 
-
-#ifdef ENABLE_DEBUGGING
-  extern const int DebugOutputDevice;
-#endif /* ENABLE_DEBUGGING */
 
 
 
@@ -73,6 +118,18 @@ unsigned int default_PIN_attempts = 0;
 
 
 
+
+/*********************************************************************************/
+/* trans_string                                                                  */
+/*                                                                               */
+/* This routine returns a textual string relating to the status of the NCMAlite  */
+/*  state machine transitions.                                                   */
+/*                                                                               */
+/* Parameters: trans                                                             */
+/*                                                                               */
+/* Returns:    A textual string describing the last transition performed.        */
+/*                                                                               */
+/*********************************************************************************/
 char *trans_string(NCMA_TRANS trans)
 {
   static char *t_table[] = {
@@ -149,6 +206,20 @@ char *trans_string(NCMA_TRANS trans)
   return(t_table[trans]);
 }
 
+
+
+
+/*********************************************************************************/
+/* state_string                                                                  */
+/*                                                                               */
+/* This routine returns a textual string relating to the status of the NCMAlite  */
+/*  state machine.                                                               */
+/*                                                                               */
+/* Parameters: state                                                             */
+/*                                                                               */
+/* Returns:    A textual string describing the state.                            */
+/*                                                                               */
+/*********************************************************************************/
 char *state_string(NCMA_STATE state)
 {
     static char *s_table[] = {
@@ -191,6 +262,19 @@ char *state_string(NCMA_STATE state)
 }
 
 
+
+
+/*********************************************************************************/
+/* email_status_string                                                           */
+/*                                                                               */
+/* This routine returns a textual string relating to the status of the email     */
+/*  client. It is only enabled on EMAIL_CLIENT builds.                           */
+/*                                                                               */
+/* Parameters: EMAIL_CLIENT_STATE                                                */
+/*                                                                               */
+/* Returns:    A textual string describing the state.                            */
+/*                                                                               */
+/*********************************************************************************/
 #ifdef EMAIL_CLIENT
 char *email_status_string(EMAIL_CLIENT_STATE state)
 {
@@ -205,16 +289,21 @@ char *email_status_string(EMAIL_CLIENT_STATE state)
 #endif /* EMAIL_CLIENT */
 
 
-/* Foward prototypes: */
-NCMA_STATE start_redial(void);
-static NCMA_STATE default_pin_failed(void);
 
 
 
-
-/* It is a requirement of the MPT project to display a connect screen
-    (connect-np) if the PIN on the card is 9999. To enable this, this routine
-    selects the proper screen to open. */
+/*********************************************************************************/
+/* select_connect_screen_to_display                                              */
+/*                                                                               */
+/* It is a requirement of the MPT project to display a connect screen            */
+/*  (connect-np) if the PIN on the card is 9999. To enable this, this routine    */
+/*  selects the proper screen to open.                                           */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    None                                                              */
+/*                                                                               */
+/*********************************************************************************/
 void select_connect_screen_to_display(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "select_connect_screen_to_display()\n");
@@ -228,16 +317,26 @@ void select_connect_screen_to_display(void)
     ncma_url_open(URL_PATH(connect-np.html)); /* Open the connect screen with no chnage pin button */
   }
 #else
-  ncma_url_open(URL_PATH(connect.html)); /* Normal behaviour */
+  ncma_url_open(URL_PATH(connect.html)); /* Normal behaviour - open the normal 'connect' screen.*/
 #endif /* ENABLE_SECOND_DEFAULT_PIN */
 }
 
 
 
-/* This routine selects whether to go to the 'connect' or the 'continue'
-    screen depending on whether or not the smartcard is inserted or verified,
-    etc
-*/
+
+
+/*********************************************************************************/
+/* select_screen_to_move_to                                                      */
+/*                                                                               */
+/* This routine selects whether to go to the 'connect' or the 'continue'         */
+/*  screen depending on whether or not the smartcard is inserted or verified,    */
+/*  etc                                                                          */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The new NCMA_STATE.                                               */
+/*                                                                               */
+/*********************************************************************************/
 NCMA_STATE select_screen_to_move_to(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "select_screen_to_move_to()\n");
@@ -291,9 +390,22 @@ NCMA_STATE select_screen_to_move_to(void)
 
 
 
-/* This routine initialises all variables to do with smartcard swapping and
-    the email client. It is used at the beginning of a session, i.e. at
-    initialisation and after a standby/logoff sequence. */
+
+
+
+
+/*********************************************************************************/
+/* initialise_variables                                                          */
+/*                                                                               */
+/* This routine initialises all variables to do with smartcard swapping and      */
+/*  the email client. It is used at the beginning of a session, i.e. at          */
+/*  initialisation and after a standby/logoff sequence.                          */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    None                                                              */
+/*                                                                               */
+/*********************************************************************************/
 void initialise_variables(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "initialise_variables().\n");
@@ -319,8 +431,19 @@ void initialise_variables(void)
 
 
 
-/* This routine is called from the task part of the module when the
-    logoff message has been recieved. */
+
+
+/*********************************************************************************/
+/* logoff                                                                        */
+/*                                                                               */
+/* This routine is called from the task part of the module when the              */
+/*  logoff message has been recieved.                                            */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The new state.                                                    */
+/*                                                                               */
+/*********************************************************************************/
 NCMA_STATE logoff(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "logoff() called. Logging out.\n");
@@ -338,8 +461,21 @@ NCMA_STATE logoff(void)
 
 
 
-/* build tag cache without connecting, to allow ISPCapture to display current sc values */
-NCMA_STATE PreConnect_in_NCMA_Connect()
+
+/*********************************************************************************/
+/* PreConnect_in_NCMA_Connect                                                    */
+/*                                                                               */
+/* This routine allows a client application to ask NCMAlite to create it's       */
+/*  tag cache off the smartcard without NCMAlite having connected. It is used by */
+/*  ISPCapture and the email client, which need to know about tags from the      */
+/*  smartcard before NCMAlite has conencted.                                     */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The new state.                                                    */
+/*                                                                               */
+/*********************************************************************************/
+NCMA_STATE PreConnect_in_NCMA_Connect(void)
 {
   DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: PreConnect_in_NCMA_Connect() called\n");
 
@@ -382,9 +518,20 @@ NCMA_STATE PreConnect_in_NCMA_Connect()
 
 
 
-/*
-  Connect to ISP, reading smartcard values.
-*/
+
+/*********************************************************************************/
+/* URLConnect_in_NCMA_Connect                                                    */
+/*                                                                               */
+/* This routine initialises the connection process. It reads the data off the    */
+/*  smartcard and then starts the dialler. In the course of doing this it has to */
+/*  deal with many failure states, for instance if the data on the smartcard is  */
+/*  missing or invalid.                                                          */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The new state.                                                    */
+/*                                                                               */
+/*********************************************************************************/
 NCMA_STATE URLConnect_in_NCMA_Connect(void)
 {
   DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: URLConnect_in_NCMA_Connect() called\n");
@@ -393,119 +540,114 @@ NCMA_STATE URLConnect_in_NCMA_Connect(void)
     ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
   }
 
-#ifdef SC_SWAPPING
-/* Check that sc_bootblock returns that the cards are the same. */
-                   {
-                     int temp_return_value = fetch_sc_bootblock(FETCH_BOOTBLOCK_FOR_CLIENT);
-		     if(temp_return_value == -1)
-		     {
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
-		     }
-		     if(temp_return_value == -2)
-		     {
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard is not the same one as at start of session.\n");
-                         ncma_dbox_open_to_target(URL_PATH(correct.html), INCORRECT_DIALOGUE_BOX);
-                         return(State_NCMAWrongISPCard);
-		     }
-                   }
-#else
-		     if(fetch_sc_bootblock(FETCH_BOOTBLOCK_FOR_CLIENT)<0)
-		     {
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+  #ifdef SC_SWAPPING
+  /* Check that sc_bootblock returns that the cards are the same. */
+  {
+    int temp_return_value = fetch_sc_bootblock(FETCH_BOOTBLOCK_FOR_CLIENT);
+    if(temp_return_value == -1)
+    {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+    }
+    if(temp_return_value == -2)
+    {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard is not the same one as at start of session.\n");
+      ncma_dbox_open_to_target(URL_PATH(correct.html), INCORRECT_DIALOGUE_BOX);
+      return(State_NCMAWrongISPCard);
+    }
+  }
+  #else
+  if(fetch_sc_bootblock(FETCH_BOOTBLOCK_FOR_CLIENT)<0)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+    #ifdef ISP_CAPTURE
+    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture and moving to State_NCMAConnect\n");
+    ncma_isp_capture();
+    return(State_NCMAConnect);
+    #else
+    ncma_dbox_open_to_target(URL_PATH(invalid.html), COMMON_DIALOGUE_BOX); // was dmaged.html
+    return(State_NCMABadCard);
+    #endif /* ISP_CAPTURE */
+  }
+  #endif /* SC_SWAPPING */
 
-#ifdef ISP_CAPTURE
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
-       			 ncma_isp_capture();
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Going to State_NCMAConnect\n");
-       			 return(State_NCMAConnect);
-#else
-		         ncma_dbox_open_to_target(URL_PATH(invalid.html), COMMON_DIALOGUE_BOX); // was dmaged.html
-		         return(State_NCMABadCard);
-#endif
-		     }
-#endif /* SC_SWAPPING */
+  if(virgin_smartcard()) /* smartcard never been written to */
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+    #ifdef ISP_CAPTURE
+    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture and moving to State_NCMAConnect\n");
+    ncma_isp_capture();
+    return(State_NCMAConnect);
+    #else
+    ncma_dbox_open_to_target(URL_PATH(invalid.html), COMMON_DIALOGUE_BOX); // was damaged.html
+    return(State_NCMABadCard);
+    #endif
+  }
 
+  if(build_ram_cache()<0) /* insufficient connect details, call RS */
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: insufficient connection details - open the invalid card dbox.\n");
+    #ifdef ISP_CAPTURE
+    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture and moving to State_NCMAConnect\n");
+    ncma_isp_capture();
+    return(State_NCMAConnect);
+    #else
+    ncma_dbox_open_to_target(URL_PATH(invalid.html), COMMON_DIALOGUE_BOX); // was damaged.html
+    return(State_NCMABadCard);
+    #endif
+  }
 
-		     if(virgin_smartcard()) { /* smartcard never been written to */
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
-#ifdef ISP_CAPTURE
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
-       			 ncma_isp_capture();
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Going to State_NCMAConnect\n");
-       			 return(State_NCMAConnect);
-#else
-		         ncma_dbox_open_to_target(URL_PATH(invalid.html), COMMON_DIALOGUE_BOX); // was damaged.html
-		         return(State_NCMABadCard);
-#endif
-		     }
+  /* dial based on connection details in RAM/SC */
+  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: RAM/SC DIALLING...\n");
+  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling ncma_dial() automatically.\n");
 
+  /* This line moved from State_DiallingISP so it is initialised *before* dialling. */
+  ncma_network_init(NCMA_NET_RAM | NCMA_NET_POST_DIAL); /* set resolver variables */
 
+  ncma_hourglass_on();
+  if(ncma_dial()<0)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: IAP dial initiation failed\n");
+    ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
+    select_connect_screen_to_display();
+    return(State_NCMAConnect);
+  }
 
-      		     if(build_ram_cache()<0) { /* insufficient connect details, call RS */
-      		         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: insufficient connection details - calling RS\n");
-#ifdef ISP_CAPTURE
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: running ISP capture\n");
-       			 ncma_isp_capture();
-       			 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Going to State_NCMAConnect\n");
-       			 return(State_NCMAConnect);
-#else
-		         ncma_dbox_open_to_target(URL_PATH(invalid.html), COMMON_DIALOGUE_BOX); // was damaged.html
-		         return(State_NCMABadCard);
-#endif
+  if (interface_type == MODEM_INTERFACE)
+  {
+    /* Dial was successful, open the please wait screen if the bNoScreenChanges is unset
+        and a redial was not requested. */
+    if (!bNoScreenChanges && !bRedialRequested)
+    {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Opening the please wait screen.\n");
+      ncma_url_open(URL_PATH(pleasewait.html));
+    }
+    else
+    {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Not opening the please wait screen as the bNoScreenChanges and bRedialRequested flags are set.\n");
+    }
+  }
 
-      		     }
-
-      		       /* dial based on connection details in RAM/SC */
-      		       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: RAM/SC DIALLING...\n");
-      		       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling ncma_dial() automatically.\n");
-
-                       /* This line moved from State_DiallingISP so it is initialised *before* dialling. */
-                       ncma_network_init(NCMA_NET_RAM | NCMA_NET_POST_DIAL); /* set resolver variables */
-
-                       ncma_hourglass_on();
-      		       if(ncma_dial()<0)
-                       {
-      		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: IAP dial initiation failed\n");
-      		         ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
-      		         select_connect_screen_to_display();
-      		         return(State_NCMAConnect);
-      		       }
-
-                       if (interface_type == MODEM_INTERFACE)
-                       {
-                         /* Dial was successful, open the please wait screen
-                             if the bNoScreenChanges is unset and a redial
-                             was not requested. */
-                         if (!bNoScreenChanges && !bRedialRequested)
-                         {
-                           DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Opening the please wait screen.\n");
-                           ncma_url_open(URL_PATH(pleasewait.html));
-                         }
-                         else
-                         {
-                           DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Not opening the please wait screen as the bNoScreenChanges and bRedialRequested flags are set.\n");
-                         }
-                       }
-
-        	       ncma_hourglass_off();
-                       return(State_NCMADiallingISP);
+  ncma_hourglass_off();
+  return(State_NCMADiallingISP);
 }
 
 
 
 
 
-
-/* this is the NCMA ASM */
+/*********************************************************************************/
+/* machine                                                                       */
+/*                                                                               */
+/* This routine is the main NCMAlite state machine.                              */
+/*                                                                               */
+/* Parameters: trans. A transition that has to be performed.                     */
+/*                                                                               */
+/* Returns:    The new state.                                                    */
+/*                                                                               */
+/*********************************************************************************/
 NCMA_STATE machine(NCMA_TRANS trans)
 {
-
-#ifdef SHOW_BOOTBLOCK_TRANSACTIONS
   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got transition %s in state %s\n", trans_string(trans), state_string(ncma_state));
-#else
-  if(trans != Trans_CompleteOK)
-    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got transition %s in state %s\n", trans_string(trans), state_string(ncma_state));
-#endif
 
 /*********************************************************************************
 
@@ -1242,27 +1384,38 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
          switch(trans) {
 
-             case Trans_DialBad: /* Don't know what to do here! Not in the CIS!! */
+             case Trans_DialBad:
+                  /* This transition is recieved when the user clicks 'cancel' on one of the dialler error boxes */
                   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: ISP dial failed - bummer\n");
+                  /* if it is a redial state that the redial has failed. */
+                  redial_interrupted();
 #ifdef EMAIL_CLIENT
+                  /* On email client-enabled boxes if the dial fails whilst
+                     in offline mode we do not want to go back to the connect
+                     screen. */
                   if (uiemail_client_state == email_state_offline)
                   {
-                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Dial failed when in offline email client. Do not open the coonect screen.\n");
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Dial failed when in offline email client. Do not open the connect screen.\n");
+                    break;
                   }
-                  else
+#endif /* EMAIL_CLIENT */
+
+#if defined UserIF_Lazarus
+                  /* In Lazarus UI builds we do not want to go back to the connect screen if we are currently in Booted state. */
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Dial failed whilst in state %s.\n", state_string(ncma_state));
+                  if (bNoScreenChanges) /* We do not wish the screens to change */
                   {
-#endif /* EMAIL_CLIENT */
-                    ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
-                    select_connect_screen_to_display();
-                    return(State_NCMAConnect);
-#ifdef EMAIL_CLIENT
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Since bNoScreenChanges we do not wish to open the connect screen. Retuening to State_NCMABooted.\n");
+                    return (State_NCMABooted);
                   }
-#endif /* EMAIL_CLIENT */
+#endif
+                  ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
+                  select_connect_screen_to_display();
+                  return(State_NCMAConnect);
                   break;
 
     	     case Trans_DialOK: /* dial succeeded */
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: ISP dial succeeded\n");
-
 #ifdef DEBUG_DISCONNECT
        		  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: DEBUG_DISCONNECT setting line drop timeout\n");
        		  set_ppp_timeout();
@@ -1270,6 +1423,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
                   if (bRedialRequested)
                   {
+                    open_current_browser_url();
                     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: A redial has been requested, so resetting bRedialRequested to 0\n");
                     bRedialRequested = 0;
                   }
@@ -1282,14 +1436,17 @@ NCMA_STATE machine(NCMA_TRANS trans)
                     if (uiemail_client_state != email_state_offline)
                     { /* If dialling was called by the email client offline, we do not want the URL screen to be opened. */
 #endif /* EMAIL_CLIENT */
-                      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling ncma_url_user\n");
-                      if (ncma_url_user() != 0)
-      		      {
-          	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Hanging up due to ncma_url_user() != 0, and returning State_NCMAConnect\n");
-		          ncma_hangup();
-			  ncma_dbox_open_to_target( URL_PATH(badurldbox.html), COMMON_DIALOGUE_BOX);
-			  return(State_NCMAConnect);
-		      }
+                      if (!open_current_browser_url())
+                      {
+                        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling ncma_url_user\n");
+                        if (ncma_url_user() != 0)
+                        {
+                          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Hanging up due to ncma_url_user() != 0, and returning State_NCMAConnect\n");
+                          ncma_hangup();
+                          ncma_dbox_open_to_target( URL_PATH(badurldbox.html), COMMON_DIALOGUE_BOX);
+                          return(State_NCMAConnect);
+                        }
+                      }
 #ifdef EMAIL_CLIENT
                     }
                     else
@@ -1900,16 +2057,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
   } /* end switch STATE */
 
   if(trans == Trans_Registry) {
-#ifdef SHOW_BOOTBLOCK_TRANSIIONS
       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: sweet nothings from the registry\n");
-#endif
       return(ncma_state);
   }
 
   if((trans == Trans_CompleteOK) || (trans == Trans_CompleteBad) || (trans == Trans_AuthFail)) {
-#ifdef SHOW_BOOTBLOCK_TRANSITIONS
     DBUG_PRINTF(DBUG_LVL_DEBUG, "NCMA: spurious I/O ACK from smartcard driver...ignoring\n");
-#endif
     return(ncma_state);
   }
 
@@ -1930,10 +2083,19 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 
 
-/*
-  This routine deals with the redialling process. If the card is currently
-   unverified, it prompts the user to reinsert the card that (s)he started
-   the session with. The dial cannot start until this is done. */
+
+/*********************************************************************************/
+/* start_redial                                                                  */
+/*                                                                               */
+/* This routine deals with the redialling process. If the card is currently      */
+/*  unverified, it prompts the user to reinsert the card that (s)he started      */
+/*  the session with. The dial cannot start until this is done.                  */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The new state of the NCMA state machine.                          */
+/*                                                                               */
+/*********************************************************************************/
 #ifdef SC_SWAPPING
 NCMA_STATE start_redial(void)
 {
@@ -2011,10 +2173,16 @@ NCMA_STATE start_redial(void)
   }
   return (State_NCMADiallingISP);
 }
-#else
+#else /* Non-SC_SWAPPING build */
 NCMA_STATE start_redial(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial()\n");
+
+  /* Store the current URL so we can return to it if necessary. */
+  current_url_store = store_current_browser_url();
+  /* Set the redial_failed flag to false so we can know if we need to manually open a screen or not. */
+  redial_failed = false;
+
   DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): sending a NCDialUI_Start and returning State_NCMADiallingISP\n");
   ncma_hourglass_on();
 
@@ -2035,12 +2203,22 @@ NCMA_STATE start_redial(void)
 
 
 
-#ifdef SC_SWAPPING
-/* This routine does some stuff which needs to be done in several cases (in
-    apres_pin and after a default pin entry) to do with smartcard swapping
-   things. Moved into a routine to prevent having two copies of idetical
-   code. */
 
+
+#ifdef SC_SWAPPING
+/*********************************************************************************/
+/* after_pin()                                                                   */
+/*                                                                               */
+/* This routine does some stuff which needs to be done in several cases (in      */
+/*  apres_pin and after a default pin entry) to do with smartcard swapping       */
+/* things. Moved into a routine to prevent having two copies of identical        */
+/* code. It is only included in SC_SWAPPING builds.                              */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The State to return to.                                           */
+/*                                                                               */
+/*********************************************************************************/
 static NCMA_STATE after_pin(void)
 {
   if (!bNoScreenChanges) /* Screens can change */
@@ -2086,8 +2264,19 @@ static NCMA_STATE after_pin(void)
 
 
 
-/* This routine is called if the defaukt_pin or default_pin_2() routines()
-    failed. */
+
+
+/*********************************************************************************/
+/* default_pin_failed()                                                          */
+/*                                                                               */
+/* This routine is called if the default_pin or default_pin_2() routines()       */
+/*  failed.                                                                      */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The State to return to.                                           */
+/*                                                                               */
+/*********************************************************************************/
 static NCMA_STATE default_pin_failed(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "default_pin_failed()\n");
@@ -2121,3 +2310,186 @@ static NCMA_STATE default_pin_failed(void)
 
   return (State_NCMAPin);
 }
+
+
+
+
+
+/*********************************************************************************/
+/* misc_getenv                                                                   */
+/*                                                                               */
+/* OS_ReadVarVal veneer.  Allows arbitrary sized read of a system variable.      */
+/*                                                                               */
+/* Parameters: variable - System variable name                                   */
+/*             buffer   - buffer to place contents of variable, or NULL to       */
+/*                        required size of buffer (returned in "nbytes")         */
+/*             buffer_size  - Size of "buffer"                                   */
+/*             nbytes   - number of bytes read (or required size of buffer if    */
+/*                        if "buffer" passed in as NULL.                         */
+/*                                                                               */
+/* Returns:    Nothing                                                           */
+/*                                                                               */
+/*********************************************************************************/
+static void misc_getenv (const char *variable, char *buffer, int buffer_size,
+                         int *nbytes)
+{
+  if (buffer == NULL)
+  {
+    _kernel_swi_regs r;
+
+     r.r[0] = (int)variable;
+     r.r[1] = NULL;
+     r.r[2] = -1;
+     r.r[3] = 0;
+     r.r[4] = 0;
+
+     _kernel_swi (OS_ReadVarVal, &r, &r);
+
+     if (nbytes != NULL)
+     {
+       if (r.r[2] == 0)
+         *nbytes = 0;
+       else
+       {
+         *nbytes = ~r.r[2] + 1;
+         DBUG_PRINTF(DBUG_LVL_DIAG, "misc_getenv(): buf=NULL, nbytes=%d\n", *nbytes);
+        }
+     }
+  }
+  else
+  {
+    int len;
+
+    _swix (OS_ReadVarVal, _INR(0,4) | _OUT(2),
+           variable, buffer, buffer_size, 0, 0,
+           &len);
+
+    buffer[len] = '\0';
+
+    if (nbytes != NULL)
+    {
+      *nbytes = len + 1;
+      DBUG_PRINTF(DBUG_LVL_DIAG, "misc_getenv(): buf!=NULL, nbytes=%d\n", *nbytes);
+    }
+  }
+}
+
+
+
+
+
+/*********************************************************************************/
+/* misc_getenv_malloc                                                            */
+/*                                                                               */
+/* OS_ReadVarVal veneer.  Allows arbitrary sized read of a system variable.      */
+/* mallocs a block to hold the contents of the system variable...uses            */
+/* misc_getenv to get variable                                                   */
+/*                                                                               */
+/* Parameters: variable - System variable name                                   */
+/*                                                                               */
+/* Returns:    pointer to malloced block holding contents of system variable.    */
+/*                                                                               */
+/*********************************************************************************/
+static char *misc_getenv_malloc (const char *variable)
+{
+  unsigned char *str;
+  int len;
+
+  misc_getenv (variable, NULL, 0, &len);
+
+  if (len == 0)
+    return NULL;
+  else
+  {
+    str = rmalloc (len, "Temporary store for misc_getenv_malloc()");
+    if (str)
+      misc_getenv (variable, (char*)str, len, &len);
+
+    return ((char*)str);
+  }
+}
+
+
+
+/*********************************************************************************/
+/* store_current_browser_url                                                     */
+/*                                                                               */
+/* This routine stores the current URL in a memory area.                         */
+/*  It allows us to store the current URL known by the browser and hence we can  */
+/*  re-open the same URL after a redial.                                         */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    A pointer to a memory area. (NULL if operation failed)            */
+/*                                                                               */
+/*********************************************************************************/
+static char* store_current_browser_url(void)
+{
+  DBUG_PRINTF(DBUG_LVL_DIAG, "store_current_browser_url()\n");
+  if (current_url_store !=NULL)
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "store_current_browser_url(): Freeing the already set current_url_store (%s) to make way for a new one.\n", current_url_store);
+    rmfree((unsigned char*)current_url_store);
+    current_url_store = NULL;
+  }
+  /* Get the current URL */
+  current_url_store = misc_getenv_malloc ("NCFresco$CurrentURL");
+  if (current_url_store)
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "store_current_browser_url(): Set current_url_store to %s.\n", current_url_store);
+  }
+  return (current_url_store);
+}
+
+
+
+
+/*********************************************************************************/
+/* open_current_browser_url                                                      */
+/*                                                                               */
+/* This routine opens the current browser URL if one has been stored.            */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    A boolean saying whether the stored URL was opened.               */
+/*                                                                               */
+/*********************************************************************************/
+static bool open_current_browser_url(void)
+{
+  DBUG_PRINTF(DBUG_LVL_DIAG, "open_current_browser_url()\n");
+  if (current_url_store != NULL && redial_failed)
+  {
+    /* We wish to open the screen the browser was on if the redial failed.
+        This is because in the case of a dial failure the browser forgets the
+        link it was following. Therefore this behaviour can prevent bejaviour
+        where, for instance, you can get 'stuck' on the options screen. */
+    DBUG_PRINTF(DBUG_LVL_DIAG, "store_current_browser_url(): Opening URL %s\n", current_url_store);
+    ncma_url_open(current_url_store);
+    rmfree ((unsigned char*)current_url_store);
+    current_url_store = NULL;
+    redial_failed = false; /* Reset this value */
+    return (true);
+  }
+  else
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "store_current_browser_url(): No URL set or redial has not failed.\n");
+  }
+
+  return (false);
+}
+
+
+
+/* This routine sets the 'redial_failed' flag if a redial was interrupted by
+a failure. This flag in turn causes the next successfulr edial to opne the
+screen that was previously open. */
+void redial_interrupted(void)
+{
+  DBUG_PRINTF(DBUG_LVL_DIAG, "redial_interrupted()\n");
+  if (bRedialRequested)
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "redial_interrupted(): Setting redial_failed to true.\n");
+    redial_failed = true;
+  }
+}
+
