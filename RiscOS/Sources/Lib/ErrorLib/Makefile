@@ -24,7 +24,7 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 
-CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} -throwback
+CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS		= -depend !Depend -Stamp -quit
 CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
@@ -59,20 +59,18 @@ DFLAGS		=
 # Program specific options:
 #
 
-COMPONENT	= errorlib
-TARGET		= errorlib
-TARGETZ		= errorlibzm
+COMPONENT	= ErrorLib
+TARGET		= ErrorLib
+TARGETZ		= ErrorLibzm
 EXPORTS		= ${EXP_HDR}.${COMPONENT}
 
 OBJS = \
- o.bitset \
  o.ErrorCheck \
  o.Main \
  o.SignalHdlr \
  o.TBack \
 
 OBJSZ = \
- oz.bitset \
  oz.ErrorCheck \
  oz.Main \
  oz.SignalHdlr \
@@ -117,12 +115,13 @@ clean:
 	@echo ${COMPONENT}: cleaned
 
 export_hdrs: h.errorlib dirs
-	${CP}	h.errorlib	${EXPORT_DIR}.h.errorlib ${CPFLAGS}
+	${CP}	h.ErrorLib	${EXPORT_DIR}.h.ErrorLib ${CPFLAGS}
 	@echo * ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
 	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
 	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
+	${CP}	VersionNum	${EXPORT_DIR}.VersionNum	${CPFLAGS}
 	@echo * ${COMPONENT}: export complete (libs)
 
 o.dirs:
