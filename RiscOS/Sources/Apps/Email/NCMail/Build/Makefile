@@ -336,7 +336,7 @@ ram: $(MODULE) $(UI) $(APPENGINE) o.dirs
 rom: $(ROM_MODULE) $(UI) $(APPENGINE) o.dirs
         @echo $(COMPONENT): Module built (ROM)
 
-install_common: $(TARGET) $(UI) $(APPENGINE) o.dirs
+install_common: $(TARGET) $(UI) $(APPENGINE) instdirs o.dirs
 	@echo
 
 preprocess: $(TARGET) $(UI) $(APPENGINE) o.dirs
@@ -412,8 +412,10 @@ o.dirs:
         @$(MKDIR) syms
         @$(MKDIR) Targets
         @$(MKDIR) Targets.$(APP)
-        @$(MKDIR) $(INSTDIR)
         @$(TOUCH) $@
+
+instdirs:
+        @$(MKDIR) $(INSTDIR)
 
 localdirs:
 	@$(MKDIR) h
