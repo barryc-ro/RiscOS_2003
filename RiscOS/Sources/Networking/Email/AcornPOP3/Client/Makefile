@@ -47,17 +47,18 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
-AS      = objasm -tb
-CC      = $(MemCheckCC) cc
-C++	= $(MemCheckCC) c++
-CMHG    = cmhg
-CP      = copy
-LD      = $(MemCheckLD) link
-RM      = remove
-MODSQZ  = modsqz
-WIPE    = -wipe
-CD	= dir
+MKDIR		= cdir
+AS		= objasm -tb
+CC		= $(MemCheckCC) cc
+C++		= $(MemCheckCC) c++
+CMHG		= cmhg
+CP		= copy
+LD		= $(MemCheckLD) link
+RM		= remove
+MODSQZ		= modsqz
+WIPE		= -wipe
+CD		= dir
+STRIPDEPND	= stripdepnd
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
@@ -73,7 +74,8 @@ UNIXLIB   = TCPIPLibs:o.unixlibzm
 CALLX     = <Lib$Dir>.callx.o.callx
 EMAILLIB  = <Lib$Dir>.Email.EmailLib.o.EmailLibzm
 C++LIB    = <Lib$Dir>.C++Lib.o.c++lib
-LIBS      = ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB} ${C++LIB}z ${EXTRALIBS}
+ASMUTILS  = <Lib$Dir>.AsmUtils.o.AsmUtilszm
+LIBS      = $(SOCKLIB) $(INETLIB) $(UNIXLIB) $(CALLX) $(ASMUTILS) $(DOBJS) $(EMAILLIB) $(C++LIB)z $(EXTRALIBS)
 
 #
 # Program specific options:
@@ -85,41 +87,43 @@ ROMTARGET = aof.AcornPOP3
 
 STUBS=		C:o.Stubs
 
-ROMCSTUBS=      RISC_OSLib:o.romcstubs
-ABSSYM=         RISC_OSLib:o.AbsSym
+ROMCSTUBS=	RISC_OSLib:o.romcstubs
+ABSSYM=		RISC_OSLib:o.AbsSym
 
 COMPAT=		-DCOMPAT_INET4
 
-CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wps -depend !Depend -c ${THROWBACK} \
-		-D${SYSTEM} ${EXTRACCFLAGS}
-C++FLAGS=	-ffa -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wps -depend !Depend -c ${THROWBACK} \
-		-D${SYSTEM} ${EXTRAC++FLAGS}
+CFLAGS=		-ffah -zM -I$(INCLUDES) -DINET -DCOMPAT_INET4 $(DEBUG)\
+		-zps1 -Wps -depend !Depend -c $(THROWBACK) \
+		-D$(SYSTEM) $(EXTRACCFLAGS)
+C++FLAGS=	-ffa -zM -I$(INCLUDES) -DINET -DCOMPAT_INET4 $(DEBUG)\
+		-zps1 -Wps -depend !Depend -c $(THROWBACK) \
+		-D$(SYSTEM) $(EXTRAC++FLAGS)
 
 
-CMHGFLAGS = -p -IC: -d h.header ${THROWBACK}
+CMHGFLAGS	= -p -I$(INCLUDES) $(THROWBACK)
 
 ASMFLAGS=       
 
+HDR=		h.header
+
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
-                errortable.o get.o send.o cmdresp.o getnummsgs.o \
-                getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o queue.o \
-		reset.o ${LIBS}
-		
+		errortable.o get.o send.o cmdresp.o getnummsgs.o \
+		getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o queue.o \
+		reset.o $(LIBS)
+
 OBJSI=		i.swihndlers i.handlers i.logon i.logout i.pop_utils i.module o.header \
-                i.errortable i.get i.send i.cmdresp i.getnummsgs \
-                i.getlistmsg i.getmsgfile i.deletemsg i.getuniquei i.getlistuid i.queue \
-		i.reset ${LIBS}
+		i.errortable i.get i.send i.cmdresp i.getnummsgs \
+		i.getlistmsg i.getmsgfile i.deletemsg i.getuniquei i.getlistuid i.queue \
+		i.reset $(LIBS)
 
 OBJSINST=	inst.swihndlers inst.handlers inst.logon inst.logout inst.pop_utils inst.module \
 		o.header \
-                inst.errortable inst.get inst.send inst.cmdresp inst.getnummsgs \
-                inst.getlistmsg inst.getmsgfile inst.deletemsg inst.getuniquei inst.getlistuid \
+		inst.errortable inst.get inst.send inst.cmdresp inst.getnummsgs \
+		inst.getlistmsg inst.getmsgfile inst.deletemsg inst.getuniquei inst.getlistuid \
 		inst.queue inst.reset \
-		${LIBS}
+		$(LIBS)
 
-EXTRAS=         acornpop3.o
+EXTRAS=		acornpop3.o
 
 #
 # Rule patterns
@@ -130,88 +134,95 @@ EXTRAS=         acornpop3.o
 .c++.i:;	$(C++) $(C++FLAGS) -c -C -E $< >> $@
 .c.i:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
 .i.inst:;	$(CC) $(CFLAGS) -C++ -o $@ $<
-.s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
+.s.o:;		$(AS) $(ASMFLAGS) -o $@ $<
 .cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
 
-all: ${TARGET}
-        @echo ${COMPONENT}: all complete
+all: $(TARGET)
+	@echo $(COMPONENT): all complete
 
 #
 # RISC OS ROM build rules:
 #
-rom: ${ROMTARGET}
-        @echo ${COMPONENT}: rom module built
+rom: $(ROMTARGET)
+	@echo $(COMPONENT): rom module built
 
-preprocess: ${OBJSI} local_dirs
-	@echo ${COMPONENT}: preprocess build complete
+preprocess: $(OBJSI) local_dirs
+	@echo $(COMPONENT): preprocess build complete
 
-instrument: ${OBJSINST} inst.instlib local_dirs 
+instrument: $(OBJSINST) inst.instlib local_dirs 
 	$(LD) -c++ -rmf -s link/sym -o rm.AcornPOP3u $(OBJSINST) inst.instlib $(STUBS)
 	ModSqz rm.AcornPOP3u rm.AcornPOP3
-	@echo ${COMPONENT}: instrument build complete
+	@echo $(COMPONENT): instrument build complete
 
-export:	export_${PHASE}
+export:	export_$(PHASE)
 
 export_hdrs: h.AcornPOP3 local_dirs
-	${CP}	h.AcornPOP3	${EXP_C_H}.AcornPOP3	${CPFLAGS}
-	@echo ${COMPONENT}: export complete (hdrs)
+	$(CP)	h.AcornPOP3	$(EXP_C_H).AcornPOP3	$(CPFLAGS)
+	@echo $(COMPONENT): export complete (hdrs)
 
 export_libs: o.AcornPOP3 local_dirs
-	${CP}	o.AcornPOP3	${EXP_C_O}.AcornPOP3	${CPFLAGS}
-	@echo ${COMPONENT}: export complete (libs)
+	$(CP)	o.AcornPOP3	$(EXP_C_O).AcornPOP3	$(CPFLAGS)
+	@echo $(COMPONENT): export complete (libs)
 
-install_rom: ${ROMTARGET}
-        ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+install_rom: $(ROMTARGET)
+	$(CP) $(ROMTARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+	@echo $(COMPONENT): rom module installed
 
 clean:
-		$(WIPE) o.*      $(WFLAGS)
-		$(WIPE) i.*     $(WFLAGS)
-		$(WIPE) inst.*   $(WFLAGS)
-                $(WIPE) rm.*     $(WFLAGS)
-                $(WIPE) aof.*    $(WFLAGS)
-		$(RM) link/sym
-		$(RM) rm
-		$(RM) aof
-		$(RM) linked
-		$(RM) map
-		$(RM) i
-		$(RM) inst
-		$(RM) o
+	@$(WIPE) o.*      $(WFLAGS)
+	@$(WIPE) i.*      $(WFLAGS)
+	@$(WIPE) inst.*   $(WFLAGS)
+	@$(WIPE) rm.*     $(WFLAGS)
+	@$(WIPE) aof.*    $(WFLAGS)
+	@$(RM) link/sym
+	@$(RM) rm
+	@$(RM) aof
+	@$(RM) linked
+	@$(RM) map
+	@$(RM) i
+	@$(RM) inst
+	@$(RM) o
+	@$(RM) $(HDR)
+	@$(STRIPDEPND) Makefile
+	@echo $(COMPONENT): cleaned
 
 local_dirs:
-	${MKDIR} o
-	${MKDIR} aof
-	${MKDIR} rm
-	${MKDIR} i
-	${MKDIR} inst
+	$(MKDIR) o
+	$(MKDIR) aof
+	$(MKDIR) rm
+	$(MKDIR) i
+	$(MKDIR) inst
 
 #
 # Target 
 #
-${TARGET}:	$(OBJS) $(EXTRAS) local_dirs
-		$(LD) -c++ -rmf -s link/sym -o rm.AcornPOP3u $(OBJS) $(STUBS)
-		ModSqz rm.AcornPOP3u $@
+$(TARGET):	$(OBJS) $(EXTRAS) $(HDR) local_dirs
+	$(LD) -c++ -rmf -s link/sym -o rm.AcornPOP3u $(OBJS) $(STUBS)
+	ModSqz rm.AcornPOP3u $@
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} $(EXTRAS) local_dirs
-        ${LD} -c++ -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS}
+$(ROMTARGET): $(OBJS) $(EXTRAS) $(HDR) local_dirs
+	$(LD) -c++ -s link/sym -o $@ -aof $(OBJS) $(ROMCSTUBS)
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -c++ -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
+	$(MKDIR) linked
+	$(MKDIR) map
+	$(LD) -c++ -o linked.$(COMPONENT) -map -rmf -base $(ADDRESS) $(ROMTARGET) $(ABSSYM) > map.$(COMPONENT)
+	$(CP) linked.$(COMPONENT) $(LINKDIR).$(COMPONENT) $(CPFLAGS)
+	@echo $(COMPONENT): rom_link complete
 
 #
 # Some rules that need explicitly declaring
 #
+$(HDR):	cmhg.header
+	$(CMHG) $(CMHGFLAGS) cmhg.header -d $(HDR)
+
+
 
 
 # Dynamic dependencies:
