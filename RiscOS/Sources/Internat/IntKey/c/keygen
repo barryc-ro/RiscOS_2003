@@ -8,6 +8,14 @@
 #include "structures.h"
 #include "throwback.h"
 
+#define MAX_FILE_DEPTH 16
+FILE *sourcefile[MAX_FILE_DEPTH];
+char *sourcefilename[MAX_FILE_DEPTH];
+int sourceline[MAX_FILE_DEPTH];
+int filedepth;
+
+const char *ExtraKeys;
+
 char keypad_codes[]={
           0x23, 0x24, 0x25,
     0x37, 0x38, 0x39, 0x3A,
@@ -57,7 +65,7 @@ charinfo funclist[] =
     0xC9, "KANJI NUMBER",
     0x8C, "LEFT",
     0xC1, "MENU",
-    0xC5, "NO CONVERT",
+    0xC5, "NO CONVERSION",
     0x9E, "PAGE DOWN",
     0x9F, "PAGE UP",
     0x80, "PRINT",
@@ -108,16 +116,15 @@ charinfo deadlist[] =
 
 #define DEADS (sizeof deadlist / sizeof deadlist[0])
 
-const char *current_file, *current_output_file;
+const char *current_output_file;
 FILE *current_output_handle;
-static int line;
-static int throwback;
+static int throwback, depend;
 
 void error(const char *p)
 {
-    fprintf(stderr, "%s, line %d: %s\n", current_file, line, p);
+    fprintf(stderr, "%s, line %d: %s\n", sourcefilename[filedepth],  sourceline[filedepth], p);
     if (throwback)
-        throwback_send(1, line, p, current_file, current_file);
+        throwback_send(1, sourceline[filedepth], p, sourcefilename[0], sourcefilename[filedepth]);
     fclose(current_output_handle);
     remove(current_output_file);
     exit(1);
@@ -139,13 +146,13 @@ static UCS4 function_key_code(const char *p)
     charinfo *ci;
 
     /* Check for raw &8A */
-    if (*p == '&')
+    if (*p == '&' && *(p+1) != '\0')
     {
         char *end;
         c = (UCS4) strtol(p+1, &end, 16);
-        if (*end != '\0' || c >= 0xFF)
+        if (*end != '\0' || c < 0x80 || c >= 0xFF)
             error("Bad hex");
-        return c < 0x80 ? c : 0x80000000 + c;
+        return 0x80000000 + c;
     }
 
     /* Check for CTRL-B etc */
@@ -234,16 +241,31 @@ UCS4 keycode_from_name(const char *name)
     return UCS_from_name(name);
 }
 
-char *getline(char *p, size_t plen, FILE *f)
+char *getline(char *p, size_t plen)
 {
     char *ret;
     int l;
 
+  start_again:
+
     do
     {
-        line++;
-        ret = fgets(p, plen, f);
-        if (!ret) return NULL;
+        sourceline[filedepth]++;
+        ret = fgets(p, plen, sourcefile[filedepth]);
+        if (!ret)
+        {
+            /* EOF - either return from the current include file, or give up */
+            if (filedepth)
+            {
+                free(sourcefilename[filedepth]);
+                fclose(sourcefile[filedepth]);
+                sourcefile[filedepth--] = NULL;
+                l = 0;
+                continue;
+            }
+            else
+                return NULL;
+        }
 
         l = strlen(p);
         if (p[l-1] == '\n')
@@ -253,6 +275,38 @@ char *getline(char *p, size_t plen, FILE *f)
             p[--l] = '\0';
 
     } while (l == 0 || p[0] == '#');
+
+    if (p[0] == '%' && memcmp(p, "%Include ", 9) == 0)
+    {
+        if (filedepth == MAX_FILE_DEPTH-1)
+            error("%Include depth too great");
+        else
+        {
+            const char *newinclude;
+            if (strcmp(p+9, "@ExtraKeys@") == 0)
+            {
+                if (ExtraKeys)
+                    newinclude = ExtraKeys;
+                else
+                    goto start_again;
+            }
+            else
+                newinclude = p+9;
+
+            /* Mustn't increment filedepth until all errors cleared */
+            if ((sourcefile[filedepth+1] = fopen(newinclude, "r")) == NULL)
+                error("Unable to open %Include file");
+            if ((sourcefilename[filedepth+1]=malloc(strlen(newinclude)+1)) == NULL)
+                error("Out of memory");
+            strcpy(sourcefilename[++filedepth], newinclude);
+            sourceline[filedepth]=0;
+
+            if (depend)
+                add_dependency(current_output_file, sourcefilename[filedepth]);
+
+            goto start_again;
+        }
+    }
 
     return p;
 }
@@ -291,14 +345,14 @@ int is_special_key(int key)
            key == K_CapsLock;
 }
 
-void read_keypad(FILE *in, Keyboard *kb)
+void read_keypad(Keyboard *kb)
 {
     int i=0;
     char buffer[256];
     char *second, *p;
     UCS4 k, k2;
 
-    while (getline(buffer, 256, in))
+    while (getline(buffer, 256))
     {
         if (buffer[0] == '$')
         {
@@ -343,14 +397,14 @@ void read_keypad(FILE *in, Keyboard *kb)
     error("Unexpected end of file");
 }
 
-void read_layer(FILE *in, Keyboard *kb, int layerno)
+void read_layer(Keyboard *kb, int layerno)
 {
     char buffer[256];
     char scaps[8], caps[8];
     int key, i;
     char *p;
 
-    while (getline(buffer, 256, in))
+    while (getline(buffer, 256))
     {
         char uc[4];
 
@@ -389,7 +443,7 @@ void read_layer(FILE *in, Keyboard *kb, int layerno)
             char *p=buffer, *q;
             static const char brack[] = "-[]-{}-()-<>";
 
-            if (getline(buffer, 256, in) == NULL)
+            if (getline(buffer, 256) == NULL)
                 error("Error reading key");
 
             q = *p != '-' ? strchr(brack, *p) : NULL;
@@ -480,12 +534,12 @@ void *xmalloc(size_t s)
     return ret;
 }
 
-void read_layout_file(FILE *in, Keyboard *kb)
+void read_layout_file(Keyboard *kb)
 {
     char buffer[256];
     int layer = -1;
 
-    while (getline(buffer, 256, in))
+    while (getline(buffer, 256))
     {
         if (buffer[0] == '$')
         {
@@ -500,7 +554,7 @@ void read_layout_file(FILE *in, Keyboard *kb)
                 if (layer < kb->layers)
                     error("Layer already defined");
 
-                read_layer(in, kb, layer);
+                read_layer(kb, layer);
 
                 kb->layers++;
             }
@@ -509,7 +563,7 @@ void read_layout_file(FILE *in, Keyboard *kb)
                 if (kb->custompad)
                     error("Keypad already defined");
                 kb->custompad=1;
-                read_keypad(in, kb);
+                read_keypad(kb);
             }
             else
                 error("Unknown directive");
@@ -591,7 +645,7 @@ void output_simples(FILE *out, Keyboard *kb)
         if (kb->key[i].easy && kb->key[i].defined) // we've saved one special code!!
             specials--;
         mem = (i+1)*4 + 36*specials*kb->layers + specials;
-        //printf("%d simple, %d special, mem = %d\n", i, specials, mem);
+        /*printf("%d simple, %d special, mem = %d\n", i, specials, mem);*/
         if (mem<bestmem)
         {
             best = i+1;
@@ -657,6 +711,8 @@ void process_keyboard(FILE *in, FILE *out)
     kb->needcodetable = 0;
     kb->custompad = 0;
 
+    sourcefile[0] = in;
+
     for (k=0; k<MAXKEYS; k++)
     {
         kb->key[k].defined = 0;
@@ -674,7 +730,7 @@ void process_keyboard(FILE *in, FILE *out)
         }
     }
 
-    read_layout_file(in, kb);
+    read_layout_file(kb);
 
     fprintf(out, "KeyStruct%d\n"
                  "        &       KeyTran%d-KeyStruct%d\n"
@@ -780,6 +836,14 @@ int main(int argc, char **argv)
 {
     FILE *in, *out;
 
+    if (argc >= 3 && strcmp(argv[1], "-depend")==0)
+    {
+        depend = 1;
+        dependfilename = argv[2];
+        argv+=2;
+        argc-=2;
+    }
+
     if (argc >= 2 && strcmp(argv[1], "-throwback")==0)
     {
         throwback = 1;
@@ -787,9 +851,17 @@ int main(int argc, char **argv)
         argc--;
     }
 
+    if (argc >= 3 && strcmp(argv[1], "-extra")==0)
+    {
+        ExtraKeys = argv[2];
+        argv+=2;
+        argc-=2;
+    }
+
     if (argc != 3)
     {
-        fprintf(stderr, "Usage: keygen [-throwback] layout-file output-file\n");
+        fprintf(stderr, "Usage: keygen [-depend filename] [-throwback] [-extra filename]\n"
+                        "              layout-file output-file\n");
         exit(1);
     }
 
@@ -807,9 +879,11 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    current_file = argv[1];
+    sourcefilename[0] = argv[1];
     current_output_handle = out;
     current_output_file = argv[2];
+    if (depend)
+        add_dependency(current_output_file, sourcefilename[0]);
 
     load_unidata("UniData215");
 

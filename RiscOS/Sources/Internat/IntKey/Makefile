@@ -20,7 +20,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
-CCFLAGS = -c -depend !Depend -IC:
+CCFLAGS = -c -depend !Depend ${THROWBACK} -IC:
 ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit ${KBD} -To $@ -From
 LDFLAGS = -bin -o $@
 CPFLAGS = ~cfr~v
@@ -43,7 +43,7 @@ KBD       = -PD "Keyboard SETS \"${KEYBOARD}\""
 .SUFFIXES:
 .SUFFIXES: .o .s .c .layout
 
-.layout.s:;  keygen ${THROWBACK} $< $@
+.layout.s:;  keygen -depend !Depend ${THROWBACK} ${EXTRAKEYS} $< $@
 .c.o:;	${MKDIR} o ; ${CC} ${CCFLAGS} -o $@ $<
 
 #
