@@ -161,7 +161,6 @@ o.dirs:
 	${MKDIR} i
 	${MKDIR} oi
 	${MKDIR} inst
-	${MKDIR} linked
 	create o.dirs
 
 clean:
@@ -177,11 +176,12 @@ clean:
 	@echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
+	${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link: o.dirs
-	${MKDIR} aof
+	${MKDIR} linked
 	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
