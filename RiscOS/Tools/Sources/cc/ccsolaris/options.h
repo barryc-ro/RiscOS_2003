@@ -21,12 +21,7 @@
                                          /* 0 => littleendian default */
                                          /* unset => defaults to host */
 
-#define PCS_DEFAULTS	0
-                      /* + PCS_CALLCHANGESPSR */  /* 32 bit */  \
-                      /* + PCS_FPE3 */                  \
-                      /* + PCS_NOSTACKCHECK */          \
-                      /* + PCS_REENTRANT */             \
-                      /* + PCS_FPREGARGS */
+#define PCS_DEFAULTS (PCS_CALLCHANGESPSR|PCS_FPE3)
 
 /*
  * 950216 KWelton
