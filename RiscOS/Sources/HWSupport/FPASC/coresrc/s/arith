@@ -827,7 +827,7 @@ Mult_Mantissas
 ;   if ((OP1mlo != 0) AND (OP2mlo = 0))
 ;     do 64x32->96 multiplication of (OP1mhi,OP1mlo) by OP2mhi;
 ;   if ((OP1mlo != 0) AND (OP2mlo != 0))
-;     do 64x32->128 multiplication of (OP1mhi,OP1mlo) by (OP2mhi,OP2mlo);
+;     do 64x64->128 multiplication of (OP1mhi,OP1mlo) by (OP2mhi,OP2mlo);
 ;
 ; In each case, this is then followed by code to deal with the case of no
 ; mantissa overflow (i.e. the top bit of the product was zero) and to create
@@ -851,6 +851,45 @@ Mult_64xX
         BEQ     Mult_64x32
 
 Mult_64x64
+
+	[ Use64bitMultiply
+
+; If we have a fast 32x32->64 multiply (ARM7M, ARM8, StrongARM), then the
+; Knuth trick below really isn't worthwhile. Just get on with the obvious
+; algorithm. UMLAL isn't much use because it doesn't set the C bit.
+; Can't really prevent the StrongARM stalling on UMULL because we have
+; very few registers to play with.
+
+	UMULL	Rtmp2,Rarith,OP1mlo,OP2mlo	; a0*b0 -> (0,      0,      Rarith, Rtmp2)
+	UMULL	Rtmp,OP1mlo,OP2mhi,OP1mlo	; a0*b1 -> (0,      OP1mlo, Rtmp,   0    )
+	ADDS	Rarith,Rarith,Rtmp              ; a0*b  -> (0,    OP1mlo+C, Rarith, Rtmp2)
+
+	UMULL	Rtmp,OP2mlo,OP1mhi,OP2mlo	; a1*b0 -> (0,      OP2mlo, Rtmp,   0    )
+	ADCS	OP1mlo,OP1mlo,OP2mlo            ; a0*b+a1*b0 ->
+						;          (C,      OP1mlo, Rarith+Rtmp, Rtmp2)
+	UMULL	OP2mlo,OP1mhi,OP2mhi,OP1mhi	; a1*b1 -> (OP1mhi, OP2mlo, 0,      0    )
+	ADC	OP1mhi,OP1mhi,#0		; a*b   -> (OP1mhi, OP1mlo+OP2mlo, Rarith+Rtmp, Rtmp2)
+	ADDS	Rarith,Rarith,Rtmp		; a*b   -> (OP1mhi, OP1mlo+OP2mlo+C, Rarith, Rtmp2)
+	ADCS	OP1mlo,OP1mlo,OP2mlo		; a*b   -> (OP1mhi+C, OP1mlo, Rarith, Rtmp2)
+	ADCS	OP1mhi,OP1mhi,#0		; a*b   -> (OP1mhi, OP1mlo, Rarith, Rtmp2)
+
+; Transfer Rtmp2 into the sticky bit, without affecting flags. Also make
+; certain we don't affect the guard or round bits.
+
+        ORR     Rtmp2,Rtmp2,Rtmp2,LSL #2
+        ORR     Rarith,Rarith,Rtmp2,LSR #2
+
+; If result is normalised, return. Otherwise normalise by shifting left one
+; bit.
+
+	MOVMI	PC,LR
+	ADDS	Rarith,Rarith,Rarith
+	ADCS	OP1mlo,OP1mlo,OP1mlo
+	ADC	OP1mhi,OP1mhi,OP1mhi
+	SUB	RNDexp,RNDexp,#1
+	MOV	PC,LR
+
+	|
 
         STMFD   Rsp!,{OP1sue,Rfpsr,Rins,LR}
 
@@ -945,7 +984,7 @@ Mult_64x64
         MOV     OP1mhi,#0                       ;Sign if a1-a0,b0-b1 both +ve
         MOV     Rarith,#0                       ;Addend if both +ve
         MVNLO   OP1mhi,OP1mhi                   ;If a1-a0 -ve, adjust sign and
-        SUBLO   Rarith,OP2mhi,OP2mlo            ; addend = -(b0-b1) = b1-b0
+	SUBLO   OP1mlo,OP2mhi,OP2mlo            ; addend = -(b0-b1) = b1-b0
         SUBNES  Rtmp2,OP2mlo,OP2mhi             ;Rtmp2 := b0-b1
         MOVEQ   OP1mhi,#0                       ;Override sign if b0-b1 = 0
         MVNLO   OP1mhi,OP1mhi                   ;If b0-b1 -ve, adjust sign and
@@ -982,16 +1021,25 @@ Mult_64x64
         SUB     RNDexp,RNDexp,#1
         LDMFD   Rsp!,{OP1sue,Rfpsr,Rins,PC}
 
+	]
+
 Mult_64x32
 
 ; To perform this multiplication, we do two 32x32 multiplications, then add
 ; the results together. We use the standard macros for the purpose.
 
-        Split16 OP2mlo,Rarith,OP2mhi
-        Mul64   OP2mhi,OP1mhi,OP2mlo,Rarith,OP1mhi,,,Rtmp,Rtmp2,OP2mhi
-        Mul64   OP2mlo,Rarith,OP2mlo,Rarith,OP1mlo,,,Rtmp,Rtmp2,OP1mlo
-        ADDS    OP1mlo,OP2mlo,OP1mhi
-        ADCS    OP1mhi,OP2mhi,#0
+	[ Use64bitMultiply
+	  UMULL   OP1mhi,Rtmp,OP2mhi,OP1mhi
+	  UMULL   Rarith,OP2mlo,OP2mhi,OP1mlo
+          ADDS    OP1mlo,OP2mlo,OP1mhi
+          ADCS    OP1mhi,Rtmp,#0
+	|
+          Split16 OP2mlo,Rarith,OP2mhi
+          Mul64   OP2mhi,OP1mhi,OP2mlo,Rarith,OP1mhi,,,Rtmp,Rtmp2,OP2mhi
+          Mul64   OP2mlo,Rarith,OP2mlo,Rarith,OP1mlo,,,Rtmp,Rtmp2,OP1mlo
+          ADDS    OP1mlo,OP2mlo,OP1mhi
+          ADCS    OP1mhi,OP2mhi,#0
+	]
 
 ; If the top bit was clear, we need to shift the product, round and sticky
 ; bits left by one bit and decrement the exponent. Otherwise, everything is
@@ -1014,11 +1062,18 @@ Mult_32x64
 ; To perform this multiplication, we do two 32x32 multiplications, then add
 ; the results together. We use the standard macros for the purpose.
 
-        Split16 OP1mlo,Rarith,OP1mhi
-        Mul64   OP1mhi,OP2mhi,OP1mlo,Rarith,OP2mhi,,,Rtmp,Rtmp2,OP1mhi
-        Mul64   OP1mlo,Rarith,OP1mlo,Rarith,OP2mlo,,,Rtmp,Rtmp2,OP2mlo
-        ADDS    OP1mlo,OP1mlo,OP2mhi
-        ADCS    OP1mhi,OP1mhi,#0
+	[ Use64bitMultiply
+	  UMULL   OP2mhi,Rtmp,OP1mhi,OP2mhi
+	  UMULL   Rarith,OP1mlo,OP1mhi,OP2mlo
+          ADDS    OP1mlo,OP1mlo,OP2mhi
+          ADCS    OP1mhi,Rtmp,#0
+	|
+          Split16 OP1mlo,Rarith,OP1mhi
+          Mul64   OP1mhi,OP2mhi,OP1mlo,Rarith,OP2mhi,,,Rtmp,Rtmp2,OP1mhi
+          Mul64   OP1mlo,Rarith,OP1mlo,Rarith,OP2mlo,,,Rtmp,Rtmp2,OP2mlo
+          ADDS    OP1mlo,OP1mlo,OP2mhi
+          ADCS    OP1mhi,OP1mhi,#0
+ 	]
 
 ; If the top bit was clear, we need to shift the product, round and sticky
 ; bits left by one bit and decrement the exponent. Otherwise, everything is
@@ -1036,8 +1091,12 @@ Mult_32x32
 ; Only the high words of the operand mantissas need to be multiplied
 ; together. Use the standard macros for this purpose.
 
-        Split16 OP2mlo,Rarith,OP2mhi
-        Mul64   OP1mhi,OP1mlo,OP2mlo,Rarith,OP1mhi,,S,Rtmp,Rtmp2,OP1mhi
+	[ Use64bitMultiply
+	  UMULLS  OP1mlo,OP1mhi,OP2mhi,OP1mhi
+        |
+          Split16 OP2mlo,Rarith,OP2mhi
+          Mul64   OP1mhi,OP1mlo,OP2mlo,Rarith,OP1mhi,,S,Rtmp,Rtmp2,OP1mhi
+	]
 
 ; The round and sticky bits are always going to be zero.
 
@@ -1336,11 +1395,17 @@ Div_Mantissas
         MOV     Rtmp,OP1mhi,LSR #13             ;Rtmp := X-1
         MLA     Rtmp2,Rtmp,Rarith,Rarith        ;Rtmp2 := (X-1)*W + W = X*W
         RSB     Rtmp2,Rtmp2,#1:SHL:29           ;Rtmp2 := 2^29 - X*W
+	[ Use64bitMultiply
+	UMULL	OP1mlo,OP1mhi,Rtmp2,Rarith	;OP1mhi,OP1mlo := Y
+	MOV	Rarith,OP1mlo,LSR #22
+	ORR	Rarith,Rarith,OP1mhi,LSL #(32-22) ;Rarith := Y >> 22
+	|
         Split16 Rtmp,Rtmp2,Rtmp2                ;Rtmp/Rtmp2 := top/bottom half
         MUL     OP1mlo,Rtmp2,Rarith             ;OP1mhi, OP1mlo := two
         MUL     OP1mhi,Rtmp,Rarith              ; parts of product with W
         ADD     Rarith,OP1mhi,OP1mlo,LSR #16    ;Rarith := Y >> 16
         MOV     Rarith,Rarith,LSR #6            ;Rarith := Y >> 22
+	]
 
         CDebug1 5,"Second N-R approx'n is",Rarith
 
@@ -2002,7 +2067,7 @@ Rec_tmp SETA    Rec_tmp+1
 
 ;===========================================================================
 
-; Routine to perform the IEEE remainder function. It has the usual two 
+; Routine to perform the IEEE remainder function. It has the usual two
 ; labels on its entry point.
 ;   The value returned is either a numeric value plus associated rounding
 ; information, with the uncommon bit clear, or an infinity or NaN, with the
