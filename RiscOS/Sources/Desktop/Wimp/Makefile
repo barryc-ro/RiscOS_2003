@@ -121,6 +121,7 @@ rm.Wimp: s.Wimp06
 rm.Wimp: s.Iconbar
 rm.Wimp: s.Wimp07
 rm.Wimp: s.ProgErrs
+rm.Wimp: s.W08_oldway
 rm.Wimp: s.Wimp08
 rm.Wimp: s.Wimp09
 rm.Wimp: s.Wimp10

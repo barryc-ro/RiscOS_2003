@@ -1,5 +1,9 @@
 ; > s.Wimp08
 
+;new way of doing things (Wimp delegates task memory management)
+;
+;only used if UseAMBControl is true
+;
 ;;----------------------------------------------------------------------------
 ;; Switcher routines
 ;;----------------------------------------------------------------------------
@@ -21,8 +25,6 @@
 ; initdynamic           intercept SWI table entry
 ; resetdynamic          unintercept SWI table entry
 ; My_ChangeDynamic      stack the applications to fill up application space
-; servicememory         accept/refuse to allow memory to be moved
-; servicememorymoved    unstack the applications and recover!
 ;-----------------------------------------------------------------------------
 
 ; Data structures:
@@ -34,6 +36,9 @@
 ; freepoolbase, orig_applicationspacesize delimit the free pool
 
 ;-----------------------------------------------------------------------------
+
+
+  [ UseAMBControl
 
 ; Set/Read current Wimp slot size
 ; Entry:  R0 = new 'current' slot size in bytes (<0 ==> no change)
@@ -48,6 +53,8 @@
 
 SWIWimp_SlotSize  ROUT
         MyEntry "SlotSize"
+
+   Debug mjs2,"mjs version of Wimp_SlotSize",R0,R1
 ;
         MOV     R4,R0                   ; R4 = new current slot size
 ;
@@ -61,48 +68,22 @@ SWIWimp_SlotSize  ROUT
         DivRem  R3,R2,R0, R14
 01
         STR     R3,slotsize             ; [slotsize] = no of pages
-        LDR     R2,orig_applicationspacesize
-        LDR     R14,freepoolbase
-        SUB     R2,R2,R14               ; R2 = total free memory
-        [ Medusa
-        MedusaOS
-        BNE     %FT02
         Push    "R0-R1"
         MOV     R0,#6
         SWI     XOS_ReadDynamicArea     ; memory in free pool
         MOV     R2,R1
-        Pull    "R0-r1"
-02
-        ]
+        Pull    "R0-R1"
+
         MUL     R1,R3,R0                ; R1 = next slot size
+        STMIA   SP,{R1,R2}              ; ensure calling task gets new values
 
-        [ false                         ; MED-00946
-        CMP     R1,R2
-        MOVGT   R1,R2                   ; can't be more memory in next than freepool
-        ]
-
-        STMIA   sp,{R1,R2}              ; ensure calling task gets new values
 ;
 ; transfer pages between current slot and free pool
 ; on exit R0 = actual current slot size (whether or not memory could be moved)
 ;
         CMP     R4,#-1                  ; R4 = proposed new current slot size
-        [ Medusa
-        BLE     returnmemsize
-        MedusaOS
-; under Medusa [freepool] has no meaning
-        BEQ     %FT01
-        LDR     R14,freepool
-        CMP     R14,#0                  ; do nothing if R4<0 or no free pool
-        BLE     returnmemsize
-01
-        |
-        LDRGT   R14,freepool
-        CMPGT   R14,#0
-        BLE     returnmemsize
-        ]
+        BLE     returnmemsize           ; done if just reading
 
-;
         MOV     R0,#ApplicationSpaceSize
         MOV     R1,#0
         SWI     XOS_ChangeEnvironment
@@ -111,14 +92,12 @@ SWIWimp_SlotSize  ROUT
         MOV     R1,#0
         SWI     XOS_ChangeEnvironment
         TEQ     R1,R3
-        BNE     returnmemsize           ; fixed - memory cannot be paged
+        BNE     returnmemsize           ; cannot change slot size
 ;
         LDR     R0,pagesize             ; R0 = page size
         SUB     R14,R0,#1
         ADD     R4,R4,R14
         BIC     R4,R4,R14               ; round up to nearest page boundary
-        SUB     R4,R3,R4
-        SUB     R4,R4,#ApplicationStart ; R4 = amount to transfer into pool
 ;
         LDR     R5,taskhandle           ; obtain R5 --> task block
         LDR     R5,[wsptr,R5]
@@ -130,121 +109,21 @@ SWIWimp_SlotSize  ROUT
         LDR     R2,[R5,#task_slotptr]   ; R2 --> slot (if any)
         CMP     R2,#0
         BLLE    getnullslot
-        STRVC   R2,[R5,#task_slotptr]
+        STRVC   R2,[R5,#task_slotptr]   ; R2 --> slot
         BVS     ExitWimp                ; exit if unable to claim block
-;
-        LDR     R0,pagesize             ; R0 = page size
-        MOV     R1,#0
-01
-        LDR     R14,[R2],#12
-        CMP     R14,#0
-        ADDGE   R1,R1,R0                ; R1 = total amount of memory in slot
-        BGE     %BT01
-        SUB     R2,R2,#12               ; R2 --> terminator of slot block
-;
-        CMP     R4,#0
-        BEQ     returnmemsize           ; don't bother with message if same size
 
-        [ Medusa
-        MedusaOS
-        BEQ     %FT02
-        CMP     R4,#0                   ; flags have been dumped
-        RSBLT   R4,R4,#0
-        B       %FT04
-02
-        Push    "R0-R3"
-; there may be more memory in the slot than memory limit, app space suggest.
-        ADD     R1,R1,#ApplicationStart
-        MOV     R0,#0
-        Push    "R1"
-        SWI     XOS_ChangeEnvironment
-        Pull    "R1"
-        MOV     R0,#14
-        SWI     XOS_ChangeEnvironment
-
-; if running under Medusa then the CAO needs to be moved to the module area, otherwise
-; the CDA call will fail.
-        MOV     R0,#15
-        MOV     R1,#&08000000
-        SWI     XOS_ChangeEnvironment
-        BVS     %FT03                   ; can't change cao, try and shift memory anyway.
-        MOV     R2,R1
-        MOV     R0,#6                   ; freepool
-        MOV     R1,R4                   ; number of bytes to alter free pool by
-        SWI     XOS_ChangeDynamicArea
-        Push    "R1"
-        MOV     R1,R2
-        MOV     R0,#15
-        SWI     XOS_ChangeEnvironment   ; put cao back where it was.
-        Pull    "R1"
-        CMP     R1,#0
-        Pull    "R0-R3",EQ
-        BEQ     returnmemsize           ; no change
-        CMP     R4,#0                   ; sets conditionals for below
-        MOV     R4,R1
-        Pull    "R0-R3"
-        B       %FT04
-03
-        MOV     R0,#6                   ; freepool
-        MOV     R1,R4                   ; number of bytes to alter free pool by
-        SWI     OS_ChangeDynamicArea
-        CMP     R1,#0
-        Pull    "R0-R3",EQ
-        BEQ     returnmemsize           ; no change
-        CMP     R4,#0                   ; sets conditionals for below
-        MOV     R4,R1
-        Pull    "R0-R3"
-04
-        |
-        RSBLT   R4,R4,#0
-; R4 now positive, flags reflect actual change
-        ]
-        BLT     growapp
-;
-; shrink application space by R4 bytes (already a whole number of pages)
-;
-shrinkapp
-        CMP     R4,R1                   ; always move as much as possible
-        MOVGT   R4,R1
-;
-        MOV     R3,R2                   ; R3 --> terminator
-;
-        CMP     R4,#0
-01
-        SUBGT   R2,R2,#12
-        SUBGT   R1,R1,R0                ; used later for OS_ChangeEnvironment
-        SUBGTS  R4,R4,R0
-        BGT     %BT01
-;
-        [ Medusa
-        MedusaOS
-        BLNE    maptofreepool           ; R2 --> last part of slot
-        ]
-
-        MOV     R14,#-1
-        STR     R14,[R2]                ; terminator
-;
-        LDR     R14,[R5,#task_slotptr]
-        CMP     R2,R14
-        BGE     %FT01
-;
-        MOV     R2,R14                  ; if null block, delete it!
-        MOV     R0,#ModHandReason_Free
-        BL     XROS_Module
-        MOV     R2,#nullptr
-        B       %FT02
-01
-        SUB     R3,R2,R3                ; R3 = amount to change block by (-ve)
-        MOV     R0,#ModHandReason_ExtendBlock
-        LDR     R2,[R5,#task_slotptr]
-        BL     XROS_Module
-02
-        STRVC   R2,[R5,#task_slotptr]
-        [ Medusa
-        MedusaOS
-        BNE     setcurslot
-        MOV     R5,R1                           ; used in the switcher message
-        BEQ     sendmemmessage
+        MOV     R1,R4,LSR #12           ;no. of (4k) pages
+        MOV     R0,#2                   ;grow/shrink reason code
+        SWI     AMBControl_SWI
+        BVS     ExitWimp
+        CMP     R2,#0
+        MOVEQ   R2,#nullptr
+        STR     R2,[R5,#task_slotptr]
+        MOV     R1,R1,LSL #12           ;no. of bytes
+        CMP     R1,R3,LSL #12           ;did no. of pages change?
+        BEQ     returnmemsize
+        MOV     R5,R1                   ;for message
+        B       sendmemmessage
 
 ; SafeChangeDynamic
 ; if running under Medusa then the CAO needs to be moved high, otherwise
@@ -272,147 +151,7 @@ SafeChangeDynamic
         SWI     OS_ChangeDynamicArea
 04
         Pull    "PC"
-;
-; grow an app under the medusa kernel
-; R4 is byte change, R2 is slot terminator, R0 page size, R5 task pointer, R1 is slot size
-;
 
-
-medusagrowapp
-        TEQ     R4,#0
-        BEQ     returnmemsize                   ; this takes account of the case where the
-                                                ; slot cannot grow due to memory constraints.
-        Push    "R0,R1,R4"
-        MOV     R3,#0
-01
-        ADD     R3,R3,#12
-        SUBS    R4,R4,R0
-        BNE     %BT01
-; need to extend slot ptr by R3
-        LDR     R2,[R5,#task_slotptr]
-        MOV     R0,#ModHandReason_ExtendBlock
-        BL      XROS_Module
-        BVC     %FT03
-; oh, dear we need to shrink the app by one page size and try again
-        MOV     R0,#6
-        LDR     R1,[SP]
-        Push    "R0-R4"
-        MOV     R4,R1
-        BL      SafeChangeDynamic
-        Pull    "R0-R4"
-;        SWI     XOS_ChangeDynamicArea
-
-; alert alert, something quite awful has happened
-; you know, i used to wonder what sort of bozzos put comments in like these, now
-; i understand...
-        ADDVS   SP,SP,#12               ; skip rubbish
-        BVS     ExitWimp
-        Pull    "R0,R1,R4"
-        SUB     R4,R4,R0
-        B       medusagrowapp           ; try again with smaller slot.
-
-03
-        STR     R2,[R5,#task_slotptr]
-        Pull    "R0,R1,R4"
-        MOV     R3,#ApplicationStart
-        Push    "R4"
-        MOV     R4,R1
-        LDR     R0,pagesize
-        MOV     R1,#0
-; first R1 bytes (original slot) probably have the correct page number
-        CMP     R4,#0
-        BEQ     %FT06
-05
-        ADD     R2,R2,#4
-        STR     R3,[R2],#8                      ; address
-        ADD     R3,R3,R0
-        SUBS    R4,R4,R0
-        BNE     %BT05
-06
-; next R4 bytes are new and so we have no idea what page number they are, set them to zero.
-        Pull    "R4"
-        CMP     R4,#0
-        BEQ     %FT09
-07
-        Push    "R2"
-08
-        STR     R1,[R2],#4                      ; page no.
-        STR     R3,[R2],#4                      ; address
-        STR     R1,[R2],#4                      ; protection
-        ADD     R3,R3,R0
-        SUBS    R4,R4,R0
-        BNE     %BT08
-        MOV     R0,#-1
-        STR     R0,[R2]
-
-        Pull    "R0"
-        SWI     XOS_FindMemMapEntries           ; only find entries for new pages
-
-09
-
-        SUB     R5,R3,#ApplicationStart          ; used in message to switcher
-        B       sendmemmessage
-
-        ] ; Medusa
-
-
-;
-; grow application space by R4 bytes (already a whole number of pages)
-;
-growapp
-        [ Medusa
-        MedusaOS
-        BEQ     medusagrowapp           ; R4 already contains max moveable
-        ]       ;Medusa
-        LDR     R3,orig_applicationspacesize
-        LDR     R14,freepoolbase
-        SUB     R3,R3,R14               ; R3 = amount of memory available
-        CMP     R4,R3
-;
-        MOVGT   R4,R3                   ; max amount moveable
-;
-;
-        Push    "R1,R2,R4"
-;
-        MOV     R3,#0
-01
-        SUBS    R4,R4,R0
-        ADDGE   R3,R3,#12
-        BGT     %BT01
-;
-        LDR     R2,[R5,#task_slotptr]
-        MOV     R1,R2
-        MOV     R0,#ModHandReason_ExtendBlock
-        BL      XROS_Module
-        STRVC   R2,[R5,#task_slotptr]
-        SUBVC   R14,R2,R1               ; amount block has moved by
-        MOVVC   R6,R2                   ; R6 --> new block
-;
-        Pull    "R1,R2,R4"
-        BVS     ExitWimp                ; nothing updated yet, so just exit
-;
-        ADD     R2,R2,R14               ; R2 --> end of block (moved!)
-;
-        LDR     R3,orig_applicationspacesize  ; DO IT AGAIN!!!
-        LDR     R14,freepoolbase              ; - may have changed !!!
-        SUB     R3,R3,R14               ; R3 = amount of memory available
-        CMP     R4,R3
-        MOVGT   R4,R3                   ; max amount moveable
-;
-        LDR     R0,pagesize
-        DivRem  R5,R4,R0, R14           ; R5 = number of pages to move
-        MOV     R3,R1                   ; R3 = size of slot so far
-        BL      mapfromfreepool         ; on exit R1 = memory transferred
-;
-        MOV     R0,R6                   ; R0 --> new slot block
-        BL      mapin                   ; map in whole slot (corrupts R2)
-;
-        ADD     R1,R1,R3                ; R1 = total memory in new slot
-
-setcurslot
-        MOV     R5,R1                   ; R5 = current slot size (for later)
-        ADD     R1,R1,#ApplicationStart
-        BL      setmemsize              ; R1 = end of memory for slot
 ;
 ; send round a broadcast, to be picked up by the Switcher
 ; NB this can only be done if the task is alive (otherwise it has no handle)
@@ -421,6 +160,8 @@ sendmemmessage
         LDR     R14,taskhandle
         LDR     R14,[wsptr,R14]
         TST     R14,#task_unused
+
+    Debug mjs2,"sendmemmessage R1,R5",R1,R5
 ;
         ASSERT  ms_data=20
         MOVEQ   R0,#28                  ; 28 byte block
@@ -435,20 +176,24 @@ sendmemmessage
         ADD     sp,sp,#28
 
 returnmemsize
+    Debug mjs2,"returnmemsize R1",R1
         MOV     R0,#MemoryLimit         ; may not actually be full slot size
         MOV     R1,#0                   ; (eg. if Twin is running above)
         SWI     XOS_ChangeEnvironment
+    Debug mjs2,"  returnmemsize R1",R1
         SUBVC   R0,R1,#ApplicationStart ; R0 = actual slot size
+    Debug mjs2,"  returnmemsize R0,R1",R0,R1
         B       ExitWimp
         LTORG
 
 getnullslot
-        Push    "LR"
-        MOV     R3,#4                   ; we need 2 terminators
-        BL      claimblock
-        MOVVC   R14,#-1                 ; terminator
-        STRVC   R14,[R2]
-        Pull    "PC"
+   Push  "R0-R1,LR"
+   MOV   R0,#0  ;reason code 0 (allocate)
+   MOV   R1,#0  ;0 pages
+   SWI   AMBControl_SWI
+   Debug mjs2,"getnullslot, slot handle =",R2
+   STRVS R0,[SP] 
+   Pull  "R0-R1,PC"
 
 ;
 ; Claim free memory pages
@@ -638,11 +383,13 @@ wimp_area_handler
 SWIWimp_TransferBlock  ROUT
         MyEntry "TransferBlock"
 ;
+  Debug mjs2,"&&&Wimp_TransferBlock",R0,R1,R2,R3,R4
         Push    "R0-R4"
         MOV     R0,#MemoryLimit         ; force this field to be up-to-date
         MOV     R1,#0
         SWI     XOS_ChangeEnvironment
         LDR     R14,taskhandle
+  Debug mjs2,"&&& taskhandle,MemoryLimit",R14,R1
         LDR     R14,[wsptr,R14]
         CMP     R14,#0
         STRGT   R1,[R14,#task_environment+12*MemoryLimit]
@@ -702,6 +449,7 @@ medusa_exit_trb2
         ADDGE   R8,R8,#ApplicationStart ; make absolute again
         BGE     %FT11
         LDR     R14,[R6,#task_environment+12*MemoryLimit]
+  Debug mjs2,"&&& source memlimit",R14
         ADD     R0,R1,R4
         CMP     R0,R14
         BGT     err_badtransfer
@@ -710,6 +458,7 @@ medusa_exit_trb2
         ADDGE   R9,R9,#ApplicationStart ; make absolute again
         BGE     %FT01
         LDR     R14,[R7,#task_environment+12*MemoryLimit]
+  Debug mjs2,"&&& dest memlimit",R14
         ADD     R2,R3,R4
         CMP     R2,R14
         BGT     err_badtransfer
@@ -777,6 +526,7 @@ medusa_exit_trb2
 ; to page out may be required in the copy, obviously we need to do more work to make sure
 ; we don't fall over in these situations.
 makespacefromct
+  Debug mjs2,"&&& makespacefromct"
         Push    "R1"                    ; save task handle
         BL      mapslotout              ; map out CT
         MOV     R0,#0
@@ -794,6 +544,7 @@ makespacefromct
 ; the transfer range
 
 onetask_currentr5
+  Debug mjs2,"&&& onetask_currentr5"
         CMP     R5,R4
         BEQ     %FT03
         CMP     R8,R11                  ; we only need to woryy about space if the copy
@@ -802,6 +553,7 @@ onetask_currentr5
         B       %FT03
 
 onetask_currentr4
+  Debug mjs2,"&&& onetask_currentr4"
         CMP     R5,R4
         BEQ     %FT03
         CMP     R9,R11
@@ -826,7 +578,7 @@ onetaskcurrent
         MOV     R0,#ApplicationSpaceSize
         MOV     R1,#0
         SWI     XOS_ChangeEnvironment   ; R1 --> end of current slot
-
+  Debug mjs2,"&&& end of current slot",R1
         Pull    "R4"
         MedusaOS
         ADDEQ   SP,SP,#20               ; will always be original values on stack
@@ -928,54 +680,45 @@ wordcopy
         BNE     %BT02
         B       %BT03
 
-        [ Medusa
-mapenoughslot
+;mjs version of mapenoughslot
 ; maps only the pages that are required for the copy to address R2, slot R0, length R10
 ; domain offset R1
-        Push    "R0-R1,R3-R5,lr"
-        LDR     R3,pagesize
-        SUB     R3,R3,#1
-        BIC     R1,R1,R3
-        ADD     R3,R3,#1
-; find start of block
-01
-        CMP     R1,#0
-        BEQ     %FT05
-02
-        LDR     R14,[R0],#12
-        CMP     R14,#0
-        BLT     err_badtransfer2
-        SUBS    R1,R1,R3
-        BNE     %BT02
-; R0 now points to start of slot that is involved in the copy
-05
-        MOV     R4,R0
-        LDR     R1,[SP,#4]              ; domain offset again
-        SUB     R5,R3,#1
-        AND     R1,R1,R5                ; offset from page
-        STR     R1,[SP]                 ; R0 on return
-        ADD     R1,R1,R10
-        ADD     R1,R1,R5
-        BIC     R1,R1,R5                ; no. of pages required x pagesize
-09
-        LDR     R14,[R4],#12
-        CMP     R14,#0
-        BLT     err_badtransfer2
-        SUBS    R1,R1,R3
-        BNE     %BT09
-        LDR     R5,[R4]                 ; temporarily shorten the slot block
-        MOV     R14,#-1                 ; this way we don't need to make a new block
-        STR     R14,[R4]                ; which may require memory we don't have.
-        BL      mapslot
-        STR     R5,[R4]                 ; put it back as it was
+
+mapenoughslot
+        Push    "R0-R1,R3-R5,LR"
+
+   Debug mjs2,"mjs version of mapenoughslot",R0,R1,R2,R10
+
+        LDR     R4,pagesize
+        SUB     R4,R4,#1
+        
+        AND     R5,R1,R4         ;offset from page
+        STR     R5,[SP]          ;R0 on return
+        ADD     R5,R5,R10
+        ADD     R5,R5,R4
+        BIC     R5,R5,R4         ;no. of pages required x pagesize
+        MOV     R5,R5,LSR #12    ;no. of (4k) pages
+
+        BIC     R1,R1,R4         ;start of map (page boundary)
+        
+        MOV     R3,R1,LSR #12    ;offset in (4k) pages to start of map
+        MOV     R1,R2            ;start address
+        MOV     R2,R0            ;handle
+        MOV     R0,#3
+        ORR     R0,R0,#&100      ;reason code 3, plus bit 8 set (mapsome)
+        MOV     R4,R5            ;no. of pages to map
+        SWI     AMBControl_SWI
+        BVS     err_badtransfer2
+
+        ADD     R2,R1,R4,LSL #12 ;R2 return
+   Debug mjs2," <mapenoughslot",R2
+
         Pull    "R0-R1,R3-R5,PC"
 
 err_badtransfer2
         MyXError        WimpBadSlot
         B               medusa_exit_trb2         ; task handle no longer on stack
         MakeErrorBlock  WimpBadSlot
-
-        ]
 
 err_badtransfer
         MyXError  WimpBadTransfer
@@ -1198,6 +941,7 @@ testapplication ROUT
         CMP     R2,R1                           ; below memorylimit?
         Pull    "R1-R3,PC",CC
 ;
+  Debug mjs3,"testapplication routine issueing Service_Memory"
         MOV     R1,#Service_Memory
         MOV     R0,#IsAnybodyThere      ; 64 megabytes should be enough!
         SWI     XOS_ServiceCall
@@ -1288,177 +1032,23 @@ restorememlimit ROUT
 ;
         DCB     "AllocateSlot"
 
+;mjs version
 allocateslot    ROUT
-        [ Medusa
-        MedusaOS
-        BNE     %FT99
+       Push    "R0-R4,LR"
+       LDR     R1,slotsize ;no. of pages
+    Debug mjs2,"mjs version of allocateslot",R1
+       MOV     R0,#0       ;reason code 0 (allocate)
+       SWI     AMBControl_SWI
+       BVC     %FT01
+       BL      setdefaulthandlers
+       Pull    "R0-R4,PC"
 01
-        Push    "R0-R4,lr"
-        MOV     R0,#14
-        MOV     R1,#ApplicationStart
-        SWI     XOS_ChangeEnvironment
-        MOV     R0,#0
-        MOV     R1,#ApplicationStart
-        SWI     XOS_ChangeEnvironment
-        LDR     R0,slotsize
-        LDR     R3,pagesize
-        MUL     R1,R3,R0                ; usually R0 < R3
-        MOV     R0,#6
-        RSB     R1,R1,#0                ; shrinking free pool
-        SWI     XOS_ChangeDynamicArea
-        [ false
-        MOVVS   R4,#0
-        STRVS   R4,slotsize
-        ]
-;        ADDVS   SP,SP,#4
-;        Pull    "R1-R4,PC",VS          sadly this may 'succeed' but return an error
-        CLRV
-        CMP     R1,#0
-;        SETV    EQ
-;hmmm no error block...
-;       Pull    "R0-R4,PC",VS           ; couldn't allocate any memory
-        BNE     %FT01
-nomemoryinslot
-        [ false
-        MOV     R0,#0
-        MOV     R1,#0
-        SWI     XOS_ChangeEnvironment
-        MOV     R0,#14
-        MOV     R1,#0
-        SWI     XOS_ChangeEnvironment   ; reset env
-        ]
-        BL      setdefaulthandlers
-        Pull    "R0-R4,PC"
-nomemoryinslot2
-        MOV     R0,#15
-        Pull    R1
-        SWI     XOS_ChangeEnvironment   ; reset env
-        Pull    "R0-R4,PC"
-01
-        Push    R1
-        MOV     R0,#15
-        MOV     R1,#ApplicationStart
-        SWI     XOS_ChangeEnvironment   ; lower the cao so that claiming RMA doesn't lose pages
-        Pull    R14
-        Push    R1
-        MOV     R1,R14
+    Debug mjs2,"  allocateslot pages,slotptr",R1,R2
+       LDR     R1,taskhandle
+       LDR     R1,[wsptr,R1]
+       STR     R2,[R1,#task_slotptr]
+       Pull    "R0-R4,PC"
 
-; R1 is actual allocation
-        DivRem  R4,R1,R3,R14
-        ADD     R4,R4,R4, LSL #1        ; x3
-        MOV     R4,R4, LSL #2           ; x4
-        ADD     R3,R4,#4
-02
-        TEQ     R3,#0
-        BEQ     nomemoryinslot2
-        MOV     R0,#ModHandReason_Claim
-        BL      XROS_Module
-; R2 is block or error
-        BVC     %FT03
-        [ false
-        LDR     lr,pagesize
-        MOV     R0,#6
-        MOV     R1,lr
-
-        SWI     XOS_ChangeDynamicArea   ; grow free pool by a page
-        |
-        Push    "R0-R4"
-        LDR     R4,pagesize
-        BL      SafeChangeDynamic
-        Pull    "R0-R4"
-        ]
-
-        SUB     R3,R3,#12
-        B       %BT02
-03
-        MOV     R0,#15
-        Pull    R1
-        Push    "R2-R3"
-        SWI     XOS_ChangeEnvironment   ; reset cao
-        Pull    "R2-R3"
-
-        LDR     lr,pagesize             ; SWI will have corrupted this
-        ADD     R4,R2,R3                ; end of block
-        SUB     R4,R4,#4
-        Push    "r2"
-        MOV     R3,#ApplicationStart
-        MOV     R0,#0
-04
-        STR     R0,[R2],#4
-        STR     R3,[R2],#4
-        STR     R0,[R2],#4              ; set protection level.
-        ADD     R3,R3,lr
-        CMP     R2,R4
-        BLT     %BT04
-        MOV     R0,#-1
-        STR     R0,[R2]
-        Pull    "R0"
-        SWI     XOS_FindMemMapEntries
-        LDRVC   R1,taskhandle
-        LDRVC   R1,[wsptr,R1]
-        STRVC   R0,[R1,#task_slotptr]
-        STR     R0,[SP]                 ; just in case anything uses this
-
-        Pull    "R0-R4,PC"
-
-99
-        ]
-
-        Push    "R1-R7,LR"
-;
-        LDRB    R14,memoryOK            ; if free space in use, can't allocate
-        TEQ     R14,#0
-        MOVNE   R7,#0
-        LDREQ   R7,freepoolpages        ; number of pages in free pool
-;
-        LDR     R5,slotsize             ; max no of pages
-        CMP     R5,R7
-
-        MOVGT   R5,R7                   ; now R5 = actual no of pages to use
-        CMP     R5,#0
-        MOVLE   R1,#ApplicationStart
-        BLE     gosetmemsize            ; no pages allocated
-;
-; allocate a heap block of the correct size
-;
-        ADD     R3,R5,R5,LSL #1         ; R3 = 3 * no of pages
-        MOV     R3,R3,LSL #2            ; R3 = 12 * no of pages
-        ADD     R3,R3,#4                ; leave room for terminator
-        BL      claimblock
-        Pull    "R1-R7,PC",VS
-;
-; NB: pages may have been remapped because of that call - check here!
-;
-        LDR     R7,freepoolpages        ; R7 = number of free pages
-        CMP     R5,R7
-
-        MOVGT   R5,R7                   ; now R5 = actual no of pages to use
-
-;
-; construct block by transferring pages from the free pool
-; R2 --> new block, R5 = no of pages, R6-->free pool, R7 = free pool sp
-;
-        LDR     R14,taskhandle          ; must be a live task!
-        LDR     R1,[wsptr,R14]          ; R1 --> task block
-        STR     R2,[R1,#task_slotptr]
-;
-        BL      mapfromfreepool         ; R5 = number of pages to grab
-        ADD     R1,R1,#ApplicationStart ; R1 --> end of application memory
-;
-        MOV     R0,R2
-        BL      mapin                   ; map pages in (corrupts R2)
-
-gosetmemsize
-
-        LDR     R14,freepool            ;; Wimp 1.89o onwards
-        CMP     R14,#nullptr            ;;
-        LDREQ   R0,taskhandle           ;; if this is the "owner" slot,
-        LDREQ   R14,inithandle          ;; it can have the application memory
-        CMPEQ   R0,R14                  ;;
-        BLEQ    restorememlimit         ;; (preserves flags)
-        BLNE    setmemsize              ;; otherwise it gets none.
-;
-        Pull    "R1-R7,PC"
 
 ;
 ; Entry:  R2 --> slot block
@@ -1529,53 +1119,23 @@ setmemsize      ROUT
 ;         pages put back into free pool (NB block never needs extension)
 ;
 
+;mjs version
 deallocateslot  ROUT
         Push    "R1-R2,LR"
-;
+
+   Debug mjs2,"mjs version of deallocateslot"
         LDR     R14,taskhandle
         LDR     R1,[wsptr,R14]          ; R1 --> task block
         LDR     R2,[R1,#task_slotptr]
+
         CMP     R2,#0
         MOVGT   R14,#nullptr
         STRGT   R14,[R1,#task_slotptr]
-        [ Medusa
         BLE     %FT03
-        MedusaOS
-        BEQ     %FT01
-        BL      deallocate
-        B       %FT03
-01
-; first find out how much memory is really in the slot
-        Push    "R2-R3"
-        MOV     R0,#0
-        LDR     R1,pagesize
-02
-        LDR     R14,[R2],#12
-        CMP     R14,#-1
-        ADDNE   R0,R0,R1
-        BNE     %BT02
-; R0 bytes in slot, update environment
-        ADD     R1,R0,#ApplicationStart
-        MOV     R0,#0
-        Push    "R1"
-        SWI     XOS_ChangeEnvironment
-        LDR     R1,[SP]
-        MOV     R0,#14
-        SWI     XOS_ChangeEnvironment
-        Pull    "R1"
-        Push    "R4"
-        SUB     R4,R1,#ApplicationStart
-        BL      SafeChangeDynamic
-        Pull    "R4"
-        Pull    "R2-R3"
-        CLRV
-        MOV     R0,#ModHandReason_Free
-        BL     XROS_Module              ; free the slot
+
+        MOV     R0,#1       ;deallocpages reason code
+        SWI     AMBControl_SWI
 03
-        |
-        BLGT    deallocate              ; R2 --> block to deallocate from
-        ]
-;
         Pull    "R1-R2,PC",,^           ; preserve flags
 
 ;
@@ -1584,58 +1144,18 @@ deallocateslot  ROUT
 ;         slot block deallocated
 ;
 
+;mjs version
 deallocate      ROUT
-        Push    "LR"
-        [ Medusa
-        MedusaOS
-        BNE     %FT50
+        Push    "R0,LR"
         CMP     R2,#0
-        Pull    "PC",LE                 ; return if invalid slot pointer
-        Push    "R0-R4"
-        BL      mapslotout              ; map current task out of the way
-        LDR     R0,pagesize
-        MOV     R1,#0
-        MOV     R3,R2
-01
-        LDR     R14,[R3],#12
-        CMP     R14,#-1
-        ADDNE   R1,R1,R0
-        BNE     %BT01
-; R1 is now size of block in bytes
-        ADD     R1,R1,#ApplicationStart
-        MOV     R0,#0
-        Push    "R1"
-        SWI     XOS_ChangeEnvironment   ; set up suitable environment
-        MOV     R3,R1
-        Pull    "R1"
-        MOV     R0,#14
-        SWI     XOS_ChangeEnvironment
-        MOV     R4,R1
-        MOV     R0,R2
-        Push    "R2-R4"
-        BL      mapin                   ; map in area to be free'd
-        MOV     R4,#&10000000
-        BL      SafeChangeDynamic
-        Pull    "R2-R4"
-        CLRV
-        MOV     R0,#ModHandReason_Free
-        BL     XROS_Module              ; free the slot
-45
-        MOV     R1,R4
-        MOV     R0,#14
-        SWI     XOS_ChangeEnvironment   ; return environment to how it was
-        MOV     R1,R3
-        MOV     R0,#0
-        SWI     XOS_ChangeEnvironment
-        BL      mapslotin               ; put current task back
-        Pull    "R0-R4,PC"
-50
-        ]
-        BL      maptofreepool
-        CMP     R2,#0
-        MOVGT   R0,#ModHandReason_Free
-        BLGT   XROS_Module
-        Pull    "PC"
+        Pull    "R0,PC",LE              ;return if invalid slot pointer
+
+   Debug mjs2,"mjs version of deallocate"
+
+        MOV     R0,#1      ;deallocate reason code (not from App space)
+        SWI     AMBControl_SWI
+        STRVS   R0,[SP]
+        Pull    "R0,PC"
 
 ;
 ; Entry:  R2 --> slot block
@@ -1718,8 +1238,15 @@ mapslotin       ROUT
 ; Exit:   the pages in the block are mapped into the application area
 ;
 
+;mjs version
 mapin   ROUT
-        MOV     R2,#ApplicationStart
+        Push    "R0-R2,LR"
+        MOV     R2,R0                ;handle
+        MOV     R0,#3                ;reason code 3 (mapslot)
+        MOV     R1,#ApplicationStart
+        SWI     AMBControl_SWI
+        STRVS   R0,[SP]
+        Pull    "R0-R2,PC"
 
 ; Entry:  R0 --> page map block
 ;         R2 --> start address of place to map pages to
@@ -1783,21 +1310,16 @@ mapslotout      ROUT
 ; Exit:   all pages referenced in the block are mapped out of the way
 ;
 
+;mjs version
+
 mapout  ROUT
-        Push    "R1-R3,LR"
-;
-        MOV     R2,#-1                  ; map out of the way
-        LDR     R3,pagesize
-        MOV     R1,R0
-01
-        LDR     R14,[R1],#4
-        CMP     R14,#0
-        STRGE   R2,[R1],#8              ; next page
-        BGE     %BT01
-;
-        SWI     XOS_SetMemMapEntries
-;
-        Pull    "R1-R3,PC"
+        Push    "R0-R2,LR"
+        MOV     R2,R0                ;handle
+        MOV     R0,#3                ;reason code 3 (mapslot)
+        MOV     R1,#-1               ;map out
+        SWI     AMBControl_SWI
+        STRVS   R0,[SP]
+        Pull    "R0-R2,PC"
 
 
 ;;----------------------------------------------------------------------------
@@ -1972,10 +1494,19 @@ initdynamic     ROUT
         ADR     R3,My_ChangeDynamic
         LDR     R14,=SvcTable + 4 * OS_ChangeDynamicArea
         LDR     R4,[R14]                        ; R4 = old SWI entry
-        TEQ     R4,R0                           ; if already in, forget it!
-        STMNEIA R0,{R1-R4}
-        STRNE   R0,[R14]                        ; R0 = RAM_SWIEntry
+        TEQ     R4,R0                           
+        Pull    "R1-R4,PC",EQ             ; if already in, forget it!
+
+        STMIA R0,{R1-R4}
+        STR   R0,[R14]                        ; R0 = RAM_SWIEntry
 ;
+    ;StrongARM
+    ;synchronise with respect to modified code at RAM_SWIEntry
+        MOV     R1,R0                           ; start address
+        ADD     R2,R1,#4                        ; end address (inclusive) for 2 words (other 2 are addresses)
+        MOV     R0,#1                           ; means R1,R2 specify range
+        SWI     XOS_SynchroniseCodeAreas        ; do the necessary
+
         Pull    "R1-R4,PC"
 
 copyofRAMcode
@@ -2080,6 +1611,7 @@ My_ChangeDynamic  ROUT
         TEQ     R2,R14
         BEQ     %FT02                   ; OK if Wimp active - don't even ask!
 ;
+  Debug mjs3,"My_ChangeDynamic issuing Service_Memory"
         MOV     R1,#Service_Memory      ; R0 = amount to change area by
         SWI     XOS_ServiceCall
         CMP     R1,#0                   ; clear V!
@@ -2187,295 +1719,6 @@ unrackslots     ROUT
 ;
         Pull    "PC"
 
-        [ Medusa
-;-----------------------------------------------------------------------------
-; Service_PagesSafe interception
-; Entry:  R2    No. of pages to move
-;         R3    page list before move
-;         R4    page list after move
-;-----------------------------------------------------------------------------
-        DCB     "PagesSafe"
-
-servicepagessafe
-        Push    "R0-r8,lr"
-;        SWI     &107                    ; beep when this happens
-        MOV     R0,#0
-        ADD     R5,R2,#1
-        MOV     R8,R4
-        MOV     R4,R3
-01
-        SUBS    R5,R5,#1
-        BEQ     %FT09
-        LDR     R6,[R4],#12
-        CMP     R6,#-1
-        BEQ     %FT09
-        LDR     R7,[R8],#12              ; 3-word entries
-        MOV     R0,#-1
-        ADRL    R3,taskpointers
-03
-        ADD     R0,R0,#1
-        CMP     R0,#maxtasks
-        BEQ     %FT11
-        LDR     R2,[R3,R0, LSL #2]
-        TEQ     R2,#task_unused
-        BEQ     %BT03
-        LDR     R2,[R2,#task_slotptr]
-        CMP     R2,#-1
-        BEQ     %BT03
-05
-        LDR     R1,[R2],#12
-        CMP     R1,#-1
-        BEQ     %BT03
-        CMP     R1,R6
-        BNE     %BT05
-        STR     R7,[R2,#-12]
-        B       %BT01
-09
-        Pull    "R0-R8,PC"
-11
-; just in case 1-tasking & task isn't in the list
-        LDR     R0,taskhandle
-        LDR     R2,singletaskhandle
-        CMP     R0,R2
-        BNE     %BT01
-        LDR     R0,pendingtask
-        CMP     R0,#1
-        BLT     %BT01
-        LDR     R2,[R0,#task_slotptr]
-        CMP     R2,#-1
-        BEQ     %BT01
-13
-        LDR     R1,[R2],#12
-        CMP     R1,#-1
-        BEQ     %BT01
-        CMP     R1,R6
-        BNE     %BT13
-        STR     R7,[R2,#-12]
-        B       %BT01
-        ]
-
-
-;-----------------------------------------------------------------------------
-; Service_Memory interception
-; Entry:  R0 = amount application space would be altered by
-;         R2 = CAO pointer
-;-----------------------------------------------------------------------------
-
-servicememory   ROUT
-        [ Medusa
-         [ true
-        Push    "R0-R2,lr"
-        MOV     R0,#6
-        SWI     XOS_ReadDynamicArea             ; is there a kernel free pool
-        Pull    "R0-R2,lr"
-;        BVC     medusaaboutto
-        MOVVCS  PC,lr
-        CLRV
-        |
-        MedusaOS
-        MOVEQS  PC,lr
-         ]
-        ]
-        Push    "R0-R3,LR"
-
-;
-        Debug   dy,"Service_Memory: CAO pointer, amount to move =",R2,R0
-;
-        LDR     R14,freepool            ;; Wimp 1.89o onwards
-        CMP     R14,#nullptr            ;;
-        BNE     %FT01                   ;; only allow paging if
-        LDR     R14,taskhandle          ;; the "owner" slot is active
-        LDR     R1,inithandle           ;;
-        TEQ     R1, R14                 ;; TMD: actually do the comparison!
-        BNE     serviceclaim            ;;
-01
-
-        LDRB    R14, memoryOK           ; if free memory has been claimed
-        TST     R14, #mem_claimed       ; then refuse to move memory
-        BNE     serviceclaim
-
-        ADRL    R14,Module_BaseAddr
-        TEQ     R2,R14                  ; are we in control?
-        Pull    "R0-R3,PC",NE
-        TEQ     R0,#IsAnybodyThere      ; if this is the Wimp, allow it
-        Pull    "R0-R3,PC",EQ
-;
-        LDR     R14,freepool            ; is there a free pool?
-        CMP     R14,#nullptr
-        Pull    "R0-R3,PC",LT           ; freepool=-2 ==> OK (not running)
-        LDRNEB  R14,memoryOK            ; if not remapped already, stop this!
-        TSTNE   R14,#mem_remapped       ; (usually because memory claimed)
-        BEQ     serviceclaim
-;
-        LDR     R1,oldapplimit          ; orig_applicationspacesize is wrong
-        LDR     R0,[sp]                 ; (has been swapped with local one)
-        ADD     R0,R1,R0                ; proposed new end-of-memory
-        LDR     R14,freepoolbase
-        CMP     R0,R14
-        Pull    "R0-R3,PC",CS
-
-serviceclaim
-        MOV     R14,#0
-        STR     R14,[sp,#1*4]           ; claim service if not enough memory
-        Pull    "R0-R3,PC"
-
-medusaaboutto
-
-        Push    "R0,lr"
-
-        ADRL    R0,Module_BaseAddr
-        TEQ     R0,R2
-        Pull    "R0,PC",NE
-        LDR     R0,inithandle
-        LDR     R14,taskhandle
-        TEQ     R0,R14
-        MOVNE   R1,#0
-
-        Pull    "R0,PC",,^
-
-
-medusaservicemem
-        ; page may have been taken out of application space
-        ; the slot block must be updated.
-        Push    "R0-R3,lr"
-        ; first check pending task
-
-        LDR     R14,pendingtask
-        MOVS    R0,R14,ASR #31
-        LDREQ   R0,[R14,#task_slotptr]
-        CMP     R0,#0
-        SWIGT   XOS_FindMemMapEntries
-        BGT     %FT05
-
-        LDR     R14,taskhandle
-        CMP     R14,#0
-        Pull    "R0-R3,PC",EQ,^
-
-        LDR     R14,[wsptr,R14]
-        MOVS    R0,R14,ASR #31
-        LDREQ   R0,[R14,#task_slotptr]
-        CMP     R0,#0
-        SWIGT   XOS_FindMemMapEntries
-
-05
-
-
-
-
-
-        Pull    "R0-R3,PC",,^
-
-;-----------------------------------------------------------------------------
-; Service_MemoryMoved interception
-; Put pages back into their proper positions
-;-----------------------------------------------------------------------------
-
-servicememorymoved  ROUT
-        [ Medusa
-         [ true
-        Push    "R0-R2,lr"
-        MOV     R0,#6
-        SWI     XOS_ReadDynamicArea             ; is there a kernel free pool
-        Pull    "R0-R2,lr"
-        BVC     medusaservicemem
-
-        CLRV
-        |
-        MedusaOS
-        MOVEQS  PC,lr
-         ]
-        ]
-        Push    "R0-R7,R10-R11,LR"
-
-;
-        MOV     R14,#IRQsema            ; if in IRQ, forget it!
-        LDR     R14,[R14]
-        TEQ     R14,#0
-        Pull    "R0-R7,R10-R11,PC",NE,^
-;
-        TEQP    PC,#SVC_mode            ; enable interrupts (bug in MOS)
-;
-        LDR     R14,freepool            ; no messing about if no free pool
-        CMP     R14,#nullptr
-        Pull    "R0-R7,R10-R11,PC",LT,^ ; Wimp not involved at all
-        BNE     %FT01                   ; Wimp has a free pool to maintain
-;
-        LDR     R0,taskhandle                ;; Wimp 1.89o onwards
-        LDR     R14,inithandle               ;;
-        TEQ     R0,R14                       ;; update these if "owner" slot
-        Pull    "R0-R7,R10-R11,PC",NE,^      ;; is being altered
-;                                            ;;
-        MOV     R0,#ApplicationSpaceSize     ;; restorepages uses these later
-        MOV     R1,#0                        ;;
-        SWI     XOS_ChangeEnvironment        ;;
-        STRVC   R1,orig_applicationspacesize ;;
-        MOV     R0,#MemoryLimit              ;;
-        MOV     R1,#0                        ;;
-        SWI     XOS_ChangeEnvironment        ;;
-        STRVC   R1,orig_memorylimit          ;;
-                                             ;;
-        Pull    "R0-R7,R10-R11,PC",,^        ;;
-
-01
-        LDRB    R14,memoryOK            ; if not remapped, forget it
-        TST     R14,#mem_remapped
-        Pull    "R0-R7,R10-R11,PC",EQ,^
-;
-; restore correct CAO pointer (forced to be Wimp during OS_ChangeDynamic)
-;
-        MOV     R0,#CAOPointer
-        LDR     R1,oldCAOpointer
-        SWI     XOS_ChangeEnvironment   ; ignore errors
-;
-; scan all slots to see if the memory has moved
-;
-        ADRL    R5,taskpointers
-        MOV     R4,#maxtasks
-01
-        LDR     R14,[R5],#4
-        MOVS    R0,R14,ASR #31          ; R0 = 0 (OK) or -1 (no slot)
-        LDREQ   R0,[R14,#task_slotptr]
-        CMP     R0,#0
-        SWIGT   XOS_FindMemMapEntries   ; R10 --> new map, R0 --> slot
-        SUBS    R4,R4,#1                ; clears V
-        BNE     %BT01
-;
-; don't forget the 'pending' slot
-;
-        LDR     R14,pendingtask         ;; this was missing in Risc OS 2.00
-        MOVS    R0,R14,ASR #31          ;;
-        LDREQ   R0,[R14,#task_slotptr]  ;; essential for screen remapping
-        CMP     R0,#0                   ;;
-        SWIGT   XOS_FindMemMapEntries   ;;
-;
-; restore the current orig_applicationspacesize/memorylimit for this slot
-;
-        BL      restorememlimit
-        LDR     R3,oldapplimit
-        STR     R1,orig_memorylimit             ; these must be equal
-        STR     R1,orig_applicationspacesize
-;
-; reconstruct the free slot by entering the expected addresses
-; note that sometimes more than just the free pool will have been removed
-;
-        LDR     R2,freepool             ; R1 -> end of memory, R2 -> free slot
-        BL      findfreepool            ; fills in free pool
-
-        MOV     R1,#2                   ; no USR mode read/write
-        BL      setslotaccess
-;
-; map out all applications except the current one
-; NB: this is important so that pages cannot coincide later
-;
-        BL      unrackslots
-;
-        LDRB    R14,memoryOK
-        BIC     R14,R14,#mem_remapped   ; should be alright again now!
-        STRB    R14,memoryOK
-;
-        Pull    "R0-R7,R10-R11,PC",,^
-
-
 
 ;;----------------------------------------------------------------------------
 ;; Neil's debugging routines
@@ -2522,5 +1765,8 @@ resourcefsfiles
         ResourceFile    Resources.desktop,      Resources.Desktop.Messages
         ]
         DCD     0
+
+
+  ] ;UseAMBControl
 
         END

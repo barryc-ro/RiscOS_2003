@@ -46,6 +46,7 @@ clean:
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.Templates  ${RESDIR}.${COMPONENT}.Templates  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}

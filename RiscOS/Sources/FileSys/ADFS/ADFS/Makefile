@@ -176,3 +176,4 @@ rm.Morris.ADFS: s.ADFS20
 rm.Morris.ADFS: s.TokenHelp
 rm.Morris.ADFS: s.ADFS50
 rm.Morris.ADFS: s.MFormat
+rm.Morris.ADFS: s.ADFS_SA

@@ -94,4 +94,5 @@ rm.Switcher: Hdr:Switcher
 rm.Switcher: Hdr:UpCall
 rm.Switcher: Hdr:MsgMenus
 rm.Switcher: Hdr:DragASprit
+rm.Switcher: Hdr:Portable
 rm.Switcher: Hdr:NDRDebug
