@@ -1,141 +1,34 @@
-# Makefile for Menu
+# Makefile for a Toolbox Object module
 #
-# ***********************************
-# ***    C h a n g e   L i s t    ***
-# ***********************************
-# Date       Name   Description
-# ----       ----   -----------
-# 06-Jan-94  AMcC   Created
-# 04-Feb-98  SNB    Updated to allow RAM builds
-#
-
+# $Id$
 #
 # Component specific options:
 #
-COMPONENT  = Menu
-ROM_MODULE = aof.${COMPONENT}
-RAM_MODULE = rm.${COMPONENT}
+RAMMESSAGES = o.msgs
+
+COMMON_OBJ = o.Modhdr_NoD o.auxiliary o.create o.delete o.events o.getstate\
+ o.hide o.miscop o.show o.task
+
+ROM_OBJS = o.mainROM ${COMMON_OBJ}
+
+RAM_OBJS = o.main ${RAMMESSAGES} ${COMMON_OBJ}
+
+DBG_OBJS = od.main ${RAMMESSAGES} o.Modhdr od.auxiliary od.create od.delete od.events od.getstate\
+ od.hide od.miscop od.show od.task
 
 #
-# Export Paths for Messages module
+# Get main rules
 #
-RESDIR = <resource$dir>.Resources2.${COMPONENT}
+include C:tboxlibint.TboxMake
 
 #
-# Generic options:
+# Module specific rules:
 #
-MKDIR   = cdir
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-TLD	= tlink
-RM      = remove
-MODSQZ  = modsqz
-WIPE    = -wipe
-
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
-
-CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
-DFLAGS   = -D${SYSTEM}
-ROMFLAGS = -DROM
-INCLUDES = -I<Lib$Dir>.tboxlibint.,<Lib$Dir>.tboxlibs:,C:
-
-#
-# Libraries
-#
-ANSILIB   = CLib:o.ansilib
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.abssym
-TBOXLIB   = <Lib$Dir>.tboxlibint.o.tboxlibm
-
-OBJS =\
- o.Modhdr_NoD\
- o.Menu\
- o.auxiliary\
- o.create\
- o.delete\
- o.events\
- o.getstate\
- o.hide\
- o.miscop\
- o.show\
- o.task
- 
-RAM_OBJS =\
- o.Modhdr_NoD\
- o.MenuRAM\
- o.auxiliary\
- o.create\
- o.delete\
- o.events\
- o.getstate\
- o.hide\
- o.miscop\
- o.show\
- o.task
- 
-RESF=o.msgs
-
-#
-# Rule patterns
-#
-.c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -p -o $@ $<
-
-#
-# Main rules:
-#
-#
-all: ${RAM_MODULE}
-        @echo ${COMPONENT}: Module built (RAM)
-
-rom: ${ROM_MODULE}
-        @echo ${COMPONENT}: Module built (ROM)
-
-install_rom: ${ROM_MODULE}
-        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: Module installed (ROM)
-
-resources: LocalRes:Messages
-        ${MKDIR} ${RESDIR}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages ${RESDIR}.Messages ${CPFLAGS}
+resources: resources-messages
         @echo ${COMPONENT}: resource files copied to Messages module
 
-clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} aof ${WFLAGS}
-        ${WIPE} rm ${WFLAGS}
-        ${WIPE} linked ${WFLAGS}
+clean: toolbox-clean
         @echo ${COMPONENT}: cleaned
-
-${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
-        ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
-
-# final link for ROM Image (using given base address)
-rom_link:
-        ${MKDIR} linked
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
-
-${RESF}: LocalRes:Messages
-	resgen messages_file ${RESF} LocalRes:Messages Resources.${COMPONENT}.Messages
-
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
-	${mkdir} rm
-        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
-        ${MODSQZ} $@
-        Access $@ RW/R
-
-o.MenuRAM: Menu.c
-	$(CC) ${CFLAGS} -o $@ Menu.c
-
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
