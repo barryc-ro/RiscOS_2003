@@ -27,11 +27,11 @@ PhysChecksum	*	(((CheckSumCMOS + &30) :MOD: &F0) + &10)
 
 ; Device addresses
 RTCAddress		*	&a0     ; traditional RTC / 240 byte CMOS
-E2ROMAddress		*	&a8     ; 24C08 device - 512 byte or 1K
 E2ROMAddress2K		*	&e0     ; 24C174 device - 2K
 E2ROMAddress2K_OTP	*	&60     ; 24C174 device - OTP section
 E2ROMAddress4K          *       &a4     ; 24C32 device - 4K (top 1K protectable)
-E2ROMAddress8K          *       &a2     ; 24C64 device - 8K (top 2K protectable)
+E2ROMAddress8K_prot     *       &a2     ; 24C64 device - 8K (top 2K protectable)
+E2ROMAddress8K          *       &ae     ; 24C64 device - 8K
 E2ROMAddress16K         *       &a8     ; 24C128 device - 16K
 E2ROMAddress32K         *       &a6     ; 24CS256 device - 32K (top 2K possibly OTP)
 
@@ -718,10 +718,10 @@ ReadSubBlock ROUT
         Pull    "R3-R5,PC"              ; V will be clear
 15
         Push    "R0-R2"
-        ADD     R0, R0, R4              ; R0 = physical address
+        ADD     R0, R0, R4              ; R0 = physical start address
+        ADD     R3, R3, R4              ; R3 = physical end address
   [ HAL
     	Push	"sb"
-        ADD     R3, R3, R4
         SUB     R2, R3, R0
     	MOV 	R5, R0	    	    	; save address
     	AddressHAL
@@ -756,6 +756,8 @@ ReadSubBlock ROUT
     	Pull	"sb"
   ]
 
+        SUB     R5, R3, R0              ; R5 = bytes being read
+
   [	E2ROMSupport
 	BL	GetI2CAddress		; convert to device address and offset
   |
@@ -783,7 +785,6 @@ ReadSubBlock ROUT
 
         ADD     R14, R13, #12*2+4
         LDMIA   R14, {R0-R2}
-        SUB     R5, R3, R0              ; R5 = bytes being read
         ADD     R0, R0, R5              ; update return R0
         SUB     R2, R2, R5              ; update return R2
         STMIB   R14, {R0,R2}
@@ -900,8 +901,8 @@ ChecksumSubBlock ROUT
 15
         Push    "R0-R2"
         ADD     R0, R0, R4              ; R0 = physical start address
-  [ HAL
         ADD     R3, R3, R4              ; R3 = physical end address
+  [ HAL
     	Push	"sb,R12"
     	MOV 	R5, R0	    	    	; save address
     	AddressHAL
@@ -911,6 +912,8 @@ ChecksumSubBlock ROUT
     	AND 	R4, R0, #NVMemoryFlag_Provision
     	MOV 	R0, R5	    	    	; restore address
     	TEQ 	R4, #NVMemoryFlag_None
+        TEQNE   R4, #NVMemoryFlag_HAL
+        BNE     %FT17                   ; do IIC things.
 
         SUB     R14, R3, R0
         LDR     R1, [R13,#8]
@@ -920,12 +923,10 @@ ChecksumSubBlock ROUT
         STR     R1, [R13,#8]
         STR     R3, [R13,#16]
 
+    	TEQ 	R4, #NVMemoryFlag_None
     	; If there's no NVmemory, tough - we just return.
     	Pull 	"sb,R12", EQ
 	Pull	"R0-R5,PC", EQ
-
-    	TEQ 	R4, #NVMemoryFlag_HAL
-    	BNE 	%FT17	    	    	; do IIC things.
 
         Push    "R6"
         MOV     R4, #0
@@ -949,6 +950,7 @@ ChecksumSubBlock ROUT
 17
         Pull    "sb,R12"
   ]
+        SUB     R5, R3, R0              ; R5 = bytes being read
   [	E2ROMSupport
 	BL	GetI2CAddress		; convert to device address and offset
   |
@@ -976,7 +978,6 @@ ChecksumSubBlock ROUT
 
         ADD     R14, R13, #12*2+4
         LDMIA   R14, {R0-R2}
-        SUB     R5, R3, R0              ; R5 = bytes being read
         ADD     R0, R0, R5              ; update return R0
         SUB     R2, R2, R5              ; update return R2
         STMIB   R14, {R0,R2}
@@ -1452,23 +1453,7 @@ InitCMOSCache	Entry "r1-r6, sb,r12"
         MOVVC   R3, #3          ; Fast speed setting (1.5탎 delays)
 	BVC	%FT5
 
-; Have we got a 1K E� ?
-        MOV     r1, #E2ROMAddress
-	MOV	r0, #(E2ROMAddress+6)
-	BL	DummyAccess
-	MOVVC	R4, #4
-	BVC	%FT5
-
-; Have we got 512 bytes of E� ?
-	MOV	r0, #(E2ROMAddress+2)
-	BL	DummyAccess
-	MOVVC	R4, #2
-	BVC	%FT5
-
-; Have we got a 16K device ? (Note that this probe would make a 24C08 device respond -
-; but if we've gotten this far it would have to be a < 512 byte version; we've never
-; used such a device).
-
+; Have we got a 16K device ?
         MOV     r1, #E2ROMAddress16K
 	MOV	r0, #E2ROMAddress16K
 	BL	DummyAccess
@@ -1478,7 +1463,6 @@ InitCMOSCache	Entry "r1-r6, sb,r12"
         BVC     %FT5
 
 ; Have we got a 4K device?
-
         MOV     r1, #E2ROMAddress4K
 	MOV	r0, #E2ROMAddress4K
 	BL	DummyAccess
@@ -1492,6 +1476,16 @@ InitCMOSCache	Entry "r1-r6, sb,r12"
 
         MOV     r1, #E2ROMAddress8K
 	MOV	r0, #E2ROMAddress8K
+	BL	DummyAccess
+	MOVVC	R4, #32
+        MOVVC   R5, #5          ; 32 byte page size
+        MOVVC   R3, #3          ; Fast speed setting (1.5탎 delays)
+        BVC     %FT5
+
+; Have we got a protected 8K device?
+
+        MOV     r1, #E2ROMAddress8K_prot
+	MOV	r0, #E2ROMAddress8K_prot
 	BL	DummyAccess
 	MOVVC	R4, #32
         MOVVC   R6, #24         ; Only bottom 6K writable
