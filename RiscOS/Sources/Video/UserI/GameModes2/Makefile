@@ -47,13 +47,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.GameModes2: Hdr:ListOpts
-rm.GameModes2: Hdr:Macros
-rm.GameModes2: Hdr:System
-rm.GameModes2: Hdr:SWIs
-rm.GameModes2: Hdr:CPU.Generic26
-rm.GameModes2: Hdr:IO.GenericIO
-rm.GameModes2: Hdr:RISCOS
-rm.GameModes2: Hdr:ModHand
-rm.GameModes2: Hdr:NdrDebug
-rm.GameModes2: Version

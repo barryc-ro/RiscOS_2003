@@ -112,7 +112,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	h.Header
-o.module:	C:h.swis

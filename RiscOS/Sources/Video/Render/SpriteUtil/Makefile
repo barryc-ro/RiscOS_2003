@@ -59,18 +59,3 @@ s.TokHelpSrc: ${TOKENS} HelpSrc
         ${TOKENISE} ${TOKENS} HelpSrc $@
 
 # Dynamic dependencies:
-rm.SpriteUtil: Hdr:ListOpts
-rm.SpriteUtil: Hdr:Macros
-rm.SpriteUtil: Hdr:System
-rm.SpriteUtil: Hdr:SWIs
-rm.SpriteUtil: Hdr:CPU.Generic26
-rm.SpriteUtil: Hdr:IO.GenericIO
-rm.SpriteUtil: Hdr:RISCOS
-rm.SpriteUtil: Hdr:ModHand
-rm.SpriteUtil: Hdr:Proc
-rm.SpriteUtil: Hdr:Tokens
-rm.SpriteUtil: Hdr:MsgTrans
-rm.SpriteUtil: Hdr:Sprite
-rm.SpriteUtil: Version
-rm.SpriteUtil: s.TokHelpSrc
-rm.SpriteUtil: s.MsgCode

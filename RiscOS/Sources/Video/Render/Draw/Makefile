@@ -66,26 +66,3 @@ ${EXP_HDR}.Draw: hdr.Draw
         ${CP} hdr.Draw $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.DrawMod: Version
-rm.DrawMod: hdr:ListOpts
-rm.DrawMod: hdr:Macros
-rm.DrawMod: hdr:System
-rm.DrawMod: Hdr:SWIs
-rm.DrawMod: Hdr:CPU.Generic26
-rm.DrawMod: Hdr:IO.GenericIO
-rm.DrawMod: Hdr:RISCOS
-rm.DrawMod: hdr:PublicWS
-rm.DrawMod: hdr:ModHand
-rm.DrawMod: hdr:Services
-rm.DrawMod: hdr:VduExt
-rm.DrawMod: hdr:FSNumbers
-rm.DrawMod: hdr:NewErrors
-rm.DrawMod: hdr:Debug
-rm.DrawMod: hdr:Draw
-rm.DrawMod: hdr:Proc
-rm.DrawMod: hdr:MsgTrans
-rm.DrawMod: s.DrProcess
-rm.DrawMod: s.DrOutput
-rm.DrawMod: s.DrQFill
-rm.DrawMod: s.DrArith
-rm.DrawMod: s.DrInter

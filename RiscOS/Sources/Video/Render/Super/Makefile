@@ -64,18 +64,3 @@ ${EXP_HDR}.Super: hdr.Super
         ${CP} hdr.Super $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.Super: Hdr:ListOpts
-rm.Super: Hdr:Macros
-rm.Super: Hdr:System
-rm.Super: Hdr:SWIs
-rm.Super: Hdr:CPU.Generic26
-rm.Super: Hdr:IO.GenericIO
-rm.Super: Hdr:RISCOS
-rm.Super: Hdr:ModHand
-rm.Super: Hdr:FSNumbers
-rm.Super: Hdr:NewErrors
-rm.Super: Hdr:NDRDebug
-rm.Super: Hdr:MsgTrans
-rm.Super: Version
-rm.Super: s.Matrix1
-rm.Super: s.Matrix2

@@ -55,19 +55,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.ModeFiles: Hdr:ListOpts
-rm.ModeFiles: Hdr:Macros
-rm.ModeFiles: Hdr:System
-rm.ModeFiles: Hdr:SWIs
-rm.ModeFiles: Hdr:CPU.Generic26
-rm.ModeFiles: Hdr:IO.GenericIO
-rm.ModeFiles: Hdr:RISCOS
-rm.ModeFiles: Hdr:ModHand
-rm.ModeFiles: Hdr:Machine.<Machine>
-rm.ModeFiles: Hdr:Proc
-rm.ModeFiles: Hdr:Services
-rm.ModeFiles: Hdr:FSNumbers
-rm.ModeFiles: Hdr:HighFSI
-rm.ModeFiles: Hdr:NewErrors
-rm.ModeFiles: Hdr:MsgTrans
-rm.ModeFiles: Version

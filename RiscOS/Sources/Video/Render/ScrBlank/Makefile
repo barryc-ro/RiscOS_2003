@@ -69,25 +69,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.ScrBlank: Hdr:ListOpts
-rm.ScrBlank: Hdr:Macros
-rm.ScrBlank: Hdr:System
-rm.ScrBlank: Hdr:SWIs
-rm.ScrBlank: Hdr:CPU.Generic26
-rm.ScrBlank: Hdr:IO.GenericIO
-rm.ScrBlank: Hdr:RISCOS
-rm.ScrBlank: Hdr:ModHand
-rm.ScrBlank: Hdr:FSNumbers
-rm.ScrBlank: Hdr:NewErrors
-rm.ScrBlank: Hdr:Services
-rm.ScrBlank: Hdr:CMOS
-rm.ScrBlank: Hdr:MsgTrans
-rm.ScrBlank: Hdr:Portable
-rm.ScrBlank: Hdr:Proc
-rm.ScrBlank: Hdr:ColourTran
-rm.ScrBlank: Hdr:ScrBlank
-rm.ScrBlank: Hdr:PaletteV
-rm.ScrBlank: Hdr:UpCall
-rm.ScrBlank: Hdr:HostFS
-rm.ScrBlank: Hdr:Debug
-rm.ScrBlank: Version

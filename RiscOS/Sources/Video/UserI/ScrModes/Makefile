@@ -115,12 +115,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.ScrModes:	c.ScrModes
-o.ScrModes:	C:h.kernel
-o.ScrModes:	C:h.swis
-o.ScrModes:	h.newswis
-o.ScrModes:	h.errors
-o.ScrModes:	h.services
-o.ScrModes:	h.monitors
-o.ScrModes:	h.machtypes
-o.ScrModes:	h.modex
