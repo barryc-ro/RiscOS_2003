@@ -7,7 +7,7 @@
 #
 # Makefile for Freeway module
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.3  95/01/09  14:13:24  kwelton
 # Added ifswrap.c into the list of C source files, remade dependencies
 # (again).

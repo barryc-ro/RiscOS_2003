@@ -7,7 +7,7 @@
 #
 # Makefile for Ether2 Module
 #
-# $Log$
+# :RCS Log discontinued:
 #
 LEVEL=		..
 INCLUDES=	${LEVEL}/include

@@ -7,7 +7,7 @@
 #
 # Makefile for socklib.a
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.1  95/03/08  11:38:13  kwelton
 # Initial revision
 # 
