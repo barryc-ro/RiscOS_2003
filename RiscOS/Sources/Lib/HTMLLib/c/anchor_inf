@@ -1,0 +1,571 @@
+/* -*-C-*-
+ *
+ */
+
+#include "stdio.h"        /* For NULL etc */
+#include "stdlib.h"       /* For bsearch */
+#include "limits.h"       /* For INT_MAX */
+#include "html2_ext.h"  /* For the HTML bits */
+#include "tags.h"         /* for PCDATA */
+#include "struct.h"        /* For the structures */
+#include "string.h"        /* For string handling */
+#include "internal.h"         /* predefinitions of functions */
+
+static void __anchor_munge_spaces(char *s);
+static int __html_tag_length(char *s1);
+static void parse_rowcols (char *ptr, unsigned int *values, unsigned int *number);
+
+typedef struct colour_name { char *name; unsigned int colour; } colour_name;
+
+/*
+ * I don't believe I just entered this stupid list. Thanks, Microsoft.
+ *
+ * They must be sorted for bsearch to work...
+ */
+
+#define COLNAMES 16
+
+static const colour_name colour_list[COLNAMES] =
+{
+  "AQUA",    0xffff0000,
+  "BLACK",   0x00000000,
+  "BLUE",    0xff000000,
+  "FUCHSIA", 0xff00ff00,
+  "GRAY",    0x80808000,
+  "GREEN",   0x00800000,
+  "LIME",    0x00ff0000,
+  "MAROON",  0x00008000,
+  "NAVY",    0x80000000,
+  "OLIVE",   0x00808000,
+  "PURPLE",  0x80008000,
+  "RED",     0x0000ff00,
+  "SILVER",  0xc0c0c000,
+  "TEAL",    0x80800000,
+  "WHITE",   0xffffff00,
+  "YELLOW",  0x00ffff00
+};
+
+static int compare_colname(const void *keyp, const void *membp)
+{
+  const char        * key  = (const char        *) keyp;
+  const colour_name * memb = (const colour_name *) membp;
+
+  return strincmp(key, memb->name, INT_MAX);
+}
+
+static unsigned int __html_convcol(const char *s)
+{
+    char r, g, b;
+    unsigned int c = 0;
+
+    while (*s==' ' || *s=='"' || *s=='\'')
+        s++;
+
+    if (*s == '#')
+    {
+        s++;
+
+  retry_colour:
+
+        while (*s)
+        {
+            c=c*16+__html_unnumeric_escape(toupper(*s));
+            s++;
+        }
+
+        r=c>>16;
+        g=c>>8;
+        b=c;
+
+        return (b<<24) | (g<<16) | (r<<8);
+    }
+    else
+    {
+        const colour_name *entry;
+
+        if ((entry = bsearch(s, colour_list, COLNAMES, sizeof colour_list[0], compare_colname)) != NULL)
+            return entry->colour;
+        else
+        {
+            if (isxdigit(s[0]) && isxdigit(s[1]) && isxdigit(s[2]))
+                goto retry_colour; /* May be a colour missing initial '#' */
+        }
+
+        return rand() << 8;        /* Whyever not? */
+    }
+}
+
+static int compare_anchor(const void *keyp, const void *membp)
+{
+    const char *key    = (const char *)   keyp;
+    const Anchor *memb = (const Anchor *) membp;
+
+    return strcmp(key, memb->anchor);
+}
+
+
+/*************************************************************************/
+/* AnchorInfo *__html_get_anchor_info(char **anchor_info, Tag current_.. */
+/*************************************************************************/
+/* This routine returns a struct of the type "AnchorInfo" containing the */
+/* information contained within the tag. e.g. <A HREF="..."> woud fill   */
+/* in the href tag. To allow for it to do nasty things to the info it    */
+/* requires a copy of the string to be able to work correctly. This      */
+/* ensures that a save source on the input stream will still be okay.    */
+/*************************************************************************/
+
+AnchorInfo * __html_get_anchor_info(StreamTokens * st, char ** anchor_info, Tag current_tag)
+{
+  Anchor     * anc = current_tag.anchors;
+  Anchor     * found_anc;
+
+  AnchorInfo * return_val = NULL;
+
+  char         c;
+  char       * start_ptr;
+
+  char       * info    = strndup(*anchor_info, __html_tag_length(*anchor_info));
+  char       * p       = info;
+  char       * buf     = NULL;
+  char       * ptr     = NULL;
+  char       * pointer = NULL;
+
+  int        max_anc                = current_tag.max_anchors;
+  int        need_to_create_colinfo = 1;
+  int        has_quotes, has_equals, in_second_part, had_space;
+
+// Printf ("get anchor info for '%s'\n", current_tag);
+
+  /* Check for NULL or zero length string */
+
+  if ((info == NULL) || (*info == '\0')) return NULL;
+
+  start_ptr = info;
+
+  /* Make parsing a little easier */
+
+  __anchor_munge_spaces(start_ptr);
+
+  /* Skip the main part of the tag (e.g. '<a' for anchors) */
+
+  while (
+          (*info != ' ')  &&
+          (*info != '\0') &&
+          (*info != '>')
+        )
+        info++;
+
+  /* Skip the next set of spaces */
+
+  while (*info == ' ') info++;
+
+  /* We have hit the end of the input stream or tag? */
+
+  if ((*info == '\0') || (*info== '>'))
+  {
+    __html_free(start_ptr,0);
+    return NULL;
+  }
+
+  /* Grab just the bit inside the tag: convert \n, \t and \r to ' ' */
+
+  p = info;
+
+  while ((*p != '>') && (*p != '<'))
+  {
+    if (*p=='\0')
+    {
+      __html_free(start_ptr,0);
+      return NULL; /* error case really */
+    }
+
+    p++;
+  }
+
+  /* Snip off the '>' at the end now, then move back to the begining */
+
+  *p = '\0';
+  p  = info;
+
+  /* We are just working inside the tag now: */
+
+  while (*info != '\0')
+  {
+    /* Note that we havent seen a quote mark yet! */
+
+    has_quotes     = 0;
+    has_equals     = 0;
+    in_second_part = 0;
+    had_space      = 0;
+
+    /* isolate the next bit of the tag */
+
+    while (*p != '\0')
+    {
+      if (*p=='"' || *p=='\'')
+      {
+        if (has_quotes)
+        {
+          if ((*p == '"' && has_quotes == 1) || (*p == '\'' && has_quotes == 2))
+          {
+            p++;
+            break;
+          }
+        }
+        else has_quotes = ((*p == '"') ? 1 : 2);
+      }
+      else if (*p=='=') has_equals = 1;
+      else if (isspace(*p))
+      {
+        if (in_second_part && !has_quotes) break;
+
+        had_space = 1;
+      }
+      else
+      {
+        if (has_equals) in_second_part = 1;
+
+        else if (had_space)
+        {
+          /* Hit the next element after an atomic one - back up */
+
+          p--;
+          break;
+        }
+      }
+      p++;
+    }
+
+    c  = *p;
+    *p = '\0';
+
+/*
+ * Look to see what we have. First off scan through to see if we have
+ * an '=' sign. If we do, store for later use!
+ */
+    buf=ptr=info;
+    while (*ptr != '\0') {
+      if (*ptr=='=') {
+        *ptr='\0';
+        ptr++;
+        while (*ptr == ' ') ptr++;
+        break;
+      }
+      if (*ptr==' ') {
+        *ptr='\0'; ptr++;
+        while (*ptr==' ') ptr++;
+        if (*ptr=='=') {
+          ptr++;
+          while (*ptr==' ') ptr++;
+        }
+        break;
+      }
+      ptr++;
+    }
+
+/*
+ * Next look to see if we can find the suposed anchor element
+ * in the list provided
+ */
+    UPPER_CASE(info);
+
+//    Printf ("anchor element '%s', data '%s'\n", info, ptr, info, max_anc, anc);
+
+    found_anc = bsearch(info, anc, max_anc, sizeof anc[0], compare_anchor);
+
+/*
+ * If we have not found anything that is allowed, skip it
+ */
+    if (!found_anc) {
+      if (c=='\0') break;
+      *p=c; p++;
+      info=p;
+      continue;
+    }
+
+    /* Store what we have */
+
+    if (return_val == NULL)
+    {
+      return_val = (AnchorInfo *) __html_malloc(sizeof(AnchorInfo), 1);
+
+      if (return_val==NULL)
+      {
+        __html_free(start_ptr, 0);
+        return NULL;
+      }
+
+      return_val->href      = NULL;
+      return_val->src       = NULL;
+      return_val->target    = NULL;
+      return_val->alt       = NULL;
+      return_val->ismap     = 0;
+      return_val->border    = 2;          /* default image border  */
+      return_val->spacing   = 8;          /* default frame spacing */
+      return_val->alignment = _html_none;
+
+      if (current_tag.tag==BODY)
+      {
+        /* These are not valid RISC OS colours */
+
+        return_val->size=(unsigned int)-1;
+        return_val->rows=(unsigned int)-1;
+        return_val->cols=(unsigned int)-1;
+        return_val->maxlength=(unsigned int)-1;
+      }
+    }
+
+/*
+ * If the value inside ptr is enclosed in quotes, we need to
+ * strip them off!
+ */
+    if (*ptr=='"')
+    {
+      ptr++;
+      pointer=strpbrk(ptr,"\"");
+    }
+    else if (*ptr=='\'')
+    {
+      ptr++;
+      pointer=strpbrk(ptr,"\'");
+    }
+    if (pointer != NULL) *pointer='\0';
+
+    if (found_anc->rule == CDATA)
+        __html_unescape_string(ptr);
+
+    switch (found_anc->tag) {
+/* These are not currently supported */
+/*    case REL:     return_val->rel     = strdup(ptr); break;
+      case REV:     return_val->rev     = strdup(ptr); break;
+      case URN:     return_val->urn     = strdup(ptr); break;
+      case _TITLE:  return_val->title   = strdup(ptr); break;
+      case METHODS: return_val->methods = strdup(ptr); break; */
+      case NAME:    return_val->name    = strdup(ptr); break;
+/* Deal with char * type elements first */
+      case HREF:    return_val->href    = strdup(ptr); break;
+      case SRC:     return_val->src     = strdup(ptr); break;
+      case ALT:     return_val->alt     = strdup(ptr); break;
+      case ACTION:  return_val->action  = strdup(ptr); break;
+      case ENCTYPE: return_val->enctype = strdup(ptr); break;
+      case VALUE:   return_val->value   = strdup(ptr); break;
+/* 32 bit int values */
+      case MAXLENGTH:  return_val->maxlength = atoi(ptr); break;
+      case SIZE:       return_val->size      = atoi(ptr); break;
+      case ROWS:
+      {
+        if (!st->_stream_frameset) {
+          return_val->rows      = atoi(ptr); break;
+        } else {
+          parse_rowcols (ptr, NULL, &(return_val->rows));
+          return_val->name = __html_malloc (sizeof(unsigned int), return_val->rows);
+          if (return_val->name) {
+            parse_rowcols (ptr, (unsigned int *) (return_val->name), NULL);
+          }
+        }
+        break;
+      }
+      case COLS:
+      {
+        if (!st->_stream_frameset) {
+          return_val->cols      = atoi(ptr); break;
+        } else {
+          parse_rowcols (ptr, NULL, &(return_val->cols));
+          return_val->value = __html_malloc (sizeof(unsigned int), return_val->cols);
+          if (return_val->value) {
+            parse_rowcols (ptr, (unsigned int *) (return_val->value), NULL);
+          }
+        }
+        break;
+      }
+
+/* 8 and 1 but values (stored in an unsigned char for safekeeping */
+      case METHOD:
+        UPPER_CASE(ptr)
+        if (!strcmp(ptr,"POST"))  return_val->method=4;
+        else if (!strcmp(ptr,"PUT"))   return_val->method=8;
+        else if (!strcmp(ptr,"GET"))   return_val->method=1;
+	break;
+      case ISMAP:   return_val->ismap   = 1; 	       break;
+      case ALIGN:
+	UPPER_CASE(ptr);
+	if (!strcmp(ptr,"CENTRE"))        return_val->alignment=_html_centre;
+	  else if (!strcmp(ptr,"CENTER")) return_val->alignment=_html_centre;
+	  else if (!strcmp(ptr,"TOP"))    return_val->alignment=_html_top;
+	  else if (!strcmp(ptr,"MIDDLE")) return_val->alignment=_html_middle;
+	  else if (!strcmp(ptr,"BOTTOM")) return_val->alignment=_html_bottom;
+	  else if (!strcmp(ptr,"LEFT"))   return_val->alignment=_html_left;
+	  else if (!strcmp(ptr,"RIGHT"))  return_val->alignment=_html_right;
+	  else                            return_val->alignment=_html_none;
+        break;
+      case VALIGN:
+        UPPER_CASE(ptr);
+        if (!strcmp(ptr,"CENTRE"))        return_val->valign=_html_centre;
+          else if (!strcmp(ptr,"CENTER")) return_val->valign=_html_centre;
+          else if (!strcmp(ptr,"TOP"))    return_val->valign=_html_top;
+          else if (!strcmp(ptr,"MIDDLE")) return_val->valign=_html_middle;
+          else if (!strcmp(ptr,"BOTTOM")) return_val->valign=_html_bottom;
+          else if (!strcmp(ptr,"LEFT"))   return_val->valign=_html_left;
+          else if (!strcmp(ptr,"RIGHT"))  return_val->valign=_html_right;
+          else                            return_val->valign=_html_none;
+        break;
+
+      case TYPE:
+        UPPER_CASE(ptr);
+        if (!strcmp(ptr,"PASSWORD")) return_val->type=PASSWORD;
+        else if (!strcmp(ptr,"CHECKBOX")) return_val->type=CHECKBOX;
+        else if (!strcmp(ptr,"RADIO"))    return_val->type=RADIO;
+        else if (!strcmp(ptr,"IMAGE"))    return_val->type=IMAGE;
+        else if (!strcmp(ptr,"HIDDEN"))   return_val->type=HIDDEN;
+        else if (!strcmp(ptr,"SUBMIT"))   return_val->type=SUBMIT;
+        else if (!strcmp(ptr,"RESET"))    return_val->type=RESET;
+        break;
+      case CHECKED:		     return_val->checked=1; break;
+      case MULTIPLE:		     return_val->multiple=1; break;
+      case SELECTED:		     return_val->selected=1; break;
+      case BORDER:		     return_val->border=atoi(ptr); break;
+      case BGCOL:                    return_val->maxlength=__html_convcol(ptr); break;
+      case FGCOL:                    return_val->size=__html_convcol(ptr); break;
+      case ALINK:                    return_val->rows=__html_convcol(ptr); break;
+      case VLINK:                    return_val->cols=__html_convcol(ptr); break;
+      case COLOR:                    add_colour_info(st, __html_convcol(ptr),
+                                                     &need_to_create_colinfo);
+                                     break;
+      case FONTSIZE:                 add_size_info(st, ptr, &need_to_create_colinfo);
+                                     break;
+      case BASEFONTSIZE:             {
+                                         int fontsize = atoi(ptr);
+                                         if (fontsize >=1 && fontsize <=7)
+                                            st->_stream_basefont = fontsize;
+                                     }
+                                     break;
+      case HRWIDTH:                  return_val->cols = atoi(ptr);
+                                     /* Indicate presence (see HR_HAS_WIDTH macro) */
+                                     return_val->cols |= (1<<24);
+                                     if (strchr(ptr, '%'))
+                                        return_val->cols |= UNITS_PERCENT << 28;
+                                     else
+                                        return_val->cols |= UNITS_PIXELS << 28;
+                                     break;
+      case NOSHADE:                  return_val->noshade = 1;
+                                     break;
+      case TARGET:       return_val->target = strdup (ptr); break;
+      case MARGINWIDTH:  return_val->rows = atoi (ptr); break;
+      case MARGINHEIGHT: return_val->cols = atoi (ptr); break;
+      case SCROLLING:
+      {
+        UPPER_CASE(ptr);
+        if (!strcmp (ptr, "YES"))        return_val->scrolling = SCROLLING_YES;
+        else if (!strcmp (ptr,  "NO"))   return_val->scrolling = SCROLLING_NO;
+        else                             return_val->scrolling = SCROLLING_AUTO; // default
+        break;
+      }
+      case NORESIZE:     return_val->noresize = 1; break;
+      case BORDERCOLOR:  /*
+                          * Get the colour; set the bottom bit to indicate that colour was
+                          * indicated (to distinguish no colour from black)
+                          */
+                         return_val->maxlength = __html_convcol(ptr) | 1;
+                         break;
+      case FRAMEBORDER: // FRAMEBORDER, BORDER, FRAMESPACING in FRAMESET
+        while (isspace(*ptr)) ptr++;
+
+        if (!isdigit(*ptr)) {
+          if (!strncmp (ptr, "YES", 3)) {
+            if (!return_val->spacing) return_val->spacing = 8;
+          } else return_val->spacing = 0;
+        } else {
+          return_val->spacing = atoi(ptr);
+        }
+        break;
+    }
+
+    if (pointer != NULL) *pointer='"';
+/* Skip this bit (or if it was the last one exit */
+    if (c=='\0') break;
+      *p=c; /*p++;*/
+
+/* Skip over spaces */
+    while (*p == ' ')
+        p++;
+
+    info=p;
+  }
+
+  __html_free(start_ptr,0);
+  return return_val;
+}
+
+/*************************************************************************/
+/* static void __anchor_munge_spaces(char *s)                            */
+/*************************************************************************/
+/* Given a string convert all control chars into spaces (e.g. newlines   */
+/* tabs and linefeeds). This makes parsing the string easier :)		 */
+/*************************************************************************/
+static void  __anchor_munge_spaces(char *s)
+{
+  while (*s != '\0') {
+    if ((*s < 32) && (*s > 0)) *s=32;
+    s++;
+  }
+}
+
+static int __html_tag_length (char *s1)
+{
+  char *p=s1;
+
+  while ((*p != '>') && (*p != '\0')) {
+        p++; /* skip to the end of the tag name */
+	}
+
+  if (*p=='>') p++;
+
+  return (int)(p-s1);
+}
+
+/* parse_rowcols (local)
+ *
+ *   ptr -> FRAMESET ROWS=""/COLS="" data to parse
+ *   values = NULL:
+ *      put number of data into number
+ *   value != NULL:
+ *      put data into values array
+ *
+ * counts number of data items, or puts data items in an array
+ */
+
+static void parse_rowcols (char *ptr, unsigned int *values, unsigned int *number) {
+
+  unsigned int value;
+
+  if (!values) *number = 0;
+
+  do {
+    while (isspace(*ptr)) ptr++;
+    value = 0;
+    if (isdigit(*ptr)) {
+      value = (unsigned int) strtol (ptr, &ptr, /*base=*/10);
+    }
+    while (isspace(*ptr)) ptr++;
+    if (*ptr == '*') {
+      if (!value) value = 1;
+      value |= ROWCOL_STAR;
+      ptr++;
+    } else if (*ptr == '%') {
+      value |= ROWCOL_PERCENT;
+      ptr++;
+    }
+    while (isspace(*ptr)) ptr++;
+    if (*ptr == ',') {
+      ptr++;
+    }
+    while (isspace(*ptr)) ptr++;
+
+    if (values) {
+      *values++ = value;
+    } else {
+      *number += 1;
+    }
+
+  } while (isdigit (*ptr) || *ptr == '*');
+}
