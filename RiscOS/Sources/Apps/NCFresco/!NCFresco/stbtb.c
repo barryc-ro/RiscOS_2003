@@ -1730,6 +1730,10 @@ void tb_status_hide(int only_if_small)
 
 	if (focus)
 	    return_highlight(NULL, bar_list, 0);
+
+	/* if we are closing big toolbar and still spinning then reopen ickle status bar */
+	if (turn_ctr != -1 && !only_if_small)
+	    tb_status_show(TRUE);
     }
 }
 

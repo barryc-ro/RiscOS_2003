@@ -24,7 +24,7 @@
 #include "rectplot.h"
 #endif
 
-#ifdef DEBUG
+#if DEBUG
 static const char * WIDTH_NAMES[N_COLSPAN_WIDTHS] = WIDTH_NAMES_ARRAY;
 #endif
 
@@ -132,7 +132,7 @@ static void print_colspan_flags(unsigned int flags)
 
 extern void colspan_trace_cells (rid_table_item *table, BOOL horiz)
 {
-#ifdef DEBUG
+#if DEBUG
     const int max = horiz ? table->cells.x : table->cells.y;
     int *width = HORIZCELLS(table,horiz);
     pcp_cell the_cells = table->colspans;

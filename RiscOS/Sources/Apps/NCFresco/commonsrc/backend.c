@@ -1226,8 +1226,8 @@ static void be_update_image_info(be_doc doc)
 			     doc->im_error, doc->im_so_far, doc->im_in_transit);
     }
 
-/*     if ( doc->im_fetching == 0 && doc->ah == 0 && doc->ph == 0 ) */
-/*         fvpr_progress_stream_flush( &doc->rh->stream ); */
+     if ( doc->im_fetching == 0 && doc->ah == 0 && doc->ph == 0 )
+         fvpr_progress_stream_flush( &doc->rh->stream );
 }
 
 os_error *backend_screen_changed(int flags)

@@ -295,43 +295,23 @@ void render_set_font_colours(int f, int b, antweb_doc *doc)
     colourtran_setfontcolours( &fh, &bb, &ff, &maxcols );
 }
 
-/*
- * This is used for images (links and unlinks).
- */
-
-int render_link_colour(rid_text_item *ti, antweb_doc *doc)
+static int render__text_link_colour(rid_text_item *ti, antweb_doc *doc, BOOL allow_font_colour)
 {
     int rcol;
+    int no;    /* defined in rid.h */
+
     if (ti->flag & rid_flag_ACTIVATED)
-	rcol = render_colour_ACTIVATED;
-    else if (backend_is_selected(doc, ti))
-	rcol = render_colour_HIGHLIGHT;
-    else
-        rcol = render_text_link_colour(ti, doc);
-    return rcol;
-}
-
-/*
- * This is used for text links. Note that (in the function above) rh is passed
- * as NULL (in this case aref should never be null though)
- */
-
-int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
-{
-    int rcol;
-
-    if (ti->aref == NULL || ti->aref->href == NULL || (ti->aref->flags & rid_aref_LABEL))
     {
-        /* pdh: It's not a link -- but what colour is it? */
-        int no = RID_COLOUR(ti);    /* defined in rid.h */
-
-        if ( no && doc && (doc->flags & doc_flag_DOC_COLOURS) )
-            rcol = render_colour_RGB | doc->rh->extracolourarray[no];
-        else
-            rcol = render_colour_PLAIN;
-    }
-    else if (ti->flag & rid_flag_ACTIVATED)
 	rcol = render_colour_ACTIVATED;
+    }
+    else if ( allow_font_colour && (no = RID_COLOUR(ti)) != 0 && doc && (doc->flags & doc_flag_DOC_COLOURS) )
+    {
+	rcol = render_colour_RGB | doc->rh->extracolourarray[no];
+    }
+    else if (ti->aref == NULL || ti->aref->href == NULL || (ti->aref->flags & rid_aref_LABEL))
+    {
+	rcol = render_colour_PLAIN;
+    }
     else
     {
 #if 0
@@ -364,6 +344,35 @@ int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
 #endif
     }
     return rcol;
+}
+
+
+/*
+ * This is used for images (links and unlinks).
+ */
+
+int render_link_colour(rid_text_item *ti, antweb_doc *doc)
+{
+    int rcol;
+    if (ti->flag & rid_flag_ACTIVATED)
+	rcol = render_colour_ACTIVATED;
+    else if (backend_is_selected(doc, ti))
+	rcol = render_colour_HIGHLIGHT;
+    else
+        rcol = render__text_link_colour(ti, doc, FALSE);
+    return rcol;
+}
+
+/*
+ * This is used for text links. Note that (in the function above) rh is passed
+ * as NULL (in this case aref should never be null though)
+ * SJM: 210597 reordered as check activated, check font colout, check non-link, check link
+ * previously was non-link (including font colour check), activated, link.
+ */
+
+int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
+{
+    return render__text_link_colour(ti, doc, TRUE);
 }
 
 /*

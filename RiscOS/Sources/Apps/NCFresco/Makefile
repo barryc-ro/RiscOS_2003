@@ -714,7 +714,7 @@ RECONS_UNIX:	$(PREDEPS)
 # ===========================================================================
 
 #uncomment this to build dependencies...
-RISCOS_BUILD_EXPORT=../../../../Export
+#RISCOS_BUILD_EXPORT=../../../../Export
 
 #Two possibilities for exporting to
 #RISCOS_BUILD_RESOURCES=../../../../Install

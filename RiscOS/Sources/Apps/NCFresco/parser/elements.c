@@ -1074,7 +1074,9 @@ static void parse_then_perform_element_close(SGMLCTX *context)
 #if SGML_REPORTING
 	sgml_note_message(context, "</%s> has unexpected attributes", element->name.ptr);
 #endif
-	goto done;
+/*  goto done; SJM: 21/05/97: removed this goto. Even if it does have
+			      unexpected attributes we still probably
+			      want to obey the close */
     }
 
     perform_element_close(context, element);

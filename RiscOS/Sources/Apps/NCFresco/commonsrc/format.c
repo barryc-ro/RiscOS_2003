@@ -712,7 +712,7 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 
 
 
-    /*colspan_trace_cells(table, horiz);*/
+    colspan_trace_cells(table, horiz);
     /* At this point, all the percent group values are zero and they
        have had their flags removed. An arbitary (leftmost in this
        case) crystallisation of the group has been chosen and
@@ -1358,7 +1358,7 @@ static void recurse_format_table(antweb_doc *doc,
     rid_table_cell *cell;
     int height;
 
-    FMTDBG(("recurse_format_table(%p %p %p): entered\n", doc, rh, table));
+    FMTDBG(("recurse_format_table(%p %p id=%d): entered\n", doc, rh, table->idnum));
 
     /* Format all the descendents below us */
 
@@ -1444,7 +1444,7 @@ static void recurse_format_table(antweb_doc *doc,
     /* Perform vertical and horizontal positioning of cells within table */
     format_position_table_cells(table);
 
-    FMTDBG(("recurse_format_table: Chosen size %d,%d for table\n", table->size.x, table->size.y));
+    FMTDBG(("recurse_format_table: Chosen size %d,%d for table id=%d\n", table->size.x, table->size.y, table->idnum));
 }
 
 /*****************************************************************************

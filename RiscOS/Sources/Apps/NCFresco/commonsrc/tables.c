@@ -2834,7 +2834,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     switch ( (attr = &attributes->value[HTML_TD_WIDTH])->type )
     {
     case value_absunit:
-	FMTDBG(("start_tdth: taking %%age value %d from %g\n", ceil(attr->u.f), attr->u.f));
+	FMTDBG(("start_tdth: taking %%age value %d from %g\n", (int)ceil(attr->u.f), attr->u.f));
 	cell->flags |= rid_cf_ABSOLUTE;
 	cell->userwidth = *attr;
 	break;

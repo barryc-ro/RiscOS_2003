@@ -1587,6 +1587,19 @@ static int internal_decode_error(const char *query, char **new_url, int *flags)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+static int internal_decode_hotlist(const char *query, char **new_url, int *flags)
+{
+    char *which = extract_value(query, "url.");
+
+    hotlist_return_url(atoi(which), new_url);
+
+    mm_free(which);
+
+    return fe_internal_url_REDIRECT;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
 static int internal_decode_history_alpha(const char *query, char **new_url, int *flags)
 {
     char *which = extract_value(query, "url.");
@@ -1647,6 +1660,10 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     if (strcasecomp(page, "custom") == 0)
     {
 	generated = internal_decode_custom(query, new_url, flags);
+    }
+    else if (strcasecomp(page, "favs") == 0)
+    {
+	generated = internal_decode_hotlist(query, new_url, flags);
     }
     else if (strcasecomp(page, "favsdelete") == 0)
     {

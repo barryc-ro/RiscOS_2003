@@ -131,6 +131,7 @@ struct config_str
     int mode_keyboard;
     int mode_cursor_toolbar;
     int mode_platform;
+    int mode_mouse_adjust;
 
     int cookie_enable;
     int cookie_uptodate;
@@ -258,6 +259,8 @@ extern struct config_str config_array;
 #define config_mode_keyboard (config_array.mode_keyboard)
 #define config_mode_cursor_toolbar (config_array.mode_cursor_toolbar)
 #define config_mode_platform (config_array.mode_platform)
+#define config_mode_mouse_adjust (config_array.mode_mouse_adjust)
+
 #define config_cookie_enable (config_array.cookie_enable)
 #define config_cookie_uptodate (config_array.cookie_uptodate)
 

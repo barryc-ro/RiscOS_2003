@@ -412,12 +412,21 @@ void hotlist_write_list(FILE *fout, BOOL del)
 	if (del)
  	    fprintf(fout, msgs_lookup("hotsdI"), i, i, ttl, i, i);
 	else
-	{
-	    fprintf(fout, msgs_lookup("hotsI2a"), i);
-	    url_escape_to_file(item->url, fout);
-	    fprintf(fout, msgs_lookup("hotsI2b"), ttl);
-	}
+ 	    fprintf(fout, msgs_lookup("hotsI"), i, ttl);
     }
+}
+
+/* ---------------------------------------------------------------------- */
+
+void hotlist_return_url(int index, char **url)
+{ 
+    hotlist_item *item;
+    int i;
+    for (item = hotlist_list, i = 0; item && i < index; item = item->next, i++)
+	;
+
+    if (item)
+	*url = strdup(item->url);
 }
 
 /* ---------------------------------------------------------------------- */

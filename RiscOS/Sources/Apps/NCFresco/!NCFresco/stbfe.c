@@ -3662,7 +3662,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 
     if (!v)
     {
-	if (m->bbits == wimp_BRIGHT)
+	if (m->bbits == wimp_BRIGHT && config_mode_mouse_adjust == 1)
 	{
 	    if (keyboard_state == fe_keyboard_ONLINE)
 		frontend_complain(fe_status_open_toolbar(main_view, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
@@ -3702,7 +3702,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	break;
 
     case wimp_BRIGHT:
-	if (keyboard_state == fe_keyboard_ONLINE && v->displaying)
+	if (keyboard_state == fe_keyboard_ONLINE && v->displaying && config_mode_mouse_adjust == 1)
 	{
 	    wimp_wstate state;
 	    be_item ti;
