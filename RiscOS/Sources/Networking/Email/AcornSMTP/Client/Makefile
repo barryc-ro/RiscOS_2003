@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.04 for RISC OS
+#	VERSION:	0.05 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -17,6 +17,7 @@
 #	07/11/97	0.03	RDW	changed when AcornSMTP code replaced with AcornPOP3 code base
 #	17/12/97	0.04	RDW	changed so it exports correctly and uses callx from the Lib$Dir
 #					Changes from BAL.
+#	27/01/98	0.05	RDW	Support added to output preprocessed source for McCabe tool
 
 #
 # Paths
@@ -74,7 +75,7 @@ STUBS=		C:o.Stubs
 ROMCSTUBS=      RISC_OSLib:o.romcstubs
 ABSSYM=         RISC_OSLib:o.AbsSym
 
-DEBUG=		#-DMEMCHECK #-DTRACE -DDEBUG
+DEBUG=		#-DMEMCHECK # -DDEBUG -DTRACE
 
 COMPAT=		-DCOMPAT_INET4
 
@@ -87,10 +88,14 @@ CMHGFLAGS = -p -IC: -d h.header -throwback
 
 ASMFLAGS=       
 
-DOBJS=          #MemCheck:o.MC_M #tml_podule.o debuglib.o trace_PL.o
+DOBJS=          #tml_podule.o debuglib.o trace_PL.o #MemCheck:o.MC_M
 
 OBJS=		swihndlers.o handlers.o smtp_utils.o module.o sendmail.o header.o \
                 errortable.o get.o sendline.o send.o cmdresp.o elib_priv.o \
+                ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS}
+
+OBJSCP=		cp.swihndlers cp.handlers cp.smtp_utils cp.module cp.sendmail o.header \
+                cp.errortable cp.get cp.sendline cp.send cp.cmdresp cp.elib_priv \
                 ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS}
 
 EXTRAS=         acornsmtp.o
@@ -98,8 +103,9 @@ EXTRAS=         acornsmtp.o
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .s .c
+.SUFFIXES:	.o .s .c .cp .cmhg
 .c.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
+.c.cp:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 .cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
 
@@ -111,6 +117,9 @@ all: ${TARGET}
 #
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
+
+analyse: ${OBJSCP}
+	@echo ${COMPONENT}: analysis build complete
 
 export:	export_${PHASE}
 
@@ -128,6 +137,7 @@ install_rom: ${ROMTARGET}
 
 clean:
 		$(WIPE) o.*      $(WFLAGS)
+		$(WIPE) cp.*      $(WFLAGS)
                 $(WIPE) rm.*     $(WFLAGS)
                 $(WIPE) aof.*    $(WFLAGS)
 		$(RM) link/sym
