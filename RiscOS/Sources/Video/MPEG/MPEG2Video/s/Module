@@ -148,6 +148,8 @@
 ; 04-Mar-99  NDT  2.80          Updated to use PortMan if the SCART control bits are in IOMD.
 ;                                This actually works if STBState also uses PortMan, as STBState will no longer trample on the SCART bits.
 ; 17-Mar-99  BJGA 2.81          Disables FIQs in IOMD in ReleaseFIQs.
+; 07-Apr-99  BJGA 2.81-4.3.2.1  Implemented extraction of DiviCom format line 21 (closed captions) data from picture layer user data using the L64002's
+;                                user data FIFO, its reordering into display order, and the passing of the data to the Macrovision module for encoding.
 ;
 
 	LEADR	Module_LoadAddr
@@ -255,6 +257,12 @@ SCARTCTRLRegistersAreInIOMD SETL {FALSE}
 SCARTCTRLRegistersAreInIOMD SETL {TRUE} ; map UpdateControlRegister_CTRL0/1 bits to IOMD_C_MPEG_CTRL_0/1 bits using PortMan
    ]
  ]
+
+        GBLL    Captions
+Captions SETL   {TRUE}                  ; extract closed captions and exended data service from the picture header user data
+
+        GBLL    Pulldown
+Pulldown SETL   {FALSE}                 ; work around L64002's bugs in 3:2 pull-down support
 
 
 ; Structure of a PTS list entry
@@ -531,6 +539,22 @@ PictureCodingExtensionData	#	20
 
 	AlignSpace
 
+ [ Captions
+; State variables for user data FIFO parsing
+UserData_State          #       4       ; -3  => waiting for dataLength
+                                        ; -2  => waiting for dataType
+                                        ; -1  => waiting for extDataType
+                                        ; >=0 => waiting for nth dataByte
+UserData_dataLength     #       1
+UserData_dataType       #       1
+UserData_extDataType    #       1
+UserData_NBytes         #       1       ; number of data bytes (may differ from dataLength if we support C-Cube format)
+        ASSERT (3 :AND: :INDEX: @) = 0  ; should be word aligned to simplify rescheduling anchor frame data
+UserData_dataBytes      #       4
+UserData_OldCCDataBytes #       4       ; caption dataBytes from previous anchor frame
+UserData_OldEDSDataBytes #      4       ; extended data dataBytes from previous anchor frame
+ ]
+
  [ SkippingCode
 StartSkipCode		#	4	; bottom byte of start code to skip to initially, or zero if no skip
  ]
@@ -565,6 +589,13 @@ AudioHadFirstPacket	#	4	; ditto
 
  [ AudioDebug
 AudioCaptureBlockLength	#	4	; length of captured data
+ ]
+
+ [ Pulldown
+auxbufptr               #       4
+                AlignSpace      256
+auxbufstart             #       1024
+auxbufend               #       0
  ]
 
 ; Large blocks
@@ -1609,6 +1640,9 @@ VideoCloseStream Entry "r0-r2,r11"
 	BLEQ	CommonReleaseInterruptVectors		; then shut whole lot down
 	MOV	r0, #0
 	STR	r0, VideoControlStreamHandle		; stream no longer open
+      [ Captions
+        BL      EraseCaptions                           ; so they don't stay on screen when we're back to the browser
+      ]
 	EXIT
 
 ; **************************************************************************
@@ -2051,6 +2085,23 @@ VideoReset Entry "r0"
 	MOV	r0, #&80000001					; indicate pre-buffering, but would otherwise be playing
 	STR	r0, VideoSpeedSetting
 
+      [ Captions
+        MOV     r0, #-3
+        STR     r0, UserData_State                              ; reinitialise user data parser
+        MOV     r0, #-1
+        STR     r0, UserData_dataLength
+        STR     r0, UserData_dataBytes                          ; this lets us see if any user data has been received at all
+        MOV     r0, #0
+        STR     r0, UserData_OldCCDataBytes
+        STR     r0, UserData_OldEDSDataBytes                    ; don't send any data for first anchor frame
+        BL      EraseCaptions                                   ; clear captions overlay
+      ]
+
+      [ Pulldown
+        MOV     r0, #:INDEX: auxbufstart
+        STR     r0, auxbufptr
+      ]
+
 	BL	InitStream_Common
 	BL	VideoClaimInterruptVectors
 
@@ -2061,6 +2112,35 @@ VideoReset Entry "r0"
 	STR	r0, TimeOfLastVideoReset			; remember time of last video reset
 
 	EXIT
+
+      [ Captions
+EraseCaptions
+        Entry   "r0-r2"
+        MOV     r0, #6                                          ; odd fields, calculate parity bits, flush buffer
+        ADR     r1, EraseCaptions_OddField_Start
+        MOV     r2, #EraseCaptions_OddField_End-EraseCaptions_OddField_Start
+        SWI     XMacrovision_LoadCaptions                       ; clear captions channels 1 and 2
+
+        MOV     r0, #7                                          ; even fields, calculate parity bits, flush buffer
+        ADR     r1, EraseCaptions_EvenField_Start
+        MOV     r2, #EraseCaptions_EvenField_End-EraseCaptions_EvenField_Start
+        SWI     XMacrovision_LoadCaptions                       ; clear captions channels 3 and 4
+        EXITS
+
+EraseCaptions_OddField_Start
+        =       &14, &2C, &14, &2C              ; Erase Displayed Memory, captions channel 1
+        =       &1C, &2C, &1C, &2C              ; Erase Displayed Memory, captions channel 2
+        =       &14, &2E, &14, &2E              ; Erase Nondisplayed Memory, captions channel 1
+        =       &1C, &2E, &1C, &2E              ; Erase Nondisplayed Memory, captions channel 2
+EraseCaptions_OddField_End
+
+EraseCaptions_EvenField_Start
+        =       &15, &2C, &15, &2C              ; Erase Displayed Memory, captions channel 3
+        =       &1D, &2C, &1D, &2C              ; Erase Displayed Memory, captions channel 4
+        =       &15, &2E, &15, &2E              ; Erase Nondisplayed Memory, captions channel 3
+        =       &1D, &2E, &1D, &2E              ; Erase Nondisplayed Memory, captions channel 4
+EraseCaptions_EvenField_End
+      ]
 
 ; **************************************************************************
 ;
@@ -2974,7 +3054,7 @@ SampleRateProgTable
 
 
 ; Picture Start Code IRQ
-; We use this to read the Aux FIFO and check the video system buffer
+; We use this to read the Aux and User Data FIFOs and check the video system buffer
 ; r0-r3 can be junked
 
 PictureStartCodeIRQ Entry "r8"
@@ -3000,6 +3080,9 @@ PictureStartCodeIRQ Entry "r8"
 	BL	CheckSystemBuffer		; read any video system buffer data
 
 	BL	ProcessAuxFIFO			; ensure we have updated picture type before checking for PTS being valid
+ [ Captions
+        BL      ProcessUserDataFIFO             ; this also needs the picture type to be correct
+ ]
 
 	BL	ProcessVideoReadPtr
 	LDR	lr, FirstItemReceived
@@ -3019,7 +3102,20 @@ ProcessAuxFIFO Entry "r0-r3"
 	MOV	r0, r0, LSR #L64002_Status0_AuxIDShift
 	CMP	r0, #3
 	BCC	%FT20
+ [ Pulldown
+        MOV     r1, r0
+ ]
 	ReadRegI r0, AuxiliaryDataFIFO		; not recognised, so read a byte from FIFO
+ [ Pulldown
+        LDR     r14, auxbufptr
+        CMP     r14, #:INDEX:auxbufend
+        BGE     %BT10
+        STRB    r1, [wp, r14]
+        ADD     r14, r14, #1
+        STRB    r0, [wp, r14]
+        ADD     r14, r14, #1
+        STR     r14, auxbufptr
+ ]
 	B	%BT10				; and loop
 
 20
@@ -3028,7 +3124,23 @@ ProcessAuxFIFO Entry "r0-r3"
 	ADD	r2, wp, r1, LSR #8		; r2 -> area to dump info to
 	AND	r1, r1, #&FF			; r1 = length of data
 30
+ [ Pulldown
+        Push    "r0,r1"
+        ReadReg r0, Status0
+        ReadRegI lr, AuxiliaryDataFIFO
+        AND     r0, r0, #L64002_Status0_AuxIDBits
+        MOV     r0, r0, LSR #L64002_Status0_AuxIDShift
+        LDR     r1, auxbufptr
+        CMP     r1, #:INDEX:auxbufend
+        STRLTB  r0, [wp, r1]
+        ADDLT   r1, r1, #1
+        STRLTB  lr, [wp, r1]
+        ADDLT   r1, r1, #1
+        STRLT   r1, auxbufptr
+        Pull    "r0,r1"
+ |
 	ReadRegI lr, AuxiliaryDataFIFO
+ ]
 	STRB	lr, [r2], #1
 	SUBS	r1, r1, #1
 	BNE	%BT30
@@ -3098,6 +3210,113 @@ AuxInfoTable
 	&	12 :OR: ((:INDEX: VideoSequenceData)   :SHL: 8)
 	&	6  :OR: ((:INDEX: GroupOfPicturesData) :SHL: 8)
 	&	5  :OR: ((:INDEX: PictureData)	       :SHL: 8)
+
+ [ Captions
+ProcessUserDataFIFO Entry "r0-r3"
+10
+        ReadReg r0, Status1                     ; determine if user data FIFO has any data in it
+        AND     r1, r0, #L64002_Status1_UDFSBits
+        TEQ     r1, #L64002_Status1_UserDataFIFOEmpty ; if no data
+        EXIT    EQ                              ; then exit
+
+        ReadRegI r1, UserDataFIFO               ; remove byte from FIFO
+        AND     r0, r0, #L64002_Status1_UDIDBits
+        TEQ     r0, #L64002_Status1_UDID_Picture
+        BNE     %BT10                           ; if not the layer we're interested in, then loop
+
+        LDR     r2, UserData_State
+        MVNS    r14, r2, ASR #1                 ; Test r2: C = bit 0, N = NOT (bit 31), Z set if r2 = -1 or -2
+        BMI     %FT50                           ; handle dataBytes   (State >= 0)
+        BCC     %FT30                           ; handle dataType    (State = -2)
+        BEQ     %FT40                           ; handle extDataType (State = -1)
+                                                ; drop through and handle dataLength (State = -3)
+20
+        TEQ     r1, #0                          ; is it null-byte padding?
+        BEQ     %BT10                           ; ignore it if so
+        ASSERT  (3 :AND: :INDEX: UserData_dataLength) = 0
+        ASSERT  (:INDEX: UserData_NBytes = :INDEX: UserData_dataLength + 3)
+        ORR     r1, r1, r1, LSL #24             ; in DiviCom format, dataLength == number of data bytes
+        STR     r1, UserData_dataLength         ; also initialises dataType and extDataType to 0
+        MOV     r0, #0
+        STR     r0, UserData_dataBytes          ; initialise dataBytes to 0
+        MOV     r2, #-2
+        STR     r2, UserData_State              ; look for dataType next
+        B       %BT10
+30
+        STRB    r1, UserData_dataType
+        TEQ     r1, #&FF                        ; is there an extDataType field?
+        MOVEQ   r2, #-1                         ; look for it if so
+        MOVNE   r2, #0                          ; else look for first data byte
+        STR     r2, UserData_State
+        B       %BT10
+40
+        STRB    r1, UserData_extDataType
+        MOV     r2, #0
+        STR     r2, UserData_State              ; look for first data byte next
+        B       %BT10
+50
+        CMP     r2, #4
+        ADRLO   r0, UserData_dataBytes
+        STRLOB  r1, [r0, r2]                    ; only store the first 4 bytes
+        LDRB    r0, UserData_NBytes
+        ADD     r2, r2, #1
+        TEQ     r2, r0                          ; have we got the whole packet now?
+        MOVEQ   r2, #-3                         ; reset state back to the beginning if so
+        STR     r2, UserData_State              ; else leave it incremented
+        BNE     %BT10                           ; and go back for some more
+
+        ; Now we can safely process the complete packet - start by checking the data type
+        LDRB    r0, UserData_dataType
+        TEQ     r0, #&09                        ; if not closed captions
+        TEQNE   r0, #&0a                        ; or extended data service
+        BNE     %BT10                           ; then junk the packet
+
+      [ TrickPlaySupport
+        ; If we're in trick play mode, don't output anything
+        LDR     lr, TrickPlayMode
+        TEQ     lr, #0
+        BNE     %BT10
+      ]
+
+        ; If an anchor frame, then switch data bytes with data bytes from previous anchor frame
+        TEQ     r0, #&09
+        ADREQ   r3, UserData_OldCCDataBytes
+        ADRNE   r3, UserData_OldEDSDataBytes    ; select appropriate holding buffer for the data type
+        LDRB    r1, Picture_PictureCodingType
+        TEQ     r1, #1                          ; if an I-picture
+        TEQNE   r1, #2                          ; or a P-picture, then swap them
+        LDREQ   r1, [r3]
+        LDREQ   r2, UserData_dataBytes
+        STREQ   r1, UserData_dataBytes
+        STREQ   r2, [r3]
+
+        ; Check how many bytes to send
+        MOV     r2, #4
+        LDRNE   r1, UserData_dataBytes          ; if Z set, r1 already contains this!
+        TST     r1, #&7F :SHL: 24
+        TSTEQ   r1, #&7F :SHL: 16
+        MOVEQ   r2, #2                          ; second two bytes are nulls, so don't send them
+        TSTEQ   r1, #&7F :SHL: 8
+        TSTEQ   r1, #&7F :SHL: 0
+        BEQ     %BT10                           ; don't send anything if all four bytes are nulls
+
+        ; Set up r0 and r1 for the SWI too
+        TEQ     r0, #&09                        ; was it captions or extended data? (r0 still contains dataType)
+        MOVEQ   r0, #0
+        MOVNE   r0, #1
+        ADR     r1, UserData_dataBytes
+
+        MOV     r3, pc
+        ORR     lr, r3, #SVC_mode
+        TEQP    lr, #0                          ; switch to SVC mode
+        NOP
+        Push    "lr"
+        SWI     XMacrovision_LoadCaptions       ; call the SWI
+        Pull    "lr"
+        TEQP    r3, #0                          ; switch back to IRQ mode
+        NOP
+        B       %BT10                           ; finished with packet
+ ]
 
 
 ; Begin Vertical Blank interrupt
@@ -5291,6 +5510,43 @@ VideoInfo_Code Entry "r8"
 	DREG	r0, "Context errors = "
 	LDR	r0, VLCErrors
 	DREG	r0, "VLC errors = "
+
+ [ {FALSE} ; this is probably only useful during development
+        DLINE   "Interrupt counts: "
+        ADR     r4, IRQCounts
+        MOV     r5, #1
+01      LDR     r6, [r4, r5, LSL #2]
+        BREG    r5,, cc
+        DREG    r6
+        ADD     r5, r5, #1
+        CMP     r5, #16
+        BNE     %BT01
+ ]
+ [ Captions
+        LDRB    r0, UserData_dataLength
+        BREG    r0, "Last user data packet: length ", cc
+        LDRB    r0, UserData_dataType
+        BREG    r0, " type ", cc
+        TEQ     r0, #&FF
+        BNE     %FT01
+        LDRB    r0, UserData_extDataType
+        BREG    r0,, cc
+01      LDR     r0, UserData_dataBytes
+        DLINE   " data", cc
+01
+        BREG    r0,, cc
+        MOVS    r0, r0, LSR #8
+        BNE     %BT01
+        DLINE   ""
+ ]
+ [ Pulldown
+        ADR     r0, auxbufstart
+        DREG    r0, "Extension data: ", cc
+        LDR     r1, auxbufptr
+        ADD     r1, r1, wp
+        SUB     r0, r1, r0
+        DREG    r0, " + "
+ ]
 
 	CLRV
 	EXIT
