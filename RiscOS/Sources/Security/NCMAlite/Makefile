@@ -117,7 +117,7 @@ C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 COMPONENT = NCMAlite
 TARGET    = aof.NCMAlite
 TARGETSA  = rm.NCMAlite
-EXPORTS   =
+EXPORTS   = ${EXP_C_H}.smtags
 BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	  dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
 	  ncma_utils.o ncma_dial.o kprintf.o  \
@@ -182,6 +182,8 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB
 #
 # Exported interface headers
 #
+${EXP_C_H}.smtags:	h.smtags
+	${CP} h.smtags $@ ${CPFLAGS}
 
 #
 # ROM target (re-linked at ROM Image build time)
