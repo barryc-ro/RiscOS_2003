@@ -4,7 +4,7 @@
 CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
-CFLAGS=-c -O2 -I$(CLXPATH)  $(CFL) -DHOST_WANTS_NO_BANNER=1
+CFLAGS=-c -O2 -I$(CLXPATH)  $(CFL) -DHOST_WANTS_NO_BANNER=1 -D__acorn
 CC=gcc
 DERIVED= datenow.h
 
