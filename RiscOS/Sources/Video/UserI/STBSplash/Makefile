@@ -79,8 +79,10 @@ install_rom: ${TARGET} dirs
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o ${WFLAGS}
+        ${WIPE} o      ${WFLAGS}
+        ${WIPE} aof    ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
+        ${WIPE} rm     ${WFLAGS}
         ${RM} h.ModHead
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
@@ -96,6 +98,8 @@ resources:
 dirs:
         ${MKDIR} o
         ${MKDIR} linked
+        ${MKDIR} aof
+        ${MKDIR} rm
         
 #
 # ROM target (re-linked at ROM Image build time)
