@@ -138,8 +138,6 @@ ${WIMPLIB}:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.slider_ven: gadgets.s.slider_ven
-o.toolbox: s.toolbox
 o.actbut:	gadgets.c.actbut
 o.actbut:	C:h.swis
 o.actbut:	C:h.kernel
@@ -899,6 +897,7 @@ o.slider:	C:h.swis
 o.slider:	gadgets.^.h.main
 o.slider:	C:h.kernel
 o.slider:	gadgets.h.slider
+o.slider_ven: gadgets.s.slider_ven
 o.stringset:	gadgets.c.stringset
 o.stringset:	C:h.swis
 o.stringset:	C:h.kernel
@@ -1002,6 +1001,7 @@ o.toolbar:	C:h.kernel
 o.toolbar:	h.veneers
 o.toolbar:	h.toolbar
 o.toolbar:	C:h.kernel
+o.toolbox: s.toolbox
 o.utils:	c.utils
 o.utils:	h.utils
 o.utils:	tbox:h.twimp

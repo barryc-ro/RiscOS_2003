@@ -35,12 +35,18 @@ AAsmflags = -depend !Depend -quit -CloseExec -To $@ -From
         @.o.wsetfon @.o.wgetmenu @.o.waddmsg @.o.wremmsg @.o.wsetcolm @.o.wopenw2 @.o.wgetwst2 \
         @.o.wforcere2
 
+rom: @.wimplib
+        @echo all done
+
+install_rom:  @.wimplib
+        @echo all done
 
 # User-editable dependencies:
 
 clean:
         remove wimplib
         -wipe o.* ~c~v
+        @echo cleaned
 
 
 # Static dependencies:
@@ -224,4 +230,6 @@ o.wgetmenu: s.wgetmenu
 o.waddmsg: s.waddmsg
 o.wremmsg: s.wremmsg
 o.wsetcolm: s.wsetcolm
+o.wopenw2: s.wopenw2
+o.wgetwst2: s.wgetwst2
 o.wforcere2: s.wforcere2
