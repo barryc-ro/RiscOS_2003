@@ -23,7 +23,6 @@ LD      = link
 WIPE    = -wipe
 MKDIR   = mkdir -p
 CHMOD   = attr ${CHMODFLAGS}
-STRIP   = stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -o $@
 LDFLAGS = -bin -o $@
@@ -54,7 +53,6 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o ${WFLAGS}
         ${RM} ${TARGET}
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
