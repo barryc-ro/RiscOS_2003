@@ -2164,6 +2164,297 @@ returnclick
 
 trykeys
         Debug   poll2, "Processing keys"
+ [ UTF8
+        ; First, check if caret task is queueing keypresses for later handling
+        LDR     handle, caretdata + 0
+        CMP     handle, #0
+        BLE     %FT11                   ; still read character (may be hot!)
+        BL      checkhandle             ; check it hasn't been deleted!
+        MOVVS   handle, #nullptr
+        STRVS   handle, caretdata + 0   ; if deleted, turn it off
+        BVS     %FT11
+
+        LDR     R14, [handle, #w_taskhandle]
+        CMP     R14, #0
+        LDRLT   R14, menutaskhandle
+        LDR     R14, [wsptr, R14]
+        LDR     R14, [R14, #task_flagword]
+        TST     R14, #keypress_bit
+        BNE     nothing                 ; queue for later handling
+11
+
+        ; See if we're in the middle of a multi-byte external key event
+        LDRB    R14, keyout_buflen
+        TEQ     R14, #0
+        BEQ     trykeys_getinternalkeycode
+        ADRL    R1, keyout_buffer
+        LDRB    R6, [R1]                ; next byte to process
+        ADD     R2, R1, R14
+01      LDRB    R0, [R1, #1]            ; copy the other bytes down
+        STRB    R0, [R1], #1
+        CMP     R1, R2
+        BLT     %BT01
+        SUB     R14, R14, #1            ; decrement byte count
+        STRB    R14, keyout_buflen
+
+        LDR     R14, singletaskhandle
+        CMP     R14, #0
+        BLLE    topmost_window
+        STRLE   R0, hotkeyptr           ; initialise hotkey system, unless we're single-tasking
+        ADRL    R14, savedcaretdata     ; get caret data
+        LDMIA   R14, {R0-R5}
+        CMP     R0, #0                  ; is there a caret?
+        BGT     %FT02
+        BL      int_processkey          ; if not, send hotkey
+        B       repollwimp              ; (no need to check if single-tasking, as we won't get here otherwise)
+02      MOV     handle, R0
+        BL      checkhandle             ; check savedcaret window hasn't been deleted
+        MOVVS   R0, #0
+        STRVSB  R0, keyout_buflen       ; if it has (!) then delete continuation byte queue
+        BVS     trykeys                 ; and restart key processing
+        LDR     R14, [handle, #w_taskhandle]
+        CMP     R14, #0
+        LDRLT   R14, menutaskhandle
+        Task    R14,, "KeyPressed continuation"
+        STMIA   userblk, {R0-R6}
+        MOV     R0, #Key_Pressed
+        B       ExitPoll                ; return Key_Pressed event
+
+trykeys_getinternalkeycode
+        ; Get the next "key" from the expanded function key (if applicable)
+        ADR     R5, keystring_buffer
+        ADRL    R7, keystring_buflen
+        BL      get_internal_keycode_from_buffer
+        CMP     R6, #-1                 ; was there one?
+        BNE     trykeys_gotinternalkeycode
+
+        ; Get the next task-generated key
+        ADR     R5, keyprocess_buffer
+        ADRL    R7, keyprocess_buflen
+        BL      get_internal_keycode_from_buffer
+        CMP     R6, #-1                 ; was there one?
+        BNE     trykeys_gotinternalkeycode
+
+        ; Fill our keyboard input buffer from kernel keyboard buffer (needed so we can look ahead)
+        LDRB    R3, keyin_buflen
+        ADRL    R5, keyin_buffer
+01      CMP     R3, #6
+        BGE     %FT02                   ; break from loop if full
+        MOV     R0, #&81                ; OS_Byte 129 (INKEY)
+        MOV     R1, #0
+        MOV     R2, #0                  ; time limit 0
+        SWI     XOS_Byte
+        TEQ     R2, #&FF
+        BEQ     %FT02                   ; break if no byte available
+        STRB    R1, [R5, R3]            ; stick byte in my buffer
+        ADD     R3, R3, #1
+        B       %BT01
+02      STRB    R3, keyin_buflen
+
+        ; Get a key from our input buffer
+        ADR     R7, keyin_buflen        ; R5 already set up
+        BL      get_internal_keycode_from_buffer
+        CMP     R6, #-1                 ; was there one?
+        BEQ     nothing                 ; no keys to handle
+
+trykeys_gotinternalkeycode
+        ; *All* Key_Pressed events now return caretdata as it is at this time
+        ; - ie. before the writable icon handling messes around with it.
+        ; This saves on the horrible kludge of storing the Key_PressedOldData
+        ; event number in order to specify where to get the caret data from.
+        Push    "R0-R5"
+        ADR     R14, caretdata
+        LDMIA   R14, {R0-R5}
+        ADRL    R14, savedcaretdata
+        STMIA   R14, {R0-R5}
+        Pull    "R0-R5"
+
+        ; Page in correct task
+        CMP     handle, #0
+        BLE     %FT01
+        LDR     R14, [handle, #w_taskhandle]
+        CMP     R14, #0
+        LDRLT   R14, menutaskhandle
+        Task    R14,, "KeyPressed"
+01
+
+        ; KeyboardMenus gets a look in first
+      [ KeyboardMenus
+        LDR     R4, menuSP
+        CMP     R4, #0
+        BLT     %FT00                   ; no menu open so don't grab special keys
+
+        ADR     R5, menudata            ; if it's a dbox then don't grab keys
+        LDR     R5, [R5, R4]
+        TST     R5, #3
+        BNE     %FT00
+
+        ADR     R14, menuhandles        ; if menu has caret then don't grab keys
+        LDR     R14, [R14, R4]
+        LDR     R0, menucaretwindow
+        TEQ     R0, R14
+        BEQ     %FT00
+
+        TEQ     R6, #13                 ; check for return and cursor keys
+        BEQ     handlemenukey
+        TST     R6, #1:SHL:31
+        BEQ     %FT00
+        BIC     R14, R6, #1:SHL:31
+        TEQ     R14, #&8C
+        TEQNE   R14, #&8D
+        TEQNE   R14, #&8E
+        TEQNE   R14, #&8F
+        SUBEQ   R6, R14, #(&8C-136)     ; map onto range 136-139
+        BEQ     handlemenukey
+00
+      ]
+
+        ; Handle escape keypresses
+        TEQ     R6,#&1B                 ; escape?
+        BNE     %FT02
+      [ KeyboardMenus
+        CMP     r4, #0                  ; if no menu open then skip
+        BLT     %FT02
+        TST     r5, #3                  ; check for dialogue
+        SUBNE   r0, r4, #4              ; if dialogue open then just remove it
+        MOVEQ   r0, #-4                 ; otherwise remove whole menu tree
+        CMP     r0, #0
+        BLLT    menusdeleted            ; send Message_MenusDeleted if whole menu going (preserves r0)
+        BL      closemenus
+      |
+        LDR     R0,menuSP
+        CMP     R0,#0
+        BLT     %FT02
+
+        BL      menusdeleted            ; send Message_MenusDeleted
+        MOVVC   R0,#-4
+        BLVC    closemenus
+      ]
+        BVC     nothing                 ; absorb escape if used to close menus
+        B       ExitPoll                ; report error if any
+
+02      ; Examine caret state to determine what to do with keypress
+        ADRL    R14, savedcaretdata
+        LDMIA   R14, {R0-R5}
+        CMP     R0, #0
+        BLE     tryhotkeys              ; no input focus
+        CMP     R1, #nullptr
+        BNE     processkey              ; wimp gets first bash at this one!
+
+keypressed
+; Return a Key_Pressed event to the caret-owning task
+        BL      prepare_external_key_event
+        STMIA   userblk, {R0-R6}
+        MOV     R0,#Key_Pressed         ; task handle already set up
+        B       ExitPoll
+
+tryhotkeys
+; Initiate hotkey chain of events
+        BL      prepare_external_key_event
+        MOVGT   R0, #0
+        STRGTB  R0, keyout_buflen       ; don't cache the other bytes if we're single-tasking!
+        BLLE    int_processkey
+        B       repollwimp
+
+
+; Support routines for the above
+
+prepare_external_key_event
+; Munges internal keycode back into UTF-8 / external keycode format, and initialises hotkey system
+; Entry: R6 = internal key code
+; Exit:  R6 = first external key code
+;        keyout_buffer filled with any remaining external keycodes
+;        hotkeyptr set up (unless we're not multitasking)
+;        LE => we are multitasking
+        ENTRY   "R0,R4,R5"
+        TST     R6, #1:SHL:31           ; was it a function key?
+        ANDNE   R6, R6, #&FF
+        ORRNE   R6, R6, #&100           ; convert into external form if so
+        BNE     %FT01
+
+        BL      read_current_alphabet   ; are we in UTF-8 alphabet?
+        ANDNE   R6, R6, #&FF
+        BNE     %FT01                   ; return bottom byte if not
+
+        SUB     sp, sp, #8
+        MOV     R5, sp
+        BL      convert_UCS4_to_UTF8
+        LDRB    R6, [sp]                ; first byte
+        SUB     R4, R4, #1
+        STRB    R4, keyout_buflen       ; held-over byte count
+        ADD     R14, R5, R4             ; -> last byte in sequence
+        ADRL    R4, keyout_buffer
+02      LDRB    R0, [R5, #1]!
+        STRB    R0, [R4], #1
+        CMP     R5, R14
+        BLT     %BT02
+        ADD     sp, sp, #8
+
+01      LDR     R14, singletaskhandle
+        CMP     R14, #0
+        BLLE    topmost_window          ; if we're multitasking, get top window handle
+        STRLE   R0, hotkeyptr           ; and store it as the first hotkey window
+        EXIT                            ; leave flags as they are
+
+get_internal_keycode_from_buffer
+; Reads a key from either keyin_buffer or keyprocess_buffer, from a range appropriate to the current alphabet
+; Skips any malformed characters
+; Entry: R5 -> buffer
+;        R7 -> buffer length byte
+; Exit:  R6 = internal keycode : -1 means no character
+;                                &800000xx represents a function key
+;                                else character code ( <= &7FFFFFFF if UTF-8 alphabet, <= &FF otherwise )
+        ENTRY   "R0-R4"
+        LDRB    R3, [R7]                ; get buffer length
+get_internal_keycode_restartpoint
+        CMP     R3, #0                  ; nothing in my buffer?
+        MOVLE   R6, #-1
+        EXITS   LE
+
+        LDRB    R6, [R5]
+        TEQ     R6, #0                  ; first byte null => either a null or a function key
+        BNE     get_internal_keycode_isntafunctionkey
+
+get_internal_keycode_isafunctionkey
+        TEQ     R3, #1                  ; if it's just one null byte, it's a malformed character
+        MOVEQ   R4, #1
+        MOVEQ   R6, #-1
+        BEQ     get_internal_keycode_removefrombuffer
+
+        LDRB    R6, [R5, #1]
+        TEQ     R6, #0
+        ORRNE   R6, R6, #1:SHL:31       ; unless a null, set top bit to indicate function key status
+        MOV     R4, #2                  ; either way, it's a 2-byte character
+        B       get_internal_keycode_removefrombuffer
+
+get_internal_keycode_isntafunctionkey
+        BL      read_current_alphabet
+        MOVNE   R4, #1                  ; if not UTF-8, then it's got to be a valid 1-byte character
+        BNE     get_internal_keycode_removefrombuffer
+
+        MOV     R6, R5
+        MOV     R4, R3
+        BL      convert_UTF8_to_UCS4    ; sets up R4 and R6
+
+get_internal_keycode_removefrombuffer
+        ; R6 = internal Wimp key number, or -1 if malformed
+        ; R4 = number of bytes of keyboard buffer it used
+        SUB     R3, R3, R4              ; number of bytes that will still be in buffer after removal
+        STRB    R3, [R7]
+        ADD     R1, R5, R3              ; -> byte after final byte in buffer (after copying down)
+        MOV     R2, R5                  ; rover
+01      LDRB    R0, [R2, R4]
+        STRB    R0, [R2], #1            ; copy down
+        CMP     R2, R1
+        BLT     %BT01
+
+        CMP     R6, #-1                 ; was it a malformed character?
+        BEQ     get_internal_keycode_restartpoint  ; swallow it if so!
+
+        EXITS
+
+ | ; else not UTF8...
+
  [ KeyboardMenus
         MOV     r6, #-1                 ; so we can tell later on if we read a key
         LDR     r4, menuSP
@@ -2308,6 +2599,9 @@ inkey0
         CMP     R2,#&FF                 ; was there a key?
         BEQ     nothing
         MOVS    PC,LR                   ; must preserve flags
+
+ ] ; end UTF8 conditional
+
 
  [ KeyboardMenus
 ; In:   r4 = menuSP

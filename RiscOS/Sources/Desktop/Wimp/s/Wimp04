@@ -6584,7 +6584,7 @@ State_SymbolFont        *       2
         MACRO
 $lab    TEST_ARROW2 $c
 $lab
-        ; like TEST_ARROW, but always returns NE if R11 "Z" bit is clear
+        ; like TEST_ARROW, but always returns NE if R11 "Z" bit is clear (ie if alphabet is UTF-8)
         TEST_ARROW $c
         TEQEQP  PC, R11
         MEND
@@ -6615,14 +6615,9 @@ pushfontstring TraceL font
 
       [ UTF8
 ; check current alphabet - if it's UTF-8, we mustn't map characters to the symbol font, as they will be part of a multi-byte sequence
-        Push    "R0-R2"
-        MOV     R0, #71
-        MOV     R1, #127  ; read alphabet
-        SWI     XOS_Byte
-        TEQ     R1, #ISOAlphabet_UTF8
-        TOGPSR  Z_bit, R0 ; NE => alphabet is UTF-8
-        MOV     R11, PC   ; referred back to in TEST_ARROW2
-        Pull    "R0-R2"
+        BL      read_current_alphabet
+        TOGPSR  Z_bit, R14 ; NE => alphabet is UTF-8
+        MOV     R11, PC    ; referred back to in TEST_ARROW2
       ]
 
         MOV     R8, R2
@@ -6647,9 +6642,16 @@ pushfontstring TraceL font
 ; R3 -> validation string
 
         BLGE    findcommand
+      [ UTF8
+        BLEQ    checkvalid_getchar
+        TEQ     R10, #"\"
+        ADDEQ   R3, R3, R9
+        BLEQ    checkvalid_getchar
+      |
         LDREQB  R10, [R3], #1
         TEQEQ   R10, #"\"
         LDREQB  R10, [R3]
+      ]
 ; R10 = replacement character
 
         MOV     R3, R7
@@ -6660,6 +6662,12 @@ pushfontstring TraceL font
         MOVEQ   R9, #12
         MOVNE   R9, #bignum
 ; R9 = maximum length of string
+
+      [ UTF8
+        TEQ     R10, #0
+        TEQNEP  PC, R11
+        BNE     pushfontstring_scan_UTF8_string   ; special code for passworded UTF-8 sequences
+      ]
 
 pushfontstring_scan_string TraceL font
         MOV     R0, #0
@@ -6680,6 +6688,9 @@ pushfontstring_start_scan_loop
 
 pushfontstring_scanning_icon_font
       [ UTF8
+        TEQ     R5, #' '
+        TSTEQ   R11, #Z_bit
+        ADDEQ   R0, R0, #1  ; may need expanding to UTF-8 &C2 &A0 in fixupfontstring
         TEST_ARROW2 R5
       |
         TEST_ARROW R5
@@ -6690,6 +6701,9 @@ pushfontstring_scanning_icon_font
 
 pushfontstring_scanning_current_font
       [ UTF8
+        TEQ     R5, #' '
+        TSTEQ   R11, #Z_bit
+        ADDEQ   R0, R0, #1  ; may need expanding to UTF-8 &C2 &A0 in fixupfontstring
         TEST_ARROW2 R5
       |
         TEST_ARROW R5
@@ -6701,6 +6715,9 @@ pushfontstring_scanning_current_font
 
 pushfontstring_scanning_symbol_font
       [ UTF8
+        TEQ     R5, #' '
+        TSTEQ   R11, #Z_bit
+        ADDEQ   R0, R0, #1  ; may need expanding to UTF-8 &C2 &A0 in fixupfontstring
         TEST_ARROW2 R5
       |
         TEST_ARROW R5
@@ -6731,6 +6748,7 @@ pushfontstring_switch
         ;do we need to copy the string?
         TEQ R10, #:CHR: 0
         BNE pushfontstring_use_replacement_string
+
 
 pushfontstring_copy_string TraceL font
         ;R7 := ALIGN (R0 + 1)
@@ -6885,6 +6903,7 @@ pushfontstring_copy_loop_done
 
         B       pushfontstring_exit
 
+
 pushfontstring_use_replacement_string TraceL font
         ;R7 := Align (R6 + 4 + 1)
         ADD     R7, R6, #8
@@ -6920,6 +6939,70 @@ pushfontstring_replacement_loop
         MOV     R9, #:CHR: 0
         STRB    R9, [R1, R0]
 ; R0 = length of destination
+      [ UTF8
+        B       pushfontstring_exit
+      ]
+
+
+      [ UTF8
+pushfontstring_scan_UTF8_string
+        ; R3 = handle for icon font
+        ; R8 -> source string
+        ; R9 = maximum byte-count of source string
+        ; R10 = UCS-4 replacement character
+        MOV     R0, #0                  ; character count
+        MOV     R2, R8                  ; rover
+        MOV     R6, R9
+        ADD     R7, R8, R9              ; -> byte after end of source
+01      MOV     R4, R2
+        BL      skipcharR
+        CMP     R2, R4
+        BEQ     %FT02                   ; break from loop if we've not advanced
+        ADD     R0, R0, #1
+        SUBS    R6, R7, R2              ; calculate number of bytes left
+        BGT     %BT01
+02      ; R0 = number of characters
+        SUB     sp, sp, #8              ; we need some scratch space - tempworkspace may already be in use
+        MOV     R5, sp
+        MOV     R6, R10
+        BL      convert_UCS4_to_UTF8
+        ADD     sp, sp, #8
+        ; R4 = number of bytes per replacement character
+        MUL     R7, R4, R0
+        ADD     R7, R7, #3 + 3
+        BIC     R7, R7, #3
+        ; R7 = Align (R0 + 2 + 1)
+        SUB     sp, sp, R7
+        MOV     R1, sp
+        ; R1 -> destination string
+        SUB     sp, sp, #8              ; this time, we're using it to hold byte-sequence template
+        MOV     R5, sp
+        MOV     R6, R10
+        BL      convert_UCS4_to_UTF8
+        ; first, select font:
+        MOV     R14, #26
+        STRB    R14, [R1], #1
+        STRB    R3, [R1], #1
+        ; now put in characters:
+01      CMP     R0, #0                  ; finished?
+        BLE     %FT03
+        MOV     R5, #0                  ; reinitialise index into replacement character
+02      LDRB    R14, [sp, R5]
+        STRB    R14, [R1], #1           ; copy across byte
+        ADD     R5, R5, #1
+        CMP     R5, R4
+        BLT     %BT02
+        SUB     R0, R0, #1              ; decrement character count
+        B       %BT01
+03      ADD     sp, sp, #8              ; realign stack
+        ; finally, terminate the string
+        MOV     R14, #0
+        STRB    R14, [R1]
+        ; Reset R1 to start of string
+        MOV     R1, sp
+        ; Drop through...
+      ]
+
 
 pushfontstring_exit
         ;get registers back from where we put them
