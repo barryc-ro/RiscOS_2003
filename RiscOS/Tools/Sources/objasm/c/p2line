@@ -87,7 +87,7 @@ static BOOLEAN ADRRotatable(CARDINAL value)
     for (;;)
     { if (value < 0x100) { return TRUE; }
       if (k >= 0x10) break;
-      value = (value >> 2) + (value << 30);
+      value = (value >> 2) | (value << 30);
       k++;
     }
     value = (value ^ -1) + 1;
@@ -107,7 +107,7 @@ static BOOLEAN Rotatable(CARDINAL value,
     do {
       if (value < 0x100) { *immValue1 = value; return TRUE; }; /* if */
       if (*k >= 0x10) { break; }; /* if */
-      value = (value << 2) + (value >> 30);
+      value = (value << 2) | (value >> 30);
       /* Rotate left value while incrementing rotator */
       (*k)++;
     } while (1); /* loop */
@@ -129,7 +129,7 @@ static BOOLEAN RotatedForm(
     if (*immValue < 0x100) { break; }; /* if */
     (*rotator)++;
     /*Now shift left immediate value*/
-    *immValue = (*immValue << 2) + (*immValue >> 30);
+    *immValue = (*immValue << 2) | (*immValue >> 30);
     if (*rotator == 0x10) {
       /*
       Here we have failed,
@@ -197,7 +197,7 @@ static BOOLEAN RotatedForm(
         if (*immValue < 0x100) { break; }; /* if */
         (*rotator)++;
         /*Now shift left immediate value*/
-        *immValue = (*immValue << 2) + (*immValue >> 30);
+        *immValue = (*immValue << 2) | (*immValue >> 30);
         if (*rotator == 0x10) {
           Report(AsmError,errors_ImmValRange,oldImmValue);
           return TRUE;
@@ -226,13 +226,13 @@ static BOOLEAN Rotated16Form(
  * Returned value indicates error found (TRUE=>error)
  */
 {
-  CARDINAL bits_set,tmp_val,i;
+  CARDINAL tmp_val,i;
 
-  /* count the number of bits set in value */
-  for (bits_set=0,tmp_val=value; tmp_val!=0;
-                               bits_set++,tmp_val=tmp_val&(tmp_val-1));
-
-  if (bits_set>16) {
+  /* If value is negative, first try subtraction, then addition.
+   * If value is positive, try addition, then subtraction.
+   */
+  if (value & 0x80000000) {
+   try_subtract:
     /* If we have to use two Subtracts to perform an ADD, rather than
      * using an MVN and a SUB, then we need to adjust the
      * value by subtracting one to the unsigned value to get the 2's
@@ -254,11 +254,12 @@ static BOOLEAN Rotated16Form(
           return FALSE;
         }
       }
-      tmp_val=(tmp_val << 2) + (tmp_val >> 30); /* ROR tmp_val by 2 bits */
+      tmp_val=(tmp_val << 2) | (tmp_val >> 30); /* ROR tmp_val by 2 bits */
     }
-    Report(AsmError,errors_ImmValRange,value);
-    return TRUE;
+    if (!(value & 0x80000000))
+      goto failed;
   }
+
   /* search for set bits, and eliminate all those within 8 bits,
    * and then see if what is left over can be patched in one instr
    */
@@ -274,8 +275,12 @@ static BOOLEAN Rotated16Form(
         return FALSE;
       }
     }
-    tmp_val=(tmp_val << 2) + (tmp_val >> 30); /* ROR tmp_val by 2 bits */
+    tmp_val=(tmp_val << 2) | (tmp_val >> 30); /* ROR tmp_val by 2 bits */
   }
+  if (!(value & 0x80000000))
+    goto try_subtract;
+
+failed:
   Report(AsmError,errors_ImmValRange,value);
   return TRUE;
 }
@@ -861,6 +866,12 @@ DPoperand2:
       CodeWord(opcodeValue + sourceReg1*0x10000 + value);
       break;
 
+      case BLX:
+      if (IsRegisterExpr(line, lineIndex))
+        goto bx;
+      opcodeValue = BLXCode;
+      /* Fall through */
+
       case Branch:
 #ifndef AAsm
       type=UnDefOT;
@@ -939,10 +950,16 @@ DPoperand2:
       value = AddressExpr(line, &lineIndex, FALSE, &defined);
       value -= programCounter+8;
 #endif
-      value1 = ((long)value < 0) ? -value : value;
-      if (value1 > 0x4000000) { Report(AsmError,errors_BrOff);  return FALSE;}
-      if (value & 3) Report(AsmError,p2line_p2line_B_unalign);
-      CodeWord(opcodeValue + (((value+3) >> 2) & 0x00ffffff));
+      if ((signed long) value < -0x2000000 || (signed long) value > 0x1fffffe)
+      { Report(AsmError,errors_BrOff);  return FALSE; }
+      if (opcodeType == BLX) {
+        if (value & 1) Report(AsmError,p2line_p2line_B_unalign);
+        CodeWord(opcodeValue + ((value & 2)<<23) + (((value+1) >> 2) & 0x00ffffff));
+      }
+      else {
+        if (value & 3) Report(AsmError,p2line_p2line_B_unalign);
+        CodeWord(opcodeValue + (((value+3) >> 2) & 0x00ffffff));
+      }
       break;
 
       case Adr:
@@ -1352,6 +1369,7 @@ adrl_have_rotated:
       break;
 
       case CPDT:
+      case CPDT2:
       cop = CPNameExpr(line, &lineIndex);
       lineIndex++;  /* Step past comma */
       destReg = CPRegisterExpr(line, &lineIndex);  /* Destination/source */
@@ -1443,6 +1461,7 @@ adrl_have_rotated:
       break;
 
       case CPDO:
+      case CPDO2:
       cop = CPNameExpr(line, &lineIndex);
       lineIndex++;/*Step past comma*/
       opcodeValue |= ConstantExpr(line, &lineIndex, FALSE, &defined)*0x100000;
@@ -1461,6 +1480,7 @@ adrl_have_rotated:
       break;
 
       case CPRT:
+      case CPRT2:
       cop = CPNameExpr(line, &lineIndex);
       lineIndex++;/*Step past comma*/
       opcodeValue |= ConstantExpr(line, &lineIndex, FALSE, &defined)*0x200000;
@@ -1474,6 +1494,20 @@ adrl_have_rotated:
         lineIndex++;/*Step past*/
         opcodeValue |= ConstantExpr(line, &lineIndex, FALSE, &defined)*0x20;
       }; /* if */
+      CodeWord(opcodeValue + sourceReg1*0x10000 + sourceReg2 + destReg*0x1000 +
+        cop*0x100);
+      break;
+
+      case CPRRT:
+      cop = CPNameExpr(line, &lineIndex);
+      lineIndex++;/*Step past comma*/
+      opcodeValue |= ConstantExpr(line, &lineIndex, FALSE, &defined)*0x10;
+      lineIndex++;/*Step past comma*/
+      destReg = RegisterExpr(line, &lineIndex);
+      lineIndex++;/*Step past comma*/
+      sourceReg1 = RegisterExpr(line, &lineIndex);
+      lineIndex++;/*Step past*/
+      sourceReg2 = CPRegisterExpr(line, &lineIndex);
       CodeWord(opcodeValue + sourceReg1*0x10000 + sourceReg2 + destReg*0x1000 +
         cop*0x100);
       break;
@@ -1517,6 +1551,27 @@ adrl_have_rotated:
         break;
       }
 
+      case SMLALxy:
+      value = RegisterExpr(line, &lineIndex);
+      lineIndex++;
+      /* fall through */
+
+      case SMUL:
+      case SMLA:
+      destReg = RegisterExpr(line, &lineIndex);
+      lineIndex++;
+      sourceReg1 = RegisterExpr(line, &lineIndex);
+      lineIndex++;
+      sourceReg2 = RegisterExpr(line, &lineIndex);
+      if (opcodeType == SMLA) {
+        lineIndex++;
+        value = RegisterExpr(line, &lineIndex);
+      } else if (opcodeType == SMUL)
+        value = 0;
+      CodeWord(opcodeValue + destReg*0x10000 + sourceReg1
+                           + sourceReg2*0x100 + value*0x1000);
+      break;
+
       case CLZ:
       destReg = RegisterExpr(line, &lineIndex);
       lineIndex++;
@@ -1525,8 +1580,18 @@ adrl_have_rotated:
       break;
 
       case BranchXReg:
+      bx:
       destReg = RegisterExpr(line, &lineIndex);
       CodeWord(opcodeValue + destReg);
+      break;
+
+      case Saturating:
+      destReg = RegisterExpr(line, &lineIndex);
+      lineIndex++;
+      sourceReg1 = RegisterExpr(line, &lineIndex);
+      lineIndex++;
+      sourceReg2 = RegisterExpr(line, &lineIndex);
+      CodeWord(opcodeValue + destReg*0x1000 + sourceReg1 + sourceReg2*0x10000);
       break;
 
       case NOP:
