@@ -27,6 +27,18 @@ extern void starthead (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     generic_start (context, element, attributes);
 }
 
+extern void startartbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+
+    /* Required bit of old startbody() */
+    select_fmt_mode(htmlctxof(context));
+}
+
+/* DAF: 970627: ** IMPORTANT ** THIS ROUTINE CAN BE CALLED MULTIPLY
+   FOR A SINGLE (BADLY FORMED) DOCUMENT. IT IS ESSENTIAL THAT THIS IS
+   HANDLED CORRECTLY. */
+
 extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
@@ -53,6 +65,9 @@ extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	}
 #endif 
     }
+    /* What are the implications of changing the colour values? Can we
+       end up with different portions of the background, invalidated
+       at different times, being different colours? */
     if (attributes->value[HTML_BODY_BGCOLOR].type != value_none)
     {
 	me->rh->bgt |= rid_bgt_COLOURS;
@@ -84,7 +99,12 @@ extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     if (attributes->value[HTML_BODY_TOPMARGIN].type == value_integer)
 	me->rh->margin.top = attributes->value[HTML_BODY_TOPMARGIN].u.i;
 
-    select_fmt_mode(htmlctxof(context));
+
+    /* This happens in startartbody() now, as that is called where
+       this is meant to be called, and startbody() is called when the
+       lazy HTML author suddenly rememebers they had a few more
+       attributes to specify! */
+    /*select_fmt_mode(htmlctxof(context));*/
 }
 
 /*****************************************************************************
@@ -363,9 +383,13 @@ extern void startwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 
 /*****************************************************************************/
 
-extern void finishbody (SGMLCTX * context, ELEMENT * element)
+extern void finishartbody (SGMLCTX * context, ELEMENT * element)
 {    generic_finish (context, element);	}
 
+/*
+extern void finishbody (SGMLCTX * context, ELEMENT * element)
+{    generic_finish (context, element);	}
+*/
 
 
 

@@ -20,6 +20,7 @@ va_end(arglist); } }
 /* ----------------------------------------------------------------------------- */
 
 /* debugging routines that only depend on DEBUG state */
+/* -- and hence make plotcheck across 100s of files really messy :-( */
 
 void dbg(const char *fmts, ...)
 {

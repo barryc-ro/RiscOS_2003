@@ -1635,46 +1635,58 @@ static void formatting_start(RID_FMT_STATE *fmt)
 	if (ti->tag == rid_tag_TABLE)
 	{
 	    rid_table_item *table = ((rid_text_item_table*)ti)->table;
+	    int cand_width = 0;
 
 	    switch (fmt->fmt_method)
 	    {
 	    case MAYBE:
-		ti->width = table->hwidth[ACTUAL];
+		cand_width = table->hwidth[ACTUAL];
 		break;
 	    case DONT:
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
 		     table->userwidth.type == value_absunit)
 		{
-		    ti->width = (fmt->doc->scale_value * ceil(table->userwidth.u.f)) / 100;
+		    cand_width = (fmt->doc->scale_value * ceil(table->userwidth.u.f)) / 100;
 		    FMTDBG(("formatting_start: pickup user width of %d\n", ti->width));
-		    if (ti->width < table->hwidth[LAST_MIN])
+		    if (cand_width < table->hwidth[LAST_MIN])
 		    {
-			ti->width = table->hwidth[LAST_MIN];
-			FMTDBG(("formatting_start: override user width with %d\n", ti->width));
+			cand_width = table->hwidth[LAST_MIN];
+			FMTDBG(("formatting_start: override user width with %d\n", cand_width));
 		    }
 		}
 		else
-		    ti->width = table->hwidth[LAST_MAX];
+		    cand_width = table->hwidth[LAST_MAX];
 		break;
 	    case MUST:
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
 		     table->userwidth.type == value_absunit)
 		{
-		    ti->width = (fmt->doc->scale_value * ceil(table->userwidth.u.f)) / 100;
-		    FMTDBG(("formatting_start: pickup user width of %d\n", ti->width));
-		    if (ti->width < table->hwidth[LAST_MIN])
+		    cand_width = (fmt->doc->scale_value * ceil(table->userwidth.u.f)) / 100;
+		    FMTDBG(("formatting_start: pickup user width of %d\n", cand_width));
+		    if (cand_width < table->hwidth[LAST_MIN])
 		    {
-			ti->width = table->hwidth[LAST_MIN];
-			FMTDBG(("formatting_start: override user width with %d\n", ti->width));
+			cand_width = table->hwidth[LAST_MIN];
+			FMTDBG(("formatting_start: override user width with %d\n", cand_width));
 		    }
 		}
 		else
-		    ti->width = table->hwidth[LAST_MIN];
+		    cand_width = table->hwidth[LAST_MIN];
 		break;
 	    }
 
+	    /* DAF: 970628: ti->wifth is SHORTISH which is currently a
+	       plain short, so we only have 15 bits available for
+	       horizontal widths. Perform some clipping! */
+	    if (cand_width > 0x7fff)
+	    {
+		FMTDBG(("\n\nformatting_start: clipped width from %d to 0x7fff\n\n\n", cand_width));
+		cand_width = 0x7fff;
+	    }
+
+	    ti->width = cand_width;
+
 	    FMTDBG(("formatting_start: set table's id=%d width to %d (%s)\n",
-		    ((rid_text_item_table *)ti)->table->idnum, ti->width, fnames[fmt->fmt_method]));
+		    ((rid_text_item_table *)ti)->table->idnum, cand_width, fnames[fmt->fmt_method]));
 	}
 
 	/* SJM: do the stuff for other scaleable items */

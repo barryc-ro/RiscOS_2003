@@ -264,7 +264,7 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
                 if (element->group != other_elem->group || invent == NULL || can_invent_within)
                 {
 
-		    PRSDBGN(("ensure_pre_requisites(%s): %s not contained in %s\n",
+		    PRSDBG(("ensure_pre_requisites(%s): %s not contained in %s\n",
 			     element->name.ptr,element->name.ptr, other_elem->name.ptr));
 		    if (! init_dummy)
 		        init_dummy = default_attributes(context, other_elem, &dummy_values);
@@ -524,6 +524,11 @@ static void special_container_open_actions(SGMLCTX *context, ELEMENT *element)
     }
     else if (element->group == HTML_GROUP_BODY)
     {
+	/* DAF: 970627: Be cautious: had to seperate <BODY> with its
+           attributes from the element other elements insist on being
+           contained with to trigger an automatic title, etc. If you
+           want to add something here, you probably need to make a
+           change elsewhere as well. */
     }
     else if (element->group == HTML_GROUP_SELECT)
     {
@@ -687,6 +692,23 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 	else
 	{
 	    PRSDBGN(("Implementing <P> as a non-nesting element\n"));
+	}
+    }
+    /* Likewise for <A NAME=> ... don't require a </A> */
+    else if ( element->id == HTML_A )
+    {
+	if ( values->value[HTML_A_HREF].type == value_none )
+	{
+	    nests = TRUE;
+	}
+
+	if (nests)
+	{
+	    PRSDBG(("Implementing <A ...> as a nesting element\n"));
+	}
+	else
+	{
+	    PRSDBG(("Implementing <A> as a non-nesting element\n"));
 	}
     }
 

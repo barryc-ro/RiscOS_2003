@@ -964,7 +964,15 @@ static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell,
 	    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
 
 	FMTDBG(("prior to assert min %d, max %d - B\n", widths[RAW_MIN], widths[RAW_MAX]));
+
+	if (widths[RAW_MIN] > widths[RAW_MAX])
+	{
+	    FMTDBG(("ASSERTION WOULD HAVE TRIGGERED\n"));
+	}
+#if 1
 	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
+#endif
+	{ static int BORRIS_FIX_ME; }
     }
     else
     {
@@ -1082,7 +1090,7 @@ extern void colspan_do_the_stomping(rid_table_item *table, BOOL horiz)
     int x;
     pcp_cell the_cells = table->colspans;
 
-    FMTDBG(("do_the_stomping: \n"));
+    FMTDBG(("colspan_do_the_stomping: table %d\n", table->idnum));
 
     colspan_trace_cells(table, horiz);
 
@@ -1150,7 +1158,9 @@ extern void colspan_do_the_stomping(rid_table_item *table, BOOL horiz)
 	    group = group->next_start;
 	}
     }
+    FMTDBG(("colspan_do_the_stomping: finished table %d\n", table->idnum));
 }
+
 
 static BOOL have_contradictions(rid_table_item *table, BOOL horiz)
 {

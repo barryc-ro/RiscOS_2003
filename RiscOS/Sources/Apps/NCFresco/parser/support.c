@@ -50,6 +50,8 @@ static char char_decode[256];
 
 static void dump_elements_open(BITS *bits)
 {
+    /* Enable this when wanted - it consumes lots of resources and distorts profiling values. */
+#if 0
     int i;
 
     for (i = 0; i < NUMBER_SGML_ELEMENTS; i++)
@@ -59,6 +61,7 @@ static void dump_elements_open(BITS *bits)
 	    PRSDBGN((" %.*s", elements[i].name.bytes, elements[i].name.ptr));
 	}
     }
+#endif
 }
 
 static void dump_stack(SGMLCTX *ctx)
@@ -234,30 +237,6 @@ extern STRING mkstring(char *ptr, int n)
 
     return s;
 }
-
-/*****************************************************************************/
-
-/* FROM CHAR * TO STRING, BUT NO ALLOCATES */
-
-#if 0 /*not called?*/
-extern STRING mktempstring(char *ptr)
-{
-    STRING s;
-
-    if (ptr == NULL)
-    {
-	s.ptr = NULL;
-	s.bytes = 0;
-    }
-    else
-    {
-	s.ptr = ptr;
-	s.bytes = (int) strlen( (const char *) ptr);
-    }
-
-    return s;
-}
-#endif
 
 /*****************************************************************************/
 
@@ -1029,6 +1008,28 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
         STACK_ITEM *inner = tos->inner;
         STACK_ITEM *above = item->outer;
         STACK_ITEM *below = item->inner;
+	BOOL do_clear;
+
+	if (item->outer == NULL)
+	{
+	    PRSDBG(("pull_stack_item_to_top: no outer, so do_clear is set\n"));
+	    do_clear = TRUE;
+	}
+	else if ( element_bit_set(item->outer->elements_open, item->element) )
+	{
+	    PRSDBG(("pull_stack_item_to_top: item is open in outer as well - do_clear is clear\n"));
+	    do_clear = FALSE;
+	}
+	else
+	{
+	    PRSDBG(("pull_stack_item_to_top: item is closed in outer - do_clear is set\n"));
+	    do_clear = TRUE;
+	}
+
+	if (do_clear)
+	{
+	    element_clear_bit(tos->elements_open, item->element);
+	}
 
         /*  We must get the elements_seen vaguely right - since
             the close appears instead of the expected we can use the

@@ -1206,7 +1206,8 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 		    /* Don't know if this will work from the cache or not */
 
 		    /* pdh
-		    if (i->flags & image_flag_USE_LOGICAL)
+		    if ( i->flags & image_flag_USE_LOGICAL
+		         && i->file_type == FILETYPE_SPRITE )
 		    {
 			if (i->frame == NULL)
 			{
@@ -3350,7 +3351,7 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 {
     sprite_factors facs;
     int flags;
-    
+
     if ((i->flags & image_flag_RENDERABLE) == 0)
 	return;
 
@@ -3376,7 +3377,7 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
     flags = config_display_jpeg & 3;
     if (flags == 3 && (w == 1 || h == 1))
 	flags = 0;
-    
+
     _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, flags);
 }
 
@@ -3421,7 +3422,7 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 
     if (w == 0 || h == 0)
 	return;
-    
+
     plotter = i->plotter;
     if ( (i->flags & (image_flag_FETCHED | image_flag_RENDERABLE)) == image_flag_FETCHED )
 	plotter = plotter_SPRITE;

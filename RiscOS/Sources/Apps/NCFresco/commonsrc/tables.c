@@ -2922,6 +2922,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	cell->flags |= rid_cf_HEADER;
 #ifdef STBWEB
     /* SJM: need to ignore == 0 behaviour as no one else understands it */
+    /* DAF: Bloody pathetic of the rest of the world! */
     if (cell->span.x <= 0)
 	cell->span.x = 1;
     if (cell->span.y <= 0)

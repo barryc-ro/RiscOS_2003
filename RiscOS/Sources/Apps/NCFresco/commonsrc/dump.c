@@ -106,10 +106,14 @@ static char *smartpos(rid_pos_item *pi)
 #if 0
     sprintf(buf, "%p", pi);
 #else
-    if (pi == NULL)
+
+    if (pi == NULL || DEBUG != 0)
 	strcpy(buf, "No pos item");
+#if DEBUG
     else
 	sprintf(buf, "line %d", pi->linenum);
+#endif
+
 #endif
 
     return buf;

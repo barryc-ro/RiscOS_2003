@@ -9,6 +9,12 @@
 #define wimp_MURLHOTDEL	0x4AF83
 #define wimp_MNCFRESCO	0x4AF84
 
+/* Cache query protocol, so's Webtool can get its mitts on Fresco's cache
+ * Nick's protocol spec is at gi/~peter/info/Cache.txt
+ */
+#define wimp_MCACHEDURL     0x4AF85
+#define wimp_MCACHEDFILE    0x4AF86
+
 #if 1
 
 typedef union {
@@ -66,5 +72,20 @@ typedef struct
 #define ncfresco_loaddata_PLUGINS	0x00000020
 #define ncfresco_loaddata_ALLOW		0x00000040
 #define ncfresco_loaddata_FLUSH		0x00000080 /* flush is assumed if NOT_ALL is clear */
+
+typedef struct {
+    BOOL indirected;
+    union {
+        char direct[232];
+        char *indirect;
+    } url;
+} urlcache_data;
+
+typedef struct {
+    unsigned int expires_on;
+    unsigned int fetched_at;
+    unsigned int last_modified;
+    char filename[224];
+} urlcache_reply;
 
 #endif /* __urlopen_h */
