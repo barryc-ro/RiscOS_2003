@@ -205,6 +205,7 @@ OBJS = \
  o.Memory		\
  o.Menus		\
  o.Meta			\
+ o.MimeMap		\
  o.Mouse		\
  o.Object		\
  o.OpenURL		\
@@ -253,6 +254,7 @@ OBJSZ = \
  oz.Memory		\
  oz.Menus		\
  oz.Meta		\
+ oz.MimeMap		\
  oz.Mouse		\
  oz.Object		\
  oz.OpenURL		\
@@ -301,6 +303,7 @@ OBJSD = \
  od.Memory		\
  od.Menus		\
  od.Meta		\
+ od.MimeMap		\
  od.Mouse		\
  od.Object		\
  od.OpenURL		\
@@ -351,6 +354,7 @@ OBJSDZ = \
  odz.Memory		\
  odz.Menus		\
  odz.Meta		\
+ odz.MimeMap		\
  odz.Mouse		\
  odz.Object		\
  odz.OpenURL		\
@@ -400,6 +404,7 @@ OBJS_SURF = \
  o_surf.Memory		\
  o_surf.Menus		\
  o_surf.Meta		\
+ o_surf.MimeMap		\
  o_surf.Mouse		\
  o_surf.Object		\
  o_surf.OpenURL		\
@@ -447,6 +452,7 @@ OBJSD_SURF = \
  od_surf.Memory		\
  od_surf.Menus		\
  od_surf.Meta		\
+ od_surf.MimeMap	\
  od_surf.Mouse		\
  od_surf.Object		\
  od_surf.OpenURL	\
@@ -497,6 +503,7 @@ OBJS_ITALK = \
  o_italk.Memory		\
  o_italk.Menus		\
  o_italk.Meta		\
+ o_italk.MimeMap	\
  o_italk.Mouse		\
  o_italk.Object		\
  o_italk.OpenURL	\
@@ -545,6 +552,7 @@ OBJSD_ITALK = \
  od_italk.Memory	\
  od_italk.Menus		\
  od_italk.Meta		\
+ od_italk.MimeMap	\
  od_italk.Mouse		\
  od_italk.Object	\
  od_italk.OpenURL	\
