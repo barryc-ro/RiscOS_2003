@@ -1,7 +1,7 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
 
-CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
+#CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
 CFLAGS=-c -O -I${CLXPATH}  -DNO_VERSION_STRINGS -DEXTENSION_SYSV -DHOST_WANTS_NO_BANNER=1 $(CFL)
@@ -678,15 +678,9 @@ ncc: $(EXTLIB1)
 	$(CC) -o ncc $(OBJALL) $(EXTLIB1)
 	@echo "Made ncc"
 
-release:
-	- chmod +w /bb/xdevt/release/ccsparc/ncc
-	cp -p ncc /bb/xdevt/release/ccsparc/ncc
-	strip /bb/xdevt/release/ccsparc/ncc
-	chmod -w /bb/xdevt/release/ccsparc/ncc
-	- chmod +w /bb/xdevt/release/bin4.0/ncc
-	$(CC) -Bstatic -o /bb/xdevt/release/bin4.0/ncc $(OBJALL) $(EXTLIB1)
-	strip /bb/xdevt/release/bin4.0/ncc
-	chmod -w /bb/xdevt/release/bin4.0/ncc
+install: ncc
+	cp -p ncc ${RISCOS_BUILD_TOOLS}/armcc
+	strip ${RISCOS_BUILD_TOOLS}/armcc
 
 errors.h: genhdrs miperrs.h feerrs.h mcerrs.h
 	./genhdrs -eerrors.h -qmiperrs.h -qfeerrs.h -qmcerrs.h -s
