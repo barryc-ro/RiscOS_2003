@@ -380,7 +380,7 @@ Source::Allocate(size_t max_blocks, size_t block_size, size_t initial_block_num,
         		}
  			else {	
  				// datagram size is specified as the send to size this size does not include the header.
-   				mem_map = new SourceMemMap(max_blocks, block_size, datagram_size /*-sizeof(NECDatagram)*/ );
+   				mem_map = new SourceMemMap(max_blocks, block_size, datagram_size-sizeof(NECDatagram) );
    		
    				if (mem_map->ErrorState() == ErrorOccurred){
 					if (err_ptr == NULL)
@@ -1168,13 +1168,18 @@ SourceLIVE::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeou
 							mb->pending_nak = 0;
 													
 	       						result = calculateMaxCompleteBlock();	// calculate most completed
-													// stream live or full buffers
-							if ((max_completed_block+2) < dgram->block_number){
-								mb = mem_map->findExistingBlock(max_completed_block+1);
-								if (mb != NULL){
-									++(stats->deleted_blocks);
-									mem_map->freeBlock_background(mb);
-								}
+							
+							if (max_completed_block < dgram->block_number){
+							  	// clean up blocks that will not fill
+							  	mb = mem_map->findExistingBlock(max_completed_block+1);
+							  	while ((mb != NULL)&&(mb->block_id < dgram->block_number)){
+							  		if (mb->completed != 1){
+										++(stats->deleted_blocks);
+										mem_map->freeBlock_background(mb);
+									}
+									mb = mem_map->findExistingBlock(mb->block_id+1);
+							        }
+								result = calculateMaxCompleteBlock();	// re-calculate most completed
 							}
 										
 							(*flags) += callback_timeout;
@@ -1302,11 +1307,7 @@ SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace
         		        	MakeError(VSP_DatagramSizeError);
         			} else {
  		   			sd.setDgramSize((size_t)header.MaxLength);
- 		   			
-        				// incomming datagram size is set to Maxlength as this is the maximum size of
-        				// datagrams received.  These may be divided in two (indicated by a continuity
-        				// flag. On these rare occations we copy the remainder of one into the former.
-					// allocate 8 datagrams per block to decrease traffic
+
   					mem_map = new SourceMemMap(numBlocks, (size_t)header.EMPacketSize, (size_t)header.MaxLength - sizeof(MultiCastDatagram) );
   				
   					if (mem_map->ErrorState() == ErrorOccurred){
@@ -1335,7 +1336,8 @@ SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buf
 
        _kernel_irqs_off();
  
-        do {
+        do { // determine if last block sent is missing datagrams if so delete it
+             // we assume that there are no out of order blocks.
         	mb = mem_map->findExistingBlock(last_block_sent + 1);
         	
         	if (mb == NULL)	break;
@@ -1475,7 +1477,7 @@ SourceMultiCast::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *t
                	  	
 				if ((mb = mem_map->findOrReplaceBlock(dgram->EMPacketID, &last_block_sent, &max_completed_block, stats)) != NULL ) {
 				  	// determine the fragment
-				  	ULONG datagram_num = (dgram->fragmentOffset / (mem_map->dgramSize() - sizeof(MultiCastDatagram)));
+				  	ULONG datagram_num = (dgram->fragmentOffset / mem_map->dgramSize());
 				  	
 				  	if (datagram_num < mem_map->dgramsPerBlock()) {
 				  	  
@@ -1494,6 +1496,7 @@ SourceMultiCast::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *t
 								mb->dgrams_in_block = (unsigned int) mem_map->dgramsPerBlock();
         						}
         						
+        						// the number of datagrams in a block is defined by the block without continuity
         						if (!dgram->Continuity)
         						  	mb->dgrams_in_block = (unsigned int) datagram_num + 1; // datagrams start at 0
         						  	
@@ -1505,12 +1508,17 @@ SourceMultiCast::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *t
 													
 	       							result = calculateMaxCompleteBlock();	// calculate most completed
 													// stream live or full buffers
-								if ((max_completed_block+2) < dgram->EMPacketID){
-									mb = mem_map->findExistingBlock(max_completed_block+1);
-									if (mb != NULL){
-										++(stats->deleted_blocks);
-										mem_map->freeBlock_background(mb);
-									}
+								if (max_completed_block < dgram->EMPacketID){
+								  	// clean up blocks that will not fill
+								  	mb = mem_map->findExistingBlock(max_completed_block+1);
+								  	while ((mb != NULL)&&(mb->block_id < dgram->EMPacketID)){
+								  		if (mb->completed != 1){
+											++(stats->deleted_blocks);
+											mem_map->freeBlock_background(mb);
+										}
+										mb = mem_map->findExistingBlock(mb->block_id+1);
+								        }
+									result = calculateMaxCompleteBlock();	// re-calculate most completed
 								}
 										
 								(*flags) += callback_timeout;

@@ -13,8 +13,7 @@ EXP_HDR = <export$dir>
 #
 TCPIPLib   = TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklib5zm
 DebugLib   = <Lib$Dir>.DebugLib.o.DebugLibzm
-CLIB       = CLIB:o.stubs
-CPPLIB	   = CPP:o.c++libz
+CLIB       = CLIB:o.stubs CLIB:o.c++libz
 RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
@@ -184,10 +183,10 @@ clean:
 
 # Final targets:
 ${TARGET}: ${OBJS} o.VSPHdr
-        ${LD} ${Linkflags} -s syms ${OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${TCPIPLib}
+        ${LD} ${Linkflags} -s syms ${OBJS} ${COBJ} ${CLIB} ${TCPIPLib}
 
 ${TARGETDB}: ${d_OBJS} o.VSPHdr
-        ${LD} ${Linkflags} -s syms ${d_OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${TCPIPLib} ${DebugLib}
+        ${LD} ${Linkflags} -s syms ${d_OBJS} ${COBJ} ${CLIB} ${TCPIPLib} ${DebugLib}
         
 h.VSPHdr:	cmhg.VSPHdr
 		${CMHG} ${CMHGFLAGS} -o o.$* $? $@
