@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <signal.h>
 #include <ctype.h>
 #include "kernel.h"
@@ -30,7 +31,6 @@
 #include "module.h"
 #include "utils.h"
 #include "lineedit.h"
-
 
 /* This flag is initialised during module initialisation so that we know whether
  * we are supposed to be responding to Service_Reset or not.
@@ -55,6 +55,10 @@ static int field_width = 24;
 /* Number of IP extra addresses to prompt for
  */
 static int extra_ip = 1;
+
+/* Non-zero if we find an ATM interface
+ */
+static int got_atm_card = 0;
 
 /* Maximum length of buffer into which to read allowable Yes keypressed
  * plus the actual characters allowed.
@@ -101,13 +105,13 @@ static void get_cmos_vector(const int location, int vector[])
 }
 
 
-int read_cmos_byte(int location)
+static unsigned int read_cmos_byte(int location)
 {
         int val = _kernel_osbyte(osbyte_READ_CMOS, location, 0);
         return val < 0 ? 0 : (val >> 8) & 0xFF;
 }
 
-void write_cmos_byte(int location, unsigned int value)
+static void write_cmos_byte(int location, unsigned int value)
 {
         if (location != 0) {
         	(void) _kernel_osbyte(osbyte_WRITE_CMOS, location, value);
@@ -119,7 +123,7 @@ void write_cmos_byte(int location, unsigned int value)
 
 /* Read an IP address (or 4 byte value) from CMOS.
  */
-void ReadIPCMOS( int location, struct in_addr *ip )
+static void ReadIPCMOS( int location, struct in_addr *ip )
 {
 	int i;
 	int vector[4];
@@ -148,10 +152,20 @@ static void WriteIPCMOS( int location, const struct in_addr *ip )
         }
 }
 
+static void ReadATMCMOS( int location_lo, int location_hi, unsigned short *pvc)
+{
+        *pvc = read_cmos_byte(location_lo) | (read_cmos_byte(location_hi) << 8);
+}
+
+static void WriteATMCMOS( int location_lo, int location_hi, unsigned short pvc)
+{
+        write_cmos_byte(location_lo, pvc & 0xFF);
+        write_cmos_byte(location_hi, pvc >> 8);
+}
 
 /* Read a \0 terminated string from CMOS.
  */
-void ReadStringCMOS( int location, char *p, int bufsz )
+static void ReadStringCMOS( int location, char *p, int bufsz )
 {
     	while ( --bufsz ) {
         	if ((*p++ = read_cmos_byte(location++)) == '\0') return;
@@ -182,6 +196,7 @@ void ReadIPData( ip_data *ip )
     	ReadIPCMOS( cmos_DNS_IP, &ip->dns_ip );
     	ReadIPCMOS( cmos_IP_ADDR_1, &ip->addr1_ip );
     	ReadStringCMOS( cmos_BOOT_MOUNT, ip->boot_mount, cmos_BOOT_MOUNT_SZ );
+    	ReadATMCMOS( cmos_ATM_PVC_LOW, cmos_ATM_PVC_HIGH, &ip->atm_pvc );
 
 	flags = read_cmos_byte(cmos_NETMASK);
 	ip->netmask = (flags & cmos_NETMASK_MASK) >> cmos_NETMASK_SHIFT;
@@ -207,6 +222,7 @@ void WriteIPData( ip_data *ip )
     	WriteIPCMOS( cmos_DNS_IP, &ip->dns_ip );
 	WriteIPCMOS( cmos_IP_ADDR_1, &ip->addr1_ip );
     	WriteStringCMOS( cmos_BOOT_MOUNT, ip->boot_mount );
+    	WriteATMCMOS ( cmos_ATM_PVC_LOW, cmos_ATM_PVC_HIGH, ip->atm_pvc );
 
         flags = read_cmos_byte(cmos_NETMASK);
         flags = (flags & ~cmos_NETMASK_MASK) | (ip->netmask << cmos_NETMASK_SHIFT);
@@ -226,6 +242,39 @@ int read_address_count(void)
 {
         return extra_ip;
 }
+
+/* Returns whether we have an ATM interface card present
+ */
+int using_atm_card(void)
+{
+        return got_atm_card;
+}
+
+/* Called if read_device_name discovers an ATM card
+ */
+void found_atm_card(void)
+{
+        got_atm_card = 1;
+}
+
+#pragma -v1
+/* Pragma enables the printf style format checking */
+static int lm_printf(const char *format, ...)
+{
+        va_list ap;
+        int i;
+
+	for (i = 0; i < left_indent; ++i) {
+	        putchar(' ');
+      	}
+
+        va_start(ap, format);
+        i += vprintf(format, ap);
+        va_end(ap);
+
+        return i;
+}
+#pragma -v0
 
 /*  Determines if the IP address is not set
  */
@@ -265,14 +314,14 @@ void format_mac_address(const struct ether_addr *mac, char *buffer, char sep)
 
 /* Write a string (reads tag from Messages file)
  */
-void write_tag_msg(const char *tag)
+size_t write_tag_msg(const char *tag)
 {
         const char *ptr = NULL;
         size_t inoutlength = 0;
 
-	printf("%*s", left_indent, "");
+	lm_printf("");
         (void) read_message(tag, &ptr, &inoutlength);
-        (void) fwrite(ptr, inoutlength, 1, stdout);
+        return fwrite(ptr, 1, inoutlength, stdout);
 }
 
 void write_tag_msg_nl(const char *tag)
@@ -287,6 +336,18 @@ void newline(void)
 {
         putc('\n', stdout);
 }
+
+static void lm_print_hdr(const char *message)
+{
+        int i;
+
+	i = field_width - write_tag_msg(message);
+	putchar(':');
+	for (; i > 0; --i) {
+	        putchar(' ');
+      	}
+}
+
 
 /* Read a message
  */
@@ -360,9 +421,7 @@ static void PrintIP( const struct in_addr *p )
  */
 static void ShowIPConfigLine(const char *tag, const struct in_addr *p)
 {
-        char msg[64];
-        (void) read_msg(tag, msg, sizeof(msg));
-        (void) printf("%*s%s:%*s", left_indent, "", msg, field_width - strlen(msg), "");
+        (void) lm_print_hdr(tag);
         PrintIP(p);
 }
 
@@ -383,10 +442,20 @@ static void PrintIPData( const ip_data *ip )
         if (extra_ip > 3) ShowIPConfigLine("IPAddr4", &ip->addr4_ip);
         ShowIPConfigLine("DNSIPAddr", &ip->dns_ip);
 
-        read_msg("BootMount", msg, sizeof(msg));
-        printf("%*s%s:%*s%s\n", left_indent, "", msg, field_width - strlen(msg), "", ip->boot_mount);
-        read_msg("StatBFlag", msg, sizeof(msg));
-        printf("%*s%s:%*s", left_indent, "", msg, field_width - strlen(msg), "");
+        lm_print_hdr("BootMount");
+        puts(ip->boot_mount);
+
+	if (using_atm_card()) {
+	        lm_print_hdr("ATMPVCAddr");
+	        if (ip->atm_pvc != 0) {
+	                printf("%hu\n", ip->atm_pvc);
+	        }
+	        else {
+	                puts(unset);
+	        }
+	}
+
+        lm_print_hdr("StatBFlag");
         read_msg(ip->static_flag ? "Enabled" : "Disabled", msg, sizeof(msg));
         puts(msg);
         newline();
@@ -413,6 +482,45 @@ static void GetString( const char *message, char *buf, int bufsz, char *def_valu
 	}
 	else {
 	        buf[bufsz-c-1] = '\0';
+	}
+}
+
+/* Get an ATM PVC address from stdin.
+ */
+static void GetPVC( const char *message, unsigned short *pvc)
+{
+	for (;;) {
+               	char buf[16];
+
+        	if (*pvc != 0) {
+        	       	(void) sprintf(buf, "%hu", *pvc);
+        	}
+        	else {
+        	        *buf = '\0';
+        	}
+
+        	GetString(message, buf, sizeof(buf), buf);
+        	if (buf[0] != '\0') {
+        	       	int base = 0;
+               		int offs = 0;
+        	        unsigned long new_val;
+        	        if (buf[0] == '$' || buf[0] == '&') {
+        	                base = 16;
+        	                offs = 1;
+        	        }
+        	        new_val = strtoul(buf + offs, NULL, base);
+        	        if (new_val == 65535 || (new_val >> 16) != 0) {
+        	                write_tag_msg_nl("NeedOKPVC");
+        	                newline();
+        	                continue;
+        	        }
+        	        *pvc = (unsigned short) new_val;
+        	}
+        	else {
+                       	write_tag_msg_nl("FldUnXed");
+        	}
+        	newline();
+        	break;
 	}
 }
 
@@ -567,13 +675,42 @@ static void ReadMainVars(void)
         read_msg("NoIP:Unset", unset, sizeof(unset));
 }
 
-/* Validates the client, net mask and gateway address to ensure that they
- * are consistent (ie. the gateway must be reachable on the addressable sub-net!)
+/* Validates the client, net mask and destination address to ensure that they
+ * are consistent (ie. the destination must be reachable on the addressable sub-net!)
  */
-static int editconfig_gateway_visible(const struct in_addr *client,
-		const struct in_addr *mask, const struct in_addr *gw)
+static int editconfig_address_reachable(const struct in_addr *client,
+		const struct in_addr *mask, const struct in_addr *dest)
 {
-        return (client->s_addr & mask->s_addr) == (gw->s_addr & mask->s_addr);
+        return (client->s_addr & mask->s_addr) == (dest->s_addr & mask->s_addr);
+}
+
+/* Pokes the ATM driver during startup if necessary */
+void editconfig_exec_atm_start(ip_data *ip)
+{
+	struct in_addr *pvc_dest;
+	char IParg[sizeof("123.123.123.123")];
+	char pvc_address[sizeof("12345")];
+	char cmdbuf[64];
+	const char *pcmdbuf;
+	size_t inoutlength;
+
+	/* Can be see the boot server?  If so, establish the PVC to the boot server.
+	 * If not, then we establish the PVC to the gateway instead
+	 */
+	if (editconfig_address_reachable(&ip->client_ip, &ip->netmask_ip, &ip->server_ip)) {
+	        pvc_dest = &ip->server_ip;
+	}
+	else {
+	        pvc_dest = &ip->gateway_ip;
+	}
+
+	(void) sprintf(pvc_address, "%hu", ip->atm_pvc);
+	(void) FormatIP(pvc_dest, IParg);
+	pcmdbuf = &cmdbuf[0];
+	inoutlength = sizeof(cmdbuf);
+	if (read_message_2("ATMStart:||", &pcmdbuf, &inoutlength, IParg, pvc_address) == NULL) {
+		(void) _kernel_oscli(pcmdbuf);
+	}
 }
 
 /*
@@ -652,7 +789,7 @@ static void editconfig_exec(void *pw)
 			        break;
 			}
 
-                        if (editconfig_gateway_visible(&ip.client_ip,
+                        if (editconfig_address_reachable(&ip.client_ip,
                                 	&ip.netmask_ip, &ip.gateway_ip)) {
                                 break;
                         }
@@ -673,6 +810,10 @@ static void editconfig_exec(void *pw)
         	ip.boot_mount[0] = '\0';
     		(void) strncat(ip.boot_mount, buf, cmos_BOOT_MOUNT_SZ);
     		newline();
+
+		if (using_atm_card()) {
+		        GetPVC( "QATMPVC", &ip.atm_pvc);
+		}
 
         	ip.static_flag = (Yes("QStaticB", ip.static_flag)) != 0;
 
@@ -699,7 +840,9 @@ void editconfig_service(void *pw)
 	/* If we get here then it must be Service_Reset because it's
      	 * the only one passed along by module.c
      	 */
-
+#ifdef TRACE
+	found_atm_card();
+#endif
     	if (respond_to_Service_Reset) editconfig_exec(pw);
 }
 
