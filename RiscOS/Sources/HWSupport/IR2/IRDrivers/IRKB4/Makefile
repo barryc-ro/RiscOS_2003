@@ -18,7 +18,7 @@ RM      = remove
 WIPE    = -wipe
 
 CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
-#DFLAGS  = -DDEBUG=3
+DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 INCLUDES= -IC:
@@ -109,13 +109,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.utils
-o.module:	h.ir_api
-o.module:	h.module
-o.module:	h.keyboard
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis

@@ -121,12 +121,6 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.driver
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
 o.driver:	c.driver
 o.driver:	C:h.kernel
 o.driver:	C:h.swis
@@ -134,3 +128,9 @@ o.driver:	h.utils
 o.driver:	h.ir_api
 o.driver:	h.driver
 o.driver:	h.veneers
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
