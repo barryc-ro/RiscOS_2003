@@ -159,7 +159,7 @@ all:	${APP}
 clean:	cleanlib cleandll cleanapp
 	@echo cleaned all
 
-realclean: clean cleanmisc cleaninstall cleanmakepass
+realclean: clean cleanmisc cleaninstall cleanmakepass cleanicaenum
 	@echo realcleaned all
 
 cleanmisc:
@@ -278,6 +278,34 @@ makepass,ff8: src/app/makepass.o ${CITRIXLIB}
 cleanmakepass:
 	@${RM} src/app/makepass.o 'makepass,ff8'
 	@echo cleaned makepass
+
+# ----------------------------------------------------------------------------------------------------
+
+icaenum: icaenum,ff8
+icaenumd: icaenumd,ff8
+
+ICAENUMLIBS=${NELIB} ${CITRIXLIB} \
+	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/inetlib.o \
+	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/socklib.o
+
+ICAENUMLIBSD=${NELIBD} ${CITRIXLIBD} \
+	$(RISCOS_BUILD_EXPORT)/Lib/debug/lremote.o \
+	$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o \
+	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/inetlib.o \
+	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/socklib.o
+
+icaenum,ff8: src/app/icaenum.o ${ICAENUMLIBS}
+	${LD} ${LDFLAGS} -v -o 'icaenum,ff8' src/app/icaenum.o ${ICAENUMLIBS} $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
+	@ls -l '$@'
+
+icaenumd,ff8: src/app/icaenum.od ${ICAENUMLIBSD}
+	${LD} ${LDFLAGS} -v -o 'icaenumd,ff8' src/app/icaenum.od ${ICAENUMLIBSD} $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
+	@ls -l '$@'
+
+
+cleanicaenum:
+	@${RM} src/app/icaenum.o src/app/icaenum.od 'icaenum,ff8' 'icaenumd,ff8'
+	@echo cleaned icaenum
 
 # ----------------------------------------------------------------------------------------------------
 

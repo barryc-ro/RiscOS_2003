@@ -263,7 +263,7 @@ static void handler(int signal)
 {
     *sig_numspot = signal + '0';
 
-    wimp_report_error(&sig_errmsg, 0, utils_msgs_lookup("_TaskName"));
+    wimp_report_error(&sig_errmsg, 0, APP_NAME);
 
     if (cli_dopostmortem) switch (signal)
     {
@@ -279,7 +279,7 @@ static void handler(int signal)
 static void signal_setup(void)
 {
     sig_errmsg.errnum = 0;
-    sprintf(sig_errmsg.errmess, FATAL_ERROR, utils_msgs_lookup("_TaskName"), 9);
+    sprintf(sig_errmsg.errmess, FATAL_ERROR, 9);
     sig_numspot = strchr(sig_errmsg.errmess, '9');
 
     signal(SIGABRT, &handler);
@@ -352,8 +352,10 @@ static void connection_state(int event)
 		    connect_open(current_session);
 		    connectopen_state = initop_COMPLETED;
 		}
-
-		if (printinfo_state == initop_COMPLETED && connectopen_state != initop_UNSTARTED)
+		/* make this an else so that we have time to open the
+                   connect window before going in to the connect()
+                   state */
+		else if (printinfo_state == initop_COMPLETED && connectopen_state != initop_UNSTARTED)
 		{
 		    if (!session_connect(current_session))
 		    {
@@ -1461,9 +1463,9 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass    = LOG_ASSERT | TC_TW;
+   EMLogInfo.LogClass    = LOG_ASSERT | TC_UI | TC_TD;
    EMLogInfo.LogEnable   = TT_ERROR;
-   EMLogInfo.LogTWEnable = TT_TW_DIM;
+   EMLogInfo.LogTWEnable = 0;
 #else
    EMLogInfo.LogClass   = TC_ALL;
    EMLogInfo.LogEnable  = TT_ERROR;

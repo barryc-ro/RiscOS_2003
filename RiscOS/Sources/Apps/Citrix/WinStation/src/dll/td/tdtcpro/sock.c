@@ -44,6 +44,7 @@
 #include "sys/ioctl.h"
 
 #include "socklib.h"
+#include "swis.h"
 
 /* ---------------------------------------------------------------------------- */
 
@@ -86,6 +87,8 @@ int Call( PPD pPd, ULONG InetAddr, UINT Port, int * pSocket )
    struct linger Linger;
    struct sockaddr_in addr;
    int fKeepAlive;
+
+   LOGERR(_swix(Hourglass_On, 0));
 
    memset( (char *)&addr, (int)0, sizeof( struct sockaddr ) );
 
@@ -162,6 +165,8 @@ int Call( PPD pPd, ULONG InetAddr, UINT Port, int * pSocket )
        goto badconnect;
    }
 
+   LOGERR(_swix(Hourglass_Off, 0));
+
    // Success
    *pSocket = sock;
    return( rc );
@@ -171,6 +176,8 @@ int Call( PPD pPd, ULONG InetAddr, UINT Port, int * pSocket )
 =============================================================================*/
 
 badconnect:
+   LOGERR(_swix(Hourglass_Off, 0));
+
    *pSocket = 0;
    return( rc );
 }

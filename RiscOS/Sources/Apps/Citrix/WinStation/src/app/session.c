@@ -278,6 +278,33 @@ static void restore_desktop(void)
     LOGERR(_swix(Wimp_SetMode, _IN(0), mode));
 }
 
+static int question(icaclient_session sess, const char *message)
+{
+    _kernel_oserror e;
+    int rval;
+
+    e.errnum = 0;
+    strncpy(e.errmess, message, sizeof(e.errmess)-1);
+
+    LOGERR(_swix(Wimp_ReportError, _INR(0,2) | _OUT(1),
+		 &e,
+		 3,		// OK and cancel
+		 APP_NAME,
+		 &rval));
+/*
+    LOGERR(_swix(Wimp_ReportError, _INR(0,5) | _OUT(1),
+		 &e,
+		 0x100 | (4<<9),
+		 sess->gszServerLabel,
+		 NULL,		// spritename
+		 NULL,		// spritearea
+		 "OK,Cancel",
+		 &rval));
+		 */
+
+    return rval == 3 || rval == 1;
+}
+
 /*******************************************************************************
  *
  *  WFEngineStatusCallback - helper function
@@ -299,6 +326,7 @@ static void restore_desktop(void)
 static void WFEngineStatusCallback( icaclient_session sess, int message )
 {
     int rc;
+    static BOOL ignore_next_kill = FALSE;
 
 #ifdef DEBUG
     if (message != CLIENT_STATUS_SUCCESS && message != CLIENT_STATUS_NO_DATA)
@@ -346,7 +374,14 @@ static void WFEngineStatusCallback( icaclient_session sess, int message )
 
     case HOTKEY_EXIT: // CLIENT_STATUS_HOTKEY2:     // exit
 	TRACE(( LOG_CLASS, LOG_CONNECT, "HOTKEY_EXIT"));
-	srvWFEngDisconnect(sess->hWFE);
+	
+	if (question(sess, utils_msgs_lookup("disconn")))
+	    srvWFEngDisconnect(sess->hWFE);
+	else
+	{
+	    ignore_next_kill = TRUE;
+	    session_resume(sess);
+	}
 	break;
 
     case CLIENT_STATUS_DELETE_CONNECT_DIALOG:
@@ -361,9 +396,16 @@ static void WFEngineStatusCallback( icaclient_session sess, int message )
 	break;
 
     case CLIENT_STATUS_KILL_FOCUS:  // ignore these messages
-	sess->HaveFocus = TRUE;
-
-	restore_desktop();
+	TRACE((TC_UI, TT_API1, "client_status_kill_focus: %p", sess));
+	if (ignore_next_kill)
+	{
+	    ignore_next_kill = FALSE;
+	}
+	else
+	{
+	    sess->HaveFocus = TRUE;
+	    restore_desktop();
+	}
 	break;
 
     case CLIENT_STATUS_CONNECTING:
@@ -518,21 +560,6 @@ static int EMEngLoadwinframe_session(icaclient_session sess)
     
     return(rc);
 }
-
-/* --------------------------------------------------------------------------------------------- */
-
-#if 0
-
-static BOOL ppp_up(void)
-{
-}
-
-static void ppp_redial(void)
-{
-    LOGERR(wimp_start_task("NCDialUI_Start", 0));
-}
-
-#endif
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -1052,7 +1079,7 @@ int session_poll(icaclient_session sess)
 {
     int rc;
     
-    DTRACE((TC_UI, TT_API1, "session_poll: state %x connected %d focus %d continuepolling %d", gState, gState & WFES_CONNECTED, sess->HaveFocus, gbContinuePolling ));
+    TRACE((TC_UI, TT_API1, "session_poll: state %x connected %d focus %d continuepolling %d", gState, gState & WFES_CONNECTED, sess->HaveFocus, gbContinuePolling ));
 
 //  if ( gState & WFES_CONNECTED )
 //	srvWFEngMessageLoop( sess->hWFE );

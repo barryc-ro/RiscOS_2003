@@ -1862,7 +1862,7 @@ fProcCalled = TRUE;
            break;
 
        case HOTKEY_EXIT:
-           wdKillFocus();
+	   wdKillFocus();
            fProcCalled = TRUE; // Don't notify UI yet
            messageHotkey = message;
            break;
