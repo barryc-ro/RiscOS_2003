@@ -14,6 +14,26 @@
  * Renamed file from faxreceivr.c to localfax.c and merged with callfax.c.
  * Now kicks off 'fake exchange' automatically when off-hook is detected
  * (unless we are calling the local fax machine).
+ *
+ * 1998-05-11: BAL
+ * Fixed PAN-01849 where a dialtone would not be generated if off-hook occured
+ * while fake exchange was being shut down.  Now sets an 'off-hook pending'
+ * flag so that a dialtone is generated when we go idle again.  NB. In this
+ * situation the delay between off-hook and dialtone is considerable, but
+ * there's not a lot that can be done about this (could possibly modify the
+ * dialler to allow prevention of DTR reset at end of hangup script, but no
+ * time at the moment).
+ *
+ * local_fax_initialise no longer reads the state of the on/off hook bit - just
+ * assumes that we start on-hook.  This fixes the problem where a dialtone
+ * would not be generated if you switched the box on with the local fax machine
+ * off-hook.
+ *
+ * Fixed bug where the callevery-callback combination to monitor on/off hook
+ * could stall.  If in the callevery routine the kernel needs to grow the
+ * system heap to add the callback then it cannot, because interrupts are
+ * disabled.  Fix is to ensure that callback_pending flag does not remain set
+ * if the call to add it fails.
  */
 
 
@@ -87,6 +107,8 @@ static local_fax_state_t  local_fax_state = LocalFax_Idle;
 static unsigned int previous_receiver_state;
 
 static unsigned int local_fax_receiver_callback_pending = 0;
+
+static unsigned int off_hook_pending = 0;
 
 static int ring_pattern[] =
 {
@@ -183,10 +205,14 @@ extern _kernel_oserror *  local_fax_initialise (void)
 {
     _kernel_oserror *e = NULL;
 
+
+    previous_receiver_state = LocalFaxReceiver_OnHook;
+#if 0
 #ifdef TEST
     previous_receiver_state = read_key ();
 #else
     previous_receiver_state = pio_register_read (LocalFaxReceiver_Mask);
+#endif
 #endif
     e = local_fax_control_receiver_monitoring (DaytonaHW_HookControl_Enable);
 
@@ -219,7 +245,7 @@ extern _kernel_oserror *  local_fax_control_receiver_monitoring (
 
     if (new_state == DaytonaHW_HookControl_Enable)
     {
-        e = callx_add_callevery (9,
+        e = callx_add_callevery (4,
                                  local_fax_receiver_callevery,
                                  NULL);
     }
@@ -362,8 +388,11 @@ static _kernel_oserror *  local_fax_receiver_callevery (
     if (local_fax_receiver_callback_pending == 0)
     {
         local_fax_receiver_callback_pending = 1;
-        callx_add_callback (local_fax_receiver_callback,
-                            NULL);
+        if (callx_add_callback (local_fax_receiver_callback,
+                                NULL))
+        {
+            local_fax_receiver_callback_pending = 0;
+        }
     }
 
     return NULL;
@@ -397,7 +426,6 @@ static _kernel_oserror *  local_fax_receiver_callback (
                               void *              pw,
                               void *              handle)
 {
-    unsigned int  irqs;
     unsigned int  receiver_state;
 
     M_unused (r);
@@ -410,7 +438,7 @@ static _kernel_oserror *  local_fax_receiver_callback (
     receiver_state = pio_register_read (LocalFaxReceiver_Mask);
 #endif
 
-    if (receiver_state != previous_receiver_state)
+    if (receiver_state != previous_receiver_state || off_hook_pending)
     {
         if (receiver_state == LocalFaxReceiver_OffHook)
         {
@@ -421,7 +449,11 @@ static _kernel_oserror *  local_fax_receiver_callback (
             on_hook ();
         }
 
-        if ((g_flags & Flags_SuppressWimpMessages) == 0)
+
+        /* If there is an off-hook pending then don't send the message until
+         * the off-hook actually occurs.
+         */
+        if (!off_hook_pending && (g_flags & Flags_SuppressWimpMessages) == 0)
         {
             WimpMessage message;
 
@@ -450,9 +482,7 @@ static _kernel_oserror *  local_fax_receiver_callback (
         previous_receiver_state = receiver_state;
     }
 
-    irqs = irqs_off ();
     local_fax_receiver_callback_pending = 0;
-    irqs_restore (irqs);
 
     return NULL;
 }
@@ -470,10 +500,42 @@ static _kernel_oserror *  local_fax_receiver_callback (
 
 static void  off_hook (void)
 {
-    if (local_fax_state == LocalFax_Idle)
+    switch (local_fax_state)
     {
-        local_fax_state = LocalFax_DoingFakeExchange;
-        fake_exchange_start ();
+        case LocalFax_Idle:
+        {
+            int  configured;
+
+            local_fax_state  = LocalFax_DoingFakeExchange;
+            off_hook_pending = 0;
+            if (fake_exchange_start (&configured))
+            {
+                local_fax_state = LocalFax_Idle;
+                if (!configured)
+                {
+                    off_hook_pending = 1;
+                }
+            }
+
+            break;
+        }
+
+        case LocalFax_StoppingFakeExchange:
+            /* It takes time to stop fake exchange, mainly due to a script
+             * being executed to return the modem to a known state.  It is
+             * possible that if the fax machine is off-hook and the receiver
+             * is briefly pressed (say for 0.5s) then when we detect off-hook
+             * (when the receiver is released) while the original fake exchange
+             * is shutting down.  We need to flag this so that we can start a
+             * dialtone when fake exchange has finished.
+             *
+             * Fixes PAN-01849.
+             */
+            off_hook_pending = 1;
+            break;
+
+        default:
+            break;
     }
 }
 
@@ -490,6 +552,8 @@ static void  off_hook (void)
 
 static void  on_hook (void)
 {
+    off_hook_pending = 0;
+
     if (local_fax_state == LocalFax_DoingFakeExchange)
     {
         local_fax_state = LocalFax_StoppingFakeExchange;
