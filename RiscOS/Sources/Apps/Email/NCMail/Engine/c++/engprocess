@@ -144,10 +144,22 @@ void StartProcess(void)
   }
   if (smtpstatus != acctnonexistent)
   {
+    smtpprocessstate.attempts = 0;
     smtpprocessstate.context = readytosend;
     state |= PROCESSSMTP;
     outbox = (SendQMailbox *) SMTPaccount->GetInbox();
   }
+
+}
+
+
+void RetrySMTP(void)
+{
+
+  ++smtpprocessstate.attempts;
+  smtpprocessstate.context = readytosend;
+  state |= PROCESSSMTP;
+  outbox = (SendQMailbox *) SMTPaccount->GetInbox();
 
 }
 
@@ -272,19 +284,34 @@ void DoSMTPProcess(void)
         ************************************/
         /* do we report back here if connection has failed,
            or just keep message in send queue and keep trying? */
-        sendstate.ret.code = ENG_SENDFAILED;
+        sendstate.ret.code = ENG_SMTPCONNECTFAIL;
         (*callbacklist.sendfunc)(&sendstate.ret, callbacklist.sendhandle);
-        state &= ~SEND;
+        state &= ~(SEND + PROCESSSMTP);
       }
       else
       {
-        /************************************
-        *** ATTENTION
-        ************************************/
-        /* need  to evaluate rc and send meaningful message
-           e.g. AUTHFAILED */
-        statusret.code = ENG_SMTPCONNECTFAIL;
-        (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, DefunctSMTP);
+        switch (smtpprocessstate.ret.rc)
+        {
+          case ELIB_EMALLOCFAILED :
+            smtpprocessstate.ret.code = ENG_NOMEMORY;
+            break;
+
+          case ELIB_ECONREFUSED :
+          case ELIB_ECONFAILED :
+
+            smtpprocessstate.ret.code = ENG_SMTPCONNECTFAIL;
+            break;
+
+          case ELIB_ECONTIMEDOUT :
+
+            smtpprocessstate.ret.code = ENG_SMTPTIMEOUT;
+            break;
+
+          default :
+            smtpprocessstate.ret.code = ENG_SMTPCONNECTFAIL;
+        }
+
+        (*callbacklist.statusfunc)(&smtpprocessstate.ret, callbacklist.statushandle, DefunctSMTP);
       }
 
       break;
@@ -394,9 +421,6 @@ void DoSMTPProcess(void)
       CleanupOutbox();
       smtpstatus = acctcreated;
       state &= ~(TIMEOUT + PROCESSSMTP);
-
-      if (state & CHANGEUSER)
-        changestate.context = readytoread;
 
       if (state & SEND)
       {
@@ -540,11 +564,16 @@ void DoPOPProcess(void)
             popprocessstate.ret.code = ENG_AUTHORISATIONFAILED;
             break;
 
+          case ELIB_ECONTIMEDOUT :
+
+            popprocessstate.ret.code = ENG_POPTIMEOUT;
+            break;
+
           default :
-            popprocessstate.ret.code = ENG_GETMSGFAILED;
+            popprocessstate.ret.code = ENG_POPCONNECTFAIL;
         }
 
-        (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, DefunctPOP);
+        (*callbacklist.statusfunc)(&popprocessstate.ret, callbacklist.statushandle, DefunctPOP);
       }
       break;
 
@@ -567,7 +596,7 @@ void DoPOPProcess(void)
         popprocessstate.changed = popprocessstate.processobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
-      if (state & (DISCONNECT | TIMEOUT | CHANGEUSER))
+      if (state & (DISCONNECT | TIMEOUT))
         POPAccountDisconnect();
 
       else
@@ -601,12 +630,6 @@ void DoPOPProcess(void)
       popstatus = acctcreated;
       if (state & TIMEOUT)
         state &= ~(PROCESSPOP + TIMEOUT);
-
-      else if (state & CHANGEUSER)
-      {
-        state &= ~PROCESSPOP;
-        changestate.context = disconnectsmtp;
-      }
 
       else if (state & DISCONNECT)
       {
@@ -717,7 +740,7 @@ void ReconcileMailbox(uint32 n)
 
   MessageDescriptor *nextptr, *msgptr;
   ELib_rcode rc;
-  uint32 i;
+  uint32 i, temp;
   Message::Flags flags;
   Message *obj;
   bool errorflag = false;
@@ -726,6 +749,15 @@ void ReconcileMailbox(uint32 n)
   /* check through our list to see if any are missing
      from mailbox's list, and destroy them */
 
+  temp = n;
+  msglist.Reset();  
+  while (temp--)
+  {
+    msglist.Next();
+    dprintf(("Eng", "Mailbox object at 0x%x\n",(Message *) msglist.Current()));
+  }
+
+
   msgptr = ourmboxin->list;
   while (msgptr)
   {
@@ -733,11 +765,11 @@ void ReconcileMailbox(uint32 n)
     if (!OnMboxList(msgptr->mboxobj, msglist, n))
     {
       /* must have been deleted so destroy descriptor */
-      dprintf(("Eng", "Deleting message %d not on mailbox list\n",msgptr->ID));
+      dprintf(("Eng", "Deleting message %d at 0x%x not on mailbox list, obj=0x%x, next = 0x%x, list = 0x%x\n",msgptr->ID,msgptr,msgptr->mboxobj,msgptr->next,ourmboxin->list));
       DestroyDescriptor(msgptr, ourmboxin);
     }
-    else
-      msgptr = nextptr;
+
+    msgptr = nextptr;
   }
 
   msglist.Reset();
@@ -770,6 +802,7 @@ void ReconcileMailbox(uint32 n)
         else
         {
           msgptr->mboxobj = obj;
+          dprintf(("Eng", "Setting mboxobj to 0x%x\n",obj));
           rc = obj->GetFlags(flags, Message::Set);
           dprintf(("Eng", "Flags=0x%x, rc=%d\n",flags,rc));
           if (rc >= 0)
