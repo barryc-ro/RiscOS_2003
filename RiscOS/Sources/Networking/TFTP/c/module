@@ -1,0 +1,213 @@
+#include <sys/types.h>
+#include <sys/errno.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <arpa/tftp.h>
+#include <netdb.h>
+
+#include <socklib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <swis.h>
+
+#include "TFTPhdr.h"
+#include "tftp.h"
+
+/* Generic Dynamic Area pumper */
+typedef struct area
+{
+    int num;
+    void *base;
+    int size;
+    int used;
+} area;
+
+static _kernel_oserror *pumptoda(const void *data, u_long offset, size_t len, void *handle)
+{
+    area *da = (area *) handle;
+    int moved;
+    _kernel_oserror *e;
+
+    if (offset + len > da->size)
+    {
+        e = _swix(OS_ChangeDynamicArea, _INR(0,1)|_OUT(1), da->num, offset + len - da->size, &moved);
+        if (e)
+        {
+            _inet_error = *e;
+            _inet_error.errnum = ERRORBASE + ENOSPACE;
+            return &_inet_error;
+        }
+        da->size += moved;
+    }
+
+    memcpy((char *)da->base + offset, data, len);
+
+    if (offset + len > da->used)
+        da->used = (int) offset + len;
+
+    return NULL;
+}
+
+/* Module loader */
+
+static _kernel_oserror *fetchmodule(const char *filename, struct in_addr server)
+{
+    struct area da;
+    _kernel_oserror *e;
+    u_long *module;
+
+    e = _swix(OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3),
+                              0, -1, 4, -1, 0x80,
+                              32*1024*1024, NULL, NULL,
+                              "TFTP buffer",
+                              &da.num, &da.base);
+    if (e) return e;
+
+    e = _swix(OS_ReadDynamicArea, _IN(0)|_OUT(1), da.num, &da.size);
+    if (e)
+        goto error;
+
+    da.used = 0;
+
+    /* Hackery to fool pumping routing to keep first word clear */
+    da.base = (char *) da.base + 4;
+    da.size -= 4;
+
+    e = tftpreadfile(filename, server, pumptoda, &da);
+    if (e)
+        goto error;
+
+    module = (u_long *) da.base;
+
+    if (module[1] & 0x80000000)
+    {
+        /* It's squeezed. Link directly in place, and the kernel will unsqueeze
+         * into RMA. Hacky, but better than the kernel copying into the RMA,
+         * then unsqueezing into another block of RMA.
+         */
+        module[-1] = da.used;
+        e = _swix(OS_Module, _INR(0,1), 10, module);
+    }
+    else
+    {
+        /* It's not squeezed. Copy into RMA in the normal fashion. */
+        e = _swix(OS_Module, _INR(0,2), 11, module, da.used);
+    }
+
+  error:
+    _swix(OS_DynamicArea, _INR(0,1), 1, da.num);
+
+    return e;
+}
+
+/* File loader */
+typedef struct fileinfo
+{
+    int file;
+    u_long pos;
+} fileinfo;
+
+static _kernel_oserror *pumptofile(const void *data, u_long offset, size_t len, void *handle)
+{
+    fileinfo *fi = (fileinfo *) handle;
+    _kernel_oserror *e;
+
+    if (offset != fi->pos)
+       if ((e=_swix(OS_Args, _INR(0,2)|_OUT(2), 1, fi->file, offset, &fi->pos)) != NULL)
+       {
+           _inet_error.errnum = ERRORBASE + ENOSPACE;
+           strcpy(_inet_error.errmess, e->errmess);
+           return &_inet_error;
+       }
+
+    if ((e=_swix(OS_GBPB, _INR(0,3)|_OUT(4), 2, fi->file, data, len, &fi->pos)) != NULL)
+        goto error;
+
+    return NULL;
+
+  error:
+    _inet_error.errnum = ERRORBASE + ENOSPACE;
+    strcpy(_inet_error.errmess, e->errmess);
+    return &_inet_error;
+}
+
+static _kernel_oserror *fetchfile(const char *filename, struct in_addr server, const char *local)
+{
+    fileinfo fi;
+    _kernel_oserror *e;
+
+    e = _swix(OS_Find, _INR(0,1)|_OUT(0), 0x80, local, &fi.file);
+    if (e) return e;
+
+    fi.pos = 0;
+
+    e = tftpreadfile(filename, server, pumptofile, &fi);
+
+    _swix(OS_Find, _INR(0,1), 0, fi.file);
+
+    if (e)
+        _swix(OS_File, _INR(0,1), 6, local);
+
+    return e;
+}
+
+static _kernel_oserror *name_to_addr(const char *server, struct in_addr *addr)
+{
+    addr->s_addr = inet_addr(server);
+    if (addr->s_addr == INADDR_NONE)
+    {
+        struct hostent *hp = gethostbyname(server);
+        if (!hp)
+        {
+            _inet_error.errnum = ERROR_UNKNOWNHOST;
+            strcpy(_inet_error.errmess, "Unknown host");
+            return &_inet_error;
+        }
+        memcpy(addr, hp->h_addr, sizeof *addr);
+    }
+
+    return NULL;
+}
+
+_kernel_oserror *tftp_command(const char *arg, int argc, int cmd_no, void *pw)
+{
+    char *buffer[64];
+    char **argv = buffer;
+    bool eflag = false;
+    struct in_addr addr;
+    _kernel_oserror *e;
+
+    argc = argc;
+    pw = pw;
+
+    e=_swix(OS_ReadArgs, _INR(0,3),
+                cmd_no == CMD_TFTPRead ? "e/s,/a,/a,/a" : "e/s,/a,/a",
+                arg, buffer, sizeof buffer);
+    if (e) return e;
+
+    if (*argv++)
+        eflag = true;
+
+    e = name_to_addr(argv[0], &addr);
+
+    if (!e)
+    {
+        switch (cmd_no)
+        {
+            case CMD_TFTPRead:
+                e = fetchfile(argv[1], addr, argv[2]);
+                break;
+            case CMD_TFTPLoadModule:
+                e = fetchmodule(argv[1], addr);
+                break;
+        }
+    }
+
+    if (e && eflag)
+    {
+        _kernel_setenv("Inet$Error", e->errmess);
+        e = NULL;
+    }
+
+    return e;
+}
