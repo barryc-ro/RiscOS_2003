@@ -4,7 +4,8 @@
 #
 # Paths
 #
-EXP_HDR = <CExport$Dir>.h
+EXP_H   = <CExport$Dir>.h
+EXP_HDR = <export$dir>.^.Interface2
 
 #
 # Generic options:
@@ -48,7 +49,7 @@ COMPONENT = NVRAM
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
 OBJS      = header.o module.o nvram.o msgfile.o parse.o trace.o
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   = ${EXP_H}.${COMPONENT} ${EXP_HDR}.${COMPONENT}
 RDIR      = ${RESDIR}.NVRAM
 
 #
@@ -105,7 +106,10 @@ rom_link:
 ${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
+${EXP_H}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
+
+${EXP_HDR}.${COMPONENT}: export.hdr.${COMPONENT}
+        ${CP} export.hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
