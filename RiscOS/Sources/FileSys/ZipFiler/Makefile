@@ -32,7 +32,7 @@ CPFLAGS = ~cfr~v
 COMPONENT  = ZipFiler
 TARGET     = rm.${COMPONENT}
 TARGETSA   = ${COMPONENT}
-SRC	   = s.${COMPONENT}
+SRC	   = s.${COMPONENT}AB
 SRCSA	   = s.standalone
 #
 # Generic rules:
@@ -103,25 +103,6 @@ rm.IZipFS: Hdr:FileCore
 rm.IZipFS: Hdr:Free
 rm.IZipFS: Hdr:IZipFS
 rm.IZipFS: Version
-ZipFiler: s.ZipFiler
-ZipFiler: s.ZipFilCore
-ZipFiler: s.AcornHdr
-ZipFiler: Hdr:ListOpts
-ZipFiler: Hdr:Macros
-ZipFiler: Hdr:System
-ZipFiler: Hdr:SWIs
-ZipFiler: Hdr:CPU.Generic26
-ZipFiler: Hdr:IO.GenericIO
-ZipFiler: Hdr:RISCOS
-ZipFiler: Hdr:ModHand
-ZipFiler: Hdr:Parallel
-ZipFiler: Hdr:Buffer
-ZipFiler: Hdr:Wimp
-ZipFiler: Hdr:ResourceFS
-ZipFiler: Hdr:MsgTrans
-ZipFiler: Hdr:Hourglass
-ZipFiler: Hdr:IZipFS
-ZipFiler: Version
 rm.ZipFiler: s.ZipFilCore
 rm.ZipFiler: s.AcornHdr
 rm.ZipFiler: Hdr:ListOpts
@@ -140,3 +121,22 @@ rm.ZipFiler: Hdr:MsgTrans
 rm.ZipFiler: Hdr:Hourglass
 rm.ZipFiler: Hdr:IZipFS
 rm.ZipFiler: Version
+ZipFiler: s.ZipFilerAB
+ZipFiler: s.ZipFilCore
+ZipFiler: s.AcornHdr
+ZipFiler: Hdr:ListOpts
+ZipFiler: Hdr:Macros
+ZipFiler: Hdr:System
+ZipFiler: Hdr:SWIs
+ZipFiler: Hdr:CPU.Generic26
+ZipFiler: Hdr:IO.GenericIO
+ZipFiler: Hdr:RISCOS
+ZipFiler: Hdr:ModHand
+ZipFiler: Hdr:Parallel
+ZipFiler: Hdr:Buffer
+ZipFiler: Hdr:Wimp
+ZipFiler: Hdr:ResourceFS
+ZipFiler: Hdr:MsgTrans
+ZipFiler: Hdr:Hourglass
+ZipFiler: Hdr:IZipFS
+ZipFiler: Version
