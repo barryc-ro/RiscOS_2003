@@ -86,7 +86,6 @@ ROM_OBJS =	\
  o.Module	\
  o.MoreInfo	\
  o.Options	\
- o.ParseURL	\
  o.Play		\
  o.Setup	\
  o.Session	\
@@ -108,7 +107,6 @@ RAM_OBJS =	\
  oSL.Module	\
  oSL.MoreInfo	\
  oSL.Options	\
- oSL.ParseURL	\
  oSL.Play	\
  oSL.Setup	\
  oSL.Session	\
@@ -130,7 +128,6 @@ DBG_OBJS =	\
  oSLd.Module	\
  oSLd.MoreInfo	\
  oSLd.Options	\
- oSLd.ParseURL	\
  oSLd.Play	\
  oSLd.Setup	\
  oSLd.Session	\
