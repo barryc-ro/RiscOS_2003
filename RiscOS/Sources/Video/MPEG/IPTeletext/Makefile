@@ -88,13 +88,13 @@ ${RAM_MODULE}: ${OBJS} ${CLIB} ${RESF} dirs
         @echo ${COMPONENT}: module built (disc).
 
 install: ${RAM_MODULE}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: module installed (disc).
 
 dirs:
         ${MKDIR} rm
         ${MKDIR} o
-        ${MKDIR} ${INSTDIR}
 
 
 #---------------------------------------------------------------------------
