@@ -1,0 +1,725 @@
+
+#include "kernel.h"
+#include "swis.h"
+#include "wimp.h"
+
+#include "porting.h"
+#include "ndsmsgr.h"
+#include "DebugLib/DebugLib.h"
+
+/* NCFresco Script message block */
+typedef struct
+{
+    unsigned int handle;
+    char         strng[MAX_MSG_LENGTH];
+} ncfresco_scriptmsg_data;
+
+typedef struct
+{
+    struct
+    {
+        int    size;
+        wimp_t sender;
+        int    my_ref;
+        int    your_ref;
+        int    action_code;
+    } hdr;
+
+    ncfresco_scriptmsg_data data;
+} ncfresco_scriptmsg;
+
+typedef struct
+{
+      int size;
+      wimp_t sender;
+      int my_ref;
+      int your_ref;
+      int action;
+      int reason_code;
+} browser_message;
+
+/* the following structures are used held in the following order.
+ *    - there exists one list of msgr_nds_structures.  There is a one to one relationship
+ *    between this structure and a javascript object, determined by its unique id string.
+ *    A registration for a string that already exists will repurpose the existing struct.
+ *
+ *    -  each msgr_nds_structure contains a list of one or more msgr_pid_structures this
+ *    one for each process which registers against that string_id and hence JS object.
+ *
+ *    -  within each p_id there is a list of messages that that process is yet to read. Note
+ *    that when the JS object sends a message that message will be duplicated for each p_id
+ *    and retained until that process reads it.  ( the usual case will be one process only ).
+ */
+typedef struct
+{
+      void*             next;
+      char              msg[4];
+} msgr_msg_struct;
+
+typedef struct
+{
+      void              *next;
+      msgr_msg_struct   *msgs;      
+      unsigned long     p_id;
+} msgr_pid_struct;
+
+typedef struct
+{
+      void             *next;
+      unsigned int     app_msgr_object_id;
+      wimp_t           task_num;
+      msgr_pid_struct *p_ids;
+      char             id_string[4];     
+} msgr_nds_struct;      
+
+static msgr_nds_struct *msgr_list = NULL;
+/* end of msgr structure lists */
+
+#ifndef DEBUGLIB
+#define msgr_malloc malloc
+#define msgr_calloc calloc
+#define msgr_free   free
+#else
+
+
+void  mem_check(void);
+void* msgr_malloc(size_t size);
+void* msgr_calloc(size_t n, size_t size);
+void  msgr_free(void* ptr);
+
+/* the following functions are for memory calculations they are done as part of 
+ * diagnostic builds to ensure that memory is not leaked in release builds.
+ */
+
+#define magic_value    (('M' << 24) + ('E' << 16) + ('M' << 8) + ('\0')) 
+#define fill_character 'h'
+#define extra_size     248
+#define initial_offset 124
+
+static int outstanding_data = 0;
+
+#if (initial_offset + 4) > extra_size
+#error offset must be less than the offset
+#endif
+
+static void mem_check(void)
+{
+    if (0 != outstanding_data)
+    {
+        dprintf(("","outstanding malloc (%i)\n", outstanding_data));
+    }
+    else
+    {
+        dprintf(("","outstanding malloc OK\n"));
+    }
+  
+}
+
+static void* msgr_malloc(size_t size)
+{
+  char* tmp = malloc(size + extra_size);
+  
+  memset(tmp, fill_character, size + extra_size);
+  
+  ((int*)tmp)[0] = magic_value;
+  
+  ((int*)tmp)[1] = size;
+  
+  outstanding_data += size;
+  
+  return (tmp + initial_offset);
+}
+
+static void* msgr_calloc(size_t n, size_t size)
+{
+    void* tmp = msgr_malloc(size);
+    
+    if (tmp)
+    {
+       memset(tmp, 0, size);
+    }
+    
+    return tmp;
+}
+
+static void msgr_free(void* ptr)
+{
+  if (NULL == ptr)
+  {
+      dprintf(("", "attempt to free a NULL pointer\n"));
+  }
+  else
+  {
+      char* tmp = ((char*)ptr - initial_offset);
+      int size = ((int*)tmp)[1];
+      
+      if (magic_value != ((int*)tmp)[0])
+      {
+          dprintf(("", "attempt to free an unallocated block\n"));
+      }
+      else
+      {
+          int i;
+          memset(ptr, fill_character, size);
+          
+          for (i=8; i < (size + extra_size); i++)
+          {
+              if (fill_character != tmp[i])
+              {
+                  if ((tmp[i] > '~') || (tmp[i] < ' '))
+                  {
+                      dprintf(("", "memory overwritten @ (%i) for size (%i) ASCII = (%i) \n", i, size, tmp[i]));
+                  }
+                  else
+                  {
+                      dprintf(("", "memory overwritten @ (%i) for size (%i)  char = (%c) \n", i, size, tmp[i]));
+                  }
+              }
+          }
+      }
+      outstanding_data -= size;
+      free (tmp);
+  }
+}
+#endif
+
+/* the following methods are the only means of allocating and freeing memory
+ * as used within the msgr database */
+/* add message to the end of a given message struct */
+static int add_msgr_msg(msgr_pid_struct* pid, const char* msg)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    
+    msgr_msg_struct *tmp = msgr_calloc(sizeof(msgr_msg_struct) + strlen(msg), sizeof(byte));
+    
+    if (tmp)
+    {
+        tmp->next = (msgr_msg_struct*)pid->msgs;
+        strcpy(tmp->msg, msg);
+        
+        pid->msgs = tmp;        
+        
+        ret_val = NDS_OS_STATUS_OK;
+    }
+    return ret_val;
+}
+
+/* this removes the message at the head of the tail of the chain.  I.e. the one that
+ * has been there for the longest. */
+static int return_disconnected_top_msgr_msg(msgr_pid_struct* pid, msgr_msg_struct **rem_msg)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    
+    if (NULL != pid->msgs)
+    {
+        void **tmp = (void**)&(pid->msgs);
+        
+        while (NULL != (*tmp))
+        {            
+            /* if tmp points to the pointer to the last message */
+            if (NULL == (((msgr_msg_struct*)(*tmp))->next))
+            {
+                (*rem_msg) = (msgr_msg_struct*)(*tmp);        
+        
+                (*tmp) = NULL;
+                
+                ret_val = NDS_OS_STATUS_OK;
+                
+                break;
+            }
+            else
+            {
+                tmp = (void**)&((msgr_msg_struct*)(*tmp))->next;
+            }
+        }
+        
+    }
+    return ret_val;
+}
+
+/* delete all msgr_msgrs in the list for each pid */
+static int delete_msgr_msgs(msgr_pid_struct* pid)
+{
+    void *tmp = (void*)(pid->msgs);
+    void *tmp2 = tmp;
+    
+    while (NULL != tmp)
+    {
+        tmp2 = ((msgr_msg_struct*)tmp)->next;
+        ((msgr_msg_struct*)tmp)->next = NULL;
+        
+        msgr_free(tmp);
+        
+        tmp = tmp2;
+    }
+    
+    pid->msgs = NULL;
+    
+    return NDS_OS_STATUS_OK;
+}
+
+static int add_msgr_pid(msgr_nds_struct *idstr, unsigned long p_id, msgr_pid_struct** ret_ptr)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    msgr_pid_struct *tmp = msgr_calloc(sizeof(msgr_pid_struct), sizeof(byte));
+    
+    if (tmp)
+    {
+        tmp->p_id = p_id;
+        tmp->next = (void*)idstr->p_ids;
+        
+        idstr->p_ids = tmp;
+        
+        (*ret_ptr) = (msgr_pid_struct*)tmp;
+        
+        ret_val = NDS_OS_STATUS_OK;
+    }
+    
+    return ret_val;
+}
+
+static int remove_msgr_pid(msgr_nds_struct *idstr, unsigned int msgr_handle)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;    
+    void **tmp = (void**)&(idstr->p_ids);
+    
+    while (NULL != (*tmp))
+    {
+        if (msgr_handle == ((unsigned int)(*tmp)))
+        {
+            break;
+        }
+          
+        tmp = &(((msgr_pid_struct*)(*tmp))->next);
+    }
+    
+    if (NULL != (*tmp))
+    {
+        void* tmp2 = (*tmp);
+        
+        (*tmp) = ((msgr_pid_struct*)(*tmp))->next;
+        
+        ((msgr_pid_struct*)tmp2)->next = NULL;
+        
+        msgr_free(tmp2);
+        
+        ret_val = NDS_OS_STATUS_OK;
+    }
+    
+    return ret_val;
+}
+
+static int delete_msgr_pids(msgr_nds_struct *idstr)
+{    
+    void *tmp = (void*)(idstr->p_ids);
+    void *tmp2 = tmp;
+    
+    while (NULL != tmp)
+    {
+        tmp2 = ((msgr_pid_struct*)(tmp))->next;
+        ((msgr_pid_struct*)tmp)->next = NULL;
+        
+        delete_msgr_msgs(tmp);
+        
+        msgr_free(tmp);
+        
+        tmp = tmp2;
+    }
+    
+    idstr->p_ids = NULL;
+    
+    return NDS_OS_STATUS_OK;
+}
+
+static int send_message_by_nds_struct(msgr_nds_struct* o_id, const char* message_string)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    
+    if ((NULL != o_id) &&
+        (o_id->task_num != 0))
+    {
+        ncfresco_scriptmsg msg;
+                         
+        memset(&msg, 0, sizeof(ncfresco_scriptmsg));
+        
+        memcpy(msg.data.strng, message_string, MAX_MSG_LENGTH);
+                
+        msg.hdr.action_code = ANT_MScriptSend;
+        msg.hdr.size = sizeof(msg.hdr) + sizeof(msg.data.handle) + strlen(msg.data.strng) +1;
+        msg.hdr.size = ((msg.hdr.size) + 3) & ~3;
+        
+        msg.data.handle = o_id->app_msgr_object_id;
+                         
+        wimp_send_message(wimp_USER_MESSAGE, (wimp_message*)&msg, o_id->task_num);
+        
+        ret_val = NDS_OS_STATUS_OK;
+    }
+    
+    return ret_val;
+}
+
+/* this method looks for a string if it exists it returns it     */
+/* if it fails to find it it creates a new one                   */
+/* it is the responsability of the caller to set ret_ptr to NULL */
+static int find_or_add_id_string_struct(const char* id_string, msgr_nds_struct** ret_ptr)
+{    
+    int ret_val = NDS_OS_STATUS_FAIL;
+    void **tmp = (void**)&msgr_list;
+    
+    while (NULL != (*tmp))
+    {
+        if (0 == strcmp(id_string, ((msgr_nds_struct*)(*tmp))->id_string))
+        {
+            (*ret_ptr) = (msgr_nds_struct*)(*tmp);
+            
+            ret_val = NDS_OS_STATUS_OK;
+            
+            break;
+        }
+        
+        tmp = &((msgr_nds_struct*)(*tmp))->next;
+    }
+
+    if (NULL == (*tmp))
+    {
+        msgr_nds_struct *tmp2 = msgr_calloc(sizeof(msgr_nds_struct)+strlen(id_string), sizeof(byte));      
+        
+        if (tmp2)
+        {
+            strcpy(tmp2->id_string, id_string);
+            
+            tmp2->next = (*tmp);
+            
+            tmp2->task_num = 0;
+            tmp2->app_msgr_object_id = -1;
+            
+            (*tmp) = (void*)tmp2;
+            
+            (*ret_ptr) = (msgr_nds_struct*)(tmp2);
+            
+            ret_val = NDS_OS_STATUS_OK;
+        }
+    }
+    
+    return ret_val;
+}
+
+static int remove_id_string_struct(const char* id_string)
+{   
+    int ret_val = NDS_OS_STATUS_FAIL;
+    
+    void **tmp = (void**)&msgr_list;
+    
+    while (NULL != (*tmp))
+    {
+        if (0 == strcmp(id_string, ((msgr_nds_struct*)(*tmp))->id_string))
+        {
+            /* this is a failure case as it already exists */
+            break;
+        }
+        
+        tmp = &((msgr_nds_struct*)(*tmp))->next;
+    }
+
+    if (NULL != (*tmp))
+    {
+        void *tmp2 = (*tmp);
+        
+        (*tmp) = ((msgr_nds_struct*)(*tmp))->next;
+        ((msgr_nds_struct*)(*tmp))->next = NULL;
+        
+        delete_msgr_pids(tmp2);
+        
+        msgr_free(tmp2);
+        
+        ret_val = NDS_OS_STATUS_OK;
+    }
+      
+    return ret_val;
+}
+
+static int delete_id_string_structs(void)
+{
+    int ret_val = NDS_OS_STATUS_OK;
+    
+    while (NULL != msgr_list)
+    {
+        ret_val = remove_id_string_struct(msgr_list->id_string);
+        
+        if (NDS_OS_STATUS_FAIL == ret_val)
+        {
+            break;           
+        }
+    }
+    return ret_val;
+}
+
+static int assign_js_object_by_string(const char* id_string, wimp_t task, unsigned int handle)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    msgr_nds_struct* tmp = msgr_list;
+    
+    while (tmp) 
+    {
+        if (0 == strcmp(tmp->id_string, id_string))
+        {
+            tmp->task_num           = task;
+            tmp->app_msgr_object_id = handle;
+            
+            ret_val = NDS_OS_STATUS_OK;
+            break;
+        }
+        
+        tmp = (msgr_nds_struct*)tmp->next;
+    }
+    return ret_val;
+}
+
+static int assign_message_by_handle_and_task(const char* message, wimp_t task, unsigned int handle)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    msgr_nds_struct* tmp = msgr_list;
+    
+    while (NULL != tmp) 
+    {
+        if ((tmp->task_num == task)&&
+            (tmp->app_msgr_object_id == handle))
+        {
+            msgr_pid_struct* pid_ptr = tmp->p_ids;
+            
+            while (NULL != pid_ptr)
+            {
+                ret_val = add_msgr_msg(pid_ptr, message);
+                
+                if (NDS_OS_STATUS_OK == ret_val)
+                {
+                    ret_val = NDS_OS_Send_Message (pid_ptr->p_id, (unsigned long)pid_ptr);
+                }
+                    
+                if (NDS_OS_STATUS_FAIL == ret_val)
+                {
+                    break;
+                }
+            }
+            
+            break;
+        }
+        
+        tmp = (msgr_nds_struct*)tmp->next;
+    }
+    return ret_val;
+}
+
+/* this method is used to determine if a passed handle is valid */
+/* if speed becomes an issue this could be 'debugged' out such */
+/* that these checks are only done in a diagnostic build       */
+
+static int msgr_handle_to_js_object_id(unsigned int msgr_handle, msgr_nds_struct** o_ptr)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    
+    void *nds_struct_ptr = (void*)msgr_list;
+    void *pid_struct_ptr = NULL;
+    
+    while (NULL != nds_struct_ptr)
+    {
+        pid_struct_ptr = (void*)((msgr_nds_struct*)nds_struct_ptr)->p_ids;
+        
+        while (NULL != pid_struct_ptr)
+        {
+            if (msgr_handle == (unsigned int)pid_struct_ptr)
+            {
+                if (NULL != o_ptr)
+                {
+                    (*o_ptr) = (msgr_nds_struct*)nds_struct_ptr;
+                }
+                ret_val = NDS_OS_STATUS_OK;
+                break;
+            }
+            
+            pid_struct_ptr = ((msgr_pid_struct*)pid_struct_ptr)->next;
+        }
+          
+        if (NDS_OS_STATUS_OK == ret_val)
+        {
+            break;
+        }
+        
+        nds_struct_ptr = ((msgr_nds_struct*)nds_struct_ptr)->next;
+    }
+    
+    return ret_val;
+}
+
+/* end of database memory allocation/deallocation methods */
+
+int msgr_register_handler(int *block)
+{
+    ncfresco_scriptmsg* data = (ncfresco_scriptmsg*)block;
+    ncfresco_scriptmsg msg;
+    
+    memset(&msg, 0, sizeof(ncfresco_scriptmsg));
+    
+    if (NDS_OS_STATUS_OK == 
+            assign_js_object_by_string(data->data.strng,
+                                       data->hdr.sender,
+                                       data->data.handle))
+    {
+        msg.hdr.your_ref = data->hdr.my_ref;
+        msg.data.handle = data->data.handle;
+        
+        sprintf(msg.data.strng, thread_manager_task_name);
+        
+        msg.hdr.size = sizeof(msg.hdr)
+                       + sizeof(msg.data.handle)
+                       + strlen(thread_manager_task_name)
+                       + 1;
+        
+        msg.hdr.size = (msg.hdr.size+3) & ~3;
+        msg.hdr.action_code = ANT_MScriptRegister;
+        
+        wimp_send_message(wimp_USER_MESSAGE, (wimp_message*)&msg,  data->hdr.sender);
+        
+        dprintf(("","got registration event from (%p) object (0x%x) (%s)\n",
+                                data->hdr.sender, data->data.handle, data->data.strng));
+    }
+
+    return NDS_OS_STATUS_OK;
+}
+
+/* JavaScript -> application pipe
+   This is a message directly from the javascript object using the send method.  This 
+   should be used as a pipe directly to the application from the JavaScript.  This is
+   used by this application as appending a new message to all registered pids and sending
+   a message to that process to note the messages arrival
+ */   
+int msgr_send_handler(int* block)
+{
+    ncfresco_scriptmsg* data = (ncfresco_scriptmsg*)block;
+    
+    assign_message_by_handle_and_task(data->data.strng, data->hdr.sender, data->data.handle);
+    
+    dprintf(("", "got JSMessage handle (%d)\nmsg (%s)\n", data->handle, data->strng));
+    
+    return NDS_OS_STATUS_OK;
+}
+
+int NDS_OS_AppMsgr_TidyUp(void)
+{
+    int ret_val = NDS_OS_STATUS_OK;
+#ifdef DEBUGLIB  
+    
+    ret_val = delete_id_string_structs();  
+    
+    if (msgr_list)
+    {
+        dprintf(("msgr", "AppMsgr_TidyUp is deleting objects left behind (error?(%d))\n", (ret_val == NDS_OS_STATUS_FAIL)));
+    }
+    
+    mem_check();
+#else
+    ret_val = delete_id_string_structs();
+#endif
+    
+    return ret_val;
+}
+
+int NDS_OS_AppMsgr_Register(const char* id_string, unsigned long p_id, unsigned int *msgr_handle)
+{
+    int ret_val = NDS_OS_STATUS_OK;
+    msgr_nds_struct* nds_ptr = NULL;
+    
+    ret_val = find_or_add_id_string_struct(id_string, &nds_ptr);
+    
+    if (NDS_OS_STATUS_OK == ret_val)
+    {    
+        if (NULL != nds_ptr)
+        {
+            msgr_pid_struct* pid_ptr = NULL;
+            
+            ret_val = add_msgr_pid(nds_ptr, p_id, &pid_ptr);
+            
+            (*msgr_handle) = (unsigned int)pid_ptr;
+        }
+    }
+    
+    return ret_val;    
+}
+
+int NDS_OS_AppMsgr_Deregister(unsigned int msgr_handle)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    void *tmp = (void*)&msgr_list;
+    
+    while (NULL != tmp)
+    {
+         ret_val = remove_msgr_pid((msgr_nds_struct*)tmp, msgr_handle);
+         
+         if (ret_val == NDS_OS_STATUS_OK)
+         {            
+            /* if that was the only one for this string */
+            if (NULL == ((msgr_nds_struct*)tmp)->p_ids)
+            {
+                ret_val = remove_id_string_struct(((msgr_nds_struct*)tmp)->id_string);
+            }
+            break;
+        }        
+        tmp = ((msgr_nds_struct*)tmp)->next;
+    }
+    return ret_val;
+}
+
+int NDS_OS_AppMsgr_Read(unsigned int msgr_handle, char message_string[MAX_MSG_LENGTH])
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    
+    ret_val = msgr_handle_to_js_object_id(msgr_handle, NULL);
+    
+    if (NDS_OS_STATUS_OK == ret_val)
+    {
+       msgr_pid_struct* pid_ptr = (msgr_pid_struct*)msgr_handle;
+       msgr_msg_struct* msg_ptr = NULL;
+       
+       ret_val =  return_disconnected_top_msgr_msg(pid_ptr, &msg_ptr);       
+       
+       if (NDS_OS_STATUS_OK == ret_val)
+       {
+           memcpy(message_string, msg_ptr->msg, MAX_MSG_LENGTH);
+           msgr_free(msg_ptr);
+       }
+    }
+    return ret_val;
+}
+
+int NDS_OS_AppMsgr_Send(unsigned int msgr_handle, const char* message_string)
+{
+    int ret_val = NDS_OS_STATUS_FAIL;
+    msgr_nds_struct* o_id;
+    
+    ret_val = msgr_handle_to_js_object_id(msgr_handle, &o_id);
+    
+    if (NDS_OS_STATUS_OK == ret_val)
+    {
+        ret_val = send_message_by_nds_struct(o_id, message_string);
+    }
+    
+    return ret_val;
+}
+
+int NDS_OS_AppMsgr_Broadcast(const char* message_string)
+{
+    int ret_val = NDS_OS_STATUS_OK;
+    void **tmp = (void**)&msgr_list;
+    
+    while (NULL != (*tmp))
+    {
+        ret_val = send_message_by_nds_struct((msgr_nds_struct*)(*tmp), message_string);
+        
+        if (NDS_OS_STATUS_FAIL == ret_val)
+            break;
+               
+        tmp = &((msgr_nds_struct*)(*tmp))->next;
+    }
+    
+    return ret_val;
+}

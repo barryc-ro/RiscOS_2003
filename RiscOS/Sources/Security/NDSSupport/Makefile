@@ -6,7 +6,7 @@
 COMPONENT = NDSVerifier
 TARGET    = ${COMPONENT}
 DIRS      = o._dirs
-OBJS      = o.modhead o.ndssupport o.cstart o.ndsstubs o.ndcport
+OBJS      = o.modhead o.ndssupport o.cstart o.ndsmsgr o.ndsstubs o.ndcport
 BASE_LIBS = ${CLIB} ${TBOXLIBS} ${DEBUGLIB} ${NET5LIBS} ${CALLXLIB}
 LIBS      = ${BASE_LIBS} lib.VER_LIB lib.math_lib
 
