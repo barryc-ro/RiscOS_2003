@@ -127,7 +127,7 @@ all: ${TARGET}
 
 ${TARGET}: ${OBJS} ${CLIB}
         ${LD} -c++ -rmf -o $@ ${OBJS} ${CLIB}
-        |${MODSQZ} $@
+        ${MODSQZ} $@
         Access $@ WR/r
 
 rom: ${ROM_MODULE}
