@@ -22,6 +22,40 @@
 #include "client.h"
 #include "utils.h"
 
+/*
+   When to do a force_to_plain()? Cannot just be done in close, because if
+the close causes a stop, the file is still open by replay and cannot be
+forced to plain.
+
+   Problem: we need for Replay to exit of its own accord, but any memory
+we leave is owned only by that callback after the closed(). (The parent
+plugin structure has been freed when the closed is called.)
+
+   opened -> multi_start -> closedown (turn to image file now)
+          -> multi_start -> close 
+          -> multi_start -> stop -> close
+          
+   Separate replay_multi_end() into 2: replay_multi_closedown() called when
+replay has already gone away; replay_multi_stop() called to stop replay.
+Calling stop() will therefore cause closedown() to be called later.
+
+   In closedown() we would just force the file to plain (and free its memory?).
+
+   A plugin is tidied up when close() is called so we must leave no trace
+after that.
+
+   Just leave the closedown handler around? Can't because crp might be
+deleted before it comes back. Change it not to use that? Can't be done (sends
+a message to the browser using plugin).
+
+   Special code?
+   
+   Can we even tell if Replay is still around? Yes---crp->replay != NULL. So
+in close(), if crp->replay != NULL, we could queue a special message on
+wimp_NULL_REASON_CODE that will force the file closed.
+
+ */
+
 /* ----------------------------------------------------------------------
  * CONSTANTS
  * ----------------------------------------------------------------------
@@ -335,6 +369,26 @@ static void process_tag_params(pluginclient_instance *plugin, client_replay_ptr 
 
 } /* process_tag_params */
 
+/*If FileSwitch has opened the file as a directory (on behalf of MovieFS), we
+   have to force it to close it by opening the file as a plain file and
+   closing it again. JRC 16 Jul 1997*/
+
+static void force_to_plain (char *file_name)
+{
+   FILE *file;
+
+   TRACE3 ("+force_to_plain");
+
+   if ((file = fopen (file_name, "r")) != NULL)
+   {
+      TRACE2 ("image file now plain again\n");
+      (void) fclose (file);
+   }
+   else
+      TRACE1 ("image file couldn't be forced back to plain\n");
+
+   TRACE3 ("-force_to_plain");
+}
 
 static _kernel_oserror *show_own_window(ObjectId window_handle, const char *file_name,
       int *windowx, int *windowy)
@@ -492,6 +546,7 @@ static _kernel_oserror *replay_multi_start(client_replay_ptr crp)
    char buffer [256];
    BOOL done_register_message_handler = FALSE;
    BOOL done_register_wimp_handler    = FALSE;
+   BOOL fileswitch_opened_image_file  = FALSE;
 
    TRACE2 ("+replay_multi_start\n");
 
@@ -522,7 +577,9 @@ static _kernel_oserror *replay_multi_start(client_replay_ptr crp)
       /* Check for MovieFS Error file */
       sprintf (extra_args, "%s.Error", crp->file_name);
       temp_file = fopen (extra_args, "r");
- 
+      fileswitch_opened_image_file = TRUE; /*FileSwitch opens the image file regardless of
+            whether the file within exists or not. JRC 16 Jul 1997*/
+
       if (temp_file != NULL) /* error file exists! */
       {
          TRACE5 ("%s found\n" _ extra_args);
@@ -722,8 +779,15 @@ finish:
             (void) event_deregister_wimp_handler (crp->wimp_window, Wimp_EOpenWindow,
                   client_replay_open_win_handler, crp->replay);
 
+         if (fileswitch_opened_image_file)
+            /*If FileSwitch has opened the file as a directory (on behalf of
+               MovieFS), we have to force it to close it by opening the file
+               as a plain file and closing it again. JRC 16 Jul 1997*/
+            force_to_plain (crp->file_name);
+
          if (crp->replay->rma != NULL)
             m_RMA_FREE (crp->replay->rma, sizeof *crp->replay->rma);
+
          m_FREE (crp->replay, sizeof *crp->replay);
 
          crp->replay = NULL;
@@ -743,7 +807,7 @@ finish:
 static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_browser)
 {
    pluginclient_instance *plugin;
-   WimpMessage message;
+   WimpMessage            message;
 
    TRACE2 ("+replay_multi_end\n");
    m_ASSERT (crp->replay != NULL);
@@ -804,7 +868,7 @@ static int client_replay_closedown_handler(WimpMessage *message, void *handle)
       if (crp->replay->replay_task == message->hdr.sender)
       {
          replay_multi_end (crp, /*tell_browser?*/ TRUE);
-
+   
          TRACE2 ("-client_replay_closedown_handler\n");
          return 1;
       } /* if */
@@ -830,6 +894,32 @@ static int client_replay_open_win_handler(int event_code, WimpPollBlock *event,
     TRACE2 ("-client_replay_open_win_handler\n");
     return 1;
 } /* client_replay_open_win_handler */
+
+/* Function to be registered for 1 call when a file has to be forced to
+   plain.*/
+
+static int force_to_plain_handler (int event_code, WimpPollBlock *event,
+      IdBlock *id_block, void *handle)
+{
+   char *file_name = (char *) handle;
+
+   TRACE2 ("+force_to_plain_handler: file_name %s\n" _ file_name);
+   m_ASSERT (event_code == Wimp_ENull);
+   NOT_USED (event_code), NOT_USED (event), NOT_USED (id_block);
+
+   /*Deregister ourselves.*/
+   (void) event_deregister_wimp_handler (-1, Wimp_ENull,
+         &force_to_plain_handler, file_name);
+
+   /*Do our work.*/
+   force_to_plain (file_name);
+
+   /*Don't leave unfreed memory.*/
+   m_FREE (file_name, strlen (file_name) + 1);
+
+   TRACE2 ("-force_to_plain_handler\n");
+   return 1;
+} /* force_to_plain_handler */
 
 /* ----------------------------------------------------------------------
  * INSTANCE INITIALISATION FUNCTIONS
@@ -889,18 +979,39 @@ static _kernel_oserror *client_replay_close(client_ptr *cp)
    TRACE2("+client_replay_close(): crp %p\n" _ crp);
 
    if (crp->replay != NULL)
+   {
+      if (crp->file_type != osfile_TYPE_ARMOVIE)
+         /*Queue a message to make sure the file gets closed. If we don't
+            have the memory to close it, it just stays open. This is bad,
+            but as far as I can see, unavoidable. JRC 17 Jul 1997*/
+         if (event_register_wimp_handler (-1, Wimp_ENull,
+               &force_to_plain_handler, crp->file_name) != NULL)
+            /*Memory used for file_name is now owned by
+               force_to_plain_handler().*/
+            crp->file_name = NULL;
+
       replay_multi_end (crp, /*don't tell browser, as higher layer should
             know we're stopping*/ FALSE);
+   }
+   else
+   {
+      /*Replay not running---we can force the file back to plain now (if
+         there ever was one).*/
+      if (crp->file_name != NULL)
+      {
+         if (crp->file_type != osfile_TYPE_ARMOVIE)
+            force_to_plain (crp->file_name);
 
-   if (crp->file_name != NULL)
-      m_FREE(crp->file_name, strlen (crp->file_name) + 1);
+         m_FREE (crp->file_name, strlen (crp->file_name) + 1);
+      }
+   }
 
    m_FREE(crp, sizeof *crp);
 
    *cp = NULL;
 
    TRACE2("-client_replay_close()\n");
-  return NULL;
+   return NULL;
 } /* client_replay_close */
 
 static _kernel_oserror *client_replay_set_window(client_ptr cp, ObjectId window_handle,
@@ -1052,7 +1163,6 @@ static _kernel_oserror *client_replay_idle(client_ptr cp)
   TRACE3 ("-client_replay_idle\n");
   return NULL;
 } /* client_replay_idle */
-
 
 /* ----------------------------------------------------------------------
  * INSTANCE EVENT HANDLERS FOR SCREEN EVENTS
