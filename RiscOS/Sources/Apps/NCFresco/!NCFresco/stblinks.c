@@ -677,7 +677,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
     else				/* no frames */
     {
 	/* try and find link on page */
-	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
+	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP_H)) != NULL)
 	{
 /* 	    v->current_link = new_link; */
 	    STBDBG(("fe_move_highlight_xy: no frames v %p new link %p\n", v, new_link));
@@ -697,22 +697,31 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    }
 	}
 
-	if (v->displaying && v->scrolling != fe_scrolling_NO)
+	if (v->displaying)
 	{
-	    if (flags & be_link_VERT)
-		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);
-	    else
-		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, 0);
-
-	    if (scrolled)
+	    if (v->scrolling != fe_scrolling_NO)
 	    {
-		if ((new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
-		{
-/* 		    v->current_link = new_link; */
-		}
+		if (flags & be_link_VERT)
+		    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);
+		else
+		    scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, 0);
 
-		/* return if scrolled whether or not new link found */
-		STBDBG(("fe_move_highlight_xy: no frames v %p scrolled new link %p\n", v, new_link));
+		if (scrolled)
+		{
+		    if ((new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP_H)) != NULL)
+		    {
+/* 		    v->current_link = new_link; */
+		    }
+
+		    /* return if scrolled whether or not new link found */
+		    STBDBG(("fe_move_highlight_xy: no frames v %p scrolled new link %p\n", v, new_link));
+		    return;
+		}
+	    }
+
+	    if ((new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
+	    {
+		STBDBG(("fe_move_highlight_xy: no frames v %p h wrapped new link %p\n", v, new_link));
 		return;
 	    }
 	}
@@ -761,7 +770,7 @@ int fe_ensure_highlight(fe_view v, int flags)
     {
 	backend_highlight_link(v->displaying, backend_read_highlight(v->displaying, NULL),
 			       (flags & be_link_BACK) | be_link_VISIBLE | be_link_INCLUDE_CURRENT |
-			       caretise() | movepointer() | be_link_DONT_FORCE_ON);
+			       /* caretise() |  */movepointer() | be_link_DONT_FORCE_ON);
     }
     return 0;
 }

@@ -15,6 +15,7 @@ typedef int access_complete_flags;
 #define access_CACHE	0x01
 #define access_KEEP	0x02
 #define access_OURS	0x04	/* Take the cache entry out but don't delete the file */
+#define access_LOCK	0x08	/* Keep the file locked until we unlock it explicitly */
 
 typedef int access_url_flags;
 #define access_NOCACHE		0x01

@@ -623,6 +623,8 @@ os_error *file_lock(const char *file_name, int lock)
     os_filestr fs;
     os_error *e;
 
+/*  DBG(("file_lock: %d %s\n", lock, file_name)); */
+    
     fs.action = 17;
     fs.name = (char *)file_name;
 
@@ -632,6 +634,7 @@ os_error *file_lock(const char *file_name, int lock)
 	int new_attr = lock ? (fs.end | 8) : (fs.end &~ 8);
 	if (new_attr != fs.end)
 	{
+	    fs.action = 4;
 	    fs.end = new_attr;
 	    e = os_file(&fs);
 	}
@@ -948,6 +951,13 @@ char *get_plugin_type_name(int ftype)
     if (!s)
 	s = get_file_type_name(ftype);
     return s;
+}
+
+int get_free_memory_size(void)
+{
+    int free;
+    _swix(Wimp_SlotSize, _INR(0,1) | _OUT(2), -1, -1, &free);
+    return free;
 }
 
 /*****************************************************************************/

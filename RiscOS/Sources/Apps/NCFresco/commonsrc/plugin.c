@@ -17,6 +17,10 @@
 #include "pluginfn.h"
 #include "verstring.h"
 
+#ifndef LOCK_FILES
+#define LOCK_FILES 0
+#endif
+
 /* ----------------------------------------------------------------------------- */
 
 typedef enum
@@ -448,7 +452,9 @@ static void remove_parameter_file(plugin_private *pp)
     {
 	OBJDBG(("plugin: remove parameter file '%s'\n", pp->parameter_file));
 
+#if LOCK_FILES
 	file_lock(pp->parameter_file, FALSE);
+#endif
 	remove(pp->parameter_file);
 	mm_free(pp->parameter_file);
 	pp->parameter_file = NULL;
@@ -1119,8 +1125,10 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
     plugin_write_parameter_file(f, obj, doc ? BASE(doc) : NULL);
     mmfclose(f);
 
+#if LOCK_FILES
     file_lock(pp->parameter_file, TRUE);
-
+#endif
+    
     /* copy useful values out of 'obj' */
     pp->objd.classid = strdup(obj->classid);
     pp->objd.data = strdup(obj->data);
@@ -1158,7 +1166,13 @@ void plugin_destroy(plugin pp)
 	mm_free(pp->objd.data);
 
 	/* free helper info */
-	mm_free(pp->helper.cfile);
+	if (pp->helper.cfile)
+	{
+#if LOCK_FILES
+	    file_lock(pp->helper.cfile, FALSE);
+#endif
+	    mm_free(pp->helper.cfile);
+	}
 
 	/* unlink from list */
 	unlink(&plugin_list, pp);
@@ -1210,6 +1224,7 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *pa
 
 	pp->priv_flags |= plugin_priv_HELPER;
 
+/* 	file_lock(cfile, TRUE); */
 	plugin_send_open(pp, NULL, plugin_open_HELPER);
     }
     
@@ -1252,6 +1267,60 @@ void plugin_get_info(plugin pp, int *flags, int *state)
 	*state = pp->state;
     }
 }
+
+/* ----------------------------------------------------------------------------- */
+
+/* We pass the size of the file in here but the memory will already
+ * have been allocated for it so we only want to know if there is
+ * enough memory free in the rest of the system
+ */
+
+BOOL plugin_is_there_enough_memory(int ft, int size)
+{
+    int free;
+    int extra = 0;
+
+    /* if we don't know the size then we have to say yes */
+    if (size = -1)
+	return TRUE;
+
+    extra += 32*1024;		/* for CodecCtl */
+    switch (ft)
+    {
+    case 0xae7:			/* video replay */
+    case 0xfb1:
+	extra += 512*1024;
+	break;
+
+    case 0xfb2:			/* audio replay */
+    case 0xfc2:
+    case 0xf88:
+	extra += 128*1024;
+	break;
+
+    case 0xfd4:			/* MIDI */
+	extra += 128*1024;
+	break;
+    }
+
+    free = get_free_memory_size();
+
+    return extra <= free;
+}
+
+/* ----------------------------------------------------------------------------- */
+
+#if DEBUG
+void plugin_dump(void)
+{
+    plugin pp;
+    for (pp = plugin_list; pp; pp = pp->next)
+    {
+	DBG(("plugin: %p: state %d %s task %x cfile '%s'\n",
+	     pp, pp->state, pp->priv_flags & plugin_priv_HELPER ? "helper" : "embed", pp->task, strsafe(pp->helper.cfile)));
+    }
+}
+#endif
 
 /* ----------------------------------------------------------------------------- */
 
@@ -1303,7 +1372,11 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		if ((opening->flags & plugin_opening_NEED_FILE) == 0)
 		    remove_parameter_file(pp);
 		else
+		{
+#if LOCK_FILES
 		    file_lock(pp->parameter_file, FALSE);
+#endif
+		}
 
 		switch (pp->state)
 		{

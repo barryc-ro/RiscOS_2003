@@ -225,7 +225,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     char *referer = NULL, *title = NULL;
     int oflags;
 
-    STBDBG(("frontend_open_url '%s' in window '%s' parent v%p '%s' flags %x\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : "", flags));
+    DBG(("frontend_open_url '%s' in window '%s' parent v%p '%s' flags %x\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : "", flags));
 
     if (target && parent)
     {
@@ -338,8 +338,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	    /* 30Jun97 added frame and fetching_data check*/
 	    if (top->fetching_data.hist)
 	    {
-		top->hist_at = parent->fetching_data.hist;
+		top->hist_at = top->fetching_data.hist;
 		top->fetching_data.hist = NULL;
+		DBG(("history: v%p top%p set hist_at to %p\n", parent, top, top->hist_at));
 	    }
 	    else if ((flags & fe_open_url_FROM_FRAME) == 0)
 	    {
@@ -556,6 +557,8 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
     view->magic = ANTWEB_VIEW_MAGIC;
 
+    view->pending_user = -1;
+    
     if (config_defer_images)
 	view->flags |= be_openurl_flag_DEFER_IMAGES;
     if (config_display_antialias)

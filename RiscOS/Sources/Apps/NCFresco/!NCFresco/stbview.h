@@ -163,6 +163,9 @@ struct _frontend_view
     char *real_url;		/* with NCOPTIONS pages this will give the url to put in the history list */
     int offline_mode;
     int external_open;		/* opened from an external message */
+
+    int pending_user;
+    char *pending_user_name;
 };
 
 /* ----------------------------------------------------------------------------- */

@@ -4511,7 +4511,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 static access_complete_flags antweb_doc_complete(void *h, int status, char *cfile, char *url)
 {
     antweb_doc *doc = (antweb_doc *) h;
-    int ft;
+    int ft, r;
 
     frontend_view_status(doc->parent, sb_status_PROGRESS, status);
 
@@ -4552,10 +4552,11 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 #ifndef BUILDERS
 	frontend_view_visit(doc->parent, NULL, url,
-/* 			    status == status_BAD_FILE_TYPE ? */
-			    status != status_FAIL_DNS ?
-			    (char *)makeerror(ERR_UNSUPORTED_SCHEME) :			/* cannot display the web page */
-			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile));	/* cannot find the web page */
+			    status == status_FAIL_LOCAL ?
+			    (char *)makeerror(ERR_NO_DISC_SPACE) :			/* local error (probably out of disc space) */
+			    status == status_FAIL_DNS ?
+			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile) :/* cannot find the web page */
+			    (char *)makeerror(ERR_UNSUPORTED_SCHEME));			/* cannot display the web page */
 #endif
 
 	backend_dispose_doc(doc);
@@ -4668,20 +4669,30 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 		alarm_set(alarm_timenow()+(doc->rh->refreshtime * 100), be_refresh_document, doc);
 	}
 
-	frontend_view_status(doc->parent, sb_status_FINISHED);
+	frontend_view_status(doc->parent, sb_status_FINISHED); 
+
+	r = access_CACHE;
     }
     else
     {
 	BENDBG(( "Got document of type 0x%03x, passing to the front end.\n", ft));
 
 #ifndef BUILDERS
+	r = access_CACHE | access_LOCK;	/* maintain the lock on the file as it is still required */
+
 	if (frontend_plugin_handle_file_type(ft))
 	{
+	    /* tell the frontend we've completed the file */
 	    frontend_pass_doc(doc->parent, NULL, NULL, -1);
-	    plugin_helper(doc->url, ft, NULL, doc->parent, cfile);
+
+	    /* clear the lock if the helper fails to start */
+	    if (plugin_helper(doc->url, ft, NULL, doc->parent, cfile) == NULL)
+		r &= ~access_LOCK;
 	}
 	else
+	{
 	    frontend_pass_doc(doc->parent, doc->url, cfile, ft);
+	}	    
 #endif
 
 	BENDBG(( "Returned from frontend\n"));
@@ -4691,7 +4702,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
     BENDBG(( "'Compleated' function done.\n"));
 
-    return access_CACHE;
+    return r;
 }
 
 

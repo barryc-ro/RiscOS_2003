@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "memwatch.h"
 
@@ -42,10 +43,9 @@
 #include "interface.h"
 
 #include "printing.h"
+#include "debug.h"
 
-#ifndef DEBUG
-#define DEBUG 0
-#endif
+#define PRNDBG(a)	DBG(a); waitabit()
 
 #define MP2OS	(72000/180)
 
@@ -77,6 +77,18 @@ struct _awp_job_str {
 #endif
     int old_blending, old_display_scale, old_scale_value;
 };
+
+#if DEBUG
+static void waitabit(void)
+{
+    clock_t t = clock();
+    t += 5;
+    while (clock() < t)
+	;
+}
+#else
+#define waitabit()
+#endif
 
 static os_error *awp_open_printer(int *jobp)
 {
@@ -115,25 +127,19 @@ static os_error *awp_old_render_page(antweb_doc *doc, awp_job job, int copies)
 
     /* Start to set up redraw struct for diagram */
 
-#if DEBUG
-    fprintf(stderr, "Calling drawpage, doc = 0x%p\n", doc);
-#endif
+    PRNDBG(("Calling drawpage, doc = 0x%p\n", doc));
     ep = print_drawpage(copies, 0, 0, (print_box *) &box, &more, (int*) &page);
     if (ep)
 	return ep;
 
-#if DEBUG
-    fprintf(stderr, "Page is 0x%p, bounding box is: %d,%d,%d,%d\n", page, box.x0, box.y0, box.x1, box.y1);
-#endif
+    PRNDBG(("Page is 0x%p, bounding box is: %d,%d,%d,%d\n", page, box.x0, box.y0, box.x1, box.y1));
 
     visdelay_percent((page->line->top * 100) / doc->rh->stream.height);
 
     /* Loop */
     while (more && ep == NULL)
     {
-#if DEBUG
-	fprintf(stderr, "More data, page is 0x%p, bounding box is: %d,%d,%d,%d\n", page, box.x0, box.y0, box.x1, box.y1);
-#endif
+	PRNDBG(("More data, page is 0x%p, bounding box is: %d,%d,%d,%d\n", page, box.x0, box.y0, box.x1, box.y1));
 	r.g = box;
 	r.box.x0 = r.box.y0 = 0;
 	r.scx = 0;
@@ -148,16 +154,13 @@ static os_error *awp_old_render_page(antweb_doc *doc, awp_job job, int copies)
 
 	backend_render_rectangle(&r, doc, 0);
 
-#if DEBUG
-	fprintf(stderr, "Getting next rectangle\n");
-#endif
+	PRNDBG(("Getting next rectangle\n"));
+
 	/* Get next rectangle */
 	ep = print_getrectangle((print_box *) &box, &more, (int*) &page);
     }
 
-#if DEBUG
-    fprintf(stderr, "Done render\n");
-#endif
+    PRNDBG(("Done render\n"));
 
     return ep;
 }
@@ -184,9 +187,8 @@ static os_error *awp_paginate(antweb_doc *doc, int plen, int flags)
     int page_top;
     int offset;     /* offset within page */
 
-#if DEBUG
-fprintf(stderr, "Page length %d\n", plen);
-#endif
+    PRNDBG(("Page length %d\n", plen));
+
     if (doc->paginate)
 	awp_free_pages(doc);
 
@@ -312,9 +314,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     ep = print_pagesize(&(new_job->psize));
     if (ep)
     {
-#if DEBUG
-	fprintf(stderr, "Getting page size gave error '%s'\n", ep->errmess);
-#endif
+	PRNDBG(("Getting page size gave error '%s'\n", ep->errmess));
 	goto err;
     }
 
@@ -364,9 +364,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     ep = antweb_document_format(doc, new_job->pwidth );
     if (ep)
     {
-#if DEBUG
-	fprintf(stderr, "Reformat to page width gave error '%s'\n", ep->errmess);
-#endif
+	PRNDBG(("Reformat to page width gave error '%s'\n", ep->errmess));
 	goto err;
     }
     had_reformat = 1;
@@ -374,9 +372,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     ep = awp_paginate(doc, new_job->pheight, 0);
     if (ep)
     {
-#if DEBUG
-	fprintf(stderr, "paginate gave error '%s'\n", ep->errmess);
-#endif
+	PRNDBG(("paginate gave error '%s'\n", ep->errmess));
 	goto err;
     }
 
@@ -386,9 +382,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     ep = awp_open_printer(&new_job->job);
     if (ep)
     {
-#if DEBUG
-	fprintf(stderr, "open printer gave error '%s'\n", ep->errmess);
-#endif
+	PRNDBG(("open printer gave error '%s'\n", ep->errmess));
 	goto err;
     }
 
@@ -396,15 +390,11 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     ep = print_selectjob(new_job->job, doc->url, &new_job->oldjob);
     if (ep)
     {
-#if DEBUG
-	fprintf(stderr, "Select job gave error '%s'\n", ep->errmess);
-#endif
+	PRNDBG(("Select job gave error '%s'\n", ep->errmess));
 	goto err;
     }
 
-#if DEBUG
-    fprintf(stderr, "Declaring fonts\n");
-#endif
+    PRNDBG(("Declaring fonts\n"));
 
     webfont_declare_printer_fonts();
 
@@ -481,38 +471,37 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     return ep;
 }
 
+extern os_error *sutil_print_abortjob(int job);
+extern os_error *sutil_print_endjob(int job);
+
 static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
 {
     os_error *ep;
     fe_view_dimensions fvd;
 
     /* End job */
+    PRNDBG(("Ending job: abort %d job %d\n", abort, job->job));
+
 #if DEBUG
-    fprintf(stderr, "Ending job\n");
-#endif
+    ep = abort ? sutil_print_abortjob(job->job) : sutil_print_endjob(job->job);
+#else
     ep = abort ? print_abortjob(job->job) : print_endjob(job->job);
+#endif
+    PRNDBG(("Returning from abort/end\n"));
     if (ep)
     {
-#if DEBUG
-	fprintf(stderr, "end/abort job gave error '%s'\n", ep->errmess);
-#endif
+	PRNDBG(("end/abort job gave error '%s'\n", ep->errmess));
     }
 
     /* Close printer file */
-#if DEBUG
-    fprintf(stderr, "Closing file\n");
-#endif
+    PRNDBG(("Closing file job %d\n", job->job));
     awp_close_printer(job->job);
 
-#if DEBUG
-    fprintf(stderr, "Freeing pages\n");
-#endif
+    PRNDBG(("Freeing pages\n"));
 
     awp_free_pages(doc);
 
-#if DEBUG
-    fprintf(stderr, "Done printing!\n");
-#endif
+    PRNDBG(("Done printing!\n"));
 
     doc->flags = job->old_doc_flags;
     doc->rh->bgt = job->old_bgt_flags;
@@ -570,15 +559,12 @@ static os_error *awp_render_page(be_doc doc, awp_job job, int page, int copies)
 
     if (page != job->page_no)
     {
-#if DEBUG
-	fprintf(stderr, "Not a known page\n");
-#endif
+	PRNDBG(("Not a known page\n"));
 
 	if (job->page && page == (job->page_no + 1))
 	{
-#if DEBUG
-	    fprintf(stderr, "Moving to the next page\n");
-#endif
+	    PRNDBG(("Moving to the next page\n"));
+
 	    job->page_no++;
 	    job->page = job->page->next;
 
@@ -590,18 +576,14 @@ static os_error *awp_render_page(be_doc doc, awp_job job, int page, int copies)
 	    awp_page_str *pageptr;		/* The last page used */
 	    int page_no;		/* The number of the last page */
 
-#if DEBUG
-	    fprintf(stderr, "Looking for the correct page\n");
-#endif
+	    PRNDBG(("Looking for the correct page\n"));
 
 	    for(page_no = 1, pageptr = doc->paginate;
 		page_no < page && pageptr && pageptr->line;
 		page_no++, pageptr = pageptr->next)
 	    {
-#if DEBUG
-		fprintf(stderr, "Looking for page %d, current page is %d at 0x%p\n",
-			page, page_no, pageptr);
-#endif
+		PRNDBG(("Looking for page %d, current page is %d at 0x%p\n",
+			page, page_no, pageptr));
 	    }
 
 	    if (page_no != page)
@@ -609,9 +591,7 @@ static os_error *awp_render_page(be_doc doc, awp_job job, int page, int copies)
 		return makeerror(ERR_BAD_PAGE);
 	    }
 
-#if DEBUG
-	    fprintf(stderr, "Page number %d is at 0x%p\n", page_no, pageptr);
-#endif
+	    PRNDBG(("Page number %d is at 0x%p\n", page_no, pageptr));
 
 	    job->page = pageptr;
 	    job->page_no = page_no;
@@ -671,12 +651,10 @@ static os_error *awp_render_page(be_doc doc, awp_job job, int page, int copies)
 #endif
     }
 
-#if DEBUG
-    fprintf(stderr, "Giving rectangle:\n");
-    fprintf(stderr, "Box = %d,%d,%d,%d\n", pbox.x0, pbox.y0, pbox.x1, pbox.y1 );
-    fprintf(stderr, "Page position is %d,%d (%d,%d)\n", ppos.dx, ppos.dy, ppos.dx / MP2OS, ppos.dy / MP2OS);
-    fprintf(stderr, "Page given is 0x%p\n", job->page);
-#endif
+    PRNDBG(("Giving rectangle:\n"));
+    PRNDBG(("Box = %d,%d,%d,%d\n", pbox.x0, pbox.y0, pbox.x1, pbox.y1 ));
+    PRNDBG(("Page position is %d,%d (%d,%d)\n", ppos.dx, ppos.dy, ppos.dx / MP2OS, ppos.dy / MP2OS));
+    PRNDBG(("Page given is 0x%p\n", job->page));
 
     bgcol = (job->flags & awp_print_NO_BACK) ?
 	0xffffff00 : ((doc->rh->bgt & rid_bgt_COLOURS) ?
@@ -689,7 +667,7 @@ static os_error *awp_render_page(be_doc doc, awp_job job, int page, int copies)
 	ep = awp_old_render_page(doc, job, copies);
 #if DEBUG
 	if (ep)
-	    fprintf(stderr, "Render page gave error '%s'\n", ep->errmess);
+	    PRNDBG(("Render page gave error '%s'\n", ep->errmess));
 #endif
     }
 
@@ -719,10 +697,9 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies)
 
 	/* @@@@ In here we need a whole stack of checks */
 
-#if DEBUG
-	fprintf(stderr, "About to print doc 0x%p, %d copies, from page %d to page %d, flags = 0x%02x\n",
-		doc, copies, pfrom, pto, flags);
-#endif
+	PRNDBG(("About to print doc 0x%p, %d copies, from page %d to page %d, flags = 0x%02x\n",
+		doc, copies, pfrom, pto, flags));
+
 	if (flags & awp_print_REVERSED)
 	{
 	    int t = pfrom;
@@ -737,9 +714,7 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies)
 	    inc = 1;
 	}
 
-#if DEBUG
-	fprintf(stderr, "From %d to %d step %d\n", pfrom, pto, inc);
-#endif
+	PRNDBG(("From %d to %d step %d\n", pfrom, pto, inc));
 
 	if (ep == NULL)
 	{
@@ -747,9 +722,7 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies)
 	    {
 		for (pageno = pfrom; ep == NULL && pageno != pto; pageno += inc)
 		{
-#if DEBUG
-		    fprintf(stderr, "About to print page %d\n", pageno);
-#endif
+		    PRNDBG(("About to print page %d\n", pageno));
 
 		    ep = awp_render_page(doc, job, pageno, (flags & awp_print_COLLATED) ? 1 : copies);
 		}

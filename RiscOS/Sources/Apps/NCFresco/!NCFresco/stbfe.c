@@ -914,6 +914,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    wimp_box box;
 	    int new_keyboard_state;
 
+	    STBDBG(("ncbrowsermode: %s\n", ncmode));
+	    
 	    /* decode the parameters */
 	    parse_http_header(ncmode, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
 
@@ -943,26 +945,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		    /* check for user change */
 		    if (vals[content_tag_USER].value)
 		    {
-			int user = atoi(vals[content_tag_USER].value);
-			char *current_user_s = getenv(PROFILE_NUM_VAR);
-			if (current_user_s == NULL || atoi(current_user_s) != user)
-			{
-			    char buffer[64];
+			STBDBG(("ncbrowsermode: user '%s' '%s'\n", vals[content_tag_USER].value, vals[content_tag_USERNAME].value));
 
-			    /* set the current user variable */
-			    sprintf(buffer, "%d", user);
-			    _kernel_setenv(PROFILE_NUM_VAR, buffer);
-
-			    /* set the user name variable */
-			    translate_escaped_text(strsafe(vals[content_tag_USERNAME].value), buffer, sizeof(buffer));
-			    _kernel_setenv(PROFILE_NAME_VAR, buffer);
-
-			    /* re read the config and flush the cache */
-			    re_read_config(0);
-			    
-			    /* close and open popups */
-			    
-			}
+			v->pending_user = atoi(vals[content_tag_USER].value);
+			v->pending_user_name = strdup(vals[content_tag_USERNAME].value);
 		    }
 		}
 		
@@ -1848,6 +1834,37 @@ int fe_check_download_finished(fe_view v)
 /* 		fe_force_fit(top, TRUE); */
 	}
 
+	/* check for a user change. We don't do it in visit because
+           the page needs to be fully downloaded first (ie out of the
+           cache!) */
+	if (v->children == NULL && !top->open_transient && v->pending_user != -1)
+	{
+	    int user = v->pending_user;
+	    char *current_user_s = getenv(PROFILE_NUM_VAR);
+	    if (current_user_s == NULL || atoi(current_user_s) != user)
+	    {
+		char buffer[64];
+
+		STBDBG(("setuser: user %d name '%s'\n", user, v->pending_user_name));
+		
+		/* set the current user variable */
+		sprintf(buffer, "%d", user);
+		_kernel_setenv(PROFILE_NUM_VAR, buffer);
+
+		/* set the user name variable */
+		translate_escaped_text(strsafe(v->pending_user_name), buffer, sizeof(buffer));
+		_kernel_setenv(PROFILE_NAME_VAR, buffer);
+
+		/* re read the config and flush the cache */
+		re_read_config(0);
+			    
+		/* close and open popups */
+	    }
+	    mm_free(v->pending_user_name);
+	    v->pending_user_name = NULL;
+	    v->pending_user = -1;
+	}
+	
 	/* optimise various memory uses */
 	if (1)
 	{
@@ -1860,7 +1877,7 @@ int fe_check_download_finished(fe_view v)
 	    fe_internal_optimise();
 
 	    cookie_optimise();
-/* 	    access_optimise_cache(); */
+  	    access_optimise_cache();
  	    auth_optimise();
 /* 	    plugin_list_optimise(); */
 	}
@@ -3228,7 +3245,8 @@ os_error *fe_status_unstack(fe_view source_v)
 	{
 	}
 	else
-            fe_history_move(source_v, history_PREV);
+	    /* hardwire this to main_view 'cos I'm not sure what the current code really does if it isn't */
+            fe_history_move(main_view/* source_v */, history_PREV);
     }
 
     tb_status_update_fades(top);
@@ -3582,8 +3600,10 @@ static int scrollsafe(int scroll)
     return scroll * 4;
 }
 
-void fe_check_autoscroll(fe_view v, const wimp_mousestr *mp)
+BOOL fe_check_autoscroll(fe_view v, const wimp_mousestr *mp)
 {
+    BOOL scrolled = FALSE;
+
     /* check for auto-scrolling */
     if (v->w && v->scrolling != fe_scrolling_NO)
     {
@@ -3610,7 +3630,7 @@ void fe_check_autoscroll(fe_view v, const wimp_mousestr *mp)
 	{
 	    autoscroll_xedge = xedge;
 	    autoscroll_yedge = yedge;
-	    fe_scroll_request(v, &state.o, scrollsafe(xedge), scrollsafe(yedge));
+	    scrolled = fe_scroll_request(v, &state.o, scrollsafe(xedge), scrollsafe(yedge));
 	}
 	else if (xedge || yedge)
 	{
@@ -3618,7 +3638,7 @@ void fe_check_autoscroll(fe_view v, const wimp_mousestr *mp)
 	    if (abs(xedge - autoscroll_xedge) <= AUTOSCROLL_HOVER_AREA && abs(yedge - autoscroll_yedge) < AUTOSCROLL_HOVER_AREA)
 	    {
 		if (now - autoscroll_time >= AUTOSCROLL_DELAY)
-		    fe_scroll_request(v, &state.o, scrollsafe(xedge), scrollsafe(yedge));
+		    scrolled = fe_scroll_request(v, &state.o, scrollsafe(xedge), scrollsafe(yedge));
 	    }
 	    else
 	    {
@@ -3632,6 +3652,8 @@ void fe_check_autoscroll(fe_view v, const wimp_mousestr *mp)
 	    autoscroll_xedge = autoscroll_yedge = 0;
 	}
     }
+
+    return scrolled;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -4364,9 +4386,17 @@ static void fe_keyboard__open(void)
 	    coords_union(&v->box, &box, &box);
 
 	if (config_display_control_top)
+	{
 	    sprintf(buffer + n, " -scrolldown %d", box.y0/2);
+	}
 	else
-	    sprintf(buffer + n, " -scrollup %d", box.y1/2);
+	{
+	    fe_view v = fe_selected_view();
+	    if (v && v != main_view && (v->box.y1 < box.y1 + 400 + 100))
+		sprintf(buffer + n, " -scrolldown %d", text_safe_box.y1/2);
+	    else
+		sprintf(buffer + n, " -scrollup %d", box.y1/2);
+	}
 
 	fe_start_task(buffer, NULL);
     }
@@ -4438,12 +4468,13 @@ static void fe_doc_bounce(wimp_msgdataopen *dataopen)
         char buffer[256];
         sprintf(buffer, "/%s", dataopen->name);
 
-	file_lock(dataopen->name, TRUE);
+/* 	file_lock(dataopen->name, TRUE); */
 
         frontend_complain(fe_start_task(buffer, NULL));
-
-	file_lock(dataopen->name, FALSE);
     }
+
+    /* backend will have locked it before starting flinging it around */
+    file_lock(dataopen->name, FALSE);
 }
 
 #define STBWEB_RETURNED_FRAMES PROGRAM_NAME"$ReturnedFrames"
@@ -4917,6 +4948,8 @@ static void re_read_config(int flags)
 	plugin_list_dispose();
 
 	fe_internal_flush();
+
+	hotlist_shutdown();
     }
 
     if ((flags & ncfresco_loaddata_CONFIG) &&
@@ -5429,6 +5462,25 @@ void fe_event_process(void)
 		offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]);
 		break;
 
+#if DEBUG
+	    case wimp_MINITTASK:
+	    {
+		int i;
+		for (i = 8; i < sizeof(msg->data.chars); i++)
+		    if (msg->data.chars[i] < ' ')
+		    {
+			msg->data.chars[i] = 0;
+			break;
+		    }
+
+		DBG(("taskinit: %x %s\n", msg->hdr.task, &msg->data.chars[8]));
+		break;
+	    }
+	    case wimp_MCLOSETASK:
+		DBG(("taskclos: %x\n", msg->hdr.task));
+		break;
+#endif
+		
 	    case wimp_MPREQUIT:
 		fe_handle_prequit();
 		break;
@@ -5656,7 +5708,12 @@ static int message_codes[] =
     wimp_MNCFRESCO,
 
     MESSAGE_ERROR_BROADCAST,
-    
+
+#if DEBUG
+    wimp_MINITTASK,
+    wimp_MCLOSETASK,
+#endif
+
     wimp_MMODECHANGE,
     wimp_PALETTECHANGE,
     wimp_MSERVICE,

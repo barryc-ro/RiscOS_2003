@@ -208,7 +208,7 @@ static int get_colour_text(int i)
 
 void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
 {
-    LNKDBG(("highlight_render_outline: doc %p ti %p %d,%d sel %d\n", doc, ti, hpos, bline, ti->flag & rid_flag_SELECTED ? 1 : 0));
+    LNKDBGN(("highlight_render_outline: doc %p ti %p %d,%d sel %d\n", doc, ti, hpos, bline, ti->flag & rid_flag_SELECTED ? 1 : 0));
 
     if (ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED))
     {
@@ -255,7 +255,7 @@ void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw)
     if ((doc->flags & doc_flag_DISPLAYING) == 0)
         return;
 
-    LNKDBG(("highlight_update_border: draw %d box %d,%d %d,%d\n", draw, box->x0, box->y0, box->x1, box->y1));
+    LNKDBGN(("highlight_update_border: draw %d box %d,%d %d,%d\n", draw, box->x0, box->y0, box->x1, box->y1));
     if (draw && !gbf_active(GBF_ANTI_TWITTER))
     {
         frontend_view_update(doc->parent, box, render_border, doc, 0);
@@ -305,7 +305,7 @@ void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
     oy += doc->margin.y1;
 #endif
 
-    LNKDBG(("highlight_render: doc %p tag %d\n", doc, doc->selection.tag));
+    LNKDBGN(("highlight_render: doc %p tag %d\n", doc, doc->selection.tag));
 
     switch (doc->selection.tag)
     {

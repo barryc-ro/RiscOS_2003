@@ -20,6 +20,9 @@ extern void plugin_get_info(plugin pp, int *flags, int *state);
 extern plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *parent, const char *cfile);
 
 extern int plugin_message_handler(wimp_eventstr *e, void *handle);
+extern BOOL plugin_is_there_enough_memory(int ft, int size);
+extern void plugin_dump(void);
+
 
 /* ----------------------------------------------------------------------------- */
 

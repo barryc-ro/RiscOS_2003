@@ -432,7 +432,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 {
     image i = (image) h;
 
-    IMGDBGN(("put_bytes: in: Putting 0x%x bytes at 0x%p to offset 0x%x\n", buf_len, buf, i->put_offset));
+    IMGDBGN(("put_bytes: in: Putting 0x%x bytes at 0x%p to offset 0x%x flags 0x%x\n", buf_len, buf, i->put_offset, i->flags));
 
     if ( !i->our_area )
         return;
@@ -445,7 +445,12 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
     else
     {
 	flexmem_noshift();
+
+	IMGDBGN(("put_bytes: copying %d bytes from %p to %p\n", buf_len, buf, ((char*) i->our_area) + i->put_offset));
+
 	memcpy(((char*) i->our_area) + i->put_offset, buf, buf_len);
+
+	IMGDBGN(("put_bytes: copied\n"));
 	flexmem_shift();
 
 	i->put_offset += buf_len;
@@ -458,6 +463,8 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 	i->areap = &(i->our_area);
 	i->id.tag = sprite_id_name;
 	i->id.s.name = i->sname;
+
+	IMGDBGN(("put_bytes: copying sprite name\n"));
 
 	flexmem_noshift();
 	strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
@@ -498,7 +505,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 
 	i->flags |= image_flag_REALTHING/* | image_flag_RENDERABLE */;
 
-	IMGDBG(("New sprite area at %p, sprite name %s, width = %d, height = %d\n",
+ 	IMGDBG(("New sprite area at %p, sprite name %s, width = %d, height = %d\n",
 		i->our_area, i->id.s.name, i->width, i->height));
     }
 
@@ -507,6 +514,8 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
     {
         sprite_header *sph;
         int pal_end;
+
+/* 	IMGDBG(("put_bytes: try to set renderable\n")); */
 
 	flexmem_noshift();
 
@@ -2594,7 +2603,7 @@ static void fixup_scale(sprite_factors *facs, int scale_image)
 
 static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image, sprite_factors *facs)
 {
-    if ((i->flags & image_flag_REALTHING) && (w != -1 && h != -1))
+    if ((i->flags & (image_flag_REALTHING|image_flag_ERROR)) == image_flag_REALTHING && (w != -1 && h != -1))
     {
 #if 0   /*pdh*/
 	facs->xmag = w*2;
@@ -3582,6 +3591,7 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
     if (!must_rebuild || image_build_cache_tile_sprite(i, scale_image))
     {
 	changed = must_rebuild;
+	IMGDBGN(("img: have cache ok changed %d flags %x\n", changed, i->flags));
 
 	area = i->cache_area;
 	id.tag = sprite_id_name;
@@ -3592,9 +3602,10 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
     else
     {
 	changed = area != i->cache_area;
+	IMGDBGN(("img: not have cache OK changed %d flags %x\n", changed, i->flags));
 
 	/* If image is transparent then clear background first */
-        if (i->flags & image_flag_MASK)
+        if (i->flags & (image_flag_MASK|image_flag_ERROR|image_flag_DEFERRED))
 	{
 	    int junk;
 	    colourtran_setGCOL(bgcol, (1<<8) | (1<<7), 0, &junk);
@@ -3609,7 +3620,7 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
     }
 
     /* get the sprite direct pointer */
-    if (image_get_sprite_ptr(area, &id, &id))
+    if ( (i->flags & (image_flag_ERROR|image_flag_DEFERRED)) == 0 && image_get_sprite_ptr(area, &id, &id))
     {
 	/* read the sprite info */
 	sprite_readsize(area, &id, &info);

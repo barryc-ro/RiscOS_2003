@@ -30,6 +30,14 @@
 #define ACCESS_INTERNAL
 #include "access.h"
 
+#ifndef LOCK_FILES
+#define LOCK_FILES 0
+#endif
+
+#ifndef USE_FILEWATCH
+#define USE_FILEWATCH 0
+#endif
+
 /* ----------------------------------------------------------------------------------------------- */
 
 #define N_FILES_PER_DIR 75
@@ -368,6 +376,9 @@ static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
 
 	    ACCDBG(("cache_remove_file: '%s' '%s'\n", urlblock + cc->urloffset, cfile));
 
+#if LOCK_FILES
+	    file_lock(cfile, FALSE);
+#endif
 	    if (remove(cfile))
 	    {
 		int type;
@@ -545,19 +556,61 @@ static BOOL cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int fil
 
 static void cache_optimise( void )
 {
-#if !MEMLIB
     int i;
 
     if ( cache )
     {
+#if MEMLIB
+	int n = 0;
+        for (i = 0; i < cache_ndirs; i++)
+	{
+	    cache_dir *dp = &cache[i];
+	    if (dp->items)
+	    {
+		if (optimise_block((void **)&dp->items, sizeof(dp->items[0])*N_FILES_PER_DIR))
+		{
+		    cache_item *cc;
+		    int file;
+
+#if DEBUG
+		    ACCDBGN(("Before optimisation: block %p\n", urlblock));
+		    for (file = 0, cc = dp->items; file < N_FILES_PER_DIR; file++, cc++)
+			if (cc->urloffset)
+			    ACCDBGN(("%2d: off %5d '%s'\n", file, cc->urloffset, urlblock + cc->urloffset));
+#endif
+		    
+		    for (file = 0, cc = dp->items; file < N_FILES_PER_DIR; file++, cc++)
+			SubFlex_Reanchor(&cc->urloffset, &urlblock);
+
+#if DEBUG
+		    ACCDBGN(("After optimisation: block %p\n", urlblock));
+		    for (file = 0, cc = dp->items; file < N_FILES_PER_DIR; file++, cc++)
+			if (cc->urloffset)
+			    ACCDBGN(("%2d: off %5d '%s'\n", file, cc->urloffset, urlblock + cc->urloffset));
+#endif
+		    n++;
+		}
+		else
+		    /* since all the cache_directories are the same
+                       size if we can't move one then give up on them
+                       all */
+		    break;
+	    }
+	}
+
+#if DEBUG
+	ACCDBG(("cache3: optimised %d cache structures\n", n));
+#endif
+
+#else
         for (i = 0; i < cache_size; i++)
         {
-        cache_item *cc = cache_item_ptr(i);
-        if ( cc && cc->url )
-            cc->url = optimise_string( cc->url );
+	    cache_item *cc = cache_item_ptr(i);
+	    if ( cc && cc->url )
+		cc->url = optimise_string( cc->url );
         }
-    }
 #endif /* !MEMLIB */
+    }
 }
 
 static void cache_insert(char *url, char *file, cache_flags flags)
@@ -862,22 +915,25 @@ static void cache_dump_dir_write(int dir)
 	    {
 #if CACHE_FORMAT == 1
 		fprintf(fh, "%02d" "\t%d" "\t%x" "\t%d" "\t%d" "\t%s" "\n",
-#if !MEMLIB
-			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, cc->url);
-#else /* MEMLIB */
-			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, urlblock + cc->urloffset);
-#endif /* MEMLIB */
+# if !MEMLIB
+			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, cc->url
+# else /* MEMLIB */
+			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, urlblock + cc->urloffset
+# endif /* MEMLIB */
+			);
 #elif CACHE_FORMAT == 2
 		fprintf(fh, "%02d" "\t%x" "\t%x" "\t%x" "\t%s" "\n",
 			cc->file_num,
 			cc->header.date, cc->header.last_modified, cc->header.expires,
-#if !MEMLIB
-			cc->url);
-#else /* MEMLIB */
-			urlblock + cc->urloffset);
-#endif /* MEMLIB */
+# if !MEMLIB
+			cc->url
+# else /* MEMLIB */
+			urlblock + cc->urloffset
+# endif /* MEMLIB */
+			);
+
 #else
-#error "unknown cache format"
+# error "unknown cache format"
 #endif
 	    }
 	}
@@ -904,6 +960,7 @@ static void cache_dump_dir_wipe(int dir)
     r.r[3] = 0;
     os_swix(OS_FSControl, &r);
 
+#if 0
     dp = &cache[dir];
 
     ACCDBG(("dump_dir_wipe: dp items %p\n", dp->items));
@@ -926,7 +983,27 @@ static void cache_dump_dir_wipe(int dir)
 	mm_free(dp->items);
     }
     memset(dp, 0, sizeof(*dp));
+#endif
 }
+
+#if DEBUG
+void cache_debug(void)
+{
+    int dir, file;
+    for (dir = 0; dir < cache_ndirs; dir++)
+    {
+        cache_item *cc = cache[dir].items;
+
+	if (cc) for (file = 0; file < N_FILES_PER_DIR; file++, cc++)
+	{
+	    if (cc->urloffset && cc->file_num != NO_FILE)
+	    {
+		DBG(("cache: %02d.%02d '%s' 0x%x\n", dir, file, urlblock + cc->urloffset, cc->flags));
+	    }
+	}
+    }
+}
+#endif
 
 /* ---------------------------------------------------------------------------------------- */
 
@@ -1048,6 +1125,8 @@ static char *scrapfile_name(void)
 
 /* ---------------------------------------------------------------------------------------- */
 
+#if USE_FILEWATCH
+
 #define FileWatch_RegisterInterest              0x4D240
 #define FileWatch_DeRegisterInterest            0x4D241
 #define FileWatch_Poll                          0x4D242
@@ -1064,7 +1143,7 @@ static void filewatcher_poll(int called_at, void *handle)
     {
         char *buf_end;
 
-	ACCDBGN(("filewatcher_poll: calling\n"));
+	ACCDBGN(("filewatcher_poll: calling handle %d\n", filewatcher_handle));
 
         e = (os_error *) _swix(FileWatch_Poll, _INR(0,3) | _OUT(2)|_OUT(4),
             0, filewatcher_handle, buffer, sizeof(buffer),
@@ -1080,7 +1159,7 @@ static void filewatcher_poll(int called_at, void *handle)
                 cache_dir *dir;
                 cache_item *item = cache_ptr_from_file(s, &dir);
 
-		ACCDBG(("filewatcher_poll: remove '%s' item %p dir %p '%s'\n", s, item, dir, urlblock + item->urloffset));
+		ACCDBG(("filewatcher_poll: remove '%s' item %p dir %p '%s'\n", s, item, dir, item->urloffset ? urlblock + item->urloffset : "<none>"));
 
                 if (item)
                     cache_remove_file(item, dir);
@@ -1135,6 +1214,8 @@ static void filewatcher_final(void)
     }
 }
 
+#endif
+
 /* ---------------------------------------------------------------------------------------- */
 
 static int cache_test(char *url)
@@ -1146,6 +1227,7 @@ static int cache_test(char *url)
     if (item == NULL)
         return 0;
 
+#if USE_FILEWATCH
     if (filewatcher_handle)
     {
 #if !MEMLIB
@@ -1155,6 +1237,7 @@ static int cache_test(char *url)
 #endif /* MEMLIB */
     }
     else
+#endif
     {
 	type = 0;
 	_swix(OS_File, _INR(0,1)|_OUT(0), 0x11, index_file_name(dir->dir_num, item->file_num), &type);
@@ -1233,18 +1316,20 @@ static os_error *cache_init(int size)
     if (!e)
         e = scrapfile_init();
 #endif /* MEMLIB */
+#if USE_FILEWATCH
     if (!e) filewatcher_init();
-
+#endif
     return e;
 }
-
 
 static void cache_tidyup(void)
 {
     ACCDBG(("cache: tidyup\n"));
 
+#if USE_FILEWATCH
     filewatcher_final();
-
+#endif
+    
     if (cache)
     {
 	if (config_cache_keep)

@@ -171,7 +171,7 @@ extern int movepointer(void);
 
 extern void fe_no_new_page(fe_view v, os_error *e);
 extern void fe_ensure_highlight_after_fetch(fe_view v);
-extern void fe_check_autoscroll(fe_view v, const wimp_mousestr *mp);
+extern BOOL fe_check_autoscroll(fe_view v, const wimp_mousestr *mp);
 
 /* From internal.h */
 

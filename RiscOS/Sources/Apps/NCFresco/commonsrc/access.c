@@ -102,6 +102,10 @@ extern void translate_escaped_text(char *in, char *out, int len);
 #define INTERNAL_URLS 0
 #endif
 
+#ifndef LOCK_FILES
+#define LOCK_FILES 0
+#endif
+
 #ifndef POLL_INTERVAL
 #define POLL_INTERVAL	10	/* centi-seconds */
 #endif
@@ -417,11 +421,39 @@ static void access_redial_alarm(int at, void *h)
 
 #ifndef FILEONLY
 
-static BOOL access_can_handle_file_type(int ft)
+static int access_can_handle_file_type(int ft, int size)
 {
-    return ft == FILETYPE_HTML || ft == FILETYPE_GOPHER || ft == FILETYPE_TEXT ||
-        image_type_test(ft) ||
-        frontend_can_handle_file_type(ft);
+    ACCDBG(("access_can_handle_file_type: ft %03x size %d\n", ft, size));
+
+    if (ft == FILETYPE_HTML || ft == FILETYPE_GOPHER || ft == FILETYPE_TEXT ||
+        image_type_test(ft))
+    {
+	ACCDBG(("access_can_handle_file_type: standard type\n"));
+	return 0;
+    }
+    
+    if (frontend_plugin_handle_file_type(ft))
+    {
+#ifdef STBWEB
+	if (!plugin_is_there_enough_memory(ft, size))
+	{
+	    ACCDBG(("access_can_handle_file_type: not enough plugin memory\n"));
+	    return status_FAIL_LOCAL;
+	}
+#endif
+
+	ACCDBG(("access_can_handle_file_type: OK plugin file type\n"));
+	return 0;
+    }
+    
+    if (frontend_can_handle_file_type(ft))
+    {
+	ACCDBG(("access_can_handle_file_type: OK frontend file type\n"));
+	return 0;
+    }
+    
+    ACCDBG(("access_can_handle_file_type: bad file type\n"));
+    return status_BAD_FILE_TYPE;
 }
 
 static char *access_host_name_only(char *url)
@@ -1156,8 +1188,13 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     /* Temporary insertion in case the url is re-requested inside the completed call (e.g. for a GIF) */
     cache->insert(d->url, cfile, cache_flag_OURS | (si->out.data_size == -1 ? cache_flag_IGNORE_SIZE : 0));
 
-    ACCDBGN(("access: inserted\n"));
+    ACCDBGN(("access: inserted (and locked) %s\n", cfile));
 
+#if LOCK_FILES
+    /* lock the file before closing it */
+    file_lock(cfile, TRUE);
+#endif
+    
     /* The http close does not need to delete the file as we have already if it was removed from the cache */
     access_http_close(d->transport_handle, http_close_DELETE_BODY );
 
@@ -1185,6 +1222,15 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
 
     access_done_flag = 1;
 
+#if LOCK_FILES
+    /* unlock the file unless client asked for it to be lept locked */
+    if ((cache_it & access_LOCK) == 0)
+    {
+	ACCDBGN(("access: unlocked '%s'\n", cfile));
+	file_lock(cfile, FALSE);
+    }
+#endif
+    
     if (si->out.status == status_COMPLETED_FILE && si->out.rc == 200 )
     {
 	if ( cache_it & access_KEEP )
@@ -1274,8 +1320,12 @@ static void access_http_fetch_alarm(int at, void *h)
     if (ep)
     {
 	memset(&si, 0, sizeof(si));
+#ifdef STBWEB
+	si.out.status = status_FAIL_LOCAL;
+#else
 	si.out.status = status_FAIL_REQUEST;
 	frontend_complain(ep);
+#endif
 	access_http_fetch_done(d, &si);
 	return;
     }
@@ -1336,12 +1386,11 @@ static void access_http_fetch_alarm(int at, void *h)
 	    }
 	}
 
-	if (d->flags & access_CHECK_FILE_TYPE &&
-	    !access_can_handle_file_type(d->ftype))
-        {
-	    si.out.status = status_BAD_FILE_TYPE;
-/* 	    access_http_fetch_done(d, &si); */
-/* 	    return; */
+	if (d->flags & access_CHECK_FILE_TYPE)
+	{
+	    int s = access_can_handle_file_type(d->ftype, si.out.data_size);
+	    if (s)
+		si.out.status = s;
 	}
     }
 
@@ -1643,10 +1692,11 @@ static void access_gopher_fetch_alarm(int at, void *h)
 	d->ftype = (short) ft;
 	d->ft_is_set = 1;
 
-        if (d->flags & access_CHECK_FILE_TYPE &&
-	    !access_can_handle_file_type(ft))
+	if (d->flags & access_CHECK_FILE_TYPE)
 	{
-	    gos.out.status = status_BAD_FILE_TYPE;
+	    int s = access_can_handle_file_type(ft, gos.out.data_size);
+	    if (s)
+		gos.out.status = s;
 	}
     }
 
@@ -1667,6 +1717,10 @@ static void access_gopher_fetch_alarm(int at, void *h)
 	    d->progress(d->h, status_GETTING_BODY, gos.out.data_so_far, gos.out.data_so_far, gos.out.ro_fh, d->ftype, d->url);
 	}
 
+#if LOCK_FILES
+	/* lock the file before closing it */
+	file_lock(cfile, TRUE);
+#endif
 	/* The gopher close does not need to delete the file as we have already if it was removed from the cache */
 	access_gopher_close(d->transport_handle, 0);
 
@@ -1677,6 +1731,14 @@ static void access_gopher_fetch_alarm(int at, void *h)
 
 	access_done_flag = 1;
 
+#if LOCK_FILES
+	/* unlock the file unless client asked for it to be lept locked */
+	if ((cache_it & access_LOCK) == 0)
+	{
+	    ACCDBGN(("access: unlocked '%s'\n", cfile));
+	    file_lock(cfile, FALSE);
+	}
+#endif
 	if (gos.out.status == status_COMPLETED_FILE )
 	{
 	    if ( cache_it & access_KEEP )
@@ -1840,10 +1902,11 @@ static void access_ftp_fetch_alarm(int at, void *h)
 	d->ftype = ft;
 	d->ft_is_set = 1;
 
-        if (d->flags & access_CHECK_FILE_TYPE &&
-	    !access_can_handle_file_type(ft))
+	if (d->flags & access_CHECK_FILE_TYPE)
 	{
-	    status = ftps.out.status = status_BAD_FILE_TYPE;
+	    int s = access_can_handle_file_type(ft, ftps.out.data_total);
+	    if (s)
+		ftps.out.status = status = s;
 	}
     }
 
@@ -1867,6 +1930,10 @@ static void access_ftp_fetch_alarm(int at, void *h)
 	    d->progress(d->h, status_GETTING_BODY, ftps.out.data_so_far, ftps.out.data_so_far, ftps.out.ro_handle, d->ftype, d->url);
 	}
 
+#if LOCK_FILES
+	/* lock the file before closing it */
+	file_lock(cfile, TRUE);
+#endif
 	/* The ftp close does not need to delete the file as we have already if it was removed from the cache */
 	access_ftp_close(d->transport_handle, 0);
 
@@ -1877,6 +1944,15 @@ static void access_ftp_fetch_alarm(int at, void *h)
 
 	access_done_flag = 1;
 
+#if LOCK_FILES
+	/* unlock the file unless client asked for it to be lept locked */
+	if ((cache_it & access_LOCK) == 0)
+	{
+	    ACCDBGN(("access: unlocked '%s'\n", cfile));
+	    file_lock(cfile, FALSE);
+	}
+#endif
+    
 	if (status == status_COMPLETED_FILE || status == status_COMPLETED_DIR )
 	{
 	    if ( cache_it & access_KEEP )
@@ -2138,6 +2214,9 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 
     if (fh > 0)
     {
+	if (ft == -1)
+	    ft = file_type(file);
+
 	d = mm_calloc(1, sizeof(*d));
 
 	d->access_type = access_type_FILE;
@@ -2772,14 +2851,14 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 	if (ep == NULL && !file_missing)
 	{
-	    ep = access_new_file(cfile, file_type(cfile), url, flags, ofile, progress, complete, h, result);
+	    ep = access_new_file(cfile, -1/* file_type(cfile) */, url, flags, ofile, progress, complete, h, result);
 	    if (ep)
 		file_missing = TRUE;
 	}
 
 	if (file_missing)
 	{
-	    ACCDBGN(("Cache hit '%s', file missing, removing the cache entry.\n", cfile));
+	    ACCDBGN(("Cache hit '%s', file missing, removing the cache entry e %x '%s'.\n", cfile, ep ? ep->errnum : 0, ep ? ep->errmess : ""));
 	    cache->remove(url);
 	    ep = NULL;
 	}

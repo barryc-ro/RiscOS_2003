@@ -71,17 +71,32 @@ static be_item descriptor_to_item(antweb_selection_descr *link)
 
 /* ----------------------------------------------------------------------------- */
 
-static void aref_union_box(be_doc doc, rid_aref_item *aref, wimp_box *box_out)
+static void aref_union_box(be_doc doc, rid_aref_item *aref, int flags, wimp_box *box_out)
 {
     be_item item = aref->first;
+    wimp_box box_first;
 
-    backend_doc_item_bbox(doc, item, box_out);
+    backend_doc_item_bbox(doc, item, &box_first);
+    *box_out = box_first;
 
     for (item = item->next; item && item->aref == aref; item = item->next)
     {
 	wimp_box box;
 	backend_doc_item_bbox(doc, item, &box);
 	coords_union(&box, box_out, box_out);
+    }
+    
+    /* this will force multi-line links to only extend the height of
+       the first item when moving up and down. */
+    if (flags & be_link_VERT)
+    {
+	box_out->y0 = box_first.y0;
+	box_out->y1 = box_first.y1;
+    }
+    else
+    {
+/* 	box_out->x0 = box_first->x0; */
+/* 	box_out->x1 = box_first->x1; */
     }
 }
 
@@ -433,13 +448,18 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	    else
 	    {
 		/* check fallback link */
+		/* changed to use the same side on each link so that
+                   NetChannel sites work - maybe I meant this
+                   originally??? */
 		if (flags & be_link_BACK)
 		{
-		    dist1 = link->bbox.y0 - from->y1;		/* dist between roofs */
+/* 		    dist1 = link->bbox.y0 - from->y1;	 */	/* dist between roofs */
+		    dist1 = link->bbox.y0 - from->y0;		/* dist between roofs */
 		}
 		else
 		{
-		    dist1 = from->y0 - link->bbox.y1;		/* dist between roofs */
+/* 		    dist1 = from->y0 - link->bbox.y1;	 */	/* dist between roofs */
+		    dist1 = from->y1 - link->bbox.y1;		/* dist between roofs */
 		}
 
 		secdist1 = from->x0 - link->bbox.x1;
@@ -528,7 +548,7 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
     {
     case doc_selection_tag_AREF:
 	item = initial->data.aref->first;
-	aref_union_box(doc, initial->data.aref, &bbox);
+	aref_union_box(doc, initial->data.aref, flags, &bbox);
 	break;
 
     case doc_selection_tag_TEXT:
@@ -870,7 +890,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 
 		if (flags & be_link_MOVE_POINTER)
 #if USE_MARGINS
-		    frontend_pointer_set_position(doc->parent, x + (ti->width + ti->pad)/2 + doc->margin.x0, y + doc->margin.y1);
+		    frontend_pointer_set_position(doc->parent, x + (ti->width + ti->pad)/2 + doc->margin.x0, y + (ti->max_up - ti->max_down)/2 + doc->margin.y1);
 #else
 		    frontend_pointer_set_position(doc->parent, x + (ti->width + ti->pad)/2, y);
 #endif

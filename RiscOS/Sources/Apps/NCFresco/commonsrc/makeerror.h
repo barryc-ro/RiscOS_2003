@@ -36,3 +36,9 @@ os_error *makeerrorf(int n, ...);
 #define ERR_FIND_FAILED         29
 #define ERR_NO_ACTION	        30
 #define ERR_PRINT_FAILED        31
+#define ERR_CANT_OPEN_FILE      32
+#define ERR_OLE_LOCAL           33
+#define ERR_CANT_MAKE_DIR       34
+#define ERR_NO_EDITOR           35
+#define ERR_PRINT_FRAMESET      36
+#define ERR_NO_DISC_SPACE       37

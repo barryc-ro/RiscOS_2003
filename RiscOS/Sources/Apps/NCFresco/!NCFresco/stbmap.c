@@ -72,6 +72,7 @@ static int fe_map_update_position_to(int x, int y)
 #define SINGLE_STEP     8
 #define FACTOR          1.3
 #define MULT            5
+#define MAX_CONT        20
 
 static int cont = 0;
 static int t_last[8] = { 0 };
@@ -79,10 +80,20 @@ static int t_last[8] = { 0 };
 static int change_step_speed(void)
 {
     int step;
+
+/*     DBG(("change_step_speed: cont %d\n", cont)); */
+    
+    /* pow() can give an exception if this gets too big */
+    if (cont > MAX_CONT)
+	return MAX_SPEED;
+
     cont++;
     step = (int)(MULT*pow(FACTOR, cont));
     if (step > MAX_SPEED)
         step = MAX_SPEED;
+
+/*     DBG(("change_step_speed: step %d\n", step)); */
+
     return step;
 }
 
@@ -183,10 +194,32 @@ void fe_map_check_pointer_move(const wimp_mousestr *m)
 {
     wimp_box box;
 
-    if (fe_item_screen_box(map_view, map_item, &box) && 
-        m->x >= box.x0 && m->x <= box.x1 && m->y >= box.y0 && m->y <= box.y1)
+    if (fe_item_screen_box(map_view, map_item, &box) &&
+	coords_withinbox((coords_pointstr *)&m->x, &box))
     {
-	fe_check_autoscroll(map_view, m);
+/* 	DBG(("fe_map_check_pointer_move: 1 point %d,%d box %d,%d %d,%d\n", m->x, m->y, box.x0, box.y0, box.x1, box.y1)); */
+
+	/* if we scrolled and the pointer is now outside the box */
+	if (fe_check_autoscroll(map_view, m) && 
+	    fe_item_screen_box(map_view, map_item, &box))
+	{
+	    int x = m->x, y = m->y;
+
+/* 	    DBG(("fe_map_check_pointer_move: 2 point %d,%d box %d,%d %d,%d\n", m->x, m->y, box.x0, box.y0, box.x1, box.y1)); */
+
+	    /* then force it to be within the box */
+	    if (x < box.x0)
+		x = box.x0;
+	    if (x > box.x1-2)
+		x = box.x1-2;
+	    if (y < box.y0)
+		y = box.y0;
+	    if (y > box.y1-2)
+		y = box.y1-2;
+
+	    if (x != m->x || y != m->y)
+		frontend_pointer_set_position(NULL, x, y);
+	}
     }
 }
 

@@ -32,6 +32,7 @@
 #include "debug.h"
 #include "interface.h"
 #include "util.h"
+#include "unwind.h"
 
 #include "heap.h"
 
@@ -83,8 +84,10 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
     void *newptr;
     int old_heap_size = heap__size, old_da_size = da_size;
 
-    STBDBGN(("heapda_realloc: %p to %d (heap %d da %d)\n", oldptr, size_request, heap__size, da_size));
-    
+#if DEBUG
+    if (oldptr)
+	STBDBGN(("heapda_realloc: %p to %d (heap %d da %d) (%s/%s)\n", oldptr, size_request, heap__size, da_size, caller(1), caller(2)));
+#endif
     /* if shrink to zero then just remove it */
     if (size_request == 0)
     {
@@ -173,6 +176,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 
 void *heapda_alloc(unsigned int size)
 {
+    STBDBGN(("heapda_alloc: %d (heap %d da %d) (%s/%s)\n", size, heap__size, da_size, caller(1), caller(2)));
     return heapda_realloc(NULL, size);
 }
 
@@ -181,7 +185,7 @@ void heapda_free(void *heapptr)
     int moved;
     _kernel_swi_regs r;
     
-    STBDBGN(("heapda_free: free %p (%d) (heap %d da %d)\n", heapptr, ((int *)heapptr)[-1], heap__size, da_size));
+    STBDBGN(("heapda_free: free %p (%d) (heap %d da %d) (%s/%s)\n", heapptr, ((int *)heapptr)[-1], heap__size, da_size, caller(1), caller(2)));
 
     if (heapptr == NULL)
 	return;
@@ -450,8 +454,9 @@ static int scan_usedlist(char *base, int from, int to, FILE *f)
     {
 	int *used_blk = (int *)(base + from);
 
-	FDBG((f, "used %8d - %8d (%8d)\n",
-		from + 4, from + *used_blk, *used_blk - 4));
+	FDBG((f, "used 0x%p %8d - %8d (%8d)\n",
+	      base + (from + 4),
+	      from + 4, from + *used_blk, *used_blk - 4));
 
 	from += *used_blk;
 	count++;

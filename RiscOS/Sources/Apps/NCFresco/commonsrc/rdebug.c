@@ -27,6 +27,48 @@ static void cleanup(void)
     remote_debug_close((debug_session *)db_sess);
 }
 
+static void dump_dir(const char *dir, int level)
+{
+    char buffer[512];
+    int nread, offset = 0;
+
+    do
+    {
+	int i;
+	char *s;
+
+	if ((os_error *)_swix(OS_GBPB, _INR(0,6) | _OUTR(3,4),
+			      12, dir, buffer, 75, offset, sizeof(buffer), NULL,
+			      &nread, &offset) != NULL)
+	    break;
+	
+	for (i = 0, s = buffer; i < nread; i++, s += ((24 + strlen(s+24)+1 + 3) &~ 3))
+	{
+	    int size = ((int *)s)[2];
+	    int attr = ((int *)s)[3];
+	    int type = ((int *)s)[4];
+	    char *file = s + 24;
+	    
+	    if (type == 2)
+	    {
+		char newdir[256];
+		strcpy(newdir, dir);
+		strcat(newdir, ".");
+		strcat(newdir, file);
+
+		DBG((" directory: %s\n", newdir));
+
+		dump_dir(newdir, level+1);
+	    }
+	    else
+	    {
+		DBG(("%10d%c%c %s\n", size, type == 1 ? ':' : '*', attr & (1<<3) ? 'L' : ' ', file));
+	    }
+	}
+    }
+    while (offset != -1);
+}
+
 static int debug_cmd_handler(int argc, char *argv[], void *handle)
 {
     int handled = -1;
@@ -73,9 +115,9 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	    }
 	    else if (strcasecomp(argv[1], "mem") == 0)
 	    {
-		int us = -1, next = -1, free;
+		int us, free;
 
-		wimp_slotsize(&us, &next, &free);
+		_swix(Wimp_SlotSize, _INR(0,1) | _OUT(0) | _OUT(2), -1, -1, &us, &free);
 		DBG(("slot: size %dK total free %dK\n", us/1024, free/1024));
 
 #if MEMLIB
@@ -117,6 +159,32 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 		}
 		handled = 1;
 	    }
+	    else if (strcasecomp(argv[1], "cache") == 0)
+	    {
+		extern void cache_debug(void);
+		cache_debug();
+		handled = 1;
+	    }
+	    else if (strcasecomp(argv[1], "scrap") == 0)
+	    {
+		char *s = getenv("Wimp$ScrapDir");
+		dump_dir(s, 0);
+		handled = 1;
+	    }
+	    else if (strcasecomp(argv[1], "plugins") == 0)
+	    {
+		extern void plugin_dump(void);
+		plugin_dump();
+		handled = 1;
+	    }
+#ifdef STBWEB
+	    else if (strcasecomp(argv[1], "history") == 0)
+	    {
+		extern void history_dump(BOOL global);
+		history_dump(FALSE);
+		handled = 1;
+	    }
+#endif
 	}
     }
     else if (strcasecomp(argv[0], "openurl") == 0)

@@ -56,4 +56,24 @@ my_kernel_alloc
 		LDR	pc, pc_store
 
  ]	
-        	END
+
+ [ {TRUE}
+
+PDriver_AbortJob	*	&A0149
+PDriver_EndJob		*	&A0148
+	
+		EXPORT	sutil_print_abortjob
+sutil_print_abortjob
+		SWI	PDriver_AbortJob
+		MOVVC	a1, #0	
+		MOVS	pc, lr
+		EXPORT	sutil_print_abortjob
+
+sutil_print_endjob
+		EXPORT	sutil_print_endjob
+		SWI	PDriver_EndJob
+		MOVVC	a1, #0	
+		MOVS	pc, lr
+ ]
+	
+	        	END

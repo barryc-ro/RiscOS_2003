@@ -437,6 +437,9 @@ static os_error *hotlist__changed_message(void)
 BOOL hotlist_read(const char *file)
 {
     FILE *f;
+
+    STBDBG(("hotlist_read: %s\n", file));
+
     f = mmfopen(file, "r");
     if (f)
     {
@@ -455,6 +458,9 @@ BOOL hotlist_read(const char *file)
 BOOL hotlist_write(const char *file)
 {
     FILE *f;
+
+    STBDBG(("hotlist_write: %s\n", file));
+
     f = mmfopen(file, "w");
     if (f)
     {
@@ -572,12 +578,17 @@ void hotlist_optimise(void)
 
     for (last = NULL, item = hotlist_list; item; last = item, item = item->next)
     {
+	hotlist_item *was = item;
+
 	if (optimise_block((void **)&item, sizeof(*item)))
 	{
 	    if (last)
 		last->next = item;
 	    else
 		hotlist_list = item;
+
+	    if (hotlist_last == was)
+		hotlist_last = item;
 	}
 
 	item->url = optimise_string(item->url);
