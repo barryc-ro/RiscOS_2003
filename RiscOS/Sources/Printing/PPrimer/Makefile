@@ -99,13 +99,13 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.Messages  ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -119,9 +119,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -132,13 +130,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.cmos:	c.cmos
-o.cmos:	C:h.kernel
-o.cmos:	C:h.swis
-o.cmos:	h.constants
-o.cmos:	h.error
-o.cmos:	C:h.kernel
-o.cmos:	C:h.nvram
 o.cmos:	c.cmos
 o.cmos:	C:h.kernel
 o.cmos:	C:h.swis
@@ -190,17 +181,6 @@ o.text:	C:h.swis
 o.text:	h.constants
 o.text:	h.error
 o.text:	C:h.kernel
-o.misc:	c.misc
-o.misc:	C:h.kernel
-o.misc:	C:h.swis
-o.misc:	h.constants
-o.misc:	h.error
-o.misc:	C:h.kernel
-o.misc:	h.text
-o.misc:	h.file
-o.misc:	C:h.kernel
-o.misc:	h.cmos
-o.misc:	C:h.kernel
 o.misc:	c.misc
 o.misc:	C:h.kernel
 o.misc:	C:h.swis
