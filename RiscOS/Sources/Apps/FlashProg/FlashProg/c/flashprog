@@ -6,6 +6,7 @@
    0.14  TC  Fixed the usual bug in 16Meg recognition...
    0.17	 jmf Add support for AMD28F160S5 devices
    0.18  jmf Allow multiples of writesize in Flash_Write.
+   0.19  nce works in any podule slot and gives more useful error messages
 */
 
 //#ifdef DEBUG
@@ -15,6 +16,7 @@
 #include "kernel.h"
 #include "swis.h"
 #include "time.h"
+#include "string.h"
 
 #include "module.h"
 #include "flashprog.h"
@@ -27,6 +29,20 @@ ERROR_STRUCT(BADTYPES, "Unknown type of flash");
 ERROR_STRUCT(BADPARAMS, "Bad parameters");
 ERROR_STRUCT(LOCKED, "Device is busy");
 ERROR_STRUCT(BADHARD, "Bad hardware");
+ERROR_STRUCT(VPPLOW, "VPP Low");
+ERROR_STRUCT(WRITEPROT, "Write fail: Write Protected");
+ERROR_STRUCT(PROGSUS, "Write fail: Program Suspended");
+ERROR_STRUCT(PROGERR, "Write fail: Programming Error");
+ERROR_STRUCT(BUSY, "Busy/Pending error");
+ERROR_STRUCT(GSRDOS, "GSR DOS error");
+ERROR_STRUCT(S5_ERASE_SUS, "S5 erase suspended");
+ERROR_STRUCT(S5_ERASE_ERR, "S5 erase error");
+ERROR_STRUCT(S5_PROG_ERR, "S5 programming error");
+ERROR_STRUCT(S5_VPPLOW, "S5 VPP low");
+ERROR_STRUCT(S5_PROG_SUS, "S5 program suspended");
+ERROR_STRUCT(S5_PROT, "S5 protected");
+ERROR_STRUCT(NOPOD, "Flash sledge not found");
+
 
 /* Addressing stuff */
 #define DEFUALT_PODULE	0		/* Hack for testing when softloaded */
@@ -46,7 +62,6 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 #define PAGE0	0
 #define SETPAGE1	power_control->program = (programcopy & 3) | PAGE1
 #define SETPAGE0	power_control->program = (programcopy & 3) | PAGE0
-
 #define MEG		(1024*1024)
 #define MEG2MASK		(2*MEG-1)
 #define MEG8MASK		(8*MEG-1)
@@ -61,7 +76,7 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 #define MAN_SHARP	0x00B0
 #define	DEV_28F016Su	0x6688
 #define	DEV_28F016Sx	0x66A0		/* 28F016SA/SV */
-#define DEV_28F160S5	0x00D0	
+#define DEV_28F160S5	0x00D0
 
 #define	PROG_VOLTAGE	((dev) == DEV_28F016Sx ? TWELVE_VOLTS : FIVE_VOLTS)
 
@@ -137,6 +152,8 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 	((dev & 0xffff) == (dev >> 16)) && \
 	(man != READ_ID) || (dev != READ_ID))
 
+#define DEBUGPATH "ADFS::HardDisc5.$.Blower.Build.Sources.FlashProgN.Debug"
+
 /*
  * Types
  */
@@ -159,7 +176,6 @@ typedef struct
   volatile unsigned int powerstatus;
 } power_control_t;
 
-
 /*
  * Variables
  */
@@ -170,7 +186,8 @@ static unsigned int easi_base;
 static volatile unsigned int *flash;
 static int programcopy=0;
 
-static int hw_failed=0;		/* forces error returns until FlashRelease called */
+//static int hw_failed=0;
+static _kernel_oserror * hw_failed=0;
 
 /*
  * Forward declarations
@@ -189,6 +206,7 @@ void power_up(void)
   /* Delay for >50ms to give Vcc time to settle */
   done = clock() + 1 + (int) (CLOCKS_PER_SEC * 50e-3);
   while (clock() < done);
+  debug_output_buffer_on(0,4096);
 }
 
 void power_down(void)
@@ -196,18 +214,45 @@ void power_down(void)
   power_control->program = programcopy = 0;
   power_control->signals.all_signals = 0;
   power_control->power = 0;
+  debug_output_buffer_off(0,FILE_OUTPUT);
 }
 
 _kernel_oserror *flash_initialise( void *pw, int podule_base )
 {
-  
-  debug_initialise("FlashProg", "", "FlashProg$DebugLevel");
-  debug_output_device(DEBUGIT_OUTPUT);
+  int podule=0;
+  int buff;
+  _kernel_swi_regs reg;
+
+  debug_initialise("FlashProg",DEBUGPATH, "");
   debug_atexit();
-  
-  
+  debug_output_device(FILE_OUTPUT);
+  debug_output_buffer_on(0,4096);
+  dprintf(("debug","\npodule_base=%d\n",podule_base));
+
   if (podule_base < 0x3000000)
+  {
     easi_base = (DEFUALT_PODULE<<24) + EASI_SPACE;
+    //search the podule slots
+    //to see if we can find the flash programmer
+    do
+    {
+     buff=0;
+     reg.r[0]=0x40;
+     reg.r[1]=(int)&buff;
+     reg.r[2]=64;
+     reg.r[3]=podule;
+     _kernel_swi(Podule_ReadInfo,&reg,&reg);
+     dprintf(("debug","\nPodule %d : %d\n",podule,buff));
+     if (buff==290) //found it!
+     {
+      easi_base = (podule<<24) + EASI_SPACE;
+      power_control = (void *) (easi_base + POWER_OFFSET);
+      return NULL;
+     }
+    }
+    while(podule++<8);
+    return ERROR(NOPOD);
+  }
   else
   {
     /* Get EASI address using podule_base */
@@ -244,6 +289,9 @@ extern void flash_finalise( void *pw )
  */
 _kernel_oserror *flash_info( _kernel_swi_regs *r )
 {
+
+  dprintf(("debug","\nflash_info\n"));
+
   /* Can't do anything if WSM is in operation */
   if (pending | pending1)
     return ERROR(LOCKED);
@@ -265,7 +313,7 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
     if (RECOGNISE(man,dev))
     {
       dprintf(("debug","Recognised first half\n"));
-      
+
       r->r[4] = blocksize = 128*1024;	/* Each device in pair = 64Kbytes */
       r->r[5] = writesize = PB_SIZE*2;	/* pagebuffer * 2 devices */
 
@@ -355,9 +403,9 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
   }
   else		/* Maybe its a 16bit device */
   {
-    
+
     dprintf(("debug","Checking for 16-bit device\n"));
-          
+
     *flash = READ_ARRAY;		/* Try to restore normality */
     flash = (void *) (easi_base + SLEDGE_OFFSET);
     *flash = READ_ID;			/* Get ID stuff */
@@ -451,17 +499,17 @@ _kernel_oserror *flash_read( _kernel_swi_regs *r )
  *   OUT
  *     r0:  RET_PENDING
  */
- 
+
  /* Erase page 'p' using erase routine for device type.
   * Uses global 'dev' to determine.
   */
 #define erase(p) (((dev) == DEV_28F160S5) ? s5_erase(p) : sx_erase(p))
- 
+
 _kernel_oserror *sx_erase(int page)
 {
 
  dprintf(("trace","sx_erase page=%x\n", page));
- 
+
  if (size > page)
  {
 
@@ -492,7 +540,7 @@ _kernel_oserror *sx_erase(int page)
    power_control->program = programcopy = PROG_VOLTAGE | PAGE1;
   else
    power_control->program = programcopy = PROG_VOLTAGE | PAGE0;
-  
+
   {
   clock_t done;
 
@@ -500,7 +548,7 @@ _kernel_oserror *sx_erase(int page)
   done = clock() + 1 + (int) (CLOCKS_PER_SEC * 50e-3);
   while (clock() < done);
   }
-  
+
   *flash = ERASE_ALL;
   *flash = ERASE_CONFIRM;
   if (size > (4*MEG))
@@ -515,7 +563,7 @@ _kernel_oserror *sx_erase(int page)
 
 _kernel_oserror *s5_erase(int page)
 {
-  
+
  dprintf(("trace","s5_erase page=%x\n", page));
 
  /* Clear status registers, to be sure */
@@ -523,7 +571,7 @@ _kernel_oserror *s5_erase(int page)
  if (size>4*MEG) flash[MEG] = S5_CLEAR_SR;
 
  if (size > page)
- { 
+ {
   if (page>0)
    power_control->program = programcopy = PROG_VOLTAGE | PAGE1;
   else
@@ -531,7 +579,6 @@ _kernel_oserror *s5_erase(int page)
 
   {
   clock_t done;
-
     /* Delay for >50ms to give Vpp time to settle */
   done = clock() + 1 + (int) (CLOCKS_PER_SEC * 100e-3);
   while (clock() < done);
@@ -545,6 +592,7 @@ _kernel_oserror *s5_erase(int page)
     flash[MEG] = S5_ERASE_CONFIRM;;
   }
  }
+
  if (page>0) SETPAGE0;
  return NULL;
 }
@@ -554,7 +602,7 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
   _kernel_oserror *oserror;
 
   hw_failed = 0; /* maybe try again */
-  
+
   /* Only know about this kind of flash */
   if (!RECOGNISE(man,dev))
     return ERROR(BADTYPES);
@@ -571,7 +619,7 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
       oserror = erase(8*MEG);
       if (oserror != NULL) return oserror;
   }
-  
+
   pending = 1;
   if (size>8*MEG) pending1 = 1;
   r->r[0] = RET_PENDING;
@@ -612,10 +660,11 @@ _kernel_oserror *sx_flash_write( _kernel_swi_regs *r )
   /* Length to write in half-words, replicated in both 16-bits of 32bit word */
   unsigned int i, lenpattern = (len - 1) + ((len - 1)<<16);
 
+  dprintf(("debug","sx_flash_write"));
+
   block = flash + ((chipoffset & ~(blocksize-1)) / width);
   chip = flash + (((chipoffset / 4) < MEG) ? 0 : MEG);
   dst = flash + (offset & MEG2MASK);
-  
 
   /* Only know about this kind of flash */
   if (!RECOGNISE(man,dev))
@@ -653,7 +702,7 @@ _kernel_oserror *sx_flash_write( _kernel_swi_regs *r )
          ((size > (12*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
      {
        power_control->program = programcopy = 0;
-       return ERROR(BADHARD);
+       return ERROR(GSRDOS);
      }
 
      /* Clear prior status bits */
@@ -686,7 +735,7 @@ _kernel_oserror *sx_flash_write( _kernel_swi_regs *r )
          ((size > (4*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
      {
        power_control->program = programcopy = 0;
-       return ERROR(BADHARD);
+       return ERROR(GSRDOS);
      }
 
      /* Clear prior status bits */
@@ -712,8 +761,7 @@ _kernel_oserror *sx_flash_write( _kernel_swi_regs *r )
 
   dprintf(("debug","\nWrite: offset=%x, len=%x\n", r->r[1], r->r[2]));
   dprintf(("debug","chip=%p\n", chip));
-  dprintf(("debug","BSR=%x, GSR=%x\n",
-         block[BSR_ADDR] & widthmask, block[GSR_ADDR] & widthmask));
+  dprintf(("debug","BSR=%x, GSR=%x\n",block[BSR_ADDR] & widthmask, block[GSR_ADDR] & widthmask));
   dprintf(("debug","block offset=%x\n", ((int) block) - ((int) flash)));
   dprintf(("debug","write offset=%x\n", ((int) dst) - ((int) flash)));
   dprintf(("debug","Length pattern=%x\n", lenpattern));
@@ -732,8 +780,7 @@ _kernel_oserror *sx_flash_write( _kernel_swi_regs *r )
   for (i=0; i<len; i++)
     block[pb_offset+i] = src[i];
 
-  dprintf(("debug","BSR=%x, GSR=%x\n",
-                 block[BSR_ADDR] & widthmask, block[GSR_ADDR] & widthmask));
+  dprintf(("debug","BSR=%x, GSR=%x\n",block[BSR_ADDR] & widthmask, block[GSR_ADDR] & widthmask));
 
   /* Write page buffer to flash */
   *dst = WRITE_PB;
@@ -760,7 +807,7 @@ _kernel_oserror *sx_flash_write( _kernel_swi_regs *r )
   if (chip[GSR_ADDR] & GSR_DOS_ERROR)
   {
     if (offset >= (2*MEG)) SETPAGE0;
-    return ERROR(BADHARD);
+    return ERROR(GSRDOS);
   }
 
   *chip = CLEAR_SR;			/* Restore normality */
@@ -791,7 +838,7 @@ _kernel_oserror *s5_flash_write( _kernel_swi_regs *r )
 
   dprintf(("trace","s5_flash_write: src=%x, offset=%d, len=%d\n", r->r[0], r->r[1],
            r->r[2]));
-    
+
   /* Only know about this kind of flash */
   if (!RECOGNISE(man,dev))
     return ERROR(BADTYPES);
@@ -803,7 +850,7 @@ _kernel_oserror *s5_flash_write( _kernel_swi_regs *r )
   if (size <= 8*MEG)
   {
     _kernel_oserror *err;
-    
+
     err = s5_status(r, size, &pending);
     if (err) return err;
     if (r->r[0] != RET_DONE) return NULL;
@@ -811,7 +858,7 @@ _kernel_oserror *s5_flash_write( _kernel_swi_regs *r )
   else
   {
     _kernel_oserror *err;
-    
+
     SETPAGE1;
     err = s5_status(r, size - 8*MEG, &pending1);
     SETPAGE0;
@@ -820,12 +867,12 @@ _kernel_oserror *s5_flash_write( _kernel_swi_regs *r )
 
     err = s5_status(r, 8*MEG, &pending);
     if (err) return err;
-    if (r->r[0] != RET_DONE) return NULL;   
+    if (r->r[0] != RET_DONE) return NULL;
   }
 
   /* OK, issue "Write to buffer" command */
   *block = S5_WRITE_TO_BUFFER;
-  
+
   /* Wait for write buffer to become available */
   while ((*chip & S5_SR_READY & widthmask) != (S5_SR_READY & widthmask))
     ; /* do nothing */
@@ -834,7 +881,7 @@ _kernel_oserror *s5_flash_write( _kernel_swi_regs *r )
   dprintf(("debug","flash=%p\n", flash));
   dprintf(("debug","chipoffset=%d\n", chipoffset));
   dprintf(("debug","chip=%p\n", chip));
-  dprintf(("debug","block=%p\n", block));  
+  dprintf(("debug","block=%p\n", block));
   dprintf(("debug","SR=%08x\n", block[S5_SR_ADDR] & widthmask));
   dprintf(("debug","block offset=%x\n", ((int) block) - ((int) flash)));
   dprintf(("debug","write offset=%x\n", ((int) dst) - ((int) flash)));
@@ -859,36 +906,36 @@ _kernel_oserror *s5_flash_write( _kernel_swi_regs *r )
   /* Wait for WSM completion */
   while ((block[S5_SR_ADDR] & S5_SR_READY & widthmask) != (S5_SR_READY & widthmask))
     ; /* do nothing */
-  
+
   /* Check for programming failure */
   if (block[S5_SR_ADDR] & S5_SR_VPP_LOW & widthmask)
   {
     dprintf(("debug","Write fail, VPP Low, SR=%08x\n", block[S5_SR_ADDR] & widthmask));
-    
+
     if (offset >= (2*MEG)) SETPAGE0;
-    return ERROR(BADHARD);
+    return ERROR(VPPLOW);
   }
   if (block[S5_SR_ADDR] & S5_SR_PROTECTED & widthmask)
   {
     dprintf(("debug","Write fail, write protected, SR=%08x\n", block[S5_SR_ADDR] & widthmask));
-    
+
     if (offset >= (2*MEG)) SETPAGE0;
-    return ERROR(BADHARD);
+    return ERROR(WRITEPROT);
   }
   if (block[S5_SR_ADDR] & S5_SR_PROGRAM_SUSPENDED & widthmask)
   {
     dprintf(("debug","Write fail, program suspended, SR=%08x\n", block[S5_SR_ADDR] & widthmask));
-    
+
     if (offset >= (2*MEG)) SETPAGE0;
-    return ERROR(BADHARD);
+    return ERROR(PROGSUS);
 
   }
   if (block[S5_SR_ADDR] & S5_SR_PROGRAM_ERROR & widthmask)
   {
     dprintf(("debug","Write fail, program error, SR=%08x\n", block[S5_SR_ADDR] & widthmask));
-    
+
     if (offset >= (2*MEG)) SETPAGE0;
-    return ERROR(BADHARD);
+    return ERROR(PROGERR);
   }
 
   /* Turn off programming voltage */
@@ -901,7 +948,7 @@ _kernel_oserror *s5_flash_write( _kernel_swi_regs *r )
   *block = S5_CLEAR_SR;
   if (offset >= (2*MEG)) SETPAGE0;
 
-  r->r[0] = RET_DONE;    
+  r->r[0] = RET_DONE;
   return NULL;
 }
 
@@ -910,10 +957,13 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r)
     int offset;
     int sizeleft;
     int wroteone = 0;		/* Have we written a pagebuffer in this call yet? */
-    
-        
-    if (hw_failed) return ERROR(BADHARD);
 
+    if(hw_failed)
+      {
+        dprintf(("debug","flash_write: hw failed\n"));
+     //   debug_output_buffer_off(0,FILE_OUTPUT);
+        return hw_failed;
+      }
     /* Handle simple case of writing a single pagebuffer */
     if (r->r[2] <= writesize)
         return (dev == DEV_28F160S5) ? s5_flash_write(r) : sx_flash_write(r);
@@ -924,26 +974,26 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r)
      * determining programming time.
      */
     sizeleft = r->r[2];
-    offset = r->r[0];            
+    offset = r->r[0];
     while (sizeleft > 0)
     {
         _kernel_oserror *err;
-          
+
         r->r[2] = (sizeleft < writesize) ? sizeleft : writesize;
-              	
+
         err = (dev == DEV_28F160S5) ? s5_flash_write(r) : sx_flash_write(r);
 	if (err) return err;
-	            
+
         /* Can't handle BUSY or PENDING if we've already written some
-         * in this call because the SWI interface has no way to report 
-         * how many pagebuffers were written before this happened.  
-         * Fortunately, the underlying code seems always to wait for the 
+         * in this call because the SWI interface has no way to report
+         * how many pagebuffers were written before this happened.
+         * Fortunately, the underlying code seems always to wait for the
          * write to complete before returning.
-         */	
-	if (wroteone && (r->r[0] != RET_DONE)) return ERROR(BADHARD);
+         */
+	if (wroteone && (r->r[0] != RET_DONE))  return ERROR(BUSY);
 
         wroteone = 1;
-        
+
         r->r[0] = offset += writesize;
         r->r[1] += writesize;
         sizeleft -= writesize;
@@ -978,7 +1028,7 @@ _kernel_oserror *sx_status ( _kernel_swi_regs *r, int size,int *pending)
     r->r[0] = RET_DONE;
     return NULL;
   }
-  
+
   /*
    * Despite what figure 11-15 of the manual advises, doing the following causes
    * the WSM to suspend (the OSS bit in the GSR gets set). So we don't do it.
@@ -1035,8 +1085,9 @@ _kernel_oserror *sx_status ( _kernel_swi_regs *r, int size,int *pending)
     flash[MEG] = READ_ARRAY;
 #endif
     *pending = 0;		/* So Flash_Release doesn't fail */
-    hw_failed = 1;
-    return ERROR(BADHARD);
+    hw_failed = ERROR(GSRDOS);
+    dprintf(("debug","sx_status: GSR_DOS error\n"));
+    return ERROR(GSRDOS);
   }
 
   dprintf(("debug","BSR=%08x, GSR=%08x\n",
@@ -1052,12 +1103,16 @@ _kernel_oserror *sx_status ( _kernel_swi_regs *r, int size,int *pending)
   return NULL;
 }
 
+
 _kernel_oserror *s5_status ( _kernel_swi_regs *r, int size,int *pending)
 {
 
+  dprintf(("debug","s5_status\n"));
   /* Only know about this kind of flash */
   if (!RECOGNISE(man,dev))
+  {
     return ERROR(BADTYPES);
+  }
 
   if (!*pending)
   {
@@ -1070,23 +1125,60 @@ _kernel_oserror *s5_status ( _kernel_swi_regs *r, int size,int *pending)
   {
     r->r[0] = RET_PENDING;
     return NULL;
-  } 
-  if ((flash[S5_SR_ADDR] & S5_SR_ERASE_SUSPENDED & widthmask) ||
-      (flash[S5_SR_ADDR] & S5_SR_ERASE_ERROR & widthmask) ||
-      (flash[S5_SR_ADDR] & S5_SR_PROGRAM_ERROR & widthmask) ||
-      (flash[S5_SR_ADDR] & S5_SR_VPP_LOW & widthmask) ||
-      (flash[S5_SR_ADDR] & S5_SR_PROGRAM_SUSPENDED & widthmask) ||
-      (flash[S5_SR_ADDR] & S5_SR_PROTECTED & widthmask))
-  {
-    dprintf(("debug","Lower WSM error: status=%x\n", flash[S5_SR_ADDR] & widthmask));
-    
-    *pending = 0;		/* So Flash_Release doesn't fail */
-    hw_failed = 1;
-    return ERROR(BADHARD);
   }
-  dprintf(("debug","Lower WSM completed: SR=%08x\n", flash[S5_SR_ADDR] & widthmask));
-  
-                               
+
+
+  if (flash[S5_SR_ADDR] & S5_SR_ERASE_SUSPENDED & widthmask)
+  {
+    *pending = 0;		/* So Flash_Release doesn't fail */
+    hw_failed = ERROR(S5_ERASE_SUS);
+    return ERROR(S5_ERASE_SUS);
+  }
+
+
+   if (flash[S5_SR_ADDR] & S5_SR_ERASE_ERROR & widthmask)
+   {
+     *pending = 0;
+     dprintf(("debug","S5_status: S5 Erase Error: %x\n",S5_SR_ERASE_ERROR));
+     dprintf(("debug","S5_status: Lower WSM error: flash[S5_SR_ADDR] =%x\n", flash[S5_SR_ADDR] & widthmask));
+     dprintf(("debug","S5_status: flash[MEG+S5_SR_ADDR] = %x\n",flash[MEG+S5_SR_ADDR] & widthmask));
+     hw_failed = ERROR(S5_ERASE_ERR);
+     return ERROR(S5_ERASE_ERR);
+   }
+
+   if (flash[S5_SR_ADDR] & S5_SR_PROGRAM_ERROR & widthmask)
+   {
+     *pending = 0;
+     hw_failed =ERROR(S5_PROG_ERR);
+     return ERROR(S5_PROG_ERR);
+   }
+
+   if (flash[S5_SR_ADDR] & S5_SR_VPP_LOW & widthmask)
+   {
+     *pending = 0;
+     hw_failed =ERROR(S5_VPPLOW);
+     return ERROR(S5_VPPLOW);
+   }
+
+   if (flash[S5_SR_ADDR] & S5_SR_PROGRAM_SUSPENDED & widthmask)
+   {
+    *pending = 0;
+     hw_failed =ERROR(S5_PROG_SUS);
+     return ERROR(S5_PROG_SUS);
+   }
+
+   if (flash[S5_SR_ADDR] & S5_SR_PROTECTED & widthmask)
+   {
+    *pending = 0;
+     hw_failed =ERROR(S5_PROT);
+     return ERROR(S5_PROT);
+   }
+
+
+  dprintf(("debug","Lower WSM completed: SR=%08x\n",
+                                         flash[S5_SR_ADDR] & widthmask));
+
+
   if (size > (4*MEG))
   {
     if ((flash[MEG+S5_SR_ADDR] & S5_SR_READY & widthmask) !=
@@ -1095,21 +1187,52 @@ _kernel_oserror *s5_status ( _kernel_swi_regs *r, int size,int *pending)
       r->r[0] = RET_PENDING;
       return NULL;
     }
-    if ((flash[MEG+S5_SR_ADDR] & S5_SR_ERASE_SUSPENDED & widthmask) ||
-        (flash[MEG+S5_SR_ADDR] & S5_SR_ERASE_ERROR & widthmask) ||
-        (flash[MEG+S5_SR_ADDR] & S5_SR_PROGRAM_ERROR & widthmask) ||
-        (flash[MEG+S5_SR_ADDR] & S5_SR_VPP_LOW & widthmask) ||
-        (flash[MEG+S5_SR_ADDR] & S5_SR_PROGRAM_SUSPENDED & widthmask) ||
-        (flash[MEG+S5_SR_ADDR] & S5_SR_PROTECTED & widthmask))
+
+ //dprintf(("debug","Upper WSM error: status=%x\n", flash[MEG+S5_SR_ADDR] & widthmask));
+
+    if (flash[MEG+S5_SR_ADDR] & S5_SR_ERASE_SUSPENDED & widthmask)
     {
-      dprintf(("debug","Upper WSM error: status=%x\n", flash[MEG+S5_SR_ADDR] & widthmask));
-    
-      *pending = 0;		/* So Flash_Release doesn't fail */
-      hw_failed = 1;
-      return ERROR(BADHARD);
+     *pending = 0;		/* So Flash_Release doesn't fail */
+      hw_failed = ERROR(S5_ERASE_SUS);
+      return ERROR(S5_ERASE_SUS);
     }
 
-    dprintf(("debug","Upper WSM completed: SR=%08x\n", flash[MEG+S5_SR_ADDR]));
+    if (flash[MEG+S5_SR_ADDR] & S5_SR_ERASE_ERROR & widthmask)
+    {
+     *pending = 0;
+      hw_failed = ERROR(S5_ERASE_ERR);
+      return ERROR(S5_ERASE_ERR );
+    }
+
+    if (flash[MEG+S5_SR_ADDR] & S5_SR_PROGRAM_ERROR & widthmask)
+    {
+     *pending = 0;
+      hw_failed = ERROR(S5_PROG_ERR);
+      return ERROR(S5_PROG_ERR);
+    }
+
+    if (flash[MEG+S5_SR_ADDR] & S5_SR_VPP_LOW & widthmask)
+    {
+     *pending = 0;
+      hw_failed = ERROR(S5_VPPLOW);
+      return ERROR(S5_VPPLOW);
+    }
+
+    if (flash[MEG+S5_SR_ADDR] & S5_SR_PROGRAM_SUSPENDED & widthmask)
+    {
+     *pending = 0;
+      hw_failed = ERROR(S5_PROG_SUS);
+      return ERROR(S5_PROG_SUS);
+    }
+
+    if (flash[MEG+S5_SR_ADDR] & S5_SR_PROTECTED & widthmask)
+    {
+     *pending = 0;
+      hw_failed = ERROR(S5_PROT);
+      return ERROR(S5_PROT);
+    }
+
+   dprintf(("debug","Upper WSM completed: SR=%08x\n",flash[MEG+S5_SR_ADDR]));
   }
 
   *flash = S5_CLEAR_SR;
@@ -1314,11 +1437,11 @@ _kernel_oserror *flash_abort( _kernel_swi_regs *r )
 _kernel_oserror *flash_powercontrol( _kernel_swi_regs *r )
 {
  clock_t done;
- 
+
  dprintf(("trace","flash_powercontrol %s\n", (r->r[0] & 1) ? "ON" : "OFF"));
-  
+
  if (!RECOGNISE(man,dev)) return ERROR(BADTYPES);
- if (r->r[0] & 1) 
+ if (r->r[0] & 1)
  {
   power_control->program = programcopy = (programcopy & 0xFFFFFFFC) | PROG_VOLTAGE;
  }
@@ -1331,8 +1454,8 @@ _kernel_oserror *flash_powercontrol( _kernel_swi_regs *r )
   while (clock() < done);
  r->r[1] = power_control->powerstatus;
  r->r[0] = (pending | pending1) ? RET_PENDING : RET_DONE;
- 
- dprintf(("trace","flash_powercontrol power=%x, status=%s\n", 
+
+ dprintf(("trace","flash_powercontrol power=%x, status=%s\n",
  	r->r[1], (pending | pending1) ? "PENDING" : "DONE"));
  return NULL;
 }

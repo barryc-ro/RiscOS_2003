@@ -42,7 +42,7 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-DEBUGLIB  = <Lib$Dir>.DebugLib.o.debuglibzm
+DEBUGLIB  = <Lib$Dir>.DebugLib.o.debuglib
 
 #
 # DebugLib support :- comment out for production.
@@ -112,19 +112,19 @@ resources:
 # Stand-alone module
 #
 ${TARGETSA}: ${OBJS} ${CLIB} ${LIBSD}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${LIBSD}
+        ${LD} ${LDFLAGS} -o $@ -module ${OBJS} ${CLIB} ${LIBSD}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} ${LDFLAGS} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        ${LD} ${LDFLAGS} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
         truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
