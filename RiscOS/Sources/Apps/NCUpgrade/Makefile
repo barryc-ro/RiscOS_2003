@@ -102,7 +102,6 @@ LIBSM = \
  ${ZLIB}.o.zlibzm \
  ${SOCKLIB}zm \
  ${INETLIB}zm \
- ${MEMCHECKLIB} \
 
 
 LIBS = \
@@ -115,7 +114,6 @@ LIBS = \
  ${ZLIB}.o.zlib \
  ${SOCKLIB} \
  ${INETLIB} \
- ${MEMCHECKLIB} \
 
 
 LIBSD = \
@@ -129,7 +127,6 @@ LIBSD = \
  ${DEBUGLIB} \
  ${SOCKLIB} \
  ${INETLIB} \
- ${MEMCHECKLIB} \
 
 
 # -----------------------------------------------------------------------------
