@@ -1162,7 +1162,7 @@ extern void text_item_push_break(HTMLCTX * me)
 
     /* SJM: added the line break check */
     add_break = TRUE;
-    if ( (nb = me->rh->stream.text_last) != NULL)
+    if ( (nb = me->rh->curstream->text_last) != NULL) /* SJM: 19Jun97 stream to curstream */
     {
 	/* if previous has a line break and isn't an explicitly pushed break
 	   then don't push break item but mark that we had it */
@@ -1216,7 +1216,7 @@ extern void text_item_ensure_break(HTMLCTX * me)
 
     PRSDBG(("Ensure Paragraph break.\n"));
 
-    if ( (nb = me->rh->stream.text_last) != NULL &&
+    if ( (nb = me->rh->curstream->text_last) != NULL &&	/* SJM: 19Jun07 stream to curstream. Fixed problem with delayed tables */
 	 nb->tag != rid_tag_PBREAK &&
 	 nb->tag != rid_tag_BULLET) /* SJM: added bullet check */
     {

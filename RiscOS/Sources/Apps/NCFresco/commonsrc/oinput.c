@@ -1206,6 +1206,8 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 			doc->selection.data.text.input_offset++;
 			used = TRUE;
 		    }
+		    else
+			used = be_doc_key_FILLED;
 
 		    redraw = TRUE;
 		}

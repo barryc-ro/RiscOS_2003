@@ -56,7 +56,7 @@ static void dump_elements_open(BITS *bits)
     {
 	if ( bits[i >> 5] & (1 << (i & 0x1f)) )
 	{
-	    PRSDBG((" %.*s", elements[i].name.bytes, elements[i].name.ptr));
+	    PRSDBGN((" %.*s", elements[i].name.bytes, elements[i].name.ptr));
 	}
     }
 }
@@ -70,7 +70,7 @@ static void dump_stack(SGMLCTX *ctx)
     return;
 #endif
 
-    PRSDBG(("dump_stack(%p): tos %p\n", ctx, item));
+    PRSDBGN(("dump_stack(%p): tos %p\n", ctx, item));
 
     if (item == NULL)
 	return;
@@ -87,18 +87,18 @@ static void dump_stack(SGMLCTX *ctx)
 	if (item == ctx->tos)
 	    dir = "    ";
 #if 0
-	PRSDBG(("This %p, outer %p(%p), inner %p(%p)\n",
+	PRSDBGN(("This %p, outer %p(%p), inner %p(%p)\n",
 		item, item->outer, &item->outer, item->inner, &item->inner));
 #else
-	PRSDBG(("%s %p, fx %08x, outer %p, inner %p: %s\n",
+	PRSDBGN(("%s %p, fx %08x, outer %p, inner %p: %s\n",
 		dir, item, item->effects_active[0], item->outer, item->inner, ctx->elements[abs (item->element)].name.ptr));
 #endif
 
-	PRSDBG(("%s OPEN:", dir));
+	PRSDBGN(("%s OPEN:", dir));
 	dump_elements_open(item->elements_open);
-	PRSDBG(("\n%s SEEN:", dir));
+	PRSDBGN(("\n%s SEEN:", dir));
 	dump_elements_open(item->elements_seen);
-	PRSDBG(("\n"));
+	PRSDBGN(("\n"));
 
 	if (ctx->tos == item)
 	    dir = "^^^^";
@@ -718,23 +718,28 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *gu
 
     if (gbf_active(GBF_GUESS_ATTRIBUTES))
     {
+	int dist;
 	PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, s.ptr));
 
 #if 1
         /* pdh: less keen on giving out-of-control matches */
-        attributep = element->attributes;
-        ix = 0;
-        while ( (attribute = *attributep)->name.ptr != NULL )
-        {
-            if ( strnearly( s.ptr, s.bytes,
-                            attribute->name.ptr, attribute->name.bytes,
-                            2 ) )
-            {
-                *guessed = TRUE;
-                return ix;
-            }
-            ix++;
-            attributep++;
+	/* sjm: even less keen, tries distance 1 before 2 */
+	for (dist = 1; dist <= 2; dist++)
+	{
+	    attributep = element->attributes;
+	    ix = 0;
+	    while ( (attribute = *attributep)->name.ptr != NULL )
+	    {
+		if ( strnearly( s.ptr, s.bytes,
+				attribute->name.ptr, attribute->name.bytes,
+				dist ) )
+		{
+		    *guessed = TRUE;
+		    return ix;
+		}
+		ix++;
+		attributep++;
+	    }
         }
 #else
 	for (len = s.bytes; len > 0; len--)

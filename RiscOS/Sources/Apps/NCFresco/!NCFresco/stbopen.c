@@ -394,7 +394,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     parent->threaded++;
 
     STBDBG(("frontend_open_url: backend IN transient %d\n", parent->open_transient));
-    ep = backend_open_url(parent, &parent->fetching, url, bfile, referer, oflags);
+    ep = backend_open_url(parent, &parent->fetching, url, bfile, flags & fe_open_url_NO_REFERER ? NULL : referer, oflags);
     STBDBG(("frontend_open_url: backend OUT fetching %p error %x\n", parent->fetching, ep ? ep->errnum : 0));
 
     if (ep)

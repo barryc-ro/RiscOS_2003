@@ -154,7 +154,7 @@ static BOOL open_within_container(SGMLCTX *context, const tag)
     {
 	ELEMENT *elem = &context->elements[item->element];
 
-	stop = (elem->flags & FLAG_CONTAINER) != 0;
+	stop = (elem->flags & FLAG_CONTAINER) != 0 && (elem->flags & FLAG_FULL_UNWIND) == 0;
 	seen = elem->id == tag;
     }
 
@@ -307,7 +307,7 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 	    break;
 	case CLOSE_ANY_OPEN:
 	    if ( open_within_container(context, tag) )
-		/* while ( is_element_open(context, tag) ) */
+		 /* while ( is_element_open(context, tag) ) */
 	    {
 		ELEMENT *oe = &context->elements[context->tos->element];
 		PRSDBGN(("ensure_pre_requisite(%s): implied closure </%s>\n",
@@ -317,7 +317,7 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 
 		/* perform_element_close (context, oe); */
 
-#if 1
+#if 0
 		/* SJM: 20/5/97: this (or something liek it) is needed here as much as in perform_element_close() */
 		if (other_elem->flags & FLAG_OUT_OF_ORDER_CLOSE)
 		{
@@ -342,14 +342,14 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 	    break;
 	case QUIETLY_CLOSE_ANY_OPEN:
 	    if ( open_within_container(context, tag) )
-	    if ( is_element_open(context, tag) )
+		/* if ( is_element_open(context, tag) ) --DL: This is implied by the above */
 	    {
 		PRSDBGN(("ensure_pre_requisite%s(): quiet implied closure </%s>\n",
 			element->name.ptr, other_elem->name.ptr));
 		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
 		    sgml_note_missing_close (context, other_elem);
 		/* perform_element_close (context, &context->elements [context->tos->element] ); */
-#if 1
+#if 0
 		/* SJM: 20/5/97: this (or something liek it) is needed here as much as in perform_element_close() */
 		if (other_elem->flags & FLAG_OUT_OF_ORDER_CLOSE)
 		{

@@ -78,17 +78,30 @@ static BOOL should_we_display_url(const char *url)
 	strncasecomp(url, "file:/cache:", sizeof("file:/cache:")-1) != 0;
 }
 
+/* This function write s a string to the file with potential line
+ * breaks at punctuation, whitespace or every 16 characters
+ * This should make the errors format better.
+ * The NOBR/WBR scheme is whaqt happens to work at the moment.
+ */
+
 static void write_url_with_breaks(FILE *f, const char *url)
 {
     const char *s = url;
-    int c;
+    int c, count = 0;
 
     fputs("<NOBR>", f);
     for (c = *s++; c; c = *s++)
     {
 	fputc(c, f);
-	if (c == '/')
+	if (ispunct(c) || isspace(c) || count == 16)
+	{
 	    fputs("<WBR>", f);
+	    count = 0;
+	}
+	else
+	{
+	    count++;
+	}
     }
     fputs("</NOBR>", f);
 }
@@ -907,9 +920,11 @@ static os_error *fe_error_write_file(FILE *f, const char *query)
     /* write message */
     s = msgs_lookup(which);
     if (s && strcmp(s, which) == 0)
-	fprintf(f, "%s", message);
-    else
-	fprintf(f, strsafe(s));
+	write_url_with_breaks(f, message);
+/* 	fprintf(f, "%s", message); */
+    else if (s)
+	write_url_with_breaks(f, s);
+/* 	fprintf(f, strsafe(s)); */
 
     /* write button 1 */
     fputs(msgs_lookup("error1"), f);
@@ -1369,6 +1384,20 @@ static int internal_action_back(const char *query, const char *bfile, const char
 
     if (v)
 #if 1
+    {
+	if (fe_history_move_recent_steps(main_view, -1, new_url))
+	{
+	    /* set history flag on current document */
+	    backend_doc_set_flags(main_view->displaying, be_openurl_flag_HISTORY, be_openurl_flag_HISTORY);
+	
+	    /* clear check expire flag on current fetch */
+	    *flags &= ~access_CHECK_EXPIRE;
+	    
+	    return fe_internal_url_REDIRECT;
+	}
+    }
+    return fe_internal_url_NO_ACTION;
+#elif 0
 	fevent_handler(fevent_HISTORY_BACK, v);
     return fe_internal_url_NO_ACTION;
 #else
@@ -1392,13 +1421,30 @@ static int internal_action_forward(const char *query, const char *bfile, const c
 
     if (v)
 #if 1
+    {
+	if (fe_history_move_recent_steps(main_view, +1, new_url))
+	{
+	    /* set history flag on current document */
+	    backend_doc_set_flags(main_view->displaying, be_openurl_flag_HISTORY, be_openurl_flag_HISTORY);
+	
+	    /* clear check expire flag on current fetch */
+	    *flags &= ~access_CHECK_EXPIRE;
+	    
+	    return fe_internal_url_REDIRECT;
+	}
+    }
+    return fe_internal_url_NO_ACTION;
+#elif 0
 	fevent_handler(fevent_HISTORY_FORWARD, v);
     return fe_internal_url_NO_ACTION;
 #else
     {
  	sound_event(snd_HISTORY_FORWARD);
+
  	*new_url = strdup(fe_history_get_url(v, history_NEXT));
  	*flags &= ~access_CHECK_EXPIRE;
+
+	backend_doc_set_flags(v->displaying, be_openurl_flag_HISTORY, be_openurl_flag_HISTORY);
     }
 
     return *new_url ? fe_internal_url_REDIRECT : fe_internal_url_ERROR;

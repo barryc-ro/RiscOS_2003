@@ -31,14 +31,14 @@ static char *webfont_font_name(int n, char *buffer)
 	switch (n & WEBFONT_SPECIAL_TYPE_MASK)
 	{
 	case WEBFONT_SPECIAL_TYPE_SYMBOL:
-	    strcpy(buffer, "Selwyn");
+	    strcpy(buffer, config_font_names[12]);
 	    break;
 #ifdef STBWEB
 	case WEBFONT_SPECIAL_TYPE_MENU:
-	    strcpy(buffer, "Lucida.Sans");
+	    strcpy(buffer, config_font_names[13]);
 	    break;
 	case WEBFONT_SPECIAL_TYPE_JAPANESE:
-	    strcpy(buffer, "HeiBold");
+	    strcpy(buffer, config_font_names[14]);
 	    break;
 #endif
 	default:

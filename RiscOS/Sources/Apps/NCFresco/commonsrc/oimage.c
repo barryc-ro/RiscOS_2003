@@ -139,10 +139,15 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 		break;
 	    }
 
-            write_text_in_box_height(alt, ww - PLINTH_PAD, wf->handle, &height);
+	    if (ww > PLINTH_PAD)
+	    {
+		write_text_in_box_height(alt, ww - PLINTH_PAD, wf->handle, &height);
+		imh = height + PLINTH_PAD;
+	    }
+	    else
+		imh = *ih;
 
 	    imw = ww;
-	    imh = height + PLINTH_PAD;
 	}
     }
 #else  /* BUILDERS */

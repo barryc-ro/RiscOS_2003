@@ -717,14 +717,8 @@ int fe_history_move_alpha_index(fe_view v, int index, char **new_url)
     return FALSE;
 }
 
-int fe_history_move_recent_index(fe_view v, int index, char **new_url)
+static BOOL fe_history_move_to(fe_view v, fe_history_item *item, char **new_url)
 {
-    fe_history_item *item;
-    int i;
-
-    for (i = 0, item = v->last; i < index && item; i++, item = item->prev)
-	;
-
     if (item)
     {
 	fe_view vv = fe_frame_specifier_decode(v, item->frame[0].specifier);
@@ -745,7 +739,37 @@ int fe_history_move_recent_index(fe_view v, int index, char **new_url)
 	/* open the new url */
 	frontend_open_url(item->frame[0].url, vv, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
     }
+
     return FALSE;
+}
+
+int fe_history_move_recent_index(fe_view v, int index, char **new_url)
+{
+    fe_history_item *item;
+    int i;
+
+    for (i = 0, item = v->last; i < index && item; i++, item = item->prev)
+	;
+
+    return fe_history_move_to(v, item, new_url);
+}
+
+int fe_history_move_recent_steps(fe_view v, int steps, char **new_url)
+{
+    fe_history_item *item = NULL;
+
+    if (steps < 0)
+    {
+	for (item = v->hist_at; item != v->first && steps != 0; steps++, item = item->prev)
+	    ;
+    }
+    else if (steps > 0)
+    {
+	for (item = v->hist_at; item != v->last && steps != 0; steps--, item = item->next)
+	    ;
+    }
+
+    return fe_history_move_to(v, item, new_url);
 }
 
 void fe_history_dispose(fe_view v)

@@ -5021,7 +5021,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
     if (strcasecomp(name, "expires") == 0)
     {
 	unsigned expires = UINT_MAX;
-	if (!access_get_header_info(doc->url, NULL, NULL, &expires) || expires == UINT_MAX)
+	if (!access_get_header_info(doc->url, NULL, NULL, &expires) || expires == UINT_MAX || expires == 0)
 	    return NULL;
 
 	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime((const time_t *)&expires));

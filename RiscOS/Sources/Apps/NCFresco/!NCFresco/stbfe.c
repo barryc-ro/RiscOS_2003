@@ -2582,7 +2582,12 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
 	fe_keyboard_close();
     }
 
-    return used;
+    if (used == be_doc_key_FILLED)
+    {
+	return fevent_HIGHLIGHT_FORWARD;
+    }
+
+    return used ? 0 : -1;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -4890,7 +4895,10 @@ static void fe_handle_service_message(wimp_msgstr *msg)
     }
 
     case Service_ShutdownComplete:
+	/* on a shutdown flush the cache and stuff */
 	re_read_config(ncfresco_loaddata_NOT_ALL | ncfresco_loaddata_FLUSH);
+
+	fe_status_unstack_all();
 	break;
     }
 }

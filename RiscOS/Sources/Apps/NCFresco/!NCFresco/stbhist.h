@@ -22,5 +22,6 @@ extern void fe_history_update_current_state(fe_view v);
 extern char *fe_history_lookup_specifier(fe_view v, const char *specifier, int *xoffset, int *yoffset);
 extern int fe_history_move_alpha_index(fe_view v, int index, char **new_url);
 extern int fe_history_move_recent_index(fe_view v, int index, char **new_url);
+extern int fe_history_move_recent_steps(fe_view v, int steps, char **new_url);
 
 /* stbhist.c */

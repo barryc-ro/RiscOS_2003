@@ -334,6 +334,7 @@ os_error *backend_doc_click(be_doc doc, int x, int y, wimp_bbits bb);
 #define be_doc_key_NOT_USED	0
 #define be_doc_key_USED		1
 #define be_doc_key_SUBMIT	2 /* key was used and submitted a form */
+#define be_doc_key_FILLED	3 /* key was used and filled a text entry field */
 
 os_error *backend_doc_key(be_doc doc, int key, int *used);
 

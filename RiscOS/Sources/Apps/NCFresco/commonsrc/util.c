@@ -591,7 +591,10 @@ os_error *write_text_in_box(int handle, const char *str, void *bbox)
         r.r[3] = x0 + (x1 - x0) / 2 - lines[i].width / 2;
         r.r[4] = y;
         r.r[7] = lines[i].length;
-        e = os_swix(Font_Paint, &r);
+
+	/* don't display if the line starts outside the bounding box */
+	if (r.r[3] >= x0)
+	    e = os_swix(Font_Paint, &r);
 
         y -= spacing;
     }
