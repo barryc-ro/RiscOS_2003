@@ -21,8 +21,10 @@ WPFLAGS=FR~C~V
 # The following four macros are passed through to all sub-makefiles.  Therefore you can
 # switch all the options just by changing them here, cleaning everything, and rebuilding.
 
-INCLUDES = C:SSLeay,TCPIPLibs:,C:
-DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA
+INCLUDES = C:CryptoLib,C:SSLeay,TCPIPLibs:,C:
+DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA -DPKCS11 -D_ACORN
+#INCLUDES = C:SSLeay,TCPIPLibs:,C:
+#DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA
 EFLAGS   = -zM -zps1 -Wpand
 CC       = cc
 
@@ -38,6 +40,7 @@ export_hdrs:
        SSLExportHeader bf blowfish
        SSLExportHeader bn bn
        SSLExportHeader buffer buffer
+       SSLExportHeader cast cast
        SSLExportHeader conf conf
        SSLExportHeader h.^ cryptall
        SSLExportHeader h.^ cryptlib
@@ -47,6 +50,7 @@ export_hdrs:
        SSLExportHeader dsa dsa
        SSLExportHeader err err
        SSLExportHeader evp evp
+       SSLExportHeader hmac hmac
        SSLExportHeader idea idea
        SSLExportHeader lhash lhash
        SSLExportHeader md md2
@@ -58,12 +62,15 @@ export_hdrs:
        SSLExportHeader rand rand
        SSLExportHeader rc2 rc2
        SSLExportHeader rc4 rc4
+       SSLExportHeader rc5 rc5
+       SSLExportHeader ripemd ripemd
        SSLExportHeader rsa rsa
        SSLExportHeader sha sha
        SSLExportHeader ^.ssl ssl
        SSLExportHeader ^.ssl ssl2
        SSLExportHeader ^.ssl ssl23
        SSLExportHeader ^.ssl ssl3
+       SSLExportHeader ^.ssl tls1
        SSLExportHeader stack stack
        SSLExportHeader txt_db txt_db
        SSLExportHeader x509 x509
