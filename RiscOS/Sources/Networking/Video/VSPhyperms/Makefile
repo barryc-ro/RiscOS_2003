@@ -12,7 +12,7 @@ EXP_HDR = <export$dir>
 #
 TCPIPLib   = TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
 DebugLib   = 
-#<Lib$Dir>.DebugLib.o.DebugLibZM 
+#<Lib$Dir>.DebugLib.o.DebugLib
 CLIB       = CLIB:o.stubs
 CPPLIB	   = CLIB:o.c++lib
 RLIB       = RISCOSLIB:o.risc_oslib
@@ -61,7 +61,6 @@ INCLUDES = -ITCPIPLibs:,C:
 TARGET    = rm.${COMPONENT}
 
 OBJS      =	\
-o.Pdebug	\
 o.VSPHdr	\
 o.main		\
 o.Interface	\
@@ -77,7 +76,6 @@ o.NECstruct	\
 o.htonstruct
 
 OBJSI     =	\
-i.Pdebug	\
 i.main		\
 i.Interface	\
 i.List		\
@@ -92,7 +90,6 @@ i.htonstruct	\
 i.NECstruct
 
 OBJSINST   =	\
-oi.Pdebug	\
 oi.VSPHdr	\
 oi.main		\
 oi.Interface	\
