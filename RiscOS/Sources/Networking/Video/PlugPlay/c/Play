@@ -29,6 +29,7 @@
 #include <VideoCtrl.h>
 
 #include "FullScreen.h"
+#include "PlugIn.h"
 #include "Utils.h"
 
 #include "Play.h"
@@ -40,7 +41,6 @@
 /* Local variables */
 
 static play_session * sessions;
-static bool           play_looping = true;
 
 /* Local functions */
 
@@ -393,18 +393,37 @@ _kernel_oserror * play_play(play_session * s, play_mode mode, unsigned int speed
 
 static _kernel_oserror * play_call_play(play_session * s, play_mode mode, unsigned int speed)
 {
-  char sp[20];
+  char         sp[20];
+  char         ra[32];
+  const char * r;
 
   play_build_speed(mode, speed, sp, true);
 
   if ((mode != play_mode_normal || speed != 1) && s->go_via_normal != 0) s->go_via_normal = 0;
+
+  *ra = '\0';
+
+  if (s->setting_up)
+  {
+    int from, to;
+
+    if (plugin_get_video_options(s->plugin, &from, &to, NULL))
+    {
+      if      (from >= 0 && to >= 0) sprintf(ra, "%d-%d", from, to);
+      else if (from >= 0)            sprintf(ra, "%d-",   from);
+      else if              (to >= 0) sprintf(ra, "-%d",   to);
+    }
+  }
+
+  if (*ra == '\0') r = play_return_range(s);
+  else             r = ra;
 
   return _swix(VideoControl_Play,
                _INR(0,3),
 
                0,
                s->handle,
-               play_return_range(s),
+               r,
                sp);
 }
 
@@ -580,8 +599,9 @@ _kernel_oserror * play_new_session(play_session ** news)
   if (s == NULL) return make_no_memory_error(6);
 
   if (sessions != NULL) sessions->prev = s;
-  s->next = sessions;
-  sessions = s;
+
+  s->next   = sessions;
+  sessions  = s;
 
   return NULL;
 }
@@ -629,9 +649,11 @@ void play_shutdown(void)
 }
 
 /**************************************************************/
-/* fullscreen_set_defaults()                                  */
+/* play_set_defaults()                                        */
 /*                                                            */
-/* Set default options.                                       */
+/* Set default options. Will then go on to modify those with  */
+/* any options in the plug-in referenced by the given session */
+/* structure's "plugin" field, if this is non-zero.           */
 /*                                                            */
 /* Parameters: Pointer to a relevant playback session struct. */
 /**************************************************************/
@@ -668,14 +690,41 @@ static _kernel_oserror * play_set_defaults(play_session * s)
 
   opts[18] = vc_tags_looping;
   opts[19] = 1;
-  opts[20] = play_looping ? 1 : 0;
+  opts[20] = Play_DefaultLoopingValue == true ? 1 : 0;
+  s->loop  = opts[20];
 
   opts[21] = vc_tags__end;
 
-  return _swix(VideoControl_Options,
-               _INR(0,2),
+  /* Right, so set the general playback system's defaults */
 
-               0,
-               s->handle,
-               &opts);
+  RetError(_swix(VideoControl_Options,
+                 _INR(0,2),
+
+                 0,
+                 s->handle,
+                 &opts));
+
+  /* Now we need to worry about a plug-in launcher. We only care about whether */
+  /* or not setting options for that plug-in, if any, is going to change the   */
+  /* playback looping on/off stuff here. This flag is important to us as,      */
+  /* apart from anything else, an end-of-stream signal by Video Control        */
+  /* forwarded to us by TaskModule must only result in (say) the full screen   */
+  /* player closing if looping for the session is disabled.                    */
+
+  if (s->plugin != 0)
+  {
+    bool loop;
+
+    if (
+         plugin_get_video_options(s->plugin,
+                                  NULL,
+                                  NULL,
+                                  &loop)
+       )
+       s->loop = (loop == true ? 1 : 0);
+
+    return plugin_set_video_options(s->plugin, s->handle);
+  }
+
+  return NULL;
 }

@@ -190,6 +190,7 @@ OBJSPP = \
  opp.Handlers		\
  opp.Main		\
  opp.ModeInfo		\
+ opp.Mouse		\
  opp.Overlay		\
  opp.Parameters		\
  opp.Play		\
@@ -209,6 +210,7 @@ OBJSPPD = \
  oppd.Handlers		\
  oppd.Main		\
  oppd.ModeInfo		\
+ oppd.Mouse		\
  oppd.Overlay		\
  oppd.Parameters	\
  oppd.Play		\
@@ -230,6 +232,7 @@ OBJSPPRZ = \
  opprz.Handlers		\
  opprz.Main		\
  opprz.ModeInfo		\
+ opprz.Mouse		\
  opprz.Overlay		\
  opprz.Parameters	\
  opprz.Play		\
@@ -250,6 +253,7 @@ OBJSPPRDZ = \
  opprdz.Handlers	\
  opprdz.Main		\
  opprdz.ModeInfo	\
+ opprdz.Mouse		\
  opprdz.Overlay		\
  opprdz.Parameters	\
  opprdz.Play		\
@@ -273,6 +277,7 @@ OBJSPPZ = \
  oppz.Handlers		\
  oppz.Main		\
  oppz.ModeInfo		\
+ oppz.Mouse		\
  oppz.Overlay		\
  oppz.Parameters	\
  oppz.Play		\

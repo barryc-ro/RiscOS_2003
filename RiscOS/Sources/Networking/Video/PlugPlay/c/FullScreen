@@ -19,6 +19,7 @@
 #include <kernel.h>
 #include <swis.h>
 #include <Global/SWIs.h>
+#include <Global/Services.h>
 
 #include <tboxlibs/wimp.h>
 #include <tboxlibs/wimplib.h>
@@ -32,6 +33,7 @@
 #include <SVBmip.h>
 #include <VideoCtrl.h>
 
+#include "Mouse.h"
 #include "Parameters.h"
 #include "Play.h"
 #include "PlugIn.h"
@@ -123,7 +125,7 @@ static int               fullscreen_channel_poll             (int eventcode, Wim
 static int               fullscreen_auto_destruct            (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 
 /**************************************************************/
-/* fullscreen_setup()                                         */
+/* fullscreen_start()                                         */
 /*                                                            */
 /* Start full screen video playback. Will not return an error */
 /* unless the overlay system is up with a window open; any    */
@@ -131,10 +133,16 @@ static int               fullscreen_auto_destruct            (int eventcode, Wim
 /* should run this function's return value through            */
 /* fullscreen_report_error, ideally.                          */
 /*                                                            */
-/* Parameters: RTSP URL for the video to play.                */
+/* Parameters: RTSP URL for the video to play;                */
+/*                                                            */
+/*             If being launched on behalf of another plug-in */
+/*             (so e.g. all our deviations from default       */
+/*             options will be stored in that other item),    */
+/*             pass its plug-in instance handle here, else    */
+/*             pass in zero.                                  */
 /**************************************************************/
 
-_kernel_oserror * fullscreen_start(const char * url)
+_kernel_oserror * fullscreen_start(const char * url, unsigned int launcher)
 {
   char       * start;
   const char * end;
@@ -154,6 +162,15 @@ _kernel_oserror * fullscreen_start(const char * url)
   /* Open a full-screen window via. stand-alone plug-in instance */
 
   ChkError(overlay_open_window(&fullscreen_plugin));
+  plugin_set_launcher(fullscreen_plugin, launcher);
+
+  // TBD - if we turn this off and it used to be on, the browser doesn't
+  // know and doesn't reactivate it when the mouse next moves. This means
+  // we don't have to rectangle the mouse to not move, but it means we
+  // need to now if the pointer was on, and therefore, should we restore
+  // it afterwards.
+  //
+  // mouse_pointer_off();
 
   /* General key press handler. We can do RetError now */
 
@@ -163,6 +180,8 @@ _kernel_oserror * fullscreen_start(const char * url)
   /* Get a new playback session and kick off playback */
 
   RetError(play_new_session(&fullscreen_session));
+
+  fullscreen_session->plugin   = fullscreen_plugin;
   fullscreen_session->callback = fullscreen_play_callback;
 
   RetError(play_setup(fullscreen_session, url));
@@ -372,6 +391,98 @@ _kernel_oserror * fullscreen_shutdown(void)
 }
 
 /**************************************************************/
+/* fullscreen_handle_eos()                                    */
+/*                                                            */
+/* Handle an end-of-stream event. Will shut down the session  */
+/* immediately, after warning of a stream timeout, or not at  */
+/* all according to the event's nature.                       */
+/*                                                            */
+/* The function attempts to run any errors raised internally  */
+/* through fullscreen_report_error, and will only return a    */
+/* non-NULL result if this wasn't possible for some reason.   */
+/*                                                            */
+/* Parameters: Pointer to the SWI register payload of a       */
+/*             Wimp message from TaskModule reporting a       */
+/*             service call for Service_VideoControl 5        */
+/*             (VideoControlPlayStateChanged).                */
+/**************************************************************/
+
+_kernel_oserror * fullscreen_handle_eos(_kernel_swi_regs * r)
+{
+  /* The Video Control client ID should be in R2 */
+
+  if (fullscreen_session == NULL || r->r[2] != fullscreen_session->handle) return NULL;
+
+  /* Is this a normal or error based timeout? We only take it as a */
+  /* timeout if the flag saying "read new status" is set and the   */
+  /* status says "timeout EOS".                                    */
+
+  if ((r->r[3] & VC_SVC_NewPlayState_ReadNewState) != 0)
+  {
+    _kernel_oserror * e;
+    int               opts[4];
+    vc_play_state     state;
+
+    opts[0] = vc_tags_play_state;
+    opts[1] = 1;
+    opts[2] = 0;
+    opts[3] = vc_tags__end;
+
+    e = _swix(VideoControl_Options,
+               _INR(0,2),
+
+               VC_Options_ReadValues,
+               fullscreen_session->handle,
+               opts);
+
+    if (e != NULL)
+    {
+      if (!fullscreen_report_error(e, true)) return e;
+      else                                   return NULL;
+    }
+
+    state = (vc_play_state) opts[2];
+
+    if (
+         state != vc_play_state_normal_eos  &&
+         state != vc_play_state_timeout_eos
+       )
+       return NULL; /* I.e, "huh?" - this is one of those Should Never Happen things */
+
+    /* A timeout? If so, raise a nice error rather than just exitting */
+
+    else if (state == vc_play_state_timeout_eos)
+    {
+      erb.errnum = Utils_Error_Custom_Message;
+
+      StrNCpy0(erb.errmess,
+               lookup_token("Timeout:Video stream ended due to timeout",
+                            0,
+                            0));
+
+      if (!fullscreen_report_error(&erb, true)) return &erb;
+      else                                      return NULL;
+    }
+  }
+
+  /* We often briefly see EOS for looping playback since the looping is done */
+  /* client-side; the issue 3E Video Control specification, for example,     */
+  /* warns of this, in the tag 24 documentation in the options table.        */
+  /*                                                                         */
+  /* Don't check this flag any earlier, by the way - we need to have made    */
+  /* sure this wasn't an end of stream due to timeout beforehand.            */
+
+  if (fullscreen_session->loop != 0) return NULL;
+
+  /* Right then, that just about wraps it up - that end of stream signal */
+  /* really was for us and really did mean a normal end of stream.       */
+
+  fullscreen_shutdown();
+
+  return NULL;
+}
+
+/**************************************************************/
 /* fullscreen_report_error()                                  */
 /*                                                            */
 /* If there's an error during fullscreen_start, report it     */
@@ -401,7 +512,7 @@ _kernel_oserror * fullscreen_shutdown(void)
 bool fullscreen_report_error(_kernel_oserror * e, bool kill)
 {
   if (e                 == NULL) return true;
-  if (fullscreen_plugin == NULL) return false;
+  if (fullscreen_plugin == 0)    return false;
 
   /* Remove all existant overlays */
 
@@ -442,6 +553,20 @@ bool fullscreen_report_error(_kernel_oserror * e, bool kill)
   }
 
   return true;
+}
+
+/**************************************************************/
+/* fullscreen_get_plugin()                                    */
+/*                                                            */
+/* Return the instance handle for the pseudo plug-in we're    */
+/* using for playback.                                        */
+/*                                                            */
+/* Returns:    Instance handle of truly stand-alone plug-in.  */
+/**************************************************************/
+
+unsigned int fullscreen_get_plugin(void)
+{
+  return fullscreen_plugin;
 }
 
 /**************************************************************/
@@ -511,14 +636,8 @@ static _kernel_oserror * fullscreen_play_callback(play_session * s, unsigned int
         overlay_add("disabled",                   NULL,   oa_top_right, 100, NULL, fullscreen_overlay_handle);
       }
 
-      /* Some other error, nasty. Show "!" */
-
-      else
-      {
-        overlay_add(fullscreen_determine_icon(s), use,    oa_top_right, 200, NULL, fullscreen_overlay_handle);
-        sprintf(number, "%d", response);
-        overlay_add("warning",                    number, oa_top_right, 100, NULL, fullscreen_overlay_handle);
-      }
+      /* Other errors are dealt with already - play_poll will have called */
+      /* fullscreen_report_error before calling here.                     */
     }
   }
 
@@ -544,12 +663,12 @@ static _kernel_oserror * fullscreen_play_callback(play_session * s, unsigned int
 
 static const char * fullscreen_determine_icon(play_session * s)
 {
-  if (s->setting_up) return "play";
+  if (s->setting_up) return "wait";
 
   switch (s->current)
   {
     default:
-    case play_mode_none:   return "blank";
+    case play_mode_none:   return "blank_tv";
     case play_mode_frwd:   return "fr";
     case play_mode_srwd:   return "last";
     case play_mode_pause:  return "pause";
@@ -662,7 +781,8 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
   // into service functions for black-boxing and clarifying the key
   // handling path (ADH, 05-Jul-2000 - it's all my fault anyway).
 
-  /* First pass - is this keypress allowed in the current context? */
+  /* First pass - is this keypress allowed in the current context? Deal */
+  /* with overlay issues and so-on too.                                 */
 
   switch (key)
   {
@@ -924,25 +1044,13 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
     case 389: /* |< (seek to start) */
     case 391: /* >| (seek to end) */
     {
-      if (fullscreen_session == NULL || fullscreen_session->in_transition != 0)
-      {
+      if (
+           fullscreen_session == NULL ||
+           fullscreen_session->in_transition != 0
+         )
+         return 1; /* Operation In Progress; showing a 'Disabled' icon proved to be annoying, so it was taken out */
 
-// A nagging interface with "X" icons when there's an operation in progress
-// only serves to irritate. The clock's up in the top left so we shouldn't
-// put the "X" there - it obscures the one UI key to what's really going on
-// - but we try hard to not use the top left (say) or indeed anywhere else
-// as you can end up with two "X"s on screen in different places. Awful. So,
-// for now at least, this is taken out.
-//
-//        overlay_add("disabled",
-//                    NULL,
-//                    oa_top_right,
-//                    100,
-//                    NULL,
-//                    fullscreen_overlay_handle);
-
-        return 1;
-      }
+      /* Operation not in progress so show the clock */
 
       if (fullscreen_waiting == NULL)
       {
@@ -955,14 +1063,6 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
       }
     }
     break;
-
-    /* Anything left over gets passed on */
-
-//    default:
-//    {
-//      wimp_process_key(key);
-//      return 1;
-//    }
   }
 
   /* Second pass - deal with command keys */
@@ -1150,14 +1250,62 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
     }
     break;
 
-    case 68:
-    case 100:
+    /* The next chunk of code shouldn't normally be compiled in, even */
+    /* for debug builds. You'll need to knock out the wimp_process*/
+
+    #if 0
+
+      /* Big D - shut all files; useful for testing LVFGeneric error */
+      /* throwing as a server message, for example.                  */
+
+      case 68:
+      {
+        _swix(OS_CLI,
+        _IN(0),
+        "SHUT");
+      }
+      break;
+
+      #define VideoControl_Test 0x053509
+
+      /* Little D - call "Friday Evening" interface, so named from the time it was */
+      /* written and the silly SWI name that I used, temporarily. That was before  */
+      /* altering it to a more sane "Test" when I decided to keep the code in the  */
+      /* Video Control module, albeit commented/compiled out. To use this, add the */
+      /* SWI name to the CMHG header file for Video Control, fix the above SWI     */
+      /* number definition if it's not right, and uncomment the relevant stuff in  */
+      /* the module SWI handler. As ever, don't forget to undo all of that when    */
+      /* you've finished testing things.                                           */
+
+      case 100:
+      {
+        _swix(VideoControl_Test,
+              _INR(0,3),
+
+              0,
+              fullscreen_session->handle,
+              1,  /* Set play state */
+              vc_play_state_tineout_eos);
+
+        _swix(OS_ServiceCall,
+              _INR(0,3),
+
+              VideoControlNewPlayState,
+              Service_VideoControl,
+              fullscreen_session->handle,
+              VC_SVC_NewPlayState_ReadNewState | VC_SVC_NewPlayState_EndOfStreamSignalled);
+      }
+      break;
+
+    #endif
+
+    /* Anything left over gets passed on */
+
+    default:
     {
-      _swix(OS_CLI,
-      _IN(0),
-      "SHUT");
+      wimp_process_key(key);
+      return 1;
     }
-    break;
   }
 
   return 1;
@@ -1182,6 +1330,7 @@ static _kernel_oserror * fullscreen_change_channel(unsigned int chan_no)
     char            * channel;
     char            * query;
     char            * newu;
+    unsigned int      launcher_record;
     bool              gotit;
 
     e = _swix(SVB_EnumerateChannels,
@@ -1339,8 +1488,9 @@ static _kernel_oserror * fullscreen_change_channel(unsigned int chan_no)
 
     /* Now shutdown and restart with the new URL */
 
+    launcher_record = plugin_get_launcher(fullscreen_plugin);
     fullscreen_shutdown();
-    e = fullscreen_start(newu);
+    e = fullscreen_start(newu, launcher_record);
 
     free(newu);
 
