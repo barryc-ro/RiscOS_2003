@@ -9,7 +9,7 @@
 # 08-Dec-94  AMcC         Adjust rules and dependencies so that
 #                         tokens don't need to be generated every time
 #                         - remove data.Dictionary to regenerate tokens
-#
+# 05 Sep 1997 RWB	Corrected error on usage of WFLAGS
 
 #
 # Generic options:
@@ -30,9 +30,8 @@ WFLAGS  = ~cr~v
 #
 # Program specific options:
 #
-COMPONENT = Messages
-SOURCE    = s.Messages
-TARGET    = rm.${LOCALE}.${BUILD}.Messages
+SOURCE    = s.${TARGET}
+BUILT     = rm.${LOCALE}.${BUILD}.${TARGET}
 PROCESSDIR= Processed.${LOCALE}.${BUILD}
 RESDIR    = Resources.${LOCALE}.${BUILD}
 UTILS     = Utils
@@ -66,34 +65,36 @@ SCANRES = ${UTILS}.ScanRes
 #
 # Generic rules:
 #
-rom: ${TARGET}
+rom: ${BUILT}
         @echo ${COMPONENT}: rom module built for Build: ${BUILD}
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+install_rom: ${BUILT}
+        ${CP} ${BUILT} ${INSTDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 #
 # Clean: clean current build and locale, except dictionary and HelpTokens
 #
 clean:
-        ${RM} ${TARGET}
+        ${RM} ${BUILT}
         ${RM} ${RESDATA}
         ${RM} ${DATA}.Tokenised
         ${RM} ${HELPTAGS}
         ${RM} ${DICTTAGS}
-        ${WIPE} Resources.* ${WFLAGS}
+        ${WIPE} ${RESDIR}.* ${WFLAGS}
+        ${WIPE} ${PROCESSDIR}.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned (Dictionary & HelpTokens not removed)
 
 #
 # Clean_all: totally clean all builds and locales
 #
 clean_all:
-	${WIPE} Data.* ${WFLAGS}
-	${WIPE} rm.* ${WFLAGS}
+	${WIPE} Data ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} rm ${WFLAGS}
         ${WIPE} Resources.* ${WFLAGS}
 	${WIPE} Processed.* ${WFLAGS}
         @echo ${COMPONENT}: all cleaned
@@ -103,11 +104,17 @@ resources:
         ${CP} Global.${LOCALE}.Messages ${RESDIR}.Resources.Global.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} ${DATA}.Tokenised ${DIRS}
+rm.${LOCALE}.${BUILD}.Messages: ${SOURCE} ${DATA}.Tokenised ${DIRS}
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
+
+rm.${LOCALE}.${BUILD}.MessagesHI: ${SOURCE} ${DIRS}
+        ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
+
+rm.${LOCALE}.${BUILD}.MessData: ${DATA}.Tokenised ${DIRS}
+        ${SCANRES} ${PROCESSDIR} $@
 
 #
 # Tokenise the Messages file using Help and Dictionary Tokens
@@ -157,22 +164,10 @@ ${DIRS}:
 	${MKDIR} Data
 	${MKDIR} Data.${LOCALE}
 	${MKDIR} ${DATA}
+	${MKDIR} o
 	${MKDIR} rm
 	${MKDIR} rm.${LOCALE}
 	${MKDIR} rm.${LOCALE}.${BUILD}
 	${TOUCH} ${DIRS}
 
 # Dynamic dependencies:
-rm.Morris4.Messages: Hdr:ListOpts
-rm.Morris4.Messages: Hdr:Macros
-rm.Morris4.Messages: Hdr:System
-rm.Morris4.Messages: Hdr:SWIs
-rm.Morris4.Messages: Hdr:CPU.Generic26
-rm.Morris4.Messages: Hdr:IO.GenericIO
-rm.Morris4.Messages: Hdr:RISCOS
-rm.Morris4.Messages: Hdr:ModHand
-rm.Morris4.Messages: Hdr:Services
-rm.Morris4.Messages: Hdr:Proc
-rm.Morris4.Messages: Hdr:ResourceFS
-rm.Morris4.Messages: Version
-rm.Morris4.Messages: Hdr:NDRDebug
