@@ -788,7 +788,13 @@ SWIWimp_StartTask
         LDR     R5,taskhandle
         LDR     R5,[wsptr,R5]
         ADRL    R14,runthetask          ; PC must be set up explicitly
-        STR     R14,[R5,#task_registers+4*15]
+        STR     R14,[R5,#task_registers+4*15]   ; note PC has no flags, ie USR on 26-bit
+        ; this next bit is harmless on a 26-bit system, as the 17th word is ignored
+        MRS     R14,CPSR
+        BIC     R14,R14,#2_11101111     ; get USR26/USR32, ARM, FIQs+IRQs on
+        STR     R14,[R5,#task_registers+4*16]
+
+
 ;
 ; to be on the safe side, bring up a text window if any chars printed
 ;
@@ -1178,15 +1184,34 @@ returnerror
 ; ensure that R0 and the flags are passed back to the correct task
 ; bodge: if same task, also keep R0 and flags now
 ;
+      [ No32bitCode
         Push    "R0,PC"                 ; save R0 and flags
         SETPSR  I_bit, R5               ; disable interrupts
+      |
+        MRS     R5,CPSR
+        Push    "R0,R5"
+        ORR     R5,R5,#I32_bit
+        MSR     CPSR_c,R5
+      ]
 ;                                       ; NB preserve R14 in this code
         LDR     R5,[wsptr,handle]
         STR     R0,[R5,#task_registers+4*0]
+      [ No32bitCode
         LDR     R0,[R5,#task_registers+4*15]
+      |
+        MRS     R0,CPSR
+        TST     R0,#2_11100                     ; 32-bit system?
+        LDREQ   R0,[R5,#task_registers+4*15]    ; 26-bit: modify R15
+        LDRNE   R0,[R5,#task_registers+4*16]    ; 32-bit: modify CPSR
+      ]
         BICVC   R0,R0,#V_bit            ; set up correct V bit
         ORRVS   R0,R0,#V_bit
+      [ No32bitCode
         STR     R0,[R5,#task_registers+4*15]   ; save for new task
+      |
+        STREQ   R0,[R5,#task_registers+4*15]
+        STRNE   R0,[R5,#task_registers+4*16]
+      ]
 ;
 ; set up callback handler
 ; NOTE: since the task is already paged in, its handlers are set up already
@@ -1211,7 +1236,11 @@ returnerror
         SWI     XOS_SetCallBack         ; set call back flag
 ;
         Pull    "R0,R14"
+      [ No32bitCode
         TEQP    R14,#0                  ; restore flags, ready for exit
+      |
+        MSR     CPSR_cf,R14             ; restore flags+ints, ready for exit
+      ]
 ;
         B       ExitWimp_noswitch       ; pulls registers & exits to callback
 
@@ -1246,7 +1275,13 @@ callbackpoll
 ;
 ; exit to caller
 ;
+        MOV     R0,#0
+        MRS     R0,CPSR
+        TST     R0,#2_11100                     ; are we 26 or 32-bit?
+
         ADD     lr_svc,R4,#task_registers       ; lr_svc --> register block
+        LDRNE   R0,[lr_svc,#16*4]
+        MSRNE   SPSR_cxsf,R0
         LDMIA   lr_svc,{R0-R14}^                ; restore USR regs
         NOP
         LDR     lr_svc,[lr_svc,#15*4]
@@ -1286,7 +1321,7 @@ deactivate_hourglass_on_wrchv Entry "R0-R2"
 ; Out   FP registers saved if FPEmulator present and task knows Wimp 2.23
 
 saveFPregs
-        Push    "R0-R3,LR"
+        EntryS  "R0-R3"
 
         Debug   fp,"Saving FP state for task",#taskhandle
         Debuga  fp,"Reading FP status: "
@@ -1299,8 +1334,8 @@ saveFPregs
         CMP     R2,#0                           ; (assume will be required again)
         MOVLE   R3,#fp_size
         BLLE    claimblock                      ; R2 -> block address
-        STRVS   R0,[sp]
-        Pull    "R0-R3,PC",VS
+        STRVS   R0,[sp,#Proc_RegOffset]
+        EXIT    VS
         STR     R2,[R4,#task_fpblock]
 
         Debug   fp,"FP save block at",R2
@@ -1329,7 +1364,7 @@ saveFPregs
         STFE    F7,[R2,#fp_reg7]
       ]
 ;
-        Pull    "R0-R3,PC",,^                   ; preserve flags
+        EXITS                                   ; preserve flags
 
 ;.............................................................................
 
@@ -1339,11 +1374,11 @@ saveFPregs
 ; Out   exits to Wimp with or without R2 set up (as appropriate)
 
 putsender_ExitWimp
-        MOV     R3,PC                   ; save flags
+        SavePSR R3                      ; save flags
         LDR     R4,[wsptr,handle]
         BL      getsender_R2            ; GE => R2 = task handle of sender
         STRGE   R2,[sp,#4]              ; R2 = second word on stack
-        TEQP    R3,#0                   ; restore error state
+        RestPSR R3,,f                   ; restore error state
         B       ExitWimp
 
 ;.............................................................................
@@ -2290,10 +2325,9 @@ starterrorbox_draw
         MOV     R1,#11
         B       oldapploop
 
- [ STB
-oklabel         DCB     "Continue",0
- |
-oklabel         DCB     "OK",0,0
+oklabel
+ [ :LNOT: STB
+                DCB     "OK",0,0
  ]
 contlabel       DCB     "Continue",0
 noappname       DCB     "switcher",0
