@@ -67,12 +67,17 @@
         GET     Hdr:NewErrors
         GET     Hdr:Variables
         GET     Hdr:MsgTrans
-	GET	Hdr:FPEmulator
+        GET     Hdr:FPEmulator
 
         GET     VersionASM
 
         GBLA    Version
 Version SETA    Module_Version
+
+;
+; You want to change any of these settings?  You bloody well work out how to reorganise
+; the R12 relative data so all the ADRs stay in range.  Took me long enough ... :-(
+;
 
                         GBLL    CheckBufferPointers
 CheckBufferPointers     SETL    {FALSE}
@@ -131,7 +136,7 @@ DebugStart SETL {FALSE}
 
         GBLL    FixDomain
 FixDomain       SETL    {TRUE}
-WimpDomain      *       &FF8
+WimpDomain      *       DomainId
 
         GBLL    FixControl
 FixControl      SETL    {TRUE}
@@ -145,7 +150,7 @@ FixRedirection  SETL    {TRUE}          ; NB: SWI not known overwrites GetEnv bu
         GBLL    FixSpool
 FixSpool        SETL    {TRUE}
 
-        GET     "s.Messages"
+        GET     s.Messages
 
         TTL     Task module version $Version
         SUBT
@@ -276,11 +281,6 @@ ReadPointer *   0
 ReadExtent *    2
 ReadEOF  *      5
 ;
-; Mode numbers
-;
-SVC_Mode *      3
-IntsOff *       &C0000003
-;
 ; Characters
 ;
 TAB     *       9
@@ -319,7 +319,9 @@ Code_ModuleBase
  |
         DCD     0
  ]
-
+ [ :LNOT: No32bitCode
+        DCD     Code_Flags        -Code_ModuleBase
+ ]
 Code_SWITable
 Code_TitleString
         DCB     "$ModuleName", 0
@@ -429,7 +431,6 @@ Code_TaskWindowSyntax   DCB     "STSWTSW", 0
 
         ALIGN
 
-        [ Version >= 31
 MessagesList    DCD     Message_DataSave
                 DCD     Message_RAMTransmit
                 DCD     Input
@@ -437,16 +438,22 @@ MessagesList    DCD     Message_DataSave
                 DCD     Suspend
                 DCD     Resume
                 DCD     0
-        ]
+
+ [ :LNOT: No32bitCode
+Code_Flags DCD ModuleFlag_32bit
+ ]
+
 
 ; ***********************************************************************
 
 Code_SWIHandler
         MOV     r10, lr
+        SavePSR r11
         LDR     r12, [r12]
         BL      FindOwner
         MOV     r0, r12
-        MOVS    pc, r10
+        RestPSR r11,,f
+        MOV     pc, r10
 
 ; Loop creating various variables if they don't already exist
 
@@ -528,7 +535,7 @@ svc_reset1
 svc_reset2
         CMP     r2, #0
         BNE     svc_reset1
-        LDMIA   sp!, {r0, r1, r2, r3, pc}^
+        LDMIA   sp!, {r0, r1, r2, r3, pc}
 
 Claim_SWIs
         Push    "lr"
@@ -657,8 +664,8 @@ Code_DieEntry
         Debug_Close
 
         LDR     r12, [r12]              ; r12 -> global workspace
-        CMP     r12, #0
-        MOVEQS  pc, lr                  ; no workspace!
+        CMP     r12, #0                 ; clears V
+        MOVEQ   pc, lr                  ; no workspace!
 
         LDR     r0, FirstWord
         CMP     r0, #0
@@ -696,11 +703,9 @@ Code_DieEntry
         ADRVC   r1, MyWord
         MOVVC   r2, r12
         SWIVC   XOS_Release
+        ]
 
         Pull    "r1-r3,pc"
-        |
-        MOVS    pc, lr
-        ]
         LTORG
 
         MakeInternatErrorBlock TaskWindow_CantKill,,M00
@@ -716,17 +721,17 @@ Code_DieEntry
 ;       or calls the original OS_GetEnv if not claiming vectors
 
 MyGetEnv_ROMCode
-        Push    "r12, lr, pc"
+        Push    "r11, r12, lr, pc"
+        SavePSR r11
         BL      FindOwner               ; r12 -> task block if found
         TEQ     r12, #0
         BLNE    gettaskenv              ; set up r0,r1,r2
         LDRNE   lr, =BranchToSWIExit
-        LDREQ   r12, [sp, #0]
-        LDREQ   lr, MOS_GetEnv           ; continue with original SWI
-        LDR     r12, [sp, #8]
-        TEQP    r12, #0                 ; restore flags as on entry
-        STR     lr, [sp, #8]
-        Pull    "r12, lr, pc"           ; go to required place!
+        LDREQ   r12, [sp, #4]
+        LDREQ   lr, MOS_GetEnv          ; continue with original SWI
+        RestPSR r11,,f                  ; restore flags as on entry
+        STR     lr, [sp, #12]
+        Pull    "r11, r12, lr, pc"      ; go to required place!
         LTORG
 
 ; In:   r12 -> task workspace
@@ -735,7 +740,7 @@ MyGetEnv_ROMCode
 ;       r2 -> 5-byte real time (set using OS_WriteEnv)
 
 gettaskenv
-        Push    "lr"
+        EntryS
 
         MOV     r0, #MemoryLimit
         MOV     r1, #0
@@ -747,7 +752,7 @@ gettaskenv
 
         Debug   env, "gettaskenv: r0,r1,r2 =",r0,r1,r2
 
-        Pull    "pc",,^                 ; must preserve flags
+        EXITS                           ; must preserve flags
 
 ; .............................................................................
 
@@ -758,17 +763,17 @@ gettaskenv
 ;       or calls the original OS_WriteEnv if not claiming vectors
 
 MyWriteEnv_ROMCode
-        Push    "r12, lr, pc"
+        Push    "r11, r12, lr, pc"
+        SavePSR r11
         BL      FindOwner               ; r12 -> task block if found
         TEQ     r12, #0
         BLNE    puttaskenv              ; uses r0, r1
         LDRNE   lr, =BranchToSWIExit    ; exit to caller
-        LDREQ   r12, [sp, #0]
+        LDREQ   r12, [sp, #4]
         LDREQ   lr, MOS_WriteEnv        ; continue with original SWI
-        LDR     r12, [sp, #8]
-        TEQP    r12, #0                 ; restore flags as on entry
-        STR     lr, [sp, #8]
-        Pull    "r12, lr, pc"           ; go to required place!
+        RestPSR r11,,f                  ; restore flags as on entry
+        STR     lr, [sp, #12]
+        Pull    "r11, r12, lr, pc"      ; go to required place!
         LTORG
 
 ; In    r0 -> *command
@@ -777,7 +782,7 @@ MyWriteEnv_ROMCode
 ; Out   command copied to task block (if vectors claimed)
 
 puttaskenv
-        Push    "r0-r3,lr"
+        EntryS  "r0-r3"
 
         Debug   env, "puttaskenv: r0,r1 =",r0,r1
 
@@ -796,7 +801,7 @@ puttaskenv
         LDR     r2, OscliBuffer
         CMP     r2, #0
         MOVNE   r0, #ModHandReason_Free
-        SWINE   OS_Module
+        SWINE   XOS_Module
 ; Find the command line length
         MOV     r0, r1
 03      LDRB    r14, [r0], #1
@@ -816,7 +821,7 @@ puttaskenv
 ;        CheckPointers
         BHS     %b02
 
-        Pull    "r0-r3,pc",,^           ; must preserve flags
+        EXITS                           ; must preserve flags
 
 ; .............................................................................
 
@@ -829,7 +834,7 @@ puttaskenv
 
 MyWord
         TEQ     r0, #14
-        MOVNES  pc, lr                  ; pass it on
+        MOVNE   pc, lr                  ; pass it on
 
         Push    "r0-r2, r12, lr"
 
@@ -837,22 +842,24 @@ MyWord
         TEQ     r14, #3
         LDREQ   r14, MOS_EnvTime        ; is this FileSwitch reading the time?
         TEQEQ   r1, r14
-        Pull    "r0-r2, r12, pc",NE,^
+        Pull    "r0-r2, r12, pc",NE
 
         BL      FindOwner               ; are we on the vector?
         TEQ     r12, #0
-        Pull    "r0-r2, r12, pc",EQ,^
+        Pull    "r0-r2, r12, pc",EQ
 
-        ADR     r2, %f01 + SVC_mode     ; link register
+	JumpAddress r2,%f20,Forward
         Push    "r2,r12"
         LDR     pc, [sp, #6*4]          ; pass on to rest of vector owners
-01
-        Pull    "r12"                   ; don't trust them - get my r12 back!
+20
+        Pull    "r12"                   ; don't trust them - get my CPSR[m0:m4] and r12 back!
         LDR     r0, GlobalWS
         LDR     r0, [r0, #:INDEX:MOS_EnvString]         ; r0 -> MOS environment string
-        BL      puttaskenv                              ; r12 -> task workspace
+        BL      puttaskenv                              ; r12 -> task workspace (preserves all flags)
 
-        Pull    "r0-r2, r12, lr, pc",,^     ; exit to caller
+        TEQ     PC,PC
+        Pull    "r0-r2, r12, lr, pc",NE,^  ; 26-bit mode exit to caller
+        Pull    "r0-r2, r12, lr, pc"       ; 32-bit mode exit to caller
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -876,7 +883,7 @@ Code_ServiceEntry ROUT
   ]
         TEQNE   r1, #Service_WimpCloseDown
         TEQNE   r1, #Service_WimpReportError
-        MOVNES  PC, LR
+        MOVNE   PC, LR
 ;
 Code_UServiceEntry
 ;
@@ -892,7 +899,7 @@ Code_UServiceEntry
 ;
         LDR     r12, [r12]              ; r12 -> global workspace
         TEQ     r12, #0
-        MOVEQS  pc, lr                  ; give up if no workspace!
+        MOVEQ   pc, lr                  ; give up if no workspace!
 
         TEQ     r1, #Service_WimpCloseDown
         BEQ     %f10
@@ -906,29 +913,28 @@ Code_UServiceEntry
         LDR     r1, FirstWord
         TEQ     r1, #0            ; Are we active?
         MOVEQ   r1, #Service_Memory
-        MOVEQS  pc, r14           ; Return if not
+        MOVEQ   pc, r14           ; Return if not
 
         CMP     r0, #-64*&100000        ; check for Wimp's magic value
         ADREQL  r1, Code_ModuleBase     ; we don't require memory otherwise
-        CMPEQ   r2, r1                  ; Is it us?
+        SUBEQS  r1, r2, r1              ; Is it us?  R1=0 if so
         MOVNE   r1, #Service_Memory
-        MOVEQ   r1, #0
-        MOVS    pc, r14           ; Return if not
+        MOV     pc, r14           ; Return if not
 10
         TEQ     r0, #0
-        MOVEQS  pc, r14           ; Normal closedown and return
+        MOVEQ   pc, r14           ; Normal closedown and return
 
         Push    "lr"              ; r2 = handle of task being affected
         LDR     r12, FirstWord
 11      TEQ     r12, #0
-        Pull    "pc", EQ, ^       ; exit if no task has this ID
+        Pull    "pc", EQ          ; exit if no task has this ID
         LDR     r14, ChildTask
         CMP     r2, r14
         LDRNE   r12, NextBlock
         BNE     %b11
         ADR     r0, ErrorBlock_WimpCantKill  ; no need to set V bit
         BL      CopyError
-        Pull    "pc",,^
+        Pull    "pc"
 
 20
         Push    "r0, lr"
@@ -944,7 +950,7 @@ Code_UServiceEntry
 25
         STR     r0, PassOnVectors ; temporarily
 30
-        Pull    "r0,pc",,^        ; Return with correct flags
+        Pull    "r0,pc"           ; Return - service calls can corrupt flags
 40
 ;
 ; See if someone was suspended
@@ -999,11 +1005,11 @@ Code_CommandCodeQuit ROUT
         Push    "lr"
         LDR     r12, [r12]        ; r12 -> global workspace
         BL      FindOwner         ; See who this task is
-        TEQ     r12, #0
+        CMP     r12, #0           ; clears V
         MOVNE   r0, #1
         STRNE   r0, ReqDie        ; Don't set moribund flag directly
                                   ; we need SendOutput to be called
-        Pull    "pc",,^
+        Pull    "pc"
 
 ; .........................................................................
 
@@ -1188,13 +1194,6 @@ Code_ErrorHandler ROUT
         ]
         SWI     Wimp_ReportError  ; Say what happened
 20
-        [       {FALSE}
-        ADR     r13, CommandStack+MyStackSize ; Just in case we need a stack
-        MOV     r1, #1
-        BL      Clear             ; Empty buffers
-        MOV     r1, #0
-        BL      Clear
-        ]
         MOV     r1, #0
         STRB    r1, TaskAborted   ; Ok, we're not worried about errors now.
         LDR     r0, PassOnVectors
@@ -1253,7 +1252,7 @@ Code_FPErrorHandler ROUT
 ; Note if we were called from a swi, the real values will be
 ; higher up the stack, and the fact that these are wrong won't be important.
 ;
-        TEQP    pc, #0            ; User mode, interrupts on
+        WritePSRc USR_mode,r1     ; User mode, interrupts on
         MOV     r1, #0            ; Intercepting again
         STR     r1, PassOnVectors
         [       UseInCallBack
@@ -1310,7 +1309,7 @@ Code_StartEntry ROUT
 
         BL      SaveEscape        ; Do this while in SVC mode
                                   ; since it calls a user handler
-        TEQP    pc, #0            ; must be user mode here
+        WritePSRc USR_mode,r14    ; must be user mode here
         NOP
 ;
 ; Now in user mode, so r13 and r14 are new
@@ -1382,7 +1381,8 @@ Code_StartEntry ROUT
 ;
 ; restore state after calling Wimp
 ;
-        Push    "r0,r1,pc"        ; save psr state
+        SavePSR lr
+        Push    "r0,r1,lr"        ; save psr state
 
         LDRB    r0, CopyOfRedirectInHandle
         LDRB    r1, CopyOfRedirectOutHandle
@@ -1394,7 +1394,7 @@ Code_StartEntry ROUT
         BL      WriteSpoolHandle
 
         Pull    "r0,r1,lr"
-        TEQP    lr, #0
+        RestPSR lr
 
         Pull    "$Regs"                 ; restore user regs
 
@@ -1450,19 +1450,13 @@ nowimpstarttask ROUT
         MOV     r9, r1          ; r9-r11 = parameters
         MOV     r10,r2
 
-      [ Version >= 26 :LAND Version < 28
-        BL      SetRedirectWrch   ;; THIS IS CRAP !!!
-        SWIVS   OS_GenerateError  ;; R12 must point to task workspace
-      ]
 ;
 ; work out max size of SVC stack, so we can claim a block big enough
 ;
-        MOV     r4, r13           ; Pointer to top of stack (flat on entry)
+        MOV     r4, r13, LSL #12  ; R13 is pointer to top of stack (flat on entry)
         MOV     r5, r13
-        TEQP    pc, #0            ; Back to user mode
-        NOP
-        LDR     r2, =&000FFFFF    ; Megabyte mask
-        AND     r4, r4, r2        ; Allowed size of SVC stack
+        WritePSRc USR_mode, r3    ; Back to user mode
+        MOV     r4, r4, LSR #12   ; Effectively (R13 & 0x000FFFFF)
         LDR     r3, =HeapSize
         ADD     r3, r3, r4        ; Request that much
         MOV     r0, #ModHandReason_Claim
@@ -1481,10 +1475,6 @@ nowimpstarttask ROUT
         STR     r10, ParentTxt
         STR     r11, MyParameters
 
-      [ Version < 26
-        BL      SetRedirectWrch   ; now done earlier
-      ]
-
         MOV     r8, #0
         [       UseGotCallBack
         STRB    r8, GotCallBack   ; No call back handler installed yet
@@ -1498,22 +1488,20 @@ nowimpstarttask ROUT
         STR     r8, key_ctrl      ; and no control keys passed through
         STR     r8, key_wimpslot  ; defaults if no OS_ReadArgs used
         STRB    r8, key_fnflag
-        MOV     r8, #1
-        STR     r8, PassOnVectors ; Don't want vectors here
         [ DebugExit
-        MOV     r14, #0
-        STR     r14, InPollWimpFn
+        STR     r8, InPollWimpFn
         ]
         [       FixDomain
-        MOV     r0, #0
-        LDR     r0, [r0, #WimpDomain]
+        LDR     r0, [r8, #WimpDomain]
         STR     r0, MyDomain
         ]
+        MOV     r8, #1
+        STR     r8, PassOnVectors ; Don't want vectors here
 ;
 ; Now copy in the vector claim state if not first incarnation
 ; or zero it if first incarnation
 ;
-        ADR     r0, GotVectors
+        ADRL    r0, GotVectors
         SUB     r1, r0, r12       ; The index
         ADD     r1, r1, r7        ; ADRL
         MOV     r9, #NumVectors
@@ -1532,10 +1520,8 @@ nowimpstarttask ROUT
 ;
 ; Having initialised the rest, try out OS_ChangeRedirection
 ;
-      [ Version >= 28
         BL      SetRedirectWrch   ; now done earlier
         BVS     Code_StartError
-      ]
 ;
 ; decode options now, as one of them is the task name
 ;
@@ -1561,11 +1547,7 @@ nowimpstarttask ROUT
         ADR     r2, ParameterBuffer
         MOV     r3, #?ParameterBuffer
         SWI     XOS_ReadArgs
-      [ Version >= 28
         BVS     Code_StartError         ; haven't called Wimp_Initialise yet
-      |
-        BVS     Code_WimpStartError
-      ]
 
         LDR     r0, key_command
         STR     r0, MyParameters
@@ -1591,17 +1573,13 @@ nowimpstarttask ROUT
         MOV     r0, #WimpVersion
         LDR     r1, Task
         LDR     r2, key_name
-      [ WimpVersion >= 300
         ADRL    r3, MessagesList
-      ]
         SWI     XWimp_Initialise  ; Non error form
         BVS     Code_StartError   ; Die if error
         STR     r1, ChildTask     ; Not sure if we need this or not
 
 ; If there's a parent task, send the Ego message
 
-;        SWI     XOS_ReadMemMapInfo
-;        MOV     r3, r0
         MOV     r0, #-1
         MOV     r1, #-1
         SWI     XWimp_SlotSize
@@ -1867,10 +1845,10 @@ CheckSpaces ROUT
         BNE     CopyError
 
 10      LDRB    r1, [r0], #1
-        TEQ     r1, #" "
+        CMP     r1, #" "          ; clears V
         BEQ     %b10              ; Loop ignoring spaces
         SUB     r0, r0, #1        ; Pointer to first non-space
-        BICS    pc, r14, #V_bit
+        MOV     pc, lr
 
 ; ........................................................................
 
@@ -1883,18 +1861,18 @@ GetHex  ROUT
         LDRB    r3, [r0], #1      ; The character
         CMP     r3, #"0"
         BCC     %f10              ; Branch on range error
-        CMP     r3, #"9"
+        CMP     r3, #"9"          ; Clears V
         SUBLS   r3, r3, #"0"      ; Convert to numeric
-        BICLSS  pc, r14, #V_bit   ; Return V clear
+        MOVLS   pc, r14           ; Return V clear
 ;
 ; Try alphabetic
 ;
         BIC     r3, r3, #"a"-"A"  ; Clear the lower case bit
         CMP     r3, #"A"
         BCC     %f10              ; Branch on range error
-        CMP     r3, #"F"
+        CMP     r3, #"F"          ; Clears V
         SUBLS   r3, r3, #"A"-10   ; Convert to value
-        BICLSS  pc, r14, #V_bit   ; Return V clear
+        MOVLS   pc, lr            ; Return V clear
 10
         ADR     r0, ErrorBlock_TaskWindow_BadTaskHandle
         B       CopyError
@@ -2193,12 +2171,7 @@ Code_ExitHandler ROUT
         MOV     r0, #0            ; no command yet - prompt for one
         STR     r0, MyParameters
 
-; ...............................................................................
-
-cli_prompt
-        DCB     "Cli$Prompt", 0
-star_prompt
-        DCB     "*"
+; ......FALLING THROUGH HERE ***.................................................
 
 Code_NewCommand
 ;
@@ -2246,14 +2219,9 @@ Code_NewCommand
 ; Now check if anything in exec file, and get rid of it if not
 ;
         MOV     r0, #ReadEOF
-      [ Version >= 27
         SWI     XOS_Args
         MOVVS   r2, #1            ; treat error as EOF
         CMP     r2, #0            ; V clear, NE => EOF
-      |
-        SWI     OS_Args
-        TEQ     r2, #0
-      ]
         BLNE    CloseMyExec       ; Get rid of exec file if exhausted
 12
 ;
@@ -2278,7 +2246,7 @@ Code_NewCommand
 
         ADR     r0, cli_prompt
         ADR     r1, ReadLineBuffer
-        MOV     r2, #256
+        MOV     r2, #1024
         MOV     r3, #0
         MOV     r4, #3
         SWI     XOS_ReadVarVal
@@ -2307,15 +2275,22 @@ Code_NewCommand
         MOV     r4, r1
         SWI     XMessageTrans_Lookup
         MOVVS   r2, r4
+        MOV     r1, #0
 print_esc
-        LDRB    r0, [r2], #1
+        LDRB    r0, [r2, r1]
         CMP     r0, #32
-        SWICS   XOS_WriteC
+        ADC     r1, r1, #0
         BCS     print_esc
+        MOV     r0, r2
+        SWI     OS_WriteN
         SWI     OS_NewLine
         B       %b12
 esc_token
         DCB     "Escape", 0
+cli_prompt
+        DCB     "Cli$Prompt", 0
+star_prompt
+        DCB     "*"
         ALIGN
 15
         BL      SendOutput        ; Clear output buffer
@@ -2339,29 +2314,17 @@ esc_token
         BL      ChangeRedirection
         TEQ     r1, #0
         MOVNE   r0, #0
-      [ Version >= 27
         SWINE   XOS_Find          ; ignore errors
-      |
-        SWINE   OS_Find
-      ]
         MOVS    r1, r2
         MOVNE   r0, #0
-      [ Version >= 27
         SWINE   XOS_Find          ; ignore errors
-      |
-        SWINE   OS_Find
-      ]
     ]
 ;
 ; if there's a spool file, close it down
 ;
         BL      ReadSpoolHandle   ; writes OS spool handle to 0
         MOVNE   r0, #0
-      [ Version >= 27
         SWINE   XOS_Find          ; ignore errors
-      |
-        SWINE   OS_Find
-      ]
 ;
 ; Handle application dies
 ; Should send a message to parent (if any) saying so
@@ -2514,7 +2477,7 @@ MyEventV ROUT
 ; Exit:-  All registers preserved
 ;
         TEQ     r0, #Event_VSync  ; Is it the one I want?
-        MOVNES  pc, r14           ; Return if not
+        MOVNE   pc, r14           ; Return if not
 ;
 ; Now decrement all Inkey counts for all instances
 ;
@@ -2547,7 +2510,7 @@ MyEventV ROUT
         MOVCS   r0, #0
         STR     r0, VSyncCount
         MOV     r0, #Event_VSync
-        MOVCCS  pc, r14           ; Return if not
+        MOVCC   pc, r14           ; Return if not
 ;
 ; Now set up a callback handler ready
 ;
@@ -2558,9 +2521,7 @@ MyEventV ROUT
         STR     r0, InPollWimpFn
         ]
         Push    "r1 - r5"
-        MOV     r4, pc
-        ORR     r5, r4, #SVC_Mode
-        TEQP    r5, #0            ; Enter SVC mode
+        SETPSR  SVC_mode,R5,,R4 ; Enter SVC mode
         NOP
         MOV     r5, r14           ; Remember r14_svc
         MOV     r0, #CallBackHandler
@@ -2617,9 +2578,9 @@ MyEventV ROUT
         ADRCS   r0, R1R
         SWI     OS_Write0
         B       .
-R1A     =       "R1 in application space", 0
-R1M     =       "R1 in module space", 0
-R1R     =       "R1 in ROM", 0
+R1A     =       "R1 in application space < &1800000", 0
+R1M     =       "R1 in module space > &1800000 < &3800000", 0
+R1R     =       "R1 in ROM > &3800000", 0
 38      TEQ     r0, #0               ; Restore flag
         ]
         ADREQ   r0, OldCallBackHandler
@@ -2635,14 +2596,14 @@ R1R     =       "R1 in ROM", 0
         ]
         SWI     OS_SetCallBack    ; And request the call back
         MOV     r14, r5           ; Restore svc_r14
-        TEQP    r4, #0            ; Previous mode
+        RestPSR r4                ; Previous mode
         NOP
         Pull    "r1 - r5"         ; Register preservation
         MOV     r0, #0
         STR     r0, PassOnVectors ; Back on vectors again
 30
         MOV     r0, #Event_VSync
-        MOVS    pc, r14           ; And return anyway
+        MOV     pc, r14           ; And return anyway
 
 
 ; **************************************************************************************
@@ -2673,11 +2634,14 @@ MyWrchV ROUT
 ;         All other registers preserved
 ;         V clear
 ;
-        Push    "r0, r14"
+        Push    "r1, r14"
+        SavePSR r1
         BL      FindOwner
         TEQ     r12, #0           ; See if someone on vectors
-        Pull    "r0, r14"
-        MOVEQS  pc, r14           ; Just pass on if not
+        BNE     %FT10
+        RestPSR r1,,f
+        Pull    "r1, pc"          ; Just pass on if not
+10
 
         CheckIn
 
@@ -2689,13 +2653,21 @@ MyWrchV ROUT
         ]
         ADR     r14, VecSaveRegs  ; save regs for later
         STMIA   r14, {r0-r13}
+        LDR     r14, [sp]
+        STR     r14, VecSaveRegs + 4
         [       FPErrorHandling
         ADR     r14, ErrorRegs
         STMIA   r14, {r0-r12}     ; In case of FP asynchronous errors
+        LDR     r14, [sp]
+        STR     r14, ErrorRegs + 4
         ]
 
+        ; Switch PSR with stacked R1 now that real R1 is safely in VecSaveRegs
+        BIC     r1, r1, #V_bit
+        STR     r1, [sp]
+
 ;
-; r12, r14 only corrupt so far
+; r12, r14 only corrupt so far (SaveSVCStack corrupts at least R0-R7,R10)
 ;
         BL      SaveSVCStack
 ;
@@ -2714,8 +2686,7 @@ MyWrchV ROUT
         STR     r14, InPollWimpFn
         ]
         LDR     r13, SVCStackBase ; New empty SVC stack
-        MOV     r1, pc            ; save, we'll need for the flags
-        TEQP    pc, #0            ; must be user mode here
+        WritePSRc USR_mode,r2,,r1 ; must be user mode here, save flags in R1
         NOP
 ;
 ; Now in user mode, so r13 and r14 are new
@@ -2801,7 +2772,7 @@ notcontrol
         STRVS   r0, VecSaveRegs
 
         SWI     OS_EnterOS        ; back to SVC mode
-        TEQP    pc, r1            ; restore the mode
+        RestPSR r1                ; restore the mode
         NOP                       ; nop for 3 mu ARM
 
         BL      RestoreSVCStack   ; Put back real SVC stack
@@ -2810,15 +2781,22 @@ notcontrol
         MOV     r14, #"a"
         STRB    r14, EscRestoreFlag
         ]
+        STR     r4, VecSaveRegs + 16*4
         BL      RestoreEscape
+        LDR     r4, VecSaveRegs + 16*4
         MOV     r1, #0            ; Intercepting again
         STR     r1, PassOnVectors
 ;
 ; if error, just return
 ;
-        ADRVS   r0, VecSaveRegs
-        LDMVSIA r0, {r0-r13}
-        Pull    "pc", VS
+        BVC     %ft15
+        ADR     r0, VecSaveRegs
+        LDMIA   r0, {r0-r13}
+        Pull    "r14"
+        ORR     r14, r14, #V_bit
+        RestPSR r14
+        Pull    "pc"              ; pass it on
+15
 ;
 ; Send byte to spool file, using the handle remembered before Wimp_Poll
 ; NB: must do this when we are back on the vectors, in case spool file blocks
@@ -2837,7 +2815,11 @@ notcontrol
         Push    "r1-r4"
         MOV     r1, r14
         SWI     XOS_BPut
-        Pull    "r1-r4, pc",VC,^
+        BVS     %ft16
+        Pull    "r1-r4, r14"
+        RestPSR r14
+        Pull    "pc"
+16
         MOV     r4, r0
         MOV     r0, #ReadSpool
         MOV     r1, #0
@@ -2848,7 +2830,9 @@ notcontrol
         SWI     XOS_Find
         MOV     r0, r4
         Pull    "r1-r4, lr"
-        ORRS    pc, r14, #V_bit
+        ORR     r14, r14, #V_bit
+        RestPSR r14
+        Pull    "pc"
         ]
 ;
 ; Check if dying now
@@ -2862,8 +2846,13 @@ notcontrol
         LDR     r14, Moribund
         TEQ     r14, #0
         Pull    "lr"
-        BICEQS  pc, lr, #V_bit    ; Clear for good return
-        ADRNE   r0, ErrorBlock_TaskWindow_Dying
+        BNE     %ft20
+        RestPSR lr
+        Pull    "pc"              ; Clear V for good return
+20
+        RestPSR lr
+        Pull    "lr"
+        ADR     r0, ErrorBlock_TaskWindow_Dying
         BNE     CopyError
 
 ; **************************************************************************************
@@ -2890,10 +2879,10 @@ MyUpCallV ROUT
 ;
         Debug   up,"TaskWindow UpCall: r0,r1,r12 =",r0,r1,r12
 
-        CMP     r0, #UpCall_SleepNoMore
+        TEQ     r0, #UpCall_SleepNoMore
         BEQ     sleepnomore             ; return error if we're sleeping on one of these
 
-        CMP     r0, #UpCall_Sleep
+        TEQ     r0, #UpCall_Sleep
         MOVNE   pc, lr            ; pass it on
 
         Push    "r0, r14"
@@ -2901,7 +2890,7 @@ MyUpCallV ROUT
         Debug   up,"UpCall_Sleep: task r12 =",r12
         TEQ     r12, #0           ; See if someone on vectors
         Pull    "r0, r14"
-        MOVEQS  pc, r14           ; Just pass on if not
+        MOVEQ   pc, r14           ; Just pass on if not
 
         CheckIn
 
@@ -2938,8 +2927,7 @@ MyUpCallV ROUT
         STR     r14, InPollWimpFn
         ]
         LDR     r13, SVCStackBase ; New empty SVC stack
-        MOV     r1, pc            ; save, we'll need for the flags
-        TEQP    pc, #0            ; must be user mode here
+        WritePSRc USR_mode,r2,,r1 ; must be user mode here, save flags in R1
         NOP
 ;
 ; Now in user mode, so r13 and r14 are new
@@ -3001,7 +2989,7 @@ MyUpCallV ROUT
         STRVS   r0, VecSaveRegs
 
         SWI     OS_EnterOS        ; back to SVC mode
-        TEQP    pc, r1            ; restore the mode
+        RestPSR r1                ; restore the mode
         NOP                       ; nop for 3 mu ARM
 
         BL      RestoreSVCStack   ; Put back real SVC stack
@@ -3025,26 +3013,28 @@ MyUpCallV ROUT
         ADR     r0, VecSaveRegs
         LDMIA   r0, {r0-r13}
         Pull    "pc", VS          ; just return if error
-40
-        Push    "pc"
+
+        SavePSR r14
+        Push    r14
         LDR     r14, Moribund
         TEQ     r14, #0
         Pull    r14
         Pull    r14, NE           ; Get return address if going to cause error
         ADRNE   r0, ErrorBlock_TaskWindow_Dying
         BNE     CopyError
-        TEQP    pc, r14           ; Restore flags
+        BIC     r14, r14, #V_bit  ; clear V (CopyError will set it again if needs be)
+        RestPSR r14               ; Restore flags
         Pull    r14               ; Get return address anyway
         ADRNE   r0, ErrorBlock_Escape
         BNE     CopyError
         MOV     r0, #UpCall_Claimed    ; we dealt with it
-        BICS    pc, lr, #V_bit         ; Exit without error
+        MOV     pc, lr                 ; Exit without error
 
 sleepnomore
         LDR     r12, FirstWord    ; Point to a workspace
-50      TEQ     r12, #0
+50      CMP     r12, #0                         ; clears V
         MOVEQ   r0, #UpCall_SleepNoMore         ; don't claim this!
-        BICEQS  pc, lr, #V_bit
+        MOVEQ   pc, lr
         LDR     r0, PollWord
         TEQ     r0, #0
         LDREQ   r12, NextBlock    ; If not sleeping, try the next block
@@ -3073,12 +3063,17 @@ MyRdchV ROUT
 ; Exit:-  To caller
 ;         r0 modified, all other registers preserved
 ;
-        Push    "r0, r14"
+        Push    "r0, r1, r14"
+        SavePSR r1
         BL      FindOwner
         TEQ     r12, #0           ; See if someone got vectors
-        Pull    "r0, r14"
-        MOVEQS  pc, r14           ; Just pass on if not
+        BNE     %FT05
+        RestPSR r1
+        Pull    "r0, r1, pc"      ; Just pass on if not
 
+05
+        RestPSR r1
+        Pull    "r0, r1, r14"
         CheckIn
 
 ; See if any input has arrived for us
@@ -3089,9 +3084,8 @@ MyRdchV ROUT
 ; Now check we don't have escape as well
 
         SWI     OS_ReadEscapeState
-        MOVCS   r14, #1           ; Set escape if exists now
-        LDRCCB  r14, EscPending   ; Else see if existed anyway
-        TEQ     r14, #0
+        LDRB    r14, EscPending   ; See if existed anyway
+        ADCS    r14, r14, #0      ; clears C,V,N; clears Z if r14 != 0 or SWI returned C set
         B       %f40              ; Common exit code
 10
         ADR     r14, VecSaveRegs  ; save regs for later
@@ -3116,8 +3110,7 @@ MyRdchV ROUT
 ; Now set up new SVC stack
 ;
         LDR     r13, SVCStackBase ; New empty SVC stack
-        MOV     r1, pc            ; save, we'll need for the flags
-        TEQP    pc, #0            ; must be user mode here
+        WritePSRc USR_mode,r2,,r1 ; must be user mode here, save flags in R1
         NOP
 ;
 ; Now in user mode, so r13 and r14 are new
@@ -3175,7 +3168,7 @@ MyRdchV ROUT
         STRVS   r0, VecSaveRegs
 
         SWI     OS_EnterOS        ; back to SVC mode
-        TEQP    pc, r1            ; restore the mode
+        RestPSR r1                ; restore the mode
         NOP                       ; nop for 3 mu ARM
 
         BL      RestoreSVCStack   ; Put back real SVC stack
@@ -3200,19 +3193,22 @@ MyRdchV ROUT
         LDMIA   r0, {r0-r13}
         Pull    "pc", VS          ; just return if error
 40
-        Push    pc
+        SavePSR r14
+        Push    r14
         LDR     r14, Moribund
         TEQ     r14, #0
         Pull    r14
         Pull    r14, NE           ; Get return address if going to cause error
         ADRNE   r0, ErrorBlock_TaskWindow_Dying
         BNE     CopyError
-        TEQP    pc, r14           ; Restore flags
-        Pull    r14               ; Get return address anyway
-        MOVNE   r0, #Esc
-        BIC     r14, r14, #V_bit  ; Clear for good return
-        BICEQS  pc, r14, #C_bit   ; Exit setting carry accordingly
-        ORRS    pc, r14, #C_bit   ; Exit setting carry accordingly
+        ; the Z flag in the R14 PSR is important, but need V clear for good
+        ; return plus we clear C for the non-ESCAPE case.
+        BIC     r14, r14, #V_bit+C_bit
+        TST     r14, #Z_bit       ; *Invert* R14:Z_bit into Z
+        MOVEQ   r0, #Esc
+        ORREQ   r14, r14, #C_bit  ; set carry if returning Escape
+        RestPSR r14,,f            ; Set flags to what we want
+        Pull    "pc"              ; and return
 
         MakeInternatErrorBlock TaskWindow_Dying,,M03
 
@@ -3227,24 +3223,33 @@ MyByteV ROUT
 ;         r13 = stack pointer (FD)
 ;         r12 = Private word
 ;         r0 - r2 as for OS_Byte
-; Entered in SVC mode
+; Entered in SVC mode, IRQs disabled
 ;
 ; Exit:-  To caller
 ;         r0 modified, all other registers preserved
 ;
+        Push    lr
+        SavePSR lr
         TEQ     r0, #Inkey
         TSTEQ   r2, #&80
         TEQNE   r0, #EscapeAck    ; Is it escape acknowledge then?
         [       EmulateEscapeChar
         TEQNE   r0, #EscapeChar
         ]
-        MOVNES  pc, r14           ; Return if not inkey, or inkey negative
+        BEQ     %FT01
+        RestPSR lr,,f
+        Pull    "pc"              ; Return if not inkey, or inkey negative
+01
         Push    "r0, r14"
         BL      FindOwner         ; Is anyone on the vectors now?
         TEQ     r12, #0
-        Pull    r0
-        Pull    "pc", EQ, ^       ; Return if not
-
+        BNE     %FT02
+        Pull    "r0, r12, r14"
+        RestPSR r12,,f
+        MOV     pc, r14           ; Pass it on if not
+02
+        Pull    "r0"
+        ; stack now contains PSR, pass on LR, claim LR
         CheckIn
 
         TEQ     r0, #EscapeAck
@@ -3253,7 +3258,8 @@ MyByteV ROUT
         TEQ     r0, #EscapeChar
         BEQ     %f50              ; Handle escape allowed
         ]
-        Pull    r14
+        Pull    "r0,r14"          ; Discard pass on LR
+        Push    "r0"              ; Push PSR back again
         AND     r0, r1, #&FF
         AND     r2, r2, #&FF
         ORR     r0, r0, r2, LSL #8; Get count value
@@ -3269,9 +3275,8 @@ MyByteV ROUT
 ; Now check we don't have escape as well
 
         SWI     OS_ReadEscapeState
-        MOVCS   r14, #1           ; Set escape if exists now
-        LDRCCB  r14, EscPending   ; Else see if existed anyway
-        TEQ     r14, #0
+        LDRB    r14, EscPending   ; Else see if existed anyway
+        ADCS    r14, r14, #0      ; clear NCV; clear Z if R14 != 0 or C was set
         B       %f30              ; Common exit code
 05
 ;
@@ -3304,8 +3309,7 @@ MyByteV ROUT
 ; Now set up new SVC stack
 ;
         LDR     r13, SVCStackBase ; New empty SVC stack
-        MOV     r1, pc            ; save, we'll need for the flags
-        TEQP    pc, #0            ; must be user mode here
+        WritePSRc USR_mode,r2,,r1 ; USR mode, IRQs enabled, old PSR in r1
         NOP
 ;
 ; Now in user mode, so r13 and r14 are new
@@ -3368,7 +3372,7 @@ MyByteV ROUT
         STRVS   r0, VecSaveRegs
 
         SWI     OS_EnterOS        ; back to SVC mode
-        TEQP    pc, r1            ; restore the mode
+        RestPSR r1                ; restore the mode
         NOP                       ; nop for 3 mu ARM
 
         BL      RestoreSVCStack   ; Put back real SVC stack
@@ -3390,7 +3394,7 @@ MyByteV ROUT
         TEQ     r0, #0            ; See if we should return escape
         ADR     r0, VecSaveRegs
         LDMIA   r0, {r0-r13}
-        Pull    "pc", VS          ; just return if error
+        Pull    "r14, pc", VS     ; just return if error (discard CPSR)
         BNE     %f35              ; Branch if escape to be returned
 30
         MOVS    r1, r0
@@ -3398,38 +3402,47 @@ MyByteV ROUT
         BMI     %f40              ; Branch if timeout
         MOVS    r2, #0            ; Set zero
 35
-        Push    pc                ; Save flags
+        SavePSR r14
+        Push    r14
         LDR     r14, Moribund
         TEQ     r14, #0           ; Are we dying
         Pull    r14
         Pull    r14, NE           ; Get return address if going to cause error
         ADRNE   r0, ErrorBlock_TaskWindow_Dying
         BNE     CopyError
-        TEQP    pc, r14           ; Restore flags
+        RestPSR r14               ; Restore flags
 
         MOVNE   r2, #Esc
 40
         MOVNE   r1, #&FF
+        Pull    r14               ; get pack stacked PSR
+        BICEQ   r14, r14, #C_bit  ; clear C if needs be
+        ORRNE   r14, r14, #C_bit  ; set C if needs be
+        RestPSR r14
         MOV     r0, #Inkey
-        Pull    r14
-        BICEQS  pc, r14, #C_bit   ; Exit setting carry accordingly
-        ORRS    pc, r14, #C_bit   ; Exit setting carry accordingly
+        Pull    "pc"              ; return to caller
 
 ; .......................................................................
 
 ; EscapeAck - first see if escape exists
 
 45
+        ; stack now contains PSR, pass on LR, claim LR
         Push    "r0-r2"
         SWI     XOS_ReadEscapeState
-        Pull    "r0-r2, pc", CC, ^ ; No action if no escape anyway
+        BLCS     %FT48            ; only action if there was an escape
+        Pull    "r0-r2, lr"
+        RestPSR lr
+        Pull    "pc"
+48
+        Push    "lr"
         MOV     r0, #EscapeSide
         MOV     r1, #0
         MOV     r2, #&ff
         SWI     OS_Byte           ; See if side effects on at the moment
         TEQ     r1, #0
         BLEQ    CloseMyExec
-        Pull    "r0-r2, pc", , ^  ; And on to next claimant
+        Pull    "pc"
 
 ; ........................................................................
 
@@ -3437,6 +3450,7 @@ MyByteV ROUT
 
         [       EmulateEscapeChar
 50
+        ; stack now contains PSR, pass on LR, claim LR
         Push    "r3, r4"
 
         Debuga  esc,"*FX 229",R1,R2
@@ -3458,8 +3472,9 @@ MyByteV ROUT
         Debug   esc," gives",R1,R2
 
         Pull    "r3-r4, r14"
-        Pull    "r14"
-        BICS    pc, r14, #V_bit   ; Return to user
+        BIC     lr, lr, #V_bit
+        RestPSR lr
+        Pull    "r14, pc"         ; Claim - return to user.
         ]
 
 ; **************************************************************************************
@@ -3482,6 +3497,9 @@ MyCnpV  ROUT
 ;         r0 undefined
 ;         all other registers preserved
 ;
+        ; XXX: sbrodie 2000/05/27: WTF?? I'd like to know where this module
+        ; thinks R3 gets set up, because the kernel sure doesn't set it ...
+        [ {FALSE}
         TEQ     r3, #1           ; Is it purge?
         TEQEQ   r1, #0           ; Is it my buffer?
         MOVNES  pc, r14          ; Out if not
@@ -3490,6 +3508,17 @@ MyCnpV  ROUT
         TEQ     r12, #0
         BLNE    Clear            ; Empty my buffer
         Pull    "r0, r12, pc",,^ ; Continue with other people on the vectors
+        |
+        MOVVC   pc, r14          ; VS for purge - pass on VC calls (preserve C+V)
+        TEQ     r1, #0           ; Is it my buffer? (Preserve C+V!)
+        MOVNE   pc, r14          ; not my buffer - pass it on preserving C+V
+        Push    "r0, r12, r14"
+        BL      FindOwner
+        TEQ     r12, #0
+        BLNE    Clear            ; Empty my buffer
+        SETV
+        Pull    "r0, r12, pc"
+        ]
 
 ; **************************************************************************************
 ;
@@ -3513,8 +3542,10 @@ Code_CallBackHandler ROUT
 ;
 ; First remove callback handler
 ;
-        [       1 = 1
-        MOV     r11, pc
+        ; XXX: sbrodie 2000/05/27: This code appears to be validating the
+        ; entry conditions for the callback handler.  Why??  Removed it.
+        [ {FALSE}
+        SavePSR r11
         TST     r11, #1
         TSTNE   r11, #2          ; Check mode bits
         TSTNE   r11, #I_bit      ; Check interrupts off as well
@@ -3598,8 +3629,8 @@ Code_CallBackHandler ROUT
         ADR     r13, ErrorRegs
         LDMIB   r0!, {r1-r9}
         STMIB   r13!, {r1-r9}
-        LDMIB   r0, {r1-r5}       ; His r10 - r14
-        STMIB   r13, {r1-r5}      ; Saved
+        LDMIB   r0, {r1-r7}       ; His r10 - r15 and CPSR (if 32-bit)
+        STMIB   r13, {r1-r7}      ; Saved
         ]
         LDR     r13, SVCStackBase ; New empty SVC stack
 ;
@@ -3611,8 +3642,7 @@ Code_CallBackHandler ROUT
 ;
 ; enter USR mode
 ;
-        MOV     r1, pc            ; save, we'll need for the flags
-        TEQP    pc, #0            ; must be user mode here, interrupts enabled
+        WritePSRc USR_mode,r2,,r1 ; user mode, irqs enabled, old CPSR saved for later
         NOP
 ;
 ; Now in user mode, so r13 and r14 are new
@@ -3671,7 +3701,7 @@ Code_CallBackHandler ROUT
         BNE     abex_exit
 
         SWI     OS_EnterOS        ; back to SVC mode
-        TEQP    r1, #0            ; restore the mode
+        RestPSR r1                ; restore the mode
         NOP                       ; nop for 3 mu ARM
         BL      RestoreSVCStack   ; Put back real SVC stack
 
@@ -3690,8 +3720,7 @@ Code_CallBackHandler ROUT
 ;
 ; check for the task's escape handler having requested a callback
 ;
-        MOV     r1, pc
-        TEQP    pc, #0            ; make sure we're in USR mode
+        WritePSRc USR_mode,r0,,r1 ; USR mode, IRQs enabled, old state in R1
         NOP
         ADR     r13, MyVecStack+MyStackSize     ; and we've got a stack!
          [ checkingcallback
@@ -3700,7 +3729,7 @@ Code_CallBackHandler ROUT
         BLEQ    checkcallback                   ; sets up [callbackflag]
          ]
         SWI     OS_EnterOS
-        TEQP    r1, #0
+        RestPSR r1
       ; NOP                     ; not required as it happens
       |
         [ DebugExit
@@ -3759,6 +3788,10 @@ Code_CallBackHandler ROUT
   |
         STMIA   r14, {r0-r14}^
   ]
+
+        TEQ     PC,PC                   ; Set Z if in 32-bit mode
+        LDREQ   r12, CallBackRegs+16*4
+        STREQ   r12, [r14, #16*4]       ; copy the user CPSR
         Pull    "R12"
 
         LDR     r12, CallBackRegs+15*4
@@ -3772,10 +3805,13 @@ Code_CallBackHandler ROUT
         CheckOut
 50
         ADR     r14, CallBackRegs
+        TEQ     PC,PC
+        LDREQ   r0, [r14, #16*4]  ; The CPSR
+        msr EQ ,SPSR_cxsf, r0     ; put into SPSR_svc/SPSR_irq ready for MOVS
         LDMIA   r14, {r0-r14}^    ; Restore user registers
         NOP
         LDR     r14, [r14, #15*4] ; The pc
-        MOVS    pc, r14           ; Back we go
+        MOVS    pc, r14           ; Back we go (32-bit safe - SPSR set up)
 
 abex_exit
         MOV     r0, #0
@@ -3828,10 +3864,13 @@ callbackchecker
         STRB    r14, callbackflag
 
         ADR     r14, ScratchBlock
+        TEQ     PC,PC             ; Z set if 32-bit mode
+        LDREQ   r0, [r14, #16*4]  ; yes - new format callback register dump
+        msr EQ ,SPSR_cxsf, r0     ; shove it in SPSR so it gets restored on MOVS pc, r14
         LDMIA   r14, {r0-r14}^    ; Restore user registers
         NOP
         LDR     r14, [r14, #15*4] ; The pc
-        MOVS    pc, r14           ; Back we go
+        MOVS    pc, r14           ; Back we go (32-bit OK - SPSR set up correctly)
 
         ]
 
@@ -3846,6 +3885,7 @@ SaveSVCStack ROUT
 ;
 ; Corrupts r0 - r7, r10
 ;
+        SavePSR r7
         [       FPErrorHandling
         STR     r13, SVCStackLimit ; In case of FP error
         ]
@@ -3853,8 +3893,8 @@ SaveSVCStack ROUT
         ADR     r0, MySVCStack    ; To
         LDR     r1, SVCStackBase  ; From
 10
-        LDMDB   r1!, {r2-r7}
-        STMIA   r0!, {r2-r7}      ; Copy stack to my area
+        LDMDB   r1!, {r2-r6}
+        STMIA   r0!, {r2-r6}      ; Copy stack to my area
         CMP     r1, r13
         BHI     %b10
 ;
@@ -3868,7 +3908,8 @@ SaveSVCStack ROUT
         LDR     r1, MySVCStackSize ; Size thereof
         ADD     r0, r0, r1        ; Address of slot at end
         STMDB   r0, {r2-r5}       ; Copy them
-        MOVS    pc, r14
+        RestPSR r7,,f
+        MOV     pc, r14
 
 
 RestoreSVCStack ROUT
@@ -3880,12 +3921,13 @@ RestoreSVCStack ROUT
 ; Exit:-  r13 restored from r10
 ; Corrupts r0 - r7
 ;
+        SavePSR r7
         MOV     r13, r10          ; old svc_r13
         ADR     r0, MySVCStack    ; From
         LDR     r1, SVCStackBase  ; To
 10
-        LDMIA   r0!, {r2-r7}
-        STMDB   r1!, {r2-r7}      ; Copy stack from my area
+        LDMIA   r0!, {r2-r6}
+        STMDB   r1!, {r2-r6}      ; Copy stack from my area
         CMP     r1, r13
         BHI     %b10
 ;
@@ -3899,7 +3941,8 @@ RestoreSVCStack ROUT
         LDR     r0, =&000FFFFF    ; Megabyte mask
         BIC     r1, r1, r0        ; Base of stack
         STMIA   r1, {r2-r5}       ; Copy them
-        MOVS    pc, r14
+        RestPSR r7,,f
+        MOV     pc, r14
 
 
 SaveEscape ROUT
@@ -3952,9 +3995,10 @@ RestoreEscape ROUT
 ;
 ; Put back old escape and enable state
 ;
-; Uses r0-r3
+; Uses r0-r4
 ;
         MOV     r3, r14
+        SavePSR r4
         MOV     r0, #EscapeChar   ; now disable/enable Escape Key
         [       RealEscape
         LDRB    r1, EscapeDisable ; using the old value
@@ -3965,14 +4009,13 @@ RestoreEscape ROUT
         SWI     OS_Byte
         LDRB    r0, EscPending
         CMP     r0, #EscapeSet
-        [       {TRUE}
         STRB    r0, EscWasSet
         MOV     r1, #0
         STRB    r1, EscPending
         CheckPointers
-        ]
         SWIEQ   OS_Byte           ; restore Escape condition
-        MOVS    pc, r3            ; must preserve flags
+        RestPSR r4,,f
+        MOV     pc, r3            ; must preserve flags
 
 
 ReadExecHandle
@@ -3998,23 +4041,15 @@ CloseMyExec
 ; Exit:-  ExecHandle=0, exec file closed if was open
 ;         Errors when closing are ignored
 ;
-      [ Version >= 27
-        Push    "r0, r1, lr"
+        Push    "r0, r1, r2, lr"
+        SavePSR r2
         LDRB    r1, ExecHandle
         TEQ     r1, #0
         MOVNE   r0, #0
         STRNEB  r0, ExecHandle    ; Clear my copy
         SWINE   XOS_Find
-        Pull    "r0, r1, pc",,^
-      |
-        Push    "lr"
-        LDRB    r1, ExecHandle
-        TEQ     r1, #0
-        MOVNE   r0, #0
-        STRNEB  r0, ExecHandle    ; Clear my copy
-        SWINE   OS_Find           ; Close handle if was open
-        Pull    "pc",,^           ; Preserve flags
-      ]
+        RestPSR r2,,f
+        Pull    "r0, r1,r2,pc"
 
 ReadSpoolHandle
 ;
@@ -4038,11 +4073,13 @@ WriteSpoolHandle
 ;
 ; Exit:-  all preserved
 ;
-        Push    "r0-r2, lr"
+        Push    "r0-r3, lr"
+        SavePSR r3
         MOV     r0, #ReadSpool
         MOV     r2, #0
         SWI     OS_Byte           ; Write spool handle
-        Pull    "r0-r2, pc",,^
+        RestPSR r3,,f
+        Pull    "r0-r3, pc"
 
 
 CheckDying ROUT
@@ -4061,21 +4098,21 @@ CheckDying ROUT
 ; Exit:-  r0 - r4, r14 corrupt
 ;
         [       DebugWimp
-        MOVS    pc, lr
+        MOV     pc, lr
         ]
-        MOV     r4, r14
+        SavePSR r4
+        Push    "r4, r14"
         [ FixNDR :LAND: checkingcallback :LAND: resetingcallback
         LDRB    r0, callbackflag  ; See if user was asking for a callback
         TEQ     r0, #0
         BEQ     %f10
         SWI     OS_SetCallBack
-        MOVS    pc, r4
-        ]
+        B       %FT20
 10
+        ]
         LDR     r0, Moribund
         TEQ     r0, #0
-        MOVEQS  pc, r14           ; Return if not dying
-        MOV     r0, #1
+        BEQ     %FT20
         MOV     r0, #CallBackHandler
         addr    r1, Code_CallBackHandler
         MOV     r2, r12
@@ -4096,7 +4133,10 @@ CheckDying ROUT
         STMNEIA r0, {r1-r3}       ; Save it if not
         ]
         SWI     OS_SetCallBack    ; And request the call back
-        MOVS    pc, r4            ; Return
+20
+        Pull    "r4, lr"
+        RestPSR r4,,f
+        MOV     pc, lr            ; Return
 
 
 PollWimpFn ROUT
@@ -4260,13 +4300,14 @@ grotpollwimp
 ;
 ; Now restore old error handlers
 ;
-        Push    "r0, pc"          ; Save flags plus wimp result
+        SavePSR r1
+        Push    "r0, r1"          ; Save flags plus wimp result
         MOV     r0, #ErrorHandler
         ADR     r1, PreErrorHandler
         LDMIA   r1, {r1-r3}
         SWI     OS_ChangeEnvironment ; Restore previous handler
         Pull    "r0, lr"
-        TEQP    lr, #0            ; Restore flags on exit from Wimp_Poll
+        RestPSR lr,,f              ; Restore flags on exit from Wimp_Poll
         ]
 ;
 ; save Wimp_Poll action so we can (eg) wait for a specific event
@@ -4276,17 +4317,19 @@ grotpollwimp
 ; Restore OS redirection handles
 ;
         [       FixRedirection
-        Push    "r0,r1,pc"        ; save psr state
+        SavePSR lr
+        Push    "r0,r1,lr"        ; save psr state
         LDRB    r0, CopyOfRedirectInHandle
         LDRB    r1, CopyOfRedirectOutHandle
         BL      ChangeRedirection
         Pull    "r0,r1,lr"
-        TEQP    lr, #0
+        RestPSR lr,,f
         ]
 
         [       DebugWimp
         Pull    "r1, r2"          ; r1 = previous checksum, r2 = address
-        Push    "r0, pc"          ; Save flags plus wimp result
+        SavePSR lr
+        Push    "r0, lr"          ; Save flags plus wimp result
         [       CheckSum
         MOV     r0, r2
         BL      FindSum           ; See if application space pages corrupt
@@ -4299,7 +4342,7 @@ grotpollwimp
         MOV     r0, r1
         BL      CheckPages        ; See if same pages now available!
         Pull    "r0, lr"
-        TEQP    lr, #0            ; Restore flags on exit from Wimp_Poll
+        RestPSR lr,,f             ; Restore flags on exit from Wimp_Poll
         ]
 
         BVS     Null              ; the safest thing to with an error is ignore it
@@ -4485,7 +4528,8 @@ SendOutput ROUT
 ;
 ; Exit:-  All registers and flags preserved
 ;
-        Push    "r0-r8, r14"
+        Push    "r0-r9, r14"
+        SavePSR r9
         MOV     r3, #24           ; Size of block
         ADRL    r2, SMessageDataData ; Where to put the stuff
         MOV     r1, #1            ; Buffer number
@@ -4511,8 +4555,8 @@ SendOutput ROUT
         CMP     r2, #0            ; if no parent, throw it on the floor!
         SWINE   XWimp_SendMessage ; Send
 20
-        Pull    "r0-r8,r14"
-        MOVS    pc, r14           ; Return
+        RestPSR r9,,f
+        Pull    "r0-r9,pc"        ; Return
 
 
 Insert  ROUT
@@ -4610,13 +4654,9 @@ GetInput ROUT
         LDRB    r1, ExecHandle
         TEQ     r1, #0            ; See if got non-zero exec handle
         BEQ     %f20              ; Branch if not
-      [ Version >= 27
         SWI     XOS_BGet          ; Try for byte from filing system
         BLVS    CloseMyExec
         Pull    "r1-r2, pc",VS
-      |
-        SWI     OS_BGet
-      ]
         BCC     %f30              ; Branch if got one
         BL      CloseMyExec       ; File exhausted, close it
 20
@@ -4630,7 +4670,8 @@ GetInput ROUT
 ; All registers and flags preserved
 
 urk_closeredirection
-        Push    "r0-r2,lr"
+        Push    "r0-r3,lr"
+        SavePSR r3
 
         MOV     r0, #0
         MOV     r1, #0
@@ -4644,7 +4685,8 @@ urk_closeredirection
         MOVNE   r0, #0
         SWINE   XOS_Find
 
-        Pull    "r0-r2,pc",,^
+        RestPSR r3,,f
+        Pull    "r0-r3,pc"
 
 ; ............................................................................
 
@@ -4665,18 +4707,17 @@ GetKbInput ROUT
 GetKbInput0
         MOV     r1, #0
         LDR     r14, ExpPointer   ; See if something buffered up
-        TEQ     r14, #0
+        ADDS    r14, r14, #0      ; replaces TEQ r14, #0 - this one clears CNV as well as set/clear Z
         ADRNE   r0, ExpBuffer
         SUBNE   r14, r14, #1
         LDRNEB  r0, [r0, r14]     ; Get it if so
         STRNE   r14, ExpPointer   ; Decrement pointer
-        Pull    r14, NE
-        BICNES  pc, r14, #C_bit   ; Return got (carry clear)
+        Pull    pc, NE            ; Return got (carry will be clear from ADDS earlier)
         BL      Extract           ; Try ordinary buffer first
         BCC     %f10              ; Branch if got one
         LDR     r0, ReceivedBytes
         CMP     r0, #0
-        Pull    pc, EQ            ; Return if none (not carry set by CMP)
+        Pull    pc, EQ            ; Return if none (note carry set by CMP)
         SUB     r0, r0, #1
         STR     r0, ReceivedBytes
         LDR     r14, ReceivedPointer
@@ -4695,17 +4736,16 @@ GetKbInput0
 ; Now see if function key expansion of any sort required
 ;
 15
-        MOV     r14, #0
+        MOVS    r14, #0,2         ; barrel shifting to clear carry too
         STRB    r14, key_fnflag
-        Pull    r14
         TST     r0, #&80          ; Fn key bit
-        BICEQS  pc, r14, #C_bit   ; Return got if not (carry clear)
-        Push    "r1-r4, r14"
+        Pull    "pc", EQ          ; Return got if not (carry clear)
+        Push    "r1-r4"
         MOV     r4, r0
         AND     r3, r4, #&70      ; Get section bits
         EOR     r3, r3, #&40      ; Get into right order
         MOV     r3, r3, LSR #4    ; And into bottom bits
-        ADD     r0, r3, #ReadFnKey; The controling OSByte
+        ADD     r0, r3, #ReadFnKey; The controlling OSByte
         MOV     r1, #0
         MOV     r2, #&ff
         SWI     OS_Byte           ; Read it
@@ -4720,14 +4760,12 @@ GetKbInput0
         CheckPointers
         MOV     r1, #1
         STR     r1, ExpPointer
-        MOV     r0, #0            ; Returning 0
-20
-        Pull    "r1-r4, r14"
-        BICS    pc, r14, #C_bit   ; Return got (carry clear)
+        MOVS    r0, #0,2          ; Returning 0, barrel shifting to clear carry too
+        Pull    "r1-r4, pc"
 30
         AND     r0, r4, #&f       ; Code modulo 16
-        ADD     r0, r0, r1        ; Add in base
-        B       %b20              ; Common exit
+        ADDS    r0, r0, r1        ; Add in base (clear carry)
+        Pull    "r1-r4, pc"       ; Exit
 40
 ;
 ; Set up for soft key expansion
@@ -4819,7 +4857,8 @@ Extract ROUT
 
       [ CheckBufferPointers
 checkbufferpointers
-        Push    "r2,r3,lr"
+        Push    "r2,r3,r4,lr"
+        SavePSR r4
         CMP     r1, #1
         BHI     knacked
         ADRNE   r2, KeyBufferEnd
@@ -4827,13 +4866,16 @@ checkbufferpointers
         ADR     r3, KeyBufferLast
         LDR     r3, [r3, r1, LSL #2]
         CMP     r3, r2
-        Pull    "r2,r3,pc",EQ,^
+        BNE     knacked
+        RestPSR r4,,f
+        Pull    "r2,r3,r4,pc"
 knacked
         MOV     r14, #1
         STR     r14, PassOnVectors      ; just in case!
         ADR     r0, knackedstring
         SWI     XOS_Write0
-        Pull    "r2,r3,lr"              ; get registers back
+        RestPSR r4,,f
+        Pull    "r2,r3,r4,lr"           ; get registers back
         STR     r14, Debug_r14          ; keep this!
         MOV     r0, #0
         LDR     r0, [r0, #-4]           ; force address exception
@@ -4861,7 +4903,7 @@ Clear   ROUT
         ADR     r2, KeyBufferTail
         STR     r0, [r2, r1, LSL #2]
         Pull    "r0,r2"
-        MOVS    pc, r14
+        MOV     pc, r14
 
 
 FindOwner ROUT
@@ -4875,21 +4917,23 @@ FindOwner ROUT
 ;             = 0 if none found
 ;         All other registers and flags preserved
 ;
-        Push    "r0,lr"
-
+        Push    "r0,r1,lr"
+        SavePSR r1
         LDR     r12, FirstWord    ; Point to a workspace
 10
         TEQ     r12, #0
-        Pull    "r0,pc",EQ,^      ; Return if nobody got em
+        BEQ     %FT20             ; Return if nobody got em
         [       FixDomain
         BL      CheckDomain
         |
         LDR     r0, PassOnVectors
         TEQ     r0, #0
         ]
-        Pull    "r0,pc",EQ,^      ; Return if this man got em
-        LDR     r12, NextBlock    ; Else try the next block
-        B       %b10              ; Loop
+        LDRNE   r12, NextBlock    ; Not got em - try the next block
+        BNE     %b10              ; Loop
+20
+        RestPSR r1,,f
+        Pull    "r0,r1,pc"        ; Return
 
         [       FixDomain
 CheckDomain     ROUT
@@ -4910,7 +4954,7 @@ CheckDomain     ROUT
         Pull    "r0, pc"
         ]
 
-        GET     "s.Redirect"            ; for OS_ChangeRedirection
+        GET     s.Redirect              ; for OS_ChangeRedirection
 
 ReadTaskKeyStates ROUT
 ;
@@ -4982,7 +5026,8 @@ ReadKeyStates ROUT
 ;
 ; Exit:-  All registers and flags preserved
 ;
-        Push    "r0-r4, r14"
+        Push    "r0-r5, r14"
+        SavePSR r5
         MOV     r4, #7
 10
         ADD     r0, r4, #ReadFnKey
@@ -4993,7 +5038,8 @@ ReadKeyStates ROUT
         CheckPointers
         SUBS    r4, r4, #1
         BCS     %b10              ; Loop until read all eight
-        Pull    "r0-r4, pc", , ^
+        RestPSR r5,,f
+        Pull    "r0-r5, pc"
 
 
 SetKeyStates ROUT
@@ -5006,7 +5052,8 @@ SetKeyStates ROUT
 ;
 ; Exit:-  All registers and flags preserved
 ;
-        Push    "r0-r4, r14"
+        Push    "r0-r5, r14"
+        SavePSR r5
         MOV     r4, #7
 10
         ADD     r0, r4, #ReadFnKey
@@ -5015,7 +5062,8 @@ SetKeyStates ROUT
         SWI     OS_Byte
         SUBS    r4, r4, #1
         BCS     %b10              ; Loop until set all eight
-        Pull    "r0-r4, pc", , ^
+        RestPSR r5,,f
+        Pull    "r0-r5, pc"
         LTORG
         [       DebugWimp
 FindPages ROUT
@@ -5060,52 +5108,22 @@ FindSum ROUT
 ; Exit:-  r0  = Checksum
 ;         All other registers preserved
 ;
-        Push    "r1, r2"
+        Push    "r1, r2, r3, lr"
+        SavePSR r3
         MOV     r1, #0
 10      LDR     r2, [r0, #-4]!
         ADD     r1, r1, r2
         CMP     r0, #&8000
         BHI     %b10              ; Loop until all done
         MOV     r0, r1
-        Pull    "r1, r2"
-        MOVS    pc, lr
+        RestPSR r3,,f
+        Pull    "r1, r2, r3, pc"
 BadSum  Push    "lr"
         SWI     OS_WriteS
         =       4,4,4,4,4,4,4,4,4,30,"Check sum failure after Wimp_Poll", 0
         Pull    "pc"
         ]
 
-
-        [       {FALSE}   ; JThackray's version of DoingSwi
-My_Swi  TST     r14, #I_bit
-        BNE     Old_Vector
-        Push    "r10-r12"         ; Get some workspace
-        BIC     r12, r14, #&FC000003 ; Remove flags
-        LDR     r11, [r12, #-4]   ; Get swi instruction
-        BIC     r11, r11, #&FF000000 ; Get value only
-        BIC     r10, r11, #Auto_Error_SWI_bit ; Remove XOS bit
-        TEQ     r10, #OS_ChangeEnvironment
-        TEQEQ   r0, #CallBackHandler ; Is it the one I'm interested in?
-        Pull    "r10-r12", NE
-        BNE     Old_Vector
-        LDR     r11, [r12, #-4]   ; Get swi instruction again
-        STR     r11, New_Swi      ; Get it ready
-        ORR     r10, r14, #SVC_mode+I_bit
-        TEQP    r10, #0           ; Same user flags as on entry, SVC mode
-        Pull    "r10-r12"
-        Push    "r14"             ; Save his link
-New_Swi DCD     0                 ; The swi he asked for
-        Pull    "r14"
-        Push    "r10-r12"         ; Get some workspace
-        MOV     r10, pc           ; Returned flags
-        EOR     r10, r10, r14
-        AND     r10, r10, #&F0000000
-        EOR     r14, r10, r14     ; Correct return to user pc
-        Pull    "r10-r12"         ; Preserve
-        MOVS    pc, r14           ; Return
-Old_Vector  DCD 0
-Old_Handler DCD 0                 ; Space for one instruction
-        ]
 
       [ debug
         InsertNDRDebugRoutines
@@ -5118,7 +5136,6 @@ message_filename
         ALIGN
 
 CopyError
-        ORR     lr, lr, #V_bit
         STMDB   sp!, {r0-r7,lr}
         SUB     sp, sp, #16
         MOV     r0, sp
@@ -5139,7 +5156,10 @@ CopyError
         SWI     XMessageTrans_CloseFile
 99      STRVS   r0, [sp, #16]
         ADD     sp, sp, #16
-        LDMIA   sp!, {r0-r7,pc}^
+        SavePSR r0,VC
+        ORRVC   r0, r0, #V_bit
+        RestPSR r0,VC,f
+        LDMIA   sp!, {r0-r7,pc}
 
 ; -----------------------------------------------------------------------------
 
@@ -5255,13 +5275,12 @@ ErrorBufferPC          Word
 ErrorBufferNumber      Word
 ErrorBufferMsg         Word 64
         [       FPErrorHandling
-ErrorRegs              Word 16    ; Where to put user registers for error
+ErrorRegs              Word 17    ; Where to put user registers for error (also temp copy of CallBackRegs)
         ]
 ExpBuffer              Word 64    ; Where to put soft key expansions
-VecSaveRegs            Word 16    ; somewhere to save on vector intercept
+VecSaveRegs            Word 17    ; somewhere to save on vector intercept (17th word for 32-bit systems)
 
 MySVCStackSize         Word       ; How big the SVC stack is
-SVCStackBase           Word       ; Where it starts
         [       FPErrorHandling
 SVCStackLimit          Word 4     ; Current end
         ]
@@ -5277,7 +5296,7 @@ SMessageDataData       *    SMessageData+4
 MyVecStack             Word 32    ; temp stack used during vector interception
 MyStackSize            *    &80
 CommandStack           Word 32    ; temp stack used during cli stuff
-CallBackRegs           Word 16    ; Area in which to save the registers
+CallBackRegs           Word 17    ; Area in which to save the registers (32-bit OS stores R0-R15,CPSR)
 GotVectors             *    @
 GotRdchV               Word
 GotWrchV               Word
@@ -5286,6 +5305,7 @@ GotEventV              Word
 GotByteV               Word
 GotCnpV                Word
 NumVectors             *    (@-GotVectors)/4 ; The number of vectors
+SVCStackBase           Word       ; Where it starts
   [ DebugExit
 InPollWimpFn           Word
   ]
