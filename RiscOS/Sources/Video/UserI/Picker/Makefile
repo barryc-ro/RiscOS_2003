@@ -200,13 +200,13 @@ ${RAM_MODULE}:  ${RAM_OBJS} ${CLIB} ${OSLIB} ${ICONS}
         ${MODSQZ} $@
         Access $@ RW/R
 
-${ROM_MODULE}:  ${ROM_OBJS} ${ROMCSTUBS} ${ICONS}
+${ROM_MODULE}:  ${ROM_OBJS} ${OSLIB} ${ROMCSTUBS} ${ICONS}
         ${MKDIR} aof
-        $(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS}
+        $(LD) -o $@ -aof ${ROM_OBJS} ${OSLIB} ${ROMCSTUBS}
 
-${DBG_MODULE}:  ${DBG_OBJS} ${CLIB} ${ICONS}
+${DBG_MODULE}:  ${DBG_OBJS} ${CLIB} ${OSLIB} ${ICONS}
         ${MKDIR} rm
-        $(LD) -o $@ -rmf ${DBG_OBJS} ${CLIB}
+        $(LD) -o $@ -rmf ${DBG_OBJS} ${OSLIB} ${CLIB}
         Access $@ RW/R
 
 ${RESF}: ${RESOURCEFILES}
