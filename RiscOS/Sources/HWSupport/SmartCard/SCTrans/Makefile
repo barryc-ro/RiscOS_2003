@@ -31,6 +31,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+AWK     = awk
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
@@ -53,6 +54,9 @@ REMOTEDB   = <Lib$Dir>.debug.o.remotezm
 # Include files
 #
 INCLUDES = -IC:,<Lib$Dir>.
+
+# Exported headers 
+EXPORTS  = ${EXP_C_H}.SCTransport
 
 # Program specific options:
 #
@@ -139,9 +143,12 @@ rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} dirs
         ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${REMOTEDB}
         Access rm.${COMPONENT}D RW/R
 
-# dummy target
 h.header: cmhg.header
-	@echo
+	${CMHG} ${CMHGFLAGS} -d $@ cmhg.header
+
+${EXPORTS}: h.header
+	${AWK} -- "/.define SCTransport\_00/,/endif/" h.header { > $@ }
+	SetType ${EXPORTS} Text
 
 #
 # Dynamic dependencies:
