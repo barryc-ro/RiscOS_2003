@@ -18,6 +18,7 @@
 #include "Compose.h"
 #include "PopUp.h"
 #include "Entry.h"
+#include "ScreenMode.h"
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
@@ -493,7 +494,9 @@ void inbox_output_messages_listing(FILE *out)
 void inbox_get_mailbox_list_completed(FILE *out, eng_rcode er, MessageDescriptor *ptr)
 {
   char			*token;
-  int			 len = 0;
+  int32			 len = 0;
+  int32			 sub_len = 0;
+  int32			 from_len = 0;
 
   /* Set internal state */
   status.state = State_Inbox;
@@ -517,20 +520,22 @@ void inbox_get_mailbox_list_completed(FILE *out, eng_rcode er, MessageDescriptor
     }
     else
     {
+      /* Retrieve the truncate lengths */
+      sub_len = screenmode_return_value("ScreenMode_Inbox_Subject");
+      from_len = screenmode_return_value("ScreenMode_Inbox_From");
+
+      dprintf(("UI", "** Truncate lengths: From (%d), Subject (%d)\n", from_len, sub_len));
+
       while (ptr)
       {
-        /* Check the error flag is not set before attempting to process */
-//        if (!(ptr->flags & ERROR))
-        {
-          dprintf(("UI", "ID:      %d\n", ptr->ID));
-          dprintf(("UI", "Flags:   %d\n", ptr->flags));
-          dprintf(("UI", "From:    %s\n", ptr->fromreal));
-          dprintf(("UI", "Address: %s\n", ptr->fromaddr));
-          dprintf(("UI", "Subject: %s\n", ptr->subject));
-          dprintf(("UI", "Date:    %s\n", asctime(ptr->datestruct)));
+        dprintf(("UI", "ID:      %d\n", ptr->ID));
+        dprintf(("UI", "Flags:   %d\n", ptr->flags));
+        dprintf(("UI", "From:    %s\n", ptr->fromreal));
+        dprintf(("UI", "Address: %s\n", ptr->fromaddr));
+        dprintf(("UI", "Subject: %s\n", ptr->subject));
+        dprintf(("UI", "Date:    %s\n", asctime(ptr->datestruct)));
 
-          inbox_output_message_html(out, ptr, token, len);
-        }
+        inbox_output_message_html(out, ptr, token, len, from_len, sub_len);
         ptr = ptr->next;
       }
     }
@@ -605,163 +610,56 @@ void inbox_get_mailbox_list_nombox(FILE *out)
 /* table, escapes the output to remove reserved HTML characters and     */
 /* outputs the data as an HTML Table Row.                               */
 /*                                                                      */
-/* Parameters: out     - file pointer                                   */
-/*             flags   - flags word for message                         */
-/*             id      - message id                                     */
-/*             from    - from text                                      */
-/*             date    - date struct for turning into date string.      */
-/*             subject - subject text.                                  */
+/* Parameters: out        - file pointer                                */
+/*             msg        - MessageDescriptor of message to output.     */
+/*             html       - HTML to embed the message components into.  */
+/*             len        - length of HTML fragment.                    */
+/*             from_trunc - date struct for turning into date string.   */
+/*             sub_trunc  - subject text.                               */
 /*                                                                      */
 /* Returns:    void.                                                    */
 /*                                                                      */
 /************************************************************************/
-void inbox_output_message_html(FILE *out, MessageDescriptor *msg, char *html, uint32 len)
+void inbox_output_message_html(FILE *out, MessageDescriptor *msg, char *html, uint32 len,
+                               int32 from_trunc, int32 sub_trunc)
 {
   char			*output_line = NULL;
   char			*from = NULL;
   char			*subject = NULL;
   char			*image_filename = NULL;
   char			*date = NULL;
-  char			*date_initial = NULL;
-  int			 sub_len = 0;
-  int			 date_len = 0;
-  int			 from_len = 0;
-  int			 rc = 0;
-  esc_html_context	 context;
+  bool			 er = true;
 
-  /* First check to see if the subject text is empty */
-  if ( (msg->subject == NULL) || (strcmp(msg->subject, "") == 0) )
-  {
-    /* Empty, so we need the INBOX_No_Subject token text to be output instead */
-    sub_len = (nb_messagetrans_token_length(message_block, "INBOX_No_Subject") * 6) + 5;
-  }
-  else
-  {
-    sub_len = (strlen(msg->subject) * 6) + 5;
-  }
-
-  /* First check to see if the fromreal text is empty */
-  if ( (msg->fromreal == NULL) || (strcmp(msg->fromreal, "") == 0) )
-  {
-    from_len = (strlen(msg->fromaddr) * 6) + 5;
-  }
-  else
-  {
-    from_len = (strlen(msg->fromreal) * 6) + 5;
-  }
-  /* For escaping characters the rule is that you must malloc the size of the original string
-   * times 6 to ensure that all characters in the string can be escaped.
+  /* SUBJECT TEXT
+   * First check to see if the subject text is empty.  If so output INBOX_No_Subject token.
    */
-  date_len = (DateString_Length * 6) + 5;
+  if ( (msg->subject == NULL) || (strcmp(msg->subject, "") == 0) )
+    er = inbox_build_intray_element(nb_messagetrans_lookup(message_block, "INBOX_No_Subject"),
+                                    &subject, 0);
+  else
+    er = inbox_build_intray_element(msg->subject, &subject, sub_trunc);
 
-  if ( ((output_line= malloc(len + 300)) == NULL)			||
-       ((date_initial = malloc(DateString_Length)) == NULL)		||
-       ((date = malloc(date_len)) == NULL)  				||
-       ((from = malloc(from_len)) == NULL)  				||
-       ((subject = malloc(sub_len)) == NULL)				||
-       ((image_filename = malloc(Inbox_Filename_Max_Length)) == NULL)
-     )
+  /* FROM TEXT
+   * First check to see if the fromreal text is empty.  If it is display the email address.
+   */
+  if ( (msg->fromreal == NULL) || (strcmp(msg->fromreal, "") == 0) )
+    er = inbox_build_intray_element(msg->fromaddr, &from, from_trunc);
+  else
+    er = inbox_build_intray_element(msg->fromreal, &from, from_trunc);
+
+  /* DATE TEXT */
+  inbox_build_date_string(msg, &date);
+
+  /* IMAGE TYPE */
+  inbox_build_image_string(msg, &image_filename);
+
+  if ((output_line= malloc(len + 300)) == NULL)
   {
     ncmui_error_display(1);
     dprintf(("UI", "ERROR: Not enough memory to create inbox listing.\n"));
   }
   else
   {
-    /* Setup the initial date string based on the tm structure passed.  Then send this to
-     * strftime to get internationalised date.  Later pass it through the html escaper with the
-     * rest of the text
-     */
-    strftime(date_initial, DateString_Length, "%d %b", msg->datestruct);
-
-    /* Check the flags for the message to ensure the correct graphic is displayed */
-    if ( (!(msg->flags & READ)) && ((msg->flags & DOWNLOADED) == DOWNLOADED) )
-    {
-      strcpy(image_filename, Inbox_Local_New_Message);
-    }
-    else if ( (msg->flags & (READ | DOWNLOADED)) == (READ | DOWNLOADED) )
-    {
-      strcpy(image_filename, Inbox_Local_Read_Message);
-    }
-    else if ( (!(msg->flags & DOWNLOADED)) && ((msg->flags & READ) == READ) )
-    {
-      strcpy(image_filename, Inbox_Server_Read_Message);
-    }
-    else if ( (!(msg->flags & DOWNLOADED)) && (!(msg->flags & READ)) )
-    {
-      strcpy(image_filename, Inbox_Server_New_Message);
-    }
-    else
-    {
-      strcpy(image_filename, Inbox_Server_Read_Message);
-    }
-
-    /* Setup The Subject Text.
-     * Check the subject field to ensure there is some text to build the link around
-     */
-    if ( (msg->subject == NULL) || (strcmp(msg->subject, "") == 0) )
-    {
-      /* No subject, so escape the Message token */
-      context = NULL;
-      while (rc = escape_html_mem_to_mem (nb_messagetrans_lookup(message_block, "INBOX_No_Subject"),
-                                          subject, sub_len, 1, &context), rc == 0);
-    }
-    else
-    {
-      /* Has subject, so escape the text */
-      context = NULL;
-      while (rc = escape_html_mem_to_mem (msg->subject, subject, sub_len, 1, &context), rc == 0);
-    }
-    /* Check for error code in either situation */
-    if (rc == 0)
-    {
-      strcpy(subject, "Escaping Error");
-    }
-
-    /* Setup The From Text.
-     * Escape the text and output if no error
-     */
-    if ( (msg->fromreal == NULL) || (strcmp(msg->fromreal, "") == 0) )
-    {
-      /* No real name, so use email address. */
-      context = NULL;
-      while (rc = escape_html_mem_to_mem (msg->fromaddr, from, from_len, 1, &context), rc == 0);
-    }
-    else
-    {
-      /* Has real name, so escape the real name */
-      context = NULL;
-      while (rc = escape_html_mem_to_mem (msg->fromreal, from, from_len, 1, &context), rc == 0);
-    }
-    /* Check for error code in either situation */
-    if (rc == 0)
-    {
-      strcpy(from, "Escaping Error");
-    }
-
-    /* Setup The Date Text.
-     * Escape the text and output if no error
-     */
-    context = NULL;
-    while (rc = escape_html_mem_to_mem (date_initial, date, date_len, 1, &context), rc == 0);
-
-    /* Check for error code in either situation */
-    if (rc == 0)
-    {
-      strcpy(date, "Escaping Error");
-    }
-
-
-    /* Tuncate the length of the from and subject text if necessary */
-    if (strlen(from) > Inbox_Truncate_From)
-    {
-      from[Inbox_Truncate_From] = '\0';
-    }
-    if (strlen(subject) > Inbox_Truncate_Subject)
-    {
-      subject[Inbox_Truncate_Subject] = '\0';
-    }
-
-
     /* Output the escaped data plus the message ID in the correct order based on the html
      * fragment from the Messages file
      */
@@ -774,11 +672,110 @@ void inbox_output_message_html(FILE *out, MessageDescriptor *msg, char *html, ui
 
     /* Tidy up */
     free(date);
-    free(date_initial);
     free(from);
     free(subject);
     free(image_filename);
     free(output_line);
+  }
+}
+
+
+/************************************************************************/
+/* inbox_build_image_string                                             */
+/*                                                                      */
+/* Function builds a string containing the image to display with this   */
+/* message depending on the flags settings in the MessageDescriptor.    */
+/*                                                                      */
+/* Parameters: msg  - MessageDescriptor containing data to display.     */
+/*             data - pointer to return                                 */
+/*                                                                      */
+/* Returns:    true or false.                                           */
+/*                                                                      */
+/************************************************************************/
+bool inbox_build_image_string(MessageDescriptor *msg, char **data)
+{
+  char		*ptr = NULL;		/* DO NOT FREE THIS */
+
+  if ((ptr = malloc(Inbox_Filename_Max_Length)) == NULL)
+  {
+    ncmui_error_display(1);
+    return(false);
+  }
+  else
+  {
+    if ( (!(msg->flags & READ)) && ((msg->flags & DOWNLOADED) == DOWNLOADED) )
+    {
+      strcpy(ptr, Inbox_Local_New_Message);
+    }
+    else if ( (msg->flags & (READ | DOWNLOADED)) == (READ | DOWNLOADED) )
+    {
+      strcpy(ptr, Inbox_Local_Read_Message);
+    }
+    else if ( (!(msg->flags & DOWNLOADED)) && ((msg->flags & READ) == READ) )
+    {
+      strcpy(ptr, Inbox_Server_Read_Message);
+    }
+    else if ( (!(msg->flags & DOWNLOADED)) && (!(msg->flags & READ)) )
+    {
+      strcpy(ptr, Inbox_Server_New_Message);
+    }
+    else
+    {
+      strcpy(ptr, Inbox_Server_Read_Message);
+    }
+
+    *data = ptr;
+    return(true);
+  }
+}
+
+/************************************************************************/
+/* inbox_build_date_string                                              */
+/*                                                                      */
+/* Function is called by the inbox building routines to create convert  */
+/* the date data stored in the MessageDescriptor into more user-friendly*/
+/* output                                                               */
+/*                                                                      */
+/* Parameters: msg  - MessageDescriptor containing data to display.     */
+/*             data - pointer to return                                 */
+/*                                                                      */
+/* Returns:    true or false.                                           */
+/*                                                                      */
+/************************************************************************/
+bool inbox_build_date_string(MessageDescriptor *msg, char **data)
+{
+  char			*tmp = NULL;
+  char			*ptr = NULL;		/* DO NOT FREE */
+  char			*date_format = NULL;
+  int32			 date_len = 0;
+  int			 rc = 0;
+  esc_html_context	 context;
+
+  date_len = (DateString_Length * 6) + 5;
+
+  if ( ((tmp = malloc(DateString_Length)) == NULL)		||
+       ((ptr = malloc(date_len)) == NULL)
+     )
+  {
+    ncmui_error_display(1);
+    return(false);
+  }
+  else
+  {
+    /* Setup the initial date string based on the tm structure passed.  Then send this to
+     * strftime to get internationalised date.  Later pass it through the html escaper with the
+     * rest of the text
+     */
+    nb_strcpy_malloc(&date_format, nb_messagetrans_lookup(message_block, "INBOX_DateFormat"));
+    strftime(tmp, DateString_Length, date_format, msg->datestruct);
+
+    context = NULL;
+    while (rc = escape_html_mem_to_mem (tmp, ptr, date_len, 1, &context), rc == 0);
+
+    *data = ptr;
+    free(date_format);
+    free(tmp);
+    return(true);
   }
 }
 
@@ -813,9 +810,9 @@ bool inbox_build_intray_element(char *data, char **result, int32 truncate)
   {
     if (truncate > 0)
     {
-      ptr_len = (truncate * 6) + 5;
       /* We need to truncate the text.  */
-      if ( ((temp = malloc(truncate + 2)) == NULL) ||
+      ptr_len = (truncate * 6) + 5;
+      if ( ((temp = malloc(truncate + 1)) == NULL) ||
            ((ptr = malloc(ptr_len)) == NULL) )
       {
         return(false);
@@ -823,6 +820,7 @@ bool inbox_build_intray_element(char *data, char **result, int32 truncate)
       else
       {
         strncpy(temp, data, truncate);
+        temp[truncate] = '\0';
         context = NULL;
         while (rc = escape_html_mem_to_mem (temp, ptr, ptr_len, 1, &context), rc == 0);
         free(temp);
