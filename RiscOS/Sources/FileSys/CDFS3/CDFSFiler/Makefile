@@ -52,7 +52,7 @@ RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
+ABSSYM    = RISC_OSLib:o.c_AbsSym
 
 #
 # Include files
@@ -79,7 +79,7 @@ OBJS = aux.o\
 #
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $<
 .s.o:;      ${AS} ${ASFLAGS} $< $@
-.cmhg.o:;    ${CMHG} -d @.h.module $< $@
+.cmhg.o:;    ${CMHG} -p -d @.h.module $< $@
 
 # Specific rules
 
@@ -87,7 +87,7 @@ messages.o: Res.UK.Messages
         resgen messages_file @.o.messages @.Res.UK.Messages Resources.${COMPONENT}.Messages
 
 module.h: cmhg.Hdr
-        ${CMHG} -d @.h.module @.cmhg.Hdr -o @.o.Hdr 
+        ${CMHG} -p -d @.h.module @.cmhg.Hdr -o @.o.Hdr 
 
 res.o: Res.!Sprites22
         resgen res_file @.o.res @.Res.UK.Res Resources.CDFSFiler.Res @.Res.!Sprites22 Resources.CDFSFiler.!Sprites22 
@@ -136,7 +136,7 @@ ${MODULE}: ${OBJS} ${TGRLIB} local_dirs
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} local_dirs
-        ${LD} -o $@ -aof ${OBJS} ${TGRLIB} ${TBOXLIB} 
+        ${LD} -o $@ -aof ${OBJS} ${TGRLIB} ${TBOXLIB} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
