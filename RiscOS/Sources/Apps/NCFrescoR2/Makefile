@@ -165,9 +165,9 @@ install_NCFresco_common:
 	${CP} NCFrescoRORes:Sprites		${INSTALLRESLOCALEDIR}.Sprites  ${CPFLAGS}
 	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLRESLOCALEDIR}.Messages ${TRFLAGS}
 	${CP} NCFrescoRORes:Res			${INSTALLRESLOCALEDIR}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:MimeMap		${INSTALLDIR}.MimeMap  ${CPFLAGS}
-	${CP} NCFrescoRORes:Config		${INSTALLRESLOCALEDIR}.Config   ${CPFLAGS}
-	${CP} NCFrescoRORes:fontmap/txt		${INSTALLRESLOCALEDIR}.fontmap/txt ${CPFLAGS}
+	${CP} NCFrescoRORes:MimeMap		${INSTALLDIR}.MimeMap           ${CPFLAGS}
+	${CP} NCFrescoRORes:Config		${INSTALLDIR}.Config            ${CPFLAGS}
+	${CP} NCFrescoRORes:fontmap/txt		${INSTALLDIR}.fontmap/txt       ${CPFLAGS}
 	${CP} <Lib$Dir>.LocaleRes.LocaleRes	${INSTALLDIR}.LocaleRes         ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLRESLOCALEDIR}.html.alert     ${TRFLAGS}
