@@ -25,6 +25,7 @@ Pace.
 #include <ctype.h>
 #include <time.h>
 #include "header.h"
+#include "kernel.h"
 #include "swis.h"
 #include "asmutils/rminfo.h"
 #include "global/services.h"
@@ -83,14 +84,14 @@ static void addDataReadCallback (const void* const pw);
 *****************************************************************************/
 
 static int wimp_poll_word = 0;
-static int task_handle = 0, child_handle = 0;   /* two task handles */
+static volatile int task_handle = 0;
+static volatile int  child_handle = 0;
 
 static volatile bool taskwindow_created = false;
 static volatile commandMode mode = immidiate;
 
 char input_data[INPUT_DATA_BUFFER_SIZE];          /* serial input is written to this buffer */
 
-static FILE* output = 0;      /* pointer to output file */
 static void* pw_ref;          /* pointer to modules private word, setup in module initialisation code */
 
 static dataSource current_source = mainWindow;
@@ -98,7 +99,7 @@ static dataSource current_source = mainWindow;
 static bool reading_input = false;             /* a flag that is set to prevent a chain of callbacks from building */
 static bool need_data_read_callback = false;   /* set to true when data on serial port needs to be read in a callback */
 
-static bool ack = false;  /* an acknowledge flag */
+
 
 
 /***************************************************************************
@@ -120,7 +121,7 @@ int main (int argc, char* argv[])
 {
    int messages[] = {TaskWindow_Output, TaskWindow_Ego, TaskWindow_Morio, Wimp_MQuit};
    const char description[] = "BrainLink";
-   const char module_name[] = "BrainLink";
+   const char module_name[] = Module_Title;
 
    char task_window_cmd[MAX_COMMAND_LENGTH];
    unsigned int bytes_read = 0;                      /* amount of data in in_data buffer */
@@ -139,7 +140,7 @@ int main (int argc, char* argv[])
    serial_openPort ();
 
    /* need to flush out the serial port buffer, upcalls only happen when data enters an empty buffer */
-   serial_flushBuffers ();
+   serial_flushBuffers (true, true);
 
    /* now we want to configure the reads to be non-blocking */
    serial_setBlockingStatus (false);
@@ -179,7 +180,15 @@ int main (int argc, char* argv[])
                switch (wimp_poll_block.user_message.hdr.action_code)
                {
                   case Wimp_MQuit:
-                     _swix (OS_ExitAndDie, _IN(0) | _IN(3), 0, module_name);
+                     {
+                         WimpMessage msg;
+                         msg.hdr.size = 20;
+                         msg.hdr.your_ref = 0;
+                         msg.hdr.action_code = TaskWindow_Morite;
+                         _swix (Wimp_SendMessage, _INR (0, 2), 17, &msg, child_handle);
+                         child_handle = 0;
+                        _swix (OS_ExitAndDie, _IN(0) | _IN(3), 0, module_name);
+                     }
                      break;
                   case TaskWindow_Output:     /* send task window output to serial port */
                      ptr = (char*)&wimp_poll_block.user_message.data.words[1];
@@ -189,8 +198,8 @@ int main (int argc, char* argv[])
                   case TaskWindow_Ego:        /* record the child's task ID */
                      child_handle = wimp_poll_block.user_message.hdr.sender;
                      break;
-                  case TaskWindow_Morio:      /* the task window has died */
-                     task_handle = 0;
+                  case TaskWindow_Morio:      /* the child has died */
+                     child_handle = 0;
                      _swix (OS_ExitAndDie, _IN(0) | _IN(3), 0, module_name);
                      break;
                   default:
@@ -418,9 +427,6 @@ static void processInputData (const char* in_data, unsigned int input_data_size,
       {
          switch (in_data[i])
          {
-            case 0x06: /* acknowledge */
-               ack = true;
-               break;
             case 0x09: /* control I */
                writeOutputString ("\n\rIMMIDIATE MODE.\n\r", brainlink);
                mode = immidiate;
@@ -678,29 +684,13 @@ extern void serviceCallHandler (int service_number, _kernel_swi_regs* r, void* p
 ***************************************************************************/
 extern _kernel_oserror* commandHandler (const char *arg_string, int argc, int cmd_no, void *pw)
 {
-   char parameters[16][64];
-   unsigned int i = 0, j = 0, k = 0;
+   char parameters[256][4];
 
    (void)pw;
 
-    do
-    {
-       while (arg_string[i] <= 0x20) /* run through arg_string until a non space is found. */
-       {
-          i++;
-       }
 
-       do
-       {
-          parameters[j][k++] = arg_string[i]; /* copy the parameter */
-       }
-       while (arg_string[i++] > 0x20 && k < 64);
 
-       parameters[j][k - 1] = '\0';          /* terminate the parameter */
-       k = 0;
-
-    }
-    while (j++ < 16);
+   sscanf (arg_string, "%s", &parameters[0][0]);
 
 
    switch (cmd_no)
@@ -733,7 +723,7 @@ extern _kernel_oserror* commandHandler (const char *arg_string, int argc, int cm
             writeOutputString ("\n\rBrainLink receiving file using Z-Modem.\n\r", brainlink);
             filename = directzmodemrx("@.");
             writeOutputString ("\n\rBrainlink file transfer complete.\n\r", brainlink);
-            if (argc == 1)
+            if (argc > 0)
             {
                char pathname[256];
                sprintf (pathname, "@.%s", filename);
@@ -807,32 +797,28 @@ _kernel_oserror* swiHandler (int swi_no, _kernel_swi_regs* r, void* pw)
 ***************************************************************************/
 extern _kernel_oserror* moduleFinalise (int fatal, int podule, void *pw)
 {
-   _kernel_oserror* err = 0;
+   _kernel_oserror* e;
 
-   writeOutputString ("\n\rBrainlink module terminated.", brainlink);
-   serial_closePort ();
-
-   if (task_handle)    /* if the wimp task was successfully started */
+   if (child_handle == 0)    /* can only terminate properly if child task is already dead */
    {
-      wimp_close_down (task_handle);    /* close down the wimp task */
-      task_handle = 0;
+      writeOutputString ("\n\rBrainlink module terminated.", brainlink);
+      wimp_close_down (task_handle);
+      serial_closePort ();
+      /* need to handle the returned error codes */
+      e = _swix (OS_RemoveCallBack, _INR(0, 1), readinput_callback_entry, pw);
+      if (!e)
+      {
+         e = _swix (OS_Release, _INR (0, 2), 0x1D, upcallv_entry, pw);
+      }
    }
-   if (child_handle)   /* if the child task was successfully started */
+   else
    {
-      wimp_close_down (child_handle);   /* close down the child task */
-      child_handle = 0;
+      _kernel_oserror err_block;
+      err_block.errnum = 0x103;
+      strcpy (err_block.errmess, "AppQuit");
+      e = _swix (MessageTrans_ErrorLookup, _INR (0, 4), &err_block, 0, 0, 0, Module_Title);
    }
-
-   if (output)  /* if the output file is still open */
-   {
-      fclose(output); /* then close it */
-   }
-
-   /* need to handle the returned error codes */
-   _swix (OS_RemoveCallBack, _INR(0, 1), readinput_callback_entry, pw);
-   _swix (OS_Release, _INR (0, 2), 0x1D, upcallv_entry, pw);
-
-   return err;
+   return e;
 }
 
 
