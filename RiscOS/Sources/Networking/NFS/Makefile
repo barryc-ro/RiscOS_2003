@@ -156,6 +156,7 @@ clean:
         ${RM} ${TARGET}
         ${RM} ${ROMTARGET}
         ${RM} linked.${COMPONENT}
+        ${RM} h.${CMHGNAME}
         @echo ${COMPONENT}: cleaned
 
 #
