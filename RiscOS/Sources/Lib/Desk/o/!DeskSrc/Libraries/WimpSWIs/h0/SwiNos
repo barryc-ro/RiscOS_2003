@@ -1,0 +1,66 @@
+
+XOS_Bit                        EQU &020000
+
+SWI_Wimp_Initialise            EQU &0400c0
+SWI_Wimp_CreateWindow          EQU &0400c1
+SWI_Wimp_CreateIcon            EQU &0400c2
+SWI_Wimp_DeleteWindow          EQU &0400c3
+SWI_Wimp_DeleteIcon            EQU &0400c4
+SWI_Wimp_OpenWindow            EQU &0400c5
+SWI_Wimp_CloseWindow           EQU &0400c6
+SWI_Wimp_Poll                  EQU &0400c7
+SWI_Wimp_RedrawWindow          EQU &0400c8
+SWI_Wimp_UpdateWindow          EQU &0400c9
+SWI_Wimp_GetRectangle          EQU &0400ca
+SWI_Wimp_GetWindowState        EQU &0400cb
+SWI_Wimp_GetWindowInfo         EQU &0400cc
+SWI_Wimp_SetIconState          EQU &0400cd
+SWI_Wimp_GetIconState          EQU &0400ce
+SWI_Wimp_GetPointerInfo        EQU &0400cf
+SWI_Wimp_DragBox               EQU &0400d0
+SWI_Wimp_ForceRedraw           EQU &0400d1
+SWI_Wimp_SetCaretPosition      EQU &0400d2
+SWI_Wimp_GetCaretPosition      EQU &0400d3
+SWI_Wimp_CreateMenu            EQU &0400d4
+SWI_Wimp_DecodeMenu            EQU &0400d5
+SWI_Wimp_WhichIcon             EQU &0400d6
+SWI_Wimp_SetExtent             EQU &0400d7
+SWI_Wimp_SetPointerShape       EQU &0400d8
+SWI_Wimp_OpenTemplate          EQU &0400d9
+SWI_Wimp_CloseTemplate         EQU &0400da
+SWI_Wimp_LoadTemplate          EQU &0400db
+SWI_Wimp_ProcessKey            EQU &0400dc
+SWI_Wimp_CloseDown             EQU &0400dd
+SWI_Wimp_StartTask             EQU &0400de
+SWI_Wimp_ReportError           EQU &0400df
+SWI_Wimp_GetWindowOutline      EQU &0400e0
+SWI_Wimp_PollIdle              EQU &0400e1
+SWI_Wimp_PlotIcon              EQU &0400e2
+SWI_Wimp_SetMode               EQU &0400e3
+SWI_Wimp_SetPalette            EQU &0400e4
+SWI_Wimp_ReadPalette           EQU &0400e5
+SWI_Wimp_SetColour             EQU &0400e6
+SWI_Wimp_SendMessage           EQU &0400e7
+SWI_Wimp_CreateSubMenu         EQU &0400e8
+SWI_Wimp_SpriteOp              EQU &0400e9
+SWI_Wimp_BaseOfSprites         EQU &0400ea
+SWI_Wimp_BlockCopy             EQU &0400eb
+SWI_Wimp_SlotSize              EQU &0400ec
+SWI_Wimp_ReadPixTrans          EQU &0400ed
+SWI_Wimp_ClaimFreeMemory       EQU &0400ee
+SWI_Wimp_CommandWindow         EQU &0400ef
+SWI_Wimp_TextColour            EQU &0400f0
+SWI_Wimp_TransferBlock         EQU &0400f1
+SWI_Wimp_ReadSysInfo           EQU &0400f2
+SWI_Wimp_SetFontColours        EQU &0400f3
+
+SWI_Wimp_BorderIcon            EQU &081680
+SWI_Wimp_BorderWindow          EQU &081681
+SWI_Wimp_ClaimInterface        EQU &081682
+SWI_Wimp_ReleaseInterface      EQU &081683
+SWI_Wimp_SetWorkAreaPointer    EQU &081684
+SWI_Wimp_RemoveWorkAreaPointer EQU &081685
+SWI_Wimp_PollPointer           EQU &081686
+SWI_Wimp_SendHelp              EQU &081687
+
+        END
