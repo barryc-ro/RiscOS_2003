@@ -93,6 +93,11 @@ resources:
         |${CP} Tables.8desktop ${RESDIR}.Tables.8desktop ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_Dir tables
+
 dirs:
 	${MKDIR} o
 
