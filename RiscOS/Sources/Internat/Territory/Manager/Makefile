@@ -67,30 +67,3 @@ ${EXP_HDR}.Territory: hdr.Territory
         ${CP} hdr.Territory $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.TerrMgr: Hdr:ListOpts
-rm.TerrMgr: Hdr:Macros
-rm.TerrMgr: Hdr:System
-rm.TerrMgr: Hdr:SWIs
-rm.TerrMgr: Hdr:CPU.Generic26
-rm.TerrMgr: Hdr:IO.GenericIO
-rm.TerrMgr: Hdr:RISCOS
-rm.TerrMgr: Hdr:ModHand
-rm.TerrMgr: Hdr:Services
-rm.TerrMgr: Hdr:VduExt
-rm.TerrMgr: Hdr:FSNumbers
-rm.TerrMgr: Hdr:NewErrors
-rm.TerrMgr: Hdr:Variables
-rm.TerrMgr: Hdr:Proc
-rm.TerrMgr: Hdr:Sprite
-rm.TerrMgr: Hdr:Wimp
-rm.TerrMgr: Hdr:Messages
-rm.TerrMgr: Hdr:CMOS
-rm.TerrMgr: Hdr:MsgTrans
-rm.TerrMgr: Hdr:Squash
-rm.TerrMgr: Hdr:ColourTran
-rm.TerrMgr: Hdr:Territory
-rm.TerrMgr: Hdr:NdrDebug
-rm.TerrMgr: Version
-rm.TerrMgr: s.ModHead
-rm.TerrMgr: s.SWIs
-rm.TerrMgr: s.Tail
