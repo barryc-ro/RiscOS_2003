@@ -11,8 +11,13 @@ INSTDIR    = ${APP}
 
 # Generic options:
 #
-
-include Makefiles:StdTools
+MKDIR   = cdir
+CC      = cc
+CP      = copy
+LD      = link
+RM      = remove
+SQUEEZE = squeeze
+WIPE    = -wipe
 
 CFLAGS  = ${THROWBACK} -c -depend !Depend -fah -fussy ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
@@ -61,30 +66,31 @@ all: $(FILES)
 
 install: $(FILES)
          $(MKDIR) ${INSTDIR}
+         Access $(INSTDIR) RW/R
          $(CP) $(LDIR).Messages  $(INSTDIR).Messages    $(CPFLAGS)
+         Access $(INSTDIR).Messages RW/R
          $(CP) $(RDIR).!Run      $(INSTDIR).!Run        $(CPFLAGS)
+         Access $(INSTDIR).!Run RW/R
          $(CP) $(RDIR).!Boot     $(INSTDIR).!Boot       $(CPFLAGS)
+         Access $(INSTDIR).!Boot RW/R
          $(CP) $(RDIR).TTXlaunch $(INSTDIR).TTXlaunch   $(CPFLAGS)
+         Access $(INSTDIR).TTXlaunch RW/R
          $(CP) $(RDIR).Config    $(INSTDIR).Config      $(CPFLAGS)
+         Access $(INSTDIR).Config RW/R
          $(CP) $(RDIR).!RunImage $(INSTDIR).!RunImage   $(CPFLAGS)
-         Access $(INSTDIR).* RW/R
+         Access $(INSTDIR).!RunImage RW/R
          @echo $(COMPONENT): installed
 
 clean:
-        ${RM}   ${RDIR}.!RunImage
-        ${WIPE} ${WPREFLAGS} ${APP}.* ${WFLAGS}
-        ${WIPE} o ${WFLAGS}
-        ${RM}   ${APP}
-        -stripdepnd
+        ${WIPE} o.* ${WFLAGS} 
+        ${RM} ${RDIR}.!RunImage
+        ${WIPE} ${INSTDIR} ${WFLAGS}
         @echo $(COMPONENT): cleaned
-
-dirs:
-        ${MKDIR} o
 
 #
 # Static dependencies:
 #
-${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB} dirs
+${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB} 
         ${LD} ${LINKFLAGS} -o $@ ${OBJS} ${CLIB} ${WIMPLIB} 
 #        ${SQUEEZE} $@
 
