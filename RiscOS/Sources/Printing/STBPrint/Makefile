@@ -26,6 +26,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 COMPRESS = squash
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS}
@@ -47,6 +48,8 @@ WRAPPER   = s.ModuleWrap
 # Include files
 #
 INCLUDES = -IC:
+
+DIRS     = o._dirs
 
 # DFLAGS should be NULL for any non-debugging release, for old key mappings, key OLDKEYS flag
 DFLAGS    = -DOLDKEYS
@@ -145,14 +148,28 @@ install_rom: ${TARGET}
 	@echo ${COMPONENT}: rom module installed
 
 clean:
-	${WIPE} o.* ${WFLAGS}
-	${WIPE} oz.* ${WFLAGS}
-	${WIPE} rm.* ${WFLAGS}
-	${WIPE} linked.* ${WFLAGS}
-	${WIPE} map.* ${WFLAGS}
+	${WIPE} abs ${WFLAGS}
+	${WIPE} aof ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} oz ${WFLAGS}
+	${WIPE} rm ${WFLAGS}
+	${WIPE} linked ${WFLAGS}
+	${WIPE} map ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${APPLICATION}
+	${STRIP}
 	@echo ${COMPONENT}: cleaned
+
+${DIRS}:
+	@${MKDIR} abs
+	@${MKDIR} aof
+	@${MKDIR} linked
+	@${MKDIR} map
+	@${MKDIR} o
+	@${MKDIR} oz
+	@${MKDIR} rm
+	create ${DIRS}
+	stamp  ${DIRS}
 
 resources:
 	${MKDIR} ${RESDIR}
@@ -213,22 +230,22 @@ install: ${RESFILES} ${APPLICATION}
 #
 # Static dependencies:
 #
-abs.!RunImage: ${OBJS} ${RLIB} ${CLIB}
+abs.!RunImage: ${OBJS} ${RLIB} ${CLIB} ${DIRS}
 	${LD} -o $@ ${OBJS} ${RLIB} ${CLIB}
 
-rm.STBPrint: oz.ModuleWrap ${OBJSZ} ${RLIB} ${CLIB}
+rm.STBPrint: oz.ModuleWrap ${OBJSZ} ${RLIB} ${CLIB} ${DIRS}
 	${LD} -o $@ -module oz.ModuleWrap ${OBJSZ} ${RLIB} ${CLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: oz.ModuleWrap ${OBJSZ} ${ROMSTUBS}
+${TARGET}: oz.ModuleWrap ${OBJSZ} ${ROMSTUBS} ${DIRS}
 	${LD} -o $@ -aof oz.ModuleWrap ${OBJSZ} ${ROMSTUBS}
 
 #
 # Build for !RunImage
 #
-${APPLICATION}: ${OBJS} ${CLIB}
+${APPLICATION}: ${OBJS} ${CLIB} ${DIRS}
 	${LD} -o $@ ${OBJS} ${CLIB}
 
 #
@@ -243,11 +260,8 @@ rom_link:
 	@echo ${COMPONENT}: rom_link complete
 
 
-oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
+oz.ModuleWrap: s.ModuleWrap ${RESFILES}
 	${AS} ${AFLAGS} s.ModuleWrap $@
-
-s.AppName: ${LDIR}.Messages
-	awk -f awk.AppName ${LDIR}.Messages > $@
 
 #
 # Squash resource files
