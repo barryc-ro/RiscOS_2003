@@ -6,6 +6,7 @@
 # Date           Name   Description
 # ----           ----   -----------
 # 13-Aug-2001    SAR    Created
+# 14-Aug-2001    RJC    Added CPFLAGS to export_libs
 #
 
 #
@@ -64,8 +65,8 @@ export_hdrs:
 
 export_libs: ${UTILITY}
         ${MKDIR} ${LIB_EX_DIR}
-        ${CP} VersionNum ${LIB_EX_DIR}.LibVersion
-        ${CP} util.${COMPONENT} ${LIB_EX_DIR}.${COMPONENT}
+        ${CP} VersionNum ${LIB_EX_DIR}.LibVersion ${CPFLAGS}
+        ${CP} util.${COMPONENT} ${LIB_EX_DIR}.${COMPONENT} ${CPFLAGS}
         @echo
         @echo ${COMPONENT}: export_libs complete.
 
