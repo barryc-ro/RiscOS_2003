@@ -49,10 +49,18 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resources-${CMDHELP}
+        @echo ${COMPONENT}: resource files copied
+
+resources_common:
         ${MKDIR} ${RESDIR}.ScrBlanker
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.ScrBlanker.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.ScrBlanker.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}

@@ -102,6 +102,7 @@ Blanked         #       4               ; non-zero means blanked
 Blanked_NotBlanked      *       0
 Blanked_Blanked         *       1
 Blanked_Standby         *       2
+Blanked_External        *       3
 
  [ Stork
 OnAPortable     #       4               ; Value returned by Portable_ReadFeatures (0 if not supported)
@@ -683,8 +684,21 @@ ClaimVectorsAndStuff  ENTRY "R0-R3"
         ADR     R1,EventAction
         MOV     R2, R12
         SWI     XOS_Claim
+        STRVS   R0, [SP]                ; store the error for return
+        BVS     %FT15
+
+        MOV     R0, #INSV
+        ADR     R1, INSVAction
+        MOV     R2, R12
+        SWI     XOS_Claim
         BVC     %FT20
 
+        STR     R0, [SP]                ; store the error for return
+        MOV     R0, #EventV
+        ADR     R1, EventAction
+        MOV     R2, R12
+        SWI     XOS_Release
+15
         ADR     R0, Tick                ; if claim of eventV fails, bail out
         MOV     R1, R12
         SWI     XOS_RemoveTickerEvent
@@ -732,6 +746,11 @@ Finish
         SWI     XOS_Byte
 
         BL      ReleaseWriteCV
+
+        MOV     R0, #INSV
+        ADR     R1, INSVAction
+        MOV     R2, R12
+        SWI     XOS_Release
 
         MOV     R0,#EventV
         ADR     R1, EventAction
@@ -838,6 +857,11 @@ CancelFlash
 ; Flashing: if we're flashing, then this entry cancels flashing, but not
 ; if there is a positive number in DelayCancel.
 
+INSVAction
+        TEQ     R1, #0          ; check for bytes going into the keyboard buffer
+        MOVNE   PC, LR
+        B       Action
+
 EventAction
         TEQ     R0, #Event_Keyboard
         TEQEQ   R1, #1          ; Down transitions only
@@ -856,8 +880,8 @@ Action  ENTRY   "R0"
         LDR     R0,TimeOn
         STR     R0,timer
         LDR     R0, Blanked
-        TEQ     R0, #Blanked_Blanked
-        BLEQ    TurnScreenOn    ; if so, then screen ON.
+        TEQ     R0, #Blanked_NotBlanked
+        BLNE    TurnScreenOn    ; if so, then screen ON.
         EXIT
 
 ; Tick is called from OS_CallEvery, and is therefore effectively an interrupt
@@ -904,7 +928,7 @@ Tick    ENTRY   "R0-R5"
         ASSERT  Blanked = LastMouse + 4
         ADR     R2, LastMouse
         LDMIA   R2, {R4,LR}
-        TEQ     LR,#0
+        TEQ     LR, #Blanked_NotBlanked
         BNE     offcode
 
 ; Screen is ON:-
@@ -1005,6 +1029,15 @@ TurnScreenOff  ENTRY       "R0-R9"
         MOV     R0,R0           ; nop, because of prefetch
         Push    "R4,LR"         ; push SVC_link
 
+        TEQ     R0, #Blanked_Blanked            ; If normal blanking then let someone else do it.
+        BNE     %FT00
+        MOV     R1, #Service_ScreenBlanking     ; Issue the service call.
+        SWI     XOS_ServiceCall
+        BVS     %FT10
+        TEQ     R1, #0                          ; If someone has claimed it then
+        MOVEQ   R1, #Blanked_External           ;       flag that someone else is doing blanking
+        BEQ     %FT05                           ;       and skip our blanking bit.
+00
         [ LCDSupport
         SWI     XPortable_Status
         BVS     %FT00
@@ -1019,9 +1052,10 @@ TurnScreenOff  ENTRY       "R0-R9"
         MOV     R0, #1          ; unblank
         MOV     R9, #PaletteV
         SWI     XOS_CallAVector
-        BVS     %FT00
+        BVS     %FT10
 
         LDR     R1, [SP, #8]
+05
         STR     R1, Blanked
 
         MOV     R1,#Service_ScreenBlanked
@@ -1036,7 +1070,7 @@ TurnScreenOff  ENTRY       "R0-R9"
         ]
         SWI     XOS_AddCallBack
 
-00
+10
         Pull    "R4,LR"         ; pop SVC_link
         TEQP    R4,#0           ; restore previous mode
         MOV     R0,R0           ; nop, because of prefetch
@@ -1054,6 +1088,10 @@ TurnScreenOn  ENTRY       "R0-R9"
         MOV     R0,R0           ; nop, because of prefetch
         Push    "R4,LR"         ; push SVC_link
 
+        LDR     R0, Blanked
+        TEQ     R0, #Blanked_External   ; If someone else is doing the blanking then
+        BEQ     %FT00                   ;       skip our unblanking bit.
+        
         ASSERT  paletteV_BlankScreen = 6
         MOV     R4, #paletteV_BlankScreen
         MOV     R0, #0          ; unblank
