@@ -9,6 +9,7 @@
 # 28-Nov-97  ADH          Added !Sprites, !Sprites22, !Sprites23
 # 19-Nov-99  SNB          Updated to allow slimmed down STB !Unicode to be built.
 #                         Passing OPTIONS=STB builds a cut down structure.
+# 05-Oct-01  SAR          General improvements to module builds. Updates to STB builds.
 
 #
 # Generic options:
@@ -17,6 +18,8 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+PL      = perl
+MOD     = do modgen
 WIPE    = -wipe
 CHMOD   = attr ${CHMODFLAGS}
 CCFLAGS = -c -depend !Depend -IC:
@@ -24,12 +27,17 @@ ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 WFLAGS  = ~cfr~v
 CHMODFLAGS = +ow +or +wr -ww
+VERSIONVAR = UnicodeRes$Version
+VERSION    = <UnicodeRes$Version>
+PLSCRIPT   = Build:GetVersion
 
 #
 # Program specific options:
 #
 COMPONENT = Unicode
 APP       = !${COMPONENT}
+RESMOD    = rm.${COMPONENT}Res
+VIAFILE   = LocalUserIFRes:ViaFile
 TARGET    =
 
 #
@@ -51,6 +59,7 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+        ${WIPE} rm ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources: resources-${SUBSET}
@@ -98,9 +107,15 @@ install: install_${OPTIONS} install_dirs
         ${CHMOD} ${INSTDIR}
 	echo ${COMPONENT}: Installed.
 
-module:
-	modgen UnicodeRes UnicodeRes UnicodeRes 0.18 -via viafile
+module: versionvar dirs
+	${MOD} ${RESMOD} ${RESMOD} ${RESMOD} ${VERSION} -via ${VIAFILE}
 	echo built softload UnicodeRes 
+
+versionvar:
+	${PL} ${PLSCRIPT} ${VERSIONVAR}
+
+dirs:
+        ${MKDIR} rm
 
 BBETYPE = unicode
 bbe-unicode: bbe-unicode-${SUBSET}
