@@ -32,7 +32,7 @@ APPFLAGS        = { >> rm.Via }
 # Translate phase:
 #
 TRANSLATE       = translate
-TRANSFLAGS      = $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "??" -htmlc "êê"
+TRANSFLAGS      = $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
 INTRANDIR       = Translate.$(UserIF).$(Locale)
 OUTTRANDIR      = Translated
 TRANSMAPPINGS   = $(INTRANDIR).Mappings
