@@ -60,6 +60,7 @@ install: ${TARGET} Doc.MPEGPlayer
 clean:
         ${RM} ${TARGET}
         -wipe rm.SysOnly ~cfr~v
+        -stripdepnd
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
