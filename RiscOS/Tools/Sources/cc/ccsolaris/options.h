@@ -14,7 +14,7 @@
  */
 
 #include "VersionNum"
-#define NON_RELEASE_VSN Module_MajorVersion " (Acorn Computers Ltd) " Module_MinorVersion
+#define NON_RELEASE_VSN Module_MajorVersion " (Pace Micro Technology plc.) " Module_MinorVersion
 
 #define TARGET_ENDIANNESS_CONFIGURABLE 1
 #define TARGET_DEFAULT_BIGENDIAN 0       /* 1 => bigendian default */
