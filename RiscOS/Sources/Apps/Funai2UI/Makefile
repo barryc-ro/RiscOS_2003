@@ -15,9 +15,11 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cf~vr
 
 #
 # Program specific options:
@@ -30,8 +32,10 @@ TARGET    =
 #
 # Export Paths for Messages module
 #
-RESAPP = <Resource$Dir>.${APP}
-RESRES = <Resource$Dir>.Resources
+EXPORTDIR = $(RESDIR).^
+RESAPP    = $(EXPORTDIR).$(APP)
+RESRES    = $(EXPORTDIR).Resources
+
 #
 # Generic rules:
 #
@@ -47,10 +51,23 @@ install_rom: ${TARGET}
 clean:
         @echo ${COMPONENT}: cleaned
 
-resources:
+local_clean:
+        $(WIPE) Translated $(WFLAGS)
+        @echo $(COMPONENT): cleaned local resources directory
+
+dirs:
+        @echo ** Creating directory structure
+        $(MKDIR) $(EXPORTDIR)
+        $(MKDIR) $(RESAPP)
+        $(MKDIR) $(RESRES)
+        $(MKDIR) $(RESRES).NVRAM
+        $(MKDIR) $(RESRES).Wimp
+        $(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) T~V~CFQR
+
+resources: dirs
         ${CP} Resources.<UserIf>.${LOCALE}.${APP} ${RESAPP} ${CPFLAGS}
         ${CP} Resources.<UserIf>.${LOCALE}.NVRAM.Tags ${RESRES}.NVRAM.Tags ${CPFLAGS}
-        ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
+        ${CP} LocalUserIFRes:Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
         
 # Dynamic dependencies:
