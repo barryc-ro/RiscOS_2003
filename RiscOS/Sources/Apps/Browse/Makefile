@@ -184,6 +184,7 @@ RESFILES = \
 #
 
 OBJS = \
+ o.About		\
  o.Authorise		\
  o.Browser		\
  o.Choices		\
@@ -239,6 +240,7 @@ OBJS = \
  o.ROSLib
 
 OBJSZ = \
+ oz.About		\
  oz.Authorise		\
  oz.Browser		\
  oz.Choices		\
@@ -294,6 +296,7 @@ OBJSZ = \
  o.ROSLib
 
 OBJSD = \
+ od.About		\
  od.Authorise		\
  od.Browser		\
  od.Choices		\
@@ -351,6 +354,7 @@ OBJSD = \
  o.ROSLib
 
 OBJSDZ = \
+ odz.About		\
  odz.Authorise		\
  odz.Browser		\
  odz.Choices		\
@@ -408,6 +412,7 @@ OBJSDZ = \
  o.ROSLib
 
 OBJS_SURF = \
+ o_surf.About		\
  o_surf.Authorise	\
  o_surf.Browser		\
  o_surf.Choices		\
@@ -462,6 +467,7 @@ OBJS_SURF = \
  o.ROSLib
 
 OBJSD_SURF = \
+ od_surf.About		\
  od_surf.Authorise	\
  od_surf.Browser	\
  od_surf.Choices	\
@@ -518,6 +524,7 @@ OBJSD_SURF = \
  o.ROSLib
 
 OBJS_ITALK = \
+ o_italk.About		\
  o_italk.Authorise	\
  o_italk.Browser	\
  o_italk.Choices	\
@@ -573,6 +580,7 @@ OBJS_ITALK = \
  o.ROSLib
 
 OBJSD_ITALK = \
+ od_italk.About		\
  od_italk.Authorise	\
  od_italk.Browser	\
  od_italk.Choices	\
@@ -705,6 +713,7 @@ install_common: ${FILES}
 	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}n
 	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}n
 	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
+	-${CP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
 	${MKDIR} ${INSTDIR}.User
 	-${CP} ${LDIR}.User.Hotlist		${INSTDIR}.User.Hotlist		${CPFLAGS}n
 

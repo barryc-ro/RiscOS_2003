@@ -297,7 +297,7 @@ static _kernel_oserror * reformat_token_width(reformat_width_data * w, unsigned 
     if (flags & Reformatter_Virtual) toplevel = 1;
     else                             toplevel = 0;
 
-    w->width = tables_width_table (toplevel, w->b, table, w->maxwid, cellarray);
+    w->width = tables_width_table (toplevel, w->b, table, w->maxwid, cellarray, flags);
     w->bytes = tables_height_table(toplevel, w->b, table,            cellarray);
 
     tables_fix_table(w->b, table, cellarray);
@@ -482,7 +482,8 @@ static _kernel_oserror * reformat_token_width(reformat_width_data * w, unsigned 
     }
     else switch(HtmlINPUTtype(w->tp))
     {
-      case inputtype_SUBMIT: /*; no break - same as RESET */
+      case inputtype_SUBMIT: /* No break - same as RESET */
+      case inputtype_BUTTON: /* Again, no break          */
       case inputtype_RESET:
       {
         const char * p;
@@ -561,7 +562,6 @@ static _kernel_oserror * reformat_token_width(reformat_width_data * w, unsigned 
 
   else if (w->tp->style & IMG)
   {
-
 do_image: /* Used by switch statement above */
 
     w->bytes = 0;
@@ -587,7 +587,8 @@ do_image: /* Used by switch statement above */
   {
     /* For a horizontal rule, there's no extra data to put in (so */
     /* the w->bytes field is zero) and the width is as wide as    */
-    /* the specified maximum width.                               */
+    /* the specified maximum width, unless the HR specifies a     */
+    /* particular width directly.                                 */
     /*                                                            */
     /* The special case of finding min/max widths is checked in   */
     /* the flags here, as otherwise any HR tag can force the      */
@@ -595,13 +596,25 @@ do_image: /* Used by switch statement above */
 
     w->bytes = 0;
 
-    if (
-         !(flags & Reformatter_FindingWidest)   &&
-         !(flags & Reformatter_FindingSmallest)
-       )
-       w->width = w->maxwid;
+    if (!HR_HAS_WIDTH(w->tp) || HR_WIDTH_UNITS(w->tp) == UNITS_PERCENT)
+    {
+      if (
+           !(flags & Reformatter_FindingWidest)   &&
+           !(flags & Reformatter_FindingSmallest)
+         )
+      {
+        if (HR_HAS_WIDTH(w->tp)) w->width = (w->maxwid * HR_WIDTH(w->tp)) / 100;
+        else                     w->width = w->maxwid;
+      }
 
-    else w->width = 0;
+      else w->width = 0;
+    }
+    else
+    {
+      w->width = HR_WIDTH(w->tp) * 2; /* 1 'web pixel' = 2 OS units */
+
+      convert_to_points(w->width, &w->width);
+    }
   }
   else if (ISBULLET(w->tp)) /* ISBULLET is defined in Fetch.h */
   {
@@ -1207,10 +1220,6 @@ static _kernel_oserror * reformat_format_from_now(browser_data * b, int lastline
 
     if (!b->fetch_handler) fetchpage_claim_nulls(b);
 
-    /* Make sure the forms library knows where the caret should be */
-
-    form_check_caret(b);
-
     /* Update the status bar */
 
     toolbars_update_status(b, Toolbars_Status_Formatting);
@@ -1637,7 +1646,7 @@ static _kernel_oserror * reformat_text_line_height(browser_data * b, HStream * t
   /* font metrics - otherwise, bold text (say) will   */
   /* force the line spacing higher than plain.        */
 
-  rettop = box.ymax - (b->page_is_text ? b->leading * 2 : 0);
+  rettop = box.ymax - ((b->page_is_text && !choices.system_font) ? b->leading * 2 : 0);
   retbot = -box.ymin + b->leading;
 
 //     fm_token_font_info(tp, &face, &size, &italic, &bold);
@@ -1731,7 +1740,7 @@ static _kernel_oserror * reformat_check_height(int toplevel, browser_data * b, r
               (
                 (tpLast->style & PCDATA) ||
                 (
-                  (tpLast->style == BR)          && /* Note, NOT '& BR'... HTMLLib bug. */
+                  (tpLast->tagno == TAG_BR)      &&
                   tpLast->prev                   &&
                   (tpLast->prev->style & PCDATA)
                 )
@@ -1790,11 +1799,11 @@ static _kernel_oserror * reformat_check_height(int toplevel, browser_data * b, r
     fol = d->cdata[d->ldata[line].chunks].t;
 
     if (
-         (fol->style == BR) && /* Note, NOT '& BR'... HTMLLib bug. */
+         (fol->tagno == TAG_BR) &&
          (
            (
              fol->prev &&
-             (fol->prev->style == BR)
+             (fol->prev->tagno == TAG_BR)
            )
            || line == 0
          )
@@ -1916,11 +1925,17 @@ static _kernel_oserror * reformat_check_height(int toplevel, browser_data * b, r
   else
   {
     /* Get the bounding box of the font that should be used for the token */
-    /* if we've got some text, and we're either a forms element or the    */
-    /* text consists of more than one single space.                       */
+    /* if we've got some text, and we're either a visible forms element   */
+    /* or the text consists of more than one single space.                */
 
     if (
-         (tp->style & FORM) ||
+         (
+           (tp->style & FORM)        &&
+           tp->tagno != TAG_FORM     &&
+           tp->tagno != TAG_FORM_END &&
+           HtmlINPUTtype(tp) != inputtype_HIDDEN
+         )
+         ||
          (
            (tp->text) &&
            (
@@ -1995,7 +2010,9 @@ static _kernel_oserror * reformat_check_height(int toplevel, browser_data * b, r
         top += 8;
       }
       break;
+
       case inputtype_SUBMIT: /* No break - same as RESET */
+      case inputtype_BUTTON: /* Again, no break          */
       case inputtype_RESET:
       {
         bot += 8;
@@ -2175,7 +2192,17 @@ _kernel_oserror * reformat_set_extent(browser_data * b, int y_extent)
 
   /* Update height, too */
 
-  b->display_height = s.visible_area.ymax - s.visible_area.ymin;
+  {
+    int h1, h2;
+
+    h1 = toolbars_button_height(b) + toolbars_url_height(b);
+    h2 = toolbars_status_height(b);
+
+    if (h1) h1 += wimpt_dy();
+    if (h2) h2 += wimpt_dy();
+
+    b->display_height = s.visible_area.ymax - s.visible_area.ymin - h1 - h2;
+  }
 
   /* Set the extent */
 
@@ -2393,7 +2420,17 @@ void reformat_reformatter(browser_data * b)
 /*             the browser_data structure.       */
 /*                                               */
 /* Returns:    Width of the widest line that was */
-/*             generated, in millipoints.        */
+/*             generated, in millipoints. This   */
+/*             includes the left hand margin /   */
+/*             gap; however, if there is no      */
+/*             stream to reformat, 0 is returned */
+/*             rather than purely the left hand  */
+/*             margin plus zero to indicate this */
+/*             special case to the caller.       */
+/*             Ideally the caller should never   */
+/*             invoke the reformatter without a  */
+/*             stream though, it's not very      */
+/*             efficient...                      */
 /*************************************************/
 
 static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat_cell * d, HStream * streambase)
@@ -2477,8 +2514,7 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
     /* Set 'linewidth' to the indentation requried at this line, */
     /* and add the widths of the line chunks to this.            */
 
-    if (tpLast->style & HR) linewidth = 0;
-    else                    linewidth = redraw_margin(b, d, tpLast);
+    linewidth = redraw_left_gap(b, d, tpLast);
 
     for (
           i = 0;
@@ -2638,41 +2674,36 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
 
     if (!done)
     {
-      /* The left hand margin - zero for horizontal rules, which can span the whole   */
-      /* display (their actual visible extent is determined by the redraw routine);   */
-      /* else equal to the result of redraw_margin in Redraw.c (converted to points). */
+      /* The left hand margin - zero for horizontal rules, which can span the whole     */
+      /* display (their actual visible extent is determined by the redraw routine);     */
+      /* else equal to the result of redraw_left_gap in Redraw.c (converted to points). */
 
-      if (tpCurr->style & HR) left_margin = 0;
-      else                    left_margin = redraw_margin(b, d, tpCurr);
+      left_margin = redraw_left_gap(b, d, tpCurr);
 
-      /* Can't have a margin greater than display width... */
+      /* Can't have a margin greater than display width, but this consideration */
+      /* only applies if we're not finding the smallest the stream can be.      */
 
-      if (left_margin > displaywidth) left_margin = 0;
+      if (!(flags & Reformatter_FindingSmallest) && left_margin > displaywidth) left_margin = 0;
 
-      /* The right hand margin - zero for horizontal rules, which can span the whole   */
-      /* display (their actual visible extent is determined by the redraw routine);    */
-      /* same as the left margin for block quotations; else the right margin quantity. */
+      /* The right hand gap value */
 
-      if (!(tpCurr->style & HR))
-      {
-        if (tpCurr->style & BLOCKQUOTE) right_margin = left_margin;
-        else                            right_margin = redraw_right_margin(b, d);
-      }
-      else right_margin = 0;
+      right_margin = redraw_right_gap(b, d, tpCurr);
 
       /* Can't have margins greater than the display width */
 
       if (left_margin + right_margin > displaywidth) right_margin = 0;
 
-      /* If the text is not preformatted and the line width has gone over */
-      /* over the available display width, flag that a new line is needed */
-
+//      /* If the text is not preformatted and the line width has gone over */
+//      /* over the available display width, flag that a new line is needed */
+//
       if (!newline && !(tpCurr->style & PRE) && linewidth > displaywidth - right_margin) newline = 1;
 
       /* If the difference between the current and last tags say we should */
       /* put in a line break, flag this in newline.                        */
 
       if (!newline && reformat_newline(tpCurr,tpLast,offset)) newline = 1;
+
+      /* Right, if newline is set, create a new line. */
 
       if (newline)
       {
@@ -2763,14 +2794,32 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
 
       if (!e)
       {
+        int available;
+
         /* Fill in the reformat_width_data structure */
 
         wd.b      = b;
+        wd.d      = d;
         wd.tp     = tpCurr;
         wd.data   = reformat_istext(tpCurr) ? tpCurr->text : NULL;
         wd.offset = offset;
 
+        /* Tables, when specifying percentage widths, take up the whole */
+        /* page - e.g. 100% when in an indented list will result in the */
+        /* right hand edge of the table being off the page. Well, this  */
+        /* is what MSIE / NN do anyway, despite it being stupid IMHO.   */
+
+        if (tpCurr->tagno == TAG_TABLE)
+        {
+          available = displaywidth - redraw_left_margin(b, d) - right_margin;
+        }
+        else
+        {
+          available = displaywidth - linewidth - right_margin;
+        }
+
         /* The maximum width is 'very large' for preformatted text (effectively limitless).  */
+        /* Similarly, for any text items in NOBR, the width in effect is without a limit.    */
         /* For other tokens, the left hand edge is at an indent equal to the left hand       */
         /* margin plus the summed widths of preceeding chunks (this is kept in 'linewidth'), */
         /* so the width is the available display width minus this left hand value.           */
@@ -2780,11 +2829,18 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
                         (tpCurr->style & PRE) &&
                         reformat_istext(tpCurr)
                       )
+                      ||
+                      (
+                        (tpCurr->style & PCDATA) &&
+                        (tpCurr->style & 0*NOBR)
+                      )
                     )
 
                     ?
 
-                    Reformat_AsWideAsPossible_MP : displaywidth - linewidth - right_margin;
+                    Reformat_AsWideAsPossible_MP : available;
+
+        if (wd.maxwid < 0) wd.maxwid = 0;
 
         /* Set the (returned) bytes and width fields to zero initially */
 
@@ -2829,6 +2885,15 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
         /* flag a line break is needed through newline = 1.                                */
 
         else if (reformat_istext(tpCurr) && wd.bytes && wd.data[wd.offset + wd.bytes - 1] == '\n') newline = 1;
+      }
+
+      /* A new chunk is forced by setting 'newchunk' if the previous item and this one    */
+      /* should not be split up. For example, an LI bullet point and the text that        */
+      /* follows it (if any) should appear on the same line.                              */
+
+      if (!e && !newchunk && 0)
+      {
+        if (tpCurr->prev && !(tpCurr->style & LI) && (tpCurr->prev->style & LI)) newchunk = 1;
       }
 
       /* Proceed if there is no error, to add a chunk. If the current line has no chunks, */
@@ -2934,6 +2999,19 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
           {
             int w;
 
+            if (!noalloc)
+            {
+              /* If a form had input focus, hopefully the forms library can now find */
+              /* the caret. This call will check if the token we're dealing with is  */
+              /* the currently editing one, and if so try to find its position and   */
+              /* move the caret as necessary. We do this only if 'noalloc' is unset, */
+              /* as if we're a 'virtual reformat loop', the token won't necessarily  */
+              /* have presence in any lines anyway. It might not be found if noalloc */
+              /* is unset anyway, but at least we increase the chances...            */
+
+              form_caret_may_be_moving(b, tnCurr);
+            }
+
             /* Advance through the token data */
 
             if (wd.bytes <= 0) offset = -1; /* Flag we need a new token */
@@ -2944,12 +3022,13 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
               offset += wd.bytes;
 
               /* Need a new line if we've not run off the end of the text - */
-              /* there must have been a split point within it.              */
+              /* there must have been a split point within it. This is not  */
+              /* true, though, if NOBR is set.                              */
 
               if (tpCurr) has_text = tpCurr->text ? reformat_istext(tpCurr) : 0;
               else        has_text = 0;
 
-              if (has_text && tpCurr->text[offset]) newline = 1;
+              if (has_text && tpCurr->text[offset] && !(tpCurr->style & 0*NOBR)) newline = 1;
             }
 
             /* Make the last poken pointer is now updated */
@@ -2972,7 +3051,10 @@ static int reformat_reformatter_r(unsigned int flags, browser_data * b, reformat
 
             if (linewidth >= displaywidth - right_margin)
             {
-              newline = 1;
+              /* ...But shouldn't flag a new line if NOBR is set... */
+
+              if (!(tpCurr->style & 0*NOBR)) newline = 1;
+
               if (!d->table && w > b->display_extent) b->display_extent = w;
             }
           }
@@ -3079,10 +3161,7 @@ int reformat_format_cell(int toplevel, browser_data * b, HStream * streambase, t
 {
   int             dheight;
   int             cellindex = Row * table->ColSpan + Column;
-  int             cellpadmp = table->cellpadding * 2; /* 1 'web pixel' = 2 OS units, but only for right hand edge - redraw_left_margin takes care of the rest */
   reformat_cell * c;
-
-  convert_to_points(cellpadmp, &cellpadmp);
 
   /* Can't do anything if the cell index is out of range */
 
@@ -3102,7 +3181,7 @@ int reformat_format_cell(int toplevel, browser_data * b, HStream * streambase, t
   /* generate lines (flag Virtual in the reformatter). Otherwise, allow  */
   /* line generation (don't flag Virtual).                               */
 
-  c->width = c->cellwidth = ColWidth - cellpadmp;
+  c->width = c->cellwidth = ColWidth;
 
   if (c->width <= 400) c->width = 400; /* Give at least 1 OS unit to avoid possible problems in the reformatter */
 
@@ -3198,50 +3277,54 @@ void reformat_find_cell_limits(int toplevel, browser_data * b, HStream * streamb
     return;
   }
 
-  /* Find the maximum width used by the cell; first, reformat */
-  /* to a 'large width' (effectively, no line breaks).        */
+  if (streambase)
+  {
+    /* Find the maximum width used by the cell; first, reformat */
+    /* to a 'large width' (effectively, no line breaks).        */
 
-  maxwidth = reformat_reformatter_r(Reformatter_KeepGoingToEnd  |
-                                    Reformatter_FindingWidest   |
-                                    Reformatter_FromStreamStart |
-                                    Reformatter_Virtual,
+    maxwidth = reformat_reformatter_r(Reformatter_KeepGoingToEnd  |
+                                      Reformatter_FindingWidest   |
+                                      Reformatter_FromStreamStart |
+                                      Reformatter_Virtual,
 
-                                    b,
-                                    c,
-                                    streambase);
+                                      b,
+                                      c,
+                                      streambase);
 
-  #ifdef TRACE
-    if (c->nlines || c->ldata || c->cdata)
-    {
-      erb.errnum = Utils_Error_Custom_Normal;
+    #ifdef TRACE
+      if (c->nlines || c->ldata || c->cdata)
+      {
+        erb.errnum = Utils_Error_Custom_Normal;
 
-      strcpy(erb.errmess,"Line or chunk data allocated inside reformat_find_cell_limits for maxwidth check");
+        strcpy(erb.errmess,"Line or chunk data allocated inside reformat_find_cell_limits for maxwidth check");
 
-      show_error_ret(&erb);
-    }
-  #endif
+        show_error_ret(&erb);
+      }
+    #endif
 
-  /* Find the minimum width */
+    /* Find the minimum width */
 
-  minwidth = reformat_reformatter_r(Reformatter_KeepGoingToEnd  |
-                                    Reformatter_FindingSmallest |
-                                    Reformatter_FromStreamStart |
-                                    Reformatter_Virtual,
+    minwidth = reformat_reformatter_r(Reformatter_KeepGoingToEnd  |
+                                      Reformatter_FindingSmallest |
+                                      Reformatter_FromStreamStart |
+                                      Reformatter_Virtual,
 
-                                    b,
-                                    c,
-                                    streambase);
+                                      b,
+                                      c,
+                                      streambase);
 
-  #ifdef TRACE
-    if (c->nlines || c->ldata || c->cdata)
-    {
-      erb.errnum = Utils_Error_Custom_Normal;
+    #ifdef TRACE
+      if (c->nlines || c->ldata || c->cdata)
+      {
+        erb.errnum = Utils_Error_Custom_Normal;
 
-      strcpy(erb.errmess,"Line or chunk data allocated inside reformat_find_cell_limits for minwidth check");
+        strcpy(erb.errmess,"Line or chunk data allocated inside reformat_find_cell_limits for minwidth check");
 
-      show_error_ret(&erb);
-    }
-  #endif
+        show_error_ret(&erb);
+      }
+    #endif
+  }
+  else minwidth = maxwidth = redraw_left_margin(b, c);
 
   /* Account for cellpadding */
 
