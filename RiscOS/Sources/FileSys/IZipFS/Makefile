@@ -65,30 +65,3 @@ ${TARGET}: ${SRC}
         ${AS} ${ASFLAGS} ${SRC}
 
 # Dynamic dependencies:
-rm.ZipFS: Hdr:ListOpts
-rm.ZipFS: Hdr:Macros
-rm.ZipFS: Hdr:System
-rm.ZipFS: Hdr:SWIs
-rm.ZipFS: Hdr:CPU.Generic26
-rm.ZipFS: Hdr:IO.GenericIO
-rm.ZipFS: Hdr:RISCOS
-rm.ZipFS: Hdr:ModHand
-rm.ZipFS: Hdr:Parallel
-rm.ZipFS: Hdr:FileCore
-rm.ZipFS: Hdr:Free
-rm.ZipFS: Hdr:ZipFS
-rm.IZipFS: s.AcornHdr
-rm.IZipFS: Hdr:ListOpts
-rm.IZipFS: Hdr:Macros
-rm.IZipFS: Hdr:System
-rm.IZipFS: Hdr:SWIs
-rm.IZipFS: Hdr:CPU.Generic26
-rm.IZipFS: Hdr:IO.GenericIO
-rm.IZipFS: Hdr:RISCOS
-rm.IZipFS: Hdr:ModHand
-rm.IZipFS: Hdr:Parallel
-rm.IZipFS: Hdr:Buffer
-rm.IZipFS: Hdr:FileCore
-rm.IZipFS: Hdr:Free
-rm.IZipFS: Hdr:IZipFS
-rm.IZipFS: Version
