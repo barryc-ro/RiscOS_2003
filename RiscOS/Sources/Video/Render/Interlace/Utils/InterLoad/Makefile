@@ -14,7 +14,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -23,6 +23,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 CD	= dir
+STRIP   = stripdepnd
 
 
 AFLAGS = -depend !Depend -Stamp -quit ${THROWBACK}
@@ -79,6 +80,7 @@ clean:
         ${WIPE} oz ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 dirs:
@@ -108,6 +110,16 @@ ${ROMTARGET}: ${OBJS}
 	${MKDIR} aof
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
         access $@ rw/r
+
+#
+# RISC OS disc build rules:
+#
+install: install_dirs all
+	$(CP)    abs.${COMPONENT}  $(INSTDIR).${COMPONENT}  $(CPFLAGS)
+	@echo $(COMPONENT): installed to $(INSTDIR)
+
+install_dirs:
+	$(MKDIR) $(INSTDIR)
 
 #
 # Final link for the ROM Image (using given base address)
