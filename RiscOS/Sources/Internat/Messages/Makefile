@@ -31,7 +31,8 @@ WFLAGS  = ~cr~v
 # Program specific options:
 #
 SOURCE    = s.${TARGET}
-BUILT     = rm.${LOCALE}.${BUILD}.${TARGET}
+BUILTDIR  = rm.${LOCALE}.${BUILD}
+BUILT     = ${BUILTDIR}.${TARGET}
 PROCESSDIR= Processed.${LOCALE}.${BUILD}
 RESDIR    = Resources.${LOCALE}.${BUILD}
 UTILS     = Utils
@@ -77,9 +78,11 @@ install_rom: ${BUILT}
 
 #
 # Clean: clean current build and locale, except dictionary and HelpTokens
+# (note - called from srcbuild with TARGET and COMPONENT set only to "Messages"
+# and no options - but must clean all targets).
 #
 clean:
-        ${RM} ${BUILT}
+        ${WIPE} ${BUILTDIR}.* ${WFLAGS}
         ${RM} ${RESDATA}
         ${RM} ${DATA}.Tokenised
         ${RM} ${HELPTAGS}
