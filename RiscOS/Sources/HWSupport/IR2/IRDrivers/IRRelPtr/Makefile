@@ -106,12 +106,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -128,3 +122,9 @@ o.relptr:	h.veneers
 o.relptr:	h.irqs
 o.relptr:	h.relptr
 o.relptr:	h.module
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
