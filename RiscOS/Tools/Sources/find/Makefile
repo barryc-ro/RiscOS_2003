@@ -7,7 +7,7 @@
 # 09-Nov-99   NB         Created.
 # 17-Nov-99   BAL        Builds actual find tool as well.  Gets versions and
 #                          dates from VersionNum.
-
+# 18-Nov-99   BAL        Added missing -DDDE so that throwback is supported.
 
 
 
@@ -77,6 +77,8 @@ INCLUDES	= C:
 
 COMPONENT	= find
 TARGET		= find
+
+DFLAGS		= -DDDE
 
 OBJS =\
  o.find\
