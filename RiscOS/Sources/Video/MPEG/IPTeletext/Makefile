@@ -44,12 +44,12 @@ INCLUDES = -Itbox:,C:
 CLIB      = CLIB:o.stubs
 
 OBJS =\
- o.swihandlers\
- o.pehandlers\
- o.freepacket\
- o.messages\
- o.main\
- o.modhdr
+ swihandlers.o\
+ pehandlers.o\
+ freepacket.o\
+ messages.o\
+ main.o\
+ modhdr.o
 
 RESF=o.msgs
 
@@ -77,8 +77,6 @@ clean:
 # Explicit rules
 #
 
-h.module: o.modhdr
-
 ${RESF}: LocalRes:Messages
         resgen messages_file ${RESF} LocalRes:Messages Resources.${COMPONENT}.Messages
 
@@ -96,6 +94,8 @@ dirs:
         ${MKDIR} rm
         ${MKDIR} o
 
+module.h: modhdr.o
+        @|
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
