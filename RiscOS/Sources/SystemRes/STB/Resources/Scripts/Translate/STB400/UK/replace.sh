@@ -6,5 +6,5 @@
 #
 ««Cmnt21»» ««Version»», ««Date»»
 
-sed -e "s/$argv[2]/$argv[3]/g" < $argv[1] > $argv[1].bak
+perl -pe "s/$argv[2]/$argv[3]/g" < $argv[1] > $argv[1].bak
 if -e $argv[1].bak mv $argv[1].bak $argv[1]
