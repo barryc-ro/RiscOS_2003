@@ -1,4 +1,11 @@
 # makefile for VSPovc module
+#
+# debug directives:
+#
+# NDEBUG - should disable ALL debugging when defined
+#
+# EOS - sets series of system variables detailing what caused video to stop
+#       (OVCdebug$*)
 
 VPATH=@ rts.src.vid
 
@@ -10,8 +17,9 @@ CC = cc
 CMHG=cmhg
 OBJASM=objasm
 
-CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES)
-INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:
+#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
+CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4
+INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
 
 IDLLIB= @.fromidl.lib.libidl
 YOLIB= @.mx.src.yo.lib.libyo
@@ -22,31 +30,34 @@ YOLIB= @.mx.src.yo.lib.libyo
 .c.o:;		$(CC) $(CFLAGS) $<
 .s.o:;		$(OBJASM) -from $< -to $@
 
-OBJS=o.module o.vspc o.smnudp o.mzswrap o.mzscl o.mzsclii o.umdn o.vsphdr
+OBJS=o.module o.vspc o.smnudp o.mzswrap o.mzscl o.mzsclii o.umdn o.vsphdr o.debug
 
 VSPovc:  $(OBJS) $(IDLLIB)
-         link $(LINKFLAGS) -o $@ $(OBJS) @.mx.src.mn.o.* @.mx.src.mt.o.* \
-            @.mx.src.yo.o.* @.mx.src.ys.o.* @.mx.src.yr.o.* ${IDLLIB} \
-            clib:o.stubs InetInc:o.inetlibzm InetInc:o.socklibzm ${YOLIB}
+         link $(LINKFLAGS) -o $@ $(OBJS) ${IDLLIB} ${YOLIB} -via amu.link
          @echo ***********************************
-         @echo * VSPovc constructed successfully *  
+         @echo * VSPovc constructed successfully *
          @echo ***********************************
-         
-         
-o.module:   amu.makefile c.module
 
-o.vspc   :  amu.makefile c.vspc
 
-o.smnudp :  amu.makefile c.smnudp
+o.debug:   amu.makefile c.debug h.debug
 
-o.mzswrap:  amu.makefile c.mzswrap 
+o.module:   amu.makefile c.module cmhg.h h.mzswrap h.module h.vspc smnudp.h debug.h
+
+o.vspc   :  amu.makefile c.vspc h.mzswrap h.module h.vspc debug.h
+
+o.smnudp :  amu.makefile c.smnudp module.h
+
+o.mzswrap:  amu.makefile c.mzswrap h.mzswrap h.module h.vspc h.debug
 
 o.mzscl  :  amu.makefile c.mzscl
 
-o.mzsclii:  amu.makefile c.mzsclii 
+o.mzsclii:  amu.makefile c.mzsclii
 
 o.umdn   :  amu.makefile s.umdn
 
-o.vsphdr :  amu.makefile cmhg.vsphdr  
+o.vsphdr :  amu.makefile cmhg.vsphdr
+
+cmhg.h:  amu.makefile cmhg.vsphdr
+         cmhg -d h.cmhg cmhg.VSPhdr
 
 
