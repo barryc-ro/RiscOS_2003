@@ -23,6 +23,7 @@
 #include "sockets.h"
 #include "module.h"
 #include "packets.h"
+#include "voting.h"
 
 /* Data structure holding details of active DHCP leasing interfaces */
 static dhcp_interface *ichain;
@@ -127,17 +128,68 @@ dhcp_interface *interfaces_create(const dhcp_start_params *dsp)
 	         * struct ifreq is initialised correctly
 	         */
 		(void) strncpy(di->di_name, dsp->ifname, IFNAMSIZ);
+		dhcp_empty_blacklist(di);
 		di->next = ichain;
-		di->state = dhcpstate_INIT;
-		di->request_lease = dhcp_infinite_lease;
+		di->request_lease = dhcp_any_lease;
 		di->dib = dsp->dib;
 		di->t1 = interfaces_random_delay(2);
 		di->t2 = dhcp_infinite_lease;
+		di->orig_t1 = dhcp_infinite_lease;
+		di->orig_t2 = dhcp_infinite_lease;
 		di->kill_if = dhcp_infinite_lease;
+		sockets_set_preferred_ip_address(di, INADDR_ANY);
+		if (di->preferred_ip.s_addr != INADDR_ANY) {
+                        di->state = dhcpstate_INITREBOOT;
+		}
+		else {
+			di->state = dhcpstate_INIT;
+		}
 		ichain = di;
 	}
 
 	return di;
+}
+
+void interfaces_address_changed(void)
+{
+        /* Check all the interfaces */
+	dhcp_interface *di, *next;
+
+	for (di = ichain; di != NULL; di = next) {
+	        next = di->next;
+        	if (sockets_verify_address(di) < 0) {
+                	/* Interface configuration is incorrect. */
+                        dhcp_release(di, "Manual reconfiguration");
+                	interfaces_forget(di);
+                }
+	}
+}
+
+int interfaces_address_clash(Dib *dib, u_long iap)
+{
+        /* Check all the interfaces */
+	dhcp_interface *di, *next;
+
+#ifdef TRACE
+	struct in_addr ia; ia.s_addr = iap;
+	trace(("Internet has notified of an address clash (%s)\n", inet_ntoa(ia)));
+#endif
+	(void) iap;
+
+	for (di = ichain; di != NULL; di = next) {
+	        next = di->next;
+        	if (di->dib == dib) {
+                	/* This interface clashed - decommission it */
+                	trace(("Decommissioning interface due to ARP probe clash\n"));
+                        dhcp_decline(di, "Address clash detected by ARP probe");
+                        di->binding.yiaddr = iap;
+                        sockets_kill_interface(di);
+        		sockets_trigger_internet_dhcp(di->di_name);
+                	return 1; /* Instruct module.c to claim the service call */
+                }
+	}
+
+	return 0; /* Don't claim the service call */
 }
 
 /* Deletion of a structure.  Triggered by module finalisation or explicit request
@@ -147,7 +199,9 @@ void interfaces_forget(dhcp_interface *i)
 {
 	dhcp_interface *di = ichain, *prev = NULL;
 
-	for (di = ichain; di != NULL; di = di->next) {
+       	trace(("DHCP abandons interface %s (%s)\n", i->di_name, dhcp_state_name(i)));
+
+	for (di = ichain; di != NULL; prev = di, di = di->next) {
 		if (di == i) {
 			if (prev != NULL) {
 				prev->next = di->next;
@@ -218,29 +272,44 @@ void interfaces_print_information(const dhcp_interface *di)
         }
         else {
 		/* ctime uses a static buffer - so only one per printf! */
-                const int infinite = (di->kill_if == dhcp_infinite_lease);
-		const char *expiry  = interfaces_ctime(dhcp_infinite_lease);
 
 		printf(
 			"Interface     : %s\n"
 			"State         : %s\n"
-			"IP address    : %s\n"
-			"Lease expires @ %s",
+			"IP address    : %s\n",
 			di->di_name,
 			dhcp_state_name(di),
-			inet_ntoa(*(struct in_addr *) &di->binding.yiaddr),
-			infinite ? expiry : interfaces_ctime(di->kill_if)
-			);
+			inet_ntoa(*(struct in_addr *) &di->binding.yiaddr));
 
-		printf(
+		if (di->state == dhcpstate_BOUND || di->state == dhcpstate_RENEWING) {
+		        struct in_addr ip;
+		        if (dhcp_find_server_identifier(&di->binding, &ip)) {
+			        printf(
+		        	"DHCP server   : %s\n", inet_ntoa(ip));
+		        }
+		}
+
+                if (di->orig_t1 != dhcp_infinite_lease) printf(
 			"Renew lease   @ %s",
-			infinite ? expiry : interfaces_ctime(di->t1)
+			interfaces_ctime(di->orig_t1)
 			);
 
-		printf(
+		if (di->orig_t2 != dhcp_infinite_lease) printf(
 			"Rebind lease  @ %s",
-			infinite ? expiry : interfaces_ctime(di->t2)
+			interfaces_ctime(di->orig_t2)
 			);
+
+        	printf(
+			"Lease expires @ %s",
+			interfaces_ctime(di->kill_if)
+			);
+
+                if (di->t1 != dhcp_infinite_lease && di->t1 != di->orig_t1) printf(
+			"Retry         @ %s",
+			interfaces_ctime(di->t1)
+			);
+
+
         }
 
 }
@@ -293,6 +362,8 @@ static void interfaces_terminate(dhcp_interface *di)
 		di->t1 = interfaces_random_delay(5);
 		di->t2 = dhcp_infinite_lease;
 		di->kill_if = dhcp_infinite_lease;
+		di->orig_t1 = dhcp_infinite_lease;
+		di->orig_t2 = dhcp_infinite_lease;
 	}
 }
 
@@ -315,6 +386,7 @@ static void interfaces_T2_triggered(dhcp_interface *di)
 		}
 		else {
 		        /* Had a response - try it! */
+		        dhcp_vote_notify_offer_accepted(di);
 	                dhcp_request(di, dhcpstate_REQUESTING, dhcprequest_set_T2);
 		}
 	}
@@ -330,8 +402,6 @@ static void interfaces_T2_triggered(dhcp_interface *di)
 	        /* No response to the request message - try again?  Perhaps we
 	         * should log the naughty server identifier and make sure we
 	         * don't accept any DHCPOFFER messages from it for a while.
-	         * INIT and INITREBOOT are really fatal errors - should never
-	         * get into those states under RISC OS.
 	         */
 		dhcp_discover(di);
 	}
@@ -373,6 +443,7 @@ static void interfaces_T1_triggered(dhcp_interface *di)
                 }
                 else {
                         /* OK - we're happy with the one we have been offered */
+		        dhcp_vote_notify_offer_accepted(di);
                         dhcp_request(di, dhcpstate_REQUESTING, dhcprequest_set_T2);
                 }
         }
@@ -467,3 +538,4 @@ void interfaces_reschedule(void *private_word)
 	        }
 	}
 }
+

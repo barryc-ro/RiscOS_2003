@@ -15,6 +15,7 @@
 #include "net/if.h"
 #include "protocols/dhcp.h"
 #include "netinet/in.h"
+#include "netinet/if_ether.h"
 
 #include "dhcp.h"
 #include "interfaces.h"
@@ -23,13 +24,13 @@
 #include "consts.h"
 #include "sockets.h"
 
-u_char *dhcp_options_start(DHCP *d)
+u_char *dhcp_options_start(const DHCP *d)
 {
         /* Return pointer to actual options, skipping the magic cookie.
          * The Internet module will have already verified the cookie,
          * so we don't have to worry about it.
          */
-        return &d->options[4];
+        return (u_char *) &d->options[4];
 }
 
 /* Locate a specific option in the options body.  Returns pointer to
@@ -38,7 +39,7 @@ u_char *dhcp_options_start(DHCP *d)
  * used as extensions for the options, then search those too, in the order specified
  * by RFC2131.
  */
-u_char *dhcp_find_option(DHCP *d, const u_char option)
+u_char *dhcp_find_option(const DHCP *d, const u_char option)
 {
         u_char *options = dhcp_options_start(d), *eoo = options + sizeof(d->options) - 4;
         int overload = 0;
@@ -54,12 +55,12 @@ u_char *dhcp_find_option(DHCP *d, const u_char option)
 			if (*options == OPTION_END && overload != 0) {
 			        if (overload & 1) {
 			                overload ^= 1;
-			                options = d->file;
+			                options = (u_char *) d->file;
 			                eoo = options + sizeof(d->file);
 			        }
 			        else if (overload & 2) {
 			                overload ^= 2;
-			                options = d->sname;
+			                options = (u_char *) d->sname;
 			                eoo = options + sizeof(d->sname);
 			        }
 			        else {
@@ -193,7 +194,7 @@ void dhcp_delete_option(DHCP *d, const u_char option)
  * it in host-byte order and converted into centiseconds.  Returns NULL if the option
  * was not found, else a pointer to the type byte in the packet and *expiry is filled in
  */
-u_char *dhcp_find_lease_expiry(DHCP *d, dhcp_time *expiry, u_char option)
+u_char *dhcp_find_lease_expiry(const DHCP *d, dhcp_time *expiry, u_char option)
 {
         u_char *opt = dhcp_find_option(d, option);
         if (opt != NULL) {
@@ -221,18 +222,45 @@ u_char *dhcp_find_lease_expiry(DHCP *d, dhcp_time *expiry, u_char option)
         return opt;
 }
 
+/* Locates and extracts the server identifier option from the given DHCP packet.  Returns
+ * NULL if the option was not found, else a pointer to the type byte in the packet and
+ * *ia is filled in.
+ */
+u_char *dhcp_find_server_identifier(const DHCP *d, struct in_addr *ia)
+{
+        u_char *opt = dhcp_find_option(d, OPTION_SERVERIDENTIFIER);
+        if (opt != NULL) {
+                (void) memcpy(ia, opt + 2, sizeof(*ia));
+        }
+        else {
+                ia->s_addr = INADDR_ANY;
+        }
+        return opt;
+}
+
+
 /* This routine copies an option from the src DHCP packet to the destination
  * should the option be present in the source.  it returns the address of
  * the option in the destination, or NULL if the copy did not succeed (either
  * did not exist in original, or there was no space in the destination)
  */
-u_char *dhcp_copy_option(DHCP *d, DHCP *src, const u_char option)
+u_char *dhcp_copy_option(DHCP *d, const DHCP *src, const u_char option)
 {
         const u_char *opt = dhcp_find_option(src, option);
         if (opt != NULL) {
                 return dhcp_add_option(d, opt[0], opt[1], &opt[2]);
         }
         return NULL;
+}
+
+/* This routine adds vendor class information to the outgoing packet */
+static void dhcp_add_vendor_class_information(DHCP *d)
+{
+        _kernel_oserror *e = _swix(OS_Byte, _INR(0,1), 0, 0);
+
+        if (e != NULL) {
+                dhcp_add_option(d, OPTION_CLASSIDENTIFIER, strlen(e->errmess), e->errmess);
+        }
 }
 
 /* This routine initialises the di->di_dhcp (di->req.ifd.packet) structure with a header
@@ -244,6 +272,7 @@ u_char *dhcp_copy_option(DHCP *d, DHCP *src, const u_char option)
 void dhcp_init_packet(dhcp_interface *di, DHCP *dsrc, u_char message_type)
 {
         DHCP *d = &di->di_dhcp;
+        u_long *hwlong = (u_long *) &d->chaddr;
 
 	memset(d, '\0', sizeof(*d));
         d->op = BOOTREQUEST;
@@ -264,10 +293,16 @@ void dhcp_init_packet(dhcp_interface *di, DHCP *dsrc, u_char message_type)
 	}
 
 	dhcp_add_option(d, OPTION_DHCPMESSAGETYPE, 1, &message_type);
+	if (message_type != DHCPDECLINE && message_type != DHCPRELEASE) {
+		dhcp_add_vendor_class_information(d);
+	}
+
+	/* Random XID - but this will be overridden by dhcp_request if it requires
+	 * a duplicate transaction identifier
+	 */
+        d->xid = interfaces_current_time() ^ (u_long) di ^ hwlong[0] ^ hwlong[1];
 
 	if (dsrc != NULL) {
-	        /* Copy the transaction ID */
-	        d->xid = dsrc->xid;
 		/* Pull in the previous client IP address, if known */
 	        d->ciaddr = dsrc->ciaddr;
 		/* Copy the parameter request list from the previous request */
@@ -278,15 +313,43 @@ void dhcp_init_packet(dhcp_interface *di, DHCP *dsrc, u_char message_type)
 		        /* There wasn't one.  Create one - if wanted.  We don't. */
 		}
 	}
-	else {
-	        d->xid = interfaces_current_time() ^ (u_long) di;
+}
+
+void dhcp_init_inform_packet(DHCP *d, struct ether_addr *hw_addr, u_long ciaddr)
+{
+        static int monotonic = 0;
+        u_char message_type = DHCPINFORM;
+
+	memset(d, '\0', sizeof(*d));
+        d->op = BOOTREQUEST;
+        d->htype = ETHERNET_TYPE;
+        d->hlen = ETHERNET_LEN;
+        d->secs = htons(0);
+        d->hops = 0;
+        d->flags = 0;
+        if (hw_addr != NULL) {
+                (void) memcpy(d->chaddr, hw_addr, d->hlen);
+        }
+
+	{
+	        /* Initialise the options field */
+	        const u_long cookie = htonl(OPTIONS_COOKIE);
+    		memcpy(d->options, &cookie, sizeof(cookie));
+		d->options[4] = OPTION_END;
 	}
+
+	dhcp_add_option(d, OPTION_DHCPMESSAGETYPE, 1, &message_type);
+
+	/* Copy in the client IP address */
+        d->ciaddr = ciaddr;
+        monotonic = (monotonic + 1) % sizeof(*d);
+        d->xid = interfaces_current_time() ^ ciaddr;
 }
 
 /* This routine controls backoff fuzz values, based on the current monotonic time */
 static dhcp_time dhcp_time_fuzz(dhcp_time interval)
 {
-	int now = ((interfaces_current_time() & 7) - 4) * 24;
+	int now = ((interfaces_current_time() % 9) - 5) * 25;
         return interval + now;
 }
 
@@ -327,13 +390,13 @@ void dhcp_transmit(dhcp_interface *di)
                 	        new_interval = transmit_DEFAULT_INITIAL_RETRY;
 	                }
         	        else {
-	        	        new_interval = (di->interval * 3) >> 1;
+	        	        new_interval = (di->interval * 2);
 	                	if (new_interval == di->interval) ++new_interval;
 	                }
-	                di->interval = dhcp_time_fuzz(new_interval);
         	        if (di->interval > transmit_BACKOFF_LIMIT) {
                 	        di->interval = transmit_BACKOFF_LIMIT;
 	                }
+	                di->interval = dhcp_time_fuzz(new_interval);
         	}
 	        else {
         	        /* But, we must not exceed the final cutoff point */
@@ -367,10 +430,22 @@ void dhcp_transmit(dhcp_interface *di)
 		         * minute.  We really really really really really really really
 		         * need a new one extremely precipitously!
 	        	 */
-	                        di->t1 = di->t2;
+	                        di->t1 += minute;
 	                }
 	                else {
 	                        di->t1 = t;
+	                }
+                }
+        }
+
+	/* If we are currently RENEWING and this a REQUEST message, then attempt to
+	 * unicast the packet to the server
+	 */
+        if (di->state == dhcpstate_RENEWING && msgtype == DHCPREQUEST) {
+                struct in_addr dest;
+                if (dhcp_find_server_identifier(&di->binding, &dest)) {
+	                if (sockets_unicast_transmit(&di->di_dhcp, dest) > 0) {
+	                        return;
 	                }
                 }
         }

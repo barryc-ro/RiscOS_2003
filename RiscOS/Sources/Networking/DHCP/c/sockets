@@ -6,6 +6,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stddef.h>
 #include "kernel.h"
 #include "swis.h"
@@ -20,16 +21,22 @@
 #include "sys/dcistructs.h"
 #include "netinet/in.h"
 #include "arpa/inet.h"
+#include "net/if_dl.h"
+#include "net/if_arp.h"
+#include "net/if_types.h"
+#include "sys/errno.h"
 
 #include "dhcp.h"
 #include "interfaces.h"
 #include "sockets.h"
 #include "socklib.h"
 #include "packets.h"
+#include "iparp.h"
+#include "module.h"
 
 /* This is the socket handle which we can use for all our activities, including
  * sending ioctls to the Internet module, and actually receiving the incoming
- * datagrams that are response sto our requests.
+ * datagrams that are responses to our requests.
  */
 static int s;
 
@@ -67,7 +74,6 @@ void sockets_init(void)
                 trace(("socket() failed -> errno %d (%s)\n", errno, _inet_err()));
                 return;
         }
-
 	(void) memset(&sin, '\0', sizeof(sin));
 	sin.sin_family = AF_INET;
 #ifndef COMPAT_INET4
@@ -130,7 +136,7 @@ int sockets_data_arrived(int ns, void *private_word)
          */
 
 	/* Drain socket ... no more events unless we do */
-	while ((res = recv(s, &packet, sizeof(packet), 0)) > 0) {
+	while ((res = recv(ns, &packet, sizeof(packet), 0)) > 0) {
 	        if (res < offsetof(DHCP, options[8])) {
 	                /* Not a valid DHCP packet - too short!
 	                 * (Base message without options, plus 4 for cookie
@@ -209,37 +215,55 @@ static int sockets_set_address(dhcp_interface *di, struct in_addr in, u_long com
 int sockets_kill_interface(dhcp_interface *di)
 {
         struct ifreq *ifr = &di->di_ifr;
+        struct in_addr in;
 
 	sockets_ensure_init();
 
-	/* Disassociate address with interface */
-	/* Ignore errors on this call - the machine's shafted anyway, so
-	 * ignoring this isn't going to make any difference really.
+	/* Disassociate the bound address from this interface
+	 * If no error was returned, then attempt to read the interface address
+	 * and if this fails, then put the interface down.
 	 */
-	{
-	        struct in_addr in;
-	        in.s_addr = INADDR_ANY;
+        in.s_addr = di->binding.yiaddr;
 
-		(void) sockets_set_address(di, in, SIOCSIFADDR);
-	}
-
-	if (socketioctl(s, SIOCGIFFLAGS, ifr) < 0) {
-	        /* Erk - an error - the interface has gone? Let's assume so */
-	        return -1;
-	}
-	ifr->ifr_flags &= ~(IFF_UP|IFF_RUNNING);
-
-	/* Finally, force the interface down.  Do this after setting the address
-	 * as setting the address can affect the flags
-	 */
-	if (socketioctl(s, SIOCSIFFLAGS, ifr) < 0) {
-	        /* Unable to table interface down - nasty.  Let's stick our
-	         * heads in the sand and assume the interface died.
+	if (sockets_set_address(di, in, SIOCDIFADDR) < 0) {
+	        /* Failed to delete this IP address from the interface.  User has
+	         * presumably reconfigured the interface manually.  Bail out.
 	         */
-	        return -1;
+	        return 0;
+	}
+
+	if (socketioctl(s, SIOCGIFADDR, ifr) < 0 && errno == EADDRNOTAVAIL) {
+	        /* No more addresses on the interface, so kill the interface */
+
+		if (socketioctl(s, SIOCGIFFLAGS, ifr) < 0) {
+	        	/* Erk - an error - the interface has gone? Let's assume so */
+	        	return -1;
+		}
+		ifr->ifr_flags &= ~(IFF_UP|IFF_RUNNING);
+
+		/* Finally, force the interface down.  Do this after setting the address
+		 * as setting the address can affect the flags
+		 */
+		if (socketioctl(s, SIOCSIFFLAGS, ifr) < 0) {
+		        /* Unable to table interface down - nasty.  Let's stick our
+		         * heads in the sand and assume the interface died.
+		         */
+		        return -1;
+		}
 	}
 
 	return 0;
+}
+
+void sockets_direct_transmit(ifdhcpreq *req, int ioctl_flags)
+{
+        sockets_ensure_init();
+        req->ifr.ifr_flags = ioctl_flags;
+        if (socketioctl(s, SIOCGWHOIAMD, req) < 0) {
+                trace(("sockets_transmit: Internet module error %d\n", errno));
+                sockets_discard();
+                sockets_ensure_init();
+        }
 }
 
 void sockets_transmit(dhcp_interface *di, int ioctl_flags)
@@ -257,13 +281,7 @@ void sockets_transmit(dhcp_interface *di, int ioctl_flags)
         	dhcp_find_option(&di->di_dhcp, OPTION_DHCPMESSAGETYPE) ?
         	dhcp_find_option(&di->di_dhcp, OPTION_DHCPMESSAGETYPE)[2] : -1));
 
-	sockets_ensure_init();
-        di->req.ifr.ifr_flags = ioctl_flags;
-        if (socketioctl(s, SIOCGWHOIAMD, &di->req) < 0) {
-                trace(("sockets_transmit: Internet module error %d\n", errno));
-                sockets_discard();
-                sockets_ensure_init();
-        }
+	sockets_direct_transmit(&di->req.ifd, ioctl_flags);
 }
 
 /* This routine is called by the handler for SWI DHCP_Execute to get the Internet
@@ -283,7 +301,9 @@ void sockets_trigger_internet_dhcp(const char *if_name)
 	sockets_ensure_init();
 	(void) memset(&ifr, '\0', sizeof(ifr));
        	(void) strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
+       	module_idle(mir_THREAD);
        	res = socketioctl(s, SIOCGWHOIAMB, &ifr);
+       	module_idle(mir_UNTHREAD);
        	if (res<0) {
                 trace(("SIOCWHOIAMB -> error %d\n", errno));
         }
@@ -300,4 +320,281 @@ void sockets_ensure_init(void)
         if (s == -1) {
                 sockets_init();
         }
+}
+
+
+/* This routine takes a local IP address and determines it which interface it belongs
+ * and what the link address of that interface is.  The interface table is searched for
+ * the AF_INET record which matches the specified IP address and then a matching AF_LINK
+ * structure is sought which gives the details on the interface itself.
+ *
+ * A buffer is malloced for the data retrieval from the Internet module.  Once the
+ * appropriate sockaddr_dl entry has been located in the buffer, it is copied down to
+ * the start of the buffer and the address of the buffer is returned.  The caller is
+ * responsible for freeing the returned buffer.  The return value is NULL if the
+ * AF_INET lookup has failed, AF_LINK lookup has failed or memory allocation has failed.
+ *
+ */
+static struct sockaddr_dl *sockets_ip_to_hardware_address(struct in_addr ia, char *actual_if)
+{
+        struct ifconf ifc;
+        struct ifreq *ifr, *end;
+        char *ifname = 0;
+        static const size_t bufsize = 1500;
+        int found = 0;
+
+        ifc.ifc_len = bufsize;
+        ifc.ifc_buf = malloc(ifc.ifc_len);
+        if (ifc.ifc_buf == NULL) {
+                return NULL;
+        }
+
+	trace(("sockets_ip_to_hardware_address\n"));
+
+        if (socketioctl(s, SIOCGIFCONF, &ifc) == 0) {
+                ifr = ifc.ifc_req;
+                end = (struct ifreq *) (ifc.ifc_buf + ifc.ifc_len);
+                trace(("SIOCGIFCONF succeeded: %p -> %p\n", ifr, end));
+                if (ia.s_addr == INADDR_ANY) {
+                        found = 1;
+                        ifname = actual_if;
+                }
+                else while (ifr < end) {
+                        trace(("Entry family: %d\n", ifr->ifr_addr.sa_family));
+                        if (ifr->ifr_addr.sa_family == AF_INET) {
+                                struct sockaddr_in *sin;
+                                sin = (struct sockaddr_in *) &ifr->ifr_addr;
+                                trace(("Internet address %s\n", inet_ntoa(sin->sin_addr)));
+                                if (sin->sin_addr.s_addr == ia.s_addr) {
+                                        ifname = ifr->ifr_name;
+                                        trace(("This is the one we wanted: %s\n",
+                                        	ifr->ifr_name));
+                                        found = 1;
+                                        /*break;*/
+                                }
+                        }
+                        if (ifr->ifr_addr.sa_len) {
+                                /* Dodgy hack for dual Internet 4/Internet 5 compat */
+                                ifr = (struct ifreq *) ((caddr_t) ifr +
+                                	ifr->ifr_addr.sa_len - sizeof(struct sockaddr));
+                        }
+                        ++ifr;
+                }
+                if (found) for (ifr = ifc.ifc_req; ifr < end; ++ifr) {
+                        if (ifr->ifr_addr.sa_family == AF_LINK) {
+                                struct sockaddr_dl *sdl = (struct sockaddr_dl *)
+                                       	&ifr->ifr_addr;
+                                int matches = !strncmp(ifr->ifr_name, ifname, IFNAMSIZ);
+
+                                trace(("Found a link address.  Interface `%*s'; type %d; MAC: %s\n",
+                                	sdl->sdl_nlen, sdl->sdl_data, sdl->sdl_type,
+                                	link_ntoa(sdl)));
+
+                                if (matches) {
+                                        /* Got it */
+                                        if (ifname != actual_if) {
+                                                (void) strncpy(actual_if, ifname, IFNAMSIZ);
+                                        }
+                                        (void) memmove(ifc.ifc_buf, sdl, sdl->sdl_len);
+                                        return (struct sockaddr_dl *) ifc.ifc_buf;
+                                }
+                        }
+                        if (ifr->ifr_addr.sa_len) {
+                                /* Dodgy hack for dual Internet 4/Internet 5 compat */
+                                ifr = (struct ifreq *) ((caddr_t) ifr +
+                                	ifr->ifr_addr.sa_len - sizeof(struct sockaddr));
+                        }
+                }
+        }
+
+        free(ifc.ifc_buf);
+        trace(("sockets_ip_to_hardware_address ends\n"));
+        return 0;
+}
+
+/* This is the inform sending socket - we use a separate socket so that we don't
+ * inadvertantly bind our *.bootpc socket to a specific interface
+ */
+static int is;
+
+static void sockets_ensure_inform_init(void)
+{
+        int one = 1;
+
+        if (is == -1) {
+	        is = socket(PF_INET, SOCK_DGRAM, 0);
+	        if (is == -1) {
+        	        trace(("socket() failed -> errno %d (%s)\n", errno, _inet_err()));
+                	return;
+	        }
+        }
+
+        (void) ioctl(is, FIOSLEEPTW, &one);
+	(void) ioctl(is, FIOASYNC, &one);
+	(void) ioctl(is, FIONBIO, &one);
+	(void) setsockopt(is, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+
+}
+
+static void sockets_inform_discard(void)
+{
+        if (is != -1) {
+	        socketclose(is);
+        	is = -1;
+        }
+}
+
+
+/* This routine is called to get hold of the handle of the inform sender socket,
+ * which will already have been bound to the correct interface ready for
+ * transmission.  It fills in a network-order 32-bit IP address in ciaddr with a
+ * value suitable for going in a DHCP packet's ciaddr header field.  The
+ * socket handle is the function's return value.
+ */
+
+int sockets_inform(DHCP *d, struct in_addr dest_ip, char *actual_interface)
+{
+        struct sockaddr_in sin;
+        int res;
+
+        sockets_ensure_init();
+        sockets_ensure_inform_init();
+
+	if (dest_ip.s_addr == htonl(INADDR_ANY)) {
+	        dest_ip.s_addr = htonl(INADDR_BROADCAST);
+	}
+
+	(void) memset(&sin, '\0', sizeof(sin));
+	sin.sin_family = AF_INET;
+#ifndef COMPAT_INET4
+	sin.sin_len = sizeof(sin);
+#endif
+	sin.sin_addr = dest_ip;
+	sin.sin_port = htons(DHCP_server);
+
+	if (connect(is, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
+	        /* Erk - unable to associate - probably can't reach that IP address */
+                trace(("connect() failed -> errno %d (%s)\n", errno, _inet_err()));
+                res = -1;
+	}
+	else {
+	        /* Managed to associate socket - now find the local address ... */
+	        struct sockaddr_in lin;
+	        int sizeof_lin = sizeof(lin);
+
+	        if (getsockname(is, (struct sockaddr *)&lin, &sizeof_lin) < 0) {
+	                /* Unable to read it?  Oh dear - don't fill it in then */
+	                trace(("getsockname() failed -> %s\n", _inet_err()));
+	        }
+	        else {
+	                struct sockaddr_dl *sdl;
+	                d->ciaddr = lin.sin_addr.s_addr;
+	                sdl = sockets_ip_to_hardware_address(lin.sin_addr, actual_interface);
+	                if (sdl != NULL) {
+	                        char *address = LLADDR(sdl);
+	                        size_t len = sdl->sdl_alen;
+
+	                        if (len > sizeof(d->chaddr)) len = sizeof(d->chaddr);
+	                        d->hlen = len;
+	                        if (len) {
+	                                memcpy(d->chaddr, address, len);
+	                        }
+	                        switch (sdl->sdl_type) {
+	                                default:
+	                                        /* Allow default to Ethernet */
+	                                        if (len == 0) {
+	                                                d->htype = 0;
+	                                        }
+	                                        break;
+	                                case IFT_MODEM:
+                                        case IFT_PPP:
+                                        case IFT_SLIP:
+                                        case IFT_ISDNBASIC:
+                                        case IFT_ISDNPRIMARY:
+                                        case IFT_RS232:
+                                                if (len == 0) {
+	                                                d->htype = ARPHRD_SERIAL;
+                                                }
+                                                break;
+	                        }
+	                        free(sdl);
+	                }
+	        }
+
+		res = send(is, d, sizeof(*d), 0);
+		if (res < 0) {
+	        	trace(("send: %s\n", _inet_err));
+		}
+	}
+
+	sockets_inform_discard();
+
+        return res;
+}
+
+int sockets_unicast_transmit(DHCP *d, struct in_addr dest)
+{
+        struct sockaddr_in sin;
+
+	sockets_ensure_init();
+
+        (void) memset(&sin, '\0', sizeof(sin));
+        sin.sin_family = AF_INET;
+#ifndef COMPAT_INET4
+	sin.sin_len = sizeof(sin);
+#endif
+        sin.sin_port = htons(DHCP_server);
+        sin.sin_addr = dest;
+
+        return sendto(s, d, sizeof(*d), 0, (struct sockaddr *) &sin, sizeof(sin));
+}
+
+void sockets_set_preferred_ip_address(dhcp_interface *di, u_long ip)
+{
+        if (ip == INADDR_ANY) {
+                if (socketioctl(s, SIOCGIFADDR, &di->di_ifr) == 0) {
+                        ip = di->req.ifr_in.sin.sin_addr.s_addr;
+                        di->state = dhcpstate_INITREBOOT;
+                }
+        }
+
+        di->preferred_ip.s_addr = ip;
+}
+
+int sockets_verify_address(dhcp_interface *di)
+{
+        struct in_addr if_ip;
+
+        if (socketioctl(s, SIOCGIFADDR, &di->req) < 0) {
+                if_ip.s_addr = INADDR_ANY;
+        }
+        else {
+                if_ip.s_addr = di->req.ifr_in.sin.sin_addr.s_addr;
+        }
+
+        switch (di->state) {
+	        case dhcpstate_INIT:
+	        case dhcpstate_SELECTING:
+        	case dhcpstate_REQUESTING:
+	        case dhcpstate_INITREBOOT:
+        	case dhcpstate_REBOOTING:
+                        if (di->preferred_ip.s_addr != if_ip.s_addr) {
+                                return -1; /* Is changed */
+                        }
+                        break;
+
+		case dhcpstate_BOUND:
+	        case dhcpstate_RENEWING:
+        	case dhcpstate_REBINDING:
+
+			if (di->binding.yiaddr != if_ip.s_addr) {
+			        return -1; /* Faulty */
+			}
+			break;
+
+        	default:
+                        break;
+        }
+
+	return 0; /* OK */
 }

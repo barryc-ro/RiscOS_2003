@@ -39,7 +39,7 @@ DEPENDS = -depend !Depend ${THROWBACK}
 #
 # Internet version compatibility
 #
-COMPAT = -DCOMPAT_INET4
+#COMPAT = -DCOMPAT_INET4
 
 
 DEFINES = ${COMPAT} ${OPTIONS} -UTRACE
@@ -64,7 +64,7 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 RPCLIB    = TCPIPLibs:rpc.o.rpc_datazm TCPIPLibs:rpc.o.rpclibzm
 INETLIB   = TCPIPLibs:o.inetlibzm
-SOCKLIB   = TCPIPLibs:o.socklibzm
+SOCKLIB   = TCPIPLibs:o.socklib5zm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 
 
@@ -83,12 +83,14 @@ ROMTARGET = aof.${COMPONENT}
 OBJS      =	\
  o.dhcp		\
  o.dhcperrors	\
+ o.dhcpinform	\
  o.idle		\
  o.module	\
  o.interfaces	\
  o.iparp	\
  o.packets	\
  o.sockets	\
+ o.voting	\
  $(CMHGOBJ)
 
 #
