@@ -10,6 +10,8 @@
 #include "ncma_tags.h"
 #include "areacode.h"
 #include "smcard.h"
+#include "ncma_utils.h"
+#include "dynalloc.h"
 
 #include "DBUG.h"
 
@@ -35,7 +37,8 @@ int nvram_empty(void)
         return(1);
     }
 
-    if((nvram_ptr = (unsigned char *)malloc(MAX_NVRAM_BUFFER))==NULL) {
+    if(nvram_ptr) rmfree(nvram_ptr);
+    if((nvram_ptr = (unsigned char *)rmalloc(MAX_NVRAM_BUFFER,"NVRAM matrix"))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "nvram_empty: couldn't claim NVRAM workspace\n");
         return(1);
     }
@@ -46,53 +49,58 @@ int nvram_empty(void)
 
     if(_kernel_swi(NVRAM_Read, &r, &r)!=NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "nvram_empty: NVRAM Read SWI (read) failed\n");
-        free(nvram_ptr);
+        if(nvram_ptr != NULL) rmfree(nvram_ptr);
         nvram_ptr = NULL;
         return(1);
     }
 
     nvram_bytes = MAX_NVRAM_BUFFER;
 
-    if((t1=find_tag_in_block(nvram_ptr, nvram_bytes, NCIIAPIDTag, &t1b, NULL))==NULL) {
+    if((t1=find_tag_in_block(nvram_ptr+4, nvram_bytes, NCIIAPIDTag, &t1b, NULL))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "nvram_empty: NVRAM data contains no IAP info\n");
-        free(nvram_ptr);
+        if(nvram_ptr != NULL) rmfree(nvram_ptr);
         nvram_ptr = NULL;
         return(1);
     }
 
-    if((t2=find_tag_in_block(nvram_ptr, nvram_bytes, NCIEnterpriseCertTag, &t2b, NULL))==NULL) {
+    if((t2=find_tag_in_block(nvram_ptr+4, nvram_bytes, NCIEnterpriseCertTag, &t2b, NULL))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "nvram_empty: NVRAM data contains no certificate info\n");
-        free(nvram_ptr);
+        if(nvram_ptr != NULL) rmfree(nvram_ptr);
         nvram_ptr = NULL;
         return(1);
     }
 
 
     DBUG_PRINTF(DBUG_LVL_DIAG, "nvram_empty: ptr: 0x%x bytes: %d\n", nvram_ptr, nvram_bytes);
-    return(1);
+    rmfree(nvram_ptr);
+    return(0);
 }
 
 int build_nvram_info(void)
 {
-    unsigned char *nuptr, nusize;
+    unsigned char *nuptr;
+    unsigned int nusize;
     _kernel_swi_regs r;
     char tag[] = "ManagedAccess";
 
 
 
-    nusize = ram_eb_bytes + ram_cert_bytes;
+    nusize = ram_iap_bytes + ram_cert_bytes + 6 + 4; /* 4 bytes for initial raw EntID, 6 for cert. tag and length */
     if(nusize > MAX_NVRAM_BUFFER) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "build_nvram_info: too much data to store in NVRAM\n");
         return(-1);
     }
 
-    if((nuptr = (unsigned char *)malloc(MAX_NVRAM_BUFFER))==NULL) {
+    if((nuptr = (unsigned char *)rmalloc(MAX_NVRAM_BUFFER, "NVRAM buffer"))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "build_nvram_info: couldn't claim workspace\n");
         return(-1);
     }
 
-    memcpy(nuptr, ram_eb_ptr, ram_eb_bytes);
-    memcpy(nuptr + ram_eb_bytes, ram_cert_ptr, ram_cert_bytes);
+    DBUG_PRINTF(DBUG_LVL_DIAG, "build_nvram_info: NVRAM caching enterprise ID: 0x%x\n", enterprise_id);
+
+    write_big_word((char *)nuptr, enterprise_id);
+    memcpy(nuptr+4, ram_iap_ptr, ram_iap_bytes);
+    memcpy(nuptr + 4 + ram_iap_bytes, ram_cert_ptr-6, ram_cert_bytes+6); /* we want the cert tag & length as well as the data */
 
     r.r[0] = (int)tag;
     r.r[1] = (int)nuptr;
@@ -100,27 +108,39 @@ int build_nvram_info(void)
 
     if(_kernel_swi(NVRAM_Write, &r, &r)!=NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "build_nvram_info: NVRAM Write SWI failed\n");
+        rmfree(nuptr);
         return(-1);
     }
 
     if(r.r[0]<0) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "build_nvram_info: NVRAM Write SWI returned error %d\n", r.r[0]);
+        rmfree(nuptr);
         return(-1);
     }
 
-    if(nvram_ptr) free(nvram_ptr);
+    if(nvram_ptr) rmfree(nvram_ptr);
     nvram_ptr = nuptr;
     nvram_bytes = nusize;
 
-    DBUG_PRINTF(DBUG_LVL_DIAG, "build_nvram_info: cached %d (%d IAP + %d cert) bytes in NVRAM\n", nvram_bytes, ram_eb_bytes, ram_cert_bytes);
+    DBUG_PRINTF(DBUG_LVL_DIAG, "build_nvram_info: cached %d (%d IAP + %d cert) bytes in NVRAM\n", nvram_bytes, ram_iap_bytes, ram_cert_bytes);
 
     return(nvram_bytes);
 }
 
+/* get stuff out of NVRAM and into a RAM buffer, but more sneakily than that, stick it in a big
+   aggregate tag type nightmare so that it looks like a RAM block */
 int copy_nvram_to_ram(void)
 {
     _kernel_swi_regs r;
     char tag[] = "ManagedAccess";
+    char *nvram_cert_ptr, *nvram_iap_ptr, *nvram_rule_ptr;
+    unsigned int nvram_cert_bytes, nvram_iap_bytes, nvram_rule_bytes;
+    unsigned int nvram_eid;
+
+#ifdef NVRAM_DEBUG
+       FILE *fp;
+#endif
+
 
     r.r[0] = (int)tag;
     r.r[1] = 0;
@@ -136,17 +156,20 @@ int copy_nvram_to_ram(void)
     }
 
     else if(r.r[0]>0) {
-        if(nvram_ptr) free(nvram_ptr);
-        nvram_bytes = r.r[0];
-        if((nvram_ptr = (unsigned char *)malloc(r.r[0]))==NULL) {
+        if(nvram_ptr) rmfree(nvram_ptr);
+        nvram_bytes = r.r[0]; /* raw IAP details, and certificate+hdrs */
+        nvram_bytes += 46; /* 6 tags of headers + 1 trailing NULL NCISignatureTag/len combo, plus 4 for eid */
+        if((nvram_ptr = (unsigned char *)rmalloc(nvram_bytes,"NVRAM matrix"))==NULL) {
             DBUG_PRINTF(DBUG_LVL_ERROR, "copy_nvram_to_ram: failed to claim memory for NVRAM buffer\n");
             return(-1);
         }
 
+	/* store NVRAM info such that the first word (raw enterprise ID) will be overwritten by header data */
+	nvram_iap_ptr = (char *)nvram_ptr + 36;
+
         r.r[0] = (int)tag;
-        r.r[1] = (int)nvram_ptr;
+        r.r[1] = (int)nvram_iap_ptr;
         r.r[2] = nvram_bytes;
-        r.r[0] = (int)tag;
         if(_kernel_swi(NVRAM_Read, &r, &r)!=NULL) {
           DBUG_PRINTF(DBUG_LVL_ERROR, "copy_nvram_to_ram: NVRAM read failed (read)\n");
           return(-1);
@@ -157,6 +180,70 @@ int copy_nvram_to_ram(void)
         DBUG_PRINTF(DBUG_LVL_DIAG, "copy_nvram_to_ram: got 0 bytes of NVRAM info\n");
         return(-1);
     }
+
+    nvram_eid = read_big_word(nvram_iap_ptr);
+    nvram_iap_ptr += 4; /* skip raw enterprise ID */
+    DBUG_PRINTF(DBUG_LVL_DIAG, "copy_nvram_to_ram: read NVRAM enterprise ID 0x%x\n", nvram_eid);
+
+    /* first, figure out how much of the NVRAM data is raw IAP data and how much is ISP certificate data */
+    if((nvram_cert_ptr = (char *)find_tag_in_block((unsigned char *)nvram_iap_ptr, nvram_bytes, NCIEnterpriseCertTag, &nvram_cert_bytes, NULL))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "copy_nvram_to_ram: no certificate info in NVRAM data\n");
+        return(-1);
+    }
+
+    nvram_iap_bytes = nvram_cert_ptr - nvram_iap_ptr - 6; /* -6 = -4 for tag and -2 for len (for the certificate hdr) */
+    DBUG_PRINTF(DBUG_LVL_DIAG, "copy_nvram_to_ram: decoded NVRAM as %d IAP bytes + %d cert bytes\n", nvram_iap_bytes, nvram_cert_bytes);
+
+    /* find the time rule for the IAP data and NOP it out so it's always valid (it's the only one we have) */
+
+    if((nvram_rule_ptr = (char *)find_tag_in_block((unsigned char *)nvram_iap_ptr, nvram_iap_bytes, NCIRuleTag, &nvram_rule_bytes, NULL))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "copy_nvram_to_ram: NVRAM IAP data has no RuleTag\n");
+        return(-1);
+    }
+
+    write_big_word(nvram_rule_ptr, 0); /* NOP it out */
+
+    write_big_word((char *)nvram_ptr, NCIEnterpriseMatrixTag);
+    write_big_short((char *)(nvram_ptr + 4), nvram_iap_bytes + 40 + nvram_cert_bytes + 6);
+
+    write_big_word((char *)(nvram_ptr + 6), NCIGroupTag);
+    write_big_short((char *)(nvram_ptr + 10), nvram_iap_bytes + 34 + nvram_cert_bytes + 6);
+
+    write_big_word((char *)(nvram_ptr + 12), NCIBeginSignatureTag);
+    write_big_short((char *)(nvram_ptr + 16), nvram_iap_bytes + 22);
+
+    write_big_word((char *)(nvram_ptr + 18), NCIEnterpriseIDTag);
+    write_big_short((char *)(nvram_ptr + 22), 4);
+    write_big_word((char *)(nvram_ptr + 24), nvram_eid);
+
+    write_big_word((char *)(nvram_ptr + 28), NCIIAPConnectMatrixTag);
+    write_big_short((char *)(nvram_ptr + 32), nvram_iap_bytes + 6);
+
+    write_big_word((char *)(nvram_ptr + 34), NCIGroupTag);
+    write_big_short((char *)(nvram_ptr + 38), nvram_iap_bytes);
+
+    memmove(nvram_cert_ptr, nvram_cert_ptr-6, nvram_cert_bytes+12); /* make space for NCISignature tag + len */
+    write_big_word(nvram_cert_ptr-6, NCISignatureTag); /* write signature tag */
+    write_big_short(nvram_cert_ptr-6 + 4, 0); /* write length of zero */
+
+    if(ram_block_ptr) {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "copy_nvram_to_ram: freeing previous %d byte connection matrix at 0x%x\n", ram_block_bytes, ram_block_ptr);
+        rmfree(ram_block_ptr);
+    }
+
+#ifdef NVRAM_DEBUG
+    if((fp=fopen("NFS::Ant.$.NVRAMlog", "w"))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "copy_nvram_to_ram: couldn't write log file\n");
+    } else {
+        fwrite(nvram_ptr, 1, 800, fp);
+        fclose(fp);
+    }
+#endif
+    DBUG_PRINTF(DBUG_LVL_DIAG, "copy_nvram_to_ram: setting up RAM connection matrix...\n");
+    ram_block_ptr = nvram_ptr;
+    ram_block_bytes = nvram_bytes;
+    nvram_ptr = NULL;
+    nvram_bytes = 0;
 
     return(1);
 }
