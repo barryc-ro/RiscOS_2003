@@ -30,7 +30,7 @@ TOUCH   = create
 STRIP   = -stripdepnd
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit -PD "${Build}${UserIF} SETL {TRUE}"
-CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ffa ${INCLUDES} ${DFLAGS} -DSysIdent=${Build}${UserIF}
+CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ffa ${INCLUDES} ${DFLAGS} -DSysIdent=${Build}${UserIF} -DIrProtocol="${IRPROTO}"
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
@@ -73,7 +73,7 @@ OBJS      =  \
 o.header     \
 o.handler    \
 o.DevFSIntFc \
-o.MsgHandler \
+o.Msg_${IRPROTO} \
 o.module     \
 o.IntHandler   
 
@@ -81,7 +81,7 @@ OBJS_D    =  \
 o.header     \
 o.handler    \
 od.DevFSIntFc \
-od.MsgHandler \
+od.Msg_${IRPROTO} \
 od.module    \
 od.IntHandler 
 
