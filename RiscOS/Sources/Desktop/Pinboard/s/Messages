@@ -44,6 +44,12 @@ message_received
         TEQ     r0,r14
         BEQ     MenuDeleted
 
+        [ Version >= 67
+        LDR     r14, =Message_IconizeAt
+        TEQ     r0, r14
+        BEQ     IconizeAt
+        ]
+
         LDR     r14, =Message_Iconize
         TEQ     r0, r14
         BEQ     Iconize
@@ -459,6 +465,19 @@ MenuDeleted
 
         Pull    "PC"
 
+IconizeAt
+
+        ;MOV     r0, #7
+        ;SWI     OS_WriteC
+        LDR     r0, [r1, #28]
+        STR     r0, IconizeAtX
+        LDR     r0, [r1, #32]
+        STR     r0, IconizeAtY        
+        
+        Pull    "PC"
+
+filenamestring DCB "$.MB",0
+
 Iconize
 
         LDR     r0,Pinboard_options
@@ -668,8 +687,33 @@ got_task_name
        LDR      r1,[r11,#w_window_pos+12]
        SUB      r1,r1,#grid_y_spacing :SHR: 1
        STR      r1,iconize_y
+
+ [ Version >= 67
+       TST      lr, #PinboardOption_UseWinToCorner
+       BLNE     get_iconise_position
+
+       TST      lr, #PinboardOption_UseWinToCorner
+       BNE      %FT10
+       TST      lr, #PinboardOption_IconiseToIconBar
+       BNE      %FT10
+
+       LDR      r0, IconizeAtX     ; If there's a value waiting from a Message_IconizeAt
+       CMP      r0, #-1            ; then use that,
+       BEQ      %FT10              ; otherwise use the default position (so skip ahead)
+       STR      r0, iconize_x
+       LDR      r0, IconizeAtY
+       STR      r0, iconize_y
+10       
+ ]
+
        Debug    ic,"Y", r1
 00
+
+       [ Version >= 67
+       MOV     r0, #-1
+       STR     r0, IconizeAtX
+       STR     r0, IconizeAtY
+       ]
 
        ADD     r2, r11, #w_sprite_name
 
@@ -746,7 +790,7 @@ got_task_name
         TST     lr, #PinboardOption_IconiseToIconBar
         MOVNE   r0, #-2
         STRNE   r0, [r1]
-        BNE     %FT02
+        BNE     %FT10
  ]
 
         LDR     r0,backdrop_handle
@@ -757,21 +801,43 @@ got_task_name
         CMP     r8,r9
         MOVGT   r9,r8
         LDR     r8,iconize_x
+        
+ [ Version >=67
+        TST     lr, #PinboardOption_UseWinToCorner
+        BEQ     %FT02
+        Push    "r0-r1"
+        MOV     r3, r8
+        MOV     r4, r9
+        MOV     r0, #grid_x_spacing
+        SUBS    r1, r0, r5
+        ADDS    r3, r3, r1, LSR #1
+        Pull    "r0-r1"
+        B       %FT04
+02
+ ]
         Debug   ic,"r3 x y",r3,r8,r9
         ADD     r3,r3,r8
         SUBS    r3,r3,r5, LSR #1
         MOVCC   r3,#0
         ADD     r4,r4,r9
+
+04        
         ADD     r5,r3,r5
         ADD     r6,r6,r9
         LDR     r8,w_icon_flags
         Debug   ic,"Lock to grid ",r3
-;        BL      lock_to_grid
+        ;BL      lock_to_grid
         Debug   ic,"Lock to grid returned"
+        
         STMIA   r1,{r3-r6,r8}
         Debug   ic,"Bounding box is ",r3,r4,r5,r6
         SUB     r1,r1,#4
-02
+10
+        [ Version >= 67
+        LDR     r8, [r1]
+        Push    "r8"          ; stick the window handle (backdrop or iconbar) on stack
+        ]
+                
         SWI     XWimp_CreateIcon
         ADRVC   r1,dataarea
         STRVC   r0,[r1,#4]
@@ -780,6 +846,12 @@ got_task_name
         STRVC   r8,[r1,#12]
         MOVVC   r8,r0
         SWIVC   XWimp_SetIconState
+
+        [ Version >= 67
+        Pull    "r0"
+        STR     r0, [r11, #w_icon_id]
+        ]
+
         STRVC   r8, [r11,#w_icon_handle]
 
 
@@ -804,6 +876,182 @@ got_task_name
  ]
        Pull     "PC"
 
+
+ [ Version >=67
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; get_iconise_position
+;
+; Decide where to put the icon for a window that's just been iconized.
+;
+; In: Nothing.
+;
+; Out: The memory locations iconise_x and iconise_y are set.
+;      All regs preserved.
+
+get_iconise_position ENTRY
+
+        Push    "r0-r12"
+        
+        LDR     r2, Pinboard_options              ; Pinboard options
+        ADR     r0, bounding_box                  ; Screen bouding box
+
+        LDR     r1, [r0, #8]                      ; Decide of Left/Right positioning
+        TST     r2, #PinboardOption_WinToCornerLR ; 0 = Left (EQ), 1 = Right (NE)
+        MOVEQ   r3, #0
+        SUBNE   r3, r1, #grid_x_spacing
+
+        LDR     r1, [r0, #12]                     ; Decide on up/down positioning
+        TST     r2, #PinboardOption_WinToCornerTB ; 0 = Top (EQ), 1 = Bottom (NE)
+        SUBEQ   r4, r1, #grid_y_spacing
+        LDRNE   r4, icon_bar_height
+                 
+        SUB     sp, sp, #48                       ; Increase stack - we'll use it for getting icon data
+
+        ; Now loop through linked list of icons and see if they present a problem (occupy the space that
+        ; our 'proposed' icon is going to use). If so, try another space. If not, then we can use the coords. 
+        ; (Surely there's an easier way?)
+        ; r2 = options
+        ; r3 = iconize_x
+        ; r4 = iconize_y
+        ; r3-r6 = attempted bounding box
+        ; r11 -> current iconized icon we're checking
+        ; r10 -> bounding box of the icon we're checking
+        
+10 ; tryagain
+        LDR     r11, iconized_ptr                 ; location of first icon data
+
+20 ; nexticon
+        CMP     r11, #0                           ; if pointer to icon data is <=0, then there's no more
+        BLE     %FT86                             ; so the last values of r3, r4 are the right coords.
+        LDR     r0, backdrop_handle
+                                                  ; Get the bounding box of this icon
+        STR     r0, [sp]
+        LDR     r0, [r11, #w_icon_handle]
+        STR     r0, [sp, #4]
+        MOV     r1, sp
+        SWI     Wimp_GetIconState
+        ADD     r10, r1, #8                       ; r10 -> Bounding box
+
+        ADD     r5, r3, #grid_x_spacing           ; make r3, r4, r5, r6 the proposed bounding box.
+        ADD     r6, r4, #grid_y_spacing
+
+        ; Check the proposed icon's left and right bounds against the current stored icon
+        LDR     r7, [r10] 
+        CMP     r5, r7                            ; Check proposed x2 <= icon x1
+        BLE     %FT80                             ; If it is, then this icon presents no problems - try next
+        LDR     r7, [r10, #8]
+        CMP     r3, r7                            ; Check proposed x1 >= icon x2
+        BGE     %FT80                             ; If it is, then this icon presents no problems - try next
+        
+        ; Check the proposed icon's top and bottom bounds against the current stored icon
+        LDR     r7, [r10, #4]
+        CMP     r6, r7                            ; Check proposed y2 <= icon y1
+        BLE     %FT80                             ; If it is, then this icon present no problems.
+        LDR     r7, [r10, #12]
+        CMP     r4, r7                            ; Check proposed y1 >= store y2
+        BGE     %FT80                             ; If it is, then this icon presents no problems
+
+        ; The bounds checks have failed - the stored icon overlaps with our proposed one.
+        ; So, we've got to move onto the next possible slot on the pinboard.
+        TST     r2, #PinboardOption_WinToCornerHV ; 0 = Stack horizontally (EQ), 1 = Stack vertically (NE)
+        BEQ     %FT70                             ; if we're stacking horizontally, skip to different code.
+        
+        ; Right, we're stacking vertically - move y up/down by one icon
+        TST     r2, #PinboardOption_WinToCornerTB ; 0 = move down (EQ), 1 = move up (NE)
+        ADDNE   r4, r4, #grid_y_spacing           
+        SUBEQ   r4, r4, #grid_y_spacing
+
+        ; Check we're still on the screen
+        LDR     r0, icon_bar_height
+        CMP     r4, r0                            
+        BLT     %FT66                             ; We're off the bottom - move x and reset y.
+        ADR     r0, bounding_box
+        LDR     r1, [r0, #12]
+        SUB     r1, r1, #grid_y_spacing
+        CMP     r4, r1
+        BGT     %FT66                             ; We're off the top - moce x and reset y.
+        
+        ; We are still on the screen, so now go back and check and see if this new position is okay.
+        B       %BT10
+
+66 ; move_x
+        ; we've reached the top/bottom of a vertical stack, so move x left/right by one icon
+        TST     r2, #PinboardOption_WinToCornerLR ; 0 = move right (EQ), 1 = move left (NE)
+        SUBNES  r3, r3, #grid_x_spacing
+        ADDEQ   r3, r3, #grid_x_spacing
+
+        ; reset y to the top/bottom
+        ADR     r0, bounding_box
+        LDR     r1, [r0, #12]
+        TST     r2, #PinboardOption_WinToCornerTB ; 0 = top (EQ), 1 = bottom (NE)
+        LDRNE   r4, icon_bar_height
+        SUBEQ   r4, r1, #grid_y_spacing
+
+        ; has x reached the screen edge (ie. screen full) ?
+        CMP     r3, #0
+        BLT     %FT84                            ; The screen is full
+        LDR     r1, [r0, #8]
+        CMP     r3, r1
+        BLT     %BT10
+        B       %FT84                             ; The screen is full
+
+70 ; not_here_horiz
+        ; we're stacking horizontally, so move x left/right by one icon
+        TST     r2, #PinboardOption_WinToCornerLR ; 0 = left (EQ), 1 = right (NE)
+        ADDEQ   r3, r3, #grid_x_spacing
+        SUBNES  r3, r3, #grid_x_spacing
+        
+        ; Check we're still on the screen
+        CMP     r3, #0
+        BLT     %FT76                             ; We're off the left - move y and reset x.
+        ADR     r0, bounding_box
+        LDR     r1, [r0, #8]
+        SUB     r1, r1, #grid_x_spacing
+        CMP     r3, r1
+        BGT     %FT76                             ; We're off the right - move y and reset x.
+        
+        ; We are still on the screen, so now go back and check and see if this new position is okay.
+        B       %BT10
+        
+76 ; move_y
+        ; we've reached the edge of a horizontal stack, so move y up/down by one icon
+        TST     r2, #PinboardOption_WinToCornerTB ; 0 = move down (EQ), 1 = move up (NE)
+        ADDNE   r4, r4, #grid_y_spacing
+        SUBEQS  r4, r4, #grid_y_spacing
+        
+        ; reset x to the left/right
+        ADR     r0, bounding_box
+        LDR     r1, [r0, #8]
+        TST     r2, #PinboardOption_WinToCornerLR ; 0 = left (EQ), 1 = right (NE)
+        MOVEQ   r3, #0
+        SUBNE   r3, r1, #grid_x_spacing
+        
+        ; has y reached the screen edge (ie. screen full) ?
+        CMP     r4, #0
+        BLT     %FT84                             ; The screen is full
+        LDR     r1, [r0, #12]
+        CMP     r4, r1
+        BLT     %BT10
+        B       %FT84                             ; The screen is full
+
+80 ; try_next
+        LDR     r11, [r11, #w_next_ptr]
+        B       %BT20                             ; Next icon - go back and check it
+
+84 ; screen_full
+        B       %FT88
+ 
+86 ; got_one
+        STR     r3, iconize_x
+        STR     r4, iconize_y
+                
+88 ; exit
+        ADD     sp, sp, #48
+        Pull    "r0-r12"
+        EXIT
+ ]
+
+
 int_close_window                  ; fake close window ( r5=handle )
         Push    "LR"
         B       close_window_entry
@@ -823,7 +1071,9 @@ close_window_entry
         Push    "R7"
 
         Debug   ic,"window closed ",r5
+        
 01      BL      find_window
+
         CMP     r7,#0
         Pull    "R7,PC",EQ
         BL      delete_window      ; Preserves r5.
