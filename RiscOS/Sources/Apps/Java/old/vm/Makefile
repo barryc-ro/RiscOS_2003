@@ -11,10 +11,13 @@
 #
 # Component specific options:
 #
-COMPONENT  = java
+COMPONENT  = Java
+APP	   = !$(COMPONENT)
 ROM_MODULE = aof.$(COMPONENT)
 
 RESDIR = <resource$dir>.Resources2.$(COMPONENT)
+RESAPP = <resource$dir>.Apps.$(APP)
+RDIR   = Resources
 
 SYMFILTER = filter
 GENINDEX = genindex
@@ -67,6 +70,12 @@ ENTRIES = \
 	$(ENTRY).$(NET) \
 	$(ENTRY).$(MMEDIA)
 
+FILES = \
+	$(RDIR).!Boot \
+	$(RDIR).!Run \
+	$(RDIR).CallASWI \
+	$(RDIR).!Sprites22
+	
 SYMBOLS = syms
 
 #
@@ -75,14 +84,16 @@ SYMBOLS = syms
 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
-
+	
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
-resources: indexes
+resources: indexes $(FILES)
 	$(MKDIR) $(RESDIR)
+	$(MKDIR) $(RESAPP)
 	$(CP) $(INDEX).* $(RESDIR).* $(CPFLAGS)
+	$(CP) $(RDIR).* $(RESAPP).* $(CPFLAGS)
 	@echo $(COMPONENT): resource files copied to Messages module
 
 
