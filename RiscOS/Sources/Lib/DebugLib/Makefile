@@ -224,10 +224,15 @@ export_hdrs: h.DebugLib export_dirs
 	$(CP)	Docs.DebugLib	$(EXPORT_DIR).DebugLib		$(CPFLAGS)
 	@echo * $(COMPONENT): export complete (hdrs)
 
-export_libs: $(TARGET) $(TARGETZ) export_dirs
+export_libs: export_libs-${NOLIBS}
+	@echo * $(COMPONENT): export complete (libs)
+
+export_libs-: $(TARGET) $(TARGETZ) export_dirs
 	$(CP)	$(TARGET)	$(EXPORT_DIR).o.$(TARGET)	$(CPFLAGS)
 	$(CP)	$(TARGETZ)	$(EXPORT_DIR).o.$(TARGETZ)	$(CPFLAGS)
-	@echo * $(COMPONENT): export complete (libs)
+
+export_libs-NOLIBS:
+	@echo * $(COMPONENT): library export disabled (export_libs)
 
 ${DIRS}:
 	$(MKDIR) o
