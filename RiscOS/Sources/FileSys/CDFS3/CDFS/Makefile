@@ -120,6 +120,8 @@ clean:
         ${RM} h.module
         ${RM} ${TARGET}
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} linked.* ${WFLAGS}
+        ${RM} linked
         ${WIPE} aof.* ${WFLAGS}
         ${RM} aof
         @echo ${COMPONENT}: cleaned
