@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.08 for RISC OS
+#	VERSION:	0.09 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -23,6 +23,7 @@
 #	17/12/97	0.06	RDW	merged in BALs changes so we export correctly
 #	09/01/98	0.07	RDW	merged in BALs debug build target
 #	18/02/98	0.08	RDW	Split NetFax NFE code from generic emaillibrary
+#	20/02/98	0.09	RDW	added XNFrtnrcpt to OBJS, HDRS, OBJSZ, OBJSD
 
 #
 # Paths
@@ -93,27 +94,27 @@ HDRS=		h.822parser body.h bodymulti.h contentT.h contentTE.h date.h elibbase.h e
 		from.h header.h headers.h messageid.h MIMEentity.h MIMEimage.h MIMEmultip.h mimevers.h \
 		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.o XNFdevicec.o \
 		XNFfaxnum.h XNFfaxpage.h XNFmsgclas.h XNFphoneno.h XNFserial.h XNFsoftrev.h Xorganiz.h \
-		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h \
+		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h XNFrtnrcpt.h \
 		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist
 
 OBJS=		o.822parser body.o bodymulti.o contentT.o contentTE.o date.o elibbase.o entity.o \
 		from.o header.o headers.o messageid.o MIMEentity.o MIMEimage.o MIMEmultip.o mimevers.o \
 		parameter.o replyto.o resentdate.o rfc822msg.o to.o XNFdevice.o XNFdevicec.o \
 		XNFfaxnum.o XNFfaxpage.o XNFmsgclas.o XNFphoneno.o XNFserial.o XNFsoftrev.o Xorganiz.o \
-		subject.o base64.o ELib.o ELib_priv.o MIMEtext.o ELib_OS.o
+		subject.o base64.o ELib.o ELib_priv.o MIMEtext.o ELib_OS.o XNFrtnrcpt.o
 
 OBJSZ=		z.822parser z.body z.bodymulti z.contentT z.contentTE z.date z.elibbase z.entity \
 		z.from z.header z.headers z.messageid z.MIMEentity z.MIMEimage z.MIMEmultip z.mimevers \
 		z.parameter z.replyto z.resentdate z.rfc822msg z.to z.XNFdevice z.XNFdevicec \
 		z.XNFfaxnum z.XNFfaxpage z.XNFmsgclas z.XNFphoneno z.XNFserial z.XNFsoftrev z.Xorganiz \
-		z.subject z.base64 z.ELib z.ELib_priv z.MIMEtext z.ELib_OS
+		z.subject z.base64 z.ELib z.ELib_priv z.MIMEtext z.ELib_OS z.XNFrtnrcpt
 
 OBJSD =		od.822parser od.body od.bodymulti od.contentT od.contentTE od.date od.elibbase \
 		od.entity od.from od.header od.headers od.messageid od.MIMEentity od.MIMEimage \
 		od.MIMEmultip od.mimevers od.parameter od.replyto od.resentdate od.rfc822msg \
 		od.to od.XNFdevice od.XNFdevicec od.XNFfaxnum od.XNFfaxpage od.XNFmsgclas \
 		od.XNFphoneno od.XNFserial od.XNFsoftrev od.Xorganiz od.subject od.base64 od.ELib \
-		od.ELib_priv od.MIMEtext od.ELib_OS
+		od.ELib_priv od.MIMEtext od.ELib_OS od.XNFrtnrcpt
 
 QAOBJS=		@.qautils.o.list @.qautils.o.olist @.qautils.o.indxlist
 
