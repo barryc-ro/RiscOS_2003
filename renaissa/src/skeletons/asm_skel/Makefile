@@ -1,11 +1,4 @@
 # Skeleton ASM Makefile
-#
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date       	Name         	Description
-# ----       	----         	-----------
-# 17 Sep 1997	RWB		Created
 
 #
 # Paths
@@ -26,7 +19,7 @@ CPFLAGS = ~cfr~v
 # Program specific options:
 #
 COMPONENT  = Skeleton
-SOURCE     = s.skeleton
+SOURCE     = s.module
 TARGET     = rm.${COMPONENT}
 EXPORTS    = ${EXP_HDR}.${COMPONENT}
 
@@ -67,3 +60,14 @@ ${EXP_HDR}.${COMPONENT}: Hdr.${COMPONENT}
         ${CP} Hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rm.Skeleton: s.getall
+rm.Skeleton: Hdr:ListOpts
+rm.Skeleton: Hdr:Macros
+rm.Skeleton: Hdr:System
+rm.Skeleton: Hdr:SWIs
+rm.Skeleton: Hdr:CPU.Generic26
+rm.Skeleton: Hdr:IO.GenericIO
+rm.Skeleton: Hdr:RISCOS
+rm.Skeleton: Hdr:ModHand
+rm.Skeleton: Hdr:Proc
+rm.Skeleton: VersionASM
