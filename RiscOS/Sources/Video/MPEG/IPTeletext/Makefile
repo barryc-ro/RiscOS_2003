@@ -78,6 +78,7 @@ clean:
 #
 
 h.module: o.modhdr
+        @|
 
 ${RESF}: LocalRes:Messages
         resgen messages_file ${RESF} LocalRes:Messages Resources.${COMPONENT}.Messages
