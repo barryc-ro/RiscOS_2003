@@ -6,7 +6,7 @@
 .SUFFIXES: .o .c
 
 CC      = gcc
-CFLAGS  = -I. -DPACE_BUILD
+CFLAGS  = -I. -DPACE_BUILD -DUNIX -DEXECUTE_ON_UNIX
 LD      = gcc
 LDFLAGS = 
 YACC    = bison
