@@ -3,9 +3,10 @@
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
-# Date       Name         Description
-# ----       ----         -----------
-# 23-Jul-96  JRH          Created.
+# Date         Name         Description
+# ----         ----         -----------
+# 23-Jul-1996  JRH          Created.
+# 07-Feb-1997  RWB	    Improved clean for CVS
 #
 
 #
@@ -24,6 +25,8 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+DESTROY = destroy
+IGNORE  = IgnoreErr
 
 AFLAGS  = -depend !Depend -Stamp -quit
 # DFLAGS  = -DDEBUG
@@ -53,8 +56,8 @@ INCLUDES = -IC:
 COMPONENT = flashprog
 TARGET    = aof.flashprog
 TARGETSA  = rm.flashprog
-OBJS      = header.o module.o flashprog.o
-EXPORTS   = 
+OBJS      = o.header o.module o.flashprog
+EXPORTS   =
 
 #
 # Rule patterns
@@ -84,11 +87,11 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
+        ${IGNORE} ${DESTROY} ${OBJS}
         ${RM} ${TARGET}
+        ${RM} ${TARGETSA}
+        ${RM} linked.${COMPONENT}
+        ${RM} map.${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -128,6 +131,7 @@ o.module:	h.error
 o.flashprog:	c.flashprog
 o.flashprog:	C:h.kernel
 o.flashprog:	C:h.swis
+o.flashprog:	C:h.time
 o.flashprog:	h.module
 o.flashprog:	h.flashprog
 o.flashprog:	h.error
