@@ -1,0 +1,681 @@
+/****************************************************************************/
+//   	Filename:	parser.c++
+//	Author:		Alistair Rodger
+//	Spec:		DO 2501,833/FS
+//
+// © Pace Micro Technology Ltd
+//
+//	Description:
+//	this class contains a set of methods appropriate to parsing a
+//	config file
+//
+// History:
+//
+// Date      Who	Description of change
+// ===========================================
+// 08/10/99  AR		File created
+/****************************************************************************/
+
+#include "menuhier.h"
+#include "ctype.h"
+#include "main.h"
+
+static char* menu_token    = "MENU";
+static char* submenu_token = "SUBMENU";
+static char* nvram_token   = "NVRAM";
+static char* list_token    = "LIST";
+static char* string_token  = "STRING";
+static char* range_token   = "RANGE";
+static char* desc_token    = "DESC";
+static char* mfunc_token   = "MFUNC";
+
+/**********************************************************************************/
+// this file takes a filename and reads it into an allocated array
+// it also sets the menu tree to null etc.
+//
+Parser::Parser(char *file)
+{
+  	error = NULL;
+  	menu_pool = NULL;
+  	line_num = 1;	// updated at each eoln factor.
+  	int type = 0;
+  	
+  	error = _swix(OS_File, _INR(0,1)|_OUT(0)|_OUT(4), 17, file, &type, &eof);
+  	
+ 	if (type != 1) { // file found
+  		error = makeError(EM_NoFILE);
+  	} else {
+  	  	if (error == NULL) {
+  	  		file_ptr = new char[eof];
+  	  	
+  	  		if (file_ptr != NULL) {
+  	  		  
+  	  		  	error = _swix(OS_File, _INR(0,3), 16, file, file_ptr, 0);
+
+  	  		} else {
+  	  		  
+  	  			error = makeError(EM_Alloc);
+  	  			
+  	  		}
+  	  	}
+  	}
+  	current = seek = 0;
+  	eof -= 1; // point to the last element in the list.
+  	
+#ifdef DEBUGLIB
+	debug("","open config file size = %i\n", eof);
+#endif  	
+}
+
+// this frees the allocated memory location
+Parser::~Parser()
+{
+  	delete file_ptr;
+  	file_ptr = NULL;
+}
+
+// this parses the config file ( allocated block ) on a line by line basis
+menuObject*
+Parser::getMenuPool()
+{
+    menuObject* temp_menu = NULL;
+    
+     while ((current < eof)&&(error == NULL)){
+             
+            // this returns a boolean but we dont care
+            getComment();
+            if (current >= eof) break;
+             
+            // line parsing  
+            if (seekToken() == true) {	// find the next token
+                    
+                    // MENU
+                    if (seekTokenCompare(menu_token) == true)
+                    		getMenuDesc();
+		    else
+		    // ELEMENT (8* is checked by menu);  
+                    if (menu_pool != NULL){
+                          
+                            // SUBMENU
+                            if (seekTokenCompare(submenu_token) == true)
+                              		getSubmenu();
+                            else
+                            
+                            // NVRAM
+                            if (seekTokenCompare(nvram_token) == true)
+                              		getNVRAM();
+                            else
+                            
+                            // DESC
+                            if (seekTokenCompare(desc_token) == true)
+                              		getDescFn();
+                            else
+                            
+                            // MFUNC
+                            if (seekTokenCompare(mfunc_token) == true)
+                              		getManagementFn();
+                              		
+                            else
+                            // default error
+                            	error = makeError(EM_ParseError, line_num_to_string());
+                            	
+                    } else {
+                      	// not a known token
+                          	error = makeError(EM_NoMENU);
+                    }
+                        
+            	    // end of line
+            	    if ((error == NULL)&&(getChar(';') == false))
+            			error = makeError(EM_ParseError, line_num_to_string());
+            	    else
+            			line_num++;
+                    
+            } else {
+              
+              	error = makeError(EM_ParseError, line_num_to_string());
+              	
+            }
+            
+     }
+     
+     if (error != NULL) {
+     	   delete menu_pool;
+     	   menu_pool = NULL;
+     }
+          
+     temp_menu = menu_pool;
+     menu_pool = NULL;
+     
+     return temp_menu;
+}
+/**********************************************************************************/
+//
+// Private functions and nothing to do with pigs.
+//
+// all of the get and seek functions consume white space.
+//
+// these are defined by the syntactical factors as defined in the specification
+// with the exception of getChar which does the job of all seperators, "," , eoln
+// and list.
+//
+/**********************************************************************************/
+
+// moves the current and seek to the end of a comment line if one exists
+bool
+Parser::getComment()
+{
+  	bool return_val = false;
+  	
+  	// eat white space
+  	while ((current < eof)&&(isspace(file_ptr[current]))) current++;
+  	
+  	if (file_ptr[current] == '#')
+  		return_val = true;
+  	
+ 	if (return_val == true)
+  		while ((current < eof)&&(isprint(file_ptr[current]))) current++;
+  		
+  	seek = current; // point to either white space or non-comment character
+  		
+ 	return return_val;
+}
+
+// moves the current and seek past the character specified by 'item'
+bool
+Parser::getChar(char item)
+{
+  	bool return_val = false;
+ 	
+ 	while ((current < eof)&&(isspace(file_ptr[current]))) current++;
+  	
+  	if (file_ptr[current] == item){
+  	  	current++;
+  		return_val = true;
+  	}
+  		
+  	seek = current;
+  	
+   	return return_val;
+}
+
+// moves the current to the first character of the string, and the seek one past the final.
+// in all casts this must be the '"'.
+bool
+Parser::seekString()
+{
+  	bool return_val = false;
+ 	
+ 	while ((current < eof)&&(isspace(file_ptr[current]))) current++;
+  	
+  	if (file_ptr[current] == '"'){
+  	
+  		seek = current += 1;	// move to the beginning of the string
+  		
+  	  	while ((seek < eof)&&(isprint(file_ptr[seek]))) {
+  	  	  	if (file_ptr[seek] == '"'){
+  	  	  	  	if( seek != current )// if not an empty string
+  					return_val = true;
+  				break;
+  			}
+  	  	  	seek ++;
+  		}
+        }
+        
+ 	return return_val;
+}
+
+// moves the current to the first character of the token and moves the seek to one past the last
+bool
+Parser::seekToken()
+{
+  	bool return_val = false;
+  	
+ 	while ((current < eof)&&(isspace(file_ptr[current]))) current++;
+ 	
+	if (isalnum(file_ptr[current])) {
+	  	return_val = true;
+	  	
+	  	seek = current;
+	  	
+	  	while ( (seek < eof)&&(isalnum(file_ptr[seek])||(file_ptr[seek] == '_')) ) seek++;
+	}
+ 	return return_val;
+}
+
+// similarly current points to the first digit seek one past the last.
+bool
+Parser::seekNumber()
+{
+ 	bool return_val = false;
+  	
+ 	while ((current < eof)&&(isspace(file_ptr[current]))) current++;
+
+	if (isdigit(file_ptr[current])) {
+	  	return_val = true;
+	  	
+	  	seek = current;
+	  	
+	  	while ((seek < eof)&&(isdigit(file_ptr[seek]))) seek++;
+	}
+ 	return return_val;
+}
+
+// compares comp_str with the space between the current and seek pointers upto seek -1;
+bool 
+Parser::seekTokenCompare(const char* comp_str)
+{
+  	bool return_val = true;
+  	
+  	int i = 0;
+  	
+  	if (seek > current) {
+          	while ( i < (seek-current)) {
+          	   	if (comp_str[i] != file_ptr[current+i]){
+          	   	  	return_val = false;
+          	   		break;
+          	   	}
+          	   	i++;
+          	}
+  	} else {
+  	  	error = makeError( EM_ObjectError );
+  	}
+  	
+  	// if comp_str is longer
+  	if ((return_val != false)&&(comp_str[i] != '\0'))
+  		return_val = false;
+  	
+ 	return return_val;
+}
+
+// extract an integer from between the current and seek offsets
+int	
+Parser::getNewNumberFromSeek()
+{
+  	int value = 0, i = 0;
+  	
+  	if (seek > current) {
+          	while (i < seek-current) {
+          		value = (value*10) + ( file_ptr[current+i] - '0');
+          		i++;
+          	}
+  	} else {
+  	  	error = makeError( EM_ObjectError );
+  	}
+  	
+  	return value;
+}
+
+// extract and allocate a string from between current and seek offsets.
+char*	
+Parser::getNewStringFromSeek()
+{
+  	char *string = NULL;
+  	
+  	if (seek > current) {
+          	string = new char[(seek-current)+1];
+          	int i = 0;
+          	
+          	if (string != NULL) { 
+          		while (i < seek-current) {
+          		  	string[i] = file_ptr[current+i];
+          		  	i++;
+          		}
+          		string[i] = '\0';
+                }
+        } else {
+  	  	error = makeError( EM_ObjectError );
+  	}
+  	
+  	return string;
+}
+
+//----------------------------------------------------------------------- MENU desc -------
+void
+Parser::getMenuDesc()
+{
+  char *TAG = NULL, *desc_string = NULL;
+  
+  	current = seek;
+  
+      	if ((getChar(',') == true)&&(seekToken() == true)) {
+        	
+          	TAG = getNewStringFromSeek();
+	  	current = seek;
+                
+      	} else {
+      	  
+         	error = makeError(EM_ParseError, line_num_to_string());	
+      	}  
+                
+      	if (error == NULL){
+        	if ((getChar(',') == true)&&(seekString() == true)) {
+        		  
+        		desc_string = getNewStringFromSeek();
+			current = seek +=1; // past '"'
+              
+          	} else {
+    	
+               		error = makeError(EM_ParseError, line_num_to_string());
+        	}
+      	}
+        		
+      	if (error == NULL) {
+      	  	menuObject* menu = new menuObject(TAG, desc_string);
+        	  	
+       	  	if (menu == NULL) {
+       	  		error = makeError(EM_Alloc);
+       	  	} else {
+       	  		menu->chain = menu_pool;
+      			menu_pool = menu;
+      		}
+        }
+ }
+ 
+//----------------------------------------------------------------------- SUBMENU -------
+void
+Parser::getSubmenu()
+{
+  	current = seek;
+  	
+  	if ((getChar(',') == true)&&(seekToken() == true)) {
+		
+		menuObject* tmpObjectPtr = menu_pool;
+	
+		// go through the menu pool and ensure that it exists;	
+		while ((tmpObjectPtr != NULL)&&( seekTokenCompare(tmpObjectPtr->tag) == false))
+				tmpObjectPtr = tmpObjectPtr->chain;
+		
+		current = seek; // we have used the token
+			
+		if ((tmpObjectPtr == NULL)||(menu_pool == NULL)){
+	  
+			error = makeError(EM_UnknownMenu);
+		
+		}else {
+			menuElement* tmpElem = new SUBMENU(tmpObjectPtr);
+		  	
+			if ((tmpElem == NULL)||((error = tmpElem->getError())!=NULL)) {
+			  	if (error == NULL) error = makeError(EM_Alloc);
+			} else {
+				error = menu_pool->addElement(tmpElem);
+			}
+		}
+	} else {
+	  
+	  	error = makeError(EM_ParseError, line_num_to_string());
+	}
+}
+
+//-----------------------------------------------------------------------  NVRAM  --------
+void
+Parser::getNVRAM()
+{
+  	current = seek;
+  	
+  	char *desc = NULL, *token = NULL;
+  	
+  	if ((getChar(',') == true)&&(seekString() == true)) {
+  		desc = getNewStringFromSeek();
+		current = seek +=1;
+  	} else {
+  		error = makeError(EM_ParseError, line_num_to_string());
+  	}
+  	
+  	if (error == NULL){
+  	  	if ((getChar(',') == true)&&(seekToken() == true)) {
+  			token = getNewStringFromSeek();
+			current = seek;
+  		} else {
+  			error = makeError(EM_ParseError, line_num_to_string());
+  		}
+  	}
+  	
+  	if ((error == NULL)&&(getChar(',') == true)&&(seekToken() == true)) {
+  	  	
+  	  	// LIST
+  	  	if (seekTokenCompare(list_token) == true)
+  	  		getNVRAMlist(desc, token);
+  	  	else
+  	  	
+  	  	// STRING
+  	  	if (seekTokenCompare(string_token) == true)
+  	  		getNVRAMstring(desc, token);
+  	  	else
+  	  	
+  	  	// RANGE
+  	  	if (seekTokenCompare(range_token) == true) {
+  	  		getNVRAMrange(desc, token);
+  	  	} else {
+  	  		error = makeError(EM_ParseError, line_num_to_string());
+  	  		if (desc != NULL) free(desc);
+  	  		if (token != NULL) free(token);
+  	  	}
+  	  	
+  	} else {
+  	  
+  	  	if (error == NULL)
+  	  		error = makeError(EM_ParseError, line_num_to_string());
+  	  		
+  	  	if (desc != NULL) free(desc);
+  	  	if (token != NULL) free(token);
+  	  	
+  	}
+}
+
+void
+Parser::getNVRAMlist(char* desc, char* token)
+{
+  	int nvram_value = 0;
+  	char *nvram_string = NULL;
+  	
+  	listNVRAM *tmpElement = new listNVRAM(desc, token);
+
+  	current = seek;
+
+ 	if (tmpElement == NULL) {
+  		error = makeError(EM_Alloc);
+  	} else {
+  	        menu_pool->addElement(tmpElement);
+  	        menu_pool->notCentred();
+  	}
+  	    
+  	if (error == NULL) {
+  	  	while ((getChar(',') == true)&&(seekString() == true)){
+  	  	  	nvram_string = getNewStringFromSeek();
+  	  	  	current = seek += 1;
+  	  	  	
+  	  	  	if ((getChar('=') == true)&&(seekNumber() == true)){
+  	  	  	  	nvram_value = getNewNumberFromSeek();
+  	  	  	  	current= seek;
+  	  	  	  	
+  	  	  	  	error = tmpElement->addList(nvram_string, nvram_value);
+  	  	  	} else {
+  	  			error = makeError(EM_ParseError, line_num_to_string());
+  	  		}
+  	  	}
+  	  	  	
+  	  	// NVRAM_list object compare to nvram setting.
+  	}
+}
+
+void
+Parser::getNVRAMstring(char* desc, char* token)
+{
+   	int length = 0; // the length of the NVRAM string
+   	
+  	current = seek;
+   	
+  	if (menu_pool != NULL) {
+  		menuElement* tmpElement = new stringNVRAM(desc, token, length);
+  		
+  		if (tmpElement == NULL) {
+  			error = makeError(EM_Alloc);
+  	        } else {
+  	          	menu_pool->addElement(tmpElement);
+  	        	menu_pool->notCentred();
+  	        }
+  	} else {
+  	  	error = makeError(EM_NoMENU);
+  	}
+}
+
+void
+Parser::getNVRAMrange(char* desc, char* token)
+{
+  	int min = 0, max = 0, granularity = 1;
+  	
+  	current = seek;
+  	
+  	if (error == NULL){
+  		if ((getChar(',') == true)&&(seekNumber() == true)) {
+  			min = getNewNumberFromSeek();
+			current = seek;
+  		} else {
+  			error = makeError(EM_ParseError, line_num_to_string());
+  		}
+  	}
+  	
+  	if (error == NULL){
+  		if (getChar('-') == false)
+  			error = makeError(EM_ParseError, line_num_to_string());
+  	}
+  	
+  	if (error == NULL){
+  		if (seekNumber() == true){
+  			max = getNewNumberFromSeek();
+			current = seek;
+  		} else {
+  			error = makeError(EM_ParseError, line_num_to_string());
+  		}
+  	}
+  	
+  	if ((error == NULL)&&(getChar(',') == true)&&(seekNumber() == true)){
+  		granularity = getNewNumberFromSeek();
+		current = seek;
+  	}
+  	
+  	if (error == NULL) {
+  	  	if (menu_pool != NULL) {
+  			menuElement* tmpElement = new rangeNVRAM( desc, token, min, max, granularity);
+  		
+  			if (tmpElement == NULL) {
+  				error = makeError(EM_Alloc);
+  	        	} else {
+  	        	  	menu_pool->addElement(tmpElement);
+  	        		menu_pool->notCentred();
+  	        	}
+  		} else {
+  		  	error = makeError(EM_NoMENU);
+  		}
+  	}
+}
+
+//-----------------------------------------------------------------------  DESC  --------
+
+void
+Parser::getDescFn()
+{
+  	current = seek;
+  	
+  	char *desc = NULL, *token = NULL;
+  	
+  	if ((getChar(',') == true)&&(seekString() == true)) {
+  		desc = getNewStringFromSeek();
+		current = seek +=1;
+	} else {
+  		error = makeError(EM_ParseError, line_num_to_string());
+  	}
+  	
+  	if (error == NULL){
+  	  	if ((getChar(',') == true)&&(seekToken() == true)) {
+  			token = getNewStringFromSeek();
+			current = seek;
+		} else {
+  			error = makeError(EM_ParseError, line_num_to_string());
+  		}
+  	}
+  	
+ 	if (menu_pool != NULL) {
+  		DESC* tmpElement = new DESC(desc, token);
+  		
+  		if (tmpElement == NULL) {
+  			error = makeError(EM_Alloc);
+  	        } else {
+  	
+  			while (getChar(',') == true){
+  	  
+  	  			if (seekString() == false) {
+  	  	
+  	  				error = makeError(EM_ParseError, line_num_to_string());
+  	  		
+  	        		} else {
+  	        		  
+  	          			error = tmpElement->addArgument(getNewStringFromSeek());
+					current = seek += 1;
+  	        		}		
+  	                }
+  	                
+  	                if (error == NULL) {
+  	          		menu_pool->addElement((menuElement*)tmpElement);
+  	        		menu_pool->notCentred();
+  	          	} else {
+  	          		delete tmpElement;
+  	          	}
+    	        }
+  	} else {
+  	  	error = makeError(EM_NoMENU);
+  	}
+}
+
+//-----------------------------------------------------------------------  MFUNC  --------
+
+void
+Parser::getManagementFn()
+{
+  	current = seek;
+  	
+  	char *desc = NULL, *token = NULL, *message = NULL;
+  	
+  	if ((getChar(',') == true)&&(seekString() == true)) {
+  		desc = getNewStringFromSeek();
+		current = seek +=1;
+  	} else {
+  		error = makeError(EM_ParseError, line_num_to_string());
+  	}
+  	
+  	if (error == NULL){
+  	  	if ((getChar(',') == true)&&(seekToken() == true)) {
+  			token = getNewStringFromSeek();
+			current = seek;
+  		} else {
+  			error = makeError(EM_ParseError, line_num_to_string());
+  		}
+  	}
+  	
+   	if (error == NULL){
+  	  	if (getChar(',') == true) {
+  	  		if (seekString() == true){
+  				message = getNewStringFromSeek();
+				current = seek +=1;
+  			} else {
+  				error = makeError(EM_ParseError, line_num_to_string());
+  			}
+  		}
+  	}
+  	
+ 	if (menu_pool != NULL) {
+  		menuElement* tmpElement = new MFUNC(desc, token, message);
+  		
+  		if (tmpElement == NULL) {
+  		  
+  			error = makeError(EM_Alloc);
+  			
+  	        } else {
+  	
+  	          	menu_pool->addElement(tmpElement);
+  	          	
+    	        }
+  	} else {
+  	  	error = makeError(EM_NoMENU);
+  	}
+}
