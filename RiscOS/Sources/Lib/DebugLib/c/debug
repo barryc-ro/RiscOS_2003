@@ -35,22 +35,17 @@ int serial_lf = TRUE;
 
 int printf_screen_cornering = 1;
 
-int DEBUG_OUTPUT_TYPE = NULL_OUTPUT;		/* Output device - see DebugLib.h */
+int DEBUG_OUTPUT_TYPE = NULL_OUTPUT;    /* Output device - see DebugLib.h */
 
-static int sysvar_provided_type = NULL_OUTPUT;         /* The variable to hold output device specified by
-                                                          system variable */
+FILE *debug_file_pointer=NULL;          /* File pointer */
 
-FILE		*debug_file_pointer=NULL;	/* File pointer */
+int trace_stream = NULL;
 
-int		trace_stream = NULL;
+debug_session *remotedb_info;           /* RemoteDB handler */
 
-debug_session	*remotedb_info;			/* RemoteDB handler */
+char TASK_NAME[40];                     /* Task name for use with Sockets Library */
 
-char	TASK_NAME[20];			/* Task name for use with Sockets Library */
-
-char	FILE_FILENAME[300];		/* Filename for FILE debug output */
-
-static char *sys_var_contents = NULL;        /* Contents of area-level specifying sys var */
+char FILE_FILENAME[300];                /* Filename for FILE debug output */
 
 SessionsAvailable sessions_available;
 
@@ -60,15 +55,21 @@ BOOL pdebug_error = FALSE;
 
 /* -------------------------------------- LOCAL VARIABLES --------------------------------------- */
 
-static char    debug_buffer[Debug_Buffer_Size];	/* Buffer for debug data */
+static int sysvar_provided_type = NULL_OUTPUT;   /* The variable to hold output device specified by
+                                                    system variable */
 
-static int	stamp_debug = FALSE;		/* Add timestamp to lines if set to TRUE */
+static char *sys_var_contents = NULL;            /* Contents of area-level specifying sys var */
 
-/* ------------------------------------ FUNCTION PROTOTYPES ------------------------------------- */
+static char debug_buffer[Debug_Buffer_Size];     /* Buffer for debug data */
+
+static int stamp_debug = FALSE;                  /* Add timestamp to lines if set to TRUE */
+
 static int global_indent = 0;
 
-void debug_trace_enter(const char *);
-void debug_trace_exit(const char *);
+/* ------------------------------------ FUNCTION PROTOTYPES ------------------------------------- */
+
+void debug_trace_enter (const char *);
+void debug_trace_exit (const char *);
 
 /* ----------------------------------------- FUNCTIONS ------------------------------------------ */
 
@@ -102,10 +103,14 @@ static int debug_check_level (const char *area_level_in, const char *variable)
   if (strlen (variable) == 0)
     return 0;
 
+  /* If the area_level is NULL, it's a match */
+  if (area_level_in == NULL)
+    return 1;
+
   area_level_len = strlen (area_level_in);
 
-  /* If the area_level is empty, or NULL, it's a match */
-  if (area_level_in == NULL || area_level_len == 0)
+  /* If the area_level is empty, it's a match */
+  if (area_level_len == 0)
     return 1;
 
   area_level = malloc (strlen (area_level) + 1);
@@ -216,19 +221,20 @@ static int debug_check_level (const char *area_level_in, const char *variable)
 /* Function initialises the library                                     */
 /*                                                                      */
 /* Parameters: name - name of app that is calling the library.          */
-/*             filename - file for debug output to FILE                 */
+/*             fame - file for debug output to FILE                     */
+/*             sysvar - System Variable to override default area/level  */
+/*                      specifiying system variable. Uses default if    */
+/*                      NULL or "" is passed.                           */
 /*                                                                      */
 /* Returns:    void.                                                    */
 /*                                                                      */
 /************************************************************************/
-void debug_initialise (char *name, char *fname, char* sysvar)
+void debug_initialise (char *name, char *fname, char *sysvar)
 {
   char *sys_variable;
   int tmp_type;
   _kernel_oserror *er;
   char tmp_string[20];
-
-  IGNORE (sysvar);
 
   /* No open debug devices */
   sessions_available.debugit = FALSE;
@@ -238,13 +244,23 @@ void debug_initialise (char *name, char *fname, char* sysvar)
   sessions_available.pdebug = FALSE;
   sessions_available.serial = FALSE;
 
-  /* Setup TASK_NAME for use with Sockets debugging. */
-  strncpy (TASK_NAME, name, sizeof (TASK_NAME));
-  TASK_NAME[sizeof (TASK_NAME) - 1] = '\0';
+  /* Setup TASK_NAME  */
+  if (name != NULL)
+  {
+    strncpy (TASK_NAME, name, sizeof (TASK_NAME));
+    TASK_NAME[sizeof (TASK_NAME) - 1] = '\0';
+  }
+  else
+    strcpy (TASK_NAME, "DefaultName");
 
   /* Setup filename */
-  strncpy (FILE_FILENAME, fname, sizeof (FILE_FILENAME));
-  FILE_FILENAME[sizeof (FILE_FILENAME) - 1] = '\0';
+  if (fname != NULL)
+  {
+    strncpy (FILE_FILENAME, fname, sizeof (FILE_FILENAME));
+    FILE_FILENAME[sizeof (FILE_FILENAME) - 1] = '\0';
+  }
+  else
+    FILE_FILENAME[0] = '\0';
 
   if (sys_var_contents != NULL)
     free (sys_var_contents);
@@ -317,6 +333,11 @@ void debug_initialise (char *name, char *fname, char* sysvar)
 /*                             Unset,  Disable taskname prefixing.      */
 /*                     - Bit 1 Set,    Add \r to serial output (def).   */
 /*                             Unset,  No \r.                           */
+/*                     - Bit 2 Set,    Enable printf "screen cornering" */
+/*                                     i.e. each successive "printf"    */
+/*                                     output is sent to the top-left   */
+/*                                     corner of the screen (default)   */
+/*                             Unset,  Disable "screen cornering"       */
 /*             sport   - Serial port to use (1|2) - def = 1.            */
 /*             sspeed  - Serial port speed (300 - 115200) - def = 9600. */
 /*                                                                      */
@@ -398,10 +419,10 @@ void debug_close_device (void)
   time_t timer;
 
   time (&timer);
-  _dprintf("", "\n***** Debug Session Terminated ***********************************\n");
-  _dprintf("", "Task: %s\n", TASK_NAME);
-  _dprintf("", "Time: %s", ctime(&timer));
-  _dprintf("", "******************************************************************\n");
+  _dprintf ("", "\n***** Debug Session Terminated ***********************************\n");
+  _dprintf ("", "Task: %s\n", TASK_NAME);
+  _dprintf ("", "Time: %s", ctime(&timer));
+  _dprintf ("", "******************************************************************\n");
 
   switch(DEBUG_OUTPUT_TYPE)
   {
@@ -524,20 +545,20 @@ void debug_output_device (int device)
         break;
     }
     time (&timer);
-    _dprintf("", "\n***** Debug Session Started **************************************\n");
-    _dprintf("", "System: DebugLib %s  (Neil Bingham & John Beranek)\n",
+    _dprintf ("", "\n***** Debug Session Started **************************************\n");
+    _dprintf ("", "System: DebugLib %s  (Neil Bingham & John Beranek)\n",
                       Module_MajorVersion);
-    _dprintf("", "Task:   %s\n", TASK_NAME);
-    _dprintf("", "Time:   %s", ctime(&timer));
+    _dprintf ("", "Task:   %s\n", TASK_NAME);
+    _dprintf ("", "Time:   %s", ctime(&timer));
     {
       char *levels;
       if (sys_var_contents == NULL)
         levels = "";
       else
         levels = sys_var_contents;
-      _dprintf("", "Levels: %s\n", levels);
+      _dprintf ("", "Levels: %s\n", levels);
     }
-    _dprintf("", "******************************************************************\n");
+    _dprintf ("", "******************************************************************\n");
   }
 }
 

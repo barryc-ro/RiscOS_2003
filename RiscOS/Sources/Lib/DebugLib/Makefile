@@ -1,11 +1,11 @@
-# Makefile for debuglib
+# Makefile for DebugLib
 #
 
 # ------------------------------------------------------------------------------
 # Paths
 #
 
-EXP_HDR		= <export$dir>
+EXP_HDR		= <Export$Dir>
 LIBDIR		= <Lib$Dir>
 EXPORT_DIR	= <Lib$Dir>.DebugLib
 
@@ -59,9 +59,9 @@ DFLAGS		=
 # Program specific options:
 #
 
-COMPONENT	= debuglib
-TARGET		= debuglib
-TARGETZ		= debuglibzm
+COMPONENT	= DebugLib
+TARGET		= DebugLib
+TARGETZ		= DebugLibzm
 EXPORTS		= ${EXP_HDR}.${COMPONENT}
 
 OBJS = \
@@ -122,8 +122,9 @@ clean:
 	${RM} ${TARGETZ}
 	@echo ${COMPONENT}: cleaned
 
-export_hdrs: h.debuglib dirs
-	${CP}	h.debuglib	${EXPORT_DIR}.h.debuglib ${CPFLAGS}
+export_hdrs: h.DebugLib dirs
+	${CP}	h.DebugLib	${EXPORT_DIR}.h.DebugLib ${CPFLAGS}
+	${CP}   VersionNum      ${EXPORT_DIR}.VersionNum ${CPFLAGS}
 	@echo * ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
