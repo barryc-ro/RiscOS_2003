@@ -393,8 +393,10 @@ clean_all:
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${MKDIR} ${RESDIR}.CLib
-        IfThere clib.Resources.${LOCALE}.<System>.Messages Then ${CP} clib.Resources.${LOCALE}.<System>.Messages ${RESDIR}.CLib.Messages ${CPFLAGS} Else ${CP} clib.Resources.${LOCALE}.Messages ${RESDIR}.CLib.Messages ${CPFLAGS}
-        IfThere rlib.Resources.${LOCALE}.<System>.Messages THEN ${CP} rlib.Resources.${LOCALE}.<System>.Messages ${RESDIR}.RISC_OSLib.Messages ${CPFLAGS} Else ${CP} rlib.Resources.${LOCALE}.Messages ${RESDIR}.RISC_OSLib.Messages ${CPFLAGS}
+        IfThere clib.Resources.${LOCALE}.<System>.Messages Then Set MessagesFile clib.Resources.${LOCALE}.<System>.Messages else Set MessagesFile clib.Resources.${LOCALE}.Messages
+        ${CP} <MessagesFile> ${RESDIR}.CLib.Messages ${CPFLAGS}
+        IfThere rlib.Resources.${LOCALE}.<System>.Messages Then Set MessagesFile rlib.Resources.${LOCALE}.<System>.Messages else Set MessagesFile rlib.Resources.${LOCALE}.Messages
+        ${CP} <MessagesFile> ${RESDIR}.RISC_OSLib.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 dirs:
