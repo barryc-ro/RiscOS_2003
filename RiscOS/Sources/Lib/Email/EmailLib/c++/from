@@ -4,7 +4,7 @@
 
 	FILE:		from.c++
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.10 for RISC OS
+	VERSION:	0.11 for RISC OS
 
 	OVERVIEW
 	========
@@ -41,6 +41,16 @@
 					SetRealName and SetAddress will now create a mailbox
 					object if the mailbox list is empty
 					create_mailbox() private method added
+	12/10/98	0.11	RDW	AddMBox() method added
+					GetRealBody() method added
+					GetBodyLen() method added
+					WriteOutMBoxes() method added, WriteOut() memory
+					method changed to use it
+					WriteOut() memory version, char* mem changed to
+					char*& mem so that on exit mem is pointing to
+					the next location to write a char to
+					parse() deletes previous unfoldedbody memory
+					before allocating new memory
 */
 
 
@@ -120,6 +130,7 @@ from::from(bool f, char *membase, uint32 offset, uint32 length, bool owner)
   if ((owner) && (length==0))
   {
     SetName("From");
+    parsed = true;
   }
 }
 
@@ -242,6 +253,8 @@ ELib_rcode from::parse(ELIB_CONTEXT &context, clock_t t_slice)
     uint32 size = 0;
     retcode = GetBodyLen(size);
     size+=2;
+    if (unfoldedbody)
+      delete[] unfoldedbody;
     unfoldedbody = new char[size];
     if (unfoldedbody)
     {
@@ -324,6 +337,8 @@ ELib_rcode from::parse(ELIB_CONTEXT &context, clock_t t_slice)
           }
           if (retcode == ELIB_COMPLETED)					// If outer return code is still success
             retcode = rc;							// Copy out this return code for this mailbox parse
+/*          if (rc > ELIB_RUNNING)
+            RefreshLen();*/
         } // endwhile
       }
     }
@@ -332,6 +347,39 @@ ELib_rcode from::parse(ELIB_CONTEXT &context, clock_t t_slice)
   }
 
   return retcode;
+}
+
+
+
+uint32 from::RefreshLen(void)
+{
+  uint32 size = 0;
+  uint32 len = 0;
+
+  TRAVERSE(list)
+  {
+    mailbox* m = (mailbox*)list.Current();
+    if (m)
+    {
+      ELIB_CONTEXT context;
+      char c;
+      char* tmp = &c;
+
+      size = 0;
+
+      new_context(&context);
+      m->WriteOut(context, 0, tmp, size);
+      destroy_context(&context);
+      len += size + 2;				// +2 for ", " separator or CRLF if this is the last mailbox
+    }
+  }
+  if (len == 0)
+    len = 2;	// if no mailboxes, then len must be at least 2 for CRLF
+  size = 0;
+  GetNameLen(size);
+  len += size + 2;	// +2 for ": "
+
+  return len;
 }
 
 
@@ -357,16 +405,26 @@ ELib_rcode from::SetRealName(char *n)
 {
   ELib_rcode rc = ELIB_COMPLETED;
   int32 curpos = list.Rank();							// Remember current position
+  bool created = false;
 
   list.Start();									// Goto start
   mailbox *m = (mailbox*)list.Current();					// Get 1st
 
   if (m == 0)
+  {
     m = create_mailbox();
+    created = true;
+  }
 
   if ((rc > ELIB_RUNNING) && (m))
   {
-    m->SetRealName(n);
+    rc = m->SetRealName(n);
+    if ((rc > ELIB_RUNNING) && (created))
+    {
+      rc = AddMBox(*m);
+    }
+    if (rc < ELIB_RUNNING)
+      delete m;
   }
   else
     rc = ELIB_ENODATAPRESENT;
@@ -379,18 +437,7 @@ ELib_rcode from::SetRealName(char *n)
 
 mailbox* from::create_mailbox(void)
 {
-  mailbox* m = new mailbox(false, 0, 0, 0, true);
-
-  if (m)
-  {
-    if (list.Insert(m) == 0)
-    {
-      delete m;
-      m = 0;
-    }
-  }
-
-  return m;
+  return new mailbox(false, 0, 0, 0, true);
 }
 
 
@@ -401,16 +448,26 @@ ELib_rcode from::SetAddress(char *n)
 {
   ELib_rcode rc = ELIB_COMPLETED;
   int32 curpos = list.Rank();							// Remember current position
+  bool created = false;
 
   list.Start();									// Goto start
   mailbox *m = (mailbox*)list.Current();					// Get 1st
 
   if (m == 0)
+  {
     m = create_mailbox();
+    created = true;
+  }
 
   if ((rc > ELIB_RUNNING) && (m))
   {
-    m->SetAddress(n);
+    rc = m->SetAddress(n);
+    if ((rc > ELIB_RUNNING) && (created))
+    {
+      rc = AddMBox(*m);
+    }
+    if (rc < ELIB_RUNNING)
+      delete m;
   }
   else
     rc = ELIB_ENODATAPRESENT;
@@ -509,41 +566,70 @@ ELib_rcode from::WriteOut(ELIB_CONTEXT &context, clock_t t_slice, FILE *f, ELIB_
 
 
 // function to write out the object to memory
-ELib_rcode from::WriteOut(ELIB_CONTEXT &context, clock_t t_slice, char *mem, uint32 &l)
+ELib_rcode from::WriteOut(ELIB_CONTEXT &context, clock_t t_slice, char*& mem, uint32 &l)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+  uint32 actual_len = RefreshLen();
+
+  if (mem)
+  {
+    if (l >= actual_len + 1)
+    {
+      rc = WriteOutFieldName(context, t_slice, mem, l);
+      if (rc > ELIB_RUNNING)
+      {
+        rc = WriteOutMBoxes(context, t_slice, mem, l);
+      }
+      if (rc > ELIB_RUNNING)
+        rc = WriteOutEnd(context, t_slice, mem, l);
+    }
+    else
+    {
+      l = actual_len + 1;
+      rc = ELIB_ENOSPACE;
+    }
+  }
+  else
+    rc = ELIB_ENULLADDR;
+
+  return rc;
+}
+
+
+
+
+ELib_rcode from::WriteOutMBoxes(ELIB_CONTEXT &context, clock_t t_slice, char*& mem, uint32 &l)
 {
   ELib_rcode rc = ELIB_COMPLETED;
 
   if (mem)
   {
-    if (l >= len + 1)
+    uint32 actual_len = RefreshLen();
+    if (l >= (actual_len + 1) - 8)		// 8 for "From: " and "CRLF"
     {
-      rc = WriteOutFieldName(context, t_slice, mem, l);
-      if (rc > ELIB_RUNNING)
+      mailbox *m = 0;
+      list.Start();
+      if (!list.Nul())
       {
-        mailbox *m = 0;
-        list.Start();
-        if (!list.Nul())
-        {
-          m = (mailbox*)list.Current();
-          if (m)
-            rc = m->WriteOut(context, t_slice, mem, l);
-          list.Next();
-        }
-        while ((!list.Nul()) && (rc >= ELIB_RUNNING))
-        {
-          memcpy(mem, ", ", 2);
-          m = (mailbox*)list.Current();
-          if (m)
-            rc = m->WriteOut(context, t_slice, mem, l);
-          list.Next();
-        }
-        if (rc > ELIB_RUNNING)
-          rc = WriteOutEnd(context, t_slice, mem, l);
+        m = (mailbox*)list.Current();
+        if (m)
+          rc = m->WriteOut(context, t_slice, mem, l);
+        list.Next();
+      }
+      while ((!list.Nul()) && (rc >= ELIB_RUNNING))
+      {
+        memcpy(mem, ", ", 2);
+        mem += 2;
+        l -= 2;
+        m = (mailbox*)list.Current();
+        if (m)
+          rc = m->WriteOut(context, t_slice, mem, l);
+        list.Next();
       }
     }
     else
     {
-      l = len + 1;
+      l = actual_len + 1 - 8;
       rc = ELIB_ENOSPACE;
     }
   }
@@ -568,4 +654,83 @@ mailbox* from::GetMailbox(uint32 pos)
   m = (mailbox*)list.Current();
 
   return m;
+}
+
+
+ELib_rcode from::AddMBox(mailbox& m)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+
+  list.End();
+  if (list.Insert(&m) == 0)
+    rc = ELIB_EMALLOCFAILED;
+  else
+  {
+    ELIB_CONTEXT context;
+    char c;
+    char* mem = &c;
+    uint32 tmp_len = 0;
+
+    new_context(&context);
+    m.WriteOut(context, 0, mem, tmp_len);
+    destroy_context(&context);
+//    len += tmp_len;
+  }
+
+  return rc;
+}
+
+
+ELib_rcode from::GetRealBody(char *n, uint32 &length)
+{
+  ELib_rcode rc;
+  ELIB_CONTEXT context;
+
+  if (parsed)
+  {
+    char *org_n = n;
+    new_context(&context);
+    rc = WriteOutMBoxes(context, 0, n, length);
+    if (rc > ELIB_RUNNING)					// if successful, then length on return from WriteOut will be
+    {
+      if (length > 0)
+      {
+        length = n - org_n + 1;					// passed in value - no. of bytes written.  We, for a GetMethod what
+        *n = '\0';						// to return the length of the data.
+      }
+      else
+      {
+        rc = ELIB_ENOSPACE;
+        length = (n - org_n) + 1;
+      }
+    								// If WriteOut unsuccessful, then length on exit is set to the
+    								// required space
+    }
+    destroy_context(&context);
+  }
+  else
+    rc = super::GetRealBody(n, length);
+
+  return rc;
+}
+
+
+ELib_rcode from::GetBodyLen(uint32 &length)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+  length = 0;
+  mailbox* m = 0;
+
+  if (parsed == false)
+  {
+    super::GetBodyLen(length);
+  }
+  else
+  {
+    uint32 size = 0;
+    GetNameLen(size);
+    length = RefreshLen() - (size + 2 + 2) + 1;			//  ": " = 2, CRLF = 2 + 1 for null
+  }
+
+  return rc;
 }

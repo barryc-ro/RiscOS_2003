@@ -4,7 +4,7 @@
 
 	FILE:		rfc822msg.c++
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.09 for RISC OS
+	VERSION:	0.11 for RISC OS
 
 	OVERVIEW
 	========
@@ -33,6 +33,18 @@
 					GetRecipients() method added
 					AppendRecipients() method added for GetRecipients()
 					ConvertMailboxList() method added for GetRecipients()
+	12/10/98	0.10	RDW	CreateReply() method added
+					MakeReplyBody() method added
+					MakeReplyToHdr() method added
+					MakeReplySubjectHdr() method added
+					CopyMailboxesToHdr() method added
+					WriteOut() memory version, char* mem changed to
+					char*& mem so that on exit mem is pointing to
+					the next location to write a char to
+					Changed destructor to use new bool flag
+					"owns_mime_obj" to indicate if it is responsible for
+					destroying the mime_obj object
+					Fixed memory leak of "new_body" in MakeReplySubjectHdr()
 */
 
 
@@ -47,6 +59,8 @@ extern "C"
   #include <string.h>
   #include <ctype.h>
   #include "DebugLib/DebugLib.h"
+  #include "ELib_priv.h"
+  #include "ELib_OS.h"
 }
 
 
@@ -58,8 +72,11 @@ extern "C"
 #include "rfc822msg.h"
 #include "entity.h"
 #include "to.h"
+#include "replyto.h"
+#include "cc.h"
 #include "from.h"
 #include "date.h"
+#include "subject.h"
 #include "mimevers.h"
 #include "MIMEentity.h"
 #include "MIMEimage.h"
@@ -76,6 +93,14 @@ extern "C"
 /* New enumerated types                                                       */
 /*                                                                            */
 /* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Constants                                                                  */
+/*                                                                            */
+/* ************************************************************************** */
+const char REPLY_SUBJECT_PREFIX[] = "Re: ";
 
 
 /* ************************************************************************** */
@@ -108,7 +133,8 @@ rfc822msg::rfc822msg(bool f, char *membase, uint32 offset, uint32 length, bool o
        to_index(-1),
        from_index(-1),
        date_index(-1),
-       mime_obj(0)
+       mime_obj(0),
+       owns_mime_obj(true)
 {
   if ((owner) && (length == 0))
   {
@@ -199,13 +225,14 @@ void rfc822msg::copyrfc822msgobject(const rfc822msg &object)
   from_index = object.from_index;
   date_index = object.date_index;
   mime_obj = object.mime_obj;
+  owns_mime_obj = false;
 }
 
 
 // Implementation of destructor for rfc822msg
 rfc822msg::~rfc822msg()
 {
-  if ((ownership) && (mime_obj))
+  if ((owns_mime_obj) && (mime_obj))
     delete mime_obj;
 }
 
@@ -457,12 +484,12 @@ ELib_rcode rfc822msg::MergeMIMEentity(MIMEentity* ent)
 
   if (ent)
   {
-    if (mime_obj)
+    if ((mime_obj) && (owns_mime_obj))
     {
       delete mime_obj;
     }
     mime_obj = ent;
-    ownership = true;
+    owns_mime_obj = true;
 
     headers* mime_obj_hdrs = mime_obj->GetHdrs();
     body*    mime_obj_body = mime_obj->GetBody();
@@ -512,7 +539,7 @@ ELib_rcode rfc822msg::WriteOut(ELIB_CONTEXT& context, clock_t t_slice, FILE* fil
 }
 
 // function to write out the object to memory
-ELib_rcode rfc822msg::WriteOut(ELIB_CONTEXT& context, clock_t t_slice, char* mem, uint32& l)
+ELib_rcode rfc822msg::WriteOut(ELIB_CONTEXT& context, clock_t t_slice, char*& mem, uint32& l)
 {
   if (mime_obj)
     return mime_obj->WriteOut(context, t_slice, mem, l);
@@ -661,3 +688,275 @@ ELib_rcode rfc822msg::ConvertMailboxList(char*& comma_list, ELib_list& mbox_list
 
   return rc;
 }
+
+
+ELib_rcode rfc822msg::CreateReply(rfc822msg*& reply_message, const char* const body_filename, bool reply_to_all)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+
+  if (Parsed() == false)
+  {
+    rc = ELIB_EDATAMUSTBEPARSED;
+  }
+  else
+  {
+    reply_message = new rfc822msg(false, 0, 0, 0, true);
+    if (reply_message == 0)
+      rc = ELIB_EMALLOCFAILED;
+    else
+    {
+      to* new_to_hdr = 0;
+
+      rc = MakeReplyToHdr(new_to_hdr, reply_to_all);
+      if (rc > ELIB_RUNNING)
+      {
+        rc = reply_message->SetTo(*new_to_hdr);
+        delete new_to_hdr;
+      }
+
+      if (rc > ELIB_RUNNING)
+      {
+        rc = MakeReplySubjectHdr(*reply_message);
+      }
+
+      if (rc > ELIB_RUNNING)
+      {
+        rc = MakeReplyBody(*reply_message, body_filename);
+      }
+    }
+    if (rc < ELIB_RUNNING)
+      delete reply_message;
+  }
+
+  return rc;
+}
+
+
+ELib_rcode rfc822msg::MakeReplyBody(rfc822msg& reply_message, const char* const body_filename)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+  body *new_body = 0;
+
+  MIMEtext* text = new MIMEtext(false, 0, 0, 0, ELIB_CT_TEXT_PLAIN, true);
+
+  if (text == 0)
+    rc = ELIB_EMALLOCFAILED;
+  else
+  {
+    body* old_body = Get1stTextBody();
+    if (old_body)
+    {
+      // quote body into new body
+      new_body = new body(*old_body);
+      if (new_body)
+      {
+        ELIB_CONTEXT context;
+        char* tmp_file = "<Wimp$ScrapDir>.EMailLib00";
+
+        new_context(&context);
+        rc = new_body->RemoveEncoding(context, 0, tmp_file, 3072);
+        destroy_context(&context);
+
+        if (rc == ELIB_EALREADYDECODED)
+        {
+          rc = ELIB_COMPLETED;
+        }
+        if (rc > ELIB_RUNNING)
+        {
+          new_context(&context);
+          rc = new_body->ApplyEncoding(context, 0, ELIB_TE_TEXT_QUOTING, (char*)body_filename, 3072);
+          destroy_context(&context);
+        }
+        ELIB_OS_delete_file(tmp_file);
+      }
+      else
+        rc = ELIB_EMALLOCFAILED;
+    }
+  }
+
+  if (rc > ELIB_RUNNING)
+  {
+    if (new_body)
+    {
+      text->ReplaceBody(new_body);
+    }
+  }
+
+  if (rc > ELIB_RUNNING)
+    rc = reply_message.MergeMIMEentity(text);
+
+  return rc;
+}
+
+
+body* rfc822msg::Get1stTextBody(void)
+{
+  body* b = 0;
+  MIMEentity* current_entity = GetMIMEentity();
+
+  // check for MIMEobject
+  if (current_entity == 0)
+    b = the_body;
+  else
+  {
+    ELib_rcode rc = ELIB_COMPLETED;
+    ELIB_CT ct;
+
+    rc = current_entity->GetMajorType(ct);
+    if (rc > ELIB_RUNNING)
+    {
+      if (ct == ELIB_CT_MULTIPART)
+      {
+        current_entity = ((MIMEmultip*)current_entity)->BFS(ELIB_CT_TEXT);
+        ct = ELIB_CT_TEXT;
+      }
+      if (current_entity)
+      {
+        b = current_entity->GetBody();
+      }
+    }
+  }
+
+  return b;
+}
+
+
+ELib_rcode rfc822msg::MakeReplySubjectHdr(rfc822msg& reply_message)
+{
+  ELib_rcode rc              = ELIB_COMPLETED;
+  subject*   new_subject_hdr = 0;
+  subject*   old_subject_hdr = (subject*)the_headers->FindHdr(ELIB_HDR_SUBJECT);
+
+  if (old_subject_hdr)
+    new_subject_hdr = new subject(*old_subject_hdr);
+  else
+    new_subject_hdr = new subject(false, 0, 0, 0, true);
+
+  if (new_subject_hdr == 0)
+    rc = ELIB_EMALLOCFAILED;
+  else
+  {
+    uint32 size = 0;
+    char* new_body = 0;
+
+    rc = new_subject_hdr->GetBodyLen(size);
+    if (rc > ELIB_RUNNING)
+    {
+      size++;
+      size += strlen(REPLY_SUBJECT_PREFIX);
+      new_body = new char[size+1];
+      if (new_body == 0)
+        rc = ELIB_EMALLOCFAILED;
+      else
+      {
+        strcpy(new_body, REPLY_SUBJECT_PREFIX);
+        char* pos = new_body;
+        pos += strlen(REPLY_SUBJECT_PREFIX);
+        size -= strlen(REPLY_SUBJECT_PREFIX);
+
+        rc = new_subject_hdr->GetUnfoldedNoCommentsBody(pos, size);
+        if (rc > ELIB_RUNNING)
+        {
+          if (incase_n_comp(pos, (char*)REPLY_SUBJECT_PREFIX, strlen(REPLY_SUBJECT_PREFIX)) == 0)	// if subject already has "Re:"
+          {
+            rc = new_subject_hdr->SetBody(pos);							// set body to orginal message subject contents
+          }
+          else
+          {
+            rc = new_subject_hdr->SetBody(new_body);						// else, set to original with "Re:" prepended
+          }
+          if (rc > ELIB_RUNNING)
+          {
+            headers* new_headers = reply_message.GetHdrs();
+            if (new_headers)
+            {
+              rc = new_headers->AddHdr(*new_subject_hdr);
+            }
+          }
+        }
+        delete new_body;
+      }
+    }
+    if (rc < ELIB_RUNNING)
+      delete new_subject_hdr;
+  }
+
+  return rc;
+}
+
+
+ELib_rcode rfc822msg::MakeReplyToHdr(to*& new_to_hdr, bool reply_to_all)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+  new_to_hdr = 0;
+
+  replyto* replyto_hdr = (replyto*)the_headers->FindHdr(ELIB_HDR_REPLY_TO);	// Look for presence of a Reply-To header
+  if (replyto_hdr)									// If found, make to header from that
+  {
+    new_to_hdr = new to(*replyto_hdr);
+    if (new_to_hdr == 0)
+      rc = ELIB_EMALLOCFAILED;
+  }
+
+  if (rc > ELIB_RUNNING)
+  {
+    if (new_to_hdr == 0)							// If no to header, then there was no reply-to, so
+    {
+      from* from_hdr = (from*)the_headers->FindHdr(ELIB_HDR_FROM);		// look for from header
+      if (from_hdr)
+        new_to_hdr = new to(*from_hdr);						// and create to header from that
+      else
+        new_to_hdr = new to(false, 0, 0, 0, true);				// if not found from header, then make empty to header
+										// need this as message/rfc822 objects are not required to
+      										// to have destination or source headers as per RFC822
+      if (new_to_hdr == 0)
+        rc = ELIB_EMALLOCFAILED;
+    }
+  }
+
+  if ((rc > ELIB_RUNNING) && (reply_to_all == true))
+  {
+    cc* cc_hdr = (cc*)the_headers->FindHdr(ELIB_HDR_CC);
+    to* to_hdr = (to*)the_headers->FindHdr(ELIB_HDR_TO);
+
+    if (cc_hdr)
+      rc = CopyMailboxesToHdr(*new_to_hdr, *cc_hdr);
+    if ((rc > ELIB_RUNNING) && (to_hdr))
+      rc = CopyMailboxesToHdr(*new_to_hdr, *to_hdr);
+  }
+
+  return rc;
+}
+
+// Make copies of mailbox objects in source_hdr and append them to the dest_hdr
+ELib_rcode rfc822msg::CopyMailboxesToHdr(from& dest_hdr, from& source_hdr)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+
+  uint32 num_of_mboxes = source_hdr.GetNumMailboxes();
+
+  if (num_of_mboxes > 0)
+  {
+    for (uint32 i = 0;
+         ((i<num_of_mboxes) && (rc > ELIB_RUNNING));
+         i++)
+    {
+      mailbox* m = source_hdr.GetMailbox(i);
+      if (m)
+      {
+        mailbox* m2 = new mailbox(*m);
+        if (m2)
+        {
+          rc = dest_hdr.AddMBox(*m2);
+          if (rc < ELIB_RUNNING)
+            delete m2;
+        }
+        else
+          rc = ELIB_EMALLOCFAILED;
+      }
+    }
+  }
+
+  return rc;
+}
+

@@ -34,8 +34,8 @@ EXP_HDR = <export$dir>
 #
 MKDIR   = cdir
 AS      = objasm -tb
-CC      = cc
-C++     = c++
+CC      = $(MemCheckCC) cc
+C++     = $(MemCheckCC) c++
 CMHG    = cmhg
 CP      = copy
 LD      = link
