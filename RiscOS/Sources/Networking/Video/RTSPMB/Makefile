@@ -14,6 +14,7 @@
 # 05-Apr-2000	ADH	Corrected path and filenames in ROM resources
 #			export rule
 # 19-Mar-2002	JRB	Added Auth.c, extra compile options
+# 21-May-2002   SAR     Fixed install rule
 
 # -----------------------------------------------------------------------------
 # Component specific options
@@ -34,7 +35,7 @@ RESDIR		= <resource$dir>.Resources2.VideoCtrl
 # Generic options
 #
 
-MKDIR		= cdir
+MKDIR		= do mkdir -p
 CC		= cc
 CMHG		= cmhg
 CP		= copy
@@ -217,9 +218,8 @@ all: ${RAM_MODULE} ${DIRS}
 	@echo ${COMPONENT}: Module built (RAM)
 
 install: ${RAM_MODULE}
-	${MKDIR} ${INSTDIR}.310.Modules.Networking
-	${MKDIR} ${INSTDIR}.310.Modules.Networking.RTSPMB
-	${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.RTSPMB.${COMPONENT}
+	${MKDIR} ${INSTDIR}
+	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Module installed (Disc)
 
