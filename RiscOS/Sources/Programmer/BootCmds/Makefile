@@ -100,9 +100,7 @@ ${TARGET}: ${ROM_OBJS} ${OSLIB} ${RSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LINK} -o linked.BootCmds -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} \
-              -map > map.BootCmds
-        truncate map.BootCmds linked.BootCmds
+        ${LINK} -o linked.BootCmds -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.BootCmds ${LINKDIR}.BootCmds ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
