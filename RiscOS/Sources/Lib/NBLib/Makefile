@@ -36,34 +36,34 @@ DEBUG_TARGET	= $(COMPONENT)d
 
 all:	
 	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
-	@echo $(COMPONENT): build complete
+	@*echo $(COMPONENT): build complete
 
 debug:
 	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
-	@echo $(COMPONENT): debug build complete
+	@*echo $(COMPONENT): debug build complete
 
 preprocess:
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
-	@echo $(COMPONENT): preprocessing complete
+	@*echo $(COMPONENT): preprocessing complete
 
 export: export_$(PHASE)
 
 export_hdrs:
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
-	@echo $(COMPONENT): export complete (hdrs)
+	@*echo $(COMPONENT): export complete (hdrs)
 
 export_libs:
 	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
 	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=z
-	@echo $(COMPONENT): export complete (libs)
+	@*echo $(COMPONENT): export complete (libs)
 	
 export_libsMC:
 	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
-	@echo $(COMPONENT): export complete (MemCheck libs)
+	@*echo $(COMPONENT): export complete (MemCheck libs)
 	
 export_libsHP:
 	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
-	@echo $(COMPONENT): export complete (HierProf libs)
+	@*echo $(COMPONENT): export complete (HierProf libs)
 	
 clean:
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
@@ -77,4 +77,4 @@ clean:
 	@$(RM) $(HIERPROF_TARGET)
 	@$(RM) $(MODULE_TARGET)
 	@$(RM) $(DEBUG_TARGET)
-	@echo $(COMPONENT): cleaned
+	@*echo $(COMPONENT): cleaned
