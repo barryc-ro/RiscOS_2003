@@ -21,8 +21,12 @@ WIPE    = -wipe
 CD	= dir
 CHMOD	= access
 
+ifeq (${UserIf},MPT)
+BUILDFLAGS = -DBUILD_MPT
+endif
+
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -Wpc -depend !Depend ${THROWBACK} -ff ${INCLUDES} -DUSE_CHECKURL ${OPTS}
+CFLAGS     = -c -Wpc -depend !Depend ${THROWBACK} -ff ${INCLUDES} ${BUILDFLAGS} -DUSE_CHECKURL ${OPTS}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
