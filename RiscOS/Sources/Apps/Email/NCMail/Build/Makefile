@@ -41,7 +41,7 @@ APPENGINE       = Engine
 # Export Paths for Messages module
 #
 
-RESDIR          = $(RESDIR).$(COMPONENT)
+RESDIR          := $(RESDIR).$(COMPONENT)
 RESAPP          = <Resource$Dir>.Apps.$(APP)
 
 
