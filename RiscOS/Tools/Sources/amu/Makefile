@@ -13,74 +13,35 @@
 # Paths
 #
 CLXDIR  = C:CLX
-LIBDIR	= ${INSTDIR}.Library.Acorn
-INSTAPP    = ${INSTDIR}.Apps.!AMU
+LIBDIR  = ${INSTDIR}.Library.Acorn
+INSTAPP = ${INSTDIR}.Apps.!AMU
+
+CINCLUDES  = -IC: -I${CLXDIR}
+CDEFINES   = -DDDE -DNESTEDMAKEFILES
+CFLAGS     = -Wc -ffah
+
 #
 # Generic options:
 #
-MKDIR   = mkdir -p
-AS      = objasm
-CP      = copy
-CC      = cc
-CM      = cmhg
-RM      = remove
-LD      = link
-LB      = libfile
-TOUCH   = create
-WIPE    = -wipe
-SQZ     = squeeze
-
-CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} -Wc
-ASFLAGS = -depend !Depend -Stamp -quit
-CPFLAGS = ~cfr~v
-LBFLAGS = -c
-WFLAGS  = ~CFR~V
-SQZFLAGS= -f
-
-#
-# Libraries
-#
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-CLXLIB    = ${CLXDIR}.o.clxlib
+include Makefiles:StdTools
+include Makefiles:AppLibs
+include Makefiles:AppStdRule
 
 DIRS=o._dirs
-
-#
-# Include files
-#
-INCLUDES  = -IC: -Iriscos -I${CLXDIR}
-DFLAGS    = -DDDE -DNESTEDMAKEFILES
 
 #
 # Program specific options:
 #
 COMPONENT  = amu
 TARGET     = ${COMPONENT}
-SOURCE     = 
-EXPORTS    = 
 
-
-OBJS=	amu.o
-
-LIBS=	${CLXLIB} ${CLIB}
-
-#
-# Rule patterns
-#
-.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
-.cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
-.cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
+OBJS       = amu.o
+LIBS       = ${CLXLIB} ${CLIB}
 
 #
 # build a the library:
 #
-all:	${TARGET}
+all:    ${TARGET}
 
 #
 # RISC OS ROM build rules:
@@ -110,7 +71,6 @@ install: install_tool install_dirs
 
 install_dirs:
 	${MKDIR} ${INSTAPP}
-	${MKDIR} ${INSTAPP}
 	${MKDIR} ${LIBDIR}.Docs
 
 clean:
@@ -126,7 +86,7 @@ export_libs:
 
 ${DIRS}:
 	${MKDIR} o
-	create $@
+	${TOUCH} $@
 
 #
 # Final link
@@ -134,6 +94,7 @@ ${DIRS}:
 ${TARGET}: ${OBJS} ${LIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
         ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
 
 
 # Static dependencies:
