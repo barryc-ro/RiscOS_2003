@@ -11,7 +11,7 @@
 #
 # Paths
 #
-EXP_HDR = <cexport$dir>
+#EXP_HDR = <cexport$dir>
 
 #
 # Generic options:
@@ -85,9 +85,6 @@ dirs:
 #
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
 
 install_rom: ${ROMTARGET}
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
