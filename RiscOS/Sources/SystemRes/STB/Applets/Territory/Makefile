@@ -13,10 +13,10 @@ CMNRESDIR = ${INSTAPP}
 CMNLOCDIR = ${CMNRESDIR}.${Locale}
 MSGSDIR   = Messages
 
-MSG_CHECK    = ^.^.^.^.Network.CheckURL.Resources.${Locale}
-MSG_FILTER   = ^.^.^.^.Desktop.Filter.Resources.${Locale}
-MSG_PARALLEL = ^.^.^.^.HWSupport.Parallel.Resources.${Locale}
-MSG_PPRIMER  = ^.^.^.^.Printing.PPrimer.Resources.${Locale}
+MSG_CHECK    = ^.^.^.^.Networking.CheckURL.Resources.${Locale}.,^.^.^.^.Networking.CheckURL.Resources.UK.
+MSG_FILTER   = ^.^.^.^.Desktop.Filter.Resources.${Locale}.,^.^.^.^.Desktop.Filter.Resources.UK.
+MSG_PARALLEL = ^.^.^.^.HWSupport.Parallel.Resources.${Locale}.,^.^.^.^.HWSupport.Parallel.Resources.UK.
+MSG_PPRIMER  = ^.^.^.^.Printing.PPrimer.Resources.${Locale}.,^.^.^.^.Printing.PPrimer.Resources.UK.
 
 IFTHERE    = IfThere
 IFTHEN     = Then
@@ -124,17 +124,25 @@ build_message_files:
 	@Update Spain
 
 res_check:
-	${IFTHERE} ${MSG_CHECK}.Messages    ${IFTHEN} ${CP} ${MSG_CHECK}.Messages    ${CMNLOCDIR}.CheckURL.Messages  ${CPFLAGS}
+	Set MSG_CHECK$Path ${MSG_CHECK}
+	${IFTHERE} MSG_CHECK:Messages ${IFTHEN} ${CP} MSG_CHECK:Messages ${CMNLOCDIR}.CheckURL.Messages ${CPFLAGS}
+	Unset MSG_CHECK$Path
 
 res_filter:
-	${IFTHERE} ${MSG_FILTER}.Messages   ${IFTHEN} ${CP} ${MSG_FILTER}.Messages   ${CMNLOCDIR}.FilterMgr.Messages ${CPFLAGS}
-	${IFTHERE} ${MSG_FILTER}.CmdHelp    ${IFTHEN} ${CONCAT} ${CMNLOCDIR}.FilterMgr.Messages ${CATFLAGS} ${MSG_FILTER}.CmdHelp
+	Set MSG_FILTER$Path ${MSG_FILTER}
+	${IFTHERE} MSG_FILTER:Messages ${IFTHEN} ${CP} MSG_FILTER:Messages ${CMNLOCDIR}.FilterMgr.Messages ${CPFLAGS}
+	${IFTHERE} MSG_FILTER:CmdHelp  ${IFTHEN} ${CONCAT} ${CMNLOCDIR}.FilterMgr.Messages ${CATFLAGS} MSG_FILTER:CmdHelp
+	Unset MSG_FILTER$Path
 
 res_parallel:
-	${IFTHERE} ${MSG_PARALLEL}.Messages ${IFTHEN} ${CP} ${MSG_PARALLEL}.Messages ${CMNLOCDIR}.Parallel.Messages  ${CPFLAGS}
+	Set MSG_PARALLEL$Path ${MSG_PARALLEL}
+	${IFTHERE} MSG_PARALLEL:Messages ${IFTHEN} ${CP} MSG_PARALLEL:Messages ${CMNLOCDIR}.Parallel.Messages ${CPFLAGS}
+	Unset MSG_PARALLEL$Path
 
 res_pprimer:
-	${IFTHERE} ${MSG_PPRIMER}.Messages  ${IFTHEN} ${CP} ${MSG_PPRIMER}.Messages  ${CMNLOCDIR}.PPrimer.Messages   ${CPFLAGS}
+	Set MSG_PPRIMER$Path ${MSG_PPRIMER}
+	${IFTHERE} MSG_PPRIMER:Messages ${IFTHEN} ${CP} MSG_PPRIMER:Messages ${CMNLOCDIR}.PPrimer.Messages ${CPFLAGS}
+	Unset MSG_PPRIMER$Path
 
 translate:
 	${IFTHERE} TerrTrans:Acknow            ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Acknow            -o ${INSTOPTS}.Acknow
