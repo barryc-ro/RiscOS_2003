@@ -1,6 +1,8 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
 
+COMPONENT=armasm
+
 #CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
@@ -25,8 +27,8 @@ options.h p1dir.h p1line.h p2dir.h p2line.h stats.h store.h symdump.h \
 tables.h tokens.h vars.h version.h 
 
 
-noarg: armasm
-	@echo "Made armasm (the default target)"
+noarg: ${COMPONENT}
+	@echo "Made ${COMPONENT} (the default target)"
 
 # Dependencies
 aasm.o:	aasm.c
@@ -590,30 +592,30 @@ vars.o:	vars.h
 
 # Dependencies to /nfs/sun1/bb/xdevt/release/bin/topcc from local to build directories
 
-armasm: $(OBJALL)
-armasm: $(HSOURCE)
-armasm: $(DERIVED)
-armasm: $(EXTLIB1)
-	$(CC) -o armasm $(OBJALL) $(EXTLIB1) -s
-	@echo "Made armasm"
+${COMPONENT}: $(OBJALL)
+${COMPONENT}: $(HSOURCE)
+${COMPONENT}: $(DERIVED)
+${COMPONENT}: $(EXTLIB1)
+	$(CC) -o ${COMPONENT} $(OBJALL) $(EXTLIB1) -s
+	@echo "Made ${COMPONENT}"
 
-install: armasm
-	cp -p armasm ${RISCOS_BUILD_TOOLS}/armasm
-	strip ${RISCOS_BUILD_TOOLS}/armasm
+install: ${COMPONENT}
+	install ${COMPONENT} ${RISCOS_BUILD_TOOLS}/${COMPONENT}
+	strip ${RISCOS_BUILD_TOOLS}/${COMPONENT}
 
 clean:
 	-rm ${OBJALL}
-	-rm armasm
+	-rm ${COMPONENT}
 	-rm $(DERIVED)
-	@echo cleaned armasm
+	@echo cleaned ${COMPONENT}
 
 realclean: clean
 	-find . -type l -print | xargs rm
-	@echo cleaned armasm links
+	@echo cleaned ${COMPONENT} links
 
 links:
 	./mklinks
-	@echo made armasm links
+	@echo made ${COMPONENT} links
 
 datenow.h: FRC
 	touch -f datenow.h
