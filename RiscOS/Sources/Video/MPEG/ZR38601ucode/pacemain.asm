@@ -21,12 +21,15 @@
 //      17-07-02 Version 1.4 b avison
 //      changed PLL settings so serial master clock output frequency is 256 fs (was 384 fs)
 //
+//      30-07-02 Version 1.5 b avison
+//      inverted samples fed to DACs to compensate for inversion in dongle hardware
+//
 //*****************************************************************************************
 
 #include "macros.inc"
 
 // code revision
-#define VERSION                 {0x4132,0x3331,0x7631,0x2e34 } // A231v1.4
+#define VERSION                 {0x4132,0x3331,0x7631,0x2e35 } // A231v1.5
 
 // hard coded locations
 #define VERSION_LOC     0x2600
@@ -587,6 +590,7 @@ EXPORT D3_TO_SRG:                               // smc (disable next instruction
     pop     d3;                                 // get original sample back
     mul     d4,d3;                              // attenuate by PCM volume control first
     ashi    #4,d3;                              // and shift back into MSBits to avoid clipping
+    neg     d3;                                 // invert sample (BJGA 30-Jul-2002)
     move    d3,srb;                             // output PCM sample to serial port hardware
     move    (sp)+,mode;                         // Send srb data
     move    ie,(a7)+;                           // clear output buffer
