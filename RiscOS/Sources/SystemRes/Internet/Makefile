@@ -18,7 +18,7 @@ APP        = !${COMPONENT}
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 SDIR       = Sources
-INSTDIR    = ${INSTDIR}.${APP}
+INSTAPP    = ${INSTDIR}.${APP}
 RESD       = ${RESDIR}.Internet
 
 # Generic options:
@@ -100,52 +100,52 @@ all: ${FILES}
         @echo ${COMPONENT}: All built (Disc)
 
 install: install_${OPTIONS} install_common dirs
-        ${ATTR} -directories +wr -ww ${INSTDIR}
-        ${ATTR} -files +or +ow +wr -ww ${INSTDIR}
+        ${ATTR} -directories +wr -ww ${INSTAPP}
+        ${ATTR} -files +or +ow +wr -ww ${INSTAPP}
         @echo ${COMPONENT}: All installed (Disc)
 
 install_common: ${COMMONFILES}
-        ${CP} ${SDIR}.arp.ARP               ${INSTDIR}.bin.ARP          ${CPFLAGS}
-        ${CP} ${SDIR}.ifconfig.IfConfig     ${INSTDIR}.bin.IfConfig     ${CPFLAGS}
-        ${CP} ${SDIR}.inetstat.InetStat     ${INSTDIR}.bin.InetStat     ${CPFLAGS}
-        ${CP} ${SDIR}.ipvars.IPVars         ${INSTDIR}.bin.IPVars       ${CPFLAGS}
-        ${CP} ${SDIR}.ping.Ping             ${INSTDIR}.bin.Ping         ${CPFLAGS}
-        ${CP} ${SDIR}.route.Route           ${INSTDIR}.bin.Route        ${CPFLAGS}
-        ${CP} ${SDIR}.showstat.ShowStat     ${INSTDIR}.bin.ShowStat     ${CPFLAGS}
-        ${CP} ${SDIR}.sysctl.SysCtl         ${INSTDIR}.bin.SysCtl       ${CPFLAGS}
-        ${CP} ${SDIR}.traceroute.TraceRoute ${INSTDIR}.bin.TraceRoute   ${CPFLAGS}
-        ${CP} ${SDIR}.utils.utl.X           ${INSTDIR}.bin.X            ${CPFLAGS}
+        ${CP} ${SDIR}.arp.ARP               ${INSTAPP}.bin.ARP          ${CPFLAGS}
+        ${CP} ${SDIR}.ifconfig.IfConfig     ${INSTAPP}.bin.IfConfig     ${CPFLAGS}
+        ${CP} ${SDIR}.inetstat.InetStat     ${INSTAPP}.bin.InetStat     ${CPFLAGS}
+        ${CP} ${SDIR}.ipvars.IPVars         ${INSTAPP}.bin.IPVars       ${CPFLAGS}
+        ${CP} ${SDIR}.ping.Ping             ${INSTAPP}.bin.Ping         ${CPFLAGS}
+        ${CP} ${SDIR}.route.Route           ${INSTAPP}.bin.Route        ${CPFLAGS}
+        ${CP} ${SDIR}.showstat.ShowStat     ${INSTAPP}.bin.ShowStat     ${CPFLAGS}
+        ${CP} ${SDIR}.sysctl.SysCtl         ${INSTAPP}.bin.SysCtl       ${CPFLAGS}
+        ${CP} ${SDIR}.traceroute.TraceRoute ${INSTAPP}.bin.TraceRoute   ${CPFLAGS}
+        ${CP} ${SDIR}.utils.utl.X           ${INSTAPP}.bin.X            ${CPFLAGS}
 
 install_STB:
-        ${MKDIR} ${INSTDIR}.etc
-        ${CP} LocalUserIFRes:!Boot     ${INSTDIR}.!Boot         ${CPFLAGS}
-        ${CP} ${RDIR}.files.Hosts      ${INSTDIR}.etc.hosts     ${CPFLAGS}
-        ${CP} ${RDIR}.files.protocols  ${INSTDIR}.etc.protocols ${CPFLAGS}
-        ${CP} ${RDIR}.files.services   ${INSTDIR}.etc.services  ${CPFLAGS}
+        ${MKDIR} ${INSTAPP}.etc
+        ${CP} LocalUserIFRes:!Boot     ${INSTAPP}.!Boot         ${CPFLAGS}
+        ${CP} ${RDIR}.files.Hosts      ${INSTAPP}.etc.hosts     ${CPFLAGS}
+        ${CP} ${RDIR}.files.protocols  ${INSTAPP}.etc.protocols ${CPFLAGS}
+        ${CP} ${RDIR}.files.services   ${INSTAPP}.etc.services  ${CPFLAGS}
 
 install_: ${DISCFILES} dirs
-        ${CP} ${RDIR}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
-        ${CP} ${LDIR}.!Help      ${INSTDIR}.!Help      ${CPFLAGS}
-        ${CP} ${RDIR}.!Run       ${INSTDIR}.!Run       ${CPFLAGS}
-        ${CP} ${RDIR}.!Sprites   ${INSTDIR}.!Sprites   ${CPFLAGS}
-        ${CP} ${RDIR}.!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
-        ${CP} ${RDIR}.bin        ${INSTDIR}.bin        ${CPFLAGS}
-        ${CP} ${RDIR}.files      ${INSTDIR}.files      ${CPFLAGS}
-        ${CP} ${RDIR}.utils      ${INSTDIR}.utils      ${CPFLAGS}
+        ${CP} ${RDIR}.!Boot      ${INSTAPP}.!Boot      ${CPFLAGS}
+        ${CP} ${LDIR}.!Help      ${INSTAPP}.!Help      ${CPFLAGS}
+        ${CP} ${RDIR}.!Run       ${INSTAPP}.!Run       ${CPFLAGS}
+        ${CP} ${RDIR}.!Sprites   ${INSTAPP}.!Sprites   ${CPFLAGS}
+        ${CP} ${RDIR}.!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
+        ${CP} ${RDIR}.bin        ${INSTAPP}.bin        ${CPFLAGS}
+        ${CP} ${RDIR}.files      ${INSTAPP}.files      ${CPFLAGS}
+        ${CP} ${RDIR}.utils      ${INSTAPP}.utils      ${CPFLAGS}
         |
-        ${CP} ${SDIR}.map-mbone.Map-MBone   ${INSTDIR}.bin.Map-MBone    ${CPFLAGS}
-        ${CP} ${SDIR}.mrinfo.MRInfo         ${INSTDIR}.bin.MRInfo       ${CPFLAGS}
-        ${CP} ${SDIR}.mtrace.MTrace         ${INSTDIR}.bin.MTrace       ${CPFLAGS}
-        ${CP} ${SDIR}.pong.Pong             ${INSTDIR}.bin.Pong         ${CPFLAGS}
-        ${CP} ${SDIR}.utils.utl.RMFind      ${INSTDIR}.bin.RMFind       ${CPFLAGS}
-        ${CP} ${SDIR}.utils.utl.CheckMem    ${INSTDIR}.utils.CheckMem   ${CPFLAGS}
-        ${CP} ${SDIR}.newfiler.NewFiler     ${INSTDIR}.utils.NewFiler   ${CPFLAGS}
-        ${CP} ${SDIR}.utils.utl.ReadCMOSIP  ${INSTDIR}.utils.ReadCMOSIP ${CPFLAGS}
-        ${CP} ${SDIR}.utils.utl.TriggerCBs  ${INSTDIR}.utils.TriggerCBs ${CPFLAGS}
+        ${CP} ${SDIR}.map-mbone.Map-MBone   ${INSTAPP}.bin.Map-MBone    ${CPFLAGS}
+        ${CP} ${SDIR}.mrinfo.MRInfo         ${INSTAPP}.bin.MRInfo       ${CPFLAGS}
+        ${CP} ${SDIR}.mtrace.MTrace         ${INSTAPP}.bin.MTrace       ${CPFLAGS}
+        ${CP} ${SDIR}.pong.Pong             ${INSTAPP}.bin.Pong         ${CPFLAGS}
+        ${CP} ${SDIR}.utils.utl.RMFind      ${INSTAPP}.bin.RMFind       ${CPFLAGS}
+        ${CP} ${SDIR}.utils.utl.CheckMem    ${INSTAPP}.utils.CheckMem   ${CPFLAGS}
+        ${CP} ${SDIR}.newfiler.NewFiler     ${INSTAPP}.utils.NewFiler   ${CPFLAGS}
+        ${CP} ${SDIR}.utils.utl.ReadCMOSIP  ${INSTAPP}.utils.ReadCMOSIP ${CPFLAGS}
+        ${CP} ${SDIR}.utils.utl.TriggerCBs  ${INSTAPP}.utils.TriggerCBs ${CPFLAGS}
 
 dirs:
-        ${MKDIR} ${INSTDIR}
-        ${MKDIR} ${INSTDIR}.bin
+        ${MKDIR} ${INSTAPP}
+        ${MKDIR} ${INSTAPP}.bin
 
 clean:
 	dir ${SDIR}
