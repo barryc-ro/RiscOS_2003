@@ -82,7 +82,6 @@ ROM_OBJS =	\
  o.MoreInfo	\
  o.MPEGCtrl	\
  o.Options	\
- o.ParseURL	\
  o.Play		\
  o.Protocol	\
  o.Register	\
@@ -103,7 +102,6 @@ RAM_OBJS =	\
  oSL.MoreInfo	\
  oSL.MPEGCtrl	\
  oSL.Options	\
- oSL.ParseURL	\
  oSL.Play	\
  oSL.Protocol	\
  oSL.Register	\
@@ -124,7 +122,6 @@ DBG_OBJS =	\
  oSLd.MoreInfo	\
  oSLd.MPEGCtrl	\
  oSLd.Options	\
- oSLd.ParseURL	\
  oSLd.Play	\
  oSLd.Protocol	\
  oSLd.Register	\
