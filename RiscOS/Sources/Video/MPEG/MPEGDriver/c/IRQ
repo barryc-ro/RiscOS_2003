@@ -154,6 +154,10 @@ Date		Who	Change
 			(should make buffer allocation algorithm more robust to bitstream errors);
 			removed special-case handling of low_delay streams (reduces frequency of video-tear artefacts);
 			widescreen TVs can now be signalled to switch to 16:9 zoom mode as well as anamorphic mode in viewing mode Stretch
+09/08/2000	BJGA	Fixed a divide-by-zero in SetUpScalingRegisters due to horizontal_downscaling being < 0x100;
+			fixed header parsing to skip slice start codes until at least one of sequence header, gop header or
+			picture header had been received, and moved a few critical operations from the picture start code handler
+			to the slice start code handler - so now we are robust against the picture start code being lost from the stream
 
 ***************************************************************************/
 
@@ -1438,7 +1442,7 @@ static void static_ProcessVideoHdr (void *argument)
   while (true)
   {
     data = static_GetVideoHdrBits (8);
-    if (data <= SLICE_START_CODE_MAX && data >= SLICE_START_CODE_MIN)
+    if (Stream.vid_flags.started_parsing_headers && data <= SLICE_START_CODE_MAX && data >= SLICE_START_CODE_MIN)
     {
       /* Now we've processed all the headers, take any necessary actions */
       static_ProcessVideoSliceHdr ();
@@ -1820,18 +1824,6 @@ static void static_ProcessVideoPictureHdr (void)
   }
   
   /* Set sensible values in case the picture extensions are absent */
-  switch (Stream.current_picture_structure)
-  {
-    case ps_first_field_picture:
-      Stream.next_picture_structure = ps_second_field_picture;
-      break;
-    case ps_second_field_picture:
-      Stream.next_picture_structure = ps_first_field_picture;
-      break;
-    default:
-      Stream.next_picture_structure = ps_frame_picture;
-      break;
-  }
   Stream.decode_frames->lastpic->intra_dc_precision = 0;  /**/
   Stream.decode_frames->lastpic->picture_structure = 0;   /**  these are the values the VID_PPR1/2 registers require in MPEG-1 mode */
   Stream.decode_frames->lastpic->picture_flags.byte = 0;  /**/
@@ -1873,77 +1865,6 @@ static void static_ProcessVideoPictureHdr (void)
   }
   dprintf (("IRQ", "ProcessVideoPictureHdr: RFP = %04X, FFP = %04X, BFP = %04X\n", Stream.decode_frames->frame_buffer, VID_FFP & 0x3FFF, VID_BFP & 0x3FFF));
   
-#ifdef DEBUGLIB
-  {
-    frame_t *frame = Stream.display_frames;
-    int items = 0;
-    dprintf (("IRQ", "ProcessVideoPictureHdr: display frames list = "));
-    while (frame != NULL)
-    {
-      dprintf (("IRQ", "%d ", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
-      frame = frame->display_link;
-      if (++items > 10) break;
-    }
-  }
-  dprintf (("IRQ", "\n"));
-  {
-    frame_t *frame = Stream.decode_frames;
-    int items = 0;
-    dprintf (("IRQ", "ProcessVideoPictureHdr: decode frames list = "));
-    while (frame != NULL)
-    {
-      dprintf (("IRQ", "%d ", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
-      frame = frame->decode_link;
-      if (++items > 10) break;
-    }
-  }
-  dprintf (("IRQ", "\n"));
-#endif
-  /* Add the frame into the display list (this depends upon the picture_coding_type too) */
-  if (!Stream.decode_frames->on_display_list /* may be set if this is the second field picture, or if we lost data and re-used the struct */)
-  {
-    frame_t *frame_to_insert_after = NULL;
-    frame_t *previous = NULL;
-    frame_t *rover = Stream.display_frames;
-    while (rover != NULL)
-    {
-      /* Anchor frames are added at the end of the list */
-      if (Stream.decode_frames->lastpic->picture_coding_type != B_PICTURE && rover->display_link == NULL)
-        frame_to_insert_after = rover;
-      /* B-frames are added before the last anchor frame on the list */
-      if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && rover->lastpic->picture_coding_type != B_PICTURE)
-        frame_to_insert_after = previous;
-      previous = rover;
-      rover = rover->display_link;
-    }
-    if (frame_to_insert_after == NULL)
-    {
-      Stream.decode_frames->display_link = Stream.display_frames;
-      Stream.display_frames = Stream.decode_frames;
-    }
-    else
-    {
-      Stream.decode_frames->display_link = frame_to_insert_after->display_link;
-      frame_to_insert_after->display_link = Stream.decode_frames;
-    }
-    Stream.decode_frames->on_display_list = true;
-  }
-#ifdef DEBUGLIB
-  {
-    frame_t *frame = Stream.display_frames;
-    int items = 0;
-    const char *coding_names = "0IPB4567";
-    dprintf (("IRQ", "ProcessVideoPictureHdr: display frames list = "));
-    while (frame != NULL)
-    {
-      dprintf (("IRQ", "%d (%d,%c) ", ((int) frame - (int) Stream.frame) / sizeof (frame_t), frame->temporal_reference, coding_names[frame->pic1.picture_coding_type]));
-      frame = frame->display_link;
-      if (++items > 10) break;
-    }
-  }
-  dprintf (("IRQ", "\n"));
-#endif
-  
   /* Set decoding state flags */
   Stream.last_video_header_layer_decoded = lvhld_picture;
   Stream.vid_flags.sequence_header_received_since_picture_header = false;
@@ -1970,47 +1891,6 @@ static void static_ProcessVideoPictureCodingExt (void)
   static_GetVideoHdrBits (1); /* ignore chroma_420_type */
   Stream.decode_frames->progressive_frame = static_GetVideoHdrBits (1); /* used in WSS signal and deciding whether to freeze fields or frames */
   /* Ignore composite_display_flag, v_axis, field_sequence, sub_carrier, burst_amplitude and sub_carrier_phase */
-  
-  /* Set next_picture_structure and frame's top_field_first flag */
-  if (Stream.decode_frames->lastpic->picture_structure == FRAME_PICTURE)
-  {
-    if (Stream.current_picture_structure == ps_first_field_picture)
-    {
-      /* We're obviously in the middle of some corrupt data - pretend we're a second-field picture to avoid data structures getting out of step */
-      Stream.next_picture_structure = ps_second_field_picture;
-      dprintf (("IRQ", "ProcessVideoPictureCodingExt: faked second_field_picture\n"));
-    }
-    else
-    {
-      Stream.next_picture_structure = ps_frame_picture;
-      dprintf (("IRQ", "ProcessVideoPictureCodingExt: frame_picture\n"));
-      Stream.decode_frames->top_field_first = Stream.decode_frames->lastpic->picture_flags.bits.top_field_first;
-    }
-  }
-  else
-  {
-    switch (Stream.current_picture_structure)
-    {
-      case ps_first_field_picture:
-        Stream.next_picture_structure = ps_second_field_picture;
-        dprintf (("IRQ", "ProcessVideoPictureCodingExt: second_field_picture\n"));
-        break;
-      case ps_second_field_picture:
-        Stream.next_picture_structure = ps_first_field_picture;
-        dprintf (("IRQ", "ProcessVideoPictureCodingExt: first_field_picture\n"));
-        /* Copy top_field_first from last frame (should be more resilient if an odd number of pictures are lost due to errors) */
-        Stream.decode_frames->top_field_first = Stream.decode_frames->decode_link->top_field_first;
-        break;
-      case ps_frame_picture:
-      case ps_frame_picture_extension:
-        /* It's possible to switch between field and frame pictures within the same clip */
-        Stream.next_picture_structure = ps_first_field_picture;
-        dprintf (("IRQ", "ProcessVideoPictureCodingExt: first_field_picture\n"));
-        /* The current field type must be used to determine top_field_first flag */
-        Stream.decode_frames->top_field_first = (Stream.decode_frames->lastpic->picture_structure == TOP_FIELD_PICTURE);
-        break;
-    }
-  }
 }
 
 /******	static_ProcessVideoQuantMatrixExt() ********************************
@@ -2265,6 +2145,119 @@ Purpose:	Deals with the completion of header parsing
 static void static_ProcessVideoSliceHdr (void)
 {
   dprintf (("IRQ", "ProcessVideoSliceHdr\n"));
+  
+#ifdef DEBUGLIB
+  {
+    frame_t *frame = Stream.display_frames;
+    int items = 0;
+    dprintf (("IRQ", "ProcessVideoSliceHdr: display frames list = "));
+    while (frame != NULL)
+    {
+      dprintf (("IRQ", "%d ", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
+      frame = frame->display_link;
+      if (++items > 10) break;
+    }
+  }
+  dprintf (("IRQ", "\n"));
+  {
+    frame_t *frame = Stream.decode_frames;
+    int items = 0;
+    dprintf (("IRQ", "ProcessVideoSliceHdr: decode frames list = "));
+    while (frame != NULL)
+    {
+      dprintf (("IRQ", "%d ", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
+      frame = frame->decode_link;
+      if (++items > 10) break;
+    }
+  }
+  dprintf (("IRQ", "\n"));
+#endif
+  /* Add the frame into the display list (this depends upon the picture_coding_type too) */
+  if (!Stream.decode_frames->on_display_list /* may be set if this is the second field picture, or if we lost data and re-used the struct */)
+  {
+    frame_t *frame_to_insert_after = NULL;
+    frame_t *previous = NULL;
+    frame_t *rover = Stream.display_frames;
+    while (rover != NULL)
+    {
+      /* Anchor frames are added at the end of the list */
+      if (Stream.decode_frames->lastpic->picture_coding_type != B_PICTURE && rover->display_link == NULL)
+        frame_to_insert_after = rover;
+      /* B-frames are added before the last anchor frame on the list */
+      if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && rover->lastpic->picture_coding_type != B_PICTURE)
+        frame_to_insert_after = previous;
+      previous = rover;
+      rover = rover->display_link;
+    }
+    if (frame_to_insert_after == NULL)
+    {
+      Stream.decode_frames->display_link = Stream.display_frames;
+      Stream.display_frames = Stream.decode_frames;
+    }
+    else
+    {
+      Stream.decode_frames->display_link = frame_to_insert_after->display_link;
+      frame_to_insert_after->display_link = Stream.decode_frames;
+    }
+    Stream.decode_frames->on_display_list = true;
+  }
+#ifdef DEBUGLIB
+  {
+    frame_t *frame = Stream.display_frames;
+    int items = 0;
+    const char *coding_names = "0IPB4567";
+    dprintf (("IRQ", "ProcessVideoSliceHdr: display frames list = "));
+    while (frame != NULL)
+    {
+      dprintf (("IRQ", "%d (%d,%c) ", ((int) frame - (int) Stream.frame) / sizeof (frame_t), frame->temporal_reference, coding_names[frame->pic1.picture_coding_type]));
+      frame = frame->display_link;
+      if (++items > 10) break;
+    }
+  }
+  dprintf (("IRQ", "\n"));
+#endif
+  
+  /* Set next_picture_structure and frame's top_field_first flag */
+  if (Stream.decode_frames->lastpic->picture_structure == FRAME_PICTURE)
+  {
+    if (Stream.current_picture_structure == ps_first_field_picture)
+    {
+      /* We're obviously in the middle of some corrupt data - pretend we're a second-field picture to avoid data structures getting out of step */
+      Stream.next_picture_structure = ps_second_field_picture;
+      dprintf (("IRQ", "ProcessVideoPictureCodingExt: faked second_field_picture\n"));
+    }
+    else
+    {
+      Stream.next_picture_structure = ps_frame_picture;
+      dprintf (("IRQ", "ProcessVideoPictureCodingExt: frame_picture\n"));
+      Stream.decode_frames->top_field_first = Stream.decode_frames->lastpic->picture_flags.bits.top_field_first;
+    }
+  }
+  else
+  {
+    switch (Stream.current_picture_structure)
+    {
+      case ps_first_field_picture:
+        Stream.next_picture_structure = ps_second_field_picture;
+        dprintf (("IRQ", "ProcessVideoPictureCodingExt: second_field_picture\n"));
+        break;
+      case ps_second_field_picture:
+        Stream.next_picture_structure = ps_first_field_picture;
+        dprintf (("IRQ", "ProcessVideoPictureCodingExt: first_field_picture\n"));
+        /* Copy top_field_first from last frame (should be more resilient if an odd number of pictures are lost due to errors) */
+        Stream.decode_frames->top_field_first = Stream.decode_frames->decode_link->top_field_first;
+        break;
+      case ps_frame_picture:
+      case ps_frame_picture_extension:
+        /* It's possible to switch between field and frame pictures within the same clip */
+        Stream.next_picture_structure = ps_first_field_picture;
+        dprintf (("IRQ", "ProcessVideoPictureCodingExt: first_field_picture\n"));
+        /* The current field type must be used to determine top_field_first flag */
+        Stream.decode_frames->top_field_first = (Stream.decode_frames->lastpic->picture_structure == TOP_FIELD_PICTURE);
+        break;
+    }
+  }
+  
   /* Calculate the video buffer prefill threshold if we haven't done so already */
   if (VideoPrefillSize == -1)
   {
@@ -2278,6 +2271,7 @@ static void static_ProcessVideoSliceHdr (void)
     VideoPrefillSize = MAX(VideoPrefillSize, 200);
     WRITE_VID_VBT(VideoPrefillSize);
   }
+  
   if (Stream.video.state == stream_prefilling && Stream.video.prefill_state == ps_initialising)
   {
     Stream.video.prefill_state = ps_pre_decoding;
@@ -3042,7 +3036,7 @@ static void static_PositionVideo (signed short frame_centre_horizontal_offset, s
     horizontal_downscaling = Fixed_IntDivide (source_width - 1, ideal_dest_width - 1);
   }
   if (horizontal_downscaling > 0x20000) horizontal_downscaling = 0x20000;
-  if (horizontal_downscaling < 1) horizontal_downscaling = 1;
+  if (horizontal_downscaling < 0x100) horizontal_downscaling = 0x100;
   
   if (Stream.video_parms.scaling_type.type == st_free)
   {
