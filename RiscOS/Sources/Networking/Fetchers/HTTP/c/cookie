@@ -98,8 +98,6 @@ typedef enum {
 
 
 #ifdef TRACE
-#define USE_SYSLOG
-
 #ifdef USE_SYSLOG
 #include "<syslog$dir>.C-veneer.h.syslog"
 #endif
@@ -570,6 +568,7 @@ static void write_cookies_to_file(void)
 static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 {
 	size_t pointer = 0, max_size = 0;
+	size_t num_cookies = 0;
 	CookieDomain *cookie_domain;
 	Cookie *cookie;
 	const time_t current_time = time(NULL);
@@ -602,6 +601,7 @@ static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 			if (cookie->expires < current_time) continue;
 
 			size = strlen(cookie->name) + strlen(cookie->value) + sizeof("; = ");
+			if (num_cookies > 0) size += sizeof("; ");
 			if (cookie->version > 0) {
 				size += sizeof("; $Version=XXXXXXXX; $Domain= ; $Path= ;");
 				size += cookie->domain != NULL ? strlen(cookie->domain) : 0;
@@ -628,6 +628,10 @@ static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 			}
 
 			/* Write the cookie into the output buffer */
+                        if (num_cookies > 0) {
+				pointer += sprintf(buffer + pointer, "; ");
+                        }
+
 			if (cookie->version > 0) {
 				pointer += sprintf(buffer + pointer, "$Version=%i; %s=%s",
 					cookie->version,cookie->name,cookie->value);
@@ -642,28 +646,27 @@ static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 				if (strcmp(cookie->path, path) != 0) {
 					pointer += sprintf(buffer+pointer,"; $Path=%s",cookie->path);
 				}
-				cookie->last_access = current_time;
 			}
 			else {
 				pointer += sprintf(buffer+pointer,"%s=%s",cookie->name,cookie->value);
 			}
-			#ifdef TRACE
-			cookie_debug("Adding cookie `%s'\n", buffer);
-			#endif
-			http_add_header(&ses->headers, "Cookie", buffer);
-			free(buffer);
-			buffer = NULL;
-			pointer = 0;
-			max_size = 0;
 			cookie->last_access = current_time;
+			++num_cookies;
 		}
 	}
 
-	if (buffer) {
-	        free(buffer);
-	        buffer = NULL;
-	}
-	return buffer;
+        if (buffer != NULL) {
+		#ifdef TRACE
+		cookie_debug("Adding cookie header: `%s'\n", buffer);
+		#endif
+		http_add_header(&ses->headers, "Cookie", buffer);
+		free(buffer);
+		buffer = NULL;
+		pointer = 0;
+		max_size = 0;
+        }
+
+	return NULL;
 }
 
 static char *cookie_process_path(const char *uri)
@@ -882,12 +885,22 @@ static void cookie_clean(void)
 	expire_cookies(best_domain);
 }
 
-static Cookie *cookie_match_name_in_domain(CookieDomain *domain, const char *name)
+static Cookie *cookie_find_duplicate(CookieDomain *domain, Cookie *match)
 {
-	Cookie *cookie;
+        Cookie *cookie;
 
 	for (cookie = domain->cookie; cookie; cookie = cookie->next) {
-		if (strcmp(cookie->name, name) == 0) return cookie;
+		if (strcmp(cookie->name, match->name) == 0) {
+		        if (strcmp(cookie->domain, match->domain) == 0 && strcmp(cookie->path, match->path) == 0) {
+		                #ifdef TRACE
+		                cookie_debug("duplicate finder: matching cookie\n");
+		                cookie_debug("  (%s,%s,%s) == (%s,%s,%s)\n",
+			                cookie->name, cookie->domain, cookie->path,
+			                match->name, match->domain, match->path);
+		                #endif
+			        return cookie;
+		        }
+		}
 	}
 
 	return NULL;
@@ -973,10 +986,10 @@ static void cookie_link_to_domain(CookieDomain *head, Cookie *cookie)
 	Cookie *insertion_point;
 	const char *const path = cookie->path;
 
-	while ((insertion_point = cookie_match_name_in_domain(head, cookie->name)) != NULL) {
+	while ((insertion_point = cookie_find_duplicate(head, cookie)) != NULL) {
 		#ifdef TRACE
-		cookie_debug("Deleting duplicate (%p) domain=%s, name=%s\n",
-			insertion_point, insertion_point->domain, insertion_point->name);
+		cookie_debug("Deleting duplicate (%p) domain=%s, name=%s, path=%s\n",
+			insertion_point, insertion_point->domain, insertion_point->name, insertion_point->path);
 		#endif
 		remove_cookie_from_list(insertion_point, NOT_DOMAIN);
 		destroy_cookie(insertion_point);
@@ -1381,6 +1394,9 @@ static void act_on_cookie_giveup(Cookie **pcookie)
 	Cookie *const cookie = *pcookie;
 
 	if (cookie != NULL) {
+	        #ifdef TRACE
+	        cookie_debug("act_on_cookie_giveup: %p\n", cookie);
+	        #endif
 		remove_cookie_from_queue(cookie);
 		destroy_cookie(cookie);
 		*pcookie = NULL;
@@ -1464,6 +1480,9 @@ static void act_on_cookie(char *string, Session *s, char *host, char *path)
 		}
 		else if (Strcmp_ci(string,"path") == 0 && current_cookie) {
 			/* Set new path */
+		        #ifdef TRACE
+		        cookie_debug("Path override to `%s'\n", value);
+		        #endif
 			if (check_path_valid(path,value)) {
 				/* Delete default path */
 				if (current_cookie->path != NULL) {

@@ -39,7 +39,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -UTML -UTRACE
+DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -UTML -UTRACE -DUSE_SYSLOG
 ROMFLAGS = -DROM
 INCLUDES = -ITCPIPLibs:,C:
 
@@ -154,9 +154,9 @@ rom_link:
 ${MSGSF}: @.Resources.${LOCALE}.Messages
 	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages ${RESFSDIR}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${mkdir} rm
-	${TLD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
+	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	Access $@ RW/R
 
 o.moduleRAM: module.c

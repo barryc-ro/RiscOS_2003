@@ -155,9 +155,9 @@ rom_link:
 ${MSGSF}: Resources.${LOCALE}.Messages Resources.${LOCALE}.File Resources.${LOCALE}.FileGrey Resources.${LOCALE}.Dir Resources.${LOCALE}.DirGrey
 	MkRes messages_file ${MSGSF} Resources.${LOCALE} ${RESFSDIR}
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${mkdir} rm
-        ${TLD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
+        ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
         Access $@ RW/R
 
 o.moduleRAM: module.c

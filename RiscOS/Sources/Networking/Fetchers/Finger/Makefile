@@ -146,9 +146,9 @@ rom_link:
 ${MSGSF}: @.Resources.${LOCALE}.Messages
 	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages ${RESFSDIR}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${mkdir} rm
-        ${TLD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
+        ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
         Access $@ RW/R
 
 o.moduleRAM: module.c
