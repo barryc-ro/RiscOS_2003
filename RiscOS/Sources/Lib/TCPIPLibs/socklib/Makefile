@@ -160,6 +160,8 @@ local_dirs:
         ${MKDIR} z
 	${MKDIR} sn
 	${MKDIR} sz
+	Create   local_dirs
+	
 clean:
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} z.* ${WFLAGS}
@@ -167,6 +169,7 @@ clean:
 	${WIPE} sz.* ${WFLAGS}
 	${RM} mkveneers
 	${RM} veneers
+	${RM} local_dirs
 	${RM} socklib
 	${RM} socklibzm
 	${RM} socklib5
