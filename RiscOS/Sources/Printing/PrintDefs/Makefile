@@ -65,7 +65,7 @@ RESFILES =			\
  ${RDIR}.Printers.Lex_BW	\
  ${RDIR}.Printers.Lex_Col	\
  ${RDIR}.Printers.L6Z11_BW	\
- ${RDIR}.Printers.L6Z11_Col	\ 
+ ${RDIR}.Printers.L6Z11_Col	\
  ${RDIR}.Printers.BJC80V_BW	\
  ${RDIR}.Printers.BJC80V_Col	\
  ${RDIR}.Printers.BJF100_BW	\
