@@ -15,7 +15,7 @@
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CP      = copy
 RM      = remove
@@ -36,6 +36,7 @@ CHMODFLAGS = +ow +or +wr -ww
 #
 SOURCE    = s.ROMFonts
 TARGET    = rm.${COMPONENT}
+
 
 #
 # Generic rules:
@@ -60,6 +61,18 @@ resources:
 	${MKDIR} <Resource$Dir>.Fonts
         @Set Alias$MFD ${MKDIR} <Resource$Dir>.Fonts.%0
 	@Set Alias$CFF ${CP} Fonts.%0 <Resource$Dir>.Fonts.%0 ${CPFLAGS}
+	Obey Config.${USERIF}
+        @echo ${COMPONENT}: resource files copied
+
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+	${MKDIR} ${BBEDIR}.Config.DiscBuild
+	BBE_Export_File Config.${USERIF}
+	BBE_Export_File Config.DiscBuild.${USERIF}
+	${MKDIR} ${BBEDIR}.Fonts
+        @Set Alias$MFD ${MKDIR} ${BBEDIR}.Fonts.%0
+	@Set Alias$CFF ${CP} Fonts.%0 ${BBEDIR}.Fonts.%0 ${CPFLAGS}
 	Obey Config.${USERIF}
         @echo ${COMPONENT}: resource files copied
 
