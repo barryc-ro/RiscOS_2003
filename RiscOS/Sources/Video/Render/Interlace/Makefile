@@ -12,6 +12,7 @@
 # 17-Oct-95  TMD	  Removed obsolete variants 't','u','v' from disc build
 # 18-Jul-96  TMD	  Added 'y' variant for STB1 MPEG2
 # 05-Feb-97  TMD	  Added 'z' variant for ART
+# 12-May-99  SBF          Added MPT variant
 #
 
 #
@@ -78,6 +79,10 @@ install: ${DISCTARGETS}
 #
 # ROM variants
 #
+rm.MPT.Interlace: rm.Interlx
+        ${MKDIR} rm.${MACHINE}
+	${CP} $? $@ ${CPFLAGS}
+
 rm.Omega.Interlace: rm.Interlx
         ${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
