@@ -43,6 +43,10 @@
 ; 18-Aug-98  BJGA Fixed numerous layout bugs
 ; 31-Aug-98  Internals fully revised to use new UCS layout structures created
 ;            by keygen. Alphabet adaptive, including UTF-8.
+; 02-Sep-98  Hexadecimal keypad selection added. If the first digit is 0,
+;            then the number entered is read as hex. (Physical) keypad keys
+;            "/", "*", "-", "+", "." and "Enter" stand for digits A-F respectively.
+;            Also, logical keys A-F will work.
 ;
 
         GBLL    PCDel           ; option to have Delete key return &8B (Copy) instead
@@ -324,10 +328,8 @@ AltDigitValue   # 4
 CurrentAlphabet # 4
 AlphabetTable   # 4
 FallbackCode    # 4
- [ PCDel
 DeleteChar      # 1
-unused          # 3
- ]
+HexDigits       # 1
 
 A1Key_WorkspaceSize * :INDEX: @
 
@@ -339,10 +341,8 @@ R0AltDigitValue # 4     ; value of ALT+digits so far
 R0CurrentAlphabet # 4
 R0AlphabetTable # 4
 R0FallbackCode  # 4
- [ PCDel
 R0DeleteChar    # 1
-R0unused        # 3
- ]
+R0HexDigits     # 1
 
 ; User key workspace allocation
 
@@ -377,7 +377,7 @@ A1Key_Title
         =       "InternationalKeyboard", 0
 
 A1Key_HelpStr
-        =       "Int'l Keyboard", 9, "0.50 (01 Sep 1998)"
+        =       "Int'l Keyboard", 9, "0.50 (02 Sep 1998)"
  [ Keyboard <> "All"
         =       " $Keyboard"
  ]
@@ -720,6 +720,7 @@ ProcessKAlt ROUT
         TEQ     R3, #0                  ; if no ALTs down so far, then must be
 
         STREQ   R3, R0AltDigitValue     ; going down, so zero cumulative digits
+        STREQB  R3, R0HexDigits
 
         TEQ     R1, #0                  ; 0 => up, 1 => down
         ADDNE   R3, R3, #1              ; if down then increment
@@ -923,21 +924,57 @@ ReturnOneChar
         MOV     PC, R14
 
 AltKeyPad ROUT
+        LDRB    R1, R0HexDigits                 ; are we doing hex?
+        TEQ     R1, #0
+        BNE     AltKeyPadHex
         LDRB    R3, [R3, R4]                    ; get value from PadK1NumTran
         SUB     R3, R3, #"0"
         CMP     R3, #10                         ; if not in range 0-9
-        BICCS   R7, R7, #(KBAlt_DigitsPresent :OR: KBAlt_SelectKeyboard)
+        BICHS   R7, R7, #(KBAlt_DigitsPresent :OR: KBAlt_SelectKeyboard)
                                                 ; then get rid of digs + select
-        ORRCC   R7, R7, #KBAlt_DigitsPresent    ; else indicate we have digits
-        MOVCS   R2, #0                          ; if no digits
-        STRCS   R2, R0AltDigitValue             ; then zero digits
-        MOVCS   PC, R14                         ; and exit
+        ORRLO   R7, R7, #KBAlt_DigitsPresent    ; else indicate we have digits
+        MOVHS   R2, #0                          ; if no digits
+        STRHS   R2, R0AltDigitValue             ; then zero digits
+        MOVHS   PC, R14                         ; and exit
 
         LDR     R2, R0AltDigitValue
         MOV     R1, #10
-        MLA     R3, R2, R1, R3                  ; digits = digits*10+new digit
+        MLAS    R3, R2, R1, R3                  ; digits = digits*10+new digit
+        TSTEQ   R7, #KBAlt_SelectKeyboard
+        STREQB  R1, R0HexDigits                 ; 0 pressed first - switch to hex (not IDD)
         STR     R3, R0AltDigitValue
         MOV     PC, R14
+
+AltKeyPadHex
+        LDRB    R1, [R3, R4]
+        SUB     R1, R1, #"0"                    ; check digits first - they're logical
+        CMP     R1, #10
+        BLO     GotHex
+
+        ADR     R4, HexPadTable                 ; scan table of physical codes
+05      LDRB    R1, [R4], #2
+        TEQ     R2, R1
+        LDREQB  R1, [R4, #-1]
+        BEQ     GotHex
+        TEQ     R1, #0
+        BNE     %BT05
+
+GotHex
+        LDR     R2, R0AltDigitValue
+        ADD     R2, R1, R2, LSL #4              ; digits = digits*16+new digit
+        STR     R2, R0AltDigitValue
+        MOV     PC, R14
+
+HexPadTable
+        =       K1NumPadSlash, &A
+        =       K1NumPadStar,  &B
+        =       K1NumPadHash,  &C
+        =       K1NumPadMinus, &C
+        =       K1NumPadPlus,  &D
+        =       K1NumPadDot,   &E
+        =       K1NumPadEnter, &F
+        =       0
+        ALIGN
 
 ReturnNULChar
         ADR     R6, KeyNULReturn
@@ -969,6 +1006,9 @@ ProcessUCS ROUT
         ADD     R2, R0, R2
         ADD     R2, R2, R4, LSL #2      ; R2 -> 36-byte entry for key
 
+        TST     R7, #KBAlt_DigitsPresent
+        BNE     CheckHexAtoF
+
 ; select the correct Shift/Ctrl/Alt variant.
         STRB    R1, TempAction
         MOV     R1, #0
@@ -979,7 +1019,7 @@ ProcessUCS ROUT
         TST     R7, #KBAlt_AltDown
         ORRNE   R1, R1, #16
 
-        TST     R5, #KBStat_NoCapsLock
+02      TST     R5, #KBStat_NoCapsLock
         BNE     %FT05
 
 ; process Caps Lock
@@ -997,7 +1037,7 @@ ProcessUCS ROUT
 
 05      LDR     R1, [R2, R1]
 
-        TST     R1, #&80000000
+06      TST     R1, #&80000000
         BNE     FunnyUCS
 
 ReturnUCSAlt
@@ -1115,6 +1155,24 @@ FunnyUCS
 
 40      ADRHI   R6, NowtReturn
         MOV     PC, R14
+
+CheckHexAtoF
+; We're doing something digitty - if it's hex we need to check for A-F.
+; If it's not hex or A-F, we return immediately - it's not sensible to
+; be outputting standard Alt symbols while doing a keypad sequence, although
+; this is what pre 0.50 versions did.
+
+        LDRB    R4, R0HexDigits         ; are we doing hex?
+        TEQ     R4, #0
+        MOVEQ   PC, R14
+        LDR     R4, [R2, #0]            ; get the base symbol for this key
+        BIC     R4, R4, #&20            ; upper case the codes that matter
+        CMP     R4, #"A"
+        MOVLO   PC, R14
+        CMP     R4, #"F"
+        MOVHI   PC, R14
+        SUB     R1, R4, #"A"-10
+        B       GotHex
 
 SpecialKey
         SUB     R4, R1, #&10000
