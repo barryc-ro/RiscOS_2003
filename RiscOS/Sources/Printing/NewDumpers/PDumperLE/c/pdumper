@@ -18,6 +18,8 @@
 #include "kelvswis.h"
 #include "rawsprite.h"
 
+#include <stdarg.h>
+
 #define NAMELEN			32
 
 static BOOL				registered = FALSE;
@@ -236,6 +238,12 @@ static _kernel_oserror *kelvin__startjob(void **anchor, int stripType)
 	kelvin__job *job;
 	LPDVDATAREC lpDataRec;
 
+	/* Make sure that any io error condition from a previous, aborted job is
+	 * cleared before we attempt to send any data to the printer.
+	 */
+
+	enable_io();
+
 	if (err = pdumper_startjob(anchor, 0u, palfile), err)
 		return err;
 
@@ -321,15 +329,18 @@ static _kernel_oserror *kelvin__endpage(	void **anchor, unsigned int fh, unsigne
 	return NULL;
 }
 
-static _kernel_oserror *kelvin__abortjob(   void **anchor, unsigned int fh, unsigned int stripType, int reason)
+static _kernel_oserror *kelvin__abortjob(void **anchor, unsigned int fh, unsigned int stripType, int reason)
 {
 	kelvin__job *job;
 	_kernel_oserror *err = NULL, *err2;
 
     (void) stripType;
 
+	kelvin_trace1("kelvin__abortjob(%d)\n", reason);
+
 	if (reason != 0)	/* end of whole job */
 	{
+		kelvin_trace0("about to pdumper_find()\n");
 		if (err = pdumper_find(anchor, kelvin__rootBlock, (void **) &job), err)
 			goto noluck;
 
@@ -345,21 +356,27 @@ static _kernel_oserror *kelvin__abortjob(   void **anchor, unsigned int fh, unsi
 			job->needEndPage = FALSE;
 		}
 
+		kelvin_trace0("about to lexmark_enddoc()\n");
 		err2 = lexmark_enddoc(job->lpDataRec);
 		if (!err) err = err2;
 	
 		/* now free the memory we got at the start of the job */
-	
+
+		kelvin_trace0("about to free pdumper workspace\n");
 		if (job->rowBuf)
 			err2 = pdumper_free(anchor, job->rowBuf);
 		if (!err) err = err2;
 		err2 = pdumper_free(anchor, job);
 		if (!err) err = err2;
+		kelvin_trace0("done all that\n");
 	}
 
 noluck:
+	kelvin_trace0("about to pdumper_tidyjob()\n");
 	err2 = pdumper_tidyjob(anchor, NULL, reason);
 	if (!err) err = err2;
+
+	kelvin_trace1("returning with err = %p\n", err);
 
 	return err;
 }
@@ -377,6 +394,46 @@ void kelvin_findlimits(const unsigned char *buf, int *left, int *right)
 
 	*left	= l;
 	*right	= r;
+}
+
+static _kernel_oserror *kelvin__pollescape(void)
+{
+	_kernel_swi_regs r;
+	BOOL escaped = FALSE;
+
+	/* Need to check the escape key explicitly because asynchronous
+	 * Escape events don't get stored up while Escape is disabled
+	 * by the Wimp. We don't want to cause a real Escape condition
+	 * because that would cause the printer output buffer to be
+	 * flushed, putting the printer in an unknown state (because
+	 * data had been lost) and causing the problem which we're
+	 * trying to avoid.
+	 */
+
+	for (;;)
+	{
+		r.r[0] = 129;
+		r.r[1] = 0;
+		r.r[2] = 0;
+		(void) _kernel_swi(OS_Byte, &r, &r);
+		if (r.r[2] != 0) break;
+		if (r.r[1] == 0x1b)	/* escape */
+			escaped = TRUE;
+	}
+
+	if (escaped)
+		return &kelvin_escape;
+
+#if 0
+	r.r[0] = 129;
+	r.r[1] = -113;		/* escape */
+	r.r[2] = -113 >> 8;
+	(void) _kernel_swi(OS_Byte, &r, &r);
+	if (r.r[1])
+		return &kelvin_escape;
+#endif
+
+	return NULL;
 }
 
 static _kernel_oserror *kelvin__outputdump(	void **anchor, unsigned char *data, unsigned int fh, unsigned int stripType,
@@ -493,6 +550,13 @@ static _kernel_oserror *kelvin__outputdump(	void **anchor, unsigned char *data, 
 		if (left < right && (err = lexmark_sendstrip(job->lpDataRec, job->rowBuf, job->curRow, 0, lineWidth), err))
 			return err;
 
+		/* check escape here: the printer's in a known state and it would be safe to the the page now, so
+		 * the job tidy up code won't confuse the printer
+		 */
+
+		if (err = kelvin__pollescape(), err)
+			return err;
+
 		job->curRow++;
 
 		data += rowLen;
@@ -505,6 +569,11 @@ static _kernel_oserror *kelvin__command(unsigned int reason, unsigned int fh)
 {
 	LPDVDATAREC lpDataRec;
 	_kernel_oserror *err;
+
+	/* As for kelvin__startjob(), we need to make sure that io is enabled
+	 * in case a previous print job ended with an error.
+	 */
+	enable_io();
 
 	switch (reason)
 	{
@@ -531,12 +600,81 @@ static _kernel_oserror *kelvin__command(unsigned int reason, unsigned int fh)
 	return NULL;
 }
 
-_kernel_oserror *kelvin_handler(int reason, _kernel_swi_regs *r)
+#if defined(DEBUG)
+static _kernel_oserror *__kelvin_handler(int reason, _kernel_swi_regs *r);
+
+static struct
 {
+	char leader[8];
+	unsigned long reg[16];
+	int oldhandler;
+
+} dumpzone;
+
+#endif
+
+_kernel_oserror *kelvin_handler(int reason, _kernel_swi_regs *r)
+#if defined(DEBUG)
+{
+	_kernel_oserror *err;
+	_kernel_swi_regs rr;
+	static int reenter = 0;
+	static int first = TRUE;
+
+	if (first)
+	{
+		memset(&dumpzone, 0, sizeof(dumpzone));
+		first = FALSE;
+	}
+
+	memcpy(dumpzone.leader, "dumpzone", sizeof(dumpzone.leader));
+
+	rr.r[0] = 13;
+	rr.r[1] = (int) &dumpzone.reg;
+	(void) _kernel_swi(OS_ChangeEnvironment, &rr, &rr);
+	dumpzone.oldhandler = rr.r[1];
+
+	kelvin_trace1("Entering driver (registers at %p)\n", &dumpzone.reg);
+
+	if (reenter > 0)
+	{
+		kelvin_trace0("Attempt to re-enter driver!\n");
+		return NULL;
+	}
+
+	reenter++;
+
 	kelvin_trace11("PDumper(%3d, %08x, %08x, %08x, %08x, %08x,\n"
 	             "             %08x, %08x, %08x, %08x, %08x)\n",
 	             reason,	r->r[0], r->r[1], r->r[2], r->r[3], r->r[4],
 	             			r->r[5], r->r[6], r->r[7], r->r[8], r->r[9]);
+
+	err = __kelvin_handler(reason, r);
+
+	if (err)
+	{
+		kelvin_trace2("Returning error %d, %s\n", err->errnum, err->errmess);
+	}
+
+
+	kelvin_trace11("PDumper(%3d, %08x, %08x, %08x, %08x, %08x,\n"
+	             "             %08x, %08x, %08x, %08x, %08x) done\n\n",
+	             reason,	r->r[0], r->r[1], r->r[2], r->r[3], r->r[4],
+	             			r->r[5], r->r[6], r->r[7], r->r[8], r->r[9]);
+
+	reenter--;
+	kelvin_trace0("Leaving driver\n");
+
+	rr.r[0] = 13;
+	rr.r[1] = dumpzone.oldhandler;
+	(void) _kernel_swi(OS_ChangeEnvironment, &rr, &rr);
+
+	return err;
+}
+
+static _kernel_oserror *__kelvin_handler(int reason, _kernel_swi_regs *r)
+#endif
+{
 
 	switch (reason)
 	{
@@ -564,6 +702,7 @@ _kernel_oserror *kelvin_handler(int reason, _kernel_swi_regs *r)
 		return kelvin__startjob(	(void **) r->r[0], r->r[2]);
 
 	case PDumperReason_AbortJob:
+		kelvin_trace0("About to AbortJob\n");
 		return kelvin__abortjob(	(void **) r->r[0], r->r[1], r->r[2], r->r[3]);
 		break;
 

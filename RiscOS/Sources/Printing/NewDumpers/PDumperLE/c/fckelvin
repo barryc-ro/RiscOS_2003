@@ -15,30 +15,97 @@ static char fc_version[] = "product.obj: "FC_VERSION;  /* set object module leve
 BYTE bNumBidiSwaths;
 #endif /* GEN_COL_BIDI */
 
-/***************************************************************************
- *  FCKELVIN.C                                    Lexmark Confidential
- *
- * Function Name:    OutToFile
- *
- * Description:
- *    This function outputs print swath data into a file.
- *
- * Inputs:  lpDataRec  Long pointer to print device structure.
- *
- * Outputs: Printer Command to file.
- *
- * Major Functions Called:  fwrite
- *
- * Original Author: J. Bates/K. Profitt
- * Date: 09/27/96
- *
- * Changes:
- *    Date        Name           Reason for Change
- *
- *************************************************************************/
+#define VEC_CLAIM	((_kernel_oserror *) -1)
+#define CLAIM(e)	((e) ? (e) : VEC_CLAIM)
+
+static unsigned char saved_escape_state;
+static BOOL claimed = FALSE;
+static BOOL ioErrorDetected = FALSE;
+
+/* Call this at the start of a job to clear the ioErrorDetected flag from
+ * a previous, aborted job.
+ */
+
+void enable_io(void)
+{
+	ioErrorDetected = FALSE;
+}
+
+/* Trap OS_Byte 200 to prevent Escape from being enabled while we've
+ * disabled it.
+ */
+_kernel_oserror *trap_osbyte(int r11, _kernel_swi_regs *r, void *wsp)
+{
+	(void) r11;
+	(void) wsp;
+
+	switch (r->r[0])
+	{
+	case 229:
+	case 200:
+		return CLAIM(NULL);
+	}
+
+	return NULL;
+}
+
+/* Disable Escape and trap OS_Byte to stop it being re-enabled
+ */
+static void disable_escape(void)
+{
+	_kernel_swi_regs r;
+
+	r.r[0] = 229;
+	r.r[1] = 1;
+	r.r[2] = 0;
+	THROW(_kernel_swi(OS_Byte, &r, &r));
+	saved_escape_state = r.r[1];
+
+	if (!claimed)
+	{
+		r.r[0] = 6; /* BYTEV */
+		r.r[1] = (int) vec_osbyte;
+		r.r[2] = (int) kelvin__wsp;
+	
+		THROW(_kernel_swi(OS_Claim, &r, &r));
+		claimed = TRUE;
+	}
+
+}
+
+static void enable_escape(void)
+{
+	_kernel_swi_regs r;
+
+	if (claimed)
+	{
+		r.r[0] = 6; /* BYTEV */
+		r.r[1] = (int) vec_osbyte;
+		r.r[2] = (int) kelvin__wsp;
+	
+		THROW(_kernel_swi(OS_Release, &r, &r));
+		claimed = FALSE;
+	}
+
+	r.r[0] = 229;
+	r.r[1] = saved_escape_state;
+	r.r[2] = 0;
+	THROW(_kernel_swi(OS_Byte, &r, &r));
+}
+
 void OutToFile(LPDVDATAREC lpDataRec, void *pOutString, unsigned long dwLength)
 {
 	_kernel_swi_regs r;
+	_kernel_oserror *err;
+
+    /* If there has already been a detected io error during this print job
+     * bail out without attempting to send more data. This relies on Escape
+     * conditions being detected outside DeviceFS and therefore not reported
+     * as io errors.
+     */
+
+	if (ioErrorDetected)
+		return;
 
 #ifdef FAKEDFSERROR
 	r.r[0] = 129;
@@ -48,7 +115,8 @@ void OutToFile(LPDVDATAREC lpDataRec, void *pOutString, unsigned long dwLength)
 	if (r.r[1])
 	{
 		static _kernel_oserror fake = { 0, "Simulated DeviceFS error" };
-		THROW(&fake);
+		err = &fake;
+		goto oserror;
 	}
 #endif
 
@@ -57,17 +125,18 @@ void OutToFile(LPDVDATAREC lpDataRec, void *pOutString, unsigned long dwLength)
 	 * printer isn't ready. Should we retry though?
 	 */
 	r.r[0] = 0;
-	THROW(_kernel_swi(Parallel_Op, &r, &r));
+	if (err = _kernel_swi(Parallel_Op, &r, &r), err) goto oserror;
 	if ((r.r[2] & 0x80) == 0)
 	{
-		THROW(&kelvin_notready);
+		err = &kelvin_notready;
+		goto oserror;
 	}
 #endif
 
-	kelvin_trace3("Sending %d bytes to file handle %d (%p)\n", dwLength, lpDataRec->flOutFile, lpDataRec);
-
 	r.r[0] = 2;
 	r.r[1] = (int) lpDataRec->flOutFile;
+
+	disable_escape();
 
 #ifdef TEXTPRINT
 	if (wedge_getcooked())
@@ -78,14 +147,30 @@ void OutToFile(LPDVDATAREC lpDataRec, void *pOutString, unsigned long dwLength)
 		esc[4] = (dwLength >> 16) & 0xFF;
 		r.r[2] = (int) esc;
 		r.r[3] = 5;
-		THROW(_kernel_swi(OS_GBPB, &r, &r));
+		if (err = _kernel_swi(OS_GBPB, &r, &r), err)
+			goto oserror2;
 	}
 #endif
 
 	r.r[2] = (int) pOutString;
 	r.r[3] = (int) dwLength;
 
-	THROW(_kernel_swi(OS_GBPB, &r, &r));
+	kelvin_trace3("Sending %d bytes to file handle %d (%p)\n", dwLength, lpDataRec->flOutFile, lpDataRec);
+
+	err = _kernel_swi(OS_GBPB, &r, &r);
+
+	kelvin_trace4("Sent %d bytes to file handle %d (%p), err = %p\n", dwLength, lpDataRec->flOutFile, lpDataRec, err);
+	if (err)
+		goto oserror2;
+
+	enable_escape();
+	return;
+
+oserror2:
+	enable_escape();
+oserror:
+	ioErrorDetected = TRUE;
+    THROW(err);
 }
 
 /******************************************************************

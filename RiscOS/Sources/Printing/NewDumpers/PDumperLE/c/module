@@ -23,6 +23,14 @@ extern int Image_RO_Base;
 
 struct kelvin__memhdr
 {
+#ifdef MEMTRACE
+	unsigned int pad[4];		/* padding in case the header of the block gets overwritten
+								 * after it has been freed. This should increase the chance
+								 * that the remainder of the header will survive for
+								 * debugging purposes.
+								 */
+#endif
+
 	unsigned int tag;											// 'KELV' or 'FKLV'
 
 	kelvin__memhdr	*prev, *next;
@@ -43,12 +51,12 @@ static int allocbomb	= ALLOCBOMB;		/* out of memory after this many */
 #define kelvin__TAG		0x564C454B
 #define kelvin__FREE	0x564C4B46
 
-kelvin__memhdr *kelvin_memhead, *kelvin_memtail;
+kelvin__memhdr *kelvin_memhead = NULL, *kelvin_memtail = NULL;
 #ifdef TRACE
 int kelvin__trackHandle = 0;
 #endif
 
-static void *kelvin__wsp;
+void *kelvin__wsp;
 
 #ifdef TRACE
 static int kelvin__open(char *title, int width, int height, int flags)
@@ -101,14 +109,15 @@ void kelvin_traceout(const char *s)
 	if (kelvin__trackHandle == 0)
 		kelvin__trackHandle = kelvin__open("Kelvin", 80, 5000, 1);
 
-	if (kelvin__trackHandle < 0)
-		return;
+	if (kelvin__trackHandle > 0)
+		kelvin__writes(kelvin__trackHandle, s);
 
 #ifdef FILETRACE
-	if (1)
 	{
 		FILE *fl;
-		if (fl = fopen("$.Kelvin", "a"), fl)
+		fl = fopen("ZipDisk:Spool.DrvState", "a");
+		if (!fl) fl = fopen("$.DrvState", "a");
+		if (fl)
 		{
 			fputs(s, fl);
 			fclose(fl);
@@ -116,7 +125,6 @@ void kelvin_traceout(const char *s)
 	}
 #endif
 
-	kelvin__writes(kelvin__trackHandle, s);
 }
 
 int kelvin_trace(const char *fmt,...)
@@ -245,7 +253,6 @@ void *kelvin_malloc(
 	_kernel_swi_regs r;
 	kelvin__memhdr *hdr;
 
-	kelvin_trace2("%s, %d\n", file, line);
 	kelvin_trace4("kelvin_malloc(%ld, %d) at %s, %d\n", (long) size, type, file, line);
 
 #ifdef ALLOCBOMB
@@ -273,7 +280,7 @@ void *kelvin_malloc(
 	hdr->type	= type;
 
 #ifdef MEMTRACE
-	kelvin_trace3("%p, %d: MALLOC(%d)\n", file, line, size);
+	kelvin_trace3("%s, %d: MALLOC(%d)\n", file, line, size);
 
 	hdr->file = file;
 	hdr->line = line;
@@ -290,6 +297,44 @@ void *kelvin_malloc(
 	return (void *) (hdr + 1);
 }
 
+#ifdef MEMTRACE
+static BOOL kelvin__isvalid(void *mem)
+{
+#ifdef MEMTRACE
+	kelvin__memhdr *hdr = ((kelvin__memhdr *) mem) - 1;
+	kelvin__memhdr *blk;
+
+	for (blk = kelvin_memhead; blk; blk = blk->next)
+	{
+		if (blk == hdr)
+		{
+			if (blk->tag == kelvin__TAG)
+				return TRUE;
+			else if (blk->tag == kelvin__FREE)
+				kelvin_trace1("!!!! Block at %p has been freed\n", mem);
+			else
+				kelvin_trace1("!!!! Block at %p has an illegal tag\n", mem);
+			return FALSE;
+		}
+	}
+	
+	kelvin_trace1("!!!! Block at %p is outside heap\n", mem);
+
+	if (hdr->tag == kelvin__TAG)
+		kelvin_trace1("!!!! Block at %p has a valid tag\n", mem);
+	else if (hdr->tag == kelvin__FREE)
+		kelvin_trace1("!!!! Block at %p has been freed\n", mem);
+	else
+		kelvin_trace1("!!!! Block at %p has an invalid tag\n", mem);
+
+	return FALSE;
+#else
+	(void) mem;
+	return TRUE;
+#endif
+}
+#endif
+
 void kelvin_free(
 #ifdef MEMTRACE
 		const char *file, int line,
@@ -304,6 +349,9 @@ void kelvin_free(
 #ifdef MEMTRACE
 	(void) file;
 	(void) line;
+
+	if (!kelvin__isvalid(mem))		/* kelvin__isvalid produces descriptive debug */
+		return;
 #endif
 
 	if (hdr->tag == kelvin__FREE)
@@ -347,8 +395,11 @@ void kelvin_memtrace(void)
 			total += hdr->size;
 		}
 
-		kelvin_trace0("========================================\n");
 		kelvin_trace1("                      %7ld\n", (unsigned long) total);
+	}
+	else
+	{
+		kelvin_trace0("No orphan allocations\n");
 	}
 
 #endif
@@ -367,7 +418,10 @@ void kelvin_freeall(unsigned int type)
 		next = hdr->next;	/* get next link before we delete the block */
 
 		if (hdr->type == type || type == kelvin_ALL)
-			FREE((void *) (kelvin_memhead + 1));
+			FREE((void *) (hdr + 1));		/* AA, 13/1/99 found problem here: hdr + 1 was
+											 * kelvin_memhead + 1, presumably a legacy from
+											 * a time when all the memory was disposed of.
+											 */
 	}
 }
 
@@ -424,7 +478,7 @@ _kernel_oserror *kelvin_swi(int n, _kernel_swi_regs * r, void *ws)
 			"Lexmark_ClaimWorkspace", "Lexmark_StartDoc", "Lexmark_StartPage",
 			"Lexmark_SendStrip", "Lexmark_EjectPage", "Lexmark_InstallCartridge",
 			"Lexmark_SendCartridgeHome", "Lexmark_GetInkUsage", "Lexmark_CalcBidiAlign",
-			"Lexmark_EndPage", "Lexmark_EndDoc"
+			"Lexmark_EndPage", "Lexmark_EndDoc", "Lexmark_FreeAll", "Lexmark_Debug"
 	};
 #endif
 
@@ -436,7 +490,7 @@ _kernel_oserror *kelvin_swi(int n, _kernel_swi_regs * r, void *ws)
 
 #ifdef DEBUG
 	(void) swiname;
-	kelvin_trace2("%s(%08x)\n", swiname[n], r->r[0]);
+	kelvin_trace2("%s(r0=%08x)\n", swiname[n], r->r[0]);
 #endif
 
 	if (err = CATCH(), err)
@@ -497,11 +551,18 @@ _kernel_oserror *kelvin_swi(int n, _kernel_swi_regs * r, void *ws)
 		FCEndDoc(lpDataRec);
 		FREE(lpDataRec);
 		kelvin_trace0("Document done\n");
-		kelvin_freeall(kelvin_HBP);
+		// Temp disabled to see if bug goes away
+		// kelvin_freeall(kelvin_HBP);
 		break;
 
 	case BASE(Lexmark_FreeAll):
 		kelvin_freeall(kelvin_ALL);
+		break;
+
+	case BASE(Lexmark_Debug):
+		kelvin_trace0("\nLexmark_Debug\n");
+		kelvin_memtrace();
+		kelvin_trace0("Lexmark_Debug done\n\n");
 		break;
 
 	default:
