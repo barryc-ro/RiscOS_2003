@@ -30,8 +30,12 @@
 #define RFLAGS (render_plinth_NOFILL | render_plinth_THIN)
 #endif
 
-#ifndef BUILDERS
-static void obreak_get_sizes(rid_text_item_hr *tih, int *left, int *right)
+#ifdef BUILDERS
+extern
+#else
+static
+#endif
+void obreak_get_sizes(rid_text_item_hr *tih, int *left, int *right)
 {
     int leftend = *left;
     int rightend = *right;
@@ -68,7 +72,7 @@ static void obreak_get_sizes(rid_text_item_hr *tih, int *left, int *right)
     *left = leftend;
     *right = rightend;
 }
-#endif
+
 
 void obreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
@@ -105,11 +109,11 @@ void obreak_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
         antweb_get_edges(ti, &leftend, &rightend);
 
 #if 1
-        obreak_get_sizes(tih, &leftend, &rightend);
+	obreak_get_sizes(tih, &leftend, &rightend);
 
 	if (tih->noshade)
 	{
-	render_set_colour(render_colour_LINE_D, doc);
+	    render_set_colour(render_colour_LINE_D, doc);
 	    bbc_move(ox + leftend, bline - tih->size/2);
 	    bbc_plot(bbc_RectangleFill + bbc_DrawRelFore, rightend - leftend, tih->size);
 	}

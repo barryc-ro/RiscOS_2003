@@ -157,8 +157,8 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
 {
     int width, height;
 
-    width = *iw * scale_value/100;
-    height = *ih * scale_value/100;
+    width = (*iw * scale_value)/100;
+    height = (*ih * scale_value)/100;
 
     IMGDBG(("oimage_size_image: old width %d, height %d, scale %d%% rid flags 0x%x\n", *iw, *ih, scale_value, flags));
 
@@ -180,6 +180,10 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
 	if (req_ww->type != value_none || req_hh->type == value_absunit)
 	{
             double aspect = (double)width/height;
+
+#ifdef BUILDERS
+	    aspect = 1.0;
+#endif
 
     	    switch (req_ww->type)
     	    {
@@ -206,7 +210,12 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
     else
     {
         /* if not real then size from the text */
+#ifndef BUILDERS
 	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, fwidth, &width, &height);
+#else
+	width = 16;
+	height = 16;
+#endif
     }
 
     IMGDBG(("Now width %d, height %d\n", width, height));
@@ -435,11 +444,18 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     IMGDBG(("oimage_size: src '%s' im %p bwidth %d, hspace %d, vspace %d, fwidth %d\n",
 	    tii->src, tii->im, tii->bwidth, tii->hspace, tii->vspace, fwidth));
 
+#ifndef BUILDERS
+    /* Borris sez doing this here is a good way of wasting
+       time. Between adding the object to the tree (parsing), and
+       formatting (which triggers the sizing), there could be quite a
+       time lag. This will impact the latency of image fetching,
+       especially with a fast turnaround server. */
     if (tii->im == NULL)
 	tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
+#endif
 
     image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
-    
+
     IMGDBG(("oimage_size: real %d width %d height %d\n", fl & image_flag_REALTHING ? 1 : 0, width, height));
 
     if (fl & image_flag_REALTHING)
@@ -448,6 +464,12 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     oimage_size_image(tii->alt, &tii->ww, &tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
     
     IMGDBG(("oimage_size:       width %d height %d\n", width, height));
+
+    /* DAF: Formatter doesn't invisible objects please */
+    if (width < 1)
+	width = 1;
+    if (height < 1)
+	height = 1;
 
     width += (tii->bwidth + tii->hspace) * 4;
     height += (tii->bwidth + tii->vspace) * 4;

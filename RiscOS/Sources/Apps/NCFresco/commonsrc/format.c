@@ -1412,7 +1412,23 @@ static void recurse_format_table(antweb_doc *doc,
 	recurse_format_stream(doc, rh, &table->caption->stream);
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+    {
+	VALUE v;
+	int z;
+
 	recurse_format_stream(doc, rh, &cell->stream);
+
+	rid_getprop(table, x, y, rid_PROP_HEIGHT, &v);
+
+	switch (v.type)
+	{
+	case value_absunit:
+	    z = - ceil(v.u.f);
+	    if (z < cell->stream.height)
+		cell->stream.height = z;
+	    break;
+	}
+    }
 
     /*  All descendent cells/streams now have heights. These heights
         can only be grown, and then for one of three reasons: 1)
@@ -1542,7 +1558,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
     stomp_captions_until_working(rh);
 
-    format_entry_fixes(rh);
+    format_precondition(rh);
 
     if (rh->stream.text_list == NULL)
     {
@@ -1575,7 +1591,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
     FMTDBG(("rid_toplevel_format: finished\n"));
 
-    format_exit_fixes(rh);
+    format_postcondition(rh);
 
     return;
 }

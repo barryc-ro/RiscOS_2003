@@ -207,6 +207,12 @@ void oobject_astext(rid_text_item *ti, rid_header *rh, FILE *f);
 void oobject_asdraw(rid_text_item *ti, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
 void *oobject_image_handle(rid_text_item *ti, antweb_doc *doc, int reason);
 
+void oscaff_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
+void oscaff_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
+void oscaff_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
+char * oscaff_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb);
+void oscaff_astext(rid_text_item *ti, rid_header *rh, FILE *f);
+void oscaff_asdraw(rid_text_item *ti, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
 
 /* Finally, a jump table to dispatch from */
 extern object_methods object_table[];

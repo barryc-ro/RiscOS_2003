@@ -4,6 +4,7 @@
 
  */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -60,7 +61,7 @@ fe_view fe_frame_specifier_decode(fe_view top, const char *spec)
 	    else
 		v = v->children;
 	    
-	    while (index--)
+	    while (v && index--)
 		v = v->next;
 
 	    STBDBGN((" yields %p\n", v));
@@ -235,7 +236,11 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
         {
             parent = fe_find_top(parent);
         }
-        else
+        else if (target[0] == '_' && isdigit(target[1]))
+	{
+	    parent = fe_frame_specifier_decode(fe_find_top(parent), target);
+	}
+	else
         {
             parent = fe_find_target(fe_find_top(parent), target);
         }
@@ -607,9 +612,6 @@ void fe_dispose_view(fe_view v)
 
     fe_internal_deleting_view(v);
 
-    /* update current state in the history list */
-    fe_history_update_current_state(v);
-     
 #if 1
     /* unlink from chain before deleting */
     if (v->prev)

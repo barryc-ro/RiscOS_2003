@@ -156,8 +156,9 @@ typedef SHORTISH rid_tag;
 #define rid_tag_SELECT          7       /* A selection list (e.g. a menu) */
 #define rid_tag_TABLE           8       /* A table */
 #define rid_tag_OBJECT          9       /* An OBJECT */
+#define rid_tag_SCAFF		10	/* Internal scaffolding - 'NOP' objects */
 
-#define rid_tag_LAST_TAG        10	/* ie 0...N-1 is tag range */
+#define rid_tag_LAST_TAG        11	/* ie 0...N-1 is tag range */
 #define rid_tag_MASK            0xf
 
 typedef SHORTISH rid_flag;
@@ -1414,6 +1415,9 @@ extern rid_pos_item *rid_pos_alloc(void);
 extern void rid_pos_free(rid_pos_item *pi);
 extern void rid_pos_free_chain(rid_pos_item *pi);
 extern void rid_pos_cache_flush(void);
+
+/* Support for floating items */
+extern rid_float_item * rid_get_float_item(rid_text_item *ti, rid_pos_item *pi);
 
 /* Some useful form scanning functions */
 

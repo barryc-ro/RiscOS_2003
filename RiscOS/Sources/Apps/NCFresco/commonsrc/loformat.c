@@ -19,6 +19,8 @@
 #include "htmlparser.h"
 #include "dump.h"
 #include "util.h"
+#include "webfonts.h"
+#include "indent.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -27,7 +29,7 @@
 #define NOTWRITTEN	ASSERT(!"FACILITY NOT YET IMPLEMENTED")
 #endif
 
-#ifdef DEBUG
+#if DEBUG
 static const char * WIDTH_NAMES[N_COLSPAN_WIDTHS] = WIDTH_NAMES_ARRAY;
 #endif
 
@@ -35,69 +37,81 @@ static const char * WIDTH_NAMES[N_COLSPAN_WIDTHS] = WIDTH_NAMES_ARRAY;
 
 static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 {
-    rid_pos_item *new_pos = fmt->text_line; /* fmt->WOP; */
-    const int display_width = fmt->format_width; /* fmt->center_width; */
-    const int width = fmt->x_text_pos; /* fmt->text_pos.x; */
+    rid_pos_item *new_pos = fmt->text_line;
+    const int display_width = fmt->format_width;
+    const int width = fmt->x_text_pos;
     const int spare = display_width - width;
 
     FMTDBGN(("center_and_right_align_adjustments: center_width %d, text_pos.x %d, flags %x, spare %d\n",
 	    display_width, width, 0 /* fmt->SOL->st.flags & rid_sf_ALIGN_MASK */, spare));
 
-    switch (new_pos->first->st.flags & rid_sf_ALIGN_MASK)
+    if (new_pos->first != NULL)
     {
-    case rid_sf_ALIGN_JUSTIFY:
-	if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
+	int flags = 0;
+
+	if (new_pos->first->tag == rid_tag_SCAFF && new_pos->first->next != NULL)
 	{
-	    rid_text_item *ti, *lti;
-	    int n;
+	    flags = new_pos->first->next->st.flags;
+	}
+	else
+	    flags = new_pos->first->st.flags;
 
-	    for(n=0, lti = NULL, ti = new_pos->first; ti; ti = ti->next)
+	switch (flags & rid_sf_ALIGN_MASK)
+	{
+	case rid_sf_ALIGN_JUSTIFY:
+	    if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
 	    {
-		FMTDBG(("Item=%p, pos=%p, line=%p, flags=0x%02x\n",
-			ti, new_pos, ti->line, ti->flag));
+		rid_text_item *ti, *lti;
+		int n;
 
-		if ( CLEARING_ITEM(ti) || ! FLOATING_ITEM(ti) )
+		for(n=0, lti = NULL, ti = new_pos->first; ti; ti = ti->next)
 		{
-		    /* Not a floater */
-		    if (ti->line != new_pos)
-			break;
-		    n++;
-		    lti = ti;
+		    FMTDBG(("Item=%p, pos=%p, line=%p, flags=0x%02x\n",
+			    ti, new_pos, ti->line, ti->flag));
+
+		    if ( CLEARING_ITEM(ti) || ! FLOATING_ITEM(ti) )
+		    {
+			/* Not a floater */
+			if (ti->line != new_pos)
+			    break;
+			n++;
+			lti = ti;
+		    }
+		}
+
+		FMTDBG(("Spare=%d, n=%d\n", spare, n));
+
+		/* Have more than one word on the line and not the end of the paragraph */
+		if ((n > 1) &&
+		    ((lti->flag & (rid_flag_CLEARING | rid_flag_LINE_BREAK)) == 0) &&
+		    ti != NULL )
+		{
+		    new_pos->leading = spare / (n-1);
+
+		    FMTDBG(("Leading=%d\n", new_pos->leading));
 		}
 	    }
-
-	    FMTDBG(("Spare=%d, n=%d\n", spare, n));
-
-	    /* Have more than one word on the line and not the end of the paragraph */
-	    if ((n > 1) &&
-		((lti->flag & (rid_flag_CLEARING | rid_flag_LINE_BREAK)) == 0) &&
-		ti != NULL )
+	    break;
+	case rid_sf_ALIGN_CENTER:
+	    if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
 	    {
-		new_pos->leading = spare / (n-1);
+		/* Only center things that can fit on the display */
 
-		FMTDBG(("Leading=%d\n", new_pos->leading));
+		FMTDBGN(("center, %d %d\n", width, display_width));
+
+		if (width < display_width)
+		    new_pos->left_margin += (spare >> 1);
 	    }
-	}
-	break;
-    case rid_sf_ALIGN_CENTER:
-	if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    /* Only center things that can fit on the display */
+	    break;
+	case rid_sf_ALIGN_RIGHT:
+	    if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
+	    {
+		FMTDBGN(("Right aligned\n"));
 
-	    FMTDBGN(("center, %d %d\n", width, display_width));
-
-	    if (width < display_width)
-		new_pos->left_margin += (spare >> 1);
+		new_pos->left_margin += spare;
+	    }
+	    break;
 	}
-	break;
-    case rid_sf_ALIGN_RIGHT:
-	if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    FMTDBGN(("Right aligned\n"));
-
-	    new_pos->left_margin += spare;
-	}
-	break;
     }
 }
 
@@ -229,7 +243,7 @@ static BOOL floating_item_fits(RID_FMT_STATE *fmt)
     const int MW = fltr->width;
     const int have_text = TEXT_ITEMS_THIS_LINE(line);
     const int have_fltrs = FLOATERS_THIS_LINE(line);
-    BOOL fits = (FW - LM - RM - MW) >= 0;
+    BOOL fits = (RM - LM - MW) >= 0;
 
     ASSERT(fmt->next_item != NULL);
     ASSERT(fmt->float_line != NULL);
@@ -248,7 +262,7 @@ static BOOL floating_item_fits(RID_FMT_STATE *fmt)
 	    fits = TRUE;
     }
 
-    FMTDBGN(("floating_item_fits: %s: LM/RM %d/%d, FW %d, MW %d, txt %d, fltrs %d",
+    FMTDBGN(("floating_item_fits: %s: LM/RM %d/%d, FW %d, MW %d, txt %d, fltrs %d\n",
 	     fits ? "FITS" : "DOESN'T FIT", LM, RM, FW, MW, have_text, have_fltrs));
 
     return fits;
@@ -269,15 +283,19 @@ static void pickup_float_line(RID_FMT_STATE *fmt)
 
     fmt->float_line = pi;
 
-    if (pi->prev == NULL)
+    /* Not quite right - closing a line will forget the right indent it had */
+    if (pi->prev == NULL || pi->prev->floats == NULL)
     {
 	FMTDBGN(("pickup_float_line: no prev so default margin information\n"));
 	pi->left_margin = 0;
+	pi->floats->right_margin = fmt->format_width;
     }
     else
     {
 	pi->left_margin = pi->prev->left_margin;
-	FMTDBGN(("pickup_float_line: prev item so use margin %d\n", pi->left_margin));
+	pi->floats->right_margin = pi->prev->floats->right_margin;
+	FMTDBGN(("pickup_float_line: inherit margins %d/%d\n", 
+		 pi->left_margin, pi->floats->right_margin));
     }
 }
 
@@ -297,8 +315,6 @@ static void pickup_float_line(RID_FMT_STATE *fmt)
 
 static void advance_float_line(RID_FMT_STATE *fmt)
 {
-    rid_pos_item *new = new_pos_item(fmt);
-
     ASSERT(fmt->float_line != NULL);
     ASSERT(fmt->float_line->next == NULL);
 
@@ -368,13 +384,12 @@ static void position_floating_item(RID_FMT_STATE *fmt)
     else
     {
 	fi->entry_margin = fl->right_margin;
-	/*fi->left = (fmt->format_width - fl->right_margin - width);*/
-	fl->right_margin += width;
+	fl->right_margin -= width;
 	attach_float_at_end(&fl->right, fi);
     }
 
     /* This shouldn't have caused us to cross the margins! */
-    ASSERT( (fmt->format_width - pi->left_margin - fl->right_margin) >= 0 );
+    ASSERT( (fl->right_margin - pi->left_margin) >= 0 );
 
     FMTDBGN(("position_floating_item: now got LM %d, RM %d\n",
 	     pi->left_margin, fl->right_margin ));
@@ -416,15 +431,14 @@ static void create_new_text_line(RID_FMT_STATE *fmt)
 
 static void set_text_margin_info(RID_FMT_STATE *fmt)
 {
-    const int indent = fmt->unbreakable_start->st.indent;
+    const int indent = fmt->unbreakable_start->st.indent * INDENT_UNIT;
 
     ASSERT(fmt->text_line != NULL);
     ASSERT(fmt->text_line->left_margin == NOTINIT);
 
     /* Doesn't account for INDENT_SIZE */
     fmt->text_line->left_margin = indent;
-    /* @@@@ FIXME: Needs attention. */
-    fmt->text_line->floats->right_margin = 0;
+    fmt->text_line->floats->right_margin = fmt->format_width;
 
     FMTDBGN(("set_text_margin_info: LM %d, RM %d\n",
 	     fmt->text_line->left_margin, fmt->text_line->floats->right_margin));
@@ -490,7 +504,7 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
     const int TW = fmt->unbreakable_width + prev_pad;
     const BOOL have_floaters = FLOATERS_THIS_LINE(line);
     const BOOL have_text = TEXT_ITEMS_THIS_LINE(line);
-    BOOL fits = (FW - LM - RM - TW - fmt->x_text_pos) >= 0;
+    BOOL fits = (RM - LM - fmt->x_text_pos- TW) >= 0;
 
     ASSERT(fmt->text_line != NULL);
     ASSERT(fmt->text_line->left_margin != NOTINIT);
@@ -506,9 +520,9 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
 	    fits = TRUE;
     }
 
-    FMTDBGN(("unbreakable_sequence_fits: %s: pp %d, LM/RM %d/%d, FW %d, TW %d, flt %d, txt %d\n",
+    FMTDBGN(("unbreakable_sequence_fits: %s: pp %d, LM/RM %d/%d, FW %d, TW %d, XP %d, flt %d, txt %d\n",
 	     fits ? "FITS" : "DOESN'T FIT", 
-	     prev_pad,  LM, RM, FW, TW, have_floaters, have_text));
+	     prev_pad,  LM, RM, FW, TW, fmt->x_text_pos, have_floaters, have_text));
 
     return fits;
 }
@@ -516,12 +530,134 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
 /*****************************************************************************
 
   Update the 'widest' field of the stream. This is complicated when
-  there are right floating items.  */
+  there are right floating items. If we are doing a maxwidth format,
+  we wish to be careful about getting a useful answer. A line is
+  composed of left floaters (LLLL), text items (TTTT), empty space
+  (....) and right floaters (RRRR). ZOM for all of them, except the
+  line must hold at least a floater or a text item. Thus:
+
+  LLLL TTTT TTTT .... RRRR
+
+  The widest value we want to set is the sum of LLLL, TTTT and RRRR
+  sections.
+
+  */
 
 static void find_widest_info(RID_FMT_STATE *fmt)
 {
-    if (fmt->x_text_pos > fmt->stream->widest)
-	fmt->stream->widest = fmt->x_text_pos;
+    const int LM = fmt->text_line->left_margin;
+    const int used = LM + fmt->x_text_pos +
+	(fmt->format_width - fmt->text_line->floats->right_margin);
+
+    if (LM != NOTINIT)
+	if (used > fmt->stream->widest)
+	    fmt->stream->widest = used;
+}
+
+/*****************************************************************************
+
+  There may or may not be another line after text_line. Either way, a
+  new line needs creating immediately after text_line, being inserted
+  before subsequent lines if they exist. We set everything manually
+  here as its such a special case. */
+
+static void fracture_float_line(RID_FMT_STATE *fmt)
+{
+    rid_pos_item *text = fmt->text_line;
+    rid_pos_item *later = text->next;
+    rid_pos_item *new = mm_calloc(1, sizeof(*new));
+
+    ASSERT(text != NULL);
+    ASSERT(fmt->stream->pos_list != NULL);
+    ASSERT(fmt->stream->pos_last != NULL);
+    ASSERT(fmt->float_line != text);
+
+    /* Link into chain */
+    new->prev = text;
+    text->next = new;
+
+    if (later != NULL)
+    {
+	later->prev = new;
+	new->next = later;
+    }
+
+    if (text == fmt->stream->pos_last)
+    {
+	ASSERT(later == NULL);
+	fmt->stream->pos_last = new;
+    }
+
+    new->st = fmt->stream;
+    new->left_margin = text->left_margin;
+    new->floats = mm_calloc(1, sizeof(*new->floats));
+    new->floats->right_margin = text->floats->right_margin;
+
+    /* Linked into chain - still need to replicate surviving floating items. */
+}
+
+
+static void fracture_copy_left(RID_FMT_STATE *fmt)
+{
+    rid_pos_item *old = fmt->text_line;
+    rid_pos_item *new = old->next;
+    rid_float_item *fi = old->floats->left;
+    rid_float_item **finp = &new->floats->left;
+    int carried_over = 0;
+
+    ASSERT(new != NULL);
+    ASSERT(old->floats != NULL);
+    ASSERT(fi != NULL);
+    ASSERT(new->floats != NULL);    
+
+    while (fi != NULL)
+    {
+	if (fi->height_left > 0)
+	{
+	    *finp = mm_calloc(1, sizeof(**finp));
+	    **finp = *fi;
+	    (*finp)->next = NULL;
+	    finp = &((*finp)->next);
+	    carried_over++;
+	}
+	fi = fi->next;
+    }
+
+    ASSERT(finp != &new->floats->left);
+
+    FMTDBGN(("fracture_copy_left: carried over %d items\n", carried_over));
+}
+
+
+static void fracture_copy_right(RID_FMT_STATE *fmt)
+{
+    rid_pos_item *old = fmt->text_line;
+    rid_pos_item *new = old->next;
+    rid_float_item *fi = old->floats->right;
+    rid_float_item **finp = &new->floats->right;
+    int carried_over = 0;
+
+    ASSERT(new != NULL);
+    ASSERT(old->floats != NULL);
+    ASSERT(fi != NULL);
+    ASSERT(new->floats != NULL);    
+
+    while (fi != NULL)
+    {
+	if (fi->height_left > 0)
+	{
+	    *finp = mm_calloc(1, sizeof(**finp));
+	    **finp = *fi;
+	    (*finp)->next = NULL;
+	    finp = &((*finp)->next);
+	    carried_over++;
+	}
+	fi = fi->next;
+    }
+
+    ASSERT(finp != &new->floats->right);
+
+    FMTDBGN(("fracture_copy_right: carried over %d items\n", carried_over));
 }
 
 /*****************************************************************************
@@ -543,31 +679,82 @@ static void find_widest_info(RID_FMT_STATE *fmt)
   in the future, and so on until the height of the floating item is
   used up. Such a new fractured float line is past the point of having
   floating items added to it - we just need to flow the text
-  correctly. */
+  correctly.
+
+  Note that if we are called to close a line with floating items only
+  (say IMG BR IMG), then the line will have no height. In that case,
+  pretend the height of the line is the smallest value it could be
+  whilst finishing at least one image. If this repeats multiple times,
+  it will at least work. The alternative is to think harder about
+  removing N images on one go. but this might easily end up with
+  differemt semantics and be a bastard to track.  */
 
 static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
 {
     rid_pos_item *pi = fmt->text_line;
-    const int this_height = pi->max_up + pi->max_down;
+    int this_height = pi->max_up + pi->max_down;
     rid_float_item *fi;
     BOOL l_fracture = FALSE;
     BOOL r_fracture = FALSE;
 
+    FMTDBGN(("consider_fracturing_float_line: this_height %d\n", this_height));
+
+    if (this_height == 0)
+    {
+	this_height = INT_MAX;
+
+	for (fi = pi->floats->left; fi != NULL; fi = fi->next)
+	    if (fi->height_left < this_height && fi->height_left > 0)
+		this_height = fi->height_left;
+
+	for (fi = pi->floats->right; fi != NULL; fi = fi->next)
+	    if (fi->height_left < this_height && fi->height_left > 0)
+		this_height = fi->height_left;
+
+	pi->max_up = this_height;
+
+	FMTDBGN(("consider_fracturing_float_line: this_height NOW %d\n", this_height));
+    }
+
     /* Scan all floating items of this line and see if there are any
-       that require us to fracture this line */
+       that require us to fracture this line. Update their remaining
+       height according to the line being completed. This can lead to
+       negative height information - if this happens, it indicates how
+       many pixels of padding at the bottom of the floater to the
+       bottom of its last line. */
     for (fi = pi->floats->left; !l_fracture && fi != NULL; fi = fi->next)
-	l_fracture = (fi->height_left > this_height);
+    {
+	FMTDBGN(("consider_fracturing_float_line: left height %d lowered by %d\n", fi->height_left, this_height));
+	fi->height_left -= this_height;
+	l_fracture = (fi->height_left > 0);
+    }
 
     for (fi = pi->floats->right; !r_fracture && fi != NULL; fi = fi->next)
-	r_fracture = (fi->height_left > this_height);
+    {
+	FMTDBGN(("consider_fracturing_float_line: right height %d lowered by %d\n", fi->height_left, this_height));
+	fi->height_left -= this_height;
+	r_fracture = (fi->height_left > 0);
+    }
 
     if (l_fracture || r_fracture)
     {
-	
-    }
-    else
-    {
-	
+	static char *msg[4] =
+	{
+	    "",
+	    "left side",
+	    "right side",
+	    "both sides"
+	};
+
+	FMTDBG(("consider_fracturing_float_line: %s causing fracturing\n",
+		msg[l_fracture + 2 * r_fracture]));
+	/* Need to *insert* a new pos item and replicate the floating
+           items that haven't been finished yet. */
+	fracture_float_line(fmt);
+	if (l_fracture)
+	    fracture_copy_left(fmt);
+	if (r_fracture)
+	    fracture_copy_right(fmt);
     }
 }
 
@@ -607,16 +794,22 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     }
 
     FMTDBGN(("close_down_current_line: max up/down %d/%d\n", max_up, max_down));
+#if DEBUG
+    if (debug_get("FMTDBGN"))
+	dump_pos(pi);
+#endif
 
     /* Can now set the height information for this strip */
     pi->top = fmt->y_text_pos;
     pi->max_up = max_up;
     pi->max_down = max_down;
-    fmt->y_text_pos -= pi->max_up + pi->max_down;
 
     /* Might want to fracture a strip here */
     if ( FLOATERS_THIS_LINE(fmt->text_line) )
 	consider_fracturing_float_line(fmt);
+
+    /* fracturing may change these */
+    fmt->y_text_pos -= pi->max_up + pi->max_down;
 
     /* Close down line information */
     find_widest_info(fmt);
@@ -649,11 +842,17 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 	pi->floats = NULL;
     }
 
-    FMTDBGN(("close_down_current_line: widest now %d, height %d/%d, line now %p\n\n",
+    FMTDBGN(("close_down_current_line: widest now %d, height %d/%d, line now %p, ypos %d\n\n",
 	     fmt->stream->widest, 
 	     pi->max_up,
 	     pi->max_down,
-	     fmt->text_line));
+	     fmt->text_line,
+	     fmt->y_text_pos));
+#if DEBUG
+    if (debug_get("FMTDBGN"))
+	dump_pos(pi);
+#endif
+
 }
 
 /*****************************************************************************
@@ -726,6 +925,17 @@ static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
 	no_unbreakable(fmt);    
 }
 
+/*****************************************************************************/
+
+static BOOL only_scaffolding(RID_FMT_STATE *fmt)
+{
+    while (fmt->unbreakable_start != fmt->unbreakable_stop &&
+	   fmt->unbreakable_start->tag == rid_tag_SCAFF)
+	fmt->unbreakable_start = fmt->unbreakable_start->next;
+
+    return fmt->unbreakable_start->tag == rid_tag_SCAFF;
+}
+
 /*****************************************************************************
 
   We have a new unbreakable sequence of text items to place. We need
@@ -737,33 +947,39 @@ static void deal_with_unbreakable_sequence(RID_FMT_STATE *fmt)
 {
     BOOL usf = FALSE;
 
-    get_ubs_width(fmt);
+    if (fmt->unbreakable_start->tag == rid_tag_SCAFF)
+	fmt->previous_pad = 0;
 
-    FMTDBGN(("deal_with_unbreakable_sequence: ubs width is %d\n", fmt->unbreakable_width));
-
-    do
+    if ( /*! only_scaffolding(fmt)*/ 1 )
     {
-	while (1)
+	get_ubs_width(fmt);
+
+	FMTDBGN(("deal_with_unbreakable_sequence: ubs width is %d\n", fmt->unbreakable_width));
+
+	do
 	{
-	    FMTDBGN(("deal_with_unbreakable_sequence: looking for text line without margin clash\n"));
+	    while (1)
+	    {
+		FMTDBGN(("deal_with_unbreakable_sequence: looking for text line without margin clash\n"));
+		
+		if ( fmt->text_line == NULL )
+		    create_new_text_line(fmt);
+		
+		if ( no_text_margin_info(fmt) )
+		    set_text_margin_info(fmt);
+		
+		if ( text_margin_indent_clash(fmt) || ! (usf = unbreakable_sequence_fits(fmt)) )
+		    close_down_current_line(fmt);
+		else 
+		    break;
+	    }
+	    FMTDBGN(("deal_with_unbreakable_sequence: found: looking for line with enough room\n"));
+	} while ( ! usf );
 
-	    if ( fmt->text_line == NULL )
-		create_new_text_line(fmt);
-	    
-	    if ( no_text_margin_info(fmt) )
-		set_text_margin_info(fmt);
+	FMTDBGN(("deal_with_unbreakable_sequence: found: appending ubs to line\n"));
 
-	    if ( text_margin_indent_clash(fmt) || ! (usf = unbreakable_sequence_fits(fmt)) )
-		close_down_current_line(fmt);
-	    else 
-		break;
-	}
-	FMTDBGN(("deal_with_unbreakable_sequence: found: looking for line with enough room\n"));
-    } while ( ! usf );
-
-    FMTDBGN(("deal_with_unbreakable_sequence: found: appending ubs to line\n"));
-
-    append_unbreakable_sequence(fmt);
+	append_unbreakable_sequence(fmt);
+    }
 }
 
 /*****************************************************************************
@@ -828,8 +1044,6 @@ static void next_nonfloating_item(RID_FMT_STATE *fmt)
 
 static void next_floating_item(RID_FMT_STATE *fmt)
 {
-    rid_text_item *ti = fmt->next_item;
-
     /* Find initial place to think about placing floating item */
     if (fmt->float_line == NULL)
 	pickup_float_line(fmt);
@@ -999,6 +1213,8 @@ static void formatting_loop(RID_FMT_STATE *fmt)
 
     while (fmt->next_item != NULL)
     {
+	/*dump_item(fmt->next_item, fmt->rh->texts.data);*/
+
 	if ( FLOATING_ITEM(fmt->next_item) )
 	    next_floating_item(fmt);
 	else
@@ -1121,7 +1337,7 @@ static void stomp_stream(rid_text_stream *stream)
     for (ti = stream->text_list; ti != NULL; ti = rid_scanf(ti))
     {
 	/* Stmop floating items for now */
-	ti->flag &= ~ (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS | rid_flag_CLEARING);
+	/*ti->flag &= ~ (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS | rid_flag_CLEARING);*/
 
 	if (ti->tag == rid_tag_TABLE)
 	{
@@ -1138,43 +1354,109 @@ extern void stomp_captions_until_working(rid_header *header)
 
 /*****************************************************************************
 
-  During table building, the span y field can reflect the number of
-  rows we want, not the number actually allocated yet. However, sleft
-  records the number yet to acquire. So, quick pre/post format fudge
-  to account for this/.
+  <IMG> SPACE <IMG> should not introduce a text item and the implied
+  text line movement. Crudely, we prevent this by looking for
+  sequences that give us gyp and convert the space sequences into
+  scaffolding objects.
 
  */
 
-static void entry_fixes_stream(rid_text_stream *stream);
+static void entry_fixes_stream(rid_text_stream *stream, rid_header *rh);
 
-static void entry_fixes_table(rid_table_item *table)
+static void entry_fixes_table(rid_table_item *table, rid_header *rh)
 {
     int x, y;
     rid_table_cell *cell;
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
     {
-	entry_fixes_stream(&cell->stream);
+	entry_fixes_stream(&cell->stream, rh);
     }
 }
 
-static void entry_fixes_stream(rid_text_stream *stream)
+static BOOL only_whitespace(rid_text_item *ti, rid_header *rh)
+{
+    rid_text_item_text *tit = (rid_text_item_text *)ti;
+    char *s;
+    BOOL only = FALSE;
+
+    flexmem_noshift();		/* no shift whilst accessing text array */
+
+    s = rh->texts.data + tit->data_off;
+    if ( s[0] == ' ' && s[1] == '\0' )
+	only = TRUE;
+
+    flexmem_shift();		/* no shift whilst accessing text array */
+
+    return only;
+}
+
+static void scaffold_check(rid_text_item *ti, rid_header *rh)
+{
+    FMTDBGN(("scaffold_check: ti is %p\n"));
+
+    if ( ti->next != NULL &&
+	 ti->next->tag == rid_tag_TEXT &&
+	 ! FLOATING_ITEM(ti->next) &&
+	 only_whitespace(ti->next, rh) )
+    {
+	rid_text_item *other = ti;
+
+	FMTDBGN(("scaffold_check: worth scanning\n"));
+
+	while (1)
+	{
+	    other = other->next;
+	    FMTDBGN(("scanning: other now %p\n", other));
+	    if (other->next == NULL)
+		break;
+	    if (FLOATING_ITEM(other->next))
+		break;
+	    if (other->next->tag != rid_tag_TEXT)
+		break;
+	    if (! only_whitespace(other, rh) )
+		break;
+	    FMTDBGN(("scaffold_check: continue looping\n"));
+	}
+	
+	FMTDBGN(("scaffold_check: other %p, other->next %p\n", other, other->next));
+
+	if ( other->next != NULL && FLOATING_ITEM(other->next) )
+	{
+	    FMTDBGN(("scaffold_check: converting intervening whitespace to scaffold\n"));
+	    do
+	    {
+		ti = ti->next;
+		FMTDBGN(("scaffold_check: convert %p to rid_tag_SCAFF\n", ti));
+		ti->tag = rid_tag_SCAFF;
+		ti->flag = rid_flag_NO_BREAK;
+		ti->max_up = ti->max_down = 0;
+		ti->pad = ti->width = 0;
+	    } while (ti != other);		
+	}
+    }
+}
+
+static void entry_fixes_stream(rid_text_stream *stream, rid_header *rh)
 {
     rid_text_item *ti;
 
     for (ti = stream->text_list; ti != NULL; ti = rid_scanf(ti))
     {
+	if ( FLOATING_ITEM(ti) )
+	    scaffold_check(ti, rh);
+
 	if (ti->tag == rid_tag_TABLE)
 	{
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
-	    entry_fixes_table(table);
+	    entry_fixes_table(table, rh);
 	}
     }
 }
 
-extern void format_entry_fixes(rid_header *header)
+extern void format_precondition(rid_header *header)
 {
-    entry_fixes_stream(&header->stream);
+    entry_fixes_stream(&header->stream, header);
 }
 
 /*****************************************************************************/
@@ -1206,7 +1488,7 @@ static void exit_fixes_stream(rid_text_stream *stream)
     }
 }
 
-extern void format_exit_fixes(rid_header *header)
+extern void format_postcondition(rid_header *header)
 {
     exit_fixes_stream(&header->stream);
 }

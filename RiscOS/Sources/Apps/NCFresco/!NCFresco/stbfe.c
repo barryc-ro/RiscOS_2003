@@ -632,6 +632,19 @@ static int decode_string(const char *input, const char *matches[], int nmatches)
     return -1;
 }
 
+static os_error *children__update_state(fe_view v, void *handle)
+{
+    /* update current state in the history list */
+    fe_history_update_current_state(v);
+    return NULL;
+}
+
+static void children_update_state(fe_view v)
+{
+    if (v->children)
+	iterate_frames(v->children, children__update_state, NULL);
+}
+     
 /*
  * If there is a fragment id then 'url' parameter will always contain it.
 
@@ -761,6 +774,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     
         backend_dispose_doc(v->displaying);
     }
+
+    /* call fe_history_update_current_state for each child before removing them all */
+    children_update_state(v);
 
     /* dispose of any children - each one will call fe_history_update_current_state before being removed */
     fe_dispose_view_children(v);
@@ -916,12 +932,13 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     {
 	/* transfer any fetching_data values over in to the real world */
-	if (v->fetching_data.hist)
+	fe_view top = fe_find_top(v);
+	if (top->fetching_data.hist)
 	{
-	    v->hist_at = v->fetching_data.hist;
-	    v->fetching_data.hist = NULL;
+	    top->hist_at = top->fetching_data.hist;
+	    top->fetching_data.hist = NULL;
 	}
-	else
+	else if (!v->from_frame)
 	{
 	    fe_history_visit(v, url, title);
 	}
@@ -1327,6 +1344,8 @@ static void check_pending_scroll(fe_view v)
         wimp_box bb;
         int h, hh;
 
+	STBDBG(("check_pending_scrooll %d,%d\n", v->fetching_data.yscroll, v->fetching_data.xscroll));
+	
         frontend_view_bounds(v, &bb);
 
         h = bb.y1 - bb.y0;

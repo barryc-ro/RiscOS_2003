@@ -161,6 +161,24 @@ extern void debug_set(const char *feature, int enable)
     }
 }
 
+extern int debug_get(const char *feature)
+{
+    int ix;
+
+    for (ix = 0; ix < sizeof(dbg_conf) / sizeof(dbg_conf_item); ix++)
+    {
+	/*if ( strcasecmp(dbg_conf[ix].name, feature) == 0 )*/
+	if ( strcmp(dbg_conf[ix].name, feature) == 0 )
+	{
+	    return dbg_conf[ix].present;
+	}
+    }
+
+    return 0;
+}
+
+
+
 /* **** N.B.  These don't need semi-colons at the end as they define functions */
 DBGFNDEF(tabdbg, tab)
 DBGFNDEF(tabdbgn, tabn)

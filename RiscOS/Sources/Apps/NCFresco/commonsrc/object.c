@@ -50,6 +50,9 @@ object_methods object_table[rid_tag_LAST_TAG] = {
 { &oobject_size,	&oobject_redraw,	&oobject_dispose,
       oobject_click,	&oobject_astext,
       0,		0,			oobject_image_handle,
-      &oobject_asdraw,  0			}	/* OBJECT */
-
+      &oobject_asdraw,  0			},	/* OBJECT */
+{ &oscaff_size,		&oscaff_redraw,		0,
+      0,		&oscaff_astext,
+      0,		0,			0,
+      &oscaff_asdraw,   0			},	/* SCAFF */
 };

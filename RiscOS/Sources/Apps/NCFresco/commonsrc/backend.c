@@ -164,8 +164,50 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 
 static be_doc document_list = NULL;
 
-/**********************************************************************/
+/**********************************************************************
 
+  DAF: SPIT! A precise definition of the values being retrieved would
+  be nice. Hopefully I've got the right values.
+
+ */
+
+#if 1
+int antweb_get_edges(const rid_text_item *ti, int *left, int *right)
+{
+    int leftend = 0, rightend = 0;
+
+    if (ti->line)
+    {
+	leftend = ti->line->left_margin;
+	rightend = ti->line->st->fwidth;
+
+        if (ti->line->floats)
+        {
+	    rid_float_item *fi;
+	    int most;
+
+	    for (most = 0, fi = ti->line->floats->left; fi != NULL; fi = fi->next)
+		most = fi->entry_margin + ti->width;
+
+	    if (most > 0)
+		leftend = most;
+
+	    for (most = 0, fi = ti->line->floats->right; fi != NULL; fi = fi->next)
+		most = fi->entry_margin - ti->width;
+	    
+	    if (most > 0)
+		rightend = most;
+        }
+    }
+
+    if (left)
+        *left = leftend;
+    if (right)
+        *right = rightend;
+
+    return rightend - leftend;
+}
+#else
 int antweb_get_edges(const rid_text_item *ti, int *left, int *right)
 {
     int leftend = 0, rightend = 0;
@@ -192,6 +234,7 @@ int antweb_get_edges(const rid_text_item *ti, int *left, int *right)
 
     return rightend - leftend;
 }
+#endif
 
 /*****************************************************************************
 
@@ -942,7 +985,7 @@ static void be_dispose_doc_contents( be_doc doc )
 	be_refresh_document(0, doc);
 #endif
 
-#if DEBUG  > 2
+#if DEBUG >= 2
     if (doc->rh) dump_header(doc->rh);
 #endif
 

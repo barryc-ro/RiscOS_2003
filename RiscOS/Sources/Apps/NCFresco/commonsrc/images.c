@@ -2430,7 +2430,8 @@ static os_error *image_default_image(image i, int scale_image, sprite_area **are
 
     if (ep == 0)
     {
-	pt = mm_malloc(16);
+	/* DAF: under unix might not get initialised, so mm_malloc => mm_calloc */
+	pt = mm_calloc(1,16);
 	id.tag = sprite_id_addr;
 	id.s.addr = sph;
 
@@ -2731,7 +2732,8 @@ static os_error *image_get_trans(sprite_area *area, sprite_ptr sptr, sprite_pixt
 
 	if (pixtrans)
 	{
-	    *pixtrans = mm_malloc(16);
+	    /* DAF: under unix might not get initialised, so mm_malloc => mm_calloc */
+	    *pixtrans = mm_calloc(1, 16);
 	    *table_type = pixtrans_NARROW;
 	}
 
@@ -2765,7 +2767,8 @@ static os_error *image_get_trans(sprite_area *area, sprite_ptr sptr, sprite_pixt
 
 		if (r.r[4])
 		{
-		    *pixtrans = mm_malloc(table_size);
+		    /* DAF: under unix might not get initialised, so mm_malloc => mm_calloc */
+		    *pixtrans = mm_calloc(1, table_size);
 		    *table_type = (table_size >> (sprite_bpp)) > 1 ? pixtrans_WIDE : pixtrans_NARROW;
 
 		    r.r[4] = (int) (long) *pixtrans;

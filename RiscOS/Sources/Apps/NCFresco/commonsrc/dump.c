@@ -225,10 +225,22 @@ extern void dump_float_item(rid_float_item *ptr)
     enter();
     FIELD(ptr, ti, "%p");
     FIELD(ptr, pi, "%p");
+    FIELD(ptr, height, "%d");
+    FIELD(ptr, height_left, "%d");
+    FIELD(ptr, entry_margin, "%d");
     leave();
 #else
     my_print("rid_float_item");
 #endif
+}
+
+extern void dump_float_items(rid_float_item *ptr)
+{
+    while (ptr != NULL)
+    {
+	dump_float_item(ptr);
+	ptr = ptr->next;
+    }
 }
 
 extern void dump_floats_link(rid_floats_link *ptr)
@@ -239,14 +251,23 @@ extern void dump_floats_link(rid_floats_link *ptr)
     my_print("rid_floats_link");
 #endif
     enter();
+    FIELD(ptr, right_margin, "%d");
 #ifndef NO_PTRS
     FIELD(ptr, left, "%p");
     FIELD(ptr, right, "%p");
 #endif
     if (ptr->left)
-	dump_float_item(ptr->left);
+    {
+	my_print("left links");
+	dump_float_items(ptr->left);
+    }
+
     if (ptr->right)
-	dump_float_item(ptr->right);
+    {
+	my_print("right links");
+	dump_float_items(ptr->right);
+    }
+
     leave();
 }
 
@@ -324,7 +345,8 @@ char *item_names[] =
     "TEXTAREA",
     "SELECT",
     "TABLE",
-    "OBJECT"
+    "OBJECT",
+    "SCAFF"
 };
 
 extern void dump_item(rid_text_item *item, char *base)

@@ -91,7 +91,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		images.o layout.o licence.o makeerror.o memwatch.o \
 		myassert.o object.o obreak.o obullet.o oimage.o oinput.o \
 		oselect.o otable.o otext.o otextarea.o printing.o render.o \
-		resolve.o rid.o tables.o threads.o gbf.o \
+		resolve.o rid.o tables.o threads.o gbf.o oscaff.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
@@ -218,7 +218,8 @@ BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
+		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
+		loformat.o cs2.o oscaff.o
 BUILDERS_LIBS=
 
 CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1  -DNEWGROW=1
@@ -227,7 +228,8 @@ CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
+		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
+		loformat.o cs2.o oscaff.o
 CHECKERS_LIBS=
 
 HTMLCHECK_INCS=	-I../stdalone
@@ -256,8 +258,10 @@ PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
-		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
-PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
+		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
+		loformat.o cs2.o oscaff.o
+PLOTCHECK_LIBS=
+#PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
 
 
 RECONS_INCS=	-I../reconsparse -I../RISC_OSLib

@@ -737,14 +737,21 @@ extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
     if (st->text_list)
     {
 	st->text_last->next = t;
-#if 0
-	t->prev = st->text_last;
-#endif
 	st->text_last = t;
     }
     else
     {
-	st->text_list = st->text_last = t;
+	/* This is the first item in the stream. Insert a magic
+           scaffold object first. */
+	rid_text_item *scaff = mm_calloc(1, sizeof(*scaff));
+
+	FMTDBGN(("rid_text_item_connect: inserted rid_tag_SCAFF object\n"));
+
+	scaff->tag = rid_tag_SCAFF;
+	scaff->flag = rid_flag_NO_BREAK;
+	scaff->next = t;
+	st->text_list = scaff;
+	st->text_last = t;
     }
 }
 
@@ -1255,6 +1262,35 @@ extern rid_text_item * rid_scan(rid_text_item * item, int action)
         }
 
         return item;
+}
+
+/*****************************************************************************
+
+  Given a rid_text_item that is floating and a rid_pos_item that it is
+  believed to be floating on, return either NULL or the rid_float_item
+  on the line referencing the floater.  */
+
+extern rid_float_item * rid_get_float_item(rid_text_item *ti, rid_pos_item *pi)
+{
+    rid_float_item *fi;
+
+    ASSERT(ti != NULL);
+    ASSERT(pi != NULL);
+    TASSERT( FLOATING_ITEM(ti) );
+
+    /* No floaters, so dumb question */
+    if (pi->floats == NULL)
+	return NULL;
+
+    if ( (ti->flag & rid_flag_LEFTWARDS) != 0 )
+	fi = pi->floats->left;
+    else
+	fi = pi->floats->right;
+
+    while (fi != NULL && fi->ti != ti)
+	fi = fi->next;
+    
+    return fi;
 }
 
 /*****************************************************************************

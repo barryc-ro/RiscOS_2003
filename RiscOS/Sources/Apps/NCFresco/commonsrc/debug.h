@@ -106,8 +106,9 @@ extern void init_usrtrc(void);
 /* Always exists, might do nothing */
 extern void dbginit(void);
 
-#ifdef DEBUG
+#if DEBUG
 extern void debug_set(const char *feature, int enable);
+extern int debug_get(const char *feature);
 #endif
 
 /*****************************************************************************/
