@@ -8,49 +8,69 @@
 XOS_CLI          * &20005
 XOS_EnterOS      * &20016
 XOS_ServiceCall  * &20030
+XOS_IntOff       * &20014
 
 Service_PreReset * &45
 
 SVC32_mode       * &13
 
+ROMlogaddr       * &03800000
 
-;kernel workspace in 3.7
-ARMA_Cleaner_flipflop * &178
 
         AREA    |main|, CODE, READONLY
 
 
         EXPORT |startnew|
+        EXPORT |DAhandler|
+        EXPORT |svcpeek|
+;        EXPORT |svcpoke|
+        EXPORT |svcarmid|
 
 startnew
       
-; in -  r0 -> where ROM image will be in phys space
+; in -  r0 -> where ROM image will be in phys space (0 if soft unloading)
 ;       r1 -> L1PT
-;       r2 -> where starter code will be in phys space
-;       r3 -> command to load ROM image
-
-
-        ;the ROM/code load may wreck C stack etc, so we must never return!
-
-        MOV     r6,r0
-        MOV     r0,r3
-        SWI     XOS_CLI  ;load the ROM
-        MOV     r0,r6
-
-        MOV     R6, R2
-
+;       r2 -> current ROM in phys space (0 if soft loading)
+;       r3 -> ARMA_Cleaner_flipflop word (kernel workspace, for StrongARM cache clean)
+;
         SWI     XOS_EnterOS
-        TEQP    PC, #&FC000003
 
-        MOV     r0,r0
         STMFD   r13!, {r0,r1}
         MOV     r1, #Service_PreReset   ; issue Service_PreReset to turn off h/w
         SWI     XOS_ServiceCall
         LDMFD   r13!, {r0,r1}
 
-        TEQP    PC, #&FC000003          ; just in case
+        SWI     XOS_IntOff              ; we really don't want old ROM active at all
 
-        ADD     r7, r1, r0, LSR #18     ; r1 -> first L1PT entry
+        TEQ     r0,#0                   ; 0 means we want to 'soft unload' to real ROM
+        BNE     startnew_flatten
+
+        MOV     r0,r2                   ; we'll restart current ROM, but altered to jump to old
+        ADD     r2,r1,#ROMlogaddr:SHR:18 ;L1PT for ROM
+        MOV     r7,r0
+        ORR     r7,r7,#&400             ; make sure we have temporary write access to ROM
+        ORR     r7,r7,#&01E             ; 1st 1Mb section of ROM
+        STR     r7,[r2]
+        ARM_flush_TLB r2
+
+        MOV     r2,#ROMlogaddr
+        LDR     r7,NOPInst
+        STR     r7,[r2]                 ; bung in a few NOPs to allow for some MMU-off delay
+        STR     r7,[r2,#4]
+        STR     r7,[r2,#8]
+        STR     r7,[r2,#12]
+        LDR     r7,MOVPC0Inst
+        STR     r7,[r2,#16]             ; make it leap to real ROM
+
+startnew_flatten
+;
+;set up L1 mapping so that logical mapping of ROM image at r0 is flat with
+;physical mapping - this means that things will go smoothly when we turn off the
+;MMU - we get away with this because the physical address of RAM on Medusa style
+;machine is sufficiently high to avoid trashing any critical mapping around us
+;at this point
+;
+        ADD     r7, r1, r0, LSR #18     ; r7 -> first L1PT entry
         ORR     r2, r0, #(1:SHL:10)     ; svc-only access
         ORR     r2, r2, #(1:SHL:4):OR:2 ; U~C~B, section mapped
         STR     r2, [r7], #4            ; put in entries for 4x 1Mb for ROM
@@ -61,11 +81,6 @@ startnew
         ADD     r2, r2, #1024*1024
         STR     r2, [r7], #4 
 
-        ADD     r7, r1, r6, LSR #18
-        ORR     r2, r6, #(1:SHL:10)       ; svc-only access
-        ORR     r2, r2, #(1:SHL:4):OR:2   ; U~C~B, section mapped
-        STR     r2, [r7]
-
 ;flush cache(s) and TLB(s), ARMs 6,7,StrongARM
         STMFD   r13!,{r0-r4}
         ARM_read_ID r4
@@ -75,7 +90,7 @@ startnew
         ARM67_flush_cache NE       ;if not StrongARM, assume 6,7
         BNE      flushTLB
 ;StrongARM then (and OS must be 3.7 or later)
-        MOV     r2,#ARMA_Cleaner_flipflop
+        MOV     r2,r3              ;ARMA_Cleaner_flipflop, passed in
         LDR     r1,[r2]
         EOR     r1,r1,#16*1024
         STR     r1,[r2]       
@@ -88,61 +103,78 @@ flushTLB
         ARM67_flush_TLB NE         ;if not StrongARM, assume 6,7
         LDMFD   r13!,{r0-r4}
 
-        MOV r2,r6
+        LDR     r3,[r0]
+        LDR     r4,NOPInst               ;if inserted NOP, we want to jump here
+        TEQ     r3,r4
+        MOVEQ   r3,#0
+        BEQ     startnew_jump
+        LDR     r4,LDRPCInst             ;assume 1st instruction of the form LDR PC, [PC, +/-#x]
+        EOR     r3, r3, r4, LSL #12      ; extract offset, and up/down bit
+        TST     r3, #1 :SHL: 23          ; NE => bit was 0, so -ve
+        RSBNE   r3, r3, #1 :SHL: 23      ; get rid of bit 23 and negate
+        ADD     r3, r3, #8               ; offset in ROM we're reading
+        LDR     r3, [r0, r3]             ; address to jump to (may be in hi- or lo- ROM)
 
-        ADR     r3, startnew2
-        ADR     r4, endnew2
-loopnew
-        LDR     r5, [r3], #4            ; copy code
-        STR     r5, [r2], #4
-        TEQ     r3, r4
-        BNE     loopnew
-        CMP     r0, #&04000000          ; if code lives below 64M
-        MOVCC   r2, #0                  ; then we don't need to go into 32-bit mode
-        BCC     go2
-
+startnew_jump
 ; switch into 32-bit mode (we're already in 32-bit config)
         MRS     r2, CPSR
         BIC     r2, r2, #&1F
         ORR     r2, r2, #SVC32_mode
         MSR     CPSR, r2
-        MOV     r2, #&30                ; MMU off, in 32-bit config
-go2
-        MOV     pc,r6
-
-startnew2
-        ARM_write_control r2            ; turn off MMU
-        LDR     r3, [r0]                ; load 1st instruction of ROM image
-        AND     r2, r3, #&FF000000
-        TEQ     r2, #&EA000000          ; is it a branch
-        BNE     notabranch              ; [no, so try something else]
-
-        MOV     r3, r3, LSL #(32-21)    ; extract offset within ROM
-        ADD     r0, r0, r3, LSR #(32-21-2)
-        ADD     pc, r0, #8
-
-notabranch
-
-; check for LDR PC, [PC, +/-#x]
-
-        MOV     r4, r3, LSR #12
-        LDR     r5, LDRPCInst
-        ORR     r4, r4, #1 :SHL: (23-12)
-        TEQ     r4, r5
-endlessloop
-        BNE     endlessloop             ; not either, so stuck
-
-        EOR     r3, r3, r4, LSL #12     ; extract offset, and up/down bit
-        TST     r3, #1 :SHL: 23         ; NE => bit was 0, so -ve
-        RSBNE   r3, r3, #1 :SHL: 23     ; get rid of bit 23 and negate
-        ADD     r3, r3, #8              ; offset in ROM we're reading
-        LDR     r3, [r0, r3]            ; address to jump to (may be in hi- or lo- ROM)
-        MOV     r3, r3, LSL #(32-21)    ; only use bits regarding offset in ROM
-        ADD     pc, r0, r3, LSR #(32-21) ; jump to it
+        MOV     r2,#&30                  ; MMU off, in 32-bit config
+        ARM_write_control r2
+        ADD     pc, r0, r3               ; jump to it
 
 LDRPCInst
         DCD     &E59FF
+NOPInst
+        MOV     R0,R0
+MOVPC0Inst
+        MOV     PC,#0
 
-endnew2
+;DAhandler for softROM DA (needs specific pages)
+;r12 on entry to pregrow points to next page number needed
+;
+;we get away with handler code in app space, because softload runs predesktop
+;(no swapping) and never returns
+;
+DAhandler
+        CMP     r0,#0           ;pregrow? (clears V)
+        MOVNE   pc,r14
+        STMFD   r13!,{r0-r2}
+        LDR     r0,[r12]        ;next page needed
+DAh_pregrowloop
+        STR     r0,[r1],#12
+        ADD     r0,r0,#1
+        SUBS    r2,r2,#1
+        BNE     DAh_pregrowloop
+        STR     r0,[r12]        ;for next call
+        LDMFD   r13!,{r0-r2}
+        MOV     pc,r14
+
+
+; uint32 svcpeek(uint32 *addr)
+svcpeek
+        SWI     XOS_EnterOS
+        LDR     r0, [r0]
+        TEQP    pc, #0
+        MOV     r0, r0
+        MOVS    pc, r14
+
+; void svcpoke(uint32 *addr, uint32 val)
+;svcpoke
+;        SWI     XOS_EnterOS
+;        STR     r1, [r0]
+;        TEQP    pc, #0
+;        MOV     r0, r0
+;        MOVS    pc, r14
+
+; uint32 svcarmid(void)
+svcarmid
+        SWI     XOS_EnterOS
+        MRC     p15,0,r0,c0,c0,0
+        TEQP    pc, #0
+        MOV     r0, r0
+        MOVS    pc, r14
 
         END
