@@ -7,7 +7,7 @@
 #
 # Makefile for socklib.a
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.5  95/08/17  18:39:36  kwelton
 # The _makecall() routine has been rewritten in assembler to get round
 # a race condition that previously existed in the "standard" (i.e.

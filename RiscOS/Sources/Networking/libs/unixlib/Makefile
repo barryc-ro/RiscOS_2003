@@ -7,7 +7,7 @@
 #
 # Makefile for unixlib.a
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.1  95/04/20  09:50:39  kwelton
 # Initial revision
 # 
