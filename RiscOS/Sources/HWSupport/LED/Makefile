@@ -6,6 +6,8 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
+# 02-Jun-99  SBF          Modified to use LocalRes.
+#                         Added StripDepnd support.
 #
 
 #
@@ -24,6 +26,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = -stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -D${MACHINE}=1 ${DFLAGS}
@@ -58,7 +61,7 @@ RAMTDIR   = rm.${MACHINE}
 RAMTARGET = ${RAMTDIR}.${COMPONENT}
 LINKEDDIR = linked.${MACHINE}
 MAPDIR    = map.${MACHINE}
-OBJS      = ${OM}.header ${OM}.module ${OM}.veneer ${OM}.led ${OM}.msgfile 
+OBJS      = ${OM}.header ${OM}.module ${OM}.veneer ${OM}.led ${OM}.msgfile
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
 
 .SUFFIXES: .${OM}
@@ -94,11 +97,13 @@ clean:
         ${WIPE} ${MAPDIR} ${WFLAGS}
         ${WIPE} ${TDIR} ${WFLAGS}
         ${WIPE} ${RAMTDIR} ${WFLAGS}
+        @echo Stripping dependencies from makefile...
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
         ${MKDIR} ${RESDIR}.LED
-        ${CP} Resources.${LOCALE}.${UserIF}.InitState         ${RESDIR}.LED.InitState       ${CPFLAGS}
+        ${CP} LocalRes:${UserIF}.InitState ${RESDIR}.LED.InitState ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
