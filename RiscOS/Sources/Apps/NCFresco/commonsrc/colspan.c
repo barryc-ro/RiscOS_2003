@@ -856,6 +856,9 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
     case value_absunit:
 	flags = colspan_flag_ABSOLUTE | colspan_flag_ABSOLUTE_GROUP;
 	z = (scale_value * ceil(vp->u.f)) / 100;
+	/* DAF: 970708: account for height this way now */
+	if (widths[RAW_MIN] < z)
+	    widths[RAW_MIN] = widths[RAW_MAX] = z;
 	if (widths[ABS_MAX] < z)
 	    widths[ABS_MAX] = widths[ABS_MIN] = z;
 	break;
@@ -928,6 +931,9 @@ static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell,
     case value_absunit:
 	*flags |= colspan_flag_ABSOLUTE | colspan_flag_ABSOLUTE_COL | colspan_flag_USED;
 	z = (scale_value * ceil(vp->u.f)) / 100;
+	/* DAF: 970708: account for height this way now */
+	if (widths[RAW_MIN] < z)
+	    widths[RAW_MIN] = widths[RAW_MAX] = z;
 	if (widths[ABS_MAX] < z)
 	    widths[ABS_MAX] = widths[ABS_MIN] = z;
 	break;

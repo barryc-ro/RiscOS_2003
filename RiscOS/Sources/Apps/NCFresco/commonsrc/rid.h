@@ -450,6 +450,8 @@ typedef struct rid_textarea_item {
 #if NEW_TEXTAREA
     memzone default_text;
     memzone text;
+    int n_lines;		/* number of lines in use */
+    int *lines;			/* array of line start points, 1 more entry than n_lines */
 #else
     rid_textarea_line *default_lines, *def_last_line;
     rid_textarea_line *lines, *last_line;

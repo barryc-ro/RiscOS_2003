@@ -337,14 +337,17 @@ void oimage_render_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, in
     }
 }
 
-int oimage_decode_align(rid_image_flags flags, int height)
+int oimage_decode_align(rid_pos_item *pi, rid_image_flags flags, int height)
 {
+    /* pdh: not sure whether pi can be NULL, so assume it can be */
     int max_up;
 
     if (flags & rid_image_flag_ATOP)
     /* TOP and TEXTTOP */
     {
-	max_up = webfonts[WEBFONT_BASE].max_up;
+	max_up = pi ? pi->max_up : webfonts[WEBFONT_BASE].max_up;
+	IMGDBG(("decode_align: setting max_up to %d, %sfrom pos_item\n",
+	        max_up, pi ? "" : "not " ));
     }
     else if (flags & rid_image_flag_ABOT)
     {
@@ -452,6 +455,7 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
 void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
+    rid_pos_item *pi = ti->line;
     int width = -1, height = -1;
     image_flags fl;
     int min;
@@ -496,19 +500,19 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     min = (tii->bwidth ? 2 : 0) + (tii->hspace ? 2 : 0);
     if (tii->hgap < min)
 	tii->hgap = min;
-	
+
     tii->vgap = (tii->bwidth + tii->vspace) *doc->scale_value/100 * 2;
     min = (tii->bwidth ? 2 : 0) + (tii->vspace ? 2 : 0);
     if (tii->vgap < min)
 	tii->vgap = min;
-    
+
     width += tii->hgap * 2;
     height += tii->vgap * 2;
 
     ti->width = width;
     ti->pad = 0;
 
-    ti->max_up = oimage_decode_align(tii->flags, height);
+    ti->max_up = oimage_decode_align(pi, tii->flags, height);
     ti->max_down = height - ti->max_up;
 
     IMGDBG(("oimage_size:       width %d height %d hgap %d vgap %d item width %d max up %d down %d\n", width, height, tii->hgap, tii->vgap, ti->width, ti->max_up, ti->max_down));

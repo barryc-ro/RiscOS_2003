@@ -167,7 +167,7 @@ extern void startli (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     case HTML_UL:
     {
         /* check for type from the element */
-        VALUE *attr = &attributes->value[HTML_UL_TYPE];
+        VALUE *attr = &attributes->value[HTML_LI_TYPE];
         if (attr->type == value_enum)
             item_type = attr->u.i;
 	break;

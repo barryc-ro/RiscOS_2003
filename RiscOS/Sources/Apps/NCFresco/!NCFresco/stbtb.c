@@ -1788,8 +1788,9 @@ void tb_status_hide(int only_if_small)
     if ((status_state != status_CLOSED && !only_if_small) || status_state == status_OPEN_SMALL)
     {
 	BOOL focus = havefocus(bar_list);
-	
-	sound_event(snd_TOOLBAR_HIDE);
+
+	if (status_state == status_OPEN)
+	    sound_event(snd_TOOLBAR_HIDE);
 
         frontend_complain((os_error *)_swix(Toolbox_HideObject, _INR(0,1), 0, bar_list->object_handle));
         status_state = status_CLOSED;

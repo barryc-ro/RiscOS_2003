@@ -404,6 +404,7 @@ os_error *backend_item_info(be_doc doc, be_item ti, int *flags, char **link, voi
 #define be_item_info_SECURE	(1 << 8) /* If ACTION then dest URL is https:... */
 #define be_item_info_PLUGIN	(1 << 9) /* The item is a plugin, 'im' is the internal plugin handle */
 #define be_item_info_LABEL	(1 << 10) /* The item is a LABEL for a form element */
+#define be_item_info_NUMBERS	(1 << 11) /* INPUT TYPE=TEXT NUMBERS (NCFresco only) */
 
 os_error *backend_image_size_info(be_doc doc, void *imh, int *width, int *height, int *bpp);
 os_error *backend_image_file_info(be_doc doc, void *imh, int *load, int *exec, int *size);

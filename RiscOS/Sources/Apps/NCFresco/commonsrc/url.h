@@ -22,6 +22,8 @@ char *url_escape_chars(const char *s, const char *escapes);
 int url_escape_cat(char *buffer, const char *in, int len);
 void url_escape_to_file(const char *s, FILE *f);
 BOOL url_escape_file_to_file(FILE *in, FILE *out);
+extern int url_escape_cat_n(char *buffer, const char *in, int len, int n);
+extern void url_escape_to_file_n(const char *s, FILE *f, int n);
 
 extern char *url_path_trans(const char *s, int topath);
 

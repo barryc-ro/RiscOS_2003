@@ -535,6 +535,8 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 	i->plotter = plotter_OSJPEG;
 	i->flags |= image_flag_CHANGED;
 
+	IMGDBG(("im%p: choosing OSJPEG\n", i ));
+
 	IMGDBGN(("img: im %p leaving to OS size %dx%d\n", i, i->width, i->height));
 
 	return FALSE;
@@ -640,6 +642,12 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 
     i->width = ir->x_logical;	/* changed to logical sizes */
     i->height = ir->y_logical;
+
+    if ( i->width == 0 || i->height == 0 )
+    {
+        i->flags |= image_flag_ERROR;
+        return FALSE;
+    }
 
     if (ir->x != ir->x_logical || ir->y != ir->y_logical)
 	i->flags |= image_flag_USE_LOGICAL;
@@ -766,6 +774,8 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
 			i->plotter = plotter_DRAWFILE; /* 'Draw' */
 		    else
 			i->plotter = plotter_UNKNOWN;
+
+                    IMGDBG(("im%p: setting plotter=%d in ihi\n", i, i->plotter));
 		}
 		break;
 	    }
@@ -901,7 +911,7 @@ static char *image_thread_end(image i)
     IMGDBG(("im%p: image_thread_end (status=%d)\n", i, i->tt ? i->tt->status : -1));
 
     if (!i->tt)
-	return "";
+	return NULL;
     
     /* thread doesn't seem to die in two calls when called from image_flush or the like */
     _kernel_osbyte(0xE5, 0, 0);
@@ -1082,7 +1092,16 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
     {
         /* We can't rewind webimage, so we must start again */
         if ( i->tt )
+	{
             image_thread_end(i);
+
+	    /* SJM: 7Jul97: if internal then we need to force a plot */
+	    if (i->plotter != plotter_SPRITE && i->plotter != plotter_UNKNOWN && i->data_area)
+	    {
+		i->flags |= image_flag_RENDERABLE | image_flag_REALTHING;
+		image_issue_callbacks(i, image_cb_status_UPDATE, NULL);
+	    }
+	}
 
         IMGDBG(("im%p: completed a part\n",i));
 
@@ -1897,7 +1916,10 @@ os_error *image_stream_end(image i, char *cfile)
     }
     else
     {
+        /* pdh: changed 'cos this isn't really an error situation
 	res = "No thread to end";
+	 */
+        res = NULL;
     }
 
     i->flags |= image_flag_FETCHED;

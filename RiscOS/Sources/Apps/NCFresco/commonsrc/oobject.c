@@ -183,7 +183,7 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
     ti->width = width;
     ti->pad = 0;
 
-    ti->max_up = oimage_decode_align(obj->iflags, height);
+    ti->max_up = oimage_decode_align(ti->line, obj->iflags, height);
     ti->max_down = height - ti->max_up;
 
     OBJDBG(("oobject: size to w=%d,u=%d,d=%d\n", ti->width, ti->max_up, ti->max_down));

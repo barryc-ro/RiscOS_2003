@@ -36,6 +36,15 @@
 #define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
 #endif
 
+
+/* bias values for text links */
+#define TEXT_X0	12
+#define TEXT_X1	12
+#define TEXT_Y0	0
+#define TEXT_Y1	6
+
+#define IMAGE_SPACE	4
+
 #if 0
 
 #define HSPACE	4
@@ -205,7 +214,7 @@ void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
     {
 	int x, y, w, h, i;
 	int last = -1;
-	int border_width = config_display_highlight_width*2 + 4;
+	int border_width = config_display_highlight_width*2 + IMAGE_SPACE;
 
 	x = hpos - border_width;
 	y = bline - ti->max_down - border_width;
@@ -341,7 +350,7 @@ void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
     }
 }
 
-static void draw_partial_box(BOOL first, BOOL last, int x, int y, int w, int h)
+static void draw_partial_box(BOOL first, BOOL last, BOOL first_line, int x, int y, int w, int h)
 {
     int dx = frontend_dx, dy = frontend_dy;
     int ww = last ? w : w - dx;
@@ -355,7 +364,12 @@ static void draw_partial_box(BOOL first, BOOL last, int x, int y, int w, int h)
         bbc_move(x, y + h - dy);
 
     if (ww > 0)
-	bbc_drawby(ww, 0);
+    {
+	if (first_line)
+	    bbc_drawby(ww, 0);
+	else
+	    bbc_moveby(ww, 0);
+    }
 
     if (last)
         bbc_drawby(0, - (h-dy));
@@ -410,19 +424,20 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
     BOOL last = ti->next == NULL || ti->next->aref == NULL || ti->next->aref != ti->aref;
     BOOL first_in_line = ti == ti->line->first;
     BOOL last_in_line = ti->next == ti->line->next->first;
+    BOOL on_first_line = ti->line == ti->aref->first->line;
     int width, height;
+
+    first = first || first_in_line;
+    last = last || last_in_line || ti->next->tag != ti->tag; /* if type changes then count as end of line */
 
     if (has_text || (first ^ last))
     {
 	int i, n, ypos;
 	int last_col = -1;
 
-	first = first || first_in_line;
-	last = last || last_in_line || ti->next->tag != ti->tag; /* if type changes then count as end of line */
-
 	width = ti->width + (last ? 0 : ti->pad);
 	height = ti->max_up + ti->max_down - frontend_dy;
-
+	
 	ypos =  b - ti->max_down;
 
 	/* for now limit the text border width to 4 pixels */
@@ -430,6 +445,22 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	if (n > 4)
 	    n = 4;
 
+	/* raise first line by width + gap */
+	if (on_first_line)
+	    height += n*2 + IMAGE_SPACE;
+	else
+	    height += 2;	/* nasty value to fill hole - should be based on leading and stuff */
+
+	/* move first box left to avoid obscuring text */
+	if (first)
+	{
+	    hpos -= n*2 + IMAGE_SPACE;
+	    width += n*2 + IMAGE_SPACE;
+	}
+
+	if (width < n*2)
+	    width = n*2;
+	
 	for (i = 0; i < n; i++)
 	{
 	    int col = get_colour_text(i);
@@ -437,7 +468,7 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	    if (col != last_col)
 		render_set_colour(last_col = col, doc);
 
-	    draw_partial_box(first, last, hpos, ypos, width, height);
+	    draw_partial_box(first, last, TRUE, hpos, ypos, width, height);
 	    if (first)
 	    {
 		hpos += 2;
@@ -452,6 +483,5 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	}
     }
 }
-
 
 /* eof highlight.c */

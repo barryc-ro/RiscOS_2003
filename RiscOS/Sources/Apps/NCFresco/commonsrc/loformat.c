@@ -1200,12 +1200,27 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 	    if (ti->line != pi)
 		break;
 
+	    /* Lots of filth for <IMG align=top> */
+	    if ( ti->tag == rid_tag_IMAGE )
+	    {
+	        IMGDBGN((" ti%p: calling size()\n", ti ));
+	        (object_table[ti->tag].size)( ti, fmt->rh, fmt->doc );
+	    }
+
+            IMGDBGN((" ti%p: [%d] considering max_up %d\n",
+                    ti, ti->tag, ti->max_up ));
+
 	    if (ti->max_up > max_up)
+	    {
 		max_up = ti->max_up;
+		pi->max_up = max_up;    /* needed so align=top works */
+	    }
 	    if (ti->max_down > max_down)
 		max_down = ti->max_down;
 	}
     }
+
+    IMGDBGN(("pi%p: ending max_up scan (%d)\n", pi, max_up));
 
     FMTDBGN(("close_down_current_line: max up/down %d/%d\n", max_up, max_down));
 #if DEBUG

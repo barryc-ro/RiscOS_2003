@@ -791,7 +791,7 @@ void sound_event(sound_event_t event_num)
 {
     if (config_sound_fx && event_num != snd_NONE)
     {
-	DBG(("sound_event: %x\n", event_num));
+	DBG(("sound_event: %x from %s/%s\n", event_num, caller(1), caller(2)));
 	_swix(SoundFX_Play, _INR(0,1), 0, event_num);
     }
 }

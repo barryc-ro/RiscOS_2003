@@ -219,45 +219,13 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (update == object_redraw_HIGHLIGHT)
-	return;
-
-    /* quick exit if there is no text to display */
-    if (rh->texts.data[tit->data_off] == 0)
-	return;
-
-    tfc = render_text_link_colour(ti, doc);
-    tbc = render_background(ti, doc);
-
 #ifdef STBWEB
     draw_highlight_box = ti->aref && ti->aref->href &&
 	(ti->aref->flags & rid_aref_LABEL) == 0 && /* SJM: 11/05/97: made LABELs not cause text to highlight */
 	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED);
-
-    if (draw_highlight_box && (doc->flags & doc_flag_SOLID_HIGHLIGHT))
-    {
-	tbc = render_link_colour(ti, doc);
-
-	render_set_colour(tbc, doc);
-
-	bbc_rectanglefill(hpos, bline - ti->max_down, ti->width + ti->pad, ti->max_up + ti->max_down);
-	draw_highlight_box = FALSE;
-    }
 #endif
+
     wf = getwebfont(doc, ti);
-
-    if (fs->lf != wf->handle)
-    {
-	fs->lf = wf->handle;
-	font_setfont(fs->lf);
-    }
-
-    if ( fs->lfc != tfc || fs->lbc != tbc )
-    {
-	fs->lfc = tfc;
-	fs->lbc = tbc;
-	render_set_font_colours(tfc, tbc, doc);
-    }
 
     /* adjust base line for subscipts and superscripts */
     b = bline;
@@ -270,6 +238,47 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     case rid_sf_SUP:
 	b += wf->max_up/2;
 	break;
+    }
+
+    if (update == object_redraw_HIGHLIGHT)
+    {
+	if (draw_highlight_box && (doc->flags & doc_flag_SOLID_HIGHLIGHT) == 0)
+	    highlight_draw_text_box(ti, doc, b, hpos, TRUE);
+	return;
+    }
+
+    /* quick exit if there is no text to display */
+    /* removed because it upsets the highligt box drawing */
+#if 1
+    if (rh->texts.data[tit->data_off] == 0)
+	return;
+#endif
+    tfc = render_text_link_colour(ti, doc);
+    tbc = render_background(ti, doc);
+
+#ifdef STBWEB
+    if (draw_highlight_box && (doc->flags & doc_flag_SOLID_HIGHLIGHT))
+    {
+	tbc = render_link_colour(ti, doc);
+
+	render_set_colour(tbc, doc);
+
+	bbc_rectanglefill(hpos, bline - ti->max_down, ti->width + ti->pad, ti->max_up + ti->max_down);
+	draw_highlight_box = FALSE;
+    }
+#endif
+
+    if (fs->lf != wf->handle)
+    {
+	fs->lf = wf->handle;
+	font_setfont(fs->lf);
+    }
+
+    if ( fs->lfc != tfc || fs->lbc != tbc )
+    {
+	fs->lfc = tfc;
+	fs->lbc = tbc;
+	render_set_font_colours(tfc, tbc, doc);
     }
 
 #if DEBUG_ITEMS
@@ -294,7 +303,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 #ifdef STBWEB
     if (draw_highlight_box)
     {
-	highlight_draw_text_box(ti, doc, b, hpos, !no_text);
+/* 	highlight_draw_text_box(ti, doc, b, hpos, !no_text); */
     }
     else
 #endif /* STBWEB */
@@ -437,11 +446,27 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 
 int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
-    memset(box, 0, sizeof(*box));
-
+#if 0
     if (box)
-	box->x1 = ti->pad + 2;
+    {
+	memset(box, 0, sizeof(*box));
 
+	box->x1 = ti->pad + 2;
+    }
+#else
+    if (box)
+    {
+	int d = config_display_highlight_width*2 + 4;
+       
+	/* these values must tie up with what's in highlight_draw_text_box */
+	box->x0 = ti == ti->aref->first || ti == ti->line->first ? -d : 0;
+	box->y1 = ti->line == ti->aref->first->line ? d : 2;
+	box->x1 = ti->pad + 2;
+	if (box->x1 < d)
+	    box->x1 = d;
+	box->y0 = 0;
+    }
+#endif
     return FALSE;
 }
 

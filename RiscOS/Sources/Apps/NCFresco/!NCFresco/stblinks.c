@@ -633,6 +633,12 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    return;
 	}
 
+	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
+	{
+	    STBDBG(("fe_move_highlight_xy: frames v %p last ditch with h wrapping %p\n", v, new_link));
+	    return;
+	}
+
 	/* if can't move on then beep */
 	STBDBG(("fe_move_highlight_xy: frames v %p can't find new frame\n", v));
 	sound_event(snd_WARN_NO_FIELD);
@@ -1093,7 +1099,7 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	had_caret = FALSE;
 
 	/* this needs to check whether it is NUMBERS or not */
-	need_caret = (flags & be_item_info_INPUT) && 
+	need_caret = (flags & (be_item_info_INPUT|be_item_info_NUMBERS)) == be_item_info_INPUT && 
 	    backend_read_highlight(v->displaying, &had_caret) == ti &&
 	    !had_caret;
 	

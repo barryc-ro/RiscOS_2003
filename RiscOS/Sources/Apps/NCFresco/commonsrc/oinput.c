@@ -278,7 +278,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	else
 	{
 	    int n = ii->flags & rid_if_NUMBERS ? (ii->xsize == -1 ? DEFAULT_XSIZE : ii->xsize) : text_displayable_width(ii->xsize, doc);
-	    ti->width = webfonts[whichfont].space_width*n + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
+ 	    ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
 	}
 
 	ti->max_up = webfonts[whichfont].max_up + INPUT_TEXT_BORDER_Y;
@@ -511,7 +511,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 #ifdef STBWEB
 	if (ii->flags & rid_if_NUMBERS)
 	{
-	    int i, char_width = webfonts[whichfont].space_width;
+	    int i, char_width = webfont_tty_width(1, TRUE);
 	    int n = ii->xsize != -1 ? ii->xsize : DEFAULT_XSIZE;
 	    int bg1 = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back | render_colour_RGB;
 

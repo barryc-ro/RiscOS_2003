@@ -191,6 +191,14 @@ static BOOL getbulletfont( antweb_doc *doc, const rid_text_item_bullet *tib,
     if ( tib->list_type == HTML_UL && tib->item_type != HTML_UL_TYPE_DISC )
     {
         which = WEBFONT_SYMBOL(WEBFONT_SIZEOF(tib->base.st.wf_index));
+
+	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
+	     doc->scale_value < 100 &&
+             ( (which & WEBFONT_SIZE_MASK) > 0 ) )
+	{
+	    which -= (1<<WEBFONT_SIZE_SHIFT);
+	}
+
         antweb_doc_ensure_font( doc, which );
 
         if ( webfonts[which].handle > 0 )
@@ -200,6 +208,14 @@ static BOOL getbulletfont( antweb_doc *doc, const rid_text_item_bullet *tib,
         }
     }
     which = tib->base.st.wf_index;
+
+    if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
+	 doc->scale_value < 100 &&
+	( (which & WEBFONT_SIZE_MASK) > 0 ) )
+    {
+	which -= (1<<WEBFONT_SIZE_SHIFT);
+    }
+
     antweb_doc_ensure_font( doc, which );
     *ppfont = webfonts+which;
     return FALSE;

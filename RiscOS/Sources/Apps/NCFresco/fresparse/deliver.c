@@ -585,7 +585,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
 	    null.bytes = 0;
 	    text = get_tab_expanded_string(item, null);
-	    if ((off = memzone_alloc(&tai->default_text, tai->default_text.used + text.bytes + 1)) != -1)
+	    if ((off = memzone_alloc(&tai->default_text, text.bytes + 1)) != -1)
 	    {
 		char *s;
 

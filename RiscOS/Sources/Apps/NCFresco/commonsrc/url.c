@@ -11,6 +11,7 @@
 
 /* Manipulate URLs */
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -602,6 +603,11 @@ char *url_escape_chars(const char *s, const char *escapes)
 
 int url_escape_cat(char *buffer, const char *in, int len)
 {
+    return url_escape_cat_n(buffer, in, len, INT_MAX);
+}
+
+int url_escape_cat_n(char *buffer, const char *in, int len, int n)
+{
     int i,j;
     int sl;
 
@@ -614,7 +620,7 @@ int url_escape_cat(char *buffer, const char *in, int len)
 
     buffer += sl;
 
-    for(i=j=0; in[i] && len; i++,j++)
+    for(i=j=0; in[i] && len && i < n; i++,j++)
     {
 	int c = in[i];
         if (c == ' ')
@@ -648,9 +654,15 @@ int url_escape_cat(char *buffer, const char *in, int len)
 
 void url_escape_to_file(const char *s, FILE *f)
 {
-    char c;
+    url_escape_to_file_n(s, f, INT_MAX);
+}
 
-    while ( (c=*s++) != 0 && !ferror(f))
+void url_escape_to_file_n(const char *s, FILE *f, int n)
+{
+    char c;
+    int i = 0;
+
+    while ( (c=*s++) != 0 && !ferror(f) && i < n)
     {
 	if (c == ' ')
         {
@@ -666,6 +678,8 @@ void url_escape_to_file(const char *s, FILE *f)
 	    fputc(hexchars[(c>>4) & 0xf], f);
 	    fputc(hexchars[(c>>0) & 0xf], f);
 	}
+
+	i++;
     }
 }
 

@@ -678,7 +678,7 @@ int plugin_send_focus(plugin pp)
     
     OBJDBG(("plugin: send focus %p state %d\n", pp, pp ? pp->state : -1));
 
-    if (pp == NULL)
+    if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
     
     if ((pp->opening_flags & plugin_opening_CAN_FOCUS) == 0)
@@ -710,7 +710,7 @@ int plugin_send_action(plugin pp, int new_action)
     OBJDBG(("plugin: send action %p action %d state %d helper %d\n",
 	    pp, new_action, pp ? pp->state : -1, pp ? pp->priv_flags & plugin_priv_HELPER : -1));
 
-    if (pp == NULL)
+    if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
     
     /* Build message block */
@@ -735,7 +735,7 @@ int plugin_send_abort(plugin pp)
     if (pp == NULL)
 	pp = first_helper();
 
-    if (pp == NULL)
+    if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
     
     OBJDBG(("plugin: send abort %p state %d\n", pp, pp->state));
@@ -779,6 +779,10 @@ static void plugin_send_stream_destroy(plugin_stream_private *psp, int your_ref,
     wimp_msgstr msg;
     message_plugin_stream_destroy *sdestroy = (message_plugin_stream_destroy *)&msg.data;
 
+    /* Don't send destroy if known to be closed */
+    if (psp->pp->state != plugin_state_OPEN)
+	return;
+    
     OBJDBG(("plugin: send stream destroy %p state %d your ref %d reason %d\n", psp, psp->stream_state, your_ref, reason));
 
     msg.hdr.size = sizeof(wimp_msghdr) + sizeof(*sdestroy);

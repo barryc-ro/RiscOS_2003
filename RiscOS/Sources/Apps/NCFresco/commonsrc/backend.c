@@ -743,6 +743,8 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    case rid_it_TEXT:
 	    case rid_it_PASSWD:
 		f |= be_item_info_INPUT;
+		if (ii->flags & rid_if_NUMBERS)
+		    f |= be_item_info_NUMBERS;
 		break;
 	    case rid_it_IMAGE:
 		/* Do set the ISMAP flag for an IMAGE unless the NOCURSOR flag is set */
@@ -1541,7 +1543,7 @@ void antweb_update_item(antweb_doc *doc, rid_text_item *ti)
 }
 
 #define LEEWAY 64
-static void be_ensure_buffer_space(char **buffer, int *len, int more)
+void be_ensure_buffer_space(char **buffer, int *len, int more)
 {
     int curlen = strlen(*buffer);
 
@@ -4504,7 +4506,8 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 #ifndef BUILDERS
 	frontend_view_visit(doc->parent, NULL, url,
-			    status == status_BAD_FILE_TYPE ?
+/* 			    status == status_BAD_FILE_TYPE ? */
+			    status != status_FAIL_DNS ?
 			    (char *)makeerror(ERR_UNSUPORTED_SCHEME) :			/* cannot display the web page */
 			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile));	/* cannot find the web page */
 #endif

@@ -197,6 +197,7 @@ extern void antweb_uncache_image_info(antweb_doc *doc);
 /* backend.c */
 
 extern os_error *antweb_doc_ensure_font( antweb_doc *doc, int n );
+extern void be_ensure_buffer_space(char **buffer, int *len, int more);
 
 /* from keyhl.c */
 

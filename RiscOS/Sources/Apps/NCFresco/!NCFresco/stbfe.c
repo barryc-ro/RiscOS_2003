@@ -1780,7 +1780,8 @@ void fe_ensure_highlight_after_fetch(fe_view v)
 	}
 	    
 	/* if there was anything to move to then set the caret in the window */
-	if (backend_highlight_link(vcaret->displaying, item, flags | movepointer()) != NULL ||
+	if (backend_highlight_link(vcaret->displaying, item, be_link_ONLY_CURRENT | flags | movepointer()) != NULL ||
+	    ((flags & be_link_ONLY_CURRENT) == 0 && backend_highlight_link(vcaret->displaying, item, flags | movepointer()) != NULL) ||
 	    backend_highlight_link(vcaret->displaying, NULL, flags | movepointer()) != NULL)
 	    fe_get_wimp_caret(vcaret->w);
 

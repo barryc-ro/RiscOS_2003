@@ -1481,6 +1481,10 @@ static void recurse_format_table(antweb_doc *doc,
 
 	recurse_format_stream(doc, rh, &cell->stream, depth);
 
+#if 0
+	/* DAF: 970708: Need to know both the real stream height and
+           the users desired height. So don't set this here, but
+           account for it when building colspan structures. */
 	rid_getprop(table, x, y, rid_PROP_HEIGHT, &v);
 
 	switch (v.type)
@@ -1491,6 +1495,7 @@ static void recurse_format_table(antweb_doc *doc,
 		cell->stream.height = z;
 	    break;
 	}
+#endif
     }
 
     /*  All descendent cells/streams now have heights. These heights
@@ -1611,7 +1616,7 @@ static void recurse_format_stream(antweb_doc *doc,
 /* Never scale things to under this percentage */
 /* 576/640 = 0.9 = ideal ratio. go for less though! */
 #define MIN_SCALE	80
-#define SCALE_UNIT	4
+#define SCALE_UNIT	10
 
 /* Allow a bit of play to avoid a few pixels over becoming a lot of pixels under */
 #define AUTOFIT_THRESHOLD 32
