@@ -57,6 +57,7 @@ but IssueCommand can still return some errors which CTS should trap.
 
 5. Ideally we should make both card slots use the same code.
 
+6. IFSC and IFSD are used interchangeably when they should be separate.
 
 Fault Finding Notes
 -------------------
@@ -720,7 +721,15 @@ com_ProcessError
 }
 
 
-/* Process Slot 2 S-block
+/*  Process Slot 2 S-block
+    ----------------------
+
+An S-block request is always acknowledged by an S-block response.
+If the card sends an S-block request to us we process it and send a response back
+(although we only take action on IFSC requests at present).
+
+if we send an S-block to the card it will acknowledge it by sending an S-block response
+but we take no action and don't complain if it fails to send a response.
 */
 
 void com_slot2_Sblock(BYTE *data)
@@ -731,17 +740,30 @@ void com_slot2_Sblock(BYTE *data)
   g_uc_state = UC_IDLE;
   if (g_slot2_state ==CMD_CHAIN_LINK) g_slot2_state = CMD_RESPONSE_HDR; /* In case it's the end of the chain */
 
-  if(g_slot2_apdu.PCB == 0xE1)
+  if(g_slot2_apdu.PCB == 0xC1)         /* Test for IFSC request */
   {
-    /* It's an IFSC S-block response we update our Interface Field Size for Card (see ISO/IEC7816-3 page 4) */
+    /* It's an IFSC S-block request we update our Interface Field Size for Card (see ISO/IEC7816-3 page 4) */
     /* The card is telling us what field size it can accept  */
-    IFSC_Value[SLOT_2] = data[0];        /* There is only one data byte and this is new IFSC */
+    IFSC_Value[SLOT_2] = data[0];      /* There is only one data byte and this is new IFSC */
+#if 0
+    /* DO NOT CHECK AGAINST MAXIMUM - THE CARD IS TELLING US ITS MAXIMUM AND THIS IS WHAT WE USE
+       WHEN SENDING DATA: */
     if(IFSC_Value[SLOT_2] > max_ifsc) IFSC_Value[SLOT_2] = max_ifsc; /* Check it's not too long */
+#endif
+
+    /* Send IFSC S-block response back to slot2 */
+    rblock[0]=0x00;                    /* NAD */
+    rblock[1]=g_slot2_apdu.PCB | 0x20; /* PCB of response is received PCB with this bit set */
+    rblock[2]=0x01;                    /* Len is 1 */
+    rblock[3]=data[0];                 /* Copy the INF field in our acknowledgment response */
+    rblock[4]=rblock[1] ^ rblock[2] ^ rblock[3];  /* XOR Checksum */
+    com_SendFunaiHeader(SLOT_2, CMD_APDU);
+    com_SendBytes(rblock, 4);
+    g_uc_state = UC_IDLE;
 
     sys_SigBroadcast(SCI_CMD2_DONE); /** Data is ready for collection **/
   }
-
-  if(g_slot2_apdu.PCB >=0xC0 && g_slot2_apdu.PCB<0xE0 )  /* Test for S-block request */
+  else if(g_slot2_apdu.PCB >=0xC0 && g_slot2_apdu.PCB<0xE0 )  /* Test for other S-block requests */
   {
     /** Send an S-block response back to slot2 **/
     /** This code doesn't fully conform to the ISO spec - we should take further action in some cases, eg WTX */
@@ -1143,8 +1165,7 @@ com_DealWithReadRecord
         int     hcount;
         int     tempchar;
 
-        IFSC_Value[SLOT_2] = 0x20; /* seems like a sensible default */
-        max_ifsc = 0x20;
+        IFSC_Value[SLOT_2] = IFSC_DEFAULT;  /* Default for IFSC in case card doesn't tell us */
 
         if( blocking_readbyte() != 0x3B) return(-1);  /** Same on all supported cards **/
         tempchar=blocking_readbyte();
@@ -1160,7 +1181,7 @@ com_DealWithReadRecord
           default:  return(-1);
         }
         tempchar = blocking_readbyte(); /* Get IFSC value */
-        max_ifsc = tempchar;
+        IFSC_Value[SLOT_2]= tempchar;   /* Record new IFSC value */
         switch(tempchar)
         {
           case 0x25: if((g_slot2_cardtype!=CARD_OLDURL) && (g_slot2_cardtype!=CARD_REASONA)) return(-1);break;

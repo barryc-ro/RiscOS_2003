@@ -26,6 +26,8 @@
 #include "atr.h"
 #include "t1.h"
 
+#include "pmsdebug.h"
+
 atr_states_t AtrState;
 
 static PROT_PARAMS ProtTab[MAX_PROTS];
@@ -46,17 +48,38 @@ card_state_t card_status;	// storage for card parameters
 char *atr_state_names[] =
 	{ALL_ATR_STATES(ARRAY_ENTRY)};
 
-/***************************************************************************/
-int
-atr_ProcessByte (BYTE ch)
-/***************************************************************************/
+
+/*     Process ATR Byte
+       ----------------
+
+On entry:  byte to process is in ch
+On exit:   Returns SCI_SUCCESS or SCI error code (such as SCI_E_COMMS)
+           sci_State is set to S_S_OPEN once the ATR has been fully received.
+
+When the card has been reset it sends us its Answer To Reset (ATR)
+which we process here, one byte per call.
+
+AtrState contains current state telling us how far through the ATR we are.
+
+When we have fully received the ATR, we can also send a protocol select
+and IFSD request. Although they are not strictly part of the ATR we
+handle them here before declaring that the card is open and ready
+for commands from an application.
+*/
+
+int atr_ProcessByte (BYTE ch)
 {
   int channel;
+  static int ifsd_resp_count;
+
 #ifdef DEBUGLIB
 debug_printf(db, "(7) atr_ProcessByte state %s, char %02X, protocol %d\n",
   	atr_state_names[AtrState],ch,card_status.protocol);
 #endif /*DEBUGLIB*/
-  switch (AtrState) {
+    pms_debug("atr_ProcessByte state %s, char %02X, protocol %d",
+  	atr_state_names[AtrState],ch,card_status.protocol);
+
+    switch (AtrState) {
     case ATR_WAIT_TS:
       /* waiting initial byte, this does not concern API */
       /* may get padding characters, ignore and remain in initial state */
@@ -76,6 +99,7 @@ debug_printf(db, "(7) atr_ProcessByte state %s, char %02X, protocol %d\n",
       }
       debug_printf(db, "(7) atr length %d bytes\n",sci_HistLen);
 
+      IFSC_Value[SLOT_1] = IFSC_DEFAULT;   /* Set default IFSC in case we don't get a TA3 value in ATR */
       card_status.T0 = ch;
       HistNext = 0;
       ProtIndex = 0;
@@ -369,25 +393,73 @@ debug_printf(db, "(7) atr_ProcessByte state %s, char %02X, protocol %d\n",
       debug_printf(db, "(7) atr_ProcessByte(): SCI_E_PROTO\n");
 
       return SCI_E_PROTO;
-      /* break; */
+      break;
+
+    case ATR_WAIT_IFSD_RESP:
+    {
+      /* Expected IFSD response from card: E1 is IFSD response, 1 data byte, data is IFSD, checksum: */
+      const static char IFSD_response[]={0x00, 0xE1, 0x01, IFSD, 0xE0 ^ IFSD};
+
+      pms_debug("atr_ProcessByte(): IFSD_resp: %02x", ch);
+      if (ch!=IFSD_response[ifsd_resp_count++]) return SCI_E_PROTO;      /* Return error if card doesn't return correct IFSD response */
+
+      if (ifsd_resp_count==sizeof(IFSD_response))
+        {
+          #ifdef FUNAI_TWINSLOT
+            com_SendAck();
+            g_uc_state = UC_IDLE;
+          #endif
+          AtrState=ATR_COMPLETE;
+        }
+      break;
+    }
   }
 
-  if (AtrState != ATR_ENDED && AtrState != ATR_PTS_ENDED) {
-    return SCI_SUCCESS;
-  }
+  /* Check for sequence of state machine finishing and initiate next sequence:
 
-  if (AtrState == ATR_ENDED) {
-    /* determine if protocol selection required */
-    if (!atr_SendPtss ())
-      return SCI_E_COMMS;
-  }
+     Once the ATR is fully received we may need to send a protocol select command.
+     We also send an IFSD request to the card if it is a JICSAP card.
+  */
 
-  if (AtrState != ATR_PTS_ENDED)
-    return SCI_SUCCESS;
+  if (AtrState==ATR_ENDED)
+    if (!atr_SendPtss ()) return SCI_E_COMMS; /* Do protocol selection, if required */
+
+  pms_debug("   Switch state %s\n", atr_state_names[AtrState]);
+
+  switch (AtrState)
+  {
+    case ATR_PTS_ENDED: /* Protocol selection complete, so send IFSD */
+      /* ATR is complete, send IFSD S-block request to card */
+#ifdef FUNAI_TWINSLOT
+      com_SendAck();
+      g_uc_state = UC_IDLE;
+#endif
+      if (IFSC_Value[SLOT_1]>0x25)   /* If this is a JICSAP card then send an IFSD request.
+                                        (Funai Spec section 2.2 says don't send IFSD to miniJIS cards which we
+                                        can detect as they send IFSC of LESS THAN 0x25. This is incorrect as MiniJIS
+                                        cards actually send an IFSC of 0x25 - they mean LESS THAN 0x26) */
+      {
+        pms_debug("Sending IFSD");
+        SendIFSD(SLOT_1);
+        ifsd_resp_count=0;
+        AtrState=ATR_WAIT_IFSD_RESP; /* Wait for acknowledge from card */
+        return SCI_SUCCESS;
+        break;
+      }
+      else
+        AtrState=ATR_COMPLETE;       /* Don't send IFSD requests to Reasona/Mini-JIS cards - they don't understand */
+      break;
+    case ATR_COMPLETE:
+      break;  /* Continue below */
+    default:
+      return SCI_SUCCESS;
+      break;
+  }
 
   /* ATR received in full successfully */
   sci_State = S_S_OPEN;
-#ifdef FUNAI_TWINSLOT
+
+  #ifdef FUNAI_TWINSLOT
   //printf("ATR successfully handled. Card_status at &%08X\n",(int)&card_status);
   com_SendAck();
   g_uc_state = UC_IDLE;
@@ -404,6 +476,8 @@ debug_printf(db, "(7) atr_ProcessByte state %s, char %02X, protocol %d\n",
   else
   {
 #endif
+  /* Notify application that card is open */
+
     debug_printf(db, "(7) ATR success, signalling apps\n");
     for (channel=0; channel<MAX_CARD_CHANNELS; channel++) {
       if (ChannelTable[channel].flags & channel_in_use) {
@@ -420,6 +494,43 @@ debug_printf(db, "(7) atr_ProcessByte state %s, char %02X, protocol %d\n",
   return (SCI_SUCCESS);
 }
 
+/*   Send IFSD to Card
+     -----------------
+
+Send IFSD to specified card slot (SLOT_1 or SLOT_2)
+
+The IFSD is the Interface Field Size for the interface Device.
+See ISO/IEC7816-3, section 9.5.1.2.
+
+We always send IFSD of 0xFE. This is the maximum that the protocol allows
+and the microcontroller is happy with it. It makes sense to use the largest
+IFSD that we can to improve performance. There was some concern that long
+blocks would make it more likely that card removals would be missed but
+this is not the case, as the microcontroller will always complete the block
+before repoerting card insertion and removal events.
+*/
+
+int SendIFSD(int slot)
+{
+  T1_PCKT cmd;
+
+  debug_printf(db, "Entering SendIFSD()\n");
+
+  cmd.slot = slot;
+
+  cmd.data_start = 0;
+  cmd.total_len = 0;
+
+  cmd.NAD = 0x00;		/* NAD will always be 0 */
+  cmd.PCB = 0xC1;
+  cmd.LEN = 1;
+  cmd.DATA[0]=0xFE;             /* Maximum that is allowed by protocol */
+
+  cmd.TCK = t1_Check(&cmd);	/* calculate checksum */
+
+  return SendBlk(&cmd);
+}
+
 /**************************************************************************/
 static bool
 atr_SendPtss (void)
@@ -431,6 +542,9 @@ atr_SendPtss (void)
    4. sets next state
    Returns TRUE if everything OK, FALSE if comms error sending PTSS.
    It does not return any indication as to whether PTSS was necessary.
+
+   It also sets AtrState to ATR_WAIT_PTS_ACK if an acknowledge is expected
+   or ATR_PTS_ENDED otherwise.
  */
 {
   int i=0;
