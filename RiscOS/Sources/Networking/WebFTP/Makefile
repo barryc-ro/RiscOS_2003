@@ -26,7 +26,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -wp
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -wp -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #
