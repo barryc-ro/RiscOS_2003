@@ -66,10 +66,10 @@ static int got_atm_card = 0;
  */
 static int keywait_delay = 20;
 
-/* Number of retries to use for dynamic boots
+/* Timeout for dynamic boot retries - in seconds
  * Messages file tag:  DynRetries
  */
-static int dynamic_retries = 25;
+static int dynamic_retry_timeout = 600;
 
 /* Maximum length of buffer into which to read allowable Yes keypressed
  * plus the actual characters allowed.
@@ -164,6 +164,13 @@ static void WriteIPCMOS( int location, const struct in_addr *ip )
 	}
 }
 
+/* Reads ATM configuration data from the ATM driver.
+   Pass buffer addresses to receive information, or NULL if not interested in data.
+   Flags are returned with bits set:
+     0  PVC was read
+     1  ATM address 1 was read
+     2  ATM address 2 was read
+ */
 static int ReadATMCMOS(unsigned short *pvc, struct atm_addr *svr1, struct atm_addr *svr2)
 {
 	int flags = 0;
@@ -189,6 +196,14 @@ static int ReadATMCMOS(unsigned short *pvc, struct atm_addr *svr1, struct atm_ad
 	return flags;
 }
 
+/* Write ATM configuration data to the ATM driver.
+   Pass buffer addresses to send information, or NULL if not interested in data.
+   Flags with bits set:
+     0  Write PVC
+     1  Write ATM address 1
+     2  Write ATM address 2
+   Flag big is ignored if passed pointer is NULL
+ */
 static void WriteATMCMOS(int flags, unsigned short pvc, struct atm_addr *svr1, struct atm_addr *svr2)
 {
 	unsigned short old_pvc;
@@ -209,7 +224,7 @@ static void WriteATMCMOS(int flags, unsigned short pvc, struct atm_addr *svr1, s
 				sanitised = 1;
 				atm_boot_config(0, atm_config_SANITISE, atm_config_item_ALL, 0);
 			}
-			atm_write_config(atm_config_item_ADDR_1, &atm_address);
+			atm_write_config(atm_config_item_ADDR_1, svr1);
 		}
 	}
 	if (svr2 != NULL && flags & ReadATMCMOS(NULL, &atm_address, NULL) & (1<<atm_config_item_ADDR_2)) {
@@ -218,7 +233,7 @@ static void WriteATMCMOS(int flags, unsigned short pvc, struct atm_addr *svr1, s
 				sanitised = 1;
 				atm_boot_config(0, atm_config_SANITISE, atm_config_item_ALL, 0);
 			}
-			atm_write_config(atm_config_item_ADDR_2, &atm_address);
+			atm_write_config(atm_config_item_ADDR_2, svr2);
 		}
 	}
 }
@@ -348,11 +363,11 @@ int read_keywait_delay(void)
 	return keywait_delay;
 }
 
-/* Returns the number of retries on dynamic boot attempts
+/* Returns the retry delay on dynamic boot attempts - in seconds
  */
-int read_dynamic_retries(void)
+int read_dynamic_retry_timeout(void)
 {
-        return dynamic_retries;
+        return dynamic_retry_timeout;
 }
 
 /* Returns whether we have an ATM interface card present
@@ -969,7 +984,7 @@ static void ReadMainVars(void)
 	left_indent = ReadNumMsg("LMargin", 0, 100);
 	field_width = ReadNumMsg("HdrWidth", 0, 100);
 	keywait_delay = ReadNumMsg("KeyDelay", 0, 1024);
-	dynamic_retries = ReadNumMsg("DynRetries", 2, 4096);
+	dynamic_retry_timeout = ReadNumMsg("DynRetries", 2, 1<<20); /* Max limit 291 hours! */
 	read_msg("YesChars", yeschars, sizeof(yeschars));
 	read_msg("NoChars", nochars, sizeof(nochars));
 	read_msg("IPCount", unset, sizeof(unset));
@@ -978,7 +993,7 @@ static void ReadMainVars(void)
 	read_msg("NoIP", unset, sizeof(unset));
 }
 
-/* Validates the client, net mask and destination address to ensure that they
+/* Validates the source, net mask and destination address to ensure that they
  * are consistent (ie. the destination must be reachable on the addressable sub-net!)
  */
 static int editconfig_address_reachable(const struct in_addr *client,
@@ -990,12 +1005,15 @@ static int editconfig_address_reachable(const struct in_addr *client,
 /* Pokes the ATM driver during startup if necessary */
 void editconfig_exec_atm_start(ip_data *ip)
 {
-	struct in_addr *pvc_dest;
+	struct in_addr *vc_dest;
 	struct in_addr *remote_ip;
 	char IParg[sizeof("123.123.123.123")];
 	char pvc_address[sizeof("12345")];
-	char cmdbuf[64];
+	char svc_address[sizeof(struct atm_addr) * 2 + 1];
+	static char cmdbuf[sizeof(svc_address) + sizeof(IParg) + 32];
 	const char *pcmdbuf;
+	const char *tag;
+	char *address;
 	size_t inoutlength;
 
 	/* In the case of LanManFS over ATM, we need to be able to reach the NetBIOS
@@ -1010,21 +1028,39 @@ void editconfig_exec_atm_start(ip_data *ip)
 	        remote_ip = &ip->server_ip;
 	}
 
-	/* Can we see the boot server?  If so, establish the PVC to the boot server.
-	 * If not, then we establish the PVC to the gateway instead
+	/* Can we see the boot server?  If so, establish the VC to the boot server.
+	 * If not, then we establish the VC to the gateway instead
 	 */
 	if (editconfig_address_reachable(&ip->client_ip, &ip->netmask_ip, remote_ip)) {
-		pvc_dest = remote_ip;
+		vc_dest = remote_ip;
 	}
 	else {
-		pvc_dest = &ip->gateway_ip;
+		vc_dest = &ip->gateway_ip;
 	}
 
-	(void) sprintf(pvc_address, "%hu", ip->atm_pvc);
-	(void) FormatIP(pvc_dest, IParg);
+	/* Was the configured PVC zero?  If so, try an SVC instead */
+	if (ip->atm_pvc == 0) {
+	        const struct atm_addr *atm = &ip->atm_boot1;
+	        if (editconfig_is_null_atm_address(atm)) {
+	                atm = &ip->atm_boot2;
+	                if (editconfig_is_null_atm_address(atm)) {
+		                return;
+	                }
+	        }
+	        (void) FormatATMAddress(atm, svc_address);
+	        address = svc_address;
+	        tag = "ATMSVC";
+	}
+	else {
+		(void) sprintf(pvc_address, "%hu", ip->atm_pvc);
+		address = pvc_address;
+		tag = "ATMStart";
+	}
+
+	(void) FormatIP(vc_dest, IParg);
 	pcmdbuf = &cmdbuf[0];
 	inoutlength = sizeof(cmdbuf);
-	if (read_message_2("ATMStart", &pcmdbuf, &inoutlength, IParg, pvc_address) == NULL) {
+	if (read_message_2(tag, &pcmdbuf, &inoutlength, IParg, address) == NULL) {
 		(void) _kernel_oscli(pcmdbuf);
 	}
 }
