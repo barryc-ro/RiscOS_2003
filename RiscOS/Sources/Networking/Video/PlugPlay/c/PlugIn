@@ -18,6 +18,7 @@
 /*          18-Apr-2000 (ADH): Imported into PlugPlay.        */
 /**************************************************************/
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,40 +37,57 @@
 #endif
 #include <debuglib/debuglib.h>
 
+#include <Global/SWIs.h>
+#include <MPEG/MPEGCtrl.h>
+#include <MPEG/MPEGVideo.h>
 #include <VideoCtrl.h>
 
 #include "Filter.h"
+#include "Fixed.h"
 #include "FromROSLib.h"
 #include "FullScreen.h"
 #include "Global.h"
 #include "MiscDefs.h"
 #include "ModeInfo.h"
+#include "Mouse.h"
 #include "Overlay.h"
 #include "RMA.h"
 #include "Utils.h"
 
 #include "PlugIn.h"
 
+/* Possible missing external definitions */
+
+#ifndef ModeFiles_SafeArea
+  #define ModeFiles_SafeArea 0x4D481
+#endif
+
+#define ModeFiles_SafeArea_MagicWord 0x45444957 /* "WIDE" */
+
 /* Local definitions and structures */
 
 #define Magic_PlugIn_Instance    0x47554C50 /* "PLUG" */
 
-#define PlugIn_ParamsName_ID         "id"
-#define PlugIn_ParamsName_Data       "data"
-#define PlugIn_ParamsName_Border     "border"
-#define PlugIn_ParamsName_FS         "fullscreen"
-#define PlugIn_ParamsName_SA         "standalone"
-#define PlugIn_ParamsName_Demux      "demux"
-#define PlugIn_ParamsName_AudStream  "audstream"
-#define PlugIn_ParamsName_VidStream  "vidstream"
-#define PlugIn_ParamsName_Program    "program"
-#define PlugIn_ParamsName_From       "from"
-#define PlugIn_ParamsName_To         "to"
-#define PlugIn_ParamsName_Loop       "loop"
-#define PlugIn_ParamsName_Volume     "volume"
-#define PlugIn_ParamsName_NoAudio    "noaudio"
-#define PlugIn_ParamsName_NoVideo    "novideo"
-#define PlugIn_ParamsName_NTSC       "ntsc"
+#define PlugIn_ParamsName_ID          "id"
+#define PlugIn_ParamsName_Data        "data"
+#define PlugIn_ParamsName_Border      "border"
+#define PlugIn_ParamsName_FS          "fullscreen"
+#define PlugIn_ParamsName_SA          "standalone"
+#define PlugIn_ParamsName_Adjust      "adjust"
+#define PlugIn_ParamsName_Fixed       "fixed"
+#define PlugIn_ParamsName_Demux       "demux"
+#define PlugIn_ParamsName_AudStream   "audstream"
+#define PlugIn_ParamsName_VidStream   "vidstream"
+#define PlugIn_ParamsName_Program     "program"
+#define PlugIn_ParamsName_From        "from"
+#define PlugIn_ParamsName_To          "to"
+#define PlugIn_ParamsName_Loop        "loop"
+#define PlugIn_ParamsName_Volume      "volume"
+#define PlugIn_ParamsName_NoAudio     "noaudio"
+#define PlugIn_ParamsName_NoVideo     "novideo"
+#define PlugIn_ParamsName_NoPalette   "nopalette"
+#define PlugIn_ParamsName_NTSC        "ntsc"
+#define PlugIn_ParamsName_HidePointer "hidepointer"
 
 typedef struct plugin_file_entry
 {
@@ -115,7 +133,13 @@ typedef struct plugin_instance
 
   unsigned                   redraw_handler :1;
   unsigned                   reopen_handler :1;
+  unsigned                   focus_handler  :1;
   unsigned                   filter_done    :1;
+  unsigned                   monitoring     :1;
+
+  unsigned                   adjustable     :1;
+  unsigned                   fixed_width    :1;
+  unsigned                   fixed_height   :1;
 
   unsigned                   full_screen    :1;
   unsigned                   stand_alone    :1;
@@ -123,6 +147,7 @@ typedef struct plugin_instance
   unsigned                   loop           :1;
   unsigned                   no_audio       :1;
   unsigned                   no_video       :1;
+  unsigned                   no_palette     :1;
   unsigned                   ntsc           :1;
 }
 plugin_instance;
@@ -146,9 +171,14 @@ static _kernel_oserror * plugin_make_initialised    (WimpMessage * m, BBox * at,
 
 static int               plugin_redraw_window       (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 static int               plugin_reopen_window       (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
+static int               plugin_regain_focus        (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 
 static _kernel_oserror * plugin_move_window         (plugin_instance * i);
 static _kernel_oserror * plugin_move_video          (plugin_instance * i);
+
+static _kernel_oserror * plugin_resize_window       (plugin_instance * i, unsigned int w, unsigned int h);
+static void              plugin_resize_video        (plugin_instance * i);
+static int               plugin_monitor_video       (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 
 /**************************************************************/
 /* plugin_new_instance()                                      */
@@ -238,6 +268,8 @@ static void plugin_delete_instance(plugin_instance * i)
   if (i->filter_done    == 1) filter_remove_filter();
   if (i->redraw_handler == 1) event_deregister_wimp_handler(i->window_id, Wimp_ERedrawWindow, plugin_redraw_window, (void *) i->plugin_instance_handle);
   if (i->reopen_handler == 1) event_deregister_wimp_handler(i->window_id, Wimp_EOpenWindow,   plugin_reopen_window, (void *) i->plugin_instance_handle);
+  if (i->focus_handler  == 1) event_deregister_wimp_handler(i->window_id, Wimp_ELoseCaret,    plugin_regain_focus,  (void *) i->window_handle);
+  if (i->monitoring     == 1) deregister_null_claimant(Wimp_ENull, plugin_monitor_video, (void *) i);
 
   if (i->window_id != NULL_ObjectId) toolbox_delete_object(0, i->window_id);
 
@@ -592,22 +624,44 @@ static _kernel_oserror * plugin_read_params_file(plugin_instance * i, const char
 
       /* Now read our various plug-in supported options */
 
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Border))    i->border      = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_FS))        i->full_screen = YesNoToFlag(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_SA))        i->stand_alone = YesNoToFlag(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Demux))     i->demux       = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_AudStream)) i->aud_stream  = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_VidStream)) i->vid_stream  = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Program))   i->program     = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_From))      i->from        = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_To))        i->to          = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Loop))      i->loop        = YesNoToFlag(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Volume))    i->volume      = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NoAudio))   i->no_audio    = YesNoToFlag(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NoVideo))   i->no_video    = YesNoToFlag(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NTSC))      i->ntsc        = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Border))      i->border      = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_FS))          i->full_screen = YesNoToFlag(i->entries->data); /* Forces Stand Alone to 'yes', see below */
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_SA))          i->stand_alone = YesNoToFlag(i->entries->data);
+
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Demux))       i->demux       = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_AudStream))   i->aud_stream  = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_VidStream))   i->vid_stream  = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Program))     i->program     = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_From))        i->from        = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_To))          i->to          = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Loop))        i->loop        = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Volume))      i->volume      = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NoAudio))     i->no_audio    = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NoVideo))     i->no_video    = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NoPalette))   i->no_palette  = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NTSC))        i->ntsc        = YesNoToFlag(i->entries->data);
+
+      /* Auto resize stuff */
+
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Adjust))      i->adjustable  = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Fixed))
+      {
+        if      (!utils_strcasecmp(i->entries->data, "width"))  i->fixed_width  = 1;
+        else if (!utils_strcasecmp(i->entries->data, "height")) i->fixed_height = 1;
+      }
+
+      /* Force mouse pointer off, on the head of the web page designer...! */
+
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_HidePointer))
+      {
+        if (YesNoToFlag(i->entries->data) != 0) mouse_pointer_off();
+      }
     }
   }
+
+  /* If full-screen, must implicitly be stand-alone */
+
+  if (i->full_screen != 0) i->stand_alone = 1;
 
   /* Normal mode exit */
 
@@ -675,7 +729,7 @@ const char * plugin_return_string(WimpMessage * m, string_value * sv)
 }
 
 /**************************************************************/
-/* plugin_make_stand_alone_instance()                         */
+/* plugin_make_stand_alone()                                  */
 /*                                                            */
 /* Make a stand-alone plug-in instance.                       */
 /*                                                            */
@@ -736,12 +790,11 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
 {
   _kernel_oserror         * e;
   WimpGetWindowStateBlock   state;
-  WimpMessage               response;
   ObjectId                  newo;
   int                       plugin_instance_handle;
   plugin_instance         * i;
   MPlugIn_Open            * open;
-  MPlugIn_Opening         * opening = (MPlugIn_Opening *) &response.data;
+  MPlugIn_Opening         * opening = (MPlugIn_Opening *) &m->data;
 
   #ifdef TRACE
     if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Called for %p, %p\n", m, at));
@@ -792,6 +845,7 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
   i->loop        = 0;
   i->no_audio    = 0;
   i->no_video    = 0;
+  i->no_palette  = 0;
 
   /* If not stand-alone, record the parent task and read the parameters file */
 
@@ -858,10 +912,24 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
     e = window_get_wimp_handle(0, newo, &i->window_handle);
   }
 
-  if (e == NULL && open != NULL)
+  /* For plug-in, get the parent window state so we can work out where the plug-in */
+  /* should be opened in a moment. For full-screen items, install a 'regain input  */
+  /* focus' handler.                                                               */
+
+  if (e == NULL)
   {
-    state.window_handle = open->parent_window_handle;
-    e = wimp_get_window_state(&state);
+    if (open != NULL)
+    {
+      state.window_handle = open->parent_window_handle;
+      e = wimp_get_window_state(&state);
+    }
+    else
+    {
+      e = event_register_wimp_handler(newo,
+                                      Wimp_ELoseCaret,
+                                      plugin_regain_focus,
+                                      (void *) i->window_handle);
+    }
   }
 
   if (e != NULL)
@@ -903,9 +971,9 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
   {
     /* Respond with Message_PlugIn_Opening */
 
-    response.hdr.size                = sizeof(MPlugIn_Opening);
-    response.hdr.your_ref            = m->hdr.my_ref;
-    response.hdr.action_code         = Message_PlugIn_Opening;
+    m->hdr.size                      = sizeof(MPlugIn_Opening) + offsetof(WimpMessage, data);
+    m->hdr.your_ref                  = m->hdr.my_ref;
+    m->hdr.action_code               = Message_PlugIn_Opening;
 
     opening->flags                   = MPlugIn_Opening_ActionBeyondStop;
     opening->browser_instance_handle = i->browser_instance_handle;
@@ -918,7 +986,7 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
     #endif
 
     RetError(wimp_send_message(Wimp_EUserMessage,
-                               &response,
+                               m,
                                m->hdr.sender,
                                0,
                                NULL));
@@ -930,6 +998,22 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
       /* will be re-entered as a result of this call, assuming all goes well.     */
 
       fullscreen_report_error(fullscreen_start(i->url, i->plugin_instance_handle), true);
+    }
+
+    else
+    {
+      /* If this item can be resized to fit the video, set a watcher. It's the */
+      /* best we can do - we don't know when the first frame will be decoded   */
+      /* but we can't read the current video size until then.                  */
+
+      if (i->adjustable != 0 && i->monitoring == 0)
+      {
+        i->monitoring = 1;
+
+        register_null_claimant(Wimp_ENull,
+                               plugin_monitor_video,
+                               i);
+      }
     }
 
     return NULL;
@@ -955,10 +1039,9 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
 
 _kernel_oserror * plugin_got_close(WimpMessage * m)
 {
-  WimpMessage       response;
   plugin_instance * i;
   MPlugIn_Close   * close  = (MPlugIn_Close  *) &m->data;
-  MPlugIn_Closed  * closed = (MPlugIn_Closed *) &response.data;
+  MPlugIn_Closed  * closed = (MPlugIn_Closed *) &m->data;
 
   #ifdef TRACE
     if (tl & (1u<<30)) dprintf(("", "plugin_got_close: Called\n"));
@@ -983,9 +1066,9 @@ _kernel_oserror * plugin_got_close(WimpMessage * m)
 
   /* Respond with Message_PlugIn_Closed */
 
-  response.hdr.size               = sizeof(MPlugIn_Closed);
-  response.hdr.your_ref           = m->hdr.my_ref;
-  response.hdr.action_code        = Message_PlugIn_Closed;
+  m->hdr.size                     = sizeof(MPlugIn_Closed) + offsetof(WimpMessage, data);;
+  m->hdr.your_ref                 = m->hdr.my_ref;
+  m->hdr.action_code              = Message_PlugIn_Closed;
 
   closed->flags                   = 0;
   closed->browser_instance_handle = i->browser_instance_handle;
@@ -996,7 +1079,7 @@ _kernel_oserror * plugin_got_close(WimpMessage * m)
   #endif
 
   return wimp_send_message(Wimp_EUserMessage,
-                           &response,
+                           m,
                            m->hdr.sender,
                            0,
                            NULL);
@@ -1134,6 +1217,8 @@ _kernel_oserror * plugin_got_inform(WimpMessage * m)
 
     if (i != NULL)
     {
+      MPlugIn_Informed * r = (MPlugIn_Informed *) &m->data;
+
       #ifdef TRACE
         if (tl & (1u<<30)) dprintf(("", "plugin_got_inform: Assigning handle to instance %p\n", i));
       #endif
@@ -1143,11 +1228,80 @@ _kernel_oserror * plugin_got_inform(WimpMessage * m)
       /* Ensure the video position is up to date */
 
       RetError(plugin_move_video(i));
+
+      /* Ensure the plug-in matches the video */
+
+      if (i->adjustable != 0 && i->monitoring == 0)
+      {
+        i->monitoring = 1;
+
+        register_null_claimant(Wimp_ENull,
+                               plugin_monitor_video,
+                               i);
+      }
+
+      /* Reply */
+
+      m->hdr.size                = sizeof(MPlugIn_Informed) + offsetof(WimpMessage, data);;
+      m->hdr.your_ref            = m->hdr.my_ref;
+      m->hdr.action_code         = Message_PlugIn_Informed;
+
+      r->browser_instance_handle = i->browser_instance_handle;
+      r->plugin_instance_handle  = i->plugin_instance_handle;
+
+      RetError(wimp_send_message(Wimp_EUserMessage,
+                                 m,
+                                 m->hdr.sender,
+                                 0,
+                                 NULL));
     }
   }
 
   #ifdef TRACE
     if (tl & (1u<<30)) dprintf(("", "plugin_got_inform: Successful\n"));
+  #endif
+
+  return NULL;
+}
+
+/**************************************************************/
+/* plugin_got_focus()                                         */
+/*                                                            */
+/* Handle reception of a Message_PlugIn_Focus.                */
+/*                                                            */
+/* Parameters: Pointer to a Wimp_Message struct relevant to   */
+/*             the message.                                   */
+/**************************************************************/
+
+_kernel_oserror * plugin_got_focus(WimpMessage * m)
+{
+  plugin_instance * i;
+  MPlugIn_Focus   * focus = (MPlugIn_Focus *) &m->data;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) dprintf(("", "plugin_got_focus: Called\n"));
+  #endif
+
+  i = plugin_find_instance(focus->plugin_instance_handle);
+
+  if (i == NULL)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<30)) dprintf(("", "plugin_got_focus: Instance handle &%08X invalid\n", focus->plugin_instance_handle));
+    #endif
+
+    return NULL;
+  }
+
+  /* And then do... Something. */
+
+//  if (i->full_screen == 0)
+//  {
+//    fullscreen_start(i->url, 0);
+//  }
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) dprintf(("", "plugin_got_focus: Successful\n"));
   #endif
 
   return NULL;
@@ -1200,8 +1354,31 @@ static int plugin_redraw_window(int eventcode, WimpPollBlock * b, IdBlock * idb,
 
       bbc_vdu(BBC_ClearGraph);
 
-      ChkError(wimp_get_rectangle(&r, &more));
+// Not particularly good, but just about useable debug stuff -
+// check that the intended play rectangle is correct (best used
+// in conjunction with "command:screensave <filename>").
+//
+//      {
+//        int xmin, ymin, xmax, ymax;
+//
+//        _swix(OS_SetColour,
+//              _INR(0,1),
+//
+//              1u<<4,
+//              0x8);
+//
+//        xmax = i->position.xmax - i->position.xmin;
+//        ymax = i->position.ymax - i->position.ymin;
+//        xmin = i->position.xmin + xmax / 2;
+//        ymin = i->position.ymin + ymax / 2;
+//
+//        xmax -= i->border * 4; /* 2 OS units = 1 "web pixel" taken twice for left plus right borders */
+//        ymax -= i->border * 4; /* 2 OS units = 1 "web pixel" taken twice for top plus bottom borders */
+//
+//        bbc_rectangle(xmin - (xmax / 2), ymin - (ymax / 2), xmax - 1, ymax - 1);
+//      }
 
+      ChkError(wimp_get_rectangle(&r, &more));
     }
     while (more);
   }
@@ -1245,12 +1422,36 @@ static int plugin_reopen_window(int eventcode, WimpPollBlock * b, IdBlock * idb,
 }
 
 /**************************************************************/
+/* plugin_regain_focus()                                      */
+/*                                                            */
+/* For full-screen windows, handle Wimp_ELoseCaret by         */
+/* putting the caret back into the window again.              */
+/**************************************************************/
+
+static int plugin_regain_focus(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
+{
+  unsigned int window_handle = (unsigned int) handle;
+
+  ChkError(wimp_set_caret_position(window_handle,
+                                   -1,
+                                   0,
+                                   0,
+                                   -1,
+                                   -1));
+  return 1;
+}
+
+/**************************************************************/
 /* plugin_move_window()                                       */
 /*                                                            */
 /* Move a plug-in window to the location currenly specified   */
 /* by the "position" BBox and parent window handle in the     */
 /* given plugin_instance structure. If the parent window      */
 /* handle is zero, the item is opened with no parent.         */
+/*                                                            */
+/* If the window is to be moved because we want it to move,   */
+/* rather than because the browser asked for it, you MUST go  */
+/* through plugin_resize_window instead.                      */
 /*                                                            */
 /* Parameters: Pointer to a plugin_instance struct relevant   */
 /*             to the plug-in window to move.                 */
@@ -1373,6 +1574,9 @@ static _kernel_oserror * plugin_move_video(plugin_instance * i)
     opts[4] -= i->border * 4; /* 2 OS units = 1 "web pixel" taken twice for left plus right borders */
     opts[5] -= i->border * 4; /* 2 OS units = 1 "web pixel" taken twice for top plus bottom borders */
 
+    if      (i->fixed_width  != 0) opts[5] = 0; /* Let the MPEG system choose the height */
+    else if (i->fixed_height != 0) opts[4] = 0; /* Let the MPEG system choose the width  */
+
     opts[6] = vc_tags__end;
 
     _swix(VideoControl_Options,
@@ -1384,6 +1588,312 @@ static _kernel_oserror * plugin_move_video(plugin_instance * i)
   }
 
   return NULL;
+}
+
+/**************************************************************/
+/* plugin_check_videos()                                      */
+/*                                                            */
+/* On seeing Service_VideoControl 6 (active area changed),    */
+/* this is called to see if the Video Control handle given in */
+/* the message matches a plug-in instance, and if so,         */
+/* resize the item as required.                               */
+/*                                                            */
+/* Parameters: Video Control session handle to check for.     */
+/*                                                            */
+/* Returns:    Plug-in instance handle for which the resize   */
+/*             was done, else 0 for none.                     */
+/**************************************************************/
+
+unsigned int plugin_check_videos(unsigned int vc_id)
+{
+  plugin_instance * i;
+
+  for (i = instances; i != NULL; i = i->next)
+  {
+    if (i->video_control_handle == vc_id && (i->fixed_width != 0 || i->fixed_height != 0))
+    {
+      /* We found a match */
+
+      plugin_resize_video(i);
+
+      return i->plugin_instance_handle;
+    }
+  }
+
+  /* No match found */
+
+  return 0;
+}
+
+/**************************************************************/
+/* plugin_resize_window()                                     */
+/*                                                            */
+/* Ask the browser to move (resize) the plug-in window via.   */
+/* Message_PlugIn_ReshapeRequest. The parent task handle must */
+/* be non-zero (so calling on slaves has no effect).          */
+/*                                                            */
+/* If width/height of the plug-in matches the given values no */
+/* resize is done.                                            */
+/*                                                            */
+/* Parameters: Pointer to a plugin_instance struct relevant   */
+/*             to the video to examine and plug-in to move;   */
+/*                                                            */
+/*             New width (OS units).                          */
+/*                                                            */
+/*             New height (OS units).                         */
+/**************************************************************/
+
+static _kernel_oserror * plugin_resize_window(plugin_instance * i, unsigned int w, unsigned int h)
+{
+  if (i->parent_task_handle)
+  {
+    /* Is the width/height different from what we last asked for? */
+
+    if (
+         w != i->position.xmax - i->position.xmin ||
+         h != i->position.ymax - i->position.ymin
+       )
+    {
+      WimpMessage              m;
+      MPlugIn_ReshapeRequest * r = (MPlugIn_ReshapeRequest *) &m.data;
+
+      m.hdr.size                 = sizeof(MPlugIn_ReshapeRequest) + offsetof(WimpMessage, data);
+      m.hdr.your_ref             = 0;
+      m.hdr.action_code          = Message_PlugIn_ReshapeRequest;
+
+      r->flags                   = 0;
+      r->browser_instance_handle = i->browser_instance_handle;
+      r->plugin_instance_handle  = i->plugin_instance_handle;
+      r->width                   = w;
+      r->height                  = h;
+
+      return wimp_send_message(Wimp_EUserMessage,
+                               &m,
+                               i->parent_task_handle,
+                               0,
+                               NULL);
+    }
+  }
+
+  return NULL;
+}
+
+/**************************************************************/
+/* plugin_resize_video()                                      */
+/*                                                            */
+/* If the active area of a clip changes, resize the plug-in   */
+/* instance to which it relates.                              */
+/*                                                            */
+/* Service function for plugin_check_videos.                  */
+/*                                                            */
+/* Parameters: Pointer to plugin_instance to deal with.       */
+/**************************************************************/
+
+static void plugin_resize_video(plugin_instance * i)
+{
+  /* We'll use plugin_monitor_video for this. Video is probably already */
+  /* decoding, but the UpCall leading to Service_VideoControl 6 leading */
+  /* to this function being called may have happened right at the start */
+  /* of the clip and data could be buffering up somewhere. So, whilst   */
+  /* we must formally install the monitor as a null handler to catch    */
+  /* the 'still buffering' case, we don't want a possibly large lag     */
+  /* waiting for the null handler to eventually get called if it can be */
+  /* avoided - thus the handler is called directly after it has been    */
+  /* registered. It'll deregister itself immediately if it succeeds.    */
+
+  if (i->monitoring == 0)
+  {
+    i->monitoring = 1;
+
+    register_null_claimant(Wimp_ENull,
+                           plugin_monitor_video,
+                           i);
+  }
+
+  plugin_monitor_video(Wimp_ENull, NULL, NULL, (void *) i);
+
+  /* ...and that's it; the monitor code and message handlers do the rest. */
+
+  return;
+}
+
+/**************************************************************/
+/* plugin_monitor_video()                                     */
+/*                                                            */
+/* Wait until we have a control handle and MPEGControl says   */
+/* that the first frame of the video has been played; when it */
+/* has, resize the plugin to fit it.                          */
+/*                                                            */
+/* If the "monitoring" flag of the plug-in instance structure */
+/* is set then the routine assumes it was installed as a      */
+/* NULL event handler and deregisters itself (when and only   */
+/* when the MPEG system has reported that video is decoding). */
+/* If this flag is clear the deregistration isn't done, so    */
+/* it's possible to directly call this function as a one-off  */
+/* if required.                                               */
+/*                                                            */
+/* Parameters as normal for a Wimp event handler, with the    */
+/* handle pointing to the plugin_instance structure.          */
+/**************************************************************/
+
+static int plugin_monitor_video(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
+{
+  plugin_instance * i = (plugin_instance *) handle;
+  unsigned int      mh;
+  unsigned int      ready;
+
+  /* Extract the MPEG control handle */
+
+  if (i->video_control_handle == 0)
+  {
+    return 0;
+  }
+  else
+  {
+    int opts[4];
+
+    opts[0] = vc_tags_control_handle;
+    opts[1] = 1;
+    opts[2] = 0;
+    opts[3] = vc_tags__end;
+
+    if (
+         _swix(VideoControl_Options,
+               _INR(0,2),
+
+               VC_Options_ReadValues,
+               i->video_control_handle,
+               opts)
+
+         != NULL
+       )
+       return 0;
+
+    mh = opts[2];
+  }
+
+  /* Read the decoding state */
+
+  if (
+       _swix(MPEGVideo_ReadParameters,
+             _IN(0) | _OUT(1),
+
+             5, /* 5 = "Check if display is ready" */
+
+             &ready)
+
+       != NULL
+     )
+     return 0;
+
+  /* Has video decoded? */
+
+  if (ready != 0)
+  {
+    unsigned int   w, h;
+    unsigned int   statsin  [2];
+    unsigned int   statsout [10];
+    unsigned int * written;
+
+    /* Yes - don't need this handler anymore, if it was installed as one */
+
+    if (i->monitoring != 0)
+    {
+      i->monitoring = 0;
+
+      deregister_null_claimant(Wimp_ENull,
+                               plugin_monitor_video,
+                               i);
+    }
+
+    /* Work out where to move to */
+
+    statsin[0] = 0x1011; /* Active area information */
+    statsin[1] = -1;
+
+    if (
+         _swix(MPEGControl_Stats,
+               _INR(0,4) | _OUT(3),
+
+               0,
+               mh,
+               statsin,
+               statsout,
+               sizeof(statsout),
+
+               &written)
+
+         != NULL
+
+         || written     == 0
+         || written     == statsout
+         || statsout[1] == 0
+       )
+       return 0;
+
+    /* The width / height to use depends on the HTML's PARAM settings... */
+
+    if (i->fixed_width != 0)
+    {
+      /* Fixed width, so use our existing dimension. If the MPEG system had told us */
+      /* to change width too, tough; the page author gets what the page author      */
+      /* asked for. This may well mean the plug-in window is too narrow or tall,    */
+      /* leading to a slight in-plug-in letterbox or vertical overscan effect.      */
+
+      w = i->position.xmax - i->position.xmin;
+      h = statsout[8] + i->border * 4;
+    }
+    else if (i->fixed_height != 0)
+    {
+      /* As before, with a fixed height the width just has to take its chances. If */
+      /* scaling can't match exactly there'll be a pillarboxing or horizontal      */
+      /* overscan effect.                                                          */
+
+      w = statsout[7] + i->border * 4;
+      h = i->position.ymax - i->position.ymin;
+    }
+    else
+    {
+      fixed fw, fh, da;
+
+      /* If width or height are fixed, this is a start of playback only adjustment. */
+      /* The MPEG system will make a best-fit guess to the size we requested. This  */
+      /* will not necessarily be the right aspect ratio though - e.g. the page      */
+      /* author's done a 4:3 shape plug-in but somebody later points it at a 16:9   */
+      /* clip. Since the horizontal direction is the most flexible on STB 400       */
+      /* hardware and in the absence of any other indicators, the height that the   */
+      /* MPEG system says it can manage is taken and the width determined by        */
+      /* applying the clip's aspect ratio to it. The pixel aspect ratio must be     */
+      /* taken into account too.                                                    */
+
+      if (
+           _swix(ModeFiles_SafeArea,
+                 _IN(0) | _OUT(4),
+
+                 ModeFiles_SafeArea_MagicWord, /* See top of this file */
+
+                 &da)
+
+           != NULL
+         )
+         da = (fixed) 0x10000; /* 1:1 */
+
+      h  = statsout[8];
+      fh = (fixed) (h << 16u);
+
+      fw = fixed_fixed_multiply(fh, (fixed) statsout[4]);
+      fw = fixed_fixed_divide(fw, da);
+
+      w  = ((unsigned int) fw + 32768) >> 16u;
+
+      w += i->border * 4; /* 1 'web pixel' = 2 OS units, taken */
+      h += i->border * 4; /* twice for left+right/top+bottom.  */
+    }
+
+    plugin_resize_window(i, w, h);
+  }
+
+  return 0;
 }
 
 /**************************************************************/
@@ -1402,7 +1912,8 @@ static _kernel_oserror * plugin_move_video(plugin_instance * i)
 _kernel_oserror * plugin_set_video_options(unsigned int instance, unsigned int vc_id)
 {
   plugin_instance * i;
-  int               opts[28];
+  int               opt[31];
+  int             * opts = opt;
 
   if (instance == 0) return NULL;
   i = plugin_find_instance(instance);
@@ -1424,50 +1935,54 @@ _kernel_oserror * plugin_set_video_options(unsigned int instance, unsigned int v
 
   /* Build the options block */
 
-  opts[0]  = vc_tags_volume;
-  opts[1]  = 1;
-  opts[2]  = i->volume;
+  *opts++ = vc_tags_volume;
+  *opts++ = 1;
+  *opts++ = i->volume;
 
-  opts[3]  = vc_tags_mp2program,
-  opts[4]  = 1;
-  opts[5]  = i->program;
+  *opts++ = vc_tags_mp2program,
+  *opts++ = 1;
+  *opts++ = i->program;
 
-  opts[6]  = vc_tags_mp2audiostream;
-  opts[7]  = 1;
-  opts[8]  = i->aud_stream;
+  *opts++ = vc_tags_mp2audiostream;
+  *opts++ = 1;
+  *opts++ = i->aud_stream;
 
-  opts[9]  = vc_tags_mp2videostream;
-  opts[10] = 1;
-  opts[11] = i->vid_stream;
+  *opts++ = vc_tags_mp2videostream;
+  *opts++ = 1;
+  *opts++ = i->vid_stream;
 
-  opts[12] = vc_tags_demux;
-  opts[13] = 1;
+  *opts++ = vc_tags_demux;
+  *opts++ = 1;
 
-  switch(i->demux)
+  switch (i->demux)
   {
     default:
-    case 0: opts[14] = vc_demux_auto;  break;
-    case 1: opts[14] = vc_demux_mpeg1; break;
-    case 2: opts[14] = vc_demux_mpeg2; break;
+    case 0: *opts++ = vc_demux_auto;  break;
+    case 1: *opts++ = vc_demux_mpeg1; break;
+    case 2: *opts++ = vc_demux_mpeg2; break;
   }
 
-  opts[15] = vc_tags_looping;
-  opts[16] = 1;
-  opts[17] = i->loop;
+  *opts++ = vc_tags_looping;
+  *opts++ = 1;
+  *opts++ = i->loop;
 
-  opts[18] = vc_tags_video_only;
-  opts[19] = 1;
-  opts[20] = i->no_audio;
+  *opts++ = vc_tags_video_only;
+  *opts++ = 1;
+  *opts++ = i->no_audio;
 
-  opts[21] = vc_tags_audio_only;
-  opts[22] = 1;
-  opts[23] = i->no_video;
+  *opts++ = vc_tags_audio_only;
+  *opts++ = 1;
+  *opts++ = i->no_video;
 
-  opts[24] = vc_tags_ntsc;
-  opts[25] = 1;
-  opts[26] = i->ntsc;
+  *opts++ = vc_tags_no_palette;
+  *opts++ = 1;
+  *opts++ = i->no_palette;
 
-  opts[27] = vc_tags__end;
+  *opts++ = vc_tags_ntsc;
+  *opts++ = 1;
+  *opts++ = i->ntsc;
+
+  *opts++ = vc_tags__end;
 
   /* Exit through Video Control */
 
@@ -1476,7 +1991,7 @@ _kernel_oserror * plugin_set_video_options(unsigned int instance, unsigned int v
 
                0,
                vc_id,
-               &opts);
+               opt);
 }
 
 /**************************************************************/

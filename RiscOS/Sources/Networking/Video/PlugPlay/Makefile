@@ -199,6 +199,7 @@ OBJSPP = \
  opp.RMA		\
  opp.URLutils		\
  opp.Utils		\
+ o.Fixed		\
  o.ROSLib		\
  o.SetPW
 
@@ -219,6 +220,7 @@ OBJSPPD = \
  oppd.RMA		\
  oppd.URLutils		\
  oppd.Utils		\
+ o.Fixed		\
  o.ROSLib		\
  o.SetPW
 
@@ -242,6 +244,7 @@ OBJSPPRZ = \
  opprz.URLutils		\
  opprz.Utils		\
  o.FilterHelp		\
+ o.Fixed		\
  o.ROSLib		\
  o.SetPW
 
@@ -263,6 +266,7 @@ OBJSPPRDZ = \
  opprdz.URLutils	\
  opprdz.Utils		\
  o.FilterHelp		\
+ o.Fixed		\
  o.ROSLib		\
  o.SetPW
 
@@ -287,6 +291,7 @@ OBJSPPZ = \
  oppz.URLutils		\
  oppz.Utils		\
  o.FilterHelp		\
+ o.Fixed		\
  o.ROSLib		\
  o.SetPW
 
