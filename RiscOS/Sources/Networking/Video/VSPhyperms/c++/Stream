@@ -120,13 +120,11 @@ Stream::NECBlockToMPEGBufferList(StreamToken *buffer)
     result =  ErrorOccurred;
   }
   
-  if (result != ErrorOccurred) { 	
-	if (buffer->block->iov[i].iov_len > sizeof(NECBlockHeader))
-		buffer->block_header = (NECBlockHeader*)buffer->block->iov[0].iov_base;
-	else {
+  buffer->block_header = (NECBlockHeader*)buffer->block->iov[0].iov_base;
+  
+  if ((result != ErrorOccurred)&&(buffer->block->iov[i].iov_len < sizeof(NECBlockHeader))){
 		MakeError(VSP_DatagramSizeError);
 		result = ErrorOccurred;
-	}
   }	
 	
   if (result !=ErrorOccurred) {
@@ -145,8 +143,10 @@ Stream::NECBlockToMPEGBufferList(StreamToken *buffer)
 	else
 		remaining_header = sizeof(NECBlockHeader);	// must be within one dgram else error
   }//no error
-  	// the only way to ensure it is valid memory is to copy it to valid memory
-        memcpy((void*)&most_significant_block, (void*)buffer->block_header, sizeof(NECBlockHeader));
+  
+  // the only way to ensure it is valid memory is to copy it to valid memory
+  memcpy((void*)&most_significant_block, (void*)buffer->block_header, sizeof(NECBlockHeader));
+  result = ntoh_structure((void*)&most_significant_block, map_NECBlockHeader, NECBlockHeader);
 
 #ifdef DEBUG  
   	//Debug("read block__%i_ free %i", ntohl(buffer->block_header->block_number)+19, source_full_blocks);
@@ -188,7 +188,7 @@ Stream::NECBlockToMPEGBufferList(StreamToken *buffer)
   	result = ErrorOccurred;
   }
   else 
-  if ((result != ErrorOccurred)&&(state != state_stop)){
+  if (result != ErrorOccurred){
 	result = mysink->FullBuffer(buffer->list);
   }
   return result;
@@ -200,37 +200,44 @@ Stream::test_empty_buffers(void)
   int i, result;
   
   result = !ErrorExists();
-  for (i = 0; (i<NUM_MPEG_Tokens); i++){
-  	if (result != ErrorOccurred) {
-    	  	if (buffers[i].in_use == 0){
-    	  	  	
-    	  	  	buffers[i].in_use = 1;	// paired with free block
-    	  	  	
-    	  	  	result = mysource->getBlock(&(buffers[i].block));
- 	  		if (result == ErrorOccurred){
- 	  		  	err = &mysource->ReturnCopyOfError();
- 	  		}
- 	  		else {
- 	  	     	  	if (buffers[i].block == NULL){
- 	  	     	  	  	buffers[i].in_use = 0;
- 	  	     	  	}
- 	  	     	  	else {
-					result = NECBlockToMPEGBufferList(&buffers[i]);
- 	  	     	  		  	     	  	
- 	  	     	  		if ((result == ErrorOccurred)&&(ErrorNum() == VSP_BadBlock)){
- 	  	     	  			RemoveErr();
- 	  	     	  		}	
- 	  	     	  	} // != null
-                        } // !get block error occurred
- 	        }// not in use
- 	}
-  }
   
-  if (most_significant_block.block_number == mysource->getFinalBlock()){
-    change_state(state_stop);	// this will return a deleting shared memory error
-    RemoveErr();
-  }
+  if ( (result != ErrorOccurred)&&(state != state_stop) ) {
+    
+  	for (i = 0; (i<NUM_MPEG_Tokens); i++){
+  		if (result != ErrorOccurred) {
+    	  		if (buffers[i].in_use == 0){
+    	  	  	
+    	  	  		buffers[i].in_use = 1;	// paired with free block
+    	  	  	
+    	  	  		result = mysource->getBlock(&(buffers[i].block));
+ 	  			if (result == ErrorOccurred){
+ 	  		  		err = &mysource->ReturnCopyOfError();
+ 	  			}
+ 	  			else {
+ 	  	     	  		if (buffers[i].block == NULL){
+ 	  	     	  	  		buffers[i].in_use = 0;
+ 	  	     	  		}
+ 	  	     	  		else {
+						result = NECBlockToMPEGBufferList(&buffers[i]);
+ 	  	     	  		  	     	  	
+ 	  	     	  			if ((result == ErrorOccurred)&&(ErrorNum() == VSP_BadBlock)){
+ 	  	     	  				RemoveErr();
+ 	  	     	  			}	
+ 	  	     	  		} // != null
+                        	} // !get block error occurred
+ 	        	}// not in use
+ 		}
+  	}
+  /*
+  	if (mysource->getFinalBlock() != 0)
+  		Debug("end block [%i]=[%i]", most_significant_block.block_number, mysource->getFinalBlock());
   	
+  	if (most_significant_block.block_number == mysource->getFinalBlock()){
+    		change_state(state_stop);	// this will return a deleting shared memory error
+    		RemoveErr();
+  	}
+  	*/
+  }	
   return result;
 }
 
@@ -341,21 +348,26 @@ Stream::Stream(int MPEGid, PlayList playlist, int play_num, Server *server, int 
 
 Stream::~Stream(void)
 {
-  int i;
+  int i, used_buffer = 1;
   
   source_flag = STREAM_inet_inuse;
   
   if (myserver != NULL)
   	myserver->AssetEnd(0,(state == state_stop));
   	
+
+  
+  change_state(state_pause);
+  
+  mysink->DropBuffers();
+  	
   if (change_state(state_stop) != ErrorOccurred){
     	delete mysource; mysource = NULL;
   }
 #ifdef DEBUG
-  else	// better to have floating memory than freeing somebody elses
-  	// either way it is as ugly as a bucket of sick.
-	Debug("attemt to delete shared memory");    
-#endif	
+  else
+  	Debug("attempt to delete shared memory");
+#endif    
   	
   delete mysink;   mysink = NULL;
   delete myserver; myserver = NULL;
@@ -372,21 +384,25 @@ int
 Stream::change_state(state_of_play new_state)
 { 
    int result = !ErrorExists();
-   int i;
-
+   int i, used_buffer;
+ 
 #ifdef DEBUG
-	//Debug("^state = %i", new_state);
+	Debug("^state = %i", new_state);
 #endif	
 	   
    switch (new_state) {
      case state_stop:
    	state = state_stop;
+    	
+    	used_buffer = 0;
      	for (i=0; i < NUM_MPEG_Tokens; i++){
      		if (buffers[i].in_use == 1) {
-     			MakeError(VSP_CantDeleteSharedMemory);
-     			result = ErrorOccurred;
-     			break;
-     		}
+     			used_buffer = 1;
+    		}
+     	}
+     	if (used_buffer == 1){
+     		MakeError(VSP_CantDeleteSharedMemory);
+     		result = ErrorOccurred;
      	}
    	break;
      case state_pause:
@@ -412,8 +428,9 @@ Stream::GetSinkHandle(void)
 int 
 Stream::CheckEOS(int *play_state)			// call to Decoder
 {
-  if (state == state_stop)
+  if (state == state_stop){
   	(*play_state) = 1;
+  }
   else
   	(*play_state) = 0;
   
@@ -443,8 +460,7 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
 {
   flags = flags;
   pos_time = pos_time;
-  
-  
+    
   MakeError(VSP_Unimplemented);
   return ErrorOccurred;
 }
@@ -523,7 +539,7 @@ Stream::source_inetevent(void)
  		}
   }
   
-  if ((result != ErrorOccurred)&&(source_full_blocks >= full_blocks)&&(state != state_stop)) 
+  if ((result != ErrorOccurred)&&(source_full_blocks >= full_blocks)) 
   	result = test_empty_buffers();
   	
   return result;
@@ -613,16 +629,21 @@ Stream::MPEGInterrupt(int buffer_descriptor, int *claim)
  
   if (i < NUM_MPEG_Tokens){	// if a token was found
   	(*claim) = CLAIMED;
-  	
+
    	if (buffers[i].blocks_returned == buffers[i].num_blocks){	// if we have received all the blocks free it
-  		result = MPEGBufferListToNECBlock(&buffers[i]);		// this marks it as free 
-  		
-  		if ((source_full_blocks)&&(state != state_stop))
+			
+  		if (ntohl(buffers[i].block_header->block_number) == mysource->getFinalBlock()){
+    			change_state(state_stop);	// this will return a deleting shared memory error
+    			RemoveErr();
+  		}
+		
+   		result = MPEGBufferListToNECBlock(&buffers[i]);		// this marks it as free
+ 		
+  		if (source_full_blocks)
     			result = test_empty_buffers();
 #ifdef DEBUG    			
   		else
-  			if (source_full_blocks == 0)
-  				Debug("no full buffers for the mpeg player");
+  			Debug("no full buffers for the mpeg player");
 #endif  			
    	}
   }
@@ -739,13 +760,12 @@ StreamList::inetEvent(int code, int identifier, int *claim, void *)
     			err = &((Stream*)object[i])->ReturnCopyOfError();
     			return ErrorOccurred;
       		}
-      		if (((Stream*)object[i])->get_state() == state_stop){
-      		   if (((Stream*)object[i])->change_state(state_stop) == ErrorOccurred)
-      		   	 ((Stream*)object[i])->RemoveErr();
-      		   else
-      		   	if (Remove(identifiers[i]) == ErrorOccurred)
-      		   		result = ErrorOccurred;
-      		}// if closing this stream, we are doing this in a non interrupt mode.
+      		if ( ((Stream*)object[i])->get_state() == state_stop) {
+      		  	if ( ((Stream*)object[i])->change_state(state_stop) == ErrorOccurred )
+      		  	  	((Stream*)object[i])->RemoveErr();
+      		  	else
+      		  		Remove(identifiers[i]);
+      		}     		  	
       		((Stream*)object[i])->source_flag = !STREAM_inet_inuse; 	// not in use
       	}
         *claim = CLAIMED;
@@ -779,20 +799,27 @@ StreamList::TimeSliceCall(void *)
 {
   int result = !ErrorExists();
   if (result == ErrorOccurred) return result;
-
+ 
   int i;
   for (i=0;i<CurrentSize;i++){
     if( ((Stream*)object[i])->callback_pending != 0){
     	if (((Stream*)object[i])->source_flag != STREAM_inet_inuse ){
       		((Stream*)object[i])->source_flag = STREAM_inet_inuse; 		// in use
-      		if (((Stream*)object[i])->source_inetevent() == ErrorOccurred){
+       		if (((Stream*)object[i])->source_inetevent() == ErrorOccurred){
     			err = &((Stream*)object[i])->ReturnCopyOfError();
     			result = ErrorOccurred;
       		}
+      		if ( ((Stream*)object[i])->get_state() == state_stop) {
+      		  	if ( ((Stream*)object[i])->change_state(state_stop) == ErrorOccurred )
+      		  	  	((Stream*)object[i])->RemoveErr();
+      		  	else
+      		  		Remove(identifiers[i]);
+      		}     		  	
 	       	((Stream*)object[i])->source_flag = !STREAM_inet_inuse; 	// not in use
 	}
     }// timer flag 		
   }
+
   return result;
 }
 
