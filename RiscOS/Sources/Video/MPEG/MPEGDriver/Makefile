@@ -46,14 +46,14 @@ CLIB     = C:o.stubs
 ROMCSTUBS= RISC_OSLib:o.romcstubs
 C_ABSSYM = RISC_OSLib:o.c_abssym
 LIBSD    = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
-UNIXLIB  = TCPIPLibs:o.UnixLib
+UNIXLIB  = TCPIPLibs:o.UnixLibzm
 
-RAMOBJS  =  o.Audio  o.CLI o.Clk o.Co  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module    o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Video o.ModHdr
-ROMOBJS  =  o.Audio  o.CLI o.Clk o.Co  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.ModuleROM            o.Service  o.STi3520L  o.Stuffing  o.Video o.ModHdr
-SOBJS    =  s.Audio  s.CLI             s.IRQ  s.Mess                      s.Module               s.Service  s.STi3520L  s.Stuffing  s.Video o.ModHdr
-IOBJS    =  i.Audio  i.CLI             i.IRQ  i.Mess                      i.Module               i.Service  i.STi3520L  i.Stuffing  i.Video o.ModHdr
-IOOBJS   = io.Audio io.CLI o.Clk o.Co io.IRQ io.Mess o.MiscAsm o.ModHdr2 io.Module    o.ResMess io.Service io.STi3520L io.Stuffing io.Video o.ModHdr
-DOOBJS   = do.Audio do.CLI o.Clk o.Co do.IRQ do.Mess o.MiscAsm o.ModHdr2 do.Module    o.ResMess do.Service do.STi3520L do.Stuffing do.Video o.ModHdr
+RAMOBJS  =  o.Audio  o.CLI o.Clk o.Co  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module    o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS o.ModHdr
+ROMOBJS  =  o.Audio  o.CLI o.Clk o.Co  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.ModuleROM            o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS o.ModHdr
+SOBJS    =  s.Audio  s.CLI             s.IRQ  s.Mess                      s.Module               s.Service  s.STi3520L  s.Stuffing  s.Video  s.WSS o.ModHdr
+IOBJS    =  i.Audio  i.CLI             i.IRQ  i.Mess                      i.Module               i.Service  i.STi3520L  i.Stuffing  i.Video  i.WSS o.ModHdr
+IOOBJS   = io.Audio io.CLI o.Clk o.Co io.IRQ io.Mess o.MiscAsm o.ModHdr2 io.Module    o.ResMess io.Service io.STi3520L io.Stuffing io.Video io.WSS o.ModHdr
+DOOBJS   = do.Audio do.CLI o.Clk o.Co do.IRQ do.Mess o.MiscAsm o.ModHdr2 do.Module    o.ResMess do.Service do.STi3520L do.Stuffing do.Video do.WSS o.ModHdr
 
 
 #

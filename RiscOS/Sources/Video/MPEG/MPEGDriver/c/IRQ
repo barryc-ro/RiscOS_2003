@@ -67,6 +67,17 @@ Date		Who	Change
 			a frame decode into one field interval; also has more
 			robust header parsing, to deal with stream corruption
 			within a single set of headers
+02/12/1999	BJGA	Only starts a new frame struct if the previous headers
+			have finished parsing (more resilient against bitstream
+			errors); resets pipeline after a while, if it fails to
+			return to idle state, or if no slice header is parsed
+09/12/1999	BJGA	Different values of XDO/XDS needed for PAL and NTSC
+25/01/2000	BJGA	Unused f_codes initialised to 0xF instead of 0xFF;
+			inverted sense of VID_HDS.QMI to suit hardware
+			rather than data sheet - fixes video blocking bug;
+			implemented audio start/stop; enabled VSyncs between
+			waiting_for_play_command and waiting_for_presentation_start;
+			adjusted VID_XDO and VID_XDS as per new hardware timing scheme
 
 ***************************************************************************/
 
@@ -353,8 +364,9 @@ Purpose:	Decrements common-IRQ usage counter, and releases common
 void IRQ_DisableCommonIRQs (void)
 {
   CommonIRQsClaimedCount--;
-  if (CommonIRQsClaimedCount == 0)
+  if (CommonIRQsClaimedCount <= 0)
   {
+    CommonIRQsClaimedCount = 0;
     /* Get off TickerV */
      _swix (OS_Release, _INR(0,2), TickerV, tickerv_handler, Module_PrivateWord);
     /* Release 3520 IRQs */
@@ -399,8 +411,6 @@ _kernel_oserror *IRQ_EnableVideoIRQs (void)
   /* Update state machine */
   Stream.video.prefill_state = ps_waiting_for_presentation_start;
   dprintf (("IRQ", "EnableVideoIRQs: video.prefill_state = waiting_for_presentation_start\n"));
-  /* Then enable VSync IRQs (just VSyncs until we're at the correct start time) */
-  VID_ITM_0 |= (VIDEO_INT_VSB>>0 | VIDEO_INT_VST>>0);
   return e;
 }
 
@@ -428,6 +438,7 @@ Out:		Pointer to error block
 _kernel_oserror *IRQ_EnableAudioPrefillIRQs (void)
 {
   _kernel_oserror *e = NULL;
+  dprintf (("IRQ", "EnableAudioPrefillIRQs\n"));
   return e;
 }
 
@@ -441,6 +452,23 @@ Out:		Pointer to error block
 _kernel_oserror *IRQ_EnableAudioIRQs (void)
 {
   _kernel_oserror *e = NULL;
+  int retry_count = 200;
+  int dummy_counter;
+  
+  /* Update state machine - audio starts immediately */
+  Stream.audio.state = stream_open;
+  dprintf (("IRQ", "EnableAudioIRQs: audio.state = stream_open\n"));
+  
+  AUD_RST = 1;
+  /* Ensure the restart bit clears itself - if it doesn't then try writing the register again */
+  while ((retry_count-- > 0) && ((AUD_RST & 1) == 0))
+  {
+    for (dummy_counter = 0; dummy_counter < 100; dummy_counter++); /* wait a while */
+  }
+  if (retry_count == 0) dprintf (("IRQ", "EnableAudioIRQs: audio restart failed\n"));
+  
+  AUD_MUT = 0;
+  AUD_PLY = 1;
   return e;
 }
 
@@ -452,6 +480,9 @@ Purpose:	Disables audio interrupts
 
 void IRQ_DisableAudioIRQs (void)
 {
+  dprintf (("IRQ", "DisableAudioIRQs\n"));
+  AUD_MUT = 1;
+  AUD_PLY = 0;
 }
 
 /******	IRQ_AudioFast() ****************************************************
@@ -550,17 +581,20 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
   dprintf (("IRQ", "INT_VS%c\n", field ? 'T' : 'B'));
   if (Stream.video.state == stream_prefilling)
   {
-    /* If the *next* VSync is the correct interlace phase for our */
-    /* first frame, then kickstart the video play state machine   */
-    if (Stream.display_frames->top_field_first != field)
+    if (Stream.video.prefill_state == ps_waiting_for_presentation_start)
     {
-      /* Update state machine */
-      Stream.fields_till_next_AU = 1;
-      Stream.vid_flags.first_frame_displayed = false;
-      Stream.video.state = stream_open;
-      dprintf (("IRQ", "INT_VS: video.state = stream_open\n"));
-      /* Decode the first B-frame */
-      static_PerhapsWriteNewInstruction ();
+      /* If the *next* VSync is the correct interlace phase for our */
+      /* first frame, then kickstart the video play state machine   */
+      if (Stream.display_frames->top_field_first != field)
+      {
+        /* Update state machine */
+        Stream.fields_till_next_AU = 1;
+        Stream.vid_flags.first_frame_displayed = false;
+        Stream.video.state = stream_open;
+        dprintf (("IRQ", "INT_VS: video.state = stream_open\n"));
+        /* Decode the first B-frame */
+        static_PerhapsWriteNewInstruction ();
+      }
     }
   }
   else if (Stream.video.state == stream_open || Stream.video.state == stream_closing)
@@ -599,7 +633,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
       VID_DCF_0 |= VID_DCF_USR; /* note this bit isn't latched, so has immediate effect */
     }
     
-dprintf (("IRQ", "fields_till_next_AU = %d\n", Stream.fields_till_next_AU));
+    dprintf (("IRQ", "INT_VS: fields_till_next_AU = %d\n", Stream.fields_till_next_AU));
     if (Stream.fields_till_next_AU == 0)
     {
       if (Stream.vid_flags.final_instruction_has_been_written_during_this_AU == false)
@@ -610,10 +644,23 @@ dprintf (("IRQ", "fields_till_next_AU = %d\n", Stream.fields_till_next_AU));
         Stream.fields_till_next_AU = 2;
         if (Stream.current_picture_structure == ps_second_field_picture) /* ie first decode within the PU */ Stream.field_to_trigger_second_decode_on += 2;
         if (Stream.video.state == stream_closing) Stream.vid_flags.stalled_while_closing = true;
+        if ((VID_VBL & 0x3FFF) >= (VID_VBT & 0x3FFF))
+        {
+          /* The pipeline has stalled, but there's plenty of data in the buffer. */
+          /* If this happens too many times, we assume the chip has entered a locked state, and apply a pipeline reset */
+          
+          Stream.consecutive_pipeline_stalls ++;
+          if (Stream.consecutive_pipeline_stalls % 8 == 0)
+          {
+            STi3520L_PipelineReset ();
+            Stream.vid_flags.parsing_headers = true; /* to force re-use of the current frame struct */
+          }
+        }
       }
       else
       {
-dprintf (("IRQ", "current_picture_structure = %d\n", Stream.current_picture_structure));
+        dprintf (("IRQ", "INT_VS: current_picture_structure = %d\n", Stream.current_picture_structure));
+        Stream.consecutive_pipeline_stalls = 0;
         if (Stream.current_picture_structure == ps_second_field_picture || Stream.current_picture_structure == ps_frame_picture_extension) /* ie first of two decodes within the PU */
         {
           Stream.fields_till_next_AU = 1; /* ideally, we want this done in one field only, irrespective of pause etc. */
@@ -919,6 +966,8 @@ static void static_NewPictureDecode (void)
     new_frame->on_decode_list = true;
     /* Write picture parameters into the first picture_t struct */
     Stream.decode_frames->lastpic = &Stream.decode_frames->pic1;
+    /* Flags that we haven't assigned a frame buffer to this frame struct yet */
+    Stream.vid_flags.buffer_assigned_to_this_frame = false;
   }
   else
   {
@@ -1087,23 +1136,30 @@ static void static_ProcessVideoPictureHdr (void)
     /* The 3520 overloads MPEG-1 full_pel_forward_vector/forward_f_code and MPEG-2 f_code[0,0] */
     Stream.decode_frames->lastpic->forward_horizontal_f_code = static_GetVideoHdrBits (4);
     /* f_code[0,1] register not used in MPEG-1 mode */
-    Stream.decode_frames->lastpic->forward_vertical_f_code = 0xFF;
-    /* The 3520 overloads MPEG-1 full_pel_backward_vector/backward_f_code and MPEG-2 f_code[1,0] */
-    Stream.decode_frames->lastpic->backward_horizontal_f_code = static_GetVideoHdrBits (4);
-    /* f_code[1,1] register not used in MPEG-1 mode */
-    Stream.decode_frames->lastpic->backward_vertical_f_code = 0xFF;
+    Stream.decode_frames->lastpic->forward_vertical_f_code = 0xF;
   }
   else
   {
-    /* f_codes not used for I-pictures */
+    /* Forward f_codes not used for I pictures */
     Stream.decode_frames->lastpic->forward_horizontal_f_code =
-      Stream.decode_frames->lastpic->forward_vertical_f_code =
-      Stream.decode_frames->lastpic->backward_horizontal_f_code =
-      Stream.decode_frames->lastpic->backward_vertical_f_code = 0xFF;
+      Stream.decode_frames->lastpic->forward_vertical_f_code = 0xF;
+  }
+  if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE)
+  {
+    /* The 3520 overloads MPEG-1 full_pel_backward_vector/backward_f_code and MPEG-2 f_code[1,0] */
+    Stream.decode_frames->lastpic->backward_horizontal_f_code = static_GetVideoHdrBits (4);
+    /* f_code[1,1] register not used in MPEG-1 mode */
+    Stream.decode_frames->lastpic->backward_vertical_f_code = 0xF;
+  }
+  else
+  {
+    /* Backward f_codes not used for I or P pictures */
+    Stream.decode_frames->lastpic->backward_horizontal_f_code =
+      Stream.decode_frames->lastpic->backward_vertical_f_code = 0xF;
   }
   /* Ignore extra_bit_picture and extra_information_picture */
   
-  /* Set sensible values in case the pictue extensions are absent */
+  /* Set sensible values in case the picture extensions are absent */
   Stream.next_picture_structure = ps_frame_picture; /* for MPEG-1 */
   Stream.decode_frames->lastpic->intra_dc_precision = 0;  /**/
   Stream.decode_frames->lastpic->picture_structure = 0;   /**  these are the values the VID_PPR1/2 registers require in MPEG-1 mode */
@@ -1119,8 +1175,8 @@ static void static_ProcessVideoPictureHdr (void)
   Stream.decode_frames->frame_center_vertical_offset [2] = 0;
   Stream.decode_frames->lastpic->active_format = 0xFF; /* magic value to flag that AFD hasn't been found */
 
-  /* Get a new reconstruction frame pointer, unless the previous picture was a first-field picture */
-  if (Stream.current_picture_structure != ps_first_field_picture)
+  /* Get a new reconstruction frame pointer, unless we already have one */
+  if (!Stream.vid_flags.buffer_assigned_to_this_frame)
   {
     Stream.decode_frames->frame_buffer = Stream.unused_frame_buffers;
     if (Stream.decode_frames->frame_buffer == NULL)
@@ -1137,6 +1193,8 @@ static void static_ProcessVideoPictureHdr (void)
     }
     /* Either way, increment the usage count */
     Stream.decode_frames->frame_buffer->usage_count ++;
+    /* Flag that we've assigned a buffer now */
+    Stream.vid_flags.buffer_assigned_to_this_frame = true;
   }
   WRITE_VID_RFP(Stream.decode_frames->frame_buffer->addr);
   
@@ -1279,29 +1337,32 @@ static void static_ProcessVideoQuantMatrixExt (void)
 {
   unsigned int coeff;   /* counter for loading quantization matrices */
   dprintf (("IRQ", "ProcessVideoQuantMatrixExt\n"));
+  
+  /* VERY IMPORTANT:                                                  */
+  /* The data sheet is wrong, bit VID_HDS.QMI must be set for *intra* */
+  /* quantizer matrices, and clear for *non-intra* quantizer matrices */
+  
   if (static_GetVideoHdrBits (1) == 0)
   {
     /* Load default intra quantizer matrix (if necessary) */
     if (!Stream.vid_flags.default_intra_quantizer_matrix_loaded)
     {
-      VID_HDS = 0; /* select intra table */
+      VID_HDS = VID_HDS_QMI; /* select intra table */
       for (coeff = 0; coeff < 64; coeff ++)
       {
         VID_QMW = default_intra_quantizer_matrix[coeff];
       }
-      VID_HDS = 0; /* lock */
       Stream.vid_flags.default_intra_quantizer_matrix_loaded = true;
     }
   }
   else
   {
     /* Load intra quantizer matrix from stream */
-    VID_HDS = 0; /* select intra table */
+    VID_HDS = VID_HDS_QMI; /* select intra table */
     for (coeff = 0; coeff < 64; coeff ++)
     {
       VID_QMW = static_GetVideoHdrBits (8);
     }
-    VID_HDS = 0; /* lock */
     Stream.vid_flags.default_intra_quantizer_matrix_loaded = false;
   }
   if (static_GetVideoHdrBits (1) == 0)
@@ -1309,24 +1370,22 @@ static void static_ProcessVideoQuantMatrixExt (void)
     /* Load default non-intra quantizer matrix (if necessary) */
     if (!Stream.vid_flags.default_non_intra_quantizer_matrix_loaded)
     {
-      VID_HDS = VID_HDS_QMI; /* select non-intra table */
+      VID_HDS = 0; /* select non-intra table */
       for (coeff = 0; coeff < 64; coeff ++)
       {
         VID_QMW = 16; /* all coefficients of default non-intra matrix are 16 */
       }
-      VID_HDS = 0; /* lock */
       Stream.vid_flags.default_non_intra_quantizer_matrix_loaded = true;
     }
   }
   else
   {
     /* Load non-intra quantizer matrix from stream */
-    VID_HDS = VID_HDS_QMI; /* select non-intra table */
+    VID_HDS = 0; /* select non-intra table */
     for (coeff = 0; coeff < 64; coeff ++)
     {
       VID_QMW = static_GetVideoHdrBits (8);
     }
-    VID_HDS = 0; /* lock */
     Stream.vid_flags.default_non_intra_quantizer_matrix_loaded = false;
   }
   
@@ -1633,6 +1692,10 @@ static void static_PerhapsWriteNewInstruction (void)
       /* Update state machine */
       Stream.video.prefill_state = ps_waiting_for_play_command;
       dprintf (("IRQ", "PerhapsWriteNewInstruction: video.prefill_state = waiting_for_play_command\n"));
+      /* Enable vsync interrupts now - but don't take any action on them until we receive the play command.         */
+      /* This is necessary so that we can clear the relevant bits in VID_ITS - otherwise, if it takes a long time   */
+      /* for audio prefilling to complete, then the first interrupt will have both VID_ITS.VST and VID_ITS.VSB set! */
+      VID_ITM_0 |= (VIDEO_INT_VSB>>0 | VIDEO_INT_VST>>0);
       /* Tell control unit that we've finished - we may be re-entered via SWI MPEGVideo_Play at this point */
       _swix (MPEGControl_Play, _INR(0,1), StreamFlags_VideoPresent, Stream.csh);
     }
@@ -1710,7 +1773,10 @@ static void static_SetUpDisplayForNewAU (void)
         if (adder % 719 == 0) adder = adder / 719; else adder = adder / 719 + 1;
         WRITE_VID_LSR(adder - 1);
         actual_display_width = (Stream.display_frames->seq.coded_horizontal_size-1)*256/adder+1;
-        WRITE_VID_XDS(102-1+actual_display_width+6);
+// NTSC
+//        WRITE_VID_XDS(102+actual_display_width+6);
+// PAL
+        WRITE_VID_XDS(112+actual_display_width+6);
       }
       WRITE_VID_DCF(VID_DCF | VID_DCF_EVD);
       WRITE_VID_DFP(Stream.display_frames->frame_buffer->addr);
