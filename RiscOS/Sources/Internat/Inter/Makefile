@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
+# 21-Nov-00  SBF          Added StripDepnd support.
 #
 
 #
@@ -15,6 +16,7 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+STRIP   = -stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
@@ -46,6 +48,7 @@ clean:
         ${RM} ${TARGET}
         ${RM} s.IntHelpTok
         ${RM} s.IntHelp
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources: resources-${CMDHELP}
