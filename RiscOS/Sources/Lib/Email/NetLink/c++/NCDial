@@ -134,13 +134,40 @@ NCDialNetLink_wimp_register::NCDialNetLink_wimp_register ()
 /* -----------------------------------------------------------------------------
    NCDialNetLink::NCDialNetLink
 
-   Constructor.
+   Constructor.  Register handler to catch dialler service call.
  */
 
-NCDialNetLink::NCDialNetLink ()
-    : _handlers_registered (false)
+NCDialNetLink::NCDialNetLink (ELib_rcode &  rc)
 {
     dprintf (("", "NetLink: NCDialNetLink constructor\n"));
+    _kernel_oserror *  e = 0;
+    int                task_handle = WimpRegistry::Instance()->GetTaskID ();
+
+    rc = ELIB_EFAILED;
+
+    if (!_swix (TaskModule_RegisterService,
+                _INR (0, 2),
+
+                TaskModule_Flags_PreserveOrder,
+                Service_DiallerStatus,
+                task_handle))
+    {
+        if (!event_register_message_handler (
+                 Message_Service,
+                 NCDialNetLink::service_message_handler,
+                 this))
+        {
+            rc = ELIB_COMPLETED;
+        }
+        else
+        {
+            (void) _swix (TaskModule_DeRegisterService,
+                          _INR (0, 2),
+                          0,
+                          Service_DiallerStatus,
+                          task_handle);
+        }
+    }
 }
 
 
@@ -149,12 +176,23 @@ NCDialNetLink::NCDialNetLink ()
 /* -----------------------------------------------------------------------------
    NCDialNetLink::~NCDialNetLink
 
-   Constructor.
+   Destructor.  Deregister handlers to catch dialler service call.
  */
 
 NCDialNetLink::~NCDialNetLink ()
 {
     dprintf (("", "NetLink: NCDialNetLink destructor\n"));
+
+    (void) event_deregister_message_handler (
+              Message_Service,
+              NCDialNetLink::service_message_handler,
+              this);
+
+    (void) _swix (TaskModule_DeRegisterService,
+                  _INR (0, 2),
+                  0,
+                  Service_DiallerStatus,
+                  WimpRegistry::Instance()->GetTaskID ());
 }
 
 
@@ -184,37 +222,15 @@ ELib_rcode  NCDialNetLink::Connect ()
     if (current_status != NetLink::Connected &&
         current_status != NetLink::Connecting)
     {
-        _kernel_oserror *  e = NULL;
-
-        if (!_handlers_registered)
+        // Call NCFrescoReDial to start the dial
+        if (!_swix (OS_CLI,
+                    _IN (0),
+                    "NCFrescoReDial"))
         {
-            dprintf (("", "NetLink: registering handlers\n"));
-            e = register_handlers (&NCDialNetLink::connect_status_handler);
+            ChangeStatus (NetLink::Connecting);
         }
-
-        if (e == NULL)
+        else
         {
-            // Call NCFrescoReDial to start the dial
-            e = _swix (OS_CLI,
-                       _IN (0),
-                       "NCFrescoReDial");
-
-            if (e == NULL)
-            {
-                ChangeStatus (NetLink::Connecting);
-            }
-            else
-            {
-                dprintf (("", "NetLink: NCDialUI_Start error: %s\n", e->errmess));
-            }
-        }
-
-        if (e)
-        {
-            // Ensure we don't leave any dangling registrations if an error
-            // occurs.
-            deregister_handlers ();
-
             rc = ELIB_EFAILED;
         }
     }
@@ -228,8 +244,7 @@ ELib_rcode  NCDialNetLink::Connect ()
 /* -----------------------------------------------------------------------------
    NCDialNetLink::Disconnect
 
-   Disconnect from NCDial network link.  Just calls any registered callbacks
-   immediately because the link doesn't really get taken down.
+   Disconnect from NCDial network link.
 
    Returns ELib_rcode
    ELIB_COMPLETED
@@ -246,29 +261,14 @@ ELib_rcode  NCDialNetLink::Disconnect ()
     if (current_status != NetLink::Disconnected &&
         current_status != NetLink::Error)
     {
-        _kernel_oserror *  e = NULL;
-
-        if (!_handlers_registered)
+        // Call NCDial to disconnect
+        if (!_swix (NCDial_Hangup,
+                    0))
         {
-            e = register_handlers (&NCDialNetLink::disconnect_status_handler);
+            ChangeStatus (NetLink::Disconnecting);
         }
-
-        if (e == NULL)
+        else
         {
-            // Call NCDial to disconnect
-            e = _swix (NCDial_Hangup,
-                       0);
-
-            if (e == NULL)
-            {
-                ChangeStatus (NetLink::Disconnecting);
-            }
-        }
-
-        if (e)
-        {
-            deregister_handlers ();
-
             rc = ELIB_EFAILED;
         }
     }
@@ -295,8 +295,7 @@ int  NCDialNetLink::service_message_handler (
         dprintf (("", "NetLink: received Service_DiallerStatus %d\n",
                   service_message->r.r[2]));
 
-        (this_netlink->*(this_netlink->_status_handler)) (
-            service_message->r.r[2]);
+        this_netlink->status_handler(service_message->r.r[2]);
         rc = 1;
     }
 
@@ -306,7 +305,7 @@ int  NCDialNetLink::service_message_handler (
 
 
 
-void  NCDialNetLink::connect_status_handler (const int  ncdial_status)
+void  NCDialNetLink::status_handler (const int  ncdial_status)
 {
     NetLink::Status  current_status = GetStatus ();
     NetLink::Status  new_status;
@@ -317,6 +316,10 @@ void  NCDialNetLink::connect_status_handler (const int  ncdial_status)
     {
         case NCDial_Status_IPUp:
             new_status = NetLink::Connected;
+            break;
+
+        case NCDial_Status_Disconnected:
+            new_status = NetLink::Disconnected;
             break;
 
         case NCDial_Status_NoDialtone:
@@ -337,100 +340,5 @@ void  NCDialNetLink::connect_status_handler (const int  ncdial_status)
     if (new_status != current_status)
     {
         ChangeStatus (new_status);
-
-        // Know this new state is terminal, so deregister handlers
-        deregister_handlers ();
     }
-}
-
-
-
-
-void  NCDialNetLink::disconnect_status_handler (const int  ncdial_status)
-{
-    NetLink::Status  current_status = GetStatus ();
-    NetLink::Status  new_status;
-
-    switch (ncdial_status)
-    {
-        case NCDial_Status_Disconnected:
-            new_status = NetLink::Disconnected;
-            break;
-
-        case NCDial_Status_NoDialtone:
-        case NCDial_Status_Busy:
-        case NCDial_Status_NoCarrier:
-        case NCDial_Status_ServerNotResponding:
-        case NCDial_Status_Timeout:
-        case NCDial_Status_Error:
-            new_status = NetLink::Error;
-            break;
-
-        default:
-            new_status = current_status;
-            break;
-    }
-
-    if (new_status != current_status)
-    {
-        ChangeStatus (new_status);
-
-        // Know this new state is terminal, so deregister handlers
-        deregister_handlers ();
-    }
-}
-
-
-
-_kernel_oserror *  NCDialNetLink::register_handlers (
-                                      status_handler_fn  status_handler)
-{
-    _kernel_oserror *  e;
-    int                task_handle = WimpRegistry::Instance()->GetTaskID ();
-
-    e = _swix (TaskModule_RegisterService,
-               _INR (0, 2),
-
-               TaskModule_Flags_PreserveOrder,
-               Service_DiallerStatus,
-               task_handle);
-    if (e == NULL)
-    {
-        e = event_register_message_handler (
-                Message_Service,
-                NCDialNetLink::service_message_handler,
-                this);
-        if (e == NULL)
-        {
-            _handlers_registered = true;
-            _status_handler      = status_handler;
-        }
-        else
-        {
-            (void) _swix (TaskModule_DeRegisterService,
-                          _INR (0, 2),
-                          0,
-                          Service_DiallerStatus,
-                          task_handle);
-        }
-    }
-
-    return e;
-}
-
-
-void  NCDialNetLink::deregister_handlers ()
-{
-    (void) event_deregister_message_handler (
-               Message_Service,
-               NCDialNetLink::service_message_handler,
-               this);
-
-    (void) _swix (TaskModule_DeRegisterService,
-                  _INR (0, 2),
-                  0,
-                  Service_DiallerStatus,
-                  WimpRegistry::Instance()->GetTaskID ());
-
-    _handlers_registered = false;
 }
