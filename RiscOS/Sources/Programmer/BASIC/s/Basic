@@ -74,7 +74,9 @@ SOUNDEVENTQBEAT                 *       SOUNDSWIBASE+&80+6
 XOSPLOT                         *       &20045
 XOSSYNCHRONISECODEAREAS         *       &2006E
 WRITEN                          *       &46
+SETCOLOUR                       *       &61
 SCREENMODE                      *       &65
+XSCREENMODE                     *       &20065
 WIMPSLOT                        *       &400EC
 COLOURTRANSSETGCOL              *       &40743
 COLOURTRANSSETTEXTCOLOUR        *       &40761
@@ -129,8 +131,9 @@ OS_Exit_RetCode                 *       SWICODE+4
 SEED                            #       5
 LISTOP                          #       1
 BYTESM                          #       1
+MEMM                            #       1
 
-CALLEDNAME                      #       0-(BYTESM+1)
+CALLEDNAME                      #       0-(MEMM+1)
 
  [ FP=0
 CACHESIZE                       *       128
@@ -300,6 +303,123 @@ PUTBACKHAND
         LDMIA   R12!,{R1,R2}
         SWI     OSCHANGEENV
         LDMFD   SP!,{R0-R3,PC}
+
+        GBLL    ONLYEMPTY
+ONLYEMPTY SETL  {FALSE}
+
+MOVEMEMORY
+        TEQ     R0,#0                   ;ignore grows
+        MOVPL   PC,R14
+        STMFD   SP!,{R0,R2-R8,R14}
+ [ 1=0
+        SWI     WRITES
+        =       "Service_Memory(",0
+        MOV     R1,#VARS+STRACC
+        ADD     R1,R1,#128
+        MOV     R2,#128
+        SWI     &DC
+        SWI     WRITE0
+        SWI     WRITEI+")"
+        SWI     NEWLINE
+;       MOV     R1,#0
+;       LDMFD   SP!,{R0,R2-R8,PC}
+ ]
+        MOV     ARGP,#VARS
+        LDRB    R0,[ARGP,#MEMM]
+        LDR     R1,[ARGP,#INSTALLLIST]
+        LDR     R4,[ARGP,#MEMLIMIT]
+        LDR     R5,[ARGP,#HIMEM]
+        TEQ     R0,#1                   ;is "move memory" flag set?
+        TEQEQ   R1,#0                   ;and no installed libraries?
+        MOVNE   R1,#0
+        LDMNEFD SP!,{R0,R2-R8,PC} ; if not, refuse
+        MOV     R0,#14
+        MOV     R1,#0
+        MOV     R2,#0
+        MOV     R3,#0
+        SWI     OSCHANGEENV             ;read end of application space
+        TEQ     R1,R4                   ;are we using whole application space?
+        TEQEQ   R1,R5                   ;and is HIMEM at the top of it?
+        MOVNE   R1,#0
+        LDMNEFD SP!,{R0,R2-R8,PC}       ;if not, not in a position to surrender memory.
+        SUB     SP,SP,#4
+        STMIA   SP,{SP}^                ;get user mode stack pointer
+        MOV     R0,R0
+        LDR     R5,[SP],#4
+        LDR     R4,[ARGP,#HIMEM]
+        SUBS    R5,R4,R5                ;amount of space on stack
+ [ ONLYEMPTY
+        MOVNE   R1,#0
+        LDMNEFD SP!,{R0,R2-R8,PC}       ;if stack not empty, refuse
+ ]
+        LDR     R6,[ARGP,#FSA]
+        ADD     R2,R6,#1024
+        ADD     R2,R2,R5                ;FSA+1024+amount of space on stack
+        LDR     R14,[SP,#0]
+        ADDS    R0,R1,R14               ;new end address
+        MOVMI   R1,#0                   ;if end address is negative, we've wrapped below 0,
+        LDMMIFD SP!,{R0,R2-R8,PC}       ; or gone higher than we cancope with
+MOVEMEMORYOK
+        SUB     R7,R0,#&8000            ;new slot
+        CMP     R2,R0
+        MOVHS   R1,#0
+        LDMHSFD SP!,{R0,R2-R8,PC}       ;if going too small, refuse
+
+ [ DO32BIT = 1
+        MRS    ,R3,CPSR
+        BIC     R3,R3,#&F
+        MSR    ,CPSR_c,R3               ; change down to user mode (is this safe???)
+ |
+        MOV     R3,PC
+        TEQP    R3,#3
+ ]
+;first move the stack down
+ [ :LNOT:ONLYEMPTY
+; code lifted from ENDCHANGE1 in Stmt
+MOVEMEM1
+        LDR     R3,[SP],#4
+        STR     R3,[R6],#4              ;R6=FSA
+        CMP     SP,R4                   ;R4=HIMEM
+        BCC     MOVEMEM1
+ ]
+;change memory size
+        SUB     R7,R0,SP                ;remember difference - how far the world moved!
+        MOV     SP,R0
+        STR     SP,[ARGP,#MEMLIMIT]
+        STR     SP,[ARGP,#HIMEM]
+;move stack back up again
+ [ :LNOT:ONLYEMPTY
+        LDR     R1,[ARGP,#FSA]
+MOVEMEM2
+        LDR     R3,[R6,#-4]!
+        STR     R3,[SP,#-4]!
+        CMP     R6,R1
+        BHI     MOVEMEM2
+;patch self references on the stack
+        ADD     R4,ARGP,#LOCALARLIST-4
+        LDR     R0,[ARGP,#ERRSTK]
+        ADD     R0,R0,R7
+        STR     R0,[ARGP,#ERRSTK]
+MOVEMEMLOCALAR
+        LDR     R3,[R4,#4]              ;next field
+        TEQ     R3,#0
+        BEQ     MOVEMEMLOCALARDONE
+        ADD     R3,R3,R7                ;alter reference to stack
+        STR     R3,[R4,#4]
+        MOV     R4,R3
+        LDR     R5,[R4,#8]              ;address of owner
+        LDR     R6,[R5]
+        ADD     R6,R6,R7                ;move owner's idea of where we are
+        ADD     R1,R4,#16               ;check it's pointing at us
+        CMP     R6,R1
+        STREQ   R6,[R5]
+        B       MOVEMEMLOCALAR
+MOVEMEMLOCALARDONE
+ ]
+        SWI     ENTERSWI
+        MOV     R1,#Service_Memory      ;not claimed
+        LDMFD   SP!,{R0,R2-R8,PC}
+
 OSQUITR LDR     R1,[R12,#TRACEFILE-OLDERR] ;tracefile handle
         TEQ     R1,#0
         MOV     R0,#0
@@ -376,6 +496,7 @@ MAIN    MOV     ARGP,#VARS
         STR     R0,[ARGP,#TRACEFILE]
         STR     R0,[ARGP,#TALLY]
         STRB    R0,[ARGP,#LISTOP]
+        STRB    R0,[ARGP,#MEMM]
         MVN     R0,#0
         STR     R0,[ARGP,#WIDTHLOC]
         STRB    R0,[ARGP,#BYTESM]
@@ -641,6 +762,7 @@ CLRSTK  MOV     ARGP,#VARS
         LDR     SP,[ARGP,#HIMEM]
         MOV     R0,#0
         STMFD   SP!,{R0-R9}            ;to stop pops getting carried away
+        STRB    R0,[ARGP,#MEMM]
         MVN     R0,#0
         STRB    R0,[ARGP,#BYTESM]
         STR     SP,[ARGP,#ERRSTK]
@@ -718,7 +840,11 @@ AJ2     *       .+4
         &       INSTALL-AJ2
 DOSTAR  MOV     R0,LINE                ;do oscli
         BL      OSCLIREGS
+        MOV     R14,#1
+        STRB    R14,[ARGP,#MEMM]
         SWI     CLI
+        MOV     R14,#0
+        STRB    R14,[ARGP,#MEMM]
         B       REM
 GOTLTEND2
         CMP     R10,#TELSE
@@ -1320,6 +1446,8 @@ MSGBYTE LDRB    R2,[R4],#1
         SWI     BASICTrans_Error       ;overwrite with foreign one
 MSGERR  MOV     ARGP,#VARS             ;cardinal error from outside world
         MOV     R7,R14                 ;keep error pointer
+        MOV     R14,#0
+        STRB    R14,[ARGP,#MEMM]
         BL      FLUSHCACHE
         MOV     R0,#&DA
         MOV     R1,#0
