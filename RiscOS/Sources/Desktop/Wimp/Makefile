@@ -74,7 +74,7 @@ resources-: resources_common
 	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+        ${AS} ${ASFLAGS} ${SOURCE} ${THROWBACK}
 
 ${EXP_HDR}.Wimp: hdr.Wimp
         ${CP} hdr.Wimp $@ ${CPFLAGS}
@@ -137,7 +137,6 @@ rm.Wimp: s.Iconbar
 rm.Wimp: s.Wimp07
 rm.Wimp: s.ProgErrs
 rm.Wimp: s.Wimp08
-rm.Wimp: s.Wimp08s
 rm.Wimp: s.Wimp09
 rm.Wimp: s.Wimp10
 rm.Wimp: s.NewSWIs
