@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -14,6 +15,7 @@
 #include "smtags.h"
 #include "ncma_tags.h"
 #include "ncma_bootb.h"
+#include "ncma_exec.h"
 #include "ncma_url.h"
 #include "init.h"
 #include "smcard.h"
@@ -23,11 +25,16 @@
 /* Forward function prototypes */
 int ncma_network_init_modem(int mode);
 int ncma_network_init_ethernet(int mode);
-BOOL add_resolver_to_system_variable(int dns);
-
+bool add_resolver_to_system_variable(int dns);
 
 NETWORK_INTERFACE_TYPE interface_type = NO_INTERFACE;
-BOOL post_initialisation_run = FALSE;
+bool post_initialisation_run = false;
+
+#ifdef ALLOW_CSFS_BOOTING
+static bool is_csfs_module_running(void);
+static bool csfs_module_running = false;
+#endif /* ALLOW_CSFS_BOOTING */
+
 
 
 
@@ -46,6 +53,47 @@ version depending on what 'interface_type' is set to. */
 int ncma_network_init(int mode)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "ncma_network_init(): interface_type = %d\n", interface_type);
+
+#ifdef ALLOW_CSFS_BOOTING
+  /* Detect if the CSFS module is running */
+  csfs_module_running = is_csfs_module_running();
+
+  /* If it is not loaded, softload it out of ResourceFS if this flag is set. */
+  #ifdef SOFTLOAD_CSFS
+  if (!csfs_module_running)
+  {
+    /* For security and change-control reasons, we only want to softload it
+        if the CSFS tags are recognised within the bootblock. This means on
+        Lazarus-based products it will not normally be softloaded. */
+    /* Now attempt to read the CSFS boot tags... */
+    int bytes_in_tag = cache_enquiry("CSFS_TYPERO", NULL, 0);
+    if(bytes_in_tag<=0)
+    {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "ncma_network_init: cache enquiry failed for CSFS_TYPERO\n");
+    }
+    else
+    {
+      char execute_string[255];
+      _kernel_swi_regs regs;
+      _kernel_oserror *err;
+
+      strcpy(execute_string, SOFTLOAD_CSFS);
+      regs.r[0] = 1;
+      regs.r[1] = (int)execute_string;
+      DBUG_PRINTF(DBUG_LVL_DIAG, "ncma_network_init(): Attempting to execute command %s\n", execute_string);
+      err = _kernel_swi(OS_Module, &regs, &regs);
+      if (err)
+      {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "ncma_network_init(): Error trying to load the CSFS module, error block %s\n", err->errmess);
+      }
+      else
+      {
+        csfs_module_running = true;
+      }
+    }
+  }
+  #endif /* SOFTLOAD_CSFS */
+#endif
 
   if (interface_type == ETHERNET_INTERFACE)
   {
@@ -110,7 +158,7 @@ int ncma_network_init_modem(int mode) /* set resolver config */
     else
     {
       /* delete variable if nothing was set on the card */
-        write_os_var(SEARCH_SAV_VAR_NAME, NULL, -1);
+      write_os_var(SEARCH_SAV_VAR_NAME, NULL, -1);
     }
 
 
@@ -308,7 +356,7 @@ int ncma_network_init_ethernet(int mode)
   else
   {
     /* delete variable if nothing was set on the card */
-      write_os_var(SEARCH_SAV_VAR_NAME, NULL, -1);
+    write_os_var(SEARCH_SAV_VAR_NAME, NULL, -1);
   }
 
 
@@ -464,7 +512,7 @@ int ncma_network_init_ethernet(int mode)
 /* This routine id called to add a DNS to the resolver system variable. The
     system variable can only hold a maximum of 3 different DNS's.
   It returns TRUE if the DNS was successfully added, FALSE otherwise. */
-BOOL add_resolver_to_system_variable(int dns)
+bool add_resolver_to_system_variable(int dns)
 {
     /* Convert from an integer to a DNS-type '.'ed string. */
     #define DNS_BUFFER_SIZE 256
@@ -480,7 +528,7 @@ BOOL add_resolver_to_system_variable(int dns)
     if (read_os_var(RESOLVER_ENV_VAR_NAME, dns_sysvar_string,  DNS_BUFFER_SIZE)<0)
     {
       DBUG_PRINTF(DBUG_LVL_ERROR, "add_resolver_to_system_variable: Error reading system variable '%s'\n", RESOLVER_ENV_VAR_NAME);
-      return (FALSE);
+      return (false);
     }
     else
     {
@@ -504,7 +552,7 @@ BOOL add_resolver_to_system_variable(int dns)
         if(write_os_var(RESOLVER_ENV_VAR_NAME, dns_sysvar_string, strlen(dns_sysvar_string))<0)
         {
           DBUG_PRINTF(DBUG_LVL_ERROR, "add_resolver_to_system_variable: failed setting new resolvers to %s\n", dns_sysvar_string);
-          return (FALSE);
+          return (false);
         }
         else
         {
@@ -514,9 +562,33 @@ BOOL add_resolver_to_system_variable(int dns)
       else
       {
         DBUG_PRINTF(DBUG_LVL_ERROR, "add_resolver_to_system_variable: More than two DNS's already in the system variable. Ignoring the new one.\n");
-        return (FALSE);
+        return (false);
       }
     }
 
-    return (TRUE);
+    return (true);
 }
+
+
+#ifdef ALLOW_CSFS_BOOTING
+static bool is_csfs_module_running(void)
+{
+  _kernel_swi_regs r;
+
+  r.r[0] = 18;
+  r.r[1] = (int)"CSFS";
+
+  if(_kernel_swi(OS_Module, &r, &r)!=NULL)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "Call to os_module 18 failed.\n");
+    return(false);
+  }
+  else
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "CSFS module present: reg dump is : %d %d %d %d %d\n", r.r[0], r.r[1], r.r[2], r.r[3], r.r[4]);
+  }
+
+  return (true);
+}
+#endif
+
