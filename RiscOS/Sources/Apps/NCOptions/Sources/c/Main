@@ -3,17 +3,19 @@
 #include <string.h>
 #include <ctype.h>
 
-#include "MemCheck.MemCheck.h"
+#include "TaskModule.h"
+#include "ANT_URL.h"
+#include "MemCheck/MemCheck.h"
 
-#include "Desk.Debug.h"
-#include "Desk.Error2.h"
-#include "Desk.Str.h"
-#include "Desk.File.h"
-#include "Desk.Wimp.h"
+#include "Desk/Debug.h"
+#include "Desk/Error2.h"
+#include "Desk/Str.h"
+#include "Desk/File.h"
+#include "Desk/Wimp.h"
 
 #include "MemCheck/MemCheck.h"
 
-#include "AcornNC.HTMLParams.h"
+#include "AcornNC/HTMLParams.h"
 
 #include "Str.h"
 #include "Variables.h"
@@ -21,14 +23,12 @@
 #include "Variables2.h"
 
 #ifdef Trace_TRACE
-	#include "Trace.Trace.h"
+	#include "Trace/Trace.h"
 #endif
 
 #ifndef ROM
     extern int       messages_file(void);
 #endif
-
-#define	TaskModule_SendMessage	0x4d300
 
 #if 0
 static void	Desk_DeskMem_BufferMidExtend( Desk_deskmem_buffer* buffer, int at, int by)
@@ -571,26 +571,6 @@ static void	ProcessTemplateFile( Desk_deskmem_buffer* buffer, HTML_Args_variable
 	}
 
 
-typedef union {
-  char *ptr;
-  int offset;
-} string_value;
-
-typedef struct url_message {
-    Desk_message_header header;
-    union {
-        char url[236];
-        struct {
-            int tag;
-            string_value url;
-            int flags;
-            string_value body_file;
-            string_value target;
-            string_value body_mimetype;
-        } indirect;
-    } data;
-} url_message;
-
 static void	OpenURL(const char* url, const char *target)
 	{
 			url_message	 message;
@@ -609,16 +589,16 @@ static void	OpenURL(const char* url, const char *target)
 
 			// Open this URL, using indirect pointers.
 
-			message.header.size	= sizeof (message.header) + (sizeof (void*) * 6);
-			message.header.yourref	= 0;
-			message.header.action	= (Desk_message_action) 0x4af80 /*Message_OpenURL*/;
+			message.hdr.size	= sizeof (message.hdr) + (sizeof (void*) * 6);
+			message.hdr.your_ref	= 0;
+			message.hdr.action_code	= Message_OpenURL;
 			message.data.indirect.tag = 0;
 			message.data.indirect.url.ptr = stored_url;
 			message.data.indirect.flags = 0;
 			message.data.indirect.body_file.ptr = 0;
 			message.data.indirect.target.ptr = stored_target;
 			message.data.indirect.body_mimetype.ptr = 0;
-			Desk_Error2_CheckOS( _swix( 0x4d300/*TaskModule_SendMessage*/, _INR(0,4), 0, &message, 0, 0, 0));
+			Desk_Error2_CheckOS( _swix( TaskModule_SendMessage, _INR(0,4), 0, &message, 0, 0, 0));
 	}
 
 static void	OpenPage( const char* html)
@@ -690,7 +670,7 @@ _kernel_oserror*	Command( cmhg_CONST char *arg_string, int argc, int cmd_no, voi
 		Desk_DeskMem_BufferInit( &buffer, 256);
 
 		AcornNC_FindHTMLVariables( &args, arg_string, argc);
-		
+
 		// Add variable 'url' to list of variables, whose value is our complete input command.
 		// _kernel_command_string() doesn't contain anything useful unfortunately.
 		// Desk_Debug_Printf( Desk_error_PLACE "_kernel_command_string() = '%s'\n", _kernel_command_string());
@@ -710,7 +690,7 @@ _kernel_oserror*	Command( cmhg_CONST char *arg_string, int argc, int cmd_no, voi
 		refresh_file = NCOptions_SetSystemVariables( &args.list);
 
 		Variables2_Expand( &args.list);
-		
+
 		if ( refresh_file == NULL )
 		{
 			/* Only if SetSystemVariables didn't return a
@@ -758,6 +738,66 @@ _kernel_oserror*	Command( cmhg_CONST char *arg_string, int argc, int cmd_no, voi
 	Desk_UNUSED( pw);
 	}
 
+_kernel_oserror *WimpMessageHandler(_kernel_swi_regs *r, void *pw)
+	{
+
+	const char *url;
+	url_message *message = (url_message *)r->r[1]; /* Message block */
+
+	Desk_Debug_Printf( Desk_error_PLACE "Event number: %d\n", r->r[0]);
+
+	if (r->r[0] == Desk_event_USERMESSAGEACK)	{
+		/* It's a bounce...whoops! */
+		return NULL;
+		}
+
+	if (message->data.indirect.tag != 0)
+		url = message->data.url; /* Direct URL */
+	else	{
+		if (message->data.indirect.url.offset == 0)
+			url = ""; /* No value */
+		else if (message->data.indirect.url.offset < 236)
+			url = &(message->data.url[message->data.indirect.url.offset]); /* In message block */
+		else if (message->data.indirect.url.offset >= 0x1800000)
+			url = message->data.indirect.url.ptr; /* In RMA/Dynamic area */
+		else
+			url = ""; /* Invalid offset */
+		}
+
+	/* If we don't have a URL quit early */
+	if (!url || !(*url))
+		return NULL;
+
+
+	Desk_Debug_Printf( Desk_error_PLACE "URL: %s (%d)\n", url, strlen(url));
+
+	/* If it's ours ... */
+	if (strstr(url, "NCOptions_OpenPage:") == url)	{
+
+		/* ... do sommat */
+
+		Desk_Debug_Printf( Desk_error_PLACE "It's ours!\n");
+
+		/* Fake up a *NCOptions_OpenPage command */
+		Command (url, 1, CMD_NCOptions_OpenPage, pw);
+
+		/* Acknowledge the message */
+		message->hdr.your_ref = message->hdr.my_ref;
+
+		/* Calling Wimp_SendMessage from a callback looks dodgy, but it
+		   is in fact OK, as we're only sending an acknowledgement, which
+		   doesn't actually send a message */
+		Desk_Error2_CheckOS( _swix(Wimp_SendMessage, _INR(0,2),
+					   Desk_event_USERMESSAGEACK, message, message->hdr.sender));
+	}
+
+	return NULL;
+
+	Desk_UNUSED(pw);
+	}
+
+/* Wimp messages we're interested in */
+static int wimp_messages[] = {Message_OpenURL, 0};
 
 _kernel_oserror*	Initialise( cmhg_CONST char* cmd, int argc, void* pw)
 	{
@@ -777,16 +817,18 @@ _kernel_oserror*	Initialise( cmhg_CONST char* cmd, int argc, void* pw)
 #ifndef ROM
 	Desk_Error2_CheckOS( _swix(ResourceFS_RegisterFiles, _IN(0), messages_file()));
 #endif /* ROM */
-        
+
 	Desk_Error2_TryCatch(
 		Desk_Error2_MsgTransInit( "Resources:$.Resources.NCOptions.Messages");
 		,
 		return Desk_Error2_ConvertToOS2();
 		)
 
+	Desk_Error2_CheckOS( _swix(TaskModule_RegisterBroadcastMessage, _INR(0,3),
+				   0u, wimp_messages, WimpMessageEntry, pw));
+
 	MemCheck_UnRegisterMiscBlock( cmd);
 
-	return _kernel_setenv( "Alias$URLOpenCLI_NCOptions_OpenPage", "NCOptions_OpenPage %*0");
 	return NULL;
 	Desk_UNUSED( cmd);
 	Desk_UNUSED( argc);
@@ -800,6 +842,9 @@ _kernel_oserror*	Finalise( int fatal, int podule, void *pw)
 		Desk_Error2_MsgTransFinal();
 		,
 		)
+
+	Desk_Error2_CheckOS( _swix(TaskModule_UnRegisterBroadcastMessage, _INR(0,3),
+				   0u, 0u, WimpMessageEntry, pw));
 
 #ifndef ROM
 	Desk_Error2_CheckOS( _swix(ResourceFS_DeregisterFiles, _IN(0), messages_file()));
