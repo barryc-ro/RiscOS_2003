@@ -124,14 +124,6 @@ o.modhdr: hdr:soundfile
 o.modhdr: OS:Hdr.OSGBPB
 o.modhdr: hdr.Proc
 o.modhdr: hdr.msadpcm
-o.msadpcmasm: s.msadpcmasm
-o.msadpcmasm: os:hdr.types
-o.msadpcmasm: os:hdr.os
-o.msadpcmasm: os:hdr.osmodule
-o.msadpcmasm: hdr:soundfile
-o.msadpcmasm: OS:Hdr.OSGBPB
-o.msadpcmasm: hdr.proc
-o.msadpcmasm: hdr.msadpcm
 o.modhdrz: s.modhdr
 o.modhdrz: os:hdr.types
 o.modhdrz: os:hdr.os
@@ -140,3 +132,11 @@ o.modhdrz: hdr:soundfile
 o.modhdrz: OS:Hdr.OSGBPB
 o.modhdrz: hdr.Proc
 o.modhdrz: hdr.msadpcm
+o.msadpcmasm: s.msadpcmasm
+o.msadpcmasm: os:hdr.types
+o.msadpcmasm: os:hdr.os
+o.msadpcmasm: os:hdr.osmodule
+o.msadpcmasm: hdr:soundfile
+o.msadpcmasm: OS:Hdr.OSGBPB
+o.msadpcmasm: hdr.proc
+o.msadpcmasm: hdr.msadpcm
