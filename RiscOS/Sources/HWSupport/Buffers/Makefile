@@ -33,7 +33,7 @@ TARGET    = rm.Buffers
 TARGETSA  = rm.BuffersSA
 EXPORTS   = ${EXP_HDR}.Buffer
 
-RESOURCES = LocalRes:Messages
+RESOURCES = Resources.UK.Messages
 
 #
 # Generic rules:

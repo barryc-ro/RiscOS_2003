@@ -90,6 +90,7 @@
                 GET     Hdr:MsgTrans
                 GET     Hdr:Proc
                 GET     Hdr:ResourceFS
+                GET     Hdr:HostFS
 
                 GBLL    hostvdu
                 GBLL    debug
@@ -109,19 +110,19 @@ international   SETL    true
 dormant_on_last_byte SETL true
 
 init            SETD    false
-final           SETD    false
+final           SETD    true;false
 service         SETD    false
-register        SETD    false
+register        SETD    true
 deregister      SETD    false
 getinfo         SETD    false
 modflags        SETD    false
 link            SETD    false
 unlink          SETD    false
-blkinsert       SETD    false
+blkinsert       SETD    true
 blkremove       SETD    false
 findhandle      SETD    false
 cnpv            SETD    false
-insv            SETD    false
+insv            SETD    true;false
 remv            SETD    false
 makebuffer      SETD    false
 zapbuffer       SETD    false
@@ -195,7 +196,8 @@ buffer_Flags            # 4     ;  = flags for buffer
                                 ;       bit 1 = 1 => buffer generates "output buffer empty" events
                                 ;       bit 2 = 1 => buffer generates "input buffer full" events
                                 ;       bit 3 = 1 => buffer generates threshold upcalls
-                                ;
+                                ;       bit 4 = 1 => word-aligned data buffer
+
                                 ;       bit 8 = 1 => threshold currently exceeded
 
 buffer_Start            # 4     ; -> start of buffer in memory
@@ -223,6 +225,7 @@ b_NotDormant            * 1:SHL:0 ; 0 => dormant, 1 => awake
 b_GenerateOutputEmpty   * 1:SHL:1 ; 1 => generate OutputEmpty events
 b_GenerateInputFull     * 1:SHL:2 ; 1 => generate InputFull events
 b_SendThresholdUpCalls  * 1:SHL:3 ; 1 => send upcalls when free goes above or below threshold
+b_WordAligned           * 1:SHL:4 ; 1 => word-aligned data buffer
 
 b_ThresholdExceeded     * 1:SHL:8 ; =0 free >= threshold, =1 free < threshold (only maintained if bit 2 set)
 
@@ -685,6 +688,11 @@ b_Create        ENTRY   "r0-r4"
                 PullEnv LE
                 BLE     BufferTooSmall
 
+                TST     r0, #b_WordAligned
+                TSTNE   r1, #3
+                PullEnv NE
+                BNE     BufferNotAligned
+
                 MOV     r4, r2                  ; r4  = handle to be used
 
                 MOV     r0, #ModHandReason_Claim
@@ -716,6 +724,11 @@ BufferTooSmall
                 DoError
 
                 MakeErrorBlock BufferManager_BufferTooSmall
+BufferNotAligned
+                ADR     r0, ErrorBlock_BufferManager_BufferNotAligned
+                DoError
+
+                MakeErrorBlock BufferManager_BufferNotAligned
 
                 LTORG
 
@@ -790,6 +803,17 @@ b_Register      ENTRY   "r0-r3"
         ; r2 -> buffer end
         ; r3  = handle to be used, =-1 if undefined
 
+                TST     r0, #b_WordAligned
+                BEQ     %FT05
+
+                TST     r1, #3
+                PullEnv NE
+                BNE     BufferNotAligned
+
+                TST     r2, #3
+                PullEnv NE
+                BNE     BufferNotAligned
+05
                 SUBS    lr, r2, r1              ; lr = size of buffer
                 PullEnv LE                      ; if size <= 0 then stupid
                 BLE     BufferTooSmall
@@ -843,7 +867,7 @@ b_Register      ENTRY   "r0-r3"
                 STR     r10, [r11, #buffer_Handle]
 
                 SUB     r2, r2, r1              ; lr = buffer size
-                AND     r0, r0, #&0F            ; set high-up (internal) flag bits to zero
+                AND     r0, r0, #&1F            ; set high-up (internal) flag bits to zero
 
                 ASSERT  buffer_Flags = 4
                 ASSERT  buffer_Start = buffer_Flags +4
@@ -1513,8 +1537,19 @@ s_InsertBlock                                   ; r11 and return address already
         ASSERT  buffer_RemoveIndex = buffer_Flags +16
         LDMIB   r11, {r4-r8}                    ; r4=flags, r5->start, r6=size, r7=ins, r8=rem
 
+        TST     r4, #b_WordAligned
+        BNE     %FT20
+
         SUBS    r8, r8, #1                      ; real insert limit
         SUBLO   r8, r6, #1                      ; if -ve then wrap to end of buffer
+        B       %FT30
+
+20
+        Debug   insv,"word-aligned insert"
+
+        SUBS    r8, r8, #4                      ; real insert limit
+        SUBLO   r8, r6, #4                      ; if -ve then wrap to end of buffer
+30
         TEQ     r7, r8                          ; if ins=rem-1
         BEQ     %FT80                           ; then buffer full
 
@@ -1978,19 +2013,31 @@ s_UsedSpace                                     ; r11 and return address already
 ;       all other registers preserved
 ;
 s_FreeSpace                                     ; r11 and return address already stacked
-        Push    "r0,r1"
+        Push    "r4-r8"
 
         Debug   cnpv,"Returning free space in buffer",r11
 
-        ASSERT  buffer_InsertIndex = buffer_Size +4
-        ASSERT  buffer_RemoveIndex = buffer_Size +8
-        ADD     r11, r11, #buffer_Size
-        LDMIA   r11, {r0-r2}                    ; r0=size, r1=ins, r2=rem
+        ASSERT  buffer_Flags = 4
+        ASSERT  buffer_Start = buffer_Flags +4
+        ASSERT  buffer_Size = buffer_Flags +8
+        ASSERT  buffer_InsertIndex = buffer_Flags +12
+        ASSERT  buffer_RemoveIndex = buffer_Flags +16
+        LDMIA   r11, {r4-r8}                    ; r4=flags, r5->start, r6=size, r7=ins, r8=rem
+
+        TST     r4, #b_WordAligned
+        BEQ     %FT21
+        SUB     r2, r8, #4
+        SUBS    r2, r2, r7
+        ADDLT   r2, r2, r6
+
+        Pull    "r4-r8,r11,pc"
+
+21
         CLC
         SBCS    r2, r2, r1                      ; r2=rem-ins-1
         ADDCC   r2, r2, r0                      ; if -ve then add size
 
-        Pull    "r0,r1,r11,pc"
+        Pull    "r4-r8,r11,pc"
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
