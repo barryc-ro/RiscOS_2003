@@ -110,19 +110,21 @@ static unsigned systime()
     return s;
 }
 
-static void send_error(int s, struct tftphdr *buf, int errnum, const char *errmess,
+static void send_error(int s, int errnum, const char *errmess,
                        const struct sockaddr_in *to)
 {
+    char buf[SEGSIZE]; /* I really hope we have 512 bytes of stack... */
+    struct tftphdr *t = (struct tftphdr *) buf;
     int n;
 
-    buf->th_opcode = htons(ERROR);
-    buf->th_code = htons(errnum);
-    n = sprintf(buf->th_msg, "%s", errmess);
-    sendto(s, buf,
+    t->th_opcode = htons(ERROR);
+    t->th_code = htons(errnum);
+    n = sprintf(t->th_msg, "%s", errmess);
+    sendto(s, t,
            offsetof(struct tftphdr, th_msg) + n + 1,
            0, (const struct sockaddr *) to, sizeof *to);
     #ifdef TRACE
-    log_datagram("->", buf, offsetof(struct tftphdr, th_msg) + n + 1);
+    log_datagram("->", t, offsetof(struct tftphdr, th_msg) + n + 1);
     #endif
 
     if (errmess != _inet_error.errmess)
@@ -227,6 +229,9 @@ static int first_socket(int n, fd_set *fds)
                 return -1;
 
             tv = (struct timeval *) CMSG_DATA(cmsg);
+            #ifdef TRACE_TIMESTAMPS
+            trace(("tv=(%ld.%06ld)\n", tv->tv_sec, tv->tv_usec));
+            #endif
             if (firstsocket == -1 || timercmp(tv, &firsttime, <))
             {
                 firstsocket = s;
@@ -376,7 +381,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
         if ((n=select(nfds, &fds, NULL, NULL, &tv)) < 0 && errno != EINTR)
         {
             if (connected)
-                send_error(unicast_socket, in, EUNDEF, _inet_err(), NULL);
+                send_error(unicast_socket, EUNDEF, _inet_err(), NULL);
             goto error;
         }
 
@@ -384,7 +389,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
         {
             e = escape_error();
             if (connected)
-                send_error(unicast_socket, in, EUNDEF, e->errmess, NULL);
+                send_error(unicast_socket, EUNDEF, e->errmess, NULL);
             _inet_error.errnum = 17;
             goto error;
         }
@@ -437,12 +442,17 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                               (struct sockaddr *) &from, &fromlen)) < 0)
             {
                 if (connected)
-                    send_error(unicast_socket, in, EUNDEF, _inet_err(), NULL);
+                    send_error(unicast_socket, EUNDEF, _inet_err(), NULL);
                 goto error;
             }
         }
         else
             n = -1;
+
+#if 0
+        if (!(rand() % 10))
+            n = -1;
+#endif
 
         if (n <= 0)
         {
@@ -454,7 +464,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                 _inet_error.errnum = ERROR_TIMEDOUT;
                 strcpy(_inet_error.errmess, "Timed out");
                 if (connected)
-                    send_error(unicast_socket, in, EUNDEF, _inet_error.errmess, NULL);
+                    send_error(unicast_socket, EUNDEF, _inet_error.errmess, NULL);
                 goto error;
             }
 
@@ -545,7 +555,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
              * from other multicast channels.
              */
             if (s != multicast_socket)
-                send_error(unicast_socket, in, EBADID, "Unknown transfer ID", &from);
+                send_error(unicast_socket, EBADID, "Unknown transfer ID", &from);
             /* Loop around again (see comments above about ICMP) */
             goto reselect;
         }
@@ -556,7 +566,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
             sin.sin_port = from.sin_port;
             if (connect(unicast_socket, (struct sockaddr *) &sin, sizeof sin) < 0)
             {
-                send_error(unicast_socket, in, EUNDEF, _inet_err(), &from);
+                send_error(unicast_socket, EUNDEF, _inet_err(), &from);
                 goto error;
             }
             connected = true;
@@ -599,7 +609,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                             /* Create socket */
                             if ((multicast_socket = new_socket(IPPROTO_UDP)) < 0)
                             {
-                                send_error(unicast_socket, in, EUNDEF, _inet_err(), NULL);
+                                send_error(unicast_socket, EUNDEF, _inet_err(), NULL);
                                 goto error;
                             }
 
@@ -612,7 +622,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                                 bind(multicast_socket, (struct sockaddr *) &ma, sizeof ma) < 0 ||
                                 getsockname(unicast_socket, (struct sockaddr *) &la, &lalen) < 0)
                             {
-                                send_error(unicast_socket, in, EBADOPTS, _inet_err(), NULL);
+                                send_error(unicast_socket, EBADOPTS, _inet_err(), NULL);
                                 goto error;
                             }
 
@@ -636,12 +646,10 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
 
                             mreq.imr_multiaddr = ma.sin_addr;
                             mreq.imr_interface = la.sin_addr;
-                            trace(("add membership %s ", inet_ntoa(ma.sin_addr)));
-                            trace(("on %s\n", inet_ntoa(la.sin_addr)));
 
                             if (setsockopt(multicast_socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof mreq) < 0)
                             {
-                                send_error(unicast_socket, in, EBADOPTS, _inet_err(), NULL);
+                                send_error(unicast_socket, EBADOPTS, _inet_err(), NULL);
                                 goto error;
                             }
 
@@ -660,16 +668,13 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     else if (strcasecmp(p, "blksize") == 0)
                     {
                         blocksize = atoi(val);
-#if 0
-                        in = realloc(in, offsetof(struct tftphdr, th_data) + blocksize);
-#else
+                        /* realloc() doesn't work on RISC OS 3.1 */
                         free(in);
                         in = malloc(offsetof(struct tftphdr, th_data) + blocksize);
-#endif
                         if (!in)
                         {
                             e = no_mem_error();
-                            send_error(unicast_socket, in, EBADOPTS, e->errmess, NULL);
+                            send_error(unicast_socket, EBADOPTS, e->errmess, NULL);
                             goto error;
                         }
                     }
@@ -682,7 +687,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     }
                     else
                     {
-                        send_error(unicast_socket, in, EBADOPTS, "Unknown option", NULL);
+                        send_error(unicast_socket, EBADOPTS, "Unknown option", NULL);
                         goto error;
                     }
 
@@ -695,7 +700,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                  */
                 if (tsize && tsize / blocksize + 1 > 0xFFFF)
                 {
-                    send_error(unicast_socket, in, ENOSPACE, "Too many blocks", NULL);
+                    send_error(unicast_socket, ENOSPACE, "Too many blocks", NULL);
                     goto error;
                 }
 
@@ -727,7 +732,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                 /* Quick check of block number */
                 if (num_blocks != -1 && blocknum >= num_blocks)
                 {
-                    send_error(unicast_socket, in, EBADOP, "Block number too high", NULL);
+                    send_error(unicast_socket, EBADOP, "Block number too high", NULL);
                     goto error;
                 }
 
@@ -769,7 +774,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                         else
                             errnum = EUNDEF;
 
-                        send_error(unicast_socket, in, errnum, e->errmess, NULL);
+                        send_error(unicast_socket, errnum, e->errmess, NULL);
                         e = e2;
                         goto error;
                     }
@@ -784,7 +789,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     /* Check we haven't received any higher-numbered blocks */
                     if (blocknum < highest_block)
                     {
-                        send_error(unicast_socket, in, EBADOP, "Block too small", NULL);
+                        send_error(unicast_socket, EBADOP, "Block too small", NULL);
                         goto error;
                     }
                     num_blocks = blocknum + 1;
@@ -796,7 +801,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                      */
                     if (blocknum == 65535 - 1)
                     {
-                        send_error(unicast_socket, in, ENOSPACE, "Too many blocks", NULL);
+                        send_error(unicast_socket, ENOSPACE, "Too many blocks", NULL);
                         goto error;
                     }
                 }
@@ -820,7 +825,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                 goto error;
 
             default:
-                send_error(unicast_socket, in, EBADOP, "Unknown TFTP operation", NULL);
+                send_error(unicast_socket, EBADOP, "Unknown TFTP operation", NULL);
                 goto error;
         }
     }
