@@ -609,8 +609,10 @@ MMUon_nol1ptoverlap
         LDR     a3, [a2, #HAL_WsSize]
         BL      memset
 
-        LDR     a1, =IO
         MOV     a2, #ZeroPage
+        LDR     a1, =IOLimit
+        STR     a1, [a2, #IOAllocLimit]
+        LDR     a1, =IO
         STR     a1, [a2, #IOAllocPtr]
 
         BL      SetUpHALEntryTable
@@ -1409,61 +1411,93 @@ InitProcVec_FIQ
         DCD     0
 InitProcVecsEnd
 
-; In: a1 = flags
-;     a2 = physical address
-;     a3 = size
-RISCOS_MapInIO
+;
+; In:  a1 = flags  (only L1_B currently allowed)
+;      a2 = physical address
+;      a3 = size
+; Out: a1 = assigned logical address, or 0 if failed (no room)
+;
+; Will detect and return I/O space already mapped appropriately, or map and return new space
+; For simplicity and speed of search, works on a section (1Mb) granularity
+;
+RISCOS_MapInIO ROUT
         Entry   "v1-v4"
         MOV     v4, a2                                  ; v4 = original requested address
-        ADD     a3, a2, a3                              ; a3 -> end
-        MOV     a2, a2, LSR #12
-        MOV     a2, a2, LSL #12                         ; round a2 down to a page boundary
-        SUB     v4, v4, a2                              ; v4 = offset of original within page-aligned area
-        MOV     lr, a3, LSR #12
-        TEQ     a3, lr, LSL #12
+        ADD     a3, a2, a3                              ; a3 -> end (exclusive)
+        MOV     a2, a2, LSR #20
+        MOV     a2, a2, LSL #20                         ; round a2 down to a section boundary
+        SUB     v4, v4, a2                              ; v4 = offset of original within section-aligned area
+        MOV     lr, a3, LSR #20
+        TEQ     a3, lr, LSL #20
         ADDNE   lr, lr, #1
-        MOV     a3, lr, LSL #12                         ; round a3 up to a page boundary
+        MOV     a3, lr, LSL #20                         ; round a3 up to a section boundary
 
-        SUB     a4, a3, a2                              ; a4 = area size
-        AND     a3, a1, #L2_C
-        ORR     a3, a3, #AP_None * L2_APMult            ; a3 = access permissions
-        MOV     a1, a2                                  ; a1 = physical base
-        Push    "a1,a3,a4"
-        BL      FindIOLogicalAddress
-        MOV     a2, a1                                  ; a2 = logical address of page-aligned area
-        ADD     v4, a1, v4                              ; v4 = logical address of requested physical address
-        Pull    "a1,a3,a4"
+        LDR     ip, =ZeroPage
+        LDR     a4, =L1PT
+        AND     a1, a1, #L1_B                           ; only allow bufferable as flags option
+        LDR     v2, =IO                                 ; logical end (exclusive) of currently mapped IO
+        LDR     v1, [ip, #IOAllocPtr]                   ; logical start (inclusive)
+
+        SUB     v1, v1, #&100000
+10
+        ADD     v1, v1, #&100000                        ; next mapped IO section
+        CMP     v1, v2
+        BHS     %FT32                                   ; no more currently mapped IO
+        LDR     v3, [a4, v1, LSR #(20-2)]               ; L1PT entry (must be for mapped IO) 
+        MOV     lr, v3, LSR #20                         ; physical address bits
+        CMP     lr, a2, LSR #20
+        BNE     %BT10                                   ; no address match
+        AND     lr, v3, #L1_B
+        TEQ     lr, a1
+        BNE     %BT10                                   ; no flags match
+;
+; alright, found start of requested IO already mapped, and with required L1_B
+;
+        Push    "a2, v1"
+20
+        ADD     a2, a2, #&100000
+        CMP     a2, a3
+        Pull    "a2, v1", HS
+        BHS     %FT40                                  ; its all there already!
+        ADD     v1, v1, #&100000                       ; next mapped IO section
+        CMP     v1, v2
+        BHS     %FT30                                  ; not all there in this mapping
+        LDR     v3, [a4, v1, LSR #(20-2)]              ; L1PT entry
+        MOV     lr, v3, LSR #20                        ; physical address bits
+        CMP     lr, a2, LSR #20
+        BNE     %FT30                                  ; address match failed
+        AND     lr, v3, #L1_B
+        TEQ     lr, a1
+        BEQ     %BT20                                  ; address and flags match so far
+30
+        Pull    "a2, v1"
+;
+; request not currently mapped, only partially mapped, or mapped with wrong L1_B
+;
+32
         MOV     ip, #ZeroPage
-        LDR     v1, [ip, #InitUsedBlock]
-        LDR     v2, [ip, #InitUsedEnd]
-        MOV     v3, #0
-        BL      Init_MapIn
-        MOV     a1, v4
-        MOV     ip, #ZeroPage
-        STR     v1, [ip, #InitUsedBlock]
-        STR     v2, [ip, #InitUsedEnd]
+        LDR     v2, [ip, #IOAllocPtr]
+        ADD     v1, v2, a2
+        SUB     v1, v1, a3                              ; attempt to allocate size of a3-a2
+        LDR     v3, [ip, #IOAllocLimit]                 ; can't extend down below limit
+        CMP     v1, v3
+        MOVLS   a1, #0
+        BLS     %FT90
+        STR     v1, [ip, #IOAllocPtr]
+        ORR     a2, a2, a1
+        ORR     a2, a2, #AP_None * L1_APMult
+        ORR     a2, a2, #L1_Section                     ; first L1PT value
+34
+        STR     a2, [a4, v1, LSR #(20-2)]
+        ADD     a2, a2, #&100000
+        ADD     v1, v1, #&100000                        ; next section
+        CMP     a2, a3
+        BLO     %BT34
+        LDR     v1, [ip, #IOAllocPtr]
+40
+        ADD     a1, v1, v4                              ; logical address for request
+90
         EXIT
-
-; In:  a1 = Physical address
-;      a3 = flags
-;      a4 = size
-; Out: a1 = Logical address
-FindIOLogicalAddress
-        MOV     a2, a4, LSR #12
-        TEQ     a4, a2, LSL #12
-        ADDNE   a2, a2, #1
-        MOV     a4, a2, LSL #12                         ; a4 = size rounded up
-
-        ORR     a2, a1, a4
-        MOVS    ip, a2, LSL #12                         ; EQ if megabyte aligned
-
-        MOV     ip, #ZeroPage
-        LDR     a3, [ip, #IOAllocPtr]
-        MOVEQ   a3, a3, LSR #20
-        MOVEQ   a3, a3, LSL #20
-        SUB     a1, a3, a4
-        STR     a1, [ip, #IOAllocPtr]
-        MOV     pc, lr
 
 
 SetUpHALEntryTable ROUT
