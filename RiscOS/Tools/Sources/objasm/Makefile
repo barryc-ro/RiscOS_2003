@@ -125,13 +125,14 @@ export_hdrs:
 export_libs: 
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs: 
+o.local_dirs: 
 	${MKDIR} o
+	${TOUCH} $@
 
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} local_dirs
+${TARGET}: ${OBJS} ${LIBS} o.local_dirs
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
         ${SQUEEZE} ${SQZFLAGS} $@
 

@@ -49,6 +49,7 @@
 #define Type1ValueMult   0x0200000
 #define Type1ImmBit      0x2000000/*The bit distinguishing Imm from Reg*/
 #define Type2RegBit      0x2000000/*The bit distinguishing Imm from Reg*/
+#define Type25ImmBit     0x400000/*The bit distinguishing Imm from Reg*/
 #define PreBit           0x1000000/*The pre/post bit for type 2/4 opcodes*/
 #define UpBit            0x800000/*The up/down bit for type 2/4 opcodes*/
 #define PSRBit           0x400000/*The PSR update bit for group 4 opcodes*/
@@ -549,6 +550,7 @@ DPoperand2:
       break;
 
       case DataTransfer:
+      case DataTransfer_v4:
       destReg = RegisterExpr(line, &lineIndex); /* Destination/source */
       lineIndex++; /* Step past comma */
       while (isWhiteSpace(line[lineIndex])) lineIndex++;
@@ -562,6 +564,7 @@ DPoperand2:
           while (isWhiteSpace(line[lineIndex])) lineIndex++;
           if (line[lineIndex] != Comma)
           { opcodeValue |= UpBit;
+            if (opcodeType == DataTransfer_v4) opcodeValue |= Type25ImmBit;
             /* Allow optional shriek */
             if (line[lineIndex] == Shriek)
               lineIndex++;
@@ -576,9 +579,11 @@ DPoperand2:
             while (isWhiteSpace(line[lineIndex])) lineIndex++;
             if (line[lineIndex] == Hash)
             { lineIndex++;
+              if (opcodeType == DataTransfer_v4) opcodeValue |= Type25ImmBit;
               immValue = ConstantExpr(line, &lineIndex, FALSE, &defined);
               if (errorFound) { return FALSE; };
-              if (abs((int)immValue) >= 0x1000) {
+              if (abs((int)immValue) >= 0x1000 ||
+                  (opcodeType == DataTransfer_v4 && abs((int)immValue) >= 0x100)) {
                 Report(AsmError,errors_DatOff);
                 return FALSE;
               }
@@ -586,7 +591,7 @@ DPoperand2:
               immValue = abs((int)immValue);
             }
             else
-            { opcodeValue |= Type2RegBit;
+            { if (opcodeType == DataTransfer) opcodeValue |= Type2RegBit;
               /*Here we must allow an optional + or -*/
               if (line[lineIndex] == PlusSign) {
                 lineIndex++;
@@ -596,7 +601,10 @@ DPoperand2:
               } else {
                 opcodeValue |= UpBit;
               }; /* if */
-              immValue = ShiftedRegister(line, &lineIndex, FALSE);
+              if (opcodeType == DataTransfer)
+                immValue = ShiftedRegister(line, &lineIndex, FALSE);
+              else
+                immValue = RegisterExpr(line, &lineIndex);
             }
           }
         }
@@ -606,17 +614,19 @@ DPoperand2:
           lineIndex++;/*Past comma*/
           while (isWhiteSpace(line[lineIndex])) lineIndex++;
           if (line[lineIndex] == Hash) {
+            if (opcodeType == DataTransfer_v4) opcodeValue |= Type25ImmBit;
             lineIndex++;
             immValue = ConstantExpr(line, &lineIndex, FALSE, &defined);
             if (errorFound) { return FALSE; }; /* if */
-            if (abs((int)immValue) >= 0x1000) {
+            if (abs((int)immValue) >= 0x1000 ||
+                (opcodeType == DataTransfer_v4 && abs((int)immValue) >= 0x100)) {
               Report(AsmError,errors_DatOff);
               return FALSE;
             }
             if (immValue < 0x1000) opcodeValue |= UpBit;
             immValue = abs((int)immValue);
           } else {
-            opcodeValue |= Type2RegBit;
+            if (opcodeType == DataTransfer) opcodeValue |= Type2RegBit;
             /*Here we must allow an optional + or -*/
             if (line[lineIndex] == PlusSign) {
               lineIndex++;
@@ -626,7 +636,10 @@ DPoperand2:
             } else {
               opcodeValue |= UpBit;
             }
-            immValue = ShiftedRegister(line, &lineIndex, FALSE);
+            if (opcodeType == DataTransfer)
+              immValue = ShiftedRegister(line, &lineIndex, FALSE);
+            else
+              immValue = RegisterExpr(line, &lineIndex);
           }
           lineIndex++;
           while (isWhiteSpace(line[lineIndex])) lineIndex++;
@@ -749,9 +762,11 @@ DPoperand2:
           if (errorFound) return FALSE;
         }
         opcodeValue |= PreBit;
+        if (opcodeType == DataTransfer_v4) opcodeValue |= Type25ImmBit;
         /* Always adjust PC relative offsets */
         if (sourceReg1 == 15) immValue -= programCounter+8;
-        if (abs((int)immValue) >= 0x1000) {
+        if (abs((int)immValue) >= 0x1000 ||
+            (opcodeType == DataTransfer_v4 && abs((int)immValue) >= 0x100)) {
           Report(AsmError,errors_DatOff);
           return FALSE;
         }
@@ -764,7 +779,11 @@ DPoperand2:
           opcodeValue |= WriteBackBit;
         }
       }
-      CodeWord(opcodeValue + immValue + sourceReg1*0x10000 + destReg*0x1000);
+      if (opcodeType == DataTransfer)
+        CodeWord(opcodeValue + sourceReg1*0x10000 + destReg*0x1000 + immValue);
+      else
+        CodeWord(opcodeValue + sourceReg1*0x10000 + destReg*0x1000 +
+                (immValue>>4)*0x100 + (immValue&0xF));
       break;
 
       case SWI:
@@ -790,6 +809,13 @@ DPoperand2:
       if (value >= 0x1000000) {
         Report(AsmError,errors_ImmValRange,value);  return FALSE;}
       CodeWord(opcodeValue + value);
+      break;
+
+      case BKPT:
+      value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+      if (value >= 0x10000) {
+        Report(AsmError,errors_ImmValRange,value);  return FALSE;}
+      CodeWord(opcodeValue + (value>>4)*0x100 + (value&0xF));
       break;
 
       case BlockData:
@@ -1322,16 +1348,25 @@ DPoperand2:
           { /* Definitely post-indexed */
             lineIndex++;
             while (isWhiteSpace(line[lineIndex])) lineIndex++;
-            lineIndex++;
+            if (line[lineIndex++] != CurlyBra)
+              opcodeValue |= WriteBackBit;
             immValue = ConstantExpr(line, &lineIndex, FALSE, &defined);
             if (errorFound) return FALSE;
-            if ((abs((int)immValue) >= 0x400) || (immValue % 4 != 0))
-            { Report(AsmError,errors_DatOff);
-              return FALSE;
+            if (opcodeValue & WriteBackBit)
+            { if ((abs((int)immValue) >= 0x400) || (immValue % 4 != 0))
+              { Report(AsmError,errors_DatOff);
+                return FALSE;
+              }
+              if (immValue < 0x400) opcodeValue |= UpBit;
+              immValue = (abs((int)immValue)) / 4L;
+            } else
+            { lineIndex++; /* skip } */
+              if (immValue >= 0x100)
+              { Report(AsmError,errors_ImmValRange, immValue);
+                return FALSE;
+              }
+              opcodeValue |= UpBit;
             }
-            if (immValue < 0x400) opcodeValue |= UpBit;
-            immValue = (abs((int)immValue)) / 4L;
-            opcodeValue |= WriteBackBit;  /* We must write back */
           }
         }
         else
@@ -1450,6 +1485,18 @@ DPoperand2:
 
         break;
       }
+
+      case CLZ:
+      destReg = RegisterExpr(line, &lineIndex);
+      lineIndex++;
+      sourceReg1 = RegisterExpr(line, &lineIndex);
+      CodeWord(opcodeValue + destReg*0x1000 + sourceReg1);
+      break;
+
+      case BranchXReg:
+      destReg = RegisterExpr(line, &lineIndex);
+      CodeWord(opcodeValue + destReg);
+      break;
 
     }; /* switch */
   }; /* if */
