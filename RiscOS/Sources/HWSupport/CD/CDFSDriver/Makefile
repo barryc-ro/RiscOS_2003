@@ -7,7 +7,7 @@
 # ----       ----   -----------
 # 25-May-94  AMcC   Created.
 # 23-Feb-95  AMcC   Resources now copied to CDFSRes
-#
+# 29-Nov-95  RWB    Added install: option
 
 #
 # Paths
@@ -53,6 +53,10 @@ install_rom: ${TARGET}
 
 resources:
         @echo ${COMPONENT}: Resources are in CDFSRes
+
+install: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: module installed
 
 clean:
         ${RM} ${TARGET}
