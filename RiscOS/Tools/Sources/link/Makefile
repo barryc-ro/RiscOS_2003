@@ -26,12 +26,14 @@ LD      = link
 LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
+SQZ     = squeeze
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
 WFLAGS  = ~CFR~V
+SQZFLAGS= -f
 
 #
 # Libraries
@@ -98,15 +100,16 @@ export_hdrs:
 export_libs: 
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+o.dirs:
 	${MKDIR} o
+	create o.dirs
 
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} local_dirs
-        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
-
+${TARGET}: ${OBJS} ${LIBS} o.dirs
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
+	${SQZ} ${SQZFLAGS} $@
 
 # Static dependencies:
 
@@ -114,33 +117,3 @@ o.dem: riscos.c.dem
     ${CC} ${CCFLAGS} -pcc -o $@ riscos.c.dem
 
 # Dynamic dependencies:
-o.aifcode:	c.aifcode
-o.aifcode:	C:CLX.h.aif
-o.aifcode:	h.aifcode
-o.aifcode:	C:CLX.h.aif
-o.aifcode:	c.aifcode
-o.aifcode:	C:CLX.h.aif
-o.aifcode:	h.aifcode
-o.aifcode:	C:CLX.h.aif
-o.hostdep:	c.hostdep
-o.hostdep:	h.options
-o.hostdep:	h.hostdep
-o.hostdep:	h.options
-o.hostdep:	C:h.kernel
-o.link:	c.link
-o.link:	h.options
-o.link:	h.hostdep
-o.link:	h.options
-o.link:	h.msgnos
-o.link:	C:CLX.h.aof
-o.link:	C:CLX.h.prgname
-o.link:	riscos.h.dem
-o.link:	C:CLX.h.libflfmt
-o.link:	C:CLX.h.chunkfmt
-o.link:	C:CLX.h.aif
-o.link:	h.aifcode
-o.link:	C:CLX.h.aif
-o.link:	C:CLX.h.asdfmt
-o.link:	C:CLX.h.ovrflfmt
-o.dem:	riscos.c.dem
-o.dem:	riscos.h.dem

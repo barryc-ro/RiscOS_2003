@@ -91,8 +91,10 @@ extern int errno;
 #ifndef IDFNSTR
 #  define IDFNSTR " Version 5.00f (Acorn Computers Ltd) <beta+ release>"
 #endif            /* NB - leading space is needed */
-#ifndef __DATE__
-#  include "datenow.h" /* [Mar 30 1993] */
+#ifndef Module_Date
+#  define BUILDDATE __DATE__
+#else
+#  define BUILDDATE Module_Date
 #endif
 
 #define StrEQ(x, y)   (strcmp((x), (y)) == 0)
@@ -1956,6 +1958,20 @@ static struct hentry *globinsert(const char *name, struct sym *sy, char *id)
     symname[0] = id[0];
     symname[1] = id[1];
     bufcpy(symname+2, name, sizeof(symname)-2);
+
+#ifdef LINKING_ON_ACORN_RISC_OS
+        if ((sy->flags & SYM_REFDEFMASK) == SYM_GLOBALDEFAT &&
+                ((!strncmp(name, "__sti__", 7) || !strncmp(name, "__std__", 7))))
+        {
+            /* Make static global constructor and destructor functions locally visible only,
+             * otherwise if you have multiple source files of the same name (albeit in different
+             * directories) then these functions will cause duplicate symbol errors
+             * The only reference to these functions should be from the struct __linkl.ctor
+             * pointer anyway.  (sbrodie; 08/Nov/1998)
+             */
+            sy->flags = (sy->flags & ~SYM_REFDEFMASK) | SYM_LOCALDEFAT;
+        }
+#endif
 
     is_new = lookenter(&nh, symname, &globhashtable,
                        (sy->flags & SYM_NOCASEAT) ? cistrcmp : casefn);
@@ -4039,13 +4055,17 @@ oldsym("!!Image$$DataLimit", "Image$$RW$$Limit",
     undefs = 0;
     for (h = firstglobsym;  h != NULL;  h = gs->next)
     {   gs = h->h_un.globval;
-        if (debugflag || plinkflag &&
-                ((gs->symval.flags & SYM_REFDEFMASK) != SYM_LOCALDEFAT ||
-                    output_type == AOUT))
-        {
-            if ((!shl_flag || (gs->symval.flags & (SYM_EFTSYM+SYM_LINKSYM))) &&
+        if ((!shl_flag || (gs->symval.flags & (SYM_EFTSYM+SYM_LINKSYM))) &&
                 (gs->symval.area == NULL ||
                  !(gs->symval.area->flags & UNUSEDAREA)))
+        {
+            if (debugflag ||
+#ifdef LINKING_ON_ACORN_RISC_OS
+                plinkflag && strcmp(h->name+2, "__link") == 0 ||
+#endif
+                plinkflag &&
+                ((gs->symval.flags & SYM_REFDEFMASK) != SYM_LOCALDEFAT ||
+                    output_type == AOUT))
             {   gs->symval.symno = symcount;
                 symcount++;
                 strtsize += (int32)(size_t)(strlen(h->name));
@@ -4472,20 +4492,67 @@ nostrback:
             }
         }
 #ifdef LINKING_ON_ACORN_RISC_OS
+/* Commentary (sbrodie; 13/Nov/1998), (graphics by ahodgkinson):
+
+The problem with partially linked AOF is that the __link symbols are
+discarded because they are local only.  The ->next fields have been poked
+with useless values but that doesn't matter because the list is never walked!
+
+When linking AIF files, the code uses the (known) final target address of the
+__link->next fields and pokes it straight in.  Unfortunately, this is not
+good enough for outputting AOF files ....
+
+The change I have made here is that this code must do nothing at all when
+partially linking.  It must not write the __head data, and it must not modify
+anything else.  The only thing it needs to do is to ensure that __link
+symbols are retained in the output (see write_symt() and middle()).  This
+code already copes with multiple __link symbols in the intput areas by
+storing them through the chain pointers, and so will link the whole lot up at
+final link correctly.
+
+                    +--------+        +--------+        +--------+
+                    | aentry |        | aentry |        | aentry |
+                    |        | <----- |        |  ...<- |        |
+                    |  aep   |        |   aep  |        |  aep   |
+                    +--------+        +--------+        +--------+
+                        |                  |                |
+                        | area_link_list   |                |
+                        V                  V                V
+                    +--------+        +--------+        +--------+       +--------+
+                    |   _l_l |  next  |   _l_l |        |   _l_l |       |   _l_l |
+   g__link_list --> |        | -----> |        | ->...  |        |   /-->|        |
+                    |        |        |        |        |        |   |   |        |
+                    +--------+        +--------+        +--------+   |   +--------+
+                        |                  |               |  |      |
+                        | chain            | chain   chain |  | next | next
+                        V                  V               V  V      |
+                       ---                ---           +--------+   |
+                                                        |   _l_l |   |
+                                                        |        |---/
+                                                        |        |
+                                                        +--------+
+                                                            |
+                                                            | chain
+   "_l_l" = "__link_list"                                   V
+                                                           ---
+
+ */
+
+        if (!plinkflag) {
                 for (__link = aep->area__link_list; __link; __link = __link->chain) {
                     sy = __link->sy;
                     assert(sy->area == aep);
                     cp = area + (sy->value - aep->base);
                     if (__link->next)
-                        *(int *)cp = __link->next->sy->value;
-                    /* /* FIXME - Reloc code for __link */
+                        *(int32 *)cp = __link->next->sy->value;
                 }
-                if ((sy = g__head_sym) && aep == sy->area) {
+                if ((sy = g__head_sym) != NULL && aep == sy->area) {
                     cp = area + (sy->value - aep->base);
                     __link = g__link_list;
                     if (__link)
-                        *(int *)cp = __link->sy->value;
+                        *(int32 *)cp = __link->sy->value;
                 }
+        }
 #endif
 
         siz = aep->relocs * sizeof(aof_reloc);
@@ -4958,14 +5025,28 @@ static void write_symt(void)
         }
         for (h = firstglobsym;  h != NULL;  h = gs->next)
         {   int32 v, attrs;
+#ifdef LINKING_ON_ACORN_RISC_OS
+            int forcibly_link = plinkflag && strcmp(h->name+2, "__link") == 0;
+#endif
             gs = h->h_un.globval;
             /* WARNING: changes to following expression must be duplicated
                in function middle() where symcount is incremented! */
-            if (plinkflag && !debugflag &&
+            if (
+#ifdef LINKING_ON_ACORN_RISC_OS
+                !forcibly_link &&
+#endif
+                plinkflag && !debugflag &&
                 (gs->symval.flags & SYM_REFDEFMASK) == SYM_LOCALDEFAT ||
                 shl_flag &&
                 (gs->symval.flags & (SYM_EFTSYM+SYM_LINKSYM)) == 0)
                     continue; /* don't output symbol */
+
+            if (forcibly_link) {
+                    /* If we forcibly included this symbol, we must now make it local to the output
+                     * AOF file to avoid problems of duplicate symbols in subsequent link phases
+                     */
+                    gs->symval.flags = (gs->symval.flags & ~SYM_REFDEFMASK) | SYM_LOCALDEFAT;
+            }
 
             symtp->sym_name = tv(strtp - outstrt);
             if ((gs->symval.flags & SYM_EFTSYM) && (i = gs->pcit_entry) >= 0)
@@ -5522,7 +5603,7 @@ static struct fentry **addfile(struct fentry **next, char *fname, int lflag)
 
 static void help(void)
 {
-    printf(msgtext(HELP_TEXT_FORMAT), SELF, IDFNSTR,  __DATE__, myname);
+    printf(msgtext(HELP_TEXT_FORMAT), SELF, IDFNSTR, BUILDDATE, myname );
     fputs( msgtext( HELP_TEXT_GENERAL_1), stdout );
     fputs( msgtext( HELP_TEXT_GENERAL_2), stdout );
     fputs( msgtext( HELP_TEXT_OPTS_1  ),  stdout );
