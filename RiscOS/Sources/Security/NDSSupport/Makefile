@@ -6,7 +6,7 @@
 COMPONENT = NDSVerifier
 TARGET    = ${COMPONENT}
 DIRS      = o._dirs
-OBJS      = o.modhead o.ndssupport o.cstart o.ndsstubs
+OBJS      = o.modhead o.ndssupport o.cstart o.ndsstubs o.ndcport
 BASE_LIBS = ${CLIB} ${TBOXLIBS} ${DEBUGLIB} ${NET5LIBS} ${CALLXLIB}
 LIBS      = ${BASE_LIBS} lib.VER_LIB lib.math_lib
 
@@ -21,9 +21,9 @@ include ModuleLibs
 AIFDBG = aif.${COMPONENT}
 GPADBG = gpa.${COMPONENT}
 
-CFLAGS    .= -throwback -zm -g
+CFLAGS    += -throwback -zM -g
 CINCLUDES = -IOS:,C:,tbox:
-ASFLAGS   .= -G
+ASFLAGS   += -G
 
 
 ${AIFDBG}: ${OBJS} ${LIBS} ${DIRS}
