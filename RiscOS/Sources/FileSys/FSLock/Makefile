@@ -36,6 +36,7 @@ EXPORTS   = ${EXP_HDR}.FSLock
 # Generic rules:
 #
 rom: ${TARGET}
+	@echo AMU: warning - Hard coded SWI XOS_SynchroniseCodeAreas
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
