@@ -6,19 +6,21 @@
 
 ; Date       Description
 ; ----       -----------
-; 27-Apr-90     0.03    File created from ResourceFS 0.03
-;  1-May-90     0.04    OSFile_Load/Save allowed if file closed
-;  8-May-90     0.05    Fixed a storage leak in deletepipe
-;  9-May-90             Don't stop blocking if reader wants file size
-;               0.06    Fix bug: errors garbled from *PipeCopy
-; 10-May-90     0.07    Fix bug: don't extend file if blocking possible
-; 11-May-90     0.08    Fix bug: allow *Create if file only open for reading and empty
-; 14-May-90     0.09    Fix bug: *Create should zero file length, and mark "not written"
-; 14-May-90     0.10    Get case-equivalencing to work properly on directory enumeration
-; 27-Mar-91 ECN 0.11    Internationalised
-; 09-Oct-91 ECN 0.12    Fix open for update so it creates pipe
-; 11-Dec-91 SMC 0.13    Changed to use global messages BadFSOp, Escape, IsAFil
-; 08-Feb-93 SMC 0.14    Use Hdr: to get headers.
+; 27-Apr-1990     0.03    File created from ResourceFS 0.03
+; 01-May-1990     0.04    OSFile_Load/Save allowed if file closed
+; 08-May-1990     0.05    Fixed a storage leak in deletepipe
+; 09-May-1990             Don't stop blocking if reader wants file size
+;                 0.06    Fix bug: errors garbled from *PipeCopy
+; 10-May-1990     0.07    Fix bug: don't extend file if blocking possible
+; 11-May-1990     0.08    Fix bug: allow *Create if file only open for reading and empty
+; 14-May-1990     0.09    Fix bug: *Create should zero file length, and mark "not written"
+; 14-May-1990     0.10    Get case-equivalencing to work properly on directory enumeration
+; 27-Mar-1991 ECN 0.11    Internationalised
+; 09-Oct-1991 ECN 0.12    Fix open for update so it creates pipe
+; 11-Dec-1991 SMC 0.13    Changed to use global messages BadFSOp, Escape, IsAFil
+; 08-Feb-1993 SMC 0.14    Use Hdr: to get headers.
+; 22-Jan-2001 ADH 0.19    File heap in private dynamic area; two different ways of issuing
+;                         UpCall_ModifyingFile, much better than old "every byte" approach
 
 Module_BaseAddr
 
@@ -27,17 +29,18 @@ Module_BaseAddr
         GET     Hdr:System
         GET     Hdr:ModHand
         GET     Hdr:Services
-	GET	Hdr:Machine.<Machine>
+        GET     Hdr:Machine.<Machine>
         GET     Hdr:CMOS
         GET     Hdr:Proc
         GET     Hdr:FSNumbers
         GET     Hdr:HighFSI
-        GET     Hdr:LowFSi
+        GET     Hdr:LowFSI
         GET     Hdr:NewErrors
         GET     Hdr:Variables
         GET     Hdr:Wimp
         GET     Hdr:UpCall
         GET     Hdr:MsgTrans
+        GET     Hdr:Heap
 
         GET     VersionASM
 
@@ -47,18 +50,52 @@ Module_BaseAddr
         GBLL    debugup
         GBLL    debugrg
         GBLL    debugfs
+        GBLL    debugda
         GBLL    debugxx
         GBLL    hostvdu
 
-debug   SETL    false
-debugup SETL    debug :LAND: true
+debug   SETL    false                    ; set to true, then turn on individual areas
+debugup SETL    debug :LAND: false
 debugrg SETL    debug :LAND: false
 debugfs SETL    debug :LAND: false
+debugda SETL    debug :LAND: false
 debugxx SETL    debug :LAND: false
-hostvdu SETL    false
+hostvdu SETL    false                    ; set to true to use TML (HostFS) output
 
         GBLL    justreturnextent
 justreturnextent        SETL    Module_Version = 6     ; removed in version 0.07
+
+        ; 22-Jan-2001 (ADH)
+        ;
+        ; Set dynamicareas to true to always use a dynamic area for the file heap
+        ; or set to false to use RMA. There's no run-time detection.
+
+        GBLL    dynamicareas
+dynamicareas            SETL    true
+
+        ; 22-Jan-2001 (ADH)
+        ;
+        ; There's no OS_GBPB entry point, so PipeFS' individual get/put byte code
+        ; gets called instead. Unfortunately this issues UpCall_ModifyingFile for
+        ; every single byte read or written, which is horribly slow. If you use
+        ; upcalloncallback (uncommenting relevant code throughout this file), then
+        ; an array of filename pointers is constructed until eventually a callback
+        ; goes off which scans the array and calls the "modifyingfile" routine for
+        ; each of those R1 values.
+        ;
+        ; However, "modifyingfile" actually ignores the R1 value and sets a null
+        ; filename instead (owing to auto directory creation headaches I think) so
+        ; the array maintenance overhead is unnecessary. The array code is only
+        ; present in case anyone comes up with better UpCall generation code. In
+        ; the mean time, use "delayedupcall". This uses a simple flagged callback
+        ; to raise the UpCall. It's not very efficient to use a null filename like
+        ; this, of course, because all directories will be rescanned.
+
+        GBLL    upcalloncallback
+        GBLL    delayedupcall
+upcalloncallback        SETL    false ; otherwise, use "dynamicareas", *not* "true"
+delayedupcall           SETL    :LNOT: upcalloncallback
+
 
         LEADR   Module_LoadAddr
 
@@ -69,12 +106,12 @@ CR      *       13
 
 ; File header format
 
-                 ^ 0
-PipeFile_Load    # 4                     ; load address
-PipeFile_Exec    # 4                     ; exec address
+                      ^ 0
+PipeFile_Load         # 4                ; load address
+PipeFile_Exec         # 4                ; exec address
 PipeFile_Ext          # 4                ; total bytes written to file
-PipeFile_Attr    # 4                     ; file attributes
-PipeFile_Size    # 4                     ; size of file
+PipeFile_Attr         # 4                ; file attributes
+PipeFile_Size         # 4                ; size of file
 PipeFile_usage        # 4                ; is file open for read/write?
 PipeFile_readPTR      # 4                ; where to read bytes
 PipeFile_writePTR     # 4                ; where to write bytes
@@ -83,31 +120,58 @@ PipeFile_wrapend      # 4                ; buffer end
 PipeFile_readblocked  * PipeFile_Size    ; block if attempting to read
 PipeFile_writeblocked # 4                ; block if attempting to write
 PipeFile_lenblocked   # 4                ; block if attempting to read length
-PipeFile_Name    # 0                     ; null terminated file name
+PipeFile_Name         # 0                ; null terminated file name
 
-PipeFS_BufferSize  *  &100               ; fixed size allocated for data
+PipeFS_BufferSize     * &100             ; fixed size allocated for data
 
 ; extra bits involved in a file handle
 
-pipehandle_read   *   1 :SHL: 0        ; set => this is the read handle
-pipehandle_write  *   1 :SHL: 1        ; set => this is the write handle
-pipehandle_bits   *   pipehandle_read :OR: pipehandle_write
+pipehandle_read       * 1 :SHL: 0        ; set => this is the read handle
+pipehandle_write      * 1 :SHL: 1        ; set => this is the write handle
+pipehandle_bits       * pipehandle_read :OR: pipehandle_write
 
 ; main workspace contents
 
-                ^       0, wp
+                      ^ 0, wp
 
-lastleafname    #       4               ; for directory enumeration
-PipeFSFileData   #      4               ; points to list of link_ items
-MessageFile_Block #     16
-MessageFile_Open  #     4
+lastleafname          # 4                ; for directory enumeration
+PipeFSFileData        # 4                ; points to list of link_ items
+MessageFile_Block     # 16
+MessageFile_Open      # 4
 
-PipeFS_WorkspaceSize * :INDEX: @
+ [ dynamicareas
+PipeFS_PageSize       # 4                ; heap is always at least 1 page
+PipeFS_DAHandle       # 4                ; file heap dynamic area handle
+PipeFS_DABase         # 4                ; area's base address
+PipeFS_DASize         # 4                ; area's current size
+ ]
 
-                ^       0
-link_data       #       4               ; points to list of files
-link_next       #       4
-link_size       #       0
+ [ upcalloncallback
+UpCallArray           # 4                ; base of array of R1 values
+UpCallItems           # 4                ; number of items in the array
+ ]
+
+ [ upcalloncallback :LOR: delayedupcall
+UpCallFlag            # 4                ; non-zero = callback has been set
+ ]
+
+PipeFS_WorkspaceSize  * :INDEX: @
+
+                      ^ 0
+link_data             # 4                ; points to list of files
+link_next             # 4
+link_size             # 0
+
+; dynamic area reason codes aren't in a Hdr file currently
+
+ [ dynamicareas
+                      ^ 0
+DAReason_Create       # 1
+DAReason_Remove       # 1
+DAReason_Information  # 1
+DAReason_Enumerate    # 1
+DAReason_Renumber     # 1
+ ]
 
 ; **************** Module code starts here **********************
 
@@ -155,12 +219,18 @@ PipeCopy_Syntax
 PipeCopy_Help   DCB     "HPFSCPY", 0
 PipeCopy_Syntax DCB     "SPFSCPY", 0
  ]
+
+ [ dynamicareas
+PipeFS_DAName
+        DCB     "PipeFS", 0
+ ]
         ALIGN
 
 ; *****************************************************************************
-
+;
 ; This command allows byte copying of one file to another
 ; *Copy will not work on pipes because it sometimes uses OS_File Load and Save
+;
 
 PipeCopy_Code   ROUT
         Push    "R1-R6,LR"
@@ -261,6 +331,7 @@ PipeFS_Init ENTRY
 
         LDR     R2, [R12]               ; have we got workspace yet ?
         TEQ     R2, #0
+        MOVNE   R12, R2
         BNE     %FT05
 
         MOV     R0, #ModHandReason_Claim
@@ -270,19 +341,59 @@ PipeFS_Init ENTRY
 
         STR     R2, [R12]               ; save address in my workspace pointer,
                                         ; so Tutu can free it for me when I die
-05      MOV     R12, R2
+        MOV     R12, R2
 
-        MOV     R14, #0                 ; no files yet
+ [ dynamicareas
+
+        SWI     XOS_ReadMemMapInfo
+        EXIT    VS
+        STR     R0, PipeFS_PageSize
+        MOV     R2, R0                  ; initial size for OS_DynamicArea, below
+
+        MOV     R0, #DAReason_Create
+        MVN     R1, #0                  ; must be -1
+        MVN     R3, #0                  ; must be -1
+        MOV     R4, #1<<7               ; flags: bit 7 set -> not resizeable from Task Manager
+        MOV     R5, #&1000000           ; 16MB maximum size
+        MOV     R6, #0                  ; no handler routine
+        MOV     R7, #0
+        ADR     R8, PipeFS_DAName
+        SWI     XOS_DynamicArea
+        EXIT    VS
+
+        Debug  da, "PipeFS dynamic area created - handle, size, base:",R1,R2,R3
+
+        STR     R1, PipeFS_DAHandle     ; remember the important details
+        STR     R2, PipeFS_DASize
+        STR     R3, PipeFS_DABase
+
+        MOV     R0, #HeapReason_Init    ; initialise the area as a heap
+        MOV     R1, R3
+        LDR     R3, PipeFS_PageSize
+        SWI     XOS_Heap
+ ]
+
+05      MOV     R14, #0                 ; no files yet
         STR     R14, PipeFSFileData
         STR     R14, MessageFile_Open
 
-        BL      PipeFS_Declare           ; call FileSwitch
+ [ upcalloncallback
 
+        STR     R14, UpCallArray
+        STR     R14, UpCallItems
+ ]
+
+ [ upcalloncallback :LOR: delayedupcall
+
+        STR     R14, UpCallFlag
+ ]
+        BL      PipeFS_Declare           ; call FileSwitch
         EXIT
 
-;..............................................................................
-
+; *****************************************************************************
+;
 ; Declare PipeFS: to FileSwitch (called on Init and Service_FSRedeclare)
+;
 
 PipeFS_Declare ENTRY "R1-R3"
 
@@ -300,6 +411,7 @@ PipeFS_Declare ENTRY "R1-R3"
 ;       PipeFS_Die - Die entry
 ;
 ; Deallocate link blocks, issue FSControl_RemoveFS
+;
 
 PipeFS_Die ENTRY
 
@@ -313,19 +425,38 @@ PipeFS_Die ENTRY
         LDR     R2, PipeFSFileData
         TEQ     R2, #0
 01      LDRNE   R3, [R2, #link_next]
-        STRNE   R3, PipeFSFileData       ; remove link
+        STRNE   R3, PipeFSFileData      ; remove link
         MOVNE   R0, #upfsfile_Delete    ; tell the Filer
         BLNE    modifyingfiles          ; (preserves flags)
+ [ :LNOT: dynamicareas
         MOVNE   R0, #ModHandReason_Free
         SWINE   XOS_Module
+ ]
         MOVNES  R2, R3
         BNE     %BT01
+
+ [ dynamicareas
+        MOV     R0, #DAReason_Remove
+        LDR     R1, PipeFS_DABase
+        CMP     R1, #0
+        LDRNE   R1, PipeFS_DAHandle
+        SWINE   XOS_DynamicArea
+ ]
+
+ [ upcalloncallback :LOR: delayedupcall
+        LDR     R0, UpCallFlag
+        CMP     R0, #0
+        ADRNEL  R0, modifyingpipecb
+        MOVNE   R1, R12
+        SWINE   XOS_RemoveCallBack
+ ]
 
 02      MOV     R0, #FSControl_RemoveFS
         addr    R1, StringROM           ; ADR or ADRL as appropriate
         SWI     XOS_FSControl
 
-        EXITS                           ; return V clear
+        CLRV
+        EXIT
 
 ; *****************************************************************************
 ;
@@ -335,24 +466,29 @@ PipeFS_Die ENTRY
 ; Out   UpCall_ModifyingFile called for ""
 ;       This causes all directories to be re-scanned!
 ;       It may be hard to work out which directories are being created / deleted
+;
 
-modifyingfiles ENTRY "R1"
+modifyingfiles EntryS "R1"
 
         ADR     R1, null                ; R1 -> filename ("") - R2-R5 corrupt
         BL      modifyingfile
 
-        EXIT
+        EXITS
 
 null    DCB     0
         ALIGN
 
-; .............................................................................
-
+; *****************************************************************************
+;
 ; In    R0 = reason code to pass in R9 to upcall
 ;       R1 -> filename being modified
 ; Out   UpCall_ModifyingFile called for [R1..]
+;
+; Use of the "delayedupcall" code assumes that R1 is ignored on entry and
+; set to 'null' internally. Use "upcalloncallback" if R1 is actually read.
+;
 
-modifyingfile ENTRY "R0-R10"
+modifyingfile EntryS "R0-R10"
 
         LDR     R8, fsinfoword          ; R8 = fs info word
         MOV     R9, R0                  ; R9 = reason code
@@ -407,11 +543,11 @@ PipeFS_Service ROUT
 UService
         LDR     R12, [R12]
 
-svc_fsredeclare ENTRY   "R0-R3"
+svc_fsredeclare ENTRY  "R0-R3"
 
         BL      PipeFS_Declare                   ; else redeclare myself
 
-        EXITS
+        EXIT
 
 ; *****************************************************************************
 ;
@@ -421,7 +557,7 @@ svc_fsredeclare ENTRY   "R0-R3"
 ;       R1-R? parameters
 ;
 
-PipeFS_OSFile ENTRY "R1,R7,R9"
+PipeFS_OSFile EntryS "R1,R7,R9"
 
         CMP     R0, #fsfile_Load        ; can only load if file closed
         BEQ     %FT10
@@ -791,8 +927,8 @@ NotSupportedError
 
         EXIT
 
-; .............................................................................
-
+; *****************************************************************************
+;
 ; in:   R1 -> wildcarded directory name
 ;       R2 -> buffer to put data
 ;       R3 = number of object names to read
@@ -801,7 +937,7 @@ NotSupportedError
 ;       R6 -> special field (ignored)
 ; out:  R3 = number of names read
 ;       R4 = offset of next item to read (-1 if end)
-
+;
 
 PipeFS_fsfunc_readdirentries      ROUT
 PipeFS_fsfunc_readdirentriesinfo  ROUT
@@ -904,8 +1040,9 @@ PipeFS_fsfunc_readdirentriesinfo  ROUT
 ;       R1 = internal file handle
 ;       R2 = buffer size for FileSwitch (0 if unbuffered)
 ;       R3,R4 irrelevant if no buffering
+;
 
-PipeFS_Open ENTRY "R3-R6"
+PipeFS_Open EntryS "R3-R6"
 
         CMP     R0, #fsopen_ReadOnly
         BEQ     openforreading
@@ -978,12 +1115,13 @@ openforreading
         EXITS
         LTORG
 
-; .................................................................................
-
+; *****************************************************************************
+;
 ; in:   R1 -> filename
 ; out:  R1 -> file header (created if file didn't exist)
 ;       R2-R5 = load,exec,size,attr
 ;       R6 -> filename (for *OPT 1,1)
+;
 
 getpipe ROUT
         Push    "r1,lr"
@@ -994,10 +1132,11 @@ getpipe ROUT
         BLEQ    createpipe                      ; out: R1 -> file header
         Pull    "pc"
 
-; .................................................................................
-
+; *****************************************************************************
+;
 ; in:   R1 -> filename
 ; out:  R1 -> file header (with a 256 byte data buffer)
+;
 
 notread         *       1 :SHL: 5               ; file has not been closed for reading
 notwritten      *       1 :SHL: 6               ; file has not been closed for writing
@@ -1017,7 +1156,11 @@ createpipe ENTRY "r2-r5"
         SUB     R3, R3, R1
         ADD     R3, R3, #link_size + PipeFile_Name
         MOV     R0, #ModHandReason_Claim
+ [ dynamicareas
+        BL      claimheapchunk
+ |
         SWI     XOS_Module
+ ]
         EXIT    VS
 
         Push    "R2"
@@ -1060,8 +1203,13 @@ createpipe ENTRY "r2-r5"
         STR     R4, [R1, #PipeFile_usage]
 
         MOV     R3, #PipeFS_BufferSize
+
         MOV     R0, #ModHandReason_Claim
+ [ dynamicareas
+        BL      claimheapchunk
+ |
         SWI     XOS_Module
+ ]
 
         STRVC   R2, [R1, #PipeFile_wrapstart]
         ADDVC   R3, R2, R3
@@ -1080,7 +1228,11 @@ createpipe ENTRY "r2-r5"
 90      MOV     r4, r0
         MOV     r5, pc
         MOV     R0, #ModHandReason_Free
+ [ dynamicareas
+        BL      releaseheapchunk
+ |
         SWI     XOS_Module                      ; error caused because no room for buffer
+ ]
         MOVVC   r0, r4
         TEQVCP  r5, #0
 
@@ -1098,7 +1250,7 @@ createpipe ENTRY "r2-r5"
 ;       point been open for reading (this allows the file to be read later)
 ;
 
-PipeFS_Close ENTRY "R0-R2"
+PipeFS_Close EntryS "R0-R2"
 
         TST     R1, #pipehandle_read
         MOVEQ   R0, #PipeFile_writeblocked
@@ -1152,12 +1304,13 @@ sleepnomore ENTRY "R0,R1"
         STRVS   R0,[sp]
         EXIT
 
-; ..............................................................................
-
+; *****************************************************************************
+;
 ; in:   R1 -> file header
 ; out:  file deleted, and UpCall_ModifyingFile called
+;
 
-deletepipe ENTRY "R0-R3"
+deletepipe EntryS "R0-R3"
 
         BL      checkexists                     ; check R1 -> a valid file header
         MOVVC   R3, R0                          ; R2, R3 -> current/previous links
@@ -1176,12 +1329,20 @@ deletepipe ENTRY "R0-R3"
         LDR     R2, [R2, #link_data]            ; actually part of the same block
         LDR     R2, [R2, #PipeFile_wrapstart]
         MOV     R0, #ModHandReason_Free
+ [ dynamicareas
+        BL      releaseheapchunk
+ |
         SWI     XOS_Module                      ; free buffer block
+ ]
         Pull    "R2"
         MOV     R1, R0
         MOV     R3, PC
         MOV     R0, #ModHandReason_Free
+ [ dynamicareas
+        BL      releaseheapchunk
+ |
         SWI     XOS_Module                      ; free header block
+ ]
         MOVVC   R0, R1
         TEQVCP  R3, #0
 99
@@ -1282,17 +1443,125 @@ get_eof
         MakeInternatErrorBlock PipeFS_NoBlocking,,M00
         MakeInternatErrorBlock Escape
 
-; .............................................................................
+; *****************************************************************************
+;
+; in:   R12 = pointer to workspace
+;
+; ** Only included if upcalloncallback = true.
+;
 
-; in:   R1 -> file header
-; out:  modifyingfile called with appropriate filename
+ [ upcalloncallback
 
-modifyingpipe ENTRY "R0,R1"
+modifyingpipecb EntryS "R0-R10"
+
+        MOV     R3, #0
+        STR     R3, UpCallFlag          ; clear callback pending flag
+
+        LDR     R3, UpCallItems
+        CMP     R3, #0                  ; any items in the array?
+        BEQ     %FT01
+        LDRNE   R2, UpCallArray         ; get array base address in R2
+        CMPNE   R2, #0                  ; sanity check...
+        BEQ     %FT01
+
+02      SUB     R3, R3, #4
+        LDR     R1, [R2, R3]            ; load last item in array
 
         LDR     R0, =upfsopen_Update    ; cause dir recache
         ADD     R1, R1, #PipeFile_Name
         BL      modifyingfile
 
+        CMP     R3, #0                  ; check for more items
+        BGT     %BT02
+
+        BL      releaseheapchunk        ; get rid of the array
+        MOV     R0, #0
+        STR     R0, UpCallArray
+        STR     R0, UpCallItems
+01
+        EXITS
+ ]
+
+; *****************************************************************************
+;
+; in:   R12 = pointer to workspace
+; out:
+;
+; ** Only included if delayedupcall = true
+;
+
+ [ delayedupcall
+
+modifyingpipecb EntryS "R0-R10"
+
+        MOV     R3, #0
+        STR     R3, UpCallFlag          ; clear callback pending flag
+
+        BL      modifyingfiles          ; issue the UpCall
+
+        EXITS
+ ]
+
+; *****************************************************************************
+;
+; in:   R1 -> file header
+; out:  modifyingfile called with appropriate filename, or callback to do
+;       a similar action is set
+;
+
+modifyingpipe EntryS "R0-R3"
+
+ [ upcalloncallback
+
+        LDR     R2, UpCallArray         ; do we have an array for R1 values yet?
+        CMP     R2, #0
+        BNE     %FT02                   ; if not, check the array for our current R1 value
+
+        MOV     R3, #4                  ; otherwise, need 4 bytes for 1 entry
+        BL      claimheapchunk          ; claim space for the new array item
+        BVS     %FT01
+
+        B       %FT04
+
+02      LDR     R3, UpCallItems         ; get number of items currently in array * 4
+03      SUB     R3, R3, #4
+        LDR     R0, [R2, R3]            ; get the last item in the array
+        CMP     R0, R1                  ; same as our R1 value?
+        BEQ     %FT01                   ; if so, there's nothing to do
+        CMP     R3, #0
+        BGT     %BT03                   ; get another item
+
+        LDR     R3, UpCallItems         ; OK, we need to add the R1 value
+        ADD     R3, R3, #4
+        BL      extendheapchunk         ; extend the array for the new item
+        BVS     %FT01
+
+04      STR     R2, UpCallArray         ; store the new array details
+        STR     R3, UpCallItems
+        SUB     R3, R3, #4
+        STR     R1, [R2, R3]            ; store R1 in the array
+ ]
+
+ [ upcalloncallback :LOR: delayedupcall
+
+        LDR     R0, UpCallFlag
+        CMP     R0, #0
+        BNE     %FT01                   ; don't add a callback if it is already pending
+
+        ADR     R0, modifyingpipecb     ; callback routine to call
+        MOV     R1, R12                 ; (with the workspace pointer)
+        SWI     XOS_AddCallBack
+        BVS     %FT01
+        MOV     R0, #1
+        STR     R0, UpCallFlag          ; mark callback set
+ |
+
+        LDR     R0, =upfsopen_Update    ; cause dir recache
+        ADD     R1, R1, #PipeFile_Name
+        BL      modifyingfile
+ ]
+
+01
         EXITS
 
 ; *****************************************************************************
@@ -1306,7 +1575,7 @@ modifyingpipe ENTRY "R0,R1"
 ;     other end read some data.
 ;
 
-PipeFS_PutByte ENTRY "R0-R5"
+PipeFS_PutByte EntryS "R0-R5"
 
         BIC     R1, R1, #pipehandle_bits        ; ignore bits 0..1
 
@@ -1418,7 +1687,11 @@ ensuresize ENTRY "r0,r2-r6"
 
         MOV     r2, r4                          ; r2 -> current buffer
         MOV     r0, #ModHandReason_ExtendBlock  ; r3 = amount to extend by
+ [ dynamicareas
+        BL      extendheapchunk
+ |
         SWI     XOS_Module
+ ]
         BVS     %FT99
 
 ; now copy the bit between readPTR and wrapend up to the top of the block
@@ -1744,13 +2017,14 @@ returndirentry
 
         MakeInternatErrorBlock IsAFile,,IsAFil
 
-;......................................................................
-
+; *****************************************************************************
+;
 ; In    R10 -> filename1
 ;       R11 -> filename2
 ; Out   GT if R10 > R11, or (R10 or R11 is null)
 ;       LE if R10 <= R11
 ; NB:   Comparisons are case-insensitive (both strings forced to be upper case)
+;
 
 compare_R10_R11 ENTRY "R1,R2"
 
@@ -1777,10 +2051,11 @@ compare_R10_R11 ENTRY "R1,R2"
         CMPNE   R2, #&100000            ; LT <= filename1 shorter
         EXIT
 
-;.....................................................................
-
+; *****************************************************************************
+;
 ; in:   R1 -> wildcarded pathname
 ; out:  R1 -> pathname, with "$.", "@.", "%." or "\." removed
+;
 
 skipdollar ENTRY
 
@@ -1800,7 +2075,7 @@ skipdollar ENTRY
         EXIT
 
 ; *****************************************************************************
-
+;
 ; In  : R0 is wildcard spec ptr, R4 is name ptr.
 ;       Wild Terminators are any ch <=" ",name terminator 0
 ;       Wildcards are *,#
@@ -1866,6 +2141,256 @@ WildMatch ENTRY "R0-R3"
         MOV    R3,R4         ; name backtrack ptr is char after match
         B      %BT01         ; LOOP
 
+ [ dynamicareas
+
+; *****************************************************************************
+;
+; Tries to minimise the heap size, hides any errors (i.e. R0 and V preserved).
+; PipeFS_DASize updated if required.
+;
+; R12 should hold the address of the workspace (i.e. value of the private
+; word, not a pointer to it).
+;
+; ** Only included if dynamicareas = true.
+;
+
+shrinkheap EntryS "R0-R4"
+
+        Debug  da, "shrinkheap: Called"
+
+        LDR    R0, PipeFS_DABase
+        LDR    R0, [R0, #8]  ; PRM 1-349; R0 = offset to first free word of unused area in heap
+
+        LDR    R1, PipeFS_DASize
+        Debug  da, "shrinkheap: DA size pre",R1
+
+        SUB    R0, R1, R0    ; R0 = amount of free space in heap
+                             ; We want to shrink it to the nearest page boundary
+
+        Debug  da, "shrinkheap: Free amount pre",R0
+
+        LDR    R1, PipeFS_PageSize
+        SUB    R1, R1, #1    ; So R1 = e.g. 4095
+        MVN    R2, #0        ; R2 = -1
+        EOR    R1, R1, R2    ; So R1 = 4095 EOR -1, AKA R1 = NOT 4095 (ahem)
+        AND    R0, R0, R1    ; R0 = (free in heap) AND NOT (page_size)
+
+        CMP    R0, #0
+        Debug  da, "shrinkheap: Shrink by",R0
+        BEQ    %FT01         ; If zero, the heap is already as small as it can get (page boundarywise)
+
+        MVN    R4, R0
+        ADD    R4, R4, #1    ; R4 = -R0 (amount to alter by must be negative, we're shrinking it)
+
+        MOV    R0, #HeapReason_ExtendHeap
+        LDR    R1, PipeFS_DABase
+        MOV    R3, R4
+        SWI    XOS_Heap      ; First shrink the heap, then the dynamic area
+
+        LDR    R0, PipeFS_DAHandle
+        MOV    R1, R4
+        SWI    XOS_ChangeDynamicArea
+
+        LDR    R0, PipeFS_DASize
+        SUB    R0, R0, R1    ; R1 = the actual size of change
+        STR    R0, PipeFS_DASize
+
+        Debug  da, "shrinkheap: DA size post",R0
+01
+        Debug  da, "shrinkheap: Exit"
+        EXITS
+
+; *****************************************************************************
+;
+; In  : R3 = amount of free space you want in the heap. The heap is extended
+;       or possibly shrunk (if there's more free space in there than you
+;       asked for) by the relevant amount.
+;
+; Out : V set on error, R0 points to error block
+;       PipeFS_DASize updated otherwise
+;
+; R12 should hold the address of the workspace (i.e. value of the private
+; word, not a pointer to it).
+;
+; ** Only included if dynamicareas = true.
+;
+
+extendheap ENTRY "R0-R5"
+
+        Debug  da, "extendheap: R3 =",R3
+
+        LDR    R2, PipeFS_DASize
+        Debug  da, "extendheap: DA size pre",R2
+
+        LDR    R1, PipeFS_DABase
+        LDR    R4, [R1, #8]   ; PRM 1-349; R4 = offset to first free word of unused area in heap
+        SUB    R2, R2, R4     ; R2 = total heap size - offset to unused area; -> R2 = free space in heap
+
+        SUB    R1, R3, R2     ; R1 = required_total - current_free
+        ADD    R1, R1, #4     ; R1 now holds required change plus 4 for caution
+        MOV    R4, R1         ; keep a copy in R4 for after the SWI
+
+        Debug  da, "extendheap: Change DA by",R1
+
+        LDR    R0, PipeFS_DAHandle
+        SWI    XOS_ChangeDynamicArea
+        BVS    %FT01
+
+        CMP    R2, #0         ; On exit, the SWI sets R1 to the amount changed by - unsigned
+        MVNLT  R1, R1         ; so, make this a negative number if the size change we did
+        ADDLT  R3, R1, #1     ; was negative initially (hence record of R2 earlier).
+        MOVGE  R3, R1         ; Either way, end up with the change in R3 for OS_Heap 5.
+
+        MOV    R4, R3         ; Keep a record of the change value in R4
+
+        LDR    R0, PipeFS_DASize
+        ADD    R0, R0, R4     ; Work out the new area size and store it
+        STR    R0, PipeFS_DASize
+
+        Debug  da, "extendheap: DA size post",R0
+
+        MOV    R0, #HeapReason_ExtendHeap
+        LDR    R1, PipeFS_DABase
+        SWI    XOS_Heap
+        BLVS   shrinkheap     ; If that fails, ensure the heap is shrunk back.
+
+01      STRVS  R0, [sp]       ; Store the error pointer, if required
+        Debug  da, "extendheap: Exit"
+        EXIT
+
+; *****************************************************************************
+;
+; In  : R3 = size of heap chunk to claim
+;
+; Out : V set on error, R0 points to error block
+;       Else
+;       PipeFS_DASize will be updated if overall heap size increased
+;       2 now points to base of new block
+;
+; R12 should hold the address of the workspace (i.e. value of the private
+; word, not a pointer to it).
+;
+; ** Only included if dynamicareas = true.
+;
+
+claimheapchunk ENTRY "R0,R1,R3-R5"
+
+        Debug  da, "claimheapchunk: R3 =",R3
+
+        MOV    R0, #HeapReason_Get ; Claim block
+        LDR    R1, PipeFS_DABase
+        SWI    XOS_Heap      ; Gives pointer in R2, just where we want it
+
+        BVC    %FT02         ; If there's no error, there's no problem
+        LDR    R1, [R0]      ; Else load the error number into R1
+        TEQ    R1, #&184     ; Error &184 = "Not enough memory (in heap)" (TEQ doesn't clear V)
+        BEQ    %FT03
+        STR    R0, [sp]      ; If not, bail out
+        EXIT
+
+03      BL     extendheap    ; Try extending the heap by the amount requested (which is still in R3)
+        BVS    %FT01         ; Can't do it? Bail out. Otherwise try an OS_Heap claim call again.
+
+        MOV    R0, #HeapReason_Get
+        LDR    R1, PipeFS_DABase
+        SWI    XOS_Heap
+
+        BL     shrinkheap    ; This may be able to recover some space if we over-allocated
+
+01      STRVS  R0, [sp]
+02
+        Debug  da, "claimheapchunk: Exit with",R2
+        EXIT
+
+; *****************************************************************************
+;
+; In  : R2 = pointer to heap block to release
+;
+; Out : V set on error, R0 points to error block
+;
+; R12 should hold the address of the workspace (i.e. value of the private
+; word, not a pointer to it).
+;
+; ** Only included if dynamicareas = true.
+;
+
+releaseheapchunk ENTRY "R0,R1"
+
+        Debug  da, "releaseheapchunk: R2 =",R2
+
+        MOV    R0, #HeapReason_Free
+        LDR    R1, PipeFS_DABase
+        SWI    XOS_Heap
+
+        BLVC   shrinkheap
+
+        STRVS  R0, [sp]
+        Debug  da, "releaseheapchunk: Exit"
+        EXIT
+
+; *****************************************************************************
+;
+; In  : R2 = pointer to heap block to resize
+;       R3 = amount to resize by (signed value)
+;
+; Out : V set on error, R0 points to error block
+;       Else
+;       PipeFS_DASize will be updated if overall heap size increased
+;       R2 will be updated if the block has moved
+;
+; R12 should hold the address of the workspace (i.e. value of the private
+; word, not a pointer to it).
+;
+; ** Only included if dynamicareas = true.
+;
+
+extendheapchunk ENTRY "R0,R1,R3-R5"
+
+        Debug  da, "extendheapchunk: R2/R3 =",R2,R3
+
+        CMP    R2, #0        ; Sanity checks
+        CMPNE  R3, #0
+        BEQ    %FT02
+
+        MOV    R0, #HeapReason_ExtendBlock
+        LDR    R1, PipeFS_DABase
+        SWI    XOS_Heap
+
+        BLVC   shrinkheap    ; If it worked, make sure the heap is a minimum size...
+        BVC    %FT02         ; ...then exit
+
+        LDR    R4, [R0]      ; Else load the error number into R4
+        TEQ    R4, #&184     ; Error &184 = "Not enough memory (in heap)" (TEQ doesn't clear V)
+        MOV    R5, #&1C0
+        ADD    R5, R5, #1    ; Error &1C1 = "Unable to move memory"
+        TEQNE  R4, R5
+
+        BEQ    %FT03         ; If one or the other matched, proceed.
+        STR    R0, [sp]      ; Otherwise, bail out.
+        EXIT
+
+03      MOV    R4, R3        ; Remember the amount we want to change by
+        Debug  da, "extendheapchunk: Want to change by",R3
+        MOV    R0, #HeapReason_ReadBlockSize
+        SWI    XOS_Heap      ; R1 (heap base) and R2 (block ptr) should still be intact after the above stuff
+        BVS    %FT01         ; If no error, the current block size is now in R3
+
+        Debug  da, "extendheapchunk: Block size is",R3
+        ADD    R3, R4, R3    ; Put current block size + amount to change the block by into R3
+        BL     extendheap    ; Extend the heap
+        MOV    R0, #HeapReason_ExtendBlock
+        MOV    R3, R4        ; Restore our on-entry value of R3, i.e. R3 now = required change of size
+        SWI    XOS_Heap      ; R1 (heap base) and R2 (block ptr) should still be intact after the above stuff
+
+        BL     shrinkheap
+
+01      STRVS  R0, [sp]
+02
+        Debug  da, "extendheapchunk: Exit"
+        EXIT
+
+ ] ; from "[ dynamicareas"
+
 ; *****************************************************************************
 
 CopyError ENTRY r1-r7
@@ -1905,4 +2430,3 @@ open_messagefile ENTRY r0-r3
       ]
 
         END
-
