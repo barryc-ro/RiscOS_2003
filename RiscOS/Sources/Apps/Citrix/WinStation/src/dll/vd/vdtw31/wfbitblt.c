@@ -10,6 +10,12 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.2  1998/01/27 18:39:11  smiddle
+*   Lots more work on Thinwire, resulting in being able to (just) see the
+*   log on screen on the test server.
+*
+*   Version 0.03. Tagged as 'WinStation-0_03'
+*
 *   Revision 1.1  1998/01/19 19:12:58  smiddle
 *   Added loads of new files (the thinwire, modem, script and ne drivers).
 *   Discovered I was working around the non-ansi bitfield packing in totally
@@ -2676,6 +2682,7 @@ more_data:
             bitmap_header_flags(bm_header, color) = 
                       (BYTE)  (signatureLO & 0x00000007);
          }
+         TRACE((TC_TW,TT_TW_BLT,"BltSrcCommon: set bm_header: cached DIM\n"));
       }
       else {
          cache_handle = (word1 >> 8) | ((word1 << 8) & 0x0f00);
@@ -2715,6 +2722,8 @@ more_data:
             //bm_header = (BITMAP_HEADER) *((LPBITMAP_HEADER) lpcache);
             memcpy((LPVOID) &bm_header, lpcache, sizeof(bm_header));
          }
+	 TRACE((TC_TW,TT_TW_BLT,"BltSrcCommon: set bm_header: bm_cache_special %d\n", bm_cache_special));
+	 TRACEBUF((TC_TW,TT_TW_BLT, &bm_header, sizeof(bm_header)));
       }
 
       //if its 256 color mode and its a 16 color bitmap then we need to

@@ -9,7 +9,12 @@
 *
 *  Author: Andy  (3/15/94)
 *
-*  $Log$
+*  mouapi.h,v
+*  Revision 1.1  1998/01/12 11:36:52  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.16   11 Jun 1997 10:16:58   terryt
 *  client double click support
@@ -73,6 +78,8 @@ typedef struct _MOUSEDATA {
     USHORT Y;
     BYTE cMouState;
 } MOUSEDATA, * PMOUSEDATA;
+
+#define sizeof_MOUSEDATA    5
 
 // mouse status returned in MOUSEDATA structure
 #define MOU_STATUS_MOVED    0x01

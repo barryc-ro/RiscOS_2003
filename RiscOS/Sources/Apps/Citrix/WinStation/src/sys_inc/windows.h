@@ -107,15 +107,15 @@ typedef char *LPSTR;
 
 // some typedefs that replace the vaious sized bitfields around
 
-typedef int BWORD;
-typedef int BBYTE;
-typedef int BCHAR;
-typedef int BUCHAR;
-typedef int BSHORT;
-typedef int BUSHORT;
-typedef int BLONG;
-typedef int BULONG;
-
+typedef unsigned int BBYTE;
+typedef signed int BWORD;
+typedef unsigned int BUWORD;
+typedef signed int BCHAR;
+typedef unsigned int BUCHAR;
+typedef signed int BSHORT;
+typedef unsigned int BUSHORT;
+typedef signed int BLONG;
+typedef unsigned int BULONG;
 
 /*=============================================================================
  ==   typedefs
@@ -385,7 +385,7 @@ extern int GetSystemMetrics(int nIndex);
 #define RGN_ERROR ERROR
 
 /* CombineRgn() Styles */
-//#define RGN_AND             1
+#define RGN_AND             1
 #define RGN_OR              2
 /* #define RGN_XOR             3 */
 /* #define RGN_DIFF            4 */

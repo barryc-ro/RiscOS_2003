@@ -282,6 +282,8 @@ typedef struct _WD_VCBIND {
     USHORT VirtualClass;
 } WD_VCBIND, * PWD_VCBIND;
 
+#define sizeof_WD_VCBIND	10
+
 
 /*=============================================================================
 ==   Virtual Driver Header - client drive mapping

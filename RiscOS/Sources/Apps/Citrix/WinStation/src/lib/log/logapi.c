@@ -428,7 +428,6 @@ LogAssert( PCHAR pExpr, PCHAR pFileName, int LineNumber, int rc )
    sprintf( Buffer, "Assert: %s(%u), %s, %u", pFileName, LineNumber, pExpr, rc );
 
    LogPrintf( LOG_ASSERT, TT_ERROR, "%s", Buffer );
-
    fprintf(stderr,  "%s\n", Buffer );
 
     //  send to WFDbg
@@ -468,5 +467,6 @@ void LogErr( void *err, PCHAR pFileName, int LineNumber )
 	sprintf( Buffer, "OSERROR: %s(%u), %s, %u", pFileName, LineNumber, e->errmess, e->errnum );
 
 	LogPrintf( LOG_ASSERT, TT_ERROR, "%s", Buffer );
+	fprintf(stderr,  "%s\n", Buffer );
     }
 }

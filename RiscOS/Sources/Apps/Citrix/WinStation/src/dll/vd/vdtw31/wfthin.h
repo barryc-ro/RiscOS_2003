@@ -10,6 +10,12 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
+*   Revision 1.2  1998/01/27 18:39:41  smiddle
+*   Lots more work on Thinwire, resulting in being able to (just) see the
+*   log on screen on the test server.
+*
+*   Version 0.03. Tagged as 'WinStation-0_03'
+*
 *   Revision 1.1  1998/01/19 19:13:10  smiddle
 *   Added loads of new files (the thinwire, modem, script and ne drivers).
 *   Discovered I was working around the non-ansi bitfield packing in totally
@@ -60,8 +66,8 @@
 
 typedef  struct   _INPUT_WORD
 {
-   BWORD  lowbyte : 8;
-   BWORD  hibyte  : 8;
+   BUWORD  lowbyte : 8;
+   BUWORD  hibyte  : 8;
 } INPUT_WORD, near * PINPUT_WORD, far * LPINPUT_WORD;
 
 #define sizeof_INPUT_WORD	2

@@ -6,12 +6,15 @@
 
 #include "windows.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "swis.h"
 
+#include "../../../app/version.h"
 #include "../../../app/utils.h"
+
 #include "../../../inc/client.h"
 #include "../../../inc/debug.h"
 #include "../../../inc/mouapi.h"
@@ -131,6 +134,7 @@ typedef struct DC__
 	POINT brush_org;
 
 	HBITMAP bitmap;		// bitmap that represents the drawing surface, MEMDC only
+	HBITMAP bitmap_placeholder;
 
 	POINT pen_pos;
 	COLORREF bk_col;
@@ -144,7 +148,7 @@ typedef struct DC__
 
 
 	int planes;		// always 1
-	int log2bpp;
+	int bpp;
 	int width;		// in pixels
 	int height;
 
@@ -170,9 +174,6 @@ typedef struct DC__
 
 	    ropalette *palette;	// 1 word per col palette in use
 	    void *brush_coltrans;
-
-	    void *bitmap_coltrans;
-	    HBITMAP bitmap_bitmap;
 
 	    HRGN clip;
 	} current;
@@ -252,15 +253,19 @@ typedef struct CURSOR__
     } data;
 } cursor;
 
-typedef struct GDIOBJ__
+struct GDIOBJ__
 {
     gdi_hdr gdi;
-} gdiobj;
+};
 
 /* ---------------------------------------------------------------------------------------------------- */
 
+/* convert from Windows coordinates (origin top left, positive downwards) to
+ * RISC OS coordinates (origin bottom left, positive upwards, 2 units per pixel)
+ */
+
 #define cvtx(dc, x)	((x)*2)
-#define cvty(dc, y)	(((dc)->data.height - 1 - (y))*2)
+#define cvty(dc, y)	(((dc)->data.height - (y))*2)
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -329,10 +334,19 @@ coord system is origin at bottom-left
 
  */
 
+/* ---------------------------------------------------------------------------------------------------- */
 
 #define REVERSE_WORD(p)	((p << 24) | ((p << 8) & 0x00FF0000) | ((p >> 8) & 0x0000FF00) | (0 /*p >> 24*/))
 
-/* ---------------------------------------------------------------------------------------------------- */
+#define is_screen(dc)	(((dc) == screen_dc) ? " (screen)" : "")
+
+//#define DISABLE_CURSOR "\23\1\0\0\0\0\0\0\0\0"
+#define DISABLE_CURSOR	"\23\0\10\x20\0\0\0\0\0\0"
+
+#define first_sprite(area)	((sprite_header *)((char *)(area) + (area)->sproff))
+#define sprite_data(sprite)	((char *)(sprite) + (sprite)->image)
+#define sprite_palette(sprite)	(ropalette *)((char *)(sprite) + sizeof(sprite_header))
+
 
 struct os_mode_selector
 {
@@ -348,6 +362,8 @@ struct os_mode_selector
 #define vduvar_Log2BPP	9
 #define vduvar_XLimit	11
 #define vduvar_YLimit	12
+
+/* ---------------------------------------------------------------------------------------------------- */
 
 static int vduval(int var)
 {
@@ -390,10 +406,41 @@ static int get_mode_number(int log2bpp)
 
 /* ---------------------------------------------------------------------------------------------------- */
 
-#define first_sprite(area)	((sprite_header *)((char *)(area) + (area)->sproff))
-#define sprite_data(sprite)	((char *)(sprite) + (sprite)->image)
-#define sprite_palette(sprite)	(ropalette *)((char *)(sprite) + sizeof(sprite_header))
+#ifdef DEBUG
 
+static void save_sprite(const sprite_descr *descr, const char *name)
+{
+    sprite_header *sprite;
+    char filename[256];
+    int index;
+
+    DTRACE((TC_TW, TT_API4, "save_sprite: in: descr %p name '%s'", descr, name));
+
+    if (descr->area == NULL)
+	return;
+    
+    sprite = first_sprite(descr->area);
+
+    DTRACE((TC_TW, TT_API4, "save_sprite: sprite %p", sprite));
+    DTRACE((TC_TW, TT_API4, "save_sprite: name '%.12s'", sprite->name));
+
+    index = atoi(sprite->name);
+    
+    sprintf(filename, "<Wimp$ScrapDir>." APP_NAME ".%02d", index / 75);
+    DTRACE((TC_TW, TT_API4, "save_sprite: mkdir '%s'", filename));
+    mkdir(filename);
+
+    sprintf(filename, "<Wimp$ScrapDir>." APP_NAME ".%02d.%03d%s", index / 75, index, name);
+    DTRACE((TC_TW, TT_API4, "save_sprite: save %p to '%s'", descr->area, filename));
+    _swix(OS_SpriteOp, _INR(0,2), 12 + 256, descr->area, filename);
+
+    DTRACE((TC_TW, TT_API4, "save_sprite: out"));
+}
+#else
+#define save_sprite(a,b)
+#endif
+
+#if 0
 static int getlog2bpp(int bpp)
 {
     switch (bpp)
@@ -411,6 +458,7 @@ static int getlog2bpp(int bpp)
     }
     return 5;
 }
+#endif
 
 static int getspritemode(int bpp)
 {
@@ -428,36 +476,47 @@ static int getspritemode(int bpp)
     return 28;
 }
 
+static create_sprite_index = 1;
+
 static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palette)
 {
     sprite_area *area;
     sprite_header *sprite;
-    BOOL wastage = TRUE;
 
     int bit_width = w * bpp;
-    int word_width = ((wastage ? 32 - bpp : 0) + bit_width + 31)/32; // max left hand wastage + sprite + round up to a word (to allow for grabbing from screen)
+    int word_width = (bit_width + 31)/32;
+    int word_width_wastage = ((32 - bpp) + bit_width + 31)/32; // max left hand wastage + sprite + round up to a word (to allow for grabbing from screen)
     int pal_size = palette ? (8 << bpp) : 0;
 
     int size = sizeof(sprite_area) +
 	sizeof(sprite_header) +
 	pal_size +
-	word_width * 4 * h;
+	word_width_wastage * 4 * h;
 
     ASSERT(descr, 0);
 
-    TRACE((TC_TW, TT_API4, "create_sprite: %d x %d @ %d bpp palette %d size %d", w, h, bpp, palette, size));
+    TRACE((TC_TW, TT_API4, "create_sprite: %d @ %d x %d @ %d bpp palette %d size %d", create_sprite_index, w, h, bpp, palette, size));
     
     area = malloc(size);
     if (area)
-    {    
-	area->size = size;
+    {
+	char buf[12];
+	area->size = size;		// area size is total size malloced including space for wastage
+
+	size = sizeof(sprite_area) +	// recalculate size to use as the actual size of the sprite
+	    sizeof(sprite_header) +
+	    pal_size +
+	    word_width * 4 * h;
+
 	area->number = 1;
 	area->sproff = sizeof(sprite_area);
 	area->freeoff = size;
 
 	sprite = first_sprite(area);
 	sprite->next = size - sizeof(sprite_area);
-	strncpy(sprite->name, "bitmap", sizeof(sprite->name));
+
+	sprintf(buf, "%dbitmap", create_sprite_index++);
+	strncpy(sprite->name, buf, sizeof(sprite->name));
 
 	sprite->width = word_width - 1;
 	sprite->height = h - 1;
@@ -479,80 +538,6 @@ static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palett
     descr->area = area;
 
     return area != NULL;
-}
-
-static void fill_sprite(sprite_descr *descr, const void *bits, int in_line_length)
-{
-    sprite_header *sprite = first_sprite(descr->area);
-    int out_line_length = (sprite->width + 1) * 4;
-    char *out = sprite_data(sprite);
-    const char *in = (const char *)bits;
-    int line;
-
-    for (line = 0;
-	 line < descr->height;
-	 line++, out += out_line_length, in += in_line_length)
-    {
-	memcpy(out, in, in_line_length);	// in_line_length is always less than out_line_length
-    }
-
-    ASSERT((descr->bpp == 1), descr->bpp);
-}
-
-static void clear_sprite(sprite_descr *descr, int val)
-{
-    sprite_header *sprite = first_sprite(descr->area);
-    memset((char *)sprite + sprite->image, val, sprite->next - sprite->image);
-}
-
-static void set_sprite_palette(sprite_descr *descr, const ropalette *palette)
-{
-    sprite_header *sprite = first_sprite(descr->area);
-    int n_entries = (sprite->image - sizeof(sprite_header)) / 8;
-    ropalette *pal = sprite_palette(sprite);
-    int i;
-
-    for (i = 0; i < n_entries; i++)
-    {
-	pal[1] = pal[0] = *palette++;
-	pal += 2;
-    }
-}
-
-static void fill_sprite_from_screen(sprite_descr *descr, int x, int y)
-{
-    // remove any sprite definition in there already
-    descr->area->number = 0;
-    descr->area->freeoff = descr->area->sproff;
-
-    // grab sprite from screen
-    LOGERR(_swix(OS_SpriteOp, _INR(0,7),
-	  16 + 512,
-	  descr->area, first_sprite(descr->area),
-	  0,	// no palette
-	  x*2, y*2,
-	  (x + descr->width)*2 - 1, (y + descr->height)*2 - 1));
-}
-
-static void copy_palette(void *to, const void *from, int n)
-{
-    int *t = to;
-    const int *f = (const int *)from;
-    int i;
-    for (i = 0; i < n; i++)
-    {
-	int w = *f++;
-	*t++ = REVERSE_WORD(w);
-    }
-}
-
-/* ---------------------------------------------------------------------------------------------------- */
-
-static int dib_pal_size(const BITMAPINFOHEADER *info)
-{
-    return info->biBitCount > 8 ? 0 :
-	info->biSize >= 40 && info->biClrUsed ? (int)info->biClrUsed :
-	1 << (int)info->biBitCount;
 }
 
 static void copy_1bit(char *out, const char *in, int npixels)
@@ -655,6 +640,92 @@ static void copy_line_from_sprite(char *out, const char *in, int bpp, int npixel
     }
 }
 
+static void fill_sprite(sprite_descr *descr, const void *bits, int in_line_length)
+{
+    sprite_header *sprite = first_sprite(descr->area);
+    int out_line_length = (sprite->width + 1) * 4;
+    char *out = sprite_data(sprite);
+    const char *in = (const char *)bits;
+    int line;
+
+    for (line = 0;
+	 line < descr->height;
+	 line++, out += out_line_length, in += in_line_length)
+    {
+	copy_line_to_sprite(out, in, descr->bpp, descr->width);
+    }
+
+    ASSERT((descr->bpp == 1), descr->bpp);
+}
+
+#if 0
+static void clear_sprite(sprite_descr *descr, int val)
+{
+    sprite_header *sprite = first_sprite(descr->area);
+    memset((char *)sprite + sprite->image, val, sprite->next - sprite->image);
+}
+
+static void set_sprite_palette(sprite_descr *descr, const ropalette *palette)
+{
+    sprite_header *sprite = first_sprite(descr->area);
+    int n_entries = (sprite->image - sizeof(sprite_header)) / 8;
+    ropalette *pal = sprite_palette(sprite);
+    int i;
+
+    for (i = 0; i < n_entries; i++)
+    {
+	pal[1] = pal[0] = *palette++;
+	pal += 2;
+    }
+}
+#endif
+
+/*
+ * For this calll the coordinates are already converted to OS coords, bottom left
+ */
+
+static void fill_sprite_from_screen(sprite_descr *descr, int x, int y)
+{
+    char buf[12];
+
+    strcpy(buf, first_sprite(descr->area)->name);
+    
+    // remove any sprite definition in there already
+    descr->area->number = 0;
+    descr->area->freeoff = descr->area->sproff;
+
+    // grab sprite from screen
+    LOGERR(_swix(OS_SpriteOp, _INR(0,7),
+	  16 + 256,
+	  descr->area, buf,
+	  0,	// no palette
+	  x, y,
+	  (x + descr->width*2) - 1, (y + descr->height*2) - 1));
+
+    save_sprite(descr, "grab");
+}
+
+static void copy_palette(void *to, const void *from, int n)
+{
+    int *t = to;
+    const int *f = (const int *)from;
+    int i;
+    for (i = 0; i < n; i++)
+    {
+	int w = *f++;
+	*t++ = REVERSE_WORD(w);
+    }
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+static int dib_pal_size(const BITMAPINFOHEADER *info)
+{
+    return info->biBitCount > 8 ? 0 :
+	info->biSize >= 40 && info->biClrUsed ? (int)info->biClrUsed :
+	1 << (int)info->biBitCount;
+}
+
 /*
  * This routine can cope when the sprite is smaller than the DIB (as in the brush case).
  */
@@ -708,42 +779,81 @@ static void fill_dib_from_sprite(sprite_descr *descr, PBITMAPINFO info, void *bi
     {
 	copy_line_from_sprite(out_data, in_data, descr->bpp, descr->width);
     }
-
-    // fill in information
-    info->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info->bmiHeader.biWidth = descr->width;
-    info->bmiHeader.biHeight = descr->height;
-    info->bmiHeader.biPlanes = 1;
-    info->bmiHeader.biBitCount = descr->bpp == 32 ? 24 : descr->bpp;
-    info->bmiHeader.biCompression = 0;
-    info->bmiHeader.biSizeImage = 0;
-    info->bmiHeader.biXPelsPerMeter = 0;
-    info->bmiHeader.biYPelsPerMeter = 0;
-    info->bmiHeader.biClrUsed = 0;
-    info->bmiHeader.biClrImportant = 0;
-
-    // fill in palette
 }
 
-static void fill_palette_from_dib(sprite_descr *descr, CONST BITMAPINFOHEADER *info, int color_table_type)
+static void fill_palette_from_sprite(sprite_descr *descr, CONST BITMAPINFO *info, int color_table_type)
 {
     sprite_header *sprite = first_sprite(descr->area);
-    unsigned *in_pal, *out_pal;
+    ropalette *in_pal;
+    char *out_pal;
     int in_pal_size;
     int i;
 
-    in_pal = (unsigned *)((char *)info + info->biSize);
-    in_pal_size = dib_pal_size(info) / 4;
+    out_pal = ((char *)info + info->bmiHeader.biSize);
 
-    out_pal = (unsigned *)((char *)sprite + sizeof(sprite_header));
+    in_pal = sprite_palette(sprite);
+    in_pal_size = (sprite->image - sizeof(sprite_header)) / 8;
 
+    DTRACE((TC_TW, TT_API4, "fill_palette_from_sprite: in_pal_size %d out_pal_size %d", in_pal_size, out_pal_size));
+    
     for (i = 0; i < in_pal_size; i++)
     {
-	unsigned p = *in_pal++;
-	unsigned q = color_table_type == DIB_PAL_COLORS ? REVERSE_WORD(p) : p;
-	*out_pal++ = q;
-	*out_pal++ = q;
+	ropalette q = *in_pal;
+	in_pal += 2;
+	
+	if (color_table_type == DIB_RGB_COLORS)
+	{
+	    *(unsigned *)out_pal = REVERSE_WORD(q.w);
+	    out_pal += 4;
+	}
+	else
+	{
+	    *(unsigned short *)out_pal = q.w;
+	    out_pal += 2;
+	}
     }
+}
+
+static void fill_palette_from_dib(sprite_descr *descr, CONST BITMAPINFOHEADER *hdr, CONST BITMAPINFO *info, int color_table_type)
+{
+    sprite_header *sprite = first_sprite(descr->area);
+    char *in_pal;
+    ropalette *out_pal;
+    int in_pal_size, out_pal_size;
+    int i;
+
+    in_pal = ((char *)info + info->bmiHeader.biSize);
+    in_pal_size = dib_pal_size(hdr);
+
+    out_pal = (ropalette *)((char *)sprite + sizeof(sprite_header));
+    out_pal_size = (sprite->image - sizeof(sprite_header)) / 8;
+
+    TRACE((TC_TW, TT_API4, "fill_palette_from_dib: in_pal_size %d out_pal_size %d", in_pal_size, out_pal_size));
+    
+    for (i = 0; i < in_pal_size; i++)
+    {
+	unsigned q;
+	if (color_table_type == DIB_RGB_COLORS)
+	{
+	    q = *(unsigned *)in_pal;
+	    q = REVERSE_WORD(q);
+	    in_pal += 4;
+	}
+	else
+	{
+	    q = *(unsigned short *)in_pal;
+	    in_pal += 2;
+	}
+
+	out_pal[0].w = q;
+	out_pal[1].w = q;
+	out_pal += 2;
+    }
+
+    i = out_pal_size - in_pal_size;
+    TRACE((TC_TW, TT_API4, "fill_palette_from_dib: clear %d bytes", i));
+    if (i)
+	memset(out_pal, 0, 2*sizeof(unsigned)*i);
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -818,6 +928,7 @@ static void free_object(HGDIOBJ obj)
     case OBJ_BITMAP:
     {
 	HBITMAP bitmap = (HBITMAP)obj;
+
 	free(bitmap->data.sprite.area);
 	break;
     }
@@ -825,6 +936,7 @@ static void free_object(HGDIOBJ obj)
     case OBJ_BRUSH:
     {
 	HBRUSH brush = (HBRUSH)obj;
+
 	free(brush->data.sprite.area);
 	break;
     }
@@ -835,8 +947,9 @@ static void free_object(HGDIOBJ obj)
 	HDC dc = (HDC)obj;
 	free(dc->data.current.palette);
 	free(dc->data.current.brush_coltrans);
-	free(dc->data.current.bitmap_coltrans);
 	free(dc->data.save_area);
+
+	DeleteObject(dc->data.bitmap_placeholder);
 	break;
     }
 
@@ -924,7 +1037,7 @@ static void set_default_dc(HDC dc)
 {
     // select palette first as others might be realized
     SelectPalette(dc, (HPALETTE)GetStockObject(DEFAULT_PALETTE), TRUE);
-    RealizePalette(dc);
+//  RealizePalette(dc);
 
     SelectObject(dc, GetStockObject(BLACK_PEN));
     SelectObject(dc, GetStockObject(WHITE_BRUSH));
@@ -944,10 +1057,6 @@ static void uncache_dc(HDC dc)
     free(dc->data.current.brush_coltrans);
     dc->data.current.brush_coltrans = NULL;
 
-    free(dc->data.current.bitmap_coltrans);
-    dc->data.current.bitmap_coltrans = NULL;
-    dc->data.current.bitmap_bitmap = NULL;
-
     // cached colour numbers
     dc->data.local.pen_col = UNSET_COLOUR;
     dc->data.local.text_col = UNSET_COLOUR;
@@ -957,12 +1066,22 @@ static void uncache_dc(HDC dc)
 
 static void set_current_dc(HDC dc)
 {
+    int log2bpp = vduval(vduvar_Log2BPP);
     // set values
     dc->data.planes = 1;
-    dc->data.log2bpp = vduval(vduvar_Log2BPP);
-    dc->data.mode = get_mode_number(dc->data.log2bpp);
+    dc->data.bpp = 1 << log2bpp;
+    dc->data.mode = get_mode_number(log2bpp);
     dc->data.width = vduval(vduvar_XLimit) + 1;
     dc->data.height = vduval(vduvar_YLimit) + 1;
+}
+
+static void set_current_dc_from_bitmap(HDC dc)
+{
+//  ASSERT(dc->data.bpp == dc->data.bitmap->data.sprite.bpp, dc->data.bitmap->data.sprite.bpp);
+    
+    dc->data.bpp = dc->data.bitmap->data.sprite.bpp;
+    dc->data.width = dc->data.bitmap->data.sprite.width;
+    dc->data.height = dc->data.bitmap->data.sprite.height;
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -1067,8 +1186,8 @@ static void *get_colour_lookup_table(HDC dc, const sprite_descr *descr, int colo
 		dc->data.local.bk_col = getcolournumber(dc, dc->data.bk_col);
 	
 	    // fill in lookup table
-	    ((char *)table)[0] = dc->data.local.bk_col;
-	    ((char *)table)[1] = dc->data.local.text_col;
+	    ((char *)table)[0] = dc->data.local.text_col;
+	    ((char *)table)[1] = dc->data.local.bk_col;
 	}
     }
     else
@@ -1130,35 +1249,51 @@ static void *get_colour_lookup_table(HDC dc, const sprite_descr *descr, int colo
     return table;
 }
 
+static void set_clip_rect(HDC dc, const RECT *r)
+{
+    char s[9];
+
+    s[0] = 24;
+    write_word(s+1, cvtx(dc, (int)r->left));
+    write_word(s+3, cvty(dc, (int)r->bottom));
+    write_word(s+5, cvtx(dc, (int)r->right) - 1);
+    write_word(s+7, cvty(dc, (int)r->top) - 1);
+	
+    _swix(OS_WriteN, _INR(0,1), s, sizeof(s));
+   
+    TRACE((TC_TW, TT_API3, "set_clip_rect: OS %d,%d %d,%d",
+	   cvtx(dc, (int)r->left),
+	   cvty(dc, (int)r->bottom),
+	   cvtx(dc, (int)r->right) - 1,
+	  cvty(dc, (int)r->top) - 1));
+}
+
 // assumed switched by now
 
 static void set__clip(HDC dc, HRGN rgn)
 {
-    TRACE((TC_TW, TT_API4, "set__clip: dc %p rgn %p", dc, rgn));
+    TRACE((TC_TW, TT_API4, "set__clip: dc %p%s rgn %p", dc, is_screen(dc), rgn));
+
     if (rgn == NULL)
     {
 	_swix(OS_WriteI + 26, 0);
+	TRACE((TC_TW, TT_API3, "set_clip_rect: reset"));
     }
     else
     {
-	char s[9];
     	region_rect *r = rgn->data.base;
 
 	ASSERT(r->next == NULL, 0);	// can't handle multiple regions as yet
 
-	s[0] = 24;
-	write_word(s+1, cvtx(dc, r->rect.left));
-	write_word(s+3, cvty(dc, r->rect.bottom));
-	write_word(s+5, cvtx(dc, r->rect.right) - 1);
-	write_word(s+7, cvty(dc, r->rect.top) - 1);
-
-	TRACEBUF((TC_TW, TT_API4, s, sizeof(s)));
-	_swix(OS_WriteN, _INR(0,1), s, sizeof(s));
+	set_clip_rect(dc, &r->rect);
     }
 }
 
 static void set_clip(HDC dc)
 {
+    TRACE((TC_TW, TT_API3, "set_clip: dc %p%s current %p new %p",
+	   dc, is_screen(dc), dc->data.clip, dc->data.current.clip));
+
     if (dc->data.current.clip != dc->data.clip)
     {
 	dc->data.current.clip = dc->data.clip;
@@ -1170,7 +1305,7 @@ static void set_clip(HDC dc)
 
 BOOL MoveToEx(HDC dc, int x, int y, LPPOINT pPoint)
 {
-    TRACE((TC_TW, TT_API4, "MoveToEx: dc %p %dx%d", dc, x, y));
+    TRACE((TC_TW, TT_API3, "MoveToEx: dc %p%s %dx%d", dc, is_screen(dc), x, y));
 
     switch_output(dc);
 
@@ -1184,7 +1319,7 @@ BOOL MoveToEx(HDC dc, int x, int y, LPPOINT pPoint)
 
 BOOL LineTo(HDC dc, int x, int y)
 {
-    TRACE((TC_TW, TT_API4, "LineTo: dc %p %dx%d", dc, x, y));
+    TRACE((TC_TW, TT_API3, "LineTo: dc %p%s %dx%d", dc, is_screen(dc), x, y));
 
     switch_output(dc);
     set_clip(dc);
@@ -1233,12 +1368,19 @@ static HBITMAP get_relevant_bitmap(HDC dc, bitblt_info *info, BOOL *delete_after
 
     if (b == NULL)
     {
+	TRACE((TC_TW, TT_API3, "get_relevant_bitmap: dc %p%s from OS %dx%d", dc, is_screen(dc), 
+				cvtx(dc, info->xSrc),
+				cvty(dc, info->ySrc + info->Height)
+	    ));
+
 	switch_output(dc);
 	
 	// grab a sprite
 	b = CreateCompatibleBitmap(dc, info->Width, info->Height);
 
-	fill_sprite_from_screen(&b->data.sprite, info->xSrc, info->ySrc);
+	fill_sprite_from_screen(&b->data.sprite,
+				cvtx(dc, info->xSrc),
+				cvty(dc, info->ySrc + info->Height));
 	
 	// mark to be deleted
 	*delete_after = TRUE;
@@ -1256,26 +1398,45 @@ static HBITMAP get_relevant_bitmap(HDC dc, bitblt_info *info, BOOL *delete_after
 
 static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int action)
 {
-    switch_output(dc);
-    set_clip(dc);
-
-    TRACE((TC_TW, TT_API4, "plotbitmap: dc %p bitmap %p", dc, bitmap));
-
-    // set a clip window to intersection of the current, Dest and Src
+    void *coltrans;
+    HRGN rgn;
     
-    if (dc->data.current.bitmap_bitmap != bitmap || dc->data.current.bitmap_coltrans == NULL)
-    {
-	dc->data.current.bitmap_bitmap = bitmap;
-	dc->data.current.bitmap_coltrans = get_colour_lookup_table(dc, &bitmap->data.sprite, bitmap->data.color_table_type);
-    }
+    //save_sprite(&bitmap->data.sprite, "plot");
+
+    // calculate a clip window for the intersection of the current and Dest regions
+    rgn = CreateRectRgn(info->xDest, info->yDest, info->xDest + info->Width, info->yDest + info->Height);
+    CombineRgn(rgn, dc->data.clip, rgn, RGN_AND);
+
+    switch_output(dc);
+    set_clip(dc);		// set base so that current gets setup
+    
+    set__clip(dc, rgn);
+
+    DTRACE((TC_TW, TT_API3, "plotbitmap: dc %p bitmap %p action %d", dc, bitmap, action));
+
+    DTRACE((TC_TW, TT_API3, "plotbitmap: sprite OS %d,%d %d,%d",
+	   cvtx(dc, info->xDest - info->xSrc),
+	   cvty(dc, info->yDest - info->ySrc) - bitmap->data.sprite.height*2,
+	   cvtx(dc, info->xDest - info->xSrc) + bitmap->data.sprite.width*2,
+	   cvty(dc, info->yDest - info->ySrc)
+	));
+
+    // get lookup table - can't cache because we are plotting from bitmap into a different DC
+    coltrans = get_colour_lookup_table(dc, &bitmap->data.sprite, bitmap->data.color_table_type);
 
     LOGERR(_swix(OS_SpriteOp, _INR(0,7),
-		 dc->data.current.bitmap_coltrans ? 52 + 512 : 28 + 512,
+		 coltrans ? 52 + 512 : 28 + 512,
 		 bitmap->data.sprite.area, first_sprite(bitmap->data.sprite.area),
-		 cvtx(dc, info->xDest), cvty(dc, info->yDest),
+		 cvtx(dc, info->xDest - info->xSrc),
+		 cvty(dc, info->yDest - info->ySrc) - bitmap->data.sprite.height*2,
 		 action,
 		 NULL,
-		 dc->data.current.bitmap_coltrans));
+		 coltrans));
+
+    free(coltrans);
+    DeleteObject(rgn);
+
+    set__clip(dc, dc->data.clip);
 }
 
 // need to add support for brush rotation in here
@@ -1305,16 +1466,37 @@ static void tilebrush(HDC dc, const bitblt_info *info, int action)
 	    LOGERR(_swix(OS_SetColour, _INR(0,1), 0, dc->data.current.fg_col));
 	}
 	
-	TRACE((TC_TW, TT_API4, "tilebrush: dc %p brush %p colour %d (%x)", dc, brush, dc->data.current.fg_col, brush->data.colour));
+	DTRACE((TC_TW, TT_API4, "tilebrush: dc %p brush %p colour %d (%x)", dc, brush, dc->data.current.fg_col, brush->data.colour));
 
-	LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, cvtx(dc, info->xDest), cvty(dc, info->yDest))); // moveto
-	LOGERR(_swix(OS_Plot, _INR(0,2), 96+5, cvtx(dc, info->xDest + info->Width), cvty(dc, info->yDest + info->Height))); // fill
+	LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
+		     cvtx(dc, info->xDest),
+		     cvty(dc, info->yDest + info->Height)));	// moveto
+
+	LOGERR(_swix(OS_Plot, _INR(0,2), 96+5,
+		     cvtx(dc, info->xDest + info->Width) - 1,
+		     cvty(dc, info->yDest) - 1));			// fill
+
+	DTRACE((TC_TW, TT_API3, "tilebrush: solid  OS %d,%d %d,%d",
+	       cvtx(dc, info->xDest),
+	       cvty(dc, info->yDest + info->Height),
+	       cvtx(dc, info->xDest + info->Width) - 1,
+	       cvty(dc, info->yDest) - 1
+	    ));
     }
     else
     {
 	int x, y;
 	
 	TRACE((TC_TW, TT_API4, "tilebrush: dc %p brush %p", dc, brush));
+
+	TRACE((TC_TW, TT_API3, "tilebrush: sprite OS %d,%d %d,%d",
+	       cvtx(dc, info->xDest),
+	       cvty(dc, info->yDest) - brush->data.sprite.height*2,
+	       cvtx(dc, info->xDest + info->Width),
+	       cvty(dc, info->yDest + info->Height) - brush->data.sprite.height*2
+	    ));
+
+	//save_sprite(&brush->data.sprite, "tile");
 
 	// get and cache the colourtrans table
 	if (dc->data.current.brush_coltrans == NULL)
@@ -1326,7 +1508,8 @@ static void tilebrush(HDC dc, const bitblt_info *info, int action)
 		LOGERR(_swix(OS_SpriteOp, _INR(0,7),
 			     dc->data.current.brush_coltrans ? 52 + 512 : 28 + 512,
 			     brush->data.sprite.area, first_sprite(brush->data.sprite.area),
-			     cvtx(dc, info->xDest + x), cvty(dc, info->yDest + y),
+			     cvtx(dc, info->xDest + x),
+			     cvty(dc, info->yDest + y) - brush->data.sprite.height*2,
 			     action,
 			     NULL,
 			     dc->data.current.brush_coltrans));
@@ -1344,10 +1527,10 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
     HBITMAP bitmap;
     int delbitmap;
 
-    TRACE((TC_TW, TT_API4, "BitBlt: %p%s %dx%d %dx%d from %p%s %dx%d brush %p rop3=0x%x",
-	   dcDest, dcDest == screen_dc ? " (screen)" : "",
+    TRACE((TC_TW, TT_API3, "BitBlt: %p%s %dx%d %dx%d from %p%s %dx%d brush %p rop3=0x%x",
+	   dcDest, is_screen(dcDest),
 	   xDest, yDest, Width, Height,
-	   dcSrc, dcSrc == screen_dc ? " (screen)" : "",
+	   dcSrc, is_screen(dcSrc),
 	   xSrc, ySrc,
 	   dcSrc ? dcSrc->data.brush : NULL,
 	   rop3));
@@ -1376,6 +1559,9 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
 	break;
 
 	
+    default:
+	TRACE((TC_TW, TT_API4, "BitBlt: unsupported rop3", rop3));
+	ASSERT(0,0);
     case SRCCOPY:
 	bitmap = get_relevant_bitmap(dcSrc, &info, &delbitmap);
 	plotbitmap(dcDest, bitmap, &info, plotaction_WRITE);
@@ -1415,11 +1601,6 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
 	SelectObject(dcSrc, old_brush);
 	break;
     }
-
-    default:
-	TRACE((TC_TW, TT_API4, "BitBlt: unsupported rop3", rop3));
-	ASSERT(0,0);
-	break;
     }    
     
     if (delbitmap)
@@ -1430,58 +1611,100 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
     return 1;
 }
 
+
+// link into chain
+static void link_region(region_rect **head, region_rect **last, region_rect *n)
+{
+    if (*last)
+	(*last)->next = n;
+    else
+	(*head) = n;
+    (*last) = n;
+}
+
 /*
- * Note 'dest' and 'rgn1' can be the same.
+ * Note 'dest' and 'rgn1' or 'dest' and 'rgn2' can be the same.
  */
 
 int CombineRgn(HRGN rgn_dest, HRGN rgn1, HRGN rgn2, int type)
 {
-    TRACE((TC_TW, TT_API4, "CombineRgn:"));
-    ASSERT(type == RGN_OR, type);
+    region_rect *regd, *regd_last; // chain for output regions
+    
+    TRACE((TC_TW, TT_API4, "CombineRgn: type %d regions %p %p", type, rgn1, rgn2));
 
-    switch (type)
-    {
-    case RGN_OR:
-    {
-	region_rect *reg1, *n;
-	region_rect *regd, *regd_last;
-	
-	ASSERT(rgn1, (int)rgn1);
-	ASSERT(rgn2, (int)rgn2);
-	ASSERT(rgn_dest, (int)rgn_dest);
-	ASSERT(rgn2->data.base->next == NULL, (int)rgn2->data.base->next);
+    ASSERT(type == RGN_OR || type == RGN_AND, type);
+    ASSERT(rgn_dest, 0);
+    ASSERT(rgn2, 0);
+    ASSERT(rgn2->data.base->next == NULL, 0);
+    
+    regd = regd_last = NULL;
 
-	// copy existing rectangles
-	regd = regd_last = NULL;
-	for (reg1 = rgn1->data.base; reg1; reg1 = reg1->next)
+    // if rgn2 is NULL then assume it means whole screen
+    if (rgn1 == NULL)
+    {
+	switch (type)
 	{
-	    n = calloc(sizeof(*n), 1);
-
-	    // fill in data
-	    n->rect = regd->rect;
-
-	    // link into chain
-	    if (regd_last)
-		regd_last->next = n;
-	    else
-		regd = regd_last = n;
-	    regd_last = n;
+	case RGN_AND:
+	{
+	    region_rect *n = calloc(sizeof(*n), 1);
+	    n->rect = rgn2->data.base->rect;
+	    link_region(&regd, &regd_last, n);
+	    break;
 	}
 
-	// add on most recent one
-	n = calloc(sizeof(*n), 1);
-	n->rect = rgn2->data.base->rect;
-	regd_last->next = n;
+	case RGN_OR:
+	    // everything OR anything is everything
+	    break;
+	}
+    }
+    else
+    {
+	region_rect *reg1;
 
-	// free the original dest chain
-	free_region(rgn_dest);
-
-	// write in the newly allocated one
-	rgn_dest->data.base = regd;
+	for (reg1 = rgn1->data.base; reg1; reg1 = reg1->next)
+	{
+	    region_rect *n = NULL;
+	    switch (type)
+	    {
+	    case RGN_AND:
+	    {
+		RECT rect;
+		if (IntersectRect(&rect, &reg1->rect, &rgn2->data.base->rect))
+		{
+		    n = calloc(sizeof(*n), 1);
+		    n->rect = rect;
+		}
+		break;
+	    }
 	
-	break;
+	    case RGN_OR:
+		// copy data to add to chain
+		n = calloc(sizeof(*n), 1);
+		n->rect = reg1->rect;
+		break;
+	    }
+
+	    // link into chain
+	    if (n)
+		link_region(&regd, &regd_last, n);
+	}
+
+	if (type == RGN_OR)
+	{
+	    // add on most recent one
+	    region_rect *n = calloc(sizeof(*n), 1);
+	    n->rect = rgn2->data.base->rect;
+
+	    // link into chain
+	    link_region(&regd, &regd_last, n);
+	}
     }
-    }
+
+    // free the original dest chain
+    free_region(rgn_dest);
+
+    // write in the newly allocated one
+    rgn_dest->data.base = regd;
 
     return 1;
 }
@@ -1512,7 +1735,8 @@ HBITMAP CreateBitmapIndirect(CONST BITMAP *b)
 {
     HBITMAP bitmap;
 
-    TRACE((TC_TW, TT_API4, "CreateBitmapIndirect:"));
+    TRACE((TC_TW, TT_API4, "CreateBitmapIndirect: %dx%d bpp %d data %p", b->bmWidth, b->bmHeight, b->bmBitsPixel, b->bmBits));
+    DTRACEBUF((TC_TW, TT_API4, b->bmBits, b->bmWidthBytes * b->bmHeight));
 
     bitmap = (HBITMAP)create_object(OBJ_BITMAP, sizeof(*bitmap));
 
@@ -1525,7 +1749,10 @@ HBITMAP CreateBitmapIndirect(CONST BITMAP *b)
     if (bitmap->data.sprite.area)
     {
 	if (b->bmBits)
+	{
 	    fill_sprite(&bitmap->data.sprite, b->bmBits, (int)b->bmWidthBytes);
+//	    save_sprite(&bitmap->data.sprite, "bitmap");
+	}
     }
     else
     {
@@ -1540,15 +1767,15 @@ HBITMAP CreateCompatibleBitmap(HDC dc, int w, int h)
 {
     BITMAP b;
 
-    TRACE((TC_TW, TT_API4, "CreateCompatibleBitmap: dc %p %dx%d", dc, w, h));
+    TRACE((TC_TW, TT_API4, "CreateCompatibleBitmap: dc %p%s %dx%d", dc, is_screen(dc), w, h));
 
     memset(&b, 0, sizeof(b));
 
     b.bmWidth = w;
     b.bmHeight = h;
-    b.bmWidthBytes = RoundShort((w << dc->data.log2bpp) / 8);
+    b.bmWidthBytes = RoundShort((w *dc->data.bpp) / 8);
     b.bmPlanes = dc->data.planes;
-    b.bmBitsPixel = 1 << dc->data.log2bpp;
+    b.bmBitsPixel = dc->data.bpp;
 
     return CreateBitmapIndirect(&b);
 }
@@ -1561,7 +1788,7 @@ HDC CreateCompatibleDC(HDC dcBase)
 {
     HDC dc;
 
-    TRACE((TC_TW, TT_API4, "CreateCompatibleDC: dc %p", dcBase));
+    TRACE((TC_TW, TT_API4, "CreateCompatibleDC: dc %p%s", dcBase, is_screen(dcBase)));
 
     dc = (HDC)create_object(OBJ_MEMDC, sizeof(*dc));
     if (dc == NULL)
@@ -1570,27 +1797,27 @@ HDC CreateCompatibleDC(HDC dcBase)
     set_default_dc(dc);
 
     dc->data.planes = dcBase->data.planes;
-    dc->data.log2bpp = dcBase->data.log2bpp;
+    dc->data.bpp = dcBase->data.bpp;
     dc->data.mode = dcBase->data.mode;
-    dc->data.bitmap = CreateBitmap(1, 1, 1, 1, NULL);
+    dc->data.bitmap_placeholder = dc->data.bitmap = CreateBitmap(1, 1, 1, dc->data.bpp, NULL);
     
     return dc;
 }
 
-int FillRect(HDC hdc, CONST RECT *lprc, HBRUSH hbr)
+int FillRect(HDC dc, CONST RECT *lprc, HBRUSH hbr)
 {
     HBRUSH old;
 
-    TRACE((TC_TW, TT_API4, "FillRect:"));
+    TRACE((TC_TW, TT_API3, "FillRect: dc %p%s brush %p", dc, is_screen(dc), hbr));
 
-    old = SelectObject(hdc, hbr);
+    old = SelectObject(dc, hbr);
 
-    PatBlt(hdc, lprc->left, lprc->top,
-	   lprc->right - lprc->left, 
-	   lprc->bottom - lprc->top,
+    PatBlt(dc, lprc->left, lprc->top,
+	   (int)lprc->right - (int)lprc->left, 
+	   (int)lprc->bottom - (int)lprc->top,
 	   PATCOPY);
 
-    SelectObject(hdc, old);
+    SelectObject(dc, old);
     return 1;
 }
 
@@ -1623,10 +1850,10 @@ HDC GetDC(HWND hwnd)
  * Create a Bitmap from a DIB.
  *
  * The info structure is in 'info'
- * The bistream is in 'bits'
+ * The bitstream is in 'bits'
  * The palette is in 'dib'
  * 'color_table_type' says what kind of palette it is.
- * flags has whether something shouldbe initialised or not.
+ * flags is whether to fill the bitmap with the bitstream given
  */
 
 
@@ -1634,9 +1861,16 @@ HBITMAP CreateDIBitmap(HDC dc, CONST BITMAPINFOHEADER *info, DWORD flags, CONST 
 {
     HBITMAP bitmap;
 
-    bitmap = (HBITMAP)create_object(OBJ_BITMAP, sizeof(*bitmap));
+    ASSERT(flags == CBM_INIT, flags);
+    
+    TRACE((TC_TW, TT_API4, "CreateDIBitmap: dc %p%s table %d pal entries %d(%d) used %d(%d) hdr size %d (%d)",
+	   dc, is_screen(dc), color_table_type,
+	   1 << info->biBitCount, 1 << dib->bmiHeader.biBitCount, 
+	   info->biClrUsed, dib->bmiHeader.biClrUsed,
+	   info->biSize, dib->bmiHeader.biSize
+	));
 
-    TRACE((TC_TW, TT_API4, "CreateDIBitmap: %p", bitmap));
+    bitmap = (HBITMAP)create_object(OBJ_BITMAP, sizeof(*bitmap));
 
     if (bitmap == NULL)
 	return NULL;
@@ -1651,26 +1885,28 @@ HBITMAP CreateDIBitmap(HDC dc, CONST BITMAPINFOHEADER *info, DWORD flags, CONST 
     }
 
     fill_sprite_from_dib(&bitmap->data.sprite, info, bits);
-    fill_palette_from_dib(&bitmap->data.sprite, info, color_table_type);
+    fill_palette_from_dib(&bitmap->data.sprite, info, dib, color_table_type);
 
+//  save_sprite(&bitmap->data.sprite, "dib");
+    
     return bitmap;
 }
 
 HBRUSH CreateDIBPatternBrush(HGLOBAL gdib, UINT color_table_type)
 {
     HBRUSH brush;
-    const BITMAPINFOHEADER *info = (const BITMAPINFOHEADER *)gdib;
+    const BITMAPINFO *info = (const BITMAPINFO *)gdib;
 
-    TRACE((TC_TW, TT_API4, "CreateDIBPatternBrush:"));
+    TRACE((TC_TW, TT_API4, "CreateDIBPatternBrush: dib %p table %d", gdib, color_table_type));
 
     brush = (HBRUSH)create_object(OBJ_BRUSH, sizeof(*brush));
     if (brush == NULL)
 	return NULL;
     
-    ASSERT(info->biWidth >= 8, (int)info->biWidth);
-    ASSERT(info->biHeight >= 8, (int)info->biHeight);
+    ASSERT(info->bmiHeader.biWidth >= 8, (int)info->bmiHeader.biWidth);
+    ASSERT(info->bmiHeader.biHeight >= 8, (int)info->bmiHeader.biHeight);
     
-    create_sprite(&brush->data.sprite, 8, 8, info->biBitCount, TRUE);
+    create_sprite(&brush->data.sprite, 8, 8, info->bmiHeader.biBitCount, TRUE);
     brush->data.color_table_type = color_table_type;
     brush->data.solid = FALSE;
 
@@ -1680,8 +1916,10 @@ HBRUSH CreateDIBPatternBrush(HGLOBAL gdib, UINT color_table_type)
 	return NULL;
     }
     
-    fill_sprite_from_dib(&brush->data.sprite, info, NULL);
-    fill_palette_from_dib(&brush->data.sprite, info, color_table_type);
+    fill_sprite_from_dib(&brush->data.sprite, &info->bmiHeader, NULL);
+    fill_palette_from_dib(&brush->data.sprite, &info->bmiHeader, info, color_table_type);
+
+//  save_sprite(&brush->data.sprite, "brush");
 
     return brush;
 }
@@ -1729,10 +1967,10 @@ HRGN CreateRectRgn(int left, int top, int right, int bottom)
 
     TRACE((TC_TW, TT_API4, "CreateRectRgn:"));
 
-    r.top = top;
-    r.bottom = bottom;
     r.left = left;
+    r.top = top;
     r.right = right;
+    r.bottom = bottom;
 
     return CreateRectRgnIndirect(&r);
 }
@@ -1742,7 +1980,7 @@ HRGN CreateRectRgnIndirect(CONST RECT *prect)
     HRGN rgn;
     region_rect *rr;
 
-    TRACE((TC_TW, TT_API4, "CreateRectRgnIndirect:"));
+    TRACE((TC_TW, TT_API4, "CreateRectRgnIndirect: %d,%d to %d,%d", prect->left, prect->top, prect->right, prect->bottom));
 
     rgn = (HRGN)create_object(OBJ_REGION, sizeof(*rgn));
     if (rgn == NULL)
@@ -1814,7 +2052,7 @@ HBRUSH CreateSolidBrush(COLORREF colref)
 
 BOOL DeleteDC(HDC dc)
 {
-    TRACE((TC_TW, TT_API4, "DeleteDC: dc %p", dc));
+    TRACE((TC_TW, TT_API4, "DeleteDC: dc %p%s", dc, is_screen(dc)));
     return DeleteObject((HGDIOBJ)dc);
 }
 
@@ -1841,9 +2079,27 @@ BOOL DeleteObject(LPVOID oobj)
 
 int GetDIBits(HDC dc, HBITMAP bitmap, UINT start, UINT num, LPVOID bits, LPBITMAPINFO info, UINT usage)
 {
-    TRACE((TC_TW, TT_API4, "GetDIBits: cd %p bitmap %p lines %d(%d) usage %d", dc, bitmap, start, num, usage));
+    sprite_descr *descr;
     
+    TRACE((TC_TW, TT_API4, "GetDIBits: dc %p%s bitmap %p lines %d(%d) usage %d", dc, is_screen(dc), bitmap, start, num, usage));
+    
+    // fill in information
+    descr = &bitmap->data.sprite;
+    info->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info->bmiHeader.biWidth = descr->width;
+    info->bmiHeader.biHeight = descr->height;
+    info->bmiHeader.biPlanes = 1;
+    info->bmiHeader.biBitCount = descr->bpp == 32 ? 24 : descr->bpp;
+    info->bmiHeader.biCompression = 0;
+    info->bmiHeader.biSizeImage = 0;
+    info->bmiHeader.biXPelsPerMeter = 0;
+    info->bmiHeader.biYPelsPerMeter = 0;
+    info->bmiHeader.biClrUsed = 0;
+    info->bmiHeader.biClrImportant = 0;
+
+    // get data
     fill_dib_from_sprite(&bitmap->data.sprite, info, bits, start, num);
+    fill_palette_from_sprite(&bitmap->data.sprite, info, usage);
 
     return num;
 }
@@ -1968,7 +2224,7 @@ HGDIOBJ GetStockObject(int type)
 
 UINT GetSystemPaletteEntries(HDC dc, UINT what, UINT size, LPPALETTEENTRY pal)
 {
-    TRACE((TC_TW, TT_API4, "GetSystemPaletteEntries: dc %p what %d size %d to %p", dc, what, size, pal));
+    TRACE((TC_TW, TT_API4, "GetSystemPaletteEntries: dc %p%s what %d size %d to %p", dc, is_screen(dc), what, size, pal));
 
     ASSERT(dc->data.current.palette, 0);
 
@@ -1979,21 +2235,25 @@ UINT GetSystemPaletteEntries(HDC dc, UINT what, UINT size, LPPALETTEENTRY pal)
 
 UINT GetSystemPaletteUse(HDC dc)
 {
-    TRACE((TC_TW, TT_API4, "GetSystemPaletteUse: dc %p", dc));
+    TRACE((TC_TW, TT_API4, "GetSystemPaletteUse: dc %p%s", dc, is_screen(dc)));
 
     return dc->data.syspal;
 }
 
 BOOL IntersectRect(LPRECT lprcDst, CONST RECT *lprcSrc1, CONST RECT *lprcSrc2)
 {
-    TRACE((TC_TW, TT_API4, "IntersectRect:"));
-
+    BOOL overlap;
+    
     lprcDst->left = MAX(lprcSrc1->left, lprcSrc2->left);
     lprcDst->right = MIN(lprcSrc1->right, lprcSrc2->right);
-    lprcDst->bottom = MAX(lprcSrc1->bottom, lprcSrc2->bottom);
-    lprcDst->top = MIN(lprcSrc1->top, lprcSrc2->top);
+    lprcDst->top = MAX(lprcSrc1->top, lprcSrc2->top);
+    lprcDst->bottom = MIN(lprcSrc1->bottom, lprcSrc2->bottom);
 			
-    return lprcDst->left < lprcDst->right && lprcDst->bottom < lprcDst->top;
+    overlap = lprcDst->left < lprcDst->right && lprcDst->bottom > lprcDst->top;
+
+    TRACE((TC_TW, TT_API4, "IntersectRect: %d,%d to %d,%d = overlap %d", lprcDst->left, lprcDst->top, lprcDst->right, lprcDst->bottom, overlap));
+
+    return overlap;
 }
 
 /* Use the brush set in 'dc' to paint the given rectangle of 'dc'
@@ -2003,8 +2263,8 @@ BOOL IntersectRect(LPRECT lprcDst, CONST RECT *lprcSrc1, CONST RECT *lprcSrc2)
 
 BOOL PatBlt(HDC dc, int x, int y, int w, int h, DWORD rop3)
 {
-    TRACE((TC_TW, TT_API4, "PatBlt: %p%s %dx%d %dx%d rop3=0x%x",
-	   dc, dc == screen_dc ? " (screen)" : "", x, y, w, h, rop3));
+    TRACE((TC_TW, TT_API3, "PatBlt: dc %p%s %dx%d %dx%d rop3=0x%x",
+	   dc, is_screen(dc), x, y, w, h, rop3));
 
     BitBlt(dc, x, y, w, h, dc, 0, 0, rop3);
     
@@ -2018,49 +2278,109 @@ BOOL PatBlt(HDC dc, int x, int y, int w, int h, DWORD rop3)
 
 UINT RealizePalette(HDC dc)
 {
-    TRACE((TC_TW, TT_API4, "RealizePalette: dc %p%s", dc, dc == screen_dc ? " (screen)" : ""));
+    TRACE((TC_TW, TT_API4, "RealizePalette: dc %p%s", dc, is_screen(dc)));
 
     ASSERT(dc->data.palette, 0);
     ASSERT(dc->data.palette->data.colours, 0);
     
     TRACE((TC_TW, TT_API4, "RealizePalette: pal %p ncols %d ", dc->data.palette, dc->data.palette->data.n_entries));
 
+    // allocate a 'dc' palette cache if not there already
     if (dc->data.current.palette == NULL)
     {
-	dc->data.current.palette = malloc(sizeof(ropalette) << dc->data.log2bpp);
+	TRACE((TC_TW, TT_API4, "RealizePalette: add palette to dc"));
+
+	dc->data.current.palette = malloc(sizeof(ropalette) << dc->data.bpp);
 
 	if (dc->data.current.palette == NULL)
 	    return 0;
     }
 
+    // copy palette to the 'dc' palette cache
+    ASSERT((1 << dc->data.bpp) == dc->data.palette->data.n_entries, dc->data.bpp);
     copy_palette(dc->data.current.palette, dc->data.palette->data.colours, dc->data.palette->data.n_entries);
     
-    if (dc == screen_dc)
+    DTRACEBUF((TC_TW, TT_API4, dc->data.current.palette, sizeof(ropalette) << dc->data.bpp));
+
+    // set palette to screen or sprite
+    if (dc->gdi.tag == OBJ_DC)
     {
-	TRACEBUF((TC_TW, TT_API4, dc->data.current.palette, sizeof(ropalette) << (1 << dc->data.log2bpp)));
 	LOGERR(_swix(ColourTrans_WritePalette, _INR(0,4),
 		     -1, -1,
 		     dc->data.current.palette,
 		     0, 0));
     }
-    
+    else
+    {
+	sprite_area *area;
+	sprite_header *sprite;
+	HBITMAP bitmap;
+
+	bitmap = dc->data.bitmap;
+	ASSERT(bitmap, 0);
+	
+	area = bitmap->data.sprite.area;
+	ASSERT(area, 0);
+
+	sprite = first_sprite(area);
+	ASSERT(sprite, 0);
+
+	TRACE((TC_TW, TT_API4, "RealizePalette: bitmap %p bpp %d", bitmap, bitmap->data.sprite.bpp));
+	
+	// if bitmap doesn't have a palette then add one
+	if (sprite->image == sizeof(sprite_header))
+	{
+	    int pal_size = 8 << bitmap->data.sprite.bpp;
+
+	    TRACE((TC_TW, TT_API4, "RealizePalette: adding palette to bitmap %p", bitmap));
+	    
+	    area = realloc(area, area->size + pal_size);
+	    if (!area)
+	    {
+		ASSERT(area != NULL, 0);
+		return 0;
+	    }
+
+	    area->size += pal_size;
+	    area->freeoff += pal_size;
+
+	    bitmap->data.sprite.area = area;
+
+	    sprite = first_sprite(area);
+	    memmove((char *)sprite_data(sprite) + pal_size, sprite_data(sprite), sprite->next - sprite->image);
+
+	    sprite->next += pal_size;
+	    sprite->image += pal_size;
+	    sprite->mask += pal_size;
+	}
+
+	ASSERT((1 << bitmap->data.sprite.bpp) == dc->data.palette->data.n_entries, bitmap->data.sprite.bpp);
+	
+	LOGERR(_swix(ColourTrans_WritePalette, _INR(0,4),
+		     area, sprite,
+		     dc->data.current.palette,
+		     0, 1));	// R1 is pointer to sprite
+    }
+
     return dc->data.palette->data.n_entries;
 }
 
 int ReleaseDC(HWND hwnd, HDC dc)
 {
-    TRACE((TC_TW, TT_API4, "ReleaseDC:"));
+    TRACE((TC_TW, TT_API4, "ReleaseDC: dc %p%s", dc, is_screen(dc)));
     return 1;
 }
 
 int SelectClipRgn(HDC dc, HRGN rgn)
 {
-    TRACE((TC_TW, TT_API4, "SelectClipRgn: dc %p rgn %p", dc, rgn));
+    int r = NULLREGION;
+    
+    TRACE((TC_TW, TT_API4, "SelectClipRgn: dc %p%s rgn %p clip %p current %p", dc, is_screen(dc), rgn, dc->data.clip, dc->data.current.clip));
 
     if (rgn == NULL)
 	dc->data.clip = NULL;
     else
-	SelectObject(dc, (HGDIOBJ)rgn);
+	r = (int)SelectObject(dc, (HGDIOBJ)rgn);
     
     return 1;
 }
@@ -2072,8 +2392,8 @@ LPVOID SelectObject(HDC dc, LPVOID oobj)
 
     ASSERT(obj, 0);
 
-    TRACE((TC_TW, TT_API4, "SelectObject: dc %p obj %p %s %d",
-	   dc, obj,
+    TRACE((TC_TW, TT_API4, "SelectObject: dc %p%s obj %p %s %d",
+	   dc, is_screen(dc), obj,
 	   objects[obj && (unsigned)obj->gdi.tag < sizeof(objects)/sizeof(objects[0]) ? obj->gdi.tag : 0],
 	   obj ? obj->gdi.tag : 0));
 
@@ -2108,13 +2428,16 @@ LPVOID SelectObject(HDC dc, LPVOID oobj)
 	    dc->data.bitmap = (HBITMAP)obj;
 
 	    uncache_dc(dc);
+	    set_current_dc_from_bitmap(dc);
 	    // transfer palette?
 	}
 	break;
 
     case OBJ_REGION:
-	old_obj = dc->data.clip;
 	dc->data.clip = (HRGN)obj;
+	old_obj = (LPVOID)SIMPLEREGION;
+
+	ASSERT(dc->data.clip->data.base->next == NULL, (int)dc->data.clip->data.base->next);
 	break;
 
     default:
@@ -2122,7 +2445,7 @@ LPVOID SelectObject(HDC dc, LPVOID oobj)
 	break;
     }
 
-    TRACE((TC_TW, TT_API4, "SelectObject: old %p type %d", old_obj, old_obj ? ((HGDIOBJ)old_obj)->gdi.tag : 0));
+    DTRACE((TC_TW, TT_API4, "SelectObject: old %p type %d", old_obj, old_obj && obj->gdi.tag != OBJ_REGION ? ((HGDIOBJ)old_obj)->gdi.tag : 0));
 
     return old_obj;
 }
@@ -2131,7 +2454,7 @@ HPALETTE SelectPalette(HDC dc, HPALETTE pal, BOOL foreground)
 {
     HPALETTE old_pal = NULL;
 
-    TRACE((TC_TW, TT_API4, "SelectPalette: dc %p pal %p", dc, pal));
+    TRACE((TC_TW, TT_API4, "SelectPalette: dc %p%s pal %p", dc, is_screen(dc), pal));
 
     if (dc)
     {
@@ -2146,7 +2469,7 @@ COLORREF SetBkColor(HDC dc, COLORREF col)
 {
     COLORREF old = dc->data.bk_col;
 
-    TRACE((TC_TW, TT_API4, "SetBkColor: color 0x%x", col));
+    TRACE((TC_TW, TT_API4, "SetBkColor: dc %p%s color 0x%x", dc, is_screen(dc), col));
 
     dc->data.bk_col = col;
     dc->data.local.bk_col = UNSET_COLOUR;
@@ -2155,16 +2478,31 @@ COLORREF SetBkColor(HDC dc, COLORREF col)
 }
 
 int SetDIBitsToDevice(HDC dc,
-		      int dest_x, int dest_y,	// top left of destination rectangle
-		      DWORD w, DWORD h,		// image size to transfer
-		      int src_x, int src_y,	// start position in source DIB
-		      UINT stuff1, UINT stuff2,	// ????
-		      CONST VOID *bits, CONST BITMAPINFO *info, UINT dib_plot)
+		      int xDest, int yDest,	// top left of destination rectangle
+		      DWORD Width, DWORD Height,// image size to transfer
+		      int xSrc, int ySrc,	// start position (bottom left) in source DIB
+		      UINT start, UINT num,	// 'band' of scan lines that are contained in the 'bits' array
+		      CONST VOID *bits, CONST BITMAPINFO *info, UINT color_table_type)
 {
-    TRACE((TC_TW, TT_API4, "SetDIBitsToDevice:"));
+    HBITMAP bitmap;
+    HDC dcCompat;
+    
+    TRACE((TC_TW, TT_API3, "SetDIBitsToDevice: dc %p%s dest %dx%d size %dx%d src %dx%d scanlines %d(%d) bits %p info %p paltype %d",
+	   dc, is_screen(dc), xDest, yDest, Width, Height, xSrc, ySrc, start, num, bits, info, color_table_type));
 
-    switch_output(dc);
+    ASSERT(start == 0, start);		// I don't think they use any other form
+    ASSERT(num == Height, num);
+    
+    bitmap = CreateDIBitmap(dc, &info->bmiHeader, CBM_INIT, bits, info, color_table_type);
 
+    dcCompat = CreateCompatibleDC(dc);
+    SelectObject(dcCompat, bitmap);
+    
+    BitBlt(dc, xDest, yDest, Width, Height, dcCompat, xSrc, ySrc, SRCCOPY);
+
+    DeleteObject(dcCompat);
+    DeleteObject(bitmap);
+    
     return 1;
 }
 			
@@ -2172,7 +2510,7 @@ int SetROP2(HDC dc, int rop2)
 {
     int old = dc->data.rop2;
 
-    TRACE((TC_TW, TT_API4, "SetROP2: dc %p rop2 %d", dc, rop2));
+    TRACE((TC_TW, TT_API4, "SetROP2: dc %p%s rop2 %d", dc, is_screen(dc), rop2));
 
     dc->data.rop2 = rop2;
     dc->data.local.action = rop2_to_action[(rop2 - 1) & 0x0F];
@@ -2184,7 +2522,7 @@ int SetROP2(HDC dc, int rop2)
 
 BOOL SetBrushOrgEx(HDC dc, int x, int y, LPPOINT pt)
 {
-    TRACE((TC_TW, TT_API4, "SetBrushOrgEx:"));
+    TRACE((TC_TW, TT_API4, "SetBrushOrgEx: dc %p%s %dx%d", dc, is_screen(dc), x, y));
 
     dc->data.brush_org.x = x;
     dc->data.brush_org.y = y;
@@ -2198,7 +2536,7 @@ UINT SetSystemPaletteUse(HDC dc, UINT syspal)
 {
     int old = dc->data.syspal;
 
-    TRACE((TC_TW, TT_API4, "SetSystemPaletteUse: dc %p %d", dc, syspal));
+    TRACE((TC_TW, TT_API4, "SetSystemPaletteUse: dc %p%s %d", dc, is_screen(dc), syspal));
 
     dc->data.syspal = syspal;
     return old;
@@ -2208,7 +2546,7 @@ COLORREF SetTextColor(HDC dc, COLORREF col)
 {
     COLORREF old = dc->data.text_col;
 
-    TRACE((TC_TW, TT_API4, "SetTextColor: color 0x%x", col));
+    TRACE((TC_TW, TT_API4, "SetTextColor: dc %p%s color 0x%x", dc, is_screen(dc), col));
 
     dc->data.text_col = col;
     dc->data.local.text_col = UNSET_COLOUR;
@@ -2224,14 +2562,16 @@ BOOL UnrealizeObject(HGDIOBJ obj)
     {
     case OBJ_PAL:
 	// remap logical palette to system next time it is needed?
+	ASSERT(!UnrealizeObject, obj->gdi.tag);
 	break;
 
     case OBJ_BRUSH:
 	// reset origin on next use
+	ASSERT(!UnrealizeObject, obj->gdi.tag);
 	break;
 
     default:
-	ASSERT(0, obj->gdi.tag);
+	ASSERT(!UnrealizeObject, obj->gdi.tag);
 	break;
     }
     return 1;
@@ -2310,6 +2650,8 @@ void SetMode(int colorcaps, int xres, int yres)
     uncache_dc(screen_dc);
 
     (void) MouseShowPointer( TRUE );
+
+    _swix(OS_WriteN, _INR(0,1), DISABLE_CURSOR, sizeof(DISABLE_CURSOR) - 1);
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

@@ -92,4 +92,7 @@ extern void write_word(void *a, int b);
 extern int read_long(void *a);
 extern void write_long(void *a, int b);
 
+extern void *write_rect(void *out, const RECT *r);
+extern void *read_rect(const void *in, RECT *r);
+
 #endif //__CLIB_H__

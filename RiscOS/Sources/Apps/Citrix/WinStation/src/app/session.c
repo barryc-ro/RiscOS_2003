@@ -90,7 +90,11 @@ static BOOL		bPDError=FALSE;
 
 /* --------------------------------------------------------------------------------------------- */
 
+#ifdef DEBUG
 static int EMLogInit(void);
+#else
+#define EMLogInit()	0
+#endif
 
 extern LPBYTE gScriptFile;
 extern LPBYTE gScriptDriver;
@@ -816,10 +820,14 @@ int  EMLogInit(void)
    LogClose();
    
    EMLogInfo.LogFlags   = LOG_APPEND;
-   EMLogInfo.LogClass   = TC_UI | TC_WD | TC_TW | TC_VD | TC_VIO | LOG_ASSERT | LOG_CLASS;
-// EMLogInfo.LogClass   = TC_ALL;
+#if 1
+   EMLogInfo.LogClass   = TC_ALL;
    EMLogInfo.LogEnable  = TT_ERROR &~ 0x0040;
-   lstrcpy(EMLogInfo.LogFile, "<Wimp$ScrapDir>." APP_NAME);
+#else
+   EMLogInfo.LogClass   = TC_TW | LOG_ASSERT;
+   EMLogInfo.LogEnable  = TT_API3;
+#endif
+   lstrcpy(EMLogInfo.LogFile, "<Wimp$ScrapDir>." APP_NAME ".Log");
 
    rc = LogOpen(&EMLogInfo);
 

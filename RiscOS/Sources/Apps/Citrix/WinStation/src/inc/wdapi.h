@@ -289,8 +289,10 @@ typedef struct _MOUSEINFO {
  */
 typedef struct _WDRCL {         // SetFocusProcedure parameter (via PACKET_REDRAW)
    BULONG x :12, // X coordinate
-         y :12; // Y coordinate
+          y :12; // Y coordinate
 } WDRCL, *PWDRCL;
+
+#define sizeof_WDRCL	3
 
 /*
  * WdRedraw structure
@@ -300,6 +302,8 @@ typedef struct _WDREDRAW {
    WDRCL   rcl[1]; // Compressed rectangles
 } WDREDRAW, *PWDREDRAW;
 /* #pragma pack() */
+
+#define sizeof_WDREDRAW	2
 
 /*
  *  Set Info Class enum

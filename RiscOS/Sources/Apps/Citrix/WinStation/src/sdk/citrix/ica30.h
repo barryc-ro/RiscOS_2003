@@ -10,7 +10,12 @@
 *
 *  Author: Brad Pedersen
 *
-*  $Log$
+*  ica30.h,v
+*  Revision 1.1  1998/01/12 11:37:56  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.74   Jul 01 1997 19:36:34   billm
 *  Change PACKET_INIT_REQUEST version
@@ -175,6 +180,8 @@ typedef struct _MOUSEDATA {
     BYTE cMouState;
 } MOUSEDATA, * PMOUSEDATA;
 
+#define sizeof_MOUSEDATA   5
+    
 // mouse status returned in MOUSEDATA structure
 #define MOU_STATUS_MOVED   0x01
 #define MOU_STATUS_B1DOWN  0x02

@@ -9,6 +9,12 @@
 * $Author$  Andy (3/15/94)
 *
 * $Log$
+* Revision 1.2  1998/01/27 18:40:26  smiddle
+* Lots more work on Thinwire, resulting in being able to (just) see the
+* log on screen on the test server.
+*
+* Version 0.03. Tagged as 'WinStation-0_03'
+*
 * Revision 1.1  1998/01/19 19:13:36  smiddle
 * Added loads of new files (the thinwire, modem, script and ne drivers).
 * Discovered I was working around the non-ansi bitfield packing in totally
@@ -152,6 +158,11 @@ int MouseReadAvail( PUSHORT puCountAvail )
     return CLIENT_STATUS_SUCCESS;
 }
 
+/*
+ * If this ever does write out more than one structure bear in mind that they
+ * are unaligned structures.
+ */
+
 int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
 {
     int x, y, b, t;
@@ -164,10 +175,8 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
     if (diff ||
 	((x != LastX || y != LastY) && (t - LastT) > gInfo.uTimerGran))
     {
-	pMouData->X = (USHORT)((((ULONG)pMouData->X * 0x10000) / gWidth ) + 1);
-	pMouData->Y = (USHORT)((((ULONG)pMouData->Y * 0x10000) / gHeight) + 1);
-//	pMouData->X = x;
-//	pMouData->Y = y;
+	pMouData->X = (           x/2  * 0x10000) / gWidth  + 1;
+	pMouData->Y = ((gHeight - y/2) * 0x10000) / gHeight + 1;
 	pMouData->cMouState = x != LastX || y != LastY ? MOU_STATUS_MOVED : 0;
 
 	if (diff & 1)		// right
@@ -184,7 +193,9 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
 	LastX = x;
 	LastY = y;
 
-	TRACE(( TC_MOU, TT_API2, "MouseRead: cooked st=0x%x X=%04x Y=%04x",pMouData->cMouState,pMouData->X,pMouData->Y ));
+	TRACE(( TC_MOU, TT_API2, "MouseRead: cooked st=0x%x X=%04x Y=%04x (OS pos %d,%d scrn %d,%d)",
+		pMouData->cMouState, pMouData->X, pMouData->Y,
+		x/2, y/2, gWidth, gHeight));
 	
 	*puCount = 1;
 

@@ -248,6 +248,8 @@ typedef struct _VDCDM_C2H {
 
 } VDCDM_C2H, * PVDCDM_C2H;
 
+#define sizeof_VDCDM_C2H	(sizeof(VD_C2H) + 14)
+
 /*
  *  client printer mapping (vdcpm30.dll)
  */
@@ -257,6 +259,7 @@ typedef struct _VDCPM_C2H {
     BYTE ComMask;               // mask of available client com ports (b0=com1)
 } VDCPM_C2H, * PVDCPM_C2H;
 
+#define sizeof_VDCPM_C2H	(sizeof(VD_C2H) + 2)
 
 /*=============================================================================
 ==   Protocol Driver Header
@@ -320,6 +323,8 @@ typedef struct _PDCRYPT1_C2H {
     BYTE EncryptionLevel;       // encryption level
 } PDCRYPT1_C2H, * PPDCRYPT1_C2H;
 
+#define sizeof_PDCRYPT1_C2H	(sizeof(PD_C2H) + 1)
+
 /*
  *  modem protocol driver (pdmodem.dll)
  */
@@ -328,6 +333,7 @@ typedef struct _PDMODEM_C2H {
     USHORT oModemName;
 } PDMODEM_C2H, * PPDMODEM_C2H;
 
+#define sizeof_PDMODEM_C2H	(sizeof(PD_C2H) + 2)
 
 /*=============================================================================
 ==   Transport Driver Header

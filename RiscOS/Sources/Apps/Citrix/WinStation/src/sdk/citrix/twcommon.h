@@ -308,13 +308,13 @@ typedef struct _LINESTATE {
  * TWSPHEADER    Flags;     (required field)
 \*****************************************************************************/
 typedef struct _TWSPHEADER {
-   BCHAR clipping  : 2;          // b1 b0
+   BUCHAR clipping  : 2;          // b1 b0
 #define   TW_CLIP_TRIVIAL      0 //  0  0
 #define   TW_CLIP_RECT         1 //  0  1
 #define   TW_CLIP_COMPLEX      2 //  1  0
 #define   TW_CLIP_reserved     3 //  1  1
 
-   BCHAR style     :3;          // b4 b3 b2
+   BUCHAR style     :3;          // b4 b3 b2
 #define   TW_LINE_SOLID        0 //  0  0  0
 #define   TW_LINE_ALTERNATE    1 //  0  0  1
 #define   TW_LINE_DASH         2 //  0  1  0
@@ -324,9 +324,9 @@ typedef struct _TWSPHEADER {
 #define   TW_LINE_MASK         6 //  1  1  0 (8 bit mask specified in StyleMask)
 #define   TW_LINE_OTHER        7 //  1  1  1 (Custom style specified in Style)
 
-   BCHAR fStartGap : 1;       // b5 TRUE/FALSE
-   BCHAR fSamePen  : 1;     // b6 TRUE/FALSE (Pen field used if FALSE)
-   BCHAR res       : 1;       // b7
+   BUCHAR fStartGap : 1;       // b5 TRUE/FALSE
+   BUCHAR fSamePen  : 1;     // b6 TRUE/FALSE (Pen field used if FALSE)
+   BUCHAR res       : 1;       // b7
 } TWSPHEADER, *PTWSPHEADER;
 
 #define sizeof_TWSPHEADER	1
@@ -335,7 +335,7 @@ typedef struct _TWSPHEADER {
  * TWSPPEN       Pen;       (present IFF Flags.fSamePen (b6 of fl) is FALSE)
 \*****************************************************************************/
 typedef struct _TWSPPEN {
-   BCHAR rop2  : 4; // b3 b2 b1 b0
+   BUCHAR rop2  : 4; // b3 b2 b1 b0
                     //  0  0  0  0   = 0 = R2_WHITE       (10)  1
                     //  0  0  0  1   = 1 = R2_BLACK       (01)  0
                     //  0  0  1  0   = 2 = R2_NOTMERGEPEN (02) DPon
@@ -352,7 +352,7 @@ typedef struct _TWSPPEN {
                     //  1  1  0  1   = D = R2_COPYPEN     (0D) P
                     //  1  1  1  0   = E = R2_MERGEPENNOT (0E) PDno
                     //  1  1  1  1   = F = R2_MERGEPEN    (0F) DPo
-   BCHAR color : 4; // b3 b2 b1 b0
+   BUCHAR color : 4; // b3 b2 b1 b0
                     //  I  R  G  B
                     //  0  0  0  0   = 0 = BLACK
                     //  0  0  0  1   = 1 = BLUE
@@ -381,7 +381,7 @@ typedef struct _TWSPPEN {
  *
 \*****************************************************************************/
 typedef struct _TWSPPEN256 {
-   BCHAR rop2  : 4; // b3 b2 b1 b0
+   BUCHAR rop2  : 4; // b3 b2 b1 b0
                     //  0  0  0  0   = 0 = R2_WHITE       (10)  1
                     //  0  0  0  1   = 1 = R2_BLACK       (01)  0
                     //  0  0  1  0   = 2 = R2_NOTMERGEPEN (02) DPon
@@ -398,8 +398,8 @@ typedef struct _TWSPPEN256 {
                     //  1  1  0  1   = D = R2_COPYPEN     (0D) P
                     //  1  1  1  0   = E = R2_MERGEPENNOT (0E) PDno
                     //  1  1  1  1   = F = R2_MERGEPEN    (0F) DPo
-   BCHAR res   : 4; // b3 b2 b1 b0
-   BCHAR color : 8;     // b7 b6 b5 b4 b3 b2 b1 b0
+   BUCHAR res   : 4; // b3 b2 b1 b0
+   BUCHAR color : 8;     // b7 b6 b5 b4 b3 b2 b1 b0
 } TWSPPEN256, *PTWSPPEN256;
 
 #define sizeof_TWSPPEN256	2
@@ -439,12 +439,12 @@ typedef struct _TWSPBOUNDS {
  * TWSPSUBPATH  SubPath; (Header for new subpath)
 \*****************************************************************************/
 typedef struct _TWSPSUBPATH {
-   BCHAR  fLast      : 1;  // b0 TRUE if last sub path
-   BCHAR  fSamePoint : 1;  // b1 TRUE if first point is same as previous point
-   BCHAR  fBezier    : 1;  // b2   TRUE/FALSE True if bezier
-   BCHAR  fClosed    : 1;  // b3   TRUE/FALSE True if closed figure
-   BCHAR  fNewStart  : 1;  // b4   TRUE/FALSE True if new figure start
-   BCHAR  fType      : 3;  // b7 b6 b5
+   BUCHAR  fLast      : 1;  // b0 TRUE if last sub path
+   BUCHAR  fSamePoint : 1;  // b1 TRUE if first point is same as previous point
+   BUCHAR  fBezier    : 1;  // b2   TRUE/FALSE True if bezier
+   BUCHAR  fClosed    : 1;  // b3   TRUE/FALSE True if closed figure
+   BUCHAR  fNewStart  : 1;  // b4   TRUE/FALSE True if new figure start
+   BUCHAR  fType      : 3;  // b7 b6 b5
 #define TW_SP_NORMAL   0   //  0  0  0  no special attribute
 #define TW_SP_HORZ     1   //  0  0  1  horizontal line (2 pts) 
 #define TW_SP_VERT     2   //  0  1  0  vertical line (2 pts) 
@@ -468,11 +468,11 @@ typedef struct _TWSPSUBPATH {
 \*****************************************************************************/
 #define SIZE_OF_TWPOINTFIX sizeof(TWPOINTFIX)
 typedef struct _TWPOINTFIX {
-   BLONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE)
-   BLONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
-   BLONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
-   BLONG  x       : 15; // b3-b17
-   BLONG  y       : 14; // b18-b31
+   BULONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE)
+   BULONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
+   BULONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
+   BULONG  x       : 15; // b3-b17
+   BULONG  y       : 14; // b18-b31
 } TWPOINTFIX, *PTWPOINTFIX;
 
 /*****************************************************************************\
@@ -501,12 +501,12 @@ typedef struct _TWPOINTFIXSIGN {
 \*****************************************************************************/
 #define SIZE_OF_TWPOINT 3
 typedef struct _TWPOINT     {
-   BLONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE) 
-   BLONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
-   BLONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
-   BLONG x        : 11; // b3-b13
-   BLONG y        : 10; // b14-b23
-   BLONG nu       :  8; // b24-b31 not used
+   BULONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE) 
+   BULONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
+   BULONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
+   BULONG x        : 11; // b3-b13
+   BULONG y        : 10; // b14-b23
+   BULONG nu       :  8; // b24-b31 not used
 } TWPOINT, *PTWPOINT;
 
 /*****************************************************************************\
@@ -582,7 +582,7 @@ typedef struct _ELLIPSEDATA
 #define TWTO_POS_SAMEY1DX 2 //  1  0 - Same Y, 1 byte dx from last string 1
 #define TWTO_POS_SAMEXDY  3 //  1  1 - Same X, Y uses same delta as last  0
 typedef struct _TWTOFLAGS {
-   BCHAR bSameColor        : 1, // TRUE/FALSE  True if same FG/BG color as last
+   BUCHAR bSameColor        : 1, // TRUE/FALSE  True if same FG/BG color as last
          bOpaqueBackground : 1, // TRUE/FALSE  True if opaque background
          bMonospaced       : 1, // TRUE/FALSE  True if monospaced       
          bDefPlacement     : 1, // True if pos is calc'd using cached widths
@@ -597,7 +597,7 @@ typedef struct _TWTOFLAGS {
  * TWTOCOLOR       Color;      
 \*****************************************************************************/
 typedef struct _TWTOCOLOR {
-   BCHAR FG : 4; // b3 b2 b1 b0 
+   BUCHAR FG : 4; // b3 b2 b1 b0 
                  //  I  R  G  B
                  //  0  0  0  0   = 0 = BLACK                                                    
                  //  0  0  0  1   = 1 = BLUE                                                     
@@ -615,7 +615,7 @@ typedef struct _TWTOCOLOR {
                  //  1  1  0  1   = D = LIGHT MAGENTA                                            
                  //  1  1  1  0   = E = YELLOW                                                   
                  //  1  1  1  1   = F = WHITE (high intesity)                                    
-   BCHAR BG : 4; // b3 b2 b1 b0 
+   BUCHAR BG : 4; // b3 b2 b1 b0 
                  //  I  R  G  B
                  //  0  0  0  0   = 0 = BLACK                                                    
                  //  0  0  0  1   = 1 = BLUE                                                     
@@ -658,7 +658,7 @@ typedef struct _TWTOCOLOR256 {
 #define SIZE_OF_HCACHE_EXTRA 2 
 #define HCACHE_VALID_BITS 0x0FFF
 typedef struct _TWTOGLYPHHEADER {
-   BLONG  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
+   BULONG  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
           fMediumFormat   : 2,  // see TWTO_MF_xxx defines (below)
           bTotallyClipped : 1,  // TRUE/FALSE True if glyph is totally clipped (must be in 1st byte)
           bLastGlyph      : 1,  // TRUE/FALSE True if last, False if another follows (must be in 1st byte) 
@@ -695,7 +695,7 @@ typedef struct _TWTOGH {
 #define TWTO_MF_MEDIUM      2   //  1  0 - 2 byte format - TWTOGLYPHHEADERMEDIUM structure
 #define TWTO_MF_SPACES      3   //  1  1 - 1 byte format - TWTOGLYPHHEADERSPACES structure
 typedef struct _TWTOGLYPHHEADERMEDIUM {
-   BSHORT bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
+   BUSHORT bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
           fMediumFormat   : 2,  // see TWTO_MF_xxx defines (above)
           hCache          : 12, // value of the client cache handle (low 8 bits hCache must be in low word header)
           bTiny           : 1;  // TRUE/*: _32B*/ ChunkType, FALSE/*: _128B*/
@@ -707,7 +707,7 @@ typedef struct _TWTOGLYPHHEADERMEDIUM {
  * TWTOGLYPHHEADERSPACES GlyphHeaderSpaces;
 \*****************************************************************************/
 typedef struct _TWTOGLYPHHEADERSPACES {
-   BCHAR  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
+   BUCHAR  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
           fMediumFormat   : 2,  // see TWTO_MF_xxx defines (above)
           count           : 5;  // number of contiguous spaces
 } TWTOGLYPHHEADERSPACES, *PTWTOGLYPHHEADERSPACES;
@@ -718,8 +718,8 @@ typedef struct _TWTOGLYPHHEADERSPACES {
  * TWTOGLYPHHEADERSHORT GlyphHeaderShort;
 \*****************************************************************************/
 typedef struct _TWTOGLYPHHEADERSHORT {
-   BCHAR  bShortFormat    : 1; // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first) 
-   BCHAR  hCacheCache     : 7; // value of the client cache handle
+   BUCHAR  bShortFormat    : 1; // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first) 
+   BUCHAR  hCacheCache     : 7; // value of the client cache handle
 } TWTOGLYPHHEADERSHORT, *PTWTOGLYPHHEADERSHORT;
 
 #define sizeof_TWTOGLYPHHEADERSHORT 1

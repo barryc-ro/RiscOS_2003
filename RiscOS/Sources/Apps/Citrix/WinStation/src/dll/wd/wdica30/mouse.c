@@ -221,7 +221,7 @@ MouWrite( PWD pWd, PMOUSEDATA pMouData, USHORT MouCount )
     /*
      *  Allocate output buffer
      */
-    ByteCount = (USHORT) (MouCount * sizeof(MOUSEDATA));
+    ByteCount = (USHORT) (MouCount * sizeof_MOUSEDATA);
 
     /*
      *  How many keys
@@ -314,7 +314,7 @@ MouWrite( PWD pWd, PMOUSEDATA pMouData, USHORT MouCount )
     /*
      *  Append mouse packet header
      */
-    if ( (OutBufMouCount / sizeof(MOUSEDATA)) == 1 ) {
+    if ( (OutBufMouCount / sizeof_MOUSEDATA) == 1 ) {
         rc = AppendICAPacket( pWd, PACKET_MOUSE0, NULL, 0 );
     } else if ( OutBufMouCount < 256 ) {
         str[0] = (BYTE) OutBufMouCount;

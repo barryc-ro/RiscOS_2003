@@ -10,6 +10,12 @@
 *   Author: Kurt Perry (kurtp) 8-Nov-1995
 *
 *   $Log$
+*   Revision 1.2  1998/01/27 18:39:37  smiddle
+*   Lots more work on Thinwire, resulting in being able to (just) see the
+*   log on screen on the test server.
+*
+*   Version 0.03. Tagged as 'WinStation-0_03'
+*
 *   Revision 1.1  1998/01/19 19:13:08  smiddle
 *   Added loads of new files (the thinwire, modem, script and ne drivers).
 *   Discovered I was working around the non-ansi bitfield packing in totally
@@ -32,6 +38,7 @@
 
 #include "wfglobal.h"
 #include "../../../inc/wdapi.h"
+#include "../../../inc/clib.h"
 
 
 /*=============================================================================
@@ -80,7 +87,6 @@ BITMAPINFO_8BPP_SSB bitmapinfo_8BPP_SSB = {
    241, 242, 243, 244, 245, 246, 247, 248, 249, 250,
    251, 252, 253, 254, 255 }
 };
-
 
 /****************************************************************************\
  *  w_TWCmdSSBSaveBitmap8BPP (SSB_SAVE_BITMAP service routine)
@@ -224,26 +230,32 @@ w_TWCmdSSBSaveBitmap8BPP( HWND hWnd, HDC device )
           //put the rectangle information in the cache
  
 	  prcl = (PWDRCL)(lpcache + SSB_HEADER_SIZE);
- 
+#if 1
+	  prcl = write_rect(prcl, lpoverlaprect);
+#else
           //do the first rectangle
           prcl->x = lpoverlaprect->left;
           prcl->y = lpoverlaprect->top;
 	  prcl = (PWDRCL)((LPBYTE)prcl + 3);
           prcl->x = lpoverlaprect->right;
           prcl->y = lpoverlaprect->bottom;
- 
+#endif 
           TRACE((TC_TW,TT_TW_SSB,"rect 1: left=%u, top=%u, right=%u, bottom=%u",
                 (UINT) lpoverlaprect->left, (UINT) lpoverlaprect->top,
                 (UINT) lpoverlaprect->right, (UINT) lpoverlaprect->bottom));
  
           if (coverlaprect == 2) {
              //do the second rectanle
+#if 1
+	     prcl = write_rect(prcl, lpoverlaprect);
+#else
 	     prcl = (PWDRCL)((LPBYTE)prcl + 3);
              prcl->x = (lpoverlaprect+1)->left;
              prcl->y = (lpoverlaprect+1)->top;
 	     prcl = (PWDRCL)((LPBYTE)prcl + 3);
              prcl->x = (lpoverlaprect+1)->right;
              prcl->y = (lpoverlaprect+1)->bottom;
+#endif
              TRACE((TC_TW,TT_TW_SSB,"rect 2: left=%u, top=%u, right=%u, bottom=%u",
                 (UINT) (lpoverlaprect+1)->left, (UINT) (lpoverlaprect+1)->top,
                 (UINT) (lpoverlaprect+1)->right, (UINT) (lpoverlaprect+1)->bottom));
@@ -509,13 +521,16 @@ w_TWCmdSSBRestoreBitmap8BPP( HWND hWnd, HDC device )
 		prcl = (PWDRCL)(lpcache - 32 + SSB_HEADER_SIZE);
                 i=0;     //rectangle number in ssb_header
                 while ((i < (INT) ssb_header.count_ontop) && !jRepaint) {
+#if 1
+		    prcl = read_rect(prcl, &currentcheck);
+#else
                     currentcheck.left = (INT) prcl->x;
                     currentcheck.top  = (INT) prcl->y;
 		    prcl = (PWDRCL)((LPBYTE)prcl + 3);
                     currentcheck.right = (INT) prcl->x;
                     currentcheck.bottom = (INT) prcl->y;
 		    prcl = (PWDRCL)((LPBYTE)prcl + 3);
-     
+#endif     
                     TRACE((TC_TW,TT_TW_SSB,"currentcheck(%u) left=%u, top=%u, right=%u, bottom=%u",
                            i,(UINT) currentcheck.left, (UINT) currentcheck.top,
                            (UINT) currentcheck.right, (UINT) currentcheck.bottom));
