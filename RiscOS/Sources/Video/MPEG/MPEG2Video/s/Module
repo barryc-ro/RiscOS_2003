@@ -115,6 +115,7 @@
 ; 11-Mar-98  TMD  2.52		(Conditionally) put in RAMFS debugging
 ; 11-Mar-98  TMD  2.53		Make audio packetisation use MPEG2 PES as per video, with multiple of 8 bytes packet header
 ; 11-Mar-98  TMD  2.54		Discard initial video/audio packets until we get start of MPEG packet on each
+; 20-Apr-98  TMD  2.55		Adjust horizontal scaler to take aspect_ratio_information into account
 ;
 
 	LEADR	Module_LoadAddr
@@ -204,6 +205,9 @@ AudioDebug SETL {FALSE}			; capture audio data to a memory block
 
 	GBLL	DiscardPartialPackets
 DiscardPartialPackets	SETL {TRUE}	; discard initial partial PES packet for both video/audio
+
+	GBLL	CheckAspectRatio
+CheckAspectRatio SETL {TRUE}		; adjust picture size to cope with 16:9 and 2.21:1 aspect ratios
 
 ; Structure of a PTS list entry
 
@@ -469,6 +473,9 @@ VideoInputType		#	4	; specifies what format of input is passed to MPEG2Video
 CurrentHorizontalSize	#	4	; specifies what horiz size was at last sequence header
 CurrentVerticalSize	#	4	; ditto for vertical size
 CurrentTVFormat		#	4	; ditto for TV format (0=PAL, 1=NTSC)
+ [ CheckAspectRatio
+CurrentAspectRatio	#	4	; ditto for aspect ratio
+ ]
 CurrentOutputWidth	#	4	; either 704 or 720 as appropriate
 
  [ SaveAPacket
@@ -566,7 +573,7 @@ Mod_Title
 	=	"MPEG2Video", 0
 
 Mod_HelpStr
-	=	"MPEG2Video", TAB, "2.54 (11 Mar 1998)", 0
+	=	"MPEG2Video", TAB, "2.55 (20 Apr 1998)", 0
 	ALIGN
 
 Mod_SWITable
@@ -2767,7 +2774,7 @@ PictureStartCodeIRQ Entry "r8"
 	STREQ	lr, FirstItemReceived		; then indicate picture first
 	EXIT
 
-ProcessAuxFIFO Entry "r0-r2"
+ProcessAuxFIFO Entry "r0-r3"
 10
 	ReadReg r0, Status0			; determine if Aux FIFO has any data in it
 	AND	r1, r0, #L64002_Status0_ADFSBits
@@ -2816,6 +2823,10 @@ ProcessAuxFIFO Entry "r0-r2"
 	LDRB	r1, VideoSequence_VerticalSize +0	; high byte of vertical size
 	LDRB	lr, VideoSequence_VerticalSize +1	; low byte of vertical size
 	ORR	r1, lr, r1, LSL #8			; r1 = yres
+
+ [ CheckAspectRatio
+	LDRB	r3, VideoSequence_PelAspectRatio
+ ]
 
 	LDR	lr, CardProductType			; check what type of card it is
 	CMP	lr, #-1					; if unknown, then assume it's my vanilla card
@@ -3198,11 +3209,12 @@ VideoChannelUnderrunIRQ Entry
 ; in:	r0 = xres
 ;	r1 = yres
 ;	r2 = 0 for PAL, 1 for NTSC
+;	r3 = aspect ratio
 ;
 ; out:	-
 
 
-SetupScreenMode Entry "r2-r5"
+SetupScreenMode Entry "r2-r7"
  [ {FALSE} ; debug x 2 size
 	MOV	r0, r0, LSR #1
 	MOV	r1, r1, LSR #1
@@ -3210,43 +3222,75 @@ SetupScreenMode Entry "r2-r5"
 	ASSERT	CurrentVerticalSize = CurrentHorizontalSize + 4
 	ASSERT	CurrentTVFormat = CurrentHorizontalSize + 8
 	ADR	lr, CurrentHorizontalSize
-	LDMIA	lr, {r3-r5}			; load old settings
-
-	TEQ	r0, r3
-	TEQEQ	r1, r4
-	TEQEQ	r2, r5
+ [ CheckAspectRatio
+	LDMIA	lr, {r4-r7}			; load old settings
+	TEQ	r0, r4
+	TEQEQ	r1, r5
+	TEQEQ	r2, r6
+	TEQEQ	r3, r7
 	EXIT	EQ				; all the same, so do nothing
+	STMIA	lr, {r0-r3}			; save out new parameters
+ |
+	LDMIA	lr, {r4-r6}			; load old settings
 
+	TEQ	r0, r4
+	TEQEQ	r1, r5
+	TEQEQ	r2, r6
+	EXIT	EQ				; all the same, so do nothing
 	STMIA	lr, {r0-r2}			; save out new parameters
+ ]
 
 	CMP	r1, #288			; if more than 288
-	MOVHI	r3, #DisplayMode1_HorizontalFilterEnable :OR: DisplayMode1_InterlaceChromaFieldRepeatFilterChroma
+	MOVHI	r4, #DisplayMode1_HorizontalFilterEnable :OR: DisplayMode1_InterlaceChromaFieldRepeatFilterChroma
 						; then full interlaced picture
-	MOVLS	r3, #DisplayMode1_HorizontalFilterEnable :OR: DisplayMode1_ProgressiveFilterLuma
+	MOVLS	r4, #DisplayMode1_HorizontalFilterEnable :OR: DisplayMode1_ProgressiveFilterLuma
 						; else just SIF
-	WriteRegI r3, DisplayMode1, lr
+	WriteRegI r4, DisplayMode1, lr
 
+ [ CheckAspectRatio
+	ADR	r4, AspectRatios
+	CMP	r3, #5				; if outside range
+	MOVCS	r3, #1				; then pretend it's 4:3
+	LDR	r4, [r4, r3, LSL #2]		; get word with num (bits 15:0) den (bits 31:16)
+	MOV	r5, r4, LSR #16			; denominator
+	BIC	r4, r4, r5, LSL #16		; numerator
+	MUL	r4, r0, r4			; numerator * xres
+	DivRem	r6, r4, r5, lr			; numerator * xres / denominator
+	SUBS	r4, r0, r6			; total number of undisplayed pixels
+	MOVCC	r4, #0				; if -ve then put it at left-hand edge, too complicated to blank LHS
+	MOV	r4, r4, LSL #2			; undisplayed width at LHS, in 1/8th pixel units
+	MOV	r5, r4, LSR #6			; amount in whole (8-byte) words
+	BIC	r4, r4, r5, LSL #6		; remainder
+	WriteRegI r4, PanAndScan8thPelOrigin, lr
+	WriteRegI r5, PanAndScanLumaWordOrigin0, lr
+	WriteRegI r5, PanAndScanChromaWordOrigin0, lr
+	MOV	r5, r5, LSR #8
+	WriteRegI r5, PanAndScanLumaWordOrigin1, lr
+	WriteRegI r5, PanAndScanChromaWordOrigin1, lr
+	MOV	r0, r6				; use new value as width
+ ]
  [ FudgeQSIF
-	MOVLS	r3, r0, LSL #1			; if SIF or less, use width = 2 x xres
+	CMP	r1, #288
+	MOVLS	r4, r0, LSL #1			; if SIF or less, use width = 2 x xres
 	BLS	%FT05
  ]
-	MOV	r3, #704
+	MOV	r4, #704
 	BL	GetHCF
-	MOV	r4, r3				; save HCF of (xres, 704)
+	MOV	r5, r4				; save HCF of (xres, 704)
 
-	MOV	r3, #720
+	MOV	r4, #720
 	BL	GetHCF				; get HCF of (xres, 720)
-	CMP	r3, r4
+	CMP	r4, r5
 	ORRHI	r2, r2, #2			; if HCF is higher with 720, set bit 1 of TV format to form index into table
-	MOVHI	r3, #720
-	MOVLS	r3, #704
-	STR	r3, CurrentOutputWidth
+	MOVHI	r4, #720
+	MOVLS	r4, #704
 05
-	MOV	r4, r0, LSL #8			; r4 = xres*256
-	DivRem	r5, r4, r3, lr			; r5 = xres*256/outputwidth, r4 = remainder
-	TEQ	r4, #0				; if remainder non-zero
-	ADDNE	r5, r5, #1			; round up
-	WriteRegI r5, RasterMapperIncrement, lr	; write raster mapper increment
+	STR	r4, CurrentOutputWidth
+	MOV	r5, r0, LSL #8			; r5 = xres*256
+	DivRem	r6, r5, r4, lr			; r6 = xres*256/outputwidth, r5 = remainder
+	TEQ	r5, #0				; if remainder non-zero
+	ADDNE	r6, r6, #1			; round up
+	WriteRegI r6, RasterMapperIncrement, lr	; write raster mapper increment
 
 ; now work out MainReadsPerLine/DisplayWidth registers, including top bits which are determined by PAL/NTSC
 
@@ -3270,20 +3314,29 @@ SetupScreenMode Entry "r2-r5"
 	STRB	r4, [r11, lr, LSL #L64002_Register_Address_Shift]
 	B	%BT10
 
-; GetHCF - r3 = highest common factor of r0 and r3
+ [ CheckAspectRatio
+AspectRatios
+	&	1 :OR: (1 << 16)		; forbidden - use 4:3
+	&	4 :OR: (3 << 16)		; square pixels
+	&	1 :OR: (1 << 16)		; 4:3
+	&	3 :OR: (4 << 16)		; 16:9
+	&	400 :OR: (663 << 16)		; 2.21:1
+ ]
+
+; GetHCF - r4 = highest common factor of r0 and r4
 
 GetHCF	Entry "r0, r1"
-	CMP	r0, r3				; ensure r0 >= r3 before we start
-	EORCC	r0, r0, r3
-	EORCC	r3, r3, r0
-	EORCC	r0, r0, r3
+	CMP	r0, r4				; ensure r0 >= r4 before we start
+	EORCC	r0, r0, r4
+	EORCC	r4, r4, r0
+	EORCC	r0, r0, r4
 10
-	DivRem	r1, r0, r3, lr			; r1 = r0/r3; r0=r0 mod r3
+	DivRem	r1, r0, r4, lr			; r1 = r0/r4; r0=r0 mod r4
 	TEQ	r0, #0				; if remainder non-zero
-	MOVNE	r0, r3				; then shuffle up numbers
-	MOVNE	r3, r1
+	MOVNE	r0, r4				; then shuffle up numbers
+	MOVNE	r4, r1
 	BNE	%BT10				; and loop
-	EXIT					; else exit with r3 = HCF
+	EXIT					; else exit with r4 = HCF
 
 ScreenParamsTable
 	&	ScreenParamsPAL704-ScreenParamsTable
