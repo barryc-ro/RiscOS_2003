@@ -71,7 +71,7 @@ NCTARGETARCH = ${NODB}
 # EMAIL_URL lets it be known that we have an EMAIL_URL to fill in the smartcard, it's only
 # relevant for Acorn format card.
 
-CCFLAGS = -c ${THROWBACK} -depend !Depend -wp ${INCLUDES} -zM -DCOMPAT_INET4 ${OPTS} ${NCTARGETARCH} ${OPTS}
+CCFLAGS = -c ${THROWBACK} -depend !Depend -wp ${INCLUDES} -zM -DCOMPAT_INET4 ${OPTS} ${NCTARGETARCH} ${OPTS} ${DEBUG}
 
 
 
@@ -79,26 +79,32 @@ CCFLAGS = -c ${THROWBACK} -depend !Depend -wp ${INCLUDES} -zM -DCOMPAT_INET4 ${O
 
 # Libraries
 #
+LIBDIR     = <Lib$Dir>
 CLIB       = CLIB:o.stubs
 RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-
-SOCKLIB	   = TCPIPLibs:o.socklibzm
-INETLIB	   = TCPIPLibs:o.inetlibzm
+SOCKLIB	   = TCPIPLibs:o.socklib5 
+INETLIB	   = TCPIPLibs:o.inetlib
+UNIXLIB    = TCPIPLibs:o.unixlib
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
+C++LIB     = <Lib$Dir>.c++lib.o.c++libz
+LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
 
 #
 # Rule patterns
 #
-.SUFFIXES:  .oz
+.SUFFIXES:  .oz .o .s .c .i .cmhg .inst .io
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
 .c.oz:;     ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {TRUE}"
+.c.i:;      ${CC} ${CCFLAGS} -c -C -E $< >> $@
+.inst.io:;  ${CC} ${CCFLAGS} -C++ -W -o $@ $<
 
 #
 # Program specific options:
@@ -107,18 +113,30 @@ COMPONENT = ISPCapture
 TARGET    = aof.ISPCapture
 TARGETSA  = rm.ISPCapture
 EXPORTS   =
+
+# Normal targets
 BASEOBJS  = module.o header.o ispc_cmds.o dynalloc.o ispc_ispc.o \
-	  ispc_url.o kprintf.o ispc_utils.o usermode.o ispc_file.o dbugzm.o
+            ispc_url.o kprintf.o ispc_utils.o usermode.o ispc_file.o \
+            dbugzm.o
+
+# Preprocess targets.
+OBJSI  = i.module header.o i.ispc_cmds i.dynalloc i.ispc_ispc \
+         i.ispc_url i.kprintf i.ispc_utils usermode.o i.ispc_file i.dbugzm o.resources
+
+# Instrumentation targets.
+OBJSIO = io.module header.o io.ispc_cmds io.dynalloc io.ispc_ispc \
+         io.ispc_url io.kprintf io.ispc_utils usermode.o io.ispc_file \
+         io.dbugzm io.instlib
 
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
+NOTROMOBJSIO = o.resources ${DBUGLIB} ${OBJSIO}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 HTMLDIR = <resource$dir>.!Boot.HTML
 LDIR = LocalRes:${USERIF}
 
 NOTROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
-
 ROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
 
 #
@@ -155,9 +173,37 @@ clean:
         ${WIPE} aof.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
+        ${WIPE} i ${WFLAGS}
+        ${WIPE} io ${WFLAGS}
+        ${WIPE} inst ${WFLAGS}
         remove h.cmhg
         @echo ${COMPONENT}: cleaned
 
+#
+# local_dirs - Create local directories
+#
+local_dirs:
+          ${MKDIR} i
+          ${MKDIR} io
+          ${MKDIR} inst
+
+#
+# Preprocess target - create preprocess C code.
+#
+preprocess: ${OBJSI} local_dirs
+          @echo ${COMPONENT}: Preprocess build complete
+
+#
+# Instrumentation target - create a McCabe-enabled instrumented executable
+#
+instrument: ${OBJSIO} local_dirs
+          ${LD} -o rm.${COMPONENT} -module ${NOTROMOBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
+          @echo ${COMPONENT}: instrument build complete
+
+
+#
+# resources - copy resources over into correct location.
+#
 resources:
         ${MKDIR} ${HTMLDIR}
         ${MKDIR} ${HTMLDIR}.ISPCapture
@@ -170,18 +216,15 @@ resources:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD} header.h
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} header.h
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
 
-#
-# Exported interface headers
-#
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} header.h
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} header.h
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB}
 
 
 #
