@@ -113,6 +113,9 @@ ParseOVSNPT	SETL	{TRUE}
 		GBLL	OnlyAcceptFirstPATandPMT
 OnlyAcceptFirstPATandPMT SETL {FALSE}			; for use with a faint signal, since we don't check CRCs.
 
+                GBLL    Capture
+Capture         SETL    {TRUE}                          ; include *TransCapture and *TransSave
+
                 GBLL    DebugNPT
 DebugNPT        SETL    {FALSE}                         ; print NPT debug to vdu
 
@@ -302,6 +305,15 @@ MessageFile_Block #     16
 MessageFile_Open  #     4
  ]
 
+ [ Capture
+CaptureEnable           #       4       ; 0 = inactive, 1 = active
+CaptureDANo             #       4       ; dynamic area number
+CaptureDAStart          #       4       ; base address of dynamic area
+CaptureDASize           #       4       ; size of dynamic area
+CaptureWritePtr         #       4       ; write pointer
+CaptureAmount           #       4       ; amount captured since OpenStream
+ ]
+
 ControlStreamHandle     #       CSHSize ; goes at the end cos likely to be long (with stack)
                                         ; NB this could be dynamically allocated on OpenStream eventually
 
@@ -427,9 +439,14 @@ Mod_SWITable
 	=	"SetAudioParameters", 0
         =       0
 
- [ BuildAsMPEGControl
 
 Mod_HC_Table
+ [ Capture
+        Command TransCapture, 1, 1
+        Command TransSave, 1, 1
+ ]
+
+ [ BuildAsMPEGControl
         Command CtrlInfo, 0, 0
         Command CtrlDebugOn, 0, 0
         Command CtrlDebugOff, 0, 0
@@ -449,8 +466,6 @@ CtrlDebugOff_Syntax
         =       "Syntax: *CtrlDebugOff", 0
 
  |
-
-Mod_HC_Table
         Command TransCtrlInfo, 0, 0
         Command TransCtrlDebugOn, 0, 0
         Command TransCtrlDebugOff, 0, 0
@@ -469,6 +484,17 @@ TransCtrlDebugOff_Help
 TransCtrlDebugOff_Syntax
         =       "Syntax: *TransCtrlDebugOff", 0
 
+ ]
+
+ [ Capture
+TransCapture_Help
+        =       "*TransCapture starts or stops capturing the incoming transport stream.", CR
+TransCapture_Syntax
+        =       "Syntax: *TransCapture <buffer size in MB>", 0
+TransSave_Help
+        =       "*TransSave saves out the captured transport stream.", CR
+TransSave_Syntax
+        =       "Syntax: *TransSave <filename>", 0
  ]
 
         ALIGN
@@ -504,6 +530,9 @@ Mod_Init Entry
  [ DoPEH
 	STR	r0, GlobalPEHList	; no handlers on list to start with
 	STR	r0, ControlStreamHandle+CSH_ListOfPEHPIDs ; control stream handle not valid, so no PEHPIDs
+ ]
+ [ Capture
+        STR     r0, CaptureEnable
  ]
         LDR     r0, PullPCInstruction
         STR     r0, SWIInstruction +4
@@ -556,6 +585,13 @@ Mod_Die Entry
         MOV     r0, #3
         MOV     r1, #1
         SWI     XMPEGControl_ControlOp  ; Let MPEGControl know we've died
+      ]
+
+      [ Capture
+        LDR     r0, CaptureEnable
+        TEQ     r0, #1             ; is also the "remove" reason code to OS_DynamicArea
+        LDREQ   r1, CaptureDANo
+        SWIEQ   XOS_DynamicArea
       ]
 
         Debug_Close
@@ -657,6 +693,15 @@ OpenStream Entry "r0-r2"
 	STR     lr, [r1, #CSH_NextResetStreamFlags]
 	MOV     lr, #1                                  ; start off playing data at normal speed
 	STR     lr, [r1, #CSH_NextSpeedIndicator]
+ ]
+
+ [ Capture
+        LDR     lr, CaptureEnable
+        TEQ     lr, #1
+        LDREQ   lr, CaptureDAStart
+        STREQ   lr, CaptureWritePtr
+        MOVEQ   lr, #0
+        STREQ   lr, CaptureAmount
  ]
 
         TST     r0, #StreamFlags_VideoPresent
@@ -1029,6 +1074,38 @@ FullBuffers Entry "r0-r5"
 	SUBS	lr, lr, #1
 	BNE	%BT01
 02
+ ]
+ [ Capture
+        LDR     lr, CaptureEnable
+        TEQ     lr, #1
+        BNE     %FT10
+
+        Push    "r0-r5"
+        LDR     r3, CaptureWritePtr
+        LDR     r4, CaptureDAStart
+        LDR     r5, CaptureDASize
+        ADD     r4, r4, r5
+        LDR     r5, CaptureAmount
+03
+        LDR     r0, [r2, #BufferDescriptor_Start]
+        LDR     r1, [r2, #BufferDescriptor_Length]
+        ADD     r5, r5, r1           ; add the length of this packet to total so far
+05
+        LDRB    lr, [r0], #1         ; copy one byte
+        STRB    lr, [r3], #1
+        TEQ     r3, r4
+        LDREQ   r3, CaptureDAStart   ; if reached end of DA then loop round to start
+        SUBS    r1, r1, #1
+        BNE     %BT05
+
+        LDR     r2, [r2, #BufferDescriptor_Link]
+        TEQ     r2, #0
+        BNE     %BT03
+
+        STR     r3, CaptureWritePtr
+        STR     r5, CaptureAmount
+        Pull    "r0-r5"
+10
  ]
         LDR     r0, [r1, #CSH_NotReadyBits]             ; if we haven't actually started playing yet, do nothing
         TEQ     r0, #0
@@ -3163,6 +3240,101 @@ TransCtrlDebugCommon
         STR     r0, DebugFlag
         EXIT
 
+ ]
+
+; **************************************************************************
+
+ [ Capture
+TransCapture_Code
+        Entry   "R7, R8"
+        LDR     wp, [r12]
+        MOV     r1, r0
+        MOV     r0, #10
+        SWI     XOS_ReadUnsigned  ; how many megabytes requested?
+        EXIT    VS
+        MOV     r2, r2, LSL#20    ; convert to bytes
+
+        LDR     r0, CaptureEnable
+        MOV     lr, #0
+        STR     lr, CaptureEnable ; disable capturing while DA is invalid
+        TEQ     r0, #1
+        LDREQ   r1, CaptureDANo   ; if a DA is already allocated, then remove it
+        SWIEQ   XOS_DynamicArea
+        EXIT    VS
+
+        TEQ     r2, #0
+        EXIT    EQ                ; if new size requested was 0, then exit with capturing disabled
+
+        STR     r2, CaptureDASize
+        MOV     r0, #0            ; create dynamic area
+        MOV     r1, #-1
+        MOV     r3, #-1
+        MOV     r4, #&80          ; non-draggable
+        MOV     r5, r2
+        MOV     r6, #0
+        MOV     r7, #0
+        ADRL    r8, Mod_Title
+        SWI     XOS_DynamicArea
+        EXIT    VS
+
+        STR     r1, CaptureDANo
+        STR     r3, CaptureDAStart
+        STR     r3, CaptureWritePtr
+        MOV     lr, #0
+        STR     lr, CaptureAmount
+        MOV     lr, #1
+        STR     lr, CaptureEnable
+        EXIT
+
+TransSave_Code
+        Entry
+        LDR     wp, [r12]
+        LDR     lr, CaptureEnable
+        TEQ     lr, #1
+        BNE     %FT99
+
+        MOV     r1, r0   ; filename is specified in command tail
+        MOV     r0, #&80 ; open new file
+        SWI     XOS_Find
+        EXIT    VS
+        MOV     r1, r0   ; move file handle into r1 for use in OS_GBPB
+
+        LDR     r0, CaptureDASize
+        LDR     r2, CaptureWritePtr
+        LDR     r5, CaptureAmount
+        CMP     r5, r0           ; if more than this, then we've filled the DA
+        MOVGT   r5, r0
+        LDR     r6, CaptureDAStart
+
+        SUB     r2, r2, r5       ; start address, neglecting pointer wrap
+        SUBS    r3, r6, r2       ; distance from r2 to CaptureDAStart: if >0, then we have to save top of DA first
+        SUBGT   r5, r5, r3       ; deduct r3 from the amount we do in the second OS_GBPB
+        ADDGT   r2, r2, r0
+        MOV     r0, #2
+        SWIGT   XOS_GBPB
+        MOVVC   r2, r6           ; if we've wrapped, then second half starts at DA start, otherwise we started there anyway
+        MOVVC   r3, r5
+        SWIVC   XOS_GBPB
+
+        BVS     %FT98
+        MOV     r0, #0   ; close file
+        SWI     XOS_Find
+        EXIT
+98
+        Push    "r0"
+        MOV     r0, #0   ; close file
+        SWI     XOS_Find
+        Pull    "r0"
+        SETV
+        EXIT
+99
+        ADR     r0, NotCapturedError
+        SETV
+        EXIT
+NotCapturedError
+        &       0
+        =       "No captured transport stream", 0
+        ALIGN
  ]
 
 ; **************************************************************************
