@@ -19,6 +19,7 @@
 #include <string.h>                             /* for strlen()          */
 #include <time.h>                               /* for clock             */
 #include <errno.h>
+#include <stdbool.h>
 
 /* IMPORTS */
 extern int main(int argc, char **argv);         /* the point of it all   */
@@ -26,11 +27,14 @@ extern FILEHANDLE __dup(int new, int old);
 extern void _ctype_init(void);
 extern int _fprintf_lf(FILE *fp, const char *fmt, ...);
 extern int _sprintf_lf(char *buff, const char *fmt, ...);
+extern _kernel_oserror *_kernel_peek_last_oserror(void);
 
 /* HIDDEN EXPORTS */
 void _main(char *s, int (*main)(int, char **));
 void _backtrace(int why, int *address, _kernel_unwindblock *uwb);
 const char *_clib_version(void);
+int _sys_msg_1(const char *s, const char *but);
+int _desktop_task(void);
 
 #define str(x)  #x
 #define xstr(x) str(x)
@@ -135,9 +139,118 @@ time_t time(time_t *timer)
 
 #define istty(fh) ((fh) == TTYHANDLE)
 
+/*
+ * We're a desktop task if we're in user mode, TaskWindow_TaskInfo 0 returns 0 (or an error),
+ * and Wimp_ReadSysInfo 3 says we're in the desktop, and Wimp_ReadSysInfo 5 gives us a
+ * task handle.
+ */
+int _desktop_task()
+{
+    int h = 0;
+    if (_kernel_processor_mode() & 0xF) return 0;
+    _swix(TaskWindow_TaskInfo, _IN(0)|_OUT(0), 0, &h);
+    if (h) return 0;
+    _swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 3, &h);
+    if (h == 0) return 0;
+    _swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 5, &h);
+    return h;
+}
+
+static int _desktop_report(const char *s, const char *but)
+{
+    _kernel_oserror err, *e;
+    const char *n = NULL;
+    char *p, *end;
+    int flags, r, h = _desktop_task();
+    if (h == 0) return 0;
+
+    flags = 0x102; /* New error, cancel button */
+
+    if ((e = _kernel_last_oserror()) != NULL && s == e->errmess)
+    {
+        flags |= 2 << 9;
+    }
+    else
+    {
+        while (*s == ' ')
+            s++;
+
+        if (s[0] == '*') /* If leading '*'s then make it a serious one */
+        {
+            while (*s == '*' || *s == ' ') /* Strip off the '*'s */
+                s++;
+            flags |= 3 << 9;
+            err.errnum = 0x1B << 24;
+        }
+        else
+        {
+            flags |= 2 << 9;
+            err.errnum = 0;
+        }
+
+        for (p = err.errmess, end = err.errmess + sizeof err.errmess - 1; p < end && *s >= ' '; )
+            *p++ = *s++;
+
+        *p = '\0';
+        err.errmess[0] = toupper(err.errmess[0]);
+
+        e = &err;
+    }
+    _swix(TaskManager_TaskNameFromHandle, _IN(0)|_OUT(0), h, &n);
+
+    r = 0;
+    _swix(Wimp_ReportError, _INR(0,5)|_OUT(1), e, flags, n, NULL, 1, but, &r);
+    return r;
+}
+
+bool _sys__assert(const char *s, const char *expr, const char *file, int line)
+{
+    char buffer[252];
+    int len, exprlen, filelen;
+
+    if (!istty(stderr->__file)) return false;
+
+    if (!_desktop_task()) return false;
+
+    if (strlen(s) > 200) return false; /* Be safe */
+
+    len = sprintf(buffer, s, "", "", line);
+    exprlen = strlen(expr);
+    filelen = strlen(file);
+    if (len + exprlen + filelen < 251)
+    {
+        sprintf(buffer, s, expr, file, line);
+    }
+    else
+    {
+        char expr2[200];
+        char file2[100];
+
+        #define min(a,b) a<b?a:b
+        exprlen = min(exprlen, 199);
+        filelen = min(filelen, 99);
+        filelen = min(filelen, 251-len-exprlen);
+        if (filelen < 0) filelen = 0;
+        exprlen = min(exprlen, 251-len-filelen);
+        memcpy(expr2, expr, exprlen);
+        memcpy(file2, file, filelen);
+        expr2[exprlen]='\0';
+        file2[filelen]='\0';
+        sprintf(buffer, s, expr2, file2, line);
+    }
+    return _desktop_report(buffer, NULL);
+}
+
 static int _error_recursion;
-void _sys_msg(const char *s)
-{   /* write out s carefully for intimate system use.                      */
+int _sys_msg_1(const char *s, const char *but)
+{
+    if (istty(stderr->__file))
+    {
+        int r = _desktop_report(s, but);
+        if (r) return r;
+    }
+
+    /* write out s carefully for intimate system use.                      */
     if ((stderr->__flag & _IOWRITE) && !_error_recursion)
     {
         _error_recursion = 1;
@@ -152,6 +265,13 @@ void _sys_msg(const char *s)
         _ttywrite((unsigned char *)s, strlen(s), 0);
         _ttywrite((unsigned char *)"\n", 1, 0);
     }
+
+    return 0;
+}
+
+void _sys_msg(const char *s)
+{
+    _sys_msg_1(s, NULL);
 }
 
 #define LF '\n'
@@ -181,9 +301,8 @@ FILEHANDLE _sys_open(const char *filename, int openmode)
         (openmode & OPEN_W) ||
         (openmode & ~OPEN_B) == OPEN_A)           /* or mode = w, w+, or a */
     {   if (_kernel_osfile(9, name, &fb) == _kernel_ERROR)
-        {   if (_kernel_last_oserror()->errnum == 0x108c9)
-            {   (void)_kernel_osfile(9, name, &fb); /* to restore the error */
-                errno = -1;
+        {   if (_kernel_peek_last_oserror()->errnum == 0x108c9)
+            {   errno = -1;
                 return NONHANDLE;                       /* (Protected disc) */
             }
         }

@@ -33,6 +33,7 @@
         EXPORT  |_kernel_osargs|
         EXPORT  |_kernel_oscli|
         EXPORT  |_kernel_last_oserror|
+        EXPORT  |_kernel_peek_last_oserror|
         EXPORT  |_kernel_system|
         EXPORT  |_kernel_getenv|
         EXPORT  |_kernel_setenv|
@@ -74,8 +75,15 @@
         EXPORT  |_kernel_call_client|
         EXPORT  |_kernel_raise_error|
 
+        EXPORT  |__rt_sdiv|
+        EXPORT  |__rt_udiv|
         EXPORT  |__rt_udiv10|
         EXPORT  |__rt_sdiv10|
+
+        EXPORT  |x$divide|
+        EXPORT  |x$udivide|
+        EXPORT  |x$remainder|
+        EXPORT  |x$uremainder|
 
         EXPORT  |__counter|
 
@@ -705,7 +713,7 @@ ABEXString
 ; tacked on the end.
 
 IIHandlerInDataInitValue
-        STMFD   r13!, {r0, r12}
+        STMFD   r13!, {r0-r4, r12, r14, pc}
         SUB     r12, pc, #O_IIHandlerInData+12
 
 ; Now the bits of the abort handlers which get executed from the code.
@@ -714,81 +722,88 @@ IIHandlerInDataInitValue
 
 IIHandler Keep
         SUB     r14, r14, #4
-        ADR     r0, E_IllegalInstruction
+        STR     r14, [r12, #O_registerDump + 15 * 4]
+
+        LDR     r14, [r12, #O_oldAbortHandlers + 0]
+        STR     r14, [r13, #28]
         B       Aborted
 
+
 PAHandlerInDataInitValue
-        STMFD   r13!, {r0, r12}
+        STMFD   r13!, {r0-r4, r12, r14, pc}
         SUB     r12, pc, #O_PAHandlerInData+12
 PAHandler Keep
         SUB     r14, r14, #4
-        ADR     r0, E_PrefetchAbort
+        STR     r14, [r12, #O_registerDump + 15 * 4]
+
+        LDR     r14, [r12, #O_oldAbortHandlers + 4]
+        STR     r14, [r13, #28]
         B       Aborted
 
 DAHandlerInDataInitValue
-        STMFD   r13!, {r0, r12}
+        STMFD   r13!, {r0-r4, r12, r14, pc}
         SUB     r12, pc, #O_DAHandlerInData+12
 DAHandler Keep
         SUB     r14, r14, #8
-        ADR     r0, E_DataAbort
+        STR     r14, [r12, #O_registerDump + 15 * 4]
+
+        LDR     r14, [r12, #O_oldAbortHandlers + 8]
+        STR     r14, [r13, #28]
         B       Aborted2
 
 AEHandlerInDataInitValue
-        STMFD   r13!, {r0, r12}
+        STMFD   r13!, {r0-r4, r12, r14, pc}
         SUB     r12, pc, #O_AEHandlerInData+12
 AEHandler Keep
         SUB     r14, r14, #8
-        ADR     r0, E_AddressException
+        STR     r14, [r12, #O_registerDump + 15 * 4]
+
+        LDR     r14, [r12, #O_oldAbortHandlers + 12]
+        STR     r14, [r13, #28]
 ;       B       Aborted2
 
 Aborted2 Keep
 ; Abort which may be in the FP emulator, and if so should be reported
 ; as occurring at the instruction being emulated.
 ; Try the FPEmulator_Abort SWI
-        STMFD   sp!, {r0-r2, r14}
+
+        LDR     r2, [sp, #24]
       [ {CONFIG}=26
-        BIC     r14, r14, #PSRBits
+        BIC     r2, r2, #PSRBits
       |
-        MOV     r0, #0
-        MRS     r0, CPSR
-        TST     r0, #2_11100
-        BICEQ   r14, r14, #PSRBits
+        TEQ     pc, pc
+        BICNE   r2, r2, #PSRBits
       ]
         MOV     r0, #-2                 ; current context
         LDR     r1, [sp, #20]           ; original r12
-        ADD     r2, r14, #8             ; original r14
+        ADD     r2, r2, #8              ; original r14
         SWI     XFPEmulator_Abort
         BVS     NoFPEAbortSWI
         TEQ     r0, #0
-        LDMEQFD sp!, {r0-r2, r14}
+        LDMEQFD sp, {r0-r2}
         BEQ     Aborted                 ; not in FPEmulator
-        STR     r0, [sp, #20]           ; update r12 in stack
-        LDMFD   sp!, {r0-r2, r14}
         B       FPEFault
 
 NoFPEAbortSWI
 ; If in user mode, can't be in FPE
       [ {CONFIG}=26
-        LDR     r1, [sp, #12]
+        LDR     r1, [sp, #24]
         TST     r1, #PSRPrivileged
       |
-        MOV     r2, #0
-        MRS     r2, CPSR
-        TST     r2, #2_11100
-        LDREQ   r1, [sp, #12]
-        ANDEQ   r1, r1, #3              ; obtain aborter's mode from R14
-        MRSNE   r1, SPSR                ; obtain aborter's mode from SPSR
+        TEQ     pc, pc
+        LDRNE   r1, [sp, #24]
+        ANDNE   r1, r1, #PSRMode        ; obtain aborter's mode from R14
+        MRSEQ   r1, SPSR                ; obtain aborter's mode from SPSR
         TST     r1, #PSR32Privileged
       ]
-        LDMEQFD sp!, {r0-r2, r14}
+        LDMEQFD sp, {r0-r4}
         BEQ     Aborted
 
 ; Otherwise, find out where the FPE module is
       [ {CONFIG} <> 26
         TST     r2, #2_11100
       ]
-        LDMFD   sp!, {r0-r2, r14}
-        STMFD   sp!, {r0 - r6, r14}
+        STMFD   sp!, {r0 - r6}
       [ {CONFIG} = 26
         BIC     r6, r14, #PSRBits
       |
@@ -798,65 +813,60 @@ NoFPEAbortSWI
         MOV     r0, #18
         ADR     r1, FPEName
         SWI     Module
-        LDMVSFD sp!, {r0 - r6, r14}
+        LDMVSFD sp!, {r0 - r6}
         BVS     Aborted
 ; (r3 = code base of FPE; word before is length of FPE code)
         CMP     r6, r3
         LDRGE   r4, [r3, #-4]
         ADDGE   r3, r3, r4
         CMPGE   r3, r6
-        LDMFD   sp!, {r0 - r6, r14}
+        LDMFD   sp!, {r0 - r6}
         BLT     Aborted
 
 ; It was a storage fault in the FP emulator.
-; We assume FPEmulator 4.00 or later - r12 in the register dump
+; We assume FPEmulator 4.00 or later - r0
 ; will point to a full register save. The format differs slightly
 ; depending on whether the FPEmulator is 32-bit or not. If we're
 ; in a 32-bit mode, we know the FPEmulator will be. If not, check
 ; to see if the saved r12 is in the UND stack.
 FPEFault
-        LDR     r1, [r13, #4]           ; r1 -> FPE stack frame
-        ADD     r13, r13, #8            ; pop the saved values of r0 and r12
         ADD     r14, r12, #O_registerDump
-        LDMIA   r1!, {r2-r9}            ; copy R0-R15
-        STMIA   r14!, {r2-r9}
-        LDMIA   r1!, {r2-r9}
-        SUB     r9, r9, #4
-        STMIA   r14!, {r2-r9}
+        LDMIA   r0!, {r1-r4}            ; copy R0-R15
+        STMIA   r14!, {r1-r4}
+        LDMIA   r0!, {r1-r4}
+        STMIA   r14!, {r1-r4}
+        LDMIA   r0!, {r1-r4}
+        STMIA   r14!, {r1-r4}
+        LDMIA   r0!, {r1-r4}
+        SUB     r4, r4, #4              ; adjust PC back 4
+        STMIA   r14!, {r1-r4}
       [ {CONFIG}<>26
-        MOV     r2, #0
-        MRS     r2, CPSR
-        TST     r2, #2_11100
-        BNE     FPEFault_32on32
+        TEQ     pc, pc
+        BEQ     FPEFault_32on32
       ]
         LDR     r3, [r12, #O_undStack]
         MOV     r2, r1, LSR #20         ; we're on a 26-bit system
         TEQ     r2, r3, LSR #20         ; is the stack frame in the UND stack?
         BEQ     FPEFault_32on26
 FPEFault_26on26
-        MOV     sp, r1                  ; pull the SVC stack up
-        B       AbortFindHandler
+        B       FPEFault_Continue
 
 FPEFault_32on26
-        LDR     r2, [r1, #-72]          ; get the SPSR
+        LDR     r2, [r0, #-72]          ; get the SPSR
         AND     r2, r2, #PSRBits
-        BIC     r9, r9, #PSRBits
-        ORR     r9, r9, r2
-        STR     r9, [r14, #-4]          ; merge it with pc in register dump
-        B       FPEFault_32
+        BIC     r4, r4, #PSRBits
+        ORR     r4, r4, r2
+        STR     r4, [r14, #-4]          ; merge it with pc in register dump
+      [ {CONFIG}<>26
+        B       FPEFault_Continue
 
 FPEFault_32on32
         LDR     r2, [r1, #-72]          ; get the SPSR
         STR     r2, [r14]               ; store it in the register dump
+      ]
 
-FPEFault_32
-        MRS     r2, CPSR
-        BIC     r3, r2, #PSR32Mode
-        ORR     r3, r3, #PSR32IBit + PSR32UNDMode
-        MSR     CPSR_c, r3
-        MOV     sp, r1                  ; pull the UND stack up
-        MSR     CPSR_c, r2
-        B       AbortFindHandler
+FPEFault_Continue
+        LDMFD   r13!, {r0-r4, r12, r14, pc}
 
         ErrorBlock  PrefetchAbort,      "Prefetch Abort", C60
         ErrorBlock  DataAbort,          "Data Abort", C61
@@ -866,59 +876,49 @@ FPEName =       "FPEmulator",0
         ALIGN
 
 Aborted Keep
-; entry here in SVC26, SVC32, ABT32 or UND32 mode
-; r0 a pointer to an error block describing the abort.
-; all user registers except r0, r12 are as at the time of the abort.
-; r0 & r12 are on the stack.
-; First, save all user registers in registerDump.
-        STMFD   r13!, {r14}         ; remember the abort pc
-        BL      |_kernel_copyerror|
         ADD     r14, r12, #O_registerDump
-
   [ SASTMhatbroken
-	STMIB	r14!, {r1-r12}
-	STMIB	r14, {r13,r14}^
-	NOP
-	SUB	r14, r14, #12*4
+        STMIA   r14!, {r0-r12}
+        STMIA   r14, {r13,r14}^
+        NOP
+        SUB     r14, r14, #13*4
   |
-        STMIB   r14, {r1-r14}^
+        STMIA   r14, {r0-r14}^
+        NOP
   ]
 
-        LDMFD   r13!, {r1, r2, r3}      ; abort PC, R0, R12
+        LDR     r0, [r13, #20]
+        STR     r0, [r14, #r12*4]
 
-        MOV     r6, r14                 ; switch it to a non-banked register
-        MOV     r4, #0
-        MRS     r4, CPSR
-        TST     r4, #2_11100
-        ANDEQ   r5, r1, #3              ; obtain aborter's mode from R14
-        MRSNE   r5, SPSR                ; obtain aborter's mode from SPSR
-        STRNE   r5, [r14, #16*4]        ; store aborter's SPSR if in 32-bit mode
-        BICNE   r4, r4, #PSR32Mode
-        ORRNE   r4, r4, #PSR32SVCMode
-        MSRNE   CPSR_c, r4              ; switch to SVC32 (already in SVC26 if 26bit)
-        TST     r5, #PSR32Privileged
-        LDRNE   r1, [r6, #lr*4]         ; if aborted in a privileged mode, save
-        STR     r1, [r6, #pc*4]         ; PC as user R14
-        STR     r2, [r6, #r0*4]
-        STREQ   r3, [r6, #r12*4]
-        BEQ     AbortFlattenStacks
-        LDR     r4, [r12, #O_svcStack]
-        SUB     r1, r4, sp
-        CMP     r1, #3 * 4
-        BCC     AbortFlattenStacks
-        LDMEA   r4, {r1, r2, r3}
-        ADD     r4, r6, #10 * 4
-        STMIA   r4, {r1, r2, r3}
-
-; should really fall through to error handler and let the OS clean up,
-; but this is a lot better than it was!
-AbortFlattenStacks
-        MRS     r4, CPSR                ; MRS and MSR here will be NOPs on
-        ORR     r1, r4, #PSR32UNDMode   ; ARM2/3, so we'll end up setting
-        MSR     CPSR_c, r1              ; R13_svc twice; just make sure
-        LDR     sp, [r12, #O_undStack]  ; we set the real value last.
-        MSR     CPSR_c, r4
-        LDR     sp, [r12, #O_svcStack]
+        MOV     r3, pc
+        AND     r3, r3, #PSRBits
+        MRS     r3, CPSR
+        TST     r3, #2_11100
+        LDREQ   r0, [sp, #24]
+        ANDEQ   r0, r0, #PSRMode        ; obtain aborter's mode from R14
+        MRSNE   r0, SPSR                ; obtain aborter's mode from SPSR
+        STRNE   r0, [r14, #16*4]        ; store aborter's SPSR if in 32-bit mode
+        TST     r0, #PSR32Privileged
+        BEQ     NotPrivileged
+        LDR     r0, [r14, #r14*4]       ; if abort in a privileged mode, save
+        STR     r0, [r14, #pc*4]        ; PC as user R14
+        LDR     r0, [r12, #O_svcStack]  ; switch to SVC mode and look at R13_svc
+        TEQ     pc, pc
+        MSREQ   CPSR_c, #PSR32SVCMode
+        TEQNEP  pc, #PSRSVCMode
+        NOP
+        SUB     r12, r0, sp
+        CMP     r12, #3 * 4
+        BLT     NotPrivileged
+        LDMDB   r0, {r0-r2}             ; Pull R10-R12 off of top of SVC stack
+        ADD     r4, r14, #10 * 4        ; if there were at least 3 words on it
+        STMIA   r4, {r0-r2}
+        TEQ     pc, pc
+        MSREQ   CPSR_cxs, r3
+        TEQNEP  pc, r3
+        NOP
+NotPrivileged
+        LDMFD   r13!, {r0-r4, r12, r14, pc}
 
 AbortFindHandler Keep
 ; We can only call an abort handler if we had a stack at the
@@ -1479,19 +1479,26 @@ ErrorHandler Keep
 ; Since it would be nice to preserve as much as possible for the FP fault case
 ; we switch back to SWI mode to save the registers.
         SWI     EnterSVC
-        ADD     r14, r0, #O_registerDump
 
+        LDR     r14, [r0, #O_errorNumber]
+        TEQ     r14, #Error_IllegalInstruction
+        TEQNE   r14, #Error_PrefetchAbort
+        TEQNE   r14, #Error_DataAbort
+        TEQNE   r14, #Error_AddressException
   [ SASTMhatbroken
-	STMIA	r14!, {r0-r12}
-	STMIA	r14, {r13,r14}^
-	NOP
-	SUB	r14, r14, #13*4
+        ADDNE   r14, r0, #O_registerDump
+        STMNEIA r14!, {r0-r12}
+        STMNEIA r14, {r13,r14}^
+        NOP
+        SUBNE   r14, r14, #13*4
   |
-        STMIA   r14, {r0-r14}^
+        STMNEIA r14, {r0-r14}^
   ]
 
         MOV     r12, r0
         ADD     r0, r0, #O_errorNumber
+        BEQ     AbortFindHandler
+
         LDMDA   r0, {r1, r2}            ; r1 is error pc, r2 error number
         MOV     r14, #0
         STR     r14, [r12, #O_registerDump+16*4]        ; zero PSR
@@ -1568,13 +1575,20 @@ EndFastEventHandlers
 
 EscapeHandler Keep
         TSTS    r11, #&40
-        MOVEQ   pc, r14         ; ignore flag going away
+        BNE     haveEscape
+        STMFD   r13!, {r0}
+        MOV     r0, #0
+        STRB    r0, [r12, #O_hadEscape]
+        LDMFD   r13!, {r0}
+        MOV     pc, r14         ; ignore flag going away
 
+haveEscape
         ; In Arthur, it is NEVER safe to call a handler now: we always have to
         ; wait for CallBack.
         STMFD   r13!, {r0}
         MOV     r0, #-1
         STRB    r0, [r12, #O_hadEscape]
+        LDRB    r0, [r12, #O_eventCode]
         STRB    r0, [r12, #O_escapeSeen]
         STR     r0, [r12, #O_eventCode]
         LDRB    r11, [r12, #O_callbackInactive]
@@ -1638,9 +1652,12 @@ Event_NoStackForHandler
         MOV     r1, #0
         STRB    r1, [v6, #O_hadEscape]
         LDR     v1, [v6, #O_eventCode]
+        TEQ     r0, #0                  ; if hadEscape = 0
+        CMPEQ   v1, #-1                 ; and it's an escape event
+        BEQ     %FT02                   ; then the escape's gone.
         CMP     r0, #0
         BEQ     %FT01
-        MOV     r0, #&7e
+        MOV     r0, #126                ; acknowledge escape
         SWI     Byte
         MOV     v1, #-1                 ; escape overrides everything else
 01
@@ -1653,7 +1670,7 @@ Event_NoStackForHandler
 
         CMP     r12, #0
         BGE     CallEventHandlers
-
+02
         ADD     r0, v6, #O_registerDump
         B       ReloadUserState
 
@@ -2100,6 +2117,13 @@ ErrorExitV6Stacked
         ADDNE   a1, ip, #O_errorNumber
         MOVNE   a2, #0
         STRNE   a2, [ip, #O_errorBuffer]
+        Return  ,LinkNotStacked
+
+|_kernel_peek_last_oserror|
+        LoadStaticBase ip, a1
+        LDR     a1, [ip, #O_errorBuffer]
+        TEQ     a1, #0
+        ADDNE   a1, ip, #O_errorNumber
         Return  ,LinkNotStacked
 
 |_kernel_system|
@@ -2839,7 +2863,9 @@ StackOverflowFault Keep
  ;* Arithmetic                                                        *
  ;*-------------------------------------------------------------------*
 
+|__rt_udiv|
 |_kernel_udiv|
+|x$udivide|
 ; Unsigned divide of a2 by a1: returns quotient in a1, remainder in a2
 ; Destroys a3 and ip
 
@@ -2899,6 +2925,7 @@ u_sh0   RSBS    ip, a1, a2
 ; codegenerator will call udiv directly and use the result in a2
 
 |_kernel_urem|
+|x$uremainder|
         FunctionEntry
         BL      |_kernel_udiv|
         MOV     a1, a2
@@ -2922,7 +2949,9 @@ u_sh0   RSBS    ip, a1, a2
         Return  ,LinkNotStacked
 
 
+|__rt_sdiv|
 |_kernel_sdiv|
+|x$divide|
 ; Signed divide of a2 by a1: returns quotient in a1, remainder in a2
 ; Quotient is truncated (rounded towards zero).
 ; Sign of remainder = sign of dividend.
@@ -2987,6 +3016,7 @@ s_sh0   RSBS    ip, a1, a2
 ; Signed remainder of a2 by a1: returns remainder in a1
 
 |_kernel_srem|
+|x$remainder|
         FunctionEntry
         BL      |_kernel_sdiv|
         MOV     a1, a2
