@@ -45,6 +45,8 @@ SOURCE	= s.main
 TARGET	= rm.MPEGRes
 
 RESFILES = \
+  ${RDIR}.!Boot		\
+  ${RDIR}.!Help		\
   ${RDIR}.!Run		\
   ${RDIR}.!RunImage	\
   ${RDIR}.!Version	\
@@ -64,19 +66,33 @@ ${TARGET}: ${SOURCE} ${RESFILES}
 
 install: ${RESFILES}
         ${MKDIR} ${INSTDIR}
-        ${CP} ${RDIR}.!Run      ${INSTDIR}.!Run      ${CPFLAGS}
-        ${CP} ${RDIR}.!RunImage ${INSTDIR}.!RunImage ${CPFLAGS}
-        ${CP} ${RDIR}.!Version  ${INSTDIR}.!Version ${CPFLAGS}
-        ${CP} ${RDIR}.DefaultUI ${INSTDIR}.DefaultUI ${CPFLAGS}
-        ${CP} ${RDIR}.icons     ${INSTDIR}.icons     ${CPFLAGS}
+        ${CP} VersionNum         ${INSTDIR}.VersionNum ${CPFLAGS}
+        ${CP} ${RDIR}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
+        ${CP} ${RDIR}.!Help      ${INSTDIR}.!Help      ${CPFLAGS}
+        ${CP} ${RDIR}.!RunImage  ${INSTDIR}.!RunImage  ${CPFLAGS}
+        ${CP} ${RDIR}.DefaultUI  ${INSTDIR}.DefaultUI  ${CPFLAGS}
+        ${CP} ${RDIR}.icons      ${INSTDIR}.icons      ${CPFLAGS}
+        ${CP} ${RDIR}.MPEGError  ${INSTDIR}.MPEGError  ${CPFLAGS}
+        ${CP} ${RDIR}.MPEGResume ${INSTDIR}.MPEGResume ${CPFLAGS}
+        ${CP} ${RDIR}.NPTResume  ${INSTDIR}.NPTResume  ${CPFLAGS}
+        ${CP} ${RDIR}.PlayMPEG   ${INSTDIR}.PlayMPEG   ${CPFLAGS}
+        ${CP} ${RDIR}.PlayMPEGF  ${INSTDIR}.PlayMPEGF  ${CPFLAGS}
+        ${CP} ${RDIR}.WimpComm   ${INSTDIR}.WimpComm   ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 resources: ${RESFILES} ${RDIR}.!RunROM
         ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!RunROM   ${RESAPP}.!Run      ${CPFLAGS}
-        ${CP} ${RDIR}.!RunImage ${RESAPP}.!RunImage ${CPFLAGS}
-        ${CP} ${RDIR}.DefaultUI ${RESAPP}.DefaultUI ${CPFLAGS}
-        ${CP} ${RDIR}.icons     ${RESAPP}.icons     ${CPFLAGS}
+        ${CP} VersionNum         ${RESAPP}.VersionNum ${CPFLAGS}
+        ${CP} ${RDIR}.!RunROM    ${RESAPP}.!Run       ${CPFLAGS}
+        ${CP} ${RDIR}.!RunImage  ${RESAPP}.!RunImage  ${CPFLAGS}
+        ${CP} ${RDIR}.DefaultUI  ${RESAPP}.DefaultUI  ${CPFLAGS}
+        ${CP} ${RDIR}.icons      ${RESAPP}.icons      ${CPFLAGS}
+        ${CP} ${RDIR}.MPEGError  ${RESAPP}.MPEGError  ${CPFLAGS}
+        ${CP} ${RDIR}.MPEGResume ${RESAPP}.MPEGResume ${CPFLAGS}
+        ${CP} ${RDIR}.NPTResume  ${RESAPP}.NPTResume  ${CPFLAGS}
+        ${CP} ${RDIR}.PlayMPEG   ${RESAPP}.PlayMPEG   ${CPFLAGS}
+        ${CP} ${RDIR}.PlayMPEGF  ${RESAPP}.PlayMPEGF  ${CPFLAGS}
+        ${CP} ${RDIR}.WimpComm   ${RESAPP}.WimpComm   ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
