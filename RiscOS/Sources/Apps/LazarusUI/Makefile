@@ -137,7 +137,10 @@ resources: translate
           $(CP) Resources.$(USERIF).$(LOCALE).NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS) \
         Else \
           $(CP) Resources.$(USERIF).UK.NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
-        $(CP) Resources.$(USERIF).$(LOCALE).STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
+        IfThere Resources.$(USERIF).$(LOCALE).STBPrint Then \
+          $(CP) Resources.$(USERIF).$(LOCALE).STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS) \
+        Else \
+          $(CP) Resources.$(USERIF).UK.STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
         
 # Dynamic dependencies:
