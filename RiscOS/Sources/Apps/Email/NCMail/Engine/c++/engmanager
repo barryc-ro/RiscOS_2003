@@ -8,11 +8,11 @@
 #include "stdio.h"
 #include "string.h"
 #include "swis.h"
+#include "limits.h"
 
 #include "DebugLib/DebugLib.h"
 /* #include "NBLib/NBLib.h" */
 
-#include "Email/NetLink/NetLink.h"
 
 #include "engtypes.h"
 #include "engmanager.h"
@@ -23,10 +23,12 @@
 #include "engevent.h"
 #include "enguiapi.h"
 #include "enguser.h"
+#include "engtimers.h"
+#include "engconnect.h"
 
 MailboxDescriptor *ourmboxin, *ourmboxout, *transmbox;
 
-bool online, emailactive, disconnectpending, expungepending = false;
+bool emailactive, expungepending = false;
 uint32 popstatus;
 uint32 smtpstatus;
 uint32 state;
@@ -43,17 +45,15 @@ MarkState markstate;
 
 eng_return statusret;
 
-static uint32 timeouttime = 0, reconnecttime = 0;
 static bool wrapped = false;
 
+static uint32 entID;
 static uint32 nextID = 1;  /* Number to allocate to next message ID.
                               Wrap around to one after 99999999
                               to allow filenames of "M" + 8 chars */
 
 bool SetupState(void)
 {
-
-  char *ptr;
 
   state = IDLE;
   disconnectpending = false;
@@ -86,18 +86,7 @@ bool SetupState(void)
   transmbox->total = 0;
   transmbox->list = 0;
 
-  ptr = GetSysVar("NCMail$Timeout", true);
-  if (ptr)
-  {
-    timeouttime = 6000 * atoi(ptr);
-    free(ptr);
-  }
-  ptr = GetSysVar("NCMail$PollDelay", true);
-  if (ptr)
-  {
-    reconnecttime = 6000 * atoi(ptr);
-    free(ptr);
-  }
+  ReadTimerValues();
 
   return true;
 
@@ -127,7 +116,7 @@ MessageDescriptor *FindDescriptor(uint32 msg_id, MailboxDescriptor *box)
 }
 
 
-MessageDescriptor *NewDescriptor(MessageDescriptor *newmsg, MailboxDescriptor *box)
+MessageDescriptor *NewDescriptor(MessageDescriptor *newmsg, MailboxDescriptor *box, bool owner)
 {
 
   if (!newmsg)
@@ -137,8 +126,6 @@ MessageDescriptor *NewDescriptor(MessageDescriptor *newmsg, MailboxDescriptor *b
       /* no memory */
       return 0;
     }
-
-    ++box->total;
   }
 
   if (wrapped)
@@ -164,19 +151,28 @@ MessageDescriptor *NewDescriptor(MessageDescriptor *newmsg, MailboxDescriptor *b
     wrapped = true;
   }
 
-  if (box->list)
+  if (box)
   {
-    MessageDescriptor *msg = box->list;
-    while (msg->next)
-      msg = msg->next;
-    msg->next = newmsg;
-    newmsg->last = msg;
+    ++box->total;
+    if (box->list)
+    {
+      MessageDescriptor *msg = box->list;
+      while (msg->next)
+        msg = msg->next;
+      msg->next = newmsg;
+      newmsg->last = msg;
+    }
+    else
+    {
+      box->list = newmsg;
+      newmsg->last = 0;
+    }
   }
   else
-  {
-    box->list = newmsg;
     newmsg->last = 0;
-  }
+
+  if (owner)
+    newmsg->flags |= OWNER;
 
   newmsg->next = 0;
 
@@ -189,25 +185,31 @@ void DestroyDescriptor(MessageDescriptor *msg, MailboxDescriptor *box)
 {
 
   dprintf(("Eng", "Destroying descriptor for message %d\n",msg->ID));
-  if ((msg->last == 0) && (msg->next == 0))
+  
+  if (box)
   {
-    /* set descriptor list to null */
-    box->list = 0;
-  }
+    if ((msg->last == 0) && (msg->next == 0))
+    {
+      /* set descriptor list to null */
+      box->list = 0;
+    }
 
-  else if (msg->last == 0)
-  {
-    box->list = msg->next;
-    msg->next->last = 0;
-  }
+    else if (msg->last == 0)
+    {
+      box->list = msg->next;
+      msg->next->last = 0;
+    }
 
-  else if (msg->next == 0)
-    msg->last->next = 0;
+    else if (msg->next == 0)
+      msg->last->next = 0;
 
-  else
-  {
-    msg->last->next = msg->next;
-    msg->next->last = msg->last;
+    else
+    {
+      msg->last->next = msg->next;
+      msg->next->last = msg->last;
+    }
+
+    --box->total;
   }
 
   /*
@@ -218,7 +220,8 @@ void DestroyDescriptor(MessageDescriptor *msg, MailboxDescriptor *box)
   SetFilename(msg->ID, false);
   UnlockFile(msgfilename);
   remove(msgfilename);
-  if (msg->elibobj)
+  RemoveEntities(msg);
+  if ((msg->elibobj) && (msg->flags & OWNER))
   {
     delete msg->elibobj;
     msg->elibobj = 0;
@@ -230,10 +233,9 @@ void DestroyDescriptor(MessageDescriptor *msg, MailboxDescriptor *box)
   free(msg->fromreal);
   free(msg->fromaddr);
   free(msg->to);
-  RemoveEntities(msg);
-  free(msg);
-  --box->total;
 
+  free(msg);
+  
 }
 
 
@@ -242,14 +244,20 @@ void RemoveEntities(MessageDescriptor *msg)
 
   EntityDescriptor *ent, *thisent;
 
+  dprintf(("Eng", "Entering RemoveEntities for message %d\n",msg->ID));
   ent = msg->entity_list;
   while (ent)
   {
     thisent = ent;
     free(ent->typestr);
     free(ent->charset);
-    UnlockFile(ent->fname);
-    free(ent->fname);
+    if (ent->flags & ENTITY_RFC822)
+      DestroyDescriptor(ent->data.msg, 0);
+    else
+    {
+      UnlockFile(ent->data.fname);
+      free(ent->data.fname);
+    }
     ent = ent->next;
     free(thisent);
     /* entity object in ELib will have been removed when
@@ -272,10 +280,15 @@ EntityDescriptor *NewEntity(MessageDescriptor *msg, enttype t)
     return 0;
   }
 
-  if ((newent->fname = malloc(20)) == 0)
+  newent->ID = entID++;
+  if (t != entmsg)
   {
-    dprintf(("Eng", "***ERROR*** Not enough memory for entity filename\n"));
-    return 0;
+    if ((newent->data.fname = malloc(20)) == 0)
+    {
+      dprintf(("Eng", "***ERROR*** Not enough memory for entity filename\n"));
+      return 0;
+    }
+    sprintf(newent->data.fname, (t == entread) ? "NCMailStore:Ent%d\0" : "NCMailStore:Rep%d\0", newent->ID);
   }
 
   if (msg->entity_num)
@@ -288,70 +301,19 @@ EntityDescriptor *NewEntity(MessageDescriptor *msg, enttype t)
   else
     msg->entity_list = newent;
 
-  newent->ID = msg->entity_num++;
-  sprintf(newent->fname, (t == read) ? "NCMailStore:Ent%d\0" : "NCMailStore:Rep%d\0", newent->ID);
+  ++msg->entity_num;
   newent->next = 0;
-  dprintf(("Eng", "Creating new entity %d at 0x%x\n",newent->ID,newent));
+/*   dprintf(("Eng", "Creating new entity %d at 0x%x\n",newent->ID,newent)); */
 
   return newent;
 
 }
 
 
-void ConnectToISP(void)
+void ResetEntID(void)
 {
 
-  ELib_rcode code;
-
-  state |= CONNECT;
-  /* Request NetLink Cntrl to bring link up. */
-  code = netlink->Connect();
-
-}
-
-
-void DisconnectLine(void)
-{
-
-  /* disconnect from mail servers before taking line down */
-
-  if (!(state & DISCONNECT))
-  {
-    dprintf(("Eng", "About to disconnect line, state = 0x%x\n",state));
-    state |= (PROCESSPOP + PROCESSSMTP + DISCONNECT);
-    smtpprocessstate.context = readytodisconnect;
-    popprocessstate.context = readytodisconnect;
-  }
-
-}
-
-
-void DisconnectServer(void)
-{
-
-  /* disconnect from POP3 server without taking line down */
-
-  if ((!popactive) && (!(state & MARKDELETE)))
-  {
-    dprintf(("Eng", "About to disconnect server, state = 0x%x\n",state));
-    state |= (PROCESSPOP + TIMEOUT);
-    popprocessstate.context = readytodisconnect;
-  }
-
-}
-
-
-void DisconnectFromISP(void)
-{
-
-  ELib_rcode code;
-
-  dprintf(("Eng", "Disconnecting from ISP\n"));
-  /*
-  ** Mail servers have now been disconnected,
-  ** so request NetLink Cntrl to take link down.
-  */
-  code = netlink->Disconnect();
+  entID = 0;
 
 }
 
@@ -360,87 +322,6 @@ void eng_debug_show_status(void)
 {
 
   dprintf(("Eng", "Engine state: 0x%x\n",state));
-
-}
-
-
-void StartRetryCount(void)
-{
-
-  int t;
-
-  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
-  t = regs.r[0];
-  dprintf(("Eng", "Starting SMTP retry countdown\n"));
-  nextretry = t + 6000;
-  retryactive = true;
-
-}
-
-
-void StartTimeoutCount(void)
-{
-
-  int t;
-
-  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
-  t = regs.r[0];
-
-  if (timeouttime)
-  {
-    dprintf(("Eng", "Starting timeout countdown\n"));
-    nexttimeout = t + timeouttime;
-    timeoutactive = true;
-  }
-
-}
-
-
-void StartReconnectCount(void)
-{
-
-  int t;
-
-  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
-  t = regs.r[0];
-
-  if (reconnecttime)
-  {
-    dprintf(("Eng", "Starting reconnect countdown\n"));
-    nextreconnect = t + reconnecttime;
-    reconactive = true;
-  }
-
-}
-
-
-void StopRetryCount(void)
-{
-
-  dprintf(("Eng", "Stopping SMTP retry countdown\n"));
-  retryactive  = false;
-  nextretry = 0;
-  smtpprocessstate.attempts = 0;
-
-}
-
-
-void StopTimeoutCount(void)
-{
-
-  dprintf(("Eng", "Stopping timeout countdown\n"));
-  timeoutactive  = false;
-  nexttimeout = 0;
-
-}
-
-
-void StopReconnectCount(void)
-{
-
-  dprintf(("Eng", "Stopping reconnect countdown\n"));
-  reconactive = false;
-  nextreconnect = 0;
 
 }
 
@@ -475,16 +356,118 @@ void DeactivatePOP(void)
   }
 
   else if (disconnectpending)
-  {
-    if (changepending)
-      DisconnectServer();
-    else
-      DisconnectLine();
-  }
+    DisconnectPending();
 
   else
   {
     popactive = false;
     StartTimeoutCount();
+  }
+}
+
+
+void RemoveMessage(void)
+{
+  
+  MessageDescriptor *msgptr = retrievestate.msg;
+
+  if (msgptr)
+  {
+    /*
+    ** Operation is being performed after reading message.
+    ** We can therefore destroy rfc object
+    ** and remove entities from message.
+    */
+    dprintf(("Eng", "Cleaning up read message\n"));
+    RemoveEntities(msgptr);
+    if (msgptr->elibobj)
+    {
+      delete msgptr->elibobj;
+      msgptr->elibobj = 0;
+    }
+    retrievestate.msg = 0;
+  }
+}
+
+
+int32 FreeMem(void)
+{
+
+  if (!cachefs)
+    return INT_MAX;
+
+  regs.r[0] = 5;
+  regs.r[1] = -1;
+  _kernel_swi(OS_DynamicArea,&regs,&regs);
+  return regs.r[2] - 0x200000;
+
+}
+
+
+eng_rcode ClearMemory(uint32 required, bool flag)
+{
+
+  /*
+  ** If we are running on a CacheFS system:
+  ** Remove any message files that can be removed.
+  ** Start at oldest and remove one at a time
+  ** until min is cleared.
+  */
+
+  if (!cachefs)
+    return ENG_NOCACHEFS;
+
+  else if (!ourmboxin->list)
+    return ENG_NOMEMORY;
+
+  else
+  {
+    MessageDescriptor *msgptr = ourmboxin->list, *lastptr;
+    int32 released = FreeMem();
+    int32 size = (int32) required;
+
+    /* find last message in list */
+    while (msgptr)
+    {
+      lastptr = msgptr;
+      msgptr = msgptr->next;
+    }
+
+    /*
+    ** Go through message list from last message backwards
+    ** to see if enough memory can be released by removing messages.
+    */
+    while ((released < size) && (lastptr))
+    {
+      if ((lastptr->flags & DOWNLOADED) && (!(lastptr->flags & NEW)))
+      {
+        SetFilename(lastptr->ID, false);
+        released += GetFileLength(msgfilename);
+      }
+      lastptr = lastptr->last;
+    }
+
+    if (released >= size)
+    {
+      /* enough memory available so remove message files */
+      msgptr = (lastptr == 0) ? ourmboxin->list : lastptr->next;
+
+      while (msgptr)
+      {
+        if ((msgptr->flags & DOWNLOADED) && (!(msgptr->flags & NEW)))
+        {
+          SetFilename(msgptr->ID, false);
+          UnlockFile(msgfilename);
+          remove(msgfilename);
+          msgptr->flags &= ~DOWNLOADED;
+          if (flag)
+            msgptr->flags |= REMOVED;
+          dprintf(("Eng", "Removing message %d to make more room\n",msgptr->ID));
+        }
+        msgptr = msgptr->next;
+      }
+    }        
+
+    return ((released >= size) ? ENG_COMPLETED : ENG_NOMEMORY);
   }
 }

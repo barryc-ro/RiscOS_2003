@@ -1,0 +1,226 @@
+/*
+** Email Engine
+** Timer routines
+*/
+
+#include "swis.h"
+#include "kernel.h"
+#include "stdlib.h"
+
+#include "DebugLib/DebugLib.h"
+
+#include "engprocess.h"
+#include "enginit.h"
+#include "engmanager.h"
+#include "engtimers.h"
+#include "engstr.h"
+#include "engconnect.h"
+
+static uint32 timeouttime = 0, reconnecttime = 0;
+static int nexttimeout = 0, nextreconnect = 0, nextretry = 0;;
+static bool timeoutactive = false, reconactive = false, retryactive = false;
+
+
+bool CheckTimers(void)
+{
+
+  int tt;
+
+  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+  tt = regs.r[0];
+
+  if (reconactive)
+  {
+    if (tt >= nextreconnect)
+    {
+      dprintf(("Eng", "Reconnect due\n"));
+      if (state != IDLE)
+        nextreconnect += 1500;
+      else if (online)
+        StartProcess();
+      return true;
+    }
+  }
+
+  if (timeoutactive)
+  {
+    if (tt >= nexttimeout)
+    {
+      dprintf(("Eng", "Timeout due\n"));
+      StopTimeoutCount();
+
+      /*
+      ** If we're not in a disconnect state, and if there's not a
+      ** reconnect due within one minute, disconnect from server.
+      */
+      if (!((state & DISCONNECT) || ((reconactive) && ((nextreconnect - tt) < 6000))))
+        DisconnectServer();
+      return true;
+    }
+  }
+
+  if (retryactive)
+  {
+    if (tt >= nextretry)
+    {
+      dprintf(("Eng", "Retry due\n"));
+      retryactive  = false;
+      nextretry = 0;
+      StartOffSMTP();
+      return true;
+    }
+  }
+
+  return false;
+
+}
+
+
+/*
+** NextTime() calculates when the next timer will time out. There are
+** potentially three timers running at the same time - POP3 timeout,
+** POP3 reconnect, and SMTP retry.
+*/
+
+int NextTime(void)
+{
+
+  int temp;
+
+  if (nexttimeout == 0)
+    temp = nextreconnect;
+  else if (nextreconnect == 0)
+    temp = nexttimeout;
+  else
+    temp = (nexttimeout < nextreconnect) ? nexttimeout : nextreconnect;
+
+  if (temp == 0)
+    return nextretry;
+  else if (nextretry == 0)
+    return temp;
+  else
+    return (temp < nextretry) ? temp : nextretry;
+
+}
+
+
+bool TimerActive(void)
+{
+  
+  return (bool) ((timeoutactive | reconactive | retryactive) != 0);
+
+}
+
+
+void StartRetryCount(void)
+{
+
+  int t;
+
+  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+  t = regs.r[0];
+  dprintf(("Eng", "Starting SMTP retry countdown\n"));
+  nextretry = t + 6000;
+  retryactive = true;
+
+}
+
+
+void StartTimeoutCount(void)
+{
+
+  int t;
+
+  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+  t = regs.r[0];
+
+  if (timeouttime)
+  {
+    dprintf(("Eng", "Starting timeout countdown\n"));
+    nexttimeout = t + timeouttime;
+    timeoutactive = true;
+  }
+
+}
+
+
+void StartReconnectCount(void)
+{
+
+  int t;
+
+  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+  t = regs.r[0];
+
+  if (reconnecttime)
+  {
+    dprintf(("Eng", "Starting reconnect countdown\n"));
+    nextreconnect = t + reconnecttime;
+    reconactive = true;
+  }
+
+}
+
+
+void StopRetryCount(void)
+{
+
+  dprintf(("Eng", "Stopping SMTP retry countdown\n"));
+  retryactive  = false;
+  nextretry = 0;
+  smtpprocessstate.attempts = 0;
+
+}
+
+
+void StopTimeoutCount(void)
+{
+
+  dprintf(("Eng", "Stopping timeout countdown\n"));
+  timeoutactive  = false;
+  nexttimeout = 0;
+
+}
+
+
+void StopReconnectCount(void)
+{
+
+  dprintf(("Eng", "Stopping reconnect countdown\n"));
+  reconactive = false;
+  nextreconnect = 0;
+
+}
+
+
+void StartCallbackCount(void)
+{
+
+}
+
+
+void StopCallbackCount(void)
+{
+
+}
+
+
+void ReadTimerValues(void)
+{
+
+  char *ptr;
+  
+  ptr = GetSysVar("NCMail$Timeout", true);
+  if (ptr)
+  {
+    timeouttime = 6000 * atoi(ptr);
+    free(ptr);
+  }
+  ptr = GetSysVar("NCMail$PollDelay", true);
+  if (ptr)
+  {
+    reconnecttime = 6000 * atoi(ptr);
+    free(ptr);
+  }
+
+}

@@ -36,6 +36,8 @@
 #include "engparse.h"
 #include "enginit.h"
 #include "enguser.h"
+#include "engtimers.h"
+#include "engconnect.h"
 
 static bool skipped, secondtimeround, newmsgs;
 
@@ -71,7 +73,7 @@ void FinishHeaders(void)
   ** but message list may be incomplete.
   */
   popprocessstate.ret.code = (ourmboxin->flags & MBOXINCOMPLETE) ? ENG_MBOXINCOMPLETE : ENG_COMPLETED;
-  if (newmsgs)
+  if ((newmsgs) || (ourmboxin->flags & CHANGED))
   {
     dprintf(("Eng", "Notifying UI that it can display Inbox\n"));
     (*callbacklist.promptfunc)(&popprocessstate.ret, ourmboxin->list, online, callbacklist.prompthandle);
@@ -82,12 +84,7 @@ void FinishHeaders(void)
 #endif
 
   if (disconnectpending)
-  {
-    if (changepending)
-      DisconnectServer();
-    else
-      DisconnectLine();
-  }
+    DisconnectPending();
 
   else if (emailactive)
   {
@@ -346,9 +343,7 @@ void DoDownloadMessage(void)
 
   ELib_rcode code;
   MessageDescriptor *msg = downloadstate.msg;
-  int32 freemem;
-
-  eng_mem_available(&freemem);
+  int32 freemem = FreeMem();
 
   switch (downloadstate.context)
   {
@@ -390,11 +385,7 @@ void DoDownloadMessage(void)
         dprintf(("Eng", "Picking up disconnectpending while downloading\n"));
 
         DownloadCleanup();
-
-        if (changepending)
-          DisconnectServer();
-        else
-          DisconnectLine();
+        DisconnectPending();
       }
 
       else if (msg->flags & (DOWNLOADED | DOWNLOADING | REMOVED))
@@ -441,7 +432,7 @@ void DoDownloadMessage(void)
             ok = false;
             if ((msg->flags & NEW) && (reprocess))
             {
-              if (eng_clear_memory(downloadstate.size, true) != ENG_NOMEMORY)
+              if (ClearMemory(downloadstate.size, true) != ENG_NOMEMORY)
                 ok = true;
             }
           }
@@ -488,36 +479,6 @@ void DoDownloadMessage(void)
       break;
 
   }
-}
-
-
-/*
-** ConfirmConnect() is called as a callback from the UI when
-** the Engine has requested confirmation from the user to
-** reconnect if a message on the server is requested while offline.
-*/
-
-void ConfirmConnect(bool conf, void *h)
-{
-
-  (void)(h);
-  if (conf)
-  {
-    /* user has confirmed connection */
-    dprintf(("Eng", "User has confirmed connection\n"));
-    ActivatePOP();
-    ConnectToISP();
-  }
-
-  else
-  {
-    /* Cancel RETRIEVEMSG state and clean up. */
-    dprintf(("Eng", "User has not confirmed connection\n"));
-    state &= ~(RETRIEVEMSG + DOWNLOADMSG);
-    retrievestate.ret.code = ENG_CONNECTCANCELLED;
-    (*callbacklist.getmsgfunc)(&retrievestate.ret, 0, callbacklist.getmsghandle);
-  }
-
 }
 
 
@@ -594,11 +555,10 @@ void DoRetrieve(void)
 
       else
       {
-        int32 freemem;
-        eng_mem_available(&freemem);
+        int32 freemem = FreeMem();
         if (freemem < (int32) size)
         {
-          if (eng_clear_memory(size, false) == ENG_NOMEMORY)
+          if (ClearMemory(size, false) == ENG_NOMEMORY)
           {
             dprintf(("Eng", "Can't retrieve message - no space left\n"));
             retrievestate.context = retrievefailure;
@@ -684,21 +644,41 @@ void DoRetrieve(void)
         msg->elibobj = retrievestate.rfc;
         retrievestate.context = finished;
       }
+
       else
-        FinishParseMessage();
+      {
+        retrievestate.retrievelist = new RetrieveList();
+        DecodeMessage(retrievestate.msg, retrievestate.rfc);
+        destroy_context(&retrievestate.elibcontext);
+
+        if (retrievestate.ret.rc < 0)
+          retrievestate.context = retrievefailure;
+
+        else
+        {
+          /* get first message descriptor in list */
+          retrievestate.retrievelist->Start();
+          retrievestate.current = (MessageDescriptor *) retrievestate.retrievelist->Current();
+          /* get first entity in this message */
+          retrievestate.ent = retrievestate.current->entity_list;
+          retrievestate.context = readytowrite;
+        }
+      }
 
       break;
 
     case readytowrite :
 
       dprintf(("Eng", "Retrieve context = readytowrite\n"));
-      if (retrievestate.ent)
-        StartWrite();
+      if (retrievestate.ent->flags & ENTITY_RFC822)
+      {
+        dprintf(("Eng", "Not writing this entity - it's a message\n"));
+        retrievestate.context = writedone;
+      }
       else
       {
-        /* all entities written out to file */
-        dprintf(("Eng", "Finished writing entities to file\n"));
-        retrievestate.context = finished;
+        dprintf(("Eng", "Writing out entity %d, msg %d\n",retrievestate.ent->ID,retrievestate.current->ID));
+        StartWrite();
       }
 
       break;
@@ -713,19 +693,41 @@ void DoRetrieve(void)
     case writedone :
 
       dprintf(("Eng", "Retrieve context = writedone\n"));
-      fclose(retrievestate.file);
-      LockFile(retrievestate.ent->fname);
-      retrievestate.ent = retrievestate.ent->next;
-      retrievestate.context = readytowrite;
+      if (!(retrievestate.ent->flags & ENTITY_RFC822))
+      {
+        fclose(retrievestate.file);
+        LockFile(retrievestate.ent->data.fname);
+      }
+
+      if (retrievestate.ent->next)
+      {
+        retrievestate.ent = retrievestate.ent->next;
+        retrievestate.context = readytowrite;
+      }
+
+      else
+      {
+        /* get next message on list */
+        retrievestate.retrievelist->Next();
+        if (retrievestate.retrievelist->Nul())
+          retrievestate.context = finished;
+        else
+        {
+          retrievestate.current = (MessageDescriptor *) retrievestate.retrievelist->Current();
+          /* get first entity in this message */
+          retrievestate.ent = retrievestate.current->entity_list;
+          retrievestate.context = readytowrite;
+        }
+      }
 
       break;
 
     case writefailure :
 
       dprintf(("Eng", "Retrieve context = writefailure\n"));
-      UnlockFile(retrievestate.ent->fname);
-      free(retrievestate.ent->fname);
-      retrievestate.ent->fname = 0;
+      UnlockFile(retrievestate.ent->data.fname);
+      free(retrievestate.ent->data.fname);
+      retrievestate.ent->data.fname = 0;
       msg->flags |= ERROR;
       retrievestate.context = writedone;
 
@@ -736,6 +738,11 @@ void DoRetrieve(void)
       dprintf(("Eng", "Retrieve context = finished\n"));
       /* finished downloading message,
          so we can now return it to the UI */
+      if (retrievestate.retrievelist)
+      {
+        delete retrievestate.retrievelist;
+        retrievestate.retrievelist = 0;
+      }
       state &= ~RETRIEVEMSG;
       if (!(state & (DOWNLOADMSG | PROCESSPOP)))
         DeactivatePOP();
@@ -747,10 +754,7 @@ void DoRetrieve(void)
       if (disconnectpending)
       {
         dprintf(("Eng", "Picking up disconnectpending during retrieve\n"));
-        if (changepending)
-          DisconnectServer();
-        else
-          DisconnectLine();
+        DisconnectPending();
       }
 
       break;

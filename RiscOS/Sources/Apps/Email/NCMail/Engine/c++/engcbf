@@ -2,8 +2,8 @@
 ** Email Engine
 ** Callback functions
 **
-** The routines in this file handle callbacks from NetLink
-** and from various Mailbox processes.
+** The routines in this file handle callbacks
+** from various Mailbox processes.
 */
 
 #include "Email/Mailbox/MBoxCB.h"
@@ -11,9 +11,6 @@
 #include "DebugLib/DebugLib.h"
 #include "NBLib/NBDefs.h"
 /* #include "NBLib/NBLib.h" */
-
-#include "Email/NetLink/NetLink.h"
-#include "Email/NetLink/Permanent.h"
 
 #include "engprocess.h"
 #include "enginit.h"
@@ -25,120 +22,20 @@
 #include "engmanager.h"
 #include "engfile.h"
 #include "enguser.h"
-
-extern "C"
-{
-  #include "../Build/NCMailUI.h"
-}
-
-NetLink *netlink;
-
-/*
-** LineChange() is a callback function for NetLink.
-** It is called whenever a change in the status of the link is reported.
-*/
-
-void LineChange(NetLink::Status status, void *h)
-{
-
-  (void)(h);
-
-  switch (status)
-  {
-    case NetLink::Disconnected :
-
-      dprintf(("Eng", "Receiving NetLink callback - disconnected\n"));
-      online = false;
-      disconnectpending = false;
-      state &= ~(CONNECT + DISCONNECT);
-
-      POPaccount->SetConnectionState(false);
-      SMTPaccount->SetConnectionState(false);
-
-      /* notify UI of line state */
-      ncmui_line_state(false);
-
-      /* stop all countdowns */
-      popactive = false;
-      StopTimeoutCount();
-      StopReconnectCount();
-      StopRetryCount();
-
-      if (changepending)
-        NewUser();
-
-      if (state & PREQUIT)
-      {
-        /* reinstate the shutdown process */
-        RestartPreQuit();
-      }
-      break;
-
-    case NetLink::Connecting :
-
-      dprintf(("Eng", "Receiving NetLink callback - connecting\n"));
-      /************************************
-      *** ATTENTION
-      ************************************/
-      /* are we going to report to UI here? */
-      break;
-
-    case NetLink::Connected :
-
-      dprintf(("Eng", "Receiving NetLink callback - connected\n"));
-      online = true;
-
-      /* notify UI of line state */
-      ncmui_line_state(true);
-
-      /* notify account objects of line state */
-      POPaccount->SetConnectionState(true);
-      SMTPaccount->SetConnectionState(true);
-
-      state &= ~(CONNECT + DISCONNECT);
-      if (state & PREQUIT)
-      {
-        state &= ~PREQUIT;
-        StartOffSMTP();
-      }
-      else if (state & RETRIEVEMSG)
-        retrievestate.context = readytoconnect;
-      else if (emailactive)
-        StartProcess();
-      break;
-
-    case NetLink::Error :
-
-      dprintf(("Eng", "Receiving NetLink callback - error\n"));
-      if (state & RETRIEVEMSG)
-        retrievestate.context = retrievefailure;
-
-      statusret.code = (state & CONNECT) ? ENG_CONNECTIONFAILED : ENG_DISCONNECTFAILED;
-      state &= ~(CONNECT + DISCONNECT);
-      (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, 0);
-      break;
-
-    case NetLink::Disconnecting :
-
-      dprintf(("Eng", "Receiving NetLink callback - disconnecting\n"));
-      /************************************
-      *** ATTENTION
-      ************************************/
-      /* are we going to report to UI here? */
-      break;
-  }
-
-}
+#include "engtimers.h"
 
 
 /*
 ** AnalyseCallback() takes the output from the callback received
 ** by MBoxCallback and sets the correct context depending on
 ** the type of callback (i.e. smtp or pop).
+** It also cancels the callback timeout counter.
 */
 
 void AnalyseCallback(ELib_rcode rc, uint32 handle, uint32 fail, uint32 ok)
 {
+
+  StopCallbackCount();
 
   if (handle == pop)
   {
@@ -157,12 +54,16 @@ void AnalyseCallback(ELib_rcode rc, uint32 handle, uint32 fail, uint32 ok)
     else
       smtpprocessstate.context = ok;
   }
+
+  if (rc == ELIB_RUNNING)
+    StartCallbackCount();
+
 }
 
 
 /*
 ** MBoxCallback() receives callbacks from various Mailbox processes:
-** Connect, Disconnect, Expunge, Process, GetNumMsgs, GetHdrsFile,
+** Connect, Disconnect, Process, Expunge, GetNumMsgs, GetHdrsFile,
 ** GetMsgFile and SetFlags.
 */
 
@@ -183,6 +84,15 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
       dprintf(("Eng", "Receiving Connect callback for %s, rc = %d\n",((handle == pop) ? "POP" : "SMTP"),cb->rc));
 
       AnalyseCallback(cb->rc, handle, connectfailure, connected);
+      
+      if ((handle == pop) && (cb->rc == ELIB_RUNNING) && (!reprocess))
+      {
+        /* report status of connect to user */
+        ProcessStatus stat;
+        stat.flags = 0;
+/*         stat.tag = cb->mboxstate; */
+/*         ncmui_connect_status(stat); */
+      }
 
       break;
 
@@ -225,12 +135,14 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
 
       dprintf(("Eng", "Receiving GetHdrsFile callback, rc = %d\n",cb->rc));
       downloadstate.ret.rc = cb->rc;
+      StopCallbackCount();
+
       if (cb->rc < 0)
       {
         /* error has occurred while fetching headers */
         downloadstate.context = downloadfailure;
       }
-      else if (cb->rc == ENG_COMPLETED)
+      else if (cb->rc == ELIB_COMPLETED)
       {
         SetFilename(downloadstate.msg->ID, true);
         LockFile(msgfilename);
@@ -240,6 +152,7 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
       else
       {
         /* process must be still running */
+        StartCallbackCount();
       }
 
       break;
@@ -247,6 +160,8 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
     case MBoxOpCB::GetMsgFile :
 
       dprintf(("Eng", "Receiving GetMsgFile callback for %s, message %d, rc = %d\n",(handle == DOWNLOADMSG) ? "DOWNLOAD" : "RETRIEVE",(handle == DOWNLOADMSG) ? downloadstate.msg->ID : retrievestate.msg->ID,cb->rc));
+      StopCallbackCount();
+
       if (cb->rc < 0)
       {
         /* error has occurred while fetching message */
@@ -262,7 +177,7 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
         }
       }
 
-      else if (cb->rc == ENG_COMPLETED)
+      else if (cb->rc == ELIB_COMPLETED)
       {
         MessageDescriptor *msg = (handle == DOWNLOADMSG) ? downloadstate.msg : retrievestate.msg;
         msg->flags &= ~DOWNLOADING;
@@ -283,6 +198,7 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
       else
       {
         /* process must be still running */
+        StartCallbackCount();
       }
 
       break;
@@ -290,12 +206,13 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
     case MBoxOpCB::SetFlags :
 
       dprintf(("Eng", "Receiving SetFlags callback, rc = %d\n",cb->rc));
+      StopCallbackCount();
       if (cb->rc < 0)
       {
         /* error has occurred while marking */
         markstate.context = markfailure;
       }
-      else if (cb->rc == ENG_COMPLETED)
+      else if (cb->rc == ELIB_COMPLETED)
         markstate.context = (state & MARKDELETE) ? deletedone : readdone;
 
       break;

@@ -15,9 +15,11 @@
 /* #include "NBLib/NBLib.h" */
 
 #include "Email/EmailLib/rfc822msg.h"
+#include "Email/EmailLib/rfc822.h"
 #include "Email/EmailLib/MIMEentity.h"
 #include "Email/EmailLib/MIMEtext.h"
 #include "Email/EmailLib/MIMEmultip.h"
+#include "Email/EmailLib/MIMEmessage.h"
 #include "Email/EmailLib/date.h"
 #include "Email/EmailLib/entity.h"
 #include "Email/EmailLib/to.h"
@@ -42,6 +44,8 @@
 #ifdef RDW_SPEEDUP_HACK
 static char *rdw_tmp = 0;
 #endif
+
+ELib_rcode DecodeMime(MIMEentity *ent, MessageDescriptor *msg);
 
 
 ELib_rcode GetHeader(char **dest, headers *hdrs, ELIB_HDR_TYPE type)
@@ -269,6 +273,63 @@ void ParseHeaderSlice(void)
 }
 
 
+ELib_rcode GetInboxHeaders(headers *hdrs, MessageDescriptor *msg)
+{
+
+  ELib_rcode rc;
+  uint32 len = 0;
+  from *h = (from *) hdrs->FindHdr(ELIB_HDR_FROM);
+
+  if (!h)
+  {
+    dprintf(("Eng", "Header failed\n"));
+    return ELIB_EFAILED;
+  }
+
+  rc = h->GetRealName(0, len);
+  if (len)
+  {
+    if ((msg->fromreal = malloc(len + 1)) == 0)
+      return ELIB_EMALLOCFAILED;
+
+    else
+    {
+      rc = h->GetRealName(msg->fromreal, len);
+/*       dprintf(("Eng", "Real name = %s\n",msg->fromreal)); */
+    }
+  }
+
+  len = 0;
+  rc = h->GetAddress(0, len);
+  if ((!len) && (!msg->fromreal))
+    return ELIB_EFAILED;
+
+  if (len)
+  {
+    if ((msg->fromaddr = malloc(len + 1)) == 0)
+      return ELIB_EMALLOCFAILED;
+
+    else
+    {
+      rc = h->GetAddress(msg->fromaddr, len);
+/*       dprintf(("Eng", "From addr = %s\n",msg->fromaddr)); */
+    }
+  }
+
+  if ((!msg->fromaddr) && (!msg->fromreal))
+    return ELIB_EFAILED;
+
+  if ((rc = GetHeader(&msg->subject, hdrs, ELIB_HDR_SUBJECT)) < 0)
+    return rc;
+/*   dprintf(("Eng", "Subject = %s\n",msg->subject)); */
+
+  if ((rc = GetDate(&msg->datestruct, hdrs, ELIB_HDR_DATE)) < 0)
+    return rc;
+
+  return ELIB_COMPLETED;
+}
+
+
 /*
 ** FinishParseHeader() puts the required header info into the
 ** message descriptor once EmailLib has parsed the header.
@@ -279,73 +340,26 @@ void FinishParseHeader(void)
 {
 
   ELib_rcode rc;
-  uint32 len = 0;
   MessageDescriptor *msg = parsehdrstate.msg;
 
   dprintf(("Eng", "Finished parsing header for message %d\n",msg->ID));
   /* get headers into descriptor */
   headers *hdrs = parsehdrstate.ent->GetHdrs();
-  from *h = (from *) hdrs->FindHdr(ELIB_HDR_FROM);
 
-  if (!h)
-    parsehdrstate.context = parsefailure;
-
-  else
-  {
-    rc = h->GetRealName(0, len);
-    if (len)
-    {
-      if ((msg->fromreal = malloc(len + 1)) == 0)
-      {
-        parsehdrstate.ret.rc = ELIB_EMALLOCFAILED;
-        parsehdrstate.context = parsefailure;
-      }
-      else
-      {
-        rc = h->GetRealName(msg->fromreal, len);
-/*         dprintf(("Eng", "From Realname = %s\n",msg->fromreal)); */
-      }
-    }
-
-    len = 0;
-    rc = h->GetAddress(0, len);
-    if ((!len) && (!msg->fromreal))
-      parsehdrstate.context = parsefailure;
-    else if (len)
-    {
-      if ((msg->fromaddr = malloc(len + 1)) == 0)
-      {
-        parsehdrstate.ret.rc = ELIB_EMALLOCFAILED;
-        parsehdrstate.context = parsefailure;
-      }
-      else
-      {
-        rc = h->GetAddress(msg->fromaddr, len);
-/*         dprintf(("Eng", "From Address = %s\n",msg->fromaddr)); */
-      }
-    }
-  }
-  if ((!msg->fromaddr) && (!msg->fromreal))
-    parsehdrstate.context = parsefailure;
-
-  if ((rc = GetHeader(&msg->subject, hdrs, ELIB_HDR_SUBJECT)) < 0)
+  if ((rc = GetInboxHeaders(hdrs, msg)) < 0)
   {
     parsehdrstate.context = parsefailure;
     parsehdrstate.ret.rc = rc;
   }
-  else
-  {
-/*     dprintf(("Eng", "Subject = %s\n",(msg->subject) ? msg->subject : "none")); */
-  }
 
-  if ((rc = GetDate(&msg->datestruct, hdrs, ELIB_HDR_DATE)) < 0)
+  if (!reprocess)
   {
-    parsehdrstate.context = parsefailure;
-    parsehdrstate.ret.rc = rc;
-  }
-  else
-  {
-/*     dprintf(("Eng", "Date is %s\n",asctime(msg->datestruct))); */
+    ProcessStatus stat;
+    stat.flags = 0;
+    stat.tag = messagesfound;
+    stat.data.progress.counter = parsehdrstate.count++;
+    stat.data.progress.totalnumber = ourmboxin->total;
+    /* ncmui_connect_status(stat); */
   }
 
   CleanUpParse();
@@ -398,8 +412,8 @@ void DoParseHeader(void)
 ELib_rcode GetRFC822Body(rfc822msg *rfc, MessageDescriptor *msgptr)
 {
 
-  EntityDescriptor *e = NewEntity(msgptr, read);
-/*   dprintf(("Eng", "Content type is not multipart\n")); */
+  EntityDescriptor *e = NewEntity(msgptr, entread);
+
   if (e == 0)
   {
     /* wasn't enough memory */
@@ -413,86 +427,143 @@ ELib_rcode GetRFC822Body(rfc822msg *rfc, MessageDescriptor *msgptr)
 }
 
 
-ELib_rcode ParseMime(MIMEentity *ent, MessageDescriptor *msgptr)
+ELib_rcode DecodeMultipart(MIMEentity *ent, MessageDescriptor *msg)
+{
+
+  ELib_rcode rc = ELIB_COMPLETED;
+  MIMEmultip *multipart;
+  int num, current = 0;
+
+  multipart = (MIMEmultip*) ent;
+  num = multipart->GetNumEntities();
+  while ((current < num) && (rc >= 0))
+    rc = DecodeMime(multipart->GetEntity(current++), msg);
+
+  return rc;
+
+}
+
+
+ELib_rcode CreateEntity(MIMEentity *ent, MessageDescriptor *msg, ELIB_CT contenttype, bool r)
+{
+
+  ELib_rcode rc = ELIB_COMPLETED;
+  EntityDescriptor *e = NewEntity(msg, (r) ? entmsg : entread);
+  if (e == 0)
+  {
+    /* wasn't enough memory */
+    return ELIB_EMALLOCFAILED;
+  }
+
+  headers *hdrs = ent->GetHdrs();
+  e->ent = (entity *) ent;
+  if ((rc = GetType(&e->typestr, hdrs)) >= 0)
+  {
+    dprintf(("Eng", "Content type = %s\n",e->typestr));
+  }
+
+  /*
+  ** If charset for message is not already set,
+  ** set it to this entity's charset if it has one.
+  */
+
+  if (!msg->charset)
+  {
+    if ((rc = GetCharSet(&e->charset, ent)) >= 0)
+    {
+      if (e->charset)
+        msg->charset = e->charset;
+    }
+  }
+
+  /* Set entity flags according to content type */
+
+  switch (contenttype)
+  {
+    case ELIB_CT_TEXT :
+    case ELIB_CT_MESSAGE :
+
+      e->flags |= ENTITY_OK;
+      break;
+
+    case ELIB_CT_MODEL :
+    case ELIB_CT_UNKNOWN :
+
+      e->flags |= ENTITY_BEST;
+      break;
+
+    default :
+
+      e->flags |= ENTITY_NOT_OK;
+      break;
+  }
+
+  if (r)
+    e->flags |= ENTITY_RFC822;
+
+  return rc;
+
+}
+
+
+ELib_rcode DecodeRFC822(MIMEmessage *mimemsg, MessageDescriptor *msg)
+{
+
+  ELib_rcode rc = ELIB_COMPLETED;
+  rfc822 *rfc = mimemsg->GetMessage();
+
+  if (rfc)
+  {
+    MessageDescriptor *newmsg;
+    EntityDescriptor *e = msg->entity_list;
+    while(e->next)
+      e = e->next;
+    if ((newmsg = DecodeMessage(0, rfc)) == 0)
+      return ELIB_EMALLOCFAILED;
+    e->data.msg = newmsg;
+  }
+
+  return rc;
+
+}
+
+    
+ELib_rcode DecodeMime(MIMEentity *ent, MessageDescriptor *msg)
 {
 
   ELib_rcode rc = ELIB_COMPLETED;
   ELIB_CT contenttype;
   int num = 1;
 
-/*   dprintf(("Eng", "Entering ParseMime()\n")); */
   ent->GetMajorType(contenttype);
-/*   dprintf(("Eng", "major content type = %d\n",contenttype)); */
-  if (contenttype == ELIB_CT_MULTIPART)
+
+  switch (contenttype)
   {
-    MIMEmultip *multipart;
-    int current = 0;
-    dprintf(("Eng", "Content type is multipart\n"));
-    multipart = (MIMEmultip*) ent;
-    num = multipart->GetNumEntities();
-/*     dprintf(("Eng", "Number of entities = %d\n",num)); */
-    while ((current < num) && (rc >= 0))
-      rc = ParseMime(multipart->GetEntity(current++), msgptr);
-  }
-  else if (num)
-  {
-    /* Create an entity descriptor for the entity */
-    EntityDescriptor *e = NewEntity(msgptr, read);
-/*     dprintf(("Eng", "Content type is not multipart\n")); */
-    if (e == 0)
-    {
-      /* wasn't enough memory */
-      return ELIB_EMALLOCFAILED;
-    }
+    case ELIB_CT_MULTIPART :
 
-    headers *hdrs = ent->GetHdrs();
-    e->ent = (entity *) ent;
-    if ((rc = GetType(&e->typestr, hdrs)) >= 0)
-    {
-      dprintf(("Eng", "Content type = %s\n",e->typestr));
-    }
+      dprintf(("Eng", "Content type is multipart\n"));
+      if ((rc = DecodeMultipart(ent, msg)) < 0)
+        return rc;
+      break;
 
-/*     dprintf(("Eng", "Number of entities in message = %d\n",msgptr->entity_num)); */
-    /*
-    ** If charset for message is not already set,
-    ** set it to this entity's charset if it has one.
-    */
+    case ELIB_CT_MESSAGE :
 
-    if (!msgptr->charset)
-    {
-      if ((rc = GetCharSet(&e->charset, ent)) >= 0)
-      {
-        if (e->charset)
-          msgptr->charset = e->charset;
-      }
-    }
+      dprintf(("Eng", "Content type is RFC822\n"));
+      /* Create an entity descriptor for the RFC822 message */
+      if ((rc = CreateEntity(ent, msg, contenttype, true)) < 0)
+        return rc;
+      if ((rc = DecodeRFC822((MIMEmessage *) ent, msg)) < 0)
+        return rc;
+      break;
 
-    /* Set entity flags according to content type */
+    default :
 
-    switch (contenttype)
-    {
-      case ELIB_CT_TEXT :
-      case ELIB_CT_MESSAGE :
-
-/*         dprintf(("Eng", "Setting entity flags to OK\n")); */
-        e->flags |= ENTITY_OK;
-        break;
-
-/*       case ELIB_CT_APPLICATION : */
-      case ELIB_CT_MODEL :
-      case ELIB_CT_UNKNOWN :
-
-/*         dprintf(("Eng", "Setting entity flags to BEST\n")); */
-        e->flags |= ENTITY_BEST;
-        break;
-
-      default :
-
-/*         dprintf(("Eng", "Setting entity flags to NOT_OK\n")); */
-        e->flags |= ENTITY_NOT_OK;
-        break;
-    }
-  }
+      dprintf(("Eng", "Content type is not multipart or RFC822\n"));
+      /* Create an entity descriptor for the entity */
+      if ((rc = CreateEntity(ent, msg, contenttype, false)) < 0)
+        return rc;
+      break;
+  } 
 
   return rc;
 }
@@ -555,42 +626,59 @@ void ParseMessageSlice(void)
 }
 
 
-void FinishParseMessage(void)
+MessageDescriptor *DecodeMessage(MessageDescriptor *msg, rfc822 *rfc)
 {
 
   ELib_rcode rc;
-  MIMEentity *ent = retrievestate.rfc->GetMIMEentity();
-  MessageDescriptor *msg = retrievestate.msg;
-  headers *hdrs = retrievestate.rfc->GetHdrs();
+  MIMEentity *ent = rfc->GetMIMEentity();
+  headers *hdrs = rfc->GetHdrs();
+  bool embedded = (bool) (msg == 0);
 
-/*   dprintf(("Eng", "Entering FinishParseMessage(), ent=0x%x\n",ent)); */
+  if (embedded)
+  {
+    msg = NewDescriptor(0, 0, false);
+    if (!msg)
+    {
+      retrievestate.ret.rc = ELIB_EMALLOCFAILED;
+      retrievestate.context = retrievefailure;
+      return 0;
+    }
+  }
+
+  /* add message descriptor to list for writeout process later */
+  retrievestate.retrievelist->Insert((void *) msg);
   msg->entity_num = 0;
   msg->entity_list = 0;
-  msg->elibobj = retrievestate.rfc;
+  msg->elibobj = (rfc822msg *) rfc;
 
+  /* if it's an embedded RFC822, we don't have the headers yet */
+  if (embedded)
+  {
+    dprintf(("Eng", "Getting Inbox headers for embedded object\n"));
+    GetInboxHeaders(hdrs, msg);
+/*     dprintf(("Eng", "CC = %s at 0x%x\n",msg->cc,msg->cc)); */
+  }
+    
   /* get remaining headers */
   rc = GetHeader(&msg->to, hdrs, ELIB_HDR_TO);
-/*     dprintf(("Eng", "To = %s\n",msg->to)); */
 
   rc = GetHeader(&msg->cc, hdrs, ELIB_HDR_CC);
-/*     dprintf(("Eng", "CC = %s\n",msg->cc)); */
 
   rc = GetCharSet(&msg->charset, (entity *) retrievestate.rfc);
-/*     dprintf(("Eng", "charset = %s\n",msg->charset)); */
 
   rc = GetHeader(&msg->datestr, hdrs, ELIB_HDR_DATE);
-/*     dprintf(("Eng", "Date = %s\n",msg->datestr)); */
 
   if (ent == NULL)
-    rc = GetRFC822Body(retrievestate.rfc, msg);
+    rc = GetRFC822Body((rfc822msg *) rfc, msg);
   else
-    rc = ParseMime(ent, msg);
+    rc = DecodeMime(ent, msg);
 
   if (rc >= 0)
   {
     /* if descriptor doesn't now have a charset, set a default */
     if (!msg->charset)
     {
+      dprintf(("Eng", "Setting a default charset\n"));
       if ((msg->charset = malloc(9)) == 0)
         rc = ELIB_EMALLOCFAILED;
       else
@@ -598,20 +686,7 @@ void FinishParseMessage(void)
     }
   }
 
-  /* clean up */
-  destroy_context(&retrievestate.elibcontext);
-
-  if (rc < 0)
-  {
-    retrievestate.ret.rc = rc;
-    retrievestate.context = retrievefailure;
-  }
-
-  else
-  {
-    retrievestate.ent = msg->entity_list;
-    retrievestate.context = readytowrite;
-  }
+  return msg;
 
 }
 
@@ -621,8 +696,6 @@ void WriteOutSlice(void)
 
   clock_t t = clock();
   ELib_rcode rc;
-
-/*   dprintf(("Eng", "Entering WriteOutSlice\n")); */
 
   rc = retrievestate.msgbody->WriteOut(retrievestate.elibcontext, t + 25, retrievestate.file, ELIB_TE_BINARY);
 
@@ -637,7 +710,6 @@ void WriteOutSlice(void)
   else if (rc != ELIB_RUNNING)
   {
     /* writing out has finished */
-/*     dprintf(("Eng", "Finished writing out body\n")); */
     retrievestate.context = writedone;
   }
 
@@ -664,10 +736,9 @@ void StartWrite(void)
 
   else
   {
-    retrievestate.file = fopen(retrievestate.ent->fname, "w");
+    retrievestate.file = fopen(retrievestate.ent->data.fname, "w");
     retrievestate.msgbody = retrievestate.ent->ent->GetBody();
     retrievestate.ent->ent->GetEncoding(retrievestate.enc);
-/*     dprintf(("Eng", "Encoding for entity = %d\n",retrievestate.enc)); */
     retrievestate.context = writing;
   }
 
