@@ -20,16 +20,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "werr.h"
+#include "swis.h"
 
 #include "global.h"
 #include "types.h"
 #include "FrontEnd.h"
+#include "slist.h"
 #include "lexer.h"
 #include "gen.h"
 #include "bool.h"
 #include "FEoptions.h"
 #include "FEinterr.h"
+#include "FEmem.h"
 
 #include "parser.h"
 
@@ -51,28 +53,59 @@ static lexer_token lookahead = {};
 static void parser__RD_dbox(void);
 static void parser__RD_menu(void);
 static void parser__RD_icons(void);
-static void parser__RD_deselections(void);
-static void parser__RD_exclusions(void);
+static void parser__RD_rdsei(int enforce1, int enforce2);
 static void parser__RD_make_exclusions(void);
 static void parser__RD_imports(void);
 static void parser__RD_import(void);
-static void parser__RD_optentry(void);
+static void parser__RD_optentry(BOOL off);
 static void parser__RD_orderis(BOOL order_is);
-
 
 /* ---------------------------------------- general routines ------------------------------- */
 static void parser__error(BOOL wimp_init, char *s, ...)
 {
+   _kernel_oserror e;
    va_list a;
+
+   (void) wimp_init; /* No longer needed - pending command window anyway and Wimp_ReportError is allowed */
+
    va_start(a, s);
-   if (!wimp_init)
+
+   /* Try to report the error with a Wimp error box. If that fails,
+    * try to print it with OS_PrettyPrint to get word wrapping when
+    * inside narrow displays / command windows. If that fails, use
+    * printf.
+    */
+
+   e.errnum = 0;
+
+   /* Yes, this is not very satisfactory - it assumes the message will
+    * fit... But we're about to call exit() anyway ;-)
+    */
+
+   sprintf(e.errmess, "FrontEnd (line %d): ", line_number);
+   vsprintf(e.errmess + strlen(e.errmess), s, a);
+   e.errmess[sizeof(e.errmess) - 1] = '\0';
+
+   if (
+         _swix(Wimp_ReportError,
+               _INR(0,5),
+
+               &e,
+               (1u<<8) | (3u<<9),
+               application.name != NULL && *application.name != '\0' ? application.name : 0,
+               0,
+               0,
+               "Quit")
+
+         != NULL
+      )
    {
-       printf("FrontEnd: line %d: ", line_number);
-       vprintf(s, a);
-       printf("\n");
+      if (_swix(OS_PrettyPrint, _INR(0,2), e.errmess, 0, NULL) != NULL)
+         printf("%s\n", e.errmess);
+      else
+         printf("\n");
    }
-   else
-       werr(FALSE, s, a);
+
    va_end(a);
    exit(EXIT_FAILURE);       /* --- no attempt at error recovery --- */
 }
@@ -168,28 +201,28 @@ static void parser__RD_application(void)
    /* --- the application's name --- */
    parser__checkfor(s_name);
    parser__checkfor(s_string_value);
-   gen_appname(token);
+   gen_appname(&token);
    parser__checkfor(s_semicolon);
 
    /* --- optional command name --- */
    if (parser__match(s_command_is))
    {
       parser__checkfor(s_string_value);
-      gen_appcommand(token);
+      gen_appcommand(&token);
       parser__checkfor(s_semicolon);
    }
 
    /* --- the version string --- */
    parser__checkfor(s_version);
    parser__checkfor(s_string_value);
-   gen_version(token);
+   gen_version(&token);
    parser__checkfor(s_semicolon);
 
    /* --- filetype of input files --- */
    if (parser__match(s_filetype))
    {
        parser__checkfor(s_number_value);
-       gen_filetype(token);
+       gen_filetype(&token);
        parser__checkfor(s_semicolon);
    }
 
@@ -200,7 +233,7 @@ static void parser__RD_application(void)
    if (parser__match(s_wimpslot))
    {
        parser__checkfor(s_number_value);
-       gen_wimpslot(token);
+       gen_wimpslot(&token);
        parser__checkfor(s_k);
        parser__checkfor(s_semicolon);
    }
@@ -222,7 +255,7 @@ static void parser__RD_application(void)
       if (parser__match(s_has_auto_run))
       {
          if (parser__match(s_on))
-             gen_setautorun(token);
+             gen_setautorun(&token);
          parser__checkfor(s_semicolon);
          gen_autorun();
       }
@@ -235,7 +268,7 @@ static void parser__RD_application(void)
          gen_autosave();
 
          if (parser__match(s_on))
-             gen_setautosave(token);
+             gen_setautosave(&token);
 
          while (parser__match(s_hat))
          {
@@ -246,7 +279,7 @@ static void parser__RD_application(void)
 
          if (parser__match(s_string_value))
          {
-            gen_saveprefix(token);
+            gen_saveprefix(&token);
          }
 
          if (parser__match(s_leafname))
@@ -254,13 +287,13 @@ static void parser__RD_application(void)
 
          if (parser__match(s_string_value))
          {
-            gen_savesuffix(token);
+            gen_savesuffix(&token);
          }
 
          parser__checkfor(s_from);
          parser__checkfor(s_icn);
          parser__checkfor(s_number_value);
-         gen_savefrom(token);
+         gen_savefrom(&token);
          parser__checkfor(s_semicolon);
       }
 
@@ -282,7 +315,7 @@ static void parser__RD_application(void)
       if (parser__match(s_display_dft_is))
       {
          if (parser__match_2(s_summary, s_text))
-             gen_displaydft(token);
+             gen_displaydft(&token);
          parser__checkfor(s_semicolon);
       }
 
@@ -290,7 +323,7 @@ static void parser__RD_application(void)
       if (parser__match(s_ctrl_chars))
       {
          if (parser__match_2(s_hide, s_escape) || parser__match(s_text))
-             gen_ctrlchars(token);
+             gen_ctrlchars(&token);
          parser__checkfor(s_semicolon);
       }
 
@@ -298,7 +331,7 @@ static void parser__RD_application(void)
       if (parser__match(s_tab_width))
       {
          parser__checkfor(s_number_value);
-         gen_tabwidth(token);
+         gen_tabwidth(&token);
          parser__checkfor(s_semicolon);
       }
 
@@ -313,7 +346,7 @@ static void parser__RD_application(void)
       if (parser__match(s_output_option_is))
       {
           parser__checkfor(s_string_value);
-          gen_outputoption(token);
+          gen_outputoption(&token);
           parser__checkfor(s_semicolon);
       }
 
@@ -321,7 +354,7 @@ static void parser__RD_application(void)
       if (parser__match(s_output_dft_string))
       {
           parser__checkfor(s_string_value);
-          gen_outname(token);
+          gen_outname(&token);
           parser__checkfor(s_semicolon);
       }
 
@@ -329,7 +362,7 @@ static void parser__RD_application(void)
       if (parser__match(s_output_dft_is))
       {
           if (parser__match(s_produces_output) || parser__match(s_produces_no_output))
-              gen_produces_output_dft(token);
+              gen_produces_output_dft(&token);
           parser__checkfor(s_semicolon);
       }
 
@@ -346,17 +379,26 @@ static void parser__RD_application(void)
 
    /* --- extra menu options --- */
    if (parser__match(s_menu_start))
-   {
        parser__RD_menu();
-   }
+
+   if (parser__match(s_selections_start))
+       parser__RD_rdsei(s_select, s_selects);
 
    /* --- deselections --- */
    if (parser__match(s_deselections_start))
-       parser__RD_deselections();
+       parser__RD_rdsei(s_deselect, s_deselects);
+
+   /* --- inclusions --- */
+   if (parser__match(s_inclusions_start))
+       parser__RD_rdsei(s_include, s_includes);
 
    /* --- exclusions --- */
    if (parser__match(s_exclusions_start))
-       parser__RD_exclusions();
+       parser__RD_rdsei(s_exclude, s_excludes);
+
+   /* --- rules --- */
+   if (parser__match(s_rules_start))
+       parser__RD_rdsei(s_unknown, s_unknown);
 
    /* --- things excluded by make --- */
    if (parser__match(s_make_excludes))
@@ -383,7 +425,7 @@ static void parser__RD_icondefaults(void)
       icn = token.value.integer;
       if (parser__match(s_on) || parser__match(s_off)
         ||parser__match(s_string_value) || parser__match(s_number_value))
-          gen_icondefaults(token, icn);
+          gen_icondefaults(&token, icn);
       else parser__error(FALSE,perr_expected, "icon default", token.lexeme);
 
    } while (parser__match(s_comma));
@@ -400,7 +442,7 @@ static void parser__RD_icondefaults(void)
          icn = token.value.integer;
          if (parser__match(s_on) || parser__match(s_off)
            ||parser__match(s_string_value) || parser__match(s_number_value))
-             gen_make_icondefaults(token, icn);
+             gen_make_icondefaults(&token, icn);
          else parser__error(FALSE,perr_expected, "icon default", token.lexeme);
       } while (parser__match(s_comma));
 
@@ -432,13 +474,13 @@ static void parser__RD_menudefaults(void)
       parser__checkfor(s_number_value);
       m = token.value.integer;
       if (parser__match(s_on) || parser__match(s_off))
-          gen_menudefaults(token, m);
+          gen_menudefaults(&token, m);
       else
           parser__error(FALSE,perr_expected, "menu default", token.lexeme);
       if (parser__match(s_sub_menu))
       {
          if (parser__match_2(s_string_value, s_number_value))
-             gen_sub_menudefaults(token, m);
+             gen_sub_menudefaults(&token, m);
          else
             parser__error(FALSE,perr_expected, "submenu default", token.lexeme);
       }
@@ -456,13 +498,13 @@ static void parser__RD_menudefaults(void)
          parser__checkfor(s_number_value);
          m = token.value.integer;
          if (parser__match(s_on) || parser__match(s_off))
-             gen_make_menudefaults(token, m);
+             gen_make_menudefaults(&token, m);
          else
              parser__error(FALSE,perr_expected, "menu default", token.lexeme);
          if (parser__match(s_sub_menu))
          {
             if (parser__match_2(s_string_value, s_number_value))
-                gen_make_sub_menudefaults(token, m);
+                gen_make_sub_menudefaults(&token, m);
             else
                 parser__error(FALSE,perr_expected, "submenu default", token.lexeme);
          }
@@ -475,6 +517,8 @@ static void parser__RD_menudefaults(void)
 
 static void parser__RD_menu(void)
 {
+   BOOL off;
+
    while (!parser__match(s_menu_end))
    {
       if (parser__match(s_defaults))
@@ -484,24 +528,30 @@ static void parser__RD_menu(void)
       else if (parser__checkfor(s_string_value))
       {
          gen_menuentry();
-         gen_addmenutext(token);
+         gen_addmenutext(&token);
+
+         if (parser__match(s_on)) off = FALSE;
+         else if (parser__match(s_off)) off = TRUE;
+         else off = FALSE;
 
          parser__checkfor(s_maps_to);
          parser__checkfor(s_string_value);
-         gen_menumapsto(token);
+
+         if (off) gen_menumapsto_off(&token);
+         else gen_menumapsto(&token);
 
          if (parser__match(s_sub_menu))
          {
              parser__checkfor(s_string_value);
-             gen_subtext(token);
+             gen_subtext(&token);
 
              parser__checkfor(s_number_value);
-             gen_menubufsize(token);
+             gen_menubufsize(&token);
 
              if (parser__match(s_prefix_by))
              {
                 parser__checkfor(s_string_value);
-                gen_menu_prefix(token);
+                gen_menu_prefix(&token);
              }
          }
 
@@ -530,47 +580,57 @@ static void parser__RD_menu(void)
 static void parser__RD_icons(void)
 {
    int icn_num;
+   BOOL off;
 
    while (!parser__match(s_icons_end))
    {
       parser__checkfor(s_icn);
       parser__checkfor(s_number_value);
       icn_num = token.value.integer;
-      gen_icon(token);
+      gen_icon(&token);
+
+      if (parser__match(s_on)) off = FALSE;
+      else if (parser__match(s_off)) off = TRUE;
+      else off = FALSE;
 
       if (parser__match(s_maps_to))
       {
          if (parser__match(s_string_value))
          {
-             gen_mapstring(token);
+            if (off)
+               gen_mapstring_off(&token);
+            else
+               gen_mapstring(&token);
          }
 
          if (parser__match_2(s_string, s_number) || parser__match(s_quoted_string))
          {
-            gen_conversion(token);
+            gen_conversion(&token);
          }
 
          if (parser__match(s_prefix_by))
          {
             parser__checkfor(s_string_value);
-            gen_icon_prefix(token);
+            gen_icon_prefix(&token);
          }
 
          if (parser__match(s_followed_by))
          {
             if (parser__match(s_spaces))
             {
-                gen_followiconspaces();
+                if (off) gen_followiconspaces_off();
+                else gen_followiconspaces();
             }
 
-            parser__RD_optentry();
+            parser__RD_optentry(off);
             while (parser__match(s_comma))
-                parser__RD_optentry();
+                parser__RD_optentry(off);
 
             if (parser__match(s_separator_is))
             {
                parser__checkfor(s_string_value);
-               gen_separator(token);
+               if (off) gen_separator_off(&token);
+               else gen_separator(&token);
             }
          }
 
@@ -592,48 +652,48 @@ static void parser__RD_icons(void)
       {
           parser__checkfor(s_icn);
           parser__checkfor(s_number_value);
-          gen_changesicon(token, IF_ARROWUP);
+          gen_changesicon(&token, IF_ARROWUP);
           if (parser__match(s_by))
           {
               parser__checkfor(s_number_value);
-              gen_by(token);
+              gen_by(&token);
           }
           if (parser__match(s_min))
           {
              parser__checkfor(s_number_value);
-             gen_minval(token);
+             gen_minval(&token);
           }
           if (parser__match(s_max))
           {
               parser__checkfor(s_number_value);
-              gen_maxval(token);
+              gen_maxval(&token);
           }
       }
       else if (parser__match(s_decreases))
       {
           parser__checkfor(s_icn);
           parser__checkfor(s_number_value);
-          gen_changesicon(token, IF_ARROWDOWN);
+          gen_changesicon(&token, IF_ARROWDOWN);
           if (parser__match(s_by))
           {
               parser__checkfor(s_number_value);
-              gen_by(token);
+              gen_by(&token);
           }
           if (parser__match(s_min))
           {
              parser__checkfor(s_number_value);
-             gen_minval(token);
+             gen_minval(&token);
           }
           if (parser__match(s_max))
           {
               parser__checkfor(s_number_value);
-              gen_maxval(token);
+              gen_maxval(&token);
           }
       }
       else if (parser__match(s_inserts))
       {
           parser__checkfor(s_string_value);
-          gen_insertliteral(token);
+          gen_insertliteral(&token);
       }
       else if (parser__match(s_extends))
       {
@@ -641,11 +701,11 @@ static void parser__RD_icons(void)
           parser__checkfor(s_from);
           parser__checkfor(s_icn);
           parser__checkfor(s_number_value);
-          gen_extendsfrom(token);
+          gen_extendsfrom(&token);
           parser__checkfor(s_to);
           parser__checkfor(s_icn);
           parser__checkfor(s_number_value);
-          gen_extendsto(token);
+          gen_extendsto(&token);
       }
       else
           parser__error(FALSE,perr_expected, "maps_to, increases or decreases", token.lexeme);
@@ -655,7 +715,7 @@ static void parser__RD_icons(void)
 }
 
 
-static void parser__RD_optentry(void)
+static void parser__RD_optentry(BOOL off)
 {
    if (parser__match_2(s_icn, s_string_value))
    {
@@ -664,167 +724,252 @@ static void parser__RD_optentry(void)
    }
    else
       parser__error(FALSE,perr_expected, "follow item", token.lexeme);
-   gen_followicon(token);
+   gen_followicon(&token, off);
 }
 
 
-static void parser__RD_deselections(void)
+/* Handle rules / deselections / selections / exclusions / inclusions
+ * sections, allowing any of those rule types inside any of those
+ * sections.
+ *
+ * The two parameters are used to enforce the presence of the rule
+ * keyword. They should be the singular and plural form of the rule
+ * keyword, in either order (e.g. 's_select, s_selects'). If neither
+ * is present when expected, the parser will complain about the lack
+ * of the first one you give.
+ *
+ * If you don't care (e.g. for a rules_start...rules_end section),
+ * pass 's_unknown' in both parameters. Now the parser will only
+ * complain if none of the recognised rule keywords are present.
+ */
+
+static void parser__RD_rdsei(int enforce1, int enforce2)
 {
-   while (!parser__match(s_deselections_end))
+   /* Pointers to the gen.c routines to call for a given rule */
+
+   gen_icon_dsei_ptr     icon_dsei;
+   gen_icon_dsei_ptr     menu_dsei;
+   gen_icon_dsei_ptr     icon_dsei_off;
+   gen_icon_dsei_ptr     menu_dsei_off;
+
+   /* Hold a list of items to which the rule should be applied */
+
+   Frontend_parserlist * at      = NULL;
+   Frontend_parserlist * curat;
+   Frontend_parserlist * newat;
+
+   /* Hold a list of the items listed by the rule */
+
+   Frontend_parserlist * rl      = NULL;
+   Frontend_parserlist * currl;
+   Frontend_parserlist * newrl;
+
+   /* General working variables */
+
+   BOOL                  off;
+   BOOL                  is_icon = FALSE;
+   int                   rule, temp;
+
+   /* We don't care if this is a rules section, or a section named
+    * to hold a specific type of rule - it's all treated the same.
+    * This means the [de]selections_[start|end], [in|ex]clusions_
+    * [start|end] and rules_[start|end] tokens are now synonymous.
+    */
+
+   while (
+            !parser__match  (s_rules_end)                          &&
+            !parser__match_2(s_selections_end, s_deselections_end) &&
+            !parser__match_2(s_inclusions_end, s_exclusions_end)
+         )
    {
-      if (parser__match(s_icn))
+      /* Build a list of menu entries or icons with which the rule will be associated */
+
+      do
       {
-         parser__checkfor(s_number_value);
-         gen_icon_setdeselects(token);
-         parser__checkfor(s_deselects);
+         /* Icon or menu? */
 
          if (parser__match(s_icn))
-         {
-             parser__checkfor(s_number_value);
-             gen_icon_deselects(token, IS_ICON);
-         }
+            is_icon = TRUE;
          else if (parser__match(s_menu))
-         {
-             parser__checkfor(s_number_value);
-             gen_icon_deselects(token, IS_MENU);
-         }
+            is_icon = FALSE;
          else
             parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-         while(parser__match(s_comma))
-         {
-            if (parser__match(s_icn))
-            {
-                parser__checkfor(s_number_value);
-                gen_icon_deselects(token, IS_ICON);
-            }
-            else if (parser__match(s_menu))
-            {
-                parser__checkfor(s_number_value);
-                gen_icon_deselects(token, IS_MENU);
-            }
-            else
-               parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-         }
-         parser__checkfor(s_semicolon);
-      }
-      else if (parser__match(s_menu))
-      {
+
          parser__checkfor(s_number_value);
-         gen_menu_setdeselects(token);
-         parser__checkfor(s_deselects);
+         temp = token.value.integer;
 
-         if (parser__match(s_icn))
-         {
-             parser__checkfor(s_number_value);
-             gen_menu_deselects(token, IS_ICON);
-         }
-         else if (parser__match(s_menu))
-         {
-             parser__checkfor(s_number_value);
-             gen_menu_deselects(token, IS_MENU);
-         }
-         else
-            parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-         while(parser__match(s_comma))
-         {
-            if (parser__match(s_icn))
-            {
-                parser__checkfor(s_number_value);
-                gen_menu_deselects(token, IS_ICON);
-            }
-            else if (parser__match(s_menu))
-            {
-                parser__checkfor(s_number_value);
-                gen_menu_deselects(token, IS_MENU);
-            }
-            else
-               parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-         }
-         parser__checkfor(s_semicolon);
+         /* On or off? */
 
+         if      (parser__match(s_off)) off = TRUE;
+         else if (parser__match(s_on))  off = FALSE;
+         else off = FALSE;
+
+         /* Add the item to the list */
+
+         newat = FEmem_alloc(sizeof(Frontend_parserlist));
+         newat->is_icon = is_icon ? 1 : 0;
+         newat->off     = off     ? 1 : 0;
+         newat->number  = temp;
+
+         at = slist_addend(at, (void *) newat);
+
+      } while (parser__match(s_comma));
+
+      /* Find the rule type */
+
+      if (enforce1 != s_unknown && enforce2 != s_unknown)
+      {
+         /* I.e. if neither enforce1 or enforce2 is present, complain
+          * about enforce1.
+          */
+
+         if (!parser__match_2(enforce1, enforce2)) parser__checkfor(enforce1);
+
+         /* Otherwise, use the first rule keyword (either of them will do) */
+
+         rule = enforce1;
       }
       else
-         parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-   }
-}
-
-
-static void parser__RD_exclusions(void)
-{
-   while (!parser__match(s_exclusions_end))
-   {
-      if (parser__match(s_icn))
       {
-         parser__checkfor(s_number_value);
-         gen_icon_setexcludes(token);
-         parser__checkfor(s_excludes);
+         if      (parser__match_2(s_select,   s_selects))   rule = s_selects;
+         else if (parser__match_2(s_deselect, s_deselects)) rule = s_deselects;
+         else if (parser__match_2(s_include,  s_includes))  rule = s_includes;
+         else if (parser__match_2(s_exclude,  s_excludes))  rule = s_excludes;
+         else                                               rule = s_unknown;
+      }
 
+      /* From this, work out what gen.c functions to call */
+
+      switch (rule)
+      {
+         case s_select:
+         case s_selects:
+            icon_dsei     = gen_icon_selects;
+            menu_dsei     = gen_menu_selects;
+            icon_dsei_off = gen_icon_selects_off;
+            menu_dsei_off = gen_menu_selects_off;
+            break;
+
+         case s_deselect:
+         case s_deselects:
+            icon_dsei     = gen_icon_deselects;
+            menu_dsei     = gen_menu_deselects;
+            icon_dsei_off = gen_icon_deselects_off;
+            menu_dsei_off = gen_menu_deselects_off;
+            break;
+
+         case s_include:
+         case s_includes:
+            icon_dsei     = gen_icon_includes;
+            menu_dsei     = gen_menu_includes;
+            icon_dsei_off = gen_icon_includes_off;
+            menu_dsei_off = gen_menu_includes_off;
+            break;
+
+         case s_exclude:
+         case s_excludes:
+            icon_dsei     = gen_icon_excludes;
+            menu_dsei     = gen_menu_excludes;
+            icon_dsei_off = gen_icon_excludes_off;
+            menu_dsei_off = gen_menu_excludes_off;
+            break;
+
+         default:
+            parser__error(FALSE,
+                          perr_expected,
+                          "select(s), deselect(s), include(s) or exclude(s)",
+                          token.lexeme);
+            return;
+      }
+
+      /* Now have to read all the things listed by the rule */
+
+      do
+      {
          if (parser__match(s_icn))
-         {
-             parser__checkfor(s_number_value);
-             gen_icon_excludes(token, IS_ICON);
-         }
+            is_icon = TRUE;
          else if (parser__match(s_menu))
-         {
-             parser__checkfor(s_number_value);
-             gen_icon_excludes(token, IS_MENU);
-         }
+            is_icon = FALSE;
          else
             parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-         while(parser__match(s_comma))
-         {
-            if (parser__match(s_icn))
-            {
-                parser__checkfor(s_number_value);
-                gen_icon_excludes(token, IS_ICON);
-            }
-            else if (parser__match(s_menu))
-            {
-                parser__checkfor(s_number_value);
-                gen_icon_excludes(token, IS_MENU);
-            }
-            else
-               parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-         }
-         parser__checkfor(s_semicolon);
-      }
-      else if (parser__match(s_menu))
-      {
-         parser__checkfor(s_number_value);
-         gen_menu_setexcludes(token);
-         parser__checkfor(s_excludes);
 
-         if (parser__match(s_icn))
+         parser__checkfor(s_number_value);
+         temp = token.value.integer;
+
+         /* Add the item to the list */
+
+         newrl = FEmem_alloc(sizeof(Frontend_parserlist));
+         newrl->is_icon = is_icon ? 1 : 0;
+         newrl->off     = 0; /* Not relevant */
+         newrl->number  = temp;
+
+         rl = slist_addend(rl, (void *) newrl);
+
+      } while (parser__match(s_comma));
+
+      parser__checkfor(s_semicolon);
+
+      /* Now go through the list of items built previously */
+
+      curat = at;
+
+      while (curat != NULL)
+      {
+         /* Tell the gen.c routines what icon we're working on */
+
+         if (curat->is_icon) gen_icon_setdsei(curat->number);
+         else                gen_menu_setdsei(curat->number);
+
+         /* Add the rules to this item */
+
+         currl = rl;
+
+         while (currl != NULL)
          {
-             parser__checkfor(s_number_value);
-             gen_menu_excludes(token, IS_ICON);
-         }
-         else if (parser__match(s_menu))
-         {
-             parser__checkfor(s_number_value);
-             gen_menu_excludes(token, IS_MENU);
-         }
-         else
-            parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
-         while(parser__match(s_comma))
-         {
-            if (parser__match(s_icn))
+            if (curat->is_icon)
             {
-                parser__checkfor(s_number_value);
-                gen_menu_excludes(token, IS_ICON);
-            }
-            else if (parser__match(s_menu))
-            {
-                parser__checkfor(s_number_value);
-                gen_menu_excludes(token, IS_MENU);
+               if (curat->off)
+                  (icon_dsei_off)(currl->number, currl->is_icon ? IS_ICON : IS_MENU);
+               else
+                  (icon_dsei)(currl->number, currl->is_icon ? IS_ICON : IS_MENU);
             }
             else
-               parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
+            {
+               if (curat->off)
+                  (menu_dsei_off)(currl->number, currl->is_icon ? IS_ICON : IS_MENU);
+               else
+                  (menu_dsei)(currl->number, currl->is_icon ? IS_ICON : IS_MENU);
+            }
+
+            /* Next item to add to the current menu entry or icon */
+
+            currl = currl->next;
          }
-         parser__checkfor(s_semicolon);
+
+         /* Get next item to be added to */
+
+         curat = curat->next;
       }
-      else
-         parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
+
+      /* Free up the temporary lists ready for the next rule declaration */
+
+      while (at->next != NULL)
+      {
+         curat = at->next;
+         free(at);
+         at = curat;
+      }
+
+      free(at), at = NULL;
+
+      while (rl->next != NULL)
+      {
+         currl = rl->next;
+         free(rl);
+         rl = currl;
+      }
+
+      free(rl), rl = NULL;
    }
 }
 
@@ -834,12 +979,12 @@ static void parser__RD_make_exclusions(void)
    if (parser__match(s_icn))
    {
        parser__checkfor(s_number_value);
-       gen_make_excludes(token, IS_ICON);
+       gen_make_excludes(&token, IS_ICON);
    }
    else if (parser__match(s_menu))
    {
        parser__checkfor(s_number_value);
-       gen_make_excludes(token, IS_MENU);
+       gen_make_excludes(&token, IS_MENU);
    }
    else
       parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
@@ -849,12 +994,12 @@ static void parser__RD_make_exclusions(void)
       if (parser__match(s_icn))
       {
           parser__checkfor(s_number_value);
-          gen_make_excludes(token, IS_ICON);
+          gen_make_excludes(&token, IS_ICON);
       }
       else if (parser__match(s_menu))
       {
           parser__checkfor(s_number_value);
-          gen_make_excludes(token, IS_MENU);
+          gen_make_excludes(&token, IS_MENU);
       }
       else
          parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
@@ -870,21 +1015,21 @@ static void parser__RD_orderentry(BOOL make_order)
        if (token.number == s_menu)
        {
            parser__checkfor(s_number_value);
-           gen_orderis(token, IS_MENU, make_order);
+           gen_orderis(&token, IS_MENU, make_order);
        }
        else  /* s_icn */
        {
            parser__checkfor(s_number_value);
-           gen_orderis(token, IS_ICON, make_order);
+           gen_orderis(&token, IS_ICON, make_order);
        }
    }
    else if (parser__match(s_string_value))
    {
-      gen_orderis(token, IS_STRING, make_order);
+      gen_orderis(&token, IS_STRING, make_order);
    }
    else if (parser__match(s_output))
    {
-      gen_orderis(token, IS_OUTPUT, make_order);
+      gen_orderis(&token, IS_OUTPUT, make_order);
    }
    else
        parser__error(FALSE,perr_expected, "menu or icn", token.lexeme);
@@ -907,7 +1052,7 @@ static void parser__RD_imports(void)
    if (parser__match(s_wild_card_is))
    {
        parser__checkfor(s_string_value);
-       gen_wildcard(token);
+       gen_wildcard(&token);
        parser__checkfor(s_semicolon);
    }
 
@@ -930,24 +1075,24 @@ static void parser__RD_import(void)
       parser__checkfor(s_number_value);
    }
 
-   gen_dragto(token);
+   gen_dragto(&token);
 
    parser__checkfor(s_inserts);
 
    parser__checkfor(s_icn);
    parser__checkfor(s_number_value);
-   gen_insert(token);
+   gen_insert(&token);
    while(parser__match(s_comma))
    {
       parser__checkfor(s_icn);
       parser__checkfor(s_number_value);
-      gen_insert(token);
+      gen_insert(&token);
    }
 
    if (parser__match(s_separator_is))
    {
       parser__checkfor(s_string_value);
-      gen_dragseparator(token);
+      gen_dragseparator(&token);
    }
 
    parser__checkfor(s_semicolon);
@@ -969,7 +1114,7 @@ static void parser__RD_choices(void)
    {
       /* --- set auto-run option --- */
       if (application.flags & AF_HAS_AUTORUN)
-          gen_setautorun(token);
+          gen_setautorun(&token);
    }
    else
       parser__error(TRUE,perr_expected, "on or off", token.lexeme);
@@ -978,7 +1123,7 @@ static void parser__RD_choices(void)
    {
       /* --- set auto-save option --- */
       if (application.flags & AF_HAS_AUTOSAVE)
-          gen_setautosave(token);
+          gen_setautosave(&token);
    }
    else
       parser__error(TRUE,perr_expected, "on or off", token.lexeme);
@@ -986,7 +1131,7 @@ static void parser__RD_choices(void)
    if (parser__match_2(s_text, s_summary))
    {
       /* --- set dft display --- */
-      gen_displaydft(token);
+      gen_displaydft(&token);
    }
 
    /* --- now the dbox icons and menu entries --- */
