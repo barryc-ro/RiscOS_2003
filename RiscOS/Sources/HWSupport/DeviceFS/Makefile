@@ -12,6 +12,7 @@
 # Paths
 #
 EXP_HDR = <export$dir>
+C_EXP_HDR = <cexport$dir>.Interface.h
 
 #
 # Generic options:
@@ -31,7 +32,8 @@ COMPONENT = DeviceFS
 SOURCE    = s.DeviceFS
 TARGET    = rm.DeviceFS
 TARGETSA  = rm.DeviceFSSA
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   = ${EXP_HDR}.${COMPONENT} \
+            ${C_EXP_HDR}.${COMPONENT}
 RESOURCES = LocalRes:Messages
 
 #
@@ -63,6 +65,9 @@ ${TARGET}: ${SOURCE}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+${C_EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
+	perl Build:Hdr2H hdr.${COMPONENT} $@
 
 #
 # Makes a stand-alone version with messages bound in
