@@ -262,7 +262,7 @@ export_libs:
 all:	$(UI) $(APPENGINE)
         @echo $(COMPONENT): Application built (Disc)
 
-rom: $(ROM_MODULE) $(UI) $(APPENGINE)
+rom: $(ROM_MODULE) $(UI) $(APPENGINE) o.dirs
         @echo $(COMPONENT): Module built (ROM)
 
 install_common: $(UI) $(APPENGINE) o.dirs
