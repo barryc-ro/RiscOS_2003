@@ -32,9 +32,9 @@ we leave is owned only by that callback after the closed(). (The parent
 plugin structure has been freed when the closed is called.)
 
    opened -> multi_start -> closedown (turn to image file now)
-          -> multi_start -> close 
+          -> multi_start -> close
           -> multi_start -> stop -> close
-          
+
    Separate replay_multi_end() into 2: replay_multi_closedown() called when
 replay has already gone away; replay_multi_stop() called to stop replay.
 Calling stop() will therefore cause closedown() to be called later.
@@ -49,7 +49,7 @@ deleted before it comes back. Change it not to use that? Can't be done (sends
 a message to the browser using plugin).
 
    Special code?
-   
+
    Can we even tell if Replay is still around? Yes---crp->replay != NULL. So
 in close(), if crp->replay != NULL, we could queue a special message on
 wimp_NULL_REASON_CODE that will force the file closed.
@@ -126,6 +126,7 @@ typedef struct
     client_replay_rma_control *rma;	/* block allocated in the RMA */
     int replay_task;
     BOOL replay_running;
+    char *file_name;    /* should fix the file freeing problem */
 } client_replay_control;
 
 struct client_replay_str
@@ -398,9 +399,24 @@ static void force_to_plain (char *file_name)
       (void) fclose (file);
    }
    else
+   {
       TRACE1 ("image file couldn't be forced back to plain\n");
+   }
 
    TRACE3 ("-force_to_plain\n");
+}
+
+void unlock_file(char* file_name)
+{
+    unsigned int attr;
+    _swi(OS_ServiceCall, _INR(1,3), 0x68, file_name, 0);
+    /*force_to_plain(file_name);*/
+    _swix(OS_File, _INR(0,1) | _OUT(5), 5, file_name, &attr);
+    if(attr & (1 << 3))
+    {
+        attr ^= (1 << 3);
+        _swix(OS_File, _INR(0,1) | _IN(5), 4, file_name, attr);
+    }
 }
 
 static _kernel_oserror *show_own_window(ObjectId window_handle, const char *file_name,
@@ -419,12 +435,12 @@ static _kernel_oserror *show_own_window(ObjectId window_handle, const char *file
       TRACE5("show_own_window(): error opening file\n");
       return utils_msgs_error_lookup (1, "NotFound");
    } /* if */
- 
+
    /* ignore first 4 lines */
    for (i = 0; i < 4; i++)
    {
       char value[1024];
- 
+
       if (fgets (value, sizeof value, replay_file) == NULL)
       {
          TRACE5("error reading file\n");
@@ -461,11 +477,11 @@ static _kernel_oserror *show_own_window(ObjectId window_handle, const char *file
       full_spec.behind = -1;
       full_spec.window_flags = 0;
       full_spec.alignment_flags = 0;
- 
+
       /*Return *window* coordinates to display movie at.*/
       *windowx = 0;
       *windowy = 0;
- 
+
       TRACE5("Showing window at xmin %d, ymin %d, xmax %d, ymax %d\n" _
              full_spec.visible_area.xmin _ full_spec.visible_area.ymin _
              full_spec.visible_area.xmax _ full_spec.visible_area.ymax);
@@ -591,7 +607,7 @@ static _kernel_oserror *replay_multi_start(client_replay_ptr crp)
        {
 	   /* ensure it has been closed, so we can select a new stream */
 	   force_to_plain (crp->file_name);
-	   
+
 	   sprintf(extra_args, "RAPickStream %d", ++crp->stream_index);
 	   TRACE2 ("stream %d oscli '%s'\n" _ crp->stream_index _ extra_args);
 	   _kernel_oscli(extra_args);
@@ -838,7 +854,6 @@ static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_brows
 {
    pluginclient_instance *plugin;
    WimpMessage            message;
-
    TRACE2 ("+replay_multi_end\n");
    m_ASSERT (crp->replay != NULL);
    m_ASSERT (crp->replay->rma != NULL);
@@ -876,6 +891,7 @@ static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_brows
     * handler in this case */
    if (!called_from_closedown)
    {
+       crp->replay->file_name = crp->file_name;
        err_report(event_register_message_handler (Wimp_MTaskCloseDown,
 						  &client_replay_closedown_handler_2, crp->replay));
    }
@@ -908,20 +924,22 @@ static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_brows
 static int client_replay_closedown_handler_2(WimpMessage *message, void *handle)
 {
    client_replay_control *replay = (client_replay_control *) handle;
-
    TRACE2 ("+client_replay_closedown_handler_2: replay %p\n" _ replay);
    m_ASSERT (replay != NULL);
 
    if (replay->replay_task == message->hdr.sender)
    {
+       unlock_file(replay->file_name);
+
        err_report(event_deregister_message_handler (Wimp_MTaskCloseDown,
 						    &client_replay_closedown_handler_2, replay));
 
        m_RMA_FREE (replay->rma, sizeof *replay->rma);
        m_FREE (replay, sizeof *replay);
-	 
+
        TRACE2 ("-client_replay_closedown_handler_2\n");
        return 1;
+
    } /* if */
 
    TRACE2 ("-client_replay_closedown_handler_2\n");
@@ -932,7 +950,6 @@ static int client_replay_closedown_handler_2(WimpMessage *message, void *handle)
 static int client_replay_closedown_handler(WimpMessage *message, void *handle)
 {
    client_replay_ptr crp = (client_replay_ptr) handle;
-
    TRACE2 ("+client_replay_closedown_handler: crp %p\n" _ crp);
    m_ASSERT (crp != NULL);
    m_ASSERT (crp->replay != NULL);
@@ -942,6 +959,8 @@ static int client_replay_closedown_handler(WimpMessage *message, void *handle)
       {
          replay_multi_end (crp, /*tell_browser?*/ TRUE, TRUE);
 
+         unlock_file(crp->file_name);
+
 	 if (has_pick_streams(crp->file_type))
 	 {
 	     TRACE2 ("restarting for next stream\n");
@@ -949,7 +968,7 @@ static int client_replay_closedown_handler(WimpMessage *message, void *handle)
                 the user by the error handler or multi_start */
 	     replay_multi_start (crp);
 	 }
-	 
+
 	 TRACE2 ("-client_replay_closedown_handler\n");
          return 1;
       } /* if */
@@ -1011,7 +1030,7 @@ static _kernel_oserror *client_replay_init(int argc, char *argv[])
 {
   TRACE2 ("+client_replay_init\n");
   NOT_USED (argc), NOT_USED (argv);
-  
+
   /* Poke client_replay_file_types address into client definition structure. */
   /* This avoids static init. data errors when building as a module.         */
   pluginclient_replay.file_type_list = client_replay_file_types;
@@ -1159,7 +1178,7 @@ static _kernel_oserror *client_replay_click(client_ptr cp, const WimpMouseClickE
     {
         pluginclient_browser_goto(crp->plugin, crp->href);
     } /* if */
-    
+
     TRACE2("-client_replay_click()\n");
   return NULL;
 }
@@ -1239,7 +1258,7 @@ finish:
 static _kernel_oserror *client_replay_idle(client_ptr cp)
 {
   client_replay_ptr crp = (client_replay_ptr) cp;
-  
+
   TRACE3 ("+client_replay_idle\n");
 
   if (crp->replay != NULL && crp->replay->rma->multi_flags.multi_status != NULL)
@@ -1256,7 +1275,7 @@ static _kernel_oserror *client_replay_idle(client_ptr cp)
       } /* if */
     } /* if */
   } /* if */
-  
+
   TRACE3 ("-client_replay_idle\n");
   return NULL;
 } /* client_replay_idle */
@@ -1351,12 +1370,12 @@ static _kernel_oserror *client_replay_stream_new(client_ptr cp, const char *mime
                                      int *stream_type)
 {
    TRACE2("+client_replay_stream_new(): crp %p\n" _ cp);
-    
+
    NOT_USED (cp), NOT_USED (seekable), NOT_USED (stream), NOT_USED (mime_type);
 
    /* Just tell them we only want the whole file */
    *stream_type = plugin_stream_TYPE_ASFILEONLY;
-    
+
    TRACE2("-client_replay_stream_new()\n");
    return NULL;
 }
@@ -1369,7 +1388,7 @@ static _kernel_oserror *client_replay_stream_as_file(client_ptr cp, plugin_strea
                                         const char *cache_file)
 {
    client_replay_ptr crp = (client_replay_ptr) cp;
-   _kernel_oserror *error = NULL; 
+   _kernel_oserror *error = NULL;
 
    TRACE2 ("+client_replay_stream_as_file(): crp %p\n" _ crp);
    NOT_USED (stream);
@@ -1407,7 +1426,6 @@ static _kernel_oserror *client_replay_play_file(const char *file_name, int filet
 
    TRACE2("+client_replay_play_file(): file \"%s\", type &%X, plugin %d, "
          "window_handle 0x%X\n" _ file_name _ filetype _ plugin _ window_handle);
-
    /*Might not be linked into list yet. JRC 1 Jul 1997*/
 
    /* create and clear crp */
@@ -1438,7 +1456,7 @@ static _kernel_oserror *client_replay_play_file(const char *file_name, int filet
    crp->volume          = -1;
    crp->plugin          = plugin;
    crp->stream_index	= 0;
-   
+
    if ((error = replay_multi_start (crp)) != NULL)
       goto finish;
    /*IF THERE was anything that could go wrong after this, we would have to

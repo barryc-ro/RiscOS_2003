@@ -211,8 +211,3 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 # Dynamic dependencies:
-o.plugclient: c.plugclient C:h.swis C:h.kernel tbox:h.toolbox tbox:h.wimp tbox:h.window tbox:h.gadgets tbox:h.quit h.event tbox:h.wimplib h.m C:h.plugin h.plugclient h.version VersionNum h.client h.utils h.utils
-o.utils: c.utils C:h.kernel C:h.swis h.m tbox:h.wimp tbox:h.wimplib h.version VersionNum h.utils
-o.client_rep: c.client_rep C:h.swis C:h.kernel tbox:h.wimplib tbox:h.wimp tbox:h.window tbox:h.toolbox tbox:h.gadgets h.event h.m h.plugclient C:h.plugin h.client h.utils h.utils
-o.clientmidi: c.clientmidi C:h.swis C:h.kernel tbox:h.wimplib tbox:h.wimp tbox:h.window tbox:h.toolbox tbox:h.gadgets h.event C:h.plugin h.m h.plugclient h.client h.utils h.version VersionNum h.utils
-o.m: c.m C:h.kernel h.m h.utils
