@@ -1516,7 +1516,8 @@ static LabelNumber *use_cond_field(BlockHead *p)
 /* If either successor block for A has been displayed already I do not   */
 /* need to use conditional execution.                                    */
 /* Block p has now not yet been displayed.                               */
-    int32 cond = blkflags_(p) & Q_MASK;
+    int32 cond = blkflags_(p) & Q_MASK,
+          lifted = blkflags_(p) & BLKLIFTABLE;
     LabelNumber *next = blknext_(p), *next1 = blknext1_(p);
     BlockHead *b = 0, *b1 = 0;
     int32 next1_arcs = 1;
@@ -1567,7 +1568,8 @@ static LabelNumber *use_cond_field(BlockHead *p)
             cond = commoncond;
             for (;;) {
                 if (block_coded(bh) || !block_single_entry(bh) ||
-                    block_preserves_cc(bh, cc_ignorecmp, CondMax_Ordinary) == Bpcc_No)
+                    block_preserves_cc(bh, cc_ignorecmp, CondMax_Ordinary) == Bpcc_No ||
+                    (blkflags_(bh) & BLKLIFTABLE) != lifted)
                     break;
                 if ((blkflags_(bh) & Q_MASK) == cond &&
                     blknext1_(bh) == next1)
@@ -1714,6 +1716,19 @@ static LabelNumber *use_cond_field(BlockHead *p)
         {   show_head(p, cond);
             show_branch_instruction(J_B + cond, RETLAB);
             return (next == way_out) ? RETLAB : next;
+        }
+        if ((blkflags_(b) & BLKLIFTABLE) == lifted) {
+          if ((blkflags_(b1) & BLKLIFTABLE) != lifted) {
+            show_head(p, cond);
+            show_n(ncommon, commonp, s);
+            show_branch_instruction(J_B + cond, next1);
+            return next;
+          }
+        } else if ((blkflags_(b1) & BLKLIFTABLE) == lifted) {
+          show_head(p, Q_NEGATE(cond));
+          show_n(ncommon, commonp, s);
+          show_branch_instruction(J_B + Q_NEGATE(cond), next);
+          return next1;
         }
 #ifdef TARGET_HAS_SCCK
 /* The following code checks for two blocks which each have a single    */
@@ -2427,12 +2442,13 @@ static void try_shrinkwrap(void) {
         ic = blkcode_(p); n = blklength_(p);
         for (; --n >= 0; ic++) {
           J_OPCODE op = ic->op & J_TABLE_BITS;
-          VRegInt r1 = ic->r1, r2 = ic->r2, m = ic->m;
+          VRegInt r1 = ic->r1, r2 = ic->r2, m = ic->m, r4 = ic->r4;
           RealRegSet rsin, rsout;
           FixedRegisterUse(ic, &rsin, &rsout);
           if (uses_r1(op)) r1.r = ArgRegister(r1.r, copies);
           if (uses_r2(op)) r2.r = ArgRegister(r2.r, copies);
           if (uses_r3(op)) m.r = ArgRegister(m.r, copies);
+          if (uses_r4(op)) r4.r = ArgRegister(r4.r, copies);
           if (uses_stack(op) ||
               intersect_RealRegSet(&rsin, &maynotwrite, &rsin) ||
               intersect_RealRegSet(&rsout, &maynotwrite, &rsout) ||
@@ -2440,7 +2456,8 @@ static void try_shrinkwrap(void) {
               (loads_r2(op) && member_RealRegSet(&maynotwrite, r2.r)) ||
               (reads_r1(op) && member_RealRegSet(&mnr, r1.r)) ||
               (reads_r2(op) && member_RealRegSet(&mnr, r2.r)) ||
-              (reads_r3(op) && member_RealRegSet(&mnr, m.r)))
+              (reads_r3(op) && member_RealRegSet(&mnr, m.r)) ||
+              (reads_r4(op) && member_RealRegSet(&mnr, r4.r)))
             break;
 
           if (terminal) {
@@ -2517,12 +2534,14 @@ static void try_shrinkwrap(void) {
           blkstacki_(b) = 0;
           for (; --n >= 0; ic_in++) {
             J_OPCODE op = ic_in->op;
-            VRegInt r1 = ic_in->r1, r2 = ic_in->r2, m = ic_in->m;
+            VRegInt r1 = ic_in->r1, r2 = ic_in->r2, m = ic_in->m, r4 = ic_in->r4;
             if (uses_r1(op)) r1.r = ArgRegister(r1.r, copies);
             if (uses_r2(op)) r2.r = ArgRegister(r2.r, copies);
             if (uses_r3(op)) m.r = ArgRegister(m.r, copies);
+            if (uses_r4(op)) r4.r = ArgRegister(r4.r, copies);
             if (op != J_SETSP) {
-              ic_out->op = op; ic_out->r1 = r1; ic_out->r2 = r2; ic_out->m = m;
+              ic_out->op = op; ic_out->r1 = r1; ic_out->r2 = r2;
+              ic_out->m = m; ic_out->r4 = r4;
               ic_out++;
             } else
               blklength_(b)--;
@@ -2539,7 +2558,7 @@ static void try_shrinkwrap(void) {
         if (s1 != s2) {
           BlockHead *b = ts_blockbetween(saveblock, insertbefore);
           Icode *ic = (Icode *)BindAlloc(sizeof(Icode));
-          ic->op = J_SETSP; ic->r1.r = GAP; ic->r2.i = s1; ic->m.i = s2;
+          ic->op = J_SETSP; ic->r1.r = GAP; ic->r2.i = s1; ic->m.i = s2; ic->r4.i = 0;
           blkstacki_(b) = s1; blklength_(b) = 1; blkcode_(b) = ic;
         }
         changed = YES;
@@ -2619,7 +2638,7 @@ static void try_shrinkwrap(void) {
               for (cp = copies, i = 0; cp != NULL; cp = cdr_(cp))
                 if (cp->argregdead) {
                   ic[i].op = J_MOVR + J_DEAD_R3;
-                  ic[i].r1.r = cp->r1; ic[i].r2.r = GAP; ic[i].m.r = cp->r2;
+                  ic[i].r1.r = cp->r1; ic[i].r2.r = GAP; ic[i].m.r = cp->r2; ic[i].r4.i = 0;
                   i++;
                 }
               blkcode_(q) = ic + ndead; blklength_(q) = n - ndead;
@@ -2676,10 +2695,11 @@ static void try_shrinkwrap(void) {
           mnr = maynotread;
           for (i = n; --i >= 0 && na > 0; ) {
             J_OPCODE(op) = ic[i].op;
-            VRegInt r1 = ic[i].r1, r2 = ic[i].r2, m = ic[i].m;
+            VRegInt r1 = ic[i].r1, r2 = ic[i].r2, m = ic[i].m, r4 = ic[i].r4;
             if (uses_r1(op)) r1.r = register_number(r1.r);
             if (uses_r2(op)) r2.r = register_number(r2.r);
             if (uses_r3(op)) m.r = register_number(m.r);
+            if (uses_r4(op)) r4.r = register_number(r4.r);
             if (loads_r1(op)) {
               r1.r =  VarRegister(r1.r, copies);
               if (delete_RealRegSet(&maynotread, r1.r))
@@ -2692,16 +2712,18 @@ static void try_shrinkwrap(void) {
             }
             if ((reads_r1(op) && member_RealRegSet(&maynotread, r1.r)) ||
                 (reads_r2(op) && member_RealRegSet(&maynotread, r2.r)) ||
-                (reads_r3(op) && member_RealRegSet(&maynotread, m.r)))
+                (reads_r3(op) && member_RealRegSet(&maynotread, m.r)) ||
+                (reads_r4(op) && member_RealRegSet(&maynotread, r4.r)))
               break;
           }
           if (na == 0) {
             for (; --n, nargs > 0; ) {
               J_OPCODE(op) = ic[n].op;
-              VRegInt r1 = ic[n].r1, r2 = ic[n].r2, m = ic[n].m;
+              VRegInt r1 = ic[n].r1, r2 = ic[n].r2, m = ic[n].m, r4 = ic[n].r4;
               if (uses_r1(op)) r1.r = VarRegister(r1.r, copies);
               if (uses_r2(op)) r2.r = VarRegister(r2.r, copies);
               if (uses_r3(op)) m.r = VarRegister(m.r, copies);
+              if (uses_r4(op)) r4.r = VarRegister(r4.r, copies);
               if (loads_r1(op) && delete_RealRegSet(&mnr, r1.r)) {
                 ic[n].r1 = r1;
                 nargs--;
@@ -2713,6 +2735,7 @@ static void try_shrinkwrap(void) {
               if (reads_r1(op) && member_RealRegSet(&mnr, r1.r)) ic[n].r1 = r1;
               if (reads_r2(op) && member_RealRegSet(&mnr, r2.r)) ic[n].r2 = r2;
               if (reads_r3(op) && member_RealRegSet(&mnr, m.r)) ic[n].m = m;
+              if (reads_r4(op) && member_RealRegSet(&mnr, r4.r)) ic[n].r4 = r4;
             }
             dest = tailreclab_argsinvregs;
             if (inserted != NULL) {
@@ -2722,6 +2745,7 @@ static void try_shrinkwrap(void) {
                 if (uses_r1(op)) ic[n].r1.r = VarRegister(ic[n].r1.r, copies);
                 if (uses_r2(op)) ic[n].r2.r = VarRegister(ic[n].r2.r, copies);
                 if (uses_r3(op)) ic[n].m.r = VarRegister(ic[n].m.r, copies);
+                if (uses_r4(op)) ic[n].r4.r = VarRegister(ic[n].r4.r, copies);
               }
             }
           }

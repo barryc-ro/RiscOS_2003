@@ -53,7 +53,7 @@ CLXLIB    = C:CLX.o.clxlib
 # Include files
 #
 INCLUDES  = -Iriscos -IC:CLX -Iarm -Icfe -Imip -Iutil -Iccacorn -IC:
-DFLAGS    = 
+DFLAGS    =
 
 #
 # Program specific options:
