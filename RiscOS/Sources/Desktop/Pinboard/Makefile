@@ -35,9 +35,9 @@ rom: ${TARGET}
 export: 
         @echo ${COMPONENT}: export complete
 
-#install_rom: ${TARGET}
-#        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-#        @echo ${COMPONENT}: rom module installed
+install_rom: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom module installed
 
 clean:
         ${RM} ${TARGET}
