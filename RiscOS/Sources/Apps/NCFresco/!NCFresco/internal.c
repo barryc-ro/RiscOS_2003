@@ -1803,6 +1803,10 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 
 void fe_internal_deleting_view(fe_view v)
 {
+/*     if (pointer_mode == fe_pointermode_OFF) */
+/*     { */
+/*     } */
+
     if (strcasecomp(v->name, "__favs") == 0)
     {
 	tb_status_button(fevent_HOTLIST_SHOW, tb_status_button_INACTIVE);

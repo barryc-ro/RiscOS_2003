@@ -387,7 +387,8 @@ clean:		sanity
 		-@cd ./cbfresco_pc && $(RM) *.o
 		-@cd ./cbfresco_zm && $(RM) *.o
 		-@cd ./unix ; $(RM) *.o
-		-@cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
+		-@cd ./ncfresco ; $(RM) *.o
+		-@cd ./ncfresco_zm ; $(RM) *.o
 		-@cd ./stdalone; $(RM) *.o htmlcheck
 		-@cd ./bunix ; $(RM) *.o builders
 		-@cd ./cunix ; $(RM) *.o builders parse_check format_check check_all
@@ -755,7 +756,7 @@ NCFRESCO_ANT_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -DSTBWEB_ROM=0 
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 
-NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
+NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \

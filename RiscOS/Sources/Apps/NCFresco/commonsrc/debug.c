@@ -24,24 +24,67 @@ static void cleanup(void)
 static int debug_cmd_handler(int argc, char *argv[], void *handle)
 {
     int handled = -1;
-    if (argc == 1)
+
+    if (strcasecomp(argv[0], "show") == 0)
     {
-	if (strcasecomp(argv[0], "showdbg") == 0)
+	if (argc == 2)
 	{
-	    dbglist();
-	    handled = 1;
+#if MEMLIB
+	    extern char   *flexptr__base;
+	    extern char   *flexptr__free;
+	    extern char   *flexptr__slot;
+#endif
+	    if (strcasecomp(argv[1], "dbg") == 0)
+	    {
+		dbglist();
+		handled = 1;
+	    }
+#ifdef STBWEB
+	    else if (strcasecomp(argv[1], "heap") == 0)
+	    {
+		heap__dump(NULL);
+		handled = 1;
+	    }
+#endif
+	    else if (strcasecomp(argv[1], "flex") == 0)
+	    {
+#if MEMLIB
+		DBG(("flex: free %p slot %p usage %dK\n", flexptr__free, flexptr__slot, (flexptr__slot - flexptr__base)/1024 - 32));
+#endif
+		handled = 1;
+	    }
+	    else if (strcasecomp(argv[1], "mm") == 0)
+	    {
+		mm__dump(NULL);
+		handled = 1;
+	    }
+	    else if (strcasecomp(argv[1], "mem") == 0)
+	    {
+		int us = -1, next = -1, free;
+#if MEMLIB
+		DBG(("flex: da usage %dK\n", (flexptr__slot - flexptr__base)/1024 - 32));
+#endif
+
+		wimp_slotsize(&us, &next, &free);
+		DBG(("slot: us %dK next %dK free %dK\n", us/1024, next/1024, free/1024));
+
+		heap__info(NULL);
+		
+		handled = 1;
+	    }
 	}
     }
-    else if (argc == 2)
+    else if (strcasecomp(argv[0], "openurl") == 0)
     {
-	if (strcasecomp(argv[0], "openurl") == 0)
+	if (argc == 2)
 	{
 	    frontend_open_url(argv[1], NULL, NULL, NULL, 0);
 	    handled = 1;
 	}
-	else
-	    handled = debug_set(argv[0], atoi(argv[1]));
     }
+    else if (argc == 2)
+	handled = debug_set(argv[0], atoi(argv[1]));
+
     return handled;
     handle = handle;
 }
@@ -59,6 +102,17 @@ void dbg(const char *fmts, ...)
 	debug_vprintf(db_sess, fmts, arglist);
     else
 	vfprintf(stderr, fmts, arglist);
+    va_end(arglist);
+}
+
+void fdbg(void *f, const char *fmts, ...)
+{
+    va_list arglist;
+    va_start(arglist, fmts);
+    if (f == NULL && db_sess)
+	debug_vprintf(db_sess, fmts, arglist);
+    else
+	vfprintf(f ? f : stderr, fmts, arglist);
     va_end(arglist);
 }
 

@@ -240,7 +240,7 @@ wimp_w on_screen_kbd_w;
 
 static int *keywatch_pollword = 0;		/* address of keywatch module pollword */
 static int keywatch_last_key_val = 0;		/* value read from pollword on last wimp key event */
-static BOOL keywatch_from_handset = FALSE;	/* was lasy key press from a handset */
+static BOOL keywatch_from_handset = TRUE;	/* was last key press from a handset - initialise to true in case mouse used first */
 
 os_error pending_error = { 0 };
 static char *pending_error_retry = NULL;
@@ -728,7 +728,7 @@ void fe_no_new_page(fe_view v, os_error *e)
     fe_status_clear_fetch_only();
 
     /* ensure highlight is somewhere */
-    fe_ensure_highlight(v, 0);
+/*   fe_ensure_highlight(v, 0); */
 }
 
 enum
@@ -2590,10 +2590,11 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	    backend_item_pos_info(v->displaying, ti, &x, &y, NULL, &link, NULL, &title) == NULL &&
 	    link)
 	{
-	    int len = strlen(buffer);
+	    int len;
 
 	    /* add the url of any link to be displayed */
 	    strcat(buffer, "&url=");
+	    len = strlen(buffer);
 	    len += url_escape_cat(buffer + len, link, sizeof(buffer) - len);
 
 	    /* add any TITLE shown in the link */
@@ -4887,6 +4888,8 @@ void fe_event_process(void)
 
 	    if (keywatch_pollword)
 	    {
+		STBDBGN(( "key: last key %d pollword %d", keywatch_last_key_val, *keywatch_pollword));
+
 		if (keywatch_last_key_val == *keywatch_pollword)
 		    keywatch_from_handset = TRUE;
 
@@ -4900,7 +4903,7 @@ void fe_event_process(void)
 	    if (!v)
 		v = main_view;
 
-	    STBDBG(( "\nkey: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
+	    STBDBG(( "\nkey: view %p '%s' key %x handset %d\n", v, v && v->name ? v->name : "", e.data.key.chcode, keywatch_from_handset));
 	    
 	    fe_key_handler(v, &e, use_toolbox,
 			   keyboard_state == fe_keyboard_OFFLINE ? fe_browser_mode_DESKTOP :
@@ -4984,6 +4987,8 @@ void fe_event_process(void)
 			fe_frame_link_redraw_all(v_new);		/* redraw them all */
 		}
 	    }
+	    else if (e.data.c.w == tb_status_w())
+		tb_status_highlight(TRUE);		
             break;
         }
 
@@ -5012,7 +5017,7 @@ void fe_event_process(void)
 		if (e.data.c.w == tb_status_w())
 		{
 		    /* take the highlight */
-		    tb_status_highlight(TRUE);
+/* 		    tb_status_highlight(TRUE); */
 		}
 		else
 		{

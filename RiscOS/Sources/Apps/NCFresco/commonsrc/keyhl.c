@@ -758,7 +758,8 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
     }
     else
     {
-	if ((flags & be_link_INCLUDE_CURRENT) && item)
+	/* add check for not caretise else do normal case */
+	if ((flags & (be_link_INCLUDE_CURRENT | be_link_CARETISE)) == be_link_INCLUDE_CURRENT && item)
 	{
 	    if ((flags & be_link_VISIBLE) == 0 ||
 		be_item_onscreen(doc, item, &bounds, flags))

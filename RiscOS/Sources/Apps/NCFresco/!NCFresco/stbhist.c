@@ -289,13 +289,6 @@ static void fe_global_add(const char *url, const char *title)
 	fe_global_remove_oldest();
 }
 
-/* Write out the global history items
- * truncating appropriately.
- */
-
-#define ITEM_WIDTH		600
-#define ITEM_WIDTH_PADDING	64
-
 os_error *fe__global_write_list(FILE *f)
 {
     fe_global_history_item *item;
@@ -305,7 +298,7 @@ os_error *fe__global_write_list(FILE *f)
     {
 	char *s = item->title ? item->title : item->url;
 
-	fprintf(f, msgs_lookup("histAI"), i, ITEM_WIDTH, i, s);
+	fprintf(f, msgs_lookup("histAI"), i, i, s);
 
         fputc('\n', f);
     }
@@ -402,13 +395,13 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
     {
         char *frag = strrchr(hfi->url, '#');
         if (frag)
-            fprintf(f, msgs_lookup("histRI"), i, ITEM_WIDTH, i, item->title, frag);
+            fprintf(f, msgs_lookup("histRI"), i, i, item->title, frag);
         else
-            fprintf(f, msgs_lookup("histAI"), i, ITEM_WIDTH, i, item->title);
+            fprintf(f, msgs_lookup("histAI"), i, i, item->title);
     }
     else
     {
-        fprintf(f, msgs_lookup("histRI"), i, ITEM_WIDTH, i, hfi->url);
+        fprintf(f, msgs_lookup("histRI"), i, i, hfi->url);
     }
 #else
     fprintf(f, msgs_lookup("histRIa"), i);

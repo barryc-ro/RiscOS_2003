@@ -29,12 +29,15 @@
 typedef struct hotlist_item hotlist_item;
 typedef struct hotlist_info hotlist_info;
 
+#define hotlist_DELETE_PENDING	0x01
+
 struct hotlist_item
 {
     hotlist_item *next;
     char *url;
     char *title;
     time_t last_used;
+    int flags;
 };
 
 struct hotlist_info
@@ -267,7 +270,24 @@ static void hotlist__sort(void)
 
 /* ---------------------------------------------------------------------- */
 
-void hotlist__remove_list(const char *list_orig)
+static void hotlist__flush_pending_delete(void)
+{
+    hotlist_item *item = hotlist_list, *last = NULL;
+
+    while (item)
+    {
+	hotlist_item *next = item->next;
+
+	if (item->flags & hotlist_DELETE_PENDING)
+	    hotlist__unlink_and_free(last, item);
+	else
+	    last = item;
+
+	item = next;
+    }
+}
+
+void hotlist_remove_list(const char *list_orig)
 {
     hotlist_item *item = hotlist_list, *last = NULL;
     char *list_copy = strdup(list_orig), *list;
@@ -286,8 +306,8 @@ void hotlist__remove_list(const char *list_orig)
 	    
 		if (index == current)
 		{
-		    /* remove */
-		    hotlist__unlink_and_free(last, item);
+		    /* mark for removal */
+		    item->flags |= hotlist_DELETE_PENDING;
 		}
 		else
 		{
@@ -504,12 +524,12 @@ os_error *hotlist_remove(const char *url)
     return NULL;
 }
 
-os_error *hotlist_remove_list(const char *list)
+os_error *hotlist_flush_pending_delete(void)
 {
     os_error *ep;
     
-    hotlist__remove_list(list);
-    
+    hotlist__flush_pending_delete();
+
 /*     if ((ep = ensure_modem_line()) != NULL) */
 /* 	return ep; */
     
@@ -529,7 +549,7 @@ void hotlist_write_list(FILE *fout, BOOL del)
 	char *ttl = item->title ? item->title : item->url;
 
 	if (del)
- 	    fprintf(fout, msgs_lookup("hotsdI"), i, i, ttl, i, i);
+ 	    fprintf(fout, msgs_lookup("hotsdI"), i, i, ttl, i, i, item->flags & hotlist_DELETE_PENDING ? "CHECKED" : "");
 	else
  	    fprintf(fout, msgs_lookup("hotsI"), i, ttl);
     }

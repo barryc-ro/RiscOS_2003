@@ -41,6 +41,9 @@ static int da_size;
 static void *heap__base;
 static int heap_size;
 
+static int heap__max = 0;
+static int heap__largest = 0;
+
 #undef heap_init
 #undef heap_alloc
 #undef heap_free
@@ -141,8 +144,16 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
     }
 #endif
 
-     STBDBG(("heapda_realloc: returns %p (heap %d da %d)\n", newptr, heap_size, da_size));
+    STBDBG(("heapda_realloc: returns %p (heap %d da %d)\n", newptr, heap_size, da_size));
 
+#if DEBUG
+    if (heap__max < heap_size)
+	heap__max = heap_size;
+
+    if (heap__largest < size_request)
+	heap__largest = size_request;
+#endif
+    
     /* return new ptr or null */
     return e ? NULL : newptr;
 }
@@ -426,8 +437,8 @@ static int scan_usedlist(char *base, int from, int to, FILE *f)
     {
 	int *used_blk = (int *)(base + from);
 
-	fprintf(f, "used %8d - %8d (%8d)\n",
-		from + 4, from + *used_blk, *used_blk - 4);
+	FDBG((f, "used %8d - %8d (%8d)\n",
+		from + 4, from + *used_blk, *used_blk - 4));
 
 	from += *used_blk;
 	count++;
@@ -455,8 +466,8 @@ static void scan_list(heap_descr_t *hp, FILE *f)
 	if (next_free == hp->base_offset)
 	{
 	    if (hp->end_offset != hp->base_offset)
-		fprintf(f, "free %8d - %8d (%8d)\n",
-			hp->base_offset, hp->end_offset, hp->end_offset - hp->base_offset);
+		FDBG((f, "free %8d - %8d (%8d)\n",
+			hp->base_offset, hp->end_offset, hp->end_offset - hp->base_offset));
 
 	    next_free = 0;
 	}
@@ -464,8 +475,8 @@ static void scan_list(heap_descr_t *hp, FILE *f)
 	{
 	    int *free_blk = (int *)(hp_base + next_free);
 
-	    fprintf(f, "free %8d - %8d (%8d)\n",
-		    next_free, next_free + free_blk[1], free_blk[1]);
+	    FDBG((f, "free %8d - %8d (%8d)\n",
+		    next_free, next_free + free_blk[1], free_blk[1]));
 
 	    current = next_free + free_blk[1];
 
@@ -479,7 +490,7 @@ static void scan_list(heap_descr_t *hp, FILE *f)
     }
     while (next_free);
 
-    fprintf(f, "\nused %d blocks\nfree %d blocks\n", used_count, free_count);
+    FDBG((f, "\nused %d blocks\nfree %d blocks\n", used_count, free_count));
 }
 
 void heap__dump(FILE *f)
@@ -488,14 +499,14 @@ void heap__dump(FILE *f)
 #ifdef MemCheck_MEMCHECK
     MemCheck_checking checking = MemCheck_SetChecking(0, 0);
 #endif
-    fprintf(f, "\nHeap word   %x\n"
+    FDBG((f, "\nHeap word   %x\n"
 	    "Free offset %x (%d)\n"
 	    "Base offset %x (%d)\n"
 	    "End  offset %x (%d)\n\n",
 	    hp->HeapWord,
 	    hp->free_offset, hp->free_offset,
 	    hp->base_offset, hp->base_offset,
-	    hp->end_offset, hp->end_offset);
+	    hp->end_offset, hp->end_offset));
 
     scan_list(hp, f);
 
@@ -503,11 +514,33 @@ void heap__dump(FILE *f)
     MemCheck_RestoreChecking(checking);
 #endif
 }
+
+void heap__info(FILE *f)
+{
+    heap_descr_t *hp = heap__base;
+
+    FDBG((f, "\nHeap word   %x\n"
+	    "Free offset %x (%d)\n"
+	    "Base offset %x (%d)\n"
+	    "End  offset %x (%d)\n\n",
+	    hp->HeapWord,
+	    hp->free_offset, hp->free_offset,
+	    hp->base_offset, hp->base_offset,
+	    hp->end_offset, hp->end_offset));
+
+    FDBG((f, "Largest object %dK heap %dK\n", heap__largest, heap__max));
+}
+
 #else
 
 void heap__dump(FILE *f)
 {
-    fprintf(f, "Heap debugging not compiled in\n");
+    FDBG((f, "Heap debugging not compiled in\n"));
+}
+
+void heap__info(FILE *f)
+{
+    FDBG((f, "Heap debugging not compiled in\n"));
 }
 
 #endif
