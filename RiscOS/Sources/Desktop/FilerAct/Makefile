@@ -93,7 +93,7 @@ app: app.FilerAct
         @echo ${COMPONENT}: application built
 
 test: app.FilerAct
-        Set FilerAct$Path <Obey$Dir>.
+        Set FilerAct$Path <Obey$Dir>.Resources.UK.
         Set Alias$Filer_Action <Obey$Dir>.app.FilerAct %%*0
 
 reset:

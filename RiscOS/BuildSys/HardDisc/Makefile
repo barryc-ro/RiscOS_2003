@@ -9,7 +9,12 @@ RESDIR  = <resource$dir>.Resources
 MAKE    = @amu ${MFLAGS} RESDIR=${RESDIR}
 
 BUILD = \
+ AREncode \
  AudioDemos \
+ Tutorials \
+ Sounds \
+ Videos \
+ Images \
  SlideShow \
  PrintDefs \
  PrintEdit \
@@ -47,6 +52,7 @@ BUILD = \
  SciCalc \
  Maestro \
  CloseUp \
+ Bookworm \
  ARPlayer \
  ResetBoot \
  Repeat \
@@ -319,6 +325,15 @@ ARPlayer:
         @Access ${INSTDIR}.HardDisc4.Apps /r
         @${CD} ${SRCDIR}.Apps.ARPlayer
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Apps 
+
+Bookworm:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Manuals
+        @Access ${INSTDIR}.HardDisc4.Manuals /r
+        @${CD} ${SRCDIR}.Apps.Bookworm
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Manuals 
 
 CloseUp:
         @echo $@ ...
@@ -675,6 +690,42 @@ SlideShow:
         @${CD} ${SRCDIR}.Demos.SlideShow
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Images 
 
+Images:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Images
+        @Access ${INSTDIR}.HardDisc4.Images /r
+        @${CD} ${SRCDIR}.Demos.Images
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Images 
+
+Videos:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Video
+        @Access ${INSTDIR}.HardDisc4.Video /r
+        @${CD} ${SRCDIR}.Demos.Videos
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Video 
+
+Sounds:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Sound
+        @Access ${INSTDIR}.HardDisc4.Sound /r
+        @${CD} ${SRCDIR}.Demos.Sounds
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Sound INSTFLAG=all
+
+Tutorials:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Tutorials
+        @Access ${INSTDIR}.HardDisc4.Tutorials /r
+        @${CD} ${SRCDIR}.Demos.Tutorials
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Tutorials 
+
 AudioDemos:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
@@ -683,4 +734,13 @@ AudioDemos:
         @Access ${INSTDIR}.HardDisc4.Diversions /r
         @${CD} ${SRCDIR}.Demos.AudioDemos
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Diversions 
+
+AREncode:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Replay
+        @Access ${INSTDIR}.HardDisc4.Replay /r
+        @${CD} ${SRCDIR}.AREncode
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Replay 
 
