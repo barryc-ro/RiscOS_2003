@@ -16,6 +16,7 @@
 #define TEXTUAL_EMAIL 0
 #define HARDCOPY_FINISHED 1
 #define NEWCODE 1
+#define NEW_CANCEL_CODE 1
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,6 +104,7 @@ static void hardcopy_new_document(Document document);
 static void hardcopy_pages_complete(Document document, unsigned int loPage, unsigned int hiPage);
 static void hardcopy_document_complete(Document document);
 #endif
+static void unable_to_deliver(Document document);
 static void show_ContactName(Document document);
 static void show_SendRoute(Document document);
 static void show_Sending(Document document);
@@ -129,10 +131,15 @@ static void Log_TxSentDocument(enum _SendRoute route, Document document);
 static void Log_TxDisconnected(enum _SendRoute route, PhoneConnection *connection);
 static void Log_TxEncodingError(enum _SendRoute route, messageDataBlock *messageData, Document document);
 #endif
+#if SUPPORT_UI
+static void Log_TxReRouting(enum _SendRoute route, Document document);
+static void Log_TxUnableToDeliver(enum _SendRoute route, Document document);
+#endif
 
 static BOOL connection_impossible(enum _SendRoute route, PhoneConnection *connection);
 static BOOL connection_requested_now(enum _SendRoute route, PhoneConnection *connection);
 
+static void SendQ_ClearDownSendState(void);
 static _kernel_oserror *SendQ_CreateDocument(Document *p_document);
 static void SendQ_NextDocument(BOOL *p_email_flag, Document *p_document);
 static Document document_from_pid(unsigned int pid);
@@ -532,6 +539,41 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
        		break;
 
         case UI_SQ_CANCEL:
+#if NEW_CANCEL_CODE
+            /* when scanning a document, the user is shown the intended recipient, CANCEL obviously means 'cancel the document being scanned' */
+            if (scan_document != NULL)
+            {
+                scan_document->Suspending = TRUE;   /* indicate that we'd like to suspend & possibly cancel this */
+
+                /* if this is a streaming scan/send, TRY aborting the send */ 
+                if ((scan_document->SendState != SendIDLE) && (scan_document->SendState != SendCOMPLETE))
+                {
+                    /* some attempt is being made to send this, either connecting, mime-encoding/mime-encoded or sending */
+                    StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_ABORT_OUTGOING, NULL);  /* abort if possible */
+                }
+            }
+            else
+            {
+                /* with direct dialled faxes, the user is shown number/recipient dialled, CANCEL must mean 'cancel the document being sent' */
+                switch (tx_state)
+                {
+                    case txDIRECTCONNECTING:
+                    case txDIRECTCONNECTED:
+                        if (transmit_document)
+                        {
+                            /* user can see on screen who we are trying to send a document to, so cancel is unambiguous */
+                            transmit_document->Suspending = TRUE;   /* indicate that we'd like to suspend & possibly cancel this */
+                            StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_ABORT_OUTGOING, NULL);  /* abort if possible */
+                        }
+                        break;
+                }
+
+                /* WE CANNOT CANCEL EMAIL SENDS */
+
+                /* when SendQ_QueueWalker sees document->SendState of SendIDLE or SendCOMPLETE with document->Suspending == TRUE */
+                /* and there are actually pages left too cancel, it sets document->Suspended and calls Screen_QuerryCancel       */
+            }
+#else
             if ((scan_document != NULL) && (scan_document != transmit_document))
             {
                 /* not yet sending, so inhibit sending, then                   */
@@ -552,6 +594,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
                     transmit_document->aborting;
                 }
             }
+#endif
 #endif
             break;
 
@@ -696,6 +739,9 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 											/*REPORT: DirectDial<number>*/
 											Log_TxConnecting(RouteDIRECT, &(transmit_document->Connection), show_number);
 
+						                    /* MUST change SendState from SendIDLE because setting Cancelled will delete the document */
+						                    transmit_document->SendState = SendRUNNING; /*SendCONNECTING*/
+
 											nextstate = txDIRECTCONNECTING;
 								    	}
 								    }
@@ -734,6 +780,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 #endif
 
 					                	isp_dialup.errors_before = 0;
+
 #if SUPPORT_LAN
 										if (setup_Ether_Lan)
 										{
@@ -763,6 +810,12 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 										/* no need to call Create_Originator_File() as MimeIF builds that data into email headers */
 										/*REPORT: ISPDial<number>*/
 										Log_TxConnecting(RouteISP, &isp_dialup.Connection[isp_dialup.using_now], show_number);
+
+                                        if (transmit_document)
+                                        {
+						                    /* MUST change from SendIDLE because setting Cancelled will delete the document */
+						                    transmit_document->SendState = SendRUNNING; /*SendCONNECTING*/
+                                        }
 
 										nextstate = txISPCONNECTING;
 								    }
@@ -836,9 +889,6 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								transmit_document = NULL;	/* not valid after a call to Log_TxConnectingFailed */
 	                    		nextstate = txIDLE;
 								break;
-/*>>>should we mark transmit_document->Connection when connection finally happens? */ 
-
-
 
 							case RX_SQ_SWITCHTO_DAYTONA:
 								/* we sent SQ_RX_DIAL_FAX, but !Fax detected that the receiver is capable of ZModem transfer and switched over */
@@ -1119,11 +1169,16 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 #endif
 				} /* switch (tx_state) */
 
-#if 0
-			    /* report SQ_xx_GOING_IDLE if going idle from a non-idle state */
+			    /* if going idle from a non-idle state */
 				if ((nextstate == txIDLE) && (tx_state != txIDLE))
+				{
+				    /* loop over the SendQ clearing any document->SendState that isn't SendCOMPLETE back to SendIDLE */
+				    SendQ_ClearDownSendState();
+#if 0
+                    /* report SQ_xx_GOING_IDLE if going idle from a non-idle state */
 					StateKicker_SendMessage(Xxxx_MessageHandler, SQ_xx_GOING_IDLE, NULL);
 #endif
+				}
 				tx_state = nextstate;
             }
 /* end of transmitting */
@@ -1136,7 +1191,10 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
         		if (transmit_document)
 				{
 					messageDataBlock *sendMessage;
-					
+
+                    /* MUST change SendState from SendIDLE because setting Cancelled will delete the document */
+                    transmit_document->SendState = SendRUNNING; /*SendCONNECTING*/
+
 					StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_THIS_DOCUMENT, &sendMessage);
 					sendMessage->data.this_document.pid = transmit_document->ProcessId;
 					sendMessage->data.this_document.loText = 1;
@@ -1146,11 +1204,8 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 					sendMessage->data.this_document.pageStream = (BOOL)(transmit_document->ScanState != ScanCOMPLETE);
 					strcpy(sendMessage->data.this_document.directory, transmit_document->Directory);
                 }
-                
             }
             break;
-
-
 
 #if SUPPORT_EMAIL
 		case ME_SQ_WHICH_DOCUMENT:
@@ -1159,11 +1214,10 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 				if (transmit_document)
 				{
 					messageDataBlock *sendMessage;
-#if 0
-/*>>>definatly NOT needed */
-					transmit_document->SendState = SendRUNNING; 	/* in progress (2) */
-					transmit_document->RequestTx = FALSE;	/*>>>try this*/
-#endif
+
+                    /* MUST change SendState from SendIDLE because setting Cancelled will delete the document */
+                    transmit_document->SendState = SendRUNNING; /*SendENCODING*/
+
 			    	/* send document ProcessId & directory */
 			    	StateKicker_SendMessage(MimeEncode_StateMachine, SQ_ME_THIS_DOCUMENT, &sendMessage);
 			    	sendMessage->data.this_document.pid = transmit_document->ProcessId;
@@ -1183,19 +1237,22 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 			{
 				encoding_document = next_email(encoding_document);
 				if (encoding_document)
-					{
-						messageDataBlock *sendMessage;
+				{
+					messageDataBlock *sendMessage;
 
-				    	/* send document ProcessId & directory */
-				    	StateKicker_SendMessage(MimeEncode_StateMachine, SQ_ME_THIS_DOCUMENT, &sendMessage);
-				    	sendMessage->data.this_document.pid = encoding_document->ProcessId;
-				    	sendMessage->data.this_document.loText = 1;
-				    	sendMessage->data.this_document.hiText = 0;
-				    	sendMessage->data.this_document.loPage = encoding_document->SendCount + 1;
-				    	sendMessage->data.this_document.hiPage = encoding_document->ScanCount;
-				    	sendMessage->data.this_document.pageStream = (BOOL)(encoding_document->ScanState != ScanCOMPLETE);
-						strcpy(sendMessage->data.this_document.directory, encoding_document->Directory);
-					}
+                    /* MUST change SendState from SendIDLE because setting Cancelled will delete the document */
+                    encoding_document->SendState = SendRUNNING; /*SendENCODING;*/
+
+			    	/* send document ProcessId & directory */
+			    	StateKicker_SendMessage(MimeEncode_StateMachine, SQ_ME_THIS_DOCUMENT, &sendMessage);
+			    	sendMessage->data.this_document.pid = encoding_document->ProcessId;
+			    	sendMessage->data.this_document.loText = 1;
+			    	sendMessage->data.this_document.hiText = 0;
+			    	sendMessage->data.this_document.loPage = encoding_document->SendCount + 1;
+			    	sendMessage->data.this_document.hiPage = encoding_document->ScanCount;
+			    	sendMessage->data.this_document.pageStream = (BOOL)(encoding_document->ScanState != ScanCOMPLETE);
+					strcpy(sendMessage->data.this_document.directory, encoding_document->Directory);
+				}
 				else
 					StateKicker_SendMessage(MimeEncode_StateMachine, SQ_ME_NO_NORE_DOCUMENTS, NULL);
 			}
@@ -1412,8 +1469,15 @@ static void hardcopy_pages_complete(Document document, unsigned int loPage, unsi
 			int fileType;
 			
 			QuCommon_GetClassAndType(document, i, &pageClass, &pageType, &fileType);
+#if 1 /* PAN-01530 */
+            /* Fix PAN-01530, prefix first page of enote with destination and subject details */
+            if ((i == 1) && (pageType == PageType_Text_ENote))
+                PrintQ_ExtIF_FilePrefix(document->HardCopyProcessID, document->Directory, i, pageClass, pageType, fileType,
+                                        document->AddressRecord.ContactName, document->AddressRecord.EmailAddress, document->EmailSubject);
+            else                            
+#endif
 			/*>>>error =*/ PrintQ_ExtIF_FileTake(document->HardCopyProcessID, document->Directory, i, pageClass, pageType, fileType);
-		}
+        }
 	}
 #endif	
 }
@@ -1430,6 +1494,47 @@ static void hardcopy_document_complete(Document document)
 }
 #endif
 
+#if SUPPORT_UI
+static void unable_to_deliver(Document document)
+{
+    unsigned int pid;
+    char directory[256];
+
+    if ((pid = PrintQ_ExtIF_NewDocument(directory)) != 0)
+    {
+        char show_number[64];
+        unsigned int loPage;
+			PageClasses pageClass;
+			PageTypes pageType;
+			int fileType;
+
+        show_number[0] = '\0';
+
+#if SUPPORT_ADDRESSBOOK
+        if (document->AddressRecord.DirectPhoneNumber[0] != '\0')
+            numconvert_internal_to_display(document->AddressRecord.DirectPhoneNumber,	/* internal format */
+										   show_number,
+										   sizeof(show_number),
+										   setup_international_access_code,	    /* ip:	International prefix, eg "00" */
+										   setup_national_access_code,      	/* np:	National prefix, e.g. "0" */
+										   setup_fax_country_code,              /* cc:	Country code, e.g. "44" */
+										   setup_fax_area_code                  /* ac:	Area code, e.g. "1223" */
+										  );
+
+#endif
+
+        PrintQ_ExtIF_ErrorPage(pid, show_number, document->AddressRecord.ContactName, document->AddressRecord.EmailAddress, document->EmailSubject);
+
+
+        loPage = document->SendCount + 1;
+
+        QuCommon_GetClassAndType(document, loPage, &pageClass, &pageType, &fileType);
+        PrintQ_ExtIF_FileTake(pid, document->Directory, loPage, pageClass, pageType, fileType);
+
+        PrintQ_ExtIF_DocumentComplete(pid);
+    }
+}
+#endif
 
 /*
  * show the ContactName produced by the address book search
@@ -1958,6 +2063,41 @@ static void Log_TxEncodingError(enum _SendRoute route, messageDataBlock *message
     LogFileIF_Message(buffer);
 }
 #endif
+#if SUPPORT_UI
+/*
+ * Log - unable to deliver by given route, trying another
+ *
+ * route is one that failed, so user is shown it and could check details
+ */
+static void Log_TxReRouting(enum _SendRoute route, Document document)
+{
+    char buffer[256];
+    
+    strcpy(buffer, "S Re-routing ");
+
+    /* show failed route NOT new route */
+    strncat_recipient(buffer, route, document, 128);
+
+    LogFileIF_Message(buffer);
+}
+
+/*
+ * Log - unable to deliver message
+ *
+ * route is last one tried
+ */
+static void Log_TxUnableToDeliver(enum _SendRoute route, Document document)
+{
+    char buffer[256];
+
+    strcpy(buffer, "S UNABLE TO DELIVER ");
+
+    /* show last route (or only route) tried */
+    strncat_recipient(buffer, route, document, 128);
+
+    LogFileIF_Message(buffer);
+}
+#endif
 
 static BOOL connection_impossible(enum _SendRoute route, PhoneConnection *connection)
 {
@@ -1981,13 +2121,55 @@ static BOOL connection_requested_now(enum _SendRoute route, PhoneConnection *con
 }
 
 
+/* we assign a unique document number to everything we send */
+static unsigned int UniqueDocNo(void)
+{
+	static unsigned int doc_num = 0;	/* not a valid document number */
+
+#if 0 /* SUPPORT_EMAIL */
+    static unsigned int saver = 0;
+
+    /* on first call, retrieve value from EEPROM */
+    if (doc_num == 0)
+    {
+        /* to save EEPROM wear, we write every 100 counts, so..           */
+        /* 0..99 documents could have been sent before the power went off */
+        SetupIF_Read_EEPROM(???, &doc_num);
+        doc_num += 100;
+        SetupIF_Write_EEPROM(???, doc_num);     /* so increment EEPROM value by 100 now */
+    }
+
+    ++doc_num;
+    ++saver;
+
+    /* if counter wraps! */
+    if (doc_num == 0)
+    {
+        /* don't leave doc_num on zero, or next call assumes a power cycle */
+        ++doc_num;  /* also never return zero */
+        ++saver;
+    }
+
+    if (saver >= 100)
+    {
+        /* only write every 100 counts, to save EEPROM wear */
+        SetupIF_Write_EEPROM(???, doc_num);
+        saver = 0;
+    }
+#else
+	/* assign a unique document number to everything we send */
+	++doc_num;
+	if (doc_num == 0)
+		doc_num = 1;		/* never allocate zero, even if we wrap! */
+#endif
+    return(doc_num);
+}
 
 static Document SendQ_Document_Queue = NULL;
 
 static _kernel_oserror *SendQ_CreateDocument(Document *p_document)
 {
 	static unsigned int dir_num = 0;
-	static unsigned int doc_num = 0;	/* not a valid document number */
 
 	_kernel_oserror    *error = NULL;
 	Document 			document = NULL;
@@ -2019,18 +2201,35 @@ static _kernel_oserror *SendQ_CreateDocument(Document *p_document)
 	{
 		/* created document record and a directory for the document - now fill the record */
 
-    	document->ProcessId = UniquePId();		/* non-zero, unique across both SendQ and PrintQ */
-	    strcpy(document->Directory, directory); /* fullname of the directory we created */
+    	document->ProcessId = UniquePId();		        /* non-zero, unique across both SendQ and PrintQ */
+	    strcpy(document->Directory, directory);         /* fullname of the directory we created */
 
-		/* assign a unique document number to everything we send */
-		++doc_num;
-		if (doc_num == 0)
-			doc_num = 1;		/* never allocate zero, even if we wrap! */
+	    document->DocumentNo = UniqueDocNo();   		/* non-zero, unique to SendQ, no relation to ProcessId */
+    	*document->CapturedPhoneNumber = '\0';          /* not yet captured from fax machine */
+    	*document->AddressRecord.EmailAddress = '\0';   /* not yet returned by the address book */
+#if 0
+        /* at Chris Stott's request                  */
+        /* 'Nax message'                             */
+        /* 'Nax message from <contact>'              */
+        /* 'Nax message from <company>'              */
+        /* 'Nax message from <contact> of <company>' */
+        strcpy(document->EmailSubject, "Nax message");
+        if ((setup_contact_name[0] != 0) || (setup_company_name[0] != 0))
+        {
+            strncat(document->EmailSubject, " from ", sizeof(document->EmailSubject));
 
-	    document->DocumentNo = doc_num;   		/* non-zero, unique to SendQ, no relation to ProcessId */
-    	*document->CapturedPhoneNumber = '\0';  /* not yet captured from fax machine */
-    	*document->AddressRecord.EmailAddress = '\0';         /* not yet returned by the address book */
+            if (setup_contact_name[0] != 0)
+                strncat(document->EmailSubject, setup_contact_name, sizeof(document->EmailSubject));
+
+            if ((setup_contact_name[0] != 0) && (setup_company_name[0] != 0))
+                strncat(document->EmailSubject, " from ", sizeof(document->EmailSubject));
+
+            if (setup_company_name[0] != 0)
+                strncat(document->EmailSubject, setup_company_name, sizeof(document->EmailSubject));
+        }
+#else
     	strcpy(document->EmailSubject, "Fax from Daytona");	/* a good default */
+#endif
     	*document->AddressRecord.DirectPhoneNumber   = '\0';  /* not yet returned by the address book */
     	*document->AddressRecord.ContactName = '\0';          /* not yet returned by the address book */
     	document->AddressRecord.DeviceClass = DeviceClass_Fax;
@@ -2060,6 +2259,8 @@ static _kernel_oserror *SendQ_CreateDocument(Document *p_document)
     	document->SendCount = 0;                /* no pages transmitted yet */
 	    document->Cancelled = FALSE;
 	    document->Suspended = FALSE;
+        document->Suspending = FALSE;
+
 	    document->Connection.RetryLimit = &setup_phone_fax_redial_count;	/* address not value, so changes in setup will be seen */
 	    document->Connection.RetryCount = 0;	/* not yet tried to direct dial */
 	    document->Connection.RetryTime = time(NULL);	/* time now, to trigger dial as soon as document needs it */
@@ -2160,10 +2361,21 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
                     if (BiggestPage < document->BiggestPage)
                         BiggestPage = document->BiggestPage;
 #endif
-		        	if (document->SendState == SendRUNNING)
+		        	if (document->SendState == SendRUNNING) /*>>>should this be != SendIDLE???*/
 		        		sending_already = document;			/* this document is already being sent */		
 		            else
 		            	{
+#if NEW_CANCEL_CODE
+                            if (document->Suspending)
+                            {
+                                document->Suspending = FALSE;
+                                if (document->Suspended == FALSE)
+                                {
+                                    document->Suspended = TRUE;
+                                    Screen_QuerryCancel(document->ProcessId);
+                                }    
+                            }
+#endif
 		            		if (((document->RequestTx) || (document->ScanState == ScanCOMPLETE)) &&
 #if 1 /* PAN-01708 & PAN-0xxxx */
                                 /* Part of fix for PAN-01708 (T-FAX) & PAN-0xxxx (Daytona equivalant)                                   */
@@ -2182,7 +2394,10 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
                                         	/* we've dialled document->AddressRecord.DirectPhoneNumber many times and failed to get through */
                                         	if (document->ReRouteAvailable)
                                         	{
+#if SUPPORT_UI                                        	
                                         		/*REPORT: unable to direct dial fax, re-rerouting via ISP */
+                                                Log_TxReRouting(document->SendRoute, document);
+#endif
                                         		document->ReRouteAvailable = FALSE;     /* using */
                                         		document->ReRouting = TRUE;				/* alternate route */
                                         		document->SendRoute = RouteISP;         /* via ISP */
@@ -2194,7 +2409,11 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
                                         	}
                                         	else
                                         	{
+#if SUPPORT_UI
                                         		/*REPORT: unable to deliver this*//* alternate route failed */
+                                                Log_TxUnableToDeliver(document->SendRoute, document);
+                                        		unable_to_deliver(document);
+#endif
                                         		document->Cancelled = TRUE;
                                         	}
                                         }
@@ -2213,18 +2432,24 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
 				            			/* caller uses it and always leaves structure isp_dialup looking as if connection would work */
 										if ((isp_unavailable) || (document->MimeEncodeFailures >= 2) || (document->SMTPSendFailures >= 3))
 				            			{
-				            				
 				            				/* we've dialled the ISP many times on many numbers and failed to get through */
 				            				if (document->ReRouteAvailable)
 				            				{
+#if SUPPORT_UI
 				            					/*REPORT: unable to contact ISP, re-routing as a direct dial call */
+                                                Log_TxReRouting(document->SendRoute, document);
+#endif
 					            				document->ReRouteAvailable = FALSE;     /* using */
                                         		document->ReRouting = TRUE;				/* alternate route */
                                         		document->SendRoute = RouteDIRECT;      /* direct dial */
    				            				}
 				            				else
 				            				{
+#if SUPPORT_UI
                                         		/*REPORT: unable to deliver this*//* alternate route failed */
+                                                Log_TxUnableToDeliver(document->SendRoute, document);
+                                        		unable_to_deliver(document);
+#endif
                                         		document->Cancelled = TRUE;
 				            				}
 				            			}
@@ -2300,6 +2525,30 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
     HWM_MailScan_Usage(BiggestPage);
 #endif
 }
+
+
+/*
+ * After the transmit state machine goes idle, some documents may be marked non-idle or non-complete
+ * typically because they had been mimeencoded but the call fail/was cancelled
+ */
+static void SendQ_ClearDownSendState(void)
+{
+	if (SendQ_Document_Queue)
+    {
+		/* one or more items in the queue */
+    	/* SendQ_Document_Queue points to the last record in the queue, the last record points at the first (which maybe its-self) */
+        Document document = SendQ_Document_Queue;       /* last item in queue */
+		do
+			{
+				document = document->next_document;     /* first/next item in queue */
+
+                if (document->SendState != SendCOMPLETE)
+                    document->SendState = SendIDLE;
+            }
+	    while (document != SendQ_Document_Queue);    
+	}
+}
+
 
 /*
  * SendQ_NextDocument - identify the next document ready send
@@ -2546,7 +2795,7 @@ extern unsigned int SendQ_QuerryTx_hiPage(unsigned int pid)
  */
 extern void SendQ_TickerHandler(void)
 {
-#if SUPPORT_EMAIL  
+#if SUPPORT_EMAIL
 	BOOL isp_unavailable = FALSE;	/* optomistic aren't we */
 
     if (isp_dialup.using_now <= -1)
@@ -2618,10 +2867,9 @@ extern void SendQ_TickerHandler(void)
 	if (isp_dialup.use_next == -1)
     	isp_unavailable = TRUE;	/* despite our best efforts, the ISP is un-useable */
 #endif
-
-#else      //if not supporting EMAIL/ISP
-	BOOL isp_unavailable = TRUE; 
-#endif	
+#else
+    BOOL isp_unavailable = TRUE; 
+#endif
 	if (1 /*maybe_idle*/)	/* don't use maybe_idle flag until everything reports GOING_IDLE correctly! */
 	{
 		BOOL     email_flag;
