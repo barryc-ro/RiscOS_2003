@@ -16,7 +16,7 @@
 #
 AS      = aasm
 CP      = copy
-MKDIR   = cdir
+MKDIR   = mkdir -p
 RM      = remove
 WIPE    = -wipe
 MAKE    = amu
@@ -31,12 +31,12 @@ WFLAGS  = ~cr~v
 # Program specific options:
 #
 SOURCE    = s.${TARGET}
-BUILTDIR  = rm.${LOCALE}.${BUILD}
+BUILTDIR  = rm.${BUILD}.<Build$LocaleListNumeric>
 BUILT     = ${BUILTDIR}.${TARGET}
-PROCESSDIR= Processed.${LOCALE}.${BUILD}
-RESDIR    = Resources.${LOCALE}.${BUILD}
+RESDIR    = Resources.${BUILD}.<Build$LocaleListNumeric>
+PROCESSDIR= Processed.${BUILD}.<Build$LocaleListNumeric>
 UTILS     = Utils
-DATA      = Data.${LOCALE}.${BUILD}
+DATA      = Data.${BUILD}.<Build$LocaleListNumeric>
 # Note: RESDATA mustn't be in PROCESSDIR !!
 RESDATA   = ${DATA}.Data
 HELPTAGS  = ${DATA}.HelpTags
@@ -62,12 +62,13 @@ MSGEXT2 = ${UTILS}.MsgExt2
 MSGTOK2 = ${UTILS}.MsgTok2
 TOKGEN2 = ${UTILS}.TokGen2
 SCANRES = ${UTILS}.ScanRes
+RESCOMM = ${UTILS}.ResCommon
 
 #
 # Generic rules:
 #
 rom: ${BUILT}
-        @echo ${COMPONENT}: rom module built for Build: ${BUILD}
+        @echo ${COMPONENT}: rom module built for Build: ${BUILD}.<Build$LocaleListNumeric>
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
@@ -87,8 +88,8 @@ clean:
         ${RM} ${DATA}.Tokenised
         ${RM} ${HELPTAGS}
         ${RM} ${DICTTAGS}
-        ${WIPE} ${RESDIR}.* ${WFLAGS}
-        ${WIPE} ${PROCESSDIR}.* ${WFLAGS}
+        ${WIPE} ${RESDIR}.^.* ${WFLAGS}
+        ${WIPE} ${PROCESSDIR}.^.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned (Dictionary & HelpTokens not removed)
 
 #
@@ -103,29 +104,33 @@ clean_all:
         @echo ${COMPONENT}: all cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.Resources.Global
-        ${CP} Global.${LOCALE}.Messages ${RESDIR}.Resources.Global.Messages ${CPFLAGS}
+        ${MKDIR} ${RESDIR}.<Locale>.Resources.Global
+        SetMacro LocalGlobal$Path Global.<Locale>.,Global.UK.
+        ${CP} LocalGlobal:Messages ${RESDIR}.<Locale>.Resources.Global.Messages ${CPFLAGS}
+        Unset LocalGlobal$Path
         @echo ${COMPONENT}: resource files copied
 
-rm.${LOCALE}.${BUILD}.Messages: ${SOURCE} ${DATA}.Tokenised ${DIRS}
+
+${BUILTDIR}.Messages: ${SOURCE} ${DATA}.Tokenised ${DIRS}
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-rm.${LOCALE}.${BUILD}.MessagesHI: ${SOURCE} ${DIRS}
+${BUILTDIR}.MessagesHI: ${SOURCE} 
+        ${MKDIR} rm.${BUILD}.<Build$LocaleListNumeric>
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
 
-rm.${LOCALE}.${BUILD}.MessData: ${DATA}.Tokenised ${DIRS}
+${BUILTDIR}.MessData: ${DATA}.Tokenised ${DIRS}
         ${SCANRES} ${PROCESSDIR} $@
 
 #
 # Tokenise the Messages file using Help and Dictionary Tokens
 #
 ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
-        Print ${HELPTOKENS} { >> ${PROCESSDIR}.Resources.Help.Messages }
-        ${MSGTOK} ${HELPTOKENS} ${HELPTAGS}
-        ${CP} ${DICTIONARY} ${PROCESSDIR}.Resources.Kernel.Dictionary ${CPFLAGS}
+        Perl Utils.HelpAppend ${PROCESSDIR} ${HELPTOKENS}
+        ${MSGTOK} ${HELPTOKENS} ${HELPTAGS} 
+        ${CP} ${DICTIONARY} ${PROCESSDIR}.Common.Resources.Kernel.Dictionary ${CPFLAGS}
         ${MSGTOK2} ${DICTTOKENS} ${DICTTAGS}
         ${TOUCH} ${DATA}.Tokenised; settype ${DATA}.Tokenised fff
 
@@ -135,7 +140,8 @@ ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
 ${HELPTAGS}: ${TAGEXT} ${DIRS}
         @echo Copying Resources to Processed directory for tokenising ...
         ${CP} Resources Processed ${CPFLAGS}
-        ${TAGEXT} ${PROCESSDIR} ${DICTTAGS} ${HELPTAGS}
+        ${RESCOMM} ${PROCESSDIR} -v
+        Do ${TAGEXT} ${PROCESSDIR} ${DICTTAGS} ${HELPTAGS}
 
 #
 # Help tokens
@@ -164,13 +170,11 @@ ${TAGEXT}:
         Up
 
 ${DIRS}:
-	${MKDIR} Data
 	${MKDIR} Data.${LOCALE}
 	${MKDIR} ${DATA}
 	${MKDIR} o
-	${MKDIR} rm
-	${MKDIR} rm.${LOCALE}
-	${MKDIR} rm.${LOCALE}.${BUILD}
+	${MKDIR} rm.${BUILD}.<Build$LocaleListNumeric>
 	${TOUCH} ${DIRS}
+	
 
 # Dynamic dependencies:

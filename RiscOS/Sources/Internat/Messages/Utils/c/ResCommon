@@ -15,7 +15,7 @@
 * Pace.
 *
 * ----------------------------------------------------------------------------
-* Purpose: This file contains source code required for the MsgCommon utility.
+* Purpose: This file contains source code required for the ResCommon utility.
 *           This utility implements some of the functionality required for
 *           the Multiple Resource sets in RISC OS ROMS (see spec ****,***).
 *          This utlity scans through a set of resource directories and strips
@@ -86,6 +86,7 @@ char* directory_to_copy = NULL;
 char* compared_files[MAX_TERRITORIES] = NULL; /* An array in which to store the filenames of the files t be compared. */
 bool verbose = false; /* Do you wish to see what it is doing */
 bool simulate = false; /* Do not actually delete any files. */
+bool directory_deleted = false; /* A global flag to say whether an empty directory was deleted on this pass. If it was, then the recursive routines have to restart. */
 
 /*****************************************************************************
 * Function prototypes - Private to this file
@@ -94,6 +95,10 @@ bool perform_comparisons(void);
 bool remove_file(const char* file_to_remove);
 bool compare_files(const char* filename);
 void exit_handler(void);
+char *strdup(const char *str);
+bool is_directory_empty(const char* directory);
+
+
 
 /*****************************************************************************
 * Functions
@@ -189,7 +194,7 @@ unsigned long int filer_object_type(const char* filename)
 /*
  * malloc an area for a string and copy the string in
  */
-char *strdup(char *str)
+char *strdup(const char *str)
 {
   char *newstr = malloc(str == NULL ? 1 : (strlen(str) + 1));
 
@@ -314,8 +319,8 @@ bool ensure_resource_directories_exist(void)
 
 
 
-/* This routine creates the 'common' directory, and copies the sources in. */
-void create_common(char* res_to_copy)
+/* This routine creates the 'common' directory, and moves the sources in. */
+void create_common(const char* res_to_copy)
 {
   char buffer[255]; /* another nasty hardcoded limit */
   char source[255];
@@ -458,21 +463,45 @@ bool compare_files(const char* filename)
 
 
 /* Ths routine does exactly what it says on the tin - it removes the
-specified file. It returns true if successful, false otherwise. */
+specified file. It returns true if successful, false otherwise.
+   If the global 'simulate' flag is set, then the file is not actually
+deleted. This is useful if you wish to see what it will do before */
 
 bool remove_file(const char* file_to_remove)
 {
   bool success = false;
   _kernel_swi_regs reg;
+  char* file_path = NULL;
 
   if (verbose)
     printf("Removing file %s\n", file_to_remove);
 
-  if (simulate)
+  if (!simulate)
   {
     reg.r[0] = 6;		/* remove object */
     reg.r[1] = (int) file_to_remove;
     _kernel_swi(OS_File, &reg, &reg);
+  }
+
+  /* Get the path to the file. */
+  file_path = strdup(file_to_remove);
+  stripleaf(file_path);
+
+/*
+  if (!simulate)
+  {
+    // Now attempt to delete the directory using OS_File 6. Hacky, but faster than working out if it is empty and then deleting it.
+    printf ("Attempting to delete directory %s\n", file_path);
+    reg.r[0] = 6;		// remove object
+    reg.r[1] = (int) file_path;
+    _kernel_swi(OS_File, &reg, &reg);
+  }
+*/
+
+  if (file_path)
+  {
+    free (file_path);
+    file_path = NULL;
   }
 
   return (success);
@@ -491,11 +520,14 @@ bool perform_comparisons(void)
   unsigned int loop;
   bool file_matches = true;
   unsigned int filesize[MAX_OPEN_TERRITORY_FILES] = 0;
+  unsigned long int filetype[MAX_OPEN_TERRITORY_FILES] = 0;
 
-  /* Ensure that all the files exist and grab their filesizes.*/
+  /* Ensure that all the files exist and grab their filesizes and filetypes.*/
   for (loop=0; loop < num_of_territories; loop++)
   {
     assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL string... */
+
+    /* Ensure that all the files exist. */
     if (!file_exists(compared_files[loop]))
     {
       if (verbose)
@@ -503,14 +535,19 @@ bool perform_comparisons(void)
       return (false);
     }
 
+    /* Compare the filetypes and fileseizes */
+    filetype[loop] = filer_object_type(compared_files[loop]);
     filesize[loop] = file_size(compared_files[loop]);
-    if (loop > 0 && (filesize[loop] != filesize[loop-1]))
+    if (loop > 0 && ((filesize[loop] != filesize[loop-1]) || filetype[loop] != filetype[loop-1]))
     {
       if (verbose)
-        printf("No match: differing file sizes!\n");
+        printf("No match: differing file sizes or types!\n");
       return (false);
     }
   }
+
+  /* Another check - if the files are squash files, then they will always be different. Check the headers of each file to ensure they are the same. */
+
 
   /* Open all the files. */
   for (loop=0; loop < num_of_territories; loop++)
@@ -579,6 +616,14 @@ void descend(char *path)
       object *op = (object *)buf;
       int nread;
 
+      /* Slight hack - there is a chance that the directory has been deleted because it was empty.
+          Detect if it has, and, if so, move down one segment of the path. */
+//      if (!file_exists(path))
+//      {
+//        stripleaf(path);
+     //   printf("Stripped leaf from the path. Path is now %s\n", path);
+//      }
+      printf ("Calling OS_GBPB 8 on path %s\n", path);
       _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
               10, path, buf, 80, offset, BUFSZ, 0, &nread, &offset );
 
@@ -691,7 +736,6 @@ int main(int argc, char **argv)
 {
   char* locale_list = NULL;
   unsigned int i;
-  directory_to_copy = strdup("UK");
 
   if (argc < 2)
   {
@@ -776,6 +820,7 @@ int main(int argc, char **argv)
   }
 
   /* Copy the UK directory into the Common one. */
+  directory_to_copy = strdup(supported_territories[0]);
   create_common(directory_to_copy);
 
   /* And now do the compariasons... */
@@ -837,6 +882,24 @@ void exit_handler(void)
     root_directory = NULL;
   }
 }
+
+
+
+#if 0
+/* This routine returns true if the directory is full, false otherwise. */
+/* This routine is currently uncompleted. */
+bool is_directory_empty(const char* directory)
+{
+  bool is_empty = false;
+
+  if filer_object_type(directory) == 2)) /* It is a directory. */
+  {
+    /* Is directory empty? */
+  }
+
+  return (is_empty);
+}
+#endif /* 0 */
 
 
 /*****************************************************************************
