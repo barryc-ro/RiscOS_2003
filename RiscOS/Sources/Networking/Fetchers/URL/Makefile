@@ -6,6 +6,7 @@
 # Date	     Name   Description
 # ----	     ----   -----------
 # 10-Feb-98  SNB    Created
+# 06-Oct-98  SNB    Updated to use LocalRes, link 5.08
 #
 
 #
@@ -35,6 +36,7 @@ LD	= link
 TLD	= tlink
 RM	= remove
 WIPE	= -wipe
+MODSQZ  = modsqz
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -117,12 +119,11 @@ DBGFLAGS=-DTRACE -DUSE_SYSLOG
 .c.i:;    ${CC} ${CFLAGS} ${ROMFLAGS} -C -E $< >$@
 .s.o:;	  objasm -depend !Depend -throwback -o $@ $<
 .c.od:;	  ${CC} ${CFLAGS} ${ROMFLAGS} ${DBGFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $< -p -d $*.h
+.cmhg.o:; ${CMHG} -p -o $@ $<
+.cmhg.h:; ${CMHG} -p -d $@ $<
 
-URLHdr.h: URLHdr.o
-       @|
+od.protocol protocol.o: URLHdr.h
 
-protocol.o: URLHdr.h
 
 #
 # Main rules:
@@ -137,7 +138,7 @@ install: ${RAM_MODULE}
         ${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.URL.${COMPONENT}
 	@echo ${COMPONENT}: Module installed (Disc)
 
-ramtrace: ${DBG_MODULE}
+ramtrace: ${DBG_MODULE} localdirs
 	@echo ${COMPONENT}: Module built (RAM - trace)
 
 rom: ${ROM_MODULE} localdirs
@@ -147,10 +148,11 @@ install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: Module installed (ROM)
 
-resources: Resources.${LOCALE}.Messages
+resources: LocalRes:Messages LocalRes:ResList LocalRes:images
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESDIR}.${COMPONENT}
-	${CP} Resources.${LOCALE}.* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+	${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied to Messages module
 
 localdirs:
@@ -160,7 +162,6 @@ localdirs:
 	${MKDIR} oi
 	${MKDIR} inst
 	${MKDIR} linked
-	${MKDIR} map
 	${MKDIR} aof
 	${mkdir} rm
 
@@ -171,7 +172,6 @@ clean:
 	${WIPE} oi ${WFLAGS}
 	${WIPE} inst ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
-	${WIPE} map ${WFLAGS}
 	${WIPE} aof ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
 	${WIPE} h.${COMPONENT}Hdr ${WFLAGS}
@@ -181,18 +181,18 @@ ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
 	${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
-rom_link:
-	${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-	      -map > map.${COMPONENT}
-	truncate map.${COMPONENT} linked.${COMPONENT}
+rom_link: localdirs
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-${MSGSF}: @.Resources.${LOCALE}.Messages Resources.${LOCALE}.ResList 
-	resgen messages_file ${MSGSF} -via Resources.${LOCALE}.ResList
+${MSGSF}: LocalRes:Messages LocalRes:ResList
+	TokenCheck LocalRes:Messages
+	resgen messages_file ${MSGSF} -via LocalRes:ResList
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+	${MODSQZ} $@
 	Access $@ RW/R
 
 ${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
