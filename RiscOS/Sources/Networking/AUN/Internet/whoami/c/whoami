@@ -77,6 +77,9 @@
 #include "swiveneers.h"
 #include "whoami.h"
 
+/* This header is exported by the DHCP module */
+#include "DHCP.h"
+
 /*
  * Ho hum.  You can probably guess what this macro does.  The Microsoft DHCP
  * server (at least as far as NT4/SP3 goes) does NOT send BOOTP-style clients
@@ -343,18 +346,34 @@ vend_verify(BOOTP *pkt)
 /*
  * Find code in vendor specific information
  * (returns pointer to length byte or NULL).
+ * As of v5.21, copes with overload of sname and file fields
  */
 static u_char *
 vend_find_code(BOOTP *pkt, u_char code)
 {
     u_char *cp = pkt->options + 4;     /* Skip magic cookie. */
     u_char c;
+    u_char overload = 0;
 
-    while ((c = *cp++) != OPTION_END)
-    {
-        if (c == OPTION_PAD) continue;
-        if (c == code) return cp;
-        cp += *cp + 1;
+    for (;;) {
+      while ((c = *cp++) != OPTION_END)
+      {
+          if (c == OPTION_PAD) continue;
+          if (c == OPTION_OPTIONOVERLOAD) overload = *(cp+1);
+          if (c == code) return cp;
+          cp += *cp + 1;
+      }
+      if (overload & 1) {
+              cp = pkt->file;
+              overload ^= 1;
+              continue;
+      }
+      if (overload & 2) {
+              cp = pkt->sname;
+              overload ^= 2;
+              continue;
+      }
+      break;
     }
 
     return NULL;
@@ -418,6 +437,22 @@ vend_miaddr(BOOTP *pkt, u_char code, char *buf, u_char max)
 	}
 
 	return i;
+}
+
+/* Routine compensates for overloaded file field.  Return 0 if we set the var */
+static int vend_bootpfile(BOOTP *pkt)
+{
+  if (vend_verify(pkt)) {
+    u_char *cp = vend_find_code(pkt, OPTION_BOOTFILENAME);
+    if (cp != NULL) {
+      u_char tmp = cp[1+*cp];
+      cp[1+*cp] = '\0';
+      _kernel_setenv(BOOTPSERVERFILE, (char *) cp+1);
+      cp[1+*cp] = tmp;
+      return 0;
+    }
+  }
+  return 1;
 }
 
 static void bootp_interpret(BOOTP *, int, struct ifnet *);
@@ -489,7 +524,12 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
 
     in.s_addr = pkt->siaddr;
     _kernel_setenv(BOOTPSERVERVAR, inet_ntoa(in));
-    _kernel_setenv(BOOTPSERVERFILE, (char *) pkt->file);
+
+    /* If this was a DHCP packet, file field may have been overloaded */
+    if (vend_bootpfile(pkt)) {
+       /* But it wasn't this time */
+       _kernel_setenv(BOOTPSERVERFILE, (char *) pkt->file);
+    }
 
     /* If this packet is RFC-1048 compliant then extract any pertinent
      * information from the vendor data (also rfc2132).
@@ -527,7 +567,7 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
         if (vend_miaddr(pkt, OPTION_NBNSSERVERS, buf, MAX_GENERICSERVERS))
 		_kernel_setenv(BOOTPNBNSVAR, buf);
 
-        if (vend_miaddr(pkt, OPTION_SMTPSERVER, buf, MAX_SMTPSERVERS))
+        if (vend_miaddr(pkt, OPTION_SMTPSERVERS, buf, MAX_SMTPSERVERS))
         	_kernel_setenv(BOOTPSMTPSERVERVAR, buf);
 
         if (vend_miaddr(pkt, OPTION_POP3SERVER, buf, MAX_POPSERVERS))
@@ -701,7 +741,7 @@ bootp_myaddr(ac, retry)
     pkt.options[option_index++] = OPTION_NBNSSERVERS;
     pkt.options[option_index++] = OPTION_TFTPSERVER;
     pkt.options[option_index++] = OPTION_WWWSERVER;
-    pkt.options[option_index++] = OPTION_SMTPSERVER;
+    pkt.options[option_index++] = OPTION_SMTPSERVERS;
     pkt.options[option_index++] = OPTION_POP3SERVER;
     pkt.options[option_index++] = OPTION_NNTPSERVER;
     pkt.options[option_index++] = OPTION_FINGERSERVER;
