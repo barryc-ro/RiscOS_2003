@@ -6,7 +6,7 @@
 # When		Who	What
 # ----		---	----
 # 17-Jun-96	JRH	Created
-#
+# 24-Nov-98	jmf	Switch to DebugLib for debugging
 
 #
 # Paths
@@ -29,9 +29,9 @@ DEFMOD  = DefMod
 AR	= LibFile
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
-CCFLAGS  = -c -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp
+CCFLAGS  = -c -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp ${DFLAGS}
 # Falgs for debugging ...
-#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -Throwback -DDEBUG
+#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 -Wp -Throwback -DDEBUG
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 INCLUDES= -IC: -ITCPIPLibs:
@@ -48,6 +48,15 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 
 SOCKLIB	   = TCPIPLibs:o.socklibzm
 INETLIB	   = TCPIPLibs:o.inetlibzm
+
+DEBUGLIB  = <Lib$Dir>.DebugLib.o.debuglibzm
+
+#
+# DebugLib support :- comment out both lines for production.
+#
+#DFLAGS	= -Throwback -fn -DDEBUGLIB
+#LIBSD 	= ${DEBUGLIB}
+
 
 #
 # Rule patterns
@@ -96,8 +105,8 @@ resources:
         ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGETSA}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+${TARGETSA}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD}
 
 #
 # ROM target (re-linked at ROM Image build time)
