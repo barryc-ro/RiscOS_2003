@@ -1,0 +1,1046 @@
+/* Title:   TextMan.c
+ * Purpose: Text management functions.
+ *
+ * Revision History
+ * rlougher  Nov 96  Created
+ * rlougher 18/12/96 Added code to keep track of max x-extent during editing 
+ * rlougher 14/02/97 Fixed line limit (1000) on text replace
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "kernel.h"
+#include "swis.h"
+
+#include "TextMan.h"
+
+_kernel_oserror *grow_lines(Text *text, int size);
+_kernel_oserror *grow_lines_by(Text *text, int size);
+_kernel_oserror *create_insertion(Text *text, int pos);
+int             line_start(Text *text, int line_no);
+int             line_end(Text *text, int line_no);
+int             line_index_of_char(Text *text, int pos);
+
+char            *text_to_mem(Text *text, int pos);
+
+_kernel_oserror *create_text(int size, int font_handle, Text **t_pntr)
+{
+    _kernel_oserror *err;
+    Text            *text;
+    Handle          *handle;
+
+    /* Create the memory block to hold the text data */
+
+    if((err = create_block(size, &handle)) != NULL)
+        return err;
+
+    if((text = malloc(sizeof(Text))) == NULL)
+    {
+        delete_block(handle);
+        return (_kernel_oserror*)"    Out of memory.";
+    }
+
+    text->insert_line = 0;
+    text->insert_delta = 0;
+    text->insert_pos = 0;
+    text->insert_gap_end = 0;
+    text->no_of_lines = 1;
+    text->lne_tbl_sze = 0;
+    text->line_table = NULL;
+    text->xmax_table = NULL;
+    text->sel_stop_pos = -1;
+    text->sel_stop_line = 0;
+    text->xmax = 0;
+    text->xmax_line = 0;
+
+    /* Create the line table for the text */
+
+    if((err = grow_lines(text, size)) != NULL)
+    {
+        free(text);
+        delete_block(handle);
+        return err;
+    }
+
+    text->line_table[0] = -1;
+    text->text_data = handle;
+
+    set_font(text, font_handle);
+    *t_pntr = text;
+    return NULL;
+}
+
+
+void set_font(Text *text, int font_handle)
+{
+    int min, max;
+
+    text->font_handle = font_handle;
+    _swix(Font_ReadInfo,_IN(0)|_OUT(2)|_OUT(4), font_handle, &min, &max);
+    text->line_height = max + (min < 0 ? - min : 0);
+    text->font_base = max;
+
+    if(get_text_size(text) > 0)
+        compose_text(text);
+}
+
+
+//static void delete_text(Text *text)
+//{
+//    delete_block(text->text_data);
+//    free(text->line_table);
+//    free(text);
+//}
+
+
+static void update_lines(Text *text)
+{
+    int i;
+
+    for(i = text->insert_line; i < text->no_of_lines; i++)
+        text->line_table[i] += text->insert_delta;
+
+    text->insert_delta = 0;
+}
+
+
+_kernel_oserror *move_insertion(Text *text, int pos)
+{
+    int diff = text->insert_gap_end - text->insert_pos;
+
+    if(diff == 0)
+        return create_insertion(text, pos);
+    else
+    {
+        char *base = text->text_data->base;
+
+        if(pos < text->insert_pos)
+            memmove(base + pos + diff, base + pos, text->insert_pos - pos);
+        else
+            memmove(base + text->insert_pos, base + text->insert_gap_end,
+                    pos - text->insert_gap_end);
+    }
+    text->insert_pos = pos;
+    text->insert_gap_end = pos + diff;
+
+    update_lines(text);
+    text->insert_line = line_index_of_char(text, pos);
+
+    return NULL;
+}
+
+
+_kernel_oserror *create_insertion(Text *text, int pos)
+{
+    _kernel_oserror *err;
+
+    if((err = extend_block(text->text_data, pos, INSERTION_GAP)) != NULL)
+        return err;
+
+    text->insert_pos = pos;
+    text->insert_gap_end = pos + INSERTION_GAP;
+    text->insert_delta = 0;
+    text->insert_line = line_index_of_char(text, pos);
+
+    return NULL;
+}
+
+
+void close_insertion(Text *text)
+{
+    shrink_block(text->text_data, text->insert_pos,
+                 text->insert_gap_end - text->insert_pos);
+
+    text->insert_gap_end = text->insert_pos;
+
+    update_lines(text);
+}
+
+
+static int line_len(Text *text, int line_no)
+{
+    int xpoints;
+
+    if(line_no == text->insert_line)
+    {
+        int start = line_start(text, line_no);
+        int len = text->insert_pos - start;
+        char *start_pntr = text_to_mem(text, start);
+        int xpoints2;
+
+        if((text->insert_gap_end - text->insert_pos) > 0)
+            *(text->text_data->base + text->insert_pos) = '\0';
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                              text->font_handle, start_pntr, 1<<7|1<<8,
+                              0xfffffff, 0, len,
+                              &xpoints);
+
+        len = line_end(text, line_no) - text->insert_pos + 1;
+        start_pntr = text_to_mem(text, text->insert_pos);
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                              text->font_handle, start_pntr, 1<<7|1<<8,
+                              0xfffffff, 0, len,
+                              &xpoints2);
+
+        xpoints += xpoints2;
+    }
+    else
+    {
+        int start = line_start(text, line_no);
+        int len = line_end(text, line_no) - start + 1;
+        char *start_pntr = text_to_mem(text, start);
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                              text->font_handle, start_pntr, 1<<7|1<<8,
+                              0xfffffff, 0, len,
+                              &xpoints);
+    }
+    _swix(Font_ConverttoOS,_IN(1)|_IN(2)|_OUT(1), xpoints, 0, &xpoints);
+
+    return xpoints;
+}
+
+_kernel_oserror *compose_text(Text *text)
+{
+    _kernel_oserror *err;
+    int             line_no = 0;
+    int             max_lines = text->lne_tbl_sze;
+    int             *lines = text->line_table;
+    char            *end, *char_pntr, *base = text->text_data->base;
+    int             i;
+
+    if(text->insert_gap_end > text->insert_pos)
+        close_insertion(text);
+
+    char_pntr = base;
+    end = base + text->text_data->size;
+    do
+    {
+        while((char_pntr < end) && (*char_pntr++ != '\n'));
+        if(line_no >= max_lines)
+        {
+            if((err = grow_lines(text, end - char_pntr)) != NULL)
+                return err;
+            max_lines = text->lne_tbl_sze;
+        }
+        lines[line_no++] = char_pntr - base - 1;
+    } while(char_pntr < end);
+
+    text->no_of_lines = line_no;
+
+    text->xmax_line = 0;
+    text->xmax = text->xmax_table[0];
+
+    for(i = 0; i < line_no; i++)
+    {
+        text->xmax_table[i] = line_len(text, i);
+
+        if(text->xmax_table[i] > text->xmax)
+        {
+            text->xmax_line = i;
+            text->xmax = text->xmax_table[i];
+        }
+    }
+
+    return NULL;
+}
+
+_kernel_oserror *replace_text(Text *text, int from, int ex_to, const char *str,
+                      int *first_line_p, int *last_line_p, int *line_delta_p)
+{
+    _kernel_oserror *err;
+    int             to = ex_to - 1;
+    int             str_size = strlen(str);
+    int             delta;
+    int             insert_pos = text->insert_pos;
+    int             first_line, last_line, last_line_end, first_line_start;
+    int             line_no = 0;
+    int             *new_lines, max_line;
+    char            *base = text->text_data->base;
+    char            *char_pntr, *end;
+    int             line_delta;
+    int             i;
+    char            *con;
+
+    int             old_xmax;
+
+    if((ex_to == -1) || (to > line_end(text, text->no_of_lines - 1)))
+        to = line_end(text, text->no_of_lines - 1);
+
+    if(from == -1 || (from > line_end(text, text->no_of_lines - 1)))
+        from = line_end(text, text->no_of_lines - 1) + 1;    
+
+    delta = str_size - (to - from + 1);
+    
+    if((str_size == 0) && (delta == 0)) return NULL;
+    
+    first_line = line_index_of_char(text, from);
+    last_line = line_index_of_char(text, to);
+    
+    first_line_start = line_start(text, first_line);
+    last_line_end = line_end(text, last_line);
+    
+    max_line = (last_line_end - first_line_start + 1 + delta) / 20 + 5;
+    new_lines = malloc(max_line * sizeof(int));
+    
+    if((to < insert_pos) && (from != insert_pos))
+    {
+        char_pntr = base + first_line_start;
+        end = base + to + delta;
+        con = base + 1;
+
+        if(delta < 0)
+            shrink_block(text->text_data, from, -delta);
+        else
+            if((err = extend_block(text->text_data, from, delta)) != NULL)
+                return err;
+
+        memcpy(base + from, str, str_size);
+
+        while(char_pntr <= end)
+            if(*char_pntr++ == '\n')
+            {                           
+                new_lines[line_no++] = char_pntr - con;
+                if(line_no == max_line)
+                    if((new_lines = realloc(new_lines, (max_line += ((end - char_pntr
+                                         + 1) / 20 + 5)) * sizeof(int))) == NULL)
+                        return (_kernel_oserror *)"  Out of memory";
+            }
+            
+        if((last_line_end != to) || (last_line == (text->no_of_lines -1)))
+           new_lines[line_no++] = last_line_end + delta;
+        else if((str_size == 0) || (*end != '\n'))
+                new_lines[line_no++] = line_end(text, ++last_line) + delta;
+
+        text->insert_delta += delta;
+        text->insert_pos += delta;
+        text->insert_gap_end += delta;
+
+        if(last_line == text->insert_line)
+            new_lines[line_no - 1] -= text->insert_delta;
+        else
+            for(i = last_line + 1; i < text->insert_line; i++)
+                text->line_table[i] += delta;
+
+        line_delta = line_no - (last_line - first_line + 1);
+        text->insert_line += line_delta;
+
+    }
+    else
+    {
+        int gap_size;
+
+        if(from <= insert_pos)
+        {
+            text->insert_gap_end += to - insert_pos + 1;
+            text->insert_pos = insert_pos = from;
+            text->insert_line = first_line;
+            gap_size = text->insert_gap_end - insert_pos;
+
+            if((err = extend_block(text->text_data, from + gap_size,
+                      str_size)) != NULL)
+                return err;
+        }
+        else
+        {
+            gap_size = text->insert_gap_end - insert_pos;
+
+            if(delta < 0)
+                shrink_block(text->text_data, from + gap_size, -delta);
+            else
+                if((err = extend_block(text->text_data, from + gap_size,
+                        delta)) != NULL)
+                    return err;
+        }
+
+        char_pntr = base + from + gap_size;
+        end = base + last_line_end + delta + gap_size;
+        con = base + gap_size + text->insert_delta + 1;
+
+        memcpy(char_pntr, str, str_size);
+                
+        while(char_pntr <= end)
+            if(*char_pntr++ == '\n')
+            {                           
+                new_lines[line_no++] = char_pntr - con;
+                if(line_no == max_line)
+                    if((new_lines = realloc(new_lines, (max_line += ((end - char_pntr
+                                            + 1) / 20 + 5)) * sizeof(int))) == NULL)
+                        return (_kernel_oserror *)"  Out of memory";
+            }
+
+        if(last_line == (text->no_of_lines - 1))
+            new_lines[line_no++] = char_pntr - con;
+        else
+            if(*end != '\n')
+                new_lines[line_no++] = text->line_table[++last_line] + delta;
+
+        for(i = last_line + 1; i < text->no_of_lines; i++)
+            text->line_table[i] += delta;
+
+        line_delta = line_no - (last_line - first_line + 1);
+
+    }
+    if(line_delta < 0)
+        for(i = last_line + 1; i < text->no_of_lines; i++)
+        {
+            text->line_table[i + line_delta] = text->line_table[i];
+            text->xmax_table[i + line_delta] = text->xmax_table[i];
+        }
+    else
+    {
+        int free = text->lne_tbl_sze - text->no_of_lines - line_delta;
+        if((free < 0) && ((err = grow_lines_by(text, -free)) != NULL))
+            return err;
+        for(i = text->no_of_lines - 1; i > last_line; i--)
+        {
+            text->line_table[i + line_delta] = text->line_table[i];
+            text->xmax_table[i + line_delta] = text->xmax_table[i];
+        }
+    }
+
+    for(i = 0; i < line_no; i++)
+        text->line_table[first_line + i] = new_lines[i];
+
+    free(new_lines);
+    
+    text->no_of_lines += line_delta;
+
+    *first_line_p = first_line;
+    *last_line_p = last_line;
+    *line_delta_p = line_delta;
+
+    old_xmax = text->xmax;
+
+    for(i = first_line; i < (first_line + line_no); i++)
+    {
+        text->xmax_table[i] = line_len(text, i);
+
+        if(text->xmax_table[i] > text->xmax)
+        {
+            text->xmax_line = i;
+            text->xmax = text->xmax_table[i];
+        }
+    }
+
+    if(text->xmax == old_xmax)
+    {
+      if(text->xmax_line > last_line)
+          text->xmax_line += line_delta;
+      else
+          if(text->xmax_line >= first_line)
+          {
+              text->xmax_line = 0;
+              text->xmax = text->xmax_table[0];
+              for(i = 0; i < text->no_of_lines; i++)
+                  if(text->xmax_table[i] > text->xmax)
+                  {
+                      text->xmax_line = i;
+                      text->xmax = text->xmax_table[i];
+                  }
+          }
+    }
+    return NULL;
+}
+
+
+_kernel_oserror *insert_text(Text *text, char *str,
+                      int *first_line, int *line_delta)
+{
+    _kernel_oserror *err;
+    int free = text->insert_gap_end - text->insert_pos;
+    int str_size = strlen(str);
+    char *char_pntr = text->text_data->base + text->insert_pos;
+    char *end = char_pntr + str_size;
+    char *con = text->text_data->base + 1;
+    int new_lines[100];
+    int line_no = 0;
+    int i;
+
+    int old_xmax;
+
+    if(free < str_size)
+    {
+        free -= str_size + INSERTION_GAP;
+        if((err = extend_block(text->text_data, text->insert_pos, -free))
+               != NULL)
+            return err;
+
+        text->insert_gap_end -= free;
+    }
+
+    memcpy(char_pntr, str, str_size);
+
+    while(char_pntr < end)
+        if(*char_pntr++ == '\n')
+            new_lines[line_no++] = char_pntr - con;
+
+    new_lines[line_no++] = text->line_table[text->insert_line];
+
+    text->insert_delta += str_size;
+    text->insert_pos += str_size;
+
+    *line_delta = line_no - 1;
+
+    free = text->lne_tbl_sze - text->no_of_lines - *line_delta;
+    if(free < 0)
+        grow_lines_by(text, -free);
+    for(i = text->no_of_lines - 1; i > text->insert_line; i--)
+    {
+        text->line_table[i + *line_delta] = text->line_table[i];
+        text->xmax_table[i + *line_delta] = text->xmax_table[i];
+    }
+    for(i = 0; i < line_no; i++)
+        text->line_table[text->insert_line + i] = new_lines[i];
+
+    *first_line = text->insert_line;
+
+    text->insert_line += *line_delta;
+    text->no_of_lines += *line_delta;
+
+    old_xmax = text->xmax;
+
+    for(i = *first_line; i < (*first_line + line_no); i++)
+    {
+        text->xmax_table[i] = line_len(text, i);
+
+        if(text->xmax_table[i] > text->xmax)
+        {
+            text->xmax_line = i;
+            text->xmax = text->xmax_table[i];
+        }
+    }
+
+    if(text->xmax == old_xmax)
+    {
+      if(text->xmax_line > *first_line)
+          text->xmax_line += *line_delta;
+      else
+          if(text->xmax_line == *first_line)
+          {
+              text->xmax_line = 0;
+              text->xmax = text->xmax_table[0];
+              for(i = 0; i < text->no_of_lines; i++)
+                  if(text->xmax_table[i] > text->xmax)
+                  {
+                      text->xmax_line = i;
+                      text->xmax = text->xmax_table[i];
+                  }
+          }
+    }
+    return NULL;
+}
+
+
+char *get_text(Text *text, int from, int ex_to, char *buff)
+{
+    char *base = text->text_data->base;
+    int to = ex_to - 1;
+
+    if((ex_to == -1) || (to > line_end(text, text->no_of_lines - 1)))
+        to = line_end(text, text->no_of_lines - 1);
+
+    if(to < text->insert_pos)
+        memcpy(buff, base + from, to - from + 1);
+    else
+    {
+        if(from >= text->insert_pos)
+            memcpy(buff, base + from - text->insert_pos +
+                    text->insert_gap_end, to - from + 1);
+        else
+        {
+            int size;
+            memcpy(buff, base + from, size = text->insert_pos - from);
+            memcpy(buff + size, base + text->insert_gap_end,
+                   to - text->insert_pos + 1);
+        }
+    }
+    *(buff + to - from + 1) = '\0';
+    return buff;
+}
+
+
+char *get_line(Text *text, int line_no, char *buff)
+{
+    return get_text(text, line_start(text, line_no),
+                          line_end(text, line_no) + 1, buff);
+}
+
+
+int get_text_size(Text *text)
+{
+    return line_end(text, text->no_of_lines - 1) + 1;
+}
+
+
+int line_start(Text *text, int line_no)
+{
+    int start;
+
+    if(line_no == 0)
+        return 0;
+
+    start = text->line_table[line_no - 1] + 1;
+    return line_no <= text->insert_line ? start : start + text->insert_delta;
+}
+
+
+int line_end(Text *text, int line_no)
+{
+    int end;
+
+   end = text->line_table[line_no];
+   return line_no < text->insert_line ? end : end + text->insert_delta;
+}
+
+
+int line_index_of_char(Text *text, int pos)
+{
+    int low, high, i;
+    int *lines = text->line_table;
+
+    if(pos > (lines[text->insert_line] + text->insert_delta))
+    {
+        low = text->insert_line;
+        high = text->no_of_lines - 1;
+        pos -= text->insert_delta;
+    }
+    else
+    {
+        low = 0;
+        high = text->insert_line;
+    }
+
+    if(pos <= lines[low])
+       return low;
+
+    while(high - low > 1)
+    {
+        i = (high + low) / 2;
+        if(lines[i] < pos)
+            low = i;
+        else
+            high = i;
+    }
+    return high;
+}
+
+
+char *text_to_mem(Text *text, int text_pos)
+{
+    int pos = (text_pos < text->insert_pos ? text_pos :
+                    text_pos + text->insert_gap_end - text->insert_pos);
+
+    return text->text_data->base + pos;
+}
+
+
+_kernel_oserror *grow_lines(Text *text, int text_size)
+{
+    int by  = text_size / 20 + 5; /* Rough estimate of how many lines
+                                     needed for text */
+
+    return grow_lines_by(text, by);
+}
+
+
+_kernel_oserror *grow_lines_by(Text *text, int by)
+{
+    int *new_table, *new_xmax, new_size;
+
+    new_size = text->lne_tbl_sze + by;
+
+    if((new_table = realloc(text->line_table,
+                               new_size * sizeof(int))) == NULL)
+        return (_kernel_oserror*)"    Out of memory.";
+
+    if((new_xmax = realloc(text->xmax_table,
+                               new_size * sizeof(int))) == NULL)
+        return (_kernel_oserror*)"    Out of memory.";
+
+    text->line_table = new_table;
+    text->xmax_table = new_xmax;
+    text->lne_tbl_sze = new_size;
+
+    return NULL;
+}
+
+
+void char_block(Text *text, int xcoord, int ycoord, int *line, int *index,
+                int *xpos, int *ypos)
+{
+    int xpoints, ypoints;
+    int line_no = ycoord / text->line_height;
+
+    if(line_no >= text->no_of_lines)
+       line_no = text->no_of_lines - 1;
+    else
+        if(line_no < 0)
+            line_no = 0;
+
+    _swix(Font_Converttopoints,_IN(1)|_IN(2)|_OUT(1), xcoord, 0, &xpoints);
+
+    if(line_no == text->insert_line)
+    {
+        int start = line_start(text, line_no);
+        int end = line_end(text, line_no);
+        int len = text->insert_pos - start;
+        char *start_pntr = text_to_mem(text, start);
+        char *char_pntr;
+        int points = xpoints;
+
+        if((text->insert_gap_end - text->insert_pos) > 0)
+            *(text->text_data->base + text->insert_pos) = '\0';
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|
+                              _OUT(1)|_OUT(3)|_OUT(4), text->font_handle,
+                              start_pntr, 1<<17|1<<7|1<<8, xpoints, 0, len,
+                              &char_pntr, &xpoints, &ypoints);
+
+        *index = start + (int)(char_pntr - start_pntr);
+        if(*index == text->insert_pos)
+        {
+            len = end - text->insert_pos + 1;
+            start_pntr = text_to_mem(text, text->insert_pos);
+            points -= xpoints;
+
+            _swix(Font_ScanString,_INR(0,4)|_IN(7)|
+                                  _OUT(1)|_OUT(3)|_OUT(4), text->font_handle,
+                                   start_pntr, 1<<17|1<<7|1<<8, points, 0,
+                                  len, &char_pntr, &points, &ypoints);
+
+            *index += (int)(char_pntr - start_pntr);
+            xpoints += points;
+        }
+    }
+    else
+    {
+        int start = line_start(text, line_no);
+        int len = line_end(text, line_no) - start + 1;
+        char *start_pntr = text_to_mem(text, start);
+        char *char_pntr;
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|
+                              _OUT(1)|_OUT(3)|_OUT(4), text->font_handle,
+                              start_pntr, 1<<17|1<<7|1<<8, xpoints, 0,
+                              len, &char_pntr, &xpoints, &ypoints);
+
+        *index = start + (int)(char_pntr - start_pntr);
+    }
+    _swix(Font_ConverttoOS,_IN(1)|_IN(2)|_OUT(1), xpoints, 0, xpos);
+    *ypos = (line_no + 1) * text->line_height;
+    *line = line_no;
+}
+
+
+void char_pos(Text *text, int index, int *xpos, int *ypos)
+{
+    int xpoints;
+    int line_no = line_index_of_char(text, index);
+
+    if((line_no == text->insert_line) && (index > text->insert_pos))
+    {
+        int start = line_start(text, line_no);
+        int len = text->insert_pos - start;
+        char *start_pntr = text_to_mem(text, start);
+        int xpoints2;
+
+        if((text->insert_gap_end - text->insert_pos) > 0)
+            *(text->text_data->base + text->insert_pos) = '\0';
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                              text->font_handle, start_pntr, 1<<7|1<<8,
+                              0xfffffff, 0, len,
+                              &xpoints);
+
+        len = index - text->insert_pos;
+        start_pntr = text_to_mem(text, text->insert_pos);
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                              text->font_handle, start_pntr, 1<<7|1<<8,
+                              0xfffffff, 0, len,
+                              &xpoints2);
+
+        xpoints += xpoints2;
+    }
+    else
+    {
+        int start = line_start(text, line_no);
+        int len = index - start;
+        char *start_pntr = text_to_mem(text, start);
+
+        _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                              text->font_handle, start_pntr, 1<<7|1<<8,
+                              0xfffffff, 0, len,
+                              &xpoints);
+    }
+    _swix(Font_ConverttoOS,_IN(1)|_IN(2)|_OUT(1), xpoints, 0, xpos);
+    *ypos = (line_no + 1) * text->line_height;
+}
+
+
+static void draw_line(Text *text, int line_no, int base, int *block, int right,
+               int fg, int bg)
+{
+    int start = line_start(text, line_no);
+    int len = line_end(text, line_no) - start + 1;
+    char *start_pntr = text_to_mem(text, start);
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, bg,
+          fg, 14);
+
+    block[6] = right;
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+}
+
+static void draw_line2(Text *text, int line_no, int split, int base, int *block,
+                int right, int fg, int bg, int fg2, int bg2)
+{
+    int start = line_start(text, line_no);
+    int len = split - start;
+    char *start_pntr = text_to_mem(text, start);
+    int split_pnt;
+
+    _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                      0, start_pntr,1<<7|1<<8, 0xfffffff, 0, len, &split_pnt);
+    block[6] = block[4] + split_pnt;
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, bg,
+          fg, 14);
+
+
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+
+    len = line_end(text, line_no) - split + 1;
+    start_pntr = text_to_mem(text, split);
+    block[4] = block[6];
+    block[6] = right;
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, bg2,
+          fg2, 14);
+
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+}
+
+static void draw_insert(Text *text, int line_no, int split, int base,
+              int *block, int right, int fg, int bg, int fg2, int bg2)
+{
+    int start = line_start(text, line_no);
+    int len = split - start;
+    char *start_pntr = text_to_mem(text, start);
+    int split_pnt;
+
+    if((text->insert_gap_end - text->insert_pos) > 0)
+        *(text->text_data->base + text->insert_pos) = '\0';
+
+    _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                      0, start_pntr,1<<7|1<<8, 0xfffffff, 0, len, &split_pnt);
+    block[6] = block[4] + split_pnt;
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, bg,
+          fg, 14);
+
+
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+
+    len = line_end(text, line_no) - split + 1;
+    start_pntr = text_to_mem(text, split);
+    block[4] = block[6];
+    block[6] = right;
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, bg2,
+          fg2, 14);
+
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+}
+
+static void draw_line3(Text *text, int line_no, int split1, int split2,
+                int base, int *block, int right, int fg, int bg)
+{
+    int start = line_start(text, line_no);
+    int len = split1 - start;
+    char *start_pntr = text_to_mem(text, start);
+    int split_pnt;
+
+    _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                      0, start_pntr, 1<<7|1<<8, 0xfffffff, 0, len, &split_pnt);
+    block[6] = block[4] + split_pnt;
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, bg,
+          fg, 14);
+
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+
+    len = split2 - split1;
+    start_pntr = text_to_mem(text, split1);
+
+    _swix(Font_ScanString,_INR(0,4)|_IN(7)|_OUT(3),
+                    0, start_pntr, 1<<7|1<<8, 0xfffffff, 0, len, &split_pnt);
+    block[4] = block[6];
+    block[6] += split_pnt;
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, fg,
+          bg, 14);
+
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+    len = line_end(text, line_no) - split2 + 1;
+    start_pntr = text_to_mem(text, split2);
+    block[4] = block[6];
+    block[6] = right;
+
+    _swix(ColourTrans_SetFontColours,_IN(0)|_IN(1)|_IN(2)|_IN(3), 0, bg,
+          fg, 14);
+
+    _swix(Font_Paint,_INR(0,5)|_IN(7),
+                     0, start_pntr, 1<<1|1<<5|1<<7|1<<8, block[4], base,
+                     block, len);
+}
+
+static void draw_selected(Text *text, int line1, int pos1, int line2, int pos2,
+                   int base, int right, int *block, int fg, int bg)
+{
+    if(line1 < line2)
+        draw_line2(text, line1, pos1, base, block, right, fg, bg, bg, fg);
+    else
+        if(line1 > line2)
+            draw_line2(text, line1, pos1, base, block, right, bg, fg,
+                       fg, bg);
+        else
+            if(pos1 < pos2)
+                draw_line3(text, line1, pos1, pos2, base, block, right,
+                           fg, bg);
+            else
+                draw_line3(text, line1, pos2, pos1, base, block, right,
+                           fg, bg);
+}
+
+
+void display_lines(Text *text, int ymin, int ymax, int xorg, int yorg,
+                   int fg, int bg)
+{
+    int ypos, i, step;
+    int top_line, bottom_line;
+    int top, bottom, left, right;
+    int block[8];
+    int start, stop;
+
+    if(text->insert_line < text->sel_stop_line)
+    {
+        start = text->insert_line;
+        stop = text->sel_stop_line;
+    }
+    else
+    {
+        stop = text->insert_line;
+        start = text->sel_stop_line;
+    }
+
+    block[0] = block[1] = block[2] = block[3] = 0;
+
+    if((top_line = ymin / text->line_height) < text->no_of_lines)
+    {
+        bottom_line = ymax / text->line_height;
+        if(bottom_line >= text->no_of_lines)
+            bottom_line = text->no_of_lines - 1;
+
+        top = yorg - (top_line * text->line_height);
+        bottom = top - text->line_height;
+        ypos = top - text->font_base;
+
+        _swix(Font_Converttopoints,_IN(1)|_IN(2)|_OUT(1)|_OUT(2),
+              xorg, top, &left, &top);
+        _swix(Font_Converttopoints,_IN(1)|_IN(2)|_OUT(1)|_OUT(2),
+              0xffff, bottom, &right, &bottom);
+        _swix(Font_Converttopoints,_IN(1)|_IN(2)|_OUT(1)|_OUT(2),
+              text->line_height, ypos, &step, &ypos);
+
+        _swix(Font_SetFont,_IN(0), text->font_handle);
+
+        for(i = top_line; i <= bottom_line; i++)
+        {
+            block[4] = left;
+            block[5] = bottom;
+            block[7] = top;
+
+            if(i == text->insert_line)
+                if(text->sel_stop_pos == -1)
+                    draw_insert(text, i, text->insert_pos, ypos, block, right,
+                               fg, bg, fg, bg);
+                else
+                    draw_selected(text, i, text->insert_pos,
+                                  text->sel_stop_line, text->sel_stop_pos,
+                                  ypos, right, block, fg, bg);
+            else
+                 if(i == text->sel_stop_line)
+                     if(text->sel_stop_pos != -1)
+                         draw_selected(text, i, text->sel_stop_pos,
+                                  text->insert_line, text->insert_pos,
+                                  ypos, right, block, fg, bg);
+                    else
+                        draw_line(text, i, ypos, block, right, fg, bg);
+                 else
+                     if((text->sel_stop_pos == -1) || (i > stop) ||
+                         (i < start))
+                         draw_line(text, i, ypos, block, right, fg, bg);
+                     else
+                         draw_line(text, i, ypos, block, right, bg, fg);
+
+            top = bottom;
+            bottom -= step;
+            ypos -= step;
+        }
+    }
+}
+
+#if 0
+void dump_object(Text *text)
+{
+    int i;
+    char line[256];
+
+    printf("\n\nTEXT OBJECT\n-----------\n\n");
+    printf("Insert_line   : %d\n", text->insert_line);
+    printf("Insert_delta  : %d\n", text->insert_delta);
+    printf("Insert_pos    : %d\n", text->insert_pos);
+    printf("Insert_gap_end: %d\n", text->insert_gap_end);
+    printf("No_of_lines   : %d\n", text->no_of_lines);
+    printf("lne_tbl_sze   : %d\n", text->lne_tbl_sze);
+    printf("sel_stop_pos  : %d\n", text->sel_stop_pos);
+    printf("sel_stop_line : %d\n", text->sel_stop_line);
+    printf("xmax          : %d\n", text->xmax);
+    printf("xmax_line     : %d\n", text->xmax_line);
+    
+    printf("\nLine table:\n");
+    for(i = 0; i < text->no_of_lines; i++)
+    {
+        printf("\tLine: %d\n", i);
+        printf("\t\traw: %d start: %d end: %d xmax: %d\n", text->line_table[i],
+                  line_start(text, i), line_end(text, i), text->xmax_table[i]);
+        printf("\t\t%s", get_line(text, i, line));
+    }
+
+    printf("\nMemory block:\n");
+    printf("\tbase address: %d\n", (int) text->text_data->base);
+    printf("\tsize        : %d\n", text->text_data->size);
+    printf("\tfree        : %d\n", text->text_data->free);
+}
+#endif
+
