@@ -64,6 +64,7 @@ INCLUDES= -IC:
 # use ENABLE_HTTP_PROXY / ENABLE_HTTPS_PROXY to enable ROM based proxies for http and/or SSL http
 # use PRODUCTION_KEYS to use final 'live' RSA crypto stuff (MFRKEYlive from resources, not MFRKEY)
 # use DEBUG_DISCONNECTS to set all PPP line drop timeouts to a minute
+# use MODEM_RACK for the weird alternative dial-up details for some geezer at NCI
 
 # debugging
 
@@ -72,21 +73,21 @@ ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DSHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK -DSECURE_RELATIONSHIP_SERVER \
 		-UMANUFACTURER_KEY_X509 -DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-DETHERNET -DTEST_CRON -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY -UPRODUCTION_KEYS -DDEBUG_DISCONNECTS
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY -UPRODUCTION_KEYS -UMODEM_RACK
 
 ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-DSHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK -DSECURE_RELATIONSHIP_SERVER \
 		-UMANUFACTURER_KEY_X509 -DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -DTEST_CRON -DSEND_SERIALID_LENGTH \
-		-UENABLE_HTTP_PROXY -UENABLE_HTTPS_PROXY -UPRODUCTION_KEYS -DDEBUG_DISCONNECTS
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY -UPRODUCTION_KEYS -UMODEM_RACK
 
 NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-USHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK -DSECURE_RELATIONSHIP_SERVER \
 		-UMANUFACTURER_KEY_X509 -DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -UTEST_CRON -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY -UPRODUCTION_KEYS -UDEBUG_DISCONNECTS
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY -UPRODUCTION_KEYS -UMODEM_RACK
 
 #
 # select one of these
@@ -96,7 +97,8 @@ NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 #NCTARGETARCH = ${ZIPDB}
 NCTARGETARCH = ${NODB}
 
-CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH}
+CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} 
+
 
 
 
@@ -118,8 +120,8 @@ DBUGLIB    = C:o.DBUGzm
 # Rule patterns
 #
 .SUFFIXES:  .oz
-.c.o:;      ${CC} ${CCFLAGS} -o $@ $< -DROM_BUILD=0
-.c.oz:;     ${CC} ${CCFLAGS} -o $@ $< -DROM_BUILD=1
+.c.o:;      ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
+.c.oz:;     ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ -d h.cmhg $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {TRUE}"
@@ -186,7 +188,7 @@ clean:
 resources:
         ${MKDIR} <resource$dir>.Resources
         ${MKDIR} <resource$dir>.Resources.NCMA
-        ${CP} Resources.MFRKEY <resource$dir>.Resources.NCMA.MFRKEY ${CPFLAGS}
+        ${CP} <NCMA$SourceKey> <resource$dir>.Resources.NCMA.MFRKEY ${CPFLAGS}
         ${CP} Resources.Boot <resource$dir>.Resources.NCMA.Boot ${CPFLAGS}
         ${CP} Resources.BootFast <resource$dir>.Resources.NCMA.BootFast ${CPFLAGS}
         ${CP} Resources.BootUpdate <resource$dir>.Resources.NCMA.BootUpdate ${CPFLAGS}
@@ -224,6 +226,22 @@ rom_link:
 
 
 # Dynamic dependencies:
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.module
+o.module:	C:h.DBUG
+o.module:	h.machine
+o.module:	h.vectors
+o.module:	h.ncma_cmds
+o.module:	h.ncma_swis
+o.module:	h.ncma_ncma
+o.module:	h.ncma_scard
+o.module:	h.ncma_dial
+o.module:	h.ncma_uid
+o.module:	h.dynalloc
+o.module:	h.ncma_url
+o.module:	C:h.DBUG
 o.header:	cmhg.header
 o.header:	h.cmhg_defs
 o.vectors:	c.vectors
@@ -235,6 +253,23 @@ o.vectors:	h.vectors
 o.vectors:	h.module
 o.vectors:	C:h.DBUG
 o.vectors:	h.scinter
+o.ncma_cmds:	c.ncma_cmds
+o.ncma_cmds:	C:h.kernel
+o.ncma_cmds:	C:h.swis
+o.ncma_cmds:	h.ncma_cmds
+o.ncma_cmds:	h.ncma_ncma
+o.ncma_cmds:	h.ncma_utils
+o.ncma_cmds:	h.ncma_url
+o.ncma_cmds:	h.ncma_scard
+o.ncma_cmds:	h.ncma_cache
+o.ncma_cmds:	h.ncma_mime
+o.ncma_cmds:	h.ncma_dial
+o.ncma_cmds:	h.machine
+o.ncma_cmds:	h.ncma_cron
+o.ncma_cmds:	h.vectors
+o.ncma_cmds:	h.kprintf
+o.ncma_cmds:	h.dynalloc
+o.ncma_cmds:	C:h.DBUG
 o.ncma_swis:	c.ncma_swis
 o.ncma_swis:	C:h.kernel
 o.ncma_swis:	C:h.swis
@@ -369,21 +404,6 @@ o.ncma_atr:	C:h.swis
 o.ncma_atr:	h.ncma_atr
 o.ncma_atr:	h.ncma_scard
 o.ncma_atr:	C:h.DBUG
-o.ncma_bootb:	c.ncma_bootb
-o.ncma_bootb:	C:h.kernel
-o.ncma_bootb:	C:h.swis
-o.ncma_bootb:	h.ncma_bootb
-o.ncma_bootb:	h.ncma_ROM
-o.ncma_bootb:	h.smcard
-o.ncma_bootb:	h.ncma_tags
-o.ncma_bootb:	h.ncma_scard
-o.ncma_bootb:	h.ncma_cache
-o.ncma_bootb:	h.ncma_url
-o.ncma_bootb:	h.ncma_uid
-o.ncma_bootb:	h.ncma_utils
-o.ncma_bootb:	h.ncma_nvram
-o.ncma_bootb:	h.ncma_auth
-o.ncma_bootb:	C:h.DBUG
 o.ncma_mime:	c.ncma_mime
 o.ncma_mime:	C:h.kernel
 o.ncma_mime:	C:h.swis
@@ -471,36 +491,18 @@ o.ncma_fx:	c.ncma_fx
 o.ncma_fx:	C:h.kernel
 o.ncma_fx:	C:h.swis
 o.ncma_fx:	h.ncma_fx
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	C:h.DBUG
-o.module:	h.machine
-o.module:	h.vectors
-o.module:	h.ncma_cmds
-o.module:	h.ncma_swis
-o.module:	h.ncma_ncma
-o.module:	h.ncma_scard
-o.module:	h.ncma_dial
-o.module:	h.ncma_uid
-o.module:	h.dynalloc
-o.module:	h.ncma_url
-o.module:	C:h.DBUG
-o.ncma_cmds:	c.ncma_cmds
-o.ncma_cmds:	C:h.kernel
-o.ncma_cmds:	C:h.swis
-o.ncma_cmds:	h.ncma_cmds
-o.ncma_cmds:	h.ncma_ncma
-o.ncma_cmds:	h.ncma_utils
-o.ncma_cmds:	h.ncma_url
-o.ncma_cmds:	h.ncma_scard
-o.ncma_cmds:	h.ncma_cache
-o.ncma_cmds:	h.ncma_mime
-o.ncma_cmds:	h.ncma_dial
-o.ncma_cmds:	h.machine
-o.ncma_cmds:	h.ncma_cron
-o.ncma_cmds:	h.vectors
-o.ncma_cmds:	h.kprintf
-o.ncma_cmds:	h.dynalloc
-o.ncma_cmds:	C:h.DBUG
+o.ncma_bootb:	c.ncma_bootb
+o.ncma_bootb:	C:h.kernel
+o.ncma_bootb:	C:h.swis
+o.ncma_bootb:	h.ncma_bootb
+o.ncma_bootb:	h.ncma_ROM
+o.ncma_bootb:	h.smcard
+o.ncma_bootb:	h.ncma_tags
+o.ncma_bootb:	h.ncma_scard
+o.ncma_bootb:	h.ncma_cache
+o.ncma_bootb:	h.ncma_url
+o.ncma_bootb:	h.ncma_uid
+o.ncma_bootb:	h.ncma_utils
+o.ncma_bootb:	h.ncma_nvram
+o.ncma_bootb:	h.ncma_auth
+o.ncma_bootb:	C:h.DBUG
