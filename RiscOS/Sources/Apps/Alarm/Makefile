@@ -103,6 +103,7 @@ resources: ${RDIR}.!RunLink ${MSGS} ${RDIR}.Code
 clean:
         ${RM} ${ROM_MODULE}
         ${RM} ${RDIR}.!RunImage
+        ${RM} ${RDIR}.!RunLink
         ${RM} ${RDIR}.Code
         ${RM} ${MSGS}
         ${WIPE} crunched.* ${WFLAGS}
