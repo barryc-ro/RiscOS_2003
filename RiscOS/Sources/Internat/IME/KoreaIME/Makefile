@@ -79,6 +79,10 @@ rom: ${TARGET} o.dirs
 export: ${EXPORTS} o.dirs
         @echo ${COMPONENT}: export complete
 
+install: rm.${COMPONENT} o.dirs
+        ${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGET} o.dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
