@@ -59,23 +59,6 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.Boca.ModeFiles: Hdr:ListOpts
-rm.Boca.ModeFiles: Hdr:Macros
-rm.Boca.ModeFiles: Hdr:System
-rm.Boca.ModeFiles: Hdr:SWIs
-rm.Boca.ModeFiles: Hdr:CPU.Generic26
-rm.Boca.ModeFiles: Hdr:IO.GenericIO
-rm.Boca.ModeFiles: Hdr:RISCOS
-rm.Boca.ModeFiles: Hdr:ModHand
-rm.Boca.ModeFiles: Hdr:Machine.<Machine>
-rm.Boca.ModeFiles: Hdr:Machine.Machine
-rm.Boca.ModeFiles: Hdr:Proc
-rm.Boca.ModeFiles: Hdr:Services
-rm.Boca.ModeFiles: Hdr:FSNumbers
-rm.Boca.ModeFiles: Hdr:HighFSI
-rm.Boca.ModeFiles: Hdr:NewErrors
-rm.Boca.ModeFiles: Hdr:MsgTrans
-rm.Boca.ModeFiles: Version
 rm.Omega.ModeFiles: Hdr:ListOpts
 rm.Omega.ModeFiles: Hdr:Macros
 rm.Omega.ModeFiles: Hdr:System
@@ -93,3 +76,20 @@ rm.Omega.ModeFiles: Hdr:HighFSI
 rm.Omega.ModeFiles: Hdr:NewErrors
 rm.Omega.ModeFiles: Hdr:MsgTrans
 rm.Omega.ModeFiles: Version
+rm.Boca.ModeFiles: Hdr:ListOpts
+rm.Boca.ModeFiles: Hdr:Macros
+rm.Boca.ModeFiles: Hdr:System
+rm.Boca.ModeFiles: Hdr:SWIs
+rm.Boca.ModeFiles: Hdr:CPU.Generic26
+rm.Boca.ModeFiles: Hdr:IO.GenericIO
+rm.Boca.ModeFiles: Hdr:RISCOS
+rm.Boca.ModeFiles: Hdr:ModHand
+rm.Boca.ModeFiles: Hdr:Machine.<Machine>
+rm.Boca.ModeFiles: Hdr:Machine.Machine
+rm.Boca.ModeFiles: Hdr:Proc
+rm.Boca.ModeFiles: Hdr:Services
+rm.Boca.ModeFiles: Hdr:FSNumbers
+rm.Boca.ModeFiles: Hdr:HighFSI
+rm.Boca.ModeFiles: Hdr:NewErrors
+rm.Boca.ModeFiles: Hdr:MsgTrans
+rm.Boca.ModeFiles: Version
