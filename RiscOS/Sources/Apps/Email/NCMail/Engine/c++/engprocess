@@ -73,8 +73,13 @@ eng_rcode SMTPAccountConnect(void)
 eng_rcode POPAccountDisconnect(void)
 {
 
-  state.popprocess.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
-  return (eng_rcode) POPaccount->Disconnect(state.popprocess.disconnectobj);
+  if (state.popstatus == acctconnected)
+  {
+    state.popprocess.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
+    return (eng_rcode) POPaccount->Disconnect(state.popprocess.disconnectobj);
+  }
+  else
+    return ENG_COMPLETED;
 
 }
 
@@ -82,15 +87,22 @@ eng_rcode POPAccountDisconnect(void)
 eng_rcode SMTPAccountDisconnect(void)
 {
 
-  state.smtpprocess.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
-  return (eng_rcode) SMTPaccount->Disconnect(state.smtpprocess.disconnectobj);
+  if (state.smtpstatus == acctconnected)
+  {
+    state.smtpprocess.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) smtp);
+    return (eng_rcode) SMTPaccount->Disconnect(state.smtpprocess.disconnectobj);
+  }
+  else if (state.state & DISCONNECT)
+    state.smtpprocess.substate = disconnected;
+
+  return ENG_COMPLETED;
 
 }
 
 
 void RemoveObj(MBoxOpCB **obj)
 {
-  
+
   dprintf(("Eng", "Removing object at 0x%x\n",*obj));
   if (*obj)
     delete *obj;
@@ -259,7 +271,14 @@ void DoSMTPProcess(void)
 
       dprintf(("Eng", "SMTP substate = disconnected\n"));
       RemoveObj((MBoxOpCB**) &state.smtpprocess.disconnectobj);
+      state.smtpstatus = acctcreated;
       state.state &= ~PROCESSSMTP;
+      if (state.state & DISCONNECT)
+      {
+        dprintf(("Eng", "Now going to disconnect POP\n"));
+        state.state |= PROCESSPOP;
+        state.popprocess.substate = popdone;
+      }
 
       break;
 
@@ -364,25 +383,32 @@ void DoPOPProcess(void)
     case popdone :
 
       dprintf(("Eng", "POP substate = popdone\n"));
-      changed = state.popprocess.processobj->mailbox_changed;
-      dprintf(("Eng", "Mailbox has %schanged\n",(changed) ? "" : "not "));
+      if (state.popprocess.processobj)
+        changed = state.popprocess.processobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &state.popprocess.processobj);
-      if (changed)
-      {
-        state.popprocess.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
-        state.popprocess.substate = idle;
-        code = (eng_rcode) inbox->GetNumberMessages(state.popprocess.getnumobj);
-        if (code < 0)
-        {
-          state.popprocess.substate = getnumfailure;
-          state.popprocess.rc = code;
-        }
-      }
+      if (state.state & DISCONNECT)
+        POPAccountDisconnect();
 
       else
       {
-        /* mailbox hasn't changed so no new mail */
-        ProcessDone(false);
+        dprintf(("Eng", "Mailbox has %schanged\n",(changed) ? "" : "not "));
+        if (changed)
+        {
+          state.popprocess.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
+          state.popprocess.substate = idle;
+          code = (eng_rcode) inbox->GetNumberMessages(state.popprocess.getnumobj);
+          if (code < 0)
+          {
+            state.popprocess.substate = getnumfailure;
+            state.popprocess.rc = code;
+          }
+        }
+
+        else
+        {
+          /* mailbox hasn't changed so no new mail */
+          ProcessDone(false);
+        }
       }
 
       break;
@@ -391,9 +417,16 @@ void DoPOPProcess(void)
     case disconnectfailure :
 
       dprintf(("Eng", "POP substate = disconnected\n"));
-      /* we should only be disconnecting from POP on an error */
+      /* we should only be disconnecting from POP on an error
+         or when the line is taken down */
       RemoveObj((MBoxOpCB**) &state.popprocess.disconnectobj);
+      state.popstatus = acctcreated;
       state.state &= ~PROCESSPOP;
+      if (state.state & DISCONNECT)
+      {
+        state.state &= ~DISCONNECT;
+        DisconnectFromISP();
+      }
 
       break;
 
