@@ -53,7 +53,7 @@ OBJS      =	\
 	o.fcifkelv o.fcintfc o.fckelvin \
 	o.fcprint o.fcrotate o.module o.riscos \
 	o.rm o.errors o.veneer o.pdumper \
-	o.pdsupport o.lexsupport o.rawsprite
+	o.pdsupport o.lexsupport
 #
 # Rule patterns
 #
@@ -158,6 +158,10 @@ o.textprint:	h.wedge
 o.textprint:	C:h.kernel
 o.textprint:	h.textprint
 o.textprint:	C:h.kernel
+o.rawsprite:	c.rawsprite
+o.rawsprite:	h.rawsprite
+o.rawsprite:	C:h.kernel
+o.rawsprite:	C:h.kernel
 o.fcifkelv:	c.fcifkelv
 o.fcifkelv:	h.common
 o.fcifkelv:	C:h.kernel
@@ -272,7 +276,3 @@ o.lexsupport:	h.hbpxface
 o.lexsupport:	h.kelvswis
 o.lexsupport:	h.hbpxface
 o.lexsupport:	C:h.kernel
-o.rawsprite:	c.rawsprite
-o.rawsprite:	h.rawsprite
-o.rawsprite:	C:h.kernel
-o.rawsprite:	C:h.kernel
