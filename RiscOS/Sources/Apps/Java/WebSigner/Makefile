@@ -137,3 +137,16 @@ o.messages: Hdr:Services
 o.messages: Hdr:Proc
 o.messages: Hdr:ResourceFS
 o.messages: VersionASM
+o.messages: s.messages
+o.messages: Hdr:ListOpts
+o.messages: Hdr:Macros
+o.messages: Hdr:System
+o.messages: Hdr:SWIs
+o.messages: Hdr:CPU.Generic26
+o.messages: Hdr:IO.GenericIO
+o.messages: Hdr:RISCOS
+o.messages: Hdr:ModHand
+o.messages: Hdr:Services
+o.messages: Hdr:Proc
+o.messages: Hdr:ResourceFS
+o.messages: VersionASM
