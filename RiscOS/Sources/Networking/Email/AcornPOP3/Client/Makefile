@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.08 for RISC OS
+#	VERSION:	0.09 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -19,6 +19,9 @@
 #	17/12/97	0.06	RDW	changes from BAL put in
 #	27/01/98	0.07	RDW	Support added to output preprocessed source for McCabe tool
 #	12/03/98	0.08	RDW	elib_priv obect removed, replaced with EmailLib
+#	17/03/98	0.09	RDW	instrument target added and OBJSCI for building instrumented
+#					version
+#					-ffah added back to CFLAGS.  Got lost at some point in the past
 
 #
 # Paths
@@ -81,7 +84,7 @@ DEBUG=		#-DDEBUG -DTRACE#-DMEMCHECK
 COMPAT=		-DCOMPAT_INET4
 
 # CFLAGS=		-fnah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}
-CFLAGS=		-zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
+CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -depend !Depend -Fn -c -throwback ${TINYSTUBS}\
 		${OTHERCCDEFS}
 
@@ -101,6 +104,12 @@ OBJSCP=		cp.swihndlers cp.handlers cp.logon cp.logout cp.pop_utils cp.module o.h
                 cp.getlistmsg cp.getmsgfile cp.deletemsg cp.getuniquei cp.getlistuid \
 		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB}
 
+OBJSCI=		o.swihndlers o.handlers o.logon o.logout o.pop_utils o.module o.header \
+                o.errortable o.get o.send o.cmdresp o.callbacks o.getnummsgs \
+                o.getlistmsg o.getmsgfile o.deletemsg o.getuniquei o.getlistuid \
+                o.instlib \
+		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB}
+
 EXTRAS=         acornpop3.o
 
 #
@@ -109,6 +118,7 @@ EXTRAS=         acornpop3.o
 .SUFFIXES:	.o .s .c .cp .cmhg
 .c.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
 .c.cp:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
+.cp.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 .cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
 
@@ -121,16 +131,20 @@ all: ${TARGET}
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
 
-analyse: ${OBJSCP}
+analyse: ${OBJSCP} local_dirs
 	@echo ${COMPONENT}: analysis build complete
+
+instrument: ${OBJSCI} local_dirs
+	$(MemCheckLD) $(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJSCI) $(STUBS)
+	ModSqz rm.AcornPOP3u $@
 
 export:	export_${PHASE}
 
-export_hdrs: h.AcornPOP3
+export_hdrs: h.AcornPOP3 local_dirs
 	${CP}	h.AcornPOP3	${EXP_C_H}.AcornPOP3	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: o.AcornPOP3
+export_libs: o.AcornPOP3 local_dirs
 	${CP}	o.AcornPOP3	${EXP_C_O}.AcornPOP3	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (libs)
 
