@@ -145,7 +145,7 @@ LIBSD = \
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
  $(EMAILCOMMONLIB)\
- $(MBOXLIB)\
+ $(MBOXLIB)d\
  $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
@@ -413,7 +413,7 @@ clean_all: $(APPENGINE) $(UI) clean_common
 #
 
 rom_link:
-        @$(LD) -o linked.$(COMPONENT) -rmf -base $(ADDRESS) \
+        @$(LD) -c++ -o linked.$(COMPONENT) -rmf -base $(ADDRESS) \
                 $(ROM_MODULE) $(ABSSYM) -map > map.$(COMPONENT)
         @$(CP) linked.$(COMPONENT) $(LINKDIR).$(COMPONENT) $(CPFLAGS)
         @echo $(COMPONENT): rom_link complete
@@ -453,7 +453,7 @@ abs.!RI_D: $(UI) $(APPENGINE)
 
 $(MODULE): ozsl.ModuleWrap $(LIBSM) $(CLIB) $(UI) $(APPENGINE) o.dirs
         @echo
-        @$(LD) -s syms.RAMMod -o $@ -module ozsl.ModuleWrap $(OBJSZ) $(LIBSM) $(CLIB)
+        @$(LD) -c++ -s syms.RAMMod -o $@ -module ozsl.ModuleWrap $(OBJSZ) $(LIBSM) $(CLIB)
 
 $(ROM_MODULE): oz.ModuleWrap $(ROMCSTUBS) $(LIBSM) $(UI) $(APPENGINE) o.dirs
         @echo
@@ -461,7 +461,7 @@ $(ROM_MODULE): oz.ModuleWrap $(ROMCSTUBS) $(LIBSM) $(UI) $(APPENGINE) o.dirs
 
 rm.$(APP)D: odz.ModuleWrap  $(LIBSM) $(UI) $(APPENGINE) o.dirs
         @echo
-        @$(LD) -s syms.ROMDMod -o $@ -module oz.ModuleWrap $(OBJSDZ) $(LIBSM)
+        @$(LD) -c++ -s syms.ROMDMod -o $@ -module oz.ModuleWrap $(OBJSDZ) $(LIBSM)
 
 #$(APPENGINE):
 #	@echo Calling Engine Makefile
