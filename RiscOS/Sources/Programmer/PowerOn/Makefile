@@ -56,5 +56,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE} ${THROWBACK}
         
 # Dynamic dependencies:
-rm.PowerOn: s.registers
-rm.PowerOn: s.header
