@@ -46,7 +46,7 @@ DEPENDS = -depend !Depend ${THROWBACK}
 DEFINES = ${COMPAT} ${OPTIONS} -DARCHTYPES="\"${ARCH}.h\""
 
 AFLAGS = ${DEPENDS} -Stamp -quit
-CFLAGS  = -c -Wspan ${DEFINES} ${INCLUDES} ${DEPENDS}
+CFLAGS  = -c -Wp ${DEFINES} ${INCLUDES} ${DEPENDS}
 CMHGFLAGS = -p ${DEPENDS}
 
 LDFLAGS = -S symbols

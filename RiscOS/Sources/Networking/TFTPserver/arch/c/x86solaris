@@ -56,8 +56,7 @@ bmc_status platform_create_socket(multicast_socket *ms)
 
 		platform_log(LOG_DEBUG, "socket() -> %d\n", *ms);
 
-		socketioctl(*ms, FIOSLEEPTW, &one);
-		socketioctl(*ms, FIONBIO, &one);
+		ioctl(*ms, FIONBIO, &one);
 
 		setsockopt(*ms, IPPROTO_IP, IP_RECVDSTADDR, (void *)&one, sizeof(one));
 		setsockopt(*ms, IPPROTO_IP, IP_TOS, (void *)&tos, sizeof(tos));
@@ -95,7 +94,7 @@ bmc_status platform_listen(multicast_socket ms, int queue_length)
 
 const char *platform_translate_errno(void)
 {
-	return _inet_err();
+	return strerror(errno);
 }
 
 bmc_status platform_report_error(const char *id, bmc_status status)
@@ -168,7 +167,6 @@ static bmc_status platform_get_local_name(multicast_socket ms, struct sockaddr_i
 void platform_idle(void)
 {
 	/* Idle */
-	(void) _swix(OS_UpCall, _INR(0,1), 6, 0x3800000);
 }
 
 static void platform_exit(void)
@@ -185,8 +183,16 @@ static void platform_exit(void)
 
 void platform_init(void)
 {
+	openlog("/dev/log", 0, 0);
+	atexit(closelog);
 	atexit(platform_exit);
 	FD_ZERO(&open_sockets);
+	if (chroot(configure_read_root_directory()) < 0 || chdir("/") < 0) {
+		platform_log(LOG_CRIT, "Unable to chroot/chdir to %s: %s\n",
+			configure_read_root_directory(),
+			platform_translate_errno());
+		exit(EXIT_FAILURE);
+	}
 }
 
 struct sockaddr *platform_init_sockaddr(struct sockaddr_in *sin, u_long address, u_short port)
@@ -194,7 +200,7 @@ struct sockaddr *platform_init_sockaddr(struct sockaddr_in *sin, u_long address,
 	struct sockaddr *const sa_result = memset(sin, '\0', sizeof(*sin));
 
 	sin->sin_family = AF_INET;
-	sin->sin_len = sizeof(*sin);
+	/* BSD 4.4 only: sin->sin_len = sizeof(*sin); */
 	sin->sin_port = port;
 	sin->sin_addr.s_addr = address;
 
@@ -203,19 +209,15 @@ struct sockaddr *platform_init_sockaddr(struct sockaddr_in *sin, u_long address,
 
 void platform_log(int level, const char *fmt, ...)
 {
-	if (LOG_MASK(LOG_PRI(level)) & log_mask) {
+	if (LOG_MASK(level & LOG_PRIMASK) & log_mask) {
 		va_list ap;
 		va_start(ap, fmt);
-		vsyslog(level, fmt, ap);
+		/*vsyslog(level, fmt, ap);*/
+		vfprintf(stderr, fmt, ap);
 		va_end(ap);
 	}
 }
 
-void vsyslog(int level, const char *fmt, va_list ap)
-{
-	vfprintf(stderr, fmt, ap);
-	if (!strchr(fmt, '\n')) fputc('\n', stderr);
-}
 
 size_t platform_get_interface_mtu(struct in_addr if_addr)
 {
@@ -235,7 +237,7 @@ size_t platform_get_interface_mtu(struct in_addr if_addr)
 	ifc.ifc_buf = ifcbuf;
 
 	if (platform_create_socket(&ms) == bmc_OK) {
-		if (socketioctl(ms, SIOCGIFCONF, (char *) &ifc) >= 0) {
+		if (ioctl(ms, SIOCGIFCONF, (char *) &ifc) >= 0) {
 	                end = (struct ifreq *) (ifc.ifc_buf + ifc.ifc_len);
 		        ifr = ifc.ifc_req;
 		        while (ifr < end) {
@@ -243,7 +245,7 @@ size_t platform_get_interface_mtu(struct in_addr if_addr)
 			                sin = (struct sockaddr_in *) (&ifr->ifr_addr);
 			                if (sin->sin_addr.s_addr == if_addr.s_addr) {
 			                        /* Found it! */
-			                        if (socketioctl(ms, SIOCGIFMTU, (char *) ifr) < 0) {
+			                        if (ioctl(ms, SIOCGIFMTU, (char *) ifr) < 0) {
 			                                /* Unable to read it - but give up anyway */
 			                                mtu = ETHERMTU;
 			                        }
@@ -252,17 +254,19 @@ size_t platform_get_interface_mtu(struct in_addr if_addr)
 			                                	"Interface %s (%s) MTU = %d\n",
                                                                 ifr->ifr_name,
                                                                 inet_ntoa(if_addr),
-                                                                ifr->ifr_mtu);
-			                                mtu = ifr->ifr_mtu;
+                                                                ifr->ifr_metric);
+			                                mtu = ifr->ifr_metric;
 			                        }
 			                        break;
 			                }
 		                }
+#if 0
 	                        if (ifr->ifr_addr.sa_len) {
         	                        /* Dodgy hack for dual Internet 4/Internet 5 compat */
                 	                ifr = (struct ifreq *) ((caddr_t) ifr +
                         	        	ifr->ifr_addr.sa_len - sizeof(struct sockaddr));
 	                        }
+#endif
 		                ++ifr;
 		        }
 		}

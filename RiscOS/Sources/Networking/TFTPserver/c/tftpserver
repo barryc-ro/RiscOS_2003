@@ -25,23 +25,7 @@
  * any actual or intended publication of such source code.
  */
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stddef.h>
-#include <time.h>
-
-#include "sys/types.h"
-#include "sys/socket.h"
-#include "netinet/in.h"
-#include "arpa/inet.h"
-#include "arpa/tftp.h"
-#include "netdb.h"
-#include "sys/uio.h"
-
 #include "multicaster.h"
-#include "tftpserver.h"
-#include "platform.h"
 
 enum {
 	packet_buffer = SEGSIZE
@@ -91,25 +75,26 @@ bmc_status tftpserver_initialise(void)
 	return status;
 }
 
-void tftpserver_fd_set(fd_set *fd, int *secs)
+void tftpserver_fd_set(fd_set *fd, struct timeval *secs)
 {
         if (s != multicaster_INVALID_SOCKET) {
-	        FD_SET(s, fd);
+	        platform_fd_set(s, fd);
 	        (void) secs; /* Not interested in reducing sleep time */
         }
 }
 
 int tftpserver_fd_isset(fd_set *fd)
 {
-        if (FD_ISSET(s, fd)) {
-                FD_CLR(s, fd);
+        if (platform_fd_isset(s, fd)) {
+                platform_fd_clr(s, fd);
                 tftpserver_process_packet(NULL);
-                return 1;
+                return 1; /* Indicate that one socket has been dealt with */
         }
 
-        return 0;
+        return 0; /* No sockets have been dealt with */
 }
 
+#ifdef DEBUG
 static void tftpserver_packet_dump(const struct tftphdr *tftp, int length)
 {
 	short op = ntohs(tftp->th_opcode);
@@ -174,7 +159,7 @@ static void tftpserver_packet_dump(const struct tftphdr *tftp, int length)
 		case ERROR:
 			op = ntohs(tftp->th_code);
 			if (op < EUNDEF || op > EBADOPTS) {
-				fprintf(stderr, "Unknown error");
+				fprintf(stderr, "Unknown error %d", op);
 			}
 			else {
 				fprintf(stderr, "%s", i18n_translate_tftp_error_code(op));
@@ -188,10 +173,11 @@ static void tftpserver_packet_dump(const struct tftphdr *tftp, int length)
 
 	fprintf(stderr, "\n");
 }
+#endif
 
 static void tftpserver_error(struct tftphdr *tftp, short ecode, const char *msg)
 {
-        fprintf(stderr, "Packet is faulty: %s\n", msg ? msg : i18n_translate_tftp_error_code(ecode));
+        platform_log(LOG_DEBUG, "Error: %s\n", msg ? msg : i18n_translate_tftp_error_code(ecode));
 	tftp->th_opcode = ntohs(ERROR);
 	tftp->th_code = ntohs(ecode);
 	strcpy(tftp->th_data, msg ? msg : i18n_translate_tftp_error_code(ecode));
@@ -220,7 +206,7 @@ static int tftpserver_is_packet_valid(struct tftphdr *tftp, int length, char **f
 		return 0;
 	}
 
-	if (ntohs(tftp->th_opcode) == WRQ) {
+	if (op == WRQ) {
 		/* Respond to write requests with a device-full error - effectively
 		 * this imposes a quota of zero on the filespace.
 		 */
@@ -228,7 +214,11 @@ static int tftpserver_is_packet_valid(struct tftphdr *tftp, int length, char **f
 		return 0;
 	}
 
-	if (ntohs(tftp->th_opcode) == RRQ) {
+#ifdef DEBUG
+	tftpserver_packet_dump(tftp, length);
+#endif
+
+	if (op == RRQ) {
 		eop = memchr(ptr, '\0', eob - ptr);
 		if (eop == NULL) {
 		        /* No file field! */
@@ -325,6 +315,7 @@ static void tftpserver_examine_new_rrq(struct tftphdr *tftp, char *buffer, int l
 	bmc_status status;
 	multicaster_object *mo;
 	size_t bufsize;
+	int unicast = 0;
 
 	if (ntohs(tftp->th_opcode) != RRQ) {
 		/* Ignore anything that's not a read request */
@@ -333,9 +324,21 @@ static void tftpserver_examine_new_rrq(struct tftphdr *tftp, char *buffer, int l
 	/* Require the multicast option */
 	optval = tftpserver_locate_option(tftp, length, "multicast");
 	if (!optval) {
-		tftpserver_error(tftp, EBADOPTS, "Require multicast option");
-	        tftpserver_unicast_error(tftp, sender);
-	        return;
+	        if (!configure_support_unicast_clients()) {
+			tftpserver_error(tftp, EBADOPTS, "Require multicast option");
+		        tftpserver_unicast_error(tftp, sender);
+	        	return;
+	        }
+	        else {
+	                unicast = 1;
+	        }
+	}
+	else {
+	        if (*optval != '\0') {
+	                tftpserver_error(tftp, EBADOPTS, "Multicast option value not null");
+	                tftpserver_unicast_error(tftp, sender);
+	                return;
+	        }
 	}
 
 	/* Check for tsize and object if it is not set to zero */
@@ -371,33 +374,36 @@ static void tftpserver_examine_new_rrq(struct tftphdr *tftp, char *buffer, int l
 	        bufsize = 0; /* Used to indicate default in mo_manager_new_client - it will fill it in */
 	}
 
-	if (bufsize > 1500 - 20 - 8 - 4) {
-	        bufsize = 1500 - 20 - 8 - 4;
-	}
+	bufsize = configure_clamp_mtu(bufsize, platform_get_interface_mtu(*local_if));
 
 	/* Once processing reaches this point, we have decided to accept the request for
 	 * the file in principle and need to try and find a multicaster object to handle
 	 * the client to decide for sure.
 	 */
-	mo = mo_manager_new_client(filename, bufsize, sender, local_if, &status);
+	mo = mo_manager_new_client(filename, bufsize, sender, local_if, unicast, &status);
 	if (mo == NULL) {
 	        /* Ignore this request - something nasty has happened */
-	        fprintf(stderr, "TFTP: mo_manager wasn't interested - discarding request\n");
+	        platform_log(LOG_DEBUG, "TFTP: mo_manager wasn't interested - discarding request\n");
 	        return;
 	}
 
 	/* Construct the OACK reply to the RRQ. */
-	rsp->th_opcode = htons(OACK);
 	rspoptions = rsp->th_stuff;
+	rsp->th_opcode = htons(ACK);
 
-	rspoptions += sprintf(rspoptions, "multicast%c%s,%d,%d%c", '\0',
-		inet_ntoa(multicaster_get_target(mo)->sin_addr),
-		ntohs(multicaster_get_target(mo)->sin_port),
-		multicaster_is_this_the_master_client(mo, sender) ? 1 : 0,
-		'\0');
+	optval = tftpserver_locate_option(tftp, length, "multicast");
+	if (optval) {
+		rsp->th_opcode = htons(OACK);
+		rspoptions += sprintf(rspoptions, "multicast%c%s,%d,%d%c", '\0',
+			inet_ntoa(multicaster_get_target(mo)->sin_addr),
+			ntohs(multicaster_get_target(mo)->sin_port),
+			multicaster_is_this_the_master_client(mo, sender) ? 1 : 0,
+			'\0');
+	}
 
 	optval = tftpserver_locate_option(tftp, length, "tsize");
 	if (optval) {
+		rsp->th_opcode = htons(OACK);
         	rspoptions += sprintf(rspoptions, "tsize%c%u%c", '\0',
 	                multicaster_get_total_size(mo), '\0');
 	}
@@ -407,13 +413,25 @@ static void tftpserver_examine_new_rrq(struct tftphdr *tftp, char *buffer, int l
 		/* Must ask the multicaster object for the block size - in case we
 		 * aren't going to offer the size that was requested
 		 */
+		rsp->th_opcode = htons(OACK);
 	        rspoptions += sprintf(rspoptions, "blksize%c%u%c", '\0',
 	        	multicaster_get_buffer_size(mo), '\0');
 	}
 
+	if (unicast) {
+	        /* A unicasting client.  Response to RRQ with the first DATA packet.  Force this
+	         * by pretending we've just received an ACK of block zero (in reply to our OACK).
+	         */
+	        multicaster_process_ack(mo, 0, sender);
+	        return;
+	}
+
+
 	status = platform_unicast(multicaster_get_socket(mo), sender, response, rspoptions - response);
-	if (status != bmc_OK) {
-	        fprintf(stderr, "Unable to unicast OACK to client %s\n", inet_ntoa(sender->sin_addr));
+	if (status == bmc_SYSCALL) {
+	        platform_log(LOG_NOTICE, "%s unicast (to multicast client %s) failed: %s\n",
+	        	i18n_translate_tftp_opcode(ntohs(rsp->th_opcode)),
+	        	inet_ntoa(sender->sin_addr), platform_translate_errno());
 	}
 }
 
@@ -457,14 +475,14 @@ static void tftpserver_examine_packet(multicaster_object *mo, char *buffer, int 
 	struct tftphdr *tftp = (struct tftphdr *) buffer;
 	char *filename, *mode;
 
-	fprintf(stderr, "TFTP: incoming packet from %s", inet_ntoa(sender->sin_addr));
-	fprintf(stderr, " (packet's destination was %s)\n", inet_ntoa(*local_if));
-
-	tftpserver_packet_dump(tftp, length);
+	platform_log(LOG_DEBUG, "TFTP: <- %s from %s\n",
+		i18n_translate_tftp_opcode(ntohs(tftp->th_opcode)),
+		inet_ntoa(sender->sin_addr));
 
 	if (!tftpserver_was_packet_unicasted(local_if)) {
-		fprintf(stderr, "TFTP: Packet was not unicast - ignoring it\n");
-		return ;
+		platform_log(LOG_NOTICE, "TFTP target not recognised (%s) - ignoring it\n",
+			inet_ntoa(*local_if));
+		return;
 	}
 
 	if (!tftpserver_is_packet_valid(tftp, length, &filename, &mode)) {
