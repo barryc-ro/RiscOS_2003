@@ -779,6 +779,13 @@ ModeChangeSub ROUT
         ADD     R3, R3, R1
         STR     R3, [WsPtr, #PointerXEigFactor]
 
+; Need to ensure we get modeflags correct - they were supposed to be monitor-
+; independent, but unfortunately the interlace flag depends on the response
+; to Service_ModeExtension. We can't rely on OS_SpriteOp to get it right.
+
+        LDR     R3, [R13, #wkModeFlags]
+        STR     R3, [WsPtr, #ModeFlags]
+
 ; finished doing other variables
 
  [ VIDC_Type = "VIDC20"
@@ -1355,6 +1362,35 @@ PushModeInfoCommonNoService
         ADDNE   r4, r4, #4              ; then skip ws base mode
         BLNE    ProcessModeVarPairs
 
+ [ VIDCListType3
+; special widgetry - check for the interlaced flag in the control parameters - if
+; set, set the interlaced flag in the mode flags
+
+        TEQ     r3, #0                  ; do we have a VIDC list?
+        BEQ     %FT58
+        LDR     r2, [r3, #0]            ; is it type 3?
+        TEQ     r2, #3
+        BNE     %FT58
+
+        ADD     r10, r3, #VIDCList3_ControlList
+57      LDR     r14, [r10], #8          ; loop over the control parameter list
+        CMP     r14, #-1
+        BEQ     %FT58                   ; didn't find the interlaced entry - not interlaced
+
+        TEQ     r14, #ControlList_Interlaced
+        BNE     %BT57                   ; check the next one then
+
+        LDR     r14, [r10, #-4]         ; read value
+        TEQ     r14, #0
+        BEQ     %FT58                   ; if zero, not interlaced
+
+; it's interlaced
+        LDR     r14, [r9, #wkModeFlags]
+        ORR     r14, r14, #Flag_InterlacedMode
+        STR     r14, [r9, #wkModeFlags]
+58
+ ]
+
 ; hopefully, R7 is still set from up there to be NZ if no VIDC stuff necessary
 
         CMP     r7, #0
@@ -1806,6 +1842,7 @@ ControlList_ExternalRegister    #       1
 ControlList_HClockSelect        #       1
 ControlList_RClockFrequency     #       1
 ControlList_DPMSState           #       1
+ControlList_Interlaced          #       1
 ControlList_InvalidReason       #       0
 
 ;
@@ -1920,7 +1957,40 @@ ProcessVIDCListType3 ROUT
         ORR     r14, r14, #Ext_ERegExt
         STR     r14, [r9, #VIDCExternal :SHR: 22]
 
+        MOV     r14, #VIDCControl
+        STR     r14, [r9, #VIDCControl :SHR: 22]
+
         Push    "r0, r1"
+        Push    "r3"
+
+; Now go through VIDC control parameters list (not all indices can be handled yet)
+
+        ADD     r3, r3, #VIDCList3_ControlList-8  ; point at 1st entry -8
+50
+        LDR     r4, [r3, #8]!                   ; load next index
+        CMP     r4, #-1                         ; if -1 then end of list
+        BEQ     %FT60                           ; so skip
+
+        CMP     r4, #0                          ; if non-zero (CS if zero)
+        CMPNE   r4, #ControlList_InvalidReason  ; and if known reason
+        LDRCC   r2, [r3, #4]                    ; then load value
+        BLCC    ProcessControlListItem          ; and process this item
+        B       %BT50                           ; go onto next item in list
+
+; put a minimum of 4, cos 800 x 600 x 1bpp don't work otherwise
+FIFOLoadTable
+        &       0                               ; dummy entry (not used)
+        &       0                               ; never use 0
+        &       0                               ; use 1 up to (and including) here
+        &       0                               ; use 2 up to (and including) here
+        &       0                               ; use 3 up to (and including) here
+        &       60000 :SHL: 3                   ; use 4 up to (and including) here
+        &       75000 :SHL: 3                   ; use 5 up to (and including) here
+        &       90000 :SHL: 3                   ; use 6 up to (and including) here
+                                                ; else use 7
+
+60
+        Pull    "r3"
         LDR     r0, [r3, #VIDCList3_PixelRate]  ; get pixel rate
    [ ChrontelSupport
 	ORR	r10, r0, #PseudoRegister_PixelRate               ; Set index
@@ -1950,13 +2020,14 @@ ProcessVIDCListType3 ROUT
         ORR     r0, r0, #VIDCFSyn
         STR     r0, [r9, #VIDCFSyn :SHR: 22]
 
+        LDR     r0, [r9, #VIDCControl :SHR: 22]
+        ORR     r0, r0, r1
+
         TEQ     r7, #5          ; if 32 bpp, then stick in 6 not 5
         MOVEQ   r7, #6
-        ORR     r0, r1, r7, LSL #5
+        ORR     r0, r0, r7, LSL #5
 
 ; now work out FIFO load position - r10 is b/w in thousands of bytes/sec
-
- [ {TRUE}
 
 ; do it by means of a binary chop on 3 bits
 
@@ -1975,58 +2046,9 @@ ProcessVIDCListType3 ROUT
         LDR     r2, [r4, #1*4]
         CMP     r10, r2
         ORRHI   r7, r7, #1
- |
-        CMP     r10, #&10000 :SHL: 3            ; this value (65.536 Mbytes/sec) lies above the point at which 7 works
-                                                ; and below the point at which 7 is needed
-        MOVCC   r7, #6
-        MOVCS   r7, #7
- ]
 
         ORR     r0, r0, r7, LSL #CR_FIFOLoadShift
-        ORR     r0, r0, #VIDCControl
         STR     r0, [r9, #VIDCControl :SHR: 22]
-
-; Now go through VIDC control parameters list (not all indices can be handled yet)
-
-        ADD     r3, r3, #VIDCList3_ControlList-8  ; point at 1st entry -8
-50
-        LDR     r4, [r3, #8]!                   ; load next index
-        CMP     r4, #-1                         ; if -1 then end of list
-        BEQ     %FT60                           ; so skip
-
-        CMP     r4, #0                          ; if non-zero (CS if zero)
-        CMPNE   r4, #ControlList_InvalidReason  ; and if known reason
-        LDRCC   r2, [r3, #4]                    ; then load value
-        BLCC    ProcessControlListItem          ; and process this item
-        B       %BT50                           ; go onto next item in list
-
- [ {TRUE}
-FIFOLoadTable
-  [ {TRUE}      ; put a minimum of 4, cos 800 x 600 x 1bpp don't work otherwise
-        &       0                               ; dummy entry (not used)
-        &       0                               ; never use 0
-        &       0                               ; use 1 up to (and including) here
-        &       0                               ; use 2 up to (and including) here
-        &       0                               ; use 3 up to (and including) here
-        &       60000 :SHL: 3                   ; use 4 up to (and including) here
-        &       75000 :SHL: 3                   ; use 5 up to (and including) here
-        &       90000 :SHL: 3                   ; use 6 up to (and including) here
-                                                ; else use 7
-  |
-        &       0                               ; dummy entry (not used)
-        &       0                               ; never use 0
-        &       12000 :SHL: 3                   ; use 1 up to (and including) here
-        &       24000 :SHL: 3                   ; use 2 up to (and including) here
-        &       36000 :SHL: 3                   ; use 3 up to (and including) here
-        &       60000 :SHL: 3                   ; use 4 up to (and including) here
-        &       75000 :SHL: 3                   ; use 5 up to (and including) here
-        &       90000 :SHL: 3                   ; use 6 up to (and including) here
-                                                ; else use 7
-  ]
- ]
-
-
-60
 
 ; Now, for debugging purposes, output data to a file
 
@@ -2092,6 +2114,7 @@ ProcessControlListItem ENTRY
         &       ProcessControlListHClockSelect          ; 9 - HClk select/specify
         &       ProcessControlListNOP                   ; 10 - RClk frequency
         &       ProcessControlListDPMSState             ; 11 - DPMS state
+        &       ProcessControlListNOP                   ; 12 - Interlaced mode
 
 ProcessControlListLCDMode
         [ STB
@@ -2242,11 +2265,11 @@ BestRangeError          #       4
 ComputeModuliStack      *       :INDEX: @
 
 ComputeModuli ENTRY "r2-r12", ComputeModuliStack
-        LDR     r1, [r9, #PseudoRegister_HClockSpeed:SHR:22]            ; are we using HCLK?
-        CMP     r1, #-1
+        LDR     r2, [r9, #PseudoRegister_HClockSpeed:SHR:22]            ; are we using HCLK?
+        CMP     r2, #-1
         BEQ     %FT05                                                   ; -1 => no, use VCLK/RCLK
 
-        BIC     r1, r1, #&FF000000                                      ; r1 = HCLK frequency
+        BIC     r1, r2, #&FF000000                                      ; r1 = HCLK frequency
         SUB     r1, r1, r1, LSR #2                                      ; r1 = HCLK * 3/4
         CMP     r0, r1
         MOVLO   r1, #CR_HCLK :OR: ((2-1) :SHL: CR_PixelDivShift)        ; if < 3/4 HCLK, use divide by 2
