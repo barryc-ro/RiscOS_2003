@@ -17,6 +17,9 @@
 ; 0.16  Added extra m_flags, m_pkthdr fields
 ; 0.17  Made number of mbufs configurable on startup
 ; 0.18  Modified table of numbers of mbufs for larger RAM systems.
+; 0.19  Functionally identical to 0.18, but version number now CVS controlled.
+; 0.20  Will now attempt to use configured MBuf pool parameters, falling
+;        back to RAM size if nothing is configured in NVRAM.
 ;
 ;-----------------------------------------------------------------------------
 
@@ -29,6 +32,7 @@ OMCode	SETL	{FALSE}
 
 	GET VersionASM
 	GET mmhdr.s
+	GET hdr:CMOS
 
 	AREA	|!!!module!!!|, CODE, READONLY
 
@@ -75,7 +79,7 @@ title_string	DCB	"MbufManager", 0
  [ OMCode
 help_string	DCB	"Mbuf Manager", 9, "0.15 (02 Jan 1996) © ANT Ltd 1994-1996", 0
  |
-help_string	DCB	"Mbuf Manager", 9, "$Module_MajorVersion ($Module_Date) © ANT Ltd 1994-1996, Acorn 1997-1998", 0
+help_string	DCB	"Mbuf Manager", 9, "$Module_MajorVersion ($Module_Date) © ANT Ltd 1994-1996, Acorn 1997-1999", 0
  ]
 
 short_purpose	DCB	"Mbuf Manager", 0
@@ -345,8 +349,53 @@ alloc_memory	ROUT
 		ADD	r2, r2, r3, LSL #24
 		B	%F08
 
+keyword_defn	DCB "/a/e,/a/e", 0
+		ALIGN
 
-05		SWI	XOS_ReadMemMapInfo
+
+;
+; 99/02/13 - RCE - Code added to check for 'stored' configuration for number of MBufs to allocate
+;		    needed to address issues raised by several STB projects, and timed now to
+;		    try to make ROM freeze for STB3.
+;
+TagSmall	DCB	"MManagerSmall",0	; Tag for number of small MBufs
+		ALIGN
+TagLarge	DCB	"MManagerLarge",0	; Tag for number of large MBufs
+		ALIGN
+
+05		ADR	r0, TagSmall
+		ADD	r1, ws, #num_small_mbufs; use relevant bit of module's workspace
+		MOV	r2, #0
+		SWI	0x6ee00			; XNVRAM_Read (doesn't appear to be in any headers :-()
+		BVS	%F06			; No reponse (or error) from NVRAM, so carry on as before...
+
+		ADR	r0, TagLarge
+		ADD	r1, ws, #num_large_mbufs; use relevant bit of module's workspace
+		MOV	r2, #0
+		SWI	0x6ee00			; XNVRAM_Read (doesn't appear to be in any headers :-()
+		BVS	%F06			; No reponse (or error) from NVRAM, so carry on as before...
+
+		LDR	r1, [ws, #num_small_mbufs]
+		LDR	r2, [ws, #num_large_mbufs]
+						; Load the returned values - the code expects this
+		BAL	%F08			; NVRAM yielded values, so believe them...
+
+50
+		GET	table.s			; Read in table of values
+51
+		ASSERT	((%b51 - %b50) / 4) >= 5	; Check table is at least big enough for sanity
+
+06		MOV	r0, #161		; Read CMOS
+		MOV	r1, #0x2e		; MBufManagerCMOS - should be read from header file...
+		SWI	OS_Byte			; May wish to mask to fewer bits at this point
+		AND	r2, r2, #0x1f		; Allow for 31 entries in table
+		CMP	r2, #0			; 0 => old behaviour ie MBuf pool based on mem size
+		BEQ	%F07			; Skip to 'old behaviour code'
+		SUB	r2, r2, #1		; Correct for 0..n not 1..n+1 offset
+		CMP	r2, #(%b51 - %b50) / 4	; Within table ?
+		BLE	%F71			; yes, otherwise old behaviour
+
+07		SWI	XOS_ReadMemMapInfo
 
 ; DREG r0, "Page size ", cc
 ; DREG r1, ", Number of pages "
@@ -355,29 +404,31 @@ alloc_memory	ROUT
 		MULVC	r0, r1, r0		; r0 now holds memory size
 
  [ OMCode
-		MOV	r1, # 128		; num small mbufs default
-		MOV	r2, # 64		; num large mbufs default
+		MOV	r1, # 128		; OM build values
+		MOV	r2, # 64
+		BAL	%F08
  |
-		MOV	r1, # 128		; num small mbufs default
-		MOV	r2, # 8			; num large mbufs default
+		MOV	r2, # 0			; index for 1MB
 
 		CMP	r0, # 2 * MEG
-		MOVGE	r1, # 128 + 64
-		MOVGE	r2, # 16
+		MOVGE	r2, # 1			; index for 2MB
 
 		CMP	r0, # 4 * MEG
-		MOVGE	r1, # 256
-		MOVGE	r2, # 16
+		MOVGE	r2, # 2			; index for 4MB
 
 		CMP	r0, # 8 * MEG
-		MOVGE	r1, # 512
-		MOVGE	r2, # 24
+		MOVGE	r2, # 3			; index for 8MB
 
-		CMP	r0, # 16 * MEG          ; added 981030:RCE for bigger
-		MOVGE	r1, # 512               ; systems including 16MB STB
-		MOVGE	r2, # 128               ; equating to a 256K pool.
+		CMP	r0, # 16 * MEG		; added 981030:RCE for bigger
+		MOVGE	r2, # 4			; systems including 16MB STB
  ] ; OMCode
 
+71		ADR	r1, %b50		; get start of table
+		MOV	r2, r2, LSL #2		; convert word offset to byte offset
+		LDR	r3, [r1, r2]		; get table entry
+		MOV	r1, r3, LSL #16		; r2 := number of small mbufs << 16
+		MOV	r1, r1, LSR #16		; r2 := number of small mbufs
+		MOV	r2, r3, LSR #16		; r1 := number of large mbufs
 ;
 ; use r3 as pointer into alloc table
 ;
@@ -431,9 +482,6 @@ alloc_memory	ROUT
 		MOV	r0, # 0
 
 		EXIT
-
-keyword_defn	DCB "/a/e,/a/e", 0
-		ALIGN
 
 
 ;-----------------------------------------------------------------------------
