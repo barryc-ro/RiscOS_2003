@@ -26,6 +26,7 @@ RM      = remove
 LD      = link
 LB      = libfile
 TOUCH   = create
+SQZ     = squeeze
 WIPE    = -wipe
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
@@ -33,6 +34,7 @@ ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
 WFLAGS  = ~CFR~V
+SQZFLAGS= -f
 
 #
 # Libraries
@@ -168,6 +170,7 @@ install_dirs:
 #
 ${TARGET}: ${OBJS} ${LIBS} ${HDRS} o._dirs
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+	${SQZ} ${SQZFLAGS} $@
 
 # Static dependencies:
 
