@@ -15,7 +15,7 @@ ROM_MODULE	= aof.DebugTest
 # Export Paths for Messages module
 #
 
-RESDIR          = ${RESDIR}.${COMPONENT}
+RESDIR          := ${RESDIR}.${COMPONENT}
 RESAPP          = <Resource$Dir>.Apps.${APP}
 
 # -----------------------------------------------------------------------------
