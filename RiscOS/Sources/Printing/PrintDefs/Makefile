@@ -7,6 +7,7 @@
 # ----       ----         -----------
 # 19-Jul-96  SMC          Created
 # 06-May-99  SBF          Included additional printer defintions
+# 15-Aug-00  SBF          Palette files now copied using wildcard
 
 #
 # Generic options:
@@ -17,7 +18,7 @@ RM      = remove
 WIPE    = -wipe
 COMPRESS = squash
 
-CPFLAGS = ~cfr~v
+CPFLAGS = ~cfr~vr
 WFLAGS  = ~c~v
 
 #
@@ -95,17 +96,7 @@ resources: ${RESFILES} dirs
 	${MKDIR} ${RESDIR}.ps.Printers
 	${MKDIR} ${RESDIR}.ps.PSfiles
 	${CP} ${LDIR}.Supported	           ${RESDIR}.Supported            ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.0           ${RESDIR}.Palettes.0	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.1           ${RESDIR}.Palettes.1           ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.2           ${RESDIR}.Palettes.2           ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.3           ${RESDIR}.Palettes.3	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.4           ${RESDIR}.Palettes.4	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.5           ${RESDIR}.Palettes.5	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.6           ${RESDIR}.Palettes.6	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.7           ${RESDIR}.Palettes.7	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.8           ${RESDIR}.Palettes.8	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.9           ${RESDIR}.Palettes.9	          ${CPFLAGS}
-	${CP} ${RDIR}.Palettes.10          ${RESDIR}.Palettes.10          ${CPFLAGS}
+	${CP} ${RDIR}.Palettes*            ${RESDIR}.Palettes.*           ${CPFLAGS}
 	${CP} ${RDIR}.ps.Printers.0        ${RESDIR}.ps.Printers.0        ${CPFLAGS}
 	${CP} ${RDIR}.ps.PSfiles.PSepilog  ${RESDIR}.ps.PSfiles.PSepilog  ${CPFLAGS}
 	${CP} ${RDIR}.ps.PSfiles.PSprolog2 ${RESDIR}.ps.PSfiles.PSprolog2 ${CPFLAGS}
