@@ -56,11 +56,12 @@ DEBUG_LIBS = <Lib$Dir>.DebugLib.o.DebugLibzm
 SOCKLIB    = TCPIPLibs:o.socklibzm
 INETLIB    = TCPIPLibs:o.inetlibzm
 UNIXLIB    = TCPIPLibs:o.unixlibzm
+ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Include files
 #
-INCLUDES = -IC:,<Lib$Dir>.
+INCLUDES = -IC:AsmUtils,C:,<Lib$Dir>.
 
 # Program specific options:
 #
@@ -73,7 +74,6 @@ EXPORTS   = ${EXP_C_H}.${COMPONENT}
 OBJS      =	\
 o.module	\
 o.sctrans	\
-o.irqs		\
 o.path		\
 o.orga		\
 o.schlumb	\
@@ -86,7 +86,6 @@ o.header
 DOBJS      =	\
 od.module	\
 od.sctrans	\
-od.irqs		\
 od.path		\
 od.orga		\
 od.schlumb	\
@@ -148,7 +147,7 @@ dirs:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS} dirs header.h
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -161,11 +160,11 @@ rom_link:
 # Target
 #
 rm.${COMPONENT}: ${OBJS} dirs header.h
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${ASMUTILS} ${CLIB}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}D: ${DOBJS} ${DEBUG_LIBS} ${SOCKLIB} ${INETLIB} dirs header.h
-        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${DEBUG_LIBS} ${SOCKLIB} ${INETLIB}
+rm.${COMPONENT}D: ${DOBJS} ${DEBUG_LIBS} ${SOCKLIB} ${INETLIB} ${ASMUTILS} dirs header.h
+        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${DEBUG_LIBS} ${SOCKLIB} ${INETLIB} ${ASMUTILS} 
         Access rm.${COMPONENT}D RW/R
 
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
