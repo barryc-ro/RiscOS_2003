@@ -44,8 +44,8 @@ INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 SSLDIR    = <Lib$Dir>.SSL
-#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
-REMOTEDB  =
+REMOTEDB  = <Lib$Dir>.debug.o.remotezm
+#REMOTEDB  =
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB}
 SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
@@ -138,6 +138,15 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
+os.files:	c.files
+os.files:	C:h.kernel
+os.files:	h.files
+o.mimemap:	c.mimemap
+o.mimemap:	C:h.kernel
+o.mimemap:	h.mimemap
 o.files:	c.files
 o.files:	C:h.kernel
 o.files:	h.files
@@ -192,9 +201,57 @@ o.http:	h.http
 o.http:	h.files
 o.http:	h.mimemap
 o.http:	h.csfs
-os.files:	c.files
-os.files:	C:h.kernel
-os.files:	h.files
+o.http:	c.http
+o.http:	C:h.kernel
+o.http:	C:h.swis
+o.http:	h.tcplibs
+o.http:	TCPIPLibs:sys.h.types
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:machine.h.endian
+o.http:	TCPIPLibs:machine.h.ansi
+o.http:	TCPIPLibs:machine.h.types
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:sys.h.errno
+o.http:	C:h.kernel
+o.http:	TCPIPLibs:net.h.if
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:net.h.if_arp
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:netinet.h.in
+o.http:	TCPIPLibs:sys.h.ioctl
+o.http:	TCPIPLibs:sys.h.ttycom
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.filio
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.sockio
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:h.netdb
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:netns.h.ns
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:h.socklib
+o.http:	TCPIPLibs:sys.h.types
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:sys.h.stat
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:sys.h.uio
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	C:h.kernel
+o.http:	h.status
+o.http:	h.httppub
+o.http:	h.pads
+o.http:	h.http
+o.http:	h.files
+o.http:	h.mimemap
+o.http:	h.csfs
 os.http:	c.http
 os.http:	C:h.kernel
 os.http:	C:h.swis
@@ -264,6 +321,9 @@ os.http:	<Lib$Dir>.SSL.h.rsa
 os.http:	<Lib$Dir>.SSL.h.dsa
 os.http:	<Lib$Dir>.SSL.h.dh
 os.http:	<Lib$Dir>.SSL.h.envelope
+os.http:	TCPIPLibs:h.err
+os.http:	TCPIPLibs:machine.h.ansi
+os.http:	TCPIPLibs:sys.h.cdefs
 os.http:	<Lib$Dir>.SSL.h.rsa
 os.http:	<Lib$Dir>.SSL.h.ssl
 os.http:	h.httppub
@@ -272,15 +332,3 @@ os.http:	h.http
 os.http:	h.files
 os.http:	h.mimemap
 os.http:	h.csfs
-o.mimemap:	c.mimemap
-o.mimemap:	C:h.kernel
-o.mimemap:	h.mimemap
-o.mimemap:	c.mimemap
-o.mimemap:	C:h.kernel
-o.mimemap:	h.mimemap
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
