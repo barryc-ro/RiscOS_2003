@@ -164,6 +164,7 @@ OBJS = \
  o.save\
  o.scheduler\
  o.ui\
+ o.cancel\
 
 
 OBJSZ = \
@@ -178,6 +179,7 @@ OBJSZ = \
  oz.save\
  oz.scheduler\
  oz.ui\
+ oz.cancel\
 
 
 OBJSD =\
@@ -192,6 +194,7 @@ OBJSD =\
  od.save\
  od.scheduler\
  od.ui\
+ od.cancel\
 
 
 #OBJSZ =
