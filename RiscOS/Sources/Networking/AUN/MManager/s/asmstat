@@ -1,0 +1,379 @@
+;
+; asmstat.s
+;
+
+                GET     s.mmhdr
+
+                AREA    |asmstat|, CODE
+
+                EXPORT  statistic_op
+
+
+  ;-----------------------------------------------------------------------;
+  ; WARNING - ONLY COPES WITH 32 BIT AND 64 BIT STATS, AND WILL NEED SOME ;
+  ; ATTENTION AS SOON AS THE NAME_TAG FIELD GETS DEFINED                  ;
+  ;-----------------------------------------------------------------------;
+
+
+
+
+; Assume the 6 buffer ptrs are in workspace as follows:
+;
+; accum_32bit             #       4       ; ptr to accumulated 32 bit stats
+; accum_64bit             #       4       ; ditto 64 bit stats
+; active_32bit            #       4       ; set being incremented live
+; active_64bit            #       4
+; pending_32bit           #       4       ; zeroes or being added at present
+; pending_64bit           #       4
+
+
+;-----------------------------------------------------------------------------
+;
+; Entry a1      entry number (1st is zero)
+; Exit  a1      ptr to string for stat
+; Rest preserved
+;
+
+find_stat_name ROUT
+
+        ENTER   "a2, a3"
+
+        MOV     a2, a1
+        ADR     a1, statistic_names
+
+00      SUBS    a2, a2, #1
+        EXIT    LT
+
+01      LDRB    a3, [a1], #1
+        TEQ     a3, #0
+        BNE     %b01
+
+        B       %b00
+
+        EMIT_STATISTIC_NAMES
+
+;-----------------------------------------------------------------------------
+;
+;
+;
+
+stats_ping_pong ROUT
+
+                ENTER   "a1-a4, v1-v2"
+
+                ADD     a1, ws, # active_32bit
+
+                ; The necessary atomic action
+
+                IRQSOFF lr
+
+                LDMIA   a1, {a2, a3, a4, v1}
+                STMIA   a1!, {a4, v1}
+                STMIA   a1, {a2, a3}
+
+                ; And everything else can proceed with interrupts enabled
+
+                IRQSON  lr
+
+                LDR     a1, [ws, # accum_32bit]
+                LDR     a2, [ws, # pending_32bit]
+                MOV     a3, # NUM_INTEGER32_STATISTICS
+                MOV     v2, #0
+
+00              LDR     a4, [a1]
+                LDR     v1, [a2]
+                ADD     a4, a4, v1
+                STR     a4, [a1], #4
+                STR     v2, [a2], #4
+
+                SUBS    a3, a3, #1
+                BNE     %b00
+
+        ASSERT  DEBUG = (NUM_INTEGER64_STATISTICS > 0)
+
+        [ NUM_INTEGER64_STATISTICS > 0
+                LDR     a1, [ws, # accum_64bit]
+                LDR     a2, [ws, # pending_64bit]
+                MOV     a3, # NUM_INTEGER64_STATISTICS
+
+01              LDR     a4, [a1]
+                LDR     v1, [a2]
+                ADDS    a4, a4, v1
+                STR     a4, [a1], #4
+                STR     v2, [a2], #4
+
+                LDR     a4, [a1]
+                LDR     v1, [a2]
+                ADC     a4, a4, v1
+                STR     a4, [a1], #4
+                STR     v2, [a2], #4
+
+                SUBS    a3, a3, #1
+                BNE     %b01
+        ]
+                LDR     a1, [ws, # accum_32bit]
+                LDR     a4, [ws, # open_sessions]
+                STR     a4, [a1, # ACTIVE_SESSIONS * 4]
+
+; currently, open and close sessions are incremental and can remain so
+
+                LDR     a4, [ws, # mem_size]
+                STR     a4, [a1, # MEMORY_POOL_SIZE * 4]
+                LDR     a4, = min_msize
+                STR     a4, [a1, # SMALL_BLOCK_SIZE * 4]
+                LDR     a4, = max_msize
+                STR     a4, [a1, # LARGE_BLOCK_SIZE * 4]
+
+; now work out what mbufs are in use, so we can say how many bytes
+; in small mbufs and how many in large mbufs. This sort of figure is
+; going to be slightly wrong, unless the system is very idle.
+
+                MOV     a3, # 0         ; bytes used
+                MOV     a4, # 0         ; mbufs used
+
+                IRQSOFF lr
+
+                LDR     a2, [ws, # small_chain]
+10              TEQ     a2, # 0
+                ADDNE   a3, a3, # min_msize
+                ADDNE   a4, a4, # 1
+                LDRNE   a2, [a2, # m_next]
+                BNE     %b10
+
+                IRQSON  lr
+
+                LDR     a3, [ws, # num_small_mbufs]
+                SUB     a3, a3, a4
+                STR     a3, [a1, # SMALL_MBUFS_IN_USE * 4]
+                STR     a4, [a1, # SMALL_MBUFS_FREE * 4]
+
+                MOV     a3, # 0
+                MOV     a4, # 0
+
+                IRQSOFF lr
+
+                LDR     a2, [ws, # big_chain]
+11              TEQ     a2, # 0
+                ADDNE   a3, a3, # max_msize
+                ADDNE   a4, a4, # 1
+                LDRNE   a2, [a2, # m_next]
+                BNE     %b11
+
+                IRQSON  lr
+
+                LDR     a3, [ws, # num_large_mbufs]
+                SUB     a3, a3, a4
+                STR     a3, [a1, # LARGE_MBUFS_IN_USE * 4]
+                STR     a4, [a1, # LARGE_MBUFS_FREE * 4]
+
+
+ [ DEBUG
+                LDR     a2, [ws, # small_hwm]
+                STR     a2, [a1, # SMALL_WATER_MARK * 4]
+                LDR     a2, [ws, # large_hwm]
+                STR     a2, [a1, # LARGE_WATER_MARK * 4]
+
+
+ ]
+
+                EXIT
+
+                LTORG
+
+;-----------------------------------------------------------------------------
+;
+; The register usage for both SA_DESCRIBE and SA_READ is very similar:
+;
+;     Entry
+;         a1      SA_DESCRIBE or SA_READ
+;         a2      First statistic, inclusive
+;         a3      Last statistic, inclusive
+;         a4      First byte of buffer in memory
+;         v1      Number of bytes in buffer
+;
+;     Exit
+;         v2      Number of statistics processed
+;         v3      Number of bytes of buffer used
+
+stat_describe ROUT
+
+        ENTER   "a1-a4, v1, v4-v6"
+
+        ADRL    lr, short_stdescs
+        MOV     v4, a2
+        ADD     a2, lr, a2, LSL #2              ; src ptr
+        ADD     a3, lr, a3, LSL #2              ; end - inclusive!
+
+00      CMP     a2, a3
+        EXIT    GT                              ; done all asked for
+
+        CMP     v1, # sizeof_dci4_stdesc        ; enough room for stat?
+        EXIT    LT                              ; no - exit immediately
+
+        LDR     a1, [a2], #4                    ; compressed descriptor
+
+        AND     lr, a1, # 15
+        STR     lr, [a4], # 4                   ; type
+
+        MOV     a1, a1, LSR # 4
+        AND     lr, a1, # 15
+        STR     lr, [a4], #4                    ; format
+
+        MOV     a1, a1, LSR # 4
+        AND     lr, a1, # 15
+        STR     lr, [a4], #4                    ; presentation
+
+        MOV     a1, a1, LSR # 4
+        AND     lr, a1, # 15
+        STR     lr, [a4], #4                    ; size
+
+        MOV     a1, a1, LSR # 4
+        AND     lr, a1, # 15
+        STR     lr, [a4], #4                    ; volatility
+
+        MOV     a1, v4
+        ADD     v4, v4, # 1                     ; string not through tabix
+        BL      find_stat_name
+        STR     a1, [a4], #4                    ; name
+
+        MOV     a1, #0
+        STR     a1, [a4], #4                    ; name_tag
+        STR     a1, [a4], #4                    ; spare
+
+        SUB     v1, v1, # sizeof_dci4_stdesc    ; my bytes left
+        ADD     v2, v2, #1                      ; api stats done
+        ADD     v3, v3, # sizeof_dci4_stdesc    ; api bytes used
+
+        B       %b00
+
+
+;-----------------------------------------------------------------------------
+
+        EMIT_SHORT_STDESCS
+
+;-----------------------------------------------------------------------------
+;
+; The register usage for both SA_DESCRIBE and SA_READ is very similar:
+;
+;     Entry
+;         a1      SA_DESCRIBE or SA_READ
+;         a2      First statistic, inclusive        current ptr
+;         a3      Last statistic, inclusive         end ptr
+;         a4      First byte of buffer in memory    current ptr
+;         v1      Number of bytes in buffer         bytes left
+;
+;     Exit
+;         v2      Number of statistics processed
+;         v3      Number of bytes of buffer used
+
+; ASSUME ONLY 32 BIT AND 64 BIT INTEGER STATISTICS ARE BEING MANIPULATED!
+
+stat_read ROUT
+
+        ENTER   "a1-a4, v1, v4-v6"
+
+        BL              stats_ping_pong
+
+        ADRL    lr, short_stdescs
+
+        ADD     a2, lr, a2, LSL #2              ; src ptr
+        ADD     a3, lr, a3, LSL #2              ; end - inclusive!
+
+00      CMP     a2, a3
+        EXIT    GT                              ; done all asked for
+
+        LDR     a1, [a2], #4                    ; compressed descriptor
+
+        MOV     lr, a1, LSR # 12                ; access size field
+        AND     lr, lr, # 15                    ; currently 4 bit field
+
+        SUBS    v1, v1, lr
+        EXIT    LT                              ; can't fit - exit
+
+        AND     lr, a1, # 15                    ; type
+
+        TEQ     lr, # ST_INTEGER32
+        BEQ     %f10
+        TEQ     lr, # ST_INTEGER64
+        BEQ     %f20
+
+        ; Don't know type - skip
+
+        ADD     v2, v2, #1                      ; ?
+        B       %b00
+
+; Do 32 bit stat
+
+10      MOV     lr, a1, LSR # 20                ; access table index
+
+        LDR     v4, [ws, # accum_32bit]
+        LDR     a1, [v4, lr, LSL # 2]
+        STR     a1, [a4], #4
+        ADD     v2, v2, #1
+        ADD     v3, v3, #4
+        B       %b00
+
+; Do 64 bit stat
+
+20      MOV     lr, a1, LSR # 20                ; access table index
+
+        LDR     v4, [ws, # accum_64bit]
+        LDR     a1, [v4, lr, LSL # 3]!
+        STR     a1, [a4], #4
+        LDR     a1, [v4, #4]
+        STR     a1, [a4], #4
+        ADD     v2, v2, #1
+        ADD     v3, v3, #8
+        B       %b00
+
+; XXXXXXXX VVVV SSSS PPPP FFFF TTTT
+; X     Table index
+; V     Volatility
+; S     Size
+; P     Presentation
+; T     Type
+
+
+;-----------------------------------------------------------------------------
+;
+; Statistic SWI entry point
+;
+
+statistic_op    ROUT
+
+                CMP     a1, # 1
+                BHI     %f90
+
+                ; setup common to both actions
+
+                MOV     v2, # 0
+                MOV     v3, # 0
+
+                CMP     a2, a3
+                CMPLS   a3, # NUM_STATISTICS
+                BHI     %f90
+
+                TEQ     a1, # 1
+                BEQ     stat_read
+                B       stat_describe
+
+90              ADR     a1, %f91
+                ORRS    pc, lr, #V_bit
+91
+                DCD     Mbuf_SWI
+                DCB     "Bad statistic action arguments", 0
+                ALIGN
+                LTORG
+
+
+;-----------------------------------------------------------------------------
+
+
+
+
+
+        InsertDebugRoutines
+
+
+        END
+
