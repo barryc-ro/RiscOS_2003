@@ -758,7 +758,9 @@ FieldCount              #       1       ; field count until next picture decode 
 HeadersRead             #       1       ; 0 or 1, depending on whether headers have been parsed since last picture decode boundary
 FieldsForNextFrame      #       1       ; field length of *next* picture - 1 (not evaluated until last field of current picture decode)
 PulldownNextFrame       #       1       ; bits to ensure are set in DisplayMode0 at next picture display start
+PreviousPulldown        #       1       ; value of PulldownNextFrame last time around
 PendingUnsetPulldown    #       1       ; nonzero => pulldown needs to be unprogrammed at next BAV interrupt
+PendingPulldownRepeat   #       1       ; 1:SHL:4 if pulldown repeat is to be asserted on UnsetPulldown, else 0
 FirstField_LastAnchorAU #       1       ; top_field_first for reordered anchor frame
 FieldRepeat_LastAnchorAU #      1       ; repeat_first_field for reordered anchor frame
 EvenOddIndicator        #       1       ; 0 => currently in an odd field, 1 => currently in an even field
@@ -2669,6 +2671,8 @@ VideoReset Entry "r0"
         STRB    r0, FieldCount
         STRB    r0, HeadersRead                                 ; initialise picture boundary detection state machine
         STRB    r0, PendingUnsetPulldown
+        MOV     r0, #1:SHL:7                                    ; value that won't match either 0 or 1:SHL:4
+        STRB    r0, PreviousPulldown
         Debug   pulldown, "VideoReset"
         MOV     r0, #-1                                         ; won't match with any previous layer ID
         STR     r0, AuxData_LastKnownLayer
@@ -4347,11 +4351,19 @@ CalcPulldown
         EXIT
 ; SetPulldown - called during the first field of an AU == last field of a PU
 SetPulldown
-        Entry   "r0"
+        Entry   "r0,r1"
         Debug   pulldown, "SetPulldown"
         ReadRegI r0, DisplayMode0
         BIC     r0, r0, #&1C
         LDRB    r14, PulldownNextFrame
+        LDRB    r1, PreviousPulldown            ; load previous state
+        STRB    r14, PreviousPulldown           ; save current one for next time around
+        TST     r1, r14                         ; if both this and last time it was a three-field frame,
+        MOVNE   r14, #1:SHL:4                   ; then set bit 4 (Pulldown Repeat) instead of bit 3 (Pulldown Enable)
+        ORRS    r1, r1, r14                     ; if both this and last time it was a two-field frame (update of r14 above wouldn't have happened if so)
+        MOVEQ   r1, #1:SHL:4                    ; then set Pulldown Repeat bit in UnsetPulldown
+        MOVNE   r1, #0                          ; else don't
+        STRB    r1, PendingPulldownRepeat
         ORR     r0, r0, r14
         WriteRegI r0, DisplayMode0, r14
         MOV     r0, #1
@@ -4362,7 +4374,10 @@ UnsetPulldown
         Entry   "r0"
         Debug   pulldown, "UnsetPulldown"
         ReadRegI r0, DisplayMode0
-        EOR     r0, r0, #1:SHL:3                ; invert pulldown status - so if we were wrong about the timing, the chip will still do the right thing (probably)
+        LDRB    r14, PendingPulldownRepeat      ; if we would have programmed this as a repeated 3-field frame,
+        TEQ     r14, #1:SHL:4                   ; then bits 3 and 4 will currently be unset
+        ORRNE   r0, r0, r14                     ; so just set bit 4
+        EOREQ   r0, r0, #1:SHL:3                ; else just toggle bit 3 so if we were wrong about the timing, the chip will still do the right thing (probably)
         WriteRegI r0, DisplayMode0, r14
         MOV     r0, #0
         STRB    r0, PendingUnsetPulldown
