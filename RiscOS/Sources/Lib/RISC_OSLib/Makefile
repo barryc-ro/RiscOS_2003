@@ -11,6 +11,7 @@
 # lib.romastubs                                             ROM      RISC_OSStubs  Apps_Only
 # lib.ansilib
 # lib.clib
+# lib.OverMgr         CLib:o.overmgr
 # lib.riscoslibm
 #---------------------------------------------------------------------------------------------
 #
