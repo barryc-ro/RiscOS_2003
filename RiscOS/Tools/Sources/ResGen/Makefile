@@ -1,96 +1,134 @@
-# Makefile for modgen, resgen, binaof, binasm
+# Makefile for modgen, resgen, binaof and binasm
 #
-# Note about modgen:
-#   modgen_old is modgen before addition of Ursula service call table.
-#   modgen has the Ursula service call table.
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+# 07-Oct-99  SNB          Created.
+#
 
-#LIBTYPE=ansilib
-LIBTYPE=stubs
-CC=cc
-CFLAGS=-ffah -c -DDDE -depend !Depend
-#CFLAGS=-ffah -c
-LD=Link
-LIB=CLib:o.$(LIBTYPE)
-SERVER=1.251
-RELEASEFS=net:&
+#
+# Paths
+#
+LIBDIR	= <Tools$Dir>
 
-all_old:      resgen modgen_old binaof binasm
+MODGEN     = modgen
+RESGEN     = resgen
+BINAOF     = binaof
+BINASM     = binasm
 
-all:          resgen modgen binaof binasm
+# Generic options:
+#
+MKDIR   = mkdir -p
+AS      = objasm
+CP      = copy
+CC      = cc
+CM      = cmhg
+RM      = remove
+LD      = link
+LB      = libfile
+TOUCH   = create
+WIPE    = -wipe
+SQUEEZE = squeeze
 
-resgen:       resgen.o rveneers.o
-              $(LD) -o ResGen o.resgen o.rveneers $(LIB)
-              squeeze ResGen
+CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
+ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK}
+CPFLAGS = ~cfr~v
+LDFLAGS = -aif
+WFLAGS  = ~CFR~V
+SQZFLAGS= -f
 
-modgen:       modgen.o veneers.o
-              $(LD) -o ModGen o.modgen o.veneers $(LIB)
-              squeeze ModGen
+#
+# Libraries
+#
+CLIB      = CLIB:o.stubs
+RLIB      = RISCOSLIB:o.risc_oslib
+RSTUBS    = RISCOSLIB:o.rstubs
+ROMSTUBS  = RISCOSLIB:o.romstubs
+ROMCSTUBS = RISCOSLIB:o.romcstubs
+ABSSYM    = RISC_OSLib:o.AbsSym
+CLXLIB    = C:CLX.o.clxlib
 
-modgen_old:   modgenold.o oveneers.o
-              $(LD) -o ModGen o.modgen o.oveneers $(LIB)
-              squeeze ModGen
+#
+# Include files
+#
+INCLUDES  = -IC: -IC:CLX
+DFLAGS    = -DDDE -DDEBUGGING=0
 
-binaof:       binaof.o
-              $(LD) -o BinAof o.binaof $(LIB)
-              squeeze BinAof
+#
+# Program specific options:
+#
+COMPONENT  = ${resgen} ${modgen} ${binaof} ${binasm}
+TARGET     = ${COMPONENT}
+SOURCE     = 
+EXPORTS    = 
 
-binasm:       binasm.o
-              $(LD) -o BinAsm o.binasm $(LIB)
-              squeeze BinAsm
+LIBS       =   ${CLXLIB} ${CLIB}
 
-resgen.o:     resgen.c
-              $(CC) $(CFLAGS) resgen.c
 
-modgen.o:     modgen.c
-              $(CC) $(CFLAGS) modgen.c
+#
+# Rule patterns
+#
+.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
+.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
 
-modgenold.o:  modgen.c
-              $(CC) $(CFLAGS) -D NO_SERVICE_TABLE modgen.c
+#
+# Main target
+#
+all: ${COMPONENT}
+        @echo ${COMPONENT}: all built
 
-binaof.o:     binaof.c
-              $(CC) $(CFLAGS) binaof.c
+rom: ${TARGET}
+        @echo ${COMPONENT}: rom module built
 
-binasm.o:     binasm.c
-              $(CC) $(CFLAGS) binasm.c
+export: export_${PHASE}
 
-veneers.o:    veneers.s
-              objasm s.veneers -to o.veneers -stamp -quit
+install_rom: ${TARGET}
+        @echo ${COMPONENT}: rom module installed
 
-oveneers.o:   oveneers.s
-              objasm s.oveneers -to o.oveneers -stamp -quit
+install_tool: ${TARGET}
+	${MKDIR} ${LIBDIR}.Acorn.Docs
+	${MKDIR} ${LIBDIR}.Build.Docs
+	${CP} ${RESGEN} ${LIBDIR}.Acorn.${RESGEN} ${CPFLAGS}
+	${CP} ${MODGEN} ${LIBDIR}.Build.${MODGEN} ${CPFLAGS}
+	${CP} ${BINAOF} ${LIBDIR}.Build.${BINAOF} ${CPFLAGS}
+	${CP} ${BINASM} ${LIBDIR}.Build.${BINASM} ${CPFLAGS}
+	${CP} Docs.${RESGEN} ${LIBDIR}.Acorn.Docs.${RESGEN} ${CPFLAGS}
+	${CP} Docs.${MODGEN} ${LIBDIR}.Build.Docs.${MODGEN} ${CPFLAGS}
+	${CP} Docs.${BINAOF} ${LIBDIR}.Build.Docs.${BINAOF} ${CPFLAGS}
+	${CP} Docs.${BINASM} ${LIBDIR}.Build.Docs.${BINASM} ${CPFLAGS}
+	@echo ${COMPONENT}: tool and docs installed in library
 
-rveneers.o:   rveneers.s
-              objasm s.rveneers -to o.rveneers -stamp -quit
+clean:
+        ${WIPE} o.* ${WFLAGS}
+        ${RM} ${RESGEN}
+        ${RM} ${MODGEN}
+        ${RM} ${BINAOF}
+        ${RM} ${BINASM}
+        @echo ${COMPONENT}: cleaned
 
-install:    ; copy resgen %.resgen ~cfq
-              copy resgen ^.library.ResGen ~cfq
+export_hdrs: 
+	@echo ${COMPONENT}: export complete (hdrs)
 
-clean:;       remove resgen
-              remove o.resgen
-              remove o.rveneers
-              remove modgen
-              remove o.modgen
-              remove o.veneers
-              remove o.oveneers
-              remove binasm
-              remove o.binasm
-              remove binaof
-              remove o.binaof
-              remove o.modgenold
+export_libs: 
+        @echo ${COMPONENT}: export complete (libs)
 
-release:      ;net
-              fs $(SERVER)
-              adfs
-            - cdir $(RELEASEFS).src.resgen$(DOTVSN)
-            - cdir $(RELEASEFS).src.resgen$(DOTVSN).c
-            - cdir $(RELEASEFS).src.resgen$(DOTVSN).h
-              copy makefile $(RELEASEFS).src.resgen$(DOTVSN).makefile    ~cfq
-              access $(RELEASEFS).src.resgen$(DOTVSN).makefile           wr/r
-            - copy resgen $(RELEASEFS).bin.resgen.resgen$(VSN)           ~cfq
-              access $(RELEASEFS).bin.resgen.resgen$(VSN)                wr/r
-              copy c.* $(RELEASEFS).src.resgen$(DOTVSN).c.*              ~cfq
-              access $(RELEASEFS).src.resgen$(DOTVSN).c.*                wr/r
-              copy h.* $(RELEASEFS).src.resgen$(DOTVSN).h.*              ~cfq
-              access $(RELEASEFS).src.resgen$(DOTVSN).h.*                wr/r
+
+${MODGEN}: modgen.o veneers.o ${CLIB}
+	${LD} ${LDFLAGS} -o $@ modgen.o veneers.o ${CLIB}
+	${SQUEEZE} ${SQZFLAGS} $@
+
+${RESGEN}: resgen.o rveneers.o ${CLIB}
+	${LD} ${LDFLAGS} -o $@ resgen.o rveneers.o ${CLIB}
+	${SQUEEZE} ${SQZFLAGS} $@
+
+${BINAOF}: binaof.o
+	${LD} ${LDFLAGS} -o $@ binaof.o ${CLIB}
+	${SQUEEZE} ${SQZFLAGS} $@
+
+${BINASM}: binasm.o
+	${LD} ${LDFLAGS} -o $@ binasm.o ${CLIB}
+	${SQUEEZE} ${SQZFLAGS} $@
 
 # Dynamic dependencies:
