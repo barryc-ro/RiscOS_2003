@@ -10,7 +10,6 @@
 # lib.romstubs        RISC_OSLib:o.romstubs   ${ROMSTUBS}   ROM      RISC_OSStubs  Module_Only
 # lib.romastubs                                             ROM      RISC_OSStubs  Apps_Only
 # lib.ansilib
-# lib.arthurlib
 # lib.clib
 # lib.riscoslibm
 #---------------------------------------------------------------------------------------------
@@ -77,18 +76,20 @@ ALFLAGS =\
  -PD "DEFAULT_TEXT SETL {TRUE}"
 
 VLFLAGS =\
- -DLIB_SHARED="\"\""\
- -DLIB_APCS="\"R\""
+ -DLIB_SHARED="\"\""
 
 # Shared C Library flags
 CSFLAGS =\
  -I@,^.clib\
  -DSHARED_C_LIBRARY\
- -DUROM
+ -DUROM\
+ ${SCL_APCS}
 
 VSFLAGS =\
- -DLIB_SHARED="\"Shared \""\
- -DLIB_APCS="\"R\""
+ -DLIB_SHARED="\"Shared \""
+
+ASFLAGS =\
+ ${SCL_APCS}
 
 VPATH = @ kernel clib rlib
 
@@ -105,8 +106,8 @@ VPATH = @ kernel clib rlib
 .s.o:;        ${OBJASM} ${AFLAGS} ${ALFLAGS} $< $@
 .s.o_rl:;     ${OBJASM} ${AFLAGS} $< $@
 .s.m_o_rl:;   ${OBJASM} ${AFLAGS} $< $@
-.s.rm_o:;     ${OBJASM} ${AFLAGS} ${OPTIONS} $< $@
-.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} ${OPTIONS} $< $@
+.s.rm_o:;     ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} $< $@
+.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} $< $@
 
 #
 # Libraries
@@ -490,9 +491,6 @@ lib.romastubs: rlib.s.rl_stub_a
 lib.clib: ${CLIB_MOD_OBJS}
         ${LD} -o $@ -module ${CLIB_MOD_OBJS}
 
-lib.arthurlib: o.arth_new_n o.arth_old_n o.ArtAsm_n o.ArtAsm_o
-        ${LIBFILE} ${LIBFLAGS} $@ o.Arth_new_n o.Arth_old_n o.ArtAsm_n o.ArtAsm_o
-
 # Derived headers:
 derived.swis: s.makehswis h.swisheader
         ${AS} ${AFLAGS} -from s.makehswis -to $@
@@ -619,25 +617,25 @@ rm_o.bsearch_a: c.bsearch
         ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -zkA ${OPTIONS} -o $@ c.bsearch
 
 rm_o.clib:  clib.s.cl_obj_r
-        ${OBJASM} ${AFLAGS} ${OPTIONS} -from clib.s.cl_obj_r -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_obj_r -to $@
 
 rm_o.cl_modbody: clib.s.cl_mod_r
-        ${OBJASM} ${AFLAGS} ${OPTIONS} -from clib.s.cl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_mod_r -to $@
 
 rm_o_rl.rl_modbody: rlib.s.rl_mod_r
-        ${OBJASM} ${AFLAGS} ${OPTIONS} -from rlib.s.rl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from rlib.s.rl_mod_r -to $@
 
 rm_o.k_modbody: kernel.s.k_mod_r
-        ${OBJASM} ${AFLAGS} ${OPTIONS} -from kernel.s.k_mod_r -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from kernel.s.k_mod_r -to $@
 
 rm_o.memcpy: s.memcpy s.h_regs
-        ${OBJASM} ${AFLAGS} ${OPTIONS} -from s.memcpy -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from s.memcpy -to $@
 
 rm_o.initmodule: clib.s.initmod_r
-        ${OBJASM} ${AFLAGS} ${OPTIONS} -from clib.s.initmod_r -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.initmod_r -to $@
 
 rm_o_rl.initmodule: rlib.s.initmod_r
-        ${OBJASM} ${AFLAGS} ${OPTIONS} -from rlib.s.initmod_r -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from rlib.s.initmod_r -to $@
 
 #
 # Objects that require extra flags
@@ -708,20 +706,5 @@ m_o_rl.trace: rlib.c.trace
 
 rm_o_rl.trace: rlib.c.trace
    ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} ${OPTIONS} -DTRACE -o rm_o_rl.trace rlib.c.trace
-
-#
-# Arthur objects
-#
-o.arth_new_n: c.arthur
-        ${CC} ${CFLAGS} -fah -o $@ c.arthur
-
-o.arth_old_n: c.arthur
-        ${CC} ${CFLAGS} -fah -DARTHUR_OLD_NAMES -o $@ c.arthur
-
-o.ArtAsm_n: s.Art_n_r
-        ${OBJASM} ${AFLAGS} -from s.Art_n_r -to $@
-
-o.ArtAsm_o: s.Art_o_r
-        ${OBJASM} ${AFLAGS} -from s.Art_o_r -to $@
 
 # Dynamic dependencies:

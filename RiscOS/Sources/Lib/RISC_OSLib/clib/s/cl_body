@@ -659,9 +659,15 @@ sj_v3   #       4
 sj_v4   #       4
 sj_v5   #       4
 sj_v6   #       4
-sj_fp   #       4
-sj_ap   #       4
+  [ {CONFIG}=26
+sj_fp   #       4       ; Old APCS-A ordering, which we retain
+sj_sp   #       4       ; for compatibility in the 26-bit case
+sj_sl   #       4       ; (someone might poke jmp_bufs)
+  |
 sj_sl   #       4
+sj_fp   #       4
+sj_sp   #       4
+ ]
 sj_pc   #       4
 sj_f4   #       3*4
 sj_f5   #       3*4
@@ -670,29 +676,26 @@ sj_f7   #       3*4
 
 |setjmp|
 ; save everything that might count as a register variable value.
-; To make things harder, if this has been called through a compatibility
-; veneer, longjump must return not to the veneer (which will attempt to
-; use a link on the stack which is no longer there), but to its caller.
-; This of course depends on intimate knowledge of what the compatibility
-; veneer does.
-        MOV     a2, lr
-        MOV     ip, sp
-        TST     fp, #APCSChange         ; XXXX32
-        LDRNE   lr, [sp]
-        ADDNE   ip, ip, #4
-        STMIA   a1!, {v1-v6, fp, ip} ; save in two steps for calling-standard
-        STMIA   a1!, {sl, lr}        ; independence.
-        SUB     v1, a1, #sj_f4
-        MOV     v2, a2
+  [ {CONFIG}=26
+        STMIA   a1!, {v1-v6, fp, sp}
+        STMIA   a1, {sl, lr}
+        SUB     v1, a1, #sj_sl
+  |
+        STMIA   a1, {v1-v6, sl, fp, sp, lr}
+        MOV     v1, a1
+  ]
+        MOV     v2, lr
         BL      |_kernel_fpavailable|
         CMP     a1, #0
-        BEQ     setjmp_return
-        STFE    f4, [v1, #sj_f4]
-        STFE    f5, [v1, #sj_f5]
-        STFE    f6, [v1, #sj_f6]
-        STFE    f7, [v1, #sj_f7]
+  [ {CONFIG}=26
+        STFNEE  f4, [v1, #sj_f4]
+        STFNEE  f5, [v1, #sj_f5]
+        STFNEE  f6, [v1, #sj_f6]
+        STFNEE  f7, [v1, #sj_f7]
+  |
+        SFMNE   f4, 4, [v1, #sj_f4]
+  ]
         MOV     a1, #0
-setjmp_return
         MOV     lr, v2
         LDMIA   v1, {v1, v2}
         Return  ,LinkNotStacked
@@ -711,61 +714,55 @@ setjmp_return
 
         BL      |_kernel_fpavailable|
         CMP     a1, #0
-        BEQ     longjmp_return
-        LDFE    f7, [v1, #sj_f7-sj_f4]
-        LDFE    f6, [v1, #sj_f6-sj_f4]
-        LDFE    f5, [v1, #sj_f5-sj_f4]
-        LDFE    f4, [v1, #sj_f4-sj_f4]
-longjmp_return
-        LDMDB   v1!, {r10, r12, r13, r14}   ; APCS_A fp, sp, sl
-        MOV     v5, r14
-        ; Done this way to make update of sp & sl sort of atomic.
-        ; (Actually, non-atomic in a way the event-handler caller can
-        ;  understand).
-        ; Get stack description in correct APCS-R places.
-        MOV     fp, r10
-        MOV     sl, r13
-        MOV     sp, r12
-        ; Now discard all unwanted stack chunks which are deallocatable.
-; Bug fix 26-Feb-91 ECN
-; Added test to skip stack deallocation code in SVC mode!
-; Previously this code caused a data abort.
-; Maybe this code should be conditionalised as it should only apply to the
-; shared c library.
-        [ No32bitCode
+ [ {CONFIG}=26
+        LDFNEE  f7, [v1, #sj_f7-sj_f4]
+        LDFNEE  f6, [v1, #sj_f6-sj_f4]
+        LDFNEE  f5, [v1, #sj_f5-sj_f4]
+        LDFNEE  f4, [v1, #sj_f4-sj_f4]
+        LDMDB   v1!, {v2-v5}                    ; fudge for atomic {sp,sl,fp} update
+        STMFD   sp!, {v2, v3}                   ; push fp, sp
+        STR     v4, [sp, #-4]!                  ; push sl
+        LDMFD   sp, {sl, fp, sp}
+ |
+        LFMNE   f4, 4, [v1, #sj_f4-sj_f4]
+        LDMDB   v1!, {sl, fp, sp, lr}
+        MOV     v5, lr
+ ]
+
+ [ ModeMayBeNonUser
+   [ {CONFIG}=26
         MOV     a1, pc
         TST     a1, #3
-        |
+   |
         MRS     a1, CPSR
         TST     a1, #2_01111                    ; EQ if USR26 or USR32
-        ]
+   ]
         BNE     chunks_deallocated
+ ]
 
+        ; Now discard all unwanted stack chunks which are deallocatable.
         LDR     v2, [sl, #SC_next-SC_SLOffset]  ; first extension chunk
         ADD     v4, sl, #SC_next-SC_SLOffset    ; base of extension chain
         CMP     v2, #0
         BEQ     chunks_deallocated
 deallocate_chunks
-        LDR     v3, [v2, #SC_next]              ; chunk after next
         LDR     ip, [v2, #SC_deallocate]
+        LDR     v3, [v2, #SC_next]              ; chunk after next
+        CMPS    ip, #0
+        ADDEQ   v4, v2, #SC_next                ; if it can't be deallocated
+        BEQ     deallocate_next_chunk           ; retain it
         MOV     a1, v2
-        CMPS    ip, #0                          ;) deallocate it if it can be
-        MOVNE   lr, pc                          ;) deallocated, and update the
-        MOVNE   pc, ip                          ;) chain.
-        STRNE   v3, [v4]                        ;)
-        ADDEQ   v4, v2, #SC_next                ; else retain it
+        MOV     lr, pc                          ;) deallocate it if it can be
+        MOV     pc, ip                          ;) deallocated, and update the
+        STR     v3, [v4]                        ;) chain.
+deallocate_next_chunk
         MOVS    v2, v3
         BNE     deallocate_chunks
 
 chunks_deallocated
-        MOV     r14, v5
+        MOV     lr, v5
         MOV     a1, v6
-        LDMDB   v1!, {v1-v6}
-        TST     fp, #APCSChange                 ; XXXX32
-        MOVNE   r12, sp
-        MOVNE   r13, sl
-        MOVNE   r10, fp
-        BICNE   r10, r10, #APCSChange           ; correct fp
+        LDMDB   v1, {v1-v6}
 
         Return  ,LinkNotStacked
 
