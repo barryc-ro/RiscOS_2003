@@ -26,9 +26,11 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+
 #include "kernel.h"
 #include "swis.h"
 #include "tcplibs.h"
+
 #include "status.h"
 
 #ifndef NO_SECURE
@@ -1338,9 +1340,13 @@ static void http_oserror( http_connection *c, _kernel_oserror *e )
 {
     if ( e )
     {
+        fdebugf( log_file, "%p: *** Error, message is %s\n", c, e->errmess );
         http_set_message( c, e->errmess );
-        http_set_status( c, status_FAIL_LOCAL );
     }
+    else
+        fdebugf( log_file, "%p: *** Error with no error!\n", c );
+
+    http_set_status( c, status_FAIL_LOCAL );
 }
 
 void http_copy_headers(http_header_item *h, http_header_item **new)
@@ -1594,6 +1600,33 @@ static _kernel_oserror *http_prosecute( http_connection *c )
         /* Now idempotent and quick to return */
         http_flush_data_to_file(c);
 
+#ifndef NO_SECURE
+        if ( ( c->flags & http_open_flags_TUNNEL )
+             && (c->rc/100) == 2 )
+        {
+            /* Proxy negotiation has completed -- crack on with the SSL
+             * handshake
+             */
+
+            fdebugf( log_file, "%p: starting up SSL connection\n", c );
+
+            c->SSL = SSL_new( ssl_context );
+            SSL_set_fd( c->SSL, c->socket );
+
+            if ( c->flags & http_open_flags_VERIFY )
+                SSL_set_verify( c->SSL, SSL_VERIFY_PEER,
+                                &cert_verify_callback );
+            else
+                SSL_set_verify( c->SSL, SSL_VERIFY_NONE, NULL );
+
+            c->flags &= ~http_open_flags_TUNNEL;
+
+            http_set_status( c, status_AUTHENTICATING );
+
+            http_prosecute( c );
+        }
+#endif
+
         /* It's IMPORTANT that if status becomes COMPLETED_FILE then we drop
          * through and don't return: we don't want Partial Content replies to
          * appear as COMPLETED_FILE to SWI HTTP_Status, or else the client will
@@ -1671,6 +1704,9 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
                     c->data_so_far += wrote;
 
+                    fdebugf( log_file, "%p: bound: setting so_far=%d\n", c,
+                             c->data_so_far );
+
                     bound += strlen( c->boundary );
 
                     if ( *bound == '-' && bound[1] == '-' )
@@ -1725,6 +1761,9 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             }
 
             c->data_so_far += rc;
+
+            fdebugf( log_file, "%p: adding %d to so_far (now %d)\n",
+                     c, rc, c->data_so_far );
         }
 
         if ( c->status != status_COMPLETED_FILE )
@@ -1811,9 +1850,11 @@ static _kernel_oserror *http_open(http_open_args *args)
     if (new == 0)
         return make_error(err_NO_MEMORY);
 
-    fdebugf( log_file, "%p: New connection, host=0x%08lx, port=0x%04x\n",
+    fdebugf( log_file, "%p: New connection, host=0x%08lx, port=0x%04x (%d)\n",
                        new, args2.in.addr->sin_addr.s_addr,
-                       args2.in.addr->sin_port );
+                       args2.in.addr->sin_port, htons(args2.in.addr->sin_port));
+    fdebugf( log_file, "%p:   object = '%s'\n", new, args2.in.object );
+    fdebugf( log_file, "%p:   fname = '%s'\n", new, args2.in.fname );
 
     *new = proto_con;                /* Fill in with a prototype connection */
     new->buffer = (char*) (new + 1);
@@ -1886,6 +1927,9 @@ static _kernel_oserror *http_open(http_open_args *args)
         fdebugf(log_file, "%p: http_open Opening file '%s'\n", new, new->fname);
 
         new->fh = ro_fopen(new->fname, RO_OPEN_WRITE);
+
+        fdebugf( log_file, "%p: file handle is %d\n", new, new->fh );
+
         if (new->fh == NULL)
         {
             return http_destroy(new,err_CANT_OPEN_FILE);
@@ -1961,6 +2005,7 @@ static void http_show_flags( http_connection *c )
     if ( f & http_open_flags_PRIORITY ) fdebugf( log_file, " priority" );
     if ( f & http_open_flags_IMAGE )    fdebugf( log_file, " image" );
     if ( f & http_open_flags_TOMEM )    fdebugf( log_file, " to-mem" );
+    if ( f & http_open_flags_TUNNEL )   fdebugf( log_file, " tunnel-proxy" );
     if ( f & http_flags_HTTP11 )        fdebugf( log_file, " http-1.1" );
     if ( f & http_flags_KEPTALIVE )     fdebugf( log_file, " kept-alive" );
     if ( f & http_flags_NOTALIVE )      fdebugf( log_file, " not-alive" );
@@ -2035,7 +2080,14 @@ static int http_open_socket( http_connection *c )
 #ifdef NO_SECURE
         return err_SSL_NOT_AVAILABLE;
 #else
-        if ( ssl_present )
+        if ( !ssl_present )
+            return err_SSL_NOT_AVAILABLE;
+
+        /* If we're going through a tunnel proxy, we need to begin the
+         * transaction in unsecure mode and only call SSL_connect() once
+         * the proxy headers have been exchanged.
+         */
+        if ( !(c->flags & http_open_flags_TUNNEL) )
         {
             c->SSL = SSL_new( ssl_context );
             SSL_set_fd( c->SSL, c->socket );
@@ -2046,28 +2098,24 @@ static int http_open_socket( http_connection *c )
             else
                 SSL_set_verify( c->SSL, SSL_VERIFY_NONE, NULL );
         }
-        else
-            return err_SSL_NOT_AVAILABLE;
 #endif
-        }
+    }
 
     http_set_status( c, status_CONNECTING );
 
     http_cons[c->socket] = c;
 
     totalsockets++;
-#if 0
+
     fdebugf( log_file, "%p: opened new socket, %d, total is %d\n", c, c->socket,
              totalsockets );
-#endif
+
     if ( c->queue )
     {
         c->queue->nsockets++;
-#if 0
         fdebugf( log_file, "%p: queue %p gains socket %d, total=%d\n", c,
                  c->queue, c->socket,
                  c->queue->nsockets );
-#endif
     }
 
 #if DEBUG
@@ -2084,7 +2132,8 @@ static int http_open_socket( http_connection *c )
  * potentially re-use.                                                    *
  *------------------------------------------------------------------------*/
 
-#define RELEVANT_FLAGS ( http_open_flags_SECURE | http_open_flags_VERIFY )
+#define RELEVANT_FLAGS ( http_open_flags_SECURE | http_open_flags_VERIFY | \
+                         http_open_flags_TUNNEL )
 
 static BOOL http_queue_new( http_connection *me )
 {
@@ -2456,6 +2505,9 @@ static _kernel_oserror *http_close(http_close_args *args)
     if (ep)
         return ep;
 
+    fdebugf( log_file, "%p: being closed by SWI http_close (socket %d)\n", c,
+             c->socket );
+
     return http_close_handle(c, args->in.flags);
 }
 
@@ -2497,7 +2549,9 @@ _kernel_oserror *http_close_handle(http_connection *c, int flags)
         {
             /* We were stuck in the queue anyway */
             c->queue->queue = c->queuenext;
-            c->queuenext->queueprev = NULL;
+
+            if ( c->queue->queue )
+                c->queuenext->queueprev = NULL;
             c->queuenext = NULL;
             c->queueprev = NULL;
         }
@@ -2610,7 +2664,7 @@ _kernel_oserror *http_close_handle(http_connection *c, int flags)
     /* Finally, zap the magic number */
     c->magic = 0;
 
-/*     fdebugf(log_file, "Unlinking from list\n"); */
+    fdebugf(log_file, "Unlinking from list\n");
 
     if (c->prev == NULL)
         http_cons_list = c->next;
@@ -2620,7 +2674,7 @@ _kernel_oserror *http_close_handle(http_connection *c, int flags)
     if (c->next != NULL)
         c->next->prev = c->prev;
 
-/*     fdebugf(log_file, "Freeing connection structure\n"); */
+    fdebugf(log_file, "Freeing connection structure\n");
     free(c);
 
     fdebugf(log_file, "Connection closed.\n");
@@ -2671,8 +2725,8 @@ static _kernel_oserror *http_status(http_status_args *args)
     else
         args->out.rc = c->rc;
 
-/*     fdebugf( log_file, "%p: http_status returning status=%d rc=%d\n",
-             c, args->out.status, args->out.rc ); */
+    fdebugf( log_file, "%p: http_status returning status=%d rc=%d\n",
+             c, args->out.status, args->out.rc );
 
     args->out.message = c->message ;
 
@@ -2771,6 +2825,8 @@ static _kernel_oserror *http_completedpart( http_completedpart_args *args )
     c->data_so_far = -1;
     c->data_size = -1;
 
+    fdebugf( log_file, "%p: setting so_far=-1 in completedpart\n", c );
+
     http_set_status( c, status_GETTING_HEADERS );
 
     http_prosecute( c );
@@ -2785,6 +2841,36 @@ void http_send_request(http_connection *c)
                  (c->flags & http_open_flags_HEAD ) ? "HEAD "
                                                     : "GET ";
     struct iovec iov[3];
+
+#ifndef NO_SECURE
+    /* semi-bodge */
+    if ( c->flags & http_open_flags_TUNNEL )
+    {
+        char *host = c->object + 8; /* "https://" */
+        char *slash = strchr( host, '/' );
+        char *colon = strchr( host, ':' );
+
+        if ( !slash )
+            slash = host + strlen(host);
+
+        sprintf( tmp_buffer, "CONNECT %.*s%s HTTP/1.0\r\n\r\n", slash-host,
+                 host,
+                 (colon && colon<slash) ? "" : ":443" );
+
+        http_send( c, tmp_buffer, strlen(tmp_buffer) );
+
+        fdebugf( log_file, "%p: sending request %s", c, tmp_buffer );
+
+        strcpy( tmp_buffer, slash );
+        if ( !*tmp_buffer )
+            strcpy( tmp_buffer, "/" );
+        free( c->object );
+        c->object = strdup( tmp_buffer );
+
+        http_set_status( c, status_WAITING );
+        return;
+    }
+#endif
 
     sprintf( tmp_buffer, " %s\r\n", http_version );
 
@@ -2805,6 +2891,16 @@ void http_send_request(http_connection *c)
      * line without getting an EWOULDBLOCK.
      */
 
+    if (http_sendv(c, iov, 3 ) < 0)
+    {
+        http_fail( c, status_FAIL_REQUEST );
+    }
+    else
+    {
+        http_set_status( c, status_REQUEST_HEADERS );
+        c->sendhead = c->sendhead_base;
+    }
+
 #if 0
     if ( strlen( c->object ) > TMP_BUF_SIZE - 20 )
     {
@@ -2819,7 +2915,6 @@ void http_send_request(http_connection *c)
         sprintf(tmp_buffer, "%s%s %s\r\n",
                            meth, c->object, http_version);
     }
-#endif
 
     if (http_sendv(c, iov, 3 ) < 0)
     {
@@ -2830,6 +2925,7 @@ void http_send_request(http_connection *c)
         http_set_status( c, status_REQUEST_HEADERS );
         c->sendhead = c->sendhead_base;
     }
+#endif
 }
 
 
@@ -2933,6 +3029,8 @@ int http_send_request_headers( http_connection *c )
                          c->data_size > MAX_INPUT ? MAX_INPUT : c->data_size,
                          c->bh);
                 c->data_so_far = 0;
+
+                fdebugf( log_file, "%p: setting so_far=0 in sendrh\n", c );
             }
             else
             {
@@ -2990,6 +3088,8 @@ int http_send_request_body(http_connection *c)
         else
         {
             c->data_size = c->data_so_far = -1;
+
+            fdebugf( log_file, "%p: setting so_far=-1 in sendrb\n", c );
             http_set_status( c, status_WAITING );
         }
     }
@@ -3143,7 +3243,7 @@ void http_process_header_line(http_connection *c, char *l)
 {
     char *p;
 
-/*     fdebugf(log_file, "%p: rxheader '%s'\n", c, l); */
+    fdebugf(log_file, "%p: rxheader '%s'\n", c, l);
 
     if ( !*l )
     {
@@ -3218,7 +3318,10 @@ void http_process_response_line(http_connection *c, char *l)
     {
         char *p;
 
-        p = l + strlen(http_version);
+        p = strchr(l, ' ');
+        if ( !p )
+            p = l;
+
         while (isspace(*(++p)))
             ;
         c->rc = atoi(p);
@@ -3262,7 +3365,10 @@ void http_flush_data_to_file(http_connection *c)
      */
 
     if ( c->data_so_far == -1 )
+    {
+        fdebugf( log_file, "%p: setting so_far=0 in flush\n", c );
         c->data_so_far = 0;
+    }
 
     if (c->fh && (c->buf_off != c->buf_used))
     {
@@ -3270,6 +3376,9 @@ void http_flush_data_to_file(http_connection *c)
         int wrote;
 
         n = c->buf_off - c->buf_used;
+
+        fdebugf( log_file, "%p: trying to flush %d bytes\n", c, n );
+
         wrote = ro_fwritepos( c->buffer + c->buf_used, n, 1, c->fh,
                               c->data_so_far);
         if ( wrote < n )
@@ -3343,10 +3452,10 @@ void http_socket_close(http_connection *c)
     if (c->socket != -1)
     {
         totalsockets--;
-#if 0
+
         fdebugf( log_file, "%p: closing socket %d (%d left)\n", c, c->socket,
                  totalsockets );
-#endif
+
         http_queue_dec_nsockets( c );
 
         http_cons[c->socket] = NULL;
