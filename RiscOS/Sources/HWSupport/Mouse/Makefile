@@ -5,51 +5,13 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 09-Mar-01  SNB          Recreated
 #
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
+COMPONENT  = Mouse
+ROM_SOURCE = GetAll.s
 
-#
-# Program specific options:
-#
-COMPONENT = Mouse
-SOURCE    = s.GetAll
-TARGET    = rm.${MACHINE}.Mouse
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export:
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${SOURCE}
-        ${MKDIR} rm.${MACHINE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
