@@ -11,7 +11,7 @@
 #
 # Component specific options:
 #
-COMPONENT  = Java
+COMPONENT  = JavaVM
 APP	   = !$(COMPONENT)
 ROM_MODULE = aof.$(COMPONENT)
 
