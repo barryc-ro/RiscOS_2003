@@ -8,11 +8,13 @@
 
 #include "nettime.h"
 #include "nt_nvram.h"
+#include <string.h>
 
 /*
  * Public vars
  */
 int sockno;
+char env_time_server[MAX_ENV_TIME_SERVER];
 
 
 /*
@@ -66,6 +68,7 @@ void machine(transition_t transition)
 
     case Init:
     case Die:
+    case LinkDown:
       return;
     }
     break;
@@ -165,6 +168,8 @@ static int tryconnect(void)
   int ipaddress, i;
   struct sockaddr_in sa;
   struct servent *service;
+  unsigned long host_ip;
+  struct hostent *hp;
 
   DEBUGFN(printf("trying to connect\n"));
 
@@ -178,18 +183,45 @@ static int tryconnect(void)
     DEBUGFN(printf("Dialler bailed! r0=%x\n", dialler_status));
     return 0;
   }
+  DEBUGFN(printf("checking environment variable %s\n", ENV_TIME_SERVER));
 
-  /* Ask the Registry who we should contact */
-  if (_swix(NCAccessManager_Enquiry, _IN(0)|_IN(1)|_IN(2)|_OUT(0),
-            NCRegistry_TimeServerTag, &ipaddress, sizeof(ipaddress),
-            &i) || (i != sizeof(ipaddress)))
-  {
-    DEBUGFN(printf("NCAccessManager bailed! r0=%x\n", i));
-    return 0;
+  if(read_os_var(ENV_TIME_SERVER, env_time_server, MAX_ENV_TIME_SERVER)>0) { /* we have a configured time server */
+    DEBUGFN(printf("read environment variable: %s\n", env_time_server));
+  } else {
+
+      /* Ask the Registry who we should contact */
+      if (_swix(NCAccessManager_Enquiry, _IN(0)|_IN(1)|_IN(2)|_OUT(0),
+                NCRegistry_TimeServerTag, env_time_server, MAX_ENV_TIME_SERVER,
+                &i))
+      {
+        DEBUGFN(printf("NCAccessManager bailed! r0=%x\n", i));
+        return 0;
+      }
+
+      if(i == 4) { /* packed IP address */
+        ipaddress = *(int *)env_time_server;
+        DEBUGFN(printf("NCAccessManager says timeserver is %08x\n", ipaddress));
+        if (ipaddress == 0) return 0;
+        sa.sin_addr.s_addr = ipaddress; /* address already in network order */
+        goto skip_addr_decode;
+      }
   }
-  DEBUGFN(printf("NCAccessManager says timeserver is %08x\n", ipaddress));
-  if (ipaddress == 0)
-    return 0;
+
+
+    if((hp = gethostbyname(env_time_server)) != NULL) { /* it's an IP name */
+      DEBUGFN(printf("got natural IP name \"%s\"\n", env_time_server));
+      memcpy((char *)&sa.sin_addr, hp->h_addr, hp->h_length);
+    } else if((host_ip = inet_addr(env_time_server)) != INADDR_NONE) { /* must be a dot quad then */
+          DEBUGFN(printf("got dot-quad IP name \"%s\"\n", env_time_server));
+          memcpy((char *)&sa.sin_addr, &host_ip, sizeof(unsigned long));
+    } else {
+        DEBUGFN(printf("dammit, couldn't figure out time server address\n"));
+        return 0;
+    }
+
+    skip_addr_decode:
+
+  DEBUGFN(printf("Using time server 0x%x\n", (int)sa.sin_addr.s_addr));
 
   if ((service=getservbyname("time", "tcp")) == NULL)
   {
@@ -199,7 +231,6 @@ static int tryconnect(void)
 
   sa.sin_family = AF_INET;
   sa.sin_port = service->s_port;
-  sa.sin_addr.s_addr = ipaddress;	/* Address already in network order */
 
   /* Make a non-blocking async socket */
   sockno = socket(AF_INET, SOCK_STREAM, 0);
