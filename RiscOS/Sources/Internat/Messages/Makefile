@@ -103,8 +103,10 @@ resources:
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE} ${DATA}.Tokenised
-	${MKDIR} ${DATA}
-	${MKDIR} rm.${BUILD}
+	${MKDIR} Data
+	${MKDIR} Data.${LOCALE}
+	${MKDIR} Data.${LOCALE}.${BUILD}
+	${MKDIR} rm.${LOCALE}.${BUILD}
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
