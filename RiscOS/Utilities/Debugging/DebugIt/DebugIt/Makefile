@@ -80,10 +80,12 @@ TARGETSA_D	= rm.DebugItD
 
 OBJS = \
  o.Main \
+ o.debugitHDR\
  
 
 OBJSD = \
  o.Main \
+ o.debugitHDR\
 
 
 EXPORTS =
