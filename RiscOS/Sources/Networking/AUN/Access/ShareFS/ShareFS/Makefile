@@ -20,6 +20,8 @@ EXP_HDR = <export$dir>
 #
 COMPONENT  = ShareFS
 EXPORTS    = ${EXP_HDR}.ShareD
+RAM_MODULE = rm.ShareFS
+RAM_MODULE_PLUS = rm.Share+
 ROM_MODULE = aof.ShareFS
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
@@ -30,7 +32,6 @@ RESDIR     = ^.^.^.AUNMsgs.Resources.${Locale}.Resources.${COMPONENT}
 #
 AS      = objasm
 CC      = cc
-# NOTE: cmhg 'special'
 CMHG    = cmhg -b
 CP      = copy
 LD      = link
@@ -41,37 +42,43 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 LEVEL    = ^.^.^
-INCLUDES = ^.rmalib,^.fslib,${LEVEL}.include
+INCLUDES = ^.rmalib,^.fslib,InetInc:,RISC_OSLib:,C:
 DFLAGS   = -DDCI4 -DLOOKUPERR "-DFSNAME=\"Remote\"" #-DDEBUG -DPROFILING
-CFLAGS   = -I${INCLUDES} -zM -zps1 -ffah ${DFLAGS} -wd
+CFLAGS   = -I${INCLUDES} -zM -zps1 -ffah ${DFLAGS} ${PLUSFLAGS} -wd
 AFLAGS   = -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
+
+# Always build Access+
+PLUSFLAGS=-DACCESSPLUS
 
 #
 # Libraries
 #
-ANSILIB   = CLib:o.ansilib
-CLIB      = CLIB:o.stubs
+ANSILIB   = C:o.ansilib
+CLIB      = C:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
-A_ABSSYM  = RISCOSLIB:o.a_abssym
+C_ABSSYM  = RISCOSLIB:o.c_abssym
 
 FSLIB     = ^.fslib.o.fslib
 RMALIB    = ^.rmalib.o.rmalib
+TCPLIB	  = ^.^.^.libs.socklib.socklibzm
 
 # sharefsBITS
 OBJS =\
  irqs.o\
- mshare.o\
  resourcefs.o\
- share.o\
+ sharep.o\
  shared.o\
  sharefiler.o\
  sharefs.o\
  sharehow.o\
  shareinet.o\
- stubs.o\
  window.o
+
+NORMOBJS =mshare.o
+
+PLUSOBJS =msharep.o
 
 #
 # Rule patterns
@@ -86,9 +93,15 @@ OBJS =\
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
-install_rom: ${ROM_MODULE}
-        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: Module installed (ROM)
+ram: ${RAM_MODULE}
+        @echo ${COMPONENT}: Module built (RAM)
+
+ramplus: ${RAM_MODULE_PLUS}
+        @echo ${COMPONENT}: Module built (RAM)
+
+#install_rom: ${ROM_MODULE}
+#        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+#        @echo ${COMPONENT}: Module installed (ROM)
 
 resources:
         @echo ${COMPONENT}: Resources in AUNMsgs
@@ -106,14 +119,26 @@ clean:
         ${WIPE} map.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${RMALIB} ${FSLIB} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${RMALIB} ${FSLIB} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${PLUSOBJS} ${RMALIB} ${FSLIB} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${PLUSOBJS} ${RMALIB} ${FSLIB} ${TCPLIB} ${ROMCSTUBS}
+
+${RAM_MODULE}: ${OBJS} ${NORMOBJS} ${RMALIB} ${FSLIB} ${CLIB}
+        ${LD} -o $@ -rmf ${OBJS} ${NORMOBJS} ${RMALIB} ${FSLIB} ${TCPLIB} ${CLIB}
+
+${RAM_MODULE_PLUS}: ${OBJS} ${PLUSOBJS} ${RMALIB} ${FSLIB} ${CLIB}
+        ${LD} -o $@ -rmf ${OBJS} ${PLUSOBJS} ${RMALIB} ${FSLIB} ${TCPLIB} ${CLIB}
+
+${FSLIB}:
+        dir ^.fslib; amu fslib.o; back
+
+${RMALIB}:
+        dir ^.rmalib; amu rmalib.o; back
 
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} map
         ${MKDIR} linked
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${A_ABSSYM} \
+        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${C_ABSSYM} \
               -map > map.${COMPONENT}
         truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
@@ -121,23 +146,6 @@ rom_link:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.irqs: s.irqs
-o.irqs: <Hdr$Dir>.Global.ListOpts
-o.irqs: <Hdr$Dir>.Global.Macros
-o.irqs: <Hdr$Dir>.Global.System
-o.irqs: Hdr:SWIs
-o.irqs: Hdr:CPU.Generic26
-o.irqs: Hdr:IO.GenericIO
-o.irqs: Hdr:RISCOS
-o.resourcefs:	c.resourcefs
-o.resourcefs:	C:h.swis
-o.resourcefs:	C:h.kernel
-o.resourcefs:	h.resourcefs
-o.resourcefs:	^.rmalib.h.ralloc
-o.resourcefs:	^.fslib.h.debug
-o.resourcefs:	^.fslib.h.interface
-o.resourcefs:	^.fslib.h.util
-o.resourcefs:	^.fslib.h.lookup
 o.share:	c.share
 o.share:	^.fslib.h.ker
 o.share:	C:h.kernel
@@ -157,6 +165,47 @@ o.share:	h.msgproc
 o.share:	^.fslib.h.ticker
 o.share:	h.modface
 o.share:	h.freeway
+o.svcprint:	c.svcprint
+o.svcprint:	C:h.kernel
+o.svcprint:	C:h.swis
+o.svcprint:	^.fslib.h.debug
+o.irqs: s.irqs
+o.irqs: <Hdr$Dir>.Global.ListOpts
+o.irqs: <Hdr$Dir>.Global.Macros
+o.irqs: <Hdr$Dir>.Global.System
+o.irqs: Hdr:SWIs
+o.irqs: Hdr:CPU.Generic26
+o.irqs: Hdr:IO.GenericIO
+o.irqs: Hdr:RISCOS
+o.resourcefs:	c.resourcefs
+o.resourcefs:	C:h.swis
+o.resourcefs:	C:h.kernel
+o.resourcefs:	h.resourcefs
+o.resourcefs:	^.rmalib.h.ralloc
+o.resourcefs:	^.fslib.h.debug
+o.resourcefs:	^.fslib.h.interface
+o.resourcefs:	^.fslib.h.util
+o.resourcefs:	^.fslib.h.lookup
+o.sharep:	c.sharep
+o.sharep:	^.fslib.h.ker
+o.sharep:	C:h.kernel
+o.sharep:	^.fslib.h.ModuleWrap
+o.sharep:	C:h.kernel
+o.sharep:	^.fslib.h.lookup
+o.sharep:	^.fslib.h.util
+o.sharep:	^.fslib.h.interface
+o.sharep:	^.fslib.h.lookup
+o.sharep:	h.remswis
+o.sharep:	h.errnum
+o.sharep:	^.fslib.h.debug
+o.sharep:	C:h.swis
+o.sharep:	h.how
+o.sharep:	h.msgproc
+o.sharep:	^.fslib.h.ticker
+o.sharep:	h.modface
+o.sharep:	C:h.swis
+o.sharep:	h.freeway
+o.sharep:	^.rmalib.h.ralloc
 o.shared:	c.shared
 o.shared:	c.daemon
 o.shared:	^.fslib.h.debug
@@ -191,9 +240,9 @@ o.sharefiler:	^.fslib.h.util
 o.sharefiler:	^.fslib.h.interface
 o.sharefiler:	^.fslib.h.lookup
 o.sharefiler:	^.fslib.h.cstart
-o.sharefiler:	C:h.wimp
-o.sharefiler:	C:h.os
-o.sharefiler:	C:h.sprite
+o.sharefiler:	RISC_OSLib:h.wimp
+o.sharefiler:	RISC_OSLib:h.os
+o.sharefiler:	RISC_OSLib:h.sprite
 o.sharefiler:	h.remswis
 o.sharefiler:	h.errnum
 o.sharefiler:	^.rmalib.h.ralloc
@@ -261,29 +310,21 @@ o.shareinet:	h.resourcefs
 o.shareinet:	h.modface
 o.shareinet:	h.how
 o.shareinet:	h.tcplibs
-o.shareinet:	^.^.^.include.sys.h.types
-o.shareinet:	^.^.^.include.sys.h.time
-o.shareinet:	^.^.^.include.netinet.h.in
-o.shareinet:	^.^.^.include.sys.h.socket
-o.shareinet:	^.^.^.include.sys.h.ioctl
-o.shareinet:	^.^.^.include.sys.h.ttychars
-o.shareinet:	^.^.^.include.sys.h.ttydev
-o.shareinet:	^.^.^.include.h.netdb
-o.shareinet:	^.^.^.include.sys.h.errno
-o.shareinet:	^.^.^.include.sys.^.h.errno
+o.shareinet:	InetInc:sys.h.types
+o.shareinet:	InetInc:sys.h.time
+o.shareinet:	InetInc:netinet.h.in
+o.shareinet:	InetInc:sys.h.socket
+o.shareinet:	InetInc:sys.h.ioctl
+o.shareinet:	InetInc:sys.h.ttychars
+o.shareinet:	InetInc:sys.h.ttydev
+o.shareinet:	InetInc:h.netdb
+o.shareinet:	InetInc:sys.h.errno
+o.shareinet:	InetInc:sys.^.h.errno
 o.shareinet:	C:h.kernel
-o.shareinet:	^.^.^.include.net.h.if
-o.shareinet:	^.^.^.include.sys.h.mbuf
-o.shareinet:	^.^.^.include.net.h.if_arp
-o.shareinet:	^.^.^.include.sys.h.socket
-o.stubs:	c.stubs
-o.stubs:	^.^.^.include.sys.h.types
-o.stubs:	C:h.kernel
-o.stubs:	^.^.^.include.h.errno
-o.stubs:	C:h.kernel
-o.stubs:	^.^.^.include.sys.h.uio
-o.stubs:	^.^.^.include.sys.h.socket
-o.stubs:	^.^.^.include.sys.h.socketvar
+o.shareinet:	InetInc:net.h.if
+o.shareinet:	InetInc:sys.h.mbuf
+o.shareinet:	InetInc:net.h.if_arp
+o.shareinet:	InetInc:sys.h.socket
 o.window:	c.window
 o.window:	^.fslib.h.debug
 o.window:	^.fslib.h.ker
