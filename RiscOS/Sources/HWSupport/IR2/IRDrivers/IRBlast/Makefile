@@ -23,6 +23,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
 DFLAGS  = -DDEBUG=3
@@ -44,13 +45,13 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Program specific options:
 #
 TARGET    = aof.{COMPONENT}
-OBJS      = module.o driver.o ir_api.o header.o veneers.o
+OBJS      = module.o driver.o ir_api.o header.o veneers.o codetables.o cabtbls.o tvtbls.o vcrtbls.o
 
 #
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -77,6 +78,7 @@ clean:
 	${WIPE} linked.* ${WFLAGS}
 	${WIPE} map.* ${WFLAGS}
 	${RM} ${TARGET}
+	${STRIP}
 	@echo ${COMPONENT}: cleaned
 
 
@@ -108,23 +110,3 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.utils
-o.module:	h.ir_api
-o.module:	h.module
-o.module:	h.driver
-o.driver:	c.driver
-o.driver:	C:h.kernel
-o.driver:	C:h.swis
-o.driver:	h.utils
-o.driver:	h.ir_api
-o.driver:	h.driver
-o.driver:	h.veneers
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
