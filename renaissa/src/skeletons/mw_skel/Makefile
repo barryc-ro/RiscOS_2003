@@ -1,11 +1,4 @@
 # Skeleton OBJASM/C Makefile for a modulewrapped application
-#
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date       	Name         	Description
-# ----       	----         	-----------
-# 17 Sep 1997	RWB		Created
 
 #
 # Paths
@@ -45,11 +38,11 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+REMOTEDB   = C:debug.o.remotezm
 #
 # Include files
 #
-INCLUDES = -IC:,<Lib$Dir>.
+INCLUDES = -IC:
 
 # Program specific options:
 #
@@ -133,3 +126,25 @@ o.module:	C:h.swis
 o.module:	C:h.kernel
 o.module:	h.module
 o.module:	h.header
+o.main:	c.main
+o.modulewrap: s.ModuleWrap
+o.modulewrap: s.AppName
+o.modulewrap: VersionASM
+o.modulewrap: Hdr:ListOpts
+o.modulewrap: Hdr:Macros
+o.modulewrap: Hdr:System
+o.modulewrap: Hdr:SWIs
+o.modulewrap: Hdr:CPU.Generic26
+o.modulewrap: Hdr:IO.GenericIO
+o.modulewrap: Hdr:RISCOS
+o.modulewrap: Hdr:ModHand
+o.modulewrap: Hdr:EnvNumbers
+o.modulewrap: Hdr:Proc
+o.modulewrap: Hdr:FSNumbers
+o.modulewrap: Hdr:NewErrors
+o.modulewrap: Hdr:Services
+o.modulewrap: Hdr:ResourceFS
+o.modulewrap: Hdr:MsgTrans
+o.modulewrap: Hdr:Variables
+o.modulewrap: Hdr:UpCall
+o.modulewrap: s.ResFiles
