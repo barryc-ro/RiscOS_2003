@@ -28,7 +28,7 @@ COMPONENT = NCFresco
 TARGET    = aof.${COMPONENT}
 TARGETU   = aof.${COMPONENT}u
 
-ABSSYM    = RISC_OSLib:o.abssym
+ABSSYM    = RISC_OSLib:o.c_abssym
 
 #
 # Generic rules:
