@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 06 May 1997  RWB 	  New for !EraseCVS
+# 23 Sep 1999  SNB        Added install: phase.
 #
 
 #
@@ -16,7 +17,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -25,6 +26,8 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 CD	= dir
+CHMOD	= access
+CHMODFLAGS = RW/R
 
 # Debug flags
 
@@ -53,6 +56,7 @@ INCLUDES = -ITbox:,C:
 # Program specific options:
 #
 COMPONENT = EraseCVS
+APP       = ${INSTDIR}.!${COMPONENT}
 TARGET    = !RunImage
 
 OBJS      =	\
@@ -79,6 +83,14 @@ clean:
         ${RM} o
         ${WIPE} ${TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
+
+install: ${TARGET} dirs
+	${MKDIR} ${APP}
+	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
+	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CHMOD} ${APP} ${CHMODFLAGS}
+	${CHMOD} ${APP}.* ${CHMODFLAGS}
+	@echo ${COMPONENT}: installed
 
 #
 # Target
