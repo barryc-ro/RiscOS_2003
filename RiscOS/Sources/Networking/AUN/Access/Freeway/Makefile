@@ -113,13 +113,3 @@ rom_link:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.inetfn:	c.inetfn
-o.inetfn:	TCPIPLibs:sys.h.types
-o.inetfn:	TCPIPLibs:sys.h.cdefs
-o.inetfn:	TCPIPLibs:machine.h.endian
-o.inetfn:	TCPIPLibs:machine.h.ansi
-o.inetfn:	TCPIPLibs:machine.h.types
-o.inetfn:	TCPIPLibs:netinet.h.in
-o.inetfn:	h.module
-o.inetfn:	C:h.kernel
-o.inetfn:	TCPIPLibs:netinet.h.in

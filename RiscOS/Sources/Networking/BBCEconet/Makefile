@@ -68,20 +68,3 @@ version:
         Version
 
 # Dynamic dependencies:
-rm.BBCEconet: Hdr:ListOpts
-rm.BBCEconet: Hdr:Macros
-rm.BBCEconet: Hdr:System
-rm.BBCEconet: Hdr:SWIs
-rm.BBCEconet: Hdr:CPU.Generic26
-rm.BBCEconet: Hdr:IO.GenericIO
-rm.BBCEconet: Hdr:RISCOS
-rm.BBCEconet: Hdr:Debug
-rm.BBCEconet: Hdr:ModHand
-rm.BBCEconet: Hdr:FSNumbers
-rm.BBCEconet: Hdr:NewErrors
-rm.BBCEconet: Hdr:Services
-rm.BBCEconet: Hdr:Econet
-rm.BBCEconet: Hdr:MsgTrans
-rm.BBCEconet: Hdr:Symbols
-rm.BBCEconet: Time+Date
-rm.BBCEconet: s.Interface

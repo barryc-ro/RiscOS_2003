@@ -47,13 +47,3 @@ $(TARGET): $(SOURCE)
         $(AS) $(ASFLAGS) $(SOURCE)
 
 # Dynamic dependencies:
-rm.NetUtils2: Hdr:ListOpts
-rm.NetUtils2: Hdr:Macros
-rm.NetUtils2: Hdr:System
-rm.NetUtils2: Hdr:SWIs
-rm.NetUtils2: Hdr:CPU.Generic26
-rm.NetUtils2: Hdr:IO.GenericIO
-rm.NetUtils2: Hdr:RISCOS
-rm.NetUtils2: Hdr:ModHand
-rm.NetUtils2: Hdr:NdrDebug
-rm.NetUtils2: Version
