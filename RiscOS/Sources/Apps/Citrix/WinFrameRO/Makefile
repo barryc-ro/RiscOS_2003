@@ -42,20 +42,23 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
+	@echo ** Exporting non-translatable resource files
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
 	${MKDIR} ${RESRES}.ini
-	${CP} ${SRC}!Boot       ${RESAPP}.!Boot    ${CPFLAGS}
-	${CP} ${SRC}!Help       ${RESAPP}.!Help    ${CPFLAGS}
-	${CP} ${SRC}!Run        ${RESAPP}.!Run     ${CPFLAGS}
-	${CP} ${SRC}!Sprites    ${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} ${SRC}EnsureTB    ${RESRES}.EnsureTB ${CPFLAGS}
-	${CP} ${SRC}Messages    ${RESRES}.Messages ${CPFLAGS}
-	${CP} ${SRC}Res         ${RESRES}.Res      ${CPFLAGS}
-	${CP} ${SRC}Splash      ${RESRES}.Splash   ${CPFLAGS}
-	${CP} ${SRC}ini.AppSrv   ${RESRES}.ini.AppSrv   ${CPFLAGS}
-	${CP} ${SRC}ini.Module   ${RESRES}.ini.Module   ${CPFLAGS}
-	${CP} ${SRC}ini.WFClient ${RESRES}.ini.WFClient ${CPFLAGS}
+	SetMacro WinFrameLocalRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.,Resources.UK.
+	${CP} WinFrameLocalRes:!Boot       ${RESAPP}.!Boot    ${CPFLAGS}
+	${CP} WinFrameLocalRes:!Help       ${RESAPP}.!Help    ${CPFLAGS}
+	${CP} WinFrameLocalRes:!Run        ${RESAPP}.!Run     ${CPFLAGS}
+	${CP} WinFrameLocalRes:!Sprites    ${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} WinFrameLocalRes:EnsureTB    ${RESRES}.EnsureTB ${CPFLAGS}
+	${CP} WinFrameLocalRes:Messages    ${RESRES}.Messages ${CPFLAGS}
+	${CP} WinFrameLocalRes:Res         ${RESRES}.Res      ${CPFLAGS}
+	${CP} WinFrameLocalRes:Splash      ${RESRES}.Splash   ${CPFLAGS}
+	${CP} WinFrameLocalRes:ini.AppSrv   ${RESRES}.ini.AppSrv   ${CPFLAGS}
+	${CP} WinFrameLocalRes:ini.Module   ${RESRES}.ini.Module   ${CPFLAGS}
+	${CP} WinFrameLocalRes:ini.WFClient ${RESRES}.ini.WFClient ${CPFLAGS}
+        UnSet WinFrameLocalRes$path
         @echo ${COMPONENT}: resource files copied
 
 export: export_${PHASE}
