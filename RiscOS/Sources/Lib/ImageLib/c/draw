@@ -19,6 +19,7 @@
 
 #define DRAWTOOS(arg) ((arg + 255) >> 8)
 #define OSTODRAW(arg) ((arg) << 8)
+#define roundup(n) (0xfffffffc & ((n) + 3))
 
 static int osver;
 
@@ -27,20 +28,26 @@ static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp
 static _kernel_oserror *EndLoad(Image *this, BBox *changed);
 static _kernel_oserror *Delete(Image *this);
 static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size, int y_size);
+/*static _kernel_oserror *ModeChange(Image *this);*/
 static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *justuseorig);
 static _kernel_oserror *StartExportDraw(Image *this, int *size);
 static _kernel_oserror *ExportDraw(Image *this, char *buffer, int *len);
 static _kernel_oserror *EndExportDraw(Image *this);
 static _kernel_oserror *BGColDraw(Image *this, int *bgcol, int dontoverride);
+static _kernel_oserror *RegisterFiller(Image *this, FillerFunction *fill_fn, void *handle1, int *handle2);
 
 typedef struct draw_loaddata
 {
-    int bytesloaded;
-    int bytesparsed;
-    int memory;
-    int log2_bpp;
-    int xoffset;
-    int yoffset;
+    int              bytesloaded;
+    int              bytesparsed;
+    int              memory;
+    int              log2_bpp;
+    int              xoffset;
+    int              yoffset;
+    FillerFunction * filler;
+    void           * filler_handle1;
+    int            * filler_handle2;
+
 #ifdef TRACE
     FILE *trace;
 #endif
@@ -48,15 +55,12 @@ typedef struct draw_loaddata
 
 #pragma no_check_memory_accesses
 
-static int ensure_modules(void)
+static void ensure_modules(void)
 {
+  #if 0
   /* Ensure drawfile module */
-  if (_swix(OS_Module, _INR(0, 1), 18, "DrawFile"))
-  {
-    if (_swix(OS_Module, _INR(0,1), 1, "System:Modules.DrawFile"))
-      return 1;
-  }
-  return 0;
+    _swix(OS_Module, _INR(0,1), 1, "System:Modules.DrawFile");
+  #endif
 }
 
 #define drawError imgtrnsError
@@ -65,7 +69,7 @@ int NewDraw(Image *im)
 {
     Drawloaddata *load;
 
-    if (ensure_modules()) return -1;
+    ensure_modules();
 
     if (osver==0)
         _swix(OS_Byte, _INR(0,2)|_OUT(1), 129, 0, 255, &osver);
@@ -80,6 +84,7 @@ int NewDraw(Image *im)
     im->EndLoad        = EndLoad;
     im->Delete         = Delete;
     im->Render         = Render;
+    /*im->ModeChange=ModeChange;*/
     im->LoadFromCache  = 0;
     im->DumpToCache    = DumpToCache;
     im->StartExport    = StartExportDraw;
@@ -87,7 +92,7 @@ int NewDraw(Image *im)
     im->EndExport      = EndExportDraw;
     im->BGCol          = BGColDraw;
     im->NeedRedraw     = 0;
-    im->RegisterFiller = 0;
+    im->RegisterFiller = RegisterFiller;
 
     im->transparent    = 1;
 
@@ -146,9 +151,42 @@ static _kernel_oserror *LoadDraw(Image *this, const char *data, int len, BBox *c
 }
 
 
+static _kernel_oserror *get_old_mode_number(int * mode, int xeig, int yeig, int log2bpp)
+{
+  if (!mode) return NULL;
+
+  switch(log2bpp)
+  {
+    case 0:
+      if (xeig == 1 && yeig == 2) *mode = 0;
+      if (xeig == 1 && yeig == 1) *mode = 25;
+      break;
+    case 1:
+      if (xeig == 1 && yeig == 2) *mode = 8;
+      if (xeig == 2 && yeig == 2) *mode = 1;
+      if (xeig == 1 && yeig == 1) *mode = 26;
+      break;
+    case 2:
+      if (xeig == 1 && yeig == 2) *mode = 12;
+      if (xeig == 2 && yeig == 2) *mode = 9;
+      if (xeig == 1 && yeig == 1) *mode = 27;
+      break;
+    case 3:
+      if (xeig == 1 && yeig == 2) *mode = 15;
+      if (xeig == 2 && yeig == 2) *mode = 13;
+      if (xeig == 1 && yeig == 1) *mode = 28;
+      break;
+
+    default: return NULL; /* This is a new format sprite */
+  }
+  return NULL;
+}
 
 /*****************************/
-
+int rounduprow(int log2bpp, int pixels)
+{
+  return ((pixels * (1 << log2bpp) + 31) >> 5) << 2;
+}
 
 static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp)
 {
@@ -160,8 +198,9 @@ static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp
   Drawloaddata *load;
   int nw, nh;
   int xeig, yeig, log2bpp;
-  int *spritearea;
-
+  unsigned int *spritearea, *sprite;
+  unsigned int *spriteptr, *maskptr;
+  int spriterowsize, maskrowsize;
   /*
    * Munge it into a sprite of the current mode and palette
    */
@@ -175,11 +214,27 @@ static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp
   nw = this->width_os  >> xeig;
   nh = this->height_os >> yeig;
 
+  e = get_old_mode_number((int*)&mode, xeig, yeig, log2bpp);
+
   size = SpriteAreaSize(mode, nw, nh);
 
   if (log2bpp <= 3)
-      /* Add the palette... */
+  {
+    /* Add the palette... */
     size += 8 << (1 << log2bpp);
+  }
+
+  if ((int)mode < 256)
+  {
+    /* Add room for a 1, 2, 4 or 8 bpp mask */
+    if (log2bpp > 3) return drawError("Unrecognised screen mode\n");
+    size += rounduprow(log2bpp, nw) * nh;
+  }
+  else
+  {
+    /* Add room for a 1bpp mask */
+    size += rounduprow(0, nw) * nh;
+  }
 
   if (flex_alloc((flex_ptr) &spritearea, size) == 0)
   {
@@ -193,6 +248,9 @@ static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp
   /* Create sprite */
   if (!e) e=_swix(OS_SpriteOp, _INR(0,6), 0x10f, spritearea, "sprite",
                                       0, nw, nh, mode);
+  /* Add a mask */
+  if (!e) e=_swix(OS_SpriteOp, _INR(0,2), 29+256, spritearea, "sprite");
+
   /* Add the palette */
   if (!e && log2bpp <= 3)
   {
@@ -202,10 +260,23 @@ static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp
     if (!e) e=_swix(ColourTrans_ReadPalette, _INR(0,4), -1, -1, palette, 8<<(1<<log2bpp), 2);
   }
 
+  if (!e)
+  {
+    e=_swix(OS_SpriteOp, _INR(0,2)|_OUT(2), 24+256, spritearea, "sprite", &sprite);
+    if (!e)
+    {
+      spriteptr     = (unsigned int*)((char*)sprite + sprite[8]);
+      maskptr       = (unsigned int*)((char*)sprite + sprite[9]);
+      spriterowsize = rounduprow(log2bpp, nw);
+      if ((int)mode < 256) maskrowsize = spriterowsize;
+      else                 maskrowsize = rounduprow(0, nw);
+    }
+  }
+
   if (e)
   {
     flex_free((flex_ptr) &spritearea);
-    return NULL;
+    return e;
   }
 
   /* Switch output to it */
@@ -217,10 +288,9 @@ static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp
     return NULL;
   }
 
-  /* Set background colour */
-  _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), 0xffffff00, 128, 0);
-  /* CLG */
-  _swix(OS_WriteI+16, 0);
+  /* Set background colour to all bits set */
+  memset(spriteptr, 0xff, nh * spriterowsize);
+
 
   load=(Drawloaddata *) this->private_data;
 
@@ -237,6 +307,112 @@ static _kernel_oserror *SaveSprite(Image *this, const char *filename, int maxbpp
                       &trans,
                       NULL,
                       0);
+
+  #define GETBIT(bitno) ((maskptr[bitno>>5] & (1 << (bitno & 0x1f))) >> bitno)
+  #define SETBIT(bitno)   destptr[bitno>>5] = destptr[bitno>>5] | (1 << (bitno & 0x1f))
+  #define CLEARBIT(bitno) destptr[bitno>>5] = destptr[bitno>>5] & ~(1 << (bitno & 0x1f))
+
+  if ((int)mode < 256 || log2bpp == 0)
+  {
+    /* Old format or new format 1bpp, can just copy image to mask */
+    memcpy(maskptr, spriteptr, nh * spriterowsize);
+  }
+  else
+  {
+    /* New format, here be monsters */
+    unsigned int *sourceptr, *destptr, *tempsrcptr;
+    unsigned int bitmask;
+    unsigned int bitpos, pixels, pixno, rows, bpp;
+
+    rows      = nh;
+    bpp       = 1 << log2bpp;
+    sourceptr = spriteptr;
+    destptr   = maskptr;
+    bitmask   = 0xffffffff >> (32 - bpp);
+
+    while(rows--)
+    {
+      pixels     = nw;
+      tempsrcptr = sourceptr;
+      pixno      = 0;
+      bitpos     = 0;
+
+      while(pixels--)
+      {
+        if (((*tempsrcptr >> bitpos) & bitmask) == bitmask) CLEARBIT(pixno);
+        else                                                SETBIT(pixno);
+        pixno++;
+        bitpos += bpp;
+        if (bitpos==32)
+        {
+          bitpos = 0;
+          tempsrcptr++;
+        }
+      }
+      destptr   += maskrowsize   >> 2;
+      sourceptr += spriterowsize >> 2;
+    }
+  }
+
+  /* Set background colour to all bits clear */
+  memset(spriteptr, 0x00, nh * spriterowsize);
+
+  e = drawfile_render(0,
+                      this->private_data2,
+                      load->bytesloaded,
+                      &trans,
+                      NULL,
+                      0);
+
+  if ((int)mode < 256 || log2bpp == 0)
+  {
+    /* Old format, now for some nifty bit manipulations */
+    int words = (nh * spriterowsize) >> 2;
+    unsigned int *source, *dest;
+    source = spriteptr;
+    dest   = maskptr;
+    while(words--)
+    {
+      *dest = ~(*dest ^ *source);
+      source++;
+      dest++;
+    }
+  }
+  else
+  {
+    /* New format, here be monsters */
+    unsigned int *sourceptr, *destptr, *tempsrcptr;
+    unsigned int bitmask;
+    unsigned int bitpos, pixels, pixno, rows, bpp;
+
+    rows      = nh;
+    bpp       = 1 << log2bpp;
+    sourceptr = spriteptr;
+    destptr   = maskptr;
+    bitmask   = 0xffffffff >> (32 - bpp);
+
+    while(rows--)
+    {
+      pixels     = nw;
+      tempsrcptr = sourceptr;
+      pixno      = 0;
+      bitpos     = 0;
+
+      while(pixels--)
+      {
+        if ((GETBIT(pixno) == 0) && (((*tempsrcptr >> bitpos) & bitmask) != 0)) SETBIT(pixno);
+        pixno++;
+        bitpos += bpp;
+        if (bitpos==32)
+        {
+          bitpos = 0;
+          tempsrcptr++;
+        }
+      }
+      destptr   += maskrowsize   >> 2;
+      sourceptr += spriterowsize >> 2;
+    }
+  }
 
   /* Unswitch output */
   _swix(OS_SpriteOp, _INR(0,3), 0x13c, r1, r2, r3);
@@ -278,11 +454,10 @@ static _kernel_oserror *EndLoad(Image *this, BBox *changed)
 
     if (!e)
     {
-      // FIX: currently draw units
       if (this->width_os  == -1) this->width_os  = DRAWTOOS(drawshape.xmax - drawshape.xmin);
       if (this->height_os == -1) this->height_os = DRAWTOOS(drawshape.ymax - drawshape.ymin);
-      this->width  = this->width_os  >> xeig;
-      this->height = this->height_os >> yeig;
+      this->width  = (this->width_os  + (0xffffffff >> (32 - xeig))) >> xeig;
+      this->height = (this->height_os + (0xffffffff >> (32 - yeig))) >> yeig;
       changed->xmin = 0;
       changed->xmax = this->width_os;
       changed->ymin = 0;
@@ -600,4 +775,15 @@ static _kernel_oserror *BGColDraw(Image *this, int *bgcol, int dontoverride)
   this->factors[0]=this->factors[1]=this->factors[2]=this->factors[3]=1;
   strcpy(l->name, "sprite");
   return NULL;
+}
+
+static _kernel_oserror *RegisterFiller(Image *this, FillerFunction *fill_fn, void *handle1, int *handle2)
+{
+    Drawloaddata *load = (Drawloaddata *) this->private_data;
+
+    load->filler = fill_fn;
+    load->filler_handle1 = handle1;
+    load->filler_handle2 = handle2;
+
+    return 0;
 }
