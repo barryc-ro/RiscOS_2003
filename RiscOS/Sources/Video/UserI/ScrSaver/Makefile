@@ -82,7 +82,6 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
         ${RM} ${APPTARGET}
@@ -91,10 +90,10 @@ clean:
 resources: ${APPTARGET}
         ${MKDIR} ${RESDIR}.ScrSaver
         ${CP} ${APPTARGET}                               ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.${UserIF}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.${UserIF}.Messages     ${RESDIR}.ScrSaver.Messages   ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.${UserIF}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
-        ${SHRINK} Resources.${LOCALE}.${UserIF}.Sprites  ${RESDIR}.ScrSaver.Sprites
+        ${CP} LocalRes:${UserIF}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
+        ${CP} LocalRes:${UserIF}.Messages     ${RESDIR}.ScrSaver.Messages   ${CPFLAGS}
+        ${CP} LocalRes:${UserIF}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
+        ${SHRINK} LocalRes:${UserIF}.Sprites  ${RESDIR}.ScrSaver.Sprites
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -112,9 +111,7 @@ ${APPTARGET}: ${APPOBJS}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -125,27 +122,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	h.module
-o.app:	c.app
-o.app:	C:h.swis
-o.app:	C:h.kernel
-o.app:	C:h.time
-o.app:	C:h.math
-o.app:	C:h.float
-o.app:	C:h.os
-o.app:	C:h.wimp
-o.app:	C:h.sprite
-o.app:	C:h.wimpt
-o.app:	C:h.win
-o.app:	C:h.res
-o.app:	C:h.template
-o.app:	C:h.event
-o.app:	C:h.menu
-o.app:	C:h.sprite
-o.app:	C:h.bbc
-o.app:	C:h.colourtran
-o.app:	C:h.font
-o.app:	C:h.drawmod
-o.app:	C:h.werr
