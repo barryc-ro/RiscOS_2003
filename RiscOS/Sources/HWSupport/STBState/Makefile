@@ -25,10 +25,10 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-CFLAGS  = -c -zM -depend !Depend ${DFLAGS}
+CFLAGS  = -c -zM -depend !Depend ${DFLAGS} ${THROWBACK}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-ASFLAGS = -depend !Depend -Stamp -To $@ -From
+ASFLAGS = -depend !Depend -Stamp ${THROWBACK} -To $@ -From
 
 #
 # Libraries
@@ -53,13 +53,14 @@ OBJS      = o.Module o.STBState o.Reset
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $< h.$*
 .s.o:;      ${AS} ${ASFLAGS} $<
 
 #
 # build a relocatable module:
 #
 all: rm.STBState
+	@echo ${COMPONENT}: relocatable module built
 
 #
 # RISC OS ROM build rules:
@@ -75,10 +76,10 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
+        ${WIPE} o.*         ${WFLAGS}
+        ${WIPE} h.stbstate  ${WFLAGS}
+        ${WIPE} rm.*        ${WFLAGS}
+        ${WIPE} linked.*    ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
@@ -101,14 +102,15 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 rm.STBState: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
+# Static dependancies
+h.stbstate: o.stbstate;@
+o.module: h.stbstate
 
 # Dynamic dependencies:

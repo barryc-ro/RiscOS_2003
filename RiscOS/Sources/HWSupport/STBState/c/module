@@ -43,8 +43,12 @@ Date      Who     Description of change
                    to determine if they want the box to reboot on coming out
                    of standby. By default it does not reboot (reboot = 0).
 
-01-Feb-1999  BJGA  v0.07: added issuing of Service_Standby when going into / out of
-                   standby mode. Initially for the use of the Macrovision module.
+01-Feb-1999  BJGA  v0.07: added issuing of Service_Standby when going into /
+                   out of standby mode. Initially for the use of the
+                   Macrovision module.
+10-Feb-1999 NDT    v0.08: Fixed a bug where Hourglass_Off in standby would
+                   turn the green LED on.  The hourglass only works in the
+                   ON state now.
 
 ***************************************************************************/
 
@@ -58,6 +62,8 @@ Date      Who     Description of change
 #include "kernel.h"
 #include "swis.h"
 #include "time.h"
+
+#include "STBstate.h"
 
 #undef DEBUG			/* Debug mode */
 
@@ -141,8 +147,6 @@ typedef enum { OFF_PT = 0, OFF_LP = 1,
                FATAL = 2, INIT = 4,
                ON = 6,
                NONE = -1 } state_t;
-typedef enum { SWI_ON, SWI_OFF, SWI_FATAL, SWI_BUSY, SWI_STANDBY, SWI_STATE,
-               SWI_CONTROL } swi_t;
 
 
 /*
@@ -159,7 +163,6 @@ volatile byte *resettype = (byte *) 0x322;	/* ResetType in PublicWS      */
 
 _kernel_oserror *e;
 _kernel_swi_regs regs;
-int my_private_word;
 
 byte io_softcopy = 0xff;		/* softcopy of contents of I/O port   */
 byte cmospowerdown;
@@ -176,19 +179,15 @@ char tv_var[] = "TVOn";
  * Function declarations
  */
 extern void do_reset(void);
-extern int STBState_callevery_entry (_kernel_swi_regs *r, void *pw);
 _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw);
-void STBState_final(void);
-void set_io_port(led_t red, led_t green, dog_t watch);
-void tv_on(void);
-void tv_off(int stop);
-void go_on(void);
-void go_busy(int r0);
-void go_off(void);
-void go_pd(void);
-void go_lp(void);
-void go_pt(void);
-void go_fatal(void);
+static void show_state(state_t);
+static void set_io_port(led_t red, led_t green, dog_t watch);
+static void tv_on(void);
+static void tv_off(int stop);
+static void go_on(void);
+static void go_busy(int r0);
+static void go_off(void);
+static void go_fatal(void);
 
 
 
@@ -248,22 +247,61 @@ void fadeout(void)
   _kernel_swi(OS_CallAVector, &regs, &regs);
 }
 
+/******* show_state ********************************************************
+
+Purpose: Update the LEDs according to the specified state.
+
+Inputs: The state to indicate
+
+Outputs: none
+
+***************************************************************************/
+
+void show_state(state_t new_state)
+{
+  switch(new_state)
+  {
+  case INIT:
+    set_io_port(LED_ON, LED_FLASH, DOG_ON);
+    break;
+
+  case ON:
+    if(busy_level)
+      set_io_port(LED_OFF, LED_FLASH, DOG_ON);
+    else
+      set_io_port(LED_OFF, LED_ON, DOG_ON);
+    break;
+
+  case FATAL:
+    set_io_port(LED_FLASH, LED_OFF, DOG_ON);
+    break;
+
+  case OFF_PT: case OFF_LP:
+    set_io_port(LED_ON, LED_OFF, DOG_OFF);
+    break;
+
+  default: /* Unknown state - make it clear */
+    set_io_port(LED_FLASH, LED_ON, DOG_ON);
+    break;
+  }
+}
+
 /*
  * Start here
  */
-_kernel_oserror *STBState_init (char *cmd_tail, int podule_base, void *pw)
+_kernel_oserror *STBState_init (const char *cmd_tail, int podule_base, void *pw)
 {
   /*
    * Setup a callevery function to flash the leds as required
    */
   regs.r[0] = FLASH_INTERVAL;
   regs.r[1] = (int) STBState_callevery_entry ;
-  regs.r[2] = my_private_word = ((int) pw);
+  regs.r[2] = (int) pw;
   if ((e = _kernel_swi (OS_CallEvery, &regs, &regs)) != NULL)
     return (e);
 
   /* Display the INIT state */
-  set_io_port(LED_ON, LED_FLASH, DOG_ON);
+  show_state(INIT);
 
   /* Record state of the CMOS Standby bit */
   regs.r[0] = ReadCMOS;
@@ -286,14 +324,14 @@ _kernel_oserror *STBState_init (char *cmd_tail, int podule_base, void *pw)
 /*
  * Called by on module death (which shouldn't usually happen)
  */
-void STBState_final(void)
+_kernel_oserror *STBState_final(int fatal, int podule, void *pw)
 {
   /*
    * Get off callevery
    */
   regs.r[0] = (int) STBState_callevery_entry;
-  regs.r[1] = (int) my_private_word;
-  _kernel_swi (OS_RemoveTickerEvent, &regs, &regs);
+  regs.r[1] = (int) pw;
+  return _kernel_swi (OS_RemoveTickerEvent, &regs, &regs);
 }
 
 /*----------------------------------------------------------------------
@@ -301,28 +339,30 @@ void STBState_final(void)
 
     Description : Handle command line interface to this module.
 ----------------------------------------------------------------------*/
-_kernel_oserror *STBState_cli_handler(char *arg_string, int arg_count, int cmd_no, void *pw)
+_kernel_oserror *STBState_cli_handler(const char *arg_string, int arg_count,
+                                      int cmd_no, void *pw)
 {
-  if (cmd_no == 0)      /* STBStateOn */
+  switch(cmd_no)
   {
+  case CMD_STBStateOn:
     /* Do the STBState_On call */
     if ((state == INIT) || (state == OFF_PT)) go_on();
 
     /* Look at what the configured Wimp mode is */
-    regs.r[0] = ReadCMOS;
-    regs.r[1] = CMOS_WIMPMODE;
-    _kernel_swi(OS_Byte,&regs,&regs);
+    regs.r[0] = 1;
+    _kernel_swi(OS_ReadSysInfo,&regs,&regs);
 
     /* Change mode to the configured Wimp mode */
+    regs.r[1] = regs.r[0];               /* Copy wimp mode into r1 for next call */
     regs.r[0] = 0;
-    regs.r[1] = regs.r[2];               /* Copy wimp mode into r1 for next call */
     _kernel_swi(OS_ScreenMode,&regs,&regs);
-  }
-  if (cmd_no == 1)      /* STBState_Reboot (0 or 1) */
-  {
+    break;
+
+  case CMD_STBState_Reboot:
     reboot = atoi(arg_string);
     if (reboot != 1)
       reboot = 0;
+    break;
   }
   return NULL;
 }
@@ -384,7 +424,7 @@ void set_io_port(led_t red, led_t green, dog_t watch)
  * might need to be fixed to ensure that the leds flashed in sync rather than
  * alternately
  */
-extern int STBState_callevery_handler(_kernel_swi_regs *r, void *pw)
+extern _kernel_oserror *STBState_callevery_handler(_kernel_swi_regs *r, void *pw)
 {
   int new_io;
 
@@ -413,7 +453,7 @@ extern int STBState_callevery_handler(_kernel_swi_regs *r, void *pw)
     *io_port = io_softcopy = new_io;
   }
 
-  return 1;
+  return 0;
 }
 
 
@@ -429,27 +469,27 @@ _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw)
   gets(&dummy);
 #endif
 
-  switch (swi_no)
+  switch (STBState_00+swi_no)
   {
-  case SWI_ON:
+  case STBState_On:
     if ((state == INIT) || (state == OFF_PT))
       go_on();
     break;
 
-  case SWI_OFF:
+  case STBState_Off:
     if ((state == INIT) || (state == ON) || (state == OFF_PT))
       go_off();
     break;
 
-  case SWI_FATAL:
+  case STBState_Fatal:
     go_fatal();
     break;
 
-  case SWI_BUSY:
+  case STBState_Busy:
     go_busy(r->r[0]);
   break;
 
-  case SWI_STANDBY: /* toggles on/off state */
+  case STBState_Standby: /* toggles on/off state */
 //  6/8/97:CP
 //    Whole chunk of module code disabled because it doesn't work properly.
 //    Replaced with code which simply turns screen off, nothing else.
@@ -479,29 +519,30 @@ _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw)
 
 // new functionality :
 
-     if ( (state == ON) || (state == INIT) || (state == FATAL) )
-     {
-        go_off();
-     }
+    if ( (state == ON) || (state == INIT) || (state == FATAL) )
+    {
+      go_off();
+    }
 
-     else
-     {
-        go_on();
-     }
+    else
+    {
+      go_on();
+    }
 
 
-  break;
+    break;
 
-  case SWI_STATE:
+  case STBState_State:
     r->r[0] = state;
     break;
 
-  case SWI_CONTROL:
-      set_io_port((r->r[0] & 1) ? LED_ON : LED_OFF,
-                  (r->r[0] & 2) ? LED_ON : LED_OFF, DOG_OFF);
+  case STBState_Control:
+    set_io_port((r->r[0] & 1) ? LED_ON : LED_OFF,
+                (r->r[0] & 2) ? LED_ON : LED_OFF, DOG_OFF);
     break;
 
-  default:	/* This never happens, so we're going to ignore it :-) */
+  default: /* This happens if someone calls a SWI that we don't implement */
+    return error_BAD_SWI;
     break;
   }
   return NULL;
@@ -576,7 +617,7 @@ void tv_off(int stop)
     _kernel_swi (MPEGVideo_CardControl, &regs, &regs);
   }
 
-   /* Flag to !MPEG not to flush buffer if stopping and in skip dialogue */
+  /* Flag to !MPEG not to flush buffer if stopping and in skip dialogue */
   regs.r[0] = (int) "SetEval STB$StandbyPressed 1" ;
   _kernel_swi(OS_CLI, &regs, &regs);
   
@@ -618,6 +659,10 @@ void go_on(void)
     /* Upcall claimed - something doesn't want the STB to be reset fully */
 #ifdef FX
      printf("<fx:click> TV_ON\n");
+
+     /* Flag that it's OK to play MPEG */
+     regs.r[0] = (int) "SetEval STB$StandbyPressed 0" ;
+     _kernel_swi(OS_CLI, &regs, &regs);
 #else
      tv_on();
 
@@ -627,9 +672,8 @@ void go_on(void)
 
      state = ON;
      busy_level = 0;
-     set_io_port(LED_OFF, LED_ON, DOG_ON);
+     show_state(ON);
   }
-
   else
   {
     /* hard reset */
@@ -648,13 +692,13 @@ void go_busy(int r0)
   if (r0)			/* Get busy ? */
   {
     if (!(busy_level++))	/* Change leds if currently not busy */
-      set_io_port(LED_OFF, LED_FLASH, DOG_ON);
+      show_state(state);
   }
   else				/* Get less busy */
   {
     if (busy_level)		/* Don't want negative busy levels */
       if (!(--busy_level))	/* Change leds if no longer busy */
-        set_io_port(LED_OFF, LED_ON, DOG_ON);
+        show_state(state);
   }
 #ifdef DEBUG
   printf("Busy = %d\n", busy_level);
@@ -674,7 +718,7 @@ void go_fatal(void)
   tv_on();
 
   state = FATAL;
-  set_io_port(LED_FLASH, LED_OFF, DOG_ON);
+  show_state(FATAL);
 }
 
 /*
@@ -689,17 +733,20 @@ void go_off(void)
 
    if ( regs.r[0] != 0 ) /* if r.r[0] == 0, UpCall was claimed; don't shut down */
    {
-     set_io_port(LED_ON, LED_OFF, DOG_OFF);
-
      /* Stop MPEG chips */
 #ifdef FX
-  printf("<fx:click> TV_OFF\n");
+     printf("<fx:click> TV_OFF\n");
+
+     /* Flag to !MPEG not to flush buffer if stopping and in skip dialogue */
+     regs.r[0] = (int) "SetEval STB$StandbyPressed 1" ;
+     _kernel_swi(OS_CLI, &regs, &regs);
 #else
      fadeout();
      tv_off(TRUE);
 #endif
 
      state = OFF_PT; /* arbitrary state which isn't FATAL, INIT or ON */
+     show_state(OFF_PT);
    }
 }
 
