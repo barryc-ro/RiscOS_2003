@@ -1,14 +1,16 @@
 ; > s.Wimp08s
 
-;new way of doing things (Wimp delegates task memory management)
+
+; This is the current source code - s.Wimp08 is old source code - see
+; comments at top of s.Wimp08
 ;
-;only used if UseAMBControl is true
+; mjs
 ;
 ;;----------------------------------------------------------------------------
 ;; Switcher routines
 ;;----------------------------------------------------------------------------
 
-; THIS FILE APPLIES TO WIMP 2.65 ONWARDS
+; Wimp delegates task memory management to kernel, via OS_AMBControl
 
 ; Wimp_SlotSize
 ; Wimp_ClaimFreeMemory
@@ -52,7 +54,7 @@
 SWIWimp_SlotSize  ROUT
         MyEntry "SlotSize"
 
-   Debug mjs2,"mjs version of Wimp_SlotSize",R0,R1
+   Debug mjs2,"Wimp_SlotSize",R0,R1
 ;
         MOV     R4,R0                   ; R4 = new current slot size
 ;
@@ -67,9 +69,15 @@ SWIWimp_SlotSize  ROUT
 01
         STR     R3,slotsize             ; [slotsize] = no of pages
         Push    "R0-R1"
+    [ ShrinkableAreas
+        MOV     R0, #5
+        MOV     R1, #-1
+        SWI     XOS_DynamicArea         ; memory in free pool + shrinkable
+    |
         MOV     R0,#6
-        SWI     XOS_ReadDynamicArea     ; memory in free pool
-        MOV     R2,R1
+        SWI     XOS_ReadDynamicArea
+        MOV     R2,R1                   ; memory in free pool
+    ]
         Pull    "R0-R1"
 
         MUL     R1,R3,R0                ; R1 = next slot size
@@ -210,54 +218,33 @@ mem_claimed     *       2_0010
 
 wimparea
         DCB     "Wimp"
- [ :LNOT: FreePoolWCF
-wimpareastring
-        DCB     "WDA",0                 ; SMC: add WDA:Wimp Dynamic Area to Wimp.Messages file.
- ]
         ALIGN
 
 SWIWimp_ClaimFreeMemory  ROUT
         MyEntry "ClaimFreeMemory"
 ;
-        [ :LNOT: FreePoolWCF
-        MOV     R5,R1
-        LDR     R1,wimparea
-        ]
         CMP     R0,#0
         BNE     %FT01
 ; free
-        [ FreePoolWCF
         MOV     R0,#0
         ADRL    R14,freepoolinuse
         STRB    R0,[R14]
+  [ KernelLocksFreePool
+        MOV     R0,#10
+        ORR     R0,R0,#&100
+        MOV     R1,#0
+        SWI     XOS_Memory                              ; release wimp lock
+  ]
         B       ExitWimp
-        |
-        MOV     R0,#1
-        STRB    R0,memoryOK
-        MOV     R0,R1
-        MOV     R1,#-&8000000                   ; shrink area
-        SWI     XOS_ChangeDynamicArea
-        MOV     R0,#0
-        STRB    R0,memoryOK
-        CLRV
-        B       ExitWimp
-        ]
 01
 ; claim
-        [ FreePoolWCF
         ADRL    R4,freepoolinuse
         LDRB    R0,[R4]
         TEQ     R0,#0
-        |
-        MOV     R0,R1
-        SWI     XOS_ReadDynamicArea
-        TEQ     R1,#0
-        ]
         MOVNE   R0,#0
         STRNE   R0,[SP]
         STRNE   R0,[SP,#4]
-        BNE     ExitWimp                              ; already 'claimed'
-        [ FreePoolWCF
+        BNE     ExitWimp                                ; already 'claimed'
         MOV     R5,R1                                   ; preserve the amount asked for
         MOV     R0,#6
         SWI     XOS_ReadDynamicArea
@@ -271,80 +258,15 @@ SWIWimp_ClaimFreeMemory  ROUT
 
         STR     R0,[SP,#4]                              ; return values
         STR     R1,[SP]
+  [ KernelLocksFreePool
+        MOVLS   R0,#10
+        ORRLS   R0,R0,#&100
+        MOVLS   R1,#1
+        SWILS   XOS_Memory                              ; set wimp lock
+  ]
         B       ExitWimp
 
-        [ false
-
-        CMP     R5,#0                                   ; asked for -ve amount
-        CMPGE   R1,R5                                   ; not enough ?
-        MOVLT   R3,R1
-        MOVLT   R4,#0                                   ; no address as claim 'failed'
-        BLT     %FT01
-05
-        CLRV
-        MOV     R1,#1
-        STRB    R1,[R4]                                ; mark free pool as in use
-        MOV     R0,#6
-        SWI     XOS_ReadDynamicArea
-        MOVVS   R4,#0                                   ; shouldn't happen
-        MOVVC   R3,R1
-        MOVVC   R4,R0                                   ; start address of free pool
-        B       %FT01
-        ]
-
-        |
-        MOV     R1,#1
-        STRB    R1,memoryOK
-        MOV     R1,R5
-        CMP     R1,#0
-        SETV    LT
-        LDRVC   R0,wimparea
-        SWIVC   XOS_ChangeDynamicArea
-        MOV     R4,#0
-        STRB    R4,memoryOK
-        MOVVS   R0,#6                           ; freepool, just size!!!
-        LDRVC   R0,wimparea                     ; our area
-        MOV     R2,#0
-        CLRV
-        SWI     XOS_ReadDynamicArea
-        TEQ     R2,#0
-        MOV     R3,R1
-        MOVNE   R4,R0                           ; no start if claim failed
-        CLRV
-
-        B       %FT01
-        ]
-02
-
-        TEQ     R0,#0
-        LDRB    R5,memoryOK             ; always load R5
-        BICEQ   R5,R5,#mem_claimed
-        STREQB  R5,memoryOK
-        BEQ     ExitWimp
 ;
-        MOV     R3,#0                   ; R3=0  no memory available
-        MOV     R4,#0                   ; R4=0  can't claim
-;
-        TEQ     R5,#0
-        BNE     %FT01                   ; can't claim (nasty business going on)
-;
-        LDR     R14,freepool
-        CMP     R14,#0
-        BLE     %FT01                   ; can't claim (no free pool)
-;
-        LDR     R3,orig_applicationspacesize
-        LDR     R4,freepoolbase
-        SUB     R3,R3,R4                ; R3 = length available
-;
-        ADD     R14,R3,#1
-        CMP     R1,R14                  ; C=1 ==> too long!
-        MOVCS   R4,#0                   ; address = 0 if carry set
-        ORRCC   R5,R5,#mem_claimed
-        STRCCB  R5,memoryOK
-01
-        STMIA   sp,{R3,R4}              ; R1,R2 on return = length,addr
-        B       ExitWimp
-
 wimp_area_handler
         TST     R0,#1
         MOVNES  PC,lr                   ; not insterested in postshrink/grow
@@ -361,6 +283,7 @@ wimp_area_handler
         MOV     R0,#0
         SETV
         MOV     PC,lr
+
 ;
 ; Transfer memory from one application to another
 ; Entry:  R0 = task handle of source
@@ -385,7 +308,7 @@ SWIWimp_TransferBlock  ROUT
         SWI     XOS_ChangeEnvironment
         LDR     R14,taskhandle
   Debug mjs4,"&&& taskhandle,MemoryLimit",R14,R1
-	TEQ	R14,#0
+        TEQ     R14,#0
         LDRNE   R14,[wsptr,R14]
         CMPNE   R14,#0
         STRGT   R1,[R14,#task_environment+12*MemoryLimit]
@@ -414,19 +337,15 @@ medusa_exit_trb2
         B       ExitWimp
 
 07
-	BLT	err_badtransfer
-	CMP	R1,#ApplicationStart	; buffer start >= &8000
-	CMPHS	R3,#ApplicationStart
-	BLO	err_badtransfer
-	SUB	R8,R1,#ApplicationStart ; assuming app space...
-	SUB	R9,R3,#ApplicationStart ; ... R8,R9 = offsets into domain
+        BLT     err_badtransfer
+        CMP     R1,#ApplicationStart    ; buffer start >= &8000
+        CMPHS   R3,#ApplicationStart
+        BLO     err_badtransfer
+        SUB     R8,R1,#ApplicationStart ; assuming app space...
+        SUB     R9,R3,#ApplicationStart ; ... R8,R9 = offsets into domain
   Debug mjs4,"&&& offsets R8,R9",R8,R9
 ;
-        [ sixteenmeg
-        MOV     R11,#16*1024*1024
-        |
         LDR     R11,orig_applicationspacesize
-        ]
 ;
         CMP     R1,R11                  ; not in application space?
         ADDHS   R8,R8,#ApplicationStart ; make absolute again
@@ -462,14 +381,14 @@ medusa_exit_trb2
         BLT     %FT02
 ; ok we're doing a BIG transfer, so split it up
         MOV     R10,#7*1024*1024        ; 7 meg, leave a bit of breathing space
-	Push	"R1"			; save end-of-current-slot
+        Push    "R1"                    ; save end-of-current-slot
         ADD     R0,SP,#8
-        LDMIA   R0,{R0-R4}		; original parameters for Wimp_TransferBlock
+        LDMIA   R0,{R0-R4}              ; original parameters for Wimp_TransferBlock
         ADD     R1,R1,#7*1024*1024      ; we'll carry on but only do 7 megs worth
         ADD     R3,R3,#7*1024*1024      ; then recall the routine, but starting 7 meg
         SUB     R4,R4,#7*1024*1024      ; further on.
         SWI     XWimp_TransferBlock
-	Pull	"R1"			; restore end-of-current-slot
+        Pull    "R1"                    ; restore end-of-current-slot
 ; this will cycle through as many times as required
 02
 ; now if the ammount to copy+ R1 > app space, or 2* copy if neither task is the current task
@@ -488,13 +407,9 @@ medusa_exit_trb2
         ADDLO   R0,R0,R2                ; just in case copy is over a page
         CMP     R9,R11
         ADDLO   R0,R0,R10
-	ADDLO	R0,R0,R2
-        [ sixteenmeg
-        CMP     R0,#16*1024*1024
-        |
+        ADDLO   R0,R0,R2
         LDR     R14,orig_applicationspacesize
         CMP     R0,R14
-        ]
         BLO     %FT03
 
 ; since the copy must take place in application space (on ARM 3 its the only place! and on
@@ -512,8 +427,8 @@ makespacefromct
         BL      mapslotout              ; map out CT
         MOV     R0,#0
         STR     R0,taskhandle
-        ADD     R0,SP,#8		; skipping just-pushed R1 and pushed R5 for Medusa...
-        LDMIA   R0,{R0-R4}		; ...restore R0-R4 from stack for recursive call
+        ADD     R0,SP,#8                ; skipping just-pushed R1 and pushed R5 for Medusa...
+        LDMIA   R0,{R0-R4}              ; ...restore R0-R4 from stack for recursive call
         SWI     XWimp_TransferBlock     ; do it again, only this time there is no current task
         Pull    "R1"
         STR     R1,taskhandle           ; return to how it all was
@@ -543,12 +458,8 @@ onetaskcurrent
         ADDLO   R0,R0,R10
         ADDLO   R0,R0,R2                ; just in case copy is over a page
   Debug mjs4,"&&& onetask_current R0,R2,R10",R0,R2,R10
-        [ sixteenmeg
-        CMP     R0,#16*1024*1024
-        |
         LDR     R14,orig_applicationspacesize
         CMP     R0,R14
-        ]
 
         BLO     %FT03
         B       makespacefromct
@@ -561,9 +472,9 @@ onetaskcurrent
   Debug mjs4,"&&& end of current slot",R1
         Pull    "R4"
         ADD     SP,SP,#20               ; will always be original values on stack
-	MOV	R2,#0
-	STR	R2,tempworkspace+4	; indicate mapenoughslot
-	STR	R2,tempworkspace+12	;  not used yet
+        MOV     R2,#0
+        STR     R2,tempworkspace+4      ; indicate mapenoughslot
+        STR     R2,tempworkspace+12     ;  not used yet
         MOV     R2,R1
         LDR     R3,taskhandle
         CMP     R8,R11                  ; do we need it paged in ?
@@ -574,8 +485,8 @@ onetaskcurrent
         LDR     R0,[R6,#task_slotptr]
         MOV     R1,R8
         MOV     R8,R2
-	STR	R1,tempworkspace	; save domain offset for later mapping-out use of mapenoughslot
-	STR	R10,tempworkspace+4	; save length for later mapping-out use of mapenoughslot
+        STR     R1,tempworkspace        ; save domain offset for later mapping-out use of mapenoughslot
+        STR     R10,tempworkspace+4     ; save length for later mapping-out use of mapenoughslot
         BL      mapenoughslot
         ADD     R8,R8,R0
 04
@@ -587,8 +498,8 @@ onetaskcurrent
         LDR     R0,[R7,#task_slotptr]
         MOV     R1,R9
         MOV     R9,R2
-	STR	R1,tempworkspace+8	; save domain offset for later mapping out use of mapenoughslot
-	STR	R10,tempworkspace+12	; save length for later mapping out ue of mapenoughslot
+        STR     R1,tempworkspace+8      ; save domain offset for later mapping out use of mapenoughslot
+        STR     R10,tempworkspace+12    ; save length for later mapping out ue of mapenoughslot
         BL      mapenoughslot           ; page in only whats required for the copy
         ADD     R9,R9,R0
 06
@@ -621,24 +532,24 @@ onetaskcurrent
         BEQ     %FT05
         LDR     R0,[R6,#task_slotptr]
         CMP     R0,#-1
-	LDRNE	R10,tempworkspace+4	; saved length (0 if no mapping done)
-	TEQNE	R10,#0
-	LDRNE	R1,tempworkspace	; saved domain offset
-	MOVNE	R2,#-1			; map out
+        LDRNE   R10,tempworkspace+4     ; saved length (0 if no mapping done)
+        TEQNE   R10,#0
+        LDRNE   R1,tempworkspace        ; saved domain offset
+        MOVNE   R2,#-1                  ; map out
    Debug mjs4,"putative page out R0,R1,R2,R10",R0,R1,R2,R10
-	BLNE	mapenoughslot
+        BLNE    mapenoughslot
 05
-	LDR	R2,taskhandle           ; page out the bits we paged in, unless CT
+        LDR     R2,taskhandle           ; page out the bits we paged in, unless CT
         TEQ     R2,R4
         BEQ     %FT10
         LDR     R0,[R7,#task_slotptr]
         CMP     R0,#-1
-	LDRNE	R10,tempworkspace+12	; saved length (0 if no mapping done)
-	TEQNE	R10,#0
-	LDRNE	R1,tempworkspace+8	; saved domain offset
-	MOVNE	R2,#-1			; map out
+        LDRNE   R10,tempworkspace+12    ; saved length (0 if no mapping done)
+        TEQNE   R10,#0
+        LDRNE   R1,tempworkspace+8      ; saved domain offset
+        MOVNE   R2,#-1                  ; map out
    Debug mjs4,"putative page out R0,R1,R2,R10",R0,R1,R2,R10
-	BLNE	mapenoughslot
+        BLNE    mapenoughslot
 10
         B       ExitWimp
 
@@ -660,7 +571,6 @@ wordcopy
         BNE     %BT02
         B       %BT03
 
-;mjs version of mapenoughslot
 ; maps only the pages that are required for the copy to address R2, slot R0, length R10
 ; domain offset R1, note that R2 = -1 means map out
 ;
@@ -692,8 +602,8 @@ mapenoughslot
         SWI     XOS_AMBControl
         BVS     err_badtransfer2
 
-	CMP	R1,#-1
-	MOVEQ	R2,R1
+        CMP     R1,#-1
+        MOVEQ   R2,R1
         ADDNE   R2,R1,R4,LSL #12 ;R2 return
    Debug mjs4," <mapenoughslot",R2
 
@@ -746,32 +656,10 @@ findpages       ROUT
         MOV     R1,#&10000000           ; try and shrink app space
         SWI     XOS_ChangeDynamicArea
 ; this sets up memory limit/ app space size as well
-        [ :LNOT: sixteenmeg
         MOV     R0,#-1
         SWI     XOS_ReadDynamicArea
         ADDVC   R5,R0,R2
         STRVC   R5,orig_applicationspacesize
-         [ :LNOT: FreePoolWCF
-; create dynamic area for Wimp_ClaimFreeMemory
-        ADRL    R0,wimpareastring       ; Look up name for Wimp dynamic area.
-        ADR     R2,errorbuffer          ; Use safe place for temporary string (copied by OS_DynamicArea).
-        MOV     R3,#256
-        BL      LookupToken1
-        MOVVC   R8,R2
-        ADRVSL  R8,wimpareastring       ; If look up fails then create something anyway.
-
-        MOV     R0,#0
-        LDR     R1,wimparea
-        MOV     R2,#0
-        MOV     R3,#-1
-        MOV     R4,#128                 ; not dragable
-        MOV     R5,#-1
-        ADRL    R6,wimp_area_handler
-        MOV     R7,R12
-        SWI     XOS_DynamicArea
-; ignore errors
-         ]
-        ]
 
         CLRV
 
@@ -909,11 +797,7 @@ IsAnybodyThere    *  -64*&100000        ; large negative number
 testapplication ROUT
         Push    "R1-R3,LR"
 ;
-        [ sixteenmeg
-        MOV     R1,#16*1024*1024                ; boo hiss
-        |
         LDR     R1,orig_applicationspacesize    ; watch out for Twin etc!
-        ]
         BL      readCAOpointer                  ; use OS_ChangeEnvironment
         CMP     R2,R1                           ; below memorylimit?
         Pull    "R1-R3,PC",CC
@@ -1004,12 +888,10 @@ restorememlimit ROUT
 ;         slot size = 0 if no free pool (ie. all used up)
 ;         MemoryLimit updated to reflect the amount of memory available
 ;
-
-;mjs version
 allocateslot    ROUT
        Push    "R0-R4,LR"
        LDR     R1,slotsize ;no. of pages
-    Debug mjs2,"mjs version of allocateslot",R1
+    Debug mjs2,"allocateslot",R1
        MOV     R0,#0       ;reason code 0 (allocate)
        SWI     XOS_AMBControl
        BVC     %FT01
@@ -1091,12 +973,10 @@ setmemsize      ROUT
 ;         taskhandle->task_slotptr = null
 ;         pages put back into free pool (NB block never needs extension)
 ;
-
-;mjs version
 deallocateslot  ROUT
         Push    "R1-R2,LR"
 
-   Debug mjs2,"mjs version of deallocateslot"
+   Debug mjs2,"deallocateslot"
         LDR     R14,taskhandle
         LDR     R1,[wsptr,R14]          ; R1 --> task block
         LDR     R2,[R1,#task_slotptr]
@@ -1116,14 +996,12 @@ deallocateslot  ROUT
 ; Exit:   pages mapped into free pool etc. (maptofreepool called)
 ;         slot block deallocated
 ;
-
-;mjs version
 deallocate      ROUT
         Push    "R0,LR"
         CMP     R2,#0
         Pull    "R0,PC",LE              ;return if invalid slot pointer
 
-   Debug mjs2,"mjs version of deallocate"
+   Debug mjs2,"deallocate"
 
         MOV     R0,#1      ;deallocate reason code (not from App space)
         SWI     XOS_AMBControl
@@ -1210,8 +1088,6 @@ mapslotin       ROUT
 ; Entry:  R0 --> block suitable for passing to OS_SetMemMapEntries
 ; Exit:   the pages in the block are mapped into the application area
 ;
-
-;mjs version
 mapin   ROUT
         Push    "R0-R2,LR"
         MOV     R2,R0                ;handle
@@ -1282,9 +1158,6 @@ mapslotout      ROUT
 ; Entry:  R0 --> block suitable for passing to OS_SetMemMapEntries
 ; Exit:   all pages referenced in the block are mapped out of the way
 ;
-
-;mjs version
-
 mapout  ROUT
         Push    "R0-R2,LR"
         MOV     R2,R0                ;handle
@@ -1405,9 +1278,9 @@ err_notenoughmemory
         B       %BT99                   ; exit having setup the error block
 
   [ STB
-errmem  DCB     "ErrMemS",0		; simple message
+errmem  DCB     "ErrMemS",0             ; simple message
   |
-errmem  DCB     "ErrMem",0		; original one
+errmem  DCB     "ErrMem",0              ; original one
   ]
         ALIGN
 
@@ -1438,6 +1311,7 @@ getminmax       ROUT
         Pull    "R1-R3,PC"
         MakeInternatErrorBlock BadNumb,,BadParm
 
+  [ :LNOT: KernelLocksFreePool
 
 ;;----------------------------------------------------------------------------
 ;; Stuff to deal with OS_ChangeDynamicArea
@@ -1448,18 +1322,6 @@ getminmax       ROUT
 ;
 
 initdynamic     ROUT
-        [ :LNOT: FreePoolWCF
-         [ true
-        Push    "R0-R2,lr"
-        MOV     R0,#6
-        SWI     XOS_ReadDynamicArea             ; is there a kernel free pool
-        Pull    "R0-R2,lr"
-        MOVVCS  PC,lr
-        CLRV
-        |
-        MOVS   PC,lr
-         ]
-        ]
         Push    "R1-R4,LR"
 ;
         ADR     R0,RAM_SWIEntry
@@ -1490,9 +1352,6 @@ copyofRAMcode
         ASSERT  (OScopy_ChangeDynamic-RAM_SWIEntry = 12)
 
 resetdynamic    ROUT
-       [ :LNOT: FreePoolWCF
-        MOVS   PC,lr
-       ]
 
         Push    "R1,LR"
 ;
@@ -1523,7 +1382,6 @@ resetdynamic    ROUT
 
 My_ChangeDynamic  ROUT
         Push    "R0-R5,LR"
-        [ FreePoolWCF
         ADRL    R14,freepoolinuse
         LDRB    R2,[R14]
         TEQ     R2,#0
@@ -1537,155 +1395,13 @@ My_ChangeDynamic  ROUT
         ORR     lr,lr,#V_bit                    ; note 26 bit mode only!!!!
         LDR     PC,=BranchToSWIExit
 
-        MakeInternatErrorBlock ChDynamNotAllMoved,,ErrNoMv
-        LTORG
-05
-        ]
-;
-; if freepool>0, the Wimp MUST be in control
-;
-        LDR     R14,freepool
-        CMP     R14,#0
-        BLE     goto_osentry
-;
-        MOV     R14,#IRQsema            ; if in IRQ, forget it!
-        LDR     R14,[R14]
-        TEQ     R14,#0
-        BNE     goto_osentry
-;
-        LDRB    R14,memoryOK            ; check for re-entrancy
-        TST     R14, #mem_remapped
-        BNE     goto_osentry            ; shouldn't ever happen
-
-        TST     R14, #mem_claimed       ; if free memory claimed
-        BNE     noslot                  ; then continue, but trap it in Service_Memory
-;
-; work out if the current free pool is sufficient to meet the demand
-; if not, see whether the current application would like to give some up
-;
-        LDR     R14,freepoolpages       ; R14 = number of free pages
-        LDR     R0,pagesize
-        MUL     R14,R0,R14              ; R14 = free memory
-        LDR     R1,[sp,#4]
-        SUBS    R14,R14,R1              ; R14 = extra needed (if -ve)
-        BGE     noslot
-        SUB     R0,R0,#1                ; round to next lower page boundary
-        BIC     R0,R14,R0               ; assume pagesize = 2^n
-;
-        BL      readCAOpointer          ; OS_ChangeEnvironment -> R2
-        LDR     R14,orig_applicationspacesize
-        CMP     R2,R14
-        BCC     noslot                  ; can't do it
-        ADRL    R14,Module_BaseAddr
-        TEQ     R2,R14
-        BEQ     %FT02                   ; OK if Wimp active - don't even ask!
-;
-  Debug mjs3,"My_ChangeDynamic issuing Service_Memory"
-        MOV     R1,#Service_Memory      ; R0 = amount to change area by
-        SWI     XOS_ServiceCall
-        CMP     R1,#0                   ; clear V!
-        BEQ     noslot                  ; can't do it
-02
-        Push    "R0"                    ; amount to move (-ve)
-        MOV     R0,#ApplicationSpaceSize
-        MOV     R1,#0
-        SWI     XOS_ChangeEnvironment   ; R1 = size of current slot
-        Pull    "R0"
-        SUB     R1,R1,#ApplicationStart ; convert from end address to SIZE
-        ADDS    R0,R1,R0                ; R0 = new slot size (if -ve, ignore)
-        MOVGE   R1,#-1
-        SWIGE   XWimp_SlotSize          ; I hope this works!
-noslot
-;
-; map all slots into application space
-;
-        MOV     R0,#CAOPointer          ; Wimp active during OS_ChangeDynamic
-        ADRL    R1,Module_BaseAddr
-        SWI     XOS_ChangeEnvironment
-        STR     R1,oldCAOpointer        ;; MUST RESTORE CAOPOINTER !!!
-;
-; swap total memory limits with local ones
-;
-;
-        MOV     R0,#MemoryLimit
-        LDR     R1,orig_memorylimit
-        SWI     XOS_ChangeEnvironment
-        STR     R1,orig_memorylimit             ; swap these over
-;
-        MOV     R0,#ApplicationSpaceSize
-        LDR     R1,orig_applicationspacesize
-        STR     R1,oldapplimit                  ; used later
-        SWI     XOS_ChangeEnvironment
-        STR     R1,orig_applicationspacesize    ; swap these over
-;
-; map all slots into the area above the current one
-;
-        BL      rackupslots             ; R1 --> address to start from
-                                        ; current task is left alone
-;
-; free pool is already present at the top end of the memory
-; check that we now have a contiguous block of memory
-;
-
-        LDRB    R14,memoryOK
-        ORR     R14,R14,#mem_remapped   ; set flag for Service_Memory
-        STRB    R14,memoryOK
-
 goto_osentry
         Pull    "R0-R5,LR"
         LDR     PC,OScopy_ChangeDynamic
 
-;
-; Entry:  R1 --> address to start putting slots at
-; Exit:   all slots mapped into application space, not overlapping
-;         R2 --> end address of slots
-;         R0,R1,R3,R4 trashed
-;
-rackupslots     ROUT
-        Push    "LR"
-;
-        MOV     R2,R1                           ; start mapping from here
-        ADRL    R1,taskpointers
-        LDR     R3,taskhandle           ; this one's been done already
-        ADD     R3,wsptr,R3
-        MOV     R4,#maxtasks
-01
-        TEQ     R1,R3                   ; is this the current task?
-        LDR     R14,[R1],#4             ; NB always increment R1
-        TEQNE   R14,#task_unused
-        LDRNE   R0,[R14,#task_slotptr]
-        MOVEQ   R0,#nullptr
-        CMP     R0,#0
-        BLGT    mapslot                 ; updates [R0..], R2
-        SUBS    R4,R4,#1
-        BNE     %BT01
-;
-        Pull    "PC"
+  ] ; :LNOT: KernelLocksFreePool
 
-;
-; Entry:  all slots mapped into application space, consecutively
-; Exit:   all slots except the current one are mapped out
-;         R0-R4 trashed
-;
-
-unrackslots     ROUT
-        Push    "LR"
-;
-        ADRL    R1,taskpointers
-        LDR     R3,taskhandle           ; leave this one alone
-        ADD     R3,wsptr,R3
-        MOV     R4,#maxtasks
-01
-        TEQ     R1,R3                   ; is this the current task?
-        LDR     R14,[R1],#4             ; NB always increment R1
-        TEQNE   R14,#task_unused
-        LDRNE   R0,[R14,#task_slotptr]
-        MOVEQ   R0,#nullptr
-        CMP     R0,#0
-        BLGT    mapout
-        SUBS    R4,R4,#1
-        BNE     %BT01
-;
-        Pull    "PC"
+        MakeInternatErrorBlock ChDynamNotAllMoved,,ErrNoMv
+        LTORG
 
         END
