@@ -152,10 +152,10 @@ dirs:
 #
 
 ${TARGET}: ${OBJS} o.dirs
-	${LD} ${LNFLAGS} -o ${TARGET} ${OBJS} ${LIBS}
+	${LB} ${LBFLAGS} -o ${TARGET} ${OBJS} ${LIBS}
 
 ${TARGETZ}: ${OBJSZ} o.dirs
-	${LD} ${LNFLAGS} -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
+	${LB} ${LBFLAGS} -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
