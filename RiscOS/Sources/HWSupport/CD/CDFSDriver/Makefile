@@ -21,6 +21,7 @@ MKDIR    = cdir
 AS       = aasm
 CP       = copy
 RM       = remove
+STRIP    = stripdepnd
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -Stamp -quit -module
@@ -60,6 +61,7 @@ install: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
