@@ -61,23 +61,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.NHTwitter: Hdr:ListOpts
-rm.NHTwitter: Hdr:Macros
-rm.NHTwitter: Hdr:System
-rm.NHTwitter: Hdr:SWIs
-rm.NHTwitter: Hdr:CPU.Generic26
-rm.NHTwitter: Hdr:IO.GenericIO
-rm.NHTwitter: Hdr:RISCOS
-rm.NHTwitter: Hdr:CMOS
-rm.NHTwitter: Hdr:ModHand
-rm.NHTwitter: Hdr:Services
-rm.NHTwitter: Hdr:Proc
-rm.NHTwitter: Hdr:FSNumbers
-rm.NHTwitter: Hdr:NewErrors
-rm.NHTwitter: Hdr:MsgTrans
-rm.NHTwitter: Hdr:Debug
-rm.NHTwitter: Hdr:VduExt
-rm.NHTwitter: Hdr:Podule
-rm.NHTwitter: Hdr:PoduleReg
-rm.NHTwitter: Hdr:DevNos
-rm.NHTwitter: s.Module
