@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (11/3/94)
 *
-*  $Log$
+*  nrapi.h,v
+*  Revision 1.1  1998/01/12 11:36:54  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.11   15 Apr 1997 18:45:44   TOMA
 *  autoput for remove source 4/12/97
@@ -66,6 +71,8 @@ typedef struct _NROPEN {
     LPBYTE pTcpBrowserAddrList;
     LPBYTE pIpxBrowserAddrList;
     LPBYTE pNetBiosBrowserAddrList;
+
+    PPLIBPROCEDURE pDeviceProcedures;
 } NROPEN, * PNROPEN;
 
 /*

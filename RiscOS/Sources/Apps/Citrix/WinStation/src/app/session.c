@@ -1073,6 +1073,18 @@ int session_poll(icaclient_session sess)
 #ifdef DEBUG
 	LogPoll();
 #endif
+#ifdef DEBUG
+	{
+	extern void *event__id_block;
+	static int reported = FALSE;
+	if (event__id_block == NULL && !reported)
+	{
+	    TRACE((TC_UI, TT_API1, "**** session_poll: id_block gone null ****" ));
+	    reported = TRUE;
+	}
+	}
+#endif
+    
     }
     while (!sess->HaveFocus && gbContinuePolling && !bPDError);
     
@@ -1091,6 +1103,20 @@ void session_close(icaclient_session sess)
 
 /* --------------------------------------------------------------------------------------------- */
 
+void session_close_if_connected(icaclient_session sess)
+{
+    if ( !(sess->HaveFocus && !sess->Connected) )
+    {
+	session__close(sess);
+	
+	// allow cleanup
+	while (session_poll(sess))
+	    ;
+	
+	session_free(sess);
+    }
+}
+
 void session_resume(icaclient_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_resume: %p", sess));
@@ -1103,6 +1129,10 @@ void session_resume(icaclient_session sess)
 void session_run(const char *file, int file_is_url, const char *bfile)
 {
     icaclient_session sess;
+#ifdef DEBUG
+    extern void *event__id_block;
+    TRACE((TC_UI, TT_API1, "**** session_run: id_block %p ****", event__id_block ));
+#endif
 
     TRACE((TC_UI, TT_API1, "session_run: '%s' url %d bfile '%s'", strsafe(file), file_is_url, strsafe(bfile)));
 
@@ -1159,7 +1189,8 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 	{ "pdmodem",	(PLIBPROCEDURE)PdLoad/*, PdModemDeviceProcedures */ },
 	{ "wdica30",	(PLIBPROCEDURE)WdLoad/*, WdICA30EmulProcedures */ },
 	{ "wdtty",	(PLIBPROCEDURE)WdLoad/*, WdTTYEmulProcedures */ },
-	{ "nrtcpro",	(PLIBPROCEDURE)NrLoad, NULL },
+	{ "nrtcpro",	(PLIBPROCEDURE)NrLoad/*, NrTcpRODeviceProcedures */ },
+	{ "nrica",	(PLIBPROCEDURE)NrLoad/*, NrICADeviceProcedures */ },
 #ifdef INCL_ENUM
 	{ "neica",	(PLIBPROCEDURE)NeLoad/*, NeICADeviceProcedures */ },
 #else
@@ -1168,6 +1199,7 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 	{ "vdtw30",	(PLIBPROCEDURE)VdLoad/*, VdTW31DriverProcedures */ },
 	{ "vdcpm30",	(PLIBPROCEDURE)VdLoad/*, VdCpmDriverProcedures */ },
 	{ "vdspl30",	(PLIBPROCEDURE)VdLoad/*, VdSplDriverProcedures */ },
+	{ "vdcdm",	(PLIBPROCEDURE)VdLoad/*, VdCdmDriverProcedures */ },
 #ifdef INCL_SCRIPT
 	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
 #endif
@@ -1197,13 +1229,21 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 #endif
 	modules[7].fnTable = WdICA30EmulProcedures;
 	modules[8].fnTable = WdTTYEmulProcedures;
-#ifdef INCL_ENUM
-	modules[10].fnTable = NeICADeviceProcedures;
+
+#ifdef INCL_TCPIP
+	modules[9].fnTable = NrTcpRODeviceProcedures;
+	modules[10].fnTable = NrICADeviceProcedures;
 #endif
-	modules[11].fnTable = VdTW31DriverProcedures;
+#ifdef INCL_ENUM
+	modules[11].fnTable = NeICADeviceProcedures;
+#endif
+	modules[12].fnTable = VdTW31DriverProcedures;
 #ifdef INCL_PRINTER
-	modules[12].fnTable = VdCpmDriverProcedures;
-	modules[13].fnTable = VdSplDriverProcedures;
+	modules[13].fnTable = VdCpmDriverProcedures;
+	modules[14].fnTable = VdSplDriverProcedures;
+#endif
+#ifdef INCL_DRIVES
+	modules[15].fnTable = VdCdmDriverProcedures;
 #endif
 	inited = TRUE;
     }

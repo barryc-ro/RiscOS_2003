@@ -1893,12 +1893,18 @@ fProcCalled = TRUE;
            break;
 
        case HOTKEY_UI: // UI hotkey
-           TRACE(( TC_WENG, TT_L1,
-                   "WFEngx.Exe: StatusMsgProc: UI Hotkey" ));
-           wdKillFocus();
-           fProcCalled = TRUE; // Don't notify UI yet
-           messageHotkey = message;
+       {
+	   extern int cli_suspendable; /* this comes from main.c */
+	   TRACE(( TC_WENG, TT_L1,
+		   "WFEngx.Exe: StatusMsgProc: UI Hotkey" ));
+	   if (cli_suspendable)
+	   {
+	       wdKillFocus();
+	       fProcCalled = TRUE; // Don't notify UI yet
+	       messageHotkey = message;
+	   }
            break;
+       }
 
        case CLIENT_STATUS_KILL_FOCUS :
            TRACE(( TC_WENG, TT_L1,

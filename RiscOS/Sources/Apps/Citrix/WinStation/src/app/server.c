@@ -172,6 +172,27 @@ static MenuTemplate *create_menu_structure(int count, const char *list[], int *m
 
 /* -------------------------------------------------------------------------------- */
 
+ObjectId create_menu_object(const char *object_name, const MenuTemplate *menu, int menu_size)
+{
+    ObjectTemplateHeader templ;
+    ObjectId id;
+
+    templ.object_class = Menu_ObjectClass;
+    templ.flags = Object_Shared;
+    templ.version = 102;
+    strcpy(templ.name, object_name);
+    templ.total_size = sizeof(templ);
+    templ.body = (MenuTemplate *)menu;
+    templ.body_size = menu_size;
+	
+    id = NULL_ObjectId;
+    LOGERR(toolbox_create_object(Toolbox_CreateObject_InCore, &templ, &id));
+
+    return id;
+}
+
+/* -------------------------------------------------------------------------------- */
+
 ObjectId serverlist_create_menu( const char *file )
 {
     MenuTemplate *menu;
@@ -185,18 +206,7 @@ ObjectId serverlist_create_menu( const char *file )
 
     id = NULL;
     if (menu)
-    {
-	ObjectTemplateHeader templ;
-	templ.object_class = Menu_ObjectClass;
-	templ.flags = Object_Shared;
-	templ.version = 102;
-	strcpy(templ.name, "serverM");
-	templ.total_size = sizeof(templ);
-	templ.body = menu;
-	templ.body_size = menu_size;
-	
-	LOGERR(toolbox_create_object(Toolbox_CreateObject_InCore, &templ, &id));
-    }
+	id = create_menu_object( "serverM", menu, menu_size );
 
     TRACE((TC_UI, TT_API1, "serverlist_create_menu: returns id %p", id));
 

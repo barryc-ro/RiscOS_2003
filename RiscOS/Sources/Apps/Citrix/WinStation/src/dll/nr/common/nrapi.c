@@ -101,6 +101,8 @@
 
 #include "../../../inc/clib.h"
 
+#include "../../../inc/nrdevice.h"
+
 /*=============================================================================
 ==   External Functions Defined
 =============================================================================*/
@@ -124,7 +126,7 @@ int WFCAPI NrErrorLookup( PNR, PPDLASTERROR );
 ==   External Functions used
 =============================================================================*/
 
-STATIC int DeviceNameToAddress( PNR, PNAMEADDRESS );
+//STATIC int DeviceNameToAddress( PNR, PNAMEADDRESS );
 
 
 /*=============================================================================
@@ -156,7 +158,7 @@ NR NrData = {0};
 ==   Global Data
 =============================================================================*/
 
-extern char * pNrProtocolName;
+//extern char * pNrProtocolName;
 //STATIC PPLIBPROCEDURE pClibProcedures = NULL;
 //STATIC PPLIBPROCEDURE pLogProcedures = NULL;
 
@@ -256,7 +258,7 @@ NrOpen( PNR pNr, PNROPEN pNrOpen )
      */
 //    pLogProcedures = pNrOpen->pLogProcedures;
 //    pClibProcedures = pNrOpen->pClibProcedures;
-
+    
     /*
      *  Initialize browser addresses
      */
@@ -278,6 +280,10 @@ NrOpen( PNR pNr, PNROPEN pNrOpen )
      *  Initialize NR data structure
      */
     memset( pNr, 0, sizeof(NR) );
+
+    pNr->pDeviceProcedures = pNrOpen->pDeviceProcedures;
+
+    TRACE((TC_TD, TT_API1, "NrOpen: DeviceProcedures %p", pNr->pDeviceProcedures));
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -400,6 +406,7 @@ NrPoll( PNR pNr, PDLLPOLL pNrPoll )
 int WFCAPI
 NrNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
 {
+    TRACE(( TC_TD, TT_API1, "NrNameToAddress: DeviceProcedures %p [0] = %p", pNr->pDeviceProcedures, pNr->pDeviceProcedures[0] ));
     return( DeviceNameToAddress( pNr, pNameAddress ) );
 }
 
@@ -424,10 +431,12 @@ NrNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
 int WFCAPI
 NrErrorLookup( PNR pNr, PPDLASTERROR pErrorLookup )
 {
-    memset( pErrorLookup->Message, 0, sizeof(pErrorLookup->Message) );
-    strcpy( pErrorLookup->ProtocolName, pNrProtocolName );
+    TRACE(( TC_TD, TT_API1, "NrErrorLookup: ProtocolName '%s' rc %d", pNr->pProtocolName, pErrorLookup->Error ));
 
-    if ( !LoadString( "NET",
+    memset( pErrorLookup->Message, 0, sizeof(pErrorLookup->Message) );
+    strcpy( pErrorLookup->ProtocolName, pNr->pProtocolName );
+
+    if ( !LoadString( pErrorLookup->ProtocolName, //"NET",
                       pErrorLookup->Error == 0xFFFF ? 0 : pErrorLookup->Error,
                       pErrorLookup->Message,
                       sizeof(pErrorLookup->Message) ) ) {

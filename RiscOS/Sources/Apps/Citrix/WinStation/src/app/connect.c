@@ -64,11 +64,14 @@ int connect_open(icaclient_session sess)
 void connect_status(icaclient_session sess, int state)
 {
     char buf[12];
-
     sprintf(buf, "EIDS%d:", state);
-    LOGERR(button_set_value(0, sess->connect_d, I_MESSAGE, utils_msgs_lookup(buf)));
-
+   
     TRACE((TC_UI, TT_API1, "connect_status: %p d %p state %s (%d)", sess, sess->connect_d, utils_msgs_lookup(buf), state));
+
+    if (sess->connect_d)
+    {
+	LOGERR(button_set_value(0, sess->connect_d, I_MESSAGE, utils_msgs_lookup(buf)));
+    }
 }
 
 void connect_close(icaclient_session sess)

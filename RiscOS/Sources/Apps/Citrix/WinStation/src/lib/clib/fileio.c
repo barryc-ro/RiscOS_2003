@@ -171,19 +171,26 @@ int _findnext(long handle, struct _finddata_t *info)
 
     do
     {
-	if (LOGERR(_swix(OS_GBPB, _INR(0,6) | _OUTR(3,4),
-			 10,
-			 fc->dir,
-			 buffer,
-			 1,			// read one entry
-			 fc->index,
-			 sizeof(buffer),
-			 fc->leaf,
-			 &nread,
-			 &fc->index)) != NULL)
+	_kernel_oserror *e;
+	e = _swix(OS_GBPB, _INR(0,6) | _OUTR(3,4),
+		  10,
+		  fc->dir,
+		  buffer,
+		  1,			// read one entry
+		  fc->index,
+		  sizeof(buffer),
+		  fc->leaf,
+		  &nread,
+		  &fc->index);
+	if (e)
 	{
-	    TRACE((TC_ALL, TT_ERROR, "_findnext: dir '%s' return -1", fc->dir));
-	    
+	    TRACE((TC_CLIB, TT_ERROR, "_findnext: dir '%s' return -1", fc->dir));
+
+	    /* if directory not found then don't bother reporting error */
+	    if (e->errnum == 214)
+		return -1;
+
+	    LOGERR(e);
 	    return -1;
 	}
     }

@@ -38,12 +38,20 @@
 #include "netdb.h"
 #include "sys/errno.h"
 
+#define NO_NRDEVICE_DEFINES
+#include "../../../inc/nrdevice.h"
+#include "../../../inc/nrdevicep.h"
+
 /*=============================================================================
 ==   External Functions Defined
 =============================================================================*/
 
-int DeviceNameToAddress( PNR, PNAMEADDRESS );
+static int DeviceNameToAddress( PNR, PNAMEADDRESS );
 
+PLIBPROCEDURE NrTcpRODeviceProcedures[NRDEVICE__COUNT] =
+{
+    (PLIBPROCEDURE)DeviceNameToAddress
+};
 
 /*=============================================================================
 ==   Internal Functions
@@ -54,9 +62,7 @@ unsigned long Inet_Addr( char * );
 /*
  *   TCP error messages
  */
-LPBYTE pNrProtocolName = "TCP";
-
-#define ERROR_HOST_NOT_FOUND 0xFFFF
+static LPBYTE pNrProtocolName = "TCP";
 
 /*******************************************************************************
  *
@@ -76,7 +82,7 @@ LPBYTE pNrProtocolName = "TCP";
  *
  ******************************************************************************/
 
-int
+static int
 DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
 {
    int rc = CLIENT_STATUS_SUCCESS;
@@ -86,6 +92,8 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
    struct sockaddr_in sa;
 
    memset( pNameAddress->Address, 0, sizeof(pNameAddress->Address) );
+
+   pNr->pProtocolName = pNrProtocolName;
 
    netaddr = Inet_Addr( pNameAddress->Name );
 

@@ -9,7 +9,12 @@
 *
 *   Author: Brad Pedersen (11/7/95)
 *
-*   $Log$
+*   nrica.c,v
+*   Revision 1.1  1998/01/12 11:35:29  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.14   28 Apr 1997 19:25:10   thanhl
 *  update
@@ -66,13 +71,20 @@
 #include "../../../inc/nrapi.h"
 #include "../inc/nr.h"
 
+#define NO_NRDEVICE_DEFINES
+#include "../../../inc/nrdevice.h"
+#include "../../../inc/nrdevicep.h"
 
 /*=============================================================================
 ==   External Functions Defined
 =============================================================================*/
 
-int DeviceNameToAddress( PNR, PNAMEADDRESS );
+static int DeviceNameToAddress( PNR, PNAMEADDRESS );
 
+PLIBPROCEDURE NrICADeviceProcedures[NRDEVICE__COUNT] =
+{
+    (PLIBPROCEDURE)DeviceNameToAddress
+};
 
 /*=============================================================================
 ==   Internal Functions Defined
@@ -117,7 +129,7 @@ extern USHORT          G_ReadTimeout;
 ==   Local Data
 =============================================================================*/
 
-char  *pProtocolName = "Browser";
+static char  *pNrProtocolName = "Browser";
 
 
 
@@ -142,7 +154,7 @@ char  *pProtocolName = "Browser";
  *
  ******************************************************************************/
 
-int
+static int
 DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
 {
     ICA_BR_ADDRESS Address;
@@ -152,12 +164,14 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
     memset( pNameAddress->Address, 0, sizeof(pNameAddress->Address) );
     G_LanaNumber = pNameAddress->LanaNumber;
 
+    pNr->pProtocolName = pNrProtocolName;
+    
     /*
      *  Open I/O
      */
     if ( rc = IoOpen() ) 
         return( rc );
-
+    
     /*
      *  Resolve name
      */
@@ -182,7 +196,7 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
      *  Close I/O
      */
     IoClose();
-
+    
     pNameAddress->LanaNumber = G_LanaNumber;
 
     return( rc );
@@ -255,7 +269,10 @@ _GetBrowserAddress( PNR pNr,
 
         ParamsLength = sizeof(ICA_BR_ADDRESS_PARAMS) + ClientNameLength;
         if ( (pParams = malloc( ParamsLength )) == NULL )
-            goto baddata;
+	{
+	    rc = BR_ERROR_NOT_ENOUGH_MEMORY;
+            goto baddata1;
+	}
         memset( pParams, 0, ParamsLength );
 
         Offset = sizeof(ICA_BR_ADDRESS_PARAMS);
@@ -281,7 +298,7 @@ _GetBrowserAddress( PNR pNr,
      */
     if ( rc ) {
         if ( !IoAddressCheck( pName, pAddress, FALSE ) )
-            goto baddata;
+            goto baddata1;
 
         return( BR_ERROR_SUCCESS );
     }
@@ -366,7 +383,7 @@ _GetBrowserData( PNR pNr,
      *  Get length of name (including null)
      */
     NameLength = strlen(pName) + 1;
-    Length = sizeof(ICA_BR_REQUEST_DATA) + NameLength + ParamsLength;
+    Length = sizeof_ICA_BR_REQUEST_DATA + NameLength + ParamsLength;
 
     /*
      *  Send request for browser data
@@ -378,7 +395,7 @@ _GetBrowserData( PNR pNr,
     pRequest->Header.Command   = BR_REQUEST_DATA;
     pRequest->Header.Signature = BR_SIGNATURE;
     pRequest->DataType         = DataType;
-    Offset = sizeof(ICA_BR_REQUEST_DATA);
+    Offset = sizeof_ICA_BR_REQUEST_DATA;
     // Set up pName
     pRequest->oBrowserName = Offset;
     strcpy( Buffer + Offset, pName );

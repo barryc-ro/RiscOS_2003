@@ -9,7 +9,12 @@
 *
 *   Author: $
 *
-*   $Log$
+*   tcpro.c,v
+*   Revision 1.1  1998/01/12 11:37:29  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.2   13 Aug 1997 10:52:54   terryt
 *  fix for browser address
@@ -200,28 +205,30 @@ IoOpen()
     rc = socketioctl( hSocket, FIONBIO, (CHAR *)&lMode );
     if ( rc == SOCKET_ERROR ) {
         TRACE(( TC_PD, TT_ERROR, "TcpOpen: ioctl failed, rc=%u", errno ));
-        LogPrintf( 0xffffffff, 0xffffffff, "TcpOpen: ioctl failed, rc=%u", errno );
         close_socket( hSocket );
         hSocket = INVALID_SOCKET;
         return( BR_ERROR_IO_ERROR );
     }
 
-#if 0
+#if 1
     /*
      *  Allow Broadcasts
      */
     arg = 1;
-    rc = setsockopt( hSocket, SOL_SOCKET, /*no broadcast bit available*/, (char *)&arg, sizeof(arg) );
+    rc = setsockopt( hSocket, SOL_SOCKET, SO_BROADCAST, (char *)&arg, sizeof(arg) );
     if ( rc ) {
         TRACE(( TC_PD, TT_ERROR, "TcpOpen: setsockopt(SO_BROADCAST) failed, rc=%u", errno ));
-        close_socket( hSocket );
-        return( BR_ERROR_IO_ERROR );
+        //close_socket( hSocket );
+        //return( BR_ERROR_IO_ERROR );
     }
 #endif
+
+    TRACE(( TC_PD, TT_API1, "TcpOpen: "));
+
     /*
      *  Get address of ICA Browser (optional)
      */
-    memset( G_BrowserAddrList, 0, sizeof(ADDRESS)*MAX_BROWSERADDRESSLIST);
+    memset( G_BrowserAddrList, 0, sizeof(G_BrowserAddrList[0])*MAX_BROWSERADDRESSLIST); // this used to be sizeof(ADDRESS). Wrong!!!
     if ( G_TcpBrowserAddress[0] ) {
         if ( !IoAddressCheck( G_TcpBrowserAddress, &G_BrowserAddress, FALSE ) ) {
             TRACE(( TC_PD, TT_ERROR, "TcpOpen: IoAddressCheck of '%s' failed", G_TcpBrowserAddress ));
@@ -243,7 +250,7 @@ IoOpen()
      *  Get local addresses
      */
     IoLocalAddress( &G_pLocalAddr, &G_LocalAddrCount );
-
+    
     TRACE(( TC_PD, TT_API1, "TcpOpen: returning success"));
     TRACE(( TC_PD, TT_API3, "IoOpen: opened socket %u", hSocket));
     return( BR_ERROR_SUCCESS );
@@ -278,7 +285,10 @@ IoClose()
      *  Free local address list
      */
     if ( G_pLocalAddr )
+    {
         free( G_pLocalAddr );
+	G_pLocalAddr = NULL;
+    }
 
     /*
      *  Terminate connection and close socket
@@ -345,16 +355,17 @@ IoRead( PICA_BR_ADDRESS pAddress,
      */
     AddrLen = sizeof(SOCKADDR_IN);
 //    AddrLen = sizeof(struct sockaddr);
-    rc = recv( hSocket,
+/*    rc = recv( hSocket,
                    (CHARPTR)pBuffer,
                    ByteCount,
-                   0);
-/*    rc = recvfrom( hSocket,
+                   0); */
+
+    rc = recvfrom( hSocket,
                    pBuffer,
                    ByteCount,
                    0,
                    (struct sockaddr far *) &pAddress->Address,
-                   &AddrLen );*/
+                   &AddrLen );
 
     if ( rc == SOCKET_ERROR ) {
         rc = errno;
@@ -594,6 +605,7 @@ IoSameAddress( PICA_BR_ADDRESS pAddress1,
 int
 IoLocateNearestServer( PICA_BR_ADDRESS pAddress )
 {
+    G_BrowserAddrListIndex = 0;
     if ( G_fBrowserAddress ) {
         *pAddress = G_BrowserAddress;
         return( BR_ERROR_SUCCESS );
@@ -622,7 +634,6 @@ IoLocateNearestServer( PICA_BR_ADDRESS pAddress )
 int
 IoLocateNextNearestServer( PICA_BR_ADDRESS pAddress )
 {
-#if 0
     if ( G_fBrowserAddress ) {
         if(G_BrowserAddrListIndex == MAX_BROWSERADDRESSLIST)
             return(BR_ERROR_NO_MASTER);
@@ -639,7 +650,7 @@ IoLocateNextNearestServer( PICA_BR_ADDRESS pAddress )
 
         return( BR_ERROR_SUCCESS );
     }
-#endif
+
     return( BR_ERROR_NO_MASTER );
 }
 
@@ -667,7 +678,7 @@ IoLocalAddress( PICA_BR_ADDRESS * ppAddress,
                 int * pAddrCount )
 {
 #if 0
-//    char HostName[50];
+    char HostName[50];
     ULONG IPAddr;
     struct hostent * pHost;
     SOCKADDR_IN * pSockAddr;
@@ -679,23 +690,23 @@ IoLocalAddress( PICA_BR_ADDRESS * ppAddress,
 
     /*
      *  Get host name of current computer
-     *
+     */
     if ( gethostname( HostName, sizeof(HostName) ) == SOCKET_ERROR )
-        goto noaddr;*/
+        goto noaddr;
 
     /*
      *  Get list of addresses for current computer
-     *
+     */
     if ( (pHost = gethostbyname( HostName )) == NULL )
-        goto noaddr;*/
+        goto noaddr;
 
     /*
      *  Get hostent
-     */
+     *
     if ( (pHost = gethostent()) == NULL ) {
        TRACE(( TC_PD, TT_API1, "TcpLocalAddress MS: gethostent() failed" ));
        goto noaddr;
-    }
+    } */
 
     /*
      *  Count the number of addresses

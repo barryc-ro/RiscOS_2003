@@ -9,7 +9,12 @@
 *
 *   Author: Brad Pedersen (12/5/95)
 *
-*   $Log$
+*   icabrows.c,v
+*   Revision 1.1  1998/01/12 11:37:28  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.12   30 Apr 1997 19:07:04   thanhl
 *  update
@@ -102,23 +107,9 @@ int IoLocateNextNearestServer( PICA_BR_ADDRESS );
 ==   Global Data
 =============================================================================*/
 
-extern BYTE            G_TcpBrowserAddress[];
-extern BYTE            G_IpxBrowserAddress[];
-extern BYTE            G_NetBiosBrowserAddress[];
-
-extern ADDRESS         G_TcpBrowserAddrList[];
-extern ADDRESS         G_IpxBrowserAddrList[];
-extern ADDRESS         G_NetBiosBrowserAddrList[];
-
 extern USHORT          G_RequestRetry;
 extern USHORT          G_ReadTimeout;
 
-// BYTE            G_TcpBrowserAddress[ ADDRESS_LENGTH+1 ];
-// BYTE            G_IpxBrowserAddress[ ADDRESS_LENGTH+1 ];
-// BYTE            G_NetBiosBrowserAddress[ ADDRESS_LENGTH+1 ];
-// ADDRESS         G_TcpBrowserAddrList[MAX_BROWSERADDRESSLIST];     
-// ADDRESS         G_IpxBrowserAddrList[MAX_BROWSERADDRESSLIST];     
-// ADDRESS         G_NetBiosBrowserAddrList[MAX_BROWSERADDRESSLIST]; 
 ICA_BR_ADDRESS  G_BrowserAddress = { 0 };
 ICA_BR_ADDRESS  G_BrowserAddrList[MAX_BROWSERADDRESSLIST];
 int             G_fBrowserAddress = FALSE;
@@ -126,8 +117,6 @@ int             G_fBrowserAddrList[MAX_BROWSERADDRESSLIST];
 PICA_BR_ADDRESS G_pLocalAddr     = NULL;
 int             G_LocalAddrCount = 0;
 int             G_LanaNumber = 0;
-// USHORT          G_RequestRetry;
-// USHORT          G_ReadTimeout;
 int             G_BrowserAddrListIndex = 0;
 
 
@@ -175,9 +164,9 @@ BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress )
             /*
              *  Initialize packet requesting master browser
              */
-            TRACE(( TC_PD, TT_API1, "BR_REQUEST_MASTER" ));
-            memset( &RequestMaster, 0, sizeof(ICA_BR_REQUEST_MASTER) );
-            RequestMaster.Header.ByteCount = sizeof(ICA_BR_REQUEST_MASTER);
+            TRACE(( TC_PD, TT_API1, "BR_REQUEST_MASTER (attempt %d)", i ));
+            memset( &RequestMaster, 0, sizeof_ICA_BR_REQUEST_MASTER );
+            RequestMaster.Header.ByteCount = sizeof_ICA_BR_REQUEST_MASTER;
             RequestMaster.Header.Version   = 1;
             RequestMaster.Header.Command   = BR_REQUEST_MASTER;
             RequestMaster.Header.Signature = BR_SIGNATURE;
@@ -547,8 +536,8 @@ _ForceElection()
     /*
      *  Send broadcast packet requesting election of new master
      */
-    memset( &Election, 0, sizeof(Election) );
-    Election.Header.ByteCount = sizeof(Election);
+    memset( &Election, 0, sizeof_ICA_BR_ELECTION );
+    Election.Header.ByteCount = sizeof_ICA_BR_ELECTION;
     Election.Header.Version   = 1;
     Election.Header.Command   = BR_ELECTION;
     Election.Header.Signature = BR_SIGNATURE;

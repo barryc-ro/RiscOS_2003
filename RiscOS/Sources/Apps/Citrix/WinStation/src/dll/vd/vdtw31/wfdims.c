@@ -113,6 +113,7 @@
 #define DIMS_PRIORITY_1         1
 #define DIMS_PRIORITY_MAX       2
 
+#define EXTRA_DIR	1
 
 /*=============================================================================
 ==   Function Prototypes
@@ -175,6 +176,23 @@ ReportUsage()
     wsprintf( buf, "DiskUsage: %lu bytes of %lu total", vcbDiskUsage, vDimCacheSize );
     MessageBox( NULL, buf, "ReportUsage", MB_OK );
 }
+#endif
+
+#if EXTRA_DIR
+
+static void generate_name( char *buf, ULONG sigH, const char *suffix)
+{
+    ULONG val = sigH >> (32 - 6);
+    sprintf( buf, "%s%02lX.%08lX_%s", vpszDimCachePath, val, sigH, suffix);
+}
+
+static void generate_name2( char *buf, const char *file_name)
+{
+    ULONG sigH = strtoul(file_name, NULL, 16);
+    ULONG val = sigH >> (32 - 6);
+    sprintf( buf, "%s%02lX.%s", vpszDimCachePath, val, file_name);
+}
+
 #endif
 
 /*******************************************************************************
@@ -270,7 +288,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
         }
         else {
             TRACE((TC_TW, TT_TW_DIM, 
-                   "OpenCacheFileHandle: find cache file from gDIMHandle\n"));
+                   "OpenCacheFileHandle: find cache file from gDIMHandle"));
             return ghDIMHandle;
         }
     }
@@ -278,16 +296,20 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
     /*
      *  Generate FAT style DIM filename, look for collisions too
      */
-    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH ); 
-
-    TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s\n",vszFileName));
+#if EXTRA_DIR
+    generate_name( vszFileName, sigH, WS );
+#else
+    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH );
+#endif
+    
+    TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s",vszFileName));
 
     /*
      *  DIM file not already open, look to see if it exists
      */
     if( (hFind = _findfirst(vszFileName, &FileInfo)) == -1L ){
         TRACE((TC_TW, TT_TW_DIM, 
-               "OpenCacheFileName: file can not be found, filename %s\n",
+               "OpenCacheFileName: file can not be found, filename %s",
                vszFileName));
         return DIM_FILE_NOT_FOUND;
     };
@@ -307,11 +329,16 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
         /*
          *  Read in header
          */
-        wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name ); 
+#if EXTRA_DIR
+	generate_name2( vszFileName, FileInfo.name );
+#else
+        wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name );
+#endif
+
         if ( (hFile= _open( vszFileName, oflag )) != -1 ) {
 
             TRACE((TC_TW, TT_TW_DIM, 
-                   "OpenCacheFileHandle: find file name %s\n", 
+                   "OpenCacheFileHandle: find file name %s", 
                    vszFileName));
 
             memset( &gDIMHeader, 0, sizeof(DIM_HEADER) );
@@ -334,7 +361,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
                     _findclose(hFind);
     
                     TRACE((TC_TW, TT_TW_DIM, 
-                           "OpenCacheFileHandle: return the cache file sigH[%X] sigL[%X] Handle[%d] \n", 
+                           "OpenCacheFileHandle: return the cache file sigH[%X] sigL[%X] Handle[%d] ", 
                            gDIMHeader.sigH, gDIMHeader.sigL, hFile));
     
                     return hFile;
@@ -375,7 +402,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
         else {
 
             TRACE((TC_TW, TT_TW_DIM, 
-                   "OpenCacheFileHandle: find cache file from gDIMHANDLE\n"));
+                   "OpenCacheFileHandle: find cache file from gDIMHANDLE"));
 
             return ghDIMHandle;    // found the handle
         }
@@ -387,7 +414,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
     wsprintf( vszFileName, "%s%04X%04X_" WS, vpszDimCachePath, 
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
 
-    TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s\n",vszFileName));
+    TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s",vszFileName));
     
     /*
      *  DIM file not already open, look to see if it exists
@@ -497,8 +524,12 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
     /*
      *  Generate FAT filename
      */
-    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH ); 
-    TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s\n",vszFileName));
+#if EXTRA_DIR
+    generate_name( vszFileName, sigH, WS );
+#else
+    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH );
+#endif
+    TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s",vszFileName));
     
     /*
      *  Find first match
@@ -522,18 +553,22 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
         /*
          *  Read in header
          */
-        wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name ); 
+#if EXTRA_DIR
+	generate_name2( vszFileName, FileInfo.name );
+#else
+        wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name );
+#endif
         if ( (hFile= _open( vszFileName, O_RDONLY|O_BINARY)) != -1 ) {
 
             TRACE((TC_TW, TT_TW_DIM, 
-                   "FindCacheFileName: matched filename %s\n",vszFileName));
+                   "FindCacheFileName: matched filename %s",vszFileName));
 
             memset( &DIMHeader, 0, sizeof(DIM_HEADER) );  
             _lseek( hFile, 0, SEEK_SET  );
             _read( hFile, &DIMHeader, sizeof(DIM_HEADER) );
 
             TRACE((TC_TW, TT_TW_DIM, 
-                   "FindCacheFileName: find signature[ %X, %X]\n", 
+                   "FindCacheFileName: find signature[ %X, %X]", 
                    DIMHeader.sigH, DIMHeader.sigL));
 
             /*
@@ -591,7 +626,7 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
      */
     wsprintf( vszFileName, "%s%04X%04X_" WS, vpszDimCachePath, 
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
-    TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s\n",vszFileName));
+    TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s",vszFileName));
     
     /*
      *  Find first match
@@ -623,7 +658,7 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
            _read( hFile, &DIMHeader, sizeof(DIM_HEADER) );
 
             TRACE((TC_TW, TT_TW_DIM, 
-                   "FindCacheFileName: find signature[ %X, %X]\n", 
+                   "FindCacheFileName: find signature[ %X, %X]", 
                    DIMHeader.sigH, DIMHeader.sigL));
 
             /*
@@ -705,7 +740,11 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
     /*
      *  Find first match
      */
-    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH); 
+#if EXTRA_DIR
+    generate_name( vszFileName, sigH, WS );
+#else
+    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH);
+#endif
     if( (hFind = _findfirst(vszFileName, &FileInfo)) != -1L ){        
 
         /*
@@ -729,7 +768,11 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
             /*
              *  Read in header info
              */
-            wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name); 
+#if EXTRA_DIR
+	    generate_name2( vszFileName, FileInfo.name );
+#else
+            wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name);
+#endif
             if ( ( hFile= _open( vszFileName, O_RDONLY|O_BINARY)) != -1 ) {
        
                 // read signature header
@@ -753,7 +796,7 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
                      *  Exact match, find original cache file; rewrite it
                      */
                     bFound = TRUE;
-                    wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name); 
+                    //wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name);  SJM unused?
                     _findclose(hFind);
                     _close(hFile);
 
@@ -884,6 +927,19 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
     /*
      *  Create new cache file
      */
+#if EXTRA_DIR
+    {
+	char *dot = strrchr( vszFileName, '.' );
+	if (dot)
+	    *dot = '\0';
+
+	_mkdir( vszFileName );
+
+	if (dot)
+	    *dot = '.';
+    }
+#endif
+
     if ( (hFile = _open( vszFileName, 
                          O_CREAT|O_TRUNC|O_RDWR|O_BINARY/*,
                          S_IREAD|S_IWRITE*/ )) == -1 ) {
@@ -1050,22 +1106,34 @@ static BOOL fPriorityDims = TRUE;
 BOOL
 TWDIMCacheInit( PVD pvd, BOOL fContinue ) 
 {
-#ifdef WIN32
-
     struct _finddata_t FileInfo;
     DIM_HEADER DIMHeader;
     int hFile;
     INT rc = CLIENT_STATUS_SUCCESS;
     UCHAR count=0;
 
-static long hFind;
-static PCACHE_FILE_CONTEXT pcf;
+    static long hFind = -1;
+    static PCACHE_FILE_CONTEXT pcf;
+
+#if EXTRA_DIR
+    /* Both of these need to be static because of where the continue jump goes to */
+    static struct _finddata_t DirInfo;
+    static long hFindDir;
+#endif 
+ 
+    TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: continue %d hFind %p", fContinue, hFind));
 
     /*
      *  Continuation?
      */
-    if ( fContinue ) {
-        goto w32_keep_going;
+    if ( fContinue )
+    {
+#if EXTRA_DIR
+	if (hFind == -1)
+	    goto w32_keep_going_dir;
+	else
+#endif
+	    goto w32_keep_going;
     }
 
     /* SJM: can set them here as this will only be called once (when Continue is FALSE) per session */
@@ -1076,12 +1144,12 @@ static PCACHE_FILE_CONTEXT pcf;
      *  Create and initialize cache file context records
      */
     if ( !(pcf = (PCACHE_FILE_CONTEXT) malloc(MAX_CACHE_FILE_LIST * sizeof_CACHE_FILE_CONTEXT)) ) {                   
-        rc = CLIENT_ERROR_NO_MEMORY;
-        ASSERT( 0, rc );
-        return(FALSE);
+	rc = CLIENT_ERROR_NO_MEMORY;
+	ASSERT( 0, rc );
+	return(FALSE);
     }
     else {
-        memset( &DIMHeader, 0, sizeof(DIM_HEADER) );  
+	memset( &DIMHeader, 0, sizeof(DIM_HEADER) );  
     }
     
     /*
@@ -1093,301 +1161,193 @@ static PCACHE_FILE_CONTEXT pcf;
      *  Priority Dims followed by rest of Dims
      */
     for ( /* static assignment above */;
-          iPriorityDims < DIMS_PRIORITY_MAX; 
-          iPriorityDims++ ) {
+				       iPriorityDims < DIMS_PRIORITY_MAX; 
+				       iPriorityDims++ ) {
     
-        /*
-         *  Stream the DIM handles to host
-         */
-        if ( (iPriorityDims == DIMS_PRIORITY_0) ) {
-            wsprintf( vszFileName, "%s" WS8 "_0", vpszDimCachePath ); 
-        }
-        else {
-            wsprintf( vszFileName, "%s" WS8 "_" WS, vpszDimCachePath ); 
-        }
-        TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: filename %s\n",vszFileName));
-    
-        if( (hFind = _findfirst(vszFileName, &FileInfo)) != -1L ) {
-           
-            /*
-             *  Walk file list
-             */
-            do {
-    
-                /*
-                 *  Validate file length
-                 */
-                if ( FileInfo.size < MIN_DIM_FILE_SIZE ) {
-                    continue;       
-                }
-
-                /*
-                 *  Skip priority 0 dims when processing priority 1,
-                 *  they have already been sent.
-                 */
-                if ( (iPriorityDims == DIMS_PRIORITY_1) &&
-                     (FileInfo.name[strlen(FileInfo.name)-1] == '0') ) {
-                    continue;
-                }
-                 
-                /*
-                 *  Read in header
-                 */
-                wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name); 
-                if ( ( hFile= _open( vszFileName, O_RDONLY|O_BINARY)) != -1 ) {
-    
-                    TRACE((TC_TW, TT_TW_DIM, 
-                           "TWDIMCacheInit: matched filename %s\n",
-                           vszFileName));
-    
-                    //  read header from file
-                    memset( &DIMHeader, 0, sizeof(DIM_HEADER) );  
-                    _lseek( hFile, 0, SEEK_SET  );
-                    _read( hFile, &DIMHeader, sizeof(DIM_HEADER) );
-                
-                    TRACE((TC_TW, TT_TW_DIM, 
-                           "TWDIMCacheInit: find signature[ %X, %X]\n", 
-                           DIMHeader.sigH, DIMHeader.sigL));
-    
-                    /*
-                     *  Validate DIM file and version
-                     */
-                    if ( (gDIMHeader.flag     == DIM_FILE_FLAG) || 
-                         (gDIMHeader.sigLevel == DIM_SIGNATURE_LEVEL) ) {
-    
-			CACHE_FILE_CONTEXT tmp_pcf;
-                        /*
-                         *  Add to context records bound for host
-			 *  SJM: Go via temporay structure due to alignment problems
-                         */
-                        tmp_pcf.Size = FileInfo.size ;
-                        tmp_pcf.Flags = FileInfo.attrib & _A_RDONLY;      
-                        tmp_pcf.SignatureLevel = gDIMHeader.sigLevel;
-                        *((PULONG)&(tmp_pcf.Filehandle[0])) =  DIMHeader.sigH;
-                        *((PULONG)&(tmp_pcf.Filehandle[4])) =  DIMHeader.sigL;
-			memcpy((char *)pcf + count * sizeof_CACHE_FILE_CONTEXT, &tmp_pcf, sizeof_CACHE_FILE_CONTEXT);
-        
-                        /*
-                         *  Update disk usage
-                         */
-                        vcbDiskUsage += FileInfo.size;
-        
-                        /*
-                         *  ICA packet full, ship it off to the host
-                         */
-                        if ( ++count == MAX_CACHE_FILE_LIST ) {
-        
-                            TRACE((TC_TW, TT_TW_DIM, 
-                                   "TWDIMCacheInit: send out DIM Cache file list, count [%i]\n",
-                                   count));
-        
-                            twDIMCacheStream( pvd, count, DIMHeader.sigLevel, pcf );    
-                            _close(hFile);
-    
-                            /*
-                             *  Set up continuation, more files
-                             */
-                            return(TRUE);
-                        }       
-                    }
-    
-                    _close(hFile);
-                }
-    
-w32_keep_going:     /* null statement */;
-    
-            } while ( _findnext(hFind, &FileInfo) == 0 );
-        
-            /*
-             *  Ship out remainder
-             */
-            if ( count ) {                                       
-                TRACE((TC_TW, TT_TW_DIM, 
-                       "TWDIMCacheInit: send out DIM Cache file list, count [%i]\n",
-                        count));
-                twDIMCacheStream( pvd, count, DIMHeader.sigLevel, pcf );    
-            }
-
-            /*
-             *  Ship out priority 0 dims first
-             */
-            if ( fPriorityDims ) {
-                fPriorityDims = FALSE;
-                return(TRUE);
-            }
-
-            /*
-             *  Done with find first handle
-             */
-            _findclose(hFind);
-        }
-    }
-
-    free(pcf);
-
-    REPORT_USAGE
-
-    /*
-     *  No more files
-     */
-    return(FALSE);
-
-#else   // for win16
-
-    DIM_HEADER  DIMHeader;   
-    int hFile;
-    INT rc = CLIENT_STATUS_SUCCESS;
-    UCHAR count=0;
-
-static struct find_t FileInfo;   
-static PCACHE_FILE_CONTEXT pcf;
-static int iPriorityDims = DIMS_PRIORITY_0;
-static BOOL fPriorityDims = TRUE;
-   
-    /*
-     *  Continuation?
-     */
-    if ( fContinue ) {
-        goto w16_keep_going;
-    }
-     
-    /*
-     *  Create and initialize cache file context records
-     */
-    if ( !(pcf = (PCACHE_FILE_CONTEXT) malloc(MAX_CACHE_FILE_LIST * sizeof(CACHE_FILE_CONTEXT))) ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        ASSERT( 0, rc );
-        return(FALSE);
-    }
-    else {
-        memset( &DIMHeader, 0, sizeof(DIM_HEADER) );  
-    }
-    
-    /*
-     *  Priority Dims followed by rest of Dims
-     */
-    for ( /* static assignment above */;
-          iPriorityDims < DIMS_PRIORITY_MAX; 
-          iPriorityDims++ ) {
-    
-        /*
-         *  Stream the DIM handles to host
-         */
-        if ( (iPriorityDims == DIMS_PRIORITY_0) ) {
-            wsprintf( vszFileName, "%s" WS8 "_0", vpszDimCachePath ); 
-        }
-        else {
-            wsprintf( vszFileName, "%s" WS8 "_" WS, vpszDimCachePath ); 
-        }
-        TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: filename %s\n",vszFileName));
-
-        if( _dos_findfirst(vszFileName,_A_NORMAL, &FileInfo) == 0 ) {    
-           
-            /*
-             *  Walk file list
-             */
-            do {
-        
-                /*
-                 *  Validate file length
-                 */
-                if ( FileInfo.size < MIN_DIM_FILE_SIZE ) {
-                    continue;       
-                }
-                 
-                /*
-                 *  Skip priority 0 dims when processing priority 1,
-                 *  they have already been sent.
-                 */
-                if ( (iPriorityDims == DIMS_PRIORITY_1) &&
-                     (FileInfo.name[strlen(FileInfo.name)-1] == '0') ) {
-                    continue;
-                }
-	       
-                /*
-                 *  Read in header
-                 */
-                wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name); 
-                if ( ( hFile= _open( vszFileName, O_RDONLY|O_BINARY)) != -1 ) {       
-    
-                    TRACE(( TC_TW, TT_TW_DIM, "TWDIMCacheInit: matched filename %s\n",vszFileName));
-    
-                    memset( &DIMHeader, 0, sizeof(DIM_HEADER) );  
-                    _lseek( hFile, 0, SEEK_SET  );
-                    _read( hFile, &DIMHeader, sizeof(DIM_HEADER) );
-                 
-                    TRACE((TC_TW, TT_TW_DIM, 
-                           "TWDIMCacheInit: find signature [%04X%04X , %04X%04X]\n", 
-                           (USHORT)(DIMHeader.sigH>>16), (USHORT)(DIMHeader.sigH & 0xffff), 
-                           (USHORT)(DIMHeader.sigL>>16), (USHORT) (DIMHeader.sigL & 0xffff)));       
-            
-                    /*
-                     *  Validate DIM file and version
-                     */
-                    if ( (gDIMHeader.flag     == DIM_FILE_FLAG) || 
-                         (gDIMHeader.sigLevel == DIM_SIGNATURE_LEVEL) ) {
-    
-                        /*
-                         *  add to context records bound for host
-                         */
-                        pcf[count].Size = FileInfo.size ;
-                        pcf[count].Flags = FileInfo.attrib & _A_RDONLY;      
-                        (ULONG) *((PULONG)&(pcf[count].Filehandle[0])) =  DIMHeader.sigH;
-                        (ULONG) *((PULONG)&(pcf[count].Filehandle[4])) =  DIMHeader.sigL;
-                        if ( ++count == MAX_CACHE_FILE_LIST ) {
-        
-                            TRACE((TC_TW, TT_TW_DIM, 
-                                   "TWDIMCacheInit: send out DIM Cache file list, count [%i]\n",
-                                   count));
-        
-                            twDIMCacheStream( pvd, count, DIMHeader.sigLevel, pcf );    
-                            _close(hFile);
-    
-                            /*
-                             *  Set up continuation, more files
-                             */
-                            return(TRUE);
-                        }       
-                    }
-    
-                    _close(hFile);
-                }
-           
-w16_keep_going:     /* null statement */;
-    
-            } while ( _dos_findnext(&FileInfo) == 0 );
-        
-            /*
-             *  Ship out remainder
-             */
-            if (count) {                                       
-                TRACE((TC_TW, TT_TW_DIM, 
-                       "TWDIMCacheInit: send out DIM Cache file list, count [%i]\n",
-                       count));
-                twDIMCacheStream( pvd, count, DIMHeader.sigLevel, pcf );    
-            }
-
-            /*
-             *  Ship out priority 0 dims first
-             */
-            if ( fPriorityDims ) {
-                fPriorityDims = FALSE;
-                return(TRUE);
-            }
-        }
-    }
-       
-    free(pcf);
-
-    REPORT_USAGE
-
-    /*
-     *  No more files
-     */
-    return(FALSE);
-
+#if EXTRA_DIR
+	/* search for directories */
+	wsprintf( vszFileName, "%s" WS WS, vpszDimCachePath );
+        if( (hFindDir = _findfirst(vszFileName, &DirInfo)) != -1L )
+	{
+	    TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: dirname %s",vszFileName));
+	    do
+	    {
 #endif
+		/*
+		 *  Stream the DIM handles to host
+		 */
+		if ( (iPriorityDims == DIMS_PRIORITY_0) ) {
+#if EXTRA_DIR
+		    wsprintf( vszFileName, "%s%s." WS8 "_0", vpszDimCachePath, DirInfo.name );
+#else
+		    wsprintf( vszFileName, "%s" WS8 "_0", vpszDimCachePath );
+#endif
+		}
+		else {
+#if EXTRA_DIR
+		    wsprintf( vszFileName, "%s%s." WS8 "_" WS, vpszDimCachePath, DirInfo.name );
+#else
+		    wsprintf( vszFileName, "%s" WS8 "_" WS, vpszDimCachePath );
+#endif
+		}
+		TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: filename %s",vszFileName));
+    
+		if( (hFind = _findfirst(vszFileName, &FileInfo)) != -1L ) {
+           
+		    /*
+		     *  Walk file list
+		     */
+		    do {
+    
+			/*
+			 *  Validate file length
+			 */
+			if ( FileInfo.size < MIN_DIM_FILE_SIZE ) {
+			    continue;       
+			}
 
+			/*
+			 *  Skip priority 0 dims when processing priority 1,
+			 *  they have already been sent.
+			 */
+			if ( (iPriorityDims == DIMS_PRIORITY_1) &&
+			     (FileInfo.name[strlen(FileInfo.name)-1] == '0') ) {
+			    continue;
+			}
+                 
+			/*
+			 *  Read in header
+			 */
+#if EXTRA_DIR
+			wsprintf( vszFileName, "%s%s.%s", vpszDimCachePath, DirInfo.name, FileInfo.name);
+#else
+			wsprintf( vszFileName, "%s%s", vpszDimCachePath, FileInfo.name);
+#endif
+			if ( ( hFile= _open( vszFileName, O_RDONLY|O_BINARY)) != -1 ) {
+    
+			    TRACE((TC_TW, TT_TW_DIM, 
+				   "TWDIMCacheInit: matched filename %s",
+				   vszFileName));
+    
+			    //  read header from file
+			    memset( &DIMHeader, 0, sizeof(DIM_HEADER) );  
+			    _lseek( hFile, 0, SEEK_SET  );
+			    _read( hFile, &DIMHeader, sizeof(DIM_HEADER) );
+                
+			    TRACE((TC_TW, TT_TW_DIM, 
+				   "TWDIMCacheInit: find signature[ %X, %X]", 
+				   DIMHeader.sigH, DIMHeader.sigL));
+    
+			    /*
+			     *  Validate DIM file and version
+			     */
+			    if ( (gDIMHeader.flag     == DIM_FILE_FLAG) || 
+				 (gDIMHeader.sigLevel == DIM_SIGNATURE_LEVEL) ) {
+    
+				CACHE_FILE_CONTEXT tmp_pcf;
+				/*
+				 *  Add to context records bound for host
+				 *  SJM: Go via temporay structure due to alignment problems
+				 */
+				tmp_pcf.Size = FileInfo.size ;
+				tmp_pcf.Flags = FileInfo.attrib & _A_RDONLY;      
+				tmp_pcf.SignatureLevel = gDIMHeader.sigLevel;
+				*((PULONG)&(tmp_pcf.Filehandle[0])) =  DIMHeader.sigH;
+				*((PULONG)&(tmp_pcf.Filehandle[4])) =  DIMHeader.sigL;
+				memcpy((char *)pcf + count * sizeof_CACHE_FILE_CONTEXT, &tmp_pcf, sizeof_CACHE_FILE_CONTEXT);
+        
+				/*
+				 *  Update disk usage
+				 */
+				vcbDiskUsage += FileInfo.size;
+        
+				/*
+				 *  ICA packet full, ship it off to the host
+				 */
+				if ( ++count == MAX_CACHE_FILE_LIST ) {
+        
+				    TRACE((TC_TW, TT_TW_DIM, 
+					   "TWDIMCacheInit: send out DIM Cache file list, count [%i]",
+					   count));
+        
+				    twDIMCacheStream( pvd, count, DIMHeader.sigLevel, pcf );    
+				    _close(hFile);
+    
+				    /*
+				     *  Set up continuation, more files
+				     */
+				    return(TRUE);
+				}       
+			    }
+    
+			    _close(hFile);
+			}
+ 
+ w32_keep_going:     /* null statement */;
+    
+		    } while ( _findnext(hFind, &FileInfo) == 0 );
+        
+#if !EXTRA_DIR
+		    /*
+		     *  Ship out remainder
+		     */
+		    if ( count ) {                                       
+			TRACE((TC_TW, TT_TW_DIM, 
+			       "TWDIMCacheInit: send out DIM Cache file list, count [%i]",
+			       count));
+			twDIMCacheStream( pvd, count, DIMHeader.sigLevel, pcf );    
+		    }
+
+		    /*
+		     *  Ship out priority 0 dims first
+		     */
+		    if ( fPriorityDims ) {
+			fPriorityDims = FALSE;
+			return(TRUE);
+		    }
+#endif
+		    /*
+		     *  Done with find first handle
+		     */
+		    _findclose(hFind);
+		    hFind = -1;
+		} /* if (hFind = ... */
+#if EXTRA_DIR
+	    } while ( _findnext(hFindDir, &DirInfo) == 0 );
+
+	    _findclose(hFindDir);
+	    hFindDir = NULL;
+	} /* if( (hFindDir =... */
+
+	/*
+	 *  Ship out remainder
+	 */
+	if ( count ) {                                       
+	    TRACE((TC_TW, TT_TW_DIM, 
+		   "TWDIMCacheInit: send out DIM Cache file list, count [%i]",
+		   count));
+	    twDIMCacheStream( pvd, count, DIMHeader.sigLevel, pcf );    
+	}
+
+	/*
+	 *  Ship out priority 0 dims first
+	 */
+	if ( fPriorityDims ) {
+	    fPriorityDims = FALSE;
+	    return(TRUE);
+	}
+ w32_keep_going_dir:     /* null statement */;
+#endif
+    } /* for iPriority... */
+
+    free(pcf);
+
+    REPORT_USAGE
+
+    /*
+     *  No more files
+     */
+     return(FALSE);
 }
 
 
@@ -1693,7 +1653,7 @@ twDIMCacheResize( PVD pvd, ULONG Size )
     write_long(pCacheInfo->Size, Size);
  
     TRACE((TC_TW, TT_TW_DIM,
-           "twDIMCacheResize: Command %u, size %u\n",
+           "twDIMCacheResize: Command %u, size %u",
            pCacheInfo->Command,pCacheInfo->Size));
  
     /*
@@ -1830,7 +1790,7 @@ twDIMCacheDisable( PVD pvd )
     pCacheInfo->Command = PACKET_COMMAND_CACHE_DISABLE;   
  
     TRACE((TC_TW, TT_TW_DIM,
-           "twDIMCacheDisable: Command %u\n",
+           "twDIMCacheDisable: Command %u",
            pCacheInfo->Command));
  
     /*
@@ -1963,7 +1923,7 @@ twGetDiskFreeSpace()
                         (ULONG) (0xFFFFFFFF);
 
             TRACE((TC_TW, TT_TW_DIM,
-                   "twGetDimSpace: Free space avilable from GetDiskFreeSpaceEx %08X \n",
+                   "twGetDimSpace: Free space avilable from GetDiskFreeSpaceEx %08X ",
                    freespace));
 
         }
@@ -1972,7 +1932,7 @@ twGetDiskFreeSpace()
             freespace = 0;
     
             TRACE((TC_TW, TT_TW_DIM, 
-                   "twGetDimSpace: GetDiskFreeSpaceEx() fails, ERROR (%08X)\n", 
+                   "twGetDimSpace: GetDiskFreeSpaceEx() fails, ERROR (%08X)", 
                    GetLastError()));
 
         }
@@ -1996,7 +1956,7 @@ twGetDiskFreeSpace()
                         (ULONG) NumberOfFreeClusters;
 
             TRACE((TC_TW, TT_TW_DIM, 
-                   "twGetDimSpace: Free space avilable from GetDiskFreeSpace %08X \n",
+                   "twGetDimSpace: Free space avilable from GetDiskFreeSpace %08X ",
                    freespace));
 
         }
@@ -2005,7 +1965,7 @@ twGetDiskFreeSpace()
             freespace = 0;
 
             TRACE((TC_TW, TT_TW_DIM,
-                   "twGetDimSpace: GetDIskFreeSpace() fails, ERROR(%08X) \n", 
+                   "twGetDimSpace: GetDIskFreeSpace() fails, ERROR(%08X) ", 
                    GetLastError()));      
 
         }

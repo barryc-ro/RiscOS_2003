@@ -20,6 +20,7 @@ extern void session_run(const char *file, int file_is_url, const char *bfile);
 extern void session_resume(icaclient_session sess);
 extern int session_connect(icaclient_session sess);
 extern int session_connected(icaclient_session sess);
+extern void session_close_if_connected(icaclient_session sess);
 
 /* main.c */
 

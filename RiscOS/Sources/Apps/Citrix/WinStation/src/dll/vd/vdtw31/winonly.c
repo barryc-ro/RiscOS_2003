@@ -608,7 +608,12 @@ USHORT TWReadCacheParameters( PVOID pIniSection )
 
     // ensure there is some memory left (0.5Mb) for sprites etc.
     _swix(Wimp_SlotSize, _INR(0,1) | _OUT(2), -1, -1, &freemem);
+
+    /* set a limit of the higher of free mem less 512K or half the free memory */
     limit = (freemem - 512*1024) &~ 1023;
+    if (limit < freemem/2)
+	limit = freemem/2;
+
     if (LargeCacheSize > limit)
 	LargeCacheSize = limit;
     

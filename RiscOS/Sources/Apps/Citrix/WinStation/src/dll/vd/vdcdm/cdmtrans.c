@@ -11,8 +11,6 @@
 *
 * Author:  John Richardson 03/11/94
 *
-* $Log$
-*  
 *     Rev 1.13   09 Jul 1997 16:09:26   davidp
 *  Added include for ica30.h because of Hydrix surgery
 *  

@@ -8,8 +8,6 @@
 *
 *  Author:  JohnR 04/20/94
 *
-* $Log$
-*  
 *     Rev 1.31   09 Jul 1997 16:09:30   davidp
 *  Added include for ica30.h because of Hydrix surgery
 *  
@@ -193,7 +191,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     */
    wdqi.WdInformationClass = WdOpenVirtualChannel;
    wdqi.pWdInformation = &OpenVirtualChannel;
-   wdqi.WdInformationLength = sizeof(OPENVIRTUALCHANNEL);
+   wdqi.WdInformationLength = sizeof_OPENVIRTUALCHANNEL;
    OpenVirtualChannel.pVCName = VIRTUAL_CDM;
    rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
    VirtualCdm = OpenVirtualChannel.Channel;

@@ -215,7 +215,7 @@ static int cli_iconbar = FALSE;
 static int cli_dopostmortem = FALSE;
 static int cli_remote_debug = FALSE;
 static int cli_file_debug = FALSE;
-static int cli_suspendable = FALSE;
+       int cli_suspendable = FALSE; /* this is exported to wengine.c */
 static int cli_file_is_url = FALSE;
 static int cli_loop = FALSE;
 static int cli_multitask = FALSE;
@@ -294,6 +294,7 @@ static void signal_setup(void)
 
 void main_close_session(icaclient_session sess)
 {
+    TRACE((TC_UI, TT_API1, "main_close_session: %p suspenable %d", sess, cli_suspendable));
     if (sess)
     {
 	if (current_session == sess)
@@ -323,8 +324,16 @@ static void connection_state(int event)
     TRACE((TC_UI, TT_API1, "connection_state: event %d current_session %p printinfo_state %d splash_state %d dial_state %d connectopen_state %d",
 	   event, current_session, printinfo_state, splash_state, dial_state, connectopen_state));
 
+    /* the new plan is that the connection process is driven from the
+     * null handler, so notifications of other changes are ignored.
+     * Keep the code in, in case it's useful later */
     if (event != connection_NULL)
+    {
+	TRACE((TC_UI, TT_API1, "connection_state: event %d current_session %p printinfo_state %d splash_state %d dial_state %d connectopen_state %d",
+	   event, current_session, printinfo_state, splash_state, dial_state, connectopen_state));
+
 	return;
+    }
 
     if (current_session)
     {
@@ -349,6 +358,9 @@ static void connection_state(int event)
 		    if (!session_connect(current_session))
 		    {
 			current_session = NULL;
+			
+			if (!cli_suspendable)
+			    running = FALSE;
 			
 			dial_state = initop_UNSTARTED;
 			connectopen_state = initop_UNSTARTED;
@@ -427,6 +439,9 @@ static int icon_menu_handler(int event_code, ToolboxEvent *event, IdBlock *id_bl
                          void *handle)
 {
     BOOL connected = session_connected(current_session);
+
+    TRACE((TC_UI, TT_API1, "icon_menu_handler: id_block %p\n", id_block));
+    TRACE((TC_UI, TT_API1, "                   self_id %p\n", id_block->self_id));
 
     LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONNECT, !connected));
     LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_DISCONNECT, !connected));
@@ -528,9 +543,13 @@ static int try_disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *
 {
     TRACE((TC_UI, TT_API1, "disconnect_handler:\n"));
 
-    LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL,
-			       id_block ? id_block->self_id : NULL_ObjectId,
-			       id_block ? id_block->self_component : NULL_ComponentId));
+    if (disconnect_id == NULL_ObjectId ||
+	LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL,
+				   id_block ? id_block->self_id : NULL_ObjectId,
+				   id_block ? id_block->self_component : NULL_ComponentId)) != NULL)
+    {
+	kill_current_session();
+    }
 
     quitting = quitting_NO;
 
@@ -551,9 +570,15 @@ static int try_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_blo
     }
     else
     {
-	LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL,
-				   id_block ? id_block->self_id : NULL_ObjectId,
-				   id_block ? id_block->self_component : NULL_ComponentId));
+	if (disconnect_id == NULL_ObjectId ||
+	    LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL,
+				       id_block ? id_block->self_id : NULL_ObjectId,
+				       id_block ? id_block->self_component : NULL_ComponentId)) != NULL)
+	{
+	    kill_current_session();
+	    running = FALSE;
+	}
+
 	quitting = quitting_SELF;
     }
 
@@ -582,7 +607,12 @@ static int pre_quit_handler(WimpMessage *message, void *handle)
 				    message->hdr.sender, 0, NULL));
 
 	/* open the query box */
-	LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL, NULL_ObjectId, NULL_ComponentId));
+	if (disconnect_id == NULL_ObjectId ||
+	    LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL, NULL_ObjectId, NULL_ComponentId)) != NULL)
+	{
+	    kill_current_session();
+	    running = FALSE;
+	}
     }
 
     return 1;
@@ -612,6 +642,14 @@ static int key_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, 
 
 static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
 {
+#ifdef DEBUG
+    extern void *event__id_block;
+    if (event__id_block == NULL)
+    {
+	TRACE((TC_UI, TT_API1, "**** null_handler: in: id_block gone null ****" ));
+    }
+#endif
+    
     DTRACE((TC_UI, TT_API1, "null_handler: sess %p\n", current_session));
 
     if (!splash_check_close())
@@ -619,17 +657,37 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
     
     if (session_connected(current_session))
     {
+	/* once a full connection has been made then this call won't
+         * return until the user logs off or disconnects
+	 */
+
 	if (!session_poll(current_session))
 	{
 	    TRACE((TC_UI, TT_API1, "null_handler: poll returned 0\n"));
 
 	    kill_current_session();
 	}
+
+	DTRACE((TC_UI, TT_API1, "null_handler: poll returned 1\n"));
+
+	// clean up if we are not suspendable
+//	else if (!cli_suspendable)
+//	{
+//	    session_close_if_connected(current_session);
+//	}
     }
     else if (current_session)
     {
+	/* kick off the first stage of the connection sequence */
 	connection_state(connection_NULL);
     }
+    
+#ifdef DEBUG
+    if (event__id_block == NULL)
+    {
+	TRACE((TC_UI, TT_API1, "**** null_handler: out: id_block gone null ****" ));
+    }
+#endif
     
     return 0;
     NOT_USED(event_code);
@@ -1381,9 +1439,9 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass    = LOG_ASSERT | TC_TD;
+   EMLogInfo.LogClass    = LOG_ASSERT | TC_TW;
    EMLogInfo.LogEnable   = TT_ERROR;
-   EMLogInfo.LogTWEnable = TT_TW_DIM | TT_TW_CACHE;
+   EMLogInfo.LogTWEnable = TT_TW_DIM;
 #else
    EMLogInfo.LogClass   = TC_ALL;
    EMLogInfo.LogEnable  = TT_ERROR;
@@ -1540,47 +1598,50 @@ static void initialise(int argc, char *argv[])
     /* put up splash screen */
     splash_open();
     
-    /* attach quit handlers */
-    err_fatal(event_register_message_handler(Wimp_MQuit, quit_handler, NULL));
-    err_fatal(event_register_message_handler(Wimp_MPreQuit, pre_quit_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, tbres_event_CONFIRM, confirm_handler, NULL));
-
-    /* other general handlers */
-    err_fatal(event_register_wimp_handler(-1, Wimp_ENull, null_handler, NULL));
-    err_fatal(event_register_wimp_handler(-1, Wimp_EKeyPressed, key_handler, NULL));
-
-    err_fatal(event_register_message_handler(Wimp_MDataOpen, dataopen_handler, NULL));
-    err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));
-    err_fatal(event_register_message_handler(Wimp_MDataSave, datasave_handler, NULL));
-
-    err_fatal(event_register_message_handler(wimp_MOPENURL, openurl_handler, NULL));
-    err_fatal(event_register_message_handler(MESSAGE_URI_MPROCESS, openuri_handler, NULL));
-
-    err_fatal(event_register_message_handler(message_ICACLIENT_CONTROL, control_handler, NULL));
-    err_fatal(event_register_message_handler(message_ICACLIENT_CONFIG, config_handler, NULL));
-
-    err_fatal(event_register_message_handler(Wimp_MSaveDesktop, save_desktop_handler, NULL));
-
-    err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, try_disconnect_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, tbres_event_QUIT, try_quit_handler, NULL));
-
-    err_fatal(event_register_toolbox_handler(-1, ProgInfo_AboutToBeShown, proginfo_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, tbres_event_SHOWING_ICON_MENU, icon_menu_handler, NULL));
-
-    err_fatal(event_register_toolbox_handler(-1, tbres_event_SERVER_CONNECT, server_connect_handler, NULL));
-
-    /* initialise application components */
-
-    /* create iconbar icon */
-    if (cli_iconbar)
+    if (cli_multitask)
     {
-	int iconbar_id;
-	err_fatal(toolbox_create_object(0, tbres_ICON, &iconbar_id));
-	err_fatal(toolbox_show_object(0, iconbar_id, Toolbox_ShowObject_Default, NULL, NULL_ObjectId, NULL_ComponentId));
+	/* attach quit handlers */
+	err_fatal(event_register_message_handler(Wimp_MQuit, quit_handler, NULL));
+	err_fatal(event_register_message_handler(Wimp_MPreQuit, pre_quit_handler, NULL));
+	err_fatal(event_register_toolbox_handler(-1, tbres_event_CONFIRM, confirm_handler, NULL));
 
-	LOGERR(toolbox_create_object(0, tbres_DISCONNECT_W, &disconnect_id));
-    }
+	/* other general handlers */
+	err_fatal(event_register_wimp_handler(-1, Wimp_ENull, null_handler, NULL));
+	err_fatal(event_register_wimp_handler(-1, Wimp_EKeyPressed, key_handler, NULL));
+
+	err_fatal(event_register_message_handler(Wimp_MDataOpen, dataopen_handler, NULL));
+	err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));
+	err_fatal(event_register_message_handler(Wimp_MDataSave, datasave_handler, NULL));
+
+	err_fatal(event_register_message_handler(wimp_MOPENURL, openurl_handler, NULL));
+	err_fatal(event_register_message_handler(MESSAGE_URI_MPROCESS, openuri_handler, NULL));
+
+	err_fatal(event_register_message_handler(message_ICACLIENT_CONTROL, control_handler, NULL));
+	err_fatal(event_register_message_handler(message_ICACLIENT_CONFIG, config_handler, NULL));
+
+	err_fatal(event_register_message_handler(Wimp_MSaveDesktop, save_desktop_handler, NULL));
+
+	err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
+	err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, try_disconnect_handler, NULL));
+	err_fatal(event_register_toolbox_handler(-1, tbres_event_QUIT, try_quit_handler, NULL));
+
+	err_fatal(event_register_toolbox_handler(-1, ProgInfo_AboutToBeShown, proginfo_handler, NULL));
+	err_fatal(event_register_toolbox_handler(-1, tbres_event_SHOWING_ICON_MENU, icon_menu_handler, NULL));
+
+	err_fatal(event_register_toolbox_handler(-1, tbres_event_SERVER_CONNECT, server_connect_handler, NULL));
+
+	/* initialise application components */
+
+	/* create iconbar icon */
+	if (cli_iconbar)
+	{
+	    int iconbar_id;
+	    err_fatal(toolbox_create_object(0, tbres_ICON, &iconbar_id));
+	    err_fatal(toolbox_show_object(0, iconbar_id, Toolbox_ShowObject_Default, NULL, NULL_ObjectId, NULL_ComponentId));
+
+	    LOGERR(toolbox_create_object(0, tbres_DISCONNECT_W, &disconnect_id));
+	}
+    }    
 }
 
 int main(int argc, char *argv[])

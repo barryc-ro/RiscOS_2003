@@ -298,13 +298,13 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     bGetPrivateProfileString( pPdOpen->pIniSection, INI_NAMERESOLVER,
                              INI_EMPTY, DllName, sizeof(DllName) );
     if ( DllName[0] ) {
-        pPd->pNrDll = (char *) malloc( strlen(pPdOpen->pExePath) + strlen(DllName) + 1 );
+        pPd->pNrDll = (char *) malloc( /*strlen(pPdOpen->pExePath) + */strlen(DllName) + 1 );
         if ( pPd->pNrDll == NULL ) {
             rc = CLIENT_ERROR_NO_MEMORY;
             goto badmalloc;
         }
-        strcpy( pPd->pNrDll, pPdOpen->pExePath );
-        strcat( pPd->pNrDll, DllName );
+        /*strcpy( pPd->pNrDll, pPdOpen->pExePath );*/
+        strcpy( pPd->pNrDll, DllName );
     }
 
     /* 
@@ -1185,7 +1185,10 @@ NameToAddress( PPD pPd, PNAMEADDRESS pNameAddress )
     NrOpen.pNetBiosBrowserAddrList= pPd->pNetBiosBrowserAddrList;
     NrOpen.BrowserRetry           = pPd->BrowserRetry;
     NrOpen.BrowserTimeout         = pPd->BrowserTimeout;
+
+    ModuleLookup(pPd->pNrDll, NULL, &NrOpen.pDeviceProcedures);
     rc = ModuleCall( &NrLink, DLL__OPEN, &NrOpen );
+
     TRACE((TC_TD, TT_API2, "NameToAddress(open): tcp %s, ipx %s, netb %s, retry %u, timeout %u, rc=%u", 
            NrOpen.pTcpBrowserAddress, NrOpen.pIpxBrowserAddress,
            NrOpen.pNetBiosBrowserAddress,

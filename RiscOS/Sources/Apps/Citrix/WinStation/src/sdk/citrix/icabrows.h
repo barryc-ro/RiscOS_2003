@@ -7,7 +7,12 @@
 *
 *  Author: Brad Pedersen (10/9/95)
 *
-*  $Log$
+*  icabrows.h,v
+*  Revision 1.1  1998/01/12 11:37:57  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.41   21 Apr 1997 16:56:52   TOMA
 *  update
@@ -194,6 +199,8 @@ typedef struct _ICA_BR_ELECTION {
                              // Browser name in UNICODE
 } ICA_BR_ELECTION, * PICA_BR_ELECTION;
 
+#define sizeof_ICA_BR_ELECTION	   (sizeof(ICA_BR_HEADER) + 6)
+    
 /*
  *  Cause of election request
  */
@@ -212,8 +219,10 @@ typedef struct _ICA_BR_ELECTION_CRITERIA {
     USHORT Version;                // version of this structure
     USHORT BrowserVersion;         // browser version number
     USHORT CriteriaFlags;          // election criteria flags (see CRITERIA_?)
-    ULONG  BrowserUpTime;          // time browser has been running (minutes)
+    UCHAR  BrowserUpTime[4];       // time browser has been running (minutes) - CHAR because it's unaligned
 } ICA_BR_ELECTION_CRITERIA, * PICA_BR_ELECTION_CRITERIA;
+
+#define sizeof_ICA_BR_ELECTION_CRITERIA	   (10)
 
 /* 
  *  CriteriaFlags
@@ -371,6 +380,8 @@ typedef struct _ICA_BR_DATA_HEADER {
 
 } ICA_BR_DATA_HEADER, * PICA_BR_DATA_HEADER;
 
+#define sizeof_ICA_BR_DATA_HEADER	14
+    
 /*
  *  DateType
  */
@@ -481,6 +492,8 @@ typedef struct _ICA_BR_DATA_APPLICATION {
     USHORT AppFlags;       // application flags (see APPFLAG_?)
 } ICA_BR_DATA_APPLICATION, * PICA_BR_DATA_APPLICATION;
 
+#define sizeof_ICA_BR_DATA_APPLICATION	12
+    
 /*
  *  AppFlags
  */
@@ -496,26 +509,29 @@ typedef struct _ICA_BR_DATA_GATEWAY {
     USHORT Version;         // version of this structure
 } ICA_BR_DATA_GATEWAY, * PICA_BR_DATA_GATEWAY;
 
+#define sizeof_ICA_BR_DATA_GATEWAY	2
+    
 /*
  *  Browser data structure (DATATYPE_LOADDATA)
  */
 typedef struct _ICA_BR_DATA_LOADDATA {
     USHORT Version;                // version of this structure
-    ULONG LoadLevel;               // load on computer (0-10000) 0=idle
-    ULONG LoadWinStations;         // winstation load (0-10000)
-    ULONG RatioWinStations;
-    ULONG LoadUserLicenses;        // user license load (0-10000)
-    ULONG RatioUserLicenses;
-    ULONG LoadPageFile;            // page file load (0-10000)
-    ULONG RatioPageFile;
-    ULONG LoadPageFaults;          // page fault load (0-10000)
-    ULONG RatioPageFaults;
-    ULONG LoadMemory;              // memory load (0-10000)
-    ULONG RatioMemory;
-    ULONG LoadProcessor;           // process load (0-10000)
-    ULONG RatioProcessor;
+    UCHAR LoadLevel[4];            // load on computer (0-10000) 0=idle
+    UCHAR LoadWinStations[4];      // winstation load (0-10000)
+    UCHAR RatioWinStations[4];
+    UCHAR LoadUserLicenses[4];     // user license load (0-10000)
+    UCHAR RatioUserLicenses[4];
+    UCHAR LoadPageFile[4];         // page file load (0-10000)
+    UCHAR RatioPageFile[4];
+    UCHAR LoadPageFaults[4];       // page fault load (0-10000)
+    UCHAR RatioPageFaults[4];
+    UCHAR LoadMemory[4];           // memory load (0-10000)
+    UCHAR RatioMemory[4];
+    UCHAR LoadProcessor[4];        // process load (0-10000)
+    UCHAR RatioProcessor[4];
 } ICA_BR_DATA_LOADDATA, * PICA_BR_DATA_LOADDATA;
 
+#define sizeof_ICA_BR_DATA_LOADDATA	(13*4 + 2)
 
 
 /*=============================================================================
@@ -533,6 +549,8 @@ typedef struct _ICA_BR_REQUEST_MASTER {
     USHORT MasterReqFlags;
 } ICA_BR_REQUEST_MASTER, * PICA_BR_REQUEST_MASTER;
 
+#define sizeof_ICA_BR_REQUEST_MASTER	(sizeof(ICA_BR_HEADER) + 2)
+    
 /*
  *  MasterReqFlags
  */
@@ -626,6 +644,8 @@ typedef struct _ICA_BR_REQUEST_DATA {
     USHORT CodePage;      // Code page
 } ICA_BR_REQUEST_DATA, * PICA_BR_REQUEST_DATA;
 
+#define sizeof_ICA_BR_REQUEST_DATA	(sizeof(ICA_BR_HEADER) + 10)
+    
 /*
  *  BR_DATA
  *
@@ -644,6 +664,7 @@ typedef struct _ICA_BR_DATA {
     USHORT CodePage;       // Code page
 } ICA_BR_DATA, * PICA_BR_DATA;
 
+#define sizeof_ICA_BR_DATA	(sizeof(ICA_BR_HEADER) + 10)
 
 
 /*
@@ -686,6 +707,8 @@ typedef struct _ICA_BR_REQUEST_STATS {
     ICA_BR_HEADER Header;
     USHORT StatsFlags;      // statistic flags (see STATS_?)
 } ICA_BR_REQUEST_STATS, * PICA_BR_REQUEST_STATS;
+
+#define sizeof_ICA_BR_REQUEST_STATS	(sizeof(ICA_BR_HEADER) + 2)
 
 /*
  *  StatsFlags
@@ -782,14 +805,16 @@ typedef struct _ICA_BR_REQUEST_LICENSE {
  */
 typedef struct _ICA_BR_LICENSE_COUNTS {
     USHORT Version;              // version of this structure
-    ULONG PoolInstalled;
-    ULONG PoolInUse;
-    ULONG LocalInstalled;
-    ULONG LocalInUse;
-    ULONG TotalInstalled;
-    ULONG TotalInUse;
+    UCHAR PoolInstalled[4];
+    UCHAR PoolInUse[4];
+    UCHAR LocalInstalled[4];
+    UCHAR LocalInUse[4];
+    UCHAR TotalInstalled[4];
+    UCHAR TotalInUse[4];
 } ICA_BR_LICENSE_COUNTS, * PICA_BR_LICENSE_COUNTS;
 
+#define sizeof_ICA_BR_LICENSE_COUNTS	(26)
+    
 /*
  *  BR_LICENSE
  *
@@ -802,7 +827,8 @@ typedef struct _ICA_BR_LICENSE {
     USHORT fLicense;
 
     /* version 2 */
-    ICA_BR_LICENSE_COUNTS Counts;
+    //ICA_BR_LICENSE_COUNTS Counts;
+    CHAR Counts[sizeof_ICA_BR_LICENSE_COUNTS];
 } ICA_BR_LICENSE, * PICA_BR_LICENSE;
 
 
@@ -836,7 +862,8 @@ typedef struct _SAP_RESPONSE {
     USHORT IntermediateNetworks;
 } SAP_RESPONSE, * PSAP_RESPONSE;
 
-
+#define SAP_RESPONSE	66
+    
 /*=============================================================================
 ==   ICA Browser APIs
 =============================================================================*/

@@ -1,4 +1,4 @@
-# Makefile for ICAClient project
+## Makefile for ICAClient project
 # RISC OS client for Citrix ICA protocol
 # SJM 17 Dec 1997
 
@@ -100,15 +100,15 @@ COMMONLIBSZ=	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/inetlibzm.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/toolboxlib.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/eventlibm.o
 
-APPLIBS=	${WENGINELIB}  ${WDLIB}  ${PDLIB}  ${TDLIB}  ${NRLIB}  ${SDLIB} \
+APPLIBS=	${WENGINELIB}  ${WDLIB}  ${PDLIB}  ${TDLIB}  ${NRLIB} ${NELIB}  ${SDLIB} \
 		${VDLIB} \
 		${CITRIXLIB}  
 
-APPLIBSD=	${WENGINELIBD} ${WDLIBD} ${PDLIBD} ${TDLIBD} ${NRLIBD} ${SDLIBD} \
+APPLIBSD=	${WENGINELIBD} ${WDLIBD} ${PDLIBD} ${TDLIBD} ${NRLIBD} ${NELIBD} ${SDLIBD} \
 		${VDLIBD} \
 		${CITRIXLIBD}
 
-APPLIBSZ=	${WENGINELIBZ} ${WDLIBZ} ${PDLIBZ} ${TDLIBZ} ${NRLIBZ} ${SDLIBZ} \
+APPLIBSZ=	${WENGINELIBZ} ${WDLIBZ} ${PDLIBZ} ${TDLIBZ} ${NRLIBZ} ${NELIBZ} ${SDLIBZ} \
 		${VDLIBZ} \
 		${CITRIXLIBZ}
 
@@ -235,7 +235,7 @@ install_rom_dirs:
 	@-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}/ini
 	@echo Installed ROM dirs
 
-installrom: ${APPZ} install_rom_dirs install_res_nc2
+installrom: ${APPZ} install_rom_dirs
 	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!BootROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Boot,feb
 	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help	${ROMDIR}/Resources/${COUNTRY}
 	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Run,feb
@@ -246,6 +246,7 @@ installrom: ${APPZ} install_rom_dirs install_res_nc2
 	@${CP} ${CPFLAGS} Resources/ini/appsrv			${ROMDIR}/Resources/${COUNTRY}/ini
 	@${CP} ${CPFLAGS} Resources/ini/module			${ROMDIR}/Resources/${COUNTRY}/ini
 	@${CP} ${CPFLAGS} Resources/ini/wfclient		${ROMDIR}/Resources/${COUNTRY}/ini
+	@restool merge ${ROMDIR}/Resources/${COUNTRY}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_nc2,fae
 	@${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
 	@echo Installed ${COMPONENT} aof in ${ROMDIR}
 	@${CP} ${CPFLAGS} src/app/icaclient.h			${ROMDIR}/h/icaclient
@@ -280,19 +281,6 @@ cleanmakepass:
 
 # ----------------------------------------------------------------------------------------------------
 
-mergetb: mergetb,ff8
-
-mergetb,ff8: src/app/mergetb.o ${CITRIXLIB}
-	${LD} ${LDFLAGS} -o 'mergetb,ff8' src/app/mergetb.o ${CITRIXLIB} $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
-	ls -l '$@'
-
-
-cleanmergetb:
-	${RM} src/app/mergetb.o 'mergetb,ff8'
-	@echo cleaned mergetb
-
-# ----------------------------------------------------------------------------------------------------
-
 # Components
 
 # LIBRARY
@@ -303,6 +291,7 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/vdu.c \
 		src/lib/encrypt/encrypt.c \
 		src/lib/ini/iniapi.c \
+		src/lib/io/icabrows/icabrows.c src/lib/io/tcpro/tcpro.c \
 		src/lib/log/logapi.c \
 		src/lib/riscos/dll/dll.c \
 		src/lib/riscos/kbd/kbdapi.c \
@@ -311,14 +300,13 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/riscos/vio/vioread.c src/lib/riscos/vio/vioscrll.c src/lib/riscos/vio/viowrt.c \
 		src/lib/riscos/vio/vioro.c src/lib/riscos/vio/viochars.c 
 
-#		src/lib/io/icabrows/icabrows.c rc/lib/io/tcpro/tcpro.c \
-
 CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/cfgload/cfgload.o \
 		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/machine.o \
 		src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/vdu.o \
 		src/lib/encrypt/encrypt.o \
 		src/lib/ini/iniapi.o \
+		src/lib/io/icabrows/icabrows.o src/lib/io/tcpro/tcpro.o \
 		src/lib/log/logapi.o \
 		src/lib/riscos/dll/dll.o \
 		src/lib/riscos/kbd/kbdapi.o \
@@ -330,9 +318,10 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/cfgload/cfgload.od \
 		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/machine.od \
-		 src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
+		src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
 		src/lib/encrypt/encrypt.od \
 		src/lib/ini/iniapi.od \
+		src/lib/io/icabrows/icabrows.od src/lib/io/tcpro/tcpro.od \
 		src/lib/log/logapi.od \
 		src/lib/riscos/dll/dll.od \
 		src/lib/riscos/kbd/kbdapi.od \
@@ -341,12 +330,14 @@ CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/riscos/vio/vioread.od src/lib/riscos/vio/vioscrll.od src/lib/riscos/vio/viowrt.od \
 		src/lib/riscos/vio/vioro.od src/lib/riscos/vio/viochars.od
 
+
 CITRIXLIBOBJSZ=	src/lib/cfgini/cfgini.oz \
 		src/lib/cfgload/cfgload.oz \
 		src/lib/clib/delay.oz src/lib/clib/fileio.oz src/lib/clib/loadstr.oz src/lib/clib/machine.oz \
 		src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/vdu.oz \
 		src/lib/encrypt/encrypt.oz \
 		src/lib/ini/iniapi.oz \
+		src/lib/io/icabrows/icabrows.oz src/lib/io/tcpro/tcpro.oz \
 		src/lib/log/logapi.oz \
 		src/lib/riscos/dll/dll.oz \
 		src/lib/riscos/kbd/kbdapi.oz \
@@ -382,10 +373,10 @@ src/lib/ini/iniapi.o src/lib/ini/iniapi.od src/lib/ini/iniapi.oz: src/lib/ini/he
 
 # NR
 
-NRLIBSRC=	src/dll/nr/common/nrapi.c  src/dll/nr/nrtcpro/nrtcpro.c
-NRLIBOBJS=	src/dll/nr/common/nrapi.o  src/dll/nr/nrtcpro/nrtcpro.o
-NRLIBOBJSD=	src/dll/nr/common/nrapi.od src/dll/nr/nrtcpro/nrtcpro.od
-NRLIBOBJSZ=	src/dll/nr/common/nrapi.oz src/dll/nr/nrtcpro/nrtcpro.oz
+NRLIBSRC=	src/dll/nr/common/nrapi.c  src/dll/nr/nrtcpro/nrtcpro.c src/dll/nr/nrica/nrica.c
+NRLIBOBJS=	src/dll/nr/common/nrapi.o  src/dll/nr/nrtcpro/nrtcpro.o src/dll/nr/nrica/nrica.o
+NRLIBOBJSD=	src/dll/nr/common/nrapi.od src/dll/nr/nrtcpro/nrtcpro.od src/dll/nr/nrica/nrica.od
+NRLIBOBJSZ=	src/dll/nr/common/nrapi.oz src/dll/nr/nrtcpro/nrtcpro.oz src/dll/nr/nrica/nrica.oz
 
 ${NRLIB}:	${NRLIBOBJS}
 	${LIBFILE} ${LIBFILEFLAGS} -o ${NRLIB} ${NRLIBOBJS}

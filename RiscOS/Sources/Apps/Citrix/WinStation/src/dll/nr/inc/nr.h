@@ -52,7 +52,7 @@ typedef struct _NR {
 
 //   USHORT NotUsed;
     PCHAR pProtocolName;
-
+    PPLIBPROCEDURE pDeviceProcedures;
 } NR;
 
 /*
@@ -62,5 +62,7 @@ typedef struct _PDERRORMESSAGE {
     int Error;
     char * pMessage;
 } PDERRORMESSAGE, * PPDERRORMESSAGE;
+
+#define ERROR_HOST_NOT_FOUND 0xFFFF
 
 #endif //__NR_H__
