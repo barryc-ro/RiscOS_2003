@@ -71,6 +71,9 @@
 ; 02 Jul 97 BAR   0.28          Correct mistake in CheckSoakTest.
 ; 02 Jul 97 BAR   0.29          Now sit on PostInit service call and then
 ;                               add acall back.
+; 30 Jul 1997 RWB	0.30	Seriously re-write of smartcard handling code to
+;				make it work
+
 
         LEADR   Module_LoadAddr
 
@@ -93,18 +96,23 @@ CR      *       13
 LEDs_RedNotGreen * 2_11111011	; bit 1 high, bit 2 low, other bits 1 so inputs
 LEDs_GreenNotRed * 2_11111101	; bit 1 low, bit 2 high, other bits 1 so inputs
 
-; Timeouts for parallel port bootstrap
 
-Timeout_BGET		*	300		; go back to start of protocol if BGET takes longer than this
+Timeout_BGET			* 300	; timeouts for parallel port bootstrap
+Event_Expansion_SCInterface 	* 0
+Event_CardOK      		* 0	; card inserted and understood
+
+; workspace flag definitions
+flag_callback_set       * 1:SHL:0
+flag_claimed_events	* 1:SHL:1
 
 ; Header string from parallel port
-
 			GBLS	PTHeader
 PTHeader		SETS	"ProdTest"
 
 ; Module workspace
                         ^       0, wp
 EASISpaceAddress	#	4
+Flags			# 	4
  [ SmartCardSupported
 Buffer			#	8
  ]
@@ -120,8 +128,8 @@ AudioPacketDescriptor	#	PacketDescriptorSize ; audio packet descriptor
 StackPtr		#	4	; flat stack ptr inside bootstrap
 PoduleBuffer      	#       16      ; podule header
  [ international
-MessageFile_Block 	#     16
-MessageFile_Open  	#     4
+MessageFile_Block 	#     	16
+MessageFile_Open  	#     	4
  ]
 
 
@@ -133,7 +141,7 @@ Module_BaseAddr
 
         &       0                               ; no app start entry
         &       Mod_Init    -Module_BaseAddr
-        &       Mod_Die     -Module_BaseAddr
+        &       Mod_Final   -Module_BaseAddr
         &       Mod_Service -Module_BaseAddr
         &       Mod_Title   -Module_BaseAddr
         &       Mod_HelpStr -Module_BaseAddr
@@ -151,7 +159,9 @@ Mod_HelpStr    =       "SoakTest", TAB, "0.30 (29 Jul 1997)", 0
 Mod_HC_Table
         Command SoakTest, 0, 0
 	Command Bootstrap, 0, 0
+ [ SmartCardSupported
 	Command CheckCard, 0, 0
+ ]
         =       0
 
 SoakTest_Help	 = "*SoakTest performs a soak test", CR
@@ -160,8 +170,10 @@ SoakTest_Syntax  = "Syntax: *SoakTest", 0
 Bootstrap_Help   = "*Bootstrap performs a parallel port bootstrap", CR
 Bootstrap_Syntax = "Syntax: *Bootstrap", 0
 
+ [ SmartCardSupported
 CheckCard_Help   = "*CheckCard checks validity of soaktest card", CR
 CheckCard_Syntax = "Syntax: *CheckCard", 0
+ ]
 
         ALIGN
 
@@ -180,18 +192,30 @@ Mod_Init 	ENTRY
         	SWI     XOS_Module
 	        EXIT    VS
 
-	        STR     r2, [r12]	; save address in my workspace pointer,
+	        STR     r2, [wp]	; save address in my workspace pointer,
 05
-        	MOV     r12, r2
+        	MOV     wp, r2
+        	
+; clear workspace
+		MOV	r0, #0
+		STR	r0, Flags
 
+ [ SmartCardSupported
+		BL	claim_vectors
+		EXIT	VS
+ ]
         	EXITS
 
 ; **************************************************************************
 ;
-;       Mod_Die - Die entry
+; Mod_Final
 ;
+Mod_Final	ENTRY	"r0-r3"
 
-Mod_Die * Module_BaseAddr	; nothing to do yet
+ [ SmartCardSupported
+ 		BL	release_vectors
+ ]
+		EXITS
 
 ; **************************************************************************
 ;
@@ -203,23 +227,15 @@ Mod_Die * Module_BaseAddr	; nothing to do yet
 
 Mod_Service 	ROUT
 
- [ JoysticksSupported :LOR: SmartCardSupported
+ [ JoysticksSupported
 		TEQ	r1, #Service_PostInit	; look for post init
- ]
 		MOVNE	pc, lr
-
-		Entry   "r0-r1"
+ |
+ 		MOV	pc, lr	
+ ]
+		ENTRY
 
         	LDR     wp, [r12]	; sort out wp here rather than later
-
- [ SmartCardSupported
-		TEQ	r1, #Service_PostInit
-		BNE	%10
-	        ADDR    r0,Mod_CalledBack
-        	MOV     r1,r12
-	        SWI     XOS_AddCallBack
-10
- ]
 
  [ JoysticksSupported
 		TEQ	r1, #Service_PostInit
@@ -229,16 +245,71 @@ Mod_Service 	ROUT
 		CMP	r0, #2		; is r0 = 2 ? : BootStrap Smart Card
 		BNE	%15
 		BL	BootstrapWPEntry
-		B	%20
+		B	%30
 15
 		CMP	r0, #1		; is r0 = 1 ? : SoakTest Smart Card
-		BNE	%20
+		BNE	%30
 		BL	SoakTestWPEntry
+		B	%30
 20
  ]
+30
 		EXITS
 
 ; *****************************************************************************
+
+ [ SmartCardSupported
+; *****************************************************************************
+; claim the event vector and enable the event
+;
+claim_vectors	ENTRY	"r0-r2"
+
+; claim vectors
+		MOV	r0, #EventV
+		ADDR	r1, event_handler
+		MOV	r2, wp
+		SWI	XOS_Claim
+		BVS	%10
+
+; enable expansion event
+		MOV	r0, #14			; enable
+		MOV	r1, #Event_Expansion
+		SWI	XOS_Byte
+                BVS   	%10
+                
+                LDR	r0, Flags
+                ORR	r0, r0, #flag_claimed_events
+                STR	r0, Flags
+                
+		EXITS
+; error
+10		
+                STRVS   r0, [sp]
+                EXIT    VS
+
+; *****************************************************************************
+
+; *****************************************************************************
+; disable the event and release the vector
+release_vectors	ENTRY	"r0-r2"
+ 		LDR	r0, Flags
+ 		TST	r0, #flag_claimed_events
+ 		BEQ	%10
+ 		
+; disable expansion event
+		MOV	r0, #13			; disable
+		MOV	r1, #Event_Expansion
+		SWI	XOS_Byte
+; release ventor
+		MOV	r0, #EventV
+		ADDR	r1, event_handler
+		MOV	r2, wp
+		SWI	XOS_Release
+10
+		EXITS
+; *****************************************************************************
+ ]
+
 
 ; *****************************************************************************
 
@@ -290,25 +361,74 @@ CheckForSoakConnector Entry "r1-r3"
 
 ; *****************************************************************************
 
+
+ [ SmartCardSupported
+event_handler	ENTRY	"r0-r2"
+		TEQ	r0, #Event_Expansion
+		TEQEQ	r1, #Event_Expansion_SCInterface
+		TEQEQ	r2, #Event_CardOK
+		EXITS	NE
+		
+; look to see if callback already setup
+		LDR	r0, Flags
+		TST	r0, #flag_callback_set
+		EXITS	NE
+		
+; indicate we are setting callback		
+		ORR	r0, r0, #flag_callback_set
+		STR	r0, Flags
+
+		MOV	r2, pc			; push supervisor link register
+		ORR	r0, r2, #SVC_mode
+		TEQP	r0, #0
+		NOP
+
+		Push	"lr"
+	        ADDR    r0,event_callback
+        	MOV     r1,r12
+	        SWI     XOS_AddCallBack
+		Pull	"lr"
+
+		TEQP	r2, #0
+		NOP
+		
+		EXITS
 ; *****************************************************************************
 ;
 ; callback was set during post init
 ;
-Mod_CalledBack 	ENTRY "r0-r11"
+event_callback 	ENTRY "r0"
 
+		BL	release_vectors 	; detach from things
 		BL	CheckForSmartCard
-
-		CMP	r0, #2		; is r0 = 2 ? : BootStrap Smart Card
+		
+		CMP	r0, #2		; BootStrap Smart Card
 		BNE	%10
+		BL	standby_online
 		BL	BootstrapWPEntry
 		B	%20
 10	
-		CMP	r0, #1		; is r0 = 1 ? : SoakTest Smart Card	
+		CMP	r0, #1		; SoakTest Smart Card	
 		BNE	%20
+		
+		BL	standby_online
 		BL	SoakTestWPEntry
 20
 		EXITS
 ; *****************************************************************************
+
+standby_online 	ENTRY	"r0"
+
+		SWI	XStandby_State
+		BVS	%20
+		TST	r0, #1:SHL:0 	; bit 0 indicates state
+		BEQ	%20		; not in standby
+
+		MOV	r0, #0
+		SWI	XStandby_Online
+		
+20		
+		EXITS
 
 ; **************************************************************************
 ;
@@ -337,9 +457,6 @@ CheckCard_Code 	ENTRY "r0-r2"
 40
 		EXITS
 ; **************************************************************************
-
-
- [ SmartCardSupported
 
 ; **************************************************************************
 ;
