@@ -14,6 +14,7 @@
 #include "msgs.h"
 #include "os.h"
 #include "swis.h"
+#include "visdelay.h"
 
 #include "config.h"
 #include "makeerror.h"
@@ -75,7 +76,7 @@ static int hotlist__compare_used(const void *o1, const void *o2)
 {
     const hotlist_item **item1 = (const hotlist_item **)o1;
     const hotlist_item **item2 = (const hotlist_item **)o2;
-    return (*item1)->last_used - (*item2)->last_used;
+    return (*item2)->last_used - (*item1)->last_used;
 }
 
 static hotlist_item *hotlist__find(const char *url, const char *title)
@@ -483,6 +484,10 @@ static BOOL hotlist__write_nvram(void)
 	}
     }
 
+    /* terminate block if not filled space */
+    if (used < size)
+	data[used++] = 0;
+    
     /* write to NVRAM */
     _swix(NVRAM_Write, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, data, used, &rc);
     
@@ -499,7 +504,7 @@ static BOOL hotlist__write_nvram(void)
 static BOOL hotlist__read_nvram(void)
 {
     hotlist_info info;
-    int size, used, rc;
+    int size, rc;
     char *data, *s;
     
     STBDBG(("hotlist__read_nvram: enter\n"));
@@ -528,10 +533,8 @@ static BOOL hotlist__read_nvram(void)
 
 	STBDBG(("hotlist__read_nvram: format %d record size %d\n", data[0], data[1]));
 
-	used = 2;
-
 	/* carry on reading until reached end of buffer or a null byte is found */
-	s = &data[used];
+	s = &data[2];
 	while (s && *s)
 	{
 	    int i;
@@ -540,12 +543,12 @@ static BOOL hotlist__read_nvram(void)
 
 	    for (i = 0; i < info.record_size; i++)
 	    {
-		char *nl = strchr(&data[used], '\n');
+		char *nl = strchr(s, '\n');
 
 		if (nl)
 		    *nl = 0;
 	    
-		STBDBG(("hotlist__read_nvram: read line (%d) '%s'\n", i, s));
+		STBDBG(("hotlist__read_nvram: read line (%d) s %p nl %p '%s'\n", i, s, nl, s));
 
 		switch (i)
 		{
@@ -568,7 +571,7 @@ static BOOL hotlist__read_nvram(void)
 	    STBDBG(("hotlist__read_nvram: '%s' '%s' 0x%08x\n", url, title, last_used));
 
 	    if (url)
-		hotlist__add(url, title, last_used, FALSE);
+		hotlist__add(strdup(url), strdup(title), last_used, FALSE);
 	}
     }
 
@@ -598,6 +601,8 @@ BOOL hotlist_read(const char *file)
     
     STBDBG(("hotlist_read: %s (%d)\n", file, gstrans_not_null(file)));
 
+    visdelay_begin();
+
     if (gstrans_not_null(file))
     {
 	FILE *f;
@@ -621,6 +626,8 @@ BOOL hotlist_read(const char *file)
 	hotlist__trim_length();
 	hotlist__sort(hotlist__compare_alpha);
     }
+
+    visdelay_end();
     
     hotlist_changed = FALSE;
 
@@ -633,6 +640,8 @@ BOOL hotlist_write(const char *file)
 
     STBDBG(("hotlist_write: %s (%d)\n", file, gstrans_not_null(file)));
 
+    visdelay_begin();
+    
     if (gstrans_not_null(file))
     {
 	FILE *f;
@@ -654,6 +663,8 @@ BOOL hotlist_write(const char *file)
 	rc = hotlist__write_nvram();
     }
     
+    visdelay_end();
+
     hotlist_changed = !rc;
 
     return rc;
