@@ -20,11 +20,6 @@
 #
 EXP_HDR = <export$dir>
 
-#
-# Generic options:
-#
-include StdTools
-
 # To switch between making debugging and non-debugging versions of SprExtend:
 #   change the #define of DEBUG at the top of c.PutScaled
 #   change the SETL of 'debug' in sources.SprExtend.
@@ -34,6 +29,11 @@ TFLAGS   = -APCS 3/32bit/nofp
 CDEFINES = -DRISCOS -DASMHUFF
 #CDEFINES += -DDEBUG
 CINCLUDES = -IC:
+
+#
+# Generic options:
+#
+include StdTools
 
 #
 # Libraries
