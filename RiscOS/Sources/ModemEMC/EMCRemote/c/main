@@ -22,6 +22,9 @@
  *		 added configuration using NC smartcard, and local (non-server based)
  *		 test modes.  All this options stuff would be better in a separate
  *		 source file now.
+ * 08-Jul-97 jmf Tweak to support very large numbers of scripts (increased limits
+ *		 and altered menu options).  
+ *		 Print blank line every 100 in H tests.
  */
 
 #include <stdio.h>
@@ -53,22 +56,23 @@ int  iConnectionCount = 0;
 int  flagTies = 0;
 
 
-/*  Using smartcard config file.
+/*  Structure holding user-definable named scripts.
  */
 
 #define SCRIPT_NAME_MAX 64
-#define SCRIPT_LEN_MAX 	1024
+#define SCRIPT_LEN_MAX 	2048
 
 struct script {
     char name[SCRIPT_NAME_MAX];
     char script[SCRIPT_LEN_MAX];
 };
 
-struct script Scripts[MAX_SCRIPTS] = 
-{
-	{"init", DEFAULT_INIT},
-	{"dial", DEFAULT_DIAL}
-};
+struct script *Scripts = NULL;
+
+
+/* Number of scripts currently known.
+ */
+int iNumScripts = 0;
 
 
 /*  Read the options file from the NC smartcard.
@@ -110,7 +114,7 @@ static char *read_file_options (const char *fname)
 	return NULL;
 
     } 
-    buf = malloc (space = SCRIPT_LEN_MAX*3);
+    buf = malloc (space = SCRIPT_LEN_MAX*MAX_SCRIPTS);
     nbytes = fread (buf, sizeof(char), space-1, fileOptions);
     buf[nbytes] = '\0';
     fclose(fileOptions);
@@ -142,11 +146,26 @@ static void script_add (const char *name, const char *script)
     {
         strcpy(Scripts[i].name, name);
 	strcpy(Scripts[i].script, script);
+        iNumScripts++;
     }
     else
     {
 	 printf("Too many scripts - script '%s' ignored\n", name);
     }
+}
+
+/*  Search for a script called 'name' and return a pointer to the script string.
+ */
+static const char *script_find (const char *name)
+{
+    int i;
+    
+    for (i = 0; i < iNumScripts; i++)
+    {
+        if (strcmp(Scripts[i].name, name) == 0)
+	    return Scripts[i].script;
+    }
+    return NULL;
 }
 
 /*  Save the current options and scripts to the NC smartcard.
@@ -385,7 +404,7 @@ initialise_serial()
  * Send a script to the modem.
  */
 void
-do_script(char *script)
+do_script(const char *script)
 {
   char *nl;
   char strBuffer[BUFFER_SIZE];
@@ -403,7 +422,7 @@ do_script(char *script)
     printf ("> %s\n", script);
 
 #ifndef EMCREMOTE_NOMODEM
-    transmit (script, CR);
+    transmit ((char *)script, CR); /* temp cast */
 #endif    
     *nl = '\n';           			/* put back end delimiter */
     script = nl+1;
@@ -512,9 +531,6 @@ setup_command (void)
 
     do 
     {
-        int i;
-	int scriptMenuBase;
-	        
         printf("\n");
         printf("         Options (%s)\n", strDefTitle);
         printf("   1.....Read options from file\n");        
@@ -528,13 +544,8 @@ setup_command (void)
         printf("   5.....Change options\n");
         printf("   6.....New script\n");        
         printf("   7.....Wipe scripts\n");                
-        
-        printf("\n");
-	scriptMenuBase = 'a';
-        for (i = 0; (i < MAX_SCRIPTS) && (Scripts[i].name[0] != '\0'); i++)
-        {
-            printf("   %c.....Change %s script\n", scriptMenuBase+i, Scripts[i].name);
-        }
+        printf("   8.....List scripts\n");
+        printf("   9.....Change script\n");
         printf("\n");
 
         printf("   q.....Exit SETUP\n");
@@ -545,8 +556,7 @@ setup_command (void)
         {
             do { ch = get_key(0); } while (ch==0);
         } while ((ch != 'q') && (ch != 'Q') && 
-        	 !((ch >= '1') && (ch <= '7')) &&
-        	 !((ch >= scriptMenuBase) && (ch <= scriptMenuBase+i-1)));
+        	 !((ch >= '1') && (ch <= '9')));
         	 
         printf("%c\n\n\n", ch);
 
@@ -681,21 +691,44 @@ setup_command (void)
     		  	Scripts[i].name[0] = '\0';
     		  	Scripts[i].script[0] = '\0';    		  	
     		}
+    		iNumScripts = 2;
 		break;
 	    }
-	    
-	    default:
+
+	    case '8': /* list scripts */
+	    {
+	        int i;
+	        
+	        for (i = 0; i < iNumScripts; i++)
+	            printf("%s\n", Scripts[i].name);
+                break;
+	    }
+	    	    
+	    case '9': /* change script */
 	    {
 		char script[SCRIPT_LEN_MAX];
 		char line[LINE_SIZE];
+
+                char name[SCRIPT_NAME_MAX];
+                const char *oscript;
+            		
+		printf("Script name: ");
+	        get_text(name, sizeof(name)-1);
+
+                oscript = script_find(name);
+                if (oscript == NULL)
+                {
+                   printf("No such script\n");
+		   break;
+	        }
+
 		
-		printf("Old %s script:\n%s\n", Scripts[ch-scriptMenuBase].name, 
-		       Scripts[ch-scriptMenuBase].script);
+		printf("Old %s script:\n%s\n", name, oscript);
+
 		printf("Enter new %s script lines.\nNewline to leave, '.' to end.\n", 
-		       Scripts[ch-scriptMenuBase].name);
+		       name);
 
 		*script = '\0';		
-
 		for (;;) /* break out */
 		{
 		    get_text(line, sizeof(line)-1);
@@ -717,7 +750,7 @@ setup_command (void)
 		}
 		
 		if (*line == '.')
-        	    script_add(Scripts[ch-scriptMenuBase].name, script);
+        	    script_add(name, script);
 		break;		
 	    }
     	} /* switch (ch) */
@@ -731,7 +764,7 @@ void
 receive_h(void)
 {
   char ch;
-  int i;
+  int i, lines;
   
   if (!iOnline) return;
 
@@ -741,6 +774,7 @@ receive_h(void)
   while (examine_buffer(iInputBuffer)) ; /* while input buffer is empty */
 
   i = 0;
+  lines = 0;
   while (examine_buffer(0))  /* while keyboard buffer is not empty */
   {
     ch = get_char();
@@ -749,9 +783,19 @@ receive_h(void)
       print_char(ch);
       if (++i >= 79)
       {
+	/* newline every 79 chars */
         print_char(CR);
         print_char(LF);        
         i = 0;
+        
+        if (++lines >= 100)
+        {
+	  /* blank line every 100 lines */
+	  print_char(CR);
+	  print_char(LF);
+	  lines = 0;
+        }
+        
       }  
     }
   }
@@ -764,12 +808,13 @@ receive_h(void)
 void
 print_h(void)
 {
-  int i;
+  int i, lines;
    
   printf("Printing h's - hit any key to stop.\n");
   wait (100);
 
   i = 0;
+  lines = 0;
   while (examine_buffer(0))  /* while keyboard buffer is not empty */
   {
     print_char('H');
@@ -778,6 +823,16 @@ print_h(void)
       print_char(CR);
       print_char(LF);
       i = 0;
+
+      if (++lines >= 100)
+      {
+	/* blank line every 100 lines */
+	print_char(CR);
+	print_char(LF);
+	lines = 0;
+      }
+        
+
     }  
   }
   printf("\n");
@@ -790,7 +845,8 @@ void
 print_h2(void)
 {
   int i = 0;
-   
+  int lines = 0;
+     
   printf("Printing h's - hit any key to stop.\n");
   wait (100);
 
@@ -803,6 +859,14 @@ print_h2(void)
       print_char(CR);
       print_char(LF);      
       i = 0;
+
+      if (++lines >= 100)
+      {
+	/* blank line every 100 lines */
+	print_char(CR);
+	print_char(LF);
+	lines = 0;
+      }
     }  
   }
   print_char(PRTOFF);
@@ -881,6 +945,18 @@ main(void)
 
   printf("%s\nVersion %s (%s)\n\n",TITLE,VERSION,DATE);
 
+  Scripts = calloc(MAX_SCRIPTS, sizeof(struct script));
+  if (Scripts == NULL)
+  {
+      printf("Not enough memory\n");
+      return -1;
+  }
+  strcpy(Scripts[0].name , "init");
+  strcpy(Scripts[0].script, DEFAULT_INIT);
+  strcpy(Scripts[1].name , "dial");
+  strcpy(Scripts[1].script, DEFAULT_DIAL);
+  iNumScripts = 2;
+  
   err = initialise_serial();
   if (err != NULL)
   {
@@ -915,14 +991,27 @@ main(void)
     printf("   8.....Enable VDU printer stream\n");    
     printf("   9.....Disable VDU printer stream\n");    
     printf("\n");
-    
+
     scriptMenuBase = 'a';
-    for (i = 2; (i < MAX_SCRIPTS) && (Scripts[i].name[0] != '\0'); i++)
+
+    if (iNumScripts < MAX_MENU_SCRIPTS)
     {
-        printf("   %c.....Run %s script\n", scriptMenuBase+i-2, Scripts[i].name);
+        /*  Not too many scripts, so put up a separate menu option for each.
+         */
+        for (i = 2; (i < MAX_SCRIPTS) && (Scripts[i].name[0] != '\0'); i++)
+        {
+            printf("   %c.....Run %s script\n", scriptMenuBase+i-2, Scripts[i].name);
+        }
     }
-    printf("\n");
+    else
+    {
+        /*  Loads of scripts, so use a single menu option and prompt for name.
+         */
+        printf("   %c.....Run script\n", scriptMenuBase);
+        i = 1;
+    }
     
+    printf("\n");
     printf("   q.....Quit\n");
 
     printf("\nSelect choice : ");
@@ -972,8 +1061,30 @@ main(void)
         break;
 
       default:
-          printf("Running %s script\n", Scripts[ch-scriptMenuBase+2].name);
-          do_script(Scripts[ch-scriptMenuBase+2].script);
+          if (iNumScripts < MAX_MENU_SCRIPTS)
+          {
+              printf("Running %s script\n", Scripts[ch-scriptMenuBase+2].name);
+              do_script(Scripts[ch-scriptMenuBase+2].script);
+          }
+          else
+          {
+            char name[SCRIPT_NAME_MAX];
+            const char *script;
+            		
+	    printf("Run script name: ");
+	    get_text(name, sizeof(name)-1);
+
+            script = script_find(name);
+            if (script == NULL)
+            {
+              printf("No such script\n");
+            }
+            else
+            {
+              printf("Running %s script\n", name);
+              do_script(script);
+            }
+          }
 	  break;
     }
   }
