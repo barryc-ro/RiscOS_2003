@@ -127,6 +127,7 @@ rom_link:
 
 ${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
+	Access $@ rw/r
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
