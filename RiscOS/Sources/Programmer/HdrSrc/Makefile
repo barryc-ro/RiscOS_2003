@@ -18,6 +18,7 @@
 # 25-Aug 99  SBF    Created "Register.Keyboard"; added this to makefile
 # 11-Jan-00  BJGA   Exports Global.IO.h.GenericIO
 # 28-Jan-00  BJGA   Exports Global.IO.h.IOMD
+# 23-Feb-01  SBF    Exports Hdr:UserIF.UserIF plus UI-specific files; added to this makefile
 
 #
 # Paths
@@ -104,6 +105,8 @@ EXPORTS   = \
  ${HDRDIR}.SWIs \
  ${HDRDIR}.Tokens \
  ${HDRDIR}.UpCall \
+ ${HDRDIR}.UserIF.<UserIF> \
+ ${HDRDIR}.UserIF.UserIF \
  ${HDRDIR}.VIDC.VIDC1a \
  ${HDRDIR}.VIDC.VIDC20 \
  ${HDIR}.Global.h.AUN \
@@ -159,6 +162,7 @@ Dirs:
         ${MKDIR} ${HDRDIR}.ImageSize
         ${MKDIR} ${HDRDIR}.Machine
         ${MKDIR} ${HDRDIR}.MEMM
+        ${MKDIR} ${HDRDIR}.UserIF
         ${MKDIR} ${HDRDIR}.VIDC
         ${MKDIR} ${HDIR}.h
         ${MKDIR} ${HDIR}.o
@@ -169,20 +173,21 @@ Dirs:
         ${MKDIR} ${LIBDIR}
 
 clean:
-	${RM} ${FILETYPES}
-	${RM} ${SWIS}
+        ${RM} ${FILETYPES}
+        ${RM} ${SWIS}
         @echo ${COMPONENT}: derived headers cleaned
         ${STRIP}
         @echo ${COMPONENT}: dynamic dependancies removed from makefile
 
 #
-# Special rule for exporting all ImageSize and Machine files.
+# Special rule for exporting all ImageSize, Machine and UserIF files.
 # Trigger by invoking the export with OPTIONS=ALL.
 #
-ALL: ${HDRDIR}.Machine.Machine ${HDRDIR}.ImageSize.<ImageSize> ${HDRDIR}.APCS.<APCS>
-	${CP} hdr.Machine ${HDRDIR}.Machine ${CPFLAGS}
-	${CP} hdr.ImageSize ${HDRDIR}.ImageSize ${CPFLAGS}
-	${CP} hdr.APCS ${HDRDIR}.APCS ${CPFLAGS}
+ALL: ${HDRDIR}.Machine.Machine ${HDRDIR}.UserIF.UserIF ${HDRDIR}.ImageSize.<ImageSize> ${HDRDIR}.APCS.<APCS>
+        ${CP} hdr.Machine ${HDRDIR}.Machine ${CPFLAGS}
+        ${CP} hdr.UserIF ${HDRDIR}.UserIF ${CPFLAGS}
+        ${CP} hdr.ImageSize ${HDRDIR}.ImageSize ${CPFLAGS}
+        ${CP} hdr.APCS ${HDRDIR}.APCS ${CPFLAGS}
 
 #
 # Rules for deriving headers:
@@ -274,7 +279,7 @@ ${HDIR}.Global.IO.h.IOMD:    Hdr.IO.IOMD ${HDR2H};        perl ${HDR2H} Hdr.IO.I
 # C headers:
 ${HDIR}.Global.h.IOCtl:      h.IOCtl;               ${CP} h.IOCtl                  $@ ${CPFLAGS}
 
-# Machine/hardware specific headers:
+# Machine/UI/hardware specific headers:
 ${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
 ${HDRDIR}.Machine.Machine:   hdr.Machine.Machine;   ${CP} hdr.Machine.Machine      $@ ${CPFLAGS}
 ${HDRDIR}.ImageSize.<ImageSize>: hdr.ImageSize.<ImageSize>; ${CP} hdr.ImageSize.<ImageSize> $@ ${CPFLAGS}
@@ -285,7 +290,7 @@ ${HDRDIR}.CPU.FPA:           hdr.CPU.FPA;           ${CP} hdr.CPU.FPA           
 ${HDRDIR}.CPU.Generic26:     hdr.CPU.Generic26;     ${CP} hdr.CPU.Generic26        $@ ${CPFLAGS}
 ${HDRDIR}.CPU.Generic32:     hdr.CPU.Generic32;     ${CP} hdr.CPU.Generic32        $@ ${CPFLAGS}
 ${HDRDIR}.FDC.FDC711:        hdr.FDC.FDC711;        ${CP} hdr.FDC.FDC711           $@ ${CPFLAGS}
-${HDRDIR}.IO.GenericIO:      hdr.IO.GenericIO;      ${CP} hdr.IO.GenericIO 	   $@ ${CPFLAGS}
+${HDRDIR}.IO.GenericIO:      hdr.IO.GenericIO;      ${CP} hdr.IO.GenericIO         $@ ${CPFLAGS}
 ${HDRDIR}.IO.IOC:            hdr.IO.IOC;            ${CP} hdr.IO.IOC               $@ ${CPFLAGS}
 ${HDRDIR}.IO.IOC-A1:         hdr.IO.IOC-A1;         ${CP} hdr.IO.IOC-A1            $@ ${CPFLAGS}
 ${HDRDIR}.IO.IOEB:           hdr.IO.IOEB;           ${CP} hdr.IO.IOEB              $@ ${CPFLAGS}
@@ -295,6 +300,10 @@ ${HDRDIR}.MEMM.ARM600:       hdr.MEMM.ARM600;       ${CP} hdr.MEMM.ARM600       
 ${HDRDIR}.MEMM.MEMC1:        hdr.MEMM.MEMC1;        ${CP} hdr.MEMM.MEMC1           $@ ${CPFLAGS}
 ${HDRDIR}.VIDC.VIDC1a:       hdr.VIDC.VIDC1a;       ${CP} hdr.VIDC.VIDC1a          $@ ${CPFLAGS}
 ${HDRDIR}.VIDC.VIDC20:       hdr.VIDC.VIDC20;       ${CP} hdr.VIDC.VIDC20          $@ ${CPFLAGS}
+
+# User interface specific headers:
+${HDRDIR}.UserIF.<UserIF>:   hdr.UserIF.<UserIF>;   ${CP} hdr.UserIF.<UserIF>      $@ ${CPFLAGS}
+${HDRDIR}.UserIF.UserIF:     hdr.UserIF.UserIF;     ${CP} hdr.UserIF.UserIF        $@ ${CPFLAGS}
 
 # Macros:
 ${HDRDIR}.DDVMacros:         hdr.DDVMacros;         ${CP} hdr.DDVMacros            $@ ${CPFLAGS}
