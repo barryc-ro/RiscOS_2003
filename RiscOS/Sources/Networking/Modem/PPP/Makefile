@@ -67,7 +67,7 @@ DEBUG=		#-DDEBUG
 COMPAT=		-DCOMPAT_INET4
 
 CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wp -depend !Depend -c -throwback -DVJC ${TINYSTUBS}\
+		-zps1 -Wp -depend !Depend -c -DVJC ${TINYSTUBS}\
 		${BLOCKDRIVERS}
 
 ASMFLAGS=       -PreDefine "BlockDrivers SETL {TRUE}"
@@ -141,7 +141,7 @@ pppd:
 s.blockdrive::	Internal.Driver
 	
 o.ppphdr:	cmhg.ppphdr
-		cmhg -p ${BLOCKDRIVERS} -depend !Depend -throwback \
+		cmhg -p ${BLOCKDRIVERS} -depend !Depend \
 		cmhg.ppphdr o.ppphdr h.ppphdr
 
 
@@ -323,36 +323,6 @@ o.pppmodule:	h.mbuf
 o.pppmodule:	h.dialler
 o.pppmodule:	C:h.kernel
 o.pppmodule:	h.svcprint
-o.mbuf:	c.mbuf
-o.mbuf:	C:h.kernel
-o.mbuf:	C:h.swis
-o.mbuf:	TCPIPLibs:sys.h.param
-o.mbuf:	TCPIPLibs:sys.h.types
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:machine.h.endian
-o.mbuf:	TCPIPLibs:machine.h.ansi
-o.mbuf:	TCPIPLibs:machine.h.types
-o.mbuf:	TCPIPLibs:sys.h.syslimits
-o.mbuf:	TCPIPLibs:sys.h.signal
-o.mbuf:	TCPIPLibs:machine.h.signal
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:machine.h.param
-o.mbuf:	TCPIPLibs:machine.h.limits
-o.mbuf:	TCPIPLibs:sys.h.errno
-o.mbuf:	C:h.kernel
-o.mbuf:	TCPIPLibs:sys.h.mbuf
-o.mbuf:	TCPIPLibs:sys.h.malloc
-o.mbuf:	TCPIPLibs:net.h.if
-o.mbuf:	TCPIPLibs:sys.h.socket
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:sys.h.time
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:net.h.if_arp
-o.mbuf:	TCPIPLibs:sys.h.socket
-o.mbuf:	TCPIPLibs:netinet.h.in
-o.mbuf:	TCPIPLibs:netinet.h.if_ether
-o.mbuf:	h.mbuf
-o.ppphdr:	cmhg.ppphdr
 o.serial:	c.serial
 o.serial:	TCPIPLibs:h.errno
 o.serial:	TCPIPLibs:sys.h.errno
@@ -398,3 +368,33 @@ o.serial:	pppd.h.main
 o.serial:	h.serial
 o.serial:	h.dialler
 o.serial:	C:h.kernel
+o.mbuf:	c.mbuf
+o.mbuf:	C:h.kernel
+o.mbuf:	C:h.swis
+o.mbuf:	TCPIPLibs:sys.h.param
+o.mbuf:	TCPIPLibs:sys.h.types
+o.mbuf:	TCPIPLibs:sys.h.cdefs
+o.mbuf:	TCPIPLibs:machine.h.endian
+o.mbuf:	TCPIPLibs:machine.h.ansi
+o.mbuf:	TCPIPLibs:machine.h.types
+o.mbuf:	TCPIPLibs:sys.h.syslimits
+o.mbuf:	TCPIPLibs:sys.h.signal
+o.mbuf:	TCPIPLibs:machine.h.signal
+o.mbuf:	TCPIPLibs:sys.h.cdefs
+o.mbuf:	TCPIPLibs:machine.h.param
+o.mbuf:	TCPIPLibs:machine.h.limits
+o.mbuf:	TCPIPLibs:sys.h.errno
+o.mbuf:	C:h.kernel
+o.mbuf:	TCPIPLibs:sys.h.mbuf
+o.mbuf:	TCPIPLibs:sys.h.malloc
+o.mbuf:	TCPIPLibs:net.h.if
+o.mbuf:	TCPIPLibs:sys.h.socket
+o.mbuf:	TCPIPLibs:sys.h.cdefs
+o.mbuf:	TCPIPLibs:sys.h.time
+o.mbuf:	TCPIPLibs:sys.h.cdefs
+o.mbuf:	TCPIPLibs:net.h.if_arp
+o.mbuf:	TCPIPLibs:sys.h.socket
+o.mbuf:	TCPIPLibs:netinet.h.in
+o.mbuf:	TCPIPLibs:netinet.h.if_ether
+o.mbuf:	h.mbuf
+o.ppphdr:	cmhg.ppphdr
