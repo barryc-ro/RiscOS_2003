@@ -109,7 +109,7 @@ static void convert_box_coords(wimp_box *box, fe_view v)
 static int scroll_by_flags(fe_view v, int flags)
 {
     int scrolled = FALSE;
-    if (v->displaying && v->scrolling != fe_scrolling_NO)
+    if (v->displaying && v->scrolling != fe_scrolling_NONE)
     {
 	if (flags & be_link_VERT)
 	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
@@ -564,7 +564,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	STBDBG(("fe_move_highlight_xy: frames v %p try scrolling\n", v));
 
 	/* try scrolling and highlighting again */
-	if (v->displaying && v->scrolling != fe_scrolling_NO)
+	if (v->displaying && v->scrolling != fe_scrolling_NONE)
 	{
 	    if (flags & be_link_VERT)
 		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
@@ -636,7 +636,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    return;
 	}
 
-	if (v->displaying && v->scrolling != fe_scrolling_NO)
+	if (v->displaying && v->scrolling != fe_scrolling_NONE)
 	{
 	    if (flags & be_link_VERT)
 		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
@@ -680,14 +680,27 @@ void fe_move_highlight(fe_view v, int flags)
 
 /* the given window has just scrolled
  * check that the highlight is still visible
+
+ * There are several cases here.
+ * 1) The link was on the page and is wholly visible still on the page after scrolling.
+ *	Leave where it was
+ * 2) The link was on the page and is partially visible still on the page after scrolling.
+ *	Counts as not visible
+ * 3) The link was on the page and is not at all visible still on the page after scrolling.
+ *	Highlight a link on the page if there was one
+ * 4) The link wasn't on the page although the page had the focus
+ *	Highlight a link on the page if there was one
+ * 4) The link was on the toolbar
+ *	Leave highlight on the toolbar
  */
 
 int fe_ensure_highlight(fe_view v, int flags)
 {
     if (pointer_mode == pointermode_OFF && v && v->displaying)
     {
-	/* v->current_link =  */backend_highlight_link(v->displaying, backend_read_highlight(v->displaying, NULL)/* v->current_link */,
-						 (flags & be_link_BACK) | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | movepointer());
+	backend_highlight_link(v->displaying, backend_read_highlight(v->displaying, NULL),
+			       (flags & be_link_BACK) | be_link_VISIBLE | be_link_INCLUDE_CURRENT |
+			       caretise() | movepointer() | be_link_DONT_FORCE_ON);
     }
     return 0;
 }
@@ -1047,6 +1060,7 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	/* if we are clicking in a text item, that is highlighted, and doesn't have the caret */
 	BOOL had_caret, need_caret;
 
+	had_caret = FALSE;
 	need_caret = (flags & be_item_info_INPUT) && 
 	    backend_read_highlight(v->displaying, &had_caret) == ti &&
 	    !had_caret;
@@ -1068,10 +1082,9 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	    last_click_y = box.y0;
 	    last_click_view = v;
 	    
-#if 0
-	    if (flags & be_item_info_INPUT)
-		v->current_link = backend_highlight_link(v->displaying, ti,
-							 movepointer() | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
+#if 1
+	    if (had_caret)
+		backend_highlight_link(v->displaying, ti, movepointer() | be_link_TEXT | be_link_CARETISE);
 	    else
 #endif
 		e = backend_activate_link(v->displaying, ti, 0);

@@ -678,7 +678,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
 	case key_action_RIGHT:
 	case key_action_RIGHT_OR_OFF:
-	    if (tai->cx < MAX_TEXT_LINE)
+	    if (tai->cx < len /* MAX_TEXT_LINE */) /* SJM: 11/5/97: don't allow movement off the RH edge of text */
 	    {
 		tai->cx++;
 	        flags |= REPOS_CARET;

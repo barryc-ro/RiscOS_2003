@@ -328,6 +328,9 @@ extern void finishselect (SGMLCTX * context, ELEMENT * element)
 	if (!checked && sel->options)
 	    sel->options->flags |= rid_if_CHECKED;
     }
+
+    /* mark that we are finished */
+    sel->flags |= rid_sf_FINISHED;
 }
 
 /*****************************************************************************

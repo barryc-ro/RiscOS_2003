@@ -1773,6 +1773,7 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     tab->userwidth = attributes->value[HTML_TABLE_WIDTH];
     tab->userheight = attributes->value[HTML_TABLE_HEIGHT];
 
+#if 0
     switch (tab->userwidth.type)
     {
     case value_absunit:
@@ -1789,7 +1790,8 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	tab->userwidth.type = value_none;
 	break;
     }
-
+#endif
+    
     if (tab->props != NULL)
     {
 	TABDBG(("Setting table alignment %d\n", tab->props->halign));
@@ -2845,6 +2847,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	break;
 #endif
     case value_pcunit:
+	TABDBG(("table cell size %g\n", attr->u.f));
 	if ( ceil(attr->u.f) > 0 )
 	{
 	    cell->flags |= rid_cf_PERCENT;

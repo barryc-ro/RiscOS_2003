@@ -410,6 +410,7 @@ typedef struct rid_option_item {
 
 typedef int rid_select_flags;
 #define rid_sf_MULTIPLE 0x01
+#define rid_sf_FINISHED 0x02	/* /SELECT has been received */
 
 typedef struct rid_select_item {
     struct rid_form_element base;

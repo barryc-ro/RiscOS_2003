@@ -103,12 +103,14 @@ static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int
 #else
     if (flags & be_link_BACK)
     {
+	/* if moving highlight backwards (up) then item is onscreen if top line is on screen */
         if (box.y0 >= bounds->y0 && box.y0 < bounds->y1)
             return TRUE;
     }
     else
     {
-        if (box.y1 > bounds->y0 && box.y1 <= bounds->y1)
+	/* if moving highlight forwards (down) then item is onscreen if bottom line is on screen */ 
+	if (box.y1 > bounds->y0 && box.y1 <= bounds->y1)
             return TRUE;
     }
 #endif
@@ -117,9 +119,10 @@ static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int
 
 /* ----------------------------------------------------------------------------- */
 
-#define match_item_NONE	0
-#define match_item_LINK	1
-#define match_item_TEXT	2
+#define match_item_NONE		0
+#define match_item_LINK		1
+#define match_item_TEXT		2
+#define match_item_NUMBERS	3
 
 static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 {
@@ -142,17 +145,22 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
     if (ti->tag == rid_tag_INPUT)
     {
 	rid_input_tag tag = ((rid_text_item_input *)ti)->input->tag;
+	rid_input_item *tii = ((rid_text_item_input *)ti)->input;
 
-	if (((rid_text_item_input *)ti)->input->base.tabindex == -1)
+	if (tii->base.tabindex == -1)
 	    return match_item_NONE;
 
 	if (flags & be_link_TEXT)
-	    return tag == rid_it_TEXT || tag == rid_it_PASSWD ? match_item_TEXT : match_item_NONE;
+	    return tag == rid_it_TEXT || tag == rid_it_PASSWD ?
+		(tii->flags & rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
+	    match_item_NONE;
 
 	if (aref_valid && !aref_changed_enough)
 	    return match_item_NONE;
 
-	return tag == rid_it_TEXT || tag == rid_it_PASSWD ? match_item_TEXT : match_item_LINK;
+	return tag == rid_it_TEXT || tag == rid_it_PASSWD ? 
+		(tii->flags & rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
+	    match_item_LINK;
     }
 
     if ((flags & be_link_TEXT) == 0)
@@ -787,7 +795,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	    /* removed the test on the basis that if VISIBLE was set then the item must be partially on screen
 	     * so we's like it to be totally on screen
 	     */
-/* 	    if ((flags & be_link_VISIBLE) == 0) */
+ 	    if ((flags & be_link_DONT_FORCE_ON) == 0)
 	    {
 #if USE_MARGINS
 		frontend_view_ensure_visable(doc->parent, x + doc->margin.x0, y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
@@ -798,7 +806,8 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 
             if (item_changed || (flags & (be_link_ONLY_CURRENT|be_link_CARETISE)))
 	    {
-		if ((flags & be_link_CARETISE) && match_item(ti, be_link_TEXT, NULL))
+		int match = match_item(ti, be_link_TEXT, NULL);
+		if (match == match_item_NUMBERS || (match == match_item_TEXT && (flags & be_link_CARETISE)))
 		{
 		    int offset;
 #if 1

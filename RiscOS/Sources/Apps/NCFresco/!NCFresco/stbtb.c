@@ -254,6 +254,7 @@ struct tb_button_info
 
 static tb_bar_info *bar_list = NULL;
 static void *tile_sprite = NULL;
+static int secure_light = FALSE;
 
 /* --------------------------------------------------------------------------*/
 /* --------------------------------------------------------------------------*/
@@ -563,14 +564,16 @@ static void remove_title_bar(const char *name)
 {
     struct toolbox_resource_file_object *obj;
     struct menu_object *mobj;
-    MemCheck_checking checking = MemCheck_SetChecking(0, 0);
 
-    frontend_fatal_error((os_error *)_swix(Toolbox_TemplateLookUp, _INR(0,1) | _OUT(0), 0, name, &obj));
-    mobj = (struct menu_object *)obj->header_size;
+    if (_swix(Toolbox_TemplateLookUp, _INR(0,1) | _OUT(0), 0, name, &obj) == NULL && obj)
+    {
+	MemCheck_checking checking = MemCheck_SetChecking(0, 0);
 
-    mobj->title = NULL;
+	mobj = (struct menu_object *)obj->header_size;
+	mobj->title = NULL;
 
-    MemCheck_RestoreChecking(checking);
+	MemCheck_RestoreChecking(checking);
+    }
 }
 
 static os_error *setfocus(int obj)
@@ -657,6 +660,7 @@ static int get_active(tb_bar_info *tbi)
     for (i = 0; i < tbi->n_buttons; i++)
 	if (_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140147, tbi->buttons[i].cmp, &active) == NULL &&
 	    active &&
+	    tbi->buttons[i].cmp != I_SECURE &&	/* security light on is returned as ACTIVE but it's not what we meant */
 	    tbi->buttons[i].cmp != I_DIRECTION)	/* arrow pointing up is returned as ACTIVE but it's not what we meant */
 	    return i;
     return -1;    
@@ -701,7 +705,7 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
 	_swix(IconHigh_Start, _IN(0), 0);
 
 	/* move highlight back into main window at old position */
-	fe_move_highlight(fe_selected_view(), flags | be_link_INCLUDE_CURRENT);
+	fe_move_highlight(fe_selected_view(), flags | be_link_INCLUDE_CURRENT | be_link_VISIBLE | be_link_TEXT);
     }
     else
     {
@@ -992,7 +996,7 @@ static tb_bar_info *tb_bar_init(int bar_num)
 
 	/* move gadgets if necessary */
 	if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &wbox) == NULL)
-	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - wbox.x1 - 16, 0);
+	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - wbox.x1 - 24, 0);
     
 	/* extend one extent up or down to cover safe area */
 	if (config_display_control_top)
@@ -1003,6 +1007,9 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	box.x0 = -0x4000;
 	box.x1 = 0x4000;
 	_swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, tbi->object_handle, 15, &box);
+
+	/* do a reset to ensure the sprites are set up correctly */
+	tb_status_rotate_reset();
     }
     
     return tbi;
@@ -1112,6 +1119,9 @@ void tb_status_new(fe_view v, int bar_num)
 
 	tb_bar_set_highlight(tbi, tbd->open_component, FALSE);
 	setfocus(tbi->object_handle);
+
+	if (secure_light)
+	    setstate(tbi->object_handle, I_SECURE, TRUE);
     }
 
     sound_event(snd_TOOLBAR_SHOW_SUB);
@@ -1238,9 +1248,9 @@ int tb_init(int *m_list, int *wimp_version)
     for (i = 0; i < sizeof(menu_list)/sizeof(menu_list[0]); i++)
         remove_title_bar(menu_list[i]);
 
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "mainM", &menu_object[0]));
+    _swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "mainM", &menu_object[0]);
 #if DEBUG
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "debugM", &menu_object[1]));
+    _swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "debugM", &menu_object[1]);
 #endif
 
     MemCheck_RestoreChecking(checking);
@@ -2041,6 +2051,7 @@ void tb_status_set_secure(int on)
 {
     if (bar_list)
 	setstate(bar_list->object_handle, I_SECURE, on);
+    secure_light = on;
 }
 
 static int light_state = light_state_OFF;

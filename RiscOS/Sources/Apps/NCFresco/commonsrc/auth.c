@@ -348,7 +348,7 @@ auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **p
 {
     auth_item *a;
 
-    AUTHDBG((stderr, "Trying to authorise URL='%s'\n", url));
+    AUTHDBG((stderr, "Trying to authorise URL='%s'", url));
 
     for(a = auth_first; a; a = a->next)
     {
@@ -365,7 +365,11 @@ auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **p
 		return auth_lookup_SUCCESS;
 	    }
 	    else
+	    {
+		AUTHDBG((stderr, "Miss.\n"));
+
 		return auth_lookup_NEED_DATA;
+	    }
 	}
     }
 

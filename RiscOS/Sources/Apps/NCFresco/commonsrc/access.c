@@ -2807,7 +2807,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    if (cfile[strlen(cfile)-1] == '.')
 		cfile[strlen(cfile)-1] = 0;
 
-#if defined(STBWEB) && !defined(CBPROJECT)
+#if 0 /* defined(STBWEB) && !defined(CBPROJECT) */
+	    /* This is not used anymore as CSFS will do tis own redialling */
 	    /* if file is not in resourcefs and not in cachefs then ensure the modem line
 	     * if ensure fails then report error
 	     */
@@ -2837,21 +2838,24 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    char *slash = strrchr(cfile, '/');
 		    char *dot = strrchr(cfile, '.');
 
+		    /* if we have a valid extension */
 		    if (slash && (dot == NULL || dot < slash))
 		    {
+		        int newft = suffix_to_file_type( slash+1 ); /* file type from extension */
+			
+			/* if we couldn't find the file then see if we can find one with the extensions stripped off */
 			*slash = 0;
+			ft = file_and_object_type(cfile, &obj_type);
 
-			if (suffix_to_file_type(slash+1) == (ft = file_and_object_type(cfile, &obj_type)) )
-			    ep = NULL;
-			else
-			    ep = makeerror(ERR_CANT_READ_FILE);
-		    }
-		    else
-		    {
-			ep = makeerror(ERR_CANT_READ_FILE);
+			if (obj_type && newft != ft)
+			    obj_type = 0;
 		    }
 		}
 
+		/* if still not file found then return error */
+		if (obj_type == 0)
+		    ep = makeerror(ERR_CANT_READ_FILE);
+		
 #ifndef STBWEB
                 /* pdh: Desktop Fresco wanted this, I don't know whether
                  * NCFresco does or not

@@ -64,6 +64,8 @@
 #define INPUT_TEXT_BORDER_X	12
 #define INPUT_TEXT_BORDER_Y	8
 
+#define DEFAULT_XSIZE		20
+
 /* ---------------------------------------------------------------------- */
 
 #define BUTTON_NAME_OPTION	4
@@ -178,7 +180,7 @@ static int get_string_start(const char *str, int text_input_offset, int boxx, in
 
 static int text_displayable_width(int xsize, antweb_doc *doc)
 {
-    int n = ((xsize != -1) ? xsize : 20) * doc->scale_value / 100;
+    int n = ((xsize != -1) ? xsize : DEFAULT_XSIZE) * doc->scale_value / 100;
     if (n == 0)
 	n = 1;
     return n;
@@ -256,7 +258,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    ti->width = (int)ii->ww.u.f;
 	else
 	{
-	    int n = ii->flags & rid_if_NUMBERS ? ii->xsize : text_displayable_width(ii->xsize, doc);
+	    int n = ii->flags & rid_if_NUMBERS ? (ii->xsize == -1 ? DEFAULT_XSIZE : ii->xsize) : text_displayable_width(ii->xsize, doc);
 	    ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
 	}
 	
@@ -290,15 +292,16 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	else
 	{
 #ifdef STBWEB
-	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(WEBFONT_BUTTON, t) + 20;
+	    struct webfont *wf = &webfonts[ti->st.wf_index];
+	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(ti->st.wf_index, t) + 20;
 	    if (ii->hh.type != value_absunit)
 	    {
-		ti->max_up = webfonts[WEBFONT_BUTTON].max_up + 4;
-		ti->max_down = webfonts[WEBFONT_BUTTON].max_down + 4;
+		ti->max_up = wf->max_up + 4;
+		ti->max_down = wf->max_down + 4;
 	    }
 	    else
 	    {
-		ti->max_up = ((int)ii->hh.u.f - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
+		ti->max_up = ((int)ii->hh.u.f - wf->max_down + wf->max_up)/2;
 		ti->max_down = (int)ii->hh.u.f - ti->max_up;
 	    }
 #else
@@ -453,7 +456,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	if (ii->flags & rid_if_NUMBERS)
 	{
 	    int i, char_width = webfont_tty_width(1, TRUE); /* webfonts[WEBFONT_TTY].space_width; */
-	    int n = ii->xsize;
+	    int n = ii->xsize != -1 ? ii->xsize : DEFAULT_XSIZE;
 	    int bg1 = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back | render_colour_RGB;
 
 	    for (i = 0; i < n; i++)
@@ -789,6 +792,10 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    LNKDBG(( "Caret set to item %p, offset %d\n", ti, text_input_offset));
 
 	    antweb_place_caret(doc, ti, text_input_offset);
+
+	    /* with numbers - if the focus is repositioned then it needs redrawing */
+	    if (ii->flags & rid_if_NUMBERS)
+		antweb_update_item(doc, ti);
 	}
 	break;
     case rid_it_CHECK:
@@ -952,7 +959,7 @@ void oinput_astext(rid_text_item *ti, rid_header *rh, FILE *f)
     {
     case rid_it_TEXT:
     {
-        int xsize = ii->xsize != -1 ? ii->xsize : 20;
+        int xsize = ii->xsize != -1 ? ii->xsize : DEFAULT_XSIZE;
 	fputc('[', f);
 	for(i=0; ii->data.str[i] && i < xsize; i++)
 	    fputc(ii->data.str[i], f);
@@ -963,7 +970,7 @@ void oinput_astext(rid_text_item *ti, rid_header *rh, FILE *f)
     }
     case rid_it_PASSWD:
     {
-        int xsize = ii->xsize != -1 ? ii->xsize : 20;
+        int xsize = ii->xsize != -1 ? ii->xsize : DEFAULT_XSIZE;
 	fputc('[', f);
 	for(i=0; ii->data.str[i] && i < xsize; i++)
 	    fputc('-', f);
@@ -1211,10 +1218,10 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 				if (ins->tag == rid_it_PASSWD || (ins->tag == rid_it_TEXT && ins != ii))
 				    break;
 			    }
-			    /* new behaviour 1 if in the last TEXT or PASSWD of however many then submit */
+			    /* new behaviour 1 if in the last TEXT or PASSWD of however many then submit (unless a numbers field)*/
 			    else if (action == key_action_NEWLINE_SUBMIT_LAST)
 			    {
-				if (ins->tag == rid_it_PASSWD || ins->tag == rid_it_TEXT)
+				if ((ins->tag == rid_it_PASSWD || ins->tag == rid_it_TEXT) && (ins->flags & rid_if_NUMBERS) == 0)
 				    last = ins;
 			    }
 			    /* else, new behaviour 2 always submit */

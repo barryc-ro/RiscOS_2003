@@ -437,6 +437,7 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 #define be_link_DONT_WRAP_H	(1 << 10)	/* don't wrap in h direction */
 #define be_link_CARETISE	(1 << 11)	/* if a writeabnle ends up with the highlight then caretise it */
 #define be_link_MOVE_POINTER	(1 << 12)	/* move the pointer with the highlight */
+#define be_link_DONT_FORCE_ON	(1 << 13)	/* don't force onto the screem */
 
 extern void backend_remove_highlight(be_doc doc);
 extern be_item backend_read_highlight(be_doc doc, BOOL *had_caret);

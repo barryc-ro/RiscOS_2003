@@ -566,43 +566,6 @@ static void url_event_handler(int event, fe_view v)
 	frontend_complain(frontend_open_url(s, v, NULL, NULL, 0));
 }
 
-/* The order here is determined by that in fevents.h */
-
-static int codec_actions[] =
-{
-    plugin_state_STOP,
-    plugin_state_PLAY,
-    plugin_state_PAUSE,
-    plugin_state_REWIND,
-    plugin_state_FAST_FORWARD,
-    plugin_state_RECORD
-};
-
-static void codec_event_handler(int event, fe_view v)
-{
-    int action = event - fevent_CODEC_STOP;
-    if (action < sizeof(codec_actions)/sizeof(codec_actions[0]))
-    {
-	be_item item = backend_read_highlight(v->displaying, NULL);
-	if (item == NULL)
-	    item = be_plugin_action_item_HELPERS;
-
-	backend_plugin_action(v->displaying, item, codec_actions[action]);
-    }
-    else if (event == fevent_CODEC_MUTE)
-    {
-	/* do something else... */
-    }
-    else if (event == fevent_CODEC_CLOSE)
-    {
-	be_item item = backend_read_highlight(v->displaying, NULL);
-	if (item == NULL)
-	    item = be_plugin_action_item_HELPERS;
-
-	backend_plugin_action(v->displaying, item, be_plugin_action_CLOSE);
-    }
-}
-
 static void encoding_event_handler(int event, fe_view v)
 {
     fe_encoding(v, event & fevent_ENCODING_MASK);

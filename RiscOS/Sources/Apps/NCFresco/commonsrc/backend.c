@@ -1698,15 +1698,13 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    case rid_it_RADIO:
 			if (iis->data.radio.tick)
 			{
-			    antweb_append_query(&buffer, iis->name,
-						iis->value ? iis->value : "on", &buf_size);
+			    antweb_append_query(&buffer, iis->name, strsafe(iis->value), &buf_size);
 			}
 			break;
 		    case rid_it_SUBMIT:
 			if (iis->data.button.tick && iis->name)
 			{
-			    antweb_append_query(&buffer, iis->name,
-						iis->value ? iis->value : "", &buf_size);
+			    antweb_append_query(&buffer, iis->name, strsafe(iis->value), &buf_size);
 			}
 			break;
 		    }
@@ -1804,13 +1802,13 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    case rid_it_RADIO:
 			if (iis->data.radio.tick)
 			{
-			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first);
+			    antweb_write_query(f, iis->name, strsafe(iis->value), &first);
 			}
 			break;
 		    case rid_it_SUBMIT:
 			if (iis->data.button.tick && iis->name)
 			{
-			    antweb_write_query(f, iis->name, iis->value ? iis->value : "", &first);
+			    antweb_write_query(f, iis->name, strsafe(iis->value), &first);
 			}
 			break;
 		    }
@@ -3246,10 +3244,12 @@ os_error *backend_goto_fragment(be_doc doc, char *frag)
 	    ai = ai->next;
 	}
 
+#ifndef STBWEB			/* for NCFresco if it is unknown then use the top of the page */
 	if (ai == NULL)
 	    return doc->ah || doc->ph ? NULL : makeerror(ERR_NO_SUCH_FRAG); /* only give error if document fully downloaded */
-
-        first = ai->first ? ai->first : doc->rh->stream.text_list;
+#endif
+	
+        first = ai && ai->first ? ai->first : doc->rh->stream.text_list;
 	if (first)
 	{
 	    wimp_box bb;
@@ -4373,7 +4373,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
      * This doesn't belong here (there may be images arriving) but I can't
      * see some pages without it!
      */
-    if ( doc->im_fetching == 0 )
+    if (doc->rh && doc->im_fetching == 0)
         fvpr_progress_stream_flush( &doc->rh->stream );
 
     doc->cfile = strdup(cfile);
@@ -5027,7 +5027,7 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action)
     }
     else if (item == be_plugin_action_item_ALL)
     {
-	be_item ti = doc->rh->stream.text_list;
+	be_item ti = doc ? doc->rh->stream.text_list : NULL;
 	while (ti)
 	{
 	    be__plugin_abort_or_action(ti, action);

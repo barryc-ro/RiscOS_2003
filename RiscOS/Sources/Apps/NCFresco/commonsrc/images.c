@@ -521,6 +521,9 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 	i->height = ir->y_logical;
 	i->plotter = plotter_OSJPEG;
 	i->flags |= image_flag_CHANGED;
+
+	IMGDBGN(("img: im %p leaving to OS size %dx%d\n", i, i->width, i->height));
+
 	return FALSE;
     }
 
@@ -670,6 +673,102 @@ static int bastard_main(int argc, char **argv)
 
 /* ------------------------------------------------------------------------- */
 
+static void image_handle_internal(image i, int fh, void *buffer, int from, int to)
+{
+    BOOL success;
+
+    IMGDBG(("image_handle_internal: check internal\n"));
+
+    if (i->data_area == NULL)
+    {
+	success = flex_alloc(&i->data_area, to);
+	from = 0;
+    }
+    else
+    {
+	success = flex_extend(&i->data_area, to);
+    }
+
+    IMGDBG(("image_handle_internal: flex has returned\n"));
+
+    if (success)
+    {
+	char *in;
+
+	flexmem_noshift();
+
+	in = (char *)i->data_area + from;
+	if (buffer)
+	    memcpy(in, buffer, to - from);
+	else
+	    ro_freadpos(in, 1, to - from, fh, from);
+
+	if ((i->flags & image_flag_REALTHING) == 0)
+	{
+	    switch (i->plotter)
+	    {
+	    case plotter_OSJPEG:
+		if (_swix(JPEG_Info, _INR(0,2) | _OUTR(2,5),
+			  1, i->data_area, to,
+			  &i->width, &i->height, &i->xdpi, &i->ydpi) == NULL)
+		{
+		    i->flags |= image_flag_CHANGED;
+
+		    i->dx = /* i->xdpi ? (180 + i->xdpi/2) / i->xdpi : */ 2;
+		    i->dy = /* i->ydpi ? (180 + i->ydpi/2) / i->ydpi : */ 2;
+		}
+		break;
+
+	    case plotter_DRAWFILE:
+	    {
+		wimp_box box;
+		if (_swix(DrawFile_BBox, _INR(0,4), 0, i->data_area, to, NULL, &box) == NULL)
+		{
+		    i->width = (box.x1 - box.x0) >> 9;	/* convert to nominal pixels */
+		    i->height = (box.y1 - box.y0) >> 9;
+		    i->offset_x = box.x0 >> 8;
+		    i->offset_y = box.y0 >> 8;
+
+		    i->xdpi = i->ydpi = 90;
+		    i->dx = i->dy = 2;
+
+		    i->flags |= image_flag_REALTHING | image_flag_MASK | image_flag_CHANGED;
+		}
+		break;
+	    }
+
+	    case plotter_UNKNOWN:
+	    case plotter_SPRITE:
+		if (from == 0)
+		{
+		    if (in[0] == 0xff && in[1] == 0xd8 && in[2] == 0xff)
+			i->plotter = plotter_OSJPEG;
+		    else if (*(int *)in == 0x77617244)
+			i->plotter = plotter_DRAWFILE; /* 'Draw' */
+		    else
+			i->plotter = plotter_UNKNOWN;
+		}
+		break;
+	    }
+	}
+
+	IMGDBG(("image_handle_internal: plotter %d size %dx%d\n", i->plotter, i->width, i->height));
+
+	flexmem_shift();
+    }
+    else
+    {
+	IMGDBG(("im%p: can't allocate %d-byte buffer\n", i, to ));
+	mm_can_we_recover(FALSE);
+	image_flush( i, 0 );
+    }
+
+    if (i->plotter == plotter_UNKNOWN)
+	free_data_area(&i->data_area);
+}
+
+/* ------------------------------------------------------------------------- */
+
 static int image_thread_start(image i)
 {
     IMGDBG(("im%p: starting thread\n",i));
@@ -732,96 +831,7 @@ static int image_thread_process(image i, int fh, int from, int to)
      * pdh: *And* there wasn't an error.
      */
     if (i->tt->status == thread_DEAD && (from_base == 0 || i->plotter != plotter_SPRITE) && i->our_area == NULL && !(i->flags & image_flag_ERROR) )
-    {
-	BOOL success;
-
-	IMGDBG(("image_thread_process: check internal\n"));
-
-	if (i->data_area == NULL)
-	{
-	    success = flex_alloc(&i->data_area, to);
-	    from = 0;
-	}
-	else
-	{
-	    success = flex_extend(&i->data_area, to);
-	    from = from_base;
-	}
-
-	IMGDBG(("image_thread_process: flex has returned\n"));
-
-	if (success)
-	{
-	    char *in;
-
-	    flexmem_noshift();
-
-	    in = (char *)i->data_area + from;
-	    ro_freadpos(in, 1, to - from, fh, from);
-
-	    if ((i->flags & image_flag_REALTHING) == 0)
-	    {
-		switch (i->plotter)
-		{
-		case plotter_OSJPEG:
-		    if (_swix(JPEG_Info, _INR(0,2) | _OUTR(2,5),
-			      1, i->data_area, to,
-			      &i->width, &i->height, &i->xdpi, &i->ydpi) == NULL)
-		    {
-			i->flags |= image_flag_CHANGED;
-
-			i->dx = /* i->xdpi ? (180 + i->xdpi/2) / i->xdpi : */ 2;
-			i->dy = /* i->ydpi ? (180 + i->ydpi/2) / i->ydpi : */ 2;
-		    }
-		    break;
-
-		case plotter_DRAWFILE:
-		{
-		    wimp_box box;
-		    if (_swix(DrawFile_BBox, _INR(0,4), 0, i->data_area, to, NULL, &box) == NULL)
-		    {
-			i->width = (box.x1 - box.x0) >> 9;	/* convert to nominal pixels */
-			i->height = (box.y1 - box.y0) >> 9;
-			i->offset_x = box.x0 >> 8;
-			i->offset_y = box.y0 >> 8;
-
-			i->xdpi = i->ydpi = 90;
-			i->dx = i->dy = 2;
-
-			i->flags |= image_flag_REALTHING | image_flag_MASK | image_flag_CHANGED;
-		    }
-		    break;
-		}
-
-		case plotter_UNKNOWN:
-		case plotter_SPRITE:
-		    if (from == 0)
-		    {
-			if (in[0] == 0xff && in[1] == 0xd8 && in[2] == 0xff)
-			    i->plotter = plotter_OSJPEG;
-			else if (*(int *)in == 0x77617244)
-			    i->plotter = plotter_DRAWFILE; /* 'Draw' */
-			else
-			    i->plotter = plotter_UNKNOWN;
-		    }
-		    break;
-		}
-	    }
-
-	    IMGDBG(("image_thread_process: plotter %d size %dx%d\n", i->plotter, i->width, i->height));
-
-	    flexmem_shift();
-	}
-	else
-	{
-	    IMGDBG(("im%p: can't allocate %d-byte buffer\n", i, to ));
-	    mm_can_we_recover(FALSE);
-	    image_flush( i, 0 );
-	}
-
-	if (i->plotter == plotter_UNKNOWN)
-	    free_data_area(&i->data_area);
-    }
+	image_handle_internal(i, fh, NULL, from_base, to);
 #endif
 
     IMGDBG(("im%p: image_thread_process out: status %d\n", i, i->tt->status));
@@ -1711,10 +1721,24 @@ os_error *image_stream_data(image i, char *buffer, int len, int update)
 	image_thread_data_ptr = buffer;
 	image_thread_data_more = !update;
 
-	IMGDBG(("Running thread from stream data\n"));
+	IMGDBG(("Running thread from stream data sofar %d len %d\n", i->data_so_far, len));
 
 	thread_run(i->tt);
     }
+
+#if NEW_WEBIMAGE == 2
+    /* only check this if the thread has died, we were reading from the start
+     * and no sprite has been created
+     * pdh: *And* there wasn't an error.
+
+     * FIXME:
+     * This won't work if the file cannot be identified in the first buffer as the previous
+     * buffers aren't available and we can't back up.
+     */
+    
+    if (i->tt->status == thread_DEAD && (i->data_so_far == 0 || i->plotter != plotter_SPRITE) && i->our_area == NULL && !(i->flags & image_flag_ERROR) )
+	image_handle_internal(i, 0, buffer, i->data_so_far, i->data_so_far + len);
+#endif
 
     i->data_so_far += len;
     i->data_size = -1;
@@ -1752,6 +1776,13 @@ os_error *image_stream_end(image i, char *cfile)
     {
 	IMGDBGN(("Calling image_thread_end() from image_stream_end()\n"));
 	res = image_thread_end(i);
+
+	/* SJM: set up so that internal objects can be displayed */
+	if (i->data_area && (i->flags & image_flag_ERROR) == 0)
+	{
+	    res = NULL;
+	    i->flags |= image_flag_REALTHING;
+	}
     }
     else
     {

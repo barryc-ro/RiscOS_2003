@@ -718,6 +718,9 @@ RECONS_UNIX:	$(PREDEPS)
 RISCOS_BUILD_RESOURCES=../NCFrescoRO/Resources
 RISCOS_BUILD_OBJECTS=../NCFrescoRO/aof
 
+NCFRESCO_COUNTRY=		UK
+NCFRESCO_WHICH=			RCA
+
 CP=				cp
 CPOPTIONS=			-p
 
@@ -769,7 +772,7 @@ NCFRESCO_VPATH=			../!NCFresco
 
 NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o \
+				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o stbcodec.o \
 				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 
 
@@ -820,16 +823,16 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps/!NCFresco
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Boot2,feb	$(NCFRESCO_BUILD_APPS)/!Boot,feb
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Run4,feb	$(NCFRESCO_BUILD_APPS)/!Run,feb
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Sprites4,ff9	$(NCFRESCO_BUILD_APPS)/!Sprites,ff9
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Res,fae	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Sprites4,ff9	$(NCFRESCO_BUILD_RESOURCES)/Sprites,ff9
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/SetScrap,ffb	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Config	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Messages	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/MimeMap	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Welcome,faf	$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/!BootROM,feb			$(NCFRESCO_BUILD_APPS)/!Boot,feb
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/SetScrap,ffb			$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/MimeMap				$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/Welcome,faf			$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/!RunROM,feb		$(NCFRESCO_BUILD_APPS)/!Run,feb
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/!SpritesROM,ff9	$(NCFRESCO_BUILD_APPS)/!Sprites,ff9
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Res,fae		$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/SpritesROM,ff9	$(NCFRESCO_BUILD_RESOURCES)/Sprites,ff9
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Config		$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Messages		$(NCFRESCO_BUILD_RESOURCES)
 		@-mkdir $(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
 
@@ -915,18 +918,18 @@ NCFRESCO_DIST:  NCFRESCO_BUILD
 		-@$(RM) -r $(RELS)
 		-@mkdir $(REL)
 		@mkdir $(RELS)
-		@cp -p \!NCFresco/Resources/UK/\!Boot1,feb $(RELS)/\!Boot,feb
-		@cp -p \!NCFresco/Resources/UK/\!Run3,feb $(RELS)/\!Run,feb
-		@cp -p ./abs/ncfresco $(RELS)/\!RunImage,ff8
-		@cp -p \!NCFresco/Resources/UK/\!Sprites3,ff9 $(RELS)/\!Sprites,ff9
-		@cp -p \!NCFresco/Resources/UK/Res,fae $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Sprites3,ff9 $(RELS)/Sprites,ff9
-		@cp -p \!NCFresco/Resources/UK/MimeMap $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Config $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Messages $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Help,faf $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Welcome,faf $(RELS)
-		@cp -p \!NCFresco/Resources/UK/SetScrap,ffb $(RELS)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/\!Boot,feb			$(RELS)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/SetScrap,ffb			$(RELS)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/MimeMap				$(RELS)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/Welcome,faf			$(RELS)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/\!Run,feb		$(RELS)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/\!Sprites,ff9	$(RELS)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Res,fae		$(RELS)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Sprites,ff9		$(RELS)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Config		$(RELS)
+		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Messages		$(RELS)
+
+		$(CP) $(CPOPTIONS) ./abs/ncfresco							$(RELS)/\!RunImage,ff8
 
 		@chmod 644 $(RELS)/MimeMap
 		@chmod 644 $(RELS)/Config

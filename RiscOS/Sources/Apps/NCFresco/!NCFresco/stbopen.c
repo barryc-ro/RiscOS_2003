@@ -377,6 +377,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	if (ep->errnum == ANTWEB_ERROR_BASE + ERR_NO_ACTION)
 	{
 	    fe_no_new_page(parent, NULL);
+	    fe_ensure_highlight_after_fetch(parent);
 	    ep = NULL;
 	}
 	else if (parent->open_transient)
@@ -480,7 +481,7 @@ static os_error *fe__reload(fe_view v, void *handle)
         if (!ep)
         {
             url = strdup(url);
-            ep = frontend_complain(frontend_open_url(url, v, TARGET_SELF, NULL, fe_open_url_NO_CACHE));
+            ep = frontend_complain(frontend_open_url(url, v, TARGET_SELF, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_REFERER));
             mm_free(url);
         }
     }

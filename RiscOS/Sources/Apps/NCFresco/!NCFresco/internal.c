@@ -1593,8 +1593,13 @@ static int internal_decode_history_alpha(const char *query, char **new_url, int 
 
     if (fe_history_move_alpha_index(main_view, atoi(which), new_url))
     {
-	generated = fe_internal_url_REDIRECT;
+	/* set history flag on current document */
+	backend_doc_set_flags(main_view->displaying, be_openurl_flag_HISTORY, be_openurl_flag_HISTORY);
+
+	/* clear check expire flag on current fetch */
 	*flags &= ~access_CHECK_EXPIRE;
+
+	generated = fe_internal_url_REDIRECT;
     }
         
     mm_free(which);
@@ -1611,8 +1616,13 @@ static int internal_decode_history_recent(const char *query, char **new_url, int
 
     if (fe_history_move_recent_index(main_view, atoi(which), new_url))
     {
-	generated = fe_internal_url_REDIRECT;
+	/* set history flag on current document */
+	backend_doc_set_flags(main_view->displaying, be_openurl_flag_HISTORY, be_openurl_flag_HISTORY);
+	
+	/* clear check expire flag on current fetch */
 	*flags &= ~access_CHECK_EXPIRE;
+
+	generated = fe_internal_url_REDIRECT;
     }
         
     mm_free(which);

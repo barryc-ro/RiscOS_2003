@@ -162,6 +162,7 @@ extern int caretise(void);
 extern int movepointer(void);
 
 extern void fe_no_new_page(fe_view v, os_error *e);
+extern void fe_ensure_highlight_after_fetch(fe_view v);
 
 /* From internal.h */
 
@@ -230,6 +231,10 @@ extern os_error *fe_handle_enter(fe_view v);
 extern os_error *fe_activate_link(fe_view v, int x, int y, int bbits);
 
 extern int fe_ensure_highlight(fe_view v, int scroll_flags);
+
+/* From stbcodec.c */
+
+extern void codec_event_handler(int event, fe_view v);
 
 /* stbfe.h*/
 

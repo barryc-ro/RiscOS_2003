@@ -359,8 +359,8 @@ os_error *hotlist_add(const char *url, const char *title)
     hotlist__add(strdup(url), strdup(title), TRUE);
     hotlist__sort();
 
-    if ((ep = ensure_modem_line()) != NULL)
-	return ep;
+/*     if ((ep = ensure_modem_line()) != NULL) */
+/* 	return ep; */
     
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
@@ -376,8 +376,8 @@ os_error *hotlist_remove(const char *url)
 
     hotlist__remove(NULL, url);
     
-    if ((ep = ensure_modem_line()) != NULL)
-	return ep;
+/*     if ((ep = ensure_modem_line()) != NULL) */
+/* 	return ep; */
     
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
@@ -391,8 +391,8 @@ os_error *hotlist_remove_list(const char *list)
     
     hotlist__remove_list(list);
     
-    if ((ep = ensure_modem_line()) != NULL)
-	return ep;
+/*     if ((ep = ensure_modem_line()) != NULL) */
+/* 	return ep; */
     
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);

@@ -191,9 +191,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
     }
     else if (pi->next == NULL)
     {
-#if 0
-	fprintf(stderr, "No items\n");
-#endif
+	LOCATEDBG((stderr, "No items\n"));
     }
     else
     {
@@ -233,9 +231,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	{
 	    if (*x < pi->left_margin)
 	    {
-#if 0
-		fprintf(stderr, "Pointer to the left of all items\n");
-#endif
+		LOCATEDBG((stderr, "Pointer to the left of all items\n"));
 	    }
 	    else
 	    {
@@ -263,9 +259,8 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 
 	if (found)
 	{
-#if 0
-	    fprintf(stderr, "Found item\n");
-#endif
+	    LOCATEDBG((stderr, "Found item\n"));
+
 	    *ti = ti2;
 
 	    if (ti2->tag == rid_tag_TABLE)
@@ -275,9 +270,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	}
     }
 
-#if 0
-    fprintf(stderr, "Locate pointer done: %p at %d, %d\n", *ti, *x, *y);
-#endif
+    LOCATEDBG((stderr, "Locate pointer done: %p at %d, %d\n", *ti, *x, *y));
 
     return NULL;
 }
@@ -302,24 +295,21 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
 
     if (pi->floats)
     {
-#if DEBUG
-	fprintf(stderr, "Have floats\n");
-#endif
+	LOCATEDBG((stderr, "Have floats\n"));
+
 	if (pi->floats->left)
 	{
-#if DEBUG
-	    fprintf(stderr, "Left float: left->ti=%p, left->pi=%p\n",
-		    pi->floats->left->ti, pi->floats->left->pi);
-#endif
+	    LOCATEDBG((stderr, "Left float: left->ti=%p, left->pi=%p\n",
+		    pi->floats->left->ti, pi->floats->left->pi));
+
 	    float_l = pi->floats->left->ti;
 	    hpos += float_l->width;
 	}
 	if (pi->floats->right)
 	{
-#if DEBUG
-	    fprintf(stderr, "Right float: right->ti=%p, right->pi=%p\n",
-		    pi->floats->right->ti, pi->floats->right->pi);
-#endif
+	    LOCATEDBG((stderr, "Right float: right->ti=%p, right->pi=%p\n",
+		    pi->floats->right->ti, pi->floats->right->pi));
+
 	    float_r = pi->floats->right->ti;
 	}
     }

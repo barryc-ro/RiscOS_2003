@@ -200,4 +200,9 @@ extern fe_view fe_find_top(fe_view v);
 	    
 /* ----------------------------------------------------------------------------- */
 
+/* extra scrolling code in assition to those in interface.h */
+#define fe_scrolling_NONE	0xff /* no scroll bars and cannot scroll page */
+
+/* ----------------------------------------------------------------------------- */
+
 /* eof stbview.h */

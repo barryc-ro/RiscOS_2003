@@ -21,6 +21,10 @@
 #include "dump.h"
 #include "tables.h"
 
+/* Forward reference */
+
+static BOOL fvpr_progress_stream_2(rid_text_stream *stream, BOOL *pbComplete);
+
 /*****************************************************************************
 
   Set FVPR flag on this item and any items it contains. There might not be
@@ -78,6 +82,174 @@ static void set_fvpr_and_below(rid_text_item *item)
 	image_flag_REALTHING )
 
 
+/*--------------------------------------*
+ * fvpr_item                            *
+ * Stop here because of this text item? *
+ *--------------------------------------*/
+
+static BOOL fvpr_item( rid_text_item *ti )
+{
+    BOOL stop = FALSE;
+
+    switch (ti->tag)
+    {
+    /* Item arives FVPR atomically */
+    default:
+    case rid_tag_TEXT:
+    break;
+
+    case rid_tag_PBREAK:
+	break;
+    case rid_tag_HLINE:
+	break;
+    case rid_tag_BULLET:
+	break;
+    case rid_tag_IMAGE:
+    {
+	rid_text_item_image *im = (rid_text_item_image *) ti;
+	image_flags flags;
+
+	/* sjm: if image is fully specified then don't need to know any more*/
+	if (im->ww.type != value_none && im->hh.type != value_none)
+	{
+	    RENDBG(("fvpr: image full specified\n"));
+	    break;
+	}
+
+	if (im->im == NULL)
+	{
+	    RENDBG(("fvpr: no im field for image\n"));
+	    stop = TRUE;
+	    break;
+	}
+
+	if ( image_info( (image) im->im, NULL, NULL, NULL, &flags, NULL, NULL)
+	     != NULL )
+	{
+	    RENDBG(("fvpr: error from image_info - delay until end of page\n"));
+	    stop = TRUE;
+	    break;
+	}
+
+        RENDBG(("fvpr: encountered image with flags=0x%x\n",flags));
+
+        /* pdh: this && was an || but if the HTML gives the exact size
+         * then fvpr may as well carry on
+         */
+	if ( ( (flags & IMAGE_RENDERABLE_FLAGS) == 0 )
+	     /* && */
+/* 	     (im->ww.type == value_none || im->hh.type == value_none)  */)
+	{
+	    RENDBG(("fvpr: don't know final size yet\n"));
+	    stop = TRUE;
+	    break;
+	}
+
+    }
+    break;
+
+    case rid_tag_INPUT:
+    {
+	rid_input_item *ii = ((rid_text_item_input *)ti)->input;
+	switch (ii->tag)
+	{
+	case rid_it_IMAGE:
+	    break;
+	}
+	break;
+    }
+
+    case rid_tag_TEXTAREA:
+	break;
+
+    case rid_tag_SELECT:
+    {
+	rid_select_item *sel = ((rid_text_item_select *)ti)->select;
+	/* if we haven't received all the OPTION items then it may resize */
+	if ((sel->flags & rid_sf_FINISHED) == 0)
+	    stop = TRUE;
+	break;
+    }
+
+    case rid_tag_TABLE:
+    {
+	rid_table_item *table = ((rid_text_item_table *)ti)->table;
+
+	if ((table->flags & rid_tf_FINISHED) == 0)
+	{
+	    RENDBG(("fvpr: table not completed yet\n"));
+	    stop = TRUE;
+	}
+	else
+	{
+            int x, y;
+            rid_table_cell *cell;
+            BOOL bComplete = TRUE;
+
+	    RENDBG(("fvpr: table complete - scanning inside it\n"));
+
+	    /* the following do not change 'changed' because we don't
+	     * care whether cells have changed, only whether the whole
+	     * table has
+	     */
+
+            if (table->caption != NULL)
+                fvpr_progress_stream_2( &table->caption->stream,
+                                        &bComplete );
+
+            if ( !bComplete )
+            {
+                RENDBG(("fvpr: caption not finalised\n"));
+                stop = TRUE;
+                break;
+            }
+
+            for ( x = -1, y = 0;
+                 (cell = rid_next_root_cell(table, &x, &y)) != NULL
+                    && bComplete;
+                 /* skip */
+                 )
+            {
+                fvpr_progress_stream_2( &cell->stream, &bComplete );
+
+                if ( !bComplete )
+                    RENDBG(("fvpr: cell (%d,%d) not finalised\n",x,y));
+            }
+
+            if ( !bComplete )
+            {
+                stop = TRUE;
+                break;
+            }
+	}
+    }
+    break;
+    case rid_tag_OBJECT:
+			/* need to fill stuff in here for rid_plugin_IMAGE */
+	break;
+    }
+
+    return stop;
+}
+
+
+/*------------------------------------*
+ * fvpr_floater                       *
+ * Stop here because of this floater? *
+ *------------------------------------*/
+
+static BOOL fvpr_floater( rid_float_item *fi )
+{
+    while ( fi )
+    {
+        if ( fi->ti && fvpr_item( fi->ti ) )
+            return TRUE;
+        fi = fi->next;
+    }
+    return FALSE;
+}
+
+
 /*****************************************************************************
 
   Supplied with the TOP LEVEL stream.
@@ -94,6 +266,7 @@ static BOOL fvpr_progress_stream_2(rid_text_stream *stream, BOOL *pbComplete)
 {
     BOOL changed = FALSE;
     rid_text_item *ti;
+    rid_pos_item *lastpi = NULL;
 
     if (gbf_active(GBF_FVPR))
     {
@@ -121,129 +294,36 @@ static BOOL fvpr_progress_stream_2(rid_text_stream *stream, BOOL *pbComplete)
 
 	while (1)
 	{
-	    BOOL stop = FALSE;
 	    rid_pos_item *pi = ti->line;
 
-	    if (pi == NULL || pi->next == NULL || pi->floats != NULL)
+	    if (pi == NULL || pi->next == NULL)
 	    {
 		RENDBG(("fvpr: stoppping for pos_item reasons\n"));
 		break;
 	    }
 
-	    switch (ti->tag)
+	    if ( pi != lastpi && pi->floats )
 	    {
-		/* Item arives FVPR atomically */
-	    default:
-	    case rid_tag_TEXT:
-		break;
+	        /* Try and only check each pi once (efficiency). We'll still
+	         * be checking each floater several times though; perhaps
+	         * rid_float_item really wants an fvpr flag?
+	         */
 
-	    case rid_tag_PBREAK:
-		break;
-	    case rid_tag_HLINE:
-		break;
-	    case rid_tag_BULLET:
-		break;
-	    case rid_tag_IMAGE:
-	    {
-		rid_text_item_image *im = (rid_text_item_image *) ti;
-		image_flags flags;
-
-		if (im->im == NULL)
-		{
-		    RENDBG(("fvpr: no im field for image\n"));
-		    stop = TRUE;
-		    break;
-		}
-
-		if ( image_info( (image) im->im, NULL, NULL, NULL, &flags, NULL, NULL) != NULL )
-		{
-		    RENDBG(("fvpr: error from image_info - delay until end of page\n"));
-		    stop = TRUE;
-		    break;
-		}
-
-                RENDBG(("fvpr: encountered image with flags=0x%x\n",flags));
-
-                /* pdh: this && was an || but if the HTML gives the exact size
-                 * then fvpr may as well carry on
-                 */
-		if ( ( (flags & IMAGE_RENDERABLE_FLAGS) == 0 )
-		     &&
-		     (im->ww.type == value_none || im->hh.type == value_none) )
-		{
-		    RENDBG(("fvpr: don't know final size yet\n"));
-		    stop = TRUE;
-		    break;
-		}
-
+	        if ( fvpr_floater( pi->floats->left ) )
+                {
+                    RENDBG(("fvpr: stopping for left-floater reasons\n"));
+                    break;
+                }
+	        if ( fvpr_floater( pi->floats->right ) )
+                {
+                    RENDBG(("fvpr: stopping for right-floater reasons\n"));
+                    break;
+                }
 	    }
-	    break;
-	    case rid_tag_INPUT:
-				/* need to fill stuff in here for rid_it_IMAGE*/
-		break;
-	    case rid_tag_TEXTAREA:
-	    break;
-	    case rid_tag_SELECT:
-		break;
-	    case rid_tag_TABLE:
-	    {
-		rid_table_item *table = ((rid_text_item_table *)ti)->table;
+            lastpi = pi;
 
-		if ((table->flags & rid_tf_FINISHED) == 0)
-		{
-		    RENDBG(("fvpr: table not completed yet\n"));
-		    stop = TRUE;
-		}
-		else
-		{
-	            int x, y;
-	            rid_table_cell *cell;
-	            BOOL bComplete = TRUE;
-
-		    RENDBG(("fvpr: table complete - scanning inside it\n"));
-
-		    /* the following do not change 'changed' because we don't
-		     * care whether cells have changed, only whether the whole
-		     * table has
-		     */
-
-	            if (table->caption != NULL)
-	                fvpr_progress_stream_2( &table->caption->stream,
-	                                        &bComplete );
-
-	            if ( !bComplete )
-	            {
-	                RENDBG(("fvpr: caption not finalised\n"));
-	                stop = TRUE;
-	                break;
-	            }
-
-	            for ( x = -1, y = 0;
-	                 (cell = rid_next_root_cell(table, &x, &y)) != NULL
-	                    && bComplete;
-	                 /* skip */
-	                 )
-	            {
-	                fvpr_progress_stream_2( &cell->stream, &bComplete );
-
-                        if ( !bComplete )
-                            RENDBG(("fvpr: cell (%d,%d) not finalised\n",x,y));
-	            }
-
-	            if ( !bComplete )
-                    {
-                        stop = TRUE;
-                        break;
-                    }
-		}
-	    }
-	    break;
-	    case rid_tag_OBJECT:
-				/* need to fill stuff in here for rid_plugin_IMAGE */
-		break;
-	    }
-
-	    if (stop)
+            /* Stop for text_item reasons? */
+	    if ( fvpr_item(ti) )
 		break;
 
 	    ti = ti->next;
@@ -331,3 +411,4 @@ extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream)
 
 
 /* eof fvpr.c */
+

@@ -200,7 +200,7 @@ static void draw_view_outline(wimp_w w)
 int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight)
 {
     STBDBG(("fe_view_scroll_x: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
-    if (v->w && v->scrolling != fe_scrolling_NO)
+    if (v->w && v->scrolling != fe_scrolling_NONE)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
@@ -217,7 +217,7 @@ int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight)
 int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight)
 {
     STBDBG(("fe_view_scroll_y: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
-    if (v->w && v->scrolling != fe_scrolling_NO)
+    if (v->w && v->scrolling != fe_scrolling_NONE)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
@@ -273,7 +273,7 @@ static void draw_frame_links(wimp_redrawstr *r, fe_view v, const frame_link *fl)
 static void draw_border(wimp_redrawstr *r, fe_view v)
 {
     render_plinth_full(0, plinth_col_M, plinth_col_L, plinth_col_D,
-		       render_plinth_RIM | render_plinth_NOFILL,
+		       render_plinth_RIM | render_plinth_NOFILL | render_plinth_DOUBLE_RIM,
 		       v->box.x0, v->box.y0, v->box.x1 - v->box.x0, v->box.y1 - v->box.y0,
 		       v->displaying);
 }
@@ -343,7 +343,7 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
     wimp_redrawstr r;
     fe_view selected;
 
-    STBDBG(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags));
+/*     STBDBG(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags)); */
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
@@ -371,7 +371,7 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
 	/* if we are transient and can't scroll then draw a border */
-	if (v->open_transient && v->scrolling == fe_scrolling_NO)
+	if (v->open_transient && v->scrolling == fe_scrolling_NONE)
 	    draw_border(&r, v);
 
 	/* if we are the top frameset and this is a call to
@@ -692,6 +692,7 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
     bbh = - v->margin.y1;
     sbh =   v->margin.y0;
 
+#if 0
     if (on_screen_kbd)
     {
 	if (config_display_control_top)
@@ -703,10 +704,14 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 	    sbh += on_screen_kbd_pos.y1 - on_screen_kbd_pos.y0;
 	}
     }
-
+#endif
+    
     h = (state.o.box.y1 - bbh) - (state.o.box.y0 + sbh);    /* height of visible area (within margins)*/
     mh = h > -(v->doc_height) ? h : -(v->doc_height);       /* height of document, or visible area (+ve)*/
     w = state.o.box.x1 - state.o.box.x0;
+
+    STBDBGN(("ensure_visible: compare against x %d-%d y %d-%d\n",
+	     state.o.x + v->margin.x0, state.o.x + w + v->margin.x1, state.o.y - bbh, state.o.y + sbh - (state.o.box.y1 - state.o.box.y0)));
 
     if (v->stretch_document)
     {
@@ -803,7 +808,7 @@ int frontend_view_caret(fe_view v, int x, int y, int hh, int on_screen)
     if (!v->w)
         return 1;
 
-    STBDBGN(("viewcaret: v %p w %p @ %d,%d h %d on %d %s %s\n", v, v->w, x, y, height, on_screen, caller(1), caller(2)));
+/*     STBDBGN(("viewcaret: v %p w %x @ %d,%d h %d on %d %s %s\n", v, v->w, x, y, height, on_screen, caller(1), caller(2))); */
 
     if (on_screen && height > 0)
     {
