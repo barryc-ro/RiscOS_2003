@@ -41,7 +41,7 @@ TARGET		=
 #
 # Export Paths for Messages module
 #
-EXPORTDIR	= <Resource$Dir>
+EXPORTDIR	= ${RESDIR}.^
 RESAPP		= ${EXPORTDIR}.${APP}
 RESRES 		= ${EXPORTDIR}.Resources
 
@@ -72,9 +72,8 @@ dirs:
         ${MKDIR} ${RESRES}.NVRAM
         ${MKDIR} ${RESRES}.Wimp
         IfThere Resources.${USERIF}.${LOCALE}.${APP} Then \
-	  ${CP} Resources.${USERIF}.${LOCALE}.${APP} ${RESAPP} T~V~CFQR \
-	Else \
-	  ${CP} Resources.${USERIF}.UK.${APP} ${RESAPP} T~V~CFQR
+	  ${CP} Resources.${USERIF}.${LOCALE}.${APP} ${RESAPP} T~V~CFQR
+	${CP} Resources.${USERIF}.UK.${APP} ${RESAPP} T~V~CFQR
 
 translate: dirs
         @echo ** Translating NCDialler...
@@ -111,6 +110,7 @@ translate: dirs
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Acknow -o ${RESAPP}.HTML.Setup.Acknow
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.BSD -o ${RESAPP}.HTML.Setup.BSD
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.IntroWel -o ${RESAPP}.HTML.Setup.IntroWel
+	${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.SetupD.IntroWel -o ${RESAPP}.HTML.SetupD.IntroWel
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Options -o ${RESAPP}.HTML.Setup.Options
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Printing -o ${RESAPP}.HTML.Setup.Printing
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Printing2 -o ${RESAPP}.HTML.Setup.Printing2
