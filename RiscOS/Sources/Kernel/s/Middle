@@ -232,7 +232,15 @@ SBRKPT ROUT
         STMIA   r12!, {r0}
         MOV     r0, r12
         LDMFD   sp, {r10-r12}
+    [ SAUBxferbroken
+        NOP
+        NOP
+    ]
         STMIA   r0, {r1-r12, r13_usr, r14_usr}^ ; user mode case done.
+        NOP
+    [ SAUBxferbroken
+        NOP
+    ]
 
 10      LDR     stack, =SVCSTK
         MOV     r12, #BrkAd_ws
@@ -367,8 +375,15 @@ EVENTH  MOV     pc, lr
 
 NOCALL  MOV     r0, #0                  ; default callback routine
         LDR     r14, [r0, #CallBf]
+  [ SAUBxferbroken
+        NOP
+        NOP
+  ]
         LDMIA   r14, {r0-r12, r13_usr, r14_usr}^ ; load user's regs
         NOP
+  [ SAUBxferbroken
+        NOP
+  ]
         LDR     r14, [r14, #4*15]
         MOVS    pc, r14
 
@@ -389,8 +404,8 @@ ERRORH ROUT
         BLT     %FT99
         CMP     R0,#"%"
         SWINE   XOS_WriteC
-        BVS     %FT99 
-        BNE     %BT01 
+        BVS     %FT99
+        BNE     %BT01
 
         LDRB    R0,[R12],#1              ; Found a %
         CMP     R0,#32
@@ -403,7 +418,7 @@ ERRORH ROUT
         BNE     %BT01
 
         LDR     R3,=GeneralMOSBuffer+4
-        LDR     R0,[R3]       
+        LDR     R0,[R3]
         LDR     R1,=MOSConvertBuffer
         MOV     R2,#12
         SWI     XOS_ConvertHex8
@@ -414,7 +429,7 @@ ERRORH ROUT
         BEQ     %BT02
         CMP     R1, #0
         SUBEQ   R0, R0, #1
-        SUB     R0, R0, #1 
+        SUB     R0, R0, #1
 
 10
         SWI     XOS_Write0
@@ -424,7 +439,7 @@ ERRORH ROUT
         SWI     XOS_NewLine
 
         MOV     R0, #0
-        STRB    R0, [R0, #ErrorSemaphore]                 ; Enable error translation, in case we got here in the 
+        STRB    R0, [R0, #ErrorSemaphore]                 ; Enable error translation, in case we got here in the
                                                         ; middle of looking up an error
 
         B       GOSUPV
@@ -443,8 +458,8 @@ ErrorText       =       "Error: %0 (Error Number &%1)",0
       ]
 
 
-DEFBRK  
-      [ International 
+DEFBRK
+      [ International
         TEQP    pc, #0
         MOV     r0, r0
         MOV     r13, #0
@@ -498,7 +513,7 @@ PrintError
         MOV    R12, R14
         LDR    R10, [R0], #4
         SWI    XOS_Write0
-        BVS    %FT02  
+        BVS    %FT02
       [ :LNOT: International
         SWI    XOS_WriteS
         =     " (Error number &", 0
@@ -536,7 +551,7 @@ PrintError
         CMP     R0,#"0"                 ; We only know about %0
         BNE     %BT11
 
-12                       
+12
         LDRB    R0,[R11],#1              ; Print error number.
         CMP     R0,#32
         BLT     %BT11
@@ -631,8 +646,8 @@ UNDEF1  LDR     sp, =SVCSTK             ; Flatten superstack
         LDR     R0, [R0, #ExceptionDump]
         LDR     R0, [R0, #15*4]         ; saved PC
         BIC     R0, R0, #ARM_CC_Mask
-        SWI     XOS_ConvertHex8  
-       
+        SWI     XOS_ConvertHex8
+
       [ International
         MOV     r4, #0
         LDRB    r4, [r4, #ErrorSemaphore]
@@ -866,7 +881,7 @@ AOS_Table
         &  UndHan       ; UndefinedHandler
         &  0
         &  0
-    
+
         &  PAbHan       ; PrefetchAbortHandler
         &  0
         &  0
@@ -1050,7 +1065,7 @@ ReadSysInfo_Code ROUT
         MOV     r0, #ReadCMOS
         MOV     r1, #ScreenSizeCMOS
         SWI     XOS_Byte
-        AND     r0, r2, #&7F            ; top bit is reserved 
+        AND     r0, r2, #&7F            ; top bit is reserved
         MOV     r10, #0
         LDR     r10, [r10, #Page_Size]
         MUL     r0, r10, r0
@@ -1253,13 +1268,68 @@ IOST_BATMAN     * 64    ;Stork keyboard/battery controller seems to be present
         MOV     r0, r0, LSR #8                          ; Lose family byte
         LDR     r1, =&0000A4100000                      ; Base Ethernet address
         ADD     r0, r1, r0                              ; Add Dallas part to base
+        [ STB
+        TST     r0, #1:SHL:23                           ; Check not overflowed into secondary range
+        BNE     ExitNoEthernetAddress
+        MOV     r1, r0, LSR #24                         ; Check not overflowed out of Acorn's range
+        TEQ     r1, #&A4
+        BNE     ExitNoEthernetAddress
+        ]
         MOV     r1, #0                                  ; Top 16 bits are zero
         ExitSWIHandler
 
 ExitNoEthernetAddress
+        [ :LNOT: STB
         MOV     r0, #0
         MOV     r1, #0
         ExitSWIHandler
+        |
+        Push    "r2,lr"
+        MOV     r1, #Service_MachineAddress             ; See if anyone else can provide it
+        BL      Issue_Service
+        TEQ     r1, #0
+        MOVEQ   r1, r2
+        BLNE    GetMachineAddressCMOS
+        Pull    "r2,lr"
+        ExitSWIHandler
+        ]
+
+        [ STB
+GetMachineAddressCMOS
+; Out:  r0 = lower 4 bytes (or 0)
+;       r1 = upper 2 bytes (or 0)
+;       EQ => valid, NE => invalid
+;
+        Push    "r2-r5,lr"
+        MOV     r1, #EtherAddrCMOS
+        MOV     r2, #0                                  ; For lower 4 bytes
+        MOV     r3, #0                                  ; For upper 2 bytes
+        MOV     r4, #0                                  ; For checksum
+        MOV     r5, #6                                  ; Read 6 bytes
+01
+        MOV     r0, r1
+        BL      Read
+        ADD     r1, r1, #1                              ; Move on to next byte
+        MOV     lr, r2, LSR #24                         ; Get top byte of lower word
+        ORR     r3, lr, r3, LSL #8                      ; and put it into bottom byte of upper word
+        ORR     r2, r0, r2, LSL #8                      ; Put byte read into bottom byte of upper word
+        ADD     r4, r4, r0                              ; Add byte to checksum
+        SUBS    r5, r5, #1                              ; Any more bytes?
+        BNE     %BT01
+
+        ASSERT  EtherCheckCMOS = EtherAddrCMOS+6
+        MOV     r0, r1                                  ; Read checksum byte
+        BL      Read
+        AND     r4, r4, #&FF                            ; Bottom byte of checksum
+        EOR     r0, r0, #&FF                            ; should be inverted in CMOS
+        TEQ     r0, r4
+        MOVEQ   r0, r2                                  ; Use CMOS values if valid
+        MOVEQ   r1, r3
+        MOVNE   r0, #0                                  ; otherwise no address.
+        MOVNE   r1, #0
+        Pull    "r2-r5,pc"
+        ]
+
 
 ; OS_ReadSysInfo 5
 ;

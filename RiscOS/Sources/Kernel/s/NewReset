@@ -22,7 +22,14 @@ Copy_Down_Flag  # 1
 
 KeyDataPtr      # 4
  [ MorrisSupport
+  [ STB
 Port2Present    # 4
+  |
+Port2Present    # 1
+Port3Present    # 1
+UnusedByte3     # 1
+UnusedByte4     # 1
+  ]
  ]
 
  [ MEMM_Type = "ARM600"
@@ -487,7 +494,12 @@ Continue
         MOV     R13, R1                 ; R13 is now the RAM size
         MOV     R9, R2                  ; need this to set soft copy right
 
+   [ RunningOnEmul :LAND: :LNOT: STB
+        MOV     R7,#&80
+        ORR     R7,R7,#&3E00            ; r7 := &3E80 = 16000 (standard Risc PC value)
+   |
         BL      TimeCPU                 ; r7 := CPU speed in kHz/MEMC1a flag
+   ]
 
 ; first ensure nothing dangerous in MEMC
 
@@ -587,7 +599,12 @@ noarm3
         STR     R1, [R0, #R_Down_Flag]  ; all CMOS reset flags
         STR     R1, [R0, #KeyDataPtr]
  [ MorrisSupport
+  [ STB
         STR     R1, [R0, #Port2Present]
+  |
+        STRB    R1, [R0, #Port2Present]
+        STRB    R1, [R0, #Port3Present]
+  ]
  ]
         B       SetUpKbd                ; No stack yet so branch and branch back.
 SetUpKbdReturn
@@ -610,6 +627,25 @@ SetUpKbdReturn
         STR     R2, [R3, #&18]          ; but hopefully by the same value!
 
         ORR     r0, r0, #SVC32_mode     ; switch into SVC32
+
+ [ StrongARM
+   ;for StrongARM, we need to do an IMB type thing for modifying code in vector area
+        ARM_read_ID r1
+        AND     r1,r1,#&F000
+        CMP     r1,#&A000
+        BNE     vectorpoke_notSA_1
+        MOV     r1,#0                   ;we clean one cache entry, 0..1F, = vector area
+  [ SAcleanflushbroken
+        ARMA_clean_DCentry r1
+        ARMA_flush_DCentry r1
+  |
+        ARMA_cleanflush_DCentry r1
+  ]
+        ARMA_drain_WB
+        ARMA_flush_IC
+vectorpoke_notSA_1
+ ]
+
         BIC     r0, r0, #I32_bit        ; and enable IRQs
         msr     AL, CPSR_all, r0
 
@@ -656,6 +692,16 @@ SetUpKbdReturn
         LDR     sp, =SVCSTK             ; set up a stack
 
 ; do as much other initialisation as possible, to give keyboard stuff time
+ [ StrongARM
+        BL      Processor_Type          ; Determines the processor type & stores it in page 0.
+ ]
+
+;StrongARM: OK, there is quite a bit of code poking below, to various addresses. We'll
+;           defer IMB consideration till the poking's done, then do a full IMB (full
+;           data cache clean). This avoids various little IMB's and removes chance of leaving
+;           some unnoticed poked code in data cache. The deferral should be safe, because none
+;           of the poked code will be used yet awhile (given that current IRQ hardware vector is
+;           not actually changed below).
 
  [ ProcessorVectors
 ; Copy default processor vector table and default preveneers.
@@ -755,8 +801,13 @@ PadSVCTable
         BNE     PadSVCTable
 
 ; now the dirty branch
-        LDR     R1, [R1]
-        STR     R1, [R0]
+        [ {TRUE}          ; first version is from STB, second from 3.70
+        LDR     R1, [R1]  ; since R0, R1, R2 all get trashed soon stay
+        STR     R1, [R0]  ; with the more efficient STB version
+        |
+        LDR     R2, [R1], #4
+        STR     R2, [R0], #4
+        ]
 
 ; now the time/date conversions
 
@@ -776,6 +827,23 @@ conversionSWIfill
         CMP     R2, #OS_ConvertFileSize+1
         BNE     conversionSWIfill
 
+;StrongARM: OK, that completes the poking around, some of which is code. Now let's
+;           do a full IMB type thing, to be safe (if we're running on StrongARM)
+  [ StrongARM
+        ARM_read_ID R0
+        AND     R0,R0,#&F000
+        CMP     R0,#&A000
+        BNE     afterpokingaround_notSA
+        MOV     R1,#0
+        STRB    R1,[R1,#SyncCodeA_sema]    ;initialise semaphore to 0
+        MOV     R1,#ARMA_Cleaner_flipflop
+        LDR     R0,=ARMA_Cleaners_address  ;note: we are initialising ARMA_Cleaner_flipflop here
+        STR     R0,[R1]
+        ARMA_clean_DC R0,R1,R2
+        ARMA_drain_WB
+        ARMA_flush_IC
+afterpokingaround_notSA
+  ]
 
 ; Initialise CAO ptr to none.
 
@@ -783,8 +851,11 @@ conversionSWIfill
         MOV     R1, #32*1024*1024       ; nothing will be here!!
         STR     R1, [R0, #Curr_Active_Object]
 
-
-KeyWait *       200000                  ; 1/5 sec wait (in microseconds)
+    [ RunningOnEmul :LAND: :LNOT: STB
+KeyWait *       1
+    |
+KeyWait * 200000                 ; 1/5 sec wait (in microseconds)
+    ]
 
     [ KeyWait <> 0
 ; Check for keyboard there every 1/5 sec. but give up after 2 secs.
@@ -801,6 +872,77 @@ kbdwait
         BNE     kbdwait
 kbdthere
     ]
+
+
+ [ ValidateCMOS :LAND: STB
+; Do a POR if some super-critical values are shagged or if checksum is invalid.
+        MOV	R3, #-1                 ; do all RAM if we do any
+        BL      ValChecksum             ; Always check the checksum
+        BNE	cmos_reset
+
+; ScreenSizeCMOS, RAMDiscCMOS, SysHeapCMOS, RMASizeCMOS and SpriteSizeCMOS
+; should be 0. Happily they are at consecutive addresses so we can loop through
+; them.
+	MOV	R1, #ScreenSizeCMOS
+reset_loop
+	MOV	R0, R1
+	BL	Read
+	TEQ	R0, #0
+	BNE	cmos_reset
+	INC	R1
+	TEQ	R1, #SpriteSizeCMOS
+	BHI	reset_loop
+
+; FontCMOS should be <= 32 (128K)
+	MOV	R0, #FontCMOS
+	BL	Read
+	CMP	R0, #32
+	BHI	cmos_reset
+
+	MOV	R0, #VduCMOS
+	BL	Read
+ [ IOMD_C_MonitorType = 0 :LAND: MPEGPoduleNTSCNotPALMask = 0
+; Force TV if we don't have a MonitorType auto-detect bit
+	TEQ	R0, #(Sync_Separate :OR: MonitorType0)
+ |
+; Force auto-detect of monitor stuff if we have a MonitorType auto-detect bit
+	TEQ	R0, #(Sync_Auto :OR: MonitorTypeAuto)
+ ]
+	BNE	cmos_reset
+
+; Year should be >=1995, <=2020
+; (2020 is arbitrary, but everything breaks soon after that)
+	MOV	R0, #YearCMOS+1
+	BL	Read
+	TEQ	R0, #19
+	BNE	check20
+
+; 20th century: year should be 95 to 99
+	MOV	R0, #YearCMOS
+	BL	Read
+	CMP	r0,#95
+	BLT	cmos_reset
+	CMP	r0,#99
+	BHI	cmos_reset
+	B	checkboot
+
+check20
+	TEQ	R0, #20
+	BNE	cmos_reset
+
+; 21st century: year should <= 20
+	MOV	R0, #YearCMOS
+	BL	Read
+	CMP	R0, #20
+	BHI	cmos_reset
+
+checkboot
+; Bit 4 of DBTBCMOS should be 1 (Boot)
+	MOV	R0, #DBTBCMOS
+	BL	Read
+	TEQ	R0, #(1:SHL:4)
+	BNE	cmos_reset
+ ]
 
 
 ; IF power-on bit set in IOC AND R/T/Del/Copy pressed THEN reset CMOS RAM
@@ -825,12 +967,21 @@ kbdthere
         BEQ     no_cmos_reset           ; if zero then CMOS is protected
  ]
 
+ [ STB :LAND: IOMD_C_FrontPanelButton <> 0
+        MOV     r0, #IOMD_Base          ; if front panel button pressed then CMOS reset
+        LDRB    r0, [r0, #IOMD_CLINES]
+        TST     r0, #IOMD_C_FrontPanelButton
+        BEQ     cmos_reset
+ ]
+
         MOV     R0, #InitKbdWs
         LDR     R7, [R0, #R_Down_Flag]
         CMP     R7, #0
         BEQ     no_cmos_reset           ; power on bit checked again there
 
+        [ :LNOT: STB
         ADD     sp, sp, #4              ; junk CannotReset flag from stack
+        ]
 
 ; CMOS reset detectified.
 ; **************************************************************************
@@ -849,6 +1000,10 @@ kbdthere
     [ ChecksumCMOS
         BL      ValChecksum             ; unless the CMOS ram's corrupt ..
         MOVNE   R3, #-1                 ; .. then blast it anyway.
+ [ STB
+cmos_reset
+        ADD     sp, sp, #4              ; junk CannotReset flag from stack
+ ]
         MOVNE   R0, #0                  ; even the econet station number
         MOVEQ   R0, #1
     |
@@ -876,12 +1031,42 @@ skipskipforTC
 ; first full reset defaults
         CMP     r3, #-1
         BNE     pounds_bleeding_Caspell
+
+ [ STB :LAND: IOMD_C_PALNTSCType <> 0
+        MOV     r4, #IOMD_Base          ; configure territory, country and timezone based on PAL/NTSC bit
+        LDRB    r4, [r4, #IOMD_CLINES]
+        MOV     r0, #TerritoryCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #0                  ; PAL = territory UK
+        MOVNE   r1, #49                 ; NTSC = territory USA
+        BL      Write
+        MOV     r0, #CountryCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #1                  ; PAL = country UK
+        MOVNE   r1, #48                 ; NTSC = country USA
+        BL      Write
+        MOV     r0, #TimeZoneCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #0                  ; PAL = 0 from UTC (GMT)
+        MOVNE   r1, #&E0                ; NTSC = -8 hours from UTC (USA Pacific)
+        BL      Write
+        MOV     r0, #MiscellaneousNCCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #0                  ; PAL = A4 paper size
+        MOVNE   r1, #1                  ; NTSC = US letter paper size
+        BL      Write
+ |
         MOV     r0, #CountryCMOS
         MOV     r1, #1                  ; country UK
         BL      Write
+ ]
+
+ [ :LNOT: STB
         MOV     r0, #NewADFSCMOS
         MOV     r1, #&41                ; floppies=1, ST506=0, IDE=1 (changed 01-Sep-93)
         BL      Write
+ ]
+
 pounds_bleeding_Caspell
 
 ; IF R or Delete pressed THEN set sync 0 ELSE set sync Auto
@@ -897,11 +1082,22 @@ pounds_bleeding_Caspell
 
  [ MorrisSupport
         MOV     R8, #IOMD_Base
+  [ {TRUE} ; cope with ARM7500FE
+; Change test around so if not IOMD_Original, do the code,
+; rather than checking for ARM7500 (which would exclude ARM7500FE)
+	LDRB	r0, [r8, #IOMD_ID0]
+	LDRB	r1, [r8, #IOMD_ID1]
+	ORR	r0, r0, r1, LSL #8
+	LDR	r1, =IOMD_Original
+	TEQ	r0, r1
+	BEQ	dont_program_mousetype
+  |
         LDRB    R0, [R8, #IOMD_ID0]
         CMP     R0, #&98
         LDRB    R0, [R8, #IOMD_ID1]
         CMPEQ   r0, #&5B
         BNE     dont_program_mousetype
+  ]
 ;
 ; Morris based machines use PS2 mice/tracker balls
 ;
@@ -956,6 +1152,28 @@ ConfigSoundDone
 
         LTORG
 
+ [ ValidateCMOS :LAND: STB
+DefaultCMOSTable ; list of non-zero options wanted :
+; byte pairs of offset, value
+; terminated by offset &FF
+        =       KeyDelCMOS,             32
+        =       KeyRepCMOS,             8
+        =       MODETVCMOS,             &10                                     ; TV 0,1
+        =       StartCMOS,	        (2:SHL:3)				; NOCAPS
+        =       DBTBCMOS,	        (1:SHL:4)				; Boot
+        =       YearCMOS,               96
+        =       YearCMOS+1,             19
+  [ IOMD_C_MonitorType = 0
+; TV if we don't have a MonitorType auto-detect bit
+	=	VduCMOS,	        Sync_Separate :OR: MonitorType0
+  |
+; auto-detect if we have a MonitorType auto-detect bit
+	=	VduCMOS,	        Sync_Auto :OR: MonitorTypeAuto
+  ]
+        =       MouseStepCMOS,          2
+	=	DesktopFeaturesCMOS,	desktopfeaturebit_3D :OR: (8:SHL:1)	; 3D, Homerton
+	=       ModemTimeoutCMOS,       10                                      ; 5 minutes
+ | ;ValidateCMOS
 DefaultCMOSTable ; list of non-zero options wanted :
 ; byte pairs of offset, value
 ; terminated by offset &FF
@@ -1017,6 +1235,7 @@ DefaultCMOSTable ; list of non-zero options wanted :
                               ;                     Homerton.Medium
                               ;                                    tiled window background
 
+        [ STB
         =       SystemSpeedCMOS,(1:SHL:0):OR:(0:SHL:1):OR:(1:SHL:2):OR:(0:SHL:3):OR:(1:SHL:4):OR:(0:SHL:5):OR:(1:SHL:6):OR:(0:SHL:7)
                               ;  AUN ROMBoot Enabled
                               ;               AUN auto-station numbering off
@@ -1026,13 +1245,32 @@ DefaultCMOSTable ; list of non-zero options wanted :
                               ;                                                                  Cache on
                               ;                                                                               Broadcast loader disabled
                               ;                                                                                            broadcast loader colours off
+        |
+        =       SystemSpeedCMOS,(0:SHL:0):OR:(0:SHL:1):OR:(1:SHL:2):OR:(0:SHL:3):OR:(1:SHL:4):OR:(0:SHL:5):OR:(1:SHL:6):OR:(0:SHL:7)
+                              ;  AUN BootNet Disabled
+                              ;               AUN auto-station numbering off
+                              ;                            Delete-etc reset
+                              ;                                         power saving off
+                              ;                                                      WimpMode auto
+                              ;                                                                  Cache on
+                              ;                                                                               Broadcast loader disabled
+                              ;                                                                                            broadcast loader colours off
+        ]
 
+        [ :LNOT: STB
+        =       FontMaxCMOS,    64      ; 256k
+        =       FontMax2CMOS,   &28     ; 36 point
+        =       FontMax3CMOS,   &3C     ; 36 point
+        |
+        ;       yes, omitting FontMaxCMOS is deliberate!
         =       FontMax2CMOS,   &2C     ; 32 point
         =       FontMax3CMOS,   &38     ; 32 point
+        ]
         =       AlarmAndTimeCMOS,2_00010000 ; !Alarm autosave on
         =       FSLockCMOS+5,   &EA     ; Checksum for no password
         =       CDROMFSCMOS,    &60     ; drives = 0, buffer size = 32K
         =       &FF
+  ]
         ALIGN
 
 
@@ -1711,6 +1949,12 @@ clearmswis
         LDRB    R1, [R0, #IOCIRQSTAA]
         ANDS    R1, R1, #por_bit
         STRNEB  R1, [R0, #IOCIRQCLRA]   ; clear POR if set
+
+        ; from STB, but generally useful
+	MOV	R0, #0
+	MOV	R1, R1, LSR #4
+	STRB	R1, [R0, #ResetType]			; Save POR state in workspace (bit 0 of ResetType)
+
         LDREQ   R0, =OsbyteVars + :INDEX: LastBREAK
         LDREQB  R0, [R0]
         TSTEQ   R0, #&80                ; tbs set if memory cleared
@@ -1773,6 +2017,27 @@ CopyDefaultIRQ1V
         LDR     R1, RealIRQHandler
         STR     R1, [R0, #&18]
 
+ [ StrongARM
+   ;for StrongARM, we need to do an IMB type thing for modifying code in vector area, and
+   ;for copying irq handler code
+        ARM_read_ID r1
+        AND     r1,r1,#&F000
+        CMP     r1,#&A000
+        BNE     furtherpoke_notSA
+   ;first, we clean one cache entry, 0..1F, = vector area
+        MOV     r1,#0
+        ARMA_clean_DCentry r1
+   ;next, we clean DefaultIRQ1V code area
+        LDR     r0,=DefaultIRQ1V
+        ADD     r1,r0,#(DefaultIRQ1Vcode_end - DefaultIRQ1Vcode)
+        ARMA_clean_DCrange r0,r1
+   ;and then we synch IC
+        ARMA_drain_WB
+        ARMA_flush_IC
+        MOV     r0,#0    ;restore r0 as zero base
+furtherpoke_notSA
+ ]
+
  [ CPU_Type = "ARM600"
 
 ; now back to SVC26
@@ -1801,8 +2066,10 @@ CopyDefaultIRQ1V
         TEQP    pc, #SVC_mode           ; enable IRQs
         NOP
 
+        [ DoInitialiseMode :LOR: :LNOT: STB
         BL      InitialiseMode          ; select correct screen mode, in case any
                                         ; stupid module prints anything in initialisation
+        ]
 
         MOV     R0, #&FD                ; read last reset type
         MOV     R1, #0
@@ -1812,7 +2079,9 @@ CopyDefaultIRQ1V
         BEQ     SkipHardResetPart2
 
 ; HardResetPart2
+        BL      L1L2PTenhancements      ; little tricks on cacheability etc for performance
         BL      InitVariables
+        BL      AMBControl_Init         ; initialise AMBControl section
         BL      ModuleInit              ; initialise modules
                                         ; scan podules, copy modules.
 
@@ -1837,16 +2106,31 @@ CopyDefaultIRQ1V
         MOV     R0, #FSControl_SelectFS ; set configured filing system
         SWI     XOS_FSControl
 
+  [ DebugROMInit
+        SWI     XOS_WriteS
+        =       "Service_PostInit",0
+        SWI     XOS_NewLine
+  ]
         MOV     r1, #Service_PostInit   ; issue post-initialisation service
         BL      Issue_Service
 
 ; New code added here by TMD 01-Apr-92
 ; Go into user mode, issue a dummy SWI, then go back into SVC mode
 
+  [ DebugROMInit
+        SWI     XOS_WriteS
+        =       "callbacks",0
+        SWI     XOS_NewLine
+  ]
         TEQP    PC, #0                  ; enter USR mode (IRQs, FIQs enabled)
         NOP                             ; wait for it to take effect
         SWI     XOS_WriteI+0            ; I hope it doesn't generate an error
                                         ; otherwise the callback will get deferred!
+  [ DebugROMInit
+        SWI     XOS_WriteS
+        =       "EnterOS!",0
+        SWI     XOS_NewLine
+  ]
         SWI     XOS_EnterOS             ; switch back to SVC mode (IRQs, FIQs enabled)
 
 ; end of added code
@@ -1868,7 +2152,9 @@ SkipHardResetPart2                      ; code executed on all types of reset
         STRNEB  r0, [r0, #ErrorSemaphore] ; then allow errors to be translated
       ]
 
+    [ DoInitialiseMode :LOR: :LNOT: STB
         BL      InitialiseMode
+     [ :LNOT: STB                      ; don't print stuff on STB type products
         SWI     XOS_WriteS
         =       10, "$SystemName ", 0   ; now RISC OS (no +) again
         ALIGN
@@ -1894,7 +2180,25 @@ SkipHardResetPart2                      ; code executed on all types of reset
         =       "K", 10,13, 10, 0       ; title complete
         ALIGN
       ]
-        MOV     r0, #0                  ; Set DomainId to 0 every reset
+     ]
+    ]
+
+ [ StrongARM
+  [ STB
+   ! 0,"Printing of processor type disabled - 7500/FE weren't included"
+  |
+        ;Print the processor type
+        MOV     r0, #0
+        LDRB    r0, [r0, #ProcessorType]
+        TEQ     r0, #255
+        BEQ     %FT01
+        ADR     r1, processor_names
+        ADD     r0, r1, r0, LSL #5
+        SWI     XOS_Write0
+   ]
+ ]
+
+01      MOV     r0, #0                  ; Set DomainId to 0 every reset
         STR     r0, [r0, #DomainId]     ; before calling anyone
 
 ; issue reset service call
@@ -1910,8 +2214,11 @@ SkipHardResetPart2                      ; code executed on all types of reset
         MOV     R1, #Service_ReleaseFIQ
         SWI     XOS_ServiceCall
 
+ [ SoftResets :LAND: STB
+        ! 0, "!!!! SoftReset is true => resets close all open files !!!!"
         MOV     R0, #FSControl_Shut     ; Open files get closed at reset
         SWI     XOS_FSControl
+ ]
 
         BL      PostInit
 
@@ -1939,7 +2246,11 @@ SkipHardResetPart2                      ; code executed on all types of reset
 
         MOV     r3, #0
         LDR     r3, [r3, #MetroGnome]
+ [ RunningOnEmul :LAND: :LNOT: STB
+        ADD     r3,r3,#1
+ |
         ADD     r3, r3, #10             ; Hang about for a little while
+ ]
 
 KeypadStar_key  * -92
 
@@ -1979,7 +2290,9 @@ HorologicalDelayLoop1
         BL      WriteMultiField
 
 64
+    [ DoInitialiseMode :LOR: :LNOT: STB
         BL      InitialiseMode
+
       [ International
         SWI     XOS_WriteI+10
         BLVC    WriteS_Translated
@@ -1990,6 +2303,7 @@ HorologicalDelayLoop1
         =       10,"Monitor type reconfigured.",10,13,10,0
         ALIGN
       ]
+    ]
         B       %FT75
 
 BranchThroughZeroInstruction2
@@ -2012,11 +2326,65 @@ MonitorKeypadTable      ; internal key number, CMOS bits
         =       43,  MonitorType9
         =       76,  MonitorTypeAuto    ; keypad dot
         =       &FF
-        ALIGN
+        ALIGN 32
+
+ [ StrongARM
+  [ STB
+   ! 0,"Disabling Processor ID display"
+  |
+processor_names
+        DCB     "ARM 600 Processor",10,13,10,0
+        ALIGN 32
+        DCB     "ARM 610 Processor",10,13,10,0
+        ALIGN 32
+        DCB     "ARM 700 Processor",10,13,10,0
+        ALIGN 32
+        DCB     "ARM 710 Processor",10,13,10,0
+        ALIGN 32
+        DCB     "ARM 810 Processor",10,13,10,0
+        ALIGN 32
+        DCB     "StrongARM Processor",10,13,10,0
+        ALIGN 32
+        ; type, internal type, features
+  ]
+cputable
+        DCD &6000,0,0
+        DCD &6100,1,0
+        DCD &7000,2,0
+        DCD &7100,3,0
+        DCD &8100,4,2_11101
+        DCD &a100,5,2_11111
+        DCD -1
+ ]
+
       [ International
 MessageFileName DCB     "Resources:$.Resources.Kernel.Messages",0
         ALIGN
       ]
+
+ [ StrongARM
+Processor_Type
+        ReadCop  R0,CR_ID               ; see data sheets for values
+        ; ARM 600 funny
+        TST     R0,#&f000
+        MOVEQ   R0,R0, LSL #4
+        AND     R0,R0,#&ff00
+        ADR     R1,cputable
+66
+        LDR     R2,[R1],#4
+        TEQ     R2,#0
+        MOVMI   R0,#0
+        STRMIB  R2,[R0,#ProcessorType]
+        MOVMI   PC,LR
+        TEQ     R2,R0
+        ADDNE   R1,R1,#8
+        BNE     %BT66
+        LDMIA   R1,{R0,R2}
+        MOV     R1,#0
+        STRB    R0,[R1,#ProcessorType]
+        STRB    R2,[R1,#ProcessorFlags]
+        MOV     PC,LR
+ ]
 
 70
         MOV     r14, #0
@@ -2069,7 +2437,11 @@ Hortoculture_Kicking
 
         MOV     r3, #0
         LDR     r3, [r3, #MetroGnome]
+ [ RunningOnEmul :LAND: :LNOT: STB
+        ADD     r3,r3,#1
+        |
         ADD     r3, r3, #10             ; Hang about for a little while
+ ]
 
 HorologicalDelayLoop2
         MOV     r1, #KeypadStar_key :AND: &FF
@@ -2110,6 +2482,7 @@ str_booterror   DCB     "Boot$Error",0
 
 
 AutoBootCosNoKbd
+    [ :LNOT: STB
       [ International
         SWI     XOS_WriteI+7
         BLVC    WriteS_Translated
@@ -2120,6 +2493,7 @@ AutoBootCosNoKbd
         =       7, "No keyboard present - autobooting", 10,13,0
         ALIGN
       ]
+    ]
         B       Hortoculture_Kicking
 
 

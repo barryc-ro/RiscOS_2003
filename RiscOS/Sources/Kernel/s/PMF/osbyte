@@ -7,6 +7,8 @@
 ; 2.01     15-June-90  JSR  Change OS_Byte 124/125/126 to update the CallBack_Flag byte
 ;                            correctly, rather than setting it to 1. The bug caused vector
 ;                            callbacks to be delayed over much when escape was pressed.
+; ????     08-Feb-95   WT   Change OS_Byte 106 to support the new cursor storage method
+;                            introduced for Stork LCD support.
 
 OsbyteLowLimit * &6A    ; osbytes lower than this get Y set to 0
 OsbyteVeryLow  * &1A    ; osbytes lower than this are all recognised
@@ -14,7 +16,11 @@ OsbyteSetCountry * &46
 OsbyteSetAlphKey * &47
 OsbyteWrchDests * &EC   ; only OS_Byte variable which isn't pure any more!
 
+         [ STB
 ArthurINKEY256 * &A6    ; INKEY-256 value
+         |
+ArthurINKEY256 * &A7    ; INKEY-256 value
+         ]
 
 ; *****************************************************************************
 
@@ -307,7 +313,7 @@ Osbyte02 ROUT
                                         ; (may store same value if already open, but who cares?)
 20
         Pull    "r0"
- ] 
+ ]
         LDRB    R1, InputStream         ; old input stream
         STRB    R0, InputStream
         MyOsbyte
@@ -524,7 +530,7 @@ Osbyte910
         BL      DoFirstFlash
         Pull    "R1,R2"
         MyOsbyte
-                                         
+
 ForceSecondState
         Push    "R1,R2"
         BL      DoSecondFlash
@@ -539,7 +545,7 @@ V2BBC
         B       DoOsbyteVar
 
 ; Write Keyboard Rate
-Osbyte0C  
+Osbyte0C
         TEQ     R1, #0
         BNE     V2BBC
         CLRPSR  I_bit, R0       ; this may take some time
@@ -624,13 +630,13 @@ Osbyte12 ROUT
 
 Osbyte13 ROUT
 
-        MOV     R14, PC               
-        
+        MOV     R14, PC
+
         ; bug fix for MED-03165. Having a DPMS-blanked screen stopped printing.
         ; The reason is that HSyncs stop and VSyncs stop as a consequence,
-        ; but the Hourglass module uses this call to wait for the next VSync 
+        ; but the Hourglass module uses this call to wait for the next VSync
         ; before animating the hourglass.
-        ; When the screen is DPMS-blanked this osbyte will now return 
+        ; When the screen is DPMS-blanked this osbyte will now return
         ; immediately. This is equivalent to the operation of the DPMSUtils
         ; module shipped with OS 3.50.
 
@@ -638,19 +644,28 @@ Osbyte13 ROUT
 
         LDRB    R0, [R2,#ScreenBlankFlag]
         LDRB    R1, [R2,#ScreenBlankDPMSState]
-        
+
         TEQ     R0, #0                  ; NE => blanked
         TSTNE   R1, #1                  ; NE => blanked and DPMS turned off HSyncs
         BNE     %FT20                   ; if true exit immediately
-        
+
         LDRB    R0, CFStime
 10
         TEQP    R14, #I_bit             ; CLI
+ [ StrongARM
+   ;StrongARM core will not see interrupt unless disable is cleared for at least 5 cycles,
+   ;in order to fill synchroniser pipe
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+ ]
         TEQP    R14, #0                 ; SEI
         LDRB    R1, CFStime
         TEQ     R1, R0
         BEQ     %BT10
-20        
+20
         MyOsbyte
 
 ; *****************************************************************************
@@ -845,7 +860,55 @@ DoOsbyteSetAlphKey ROUT
 ; R1 = 1..4     => use pointer shape 1..4, linked to mouse
 ; R1 = &81..&84 => use pointer shape 1..4, unlinked
 ;
+ [ LCDSupport           ;Must copy the shape from the buffer image into the 'current' buffer (ie create 4 instances)
+Osbyte6A
 
+;;;don't do a wait for vsync
+;;; [ Fix8
+;;;        CLRPSR  I_bit, R0                       ; could take some time
+;;; ]                                                                       
+;;;        MOV     R3, R1                          ; OS_Byte 19 corrupts R1 & R2 (why oh why oh why oh why oh why...)
+;;;        MOV     R0, #19                         ; wait for vsync, so we change
+;;;        SWI     XOS_Byte                        ; cleanly (ignore errors)
+;;;        MOV     R1, R3
+
+        VDWS    R0
+        LDRB    R3, [R0, #PointerShapeNumber]   ; get old shape number
+        AND     R2, R1, #&7F                    ; allow 0..4, &80..&84
+        CMP     R2, #4+1
+        STRCCB  R1, [R0, #PointerShapeNumber]
+        MOV     R1, R3
+        MyOsbyte CS                             ;Leave if pointer shape was out of range
+        CMP     R2, #0
+        MyOsbyte EQ                             ;Leave if pointer shape was 'off'
+
+        Push    "r0-r12,r14"
+        SUB     R2, R2, #1                      ;Now in range 0-3
+        LDR     R0, =CursorData
+        MOV     R1, R0                          ;R1 points to 1st current image
+        ADD     R0, R0, #&400                   ;R0 points to the start of the buffer images
+        ADD     R0, R0, R2, LSL #8              ;Now, it points to the source buffer image
+        ADD     R2, R1, #&100                   ;R2 points to 2nd current image
+        ADD     R3, R2, #&F8                    ;R3 points to 3rd current image (top line will get lost, on purpose!)
+        ADD     R4, R3, #&100                   ;R4 points to 4th current image (correct wrt 3rd image)
+
+;StrongARM note: cursor area is now marked cacheable/bufferable (so that SWI despatch etc. is also)
+;However, since the area for the current cursor (@ CursorData, &400 bytes) is never read by RISC OS,
+;it can never be in the cache, so there is no need to clean the write-back cache to force the new data
+;out. All that remain is the write buffer, but this will drain quickly without help.
+;
+        ADD     R5, R0, #&100                   ;R5 is the end address.
+11      LDMIA   R0!, {R6-R12,R14}
+        STMIA   R1!, {R6-R12,R14}
+        STMIA   R2!, {R6-R12,R14}
+        STMIA   R3!, {R6-R12,R14}
+        STMIA   R4!, {R6-R12,R14}
+        CMP     R0, R5
+        BNE     %BT11                           ;Keep going, more to do
+
+        Pull    "r0-r12,r14"
+        MyOsbyte                                ;This is a silly macro!
+ |
 Osbyte6A
         VDWS    R0
         LDRB    R3, [R0, #PointerShapeNumber]   ; get old shape number
@@ -854,6 +917,7 @@ Osbyte6A
         STRCCB  R1, [R0, #PointerShapeNumber]
         MOV     R1, R3
         MyOsbyte
+ ]
 
 ; Set vdu driver's screen number
 Osbyte70
@@ -874,7 +938,7 @@ Osbyte72
 ; *****************************************************************************
 
 ; Read VDU Status
-Osbyte75    
+Osbyte75
         Push    R2
         ByteToNosbod DoReadVDUStatus
         Pull    R2
@@ -978,7 +1042,7 @@ Osbyte7E ROUT
         BVS     %FT99                           ; no noises anyway!
         LDR     R0, =&01010008                  ; channel 8, amplitude &101
         MOV     R1, #&00010000                  ; pitch 0, duration 1
-10        
+10
         SWI     XSound_ControlPacked
         BVS     %FT99                           ; (R0 would be corrupted)
         SUB     R0, R0, #1                      ; decrement channel
@@ -994,7 +1058,7 @@ Osbyte7E ROUT
         CMP     R1, #0                          ; is EXEC file open (and V:=0)
         STRNEB  R0, ExecFileH                   ; if so, zero handle and close
                                                 ; (will enable IRQs for me)
-        SWINE   XOS_Find                        ; (R0=0, R1=handle) 
+        SWINE   XOS_Find                        ; (R0=0, R1=handle)
         ByteReturnV VS                          ; if error then bomb out
 
         BL      FlushAll
@@ -1079,7 +1143,7 @@ NotMy81                         ; DoInkeyOp passed it on
                                 ; and restore real passing on return address
         Unused                  ; else pass it on still
 
-My81                      
+My81
         Pull    R14             ; throw away real passing on address
         ByteReturnV
 
@@ -1218,14 +1282,27 @@ OsbyteA1    ; R1 = address , R2 = result
         MyOsbyte
 
 ; Write CMOS RAM
-OsbyteA2 
+OsbyteA2
         CLRPSR  I_bit, R0       ; this may take some time
         ANDS    R0, R1, #&FF    ; only look at bottom byte
         [ ProtectStationID
         MyOsbyte EQ
         ]
+        [ STB
+        ; Protect machine address CMOS (if not corrupt)
+        ASSERT  EtherCheckCMOS = EtherAddrCMOS+6
+        CMP     r0, #EtherAddrCMOS
+        BLT     %FT10
+        CMP     r0, #EtherCheckCMOS
+        BGT     %FT10
+        Push    "r0,r1"
+        BL      GetMachineAddressCMOS
+        Pull    "r0,r1"
+        MyOsbyte EQ             ; don't allow write if address is valid
+10
+        ]
         MOV     R1, R2
-        BL      Write      
+        BL      Write
         MOV     R1, R0          ; R1 is supposed to be preserved
         MyOsbyte
 
@@ -1247,7 +1324,7 @@ OsbyteA3 ROUT
 ; *****************************************************************************
 
 ; Read Output cursor Position
-OsbyteA5                                       
+OsbyteA5
         ByteToNosbod DoReadPOSVPOSO     ; Result in R1,R2   (Horiz,vert)
         MyOsbyte
 
