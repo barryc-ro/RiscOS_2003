@@ -119,7 +119,27 @@ coreres:
 	${CP} LocalRes:Messages ${EXPDIR}.!${COMPONENT}.Messages ${CPFLAGS}
 	${CP} LocalRes:Res ${EXPDIR}.!${COMPONENT}.Res ${CPFLAGS}
 	${MKDIR} ${EXPDIR}.!${COMPONENT}.WebPages
-	${CP} LocalRes:WebPages.testpage ${EXPDIR}.!${COMPONENT}.WebPages.testpage ${CPFLAGS}
+	${CP} LocalRes:WebPages.01-1 ${EXPDIR}.!${COMPONENT}.WebPages.01-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.01-2 ${EXPDIR}.!${COMPONENT}.WebPages.01-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.01-3 ${EXPDIR}.!${COMPONENT}.WebPages.01-3 ${CPFLAGS}
+	${CP} LocalRes:WebPages.02   ${EXPDIR}.!${COMPONENT}.WebPages.02   ${CPFLAGS}
+	${CP} LocalRes:WebPages.03   ${EXPDIR}.!${COMPONENT}.WebPages.03   ${CPFLAGS}
+	${CP} LocalRes:WebPages.04   ${EXPDIR}.!${COMPONENT}.WebPages.04   ${CPFLAGS}
+	${CP} LocalRes:WebPages.05   ${EXPDIR}.!${COMPONENT}.WebPages.05   ${CPFLAGS}
+	${CP} LocalRes:WebPages.06   ${EXPDIR}.!${COMPONENT}.WebPages.06   ${CPFLAGS}
+	${CP} LocalRes:WebPages.11   ${EXPDIR}.!${COMPONENT}.WebPages.11   ${CPFLAGS}
+	${CP} LocalRes:WebPages.21   ${EXPDIR}.!${COMPONENT}.WebPages.21   ${CPFLAGS}
+	${CP} LocalRes:WebPages.22   ${EXPDIR}.!${COMPONENT}.WebPages.22   ${CPFLAGS}
+	${CP} LocalRes:WebPages.23   ${EXPDIR}.!${COMPONENT}.WebPages.23   ${CPFLAGS}
+	${CP} LocalRes:WebPages.24   ${EXPDIR}.!${COMPONENT}.WebPages.24   ${CPFLAGS}
+	${CP} LocalRes:WebPages.25   ${EXPDIR}.!${COMPONENT}.WebPages.25   ${CPFLAGS}
+	${CP} LocalRes:WebPages.26   ${EXPDIR}.!${COMPONENT}.WebPages.26   ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-1 ${EXPDIR}.!${COMPONENT}.WebPages.27-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-2 ${EXPDIR}.!${COMPONENT}.WebPages.27-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-3 ${EXPDIR}.!${COMPONENT}.WebPages.27-3 ${CPFLAGS}
+	${CP} LocalRes:WebPages.28-1 ${EXPDIR}.!${COMPONENT}.WebPages.28-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.28-2 ${EXPDIR}.!${COMPONENT}.WebPages.28-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.30   ${EXPDIR}.!${COMPONENT}.WebPages.30   ${CPFLAGS}
 
 ${DIRS}:
 	${mkdir} o
