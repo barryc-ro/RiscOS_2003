@@ -20,6 +20,8 @@ MKDIR   = cdir
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
+CMHG    = cmhg
+CMHG    = cmhg
 CP      = copy
 LD      = link
 RM      = remove
@@ -41,8 +43,9 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-INETLIB=TCPIPLibs:o.inetlibzm
-SOCKLIB=TCPIPLibs:o.socklibzm
+INETLIB   = TCPIPLibs:o.inetlibzm
+SOCKLIB   = TCPIPLibs:o.socklibzm
+DEBUGLIB  = <Lib$Dir>.DebugLib.o.DebugLibzm
 #
 # Include files
 #
@@ -56,14 +59,20 @@ DFLAGS   = -DCOMPAT_INET4
 # Program specific options:
 #
 COMPONENT = webgopher
+COMPONENTD= ${COMPONENT}D
 TARGET    = aof.${COMPONENT}
 OBJS      = modhead.o files.o gopher.o
+OBJSD     = modhead.o od.files od.gopher
+LIBS      = ${CLIB} ${INETLIB} ${SOCKLIB}
+LIBSD     = ${CLIB} ${DEBUGLIB} ${INETLIB} ${SOCKLIB}
 EXPORTS   = h.gopherpub
 
 #
 # Rule patterns
 #
+.SUFFIXES:  .o .od .s .h .cmhg .c .z
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c.od:;     ${CC} ${CFLAGS} -DDEBUGLIB -Fn -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
@@ -72,6 +81,7 @@ EXPORTS   = h.gopherpub
 # build a relocatable module:
 #
 all: rm.${COMPONENT}
+debug: rm.${COMPONENTD}
 
 #
 # RISC OS ROM build rules:
@@ -90,6 +100,7 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} aof ${WFLAGS}
         ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
@@ -102,6 +113,7 @@ ${DIRS}:
         @${MKDIR} linked
         @${MKDIR} map
         @${MKDIR} o
+        @${MKDIR} od
         @${MKDIR} rm
         create ${DIRS}
         stamp  ${DIRS}
@@ -126,14 +138,20 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${DIRS}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
+# Non-debug RAM target
+rm.${COMPONENT}: ${OBJS} ${LIBS} ${DIRS}
+        ${LD} -o $@ -module ${OBJS} ${LIBS}
+
+# Debug RAM target
+rm.${COMPONENTD}: ${OBJSD} ${LIBSD} ${DIRS}
+        ${LD} -o $@ -module ${OBJSD} ${LIBSD}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Static dependencies
 
-o.gopher: h.ModHead
+o.gopher:  h.ModHead
+od.gopher: h.ModHead
 
 # Dynamic dependencies:
