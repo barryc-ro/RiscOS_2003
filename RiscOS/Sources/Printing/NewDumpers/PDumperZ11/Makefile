@@ -22,6 +22,7 @@ RM		= remove
 MODSQZ		= modsqz
 RESGEN		= resgen
 WIPE    	= -wipe
+STRIP   	= -stripdepnd
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
 CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} 
@@ -84,7 +85,8 @@ OBJS =\
  o.pdsupport \
  o.lexsupport \
  o.rawsprite \
- o.lscairo
+ o.lscairo \
+ o.daheap
 
 OBJSD =\
  od.fccairo \
@@ -100,7 +102,8 @@ OBJSD =\
  od.pdsupport \
  od.lexsupport \
  od.rawsprite \
- od.lscairo
+ od.lscairo \
+ od.daheap
 
 PSOBJS = \
  o.printspr \
@@ -177,6 +180,7 @@ clean:
         ${WIPE} aof ${WFLAGS}
 	${WIPE} abs ${WFLAGS}
 	${WIPE} Targets ${WFLAGS}
+	${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:

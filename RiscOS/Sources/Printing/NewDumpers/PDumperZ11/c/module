@@ -1,13 +1,20 @@
 /* Z11 main program */
 
 //#define ALLOCBOMB	3
-//#define ACORNDEBUG
+#define ACORNDEBUG
 
 #include "common.h"
 #include "cairoswis.h"
 #include "pdumper.h"
 #ifdef TEXTPRINT
 #include "wedge.h"
+#endif
+
+#ifdef TRACE
+#ifdef ACORNDEBUG
+#define DEBUGLIB
+#include "DebugLib/DebugLib.h"
+#endif
 #endif
 
 #ifndef Tracker_Open
@@ -65,6 +72,10 @@ static int cairo__open(char *title, int width, int height, int flags)
 
 	return regs.r[0];
 #else
+	debug_initialise(title, "Z11", NULL);
+	debug_output_device(SOCKET_OUTPUT);
+	debug_set_taskname_prefix(TRUE);
+	dprintf(("", "Debug initialised OK\n"));
 	return 1;
 #endif
 }
@@ -85,8 +96,9 @@ static void cairo__writes(int handle, const char *s)
 	_kernel_swi_regs regs;
 
 #ifdef ACORNDEBUG
-	regs.r[0] = (int) s;
-	(void) _kernel_swi(XDebugMod_Send, &regs, &regs);
+	//regs.r[0] = (int) s;
+	//(void) _kernel_swi(XDebugMod_Send, &regs, &regs);
+	dprintf(("", s));
 #else
 	regs.r[0] = handle;
 	regs.r[1] = (int) s;
@@ -96,23 +108,23 @@ static void cairo__writes(int handle, const char *s)
 
 void cairo_traceout(const char *s)
 {
-	if (cairo__trackHandle == 0)
-		cairo__trackHandle = cairo__open("Cairo", 80, 5000, 1);
-
-	if (cairo__trackHandle < 0)
-		return;
-
 #ifdef FILETRACE
 	if (1)
 	{
 		FILE *fl;
-		if (fl = fopen("$.Cairo", "a"), fl)
+		if (fl = fopen("$.TraceOut", "a"), fl != NULL)
 		{
 			fputs(s, fl);
 			fclose(fl);
 		}
 	}
 #endif
+
+	if (cairo__trackHandle == 0)
+		cairo__trackHandle = cairo__open("Cairo", 80, 5000, 1);
+
+	if (cairo__trackHandle < 0)
+		return;
 
 	cairo__writes(cairo__trackHandle, s);
 }
@@ -147,6 +159,11 @@ static void cairo__finalise(void)
 		cairo__trackHandle = -1;
 	}
 #endif
+
+#ifdef USEDA
+	daheap_dispose();
+#endif
+
 }
 
 void cairo_service(int nService, _kernel_swi_regs *r, void *ws)
@@ -167,23 +184,6 @@ void cairo_service(int nService, _kernel_swi_regs *r, void *ws)
 	}
 }
 
-_kernel_oserror *cairo_initialise(char *cmd, int pod, void *ws)
-{
-	(void) cmd;
-	(void) pod;
-
-	cairo__wsp = ws;
-
-	atexit(cairo__finalise);
-	cairo_register(ws);
-
-#ifdef TEXTPRINT
-	wedge_claim(cairo__wsp);
-#endif
-
-	return NULL;
-}
-
 #define BASE(n)	((n) & 0x3f)
 
 jmp_buf	cairo_jb[cairo_EXMAX];
@@ -197,6 +197,8 @@ void cairo_throw(
 {
 	if (err)
 	{
+		static char errbuf[256];
+
 		if (cairo_sp <= 0)
 		{
 #ifdef MEMTRACE
@@ -207,10 +209,30 @@ void cairo_throw(
 		}
 		--cairo_sp;
 #ifdef MEMTRACE
-		cairo_trace5("Throwing error (\"%s\"[%p], %d): \"%s\" (%d)\n", file, file, line, err->errmess, cairo_sp);
+		cairo_trace4("Throwing error (\"%s\", %d): \"%s\" (%d)\n", file, line, err->errmess, cairo_sp);
 #endif
-		longjmp(cairo_jb[cairo_sp], (int) err);
+		/* Take a copy of the error message because it seems
+		 * to get trampled on pretty soon after we see it.
+		 */
+		memcpy(errbuf, err, sizeof(errbuf));
+		longjmp(cairo_jb[cairo_sp], (int) errbuf);
 	}
+}
+
+_kernel_oserror *cairo_catch(
+#ifdef MEMTRACE
+			const char *file, int line,
+#endif
+			_kernel_oserror *err)
+{
+#ifdef MEMTRACE
+	if (err == NULL) {
+		cairo_trace3("Entering catch scope %d (%s, %d)\n", cairo_sp-1, file, line);
+	} else {
+		cairo_trace4("Catching error %s in catch scope %d (%s, %d)\n", err->errmess, cairo_sp-1, file, line);
+	}
+#endif
+	return err;
 }
 
 void cairo_endcatch(
@@ -229,8 +251,7 @@ void cairo_endcatch(
 
 	--cairo_sp;
 #ifdef MEMTRACE
-	(void) file; (void) line;
-//	cairo_trace3("Leaving catch scope %d (%s, %d)\n", cairo_sp, file, line);
+	cairo_trace3("Leaving catch scope %d (%s, %d)\n", cairo_sp, file, line);
 #endif
 }
 
@@ -240,7 +261,9 @@ void *cairo_malloc(
 #endif
 		size_t size, unsigned int type)
 {
+#ifndef USEDA
 	_kernel_swi_regs r;
+#endif
 	cairo__memhdr *hdr;
 
 #ifdef ALLOCBOMB
@@ -252,12 +275,16 @@ void *cairo_malloc(
 	cairo_trace1("ALLOCBOMB will after %d more MALLOCs\n", allocbomb);
 #endif
 
+#ifdef USEDA
+	hdr = daheap_malloc(size + sizeof(cairo__memhdr));
+#else
 	r.r[0] = 6;													// claim memory
 	r.r[3] = (int) (size + sizeof (cairo__memhdr));
 
 	THROW(_kernel_swi(OS_Module, &r, &r));
 
 	hdr = (cairo__memhdr *) r.r[2];
+#endif
 
 #ifdef MEMTRACE
 	memset(hdr + 1, 0, size);
@@ -268,7 +295,7 @@ void *cairo_malloc(
 	hdr->type	= type;
 
 #ifdef MEMTRACE
-// cairo_trace3("%p, %d: MALLOC(%d)\n", file, line, size);
+	cairo_trace3("\"%s\", %d: MALLOC(%d)\n", file, line, size);
 
 	hdr->file = file;
 	hdr->line = line;
@@ -291,12 +318,13 @@ void cairo_free(
 #endif
 		void *mem)
 {
+#ifndef USEDA
 	_kernel_swi_regs r;
+#endif
 	cairo__memhdr *hdr = ((cairo__memhdr *) mem) - 1;
 
 #ifdef MEMTRACE
-	(void) file;
-	(void) line;
+	cairo_trace3("\"%s\", %d: FREE(%p)\n", file, line, mem);
 #endif
 
 	if (hdr->tag == cairo__FREE)
@@ -315,10 +343,14 @@ void cairo_free(
 	else
 		cairo_memtail = hdr->prev;
 
+#ifdef USEDA
+	daheap_free(hdr);
+#else
 	r.r[0] = 7;
 	r.r[2] = (int) hdr;
 
 	THROW(_kernel_swi(OS_Module, &r, &r));
+#endif
 }
 
 void cairo_memtrace(void)
@@ -365,14 +397,14 @@ void cairo_freeall(unsigned int type)
 #ifdef MEMCHECK
 void cairo_memset(void *m, char byte, size_t len)
 {
-//	cairo_trace3("MEMSET(%p, %d, %ld)\n", m, byte, (long) len);
+	cairo_trace3("MEMSET(%p, %d, %ld)\n", m, byte, (long) len);
 	cairo_memcheck(m, len);
 	memset(m, byte, len);
 }
 
 void cairo_memcpy(void *dest, void *src, size_t len)
 {
-//	cairo_trace3("MEMCPY(%p, %p, %ld)\n", dest, src, (long) len);
+	cairo_trace3("MEMCPY(%p, %p, %ld)\n", dest, src, (long) len);
 	cairo_memcheck(dest, len);
 	memcpy(dest, src, len);
 }
@@ -407,33 +439,10 @@ void cairo_assert(const char *file, int line)
 	THROW(&cairo_generic);
 }
 
-_kernel_oserror *cairo_swi(int n, _kernel_swi_regs * r, void *ws)
+static void cairo__swi(int n, _kernel_swi_regs * r)
 {
-#if 0
-	static const char *swiname[] =
-	{
-			"LexmarkZ11_ClaimWorkspace", "LexmarkZ11_StartDoc", "LexmarkZ11_StartPage",
-			"LexmarkZ11_SendStrip", "LexmarkZ11_EjectPage", "LexmarkZ11_InstallCartridge",
-			"LexmarkZ11_SendCartridgeHome", "LexmarkZ11_GetInkUsage", "LexmarkZ11_CalcBidiAlign",
-			"LexmarkZ11_EndPage", "LexmarkZ11_EndDoc"
-	};
-#endif
-
-	_kernel_oserror *err;
 	LPDVDATAREC lpDataRec = (LPDVDATAREC) r->r[0];
 	BOOL ok = TRUE;
-
-	(void) ws;
-
-//	(void) swiname;
-//	cairo_trace2("%s(%08x)\n", swiname[n], r->r[0]);
-
-	if (err = CATCH(), err)
-	{
-		cairo_trace1("Returning with an error: %s\n", err->errmess);
-		//cairo_freeall(cairo_HBP);
-		return err;
-	}
 
 	switch (n)
 	{
@@ -445,6 +454,7 @@ _kernel_oserror *cairo_swi(int n, _kernel_swi_regs * r, void *ws)
 
 	case BASE(LexmarkZ11_StartDoc):
 		ok = FCStartDoc(lpDataRec);
+		if (!ok) cairo_trace1("FCStartDoc(%p) returned with 0\n", lpDataRec);
 		if (ok) HwStartPrintJob(lpDataRec);
 		break;
 
@@ -500,8 +510,88 @@ _kernel_oserror *cairo_swi(int n, _kernel_swi_regs * r, void *ws)
 
 	if (!ok)
 		THROW(&cairo_generic);
+}
+
+_kernel_oserror *cairo_swi(int n, _kernel_swi_regs * r, void *ws)
+{
+#ifdef DEBUG
+	static const char *swiname[] =
+	{
+			"LexmarkZ11_ClaimWorkspace", "LexmarkZ11_StartDoc", "LexmarkZ11_StartPage",
+			"LexmarkZ11_SendStrip", "LexmarkZ11_EjectPage", "LexmarkZ11_InstallCartridge",
+			"LexmarkZ11_SendCartridgeHome", "LexmarkZ11_GetInkUsage", "LexmarkZ11_CalcBidiAlign",
+			"LexmarkZ11_EndPage", "LexmarkZ11_EndDoc"
+	};
+#endif
+
+	_kernel_oserror *err;
+
+	(void) ws;
+
+#ifdef DEBUG
+	cairo_trace2("%s(%08x)\n", swiname[n], r->r[0]);
+#endif
+
+	if (err = CATCH(), err)
+	{
+		cairo_trace1("Returning with an error: %s\n", err->errmess);
+		//cairo_freeall(cairo_HBP);
+		return err;
+	}
+
+	cairo__swi(n, r);
 
 	ENDCATCH();
+
+#ifdef DEBUG
+	cairo_trace2("%s(%08x) -- done\n", swiname[n], r->r[0]);
+#endif
+
+	return NULL;
+}
+
+#ifdef USEDA
+static void cairo__initheap(void)
+{
+	cairo_trace0("Initialising heap\n");
+	daheap_free(daheap_malloc(1));
+}
+#endif
+
+_kernel_oserror *cairo_initialise(char *cmd, int pod, void *ws)
+{
+	_kernel_oserror *err;
+
+	(void) cmd;
+	(void) pod;
+
+	cairo_trace0("Loading Cairo support\n");
+
+	cairo__wsp = ws;
+
+	atexit(cairo__finalise);
+
+#ifdef USEDA
+	/* Allocate some memory so we know that we can get the dynamic
+	 * area. Once we've done this the heap manager shouldn't need
+	 * to get any more memory.
+	 */
+	if (err = CATCH(), err)
+	{
+		cairo_trace1("Returning from cairo_initialise() with an error: %s\n", err->errmess);
+		return err;
+	}
+
+	cairo__initheap();
+
+	ENDCATCH();
+#endif
+
+	cairo_register(ws);
+
+#ifdef TEXTPRINT
+	wedge_claim(cairo__wsp);
+#endif
 
 	return NULL;
 }
