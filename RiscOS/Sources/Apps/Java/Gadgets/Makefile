@@ -7,7 +7,6 @@
 # ----       ----   -----------
 # 12/05/97  RLougher  Created
 # 04/06/98  SBrodie   Added RAM build into same Makefile
-#
 
 #
 # Component specific options:
@@ -21,34 +20,57 @@ RAM_MODULE = rm.${COMPONENT}
 #
 RESDIR = <resource$dir>.Resources2.${COMPONENT}
 
+EXP_HDR = <export$dir>.^.Interface2
+EXP_C_H = <Cexport$dir>.h
+EXP_C_O = <Cexport$dir>.o
+
 #
-# Generic options:
+# Generic options
 #
+
 MKDIR   = cdir
+AS      = objasm
 CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
-ASM	= objasm
+CD	= dir
+CHMOD	= access
 
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
+#FEATURES   = -zM -zps1 -g ${DFLAGS}
+FEATURES   = -zM -zps1 -ffah ${DFLAGS}
+AFLAGS     = ${THROWBACK} -depend !Depend
+CFLAGS     = ${THROWBACK} -depend !Depend -c ${FEATURES} ${INCLUDES}
+CMHGFLAGS  = ${THROWBACK} -depend !Depend -p ${DFLAGS}
+CPFLAGS    = ~cfr~v
+WFLAGS     = ~c~vr
+CHMODFLAGS = RW/R
 
-CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
+DFLAGS  = -D${SYSTEM}_BUILD #-DUSE_TINY ${DEBUG}
+
 INCLUDES = -IC:tboxlibint,C:tboxlibs,C:
 
-#
+
+# ------------------------------------------------------------------------------
 # Libraries
 #
 ANSILIB   = CLib:o.ansilib
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.c_abssym
 TBOXLIB   = c:tboxlibs.o.toolboxlib
 WIMPLIB   = c:tboxlibs.o.wimplib
+RSTUBS     = RISCOSLIB:o.rstubs
+ROMSTUBS   = RISCOSLIB:o.romstubs
+REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+
+# Which is correct? sbrodie 19/06/1998.  Daytona uses AbsSym, Spinner/Trunk uses c_abssym
+
+ABSSYM    = RISC_OSLib:o.c_abssym
+# ABSSYM     = RISC_OSLib:o.AbsSym
+
 
 OBJS =\
 	o.Modhdr \
@@ -92,20 +114,37 @@ RAM_OBJS =\
 	o.rmensure \
 	o.string32
 
-#
+
+# ------------------------------------------------------------------------------
+HDR = h.ModHdr
+
+# ------------------------------------------------------------------------------
 # Rule patterns
 #
-.c.o:;    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -p -o $@ $<
-.s.o:;    $(ASM) $< $@
 
-#
-# Main rules:
-#
-#
+.SUFFIXES:	.o .h .s .c .cmhg
+
+.c.o:;		@echo
+		@echo Compiling $< ( ${FEATURES})
+		@${CC} ${CFLAGS} -o $@ $<
+
+.cmhg.o:;	@echo
+		@echo Generating module C veneers ( -p ${DFLAGS})
+		@${CMHG} ${CMHGFLAGS} $< -o $@
+
+.cmhg.h:;	@echo
+		@echo Generating module C veneers' header file ( -p ${DFLAGS})
+		@${CMHG} ${CMHGFLAGS} $< -d $@
+
+.s.o:;		@echo
+		@echo Assembling $<
+		@${AS} ${AFLAGS} -o $@ $<
+
+
 all: ${RAM_MODULE}
-        @echo ${COMPONENT}: Module built (RAM)
-
+	@echo
+	@echo ${COMPONENT}: Module built (RAM) in ${RAM_MODULE}
+	
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
@@ -113,32 +152,47 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
+export: ${EXPORTS}
+	@echo
+        @echo ${COMPONENT}: No exports
+
 clean:
+	@echo
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
+	${RM} ${HDR}
         @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${WIMPLIB} ${ROMCSTUBS} ${HDR}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} ${WIMPLIB} ${ROMCSTUBS}
 
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${CLIB}
+${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${CLIB} ${HDR}
 	${mkdir} rm
         ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${CLIB}
-        Access $@ RW/R
+        ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
 
 
-# final link for ROM Image (using given base address)
+# Final link for the ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
         ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
               -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-#---------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# Relocatable module target
+#
+
+${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
+        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
+
+
+# ------------------------------------------------------------------------------
 # Dynamic dependencies:
