@@ -1,0 +1,2321 @@
+/*
+ * Program:	Events.c - wimp event handler routines
+ *
+ * Project:	!Omni OmniClient(tm) project
+ *
+ * Author:	Nick Smith
+ *              ANT Limited
+ *              Cambridge
+ *              Internet: nas@ant.co.uk
+ *
+ * Date:	13 July 1994
+ * Last Edited: 26 June 1996
+ *
+ * Copyright 1994,1995,1996 by ANT Limited
+ */
+
+
+#include "Hdrs.h"
+#include "Desk/KeyCodes.h"
+#include "Desk/Kbd.h"
+#include "Desk/Time.h"
+#include "Desk/DragASpr.h"
+#include "Expert.h"
+#include "Close.h"
+
+Desk_menu_ptr 	menu_icon  	= NULL;      	/* Pointer to our icon menu     */
+Desk_menu_ptr 	menu_icon_i  	= NULL;
+Desk_menu_ptr 	menu_icon_d  	= NULL;
+Desk_menu_ptr 	menu_icon_m  	= NULL;
+Desk_menu_ptr 	menu_icon_mo  	= NULL;
+Desk_menu_ptr 	menu_icon_q  	= NULL;
+Desk_menu_ptr 	menu_main  	= NULL;
+Desk_menu_ptr 	menu_main_d  	= NULL;
+
+void 		*menuwindow	= NULL;		/* */
+mlist_record 	*mountwindow	= NULL;		/* */
+client_record   *clientwindow   = NULL;
+
+int		select_item	= 0;
+Desk_window_handle 	select_wind 	= NULL;
+Desk_bool		select_transient= Desk_FALSE;
+
+Desk_bool		all_predone	= Desk_FALSE;
+
+static int cycle_time 		= 0;		/* For ADJUST-click protocol cycles */
+static int cycle_item 		= 0;
+static int cycle_icon 		= 0;
+static Desk_wimp_point openlast 	= {-1, -1};	/* Last position mount dbox opened */
+static int icondrag		= 0;		/* Drag type, 0=none, 1=copy, 2=move */
+static Desk_bool dragging		= Desk_FALSE;	/* DragASprite dragging ? */
+#ifdef EXPERT
+static Desk_bool maydataload		= Desk_FALSE;	/* DataLoad via scrap file */
+static mount_record *drag_mount = NULL;		/* Mount currently being dragged */
+#endif
+
+/* FilerAction WIMP Messages */
+#define message_FILERSELECTIONDIRECTORY	0x403
+#define message_FILERADDSELECTION    	0x404
+#define message_FILERACTION        	0x405
+
+#define OS_Byte                        	0x000006
+
+/*  ************************** Private functions *****************************
+ */
+
+
+/*  Create & open info dbox
+ *  Return Desk_FALSE if cannot create, else Desk_TRUE.
+ */
+static Desk_bool CreateInfo(void)
+{
+  if (wind_info == NULL)
+  { char tmp[30];
+
+    wind_info = Desk_Window_Create("progInfo", Desk_template_TITLEMIN);
+    if (wind_info == NULL) return(Desk_FALSE);
+    Desk_Msgs_Lookup("app.version:", tmp, 29);
+    Desk_Icon_SetText(wind_info, info_version, tmp);
+    Desk_Msgs_Lookup("app.copy:", tmp, 29);
+    Desk_Icon_SetText(wind_info, info_copy, tmp);
+#ifdef SITE_LICENSE
+    Desk_Msgs_Lookup("app.license:", tmp, 29);
+#else
+    Desk_Msgs_Lookup("app.licensee:", tmp, 29);
+#endif
+    Desk_Icon_SetText(wind_info, info_license, tmp);
+  }
+  Window_ShowDialogue(wind_info, Desk_FALSE);
+  return(Desk_TRUE);
+}
+
+
+/*  Create & open client dbox
+ *  Return Desk_FALSE if cannot create, else Desk_TRUE.
+ */
+static Desk_bool CreateClient(int item)
+{
+  client_record *cr = NULL;
+  char buf[64];
+
+  TRACE1("CreateClient: %d\n", item);
+  if (wind_client) Desk_Window_Delete(wind_client);
+  wind_client = Desk_Window_Create("clientInfo", Desk_template_TITLEMIN);
+  if (!wind_client) return(Desk_FALSE);
+  item = item - 1; /* Rescale to start at 0 */
+  if (item < 0) return(Desk_FALSE);
+  if ((cr = ClientFind(-1, NULL, item, NULL)) == NULL) return(Desk_FALSE);
+
+  /* Update title bar */
+  strcpy(buf, "");
+  if ((flagSET(cr, flag_FS)) && (!flagSET(cr, flag_PRINT)))
+    Desk_Msgs_Lookup("cinfo.fs:", buf, 63);
+  if ((!flagSET(cr, flag_FS)) && (flagSET(cr, flag_PRINT)))
+    Desk_Msgs_Lookup("cinfo.print:", buf, 63);
+  if ((flagSET(cr, flag_FS)) && (flagSET(cr, flag_PRINT)))
+    Desk_Msgs_Lookup("cinfo.fsprint:", buf, 63);
+  if (strlen(buf) > 0) Desk_Window_SetTitle(wind_client, buf);
+
+  /* Turn description string into 3 fields */
+  if (cr->clientdesc != NULL)
+  {
+    char *line = NULL;
+    char tmp[256];
+
+    strncpy(tmp, cr->clientdesc, 255);
+    line = strtok(tmp, "\n");
+    Desk_Icon_SetText(wind_client, client_name, line ? line : "");
+    line = strtok(NULL, "\n");
+    Desk_Icon_SetText(wind_client, client_author, line ? line : "");
+    line = strtok(NULL, "\n");
+    Desk_Icon_SetText(wind_client, client_version, line ? line : "");
+  }
+  Window_ShowDialogue(wind_client, Desk_FALSE);
+  return(Desk_TRUE);
+}
+
+
+/*  Return default user name for a given protocol module, or NULL.
+ *  Reads from Omni$User<FSName> variable, see 'docs.GUI_Spec'.
+ */
+static char *UserName(client_record *cr)
+{
+  char buf[32];
+  char *s = NULL;
+
+  if ((cr == NULL) || (cr->fsname == NULL)) return(getenv("Omni$User"));
+  sprintf(buf, "Omni$User%s", cr->fsname);
+  if ((s = getenv(buf)) == NULL) s = getenv("Omni$User");
+  return(s);
+}
+
+
+/*  Find item in linked list from window handle
+ */
+static mwind_record *MountWindFind(Desk_window_handle w)
+{
+  mwind_record *mr = (mwind_record *) mwind_anchor.next;
+  int searchtype = 0;
+
+  TRACE("MountWindFind:\n");
+  while (mr != NULL)
+  {
+    switch (searchtype)
+    {
+      case 0: if (mr->w == w) return(mr);
+              break;
+      default:
+        break;
+    }
+    mr = (mwind_record *) mr->header.next;
+  }
+  return(NULL);
+}
+
+
+/*  Returns Desk_TRUE if all possible fields are filled in.
+ */
+static Desk_bool DboxFilled(Desk_window_handle w, client_record *cr, int flags)
+{
+  char s[96];
+  int old_flags = cr ? cr->flags : -1;
+
+  if (flags > -1) cr->flags = flags;
+  Desk_Icon_GetText(w, mount_mount, s);
+  TRACE2("DboxFilled: '%s' %d\n", s, strlen(s));
+  if (strlen(s) == 0) goto false;
+  Desk_Icon_GetText(w, mount_server, s);
+  if (strlen(s) == 0) goto false;
+  Desk_Icon_GetText(w, mount_path, s);
+  if ((flagSET(cr, flag_PATH)) && (strlen(s) == 0)) goto false;
+  Desk_Icon_GetText(w, mount_user, s);
+  if ((flagSET(cr, flag_USER)) && (strlen(s) == 0)) goto false;
+  Desk_Icon_GetText(w, mount_password, s);
+  if ((flagSET(cr, flag_PW)) && (strlen(s) == 0)) goto false;
+  Desk_Icon_GetText(w, mount_auth, s);
+  if ((flagSET(cr, flag_AUTH)) && (strlen(s) == 0)) goto false;
+  if (flags > -1) cr->flags = old_flags;
+  return(Desk_TRUE);
+false:
+  if (flags > -1) cr->flags = old_flags;
+  return(Desk_FALSE);
+}
+
+
+/*  Returns Desk_TRUE if all possible fields are filled in.
+ */
+static Desk_bool DomainFilled(Desk_window_handle w, client_record *cr)
+{
+  char s[96];
+
+  Desk_Icon_GetText(w, domain_domain, s);
+  if ((flagSET(cr, flag_AUTH)) && (strlen(s) == 0)) return(Desk_FALSE);
+  Desk_Icon_GetText(w, domain_user, s);
+  if ((flagSET(cr, flag_USER)) && (strlen(s) == 0)) return(Desk_FALSE);
+  Desk_Icon_GetText(w, domain_password, s);
+  if ((flagSET(cr, flag_PW)) && (strlen(s) == 0)) return(Desk_FALSE);
+  return(Desk_TRUE);
+}
+
+
+/*  Set the caret in the correct position of the uppermost static mount
+ *  dbox.
+ */
+static void MountCaret(mwind_record *mw)
+{
+  mwind_record *mwl = NULL;
+
+  if (!mw) return;
+  mwl = MountWindFind(mw->caret.window);
+  if (!mwl) return;
+  Desk_Wimp_SetCaretPosition(&mw->caret);
+}
+
+
+/*  Shared code to update mount_LIST/mount_WINDOW (from alias)
+ */
+static int CreateDomainList(Desk_window_handle w, mlist_record *mr, client_record *cr)
+{
+  char *s;
+  int i = domain_domain;
+
+  Desk_Icon_SetText(w, domain_domain, (mr->server && flagSET(cr, flag_AUTH)) ? mr->server : "");
+  Desk_Icon_SetText(w, domain_user, (mr->user && flagSET(cr, flag_USER)) ? mr->user : "");
+  if (!mr->user)
+  {
+    s = UserName(cr);
+    Desk_Icon_SetText(w, domain_user, ((s) && (flagSET(cr, flag_USER))) ? s : "");
+  } else s = mr->user;
+  Desk_Icon_SetText(w, domain_password,
+    ((mr->passwd) && (flagSET(cr, flag_PW))) ? mr->passwd : "");
+  if ((!mr->passwd) && (flagSET(cr, flag_PW))) i = domain_password;
+  if ((!s) && (flagSET(cr, flag_USER))) i = domain_user;
+  if (!mr->server) i = domain_domain;
+  return(i);
+}
+
+
+/*  Shared code to update mount_LIST/mount_WINDOW (from alias)
+ */
+static int CreateMountList(Desk_window_handle w, mlist_record *mr, client_record *cr)
+{
+  char *s;
+  int i = mount_mount;
+
+  Desk_Icon_SetText(w, mount_server, mr->server ? mr->server : "");
+  Desk_Icon_SetText(w, mount_user, ((mr->user) && (flagSET(cr, flag_USER))) ? mr->user : "");
+  if (!mr->user)
+  {
+    if (cr->client_id != 0x49240) s = UserName(cr);
+      else s = NULL;
+    Desk_Icon_SetText(w, mount_user, ((s) && (flagSET(cr, flag_USER))) ? s : "");
+  } else s = mr->user;
+  Desk_Icon_SetText(w, mount_password,
+    ((mr->passwd) && (flagSET(cr, flag_PW))) ? mr->passwd : "");
+  Desk_Icon_SetText(w, mount_mount, mr->mount ? mr->mount : "");
+  Desk_Icon_SetText(w, mount_path, ((mr->path) && (flagSET(cr, flag_PATH))) ? mr->path : "");
+  Desk_Icon_SetText(w, mount_auth, ((mr->auth) && (flagSET(cr, flag_AUTH))) ? mr->auth : "");
+  if ((!mr->auth) && (flagSET(cr, flag_AUTH))) i = mount_auth;
+  if ((!mr->passwd) && (flagSET(cr, flag_PW))) i = mount_password;
+  if ((!s) && (flagSET(cr, flag_USER))) i = mount_user;
+  if ((!mr->path) && (flagSET(cr, flag_PATH))) i = mount_path;
+  if (!mr->server) i = mount_server;
+  if ((!mr->mount) && (!flagSET(cr, flag_MOUNT))) i = mount_mount;
+  Desk_Icon_SetSelect(w, mount_open, mr->open);
+  return(i);
+}
+
+
+/*  Create & open [static] domain dbox
+ *  Return Desk_FALSE if cannot create, else Desk_TRUE.
+ */
+extern Desk_bool CreateDomain(int src, int item, Desk_bool dynamic)
+{
+  client_record *cr = NULL;
+  mlist_record *mr = NULL;
+  mwind_record *mw = NULL;
+  item_record *ir = NULL;
+  wind_record *wr = NULL;
+  char title[96];
+  Desk_icon_handle i = domain_domain;
+  char *s;
+  int flagwrite = Desk_iconbtype_WRITABLE * Desk_icon_BUTTONTYPE;
+  Desk_window_handle w;
+  Desk_window_state wstate;
+  int width, h;
+  Desk_bool result = Desk_TRUE;
+  Desk_bool ok = Desk_FALSE;
+
+  TRACE2("CreateDomain: %d %d\n", src, item);
+  TRACE1("CreateDomain: dynamic %s\n", (dynamic) ? "YES" : "NO");
+  mountwindow = NULL;
+
+  if (!dynamic)
+    w = Desk_Window_Create("domain", Desk_template_TITLEMIN);
+  else
+  {
+    w = wind_mountdom;
+    if (!w) w = wind_mountdom = Desk_Window_Create("domain", Desk_template_TITLEMIN);
+  }
+  if (!w) return(Desk_FALSE);
+  if (!dynamic)
+  {
+    mw = (mwind_record *) heap_alloc(sizeof(mwind_record));
+    if (!mw)
+    {
+      Desk_Window_Delete(w);
+      return(Desk_FALSE);
+    }
+    mw->w = w;
+    mw->ml = NULL;
+    mw->domain = Desk_TRUE;
+    Desk_LinkList_AddToTail(&mwind_anchor, &(mw->header));
+  }
+  switch (src)
+  {
+    case mount_EMPTY:
+    case mount_CLIENT:
+      clientwindow = NULL;
+      if (!dynamic) return(Desk_FALSE);
+      if (src == mount_CLIENT)
+        { if ((cr = ClientFind(item, NULL, -1, NULL)) == NULL) return(Desk_FALSE); }
+      else
+        { if ((cr = ClientFind(-1, NULL, item, NULL)) == NULL) return(Desk_FALSE); }
+      TRACE("CreateDomain: found ok\n");
+      clientwindow = cr;
+      Desk_Icon_SetText(w, domain_domain, "");
+      s = UserName(cr);
+      Desk_Icon_SetText(w, domain_user, ((s) && (flagSET(cr, flag_USER))) ? s : "");
+      Desk_Icon_SetText(w, domain_password, "");
+      Desk_Wimp_SetIconState(w, domain_DELETE, Desk_icon_DELETED, Desk_icon_DELETED);
+      break;
+    case mount_MLIST:
+    case mount_MLISTSEL:
+    case mount_MLISTREC:
+      clientwindow = NULL;
+      if ((!dynamic) && (src == mount_MLISTSEL)) return(Desk_FALSE);
+      if (src == mount_MLISTREC)
+      {
+        /* Horrible cast! */
+        mr = (mlist_record *) item;
+      }
+      else
+      {
+        item = item - 2; /* Rescale to start at 0 */
+        if (item < 0) return(Desk_FALSE);
+        if ((mr = MountFind(-1, NULL, item, -1)) == NULL) return(Desk_FALSE);
+      }
+      if ((cr = ClientFind(mr->client_id, NULL, -1, NULL)) == NULL) return(Desk_FALSE);
+      clientwindow = cr;
+      i = CreateDomainList(w, mr, cr);
+      Desk_Wimp_SetIconState(w, domain_DELETE, (dynamic) ? 0 : Desk_icon_DELETED, Desk_icon_DELETED);
+      mountwindow = mr;
+      break;
+    case mount_WINDOW:
+      if (!dynamic) return(Desk_FALSE);
+      item = select_item;
+      if (item <= 0) return(Desk_FALSE);
+      if (!clientwindow) return(Desk_FALSE);
+      if ((cr = ClientFind(clientwindow->client_id, NULL, -1, NULL)) != clientwindow)
+        return(Desk_FALSE);
+      wr = FilerFind(select_wind, -1, -1, -1);
+      TRACE2("CreateDomain: post filerfind wr %x select_wind %x\n",(int) wr, (int) select_wind);
+      ir = ItemFind(wr, select_item);
+      TRACE2("CreateDomain: post itemfind ir %x select_item %x\n",(int) ir, (int) select_item);
+      if (wr && ir && (select_wind != wind_filer.w) && ir->alias &&
+          (mr = MountFind(-1, ir->shortname, -1, ir->client_id)))
+      {
+        i = CreateDomainList(w, mr, cr);
+      }
+      else
+      {
+        Desk_Icon_SetText(w, domain_domain, "");
+        s = UserName(cr);
+        Desk_Icon_SetText(w, domain_user, ((s) && (flagSET(cr, flag_USER))) ? s : "");
+        Desk_Icon_SetText(w, domain_password, "");
+        if (!flagSET(cr, flag_AUTH))
+        {
+          if (flagSET(cr, flag_PW)) i = domain_password;
+          if ((!s) && (flagSET(cr, flag_USER))) i = domain_user;
+        }
+      }
+      Desk_Wimp_SetIconState(w, domain_DELETE, Desk_icon_DELETED, Desk_icon_DELETED);
+      break;
+    default:
+      clientwindow = NULL;
+      return(Desk_FALSE);
+      break;
+  }
+  Desk_Msgs_printf(title, "domain.title", cr->clientname);
+  Desk_Window_SetTitle(w, title);
+  Desk_Wimp_SetIconState(w, domain_domain, flagSET(cr, flag_AUTH) ? flagwrite : 0,
+    flagwrite);
+  Icon_SetValid(w, domain_domain, !flagSET(cr, flag_AUTH));
+  Icon_SetGreyShade(w, domain_tdomain, !flagSET(cr, flag_AUTH), Desk_iconbtype_NEVER);
+  Desk_Wimp_SetIconState(w, domain_user, flagSET(cr, flag_USER) ? flagwrite : 0,
+    flagwrite);
+  Icon_SetValid(w, domain_user, !flagSET(cr, flag_USER));
+  Icon_SetGreyShade(w, domain_tuser, !flagSET(cr, flag_USER), Desk_iconbtype_NEVER);
+  Icon_SetValid(w, domain_password, !flagSET(cr, flag_PW));
+  Desk_Wimp_SetIconState(w, domain_password, flagSET(cr, flag_PW) ? flagwrite : 0,
+    flagwrite);
+  Icon_SetGreyShade(w, domain_tpassword, !flagSET(cr, flag_PW), Desk_iconbtype_NEVER);
+
+  TRACE("CreateDomain: show dialogue\n");
+  if (!dynamic)
+  {
+    if (openlast.x == -1)
+    {
+      openlast.y = 500;
+      openlast.x = 220;
+    } else openlast.x += 32;
+    Desk_Wimp_GetWindowState(w, &wstate);
+    wstate.openblock.behind = -1;    			    /* open in front */
+    width = wstate.openblock.screenrect.max.x - wstate.openblock.screenrect.min.x;
+    h = wstate.openblock.screenrect.max.y - wstate.openblock.screenrect.min.y;
+    wstate.openblock.screenrect.min.x = openlast.x;
+    wstate.openblock.screenrect.max.y = openlast.y;
+    wstate.openblock.screenrect.max.x = wstate.openblock.screenrect.min.x + width;
+    wstate.openblock.screenrect.min.y = wstate.openblock.screenrect.max.y - h;
+    Desk_Wimp_GetCaretPosition(&mw->caret);
+    mw->ml = mountwindow;
+    Desk_Wimp_OpenWindow(&wstate.openblock);
+  } else Window_ShowDialogue(w, ((src != mount_MLIST) && (src != mount_MLISTSEL)));
+  Desk_Icon_SetCaret(w, i);
+
+  /* If all possible fields filled-in, and mount_WINDOW, or mount_MLIST from a select
+   * click from the submenu (not a menu warning) ...
+   */
+  if (dynamic) ok = (src == mount_WINDOW) || (src == mount_MLISTSEL);
+    else ok = Desk_TRUE;
+
+  /* If all possible fields filled, then do connect operation ?*/
+  if ((ok) && (DomainFilled(w, cr)))
+  {
+    TRACE("CreateDomain: connection attempt!\n");
+    result = MountConnect(mr, w);
+    if ((result) && (!dynamic))
+    {
+      Desk_Window_Delete(mw->w);
+      Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+      FREE(mw);
+    }
+    if ((result) && (dynamic))
+    {
+      Menu_Close();
+      Desk_menu_currentopen = NULL;
+    }
+  }
+  return(result);
+}
+
+
+/*  Create & open [static] mount dbox
+ *  Return Desk_FALSE if cannot create, else Desk_TRUE.
+ */
+extern Desk_bool CreateMount(int src, int item, Desk_bool dynamic)
+{
+  client_record *cr = NULL;
+  mlist_record *mr = NULL;
+  mwind_record *mw = NULL;
+  item_record *ir = NULL;
+  wind_record *wr = NULL;
+  char title[96];
+  Desk_icon_handle i = mount_mount;
+  char *s;
+  int flagwrite = Desk_iconbtype_WRITABLE * Desk_icon_BUTTONTYPE;
+  Desk_window_handle w;
+  Desk_window_state wstate;
+  int width, h;
+  Desk_bool result = Desk_TRUE;
+  Desk_bool ok = Desk_FALSE;
+  int flags = -1;
+
+  TRACE2("CreateMount: %d %d\n", src, item);
+  TRACE1("CreateMount: dynamic %s\n", (dynamic) ? "YES" : "NO");
+
+  /* Need to switch between Mount dbox and Domain dbox - messier than we would like */
+  switch (src)
+  {
+    case mount_EMPTY:
+    case mount_CLIENT:
+      if (!dynamic) return(Desk_FALSE);
+      if (src == mount_CLIENT)
+        { if ((cr = ClientFind(item, NULL, -1, NULL)) == NULL) return(Desk_FALSE); }
+      else
+        { if ((cr = ClientFind(-1, NULL, item, NULL)) == NULL) return(Desk_FALSE); }
+      break;
+    case mount_MLIST:
+    case mount_MLISTSEL:
+    case mount_MLISTREC:
+      clientwindow = NULL;
+      if ((!dynamic) && (src == mount_MLISTSEL)) return(Desk_FALSE);
+      if (src == mount_MLISTREC)
+      {
+        /* Horrible cast! */
+        mr = (mlist_record *) item;
+      }
+      else
+      {
+        item = item - 2; /* Rescale to start at 0 */
+        if (item < 0) return(Desk_FALSE);
+        if ((mr = MountFind(-1, NULL, item, -1)) == NULL) return(Desk_FALSE);
+        item = item + 2;
+      }
+      if ((cr = ClientFind(mr->client_id, NULL, -1, NULL)) == NULL) return(Desk_FALSE);
+      break;
+    case mount_WINDOW:
+      if (!dynamic) return(Desk_FALSE);
+      item = select_item;
+      if (item <= 0) return(Desk_FALSE);
+      if (!clientwindow) return(Desk_FALSE);
+      if ((cr = ClientFind(clientwindow->client_id, NULL, -1, NULL)) != clientwindow)
+        return(Desk_FALSE);
+      break;
+    default:
+      return(Desk_FALSE);
+      break;
+  }
+  if (flagSET(cr, flag_SPECIAL)) return(CreateDomain(src, item, dynamic));
+
+  /* Open a real mount dbox */
+  mountwindow = NULL;
+  if (!dynamic)
+    w = Desk_Window_Create("mount", Desk_template_TITLEMIN);
+  else
+  {
+    w = wind_mounttmp;
+    if (!w) w = wind_mounttmp = Desk_Window_Create("mount", Desk_template_TITLEMIN);
+  }
+  if (!w) return(Desk_FALSE);
+  if (!dynamic)
+  {
+    mw = (mwind_record *) heap_alloc(sizeof(mwind_record));
+    if (!mw)
+    {
+      Desk_Window_Delete(w);
+      return(Desk_FALSE);
+    }
+    mw->w = w;
+    mw->ml = NULL;
+    mw->domain = Desk_FALSE;
+    Desk_LinkList_AddToTail(&mwind_anchor, &(mw->header));
+  }
+  switch (src)
+  {
+    case mount_EMPTY:
+    case mount_CLIENT:
+      clientwindow = NULL;
+      if (!dynamic) return(Desk_FALSE);
+      if (src == mount_CLIENT)
+        { if ((cr = ClientFind(item, NULL, -1, NULL)) == NULL) return(Desk_FALSE); }
+      else
+        { if ((cr = ClientFind(-1, NULL, item, NULL)) == NULL) return(Desk_FALSE); }
+      TRACE("CreateMount: found ok\n");
+      clientwindow = cr;
+      Desk_Icon_SetText(w, mount_server, "");
+      if (cr->client_id != 0x49240) s = UserName(cr);
+        else s = NULL;
+      Desk_Icon_SetText(w, mount_user, ((s) && (flagSET(cr, flag_USER))) ? s : "");
+      Desk_Icon_SetText(w, mount_password, "");
+      Desk_Icon_SetText(w, mount_mount, "");
+      Desk_Icon_SetText(w, mount_path, "");
+      Desk_Icon_SetText(w, mount_auth, "");
+      Desk_Icon_SetSelect(w, mount_open, Desk_FALSE);
+      Desk_Wimp_SetIconState(w, mount_DELETE, Desk_icon_DELETED, Desk_icon_DELETED);
+      break;
+    case mount_MLIST:
+    case mount_MLISTSEL:
+    case mount_MLISTREC:
+      clientwindow = NULL;
+      if ((!dynamic) && (src == mount_MLISTSEL)) return(Desk_FALSE);
+      if (src == mount_MLISTREC)
+      {
+        /* Horrible cast! */
+        mr = (mlist_record *) item;
+      }
+      else
+      {
+        item = item - 2; /* Rescale to start at 0 */
+        if (item < 0) return(Desk_FALSE);
+        if ((mr = MountFind(-1, NULL, item, -1)) == NULL) return(Desk_FALSE);
+      }
+      if ((cr = ClientFind(mr->client_id, NULL, -1, NULL)) == NULL) return(Desk_FALSE);
+      clientwindow = cr;
+      i = CreateMountList(w, mr, cr);
+      Desk_Wimp_SetIconState(w, mount_DELETE, (dynamic) ? 0 : Desk_icon_DELETED, Desk_icon_DELETED);
+      mountwindow = mr;
+      break;
+    case mount_WINDOW:
+      if (!dynamic) return(Desk_FALSE);
+      item = select_item;
+      if (item <= 0) return(Desk_FALSE);
+      if (!clientwindow) return(Desk_FALSE);
+      if ((cr = ClientFind(clientwindow->client_id, NULL, -1, NULL)) != clientwindow)
+        return(Desk_FALSE);
+      wr = FilerFind(select_wind, -1, -1, -1);
+      TRACE2("CreateMount: post filerfind wr %x select_wind %x\n", (int) wr, (int) select_wind);
+      ir = ItemFind(wr, select_item);
+      TRACE2("CreateMount: post itemfind ir %x select_item %x\n", (int) ir, (int) select_item);
+      if ((!wr) || (!ir)) return(Desk_FALSE);
+      /* Call OmniOp,8 to see if flags for this protocol have changed */
+      if (Desk_SWI(3,2, cr->client_id, 8, (int) ir->server_id,(int) ir->fullname, NULL,&flags))
+        flags = -1;
+      if (select_wind != wind_filer.w)
+      {
+        /* Mount window */
+        if ((ir->alias) && (mr = MountFind(-1, ir->shortname, -1, ir->client_id)))
+        {
+          /* From an alias entry! Get the mlist pointer */
+          TRACE("CreateMount: from alias!\n");
+          i = CreateMountList(w, mr, cr);
+          Desk_Wimp_SetIconState(w, mount_DELETE, Desk_icon_DELETED, Desk_icon_DELETED);
+          if (MountIconFind(-1, ir->shortname, -1, Desk_TRUE, -1))
+          {
+            /* We already have a connected mount with this alias, reset */
+            Desk_Icon_SetText(w, mount_mount, "");
+            i = mount_mount;
+          }
+          break;
+        }
+        Desk_Icon_SetText(w, mount_path,
+          ((ir->fullname) && (flagSET(cr, flag_PATH))) ? ir->fullname : "");
+        ir = ItemFind(&wind_filer, wr->item);
+        Desk_Icon_SetText(w, mount_server, ir->fullname);
+        /* Hack for LanMan! Most sensible to have share name as mount name, not
+         * server name.
+         */
+        if (cr->client_id == 0x49240)
+        {
+          Desk_Icon_GetText(w, mount_path, title);
+          if (strlen(title) && MountFind(-1, title, -1, -1)) strcpy(title, "");
+          Desk_Icon_SetText(w, mount_mount, title);
+        }
+        else if (flagSET(cr, flag_MOUNT) && MountFind(-1, ir->shortname, -1, -1))
+        {
+          /* Hack for Access/NetFS - *can't* have login with same server name, because
+           * these protocols insist on having the same mount/server names.
+           */
+          Desk_Msgs_Report(0, "mount.exists");
+          return(Desk_FALSE);
+        }
+        else
+        {
+          if (!MountFind(-1, ir->shortname, -1, -1)) strcpy(title, ir->shortname);
+            else strcpy(title, "");
+          if ((s = strchr(title, '.')) != NULL) *s = '\0';
+          Desk_Icon_SetText(w, mount_mount, title);
+          TRACE2("CreateMount: title '%s' ir->shortname '%s'\n", title, ir->shortname);
+        }
+      }
+      else
+      {
+        /* Server window */
+        Desk_Icon_SetText(w, mount_server, ir->fullname);
+        Desk_Icon_SetText(w, mount_path, "");
+
+        /* Hack for Access/NetFS - *can't* have login with same server name, because
+         * these protocols insist on having the same mount/server names.
+         */
+        if (flagSET(cr, flag_MOUNT) && MountFind(-1, ir->shortname, -1, -1))
+        {
+          Desk_Msgs_Report(0, "mount.exists");
+          return(Desk_FALSE);
+        }
+        if (!MountFind(-1, ir->shortname, -1, -1)) strcpy(title, ir->shortname);
+          else strcpy(title, "");
+        if ((s = strchr(title, '.')) != NULL) *s = '\0';
+        Desk_Icon_SetText(w, mount_mount, title);
+        TRACE2("CreateMount: title '%s' ir->shortname '%s'\n", title, ir->shortname);
+      }
+      if (cr->client_id != 0x49240) s = UserName(cr);
+        else s = NULL;
+      Desk_Icon_SetText(w, mount_user, ((s) && (flagSET(cr, flag_USER))) ? s : "");
+      Desk_Icon_SetText(w, mount_password, "");
+      Desk_Icon_SetText(w, mount_auth, "");
+      if (flagSET(cr, flag_AUTH)) i = mount_auth;
+      if (flagSET(cr, flag_PW)) i = mount_password;
+      if ((!s) && (flagSET(cr, flag_USER))) i = mount_user;
+      if ((select_wind == wind_filer.w) && (flagSET(cr, flag_PATH))) i = mount_path;
+      if (flagSET(cr, flag_SPECIAL)) i = mount_server;
+      if ((strlen(title) == 0) && (!flagSET(cr, flag_MOUNT))) i = mount_mount;
+      Desk_Wimp_SetIconState(w, mount_DELETE, Desk_icon_DELETED, Desk_icon_DELETED);
+      break;
+    default:
+      clientwindow = NULL;
+      return(Desk_FALSE);
+      break;
+  }
+  Desk_Msgs_printf(title, "mount.title", cr->clientname);
+  Desk_Window_SetTitle(w, title);
+  Desk_Wimp_SetIconState(w, mount_user, flagSET(cr, flag_USER) ? flagwrite : 0,
+    flagwrite);
+  Icon_SetValid(w, mount_user, !flagSET(cr, flag_USER));
+  Icon_SetValid(w, mount_password, !flagSET(cr, flag_PW));
+  Icon_SetValid(w, mount_path, !flagSET(cr, flag_PATH));
+  Icon_SetValid(w, mount_auth, !flagSET(cr, flag_AUTH));
+  Icon_SetGreyShade(w, mount_tuser, !flagSET(cr, flag_USER), Desk_iconbtype_NEVER);
+  Desk_Wimp_SetIconState(w, mount_password, flagSET(cr, flag_PW) ? flagwrite : 0,
+    flagwrite);
+  Icon_SetGreyShade(w, mount_tpassword, !flagSET(cr, flag_PW), Desk_iconbtype_NEVER);
+  Desk_Wimp_SetIconState(w, mount_path, flagSET(cr, flag_PATH) ? flagwrite : 0,
+    flagwrite);
+  Icon_SetGreyShade(w, mount_tpath, !flagSET(cr, flag_PATH), Desk_iconbtype_NEVER);
+  Desk_Wimp_SetIconState(w, mount_auth, flagSET(cr, flag_AUTH) ? flagwrite : 0,
+    flagwrite);
+  Icon_SetGreyShade(w, mount_tauth, !flagSET(cr, flag_AUTH), Desk_iconbtype_NEVER);
+  TRACE2("CreateMount: flags %x flag_AUTH %d\n", cr->flags, flagSET(cr, flag_AUTH));
+
+  TRACE("CreateMount: show dialogue\n");
+  if (!dynamic)
+  {
+    if (openlast.x == -1)
+    {
+      openlast.y = 500;
+      openlast.x = 220;
+    } else openlast.x += 32;
+    Desk_Wimp_GetWindowState(w, &wstate);
+    wstate.openblock.behind = -1;    			    /* open in front */
+    width = wstate.openblock.screenrect.max.x - wstate.openblock.screenrect.min.x;
+    h = wstate.openblock.screenrect.max.y - wstate.openblock.screenrect.min.y;
+    wstate.openblock.screenrect.min.x = openlast.x;
+    wstate.openblock.screenrect.max.y = openlast.y;
+    wstate.openblock.screenrect.max.x = wstate.openblock.screenrect.min.x + width;
+    wstate.openblock.screenrect.min.y = wstate.openblock.screenrect.max.y - h;
+    Desk_Wimp_GetCaretPosition(&mw->caret);
+    mw->ml = mountwindow;
+    Desk_Wimp_OpenWindow(&wstate.openblock);
+  } else Window_ShowDialogue(w, ((src != mount_MLIST) && (src != mount_MLISTSEL)));
+  Desk_Icon_SetCaret(w, i);
+
+  /* If all possible fields filled-in, and mount_WINDOW, or mount_MLIST from a select
+   * click from the submenu (not a menu warning) ...
+   */
+  if (dynamic) ok = (src == mount_WINDOW) || (src == mount_MLISTSEL);
+    else ok = Desk_TRUE;
+
+  /* NetFS hack for pre-authenticated connections */
+  if ((dynamic) && (src == mount_WINDOW) && (cr->client_id == 0x4a540) && (ir->server_id != 1))
+  {
+    /* Search current NetFS connections for the same server_id */
+    TRACE("CreateMount: NetFS hack!\n");
+    if (MountIconFind(cr->client_id, NULL, -1, Desk_TRUE, ir->server_id))
+    {
+      char buf[96];
+
+      /* Do a Filer_OpenDir command */
+      sprintf(buf, "Filer_OpenDir Net::%s.$", ir->fullname);
+      TRACE1("CreateMount: NetFS found item '%s'\n", buf);
+      result = !Desk_Error_Check(Desk_SWI(1,0, OS_CLI, buf));
+
+      /* Clean up and die */
+      Menu_Close();
+      Desk_menu_currentopen = NULL;
+      return(result);
+    }
+  }
+
+  /* If all possible fields filled, then do connect operation ?*/
+  if ((ok) && (DboxFilled(w, cr, flags)))
+  {
+    TRACE("CreateMount: connection attempt!\n");
+    result = MountConnect(mr, w);
+    if ((result) && (!dynamic))
+    {
+      Desk_Window_Delete(mw->w);
+      Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+      FREE(mw);
+    }
+    if ((result) && (dynamic))
+    {
+      Menu_Close();
+      Desk_menu_currentopen = NULL;
+    }
+  }
+  return(result);
+}
+
+
+
+/*  Create & open mount info dbox
+ *  Return Desk_FALSE if cannot create, else Desk_TRUE.
+ */
+static Desk_bool CreateMountInfo(mount_record *mr)
+{
+  Desk_os_error *err = NULL;
+  char *r1, *r2, *r3, *r4, *r5;
+  char title[96];
+  client_record *cr = NULL;
+
+  if (!mr) return(Desk_FALSE);
+  if ((cr = ClientFind(mr->client_id, NULL, -1, NULL)) == NULL) return(Desk_FALSE);
+  if (wind_mountinfo == NULL)
+  {
+    wind_mountinfo = Desk_Window_Create("mountInfo", Desk_template_TITLEMIN);
+    if (wind_mountinfo == NULL) return(Desk_FALSE);
+  }
+  TRACE2("CreateMountInfo: %x %x\n", (int) mr, mr->mount_id);
+  r1 = r2 = r3 = r4 = r5 = NULL;
+  err = Desk_SWI(2,6, cr->client_id, 9,mr->mount_id, NULL,&r1,&r2,&r3,&r4,&r5);
+  if (err)
+  {
+    Desk_Error_Check(err);
+    return(Desk_FALSE);
+  }
+  Desk_Msgs_printf(title, "mount.about", cr->clientname);
+  Desk_Window_SetTitle(wind_mountinfo, title);
+  Desk_Icon_SetText(wind_mountinfo, minfo_server, r1 ? r1 : "");
+  Desk_Icon_SetText(wind_mountinfo, minfo_user, ((r2) && (flagSET(cr, flag_USER))) ? r2 : "");
+  Desk_Icon_SetText(wind_mountinfo, minfo_mount, r3 ? r3 : "");
+  Desk_Icon_SetText(wind_mountinfo, minfo_path, ((r4) && (flagSET(cr, flag_PATH))) ? r4 : "");
+  Desk_Icon_SetText(wind_mountinfo, minfo_auth, ((r5) && (flagSET(cr, flag_AUTH))) ? r5 : "");
+  Icon_SetGreyShade(wind_mountinfo, minfo_tpath, !flagSET(cr, flag_PATH), Desk_iconbtype_NEVER);
+  Icon_SetGreyShade(wind_mountinfo, minfo_tuser, !flagSET(cr, flag_USER), Desk_iconbtype_NEVER);
+  Icon_SetGreyShade(wind_mountinfo, minfo_tauth, !flagSET(cr, flag_AUTH), Desk_iconbtype_NEVER);
+  Window_ShowDialogue(wind_mountinfo, Desk_FALSE);
+  return(Desk_TRUE);
+}
+
+
+/*  Return menu position from client_id.
+ */
+static int ClientItem(int client_id)
+{
+  client_record *cr = (client_record *) client_anchor.next;
+  int loop = 0;
+
+  TRACE("ClientItem:\n");
+  while (cr != NULL)
+  {
+    if (cr->client_id == client_id) return(loop);
+    loop++;
+    cr = (client_record *) cr->header.next;
+  }
+  return(0);
+}
+
+
+/*  Performs a simple xfersend() type operation upon dragging file icon.
+ */
+#ifdef EXPERT
+static void ourxfersend(mount_record *mr)
+{
+  Desk_drag_block dr;
+  Desk_window_state wstate;
+  Desk_icon_block icon;
+  Desk_mouse_block mouse_str;
+  int x_limit = 32768, y_limit = 32768;
+  int screen_x0, screen_y0, mouse_x, mouse_y, x0, y0, x1, y1;
+  Desk_os_error *err;
+  int y;
+
+  /* Desk_Wimp_GetPointerInfo */
+  TRACE1("ourxfersend: %x\n", (int) mr);
+  err = Desk_Wimp_GetPointerInfo(&mouse_str);
+  mouse_x = mouse_str.pos.x;
+  mouse_y = mouse_str.pos.y;
+
+  /* Desk_Wimp_GetWindState */
+  err = Desk_Wimp_GetWindowState(mouse_str.window, &wstate);
+  screen_x0 = wstate.openblock.screenrect.min.x - wstate.openblock.scroll.x;
+  screen_y0 = wstate.openblock.screenrect.max.y - wstate.openblock.scroll.y;
+
+  /* Desk_Wimp_GetIconInfo */
+  err = Desk_Wimp_GetIconState(mouse_str.window, mouse_str.icon, &icon);
+
+  /* Drag from iconbar? */
+  if ((mouse_str.window != -2) || (err)) return;
+  x0 = screen_x0 + icon.workarearect.min.x - 8;
+  y0 = screen_y0 + icon.workarearect.min.y + 32;
+  x1 = screen_x0 + icon.workarearect.max.x + 8;
+  y1 = screen_y0 + icon.workarearect.max.y + 4;
+  TRACE2("ourxfersend: %d %d\n", x0, x1);
+  if (Desk_Kbd_KeyDown(Desk_inkey_SHIFT)) icondrag = 2;
+    else icondrag = 1;
+  drag_mount = mr;
+
+  /* RISC OS 3.00 or later, we have DragASprite - test solid drag bit in CMOS */
+  TRACE("ourxfersend: drag attempt\n");
+  Desk_SWI(3,3, OS_Byte, 161,0x1C,0, NULL,NULL,&y);
+  if ((y & 2) == 2)
+  {
+    char name[12];
+    Desk_wimp_rect b1, b2;
+
+    /* DragASprite bit set, go for it ! */
+    TRACE("ourxfersend: drag with dragasprite\n");
+    strcpy(name, (char *) &mr->icon_create.icondata.data.indirecttext.validstring[1]);
+    /* strcpy(name, "file_fff"); */
+    b1.min.x = x0; b1.max.x = x1;
+    b1.min.y = y0; b1.max.y = y1;
+    TRACE2("ourxfersend: %d %d ", b1.min.x, b1.max.x);
+    TRACE2("%d %d\n", b1.min.y, b1.max.y);
+    err = Desk_DragASprite_Start(197, (void *) 1, name, &b1, &b2);
+    dragging = Desk_TRUE;
+  }
+  else
+  {
+    /* Set up outline drag */
+    TRACE("ourxfersend: drag with outline\n");
+    dr.window    	= -2; 			/* Not relevant */
+    dr.type      	= drag_FIXEDBOX;
+    dr.screenrect.min.x	= x0;
+    dr.screenrect.min.y = y0;
+    dr.screenrect.max.x = x1;
+    dr.screenrect.max.y = y1;
+    dr.parent.min.x 	= x0 - mouse_x; 	/* Expanded parent by box overlap */
+    dr.parent.min.y 	= y0 - mouse_y;
+    dr.parent.max.x 	= x1 - mouse_x + x_limit;
+    dr.parent.max.y 	= y1 - mouse_y + y_limit;
+    err = Desk_Wimp_DragBox(&dr);
+    dragging = Desk_FALSE;
+  }
+  if (err) return;
+  TRACE("ourxfersend: drag started ok\n");
+}
+#endif
+
+
+/*  Filer_Action copy/move messages */
+static Desk_bool filer_action(void)
+{
+#ifdef EXPERT
+  Desk_mouse_block mousestr;
+  Desk_message_block msg;
+  Desk_os_error *err;
+
+  /* Desk_Wimp_GetPointerInfo */
+  TRACE1("filer_action: %x\n", (int) drag_mount);
+  err = Desk_Wimp_GetPointerInfo(&mousestr);
+
+  /* Not completely sure what to do in this case - perhaps we should only
+   * fail on drags to our own source icon ?
+   */
+  if (!drag_mount) return(Desk_FALSE);
+  if ((mousestr.window == -2) && (mousestr.icon == drag_mount->icon)) return(Desk_FALSE);
+  TRACE("filer_action: drag somewhere ok\n");
+
+  msg.header.size = sizeof(message_header) + sizeof(message_datasave);
+  msg.header.sender = mousestr.window;
+  msg.header.yourref = 0;
+  msg.header.action = Desk_message_DATASAVE;
+  msg.data.datasave.window = mousestr.window;
+  msg.data.datasave.icon = mousestr.icon;
+  msg.data.datasave.pos.x = mousestr.pos.x;
+  msg.data.datasave.pos.y = mousestr.pos.y;
+  msg.data.datasave.filetype = 0xFFF;
+  msg.data.datasave.estsize = 0;
+  strcpy(msg.data.datasave.leafname, "x");
+
+  err = Desk_Wimp_SendMessage(Desk_event_SEND, &msg, mousestr.window, mousestr.icon);
+  Menu_Close();
+#endif
+
+  return(Desk_FALSE);
+}
+
+
+/*  ************************* Event handlers *********************************
+ */
+
+
+/*  Handler attached to all button click events.
+ *  If no other handler specifically handles the click, and it was a menu
+ *  click, we will pop up our menu in an appropriate position.
+ */
+extern Desk_bool ButtonClick(Desk_event_pollblock *event, mount_record *mr)
+{
+  int ypos;
+  Desk_icon_handle   i = event->data.mouse.icon;
+  Desk_window_handle w = event->data.mouse.window;
+  Desk_button_state  b;
+  Desk_bool          test_select, test_adjust;
+  mwind_record  *mw = MountWindFind(w);
+
+  TRACE2("ButtonClick: 1 mw %p mw->domain %d\n", mw, mw ? mw->domain : -1);
+  if (w == NULL) return(Desk_FALSE);
+  b.value = event->data.mouse.button.value;
+  if (w == Desk_window_ICONBAR)
+  {
+    if (mr == NULL) return(Desk_FALSE);
+    if (i != mr->icon) return(Desk_FALSE);
+    openlast.x = -1;
+    openlast.y = -1;
+    if (b.data.menu)    			/* is a MENU click */
+    {
+      Desk_bool connect = (mr->icon_state != ISTATE_OK);
+      Desk_bool connections = (MountCount() > 1);
+      char tmp[32];
+
+      ypos = -1;                        	/* Over the iconbar */
+      menuwindow = (void *) mr;
+      Desk_Menu_SetFlags(menu_icon, imenu_MOUNTINFO, Desk_FALSE, connect);
+      Desk_Menu_SetFlags(menu_icon, imenu_OPENROOT, Desk_FALSE, connect);
+      Desk_Menu_SetFlags(menu_icon, imenu_FREE, Desk_FALSE, connect);
+      Desk_Menu_AddSubMenu(menu_icon, imenu_DISMOUNT, (connections && prog_config.expert) ?
+        menu_icon_d : NULL);
+#ifdef EXPERT
+      if (prog_config.expert)
+      {
+        Desk_Menu_AddSubMenu(menu_icon, imenu_QUIT, menu_icon_q);
+        Desk_Msgs_Lookup((!connect || connections) ? "icon.dismount" : "icon.reset", tmp, 31);
+        Desk_Menu_SetText(menu_icon, imenu_DISMOUNT, tmp);
+        Desk_Menu_SetFlags(menu_icon, imenu_DISMOUNT, Desk_FALSE, Desk_FALSE);
+      }
+      else
+#endif
+      {
+        Desk_Msgs_Lookup("icon.dismount", tmp, 31);
+        Desk_Menu_SetText(menu_icon, imenu_DISMOUNT, tmp);
+        Desk_Menu_SetFlags(menu_icon, imenu_DISMOUNT, Desk_FALSE, connect);
+      }
+      Desk_Menu_AddSubMenu(menu_icon, imenu_OPENROOT, ((mr->menu) && (!connect)) ? mr->menu : NULL);
+      Desk_Menu_Show(menu_icon, event->data.mouse.pos.x, ypos);
+      return(Desk_TRUE);
+    }
+#ifdef EXPERT
+    test_select = (prog_config.expert) ? (b.data.select) : ((b.data.select) || (b.data.adjust));
+    test_adjust = (prog_config.expert) ? (b.data.adjust) : Desk_FALSE;
+#else
+    test_select = ((b.data.select) || (b.data.adjust));
+    test_adjust = Desk_FALSE;
+#endif
+#ifdef EXPERT
+    if ((prog_config.expert) && (Desk_Kbd_KeyDown(Desk_inkey_CTRL)))
+    {
+      /* Drag out icon on iconbar for copy/move ? */
+      if ((!b.data.dragselect) || (mr->icon_state != ISTATE_OK)) return(Desk_FALSE);
+      TRACE("Drag attempt!\n");
+      icondrag = 0;
+      maydataload = Desk_FALSE;
+      dragging = Desk_FALSE;
+      drag_mount = NULL;
+      ourxfersend(mr);
+      return(Desk_TRUE);
+    }
+    if ((prog_config.expert) && (b.data.select) && (Desk_Kbd_KeyDown(Desk_inkey_SHIFT)))
+    {
+      /* Open servers list */
+      if ((wind_filer.w) && (!Desk_Window_IsOpen(wind_filer.w))) ParseLists(0);
+      FilerCreate(0, 0);
+      return(Desk_TRUE);
+    }
+#endif
+    if (test_select)
+    {
+      /* If connected, do a Filer_OpenDir, else open servers list ... */
+      if ((mr->icon_state == ISTATE_OK) && (b.data.select))
+      {
+        /* Filer_OpenDir on root of mount */
+        Desk_Error_Check(Desk_SWI(2,0, mr->client_id, 7,mr->mount_id));
+      }
+      else
+      {
+        /* Open servers list */
+        if ((wind_filer.w) && (!Desk_Window_IsOpen(wind_filer.w))) ParseLists(0);
+        FilerCreate(0, 0);
+      }
+      return(Desk_TRUE);
+    }
+    if (test_adjust)
+    {
+      if (mr->icon == cycle_icon)
+      {
+        /* Do mount open on some protocol */
+        if (Desk_Time_Monotonic() >= cycle_time + 200) cycle_item = ClientItem(mr->client_id);
+        if (ClientFind(-1, NULL, cycle_item, NULL) == NULL) cycle_item = 0;
+        CreateMount(mount_EMPTY, cycle_item++, Desk_TRUE);
+      }
+      else
+      {
+         cycle_icon = mr->icon;
+         if (mr->icon_state == ISTATE_OK) cycle_item = ClientItem(mr->client_id);
+           else cycle_item = 0;
+        CreateMount(mount_EMPTY, cycle_item++, Desk_TRUE);
+      }
+      cycle_time = Desk_Time_Monotonic();
+      return(Desk_TRUE);
+    }
+  }
+  TRACE2("ButtonClick: mw %p mw->domain %d\n", mw, mw ? mw->domain : -1);
+  if (w == wind_mounttmp)
+  {
+    if ((b.data.select) || (b.data.adjust))
+    {
+      switch (i)
+      {
+        case mount_DELETE:
+          /* Delete from menu list */
+          MountDeleteList(mountwindow);
+          Menu_Close();
+          Desk_menu_currentopen = NULL;
+          break;
+        case mount_CANCEL:
+          if (b.data.select)
+          {
+            Menu_Close();
+            Desk_menu_currentopen = NULL;
+          }
+          else
+          {
+            /* Restore default/previous fields */
+
+
+
+          }
+          break;
+        case mount_CONNECT:
+          /* Attempt a connection */
+          TRACE("mount tmp_connect button click\n");
+          if ((MountConnect(mountwindow, w)) && (b.data.select))
+          {
+            Menu_Close();
+            Desk_menu_currentopen = NULL;
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    return(Desk_TRUE);
+  }
+  if (w == wind_mountdom)
+  {
+    if ((b.data.select) || (b.data.adjust))
+    {
+      switch (i)
+      {
+        case domain_DELETE:
+          /* Delete from menu list */
+          MountDeleteList(mountwindow);
+          Menu_Close();
+          Desk_menu_currentopen = NULL;
+          break;
+        case domain_CANCEL:
+          if (b.data.select)
+          {
+            Menu_Close();
+            Desk_menu_currentopen = NULL;
+          }
+          else
+          {
+            /* Restore default/previous fields */
+
+
+
+          }
+          break;
+        case domain_CONNECT:
+          /* Attempt a connection */
+          TRACE("domain tmp_Connect button click\n");
+          if ((DomainConnect(mountwindow, w)) && (b.data.select))
+          {
+            Menu_Close();
+            Desk_menu_currentopen = NULL;
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    return(Desk_TRUE);
+  }
+  if (mw && !mw->domain)
+  {
+    if ((b.data.select) || (b.data.adjust))
+    {
+      switch (i)
+      {
+        case mount_DELETE:
+          break;
+        case mount_CANCEL:
+          if (b.data.select)
+          {
+            if (Desk_LinkList_ListLength(&mwind_anchor) > 1) MountCaret(mw);
+            Desk_Window_Delete(mw->w);
+            Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+            FREE(mw);
+          }
+          else
+          {
+            /* Restore default/previous fields */
+
+
+
+          }
+          break;
+        case mount_CONNECT:
+          /* Attempt a connection */
+          TRACE("mount_connect button click\n");
+          if ((MountConnect(mw->ml, mw->w)) && (b.data.select))
+          {
+            if (Desk_LinkList_ListLength(&mwind_anchor) > 1) MountCaret(mw);
+            Desk_Window_Delete(mw->w);
+            Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+            FREE(mw);
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    return(Desk_TRUE);
+  }
+  if (mw && mw->domain)
+  {
+    if ((b.data.select) || (b.data.adjust))
+    {
+      switch (i)
+      {
+        case domain_DELETE:
+          break;
+        case domain_CANCEL:
+          if (b.data.select)
+          {
+            if (Desk_LinkList_ListLength(&mwind_anchor) > 1) MountCaret(mw);
+            Desk_Window_Delete(mw->w);
+            Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+            FREE(mw);
+          }
+          else
+          {
+            /* Restore default/previous fields */
+
+
+
+          }
+          break;
+        case domain_CONNECT:
+          /* Attempt a connection */
+          TRACE2("domain_connect button click %p %p\n", mw, mw->ml);
+          if ((DomainConnect(mw->ml, mw->w)) && (b.data.select))
+          {
+            if (Desk_LinkList_ListLength(&mwind_anchor) > 1) MountCaret(mw);
+            Desk_Window_Delete(mw->w);
+            Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+            FREE(mw);
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    return(Desk_TRUE);
+  }
+  return(Desk_FALSE);
+}
+
+
+#ifdef EXPERT
+
+/*  A DataSave attempt to our iconbar icon(s) ?
+ */
+static Desk_bool DataSave(message_block msg, void *ref)
+{
+  char buf[256];
+  client_record *cr = NULL;
+  mount_record *mr = NULL;
+
+  /* Reply with a DataSaveAck message */
+  TRACE("DataSave:\n");
+  if (msg.data.datasave.window != -2) return(Desk_FALSE);
+  if (!(mr = MountIconFind(-1, NULL, msg.data.datasave.icon, Desk_TRUE, -1))) return(Desk_FALSE);
+  TRACE1("DataSave: valid icon %x\n", (int) mr);
+  if (!(cr = ClientFind(mr->client_id, NULL, -1, NULL))) return(Desk_FALSE);
+  sprintf(buf, "%s::%s.$.", cr->fsname, mr->mount);
+  strcat(buf,msg.data.datasaveack.filename);
+  strncpy(msg.data.datasaveack.filename, buf, 211);
+  TRACE1("DataSave: '%s'\n", msg.data.datasaveack.filename);
+  msg.header.size = (strlen(msg.data.datasaveack.filename) | 3)+1+44;
+  msg.header.yourref = msg.header.myref;
+  msg.header.action = Desk_message_DATASAVEOK;
+  Desk_Wimp_SendMessage(Desk_event_SEND, &msg,msg.header.sender, NULL);
+  maydataload = Desk_TRUE;
+  return(Desk_TRUE);
+}
+
+
+/*
+ */
+static Desk_bool DataSaveAck(message_block msg, void *ref)
+{
+  int handle = Desk_Wimp_NewTask("Filer_Action");
+  int tail;
+  int rename = 0;
+  char dir[256];
+  client_record *cr = NULL;
+  char root[64];
+  _kernel_swi_regs r;
+
+  TRACE2("DataSaveAck: %x %x\n", handle, (int) drag_mount);
+  if (handle == 0) return(Desk_FALSE);
+  if (!drag_mount) return(Desk_FALSE);
+  if (!(cr = ClientFind(drag_mount->client_id, NULL, -1, NULL))) return(Desk_FALSE);
+  TRACE1("DataSaveAck: '%s'\n", msg.data.datasaveack.filename);
+  if (!strcasecmp(msg.data.datasaveack.filename, "<Wimp$Scrap>.x")) return(Desk_FALSE);
+  if (!strcasecmp(msg.data.datasaveack.filename, "<Wimp$ScrapDir>.x")) return(Desk_FALSE);
+
+  /* If a move operation, FilerAction operation 6 */
+  if (icondrag == 2) rename = 6;
+  tail = strlen(msg.data.datasaveack.filename);
+  strncpy(dir, msg.data.datasaveack.filename, tail-2);
+  dir[tail-2] = '\0';
+  msg.header.yourref = 0;
+  msg.header.action = (message_action) message_FILERSELECTIONDIRECTORY;
+  sprintf(root, "%s::%s.$\0", cr->fsname, drag_mount->mount);
+  strcpy((char *) &msg.data.words[0], root);
+  Desk_Wimp_SendMessage(Desk_event_SEND, &msg, handle, NULL);
+
+  /* Add file selection (tricky!) */
+  msg.header.yourref = 0;
+  msg.header.action = (message_action) message_FILERADDSELECTION;
+  r.r[0] = 9;
+  r.r[1] = (int) root;
+  r.r[2] = (int) &msg.data.words[0];
+  r.r[3] = 1;
+  r.r[4] = 0;
+  r.r[5] = 64;
+  r.r[6] = 0;
+  do
+  {
+    _kernel_swi(OS_GBPB, &r, &r);
+    if (r.r[3] != 0) Desk_Wimp_SendMessage(Desk_event_SEND, &msg, handle, NULL);
+  } while (r.r[4] != -1);
+  msg.data.words[0] = rename;
+  msg.data.words[1] = 1;
+  strcpy((char *) &msg.data.words[2], dir);
+  msg.header.yourref = 0;
+  msg.header.action = (message_action) message_FILERACTION;
+  Desk_Wimp_SendMessage(Desk_event_SEND, &msg, handle, NULL);
+  icondrag = 0;
+  return(Desk_TRUE);
+}
+
+
+/*
+ */
+static Desk_bool DataLoad(Desk_message_block msg, void *ref)
+{
+  TRACE("DataLoad:\n");
+  if (maydataload)
+  {
+    /* Load from application */
+    TRACE("DataLoad: load from application - file transfer complete\n");
+    msg.header.yourref = msg.header.myref;
+    msg.header.action = Desk_message_DATALOADOK;
+    Desk_Wimp_SendMessage(Desk_event_SEND, &msg, msg.header.sender, NULL);
+    maydataload = Desk_FALSE;
+  }
+  else
+  {
+    int handle = Desk_Wimp_NewTask("Filer_Action");
+    int tail;
+    Desk_bool rename;
+    char dir[256];
+    char leaf[32];
+    char *name = msg.data.dataload.filename;
+    client_record *cr = NULL;
+    mount_record *mr = NULL;
+
+    /* Load from file/directory
+       Setup some cunning filer_action move/copy action with messages */
+    TRACE("DataLoad: load from filer\n");
+    if (handle == 0) return(Desk_FALSE);;
+    if (!(mr = MountIconFind(-1, NULL, msg.data.dataload.icon, Desk_TRUE, -1))) return(Desk_FALSE);
+    if (!(cr = ClientFind(mr->client_id, NULL, -1, NULL))) return(Desk_FALSE);
+
+    /* Send ack to application (filer) */
+    msg.header.yourref = msg.header.myref;
+    msg.header.action = Desk_message_DATALOADOK;
+    Desk_Wimp_SendMessage(Desk_event_SEND, &msg, msg.header.sender, NULL);
+
+    rename = Desk_Kbd_KeyDown(Desk_inkey_SHIFT);
+    tail = strlen(name);
+    while (tail > 0 && name[tail-1] != '.' && name[tail-1] != ':') tail--;
+    strncpy(dir, name, tail-1);
+    dir[tail-1] = '\0';
+    strcpy(leaf, &name[tail]);
+
+    msg.header.yourref = 0;
+    msg.header.action = (message_action) message_FILERSELECTIONDIRECTORY;
+    strcpy((char *) &msg.data.words[0], dir);
+    Desk_Wimp_SendMessage(Desk_event_SEND, &msg, handle, NULL);
+    msg.header.yourref = 0;
+    msg.header.action = (message_action) message_FILERADDSELECTION;
+    strcpy((char *) &msg.data.words[0], leaf);
+    Desk_Wimp_SendMessage(Desk_event_SEND, &msg, handle, NULL);
+    msg.data.words[0] = rename;
+    msg.data.words[1] = 1;
+    sprintf((char *) &msg.data.words[2], "%s::%s.$\0", cr->fsname, mr->mount);
+    msg.header.yourref = 0;
+    msg.header.action = (message_action) message_FILERACTION;
+    Desk_Wimp_SendMessage(Desk_event_SEND, &msg, handle, NULL);
+  }
+  return(Desk_TRUE);
+}
+
+
+/*  A DataLoad attempt to our iconbar icon(s) ?
+ */
+static Desk_bool DataLoadAck(message_block m, void *ref)
+{
+  /* Redundant stage - we don't care if receiver died or not */
+  TRACE("DataLoadAck:\n");
+  return(Desk_FALSE);
+}
+
+#endif /* EXPERT */
+
+
+/*  User Drag message handler
+ */
+extern Desk_bool UserDrag(Desk_event_pollblock *e, mount_record *mr)
+{
+  TRACE("UserDrag:\n");
+  if (dragging)
+  {
+    /* Clean up DragASprite workspace */
+    Desk_DragASprite_Stop();
+    dragging = Desk_FALSE;
+  }
+  if (icondrag > 0) filer_action();
+  return(Desk_TRUE);
+}
+
+
+/*  Logoff any Access+/LanMan domains and reload mounts file.
+ */
+static void Reset(void)
+{
+  client_record *cr = (client_record *) client_anchor.next;
+
+  /* Kill off the existing mounts file in memory */
+  mlist_clean();
+
+  /* Load default mounts file off disc */
+  MountLoadFile(NULL);
+
+  /* Call any domain logon protocols with OmniOp,17 to logout */
+  while (cr)
+  {
+    if (flagSET(cr, flag_SPECIAL))
+    {
+      /* Ignore any errors */
+      TRACE1("Reset: calling OmniOp for '%s'\n", cr->fsname);
+      Desk_SWI(1,0, cr->client_id, 17);
+    }
+    cr = (client_record *) cr->header.next;
+  }
+
+  /* Unauthenticate from Access+ domains - ignore any errors */
+  /* Desk_SWI(0,0, OmniAccess_Reset); */
+}
+
+
+/*  Dismount all active mounts.
+ */
+static void Dismount(mount_record *mr)
+{
+  client_record *cr = NULL;
+  char          buf[64];
+  Desk_bool		all = (!mr);
+
+  /* Use Omni_Op Desk_SWI call to dismount all active mounts */
+  TRACE1("Dismount: %x\n", (int) mr);
+  Desk_Hourglass_Start(5);
+  if (!mr) mr = (mount_record *) mount_anchor.next;
+  while (mr != NULL)
+  {
+    mount_record *mr_tmp = (mount_record *) mr->header.next;
+
+    /* Do Filer_CloseDir on root of mount, to close any filer windows */
+    cr = ClientFind(mr->client_id, NULL, -1, NULL);
+    if (cr)
+    {
+      if (cr->client_id != 0x4a900)
+      {
+        sprintf(buf, "Filer_CloseDir %s::%s.$", cr->fsname, mr->mount);
+        TRACE1("CLOSEDIR: %s\n", buf);
+        Desk_SWI(1,0, OS_CLI, buf);
+      }
+      /* Display any errors, but we still destroy the mount icon */
+      Desk_Error_Check(Desk_SWI(2,0, mr->client_id, 1,mr->mount_id));
+      MountDelete(mr);
+    }
+    mr = mr_tmp;
+    if (!all) break;
+  }
+  /* Argh! horrible hack to close connected HIDDEN mlist items */
+  if (all)
+  {
+    mlist_record *mrl = (mlist_record *) mlist_anchor.next;
+    while (mrl)
+    {
+      if ((mrl->hidden) && (mrl->connected))
+      {
+        /* Do Filer_CloseDir on root of mount, to close any filer windows */
+        cr = ClientFind(mr->client_id, NULL, -1, NULL);
+        if (cr)
+        {
+          if (cr->client_id != 0x4a900)
+          {
+            sprintf(buf, "Filer_CloseDir %s::%s.$", cr->fsname, mr->mount);
+            TRACE1("CLOSEDIR: (hidden mlist) %s\n", buf);
+            Desk_SWI(1,0, OS_CLI, buf);
+          }
+          Desk_SWI(2,0, mr->client_id, 1,mr->mount_id);
+        }
+      }
+      mrl = (mlist_record *) mrl->header.next;
+    }
+  }
+
+  Desk_Hourglass_Off();
+}
+
+
+/*  Return list of mounts.
+ */
+static char *ActiveMounts(void)
+{
+  mount_record *mr = (mount_record *) mount_anchor.next;
+  char buf[256];
+
+  strcpy(buf, "");
+  while (mr != NULL)
+  {
+    client_record *cr = ClientFind(mr->client_id, NULL, -1, NULL);
+    if (cr)
+    {
+      strcat(buf, mr->mount);
+      strcat(buf, " ");
+    }
+    mr = (mount_record *) mr->header.next;
+  }
+  return(&buf[0]);
+}
+
+
+/*  Handler to take care of the user's IconBar menu choices.
+ */
+static Desk_bool IconMenuChoice(Desk_event_pollblock *event, mount_record *mr)
+{
+  Desk_mouse_block 	ptr;
+  char          buf[64];
+  client_record *cr = NULL;
+
+  Desk_Wimp_GetPointerInfo(&ptr);
+  if (mr == NULL) return(Desk_FALSE);
+  if (mr != (mount_record *) menuwindow) return(Desk_FALSE);
+
+  switch(event->data.selection[0])
+  {
+    case imenu_INFO:
+      /* Info dbox or submenu */
+      switch(event->data.selection[1])
+      {
+        /* progInfo dbox */
+        case -1:
+        case iimenu_INFO:
+          if (!ptr.button.data.adjust) CreateInfo();
+          break;
+        default:
+          if (!ptr.button.data.adjust) CreateClient(event->data.selection[1]);
+          break;
+      }
+      break;
+    case imenu_SHOWALL:
+      /* Show all... operation */
+      if ((wind_filer.w) && (!Desk_Window_IsOpen(wind_filer.w))) ParseLists(0);
+      FilerCreate(0, 0);
+      break;
+    case imenu_MOUNTS:
+      switch(event->data.selection[1])
+      {
+        case -1:
+          break;
+        case immenu_OTHER:
+          /* Create a connect dbox for a given protocol */
+          if ((event->data.selection[2] != -1) && (!ptr.button.data.adjust))
+            CreateMount(mount_EMPTY, event->data.selection[2], Desk_TRUE);
+          break;
+        case immenu_SAVE:
+          /* Save configuration to disc */
+          MountSaveFile();
+          break;
+        default:
+          /* Create a connect dbox for list item */
+          if (!ptr.button.data.adjust)
+            CreateMount(mount_MLISTSEL, event->data.selection[1], Desk_TRUE);
+          break;
+      }
+      break;
+    case imenu_MOUNTINFO:
+      if (!ptr.button.data.adjust) CreateMountInfo(mr);
+      break;
+    case imenu_OPENROOT:
+      switch(event->data.selection[1])
+      {
+        case -1:
+          if (mr->icon_state == ISTATE_OK)
+          {
+            /* Filer_OpenDir on root of mount */
+            Desk_Error_Check(Desk_SWI(2,0, mr->client_id, 6,mr->mount_id));
+          }
+          break;
+        default:
+          /* Filer_OpenDir on root of shared disc 'N' */
+          if (mr->menu)
+          {
+            char open[96];
+            char *s;
+
+            Desk_Wimp_DecodeMenu((struct Desk_menu_block *) mr->menu, (int *) &event->data.selection[1],
+              (char *) &buf);
+            s = strip(buf);
+            s = strchr(s, '\x0d');
+            if (s) *s = '\0';
+            sprintf(open, "Filer_OpenDir Net::%s.$", buf);
+            TRACE1("OpenRoot: '%s'\n", open);
+            Desk_Error_Check(Desk_SWI(1,0, OS_CLI, open));
+          }
+          break;
+      }
+      break;
+    case imenu_FREE:
+      /* Show free current */
+      /* *ShowFree -FS fsname mountname */
+      cr = ClientFind(mr->client_id, NULL, -1, NULL);
+      sprintf(buf, "ShowFree -FS %s %s", cr->fsname, mr->mount);
+      /* Argh! Hack for crap NetFS ! */
+      if (mr->client_id == 0x4a540) sprintf(buf, "ShowFree -FS %s :%s", cr->fsname, mr->mount);
+      /* Hack for Access (long share names) */
+      if (mr->client_id == 0x4a900)
+      {
+        mlist_record *mrl = MountFind(-1, mr->mount, -1, -1);
+        if (mrl) sprintf(buf, "ShowFree -FS %s :%s", cr->fsname, mrl->server);
+      }
+      TRACE1("FREE: %s\n", buf);
+      Desk_Error_Check(Desk_SWI(1,0, OS_CLI, buf));
+      break;
+    case imenu_DISMOUNT:
+      /* Dismount */
+      switch(event->data.selection[1])
+      {
+        case -1:
+          if (!mr || mr->icon_state != ISTATE_OK) Reset();
+        case idmenu_MOUNT:
+          Dismount(mr);
+          break;
+        case idmenu_ALL:
+          Dismount(NULL);
+          break;
+        default:
+          break;
+      }
+      break;
+    case imenu_QUIT:
+      /* Quit */
+#ifdef EXPERT
+      if (prog_config.expert)
+      {
+        switch(event->data.selection[1])
+        {
+          case -1:
+          case iqmenu_FILER:
+            all_done = Desk_TRUE;
+            break;
+          case iqmenu_ALL:
+            all_done = 2;
+            Dismount(NULL);
+            break;
+          default:
+            break;
+        }
+      }
+      else
+#endif
+      {
+        if ((mr && mr->icon_state != ISTATE_OK) || Close(closetype_BYE, Desk_TRUE, NULL))
+        {
+          Dismount(NULL);
+          Reset();
+        }
+      }
+      break;
+    default:
+      break;
+  }
+						/* If ADJUST was used to select, */
+  if (ptr.button.data.adjust)              	/* then we keep the menu open.   */
+    if (Desk_menu_currentopen != NULL) Desk_Menu_ShowLast();
+
+  return(Desk_FALSE);
+}
+
+
+/*  Handler to take care of the user's Main menu choices.
+ */
+static Desk_bool MainMenuChoice(Desk_event_pollblock *event, mount_record *mr)
+{
+  Desk_mouse_block 	ptr;
+  wind_record 	*r = (wind_record *) menuwindow;
+
+  Desk_Wimp_GetPointerInfo(&ptr);
+  if (mr == NULL) return(Desk_FALSE);
+  if (r == NULL) return(Desk_FALSE);
+  if ((r = FilerFind(r->w, 0, -1, -1)) == NULL) return(Desk_FALSE);
+						/* If ADJUST was used to select, */
+  switch(event->data.selection[0])
+  {
+    case mmenu_CONNECT:
+      /* Connect submenu */
+      if (ptr.button.data.adjust)
+      {
+        if (Desk_menu_currentopen != NULL) Desk_Menu_ShowLast();
+        return(Desk_FALSE);
+      }
+      switch(event->data.selection[1])
+      {
+        case -1:
+          /* Create a connect dbox for a given protocol */
+          if (!clientwindow) return(Desk_FALSE);
+          if (select_item > 0) return(CreateMount(mount_WINDOW, -1, Desk_TRUE));
+            else return(CreateMount(mount_CLIENT, clientwindow->client_id, Desk_TRUE));
+	  break;
+        default:
+          /* Create a connect dbox for a given protocol */
+          return(CreateMount(mount_EMPTY, event->data.selection[1], Desk_TRUE));
+          break;
+      }
+      break;
+
+    case mmenu_DISPLAY:
+      /* Display submenu */
+      switch(event->data.selection[1])
+      {
+        case mdmenu_LARGE:
+        case mdmenu_SMALL:
+        case mdmenu_FULL:
+          prog_config.display = event->data.selection[1];
+          ConfigWrite();
+          if (r->display != event->data.selection[1])
+          {
+            int loop;
+            r->display = event->data.selection[1];
+            for (loop = mdmenu_LARGE; loop <= mdmenu_FULL; loop++)
+              Desk_Menu_SetFlags(menu_main_d, loop, (r->display == loop), Desk_FALSE);
+	    /* Sort messages */
+ 	    SortMessages(r, r->sort);
+            /* Redraw window */
+            FilerDisplay(r);
+          }
+          break;
+        case mdmenu_NAME:
+        case mdmenu_TYPE:
+          prog_config.sort = event->data.selection[1]-2;
+          ConfigWrite();
+          if (r->sort != event->data.selection[1]-2)
+          {
+            r->sort = event->data.selection[1]-2;
+            Desk_Menu_SetFlags(menu_main_d, mdmenu_NAME, (r->sort == sort_NAME), Desk_FALSE);
+            Desk_Menu_SetFlags(menu_main_d, mdmenu_TYPE, (r->sort == sort_PROTOCOL), Desk_FALSE);
+	    /* Sort messages */
+ 	    SortMessages(r, r->sort);
+            /* Redraw window */
+            FilerDisplay(r);
+          }
+          break;
+        case -1:
+        default:
+          break;
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (ptr.button.data.adjust)              	/* then we keep the menu open.   */
+    if (Desk_menu_currentopen != NULL) Desk_Menu_ShowLast();
+
+  return(Desk_FALSE);
+}
+
+
+/*  Handler to take care of the user's menu choices.
+ *  Because the Menu event is 'non window-related' according to DeskLib, we
+ *  can only have one event handler for all menus used.
+ */
+extern Desk_bool MenuChoice(Desk_event_pollblock *event, mount_record *mr)
+{
+  Desk_bool result = Desk_FALSE;
+  if (Desk_menu_currentopen == menu_icon) result = IconMenuChoice(event, mr);
+    else if (Desk_menu_currentopen == menu_main) result = MainMenuChoice(event, mr);
+  if (select_transient) FilerSelection();
+  return(result);
+}
+
+
+/*  Handler to take care of the user's key presses.
+ */
+extern Desk_bool KeyPress(Desk_event_pollblock *event, mount_record *mr)
+{
+  Desk_window_handle w = event->data.key.caret.window;
+  mwind_record *mw = MountWindFind(w);
+
+  if (w == wind_mounttmp && event->data.key.code == Desk_keycode_RETURN)
+  {
+    /* Attempt a connection */
+    if (MountConnect(mountwindow, w))
+    {
+      Menu_Close();
+      Desk_menu_currentopen = NULL;
+    }
+    return(Desk_TRUE);
+  }
+  if (w == wind_mountdom && event->data.key.code == Desk_keycode_RETURN)
+  {
+    /* Attempt a connection */
+    TRACE1("KeyPress: domainconnect %p\n", mountwindow);
+    if (DomainConnect(mountwindow, w))
+    {
+      Menu_Close();
+      Desk_menu_currentopen = NULL;
+    }
+    return(Desk_TRUE);
+  }
+  if ((mw) && (event->data.key.code == Desk_keycode_RETURN))
+  {
+    /* Attempt a connection */
+    if (!mw->domain && MountConnect(mw->ml, mw->w))
+    {
+      if (Desk_LinkList_ListLength(&mwind_anchor) > 1) MountCaret(mw);
+      Desk_Window_Delete(mw->w);
+      Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+      FREE(mw);
+    }
+    TRACE2("KeyPress: domainconnect %p %p\n", mw, mw->ml);
+    if (mw->domain && DomainConnect(mw->ml, mw->w))
+    {
+      if (Desk_LinkList_ListLength(&mwind_anchor) > 1) MountCaret(mw);
+      Desk_Window_Delete(mw->w);
+      Desk_LinkList_Unlink(&mwind_anchor, &(mw->header));
+      FREE(mw);
+    }
+    return(Desk_TRUE);
+  }
+  /* Not caught - pass to next handler */
+  Desk_Wimp_ProcessKey(event->data.key.code);
+  return(Desk_TRUE);
+}
+
+
+/*  PollWord Non-Zero message handler
+ */
+extern Desk_bool PollWordNZ(Desk_event_pollblock *e, mount_record *mr)
+{
+  _kernel_oserror *err = NULL;
+
+  TRACE2("PollWordNZ: %d %d\n", pollword, e->data.words[1]);
+  if (pollword != e->data.words[1]) return(Desk_FALSE);
+  if ((pollword & pollword_ENUMERATE) == pollword_ENUMERATE)
+  {
+    /* Possibly update the icons on the iconbar */
+    TRACE("EnumerateMounts pollword:\n");
+    /* Update icons on iconbar (active mounts) */
+    err = ParseMounts(pollword_r0);
+  }
+  if ((pollword & pollword_ENUMERATENET) == pollword_ENUMERATENET)
+  {
+    /* Redraw servers window (if open)  */
+    TRACE("EnumerateMounts Network pollword:\n");
+    /* Update filer windows (if open) */
+    err = ParseLists(pollword_r0);
+  }
+  if ((pollword & pollword_ENUMERATEPRINT) == pollword_ENUMERATEPRINT)
+  {
+    /* Update internal copy of printers on network */
+    TRACE("EnumeratePrinters Network pollword:\n");
+    err = ParsePrinters(pollword_r0);
+  }
+  if ((pollword & pollword_REGISTER) == pollword_REGISTER)
+  {
+    TRACE("RegisterClients pollword:\n");
+    /* Possibly update the icons on the iconbar */
+    err = ParseMounts(pollword_r0);
+    FileType_Load();
+    err = ParseLists(pollword_r0);
+  }
+  if ((pollword & pollword_DEREGISTER) == pollword_DEREGISTER)
+  {
+    /* No action required currently */
+    TRACE("DeregisterClients pollword:\n");
+    err = ParseMounts(pollword_r0);
+    err = ParseLists(pollword_r0);
+  }
+  if ((pollword & pollword_MOUNTCLI) == pollword_MOUNTCLI)
+  {
+    /* Do MountCLI calls for real now */
+    TRACE("MountCLI pollword:\n");
+    if (pollword_str) MountCLI(pollword_str, Desk_TRUE);
+    RMAFREE(pollword_str);
+  }
+  pollword = pollword_NONE;
+  pollword_r0 = -1;
+  return(Desk_FALSE);
+}
+
+
+/*  MenuWarning message handler for IconBar menu
+ */
+extern Desk_bool IconMenuWarn(Desk_event_pollblock *e, mount_record *mr)
+{
+  Desk_message_menuwarn *m = &e->data.message.data.menuwarn;
+  Desk_menu_ptr open = NULL;
+
+  /* 2000-03-02: BAL
+   * Added the following line of code to aid the conversion of Omni to Desk.
+   * ANT created a EventMsg_ReleaseRef routine in their DeskLib, whereas
+   * the 'mainstream' DeskLib only has EventMsg_Release.
+   *
+   * The Omni code used to register an EventMsg handler for MenuWarn messages
+   * for *every* iconbar icon, using a pointer to the mount_record for
+   * that icon as the 'user data' (the Ref bit).  This means that when a
+   * MenuWarn message occured, any one of these handlers may get called.  The
+   * start of this handler used to check whether it was the 'right' one by
+   * comparing the mr value to the menuwindow global variable, which is always
+   * set to point to a data structure describing the last thing that a menu
+   * was opened for (either a mount_record or wind_record - wind_record things
+   * are syphoned off in the main MenuWarn hander before this sub-routine is
+   * called).
+   *
+   * This check is clearly pretty pointless; you might just as well use the
+   * value of menuwindow straight off (unless you *completely* distrust your
+   * library's event dispatch system, in which case you shouldn't be using it
+   * anyway).  This also avoids us having to put ANT's EventMsg_ReleaseRef
+   * customisation into our Desk, which is nice.
+   */
+  mr = menuwindow;
+
+  TRACE2("IconMenuWarn: %d %d\n", (int) mr, m->selection[0]);
+  /* if (mr != menuwindow) return(Desk_FALSE); */
+  TRACE("IconMenuWarn: mr ok\n");
+  switch (m->selection[0])
+  {
+    case imenu_INFO:
+      switch (m->selection[1])
+      {
+	case iimenu_INFO:	return(CreateInfo());
+				break;
+        case -1:       		menu_icon_i = ClientMakeInfoMenu(menu_icon_i);
+    				if (menu_icon_i != NULL)
+    				{
+  				  Desk_Menu_AddSubMenu(menu_icon, imenu_INFO, menu_icon_i);
+        			  open = menu_icon_i;
+    				} else return(CreateInfo());
+      				break;
+      	default:		return(CreateClient(m->selection[1]));
+      				break;
+      }
+      break;
+    case imenu_MOUNTS:
+      TRACE1("IconMenuWarn: mounts %d\n", m->selection[1]);
+      switch (m->selection[1])
+      {
+        case immenu_OTHER:      menu_icon_mo = ClientMakeMenu(menu_icon_mo);
+  				Desk_Menu_AddSubMenu(menu_icon_m, immenu_OTHER, menu_icon_mo);
+        			open = menu_icon_mo;
+        			break;
+        case -1:		if (menu_icon_m) menu_icon_mo = NULL;
+        			menu_icon_m = MountMakeMenu(menu_icon_m);
+          			Desk_Menu_AddSubMenu(menu_icon, imenu_MOUNTS, menu_icon_m);
+        			open = menu_icon_m;
+                  		break;
+        default:		return(CreateMount(mount_MLIST, m->selection[1], Desk_TRUE));
+        			break;
+      }
+      break;
+    case imenu_MOUNTINFO:return(CreateMountInfo(mr));
+    			break;
+    case imenu_OPENROOT:open = mr->menu;
+      			break;
+    case imenu_DISMOUNT:open = menu_icon_d;
+      			break;
+    case imenu_QUIT:	open = menu_icon_q;
+      			break;
+    default: 		break;
+  }
+
+  if (open == NULL) return(Desk_FALSE);
+  Desk_Wimp_CreateSubMenu(open, m->openpos.x, m->openpos.y);
+  return(Desk_TRUE);
+}
+
+
+/*  MenuWarning message handler for Main menu
+ */
+extern Desk_bool MainMenuWarn(Desk_event_pollblock *e, mount_record *mr)
+{
+  Desk_message_menuwarn 	*m = &e->data.message.data.menuwarn;
+  Desk_menu_ptr 		open = NULL;
+  wind_record 		*r = (wind_record *) menuwindow;
+
+  if (r == NULL) return(Desk_FALSE);
+  if ((r = FilerFind(r->w, 0, -1, -1)) == NULL) return(Desk_FALSE);
+  switch (m->selection[0])
+  {
+    case mmenu_DISPLAY: open = menu_main_d;
+      			break;
+    case mmenu_CONNECT: menu_icon_mo = ClientMakeMenu(menu_icon_mo);
+  			Desk_Menu_AddSubMenu(menu_main, mmenu_CONNECT, menu_icon_mo);
+        		open = menu_icon_mo;
+        		break;
+    default: 		break;
+  }
+
+  if (open == NULL) return(Desk_FALSE);
+  Desk_Wimp_CreateSubMenu(open, m->openpos.x, m->openpos.y);
+  return(Desk_TRUE);
+}
+
+
+/*  MenuWarning message handler for menus
+ */
+extern Desk_bool MenuWarn(Desk_event_pollblock *e, mount_record *mr)
+{
+  if (Desk_menu_currentopen == menu_icon) return(IconMenuWarn(e, mr));
+  if (Desk_menu_currentopen == menu_main) return(MainMenuWarn(e, mr));
+  return(Desk_FALSE);
+}
+
+
+/*  Send a help message.
+ */
+static Desk_bool HelpSend(Desk_event_pollblock *event, char *s)
+{
+  /* Lookup message tag, and attempt help message reply */
+  TRACE1("HelpSend: '%s'\n", s);
+  if (Desk_Msgs_Lookup(s, event->data.message.data.helpreply.text, 200))
+  {
+    TRACE1("HelpSend: sending '%s'\n", event->data.message.data.helpreply.text);
+    event->data.message.header.yourref = event->data.message.header.myref;
+    event->data.message.header.action = Desk_message_HELPREPLY;
+    event->data.message.header.size = 256;
+    Desk_Wimp_SendMessage(Desk_event_SENDWANTACK, &event->data.message,
+      event->data.message.header.sender, 0);
+    return(Desk_TRUE);  /* Only claim message event if successfully reply to it */
+  }
+  return(Desk_FALSE);
+}
+
+
+#define Desk_Wimp_GetMenuState	0x0400f4
+
+/*  Help message handler.
+ */
+extern Desk_bool HelpHandler(Desk_event_pollblock *event, void *reference)
+{
+  Desk_menu_ptr 	m = Desk_menu_currentopen;
+  Desk_window_handle w = event->data.message.data.helprequest.where.window;
+  Desk_icon_handle 	i = event->data.message.data.helprequest.where.icon;
+  char 		prefix[16];
+  int		buf[25];
+  mwind_record 	*mwl = NULL;
+
+  /* Look for a matching menu, in case we have interactive help on one of our menus */
+  if ((w <= 0) && (w != -2)) return(Desk_FALSE);
+  if ((w == wind_info) || (w == wind_client) || (w == wind_mountinfo)) return(Desk_FALSE);
+  if (event->data.message.header.action != Desk_message_HELPREQUEST) return(Desk_FALSE);
+  if (w == wind_mounttmp && clientwindow)
+  {
+    /* Mount dbox - we want context sensitive help here */
+    TRACE2("HelpHandler: mount client %x icon %d\n", clientwindow->client_id, i);
+    sprintf(prefix, "m%s.%d", clientwindow->fsname, i);
+    return(HelpSend(event, prefix));
+  }
+  mwl = MountWindFind(w);
+  if (mwl && mwl->ml)
+  {
+    client_record *cr = ClientFind(mwl->ml->client_id, NULL, -1, NULL);
+
+    /* Mount dbox - we want context sensitive help here */
+    TRACE2("HelpHandler: mount client %x icon %d\n", cr->client_id, i);
+    sprintf(prefix, "m%s.%d", cr->fsname, i);
+    return(HelpSend(event, prefix));
+  }
+  if (w == -2)
+  {
+    mount_record *mr = MountIconFind(-1, NULL, i, Desk_TRUE, -1);
+
+    /* Iconbar - one of our icons ? */
+    TRACE2("HelpHandler: iconbar mr %x icon %d\n", (int) mr, i);
+    if (!mr) return(Desk_FALSE);
+    if (mr->icon_state != ISTATE_OK) strcpy(prefix, "iconbar.s");
+      else strcpy(prefix, "iconbar.f");
+    if (prog_config.expert) strcat(prefix, "e");
+  }
+  else
+  {
+    /* Fill up buffer to current position - deals with not our menu, menu closed, etc, etc */
+    Desk_SWI(4,0, Desk_Wimp_GetMenuState, 1,&buf[0],w,i);
+    if (buf[0] == -1) return(Desk_FALSE);
+    strcpy(prefix, "");
+
+    /* A valid menu ? */
+    if (m == menu_icon)
+    {
+      switch (buf[0])
+      {
+        case imenu_INFO: 	if (buf[1] != -1) sprintf(prefix, "miconi.%d", buf[1]);
+                          	  else sprintf(prefix, "micon.%d", buf[0]);
+                	        break;
+        case imenu_MOUNTS:
+          switch (buf[1])
+          {
+            case immenu_OTHER:	if (buf[2] != -1)
+            			{
+            			  sprintf(prefix, "miconmo.%d", buf[2]);
+     				  if (Desk_Icon_GetShade(w,i)) strcpy(prefix, "miconmo.g");
+     				  if (ClientCount() == 0) strcpy(prefix, "miconmo.b");
+                          	} else sprintf(prefix, "miconm.%d", buf[1]);
+                	        break;
+            case -1:		sprintf(prefix, "micon.%d", buf[0]);
+            			break;
+            default:		sprintf(prefix, "miconm.%d", buf[1]);
+            			break;
+          }
+          break;
+        case imenu_OPENROOT:	if (buf[1] != -1) sprintf(prefix, "micono.%d", buf[1]);
+                            	  else sprintf(prefix, "micon.%d", buf[0]);
+        			if (Desk_Icon_GetShade(w,i)) strcat(prefix, "b");
+                	        break;
+        case imenu_DISMOUNT:	if (buf[1] != -1) sprintf(prefix, "micond.%d", buf[1]);
+                            	  else sprintf(prefix, "micon.%d", buf[0]);
+#ifdef EXPERT
+      				if (prog_config.expert)
+      				{
+      				  mount_record *mr = (mount_record *) mount_anchor.next;
+      				  if (!mr || mr->icon_state != ISTATE_OK) strcat(prefix, "r");
+      				}
+#endif
+				if (Desk_Icon_GetShade(w,i)) strcat(prefix, "b");
+                	        break;
+        case imenu_QUIT:
+#ifdef EXPERT
+				if (prog_config.expert)
+				{
+         			  if (buf[1] != -1) sprintf(prefix, "miconq.%d", buf[1]);
+                            	    else sprintf(prefix, "micon.%d", buf[0]);
+				}
+				else
+#endif
+				{
+				  sprintf(prefix, "micon.%da", buf[0]);
+				}
+                	        break;
+        default:
+          sprintf(prefix, "micon.%d", buf[0]);
+  	  if (Desk_Icon_GetShade(w,i)) strcat(prefix, "b");
+          break;
+      }
+    }
+    if (m == menu_main)
+    {
+      switch (buf[0])
+      {
+        case mmenu_DISPLAY:	if (buf[1] != -1) sprintf(prefix, "mmaind.%d", buf[1]);
+                            	  else sprintf(prefix, "mmain.%d", buf[0]);
+                	        break;
+        case mmenu_CONNECT:	if (buf[1] == -1)
+        			{
+                            	  sprintf(prefix, "mmain.%d", buf[0]);
+        			  if ((prog_config.expert) && (select_item == 0))
+      				    strcat(prefix, "e");
+    				  if (Desk_Icon_GetShade(w,i)) strcat(prefix, "b");
+                                }
+                                else
+                                {
+            			  sprintf(prefix, "miconmo.%d", buf[1]);
+     				  if (Desk_Icon_GetShade(w,i)) strcpy(prefix, "miconmo.g");
+     				  if (ClientCount() == 0) strcpy(prefix, "miconmo.b");
+  				}
+                	        break;
+        default:
+          sprintf(prefix, "mmain.%d", buf[0]);
+          break;
+      }
+    }
+  }
+
+  /* Lookup message tag, and attempt help message reply */
+  if (strlen(prefix) <= 1) return(Desk_FALSE);
+  return(HelpSend(event, prefix));
+}
+
+
+/*  General wimp message event handler
+ */
+extern Desk_bool GenEvent(Desk_event_pollblock *e, void *reference)
+{
+  /* TRACE2("GenEvent: %d 0x%x\n", e->type, e->data.message.header.action); */
+  switch (e->data.message.header.action)
+  {
+   case Desk_message_CLOSEDOWN:
+     TRACE("Desk_message_QUIT\n");
+     /* MountDisconnectAll(); */
+     all_done = Desk_TRUE;
+     break;
+
+#ifdef EXPERT
+    case Desk_message_DATASAVE:		/* start data save */
+      return(DataSave(e->data.message, reference));
+      break;
+
+    case Desk_message_DATASAVEACK:		/* data save ack */
+      return(DataSaveAck(e->data.message, reference));
+      break;
+
+    case Desk_message_DATALOAD:		/* start data load */
+      return(DataLoad(e->data.message, reference));
+      break;
+
+    case Desk_message_DATALOADACK:		/* data load ack */
+      return(DataLoadAck(e->data.message, reference));
+      break;
+#endif
+
+    case Desk_message_PREQUIT:     		/* give us the chance to object to quit */
+      TRACE("Desk_message_PREQUIT\n");
+      if (all_predone) return(Desk_TRUE);
+      { int flag;
+
+        /* New RISC OS 3.xx prequit message - take note of flag word */
+        if (e->data.message.header.size < 24) flag = 0;
+          else flag = (e->data.message.data.words[0] & 0x01);
+        /* Desktop quit */
+        Dismount(NULL);
+      }
+      return(Desk_TRUE);
+      break;
+
+    case Desk_message_SAVEDESK: 		/* RISC OS 3 'Desktop save' feature */
+      { int 	fh = e->data.message.data.words[0];
+        char 	buf[256];
+
+        /* Save configuration to disc */
+        MountSaveFile();
+        sprintf(buf, "Set "app_DIR"$Path %s\n", getenv(app_DIR"$Path"));
+        Desk_File_WriteBytes(fh, buf, strlen(buf));
+        sprintf(buf, "Set "app_DIR"$Options %s\n", getenv(app_DIR"$Options"));
+        Desk_File_WriteBytes(fh, buf, strlen(buf));
+        sprintf(buf, "Run %s ", getenv(app_DIR"$Dir"));
+        Desk_File_WriteBytes(fh, buf, strlen(buf));
+        sprintf(buf, "%s\n", ActiveMounts());
+        Desk_File_WriteBytes(fh, buf, strlen(buf));
+        TRACE("GenEvent: SAVEDESK\n");
+        return(Desk_TRUE);
+      }
+      break;
+
+    case Desk_message_WINDOWINFO:		/* to work with window Iconizers (eg, Pinboard) */
+      {
+        Desk_window_handle w = e->data.message.data.words[0];
+
+        TRACE("GenEvent: WINDOWINFO\n");
+        strcpy((char *) &e->data.message.data.words[2], "Omni");
+        if (w == wind_filer.w) strcpy((char *) &e->data.message.data.words[4], "Servers");
+          else strcpy((char *) &e->data.message.data.words[4], "Mounts");
+        e->data.message.header.size = 64;
+        e->data.message.header.yourref = e->data.message.header.myref;
+        Desk_Wimp_SendMessage(Desk_event_SEND, &(e->data.message),
+          e->data.message.header.sender, 0);
+      }
+      /* _kernel_oscli("Save XXX 8000 +c000"); */
+      break;
+
+    case Desk_message_INITTASK:		/* may have to kill off a new 'ShareFS' task */
+      TRACE("GenEvent: INITTASK\n");
+      if ((!strcmp((char *) &e->data.message.data.bytes[8], "ShareFS")) &&
+          (ClientFind(-1, NULL, -1, "Share")))
+      {
+        TRACE1("GenEvent: kill ShareFS %x\n", e->data.message.header.sender);
+        e->data.message.header.size = 20;
+        e->data.message.header.yourref = 0;
+        e->data.message.header.action = Desk_message_QUIT;
+        Desk_Wimp_SendMessage(Desk_event_SEND, &(e->data.message),
+          e->data.message.header.sender, 0);
+        TRACE("GenEvent: kill ShareFS OK\n");
+        return(Desk_TRUE);
+      }
+      break;
+
+    case Desk_message_MENUSDELETED: 		/* may have to deselect a transient selection */
+      TRACE("GenEvent: MENUSDELETED\n");
+      if (select_transient) FilerSelection();
+      break;
+
+    default:
+      break;
+  }
+  return(Desk_FALSE);
+}
