@@ -5,10 +5,10 @@ CFLAGS=-c -O2 -I. $(CFL)
 CC=gcc
 DERIVED= datenow.h
 OBJALL=bytesex.o chunkfls.o disass.o err.o fname.o prgname.o re.o ieeeflt.o \
-dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o
+dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o filestamp.o
 HSOURCE=aif.h disass.h libflfmt.h scr_drv.h aof.h bytesex.h err.h \
 ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
-chunkfmt.h host_scr.h re.h ieeeflt.h 
+chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h
 
 CFLhost= -I/usr/local/riscos/include
 
@@ -22,6 +22,9 @@ bytesex.o:	bytesex.h
 disass.o:	disass.c
 disass.o:	disass.h
 	$(CC) $(CFLAGS) $(CFLdisass) disass.c -o disass.o
+filestamp.o:	filestamp.c
+filestamp.o:	filestamp.h
+	$(CC) $(CFLAGS) $(CFLfilestamp) filestamp.c -o filestamp.o
 fname.o:	fname.c
 fname.o:	fname.h
 	$(CC) $(CFLAGS) $(CFLfname) fname.c -o fname.o
