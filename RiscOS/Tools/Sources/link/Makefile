@@ -11,6 +11,7 @@
 #
 # Paths
 #
+LIBDIR	= <Tools$Dir>.Acorn
 VPATH=  @ riscos
 
 #
@@ -88,6 +89,10 @@ export: export_${PHASE}
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
+
+install_tool: ${TARGET}
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	@echo ${COMPONENT}: tool and docs installed in library
 
 clean:
         ${WIPE} o.* ${WFLAGS}
