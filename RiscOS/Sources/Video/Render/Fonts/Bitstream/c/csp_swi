@@ -31,7 +31,7 @@ Includes.
 #define STR_NULL	"\0"
 #define CSPCACHESIZE	16000		/* Bitmap cache memory size */
 #define CSPMEMORYMODE	2		/* 1 = min, 2 = normal, 3 = max */
-#define MODIF		2UL
+#define MODIF		9
 #define ESC		27
 #define SS2		142
 #define CHECK_INIT	( if( !bit_init ) if( !InitialiseBitstream() ) return; )
@@ -39,6 +39,7 @@ Includes.
 #define ISNIGORI(A)	((A>=182 && A<=196) || (A>=202 && A<=206) || (A==179))
 #define Logfile(S)	(if(replog) fprintf(replog_file, S))
 
+/*#define WONG	    	1   	    	*//* Temporary hack to get BIG5 working for WONG */
 
 /*
 Typedefs.
@@ -144,7 +145,7 @@ static _void_func_ptr swi_call_table[] = { cspSvcInitBitmapCache,
 					   cspConvertCode, /* This is not a Bitstream routine */
 					   cspIsWideFont, /* This is not a Bitstream routine */
 					   cspDirectDraw, /* This is not a Bitstream routine */
-					   cspBitmapDraw, /* This is not a Bitstream routine */
+					   cspDirectDraw, /* This is not a Bitstream routine */
 					   cspAddHandle, /* This is not a Bitstream routine */
 					   cspCheckHandle, /* This is not a Bitstream routine */
 					   cspCloseHandle, /* This is not a Bitstream routine */
@@ -212,7 +213,7 @@ static unsigned char header_block[] = {
 static unsigned short kanjichar;
 
 /* Enumeration for wide type detection. */
-enum { ASCII = 0, SJIS, OLD, NEW, NEC, EUC, EUCORSJIS, UTF8 };
+enum { ASCII = 0, SJIS, OLD, NEW, NEC, EUC, EUCORSJIS, xJIS, xSJIS, xEUC, xEUC2, xJIS2, UTF8 };
 
 /* Font Manager paint string. */
 char *string_ptr;
@@ -263,6 +264,7 @@ static char * strcpycr ( char *dest, const char *src )
 }
 
 
+
 static char * strcatcr ( char *dest, const char *src )
 {
         return strcpycr ( dest + strlen(dest), src );
@@ -293,7 +295,7 @@ _kernel_oserror *cspSWIHandle( int swi_no,
         UNUSED( private_word );
 
 	assert( swi_no <= _SWI_Max );
-	
+
 	/* Execute the appropriate SWI routine. */
 	( *swi_call_table[ swi_no ] )( r );
 
@@ -338,14 +340,14 @@ void cspSvcOpenAlt1( _kernel_swi_regs *r )
 void cspSvcSetPfr( _kernel_swi_regs *r )
 {
 	int slen;
-	
+
 	/* fudge factor ten, captain, for some spaces at the start. */
 	strcpy( font_path, (char *)(r->r[1] + 2) );
 	slen = strlen( font_path ) - 3;
 	font_path[ slen ] = '\0';
 /*	printf("Opening %s\n", font_path);*/
 	/* Set handle to indicate 16 bit file. */
-	r->r[1] = 128;	
+	r->r[1] = 128;
 /*	CspSetPfr( (short)r->r[1] );*/
 }
 
@@ -358,7 +360,7 @@ void cspSvcSetPfr( _kernel_swi_regs *r )
         else R0 = internal character code
              R2 = -1 => that was an 8-bit code (skip 1 byte in string)
              R2 <> 0 => that was a 16-bit code (skip 2 bytes in string)
-*/             
+*/
 void cspSvcOutputChar( _kernel_swi_regs *r )
 {
         unsigned long kanjichar;
@@ -368,7 +370,7 @@ void cspSvcOutputChar( _kernel_swi_regs *r )
 
 	this_enc = font_handles[ glob_font ]->parent->encoding;
 
-	if( replog ) fprintf(replog_file, "Into cspSvcOutputChar\n" );
+	if( replog ) fprintf(replog_file, "Into cspSvcOutputChar %x with encoding %i\n", r->r[0], this_enc );
 
 	/* Cast register to unsigned 32-bit long. */
 	kanjichar = (unsigned long) r->r[0];
@@ -380,6 +382,8 @@ void cspSvcOutputChar( _kernel_swi_regs *r )
 	/* In case it's UTF* */
 	glob_regs = r;
 
+    	cvt_flags = -1;
+
 	/* Convert the character as appropriate. */
 	newkchar = ConvertCode( this_enc, kanjichar );
 	if ( cvt_flags == 0 )
@@ -389,14 +393,14 @@ void cspSvcOutputChar( _kernel_swi_regs *r )
 	        if( replog ) fprintf(replog_file, "Invalid char\n");
 	        return;
 	}
-	if ( cvt_flags == 1 )
-	{
-	        kanjichar = 0UL;
+	if ( cvt_flags == 1 )	    	    	    /* Han/Zen (1 byte enc, 2 byte o/p) */
+    	{
+	        kanjichar = 1UL;
 	}
 	else if ( cvt_flags == 2 )
 	{
 	        /* Single-byte ASCII. */
-	        kanjichar = 2;
+	        kanjichar = 2UL;
 	}
 	else kanjichar = 0UL;
 
@@ -426,12 +430,13 @@ void cspSvcOutputChar( _kernel_swi_regs *r )
 
 	/* Need to set up pointer to draw data regardless. May be moved to
 	initialisation routine later. */
-	
+
 	/**** Use font_child because that will have been set in the call to
 	cspAddHandle. ****/
 	r->r[0] = &draw_data;
 	if( cvt_flags != -1 ) {
-   		if( replog ) fprintf(replog_file, "Requesting 8-bit char %x\n", newkchar );
+   		if( replog ) fprintf(replog_file, "Requesting 8-bit or Han char %x\n", newkchar );
+   		r->r[1] = (unsigned long)newkchar;  	/* May or may not be modified depending on Han status. */
 	        r->r[2] = (unsigned long)kanjichar;
 	        return;
 	}
@@ -457,38 +462,38 @@ void cspSvcOutputChar( _kernel_swi_regs *r )
 void cspSvcCharSize( _kernel_swi_regs *r )
 {
 	cspCharInfo_t pCharInfo;
-	
+
 	/* Retrieve character specs. */
 /*	CspGetCharSpecs( (unsigned short)newkchar, &pCharInfo );*/
-		
+
 	/* Return width and height info to caller. */
-	r->r[2] = ( font_handles[ r->r[0] ]->font_size << 4 ) * 48;
+	r->r[2] = ( font_handles[ r->r[0] ]->font_size ) * 48;
 	r->r[3] = 0UL;
-	
+
 /*	if(replog) fprintf(replog_file, "r0 %x\tr1 %x\tr2 %x\tr3 %x\tr4 %x\tr5 %x\n",
 				r->r[0],r->r[1],r->r[2],r->r[3],r->r[4],r->r[5] );*/
-	
+
 	if(replog) fprintf(replog_file, "Char %x is %i by %i\n", (unsigned short)newkchar,
 				pCharInfo.hWidth, pCharInfo.vWidth);
 }
-	
+
 /* Retrieve font bounding box specs. */
 void cspSvcFontSize( _kernel_swi_regs *r )
 {
         cspFontInfo_t pFontInfo;
         fontAttributes_t pFontAttributes;
         unsigned short pFontRefNumber;
-        
+
         if( CspGetFontSpecs( &pFontRefNumber, &pFontInfo, &pFontAttributes ) )
         	assert( FALSE );
-        
-        r->r[0] = pFontInfo.fontBBox.xmin;
-        r->r[1] = pFontInfo.fontBBox.ymin;
-        r->r[2] = pFontInfo.fontBBox.xmax;
-    	r->r[3] = pFontInfo.fontBBox.ymax;
+
+        r->r[0] = pFontInfo.fontBBox.xmin >> 6;
+        r->r[1] = pFontInfo.fontBBox.ymin >> 6;
+        r->r[2] = pFontInfo.fontBBox.xmax >> 6;
+    	r->r[3] = pFontInfo.fontBBox.ymax >> 6;
 }
 
-	
+
 /* SWI + 9 */
 /* Add font name derived from Font_ListFonts. */
 void cspSvcAddFile( _kernel_swi_regs *r )
@@ -503,12 +508,12 @@ void cspSvcAddFile( _kernel_swi_regs *r )
 int SetBitstreamInit( void )
 {
         int	i;
-        
+
 	/* Initialise listfonts counts. */
 	listfonts_count = 0;
 	current_encoding = 1;
 
-	if( replog ) 
+	if( replog )
 	{
 	        replog_file = fopen( ":4.$.replog2", "w" );
 	        if( replog_file == NULL ) replog = 0;
@@ -525,9 +530,9 @@ int SetBitstreamInit( void )
 	for( i = 0; i < 256; i++ ) {
 	        font_handles[ i ] = NULL;
 	}
-	
+
 	glob_font = 0;
-	
+
 	return 0;
 }
 
@@ -543,22 +548,22 @@ unsigned short InitialiseBitstream( char * file )
 	unsigned short	fontCode;
 	char pathname[ 80 ];
 
-	/* Check for no recognised PFR files. 
+	/* Check for no recognised PFR files.
 	if( listfonts_count == 0 )
 	{
 	        return( FALSE );
 	} */
-	
+
 	/* Open font file (temporary hack). */
 /*	pdfFile = fopen( listfonts_ptr[listfonts_count-1], "rb" );*/
 	strcpy( pathname, "Font:" );
 	strcatcr( pathname, file );
 	strcat( pathname, ".pfr0" );
-	
+
 	if( replog) fprintf(replog_file, "Attempting to open file %s\n", pathname);
-	
+
 	pdfFile = fopen( pathname, "rb" );
-	
+
 	if( pdfFile == NULL )
 	{
 		return( FALSE );
@@ -605,13 +610,13 @@ unsigned short InitialiseBitstream( char * file )
 
 	/* Initialise double-byte count. */
 	dbcount = 0;
-	
+
 	/* Initialise listfonts counts. */
 	listfonts_count = 0;
 
 	/* Set initialisation flag. */
 	bit_init++;
-	
+
 	return( fontCode );
 }
 
@@ -675,8 +680,8 @@ static void MyHstem( short y1, short y2 )
 static void MyMoveTo( short x, short y )
 {
         long x1, y1;
-        x1 = (long)x * ( fontsize / MODIF );
-        y1 = (long)y * ( fontsize / MODIF );
+        x1 = (long)x * ( fontsize * MODIF ) >> 6;
+        y1 = (long)y * ( fontsize * MODIF ) >> 6;
         x = (short) x1;
         y = (short) y1;
 	DRAW_OBJECT_HDR2( DRAW_MOVE );
@@ -691,9 +696,9 @@ static void MyLineTo( short x, short y )
         long x1, y1;
 
 /*        printf("Drawing line to %i,%i\n", x, y); */
-        
-        x1 = (long)x * ( fontsize / MODIF );
-        y1 = (long)y * ( fontsize / MODIF );
+
+        x1 = (long)x * ( fontsize * MODIF ) >> 6;
+        y1 = (long)y * ( fontsize * MODIF ) >> 6;
         x = (short) x1;
         y = (short) y1;
         DRAW_OBJECT_HDR2( DRAW_LINE );
@@ -706,20 +711,20 @@ static void MyLineTo( short x, short y )
 static void MyCurveTo( short xc1, short yc1, short xc2, short yc2, short x, short y )
 {
 	long x1, y1, xx1, yy1, xx2, yy2;
-	
-/*	printf("Drawing curve from %i,%i through %i,%i to %i,%i\n", 
+
+/*	printf("Drawing curve from %i,%i through %i,%i to %i,%i\n",
 		xc1, yc1, xc2, yc2, x, y );*/
-	
-        x1 = (long) x * ( fontsize / MODIF );
-        y1 = (long) y * ( fontsize / MODIF );
+
+        x1 = (long) x * ( fontsize * MODIF ) >> 6;
+        y1 = (long) y * ( fontsize * MODIF ) >> 6;
         x = (short) x1;
         y = (short) y1;
-        xx1 = (long) xc1 * ( fontsize / MODIF );
-        yy1 = (long) yc1 * ( fontsize / MODIF );
+        xx1 = (long) xc1 * ( fontsize * MODIF ) >> 6;
+        yy1 = (long) yc1 * ( fontsize * MODIF ) >> 6;
         xc1 = (short) xx1;
         yc1 = (short) yy1;
-        xx2 = (long) xc2 * ( fontsize / MODIF );
-        yy2 = (long) yc2 * ( fontsize / MODIF );
+        xx2 = (long) xc2 * ( fontsize * MODIF ) >> 6;
+        yy2 = (long) yc2 * ( fontsize * MODIF ) >> 6;
         xc2 = (short) xx2;
         yc2 = (short) yy2;
         DRAW_OBJECT_HDR2( DRAW_CURVE );
@@ -819,7 +824,7 @@ void cspDetectEncoding( _kernel_swi_regs* r )
 {
         /* String pointer to detect. */
         string_ptr = r->r[0];
-        
+
         r->r[1] = DetectCodeType();
 }
 
@@ -929,7 +934,7 @@ ufix16 SJ2UNI( ufix16 code )
 	        if( c > 160 && c < 224 )
 	        {
 	                code = xSJ2UNI( Han2Zen( code ) );
-	                cvt_flags = -1;
+	                if(replog) fprintf(replog_file,"HanZen code %x\n", code);
 	                return( code );
 		}
 		if( c > 31 && c < 127 )
@@ -949,9 +954,9 @@ ufix16 SJ2UNI( ufix16 code )
 
 	cvt_flags = -1; /* Valid char. */
 /*	if(replog) fprintf(replog_file, "Searching unicode conversion char %li %p\n", code, (void *)uni_conv_tbl);*/
-	
+
         c = ( uni_conv_tbl[ ( code - 0x8140UL ) ] );
-        
+
 /*        if(replog) fprintf(replog_file, "Found unicode conversion char.\n");*/
         return c;
 }
@@ -965,7 +970,7 @@ ufix16 JIS2UNI( ufix16 code )
         int c1 = ( code & 0xff ) >> 8;
         int c2 = ( code & 0xff );
         ufix16 temp;
-        
+
         JIS2SJ( &c1, &c2 );
         temp = ( c1 << 8 ) + c2;
         return( SJ2UNI( temp ) );
@@ -977,17 +982,17 @@ void DoMetricsBlock( _kernel_swi_regs *r )
 {
 	int	lp;
 	char*	metrics_ptr;
-	
+
 	switch( (char)r->r[5] )
 	{
 	        case 1:	/* Read length information. */
 	        	r->r[2] = 1000L; /* Dummy for the time being. */
 	        	printf("BS: Length read\n");
 	        	return;
-	        	
+
 	        case 2: /* Read metrics information. */
 			metrics_ptr = r->r[2];
-	
+
 			/* Font name. */
 			for( lp = 0; lp < 40; lp++ )
 			{
@@ -995,7 +1000,7 @@ void DoMetricsBlock( _kernel_swi_regs *r )
 			}
 			for( lp = strlen( font_path ); font_path[ lp ] != '.'; --lp );
 			strcpy( metrics_ptr, font_path + lp + 1 );
-		
+
 			/* Sizes (x, y). */
 			metrics_ptr[ 40 ] = 16;
 			metrics_ptr[ 41 ] = 0;
@@ -1005,30 +1010,30 @@ void DoMetricsBlock( _kernel_swi_regs *r )
 			metrics_ptr[ 45 ] = 0;
 			metrics_ptr[ 46 ] = 0;
 			metrics_ptr[ 47 ] = 0;
-	
+
 			/* Number of chars (low). */
 			metrics_ptr[ 48 ] = 0;
-	
+
 			/* Version. */
 			metrics_ptr[ 49 ] = 2;
-	
+
 			/* Flags. */
 			metrics_ptr[ 50 ] = 39;
 			/* No bbox, no x-off, no y-off, char map precedes map */
-	
+
 			/* Number of chars (high). */
 			metrics_ptr[ 51 ] = 5;
-	
+
 			/* Character map. */
 			metrics_ptr[ 52 ] = 0; /* No character map. */
-			
+
 			printf("BS: Metrics read\n");
 			return;
-			
+
 		default:/* Oops. */
 			assert( 0 );
 			return;
-	}		
+	}
 }
 
 
@@ -1043,10 +1048,10 @@ void CloseFont( _kernel_swi_regs *r )
 ufix16 xJIS2SJ( ufix16 code )
 {
         int c1, c2;
-        
+
         c1 = ( code >> 8 ) & 0xff;
         c2 = code & 0xff;
-        
+
         JIS2SJ( &c1, &c2 );
         return( (c1 << 8) + c2 );
 }
@@ -1056,10 +1061,10 @@ ufix16 xJIS2SJ( ufix16 code )
 ufix16 xSJ2JIS( ufix16 code )
 {
         int c1, c2;
-        
+
 	c1 = ( code >> 8 ) & 0xff;
 	c2 = code & 0xff;
-	
+
 	SJ2JIS( &c1, &c2 );
 	return( (c1 << 8) + c2 );
 }
@@ -1089,7 +1094,7 @@ ufix16 xSJ2UNI( ufix16 code )
 ufix16 KSC2UNI( ufix16 code )
 {
         unsigned short c;
-                
+
         /* Check for valid KSC char. */
         c = ( code >> 8 ) & 0xff;
         if( c < 0xA1 || c > 0xfe )
@@ -1111,9 +1116,9 @@ ufix16 KSC2UNI( ufix16 code )
 void cspConvertCode( _kernel_swi_regs *r )
 {
         int enc = current_encoding;
-        
-        if(replog) fprintf(replog_file, "cspConvertCode %x encoding %i\n", r->r[0], enc );
-        
+
+/*        if(replog) fprintf(replog_file, "cspConvertCode %x encoding %i\n", r->r[0], enc );*/
+
         switch( enc ) {
                 case 0:	break;
                 case 1: r->r[1] = SJ2UNI( (ufix16) r->r[0] );
@@ -1161,18 +1166,16 @@ void cspConvertCode( _kernel_swi_regs *r )
                 	if(replog)fprintf(replog_file,"cspOut (EUC2JIS) r1 %x    r0 %x\n", r->r[1], r->r[0]);
                 	break;
                 case 12: r->r[1] = UTF82UNI( r );
-                	r->r[0] = cvt_flags;
-                	if(replog)fprintf(replog_file,"cspOut (UTF82UNI) r1 %x    r0 %x\n", r->r[1], r->r[0]);
-
+                    	r->r[0] = cvt_flags;
 	}
-	newkchar = r->r[1];
+	newkchar = r->r[1] & 0xffff;
 }
 
 
 
 /* Internal usage: convert between encodings. */
 ufix16 ConvertCode( int enc, ufix16 wchar )
-{        
+{
         switch( enc ) {
                 case 0:	cvt_flags = -1;
                 	return( wchar );
@@ -1189,7 +1192,7 @@ ufix16 ConvertCode( int enc, ufix16 wchar )
                 case 11: return( EUC2JIS( wchar ) );
                 case 12: return( UTF82UNI( glob_regs ) );
 	}
-}        
+}
 
 
 /* SWI implementation to set the global encoding used for strings. */
@@ -1197,17 +1200,17 @@ void cspSetWideEncoding( _kernel_swi_regs *r )
 {
         int this_enc;
 	char fname[100];
-	        
+
         this_enc = (int)r->r[1];
-        
+
         if(replog)fprintf(replog_file, "Status of font handle: %i %i\n", r->r[0], font_handles[r->r[0]]);
 	if( font_handles[ r->r[0] ] != NULL )
-	if( this_enc >= 0 && this_enc <= 12 ) 
-        {
-                current_encoding = this_enc;
-	        font_handles[ r->r[0] ]->parent->encoding = this_enc;
-	        if(replog)fprintf(replog_file,"Setting encoding to %i\n", this_enc);
-        }
+		if( this_enc >= 0 && this_enc <= 12 )
+	        {
+	                current_encoding = this_enc;
+		        font_handles[ r->r[0] ]->parent->encoding = this_enc;
+		        if(replog)fprintf(replog_file,"Setting encoding to %i\n", this_enc);
+	        }
 }
 
 
@@ -1218,19 +1221,27 @@ void cspSetWideEncoding( _kernel_swi_regs *r )
  */
 void cspDirectDraw( _kernel_swi_regs *r )
 {
-	x_step = 0;
-	y_step = 12<<8;
-	xPosPix = 0;
-	yPosPix = 12<<8;
-	draw_index = 0;
-
-	if(replog)fprintf(replog_file,"DD Font size=%li, Char=%x\n", fontsize, newkchar);
 	if ( r->r[0] )
-		fontsize >>= 4; 		// divide by 16 for 1-bpp (or direct draw)
+	{   	// divide by 16 for 1-bpp (or direct draw)
+    		if(replog)fprintf(replog_file,"DRAWDIRECT Font size=%li, Char=%x\n", fontsize, newkchar);
+		fontsize >>= 2;
+    	    	x_step = fontsize << 4;
+    		y_step = (fontsize-160) << 4;
+    		xPosPix = fontsize << 4;
+    		yPosPix = (fontsize-160) << 4;
+        }
 	else
-		fontsize >>= 2;			// divide by 16 and multiply by 4 for anti-aliased output 
-	
-	CspDoChar(newkchar, &xPosPix, &yPosPix );
+	{   	// divide by 16 and multiply by 4 for anti-aliased output
+    		if(replog)fprintf(replog_file,"DRAWANTI Font size=%li, Char=%x\n", fontsize, newkchar);
+    		x_step = fontsize << 4;
+    		y_step = (fontsize-20) << 5;
+    		xPosPix = fontsize << 4;
+    		yPosPix = (fontsize-20) << 5;
+    	}
+
+    	draw_index = 0;
+
+	CspDoChar( newkchar, &xPosPix, &yPosPix );
 	if( ( draw_index - object_start ) > 0 )
 	{
 		r->r[1] = draw_index * sizeof( long );
@@ -1238,61 +1249,12 @@ void cspDirectDraw( _kernel_swi_regs *r )
 		r->r[0] = &draw_data;
 		return;
         }
-        /* Need to insert special-case for error character (ie font table
-           doesn't contain requested outline. */
-	x_step = 0;
-	y_step = 12<<8;
-	xPosPix = 0;
-	yPosPix = 12<<8;
-	draw_index = 0;
 
-	CspDoChar( 0xFF00, &xPosPix, &yPosPix );
+	CspDoChar( 0x3307, &xPosPix, &yPosPix );
 	r->r[1] = draw_index * sizeof( long );
 	DRAW_OBJECT_HDR2( DRAW_ENDPATH );
 	r->r[0] = &draw_data;
 }
-
-
-/* Draw the character into the bitmap, ready for antia-aliasing. Parameters
- * have been set up in the previous call to CspSvcOutputChar.
- * In: R0 = 0 => 4-bpp, else 1-bpp (multiply coords by 4 when anti-aliasing)
- * Out: R0 -> buffer, R1 = size
- */
-void cspBitmapDraw( _kernel_swi_regs *r )
-{
-        x_step = 0;
-        y_step = 12<<8;
-	xPosPix = 0;
-	yPosPix = 12<<8;
-	draw_index = 0;
-
-	if(replog)fprintf(replog_file,"BD Font size=%li, Char=%x\n", fontsize, newkchar);
-	if ( r->r[0] )
-		fontsize >>= 4; 		// divide by 16 for 1-bpp (or direct draw)
-	else
-		fontsize >>= 2;			// divide by 16 and multiply by 4 for anti-aliased output 
-	
-	CspDoChar(newkchar, &xPosPix, &yPosPix );
-	if( ( draw_index - object_start ) > 4 )
-	{
-		r->r[1] = draw_index * sizeof( long );
-		DRAW_OBJECT_HDR2( DRAW_ENDPATH );
-		r->r[0] = &draw_data;
-		return;
-        }
-        /* Need to insert special-case for error character (ie font table
-           doesn't contain requested outline. */
-        x_step = 0;
-        y_step = 12<<8;
-	xPosPix = 0;
-	yPosPix = 12<<8;
-	draw_index = 0;
-
-	CspDoChar( 0xFF00, &xPosPix, &yPosPix );
-	r->r[1] = draw_index * sizeof( long );
-	DRAW_OBJECT_HDR2( DRAW_ENDPATH );
-	r->r[0] = &draw_data;
-}        
 
 
 /* Conversion table from single-byte S-JIS ASCII to Unicode. */
@@ -1301,7 +1263,7 @@ ufix16 SJAS2UNI( ufix16 acode )
         /* Temp hack to ensure valid code range. */
         if( acode < 32 ) acode += 32;
         while( acode > 126 ) acode -= 32;
-        
+
         return( acode + 0xFEE0 );
 }
 
@@ -1311,18 +1273,18 @@ int Check16Bit( char* filename )
         _kernel_osfile_block	ahar;
         unsigned long		ftype;
         char lfname [100];
-        
+
         strcpy( lfname, "Font:" );
         strcatcr ( lfname, filename );
         strcat ( lfname, ".PFR0" );
 
 	if( replog ) fprintf( replog_file, "Check16: %s\n", lfname );
-        
+
         if( _kernel_osfile( 17, lfname, &ahar ) != 1 ) return( 1==0 );
         ftype = ( ahar.load & 0xfff00UL ) >> 8;
         return( ftype == 0xf92 );
 }
-        
+
 /* Add handle to signify 16-bits. */
 /* Check for redundant font sizes and allocate bitmap caches as appropriate. */
 /* Entry: R0 = font handle                */
@@ -1340,22 +1302,20 @@ void cspAddHandle( _kernel_swi_regs *r )
         int font_size;
         int font_handle;
         _wide_font_entry * font_parent;
-        	
+
         font_handle = r->r[0];
 	font_size = r->r[2];
         strcpycr( fontname, (const char*)r->r[1] );
 
 	if( font_size == 0xffffffff )
 		font_size = 1;
-	else
-		/* Shift right by four for absolute size. */
-		font_size >>= 4;
-       
+//	else
+//		font_size >>= 4;
+
 	if( !Check16Bit( fontname ) ) return;
-       
+
        	/* Add new-font-parent bit for duplicate parent fonts. !!!! */
-       
-       
+
 	/* Construct main list or sub-list if main exists. */
         if(replog) fprintf(replog_file,"Adding new handle: %i with size %i\n", font_handle, font_size);
         if( flist_init->wide_font_name == NULL )
@@ -1377,21 +1337,23 @@ void cspAddHandle( _kernel_swi_regs *r )
 		bit_init = 0;
 		b_return = InitialiseBitstream( fontname );
 		if( b_return == 0 || bit_init == 0 ) return;
-	
+
+    	    	/* Allocate memory and place font name in leaf */
 		font_parent->bits_handle = b_return;
 		font_parent->wide_font_name = calloc( (size_t)strlen(fontname)+1,(size_t)1 );
 		strcpy( font_parent->wide_font_name, fontname );
+
+		/* Open encoding file and read into allocated memory */
 		sprintf( pathname, "Font:%s.Enc0", fontname );
-	
 		if(replog)fprintf(replog_file, "Opening file %s\n", pathname);
-	
 		temp_file = fopen( pathname, "rb" );
 		assert( temp_file != 0 );
 		fseek( temp_file, 0, SEEK_END );
 		pos = ftell( temp_file );
-	
+
+    	    	/* Allocate memory for encoding for this FONT PARENT */
 		font_parent->uni_conv_tbl = calloc( (size_t)pos+2, (size_t)1 );
-		
+		assert( font_parent->uni_conv_tbl != 0 );
 		fseek( temp_file, 0, SEEK_SET );
 		font_index = fread( font_parent->uni_conv_tbl, 1, pos, temp_file );
 		if(replog)fprintf( replog_file,"%li objects read from %s\n",
@@ -1399,7 +1361,10 @@ void cspAddHandle( _kernel_swi_regs *r )
 			pathname );
 		fclose( temp_file );
 		uni_conv_tbl = font_parent->uni_conv_tbl;
+
+    	    	/* Create sub font leaf entry for this size */
 		font_child = FontSubCreate( font_parent, (short)font_size );
+		assert( font_child != NULL );
 		font_child->font_handle = font_handle;
 		font_handles[ font_handle ] = font_child;
 		glob_font = font_handle;
@@ -1412,6 +1377,7 @@ void cspAddHandle( _kernel_swi_regs *r )
 		{
 			/* Font already created. */
 			if(replog)fprintf(replog_file,"Already created sub-font\n");
+			/* Initialise encoding table pointer */
 			uni_conv_tbl = font_parent->uni_conv_tbl;
 			font_handles[ font_handle ] = font_child;
 			glob_font = font_handle;
@@ -1421,13 +1387,14 @@ void cspAddHandle( _kernel_swi_regs *r )
 		        /* Create sub-font and add it to list. */
 		        if(replog)fprintf(replog_file, "Creating sub-font...\n");
 			font_child = FontSubCreate( font_parent, (short)font_size );
+			assert( font_child != NULL );
 			font_child->font_handle = font_handle;
 			uni_conv_tbl = font_parent->uni_conv_tbl;
 			font_handles[ font_handle ] = font_child;
 			glob_font = font_handle;
 		}
 	}
-	font_handles[ glob_font ]->parent->encoding = 1;	/* Default to S-JIS encoding for this font. */
+	font_handles[ glob_font ]->parent->encoding = UTF8;	/* Default to UTF8 encoding. */
 	if(replog)fprintf(replog_file, "Exiting AddHandle\n");
 }
 
@@ -1459,7 +1426,7 @@ void cspCheckHandle( _kernel_swi_regs *r )
 void cspIsWideFont( _kernel_swi_regs* r )
 {
         int handle = r->r[0];
-        
+
         if( font_handles[ handle ] == NULL )
         {
                 r->r[0] = 0;
@@ -1470,9 +1437,9 @@ void cspIsWideFont( _kernel_swi_regs* r )
 void cspCloseHandle( _kernel_swi_regs *r )
 {
         int handle = r->r[0];
-        
+
         if( replog ) fprintf( replog_file, "In cspCloseHandle\n" );
-        
+
         if( font_handles[ handle ] != NULL )
         {
 		if( replog ) fprintf(replog_file, "Closing handle %i[%s] with size %i\n",
@@ -1505,40 +1472,41 @@ ufix16 Han2Zen( ufix16 code )
 	    {131,126},{131,128},{131,129},{131,130},{131,132},{131,134},
 	    {131,136},{131,137},{131,138},{131,139},{131,140},{131,141},
 	    {131,143},{131,147},{129,74},{129,75}
-	};        
-  
+	};
+
 	p1 = tmp = ( code >> 8 ) & 0xff;
 	p2 = code & 0xff;
-	
-	cvt_flags = 2; /* Reset flags to indicate 1-byte character. */
-	
+
+	cvt_flags = 1; /* Reset flags to indicate 2-byte o/p with 1-byte i/p. */
+
 	if( p2 == 222 )
 	{
 	        if( ISNIGORI( p1 ) )
 	        {
 	                nigori = TRUE;
-	                cvt_flags = 1;
+/*	                cvt_flags = 2;*/
 	        }
 	}
 	else if( p2 == 223 )
 	{
 		if( ISMARU ( p1 ) )
 		{
+
 		        maru = TRUE;
-		        cvt_flags = 1;
+/*		        cvt_flags = 2;*/
 		}
 	}
 
 	p1 = mtable[ tmp - 161 ][ 0 ];
 	p2 = mtable[ tmp - 161 ][ 1 ];
-	
+
 	if( nigori )
 	{
 		if ((p2 >= 74 && p2 <= 103) || (p2 >= 110 && p2 <= 122)) p2++;
 		else if (p1 == 131 && p2 == 69) p2 = 148;
 	}
 	else if (maru && p2 >= 110 && p2 <= 122) p2 += 2;
-	
+
 	code = ( p1 << 8 ) + p2;
 
 	return( code );
@@ -1550,36 +1518,42 @@ ufix16 UTF82UNI( _kernel_swi_regs *r )
 {
         unsigned int  z, y, x, w, v, u;
         unsigned int result;
-        
+
 	cvt_flags = 0;
 
 	z = *((char *)(r->r[4]));
 	if( z <= 0x7f )
 	{
+	        if( z < 32 )
+	        {
+	                cvt_flags = 0;
+	                return( z );
+	        }
+
 	        /* Single byte.*/
 	        if( z == 0 )
 	        	cvt_flags = 0;
 	        else
 	        	cvt_flags = 2;
-	        return ( z + 0xfee0 );
+	        return ( z );
 	}
-	
+
 	y = *( (char *)((r->r[4]) + 1) );
 	if( z <= 0xdf && z >= 0xc0 )
 	{
 	        cvt_flags = -1;
 	        return ((( z - 0xc0 ) << 6) + ( y - 0x80 ));
 	}
-	        
+
 	x = *( (char *)((r->r[4]) + 2 ) );
 	if( z <= 0xef && z >= 0xe0 )
 	{
 	        r->r[4] += 1;
 	        cvt_flags = -1;
-	        if( replog ) fprintf(replog_file, "z=%i, y = %i, x = %i", z, y, x);
+	        if( replog ) fprintf(replog_file, "z = %i, y = %i, x = %i", z, y, x);
 		return ((( z - 0xe0 ) << 12) + (( y - 0x80 ) << 6) + ( x - 0x80 ));
 	}
-	
+
 	w = *( (char *)((r->r[4]) + 3 ) );
 	if( z <= 0xf7 && z >= 0xf0 )
 	{
@@ -1587,8 +1561,8 @@ ufix16 UTF82UNI( _kernel_swi_regs *r )
 	        cvt_flags = -1;
 		return ((( z - 0xf0 ) << 18) + (( y - 0x80 ) << 12) + (( x - 0x80 ) << 6) + ( w - 0x80 ));
 	}
-	
-	v = *( (char *)((r->r[4]) + 2 ) );
+
+	v = *( (char *)((r->r[4]) + 4 ) );
 	if( z <= 0xfb && z >= 0xf8 )
 	{
 	        r->r[4] += 3;
@@ -1596,7 +1570,7 @@ ufix16 UTF82UNI( _kernel_swi_regs *r )
 		return ((( z - 0xf8 ) << 24) + (( y - 0x80 ) << 18) + (( x - 0x80 ) << 12) +
 					(( w - 0x80 ) << 6) + ( v - 0x80));
 	}
-	
+
 	u = *( (char *)((r->r[4]) + 5 ) );
 	if( z == 0xfc || z == 0xfd )
 	{
@@ -1605,16 +1579,16 @@ ufix16 UTF82UNI( _kernel_swi_regs *r )
 		return ((( z - 0xfc ) << 30) + (( y - 0x80 ) << 24) + (( x - 0x80 ) << 18) +
 					(( w - 0x80 ) << 12) + (( v - 0x80 ) << 6) + ( u - 0x80 ));
 	}
-	
+
 	return 0;
 }
-	 	
+
 
 void cspShowFontTree( _kernel_swi_regs* r )
 {
         _wide_font_entry* font_iter1;
         font_l* font_iter2;
-        
+
 	printf("Widefonts cached: \n");
 	font_iter1 = flist_init;
 	while( font_iter1 != NULL )
@@ -1653,19 +1627,19 @@ void PrintRegisters( _kernel_swi_regs* r )
 /* void main( void )
 {
         font_l * new_entry;
-        
+
 	flist1 = FontListInit();
 	flist1->wide_font_name = malloc( sizeof( char ) * 20 );
 	strcpy( flist1->wide_font_name, "TestFont1" );
 	flist1->bits_handle = -1;
-	
+
 	if( FontSubCreate( flist1, 12 ) != NULL ) printf("Succ with font 12\n");
 	if( FontSubCreate( flist1, 3 ) != NULL ) printf("Succ with font 3\n");
-	
+
 	if( FontSubFind( flist1, 12 ) != NULL ) printf("Found 12\n");
-	if( FontSubDelete( flist1, 12 )!= NULL ) printf("Deleted 12\n");	
+	if( FontSubDelete( flist1, 12 )!= NULL ) printf("Deleted 12\n");
 	if( FontSubFind( flist1, 3 ) != NULL ) printf("Found 3\n");
-	if( FontSubDelete( flist1, 3 )!= NULL ) printf("Deleted 3\n");	
+	if( FontSubDelete( flist1, 3 )!= NULL ) printf("Deleted 3\n");
 	if( FontSubFind( flist1, 4 ) == NULL ) printf("Couldn't find 4 (correct)\n");
 	if( FontSubDelete( flist1, 4 ) == NULL ) printf("Couldn't delete 4 (correct)\n");
 	if( FontListFind( flist1, "TestFont1" ) != NULL ) printf("Successfully found TestFont1\n");
