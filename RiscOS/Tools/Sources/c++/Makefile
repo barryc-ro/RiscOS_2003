@@ -11,6 +11,8 @@
 #
 # Paths
 #
+TOOLSDIR=<Tools$Dir>
+
 #
 # Generic options:
 #
@@ -32,6 +34,7 @@ CPPFLAGS= -c -depend !Depend -zpz0 -ff -Wp ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
+LDFLAGS = -aif
 WFLAGS  = ~CFR~V
 
 #
@@ -96,6 +99,10 @@ export: export_${PHASE}
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
+
+install_tool: ${TARGET}
+        ${CP} ${TARGET} ${TOOLSDIR}.Acorn.cfront ${CPFLAGS}
+        @echo ${COMPONENT}: built and installed in library
 
 clean:
         ${WIPE} o ${WFLAGS}
