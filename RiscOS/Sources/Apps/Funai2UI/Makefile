@@ -50,7 +50,7 @@ clean:
 resources:
         ${CP} Resources.<UserIf>.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
         ${CP} Resources.<UserIf>.${LOCALE}.NVRAM.Tags ${RESRES}.NVRAM.Tags ${CPFLAGS}
-        ${CP} Resources.<UserIf>.${LOCALE}.ScrSaver ${RESRES}.ScrSaver ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
         
 # Dynamic dependencies:
