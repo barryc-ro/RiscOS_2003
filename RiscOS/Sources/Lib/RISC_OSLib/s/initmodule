@@ -5,11 +5,11 @@
 ;
 ; IDJ: 19-Jul-91: removed message C03
 
-        GET     s.h_StrongA
-
         GBLL    SharedLibrary
-
 SharedLibrary   SETL    {TRUE}
+
+        GBLL    NoStubEntries
+NoStubEntries   SETL    {TRUE}  ; stop h_modmacro defining Entry
 
         AREA    |AA$$code|, CODE, READONLY
 
@@ -18,6 +18,8 @@ SharedLibrary   SETL    {TRUE}
         GET     s.h_stack
         GET     s.h_modmacro
         GET     s.h_workspc
+
+        GET     Hdr:Proc
 
         IMPORT  |Lib$$Init$$Base|
         IMPORT  |Lib$$Init$$Limit|
@@ -130,7 +132,10 @@ XMessageTrans_CloseFile EQU &61504 ; Put in hdr file someday
 ;              r4 pointer to start of client's statics
 ;              r5 pointer to end of clients's statics
 ;              (old stubs)  r6 = 0
-;              r6 [0:15] = 0
+;              r6 [0] = 0 if client is running in a 26-bit mode (may still be APCS-32)
+;                     = 1 if client is running in a 32-bit mode (=> must be APCS-32,
+;                       and address constant table must follow vectors)
+;              r6 [1:15] = 0
 ;              r6 [16:31] = requested root stack size (Kb)
 ; Returns with stub vector patched
 ;              if input r5>r4, user statics copied and [sl, #SL_Client_Offset]
@@ -157,20 +162,22 @@ LI_ItemSize     #       0
         ;     module, entry is via compatibility veneer.
         ;  1  new-style init.  Client uses APCS_U; so must this module.
         ;  2  (new-style) module init.  Stack is SWI stack, not in the heap.
+        ;  3  APCS-32 init.  Client uses APCS-3/32bit.
+        ;  4  APCS-32 module init.  Stack is SWI stack, not in the heap.
 
-        STMFD   r13!, {r0-r5, lr}
+        EntryS  "r0-r6"
 
         ; Check SWI in valid range
  [ Calling_Standard = "APCS_A"
         CMP     r11, #0
   |
-        CMP     r11, #2
+        CMP     r11, #4
  ]
         ADRHI   r0, E_UnknownSWI
         BHI     Failed
 
-        TEQP    pc, #3                  ; ensure IRQs enabled
-        MOV     r0, r0
+        CLRPSR  F_bit:OR:I_bit, lr      ; ensure IRQs enabled
+        NOP
 
         ; Check memory constraints work:
         ; lr = end of required workspace (data + stack), ie stack top for non-modules
@@ -178,6 +185,7 @@ LI_ItemSize     #       0
         SUBS    lr, r5, r4              ; size of client's statics
         MOVMI   lr, #0                  ; no client statics really.
         CMP     r11, #2                 ; module?
+        CMPNE   r11, #4
         MOVEQ   r12, sp, LSR #20
         MOVEQ   r12, r12, ASL #20
         ADDEQ   lr, lr, r1
@@ -198,8 +206,17 @@ CheckEnoughStore
         ADRGT   r0, E_BadMemory
         BGT     Failed
 
+      [ Proc_RegOffset = 0
         STMIA   r13, {r2, r12, lr}      ; return values of r0, r1 & r2 (Data end, stack base and stack top)
+      |
+        [ Proc_RegOffset = 4
+        STMIB   r13, {r2, r12, lr}      ; return values of r0, r1 & r2 (Data end, stack base and stack top)
+        |
+        ! 1, "Proc_RegOffset = ?"
+        ]
+      ]
         CMP     r11, #2                 ; module?
+        CMPNE   r11, #4
         STRNE   r6, [r12, #SC_size]     ; Start filling stack chunk header for non-modules
 
         ; Copy the non-zeroed client statics
@@ -301,18 +318,62 @@ CV_FixEntries
         B       CV_FixEntries
 
 DirectEntry
-        ; Branch patchup for SWI Lib_Init1 and Lib_Init2
+        ; Branch patchup for SWI Lib_Init1 to 4
  ]
+        ; r2 = entry vector base
+        ; r3 = entry vector limit
+        ; r6 bit 0 set => 32-bit mode (so BL not valid), and address constant table
+        ; of same size follows immediately after
+
+        LDR     r6, [r13, #Proc_RegOffset + 6*4] ; not APCS-A, so entry R6 valid
+        TST     r6, #1                  ; if in 26-bit mode, just use the BL form
+        BEQ     FixBranches             ; as it works, and is faster
+
+        ; Create a table of LDR PC,&xxx followed by the address constants
+
+        LDR     r1, =&E59FF000          ; LDR PC,[PC,#+0]
+        SUB     r4, r3, r2              ; r4 = size of table (remember for later)
+        SUBS    r6, r4, #8              ; r6 = offset to use in LDR
+        BICMI   r1, r1, #1:SHL:23       ; handle the negative case (just possible
+        RSBMI   r6, r6, #0              ; for a single entry stub table)
+        CMP     r6, #&1000              ; Offset must be <= &FFF
+        ADRHS   r0, E_UnknownLib        ; Can't be bothered to make a new error
+        BHS     Failed
+
+        ORR     r6, r1, r6
+FixLDRs
+        CMP     r2, r3
+        STRNE   r6, [r2], #4
+        BNE     FixLDRs                 ; Write the LDR PC,[PC,#<xxx>] into each entry
+
+        ADD     r3, r2, r4              ; r2, r3 now point to address constant table
+
+        LDR     r4, [r14, #LI_EntryBase-LI_ItemSize]    ; Our entry table
+FixAddresses
+        CMP     r2, r3
+        BEQ     ChunkEntriesDone
+        LDR     r1, [r4], #+4
+        MOV     r1, r1, ASL #8         ; sign-extend branch offset
+        ADD     r1, r4, r1, ASR #6     ; and convert to bytes
+        ADD     r1, r1, #8-4           ; +8 for pc, -4 for ,#+4 above
+        LDR     r6, [r2], #4           ; patch the stub entry only if it's
+        CMP     r6, r1                 ; not already right.
+        STRNE   r1, [r2, #-4]
+        B       FixAddresses
+
+        ; Create a table of BL &xxx
+
+FixBranches
         LDR     r4, [r14, #LI_EntryBase-LI_ItemSize]    ; Our entry table
 FixEntries
         CMP     r2, r3
         BEQ     ChunkEntriesDone
-        LDR     r1, [r4], #+4
+        LDR     r1, [r4]
         ADD     r1, r1, r4, LSR #2
-        SUB     r1, r1, #-1+2          ; -1 for ,#+4 above and +2 for pc being 2 ahead of 'here'
         SUB     r1, r1, r2, LSR #2
         BIC     r1, r1, #&FF000000
         ORR     r1, r1, #&EA000000     ; le branch!
+        ADD     r4, r4, #4
         LDR     r6, [r2], #4           ; patch the stub entry only if it's
         CMP     r6, r1                 ; not already right.
         STRNE   r1, [r2, #-4]
@@ -393,7 +454,7 @@ staticsizeok
  ]
         SUB     r3, r3, r2              ; size of library chunk statics
         ; and the offset must agree with that for all earlier chunks
-        LDR     r1, [r13, #4]
+        LDR     r1, [r13, #Proc_RegOffset + 4]
         LDR     r1, [r1, #SC_SLOffset+SL_Client_Offset]
         ADD     r2, r2, r1              ; relocate address to copy to!!
         SUB     r1, r2, r4
@@ -418,16 +479,23 @@ CopyLibStatics
         CMP     r1, #1                  ; was this the library kernel?
  [ Calling_Standard = "APCS_A"
         MOVEQ   r3, #0
+        STREQB  r3, [r2, #-32*4]        ; yuck! - set ClientFlags
    |
-        SUBEQ   r3, r11, #1
-        MOVEQ   r3, r3, LSR #31         ; 1 if r11 was 0, 0 if r11 was >= 1
+        BNE     NextLibraryChunk
+        LDR     r1, [r13, #Proc_RegOffset + 6 * 4]
+        SUB     r3, r11, #1
+        MOV     r3, r3, LSR #31         ; 1 if r11 was 0, 0 if r11 was >= 1
+        CMP     r11, #3
+        ORRGE   r3, r3, #2              ; +2 if r11 was >= 3 (APCS_32)
+        TST     r1, #1
+        ORRNE   r3, r3, #4              ; +4 if r6 bit 1 was set (32-bit mode)
+        STRB    r3, [r2, #-32*4]        ; yuck! - set ClientFlags
  ]
-        STREQB  r3, [r2, #-32*4]        ; yuck! - set APCS_A_Client
         B       NextLibraryChunk
 
 EndStubInit
         ; Set up SL_Lib_Offset
-        LDR     r12, [r13, #4]          ; r1 out
+        LDR     r12, [r13, #Proc_RegOffset + 4]          ; r1 out
         STR     r5, [r12, #SC_SLOffset+SL_Lib_Offset]
 
   [ StrongARM
@@ -437,14 +505,14 @@ EndStubInit
   ]
 
         MOV     r6, #LibraryVersionNumber
-        LDMFD   r13!, {r0-r5, pc}^
+Proc_RegList    SETS "r0-r5, r12"  ; don't restore r6 (hacky :))
+        EXITS
 
 Failed
         ; Here with r0=error block if failed for one reason or another
         BL      |_kernel_copyerror|
-        STR     r0, [r13]
-        LDMFD   r13!, {r0-r5, lr}
-        ORRS    pc, lr, #OverflowBit
+        STR     r0, [r13, #Proc_RegOffset]
+        EXITVS
 
 StubInitValue
         MOV     pc, #0

@@ -9,7 +9,6 @@
 
         GET     s.h_stack
         GET     s.h_workspc
-        GET     s.h_StrongA
 
         EXPORT  |_kernel_exit|
         EXPORT  |_kernel_setreturncode|
@@ -83,10 +82,17 @@
 PSRBits         *       &FC000003
 PSRZBit         *       &40000000
 PSRVBit         *       &10000000
-PSRIBit         *       &08000000
-PSRSVCMode      *       &00000003
 
-OSBase          *       &1800000
+PSRIBit         *       &08000000
+PSRMode         *       &00000003
+PSRSVCMode      *       &00000003
+PSRPrivileged   *       &00000003
+
+PSR32IBit       *       &00000080
+PSR32Mode       *       &0000001F
+PSR32SVCMode    *       &00000013
+PSR32Privileged *       &0000000F
+
 
 ; A RTS$$Data area
                 ^       0
@@ -344,7 +350,7 @@ movne_sl_sla
         LDR     r5, [r0, r1]
         STR     r5, [r6, #-4]!
         BNE     %B02
-        TEQP    pc, #0                  ; back to user mode
+        WritePSRc 0, r5                  ; back to user mode
  [ DDE
         NOOP
         SWI     DDEUtils_GetCLSize
@@ -938,7 +944,7 @@ FatalErrorY
         MOV     fp, r0
         MOV     r0, #0
         STRB    r0, [v6, #O_callbackInactive]
-        TEQP    pc, #0
+        WritePSRc 0, lr
         NOOP
         BL      RestoreOSHandlers
         ADD     v5, v6, #O_registerDump
@@ -959,10 +965,11 @@ FatalErrorX
         ADD     r0, r0, #3
         BIC     r0, r0, #3
   ]
+        SavePSR v4
         MOV     v4, pc
         SWI     EnterSVC
         BLVC    open_messagefile
-        TEQP    pc, v4
+        RestPSR v4
         MOV     r0, r0
         ADD     r2, v6, #O_fastEventStack
         MOV     r3, #256
@@ -1216,7 +1223,7 @@ UpCallHandler
 ; The register state is undefined, except that r13 must be the SWI stack
 ; pointer.
         STMFD   sp!, {r0-r3, v1-v6, fp, sl, lr}
-        TEQP    pc, #0
+        WritePSRc 0, v6
         NOOP
         MOV     v6, r12
         LDR     sl, [v6, #O_rootStackChunk]
@@ -1384,19 +1391,26 @@ ErrorHandler Keep
  ;*-------------------------------------------------------------------*
 
 |_kernel_escape_seen|
+      [ No32bitCode
         MOV     a4, r14
         LoadStaticBase a3, ip
         MOV     a2, #0
         TST     r14, #PSRSVCMode
-        SWINE   EnterSVC
+        SWIEQ   EnterSVC
         TEQP    pc, #PSRIBit+PSRSVCMode  ; interrupts off, for atomic read and update
         LDRB    a1, [a3, #O_escapeSeen]
         STRB    a2, [a3, #O_escapeSeen]
         MOVS    pc, a4
+      |
+        LoadStaticAddress escapeSeen, a3
+        MOV     a2, #0
+        SWPB    a1, a2, [a3]
+        Return  "", LinkNotStacked
+      ]
 
 EventHandler Keep
         TEQ     r0, #4
-        MOVEQS  pc, lr
+        MOVEQ   pc, lr
         STMFD   r13!, {r11, r14}
         STR     r0, [r12, #O_eventCode]
         ADD     r11, r12, #O_eventRegisters
@@ -1577,7 +1591,7 @@ Event_StackOK
         STMDB   r12!, {r0-r7}
 
 Event_NoStackForHandler
-        TEQP    pc, #PSRIBit+PSRSVCMode ; we want the testing for an escape and
+        WritePSRc PSRIBit+PSRSVCMode, r1 ; we want the testing for an escape and
         MOV     r1, #1                  ; allowing callbacks to be indivisible
         LDRB    r0, [v6, #O_hadEscape]  ; (otherwise an escape may be lost).
         STRB    r1, [v6, #O_callbackInactive]
@@ -1589,7 +1603,7 @@ Event_NoStackForHandler
         SWINE   Byte
         MOVNE   v1, #-1                 ; escape overrides everything else
 
-        TEQP    pc, #PSRIBit           ; to user mode, with interrupts off
+        WritePSRc PSRIBit, r0            ; to user mode, with interrupts off
         NOOP
         CMP     r12, #0
         BGE     CallEventHandlers
@@ -1617,7 +1631,7 @@ ReloadUserState
         ; from the callback buffer atomically. 3u ARMs unsupported now
         ; User r13, r14 must be reloaded from user mode.
         SWI     EnterSVC
-        TEQP    pc, #PSRIBit+PSRSVCMode
+        WritePSRc PSRIBit+PSRSVCMode, r1
         NOOP
         ADD     r14, r0, #pc*4
         LDMDB   r14, {r0-r14}^
@@ -1741,12 +1755,10 @@ default_unwind_handler Keep
         SWI     XOS_PlatformFeatures
         MOVVS   a1, #0
         TST     a1, #8
-        LDREQ   v1, [a3, #-12]
-        LDRNE   v1, [a3, #-8]
+        ADDNE   a3, a3, #4
         LDMFD   sp!, {a1-a2}
-        |
-        LDR     v1, [a3, #-12]
         ]
+        LDR     v1, [a3, #-12]
 
         ; check that the save mask instruction is indeed the right sort of STM
         ; If not, return indicating stack corruption.
@@ -1769,12 +1781,54 @@ default_unwind_handler Keep
         CMP     v3, #v1
         BGE     %B01
 
+        ; skip over saved arguments
+16      TST     v1, ip, ASL v3
+        SUBNE   v2, v2, #4
+        SUBS    v3, v3, #1
+        BGE     %B16
+
         ; now look for floating point stores immediately after the savemask
         ; instruction, updating values in the saveblock if they are there.
         SUB     a3, a3, #8
+        LDR     v1, [a3]                ; check for SUB fp, ip, #n
+        LDR     v4, =&e24cb             ; (assumes fp=r11, ip=r12)
+        CMP     v4, v1, LSR #12
+        ADDEQ   a3, a3, #4              ; skip over it
+
+        ; first look for SFM F4,<count>,[sp,#-count*12]!
+        LDR     v4, =&ed2d4200          ; assume sp = r13 if SFM
+        LDR     v1, [a3]
+        LDR     r14, =&004080ff         ; ignore count + offset
+        BIC     r14, v1, r14
+        CMP     r14, v4
+        BNE     UnwindNotSFM            ; it's not SFM
+
+        LDRB    v3, [v6, #O_fpPresent]
+        TEQ     v3, #0
+        BEQ     UnwindEndFP             ; can only unwind this if FP present
+        AND     v3, v1, #&FF            ; v3 = offset
+        AND     v4, v1, #&8000          ; v4 = bottom bit of count
+        TST     v1, #&400000
+        ORRNE   v4, v4, #&10000         ; add in top bit
+        MOVS    v4, v4, LSR #15
+        MOVEQ   v4, #4                  ; v4 = count
+        ADD     v4, v4, v4, LSL #1      ; v4 = count * 3
+        TEQ     v4, v3
+        BNE     UnwindEndFP             ; count didn't match offset
+
+        ADD     v3, a1, #uwb_f4         ; v3 -> uwb_f4
+        SUB     v2, v2, v4, LSL #2      ; pull v2 down to base of stored FP regs
+15      LFM     f0, 1, [v2], #12
+        SUBS    v4, v4, #3
+        STFE    f0, [v3], #12
+        BNE     %B15
+        B       UnwindEndFP
+
+        ; or alternatively multiple STFE Fn,[sp,#-12]!
+UnwindNotSFM
         LDR     v4, =&ed6c0103
 02      LDR     v1, [a3], #+4
-        BIC     r14, v1, #&7000
+        BIC     r14, v1, #&17000        ; sp = r12 or r13
         CMP     r14, v4
         BNE     UnwindEndFP
         MOV     v1, v1, LSR #10
@@ -1782,11 +1836,11 @@ default_unwind_handler Keep
         ADD     v1, v1, v1, ASL #1
         ADD     v1, a1, v1
         LDR     r14, [v2, #-4]!
-        STR     r14, [v1, #uwb_r4-r4*4*3+8]
+        STR     r14, [v1, #uwb_f4-r4*4*3+8]
         LDR     r14, [v2, #-4]!
-        STR     r14, [v1, #uwb_r4-r4*4*3+4]
+        STR     r14, [v1, #uwb_f4-r4*4*3+4]
         LDR     r14, [v2, #-4]!
-        STR     r14, [v1, #uwb_r4-r4*4*3]
+        STR     r14, [v1, #uwb_f4-r4*4*3]
         B       %B02
 
 UnwindEndFP

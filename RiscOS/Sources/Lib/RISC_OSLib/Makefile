@@ -59,6 +59,7 @@ INCLUDES =
 
 STK_EXTN =
 
+# RISCOS_Lib txt flags
 DFLAGS =\
  -DFIELDNUM\
  -DBIG_WINDOWS\
@@ -93,16 +94,17 @@ VPATH = @ kernel clib rlib
 #
 # Rule patterns
 #
+# Note
 .c.o:;        ${CC} ${CFLAGS} -fah ${CLFLAGS} -o $@ $<
 .c.o_rl:;     ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.m_o_rl:;   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zM -o $@ $<
-.c.rm_o:;     ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -o $@ $<
-.c.rm_o_rl:;  ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} -o $@ $<
+.c.rm_o:;     ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} -o $@ $<
+.c.rm_o_rl:;  ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} -o $@ $<
 .s.o:;        ${OBJASM} ${AFLAGS} ${ALFLAGS} $< $@
 .s.o_rl:;     ${OBJASM} ${AFLAGS} $< $@
 .s.m_o_rl:;   ${OBJASM} ${AFLAGS} $< $@
-.s.rm_o:;     ${OBJASM} ${AFLAGS} $< $@
-.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} $< $@
+.s.rm_o:;     ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} $< $@
+.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} $< $@
 
 #
 # Libraries
@@ -605,28 +607,28 @@ o.kernel: kernel.s.k_obj_r
         ${OBJASM} ${AFLAGS} ${ALFLAGS} -from kernel.s.k_obj_r -to $@
 
 rm_o.bsearch_a: c.bsearch
-        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -zkA -o $@ c.bsearch
+        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -zkA -APCS 3/26bit ${OPTIONS} -o $@ c.bsearch
 
 rm_o.clib:  clib.s.cl_obj_r
-        ${OBJASM} ${AFLAGS} -from clib.s.cl_obj_r -to $@
+        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from clib.s.cl_obj_r -to $@
 
 rm_o.cl_modbody: clib.s.cl_mod_r
-        ${OBJASM} ${AFLAGS} -from clib.s.cl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from clib.s.cl_mod_r -to $@
 
 rm_o_rl.rl_modbody: rlib.s.rl_mod_r
-        ${OBJASM} ${AFLAGS} -from rlib.s.rl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from rlib.s.rl_mod_r -to $@
 
 rm_o.k_modbody: kernel.s.k_mod_r
-        ${OBJASM} ${AFLAGS} -from kernel.s.k_mod_r -to $@
+        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from kernel.s.k_mod_r -to $@
 
 rm_o.memcpy: s.memcpy s.h_regs
-        ${OBJASM} ${AFLAGS} -from s.memcpy -to $@
+        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from s.memcpy -to $@
 
 rm_o.initmodule: clib.s.initmod_r
-        ${OBJASM} ${AFLAGS} -from clib.s.initmod_r -to $@
+        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from clib.s.initmod_r -to $@
 
 rm_o_rl.initmodule: rlib.s.initmod_r
-        ${OBJASM} ${AFLAGS} -from rlib.s.initmod_r -to $@
+        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from rlib.s.initmod_r -to $@
 
 #
 # Objects that require extra flags
@@ -641,10 +643,10 @@ o.string: c.string
         ${CC} ${CFLAGS} -fah ${CLFLAGS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 rm_o.armsys: c.armsys
-        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${VSFLAGS} -o $@ c.armsys
+        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} ${VSFLAGS} -o $@ c.armsys
 
 rm_o.string: c.string
-        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
+        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 #
 # Special case: use "rom_defs" for ROM library (o_rm), "defs" for the others
@@ -668,11 +670,11 @@ m_o_rl.poll: rlib.s.poll
 
 rm_o_rl.swi: rlib.s.swi
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS}
+        ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS} -APCS 3/26bit ${OPTIONS}
 
 rm_o_rl.poll: rlib.s.poll
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS}
+        ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS} -APCS 3/26bit ${OPTIONS}
 
 #
 # trace separated out to allow defining of TRACE
@@ -684,7 +686,7 @@ m_o_rl.trace: rlib.c.trace
    ${CC} ${CFLAGS} -ffah ${DFLAGS} -zM -DTRACE -o m_o_rl.trace rlib.c.trace
 
 rm_o_rl.trace: rlib.c.trace
-   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} -DTRACE -o rm_o_rl.trace rlib.c.trace
+   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} -APCS 3/26bit ${OPTIONS} -DTRACE -o rm_o_rl.trace rlib.c.trace
 
 #
 # Arthur objects
