@@ -1,0 +1,766 @@
+/*****************************************************************************
+* $Id$
+* $Name$
+*
+* Author(s):  Ben Avison
+* Project(s): 
+*
+* ----------------------------------------------------------------------------
+* Copyright [2002] Pace Micro Technology PLC.  All rights reserved.
+*
+* The copyright in this material is owned by Pace Micro Technology PLC
+* ("Pace").  This material is regarded as a highly confidential trade secret
+* of Pace.  It may not be reproduced, used, sold or in any other way exploited
+* or transferred to any third party without the prior written permission of
+* Pace.
+*
+* ----------------------------------------------------------------------------
+* Purpose: Re-entrant linked list handling
+*
+* ----------------------------------------------------------------------------
+* History: See source control system log
+*
+*****************************************************************************/
+
+/* Build variants */
+
+#undef  LLIST_USR_MODE /* need to use OS_IntOn/Off */
+#define LLIST_CLUSTER  /* whether to amalgamate allocs and defer frees until list destruction, to reduce heap thrashage */
+#define LLIST_DOUBLE   /* doubly link (if not, all |backwards| arguments are ignored) */
+
+
+/*****************************************************************************
+* Include header files
+*****************************************************************************/
+#include <stddef.h>
+#include <string.h>
+#include <stdbool.h>
+#include "swis.h"
+
+#include "llist.h"
+
+
+/*****************************************************************************
+* MACROS
+*****************************************************************************/
+#ifdef LLIST_USR_MODE
+  #define INT_ON { inline_OS_IntOn(); }
+  #define INT_OFF { inline_OS_IntOff(); }
+#else
+  #define INT_ON { _kernel_irqs_on(); }
+  #define INT_OFF { _kernel_irqs_off(); }
+#endif
+
+
+/*****************************************************************************
+* New type definitions
+*****************************************************************************/
+typedef struct unused
+{
+  struct unused *next;
+  size_t nlinks;
+} unused_t;
+
+typedef struct cluster
+{
+  struct cluster *next;
+} cluster_t;
+
+typedef struct
+{
+  struct link *head;
+  struct link *tail;
+  size_t data_size;
+  void *(*malloc)(size_t);
+  void (*free)(void *);
+  void (*atremoval)(void *);
+  size_t cluster_size;
+  unused_t *unused_list;
+  cluster_t *cluster_list;
+} int_head_t;
+
+typedef struct link
+{
+  int_head_t *head;
+  struct link *next;
+  struct link *prev;
+  struct step *next_list;
+  struct step *prev_list;
+  uint32_t usage; /* top bit set => linked */
+} link_t;
+
+typedef struct step
+{
+  void *data;
+  link_t *next;
+  link_t *prev;
+  struct step *next_link;
+  struct step *prev_link;
+} int_step_t;
+
+
+/*****************************************************************************
+* Constants
+*****************************************************************************/
+
+
+/*****************************************************************************
+* File scope Global variables
+*****************************************************************************/
+
+
+/*****************************************************************************
+* Function prototypes - Private to this file
+*****************************************************************************/
+__swi(OS_IntOn) void inline_OS_IntOn(void);
+__swi(OS_IntOff) void inline_OS_IntOff(void);
+static void HookStep(int_step_t *s, link_t *link);
+static void UnhookStep(int_step_t *s);
+#ifdef LLIST_CLUSTER
+static link_t *GetLink(int_head_t *list);
+#endif
+static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *next);
+
+
+/*****************************************************************************
+* Functions
+*****************************************************************************/
+
+/*****************************************************************************
+* llist_Create
+*
+* Creates a llist_head_t struct
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  data_size:    size of data block attached to each link
+*  malloc:       memory allocation routine (called like clib malloc())
+*  free:         memory free routine (called like clib free())
+*  atremoval:    routine called when a link is removed (eg to free things it points to)
+*                * can be NULL to signify no action need be taken
+*                * is called with IRQs off
+*  cluster_size: number of links to allocate together (ignored unless LLIST_CLUSTER is defined)
+*
+* Outputs
+*  head:         filled in appropriately
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void llist_Create(llist_head_t *list, size_t data_size, void *(*malloc)(size_t), void (*free)(void *), void (*atremoval)(void *), size_t cluster_size)
+{
+  int_head_t *l = (int_head_t *) list;
+  l->data_size = data_size;
+  l->malloc = malloc;
+  l->free = free;
+  l->atremoval = atremoval;
+  l->cluster_size = cluster_size;
+  l->head = NULL;
+  l->tail = NULL;
+  l->unused_list = NULL;
+  l->cluster_list = NULL;
+}
+
+/*****************************************************************************
+* llist_Destroy
+*
+* Finishes with a llist_head_t struct
+*
+* Assumptions
+*  No walks remain that are using the list
+*  (because the llist_head_t struct needs to be referenced when freeing links)
+*
+* Inputs
+*  list: the head of the list to free
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void llist_Destroy(llist_head_t *list)
+{
+  int_head_t *l = (int_head_t *) list;
+  /* First delink anything left on the list */
+  llist_step_t step;
+  llist_StartWalk(&step, list, false);
+  while (step.data != NULL)
+  {
+    llist_Delink(&step);
+    llist_NextStep(&step, false);
+  }
+  /* Then free any claimed clusters */
+#ifdef LLIST_CLUSTER
+  {
+    cluster_t *c = l->cluster_list;
+    cluster_t *next_c;
+    while (c != NULL)
+    {
+      next_c = c->next;
+      l->free(c);
+      c = next_c;
+    }
+  }
+#endif
+  l->unused_list = NULL;
+  l->cluster_list = NULL;
+}
+
+/*****************************************************************************
+* llist_StartWalk
+*
+* Starts a walk along a list
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  list:      the list head of the list to walk
+*  backwards: true to start at the end of the list (ignored unless LLIST_DOUBLE is defined)
+*
+* Outputs
+*  step:      filled in appropriately; step.data = NULL if list was empty
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void llist_StartWalk(llist_step_t *step, llist_head_t *list, bool backwards)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  int_step_t *s = (int_step_t *) step;
+  int_head_t *l = (int_head_t *) list;
+  link_t *newlink;
+  if (!irqs_were_off) INT_OFF
+#ifdef LLIST_DOUBLE
+  newlink = (backwards ? l->tail : l->head);
+#else
+  newlink = l->head;
+#endif
+  if (newlink == NULL)
+  {
+    s->data = NULL;
+  }
+  else
+  {
+    HookStep(s, newlink);
+  }
+  if (!irqs_were_off) INT_ON
+}
+
+/*****************************************************************************
+* llist_NextStep
+*
+* Steps along a list
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  step:      the current step on this walk
+*  backwards: true to step backwards through the list (ignored unless LLIST_DOUBLE is defined)
+*
+* Outputs
+*  step:      updated to point at the next data block, or NULL if the end has been reached
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void llist_NextStep(llist_step_t *step, bool backwards)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  int_step_t *s = (int_step_t *) step;
+  if (!irqs_were_off) INT_OFF
+  UnhookStep(s);
+  {
+    link_t *newlink;
+#ifdef LLIST_DOUBLE
+    newlink = (backwards ? s->prev : s->next);
+#else
+    newlink = s->next;
+#endif
+    if (newlink == NULL)
+    {
+      s->data = NULL;
+    }
+    else
+    {
+      HookStep(s, newlink);
+    }
+  }
+  if (!irqs_were_off) INT_ON
+}
+
+/*****************************************************************************
+* llist_AbortWalk
+*
+* Abandons a walk before the end of the list is reached
+* This *must* be called if you want to finish with a llist_step_t struct
+* before the end of the list
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  step:      the current step on this walk
+*
+* Outputs
+*  step:      updated to point at NULL
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void llist_AbortWalk(llist_step_t *step)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  int_step_t *s = (int_step_t *) step;
+  if (!irqs_were_off) INT_OFF
+  UnhookStep(s);
+  if (!irqs_were_off) INT_ON
+  s->data = NULL;
+}
+
+/*****************************************************************************
+* HookStep
+*
+* "Hooks" a step struct onto the current, next and prev links
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  s:    the current step on this walk
+*  link: the link the step should be pointed at
+*
+* Outputs
+*  s:    next/prev link pointers initialised; also added to linked lists of steps pointing at next/prev links
+*  link: usage counter incremented
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void HookStep(int_step_t *s, link_t *link)
+{
+  if ((s->next = link->next) != NULL)
+  {
+    s->next_link = s->next->next_list;
+    s->next->next_list = s;
+  }
+#ifdef LLIST_DOUBLE
+  if ((s->prev = link->prev) != NULL)
+  {
+    s->prev_link = s->prev->prev_list;
+    s->prev->prev_list = s;
+  }
+#endif
+  link->usage++;
+}
+
+/*****************************************************************************
+* UnhookStep
+*
+* "Unhooks" a step struct from the current, next and prev links
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  s: the current step on this walk
+*
+* Outputs
+*  s: delinked from linked lists of steps pointing at next/prev links
+*  usage counter of current link decremented
+*  current link freed if delinked and usage counter goes to 0
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void UnhookStep(int_step_t *s)
+{
+  if (s->next != NULL)
+  {
+    int_step_t *p = s->next->next_list;
+    if (p == s)
+    {
+      s->next->next_list = s->next_link;
+    }
+    else
+    {
+      while (p->next_link != s)
+      {
+        p = p->next_link;
+      }
+      p->next_link = s->next_link;
+    }
+  }
+#ifdef LLIST_DOUBLE
+  if (s->prev != NULL)
+  {
+    int_step_t *p = s->prev->prev_list;
+    if (p == s)
+    {
+      s->prev->prev_list = s->prev_link;
+    }
+    else
+    {
+      while (p->prev_link != s)
+      {
+        p = p->prev_link;
+      }
+      p->prev_link = s->prev_link;
+    }
+  }
+#endif
+  {
+    link_t *link = ((link_t *) s->data) - 1;
+    link->usage--;
+    if (link->usage == 0)
+    {
+      if (link->head->atremoval != NULL)
+      {
+        link->head->atremoval(s->data);
+      }
+#ifdef LLIST_CLUSTER
+      {
+        unused_t *unused = (unused_t *) link;
+        unused_t **unused_list = &link->head->unused_list;
+        unused->nlinks = 1;
+        unused->next = *unused_list;
+        *unused_list = unused;
+      }
+#else
+      link->head->free(link);
+#endif
+    }
+  }
+}
+
+/*****************************************************************************
+* llist_AddAtLimit
+*
+* Creates a new link at one end of a list
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  list:      the list head of the list to which to add the link
+*  backwards: true to add at the tail of the list rather than the head (ignored unless LLIST_DOUBLE is defined)
+*  data:      pointer to data to be copied into the new link's data field
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  true if successful
+*****************************************************************************/
+bool llist_AddAtLimit(llist_head_t *list, bool backwards, const void *data)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  int_head_t *l = (int_head_t *) list;
+#ifdef LLIST_CLUSTER
+  link_t *link = GetLink(l);
+#else
+  link_t *link = l->malloc(sizeof(link_t) + l->data_size);
+#endif
+  if (link == NULL)
+  {
+    return false;
+  }
+  memcpy(link + 1, data, l->data_size);
+  if (!irqs_were_off) INT_OFF
+#ifdef LLIST_DOUBLE
+  if (backwards)
+  {
+    InitLink(link, l, l->tail, NULL);
+  }
+  else
+#endif
+  {
+    InitLink(link, l, NULL, l->head);
+  }
+  if (!irqs_were_off) INT_ON
+  return true;
+}
+
+/*****************************************************************************
+* llist_AddAdjacent
+*
+* Creates a new link adjacent to the current one
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  step:      the current step on this walk
+*  backwards: true to add before the current step, rather than after
+*             (ignored unless LLIST_DOUBLE is defined)
+*             if the current link has been delinked, then the new link is
+*             added after the link we would have stepped back to, or before
+*             the link we would have stepped forward to, as appropriate
+*  data:      pointer to data to be copied into the new link's data field
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  true if successful
+*****************************************************************************/
+bool llist_AddAdjacent(llist_step_t *step, bool backwards, const void *data)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  int_step_t *s = (int_step_t *) step;
+  link_t *current = ((link_t *) step->data) - 1;
+  link_t *link;
+  int_head_t *l = (((link_t *) step->data) - 1)->head;
+#ifdef LLIST_CLUSTER
+  link = GetLink(l);
+#else
+  link = l->malloc(sizeof(link_t) + l->data_size);
+#endif
+  if (link == NULL)
+  {
+    return false;
+  }
+  memcpy(link + 1, data, l->data_size);
+  if (!irqs_were_off) INT_OFF
+  if (current->usage & 0x80000000)
+  {
+#ifdef LLIST_DOUBLE
+    if (backwards)
+    {
+      InitLink(link, l, current->prev, current);
+    }
+    else
+#endif
+    {
+      InitLink(link, l, current, current->next);
+    }
+  }
+  else
+  {
+#ifdef LLIST_DOUBLE
+    if (backwards)
+    {
+      if (s->prev == NULL)
+      {
+        InitLink(link, l, NULL, l->head);
+      }
+      else
+      {
+        InitLink(link, l, s->prev, s->prev->next);
+      }
+    }
+    else
+    {
+      if (s->next == NULL)
+      {
+        InitLink(link, l, l->tail, NULL);
+      }
+      else
+      {
+        InitLink(link, l, s->next->prev, s->next);
+      }
+    }
+#else
+    if (s->next == l->head)
+    {
+      InitLink(link, l, NULL, l->head);
+    }
+    else
+    {
+      link_t *prev = l->head;
+      while (s->next != prev->next)
+      {
+        prev = prev->next;
+      }
+      InitLink(link, l, prev, s->next);
+    }
+#endif
+  }
+  if (!irqs_were_off) INT_ON
+  return true;
+}
+
+#ifdef LLIST_CLUSTER
+/*****************************************************************************
+* GetLink
+*
+* Acquires a new link struct, either from the unused list, or failing that,
+* it mallocs a new cluster and returns the first block from it
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  list: list head
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  pointer to new link struct, or NULL if cluster alloc failed
+*****************************************************************************/
+static link_t *GetLink(int_head_t *list)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  if (!irqs_were_off) INT_OFF
+  if (list->unused_list == NULL)
+  {
+    cluster_t *cluster = list->malloc(sizeof(cluster_t) + list->cluster_size * (sizeof(link_t) + list->data_size));
+    if (cluster == NULL)
+    {
+      if (!irqs_were_off) INT_ON
+      return NULL;
+    }
+    cluster->next = list->cluster_list;
+    list->cluster_list = cluster;
+    {
+      unused_t *unused = (unused_t *) (cluster + 1);
+      unused->nlinks = list->cluster_size;
+      unused->next = NULL;
+      list->unused_list = unused;
+      /* drop through... */
+    }
+  }
+  {
+    unused_t *unused = list->unused_list;
+    if (unused->nlinks > 1)
+    {
+      unused_t *new_unused = (unused_t *) (((uint8_t *) unused) + sizeof(link_t) + list->data_size);
+      new_unused->nlinks = unused->nlinks - 1;
+      new_unused->next = unused->next;
+      list->unused_list = new_unused;
+    }
+    else
+    {
+      list->unused_list = unused->next;
+    }
+    if (!irqs_were_off) INT_ON
+    return (link_t *) unused;
+  }
+}
+#endif
+
+/*****************************************************************************
+* InitLink
+*
+* Initialises a new link struct
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  current: the link struct to initialise
+*  list:    the list it will belong to
+*  prev:    the previous link on the list, or NULL if none
+*  next:    the next link on the list, or NULL if none
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *next)
+{
+  current->head = list;
+  
+  current->next = next;
+#ifdef LLIST_DOUBLE
+  if (next == NULL)
+  {
+    list->tail = current;
+  }
+  else
+  {
+    next->prev = current;
+  }
+  
+  current->prev = prev;
+#endif
+  if (prev == NULL)
+  {
+    list->head = current;
+  }
+  else
+  {
+    prev->next = current;
+  }
+  
+  current->next_list = NULL;
+#ifdef LLIST_DOUBLE
+  current->prev_list = NULL;
+#endif
+  current->usage = 0x80000000;
+}
+
+/*****************************************************************************
+* llist_Delink
+*
+* Delinks a link from the list
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  step:      the current step on this walk
+*             the link is not freed until every walk pointing at it had moved
+*             on in one direction or the other
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void llist_Delink(llist_step_t *step)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  link_t *link = ((link_t *) step->data) - 1;
+  if (!irqs_were_off) INT_OFF
+  if (link->usage & 0x80000000) /* can only delink once! */
+  {
+    link->usage &= 0x7FFFFFFF;
+#ifdef LLIST_DOUBLE
+    if (link->next == NULL)
+    {
+      link->head->tail = link->prev;
+    }
+    else
+    {
+      link->next->prev = link->prev;
+    }
+    if (link->prev == NULL)
+    {
+      link->head->head = link->next;
+    }
+    else
+    {
+      link->prev->next = link->next;
+    }
+#else
+    if (link == link->head->head)
+    {
+      link->head->head = link->next;
+    }
+    else
+    {
+      link_t *prev = link->head->head;
+      while (prev->next != link)
+      {
+        prev = prev->next;
+      }
+      prev->next = link->next;
+    }
+#endif
+  }
+  if (!irqs_were_off) INT_ON
+}
+
+
+/*****************************************************************************
+* END OF FILE
+*****************************************************************************/
