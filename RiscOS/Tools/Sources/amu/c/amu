@@ -50,6 +50,8 @@ extern int system();
 #define  COLON            1     /* anything < ' ' bar EOF, 0 and '\n' */
 #define  COLONCOLON       2
 #define  EQUALS           3
+#define  DOTEQUALS        4
+#define  PLUSEQUALS       5
 #define  MAXDIRS        512     /* IDJ:18-Oct-94:bug-fix AQU-00041: was 100 */
 #define  MAXVPATHS      100     /* VPATH elements */
 #define  NODETABSZ      257     /* hash table size for node table */
@@ -62,6 +64,7 @@ extern int system();
 #define  MACROLEN      4096     /* IDJ:18-Oct-94:bug-fix AQU-00041: was 1024 */
 #define  MACRODEPTH      10
 #define  CMDLENLIM      255     /* imposed by RISC OS / Arthur, worse luck */
+#define  INCLUDEDEPTH    32     /* Limit on nesting of included sub-makefiles */
 
 /* Node state flags */
 #define  PROCESSED        1     /* Set if a node is up to date */
@@ -111,6 +114,25 @@ typedef struct Node
   char **file;
 } Node;
 
+#ifdef NESTEDMAKEFILES
+typedef struct MakefileDetails
+{
+  char *filename;
+  char *data;
+  char *in;
+  char *eof;
+  int lineno;
+  int included;
+  char *ptr;
+} MakefileDetails;
+
+typedef struct
+{
+  int idx;
+  MakefileDetails file[INCLUDEDEPTH];
+} Makefile;
+#endif
+
 /* Amu state flags */
 #define TOUCHING          1     /* amu -t */
 #define HAS_CYCLES        2
@@ -123,19 +145,31 @@ typedef struct Node
 #define UNIX_NAMES      256     /* set by .UNIXNAMES */
 #define CMDS_OUTPUT     512     /* set if any cmds have been sent to 'out' */
 #define DEBUGGING      1024     /* set if debugging */
-#define STATE_REASONS  2048      /* State reasons without -n */
+#define STATE_REASONS  2048     /* State reasons without -n */
 
 static int dir_sep = '.';
 
 static int  ch, nch, nch0, lineno, nerrors, amu_flags;
-#ifdef DDE
-#undef getc
-#define getc(in) (*(in) ? *(in)++ : EOF)
-static char *makefile, *in, *input_file;
-static FILE *out;
+#ifdef NESTEDMAKEFILES
+   static HashTable inc_tab;
+   static Makefile _in = { -1 };
+   static Makefile *in = &_in;
+   static FILE *out;
+#  define input_file (in->file[0].filename)
+#  define makefile (in->file[0].data)
+#  undef getc
+#  define getc(in) (amu_getc())
 #else
+#  ifdef DDE
+#    undef getc
+#    define getc(in) (*(in) ? *(in)++ : EOF)
+     static char *makefile, *in, *input_file;
+     static FILE *out;
+#  else
 static FILE *in, *out;
+#  endif
 #endif
+
 static TimeStamp now;
 static char *current_target;
 static Node *suffixes;
@@ -188,6 +222,8 @@ static void dde_exit(void)
 {
     _kernel_swi_regs r;
 
+    md_delete();
+
     if (desktop_prefix) {
         r.r[0] = 0;
         _kernel_swi(DDEUtils_Prefix, &r, &r);
@@ -230,6 +266,117 @@ static void prefix_init(char *fname)
 }
 #endif
 
+static char *Strdup_fail(const char *s1)
+{
+  const size_t length = strlen(s1) + 1;
+  char *const s2 = malloc(length);
+
+  if (s2 == NULL)
+    err_fail("memory allocation failure - increase available memory");
+  return memcpy(s2, s1, length);
+}
+
+static void report_makefile_depth(void)
+{
+#ifdef NESTEDMAKEFILES
+  int i;
+  for (i=0; i<in->idx; ++i)
+    err_report("in makefile included from %s (line %u):", in->file[i].filename,
+      in->file[i].included);
+  err_report("in file %s (line %u):", in->file[i].filename, lineno);
+#else
+  err_report("in %s (line %u):", input_file, lineno);
+#endif
+}
+
+#if defined(DDE) || defined(NESTEDMAKEFILES)
+static char *load_makefile(char *in_file, char **data, char **eof)
+{
+    int32 size;
+
+    size = wf_filesize(in_file);
+    if (size < 0)
+    { report_makefile_depth();
+      err_fail("can't find %s", in_file);
+    }
+    *data = malloc((size_t)(size + 1));
+    if (!*data) err_fail("out of memory");
+    *eof = size + *data;
+    if (wf_load(in_file, *data, size) < 0)
+    { report_makefile_depth();
+      err_fail("error reading %s", in_file);
+    }
+    **eof = 0;
+    return Strdup_fail(in_file);
+}
+#endif
+
+#ifdef NESTEDMAKEFILES
+static int amu_getc(void)
+{
+  int i = in->idx, ch;
+  MakefileDetails *md = in->file + i;
+
+  if (i < 0) return EOF;
+  if (md->in == md->eof)
+  {
+    /* Things are complicated because we must never throw away the
+     * root Makefile - otherwise the automatic dependency management
+     * goes beserk.
+     */
+    if (i == 0)
+    {
+       return EOF;
+    }
+    --in->idx;
+    --md;
+    lineno = md->lineno;
+    if (md->ptr) md->in = md->ptr;
+    do {
+      ch = amu_getc();
+    } while (ch && ch != EOF && ch != '\n');
+    return ch;
+  }
+  return *(md->in++);
+}
+
+static char *amu_getc_ptr(void)
+{
+  return in->file[in->idx].in;
+}
+
+static void push_include(char *name, int includeline, char *ptr)
+{
+  HashId h;
+  MakefileDetails *md = in->file + in->idx + 1;
+
+  if (hash_lookup(inc_tab, name, &h))
+  {
+    /* Prevent multiple inclusion */
+    report_makefile_depth();
+    err_report("Re-inclusion of %s", hash_value(inc_tab, h));
+    return;
+  }
+  hash_enter(inc_tab, name, &h);
+  hash_assoc(inc_tab, h, Strdup_fail(name));
+  if (++in->idx >= INCLUDEDEPTH)
+  { --in->idx;
+    report_makefile_depth();
+    err_fail("include file invocations nested too deeply (> %u)", INCLUDEDEPTH-1);
+  }
+  md->filename = load_makefile(name, &md->data, &md->eof);
+  md->in = md->data;
+  if (in->idx > 0)
+  { in->file[in->idx - 1].included = includeline;
+    in->file[in->idx - 1].lineno = lineno;
+    in->file[in->idx - 1].ptr = ptr;
+  }
+  lineno = 1;
+  nch = nch0 = 0;
+  if (amu_flags & DEBUGGING) err_report("loading sub-makefile %s", name);
+}
+#endif
+
 static void push_macro(name)
 char *name;
 {
@@ -253,6 +400,7 @@ char *name, *value;
   (void) hash_enter(tag_tab, name, &h);
   l = strlen(value);
   hash_assoc(tag_tab, h, strcpy(malloc(l+1), value));
+  if (amu_flags & DEBUGGING) err_report("DEFINE: %s = %s", name, value);
 }
 
 static int getch0()
@@ -334,6 +482,24 @@ static void getch()
   }
   else if (!((GETTING_CMD | IN_MACRO) & amu_flags))
   {
+    if (ch == '.')
+    { /* Look for an = character */
+      nch = getch0();
+      if (nch == '=')
+      {
+        ch = DOTEQUALS;
+        nch = getch0();
+      }
+    }
+    if (ch == '+')
+    {
+      nch = getch0();
+      if (nch == '=')
+      {
+        ch = PLUSEQUALS;
+        nch = getch0();
+      }
+    }
     if (ch == '=')
       ch = EQUALS;
     else if (ch == ':')
@@ -346,6 +512,11 @@ static void getch()
           ch = COLONCOLON;  nch = tch;
         }
         else nch0 = tch;                             /* !!!UNSTRUCTURED!!! */
+      }
+      else if (nch == '=')
+      {
+        ch = DOTEQUALS;
+        nch = getch0();
       }
       else if (isspace(nch) || (nch == ';')) ch = COLON;
     }
@@ -484,12 +655,16 @@ Node *target, *src;
   if ((src->flags & IS_COLONCOLON) &&
       (target->depends_on != NULL) &&
       (target->flags & HAS_CLONES) == 0)
-    err_report("%s '::' rule clashes with earlier ':' rule at line %u",
-               target->name, lineno);
+  {
+    report_makefile_depth();
+    err_report("%s '::' rule clashes with earlier ':' rule", target->name);
+  }
   else if ((target->flags & HAS_CLONES) &&
              (src->name != target->name))
-    err_report("%s ':' rule clashes with earlier '::' rule at line %u",
-               target->name, lineno);
+  {
+    report_makefile_depth();
+    err_report("%s ':' rule clashes with earlier '::' rule", target->name);
+  }
   else
   {
     link = (Link *) malloc(sizeof(Link));
@@ -527,7 +702,9 @@ char *name;
   if (suffixes != NULL) l = suffixes->depends_on;
   for (t = name+1;  *t != 0;  ++t) if (*t == '.') break;
   if (*t != '.')
+  { report_makefile_depth();
     err_fail("mal-formed rule at line %u?", lineno);
+  }
   while (l != NULL)
   { if (strcmp(t, l->node->name) == 0)
     { /* found the target extension in the list of suffixes */
@@ -537,12 +714,14 @@ char *name;
     }
     l = l->link;
   }
+  report_makefile_depth();
   err_fail("rule at line %u mentions non-suffix '%s'", lineno, t);
   return NULL;
 }
 
 static void build_graph()
 {
+  HashId h;
   int j, nt, delete_suffix_list;
   Node *src, *target[MAXTARGETS];
   char name[NAMELEN];
@@ -559,24 +738,49 @@ next_source_line:
     do
     { get_string(name, NAMELEN, 0);
       skip_spaces();
-      if ((nt == 0) && (ch == EQUALS))
+      if ((nt == 0) && (ch == EQUALS || ch == PLUSEQUALS || ch == DOTEQUALS))
       { /* name = <rest-of-line> */
+        const int c = ch;
         char macro_body[MACROLEN];
+        if (ch == PLUSEQUALS && hash_lookup(tag_tab, name, &h)) {
+                push_macro("__SPACE");
+                push_macro(name);
+        }
         getch();
-        skip_spaces();
+        if (c != PLUSEQUALS) skip_spaces();
         amu_flags |= IN_MACRO;
         j = 0;
         while (ch != '\n' && ch != EOF)
         { if (j < MACROLEN) macro_body[j++] = ch;
           getch();
         }
-        while (ch == ' ' || ch == '\n') getch();
         if (j >= MACROLEN) j = MACROLEN-1;
         macro_body[j] = 0;
-        define_macro(name, macro_body);
+        while (ch == ' ' || ch == '\n') getch();
+        if (c != DOTEQUALS || !hash_lookup(tag_tab, name, &h))
+          define_macro(name, macro_body);
         amu_flags &= ~IN_MACRO;
         goto next_source_line;
       }
+#ifdef NESTEDMAKEFILES
+      else if ((nt == 0) && hash_cistrcmp(name, "INCLUDE") == 0)
+      { /* include <name-of-nested-file> */
+        char macro_body[MACROLEN];
+        int tmp_line = lineno;
+        char *tmpptr = amu_getc_ptr();
+        j = 0;
+        while (ch != '\n' && ch != EOF)
+        { if (j < MACROLEN) macro_body[j++] = ch;
+          getch();
+        }
+        if (j >= MACROLEN) j = MACROLEN-1;
+        macro_body[j] = 0;
+        ch = nch;
+        push_include(macro_body, tmp_line, tmpptr);
+        while (ch == ' ' || ch == '\n') getch();
+        goto next_source_line;
+      }
+#endif
       if (name[0] == '.')
       { if (hash_cistrcmp(name, ".SILENT") == 0)
           amu_flags |= SILENT;
@@ -597,13 +801,20 @@ next_source_line:
       else
       { target[nt++] = find_node(name);
         if (nt == MAXTARGETS)
+        {
+          report_makefile_depth();
           err_fail("too many targets (> %u) in source line %u",
                     MAXTARGETS, lineno);
+        }
       }
     } while ((ch != COLON) && (ch != COLONCOLON) && (ch != '\n'));
 
     if (ch == '\n')
-      err_fail("missing ':' or '::' at line %u", lineno-1);
+    {
+      --lineno;
+      report_makefile_depth();
+      err_fail("missing ':' or '::'");
+    }
 
     if (ch == COLONCOLON)
       for (j = 0;  j < nt;  ++j) target[j] = clone_node(target[j]);
@@ -637,8 +848,11 @@ next_source_line:
           if (target[j]->cmds == NULL)
               target[j]->cmds = cmds;
           else
-err_report("'%s' already has commands (commands at line %d ignored)",
-              target[j]->name, lineno);
+          {
+            report_makefile_depth();
+            err_report("'%s' already has commands (new commands ignored)",
+              target[j]->name);
+          }
         }
       }
     }
@@ -1272,7 +1486,7 @@ static void expand_vpath()
 
 static void handle_escape(int signo)
 {
-  signal(signo, handle_escape);
+  signal(signo, SIG_IGN);
   exit(EXIT_FAILURE);
 }
 
@@ -1290,6 +1504,9 @@ static void initialise()
   lineno = 1;
   nerrors = 0;
   nodep = nodeq = NULL;
+#ifdef NESTEDMAKEFILES
+  inc_tab = hash_cinew(TAGTABSZ);
+#endif
   dir_tab = hash_cinew(MAXDIRS);
   node_tab = hash_cinew(NODETABSZ);
   tag_tab = hash_cinew(TAGTABSZ);
@@ -1320,7 +1537,7 @@ static void check_version(char *v)
 
 static void give_help()
 {
-  fprintf(stderr, "\n%s vsn %s [%s] - Acorn 'make' utility\n\n",
+  fprintf(stderr, "\n%s vsn %s [%s] - a 'make' utility\n\n",
           amu, VERSION, DATE);
   fprintf(stderr,"%s  [options] [target1 target2...]\n", amu);
   fprintf(stderr, "\n\
@@ -1476,20 +1693,15 @@ default:  err_report("unrecognised option '%s'", arg);
   prefix_init(in_file);
 #endif
 
-#ifdef DDE
+#ifdef NESTEDMAKEFILES
+  push_include(in_file, 1, NULL);
+  define_macro("__SPACE", " ");
+#elif defined(DDE)
   {
-    int32 size;
-
-    size = wf_filesize(in_file);
-    if (size < 0) err_fail("can't find %s", in_file);
-    makefile = malloc((size_t)(size + 1));
-    if (!makefile) err_fail("out of memory");
-    if (wf_load(in_file, makefile, size) < 0)
-        err_fail("error reading %s", in_file);
-    makefile[size] = 0;
+    char *eof;
+    input_file = load_makefile(in_file, &makefile, &eof);
+    *eof = 0;
     in = makefile;
-    input_file = malloc(strlen(in_file) + 1);
-    strcpy(input_file, in_file);
   }
 #else
   in = fopen(in_file, "r");

@@ -54,7 +54,7 @@ DIRS=o._dirs
 # Include files
 #
 INCLUDES  = -IC: -Iriscos -I${CLXDIR}
-DFLAGS    = -DDDE
+DFLAGS    = -DDDE -DNESTEDMAKEFILES
 
 #
 # Program specific options:
