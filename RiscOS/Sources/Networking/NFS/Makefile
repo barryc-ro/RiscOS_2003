@@ -45,7 +45,7 @@ AFLAGS = ${DEPENDS} -Stamp -quit
 CFLAGS  = -ffcah -c -zM -zps1 -wp ${INCLUDES} ${DEPENDS} ${DEFINES}
 RPCCCFLAGS = -ff -c -zM -zps1 -wp ${INCLUDES} ${DEPENDS} ${DEFINES} ${RPCCCFLAGS_EXTRA} 
 CMHGFLAGS = -p ${DEPENDS}
-RPCGENFLAGS = -i 0 -DWANT_NFS3
+RPCGENFLAGS = -i 0 -DWANT_NFS3 -debuglib
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -239,8 +239,8 @@ ${TARGET}: ${XTARGET} ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
 
 
 ${DTARGET}: ${DEBOBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ASMLIB}
-        ${LD} -o $@ -rmf ${DEBOBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMLIB}
-        $(MODSQZ) $(DTARGET)
+        ${LD} -o $@ -rmf ${DEBOBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMLIB} -symbols syms
+        |sortsymtab syms linked.syms
         Access $@ RW/R
 
 
@@ -339,10 +339,10 @@ autogen-clean:
 	${RM} c.pcnfsd_xdr
 
 h.nfsstbcmhg:	$(CMHGOBJ)
-	@
+        @stamp $@
 
 h.nfscmhg:	$(CMHGOBJ)
-	@
+        @stamp $@
 
 o.Commands:     h.nfscmhg
 o.ModuleWrap:   h.nfscmhg
