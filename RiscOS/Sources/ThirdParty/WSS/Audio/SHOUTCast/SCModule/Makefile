@@ -27,7 +27,7 @@ DEPENDS = -depend !Depend ${THROWBACK}
 
 DEFINES = ${OPTIONS}
 
-AFLAGS = ${DEPENDS} -Stamp -quit
+AFLAGS = ${DEPENDS} -Stamp -quit -PD "ATPCS32 SETL {CONFIG}<>26"
 CFLAGS  = -ff -c -zM ${DEFINES} ${INCLUDES} ${DEPENDS}
 CMHGFLAGS = -p ${DEPENDS}
 
