@@ -51,6 +51,7 @@ EXPORTS   = \
  ${HDRDIR}.Heap \
  ${HDRDIR}.ImageSize.2048K \
  ${HDRDIR}.ImageSize.4096K \
+ ${HDRDIR}.ImageSize.6144K \
  ${HDRDIR}.ImageSize.8192K \
  ${HDRDIR}.IO.GenericIO \
  ${HDRDIR}.IO.IOC \
