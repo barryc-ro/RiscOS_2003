@@ -71,7 +71,8 @@ OBJS =\
  o.font\
  o.HTMLTables\
  o.attributes\
- o.attrvenrs
+ o.attrvenrs\
+ o.utf8
  
 OBJSZ =\
  z.display\
@@ -83,7 +84,8 @@ OBJSZ =\
  z.font\
  z.HTMLTables\
  z.attributes\
- z.attrvenrs
+ z.attrvenrs\
+ z.utf8
 
 #
 # Rule patterns
