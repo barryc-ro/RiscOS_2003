@@ -30,7 +30,7 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 
-CCFLAGS		= -c -zm -depend !Depend -ffah ${INCLUDES} ${DFLAGS}
+CCFLAGS		= -c -zm -zps1 -depend !Depend -ffah ${INCLUDES} ${DFLAGS}
 ASFLAGS		= -depend !Depend -Stamp -quit
 CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
