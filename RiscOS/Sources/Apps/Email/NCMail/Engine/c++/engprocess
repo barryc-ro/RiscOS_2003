@@ -12,7 +12,7 @@
 #include "Email/Common/bool.h"
 
 #include "DebugLib/DebugLib.h"
-/* #include "NBLib/NBLib.h" */
+#include "NBLib/NBLib.h"
 
 #include "Email/Mailbox/Account.h"
 #include "Email/Mailbox/POP3/POP3Account.h"
@@ -34,17 +34,21 @@
 #include "enginit.h"
 #include "engcbf.h"
 #include "engprocess.h"
-#include "engfile.h"
 #include "engparse.h"
 #include "engsend.h"
 #include "engtimers.h"
 #include "engconnect.h"
 
+extern "C"
+{
+  #include "../Build/NCMailUI.h"
+}
+
 
 Account *POPaccount, *SMTPaccount;
 Mailbox *inbox;
 SendQMailbox *outbox;
-bool newmail = false, reprocess = false;
+bool newmail = false, firstprocess = true;
 
 #ifdef ALAN
 static int filecount1 = 1;
@@ -187,7 +191,7 @@ void CleanupOutbox(void)
   {
     nextptr = msgptr->next;
     SetFilename(msgptr->ID, true);
-    if (!FileExists(msgfilename))
+    if (nb_file_exists(1, msgfilename, 0, 0))
       DestroyDescriptor(msgptr, ourmboxout);
     msgptr = nextptr;
   }
@@ -400,7 +404,7 @@ void TempList(void)
   MessageDescriptor *msgptr = ourmboxin->list;
   uint32 i = 1, n = popprocessstate.msglist->Size();
 
-  sprintf(fname, "NFS::NCB.$.Inboxes.OurList%d\0",filecount1);
+  sprintf(fname, "NFS::NCB.$.Debug.OurList%d\0",filecount1);
   f = fopen(fname, "w");
   while (msgptr)
   {
@@ -417,7 +421,7 @@ void TempList(void)
   fclose(f);
   MakeFilePublic(fname);
 
-  sprintf(fname, "NFS::NCB.$.Inboxes.MBList%d\0",filecount1++);
+  sprintf(fname, "NFS::NCB.$.Debug.MBList%d\0",filecount1++);
   f = fopen(fname, "w");
   popprocessstate.msglist->Reset();  
   while (n--)
@@ -437,14 +441,19 @@ void TempList(void)
 void ReconcileMboxPart1(void)
 {
 
-  ProcessStatus stat;
+  uint32 num;
 
-  stat.data.totalmsgs = popprocessstate.getnumobj->number_messages;
-  dprintf(("Eng", "Number of messages=%d\n",stat.data.totalmsgs));
+  num = popprocessstate.getnumobj->number_messages;
+  dprintf(("Eng", "Number of messages=%d\n",num));
   RemoveObj((MBoxOpCB**) &popprocessstate.getnumobj);
-  stat.flags = 0;
-  stat.tag = messagesfound;
-/*   ncmui_connect_status(stat); */
+  if (firstprocess)
+  {
+/*     dprintf(("Eng", "About to send connection status to UI\n")); */
+    popstat->data.totalmsgs = num;
+    popstat->flags = 0;
+    popstat->tag = messagesfound;
+    ncmui_connection_status(popstat);
+  }
 
   popprocessstate.msglist = &inbox->GetMessages();
   popprocessstate.msg = ourmboxin->list;
@@ -558,7 +567,7 @@ bool CheckMboxList(void)
     return true;
 
   obj = (Message *) popprocessstate.msglist->Current();
-  if (!OnOurList(obj))
+  if ((firstprocess) || (!OnOurList(obj)))
   {
     /* must be an unknown message so create new descriptor */
     if ((msgptr = NewDescriptor(0, transmbox, true)) == 0)
@@ -638,27 +647,35 @@ void DoPOPProcess(void)
           popprocessstate.ret.code = ENG_POPCONNECTFAIL;
           popprocessstate.context = connectfailure;
         }
+#ifdef gorilla
+        else if (firstprocess)
+          state |= POPCONNECT;
+#endif
       }
 
       break;
 
     case connected :
-    {
-      ProcessStatus stat;
 
       dprintf(("Eng", "POP context = connected\n"));
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popstatus = acctconnected;
+#ifdef gorilla
+      state &= ~POPCONNECT;
+#endif
 
-      stat.flags = 0;
-      stat.tag = processinginbox;
-/*       ncmui_connect_status(stat); */
+      if (firstprocess)
+      {
+        popstat->flags = 0;
+        popstat->tag = processinginbox;
+        ncmui_connection_status(popstat);
+      }
 
       popprocessstate.context = idle;
       popprocessstate.processobj = new MBoxOpCB_process((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
       rc = inbox->Process(popprocessstate.processobj);
       tim = time(0);
-      dprintf(("Eng", "Processing POP mailbox at %s\n",ctime(&tim)));
+      dprintf(("Eng", "Processing POP mailbox, rc=%d, state = 0x%x, at %s\n",rc,state,ctime(&tim)));
 
       if (rc < 0)
       {
@@ -675,7 +692,6 @@ void DoPOPProcess(void)
       }
 
       break;
-    }
 
     case readytoexpunge :
 
@@ -712,6 +728,7 @@ void DoPOPProcess(void)
       dprintf(("Eng", "POP context = connectfailure\n",));
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popprocessstate.context = idle;
+/*       state &= ~(PROCESSPOP + POPCONNECT); */
       state &= ~PROCESSPOP;
       DeactivatePOP();
       statusret.rc = popprocessstate.ret.rc;
@@ -848,6 +865,7 @@ void DoPOPProcess(void)
       /* check through our list to see if any are missing
          from mailbox's list, and destroy them */
 
+      dprintf(("Eng", "POP process context = checkourlist\n"));
       t = clock();
       while (((clock() - t) < 10) && (popprocessstate.msg))
         popprocessstate.msg = CheckOurList(popprocessstate.msg);
@@ -863,6 +881,7 @@ void DoPOPProcess(void)
 
     case checkmboxlist :
 
+      dprintf(("Eng", "POP process context = checkmboxlist\n"));
       t = clock();
       finished = false;
       while (((clock() - t) < 10) && (!finished))

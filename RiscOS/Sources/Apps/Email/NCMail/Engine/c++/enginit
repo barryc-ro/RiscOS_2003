@@ -31,13 +31,18 @@
 #include "engmanager.h"
 #include "enguiapi.h"
 #include "engprocess.h"
-#include "engstr.h"
+/* #include "engstr.h" */
 #include "engsend.h"
 #include "enguser.h"
-#include "engfile.h"
+/* #include "engfile.h" */
 #include "engtimers.h"
 #include "engconnect.h"
 #include "engcbf.h"
+
+extern "C"
+{
+  #include "../Build/NCMailUI.h"
+}
 
 _kernel_swi_regs regs;
 _kernel_oserror  *err;
@@ -45,6 +50,8 @@ IdBlock idblock;
 bool appquit = false, cachefs;
 int ourhandle;
 char *appname, *msgfilename;
+
+MessagesFD infobuf;
 
 #ifdef ALAN
 static char ourvar[] = "NCMail$Handle";
@@ -61,16 +68,23 @@ bool AppInit(void)
 
   static int ourmessages[] =
   {
+#ifdef BROKEN_5_10_LINKER
     /* RDW START OF HACK
        These 3 values below are the ones that should be picked up by the WimpRegistry
        but, because there seems to be a problem in Module builds with the static objects
        constructors not being called, it doesn't work so the values are put here as a
        workaround until I have time to look at the fault
+
+       Fault found by Ben.  Fault in linker throwing away the static C++ object constructors
+       Fixed by Stewart Brodie in link 5.11.
+
+       If you're using a linker older than 5.11, then define BROKEN_5_10_LINKER
     */
     0x4e500,
     0x4e540,
     0x4AF80,
     0x4d300,
+#endif
     /* RDW END */
     Wimp_MPreQuit,
     Wimp_MQuit
@@ -115,7 +129,8 @@ bool AppInit(void)
     return false;
   }
 
-  appname = ReadToken("_TaskName");
+/*   appname = ReadToken("_TaskName"); */
+  appname = nb_messagetrans_lookup(infobuf, "_TaskName");
 
   debug_initialise(appname, "<NCMail$DebugLibFilename>", "");
   debug_output_device(PDEBUG_OUTPUT);
@@ -146,12 +161,13 @@ bool AppInit(void)
   StopTimeoutCount();
   StopReconnectCount();
   StopRetryCount();
+  /* are we running on a CacheFS-based system? */
   cachefs = (bool) nb_ensure_module(0, "CacheFS");
 
   WimpRegistry::Instance()->SetTaskID(ourhandle);
 
   event_initialise(&idblock);
-  dprintf(("Eng", "Succesfully initialised\n"));
+  dprintf(("Eng", "Successfully initialised\n"));
 
   event_register_message_handler(Wimp_MQuit, Messages, 0);
   event_register_message_handler(Wimp_MPreQuit, Messages, 0);
@@ -159,6 +175,7 @@ bool AppInit(void)
 
   event_register_toolbox_handler(-1, Quit_Quit, TBEvents, 0);
 
+  /* read sysvar to get configured threshold size */
   if ((size = GetSysVar("NCMail$ThresholdSize", true)) != 0)
   {
     regs.r[0] = 10;
@@ -175,8 +192,8 @@ bool AppInit(void)
     ourmboxin->maxsize = 0x8000;
 
   free(size);
-  CreateDirectory("<NCMailStore$Dir>");
-  LockFile("<NCMailStore$Dir>");
+  nb_directory_create(1, "<NCMailStore$Dir>", 0);
+  nb_file_lock(1, "<NCMailStore$Dir>", 0);
 
 #ifdef CHECK_FOR_NCMALITE
   ChangeUser();
@@ -198,6 +215,68 @@ bool AppInit(void)
 }
 
 
+/*
+** CleanupApp() tidies up before Standby, Logoff,
+** or quitting after a fatal error.
+** It deletes any mailbox accounts, unlocks files,
+** and if chuckvars flag is set, unsets the user variables.
+** If called because of a fatal error, the flag will be unset
+** because we want to reinstate the user details once the WatchDog
+** restarts NCMail.
+*/
+
+void CleanupApp(bool chuckvars)
+{
+
+  ncmui_email_active(false);
+  if (popstatus == acctcreated)
+  {
+    dprintf(("Eng", "About to delete POP account\n"));
+    delete POPaccount;
+  }
+
+  if (smtpstatus == acctcreated)
+  {
+    dprintf(("Eng", "About to delete SMTP account\n"));
+    delete SMTPaccount;
+  }
+
+  /* Unlock all files in user's store */
+  dprintf(("Eng", "About to unlock files\n"));
+  nb_file_unlock(0, "<NCMailStore$Dir>.<NCMail$User>", "*");
+  nb_file_unlock(1, "<NCMailStore$Dir>.<NCMail$User>", 0);
+  nb_file_unlock(1, "<NCMailStore$Dir>", 0);
+
+  if (chuckvars)
+  {
+    /* unset user variables */
+    static char popvar[] = "Inet$EmailPOP3User";
+    static char passvar[] = "Inet$EmailPOP3Password";
+
+    regs.r[0] = (int) popvar;
+    regs.r[1] = -1;
+    regs.r[2] = -1;
+    regs.r[3] = 0;
+    _kernel_swi(OS_SetVarVal,&regs,&regs);
+    regs.r[0] = (int) passvar;
+    regs.r[1] = -1;
+    regs.r[2] = -1;
+    regs.r[3] = 0;
+    _kernel_swi(OS_SetVarVal,&regs,&regs);
+  }
+
+}
+
+
+/*
+** PreShutDown() is called before going to Standby mode.
+** If there is unsent mail in the queue, or if mail servers are
+** connected, NCMail objects to the shutdown.
+** In the former case it requests confirmation from the user,
+** in the latter case simply postpones the Standby until it
+** has disconnected from the servers.
+*/
+
 void PreShutDown(WimpMessage *msg)
 {
 
@@ -206,6 +285,7 @@ void PreShutDown(WimpMessage *msg)
   if (state & PREQUIT)
   {
     /* prequit has already been done, we can ignore this time */
+    CleanupApp(true);
     return;
   }
 
@@ -227,7 +307,10 @@ void PreShutDown(WimpMessage *msg)
   }
 
   else
+  {
+    CleanupApp(true);
     return;
+  }
 
   prequitsender = msg->hdr.sender;
   msg->hdr.your_ref = msg->hdr.my_ref;
@@ -240,51 +323,11 @@ void PreShutDown(WimpMessage *msg)
 }
 
 
-void CleanupApp(void)
-{
-
-  static char popvar[] = "Inet$EmailPOP3User";
-  static char passvar[] = "Inet$EmailPOP3Password";
-
-  dprintf(("Eng", "%d descriptors in outbox\n",ourmboxout->total));
-  if (popstatus == acctcreated)
-  {
-    dprintf(("Eng", "About to delete POP account\n"));
-    delete POPaccount;
-  }
-
-  if (smtpstatus == acctcreated)
-  {
-    dprintf(("Eng", "About to delete SMTP account\n"));
-    delete SMTPaccount;
-  }
-
-  /* Unlock all files in user's store */
-  dprintf(("Eng", "About to unlock files\n"));
-  UnlockFile("<NCMailStore$Dir>.<NCMail$User>.*");
-  UnlockFile("<NCMailStore$Dir>.<NCMail$User>");
-  UnlockFile("<NCMailStore$Dir>");
-
-  /* unset user variables */
-  regs.r[0] = (int) popvar;
-  regs.r[1] = -1;
-  regs.r[2] = -1;
-  regs.r[3] = 0;
-  _kernel_swi(OS_SetVarVal,&regs,&regs);
-  regs.r[0] = (int) passvar;
-  regs.r[1] = -1;
-  regs.r[2] = -1;
-  regs.r[3] = 0;
-  _kernel_swi(OS_SetVarVal,&regs,&regs);
-
-}
-
-
 void ShutDown(void)
 {
 
   dprintf(("Eng", "Entering ShutDown\n"));
-  CleanupApp();
+  CleanupApp(false);
 
 #ifdef MemCheck_MEMCHECK
   MemCheck_UnRegisterMiscBlock(WimpRegistry::Instance());

@@ -7,35 +7,61 @@
 */
 
 #include "Email/Mailbox/MBoxCB.h"
+#include "Email/Mailbox/MBoxOpCB/connect.h"
 
 #include "DebugLib/DebugLib.h"
 #include "NBLib/NBDefs.h"
-/* #include "NBLib/NBLib.h" */
+#include "NBLib/NBLib.h"
 
 #include "engprocess.h"
 #include "enginit.h"
 #include "engtypes.h"
-#include "engparse.h"
-#include "enguiapi.h"
 #include "engcbf.h"
-#include "engdownld.h"
 #include "engmanager.h"
-#include "engfile.h"
-#include "enguser.h"
-#include "engtimers.h"
+#include "enguiapi.h"
+
+extern "C"
+{
+  #include "../Build/NCMailUI.h"
+}
+
+static uint32 mboxstate[] =
+{
+ (uint32) MBoxOpCB_connect::Initial,            (uint32) initialstate,
+ (uint32) MBoxOpCB_connect::LookingForService,  (uint32) lookingforserver,
+ (uint32) MBoxOpCB_connect::FoundService,       (uint32) serverfound,
+ (uint32) MBoxOpCB_connect::Connecting,         (uint32) serverconnecting,
+ (uint32) MBoxOpCB_connect::Connected,          (uint32) serverconnected,
+ (uint32) MBoxOpCB_connect::WaitingForGreeting, (uint32) greetingawaited,
+ (uint32) MBoxOpCB_connect::ReceivedGreeting,   (uint32) greetingreceived,
+ (uint32) MBoxOpCB_connect::Authenticating,     (uint32) loggingin,
+ (uint32) MBoxOpCB_connect::Authenticated,      (uint32) loggedin,
+ (uint32) MBoxOpCB_connect::Completed,          (uint32) connectcompleted
+};
+
+StatusTag LookupTag(MBoxOpCB_connect::State status)
+{
+  /* returns status tag after looking up value returned by Mailbox */
+  int i;
+
+  for (i = 0; mboxstate[i] <= (uint32) MBoxOpCB_connect::Completed; i++)
+  {
+    if (mboxstate[i] == (uint32) status)
+      return (StatusTag) mboxstate[i + 1];
+  }
+
+  return unknownstate;
+}
 
 
 /*
 ** AnalyseCallback() takes the output from the callback received
 ** by MBoxCallback and sets the correct context depending on
 ** the type of callback (i.e. smtp or pop).
-** It also cancels the callback timeout counter.
 */
 
 void AnalyseCallback(ELib_rcode rc, uint32 handle, uint32 fail, uint32 ok)
 {
-
-  StopCallbackCount();
 
   if (handle == pop)
   {
@@ -54,9 +80,6 @@ void AnalyseCallback(ELib_rcode rc, uint32 handle, uint32 fail, uint32 ok)
     else
       smtpprocessstate.context = ok;
   }
-
-  if (rc == ELIB_RUNNING)
-    StartCallbackCount();
 
 }
 
@@ -85,20 +108,32 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
 
       AnalyseCallback(cb->rc, handle, connectfailure, connected);
       
-      if ((handle == pop) && (cb->rc == ELIB_RUNNING) && (!reprocess))
+      if ((firstprocess) && (cb->rc == ELIB_RUNNING))
       {
-        /* report status of connect to user */
-        ProcessStatus stat;
-        stat.flags = 0;
-/*         stat.tag = cb->mboxstate; */
-/*         ncmui_connect_status(stat); */
+        /*
+        ** Receiving feedback on connection status.
+        ** This is the first processing of the mailbox
+        ** so we notify the UI so it can display window.
+        */
+        MBoxOpCB_connect::State status = ((MBoxOpCB_connect *) cb)->GetState();
+        dprintf(("Eng", "Returned mailbox state = %d\n",status));
+        popstat->flags = 0;
+        popstat->tag = LookupTag(status);
+        dprintf(("Eng", "Sending status %d to the UI\n",popstat->tag));
+        ncmui_connection_status(popstat);
       }
-
       break;
 
     case MBoxOpCB::Disconnect :
 
       dprintf(("Eng", "Receiving Disconnect callback for %s, rc = %d\n",((handle == pop) ? "POP" : "SMTP"),cb->rc));
+
+      /*
+      ** If the disconnect is because of a fatal error, then quit.
+      ** The WatchDog will restart us.
+      */
+      if (state & BROWNTROUSERS)
+        ShutDown();
 
       AnalyseCallback(cb->rc, handle, disconnectfailure, disconnected);
 
@@ -135,7 +170,6 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
 
       dprintf(("Eng", "Receiving GetHdrsFile callback, rc = %d\n",cb->rc));
       downloadstate.ret.rc = cb->rc;
-      StopCallbackCount();
 
       if (cb->rc < 0)
       {
@@ -144,15 +178,10 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
       }
       else if (cb->rc == ELIB_COMPLETED)
       {
+        /* Lock the header file */
         SetFilename(downloadstate.msg->ID, true);
-        LockFile(msgfilename);
+        nb_file_lock(1, msgfilename, 0);
         downloadstate.context = downloaddone;
-      }
-
-      else
-      {
-        /* process must be still running */
-        StartCallbackCount();
       }
 
       break;
@@ -160,7 +189,6 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
     case MBoxOpCB::GetMsgFile :
 
       dprintf(("Eng", "Receiving GetMsgFile callback for %s, message %d, rc = %d\n",(handle == DOWNLOADMSG) ? "DOWNLOAD" : "RETRIEVE",(handle == DOWNLOADMSG) ? downloadstate.msg->ID : retrievestate.msg->ID,cb->rc));
-      StopCallbackCount();
 
       if (cb->rc < 0)
       {
@@ -180,10 +208,12 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
       else if (cb->rc == ELIB_COMPLETED)
       {
         MessageDescriptor *msg = (handle == DOWNLOADMSG) ? downloadstate.msg : retrievestate.msg;
+        /* set message flags */
         msg->flags &= ~DOWNLOADING;
         msg->flags |= DOWNLOADED;
+        /* lock the message file */
         SetFilename(msg->ID, false);
-        LockFile(msgfilename);
+        nb_file_lock(1, msgfilename, 0);
         if (handle == RETRIEVEMSG)
           retrievestate.context = readytoparse;
 
@@ -195,18 +225,11 @@ void MBoxCallback(MBoxOpCB *cb, void *h)
 
       }
 
-      else
-      {
-        /* process must be still running */
-        StartCallbackCount();
-      }
-
       break;
 
     case MBoxOpCB::SetFlags :
 
       dprintf(("Eng", "Receiving SetFlags callback, rc = %d\n",cb->rc));
-      StopCallbackCount();
       if (cb->rc < 0)
       {
         /* error has occurred while marking */
