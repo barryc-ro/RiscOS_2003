@@ -33,6 +33,7 @@
 #include "FetchPage.h"
 #include "Save.h"
 #include "Toolbars.h"
+#include "URLUtils.h"
 #include "Windows.h"
 
 #include "Hotlist.h"
@@ -43,6 +44,10 @@
 
 /* Local statics */
 
+static int            autoopen_delay = 100;               /* Time in centiseconds before directory is autoopened */
+
+
+static int            autoopen_oldtime;                   /* Base time for autoopen directory */
 static hotlist_item * hotlist_root = NULL;                /* Pointer to the hotlist root directory item */
 static int            hotlist_windowid;                   /* Object ID of the hotlist window */
 
@@ -64,6 +69,10 @@ static unsigned int   alter_new;                          /* Remembers if the ed
                                                           /* HOTLIST_MENUSECTION_NEW and HOTLIST_MENUSECTION_ALTER */
 
 static unsigned int   item_number;                        /* Current item being considered for drawing */
+
+static hotlist_item * hotlist_save_item = NULL;           /* Item whose URL is being saved */
+static int            hotlist_ram_transfer_sent;          /* Number of bytes which have already been sent by ram transfer */
+static int            hotlist_save_type = HL_SAVE_NONE;   /* Variety of save currently in progress */
 
 /* Event handler prototypes */
 
@@ -93,6 +102,9 @@ static ToolboxEventHandler   hotlist_reset_directory_handler;
 static ToolboxEventHandler   hotlist_show_descriptions_handler;
 static ToolboxEventHandler   hotlist_show_urls_handler;
 
+static WimpMessageHandler    hotlist_data_save_ack_handler;
+static WimpMessageHandler    hotlist_ram_fetch_handler;
+
 /* Debug functions */
 
 #ifdef TRACE
@@ -105,7 +117,6 @@ static ToolboxEventHandler   hotlist_show_urls_handler;
 /* Miscellaneous function prototypes */
 
 static _kernel_oserror * hotlist_get_entry_sizes         (unsigned int * item_height, unsigned int * item_dir_width, unsigned int * item_url_width);
-static void              hotlist_scan_for_subdirectories (hotlist_item * item);
 
 static hotlist_item    * hotlist_find_item_r             (hotlist_item * list, unsigned int item_no);
 static hotlist_item    * hotlist_find_item               (hotlist_item * list, unsigned int item_no);
@@ -140,6 +151,10 @@ static _kernel_oserror * hotlist_load_directory          (FILE * fileptr, hotlis
 static void              hotlist_drag_renderer           (hotlist_item * item, unsigned int item_height, unsigned int item_dir_width, unsigned int item_url_width);
 static void              hotlist_start_drag              (void);
 static _kernel_oserror * hotlist_modified                (unsigned int type);
+
+/* Save Protocol */
+
+_kernel_oserror        * hotlist_initiate_uri_save       (hotlist_item *sourceitem);
 
 /* List manupulation */
 
@@ -232,7 +247,6 @@ static int               hotlist_clear_flags             (hotlist_item * list, h
         {
           Printf("%s:DIRECTORY", list->name);
         }
-        if (list->flags & HOTLIST_D_HAS_SUBDIRECTORY) Printf(" (Has sub directory)");
 
         if (list->flags & HOTLIST_D_IS_OPEN)
         {
@@ -782,11 +796,6 @@ static void hotlist_delete_item(hotlist_item * item)
         free(item);
         free(item->name);
 
-        /* The deletions will affect whether or not other */
-        /* items have subdirectories, so update the       */
-        /* relevant parts of all items in the list.       */
-
-        hotlist_scan_for_subdirectories(item->parent);
       }
       break;
 
@@ -961,52 +970,6 @@ static _kernel_oserror * hotlist_copy_item(hotlist_item * source, hotlist_item *
   }
 
   return NULL;
-}
-
-/*************************************************/
-/* hotlist_scan_for_subdirectories()             */
-/*                                               */
-/* This function will scan a directory contents  */
-/* for any subdirectories. If it finds one it    */
-/* will set the directory's                      */
-/* HOTLIST_HAS_SUBDIRECTORY bit, else it unsets  */
-/* the bit.                                      */
-/*                                               */
-/* Parameters: Pointer to the hotlist_item       */
-/*             struct representing the directory */
-/*             to scan.                          */
-/*************************************************/
-
-static void hotlist_scan_for_subdirectories(hotlist_item * item)
-{
-  hotlist_item * list;
-
-  /* Only proceed if we've been given an item and it */
-  /* is a directory                                  */
-
-  if (item && item->type == hl_directory)
-  {
-    list = item->data.directory_content;
-
-    /* Go through the contents looking for a directory */
-    /* within - as soon as one is found we can set the */
-    /* bit and exit                                    */
-
-    while(list)
-    {
-      if (list->type == hl_directory)
-      {
-        item->flags |= HOTLIST_D_HAS_SUBDIRECTORY;
-        return;
-      }
-      list = list->next;
-    }
-
-    /* If the loop exits there were no directories inside */
-    /* the given one, so unset the bit.                   */
-
-    item->flags &= ~HOTLIST_D_HAS_SUBDIRECTORY;
-  }
 }
 
 /*************************************************/
@@ -1953,6 +1916,8 @@ static void hotlist_window_preopen(hl_opentype type)
   WimpGetWindowStateBlock state;
   int height, width;
   unsigned int objectstate;
+  ObjectId parent_id;
+  ComponentId parent_component;
 
   if (type == already_open)
   {
@@ -1995,7 +1960,13 @@ static void hotlist_window_preopen(hl_opentype type)
   {
     show_error(window_get_wimp_handle(0, hotlist_windowid, &state.window_handle));
     wimp_get_window_state(&state);
-    wimp_open_window((WimpOpenWindowBlock*)&state);
+    toolbox_get_parent(0, hotlist_windowid, &parent_id, &parent_component);
+    toolbox_show_object(0, 
+                        hotlist_windowid, 
+                        Toolbox_ShowObject_FullSpec,
+                        &(state.visible_area),
+                        parent_id, parent_component);
+//    wimp_open_window((WimpOpenWindowBlock*)&state);
   }
 }
 
@@ -2851,6 +2822,14 @@ _kernel_oserror * hotlist_initialise(void)
                                           hotlist_show_urls_handler,
                                           NULL));
 
+  RetError(event_register_message_handler(Wimp_MDataSaveAck,
+                                          hotlist_data_save_ack_handler,
+                                          NULL));
+
+  RetError(event_register_message_handler(Wimp_MRAMFetch,
+                                          hotlist_ram_fetch_handler,
+                                          NULL));
+
   return NULL;
 }
 
@@ -3594,15 +3573,17 @@ void hotlist_start_drag(void)
 /* Returns:    1 if item is inside, 0 otherwise  */
 /*************************************************/
 
-static int hotlist_is_inside(hotlist_item *inside, hotlist_item *outside)
-{
-  while(inside)
-  {
-    if (inside == outside) return 1;
-    inside = inside->parent;
-  }
-  return 0;
-}
+/* This routine is no longer used but the code will be left incase it is needed */
+
+//  static int hotlist_is_inside(hotlist_item *inside, hotlist_item *outside)
+//  {
+//    while(inside)
+//    {
+//      if (inside == outside) return 1;
+//      inside = inside->parent;
+//    }
+//    return 0;
+//  }
 
 /*************************************************/
 /* hotlist_drag_completed_handler()              */
@@ -3625,7 +3606,7 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
   WimpGetWindowStateBlock state;
   int winx, winy, shift;
   unsigned int top, bottom, bottom2, tempint, position, xmin, xmax;
-  hotlist_item *targetitem, *sourceitem, *tempitem;
+  hotlist_item *targetitem, *sourceitem;
 
   _swix(OS_Byte, _INR(0,1) | _OUT(1), 121, 128, &shift); /* Check if SHIFT is pressed */
 
@@ -3711,31 +3692,6 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
 
     sourceitem = hotlist_find_selected_item();
 
-    /* Check to see if moving the selection to this position is acceptable -----------------------*/
-
-    /* This section is not sufficient for the new selection model ///////// */
-
-    tempitem = sourceitem;
-    while(tempitem)
-    {
-      if (tempitem->flags & HOTLIST_G_IS_SELECTED && tempitem->type == hl_directory)
-      {
-        if (hotlist_is_inside(targetitem, tempitem))
-        {
-          StrNCpy0(erb.errmess,
-                   lookup_token("NotIntoself:A directory cannot be copied or moved into itself.",
-                   0,
-                   0));
-          erb.errnum = Utils_Error_Custom_Message;
-          show_error_ret(&erb);
-          return 0;
-        }
-      }
-      tempitem = tempitem->next;
-    }
-
-    /* Only get this far if it is ----------------------------------------------------------------*/
-
     sourceitem->flags &= ~HOTLIST_G_IS_SELECTED;
 
     if (!shift)
@@ -3787,6 +3743,20 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
   }
   else
   {
+    if (hotlist_count_selected_items() == 1)
+    {
+      /* Dropped in non hotlist window - save as a URI file */
+      
+      sourceitem = hotlist_find_selected_item();
+      if (sourceitem->type == hl_url)
+      {
+        hotlist_initiate_uri_save(sourceitem);
+      }
+    }
+    else
+    {
+      /* Can't save URI file when saving more than one URL */
+    }
     /* Drag was dropped in non-hotlist window */
   }
 
@@ -3795,10 +3765,18 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
 
 void hotlist_autoscroll(int x, int y, int window_handle)
 {
+  ObjectId object, parent;
+  ComponentId component;
   int scroll_changed;
   WimpGetWindowStateBlock state;
+  BBox extent;
   static unsigned int hscroll_speed, vscroll_speed;          /* Separate h/v velocities */
   static int last_window_handle = 0;
+  _kernel_oserror *e;
+
+  object = 0;
+  show_error_ret(window_wimp_to_toolbox(0, window_handle, -1, &object, NULL));
+  if (!object) return;
 
   state.window_handle = window_handle;
 
@@ -3810,37 +3788,57 @@ void hotlist_autoscroll(int x, int y, int window_handle)
   }
 
   wimp_get_window_state(&state);
+  
+  window_get_extent(0, object, &extent);
 
   /* Auto scrolling of hotlist window when dragging */
   scroll_changed = 0;
   if ((y > state.visible_area.ymax - HOTLIST_SCROLL_BOUNDARY_SIZE) && y < state.visible_area.ymax)
   {
-    state.yscroll += vscroll_speed;
-    scroll_changed |= 1;
+    /* Don't scroll if already at bottom edge */
+    if (state.yscroll < extent.ymax)
+    {
+      state.yscroll += vscroll_speed;
+      scroll_changed |= 1;
+    }
   }
   else
     if ((y < state.visible_area.ymin + HOTLIST_SCROLL_BOUNDARY_SIZE) && y > state.visible_area.ymin)
     {
-      state.yscroll -= vscroll_speed;
-      scroll_changed |= 1;
+      /* Don't scroll if already at top edge */
+      if (state.yscroll > extent.ymin + (state.visible_area.ymax - state.visible_area.ymin)) ///////
+      {
+        state.yscroll -= vscroll_speed;
+        scroll_changed |= 1;
+      }
     }
 
   if ((x > state.visible_area.xmax - HOTLIST_SCROLL_BOUNDARY_SIZE) && x < state.visible_area.xmax)
   {
-    state.xscroll += hscroll_speed;
-    scroll_changed |= 2;
+    /* Don't scroll if already at right hand edge */
+    if (state.xscroll < extent.xmax - (state.visible_area.xmax - state.visible_area.xmin)) ///////
+    {
+      state.xscroll += hscroll_speed;
+      scroll_changed |= 2;
+    }
   }
   else
     if ((x < state.visible_area.xmin + HOTLIST_SCROLL_BOUNDARY_SIZE) && x > state.visible_area.xmin)
     {
-      state.xscroll -= hscroll_speed;
-      scroll_changed |= 2;
+      /* Don't scroll if already at left hand edge */
+      if (state.xscroll > extent.xmin)
+      {
+        state.xscroll -= hscroll_speed;
+        scroll_changed |= 2;
+      }
     }
 
   if (scroll_changed)
   {
-    wimp_open_window((WimpOpenWindowBlock*)&state);
+    toolbox_get_parent(0, object, &parent, &component);
+    toolbox_show_object(0, object, Toolbox_ShowObject_FullSpec, &(state.visible_area), parent, component);
   }
+  
   if (scroll_changed & 1)
   {
     vscroll_speed += HOTLIST_SCROLL_SPEED_INC;
@@ -3874,6 +3872,7 @@ static int hotlist_null_handler(int event_code, WimpPollBlock *event, IdBlock *i
   int x, y, buttons;
   unsigned int itemno, xmin, xmax;
   unsigned int item_height, item_dir_width, item_url_width;
+  int new_time;
   hotlist_item *item;
   ObjectId window;
   ComponentId component;
@@ -3914,6 +3913,20 @@ static int hotlist_null_handler(int event_code, WimpPollBlock *event, IdBlock *i
           hotlist_current_highlighted = item;
           highlighted_itemno = itemno;
           hotlist_redraw_items(highlighted_itemno, highlighted_itemno);
+          _swix(OS_ReadMonotonicTime, _OUTR(0, 0), &autoopen_oldtime);
+        }
+        else
+        {
+          _swix(OS_ReadMonotonicTime, _OUTR(0, 0), &new_time);
+          /* Auto open directories */
+          if (autoopen_delay &&
+              !(item->flags & HOTLIST_D_IS_OPEN) &&
+              (new_time - autoopen_oldtime) > autoopen_delay)
+          {
+            item->flags |= HOTLIST_D_IS_OPEN;
+            hotlist_window_preopen(already_open);
+            hotlist_redraw_items(highlighted_itemno, hotlist_count_displayed_items(hotlist_root->data.directory_content));
+          }
         }
       }
       else
@@ -4256,4 +4269,167 @@ static int hotlist_show_urls_handler(int event_code, ToolboxEvent *event, IdBloc
 static _kernel_oserror *hotlist_modified(unsigned int type)
 {
   return NULL;
+}
+
+
+
+_kernel_oserror *hotlist_initiate_uri_save(hotlist_item *item)
+{
+  WimpGetPointerInfoBlock block;
+  WimpMessage message;
+  int new_task_handle;
+  
+  wimp_get_pointer_info(&block);
+  
+  message.hdr.size        = sizeof(WimpMessage);
+  message.hdr.your_ref    = 0;
+  message.hdr.action_code = Wimp_MDataSave;
+  
+  message.data.data_save.destination_window = block.window_handle;
+  message.data.data_save.destination_icon   = block.icon_handle;
+  message.data.data_save.destination_x      = block.x;
+  message.data.data_save.destination_y      = block.y;
+  message.data.data_save.estimated_size     = strlen(item->data.url)+1;
+  message.data.data_save.file_type          = 0xf91; /* URI file - to be replaced with a defined value */
+  urlutils_leafname_from_url(item->data.url, message.data.data_save.leaf_name, 212);
+  
+  wimp_send_message(Wimp_EUserMessageRecorded,
+                    &message,
+                    block.window_handle,
+                    block.icon_handle,
+                    &new_task_handle);
+
+  hotlist_save_item = item;
+  hotlist_ram_transfer_sent = 0;
+  hotlist_save_type = HL_SAVE_URI;
+  
+  return NULL;
+}
+
+int hotlist_data_save_ack_handler(WimpMessage *message, void *handle)
+{
+  FILE *fileptr;
+  int new_task_handle;
+  _kernel_oserror *e;
+  
+  switch(hotlist_save_type)
+  {
+    case HL_SAVE_URI:
+    if (hotlist_save_item)
+    {
+      fileptr = fopen(message->data.data_save_ack.leaf_name, "w");
+      if (fileptr)
+      {
+        fprintf(fileptr, hotlist_save_item->data.url);
+        
+        if (fclose(fileptr))
+        {
+          show_error_ret(_kernel_last_oserror());
+          hotlist_save_item = NULL;
+          hotlist_save_type = HL_SAVE_NONE;
+          return 1;
+        }
+      
+        show_error_ret(_swix(OS_File,
+                       _INR(0,2),
+                       18,
+                       message->data.data_save_ack.leaf_name,
+                       0xf91));
+        
+        message->hdr.action_code = Wimp_MDataLoad;
+        message->hdr.your_ref    = message->hdr.my_ref;
+        
+        e = wimp_send_message(Wimp_EUserMessageRecorded,
+                              message,
+                              message->hdr.sender,
+                              0,
+                              &new_task_handle);
+        
+        if (e)
+        {
+          show_error_ret(e);
+          if (remove(message->data.data_save_ack.leaf_name))
+          {
+            show_error_ret(_kernel_last_oserror());
+          }
+          hotlist_save_item = NULL;
+          hotlist_save_type = HL_SAVE_NONE;
+          return 1;
+        }
+      }
+      else
+      {
+        show_error_ret(_kernel_last_oserror());
+      }
+      
+      hotlist_save_item = NULL;
+      hotlist_save_type = HL_SAVE_NONE;
+      return 1;
+    }
+    break;
+    default:
+    break;
+  }
+  
+  return 0;
+}
+
+
+int hotlist_ram_fetch_handler(WimpMessage *message, void *handle)
+{
+  int left, towrite, new_task_handle;
+  _kernel_oserror *e;
+  
+  if (hotlist_save_item)
+  {
+    /* Calculate the number of bytes left to send */
+    /* Don't include the terminating null as it is not required for URI files*/
+    left = (strlen(hotlist_save_item->data.url)) - hotlist_ram_transfer_sent;
+    /* Use the smaller of the buffer size and the number of bytes to write */
+    towrite = message->data.ram_fetch.buffer_size > left ? left : message->data.ram_fetch.buffer_size;
+
+    e = wimp_transfer_block(task_handle,
+                            (char*)(hotlist_save_item->data.url) + hotlist_ram_transfer_sent,
+                            message->hdr.sender,
+                            message->data.ram_fetch.buffer,
+                            towrite);
+
+    if (e)
+    {
+      hotlist_save_item = NULL;
+      show_error_ret(e);
+      return 1;
+    }
+
+    message->hdr.your_ref             = message->hdr.my_ref;
+    message->hdr.action_code          = Wimp_MRAMTransmit;
+    message->data.ram_transmit.nbytes = towrite;
+    
+    e = wimp_send_message(Wimp_EUserMessage,
+                          message,
+                          message->hdr.sender,
+                          0,
+                          &new_task_handle);
+    
+    if (e)
+    {
+      hotlist_save_item = NULL;
+      show_error_ret(e);
+      return 1;
+    }
+    
+    /* If no bytes were transmitted this is the last part of the ram transfer */
+    if (!left)
+    {
+      hotlist_save_item = NULL;
+      hotlist_ram_transfer_sent = 0;
+      return 1;
+    }
+    
+    /* Increase the total number of bytes send by the number just send */
+    hotlist_ram_transfer_sent += towrite;
+    
+    return 1;
+  }
+  return 0;
 }
