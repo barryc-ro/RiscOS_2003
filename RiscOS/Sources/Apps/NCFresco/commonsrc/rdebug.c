@@ -69,11 +69,52 @@ static void dump_dir(const char *dir, int level)
     while (offset != -1);
 }
 
+#define HELP_INFO_1	"\n" \
+	"close <handle>   close given file handle\n" \
+	"help             show this information\n" \
+	"openurl <url>    fetch and display the given URL\n" \
+	"ramdisc <size>   change ramdisc size by given amount (in Kbytes)\n" \
+	"suspend 0|1      turn debugging off and on\n" \
+	"show dbg         show debugging options enabled\n" \
+	"show heap        dump image heap\n" \
+	"show flex        dump flex info to stderr\n" \
+	"show mm          dump mm_malloc heap\n" \
+	"show mem         show memory summaries\n" \
+	"show da          show dynamic areas\n" \
+	"show files       show open files\n" \
+	"show cache       show cache structures\n" \
+	"show scrap       show scrap directory\n" \
+	"show history     show history list\n" \
+	"show plugins     list plugins\n" \
+	"show view <name> show info on named frame (__top for main)\n"
+
+#define HELP_INFO_2	"\n" \
+	"ACCDBG[N] 1|0    access debugging\n" \
+	"DICDBG[N] 1|0    image change debugging\n" \
+	"TABDBG[N] 1|0    tables debugging\n" \
+	"OBJDBG[N] 1|0    plugin debugging\n" \
+	"PRSDBG[N] 1|0    parser debugging\n" \
+	"PPDBG[N]  1|0    parser debugging\n" \
+	"RENDBG[N] 1|0    renderer debugging\n" \
+	"CNFDBG[N] 1|0    configure debugging\n" \
+	"FMTDBG[N] 1|0    formatter debugging\n" \
+	"IMGDBG[N] 1|0    image debugging\n" \
+	"CKIDBG[N] 1|0    cookie debugging\n" \
+	"STBDBG[N] 1|0    frontend debugging\n" \
+	"BENDBG[N] 1|0    backend debugging\n" \
+	"LNKDBG[N] 1|0    highlight debugging\n" \
+	"LAYDBG[N] 1|0    frames debugging\n"
+
 static int debug_cmd_handler(int argc, char *argv[], void *handle)
 {
     int handled = -1;
 
-    if (strcasecomp(argv[0], "show") == 0)
+    if (strcasecomp(argv[0], "help") == 0)
+    {
+	DBG(( HELP_INFO_1 ));
+	DBG(( HELP_INFO_2 ));
+    }
+    else if (strcasecomp(argv[0], "show") == 0)
     {
 	if (argc >= 2)
 	{
@@ -212,7 +253,7 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	    handled = 1;
 	}
     }
-    if (strcasecomp(argv[0], "close") == 0)
+    else if (strcasecomp(argv[0], "close") == 0)
     {
 	if (argc == 2)
 	{
@@ -220,7 +261,7 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	    handled = _swix(OS_File, _INR(0,1), 0, fh) == NULL;
 	}
     }
-    if (strcasecomp(argv[0], "ramdisc") == 0)
+    else if (strcasecomp(argv[0], "ramdisc") == 0)
     {
 	if (argc == 2)
 	{

@@ -13,6 +13,7 @@
 #include "objects.h"
 #include "gbf.h"
 
+#include "config.h"
 #include "filetypes.h"
 #include "interface.h"
 
@@ -73,7 +74,12 @@ void objects_set_position(be_doc doc, be_item ti, const wimp_box *box)
 
     if (obj->state.plugin.pp == NULL)
     {
-	if (!gbf_active(GBF_LOW_MEMORY))				/* don't start in low memory */
+	int width = box->x1 - box->x0;
+	int height = box->y1 - box->y0;
+
+	if ((obj->classid_ftype != -1 || obj->data_ftype != -1) &&	/* don't start if we have no type info */
+	    (config_sound_background || width > 2 || height > 2) &&	/* don't start if invisible(ish) and bgsound configured off */
+	    !gbf_active(GBF_LOW_MEMORY))				/* don't start in low memory */
 	{
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
 
