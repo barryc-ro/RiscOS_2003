@@ -1,10 +1,12 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
 
+TARGET=ncc
+
 #CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
-CFLAGS=-c -O -I${CLXPATH}  -DNO_VERSION_STRINGS -DEXTENSION_SYSV -DHOST_WANTS_NO_BANNER=1 $(CFL)
+CFLAGS=-g -c -O -I${CLXPATH}  -DNO_VERSION_STRINGS -DEXTENSION_SYSV -DHOST_WANTS_NO_BANNER=1 $(CFL)
 CC=gcc
 DERIVED=headers.c peeppat.c datenow.h errors.h
 
@@ -34,8 +36,8 @@ HDRPATHS = ../cl/stdh/assert.h ../cl/stdh/ctype.h ../cl/stdh/errno.h \
 ../cl/stdh/stdarg.h ../cl/stdh/stddef.h ../cl/stdh/stdio.h \
 ../cl/stdh/stdlib.h ../cl/stdh/string.h ../cl/stdh/time.h 
 
-noarg: ncc
-	@echo "Made ncc (the default target)"
+noarg: ${TARGET}
+	@echo "Made ${TARGET} (the default target)"
 
 # Dependencies
 aaof.o:	aaof.c
@@ -671,15 +673,15 @@ vargen.o:	util.h
 vargen.o:	xrefs.h
 	$(CC) $(CFLAGS) $(CFLvargen) vargen.c -o vargen.o
 
-ncc: $(OBJALL)
-ncc: $(HSOURCE)
-ncc: $(DERIVED)
-ncc: $(EXTLIB1)
-	$(CC) -o ncc $(OBJALL) $(EXTLIB1)
-	@echo "Made ncc"
+${TARGET}: $(OBJALL)
+${TARGET}: $(HSOURCE)
+${TARGET}: $(DERIVED)
+${TARGET}: $(EXTLIB1)
+	$(CC) -o ${TARGET} $(OBJALL) $(EXTLIB1)
+	@echo "Made ${TARGET}"
 
-install: ncc
-	cp -p ncc ${RISCOS_BUILD_TOOLS}/armcc
+install: ${TARGET}
+	install ${TARGET} ${RISCOS_BUILD_TOOLS}/armcc
 	strip ${RISCOS_BUILD_TOOLS}/armcc
 
 errors.h: genhdrs miperrs.h feerrs.h mcerrs.h
@@ -698,17 +700,17 @@ peepgen: peepgen.c jopcode.h mcdpriv.h
 
 clean:
 	-rm ${OBJALL}
-	-rm ncc peepgen genhdrs
+	-rm ${TARGET} peepgen genhdrs
 	-rm $(DERIVED)
-	@echo cleaned cc
+	@echo cleaned ${TARGET}
 
 realclean: clean
 	-find . -type l -print | xargs rm
-	@echo cleaned cc links
+	@echo cleaned ${TARGET} links
 
 links:
 	./mklinks
-	@echo made cc links
+	@echo made ${TARGET} links
 
 datenow.h: FRC
 	touch -f datenow.h
