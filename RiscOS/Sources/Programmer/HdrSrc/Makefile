@@ -11,6 +11,9 @@
 # 19-Oct-94  AMcC   Export ImageSize hdrs
 # 31-Oct-94  AMcC   Export IO.IOMDL (IOMD for Morris)
 # 03-Dec-96  RWB    Don't derive headers, import them instead.
+# 21-Aug-99  SNB    Restored derived headers now that our master copies 
+#                   are in CVS. Added use of OPTIONS=ALL to force all 
+#                   Machine and ImageSize headers to be exported.
 #
 
 #
@@ -21,15 +24,17 @@ HDIR   = <CExport$dir>
 
 # Generic options:
 #
-MKDIR    = cdir
+MKDIR    = mkdir -p
+AC       = access
 AS       = aasm
 CP       = copy
 RM       = remove
 TOKENISE = tokenise
 HDR2H    = build:Hdr2H
 
-CFLAGS   = -c -depend !Depend -IC:
-AFLAGS   = -depend !Depend -stamp -quit
+CFLAGS   = -c -depend !Depend ${THROWBACK} -IC:
+AFLAGS   = -depend !Depend ${THROWBACK} -stamp -quit
+ACFLAGS  = rw/r
 CPFLAGS  = ~cfr~v
 
 TOKENS   = Hdr:Tokens
@@ -91,42 +96,45 @@ EXPORTS   = \
  ${HDRDIR}.VIDC.VIDC1a \
  ${HDRDIR}.VIDC.VIDC20 \
  ${HDIR}.Global.h.AUN \
+ ${HDIR}.Global.h.CMOS \
  ${HDIR}.Global.h.Countries \
  ${HDIR}.Global.h.Devices \
+ ${HDIR}.Global.h.DevNos \
  ${HDIR}.Global.h.DrawObj \
  ${HDIR}.Global.h.DrawTags \
+ ${HDIR}.Global.h.EnvNumbers \
  ${HDIR}.Global.h.FileTypes \
  ${HDIR}.Global.h.FreeWay \
  ${HDIR}.Global.h.FSNumbers \
+ ${HDIR}.Global.h.Heap \
+ ${HDIR}.Global.h.KeyV \
  ${HDIR}.Global.h.OsWords \
+ ${HDIR}.Global.h.PaletteV \
  ${HDIR}.Global.h.PDriverReg \
  ${HDIR}.Global.h.PDumperReg \
  ${HDIR}.Global.h.PoduleReg \
+ ${HDIR}.Global.h.Pointer \
  ${HDIR}.Global.h.Services \
  ${HDIR}.Global.h.SWIs \
  ${HDIR}.Global.h.Upcall \
- ${HDIR}.Global.h.DevNos \
- ${HDIR}.Global.h.EnvNumbers \
- ${HDIR}.Global.h.Heap \
- ${HDIR}.Global.h.KeyV \
- ${HDIR}.Global.h.PaletteV \
- ${HDIR}.Global.h.Pointer \
  ${HDIR}.Global.h.Tokens \
- ${HDIR}.Global.h.CMOS \
+
+#
+# Derived assembler header files
+#
+FILETYPES = Derived.FileTypes
+SWIS      = Derived.SWIs
 
 #
 # Generic rules:
 #
 
-export: ${EXPORTS} Dirs
+export: ${OPTIONS} ${EXPORTS} Dirs
         @echo ${COMPONENT}: export complete
 
 Dirs:
-        ${MKDIR} <build$dir>.Export
-        ${MKDIR} <build$dir>.Export.C
         ${MKDIR} <build$dir>.Export.C.h
         ${MKDIR} <build$dir>.Export.C.o
-        ${MKDIR} <build$dir>.Export.Hdr
         ${MKDIR} <build$dir>.Export.Hdr.Global
         ${MKDIR} <build$dir>.Export.Hdr.Interface
         ${MKDIR} <build$dir>.Export.Hdr.Interface2
@@ -137,54 +145,92 @@ Dirs:
         ${MKDIR} ${HDRDIR}.Machine
         ${MKDIR} ${HDRDIR}.MEMM
         ${MKDIR} ${HDRDIR}.VIDC
-        ${MKDIR} ${HDIR}.Global
         ${MKDIR} ${HDIR}.Global.h
-        ${MKDIR} ${HDIR}.Interface
         ${MKDIR} ${HDIR}.Interface.h
+        ${MKDIR} ${HDIR}.Interface2.h
 
 clean:
-         @echo ${COMPONENT}: NOT cleaning imported headers
+	${RM} ${FILETYPES}
+	${RM} ${SWIS}
+        @echo ${COMPONENT}: derived headers cleaned
+
+#
+# Special rule for exporting all ImageSize and Machine files.
+# Trigger by invoking the export with OPTIONS=ALL.
+#
+ALL: ${HDRDIR}.Machine.Machine ${HDRDIR}.ImageSize.<ImageSize>
+	${CP} hdr.Machine ${HDRDIR}.Machine ${CPFLAGS}
+	${CP} hdr.ImageSize ${HDRDIR}.ImageSize ${CPFLAGS}
+
+#
+# Rules for deriving headers:
+#
+${FILETYPES}: Register.ISV-Types s.DoTypes
+        ${AS} ${AFLAGS} -from s.DoTypes -to $@ 
+        ${AC} $@ ${ACFLAGS}
+        settype $@ text
+
+${SWIS}: Register.ISV-SWIs s.DoSWIs
+        ${AS} ${AFLAGS} -from s.DoSWIs -to $@ 
+        ${AC} $@ ${ACFLAGS}
+        settype $@ text
 
 #
 # Rules for exporting:
 #
 
 # Registration headers:
-${HDRDIR}.AUN:        Import.Global.AUN;            ${CP} Import.Global.AUN        $@ ${CPFLAGS}
-${HDRDIR}.Countries:  Import.Global.Countries;      ${CP} Import.Global.Countries  $@ ${CPFLAGS}
-${HDRDIR}.Devices:    Import.Global.Devices;        ${CP} Import.Global.Devices    $@ ${CPFLAGS}
-${HDRDIR}.DrawObj:    Import.Global.DrawObj;        ${CP} Import.Global.DrawObj    $@ ${CPFLAGS}
-${HDRDIR}.DrawTags:   Import.Global.DrawTags;       ${CP} Import.Global.DrawTags   $@ ${CPFLAGS}
-${HDRDIR}.FileTypes:  Import.Global.FileTypes;      ${CP} Import.Global.FileTypes  $@ ${CPFLAGS}
-${HDRDIR}.FSNumbers:  Import.Global.FSNumbers;      ${CP} Import.Global.FSNumbers  $@ ${CPFLAGS}
-${HDRDIR}.NewErrors:  Import.Global.NewErrors;      ${CP} Import.Global.NewErrors  $@ ${CPFLAGS}
-${HDRDIR}.OsWords:    Import.Global.OsWords;        ${CP} Import.Global.OsWords    $@ ${CPFLAGS}
-${HDRDIR}.PDriverReg: Import.Global.PDriverReg;     ${CP} Import.Global.PDriverReg $@ ${CPFLAGS}
-${HDRDIR}.PDumperReg: Import.Global.PDumperReg;     ${CP} Import.Global.PDumperReg $@ ${CPFLAGS}
-${HDRDIR}.PoduleReg:  Import.Global.PoduleReg;      ${CP} Import.Global.PoduleReg  $@ ${CPFLAGS}
-${HDRDIR}.PrintTypes: Import.Global.PrintTypes;     ${CP} Import.Global.PrintTypes $@ ${CPFLAGS}
-${HDRDIR}.Services:   Import.Global.Services;       ${CP} Import.Global.Services   $@ ${CPFLAGS}
-${HDRDIR}.SWIs:       Import.Global.SWIs;           ${CP} Import.Global.SWIs       $@ ${CPFLAGS}
-${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall     $@ ${CPFLAGS}
+${HDRDIR}.AUN:        Register.AUN;            ${CP} Register.AUN        $@ ${CPFLAGS}
+${HDRDIR}.Countries:  Register.Countries;      ${CP} Register.Countries  $@ ${CPFLAGS}
+${HDRDIR}.Devices:    Register.Devices;        ${CP} Register.Devices    $@ ${CPFLAGS}
+${HDRDIR}.DevNos:     Register.DevNos;         ${CP} Register.DevNos     $@ ${CPFLAGS}
+${HDRDIR}.DrawObj:    Register.DrawObj;        ${CP} Register.DrawObj    $@ ${CPFLAGS}
+${HDRDIR}.DrawTags:   Register.DrawTags;       ${CP} Register.DrawTags   $@ ${CPFLAGS}
+${HDRDIR}.FSNumbers:  Register.FSNumbers;      ${CP} Register.FSNumbers  $@ ${CPFLAGS}
+${HDRDIR}.KEYV:       Register.KEYV;           ${CP} Register.KEYV       $@ ${CPFLAGS}
+${HDRDIR}.Messages:   Register.Messages;       ${CP} Register.Messages   $@ ${CPFLAGS}
+${HDRDIR}.NewErrors:  Register.NewErrors;      ${CP} Register.NewErrors  $@ ${CPFLAGS}
+${HDRDIR}.OsWords:    Register.OsWords;        ${CP} Register.OsWords    $@ ${CPFLAGS}
+${HDRDIR}.PaletteV:   Register.PaletteV;       ${CP} Register.PaletteV   $@ ${CPFLAGS}
+${HDRDIR}.Pointer:    Register.Pointer;        ${CP} Register.Pointer    $@ ${CPFLAGS}
+${HDRDIR}.PDriverReg: Register.PDriverReg;     ${CP} Register.PDriverReg $@ ${CPFLAGS}
+${HDRDIR}.PDumperReg: Register.PDumperReg;     ${CP} Register.PDumperReg $@ ${CPFLAGS}
+${HDRDIR}.PoduleReg:  Register.PoduleReg;      ${CP} Register.PoduleReg  $@ ${CPFLAGS}
+${HDRDIR}.PrintTypes: Register.PrintTypes;     ${CP} Register.PrintTypes $@ ${CPFLAGS}
+${HDRDIR}.Services:   Register.Services;       ${CP} Register.Services   $@ ${CPFLAGS}
+${HDRDIR}.UpCall:     Register.UpCall;         ${CP} Register.UpCall     $@ ${CPFLAGS}
 
-# The C versions of imported files.
-${HDIR}.Global.h.AUN:        Import.Global.AUN ${HDR2H};            perl ${HDR2H} Import.Global.AUN        $@
-${HDIR}.Global.h.Countries:  Import.Global.Countries ${HDR2H};      perl ${HDR2H} Import.Global.Countries  $@
-${HDIR}.Global.h.Devices:    Import.Global.Devices ${HDR2H};        perl ${HDR2H} Import.Global.Devices    $@
-${HDIR}.Global.h.DrawObj:    Import.Global.DrawObj ${HDR2H};        perl ${HDR2H} Import.Global.DrawObj    $@
-${HDIR}.Global.h.DrawTags:   Import.Global.DrawTags ${HDR2H};       perl ${HDR2H} Import.Global.DrawTags   $@
-${HDIR}.Global.h.FileTypes:  Import.Global.FileTypes ${HDR2H};      perl ${HDR2H} Import.Global.FileTypes  $@
-${HDIR}.Global.h.FreeWay:    Import.Global.FreeWay ${HDR2H};        perl ${HDR2H} Import.Global.FreeWay    $@
-${HDIR}.Global.h.FSNumbers:  Import.Global.FSNumbers ${HDR2H};      perl ${HDR2H} Import.Global.FSNumbers  $@
+# Derived registration headers:
+${HDRDIR}.FileTypes:  ${FILETYPES};            ${CP} ${FILETYPES}        $@ ${CPFLAGS}
+${HDRDIR}.SWIs:       ${SWIS};                 ${CP} ${SWIS}             $@ ${CPFLAGS}
+
+# The C versions of registration headers:
+${HDIR}.Global.h.AUN:        Register.AUN ${HDR2H};            perl ${HDR2H} Register.AUN        $@
+${HDIR}.Global.h.Countries:  Register.Countries ${HDR2H};      perl ${HDR2H} Register.Countries  $@
+${HDIR}.Global.h.Devices:    Register.Devices ${HDR2H};        perl ${HDR2H} Register.Devices    $@
+${HDIR}.Global.h.DevNos:     Register.DevNos ${HDR2H};         perl ${HDR2H} Register.DevNos     $@
+${HDIR}.Global.h.DrawObj:    Register.DrawObj ${HDR2H};        perl ${HDR2H} Register.DrawObj    $@
+${HDIR}.Global.h.DrawTags:   Register.DrawTags ${HDR2H};       perl ${HDR2H} Register.DrawTags   $@
+${HDIR}.Global.h.EnvNumbers: Register.EnvNumbers ${HDR2H};     perl ${HDR2H} Register.EnvNumbers $@
+${HDIR}.Global.h.FreeWay:    Register.FreeWay ${HDR2H};        perl ${HDR2H} Register.FreeWay    $@
+${HDIR}.Global.h.FSNumbers:  Register.FSNumbers ${HDR2H};      perl ${HDR2H} Register.FSNumbers  $@
+${HDIR}.Global.h.KeyV:       Register.KeyV ${HDR2H};           perl ${HDR2H} Register.KeyV       $@
+${HDIR}.Global.h.Messages:   Register.Messages ${HDR2H};       perl ${HDR2H} Register.Messages   $@
 # NewErrors still has a few problems.  Partial support is there.
-${HDIR}.Global.h.OsWords:    Import.Global.OsWords ${HDR2H};        perl ${HDR2H} Import.Global.OsWords    $@
-${HDIR}.Global.h.PDriverReg: Import.Global.PDriverReg ${HDR2H};     perl ${HDR2H} Import.Global.PDriverReg $@
-${HDIR}.Global.h.PDumperReg: Import.Global.PDumperReg ${HDR2H};     perl ${HDR2H} Import.Global.PDumperReg $@
-${HDIR}.Global.h.PoduleReg:  Import.Global.PoduleReg ${HDR2H};      perl ${HDR2H} Import.Global.PoduleReg  $@
+${HDIR}.Global.h.OsWords:    Register.OsWords ${HDR2H};        perl ${HDR2H} Register.OsWords    $@
+${HDIR}.Global.h.PaletteV:   Register.PaletteV ${HDR2H};       perl ${HDR2H} Register.PaletteV   $@
+${HDIR}.Global.h.PDriverReg: Register.PDriverReg ${HDR2H};     perl ${HDR2H} Register.PDriverReg $@
+${HDIR}.Global.h.PDumperReg: Register.PDumperReg ${HDR2H};     perl ${HDR2H} Register.PDumperReg $@
+${HDIR}.Global.h.PoduleReg:  Register.PoduleReg ${HDR2H};      perl ${HDR2H} Register.PoduleReg  $@
+${HDIR}.Global.h.Pointer:    Register.Pointer ${HDR2H};        perl ${HDR2H} Register.Pointer    $@
 # PrintTypes is just full of comments
-${HDIR}.Global.h.Services:   Import.Global.Services ${HDR2H};       perl ${HDR2H} Import.Global.Services   $@
-${HDIR}.Global.h.SWIs:       Import.Global.SWIs ${HDR2H};           perl ${HDR2H} Import.Global.SWIs       $@
-${HDIR}.Global.h.UpCall:     Import.Global.UpCall ${HDR2H};         perl ${HDR2H} Import.Global.UpCall     $@
+${HDIR}.Global.h.Services:   Register.Services ${HDR2H};       perl ${HDR2H} Register.Services   $@
+${HDIR}.Global.h.UpCall:     Register.UpCall ${HDR2H};         perl ${HDR2H} Register.UpCall     $@
+
+# The C versions of derived registration headers:
+${HDIR}.Global.h.FileTypes:  ${FILETYPES} ${HDR2H};            perl ${HDR2H} ${FILETYPES}        $@
+${HDIR}.Global.h.SWIs:       ${SWIS} ${HDR2H};                 perl ${HDR2H} ${SWIS}             $@
+
 
 # The C versions of local header files.
 # Files which don't work yet:
@@ -194,13 +240,7 @@ ${HDIR}.Global.h.UpCall:     Import.Global.UpCall ${HDR2H};         perl ${HDR2H
 #   Sprite      Messages
 # Files which have no equivalent.
 #   DDVMacros   Debug       ExtraLong   ListOpts    Macros      NdrDebug    Proc        Symbols
-${HDIR}.Global.h.DevNos:     Hdr.DevNos ${HDR2H};         perl ${HDR2H} Hdr.DevNos     $@
-${HDIR}.Global.h.EnvNumbers: Hdr.EnvNumbers ${HDR2H};     perl ${HDR2H} Hdr.EnvNumbers $@
 ${HDIR}.Global.h.Heap:       Hdr.Heap ${HDR2H};           perl ${HDR2H} Hdr.Heap       $@
-${HDIR}.Global.h.KeyV:       Hdr.KeyV ${HDR2H};           perl ${HDR2H} Hdr.KeyV       $@
-${HDIR}.Global.h.Messages:   Hdr.Messages ${HDR2H};       perl ${HDR2H} Hdr.Messages   $@
-${HDIR}.Global.h.Pointer:    Hdr.Pointer ${HDR2H};        perl ${HDR2H} Hdr.Pointer    $@
-${HDIR}.Global.h.PaletteV:   Hdr.PaletteV ${HDR2H};       perl ${HDR2H} Hdr.PaletteV   $@
 ${HDIR}.Global.h.Sprite:     Hdr.Sprite ${HDR2H};         perl ${HDR2H} Hdr.Sprite     $@
 ${HDIR}.Global.h.Tokens:     Hdr.Tokens ${HDR2H};         perl ${HDR2H} Hdr.Tokens     $@
 ${HDIR}.Global.h.CMOS:       Hdr.CMOS ${HDR2H};           perl ${HDR2H} Hdr.CMOS       $@
@@ -234,13 +274,8 @@ ${HDRDIR}.Proc:              hdr.Proc;              ${CP} hdr.Proc              
 
 # The rest:
 ${HDRDIR}.CMOS:              hdr.CMOS;              ${CP} hdr.CMOS                 $@ ${CPFLAGS}
-${HDRDIR}.DevNos:            hdr.DevNos;            ${CP} hdr.DevNos               $@ ${CPFLAGS}
 ${HDRDIR}.Heap:              hdr.Heap;              ${CP} hdr.Heap                 $@ ${CPFLAGS}
-${HDRDIR}.KEYV:              hdr.KEYV;              ${CP} hdr.KEYV                 $@ ${CPFLAGS}
 ${HDRDIR}.ListOpts:          hdr.ListOpts;          ${CP} hdr.ListOpts             $@ ${CPFLAGS}
-${HDRDIR}.Messages:          hdr.Messages;          ${CP} hdr.Messages             $@ ${CPFLAGS}
-${HDRDIR}.PaletteV:          hdr.PaletteV;          ${CP} hdr.PaletteV             $@ ${CPFLAGS}
-${HDRDIR}.Pointer:           hdr.Pointer;           ${CP} hdr.Pointer              $@ ${CPFLAGS}
 ${HDRDIR}.Sprite:            hdr.Sprite;            ${CP} hdr.Sprite               $@ ${CPFLAGS}
 ${HDRDIR}.Symbols:           hdr.Symbols;           ${CP} hdr.Symbols              $@ ${CPFLAGS}
 ${HDRDIR}.System:            hdr.System;            ${CP} hdr.System               $@ ${CPFLAGS}
