@@ -6,7 +6,7 @@
 *                                                                            *
 * PURPOSE: Main module source code                                           *
 *                                                                            *
-* VERSION: Version 1.00, Steve Revill 2nd/March/1998                         *
+* VERSION: Version 1.05, Steve Revill 12th/March/1998                        *
 *                                                                            *
 *###########################################################################*/
 
@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stddef.h>
+#include "stddef.h"
 #include "module.h"
 #include "filegen.h"
 #include "cmhg_modem.h"
@@ -25,8 +25,7 @@
 #include "sys/types.h"
 #include "netinet/in.h"
 
-#define vdu4() _swix(0x104, 0)
-#define os_removecursors()  _swix(OS_RemoveCursors, 0)
+#define os_removecursors()  _swix(OS_RemoveCursors,  0)
 #define os_restorecursors() _swix(OS_RestoreCursors, 0)
 #define int16 short
 #define int32 long
@@ -52,27 +51,22 @@
 #define dialB_svc_error1           0x07
 #define dialB_svc_error2           0x11
 #define dialB_svc_dialling         0x01
-/* NCDialCtrl service call status meanings */
-#define ctrl_svc_nodial            0x81
-#define ctrl_svc_busy              0x82
-#define ctrl_svc_nocarrier         0x83
-#define ctrl_svc_noserver          0x84
-#define ctrl_svc_timeout           0x85
-#define ctrl_svc_error             0x86
-#define ctrl_svc_dialling          0x91
-#define ctrl_svc_connecting        0x92
+#define dialB_svc_hanging          0x02
+#define dialB_svc_answering        0x03
+
 /* NCDialCtrl_modinit definitions */
 #define SERIALDEV_VAR "SerialDev$Path"
-#define SERIALDEV_TXT "Resources:$.Resources.NCDialCtrl."
 #define INET_VAR      "Inet$Path"
-#define INET_TXT      "Resources:$.Resources.NCDialCtrl."
 #define DYNAMIC_VAR   "FileDyn$Path"
+#define SERIALDEV_TXT "Resources:$.Resources.NCDialCtrl."
+#define INET_TXT      "Resources:$.Resources.NCDialCtrl."
 #define DYNAMIC_TXT   "<Wimp$ScrapDir>.NCDialCtrl."
 #define INETDBASE_VAR "InetDBase$Path"
 #define INETDBASE_TXT "Inet:Files.,FileDyn:Files."
 /* DiallerB SWI numbers */
 #define DiallerB_Dial   0x50C80
 #define DiallerB_HangUp 0x50C81
+#define DiallerB_Status 0x50C82
 /* Possible connection states */
 #define state_offline     0  /* There is no connection or activity                         */
 #define state_dialling    1  /* A PPPConnect has been issued but no IPUp received          */
@@ -87,21 +81,28 @@ typedef void (*P_FSStartingFN)(void *r0);
 #define TRUE (!FALSE)
 #endif
 
-carddata card;
+carddata   card;
 void       *pwp;                       /* Private word pointer  */
-BOOL       silent    = TRUE;          /* Debug output flag     */
 static int mod_state = state_offline;  /* Current state of the connection */
+#ifdef developing
+  BOOL debug = TRUE;  /* Debug output flag can be toggled with  SWI Silent  and  *Silent  */
+#else
+  BOOL debug = FALSE;
+#endif
 
 char *cmos_number(void);
 char *expand_special(char *temp);
+void pause(int cs);
 void LED_State(BOOL state);
 void DiallerService(int reason);
 void Commence(void);
 void not_connected_svc(int byte);
-void dialling_svc(int byte);
+void changing_svc(int byte);
 void connecting_svc(int byte);
 void Handle_diallerB_svc(int status);
+void discon_func(void);
 void safe_hangup(void);
+void new_state(int new);
 
 
 
@@ -112,6 +113,86 @@ void safe_hangup(void);
 /*############################################################*/
 
 
+
+void new_state(int new)
+{
+DEBUG_TOP("Before: ");
+  switch (mod_state)
+  {
+    case (state_offline):
+    {
+DEBUG_PRINT("state = offline");
+      break;
+    }
+    case (state_dialling):
+    {
+DEBUG_PRINT("state = dialling");
+      break;
+    }
+    case (state_ppp_goingup):
+    {
+DEBUG_PRINT("state = ppp_goingup");
+      break;
+    }
+    case (state_online):
+    {
+DEBUG_PRINT("state = online");
+      break;
+    }
+    case (state_hanging):
+    {
+DEBUG_PRINT("state = hanging");
+      break;
+    }
+  }
+
+  mod_state = new;
+
+DEBUG_PRINT("  now: ");
+  switch (mod_state)
+  {
+    case (state_offline):
+    {
+DEBUG_PRINT("state = offline\n");
+      break;
+    }
+    case (state_dialling):
+    {
+DEBUG_PRINT("state = dialling\n");
+      break;
+    }
+    case (state_ppp_goingup):
+    {
+DEBUG_PRINT("state = ppp_goingup\n");
+      break;
+    }
+    case (state_online):
+    {
+DEBUG_PRINT("state = online\n");
+      break;
+    }
+    case (state_hanging):
+    {
+DEBUG_PRINT("state = hanging\n");
+      break;
+    }
+  }
+}
+
+/********************************************************************************
+ *
+ * FUNCTION: pause
+ *
+ * PURPOSE:  Wait for a given number of centi-seconds
+ *
+ */
+void pause(int cs)
+{
+  int finish;
+
+  finish = monotonic_time() + cs;
+  while (monotonic_time() < finish) {};
+}
 
 /************************
 *
@@ -150,8 +231,6 @@ static char *convert_digit(char *tag, int len, char *phone, BOOL pulse)
       shift += 4;
     }
   }
-
-if(!silent)fprintf(stderr, "convert_digit gives '%s'\n", phone);
 
   return(phone);
 }
@@ -234,7 +313,6 @@ char *cmos_number(void)
   }
   *ptr = '\0';
   ptr++;
-if(!silent)fprintf(stderr, "cmos gave '%s'\n", phone);
 
   return(phone);
 }
@@ -248,27 +326,23 @@ if(!silent)fprintf(stderr, "cmos gave '%s'\n", phone);
 */
 char *expand_special(char *temp)
 {
-if(!silent)fprintf(stderr,"   NOPE. Expand things like 'send-user'\n");
   if (strlen(temp) > 0)
   {
     if (0 == strcmp(temp, "ATDT"))
     {
-if(!silent)fprintf(stderr,"   Calling cmos_number()\n");
       temp = cmos_number();
       strcat(temp, card.pstnnum);
-if(!silent)fprintf(stderr,"   Back from cmos_number() %s\n", temp);
+      strcat(temp, ";");
     }
     else
     if (0 == strcmp(temp, "send_user"))
     {
       temp = card.loginid;
-if(!silent)fprintf(stderr,"   Reading card.loginid %s\n", temp);
     }
     else
     if (0 == strcmp(temp, "send_pass"))
     {
       temp = card.loginsecret;
-if(!silent)fprintf(stderr,"   Reading card.logsecret %s\n", temp);
     }
   }
 
@@ -306,21 +380,22 @@ void LED_State(BOOL state)
 */
 void DiallerService(int reason)
 {
-  if (reason == NCDialler_IPDown)
+  if (reason == NCDialCtrl_IPDown)
   {
     LED_State(FALSE);
   }
-  if (reason == NCDialler_IPUp)
+  if (reason == NCDialCtrl_IPUp)
   {
     LED_State(TRUE);
   }
-if(!silent){vdu4();fprintf(stderr, "Issuing service call %d\n", reason);}
+DEBUG_TOPM((stderr, "Issuing a service call: %d\n", reason));
+DEBUG_ECHOM((d_file, "      Issuing a service call: %d\n", reason));
   _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, reason);
   if (0x80 == (reason & 0xF0))
   {
-if(!silent)fprintf(stderr, "Issuing service call NCDialler_IPDown\n");
-    mod_state = state_offline;
-    _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, NCDialler_IPDown);
+DEBUG_PRINT("          Svc indicates an error from DiallerB. Issuing svc call IPDown\n");
+    new_state(state_offline);
+    _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, NCDialCtrl_IPDown);
   }
 }
 
@@ -337,16 +412,19 @@ void Commence(void)
   {
     case (state_online):
     {
-      DiallerService(NCDialler_IPUp);
+DEBUG_PRINT("    WARNING: 'Commence' state = online. Issue an IPUp svc\n")
+      DiallerService(NCDialCtrl_IPUp);
       break;
     }
+
     case (state_offline):
     {
-      mod_state = state_dialling;
-      DiallerService(NCDialler_Starting);
+DEBUG_PRINT("    state = offline\n");
+      new_state(state_dialling);
+      DiallerService(NCDialCtrl_Starting);
       if (FALSE == CreateFiles(&card))
       {
-        DiallerService(NCDialler_Error);     /* mod_state becomes state_offline as a side-effect of this call */
+        DiallerService(NCDialCtrl_Error);     /* mod_state becomes state_offline as a side-effect of this call */
       }
       else
       {
@@ -354,15 +432,79 @@ void Commence(void)
         err_block = _swix(DiallerB_Dial, _INR(0, 4), 0, device_name, scrap_dial_scr, scrap_hang_scr, dial_speed);
         if (err_block)
         {
-if(!silent)fprintf(stderr,"Swi returned error num: %d  str: %s\n",err_block->errnum,err_block->errmess);
-          DiallerService(NCDialler_Error);   /* mod_state becomes state_offline as a side-effect of this call */
+DEBUG_PRINTM((stderr,"    Swi returned error num: %d  str: %s\n",err_block->errnum,err_block->errmess));
+DEBUG_ECHO("    Swi returned error\n");
+          DiallerService(NCDialCtrl_Error);   /* mod_state becomes state_offline as a side-effect of this call */
         }
         else
         {
-if(!silent)fprintf(stderr, "Issuing a dialling svc call\n");
-          DiallerService(NCDialler_Dialling);
+DEBUG_PRINT("    Issuing a dialling svc call\n");
+          DiallerService(NCDialCtrl_Dialling);
         }
       }
+      break;
+    }
+
+    case (state_dialling):
+    {
+DEBUG_PRINT("    WARNING: 'Commence' state = dialling. Issue a dialling svc\n");
+      break;
+    }
+
+    case (state_ppp_goingup):
+    {
+DEBUG_PRINT("    WARNING: 'Commence' state = ppp_goingup. Issue a connecting svc\n");
+     break;
+    }
+
+    case (state_hanging):
+    {
+DEBUG_PRINT("    WARNING: 'Commence' state = hanging\n");
+      break;
+    }
+  }
+}
+
+/**************************
+*
+* FUNCTION: temp_func
+*
+* PURPOSE:  Handle a disconnected svc call from DiallerB
+*
+*/
+void discon_func(void)
+{
+  switch (mod_state)
+  {
+    case (state_offline):
+    {
+DEBUG_PRINT("    state = offline (no change)\n");
+      break;
+    }
+
+    case (state_dialling):
+    {
+DEBUG_PRINT("    WARNING: 'not_connected_svc' state = dialling\n");
+      break;
+    }
+
+    case (state_ppp_goingup):
+    {
+      new_state(state_offline);
+      break;
+    }
+
+    case (state_online):
+    {
+DEBUG_PRINT("    WARNING: 'temp_func' state = online\n");
+      new_state(state_offline);
+      break;
+    }
+
+    case (state_hanging):
+    {
+      new_state(state_offline);
+      break;
     }
   }
 }
@@ -378,66 +520,77 @@ void not_connected_svc(int byte)
 {
   switch (byte)
   {
-    case dialB_svc_idle:
+    case (dialB_svc_idle):
     {
-if(!silent){vdu4();fprintf(stderr, "Now DiallerB is offline and PPP is disconnected\n");}
-      if (state_dialling != mod_state)
-      {
-        mod_state = state_offline;
-      }
+      discon_func();
       break;
     }
-    case dialB_svc_nodial:
+    case (dialB_svc_dialling):
     {
-if(!silent)fprintf(stderr, "dialB_svc_nodial\n");
-      DiallerService(ctrl_svc_nodial);
+DEBUG_PRINT("    Executing dial script\n");
       break;
     }
-    case dialB_svc_busy:
+    case (dialB_svc_hanging):
     {
-if(!silent)fprintf(stderr, "dialB_svc_busy\n");
-      DiallerService(ctrl_svc_busy);
+DEBUG_PRINT("    Executing hangup script\n");
       break;
     }
-    case dialB_svc_nocarrier:
+    case (dialB_svc_answering):
     {
-if(!silent)fprintf(stderr, "dialB_svc_nocarrier\n");
-      DiallerService(ctrl_svc_nocarrier);
+DEBUG_PRINT("    Executing answer script\n");
       break;
     }
-    case dialB_svc_noserver:
+    case (dialB_svc_nodial):
     {
-if(!silent)fprintf(stderr, "dialB_svc_noserver\n");
-      DiallerService(ctrl_svc_noserver);
+DEBUG_PRINT("    Issue svc call nodial\n");
+      DiallerService(NCDialCtrl_NoDial);
       break;
     }
-    case dialB_svc_timeout:
+    case (dialB_svc_busy):
     {
-if(!silent)fprintf(stderr, "dialB_svc_timeout\n");
-      DiallerService(ctrl_svc_timeout);
+DEBUG_PRINT("    Issue svc call busy\n");
+      DiallerService(NCDialCtrl_Busy);
       break;
     }
-    case dialB_svc_error0:
+    case (dialB_svc_nocarrier):
     {
-if(!silent)fprintf(stderr, "dialB_svc_error0\n");
-      DiallerService(ctrl_svc_timeout);
+DEBUG_PRINT("    Issue svc call nocarrier\n");
+      DiallerService(NCDialCtrl_NoCarrier);
       break;
     }
-    case dialB_svc_error1:
+    case (dialB_svc_noserver):
     {
-if(!silent)fprintf(stderr, "dialB_svc_error1\n");
-      DiallerService(ctrl_svc_timeout);
+DEBUG_PRINT("    Issue svc call noserver\n");
+      DiallerService(NCDialCtrl_NoServer);
       break;
     }
-    case dialB_svc_error2:
+    case (dialB_svc_timeout):
     {
-if(!silent)fprintf(stderr, "dialB_svc_error2\n");
-      DiallerService(ctrl_svc_error);
+DEBUG_PRINT("    Issue svc call timeout\n");
+      DiallerService(NCDialCtrl_Timeout);
+      break;
+    }
+    case (dialB_svc_error0):
+    {
+DEBUG_PRINT("    Issue svc call error0\n");
+      DiallerService(NCDialCtrl_Timeout);
+      break;
+    }
+    case (dialB_svc_error1):
+    {
+DEBUG_PRINT("    Issue svc call error1\n");
+      DiallerService(NCDialCtrl_Timeout);
+      break;
+    }
+    case (dialB_svc_error2):
+    {
+DEBUG_PRINT("    Issue svc call error2\n");
+      DiallerService(NCDialCtrl_Error);
       break;
     }
     default:
     {
-if(!silent)fprintf(stderr, "unknown diallerB byte 0 (not_connected_svc)\n");
+DEBUG_PRINT("    WARNING: 'not_connected_svc' ignored DiallerB byte 0\n");
       break;
     }
   }
@@ -445,17 +598,31 @@ if(!silent)fprintf(stderr, "unknown diallerB byte 0 (not_connected_svc)\n");
 
 /**************************
 *
-* FUNCTION: dialling_svc
+* FUNCTION: changing_svc
 *
 * PURPOSE:  Handle a service call where byte 1 indicates that the modem is dialling (from the POV of the UI)
 *
 */
-void dialling_svc(int byte)
+void changing_svc(int byte)
 {
-  if (byte == dialB_svc_dialling)
+  switch (byte)
   {
-if(!silent)fprintf(stderr, "dialB_svc_dialling\n");
-    DiallerService(ctrl_svc_dialling);
+    case (dialB_svc_dialling):
+    {
+DEBUG_PRINT("    Ignore DiallerB svc call (executing dial script)\n");
+      break;
+    }
+    case (dialB_svc_hanging):
+    {
+DEBUG_PRINT("    DiallerB is executing the hangup script and the state is changing (force offline state)\n");
+      new_state(state_offline);
+      break;
+    }
+    default:
+    {
+DEBUG_PRINT("    Some connection state changing service call\n");
+      break;
+    }
   }
 }
 
@@ -470,14 +637,71 @@ void connecting_svc(int byte)
 {
   if (byte == dialB_svc_idle)
   {
-    if (state_dialling == mod_state)
+    switch (mod_state)
     {
-if(!silent){vdu4();fprintf(stderr, "In handler for svc_connecting\n");}
-      DiallerService(ctrl_svc_connecting);
-if(!silent)fprintf(stderr, "Issuing a PPP connect\n");
-      mod_state = state_ppp_goingup;
-      oscli("PPPConnect");
+      case (state_offline):
+      {
+DEBUG_PRINT("    WARNING: 'connecting_svc' state = offline\n");
+        break;
+      }
+
+      case (state_dialling):
+      {
+        new_state(state_ppp_goingup);
+        DiallerService(NCDialCtrl_Connected);
+DEBUG_PRINT("    Issuing a PPP connect\n");
+        oscli("PPPConnect");
+        break;
+      }
+
+      case (state_ppp_goingup):
+      {
+DEBUG_PRINT("    WARNING: 'connecting_svc' state = ppp_goingup\n");
+        break;
+      }
+
+      case (state_online):
+      {
+DEBUG_PRINT("    WARNING: 'connecting_svc' state = online\n");
+        break;
+      }
+
+      case (state_hanging):
+      {
+DEBUG_PRINT("    WARNING: 'connecting_svc' state = hanging\n");
+        break;
+      }
     }
+  }
+  else
+  {
+DEBUG_PRINT("    Byte0 is not idle. So it's not a (dis)connecting svc call\n");
+  }
+}
+
+/**************************
+*
+* FUNCTION: new_status_string
+*
+* PURPOSE:  If DiallerB indicates that it's status has changed, see if it is a Dialled status (that
+*           we inserted in the dial script). If it is, issue a connecting service call.
+*
+*/
+static void new_status_string(void)
+{
+  int  len     = 0;
+  char *buffer = NULL;
+
+  _swix(DiallerB_Status, _INR(0, 1) | _OUT(0), 2, 0, &len);
+  if (len > 0)
+  {
+    buffer = malloc(len);
+    _swix(DiallerB_Status, _INR(0, 2), 2, buffer, len);
+    if (0 == strcmp(buffer, finish_dial))
+    {
+      DiallerService(NCDialCtrl_Connecting);
+    }
+    free(buffer);
   }
 }
 
@@ -491,32 +715,39 @@ if(!silent)fprintf(stderr, "Issuing a PPP connect\n");
 void Handle_diallerB_svc(int status)
 {
   int byte_zero, byte_one;
+
+  if (status & (1 << 18))
+  {
+    new_status_string();
+  }
+
   byte_zero = status & 0xFF;
   byte_one  = (status >> 8) & 3;
 
+DEBUG_ECHOM((d_file, "  SVC NUMBER WAS %d %d\n", byte_one, byte_zero));
   switch (byte_one)
   {
-    case dialB_svc0_not_contd:
+    case (dialB_svc0_not_contd):
     {
-if(!silent)fprintf(stderr, "Not connected SVC received\n");
+DEBUG_PRINT("  Not connected SVC received\n");
       not_connected_svc(byte_zero);
       break;
     }
-    case dialB_svc0_dialng:
+    case (dialB_svc0_dialng):
     {
-if(!silent)fprintf(stderr, "Dialling SVC received\n");
-      dialling_svc(byte_zero);
+DEBUG_PRINT("  Connection state changing SVC received from DiallerB\n");
+      changing_svc(byte_zero);
       break;
     }
-    case dialB_svc0_contng:
+    case (dialB_svc0_contng):
     {
-if(!silent)fprintf(stderr, "Connecting SVC received\n");
+DEBUG_PRINT("  Connecting SVC received\n");
       connecting_svc(byte_zero);
       break;
     }
     default:
     {
-if(!silent)fprintf(stderr, "Unexpected diallerB service call (connected incoming)\n");
+DEBUG_PRINT("  Unexpected DiallerB service call (connected incoming)\n");
       break;
     }
   }
@@ -541,24 +772,46 @@ if(!silent)fprintf(stderr, "Unexpected diallerB service call (connected incoming
 */
 void safe_hangup(void)
 {
-if(!silent)fprintf(stderr, "Entering the hangup routine\n");
+DEBUG_PRINT("  Entering the hangup routine\n");
   switch (mod_state)
   {
+    case (state_offline):
+    {
+DEBUG_PRINT("    WARNING: 'safe_hangup' state = offline\n");
+      break;
+    }
+
     case (state_dialling):
     {
-if(!silent)fprintf(stderr, "We're dialling but not online. Issue a SWI DiallerB_Hangup\n");
-      mod_state = state_offline;
+DEBUG_PRINT("    We're dialling but not online. Issue a SWI DiallerB_Hangup\n");
+      new_state(state_offline);
       _swix(DiallerB_HangUp, _IN(0), 0);
       break;
     }
+
+    case (state_ppp_goingup):
+    {
+DEBUG_PRINT("    WARNING: 'safe_hangup' state = ppp_goingup\n");
+      new_state(state_offline);
+      _swix(DiallerB_HangUp, _IN(0), 0);
+      break;
+    }
+
     case (state_online):
     {
-if(!silent)fprintf(stderr, "We're online. Issue a PPP Disconnect\n");
-      mod_state = state_hanging;
+DEBUG_PRINT("    We're online. Issue a PPP Disconnect\n");
+      new_state(state_hanging);
       oscli("PPPDisconnect");
       break;
     }
+
+    case (state_hanging):
+    {
+DEBUG_PRINT("    WARNING: 'safe_hangup' state = hanging\n");
+      break;
+    }
   }
+DEBUG_PRINT("  Exiting the hangup routine\n");
 }
 
 /***********************
@@ -570,30 +823,36 @@ if(!silent)fprintf(stderr, "We're online. Issue a PPP Disconnect\n");
 */
 _kernel_oserror *NCDialCtrl_swis(int swi_no, _kernel_swi_regs *r, void *pw)
 {
-if(!silent){vdu4();fprintf(stderr,"Entering SWI NCDialCtrl\n");}
+DEBUG_TOP("Entering SWI NCDialCtrl\n");
   switch (swi_no)
   {
     case (NCDial_Dial - NCDial_00):
     {
+DEBUG_PRINT("  SWI Dial\n");
       Commence();
       break;
     }
     case (NCDial_Hangup - NCDial_00):
     {
+DEBUG_PRINT("  SWI Hangup\n");
       safe_hangup();
       break;
     }
+#ifndef developing
     case (NCDial_Silent - NCDial_00):
     {
-      silent = r->r[0];
+DEBUG_PRINT("  SWI Silent\n");
+      debug = (0 == (r->r[0]));
       break;
     }
+#endif
     default:
     {
-if(!silent)fprintf(stderr, "unknown SWI (NCDialCtrl_swis)\n");
+DEBUG_PRINT("  unknown SWI (NCDialCtrl_swis)\n");
       break;
     }
   }
+DEBUG_PRINT("Exiting SWI NCDialCtrl\n");
 
   return(NULL);
 }
@@ -607,45 +866,40 @@ if(!silent)fprintf(stderr, "unknown SWI (NCDialCtrl_swis)\n");
 */
 _kernel_oserror *NCDialCtrl_cmd(char *arg_string, int argc, int cmd_no, void *pw)
 {
-if(!silent){vdu4();fprintf(stderr,"Entering NCDialCtrl_cmd\n");}
+DEBUG_TOP("Entering *cmd handler\n");
   switch (cmd_no)
   {
-    case CMD_NCDial_Dial:
+    case (CMD_NCDial_Dial):
     {
-if(!silent)fprintf(stderr,"*NCDial_Dial\n");
+DEBUG_PRINT("  *NCDial_Dial\n");
       Commence();
       break;
     }
-    case CMD_NCDial_Hangup:
+    case (CMD_NCDial_Hangup):
     {
-if(!silent)fprintf(stderr,"*NCDial_Hangup\n");
+DEBUG_PRINT("  *NCDial_Hangup\n");
       safe_hangup();
       break;
     }
-    case CMD_NCDial_Silent:
+    case (CMD_NCDial_StartUp):
     {
-if(!silent)fprintf(stderr,"*NCDial_Silent\n");
-      silent = (0 != atoi(arg_string));
+DEBUG_PRINT("  *NCDial_StartUp from PPP\n");
+      new_state(state_online);
+      DiallerService(NCDialCtrl_IPUp);
       break;
     }
-    case CMD_NCDial_StartUp:
+    case (CMD_NCDial_GoingDown):
     {
-if(!silent){vdu4();fprintf(stderr,"We've got a *NCDial_StartUp from PPP\n");}
-      mod_state = state_online;
-      DiallerService(NCDialler_IPUp);
-      break;
-    }
-    case CMD_NCDial_GoingDown:
-    {
-if(!silent)fprintf(stderr,"We've got a *NCDial_GoingDown from PPP\n");
-      mod_state = state_hanging;
-      DiallerService(NCDialler_IPDown);
+DEBUG_PRINT("  *NCDial_GoingDown from PPP\n");
+      new_state(state_hanging);
+      DiallerService(NCDialCtrl_IPDown);
+DEBUG_PRINT("    Issuing SWI HangUp\n");
       _swix(DiallerB_HangUp, _IN(0), 0);
       break;
     }
-    case CMD_NCDial_Repoint:
+    case (CMD_NCDial_Repoint):
     {
-if(!silent)fprintf(stderr,"*NCDial_Repoint\n");
+DEBUG_PRINT("  *NCDial_Repoint\n");
 /*       message_block mb;                                                   */
 /*       memset (&mb, '\0', sizeof(message_block));                          */
 /*       mb.header.size   = 32;                                              */
@@ -653,18 +907,27 @@ if(!silent)fprintf(stderr,"*NCDial_Repoint\n");
 /*       _swix(TaskModule_SendMessage, _INR(0, 5), 0, &mb, 0, 0, 0, 0);      */
       break;
     }
-    case CMD_NCDial_MakeFiles:
+    case (CMD_NCDial_MakeFiles):
     {
-if(!silent)fprintf(stderr,"*NCDial_MakeFiles\n");
+DEBUG_PRINT("  *NCDial_MakeFiles\n");
       CreateFiles(&card);
       break;
     }
+#ifndef developing
+    case (CMD_NCDial_Silent):
+    {
+DEBUG_PRINT("  *NCDial_Silent\n");
+      debug = (0 == atoi(arg_string));
+      break;
+    }
+#endif
     default:
     {
-if(!silent)fprintf(stderr, "Unknown *Cmd (NCDialCtrl_cmd)\n");
+DEBUG_PRINT("  Unknown *Cmd (NCDialCtrl_cmd)\n");
       break;
     }
   }
+DEBUG_PRINT("Exiting the *cmd handler\n");
 
   return (NULL);
 }
@@ -678,7 +941,7 @@ if(!silent)fprintf(stderr, "Unknown *Cmd (NCDialCtrl_cmd)\n");
 */
 _kernel_oserror *NCDialCtrl_modfinal(int fatal, int podule, void *pw)
 {
-#ifndef DONT_BUILD_RESOURCES
+#ifdef BUILD_RESOURCES
   _swix(ResourceFS_DeregisterFiles, _IN(0), resources_base());
 #endif
 
@@ -696,27 +959,27 @@ void NCDialCtrl_service(int service, _kernel_swi_regs *r, void *pw)
 {
   switch (service)
   {
-#ifndef DONT_BUILD_RESOURCES
-    case Service_ResourceFSStarting:
+#ifdef BUILD_RESOURCES
+    case (Service_ResourceFSStarting):
     {
-      /* This obscure line has the address of the start of a function passed in R2, and   */
-      /* type casts that to a pointer to a function. This call takes resources_base() as  */
-      /* it's only parameter. */
+      /* This obscure line has the address of the start of a function passed in R2, and  */
+      /* type casts that to a pointer to a function. This call takes resources_base() as */
+      /* it's only parameter.                                                            */
       ((P_FSStartingFN) (r->r[2])) (resources_base());
       break;
     }
 #endif
-    case Service_DiallerB:
+    case (Service_DiallerB):
     {
-if(!silent)fprintf(stderr, "Entering Handle_diallerB_svc()\n");
+DEBUG_TOP("DiallerB has issued a service call\n");
       Handle_diallerB_svc(r->r[0]);
-if(!silent)fprintf(stderr, "Exited Handle_diallerB_svc()\n");
-      r->r[1] = 0;
+      r->r[1] = 0;   /* Don't pass this svc call on... */
       break;
     }
-    default:
+    case (Service_ShutdownComplete):
     {
-/* if(!silent)fprintf(stderr, "unexpected service call received\n"); */
+DEBUG_PRINT("  Standby mode (svc Shutdown)\n");
+      safe_hangup();
       break;
     }
   }
@@ -732,7 +995,7 @@ if(!silent)fprintf(stderr, "Exited Handle_diallerB_svc()\n");
 _kernel_oserror *NCDialCtrl_modinit(char *cmd_tail, int podule_base, void *pw)
 {
   pwp = pw;
-#ifndef DONT_BUILD_RESOURCES
+#ifdef BUILD_RESOURCES
   _swix(ResourceFS_RegisterFiles, _IN(0), resources_base());
 #endif
   memset(&card, '\0', sizeof(carddata));
@@ -740,7 +1003,9 @@ _kernel_oserror *NCDialCtrl_modinit(char *cmd_tail, int podule_base, void *pw)
   _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), INET_VAR,      INET_TXT,      strlen(INET_TXT),      0);
   _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), DYNAMIC_VAR,   DYNAMIC_TXT,   strlen(DYNAMIC_TXT),   2);
   _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), INETDBASE_VAR, INETDBASE_TXT, strlen(INETDBASE_TXT), 2);
-  /* twiddle modem to make sure it's offline here... */
+
+DEBUG_TOP("STARTING\n");
+  new_state(state_offline);
 
   return(NULL);
 }
