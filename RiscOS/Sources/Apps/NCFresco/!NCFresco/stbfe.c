@@ -6107,6 +6107,9 @@ static BOOL fe_initialise(void)
     plugin_list_read_file();
     hotlist_init();
 
+    /* init toolbar state using the buttons field of config */
+    user_status_open = config_display_control_buttons;
+    
     /* Check the licence */
     if (frontend_complain(licence_init()) != NULL)
     {
