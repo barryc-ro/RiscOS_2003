@@ -4,7 +4,7 @@
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR = <CExport$Dir>.h
 
 #
 # Generic options:
@@ -45,10 +45,12 @@ DFLAGS   =
 # Program specific options:
 #
 COMPONENT = NVRAM
-TARGET    = aof.NVRAM
-OBJS      = header.o module.o NVRAM.o msgfile.o parse.o trace.o
-EXPORTS   = 
+TARGET    = aof.${COMPONENT}
+RAMTARGET = rm.${COMPONENT}
+OBJS      = header.o module.o nvram.o msgfile.o parse.o trace.o
+EXPORTS   = ${EXP_HDR}.${COMPONENT}
 RDIR      = ${RESDIR}.NVRAM
+
 #
 # Rule patterns
 #
@@ -59,7 +61,7 @@ RDIR      = ${RESDIR}.NVRAM
 #
 # build a relocatable module:
 #
-all: rm.NVRAM
+all: ${RAMTARGET}
 
 #
 # RISC OS ROM build rules:
@@ -76,10 +78,10 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} ${RAMTARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -102,11 +104,11 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.NVRAM: ${OBJS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-#        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
+        ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
 o.module:	c.module
@@ -116,15 +118,15 @@ o.module:	h.module
 o.module:	h.nvram
 o.module:	h.msgfile
 o.module:	h.error
-o.NVRAM:	c.NVRAM
-o.NVRAM:	C:h.kernel
-o.NVRAM:	C:h.swis
-o.NVRAM:	h.module
-o.NVRAM:	h.nvram
-o.NVRAM:	h.msgfile
-o.NVRAM:	h.parse
-o.NVRAM:	h.error
-o.NVRAM:	h.trace
+o.nvram:	c.NVRAM
+o.nvram:	C:h.kernel
+o.nvram:	C:h.swis
+o.nvram:	h.module
+o.nvram:	h.nvram
+o.nvram:	h.msgfile
+o.nvram:	h.parse
+o.nvram:	h.error
+o.nvram:	h.trace
 o.msgfile:	c.msgfile
 o.msgfile:	C:h.kernel
 o.msgfile:	C:h.swis
