@@ -155,6 +155,7 @@ rm.UARTDriver: Hdr:CPU.Generic26
 rm.UARTDriver: Hdr:IO.GenericIO
 rm.UARTDriver: Hdr:RISCOS
 rm.UARTDriver: Hdr:Machine.<Machine>
+rm.UARTDriver: Hdr:Machine.Machine
 rm.UARTDriver: Hdr:ModHand
 rm.UARTDriver: Hdr:HighFSI
 rm.UARTDriver: Hdr:DevNos
