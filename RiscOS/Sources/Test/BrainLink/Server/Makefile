@@ -55,6 +55,7 @@ ROMTARGET = aof.${COMPONENT}
 
 OBJS      =	\
  o.main		\
+ o.terminal     \
  $(CMHGOBJ)
 
 #
