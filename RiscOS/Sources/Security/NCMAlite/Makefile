@@ -80,7 +80,7 @@ ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS
 
 NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
-		-DPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
+		-UPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-USHOW_BOOTBLOCK_TRANSITIONS  \
 		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -DSEND_SERIALID_LENGTH \
@@ -184,13 +184,6 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} <resource$dir>.Resources
-        ${MKDIR} <resource$dir>.Resources.NCMA
-        ${CP} <NCMA$SourceKey> <resource$dir>.Resources.NCMA.MFRKEY ${CPFLAGS}
-        ${CP} Resources.Boot <resource$dir>.Resources.NCMA.Boot ${CPFLAGS}
-        ${CP} Resources.BootFast <resource$dir>.Resources.NCMA.BootFast ${CPFLAGS}
-        ${CP} Resources.BootUpdate <resource$dir>.Resources.NCMA.BootUpdate ${CPFLAGS}
-        
         @echo ${COMPONENT}: resource files copied
 
 #
