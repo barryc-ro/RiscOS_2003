@@ -7,6 +7,7 @@
 # ----       ----   -----------
 # 17-Nov-94  AMcC   Updated for Black build
 # 08-Mar-95  AMcC   Added lines to install 16-bit Sound directory
+# 22-Aug-96  MJS    additions to bring into line with 3.6 disc build release 5
 #
 
 #
@@ -68,14 +69,27 @@ FILESDC=\
  $(RDIR).Decomp6.Decompress\
  $(RDIR).Decomp7.Info\
  $(RDIR).Decomp7.Decompress\
+ $(RDIR).Decomp8.Makedecomp\
+ $(RDIR).Decomp8.Decomp24\
+ $(RDIR).Decomp8.DecompresH\
+ $(RDIR).Decomp8.Decompress\
+ $(RDIR).Decomp8.Info\
+ $(RDIR).Decomp9.Makedecomp\
+ $(RDIR).Decomp9.Decomp24\
+ $(RDIR).Decomp9.DecompresH\
+ $(RDIR).Decomp9.Decompress\
+ $(RDIR).Decomp9.Info\
+
 
 FILESTOOLS=\
  $(RDIR).Documents.AE7doc\
+ $(RDIR).Documents.codecIf\
  $(RDIR).Documents.DecompIf\
  $(RDIR).Documents.Extract\
  $(RDIR).Documents.Join\
  $(RDIR).Documents.PrefBig\
  $(RDIR).Documents.ProgIf\
+ $(RDIR).Documents.ToCapture\
  $(RDIR).Documents.ToUseSound\
  $(RDIR).Tools.Extract\
  $(RDIR).Tools.Join\
@@ -111,7 +125,12 @@ FILESML=\
  $(RDIR).MovingLine.adpcm.Info
 
 FILES3=\
+ $(RDIR).Trajectory.Bounce\
+ $(RDIR).Trajectory.RollBFilm\
+ $(RDIR).Trajectory.RollFilm\
  $(RDIR).Trajectory.RollTFilm\
+ $(RDIR).Trajectory.ScaleUp\
+ $(RDIR).Trajectory.ZoomUp\
  $(RDIR).Shapes.Circle\
  $(RDIR).Shapes.TallFilm.Film136\
  $(RDIR).Shapes.TallFilm.Film128\
@@ -176,6 +195,8 @@ install: $(FILES) $(FILESDC) $(FILESTOOLS) $(FILESML) $(FILES3) ${FILES16}
          ${CP} ${RDIR}.Decomp5    ${INSTDIR}.Decomp5    ${CPFLAGS}
          ${CP} ${RDIR}.Decomp6    ${INSTDIR}.Decomp6    ${CPFLAGS}
          ${CP} ${RDIR}.Decomp7    ${INSTDIR}.Decomp7    ${CPFLAGS}
+         ${CP} ${RDIR}.Decomp8    ${INSTDIR}.Decomp8    ${CPFLAGS}
+         ${CP} ${RDIR}.Decomp9    ${INSTDIR}.Decomp9    ${CPFLAGS}
          ${CP} ${RDIR}.Documents  ${INSTDIR}.Documents  ${CPFLAGS}
          ${CP} ${RDIR}.MovingLine ${INSTDIR}.MovingLine ${CPFLAGS}
          ${CP} ${RDIR}.Shapes     ${INSTDIR}.Shapes     ${CPFLAGS}
@@ -201,6 +222,12 @@ clean:
          $(RM) $(RDIR).Decomp5.Decompress
          $(RM) $(RDIR).Decomp6.DecompresH
          $(RM) $(RDIR).Decomp6.Decompress
+         $(RM) $(RDIR).Decomp8.Decomp24
+         $(RM) $(RDIR).Decomp8.DecompresH
+         $(RM) $(RDIR).Decomp8.Decompress
+         $(RM) $(RDIR).Decomp9.Decomp24
+         $(RM) $(RDIR).Decomp9.DecompresH
+         $(RM) $(RDIR).Decomp9.Decompress
          $(RM) $(RDIR).MovingLine.Decompress
          @echo $(RDIR): cleaned
 
@@ -245,6 +272,20 @@ $(RDIR).Decomp6.Decompress $(RDIR).Decomp6.DecompresH: $(RDIR).Decomp6.MakeDecom
         Set ARMovie$Dir $(RDIR)
         Set Basic$Crunch .
         /$(RDIR).Decomp6.MakeDecomp
+        Unset Basic$Crunch
+        Unset ARMovie$Dir
+
+$(RDIR).Decomp8.Decomp24 $(RDIR).Decomp8.Decompress $(RDIR).Decomp8.DecompresH: $(RDIR).Decomp8.MakeDecomp
+        Set ARMovie$Dir $(RDIR)
+        Set Basic$Crunch .
+        /$(RDIR).Decomp8.MakeDecomp
+        Unset Basic$Crunch
+        Unset ARMovie$Dir
+
+$(RDIR).Decomp9.Decomp24 $(RDIR).Decomp9.Decompress $(RDIR).Decomp9.DecompresH: $(RDIR).Decomp9.MakeDecomp
+        Set ARMovie$Dir $(RDIR)
+        Set Basic$Crunch .
+        /$(RDIR).Decomp9.MakeDecomp
         Unset Basic$Crunch
         Unset ARMovie$Dir
 

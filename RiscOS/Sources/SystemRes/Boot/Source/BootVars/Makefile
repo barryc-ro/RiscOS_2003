@@ -5,12 +5,10 @@ LINK   = Link
 
 LIBS  = OSLib:o.OSLib CLib:o.ANSILib
 
-OBJS = o.main o.x o.socket
+OBJS = o.main o.x
 
 BootVars: ${OBJS}
    ${LINK} -output BootVars ${OBJS} ${LIBS}
-
-o.main: h.socket
 
 #General rules
 .SUFFIXES:      .cmhg .h .c .debug .o .oSA .Resources .s .asm .i .def
@@ -33,25 +31,28 @@ o.main: h.socket
 #------------------------------------------------------------------------
 # Dynamic dependencies:
 o.x:	<Support$Dir>.c.x
-o.x:	OS:h.kernel
+o.x:	C:h.kernel
+o.x:	C:h.swis
 o.x:	OS:h.macros
 o.x:	OS:h.os
 o.x:	OS:h.types
 o.x:	<Support$Dir>.h.x
 o.main:	c.main
-o.main:	OS:h.swis
-o.main:	OS:h.kernel
-o.main:	h.socket
-o.main:	OS:h.types
+o.main:	C:h.swis
+o.main:	C:h.kernel
+o.main:	Support:h.trace
 o.main:	OS:h.os
+o.main:	OS:h.types
 o.main:	Support:h.x
 o.main:	OS:h.econet
 o.main:	OS:h.netfs
+o.main:	OS:h.fileswitch
 o.main:	OS:h.macros
 o.main:	OS:h.os
 o.main:	OS:h.osbyte
 o.main:	OS:h.osfscontrol
 o.main:	OS:h.osmodule
+o.main:	OS:h.socket
 o.main:	OS:h.wimpreadsysinfo
 o.main:	OS:h.wimp
 o.main:	OS:h.osspriteop

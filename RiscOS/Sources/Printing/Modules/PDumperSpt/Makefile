@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 04-Jul-94  AMcC         Created.
+# 20-Jun-95  MJS          revised for new file list
 #
 
 #
@@ -77,8 +78,14 @@ rm.PDumperSpt: hdr:Proc
 rm.PDumperSpt: hdr:ColourTran
 rm.PDumperSpt: Version
 rm.PDumperSpt: s.Manipulate
+rm.PDumperSpt: s.Calib32
+rm.PDumperSpt: s.Calib8
 rm.PDumperSpt: s.Colour
 rm.PDumperSpt: s.Halftone
+rm.PDumperSpt: s.Halftone32
+rm.PDumperSpt: s.Halftone8
 rm.PDumperSpt: s.Error
+rm.PDumperSpt: s.Error32
+rm.PDumperSpt: s.Error8
 rm.PDumperSpt: s.FullRGB
 rm.PDumperSpt: s.MsgCode

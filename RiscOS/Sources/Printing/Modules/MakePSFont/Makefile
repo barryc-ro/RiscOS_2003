@@ -134,6 +134,16 @@ ${EXP_HDR}.MakePSFont: hdr.MakePSFont
         ${CP} hdr.MakePSFont $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+o.convert:	c.convert
+o.convert:	h.module
+o.convert:	C:h.kernel
+o.convert:	C:h.swis
+o.convert:	h.misc
+o.convert:	h.swicall
+o.convert:	C:h.kernel
+o.convert:	C:h.swis
+o.convert:	h.convert
+o.convert:	h.convert
 o.float: s.float
 o.init: s.init
 o.init: hdr:ListOpts
@@ -150,17 +160,6 @@ o.init: hdr:HighFSI
 o.init: hdr:NewErrors
 o.init: hdr:MsgTrans
 o.init: hdr:PDriver
-o.swicall: s.swicall
-o.convert:	c.convert
-o.convert:	h.module
-o.convert:	C:h.kernel
-o.convert:	C:h.swis
-o.convert:	h.misc
-o.convert:	h.swicall
-o.convert:	C:h.kernel
-o.convert:	C:h.swis
-o.convert:	h.convert
-o.convert:	h.convert
 o.module:	c.module
 o.module:	h.module
 o.module:	C:h.kernel
@@ -194,6 +193,7 @@ o.registry:	h.swicall
 o.registry:	C:h.kernel
 o.registry:	C:h.swis
 o.registry:	h.convert
+o.swicall: s.swicall
 o.use:	c.use
 o.use:	h.module
 o.use:	C:h.kernel

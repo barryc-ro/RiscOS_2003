@@ -1,6 +1,6 @@
 /* c.putscaled - a new bitblit compiler for PutSpriteScaled */
 
-/*#define DEBUG
+/* #define DEBUG */
 
 #define KLUDGE*/  /* Hack to enable TML debugging info */
 
@@ -162,7 +162,7 @@ static void do_assert(int line, BOOL arg, int error, char *describe); /* forward
 #ifdef KLUDGE
 #define HostFS_WriteC 0x00040102
 #include "swis.h"
-#define asm_writech(c) _swi(HostFS_WriteC, _IN(0), c)
+#define asm_writech(c) _swix(HostFS_WriteC, _IN(0), c)
 #else
 extern int asm_writech(char c); /* provided in assembler - handles newline */
 /* Returns < 0 if trace output is being ignored right now. */
@@ -1291,6 +1291,26 @@ static int palette_is_map_spanning(int *palette)
 }
 #endif
 
+static int palette_is_grey(int *palette, int entries)
+{
+  int loop;
+  int entry;
+  int ascending = 1;
+
+  for (loop=0;loop<entries;loop++)
+  {
+    entry = palette[loop];
+
+    if (((entry ^ (entry>>8)) & 0xffff00) != 0)
+      return 0;
+    if ((entry & 0xff00)>>8 != loop)
+      ascending = 0;
+  }
+  if (ascending)
+   return 2;
+  return 1;
+}
+
 static void compile_buffer_init(asm_workspace *wp, workspace *ws)
 /* We intend to compile some code. Pick a buffer to use, and set up
 for generating into it. We use a simple round-robin for reusing buffers,
@@ -2233,7 +2253,7 @@ static void translate_pixel(asm_workspace *wp, workspace *ws)
     }
   }
 
-  if (pixl2bpp == 5 && wp->BPP != 32) /* all we can do is truncate to 4, as a first stage. */
+  if (pixl2bpp == 5 && wp->BPP != 32 && !(wp->is_it_jpeg && (wp->dither_truecolour & 2) && (wp->BPP != 16))) /* all we can do is truncate to 4, as a first stage. */
   {
     /* if (wp->BPP == 16 && ws->odither) add_ordered_dither(wp, ws, 8); */
     comment(ws,                                   "                                                             fedcba9876543210 fedcba9876543210");
@@ -2304,6 +2324,7 @@ static void translate_pixel(asm_workspace *wp, workspace *ws)
   /* Translation table lookup */
   if (wp->ColourTTR != 0)
   {
+    comment(ws, "We have a translation table.");
     if (ws->out_l2bpp <= 3) /* ie BPP <= 8 */
     {
       assert(pixl2bpp <= 4, ERROR_FATAL); /* up to 32K entries in byte table */
@@ -2317,6 +2338,12 @@ static void translate_pixel(asm_workspace *wp, workspace *ws)
       /* >>> with 16bpp that could be in the top half? Not sure... */
     }
     pixl2bpp = ws->out_l2bpp;              /* we've finished */
+  }
+  else if (wp->is_it_jpeg && (wp->dither_truecolour & 2))
+  {
+    /* bottom n bits of word contains colour number we want... */
+    pixl2bpp = ws->out_l2bpp;              /* we've finished */
+    comment(ws, "JPEG error diffusion should have done all the work!");
   }
   else if (pixl2bpp == 4 && ws->out_l2bpp < 4)
   {
@@ -3656,6 +3683,7 @@ static void loop_y(asm_workspace *wp, workspace *ws, decompress_info_ptr cinfo)
      && ws->in_bpp >= 16              /* from true colour source */
      && wp->BPP < ws->in_bpp          /* and losing resolution */
      && (wp->dither_truecolour & 1)
+     && !(wp->is_it_jpeg && (wp->dither_truecolour & 2))
      )
   {
     tracef("in dither_truecolour = %x\n" _ wp->dither_truecolour);
@@ -3947,6 +3975,7 @@ static blitter find_or_compile_code(asm_workspace *wp, workspace *ws, decompress
   }
 #ifdef JPEG
   if (wp->is_it_jpeg && (wp->dither_truecolour & 1)) key_word |= 1<<21;
+  if (wp->is_it_jpeg && (wp->dither_truecolour & 2)) key_word |= 1<<22;
 #endif
   tracef("Searching for compiled code for key_word=%x, scale=%i:%i,%i:%i outoffset=%x.\n" _
     key_word _ wp->save_xadd - wp->save_xdiv _ wp->save_xdiv _ wp->save_yadd _ wp->save_ydiv _ wp->save_outoffset);
@@ -3984,6 +4013,9 @@ static blitter find_or_compile_code(asm_workspace *wp, workspace *ws, decompress
 
   compile_buffer_done(ws);
   p->key_word = key_word; /* doesn't happen if we bomb from the compilation for any reason */
+  /** SWI here to synchronise the code areas on ARM810/StrongARM **/
+  _swix(OS_SynchroniseCodeAreas, _IN(0) | _IN(1) | _IN(2),
+              1,(int)ws->compile_base,(int)ws->compile_base+(4*BUFSIZE)-4 );
   return (blitter) ws->compile_base;
 }
 
@@ -3991,7 +4023,7 @@ static blitter putscaled_compiler(asm_workspace *wp, workspace *ws, workspace *w
 /* Main entrypoint from the assembler */
 {
   decompress_info_ptr cinfo;
-  IFDEBUG(BOOL tracing = asm_writech('\n') >= 0;)
+  IFDEBUG(BOOL tracing = (int)asm_writech('\n') >= 0;)
 
   IFDEBUG(if (tracing)
   {
@@ -4161,11 +4193,16 @@ static blitter putscaled_compiler(asm_workspace *wp, workspace *ws, workspace *w
       int modeflags = 0;
 
       /* JPEG decompression options */
-      if (wp->BPP <= 4)
+      if (wp->BPP < 4)
       {
         opt |= jopt_GREY; /* greyscale if 4bpp or less */
         if ((wp->save_PdriverIntercept & 2) == 0) /* printing is not on */
           wp->ColourTTR = 0; /* don't use trans table for 4bpp or less, results are naff */
+      }
+      if ((wp->BPP <=8) && (wp->dither_truecolour & 2))
+      {
+        opt |= jopt_DIFFUSE;
+        wp->ColourTTR = 0;
       }
       if (xmax < 0) xmax = s->width - 1; /* check overflow of reverse scale calculation, and give safe value if necessary */
       if (  (wp->save_xadd - wp->save_xdiv) * 6 <= wp->save_xdiv
@@ -4181,15 +4218,38 @@ static blitter putscaled_compiler(asm_workspace *wp, workspace *ws, workspace *w
       {
         tracef("trying new shiny 8BPP plotting technique\n");
         if (wp->BPP == 8)
-          if (wp->dither_truecolour & 2) opt |= jopt_OUTBPP_8;    /*full error diffusion*/
-          else opt |= jopt_OUTBPP_8YUV;                           /*strange diffusion from YUV data*/
+        {
+          if (wp->dither_truecolour & 2)
+            opt |= jopt_OUTBPP_8;                              /*full error diffusion*/
+          else
+            opt |= jopt_OUTBPP_8YUV;                           /*strange diffusion from YUV data*/
+        }
         else if (wp->BPP == 16) opt |= jopt_OUTBPP_16;
       }
 #else
+      if (wp->BPP == 8)
+      {
+        int temp;
+        int size;
+
+        _swix(ColourTrans_ReadPalette, _IN(0) | _IN(1) | _IN(2) | _IN(3) | _IN(4) | _OUT(3),
+                                       -1, -1, 0, 256*4, 0, &size); /*save palette into newtranstable area */
+        tracef("need %x bytes for palette\n" _ size);
+        _swix(ColourTrans_ReadPalette, _IN(0) | _IN(1) | _IN(2) | _IN(3) | _IN(4),
+                                       -1, -1, &(wp->newtranstable[0]), size, 0); /*save palette into newtranstable area */
+        temp = palette_is_grey(wp->newtranstable, size/4);
+     	if (temp) opt |= jopt_GREY;
+	if (temp == 2)
+	{
+	  opt |= jopt_OUTBPP_8GREY;
+	  opt &= ~jopt_DIFFUSE;
+        }
+      }
       if ((wp->save_PdriverIntercept & 2) == 0 && (wp->dither_truecolour & 1)) /* old format palette and printing is not on */
       {
         int  size;
-        if (wp->BPP == 8)
+
+        if ((wp->dither_truecolour & 2) && wp->BPP < 16)
         {
 #ifdef DEBUG
           int loop;
@@ -4200,33 +4260,64 @@ static blitter putscaled_compiler(asm_workspace *wp, workspace *ws, workspace *w
                                          -1, -1, 0, 256*4, 0, &size); /*save palette into newtranstable area */
           tracef("need %x bytes for palette\n" _ size);
           _swix(ColourTrans_ReadPalette, _IN(0) | _IN(1) | _IN(2) | _IN(3) | _IN(4),
-                                         -1, -1, &(wp->newtranstable[0]), 256*4, 0); /*save palette into newtranstable area */
+                                         -1, -1, &(wp->newtranstable[0]), size, 0); /*save palette into newtranstable area */
           tracef("created palette at %x\n" _ &(wp->newtranstable[0]));
 #ifdef DEBUG
           tracef("Read palette, palette entries are:-\n");
-          for(loop = 0;loop<256;loop++)
+          for(loop = 0;loop<size/4;loop++)
             tracef("Entry %d = %x\n" _ loop _ wp->newtranstable[loop]);
 #endif
-          if (wp->dither_truecolour & 2)
+          if (wp->BPP == 4)
           {
-            opt |= jopt_OUTBPP_8;    /*full error diffusion*/
+            if (palette_is_grey(wp->newtranstable, size/4)) opt |= jopt_GREY;
+          }
+          else if (wp->BPP == 8)
+          {
+            int temp = palette_is_grey(wp->newtranstable, size/4);
+
+	    if (temp) opt |= jopt_GREY;
+	    if (temp == 2)
+	    {
+	       opt |= jopt_OUTBPP_8GREY;
+	       opt &= ~jopt_DIFFUSE;
+            }
+	  }
+        }
+
+        if ((wp->BPP == 4) && !(wp->dither_truecolour & 2)) opt |= jopt_GREY;
+
+        if (wp->BPP == 8)
+        {
+          if ((wp->dither_truecolour & 2) && !(opt & jopt_OUTBPP_8GREY))
+          {
+            opt |= jopt_OUTBPP_8;                        /* full error diffusion */
             cinfo->error_code = -1;                      /* mark the workspace entirely uninitialised */
           }
           else
           {
             _swix(OS_ReadModeVariable, _IN(0) | _IN(1) | _OUT(2), -1, 0, &modeflags);
             if ((modeflags & 1<<7) == 0)
-              opt |= jopt_OUTBPP_8YUV;                           /*strange diffusion from YUV data*/
+              opt |= jopt_OUTBPP_8YUV;                   /* strange diffusion from YUV data */
           }
         }
         else if (wp->BPP == 16)
           opt |= jopt_OUTBPP_16;
       }
 #endif
+#ifdef DEBUG
+  tracef("After set up, options are:\n");
+  if (opt & jopt_GREY) tracef("   jopt_GREY\n");
+  if (opt & jopt_DC_ONLY) tracef("   jopt_DC_ONLY\n");
+  if (opt & jopt_INTERP_X) tracef("   jopt_INTERP_X\n");
+  if (opt & jopt_OUTBPP_8) tracef("   jopt_OUTBPP_8\n");
+  if (opt & jopt_OUTBPP_16) tracef("   jopt_OUTBPP_16\n");
+  if (opt & jopt_OUTBPP_8YUV) tracef("   jopt_OUTBPP_8YUV\n");
+  if (opt & jopt_DIFFUSE) tracef("   jopt_DIFFUSE\n");
+  if (opt & jopt_OUTBPP_8GREY) tracef("   jopt_OUTBPP_8GREY\n");
+#endif
       err = jpeg_scan_file(cinfo, jpeg_data, jpeg_data_size, wp->in_x, xmax, -1, -1, opt);
 
       assert(err == 0, ERROR_BAD_JPEG);
-      /* >>>> Should return a kosher error to the user at this point, eg. out of space or unacceptable JPEG data. */
 
 #if 0
       if (cinfo->error_argument1 & jopt_INTERP_X) /* we asked for it, and we got it - he'll produce twice as many pixels */
@@ -4241,7 +4332,7 @@ static blitter putscaled_compiler(asm_workspace *wp, workspace *ws, workspace *w
 
       tracef("cinfo->erooarg1 = %d\n" _ cinfo->error_argument1);
 /*      if (cinfo->error_argument1 & jopt_OUTBPP_8YUV) *//* we asked for it, and we got it - 8bpp output pixels */
-      if (cinfo->error_argument1 & (jopt_OUTBPP_8 | jopt_OUTBPP_8YUV)) /* we asked for it, and we got it - 8bpp output pixels */
+      if (cinfo->error_argument1 & (jopt_OUTBPP_8 | jopt_OUTBPP_8YUV | jopt_OUTBPP_8GREY)) /* we asked for it, and we got it - 8bpp output pixels */
       {
         tracef("actually doing new shiny 8BPP plotting technique\n");
         wp->save_inlog2bpp = wp->save_inlog2bpc = 3;

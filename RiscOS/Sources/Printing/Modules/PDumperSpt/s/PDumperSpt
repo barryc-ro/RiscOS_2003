@@ -56,8 +56,9 @@
 ;                    (saves workspace RAM, if PDriver later in ROM chain)
 ; 25-Nov-94 MJS 1.15 Give proper message if PDriver not active
 ; 03-Jan-95 MJS 1.16 Fix MED-04204 bug (bad patterning, near-white, error diffused)
-; 13-Jan-95 MJS 1.17 Fix MED-04348 (bad patterning near 25%)
-; 02-Mar-95 MJS 1.18 Allow ink-density-correcting palette, for Stylus colour 720 dpi
+; 10-Jul-95 MJS 1.19 32 bit (16m colour) mode completely revamped; faster, greatly
+;                    optimised over external whitespace, new RGB->CMYK calibration
+;                    control (currently via new palette file).
 
                 GET     hdr:ListOpts
                 GET     hdr:Macros
@@ -87,21 +88,23 @@
 PrivMessages    SETS    ""
 
 debug           SETL    false
-hostvdu         SETL    false
+hostvdu         SETL    true
 debug_flush     SETL    false
 
 fullrgb         SETL    true            ; turn tc's 24bit stuff on
 userandom       SETL    true            ; use random perturbation in error diffusion
 
-Philip          SETD    true
-claim           SETD    false           ;Claiming memory
-free            SETD    false           ;Free memory
-SWI             SETD    false           ;internal SWI debugging            
-startjob        SETD    false           ;start job decoding
-tidyjob         SETD    false           ;tidying workspace lists
-prepstrip       SETD    false           ;prep strip functions
-colset          SETD    false           ;colour handling
-findblock       SETD    false           ;block finding routines
+Philip          SETD    false
+claim           SETD    false            ;Claiming memory
+free            SETD    false            ;Free memory
+SWI             SETD    false            ;internal SWI debugging            
+startjob        SETD    false            ;start job decoding
+tidyjob         SETD    false            ;tidying workspace lists
+prepstrip       SETD    false            ;prep strip functions
+colset          SETD    false            ;colour handling
+findblock       SETD    false            ;block finding routines
+mjs             SETD    false
+mjs2            SETD    true
 
                 GBLL    newctrans
 newctrans       SETL    true          ;New colourtrans available
@@ -132,7 +135,7 @@ MessagesOpen            # 4             ;Flag to indicate messages file open
 SharedMessages          # 4             ;->Shared messages block allocated / =0 if none
 
 errorbuffer             # 4
-RandomSeed              # 0                      ;Random seed for diffuser or...
+RandomSeed              # 4                      ;Random seed for diffuser
 FirstStrip              # 4                      ;Flag set for first strip by PDumper_StartJob
                         [ fullrgb
 FullRGBInfo             # 0
@@ -161,9 +164,30 @@ CyanValue               # 1
 MagentaValue            # 1
 YellowValue             # 1
 KCMYTable               # 4
+;
+;
+;whitespace stuff
+rowmargins              # 4 ; ptr to start of next row, 1st four words are margin counts
+lastleftmargin          # 4
+lastleftgreymargin      # 4
+lastrightmargin         # 4
+lastrightgreymargin     # 4
+thisleftmargin          # 4
+thisleftgreymargin      # 4
+thisrightmargin         # 4
+thisrightgreymargin     # 4
+
+; these should only be needed for non-32 bit case
 RedGammaTable           # 256
 GreenGammaTable         # 256
 BlueGammaTable          # 256
+
+;
+;mjs - new stuff for 32bit case
+mjsCalibrationTable     # 0
+ediff_density           # 4
+CalibrateTables         # 12*256
+;
 workspace_required      * :INDEX: @
                                             
 ; A block header
@@ -184,6 +208,7 @@ palette_Large           # 4*5           ;Large halftones (sizes in tables)
 palette_Calibration     # 4             ;New calibration table
 palette_PalInverse      # 4             ;Inverse 8-bit palette (KCMY calibrated)
 palette_Removal         # 4             ;% under-colour removal
+palette_Calib32         # 4             ;newer 32bit cmyk calibration stuff
 
                         [ :LNOT:newctrans
                         ^ 0
@@ -260,6 +285,8 @@ init    ROUT
       [ :LNOT:hostvdu
         Debug_Open "$.SptDebug"         ;Open debugging file if output to hostvdu not happening
       ]
+
+  Debug mjs,"PDumperSpt initialise"
                           
         LDR     R2,[WP]
         TEQ     R2,#0                   ;Any workspace already owned?
@@ -287,9 +314,12 @@ pdr_title
         DCB     "PDriver",0
         ALIGN
 
+wspace_reqd
+        DCD     workspace_required
+
 init_pdriver_active
         MOV     R0,#ModHandReason_Claim
-        LDR     R3,=workspace_required
+        LDR     R3,wspace_reqd
         SWI     XOS_Module              ;Attempt to claim a suitable lump of space
         Pull    "R1-R3,PC",VS           ;Return any errors generated during init
 
@@ -622,8 +652,8 @@ SWIPDumper_StartJob Entry "r0-r4"
         BVS     %FT30                   ;have to check contents now...
 
         LDR     r10,[r2]
-        CMP     r10,#1                  ;check for palette version number<<<<
-        BLS     %FT10                   ;will clear V also, everything is Ok
+        CMP     r10,#2                  ;check for palette version number - must be 2 <<<<
+        BEQ     %FT10                   ;will clear V also, everything is Ok
 
         ADR     r0, ErrorBlock_PDumperBadPalette
         BL      LookupError             ;Resolve the error (could have a new one)
@@ -823,7 +853,11 @@ SWIPDumper_CopyFilename Entry "r1"
         GET     s.Manipulate
         GET     s.Colour
         GET     s.Halftone
+        GET     s.Halftone32
+        GET     s.Halftone8
         GET     s.Error
+        GET     s.Error32
+        GET     s.Error8
 ;      [ fullrgb
         GET     s.FullRGB
 ;      ]

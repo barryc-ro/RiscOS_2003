@@ -8,6 +8,8 @@
 # 08-Nov-94  AMcC   Updated for Black build
 # 31-Jan-95  AMcC   !Sprites23 no longer installed
 #                   Installation simplified, access attributes set explicitly
+# 09-Jun-95  AMcC   MED-05410: !Sprites23 re-instated (temporary fix for
+#                   FontMerging.
 #
 
 #
@@ -76,6 +78,7 @@ FILES=\
  ${LDIR}.!Run\
  ${LDIR}.!Sprites\
  ${LDIR}.!Sprites22\
+ ${LDIR}.!Sprites23\
  ${LDIR}.!Help\
  ${FONTS}
 
@@ -98,6 +101,7 @@ install_app: ${FILES}
         ${CP} $(LDIR).!Run       ${INSTDIR}.!Run       ${CPFLAGS}
         ${CP} $(LDIR).!Sprites   ${INSTDIR}.!Sprites   ${CPFLAGS}
         ${CP} $(LDIR).!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
+        ${CP} $(LDIR).!Sprites23 ${INSTDIR}.!Sprites23 ${CPFLAGS}
         |
         Access ${INSTDIR} /r
         Access ${INSTDIR}.* WR/r

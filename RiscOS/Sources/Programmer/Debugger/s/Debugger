@@ -5,6 +5,8 @@
 ;               Stuart K. Swales (Arthur fixes/enhancements)
 ;               Tim Dobson (Adjusting headers, ARM600 variant)
 ;               Alan Glover (fixes/enhancements, ARM6/ARM7 instructions)
+;		William Turner (StrongARM compatibility)
+;		Kevin Bracey (Architecture 4 instructions)
 
 ; 1.18  SKS     Fixed disassembly of #xx,yy operands
 ; 1.19  SKS     Fixed disassembly of LSR #32, ASR #32
@@ -114,7 +116,12 @@
 ;                         check conformance with FPA10 spec. Tighten up tests
 ;                         for MUL/MULL/SWP - now insist b7:b4=2_1001
 ;                        Add national switch to override internationalised help/syntax
-
+; 1.46  WT  07-Feb-96    Made StrongARM compatible (breakpoint code breaks IDcache)
+; 1.48  KJB 04-Jun-96    Added ARMv4 instructions (BX, LDR[H|SH|SB], STRH)
+;                        SWP wasn't being disassembled
+;			 CP15 comments amended to ARMv4
+;			 ARM3 warning removed from SWP (after all, MRS,
+;			 MULL etc don't have warnings!)
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
         GET     Hdr:ListOpts
@@ -149,6 +156,9 @@ Addr26  SETL    CPU_Type <> "ARM600" ; true for 26 bit wrap on addresses
 
         GBLL    national
 national SETL   False
+
+	GBLL	StrongARM
+StrongARM SETL  True
 
 ; Continue not up to much
 
@@ -195,12 +205,20 @@ TotalSpace      *       :INDEX: @
 
 ; Overlaid workspace
 
+ [ StrongARM
+ExeBufLen	*	4+4+4*16
+ ]
+
                 ^       :INDEX: StringBuffer, wp
 CoreBuffer      #       16              ; Enough for a line of bytes
  ASSERT ?StringBuffer >= ?CoreBuffer
 
                 ^       :INDEX: StringBuffer, wp
+ [ StrongARM
+ExecuteBuffer   #       ExeBufLen
+ |
 ExecuteBuffer   #       4+4+4*16
+ ]
  ASSERT ?StringBuffer >= ?ExecuteBuffer
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -274,6 +292,13 @@ Debug_Init ENTRY
         LDRPL   r1, [r0, r3]
         STRPL   r1, [r2, r3]
         BPL     %BT01
+
+ [ StrongARM
+	MOV	r0, #1
+	MOV	r1, r2
+	ADD	r2, r1, #(nbreakpoints*8)
+	SWI	XOS_SynchroniseCodeAreas
+ ]
 
         ADRL    r14, BreakTrap          ; Address of breakpoint code in ROM
         STR     r14, JumpStore          ; fwd ref
@@ -705,12 +730,6 @@ Xxm_End MOV     r10, #"}"               ; end register list
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Load or store register
 
-Ldr     DCB     "LDR", 0
-Str     DCB     "STR", 0
-Open_B  DCB     ",[", 0
-Close_B DCB     "],", 0
-        ALIGN
-
 
 LdrStr ROUT
 
@@ -844,6 +863,12 @@ not_rel
         MOV     r8, #-1
         B       %BT80
 
+Ldr     DCB     "LDR", 0
+Str     DCB     "STR", 0
+Open_B  DCB     ",[", 0
+Close_B DCB     "],", 0
+        ALIGN
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Multiply + Multiply-with-Accumulate
 
@@ -853,15 +878,15 @@ Mla     DCB     "MLA", 0
 
 UndefinedDataProcessing ROUT
 
-        MOV     R5,R4,LSR #23
-        AND     R5,R5,#&1F
-                                        ; vvvv - tested
-        TST     r4, #&3C :SHL: 22       ; 000000ASddddnnnnssss1001mmmm ?
-        BNE     Undefined               ; test was &3F - changed to allow SWP,MULL,MLAL through
-
         AND     R10,R4,#&F0             ; forcible check for &xxxxxx9x
         CMP     R10,#&90
-        BNE     Undefined
+        BNE	LdrStrH
+
+        MOV     R5,R4,LSR #23
+        AND     R5,R5,#&1F
+                                        ; vvv - tested
+        TST     r4, #&38 :SHL: 22       ; 0000 00AS dddd nnnn ssss 1001 mmmm ?
+        BNE     Undefined               ; test was &3F - changed to allow SWP,MULL,MLAL through
 
         CMP     R5,#2_00001
         BEQ     mul_long
@@ -963,20 +988,137 @@ swp     AND     R5,R4,#&F90
         BL      Dis_Register
         MOV     R10,#"]"
         STRB    R10,[R0],#1
+	[ {FALSE}
         BL      Tab
         ADR     R10,arm3only
         BL      lookup_r10
         BL      SaveString
+	]
         B       InstructionEnd
 
+LdrStrH	; Load and Store Halfword or Load Signed Byte
+	; arrive here with cccc 000x xxxx xxxx xxxx xxxx 1nn1 xxxx
+	; (nn != 00)
+	; format is        cccc 000p uiwl nnnn dddd aaaa 1sh1 bbbb
+	;
+	; {LDRH|LDRSH|LDRSB|STRH} Rd,[Rn,{#offset|Rm}]
+	;                         Rd,[Rn,{#offset|Rm}]!
+	;                         Rd,[Rn],{#offset|Rm}
+	; where cccc = condition
+	;	   p = Pre-indexed/~Post-indexed
+	;	   u = Up/~Down
+	;	   i = Immediate/~Register offset
+	;	   w = Writeback
+	;          l = Load/~Store
+	;       nnnn = Rn
+	;       dddd = Rd
+	;       aaaa = immediate offset high nibble (if i==1), else 0
+	;          s = Signed/~Unsigned halfword
+	;	   h = Halfword/~Signed byte
+	;	bbbb = immediate offset low nibble (if i==1), else Rm
+
+	; cccc 000x x0xx xxxx xxxx nnnn 1xx1 xxx is undefined if any of
+	; nnnn are 1.
+	TSTS	r4, #1:SHL:22		; Immediate/~Register offset
+	BNE	%F5
+	TSTS	r4, #&00000F00
+	BNE	Undefined
+	; Can only have STRH, not STRSH or STRSB
+5	TSTS	r4, #1:SHL:20		; Load/~Store
+	BNE	%F20
+	AND	r5, r4, #&000000F0
+	TEQS	r5, #&000000B0
+	BNE	Undefined
+
+20	TSTS	r4, #1:SHL:20
+	ADRNE	r10, Ldr
+	ADREQ	r10, Str
+	BL	SaveStringConditions
+	TSTS	r4, #1:SHL:6
+	MOVNE	r10, #"S"
+	STRNEB	r10, [r0], #1
+	TSTS	r4, #1:SHL:5
+	MOVNE	r10, #"H"
+	MOVEQ	r10, #"B"
+	STRB	r10, [r0], #1
+
+	MOV	r5, r4, LSR #12
+	BL	Tab_Dis_Register
+
+	MOV	r5, r4, LSR #16
+	AND	r5, r5, #&F
+	TEQS	r5, #15
+	ANDEQ	r10, r4, #1:SHL:22      ; Immediate/~Register offset
+	TEQEQS	r10, #1:SHL:22
+	BNE	not_ldrh_rel
+
+	; show resultant [LD|ST]R[H|SH|SB] Rd,[PC,#nn] address directly
+
+	MOV	r5, #","
+	STRB	r5, [r0], #1
+	AND	r8,  r4, #&0000000F
+	AND	r10, r4, #&00000F00
+	ORR	r8, r8, r10, LSR #4
+	TSTS	r4, #1:SHL:23		; Up/~Down bit
+	SUBEQ	r8, r9, r8
+	ADDNE	r8, r9, r8
+	B	BranchLdrStrCommon
+
+
+not_ldrh_rel
+	ADR	r10, Open_B		; ",["
+	BL	SaveString
+
+	BL	Dis_Register
+
+	TSTS	r4, #1:SHL:24           ; Pre/~Post bit
+	ADRL	r10, Close_B
+	ADDNE	r10, r10, #1            ; just ',' else '],'
+	BL	SaveString
+	TSTS	r4, #1:SHL:22		; Immediate/~Register bit
+	BEQ	ldrstrh_reg
+
+	MOV	r6, #"#"
+	STRB	r6, [r0], #1
+	TSTS	r4, #1 :SHL: 23		; Up/~Down bit
+	MOVEQ	r6, #"-"
+	STREQB	r6, [r0], #1
+
+	AND	r8,  r4, #&0000000F
+	AND	r10, r4, #&00000F00
+	ORR	r8, r8, r10, LSR #4
+	BL	StoreDecimal
+	B	%F50
+
+ldrstrh_reg
+	TSTS	r4, #1:SHL:23		; Up/~Down bit
+	MOVEQ	r6, #"-"
+	STREQB	r6, [r0], #1
+	AND	r5, r4, #&F
+	BL	Dis_Register
+
+
+50	TSTS	r4, #1:SHL:24           ; Pre/~Post bit
+	BEQ	InstructionEnd
+
+	MOV	r6, #"]"
+	STRB	r6, [r0], #1
+
+	TSTS	r4, #1:SHL:21           ; Writeback bit
+	MOVNE	r6, #"!"
+	STRNEB	r6, [r0], #1
+	B	InstructionEnd
+
+	[ {FALSE}
 arm3only = "M01",0
         ALIGN
+	]
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Data processing opcodes
 
-DataProcessing
+DataProcessing ROUT
 
         LDR     r3, =&0E000090          ; Data processing op with bit 4 set
         AND     r3, r4, r3              ; -> shift by Rs, but bit 7 set, so
@@ -1025,6 +1167,11 @@ notADR
         ; and fall through to...
 
 notMRSorMSR
+	BIC	r5, r4, #&F000000F
+	LDR	r10, =&012FFF10
+	TEQS	r5, r10
+	BEQ	is_BX
+
         ADR     r10, OpcTAB
         ADD     r10, r10, r6, LSL #2
 
@@ -1218,9 +1365,24 @@ msr_whole
         BL      AddComma
         B       Operand_2
 
+is_BX	; one legal case
+	; cccc 0001 0010 1111 1111 1111 0001 mmmm
+	;
+	; BX Rm
+	;
+	; where mmmm = Rm
+	;
+	ADR	R10,BxTAB
+	BL	SaveStringConditions
+	AND	R5,R4,#&FF
+	BL	Tab_Dis_Register
+
+	B	InstructionEnd
+
 AdrTAB  DCB     "ADR",0
 MrsTAB  DCB     "MRS",0
 MsrTAB  DCB     "MSR",0
+BxTAB   DCB     "BX", 0, 0
 
 OpcTAB  DCB     "AND",0
         DCB     "EOR",0
@@ -1353,25 +1515,26 @@ CPRT_CPDO_Common
         BLNE    AddComma
         BLNE    StoreDecimal
 
-        ;if MRC/MCR check for ARM3 and comment accordingly
+        ;if MRC/MCR check for system control coprocessor and comment accordingly
 
         TST     r4, #1 :SHL: 4          ; Transfer/~Operation bit
         BEQ     InstructionEnd
 
         AND     R5,R4,#&F00
         CMP     R5,#&F00
-        BNE     InstructionEnd          ; Not ARM3
-
-        BL      Tab
+        BNE     InstructionEnd          ; Not CP15
 
         MOV     R5,R4,LSR #16
         AND     R5,R5,#&0F
+	TEQS	R5,#4
+	BEQ	InstructionEnd
+	CMPS	R5,#8
+	BHI	InstructionEnd
+
+        BL      Tab
+
         ADR     R10,msgtable
-        CMP     R5,#6
-        MOVHI   R5,#6
         ADD     R10,R10,R5,LSL #2
-;        LDR     R5,[R5]
-;        ADD     R10,R10,R5
         BL      lookup_r10
         BL      SaveString
         B       InstructionEnd
@@ -1381,9 +1544,12 @@ msg0    = "M02",0
 msg1    = "M03",0
 msg2    = "M04",0
 msg3    = "M05",0
-msg4    = "M06",0
-msg5    = "M07",0
-msg6    = "M08",0
+msg4    = "M08",0
+msg5    = "M06",0
+msg6    = "M07",0
+msg7    = "M51",0
+msg8	= "M52",0
+
         ALIGN
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -2853,6 +3019,12 @@ BreakSet_Code ENTRY "r6-r11"
         ADD     r0, r0, r3              ; each code entry is 8 bytes too
         BL      MakeBranch
         STR     r2, [r1]
+ [ StrongARM
+	;Do the IMB thingy here, for the replaced instruction
+	MOV	r0, #1		;Ranged IMB
+	MOV	r2, r1
+	SWI	XOS_SynchroniseCodeAreas
+ ]
         EXIT
 
 
@@ -3038,6 +3210,12 @@ ClearBreakpoint ENTRY "r0-r2, r10"
         ADDEQ   r14, r4, #4             ; breakpoint was good, so put data back
         LDREQ   r14, [r14, r3]
         STREQ   r14, [r1]
+ [ StrongARM
+	;Do the IMB thingy here
+	MOV	r0, #1			;Ranged IMB
+	MOV	r2, r1
+	SWI	XOS_SynchroniseCodeAreas
+ ]
         EXIT    EQ
 
         BL      message_writes
@@ -3161,7 +3339,13 @@ Continue_Code ENTRY "r6-r11"
         ADR     r1, ExecuteBuffer+4     ; that it wants to execute after this
         BL      MakeBranch              ; one, ie. back in real program @ r1+4
         STR     r2, [r1]
-
+ [ StrongARM
+	;Best IMB the ExecuteBuffer here
+	MOV	r0, #1			; Guess what? It's a ranged sync
+	ADR	r1, ExecuteBuffer
+	ADD	r2, r1, #ExeBufLen
+	SWI	XOS_SynchroniseCodeAreas
+ ]
         ADR     r0, ExecuteBuffer+8     ; and drop into ...
 
 

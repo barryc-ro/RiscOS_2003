@@ -100,9 +100,6 @@ ${RDIR}.!RunImage: ${OBJS} ${CLIB}
         ${SQUEEZE} $@
 
 # Dynamic dependencies:
-o.menuwrap:	c.menuwrap
-o.menuwrap:	h.menuwrap
-o.swicall: s.swicall
 o.fonts:	c.fonts
 o.fonts:	h.main
 o.fonts:	h.swicall
@@ -149,6 +146,8 @@ o.menu:	h.menu
 o.menu:	h.fonts
 o.menu:	h.panes
 o.menu:	h.icons
+o.menuwrap:	c.menuwrap
+o.menuwrap:	h.menuwrap
 o.message:	c.message
 o.message:	h.message
 o.message:	C:h.kernel
@@ -166,6 +165,7 @@ o.panes:	C:h.kernel
 o.panes:	h.panes
 o.panes:	h.fonts
 o.panes:	h.icons
+o.swicall: s.swicall
 o.debug:	c.debug
 o.debug:	h.debug
 o.debug:	h.swicall

@@ -65,6 +65,7 @@ OBJS =\
  o.configfile\
  o.configure\
  o.econet\
+ o.inetsetup\
  o.filer\
  o.floppies\
  o.fonts\
@@ -86,6 +87,7 @@ ASMS =\
  s.configfile\
  s.configure\
  s.econet\
+ s.inetsetup\
  s.filer\
  s.floppies\
  s.fonts\
@@ -180,20 +182,6 @@ abs.FontMerge: o.FontMerge ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.ftrace:	c.ftrace
-o.ftrace:	C:h.swis
-o.ftrace:	C:h.kernel
-o.ftrace:	h.ftrace
-o.ftrace:	C:h.bbc
-o.ftrace:	C:h.os
-o.ftrace:	C:h.font
-o.ftrace:	C:h.drawmod
-o.ftrace:	C:h.wimp
-o.ftrace:	C:h.sprite
-o.ftrace:	C:h.os
-o.ftrace:	C:h.werr
-o.ftrace:	C:h.wimp
-o.ftrace:	C:h.wimpt
 o.FontMerge:	c.FontMerge
 o.FontMerge:	h.kernel
 o.FontMerge:	C:h.swis
@@ -257,6 +245,7 @@ o.configure:	h.configure
 o.configure:	h.cmos
 o.configure:	h.harddiscs
 o.configure:	h.floppies
+o.configure:	h.inetsetup
 o.configure:	h.econet
 o.configure:	h.printer
 o.configure:	h.screen
@@ -271,28 +260,12 @@ o.configure:	h.system
 o.configure:	h.lock
 o.configure:	h.filer
 o.econet:	c.econet
-o.econet:	h.kernel
-o.econet:	C:h.swis
-o.econet:	C:h.wimp
-o.econet:	C:h.os
-o.econet:	C:h.sprite
-o.econet:	C:h.wimpt
-o.econet:	C:h.werr
-o.econet:	C:h.win
-o.econet:	C:h.event
-o.econet:	C:h.menu
-o.econet:	C:h.baricon
-o.econet:	C:h.template
-o.econet:	C:h.msgs
-o.econet:	C:h.menu
-o.econet:	C:h.res
-o.econet:	C:h.resspr
-o.econet:	C:h.dbox
-o.econet:	C:h.visdelay
-o.econet:	C:h.help
-o.econet:	h.configure
-o.econet:	h.econet
-o.econet:	h.cmos
+o.econet:	h.inetsetup
+o.inetsetup:	c.inetsetup
+o.inetsetup:	C:h.swis
+o.inetsetup:	C:h.kernel
+o.inetsetup:	h.inetsetup
+o.inetsetup:	C:h.msgs
 o.filer:	c.filer
 o.filer:	h.kernel
 o.filer:	C:h.swis
@@ -541,6 +514,29 @@ o.sound:	C:h.visdelay
 o.sound:	h.configure
 o.sound:	h.sound
 o.sound:	h.cmos
+o.system:	c.system
+o.system:	h.kernel
+o.system:	C:h.swis
+o.system:	C:h.wimp
+o.system:	C:h.os
+o.system:	C:h.sprite
+o.system:	C:h.wimpt
+o.system:	C:h.werr
+o.system:	C:h.win
+o.system:	C:h.event
+o.system:	C:h.menu
+o.system:	C:h.baricon
+o.system:	C:h.template
+o.system:	C:h.msgs
+o.system:	C:h.menu
+o.system:	C:h.res
+o.system:	C:h.resspr
+o.system:	C:h.dbox
+o.system:	C:h.visdelay
+o.system:	h.ftrace
+o.system:	h.configure
+o.system:	h.system
+o.system:	h.version
 o.version:	c.version
 o.version:	h.kernel
 o.version:	C:h.msgs
@@ -570,26 +566,3 @@ o.wimpflags:	h.configure
 o.wimpflags:	h.ConfigFile
 o.wimpflags:	h.wimpflags
 o.wimpflags:	h.cmos
-o.system:	c.system
-o.system:	h.kernel
-o.system:	C:h.swis
-o.system:	C:h.wimp
-o.system:	C:h.os
-o.system:	C:h.sprite
-o.system:	C:h.wimpt
-o.system:	C:h.werr
-o.system:	C:h.win
-o.system:	C:h.event
-o.system:	C:h.menu
-o.system:	C:h.baricon
-o.system:	C:h.template
-o.system:	C:h.msgs
-o.system:	C:h.menu
-o.system:	C:h.res
-o.system:	C:h.resspr
-o.system:	C:h.dbox
-o.system:	C:h.visdelay
-o.system:	h.ftrace
-o.system:	h.configure
-o.system:	h.system
-o.system:	h.version

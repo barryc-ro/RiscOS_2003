@@ -3,9 +3,10 @@
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
-# Date       Name   Description
-# ----       ----   -----------
-# 08-Nov-94  AMcC   Updated for Black build
+# Date           Name   Description
+# ----           ----   -----------
+# 08-Nov-94      AMcC   Updated for Black build
+# 17th May 1995  JRC    Added world write access to all directories
 #
 
 #
@@ -56,7 +57,7 @@ install: ${FILES}
         ${CP} ${LDIR}.!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
         ${CP} ${LDIR}.Messages   ${INSTDIR}.Messages   ${CPFLAGS}
         |
-        ${ATTR} -directories +wr ${INSTDIR}
+        ${ATTR} -directories +wr +ww ${INSTDIR}
         ${ATTR} -files +or +ow +wr -ww ${INSTDIR}
         |
         @echo ${COMPONENT}: All installed (Disc)
