@@ -20,7 +20,7 @@ getborder ENTRY "R2,R4-R5"
         Debug   bo,"getborder: icon flags, vstring, caller ",R1,R3,R14
 
         MOV     R4,#border_normal
-        MOV     R5,#14                  ; default values
+        MOV     R5,#3                   ; default values
 
         TST     R1,#if_sprite
         TSTEQ   R1,#if_text
@@ -181,10 +181,47 @@ plot_action ENTRY
 ;;      R0-R3 preserved
 ;;-----------------------------------------------------------------------------
 
-plot_slab ENTRY "R0-R3"
+plot_slab ENTRY "R0-R4"
 
         BL      snap_coords             ; ensure snapped to a nice boundary
 
+      [ fixslabalignment
+        SUB     x1,x1,#1
+        SUB     y1,y1,#1                ; adjust x1 and y1 to be inclusive
+
+        ASSERT  :INDEX:dy - :INDEX:dx = 4
+        ADR     R14,dx
+        LDMIA   R14,{R0,R4}             ; get dx and dy
+        TEQ     R0,#2
+        TEQEQ   R4,#4
+        BEQ     plot_slab_24
+
+        CMP     R0,R4
+        MOVLT   R4,R0                   ; R4 = smaller of dx and dy
+
+        BL      render_bbox             ; plot first rectangle (at given coordinates)
+
+        MOV     R0,#1
+        BL      adjust_bbox             ; adjust the bounding box to cover reduced area
+
+        CMP     R4,#1
+        BLEQ    render_bbox             ; then fill again (but only if EX0 or EY0)
+
+        MOV     R0,#1
+        BL      adjust_bbox             ; adjust again
+        BL      render_bbox             ; then fill again
+
+        MOVEQ   R0,#1
+        BLEQ    adjust_bbox             ; fill final line if hires
+        BLEQ    render_bbox
+
+        MOVEQ   R0,#1
+        MOVNE   R0,#2
+        BL      adjust_bbox             ; and finally return with adjust bounding box
+
+        ADD     x1,x1,#1                ; adjust X1,Y1 to be exclusive again
+        ADD     y1,y1,#1
+      |
         LDR     R0,dx                   ; adjust X1,Y1 not to be inclusive
         SUB     x1,x1,R0
         LDR     R1,dy
@@ -202,8 +239,27 @@ plot_slab ENTRY "R0-R3"
         ADD     x1,x1,R0
         LDR     R1,dy
         ADD     y1,y1,R0
+      ]
 
         EXITS
+
+      [ fixslabalignment
+
+;; special case of plot_slab for good, old-fashioned rectangular pixel modes.
+;; It draws the bottom left and top right corners a bit more nicely
+plot_slab_24
+        MOV     R0,#2
+        BL      adjust_bbox             ; draw inner line first
+        BL      render_bbox
+        MOV     R0,#-2
+        BL      adjust_bbox
+        BL      render_bbox             ; then outer line
+        MOV     R0,#4
+        BL      adjust_bbox             ; adjust final bounding box
+        ADD     x1,x1,#1
+        ADD     y1,y1,#1                ; restore original x1,y1
+        EXITS
+      ]
 
 
 ;;-----------------------------------------------------------------------------
@@ -216,12 +272,16 @@ plot_slab ENTRY "R0-R3"
 snap_coords
         LDR     R0,dx_1
         BIC     x0,x0,R0                ; align X0 back to nice grid point
+      [ :LNOT:fixslabalignment
         ADD     x1,x1,R0
+      ]
         BIC     x1,x1,R0                ; align X1 out to the next grid point
 
         LDR     R0,dy_1
         BIC     y0,y0,R0                ; align Y0 back to nice grid point
+      [ :LNOT:fixslabalignment
         ADD     y1,y1,R0
+      ]
         BIC     y1,y1,R0                ; align Y1 out to the next grid point
 
         MOVS    PC,LR
@@ -318,7 +378,7 @@ ct_grey         = lightgrey, lightgrey, lightgrey, lightgrey
 ;; can be used to replace all the window bits and bobs within the system.
 ;;
 ;; All icons are allowed to give two states; normal + pressed, all gadgets
-;; must be defined with the same palette and same mode, mixining is not
+;; must be defined with the same palette and same mode, mixing is not
 ;; allowed.  Sprites are allowed to have mode prefix to allow different
 ;; depths to be supported.
 ;;-----------------------------------------------------------------------------
@@ -336,14 +396,13 @@ spritetable
 
         ^ 0
         AddIcon back,,"bicon", back_width, title_height
-        [ BounceClose
         AddIcon close,,"cicon", close_width, title_height
-        |
-        AddIcon close,no,"cicon", close_width, title_height
-        ]
-        AddIcon toggle,no,"ticon", vscroll_width, title_height
-        AddIcon toggle1,no,"ticon1", vscroll_width, title_height
+        AddIcon toggle,,"ticon", vscroll_width, title_height
+        AddIcon toggle1,,"ticon1", vscroll_width, title_height
         AddIcon size,,"sicon", vscroll_width, hscroll_height
+        [ IconiseButton
+	AddIcon iconise,,"iicon", iconise_width, title_height
+	]
 
         AddIcon up,,"uicon", vscroll_width, up_height
         AddIcon down,,"dicon", vscroll_width, down_height
@@ -394,8 +453,8 @@ toolcachesize   * :INDEX: @
 ;; for scanning through and replacing the various gadgets.  We attempt to
 ;; setup the caching list.
 ;;
-;; NB: The tool sprites temporaryly become part of the list of active
-;;     sprites - avoid IconSpriting any borders files.
+;; NB: The tool sprites temporarily become part of the list of active
+;;     sprites - avoid *IconSpriting any borders files.
 ;;
 ;; in   [tool_list] -> current tool list / =0 for none
 ;;      [tool_area] -> tool sprite area / =0 for none (don't build list)
@@ -452,13 +511,11 @@ maketoollist ENTRY "R1-R11"
 ;
         MOV     R1,#VduExt_YEigFactor
         SWI     XOS_ReadModeVariable
-        TEQ     R3,R2                   ; Yeig = Xeig?
-        MOVEQ   R6,#"2"                 ; if so use 22 postfix
-        MOVNE   R6,#"4"                 ; use 24 (ie usually default to none) NK Nov 17th 93
-        TEQ     R3,#1
-        TEQNE   R3,#0
-        MOVNE   R5,#0                   ; else no suffix for now
-        MOVNE   R6,#-1
+	CMP	R2,#1			; if both Xeig and Yeig <= 1 then use 22 postfix
+	CMPLS	R3,#1
+	MOVLS	R6,#"2"
+	MOVHI	R5,#0
+	MOVHI	R6,#-1
 ;
         MOV     R1,#VduExt_Log2BPP
         SWI     XOS_ReadModeVariable
@@ -480,7 +537,7 @@ maketoollist ENTRY "R1-R11"
         LDR     R2,tool_list
         LDR     R3,=toolcachesize       ; -> list / size
 ;
-        CMP     R2,#0                   ; has the list buffer been setup yet?
+        TEQ     R2,#0                   ; has the list buffer been setup yet?
         BNE     %FT07
         ADRL    R14,tools_area
         LDR     R2,[R14]                ; this is a constant size so try and reuse
@@ -622,6 +679,11 @@ maketoollist ENTRY "R1-R11"
         MOVMI   R4,#0                   ; always returns an extra pixel - bloody stupid thing!
         ]
 ;
+	TEQ	R5,#1
+	LDREQ	R5,[sp]
+	ORREQ	R5,R5,#1
+	STREQ	R5,[sp]			; store mask status
+;
         MOV     R0,R6
         MOV     R1,#VduExt_XEigFactor
         SWI     XOS_ReadModeVariable
@@ -684,6 +746,11 @@ maketoollist ENTRY "R1-R11"
         LDR     LR,close_width
         TEQ     LR,#0
         STREQ   R1,close_width
+      [ IconiseButton
+	LDR	LR,iconise_width
+	TEQ	LR,#0
+	STREQ	R1,iconise_width
+      ]
         LDR     LR,left_width
         TEQ     LR,#0
         STREQ   R1,left_width
@@ -699,6 +766,7 @@ maketoollist ENTRY "R1-R11"
 ; assume that R2 -> suitable sprite which describes the characteristics
 ; of all the other sprites being plotted.
 ;
+	BIC	R2,R2,#1		; strip our mask bit
         STR     R2,spritename
         MOV     R2,#0
         STR     R2,lengthflags          ; [spritename] is absolute
@@ -757,7 +825,7 @@ maketoollist ENTRY "R1-R11"
         MOVNE   R0,#0
         STRNE   R0,pixtable_at
         STRNE   R0,pixtable_size        ; flag as no active pixtable ('cos we stole it!)
-        
+
       [ ChildWindows
         ADR     R14,factors
         LDMIA   R14,{R3,R4,R5,R6}
@@ -850,6 +918,9 @@ default_params
         STR     R1,vscroll_width        ; width based paramaters
         STR     R1,back_width
         STR     R1,close_width
+      [ IconiseButton
+	STR	R1,iconise_width
+      ]
         STR     R1,left_width
         STR     R1,right_width
 ;
@@ -1099,6 +1170,9 @@ default_tools
 ;; in   R0,R1 = mouse co-ordinates
 ;;      R2 = button state
 ;;      R4 = icon handle
+;;	R6 = button attributes
+;;	R7 = mouse flag
+;;	R8 = old button state
 ;;      handle = window handle
 ;;      [border_iconselected] = tool handle (if applicable)
 ;;      [border_windowselected] = window handle of tool window
@@ -1145,10 +1219,17 @@ modifytool_clicked
 
         ADRL    R2,glyphs_selected
         LDRB    R2,[R2,R4]
-        TEQ     R2,#0                  ; is it possible for this glyph to have an alternate state?
-        LDRNE   R3,tool_list
-        TEQNE   R3,#0                   ; is there a glyph list?
-        LDRNE   R3,[R3,R2]
+        TEQ     R2,#0                   ; is it possible for this glyph to have an alternate state?
+	EXITS	EQ		      	; nope, so return
+        LDR     R3,tool_list
+        TEQ     R3,#0                   ; is there a glyph list?
+	BNE	%FT05
+	Push	"R2"			; R2 corrupted :-(
+	BL	recache_tools_trans	; if not, try to get one again
+	Pull	"R2"
+	LDR	R3,tool_list
+	TEQ	R3,#0
+05      LDRNE   R3,[R3,R2]
         TEQNE   R3,#0                   ; does the glyph have a second state cached?
         EXITS   EQ                      ; return 'cos not allowed to toggle the state
 ;
@@ -1212,11 +1293,13 @@ modify_hscroll
 
 modifytool_release ENTRY "R4,handle"
 
+        LDR     handle,border_windowselected
+	CMP	handle,#nullptr
+	EXITS	EQ
+;
         LDR     R4,border_iconselected
         CMP     R4,#windowicon_back
         EXITS   GT                      ; exit if not the correct sort of icon
-;
-        LDR     handle,border_windowselected
 ;
         MOV     R0,#nullptr             ; flag as no icon currently selected
         STR     R0,border_iconselected
@@ -1242,23 +1325,28 @@ invalidate_glyph ENTRY "R0-R9"
         ADR     R0,iconposn_table
         LDRB    R0,[R0,R4]              ; get the value for icon posn
         BL      calc_w_iconposn         ; mark bounding box for icon invalid
-        [ false
-        MOV     cx0,x0
-        MOV     cy0,y0
-        MOV     cx1,x1
-        MOV     cy1,y1                  ; move to more sensible registers
-        BL      markinvalid_cx0cy0cx1cy1
-        |
         BL      checkredrawhandle
         BL      visibleportion_x0y0x1y1
+      [ false
         BL      markinvalidrects
         BL      losewindowrects
-        ]
+      |
+	; Actually, lets do this immediately
+	BL	int_redraw_window
+invglp	EXIT	VS
+	TEQ	R0,#0
+	EXITS	EQ
+	BL	int_get_rectangle
+	B	invglp
+      ]
 ;
         EXITS
 
 ; table to convert -ve icon handle to posn values
 
+	[ IconiseButton
+	= iconposn_iconise
+	]
         = 0
         = iconposn_hscroll
         = iconposn_hscroll
@@ -1281,6 +1369,9 @@ iconposn_table
 ;; Glyph tables, used for highlighting icons - deciding if highlightable.
 ;;------------------------------------------------------------------------------
 
+	[ IconiseButton
+	= tool_iconise
+	]
         = 0                             ; outer frame!
         = tool_right
         = 0                             ; horizontal scroll bar
@@ -1296,6 +1387,9 @@ iconposn_table
         = 0                             ; work area
 glyphs_normal
 
+	[ IconiseButton
+	= tool_piconise
+	]
         = 0                             ; outer frame - special case
         = tool_pright
         = tool_phbarl
@@ -1304,13 +1398,9 @@ glyphs_normal
         = tool_pdown
         = tool_pvbart
         = tool_pup
-        = 0                             ; toggle icon doesn't change state
+        = tool_ptoggle			; value not used, but non-0 to indicate highlightable
         = tool_ptbarlcap
-        [ BounceClose
         = tool_pclose
-        |
-        = 0                             ; close not highlightable
-        ]
         = tool_pback
         = 0                             ; work area
 glyphs_selected
@@ -1364,10 +1454,11 @@ plot_windowglyph ENTRY "R0-R9"
         EXIT    EQ                      ; if not defined then return - do via VDU 5
 ;
 ; Allow toolsprites to be transparent (to show the colour through, if required)
-; TODO: Spot which toolsprites have a mask, and skip this bit for those that don't
 ;
-        BL      solidrectangle
-        BL      hollowrectangle        ; suitable rectangles
+	TST	R2,#1
+        BLNE    solidrectangle	     	; corrupts flags :-(
+	TST	R2,#1
+        BLNE    hollowrectangle        ; suitable rectangles
 ;
         MOV     R3,x0
         MOV     R4,y0                   ; x,y co-ordinates to plot at
@@ -1402,47 +1493,47 @@ plot_windowglyph_vscaled  ENTRY "R0,R1,cx0,cy0,cx1,cy1,y0,y1"
 
         ADRL    R1,tool_scalingblk
         LDMIA   R1,{cx0,cy0,cx1,cy1}
-        
+
         SUB     R14,y1,y0
         MUL     cy0,R14,cy0
         MUL     cy1,R0,cy1
-        
+
         Push    "cx0,cy0,cx1,cy1"
         MOV     R1,SP                           ; R1 -> new scaling block (on stack)
-        
+
         LDR     R2,tool_plotparams + 0          ; sprite reason code
         LDR     R3,tool_plotparams + 8          ; pointer to factors
         Push    "R2,R3"
-        
+
         BIC     R2,R2,#&FF
         ORR     R2,R2,#SpriteReason_PutSpriteScaled
         STR     R2,tool_plotparams + 0
         STR     R1,tool_plotparams + 8          ; must have to scale it for this call
-        
+
         ASSERT  R2 = cx0
         LDR     R2,[SP,#8*4]                    ; restore R2 from stacked cx0 on entry
         MOV     R1,R2                           ; for plot_windowglyph_clipped (later)
         BL      plot_windowglyph
-        
+
         Pull    "R2,R3"
         STR     R2,tool_plotparams + 0          ; sprite reason code
         STR     R3,tool_plotparams + 8          ; pointer to factors
-        
+
         ADD     SP,SP,#4*4                      ; correct stack
-        
+
         ; now we must explicitly plot the top and bottom row, to avoid dropouts
         ; this involves messing with the clipping region (urg)
-        
+
         Push    "x0,y0,x1,y1"
         Pull    "cx0,cy0,cx1,cy1"               ; copy x0,y0,x1,y1 to cx0,cy0,cx1,cy1 (for clip window)
-        
+
         LDR     R14,dy
         Push    "y1,R14"
-        
+
         ADD     cy1,cy0,R14
         ADD     y1,y0,R0
         BL      plot_windowglyph_clipped        ; plot bottom pixel row
-        
+
         Pull    "y1,R14"
 
         MOV     cy1,y1
@@ -1476,45 +1567,45 @@ plot_windowglyph_hscaled  ENTRY "R0,R1,cx0,cy0,cx1,cy1,x0,x1"
         SUB     R14,x1,x0
         MUL     cx0,R14,cx0
         MUL     cx1,R0,cx1
-        
+
         Push    "cx0,cy0,cx1,cy1"
         MOV     R1,SP                           ; R1 -> new factors on stack
-        
+
         LDR     R2,tool_plotparams + 0          ; sprite reason code
         LDR     R3,tool_plotparams + 8          ; pointer to factors
         Push    "R2,R3"
-        
+
         BIC     R2,R2,#&FF
         ORR     R2,R2,#SpriteReason_PutSpriteScaled
         STR     R2,tool_plotparams + 0
         STR     R1,tool_plotparams + 8          ; must have to scale it for this call
-        
+
         ASSERT  R2 = cx0
         LDR     R2,[SP,#8*4]                    ; restore R2 from stacked cx0 on entry
         MOV     R1,R2                           ; for plot_windowglyph_clipped (later)
         BL      plot_windowglyph
-        
+
         Pull    "R2,R3"
         STR     R2,tool_plotparams + 0          ; sprite reason code
         STR     R3,tool_plotparams + 8          ; pointer to factors
-        
+
         ADD     SP,SP,#4*4                      ; correct stack
 
         ; now we must explicitly plot the top and bottom row, to avoid dropouts
         ; this involves messing with the clipping region (urg)
-        
+
         Push    "x0,y0,x1,y1"
         Pull    "cx0,cy0,cx1,cy1"               ; copy x0,y0,x1,y1 to cx0,cy0,cx1,cy1 (for clip window)
-        
+
         LDR     R14,dx
         Push    "x1,R14"
 
         ADD     cx1,cx0,R14
         ADD     x1,x0,R0
         BL      plot_windowglyph_clipped        ; plot left-hand pixel row
-        
+
         Pull    "x1,R14"
-        
+
         MOV     cx1,x1
         SUB     cx0,cx1,R14
         SUB     x0,x1,R0
@@ -1539,14 +1630,14 @@ plot_windowglyph_clipped  ENTRY "R0,R1,cx0,cy0,cx1,cy1,x0,y0,x1,y1"
 
         ADR     R14,clipx0
         LDMIA   R14,{x0,y0,x1,y1}
-        
+
         Push    "x0,y0,x1,y1"
-        
+
         max     x0,cx0
         max     y0,cy0
         min     x1,cx1
         min     y1,cy1
-        
+
         CMP     x0,x1
         CMPLT   y0,y1
         ADDGE   SP,SP,#4*4
@@ -1556,13 +1647,13 @@ plot_windowglyph_clipped  ENTRY "R0,R1,cx0,cy0,cx1,cy1,x0,y0,x1,y1"
 
         ADD     R14,SP,#10*4
         LDMIA   R14,{x0,y0,x1,y1}               ; recover original x0,y0,x1,y1
-        
+
         MOVVC   R2,R1
         BLVC    plot_windowglyph
-        
+
         Pull    "x0,y0,x1,y1"
         BL      graphicswindow                  ; restore graphics window
-        
+
         EXITS
       ]
 
@@ -2274,11 +2365,13 @@ FindFont ENTRY  "R0-R10"
         AND     R2,R2,#&1E
         MOV     R2,R2, LSR #1
         TEQ     R2,#1                   ; system font
-        MOVEQ   R0,#0
-        STREQ   R0,systemfont
-        BEQ     afterfindingfont
+	BNE	%FT50
+        MOV     R0,#0
+        STR     R0,systemfont
+	SETV
+        B       afterfindingfont
 
-        ;Allocate a buffer big enough for the font name and setup a pointer
+50      ;Allocate a buffer big enough for the font name and setup a pointer
         ;       to it
         MOV     R6, SP
 
@@ -2744,6 +2837,7 @@ Tool_SpriteOp
         BLEQ    recache_tools_trans
 05
         LDR     R1,tool_area             ; R1 is quite often wrong!
+	BIC	R2,R2,#1
 
         SWI     XOS_SpriteOp
         LDR     R1,tool_list             ; if the tool list is wrong then reset the pointer
@@ -2767,6 +2861,7 @@ recache_tools_trans
 
         Push    "R0-R5"
 
+	BIC	R2,R2,#1
         STR     R2,spritename
         MOV     R2,#0
         STR     R2,lengthflags

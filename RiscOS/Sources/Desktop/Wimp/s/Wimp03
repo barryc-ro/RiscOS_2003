@@ -126,10 +126,12 @@ lookfornewtask
         LDRNE   R0,currentmode          ; only change mode if chars printed
 
         BLNE    int_setmode
+      [ Medusa
         ADRL    R14,greys_mode
         LDRB    R14,[R14]
         TEQ     R14,#0
         BLNE    recalc_greys_palette
+      ]
 
         Debug   task1,"Returned from int_setmode"
 ;
@@ -159,6 +161,8 @@ lookfornewtask
         ASSERT  postfilter =prefilter +8
         ASSERT  copyfilter =postfilter +8
         ASSERT  rectanglefilter =copyfilter +8
+	ASSERT	postrectfilter =rectanglefilter +8
+	ASSERT	posticonfilter =postrectfilter +8
 
         ASSERT  prefilterWP =prefilter -4
 
@@ -190,12 +194,16 @@ filtertable
         & postfilter_default -filtertable
         & copyfilter_default -filtertable
         & rectanglefilter_default -filtertable
+        & postrectfilter_default -filtertable
+	& posticonfilter_default -filtertable
         & -1
 
 prefilter_default
 postfilter_default
 copyfilter_default
 rectanglefilter_default
+postrectfilter_default
+posticonfilter_default
 
         MOVS    PC,LR
 
@@ -320,10 +328,8 @@ SWIWimp_Poll
 
         [ Medusa
         BLT     %FT05
-        MedusaOS
         Push    "R0"
-        LDREQ   R0,orig_applicationspacesize
-        MOVNE   R0,#&1000000
+        LDR     R0,orig_applicationspacesize
         SUBS    R14,R0,R14
         Pull    "R0"
 05
@@ -351,7 +357,7 @@ SWIWimp_Poll
 
         LDR     R14,[R4,#task_priority]
         TST     R0,#flag_pollword
-        CMPNE   R3,#0
+        TEQNE   R3,#0
         ORRNE   R14,R14,#priority_pollword      ; Has a poll word ?
         BICEQ   R14,R14,#priority_pollword
 
@@ -748,7 +754,7 @@ clearrects
         LDR     R1,scry1
         SUB     R1,R1,#1                ; default is top-left of screen
         SWI     XOS_SetECFOrigin
-        MOV     R0,#15
+        MOV     R0,#4
         BL      background
 ;
         Push    "userblk"
@@ -791,7 +797,7 @@ start_braindead_panic_redraw
         LDR     R1,scry1
         SUB     R1,R1,#1                ; default is top-left of screen
         SWI     XOS_SetECFOrigin
-        MOV     R0,#15
+        MOV     R0,#4
         BL      background
         SWI     OS_WriteI+16            ; CLG
 
@@ -930,6 +936,10 @@ lookatpointer
 ; now see what user input has occurred
 ;
         BL      getmouseposn            ; ie. MOUSE R0,R1,R2
+
+      [ PoppingIconBar
+	BL	checkiconbarpop
+      ]
 ;
 ; are we dragging a box?
 ;
@@ -974,7 +984,7 @@ lookatpointer
 ; check sysflags to see if continuous dragging occurs
 ;
         LDR     R14,dragtype
-        CMP     R14,#drag_scrollboth    ; use vscroll bit of sysflags for this
+        TEQ     R14,#drag_scrollboth    ; use vscroll bit of sysflags for this
         MOVEQ   R14,#drag_vscroll
         CMP     R14,#drag_user
         BGE     notdragging             ; only system drags are elegible
@@ -1091,6 +1101,98 @@ gonewposnsize
         LDR     R2,oldbuttons
         B       openwindow_checkbuttons
 
+	[ PoppingIconBar
+	; Note - need to sort out Service_MouseTrap for all this!
+	ROUT
+checkiconbarpop
+	Push	"R0,LR"
+	LDR	R14,singletaskhandle
+	CMP	R14,#0
+	Pull	"R0,PC",GT		; old-style tasks don't have an icon bar!
+	LDR	R14,iconbar_pop_state
+	ADD	PC,PC,R14,LSL #2
+	NOP
+	B	%F10
+	B	%F20
+	B	%F30
+; Icon bar is held by menu
+	Pull	"R0,PC"
+
+; Icon bar is at back
+10	TEQ	R1,#0		; are we at the bottom of the screen?
+	Pull	"R0,PC",NE
+
+	; Don't bring to front if dragging a window
+	LDR	R14,dragtype
+	CMP	R14,#drag_posn
+	BLT	%FT11
+	CMP	R14,#drag_vscroll
+	Pull	"R0,PC",LE
+	TEQ	R14,#drag_scrollboth
+	Pull	"R0,PC",EQ
+
+11	SWI	XOS_ReadMonotonicTime
+	Pull	"R0,PC",VS
+	[ false
+	LDR	R14,automenu_timelimit
+	ADD	R0,R0,R14
+	|
+	ADD	R0,R0,#pop_DelayTime
+	]
+	STR	R0,iconbar_pop_time
+	MOV	R0,#pop_Delaying
+	STR	R0,iconbar_pop_state
+	Pull	"R0,PC"
+
+; Icon bar is delaying
+20	TEQ	R1,#0
+	MOVNE	R14,#pop_Back
+	STRNE	R14,iconbar_pop_state
+	Pull	"R0,PC",NE
+	SWI	XOS_ReadMonotonicTime
+	LDR	R14,iconbar_pop_time
+	CMP	R0,R14
+	Pull	"R0,PC",LO
+	MOV	R14,#pop_Front
+	STR	R14,iconbar_pop_state
+	MOV	R14,#0
+	B	%FT50
+
+; Icon bar is at front
+30	LDR	R14,iconbarheight
+	CMP	R1,R14
+	Pull	"R0,PC",LE
+	MOV	R14,#pop_Back
+	STR	R14,iconbar_pop_state
+	MOV	R14,#1
+
+50
+	MOV	R0,R14
+	LDR	handle,iconbarhandle
+	CMP	handle,#0
+	Pull	"R0,PC",LE
+
+	Push	"R1-R11"
+	BL	checkhandle             ; handle -> window block
+	BLVC	calc_w_status           ; set up flag word
+	LDRVC	R14,[handle,#w_flags]
+	TEQ	R0,#0
+	BICEQ	R14,R14,#wf_backwindow
+	ORRNE	R14,R14,#wf_backwindow
+	STRVC	R14,[handle,#w_flags]
+	ADDVC	R14,handle,#w_wax0
+	LDMVCIA	R14,{R0-R3,R4,R5}
+	MOVEQ	R6,#-1
+	MOVNE	R6,#-2
+	Push	"R0-R6"
+	LDRVC	R14,iconbarhandle
+	Push	"R14"
+	MOVVC	userblk,sp
+	BLVC	int_open_window
+	ADD	sp,sp,#8*4
+	Pull	"R1-R11"
+	Pull	"R0,PC"
+	]
 
 ;;----------------------------------------------------------------------------
 ;; Check for pointer changing window
@@ -1257,6 +1359,7 @@ ptr_iconbar_icon
 
 ; if in iconbar, check whether we should scroll automatically
 
+ [ false
         LDR     R14,iconbarhandle
         CMP     R14,#0
         BLE     %FT01                   ; no iconbar
@@ -1287,6 +1390,83 @@ ptr_iconbar_icon
         BL      int_open_window
         ADD     sp,sp,#4*8              ; handle,x0,y0,x1,y1,scx,scy,bhandle
         Pull    "R0-R8,handle,userblk"
+  |
+        LDR     R14,iconbarhandle
+        CMP     R14,#0
+        BLE     %FT01                   ; no iconbar
+        TEQ     R3,R14
+	MOVNE	R14,#0
+	STRNE	R14,iconbar_scroll_start_time
+        BNE     %FT01                   ; this isn't it!
+;
+        LDR     R14,scrx0
+	[ true
+        ADD     R14,R14,#iconbarsepgap
+        CMP     R0,R14
+        MOVLT   R8,#-iconbar_scroll_speed * 100 - 1                ; scroll left
+        BLT     %FT02
+	|
+	ADD	R14,R14,#iconbar_scroll_speed
+	SUBS	R8,R0,R14
+	BLT	%FT02
+	]
+        LDR     R14,scrx1
+	[ true
+        SUB     R14,R14,#iconbarsepgap
+        CMP     R0,R14
+	MOVLE	R14,#0
+	STRLE	R14,iconbar_scroll_start_time
+        BLE     %FT01
+        MOVGT   R8,#iconbar_scroll_speed * 100                 ; scroll right
+	|
+	SUB	R14,R14,#iconbar_scroll_speed
+	SUBS	R8,R0,R14
+	MOVLE	R14,#0
+	STRLE	R14,iconbar_scroll_start_time
+	BLE	%FT01
+	]
+02
+        Push    "R0-R8,handle,userblk"
+        Abs     handle,R3
+        BL      calc_w_status           ; ensure bhandle is correct
+        ADD     R14,handle,#w_wax0
+        LDMIA   R14,{R1-R7}             ; x0,y0,x1,y1,scx,scy,bhandle
+        LDR     R8,[sp,#8*4]
+
+	SWI	XOS_ReadMonotonicTime
+	LDR	R14,iconbar_scroll_start_time
+	TEQ	R14,#0
+	STREQ	R0,iconbar_scroll_start_time
+	STREQ	R5,iconbar_scroll_start_scx
+	BEQ	%FT04
+	; The following formula gives speed = iconbar_scroll_speed+iconbar_scroll_accel * time
+	Push	"R2"
+	LDR	R5,iconbar_scroll_start_scx
+	LDR	R2,iconbar_scroll_start_time
+	SUB	R2,R0,R2		; R2=time since scroll start (in centi-seconds)
+	[ iconbar_scroll_accel = 1
+	CMP	R8,#0
+	ADDGT	R8,R8,R2
+	SUBLT	R8,R8,R2		; R8=(+/-)(speed + accel*time)
+	|
+	MOV	LR,#iconbar_scroll_accel
+	MUL	LR,R2,LR		; LR=accel * time
+	CMP	R8,#0
+	ADDGT	R8,R8,LR
+	SUBLT	R8,R8,LR		; R8=(+/-)(speed + accel*time)
+	]
+	MUL	R8,R2,R8		; R8=(+/-)(speed + accel*time) * time
+	ADD	R5,R5,R8,ASR #6		; R5+=(+/-)(speed + accel*time) * time/128 (approximation to 100)
+	Pull	"R2"
+
+        LDR     R0,iconbarhandle
+        Push    "R0,R1-R7"              ; first word is window handle
+        MOV     userblk,sp
+        BL      int_open_window
+        ADD     sp,sp,#4*8              ; handle,x0,y0,x1,y1,scx,scy,bhandle
+04
+        Pull    "R0-R8,handle,userblk"
+  ]
 01
 
 ; if dragging, treat as window -1 (do this after iconbar scrolling)
@@ -1506,7 +1686,7 @@ issystemarea
 ;
         LDR     R0,border_iconselected          ; may have changed!
         CMP     R0,#windowicon_workarea
-        BLE     %FT01                           ; if -VE then ignore its not worth the hassel
+        BLE     %FT01                           ; if -VE then ignore its not worth the hassle
 ;
         MOV     R1,#0
         MOV     R2,#is_inverted
@@ -1745,6 +1925,7 @@ waitdrag_action
 ; Return mouse buttons to the user
 ; Entry:  R0,R1 = mouse x,y coords
 ;         R2 = mouse buttons:
+
 ;              bits 0-3  = normal response    (depends on button type)
 ;              bits 4-7  = 'drag' operation   (button held down)
 ;              bits 8-11 = 'select' operation (ie. 1 click if it's that type)
@@ -1807,6 +1988,9 @@ notiniconbar
         CMP     R4,#0
         BLT     %FT10                   ; if its the background then ignore it
 ;
+	TST	R2,#button_middle	; ignore menu clicks for slabbing
+	BNE	%FT10
+
         Push    "R0-R3"
 
 ; R3 = window handle / handle => window defn ( <= 0 if none )
@@ -1821,21 +2005,40 @@ notiniconbar
 ;
         TEQ     R0,#border_action
         TEQNE   R0,#border_defaultaction
+	BNE	%FT03
 ;
-        STREQ   handle,border_windowselected
-        STREQ   R4,border_iconselected
-;
+	LDR	R14,border_windowselected    ; Make sure previous selected icon
+	CMP	R14,#nullptr                 ; is unslabbed
+	BLE	%F1
+	TEQ	R14,handle
+	LDR	R0,border_iconselected
+	CMP	R0,#nullptr
+	BLE	%F1
+	TEQ	R0,R4
+	TEQEQ	R14,handle
+	BEQ	%F2
+	Push	"handle"
+	MOV	handle,R14
+	MOV	R1,#0
+	MOV	R2,#is_inverted
+	BL	int_set_icon_state
+	Pull	"handle"
 
-        LDREQB  R0,autorepeating
-        CMPEQ   R0,#0
-        MOVNE   R0,#0
+1       STR     handle,border_windowselected
+        STR     R4,border_iconselected
+;
+2       LDRB    R0,autorepeating
+        CMP     R0,#0
+3       MOVNE   R0,#0
         STRNEB  R0,autorepeating
+	BNE	%F5
 
-        MOVEQ   R0,R4                   ; R1 => icon handle
-        MOVEQ   R1,#is_inverted
-        MOVEQ   R2,#0
-        BLEQ    int_set_icon_state      ; and then select the icon
+        MOV     R0,R4                   ; R1 => icon handle
+        MOV     R1,#is_inverted
+        MOV     R2,#0
+        BL      int_set_icon_state      ; and then select the icon
 ;
+5
         Pull    "R0-R3"
 10
 ;
@@ -2400,7 +2603,7 @@ setwimpicon
 01
         TST     R2,R3
         BEQ     %FT02
-;
+05
         Push    "R0,R1"
         MOV     R0,R4
         BL      calc_w_iconposn
@@ -2417,6 +2620,9 @@ setwimpicon
         ADDGT   R4,R4,#2
         CMP     R4,#7+2                 ; fudge!
         BEQ     check_h_arrows          ; icon 7 is also really 3 icons
+      [ IconiseButton
+        ADDGT	R4,R4,#3		; and skip -13 (which is the border)
+      ]
 03
         ADR     R14,wiconflags-4
         LDR     R5,[R14,R4,ASL #2]
@@ -2482,7 +2688,14 @@ check_h_arrows
         MOVS    R3,R3,ASL #1
         ADD     R4,R4,#1
         CMP     R4,#8
-        BCC     %BT01
+        BLO     %BT01
+      [ IconiseButton
+	BHI	%FT04
+	LDR	R2,[handle,#w_flags]
+	TST	R2,#wf_icon2
+	BNE	%BT05
+04
+      ]
 ;
         MOV     R4,#bordericon                          ; in the border
         MOV     R5,#ibt_never :SHL: ib_buttontype       ; has no effect
@@ -2490,14 +2703,19 @@ check_h_arrows
 
 
 wiconflags
-        DCD     ibt_click        :SHL: ib_buttontype        ; back
         [ BounceClose
-        DCD     ibt_clickrelease        :SHL: ib_buttontype        ; quit
+        DCD     ibt_clickrelease :SHL: ib_buttontype        ; back
+        DCD     ibt_clickrelease :SHL: ib_buttontype        ; quit
         |
-        DCD     ibt_click       :SHL: ib_buttontype
+        DCD     ibt_click        :SHL: ib_buttontype        ; back
+        DCD     ibt_click        :SHL: ib_buttontype
         ]
         DCD     ibt_click        :SHL: ib_buttontype        ; move BLOBBY
+	[ BounceClose
+        DCD     ibt_clickrelease :SHL: ib_buttontype        ; toggle
+	|
         DCD     ibt_click        :SHL: ib_buttontype        ; toggle
+	]
         DCD     -1                                          ; scup
         DCD     ibt_click        :SHL: ib_buttontype        ; scvert
         DCD     -1                                          ; scdown
@@ -2506,7 +2724,14 @@ wiconflags
         DCD     ibt_click        :SHL: ib_buttontype        ; schoriz
         DCD     -1                                          ; scright
 bordericon      *       -2 - (.-wiconflags)/4
-
+	[ IconiseButton
+	DCD	-1
+	[ BounceClose
+	DCD	ibt_clickrelease :SHL: ib_buttontype	    ; iconise
+	|
+	DCD	ibt_click        :SHL: ib_buttontype	    ; iconise
+	]
+	]
 wimpaction
         CMP     R3,#0                   ; is this a real window?
         BLGT    pageinicontask_R3R4     ; takes note of iconbar
@@ -2528,6 +2753,10 @@ wiconjump
         B       wicon_scleft
         B       wicon_schoriz
         B       wicon_scright
+	[ IconiseButton
+	MOV	PC,#0
+	B	wicon_iconise
+	]
 
 
 ;;----------------------------------------------------------------------------
@@ -2580,7 +2809,7 @@ wicon_toggle
 ; is then attempt to toggle the window to a sensible size, not obscuring
 ; the icon bar.
 
-        Push    "R0-R2,R4"
+        Push    "R0-R2,R4,R6"
 
       [ ChildWindows
         LDR     R14,[handle,#w_parent]
@@ -2588,10 +2817,14 @@ wicon_toggle
         BNE     %FT01                   ; this stuff only applies to top-level windows
       ]
 
-        LDR     R4,hscroll_height
-        ADD     R4,R4,#168              ; area not to be obscured
+	LDR	R4,iconbarheight
+	SUB	R4,R4,#8;-40
+	LDR	R14,[handle,#w_flags]
+	TSTS	R14,#wf_icon7
+        LDRNE   R14,hscroll_height
+        ADDNE   R4,R4,R14               ; area not to be obscured
 
-        CMP     cy0,R4                  ; does the bottom of the window obscure the icon bar?
+        SUBS    R6,cy0,R4               ; does the bottom of the window obscure the icon bar?
         BGE     %FT01                   ; if not then don't bother faffing around
 
         MOV     R0,#121
@@ -2612,11 +2845,21 @@ wicon_toggle
         BNE     %FT01                   ; if it isn't then ignore the munging of the bits
 
         MOV     cy0,R4
-        ADD     cy1,cy0,y1              ; setup the new co-ordinates for bottom & top Y's
+        SUB     cy1,cy1,R6              ; setup the new co-ordinates for bottom & top Y's
 
-        LDR     R14,scry1
-        CMP     cy1,R14                 ; if y1 > screen top then truncate
-        MOVGT   cy1,R14
+	LDR	R6,scry1
+	LDR	R14,title_height
+	SUB	R6,R6,R14
+	LDR	R14,iconbarheight
+	SUB	R14,R14,#8
+	SUB	R0,R6,R14
+	LDR	R14,[handle,#w_flags]
+	TSTS	R14,#wf_icon7
+	LDRNE	R14,hscroll_height
+	SUBNE	R0,R0,R14		; R0 = max window height that can fit on screen
+	CMPS	y1,R0
+	MOVGT	cy1,R6		        ; window won't fit at maximum extent, so carefully trim
+	SUBGT	y1,cy1,cy0
 
       [ Version >= 317 :LAND: togglebits
         LDR     R14,[handle,#w_flags]   ; set toggled in silly way bit
@@ -2624,7 +2867,7 @@ wicon_toggle
         STR     R14,[handle,#w_flags]
       ]
 01
-        Pull    "R0-R2,R4"
+        Pull    "R0-R2,R4,R6"
 
         ADD     R14,userblk,#u_wax0
         STMIA   R14,{cx0,cy0,cx1,cy1}
@@ -2697,6 +2940,12 @@ wicon_back
 openwindow
         B       Exit_OpenWindow
 
+      [ IconiseButton
+wicon_iconise
+	Push	"r0-r4"
+	B	%FT20
+      ]
+
 wicon_quit
         Push    "r0-r4"
 
@@ -2711,7 +2960,7 @@ wicon_quit
         Pull    "r0-r4",NE
         BNE     not_alt
 
-        MOV     R0,#&79                 ; Scan keyboard for shift key
+        MOV     R0,#121                 ; Scan keyboard for shift key
         MOV     R1,#&80
         SWI     OS_Byte
 
@@ -2721,7 +2970,7 @@ wicon_quit
         BNE     not_alt
 
                                         ; Shift-quit, send message_Iconize.
-        MOV     R14,#ms_data+8+20       ; size of block (Window,Task,20 byte from title ).
+20      MOV     R14,#ms_data+8+20       ; size of block (Window,Task,20 byte from title ).
         STR     R14,[sp,#-(ms_data+8+20)]!
         MOV     R0,#User_Message
         MOV     R1,sp
@@ -2812,6 +3061,9 @@ not_alt
         B       nothing
 05
         ]
+	[ BounceClose
+	STR	R2,mousebuttons		; Horrible hack so apps can tell that adjust was pressed
+	]
         STR     R3,[userblk]
         MOV     R0,#Close_Window_Request
         B       ExitPoll
