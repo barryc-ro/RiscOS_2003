@@ -122,6 +122,13 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.driver
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.utils
+o.module:	h.ir_api
+o.module:	h.module
+o.module:	h.driver
 o.driver:	c.driver
 o.driver:	C:h.kernel
 o.driver:	C:h.swis

@@ -40,6 +40,7 @@ static ir_client_callbacks_t callbacks =
     driver_accept_report_packet,
 };
 
+
 #define MES  MK_MES(6000)
 #define NCES 3
 #define NCPL 3
@@ -74,6 +75,7 @@ static unsigned char *data_pos;
 static unsigned int packet_count=0;
 static unsigned int total_packets=0;
 
+static tag_info_t tags[NUM_TAGS];
 static void *private_word;
 
 unsigned char flags=0;
@@ -116,6 +118,14 @@ _kernel_oserror *driver_initialise(void *pw,unsigned int reason)
             flags |= DRIVER_FLAGS_STANDBY_MODE;
         }
 
+        for (loop = 0; loop< NUM_TAGS; loop++)
+        {
+            tags[loop].PrivateWord = pw;
+            tags[loop].tag_number = loop;
+            tags[loop].ignore_keys = 0;
+            tags[loop].last_buffer_code = 0xff;
+            tags[loop].context.word = INACTIVE;
+        }
     }
 
     err = ir_initialise(&callbacks,pw);
@@ -265,17 +275,69 @@ int handset_lookup(unsigned int value)
     return key;
 }
 
+void ir_set_timeout(int tag_number, context_t context, unsigned int delay)
+{
+    context.word = delay;
+    tags[tag_number].context = context;
 
-#define BITS_PER_FIELD 2
+  _swix(OS_CallAfter,_INR(0,2),
+        delay, timeout_preveneer, &(tags[tag_number].PrivateWord));
+
+
+}
+
+
+void ir_cancel_timeout(int tag_number)
+{
+    if (tags[tag_number].context.word != INACTIVE)
+    {
+        _swix(OS_RemoveTickerEvent, _INR(0,1),
+              timeout_preveneer, &(tags[tag_number].PrivateWord));
+        tags[tag_number].context.word = INACTIVE;
+    }
+}
+
+void ir_timeout(int tag_number)
+{
+    context_t *context = &(tags[tag_number].context);
+
+    if (context->word != INACTIVE)
+    {
+        context->word = INACTIVE;
+    }
+    switch (tags[tag_number].ignore_keys)
+    {
+        case ACCEPT_NO_KEYS:
+        {
+            tags[tag_number].ignore_keys = ACCEPT_NEW_KEYS;
+            DEBUGFN(3,db_printf("\nNow accepting new keys\n"));
+            ir_set_timeout(tag_number,tags[tag_number].context,ABS(REPEAT_DELAY-BOUNCE_DELAY));
+            break;
+        }
+        case ACCEPT_NEW_KEYS:
+        {
+            tags[tag_number].ignore_keys = ACCEPT_ALL_KEYS;
+            DEBUGFN(3,db_printf("\nNow accepting all keys\n"));
+            break;
+        }
+    }
+}
+
+
+
+#define BITS_PER_CES 2
+#define BITS_PER_CPL 2
+
 void driver_accept_data_packet(unsigned int registry_number,
                                 unsigned char tag_number,
                                 unsigned char data[3])
 {
     unsigned int size;
     int buffer_code;
+    tag_info_t *tag = &tags[tag_number];
+    context_t context = tags[tag_number].context;
 
     NOT_USED(registry_number);
-    NOT_USED(tag_number);
 
     DEBUGFN(3,db_printf("in driver_accept_data_packet\n"));
 
@@ -353,9 +415,7 @@ void driver_accept_data_packet(unsigned int registry_number,
             {
 
                 DEBUGFN(3,db_printf("["));
-
-
-                for (bl=0; bl < BITS_PER_FIELD; bl++)
+                for (bl=0; bl < BITS_PER_CPL; bl++)
                 {
                     field<<=1;
                     if ((*data_pos)&(1<<bit_index))
@@ -374,8 +434,11 @@ void driver_accept_data_packet(unsigned int registry_number,
                 }
                 DEBUGFN(3,db_printf("]"));
 
+
+
+
                 DEBUGFN(3,db_printf("("));
-                for (bl=0; bl < BITS_PER_FIELD; bl++)
+                for (bl=0; bl < BITS_PER_CES; bl++)
                 {
                     DEBUGFN(3,db_printf(((*data_pos)&(1<<bit_index))?"1":"0"));
 
@@ -387,7 +450,6 @@ void driver_accept_data_packet(unsigned int registry_number,
                     }
                 }
                 DEBUGFN(3,db_printf(")"));
-
 
 
                 if (field)
@@ -407,28 +469,44 @@ void driver_accept_data_packet(unsigned int registry_number,
             {
                 value &= 0xfff;
 
-                buffer_code = handset_lookup(value);
-
-                /*
-                    If not in Standby mode, insert buffer_code into keyboard buffer
-                */
-                if ((buffer_code == PWR) ||
-                    ((buffer_code != -1) &&
-                     (!(flags & DRIVER_FLAGS_STANDBY_MODE))))
+                if (ACCEPT_NO_KEYS != tag->ignore_keys)
                 {
-                    /*
-                        Special case. Need to escape £ so it doesn't look like Ctrl-F3
-                        May need to escape other top-bit-set characters
-                    */
-                    if (buffer_code == '£') /* this is a pound sterling symbol */
+                    ir_cancel_timeout(tag_number);
+                    tag->ignore_keys = ACCEPT_THIS_KEY; /* start ignoring from the next one. */
+                    ir_set_timeout(tag_number, context, BOUNCE_DELAY);
+                }
+
+                if (ACCEPT_NO_KEYS != tag->ignore_keys)
+                {
+                    if (ACCEPT_THIS_KEY == tag->ignore_keys)
                     {
-                        _swix(OS_Byte, _INR(0,2), 153, 0, 0);
+                        tag->ignore_keys = ACCEPT_NO_KEYS;
+                        DEBUGFN(3,db_printf("\nNow accepting no keys\n"));
+
                     }
 
-                    _swix(OS_Byte, _INR(0,2), 153, 0, buffer_code);
+                    buffer_code = handset_lookup(value);
+
+                   /*
+                        If not in Standby mode, insert buffer_code into keyboard buffer
+                    */
+                    if ((buffer_code == PWR) ||
+                        ((buffer_code != -1) &&
+                         (!(flags & DRIVER_FLAGS_STANDBY_MODE))))
+                    {
+                        /*
+                            Special case. Need to escape £ so it doesn't look like Ctrl-F3
+                            May need to escape other top-bit-set characters
+                        */
+                        if (buffer_code == '£') /* this is a pound sterling symbol */
+                        {
+                            _swix(OS_Byte, _INR(0,2), 153, 0, 0);
+                        }
+
+                        _swix(OS_Byte, _INR(0,2), 153, 0, buffer_code);
+                    }
                 }
             }
-
 
         }
         else
