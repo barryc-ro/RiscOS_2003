@@ -165,8 +165,8 @@ all: ${RAM_MODULE} ${DIRS}
 	@echo ${COMPONENT}: Module built (RAM)
 
 install: ${RAM_MODULE}
-	${MKDIR} ${INSTDIR}.310.Modules.Networking
-	${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.${COMPONENT}
+	${MKDIR} ${INSTDIR}
+	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT}
 	@echo
 	@echo ${COMPONENT}: Module installed (Disc)
 
