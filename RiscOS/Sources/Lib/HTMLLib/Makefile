@@ -107,15 +107,15 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: h.html2_ext h.api h.struct h.tags dirs
-	Copy h.html2_ext    HTMLLib:h.html2_ext      ~CFLNR~V
-	Copy h.api          HTMLLib:h.HTMLLib        ~CFLNR~V
-	Copy h.struct       HTMLLib:h.struct         ~CFLNR~V
-	Copy h.tags         HTMLLib:h.tags           ~CFLNR~V
-	Copy h.tablestruc   HTMLLib:h.tablestruc     ~CFLNR~V
+	Copy h.html2_ext    HTMLLib:h.html2_ext      ~CFL~NR~V
+	Copy h.api          HTMLLib:h.HTMLLib        ~CFL~NR~V
+	Copy h.struct       HTMLLib:h.struct         ~CFL~NR~V
+	Copy h.tags         HTMLLib:h.tags           ~CFL~NR~V
+	Copy h.tablestruc   HTMLLib:h.tablestruc     ~CFL~NR~V
         @echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} dirs
-	Copy ${TARGET}      HTMLLib:o.${TARGET}      ~CFLNR~V
+	Copy ${TARGET}      HTMLLib:o.${TARGET}      ~CFL~NR~V
         @echo ${COMPONENT}: export complete (libs)
 
 local_dirs:
@@ -204,26 +204,6 @@ o.veneers:	h.html2_ext
 o.veneers:	h.tags
 o.veneers:	h.internal
 o.veneers:	h.tablestruc
-o.new_stream:	c.new_stream
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tablestruc
-o.new_stream:	h.tags
-o.new_stream:	h.struct
-o.new_stream:	C:h.string
-o.new_stream:	h.internal
-o.new_stream:	h.tags
-o.new_stream:	h.struct
-o.new_stream:	h.tablestruc
-o.new_stream:	C:h.ctype
-o.new_stream:	h.HTMLTables
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tags
-o.new_stream:	h.internal
-o.new_stream:	h.tablestruc
-o.new_stream:	h.api
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tags
-o.new_stream:	h.struct
 o.anchor_inf:	c.anchor_inf
 o.anchor_inf:	C:h.stdio
 o.anchor_inf:	C:h.stdlib
@@ -278,3 +258,22 @@ o.HTMLTables:	h.tablestruc
 o.HTMLTables:	C:h.ctype
 o.HTMLTables:	h.tablestruc
 o.HTMLTables:	h.tablestruc
+o.new_stream:	c.new_stream
+o.new_stream:	h.html2_ext
+o.new_stream:	h.tablestruc
+o.new_stream:	h.tags
+o.new_stream:	h.struct
+o.new_stream:	C:h.string
+o.new_stream:	h.internal
+o.new_stream:	h.tags
+o.new_stream:	h.struct
+o.new_stream:	h.tablestruc
+o.new_stream:	h.HTMLTables
+o.new_stream:	h.html2_ext
+o.new_stream:	h.tags
+o.new_stream:	h.internal
+o.new_stream:	h.tablestruc
+o.new_stream:	h.api
+o.new_stream:	h.html2_ext
+o.new_stream:	h.tags
+o.new_stream:	h.struct
