@@ -21,7 +21,7 @@ CD	= dir
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -pcc -ff -zps1 -zM -I${INCLUDES},. -DKERNEL -DINET \
-	${DEBUG} -depend !Depend -DMXPATCH # -DSUPPORT_TRADITIONAL_MBUFS
+	${DEBUG} -depend !Depend -THROWBACK# -DSUPPORT_TRADITIONAL_MBUFS
 
 
 CPFLAGS = ~cfr~v
@@ -41,13 +41,13 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Include files
 #
 LEVEL=		^
-INCLUDES=	TCPIPLibs:,C:
+INCLUDES=	libs,C:
 
 COMPONENT = EtherI
 TARGET    = rm.EtherI
 ROMTARGET = aof.EtherI
-OBJS      = uniqueid.o if_en.o e2module.o support.o poduleirq.o en_io.o mbuf.o dallas.o enhdr.o
-#	svcprintf.o
+OBJS      = if_en.o e2module.o support.o poduleirq.o en_io.o mbuf.o dallas.o enhdr.o
+#	uniqueid.o svcprintf.o
 
 #
 # Rule patterns
@@ -76,6 +76,10 @@ install_rom: ${ROMTARGET}
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
+install: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: module installed
+
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${RM} ${TARGET}
@@ -95,7 +99,6 @@ ${TARGET}: ${OBJS}
 #
 ${ROMTARGET}: ${OBJS}
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
-        
 #
 # Final link for the ROM Image (using given base address)
 #
@@ -119,47 +122,31 @@ o.uniqueid: Hdr:RISCOS
 o.uniqueid: Hdr:EnvNumbers
 o.uniqueid: Hdr:Proc
 o.uniqueid: h.VickySpace
-o.if_en:	c.if_en
-o.if_en:	C:h.kernel
-o.if_en:	C:h.swis
-o.if_en:	TCPIPLibs:h.delay
-o.if_en:	TCPIPLibs:sys.h.types
-o.if_en:	TCPIPLibs:sys.h.dcistructs
-o.if_en:	TCPIPLibs:sys.h.mbuf
-o.if_en:	TCPIPLibs:sys.h.errno
-o.if_en:	TCPIPLibs:sys.^.h.errno
-o.if_en:	C:h.kernel
-o.if_en:	TCPIPLibs:h.int_hndlr
-o.if_en:	TCPIPLibs:h.xcb
-o.if_en:	TCPIPLibs:h.ioc
-o.if_en:	h.if_en
-o.if_en:	h.dallas
-o.if_en:	h.e2module
-o.if_en:	h.dallas
 o.e2module:	c.e2module
 o.e2module:	C:h.kernel
 o.e2module:	C:h.swis
-o.e2module:	TCPIPLibs:h.xcb
-o.e2module:	TCPIPLibs:h.int_hndlr
-o.e2module:	TCPIPLibs:sys.h.dcistructs
-o.e2module:	TCPIPLibs:sys.h.errno
-o.e2module:	TCPIPLibs:sys.^.h.errno
+o.e2module:	libs.h.xcb
+o.e2module:	libs.h.int_hndlr
+o.e2module:	libs.sys.h.dcistructs
+o.e2module:	libs.sys.h.errno
+o.e2module:	libs.sys.^.h.errno
 o.e2module:	C:h.kernel
-o.e2module:	TCPIPLibs:sys.h.mbuf
-o.e2module:	TCPIPLibs:netinet.h.if_ether
-o.e2module:	TCPIPLibs:sys.h.types
-o.e2module:	TCPIPLibs:sys.h.socket
-o.e2module:	TCPIPLibs:net.h.if
-o.e2module:	TCPIPLibs:sys.h.mbuf
-o.e2module:	TCPIPLibs:net.^.net.h.if_arp
-o.e2module:	TCPIPLibs:sys.h.socket
-o.e2module:	TCPIPLibs:net.h.if_arp
-o.e2module:	TCPIPLibs:netinet.h.in
+o.e2module:	libs.sys.h.mbuf
+o.e2module:	libs.netinet.h.if_ether
+o.e2module:	libs.sys.h.types
+o.e2module:	libs.sys.h.socket
+o.e2module:	libs.net.h.if
+o.e2module:	libs.sys.h.mbuf
+o.e2module:	libs.net.^.net.h.if_arp
+o.e2module:	libs.sys.h.socket
+o.e2module:	libs.net.h.if_arp
+o.e2module:	libs.netinet.h.in
 o.e2module:	h.e2module
 o.e2module:	h.if_en
 o.e2module:	h.dallas
+o.e2module:	h.parallel
 o.support:	c.support
-o.support:	TCPIPLibs:sys.h.types
+o.support:	libs.sys.h.types
 o.poduleirq: s.poduleirq
 o.poduleirq: Hdr:ListOpts
 o.poduleirq: Hdr:Macros
@@ -183,23 +170,40 @@ o.en_io: Hdr:ModHand
 o.mbuf:	c.mbuf
 o.mbuf:	C:h.kernel
 o.mbuf:	C:h.swis
-o.mbuf:	TCPIPLibs:sys.h.param
-o.mbuf:	TCPIPLibs:sys.h.sysconf
-o.mbuf:	TCPIPLibs:sys.^.machine.h.machparam
-o.mbuf:	TCPIPLibs:sys.h.signal
-o.mbuf:	TCPIPLibs:sys.h.types
-o.mbuf:	TCPIPLibs:sys.h.errno
-o.mbuf:	TCPIPLibs:sys.^.h.errno
+o.mbuf:	libs.sys.h.param
+o.mbuf:	libs.sys.h.sysconf
+o.mbuf:	libs.sys.^.machine.h.machparam
+o.mbuf:	libs.sys.h.signal
+o.mbuf:	libs.sys.h.types
+o.mbuf:	libs.sys.h.errno
+o.mbuf:	libs.sys.^.h.errno
 o.mbuf:	C:h.kernel
-o.mbuf:	TCPIPLibs:sys.h.mbuf
-o.mbuf:	TCPIPLibs:netinet.h.if_ether
-o.mbuf:	TCPIPLibs:sys.h.types
-o.mbuf:	TCPIPLibs:sys.h.socket
-o.mbuf:	TCPIPLibs:net.h.if
-o.mbuf:	TCPIPLibs:sys.h.mbuf
-o.mbuf:	TCPIPLibs:net.^.net.h.if_arp
-o.mbuf:	TCPIPLibs:sys.h.socket
-o.mbuf:	TCPIPLibs:net.h.if_arp
-o.mbuf:	TCPIPLibs:netinet.h.in
+o.mbuf:	libs.sys.h.mbuf
+o.mbuf:	libs.netinet.h.if_ether
+o.mbuf:	libs.sys.h.types
+o.mbuf:	libs.sys.h.socket
+o.mbuf:	libs.net.h.if
+o.mbuf:	libs.sys.h.mbuf
+o.mbuf:	libs.net.^.net.h.if_arp
+o.mbuf:	libs.sys.h.socket
+o.mbuf:	libs.net.h.if_arp
+o.mbuf:	libs.netinet.h.in
 o.dallas:	c.dallas
 o.dallas:	h.dallas
+o.if_en:	c.if_en
+o.if_en:	C:h.kernel
+o.if_en:	C:h.swis
+o.if_en:	libs.h.delay
+o.if_en:	libs.sys.h.types
+o.if_en:	libs.sys.h.dcistructs
+o.if_en:	libs.sys.h.mbuf
+o.if_en:	libs.sys.h.errno
+o.if_en:	libs.sys.^.h.errno
+o.if_en:	C:h.kernel
+o.if_en:	libs.h.int_hndlr
+o.if_en:	libs.h.xcb
+o.if_en:	libs.h.ioc
+o.if_en:	h.if_en
+o.if_en:	h.dallas
+o.if_en:	h.e2module
+o.if_en:	h.dallas

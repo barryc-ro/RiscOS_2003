@@ -1,21 +1,89 @@
-/* -*-C-*-
+/*
+ * Name:	EtherI driver
+ * Purpose:	DCI 4 driver for EtherI ethernet cards
+ * Author:	Acorn Computers, Irlam Instruments Ltd. and Microlynx
+ * Version:	2.00
  *
- * $Header$
- * $Source$
+ * Adapted from the Ether2 source tree by Acorn computers
+ * for use with the EtherI card
  *
- * Copyright(c) 1995 Acorn Computers Ltd., Cambridge, England
  *
- * $Log$
+ * Copyright(c) 1995   Acorn Computers Ltd., Cambridge, England
+ * Copytight(c) 1997   Irlam Instruments Ltd., Uxbridge, Middlesex
+ * Copyright(c) 1998-9 Microlynx, Ely, England
+ *
  * Revision 1.1  95/09/18  15:17:53  kwelton
  * Initial revision
  *
  * Adapted for use on NC's ethernet card by Irlam Instruments
  * Massive patching to work around MX chipset
  * Big fixed ensuring alignment of mbuf data.  Required for LanManFS.
+ * Modification for large packet buffers
  *
+ * 10/7/98 Gary Stephenson
+ * Changes for machines with on-board Ethernet eg: BOCA NC2
+ *
+ * 26/8/98 Paul Skirrow
+ * Bug fix to make EtherI work with MAC OTP address starting 0000 in OTP area of EEROM.
+ *
+ * 26/8/98 Paul Skirrow
+ * Removed code to read MAC address from Dallas chip (it is excluded if DALLAS is 0
+ * and DALLAS=0 is defined in the h.Dallas header file).
+ * The DeskLite board does not have a Dallas chip and although the Boca 2 board
+ * has an option to fit one it is very unlikely every to be used as we now use
+ * the OTP area in the EEROM). See the h.Dallas file for more details.
+ *
+ * 3.01 31/3/99 Gary Stephenson
+ * Changes to reduce interrupt latency caused by driver, now enables IRQs during reception
+ *
+ * 3.02 8/4/99 Gary Stephenson
+ * Stopped driver reading from configb register in order to allow rcbr1 to be used, this
+ * means we can't check the goodlink!
+ * Removed MXPATCH routines, now uses rbcr1 during data transfers
+ * Added delay for remote dma completion in en_memtest and en_run_diags
+ *
+ * 3.03 14/4/99 Gary Stephenson
+ * Stopped driver waiting for RDC forever in two places
+ * Now checks irq_active flag on entry to transmit
+ *
+ * 3.04 20/4/99 Gary Stephenson
+ * Removed border debug code.
+ * Added code to validate Ethernet address, checks for all 0 or 0xff
+ *
+ * 3.05 3/5/99 Gary Stephenson
+ * Now checks if tx packet is pending in en_update_multicast_filter(), was failing to send packets
+ * during multicast channel changing.
+ * 'if' changed to 'while' in en_intr() so it clears all ints before exiting
+ * Added stats to record tx and rx ints
+ * Disables ints during manipulation of tx queue in tx_done()
  */
-  
+
+/* 12/4/99 Outstanding issues
+ * Need to find out what the problem with configb and rbcr1 is.
+ * Optimisation of receive to pass multiple frames to protocol modules.
+ * The way multicast addresses are handled could be improved.
+ */
+
+/*
+ * XXX
+ *
+ * cannot find an unambiguous definition for multicast addresses,
+ * the best we have is a statement that "all multicast addresses
+ * have an MSB of 1" without any clarification whether `B' means
+ * bit or byte.  This test *assumes* that it stands for bit.
+ */
+
+#define IS_MULTICAST(x)	((*(u_char *)(x) & 0x80) && \
+			 (*(u_char *)(x)) != 0xff)
+
+#define ENABLE_IRQS
+#define USE_DEVICEVECTOR
+
+#undef ADDRESS_BODGE
+#undef BORDER
 #undef TXBUF_PROFILE
+#undef DALLAS
+#undef ONBOARD_ETHERNET
 
 #ifdef TXBUF_PROFILE
 static int max_txbuf = 100;
@@ -39,16 +107,21 @@ static int max_txbuf = 100;
 
 #include "dallas.h"
 
-#define DALLAS
+//#include "parallel.h"
 
 #undef XCB_SLOTS
 #define XCB_SLOTS	(8)
 
+unsigned int parallel = 0;
+
+#define PSET(bit) parallel|=(1<<(bit));parallel_write(parallel);
+#define PCLR(bit) parallel&=~(1<<(bit));parallel_write(parallel);
+
 /*
  * MXPATCH
  *
- * The MX chipset seems to fuck up the SENDP command, and also
- * the rbcr1 registers seems to be fucked too, so we cannot DMA
+ * The MX chipset seems to mess up the SENDP command, and also
+ * the rbcr1 registers seems to be messed too, so we cannot DMA
  * more than 256 bytes in one bit.  This results in a little
  * loss in performance.
  */
@@ -75,7 +148,7 @@ extern int callproto();
 # define NULL 0
 #endif
 
-#define EN_TYPE (0x001f5678)
+#define EN_TYPE (0x00000139)
 
 char en_lastlog[64] = { 0 };
 char en_lasterr[64] = { 0 };
@@ -83,6 +156,8 @@ char en_lasterr[64] = { 0 };
 int encnt = 0;
 char slotmap[8];
 static int en_slots[8];
+int en_irq_active = 0;
+int en_tx_active = 0;
 
 extern void *module_wsp;
 struct int_hndlr intr_routine;
@@ -100,9 +175,7 @@ extern FilterChainRef e2specific[8];
 
 extern int (*address_filter)(u_int level, u_char *pack_hdr, u_char *mac_addr);
 
-#ifndef MXPATCH
 static int pdrops = 0;
-#endif
 
 static struct stats st = { 0 };
 
@@ -135,6 +208,7 @@ static void shutdown(NICRef nic, u_char *TxPending)
     nic->command = SEL_PAGE(0, NIC_STOPPED);
     nic->rbcr0 = nic->rbcr1 = 0;
     MICRODELAY(100);
+
 #if 0
     while( !(nic->isr & RST) )
 	/* do nothing */
@@ -157,25 +231,19 @@ static void shutdown(NICRef nic, u_char *TxPending)
  */
 static void abort_packet(struct en_softc *en, NICRef nic, u_char *buff_hdr)
 {
-
-#ifdef MXPATCH
     int Bnry;
-#endif
-    
     /*
      * send the ABORT DMA command, then move the
      * boundary pointer past the unwanted packet
      */
     nic->command = START_DMA(DMA_ABORT);
 
-#ifndef MXPATCH
-    nic->bnry = *(buff_hdr + 1);
-#else
     Bnry = en->en_nxt_pkt-1;
     if ( Bnry < en->en_rbs )
         Bnry = en->en_rbd-1;
     nic->bnry = Bnry;
-#endif
+
+/* we shouldn't be trying read data if we have already read it all!!! */
 
     /*
      * throw away the data waiting for us at the DMA port
@@ -185,7 +253,7 @@ static void abort_packet(struct en_softc *en, NICRef nic, u_char *buff_hdr)
 
 /**********************************************************************/
 
-#ifndef MXPATCH
+#if 0
 /*
  * drop_packet - discard packet data
  */
@@ -198,7 +266,7 @@ static void drop_packet(struct en_softc *en, int datalen)
     pdrops++;
     datalen -= PACK_HDR_LEN + CRC_LEN;
     for( i = datalen; i > 0; i -= 128 )
-	en_io_in(port, buf, min(i, 128));
+       en_io_in(port, buf, min(i, 128));
 }
 #endif
 
@@ -213,7 +281,7 @@ void mbuf_dump ( struct mbuf *m )
     parallel_printf ( "struct mbuf {\n" );
     parallel_printf ( "    struct mbuf         *m_next   = %08x\n", m->m_next   );
     parallel_printf ( "    struct mbuf         *m_list   = %08x\n", m->m_list   );
-                                      
+
     parallel_printf ( "    ptrdiff_t            m_off    = %08x\n", m->m_off    );
     parallel_printf ( "    size_t               m_len    = %08x\n", m->m_len    );
     parallel_printf ( "    const ptrdiff_t     *m_inioff = %08x\n", m->m_inioff );
@@ -235,6 +303,8 @@ void en_read(struct en_softc *en, NICRef nic)
     register u_int databuff;
     register volatile u_int *port = en->dma_port;
     register struct mbuf *m, *m0 = NULL;
+    struct mbuf *pd;
+
     /*
      * XXX
      *
@@ -249,7 +319,7 @@ void en_read(struct en_softc *en, NICRef nic)
     int this_packet;
     int bytes_left;
     int ptr;
-    
+
 #ifdef DEBUG
     Printf("ei_read(%d)...", unit);
 #endif
@@ -257,22 +327,16 @@ void en_read(struct en_softc *en, NICRef nic)
     /* we have received another frame */
     en->en_st_rx_frames++;
 
-    /* Rememer which frame we're doing */
+    /* Remember which frame we're doing */
     this_packet = en->en_nxt_pkt;
 
     /* start the Send Packet command */
-#ifdef MXPATCH
     /* Do the header in 1 go */
     nic->rsar0 = 0;
     nic->rsar1 = this_packet;
     nic->rbcr0 = BUFF_HDR_LEN + PACK_HDR_LEN;
     nic->rbcr1 = 0;
-    nic->command = START_DMA(DMA_READ);    
-#else
-    /* Send the whole packet up */
-    nic->rbcr1 = 0x0f;
-    nic->command = START_DMA(DMA_SENDP);
-#endif
+    nic->command = START_DMA(DMA_READ);
 
     /* read the buffer header */
     for( i = 0; i < BUFF_HDR_LEN; i += 2 )
@@ -290,18 +354,13 @@ void en_read(struct en_softc *en, NICRef nic)
     {
 	/* update stats */
 	en->en_st_runt_frames++;
-
-#ifdef DEBUG
-	Printf("bad length (%d) - aborting\n", datalen);
-#endif
 	abort_packet(en, nic, buff_hdr);
 	return;
     }
-    
+
     /*
      * set the next packet pointer from the header
      */
-     
     en->en_nxt_pkt = *(buff_hdr + 1);
 
     /*
@@ -324,7 +383,6 @@ void en_read(struct en_softc *en, NICRef nic)
      */
     memcpy(en->en_st_last_src_addr, pack_hdr + HW_ADDR_LEN, HW_ADDR_LEN);
 
-#ifdef MXPATCH
     /*
      * Check that the DMA for the headers completed
      */
@@ -336,14 +394,12 @@ void en_read(struct en_softc *en, NICRef nic)
 	    sprintf(en_lastlog, "Unit %d: RDC failure in ei_read\n",
 		    en->en_unit);
 	    type = 0;
-	    abort_packet(en, nic, buff_hdr);
+	    /*abort_packet(en, nic, buff_hdr);*/
 	    goto rdc_failed;
 	}
     }
     /* Acknowledge it */
     nic->isr = RDC;
-    
-#endif
 
     /*
      * drop overlong packets
@@ -351,12 +407,7 @@ void en_read(struct en_softc *en, NICRef nic)
     if( datalen > ETHERMTU + (PACK_HDR_LEN + CRC_LEN) )
     {
 	en->en_st_overlong_frames++;
-#ifndef MXPATCH
-	drop_packet(en, datalen);
-	goto dropcrc;
-#else
 	goto unwanted;
-#endif	
     }
 
     /*
@@ -435,12 +486,7 @@ void en_read(struct en_softc *en, NICRef nic)
 	{
 	    fs = NULL;
 	    en->en_st_unwanted_frames++;
-#ifndef MXPATCH
-	    drop_packet(en, datalen);
-	    goto dropcrc;
-#else
 	    goto unwanted;
-#endif
 	}
     }
     else
@@ -449,36 +495,15 @@ void en_read(struct en_softc *en, NICRef nic)
 	 * no protocols want this frame
 	 */
 	en->en_st_unwanted_frames++;
-#ifndef MXPATCH
-	drop_packet(en, datalen);
-	goto dropcrc;
-#else
-	goto unwanted;	
-#endif	
+	goto unwanted;
     }
 
-#ifdef OldCode
-    if( (m = (m0 = m_get(M_DONTWAIT, MT_DATA))) == (struct mbuf *)0 )
-    {
-	fs = NULL;
-#ifndef MXPATCH
-	drop_packet(en, datalen);
-#endif
-	goto dropcrc;
-    }
-#else
     if( (m = (m0 = ALLOC_S(MINCONTIG, NULL))) == (struct mbuf *)0 )
     {
 	fs = NULL;
-#ifndef MXPATCH
-	drop_packet(en, datalen);
-	goto dropcrc;
-#else
 	goto unwanted;
-#endif
     }
     m->m_type = MT_HEADER;
-#endif
 
     hdr = mtod(m0, RxHdrRef);
     m0->m_len = sizeof(RxHdr);
@@ -498,35 +523,6 @@ void en_read(struct en_softc *en, NICRef nic)
      */
     datalen -= (PACK_HDR_LEN + CRC_LEN);
 
-#ifdef OldCode
-    /*
-     * XXX TRACE XXX
-     *
-     * this could be much more efficient with the new mbuf manager
-     */
-    for( i = datalen; i > 0; i -= (OLDMLEN - 2) )
-    {
-	/* allocate another mbuf */
-	if( (m->m_next = m_get(M_DONTWAIT, MT_DATA)) == (struct mbuf *)0 )
-	{
-	    fs = NULL;
-	    m_freem(m0);
-#ifndef MXPATCH
-	    drop_packet(en, i + PACK_HDR_LEN + CRC_LEN);
-	    goto dropcrc;
-#else
-	    goto unwanted;	    
-#endif
-	}
-
-	m = m->m_next;
-	en_io_in(port, mtod(m, u_char *), min(i, OLDMLEN - 2));
-	m->m_len = min(i, OLDMLEN - 2);
-    }
-#else
-    {
-	struct mbuf *pd;
-
 	/*
 	 * XXX
 	 *
@@ -543,70 +539,40 @@ void en_read(struct en_softc *en, NICRef nic)
 	if( (m->m_next = ALLOC(datalen, NULL)) == NULL )
 	{
 	    fs = NULL;
-#ifndef MXPATCH
-	    drop_packet(en, datalen + PACK_HDR_LEN + CRC_LEN);
-	    goto dropcrc;
-#else
-	    goto unwanted;	    
-#endif
+	    goto unwanted;
 	}
-
 	/*
 	 * run down the mbufs, filling them in
 	 */
-
-#ifdef MXPATCH
 
 	/* Set a pointer to the start of the packet */
 	ptr = (this_packet<<8) + BUFF_HDR_LEN + PACK_HDR_LEN;
 
         /* Start off the first chunk of the remote DMA.  This DMA ends at this_packet<<8 + 0x80 or less */
-	bytes_left = (datalen>(128-BUFF_HDR_LEN-PACK_HDR_LEN)) ? (128-BUFF_HDR_LEN-PACK_HDR_LEN) : datalen;
+	/* bytes_left = (datalen>(128-BUFF_HDR_LEN-PACK_HDR_LEN)) ? (128-BUFF_HDR_LEN-PACK_HDR_LEN) : datalen;*/
+
 	nic->rsar0 = ptr & 0xff;
         nic->rsar1 = (ptr>>8) & 0xff;
-        nic->rbcr0 = bytes_left;
-        nic->rbcr1 = 0;
+        nic->rbcr0 = datalen;
+        nic->rbcr1 = datalen >> 8;
         nic->command = START_DMA(DMA_READ);
-        ptr+=bytes_left;
 
 	for( pd = m->m_next; pd; pd = pd->m_next )
 	{
-	    int c = 0;
-
-	    pd->m_type = MT_DATA;
-
-            /* LanManFS Data corruption bug is cured here.
-            
-               The writer of this driver assumes mbufs will always have an even length.  However,
-               this is not the case.  When running LanManFS mbuf chains claimed from the mbuf manager
-               have been seen to have an odd m_len.  This causes the copy code to screw up since it
-               assumes all even copies.
-               
-               2 cures are availible.  1) Write the copy code to cope with odd length transfers.
-               			       2) Re-align the mbufs
-               			       
-               I have chosen the latter since under normal circumstances it only requires a few
-               instructions.
-               
-               This code, below, ensures aligned mbuf chains.
-               
-               I would reccomend that this code is also run for non MXPATCH'ed drivers too, but
-               that's not been tested so I shant.
-            */
-
 redo:
 	    /* If this is not the last mbuf and it is of odd length then align it */
-	    if ( (pd->m_next!=0) && (pd->m_len&1) )
+	    if ( (pd->m_next!=0) && ((pd->m_len&3)||(pd->m_off&3)) )
 	    {
 	        /* The best way is to extend the mbuf by 1 byte since mbufs are usually aligned so
 	           we stand a good chance of succeeding (I do not rely on (MINILEN&1)==0), and it means there is
 	           less (theoretical) chance that we will need another ALLOC at the end */
-	        if ( ( pd->m_len+pd->m_off+1 ) <= (pd->m_inilen+pd->m_inioff) )
-  	            pd->m_len++;
-  	        else
-  	            pd->m_len--;
+	        while ( pd->m_off&3 )
+	            pd->m_off++;
+
+	        while ( pd->m_len&3 )
+	            pd->m_len--;
 	    }
-	    
+
 	    /* If is the last mbuf, and we have the wrong number of bytes, then do some adjustment */
 	    if ( (pd->m_next==0) && (pd->m_len!=datalen) )
 	    {
@@ -618,117 +584,40 @@ redo:
   	        {
   	            /* We need more buffer space */
   	            pd->m_next = ALLOC(datalen-pd->m_len, NULL);
-  	            
+
   	            if ( pd->m_next==0 )
   	            {
   	                /* Drop this last DMA.  Maybe aborting it is better ? I dont like aborting, it's more risky */
   	                for ( ; bytes_left; bytes_left-=2 )
   	                    nulldev (*port);
-  	                    
+
   	                /* Quietly loose this frame */
   	                fs = 0;
   	                break;
   	            }
-  	            
-		    /* This means this isn't the last mbuf any more, so run round again */  	            
+
+		    /* This means this isn't the last mbuf any more, so run round again */
   	            goto redo;
   	        }
 	    }
 
-	    /* Loop until this mbuf is done */
-	    for ( c=0; c < pd->m_len ; )
-	    {
-	        /* If this DMA is done, then check it really is done and start a new one */
-	        if ( bytes_left==0 )
-	        {
-	            /* First make sure the previous DMA's finished */
-                    if( !(nic->isr & RDC) ) {
-	                MICRODELAY(RDC_RECOVER_PERIOD);
-
-	                if( !(nic->isr & RDC) )
-	                {
-	                    sprintf(en_lastlog, "Unit %d: RDC failure in en_read\n",
-		                en->en_unit);
-	                    type = 0;
-	                    
-	                    /* Noone wants this corrupt packet, mbufs will be freed */
-	                    fs=0;
-
-	                    goto rdc_failed;
-	                }
-                    }
-                    
-		    /* Acknowledge the previous DMA */
-                    nic->isr = RDC;
-
-		    /* Catch buffer wrapps */
-		    if ( ptr == (en->en_rbd<<8) )
-		       ptr = en->en_rbs<<8;
-
-		    /* Start a new DMA.  This DMA MUST end on a page boundary to ensure the wrap catch works */
-		    bytes_left = (datalen>128) ? 128 : datalen;
-	            nic->rsar0 = ptr & 0xff;
-                    nic->rsar1 = (ptr>>8) & 0xff;
-                    nic->rbcr0 = bytes_left;
-                    nic->rbcr1 = 0;
-                    nic->command = START_DMA(DMA_READ);    
-                    ptr+=bytes_left;
-	        }
-
-		/* DMA as many bytes as we have left, or that fit into the mbuf */
-		if ((pd->m_len-c)>bytes_left)
-		{
-	            en_io_in(port, (mtod(pd, char *)) + c, bytes_left );
-	            c += bytes_left;
-	            datalen -= bytes_left;
-	            bytes_left=0;
-	        }
-	        else
-	        {
-	            en_io_in(port, (mtod(pd, char *)) + c, pd->m_len - c);
-	            bytes_left -= pd->m_len - c;
-	            datalen -= pd->m_len - c;
-	            c = pd->m_len;
-	            break;
-	        }
-	    }
-	}
-
-#else
-	for( pd = m->m_next; pd; pd = pd->m_next )
-	{
 	    pd->m_type = MT_DATA;
 	    en_io_in(port, mtod(pd, char *), pd->m_len);
 	    datalen -= pd->m_len;
 	}
-#endif
 
 	if( datalen != 0 )
 	    panic("BAD DATALEN");
-	
-#ifdef MXPATCH
-	if ( bytes_left!=0 )
-	    panic("BYTES_LEFT INCORRECT");
-#endif
-	
-    }
-#endif
 
-#ifndef MXPATCH
   dropcrc:
-#endif  
 
     /* now read the CRC bytes & drop them on the floor */
-#ifndef MXPATCH
     for( i = 0; i < CRC_LEN; i += 2 )
 	nulldev(*port);
-#endif
-    /*
-     * check that remote DMA has completed
-     */
+
     if( !(nic->isr & RDC) )
     {
-	/*
+        /*
 	 * this is not yet a fatal error - give it
 	 * a chance to recover then try again
 	 */
@@ -736,38 +625,31 @@ redo:
 
 	if( !(nic->isr & RDC) )
 	{
-	    sprintf(en_lastlog, "Unit %d: RDC failure in en_read\n",
+	    sprintf(en_lastlog, "Unit %d: RDC failure2 in ei_read \n",
 		    en->en_unit);
 	    type = 0;
-	    abort_packet(en, nic, buff_hdr);
-	    goto notify_protocol;
+	    /*abort_packet(en, nic, buff_hdr);
+	    goto notify_protocol;*/
+	    goto rdc_failed;
 	}
     }
 
     /* acknowledge end of remote DMA */
     nic->isr = RDC;
 
-    unwanted:
-    rdc_failed:
+  unwanted:
+  rdc_failed:
 
-#ifdef MXPATCH
     i = en->en_nxt_pkt-1;
     if ( i < en->en_rbs )
         i = en->en_rbd-1;
     nic->bnry = i;
-#endif    
 
   notify_protocol:
     if( fs )
 	callproto(dibs[unit], m0, fs->fs_handler, fs->fs_pwptr);
     else if( m0 )
-    {
-#ifdef OldCode
-	m_freem(m0);
-#else
 	FREEM(m0);
-#endif
-    }
 }
 
 /**********************************************************************/
@@ -820,10 +702,12 @@ void en_recv(struct en_softc *en, NICRef nic)
     u_char overflowed = 0;
     u_char current_page, TxPending;
 
+    en->en_st_rx_interrupts++;
+
     /*
      * loop until all packets read
      */
-    while( (nic->isr & PRX) )
+    if( (nic->isr & PRX) )
     {
 	/*
 	 * acknowledge this interrupt, then read where the
@@ -838,11 +722,7 @@ void en_recv(struct en_softc *en, NICRef nic)
 	 * loop until the boundary pointer reaches the start
 	 * of the free buffer
 	 */
-#ifndef MXPATCH	 
-	while( nic->bnry != current_page )
-#else
 	while( en->en_nxt_pkt != current_page )
-#endif	
 	{
 	    /*
 	     * check for receive ring overflows
@@ -850,6 +730,7 @@ void en_recv(struct en_softc *en, NICRef nic)
 	    if( (nic->isr & OVW) )
 	    {
 		++overflowed;
+		en->en_st_late_events++;
 		shutdown(nic, &TxPending);
 
 		/* remove a packet & acknowledge the overflow */
@@ -878,6 +759,7 @@ void en_recv(struct en_softc *en, NICRef nic)
 static void tx_done(struct en_softc *en, NICRef nic)
 {
     TxqRef txdesc;
+    int s;
 
     /* act cautious */
     if( !en->TxPending )
@@ -886,6 +768,8 @@ static void tx_done(struct en_softc *en, NICRef nic)
 		en->en_unit);
 	return;
     }
+
+    s = ensure_irqs_off();
 
     /* put this transmit request back into the free list */
     if( en->TxqFree )
@@ -901,9 +785,12 @@ static void tx_done(struct en_softc *en, NICRef nic)
     txdesc = en->TxPending->TxNext;
     en->TxPending->TxNext = (TxqRef)NULL;
 
+    restore_irqs(s);
+
     /* start next transmit if one there */
     if( (en->TxPending = txdesc) )
 	start_tx(en, nic);
+
 }
 
 /**********************************************************************/
@@ -918,6 +805,8 @@ void en_txdone(struct en_softc *en, NICRef nic)
      * acknowledge the interrupt, then increment the count of
      * transmitted packets
      */
+    en->en_st_tx_interrupts++;
+
     nic->isr = PTX;
 
     /* check for Signal Quality Error if this is appropriate */
@@ -948,6 +837,11 @@ void en_txdone(struct en_softc *en, NICRef nic)
     }
     else
 	en->en_flags |= EN_SQETEST;
+
+    if (nic->tsr & CRS)
+    {
+      en->en_st_link_failures++;
+    }
 
     tx_done(en, nic);
 }
@@ -982,6 +876,11 @@ static void en_txfailed(struct en_softc *en, NICRef nic)
 	en->en_st_tx_general_errors++;
     }
 
+    if (nic->tsr & CRS)
+    {
+      en->en_st_link_failures++;
+    }
+
     /* now get rid of this transmit request */
     tx_done(en, nic);
 }
@@ -996,7 +895,7 @@ void en_rxfailed(struct en_softc *en, NICRef nic)
 {
     u_char err_count, max_count = 0;
     char status;
-    
+
     status = en->Chip->rsr;
 
     /*
@@ -1038,14 +937,14 @@ void en_rxfailed(struct en_softc *en, NICRef nic)
 	sprintf(en_lastlog,"Unit %d: receive counters returned no errors",
 		en->en_unit);
     }
-    
+
     if ( status & 2 )
     {
 	en->en_st_rx_general_errors++;
 	sprintf(en_lastlog,"Unit %d: CRC check caught a bad packet",
 		en->en_unit);
     }
-    
+
     if ( status & 4 )
     {
 	en->en_st_rx_general_errors++;
@@ -1087,6 +986,7 @@ void en_rxfailed(struct en_softc *en, NICRef nic)
  * 6 - deal with tally counter overflows
  *
  */
+
 static void en_intr(int unit)
 {
     register struct en_softc *en = en_softc[unit];
@@ -1094,26 +994,27 @@ static void en_intr(int unit)
     u_char TxPending;
 
     /* loop until all ints cleared */
-    while( nic->isr&MY_INTS )
+    while ( nic->isr & MY_INTS )
     {
 	/* stage 1 - received packets */
-	while( nic->isr & PRX )
+	if ( nic->isr & PRX )
 	    en_recv(en, nic);
 
 	/* stage 2 - transmitted packets */
-	while( nic->isr & PTX )
+	if( nic->isr & PTX )
 	    en_txdone(en, nic);
 
 	/* stage 3 - transmit errors */
-	while( nic->isr & TXE )
+	if( nic->isr & TXE )
 	    en_txfailed(en, nic);
 
 	/* stage 4 - receive errors */
-	while( nic->isr & RXE )
+	if( nic->isr & RXE )
 	    en_rxfailed(en, nic);
 
 	/* stage 5 - overwrite warning */
-	while( nic->isr & OVW )
+	if( nic->isr & OVW )
+	{
 	    if( nic->isr & PRX )
 		/* more packets have arrived so read them out */
 		en_recv(en, nic);
@@ -1123,9 +1024,11 @@ static void en_intr(int unit)
 		nic->isr = OVW;
 		startup(en, nic, TxPending);
 	    }
+	}
 
 	/* stage 6 - tally counter overflow */
-	while( nic->isr & CNT )
+	if( nic->isr & CNT )
+	{
 	    if( nic->isr & RXE )
 		/* got more errors */
 		en_rxfailed(en, nic);
@@ -1139,6 +1042,7 @@ static void en_intr(int unit)
 		       nic->cntr0, nic->cntr1, nic->cntr2);
 		sprintf(en_lasterr,"ei_intr: CNT with no receive errors");
 	    }
+	}
 
 	/* all over bar the shouting - test for extraneous bits */
 	if( nic->isr & RDC )
@@ -1151,6 +1055,7 @@ static void en_intr(int unit)
     }
 }
 
+
 /**********************************************************************/
 
 /*
@@ -1160,25 +1065,35 @@ static void en_reset_card(int slot)
 {
     int easibase;
     volatile int dummy;
-    
+
+#ifdef ONBOARD_ETHERNET
+    easibase = EASIBASE_SLOT0;
+#else
     if ( (_swix ( 0x4028D, _IN(0)|_IN(1)|_IN(2)|_IN(3), 1<<9, &easibase, 4, slot ))!=0 )
         return;
-        
+#endif
+
     /* Force stop the controller.  We seem to need this before reset */
     *((unsigned int *)(ENCARD_NIC_REGS(easibase)+0x4)) = 0x21;
-    
+
     /* Writing actaually resets, but this algorithm holds for all circumstances */
     *((unsigned int *)(ENCARD_RESET_PORT(easibase))) = 0xff;
     MICRODELAY ( 50000 );
     *((unsigned int *)(ENCARD_RESET_PORT(easibase))) = 0x00;
     MICRODELAY ( 50000 );
-    
+
     /* Set up config A for irq 0 */
     dummy = *((unsigned int *)(ENCARD_NIC_REGS(easibase)+0x54)) = 0x00;
     *((unsigned int *)(ENCARD_NIC_REGS(easibase)+0x54)) = dummy & ~4;
-    
+
     /* Clear the isr */
     *((unsigned int *)(ENCARD_NIC_REGS(easibase)+0x3C)) = 0xff;
+
+#ifdef ONBOARD_ETHERNET
+#ifdef DEBUG1
+    printf("DEBUG: Hard reset ok, easibase:%x\n",easibase);
+#endif
+#endif
 }
 
 /*
@@ -1198,19 +1113,26 @@ void en_reset_all ()
 
 /**********************************************************************/
 
-void decl_xcb_interrupt(int slot, struct int_hndlr *hndlr, int prior)
+void decl_xcb_interrupt(int slot, struct int_hndlr *hndlr, int prior, int intstatus)
 {
+#ifndef USE_DEVICEVECTOR
     _kernel_swi_regs rin, rout;
+#endif
     static int claimed;
 
     if( claimed != 0x091067 ) /* Only claim the vector once ! */
     {
+#ifdef USE_DEVICEVECTOR
+/*    _swix ( OS_ClaimDeviceVector, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4), 13, en_irq_entry, module_wsp, easibase + EI_CTRLREG, 4 ); */
+    _swix ( OS_ClaimDeviceVector, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4), 13, en_irq_entry, module_wsp, intstatus, MY_INTS );
+#else
 	intr_routine = *hndlr;
 	rin.r[0] = 2;
 	rin.r[1] = (int)en_irq_entry;
 	rin.r[2] = (int)module_wsp;
 
 	(void)_kernel_swi(XOS_Bit | OS_Claim, &rin, &rout);
+#endif
 	claimed = 0x091067;
     }
 }
@@ -1227,7 +1149,7 @@ void stats_init(struct en_softc *en)
     /*
      * actual statistics structure is easy - only one field to set
      */
-    en->en_st_interface_type = ST_TYPE_10BASE5N2;
+    en->en_st_interface_type = ST_TYPE_10BASET;
 
     /*
      * now fill in struct st which describes
@@ -1235,7 +1157,7 @@ void stats_init(struct en_softc *en)
      */
     st.st_interface_type = ~0;
     st.st_link_status = ~0;
-    st.st_link_polarity = 0;
+    st.st_link_polarity = ~0;
     st.st_blank1 = 0;
     st.st_link_failures = 0;
     st.st_network_collisions = 0;
@@ -1255,7 +1177,7 @@ void stats_init(struct en_softc *en)
     st.st_runt_frames = ~0;
     st.st_overlong_frames = ~0;
     st.st_jabbers = 0;
-    st.st_late_events = 0;
+    st.st_late_events = ~0;
     st.st_unwanted_frames = ~0;
     st.st_rx_frames = ~0;
     st.st_rx_bytes = ~0;
@@ -1289,6 +1211,8 @@ static void en_init_high(int slot)
 
 /* Dallas chip control */
 
+#if DALLAS
+
 static void en_dallas_pull_high ( struct dallas_physical *dp )
 {
     struct en_softc *en = (struct en_softc *)dp->sc;
@@ -1299,7 +1223,7 @@ static void en_dallas_pull_low ( struct dallas_physical *dp )
 {
     struct en_softc *en = (struct en_softc *)dp->sc;
     *en->en_dallas = 0;
-}   
+}
 
 static int en_dallas_read_bus ( struct dallas_physical *dp )
 {
@@ -1314,6 +1238,7 @@ static struct dallas_physical en_dp = {
     en_dallas_read_bus,
     (void *)0
 };
+#endif
 
 /**********************************************************************/
 
@@ -1332,28 +1257,118 @@ static void en_init_low(int slot, int irqs_on)
 	int i;
 	int easibase;
 	char *flash_constants;
-	
+        int c, size, osid, next;
+        char *buf;
+
+#ifdef DEBUG1
+	printf("DEBUG: en_init_low entered for slot:%x\n", slot);
+#endif
+
+#ifdef ONBOARD_ETHERNET
+	/* this is hardwired for the ONBOARD_ETHERNET NC */
+	easibase=EASIBASE_SLOT0;
+#else
         /* Lookup easibase.  I dont see xcb.h supporting this.  This is only in RiscOS 3.5 and up */
         if ( (_swix ( 0x4028D, _IN(0)|_IN(1)|_IN(2)|_IN(3), 1<<9, &easibase, 4, slot ))!=0 )
             return;
-
-        /* Set accesses to cycle type A.  Should this really be done here ? */
-        if ( (_swix ( Podule_SetSpeed, _IN(0)|_IN(3), 1, slot ))!=0 )
-            return;
-
-	/* record which logical slot this is */
-	slotmap[slot] = unit;
-
 	/*
 	 * check for too many Ethernet (version I or II) cards.
 	 */
 	if (!xcb_add_ethernet_card (enunits, slot))
 	    return;
+#endif
 
 	/* get some memory for the control structure */
 	en = (struct en_softc *)malloc(sizeof(*en));
 	memset((char *)en, 0, sizeof(struct en_softc));
 	en_softc[unit] = en;
+
+        en->sc_easibase = easibase;
+
+        /* Enumerate the chunks to find the modification number */
+        c=0;
+        en->sc_modification = 0;
+
+#ifndef ONBOARD_ETHERNET
+        while ( 1 )
+        {
+            if ( ( _swix ( Podule_EnumerateChunks, _IN(0)|_IN(3)|_OUT(0)|_OUT(1)|_OUT(2), c, slot, &next, &size, &osid ))!=0 )
+                break;
+
+        	/* Modification chunk */
+            if ( osid == 0xf3 )
+            {
+                if ( (buf = (char *)malloc ( size ))==0 )
+                    break;
+
+        	/* Read the modification data */
+                if ( (_swix ( Podule_ReadChunk, _IN(0)|_IN(2)|_IN(3), c, buf, slot ))!=0 )
+                    break;
+
+                /* Decode the modification and limit it to ones we can handle */
+                en->sc_modification = atoi ( buf );
+
+                free ( buf );
+            }
+
+            if ( (c=next)==0 )
+                break;
+        }
+
+        switch ( en->sc_modification & 1 )
+        {
+            case 0:
+                _swi ( Podule_SetSpeed, _IN(0)|_IN(3), 1, slot );
+                break;
+            default:
+            case 1:
+                _swi ( Podule_SetSpeed, _IN(0)|_IN(3), 3, slot );
+                break;
+        }
+#else
+	en->sc_modification = 1 << 1;		/* Boca2 has 32KB frame buffer */
+#endif
+
+	/* record which logical slot this is */
+	slotmap[slot] = unit;
+
+        switch ( (en->sc_modification & (7 << 1)) >> 1 )	/* Need at least 2 bits - 16KB, 32KB, 64KB, so lets have 3   */
+        							/* however, these are to treated as a value, not a bit field */
+        {
+            default:	/* Never happens... in theory ;-) RCE */
+            case 0:
+		en->NIC_BUFFER   	= (16 * 1024);
+		en->NIC_BUFFER_START	= (0x4000);		/* this is the buffer offset in 16-bit I/O port compatible mode */
+		en->NIC_PAGE     	= 256;			/* buffer page size */
+		en->MAXTXQ       	= HC_MAXTXQ / 4;
+		en->PAGES_PER_TX 	= (((ETHERMAXP - 1) / en->NIC_PAGE) + 1);
+		en->TX_START     	= (en->NIC_BUFFER_START/en->NIC_PAGE);
+		en->RX_START     	= (en->TX_START + (en->MAXTXQ * en->PAGES_PER_TX));
+		en->RX_END       	= ((en->NIC_BUFFER_START/en->NIC_PAGE)+(en->NIC_BUFFER / en->NIC_PAGE) - 1);
+                break;
+
+            case 1:
+		en->NIC_BUFFER   	= (32 * 1024);
+		en->NIC_BUFFER_START	= (0x4000);		/* this is the buffer offset in 16-bit I/O port compatible mode */
+		en->NIC_PAGE     	= 256;			/* buffer page size */
+		en->MAXTXQ       	= HC_MAXTXQ / 2;
+		en->PAGES_PER_TX 	= (((ETHERMAXP - 1) / en->NIC_PAGE) + 1);
+		en->TX_START     	= (en->NIC_BUFFER_START/en->NIC_PAGE);
+		en->RX_START     	= (en->TX_START + (en->MAXTXQ * en->PAGES_PER_TX));
+		en->RX_END       	= ((en->NIC_BUFFER_START/en->NIC_PAGE)+(en->NIC_BUFFER / en->NIC_PAGE) - 1);
+                break;
+
+            case 2:
+		en->NIC_BUFFER   	= (63 * 1024);
+		en->NIC_BUFFER_START	= (0x100);		/* this value lowered from 0x4000 (16-bit non-compat I/O mode) RCE:990323 */
+		en->NIC_PAGE     	= 256;			/* buffer page size */
+		en->MAXTXQ       	= HC_MAXTXQ;
+		en->PAGES_PER_TX 	= (((ETHERMAXP - 1) / en->NIC_PAGE) + 1);
+		en->TX_START     	= (en->NIC_BUFFER_START/en->NIC_PAGE);
+		en->RX_START     	= (en->TX_START + (en->MAXTXQ * en->PAGES_PER_TX));
+		en->RX_END       	= ((en->NIC_BUFFER_START/en->NIC_PAGE)+(en->NIC_BUFFER / en->NIC_PAGE) - 1);
+                break;
+        }
 
 	/* initialise the en_softc structure */
 	en->en_unit = unit;
@@ -1362,17 +1377,17 @@ static void en_init_low(int slot, int irqs_on)
 	en->Chip = (NICRef)ENCARD_NIC_REGS(easibase);
 	en->dma_port = (u_int *)ENCARD_REMOTE_DMA(easibase);
 	en->en_dallas   = (char *)ENCARD_DALLAS(easibase);
-	
+
 	/*
 	 * initialise stats structures
 	 */
 	stats_init(en);
 
-	for( i = 0; i < MAXTXQ; ++i )
+	for( i = 0; i < en->MAXTXQ; ++i )
 	{
-	    en->TxqPool[i].TxNext = (i < (MAXTXQ - 1)) ?
+	    en->TxqPool[i].TxNext = (i < (en->MAXTXQ - 1)) ?
 				     &(en->TxqPool[(i + 1)]) : (TxqRef)NULL;
-	    en->TxqPool[i].TxStartPage = (i * PAGES_PER_TX) + TX_START;
+	    en->TxqPool[i].TxStartPage = (i * en->PAGES_PER_TX) + en->TX_START;
 	}
 	en->TxqFree = en->TxqPool;
 	en->TxPending = (TxqRef)NULL;
@@ -1396,6 +1411,25 @@ static void en_init_low(int slot, int irqs_on)
 	}
 	else
 	{
+	  _kernel_oserror *err = _swix( OS_ReadSysInfo, _IN(0)|_OUTR(0,1), 4, (int *)&en->en_addr[0], (int *)&en->en_addr[4] );
+
+          if ( (err == NULL) && ((*(int *)&en->en_addr[0] != 0) || (*(int *)&en->en_addr[4] != 0) ))
+          {
+	    /* We got an address from the Kernel, we must byte swap it now */
+	    en->en_addr[6] = en->en_addr[0];
+	    en->en_addr[0] = en->en_addr[5];
+	    en->en_addr[5] = en->en_addr[6];
+	    en->en_addr[6] = en->en_addr[1];
+	    en->en_addr[1] = en->en_addr[4];
+	    en->en_addr[4] = en->en_addr[6];
+	    en->en_addr[6] = en->en_addr[2];
+	    en->en_addr[2] = en->en_addr[3];
+	    en->en_addr[3] = en->en_addr[6];
+          }
+          else
+          {
+#if DALLAS
+            /* Attempt to read from Dallas chip if present in this hardware (DALLAS=FALSE for DESKLITE) */
 	    int dallas_retries;
 	    int myid;
 	    unsigned int myetheraddr;
@@ -1434,7 +1468,7 @@ static void en_init_low(int slot, int irqs_on)
 		        continue;
 		    if ( ( myetheraddr>>24 ) != 0xa4 )
 		        continue;
-		        
+
 		    /* Write it in then */
 		    en->en_addr[0] = 0x00;
 		    en->en_addr[1] = 0x00;
@@ -1445,45 +1479,45 @@ static void en_init_low(int slot, int irqs_on)
 		    break;
 	        }
 	    }
-	    
+
 	    /* Validate the dallas */
     	    for ( i=0; i<6; i++ )
     	    {
     	        if ((en->en_addr[i]!=0)&&(en->en_addr[i]!=0xff))
     	            break;
     	    }
-    	    
-    	    if ( i==6 )
+    	    if ( i==6 )		/* Dallas chip has no valid address if i=6, so read flash constants... */
+#endif
     	    {
-	    
 	        /* If not the get them from the flash constants */
     	        for ( i=0; i<6; i++ )
 	            en->en_addr[i] = flash_constants[i<<2];
-	            
-	        /* Validate the flash constants */
-    	        for ( i=0; i<6; i++ )
-    	        {
-    	            if ((en->en_addr[i]!=0)&&(en->en_addr[i]!=0xff))
-    	                break;
-    	        }
-    	        
-    	        if ( i==6 )
-    	        {
-    	            sprintf ( en_lasterr, "Ethernet address missing %d\n", slot );
-    	            en->en_flags |= EN_FAULTY;
-    	        }
     	    }
+    	  }
 	}
 
-	/* declare the ISR to the XCB manager */
-	en->en_handler.ih_fn = en_intr;
-	en->en_handler.ih_farg = unit;
-	decl_xcb_interrupt(slot, &(en->en_handler), PRIO_ET);
+	/* validate the Ethernet address */
+	for ( i=0; i<6; i++ )
+	{
+	    if ((en->en_addr[i]!=0)&&(en->en_addr[i]!=0xff))
+                break;
+        }
+
+    	if ( i==6 )
+    	{
+    	    sprintf ( en_lasterr, "Ethernet address missing %d\n", slot );
+            en->en_flags |= EN_FAULTY;
+    	}
 
 	/* declare the interrupt sense for old-fashioned machines */
 	en->en_sense.flag = (int *)&en->Chip->isr;
 	en->en_int_status = (int *)&en->Chip->isr;
 	en->en_sense.mask = EN_INTR_MASK;
+
+	/* declare the ISR to the XCB manager */
+	en->en_handler.ih_fn = en_intr;
+	en->en_handler.ih_farg = unit;
+	decl_xcb_interrupt(slot, &(en->en_handler), PRIO_ET, (int)en->en_int_status);
     }
     else
     {
@@ -1496,7 +1530,8 @@ static void en_init_low(int slot, int irqs_on)
 	    en = en_softc[unit];
 
 	/* run the diagnostics */
-	(void)en_post(en, 0);
+	if ( en )
+	    en_post(en, 0);
     }
 }
 
@@ -1536,7 +1571,7 @@ static int en_post(struct en_softc *en, int loopback_only)
 
     /* put the reset back on & return status */
     en_reset_card ( en->en_slot );
-    
+
     return(retc);
 }
 
@@ -1646,7 +1681,32 @@ static u_char *calc_crc(u_char *data, int datalen)
 	retc[i] = ~(swap & 0xff);
 	swap >>= NBBY;
     }
+
     return(retc);
+}
+
+
+static unsigned int calc_crc2 ( unsigned char *data, int datalen )
+{
+    unsigned int crc, swap;
+    unsigned int bit, byte, j;
+
+    crc = 0xffffffff;
+
+    for ( byte=0; byte<datalen; byte++ )
+    {
+        for ( bit=*(data++),j=0;j<8;j++, bit>>=1 )
+            crc = (crc>>1) ^ (((crc^bit)&0x01)?0xedb88320:0 );
+    }
+
+    for ( swap=0, bit=0; bit<32; bit++ )
+    {
+        swap<<=1;
+        swap |= crc&1;
+        crc>>=1;
+    }
+
+    return swap;
 }
 
 /**********************************************************************/
@@ -1818,7 +1878,7 @@ static int en_run_diags(struct en_softc *en, int loopback_only)
 	en_setup_diags(en, en->Chip, LOOPBACK1, 0);
 
 	/* run the test for all pages */
-	for( i = NIC_BUFFER_START; i < (NIC_BUFFER / NIC_PAGE); ++i )
+	for( i = en->NIC_BUFFER_START; i < (en->NIC_BUFFER / en->NIC_PAGE); ++i )
 	    if( !en_memtest(en, i, pattern) )
 		return(0);
     }
@@ -1849,10 +1909,22 @@ static int en_run_diags(struct en_softc *en, int loopback_only)
     for( i = 0; i < sizeof(TestPacket); ++i, ++dptr )
 	*en->dma_port = (*dptr << 16) | (*dptr << 24);
 
+    /*
+     * check that remote DMA has completed
+     */
     if( !(nic->isr & RDC) )
     {
-	sprintf(en_lasterr, "Unit %d: remote DMA failure\n",
-	    slotmap[en->en_slot]);
+	/*
+	 * this is not yet a fatal error - give it
+	 * a chance to recover then try again
+	 */
+	MICRODELAY(RDC_RECOVER_PERIOD);
+    }
+
+    if( !(nic->isr & RDC) )
+    {
+	sprintf(en_lasterr, "Unit %d: remote DMA failure, isr=%x\n",
+	    slotmap[en->en_slot], (int) nic->isr);
 	return(0);
     }
     else
@@ -1862,7 +1934,9 @@ static int en_run_diags(struct en_softc *en, int loopback_only)
     /* I dont set the recoverable error bit for the cable check so that the network */
     /* stuff can initialise properly without incident.  The user can plug the cable */
     /* in later */
-    check_cable(en);
+#if 0
+    check_cable(en); /* doing this seems to mess up writing of rcbc1 GS 7/4/99 */
+#endif
 
     en->en_flags &= ~EN_RECOVERABLE_ERROR;
 
@@ -1905,14 +1979,26 @@ static int en_memtest(struct en_softc *en, int page, u_int *pattern)
 
     nic->rsar0 = 0;
     nic->rsar1 = page;
-    nic->rbcr0 = NIC_PAGE;
-    nic->rbcr1 = NIC_PAGE >> 8;
+    nic->rbcr0 = en->NIC_PAGE;
+    nic->rbcr1 = en->NIC_PAGE >> 8;
     nic->command = START_DMA(DMA_WRITE);
-    for( i = 0, j = 0; i < (NIC_PAGE >> 1); ++i )
+    for( i = 0, j = 0; i < (en->NIC_PAGE >> 1); ++i )
     {
 	*en->dma_port = (pattern[j] << 16);
 	if( ++j == PAT_LEN )
 	    j = 0;
+    }
+
+    /*
+     * check that remote DMA has completed
+     */
+    if( !(nic->isr & RDC) )
+    {
+	/*
+	 * this is not yet a fatal error - give it
+	 * a chance to recover then try again
+	 */
+	MICRODELAY(RDC_RECOVER_PERIOD);
     }
 
     if( !(nic->isr & RDC) )
@@ -1928,10 +2014,10 @@ static int en_memtest(struct en_softc *en, int page, u_int *pattern)
     *en->page_reg = ((HARD_RESET_OFF | IO_READ) << 16);
     nic->rsar0 = 0;
     nic->rsar1 = page;
-    nic->rbcr0 = NIC_PAGE;
-    nic->rbcr1 = NIC_PAGE >> 8;
+    nic->rbcr0 = en->NIC_PAGE;
+    nic->rbcr1 = en->NIC_PAGE >> 8;
     nic->command = START_DMA(DMA_READ);
-    for( i = 0, j = 0; i < (NIC_PAGE >> 1); ++i )
+    for( i = 0, j = 0; i < (en->NIC_PAGE >> 1); ++i )
     {
 	if( (nextword = (*en->dma_port & 0xffff)) != pattern[j] )
 	{
@@ -2001,20 +2087,20 @@ static int check_cable(struct en_softc *en)
     int unit = slotmap[en->en_slot];
 
     int cb;
-    
+
     /* Enable the link test */
     cb = nic->configb;
     cb &= ~7;
     nic->configb = cb;
-    
+
     /* Delay for a bit, to be sure */
     MICRODELAY (1000);
-    
+
     /* Check the link */
     if ( en->Chip->configb & 4 )
     {
         return 1;
-    }         
+    }
     else
     {
         sprintf ( en_lasterr, "Cable is not connected at unit %d\n", unit );
@@ -2023,6 +2109,30 @@ static int check_cable(struct en_softc *en)
 }
 
 /**********************************************************************/
+
+char *bina ( unsigned char num )
+{
+    int c;
+    static char text[9];
+
+    for ( c=7; c>=0; c-- )
+        text[7-c] = ((num>>c)&1) ? '1' : '0';
+    text[8] = 0;
+
+    return text;
+}
+
+char *bina32 ( unsigned int num )
+{
+    int c;
+    static char text[33];
+
+    for ( c=31; c>=0; c-- )
+        text[31-c] = ((num>>c)&1) ? '1' : '0';
+    text[32] = 0;
+
+    return text;
+}
 
 /*
  * en_setup - initialise the NIC, but do not bring it up onto the network.
@@ -2069,8 +2179,8 @@ static int en_setup(int unit)
     nic->tcr = TCR_INIT_VALUE | LOOP_MODE(LOOPBACK1);
 
     /* set up the receive buffer ring */
-    en->en_rbs = nic->bnry = nic->pstart = RX_START;
-    en->en_rbd = nic->pstop = RX_END;
+    en->en_rbs = nic->bnry = nic->pstart = en->RX_START;
+    en->en_rbd = nic->pstop = en->RX_END;
 
     /*
      * clear all bits in the ISR, then set up the IMR
@@ -2103,15 +2213,12 @@ static int en_setup(int unit)
      * multicast filters: pass all multicast
      * packets (when AM bit is set in rcr)
      */
-    nic->mar0 = nic->mar1 = nic->mar2 = nic->mar3 = 0xff;
-    nic->mar4 = nic->mar5 = nic->mar6 = nic->mar7 = 0xff;
+
+    nic->mar0 = nic->mar1 = nic->mar2 = nic->mar3 = 0x00;
+    nic->mar4 = nic->mar5 = nic->mar6 = nic->mar7 = 0x00;
 
     /* set the current page register for remote DMA */
-#ifndef MXPATCH
-    nic->curr = RX_START;
-#else
-    en->en_nxt_pkt = nic->curr = RX_START + 1;
-#endif
+    en->en_nxt_pkt = nic->curr = en->RX_START + 1;
 
     /* put the NIC back to page 0 */
     nic->command = SEL_PAGE(0, NIC_STOPPED);
@@ -2224,12 +2331,15 @@ static int en_bringup(int unit)
 	 */
 	return(ENXIO);
 
-    s = splet();
+    s = ensure_irqs_off();
 
+#if 0
+    /* doing this seems to mess up rbcr1 GS 7/4/99 */
     /* Select TP */
     cb = en->Chip->configb;
     cb &= ~7;
     en->Chip->configb = cb;
+#endif
 
     /* set the NIC running, take it out of loopback mode */
     en->Chip->command = SEL_PAGE(0, NIC_RUNNING);
@@ -2239,7 +2349,7 @@ static int en_bringup(int unit)
     en->en_flags |= EN_RUNNING;
 
     /* all done */
-    splx(s);
+    restore_irqs(s);
     return(0);
 }
 
@@ -2253,8 +2363,21 @@ en_init(void)
     _kernel_swi_regs rin,rout;
     int s;
     int id;
-    
-    s = splet();
+
+    s = ensure_irqs_off();
+
+/* Mod for Boca hardware
+ * there is no podule manager or bus!
+ */
+#ifdef ONBOARD_ETHERNET
+    for( i = 0; i < XCB_SLOTS; ++i )
+    {
+	en_slots[i] = 0;
+	slotmap[i] = -1;
+    }
+    en_slots[0] = (++encnt);
+    en_init_high(0);
+#else
     for( i = 0; i < XCB_SLOTS; ++i )
     {
 	en_slots[i] = 0;
@@ -2276,10 +2399,11 @@ en_init(void)
 	    }
 	}
     }
+#endif
 
     if( encnt == 0 )
     {
-	splx(s);
+	restore_irqs(s);
 	return;
     }
 
@@ -2287,13 +2411,13 @@ en_init(void)
 	if( en_slots[i] )
 	    en_init_low (i, 0);
 
-    splx(s);
+    restore_irqs(s);
 
     for( i = 0; i < XCB_SLOTS; i++ )
 	if( en_slots[i] )
 	    en_init_low (i, 1);
 
-    rin.r[0] = (int)"Inet$EnCount";
+    rin.r[0] = (int)"Inet$EiCount";
     rin.r[1] = (int)&encnt;
     rin.r[2] = 4;
     rin.r[3] = 0;
@@ -2319,11 +2443,40 @@ int en_transmit(_kernel_swi_regs *r)
     char *edst = (char *)(r->r[4]);
     char *esrc = (flags & TX_FAKESOURCE) ? (char *)r->r[5] : 0;
     struct en_softc *en = en_softc[unit];
-    int error = 0;
-    int s = splet();
+    int error = 0, s, i;
 
-#ifdef DEBUG
-    Printf("ei_transmit: flags %d unit %d type %x m0 %x\n",
+#ifdef BORDER
+    set_border(1);
+#endif
+
+    /*s = splet();*/
+
+    if (en_irq_active)
+    {
+      sprintf(en_lastlog,"Transmit entered during irq\n");
+      return(EINPROGRESS);
+    }
+
+    if (en_tx_active)
+    {
+      sprintf(en_lastlog,"Transmit re-entered during transmit\n");
+      return(EALREADY);
+    }
+
+#ifdef ENABLE_IRQS
+    s = ensure_irqs_off();
+    en_tx_active = 1;
+    /*
+     * stop all our cards from generating any interrupts
+     * we can't deal with a receive whilst doing transmit
+     */
+    en = en_softc[0];
+    en->Chip->imr = 0;
+    restore_irqs(s);
+#endif
+
+#ifdef DEBUGTX
+    printf("en_transmit: flags %d unit %d type %x m0 %x\n",
 	   r->r[0], r->r[1], r->r[2], r->r[3]);
 #endif
 
@@ -2361,19 +2514,28 @@ int en_transmit(_kernel_swi_regs *r)
 	    error = tx_mbufs(en, m, edst, type, esrc);
 
 	if( !(flags & TX_PROTOSDATA) )
-	{
-#ifdef OldCode
-	    m_freem(m);
-#else
 	    FREEM(m);
-#endif
-	}
     }
 
     /*
      * all done
      */
-    splx(s);
+    /*splx(s);*/
+
+#ifdef ENABLE_IRQS
+    s = ensure_irqs_off();
+
+    /* check for outstanding transmits */
+    /*if (en->TxPending)
+        tx_done(en, en->Chip);*/
+
+    /*
+     * enable all our cards interrupts
+     */
+    en->Chip->imr = IMR_INIT_VALUE;
+    en_tx_active = 0;
+    restore_irqs(s);
+#endif
 
     return (error);
 }
@@ -2382,18 +2544,61 @@ int en_transmit(_kernel_swi_regs *r)
 
 int en_irq_handler(_kernel_swi_regs *r, void *pw)
 {
-    int i;
-    
+    int i,s,s2;
+    struct en_softc *en;
+
+#ifdef BORDER
+    set_border(0);
+#endif
+
+#ifdef ENABLE_IRQS
+    /* make sure this IRQ handler is not re-entered */
+    if (en_irq_active)
+    {
+    	sprintf(en_lastlog,"Re-entering IRQ handler\n");
+    	return (1);
+    }
+
+    /* make sure this IRQ handler is not entered when in en_transmit() */
+    if (en_tx_active)
+    {
+    	sprintf(en_lastlog,"IRQ handler entered during transmit\n");
+    	return (1);
+    }
+
+    /* set flag to indicate the IRQ handler has been entered */
+    en_irq_active = 1;
+
+    /* this will only work for 1 Ethernet card!!!! */
+    en = en_softc[0];
+    en->Chip->imr = 0;
+
+    /* enable system IRQs */
+    s = ensure_irqs_on();
+#endif
+
     for( i = 0; i < XCB_SLOTS; i++ )
     {
 	if( (en_slots[i]) && ((*en_softc[slotmap[i]]->en_int_status)&MY_INTS) )
 	{
-	    set_irqsareoff();
-	    en_intr(slotmap[i]);
-	    clear_irqsareoff();
-	    return (0);
+            /* deal with our interrupt(s) */
+            en_intr( slotmap[i] );
 	}
+
     }
+
+#ifdef ENABLE_IRQS
+    ensure_irqs_off();
+    /* now enable interrupts from all our cards */
+    en->Chip->imr = IMR_INIT_VALUE;
+    en_irq_active = 0;
+    restore_irqs(s);
+#endif
+
+#ifdef BORDER
+    set_border(3);
+#endif
+
     return (1);
 }
 
@@ -2401,20 +2606,49 @@ int en_irq_handler(_kernel_swi_regs *r, void *pw)
 
 void en_final(void)
 {
+#ifndef USE_DEVICEVECTOR
     _kernel_oserror *e;
     _kernel_swi_regs rin, rout;
+#endif
+    struct en_softc *en;
     int i;
 
+    /* The original code here was _awful_ */
+
+    for ( i=0; i<XCB_SLOTS; i++ )
+    {
+	if (en_slots[i])
+	{
+	    en = en_softc[slotmap[i]];
+	    en_shutdown(i);
+
+	    /* If we didn't claim, this swi will return an error and we will ignore it */
+#ifdef USE_DEVICEVECTOR
+/*            _swix ( OS_ReleaseDeviceVector, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4), 13, en_irq_entry, module_wsp, en->sc_easibase + EI_CTRLREG, 4 ); */
+              _swix ( OS_ReleaseDeviceVector, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4), 13, en_irq_entry, module_wsp, en->en_int_status, MY_INTS );
+#else
+            rin.r[0] = 2;
+            rin.r[1] = (int) en_irq_entry;
+            rin.r[2] = (int) module_wsp;
+            e = _kernel_swi(XOS_Bit | OS_Release, &rin, &rout);
+#endif
+	}
+    }
+
+/*
     for( i = 0; i < XCB_SLOTS; i++ )
     {
 	if (en_slots[i])
 	    en_shutdown (i);
     }
 
-    rin.r[0] = 2;
-    rin.r[1] = (int) en_irq_entry;
-    rin.r[2] = (int) module_wsp;
-    e = _kernel_swi(XOS_Bit | OS_Release, &rin, &rout);
+    _swix ( OS_ClaimDeviceVector, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4), 13, en_intr_entry, module_wsp, easibase + EI_CTRLREG, 4 );
+        rin.r[0] = 2;
+        rin.r[1] = (int) en_irq_entry;
+        rin.r[2] = (int) module_wsp;
+        e = _kernel_swi(XOS_Bit | OS_Release, &rin, &rout);
+    }
+*/
 }
 
 /**********************************************************************/
@@ -2428,20 +2662,42 @@ u_char *en_addresses(int unit)
 
 /**********************************************************************/
 
+void filter_multi ( FilterSingleRef filter )
+{
+    unsigned char zeroaddr[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  };
+    unsigned int c;
+
+    if ( filter->fs_multiall )
+    {
+        printf ( "All multicast\n" );
+        return;
+    }
+
+    for ( c=0; c<filter->fs_multitablesize; c++ )
+    {
+        if ( memcmp ( &filter->fs_multitable[c], zeroaddr, 8 ) )
+            printf ( "%s", ether_sprintf ( &filter->fs_multitable[c] ) );
+    }
+
+    printf ( "\n" );
+}
+
 prenstats(int flag)
 {
     struct en_softc *en;
     int i, unit;
     int enfound = 0;
     int filters_active;
+    register NICRef nic;
 
     for( unit = 0; unit < encnt; ++unit)
     {
 	int slot;
 
 	en = en_softc[unit];
+	nic = en->Chip;
 	filters_active = 0;
-	
+
 #ifdef TXBUF_PROFILE
 	printf ( "DEBUG %d\n", max_txbuf );
 #endif
@@ -2453,34 +2709,44 @@ prenstats(int flag)
 	else
 	{
 	    printf ( "ei%d 16-bit transfers Ethernet address %02x:%02x:%02x:%02x:%02x:%02x\n",
-		unit, en->en_addr[0]&0xff, en->en_addr[1]&0xff, en->en_addr[2]&0xff, 
+		unit, en->en_addr[0]&0xff, en->en_addr[1]&0xff, en->en_addr[2]&0xff,
 		      en->en_addr[3]&0xff, en->en_addr[4]&0xff, en->en_addr[5]&0xff );
+	    printf("ei%d: (mod %x) frame buffer %dKB : PAL type %c\n",
+		unit, en->sc_modification, (en->NIC_BUFFER) >> 10, ((en->sc_modification & 1) == 0) ? 'A':'C' );
 	}
 
 	for( slot = 0; slot < XCB_SLOTS; ++slot )
 	    if( slotmap[slot] == i )
 		break;
 
-	printf ( "     oframes %10ld : oerrors %10ld : usage %10ld\n",
+	printf ( "     TX frames %10ld : TX errors %10ld : TX bytes %10ld\n     TX ints   %10ld\n",
 	 		en->en_stats.st_tx_frames,
 	        	en->en_stats.st_tx_general_errors,
-	        	en->en_stats.st_tx_bytes );
+	        	en->en_stats.st_tx_bytes,
+	        	en->en_stats.st_tx_interrupts);
 
-	printf ( "     iframes %10ld : ierrors %10ld : usage %10ld\n",
+	printf ( "     RX frames %10ld : RX errors %10ld : RX bytes %10ld\n     RX ints   %10ld\n",
 	        	en->en_stats.st_rx_frames,
 	        	en->en_stats.st_rx_general_errors,
-	        	en->en_stats.st_rx_bytes );
-	        	
-	printf ( "     frames claimed " );
+	        	en->en_stats.st_rx_bytes,
+	        	en->en_stats.st_rx_interrupts);
+
+	printf ( "     Frame types claimed:\n" );
 
 	if( ieeefilter[unit] )
-	    printf ( "IEEE " );
+	{
+	    printf ( "       IEEE \n" ); /* filter_multi(ieeefilter[unit]); */
+	}
 
 	if( e2monitor[unit] )
-	    printf ( "Monitor " );
+	{
+	    printf ( "       Monitor \n" ); /* filter_multi(e2monitor[unit]); */
+	}
 
 	if( e2sink[unit] )
-	    printf ( "Sink " );
+	{
+	    printf ( "       Sink \n" ); /*filter_multi(e2sink[unit]); */
+	}
 
 	if( e2specific[unit] )
 	{
@@ -2490,16 +2756,25 @@ prenstats(int flag)
 
 	    while( fc )
 	    {
-		printf ( "%04x ", fc->fc_type );
+		printf ( "       %04x \n", fc->fc_type ); /* filter_multi(&fc->fc_filter); */
 		fc = fc->fc_next;
 	    }
 	}
 
-        printf ( "\n" );
-
 	printf ( "     link 10BaseT\n" );
     }
+#if 0
+    nic->command = SEL_PAGE(1, NIC_STOPPED);
+#endif
 
+        printf ( "     multicast filter %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
+	en->en_mar[0], en->en_mar[1], en->en_mar[2], en->en_mar[3],
+	en->en_mar[4], en->en_mar[5], en->en_mar[6], en->en_mar[7] );
+
+#if 0
+    nic->command = SEL_PAGE(0, NIC_STOPPED);
+    nic->command = SEL_PAGE(0, NIC_RUNNING);
+#endif
     if( en_lasterr[0] )
     {
         printf("     last error %s\n", en_lasterr);
@@ -2511,7 +2786,8 @@ prenstats(int flag)
         printf("     last log %s\n", en_lastlog);
         en_lastlog[0] = '\0';
     }
-    
+
+
     return(enfound);
 }
 
@@ -2591,15 +2867,23 @@ void set_receive_level(int unit, int addrlevel)
 int en_stats(_kernel_swi_regs *r)
 {
     struct stats *sptr;
+    struct en_softc *en;
+    register NICRef nic;
 
-    switch( r->r[0] )
+    en = en_softc[r->r[1]];
+    nic = en->Chip;
+
+    switch ( r->r[0] )
     {
       case 0:
 	sptr = &st;
 	break;
 
       case 1:
-	sptr = &(en_softc[r->r[1]]->en_stats);
+	sptr = &(en->en_stats);
+	nic->command = SEL_PAGE(0, NIC_RUNNING);
+	/* removed this 7/4/99 GS */
+	/*en->en_st_link_polarity = (nic->configb & 1<<2) >> 2;*/
 	break;
 
       default:
@@ -2629,8 +2913,7 @@ int enioctl(int unit, int cmd, int flag)
 	break;
 
       case 1:
-
-	s = splet();
+	s = ensure_irqs_off();
 
 	/*
 	 * log a message on next CD/Heartbeat error
@@ -2653,7 +2936,7 @@ int enioctl(int unit, int cmd, int flag)
 	else if( flag && !(en->en_flags & EN_RUNNING) )
 	    error = en_bringup(unit);
 
-	splx(s);
+	restore_irqs(s);
 	break;
 
       default:
@@ -2666,12 +2949,11 @@ int enioctl(int unit, int cmd, int flag)
 
 /**********************************************************************/
 
-#ifndef MXPATCH
-
 static int load_packet(u_char *hw_dst, u_char *hw_src, u_short type,
 			struct mbuf *m0, volatile u_int *port, int datalen, int page, NICRef nic )
 {
     u_int bytebuf = 0;
+    int s;
 
     nic->rsar0 = 0;
     nic->rsar1 = page;
@@ -2695,127 +2977,30 @@ static int load_packet(u_char *hw_dst, u_char *hw_src, u_short type,
     /* flush any odd bytes remaining */
     en_flush_output(port, &bytebuf);
 
-
-    if( !(nic->isr & RDC) )
-    {
-        /*
-         * this is not yet a fatal error - give it
-         * a chance to recover then try again
-         */
-	MICRODELAY(RDC_RECOVER_PERIOD);
-    }
-
-    /* now test the RDC bit for real */
-    if( !(nic->isr & RDC) )
-        return 0;
-
-    nic->isr = RDC;
-
-    /* finished */
-    return 1;
-}
-
-#else
-
-static int load_packet(u_char *hw_dst, u_char *hw_src, u_short type,
-			struct mbuf *m0, volatile u_int *port, int datalen, int page, NICRef nic )
-{
-    u_int bytebuf = 0;
-    int ptr = page<<8;
-    int bytes_left;
-
-    /* Kick off the first dma */
-    nic->rsar0 = ptr;
-    nic->rsar1 = ptr>>8;
-    nic->rbcr0 = bytes_left = (datalen > 128) ? 128 : datalen;
-    nic->rbcr1 = 0;
-    nic->command = START_DMA(DMA_WRITE);
-    ptr+=bytes_left;
-
-    /*
-     * load up the packet destination, source, and type first.  These definatly fit in the 1st dma
-     */
-    en_io_out(hw_dst, port, HW_ADDR_LEN, &bytebuf);
-    en_io_out(hw_src, port, HW_ADDR_LEN, &bytebuf);
-    en_io_out((u_char *)(&type), port, sizeof(u_short), &bytebuf);
-    datalen -= HW_ADDR_LEN + HW_ADDR_LEN + sizeof(u_short);
-    bytes_left -= HW_ADDR_LEN + HW_ADDR_LEN + sizeof(u_short);
-
-    /* now load up the mbuf data */
-    for( ; m0; m0 = m0->m_next)
-    {
-        int c = 0;
-
-        while ( c < m0->m_len )
-        {
-            if ( bytes_left==0 )
-            {
-                en_flush_output(port, &bytebuf);
-                bytebuf=0;
-                if( !(nic->isr & RDC) )
-                {
-         	    MICRODELAY(RDC_RECOVER_PERIOD);
-                }
-                
-                if( !(nic->isr & RDC) )
-                    return 0;
-    
-                nic->isr = RDC;
-
-      	        nic->rbcr0 = ~0;
-	        nic->command = START_DMA(DMA_READ);
-
-	        MICRODELAY(1);
-	        nic->command = START_DMA(DMA_ABORT);
-    
-                nic->rsar0 = ptr;
-                nic->rsar1 = ptr>>8;
-                nic->rbcr0 = bytes_left = (datalen > 128) ? 128 : datalen;
-                nic->rbcr1 = 0;
-                nic->command = START_DMA(DMA_WRITE);
-                ptr+=bytes_left;
-            }
-            
-            if ( (m0->m_len-c) >= bytes_left )
-            {
-     	        en_io_out(mtod(m0, u_char *)+c, port, bytes_left, &bytebuf);
-     	        c += bytes_left;
-                datalen-=bytes_left;
-     	        bytes_left = 0;
-     	    }
-     	    else
-     	    {
-     	        en_io_out(mtod(m0, u_char *)+c, port, m0->m_len-c, &bytebuf);
-     	        bytes_left -= m0->m_len - c;
-                datalen-= m0->m_len - c;
-     	        c = m0->m_len;
-     	    }
-        }
-    }
-
-    /* flush any odd bytes remaining */
-    en_flush_output(port, &bytebuf);
-
-    if ( !(nic->isr & RDC) )
-    {
-        /*
-         * this is not yet a fatal error - give it
-         * a chance to recover then try again
-         */
-	MICRODELAY(RDC_RECOVER_PERIOD);
-    }
-
-    /* now test the RDC bit for real */
-    if( !(nic->isr & RDC) )
-        return 0;
-
-    nic->isr = RDC;
-
-    /* finished */
-    return 1;
-}
-
+#if 0
+    while ( !(nic->isr & RDC) )
+        /* Do nothing */;
 #endif
+
+    if( !(nic->isr & RDC) )
+    {
+        /*
+         * this is not yet a fatal error - give it
+         * a chance to recover then try again
+         */
+	MICRODELAY(RDC_RECOVER_PERIOD);
+    }
+
+    /* now test the RDC bit for real */
+    if( !(nic->isr & RDC) )
+        return 0;
+
+    nic->isr = RDC;
+
+    /* finished */
+    return 1;
+}
+
 
 /**********************************************************************/
 
@@ -2851,16 +3036,20 @@ static int tx_mbufs(struct en_softc *en, struct mbuf *m0,
 	return(EMSGSIZE);
     }
 
-    s = splet();
+    s = ensure_irqs_off();
 
     /* check for a free transmit structure */
     if( (txdesc = en->TxqFree) == (TxqRef)NULL )
     {
+
+
+
+
 	/*
 	 * no free structures - log this
 	 * as a general transmit failure
 	 */
-	splx(s);
+	restore_irqs(s);
 	sprintf(en_lasterr, "Unit %d: No free transmit buffers\n",
 		en->en_unit);
        	en->en_st_tx_general_errors++;
@@ -2879,7 +3068,7 @@ static int tx_mbufs(struct en_softc *en, struct mbuf *m0,
     {
         TxqRef n;
         int m;
-        
+
         for ( m=0, n=en->TxqFree; n!=NULL; n=n->TxNext )
             m++;
         if ( max_txbuf > m )
@@ -2924,7 +3113,7 @@ static int tx_mbufs(struct en_softc *en, struct mbuf *m0,
 	sprintf(en_lastlog, "Unit %d: RDC failure in tx_mbufs()\n",
 	    en->en_unit);
 
-	splx(s);
+	restore_irqs(s);
 
 	/* mark this as a general tx failure */
 	en->en_st_tx_general_errors++;
@@ -2950,9 +3139,149 @@ static int tx_mbufs(struct en_softc *en, struct mbuf *m0,
     }
 
     /* all done */
-    splx(s);
+    restore_irqs(s);
     return(0);
 }
+
+static int en_add_addrs ( struct en_softc *en, FilterSingleRef filter )
+{
+    register NICRef nic = en->Chip;
+    unsigned char zeroaddr[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    unsigned int crc, byte, bit, c;
+
+    if ( filter==0 )
+        return 0;
+
+    if ( filter->fs_multiall )
+    {
+        /* Open up the filter and return no mor work */
+        nic->mar0 = nic->mar1 = nic->mar2 = nic->mar3 = 0xff;
+        nic->mar4 = nic->mar5 = nic->mar6 = nic->mar7 = 0xff;
+
+        memset(&en->en_mar[0], 0xff, sizeof(en->en_mar));
+
+        return 1;
+    }
+
+    /* Add all the addresses */
+    for ( c=0; c<filter->fs_multitablesize; c++ )
+    {
+        if ( !memcmp ( &filter->fs_multitable[c], zeroaddr, 8 ) )
+            continue;
+
+        /* We have an address to add here */
+	crc = calc_crc2 ( (unsigned char *)&filter->fs_multitable[c], 6 );
+
+        /* crc is 6 MS bits of crc */
+        crc = crc>>(32-6);
+        byte = (crc>>3)&0x7;
+        bit  = 1<<(crc&0x7);
+
+        /* Hmm */
+        switch ( byte )
+        {
+            case 0:
+              nic->mar0 |= bit;
+              en->en_mar[0] |= bit;
+              break;
+            case 1:
+              nic->mar1 |= bit;
+              en->en_mar[1] |= bit;
+              break;
+            case 2:
+              nic->mar2 |= bit;
+              en->en_mar[2] |= bit;
+              break;
+            case 3:
+              nic->mar3 |= bit;
+              en->en_mar[3] |= bit;
+              break;
+            case 4:
+              nic->mar4 |= bit;
+              en->en_mar[4] |= bit;
+              break;
+            case 5:
+              nic->mar5 |= bit;
+              en->en_mar[5] |= bit;
+              break;
+            case 6:
+              nic->mar6 |= bit;
+              en->en_mar[6] |= bit;
+              break;
+            case 7:
+              nic->mar7 |= bit;
+              en->en_mar[7] |= bit;
+              break;
+        }
+    }
+
+    return 0;
+}
+
+void en_update_multicast_filter ( int unit )
+{
+    struct en_softc *en = en_softc[unit];
+    register NICRef nic = en->Chip;
+    FilterSingleRef filter=0;
+    FilterChainRef chain;
+    u_char TxPending;
+    int s = ensure_irqs_off();
+
+    shutdown(nic, &TxPending);
+
+    nic->command = SEL_PAGE(1, NIC_STOPPED);
+
+    nic->mar0 = nic->mar1 = nic->mar2 = nic->mar3 = 0x00;
+    nic->mar4 = nic->mar5 = nic->mar6 = nic->mar7 = 0x00;
+
+    memset(&en->en_mar[0], 0, sizeof(en->en_mar));
+
+    filter = e2sink[unit];
+    if ( (en_add_addrs ( en, filter ))!=0 ) goto out;
+
+    filter = e2monitor[unit];
+    if ( (en_add_addrs ( en, filter ))!=0 ) goto out;
+
+    filter = ieeefilter[unit];
+    if ( (en_add_addrs ( en, filter ))!=0 ) goto out;
+
+    for ( chain=e2specific[unit]; chain; chain=chain->fc_next )
+    {
+        filter = &chain->fc_filter;
+        if ( (en_add_addrs ( en, filter ))!=0 ) goto out;
+    }
+
+out:
+
+   /*nic->command = SEL_PAGE(0, NIC_STOPPED);*/
+    nic->command = SEL_PAGE(0, NIC_RUNNING);
+    startup(en, nic, TxPending);
+
+    restore_irqs(s);
+}
+
+#ifdef BORDER
+int set_border(colour)
+int colour;
+{
+    _kernel_oserror *e;
+    _kernel_swi_regs rin,rout;
+    char block[6];
+
+    block[0] = 0;
+    block[1] = 24;
+    block[2] = 0;
+    block[3] = 0;
+    block[4] = 0;
+
+    block[colour+2]=255;
+
+    rin.r[0] = 12;
+    rin.r[1] = (int) block;
+    e =_kernel_swi(XOS_Bit | OS_Word, &rin, &rout);
+}
+#endif
+
 
 /**********************************************************************/
 
