@@ -136,6 +136,9 @@
 #define fevent_OPEN_DISPLAY_OPTIONS         0x2082
 #define fevent_OPEN_KEYBOARD		    0x2083
 #define fevent_OPEN_RELATED_STUFF	    0x2084
+#define fevent_OPEN_FONT_SIZE		    0x2085
+#define fevent_OPEN_MUSIC		    0x2086
+#define fevent_OPEN_BEEPS		    0x2087
 
 #define fevent_STATUS_INFO_LEVEL            0x2090  /* +F */
 
@@ -149,6 +152,7 @@
 #define fevent_TOOLBAR_OPENURL		    0x20A7
 #define fevent_TOOLBAR_NC1		    0x20A8
 #define fevent_TOOLBAR_CODEC		    0x20A9
+#define fevent_TOOLBAR_CUSTOM		    0x20AA
 #define fevent_TOOLBAR_EXIT		    0x20AF /* unstack */
 
 #define fevent_PRINT_LETTER		    0x20B0

@@ -36,6 +36,14 @@
 
 #define LIGHT_OFF_DELAY     (2*100)
 
+#define WORLD_SPRITE	"pgbtnuhl"
+#define WORLD_SPRITE_HL	"pgbtnhl"
+
+#define UP_SPRITE	"upbtnuhl"
+#define UP_SPRITE_HL	"upbtnhl"
+#define DOWN_SPRITE	"dabtnuhl"
+#define DOWN_SPRITE_HL	"dabtnhl"
+
 /* --------------------------------------------------------------------------*/
 
 #define Toolbox_CreateObject                    0x44EC0
@@ -314,6 +322,14 @@ static os_error *gfade(int obj, int cmp, int fade)
             e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x41, cmp, flags ^ 0x80000000);
     }
     return e;
+}
+
+static int faded(int obj, int cmp)
+{
+    unsigned flags;
+    os_error *e;
+    e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 0x40, cmp, &flags);
+    return e == NULL && (flags & 0x80000000) != 0;
 }
 
 #if 0
@@ -751,7 +767,8 @@ static tb_bar_descriptor bar_names[] =
     { "relatedT", NULL, tb_bar_related_entry_fn, tb_bar_related_exit_fn, I_DIRECTION },
     { "openurlT", NULL, 0, 0, I_DIRECTION },
     { "statusWn", "statusW", 0, 0, fevent_MENU },
-    { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION }
+    { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION },
+    { "customT", NULL, 0, 0, I_DIRECTION }
 };
 
 static tb_bar_info *tb_bar_init(int bar_num)
@@ -937,6 +954,7 @@ BOOL tb_status_highlight(BOOL gain)
 	else
 	{
 	    tb_bar_set_highlight(tbi, tbi->highlight, FALSE);
+	    tbi->highlight = -1;
 	}
 	return TRUE;
     }
@@ -1618,7 +1636,7 @@ void tb_status_rotate(void)
 /* 	if (++turn_ctr == config_animation_frames) */
 /* 	    turn_ctr = 0; */
 
-	sprintf(sprite_name1, "%s%02d,%s%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
+	sprintf(sprite_name1, "%suhl%02d,%suhl%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
 	sprintf(sprite_name2, "%shl%02d,%shl%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
 	toolactionsetpair(bar_list->object_handle, I_WORLD, sprite_name1, sprite_name2);
     }
@@ -1629,7 +1647,7 @@ void tb_status_rotate_reset(void)
 {
     turn_ctr = -1;
     if (bar_list)
-	toolactionsetpair(bar_list->object_handle, I_WORLD, "pgbtn,pgbtn", "pgbtnhl,pgbtnhl");
+	toolactionsetpair(bar_list->object_handle, I_WORLD, WORLD_SPRITE, WORLD_SPRITE_HL);
 }
 
 /*
@@ -1969,15 +1987,15 @@ int tb_print_redraw(wimp_redrawstr *r)
 
 /* --------------------------------------------------------------------------*/
 
-static int movehighlightto(tb_bar_info *tbi, int cmp)
+static int movehighlightto(tb_bar_info *tbi, int index)
 {
-    if (tbi->highlight != cmp)
+    if (tbi->highlight != index)
     {
 	tb_bar_set_highlight(tbi, tbi->highlight, FALSE);
 
-	tbi->highlight = cmp;
+	tbi->highlight = index;
 
-	tb_bar_set_highlight(tbi, cmp, TRUE);
+	tb_bar_set_highlight(tbi, index, TRUE);
 
 	return TRUE;
     }
@@ -1992,8 +2010,13 @@ static int movehighlight(tb_bar_info *tbi, int direction)
     if (tbi == NULL)
 	return FALSE;
 
-    next = tbi->highlight + direction;
-
+    next = tbi->highlight;
+    do
+    {
+	next += direction;
+    }
+    while (next >= 0 && next < tbi->n_buttons && faded(tbi->object_handle, tbi->buttons[next].cmp));
+    
     if (next < 0)
 	next = 0;
     if (next > tbi->n_buttons-1)
@@ -2070,8 +2093,8 @@ void tb_status_set_direction(int up)
     if (bar_list)
     {
 	toolactionsetpair(bar_list->object_handle, I_DIRECTION,
-		 up ? "upbtn,upbtn" : "dabtn,dabtn",
-		 up ? "upbtnhl,upbtnhl" : "dabtnhl,dabtnhl");
+		 up ? UP_SPRITE : DOWN_SPRITE,
+		 up ? UP_SPRITE_HL : DOWN_SPRITE_HL);
     }
 }
 

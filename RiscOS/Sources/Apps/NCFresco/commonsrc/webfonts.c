@@ -147,7 +147,7 @@ os_error *webfonts_tidyup(void)
     return e2;
 }
 
-#ifdef STBWEB /*pdh*/
+#if 1
 int webfont_font_width(int f, const char *s)
 {
     webfont *wf = &webfonts[f];
