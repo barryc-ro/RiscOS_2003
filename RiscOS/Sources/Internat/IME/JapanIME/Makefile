@@ -29,7 +29,7 @@ MODSQZ  = modsqz
 OPTIONS = -Dunix=1 -DSTRCT_CN=1 -DPROTO=1 -DROMDIC=1 -DCHINA=0 -DTAIWAN=0 -DKOREA=0 \
           -DTANKANJI_CNV=0 -DTANBUN=0 -DRENBUN1=0 -DDEBUG=0 -DTHIN_CSR=1
 
-CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ffa -ec -Wp ${INCLUDES} ${OPTIONS}
+CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ffa -ec -Wps ${INCLUDES} ${OPTIONS} ${OPTS}
 CMHGFLAGS = -p
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
