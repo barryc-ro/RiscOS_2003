@@ -1,0 +1,535 @@
+/*---------------------------------------------------------------------------*/
+/* File:    c.settings                                                       */
+/* Purpose: Example configuration for screen blanker                         */
+/* Author:  Richard Leggett                                                  */
+/* History: 20-Nov-97: RML: Begun.                                           */
+/*          19-Mar-98: RML: Minor changes.                                   */
+/*                                                                           */
+/* Copyright © 1998 Acorn Computers Ltd., Cambridge, UK.                     */
+/*---------------------------------------------------------------------------*/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "swis.h"
+#include "toolbox.h"
+#include "event.h"
+#include "window.h"
+#include "wimplib.h"
+#include "gadgets.h"
+#include "colourdbox.h"
+
+#define VersionString "1.00 (18-Nov-97)"
+#define TaskName      "Screen saver settings"
+
+#define SettingsFile  "<Choices$Write>.ScrSavers.Swarm"
+
+#define DefaultButton 0x02
+#define CancelButton  0x01
+#define SetButton     0x00
+
+#define NOBEES        0x03
+#define COLOURNEAR    0x04
+#define BUTTONNEAR    0x05
+#define COLOURFAR     0x06
+#define BUTTONFAR     0x07
+#define COLOURQUEEN   0x08
+#define BUTTONQUEEN   0x09
+#define DELAY         0x0a
+
+/* Configurable variables */
+static int          delay     = 1;
+static int          nobees    = 100;
+static unsigned int near_col  = 0x00ffff00;
+static unsigned int far_col   = 0x0000ff00;
+static unsigned int queen_col = 0xffffff00;
+
+static MessagesFD messages_desc;
+static IdBlock    idb;
+
+static int  main_window;
+
+typedef struct
+{
+  int no_bees;
+} choices;
+
+choices current_settings;
+
+/*---------------------------------------------------------------------------*
+ * read_settings                                                             *
+ *                                                                           *
+ * Read the current settings file.                                           *
+ *---------------------------------------------------------------------------*/
+
+void read_settings(void)
+{
+  int flags, buffsize;
+  int messblk[4];
+  char *buffer, string[256];
+
+  if (_swix(MessageTrans_FileInfo, _IN(1) | _OUTR(1, 2), SettingsFile, &flags, &buffsize)) return;
+  buffer = malloc(buffsize);
+
+  if (_swix(MessageTrans_OpenFile, _INR(0, 2), messblk, SettingsFile, buffer))
+  {
+    free(buffer);
+    return;
+  }
+  /* Read bits here */
+
+  if (!_swix(MessageTrans_Lookup, _INR(0, 7), messblk, "NoBees:100", string, 256, 0, 0, 0, 0))
+    nobees    = (unsigned int)strtoul(string, NULL, 10);
+  if (!_swix(MessageTrans_Lookup, _INR(0, 7), messblk, "QueenColour:0xffffff00", string, 256, 0, 0, 0, 0))
+    queen_col = (unsigned int)strtoul(string, NULL, 16);
+  if (!_swix(MessageTrans_Lookup, _INR(0, 7), messblk, "NearColour:0x00ffff00", string, 256, 0, 0, 0, 0))
+    near_col   = (unsigned int)strtoul(string, NULL, 16);
+  if (!_swix(MessageTrans_Lookup, _INR(0, 7), messblk, "FarColour:0x0000ff00", string, 256, 0, 0, 0, 0))
+    far_col   = (unsigned int)strtoul(string, NULL, 16);
+  if (!_swix(MessageTrans_Lookup, _INR(0, 7), messblk, "Delay:0", string, 256, 0, 0, 0, 0))
+    delay     = (unsigned int)strtoul(string, NULL, 10);
+
+  /* if this goes wrong there's very little we can do about it */
+  _swix(MessageTrans_CloseFile, _IN(0), messblk);
+
+  free(buffer);
+}
+
+void write_settings(void)
+{
+  FILE *fp;
+
+  fp = fopen(SettingsFile, "w");
+
+  if (!fp) return;
+
+  fprintf(fp, "# Swarm saver settings\n\n");
+  fprintf(fp, "NoBees:%d\n", nobees);
+  fprintf(fp, "QueenColour:0x%x\n", queen_col);
+  fprintf(fp, "NearColour:0x%x\n", near_col);
+  fprintf(fp, "FarColour:0x%x\n", far_col);
+  fprintf(fp, "Delay:%d\n", delay);
+
+  fclose(fp);
+}
+
+/*---------------------------------------------------------------------------*
+ * error_trap                                                                *
+ *                                                                           *
+ * Wrap around a function to report an error if one occurred eg.:            *
+ *  error_trap(event_initialise(&idb), 0);                                   *
+ *                                                                           *
+ * In: err - a kernel_oserror block                                          *
+ *     type - 0 means non-fatal, otherwise program will exit after reporting *
+ *---------------------------------------------------------------------------*/
+
+void error_trap(_kernel_oserror *err, int err_type)
+{
+  /* Report the appropriate error, has one occured */
+  if (err != NULL)
+  {
+      wimp_report_error(err, 0, TaskName, 0, 0, 0);
+
+      /* Now, if it was a fatal error (type != 0), exit at once */
+      if (err_type != 0) exit(0);
+  }
+}
+
+
+/*---------------------------------------------------------------------------*
+ * program_exit                                                              *
+ *                                                                           *
+ * Finished with this plug-in, so exit.                                      *
+ *---------------------------------------------------------------------------*/
+
+void program_exit(void)
+{
+  exit(0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * read_screensize                                                           *
+ *                                                                           *
+ * Return the size of rhe screen in OS units                                 *
+ *---------------------------------------------------------------------------*/
+
+_kernel_oserror* read_screensize(int *x, int *y)
+{
+  _kernel_oserror *e;
+  int              xeig;
+  int              yeig;
+  int              xpix;
+  int              ypix;
+
+  e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 4, &xeig);
+  e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 5, &yeig);
+  e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 11, &xpix);
+  e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 12, &ypix);
+
+  *x = xpix << xeig;
+  *y = ypix << yeig;
+
+  return NULL;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * save_choices                                                              *
+ *                                                                           *
+ * Save the current settings.                                                *
+ *---------------------------------------------------------------------------*/
+
+static void save_choices(void)
+{
+  numberrange_get_value(0, main_window, NOBEES, &nobees);
+  numberrange_get_value(0, main_window, DELAY, &delay);
+  write_settings();
+}
+
+/*---------------------------------------------------------------------------*
+ * set_gadget_colour                                                         *
+ *                                                                           *
+ * Set the indirection string to be an indented icon with the passed colour. *
+ *---------------------------------------------------------------------------*/
+
+static void set_gadget_colour(int gadget, unsigned int colour)
+{
+  char string[256];
+  sprintf(string, "r2;c/%06x", colour >> 8);
+  button_set_validation(0, main_window, gadget, string);
+}
+
+/*---------------------------------------------------------------------------*
+ * set_gadgets                                                               *
+ *                                                                           *
+ * Set all the gadgets to the current configured values.                     *
+ *---------------------------------------------------------------------------*/
+
+static void set_gadgets(void)
+{
+  numberrange_set_value(0, main_window, NOBEES, nobees);
+  set_gadget_colour(COLOURNEAR, near_col);
+  set_gadget_colour(COLOURFAR, far_col);
+  set_gadget_colour(COLOURQUEEN, queen_col);
+  numberrange_set_value(0, main_window, DELAY, delay);
+}
+
+/*---------------------------------------------------------------------------*
+ * set_default_choices                                                       *
+ *                                                                           *
+ * Fill in the default choices in the dialogue box.                          *
+ *---------------------------------------------------------------------------*/
+
+static void set_default_choices(void)
+{
+  delay     = 0;
+  nobees    = 100;
+  near_col  = 0x00ffff00;
+  far_col   = 0x0000ff00;
+  queen_col = 0xffffff00;
+  set_gadgets();
+}
+
+/*---------------------------------------------------------------------------*
+ * colour_selected_handler                                                   *
+ *                                                                           *
+ * Called when a colour selection is made from ColourDbox, sets the          *
+ * appropriate colour field and gadget.                                      *
+ *---------------------------------------------------------------------------*/
+
+static int colour_selected_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  ColourDboxColourSelectedEvent *cevent = (ColourDboxColourSelectedEvent*)event;
+
+  switch(idb->parent_component)
+  {
+    case BUTTONNEAR:
+    {
+      near_col  = cevent->colour_block[0];
+      set_gadget_colour(COLOURNEAR, near_col);
+      break;
+    }
+    case BUTTONFAR:
+    {
+      far_col   = cevent->colour_block[0];
+      set_gadget_colour(COLOURFAR, far_col);
+      break;
+    }
+    case BUTTONQUEEN:
+    {
+      queen_col = cevent->colour_block[0];
+      set_gadget_colour(COLOURQUEEN, queen_col);
+      break;
+    }
+
+    default:
+    return 1;
+    break;
+  }
+
+  return 1;
+}
+
+/*---------------------------------------------------------------------------*
+ * colour_shown_handler                                                      *
+ *                                                                           *
+ * Called when the ColourDbox is shown, sets the dbox colour the the correct *
+ * colour for the button pressed.                                            *
+ *---------------------------------------------------------------------------*/
+
+static int colour_shown_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  int colourblock[2];
+
+  switch(idb->parent_component)
+  {
+    case BUTTONNEAR:   colourblock[0] = near_col; break;
+    case BUTTONFAR:    colourblock[0] = far_col; break;
+    case BUTTONQUEEN:  colourblock[0] = queen_col; break;
+    default: return 0; break;
+  }
+
+  colourblock[1] = 0;
+
+  colourdbox_set_colour(0, idb->self_id, colourblock);
+
+  return 1;
+}
+
+/*---------------------------------------------------------------------------*
+ * read_choices                                                              *
+ *                                                                           *
+ * Read the current settings.                                                 *
+ *---------------------------------------------------------------------------*/
+
+static void read_choices(void)
+{
+  read_settings();
+  set_gadgets();
+}
+
+
+/*-----------------------------------------------------------------------------------------------*/
+/*                                          Event handlers                                       */
+/*-----------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*
+ * toolbox_error                                                             *
+ *                                                                           *
+ * Handler for errors from toolbox.                                          *
+ *---------------------------------------------------------------------------*/
+
+int toolbox_error(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+{
+  ToolboxErrorEvent *error_event = (ToolboxErrorEvent *)event;
+  _kernel_oserror    err;
+
+  strcpy(err.errmess, error_event->errmess);
+  err.errnum = error_event->errnum;
+  wimp_report_error(&err, 0, TaskName, 0, 0, 0);
+
+  return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * action_selected                                                           *
+ *                                                                           *
+ * Handler for when action buttons are clicked on.                           *
+ *---------------------------------------------------------------------------*/
+
+int action_selected(int event_code, ToolboxEvent *event_block, IdBlock *id_block, void *handle)
+{
+  ActionButtonSelectedEvent *block = (ActionButtonSelectedEvent*) event_block;
+  int                        icon = id_block->self_component;
+
+  switch (icon)
+  {
+    case SetButton:
+    {
+      save_choices();
+      if ((block->hdr.flags & 7)==0) program_exit(); /* Return pressed */
+      if (block->hdr.flags & 4)      program_exit(); /* Left button */
+      break;
+    }
+
+    case CancelButton:
+    {
+      if ((block->hdr.flags & 7) == 0) program_exit(); /* Escape pressed */
+      if (block->hdr.flags & 1)        read_choices(); /* Right button */
+      if (block->hdr.flags & 4)        program_exit(); /* Left button */
+      break;
+    }
+
+    case DefaultButton:
+    {
+      set_default_choices();
+      break;
+    }
+  }
+
+  return 1;
+}
+
+/*---------------------------------------------------------------------------*
+ * message_quit                                                              *
+ *                                                                           *
+ * Called when wimp quit message received.                                   *
+ *---------------------------------------------------------------------------*/
+
+int message_quit(WimpMessage *event, void *handler)
+{
+  program_exit();
+
+  return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * close_window                                                              *
+ *                                                                           *
+ * Called when user has clicked on close icon of window.                     *
+ *---------------------------------------------------------------------------*/
+
+int close_window(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+{
+  program_exit();
+
+  return 1;
+}
+
+
+/*-----------------------------------------------------------------------------------------------*/
+/*                               Program startup & polling loop                                  */
+/*-----------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*
+ * open_configure_window                                                     *
+ *                                                                           *
+ * Called to open the configure window on screen and register handlers.      *
+ *---------------------------------------------------------------------------*/
+
+static void open_configure_window(int at_x, int at_y)
+{
+  BBox bbox;
+  int  screenx;
+  int  screeny;
+  int  buffer[2];
+
+  /* Create window */
+  error_trap(toolbox_create_object(0, "Window", &main_window), 1);
+
+  /* Register handlers for the configure window */
+  error_trap(event_register_toolbox_handler(-1,Toolbox_Error,toolbox_error,NULL) ,0);
+  error_trap(event_register_wimp_handler(main_window, Wimp_ECloseWindow, close_window, NULL), 0);
+  error_trap(event_register_toolbox_handler(main_window, ActionButton_Selected, action_selected, NULL), 0);
+
+  /* Work out positioning (unless it was supplied in the command line) */
+  if ((at_x==-1) && (at_y==-1))
+  {
+      error_trap(read_screensize(&screenx, &screeny), 0);
+      error_trap(window_get_extent(0, main_window, &bbox), 0);
+      at_y = screeny - ((screeny+bbox.ymin)/2);
+      at_x = (screenx - bbox.xmax)/2;
+  }
+
+  /* Show the window */
+  buffer[0] = at_x;
+  buffer[1] = at_y;
+  error_trap(toolbox_show_object(0, main_window, 2, buffer, 0, 0), 0);
+
+  set_gadgets();
+}
+
+
+/*---------------------------------------------------------------------------*
+ * main_initialise                                                           *
+ *                                                                           *
+ * Initialise toolbox etc.                                                   *
+ *                                                                           *
+ * In: Nothing.                                                              *
+ *                                                                           *
+ * Returns: 1 if everything went okay, 0 otherwise                           *
+ *---------------------------------------------------------------------------*/
+
+static int main_initialise(void)
+{
+  _kernel_oserror *e;
+  static int mess_wanted[] = {Wimp_MQuit,
+                              0};
+  static int tbox_wanted[] = {Toolbox_Error,
+                              ActionButton_Selected,
+                              ColourDbox_ColourSelected,
+                              ColourDbox_AboutToBeShown,
+                              0};
+  int        task_handle;
+  int        colourdbox_id;
+
+  error_trap(toolbox_initialise(0, 310, mess_wanted, tbox_wanted,
+                                "<BlankerSettings$Dir>", &messages_desc, &idb,
+                                0, &task_handle, 0) ,1);
+  error_trap(event_initialise(&idb), 0);
+  error_trap(event_set_mask(Wimp_Poll_NullMask), 0);
+  error_trap(event_register_message_handler(Wimp_MQuit, message_quit, NULL), 0);
+
+  read_settings();
+
+  /* Create colourdbox to get its handle */
+  e = toolbox_create_object(0, "ColourDbox", &colourdbox_id);
+  if (e)
+  {
+    wimp_report_error(e, 0, TaskName, 0, 0, 0);
+    exit(1);
+  }
+
+  /* Register ColourDbox_ColourSelected event handler */
+  e = event_register_toolbox_handler(colourdbox_id, ColourDbox_ColourSelected, colour_selected_handler, NULL);
+  if (e)
+  {
+    wimp_report_error(e, 0, TaskName, 0, 0, 0);
+    exit(1);
+  }
+
+  e = event_register_toolbox_handler(colourdbox_id, ColourDbox_AboutToBeShown, colour_shown_handler, NULL);
+  if (e)
+  {
+    wimp_report_error(e, 0, TaskName, 0, 0, 0);
+    exit(1);
+  }
+
+  return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * main                                                                      *
+ *                                                                           *
+ * Main polling loop                                                         *
+ *---------------------------------------------------------------------------*/
+
+int main(int argc, char *argv[])
+{
+  WimpPollBlock wpb;
+  int           event_code;
+  int           openat_x = -1;
+  int           openat_y = -1;
+
+  /* Have we been passed any co-ordinates to open at? */
+  if (strcmp(argv[1], "-openat")==0)
+  {
+    openat_x = atoi(argv[2]);
+    openat_y = atoi(argv[3]);
+  }
+
+  if (!main_initialise()) return 0;
+
+  open_configure_window(openat_x, openat_y);
+
+  while (TRUE)
+  {
+    error_trap(event_poll(&event_code, &wpb, NULL), 0);
+  }
+
+  return 0;
+}
