@@ -60,6 +60,7 @@ clean:
         ${RM} ${TARGET}
         ${RM} s.Data.BinSetup
         ${RM} s.Data.BinSetupC
+        -stripdepnd
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE} s.Data.BinSetupC
