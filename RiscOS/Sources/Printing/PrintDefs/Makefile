@@ -58,7 +58,9 @@ RESFILES =			\
  ${RDIR}.Printers.StyColH_Co	\
  ${RDIR}.Printers.StyColH_BW	\
  ${RDIR}.Printers.PS_BW		\
- ${RDIR}.Printers.PS_Col
+ ${RDIR}.Printers.PS_Col	\
+ ${RDIR}.Printers.Lex_BW	\
+ ${RDIR}.Printers.Lex_Col
 
 #
 # RISC OS ROM build rules:
