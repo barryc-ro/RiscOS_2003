@@ -1,12 +1,3 @@
-# Skeleton OBJASM/C Makefile
-#
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date       	Name         	Description
-# ----       	----         	-----------
-# 17 Sep 1997	RWB		Created
-# 17 Sep 1997   RWB		Customised for SCTest
 
 #
 # Paths
@@ -15,6 +6,7 @@ EXP_HDR = <export$dir>.^.Interface2
 EXP_C_H = <Cexport$dir>.h
 EXP_C_O = <Cexport$dir>.o
 INSTDIR = <obey$dir>.install
+
 #
 # Generic options:
 #
@@ -35,8 +27,8 @@ CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
 CHMODFLAGS = RW/R
+DFLAGS     =  ${DEBUG}
 
-DFLAGS  =  ${DEBUG}
 #
 # Libraries
 #
@@ -54,6 +46,7 @@ TCPIPLIB   = <Lib$Dir>.TCPIPLibs.o.*
 TOOLBOXLIB = Tbox:o.toolboxlib
 WIMPLIB	   = Tbox:o.wimplib
 ZLIB 	   = <Lib$Dir>.zlib.o.zlib
+
 #
 # Include files
 #
@@ -62,7 +55,7 @@ INCLUDES = -Itbox:,C:,TCPIPLibs:
 # Program specific options:
 #
 COMPONENT = UpgFlash
-TARGET    = image.upgflash
+TARGET    = aof.UpgFlash
 APP	  = !${COMPONENT}
 
 OBJS      =	\
@@ -90,22 +83,32 @@ all: ${TARGET}
 # RISC OS ROM build rules:
 #
 
-install: ${TARGET}
-	${MKDIR} ${INSTDIR}.${APP}
-        ${CP} ${TARGET} ${INSTDIR}.${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.* ${INSTDIR}.${APP}.* ${CPFLAGS}
-        @echo ${COMPONENT}: application installed
+resources: ${TARGET}
+	${MKDIR} ${RESDIR}.^.Apps.${APP}
+        ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
+        ${CP} Resources.* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        @echo ${COMPONENT}: all complete
 
 clean:
         ${WIPE} o.*       ${WFLAGS}
+        ${WIPE} aof.*       ${WFLAGS}
+        ${WIPE} rm.*       ${WFLAGS}
         ${WIPE} install.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} o
+        ${RM} aof
+        ${RM} rm
         @echo ${COMPONENT}: cleaned
+
+dirs:
+        ${MKDIR} o
+        ${MKDIR} aof
+        ${MKDIR} rm
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS}
+${TARGET}: ${OBJS} dirs
         ${LD} -o $@ ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${ZLIB} ${ANSILIB} ${TCPIPLIB}
 
 
