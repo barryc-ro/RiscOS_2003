@@ -7,6 +7,8 @@
 ; Vers  Date            Name    Comment
 ; ----- ----------      ---     -------------------------------------------
 ; 1.00	27 Jan 98	RLT	Created
+; 1.01	28 Jan 98	RLT	Optimised the code, especially around the
+;				check_pages loop.
 ;
 
 
@@ -17,108 +19,92 @@
 	EXPORT	CheckIC
 CheckIC
 	MOV	r2, lr				; Preserve original mode
-	ORR	r1, r2, #1:SHL:27:OR:3		; Switch to SVC mode disabling interrupts
+	ORR	r1, r2, #1:SHL:27:OR:3		; Switch to SVC mode, disabling interrupts
 	SWI	OS_EnterOS			; Enter SVC mode
 	TEQP	r1, #0				; Disable interrupts
-	STMFD	sp!, {r2}
-	STMFD	sp!, {r4-r9}			; Push registers to the stack
+	STMFD	r13!, {r2, r4-r9}		; Preserve original registers
 
-	LDR	r1, setup_value			; Load the address to poke
-	MOV	r2, #&92			; Move the value to poke to r2
-	STRB	r2, [r1]			; Set the chip to read mode
+	LDR	r0, setup_address		; Load the address to poke
+	MOV	r1, #&92			; Move the value to poke to r1
+	STRB	r1, [r0]			; Set the chip to read mode
 
-	MOV	r8, #0				; No errors have yet occurred
-	LDR	r3, check_word			; Put the check word in r3
+	MOV	r8, #0				; Error counter; set to 0 as no errors yet.
 
-	LDR	r1, base_address		; Put the base address in r2
-	LDR	r0, [r1]			; Load r1 with the address to check
-	CMP	r0, r3				; Check the value against the check word
+	ADR	r2, page_addresses		; Get the first page address
+	MOV	r4, #19				; Set the number of pages
+	LDR	r3, check_word
+check_pages
+	LDR	r1, [r2], #4			; Put the address in r1, post inc. to next address
+	LDR	r0, [r1]			; Load r0 with the value stored at the address
+	CMP	r0, r3				; Compare with the check word
 	BLNE	examine				; If they're not equal, branch to examine
+	SUBS	r4, r4, #1			; Subtract 1 from the page counter
+	BNE	check_pages			; If the page counter is not 0, loop again
 
-	ADR	r2, address_words + 0
+	MOV	r0, r8				; Set up the return value in r0
 
-	LDR	r1, [r2], #4
-	LDR	r0, [r1]
-	CMP	r0, r3
-	BLNE	examine
+	LDMFD	sp!, {r2, r4-r9}		; Pull original registers from stack
+	MOVS	pc, r2				; Restore original mode/interrupts and return
 
-	LDR	r1, [r2], #4
-	LDR	r0, [r1]
-	CMP	r0, r3
-	BLNE	examine
-
-	LDR	r1, [r2]
-	LDR	r0, [r1]
-	CMP	r0, r3
-	BLNE	examine
-
-	LDR	r1, base_address		; Put the base address in r2
-	MOV	r4, #1				; Set the loop counter to 1
-	MOV	r5, #&20000			; Move &20000 to r5 - Offset
-loop
-	ADD	r1, r1, r5			; Add offset to base address
-	LDR	r0, [r1]			; Load r0 with the address
-	CMP	r0, r3				; Check the value against the check word
-	BLNE	examine				; If they're not equal, branch to examine
-	ADD	r4, r4, #1			; Increment the loop counter
-	CMP	r4, #16				; Check the loop counter to see if it's 16
-	BNE	loop				; If not, carry on looping
-
-	MOV	r0, r8				; Set up r0 with return value
-
-	LDMFD	sp!, {r4-r9}			; Pull registers from the stack
-	LDMFD	sp!, {r2}
-	MOVS	pc, r2				; Restore original mode/interrups and return
-
-examine
-						; r1 = the address to examine
-
+examine						; r1 contains the address to examine
 	STMFD	sp!, {r2-r7}			; Preserve original values from caller
 
-						; Set up IC chip to read the status flags
-	ADR	r2, write_addresses + 0
+	ADR	r2, write_addresses + 0		; Set up IC chip to read the status flags
 	ADR	r3, write_values + 0
 	LDR	r7, [r2], #4
 	LDR	r6, [r3], #4
 	STR	r6, [r7]
-
 	LDR	r7, [r2], #4
 	LDR	r6, [r3], #4
 	STR	r6, [r7]
-
 	LDR	r7, [r2]
 	LDR	r6, [r3]
 	STR	r6, [r7]
-
-	; Now check the status bits are not set
+						; Now check the status bits are not set
 	LDR	r3, [r1, #8]			; Load r3 with the status flag
-	; Check low half word is clear.
+						; Check low half word is clear.
 	LDR	r4, mask1			; Load r4 with mask#1 (&0000FFFF)
 	AND	r4, r3, r4			; AND the needed bits of the flag
 	CMPS	r4, #0				; Check to see if any of the bits are set
-	ORRNE	r8, r8, #1			; if not equal, OR 1 into r8
-
-	; check high half word is clear.
+	ORRNE	r8, r8, #1			; if bits are set, OR 1 into r8
+						; check high half word is clear.
 	LDR	r4, mask2			; Load r4 with mask#2 (&FFFF0000)
 	AND	r4, r3, r4			; AND the needed bits of the flag
 	MOV	r4, r4, LSR #16			; Shift value of r4 to the right by 16 bits
 	CMPS	r4, #0				; Check to see if any of the bits are set
-	ORRNE	r8, r8, #2			; if not equal, OR 2 into r8
+	ORRNE	r8, r8, #2			; if bits are, OR 2 into r8
 
-	LDR	r7, base_address
-	LDR	r2, read_value
-	STR	r2, [r7]
+	LDR	r7, page_addresses		; Load r7 with the base address of flash
+	LDR	r2, read_value			; Load r2 with the word to diable status read
+	STR	r2, [r7]			; Poke address in r7 with the word in r2
 
 	LDMFD	sp!, {r2-r7}			; Restore original registers
 	MOV	pc, lr				; Return to caller
 
 
+page_addresses
+	DCD	&03c00000			; Page addressees of the flash
+	DCD	&03c08000
+	DCD	&03c0c000
+	DCD	&03c10000
+	DCD	&03c20000
+	DCD	&03c40000
+	DCD	&03c60000
+	DCD	&03c80000
+	DCD	&03ca0000
+	DCD	&03cc0000
+	DCD	&03ce0000
+	DCD	&03d00000
+	DCD	&03d20000
+	DCD	&03d40000
+	DCD	&03d60000
+	DCD	&03d80000
+	DCD	&03da0000
+	DCD	&03dc0000
+	DCD	&03de0000
 
 check_word
 	DCD	&ffffffff			; Word containing the 'erased' value
-
-base_address
-	DCD	&03c00000			; Base address of flash
 
 address_words
 	DCD	&03c08000			; Non standard addresses to check
@@ -138,13 +124,14 @@ write_values
 read_value
 	DCD	&00f000f0			; Value to disable write mode
 
-setup_value
-	DCD	&03200080
+setup_address
+	DCD	&03200080			; Address to put flash chip into 'read' mode
 
 mask1
 	DCD	&0000ffff
 
 mask2
 	DCD	&ffff0000
+
 
 	END
