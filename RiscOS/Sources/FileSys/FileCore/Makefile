@@ -51,10 +51,20 @@ clean:
         ${RM} s.TokenHelp
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
+
+resources_common:
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE} s.TokenHelp
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -69,6 +79,7 @@ ${EXP_HDR}.MultiFS: hdr.MultiFS
         ${CP} hdr.MultiFS $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rm.FileCore: VersionASM
 rm.FileCore: Version
 rm.FileCore: s.Fixes
 rm.FileCore: s.AsmHdr
@@ -97,6 +108,8 @@ rm.FileCore: Hdr:FileTypes
 rm.FileCore: Hdr:MultiFS
 rm.FileCore: Hdr:NewErrors
 rm.FileCore: Hdr:Territory
+rm.FileCore: Hdr:Machine.<Machine>
+rm.FileCore: Hdr:Machine.Machine
 rm.FileCore: s.DebugOpts
 rm.FileCore: s.MyMacros
 rm.FileCore: s.Defns
