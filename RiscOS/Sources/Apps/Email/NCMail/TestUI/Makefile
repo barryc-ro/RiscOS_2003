@@ -10,6 +10,7 @@
 # ====          ====    ===========
 # 1998-09-16    AW      Created
 # 1998-09-22	RDW	Modified to fit into build structure
+# 1998-10-20	RDW	RAM module target added
 
 
 # ------------------------------------------------------------------------------
@@ -124,7 +125,7 @@ OBJSZ=  oz.engtempui
 # Rule patterns
 #
 
-.SUFFIXES: .o .oz .od .odz .s .c .c++
+.SUFFIXES: .o .oz .ozsl .od .odz .s .c .c++
 
 .c.o:;          @echo
                 @echo Compiling $<
@@ -135,6 +136,11 @@ OBJSZ=  oz.engtempui
                 @echo Compiling $<
                 @echo $(DZFLAGS)
                 @$(CC) $(CFLAGS) $(DZFLAGS)       -c -zM -DROM -o $@ $<
+
+.c.ozsl:;       @echo
+                @echo Compiling $<
+                @echo $(DZFLAGS)
+                @$(CC) $(CFLAGS) $(DZFLAGS)       -c -zM -o $@ $<
 
 .c.od:;         @echo
                 @echo Compiling $<
@@ -152,6 +158,11 @@ OBJSZ=  oz.engtempui
                 @$(C++) $(C++FLAGS) $(DFLAGS)     -c -o $@ $<
 
 .c++.oz:;       @echo
+                @echo Compiling $<
+                @echo $(DZFLAGS)
+                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -o $@ $<
+
+.c++.ozsl:;     @echo
                 @echo Compiling $<
                 @echo $(DZFLAGS)
                 @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -DROM -o $@ $<
@@ -200,6 +211,9 @@ export_hdrs:
 export_libs: 
 	@echo $(COMPONENT): export complete (libs)
 
+ram: $(MODULE)
+	@echo $(COMPONENT): Module built (RAM)
+
 rom: $(ROM_MODULE)
         @echo $(COMPONENT): Module built (ROM)
 
@@ -243,6 +257,7 @@ clean:
         $(WIPE) o               $(WFLAGS)
         $(WIPE) od              $(WFLAGS)
         $(WIPE) oz              $(WFLAGS)
+        $(WIPE) ozsl            $(WFLAGS)
         $(WIPE) odz             $(WFLAGS)
         $(RM)   o.dirs
 	$(RM) ^.Build.h.NCMailUI
@@ -253,6 +268,7 @@ o.dirs:
         @$(MKDIR) o
         @$(MKDIR) od
         @$(MKDIR) oz
+        @$(MKDIR) ozsl
         @$(MKDIR) odz
         create o.dirs
         stamp  o.dirs
@@ -282,8 +298,8 @@ abs.!RI: $(OBJS) o.dirs
 $(ROM_MODULE): $(OBJSZ) o.dirs
 	$(LD) $(LDFLAGS) -o ^.Build.oz.NCMailUI $(OBJSZ) $(LIBSZ)
 
-$(MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.oz.NCMailUI $(OBJSZ) $(LIBSZ)
+$(MODULE): $(OBJSZSL) o.dirs
+	$(LD) $(LDFLAGS) -o ^.Build.ozsl.NCMailUI $(OBJSZSL) $(LIBSZ)
 
 abs.!RI_D: $(OBJSD) o.dirs
 	$(LD) $(LDFLAGS) -o ^.Build.od.NCMailUI $(OBJSD) $(LIBSD)
