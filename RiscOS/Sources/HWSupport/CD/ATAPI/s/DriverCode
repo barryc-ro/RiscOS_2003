@@ -55,6 +55,26 @@
 ;   (amount of mode sense data is drive-specific) and stops Wearnes RUBY
 ;   (CDD-120A) drive working (it returns &3C bytes).
 ;
+; 31-Mar-95  12:03  cpartington (Cambridge Systems Design)
+; * Change SetParameters to correct ordering of bytes sent to drive for
+;   speed selection and check expressly for double speed and send correct
+;   value for this speed (dependent on fix_speed_select).
+;
+; 06-Apr-95  17:45  cpartington (Cambridge Systems Design)
+; * Added debugging code to print bytes not transferred by ReadData.
+; * Added debugging code to SetParameters to issue REQUEST SENSE when
+;   SET CDROM SPEED fails.
+;
+; 12-Apr-95  10:08  cpartington (Cambridge Systems Design)
+; * Added debugging routine do_request_sense with calls from SetParameters
+;   and ReadData.
+;
+; 21-Jun-95  15:21  cpartington (Cambridge Systems Design)
+; * Added test code conditional on cdp_swi.
+;
+; 09-Aug-95  15:39  cpartington (Cambridge Systems Design)
+; * Removed code conditional on cdp_swi (unused).
+;
 ;*end of change record*
 
 
@@ -194,7 +214,9 @@ ReadData ROUT
 ;-----------------------------------------------------------------------------------------------
 
  [ cdebug
-        CDebug_StrReg8  "ReadBlock ",r1,cc
+        CDebug_StrReg8  "ReadData block ",r1,cc
+        CDebug_StrReg8  ", blocks ",r2,cc
+        CDebug_StrReg8  ", blksize ",r4
  ]
 
 ; Set
@@ -226,7 +248,7 @@ ReadData ROUT
 
      STRIM         "l"
      DisplayNewLine
- [ cdebug
+ [ cdebug2
         CDebug_WriteS   "ReadTOC...",cc
  ]
 
@@ -237,11 +259,23 @@ ReadData ROUT
      ADR           r2, RD_CDBReadTOC
      ADR           r3, buffer
      MOV           r4, # 12
-
+ [ cdebug
+        MOV     r8,#0
+        STR     r8,inbytes
+ ]
      MOV           r8, # ATAPICONTROL__SEND_COMMAND
-
      BL            ATAPI_Control
  [ cdebug
+        MOV     r2,pc
+        LDR     r1,inbytes
+        SUBS    r1,r4,r1
+        BEQ     %F00
+        CDebug_StrReg8  "ReadTOC=",r4,cc
+        CDebug_StrReg8  " not transferred=",r1
+00
+        TEQP    pc,r2
+ ]
+ [ cdebug2
         BVC     %F01
         CDebug_WriteS   "FAILED"
         B       %F02
@@ -287,7 +321,7 @@ RD_MultiSessionSorted
 
 ; r0 = disc mode (1, 2 or 3)
 
- [ cdebug
+ [ cdebug2
         CDebug_StrReg8  ", mode ",r0
  ]
 
@@ -394,8 +428,27 @@ RD_HowManyBlocks
         MOV     r0,#readdata + ATAPIOP__COMMAND_PACKET
         MOV     r1,#12                          ; r1 = CDB size
         ADR     r2,buffer + 2                   ; r2 -> CDB
+ [ cdebug
+        MOV     r8,#0
+        STR     r8,inbytes
+ ]
         MOV     r8,#ATAPICONTROL__SEND_COMMAND
         BL      ATAPI_Control
+ [ cdebug
+        STASH   "r1-r3"
+        MOV     r2,pc
+        LDR     r1,inbytes
+        SUBS    r1,r4,r1
+        BEQ     %F00
+        LDR     r3,buffer
+        CDebug_StrReg8  "Read(",r3,cc
+        CDebug_StrReg8  ")=",r4,cc
+        CDebug_StrReg8  " not transferred=",r1
+00
+        TEQP    pc,r2
+        GRAB    "r1-r3"
+        BLVS    do_request_sense
+ ]
         BVS     %F20                            ; branch if error
 
 ; sector read OK
@@ -700,6 +753,20 @@ GetParameters ROUT
      BL            ATAPI_Control
      BVS           error_handler
 
+ [ cdebug2
+        STASH   "r0-r2"
+        ADR     r2,buffer
+        MOV     r1,#64
+        CDebug_WriteS   "mode sense data: ",cc
+00
+        LDRB    r0,[r2],#1
+        CDebug_StrReg2  " ",r0,cc
+        SUBS    r1,r1,#1
+        BNE     %B00
+        CDebug_NewLine
+        GRAB    "r0-r2"
+ ]
+
 ;-----------------------------------------------------
 ; Find page &0d containing inactivity time multiplier
 ;-----------------------------------------------------
@@ -933,13 +1000,35 @@ SetParameters ROUT
      TEQ           r1, # 0
      BEQ           SP_DoneSpeed                           ; [ don't want to change ]
 
+ [ fix_speed_select
+
+; if double speed, send &161 - the value the Panasonic CR571B and Sony
+;    CDU50E both return when set to double speed
+; if maximum speed, send &FFFF (defined in standard)
+; otherwise, send speed * 176 = KBytes/s
+; *** WARNING: code below makes use of fact that speed is byte multiplied by 176
+;              so can't exceed 16 bits
+
+        TEQS    r1,#255                         ; maximum?
+        ORREQ   r1,r1,#&FF00                    ; ...send &FFFF
+        TEQS    r1,#2                           ; double speed?
+        MOVEQ   r1,#&61                         ; ...send &161
+        ORREQ   r1,r1,#&100
+        MOVNE   r14,#176                        ; ...else speed * 176
+        MULNE   r1,r14,r1
+        MOV     r14,r1,LSR #8                   ; sort out byte order
+        ORR     r1,r14,r1,LSL #8
+        MOV     r1,r1,LSL #16                   ; move to high bits
+        ORR     r1, r1, # ATAPI__SET_CDROM_SPEED        ; or in opcode
+
+ |
      TEQ           r1, # 255                              ; maximum speed
      ORREQ         r1, r1, # 255:SHL:8                    ; r1 = &ffff
      MOVNE         r14, # 176
      MULNE         r1, r14, r1                            ; r1 = r1 * 176
-
      MOV           r1, r1, LSL # 16
      ORR           r1, r1, # ATAPI__SET_CDROM_SPEED
+ ]
 
      ADR           r2, buffer
      MOV           r3, # 0
@@ -953,6 +1042,10 @@ SetParameters ROUT
      MOV           r8, # ATAPICONTROL__SEND_COMMAND
 
      BL            ATAPI_Control
+
+ [ cdebug
+        BLVS    do_request_sense
+ ]
      BVS           error_handler
 
 SP_DoneSpeed
@@ -1117,6 +1210,53 @@ SP_CurrentModeSense
      DCB           0                                   ; 10 reserved
      DCB           0                                   ; 11 reserved
 
+
+;-----------------------------------------------------------------------------------------------
+
+ [ cdebug
+
+do_request_sense        ROUT
+;
+; Issue request sense to the drive
+; Only used for debugging
+
+        STASH   "r0-r8,r14"
+
+; error so issue REQUEST SENSE
+
+        ADRL    r2,sense_buffer
+        MOV     r1,#&03                 ; opcode
+        MOV     r3,#?sense_buffer - 12  ; allocation length
+        MOV     r4,#0                   ; reserved
+        STMIA   r2,{r1,r3,r4}           ; create CDB
+
+        MOV     r0,#readdata + ATAPIOP__COMMAND_PACKET
+        MOV     r1,#12                  ; cdb size
+        MOV     r4,r3                   ; bytes to be returned
+        ADD     r3,r2,r1                ; r3 -> where sense goes
+        MOV     r8,#ATAPICONTROL__SEND_COMMAND
+        BL      ATAPI_Control
+        BVS     %F02
+
+; got sense back
+; r3 -> data
+
+        CDebug_WriteS   "SENSE:",cc
+        LDRB    r2,[r3,#7]              ; get additional sense size
+        ADD     r2,r2,#8
+00
+        LDRB    r0,[r3],#1
+        CDebug_StrReg2  " ",r0,cc
+        SUBS    r2,r2,#1
+        BNE     %B00
+        CDebug_NewLine
+01
+        GRAB    "r0-r8,pc",,^
+;;;;;;;;;;;;;;;;;;
+02
+        CDebug_StrReg8  "REQUEST SENSE ERROR ",r0
+        GRAB    "r0-r8,pc",,^
+ ]
 
 ;-----------------------------------------------------------------------------------------------
 OpenDrawer ROUT
@@ -1353,6 +1493,9 @@ EnquireDataMode ROUT
      MOV           r8, # ATAPICONTROL__SEND_COMMAND
 
      BL            ATAPI_Control
+ [ cdebug
+        BLVS    do_request_sense
+ ]
 
 ; Assume any illegal request error is because it's a mode 0 disc (like Sony
 ; 561 SCSI driver does). Really should issue request sense to get more info on
@@ -1365,9 +1508,9 @@ EnquireDataMode ROUT
 
 ; VS => audio (probably)
 
-  [ cdebug
+  [ cdebug2
         BVC     %F01
-        CDebug_WriteS   "It's mode 0"
+        CDebug_WriteS   "VS:It's mode 0"
 01
   ]
         MOVVS   r0,#0                   ; return mode 0
@@ -1380,7 +1523,7 @@ EnquireDataMode ROUT
         LDRB    r0,[r3,#0]              ; get returned mode
         TEQS    r0,#1                   ; mode 1?
         TEQNES  r0,#0                   ; if not, mode 0?
-  [ cdebug
+  [ cdebug2
         BNE     %F01
         CDebug_StrReg2   "It's mode ",r0
 01
@@ -1419,7 +1562,7 @@ EnquireDataMode ROUT
      TST           r0, # SUBMODE__FORM
      MOVEQ         r0, # 3
      MOVNE         r0, # 2
- [ cdebug
+ [ cdebug2
         CDebug_StrReg2  "It's mode ",r0
  ]
 
@@ -1864,6 +2007,9 @@ EnquireTrack ROUT
 ;          usual error stuff
 ;-----------------------------------------------------------------------------------------------
 
+ [ cdebug
+        CDebug_StrReg8  "EnquireTrack ",r0
+ ]
 
 ;----------------------------
 ; Make sure that r0 = 0 to 99
@@ -2184,6 +2330,9 @@ DiscUsed ROUT
 ;
 ;-----------------------------------------------------------------------------------------------
 
+ [ cdebug
+        CDebug_StrReg8  "DiscUsed ",r0
+ ]
      [ MINCS=1
      MACRO__EXIT_DRIVER_OK
      STR           r0, [ r1 ]
@@ -2203,7 +2352,9 @@ DiscUsed ROUT
      MOV           r8, # ATAPICONTROL__SEND_COMMAND
 
      BL            ATAPI_Control
-
+ [ cdebug
+        BLVS    do_request_sense
+ ]
      BVS           error_handler
 
      MOV           r0, r5
@@ -2763,7 +2914,6 @@ RA_CDBReadCD
  ALIGN
 
 
-
  [ Version >= 105
 
 ;-----------------------------------------------------------------------------------------------
@@ -2808,6 +2958,11 @@ ReadUserData_plain ROUT
 ;          r4 =  byte offset in last block of next byte
 ;-----------------------------------------------------------------------------------------------
 
+ [ cdebug
+        CDebug_StrReg8  "ReadUserData block ",r1,cc
+        CDebug_StrReg8  ", bytes ",r2,cc
+        CDebug_StrReg8  ", offset ",r4
+ ]
      STRIM         "m"
      DisplayNewLine
 

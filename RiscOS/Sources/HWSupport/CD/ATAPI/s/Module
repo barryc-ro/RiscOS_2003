@@ -22,6 +22,20 @@
 ; * Removed code to save configuration word - it's not used and new
 ;   DriveFlags can more efficiently be checked.
 ;
+; 19-Jun-95  15:41  cpartington (Cambridge Systems Design)
+; * Added faster_startup code (don't look for more drives than are
+;   configured).
+;
+; 21-Jun-95  15:21  cpartington (Cambridge Systems Design)
+; * Added test code conditional on cdp_swi.
+;
+; 06-Jul-95  10:43  cpartington (Cambridge Systems Design)
+; * Added code conditional on full_drive_detection to try to code around
+;   Sony CDU50E sole drive problem.
+;
+; 09-Aug-95  15:39  cpartington (Cambridge Systems Design)
+; * Removed code conditional on cdp_swi (unused).
+;
 ;*end of change record*
 ;
 ;******************************************************************************
@@ -55,6 +69,9 @@ Module_InitialisingCode ROUT
 
  STASH      r14
 
+ [ cdebug
+        CDebug_WriteS   "Initialising ATAPI version $VString ($Date)"
+ ]
      STRIM      "Initialise"
      DisplayNewLine
 
@@ -82,7 +99,11 @@ Module_InitialisingCode ROUT
 
 
  STR        r2, [ r12 ]
- STASH      r12                 ; Save private word pointer in case we need it later.
+ [ faster_startup
+        STASH   "r7,r12"
+ |
+        STASH   r12             ; Save private word pointer in case we need it later.
+ ]
  MOV        r12, r2
 
 ;----------------------------
@@ -172,6 +193,21 @@ clear_workspace
 ; Work out what ATAPI drives are connected
 ;-------------------------------------------------
 
+ [ faster_startup
+; first determine how many drives are configured so we can stop looking when
+; we've found that many
+
+        MOV     r0,#161                 ; read CMOS
+        MOV     r1,#CDROMFSCMOS         ; location to read
+        SWI     XOS_Byte
+        BVS     MIC_NoDrivesFound       ; if error, no drives
+        ANDS    r7,r2,#CMOSDRIVEBITS
+        BEQ     MIC_NoDrivesFound       ; if no drives configured
+
+; no need to force configured drives to be in range 0..2
+
+ ]
+
  MOV        r0, # 0
  ADR        r1, DriveRecognizedStatus
  MOV        r2, # TRUE
@@ -184,30 +220,35 @@ MIC_IdentifyLoop
 ;---------------------------------------------------------------------------------
 
  [ cdebug
-        CDebug_StrReg2  "Do IDENTIFY ",r0
+        CDebug_StrReg2  "Checking drive ",r0
  ]
-     STASH         "r0-r8"
+        STASH   "r0-r8"
 
-     STRIM         "call ATAPI_Control"
-     DisplayNewLine
+ [ full_drive_detection
+        MOV     r8,#ATAPICONTROL__CheckForDrive
+        BL      ATAPI_Control                   ; VC => ATAPI detected
+        GRAB    "r0-r8",VS
+        STRVSB  r3,[r1,r0]                      ; if not present, set flag
+        BVS     MIC_DoneCheckForATAPI           ; ...and skip the rest
+ ]
 
-     ORR           r0, r0, # readdata + ATAPIOP__IDENTIFY_DEVICE + ATAPIOP__DONT_USE_R7 + ATAPIOP__DONT_RETRY
-     MOV           r1, # 0
-     MOV           r2, # 0
-     ADR           r3, buffer
-     MOV           r4, # ATAPIID__STRUCTURE_SIZE
+        ORR     r0, r0, # readdata + ATAPIOP__IDENTIFY_DEVICE + ATAPIOP__DONT_USE_R7 + ATAPIOP__DONT_RETRY
+        MOV     r1, # 0
+        MOV     r2, # 0
+        ADR     r3, buffer
+        MOV     r4, # ATAPIID__STRUCTURE_SIZE
 
-     MOV           r8, # ATAPICONTROL__SEND_COMMAND
+        MOV     r8, # ATAPICONTROL__SEND_COMMAND
 
-     BL            ATAPI_Control
+        BL      ATAPI_Control
 
 
-     GRAB          "r0-r8"
+        GRAB    "r0-r8"
 
 ;---------------------------------------------------------------------------------
 
-     STRVSB        r3, [ r1, r0 ]
-     BVS           MIC_DoneCheckForATAPI
+        STRVSB  r3, [ r1, r0 ]
+        BVS     MIC_DoneCheckForATAPI
 
 ; Check for ATAPI CD-ROM drive with removable medium
 ; r0 = drive number (0/1)
@@ -295,12 +336,20 @@ MIC_IdentifyLoop
 
         ORR     r3,r3,#1:SHL:16
 
+ [ faster_startup
+        SUBS    r7,r7,#1                ; --(drives-to-be-found)
+        BEQ     MIC_FoundAllDrives      ; all done if now 0
+ ]
+
 
 MIC_DoneCheckForATAPI
  ADD        r0, r0, # 1
  CMP        r0, # MAX_NUMBER_OF_ATAPI_DRIVES
  BLT        MIC_IdentifyLoop
 
+ [ faster_startup
+MIC_FoundAllDrives
+ ]
 
 ;-------------------------------------------------
 ; If none were found, then start up but with no workspace
@@ -331,7 +380,11 @@ MIC_ClearListLoop
 ; Exit OK
 ;-------------------------------------------------
 
+ [ faster_startup
+ GRAB       "r7,r12,r14"
+ |
  GRAB       "r12,r14"
+ ]
  BICS       pc, r14, #Overflow_Flag
 
 STRING__ADFS_LockIDE
@@ -343,7 +396,11 @@ STRING__ADFS_LockIDE
 ;-------------------------------------------------
 
 MIC_NoDrivesFound
+ [ faster_startup
+ GRAB       "r7,r12,r14"
+ |
  GRAB       "r12,r14"           ; Get back private word pointer and return address.
+ ]
 
  ; Drop through to...
 
@@ -412,10 +469,8 @@ Module_SWIHandler ROUT
 ; Jump to the SWI
 ;---------------------------
       TEQ         r11, # XATAPI_GetDrives - XATAPI_BaseNumber
-
       ADRNE       r0, not_supported_error                  ; [ swi not known - so exit ]
       BNE         error_handler_lookup
-
 
       ; Allow to fall through 'cause there's only one SWI
 
