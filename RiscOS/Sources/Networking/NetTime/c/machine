@@ -1,5 +1,5 @@
-#include "socklib/socklib.h"
-#include "inetlib/inetlib.h"
+#include "socklib.h"
+#include "inetlib.h"
 #include "sys/ioctl.h"
 #include "sys/errno.h"
 #pragma -d0		/* Suppress winges about K&R-style declarations */
@@ -7,11 +7,14 @@
 #pragma -d1
 
 #include "nettime.h"
+#include "nt_nvram.h"
+#include <string.h>
 
 /*
  * Public vars
  */
 int sockno;
+char env_time_server[MAX_ENV_TIME_SERVER];
 
 
 /*
@@ -19,7 +22,7 @@ int sockno;
  */
 static int tryconnect(void);
 static int isdialup(void);
-static int settimeofday(void);
+static int local_settimeofday(void);
 static void settimer(int duration);
 static void canceltimer(void);
 static void closeconnect(void);
@@ -39,9 +42,9 @@ static void closeconnect(void);
 void machine(transition_t transition)
 {
   static state_t state = Dormant;
-  
+
   DEBUGFN(printf("State:%d, transition %d\n", state, transition));
-  
+
   switch(state)
   {
   case Dormant:
@@ -51,7 +54,7 @@ void machine(transition_t transition)
       if (isdialup())
         state = NoLink;
       return;
-      
+
     case LinkUp:
     case RegistryChanged:
       if (tryconnect())
@@ -65,10 +68,11 @@ void machine(transition_t transition)
 
     case Init:
     case Die:
+    case LinkDown:
       return;
     }
     break;
-    
+
   case NoLink:
     switch(transition)
     {
@@ -84,14 +88,14 @@ void machine(transition_t transition)
 
     case LinkDown:
     case RegistryChanged:
-      return;      
-    
+      return;
+
     case Die:
       state = Dormant;
-      return;      
+      return;
     };
-    break;      
-    
+    break;
+
   case Sleeping:
     switch(transition)
     {
@@ -99,7 +103,7 @@ void machine(transition_t transition)
     case LinkUp:
     case RegistryChanged:
       if (tryconnect())
-        state = Expecting;   
+        state = Expecting;
       else
         settimer(SHORT_TIMER);
       return;
@@ -108,19 +112,19 @@ void machine(transition_t transition)
       canceltimer();
       state = NoLink;
       return;
-      
+
     case Die:
       canceltimer();
       state = Dormant;
       return;
     };
     break;
-    
+
   case Expecting:
     switch(transition)
     {
     case Response:
-      if (settimeofday())
+      if (local_settimeofday())
       {
         state = Sleeping;
         settimer(LONG_TIMER);
@@ -142,7 +146,7 @@ void machine(transition_t transition)
       state = Dormant;
       return;
     };
-    break;  
+    break;
   }
   DEBUGFN(printf("Bogus state/transition combo: state=%d, transition=%d\n",
           state, transition));
@@ -164,7 +168,9 @@ static int tryconnect(void)
   int ipaddress, i;
   struct sockaddr_in sa;
   struct servent *service;
-  
+  unsigned long host_ip;
+  struct hostent *hp;
+
   DEBUGFN(printf("trying to connect\n"));
 
   /*
@@ -177,28 +183,54 @@ static int tryconnect(void)
     DEBUGFN(printf("Dialler bailed! r0=%x\n", dialler_status));
     return 0;
   }
+  DEBUGFN(printf("checking environment variable %s\n", ENV_TIME_SERVER));
 
-  /* Ask the Registry who we should contact */
-  if (_swix(NCRegistry_Enquiry, _IN(0)|_IN(1)|_IN(2)|_OUT(0),
-            NCRegistry_TimeServerTag, &ipaddress, sizeof(ipaddress),
-            &i) || (i != sizeof(ipaddress)))
-  {
-    DEBUGFN(printf("NCRegistry bailed! r0=%x\n", i));
-    return 0;
+  if(read_os_var(ENV_TIME_SERVER, env_time_server, MAX_ENV_TIME_SERVER)>0) { /* we have a configured time server */
+    DEBUGFN(printf("read environment variable: %s\n", env_time_server));
+  } else {
+
+      /* Ask the Registry who we should contact */
+      if (_swix(NCAccessManager_Enquiry, _IN(0)|_IN(1)|_IN(2)|_OUT(0),
+                NCRegistry_TimeServerTag, env_time_server, MAX_ENV_TIME_SERVER,
+                &i))
+      {
+        DEBUGFN(printf("NCAccessManager bailed! r0=%x\n", i));
+        return 0;
+      }
+
+      if(i == 4) { /* packed IP address */
+        ipaddress = *(int *)env_time_server;
+        DEBUGFN(printf("NCAccessManager says timeserver is %08x\n", ipaddress));
+        if (ipaddress == 0) return 0;
+        sa.sin_addr.s_addr = ipaddress; /* address already in network order */
+        goto skip_addr_decode;
+      }
   }
-  DEBUGFN(printf("NCRegistry says timeserver is %08x\n", ipaddress));
-  if (ipaddress == 0)
-    return 0;
+
+
+    if((hp = gethostbyname(env_time_server)) != NULL) { /* it's an IP name */
+      DEBUGFN(printf("got natural IP name \"%s\"\n", env_time_server));
+      memcpy((char *)&sa.sin_addr, hp->h_addr, hp->h_length);
+    } else if((host_ip = inet_addr(env_time_server)) != INADDR_NONE) { /* must be a dot quad then */
+          DEBUGFN(printf("got dot-quad IP name \"%s\"\n", env_time_server));
+          memcpy((char *)&sa.sin_addr, &host_ip, sizeof(unsigned long));
+    } else {
+        DEBUGFN(printf("dammit, couldn't figure out time server address\n"));
+        return 0;
+    }
+
+    skip_addr_decode:
+
+  DEBUGFN(printf("Using time server 0x%x\n", (int)sa.sin_addr.s_addr));
 
   if ((service=getservbyname("time", "tcp")) == NULL)
   {
     DEBUGFN(printf("Can't find service time/tcp\n"));
     return 0;
   }
-  
+
   sa.sin_family = AF_INET;
   sa.sin_port = service->s_port;
-  sa.sin_addr.s_addr = ipaddress;	/* Address already in network order */
 
   /* Make a non-blocking async socket */
   sockno = socket(AF_INET, SOCK_STREAM, 0);
@@ -221,7 +253,7 @@ static int tryconnect(void)
 
 
 /* Returns non-zero if read server time */
-static int settimeofday(void)
+static int local_settimeofday(void)
 {
   int time, read;
   char ltime[8];
@@ -244,12 +276,13 @@ static int settimeofday(void)
 
   /* Convert time from network in seconds to host in centiseconds */
   time = (int) ntohl(time);
+  nvram_settime(time);
   mul64(time, 100, (int*) ltime);
 
   /* Set time */
   _swix(Territory_SetTime, _IN(0), &ltime);
   DEBUGFN(printf("Set time!\n"));
-  
+
   return -1;
 }
 
