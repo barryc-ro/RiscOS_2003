@@ -83,6 +83,8 @@
  * SJM 14-Oct-98 Need to send all headers and body at once. Moved reading body
  *		 size into http_open(). Removed http_send_request_body. Build a
  *		 complete set of headers and body info to send.
+ * SJM 08-Mar-99 Set KeptAlive on handed over connections. Discard cack before
+ *		 'HTTP/' in process_response_line() when keptalive.
  */
 
 #ifdef HTTPMOD
@@ -209,7 +211,7 @@ void http_send_request(http_connection *c);
 char *http_getline(http_connection *c, int read);
 
 void http_process_header_line(http_connection *c, char *l);
-void http_process_response_line(http_connection *c, char *l);
+void http_process_response_line(http_connection *c, char *l, int n);
 void http_flush_data_to_file(http_connection *c);
 void http_socket_close(http_connection *c);
 BOOL http_check_special_headers(http_connection *c, char *key, char *value);
@@ -982,7 +984,7 @@ os_error *http_prosecute( http_connection *c )
         l = http_getline(c, 1); /* Get the next line, doing a read */
         /*needToRead = 0;*/
         if (l)
-            http_process_response_line(c, l);
+            http_process_response_line(c, l, c->buf_used);
         if ( c->status != status_GETTING_HEADERS )
             return NULL;
         /* else we can drop through */
@@ -2028,6 +2030,9 @@ static void http_queue_allow_write( http_connection *c )
     if ( !c2 )
         return;
 
+    /* Mark that this stream has been keptalive */
+    c2->flags |= http_flags_KEPTALIVE;
+    
     c2->queueprev = c;
     c->queuenext = c2;      /* from_queue followed by this is idempotent in
                              * the case c2 is *already* c->queuenext
@@ -2088,6 +2093,9 @@ static void http_queue_allow_read( http_connection *c )
             http_socket_close( c );
         return;
     }
+
+    /* Mark that this stream has been keptalive */
+    c2->flags |= http_flags_KEPTALIVE;
 
     /* Note that because of partial fetching, we must cope with the case c2==c
      */
@@ -3039,7 +3047,7 @@ char* http_getline(http_connection *c, int read)
 
 	/* pdh: moved this termination outside the if */
 	c->buffer[c->buf_off] = 0; /* Make use we always have a NULL at the end */
-	end = strchr(c->buffer, '\n');
+	end = memchr(c->buffer, '\n', c->buf_off);
 
 	if (end)
 	{
@@ -3244,17 +3252,46 @@ static void http_set_server_flag( http_connection *c, int flag )
     }
 }
 
-void http_process_response_line(http_connection *c, char *l)
+void http_process_response_line(http_connection *c, char *l, int len)
 {
-    fdebugf(log_file, "%p: received '%s'\n",  c, l);
+    int v_len = strlen(http_version_check);
+    char *version = NULL;
+    
+    fdebugf(log_file, "%p: received '%s' keptalive %d\n",  c, l, c->flags & http_flags_KEPTALIVE?1:0);
 
-    if (strncmp(l, http_version_check, strlen(http_version_check)) == 0)
+    if (strncmp(l, http_version_check, v_len) == 0)
+    {
+	version = l;
+    }
+    else if ( c->flags & http_flags_KEPTALIVE )
+    {
+	/* SJM 8Mar99 if this is on a keptalive socket then throw away
+	   bytes before the HTTP line in case we are suffering from badly
+	   counted content-length headers
+	   In this case the string could contain 0 bytes so use len passed in.
+	*/
+	for ( len -= v_len; len > 0; len--, l++ )
+	{
+	    if ( strncmp( l, http_version_check, v_len ) == 0 )
+	    {
+		version = l;
+		break;
+	    }
+	}
+
+	fdebugf(log_file, "%p: discarded cack found version @%p\n", c, version);
+
+	if ( version == NULL )
+	    return;
+    }
+
+    if (version)
     {
         char *p;
 
-        p = strchr(l, ' ');
+        p = strchr(version, ' ');
         if ( !p )
-            p = l;
+            p = version;
 
         while (isspace(*(++p)))
             ;
