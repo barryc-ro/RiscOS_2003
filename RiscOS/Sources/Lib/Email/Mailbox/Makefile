@@ -44,7 +44,7 @@ preprocess:
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
 
 export:
-	@amu -f MainMake $(MFLAGS) TARGET=Mailbox
+	@amu -f MainMake $(MFLAGS) TARGET=Mailbox EXT=o
 
 install_rom:
 	@amu -f MainMake $(MFLAGS) TARGET=Mailbox
