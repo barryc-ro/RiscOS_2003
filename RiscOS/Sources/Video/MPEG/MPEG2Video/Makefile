@@ -19,7 +19,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = mkdir -p
+MKDIR   = do mkdir -p
 AS      = objasm
 LD      = link
 CP      = copy
@@ -36,8 +36,8 @@ WFLAGS  = ~c~fr~v
 #
 COMPONENT = MPEG2Video
 SOURCE    = Hdr.${COMPONENT}
-OBJECT    = o.${COMPONENT}
-TARGET    = rm.${COMPONENT}
+OBJECT    = o.${TV}.${COMPONENT}
+TARGET    = rm.${TV}.${COMPONENT}
 SETUP	  = s.Setup.352x288
 SETUPC	  = s.Setup.352x288C
 
@@ -57,23 +57,21 @@ install_rom: ${TARGET}
 all: ${TARGET}
 	@echo ${COMPONENT}: disc modules built
 
-install: ${TARGET} install_dirs
+install: ${TARGET}
         ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: disc modules installed
 
-install_dirs:
-    ${MKDIR} ${INSTDIR}
-
 clean:
-        ${RM} ${TARGET}
         ${RM} s.Data.BinSetup
         ${RM} s.Data.BinSetupC
         ${WIPE} o ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE} s.Data.BinSetupC
-        ${MKDIR} o
+        ${MKDIR} o.${TV}
+        ${MKDIR} rm.${TV}
         ${AS} -o ${OBJECT} ${SOURCE} ${ASFLAGS}
         ${LD} ${LDFLAGS} ${OBJECT}
         SetType $@ Module
