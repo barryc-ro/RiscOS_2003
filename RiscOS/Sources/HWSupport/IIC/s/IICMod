@@ -29,6 +29,16 @@
         GET     Hdr:IIC
 	GET	VersionASM
 
+                GBLL    ReentrancyCheck
+ReentrancyCheck SETL    {TRUE}                          ; Harmless if you don't need it
+
+                GBLL    KernelDoesIIC
+KernelDoesIIC   SETL    {TRUE} :LAND: ReentrancyCheck   ; Until the kernel's IIC support is farmed out
+
+ ^ ErrorNumber_IIC_NoAcknowledge      ; The nearest thing we have to a defined error base
+ # 1  ; AddError2 IIC_NoAcknowledge,    "No acknowledge from IIC device"
+        AddError2 IIC_InUse,            "IIC operation in progress"
+
         LEADR   Module_LoadAddr
 
 TAB     *       9
@@ -37,6 +47,13 @@ FF      *       12
 CR      *       13
 
 IOCControlSoftCopy * &106       ; Address of soft copy of IOC control register
+ [ KernelDoesIIC
+IRQsema                         * &108  ; Address of IRQ semaphore
+KernelVersion_STB22             * &45200
+KernelVersion_STB3              * &47100
+KernelVersion_STB400            * &53000
+KernelVersion_32bitIRQStack     * &48100 ; trunk versions: beware desktop OS builders!
+ ]
 
 ; Module workspace allocation
 
@@ -45,6 +62,14 @@ IOCControlSoftCopy * &106       ; Address of soft copy of IOC control register
 MessageFile_Block # 16
 MessageFile_Open  # 4
 IRQDisableFlag  # 4             ; 0 if we're talking to Alex, otherwise I_bit
+ [ ReentrancyCheck
+IICSWIThreaded  # 4
+   [ KernelDoesIIC
+KernelIICStart  # 4
+KernelIICEnd    # 4
+KernelIRQStackFlag # 4          ; negative if ARM2/3 style IRQ stack
+   ]
+ ]
 
 IIC_WorkspaceSize * :INDEX: @
 
@@ -63,6 +88,8 @@ Module_BaseAddr
         DCD     IIC_SWIHandler-Module_BaseAddr
         DCD     IIC_SWINameTable-Module_BaseAddr
         DCD     0 ; Code to manually decode swi name (not needed)
+        DCD     0 ; No messages file
+        DCD     IIC_ModFlags-Module_BaseAddr
 
 IIC_SWINameTable
 IIC_Title
@@ -70,8 +97,15 @@ IIC_Title
         =       "Control", 0
         =       0
 
-IIC_HelpStr =       "IIC",TAB, TAB,"$Module_MajorVersion ($Module_Date)"
+IIC_HelpStr =       "IIC",TAB, TAB,"$Module_MajorVersion ($Module_Date)", 0
         ALIGN
+
+IIC_ModFlags
+      [ No26bitCode
+        &       ModuleFlag_32bit
+      |
+        &       0
+      ]
 
 ; *****************************************************************************
 
@@ -100,7 +134,39 @@ IIC_Init
         MOV     r14, #0
         STR     r14, MessageFile_Open
 
-        LDMIA   sp!, {pc}^
+    [ ReentrancyCheck
+        STR     r14, IICSWIThreaded
+      [ KernelDoesIIC
+        MOV     r0, #ModHandReason_LookupName
+        ADR     r1, UtilityModuleString
+        SWI     XOS_Module
+        LDR     r0, [r3, #Module_HelpStr]
+        ADD     r0, r0, r3
+        BL      GetVerNoFromHelpString
+        MOV     r2, #0          ; emergency defaults
+        MOV     r3, #0          ; (lr=0 shouldn't appear on the IRQ stack)
+        LDR     r0, =KernelVersion_STB22
+        TEQ     r1, r0
+        ADREQ   lr, KernelAddresses_STB22
+        LDMEQIA lr, {r2, r3}
+        LDR     r0, =KernelVersion_STB3
+        TEQ     r1, r0
+        ADREQ   lr, KernelAddresses_STB3
+        LDMEQIA lr, {r2, r3}
+        LDR     r0, =KernelVersion_STB400
+        TEQ     r1, r0
+        ADREQ   lr, KernelAddresses_STB400
+        LDMEQIA lr, {r2, r3}
+        ADR     lr, KernelIICStart
+        ASSERT  :INDEX: KernelIICEnd = :INDEX: KernelIICStart + 4
+        STMIA   lr, {r2, r3}
+        LDR     r0, =KernelVersion_32bitIRQStack
+        SUB     r0, r1, r0
+        STR     r0, KernelIRQStackFlag
+        CLRV
+      ]
+    ]
+        LDMIA   sp!, {pc}
 
 IIC_Die STMDB   sp!, {lr}
         LDR     r12, [r12]
@@ -108,7 +174,102 @@ IIC_Die STMDB   sp!, {lr}
         CMP     r0, #0
         ADRNE   r0, MessageFile_Block
         SWINE   XMessageTrans_CloseFile
-        LDMIA   sp!, {pc}^
+        CLRV
+        LDMIA   sp!, {pc}
+
+ [ KernelDoesIIC
+
+UtilityModuleString
+        =       "UtilityModule", 0
+        ALIGN
+
+KernelAddresses_STB22
+        &       &03828A4C, &0382900C ; first (incl) and last (excl) addresses to trap
+KernelAddresses_STB3
+        &       &0382A808, &0382B334 ; first (incl) and last (excl) addresses to trap
+KernelAddresses_STB400
+        &       &0382C2FC, &0382CE68 ; first (incl) and last (excl) addresses to trap
+
+        LTORG
+
+; *************************************************************************
+;
+;       RMEGetVerNo - Read version number from a string
+;
+; in:   R0 -> string
+;
+; out:  R0, R4, R5, R12 corrupted
+;       R1 = version number in BCD with the decimal point between bits 15 and 16
+;            eg "2.34" => &00023400, "5.6789" => &00056789, "17" => &00170000
+;            only the last 4 digits of the integer part, and the first 4 decimal places are stored
+;
+
+RMEGetVerNo Entry
+        MOV     r1, #0
+10
+        LDRB    r12, [r0], #1
+        CMP     r12, #" "
+        BEQ     %BT10
+11
+        SUB     r12, r12, #"0"
+        CMP     r12, #9
+        ORRLS   r1, r12, r1, LSL #4             ; just keep nibbles - we only need the
+        LDRLSB  r12, [r0], #1                   ; result to be ordered, not continous
+        BLS     %BT11
+        MOV     r5, #0
+        CMP     r12, #"."-"0"
+        BNE     %FT13
+        MOV     r4, #16
+12
+        SUBS    r4, r4, #4
+        BMI     %FT13
+        LDRB    r12, [r0], #1
+        SUB     r12, r12, #"0"
+        CMP     r12, #9
+        ORRLS   r5, r5, r12, LSL r4
+        BLS     %BT12
+13
+        ORR     r1, r5, r1, LSL #16
+        EXIT
+
+; *************************************************************************
+;
+;       GetVerNoFromHelpString - Read version number from a module help string
+;
+; in:   R0 -> module help string
+;
+; out:  R1 = version number in BCD with the decimal point between bits 15 and 16
+;            eg "2.34" => &00023400, "5.6789" => &00056789, "17" => &00170000
+;            only the last 4 digits of the integer part, and the first 4 decimal places are stored
+;       All other registers preserved
+;
+
+GetVerNoFromHelpString Entry "r0, r4, r5, r12"
+        MOV     r5, #0                          ; char count
+10
+        LDRB    r1, [r0], #1
+        CMP     r1, #0                          ; check character
+        EXIT    EQ                              ; if end of string then no version number so return zero
+        ADD     r5, r5, #1
+        CMP     r1, #TAB
+        ADDEQ   r5, r5, #7
+        BICEQ   r5, r5, #7
+        CMP     r5, #16                         ; hit verno col yet?
+        BLT     %BT10
+20
+        LDRB    r1, [r0], #1
+        CMP     r1, #TAB
+        CMPNE   r1, #31                         ; if a control character (except TAB)
+        MOVLT   r1, #0                          ; then no version number so return zero
+        EXIT    LT
+        SUB     r1, r1, #"0"
+        CMP     r1, #9                          ; if not a digit
+        BHI     %BT20                           ; then try next character
+        SUB     r0, r0, #1                      ; was a digit so go back to it
+        BL      RMEGetVerNo                     ; read version number from here
+        EXIT
+
+ ]
 
 ; *****************************************************************************
 ;
@@ -125,10 +286,45 @@ IIC_SWIHandler ROUT
         LDR     r12, [r12]
         MOV     R10, LR
         TEQ     R11, #0                 ; we only have one SWI
-        ADRNE   R0, ErrorBlock_NoSuchSWI
-        ADRNE   R11, IIC_Title
-        BLNE    CopyError
-        ORRVSS  PC, R10, #V_bit
+        BNE     ReturnNoSuchSWIError
+
+    [ ReentrancyCheck
+      [ KernelDoesIIC
+        Push    "R0-R2,R14"
+        ADR     R14, KernelIICStart
+        ASSERT  :INDEX: KernelIICEnd = :INDEX: KernelIICStart + 4
+        LDMIA   R14, {R0, R1}
+        SCPSR   I_bit, 0, R14,, R2      ; disable IRQs while we navigate the IRQ stack
+        MOV     R11, #IRQsema
+inspect_IRQ_stack
+        LDR     R11, [R11]
+        CMP     R11, #0
+        BEQ     iis_end
+        LDR     R14, KernelIRQStackFlag
+        TEQ     R14, #0
+        LDRMI   R14, [R11, #4*7]        ; get return lr from stack (pushed on ARM2/3, else 26-bit PSR
+        BICMI   R14, R14, #ARM_CC_Mask  ; is mangled in by the kernel, and which we have to strip away)
+        LDRPL   R14, [R11, #4*8]        ; get pushed lr from stack (no flag bits to worry about)
+        CMP     R14, R0
+        CMPGE   R1, R14
+        BLT     inspect_IRQ_stack       ; try the next IRQ out, in case of IRQ re-entrancy
+
+        ; Kernel IIC code is threaded!
+        ; Can't easily do a OS_Heap type trick, so just report an error instead
+        RestPSR R2,, c
+        Pull    "R0-R2,R14"
+        B       ReturnIICInUseError
+
+iis_end
+        RestPSR R2,, c
+        Pull    "R0-R2,R14"
+      ]
+        LDR     R11, IICSWIThreaded
+        TEQ     R11, #0
+        BNE     ReturnIICInUseError
+        MOV     R11, #1
+        STR     R11, IICSWIThreaded
+    ]
 
         Push    R14
         LDR     lr, IRQDisableFlag      ; save IRQ disable flag around operations
@@ -137,7 +333,11 @@ IIC_SWIHandler ROUT
         BIC     r11, r0, #1             ; r11 = address without R/W bit
         EORS    lr, r11, #IICAddress_AcornBMUMicrocontroller    ; lr = 0 if we're talking to the BMU
         EORNES  lr, r11, #IICAddress_AcornBMUMicrocontroller2
+ [ No26bitCode
+        MOVNE   lr, #I32_bit
+ |
         MOVNE   lr, #I_bit
+ ]
         STR     lr, IRQDisableFlag      ; 0 if talking to BMU, else I_bit
 
         BL      Start
@@ -168,8 +368,14 @@ IIC_SWIHandler ROUT
         BL      Stop
         Pull    "lr"
         STR     lr, IRQDisableFlag      ; restore IRQ disable flag
+      [ ReentrancyCheck
+        MOV     R11, #0
+        STR     R11, IICSWIThreaded
+      ]
         Pull    R14
-        BICS    PC, R14, #V_bit
+        CMP     PC, PC                  ; also clears V in 32-bit modes
+        MOVEQ   PC, R14                 ; 32-bit exit: NZC corrupted
+        BICS    PC, R14, #V_bit         ; 26-bit exit: NZC preserved
 
 TXCheckAck ROUT
         Push    R14
@@ -181,14 +387,41 @@ TXCheckAck ROUT
         BL      Stop                    ; error, so tidy up
         ADR     R0, ErrorBlock_IIC_NoAcknowledge
         MOV     R11, #0
-        BL      CopyError
+        BL      CopyError               ; sets V
         Pull    "lr"
         STR     lr, IRQDisableFlag      ; restore IRQ disable flag
+      [ ReentrancyCheck
+;       MOV     R11, #0
+        STR     R11, IICSWIThreaded
+      ]
         Pull    R14                     ; pull real return address
-        ORRS    PC, R14, #V_bit
+        TEQ     PC, PC
+        MOVEQ   PC, R14                 ; 32-bit exit: NZC corrupted
+        ORRS    PC, R14, #V_bit         ; 26-bit exit: NZC preserved
+
+ReturnNoSuchSWIError
+        ADR     R0, ErrorBlock_NoSuchSWI
+        ADR     R11, IIC_Title
+        BL      CopyError               ; sets V
+        TEQ     PC, PC
+        MOVEQ   PC, R10                 ; 32-bit exit: NZC corrupted
+        ORRS    PC, R10, #V_bit         ; 26-bit exit: NZC preserved
+
+      [ ReentrancyCheck
+ReturnIICInUseError
+        ADR     R0, ErrorBlock_IIC_InUse
+        MOV     R11, #0
+        BL      CopyError               ; sets V
+        TEQ     PC, PC
+        MOVEQ   PC, R10                 ; 32-bit exit: NZC corrupted
+        ORRS    PC, R10, #V_bit         ; 26-bit exit: NZC preserved
+      ]
 
         MakeInternatErrorBlock NoSuchSWI,,BadSWI
         MakeInternatErrorBlock IIC_NoAcknowledge,,NoAck
+      [ ReentrancyCheck
+        MakeInternatErrorBlock IIC_InUse,,InUse
+      ]
 
 ; *****************************************************************************
 ;
@@ -198,11 +431,22 @@ TXCheckAck ROUT
 ;
 
 SetC1C0 ROUT
+ [ No26bitCode
+        Push    "R0-R3,R14"
+        mrs    ,R3, CPSR
+        TEQ     PC, #0                          ; set NE
+ |
         Push    "R0-R2,R14"
         BIC     R14, R14, #Z_bit                ; indicate not checking clock
+ ]
 SetOrCheck
+ [ No26bitCode
+        ORR     R14, R3, #I32_bit               ; disable interrupts round access to IOCControlSoftCopy
+        msr    ,CPSR_c, R14                     ; preserves Z flag
+ |
         ORR     R14, R14, #I_bit                ; disable interrupts round access to IOCControlSoftCopy
         TEQP    R14, #0
+ ]
 
         ADD     R0, R0, R1, LSL #1              ; R0 := C0 + C1*2
 
@@ -221,10 +465,18 @@ SetOrCheck
         TSTEQ   R1, #i2c_clock_bit              ; to read high
         BNE     %FT30                           ; if not checking, or it went high straight away, skip
 
+ [ No26bitCode
+        MOV     lr, R3                          ; lr = original CPSR
+ |
         LDR     lr, [sp, #3*4]                  ; reload original lr
+ ]
         LDR     r1, IRQDisableFlag
         ORR     lr, lr, r1
+ [ No26bitCode
+        msr    ,CPSR_c, lr                      ; restore IRQs if we're talking to BMU
+ |
         TEQP    lr, #0                          ; restore IRQs if we're talking to BMU
+ ]
 
 20
         LDRB    R1, [R2, #IOCControl]           ; now wait for clock to go high
@@ -235,13 +487,24 @@ SetOrCheck
         MOV     R0, #10                         ; delay for >= 10/2 microsecs
         BL      DoMicroDelay
 
+ [ No26bitCode
+        msr    ,CPSR_cf, R3
+        Pull    "R0-R3,PC"
+ |
         Pull    "R0-R2,PC",,^
+ ]
 
 ; Set clock and data lines to R1 and R0 and then wait for clock to be high
 
 SetC1C0CheckClock ROUT
+ [ No26bitCode
+        Push    "R0-R3,R14"
+        mrs    ,R3, CPSR
+        TEQ     R0, R0                          ; set EQ
+ |
         Push    "R0-R2,R14"
         ORR     R14, R14, #Z_bit                ; indicate checking clock
+ ]
         B       SetOrCheck
 
 
@@ -279,7 +542,12 @@ DoMicroDelay ROUT
 ;
 
 ClockData ROUT
+ [ No26bitCode
         Push    "R1,R2,R14"
+        mrs    ,R2,CPSR
+ |
+        Push    "R1, R14"
+ ]
 
         MOV     R1, #0                  ; clock LO
         BL      SetC1C0
@@ -288,8 +556,13 @@ ClockData ROUT
 ; This allows BMU to detect idle condition by polling
 
         LDR     r1, IRQDisableFlag
+ [ No26bitCode
+        ORR     r1, r1, r2
+        msr    ,CPSR_c,r1
+ |
         ORR     r1, r1, pc
         TEQP    r1, #0
+ ]
 
         MOV     R1, #1                  ; clock HI
         BL      SetC1C0CheckClock
@@ -299,7 +572,12 @@ ClockData ROUT
         MOV     R1, #0                  ; clock LO
         BL      SetC1C0
 
-        Pull    "R1,R2,PC",,^
+ [ No26bitCode
+        msr    ,CPSR_cf,R2
+        Pull    "R1,R2,PC"
+ |
+        Pull    "R1, PC",,^
+ ]
 
 ; *****************************************************************************
 ;
@@ -309,7 +587,12 @@ ClockData ROUT
 ;
 
 Start   ROUT
+ [ No26bitCode
+        Push    "R0-R3,R14"
+        mrs    ,R3, CPSR
+ |
         Push    "R0-R2,R14"
+ ]
 
         MOV     R0, #1                  ; clock HI, data HI
         MOV     R1, #1
@@ -333,7 +616,12 @@ Start   ROUT
         MOV     R1, #0
         BL      SetC1C0
 
+ [ No26bitCode
+        msr    ,CPSR_f, R3
+        Pull    "R0-R3,PC"
+ |
         Pull    "R0-R2,PC",,^
+ ]
 
 ; *****************************************************************************
 ;
@@ -354,11 +642,19 @@ Acknowledge ROUT
 ; Disable interrupts if not talking to BMU to ensure clock hi with data hi is only transient
 ; This allows BMU to detect idle condition by polling
 
+ [ No26bitCode
+        mrs    ,R1,CPSR
+        Push    "R1"
+        LDR     r0, IRQDisableFlag
+        ORR     r1, r1, r0
+        msr    ,CPSR_c,r1
+ |
         MOV     R1,PC
         Push    "R1"
         LDR     r0, IRQDisableFlag
         ORR     r1, r1, r0
         TEQP    r1, #0
+ ]
 
         MOV     R0, #1                  ; clock HI, data HI
         MOV     R1, #1
@@ -374,7 +670,11 @@ Acknowledge ROUT
         BL      SetC1C0
 
         Pull    "R1"
+ [ No26bitCode
+        msr    ,CPSR_c,R1
+ |
         TEQP    PC,R1
+ ]
 
         TST     R2, #1                  ; should be LO for correct acknowledge
         MOV     R2, PC
@@ -392,7 +692,12 @@ Acknowledge ROUT
 ;
 
 Stop    ROUT
+ [ No26bitCode
+        Push    "R0-R2,R14"
+        mrs    ,R2, CPSR
+ |
         Push    "R0,R1,R14"
+ ]
 
         MOV     R0, #0                  ; clock HI, data LO
         MOV     R1, #1
@@ -404,7 +709,12 @@ Stop    ROUT
         MOV     R1, #1
         BL      SetC1C0
 
+ [ No26bitCode
+        msr    ,CPSR_f, R2
+        Pull    "R0-R2,PC"
+ |
         Pull    "R0,R1,PC",,^
+ ]
 
 ; *****************************************************************************
 ;
@@ -416,7 +726,12 @@ Stop    ROUT
 ;
 
 TXByte  ROUT
+ [ No26bitCode
+        Push    "R0-R3,R14"
+        mrs    ,R3, CPSR
+ |
         Push    "R0-R2,R14"
+ ]
         MOV     R2, R0                  ; byte goes into R2
         MOV     R1, #&80                ; 2^7   the bit mask
 10
@@ -425,7 +740,12 @@ TXByte  ROUT
         BL      ClockData               ; send the bit
         MOVS    R1, R1, LSR #1
         BNE     %BT10
+ [ No26bitCode
+        msr    ,CPSR_f, R3
+        Pull    "R0-R3,PC"
+ |
         Pull    "R0-R2,PC",,^
+ ]
 
 ; *****************************************************************************
 ;
@@ -436,7 +756,12 @@ TXByte  ROUT
 ;
 
 RXByte  ROUT
+ [ No26bitCode
+        Push    "R1-R5, R14"
+        mrs    ,R5, CPSR
+ |
         Push    "R1-R4, R14"
+ ]
         MOV     R3, #0                  ; byte:=0
         MOV     R2, #IOC
         MOV     R4, #7
@@ -445,11 +770,19 @@ RXByte  ROUT
         MOV     R1, #0
         BL      SetC1C0
 10
+ [ No26bitCode
+        mrs    ,R1,CPSR
+        Push    "R1"
+        LDR     r0,IRQDisableFlag
+        ORR     R1,R1,r0
+        msr    ,CPSR_c,R1               ; Disable ints if not talking to BMU
+ |
         MOV     LR, PC
         Push    "LR"
         LDR     r0, IRQDisableFlag
         ORR     LR, LR, r0
         TEQP    LR, #0                  ; Disable ints if not talking to BMU
+ ]
 
         MOV     R0, #1                  ; pulse clock HI
         MOV     R1, #1
@@ -463,14 +796,24 @@ RXByte  ROUT
         MOV     R1, #0
         BL      SetC1C0
 
+ [ No26bitCode
+        Pull    "R1"
+        msr    ,CPSR_c,R1               ; restore interrupt state
+ |
         Pull    "LR"
         TEQP    PC, LR                  ; restore interrupt state
+ ]
 
         SUBS    R4, R4, #1
         BCS     %BT10
 
         MOV     R0, R3                  ; return the result in R0
+ [ No26bitCode
+        msr    ,CPSR_f, R5
+        Pull    "R1-R5, PC"
+ |
         Pull    "R1-R4, PC",,^
+ ]
 
 CopyError ENTRY r1-r7
         BL      open_messagefile
