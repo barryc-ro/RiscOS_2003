@@ -67,6 +67,7 @@ EXPORTS    = ${EXP_HDR}.${COMPONENT}
 
 OBJS =\
  o.cfsi\
+ o.draw\
  o.gif\
  o.gif_stream\
  o.imagetrans\
@@ -83,6 +84,7 @@ OBJS =\
  
 OBJSZ =\
  z.cfsi\
+ z.draw\
  z.gif\
  z.gif_stream\
  z.imagetrans\
