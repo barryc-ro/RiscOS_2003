@@ -254,7 +254,9 @@ static void misc_event_handler(int event, fe_view v)
     case fevent_SEARCH_PAGE:
 	frontend_complain(fe_search_page(v));
 	break;
+
     case fevent_OFFLINE_PAGE:
+	tb_status_unstack_all();
 	frontend_complain(fe_offline_page(v));
 	break;
 
@@ -300,7 +302,6 @@ static void clipboard_event_handler(int event, fe_view v)
 
 static void scroll_event_handler(int event, fe_view v)
 {
-    int used;
     switch (event)
     {
         case fevent_SCROLL_LEFT:
@@ -328,14 +329,10 @@ static void scroll_event_handler(int event, fe_view v)
             fe_view_scroll_y(v, -3);
             break;
         case fevent_SCROLL_OR_CURSOR_UP:
-	    backend_doc_cursor(v->displaying, be_cursor_UP, &used);
-	    if (!used)
-                fe_view_scroll_y(v, +1);
+	    fe_cursor_movement(v, 0, +1);
             break;
         case fevent_SCROLL_OR_CURSOR_DOWN:
-	    backend_doc_cursor(v->displaying, be_cursor_DOWN, &used);
-	    if (!used)
-                fe_view_scroll_y(v, -1);
+	    fe_cursor_movement(v, 0, -1);
             break;
         case fevent_SCROLL_FAR_LEFT:
             fe_view_scroll_x(v, -3);
@@ -386,6 +383,22 @@ static void highlight_event_handler(int event, fe_view v)
         case fevent_HIGHLIGHT_PREV_FRAME:
             fe_move_highlight_frame(v, FALSE);
             break;
+
+    case fevent_HIGHLIGHT_FRAME_UP:
+	fe_move_highlight_frame_direction(v, 0, +1);
+	break;
+
+    case fevent_HIGHLIGHT_FRAME_DOWN:
+	fe_move_highlight_frame_direction(v, 0, -1);
+	break;
+
+    case fevent_HIGHLIGHT_FRAME_LEFT:
+	fe_move_highlight_frame_direction(v, -1, 0);
+	break;
+
+    case fevent_HIGHLIGHT_FRAME_RIGHT:
+	fe_move_highlight_frame_direction(v, +1, 0);
+	break;
     }
 }
 

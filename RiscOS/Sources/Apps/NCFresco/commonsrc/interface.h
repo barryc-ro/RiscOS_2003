@@ -396,6 +396,8 @@ extern be_item backend_highlight_link(be_doc doc, be_item item, int flags);
 #define be_link_DONT_WRAP	(1 << 4)	/* return null if no more in given direction */
 #define be_link_DONT_HIGHLIGHT	(1 << 5)	/* return the new link but don't actually move highlight */
 #define be_link_TEXT		(1 << 6)	/* only find INPUT TEXT and TEXTAREA items */
+#define be_link_ONLY_CURRENT	(1 << 7)	/* only consider the current item */
+#define be_link_CLEAR_REST	(1 << 8)	/* clear out all selected items */
 
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);

@@ -4681,7 +4681,7 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 
 	/* check for tag specifically in case a table gets an AREF around it */
 	if ((ti->tag == rid_tag_TEXT || ti->tag == rid_tag_IMAGE || ti->tag == rid_tag_OBJECT) &&
-	    ti->aref && ti->aref->href && (ti->aref != aref || (flags & be_link_INCLUDE_CURRENT)) )
+	    ti->aref && ti->aref->href && (ti->aref != aref || (flags & (be_link_INCLUDE_CURRENT | be_link_ONLY_CURRENT))) )
 	    return TRUE;
     }
 
@@ -4705,7 +4705,7 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
     }
     else
     {
-        if (flags & be_link_INCLUDE_CURRENT)
+        if (flags & (be_link_INCLUDE_CURRENT|be_link_ONLY_CURRENT))
             ti = item;
         else
             ti = rid_scan(item, scan_flags);
@@ -4734,12 +4734,19 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 	        break;
 	}
 
-        ti = rid_scan(ti, scan_flags);
-
-	LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
+	if (flags & be_link_ONLY_CURRENT)
+	{
+	    ti = NULL;
+	    break;
+	}
+	else
+	{
+	    ti = rid_scan(ti, scan_flags);
+	    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
+	}
     }
 
-    if (ti == NULL && (flags & be_link_DONT_WRAP) == 0)
+    if (ti == NULL && (flags & (be_link_DONT_WRAP | be_link_ONLY_CURRENT)) == 0)
     {
 	ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
 
@@ -4761,9 +4768,11 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
     {
         /* de highlight original only if the highlight has ended up changing */
-        if (item != ti && item)
-            backend_update_link(doc, item, 0);
-
+	if (flags & be_link_CLEAR_REST)
+	    backend_clear_selected(doc);
+        else if (item != ti && item)
+	    backend_update_link(doc, item, 0);
+	
         if (ti)
         {
 	    int x, y;
@@ -4779,7 +4788,7 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 #endif
 	    }
 
-            if (item != ti)
+            if (item != ti || (flags & be_link_ONLY_CURRENT))
                 backend_update_link(doc, ti, 1);
         }
     }

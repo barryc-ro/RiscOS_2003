@@ -646,7 +646,7 @@ static fe_view get_source_view(const char *query, BOOL default_top)
 
     /* which view are we pulling data from */
     if (source == NULL)
-	v = default_top ? main_view : selected_view;
+	v = default_top ? main_view : fe_selected_view();
     else
 	v = fe_find_target(main_view, source);
 

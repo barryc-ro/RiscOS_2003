@@ -80,6 +80,10 @@
 #include "stbopen.h"
 #include "fevents.h"
 
+#if MEMLIB
+#include "memheap.h"
+#endif
+
 #include "hierprof/HierProf.h"
 
 #ifndef NEW_WEBIMAGE
@@ -129,6 +133,9 @@
 #define CLIP_FILE       "<Wimp$ScrapDir>."PROGRAM_NAME"Clip"
 #define CLIP_FILE_LEN   sizeof(CLIP_FILE)
 
+#define AUTOSCROLL_EDGE_THRESHOLD	64	/* closeness to edge to start auto-scrolling in OS units */
+#define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
+
 /* -------------------------------------------------------------------------- */
 
 #define TaskModule_RegisterService      0x4D302
@@ -167,7 +174,7 @@ static fe_view fe_next_frame(fe_view v, BOOL next);
 
 static wimp_t task_handle;
 
-static BOOL use_toolbox = FALSE;
+BOOL use_toolbox = FALSE;
 static char *progname;
 
 int debug_level;
@@ -182,7 +189,6 @@ static char *fe_pending_bfile = NULL;
 static int fe_pending_key = 0;
 
 fe_view main_view = 0;
-fe_view selected_view = 0;
 static fe_view dbox_view = 0;
 
 /* only used by ncfrescointernal:playmovie I think */
@@ -428,6 +434,17 @@ os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), 
             e = iterate_frames(v->children, fn, handle);
     }
     return e;
+}
+
+static void adjust_box_for_toolbar(wimp_box *box)
+{
+    if (use_toolbox && tb_is_status_showing())
+    {
+	if (config_display_control_top)
+	    box->y1 -= tb_status_height() + STATUS_TOP_MARGIN;
+	else
+	    box->y0 += tb_status_height() + STATUS_TOP_MARGIN;
+    }
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -717,6 +734,7 @@ void fe_dbox_dispose(void)
 {
     if (dbox_view)
     {
+	fe_view selected_view = fe_selected_view();
 	STBDBG(( "fe_dbox_dispose: sel %p db %p\n", selected_view, dbox_view));
 
 #if LINK_DBOX && 0
@@ -764,13 +782,7 @@ fe_view fe_dbox_view(const char *name)
     info.scrolling = fe_scrolling_NO;
     info.margin = margin_box;
 
-    if (use_toolbox && tb_is_status_showing())
-    {
-	if (config_display_control_top)
-	    info.margin.y1 -= tb_status_height() + STATUS_TOP_MARGIN;
-	else
-	    info.margin.y0 += tb_status_height() + STATUS_TOP_MARGIN;
-    }
+    adjust_box_for_toolbar(&info.margin);
 
     if (use_toolbox)
 	tb_menu_hide();
@@ -835,6 +847,21 @@ void fe_dbox_cancel(void)
 fe_view fe_locate_view(const char *name)
 {
     return fe_find_target(main_view, name);
+}
+
+static os_error *fe__selected_view(fe_view v, void *handle)
+{
+    fe_view *pv = handle;
+    if (v->is_selected)
+	*pv = v;
+    return NULL;
+}
+
+fe_view fe_selected_view(void)
+{
+    fe_view v = NULL;
+    iterate_frames(main_view, fe__selected_view, &v);
+    return v;
 }
 
 void fe_submit_form(fe_view v, const char *id)
@@ -1924,6 +1951,10 @@ static fe_view fe_next_frame(fe_view v, BOOL next)
     return v;
 }
 
+void fe_move_highlight_frame_direction(fe_view v, int x, int y)
+{
+}
+
 void fe_move_highlight_frame(fe_view v, BOOL next)
 {
     fe_view vv;
@@ -1977,6 +2008,9 @@ void fe_move_highlight(fe_view v, int flags)
     if (!v)
         return;
 
+    if (use_toolbox && (flags & be_link_VERT))
+	tb_status_set_direction(flags & be_link_BACK ? 1 : 0);
+    
     pointer_mode = pointermode_ON;  /* so that scroll_changed doesn't reposition highlight  */
 
     if (v->displaying)
@@ -2085,6 +2119,20 @@ void fe_move_highlight(fe_view v, int flags)
     }
 
     fe_pointer_mode_update(pointermode_OFF);
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+void fe_cursor_movement(fe_view v, int x, int y)
+{
+    int used;
+
+    if (y)
+	tb_status_set_direction(y > 0);
+
+    backend_doc_cursor(v->displaying, y > 0 ? be_cursor_UP : be_cursor_DOWN, &used);
+    if (!used)
+	fe_view_scroll_y(v, y);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -2458,7 +2506,7 @@ os_error *fe_status_open_toolbar(fe_view v, int bar)
 
 /* ------------------------------------------------------------------------------------------- */
 
-void fe_scroll_changed(fe_view v)
+void fe_scroll_changed(fe_view v, int x, int y)
 {
     if (use_toolbox)
     {
@@ -2718,6 +2766,25 @@ static fe_view find_view(wimp_w w)
     return v;
 }
 
+static int check_edge_proximity(int pos, int left, int right, int threshold)
+{
+    int dleft = pos - left;
+    int dright = right - pos;
+    int r = 0;
+
+    if (dleft < dright)
+    {
+	if (dleft < threshold)
+	    r = -1;
+    }
+    else
+    {
+	if (dright < threshold)
+	    r = +1;
+    }
+    return r;
+}
+
 #if 0
 static void dump_views(fe_view top, int indent)
 {
@@ -2799,7 +2866,7 @@ static void fe_idle_handler(void)
     /* if pointer is off (IR mode) update links from highlight  */
     if (pointer_mode == pointermode_OFF)
     {
-	fe_view v = selected_view;
+	fe_view v = fe_selected_view();
 
 	if (v)
 	{
@@ -2884,6 +2951,43 @@ static void fe_idle_handler(void)
         return;
     }
 
+    /* check for auto-scrolling */
+    if (v->w)
+    {
+	static int autoscroll_xedge = 0, autoscroll_yedge = 0, autoscroll_time = 0;
+	wimp_wstate state;
+	int xedge, yedge;
+	wimp_box box;
+
+	wimp_get_wind_state(v->w, &state);
+
+	box = state.o.box;
+	adjust_box_for_toolbar(&box);
+
+	xedge = check_edge_proximity(m.x, state.o.box.x0, state.o.box.x1, AUTOSCROLL_EDGE_THRESHOLD);
+	yedge = check_edge_proximity(m.y, box.y0, box.y1, AUTOSCROLL_EDGE_THRESHOLD);
+
+	if (xedge || yedge)
+	{
+	    int now = alarm_timenow();
+	    if (xedge == autoscroll_xedge && yedge == autoscroll_yedge)
+	    {
+		if (now - autoscroll_time >= AUTOSCROLL_DELAY)
+		    fe_scroll_request(v, &state.o, xedge, yedge);
+	    }
+	    else
+	    {
+		autoscroll_xedge = xedge;
+		autoscroll_yedge = yedge;
+		autoscroll_time = now;
+	    }
+	}
+	else
+	{
+	    autoscroll_xedge = autoscroll_yedge = 0;
+	}
+    }
+    
     /* otherwise update link from current position  */
     {
 	be_item ti = NULL;
@@ -2901,9 +3005,11 @@ static void fe_idle_handler(void)
 	/* try dragging highlight */
 	if (!akbd_pollctl() && pointer_moved && v->displaying && ti != v->current_link)
 	{
-	    backend_clear_selected(v->displaying);
 	    if (ti)
-		backend_update_link(v->displaying, ti, TRUE);
+		backend_highlight_link(v->displaying, ti, be_link_ONLY_CURRENT | be_link_CLEAR_REST);
+	    else
+		backend_clear_selected(v->displaying);
+
 	    v->current_link = ti;
 	}
     }
@@ -3851,7 +3957,7 @@ void fe_event_process(void)
 #endif
     if (fe_pending_key)
     {
-        fe_view v = selected_view;
+        fe_view v = fe_selected_view();
 
         e.data.key.chcode = fe_pending_key;
         fe_pending_key = 0;
@@ -3908,14 +4014,8 @@ void fe_event_process(void)
 		{
 		    v->margin = margin_box;
 
-		    if (use_toolbox && tb_is_status_showing())
-		    {
-			if (config_display_control_top)
-			    v->margin.y1 -= tb_status_height() + STATUS_TOP_MARGIN;
-			else
-			    v->margin.y0 += tb_status_height() + STATUS_TOP_MARGIN;
-		    }
-			
+		    adjust_box_for_toolbar(&v->margin);
+
 		    feutils_resize_window(&v->w, &v->margin, &screen_box, &v->x_scroll_bar, &v->y_scroll_bar, 0, 0, v->scrolling, fe_bg_colour(v));
 
 		    if (v->displaying)
@@ -3952,7 +4052,7 @@ void fe_event_process(void)
             STBDBG(( "key: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
 
 	    if (v || !tb_key_handler(&e.data.key.c, e.data.key.chcode))
-		fe_key_handler(v, &e, use_toolbox, v->browser_mode);
+		fe_key_handler(v ? v : main_view, &e, use_toolbox, v->browser_mode);
             break;
         }
 
@@ -3973,6 +4073,7 @@ void fe_event_process(void)
                     v->current_link = NULL;
                 }
 
+#if 0
                 if (v == selected_view)
                 {
                     fe_view v_top;
@@ -3983,6 +4084,7 @@ void fe_event_process(void)
                     if (v_top && v_top != v)
                         fe_refresh_window(v_top->w, NULL);
                 }
+#endif
             }
 	    else
 	    {
@@ -3993,7 +4095,15 @@ void fe_event_process(void)
 
         case wimp_EGAINCARET:
         {
-            fe_view v = find_view(e.data.c.w);
+            fe_view v_old, v_new;
+
+	    v_old = fe_selected_view();
+	    v_new = find_view(e.data.c.w);
+
+	    v_old->is_selected = FALSE;
+	    v_new->is_selected = TRUE;
+
+#if 0
             fe_view v_top;
 
             selected_view = v;
@@ -4001,11 +4111,14 @@ void fe_event_process(void)
             v_top = fe_find_top(v);
             if (v_top && v != v_top)
                 fe_refresh_window(v_top->w, NULL);
+#endif
             break;
         }
 
         case wimp_EPTRENTER:
             fe_update_page_info(find_view(e.data.c.w));
+
+	    fe_get_wimp_caret(e.data.c.w);
             break;
 
         case wimp_EPTRLEAVE:
@@ -4096,7 +4209,10 @@ void fe_event_process(void)
 
         case 0x200: /* toolbox events   */
 	    if (use_toolbox)
+	    {
+		fe_view selected_view = fe_selected_view();
 		tb_events((int *)&e.data, selected_view ? selected_view : main_view);
+	    }
             break;
     }
 }
@@ -4291,8 +4407,7 @@ static BOOL fe_initialise(void)
     heap_init(program_name);
 #else
     MemFlex_Initialise2(program_name);
-
-    MemHeap_Initialise(NULL /* program_name */);
+    MemHeap_Initialise(program_name);
 #endif
     atexit(&fe_tidyup);
 

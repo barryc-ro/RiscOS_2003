@@ -537,8 +537,13 @@ void fe_dispose_view(fe_view v)
     if (had_caret && v->parent)
         fe_get_wimp_caret(fe_find_top(v)->w);
 
-    if (selected_view == v)
-	selected_view = NULL;
+/*     if (selected_view == v) */
+/* 	selected_view = NULL; */
+    if (v->is_selected)
+    {
+	/* FIXME: do something with selection */
+    }
+
     
     mm_free(v->selected_id);
     mm_free(v->name);

@@ -13,6 +13,7 @@ typedef enum
 } pointermode_t;
 
 extern pointermode_t pointer_mode;
+extern BOOL use_toolbox;
 
 extern void fe_pointer_mode_update(pointermode_t mode);
 extern void fe_set_pointer(int item_flags);
@@ -20,7 +21,6 @@ extern void fe_set_pointer(int item_flags);
 extern fe_view main_view;
 extern fe_view last_click_view;
 extern fe_view dragging_view;
-extern fe_view selected_view;
 extern fe_view resizing_view;
 
 extern int last_click_x, last_click_y;
@@ -34,6 +34,8 @@ extern void fe_copy_text_to_clipboard(fe_view v);
 extern os_error *fe_home(fe_view v);
 extern void fe_move_highlight(fe_view v, int flags);
 extern void fe_move_highlight_frame(fe_view v, BOOL next);
+extern void fe_move_highlight_frame_direction(fe_view v, int x, int y);
+
 extern os_error *fe_handle_enter(fe_view v);
 
 extern int fe_print_possible(fe_view v);
@@ -79,7 +81,7 @@ extern os_error *fe_display_options_open(fe_view v);
 
 extern void fe_event_process(void);
 
-extern void fe_scroll_changed(fe_view v);
+extern void fe_scroll_changed(fe_view v, int x, int y);
 
 
 #define key_list_CLICK      0x01    /* make an audible click*/
@@ -122,10 +124,14 @@ extern void fe_force_fit(fe_view v, BOOL force);
 
 extern void fe_iconise(BOOL iconise);
 extern fe_view fe_locate_view(const char *name);
+extern fe_view fe_selected_view(void);
+
 extern void fe_submit_form(fe_view v, const char *id);
 extern void fe_open_keyboard(fe_view v);
 
 extern os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), void *handle);
+
+extern void fe_cursor_movement(fe_view v, int x, int y);
 
 /* From internal.h */
 
@@ -138,6 +144,7 @@ extern void fe_passwd_abort(void);
 
 extern int fe_view_scroll_x(fe_view v, int val);
 extern int fe_view_scroll_y(fe_view v, int val);
+extern int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y);
 
 /* from stbevents.c*/
 

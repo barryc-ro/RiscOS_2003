@@ -19,6 +19,7 @@
 #include "stbutils.h"
 #include "stbfe.h"
 #include "debug.h"
+#include "stbtb.h"
 
 #define REDRAW_OVERLAP	4	/* OS units overlap between wimp rectangles to allow for anti-twittering */
 
@@ -28,7 +29,7 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
 
 /* ----------------------------------------------------------------------------*/
 
-static int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
+int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
 {
     int dx, dy;
     int signx, signy;
@@ -136,7 +137,7 @@ static int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
 	scrolled = TRUE;
 
     if (scrolled)
-	fe_scroll_changed(v);
+	fe_scroll_changed(v, x, y);
 
     if (v->stretch_document && signy > 0)
     {
@@ -195,7 +196,11 @@ int fe_view_scroll_y(fe_view v, int val)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
-        return fe_scroll_request(v, &state.o, 0, val);
+
+	if (use_toolbox)
+	    tb_status_set_direction(val > 0);
+
+	return fe_scroll_request(v, &state.o, 0, val);
     }
     return 0;
 }
@@ -463,7 +468,7 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
                     ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1, ws.o.x, ws.o.y);
 #endif
 	        frontend_fatal_error(wimp_open_wind(&ws.o));
-                fe_scroll_changed(v);
+                fe_scroll_changed(v, 0, 0);
 /*	    statusbar_fix_pos(&ws.o, v->sb);*/
             }
 	}
@@ -594,7 +599,7 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 
 	frontend_fatal_error(wimp_open_wind(&state.o));
 
-        fe_scroll_changed(v);
+        fe_scroll_changed(v, 0, 0);
     }
 
     return 1;

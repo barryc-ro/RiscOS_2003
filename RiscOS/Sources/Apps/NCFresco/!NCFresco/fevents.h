@@ -123,6 +123,10 @@
 #define fevent_HIGHLIGHT_ACTIVATE           0x2065
 #define fevent_HIGHLIGHT_PREV_FRAME         0x2066
 #define fevent_HIGHLIGHT_NEXT_FRAME         0x2067
+#define fevent_HIGHLIGHT_FRAME_UP	    0x2068
+#define fevent_HIGHLIGHT_FRAME_DOWN         0x2069
+#define fevent_HIGHLIGHT_FRAME_LEFT	    0x206A
+#define fevent_HIGHLIGHT_FRAME_RIGHT        0x206B
 
 #define fevent_GIVE_FOCUS                   0x2070
 #define fevent_REMOVE_FOCUS                 0x2071

@@ -33,6 +33,7 @@ extern void tb_status_refresh_if_small(void);
 
 extern void tb_status_set_lights(int state);
 extern void tb_status_set_secure(int on);
+extern void tb_status_set_direction(int up);
 
 #define status_type_FETCH   0
 #define status_type_URL     1
@@ -52,6 +53,7 @@ extern void tb_status_init(void);
 extern void tb_status_unstack(void);
 extern void tb_status_new(fe_view v, int bar_num);
 extern BOOL tb_status_highlight(BOOL gain);
+extern void tb_status_unstack_all(void);
 
 extern BOOL tb_status_check_pointer(wimp_mousestr *mp);
 

@@ -140,6 +140,8 @@ struct _frontend_view
     int delete_pending;
 
     char *selected_id;
+
+    int is_selected;		/* this view is the selected one */
 };
 
 #define fe_keyboard_UNKNOWN	(-1)
