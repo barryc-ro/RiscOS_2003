@@ -1,0 +1,314 @@
+/*
+ * Serial.c - Serial port routines
+ *
+ * R C Manby
+ *
+ * Started 05 August 1997
+ */
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "kernel.h"
+#include "swis.h"
+
+#include "serial_lib.h"
+#include "Serial.h"
+
+#include "DebugLib.h"
+
+
+ChannelData Modem[NUMBER_OF_CHANNELIDS] = {0};	/* all file handles pre-initialised to closed */
+
+_kernel_oserror *Serial_Open_Ports(void)
+{
+	_kernel_oserror *err = NULL;
+
+	/* the external modem is connected to serial port 1 */
+	Modem[REMMODEM].PortNumber = 0;
+
+    Modem[REMMODEM].BufferOut  = 300;
+	Modem[REMMODEM].FileOut    = serial_open_stream("devices#buffer300;baud19200;data8;stop1;noparity;rts;size7200;thres1024:$.Serial1", Serial_Output);
+    dprintf((NULL, "Serial_Open_Ports: RemModem, file out => %d\n", Modem[REMMODEM].FileOut));
+
+    Modem[REMMODEM].BufferIn   = 301;
+    Modem[REMMODEM].FileIn     = serial_open_stream("devices#buffer301;baud19200;data8;stop1;noparity;rts;size7200;thres1024:$.Serial1", Serial_Input);
+    dprintf((NULL, "Serial_Open_Ports: RemModem, file in => %d\n", Modem[REMMODEM].FileIn));
+
+
+    /* the internal modem is connected to serial port 2 */
+    Modem[LOCMODEM].PortNumber = 1;
+
+    Modem[LOCMODEM].BufferOut  = 302;
+	Modem[LOCMODEM].FileOut    = serial_open_stream("devices#buffer302;baud115200;data8;stop1;noparity;rts;size7200;thres1024:$.Serial2", Serial_Output);
+    dprintf((NULL, "Serial_Open_Ports: LocModem, file out => %d\n", Modem[LOCMODEM].FileOut));
+
+    Modem[LOCMODEM].BufferIn   = 303;
+    Modem[LOCMODEM].FileIn     = serial_open_stream("devices#buffer303;baud115200;data8;stop1;noparity;rts;size7200;thres1024:$.Serial2", Serial_Input);
+    dprintf((NULL, "Serial_Open_Ports: LocModem, file in => %d\n", Modem[LOCMODEM].FileIn));
+
+	/*>>>do the error checking sometime*/
+	return(err);
+}
+
+
+_kernel_oserror *Serial_Close_Ports(void)
+{
+	_kernel_oserror *err = NULL;
+
+	/* the external modem is connected to serial port 1 */
+	if (Modem[REMMODEM].FileOut != 0)
+    	serial_close_stream(Modem[REMMODEM].FileOut);
+    Modem[REMMODEM].FileOut = 0;	
+
+    if (Modem[REMMODEM].FileIn != 0)
+    	serial_close_stream(Modem[REMMODEM].FileIn);
+    Modem[REMMODEM].FileIn = 0;
+
+    /* the internal modem is connected to serial port 2 */
+    if (Modem[LOCMODEM].FileOut != 0)
+    	serial_close_stream(Modem[LOCMODEM].FileOut);
+    Modem[LOCMODEM].FileOut = 0;
+
+    if (Modem[LOCMODEM].FileIn != 0)
+		serial_close_stream(Modem[LOCMODEM].FileIn);
+    Modem[LOCMODEM].FileIn = 0;
+
+	return(err);
+}
+
+
+_kernel_oserror *Serial_Set_Baudrate(ChannelId channelId, unsigned int baudrate)
+{
+	_kernel_oserror *err = NULL;
+	unsigned int junk;
+
+	err = osargs_ioctl(Modem[channelId].FileOut, IOCtl_baud_rate, write_flag, baudrate, &junk);
+	if (!err)
+    	err = osargs_ioctl(Modem[channelId].FileIn, IOCtl_baud_rate, write_flag, baudrate, &junk);
+
+    return(err);
+}
+
+/* ----------------------------------------------------------------------------- */
+/* SERIAL PORT READ/WRITE FUNCTIONS                                              */
+/* ----------------------------------------------------------------------------- */
+
+
+/* Send a string to either modem */
+void Serial_Write_String(ChannelId channelId, char* string)
+{
+  serial_write_str(Modem[channelId].FileOut, string);
+}
+
+
+/* -----------------------------------------------------------------------------
++
+   instrn
+
+   Test if a string of characters of a specififed length appears anywhere
+   within another string of specified length.  Supports partial matching as
+   well.
+
+   Inputs
+   cs: pointer to string to search in
+   ct: pointer to string to search for
+   n1: length of cs
+   n2: length of ct
+
+   Outputs
+   next_pos: complete match: pointer to start of ct in cs
+             partial match:  pointer to position in cs to start searching next
+                             time
+             no match:       pointer to end of cs
+
+   partial_match_size: complete match: 0
+                       partial match:  length of partial match
+                       no match:       0
+
+   Returns
+   complete match: pointer to start of ct in cs
+   partial match : NULL
+   no match      : NULL
+-
+ */
+
+static char *instrn (register const char *cs, register const char *ct,
+              const size_t n1, const size_t n2,
+              char **next_pos, int *const partial_match_size)
+{
+    register const char *end_cs = cs + n1;
+    register const char *end_ct = ct + n2;
+    register const char *ct_copy = ct;
+    char *last = (char *) end_cs;
+    int remaining = 0;
+
+
+    if (partial_match_size)
+        *partial_match_size = 0;
+
+    while (cs < end_cs)
+    {
+        if (*cs++ == *ct)
+        {
+            ++ct;
+            /* Save pointer to first character (returned if a partial match
+             * is found at the end of cs).
+             */
+            last = (char *) (cs - 1);
+            remaining = (int) end_cs - (int) last;
+
+            while (cs < end_cs && ct < end_ct)
+            {
+                if (*cs != *ct)
+                {
+                    goto not_found;
+                }
+
+                ++cs;
+                ++ct;
+            }
+
+            if (next_pos)
+                *next_pos = last;
+
+            if (ct == end_ct)
+            {
+                /* Complete match */
+                return last;
+            }
+
+            else
+            {
+                /* Partial match at end of cs */
+                if (partial_match_size)
+                {
+                    *partial_match_size = remaining;
+                }
+
+                return NULL;
+            }
+
+not_found:
+            last = (char *) end_cs;
+            remaining = 0;
+            ct = ct_copy;
+        }
+    }
+
+    return NULL;
+}
+
+
+/* Expect a string from either modem, within a given time */
+/* Returns 0 if string cannot be found; 1 if successful */
+int Serial_Expect_String(ChannelId channelId, char* expect_string, unsigned int timeout)
+{
+    char buffer[2048];
+    char * s;
+    char * string;
+    char * search_pos;
+    char * end;
+    unsigned int t;
+    int bytes;
+    int len;
+    int partial_match_len;
+    _kernel_oserror *e = NULL;
+    int stream_in = Modem[channelId].FileIn;
+
+
+    /* Error checking in this function uses gotos!  If an error is found then goto a
+     * single place which does all the cleaning up and returns the error.  This
+     * ensures that errors get handled consistently. */
+
+    s = buffer;
+    search_pos = buffer;
+    end = buffer + sizeof (buffer);
+    len = strlen (expect_string);
+
+
+    /* Allocate memory for a new string with four extra characters (new string is
+     * not terminated).
+     */
+    string = malloc (len + 4);
+    if (string == NULL)
+        return (0);
+
+    /* Construct new string: a copy of the expect string with a newline and carriage
+     * return at the start and end of the string.
+     */
+    string[0] = '\r';
+    string[1] = '\n';
+    strncpy (&string[2], expect_string, len);
+    string[len + 2] = '\r';
+    string[len + 3] = '\n';
+
+    _swix (OS_ReadMonotonicTime, _OUT (0), &t);
+
+    timeout *= 100;
+    timeout += t;
+
+    while (_swix (OS_ReadMonotonicTime, _OUT (0), &t), t < timeout)
+    {
+        e = _swix (OS_Args, _INR (0, 1) | _OUT (2), 2, stream_in, &bytes);
+        if (e != NULL)
+            goto error;    /* see top of function for justification */
+
+        if (bytes > 0)
+        {
+            /* Make sure there is enough room in the buffer to read the data in */
+            if (s + bytes >= end)
+            {
+                goto error;    /* see top of function for justification */
+            }
+
+            /* Read data from the buffer.  The buffer pointer is updated to point to
+             * the next free byte.
+             */
+            e = _swix (OS_GBPB, _INR (0, 3) | _OUT (2),
+
+                       4,
+                       stream_in,
+                       s,
+                       bytes,
+
+                       &s);
+
+            if (e != NULL)
+                goto error;    /* see top of function for justification */
+
+            /* Check if expected string appears anywhere within buffer */
+            if (instrn (search_pos,
+                        string,
+                        s - search_pos,    /* length of buffer to search in */
+                        len + 4,
+                        &search_pos,
+                        &partial_match_len))
+            {
+                free (string);
+                return (1); /* Success */
+            }
+
+            /* If there is not even a partial match of the expected string
+             * then everything in the buffer can be overwritten.
+             */
+            if (partial_match_len == 0)
+            {
+                s = buffer;
+                search_pos = buffer;
+            }
+        }
+    }
+
+error:
+    free (string);
+    return (0);
+}
+
+
+
+/* end of Serial.c */
+
+
