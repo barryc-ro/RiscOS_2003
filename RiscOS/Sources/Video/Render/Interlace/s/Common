@@ -108,6 +108,9 @@ TryToDoModeNumbers SETL {FALSE}		; doesn't work yet so comment out
                 GBLL    UseVSyncEvent
 UseVSyncEvent   SETL    {TRUE}          ; use VSync event instead of hacking Vsync device
 
+                GBLL    UseOSMemory12
+UseOSMemory12   SETL    {TRUE}          ; use OS_Memory 12 to locate a suitable page of physical memory
+
 ; when initially turning on interlace, use a callback to wait until not in vsync
 
 		GBLL	UseInitialCallBack
@@ -330,6 +333,10 @@ Mod_Init Entry "r7, r8"
 	EXIT	VS
 	STR	r2, ScreenPhysAddr
 
+ [ UseOSMemory12
+ ! 0, "Using OS_Memory 12 (requires Kernel 5.36 or later)"
+ |
+
 	LDR	r1, =L1PT
 	BL	LogToPhys
 	EXIT	VS
@@ -379,6 +386,7 @@ Mod_Init Entry "r7, r8"
 	EXIT	VS
 
 	STR	r0, PageTablePPN
+  ]
 
 	MOV	r0, #0			; create dynamic area
 	STR	r0, ShrinkOK		; can't shrink it at moment
@@ -395,6 +403,12 @@ Mod_Init Entry "r7, r8"
 
 	STR	r1, DynAreaNumber	; save number so we can remove area later
 	STR	r3, PageTableLogAddr	; save log address for later poking
+  [ UseOSMemory12
+        MOV     r1, r3
+        BL      LogToPhys
+        EXIT    VS
+        STR     r2, PageTablePhysAddr  ; store the physical address of the page
+  ]
 
  [ FixGrowShrink
         MOV     r0, #0                  ; don't actually intercept the handler
@@ -480,22 +494,31 @@ LogToPhys Entry "r0,r1"
 DynAreaHandler ROUT
         CMP     r0, #1
         BHI     %FT30		; check shrink
-        BEQ     %FT20		; post grow
+        MOVEQ   pc, r14		; post grow
 
 ; Pre-grow
 
         TEQ     r4, #0          ; only allow grow if zero size to start
-        BNE     CantGrowError
-        STMFD   r13!, {r0-r2}
-        LDR     r0, PageTablePPN
+        BNE     CantGrowError   ; must be NE
+        STMFD   r13!, {r0-r3,lr}
+  [ UseOSMemory12
+        MOV     r0, #12         ; RecommendPage reason code
+        MOV     r1, #4096       ; want 4096 bytes
+        MOV     r2, #12         ; log2 of required alignment
+        SWI     XOS_Memory      ; Answer comes back in R3
+        LDMVSFD sp!, {r0-r3,pc}
+        STR     r3, PageTablePPN
+        LDMIB   r13, {r1-r2}    ; Restore R1 and R2
+  |
+        LDR     r3, PageTablePPN
+  ]
 10
-        STR     r0, [r1], #12
-        ADD     r0, r0, #1
+        STR     r3, [r1], #12
+        ADD     r3, r3, #1
         SUBS    r2, r2, #1
         BNE     %BT10
-        LDMFD   r13!, {r0-r2}
-20      ; V must be clear
-        MOV     pc, r14
+        ; V must be clear (SUBS above ensures that it is)
+        LDMFD   r13!, {r0-r3,pc}
 
 30
         STMFD   r13!, {r14}
@@ -503,13 +526,10 @@ DynAreaHandler ROUT
         CMP     r14, #0         ; NB clears V
         LDMFD   r13!, {r14}
         MOVNE   pc, r14         ; NE => preshrink or postshrink OK
-        ADR     r0, CantShrinkErrorBlock
-        B       ReportError
-
+        ADREQ   r0, CantShrinkErrorBlock
 CantGrowError
-        ADR     r0, CantGrowErrorBlock
-ReportError
-        CMP     pc, #&80000000  ; set V
+        ADRNE   r0, CantGrowErrorBlock
+        SETV
         MOV     pc, r14
 
 CantGrowErrorBlock
