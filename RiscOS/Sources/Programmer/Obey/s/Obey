@@ -32,8 +32,6 @@
 ;;                      Fix syntax of *Obey command - there *must*not* be
 ;;                              any space between the -c and the -v
 ;;                      Fix BuffOflow tag to BufOFlo
-;; 24-Jan-95    0.34    OM SPECIAL VERSION: -m flag allows caching from a block of memory
-;;                      instead of a file.
 ;;----------------------------------------------------------------------------
 
 Module_BaseAddr
@@ -72,6 +70,14 @@ debugexit       SETL    false   ; checking exit handler
 
 hostvdu         SETL    true
 internat        SETL    true :LAND: Version >=20        ; should we internationalise
+
+                 GBLL    LongCommandLines
+LongCommandLines SETL    {TRUE}             ;introduced for Ursula
+
+  [ LongCommandLines
+LongCLISize      *       1024     ;long command line length
+LongPNameSize    *        512     ;long pathname length (for obey$dir)
+  ] 
 
 ;;----------------------------------------------------------------------------
 ;; Module header
@@ -119,7 +125,7 @@ Obey_Help       DCB     "*Obey executes a file of *commands, "
                 DCB     ".  Prefixing the filename with -v causes each line to be "
                 DCB     "echoed before execution, -c causes the file to be cached and executed from memory"
                 DCB     13, 10
-Obey_Syntax     DCB     "Syntax: *Obey [[-v][-c][-m] [<filename> [<parameters>]]]",0
+Obey_Syntax     DCB     "Syntax: *Obey [[-v][-c] [<filename> [<parameters>]]]",0
  |
 Messages_File   DCB     "Resources:Resources.Obey.Messages",0
 Obey_Help       DCB     "HOBYOBY", 0
@@ -132,7 +138,11 @@ Obey_Syntax     DCB     "SOBYOBY", 0
 ;; Workspace
 ;;----------------------------------------------------------------------------
 
+  [ LongCommandLines
+wk_buflen       *       LongCLISize
+  |
 wk_buflen       *       256
+  ]
 
                 ^       0
 wk_link         #       4
@@ -145,7 +155,6 @@ wk_fl_useexit   *       1:SHL:1 ; Set <=> OS_Exit has been used to finish a comm
 wk_fl_verbose   *       1:SHL:2 ; Set <=> verbose flag specified
 wk_fl_cache     *       1:SHL:3 ; Set <=> cache flag set
 wk_fl_ResFS     *       1:SHL:4 ; Set <=> cache block is in resourceFS
-wk_fl_memory    *       1:SHL:5 ; Set <=> cache "file" from memory into RMA
 wk_private      #       4       ; Back pointer to private word
 wk_handle       #       4
 wk_oldquitR1    #       4
@@ -194,7 +203,21 @@ svc_reset
 
 ;.............................................................................
 
+        ASSERT Service_Reset < Service_NewApplication
+
+ServiceTable
+        DCD     0                               ;flags word
+        DCD     UrsulaService - Module_BaseAddr ;offset to handler (skip pre-rejection)
+        DCD     Service_Reset                   ;service 1
+        DCD     Service_NewApplication          ;service 2
+        DCD     0                               ;terminator
+        DCD     ServiceTable - Module_BaseAddr  ;anchor (offset to table)
 Service
+        MOV     R0,R0                           ;magic instruction for Ursula format
+        TEQ     R1,#Service_Reset
+        TEQNE   R1,#Service_NewApplication
+        MOVNES  PC,LR
+UrsulaService
         TEQ     R1,#Service_Reset
         BEQ     svc_reset
         TEQ     R1,#Service_NewApplication
@@ -649,8 +672,17 @@ MyExitHandler ROUT
 ; Entry: R0 --> parameters
 ;        R1 = number of parameters
 
+  [ LongCommandLines
+    ;avoid the exceedingly naff method of XOS_CLI to *Set Obey$Dir, since it
+    ;is needlessly slow (use XOS_SetVarVal instead)
+    ;
+obeydir_name DCB "Obey$Dir",0
+        ALIGN
+  |
 obeydir DCB     "Set Obey$Dir    "
         ASSERT  (.-obeydir)=16
+  ]
+
 csdname DCB     "@",0
         ALIGN
 
@@ -699,13 +731,20 @@ Obey_Code ROUT
         BGT     %BT02
         ADR     R2,csdname              ; can't allow null directory name!
         ADD     R1,R2,#1
+
 03
+  [ LongCommandLines
+        SUB     sp, sp, #LongPNameSize  ; create local workspace
+        MOV     R4, sp
+        MOV     R5, #LongPNameSize
+  |
         SUB     sp,sp,#256              ; create local workspace
         ADR     R14,obeydir
         LDMIA   R14,{R4-R7}             ; 16 bytes
         STMIA   sp,{R4-R7}
         ADD     R4,sp,#16
         MOV     R5,#256-16
+  ]
 04
         SUBS    R5,R5,#1                ; ensure stack is not crapped on!
       [ internat
@@ -716,16 +755,30 @@ Obey_Code ROUT
       ]
         BVS     %FT44
         CMP     R2,R1
-        LDRCCB  R14,[R2],#1
+        LDRCCB  R14,[R2],#1             ; copy pathname (filename exluding leaf)
         STRCCB  R14,[R4],#1
         BCC     %BT04
         MOV     R14,#0
         STRB    R14,[R4]
 ;
+  [ LongCommandLines
+        Push    "R1-R4"
+        ADR     R0, obeydir_name        ; -> var name
+        ADD     R1, sp, #4*4            ; -> value (allowing for Push of 4 regs)
+        MOV     R2, #0                  ; length irrelevant for R4=0
+        MOV     R3, #0                  ; context
+        MOV     R4, #0                  ; value is string, to be GSTrans'd
+        SWI     XOS_SetVarVal
+        Pull    "R1-R4"
+44
+        ADD     sp, sp, #LongPNameSize
+  |
         MOV     R0,sp                   ; *Set Obey$Dir <parent dir>
         SWI     XOS_CLI
 44
         ADD     sp,sp,#256
+  ]
+
         BLVS    exit                    ; free block etc.
         Pull    "R7-R11,PC",VS
 ;
@@ -783,7 +836,12 @@ noesc
 ; of the fact that that a quit may have occurred, in which case
 ; the stack etc. is invalid and there is no return address.
 ;
+  [ LongCommandLines
+        LDR     R2,=wk_inputcom
+        ADD     R2,R11,R2
+  |
         ADD     R2,R11,#wk_inputcom
+  ]
         MOV     R3,#wk_buflen
         LDR     r1, [r11, #wk_handle]
         CMP     r1, #0
@@ -819,10 +877,20 @@ getline2
 getline3
 ;
 ;
+  [ LongCommandLines
+        LDR     R3,=wk_inputcom
+        ADD     R3,R11,R3               ; R3 --> template string
+  |
         ADD     R3,R11,#wk_inputcom     ; R3 --> template string
+  ]
         SUB     R4,R2,R3                ; R4 = length (no terminator)
 ;
+  [ LongCommandLines
+        LDR     R1,=wk_outputcom
+        ADD     R1,R11,R1               ; R1 --> result buffer
+  |
         ADD     R1,R11,#wk_outputcom    ; R1 --> result buffer
+  ]
         MOV     R2,#wk_buflen           ; R2 = length
         ADD     R0,R11,#wk_parameters   ; argument list
         ORR     r0, r0, #&80000000      ; "don't append unsubstituted args" flag
@@ -870,11 +938,21 @@ getline3
         SWI     OS_WriteS               ; print Obey: <foo>\n
         = "Obey: ", 0
         ALIGN
+  [ LongCommandLines
+        LDRVC   R0,=wk_outputcom
+        ADDVC   R0,R11,R0
+  |
         ADDVC   R0,R11,#wk_outputcom
+  ]
         SWIVC   XOS_Write0
         SWIVC   XOS_NewLine
 96
+  [ LongCommandLines
+        LDRVC   R0,=wk_outputcom
+        ADDVC   R0,R11,R0
+  |
         ADDVC   R0,R11,#wk_outputcom
+  ]
         SWIVC   XOS_CLI                 ; stack must be at the same level!!
 ;
       [ debugxx
@@ -1005,7 +1083,6 @@ decode_commands ROUT
         LowerCase R2,LR                 ; convert to suitable character
         TEQ     R2,#"c"
         TEQNE   R2,#"v"                 ; cache of verbose?
-        TEQNE   R2,#"m"                 ; or memory-based?
         BNE     %80
 
         LDR     lr, [r11, #wk_flags]
@@ -1013,8 +1090,6 @@ decode_commands ROUT
         ORREQ   lr, lr, #wk_fl_cache
         TEQ     R2,#"v"
         ORREQ   lr, lr, #wk_fl_verbose
-        TEQ     R2,#"m"
-        ORREQ   lr, lr, #wk_fl_memory
         STR     lr, [r11, #wk_flags]
 
         ADD     R0,R0,#2                ; skip to next command sequence
@@ -1036,8 +1111,6 @@ decode_commands ROUT
 ; r1 -> filename to be opened/loaded, r11 -> record for object.
 ;
 ; if wk_fl_cache set in wk_flags then file is cached, else simply opened
-; if wk_fl_memory set in wk_flags, then the "filename" is really the address of
-;    a 0-terminated block of memory.  This is cached into a block of RMA.
 ;
 ; This routine will try and open the file if the cache block is =0, otherwise
 ; =-1 then it will attempt to create a block of RMA and then read it in.
@@ -1046,10 +1119,6 @@ decode_commands ROUT
 open_file ROUT
 
         Push    "R1-R6,LR"
-
-        LDR     r0,  [r11, #wk_flags]   ; Was the command -m address
-        TST     r0, #wk_fl_memory
-        BNE     cache_memory
 
         MOV     R0,#OSFind_ReadFile
         SWI     XOS_Find                ; r1 -> filename so attempt to open
@@ -1081,37 +1150,6 @@ not_resourcefs
 ret_no_err
         STR     r6,[r11,#wk_handle]
         CLRV
-        Pull    "R1-R6,PC"
-
-cache_memory
-        ; R1 -> start of numeric string giving address of "file"
-        MOV     R0, #10
-        ORR     R0, R0, #1:SHL:31
-        SWI     OS_ReadUnsigned
-        Pull    "R1-R6,PC",VS
-        ; Now R2 is the address of the "file", so count it (assume 0 termination)
-        MOV     LR, R2                  ; pointer
-00
-        LDRB    R1, [LR], #1
-        TEQ     R1, #0                  ; terminator reached?
-        BNE     %BT00
-        SUB     LR, LR, #1              ; Don't count the null
-
-        MOV     R4, R2                  ; keep original pointer handy
-        SUB     R3, LR, R2              ; get length
-        MOV     r0, #ModHandReason_Claim
-        SWI     XOS_Module
-        Pull    "R1-R6,PC",VS           ; can't continue if no RMA
-
-        ; Now copy the data across.  Remember to store the address of the cache block
-        STR     r3, [r11, #wk_ext]
-        STR     r2, [r11, #wk_cacheblock]
-01
-        LDRB    lr, [r4], #1
-        TEQ     lr, #0
-        STRNEB  lr, [r2], #1
-        BNE     %BT01
-
         Pull    "R1-R6,PC"
 
 cache_file
