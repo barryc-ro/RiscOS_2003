@@ -24,9 +24,17 @@ WFLAGS  = ~cfr~v
 COMPONENT = SSound
 TARGET    = Modules.${COMPONENT}
 SOURCE    = Source
-SL        = ${SOURCE}.SSLib
+SL        = ${SOURCE}.o
 SSLIB     = ${SL}.Drivers ${SL}.Handler ${SL}.Linear ${SL}.Memory ${SL}.Module \
             ${SL}.SampleRate ${SL}.SWIS ${SL}.Vars ${SL}.Volume
+
+.o.c:
+	 set tokenisefile $*
+	 utils.detoken1; BASIC
+
+.c.o:
+	 set tokenisefile $*
+	 utils.token1; BASIC
 
 #
 # Generic rules:
@@ -43,14 +51,21 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${WIPE} o.* ~cv
         @echo ${COMPONENT}: cleaned
 
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}.SharedSoun ${SSLIB} 
-        Set MakeSSnd$Dir ${SOURCE}
-        Run ${SOURCE}.SharedSoun
+${TARGET}: o.SharedSoun makebasic
+        Set MakeSSnd$Dir @
+        Run o.SharedSoun
+        ${WIPE} o.* ~cv
 
+import: Drivers.c Handler.c Linear.c Memory.c Module.c SampleRate.c SWIS.c Vars.c Volume.c SharedSoun.c
+	echo made text files
+
+makebasic: Drivers.o Handler.o Linear.o Memory.o Module.o SampleRate.o SWIS.o Vars.o Volume.o SharedSoun.o
+	echo made basic files
 
 # Dynamic dependencies:
