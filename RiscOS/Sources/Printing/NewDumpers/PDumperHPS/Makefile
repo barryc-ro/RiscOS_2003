@@ -23,24 +23,18 @@ clean:
         ${WIPE} ${WPREFLAGS} o             ${WFLAGS}
         ${WIPE} ${WPREFLAGS} rm            ${WFLAGS} 
         ${WIPE} ${WPREFLAGS} h.modheader   ${WFLAGS}
-        set pdumperhps$dir <obey$dir>
         dir HP_SDK_LIB
         amu_machine clean
-        set obey$dir <pdumperhps$dir>
-        dir <pdumperhps$dir>
-        unset pdumperhps$dir
+        back
         @echo ${COMPONENT}: cleaned
 
 dirs:
         ${MKDIR} o
 
 HP_SDK_LIB.HP_SDK_LIB:
-        set pdumperhps$dir <obey$dir>
         dir HP_SDK_LIB
-        amu_machine library THROWBACK=-throwback HPDEFINES="${HPDEFINES}"
-        set obey$dir <pdumperhps$dir>
-        dir <pdumperhps$dir>
-        unset pdumperhps$dir
+        amu_machine library HPDEFINES="${HPDEFINES}"
+        back
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
