@@ -19,12 +19,12 @@ CINCLUDES = -IC:CLX -IC:
 CDEFINES  = -DRISCOS
 CFLAGS    = -Wc
 
-include Makefiles:StdTools
+include StdTools
 
 #
 # Libraries
 #
-include Makefiles:AppLibs
+include AppLibs
 
 # Program specific options:
 #

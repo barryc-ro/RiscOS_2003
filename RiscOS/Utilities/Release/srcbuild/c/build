@@ -157,7 +157,7 @@ static int build_select_locale(const char *locale)
   char *num_locale = sb_getenv(ENV_NUM_LOCALE);
   char buffer[BUFFER_LEN];
 
-  sb_buildfilename(BUFFER_LEN, buffer, build_dir, messages_filename, "Resources", build_name, num_locale, locale, NULL);
+  sb_buildfilename(BUFFER_LEN, buffer, build_dir, messages_filename, RESOURCES_DIR, build_name, num_locale, locale, NULL);
   sb_setenv(ENV_RES_DIR, buffer);
   sb_setenv(ENV_LOCALE, locale);
   get_amu_machine(); /* Reset amu_machine to include the new values */
@@ -238,6 +238,7 @@ int build_dirs(void)
 {
   component_entry_t *component;
   module_entry_t *module;
+  int max_resource_suffix = 0;
   char buffer[BUFFER_LEN];
   char build[BUFFER_LEN];
   char numeric[BUFFER_LEN];
@@ -259,17 +260,6 @@ int build_dirs(void)
   _check_dir_v(buffer, "Hdr", "Interface2", NULL);
   _check_dir_v(buffer, "Lib", NULL);
 
-  if (num_of_territories > 0)
-  {
-    unsigned int loop;
-    for (loop=0; loop < num_of_territories; loop++)
-    {
-      _check_dir_v(messages_filename, "Resources", build, numeric, supported_territories[loop], "Apps", NULL);
-      _check_dir_v(messages_filename, "Resources", build, numeric, supported_territories[loop], "Resources", NULL);
-      _check_dir_v(messages_filename, "Resources", build, numeric, supported_territories[loop], "Resources2", NULL);
-    }
-  }
-
   build_select_locale(supported_territories[0]);
 
   component = component_database;
@@ -280,8 +270,25 @@ int build_dirs(void)
     {
       _check_dir_v(INSTALL_DIR, build_name, module->output, NULL);
     }
+    max_resource_suffix = component->resource_sfx;
     component = component->next;
   }
+
+  if (num_of_territories > 0)
+  {
+    unsigned int loop, dirs;
+    for (loop=0; loop < num_of_territories; loop++)
+    {
+      _check_dir_v(messages_filename, RESOURCES_DIR, build, numeric, supported_territories[loop], "Apps", NULL);
+      _check_dir_v(messages_filename, RESOURCES_DIR, build, numeric, supported_territories[loop], RESOURCES_DIR, NULL);
+      for (dirs = 2; dirs <= max_resource_suffix; ++dirs)
+      {
+        sprintf(buffer, RESOURCES_DIR "%d", dirs);
+        _check_dir_v(messages_filename, RESOURCES_DIR, build, numeric, supported_territories[loop], buffer, NULL);
+      }
+    }
+  }
+
   return 0;
 }
 
@@ -488,16 +495,18 @@ static int build_resources_(build_resources_reason_code reason_code)
         {
           /* We have been given a list of territories - iterate down them. */
           unsigned int loop;
+          const char *const target = module->filename ? module->filename : component->name;
+          char component_resource_dir[sizeof(RESOURCES_DIR) + sizeof("99")];
 
           for (loop = 0; loop < num_of_territories; ++loop)
           {
             if (reason_code == build_resources_bbe_script)
             {
-              sb_buildfilename(BUFFER_LEN, bbe_dir, INSTALL_DIR, build_name, "BBE", SOURCE_DIR, module->path, NULL);
+              sb_buildfilename(BUFFER_LEN, bbe_dir, INSTALL_DIR, build_name, BBE_DIR, SOURCE_DIR, module->path, BBE_TMP_RES, target, NULL);
               sb_buildfilename(BUFFER_LEN - 3, scriptfilename + 3, build_dir, bbe_dir, supported_territories[loop], NULL);
               remove(scriptfilename + 3);
               memcpy(scriptfilename, "-o ", 3);
-              _check_dir_v(bbe_dir, "BBE_Res", NULL);
+              _check_dir_v(bbe_dir, NULL);
             }
             else
             {
@@ -510,12 +519,19 @@ static int build_resources_(build_resources_reason_code reason_code)
 #else
             res_dir = sb_strdup(sb_getenv(ENV_RES_DIR));
 #endif
+            if (component->resource_sfx > 1) {
+              sprintf(component_resource_dir, RESOURCES_DIR "%d", component->resource_sfx);
+            }
+            else {
+              strcpy(component_resource_dir, RESOURCES_DIR);
+            }
 
-            if (amu_machinef("-k resources %s %s RESDIR=%s%cResources COMPONENT=%s %s%s",
+            if (amu_machinef("-k resources %s %s RESDIR=%s%c%s COMPONENT=%s %s%s",
                   scriptfilename,
                   component->options ? component->options : "",
                   res_dir,
                   dir_sep,
+                  component_resource_dir,
                   component->name,
                   module->filename?"TARGET=":"",
                   module->filename?module->filename:"") != 0)
@@ -565,7 +581,7 @@ static void line_by_line_copy(FILE *dest, FILE *source, int with_tab)
  * the line which does the link.  We need to know where the partially linked ROM module is, and which
  * abssym file it wants - then we throw the script away and write the rule cleanly ourselves.
  */
-static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target, const char *componentname)
+static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target, const char *targetname)
 {
   char buffer[BUFFER_LEN * 2];
   char link_args[BUFFER_LEN];
@@ -578,7 +594,7 @@ static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target
   };
   const char dir_sep = host_dir_sep_char();
 
-  sprintf(link_args, "link -o linked%c${TARGET} -rmf -base ${ADDRESS} aof%c${TARGET}", dir_sep, dir_sep);
+  sprintf(link_args, "link -o linked%c${TARGET} -rmf -base ${ADDRESS} " AOF_DIR "%c${TARGET}", dir_sep, dir_sep);
 
   while (fgets(buffer, sizeof(buffer), source) != NULL) {
     char *next, *p, *source_file = NULL;
@@ -633,9 +649,10 @@ static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target
 
     sb_copy_objects(aof_target, source_file);
     fprintf(dest,
-      "rom_link:\n"
+      "rom_link-%s:\n"
       "\t${MKDIR} linked\n\t%s\n"
       "\t@${CP} linked%c${TARGET} ${LINKDIR}%c${TARGET} ${CPFLAGS}\n\n",
+      targetname,
       link_args,
       dir_sep,
       dir_sep);
@@ -655,27 +672,19 @@ static void copy_locale_resources(FILE *makefile, char *bbe_dir /* see comment a
   FILE *resources_file;
   char *end_bbe_dir = strchr(bbe_dir, '\0');
   char *locale;
-  unsigned int loop, done_uk = 0;
+  unsigned int loop;
 
 
   for (loop=0; loop < num_of_territories; loop++)
   {
     /* set the Resource$Dir and Locale environment variable to the current */
-    if (!done_uk) {
-      locale = "UK";
-      done_uk = 1;
-      --loop;
-    }
-    else {
-      locale = supported_territories[loop];
-      if (strcmp(locale, "UK") == 0) continue;
-    }
+    locale = supported_territories[loop];
 
     /* Now read the locale script */
     strcpy(end_bbe_dir, locale);
     resources_file = fopen(bbe_dir, "r");
     /* Write out the rules for generating this locale's resource export */
-    fprintf(makefile, "resources-%s:\n", locale);
+    fprintf(makefile, "resources-%s-%s:\n", name, locale);
     if (resources_file)
     {
       /* Not an error if it doesn't exist - but need the rule in the Makefile anyway.
@@ -687,6 +696,32 @@ static void copy_locale_resources(FILE *makefile, char *bbe_dir /* see comment a
     fprintf(makefile, "\t@| End of resource export for locale %s\n\n", locale);
     fclose(resources_file);
   }
+}
+
+/*
+ * This routine searches for earlier (different) components which define targets in duplicate
+ * directories.  The BBE routines need to know whether resource export rules should be
+ * appended to an existing Makefile or not.
+ *
+ * Returns true if an earlier component also used sources in the same directory, false otherwise.
+ */
+static bool build_duplicate_directory(component_entry_t *component, module_entry_t *module)
+{
+  component_entry_t *c;
+
+  for (c = component_database; c != component; c = c->next)
+  {
+    if (
+      strcmp(c->name, component->name) != 0 &&
+      c->created_bbe_makefile &&
+      strcmp(module->path, lookup_module(c->name)->path) == 0
+      )
+    {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /* BBE phase.
@@ -745,10 +780,15 @@ int build_bbe(void)
    */
   component = component_database;
   while (component) {
+    const char *target;
+    bool already_processed_directory;
     module = lookup_module(component->name);
+    target = module->filename ? module->filename : component->name;
     type = component->type;
     if (type == UNDEF)
       type = module->type;
+
+    already_processed_directory = build_duplicate_directory(component, module);
 
     switch (type) {
       case C:
@@ -768,8 +808,8 @@ int build_bbe(void)
 
           /* Construct the "aof" directory in the BBE install directory ready to receive partially linked output */
           sb_buildfilename(BUFFER_LEN, aof_target, INSTALL_DIR, build_name, BBE_DIR, SOURCE_DIR, module->path, NULL);
-          _check_dir_v(aof_target, "aof", NULL);
-          _check_dir_v(aof_target, "BBE_ROM", NULL);
+          _check_dir_v(aof_target, AOF_DIR, NULL);
+          _check_dir_v(aof_target, BBE_TMP_ROM, target, NULL);
 
           /* Using "aof_target" (holds the BBE install directory for this component), construct the full pathname
            * to that directory into bbe_dir.  Remember where the final terminator is so we can easily tack things
@@ -778,12 +818,15 @@ int build_bbe(void)
           sb_buildfilename(BUFFER_LEN, bbe_dir, build_dir, aof_target, NULL);
           end_bbe_dir = strchr(bbe_dir, '\0');
           /* Construct the actual target name of the AOF file */
-          sb_buildfilename(BUFFER_LEN, aof_target, bbe_dir, "aof", module->filename?module->filename:component->name, NULL);
+          sb_buildfilename(BUFFER_LEN, aof_target, bbe_dir, AOF_DIR, target, NULL);
           /* Construct the actual name of the BBE Makefile and delete it */
           sb_buildfilename(BUFFER_LEN, rom_link_name /* NOTE: temporary use of this buffer */, bbe_dir, "Makefile", NULL);
-          remove(rom_link_name);
+          /* Only delete it if wasn't created by us whilst processing a previous component though! */
+          if (!already_processed_directory) {
+            remove(rom_link_name);
+          }
           /* Construct the actual name of the rom_link script file */
-          sb_buildfilename(BUFFER_LEN, rom_link_name, "BBE_ROM", "rom_link", NULL);
+          sb_buildfilename(BUFFER_LEN, rom_link_name, BBE_TMP_ROM, target, "rom_link", NULL);
           end_rom_link_name = strchr(rom_link_name, '\0');
 
           /* Set up the path to the source of this component */
@@ -823,7 +866,12 @@ int build_bbe(void)
         }
         sprintf(end_bbe_dir, "%cMakefile", host_dir_sep_char());
         makefile = fopen(bbe_dir, "r");
-        if (makefile)
+
+        if (makefile && already_processed_directory)
+        {
+          makefile = freopen(bbe_dir, "a", makefile);
+        }
+        else if (makefile)
         {
           /* The component has exported a Makefile - allow it to override us */
           fclose(makefile);
@@ -860,8 +908,12 @@ int build_bbe(void)
               "\n"
               "# Resource export phases\n"
               "\n"
-              "resources: resources-${LOCALE}\n"
-              "\t@echo ${COMPONENT}: resources exported\n"
+              "resources: resources-${TARGET}-${LOCALE}\n"
+              "\t@echo ${COMPONENT}: ${LOCALE} resources exported\n"
+              "\n"
+              "\n"
+              "rom_link: rom_link-${TARGET}\n"
+              "\t@echo ${COMPONENT}: rom_link complete\n"
               "\n"
               "\n",
               component->name,
@@ -870,6 +922,7 @@ int build_bbe(void)
               BBE_BS_TOOLS,
               target_sep,
               target_sep);
+              component->created_bbe_makefile = true;
           }
           else
           {
@@ -879,8 +932,8 @@ int build_bbe(void)
         }
         if (makefile)
         {
-          sprintf(end_bbe_dir, "%cBBE_Res%c", dir_sep, dir_sep);
-          copy_locale_resources(makefile, bbe_dir, component->name);
+          sprintf(end_bbe_dir, "%c" BBE_TMP_RES "%c%s%c", dir_sep, dir_sep, target, dir_sep);
+          copy_locale_resources(makefile, bbe_dir, target);
           if (rom_link_file)
           {
             if (rom_link_line_by_line)
@@ -931,9 +984,9 @@ int build_bbe(void)
           sb_buildfilename(BUFFER_LEN, bbe_dir, build_dir, INSTALL_DIR, build_name, BBE_DIR, SOURCE_DIR, module->path, NULL);
           end_bbe_dir = strchr(bbe_dir, '\0');
           *end_bbe_dir++ = dir_sep;
-          strcpy(end_bbe_dir, "BBE_Res");
+          strcpy(end_bbe_dir, BBE_TMP_RES);
           sb_wipe_objects(bbe_dir);
-          strcpy(end_bbe_dir, "BBE_ROM");
+          strcpy(end_bbe_dir, BBE_TMP_ROM);
           sb_wipe_objects(bbe_dir);
           break;
       }
@@ -1128,7 +1181,7 @@ build_install_rom_(build_install_rom_reason_code reason_code)
           }
 
           if (reason_code == build_install_rom_bbe_script) {
-            sb_buildfilename(BUFFER_LEN, scriptdirname, INSTALL_DIR, build_name, BBE_DIR, SOURCE_DIR, module->path, "BBE_ROM", NULL);
+            sb_buildfilename(BUFFER_LEN, scriptdirname, INSTALL_DIR, build_name, BBE_DIR, SOURCE_DIR, module->path, BBE_TMP_ROM, module->filename, NULL);
             _check_dir_v(scriptdirname, NULL);
             sprintf(scriptfilename, "-o %s%c%s%crom_link ADDRESS=Address FORCEROMLINK=%s", build_dir, dir_sep, scriptdirname, dir_sep, forcefilename);
             sb_buildfilename(BUFFER_LEN, scriptdirname, INSTALL_DIR, build_name, BBE_DIR, SOURCE_DIR, module->path, "rm", NULL);
