@@ -20,7 +20,7 @@ WIPE    = -wipe
 STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS} -DCARET_MESSAGE_14
+CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS} -DUserIF_${USERIF} -DCARET_MESSAGE_14
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 Datatoaofflags = -d data -l len -dp -s -p
