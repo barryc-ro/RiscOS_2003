@@ -34,11 +34,12 @@
 
 void *module_wsp = 0;
 int v_state = IDLE;
-extern int bs_sent = 0;
-int discards = 0;
+static int bs_sent = 0;
+static int discards = 0;
+static int overflows = 0;
 int default_video_port = 0;
 int video_port = 0;
-int rxsize = 0;
+static int rxsize = 0;
 int bs_bufsize = 0;
 int n_bs_buffers = 0;
 int bs_minbufs = 0;
@@ -46,6 +47,7 @@ int bs_bufpool;
 int bs_bytes_sent = 0;
 
 extern int skipcnt;
+extern int bs_minbufs_check;
 
 int mpeg_handle, vsock, vssock;
 int do_debug = 0;
@@ -152,7 +154,7 @@ _kernel_oserror *udpv_init(char *cmd_tail, int pbase, void *pw)
       bs_bufpool = atoi(buf);
       if (bs_bufpool < bs_bufsize)
       {
-        bs_bufpool = bs_bufsize * 16; /* Guess at minimum sensible value */
+        bs_bufpool = MPEG_BUF_POOL_SIZE; /* Guess at minimum sensible value */
       }
     }
     else
@@ -187,15 +189,20 @@ _kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, v
 
     margc = 0;
     cp = arg_string;
-    while (*cp && arg_count-- > 0) {
+    while (*cp && (arg_count-- > 0) && (margc < 10))
+    {
         while (isspace(*cp))
+        {
             cp++;
+        }
         if (*cp == '\0' || iscntrl(*cp))
             break;
         *argp++ = cp;
         margc++;
         while (*cp != '\0' && !iscntrl(*cp) && !isspace(*cp))
+        {
             cp++;
+        }
         if (*cp == '\0' || iscntrl(*cp))
             break;
         *cp++ = '\0';
@@ -210,8 +217,9 @@ void udpv_show(int argc, char **argv)
 {
     printf("videoport=%d (%x), lastport=%d, rxbufsize=%d\n",
                default_video_port, default_video_port, video_port, rxsize);
-    printf("bs_bufpool=%d, n_buffers=%d, bufsize=%d, bs_minbufs=%d, discards=%d\n",
-               bs_bufpool, n_bs_buffers, bs_bufsize, bs_minbufs, discards);
+    printf("bs_bufpool=%d, n_buffers=%d, bufsize=%d, bs_minbufs=%d (%d)\n",
+               bs_bufpool, n_bs_buffers, bs_bufsize, bs_minbufs, bs_minbufs_check);
+    printf("discards=%d, overflows=%d\n", discards, overflows);
     print_bufs();
 }
 
@@ -348,7 +356,7 @@ int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int
     m1 = (struct mbuf *)ack_buf;
     if (m0 == 0)
         goto out;
-    for (m = m0; m; m = m->m_next)
+/*    for (m = m0; m; m = m->m_next)
     {
         mlen = m->m_len;
         if (mlen == 0)
@@ -380,6 +388,51 @@ int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int
    }
    bs_bytes_sent += send_buffers();
    m0->m_len = 0;
+*/
+/* Replacement for block of Keith's code:    *
+ * use MBuf manager supplied routines rather *
+ * than walking mbuf chains manually & using *
+ * CLib memcpy - the mbuf manager is likely  *
+ * to be more optimal.                       *
+ */
+
+    mlen = (*mbctl.count_bytes)(&mbctl, m0);
+    bs = get_empty_buffer();
+    if (bs == 0)
+    {
+      discards++;
+    }
+    else
+    {
+      residue = bs_bufsize;
+      bptr = bs->bs_data;
+      bs->bs_len = 0;
+      bs->bs_handle = 0;
+      bs->bs_flags = FREE_BUFFER_SWI;
+      if (mlen <= bs_bufsize)
+      {
+        (void) EXPORT(m0, mlen, bptr);
+        bs->bs_len += mlen;
+        bptr += mlen;
+        residue -= mlen;
+      }
+      else
+      {
+        overflows++;
+        (void) EXPORT(m0, bs_bufsize, bptr);
+        bs->bs_len += bs_bufsize;
+        bptr += bs_bufsize;
+        residue -= bs_bufsize;
+      }
+      if (bs != 0)
+      {
+         rxsize = bs->bs_len;
+         save_full_buf(bs, 0);
+      }
+    }
+    bs_bytes_sent += send_buffers();
+    m0->m_len = 0;
+
 out:
     if (m1)
     {
@@ -387,6 +440,8 @@ out:
     }
     return(0);
 }
+
+
 
 int read_sysvar(char *var, char *buf, int buflen)
 {
