@@ -68,8 +68,8 @@ o.sctrans	\
 o.irqs		\
 o.path		\
 o.orga		\
-o.incard	\
 o.schlumb	\
+o.incard	\
 o.header
 
 DOBJS      =	\
@@ -78,8 +78,8 @@ od.sctrans	\
 od.irqs		\
 od.path		\
 od.orga		\
-od.incard	\
 od.schlumb	\
+od.incard	\
 od.header
 
 #
@@ -88,8 +88,8 @@ od.header
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
-.c.od:;     ${CC} ${CFLAGS} -o $@ $<
-.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.c.od:;     ${CC} ${CFLAGS} -o $@ $< -DREMOTE_DEBUG
+.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$* -DREMOTE_DEBUG
 .s.od:;     ${AS} ${AFLAGS} $< $@
 
 #
@@ -145,11 +145,11 @@ rom_link:
 #
 # Target
 #
-rm.${COMPONENT}: ${OBJS} ${SERIALLIB} dirs
+rm.${COMPONENT}: ${OBJS} dirs
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}D: ${DOBJS} ${SERIALLIB} ${REMOTEDB} dirs
+rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} dirs
         ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${REMOTEDB}
         Access rm.${COMPONENT}D RW/R
 
@@ -158,6 +158,16 @@ ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
 
 #
 # Dynamic dependencies:
+o.cmd:	c.cmd
+o.cmd:	h.module
+o.cmd:	C:debug.h.remote
+o.cmd:	h.cmd
+o.cmd:	h.sctrans
+od.cmd:	c.cmd
+od.cmd:	h.module
+od.cmd:	C:debug.h.remote
+od.cmd:	h.cmd
+od.cmd:	h.sctrans
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -196,13 +206,6 @@ o.orga:	h.module
 o.orga:	C:debug.h.remote
 o.orga:	h.scinter
 o.orga:	h.sctrans
-o.incard:	c.incard
-o.incard:	C:h.kernel
-o.incard:	C:h.string
-o.incard:	h.module
-o.incard:	C:debug.h.remote
-o.incard:	h.scinter
-o.incard:	h.sctrans
 o.schlumb:	c.schlumb
 o.schlumb:	C:h.kernel
 o.schlumb:	C:h.string
@@ -210,3 +213,62 @@ o.schlumb:	h.module
 o.schlumb:	C:debug.h.remote
 o.schlumb:	h.scinter
 o.schlumb:	h.sctrans
+o.incard:	c.incard
+o.incard:	C:h.kernel
+o.incard:	C:h.string
+o.incard:	h.module
+o.incard:	C:debug.h.remote
+o.incard:	h.scinter
+o.incard:	h.sctrans
+od.sctrans:	c.sctrans
+od.sctrans:	h.module
+od.sctrans:	C:debug.h.remote
+od.sctrans:	C:h.kernel
+od.sctrans:	h.sctrans
+od.irqs: s.irqs
+od.irqs: Hdr:ListOpts
+od.irqs: Hdr:Macros
+od.irqs: Hdr:System
+od.irqs: Hdr:SWIs
+od.irqs: Hdr:CPU.Generic26
+od.irqs: Hdr:IO.GenericIO
+od.irqs: Hdr:RISCOS
+od.irqs: Hdr:ModHand
+od.path:	c.path
+od.path:	C:h.kernel
+od.path:	C:h.swis
+od.path:	h.module
+od.path:	C:debug.h.remote
+od.path:	h.scinter
+od.orga:	c.orga
+od.orga:	C:h.kernel
+od.orga:	C:h.string
+od.orga:	h.module
+od.orga:	C:debug.h.remote
+od.orga:	h.scinter
+od.orga:	h.sctrans
+od.schlumb:	c.schlumb
+od.schlumb:	C:h.kernel
+od.schlumb:	C:h.string
+od.schlumb:	h.module
+od.schlumb:	C:debug.h.remote
+od.schlumb:	h.scinter
+od.schlumb:	h.sctrans
+od.incard:	c.incard
+od.incard:	C:h.kernel
+od.incard:	C:h.string
+od.incard:	h.module
+od.incard:	C:debug.h.remote
+od.incard:	h.scinter
+od.incard:	h.sctrans
+od.module:	c.module
+od.module:	C:h.kernel
+od.module:	C:h.swis
+od.module:	h.sctrans
+od.module:	h.module
+od.module:	C:debug.h.remote
+od.module:	h.irqs
+od.module:	h.header
+od.module:	h.scinter
+od.module:	h.cards
+od.module:	h.path
