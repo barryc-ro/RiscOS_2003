@@ -1,30 +1,25 @@
 #Makefile for UDP stream control module
 
 CC= cc
-OBJASM=         $.library.objasm
+OBJASM= objasm
 
-CFLAGS=  -IC: -DRISCOS -Darm -DACORN -c -pcc -zM 
-CLIB=    clib:o.stubs
+CFLAGS=  -IC:,TCPIPLibs: -throwback -DINET -DCOMPAT_INET4 -Wp -Otime -c -zM -list 
+CLIB=    c:o.stubs
 
-SRCS=   c.module c.stubs c.bufs c.mbuf c.inetfn
+SRCS=   c.module c.bufs c.mbuf
 
-OBJS=   o.module o.stubs o.bufs o.mbuf o.inetfn o.irqs
+OBJS=   o.module o.bufs o.mbuf o.irqs TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
 
 udpv:    ${OBJS} Makefile udpvHdr
             cmhg udpvHdr o.udpvhdr
             link -map -o UdpV -rmf o.udpvhdr ${OBJS} ${CLIB} { > linkmap }
+            settype linkmap text
 
 module.o:   c.module 
             cc ${CFLAGS} c.module
 
-stubs.o:     c.stubs
-             ${CC} ${CFLAGS} c.stubs
-
 bufs.o:     c.bufs
              ${CC} ${CFLAGS} c.bufs
-
-inetfn.o:     c.inetfn
-             ${CC} ${CFLAGS} c.inetfn
 
 mbuf.o:     c.mbuf
              ${CC} ${CFLAGS} c.mbuf
