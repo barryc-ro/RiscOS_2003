@@ -80,7 +80,7 @@ ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS
 
 NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
-		-UPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
+		-UPOINTLESS_BUTTONS -UAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-USHOW_BOOTBLOCK_TRANSITIONS  \
 		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -DSEND_SERIALID_LENGTH \
@@ -259,6 +259,8 @@ o.ncma_cmds:	h.machine
 o.ncma_cmds:	h.vectors
 o.ncma_cmds:	h.kprintf
 o.ncma_cmds:	h.dynalloc
+o.ncma_cmds:	h.usermode
+o.ncma_cmds:	C:h.kernel
 o.ncma_cmds:	C:h.DBUG
 o.ncma_swis:	c.ncma_swis
 o.ncma_swis:	C:h.kernel
@@ -270,6 +272,8 @@ o.ncma_swis:	h.ncma_cache
 o.ncma_swis:	h.dynalloc
 o.ncma_swis:	h.module
 o.ncma_swis:	h.machine
+o.ncma_swis:	h.usermode
+o.ncma_swis:	C:h.kernel
 o.ncma_swis:	C:h.DBUG
 o.dynalloc:	c.dynalloc
 o.dynalloc:	C:h.kernel
