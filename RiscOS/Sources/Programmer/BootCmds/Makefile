@@ -8,13 +8,11 @@
 # 12th Sep 1994  JC         Created.
 #
 
-VPATH = @ <Support$Dir>
-
 #
 # Generic options:
 #
 MKDIR   = cdir
-CC      = cc -ISupport:,OS: -fach -wp -DBOOTCMDS
+CC      = cc -IOS: -fach -wp -DBOOTCMDS
 CP      = copy
 CPFLAGS = ~cfr~v
 OBJASM  = ObjAsm ${THROWBACK} -depend !Depend -stamp -quit
@@ -149,83 +147,6 @@ debug.trace: h.hostfs
 .def.s:;     DefMod -s < $< > $@
 
 # Dynamic dependencies:
-debug.m:	<Support$Dir>.c.m
-debug.m:	OS:h.macros
-debug.m:	OS:h.os
-debug.m:	OS:h.types
-debug.m:	OS:h.wimp
-debug.m:	OS:h.osspriteop
-debug.m:	OS:h.font
-debug.m:	<Support$Dir>.h.m
-debug.m:	<Support$Dir>.h.realloc
-debug.m:	<Support$Dir>.h.trace
-debug.m:	<Support$Dir>.h.riscos
-debug.m:	OS:h.territory
-debug.m:	<Support$Dir>.h.svc
-debug.m:	<Support$Dir>.h.trace
-debug.main:	c.main
-debug.main:	C:h.kernel
-debug.main:	OS:h.econet
-debug.main:	OS:h.types
-debug.main:	OS:h.os
-debug.main:	OS:h.macros
-debug.main:	OS:h.messagetrans
-debug.main:	OS:h.netfs
-debug.main:	OS:h.fileswitch
-debug.main:	OS:h.os
-debug.main:	OS:h.osargs
-debug.main:	OS:h.osbyte
-debug.main:	OS:h.osfile
-debug.main:	OS:h.osfscontrol
-debug.main:	OS:h.osfind
-debug.main:	OS:h.osgbpb
-debug.main:	OS:h.osmodule
-debug.main:	OS:h.resourcefs
-debug.main:	OS:h.territory
-debug.main:	Support:h.riscos
-debug.main:	Support:h.trace
-debug.main:	h.files
-debug.main:	h.main
-debug.main:	C:h.kernel
-debug.main:	Support:h.lookup
-debug.main:	Support:h.resource
-debug.main:	OS:h.wimp
-debug.main:	OS:h.osspriteop
-debug.main:	OS:h.font
-debug.main:	h.run
-debug.main:	OS:h.os
-debug.trace:	<Support$Dir>.c.trace
-debug.trace:	OS:h.econet
-debug.trace:	OS:h.types
-debug.trace:	OS:h.os
-debug.trace:	OS:h.macros
-debug.trace:	OS:h.os
-debug.trace:	OS:h.osargs
-debug.trace:	OS:h.fileswitch
-debug.trace:	OS:h.osfile
-debug.trace:	OS:h.osfind
-debug.trace:	OS:h.osgbpb
-debug.trace:	<Support$Dir>.h.hostfs
-debug.trace:	OS:h.socket
-debug.trace:	<Support$Dir>.h.trace
-debug.riscos:	<Support$Dir>.c.riscos
-debug.riscos:	OS:h.messagetrans
-debug.riscos:	OS:h.types
-debug.riscos:	OS:h.os
-debug.riscos:	OS:h.macros
-debug.riscos:	OS:h.os
-debug.riscos:	OS:h.territory
-debug.riscos:	OS:h.wimp
-debug.riscos:	OS:h.osspriteop
-debug.riscos:	OS:h.font
-debug.riscos:	<Support$Dir>.h.m
-debug.riscos:	<Support$Dir>.h.realloc
-debug.riscos:	<Support$Dir>.h.trace
-debug.riscos:	<Support$Dir>.h.riscos
-debug.riscos:	<Support$Dir>.h.trace
-debug.files: asm.files
-debug.files: OS:Hdr.Types
-debug.svc: <Support$Dir>.asm.svc
 o.files: asm.files
 o.files: OS:Hdr.Types
 o.main:	c.main
@@ -247,13 +168,13 @@ o.main:	OS:h.osgbpb
 o.main:	OS:h.osmodule
 o.main:	OS:h.resourcefs
 o.main:	OS:h.territory
-o.main:	Support:h.riscos
-o.main:	Support:h.trace
+o.main:	h.riscos
+o.main:	h.jc_trace
 o.main:	h.files
 o.main:	h.main
 o.main:	C:h.kernel
-o.main:	Support:h.lookup
-o.main:	Support:h.resource
+o.main:	h.lookup
+o.main:	h.resource
 o.main:	OS:h.wimp
 o.main:	OS:h.osspriteop
 o.main:	OS:h.font
@@ -271,7 +192,7 @@ o.repeatcmd:	OS:h.wimp
 o.repeatcmd:	OS:h.osspriteop
 o.repeatcmd:	OS:h.font
 o.repeatcmd:	OS:h.wimpspriteop
-o.riscos:	<Support$Dir>.c.riscos
+o.riscos:	c.riscos
 o.riscos:	OS:h.messagetrans
 o.riscos:	OS:h.types
 o.riscos:	OS:h.os
@@ -281,9 +202,8 @@ o.riscos:	OS:h.territory
 o.riscos:	OS:h.wimp
 o.riscos:	OS:h.osspriteop
 o.riscos:	OS:h.font
-o.riscos:	<Support$Dir>.h.m
-o.riscos:	<Support$Dir>.h.realloc
-o.riscos:	<Support$Dir>.h.trace
-o.riscos:	<Support$Dir>.h.riscos
-o.riscos:	<Support$Dir>.h.trace
-o.riscos:	<Support$Dir>.h.x
+o.riscos:	h.m
+o.riscos:	h.realloc
+o.riscos:	C:h.trace
+o.riscos:	h.riscos
+o.riscos:	C:h.trace
