@@ -96,7 +96,7 @@ resources: ${RESFILES} dirs
 	${MKDIR} ${RESDIR}.ps.Printers
 	${MKDIR} ${RESDIR}.ps.PSfiles
 	${CP} ${LDIR}.Supported	           ${RESDIR}.Supported            ${CPFLAGS}
-	${CP} ${RDIR}.Palettes*            ${RESDIR}.Palettes.*           ${CPFLAGS}
+	${CP} ${RDIR}.Palettes.*           ${RESDIR}.Palettes.*           ${CPFLAGS}
 	${CP} ${RDIR}.ps.Printers.0        ${RESDIR}.ps.Printers.0        ${CPFLAGS}
 	${CP} ${RDIR}.ps.PSfiles.PSepilog  ${RESDIR}.ps.PSfiles.PSepilog  ${CPFLAGS}
 	${CP} ${RDIR}.ps.PSfiles.PSprolog2 ${RESDIR}.ps.PSfiles.PSprolog2 ${CPFLAGS}
