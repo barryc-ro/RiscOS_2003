@@ -1,5 +1,7 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
+# requires CLXPATH = path to install CLX into
+#          RISCOS_CLIB_HDRS = path to clib include files
 
 CFLAGS=-c -O2 -I. $(CFL)
 CC=gcc
@@ -10,8 +12,8 @@ HSOURCE=aif.h disass.h libflfmt.h scr_drv.h aof.h bytesex.h err.h \
 ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
 chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h
 
-CFLhost= -I/usr/local/riscos/include
-CFLfilestamp= -I/usr/local/riscos/include
+CFLhost= -I${RISCOS_CLIB_HDRS}
+CFLfilestamp= -I${RISCOS_CLIB_HDRS}
 
 noarg: clx.a
 	@echo "Made clx.a (the default target)"
