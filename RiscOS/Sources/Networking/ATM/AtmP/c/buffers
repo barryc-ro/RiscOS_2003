@@ -1,0 +1,478 @@
+/*	BUFFERS.C
+
+Project : ATML ATM25 'Panther' card driver
+
+Purpose: MPEG player buffering routines.
+
+
+History:
+
+Date      Who     Description of change
+===========================================
+
+20/1/97   CP	  Picked up existing code.  Added header :-)
+
+		  Commented reinit_bs_buffers to make more sense.
+
+		  Added global variables for sizeof and number of
+		  bs_buffer(s).
+
+		  Made the bprotos variable static ('cos it's only needed in
+	 	  this file).
+
+	 	  Replaced all occurrences of N_BS_BUFFERS with
+		  number_of_bs_buffersG
+
+29/1/97   CP      Removed payload size from call to init_bs_buffers.  It can
+		  get all the data it needs from globals kept by commands.c.
+		  (There may also be more tidying possible).
+
+31/1/97   CP      Found and corrected serious bug in the linked lists used
+		  for mpeg buffering.  The lists were not being terminated
+		  properly (p->bs_next not being explicitly set to NULL).
+		  It's a miracle it didn't show up earlier!  The current fix
+		  is to shoot from the hip, and wherever a list is modified,
+		  set the final bs_next ptr to NULL.  A better long-term fix
+		  would be to completely rethink the buffering strategy?
+
+3/2/97    CP      Must always re-initialise buffers after a size change
+		  otherwise ptrs can move without realising!
+
+***************************************************************************/
+
+/* buffers.c -- handle MPEG buffers */
+#include <stdio.h>
+#include <assert.h>
+
+#include "kernel.h"
+#include "swis.h"
+#include "stdlib.h"
+#include "strings.h"
+#include "boson.h"
+#include "module.h"
+
+#define PROTOTYPES_INTERNAL
+#include "buffers.h"
+
+
+static struct bs_buffer **bprotos = NULL;
+
+#ifdef USE_DYNAMIC_AREAS
+static unsigned int dynamic_area_handle = 0;
+#endif
+
+
+/* OK - starting to get desperate!
+
+Set of macros to check for memory leaks and other such stuff */
+
+
+#ifndef NDEBUG
+   struct bs_buffer *first_bs_bufferG = NULL;
+   struct bs_buffer *last_bs_bufferG = NULL;
+#endif
+
+
+
+/* 20/1/97:CP:Added variables to define the bs_buffer pool. Imported from commands.c */
+extern unsigned int bs_buffer_sizeG; /* size of the buffers, including payload (bytes) */
+extern unsigned int number_of_bs_buffersG; /* how many buffers */
+
+
+
+void atm_return_empty_buf(struct bs_buffer *b)
+{
+    if (b == 0)
+        return;
+
+    assert(b >= first_bs_bufferG);
+    assert(b <= last_bs_bufferG);
+
+    bs_received++;
+    bufs_used--;
+
+    if (bs_emptyp == 0)
+    {
+      bs_empty_q = b;
+    }
+    else
+    {
+      bs_emptyp->bs_next = b;
+    }
+
+    bs_emptyp = b;
+
+    bs_emptyp->bs_next = NULL; /* 31/1/97:CP:Terminate linked list correctly */
+}
+
+
+/******* init_bs_buffers ***************************************************
+
+Purpose: To initialise the memory used by the bs_buffers.
+
+         Note that it is assumed thst the values presented have been
+         pre-checked.
+
+         Routine extensively modified CP 20/1/97 to allow variable bs_buffer
+         payload sizes.
+
+Inputs: (unsigned int) size of memory pool (bytes)
+
+Outputs: 0 if OK, -1 if an error occurred
+
+Globals: Uses number_of_bs_buffersG
+	      size_of_bs_buffersG
+
+***************************************************************************/
+
+#ifdef USE_DYNAMIC_AREAS
+int init_bs_buffers(unsigned int memorypool)
+{
+  _kernel_swi_regs r;
+  int loop;
+  int b;
+
+  static unsigned int current_pool_size;
+  static int start_of_dynamic_area;
+
+
+  if(bprotos != NULL)
+  {
+    free(bprotos);
+  }
+
+  bprotos = (struct bs_buffer **)malloc(number_of_bs_buffersG * sizeof(struct bs_buffer *));
+
+  if(dynamic_area_handle != 0)
+  { /* dynamic area exists, change its size */
+     r.r[0] = dynamic_area_handle;
+     r.r[1] = memorypool - current_pool_size; /* amount to change size */
+
+    if(_kernel_swi(XOS_Bit | OS_ChangeDynamicArea, &r, &r))
+    {
+      return(-1);
+    }
+
+    current_pool_size = memorypool;
+  }
+
+  else
+  { /* dynamic area doesn't exist yet - create it */
+    r.r[0] = 0; /* create new dynamic area */
+    r.r[1] = -1; /* reserved */
+    r.r[2] = memorypool;  /* initial size */
+    r.r[3] = -1; /* reserved */
+    r.r[4] = 128; /* not draggable */
+    r.r[5] = -1;   /* maximum size of area */
+    r.r[6] = 0; /* no dynamic area routine */
+    r.r[7] = 0; /* pointer to workspace */
+    r.r[8] = (int) "ATM25 Buffers";
+
+    if(_kernel_swi(XOS_Bit | OS_DynamicArea, &r, &r))
+    {
+      return(-1);
+    }
+
+    current_pool_size = memorypool;
+    start_of_dynamic_area = r.r[3];
+    dynamic_area_handle = r.r[1];
+  }
+
+  b = start_of_dynamic_area;
+
+  for (loop = 0; loop < number_of_bs_buffersG; loop++)
+  {
+    bprotos[loop] = (struct bs_buffer *)b;
+
+#ifndef NDEBUG
+    last_bs_bufferG = (struct bs_buffer *)b;
+#endif
+
+    b += bs_buffer_sizeG;
+  }
+
+#ifndef NDEBUG
+  first_bs_bufferG = (struct bs_buffer *)start_of_dynamic_area;
+
+  printf("Buffer checking turned ON\n");
+#endif
+
+  assert(((int)last_bs_bufferG - (int)first_bs_bufferG + bs_buffer_sizeG) == current_pool_size);
+
+
+  /* 3/2/97:CP:always re-init buffers when the size changes */
+  reinit_bs_buffers();
+
+  return(0);
+}
+
+#else
+
+int init_bs_buffers(void)
+{
+    struct bs_buffer *b;
+    int i;
+
+    for (i = 0; i < number_of_bs_buffersG; i++) {
+        b = (struct bs_buffer *)malloc(sizeof(struct bs_buffer));
+        if (!b) break;
+        bprotos[i] = b;
+    }
+    return (1);
+}
+
+#endif
+
+
+/******* reinit_bs_buffers *************************************************
+
+Purpose: Re-initialises the various bs_buffer structures, and the chain
+	 pointers.
+
+Inputs:  None
+
+Outputs: None
+                              \
+Globals:  bprotos->bs_handle   |
+	  	 ->bs_flags    |
+		 ->bs_packets   }       all reset to 0
+	  bs_received          |
+	  bufs_used            |
+                              /
+
+          bs_emptyp  changed - points to final buffer in LL on exit
+	  bs_empty_q changed - points to first buffer in LL on exit
+
+***************************************************************************/
+
+void reinit_bs_buffers(void)
+{
+    struct bs_buffer *b;
+    int i;
+
+    for (i = 0; i < number_of_bs_buffersG; i++)
+    {
+        b = bprotos[i];
+        if (!b) break;  /* don't try to access the rest! */
+
+
+        assert(b >= first_bs_bufferG);
+        assert(b <= last_bs_bufferG);
+
+        b->bs_handle = 0;
+        b->bs_flags = 0;
+        b->bs_packets = 0;
+
+        if (bs_emptyp == 0)
+	{
+	  bs_empty_q = b;
+	}
+
+        else
+        {
+          bs_emptyp->bs_next = b;
+        } /* endif (bs_emptyp == 0) */
+
+        bs_emptyp = b;
+
+    } /* endfor (i = 0; i < number_of_bs_buffersG; i++) */
+
+    bs_emptyp->bs_next = NULL; /* 31/1/97:CP:Terminate linked list correctly */
+
+    bs_received = 0;
+    bufs_used = 0;
+}
+
+#ifdef USE_DYNAMIC_AREAS
+void free_bs_buffers(void)
+{
+  _kernel_swi_regs r;
+
+  r.r[0] = 1; /* reason code FREE */
+  r.r[1] = dynamic_area_handle; /* get our area handler */
+  _kernel_swi(XOS_Bit | OS_DynamicArea, &r, &r); /* do it */
+
+  bs_empty_q = 0;
+  bs_emptyp = 0;
+  bs_full_q = 0;
+  bs_fullp = 0;
+
+  free(bprotos); /* 20/1/97:CP:free memory used by array of pointers */
+}
+
+#else
+
+void free_bs_buffers(void)
+{
+    struct bs_buffer *b;
+
+    while ((b = bs_empty_q) != 0)
+    {
+        assert(b >= first_bs_bufferG);
+        assert(b <= last_bs_bufferG);
+
+        bs_empty_q = b->bs_next;
+        free((char *)b);
+    }
+    bs_fullp = 0;
+}
+
+#endif
+
+struct bs_buffer *get_empty_buffer(void)
+{
+    struct bs_buffer *b = bs_empty_q;
+    int irq_state;
+
+    if (b == NULL) {
+        wasempty++;
+        return ((struct bs_buffer *)NULL);
+    }
+
+    assert(b >= first_bs_bufferG);
+    assert(b <= last_bs_bufferG);
+
+    irq_state = ensure_irqs_off();
+    bs_empty_q = b->bs_next;
+
+    if (bs_empty_q == NULL) /* no more buffers on emptybuffer linked list */
+    {
+      bs_emptyp = NULL;
+    }
+
+    b->bs_next = NULL;
+    b->bs_len = 0;
+    b->bs_offset = &b->bs_data; /* 20/1/97:CP:bs_data is now an int used as a
+        				      placemarker */
+
+    if (++bufs_used > bufs_hiwat) bufs_hiwat = bufs_used;
+    restore_irqs(irq_state);
+    return (b);
+}
+
+void save_full_buf(struct bs_buffer *b, int datalost)
+{
+    int irq_state;
+
+    assert(b >= first_bs_bufferG);
+    assert(b <= last_bs_bufferG);
+
+    irq_state = ensure_irqs_off();
+    b->bs_next = NULL;
+    b->bs_offset = &b->bs_data; /* 20/1/97:CP:bs_data is now an int used as a
+					      placemarker */
+				/* haven't we already done this? cf get_empty_buffer() */
+    /* b->bs_handle set to streamhandle on entry */
+    b->bs_handle = 0;
+    b->bs_packets = 0;
+    b->bs_flags = XOS_Bit | FREE_BUFFER_SWI;
+    bs_sent++;
+
+    if (bs_fullp == NULL)
+    {
+      bs_full_q = b;
+    }
+    else
+    {
+      bs_fullp->bs_next = b;
+    }
+
+    bs_fullp = b;
+    bs_fullp->bs_next = NULL;
+
+    restore_irqs(irq_state);
+}
+
+int bs_empty_q_cnt(void)
+{
+    struct bs_buffer *b;
+    int n = 0;
+
+    for (b = bs_empty_q; b; b = b->bs_next, n++)
+    {
+      assert(b >= first_bs_bufferG);
+      assert(b <= last_bs_bufferG);
+    }
+
+    return (n);
+}
+
+void send_buffers(void)
+{
+/*     struct bs_buffer *b, *bb; */
+/*     int handle, datalost; */
+    struct bs_buffer *b;
+    _kernel_swi_regs r;
+
+    while ((b = bswait_consume()) != 0)
+    {
+      assert(b >= first_bs_bufferG);
+      assert(b <= last_bs_bufferG);
+
+/*         handle = b->bs_handle; */
+/*         datalost = 0; */
+/*         for (bb = b; bb; bb = bb->bs_next) { */
+/*             if (bb->bs_flags != 0) */
+/*                 datalost = 1; */
+/*             bb->bs_handle = 0; */
+/*             bb->bs_packets = 0; */
+/*             bb->bs_flags = XOS_Bit | FREE_BUFFER_SWI; */
+/*             bs_sent++; */
+
+/*         } */
+/*         send_full_buf(b, datalost, handle); */
+      r.r[0] = 0;
+      r.r[1] = streamhandle;
+      r.r[2] = (int)b;
+      _kernel_swi(XOS_Bit | Send_FullBuffer, &r, &r);
+
+    }
+}
+
+void bswait_init(void)
+{
+    memset((char *)&bsw, 0, sizeof(bsw));
+}
+
+
+void send_full_buf(struct bs_buffer *b, int flag, int handle)
+{
+    _kernel_swi_regs r;
+
+/*     r.r[0] = flag; */
+
+    assert(b >= first_bs_bufferG);
+    assert(b <= last_bs_bufferG);
+
+    r.r[0] = 0;
+    r.r[1] = handle;
+    r.r[2] = (int)b;
+    (void) _kernel_swi(XOS_Bit | Send_FullBuffer, &r, &r);
+}
+
+int bswait_supply(struct bs_buffer *b)
+{
+    if (bsw.w_inuse) return (0);
+    if (bsw.w_bufs[bsw.w_supply] == 0) {
+        bsw.w_bufs[bsw.w_supply++] = b;
+        if (bsw.w_supply == N_WAIT_B) bsw.w_supply = 0;
+        return (1);
+    }
+    return (0);
+}
+
+struct bs_buffer *bswait_consume(void)
+{
+    struct bs_buffer *b;
+
+    bsw.w_inuse = 1; /* stop the world from changing under us (cf bswait_supply) */
+    b = bsw.w_bufs[bsw.w_consume];
+    if (b) {
+        bsw.w_bufs[bsw.w_consume++] = 0;
+        if (bsw.w_consume == N_WAIT_B)
+            bsw.w_consume = 0;
+    }
+    bsw.w_inuse = 0;
+    return (b);
+}
+

@@ -1,0 +1,355 @@
+/*	ATMSWIS.C
+
+Project : ATML ATM25 'Panther' card driver
+
+Purpose: SWI handling code
+
+
+History:
+
+Date      Who     Description of change
+===========================================
+31/1/97   CP      Picked up existing code.  Added header :-)
+
+		  Fixed mega-serious linked list bug in atm_empty_buf().  The
+		  final entry of the linked list of buffers was not being
+		  explicitly set to NULL, so was relying on being in reset
+		  memory!!!  Now it's filled in regardless.
+
+13/2/97   CP      Previous mod introduced a slight bug - mustn't mess around
+		  with linked lists while IRQs are on, otherwise the changes
+		  could be interrupted!! (Friday afternoon coding :-} )
+
+5/6/98    CP      Fixed atm_inquire to return value of dib_inquire.
+
+                  Updated DCI header files to be Acorn's version; fixed
+                  resulting mismatches.
+
+28/9/98   CP      Changed error return for atm_setmtu() to conform to
+                  DCI 4.04 spec
+
+***************************************************************************/
+/* swis.c -- swi calls provided by the module */
+#include "kernel.h"
+#include "swis.h"
+#define PROTOTYPES_INTERNAL
+#include "atmswis.h"
+#include "types.h"
+/*#include "dci4.h"*/
+#include "sys/dcistructs.h"
+#include "mbuf.h"
+#include "mbuftypes.h"
+#include "strings.h"
+#include "stdlib.h"
+#include "buffers.h"
+#include "module.h"
+#include "mast.h"
+#include "resources.h"
+#include "macros.h"
+#include "macros.h"
+#include "atmio.h"
+#include "services.h"
+#include "boson.h"
+#include "headers.h"
+#include "listen.h"
+#include "panther.h"
+
+#include <stdio.h>
+#include <assert.h>
+
+extern struct dib dib; /* from module.c */
+
+/* DCI4 SWIs */
+int atm_inquire(_kernel_swi_regs *r)
+{
+    if( r->r[0] )
+    {
+        return(EINVAL);
+    }
+
+    r->r[2] = dib.dib_inquire; /* 5jun98:CP:return description of i/f in R2 */
+
+    return(0);
+}
+
+int atm_version(_kernel_swi_regs *r)
+{
+    if( r->r[0] )
+        return(EINVAL);
+    r->r[1] = DCIVERSION; /* 5jun98:CP:conforms to Acorn headers */
+    return (0);
+}
+
+int atm_getmtu(_kernel_swi_regs *r)
+{
+    if( r->r[0] )
+    {
+        return(EINVAL);
+    }
+
+    r->r[2] = ATM_MTU;
+    return (0);
+}
+
+int atm_setmtu(_kernel_swi_regs *r)
+{
+    if( r->r[0] )
+    {
+        return(EINVAL);
+    }
+
+/* changing MTU size is not yet supported, so report 'not supported' */
+    return(ENOTTY);
+}
+
+int atm_nullswi(_kernel_swi_regs *r)
+{
+    return(EINVAL);
+}
+
+
+
+int atm_endofplay(_kernel_swi_regs *r)
+{
+    return (0);
+}
+
+int atm_startofplay(_kernel_swi_regs *r)
+{
+    atm_startstream();
+    return (0);
+}
+
+int atm_readmacadr(_kernel_swi_regs *r)
+{
+    char *b;
+
+    b = (char *)r->r[1];
+    b[0] = 0;
+    b[1] = 0;
+
+    memcpy(&b[2], &macadr[2], 4);
+    return (0);
+}
+
+int atm_setmacadr(_kernel_swi_regs *r)
+{
+/*     memcpy(macadr, (char *)r->r[1], 6); */
+/*     asm_write_fifo(CMD_HANDLE, SO_SET_MAC, (unsigned char *)r->r[1], 6,BlockToARMAddr); */
+    return (0);
+}
+
+
+
+int atm_setbufs(_kernel_swi_regs *r)
+{
+  /* Historical Note: this is a throwback to the days when OmVSP_C told the atm driver
+     to claim buffers, whereas OmVSP_S didn't call it, because it doesn't need the buffers.
+     The reason it doesn't call it, is because Keith's development server machine only
+     had a 2M SIMM.
+  */
+/*     r->r[0] = init_bs_buffers(); */
+/*     bswait_init(); */
+    return (0); /* fake happiness */
+}
+
+int atm_getstats(_kernel_swi_regs *r)
+{
+    int nbr, happy;
+
+    mast_circuits(&nbr, &happy);
+    r->r[0] = happy;
+    r->r[1] = nbr;
+    return (0);
+}
+
+/******* atm_empty_buf ****************************************************
+
+Purpose: gives back buffers.  Assumes only one buffer returned at a time
+	 (correct on 13/2/97)
+
+Inputs:
+
+Outputs:
+
+***************************************************************************/
+
+int atm_empty_buf(_kernel_swi_regs *r)
+{
+    struct bs_buffer *b;
+    int irq_state;
+
+    if (r->r[2] != 0)
+    {
+      irq_state = ensure_irqs_off();
+
+      b = (struct bs_buffer *)(r->r[2]);
+      bs_received++;
+      bufs_used--;
+      if (bs_emptyp == 0)
+      {
+        bs_empty_q = b;
+      }
+      else
+      {
+        bs_emptyp->bs_next = b;
+      }
+      bs_emptyp = b;
+/*     r->r[2] = 0; */ /* why? */
+
+      bs_emptyp->bs_next = NULL; /* 13/2/97:CP:Terminate linked list correctly
+      			   	  * and in the correct place! MUST have IRQs
+				  * off while buggering around with the
+				  * buffering linked lists!!!!
+      			   	  */
+      restore_irqs(irq_state);
+    }
+
+
+    return (0);
+}
+
+
+int atm_openconn(_kernel_swi_regs *r)
+{
+  struct mast *m;
+  unsigned int listen, port, handle, muxtype;
+  unsigned char *dst;
+
+  listen = r->r[0];
+  dst = (unsigned char *)r->r[1];
+  port = r->r[2];
+  handle = r->r[3];
+  muxtype = r->r[4];
+
+  /* First, is this connection request a LISTEN operation? */
+  if(listen) {
+    if(locate_listen_port(port)) { /* are we already listening for this? */
+      r->r[3] = 1;
+      r->r[4] = 1;
+      return 0;
+    }
+    if (add_listen(port, muxtype)) {  /* set up a listening socket */
+      r->r[3] = 1; 	   /* flag success to caller */
+      r->r[4] = 1;
+      return 0;
+    }
+
+    return 0;             /* otherwise return in disgrace */
+  }
+
+  /* OK, if it's not a LISTEN, it must be a CONNECT */
+
+  m = mast_user_locate(dst, port); /* look for existing entry - on REMOTE msnl & port */
+  if(m) {
+    DBUG printf("atm_openconn: connection already found.\n");
+  }
+  if(!m) mast_connect(dst, port);
+  if(m) {
+    DBUG printf("atm_openconn: clearing resources\n");
+    init_call_resources(m);
+    m->m_muxtype = muxtype;
+/*     m->m_streamhandle = handle; */
+    streamhandle = handle;
+    r->r[3] = 1;
+    r->r[4] = 1;
+  } else {
+    r->r[3] = 0;
+    r->r[4] = 0;
+  }
+  return 0;
+}
+
+
+int atm_clearconn(_kernel_swi_regs *r)
+{
+  struct listen *l;
+  struct mast *m;
+
+  if(r->r[0]) { /* is it a LISTEN? */
+    if((l=locate_listen_port(r->r[2]))!=NULL) { /* if it's still pending, cancel it */
+      l->handle = 0; /* clear listentab entry */
+      BlockWrite(CMD_MSG(CMD_HANDLE, SO_DETACH, l->handle));
+
+      return 0;
+    }
+    /* OK, it's a listen, but it's been connected */
+    if((m = mast_local_locate((unsigned char *)r->r[1], r->r[2]))!=NULL) /* if found, disconnect */
+        mast_disconnect((unsigned char *)r->r[1], m->m_port);
+    return 0;
+  }/* endof LISTEN */
+
+  /* if we're here, we're cancelling a connect */
+
+  mast_disconnect((unsigned char *)r->r[1], r->r[2]);
+  return(0);
+}
+
+void atm_startstream(void)
+{
+}
+
+/* transmit raw data as AAL5 encapsulated frame
+   on entry: r0 = remote MAST address
+      	     r1 = remote port number
+      	     r2 -> data
+      	     r3 = length of data buffer
+      	     r4 = previously returned socket descriptor, or 0
+*/
+int atm_txframe(_kernel_swi_regs *r)
+{
+  struct mast *m;
+
+  if( (r->r[4]) && (r->r[0] == 0) && (r->r[1] == 0) )
+  {
+    m = (struct mast *)(r->r[4]);
+    if(asm_write_fifo(m->m_socket_handle, AS_DATA_END, (unsigned char *)(r->r[2]), r->r[3],BlockToARMAddr)<0)
+    {
+#ifdef DEBUG
+      printf("atm_txframe: ran out of FIFO space!\n");
+#endif
+      r->r[3] = -1;
+      return(0);
+    }
+
+    else
+    { /* success */
+#ifdef DEBUG
+       printf("atm_txframe: packet sent OK.\n");
+#endif
+      r->r[3] = 0;
+      return(0);
+    }
+  } /* endif speedup */
+
+
+  if((m=mast_user_locate( (unsigned char *)(r->r[0]), (unsigned int)(r->r[1]) ) ) != 0)
+  {
+    r->r[4] = (unsigned int)m; /* return socket descriptor */
+
+    if(asm_write_fifo(m->m_socket_handle, AS_DATA_END, (unsigned char *)(r->r[2]), r->r[3],BlockToARMAddr) < 0)
+    {
+#ifdef DEBUG
+      printf("atm_txframe: ran out of FIFO space!\n");
+#endif
+      r->r[3] = -1;
+      return(0);
+    }
+    else
+    { /* success */
+#ifdef DEBUG
+       printf("atm_txframe: packet sent OK.\n");
+#endif
+      r->r[3] = 0;
+      return(0);
+    }
+
+  } /* lookup failed */
+#ifdef DEBUG
+       printf("atm_txframe: mast_user_locate lookup failed.\n");
+#endif
+    r->r[3] = -2;
+    r->r[4] = -1;
+    return(0);
+
+}

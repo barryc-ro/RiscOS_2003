@@ -1,0 +1,227 @@
+/*	PVC.C
+
+Project : ATML Panther ATM25 card driver
+
+Purpose: code to handle Permanent Virtual Circuits
+
+History:
+
+Date      Who     Description of change
+===========================================
+11/9/96  C.Elkins  Started modification history
+
+                   Modified pvc_connect_boot() to connect to default gateway,
+                   not boot server  and a check for no gateway address
+                   (default to ctrl server)
+
+19/3/97  CP        Revamped file header.
+
+                   Swapped byte order for ctrlserver from netwrok order to
+                   host order 'cos that's the way that StaticIP module stores
+                   it!
+
+1/4/97   CP        Expanded Carl's changes to check the netmask, and make an
+                   intelligent decision whether the control server is on the
+                   same subnet as the STB, or requires gatewaying (in which
+                   case the boot PVC is created to the gateway, and not to
+                   the server)
+
+***************************************************************************/
+
+#include <kernel.h>
+#include <swis.h>
+
+#include "headers.h"
+#include "module.h"
+
+#include "types.h"
+#include "utils.h"
+#include "mast.h"
+
+#include "atmio.h"
+#include "macros.h"
+#include "services.h"
+#include "panther.h"
+#include "ASSERTION.H"
+#include "sockcmds.h"
+#include "resources.h"
+#include "boson.h"
+#include "listen.h"
+#define PROTOTYPES_INTERNAL
+#include "pvc.h"
+#include "nvram.h"
+#include "ipconv.h"
+#include "nbit_mask.h"
+
+void pvc_connect_boot(void)
+{
+  _kernel_swi_regs r;
+
+  unsigned int vci_number;
+  unsigned int vci_host;
+  unsigned int vci_port;
+  unsigned char vci_host_string[32];
+
+  unsigned int gateway_host;
+  unsigned int netmask;
+
+  vci_number = do_pvc;
+
+  gateway_host = read_nvram_word(GWAYCMOSBASE);
+  vci_host = read_nvram_word(CONTROLCMOSBASE);  /* default the VC host to be
+                                                   the server until told
+                                                   otherwise */
+
+/* 1/4/97:CP:made the PVC creation intelligent, based on netmask value */
+  if(gateway_host != 0)
+  {
+    /*
+       there is a gateway, so now check that control server isn't on same
+       subnet
+    */
+    netmask = read_nvram_word(MASKCMOSBASE);
+
+    if((gateway_host & netmask) != (vci_host & netmask))
+    {
+      /* server is on a different subnet, so PVC to the gateway */
+       vci_host = gateway_host;
+    }
+  }
+
+  vci_host = ntohl(vci_host); /* 19/3/97:CP:swap byte order */
+
+  vci_port = do_vc ? M_IP : M_LLC;
+
+  ipuitos(vci_host, vci_host_string, '.');
+  pvc_create(vci_host_string, vci_port, vci_number);
+
+}
+
+void pvc_create(unsigned char *host, unsigned int port, unsigned int vci)
+{
+    int handle;
+    unsigned long adr;
+    struct mast *m;
+    unsigned int exists;
+    unsigned char dst[6];
+    AS_SOCKET_PARAMS socketcall;
+    AS_BIND_PVC_PARAMS bind_call;
+
+  socketcall.af       = AF_ATML_PVC;
+  socketcall.type     = SOCK_RAW;
+  socketcall.protocol = ATMPROTO_AAL5;
+  socketcall.flags    = 0;
+
+  bind_call.len = sizeof(ATML_SOCKADDR_PVC);
+  bind_call.pvc.satm_family = AF_ATML_PVC;
+  bind_call.pvc.satm_pvc = vci;
+
+  if((handle = get_handle(handle_wspace))<0) {
+#ifdef DEBUG
+       printf("pvc_create: failed with rc %d\n", handle);
+#endif
+       return; /* failed to get socket handle */
+  }
+
+  adr = inet_addr((char *)host);
+  dst[5] = (unsigned char)((adr >> 24) & 0xff);
+  dst[4] = (unsigned char)((adr >> 16) & 0xff);
+  dst[3] = (unsigned char)((adr >> 8) & 0xff);
+  dst[2] = (unsigned char)(adr & 0xff);
+  dst[1] = 0;
+  dst[0] = 0;
+
+  BlockWrite(CMD_MSG(CMD_HANDLE, SO_ATTACHX, (SOCK_SERVICE << 12) | handle)); /* attach handle to service */
+#ifdef DEBUG
+  printf("Attached handle: %d\n", handle);
+#endif
+
+  if(asm_write_fifo((unsigned int)handle, AS_SOCKET, (unsigned char *)&socketcall, sizeof(socketcall),BlockToARMAddr)<0) {
+#ifdef DEBUG
+    printf("pvc_create: called free_handle(), returned %d\n", free_handle(handle_wspace, handle));
+#else
+    free_handle(handle_wspace, handle);
+#endif
+
+#ifdef DEBUG
+    printf("Failed to issue AS_SOCKET call for socket.\n");
+#endif
+    return;
+  }
+#ifdef DEBUG
+  printf("Handle: %d socketcall bytes: %d\n", handle, sizeof(socketcall));
+#endif
+
+  if(asm_write_fifo((unsigned int)handle, AS_BIND, (unsigned char *)&bind_call, sizeof(bind_call),BlockToARMAddr)<0) {
+#ifdef DEBUG
+    printf("pvc_create: called free_handle(), returned %d\n", free_handle(handle_wspace, handle));
+#else
+    free_handle(handle_wspace, handle);
+#endif
+
+#ifdef DEBUG
+    printf("Failed to issue AS_BIND call for socket.\n");
+#endif
+    return;
+  }
+#ifdef DEBUG
+  printf("Handle: %d bindcall bytes: %d\n", handle, sizeof(bind_call));
+#endif
+
+
+  if((m = mast_add(&dst[2], port, 1, &exists, M_PERMANENT | M_CONNECT, (unsigned int)handle))!=NULL) {
+       m->m_muxtype = do_vc ? VC_MULTIPLEX : LLC_MULTIPLEX;
+       m->m_pvc_vcn = vci;
+
+       init_call_resources(m);
+  } else {
+#ifdef DEBUG
+    printf("pvc_create: called free_handle() returned %d\n", free_handle(handle_wspace, handle));
+#else
+    free_handle(handle_wspace, handle);
+#endif
+
+  }
+}
+
+
+void pvc_delete(unsigned char *host, unsigned int port, unsigned int vci)
+{
+  unsigned long adr;
+  unsigned char dst[6];
+  struct mast *m;
+  int handle;
+
+  adr = inet_addr((char *)host);
+  dst[5] = (unsigned char)((adr >> 24) & 0xff);
+  dst[4] = (unsigned char)((adr >> 16) & 0xff);
+  dst[3] = (unsigned char)((adr >> 8) & 0xff);
+  dst[2] = (unsigned char)(adr & 0xff);
+  dst[1] = 0;
+  dst[0] = 0;
+
+  for(m=&masttab[0]; m < &masttab[MASTTAB_SIZE]; m++) {
+    if((m->m_status & M_PERMANENT) &&
+       (m->m_port == port) &&
+       (m->m_pvc_vcn == vci) &&
+       (memcmp(&dst[2], &m->m_macadr[2], 4)==0)) {
+         handle = (int)(m->m_socket_handle);
+         mast_disconnect(dst, port);
+#ifdef DEBUG
+         printf("pvc_delete: called free_handle(), returned %d\n", free_handle(handle_wspace, handle));
+#else
+         free_handle(handle_wspace, handle);
+#endif
+
+#ifdef DEBUG
+	 printf("Detached handle: %d\n", handle);
+#endif
+	 return;
+       }
+  }
+#ifdef DEBUG
+  printf("Couldn't find MAST PVC entry for that host/port.\n");
+#endif
+  return;
+}
+
