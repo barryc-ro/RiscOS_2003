@@ -40,6 +40,7 @@ GlobalMenu global_menu =
 EventInterest   messages_of_interest[] =
                 {{wimp_MHELP_REQUEST  ,  0},
                  {wimp_MMENUS_DELETED ,  0},
+                 {wimp_MMENU_WARNING  ,  0},
                  {-1                  , -1}
                 };
 
@@ -78,6 +79,12 @@ extern BOOL menu_showing (int *buffer) {
       return FALSE;
 }
 
+/*
+ * generate_fontmenu
+ *
+ * Creates the font menu, storing in global_menu.wimp_menu and wimp_menu_indirect
+ * Assumes buffer space already allocated
+ */
 extern _kernel_oserror *generate_fontmenu (void) {
 
    _kernel_oserror    *e;
@@ -124,9 +131,59 @@ extern _kernel_oserror *generate_fontmenu (void) {
    return NULL;
 }
 
+/*
+ * allocate_fontmenu_memory
+ *
+ * Allocates buffer space in wimp_menu and wimp_menu_indirect for font menu
+ */
+extern _kernel_oserror *allocate_fontmenu_memory (void)
+{
+    int menusize, indirectsize;
+    _kernel_oserror *e;
+
+    if (global_menu.wimp_menu)
+        mem_freek (global_menu.wimp_menu);
+    if (global_menu.wimp_menu_indirect)
+        mem_freek (global_menu.wimp_menu_indirect);
+
+    DEBUG debug_output ("s","FontMenu: entering Font_ListFonts\n");
+
+    if ((e = _swix (Font_ListFonts, _INR(1,6)|_OUT(3)|_OUT(5),
+                    0,            /* return required size */
+                    (1<<21|1<<19) /* tick font indicated by R6 + return font menu defn */
+                       | ((global_menu.current->flags & FontMenuInternal_IncludeSystemFont) ? 1<<20: 0),
+                    0,
+                    0,
+                    0,
+                    0,
+                    &menusize,
+                    &indirectsize
+                    )) != NULL)
+        return e;
+
+    if ((global_menu.wimp_menu = mem_alloc (menusize)) == NULL)
+        return make_error (FontMenu_AllocFailed,0);
+
+    global_menu.menu_size = menusize;
+
+    if ((global_menu.wimp_menu_indirect = mem_alloc (indirectsize)) == NULL) {
+        e = make_error (FontMenu_AllocFailed,0);
+        goto clearup1;
+    }
+    global_menu.indirect_size = indirectsize;
+
+    return NULL;
+
+ clearup1:
+    mem_freek(global_menu.wimp_menu);
+    global_menu.wimp_menu = NULL;
+    global_menu.current   = NULL;
+    return e;
+}
+
 extern _kernel_oserror *fontmenu_set_font (FontMenuInternal *menu_int, char *new_font) {
 
-   char                  *buffer;
+   char *buffer = NULL;
 
    if (new_font) {
       DEBUG debug_output ("y","Font Menu: setting font to '%s'\n",new_font);
@@ -134,14 +191,14 @@ extern _kernel_oserror *fontmenu_set_font (FontMenuInternal *menu_int, char *new
          return make_error (FontMenu_AllocFailed,0);
 
       string_copy (buffer, new_font);
+   }
 
-      if (menu_int->ticked_font) {
-         DEBUG debug_output ("a","FontMenu: about to free memory\n");
-         mem_freek (menu_int->ticked_font);
-      }
-      menu_int->ticked_font = buffer;
-   } else
-      menu_int->ticked_font = NULL;
+   if (menu_int->ticked_font) {
+      DEBUG debug_output ("a","FontMenu: about to free memory\n");
+      mem_freek (menu_int->ticked_font);
+   }
+
+   menu_int->ticked_font = buffer;
 
    DEBUG if (menu_int->ticked_font) debug_output ("a","FontMenu: ticked font is '%s'\n",menu_int->ticked_font);
 
@@ -151,21 +208,16 @@ extern _kernel_oserror *fontmenu_set_font (FontMenuInternal *menu_int, char *new
 extern _kernel_oserror *hide_menu (FontMenuInternal *menu_int) {
 
     _kernel_oserror   *e;
-    _kernel_swi_regs   regs;
     int                buffer[64];
 
 
    if (global_menu.current == menu_int) {
 
-      regs.r[0] = 0;
-      regs.r[1] = (int) buffer;
-
-      if ((e = _kernel_swi (Wimp_GetMenuState, &regs, &regs)) != NULL)
+      if ((e = _swix (Wimp_GetMenuState, _INR(0,1), 0, buffer)) != NULL)
          return e;
 
       if (menu_showing(buffer)) {
-        regs.r[1] = -1;
-        if ((e = _kernel_swi (Wimp_CreateMenu, &regs, &regs)) != NULL)
+        if ((e = _swix (Wimp_CreateMenu, _IN(1), -1)) != NULL)
           return e;
         return has_been_hidden ();
       }
@@ -176,54 +228,39 @@ extern _kernel_oserror *hide_menu (FontMenuInternal *menu_int) {
 _kernel_oserror *update_tree (void) {
 
    _kernel_oserror  *e;
-   _kernel_swi_regs  regs;
 
    DEBUG debug_output ("a","FontMenu: updating menu tree\n");
 
-   if (global_menu.flags & GLOBAL_MENU_INFO_FLAGS_IS_SHOWING) {
-      if ((e = _kernel_swi (Menu_UpdateTree, &regs, &regs)) != NULL)
-         return e;
+   if ((e = _swix (Menu_UpdateTree, 0)) != NULL)
+      return e;
 
+/*   global_menu.flags |= GLOBAL_MENU_INFO_FLAGS_SHOW_NEXT; */
 
-/*      global_menu.flags |= GLOBAL_MENU_INFO_FLAGS_SHOW_NEXT; */
+   /* IDJ: 18-May-95: bug-fix AQU-01201: fix submenu behaviour */
+   if (global_menu.flags & GLOBAL_MENU_INFO_FLAGS_TOP_LEVEL) {
 
-      /* IDJ: 18-May-95: bug-fix AQU-01201: fix submenu behaviour */
-      if (global_menu.flags & GLOBAL_MENU_INFO_FLAGS_TOP_LEVEL) {
-          regs.r[1] = (int) global_menu.wimp_menu;
-
-          return _kernel_swi (Wimp_CreateMenu, &regs, &regs);
-      }
+       return _swix (Wimp_CreateMenu, _IN(1), global_menu.wimp_menu);
    }
    return NULL;
 }
 
 _kernel_oserror *menu_show_actual (void) {
 
-  _kernel_swi_regs  regs;
-   _kernel_oserror  *e;
-
-   regs.r[1] = (int) global_menu.wimp_menu;         /* Wimp menu block */
-   regs.r[2] = global_menu.x;
-   regs.r[3] = global_menu.y;
-
    DEBUG debug_output ("e","FontMenu: showing menu, 0x%x\n",global_menu.current->object_id);
 
-   e =  _kernel_swi (Wimp_CreateMenu, &regs, &regs);
-
-   return e;
+   return _swix (Wimp_CreateMenu, _INR(1,3), global_menu.wimp_menu, /* Wimp menu block */
+                                             global_menu.x,
+                                             global_menu.y);
 }
 _kernel_oserror *menu_show_submenu_actual (void) {
 
-   _kernel_swi_regs  regs;
    _kernel_oserror  *e;
-
-   regs.r[1] = (int) global_menu.wimp_menu;      /* Wimp menu block */
-   regs.r[2] = global_menu.x;
-   regs.r[3] = global_menu.y;
 
    DEBUG debug_output ("e","FontMenu: showing submenu, object_id = 0x%x; wimp_Menu = 0x%x; vert_gap = %d\n",global_menu.current->object_id,(int)global_menu.wimp_menu, global_menu.wimp_menu->hdr.vert_gap);
 
-   e = _kernel_swi (Wimp_CreateSubMenu, &regs, &regs);
+   e = _swix (Wimp_CreateSubMenu, _INR(1,3), global_menu.wimp_menu, /* Wimp menu block */
+                                             global_menu.x,
+                                             global_menu.y);
 
    DEBUG debug_output ("e","FontMenu: just after Wimp_CreateSubmenu, e = 0x%x\n",e);
 
@@ -233,7 +270,6 @@ _kernel_oserror *menu_show_submenu_actual (void) {
 extern _kernel_oserror *has_been_hidden (void) {
 
    _kernel_oserror  *e;
-   _kernel_swi_regs  regs;
    ToolboxEvent      toolbox_event;
 
    if (global_menu.current->flags & FontMenuInternal_GenerateHideEvent) {
@@ -242,12 +278,12 @@ extern _kernel_oserror *has_been_hidden (void) {
       toolbox_event.hdr.event_code = FontMenu_HasBeenHidden;
       toolbox_event.hdr.flags      = 0;
 
-      regs.r[0] = 0;
-      regs.r[1] = global_menu.current->object_id;
-      regs.r[2] = -1;
-      regs.r[3] = (int) &toolbox_event;
-
-      if ((e = _kernel_swi (Toolbox_RaiseToolboxEvent, &regs, &regs)) != NULL)
+      if ((e = _swix (Toolbox_RaiseToolboxEvent, _INR(0,3),
+                            0,
+                            global_menu.current->object_id,
+                            -1,
+                            &toolbox_event
+                      )) != NULL)
          return e;
    }
    global_menu.current  =  NULL;
