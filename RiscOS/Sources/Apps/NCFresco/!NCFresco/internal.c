@@ -58,48 +58,70 @@ static void get_form_size(int *width, int *height)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static os_error *fe_version_write_file(FILE *f, be_doc doc)
+static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
-    char *url, *title;
-    const char *s;
-    char *s1, *s2;
-
-    if (doc == NULL)
-	return NULL;
-
+    char *qlink, *qtitle;
+    
+    qlink = extract_value(query, "url=");
+    qtitle = extract_value(query, "title=");
+    
     fputs(msgs_lookup("versionT"), f);
-    fputc('\n', f);
-
-    url = title = NULL;
-    backend_doc_info(doc, NULL, NULL, &url, &title);
-
     fprintf(f, msgs_lookup("version1"), fresco_version);
-    if (title)
-	fprintf(f, msgs_lookup("version2"), title);
-    if (url)
-	fprintf(f, msgs_lookup("version3"), url);
 
-    s1 = strdup(backend_check_meta(doc, "last-modified"));
-    s2 = strdup(backend_check_meta(doc, "expires"));
-    if (s1 || s2)
+    if (qlink)
     {
-	fprintf(f, msgs_lookup("version4"), s1 ? s1 : msgs_lookup("Unknown"), s2 ? s2 : msgs_lookup("Unknown"));
-	mm_free(s1);
-	mm_free(s2);
+	char *link = qlink;
+
+	if (strncasecomp(qlink, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) == 0)
+	    link = extract_value(qlink, "url=");
+	
+	if (link)
+	    fprintf(f, msgs_lookup("version3a"), link);
+
+	if (qtitle)
+	    fprintf(f, msgs_lookup("version2"), qtitle);
+
+	if (link != qlink)
+	    mm_free(link);
+    }
+    else
+    {
+	char *url, *title;
+	const char *s;
+
+	if (doc == NULL)
+	    return NULL;
+
+	url = title = NULL;
+	backend_doc_info(doc, NULL, NULL, &url, &title);
+
+	if (title)
+	    fprintf(f, msgs_lookup("version2"), title);
+
+	if (url && strncasecomp(qlink, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0)
+	    fprintf(f, msgs_lookup("version3"), url);
+
+	if ((s = backend_check_meta(doc, "last-modified")) != NULL)
+	    fprintf(f, msgs_lookup("version4"), s);
+
+	if ((s = backend_check_meta(doc, "expires")) != NULL)
+	    fprintf(f, msgs_lookup("version5"), s);
+
+	if ((s = backend_check_meta(doc, "author")) != NULL)
+	    fprintf(f, msgs_lookup("version6"), s);
+
+	if ((s = backend_check_meta(doc, "description")) != NULL)
+	    fprintf(f, msgs_lookup("version7"), s);
+
+	if ((s = backend_check_meta(doc, "copyright")) != NULL)
+	    fprintf(f, msgs_lookup("version8"), s);
     }
 
-    if ((s = backend_check_meta(doc, "author")) != NULL)
-	fprintf(f, msgs_lookup("version6"), s);
-
-    if ((s = backend_check_meta(doc, "description")) != NULL)
-	fprintf(f, msgs_lookup("version7"), s);
-
-    if ((s = backend_check_meta(doc, "copyright")) != NULL)
-	fprintf(f, msgs_lookup("version8"), s);
-
     fputs(msgs_lookup("versionF"), f);
-    fputc('\n', f);
-
+    
+    mm_free(qlink);
+    mm_free(qtitle);
+    
     return NULL;
 }
 
@@ -501,54 +523,21 @@ static int vals_to_bits(int n_vals)
     return n_bits;
 }
 
-static int nvram_do(int bit_start, int n_bits, int new_val)
-{
-    int mask, byte, offset, r, old;
-
-    mask = (1<<n_bits) - 1;
-    byte = bit_start/8;
-    offset = bit_start%8;
-
-    /* read current value */
-    r = _kernel_osbyte(0xA1, byte, 0);
-    if (r == _kernel_ERROR)
-	return -1;
-
-    r = (r >> 8) & 0xff;
-    old = (r & mask) >> offset;
-
-    if (new_val != -1)
-    {
-	r &= ~(mask << offset);
-	r |= new_val << offset;
-	_kernel_osbyte(0xA2, byte, r);
-    }
-    
-    return old;
-}
-
-static int nvram_read(int bit_start, int n_bits)
-{
-    return nvram_do(bit_start, n_bits, -1);
-}
-
-static void nvram_write(int bit_start, int n_bits, int val)
-{
-    nvram_do(bit_start, n_bits, val);
-}
-
-#define NVRAM_FONTS	(131*8 + 0)
-#define NVRAM_SOUND	(131*8 + 2)
-#define NVRAM_BEEPS     (131*8 + 3)
+#define NVRAM_FONTS	(0x131*8 + 0)
+#define NVRAM_FONTS_TAG	"BrowserFontSize"
+#define NVRAM_SOUND	(0x131*8 + 2)
+#define NVRAM_SOUND_TAG	"BrowserMusicStatus"
+#define NVRAM_BEEPS     (0x131*8 + 3)
+#define NVRAM_BEEPS_TAG	"BrowserBeepStatus"
 
 /* ------------------------------------------------------------------------------------------- */
 
-static os_error *fe_custom_write_file(FILE *f, const char *tag, int bit_start, int n_vals)
+static os_error *fe_custom_write_file(FILE *f, const char *tag, const char *nvram_tag, int bit_start, int n_vals)
 {
     char tag_buf[8];
     int val, i;
 
-    val = nvram_read(bit_start, vals_to_bits(n_vals));
+    val = nvram_op(nvram_tag, bit_start, vals_to_bits(n_vals), 0, FALSE);
     
     sprintf(tag_buf, "m%sT", tag);
     fputs(msgs_lookup(tag_buf), f);
@@ -557,7 +546,6 @@ static os_error *fe_custom_write_file(FILE *f, const char *tag, int bit_start, i
     {
 	sprintf(tag_buf, "m%s%d", tag, i);
  	fprintf(f, msgs_lookup(tag_buf), val == i ? "radioon" : "radiooff");
-/* 	fprintf(f, msgs_lookup(tag_buf), val == i ? "CHECKED" : ""); */
     }
 
     sprintf(tag_buf, "m%sF", tag);
@@ -576,7 +564,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (font)
     {
 	int font_val = atoi(font);
-	nvram_write(NVRAM_FONTS, 2, font_val);
+	nvram_op(NVRAM_FONTS_TAG, NVRAM_FONTS, 2, font_val, TRUE);
 
 	fe_font_size_set(font_val, TRUE);
 
@@ -587,7 +575,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (sound)
     {
 	int sound_val = atoi(sound);
-	nvram_write(NVRAM_SOUND, 1, sound_val);
+	nvram_op(NVRAM_SOUND_TAG, NVRAM_SOUND, 1, sound_val, TRUE);
 
 	*url = strdup("ncfrescointernal:openpanel?name=customsound");
 	generated = fe_internal_url_REDIRECT;
@@ -596,7 +584,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (beeps)
     {
 	int beeps_val = atoi(beeps);
-	nvram_write(NVRAM_BEEPS, 1, beeps_val);
+	nvram_op(NVRAM_BEEPS_TAG, NVRAM_BEEPS, 1, beeps_val, TRUE);
 
 	*url = strdup("ncfrescointernal:openpanel?name=custombeeps");
 	generated = fe_internal_url_REDIRECT;
@@ -632,7 +620,7 @@ static int internal_decode_password(const char *query)
 	fe_passwd_abort();
     else
     {	
-	name = extract_value(query, "name=");
+	name = extract_value(query, "uname=");
 	pass = extract_value(query, "pass=");
 
 	STBDBG(( "name='%s'\n", name));
@@ -678,7 +666,7 @@ static os_error *fe_passwd_write_file(FILE *f)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-void fe_passwd_abort(void)
+BOOL fe_passwd_abort(void)
 {
     fe_passwd pw = fe_current_passwd;
 
@@ -688,7 +676,11 @@ void fe_passwd_abort(void)
             (pw->cb)(pw, pw->h, NULL, NULL);
 
         frontend_passwd_dispose(pw);
+
+	return TRUE;
     }
+
+    return FALSE;
 }
 
 fe_passwd frontend_passwd_raise(backend_passwd_callback cb, void *handle,
@@ -900,11 +892,8 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "info") == 0)
 	{
 	    v = get_source_view(query, TRUE);
-	    if (v)
-	    {
-		tb_status_button(fevent_INFO_PAGE, TRUE);
-		e = fe_version_write_file(f, v->displaying);
-	    }
+	    tb_status_button(fevent_INFO_PAGE, TRUE);
+	    e = fe_version_write_file(f, v ? v->displaying : NULL, query);
 	}
 	else if (strcasecomp(panel_name, "memdump") == 0)
 	{
@@ -932,17 +921,17 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "customfonts") == 0)
 	{
 	    tb_status_button(fevent_OPEN_FONT_SIZE, TRUE);
-	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS, 3);
+	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS_TAG, NVRAM_FONTS, 3);
 	}    
 	else if (strcasecomp(panel_name, "customsound") == 0)
 	{
 	    tb_status_button(fevent_OPEN_SOUND, TRUE);
-	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND, 2);
+	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND_TAG, NVRAM_SOUND, 2);
 	}    
 	else if (strcasecomp(panel_name, "custombeeps") == 0)
 	{
 	    tb_status_button(fevent_OPEN_BEEPS, TRUE);
-	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS, 2);
+	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS_TAG, NVRAM_BEEPS, 2);
 	}    
     
 	fclose(f);
@@ -952,10 +941,11 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    set_file_type(file, FILETYPE_HTML);
 	    generated = fe_internal_url_NEW;
 	}
+	frontend_complain(e);
     }
     mm_free(panel_name);
     mm_free(mode);
-
+    
     return generated;
     NOT_USED(referer);
 }
@@ -1191,14 +1181,8 @@ static int internal_action_printpage(const char *query, const char *bfile, const
     char *size = extract_value(query, "size=");
     BOOL legal = size && strcasecomp(size, "legal") == 0;
 
-    if (use_toolbox)
-	tb_status_button(legal ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, TRUE);
-    
     if (v)
-	fe_print(v);
-
-    if (use_toolbox)
-	tb_status_button(legal ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, FALSE);
+	frontend_complain(fe_print(v, legal ? fe_print_LEGAL : fe_print_LETTER));
     
     mm_free(size);
     

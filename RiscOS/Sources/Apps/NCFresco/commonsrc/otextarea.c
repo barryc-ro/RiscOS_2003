@@ -390,13 +390,22 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
     rid_textarea_line *tal;
     int i, h;
 
+    tai = ((rid_text_item_textarea *)ti)->area;
+
+    if (repos == object_caret_BLUR && tai->base.colours.select != -1)
+    {
+	antweb_update_item(doc, ti);
+	return FALSE;
+    }
+    
+    if (repos == object_caret_REPOSITION && tai->base.colours.select != -1)
+	antweb_update_item(doc, ti);
+    
     if (doc->text_input_offset < 0)
     {
 	doc->text_input_offset = 0;
-	repos = 1;
+	repos = object_caret_REPOSITION;
     }
-
-    tai = ((rid_text_item_textarea *)ti)->area;
 
     for(tal = tai->lines, i = tai->cy; i && tal->next; i--, tal = tal->next)
 	;
@@ -432,7 +441,7 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
     h = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
     h |= render_caret_colour(doc, tai->base.colours.back, tai->base.colours.cursor);
 
-    frontend_view_caret(doc->parent, cx, cy, h, repos);
+    frontend_view_caret(doc->parent, cx, cy, h, repos == object_caret_REPOSITION || repos == object_caret_FOCUS);
 #endif /* BUILDERS */
     return TRUE;
 }
@@ -716,7 +725,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	/* We want to move the caret out of the area that gets block-copied before the copy */
 	if (flags & REPOS_CARET)
 	{
-	    otextarea_caret(ti, rh, doc, TRUE);
+	    otextarea_caret(ti, rh, doc, object_caret_REPOSITION);
 	    flags &= ~REPOS_CARET;
 	}
 
@@ -740,7 +749,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
     if (flags & REPOS_CARET)
     {
-	otextarea_caret(ti, rh, doc, TRUE);
+	otextarea_caret(ti, rh, doc, object_caret_REPOSITION);
     }
 
     return ((flags & CHAR_USED) != 0);

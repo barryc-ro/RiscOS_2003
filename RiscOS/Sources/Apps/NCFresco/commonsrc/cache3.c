@@ -334,7 +334,10 @@ static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
         if (cc->file_num != NO_FILE)
 	{
 	    char *cfile = index_file_name(dir->dir_num, cc->file_num);
-            if (remove(cfile))
+
+	    ACCDBG(("cache_remove_file: '%s' '%s'\n", cc->url, cfile));
+
+	    if (remove(cfile))
 	    {
 		int type;
 		/* if file is open then this counts as a fail and it can't be removed */
@@ -421,6 +424,8 @@ static void cache_make_room(int size)
     {
 	if (size > limit)
 	    size = limit;
+
+	ACCDBG(("cache_make_room: limit %d size %d\n", limit, size));
 
 	while (cache_data_size + size > limit)
 	{

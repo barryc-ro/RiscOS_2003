@@ -317,6 +317,10 @@ static void plugin_write_parameter_record(FILE *f, plugin_parameter_type paramty
 static void plugin_write_parameter_numeric(FILE *f, const char *name, const rid_stdunits *val)
 {
     char buf[32];
+
+    if (val == NULL)
+	return;
+
     switch (val->type)
     {
     case value_integer:

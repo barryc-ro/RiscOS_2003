@@ -553,7 +553,7 @@ char *url_escape_chars(const char *s, const char *escapes)
 /* #define FORM_UNRESERVED_CHARS	"$-_.!*'()," */ /* don't want + as it is used for ' ' */ 
 #define FORM_UNRESERVED_CHARS	"*-.@_"
 
-void url_escape_cat(char *buffer, const char *in, int len)
+int url_escape_cat(char *buffer, const char *in, int len)
 {
     int i,j;
     int sl;
@@ -595,6 +595,8 @@ void url_escape_cat(char *buffer, const char *in, int len)
 	}
     }
     buffer[j] = 0;
+
+    return j;
 }
 
 void url_escape_to_file(const char *s, FILE *f)

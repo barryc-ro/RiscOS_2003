@@ -39,11 +39,12 @@
 #define WORLD_SPRITE	"pgbtnuhl"
 #define WORLD_SPRITE_HL	"pgbtnhl"
 
+#if 0
 #define UP_SPRITE	"upbtnuhl"
 #define UP_SPRITE_HL	"upbtnhl"
 #define DOWN_SPRITE	"dabtnuhl"
 #define DOWN_SPRITE_HL	"dabtnhl"
-
+#endif
 /* --------------------------------------------------------------------------*/
 
 #define Toolbox_CreateObject                    0x44EC0
@@ -886,6 +887,11 @@ static void tb_bar_dispose(void)
 
 /* --------------------------------------------------------------------------*/
 
+BOOL tb_status_unstack_possible(void)
+{
+    return bar_list && bar_list->next;
+}
+
 BOOL tb_status_unstack(void)
 {
     tb_status_state_t old_state = status_state;
@@ -1394,7 +1400,7 @@ void tb_menu_refresh(fe_view v)
 
 void tb_status_update_fades(fe_view v)
 {
-    if (bar_list)
+    if (bar_list && v)
     {
 	int obj = bar_list->object_handle;
 	gfade(obj, fevent_HISTORY_BACK, !fe_history_possible(v, history_PREV));
@@ -1403,6 +1409,8 @@ void tb_status_update_fades(fe_view v)
 	gfade(obj, fevent_HOTLIST_ADD, !fe_hotlist_add_possible(v));
 	gfade(obj, fevent_PRINT, !fe_print_possible(v));
 	gfade(obj, fevent_STOP_LOADING, !fe_abort_fetch_possible(v));
+
+	gfade(obj, fevent_TOOLBAR_EXIT, !fe_status_unstack_possible(v));
     }
 }
 
@@ -1671,7 +1679,7 @@ void tb_status_rotate(void)
 	
 	turn_ctr = ((alarm_timenow() - turn_start) * TURN_SPEED / 100) % config_animation_frames;
 	
-	sprintf(sprite_name1, "%suhl%02d,%shl%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
+	sprintf(sprite_name1, "%s%02d,%ss%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
 	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
     }
 }
@@ -1681,7 +1689,11 @@ void tb_status_rotate_reset(void)
 {
     turn_ctr = -1;
     if (bar_list)
-	setfield(bar_list->object_handle, I_WORLD, WORLD_SPRITE","WORLD_SPRITE_HL, FALSE);
+    {
+	char sprite_name1[40];
+	sprintf(sprite_name1, "%s,%ss", config_animation_name, config_animation_name);
+	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
+    }
 }
 
 /*

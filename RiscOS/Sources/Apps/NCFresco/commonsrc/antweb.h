@@ -38,6 +38,10 @@ typedef struct awp_page_str {
 #define doc_flag_INCOMPLETE	(1<<17)	/* The document fetch was haltedc before it was done */
 #define doc_flag_SECURE		(1<<18)	/* A secure method, such as SSL, was used. */
 
+#define doc_selection_tag_TEXT	0
+#define doc_selection_tag_AREF	1
+#define doc_selection_tag_AREA	2
+
 typedef struct _antweb_doc {
     struct _antweb_doc *next;
     int magic;			/* Magic number */
@@ -59,16 +63,30 @@ typedef struct _antweb_doc {
     int widest;			/* Width of the widest item in the page */
 #endif
     struct _frontend_view *parent;	/* The view that this document will come out in */
+
     int im_fetched;		/* The number of images fetched so far */
     int im_fetching;		/* The number of images being fetched */
     int im_unfetched;		/* The number of images yet to be fetched */
     int im_error;		/* The number of images that failed to get fetched */
     int im_in_transit;		/* The number of bytes in the images in transit */
     int im_so_far;		/* The bytes so far for those in transit */
+
     rid_text_item *input;
     int text_input_offset;
+
+    struct			/* the currently selected item. Could be an anchor or a text item */
+    {				/* an AREF covers an anchor linking several text items  */
+	int tag;		/* a label anchor linking text and inputs  */
+	union			/* an AREA covers an individual item in a client-side imagemap or SHAPED OBJECT */
+	{			/* a TEXT covers the other highlightable objects */
+	    rid_text_item *text;
+	    rid_aref_item *aref;
+	    rid_area_item *area;
+	} data;
+    } selection;
+
     awp_page_str *paginate, *last_page;
-    struct _antweb_doc *fetching;
+    struct _antweb_doc *fetching; /* currently fetching imagemap */
     struct layout_spacing_info *spacing_list;
     int object_handler_count;	/* Number of objects that are active, when 0 remove message handler */
 #if USE_MARGINS

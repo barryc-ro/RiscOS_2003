@@ -1162,6 +1162,8 @@ os_error *fe_start_task(const char *cli, wimp_t *task_out)
     visdelay_begin();
     
     /* always try this, never mind whether an error occurs or not */
+    _kernel_setenv(PROGRAM_NAME"$LastCLI", cli);
+
     e = (os_error *)_swix(Wimp_StartTask, _IN(0)|_OUT(0), cli, task_out);
 
     visdelay_end();

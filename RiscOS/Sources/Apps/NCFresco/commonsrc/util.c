@@ -197,6 +197,40 @@ int file_type_real(const char *fname)
     return r.r[2];
 }
 
+/* return last modified time in unix style */
+
+int file_last_modified(const char *fname)
+{
+    os_filestr ofs;
+
+    ofs.action = 17;		/* changed from 5 as we don't want any paths being looked at */
+    ofs.name = (char *)fname;
+
+    if (os_file(&ofs) != NULL)
+	return 0;
+
+    if (((unsigned)ofs.loadaddr & 0xfff00000) == 0xfff00000)	/* date stamped file */
+    {
+        unsigned int t1, t2, tc;
+
+        t1 = (unsigned int) ofs.execaddr;
+        t2 = (unsigned int) ofs.loadaddr & 0xff;
+
+        tc = 0x6e996a00U;
+        if (t1 < tc)
+	    t2--;
+        t1 -= tc;
+        t2 -= 0x33;		/* 00:00:00 Jan. 1 1970 = 0x336e996a00 */
+
+        t1 = (t1 / 100) + (t2 * 42949673U);	/* 0x100000000 / 100 = 42949672.96 */
+        t1 -= (t2 / 25);		/* compensate for .04 error */
+
+        return t1;
+    }
+
+    return 0;
+}
+
 int file_type(const char *fname)
 {
     int ft, ft2;
@@ -665,6 +699,58 @@ extern os_error *ensure_modem_line(void)
 
     return e;
 }
+#endif
+
+#ifdef STBWEB
+int cmos_op(int bit_start, int n_bits, int new_val, BOOL write)
+{
+    int mask, byte, offset, r, old;
+
+    mask = (1<<n_bits) - 1;
+    byte = bit_start/8;
+    offset = bit_start%8;
+
+    /* read current value */
+    r = _kernel_osbyte(0xA1, byte, 0);
+    if (r == _kernel_ERROR)
+	return -1;
+
+    r = (r >> 8) & 0xff;
+
+    if (!write)
+	return (r & mask) >> offset;
+
+    r &= ~(mask << offset);
+    r |= new_val << offset;
+    _kernel_osbyte(0xA2, byte, r);
+
+    return 0;
+}
+
+#define NVRAM_Read	0x4EE00
+#define NVRAM_Write	0x4EE01
+
+int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write)
+{
+    char buf[4];
+    int err;
+    if (!write)
+    {
+	_swix(NVRAM_Read, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
+	if (err == 0)
+	    return *(int *)buf;
+    }
+    else
+    {
+	*(int *)buf = new_val;
+	_swix(NVRAM_Write, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
+	if (err == 0)
+	    return 0;
+    }
+
+    return bit_start == -1 ? 0 : cmos_op(bit_start, n_bits, new_val, write);
+}
+
 #endif
 
 /* eof util.c */

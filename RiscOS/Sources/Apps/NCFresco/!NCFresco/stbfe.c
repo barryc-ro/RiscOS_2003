@@ -57,6 +57,7 @@
 #include "version.h"
 #include "licence.h"
 #include "plugin.h"
+#include "print.h"
 
 #ifdef STBWEB_BUILD
 #include "http.h"
@@ -211,7 +212,7 @@ static fe_message_handler_item *message_handlers = NULL;
 static int user_status_open = TRUE;
 
 static int linedrop_time = 0;
-static int keyboard_state = fe_keyboard_OFFLINE;
+static int keyboard_state = fe_keyboard_ONLINE;
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -375,12 +376,12 @@ void fe_open_keyboard(fe_view v)
     int n;
 
     n = sprintf(buffer, "NCKeyboard %s",
-	    keyboard_state == fe_keyboard_ONLINE ? "-extension 0" : "");
+	    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
     
     if (config_display_control_top)
-	sprintf(buffer + n, "-scrolldown %d", text_safe_box.y1 - tb_status_height());
+	sprintf(buffer + n, " -scrolldown %d", text_safe_box.y1 - tb_status_height());
     else
-	sprintf(buffer + n, "-scrollup %d", text_safe_box.y0 + tb_status_height());
+	sprintf(buffer + n, " -scrollup %d", text_safe_box.y0 + tb_status_height());
 
     fe_start_task(buffer, NULL);
     NOT_USED(v);
@@ -528,7 +529,7 @@ void frontend_fade_frame(fe_view v, wimp_paletteword colour)
 static int decode_string(const char *input, const char *matches[], int nmatches)
 {
     int i;
-    for (i = 0; i < nmatches; i++)
+    if (input) for (i = 0; i < nmatches; i++)
 	if (strcasecomp(input, matches[i]) == 0)
 	    return i;
     return -1;
@@ -625,6 +626,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" }; /* order must agree with #defines in stbview.h */
 	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0])];
 	    wimp_box box;
+	    int new_keyboard_state;
 
 	    parse_http_header(ncmode, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
 
@@ -632,7 +634,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    v->selected_id = strdup(vals[0].value);
 
 	    toolbar_state = decode_string(vals[1].value, on_off_list, sizeof(on_off_list)/sizeof(on_off_list[0]));
-	    keyboard_state = decode_string(vals[1].value, on_off_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]));
+	    if ((new_keyboard_state = decode_string(vals[1].value, on_off_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]))) != -1)
+		keyboard_state = new_keyboard_state;
+	    else
+		keyboard_state = fe_keyboard_ONLINE;
 	    
 	    /* set up a pending line drop */
 	    if (vals[1].value && linedrop_time == 0)
@@ -822,11 +827,17 @@ fe_view fe_dbox_view(const char *name)
     if (strcasecomp(name, TARGET_PASSWORD) == 0 ||
 	strcasecomp(name, TARGET_DBOX) == 0)
     {
+#if 1
+	box.x0 = (text_safe_box.x0*7 + text_safe_box.x1  )/8;
+	box.x1 = (text_safe_box.x0   + text_safe_box.x1*7)/8;
+	box.y0 = (text_safe_box.y0*6 + text_safe_box.y1*2)/8;
+	box.y1 = (text_safe_box.y0*2 + text_safe_box.y1*6)/8;
+#else
 	box.x0 = (text_safe_box.x0*3 + text_safe_box.x1  )/4;
 	box.x1 = (text_safe_box.x0   + text_safe_box.x1*3)/4;
 	box.y0 = (text_safe_box.y0*3 + text_safe_box.y1  )/4;
 	box.y1 = (text_safe_box.y0   + text_safe_box.y1*3)/4;
-
+#endif
 	memset(&info.margin, 0, sizeof(info.margin));
     }
     else if (strcasecomp(name, TARGET_INFO) == 0)
@@ -968,25 +979,49 @@ const char *fe_printer_name(void)
     return s ? s : "";
 }
 
-os_error *fe_print(fe_view v)
+#define PPrimer_ChangePrinter	0x4B100
+
+os_error *fe_print(fe_view v, int size)
 {
     char *s;
+    os_error *e = NULL;
+    int old_size = -1;
 
     s = getenv("Printer$");
     if (s == NULL || s[0] == 0)
         return makeerror(ERR_NO_PRINTER);
 
-/*     tb_status_set_message(status_type_ERROR, "Printing"); */
+    if (size != fe_print_DEFAULT)
+    {
+	old_size = nvram_op("PaperSize", 0x6D*8, 2, 0, FALSE);
+	nvram_op("PaperSize", 0x6D*8, 2, size == fe_print_LEGAL ? 2 : 1, TRUE);
+	_swix(PPrimer_ChangePrinter, 0);
+    }
+
+    if (use_toolbox)
+	tb_status_button(size == fe_print_DEFAULT ? fevent_PRINT : size == fe_print_LEGAL ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, TRUE);
     
-    return awp_print_document(v->displaying, config_print_scale,
-        (config_print_nopics ? awp_print_NO_PICS : 0) |
-        (config_print_nobg ? awp_print_NO_BACK : 0) |
-        (config_print_nocol ? awp_print_NO_COLOUR : 0) |
-        (print__ul ? awp_print_UNDERLINE : 0) |
-        (config_print_sideways ? awp_print_SIDEWAYS : 0) |
-        (config_print_collated ? awp_print_COLLATED : 0) |
-        (config_print_reversed ? awp_print_REVERSED : 0),
-        print__copies);
+    if (!e)
+	e = awp_print_document(v->displaying, config_print_scale,
+			       (config_print_nopics ? awp_print_NO_PICS : 0) |
+			       (config_print_nobg ? awp_print_NO_BACK : 0) |
+			       (config_print_nocol ? awp_print_NO_COLOUR : 0) |
+			       (config_display_links_underlined ? awp_print_UNDERLINE : 0) |
+			       (config_print_sideways ? awp_print_SIDEWAYS : 0) |
+			       (config_print_collated ? awp_print_COLLATED : 0) |
+			       (config_print_reversed ? awp_print_REVERSED : 0),
+			       print__copies);
+
+    if (use_toolbox)
+	tb_status_button(size == fe_print_DEFAULT ? fevent_PRINT : size == fe_print_LEGAL ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, FALSE);
+    
+    if (old_size != -1)
+    {
+	nvram_op("PaperSize", 0x6D*8, 2, old_size, TRUE);
+	_swix(PPrimer_ChangePrinter, 0);
+    }
+
+    return e;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -2198,7 +2233,9 @@ void fe_cursor_movement(fe_view v, int x, int y)
     if (y)
 	tb_status_set_direction(y > 0);
 
-    backend_doc_cursor(v->displaying, y > 0 ? be_cursor_UP : be_cursor_DOWN, &used);
+/*     backend_doc_cursor(v->displaying, y > 0 ? be_cursor_UP : be_cursor_DOWN, &used); */
+    backend_highlight_link(v->displaying, NULL, be_link_TEXT | (y > 0 ? be_link_BACK : 0));
+    
     if (!used)
 	fe_view_scroll_y(v, y);
 }
@@ -2558,7 +2595,8 @@ os_error *fe_status_info_level(fe_view v, int level)
 
 os_error *fe_status_unstack(fe_view source_v)
 {
-    if (!tb_status_unstack())
+    if (!fe_passwd_abort() &&
+	!tb_status_unstack())
     {
 	fe_view v = fe_find_top_popup(source_v ? source_v : main_view);
 
@@ -2567,8 +2605,25 @@ os_error *fe_status_unstack(fe_view source_v)
 	else
             fe_history_move(source_v, history_PREV);
     }	
-	
+
+    tb_status_update_fades(source_v);
+    
     return NULL;
+}
+
+BOOL fe_status_unstack_possible(fe_view source_v)
+{
+    fe_view v;
+    
+    if (tb_status_unstack_possible())
+	return TRUE;
+    
+    v = fe_find_top_popup(source_v ? source_v : main_view);
+
+    if (v && v->open_transient)
+	return TRUE;
+
+    return fe_history_possible(source_v, history_PREV);
 }
 
 /*
@@ -3325,9 +3380,12 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
     STBDBG(( "click: w %x view %s\n", m->w, v && v->name ? v->name : "<none>"));
 
     if (!v)
+    {
+	if (m->bbits == wimp_BRIGHT)
+	    fe_open_version(NULL);
         return FALSE;
+    }
 
-/*     fe_get_wimp_caret(m->w);   */                                  /* in case we had lost it   */
     fe_pointer_mode_update(pointermode_ON);
 
     switch (m->bbits)
@@ -3371,7 +3429,6 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
             break;
 
         case wimp_BLEFT:
-/*         case wimp_BRIGHT: */
             if (v->displaying)
             {
                 wimp_wstate state;
@@ -3386,7 +3443,36 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
             break;
 
     case wimp_BRIGHT:
-	fevent_handler(fevent_INFO_PAGE, v);
+	if (v->displaying)
+	{
+	    wimp_wstate state;
+	    be_item ti;
+	    char *link, *title;
+	    char buffer[1024];
+	    
+	    strcpy(buffer, "ncfrescointernal:openpanel?name=info");
+
+	    wimp_get_wind_state(m->w, &state);
+	    coords_point_toworkarea((coords_pointstr *)&m->x, (coords_cvtstr *)&state.o.box);
+
+	    if (backend_doc_locate_item(v->displaying, &m->x, &m->y, &ti) == NULL && 
+		backend_item_pos_info(v->displaying, ti, &m->x, &m->y, NULL, &link, NULL, &title) == NULL &&
+		link)
+	    {
+		int len;
+
+		strcat(buffer, "&url=");
+		len = strlen(buffer);
+		len += url_escape_cat(buffer + len, link, sizeof(buffer) - len);
+		if (title)
+		{
+		    len += sprintf(buffer + len, "&title=");
+		    len += url_escape_cat(buffer + len, title, sizeof(buffer) - len);
+		}		    
+	    }
+
+	    frontend_open_url(buffer, v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	}
 	break;
     }
 

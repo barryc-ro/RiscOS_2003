@@ -270,7 +270,7 @@ rid_map_item *imagemap_find_map(rid_header * rh, const char *name)
 
 #if 0
 /* not in use until we have some way of selecting the individual areas of a map */
-void imagemap_draw_area(antweb_doc *doc, rid_text_item_image *tii, int xb, int yb)
+void imagemap_draw_area(antweb_doc *doc, void *im, rid_area_item *area, int xb, int yb)
 {
     rid_area_item *area = tii->data.usemap.selection;
     int dx, dy;
@@ -278,7 +278,7 @@ void imagemap_draw_area(antweb_doc *doc, rid_text_item_image *tii, int xb, int y
     if (!area)
         return;
 
-    image_get_scales((image)tii->im, &dx, &dy);
+    image_get_scales((image)im, &dx, &dy);
 
     switch (area->type)
     {

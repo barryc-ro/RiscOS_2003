@@ -175,6 +175,7 @@ typedef struct _access_item {
 	    int so_far;
 	    char *fname;
 	    int ofh;
+	    unsigned last_modified;	/* from file */
 	} file;
 	struct {
 	    char *cfile;
@@ -1113,7 +1114,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     MemCheck_checking checking;
 
     /* Time to stop */
-    ACCDBGN(( "Transfer complete for %s\n", d->url));
+    ACCDBGN(( "Transfer complete for %s status %d rc %d \n", d->url, si->out.status, si->out.rc));
 
     MemCheck_RegisterMiscBlock(si->out.fname, 256);
     cfile = strdup(si->out.fname);
@@ -1998,6 +1999,9 @@ static void access_file_fetch_alarm(int at, void *h)
 	    d->data.file.ofh = 0;
 	}
 
+	if (cache->header_info)
+	    cache->header_info(d->url, time(NULL), d->data.file.last_modified, UINT_MAX);
+
 	d->complete(d->h, status_COMPLETED_FILE, d->ofile ? d->ofile : d->data.file.fname, d->url);
 
 	access_unlink(d);
@@ -2860,6 +2864,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 			    d->data.file.size = r.r[2];
 
+			    d->data.file.last_modified = file_last_modified(cfile);
+			    
 			    access_reschedule(&access_file_fetch_alarm, d, FILE_POLL_INTERVAL);
 
 			    *result = d;

@@ -267,13 +267,16 @@ static int rid_table_holds_image(rid_text_item *item, void *i, antweb_doc *doc)
 
 /**********************************************************************/
 
+/*
+ * This mechanism bypasses the code in antweb_place_input() and so may need updating.
+ */
 
 static rid_text_item *antweb_prev_text_input(rid_text_item *ti, be_doc doc)
 {
     while (ti)
     {
 	if (ti && object_table[ti->tag].caret &&
-	    (object_table[ti->tag].caret)(ti, doc->rh, doc, TRUE))
+	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
 	    break;
         ti = rid_scanbr(ti);
     }
@@ -286,7 +289,7 @@ static rid_text_item *antweb_next_text_input(rid_text_item *ti, be_doc doc)
     while (ti)
     {
 	if (ti && object_table[ti->tag].caret &&
-	    (object_table[ti->tag].caret)(ti, doc->rh, doc, TRUE))
+	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
 	    break;
         ti = rid_scanfr(ti);
     }
@@ -1774,12 +1777,23 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 void antweb_place_caret(antweb_doc *doc, rid_text_item *ti)
 {
     rid_text_item *old_ti = doc->input;
+    int repos = object_caret_REPOSITION;
 
-    doc->input = ti;
+    doc->input = ti;		/* must set doc->input before calling the remove() function */
+
+    if (old_ti != ti)
+    {
+	BEDBG((stderr, "antweb_place_caret(): input changed from %p to %p\n", old_ti, ti));
+
+	repos = object_caret_FOCUS;
+
+	if (old_ti && object_table[old_ti->tag].caret)
+	    object_table[old_ti->tag].caret(old_ti, doc->rh, doc, object_caret_BLUR);
+    }
 
     if (ti && object_table[ti->tag].caret)
     {
-	(object_table[ti->tag].caret)(ti, doc->rh, doc, FALSE);
+	(object_table[ti->tag].caret)(ti, doc->rh, doc, repos);
     }
     else
     {
@@ -4690,10 +4704,18 @@ be_item backend_update_link(be_doc doc, be_item item, int selected)
     /* if it isn't actually a link then toggle the flag anyway */
     if (item->aref == NULL)
     {
-        item->flag = adjust_flag(item->flag, selected, &changed);
+	doc->selection.tag = doc_selection_tag_TEXT;
+	doc->selection.data.text = item;
+
+	item->flag = adjust_flag(item->flag, selected, &changed);
 	if (changed)
 	    be_update_item_highlight(doc, item);
         return item;
+    }
+    else
+    {
+	doc->selection.tag = doc_selection_tag_AREF;
+	doc->selection.data.aref = item->aref;
     }
 
     for (ti = item->aref->first; ti && ti->aref == item->aref; ti = rid_scanfr(ti))
@@ -5023,6 +5045,8 @@ void backend_clear_selected(be_doc doc)
 	
 	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
     }
+
+    doc->selection.data.text = NULL;
 }
 
 #if 0
@@ -5056,6 +5080,7 @@ void backend_select_item(be_doc doc, be_item item, int select)
 #endif
 
 #ifdef STBWEB
+/* FIXME: this needs to be updated for the new selection model */
 be_item backend_find_selected(be_doc doc)
 {
     be_item ti = doc->rh->stream.text_list;

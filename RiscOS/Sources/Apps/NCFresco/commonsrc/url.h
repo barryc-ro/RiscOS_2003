@@ -19,7 +19,7 @@ char *url_path_to_riscos(const char *path);
 char *url_leaf_name(const char *url);
 
 char *url_escape_chars(const char *s, const char *escapes);
-void url_escape_cat(char *buffer, const char *in, int len);
+int url_escape_cat(char *buffer, const char *in, int len);
 void url_escape_to_file(const char *s, FILE *f);
 BOOL url_escape_file_to_file(FILE *in, FILE *out);
 

@@ -50,6 +50,7 @@ int mime_to_file_type(const char *mime);
 
 extern int file_type_real(const char *fname);
 int file_type(const char *fname);
+extern int file_last_modified(const char *fname);
 int set_file_type(const char *fname, int ft);
 extern int path_is_directory(const char *path);
 
@@ -155,5 +156,7 @@ typedef enum
 } input_key_action;
 
 extern input_key_action lookup_key_action(int key);
+extern int cmos_op(int bit_start, int n_bits, int new_val, BOOL write);
+extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write);
 
 /* eof util.h */

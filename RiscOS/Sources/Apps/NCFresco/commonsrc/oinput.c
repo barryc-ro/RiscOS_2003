@@ -860,12 +860,24 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
     int h;
     int slen;
 
+    OIDBG((stderr, "oinput_caret: repos=%d\n", repos));
+
     ii = ((rid_text_item_input *) ti)->input;
 
     switch (ii->tag)
     {
     case rid_it_TEXT:
     case rid_it_PASSWD:
+	if (repos == object_caret_BLUR)
+	{
+	    if (ii->base.colours.select != -1)
+		antweb_update_item(doc, ti);
+	    return FALSE;
+	}
+    
+	if (repos == object_caret_FOCUS && ii->base.colours.select != -1)
+	    antweb_update_item(doc, ti);
+    
 	stream_find_item_location(ti, &cx, &cy);
 
 	slen = strlen(ii->data.str);
@@ -873,12 +885,12 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	if (doc->text_input_offset < 0)
 	{
 	    doc->text_input_offset = slen;
-	    repos = 1;
+	    repos = object_caret_REPOSITION;
 	}
 	if (doc->text_input_offset >= ii->max_len && (ii->flags & rid_if_NUMBERS))
 	{
 	    doc->text_input_offset = ii->max_len-1;
-	    repos=1;
+	    repos = object_caret_REPOSITION;
 	}
 
 	ep = font_setfont(webfonts[WEBFONT_TTY].handle);
@@ -927,7 +939,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	h = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
 	h |= render_caret_colour(doc, ii->base.colours.back, ii->base.colours.cursor);
 
-	frontend_view_caret(doc->parent, cx, cy, h, repos);
+	frontend_view_caret(doc->parent, cx, cy, h, repos == object_caret_REPOSITION || repos == object_caret_FOCUS);
 
 	take_it = TRUE;
 	break;
@@ -1126,7 +1138,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     if (redraw)
     {
         wimp_box box;
-	oinput_caret(ti, rh, doc, TRUE);
+	oinput_caret(ti, rh, doc, object_caret_REPOSITION);
 
         oinput_update_box(ti, &box);
 	antweb_update_item_trim(doc, ti, &box, FALSE);

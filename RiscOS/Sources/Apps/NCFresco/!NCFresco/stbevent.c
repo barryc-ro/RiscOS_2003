@@ -209,7 +209,7 @@ static void misc_event_handler(int event, fe_view v)
             break;
 
         case fevent_PRINT:
-            frontend_complain(fe_print(v));
+            frontend_complain(fe_print(v, fe_print_DEFAULT));
             break;
 
         case fevent_CLOSE:
@@ -269,6 +269,14 @@ static void misc_event_handler(int event, fe_view v)
 	frontend_complain(frontend_open_url("ncfrescointernal:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE));
 	break;
 
+    case fevent_PRINT_LETTER:
+	frontend_complain(fe_print(v, fe_print_LETTER));
+	break;
+	
+    case fevent_PRINT_LEGAL:
+	frontend_complain(fe_print(v, fe_print_LEGAL));
+	break;
+	
     case fevent_OPEN_WRITEABLE:
 	tb_open_url_and_close();
 	break;

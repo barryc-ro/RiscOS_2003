@@ -43,6 +43,11 @@ typedef void (*object_astext)(rid_text_item *ti, rid_header *rh, FILE *f);
  * position.  In this is not set then the caret may get placed at the
  * and of the writable region. */
 
+#define object_caret_REDISPLAY	0 /* redisplay caret at current position */
+#define object_caret_REPOSITION	1 /* reposition the caret */
+#define object_caret_FOCUS	2 /* acquire the caret */
+#define object_caret_BLUR	3 /* lose the caret */
+
 typedef BOOL (*object_offer_caret)(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos);
 
 /* Process a key press.  This will only be called for an object after

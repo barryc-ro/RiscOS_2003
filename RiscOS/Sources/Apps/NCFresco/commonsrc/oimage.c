@@ -375,7 +375,7 @@ BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp
 	}
 
 	/* if there is no area then there is no link to follow */
-	handled = TRUE;;
+	handled = TRUE;
     }
     /* if we can't find the right map then fall through to check server map */
     return handled;
@@ -458,93 +458,28 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	ooy -= doc->margin.y1;
 #endif /* USE_MARGINS */
 
-#if 1
 	image_render((image) tii->im, bbox.x0, bbox.y0,
 		     (bbox.x1 - bbox.x0)/2,
 		     (bbox.y1 - bbox.y0)/2,
 		     doc->scale_value, antweb_render_background, doc,
 		     oox, ooy);
-#else
-	image_render((image) tii->im, x + (bw*2), y + (bw*2),
-		     w/2 - bw*2, h/2 - bw*2, doc->scale_value, antweb_render_background, doc,
-		     oox, ooy);
-#endif
     }
     else
     {
-#if 1
 	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
 		  bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0, doc);
-#else
-	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
-		      x + (bw*2), y + (bw*2),
-		      w - (bw*4), h - (bw*4),
-		      doc);
-#endif
-#if 1
+
 	oimage_render_text(ti, doc, fs, &bbox, tii->alt);
-#else
-	if (tii->alt)
-        {
-	    struct webfont *wf;
-	    int tfc;
-	    wimp_box box;
-
-	    wf = &webfonts[ALT_FONT];
-
-	    if (fs->lf != wf->handle)
-	    {
-		fs->lf = wf->handle;
-		font_setfont(fs->lf);
-	    }
-
-	    if (fs->lfc != (tfc = render_link_colour(ti, doc) ) )
-	    {
-		fs->lfc = tfc;
-		render_set_font_colours(fs->lfc, render_colour_BACK, doc);
-	    }
-
-
-	    box.x0 = x + PLINTH_PAD/2;
-	    box.x1 = x + w - PLINTH_PAD/2;
-	    box.y0 = y + PLINTH_PAD/2;
-	    box.y1 = y + h - PLINTH_PAD/2;
-	    write_text_in_box(fs->lf, tii->alt ? tii->alt : NONE_STRING, &box);
-        }
-#endif
     }
 
     if ((ti->flag & rid_flag_SELECTED) || bw)
     {
-#if 1
 	oimage_render_border(ti, doc, &bbox, bw*2);
-#else
-	render_set_colour(render_link_colour(ti, doc), doc);
-
-	IMGDBGN(("Drawing image border.  flagbit=0x%x, bw=%d\n",
-		(ti->flag & rid_flag_SELECTED), bw));
 
 #if DRAW_AREA_HIGHLIGHT
         if (tii->usemap && tii->data.usemap.selection)
         {
-            imagemap_draw_area(doc, tii, x, bline + ti->max_up - tii->vspace*2);
-        }
-        else
-#endif
-        {
-	    if (bw <= 1)
-	    {
-		bbc_rectangle(x, y, w-frontend_dx, h-frontend_dy);
-		bbc_rectangle(x+2, y+2, w-2*2-frontend_dx, h-2*2-frontend_dy);
-	    }
-	    else
-	    {
-		bbc_rectanglefill(x, y, w-frontend_dx, bw*2-frontend_dy);
-		bbc_rectanglefill(x, y + h - (bw*2), w-frontend_dx, bw*2-frontend_dy);
-		bbc_rectanglefill(x, y + (bw*2), bw*2-frontend_dx, h - (bw*4)-frontend_dy);
-		bbc_rectanglefill(x + w - (bw*2), y + (bw*2), bw*2-frontend_dx, h - (bw*4)-frontend_dy);
-	    }
-
+            imagemap_draw_area(doc, tii->imh, tii->data.usemap.selection, x, bline + ti->max_up - tii->vspace*2);
         }
 #endif
     }
@@ -605,7 +540,7 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
     }
 
     /* follow link or just place caret */
-    if (ti->aref && ti->aref->href)
+    if (ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL))
     {
 	BOOL follow_link = TRUE;
         if (config_display_time_activate)

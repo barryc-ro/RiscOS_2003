@@ -39,7 +39,13 @@ extern void fe_move_highlight_frame_direction(fe_view v, int x, int y);
 extern os_error *fe_handle_enter(fe_view v);
 
 extern int fe_print_possible(fe_view v);
-extern os_error *fe_print(fe_view v);
+
+#define fe_print_DEFAULT	0
+#define fe_print_LEGAL		1
+#define fe_print_LETTER		2
+
+extern os_error *fe_print(fe_view v, int size);
+
 extern os_error *fe_print_options_open(fe_view v);
 extern const char *fe_printer_name(void);
 
@@ -71,6 +77,8 @@ extern int fe_status_height_top(fe_view v);
 extern os_error *fe_status_info_level(fe_view v, int level);
 extern int fe_status_open(fe_view v);
 extern os_error *fe_status_unstack(fe_view v);
+extern BOOL fe_status_unstack_possible(fe_view source_v);
+
 extern os_error *fe_status_open_toolbar(fe_view v, int bar);
 
 extern void fe_show_mem_dump(void);
@@ -138,7 +146,7 @@ extern void fe_cursor_movement(fe_view v, int x, int y);
 extern int print__copies, print__ul;
 extern fe_passwd fe_current_passwd;
 
-extern void fe_passwd_abort(void);
+extern BOOL fe_passwd_abort(void);
 
 /* from stbredraw.c*/
 
