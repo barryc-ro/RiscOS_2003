@@ -5,9 +5,10 @@
 # *****************************************
 # Date       	Name         	Description
 # ----       	----         	-----------
-# 17 Sep 1997	RWB		Created
+# 1997-09-17	RWB		Created
 # 1997-12-01	BAL		Added clean_all, cleans o${BUILD}, creates
 #				o${BUILD}
+# 1999-02-01    SBF             Added STB3 targets, plus call to StripDepnd tool
 
 
 #
@@ -27,6 +28,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = -stripdepnd
 CD	= dir
 
 #AFLAGS = -depend !Depend -Stamp -quit -To $@ -From
@@ -66,13 +68,21 @@ BASEOBJS  = ${OM}.Display ${OM}.DRAMTest ${OM}.InputTest \
             ${OM}.Sound ${OM}.Support ${OM}.System ${OM}.UserDiag \
             ${OM}.CPUType ${OM}.IOControl ${OM}.MemSrcNCOS \
             ${OM}.ROMChksum
+            
 Module    = ${OM}.header ${OM}.module ${OM}.usermode ${OM}.UnitTest
-Applic    = ${OM}.AppMain
-BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedinfo ${OM}.veneer
-Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib \
-            ${OM}.CheckIC ${OM}.serflash
 
-OBJS      = ${Morris2}
+Applic    = ${OM}.AppMain
+
+BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedinfo ${OM}.veneer
+
+Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib \
+            ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
+            
+STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib \
+             
+
+OBJS      = ${STB3}
+
 
 .SUFFIXES: .${OM}
 
@@ -93,6 +103,8 @@ clean:
         ${WIPE}	o.*		${WFLAGS}
         ${WIPE}	o${BUILD}.*	${WFLAGS}
         ${WIPE}	${TARGET}	${WFLAGS}
+        @echo Stripping dependencies from makefile...
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 clean_all: clean
