@@ -29,7 +29,7 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 
-CCFLAGS = -c -g -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
