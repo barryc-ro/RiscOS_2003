@@ -46,6 +46,7 @@ DFLAGS   = -DKERNEL -DINET -DGATEWAY -DCOMPAT_43 -DCOMPAT_OLDSOCK \
            #-DDIAGNOSTIC -DDEBUG_MTUDISC
 INCLUDES = -ITCPIPLibs:,C:
 CPFLAGS  = ~cfr~v
+LDFLAGS  = -linkversion 514
 WFLAGS   = ~c~v
 
 #
@@ -126,7 +127,7 @@ all: ${TARGET}
 	@echo ${COMPONENT}: Module built (Relocatable)
 
 ${TARGET}: ${OBJS} ${CLIB}
-        ${LD} -c++ -rmf -o $@ ${OBJS} ${CLIB}
+        ${LD} ${LDFLAGS} -rmf -o $@ ${OBJS} ${CLIB}
         ${MODSQZ} $@
         Access $@ WR/r
 
@@ -150,7 +151,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -c++ -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} ${LDFLAGS} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 o.socket_swi: InetHdr.h
 
@@ -159,7 +160,7 @@ o.socket_swi: InetHdr.h
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -c++ -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
+        ${LD} -o linked.${COMPONENT} ${LDFLAGS} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
               -map > map.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
