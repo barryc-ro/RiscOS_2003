@@ -57,14 +57,3 @@ clean:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.TTextTest:	c.TTextTest
-o.TTextTest:	^.h.main
-o.TTextTest:	^.h.stdbool
-o.TTextTest:	tbox:h.wimp
-o.TTextTest:	tbox:h.wimplib
-o.TTextTest:	C:h.kernel
-o.TTextKill:	c.TTextKill
-o.TTextKill:	C:h.swis
-o.TTextKill:	C:h.kernel
-o.TTextKill:	tbox:h.wimplib
-o.TTextKill:	tbox:h.wimp

@@ -10,7 +10,7 @@ LDIR       = ${RDIR}.${LOCALE}
 
 # Generic options:
 #
-MKDIR   = mkdir -p
+MKDIR   = do mkdir -p
 CC      = cc
 CP      = copy
 LD      = link
@@ -19,7 +19,7 @@ SQUEEZE = squeeze
 WIPE    = -wipe
 
 CFLAGS  = ${THROWBACK} -c -depend !Depend -fah -fussy ${INCLUDES} ${DFLAGS}
-CPFLAGS = ~cfr~v
+CPFLAGS = ~c~fnr~v
 SQFLAGS = -nolist
 WFLAGS  = ~c~v
 LINKFLAGS =
