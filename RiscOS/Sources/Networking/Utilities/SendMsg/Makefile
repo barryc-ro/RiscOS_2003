@@ -36,10 +36,10 @@ local_dirs:
 
 clean:
         ${RM} h.ModHdr
-        IfThere aof    Then ${WIPE} aof ${WFLAGS}
-        IfThere o      Then ${WIPE} o ${WFLAGS}
-        IfThere linked Then ${WIPE} linked ${WFLAGS}
-        IfThere rm     Then ${WIPE} rm ${WFLAGS}
+        IfThere aof    Then Wipe aof ${WFLAGS}
+        IfThere o      Then Wipe o ${WFLAGS}
+        IfThere linked Then Wipe linked ${WFLAGS}
+        IfThere rm     Then Wipe rm ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 
