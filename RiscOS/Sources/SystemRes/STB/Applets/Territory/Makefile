@@ -88,6 +88,7 @@ translate:
 	${IFTHERE} TerrTrans:Software          ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Software          -o ${INSTOPTS}.Software
 	${IFTHERE} TerrTrans:Television        ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Television        -o ${INSTOPTS}.Television
 	${IFTHERE} TerrTrans:Text              ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Text              -o ${INSTOPTS}.Text
+	${IFTHERE} TerrTrans:options/css       ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:options/css       -o ${INSTOPTS}.options/css
 	${IFTHERE} TerrTrans:html.body/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body/html    -o ${HTMLDIR}.body/html
 	${IFTHERE} TerrTrans:html.body_h/html  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body_h/html  -o ${HTMLDIR}.body_h/html
 	${IFTHERE} TerrTrans:html.home/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home/html    -o ${HTMLDIR}.home/html
