@@ -308,14 +308,13 @@ extern int colspan_algorithm(rid_table_item *table, int slot, BOOL horiz)
 	}
     }
 #endif
+colspan_trace_cells(table, horiz);
     for (x = 0; x < (max - 1); x++)
     {
-	the_cells[x].rightmost = 
-	    (the_cells[x+1].rightmost + 
-	     the_cells[max - 1].leftmost);
+	the_cells[x].rightmost = (the_cells[x+1].rightmost + the_cells[max - 1].leftmost);
     }
-    the_cells[max - 1].rightmost = 
-	the_cells[max - 1].leftmost;
+
+    the_cells[max - 1].rightmost = the_cells[max - 1].leftmost;
 
     /*FMTDBGN(("\nafter r-to-l pass for rightmosts (ie final values for %s)...\n", 
 	    WIDTH_NAMES[slot]));*/

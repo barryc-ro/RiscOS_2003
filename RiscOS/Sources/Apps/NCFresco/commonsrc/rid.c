@@ -42,7 +42,7 @@
 
  */
 
-static rid_pos_item *pos_cache_head, *pos_cache_tail;
+/*static rid_pos_item *pos_cache_head, *pos_cache_tail;*/
 
 /*****************************************************************************/
 

@@ -43,6 +43,12 @@
 
 void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
+    if (gbf_active(GBF_NEW_FORMATTER))
+    {
+	TABDBG(("otable_size: new formatter so not doing anything\n"));
+    }
+    else
+    {
         rid_table_item *table = ((rid_text_item_table *)ti)->table;
         rid_table_caption *capt = table->caption;
         rid_table_cell *cell;
@@ -75,6 +81,7 @@ void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    }
         }
         TABDBG(("otable_size done, caller = %s\n", caller(1) ) );
+    }
 }
 
 /* This is the main function to render a stream of text, it is called

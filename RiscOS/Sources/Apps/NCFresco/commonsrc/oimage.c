@@ -440,7 +440,7 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
 void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
-    int width, height;
+    int width = -1, height = -1;
     image_flags fl;
 
     IMGDBG(("oimage_size: src '%s' im %p bwidth %d, hspace %d, vspace %d, fwidth %d\n",
@@ -452,11 +452,17 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
        formatting (which triggers the sizing), there could be quite a
        time lag. This will impact the latency of image fetching,
        especially with a fast turnaround server. */
-    if (tii->im == NULL)
-	tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
+    if (!gbf_active(GBF_EARLYIMGFETCH))
+    {
+	if (tii->im == NULL)
+	    tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
+    }
+    image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
+
+#else
+    fl = image_flag_REALTHING;
 #endif
 
-    image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
 
     IMGDBG(("oimage_size: real %d width %d height %d\n", fl & image_flag_REALTHING ? 1 : 0, width, height));
 

@@ -179,7 +179,7 @@ int file_and_object_type_real(const char *fname, int *obj_type)
 
     if (obj_type)
 	*obj_type = ofs.action;
-    
+
     if (ofs.action == 2)
 	return FILETYPE_DIRECTORY;
 
@@ -686,7 +686,7 @@ extern char *strdup_gstrans(const char *input)
     /* if overflow then just ensure terminated - should do better really */
     if (r.r[2] == GSTRANS_BUFSIZE)
 	output[GSTRANS_BUFSIZE-1] = 0;
-    
+
     return mm_realloc(output, r.r[2]);
 }
 
@@ -825,7 +825,32 @@ char *rs_tmpnam(char *s)
     while (!present);
     return s;
 }
-    
+
+/*****************************************************************************/
+
+/* Change a window's flags: only in Nested Wimp (3.90 and later)
+ * No-op (but returns error) if used on earlier wimps.
+ */
+
+os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor )
+{
+    wimp_wstate ws;
+    os_error *e;
+    _kernel_swi_regs r;
+
+    e = wimp_get_wind_state( w, &ws );
+    if ( e )
+        return e;
+    ws.flags = ( ws.flags & ~bic ) ^ eor;
+
+    r.r[1] = (int)&ws;
+    r.r[2] = *((int*)"TASK");
+    r.r[3] = -1;
+    r.r[4] = 1;
+
+    return (os_error*)_kernel_swi( 0x600C5, &r, &r );   /* XWimp_OpenWindow */
+}
+
 /*****************************************************************************/
 
 /* eof util.c */

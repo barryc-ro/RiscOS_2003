@@ -45,6 +45,7 @@ typedef struct RID_FMT_STATE
     int			previous_pad;
     int			format_width;
     int			y_text_pos; /* Distance so far (-ve) */
+    int			linenum;
     /* Per text line */
     rid_pos_item *	text_line;
     int			x_text_pos; /* From current left margin */

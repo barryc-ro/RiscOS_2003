@@ -14,7 +14,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 				  int flags);
 
 #ifdef BUILDERS
-extern os_error *antweb_document_sizeitems(antweb_doc *doc);
+extern os_error *antweb_trigger_fetching(antweb_doc *doc);
 #endif
 
 #endif /* __backend_h */

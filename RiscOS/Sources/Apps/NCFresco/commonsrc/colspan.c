@@ -467,6 +467,24 @@ extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array
     }
 }
 
+extern void colspan_column_init_from_mid_LR(rid_table_item *table, width_array_e slot, BOOL horiz)
+{
+    const int max = horiz ? table->cells.x : table->cells.y;
+    int x, prev;
+
+    FMTDBGN(("colspan_column_init_from_mid_LR: id %d, slot %s, %s\n",
+	    table->idnum, WIDTH_NAMES[slot], HORIZVERT(horiz)));
+
+    for (x = 0, prev = 0; x < max; x++)
+    {
+	pcp_cell cell = table->colspans + x;
+	const int z = cell->leftmost;
+	
+	cell->width[slot] = z - prev;
+	prev = z;
+    }
+}
+
 /*****************************************************************************/
 
 extern void colspan_column_and_eql_bitset(rid_table_item *table, 
@@ -635,7 +653,7 @@ extern void colspan_column_and_eql_double(rid_table_item *table,
     {
 	if ( (the_cells[x].flags & AND) == EQL )
 	{
-	    the_cells[x].width[slot] /= 2;
+	    the_cells[x].width[slot] *= 2;
 	}
     }
 }
@@ -672,12 +690,12 @@ extern int colspan_sum_columns(rid_table_item *table,
     int x;
     int sum = 0;
 
-    FMTDBG(("colspan_sum_columns: %s %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot]));
-
     for (x = 0; x < max; x++)
     {
 	sum += the_cells[x].width[slot];
     }
+
+    FMTDBG(("colspan_sum_columns: %s %s: sum %d\n", HORIZVERT(horiz), WIDTH_NAMES[slot], sum));
 
     return sum;
 }
@@ -2003,26 +2021,41 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
     const int max = HORIZMAX(table, horiz);
     int used = 0;
     pcp_cell the_cells = table->colspans;
+    int *master = HORIZCELLS(table, horiz);
     int x;
 
     fwidth -= TABLE_OUTSIDE_BIAS(table);
 
     ASSERT(fwidth >= 0);
 
+    if (master[PCT_RAW] == 100)
+    {
+	/* Fudge for things we ended up treating as WIDTH=0%  */
+	for (x = 0; x < max; x++)
+	{
+	    if (the_cells[x].width[PCT_RAW] == 0)
+		fwidth -= the_cells[x].width[ACTUAL];
+	}
+    }
+
     for (x = 0; x < max; x++)
     {
 	if ( (the_cells[x].flags & colspan_flag_PERCENT) != 0 )
 	{
-	    const int want = (fwidth * the_cells[x].width[PCT_RAW]) / 100;
-	    if (want <= the_cells[x].width[ACTUAL])
+	    if ( the_cells[x].width[PCT_RAW] != 0 )
 	    {
-		used += the_cells[x].width[ACTUAL];
+		const int want = (fwidth * the_cells[x].width[PCT_RAW]) / 100;
+		if (want <= the_cells[x].width[ACTUAL])
+		{
+		    used += the_cells[x].width[ACTUAL];
+		}
+		else
+		{
+		    the_cells[x].width[ACTUAL] = want;
+		    used += want;
+		}
 	    }
-	    else
-	    {
-		the_cells[x].width[ACTUAL] = want;
-		used += want;
-	    }
+	    /* else done in 1st loop */
 	}
 	else
 	{
@@ -2064,18 +2097,37 @@ extern void colspan_share_extra_space (rid_table_item *table,
 {
     int *master = HORIZCELLS(table, horiz);
     int user_width = 0;
-    int slop;
+    int slop = 0;
 
     if (horiz)
     {
 	switch (table->userwidth.type)
 	{
 	case value_absunit:
-	    user_width = ceil(table->userwidth.u.f);
+	    FMTDBG(("colspan_share_extra_space: abs userwidth is present\n"));
+	    if (table->flags & rid_tf_HAVE_WIDTH)
+	    {
+		fwidth = ceil(table->userwidth.u.f);
+		FMTDBG(("colspan_share_extra_space: still active - new fwidth\n"));
+	    }
+	    else
+	    {
+		FMTDBG(("colspan_share_extra_space: been stomped - ignoring\n"));
+	    }
 	    break;
-
+	    
 	case value_pcunit:
+	    FMTDBG(("colspan_share_extra_space: pct userwidth is present\n"));
 	    user_width = ceil( (table->userwidth.u.f * fwidth ) / 100.0 );
+	    if (user_width >= master[RAW_MIN]) /* Should be... */
+	    {
+		FMTDBG(("colspan_share_extra_space: user_width >= master[RAW_MIN]\n"));
+		fwidth = user_width;
+	    }
+	    else
+	    {
+		FMTDBG(("colspan_share_extra_space: can't use it - STRANGE\n"));
+	    }
 	    break;
 	}
     }
@@ -2096,8 +2148,6 @@ extern void colspan_share_extra_space (rid_table_item *table,
     /* Not correct interpretation for heights? */
     if (horiz)
     {
-	if (user_width > master[RAW_MIN])
-	    fwidth = user_width;
     }
     else
     {
@@ -2106,6 +2156,15 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	else
 	    fwidth = master[RAW_MIN];
     }
+
+    colspan_trace_cells(table, horiz);
+    FMTDBG(("colspan_share_extra_space: table %d, user_width %d, fwidth %d, slop %d\n",
+	    table->idnum, user_width, fwidth, slop));
+
+    if (table->flags & rid_tf_HAVE_WIDTH)
+	FMTDBG(("colspan_share_extra_space: have width\n"));
+    if (table->flags & rid_tf_HAVE_HEIGHT)
+	FMTDBG(("colspan_share_extra_space: have height\n"));
 
     if (fwidth < master[RAW_MIN])
     {
@@ -2118,6 +2177,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
     }
     else if (fwidth == master[RAW_MIN])
     {
+	FMTDBG(("colspan_share_extra_space: precisely RAW_MIN\n"));
 	colspan_algorithm(table, RAW_MIN, horiz);
 	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
@@ -2127,24 +2187,27 @@ extern void colspan_share_extra_space (rid_table_item *table,
     {
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
 	slop = fwidth - master[RAW_MIN];
+	FMTDBG(("colspan_share_extra_space: less than ABS_MIN, slop %d\n", slop));
     }
     else if (fwidth == master[ABS_MIN])
     {
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
 	slop = 0;
+	FMTDBG(("colspan_share_extra_space: precisely ABS_MIN\n"));
     }
     else if (fwidth < master[PCT_MIN])
     {
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
 	slop = fwidth - master[ABS_MIN];
+	FMTDBG(("colspan_share_extra_space: less than PCT_MIN, slop %d\n", slop));
     }
     else
     {
-
 	if (fwidth > master[LAST_MAX] && user_width == 0)
 	    fwidth = master[LAST_MAX];
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
 	slop = reflect_percentages(table, horiz, fwidth);
+	FMTDBG(("colspan_share_extra_space: can do PCT_MIN: slop %d\n", slop));
     }
 
     ASSERT(slop >= 0);
@@ -2167,86 +2230,6 @@ extern void colspan_share_extra_space (rid_table_item *table,
 
 }
 
-#if 0
-{
-    int x;
-    pcp_cell the_cells = table->colspans;
-    int *width = HORIZCELLS(table,horiz);
-    const int max = HORIZMAX(table,horiz);
-    const width_array_e best_slot = choose_best_slot(table, horiz, fwidth);
-    const rid_table_flags flag = horiz ? rid_tf_HAVE_WIDTH : rid_tf_HAVE_HEIGHT;
-
-    FMTDBG(("colspan_share_extra_space(%p, %s, %d, %s):\n",
-	    table, WIDTH_NAMES[best_slot], fwidth, HORIZVERT(horiz)));
-
-    /* start by setting the 'actual' slots for each column to the
-       corresponding width from the best_slot in each case, and
-       ditto for groups. */
-
-    /* Zero unused columns */
-    colspan_column_and_eql_set(table, horiz, ACTUAL,
-			       colspan_flag_USED, 0, 0);
-    
-    /* Copy from used locations */
-    colspan_all_and_eql_copy(table, horiz, ACTUAL,
-			     colspan_flag_USED,
-			     colspan_flag_USED, best_slot);
-
-    /* run colspan again to initialise leftmosts and rightmosts and
-       set table's actual width to the total width we've used up so
-       far as a result NB this is wasteful recalculation, but we're
-       doing it this way to try out the approach before deciding to
-       turn leftmost and rightmost into arrays indexed by slot */
-
-    width[ACTUAL] = colspan_algorithm (table, ACTUAL, horiz);
-    width[ACTUAL] += TABLE_OUTSIDE_BIAS(table);
-
-    /* Set the ACTUAL slot to the chosen width of each item */
-    colspan_column_init_from_leftmost(table, ACTUAL, horiz);
-
-    /* Reflect the constraint level we have satisfied fully */
-    for (x = 0; x < max; x++)
-    {
-	the_cells[x].flags |= ((1 << (best_slot + 1)) - 1);
-    }
-
-    FMTDBG(("\nNOW INITIALISED ACTUAL VALUES, BASED ON %s SLOT\n\n", 
-	    WIDTH_NAMES[best_slot]));
-    colspan_trace_cells(table, horiz);
-    FMTDBG(("\n\n"));
-
-    if ( table->flags & flag )
-    {
-	x = width[best_slot];
-	FMTDBG(("colspan_share_extra_space: user border wins: width %d\n", x));
-    }
-    else if (fwidth < width[FIRST_MIN])
-    {
-	x = width[FIRST_MIN];
-	FMTDBG(("colspan_share_extra_space: Forcing wide enough area for RAW_MIN %d\n", x));
-    }
-    else if (fwidth >= width[LAST_MAX])
-    {
-	x = width[LAST_MAX];
-	FMTDBG(("colspan_share_extra_space: fwidth > LAST_MAX, using LAST_MAX %d\n", x));
-    }
-    else
-    {
-	x = fwidth;
-	FMTDBG(("colspan_share_extra_space: using fwidth %d as being within size range\n", x));
-    }
-
-    most_constraints_then_share_fairly(table, best_slot, x, horiz);
-
-    /* Reflect the values calculated in the existing colhdr structure. */
-    reflect_into_table(table, horiz);
-
-    FMTDBG(("colspan_share_extra_space: done\n"));
-
-    colspan_trace_cells(table, horiz);
-    /*dump_table(table, NULL);*/
-}
-#endif
 
 /*****************************************************************************/
 

@@ -724,7 +724,7 @@ static void add_retro_col(rid_table_item *table)
 	cell = * CELLFOR(table, x - 1, y);
 	if (cell != NULL && (cell->flags & rid_cf_INF_HORIZ) != 0 )
 	{
-	    int  t;
+	    /*int  t;*/
 	    * CELLFOR(table, x, y) = cell;
 	    ASSERT(cell->span.x > 0);
 #if NEWGROW
@@ -1160,7 +1160,7 @@ static void start_col_growing(rid_table_item *table, int cols, int *firstp, int 
 
 static void restrain_rowspan_cells(HTMLCTX *me, rid_table_item *table)
 {
-    const int maxy = table->cells.y;
+    /*const int maxy = table->cells.y;*/
     int x, y;
     rid_table_cell *cell;
 
@@ -1776,7 +1776,8 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     switch (tab->userwidth.type)
     {
     case value_absunit:
-	tab->flags |= rid_tf_HAVE_WIDTH;
+	/* Per format, not sole forever */
+	/*tab->flags |= rid_tf_HAVE_WIDTH;*/
 	break;
 
     case value_pcunit:
@@ -2844,8 +2845,11 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	break;
 #endif
     case value_pcunit:
-	cell->flags |= rid_cf_PERCENT;
-	cell->userwidth = *attr;
+	if ( ceil(attr->u.f) > 0 )
+	{
+	    cell->flags |= rid_cf_PERCENT;
+	    cell->userwidth = *attr;
+	}
 	break;
 
     default:

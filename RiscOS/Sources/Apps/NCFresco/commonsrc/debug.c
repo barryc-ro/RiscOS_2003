@@ -36,6 +36,7 @@ DBGPROTO(ckidbgn);
 DBGPROTO(accdbgn);
 DBGPROTO(bendbgn);
 DBGPROTO(lnkdbgn);
+DBGPROTO(laydbgn);
 #pragma -v0
 #endif
 
@@ -70,7 +71,9 @@ static dbg_conf_item dbg_conf[]=
     { "BENDBG", 0 },
     { "BENDBGN", 0 },
     { "LNKDBG", 0 },
-    { "LNKDBGN", 0 }
+    { "LNKDBGN", 0 },
+    { "LAYDBG", 0 },
+    { "LAYDBGN", 0 }
 };
 
 enum
@@ -102,7 +105,9 @@ enum
     ben,
     benn,
     lnk,
-    lnkn
+    lnkn,
+    lay,
+    layn
 };
 
 extern void dbginit(void)
@@ -144,6 +149,8 @@ extern void dbginit(void)
     BENDBGN(("Excessive HTTPSave debugging present\n"));
     LNKDBG(("Link debugging present\n"));
     LNKDBGN(("Excessive link debugging present\n"));
+    LAYDBG(("Frame debugging present\n"));
+    LAYDBGN(("Excessive frame debugging present\n"));
 }
 
 extern void debug_set(const char *feature, int enable)
@@ -208,6 +215,8 @@ DBGFNDEF(bendbg, ben)
 DBGFNDEF(bendbgn, benn)
 DBGFNDEF(lnkdbg, lnk)
 DBGFNDEF(lnkdbgn, lnkn)
+DBGFNDEF(laydbg, lay)
+DBGFNDEF(laydbgn, layn)
 
 #else	/* DEBUG */
 

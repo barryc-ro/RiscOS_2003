@@ -333,7 +333,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
 	config_display_scale = 100;
 	webfonts_init();
 
-	antweb_document_sizeitems(doc);
+	antweb_trigger_fetching(doc);
     }
 
     had_rescale = 1;
@@ -447,7 +447,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
 	    config_display_scale = new_job->old_display_scale; 
 	    webfonts_init();
 
-	    antweb_document_sizeitems(doc);
+	    antweb_trigger_fetching(doc);
 	}
 
 #if USE_MARGINS
@@ -526,7 +526,7 @@ static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
 	config_display_scale = job->old_display_scale; 
 	webfonts_init();
 
-	antweb_document_sizeitems(doc);
+	antweb_trigger_fetching(doc);
     }
 
     image_palette_change();

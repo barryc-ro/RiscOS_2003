@@ -242,6 +242,20 @@ char *url_unparse(const char *scheme, const char *netloc, const char *path, cons
     return res;
 }
 
+/* pdh: internal-gopher-xxx */
+typedef struct { char *xxx; char *url; } gopherentry;
+
+static gopherentry gopherentries[] =
+{ "binary", "icontype:,ffd",
+  "index",  "icontype:directory",
+  "image",  "icontype:,ff9",
+  "menu",   "icontype:directory",
+  "movie",  "icontype:,ae7",
+  "sound",  "icontype:,d3c",
+  "text",   "icontype:,fff",
+  "telnet", "icontype:telnet",
+  "unknown","icontype:,xxx"};
+
 char *url_join(const char *base, const char *url)
 {
     char *bscheme, *bnetloc, *bpath, *bparams, *bquery, *bfragment;
@@ -249,6 +263,19 @@ char *url_join(const char *base, const char *url)
     char *uscheme, *unetloc, *upath, *uquery;
     char *result;
     char buffer[MAX_URL_LEN];
+
+    if ( !strncasecomp( url, "internal-gopher-", 16 ) )
+    {
+        int i;
+        for ( i=0; i < (sizeof(gopherentries)/sizeof(gopherentry)); i++ )
+        {
+            if ( !strcasecomp( url+16, gopherentries[i].xxx ) )
+            {
+                url = gopherentries[i].url;
+                break;
+            }
+        }
+    }
 
     if (base == NULL || url == NULL)
     {

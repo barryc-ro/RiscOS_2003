@@ -194,7 +194,7 @@ int antweb_get_edges(const rid_text_item *ti, int *left, int *right)
 
 	    for (most = 0, fi = ti->line->floats->right; fi != NULL; fi = fi->next)
 		most = fi->entry_margin - ti->width;
-	    
+
 	    if (most > 0)
 		rightend = most;
         }
@@ -1678,7 +1678,10 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 
 			    strcpy(buf3, strsafe(iis->name));
 
-			    strcat(buf3, ".x");
+			    /* pdh: duplicate NS3's behaviour with missing
+			     * names
+			     */
+			    strcat( buf3, (*buf3) ? ".x" : "x" );
 			    sprintf(buf2, "%d", iis->data.image.x);
 			    antweb_append_query(&buffer, buf3, buf2, &buf_size);
 
@@ -1851,16 +1854,47 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 
 }
 
-extern os_error *antweb_document_sizeitems(antweb_doc *doc)
+/*****************************************************************************/
+
+static void be_tfetch_stream(antweb_doc *doc, rid_text_item *ti)
+{
+    for (;ti != NULL; ti = rid_scanf(ti))
+    {
+	/* Not ideal, but *encompasses* desired behaviour */
+	switch (ti->tag)
+	{
+	case rid_tag_IMAGE:
+	case rid_tag_INPUT:
+	case rid_tag_OBJECT:
+	    (object_table[ti->tag].size)(ti, doc->rh, doc);
+	    break;
+
+	case rid_tag_TABLE:
+	{
+	    int x,y;
+	    rid_table_cell *cell;
+	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
+
+	    for (x=-1,y=0; (cell = rid_next_root_cell(table, &x,&y)) != NULL; )
+		be_tfetch_stream(doc, cell->stream.text_list);
+	}
+	break;
+	}
+    }
+}
+
+extern os_error *antweb_trigger_fetching(antweb_doc *doc)
 {
     rid_text_item *ti;
 
-    FMTDBG(("antweb_document_sizeitems start\n"));
+    FMTDBG(("antweb_trigger_fetching: start\n"));
 
     /* Pass one: size everything up */
 
     doc->im_error = doc->im_unfetched = doc->im_fetched = doc->im_fetching = 0;
 
+#if 1
+    /* DAF: See startbody() for where this now happens */
     /* pdh: Doesn't entirely actually completely belong here, but we want
      * the background image to be fetched first, not last */
     if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
@@ -1868,20 +1902,28 @@ extern os_error *antweb_document_sizeitems(antweb_doc *doc)
         BENDBG(( "Calling fetch_bg from document_sizeitems\n" ));
         be_doc_fetch_bg(doc);
     }
+#endif
 
-    ti = doc->rh->stream.text_list;
+    if (gbf_active(GBF_NEW_FORMATTER))
+    {
+	be_tfetch_stream(doc, doc->rh->stream.text_list);
+    }
+    else
+    {
+	ti = doc->rh->stream.text_list;
 
-    /* First do each individual item */
-    while (ti)
-    {   /* Tables will recurse on child objects */
-	(object_table[ti->tag].size)(ti, doc->rh, doc);
-
-        /* might be no pos list, so no scanfr() */
-	/*ti = ti->next;*/
-        ti = rid_scanf(ti);
+	/* First do each individual item */
+	while (ti)
+	{   /* Tables will recurse on child objects */
+	    (object_table[ti->tag].size)(ti, doc->rh, doc);
+	    
+	    /* might be no pos list, so no scanfr() */
+	    /*ti = ti->next;*/
+	    ti = rid_scanf(ti);
+	}
     }
 
-    FMTDBG(("antweb_document_sizeitems done\n"));
+    FMTDBG(("antweb_trigger_fetching done\n"));
     FMTDBG(("Images: %d waiting, %d fetching, %d fetched, %d errors.\n",
 	    doc->im_unfetched, doc->im_fetching, doc->im_fetched, doc->im_error));
 
@@ -2874,12 +2916,6 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 	if ( gbf_active(GBF_NEW_FORMATTER) )
 	{
 	    fe_view_dimensions fvd;
-	    { static int WARNING_FIX_ME_REQUIRED; }
-	    /* The 100 needs to be replaced with the window
-               height. This is the value we get if a table has a
-               height of 100%. Thus, just as widening the window might
-               want to trigger a reformat, making the window taller
-               can also potentially trigger a reformat. */
 	    frontend_view_get_dimensions(doc->parent, &fvd);
 	    rid_toplevel_format(doc, rh, NULL, rh->stream.fwidth, fvd.layout_height);
 	}
@@ -3168,13 +3204,14 @@ os_error *backend_reset_width(be_doc doc, int width)
         int old_user_width = doc->rh->stream.fwidth;
         frontend_view_get_dimensions(doc->parent, &fvd);
 
+#if USE_MARGINS
+	fvd.user_width -= doc->margin.x0 - doc->margin.x1;
+#endif
+
         /* only reformat if the width has actually changed */
         if (old_user_width != fvd.user_width)
         {
             doc->rh->stream.fwidth = fvd.user_width;
-#if USE_MARGINS
-	    doc->rh->stream.fwidth -= doc->margin.x0 - doc->margin.x1;
-#endif
 	    ASSERT(doc->rh->stream.fwidth > 0);
 
             antweb_document_format(doc, doc->rh->stream.fwidth);
@@ -4105,7 +4142,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 		if (doc->rh->stream.text_last)
 		{
 		    PPDBG(("Sizing the first few items...\n"));
-		    antweb_document_sizeitems(doc);
+		    antweb_trigger_fetching(doc);
 		    PPDBG(("... done\n"));
 		}
 	    }
@@ -4875,7 +4912,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
     return NULL;
 }
 
-#ifdef STBWEB
+#if FRAMES
 int backend_frame_resize_bounds(be_doc doc, int x, int y, wimp_box *box, int *handle)
 {
     return layout_frame_resize_bounds(doc, x, y, box, handle);
@@ -4927,7 +4964,7 @@ void backend_doc_reformat(be_doc doc)
 {
     if (doc)
     {
-	antweb_document_sizeitems(doc);
+	antweb_trigger_fetching(doc);
 	antweb_document_format(doc, doc->rh->stream.fwidth);
 
 	be_set_dimensions(doc);
@@ -4943,7 +4980,7 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
     {
 	doc->scale_value = scale_value;
 
-	antweb_document_sizeitems(doc);
+	antweb_trigger_fetching(doc);
 	antweb_document_format(doc, doc->rh->stream.fwidth);
 
 	be_set_dimensions(doc);

@@ -162,40 +162,19 @@ static BOOL fvpr_progress_stream_2(rid_text_stream *stream, BOOL *pbComplete)
 		    break;
 		}
 
-		/* DAF: this might not be correct any more?...*/
-#if 0
-                /* pdh: it's renderable if (a) the HTML specifies its size
-                 * exactly or (b) it's got here (or as got-here as it'll ever
-                 * be)
-                 */
                 RENDBG(("fvpr: encountered image with flags=0x%x\n",flags));
 
-                if ( ( (im->flags & rid_image_flag_PERCENT)
-                        || im->ww == -1 || im->hh == -1 )
-                     &&
-                     ( (flags & IMAGE_RENDERABLE_FLAGS) == 0 )
-                    )
-                {
-                    RENDBG(("fvpr: don't know image size\n"));
-                    stop = TRUE;
-                    break;
-                }
-
-#else
-		if ( (flags & IMAGE_RENDERABLE_FLAGS) == 0 )
+                /* pdh: this && was an || but if the HTML gives the exact size
+                 * then fvpr may as well carry on
+                 */
+		if ( ( (flags & IMAGE_RENDERABLE_FLAGS) == 0 )
+		     &&
+		     (im->ww.type == value_none || im->hh.type == value_none) )
 		{
-		    RENDBG(("fvpr: not got realthing flag yet\n"));
+		    RENDBG(("fvpr: don't know final size yet\n"));
 		    stop = TRUE;
 		    break;
 		}
-
-		if (im->ww.type == value_none || im->hh.type == value_none)
-		{
-		    RENDBG(("fvpr: ww or hh still value_none\n"));
-		    stop = TRUE;
-		    break;
-		}
-#endif
 
 	    }
 	    break;

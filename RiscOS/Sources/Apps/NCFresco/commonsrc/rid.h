@@ -51,6 +51,8 @@
 #define SHORTISH        short
 #endif
 
+#define NEWGROW		1
+
 /* This file defines the Riscos Internal Data structues to store the parsed data */
 
 /**********************************************************************************
@@ -212,6 +214,9 @@ typedef struct rid_pos_item {
     int				max_down; 	/* The depth of the lowest decender - I guess we could just use the next line. */
     struct rid_text_item *	first; 		/* The first item on the line */
     struct rid_floats_link *	floats; 	/* Non-null if either end of the line has any floats */
+#if DEBUG
+    int				linenum;
+#endif
 } rid_pos_item;
 
 /* Note that one can have overhangs. If F is float, T text and E
@@ -436,7 +441,8 @@ typedef struct rid_textarea_item {
 
 typedef enum {
     rid_fm_GET,
-    rid_fm_POST
+    rid_fm_POST,
+    rid_fm_POST_MULTIPART               /* multipart/form-data */
     } rid_form_method;
 
 typedef struct rid_form_item {
@@ -930,10 +936,10 @@ typedef struct rid_header {
     int extracolourarray[rid_EXTRACOLOURS];
 
     void *fmt_state;
-    
+
     int			table_depth;		/* Recursive table nesting level */
     int			idnum;	/* To sequentially 'name' objects for debugging reference */
-    
+
 #ifdef BUILDERS
     int cwidth;			/* Width of monospaced text font */
 #endif

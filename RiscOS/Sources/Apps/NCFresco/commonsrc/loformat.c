@@ -19,8 +19,8 @@
 #include "htmlparser.h"
 #include "dump.h"
 #include "util.h"
-#include "webfonts.h"
 #include "indent.h"
+#include "webfonts.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -158,7 +158,7 @@ static rid_pos_item *new_pos_item(RID_FMT_STATE *fmt)
 /*****************************************************************************/
 
 /*
-  
+
   IMPORTANT: ANY UBS MIGHT CONTAIN FLOATING ITEMS. THESE ARE NOT PART
   OF THE SEQUENCE AND MUST ALWAYS BE FACTORED OUT.
 
@@ -172,14 +172,30 @@ static void get_ubs_width(RID_FMT_STATE *fmt)
     int width = 0;
     int last_pad = 0;
 
+#if 0
+    FMTDBG(("\n"));
+    while (1)
+    {
+	dump_item(ti, NULL);
+	if (ti == fmt->unbreakable_stop)
+	    break;
+	ti = rid_scanf(ti);
+    }
+
+    ti = fmt->unbreakable_start;
+#endif
+
     while (1)
     {
 	if (! FLOATING_ITEM(ti))
 	{
 	    if (ti->width == -1)
 	    {
-		ASSERT(width == 0 || width == -1);
-		width = -1;
+		/*ASSERT(width == 0 || width == -1);*/
+		/* html/format/misc4.html shows this failing */
+		if (width == 0 || width == -1)
+		    width = -1;
+		/* else pretend width==0 */
 	    }
 	    else
 	    {
@@ -294,13 +310,13 @@ static void pickup_float_line(RID_FMT_STATE *fmt)
     {
 	pi->left_margin = pi->prev->left_margin;
 	pi->floats->right_margin = pi->prev->floats->right_margin;
-	FMTDBGN(("pickup_float_line: inherit margins %d/%d\n", 
+	FMTDBGN(("pickup_float_line: inherit margins %d/%d\n",
 		 pi->left_margin, pi->floats->right_margin));
     }
 }
 
 /*****************************************************************************
- 
+
   We have decided that the floating item will not fit on the current
   line. Create another candidate line to try fitting it on. We inherit
   margin information from the line preceeding us (all zeroes if no
@@ -366,7 +382,7 @@ static void position_floating_item(RID_FMT_STATE *fmt)
 
     FMTDBGN(("position_floating_item: %s, ti %p, pi %p, fi %p, fl %p, LM %d, RM %d\n",
 	     leftwards ? "LEFTWARDS" : "RIGHTWARDS",
-	     ti, pi, fi, fl, 
+	     ti, pi, fi, fl,
 	     pi->left_margin, fl->right_margin ));
 
     ti->line = pi;
@@ -521,7 +537,7 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
     }
 
     FMTDBGN(("unbreakable_sequence_fits: %s: pp %d, LM/RM %d/%d, FW %d, TW %d, XP %d, flt %d, txt %d\n",
-	     fits ? "FITS" : "DOESN'T FIT", 
+	     fits ? "FITS" : "DOESN'T FIT",
 	     prev_pad,  LM, RM, FW, TW, fmt->x_text_pos, have_floaters, have_text));
 
     return fits;
@@ -608,7 +624,7 @@ static void fracture_copy_left(RID_FMT_STATE *fmt)
     ASSERT(new != NULL);
     ASSERT(old->floats != NULL);
     ASSERT(fi != NULL);
-    ASSERT(new->floats != NULL);    
+    ASSERT(new->floats != NULL);
 
     while (fi != NULL)
     {
@@ -640,7 +656,7 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
     ASSERT(new != NULL);
     ASSERT(old->floats != NULL);
     ASSERT(fi != NULL);
-    ASSERT(new->floats != NULL);    
+    ASSERT(new->floats != NULL);
 
     while (fi != NULL)
     {
@@ -688,6 +704,10 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
   it will at least work. The alternative is to think harder about
   removing N images on one go. but this might easily end up with
   differemt semantics and be a bastard to track.  */
+
+#ifndef MAXINT
+#define MAXINT INT_MAX   /* let's be ansi out there */
+#endif
 
 static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
 {
@@ -795,6 +815,8 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 
     FMTDBGN(("close_down_current_line: max up/down %d/%d\n", max_up, max_down));
 #if DEBUG
+    pi->linenum = ++fmt->linenum;
+
     if (debug_get("FMTDBGN"))
 	dump_pos(pi);
 #endif
@@ -816,7 +838,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 
     /* SJM: add call to horizontal alignment code - is this in the right place */
     center_and_right_align_adjustments(fmt);
-    
+
     /* Auto advance text_line if have floating lines to advance in to */
     if (pi->next != NULL)
     {
@@ -843,7 +865,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     }
 
     FMTDBGN(("close_down_current_line: widest now %d, height %d/%d, line now %p, ypos %d\n\n",
-	     fmt->stream->widest, 
+	     fmt->stream->widest,
 	     pi->max_up,
 	     pi->max_down,
 	     fmt->text_line,
@@ -903,7 +925,7 @@ static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
 	FMTDBGN(("append_unbreakable_sequence: ubs contributes %d, giving %d\n",
 		 fmt->unbreakable_width, fmt->x_text_pos));
     }
-    
+
     if (fmt->last_last_unbreakable != NULL)
     {
 	fmt->x_text_pos += fmt->last_last_unbreakable->pad;
@@ -922,7 +944,7 @@ static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
 	close_down_current_line(fmt);
     }
     else
-	no_unbreakable(fmt);    
+	no_unbreakable(fmt);
 }
 
 /*****************************************************************************/
@@ -961,16 +983,16 @@ static void deal_with_unbreakable_sequence(RID_FMT_STATE *fmt)
 	    while (1)
 	    {
 		FMTDBGN(("deal_with_unbreakable_sequence: looking for text line without margin clash\n"));
-		
+
 		if ( fmt->text_line == NULL )
 		    create_new_text_line(fmt);
-		
+
 		if ( no_text_margin_info(fmt) )
 		    set_text_margin_info(fmt);
-		
+
 		if ( text_margin_indent_clash(fmt) || ! (usf = unbreakable_sequence_fits(fmt)) )
 		    close_down_current_line(fmt);
-		else 
+		else
 		    break;
 	    }
 	    FMTDBGN(("deal_with_unbreakable_sequence: found: looking for line with enough room\n"));
@@ -1008,12 +1030,12 @@ static void next_nonfloating_item(RID_FMT_STATE *fmt)
 }
 
 /*****************************************************************************
-  
+
   Handle the next floating item.
 
   The spec sez:
 
-  align=left 
+  align=left
             floats the image to the current left margin, temporarily
             changing this margin, so that subsequent text is flowed
             along the image's righthand side. The rendering depends on
@@ -1023,7 +1045,7 @@ static void next_nonfloating_item(RID_FMT_STATE *fmt)
             to wrap to a new line, with the subsequent text continuing
             on the former line.
 
-  align=right 
+  align=right
             floats the image to the current right margin, temporarily
             changing this margin, so that subsequent text is flowed
             along the image's lefthand side. The rendering depends on
@@ -1089,6 +1111,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
     /* Initialise bits and pieces */
     fmt->format_width = fmt->stream->fwidth;
     fmt->y_text_pos = 0;
+    fmt->linenum = 0;
     fmt->stream->widest = 0;
     fmt->stream->width = 0;
 
@@ -1117,14 +1140,23 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		ti->width = table->hwidth[ACTUAL];
 		break;
 	    case DONT:
-		ti->width = table->hwidth[RAW_MAX];
+		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
+		     table->userwidth.type == value_absunit)
+		    ti->width = ceil(table->userwidth.u.f);
+		else
+		    ti->width = table->hwidth[RAW_MAX];
 		break;
 	    case MUST:
-		ti->width = table->hwidth[RAW_MIN];
+		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
+		     table->userwidth.type == value_absunit)
+		    ti->width = ceil(table->userwidth.u.f);
+		else
+		    ti->width = table->hwidth[RAW_MIN];
 		break;
 	    }
 
-	    FMTDBG(("stream_first_use_init: set table's width to %d (%d)\n", ti->width, fmt->fmt_method));
+	    FMTDBG(("formatting_start: set table's id=%d width to %d (%d)\n",
+		    ((rid_text_item_table *)ti)->table->idnum, ti->width, fmt->fmt_method));
 	}
 
 	/* SJM: do the stuff for other scaleable items */
@@ -1146,7 +1178,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		break;
 	    }
 
-	    FMTDBG(("stream_first_use_init: set tag %d's width to %d (%d)\n", ti->tag, ti->width, fmt->fmt_method));
+	    FMTDBG(("formatting_start: set tag %d's width to %d (%d)\n", ti->tag, ti->width, fmt->fmt_method));
 	}
     }
 
@@ -1155,7 +1187,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
 }
 
 /*****************************************************************************
- 
+
   The stream is finished. Flush until we get a pos item with nothing
   on it, thus ensuring all lines with something on them get properly
   completed. We could use pseudo_html(, "<BR CLEAR=ALL>"), but this
@@ -1268,7 +1300,7 @@ extern void format_stream(antweb_doc *doc,
 
     formatting_loop(fmt);
 
-    FMTDBGN(("format_stream(%p): Format complete: width %d, height %d, widest %d.\n", 
+    FMTDBGN(("format_stream(%p): Format complete: width %d, height %d, widest %d.\n",
 	     fmt, fmt->stream->width, fmt->stream->height, fmt->stream->widest));
 
     /* SJM: added freeing */
@@ -1421,7 +1453,7 @@ static void scaffold_check(rid_text_item *ti, rid_header *rh)
 		break;
 	    FMTDBGN(("scaffold_check: continue looping\n"));
 	}
-	
+
 	FMTDBGN(("scaffold_check: other %p, other->next %p\n", other, other->next));
 
 	if ( other->next != NULL && FLOATING_ITEM(other->next) )
@@ -1435,7 +1467,7 @@ static void scaffold_check(rid_text_item *ti, rid_header *rh)
 		ti->flag = rid_flag_NO_BREAK;
 		ti->max_up = ti->max_down = 0;
 		ti->pad = ti->width = 0;
-	    } while (ti != other);		
+	    } while (ti != other);
 	}
     }
 }

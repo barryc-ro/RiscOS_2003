@@ -136,7 +136,7 @@ static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_fram
 /* convert all the variable size fields into fixed pixel amounts */
 /* correct backwards for all the spacing added */
 
-#ifdef STBWEB
+#if FRAMES
 static void fix_frame_sizes(rid_stdunits *vals, int n, rid_frame_unit_totals *totals, int size, int spacing)
 {
     rid_stdunits *val;
@@ -174,7 +174,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
     int i;
     int last_row_divider = 0, last_col_divider = 0;
     int bdflag = fs->bwidth ? 0 : rid_frame_divider_BORDERLESS;
-    
+
     PRSDBG(( "layout: %p/%p %dx%d sizes @%p,%p\n", frameset, fs, fs->ncols, fs->nrows, fs->widths, fs->heights));
 
     /* build the arrays of widths and heights */
@@ -182,7 +182,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
     ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, bbox->y0, bbox->y1 - bbox->y0, fs->bwidth);
 
     frame_previous_row = NULL;
-    
+
     for (i = 0, frame = fs->frame_list; i < nframes && frame; i++, frame = frame->next)
     {
         wimp_box bb;
@@ -205,16 +205,16 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 	frame->dividers[rid_frame_divider_TOP] = bdflag | (row == 0 ?
 	    frameset->dividers[rid_frame_divider_TOP] :			/* copy top from parent */
 	    frame_previous_row->dividers[rid_frame_divider_BOTTOM]);	/* use the divider from the row above */
-	
+
 	frame->dividers[rid_frame_divider_BOTTOM] = bdflag | (row == fs->nrows-1 ?
 	    frameset->dividers[rid_frame_divider_BOTTOM] :		/* copy bottom from parent */
 	    (last_row_divider = divider_current_index++));		/* create new divider and store */
 
-	
+
 	frame->dividers[rid_frame_divider_LEFT] = bdflag | (col == 0 ?
 	    frameset->dividers[rid_frame_divider_LEFT] :		/* copy left from parent */
 	    last_col_divider);						/* use the divider created last time around */
-	
+
 	frame->dividers[rid_frame_divider_RIGHT] = bdflag | (col == fs->ncols-1 ?
 	    frameset->dividers[rid_frame_divider_RIGHT] :		/* copy right from parent */
 	    (last_col_divider = divider_current_index++));		/* create new divider and store */
@@ -242,11 +242,11 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->index = row;
 
 	    spacing->divider_index = frame->dividers[rid_frame_divider_TOP];
-	    
+
             spacing->flags = layout_spacing_HORIZONTAL | layout_spacing_RESIZE;
 
 	    spacing->colour = frame->bordercolour;
-	    
+
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
 
@@ -279,7 +279,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 	    spacing->flags = layout_spacing_RESIZE;
 
 	    spacing->colour = frame->bordercolour;
-	    
+
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
 
@@ -312,7 +312,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
 		/* copy in divider values */
 		memcpy(info->dividers, frame->dividers, sizeof(info->dividers));
-		
+
                 /* also fill in the url of this frame */
                 if (urls)
                     *urls++ = f->src;
@@ -385,7 +385,7 @@ static void set_spacing_flags_frame(layout_spacing_info *spacing, rid_frame *fra
 	/* if matches and this frame wants a 3D border then give it to it */
 	if (match && frame->border)
 	    spacing->flags |= layout_spacing_BEVEL;
-	
+
 	switch (frame->tag)
         {
 	case rid_frame_tag_FRAME:
@@ -446,13 +446,13 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, in
 	divider_current_index = max;
 	memcpy(doc->rh->frames->dividers, dividers, sizeof(doc->rh->frames->dividers));
     }
-    
+
     /* kick off the layout with the outer frameset */
     doc->rh->nframes = be_frame_layout_1(doc->rh->frames, &box, info, urls, doc);
 
     /* allocate the spacing flags */
     set_spacing_flags(doc);
-    
+
 #if DEBUG
 {
     fprintf(stderr, "layout: actually %d frames\n", doc->rh->nframes);
@@ -462,7 +462,7 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, in
         fprintf(stderr, "'%16s' %4d,%4d %4d,%4d div %d,%d,%d,%d '%s'\n",
 		ip->name ? ip->name : "<none>",
 		ip->box.x0, ip->box.y0, ip->box.x1, ip->box.y1,
-		ip->dividers[0], ip->dividers[1], ip->dividers[2], ip->dividers[3], 
+		ip->dividers[0], ip->dividers[1], ip->dividers[2], ip->dividers[3],
 		urls && urls[i] ? urls[i] : "<none>");
     }
 }
@@ -480,7 +480,7 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, in
     mm_free(urls);
 }
 
-#ifdef STBWEB
+#if FRAMES
 int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int *handle)
 {
     layout_spacing_info *spc;
@@ -533,7 +533,7 @@ static void dump_list(int n, VALUE *list)
 #define dump_list(n, list)
 #endif
 
-#ifdef STBWEB
+#if FRAMES
 void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
 {
     layout_spacing_info *spc = (layout_spacing_info *)(long) handle;
@@ -589,7 +589,7 @@ void layout_render_bevels(wimp_redrawstr *r, antweb_doc *doc)
 
 	box = spc->box;
 	coords_box_toscreen(&box, (coords_cvtstr *)&r->box);
-	
+
 	if (coords_boxesoverlap(&box, &r->g))
 	{
 	    if (spc->flags & layout_spacing_BEVEL)
@@ -629,9 +629,9 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
     int *ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, 0, fmt_h, fs->bwidth);
 
     PRSDBG(("layout__writetable: frameset %p prefix '%s' fn %p base count %d\n", frameset, strsafe(prefix), fn, base_count));
-    
+
     fprintf(f, "<TABLE BORDER CELLSPACING=0 CELLPADDING=0>\n");
-   
+
     /* for all frames in the frameset */
     for (frame = frameset->data.frameset.frame_list, i = 0; frame; frame = frame->next, i++)
     {
@@ -673,7 +673,7 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
 
     mm_free(xpos);
     mm_free(ypos);
-    
+
     return count;
 }
 

@@ -2959,6 +2959,9 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else
 	    {
+#ifdef STBWEB
+		flags |= access_MAX_PRIORITY;
+#endif
 		ep = access_new_file(cfile, ft, url, flags, ofile, progress, complete, h, result);
 	    }
 

@@ -195,7 +195,7 @@ extern int nvram_write(const char *tag, int new_val);
 
 /* mappgins from slightly more generic browser conditions to the above map */
 #define snd_NONE		0
-    
+
 #define snd_TOOLBAR_SHOW	soundfx_TB_OPEN
 #define snd_TOOLBAR_HIDE	soundfx_TB_CLOSE
 #define snd_TOOLBAR_SHOW_SUB	soundfx_ACTION_OK
@@ -221,7 +221,7 @@ extern int nvram_write(const char *tag, int new_val);
 #define snd_PASSWORD_SHOW	soundfx_ACTION_OK
 #define snd_INFO_SHOW		soundfx_ACTION_OK
 #define snd_FIND_SHOW		soundfx_ACTION_OK
-    
+
 #define snd_SCROLL_LINE		0
 #define snd_SCROLL_PAGE		0
 #define snd_SCROLL_LIMIT	0
@@ -244,13 +244,13 @@ extern int nvram_write(const char *tag, int new_val);
 #define snd_FORM_RESET		0
 
 #define snd_LINK_FOLLOW		0
-    
+
 #define snd_MODE_MAP_START	0
 #define snd_MODE_MAP_END	0
 
 #define snd_BEEPS_ON		soundfx_BROWSER_SOUND_ON
 #define snd_BEEPS_OFF		soundfx_BROWSER_SOUND_ON
-    
+
 #define snd_ERROR		soundfx_ACTION_FAIL
 
 #define snd_FIND_FAILED		soundfx_ACTION_FAIL
@@ -265,7 +265,7 @@ extern void sound_event(sound_event_t event_num);
 
 extern void pointer_set_position(int x, int y);
 
-/* 
+/*
 
    The RISC OS tmpnam function has problems executing under the debugger, so we
    have a variant of our own. This doesn't apply under other OSs.
@@ -273,14 +273,20 @@ extern void pointer_set_position(int x, int y);
 
 */
 
-#ifdef RISCOS 
+#ifdef RISCOS
 
-extern char *rs_tmpnam(char *s); 
+extern char *rs_tmpnam(char *s);
 
 #else
 
 #define rs_tmpnam tmpnam
 
 #endif
+
+/* Set the window flags for a window WITHOUT deleting and recreating it. Only
+ * works on the New Wimp (WindowManager 3.90)
+ */
+os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor );
+
 
 /* eof util.h */

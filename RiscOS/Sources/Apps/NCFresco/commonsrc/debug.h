@@ -42,12 +42,12 @@
   FMTDBG	Formatting debugging
   IMGDBG	IMage debugging
   ACCDBG	Access debugging
+  LAYDBG	Frame layout debugging
 
   @@@@ We need some more debugging options that I have not yet put in.
   These include:
 
   ATHDBG	Authentication debugging
-  LAYDBG	Frame layout debugging
   PRTDBG	Print debugging
   TRDDBG	Thread debugging
   LOCDBG	Locate debugging
@@ -131,6 +131,7 @@ extern int debug_get(const char *feature);
 #define STBDBG(x)
 #define BENDBG(x)
 #define LNKDBG(x)
+#define LAYDBG(x)
 
 #else	/* DEBUG < 1 */
 
@@ -148,6 +149,7 @@ extern int debug_get(const char *feature);
 #define STBDBG(x)	stbdbg x
 #define BENDBG(x)	bendbg x
 #define LNKDBG(x)	lnkdbg x
+#define LAYDBG(x)	laydbg x
 
 /* -v1 and -v0 are NorCroft printf() checking indicators */
 #ifdef __acorn
@@ -167,6 +169,7 @@ DBGPROTO(accdbg);
 DBGPROTO(stbdbg);
 DBGPROTO(bendbg);
 DBGPROTO(lnkdbg);
+DBGPROTO(laydbg);
 #ifdef __acorn
 #pragma -v0
 #endif
@@ -193,6 +196,7 @@ DBGPROTO(lnkdbg);
 #define STBDBGN(x)
 #define BENDBGN(x)
 #define LNKDBGN(x)
+#define LAYDBGN(x)
 
 #else	/* DEBUG < 2 */
 
@@ -210,6 +214,7 @@ DBGPROTO(lnkdbg);
 #define STBDBGN(x)	stbdbgn x
 #define BENDBGN(x)	bendbgn x
 #define LNKDBGN(x)	lnkdbgn x
+#define LAYDBGN(x)	laydbgn x
 
 #pragma -v1
 DBGPROTO(tabdbgn);
@@ -226,6 +231,7 @@ DBGPROTO(accdbgn);
 DBGPROTO(stbdbgn);
 DBGPROTO(bendbgn);
 DBGPROTO(lnkdbgn);
+DBGPROTO(laydbgn);
 #pragma -v0
 
 #endif	/* DEBUG < 2 */

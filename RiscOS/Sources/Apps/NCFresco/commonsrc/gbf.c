@@ -18,7 +18,8 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 0 ) +
 		( GBF_NEW_FORMATTER * 1 ) +
 		( GBF_AUTOFIT * 1 ) +
 		( GBF_NETSCAPE_OVERLAPS * 0 ) +
-		( GBF_HARD_TABLES * 0 )
+		( GBF_HARD_TABLES * 0 ) +
+		( GBF_EARLYIMGFETCH * 0 )
 ;
 
 extern int gbf_active(int gbf)

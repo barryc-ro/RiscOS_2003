@@ -34,7 +34,7 @@
 #include "filetypes.h"
 #include "parsers.h"
 #include "images.h"
-
+#include "gbf.h"
 #include "tables.h"
 
 #include "htmlparser.h"
@@ -639,6 +639,21 @@ extern void text_item_push_image(HTMLCTX * me,
     GET_ROSTYLE(nb->st);
 
     rid_text_item_connect(me->rh->curstream, nb);
+
+#if 0				/* FIXME: SJM: this new scheme doesn't work !!! */
+    if (gbf_active(GBF_EARLYIMGFETCH))
+    {
+	rid_text_item_image *tii = (rid_text_item_image *) nb;
+
+	IMGDBG(("text_item_push_image: src '%s' im %p bwidth %d, hspace %d, vspace %d\n",
+		tii->src, tii->im, tii->bwidth, tii->hspace, tii->vspace));
+
+#ifndef BUILDERS
+	if (tii->im == NULL)
+	    tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
+#endif	
+    }
+#endif
 }
 
 /*****************************************************************************/

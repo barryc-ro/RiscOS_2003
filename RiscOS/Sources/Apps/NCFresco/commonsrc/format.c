@@ -135,6 +135,8 @@ static void basic_size_stream(antweb_doc *doc,
 	}
     }
 
+    /*dump_header(rh);*/
+
     /* Now have all items in this stream sized except tables.  any
         nested tables have child sizes calculated. Format this stream
         to pick up size information. Set the stream width as wide as
@@ -441,6 +443,12 @@ static int largest_implied_table_width(rid_table_item *table,
 	    if (x > widest)
 		widest = x;
 	}
+	else if (width_non_pct > 0)
+	{
+	    /* DAF: 8/5/97: ? */
+	    FMTDBG(("largest_implied_table_width: 100%% used by width_non_pct is %d\n", width_non_pct));
+	    widest += width_non_pct;
+	}
 
 	FMTDBG(("largest_implied_table_width: widest %d, width_non_pct %d\n",
 		widest, width_non_pct));
@@ -656,29 +664,45 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     FMTDBGN(("normalise_percentages(%p %s): starting\n",
 	    table, HORIZVERT(horiz)));
 
+    /* Initialise column header locations without a percentage
+       contribution */
+    colspan_column_and_eql_set(table, horiz, PCT_RAW,
+			       colspan_flag_PERCENT_COL, 0, 0);
+
     /* Generate a division of the groups into columns (L/R)*/
     colspan_algorithm(table, PCT_RAW, horiz);
 
     /* Gets widths based on leftmost data set */
     colspan_column_init_from_leftmost(table, PCT_RAW, horiz);
 
+
+    colspan_trace_cells(table, horiz);
+
     /* Zero contributions from percent groups */
-    colspan_all_and_eql_set(table, horiz, PCT_RAW,
-			    colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP, 0);
+    /*colspan_all_and_eql_set(table, horiz, PCT_RAW,
+			    colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP, 0);*/
+
+    colspan_trace_cells(table, horiz);
 
     /* Mark all column headers with percentages as having a direct contribution */
     colspan_column_and_eql_bitset(table, horiz, PCT_RAW,
 				  colspan_flag_PERCENT, colspan_flag_PERCENT, colspan_flag_PERCENT_COL);
 
+
+    colspan_trace_cells(table, horiz);
     /* Clear the flags for percent groups */
     colspan_all_and_eql_bitclr(table, horiz, PCT_RAW,
 			       colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP);
 
+
+    colspan_trace_cells(table, horiz);
     /* Zero contributions that are not from percent columns */
     colspan_all_and_eql_set(table, horiz, PCT_RAW,
 			    colspan_flag_PERCENT_COL, 0, 0);
 
 
+
+    colspan_trace_cells(table, horiz);
     /* At this point, all the percent group values are zero and they
        have had their flags removed. An arbitary (leftmost in this
        case) crystallisation of the group has been chosen and
@@ -1078,7 +1102,7 @@ static void basic_size_table(antweb_doc *doc,
     FMTDBG(("basic_size_table: id %d: done\n", table->idnum));
 
     /* Attempt to override sizes with user width, if it exists */
-#if 0
+#if 1
     switch (table->userwidth.type)
     {
     case value_absunit:
@@ -1087,6 +1111,7 @@ static void basic_size_table(antweb_doc *doc,
 	{
 	    FMTDBG(("User width of %d being applied (RAW_MIN=%d)\n", uwidth, table->hwidth[RAW_MIN]));
 	    /* Override ALL previously calculated values. */
+#if 0
 	    table->hwidth[RAW_MIN] =
 		table->hwidth[ABS_MIN] =
 		table->hwidth[PCT_MIN] =
@@ -1095,7 +1120,9 @@ static void basic_size_table(antweb_doc *doc,
 		table->hwidth[ABS_MAX] =
 		table->hwidth[PCT_MAX] =
 		table->hwidth[REL_MAX] = uwidth;
+#endif
 	    /* BLUNT! */
+	    table->flags |= rid_tf_HAVE_WIDTH;
 	}
 	else
 	{
@@ -1108,91 +1135,6 @@ static void basic_size_table(antweb_doc *doc,
 
     format_width_checking_assertions(table, HORIZONTALLY);
 }
-
-/*****************************************************************************
-
-  Decides the total width at which to render the table, and specifies
-  which slot to render against (ie which constraints we know can
-  always be satisfied versus those that we just try and see if they
-  can be applied). Returns the total width.
-
-  fwidth is the width of the stream the table is contained within - we
-  might not want all of this width.
-
-  See elsewhere for detailed discussion on choosing orders. The
-  complications hang around our decision that PCT_MIN is better than
-  ABS_MAX.
-
-  Note that we could be lazy about the evaluation of the various slots
-  until required by the state machine here. Also, we could optimise
-  the generation of ABS, PCT and REL when no constraints of these
-  types exist.  */
-
-#if 0
-static int decide_which_slot (antweb_doc *doc,
-			       rid_header *rh,
-			       rid_table_item *table,
-			       int fwidth,
-			       width_array_e *best_slotp,
-			       BOOL horiz)
-{
-    /* Oops - another state machine! */
-    typedef struct { width_array_e fail, pass; } tuple;
-
-    /* This embodies a lot of thought - don't change casually */
-    static const tuple states[LAST_MAX+1] =
-    {
-	{ RAW_MIN, ABS_MIN },			/* RAW_MIN */
-	{ RAW_MAX, PCT_MIN },			/* ABS_MIN */
-	{ ABS_MAX, REL_MIN },			/* PCT_MIN */
-	{ PCT_MAX, REL_MAX },			/* REL_MIN */
-
-	{ ABS_MAX, ABS_MAX },			/* RAW_MAX */
-	{ CS_STOP, PCT_MAX },			/* ABS_MAX */
-	{ CS_STOP, REL_MAX },			/* PCT_MAX */
-	{ CS_STOP, REL_MAX }			/* REL_MAX */
-    };
-
-    /* NB this function knows about the semantics of the width arrays! */
-    int result;
-    int *master = HORIZCELLS(table,horiz);
-    width_array_e current = CS_STOP, last = FIRST_MIN, next = FIRST_MIN;
-
-    FMTDBG(("decide_which_slot(%p %p %p %d %s): depth %d\n",
-	    doc, rh, table, fwidth, HORIZVERT(horiz), table->depth));
-
-    colspan_trace_cells(table, horiz);
-
-    format_width_checking_assertions(table, horiz);
-
-    /* Run state machine and choose the best slot we can */
-    do
-    {
-	if ( fwidth >= master[current = next] )
-	    next = states[last = current].pass;
-	else
-	    next = states[current].fail;
-    } while (next != current && next != CS_STOP);
-
-    ASSERT(last != CS_STOP);
-    *best_slotp = last;
-
-    if (last == FIRST_MIN || last == LAST_MAX)
-	result = master[last];
-    else
-	result = fwidth;
-
-    /* General assertion: exception is outermost table */
-    if (table->depth > 1)
-    {
-	ASSERT( result <= fwidth );
-    }
-
-    FMTDBG (("decide_which_slot: use fwidth %d for slot %s\n", result, WIDTH_NAMES[*best_slotp]));
-
-    return result;
-}
-#endif
 
 /*****************************************************************************
 

@@ -33,6 +33,8 @@
 #include "tables.h"
 #include "unwind.h"
 
+
+
 /*****************************************************************************/
 
 /* DON'T want this going out in production code (again!) */
@@ -93,6 +95,24 @@ static void nonlprint(char *format, ... )
 	vfprintf(DBGOUT, format, arg);
         va_end(arg);
 	fflush(DBGOUT);
+}
+
+/*****************************************************************************/
+
+static char *smartpos(rid_pos_item *pi)
+{
+    static char buf[32];
+
+#if 0
+    sprintf(buf, "%p", pi);
+#else
+    if (pi == NULL)
+	strcpy(buf, "No pos item");
+    else
+	sprintf(buf, "line %d", pi->linenum);
+#endif
+
+    return buf;
 }
 
 /*****************************************************************************/
@@ -224,7 +244,7 @@ extern void dump_float_item(rid_float_item *ptr)
     my_print("rid_float_item %p", ptr);
     enter();
     FIELD(ptr, ti, "%p");
-    FIELD(ptr, pi, "%p");
+    my_print("pi %s", smartpos(ptr->pi));
     FIELD(ptr, height, "%d");
     FIELD(ptr, height_left, "%d");
     FIELD(ptr, entry_margin, "%d");
@@ -274,7 +294,7 @@ extern void dump_floats_link(rid_floats_link *ptr)
 extern void dump_pos(rid_pos_item *pi)
 {
 #ifndef NO_PTRS
-        my_print("rid_pos_item %p", pi);
+        my_print("rid_pos_item %s", smartpos(pi));
 #else
         my_print("rid_pos_item");
 #endif
@@ -282,8 +302,8 @@ extern void dump_pos(rid_pos_item *pi)
         	return;
         enter();
 #ifndef NO_PTRS
-                FIELD(pi, prev, "%p");
-                FIELD(pi, next, "%p");
+		my_print("prev %s", smartpos(pi->prev));
+		my_print("next %s", smartpos(pi->next));
                 FIELD(pi, st, "%p");
 #endif
                 FIELD(pi, top, "%d");
@@ -375,7 +395,7 @@ extern void dump_item(rid_text_item *item, char *base)
         enter();
 #ifndef NO_PTRS
 	        if (item->next) FIELD(item, next, "%p");
-                if (item->line) FIELD(item, line, "%p");
+                if (item->line) my_print("line %s", smartpos(item->line));
 		if (item->aref) FIELD(item, aref, "%p");
 #endif
                 if (item->max_up) FIELD(item, max_up, "%d");
@@ -1004,10 +1024,11 @@ extern void dump_stream(rid_text_stream *ptr, char *base)
         	return;
  	enter();
 #ifndef NO_PTRS
+		/* Don't number these */
   		FIELD(ptr, pos_list, "%p");
-  		/*FIELD(ptr, pos_last, "%p");*/
+  		FIELD(ptr, pos_last, "%p");
   		FIELD(ptr, text_list, "%p");
-  		/*FIELD(ptr, text_last, "%p");*/
+  		FIELD(ptr, text_last, "%p");
 		FIELD(ptr, text_fvpr, "%p");
   		/*FIELD(ptr, parent, "%p");*/
   		/*FIELD(ptr, partype, "%d");*/

@@ -32,17 +32,8 @@
 #define HTMLMODE_BOGUS      3
 #define NUM_HTMLMODES       3  /* see last_mode field of HTMLCTX */
 
-#if 0
-#define FORCE_BREAK     0x01    /* After commands that break the line */
-#define STRIP_SPACE     0x02    /* After commands that swallow white space */
-#define HARD_BREAK      0x04    /* After the end of a preformatted line of text */
-#define NO_BREAK	0x08    /* No break */
-#endif
-
 #define WITH_SPACE    	TRUE
 #define WITHOUT_SPACE   FALSE
-
-
 
 /* This still exists to ease the joining between the layers */
 /* It could easily disappear in the future */

@@ -16,7 +16,7 @@ static char *stack_indentation(SGMLCTX *context)
 #if defined(HTMLCHECK) || defined(PLOTCHECK)
     return "";
 #else
-static char buf[256];
+    static char buf[256];
 
     STACK_ITEM *ip = context->tos;
 
@@ -120,7 +120,7 @@ static void sgml_print_value(FILE *output, ATTRIBUTE *attribute, VALUE *value)
 	    break;
     }
 }
-#endif
+#endif /* SGML_REPORTING */
 
 
 
