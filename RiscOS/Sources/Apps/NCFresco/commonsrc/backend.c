@@ -541,16 +541,20 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
 	{
 	    if (akbd_pollctl())
 	    {
+#ifndef BUILDERS
 	        backend_update_link(doc, ti, -1);
+#endif
 	    }
 	    else
 	    {
 		BOOL follow_link = TRUE;
                 if (config_display_time_activate)
                 {
+#ifndef BUILDERS
 	            backend_update_link_activate(doc, ti, 1);
                     follow_link = wait_for_release(config_display_time_activate);
 	            backend_update_link_activate(doc, ti, 0);
+#endif
     	        }
 		if (follow_link)
 		    frontend_complain(antweb_handle_url(doc, ti->aref, NULL,
@@ -2844,7 +2848,9 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
     fvpr_progress_stream(&doc->rh->stream);
 
     objects_check_movement(doc);
+#ifndef BUILDERS
     antweb_build_selection_list(doc);
+#endif
 
 #if DEBUG
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
@@ -4286,7 +4292,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	    be_doc_fetch_bg(doc);
 	}
 
-#ifndef STBWEB
+#if !defined(STBWEB) && !defined(BUILDERS)
 	if (frontend_view_has_caret(doc->parent))
 	{
 	    doc->text_input_offset = -1;

@@ -39,6 +39,8 @@ extern void state_comment_initial (SGMLCTX *context, char input);
 extern void state_comment_wait_close (SGMLCTX *context, char input);
 extern void state_comment_wait_dash_2 (SGMLCTX *context, char input);
 extern void state_comment_wait_dash_1 (SGMLCTX *context, char input);
+extern void state_comment_wait_dash_2_0 (SGMLCTX *context, char input);
+extern void state_comment_wait_dash_1_0 (SGMLCTX *context, char input);
 #endif
 
 extern void state_comment_pre_initial (SGMLCTX *context, char input);

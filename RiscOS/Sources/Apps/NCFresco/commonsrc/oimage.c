@@ -353,17 +353,20 @@ BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp
 
 		/* highlight the area (and dehighlight image) */
 /* 		tii->data.usemap.selection = area; */
+#ifndef BUILDERS
 		backend_update_link_activate(doc, ti, 1);
 
 		follow_link = wait_for_release(config_display_time_activate);
 
 		/* de highlight the area */
 		backend_update_link_activate(doc, ti, 0);
-
+#endif
 		/* restore the original selection if there was one */
 /* 		tii->data.usemap.selection = NULL; */
+#ifndef BUILDERS
 		if (was_selected)
 		    backend_update_link(doc, ti, 1);
+#endif
 	    }
 
 	    if (follow_link)

@@ -250,12 +250,14 @@ extern void state_comment_pre_initial (SGMLCTX *context, char input)
  * on comment recovery.
 
     Here is the state machine just for comments:
-
-      "<!"        "-"      "-"         "-"         "-"
-       ---> maybe ---> pre ---> dash_1 ---> dash_2 ---> maybe
-              |         |        | |
-              +---------+        +-+
-                   ?              ?
+                 /--------+-------------+--------------------------> got element
+              ">"|     ">"|          ">"|                
+      "<!"       |"-"     |"-"          | ?           "-"         "-"
+       ---> maybe ---> pre ---> dash_1_0 --->  dash_1 ---> dash_2 ---> maybe
+           |              |             \     |      |           |
+           \--------------/           "-"\    \------<-----------/ /---> got element
+                   ?                      \      ?              ">"|"-"
+                                           \-------------> dash_2_0 ---> maybe
 
     Note the change to the state machine to allow several comments in one bit of
     SGML - the comment_wait_close state is no longer reached.
@@ -296,7 +298,22 @@ extern void state_comment_wait_dash_2 (SGMLCTX *context, char input)
 	}
 }
 
-/* <!-- swallow anything except another dash */
+/* <!--- waiting for - or > having got here through unbroken series of dashes */
+extern void state_comment_wait_dash_2_0 (SGMLCTX *context, char input)
+{
+	if ( input =='-' )
+	{
+	    context->state = state_comment_maybe /* state_comment_wait_close */;
+	}
+	else if ( input == '>' )
+        {   do_got_element (context); }
+	else
+	{
+	    context->state = state_comment_wait_dash_1_0;
+	}
+}
+
+/* <!-- ... swallow anything except another dash */
 extern void state_comment_wait_dash_1 (SGMLCTX *context, char input)
 {
 	if ( input =='-' )
@@ -307,13 +324,24 @@ extern void state_comment_wait_dash_1 (SGMLCTX *context, char input)
 	{ ; }
 }
 
+/* <!-- swallow anything except another dash or closing > otherwise go to state dash_1 */
+extern void state_comment_wait_dash_1_0 (SGMLCTX *context, char input)
+{
+	if ( input =='-' )
+	{ context->state = state_comment_wait_dash_2_0; }
+	else if ( input == '>')
+        { do_got_element (context); }
+        else
+	{ context->state = state_comment_wait_dash_1; }
+}
+
 /* <!- */
 extern void state_comment_pre_initial (SGMLCTX *context, char input)
 {
 	if ( input =='-' )
 	{
             context->comment_anchor = -1;
-	    context->state = state_comment_wait_dash_1;
+	    context->state = state_comment_wait_dash_1_0;
 	}
 	else if ( input =='>' )
 	{
@@ -679,6 +707,8 @@ static state_name_str state_names[] =
 #else
     { state_comment_wait_dash_1, "state_comment_wait_dash_1" },
     { state_comment_wait_dash_2, "state_comment_wait_dash_2" },
+    { state_comment_wait_dash_1_0, "state_comment_wait_dash_1_0" },
+    { state_comment_wait_dash_2_0, "state_comment_wait_dash_2_0" },
     { state_comment_wait_close, "state_comment_wait_close" },
 #endif
     { state_double_quoted_value, "state_double_quoted_value" },
