@@ -183,6 +183,14 @@ InternetObject::send_message_StreamClosing ( ErrorBlk *error )
   return result;	
 }
 
+#ifdef DEBUGLIB 
+size_t
+InternetObject::ReadDataToDebug(void)
+{
+  return 0;
+} 	
+#endif
+
 int
 InternetObject::getSocketDescriptor(void)
 {
@@ -316,6 +324,14 @@ Server::get_assetlist_response(size_t *number, AssetIDDescriptor *buffer, size_t
   size_t asset_count;
   error_flag result = ErrorState();
 
+  UCHAR event = 0;
+  while ((result = PeekHeaderWait(&event)) != ErrorOccurred){ 
+    ULINT event_result;
+    
+    if ((event == COMMAND_assetlist_response)||((result = inetevent(&event, &event_result, 0)) == ErrorOccurred))
+    	break;
+  }
+  
   if (result != ErrorOccurred)
   	result = GetData(&header, sizeof(PacketHeader));
   	
@@ -324,7 +340,7 @@ Server::get_assetlist_response(size_t *number, AssetIDDescriptor *buffer, size_t
   
   if ((result != ErrorOccurred)&&(header.command_number != COMMAND_assetlist_response))
     	result = MakeError(VSP_UnknownMessage);
-    	
+  	
   if (result != ErrorOccurred)
   	result = GetData(&alr_header, sizeof(AssetListResponseHeader));
 
@@ -374,8 +390,10 @@ Server::get_assetlist_response(size_t *number, AssetIDDescriptor *buffer, size_t
 	  	(*number) = asset_count;
 	  }
   }
-  if ((result != ErrorOccurred)&&(alr_header.result != 0))
-  	result = MakeError(VSP_ServerError);
+  
+  if ((result != ErrorOccurred)&&(alr_header.result != 0)){
+ 	result = MakeError(VSP_ServerError, alr_header.result);
+  }
    		      	  
   return result;
 }
@@ -407,6 +425,14 @@ Server::get_scenelist_response(size_t *number, SceneInformationDescriptor *buffe
   error_flag result = ErrorState();
   SceneListHeader header;
   size_t asset_count;
+
+  UCHAR event;
+  while ((result = PeekHeaderWait(&event)) != ErrorOccurred){ 
+    ULINT event_result;
+    
+    if ((event == COMMAND_scenelist_response)||((result = inetevent(&event, &event_result, 0)) == ErrorOccurred))
+    	break;
+  }
  
   if (result != ErrorOccurred)
   	result = GetData((void*)&header, sizeof(SceneListHeader));
@@ -452,13 +478,13 @@ Server::get_scenelist_response(size_t *number, SceneInformationDescriptor *buffe
   }
   
   if ((result != ErrorOccurred)&&(header.result != 0)){
-    return MakeError(VSP_ServerError);
+    return MakeError(VSP_ServerError, header.result);
   }
   return NoError;
 }
 
 error_flag
-Server::send_assetpresentation_request(ULINT init_value, PlayElementRequest playlist[], size_t play_size, struct in_addr ipaddr, ULINT port)
+Server::fill_assetpresentation_request(int size, ULINT init_value, PlayElementRequest playlist[], size_t play_size, struct in_addr ipaddr, ULINT port)
 {
   AssetPresentationRequest request;
   int i;
@@ -466,11 +492,11 @@ Server::send_assetpresentation_request(ULINT init_value, PlayElementRequest play
   request.interface_number = 0;
   request.route_type = 0;
   request.command_number = COMMAND_assetpres_request;
-
-  request.command_length = sizeof(AssetPresentationRequest)-8 + (play_size * sizeof(PlayElementRequest));
+    
+  request.command_length = size;
   request.certification_code = certification_code;
   request.client_type = 1; 				// as per specification
-  request.packet_interval = 0;	// (visit)		// packet transition interval environment var
+  request.packet_interval = 0;				// packet transition interval environment var
   request.initial_packet_num = init_value;
   MAX_requested_block = init_value -1;
   request.my_udp_port = port;				// source.port_num;
@@ -490,27 +516,38 @@ Server::send_assetpresentation_request(ULINT init_value, PlayElementRequest play
   request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = 0;
 
   if (hton_structure(&request, map_AssetPresentationRequest, AssetPresentationRequest) == ErrorOccurred) {
-         return MakeError(IP_SendFail);
+         MakeError(IP_SendFail);
   }
 
   request.my_IP_address = (int)ipaddr.s_addr;		// my_IP_address of source object;
 
-  for (i = 0; i < play_size; i++){
+  if (!ErrorExists()){
+  	for (i = 0; i < play_size; i++){
 #ifdef DEBUGLIB
-	Debug("Play Element Request asset [%i] %i -> %i", 
-		playlist[i].asset_id, playlist[i].viewing_start_time, playlist[i].viewing_end_time);
+		Debug("Play Element Request asset [%i] %i -> %i", 
+			playlist[i].asset_id, playlist[i].viewing_start_time, playlist[i].viewing_end_time);
 #endif  	
-  	if (hton_structure(&(playlist[i]), map_PlayElementRequest, PlayElementRequest) == ErrorOccurred){
-  	  	return MakeError(IP_SendFail);
-  	}
-  }  
+	  	if (hton_structure(&(playlist[i]), map_PlayElementRequest, PlayElementRequest) == ErrorOccurred){
+	  	  	MakeError(IP_SendFail);
+	  	  	break;
+	  	}
+	  }  
         
-  if ( 	(SendData(&request, sizeof(AssetPresentationRequest)) == ErrorOccurred) ||
-  	(SendData(playlist, sizeof(PlayElementRequest)*play_size) == ErrorOccurred) ){// ||
-  	return MakeError(IP_SendFail);
+  	if ((!ErrorExists())&&( 	
+  		(SendData(&request, sizeof(AssetPresentationRequest)) == ErrorOccurred) ||
+  		(SendData(playlist, sizeof(PlayElementRequest)*play_size) == ErrorOccurred) )){// ||
+  		MakeError(IP_SendFail);
+  	}
   }
+  return ErrorState();
+}
 
-  return NoError;
+error_flag
+Server::send_assetpresentation_request(ULINT init_value, PlayElementRequest playlist[], size_t play_size, struct in_addr ipaddr, ULINT port)
+{
+   int request_length = sizeof(AssetPresentationRequest)-8 + (play_size * sizeof(PlayElementRequest));
+
+   return fill_assetpresentation_request(request_length, init_value, playlist, play_size, ipaddr, port);
 }
 
 error_flag
@@ -521,6 +558,17 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
   AssetPresentationResponse response;
   size_t buffersize;
   UCHAR *buffer;
+
+  UCHAR event;
+  while (PeekHeaderWait(&event) != ErrorOccurred){ 
+  	ULINT event_result;
+    
+    	if ((event == COMMAND_assetpres_response)||(inetevent(&event, &event_result, 0) == ErrorOccurred))
+    		break;
+  }
+  
+  if (ErrorExists())
+  	return ErrorOccurred;
 
   if (GetData((void*)&header, sizeof(PacketHeader)) == ErrorOccurred)
   	return ErrorOccurred;	//Null
@@ -573,7 +621,7 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
   	(*stream_time) = (unsigned int)response.total_time;
   
   if (response.result != 0){
-    return MakeError(VSP_ServerError);
+    return MakeError(VSP_ServerError, response.result);
   }
 
   return NoError;
@@ -639,30 +687,29 @@ Server::get_playback_response(ULINT *result)
     
   if ((e_result != ErrorOccurred)&&(response.result != 0)){
     *result = response.result;
-    e_result = MakeError(VSP_ServerError);
+    e_result = MakeError(VSP_ServerError, response.result);
   }
 
   return e_result;
 }
  
 //--------------------------------------------------------public methods---------------
-
-Server::Server(struct in_addr *server, ULINT port, ULINT timeout):InternetObject(server, port)
+// extracted from constructor so ATM server can call it.
+error_flag
+Server::createVSPLink(void)
 {
   ControlPortNumberNotification		cpnn;
   Socket				connection_port;
-
-  timeout_period = timeout;
   
 #ifdef DEBUGLIB
-  Debug("create server link %8.8X:%i", server->s_addr, port);
+  Debug("create server link %8.8X:%i", address.s_addr, portnumber);
 #endif
 
   // connect to ping socket.
   connection_port.creat();
   SocketDescriptor.creat();
   
-  connection_port.connect(&address, ntohs((int)port));
+  connection_port.connect(&address, ntohs((int)portnumber));
   
   if (connection_port.valid()){
     	int data_read;
@@ -676,7 +723,8 @@ Server::Server(struct in_addr *server, ULINT port, ULINT timeout):InternetObject
     		setSocketError(SocketDescriptor.connect(&address, (int)(cpnn.connection_port_number>>16)));
     		
     		setSocketError(SocketDescriptor.makeNonBlocking());
-    		  
+    		setSocketError(SocketDescriptor.eventsOn());
+
     		  // initialise variables
   		comms_flag = false;
   		// certification_code is never initialised as it is a comparitive value its initial value doesn't matter
@@ -704,6 +752,14 @@ Server::Server(struct in_addr *server, ULINT port, ULINT timeout):InternetObject
   }
   else
   	MakeError(IP_SocketError);
+  	
+  return ErrorState();
+}	  
+
+Server::Server(struct in_addr *server, ULINT port, ULINT timeout):InternetObject(server, port)
+{
+  	timeout_period = timeout;
+	createVSPLink();
 } 
 
 Server::~Server()
@@ -790,7 +846,6 @@ Server::GetData(void *buffer, size_t size)
     		setSocketError(SocketDescriptor.wait_read((unsigned int)((timeout_period+50)/100)));
     		
     	if ( data_read > 0) {
-    	  	
     		remaining_data -= data_read;
     		buf_ptr += data_read;
     	  	t1 = t2;
@@ -815,7 +870,6 @@ Server::ReadDataToDebug(void)
 {
   int data;
   size_t size, size_total = 0;
-  SocketDescriptor.makeNonBlocking();
       
     while ( (size = SocketDescriptor.read(&data, sizeof(int))) == sizeof(int) ) {
     	size_total += size;
@@ -825,7 +879,6 @@ Server::ReadDataToDebug(void)
     if (size == -1)    
     	Debug("data errno %i", errno);
     	
-  SocketDescriptor.makeBlocking();
   return size_total;
 } 
 #endif  
@@ -834,14 +887,49 @@ error_flag
 Server::PeekHeader(UCHAR *command)
 {
   PacketHeader header;
-
+     
     if (SocketDescriptor.read(&header, sizeof(PacketHeader), MSG_PEEK) != sizeof(PacketHeader)) {
     	return ErrorOccurred;
     }
     *command = header.command_number;
     return NoError;
 } 
+
+error_flag
+Server::PeekHeaderWait(UCHAR *command)
+{
+  PacketHeader header;
+  error_flag result = ErrorState();
+  
+  ULINT t1, t2;
+  	
+  (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
+  	
+  while (result != ErrorOccurred) {
+   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+    	  	
+    	int data_read = SocketDescriptor.read(&header, sizeof(PacketHeader), MSG_PEEK);
+    	   	  
+    	if (data_read < 0){
+    		result = setSocketError(data_read);
+    	}
  
+    	if (t2 > (t1 + timeout_period)){
+    	  	result = MakeError(IP_TimeOutOnCommunication);
+    	}	
+
+	if (result != ErrorOccurred){
+    		if ( data_read != (int)(sizeof(PacketHeader)) )
+    			setSocketError(SocketDescriptor.wait_read((unsigned int)((timeout_period+50)/100)));
+    		else {
+    		  	*command = header.command_number;
+    			break;
+    		}
+    	}
+  }
+  return result;
+} 
+
 error_flag
 Server::inetevent(UCHAR *event, ULINT *result, ULINT play_mode)
 {
@@ -853,6 +941,10 @@ Server::inetevent(UCHAR *event, ULINT *result, ULINT play_mode)
   }
   
   switch (*event) {
+    	case COMMAND_assetlist_response:
+    	case COMMAND_scenelist_response:
+    	case COMMAND_assetpres_response:	// don't touch
+    		break;
   	case COMMAND_startend_notification:
   		{
   		StartEndNotification notify;
@@ -976,6 +1068,10 @@ Server::GetAssetList(_kernel_swi_regs *regs)
   
   error_flag result = ErrorState();
   
+#ifdef DEBUGLIB
+	Debug("select %8.8X, start (%i), entries (%i)", regs->r[2], regs->r[3], regs->r[4]);
+#endif 
+  
   if (  (result != ErrorOccurred)&&(regs->r[4] == 0)&&
   	(( send_assetlist_request(regs->r[2], 0, 0) == ErrorOccurred) ||
   	    (get_assetlist_response((size_t*)&(regs->r[4]), NULL, 0)== ErrorOccurred)) )
@@ -1055,12 +1151,6 @@ Server::AssetPresentation(ULINT init_value, PlayElementRequest playlist[], size_
  	(get_assetpresentation_response(ipaddr, port, stream_time, dgram_size, bitrate, fast_playback_ratio) == ErrorOccurred) 
  	) )
      		result = ErrorOccurred;
-
-  
-  if (result != ErrorOccurred){
-  	SocketDescriptor.eventsOn();
-  	SocketDescriptor.makeNonBlocking();
-  }
   
   return result ;
 }
@@ -1093,10 +1183,12 @@ Server::AssetEnd(ULINT status, ULINT endflag)
    request.command_number = COMMAND_assetend_request;
    request.command_length = sizeof(AssetEndRequest) - 8;
    request.certification_code = certification_code;
+   
    if (endflag != 0)
    	request.end_flag = 1;
    else
-   	request.end_flag = endflag;
+   	request.end_flag = 0;
+   	
    request.asset_status = status;
    request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
 
@@ -1104,7 +1196,7 @@ Server::AssetEnd(ULINT status, ULINT endflag)
      	return MakeError(IP_SendFail);
    }
 
-   result = SendData((void*)&request, sizeof(AssetEndRequest));
+   result = SendData(&request, sizeof(AssetEndRequest));
   
    return NoError;
 }
