@@ -20,41 +20,42 @@
 #include <time.h>
 
 #include <kernel.h>
+#include <swis.h>
+
+#include <AsmUtils/rminfo.h>
+
+#include <DebugLib/DebugLib.h>
 
 #include <Desk/LinkList.h>
 #include <Desk/SWI.h>
 
-#include "NetFiler.h"
-#include "ModuleWrap.h"
-#include "Lists.h"
-#include "Print.h"
-#include "Net.h"
-#include "MakeError.h"
-#include "Debug.h"
+#include <Global/Services.h>
 
-extern Desk_bool 		client_running = Desk_bool_FALSE;	/* Desk_bool_TRUE if registered & running OK */
-extern client_rec	client =
+#include "Lists.h"
+#include "MakeError.h"
+#include "ModHdr.h"
+#include "Net.h"
+#include "NetFiler.h"
+#include "Print.h"
+
+#include "VersionNum"
+
+static Desk_bool	client_running = Desk_bool_FALSE;	/* Desk_bool_TRUE if registered & running OK */
+static client_rec	client =
 			  { client_SWIBASE,
 			    client_FLAGS,
 			    "04a540",
 			    "Level 4",
-			    "AUN Econet/Level 4\n© Acorn Computers Ltd, 1995\n1.14 (26-Jun-95)",
+			    "AUN Econet/Level 4\n© Acorn Computers Ltd, 1995\n" Module_FullVersion " (" Module_Date ")",
 			    client_LIMIT,
 			    "Net"
                           };
 extern Desk_linklist_header	mount_anchor = {NULL, NULL};	/* List of active mount records */
 extern Desk_linklist_header	mlist_anchor = {NULL, NULL};	/* List of network server records */
 extern Desk_linklist_header	plist_anchor = {NULL, NULL};	/* List of network print records */
-extern Desk_linklist_header	Desk_print_anchor = {NULL, NULL};	/* List of active print records */
+extern Desk_linklist_header	print_anchor = {NULL, NULL};	/* List of active print records */
 extern _kernel_oserror  omni_errblk = {0, ""}; 		/* Global error block */
 extern Desk_bool		block_service = Desk_bool_FALSE;		/* Block out the service call? */
-#ifdef DEBUG
-extern FILE		*omniout = NULL;
-#endif
-
-extern char		*developed = "\n Developed by ANT Limited <sales@ant.co.uk> \n";
-
-extern int *Image__RO_Base;
 
 extern _kernel_oserror *resources_register(void);
 extern _kernel_oserror *resources_deregister(void);
@@ -95,16 +96,16 @@ extern void mount_clean(void)
 
 /*  Clear out print struct from RMA.
  */
-extern void Desk_print_clean(void)
+extern void print_clean(void)
 {
-  print_rec *pr = (print_rec *) Desk_print_anchor.next;
+  print_rec *pr = (print_rec *) print_anchor.next;
   while (pr)
   {
     print_rec *pr_tmp = (print_rec *) pr->header.next;
     PrintDelete(pr);
     pr = pr_tmp;
   }
-  Desk_LinkList_Init(&Desk_print_anchor);
+  Desk_LinkList_Init(&print_anchor);
 }
 
 
@@ -125,11 +126,15 @@ extern void plist_clean(void)
 
 /*  This is the finalisation code
  */
-static void fs_finalise(void)
+_kernel_oserror *fs_finalise(int fatal, int podule, void *pw)
 {
+  M_UNUSED (fatal);
+  M_UNUSED (podule);
+  M_UNUSED (pw);
+
   mlist_clean();
   mount_clean();
-  Desk_print_clean();
+  print_clean();
   plist_clean();
   resources_deregister();
   if (client_running)
@@ -139,12 +144,16 @@ static void fs_finalise(void)
     _kernel_swi(Omni_DeregisterClient, &r, &r);
    client_running = Desk_bool_FALSE;
   }
+
+  debug_terminate();
+
+  return NULL;
 }
 
 
 /*  Attempt to register with the filer module.
  */
-_kernel_oserror *omni_register(void)
+static _kernel_oserror *omni_register(void)
 {
   _kernel_swi_regs r;
   _kernel_oserror *err = NULL;
@@ -164,31 +173,29 @@ _kernel_oserror *omni_register(void)
 
 /*  This is the initialisation code
  */
-_kernel_oserror *fs_initialise(char *cmd_tail, int podule_base, void *private_word)
+_kernel_oserror *fs_initialise(const char *cmd_tail, int podule_base, void *private_word)
 {
   _kernel_oserror *err = NULL;
   _kernel_swi_regs r;
 
+  debug_initialise ("", "NetFiler", NULL);
+  debug_set_options (0, 0, 0);
+  debug_output_device (TML_OUTPUT);
+
   /* These keep the compiler quiet. */
-  cmd_tail = cmd_tail;
-  podule_base = podule_base;
-  private_word = private_word;
+  M_UNUSED (cmd_tail);
+  M_UNUSED (podule_base);
+  M_UNUSED (private_word);
 
   /* Init test structures */
   Desk_LinkList_Init(&mount_anchor);
   Desk_LinkList_Init(&mlist_anchor);
   Desk_LinkList_Init(&plist_anchor);
-  Desk_LinkList_Init(&Desk_print_anchor);
+  Desk_LinkList_Init(&print_anchor);
 
   /* See if Network is present */
   if ((err = _kernel_swi(NetFS_ReadFSNumber, &r, &r)) != NULL) return(MakeError(err_NONET));
 
-#ifdef DEBUG
-  /* Debug trace file? */
-  if ((err = _kernel_swi(Omni_TraceFile, &r, &r)) == NULL) omniout = (FILE *) r.r[0];
-#endif
-
-  atexit(fs_finalise);
   resources_register();
   _kernel_oscli("IconSprites Resources:$.ThirdParty.OmniClient.NetFiler.Sprites");
   omni_register();
@@ -218,10 +225,10 @@ _kernel_oserror *fs_initialise(char *cmd_tail, int podule_base, void *private_wo
  *      Since client modules rely on services provided by the filer module,
  *      they should quit if the filer module dies for any reason.
  */
-void OmniAction(_kernel_swi_regs *r)
+static void OmniAction(_kernel_swi_regs *r)
 {
   /* Fiddling to get a Desk_module_title pointer */
-  char *Desk_module_base = (char *) Image__RO_Base;
+  char *Desk_module_base = (char *) Image_RO_Base;
   char *Desk_module_title = (char *) (Desk_module_base + *((int *) (Desk_module_base + 0x10)));
 
   switch (r->r[0])
@@ -324,11 +331,11 @@ void fs_service(int service_number, _kernel_swi_regs *r, void *private_word)
  *		See comments about unique mount_id's in 'Terminology'
  *		section above.
  */
-_kernel_oserror *OmniOp_Mount(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_Mount(_kernel_swi_regs *r)
 {
-  TRACE("NetFiler.Mount:\n");
+  dprintf(("", "NetFiler.Mount:\n"));
   MountCreate(r);
-  TRACE2("NetFiler.Mount: %x %x\n", r->r[0], r->r[1]);
+  dprintf(("", "NetFiler.Mount: %x %x\n", r->r[0], r->r[1]));
   return((_kernel_oserror *) r->r[0]);
 }
 
@@ -339,12 +346,12 @@ _kernel_oserror *OmniOp_Mount(_kernel_swi_regs *r)
  *		Operation to dismount a previously mounted server (in fact a
  *		given 'mount' on a particular server).
  */
-_kernel_oserror *OmniOp_Dismount(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_Dismount(_kernel_swi_regs *r)
 {
   mount_rec *mr = MountFind(r->r[1], -1);
   char buf[48];
 
-  TRACE2("NetFiler.Dismount: %x %x\n", r->r[1], (int) mr);
+  dprintf(("", "NetFiler.Dismount: %x %x\n", r->r[1], (int) mr));
   if (!mr) return(MakeError(err_BADMOUNT));
 
   /* Attempt a Bye command */
@@ -373,9 +380,10 @@ _kernel_oserror *OmniOp_Dismount(_kernel_swi_regs *r)
  *              The exact interpretation of 'user freespace' and 'total
  *              size' is client dependent, however R1+R2 >= R3.
  */
-_kernel_oserror *OmniOp_Free(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_Free(_kernel_swi_regs *r)
 {
-  TRACE1("NetFiler.Free: %x\n", r->r[1]);
+  M_UNUSED(r);
+  dprintf(("", "NetFiler.Free: %x\n", r->r[1]));
   /* We don't have information about this anyway :-( */
   return(MakeError(err_NOTSUPPORTED));
 }
@@ -419,7 +427,7 @@ _kernel_oserror *OmniOp_Free(_kernel_swi_regs *r)
  *		new R3 value. This process continues until the enumeration
  *		is complete.
  */
-_kernel_oserror *OmniOp_Servers(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_Servers(_kernel_swi_regs *r)
 {
   mlist_rec *mr = NULL;
 
@@ -475,7 +483,7 @@ _kernel_oserror *OmniOp_Servers(_kernel_swi_regs *r)
  *		new R3 value. This process continues until the enumeration
  *		is complete.
  */
-_kernel_oserror *OmniOp_Mounts(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_Mounts(_kernel_swi_regs *r)
 {
   /* No concept of mount points in this filing system */
   r->r[3] = 0;
@@ -513,7 +521,7 @@ _kernel_oserror *OmniOp_Mounts(_kernel_swi_regs *r)
  *		new R3 value. This process continues until the enumeration
  *		is complete.
  */
-_kernel_oserror *OmniOp_ActiveMounts(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_ActiveMounts(_kernel_swi_regs *r)
 {
   mount_rec *mr = NULL;
 
@@ -535,12 +543,12 @@ _kernel_oserror *OmniOp_ActiveMounts(_kernel_swi_regs *r)
  *		Trigger a Filer_OpenDir on the highest point available
  *		in mount's visible directory tree. eg, '$'
  */
-_kernel_oserror *OmniOp_Root(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_Root(_kernel_swi_regs *r)
 {
   mount_rec *mr = MountFind(r->r[1], -1);
   char buf[64];
 
-  TRACE2("NetFiler.Root: %x %x\n", r->r[1], (int) mr);
+  dprintf(("", "NetFiler.Root: %x %x\n", r->r[1], (int) mr));
   if (!mr) return(MakeError(err_BADMOUNT));
   sprintf(buf, "Filer_OpenDir Net::%s.$", mr->serveraddr);
   if (_kernel_oscli(buf) <= 0) return(_kernel_last_oserror());
@@ -556,12 +564,12 @@ _kernel_oserror *OmniOp_Root(_kernel_swi_regs *r)
  *		visible directory tree if not applicable. eg, '/homes/nas'
  *		or '$'
  */
-_kernel_oserror *OmniOp_UserRoot(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_UserRoot(_kernel_swi_regs *r)
 {
   mount_rec *mr = MountFind(r->r[1], -1);
   char buf[64];
 
-  TRACE2("NetFiler.UserRoot: %x %x\n", r->r[1], (int) mr);
+  dprintf(("", "NetFiler.UserRoot: %x %x\n", r->r[1], (int) mr));
   if (!mr) return(MakeError(err_BADMOUNT));
   sprintf(buf, "Filer_OpenDir Net::%s.&", mr->serveraddr);
   if (_kernel_oscli(buf) <= 0) return(_kernel_last_oserror());
@@ -585,9 +593,10 @@ _kernel_oserror *OmniOp_UserRoot(_kernel_swi_regs *r)
  *		allow unauthenticated new mounts, once an authenticated
  *		mount is performed.
  */
-_kernel_oserror *OmniOp_MountInfo(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_MountInfo(_kernel_swi_regs *r)
 {
-  TRACE1("NetFiler.GetMountInfo: %x\n", r->r[1]);
+  M_UNUSED(r);
+  dprintf(("", "NetFiler.GetMountInfo: %x\n", r->r[1]));
   return(MakeError(err_NOTSUPPORTED));
 }
 
@@ -608,11 +617,11 @@ _kernel_oserror *OmniOp_MountInfo(_kernel_swi_regs *r)
  *              The Server string (R1) should be the 'full name' as supplied
  *              by OmniOp reason code 3 (Enumerate all servers).
  */
-_kernel_oserror *OmniOp_ActiveMountInfo(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_ActiveMountInfo(_kernel_swi_regs *r)
 {
   mount_rec *mr = MountFind(r->r[1], -1);
 
-  TRACE2("NetFiler.GetActiveInfo: %x %x\n", r->r[1], (int) mr);
+  dprintf(("", "NetFiler.GetActiveInfo: %x %x\n", r->r[1], (int) mr));
   if (!mr) return(MakeError(err_BADMOUNT));
   r->r[1] = (int) mr->serveraddr;
   r->r[2] = (int) mr->userid;
@@ -643,7 +652,7 @@ _kernel_oserror *OmniOp_ActiveMountInfo(_kernel_swi_regs *r)
  *              job is known before printing starts. If this is the case, they
  *              should be registered with OmniClient as requiring this.
  */
-_kernel_oserror *OmniOp_CreateJob(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_CreateJob(_kernel_swi_regs *r)
 {
   /* printf("OmniOp_CreateJob:\n"); */
   if (PrintCreate(r)) return(NULL);
@@ -661,7 +670,7 @@ _kernel_oserror *OmniOp_CreateJob(_kernel_swi_regs *r)
  *         	Send a block of data down network printer stream for a given
  *         	active pjob_id word.
  */
- _kernel_oserror *OmniOp_SendJob(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_SendJob(_kernel_swi_regs *r)
 {
   print_rec *pr = NULL;
    _kernel_oserror *err = NULL;
@@ -669,8 +678,8 @@ _kernel_oserror *OmniOp_CreateJob(_kernel_swi_regs *r)
   /* Check for a valid print job */
   if ((pr = PrintFind(r->r[1])) == NULL) return(MakeError(err_BADPRINT));
 
-  /* Do Desk_OS_GBPB call to write bytes out to network driver */
-  err = (_kernel_oserror *) Desk_SWI(4, 4, Desk_OS_GBPB, 2, pr->handle, r->r[2], r->r[3],
+  /* Do OS_GBPB call to write bytes out to network driver */
+  err = (_kernel_oserror *) Desk_SWI(4, 4, OS_GBPB, 2, pr->handle, r->r[2], r->r[3],
     NULL, NULL, NULL, &r->r[3]);
   return(err);
 }
@@ -683,7 +692,7 @@ _kernel_oserror *OmniOp_CreateJob(_kernel_swi_regs *r)
  *         	End a specified print job normally (ie, all data
  *         	transmitted).
  */
-_kernel_oserror *OmniOp_EndJob(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_EndJob(_kernel_swi_regs *r)
 {
   print_rec *pr = NULL;
    _kernel_oserror *err = NULL;
@@ -691,9 +700,9 @@ _kernel_oserror *OmniOp_EndJob(_kernel_swi_regs *r)
   /* Check for a valid print job */
   if ((pr = PrintFind(r->r[1])) == NULL) return(MakeError(err_BADPRINT));
 
-  /* Do Desk_OS_Find call to close job */
+  /* Do OS_Find call to close job */
   if (pr->handle == 0) return(NULL); /* Already closed */
-  err = (_kernel_oserror *) Desk_SWI(2, 0, Desk_OS_Find, 0, pr->handle);
+  err = (_kernel_oserror *) Desk_SWI(2, 0, OS_Find, 0, pr->handle);
   if (!err)
   {
     pr->status = (Desk_print_STATUS | Desk_print_COMPLETE);
@@ -710,7 +719,7 @@ _kernel_oserror *OmniOp_EndJob(_kernel_swi_regs *r)
  *
  *         	Abort a specified print job, or all current jobs.
  */
-_kernel_oserror *OmniOp_AbortJob(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_AbortJob(_kernel_swi_regs *r)
 {
   print_rec *pr = NULL;
    _kernel_oserror *err = NULL;
@@ -718,14 +727,14 @@ _kernel_oserror *OmniOp_AbortJob(_kernel_swi_regs *r)
   if (r->r[1] == 0)
   {
     /* Abort all print jobs */
-    pr = (print_rec *) Desk_print_anchor.next;
+    pr = (print_rec *) print_anchor.next;
     while (pr != NULL)
     {
       print_rec *pr_tmp = (print_rec *) pr->header.next;
-      /* Do Desk_OS_Find call to close job */
+      /* Do OS_Find call to close job */
       if (pr->handle != 0)
       {
-        err = (_kernel_oserror *) Desk_SWI(2, 0, Desk_OS_Find, 0, pr->handle);
+        err = (_kernel_oserror *) Desk_SWI(2, 0, OS_Find, 0, pr->handle);
         if (!err) pr->handle = 0;
       }
       /* Set status */
@@ -737,9 +746,9 @@ _kernel_oserror *OmniOp_AbortJob(_kernel_swi_regs *r)
   {
     /* Abort a single print job */
     if ((pr = PrintFind(r->r[1])) == NULL) return(MakeError(err_BADPRINT));
-    /* Do Desk_OS_Find call to close job */
+    /* Do OS_Find call to close job */
     if (pr->handle == 0) return(NULL); /* Already closed */
-    err = (_kernel_oserror *) Desk_SWI(2, 0, Desk_OS_Find, 0, pr->handle);
+    err = (_kernel_oserror *) Desk_SWI(2, 0, OS_Find, 0, pr->handle);
     if (!err)
     {
       pr->handle = 0;
@@ -763,7 +772,7 @@ _kernel_oserror *OmniOp_AbortJob(_kernel_swi_regs *r)
  *         	Get information on a specified print job. The status word
  *         	(R1, R3) is defined above in SWI Omni_JobStatus.
  */
-_kernel_oserror *OmniOp_GetJobInfo(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_GetJobInfo(_kernel_swi_regs *r)
 {
   print_rec *pr = NULL;
    _kernel_oserror *err = NULL;
@@ -772,7 +781,7 @@ _kernel_oserror *OmniOp_GetJobInfo(_kernel_swi_regs *r)
   r->r[1] = pr->status;
   if (pr->handle > 0)
   {
-    err = (_kernel_oserror *) Desk_SWI(2, 3, Desk_OS_Args, 2, pr->handle, NULL, NULL, &r->r[2]);
+    err = (_kernel_oserror *) Desk_SWI(2, 3, OS_Args, 2, pr->handle, NULL, NULL, &r->r[2]);
     if (err) r->r[2] = 0;
   } else r->r[2] = 0;
   r->r[3] = 0;
@@ -797,7 +806,7 @@ _kernel_oserror *OmniOp_GetJobInfo(_kernel_swi_regs *r)
  *              'Inactive' in this case means either 'transfer complete' (3) or
  *              'job has terminal error' (5).
  */
-_kernel_oserror *OmniOp_ClearJob(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_ClearJob(_kernel_swi_regs *r)
 {
   print_rec *pr = NULL;
    _kernel_oserror *err = NULL;
@@ -805,7 +814,7 @@ _kernel_oserror *OmniOp_ClearJob(_kernel_swi_regs *r)
   if (r->r[1] == 0)
   {
     /* Free inactive print jobs */
-    pr = (print_rec *) Desk_print_anchor.next;
+    pr = (print_rec *) print_anchor.next;
     while (pr != NULL)
     {
       print_rec *pr_tmp = (print_rec *) pr->header.next;
@@ -866,7 +875,7 @@ _kernel_oserror *OmniOp_ClearJob(_kernel_swi_regs *r)
  *		new R3 value. This process continues until the enumeration
  *		is complete.
  */
-_kernel_oserror *OmniOp_Printers(_kernel_swi_regs *r)
+static _kernel_oserror *OmniOp_Printers(_kernel_swi_regs *r)
 {
   plist_rec *mr = NULL;
 
@@ -886,7 +895,7 @@ _kernel_oserror *OmniOp_Printers(_kernel_swi_regs *r)
  */
 _kernel_oserror *fs_swi(int Desk_swi_no, _kernel_swi_regs *r, void *private_word)
 {
-  static _kernel_oserror fs_error = {0x1e6, "Bad SWI call"};
+  M_UNUSED(private_word);
 
   if (!client_running) return(MakeError(err_NOOMNI));
   switch (Desk_swi_no)
@@ -951,7 +960,7 @@ _kernel_oserror *fs_swi(int Desk_swi_no, _kernel_swi_regs *r, void *private_word
       break;
 
     default:
-      return(&fs_error);
+      return error_BAD_SWI;
   }
 
   /* Return with no error */

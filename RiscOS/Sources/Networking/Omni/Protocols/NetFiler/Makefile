@@ -14,6 +14,8 @@
 # Paths
 #
 
+LIBDIR		= <Lib$Dir>
+
 # Export path for Messages module
 RESDIR		= <resource$dir>.Resources2.$(COMPONENT)
 
@@ -51,8 +53,8 @@ MEMCHECK_TARGET	= NetFilermc
 HIERPROF_TARGET	= NetFilerhp
 DEBUG_TARGET	= NetFilerd
 
-NORMAL_HDR =	h.NetFilerHdr
-DEBUG_HDR =	h.NetFilerDbg
+NORMAL_HDR =	h.ModHdr
+DEBUG_HDR =	h.ModHdr
 
 A_DEBUG_ON	= "-pd \"DEBUG SETL {TRUE}\""
 A_DEBUG_OFF	= "-pd \"DEBUG SETL {FALSE}\""
@@ -66,21 +68,39 @@ C_DEBUG_OFF	= -DNDEBUG
 
 
 # ------------------------------------------------------------------------------
+# Libraries
+#
+
+ASMUTILS	= $(LIBDIR).AsmUtils.o.AsmUtilszm
+DESKLIB		= $(LIBDIR).Desk.o.Desk_M
+DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
+SOCKLIB		= TCPIPLibs:o.socklibzm
+INETLIB		= TCPIPLibs:o.inetlibzm
+MEMCHECKLIB	= MemCheck:o.MC_M
+
+NORMAL_LIBS =	$(DESKLIB) $(ASMUTILS)
+DEBUG_LIBS =	$(DESKLIB) $(ASMUTILS) $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
+MEMCHECK_LIBS =	$(DESKLIB) $(ASMUTILS) $(MEMCHECKLIB) $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
+
+
+
+
+# ------------------------------------------------------------------------------
 # Build rules
 #
 
 # Local
 
 all:
-	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS=$(C_DEBUG_OFF) HDR=$(NORMAL_HDR) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS=$(C_DEBUG_OFF) HDR=$(NORMAL_HDR) LIBS="$(NORMAL_LIBS)" EXT=o
 	@echo $(COMPONENT): build complete
 
 debug:
-	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_ON) EXTRA_C_FLAGS="$(C_DEBUG_ON) -DDEBUGLIB" HDR=$(DEBUG_HDR) EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_ON) EXTRA_C_FLAGS="$(C_DEBUG_ON) -DDEBUGLIB" HDR=$(DEBUG_HDR) LIBS="$(DEBUG_LIBS)" EXT=od
 	@echo $(COMPONENT): debug build complete
 
 memcheck:
-	@amu -f MainMake $(MFLAGS) TARGET=$(MEMCHECK_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS="$(C_DEBUG_OFF) -DDEBUGLIB" HDR=$(NORMAL_HDR) EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=$(MEMCHECK_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS="$(C_DEBUG_OFF) -DDEBUGLIB" HDR=$(NORMAL_HDR) LIBS="$(MEMCHECK_LIBS)" EXT=oMC
 	@echo $(COMPONENT): memcheck build complete
 
 preprocess:
@@ -91,7 +111,7 @@ preprocess:
 # RISC OS ROM build rules
 
 rom:
-	@amu -f MainMake $(MFLAGS) EXTRAFLAGS=-DROM TARGET=$(NORMAL_TARGET) HDR=$(NORMAL_HDR) EXT=o
+	@amu -f MainMake $(MFLAGS) EXTRAFLAGS=-DROM TARGET=$(NORMAL_TARGET) HDR=$(NORMAL_HDR) LIBS="$(NORMAL_LIBS)" EXT=o
 	@echo $(COMPONENT): build complete
 
 export:
