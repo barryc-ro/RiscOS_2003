@@ -106,9 +106,9 @@ extern void do_ftpdir_header(PSESS sess)
     }
 
     sprintf(theline, "<img src=\"icontype:blank\"> %-*s Last modified     Size<hr>\n", FILENAMEWIDTH, "Name");
-    push_theline(sess);   
+    push_theline(sess);
     sprintf(theline, "<img src=\"icontype:back\"> <a href=\"../\">../</a>%-*sParent directory\n", FILENAMEWIDTH-3, "");
-    push_theline(sess);   
+    push_theline(sess);
 
     /*reopen_file(sess);*/
 }
@@ -121,7 +121,7 @@ extern void do_ftpdir_trailer(PSESS sess)
     sprintf(theline, "<hr>Listing generated %s", ctime(&tt));
     theline[ strlen(theline) - 1] = 0;
     strcat(theline, " by " PROG_IDENT ".\r\n</pre></body>\r\n");
-    push_theline(sess);   
+    push_theline(sess);
     /*reopen_file(sess);*/
 }
 
@@ -204,11 +204,11 @@ static int breakdown_string(void)
         cp = ep + 1;
     }
 
-#if 1
+#if 0
 { int i;
 dbg(("The words are as follows\n"));
 for (i = 0; i < count; i++)
-dbg2(("Word %d, length %d, contents '%s'\n", i, sublens[i], substrs[i]));
+dbg(("Word %d, length %d, contents '%s'\n", i, sublens[i], substrs[i]));
 }
 #endif
 
@@ -252,18 +252,18 @@ static void emit_icontype(FILE_TYPE type, char *name)
 
             len = strlen(name);
             cp = strrchr(name, COMMA);
-        
+
             if (cp != NULL && cp-name+4 != len)
             {
                 cp = NULL;
             }
-        
+
             if (cp == NULL)
                 cp = strrchr(name, DOT);
-        
+
             if (cp == NULL || name[0] == DOT)
                 cp = ".";
-            
+
             strcat(theline, cp);
             break;
 
@@ -321,7 +321,7 @@ Word 8, length 8, contents '.private'
 2 4  type    opt     string (DIR says directory)
 3 3  date    mand    number and hyphen
 4 2  time    mand    number and colon
-5 1  name    mand    
+5 1  name    mand
 
 ***********/
 
@@ -330,6 +330,9 @@ static void analyse_further(PSESS sess, int word_count)
     static char month[8], name[80], name2[80], buf[80];
 
     int type, size, year, day, hour, minute, x;
+#ifdef CSFS
+    int month_num, file_attrib=0;
+#endif
     BOOL bogus;
     char *cp, postsize;
 
@@ -362,6 +365,9 @@ static void analyse_further(PSESS sess, int word_count)
             x = (cp[0]-'0')*10 + cp[1]-'0';
             if (x > 12)
                 x = 0;
+#ifdef CSFS
+            month_num = x+1;
+#endif
             strcpy(month, months[x+1]);
             day = (cp[3]-'0')*10 + cp[4]-'0';
             year = (cp[6]-'0')*10 + cp[7]-'0';
@@ -410,11 +416,30 @@ static void analyse_further(PSESS sess, int word_count)
                     type = TYPE_LINK;
                     strcpy(name2, substrs[10]);
                     break;
-                default: 
+                default:
                     type = TYPE_OTHER;
                     break;
             }
             size = atoi( substrs[4] );
+#ifdef CSFS
+            if (sess->flags & webftp_open_NotHTML)
+	    {
+              /* get the file attributes */
+              if (substrs[0][1]=='r') file_attrib|=1<<0;
+              if (substrs[0][2]=='w') file_attrib|=1<<1;
+              if (substrs[0][7]=='r') file_attrib|=1<<4;
+              if (substrs[0][8]=='w') file_attrib|=1<<5;
+
+              /* find the month number from a textual form */
+              month_num = 1;
+              while (month_num<13)
+              {
+                if (strcmp(substrs[5],months[month_num])==0)
+                  break;
+                month_num++;
+              }
+            }
+#endif
             strcpy(month, substrs[5] );
             day = atoi(substrs[6]);
             if (sublens[7] == 4)
@@ -469,69 +494,152 @@ static void analyse_further(PSESS sess, int word_count)
 found_it:
 
     theline[0] = 0;
-    emit_icontype(type, name);
-    strcat(theline, " <a href=\"");
-    strcat(theline, sess->origpath);
-    x = strlen(theline);
-    if ( theline[x-1] != '/' )
-        strcat(theline, "/");
-    strcat(theline, name);
-    if (type == TYPE_DIR)
-        strcat(theline, "/");
-    strcat(theline, "\">");
-    strcat(theline, name);
-    if (type == TYPE_DIR)
+#ifdef CSFS
+    if (sess->flags & webftp_open_NotHTML)
     {
-        x = 1;
-        strcat(theline, "/");
+      int file_type=0;
+      unsigned int load_addr=0;
+      unsigned int exec_addr=0;
+      unsigned char utc_blk[5];
+      int time_blk[7];
+      int i,j,k;
+      _kernel_swi_regs reg;
+
+      time_blk[0] = 0;
+      time_blk[1] = 0;
+      time_blk[2] = minute;
+      time_blk[3] = hour;
+      time_blk[4] = day;
+      time_blk[5] = month_num;
+      time_blk[6] = year;
+
+      reg.r[0] = -1;                   /* Use current territory */
+      reg.r[1] = (int)utc_blk;
+      reg.r[2] = (int)time_blk;
+      _kernel_swi(Territory_ConvertOrdinalsToTime,&reg,&reg);
+
+      /* set file type to fff for now */
+      load_addr = (unsigned int)0xfff<<20 | 0xfff<<8 | utc_blk[4];
+      exec_addr = *(int*)utc_blk;
+      i=0;
+      while (name[i]!=0)  /* change '.' to '/' */
+      {
+        if (name[i]=='.')
+          name[i] = '/';
+        i++;
+      }
+
+      i=strlen(name)-1;             /* point to end of filename */
+      while (i>=0 && name[i]!=',')  /*  find the comma */
+        i--;
+
+      /* valid extension ? */
+      if (i>0 && name[i+1]!=0 && name[i+2]!=0 && name[i+3]!=0)
+      {
+        load_addr &= (unsigned int)0xfff000ff; /* clear bits */
+        for (k=0; k<3; k++)
+        {
+          name[i+k+1] = toupper(name[i+k+1]);
+          if (name[i+k+1]>='0'&&name[i+k+1]<='9') j=name[i+k+1]-'0';
+          else if (name[i+k+1]>='A'&&name[i+k+1]<='F') j=name[i+k+1]-'A'+10;
+
+          load_addr |= (j&0xf)<<(((2-k)*4)+8);
+        }
+        name[i] = '\0'; /* terminate string */
+      }
+      strcat(theline, name);	/* dump the filename */
+      strcat(theline,"\t");
+      switch(type)
+      {
+        case TYPE_FILE : case TYPE_DIR :
+          file_type = type;
+          break;
+        case TYPE_LINK :
+          file_type = TYPE_FILE;
+          break;
+        default :               /* does not deal with links correctly */
+          file_type = 0;
+          break;
+      }
+      if (type == TYPE_FILE)    /* now the file size */
+      {
+        sprintf(buf, "0x%x", size);
+        strcat(theline, buf);
+      }
+
+      sprintf(buf,"\t0x%02x\t0x%x\t0x%08x\t0x%08x\n",
+                    file_attrib,file_type,load_addr,exec_addr);
+      strcat(theline,buf);
     }
     else
-        x = 0;
-    strcat(theline, "</a>");
-
-    x += strlen(name);
-    x = FILENAMEWIDTH - x;
-    while (x > 0)
     {
-        strcat(theline, " ");
-        x--;
+#endif
+      emit_icontype(type, name);
+      strcat(theline, " <a href=\"");
+      strcat(theline, sess->origpath);
+      x = strlen(theline);
+      if ( theline[x-1] != '/' )
+          strcat(theline, "/");
+      strcat(theline, name);
+      if (type == TYPE_DIR)
+          strcat(theline, "/");
+      strcat(theline, "\">");
+      strcat(theline, name);
+      if (type == TYPE_DIR)
+      {
+          x = 1;
+          strcat(theline, "/");
+      }
+      else
+          x = 0;
+      strcat(theline, "</a>");
+
+      x += strlen(name);
+      x = FILENAMEWIDTH - x;
+      while (x > 0)
+      {
+          strcat(theline, " ");
+          x--;
+      }
+
+      sprintf(buf, "%02d-%s-%04d %02d:%02d  ", day, month, year, hour, minute);
+      strcat(theline, buf);
+
+      switch (type)
+      {
+          case TYPE_FILE:
+              postsize = ' ';
+              if (size > 2048)
+              {
+                  postsize = 'K';
+                  size = size >> 10;
+              }
+              if (size > 2048)
+              {
+                  postsize = 'M';
+                  size = size >> 10;
+              }
+              sprintf(buf, "%4d%c", size, postsize);
+              strcat(theline, buf);
+              break;
+
+          case TYPE_OTHER:
+              break;
+
+          case TYPE_DIR:
+              strcat(theline, "&lt;DIR&gt;");
+              break;
+
+          case TYPE_LINK:
+              strcat(theline, "-&gt; ");
+              strcat(theline, name2);
+              break;
+      }
+
+      strcat(theline, "\r\n");
+#ifdef CSFS
     }
-
-    sprintf(buf, "%02d-%s-%04d %02d:%02d  ", day, month, year, hour, minute);
-    strcat(theline, buf);
-
-    switch (type)
-    {
-        case TYPE_FILE:
-            postsize = ' ';
-            if (size > 2048)
-            {
-                postsize = 'K';
-                size = size >> 10;
-            }
-            if (size > 2048)
-            {
-                postsize = 'M';
-                size = size >> 10;
-            }
-            sprintf(buf, "%4d%c", size, postsize);
-            strcat(theline, buf);
-            break;
-
-        case TYPE_OTHER:
-            break;
-
-        case TYPE_DIR:
-            strcat(theline, "&lt;DIR&gt;");
-            break;
-
-        case TYPE_LINK:
-            strcat(theline, "-&gt; ");
-            strcat(theline, name2);
-            break;
-    }
-
-    strcat(theline, "\r\n");
+#endif
     push_theline(sess);
 
     return;
@@ -602,7 +710,7 @@ extern void ftp_dir_spotter(PSESS sess)
         strcpy(theline, databuf);
 
         word_count = breakdown_string();
-    
+
         if (word_count != 0)
             analyse_further(sess, word_count);
     }
@@ -629,7 +737,7 @@ extern void extract_pwd(PSESS sess)
         goto simple_server;
 
     ptr = substrs[1];
-    len = sublens[1];    
+    len = sublens[1];
 
     if (*ptr != '\"' || ptr[len-1] != '\"')
         goto simple_server;
@@ -668,7 +776,7 @@ extern void try_to_extract_size(PSESS sess)
         strcpy(theline, databuf);
 
         word_count = breakdown_string();
-    
+
         if (word_count != 0)
             hunt_for_size(sess, word_count);
     }
@@ -676,5 +784,18 @@ extern void try_to_extract_size(PSESS sess)
     return;
 }
 
+/*
+ */
+#ifdef CSFS
+void
+csfs_directory_header(PSESS sess)
+{
+  sprintf(theline,"# version %d\n#\n# WebFTP %s\n",
+  		     CSFS_File_Version,sess->origpath);
+
+  push_theline(sess);
+
+}
+#endif
 /* eof dirparse.c */
 
