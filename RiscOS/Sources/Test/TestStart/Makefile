@@ -17,7 +17,7 @@ CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
-RM      = remove
+RM      = -remove
 WIPE    = -wipe
 CD	= dir
 CHMOD	= access
@@ -26,7 +26,7 @@ AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
-WFLAGS     = ~c~vr
+WFLAGS     = ~cf~vr
 CHMODFLAGS = RW/R
 
 DFLAGS  = -DUSE_TINY ${DEBUG}
@@ -68,13 +68,20 @@ o.dongle	\
 
 # build a relocatable module:
 #
-all: ${RMTARGET}
+all: ${RMTARGET} dirs
 	@echo ${COMPONENT}: all complete
 	
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+
+dirs:
+        ${MKDIR} o
+	${MKDIR} aof
+	${MKDIR} rm
+	${MKDIR} linked
+
+rom: ${TARGET} dirs
         @echo ${COMPONENT}: rom complete
 
 export: ${EXPORTS}
@@ -85,8 +92,10 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.*      ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
+        ${WIPE} o      ${WFLAGS}
+        ${WIPE} aof      ${WFLAGS}
+        ${WIPE} rm      ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
         ${RM} h.header
         ${RM} ${RMTARGET}
         ${RM} ${TARGET}
@@ -98,7 +107,7 @@ h.header: o.header ;@
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} 
+${TARGET}: ${DIRS} ${OBJS} ${ROMCSTUBS} 
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
@@ -112,28 +121,13 @@ rom_link:
 #
 # Relocatable module target
 #
-${RMTARGET}: ${OBJS}
+${RMTARGET}: ${DIRS} ${OBJS}
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
 
-${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
-        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
 # Extra dependencies:
 o.module: h.header
 
 #
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.swis
-o.module:	C:h.kernel
-o.module:	h.module
-o.module:	h.header
-o.module:	h.Pop
-o.module:	h.dongle
-o.Pop:	c.Pop
-o.Pop:	C:h.swis
-o.Pop:	C:h.kernel
-o.dongle:	c.dongle
-o.dongle:	h.Pop
-o.dongle:	C:h.kernel
