@@ -182,6 +182,7 @@ RESFILES = \
 OBJS = \
  o.Authorise		\
  o.Browser		\
+ o.Choices		\
  o.Cookies		\
  o.DragBox		\
  o.Encoding		\
@@ -274,6 +275,7 @@ OBJSZ = \
 OBJSD = \
  od.Authorise		\
  od.Browser		\
+ od.Choices		\
  od.Cookies		\
  od.DragBox		\
  od.Encoding		\
@@ -710,6 +712,7 @@ o.dirs:
 	@${MKDIR} o_italk
 	@${MKDIR} od_italk
 	@${MKDIR} rm
+	@${MKDIR} syms
 	@${MKDIR} Targets
 	@${MKDIR} Targets.Argonet
 	@${MKDIR} Targets.Argonet.!Voyager
@@ -769,41 +772,41 @@ s.AppName: ${LDIR}.Messages
 
 abs.!RI: ${OBJS} ${LIBS} o.dirs
 	@echo
-	${LD} -s Symbols.!RI -o $@ ${OBJS} ${LIBS}
+	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
 	@echo
-	${LD} -debug -s Symbols.!RI_D -o $@ ${OBJSD} ${LIBSD}
+	${LD} -debug -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD}
 
 abs.!RI_Surf: ${OBJS_SURF} ${LIBS} o.dirs
 	@echo
-	${LD}  -s Symbols.!RI_Surf -o $@ ${OBJS_SURF} ${LIBS}
+	${LD}  -s syms.!RI_Surf -o $@ ${OBJS_SURF} ${LIBS}
 
 abs.!RI_DSurf: ${OBJSD_SURF} ${LIBSD} o.dirs
 	@echo
-	${LD} -debug -s Symbols.!RI_DSurf -o $@ ${OBJSD_SURF} ${LIBSD}
+	${LD} -debug -s syms.!RI_DSurf -o $@ ${OBJSD_SURF} ${LIBSD}
 
 abs.!RI_ITalk: ${OBJS_ITALK} ${LIBS} o.dirs
 	@echo
-	${LD} -s Symbols.!RI_ITalk -o $@ ${OBJS_ITALK} ${LIBS}
+	${LD} -s syms.!RI_ITalk -o $@ ${OBJS_ITALK} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_DITalk: ${OBJSD_ITALK} ${LIBSD} o.dirs
 	@echo
-	${LD} -debug -s Symbols.!RI_DITalk -o $@ ${OBJSD_ITALK} ${LIBSD}
+	${LD} -debug -s syms.!RI_DITalk -o $@ ${OBJSD_ITALK} ${LIBSD}
 
 ${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} o.dirs
 	@echo
-	${LD} -s Symbols.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
+	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
 
 ${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} o.dirs
 	@echo
-	${LD} -s Symbols.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
+	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
 
 rm.!BrowseD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
 	@echo
-	${LD} -s Symbols.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
+	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
 
 
 # -----------------------------------------------------------------------------
