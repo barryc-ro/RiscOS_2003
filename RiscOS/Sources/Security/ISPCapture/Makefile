@@ -146,13 +146,13 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-#        ${MKDIR} <resource$dir>.Resources
-#        ${MKDIR} <resource$dir>.Resources.ISPCapture
         ${MKDIR} ${HTMLDIR}.ISPCapture
         ${CP} ${LDIR}.HTML.connect ${HTMLDIR}.MA.connect ${CPFLAGS}
         ${CP} ${LDIR}.HTML.ISPC1 ${HTMLDIR}.ISPCapture.ISPC1 ${CPFLAGS}
         ${CP} ${LDIR}.HTML.ISPC2 ${HTMLDIR}.ISPCapture.ISPC2 ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
+#        ${MKDIR} <resource$dir>.Resources
+#        ${MKDIR} <resource$dir>.Resources.ISPCapture
 
 #
 # Executable target (static link)
@@ -185,17 +185,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.ispc_url:	c.ispc_url
-o.ispc_url:	C:h.kernel
-o.ispc_url:	C:h.swis
-o.ispc_url:	h.ispc_ispc
-o.ispc_url:	h.ispc_url
-o.ispc_url:	h.ispc_utils
-o.ispc_url:	h.DBUG
-o.kprintf:	c.kprintf
-o.kprintf:	C:h.kernel
-o.kprintf:	C:h.swis
-o.kprintf:	h.kprintf
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -253,6 +242,17 @@ o.ispc_ispc:	h.ispc_url
 o.ispc_ispc:	h.ispc_utils
 o.ispc_ispc:	h.dynalloc
 o.ispc_ispc:	h.DBUG
+o.ispc_url:	c.ispc_url
+o.ispc_url:	C:h.kernel
+o.ispc_url:	C:h.swis
+o.ispc_url:	h.ispc_ispc
+o.ispc_url:	h.ispc_url
+o.ispc_url:	h.ispc_utils
+o.ispc_url:	h.DBUG
+o.kprintf:	c.kprintf
+o.kprintf:	C:h.kernel
+o.kprintf:	C:h.swis
+o.kprintf:	h.kprintf
 o.ispc_utils:	c.ispc_utils
 o.ispc_utils:	C:h.kernel
 o.ispc_utils:	C:h.swis
