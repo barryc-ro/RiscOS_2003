@@ -48,21 +48,25 @@ goes a bit like this
 
 
 
-#include "stdio.h"
-#include "stdlib.h"
-#include "string.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "kernel.h"
 #include "swis.h"
 #include "zlib/h/zlib"
-
 #include "globals.h"
 #include "ProgOS.h"
 #include "flashprog.h"
 #include "endscreen.h"
 #include "fetcher.h"
 #include "messages.h"
+#include "VersionNum"
+#include "kill.h"
 
 
+// SWI Number
+#define ModeFiles_MonitorType 0x4D480
 
 // global variables
 
@@ -70,95 +74,125 @@ int image_type = NO_IMAGE;
 int image_length = 0;
 int filing_system = ZIPFS;
 
-volatile unsigned int *rom_base = ROM_BASE;
+unsigned int *rom_base = ROM_BASE;
 int number_of_devices = NO_DEVICES;
 int verbose = NO;
 
-
-
+//prototype for border changer
+extern void border(int colour);
 
 /* This function basically executes the programming procedure step at a time
 */
 
 int main(int argc, char *argv[])
 {
-  volatile unsigned int *start_of_buffer;
-  char *filename = NULL;
-  volatile unsigned int *end_of_buffer;  // pointer to end of block.
-  volatile char *zlib_output_buffer;   // output buffer for zlib
-  _kernel_swi_regs regs;
+  unsigned int *start_of_buffer;
+  char filename[50];
+  unsigned int *end_of_buffer;  // pointer to end of block.
+  char *zlib_output_buffer;   // output buffer for zlib
+  int vdu;
 
-  char buffer[255]; /* This appears to store input from the user */
-
-  /* allocate memory for filename */
-  if ((filename = malloc(255)) == NULL)
-  {
-    printf("main(): Error allocating memory for filename.\n");
-    exit(EXIT_FAILURE);
-  }
-
-  /* hang up the line - this fixes MPT fault 142. They have asked for the line to be hungup when the program fails. */
-  if(_kernel_swi(NCDial_Hangup, &regs, &regs)!=NULL)
-  {
-    printf("main(): hangup SWI failed\n");
-    exit(EXIT_FAILURE);
-  }
+  char buffer[255];
 
   // load the messages file and prepare to read from it
-  if (!init_messages())
-  {
-    printf("main(): Failure to initialise the messages.\n");
-    exit(EXIT_FAILURE);
-  }
+  if (!init_messages()) exit(0);
 
-  // set up the endscreen for later use
-  setup_endscreen();
+  atexit(close_messages_file);
+
 
   // deal with the command line arguments
-  if (!command_line_arguments(argc, argv, filename) )
+  if (!command_line_arguments(argc, argv, filename) ) return(FAILURE);
+
+
+  // set up the endscreen for later use
+
+  if(filing_system == ZIPFS)
+    {
+      kill_apps();
+      verbose=YES;
+      vdu=initialise_screen();
+    }
+  else
   {
-    printf("main(): Error parsing the command line arguments.\n");
-    exit(EXIT_FAILURE);
+   setup_endscreen();
   }
 
   // allocate memory for zlib output buffer
-  if ((zlib_output_buffer = malloc(OUTPUT_BUFFER_SIZE)) == NULL)
+  zlib_output_buffer = malloc(OUTPUT_BUFFER_SIZE);
+
+  // check allocation success
+  if ( zlib_output_buffer == NULL )
   {
-    printf("main(): Not enough memory\n");
-    exit(EXIT_FAILURE);
+     printf("Not enough memory\n");
+     return(FAILURE);
   }
 
-  /* Startup display */
+  /* STARTUP DISPLAY STUFF */
+
+
   if (verbose)
   {
-    printf("\nAtmel Series Flash Rom Device Programmer v1.3\n");
+    printf("\nAtmel Series Flash Rom Device Programmer %s\n",Module_FullVersion);
     printf("(C) 2000  Pace Micro Technology PLC\n\n");
 
     // report which bank writing to
-    if (image_type == OS_IMAGE)
-      printf("Write OS Image to %p\n",  rom_base);
-    if (image_type == FONT_IMAGE)
-      printf("Write Font Image to %p\n", rom_base);
+    if (image_type == OS_IMAGE) printf("Write OS Image to %p\n",  rom_base);
+    if (image_type == FONT_IMAGE) printf("Write Font Image to %p\n", rom_base);
 
     // give chance to quit
     printf("You will lose all the data in this bank.  Do you wish to continue yes/no  ");
 
     scanf("%s", buffer);
 
-    /* check that person says yes !! (but not case-sensitively). This needs rewriting. */
-    if (strcmp(buffer, "yes") && strcmp(buffer, "y"))
-    {
-      exit(EXIT_FAILURE);
-    }
+    // check that person says yes !!
+    if (!strchr(buffer, 'y') && !strchr(buffer,'Y')) return(FAILURE);
+
   }
 
+
   start_of_buffer = fetch_image(filename);
+
 
   // check for success
   if (start_of_buffer == NULL)
   {
     printf("Fetch failed\n");
-    exit(EXIT_FAILURE);
+    exit(0);
+  }
+
+  //if were loading from ZIPFS assume its an upgrade file so
+  //read through the tags to find the image and OS bank
+  if(filing_system == ZIPFS)
+  {
+    char *pos;
+    int tag;
+    int chunk_size;
+
+    pos=(char *)start_of_buffer;
+
+    do
+    {
+      tag=(*(pos)) | ((*(pos+1))<<8) | ((*(pos+2))<<16) | ((*(pos+3))<<24);
+
+      //if we are not pointing to the data
+      if (tag != 6)  //data tag is 6
+      {
+        pos+=4;  //move pos on by one word
+        chunk_size=(*(pos)) | ((*(pos+1))<<8) | ((*(pos+2))<<16) | ((*(pos+3))<<24);
+        pos+=4;  //move to start of data
+        pos+= chunk_size;
+      }
+      else
+      {
+        pos+=4; //move to length
+        image_length=(*(pos)) | ((*(pos+1))<<8) | ((*(pos+2))<<16) | ((*(pos+3))<<24);
+        pos+=4; //move to start of data
+        break;
+      }
+    }
+    while( pos < (char*)(start_of_buffer+image_length));
+
+    start_of_buffer=(unsigned int *)pos;
   }
 
   // set up the end of buffer pointer
@@ -169,61 +203,47 @@ int main(int argc, char *argv[])
   {
     printf("Please switch off power when screen colour changes\n");
     printf("Green Screen = success      Red Screen = failure\n");
+
   }
 
   // allow us to write to the ROM
-  if (!flash_init())
-  {
-    exit(EXIT_FAILURE);
-  }
+
+  if ( !flash_init() ) return(0);
 
   // erase phase
-  if (!erase_and_unlock_devices())
+
+  if (!erase_and_unlock_devices() )
   {
-    if (verbose)
-    {
-      printf("Erase sequence failed\n");
-    }
-    else
-    {
-      display_endscreen(FAILURE);
-    }
-    exit(EXIT_FAILURE);
+    if (verbose) set_screen(RED);
+    else display_endscreen(FAILURE);
+    return(0);
   }
 
   // program phase
   if (!program_rom(start_of_buffer, zlib_output_buffer,  image_length) )
   {
-    if (verbose)
-      printf("Program sequence failed\n");
-    else
-      display_endscreen(FAILURE);
+    if (verbose) set_screen(RED);
+    else display_endscreen(FAILURE);
+
   }
 
   // verify phase
   if (!verify_rom(start_of_buffer, zlib_output_buffer,  image_length) )
   {
-    if (verbose)
-      printf("Verify sequence failed\n");
-    else
-      display_endscreen(FAILURE);
+    if (verbose) set_screen(RED);
+    else display_endscreen(FAILURE);
     return(0);
   }
 
-  if (verbose)
-    printf("Verification complete\n");
 
-  if (verbose)
-    printf("\nChip Programming complete\n");
+  if(verbose)
+    set_screen(GREEN);
+  else
+    display_endscreen(SUCCESS);
 
-  display_endscreen(SUCCESS);
+  return(SUCCESS);
 
-  return(EXIT_SUCCESS);
 }
-
-
-
-
 
 
 
@@ -234,10 +254,6 @@ to the erase functions provided in flashprog.c */
 int erase_and_unlock_devices(void)
 {
   int current_device;
-
-
-  if (verbose)
-  printf("Erasing and unlocking devices....\n");
 
   // Erase and then unlock All devices
   for (current_device = 0; current_device < number_of_devices;
@@ -259,15 +275,9 @@ int erase_and_unlock_devices(void)
 /* This function handles the writing of the image.  Again it just passes
 information to the write/verify routines in flashprog.h
 */
-int program_rom(volatile unsigned int *start_of_buffer,
-           volatile char *zlib_output_buffer, int image_length)
+int program_rom(unsigned int *start_of_buffer,
+           char *zlib_output_buffer, int image_length)
 {
-
-  if (verbose)
-  {
-    printf("Programming Flash....\n");
-  }
-
 
   // main write function
   if (!flash_decompress_block_operation(PROGRAM_FLASH, start_of_buffer,
@@ -286,28 +296,16 @@ int program_rom(volatile unsigned int *start_of_buffer,
 /* This function verifies the image.  Again it just passes
 information to the write/verify routines in flashprog.h
 */
-int verify_rom(volatile unsigned int *start_of_buffer,
-           volatile char *zlib_output_buffer, int image_length)
+int verify_rom(unsigned int *start_of_buffer,char *zlib_output_buffer, int image_length)
 
 {
-
-  if (verbose)
-  {
-    printf("Verifying Flash....\n");
-  }
-
-
   // main verify operation
   if (!flash_decompress_block_operation(VERIFY_FLASH, start_of_buffer,
     zlib_output_buffer,  image_length,  rom_base ) ) return(FAILURE);
 
-
   return(SUCCESS);
 
-
 }
-
-
 
 
 /*  This function deals with the command line arguments passed
@@ -346,16 +344,16 @@ int command_line_arguments(int argc, char *argv[], char *filename)
          (!strcmp(argv[argument_counter], "-help") ) )
     {
       printf("\n");
-      printf("Atmel Series Flash Rom Device Programmer v1.3 \n");
+      printf("Atmel Series Flash Rom Device Programmer %s\n",Module_FullVersion);
       printf("(C) 2000  Pace Micro Technology PLC\n\n");
-      printf("Description: Erases and reprograms the flash ROM in Funai 8 devices\n");
+      printf("Description: Erases and reprograms the flash ROM\n");
       printf("\n");
       printf("Options: \n");
-      printf("-zipfs         Selects source FS as zipfs\n");
-      printf("-cachefs       Selects source FS as cachefs\n");
-      printf("-os            Selects an OS image\n");
-      printf("-font          Selects a Font image\n");
-      printf("-v             Switch on verbose output\n");
+ //     printf("-zipfs         Selects source FS as zipfs\n");
+ //     printf("-cachefs       Selects source FS as cachefs\n");
+      printf("-os <bank>       Selects Flash bank (0-7)\n");
+//      printf("-font          Selects a Font image\n");
+//      printf("-v             Switch on verbose output\n");
       printf("-h, -help      Help mode\n");
       printf("\nReturns: \n");
       printf("Green screen if reprogramming successful\n");
@@ -461,6 +459,8 @@ int command_line_arguments(int argc, char *argv[], char *filename)
     printf("No image type selected\n");
     return(0);
   }
+
+
 
 
 return(1);

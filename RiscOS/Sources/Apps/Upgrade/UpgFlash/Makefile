@@ -20,7 +20,6 @@ RM      = remove
 WIPE    = -wipe
 CD	= dir
 CHMOD	= access
-STRIP   = -stripdepnd
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -Wa -depend !Depend ${THROWBACK} -ff ${INCLUDES} ${DFLAGS}
@@ -66,6 +65,7 @@ o.fetcher	\
 o.stuff         \
 o.endscreen	\
 o.messages	\
+o.kill          
 
 
 #
@@ -86,16 +86,14 @@ all: ${TARGET}
 
 resources: ${TARGET}
 	${MKDIR} ${RESDIR}.^.Apps.${APP}
-	SetMacro UpgFlashRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.
         ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} UpgFlashRes:* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
-        UnSet UpgFlashRes$path
+        ${CP} Resources.* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
         @echo ${COMPONENT}: all complete
 
 install:   ${TARGET}
 	${MKDIR} ${APP}
         ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.$(USERIF).$(LOCALE).* ${APP}.* ${CPFLAGS}
+        ${CP} Resources.* ${APP}.* ${CPFLAGS}
         @echo ${COMPONENT}: all complete
 
 clean:
@@ -108,8 +106,6 @@ clean:
         ${RM} o
         ${RM} aof
         ${RM} rm
-        @echo Stripping dependencies from makefile...
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 dirs:
