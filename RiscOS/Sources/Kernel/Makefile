@@ -52,7 +52,7 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
-        ${RM} TMOSHelp
+        ${RM} s.TMOSHelp
         @echo ${COMPONENT}: cleaned
 
 export: ${EXPORTS}
