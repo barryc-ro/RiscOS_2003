@@ -9,13 +9,11 @@ ASflags = -Stamp -quit
 
 .SUFFIXES: .c .s .o .oz .od .odz
 
-.c.o:;	$(CC) -DROM=0 $(CCflags) -o $@ $<
+.c.o:;	$(CC) -DROM=0 -DDEBUG=0 $(CCflags) -o $@ $<
 
 .c.od:;	$(CC) -DROM=0 -DDEBUG=1 -Fn $(CCflags) -o $@ $<
 
-.c.oz:;	$(CC) -zM -DROM=1 $(CCflags) -o $@ $<
-
-.c.odz:;$(CC) -zM -DROM=1 -DDEBUG=1 -Fn  $(CCflags) -o $@ $<
+.c.oz:;	$(CC) -zM -DROM=1 -DDEBUG=0 $(CCflags) -o $@ $<
 
 .s.o:;	$(AS) $(ASflags) -from $< -to $@
 
@@ -23,10 +21,7 @@ Objects =  autojp.o unictype.o \
 	utf8.o \
 	encoding.o \
 	iso2022.o \
-	koi8r.o \
-	microsoft.o \
-	acorn.o \
-	apple.o \
+	eightbit.o \
 	shiftjis.o \
 	bigfive.o \
 	enc_utf8.o \
@@ -38,16 +33,25 @@ ObjectsD =  autojp.od unictype.od \
 	utf8.od \
 	encoding.od \
 	iso2022.od \
-	koi8r.od \
-	microsoft.od \
-	acorn.od \
-	apple.od \
+	eightbit.od \
 	shiftjis.od \
 	bigfive.od \
 	enc_utf8.od \
 	enc_ascii.od \
 	enc_utf16.od \
 	enc_ucs4.od
+
+ObjectsZ =  autojp.oz unictype.oz \
+	utf8.oz \
+	encoding.oz \
+	iso2022.oz \
+	eightbit.oz \
+	shiftjis.oz \
+	bigfive.oz \
+	enc_utf8.oz \
+	enc_ascii.oz \
+	enc_utf16.oz \
+	enc_ucs4.oz
 
 all: ucodelib
 
@@ -57,13 +61,10 @@ ucodelib: $(Objects)
 ucodelibd: $(ObjectsD)
 	armlib -c -o ucodelibd $(ObjectsD)
 
-ucodelibzm: $(ObjectsZM)
-	armlib -c -o ucodelibzm $(ObjectsZM)
+ucodelibz: $(ObjectsZ)
+	armlib -c -o ucodelibz $(ObjectsZ)
 
-ucodelibdzm: $(ObjectsDZM)
-	armlib -c -o ucodelibdzm $(ObjectsDZM)
-
-riscos_libs: ucodelib ucodelibd
+riscos_libs: ucodelib ucodelibd ucodelibz
 
 riscos_export: riscos_libs
 	@-mkdir $(RISCOS_BUILD_EXPORT)
@@ -72,7 +73,7 @@ riscos_export: riscos_libs
 	@echo Made export directories
 	@-cp -p ucodelib $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelib.o
 	@-cp -p ucodelibd $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibd.o
-	@-cp -p ucodelibzm $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibzm.o
+	@-cp -p ucodelibz $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz.o
 	@cp -p autojp.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p charsets.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p unictype.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
