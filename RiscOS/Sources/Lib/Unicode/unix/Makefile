@@ -19,6 +19,7 @@ ASflags = -Stamp -quit
 
 Objects =  autojp.o unictype.o \
 	utf8.o \
+	utf16.o \
 	encoding.o \
 	iso2022.o \
 	eightbit.o \
@@ -35,6 +36,7 @@ Objects =  autojp.o unictype.o \
 
 ObjectsD =  autojp.od unictype.od \
 	utf8.od \
+	utf16.od \
 	encoding.od \
 	iso2022.od \
 	eightbit.od \
@@ -51,6 +53,7 @@ ObjectsD =  autojp.od unictype.od \
 
 ObjectsZ =  autojp.oz unictype.oz \
 	utf8.oz \
+	utf16.oz \
 	encoding.oz \
 	iso2022.oz \
 	eightbit.oz \
@@ -83,9 +86,9 @@ riscos_export: riscos_libs
 	@-mkdir $(RISCOS_BUILD_EXPORT)/Lib
 	@-mkdir $(RISCOS_BUILD_EXPORT)/Lib/Unicode
 	@echo Made export directories
-	@-cp -p ucodelib $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelib.o
-	@-cp -p ucodelibd $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibd.o
-	@-cp -p ucodelibz $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz.o
+	@-cp -p ucodelib $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelib
+	@-cp -p ucodelibd $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibd
+	@-cp -p ucodelibz $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz
 	@cp -p autojp.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p charsets.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p combine.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
@@ -94,6 +97,7 @@ riscos_export: riscos_libs
 	@cp -p iso10646.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p languages.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p utf8.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
+	@cp -p utf16.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@echo Copied libraries
 
 clean:
