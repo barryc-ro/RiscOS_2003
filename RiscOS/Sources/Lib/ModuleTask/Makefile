@@ -18,14 +18,9 @@ all:
 	Echo	Library $(COMPONENT): Please supply a target.
 
 
-clean:
-	Wipe o.Lib* ~c~r~v
-	Echo Library $(COMPONENT): 'clean' finished.
-
-
-clean_all:	clean
+clean clean_all:
 	Every.Every2	-c "@.o.Sources.!*.Sources @.o.Sources.!*.Makefile" wipe %0 ~c~vr
-	Echo		Library $(COMPONENT): 'clean_all' finished.
+	Echo		Library $(COMPONENT): '$@' finished.
 
 
 export:	export_$(PHASE)
