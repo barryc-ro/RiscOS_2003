@@ -25,3 +25,4 @@ int render_text_link_colour(rid_header *rh, be_item ti, be_doc doc);
 int render_cell_background_colour(int c);
 
 int render_background( rid_header *rh, be_item ti, be_doc doc );
+int render_caret_colour(be_doc doc, int back, int cursor);

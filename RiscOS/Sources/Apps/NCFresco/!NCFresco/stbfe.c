@@ -257,14 +257,14 @@ static pointer_info pointers[] =
 {
     { NULL, 0, 0 },
     { "ptr_hand", 4, 0 },
-    { "ptr_map", 16, 16 },
     { "ptr_caret", 4, 0 },
     { "ptr_click", 0, 22 },
     { "ptr_menu", 0, 4 },
     { "ptr_push", 4, 0 },
     { "ptr_resizew", 16, 0 },
     { "ptr_resizeh", 0, 16 },
-    { "ptr_push", 4, 0 }	/* This is meant to be the secure submit cursor */
+    { "ptr_push", 4, 0 },	/* This is meant to be the secure submit cursor */
+    { "ptr_map", 16, 16 }
 };
 
 #define fe_pointer_MAP              (1U<<31)
@@ -282,21 +282,21 @@ static int fe_get_pointer_number(int item_flags)
     else if (item_flags & (be_item_info_BUTTON | be_item_info_ACTION))
         ptr_num = 1; /*4;   */
     else if (item_flags & be_item_info_INPUT)
-        ptr_num = 3;
+        ptr_num = 2;
     else if (item_flags & be_item_info_MENU)
         ptr_num = 1; /* 5;  */
     else if (item_flags & be_item_info_LINK)
         ptr_num = 1;
     else if (item_flags & be_item_info_SECURE)
-        ptr_num = 9;
-    else if ((unsigned)item_flags & fe_pointer_MAP)   /* force map for the map mode */
-        ptr_num = 2;
-    else if ((unsigned)item_flags & fe_pointer_DRAG)   /* dragging mode */
-        ptr_num = 6;
-    else if ((unsigned)item_flags & fe_pointer_RESIZE_WIDTH)   /* resize w  */
-        ptr_num = 7;
-    else if ((unsigned)item_flags & fe_pointer_RESIZE_HEIGHT)   /* resize h */
         ptr_num = 8;
+    else if ((unsigned)item_flags & fe_pointer_MAP)   /* force map for the map mode */
+        ptr_num = 9;
+    else if ((unsigned)item_flags & fe_pointer_DRAG)   /* dragging mode */
+        ptr_num = 5;
+    else if ((unsigned)item_flags & fe_pointer_RESIZE_WIDTH)   /* resize w  */
+        ptr_num = 6;
+    else if ((unsigned)item_flags & fe_pointer_RESIZE_HEIGHT)   /* resize h */
+        ptr_num = 7;
     return ptr_num;
 }
 
@@ -306,11 +306,11 @@ void fe_set_pointer(int item_flags)
 {
     int num;
 
-    if (!config_display_fancy_ptr)
-	return;
-    
     num = fe_get_pointer_number(item_flags);
 
+    if (!config_display_fancy_ptr && num > 0 && num < 5) /* no_fancy disables hand and caret pointers */
+	return;
+    
     if (num != pointer_current)
     {
         pointer_info *info = &pointers[num];
@@ -1752,9 +1752,11 @@ os_error *fe_handle_enter(fe_view v)
         e = backend_doc_item_bbox(v->displaying, v->current_link, &box);
     if (!e)
     {
-        if ( (flags & (be_item_info_ISMAP | be_item_info_USEMAP)) ||
+        if ((flags & (be_item_info_ISMAP | be_item_info_USEMAP)))
+#if 0
 	     (v->browser_mode != fe_browser_mode_DESKTOP && v->browser_mode != fe_browser_mode_APP &&		/* input=image is just a graphical button on a desktop page */
 	      (flags & (be_item_info_ACTION|be_item_info_IMAGE)) == (be_item_info_ACTION|be_item_info_IMAGE)))
+#endif
         {
             coords_pointstr p;
             coords_cvtstr cvt = fe_get_cvt(v);

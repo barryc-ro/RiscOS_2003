@@ -162,10 +162,11 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     int line_gap = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
     int dx = frontend_dx, dy = frontend_dy;
     wimp_box ta_box, gwind_box;
-    int bg;
+    int fg, bg;
 
     tai = ((rid_text_item_textarea *)ti)->area;
 
+    fg = tai->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
     bg = tai->base.colours.back == -1 ? render_colour_WRITE : tai->base.colours.back;
 
     if (fs->lf != webfonts[WEBFONT_TTY].handle)
@@ -174,9 +175,9 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 	font_setfont(fs->lf);
     }
 
-    if (fs->lfc != render_colour_INPUT_F )
+    if (fs->lfc != fg)
     {
-	fs->lfc = render_colour_INPUT_F;
+	fs->lfc = fg;
 	render_set_font_colours(fs->lfc, bg, doc);
     }
 
@@ -386,7 +387,7 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
     os_error *ep;
     rid_textarea_item *tai;
     rid_textarea_line *tal;
-    int i;
+    int i, h;
 
     if (doc->text_input_offset < 0)
     {
@@ -427,7 +428,10 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
     cx += doc->margin.x0;
     cy += doc->margin.y1;
 #endif
-    frontend_view_caret(doc->parent, cx, cy, webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down, repos);
+    h = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+    h |= render_caret_colour(doc, tai->base.colours.back, tai->base.colours.cursor);
+
+    frontend_view_caret(doc->parent, cx, cy, h, repos);
 #endif /* BUILDERS */
     return TRUE;
 }

@@ -222,10 +222,12 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     font_string fstr;
 
     int bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back;
+    int fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 
     render_plinth(bg, render_plinth_IN,
 		  hpos, bline - ti->max_down,
-		  ti->width - 52, (ti->max_up + ti->max_down), doc );
+		  ti->width - (sel->flags & rid_if_NOPOPUP ? 4 : 52),
+		  (ti->max_up + ti->max_down), doc );
 
     for(oi = sel->options; oi; oi = oi->next)
     {
@@ -255,9 +257,9 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     }
 #endif
 
-    if (fs->lfc != render_colour_INPUT_F)
+    if (fs->lfc != fg)
     {
-	fs->lfc = render_colour_INPUT_F;
+	fs->lfc = fg;
 	render_set_font_colours(fs->lfc, bg, doc);
     }
 
@@ -268,7 +270,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     font_strwidth(&fstr);
 
     font_paint(str, font_OSCOORDS + (config_display_blending ? 0x800 : 0),
-	       hpos + ((ti->width - 68 - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1) + 10, bline);
+	       hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 20 : 68) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1) + 10, bline);
 
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	render_plot_icon("gright", hpos + ti->width - 48, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
@@ -287,7 +289,8 @@ void oselect_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 #ifndef BUILDERS
     rid_select_item *sel = ((rid_text_item_select *) ti)->select;
 
-    frontend_menu_dispose( sel->menuh );
+    if (sel->menuh)
+	frontend_menu_dispose( sel->menuh );
 
     if (sel->items)
     {

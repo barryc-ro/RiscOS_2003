@@ -461,6 +461,8 @@ static void url_event_handler(int event, fe_view v)
 
 void fevent_handler(int event, fe_view v)
 {
+    STBDBG(("fevent_handler(): event %x v %p\n", event, v));
+
     switch (event & fevent_CLASS_MASK)
     {
     case fevent_CLASS_GLOBAL:

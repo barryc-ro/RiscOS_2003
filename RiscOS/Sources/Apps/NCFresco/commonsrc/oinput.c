@@ -32,6 +32,7 @@
 #include "bbc.h"
 #include "swis.h"
 #include "akbd.h"
+#include "colourtran.h"
 
 #include "antweb.h"
 #include "interface.h"
@@ -98,9 +99,6 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     switch (ii->tag)
     {
     case rid_it_IMAGE:
-#if 0
-	if (ii->src)
-#endif
 	{
 	    image_flags fl;
 	    int new_im = 0;
@@ -131,13 +129,6 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    if (new_im && (fl & image_flag_REALTHING))
 		ii->data.image.flags |= rid_image_flag_REAL;
 	}
-#if 0
-	else
-	{
-	    width = 68;
-	    height = 68;
-	}
-#endif
 #ifndef BUILDERS
         width = width*doc->scale_value/100 + 4;
         height = height*doc->scale_value/100 + 4;
@@ -198,7 +189,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     rid_input_item *ii = tii->input;
     int plotx;
     int slen;
-    int bg;
+    int fg, bg;
 
     switch (ii->tag)
     {
@@ -229,6 +220,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	slen = strlen(ii->data.str);
 
+	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 	bg = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back;
     
 	if (fs->lf != webfonts[WEBFONT_TTY].handle)
@@ -237,9 +229,9 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    font_setfont(fs->lf);
 	}
 
-	if (fs->lfc != render_colour_INPUT_F )
+	if (fs->lfc != fg)
 	{
-	    fs->lfc = render_colour_INPUT_F;
+	    fs->lfc = fg;
 	    render_set_font_colours(fs->lfc, bg, doc);
 	}
 
@@ -272,7 +264,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    x2 = (fs.x / MILIPOINTS_PER_OSUNIT);
 
 	    if (x2 <= boxw)
-
 	    {
 		/* The whole string fits in the box */
 	    }
@@ -336,7 +327,10 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_SUBMIT:
     case rid_it_RESET:
     case rid_it_BUTTON:
-	render_plinth(ii->data.tick ? render_colour_ACTION : render_colour_INPUT_B,
+	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
+	bg = ii->data.tick ? render_colour_ACTION : ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back;
+
+	render_plinth(bg,
 		      ii->data.tick ? render_plinth_IN : 0,
 		      hpos, bline - ti->max_down,
 		      ti->width, (ti->max_up + ti->max_down), doc );
@@ -347,10 +341,10 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    font_setfont(fs->lf);
 	}
 
-	if (fs->lfc != render_colour_INPUT_F )
+	if (fs->lfc != fg)
 	{
-	    fs->lfc = render_colour_INPUT_F;
-	    render_set_font_colours(fs->lfc, render_colour_INPUT_B, doc);
+	    fs->lfc = fg;
+	    render_set_font_colours(fs->lfc, bg, doc);
 	}
 
 	font_paint(ii->value ? ii->value : ( ii->tag == rid_it_SUBMIT ? "Submit" : "Reset" ),
@@ -682,6 +676,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
     int x1, x2;
     int boxw;
     int cx, cy;
+    int h;
 
     ii = ((rid_text_item_input *) ti)->input;
 
@@ -752,7 +747,10 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	cx += doc->margin.x0;
 	cy += doc->margin.y1;
 #endif
-	frontend_view_caret(doc->parent, cx, cy, webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down, repos);
+	h = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+	h |= render_caret_colour(doc, ii->base.colours.back, ii->base.colours.cursor);
+
+	frontend_view_caret(doc->parent, cx, cy, h, repos);
 
 	take_it = TRUE;
 	break;
@@ -765,6 +763,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
     return FALSE;
 #endif /* BUILDERS */
 }
+
 
 BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 {

@@ -166,26 +166,26 @@
 #define fevent_URLS_MASK	            0x00ff
 
 /* menu events */
-#define fevent_MENU_UP                      0x4001
-#define fevent_MENU_DOWN                    0x4002
-#define fevent_MENU_PAGE_UP                 0x4003
-#define fevent_MENU_PAGE_DOWN               0x4004
-#define fevent_MENU_TOP                     0x4005
-#define fevent_MENU_BOTTOM                  0x4006
-#define fevent_MENU_SELECT                  0x4007
-#define fevent_MENU_CANCEL                  0x4008
-#define fevent_MENU_TOGGLE                  0x4009
+#define fevent_MENU_UP                      (fevent_CLASS_MENU + 0x001)
+#define fevent_MENU_DOWN                    (fevent_CLASS_MENU + 0x002)
+#define fevent_MENU_PAGE_UP                 (fevent_CLASS_MENU + 0x003)
+#define fevent_MENU_PAGE_DOWN               (fevent_CLASS_MENU + 0x004)
+#define fevent_MENU_TOP                     (fevent_CLASS_MENU + 0x005)
+#define fevent_MENU_BOTTOM                  (fevent_CLASS_MENU + 0x006)
+#define fevent_MENU_SELECT                  (fevent_CLASS_MENU + 0x007)
+#define fevent_MENU_CANCEL                  (fevent_CLASS_MENU + 0x008)
+#define fevent_MENU_TOGGLE                  (fevent_CLASS_MENU + 0x009)
 
 /* map events */
-#define fevent_MAP_MOVE_MASK                0x500F
-#define fevent_MAP_MOVE                     0x5000
+#define fevent_MAP_MOVE_MASK                (fevent_CLASS_MAP + 0x00F)
+#define fevent_MAP_MOVE                     (fevent_CLASS_MAP + 0x000)
 #define fevent_MAP_MOVE_LEFT                0x0001
 #define fevent_MAP_MOVE_RIGHT               0x0002
 #define fevent_MAP_MOVE_UP                  0x0004
 #define fevent_MAP_MOVE_DOWN                0x0008
-#define fevent_MAP_SELECT                   0x5010
-#define fevent_MAP_STOP                     0x5011
-#define fevent_MAP_CANCEL                   0x5012
+#define fevent_MAP_SELECT                   (fevent_CLASS_MAP + 0x010)
+#define fevent_MAP_STOP                     (fevent_CLASS_MAP + 0x011)
+#define fevent_MAP_CANCEL                   (fevent_CLASS_MAP + 0x012)
 
 /* plugin toggle events */
 

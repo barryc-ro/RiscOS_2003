@@ -362,6 +362,7 @@ clean:		sanity
 		@cd ./hriscos ; $(RM) *.o htmlcheck,ff8
 		@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
 		@cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
+		@cd ./abs ; $(RM) *
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
 

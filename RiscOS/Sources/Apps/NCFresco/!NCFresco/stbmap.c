@@ -93,6 +93,9 @@ void fe_map_event_handler(int event, fe_view v)
     wimp_mousestr m;
 
     wimp_get_point_info(&m);
+
+    STBDBG(("fe_map_event_handler(): event %x v %p @ %d,%d\n", event, v, m.x, m.y));
+    
     switch (event)
     {
         case fevent_MAP_SELECT:

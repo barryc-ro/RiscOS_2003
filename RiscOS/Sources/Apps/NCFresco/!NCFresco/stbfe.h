@@ -89,8 +89,8 @@ extern void fe_scroll_changed(fe_view v, int x, int y);
 
 typedef struct
 {
-    short key;
-    short event;
+    unsigned short key;
+    unsigned short event;
     int flags;
 } key_list;
 
