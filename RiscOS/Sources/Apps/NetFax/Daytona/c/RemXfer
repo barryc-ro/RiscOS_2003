@@ -47,6 +47,16 @@
  * the document list even if the mailbox is empty; code was assuming that
  * some messages would have been downloaded so was trying to free resources
  * that were never allocated.
+ *
+ * 1998-05-18: BAL
+ * Fixed bug: now send RX_PQ_DOCUMENT_COMPLETE if an error occurs while we're
+ * placing a document in the PrintQ.  Without this, the next time we try to
+ * put a document in the PrintQ, the PrintQ would reject the request because
+ * as far as it is concerned it is still busy.  Fixes PAN-01848.
+ *
+ * 1998-05-20: BAL
+ * Added code to support integration of email receive into High Water-Mark
+ * system.
  */
 
 
@@ -82,6 +92,9 @@
 #include "ZmodemIF.h"
 #include "SmtpIF.h"
 
+#include "AddrBookIF.h"
+#include "QuStruct.h"
+#include "QuCommon.h"
 
 #include "MimeQ.h"
 
@@ -154,11 +167,13 @@ typedef struct
     message_t       *message;
 
     list_iterator_t  document_list_iter;
-
     list_iterator_t  message_list_iter;
 
     char *document_directory;
     char *message_filename;
+
+    unsigned int  space_used;
+    unsigned int  space_reserved;
 } pop3_data_t;
 
 typedef struct
@@ -271,8 +286,8 @@ static void  free_print_info (void *  data);
 
 static void  print_confirmed (unsigned int  pid);
 
-static int  match_pid (void *const  list_item,
-                       void *const  search_data);
+static int  match_pid (const void *const  list_item,
+                       const void *const  search_data);
 
 #endif /*support_email*/
 
@@ -2028,6 +2043,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     email_new_message_rc = emailrx_new_message (pop3.message_list[pop3.header_index].msg_size,
                                                                 &pop3.message_header,
                                                                 unique_id,
+                                                                HWM_Query_MaxSpace (),
                                                                 &delete_message);
 #ifdef TEST
                     emailrx_dump_doc_list_to_file (emailrx_get_doc_list (),
@@ -2157,6 +2173,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                      * the PrintQ just wants us to not give it any more stuff, so we just clean
                      * up - anything we throw away will be got in the next session.
                      */
+                    free_pop3_resources ();
+                    wipe_pop3_directory ();
                     finish_download_session ();
                     nextstate = INCOMING_8o;
                     break;
@@ -2179,8 +2197,13 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         send_message->data.os_error.err.errnum = 0;
                         strcpy (send_message->data.os_error.err.errmess, "Not enough memory to print document.");
 #endif
+                        StateKicker_SendMessage (PrintQ_MessageHandler,
+                                                 RX_PQ_DOCUMENT_COMPLETE,
+                                                 NULL);
+
                         free_pop3_resources ();
                         Pop3IF_Disconnect();
+                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                         break;
                     }
@@ -2198,8 +2221,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     if (add_doc_to_print_list (messageData->data.new_document_dir.pid))
                     {
                         RemXfer_SendRCError(PrintQ_MessageHandler, RX_PQ_ERROR, "Not enough memory to print document.", 2);
+                        StateKicker_SendMessage (PrintQ_MessageHandler,
+                                                 RX_PQ_DOCUMENT_COMPLETE,
+                                                 NULL);
                         free_pop3_resources ();
                         Pop3IF_Disconnect();
+                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                         break;
                     }
@@ -2224,6 +2251,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                                                           report))
                         {
                             /* error occured */
+                            StateKicker_SendMessage (PrintQ_MessageHandler,
+                                                     RX_PQ_DOCUMENT_COMPLETE,
+                                                     NULL);
+                            free_pop3_resources ();
+                            Pop3IF_Disconnect();
+                            wipe_pop3_directory ();
                             nextstate = INCOMING_9c;
                             break;
                         }
@@ -2264,6 +2297,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         strcpy (send_message->data.os_error.err.errmess,
                                 "Not enough memory to download EMail message.");
 #endif
+                        StateKicker_SendMessage (PrintQ_MessageHandler,
+                                                 RX_PQ_DOCUMENT_COMPLETE,
+                                                 NULL);
                         free_pop3_resources ();
                         Pop3IF_Disconnect();
                         wipe_pop3_directory ();
@@ -2287,6 +2323,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 case P3_RX_GET_MESSAGE_CALL_ERROR:
                 case P3_RX_GET_X_LINES_OF_MESSAGE_CALL_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
+                    StateKicker_SendMessage (PrintQ_MessageHandler,
+                                             RX_PQ_DOCUMENT_COMPLETE,
+                                             NULL);
                     free_pop3_resources ();
                     Pop3IF_Disconnect();
                     wipe_pop3_directory ();
@@ -2296,6 +2335,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 case P3_RX_GET_MESSAGE_PROCESS_ERROR:
                 case P3_RX_GET_X_LINES_OF_MESSAGE_PROCESS_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
+                    StateKicker_SendMessage (PrintQ_MessageHandler,
+                                             RX_PQ_DOCUMENT_COMPLETE,
+                                             NULL);
                     free_pop3_resources ();
                     Pop3IF_ReleaseData();
                     Pop3IF_Disconnect();
@@ -2312,8 +2354,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                          * so abandon the download.
                          */
                         RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
+                        StateKicker_SendMessage (PrintQ_MessageHandler,
+                                                 RX_PQ_DOCUMENT_COMPLETE,
+                                                 NULL);
                         free_pop3_resources ();
                         Pop3IF_Disconnect();
+                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                     }
                     else
@@ -2336,8 +2382,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                          * so abandon the download.
                          */
                         RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
+                        StateKicker_SendMessage (PrintQ_MessageHandler,
+                                                 RX_PQ_DOCUMENT_COMPLETE,
+                                                 NULL);
                         free_pop3_resources ();
                         Pop3IF_Disconnect();
+                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                     }
                     else
@@ -2358,6 +2408,19 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
                     pop3.retry = 0;
                     emailrx_message_downloaded (pop3.message);
+
+
+                    /* Space used and space reserved change by different
+                     * amounts.  We don't need to worry about space for the
+                     * decoded message because we originally reserved enough
+                     * space for all the decoded message plus the largest raw
+                     * message; a decoded message cannot be larger than a raw
+                     * message.
+                     */
+                    pop3.space_used     += pop3.message->size;
+                    pop3.space_reserved -= pop3.message->decoded_size_estimate;
+                    HWM_MailRx_Usage (pop3.space_used,
+                                      pop3.space_reserved);
 
                     /* It is absolutely vital that the header structure is cleared before each message fetch
                      * otherwise data from the previous fetch could be picked up.
@@ -2386,6 +2449,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 case MD_RX_DECODE_HDR_ERROR:
                 {
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
+                    StateKicker_SendMessage (PrintQ_MessageHandler,
+                                             RX_PQ_DOCUMENT_COMPLETE,
+                                             NULL);
                     free_pop3_resources ();
                     Pop3IF_Disconnect();
                     wipe_pop3_directory ();
@@ -2482,6 +2548,10 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     _swix (OS_File, _INR (0, 1), 6, pop3.message_filename);
 #endif
 
+                    pop3.space_used -= pop3.message->size;
+                    HWM_MailRx_Usage (pop3.space_used,
+                                      pop3.space_reserved);
+
                     pop3.message->flags.bits.printing = 1;
                     /* Add this message to the current document's list of
                      * messages being printed.
@@ -2503,6 +2573,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
                 case MD_RX_DECODE_MSG_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
+                    StateKicker_SendMessage (PrintQ_MessageHandler,
+                                             RX_PQ_DOCUMENT_COMPLETE,
+                                             NULL);
                     free_pop3_resources ();
                     Pop3IF_Disconnect();
                     wipe_pop3_directory ();
@@ -2629,6 +2702,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 }
 
                 case P3_RX_DISCONNECT_DONE:
+                    HWM_MailRx_Usage (0,
+                                      0);
                     Pop3IF_DeRegister();
                     nextstate = INCOMING_9b;
                     break;
@@ -3373,7 +3448,9 @@ static void  free_pop3_resources (void)
 
 static int  start_message_download (void)
 {
+#if 0
     unsigned int free_space;
+#endif
 
     /* Header download is complete, start downloading fax messages.
      * Messages are downloaded one at a time so the same filename can be used
@@ -3394,6 +3471,7 @@ static int  start_message_download (void)
     _swix (OS_File, _INR (0, 1) | _IN (4), 8, POP3_DIR, 0);
     #endif
 
+#if 0
     /* Find free space on RAM disc so that emailrx_build_dl_list knows
      * how much work it can do.  Bit brain dead at the moment in that
      * the free space could change after it has been read.
@@ -3406,14 +3484,14 @@ static int  start_message_download (void)
 
            &free_space);
 
-#if 0
 #ifdef TEST
     emailrx_dump_doc_list_to_file (emailrx_get_doc_list (),
                                    "ADFS::4.$.doclist");
 #endif
 #endif
 
-    if (emailrx_decide_download (free_space) == 1)
+    pop3.space_used = 0;
+    if (emailrx_decide_download (&pop3.space_reserved) == 1)
     {
         /* A document had to be 'split', so we should reconnect as soon as
          * possible to download the rest of the document.
@@ -3933,8 +4011,8 @@ static void  free_print_info (void *  data)
    match_pid
  */
 
-static int  match_pid (void *const  list_item,
-                       void *const  search_data)
+static int  match_pid (const void *const  list_item,
+                       const void *const  search_data)
 {
     const unsigned int    pid        = *(unsigned int *) search_data;
     const print_info_t *  print_info = (print_info_t *) list_item;
