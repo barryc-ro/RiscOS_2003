@@ -27,8 +27,8 @@
 #include "frameutils.h"
 #include "stbfe.h"
 
-#define HISTDBG(a)	DBG(a)
-#define HISTDBGN(a)	DBG(a)
+#define HISTDBG(a)	STBDBG(a)
+#define HISTDBGN(a)	STBDBGN(a)
 
 /* --------------------------------------------------------------------------------------------- */
 

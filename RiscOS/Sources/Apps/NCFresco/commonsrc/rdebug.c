@@ -203,12 +203,22 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	    handled = 1;
 	}
     }
-    if (strcasecomp(argv[1], "close") == 0)
+    if (strcasecomp(argv[0], "close") == 0)
     {
 	if (argc == 2)
 	{
 	    int fh = atoi(argv[1]);
 	    handled = _swix(OS_File, _INR(0,1), 0, fh) == NULL;
+	}
+    }
+    if (strcasecomp(argv[0], "ramdisc") == 0)
+    {
+	if (argc == 2)
+	{
+	    int size = atoi(argv[1])*1024;
+	    int out = -1;
+	    _swix(OS_ChangeDynamicArea, _INR(0,1) | _OUT(1), 5, size, &out);
+	    handled = out;
 	}
     }
     else if (argc == 2)

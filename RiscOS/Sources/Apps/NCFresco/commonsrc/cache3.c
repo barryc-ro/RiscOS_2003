@@ -987,6 +987,7 @@ static void cache_dump_dir_wipe(int dir)
 }
 
 #if DEBUG
+#define TIME_FORMAT	"%a, %d %b %Y %H:%M:%S GMT"
 void cache_debug(void)
 {
     int dir, file;
@@ -998,7 +999,9 @@ void cache_debug(void)
 	{
 	    if (cc->urloffset && cc->file_num != NO_FILE)
 	    {
-		DBG(("cache: %02d.%02d '%s' 0x%x\n", dir, file, urlblock + cc->urloffset, cc->flags));
+		char rbuf[32];
+		strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime((const time_t *)&cc->header.expires));
+		DBG(("cache: %02d.%02d %s '%s' 0x%x\n", dir, file, rbuf, urlblock + cc->urloffset, cc->flags));
 	    }
 	}
     }

@@ -4374,6 +4374,7 @@ static void fe_keyboard__open(void)
     if (getenv("Alias$NCKeyBoard"))
     {
 	fe_view v;
+	BOOL url_open = FALSE;
 
 	if (!tb_is_status_showing())
 	{
@@ -4388,7 +4389,10 @@ static void fe_keyboard__open(void)
 
 	/* add in open url box if present */
 	if ((v = fe_locate_view("__url")) != NULL)
+	{
 	    coords_union(&v->box, &box, &box);
+	    url_open = TRUE;
+	}
 
 	if (config_display_control_top)
 	{
@@ -4396,8 +4400,8 @@ static void fe_keyboard__open(void)
 	}
 	else
 	{
-	    fe_view v = fe_selected_view();
-	    if (v && v != main_view && (v->box.y1 < box.y1 + 400 + 100))
+	    v = fe_selected_view();
+	    if (v && v != main_view && (v->box.y1 < box.y1 + 400 + 100) && !url_open)
 		sprintf(buffer + n, " -scrolldown %d", text_safe_box.y1/2);
 	    else
 		sprintf(buffer + n, " -scrollup %d", box.y1/2);
@@ -5478,7 +5482,7 @@ void fe_event_process(void)
 			break;
 		    }
 
-		DBG(("taskinit: %x %s\n", msg->hdr.task, &msg->data.chars[8]));
+		DBG(("taskinit: %x %dK %s\n", msg->hdr.task, msg->data.words[1]/1024, &msg->data.chars[8]));
 		break;
 	    }
 	    case wimp_MCLOSETASK:

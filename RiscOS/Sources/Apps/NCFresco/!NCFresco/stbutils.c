@@ -459,6 +459,7 @@ void fe_message(const char *msg)
     fe_anti_twitter(&error_box);
 }
 
+#if 0
 void fe_report_error(const char *msg)
 {
 #if 1
@@ -486,6 +487,7 @@ void fe_report_error(const char *msg)
     fe_refresh_screen(&error_box);
 #endif
 }
+#endif
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -1011,7 +1013,7 @@ void frontend_fatal_error(os_error *e)
 #endif
 
         er.errnum = e->errnum;
-        sprintf(er.errmess, msgs_lookup("fatal2:"), e->errmess);
+        sprintf(er.errmess, msgs_lookup("fatal2:"), e->errnum);
 	
 	_swix(Wimp_ReportError, _INR(0,5), &er, wimp_EOK | (1<<8), PROGRAM_NAME, NULL, NULL, 0);
         exit(0);
