@@ -19,6 +19,7 @@
 #include "WindInfo2.h"
 #include "DrawHL.h"
 
+#define	Toolbox_MiscOp 0x44ec6
 
 
 
@@ -131,6 +132,201 @@ We ignore non-clickable icons, shaded icons and deleted icons.
 
 
 
+typedef struct
+{
+	int			numicons;
+	Desk_icon_handle*	handles;
+}
+component_iconhandles;
+
+
+
+
+
+
+
+#define  Window_GadgetGetIconList (0x082880+11)
+
+static _kernel_oserror *gadget_get_icon_list_anytask ( unsigned int flags,
+                                               Desk_window_handle window,
+                                               ComponentId gadget,
+                                               int *buffer,
+                                               int buff_size,
+                                               int *nbytes
+                                             )
+{
+	return _swix( Window_GadgetGetIconList, _INR(0,4)|_OUT(4),
+			flags, window, gadget, buffer, buff_size,
+			nbytes
+			);
+}
+
+
+static void	GetIconsForComponent( component_iconhandles* iconhandles, Desk_window_handle window, ComponentId component)
+{
+	int	numbytes;
+	Desk_Error2_CheckOS( gadget_get_icon_list_anytask( 0, window, component, NULL, 0, &numbytes));
+	Desk_Debug_Printf( Desk_error_PLACE "numbytes=%i\n", numbytes);
+	if ( numbytes<=0)
+	{
+		iconhandles->numicons	= 0;
+		iconhandles->handles	= NULL;
+		return;
+	}
+	iconhandles->handles = (Desk_icon_handle*) Desk_DeskMem_Malloc( numbytes);
+	Desk_Error2_CheckOS( gadget_get_icon_list_anytask( 0, window, component, (int*) iconhandles->handles, numbytes, &numbytes));
+	iconhandles->numicons= numbytes/sizeof( Desk_icon_handle);
+	Desk_Debug_Printf( Desk_error_PLACE "GetIconsForComponent: component=0x%08x, numicons=%i\n", component, iconhandles->numicons);
+	#ifdef Desk_DEBUG
+	{
+		int	i;
+		for ( i=0; i<iconhandles->numicons; i++)
+		{
+			char	buffer[ 256] = "";
+			Desk_Icon_GetText( window, iconhandles->handles[i], buffer);
+			Desk_Debug_Printf( Desk_error_PLACE "icon %i is '%s'\n", iconhandles->handles[i], buffer);
+		}
+	}
+	#endif
+}
+
+
+typedef struct
+{
+	int		numcomponents;
+	ComponentId*	ids;
+}
+object_components;
+
+
+#define  Window_EnumerateGadgets (0x082880+10)
+
+static void	GetComponents( object_components* components, Desk_window_handle window)
+{
+	int	pos=-1;
+	int	buffsize;
+	
+	Desk_Debug_Printf( Desk_error_PLACE "GetComponents for window 0x%08x\n", window);
+	
+	Desk_Error2_CheckOS(
+		_swix( Window_EnumerateGadgets, _INR(0,3)|_OUT(4),
+			0, window, pos, 0,
+			&buffsize
+			)
+		);
+	Desk_Debug_Printf( Desk_error_PLACE "Required buffsize is %i\n", buffsize);
+	
+	components->ids = (ComponentId*) Desk_DeskMem_Malloc( buffsize);
+	Desk_Error2_CheckOS(
+		_swix( Window_EnumerateGadgets, _INR(0,4)|_OUT(4),
+			0, window, pos, components->ids, buffsize
+			)
+		);
+	components->numcomponents = buffsize / sizeof( ComponentId*);
+	#ifdef Desk_DEBUG
+		{
+		int	i;
+		for ( i=0; i<components->numcomponents; i++)	Desk_Debug_Printf( Desk_error_PLACE "Component %i is 0x%08x\n", i, components->ids[i]);
+		}
+	#endif
+	Desk_Debug_Printf( Desk_error_PLACE "GetComponents returning\n");
+}
+
+
+
+static Desk_icon_handle	GetNextIcon( ObjectId object, ComponentId component, Desk_window_info* info, Desk_icon_handle icon, int step)
+{
+	Desk_icon_block*	iconblocks = (Desk_icon_block*) (info+1);
+	
+	if ( step!=0)
+	{	// Look at current gadget, to see if we merely have to move to a different icon in the gadget.
+		component_iconhandles	iconhandles;
+		int			i;
+		GetIconsForComponent( &iconhandles, info->window, component);
+		
+		Desk_Debug_Printf( Desk_error_PLACE "Looking at icons of current gadget (%i icons)\n", iconhandles.numicons);
+		
+		for ( i=0; i<iconhandles.numicons; i++)
+		{
+			if ( iconhandles.handles[i]==icon)
+			{
+				int	ii;
+				for ( ii=i+step; ii>=0 && ii<iconhandles.numicons; ii+=step)
+				{
+					if ( !IconHigh_IgnoreIcon( &iconblocks[ iconhandles.handles[ii]]))
+					{
+						int	icon = iconhandles.handles[ii];
+						Desk_DeskMem_Free( iconhandles.handles);
+						Desk_Debug_Printf( Desk_error_PLACE "Returning icon %i\n", icon);
+						return icon;
+					}
+				}
+			}
+		Desk_DeskMem_Free( iconhandles.handles);
+		}
+	}
+	
+	// If we reach here, we need to move to the next component, and select the first/last icon.
+	Desk_Debug_Printf( Desk_error_PLACE "Looking for next component\n");
+	
+	{
+		object_components	components;
+		int			c;
+		
+		GetComponents( &components, info->window);
+		
+		if ( 0==step)
+		{
+			c=-1;
+			step = 1;
+		}
+		else
+		{
+			for ( c=0; c<components.numcomponents; c++)
+			{
+				if ( component==components.ids[ c])	break;
+			}
+		}
+		
+		Desk_Debug_Printf( Desk_error_PLACE "Starting at component %i\n", c+step);
+		
+		if ( c<components.numcomponents)
+		{	// Search for next clickable icon.
+			for ( c+=step; c>=0 && c<components.numcomponents; c+=step)
+			{
+				int	i;
+				component_iconhandles	iconhandles;
+				GetIconsForComponent( &iconhandles, info->window, components.ids[c]);
+				
+				Desk_Debug_Printf( Desk_error_PLACE "Component %i (0x%08x) has %i icons\n", c, components.ids[c], iconhandles.numicons);
+				i = (step>0) ? 0 : iconhandles.numicons-1;
+				for ( ; i>=0 && i<iconhandles.numicons; i+=step)
+				{
+					if ( !IconHigh_IgnoreIcon( &iconblocks[ iconhandles.handles[i]]))
+					{
+						int	handle = iconhandles.handles[i];
+						Desk_Debug_Printf( Desk_error_PLACE "Selecting icon number %i\n", handle);
+						Desk_DeskMem_Free( iconhandles.handles);
+						Desk_DeskMem_Free( components.ids);
+						return handle;
+					}
+					else Desk_Debug_Printf( Desk_error_PLACE "Ignoring icon number %i\n", iconhandles.handles[i]);
+				}
+			Desk_DeskMem_Free( iconhandles.handles);
+			Desk_Debug_Printf( Desk_error_PLACE "Component doesn't contain suitable icon\n");
+			}
+		}
+		Desk_DeskMem_Free( components.ids);
+	}
+	Desk_Debug_Printf( Desk_error_PLACE "No icon to move to\n");
+	return -1;
+	
+	Desk_UNUSED( object);
+}
+
+
+
+
 
 void	MoveHighlight( Desk_wimp_point* newpos, iconhigh_direction direction, void* pw)
 /*
@@ -176,7 +372,7 @@ When direction=iconhigh_direction_NEAREST, we move to the nearest icon.
 		Desk_Coord_RectToWorkArea( &screenrect_wa, (Desk_convert_block*) &info->block.screenrect);
 			
 		#ifdef iconhigh_DAYTONA
-			{
+		{
 			ObjectId	object;
 			ComponentId	component;
 			
@@ -184,61 +380,44 @@ When direction=iconhigh_direction_NEAREST, we move to the nearest icon.
 			Desk_Debug_Printf( Desk_error_PLACE "object=%i, component=%i\n", (int) object, (int) component);
 			
 			if ( object!=0)
-				{
-				int	numicons;
-				
-				     if ( direction==iconhigh_direction_NEXT)		component++;
-				else if ( direction==iconhigh_direction_PREV)		component--;
-				else if ( direction==iconhigh_direction_NEAREST)	component=0;
-				
-				Desk_Error2_CheckOS( gadget_get_icon_list( 0, object, component, NULL, 0, &numicons));
-				if ( numicons==1)
-					{
-					Desk_Error2_CheckOS( 
-						gadget_get_icon_list( 0, object, component, &besticon_number, sizeof( besticon_number), &numicons)
-						);
-					/*
-					if (numicons==1)
-						// This only works when the gadget has a single icon. If not, would
-						// have to look for a single icon that IconHigh_IgnoreIcon()
-						// returns FALSE for.
-						{
-						Desk_Wimp_GetIconState( mouse.window, mouse.icon, &besticon_block);
-						besticon_distancesquared	= 0;
-						}
-					*/
-					}
-				}
-			else	{	// Not a toolbox window, so move between icons instead, for testing purposes
+			{
+				int	step = 0;
+				if ( direction==iconhigh_direction_NEXT)	step = +1;
+				else if ( direction==iconhigh_direction_PREV)	step = -1;
+				besticon_number = GetNextIcon( object, component, info, mouse.icon, step);
+			}
+			
+			else
+			{	// Not a toolbox window, so move between icons instead, for testing purposes
 				int	step = 0;
 				Desk_Debug_Printf( Desk_error_PLACE "direction=%i\n", (int) direction);
 				
 				if ( direction==iconhigh_direction_NEAREST)
-					{	// Move to the first icon
+				{	// Move to the first icon
 					step = +1;
 					mouse.icon = -1;
-					}
+				}
 				else if ( direction==iconhigh_direction_NEXT)	step = +1;
 				else if ( direction==iconhigh_direction_PREV)	step = -1;
 				
 				if ( step)
-					{
+				{
 					int	i = mouse.icon;
 					for ( i=mouse.icon+step; i>=0 && i<info->block.numicons; i+=step)
-						{
+					{
 						Desk_Debug_Printf( Desk_error_PLACE "Looking at icon %i\n", i);
 						if ( !IconHigh_IgnoreIcon( &icons[ i]))
-							{
+						{
 							besticon_number			= i;
 							besticon_distancesquared	= 0;
 							Desk_Debug_Printf( Desk_error_PLACE "Moving to icon %i\n", i);
 							break;
-							}
 						}
 					}
 				}
 			}
-		#else
+		}
+		#else	// #ifdef iconhigh_DAYTONA
 			
 			mouse_workarea.x = mouse.pos.x + info->block.scroll.x - info->block.screenrect.min.x;
 			mouse_workarea.y = mouse.pos.y + info->block.scroll.y - info->block.screenrect.max.y;
@@ -320,7 +499,7 @@ When direction=iconhigh_direction_NEAREST, we move to the nearest icon.
 				besticon_number = -1;	// Cancel previous best icon - this will result in move out of window.
 			}
 		
-		#endif	// #ifdef iconhigh_DAYTONA
+		#endif	// #ifdef iconhigh_DAYTONA #else
 		
 		if ( besticon_number != -1)	{	// We have a winner!
 			
@@ -347,6 +526,7 @@ When direction=iconhigh_direction_NEAREST, we move to the nearest icon.
 					// Move input focus to the new icon.
 					// Desk_Icon_SetCaret( mouse.window, besticon_number
 					{
+					/*
 					Desk_caret_block caret;
 					caret.window	= mouse.window;
 					caret.icon	= besticon_number;
@@ -354,11 +534,12 @@ When direction=iconhigh_direction_NEAREST, we move to the nearest icon.
 					caret.offset.x	= 0;
 					caret.offset.y	= 0;
 					caret.index	= 0;
-					if (	   icon->flags.data.buttontype!=Desk_iconbtype_WRITECLICKDRAG 
-						&& icon->flags.data.buttontype!=Desk_iconbtype_WRITABLE
+					*/
+					if (	   icon->flags.data.buttontype==Desk_iconbtype_WRITECLICKDRAG 
+						|| icon->flags.data.buttontype==Desk_iconbtype_WRITABLE
 						)
-						caret.window	= -1;
-					Desk_Wimp_SetCaretPosition( &caret);
+						Desk_Icon_SetCaret( mouse.window, besticon_number);	// Places caret at end of text
+					else	Desk_Icon_SetCaret( -1, -1);	// Lose caret.
 					}
 				#endif
 				
