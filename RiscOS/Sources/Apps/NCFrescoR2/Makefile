@@ -1,4 +1,5 @@
-# Makefile for NCFresco2, HTTP2, WebFTP2 - resource export and final link only
+# Makefile for NCFresco2, HTTP2, WebFTP2 - resource export, export headers
+# and final link only
 #
 
 #
@@ -99,6 +100,7 @@ resources_NCFresco_base:
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${RESRES}.html.histr     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histt     -o ${RESRES}.html.histt     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${RESRES}.html.alert     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.prompt    -o ${RESRES}.html.prompt    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${RESRES}.html.okcncl    ${TRFLAGS}
@@ -149,6 +151,7 @@ install_NCFresco:
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLDIR}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLDIR}.html.histr     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histt     -o ${INSTALLDIR}.html.histt     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLDIR}.html.alert     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLDIR}.html.prompt    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${INSTALLDIR}.html.okcncl    ${TRFLAGS}
@@ -186,11 +189,29 @@ export_NCFresco_hdrs:
         ${CP} h.ANT_Msg ${EXP_HDR}.h.ANT_Msg ${CPFLAGS}
         @echo ${COMPONENT}: export complete(hdrs)
 
-export_HTTP:
+export_HTTP: export_HTTP_${PHASE}
         @echo ${COMPONENT}: export complete
 
-export_WebFTP:
+export_HTTP_libs:
+        @echo ${COMPONENT}: export complete(libs)
+
+export_HTTP_hdrs:
+        ${CP} h.accstatus ${EXP_HDR}.h.accstatus ${CPFLAGS}
+        ${CP} h.httpdefs ${EXP_HDR}.h.httpdefs ${CPFLAGS}
+        ${CP} h.httpmod ${EXP_HDR}.h.httpmod ${CPFLAGS}
+        @echo ${COMPONENT}: export complete(hdrs)
+
+export_WebFTP: export_WebFTP_${PHASE}
         @echo ${COMPONENT}: export complete
+
+export_WebFTP_libs:
+        @echo ${COMPONENT}: export complete(libs)
+
+export_WebFTP_hdrs:
+        ${CP} h.accstatus ${EXP_HDR}.h.accstatus ${CPFLAGS}
+        ${CP} h.webftpdefs ${EXP_HDR}.h.webftpdefs ${CPFLAGS}
+        ${CP} h.webftpmod ${EXP_HDR}.h.webftpmod ${CPFLAGS}
+        @echo ${COMPONENT}: export complete(hdrs)
 
 #
 # Final link for the ROM Image (using given base address)
