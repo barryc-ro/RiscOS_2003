@@ -27,20 +27,17 @@ static u_int bs_hiwater = 0;
 static u_int bs_overflows = 0;
 static u_int bs_underflows = 0;
 static u_int bs_lowbufs = 0;
+static u_int bs_vlowbufs = 0;
 static int bufs_used = 0;
 
 int bs_minbufs_check = 0;
-
-static int callbs = 0;
-static int callbreqs = 0;
-
-int skipcnt = 0;
 
 extern int n_bs_buffers;
 extern int bs_bufsize;
 extern int mpeg_handle;
 extern int bs_minbufs;
 extern u_long bs_bytes_sent;
+extern int do_debug;
 
 extern struct bs_buffer *bs_current_buf;
 extern int bs_current_residue;
@@ -75,8 +72,6 @@ void init_mpeg_buffers()
       init_bs_buffers();
     }
     reinit_bs_buffers();
-    callbs = 0;
-    callbreqs = 0;
 }
 
 
@@ -85,19 +80,21 @@ void print_bufs()
     int nbufs = bs_empty_q_cnt();
 
     printf("Buffers:\n");
-    printf("    Empty bufs=%d (of %d)\n",nbufs, n_bs_buffers);
-    printf("    bs_queued=%d, bs_sent=%d, bs_returned=%d, bs_inuse=%d\n",
+    printf("    Empty bufs: %d (of %d)\n",nbufs, n_bs_buffers);
+    printf("    bs_queued: %d bs_sent: %d bs_returned: %d bs_inuse: %d\n",
                 bs_saved, bs_sent, bs_received, bufs_used);
-    printf("    bs_underflows=%d, bs_lowbufs=%d\n", bs_underflows, bs_lowbufs);
-    printf("    bs_overflows=%d, bs_hiwater=%d\n", bs_overflows, bs_hiwater);
-    if (bs_sent > 0)
+    printf("    bs_underflows: %d bs_lowbufs: %d (<=%d) : %d (<=%d)\n",
+                bs_underflows, bs_vlowbufs, bs_minbufs/2, bs_lowbufs, bs_minbufs);
+    printf("    bs_overflows: %d bs_hiwater: %d\n", bs_overflows, bs_hiwater);
+    if (do_debug)
     {
-      printf("    bs_buf average content=%d\n", bs_bytes_sent/bs_sent);
+      if (bs_sent > 0)
+      {
+        printf("    bs_buf average content=%d\n", bs_bytes_sent/bs_sent);
+      }
+      printf("    Empty_q=%p, emptyp=%p, Full_q=%p, fullp=%p\n",
+                  bs_empty_q, bs_emptyp, bs_full_q, bs_fullp);
     }
-#ifdef DEBUG
-    printf("    Empty_q=%p, emptyp=%p, Full_q=%p, fullp=%p\n",
-                bs_empty_q, bs_emptyp, bs_full_q, bs_fullp);
-#endif
 }
 
 
@@ -158,7 +155,8 @@ void reinit_bs_buffers(void)
     bufs_used     = 0;
     bs_bytes_sent = 0;
     bs_underflows = 0;
-    bs_lowbufs   = 0;
+    bs_lowbufs    = 0;
+    bs_vlowbufs   = 0;
     bs_overflows  = 0;
     bs_hiwater    = 0;
     bs_minbufs_check   = 0;
@@ -171,7 +169,7 @@ void reinit_bs_buffers(void)
  */
 int return_empty_buf(struct bs_buffer *b, int flag)
 {
-    if (b != 0)
+    if (b != NULL)
     {
         int s = ensure_irqs_off();
         bs_received++;
@@ -183,18 +181,23 @@ int return_empty_buf(struct bs_buffer *b, int flag)
            bs_emptyp->bs_next = b;
         bs_emptyp = b;
 
-        restore_irqs(s);
         if (flag)
         {
-          if (bufs_used <= 1) /* only bs_buf in use is one filling */
+          if ((bufs_used == 0) || ((bufs_used == 1) && (bs_current_buf != NULL)))
           {
+            /* no bs_bufs in use or only one is the one currently filling */
             bs_underflows++;
           }
           if (bufs_used <= bs_minbufs) /* Allow for the one being filled */
           {
             bs_lowbufs++;
           }
+          if (bufs_used <= bs_minbufs/2) /* Allow for the one being filled */
+          {
+            bs_vlowbufs++;
+          }
         }
+        restore_irqs(s);
     }
     return(1);
 }
@@ -249,16 +252,12 @@ void save_full_buf(struct bs_buffer * b, int datalost)
 {
     int s = ensure_irqs_off();
     b->bs_next = 0;
-
-    if (skipcnt > 0)
-    {
-        b->bs_offset = b->bs_data + skipcnt;
-        b->bs_len -= skipcnt;
-    }
-    else
-    {
-        b->bs_offset = b->bs_data;
-    }
+    /* Removed the skip of skipcnt bytes from head of buffer, since buffers
+     * are now completely filled with data, and strung together as required
+     * to handle received frames, hence what is at the head of a bs_buffer
+     * is now completely arbitary.
+     */
+    b->bs_offset = b->bs_data;
 
     if (bs_fullp == 0)
     {
