@@ -1387,6 +1387,7 @@ static int fe_transient_set_size(fe_view v)
 	break;
 
     case fe_position_CENTERED:
+    case fe_position_UNSET:
     {
 	int h = -v->doc_height;
 	if (h < DBOX_SIZE_Y)
@@ -1401,7 +1402,6 @@ static int fe_transient_set_size(fe_view v)
     }
     
     case fe_position_FULLSCREEN:
-    case fe_position_UNSET:
 	/* do nothing */
 	break;
 
