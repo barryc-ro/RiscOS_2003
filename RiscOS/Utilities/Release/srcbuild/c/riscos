@@ -28,6 +28,7 @@
 
 #include "srcbuild.h"
 #include "riscos.h"
+#include "parse.h"
 
 /*
  * contains all non-portable functions
@@ -37,14 +38,12 @@
  * globals
  */
 int spooling = FALSE;
-extern char *build_dir;
-extern int verbose;
 
 
 #ifdef RISCOS
 #else
 enum {
-  max_env_vars = 512
+  max_env_vars = 1024 /* Remember this includes all the territory mappings! */
 };
 static HashTable env;
 static HashId vars[max_env_vars];
@@ -296,27 +295,37 @@ char **sb_putenv(void)
 */
 int sb_return_country_number(const char* country)
 {
+  char *env = malloc(strlen(country) + sizeof(TERR_NUM_PFX));
+  char *val;
+  int result = -1;
+
+  if (env) {
+    sprintf(env, "%s%s", TERR_NUM_PFX, country);
+    val = sb_getenv(env);
+    free(env);
+    if (val) {
+      result = (int) strtoul(val, NULL, 0);
+      if (result == 0) result = -1;
+    }
+  }
+  else {
+    error(1, "out of memory in return_country_number");
+  }
+
 #ifdef RISCOS
-  _kernel_swi_regs reg;
-  int return_value = 0;
+  if (result == -1) {
+    int unclaimed;
 
-  reg.r[1] = Service_International;
-  reg.r[2] = 0;              /* sub-reason code 0 */
-  reg.r[3] = (int)country;   /* The country we require (NULL terminated) */
-  reg.r[4] = 0;
-  _kernel_swi(OS_ServiceCall, &reg, &reg);
-
-  if (reg.r[1] != 0)
-    return_value = -1; /* Unrecognised country */
-  else
-    return_value = reg.r[4];
-
-  return (return_value);
-#else
-  if (cstrcmp(country, "UK") == 0) return 1;
-  sb_fprintf(stderr, "sb_return_country_number: not implemented properly yet\n");
-  return -1;
+    /* Service_International, sub-reason code 0 */
+    if (_swix(OS_ServiceCall, _INR(1,4)|_OUT(1)|_OUT(4),
+        Service_International, 0, country, 0,
+        &unclaimed, &result)
+        || unclaimed)
+          result = -1;
+  }
 #endif
+
+  return result;
 }
 
 /*
@@ -375,6 +384,55 @@ int sb_buildfilename(int bufsize, char *buffer, ...)
   return p - buffer;
 }
 
+static void sb_init_territories(void)
+{
+  char temporary[32]; /* Magic - longer than all the following strings */
+
+  /* If you really do want to update this list of defaults, then you should probably
+   * use MkDefaults BASIC program in the docs directory to pull the current set out
+   * of the machine you are using (after softloading an updated International module
+   * of course.
+   */
+
+  (void) parse_territory_entry(strcpy(temporary, "1=UK"));
+  (void) parse_territory_entry(strcpy(temporary, "4=Italy"));
+  (void) parse_territory_entry(strcpy(temporary, "5=Spain"));
+  (void) parse_territory_entry(strcpy(temporary, "6=France"));
+  (void) parse_territory_entry(strcpy(temporary, "7=Germany"));
+  (void) parse_territory_entry(strcpy(temporary, "8=Portugal"));
+  (void) parse_territory_entry(strcpy(temporary, "9=Esperanto"));
+  (void) parse_territory_entry(strcpy(temporary, "10=Greece"));
+  (void) parse_territory_entry(strcpy(temporary, "11=Sweden"));
+  (void) parse_territory_entry(strcpy(temporary, "12=Finland"));
+  (void) parse_territory_entry(strcpy(temporary, "14=Denmark"));
+  (void) parse_territory_entry(strcpy(temporary, "15=Norway"));
+  (void) parse_territory_entry(strcpy(temporary, "16=Iceland"));
+  (void) parse_territory_entry(strcpy(temporary, "17=Canada1"));
+  (void) parse_territory_entry(strcpy(temporary, "18=Canada2"));
+  (void) parse_territory_entry(strcpy(temporary, "19=Canada"));
+  (void) parse_territory_entry(strcpy(temporary, "20=Turkey"));
+  (void) parse_territory_entry(strcpy(temporary, "22=Ireland"));
+  (void) parse_territory_entry(strcpy(temporary, "24=Russia"));
+  (void) parse_territory_entry(strcpy(temporary, "26=Israel"));
+  (void) parse_territory_entry(strcpy(temporary, "27=Mexico"));
+  (void) parse_territory_entry(strcpy(temporary, "28=LatinAm"));
+  (void) parse_territory_entry(strcpy(temporary, "29=Australia"));
+  (void) parse_territory_entry(strcpy(temporary, "30=Austria"));
+  (void) parse_territory_entry(strcpy(temporary, "31=Belgium"));
+  (void) parse_territory_entry(strcpy(temporary, "32=Japan"));
+  (void) parse_territory_entry(strcpy(temporary, "33=MiddleEast"));
+  (void) parse_territory_entry(strcpy(temporary, "34=Netherlands"));
+  (void) parse_territory_entry(strcpy(temporary, "35=Switzerland"));
+  (void) parse_territory_entry(strcpy(temporary, "36=Wales"));
+  (void) parse_territory_entry(strcpy(temporary, "48=USA"));
+  (void) parse_territory_entry(strcpy(temporary, "49=Wales2"));
+  (void) parse_territory_entry(strcpy(temporary, "50=China"));
+  (void) parse_territory_entry(strcpy(temporary, "51=Brazil"));
+  (void) parse_territory_entry(strcpy(temporary, "52=SAfrica"));
+  (void) parse_territory_entry(strcpy(temporary, "70=DvorakUK"));
+  (void) parse_territory_entry(strcpy(temporary, "71=DvorakUSA"));
+  (void) parse_territory_entry(strcpy(temporary, "80=ISO1"));
+}
 
 void sb_init(void)
 {
@@ -387,6 +445,7 @@ void sb_init(void)
    * in-process.
    */
 #endif
+  sb_init_territories();
 }
 
 #ifndef RISCOS
@@ -446,6 +505,16 @@ int sb_system(char *command)
 #ifdef RISCOS
   return system(command);
 #else
+  /* UNIX builds will fork() and exec() the child process.  Note that this function
+   * is written carefully to avoid building the environment in the parent process,
+   * avoid building the argument list in the parent process, avoid resolving the
+   * path in the parent process, and avoid destroying the command parameter in the
+   * parent process.
+   *
+   * With care, this routine could be extended to not wait() for children immediately
+   * but to simply remember the child PID and allow sb_system_sync to reap the children.
+   * It may even be preferable to create a signal handler to sit and wait for SIGCHLD.
+   */
   pid_t pid;
   int status = -1;
   char **argv, **env, *path;
@@ -459,7 +528,9 @@ int sb_system(char *command)
        /* I am the child process and must never return */
       close(2);
       dup(1);
-      fclose(logfile);
+      if (logfile) {
+        fclose(logfile);
+      }
       argv = sb_makeargv(command); /* updates command to 0-terminate the filename */
       env = sb_putenv();
       path = sb_resolve_path(command);
@@ -471,8 +542,7 @@ int sb_system(char *command)
       break;
     default:
       /* I am the parent, pid is the child's PID */
-      wait(&status);
-      sb_printf("PARENT: exit status %d (%d)\n", status , status >> 8);
+      wait(&status); /* return value should equal child's pid */
       if ((status & 0xFF) == 0) {
         status = (status & 0xFF00) >> 8;
       }
@@ -480,6 +550,16 @@ int sb_system(char *command)
   }
 
   return status;
+#endif
+}
+
+void sb_system_sync(void)
+{
+#ifndef RISCOS
+  /* Nothing to do.  If we allow sb_system to fork and leave the task running in
+   * the background, we need to wait() for all the child processes to terminate
+   * here before returning.
+   */
 #endif
 }
 

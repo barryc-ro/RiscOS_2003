@@ -50,8 +50,18 @@ char *sigstr = NULL;
 char *signum = NULL;
 char *module_type_names[] =
 {ALL_MODULE_TYPES(ARRAY_ENTRY)};
+char *image_type_names[] = {
+  "rom", "exprom", "extrom", "other"
+};
 int verbose = FALSE;
 int strict = FALSE;
+
+#define MAX_JOIN_ENTRIES 256
+HashTable join_db;
+HashId join_entries[256];
+int join_db_hwm = 0;
+
+image_type_t image_type = image_type_unset;
 
 
 /* Create an array in which territories defined in the Env file can be stored.
@@ -350,10 +360,6 @@ read_shadow_component_database(char *filename)
 	    cp = extract_word(cp, &switch_on, TRUE);
 	  }
 	}
-/*         sb_printf("found option %s\n",CHK_STR(options)); */
-/*         sb_printf("found switch %s\n",CHK_STR(switch_on)); */
-/*         sb_printf("comp  option %s\n",CHK_STR(component->options)); */
-/*         sb_printf("comp  switch %s\n",CHK_STR(component->switch_on)); */
 
 	options_same = FALSE;
 	switch_same = FALSE;
@@ -401,6 +407,29 @@ read_shadow_component_database(char *filename)
   return (0);
 }
 
+
+static image_type_t srcbuild_parse_format(const char *f)
+{
+  int i;
+
+  for (i=0; (i+1)<(sizeof(image_type_names)/sizeof(*image_type_names)); ++i) {
+    if (cstrcmp(f, image_type_names[i]) == 0) break;
+  }
+
+  return (image_type_t) i;
+}
+
+static void srcbuild_add_option(char *option, char *value)
+{
+  if (!hash_enter(join_db, option, &join_entries[join_db_hwm])) {
+    free(hash_value(join_db, join_entries[join_db_hwm]));
+  }
+  hash_assoc(join_db, join_entries[join_db_hwm], value);
+  if (++join_db_hwm == MAX_JOIN_ENTRIES) {
+    error(1, "Too many joiner options in components file");
+  }
+}
+
 /*
  * read the components file into a linked list of records.
  */
@@ -423,16 +452,15 @@ read_component_database(char *filename)
   if (verbose)
     sb_printf("Using components file '%s'.\n", buffer);
 
-  while (!feof(file)) {
-    fgets(buffer, sizeof(buffer), file);
-    if (!feof(file)) {
+  if (1) {
+    while (fgets(buffer, sizeof(buffer), file)) {
       line_number++;
       chop_newline(buffer);
       if (buffer[0] != '#') {	/* ignore comments */
 	dependancy = NULL;
 
-	cp = buffer;
-	cp = extract_word(cp, &word, FALSE);	/* extract the name */
+        cp = extract_word(buffer, &word, FALSE);      /* extract the name */
+
 	if (word != NULL) {	/* ignore null lines */
 	  if (cstrcmp(word, "%log") == 0) {	/* deal with log file */
 	    cp = extract_word(cp, &log_filename, TRUE);
@@ -451,46 +479,58 @@ read_component_database(char *filename)
 	  } else if (cstrcmp(word, "%joinerformat") == 0) {
 	    /* deal with format */
 	    cp = extract_word(cp, &joiner_format, FALSE);
-	  } else if (cstrcmp(word, "%poduleproduct") == 0) {
-	    /* deal with podule bits */
-	    cp = extract_word(cp, &(podule_info.product), FALSE);
-	  } else if (cstrcmp(word, "%poduledescription") == 0) {
-	    podule_info.descript = sb_strdup(cp);
-	  } else if (cstrcmp(word, "%poduleserial") == 0) {
-	    cp = extract_word(cp, &(podule_info.serial), FALSE);
-	  } else if (cstrcmp(word, "%podulestatus") == 0) {
-	    cp = extract_word(cp, &(podule_info.status), FALSE);
-	  } else if (cstrcmp(word, "%podulemanufacture") == 0) {
-	    cp = extract_word(cp, &(podule_info.manuf), FALSE);
-	  } else if (cstrcmp(word, "%podulepart") == 0) {
-	    cp = extract_word(cp, &(podule_info.part), FALSE);
-	  } else if (cstrcmp(word, "%poduledate") == 0) {
-	    cp = extract_word(cp, &(podule_info.date), FALSE);
-	  } else if (cstrcmp(word, "%sigstr") == 0) {
-	    /* deal with the signature word eg NCOS */
-	    cp = extract_word(cp, &sigstr, FALSE);
-	    if (signum && sigstr) {
-	      error(0, "dual signature declaration, using sigstr.");
-	    }
-	  } else if (cstrcmp(word, "%signum") == 0) {
-	    cp = extract_word(cp, &signum, FALSE);
-	    if (signum && sigstr) {
-	      error(0, "dual signature declaration, using sigstr.");
-	    }
-	  } else if (cstrcmp(word, "%include") == 0) {
-	    /* deal with includes */
-	    cp = extract_word(cp, &word, FALSE);
-	    if (cstrcmp(word, filename) == 0)
-	      error(1, "cannot recursively include '%s'.", filename);
-
-	    if (read_component_database(word))	/* recurse */
-	      goto exit_gracefully;
-	  } else if (cstrcmp(word, "%baseaddress") == 0) {
-	    cp = extract_word(cp, &base_address, FALSE);
-	    rom_base_address = strtoul(base_address, NULL, 0);
-	    if (rom_base_address == 0) {
-	      rom_base_address = 0x3800000;
-	    }
+          } else if (cstrcmp(word, "%include") == 0) {
+            /* deal with includes */
+            cp = extract_word(cp, &word, FALSE);
+            if (cstrcmp(word, filename) == 0)
+              error(1, "cannot recursively include '%s'.", filename);
+            if (read_component_database(word))  /* recurse */
+              goto exit_gracefully;
+          } else if (cstrcmp(word, "%format") == 0) {
+            cp = extract_word(cp, &word, FALSE);
+            image_type = srcbuild_parse_format(word);
+          } else if (*word == '%') {
+            /* Pass this option to romlinker */
+            char *data = NULL, *full = sb_strdup(cp);
+            cp = extract_word(cp, &data, FALSE);
+            srcbuild_add_option(word + 1, data?data:"");
+            if (cstrcmp(word, "%poduleproduct") == 0) {
+              podule_info.product = data;
+            } else if (cstrcmp(word, "%poduledescription") == 0) {
+              podule_info.descript = full;
+              full = NULL;
+            } else if (cstrcmp(word, "%poduleserial") == 0) {
+              podule_info.serial = data;
+            } else if (cstrcmp(word, "%podulestatus") == 0) {
+              podule_info.status = data;
+            } else if (cstrcmp(word, "%podulemanufacture") == 0) {
+              podule_info.manuf = data;
+            } else if (cstrcmp(word, "%podulepart") == 0) {
+              podule_info.part = data;
+            } else if (cstrcmp(word, "%poduledate") == 0) {
+              podule_info.date = data;
+            } else if (cstrcmp(word, "%sigstr") == 0) {
+              /* deal with the signature word+1 eg NCOS */
+              sigstr = data;
+              if (signum && sigstr) {
+                error(0, "dual signature declaration, using sigstr.");
+              }
+            } else if (cstrcmp(word, "%signum") == 0) {
+              signum = data;
+              if (signum && sigstr) {
+                error(0, "dual signature declaration, using sigstr.");
+              }
+            } else if (cstrcmp(word, "%baseaddress") == 0) {
+              base_address = data;
+              rom_base_address = strtoul(base_address, NULL, 0);
+              if (rom_base_address == 0) {
+                rom_base_address = 0x03800000;
+              }
+            }
+            else {
+              /* Don't free data - we've got a hash table pointer to it */
+            }
+            free(full);
 	  } else {
 	    if ((dependancy = strchr(word, ':')) != NULL) {
 	      *dependancy = 0;
@@ -613,6 +653,10 @@ exit_gracefully:
     fclose(file);
   if (word)
     free(word);
+
+  if (image_type == image_type_unset) {
+    image_type = image_type_main_rom;
+  }
 
   return (0);
 }
@@ -810,6 +854,10 @@ int main(int argc, char *argv[])
   err_init(program_name(argv[0], progname, sizeof(progname)));
   host_init();
   sb_init();
+  join_db = hash_new(MAX_JOIN_ENTRIES);
+  for (i=0; i<sizeof(join_entries)/sizeof(*join_entries); ++i) {
+    join_entries[i] = NULL;
+  }
 
   atexit(doexit);
 
@@ -841,33 +889,21 @@ int main(int argc, char *argv[])
   }
   first = i;			/* record first non flag argument */
 
-  /* We need to see if a locale_list has been defined. If it has, we need to split it into a lit of locales. */
+  /* If we don't have a list, but do have a single locale, set the locale list to be the single locale */
+  if (!sb_getenv(ENV_LOCALE_LIST) && sb_getenv(ENV_LOCALE)) {
+    sb_setenv(ENV_LOCALE_LIST, sb_getenv(ENV_LOCALE));
+  }
+
+  /* We need to see if a locale_list has been defined. If it has, we need to split it into a list of locales. */
   if ((locale_list = sb_strdup(sb_getenv(ENV_LOCALE_LIST))) != NULL)
   {
     if (!parse_territories(locale_list))
     {
-      /* An error occured whilst parsing the loale list. */
+      /* An error occured whilst parsing the locale list. */
       error (0, "Malformed Locale list detected.");
     }
     free (locale_list);
     locale_list = NULL; /* locale_list is no longer needed */
-  }
-  else
-  {
-    /* There was no locale list, so use the locale env instead. */
-    char* locale = NULL;
-    if ((locale = sb_strdup(sb_getenv(ENV_LOCALE))) != NULL)
-    {
-      supported_territories[num_of_territories++] = sb_strdup(locale);
-    }
-    /* The rest of the system expects the ENV_LOCALE_LIST var to be set. Set it to be the same as the locale. */
-    sb_setenv(ENV_LOCALE_LIST, locale);
-
-    if (locale) /* Usual memory-tidying gubbins */
-    {
-      free (locale);
-      locale = NULL;
-    }
   }
 
   /* Create a system variable based on the country codes. */
@@ -880,6 +916,7 @@ int main(int argc, char *argv[])
   for (loop=0; loop < num_of_territories; loop++)
   {
     int num = 0;
+    char *varname;
     char tempstr[5];
     num = sb_return_country_number(supported_territories[loop]);
     sb_printf("Country %s has a code of %d\n", supported_territories[loop], num);
@@ -889,6 +926,16 @@ int main(int argc, char *argv[])
     }
     sprintf(tempstr, "%02d", num);
     strcat(sys_var, tempstr);
+    sprintf(tempstr, "%d", num);
+    varname = malloc(strlen(supported_territories[loop]) + sizeof(TERR_NUM_PFX));
+    if (varname)
+    {
+      sprintf(varname, "%s%s", TERR_NUM_PFX, supported_territories[loop]);
+      sb_setenv(varname, tempstr);
+      sprintf(varname, "%s%s", TERR_NAME_PFX, tempstr);
+      sb_setenv(varname, supported_territories[loop]);
+      free(varname);
+    }
   }
   sb_setenv(ENV_NUM_LOCALE, sys_var);
   sb_printf("Numeric territory string is %s\n", sys_var);
@@ -909,6 +956,7 @@ int main(int argc, char *argv[])
 
   /* Call an initialision function for the build sequence */
   build_init();
+
 
   /*
    * read in our main files

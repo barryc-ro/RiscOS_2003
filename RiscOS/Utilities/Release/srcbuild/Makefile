@@ -5,7 +5,7 @@
 # ***********************************
 # Date        Name         Description
 # ----        ----         -----------
-# 19 Aug 1997 RWB 	   new srcbuild
+# 19 Aug 1997 RWB          new srcbuild
 # 05 Sep 1997 RWB          added install
 # 30 Apr 1999 DSC          Made to install into new library structure.
 # 09 Sep 1999 JPB          Added rules to auto create and clean "o"

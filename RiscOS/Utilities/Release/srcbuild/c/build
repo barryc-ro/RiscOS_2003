@@ -41,27 +41,13 @@
 #include "parse.h"
 #include "riscos.h"
 
-extern char *build_name;
-extern char *build_dir;
-extern char *image_filename;
-extern char *log_filename;
-extern char *image_size;
-extern char *messages_filename;
-extern char *module_type_names[];
-extern char *joiner;
-extern char *joiner_format;
-extern char *sigstr;
-extern char *signum;
-extern int verbose;
-extern module_entry_t *module_database;
-extern component_entry_t *component_database;
-
 /* The base address of a ROM image */
 unsigned long rom_base_address = 0x03800000ul;
 
 /* The contents of Alias$amu_machine */
 static char *amu_machine = NULL;
-void get_amu_machine(void);
+static void get_amu_machine(void);
+
 
 static const char corporate_copyright_for_bbe[] = "#"
   "\n# Copyright [2001] Pace Micro Technology PLC.  All rights reserved."
@@ -91,7 +77,6 @@ static int build_install_rom_(build_install_rom_reason_code);
 /* Internal function invoked by build_resources and build_bbe */
 static int build_resources_(build_resources_reason_code);
 
-extern podule_info_t podule_info;
 
 /*
  * perform a amu_machine call with printf style parameter passing
@@ -341,6 +326,8 @@ int build_clean(void)
     component = component->next;
   }
 
+  sb_system_sync();
+
   return 0;
 }
 
@@ -355,6 +342,8 @@ static int build_export(const char *phase)
   component_entry_t *component;
   module_entry_t *module;
   module_type_t type;
+
+  sb_system_sync();
 
   component = component_database;
   while (component) {
@@ -397,6 +386,8 @@ static int build_export(const char *phase)
     component = component->next;
   }
 
+  sb_system_sync();
+
   return 0;
 }
 
@@ -412,9 +403,10 @@ int build_export_libs(void)
 
 
 
-/* Executes a resources phase - or not as the parameter may be.  If generate_script is non-zero, then
- * it is assumed to be a resource export command discovery being done by build_bbe to generate the
- * script filenames for the resource exports, otherwise it is a real resource export.
+/* Executes a resources phase - or not as the parameter may be.  If reason_code is build_resources_normal,
+ * then it is a real resource export.  If it is build_resources_bbe_script, then it is assumed to be a
+ * resource export command discovery being done by build_bbe to generate the script filenames for the
+ * resource exports.
  */
 static int build_resources_(build_resources_reason_code reason_code)
 {
@@ -449,6 +441,7 @@ static int build_resources_(build_resources_reason_code reason_code)
     else
     {
       sprintf(buffer,"-k clean COMPONENT=Messages TARGET=Messages NUMLOCALE=%s", locale);
+      sb_system_sync();
       if (amu_machinef(buffer) != 0)
         error(0, "running make clean on module 'Messages'.");
     }
@@ -463,6 +456,8 @@ static int build_resources_(build_resources_reason_code reason_code)
     /* Build all the resource directories that are required. Can only be done after they have been cleaned as above. */
     build_dirs();
   }
+
+  sb_system_sync();
 
   /*
    * now get on with rest
@@ -522,6 +517,8 @@ static int build_resources_(build_resources_reason_code reason_code)
     }
     component = component->next;
   }
+
+  sb_system_sync();
 
   /* Finally change the locale back to the default one (the first in the list). */
   build_select_locale(supported_territories[0]);
@@ -798,6 +795,7 @@ int build_bbe(void)
 
           }
         }
+        sb_system_sync();
         strcpy(end_rom_link_name, "_v");
         rom_link_file = fopen(rom_link_name, "r");
         if (rom_link_file)
@@ -1059,6 +1057,8 @@ build_install_rom_(build_install_rom_reason_code reason_code)
   char scriptfilename[BUFFER_LEN];
   char forcefilename[BUFFER_LEN];
 
+  sb_system_sync();
+
   if (reason_code == build_install_rom_bbe_script)
   {
     FILE *f;
@@ -1160,6 +1160,7 @@ build_install_rom_(build_install_rom_reason_code reason_code)
           }
 
           /* Need to stat the module file, display position in ROM */
+          sb_system_sync();
           size = build_get_filesize(output_path, module->filename);
 
 	  /* keep record of things for later */
@@ -1213,6 +1214,8 @@ build_install_rom_(build_install_rom_reason_code reason_code)
 
     ran_install_rom = (reason_code == build_install_rom_normal);
   }
+
+  sb_system_sync();
 
   return 0;
 }
@@ -1354,10 +1357,10 @@ static int joiner_format_makeexprom(FILE * fh)
 
   /* warn if things are not ok */
   if (kernel_count >= 1)
-    error(0, "you appear to have a kernel in an expansion ROM!");
+    error(1, "you appear to have a kernel in an expansion ROM!");
 
   if (hal_count >= 1)
-    error(0, "you appear to have a HAL in an expansion ROM!");
+    error(1, "you appear to have a HAL in an expansion ROM!");
 
   /* write out the image filename */
   sb_buildfilename(BUFFER_LEN, buffer, build_dir, IMAGES_DIR, image_filename, NULL);
@@ -1427,15 +1430,32 @@ static int joiner_format_romlinker(FILE * fh)
   component_entry_t *component;
   module_entry_t *module;
   module_type_t type;
-  int hal_count = 0;
-  int kernel_count = 0;
-  int size_printed = 0;
+  component_entry_t *hal = NULL;
+  component_entry_t *kernel = NULL;
+  component_entry_t *loader = NULL;
+  int i;
   unsigned long base = rom_base_address;
+  unsigned long image_size_num;
   char buffer[BUFFER_LEN];
 
-  /* Only if it's a ROM target though :-/ */
-  if (!ran_install_rom) {
+  /* We need to know the size information for each component */
+  if (!ran_install_rom && image_type == image_type_main_rom) {
     build_install_rom_(build_install_rom_size_calculation);
+  }
+
+  image_size_num = strtoul(image_size, NULL, 0);
+  if (image_type == image_type_extension_rom && (image_size_num & 3)) {
+    error(1, "Extension ROMs must be a multiple of 4K long");
+  }
+  image_size_num *= 1024ul;
+
+  fprintf(fh, "-format\n%s\n", image_type_names[image_type]);
+
+  sb_buildfilename(BUFFER_LEN, buffer, build_dir, IMAGES_DIR, image_filename, NULL);
+  fprintf(fh, "-imagename\n%s\n-imagesize\n%lu\n", buffer, image_size_num);
+
+  for (i = 0; i < join_db_hwm; ++i) {
+    fprintf(fh, "-%s\n%s\n", hash_key(join_db, join_entries[i]), hash_value(join_db, join_entries[i]));;
   }
 
   /* look for kernel */
@@ -1447,40 +1467,49 @@ static int joiner_format_romlinker(FILE * fh)
       type = module->type;
 
     if (type == HAL) {
-      fprintf(fh, "HAL:%s\n", build_generate_installed_name(BUFFER_LEN, buffer, module));
-      hal_count++;
+      if (hal) {
+        error(1, "you appear to have more than one HAL in this ROM");
+      }
+      if (image_type == image_type_extension_rom || image_type == image_type_expansion_rom) {
+        error(1, "you appear to have a kernel in an expansion ROM/expansion card!");
+      }
+      hal = component;
     }
     else if (type == KERNEL) {
-      if (component->force_position)
-        fprintf(fh, "%lu\n", component->force_position - base);
-      fprintf(fh, "%s\n", build_generate_installed_name(BUFFER_LEN, buffer, module));
-      kernel_count++;
+      if (kernel) {
+        error(1, "you appear to have more than one kernel in this ROM");
+      }
+      if (image_type == image_type_extension_rom || image_type == image_type_expansion_rom) {
+        error(1, "you appear to have a kernel in an expansion ROM/expansion card!");
+      }
+      kernel = component;
     }
     else if (type == LOADER) {
-      error(0, "you appear to have an extension ROM/expansion card loader in this ROM");
+      if (loader) {
+        error(1, "you appear to have more than one loader in this ROM");
+      }
+      if (image_type == image_type_main_rom) {
+        error(0, "you appear to have an expansion card/extension ROM loader in this ROM");
+      }
+      loader = component;
     }
 
-    if (hal_count + kernel_count == 1 && !size_printed) {
-      /* write out the image filename */
-      sb_buildfilename(BUFFER_LEN, buffer, build_dir, IMAGES_DIR, image_filename, NULL);
-      fprintf(fh, "%s\n", buffer);
-
-      /* write out the image size and misc newline (for "extra information") */
-      fprintf(fh, "%d\n\n", atoi(image_size) * 1024);
-
-      size_printed = 1;
-    }
     component = component->next;
   }
 
-  /* warn if things are not ok */
-  if (kernel_count > 1)
-    error(0, "you appear to have more than one kernel in this ROM");
-  else if (kernel_count < 1)
-    error(0, "you seem to be missing a kernel in this ROM");
+  if (hal) {
+    fprintf(fh, "HAL:%s\n", build_generate_installed_name(BUFFER_LEN, buffer, lookup_module(hal->name)));
+  }
 
-  if (hal_count > 1)
-    error(0, "you appear to have more than one HAL in this ROM");
+  if (kernel) {
+    if (kernel->force_position)
+      fprintf(fh, "%lu\n", component->force_position - base);
+    fprintf(fh, "%s\n", build_generate_installed_name(BUFFER_LEN, buffer, lookup_module(kernel->name)));
+  }
+
+  if (loader) {
+    fprintf(fh, "LOADER:%s\n", build_generate_installed_name(BUFFER_LEN, buffer, lookup_module(loader->name)));
+  }
 
   /* now write out the other modules in order */
   component = component_database;
@@ -1491,11 +1520,6 @@ static int joiner_format_romlinker(FILE * fh)
       type = module->type;
 
     switch (type) {
-      case LOADER:
-        if (module->filename != NULL) {
-          fprintf(fh, "LOADER:");
-        }
-        /*FALLTHROUGH*/
       case ASM:
       case C:
       case BAS:
@@ -1509,7 +1533,6 @@ static int joiner_format_romlinker(FILE * fh)
     }
     component = component->next;
   }
-  fprintf(fh, "\n");
 
   return 0;
 }
@@ -1523,6 +1546,7 @@ build_join(void)
   FILE *fh = NULL;
   char *redir_start = " < ";
   char *redir_end = " ";
+  int system_result;
 
 #ifdef RISCOS
   if (host_system() == _kernel_ARTHUR) {
@@ -1540,7 +1564,7 @@ build_join(void)
   tmpnam(filename);
 
   if ((fh = fopen(filename, "w")) == NULL)
-    error(1, "cannot open temp file '%s'.", filename);
+    error(1, "cannot open temporary file '%s' for joiner data file.", filename);
 
   /* contruct the joiner file */
   if (cstrcmp(joiner_format, "BigSplit") == 0)
@@ -1562,7 +1586,7 @@ build_join(void)
     if (sigstr) {
       sprintf(buffer, "%s -sigstr %s ", joiner, sigstr);
     } else if (signum) {
-      sprintf(buffer, "%s -sigstr %s ", joiner, sigstr);
+      sprintf(buffer, "%s -sigstr %s ", joiner, signum);
     } else {
       sprintf(buffer, "%s -nosig ", joiner);
     }
@@ -1573,21 +1597,22 @@ build_join(void)
     sprintf(buffer, "%s %s %s %s", joiner, redir_start, filename, redir_end);
   }
   else if (cstrcmp(joiner, "romlinker") == 0) {
-    sprintf(buffer, "%s -format rom -modules %s", joiner, filename);
-    if (sigstr) {
-      strcat(buffer, " -sigstr ");
-      strcat(buffer, sigstr);
-    }
+    sprintf(buffer, "%s -via %s", joiner, filename);
   }
   else {
     error(1, "Unknown joiner '%s'", joiner);
   }
 
-  /* dispatch the joiner */
-  if (sb_system(buffer) != 0)
-    error(1, "running joiner '%s' with file '%s'.", joiner, filename);
 
+  /* dispatch the joiner */
+  sb_system_sync();
+  system_result = sb_system(buffer);
+  sb_system_sync();
   remove(filename);
+
+  if (system_result != 0) {
+    error(1, "running joiner '%s' with file '%s'.", joiner, filename);
+  }
 
   return 0;
 }
@@ -1617,10 +1642,9 @@ build_list(void)
 }
 
 
-void get_amu_machine(void)
+static void get_amu_machine(void)
 {
   char *s;
-  char buffer[300];
 
   if (amu_machine)
   {
@@ -1630,7 +1654,7 @@ void get_amu_machine(void)
   /* Grab the sysvar */
   amu_machine = sb_strdup(sb_getenv(AMUMACHINEVAR));
 
-  if (DEBUG)
+  if (verbose > 2)
   {
     sb_printf("amu_machine now = %s\n", amu_machine);
   }
@@ -1641,12 +1665,14 @@ void get_amu_machine(void)
     *s = '\0';
 
   /* gstrans it... */
-  _swix (OS_GSTrans, _INR(0,3),
-           amu_machine, buffer, 300, 0);
-  strcpy (amu_machine, buffer);
+  {
+    char buffer[512];
+    _swix(OS_GSTrans, _INR(0,3), amu_machine, buffer, sizeof(buffer), 0);
+    free(amu_machine);
+    amu_machine = sb_strdup(buffer);
+  }
 
-
-  if (DEBUG)
+  if (verbose > 2)
   {
     sb_printf("amu_machine now = %s\n", amu_machine);
   }
@@ -1685,6 +1711,8 @@ build_install(void)
   if ((fh_shadow = fopen(buffer, "w")) == NULL)
     error(1, "cannot open shadow file '%s'.", buffer);
 
+  sb_system_sync();
+
   component = component_database;
   while (component) {
     module = lookup_module(component->name);
@@ -1711,6 +1739,7 @@ build_install(void)
 		component->options ? component->options : "",
 		component->name) != 0)
 	      error(0, "running make clean on module '%s'.", component->name);
+              sb_system_sync();
 	  }
 	  /*
 	   * find out what we are switching this module on
@@ -1770,6 +1799,8 @@ build_install(void)
 
   if (fh_shadow)
     fclose(fh_shadow);
+
+  sb_system_sync();
 
   return 0;
 }
