@@ -61,7 +61,7 @@ COMPONENT = http
 TARGET    = aof.${COMPONENT}
 OBJS      = mimemap.o files.o http.o modhead.o
 SECUREOBJS= os.mimemap os.files os.http modheadS.o
-EXPORTS   = h.httppub
+EXPORTS   = h.httppub h.pads
 
 .SUFFIXES:   .os
 
@@ -87,6 +87,7 @@ rom: ${TARGET}
 
 export: ${EXPORTS}
         ${CP} h.httppub ${EXP_HDR}.h.http ${CPFLAGS}
+        ${CP} h.pads ${EXP_HDR}.h.pads ${CPFLAGS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
