@@ -107,7 +107,8 @@ static void task__delete (TaskDescriptor *t)
     if (t->info.dir_name != NULL)
         mem_free (t->info.dir_name, "removing dir name");
 
-    if (t->info.sprite_area != NULL && t->info.sprite_area != (void *)1)
+    if (t->info.sprite_area != NULL && t->info.sprite_area != (void *)1 &&
+        !t->info.sprite_area_in_resourcefs)
         mem_free (t->info.sprite_area, "removing sprite area");
 
     if (t->toolbox_event_list != NULL)
@@ -387,19 +388,21 @@ static _kernel_oserror *task__try_sprite_load (TaskDescriptor *t, char *filename
      * area
      */
 
-    _kernel_swi_regs regs;
     _kernel_oserror *e = NULL;
     int              area_len;
     int             *sprite_area;
+    int              file_handle;
+    int              object_type;
+    int              file_length;
+    int              internal_handle;
+    int              filing_system;
 
     *report_error = FALSE;
 
     DEBUG debug_output ("start", "T:Try sprite load %s\n", filename);
 
     /* read catalogue info for the file */
-    regs.r[0] = 17;     /* no path */
-    regs.r[1] = (int)filename;
-    if ((e = _kernel_swi (OS_File, &regs, &regs)) != NULL)
+    if ((e = _swix (OS_File, _INR(0,1)|_OUT(0)|_OUT(4), 17, filename, &object_type, &file_length)) != NULL)
     {
         *report_error = TRUE;
         return e;
@@ -407,34 +410,57 @@ static _kernel_oserror *task__try_sprite_load (TaskDescriptor *t, char *filename
 
     DEBUG debug_output ("start", "T:Read catalogue info\n");
 
-    if (regs.r[0] != 1)    /* file not found */
+    if (object_type != 1)    /* file not found */
     {
         *report_error = FALSE;
         return make_error (Toolbox_NoMem, 0);
     }
 
-    area_len = regs.r[4] + sizeof(int);   /* area is file contents plus length word */
-
-    if ((sprite_area = (int *)mem_allocate (area_len, "sprite area")) == NULL)
-    {
-        *report_error = TRUE;
-        return make_error (Toolbox_NoMem, 0);
-    }
-
-    /* initialise the sprite area */
-    sprite_area[0] = area_len;
-    sprite_area[1] = 0;
-    sprite_area[2] = 16;
-    sprite_area[3] = 16;
-
-    /* load the sprites file */
-    regs.r[0] = 10 + 256;              /* load in user area */
-    regs.r[1] = (int)sprite_area;
-    regs.r[2] = (int)filename;
-    if ((e = _kernel_swi (OS_SpriteOp, &regs, &regs)) != NULL)
+    /* Check to see if it's in ResourceFS */
+    if ((e = _swix (OS_Find, _INR(0,1)|_OUT(0), 0x4F, filename, &file_handle)) != NULL)
     {
         *report_error = TRUE;
         return e;
+    }
+
+    e = _swix (OS_FSControl, _INR(0,1)|_OUTR(1,2), 21, file_handle, &internal_handle, &filing_system);
+
+    _swix (OS_Find, _INR(0,1), 0, file_handle); /* close the file */
+
+    if (e)
+    {
+        *report_error = TRUE;
+        return e;
+    }
+
+    if ((filing_system & 0xFF) == 46)
+    {
+        sprite_area = (int *)internal_handle - 1; /* take a direct pointer */
+        t->info.sprite_area_in_resourcefs = 1;
+    }
+    else
+    {
+        area_len = file_length + sizeof(int);   /* area is file contents plus length word */
+
+        if ((sprite_area = (int *)mem_allocate (area_len, "sprite area")) == NULL)
+        {
+            *report_error = TRUE;
+            return make_error (Toolbox_NoMem, 0);
+        }
+
+        /* initialise the sprite area */
+        sprite_area[0] = area_len;
+        sprite_area[1] = 0;
+        sprite_area[2] = 16;
+        sprite_area[3] = 16;
+
+        /* load the sprites file */
+        if ((e = _swix(OS_SpriteOp, _INR(0,2), 10 + 256, sprite_area, filename)) != NULL)
+        {
+            *report_error = TRUE;
+            return e;
+        }
+        t->info.sprite_area_in_resourcefs = 0;
     }
 
     /* record the sprite area pointer */
