@@ -1,0 +1,245 @@
+/************************************************************************/
+/* File:    laguna.c                                                      */
+/* Purpose: Main file for Laguna.                                       */
+/*          Initialises and the polls the wimp for messages.            */                                              
+/*          Does not use the toolbox, should allow Laguna to run in     */
+/*          a 'cut down' OS                                             */              
+/* Author:  Nick Evans (mailto:NCEvans@acorn.com)                       */
+/* History: 22nd Oct 1997  ver 0.01 - Created.                          */
+/************************************************************************/
+
+#define DEBUGLIB 1
+#include <time.h>
+#include <wimp.h>
+
+#include "BuildFlags.h"
+#include "main.h"
+#include "functions.h"
+#include "FileOps.h"
+#include "DaytonaHW.h"
+#include "Serial.h"
+#include "LogFileIF.h"
+#include "PageList.h"
+#include "StateKicker.h"
+#include "AddrFile.h"
+#include "AddrBookIF.h"
+#include "DataArea.h"
+#include "TextTiffIF.h"
+#include "FaxIF.h"
+#include "ZModemIF.h"
+#include "SetupIF.h"
+#include "TaskModIF.h"
+
+
+
+#define Wimp_FaxRC   0x50483	/* return codes from !Fax */
+
+
+IdBlock    event_id_block;             /* declare an event block for use with toolbox initialise */
+int        current_wimp;               /* the current version of the wimp we are using */
+int        task_id;                    /* and our task handle */
+int        quit = 0;                   /* declare a flag to indicate when we should quit */
+
+/* This array tells toolbox initialise which wimp messages we want to know about */
+
+/*old
+static int wimp_messages[]  = {
+				Wimp_MDaytonaHW_LocalFaxReceiver,
+				Wimp_MDaytonaHW_FakeExchange,
+				Wimp_FaxRC,
+				Wimp_ZModemRC,
+                                Other_Program_Window_Message,
+                                Wimp_MPreQuit,
+                                Wimp_MText2TIFFed,
+                                Wimp_MQuit
+                              };
+*/
+
+static int wimp_messages[]  = {
+				Wimp_MDaytonaHW_LocalFaxReceiver,
+				Wimp_MDaytonaHW_FakeExchange,
+				Wimp_FaxRC,
+				WM_ZMODEM_TRANSFERRESULT,						
+				Wimp_MText2TIFFed,
+                                Other_Program_Window_Message,
+                                Message_Service,
+                                Wimp_MPreQuit,
+                                Wimp_MQuit
+                              };
+
+
+/************************************************************************/
+/* ticker_handler                                                       */
+/*                                                                      */
+/* Parameters: WimpEventHandler parameters.                             */
+/*                                                                      */
+/* Returns:    TRUE or FALSE.                                           */
+/*                                                                      */
+/************************************************************************/
+int ticker_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+{
+    static int count = 0;    
+	RemModem_PollStatus();  	/* look for pollword changes */
+
+#if 1 /* Enable/disable the 'automagic' transfer */
+    switch (count)
+    {
+    	case 0:
+		PrintQ_TickerHandler();	/*>>> a lower poll frequency of 1Hz would be fine for this */
+	break;
+
+	case 3:
+        	SendQ_TickerHandler();	/*>>> a lower poll frequency of 1Hz would be fine for this */
+        break;
+    }
+#endif
+    if (++count == 6)
+    	count = 0;
+
+    return(TRUE);
+}
+
+
+/************************************************************************/
+/* initialise                                                           */
+/*                                                                      */
+/* Function is called from main() to setup various things vital to the  */
+/* program including Toolbox registration, message handle creation...   */
+/*                                                                      */
+/* Parameters: void.                                                    */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void initialise(void)
+{
+  _kernel_oserror *er;
+  
+  er = TaskModIF_Initialise();
+  error_check_exit(er);
+  
+  er = Serial_Open_Ports();	/*>>>always returns NULL???*/
+  error_check_exit(er);
+#if RELEASE_BUILD
+/*should be switched in for a normal build*/
+  er = LocModem_Initialise();
+  error_check_exit(er);
+
+  er = RemModem_Initialise();
+  error_check_exit(er);
+#endif
+  /* Create the SendQ and the PrintQ */
+  er = os_create_directory(DIRECTORY_SENDQ);
+  error_check_exit(er);
+  er = os_create_directory(DIRECTORY_PRINTQ);
+  error_check_exit(er);
+  TFax_addr_init();
+  
+//need to create a dummy address book else Laguna will
+//give a Zmodem error when it is not found
+//need to decide what to do with address book
+//.... talk tommark some time about it   
+  /* Create the AddrBook directory */
+  er = os_create_directory("RAM::RamDisc0.$.AddrBook");
+  error_check_exit(er);
+
+#if 1
+  AddrFile_Create_Recipient_AddressRecord("RAM::RamDisc0.$.AddrBook.Local");
+#else
+  /* And the dummy local address book file */
+  _kernel_oscli("Create RAM::RamDisc0.$.AddrBook.Local 1000");
+#endif
+}
+
+
+
+/************************************************************************/
+/* main                                                                 */
+/*                                                                      */
+/* Function is called on initialisation.  initialise() is called from   */
+/* here, and then event_poll().                                         */
+/*                                                                      */
+/* Parameters: Command line parameters supported.                       */
+/*                                                                      */
+/* Returns:    TRUE or FALSE.                                           */
+/*                                                                      */
+/************************************************************************/
+int main(int argc, char *argv[])
+{
+
+  WimpPollBlock block;
+  int wimp_version_returned,handle;
+  int event_code,*poll_word;
+  _kernel_oserror *er;
+
+  /* Perform initialisation of various aspects of ourselves */
+  initialise();
+  
+  Buzzer_On(20);
+#if DEBUGLIB  
+  debug_initialise(NULL, "RAM::RamDisc0.$.logfile",NULL);
+  debug_output_device(FILE_OUTPUT);
+#endif  
+ // debug_atexit();
+  /* debug_initialise_trace(SOCKET_OUTPUT,"dprintf error_check error_check_exit event_poll_idle wimpevent_dispatch call_wimp_event_handlers"); */
+ 
+  //Laguna uses wimp commands instead of the toolbox  
+  wimp_initialise(wimp_version,"Laguna",wimp_messages,&wimp_version_returned,&handle);
+
+  dprintf((NULL, "started\n"));
+  /* wimp poll loop*/
+  while(!quit)
+  {
+   er = wimp_poll(0,&block,poll_word,&event_code);
+   error_check(er);
+   switch(event_code)
+    {
+      case Wimp_EUserMessage: 
+      	switch(block.user_message.hdr.action_code)
+      	  {
+      	    case 0:  //quit sent from wimp
+              quit=1;
+      	    break;
+     
+            case Message_Service:
+                 TaskModIF_WimpMessageHandler(&block.user_message,NULL);
+            break;
+            
+      	    case Wimp_MDaytonaHW_FakeExchange:
+      	    case Wimp_MDaytonaHW_LocalFaxReceiver:        	      
+     	      DaytonaHW_WimpMessageHandler(&block.user_message,NULL);    	      
+      	    break;
+          
+      	    case Wimp_FaxRC:
+      	    
+       	      FaxIF_WimpMessageHandler(&block.user_message,NULL);    
+      	    break;
+      	    
+            case WM_ZMODEM_TRANSFERRESULT:
+              ZModemIF_WimpMessageHandler(&block.user_message,NULL);
+            break;
+            
+            case Wimp_MText2TIFFed:
+              TextTiffIF_WimpMessageHandler(&block.user_message,NULL);
+            break;
+                   
+      	  }
+      break;
+      
+      case Wimp_ENull:      
+      	ticker_handler(event_code,&block,&event_id_block,NULL);
+      break;	      	     
+    }  			         
+  }
+  
+  /* In normal use, !Laguna will never be quit!, but for debugging   */
+  /* purposes, its useful to quit cleanly - closing file handles etc. */
+  #ifdef RELEASE_BUILD
+  TaskModIF_Finalise();
+  #endif
+  Serial_Close_Ports();
+  wimp_close_down(handle);
+  exit(0);
+}
+
+
