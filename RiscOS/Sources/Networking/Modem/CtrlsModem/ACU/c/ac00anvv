@@ -1,0 +1,356 @@
+/****************************************************************************
+/
+/   Copyright 1988,1989,1990,1991,1992,1993,1994,1995.
+/   All Rights Reserved by:
+/       RSA
+/       7701 Six Forks Road
+/       Suite 120
+/       Raleigh, NC  27615
+/       (919) 846-7171
+/
+/   This document contains material confidential to RSA its contents must
+/   not be revealed, used or disclosed to anyone or company with out
+/   written permission by RSA.  The information contained herein is solely
+/   for the use of RSA.
+/
+/   File:           ac00anvv.c 
+/
+/   Module Version: ACU 4.??
+/
+/   Function:       This file contains the action routines for VOICE VIEW
+/                   processing in the ACU ANSWER state.
+/
+/   Product:        ACU core code
+/
+/   History:        None
+/
+/       Created:    8/21/95
+/
+/       ---------------------------------------------------------
+/       -                   Modifications                       -
+/       ---------------------------------------------------------
+/
+/       Author & Date:  RSA
+/       Description:
+/       Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "acu_def.h"
+#include "acu_mem.h"
+#include "acu_pro.h"
+#include "acu_vcv.h"
+#include "mt_pro.h"
+
+/* Local prototypes */
+void proc_answ_vv(void);
+void answ_vv_bg(void);
+void acu_vv_answer(void);
+void answ_vv_init_modem(void);
+ubyte vv_check_intactivity(void);
+void vv_reset_intactivity(void);
+void answ_wait_for_vv_atone(void);
+void answ_vv_idle(void);
+
+
+/*    State table for VoiceView PSTN ANSW state    */
+
+const struct stateTab_struct st_answ_vv[EVT_MAX+1] =
+{
+/* MSG        */   {S_ANSW,    orig_at_msg},
+/* CHAR_RCVD  */   {S_ANSW,    vv_kb_abort},
+/* ORIG       */   {S_ANSW,    ignore},
+/* ANSW       */   {S_ANSW,    ignore},
+/* CONNECT    */   {S_ANSW,    ignore},
+/* IDLE       */   {S_IDLE,    answ_vv_idle},
+/* RESET      */   {S_IDLE,    hard_reset},
+/* SYS_STAT   */   {S_ANSW,    ignore},
+/* RING       */   {S_ANSW,    ignore},
+/* DP_CD_OFF  */   {S_ANSW,    ignore},
+/* HANGUP     */   {S_HANGUP,  orig_vv_hangup},
+/* RETRAIN    */   {S_ANSW,    ignore},
+/* TEST       */   {S_ANSW,    ignore},
+/* PARSE      */   {S_ANSW,    ignore},
+/* V24        */   {S_ANSW,    pstn_at_v24},
+/* FP         */   {S_ANSW,    ignore},
+/* ESC_RXD    */   {S_ANSW,    ignore},
+};
+
+
+/*******************************************************************************
+/
+/   Routine:        proc_answ_vv
+/
+/   Author:         RSA
+/
+/   Creation Date:  08/21/95
+/
+/   Description:    This Routine will process events by determining the
+/                   next state and the action to be performed for
+/                   the ANSW state of type VOICE_VIEW.
+/
+/   Input Parameters:   None
+/
+/   Output Parameters:  None
+/
+/   Global Variables Changed: acu_state, acu_proc
+/
+/   Users: proc_answ
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date:   RSA
+/   Description:
+/   Reason:
+/
+*******************************************************************************/
+void proc_answ_vv(void)
+{
+   acu_state = st_answ_vv[acu_event->type].new_state;
+   acu_proc  = st_answ_vv[acu_event->type].fnc_ptr;
+}
+
+
+/*******************************************************************************
+/
+/   Routine:        answ_vv_bg
+/
+/   Author:         RSA
+/
+/   Creation Date:  08/21/95
+/
+/   Description:    This Routine will process the background functions for
+/                   the ANSW state of type VOICE_VIEW.
+/
+/   Input Parameters:   None
+/
+/   Output Parameters:  None
+/
+/   Global Variables Changed: None
+/
+/   Users: answ_bg
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date:   RSA
+/   Description:
+/   Reason:
+/
+*******************************************************************************/
+void answ_vv_bg(void)
+{
+   /* Run different substates of VoiceView ANSW background */
+   switch (st_answ.state)
+   {
+       case INIT_ACU_ANSW:
+           /* In this state the ACU is being initialized for
+               answer mode. */
+           acu_vv_answer();
+           break;
+
+       case INIT_MODEM_ANSW:
+           /*In this state the ACU sets up the modem chips to
+               send answer tone.*/
+           answ_vv_init_modem();
+           break;
+
+       case ANSW_HANDSHAKE:
+           /* In this state the ACU times the VV answer tone */
+           answ_wait_for_vv_atone();
+           break;
+   }
+}
+
+
+/*******************************************************************************
+/
+/   Routine:        acu_vv_answer
+/
+/   Author:         RSA
+/
+/   Creation Date:  08/21/95
+/
+/   Description:    This Routine will initiate the answer process for the modem
+/                   during PSTN VOICE_VIEW mode.
+/
+/   Input Parameters:   None
+/
+/   Output Parameters:  None
+/
+/   Global Variables Changed: sr14.originate_flag, st_answ,timer1
+/
+/   Users: answ_vv_bg
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date:   RSA
+/   Description:
+/   Reason:
+/
+*******************************************************************************/
+void acu_vv_answer(void)
+{
+   /* Wait until the ringing stops before going off hook */
+   if (modem_call_progress() != RINGON)
+   {
+       sr14.originate_flag = FALSE;
+
+       /* Turn off RI indications incase ATA in the middle of a RING */
+       /*modem_ri_led(OFF);*/ /* ramn 9/20/96 */
+       modem_dte_ri(OFF);
+       /*modem_serial_echo(OFF);*/ /* ramn 9/20/96 */
+
+       off_hook();
+
+       st_answ.state = INIT_MODEM_ANSW;    /* Start sending answer tone */
+       timer1 = 50;                        /* Billing delay */
+   }
+}
+
+
+
+/*******************************************************************************
+/
+/   Routine:        answ_vv_init_modem
+/
+/   Author:         RSA
+/
+/   Creation Date:  08/21/95
+/
+/   Description:    This Routine will initialize the modem hardware for
+/                   VoiceView PSTN answer mode.
+/
+/   Input Parameters:   None
+/
+/   Output Parameters:  None
+/
+/   Global Variables Changed: st_answ, timer1
+/
+/   Users: answ_vv_bg
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date:   RSA
+/   Description:
+/   Reason:
+/
+*******************************************************************************/
+void answ_vv_init_modem(void)
+{
+   /* Wait for billing delay */
+   if (!timer1)
+   {
+       /* Set pump character i/f */
+       modem_char(last_async_sync,char_size,overspeed);
+
+       /* Set state (no data modulations) */
+       modem_set_parameters(s[9],s[7],s[10],v32_retrain,s[91],receive_threshold,s[108]);
+       modem_connect(0,0,0,0,0,0,CONNECT_VOICE_ONLY,0,DISABLED);
+
+       /* Start VV ANSWtone generation and timer */
+       timer2 = 200; /* 2 secs */
+       st_answ.state = ANSW_HANDSHAKE;
+
+       /* Start answer tone */
+       modem_vcv_td_relay(DCE_TO_TELCO);
+       modem_voiceview_answtone(ON);
+    }
+}
+
+
+
+
+/*******************************************************************************
+/
+/   Routine:        answ_wait_for_vv_atone
+/
+/   Author:         RSA
+/
+/   Creation Date:  08/21/95
+/
+/   Description:    This Routine will wait on VoiceView answer tone to be sent.
+/
+/   Input Parameters:   None
+/
+/   Output Parameters:  None
+/
+/   Global Variables Changed: None
+/
+/   Users: answ_vv_bg
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date:   RSA
+/   Description:
+/   Reason:
+/
+*******************************************************************************/
+void answ_wait_for_vv_atone(void)
+{
+   /* Wait for answer tone to go out */
+   if (!timer2)
+   {
+       /* Halt answer tone */
+       modem_voiceview_answtone(OFF);
+
+       /* Move modem task CP to online */
+       modem_init_call_progress(ON_LINE);
+       modem_init_vcv_call_progress(ON_LINE);
+
+       /* Go to VV Auto Attendant w/a CONNECT + OK message */
+       vv_reset_intactivity();
+       build_event(E_IDLE,VV_IDLE_AUTO_ATTENDANT);
+       build_event(E_MSG,CONNECT);
+       build_event(E_MSG,OK);
+   }
+}
+
+
+/*******************************************************************************
+/
+/    Routine:          answ_vv_to_idle
+/
+/    Author:           RSA
+/
+/    Creation Date:    08/21/95
+/
+/    Description:      This Routine will change states from ANSW to IDLE
+/                      during VoiceView.
+/
+/    Input Parameters: None
+/
+/    Output Parameters: None
+/
+/    Global Variables Changed: st_idle
+/
+/    Users: st_answ_vv
+/
+/    -----------------------------------------------------------
+/    -                     Modifications                       -
+/    ------------------------------------------------------------
+/
+/    Author & Date:    RSA
+/    Description:
+/    Reason:
+/
+*******************************************************************************/
+void answ_vv_idle(void)
+{
+   st_idle.type = VOICE_VIEW;
+   st_idle.state = VV_IDLE_AUTO_ATTENDANT;
+
+   /* Move VoiceView module to idle also */
+   process_vcv_reset();
+}
+
