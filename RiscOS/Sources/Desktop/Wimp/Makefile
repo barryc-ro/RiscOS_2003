@@ -68,7 +68,7 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        IfThere LocalRes:<UserIF>.Messages  Then ${CP} LocalRes:<UserIF>.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        IfThere LocalRes:<UserIF>.Messages  Then ${CP} LocalRes:<UserIF>.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS} Else IfThere LocalRes:Messages Then ${CP} LocalRes:Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
         IfThere LocalRes:<UserIF>.Templates Then ${CP} LocalRes:<UserIF>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
         IfThere LocalRes:<UserIF>.Sprites   Then ${CP} LocalRes:<UserIF>.Sprites   ${RESDIR}.${COMPONENT}.Sprites   ${CPFLAGS}
         IfThere LocalRes:<UserIF>.Sprites22 Then ${CP} LocalRes:<UserIF>.Sprites22 ${RESDIR}.${COMPONENT}.Sprites22 ${CPFLAGS}
@@ -80,7 +80,7 @@ resources-None: resources_common
 	@
 
 resources-: resources_common
-	print LocalRes:<UserIF>.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+	IfThere LocalRes:CmdHelp Then Print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${OBJECT}: ${SOURCE}
         ${MKDIR} o
