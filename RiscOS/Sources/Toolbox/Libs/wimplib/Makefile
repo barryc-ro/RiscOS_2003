@@ -37,6 +37,11 @@ AAsmflags = -depend !Depend -quit -CloseExec -To $@ -From
 
 # User-editable dependencies:
 
+clean:
+        remove wimplib
+        -wipe o.* ~c~v
+
+
 # Static dependencies:
 @.o.winit:   @.s.winit
         objasm $(objasmflags) -from @.s.winit -to @.o.winit
