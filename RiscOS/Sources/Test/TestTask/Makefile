@@ -1,5 +1,7 @@
 # Makefile for TestTask
 #
+# 10/4/00 added McCabe instrumentation 
+#
 # Paths
 #
 EXP_HDR = <export$dir>
@@ -90,17 +92,85 @@ OBJS      = 	${OM}.Main 		\
 	 	${OM}.ROMChksum		\
 	 	${OM}.ID		\
 	 	${OM}.gen_ir		\
-	 	${OM}.Flash		
+	 	${OM}.Flash		\
+	 	${OM}.get_t0		
 	 						
+OBJSI      = 	i.Main 		\
+	 	i.serial  	\
+	 	i.command	\
+	 	i.serial_lib	\
+	 	i.timer		\
+	 	i.debug		\
+	 	i.DRAMTest	\
+	 	i.Support	\
+	 	i.Pop           \
+	 	i.parallel	\
+	 	i.mouse		\
+	 	i.keyboard	\
+	 	i.versions	\
+	 	i.sound         \
+	 	i.eeprom	\
+	 	i.PS2		\
+	 	i.twiddle	\
+	 	i.CMOS		\
+	 	i.Graphics	\
+	 	i.RGBBanner	\
+	 	i.STBLED	\
+	 	i.SerialLoop	\
+	 	i.ethertest	\
+	 	i.IR		\
+	 	i.modulator     \
+	 	i.SCART		\
+	 	i.MPEG		\
+	 	i.ID		\
+	 	i.gen_ir	\
+	 	i.Flash				
+	 	
+OBJSIO      = 	io.Main 	\
+	 	io.serial  	\
+	 	io.command	\
+	 	io.serial_lib	\
+	 	io.timer	\
+	 	io.debug	\
+	 	io.DRAMTest	\
+	 	io.Support	\
+	 	io.Pop          \
+	 	io.parallel	\
+	 	io.mouse	\
+	 	io.keyboard	\
+	 	io.versions	\
+	 	io.sound        \
+	 	io.eeprom	\
+	 	io.PS2		\
+	 	io.twiddle	\
+	 	io.CMOS		\
+	 	io.Graphics	\
+	 	io.RGBBanner	\
+	 	io.STBLED	\
+	 	io.SerialLoop	\
+	 	io.ethertest	\
+	 	io.IR		\
+	 	io.modulator    \
+	 	io.SCART	\
+	 	io.MPEG		\
+	 	io.ID		\
+	 	io.gen_ir	\
+	 	io.Flash	\
+	 	io.instlib		
+	 	
+
 	 			
-.SUFFIXES: .${OM}
+.SUFFIXES: .o .s .c .c++ .i .cmhg .inst .io
 
 #
 # Rule patterns
 #
-.c.${OM}:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.${OM}:;   ${CMHG} -o $@ $<
-.s.${OM}:;      ${AS} ${AFLAGS} $< $@
+.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} -o $@ $<
+.s.o:;      ${AS} ${AFLAGS} $< $@
+.inst.io:;  ${CC} ${CFLAGS} -C++ -W -o $@ $<
+.c++.i:;    ${C++} ${C++FLAGS} -c -C -E $< >> $@
+.c.i:;     ${CC} ${CFLAGS} -c -C -E $< >> $@
 
 #
 # Build
@@ -110,13 +180,17 @@ all: ${TARGET}
 
 clean:
         ${WIPE}	o.*		${WFLAGS}
+        ${WIPE} i.*		${WFLAGS}
+        ${WIPE} io.*		${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 clean_all: clean
 	${RM} ${TARGET}
+	${RM} inst
+	${RM} i
+	${RM} io
 	${WIPE}	${APP}		${WFLAGS}
 	${WIPE} o		${WFLAGS}
-	${WIPE} rm		${WFLAGS}
         @echo Stripping dependencies from makefile...
         ${STRIP}
 	@echo ${COMPONENT}: cleaned all
@@ -131,7 +205,17 @@ install: ${TARGET}
 
 dirs:
 	${MKDIR} o
-	${MKDIR} rm
+	${MKDIR} i
+	${MKDIR} inst
+	${MKDIR} io
+
+preprocess: ${OBJSI} dirs
+	@echo ${COMPONENT}: preprocess build complete
+	
+instrument: ${OBJSIO} dirs
+	${LD} ${LDFLAGS} -o $@ ${OBJSIO} ${STUBS}
+	@echo ${COMPONENT}: instrument build complete			
+	
 	
 #
 # Target
