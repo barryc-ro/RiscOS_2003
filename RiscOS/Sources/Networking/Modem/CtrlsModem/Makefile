@@ -35,6 +35,15 @@ RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 
 #
+# Libraries
+#
+ANSILIB   = CLib:o.ansilib
+CLIB      = CLIB:o.stubs
+RLIB      = RISCOSLIB:o.risc_oslib
+ROMCSTUBS = RISCOSLIB:o.romcstubs
+ABSSYM    = RISC_OSLib:o.abssym
+
+#
 # Setup flags and linker base options
 #
 
@@ -96,6 +105,11 @@ LB      = C:o.Stubs
 MODSQZ  = ModSqz
 MKDIR   = cdir
 WIPE    = -Wipe
+RM      = Remove
+CP      = copy
+
+CPFLAGS  = ~cfr~v
+WFLAGS = ~cfr~v
 
 VPATH=ACU AS IO MT_Ctls1 PP Voice
  
@@ -136,7 +150,7 @@ ${ROM_MODULE}: ${TARGET} ${ROMCSTUBS}
         ${LD} -aof -o $@ $(LFLAGS) $(ROMCSTUBS)
 
 # final link for ROM Image (using given base address)
-rom_link:
+rom_link: ${ROM_MODULE}
         ${MKDIR} linked
         ${MKDIR} map
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
@@ -148,7 +162,7 @@ rom_link:
 #
 #    Musket w/ Cirrus Cutlass I data pump for EMULATOR No wireless code
 #
-${TARGET}:    $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ) linktop
+${TARGET}:    $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ)
 	    $(MKDIR) o
 	    ${MKDIR} rm
             amu -f acumf/arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
@@ -211,11 +225,9 @@ modulehdr.h:  io/modulehdr.cmhg
                CMHG -d h.modulehdr io/modulehdr.cmhg
 
 
-
+riscos.o:   modulehdr.h
 
 # Dynamic dependencies:
-o.pkttrace:	IO.c.pkttrace
-o.pkttrace:	h.icd_msgs
 o.pp00stb:	PP.c.pp00stb
 o.pp00stb:	h.sys_def
 o.as_stub:	AS.c.as_stub
@@ -463,7 +475,7 @@ o.riscos:	h.ee_def
 o.riscos:	h.riscos
 o.riscos:	C:h.swis
 o.riscos:	IO.h.tracemac
-o.riscos:	IO.h.modulehdr
+o.riscos:	h.modulehdr
 o.linev80:	IO.c.linev80
 o.linev80:	h.sys_def
 o.linev80:	IO.h.iohw_equ

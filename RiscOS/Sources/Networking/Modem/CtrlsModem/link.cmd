@@ -198,4 +198,3 @@ vc00mn.o
 riscos.o
 riscosasm.o
 modulehdr.o
-#pkttrace.o
