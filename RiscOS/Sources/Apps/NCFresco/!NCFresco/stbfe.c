@@ -4347,6 +4347,7 @@ static int message_codes[] =
     MESSAGE_PLUGIN_URL_ACCESS,
     MESSAGE_PLUGIN_URL_NOTIFY,
     MESSAGE_PLUGIN_STATUS,
+    MESSAGE_PLUGIN_BUSY,
     
     wimp_MDATAOPEN,
     wimp_MDATALOAD,

@@ -1207,7 +1207,7 @@ unsigned long HTParseTime (const char *str)
 	tm.tm_year = (int)strtoul(s, &s, 10);
 	if (tm.tm_year < 70)				/* 00 to 69 means 2000 to 2069 */
 	    tm.tm_year += 100;				/* 70 to 99 means 1970 to 1999 */
-	else if (tm.tm_year > 99)			
+	else if (tm.tm_year > 99)
 	    tm.tm_year -= 1900;				/* else it is a four digit year */
 
 	/* skip to time numbers */

@@ -47,7 +47,7 @@ static void strinfo(char *tag, char *s)
 }
 #endif
 
-int url_parse(char *url, char **scheme, char **netloc, char **path, char **params, char **query, char **fragment)
+int url_parse(const char *url, char **scheme, char **netloc, char **path, char **params, char **query, char **fragment)
 {
     char temp[8];
     char *copy;
@@ -161,7 +161,7 @@ static void url_ensure_buffer_size(char **b, int *size, int used, int more)
 }
 #undef LEEWAY
 
-char *url_unparse(char *scheme, char *netloc, char *path, char *params, char *query, char *fragment)
+char *url_unparse(const char *scheme, const char *netloc, const char *path, const char *params, const char *query, const char *fragment)
 {
     char *b, *res;
     int i;
@@ -235,7 +235,7 @@ char *url_unparse(char *scheme, char *netloc, char *path, char *params, char *qu
     return res;
 }
 
-char *url_join(char *base, char *url)
+char *url_join(const char *base, const char *url)
 {
     char *bscheme, *bnetloc, *bpath, *bparams, *bquery, *bfragment;
     char *scheme, *netloc, *path, *params, *query, *fragment;
@@ -387,10 +387,11 @@ void url_free_parts(char *scheme, char *netloc, char *path, char *params, char *
 	mm_free(fragment);
 }
 
-extern char *url_path_trans(char *s, int topath)
+extern char *url_path_trans(const char *s, int topath)
 {
     char buffer[MAX_FILE_NAME];
-    char *p, *q;
+    char *p;
+    const char *q;
 
     p = buffer;
     q = s;
@@ -436,17 +437,17 @@ extern char *url_path_trans(char *s, int topath)
 }
 
 
-char *url_path_to_riscos(char *s)
+char *url_path_to_riscos(const char *s)
 {
     return url_path_trans(s, 0);
 }
 
-char *url_riscos_to_path(char *s)
+char *url_riscos_to_path(const char *s)
 {
     return url_path_trans(s, 1);
 }
 
-char *url_leaf_name(char *url)
+char *url_leaf_name(const char *url)
 {
     char *scheme, *netloc, *path, *params, *query, *fragment;
     char *slash, *dot;
@@ -521,7 +522,7 @@ char *url_leaf_name(char *url)
  * then you might need to treat things differently.
  */
 
-char *url_escape_chars(char *s, char *escapes)
+char *url_escape_chars(const char *s, const char *escapes)
 {
     char buffer[1024];
     char c;
@@ -552,7 +553,7 @@ char *url_escape_chars(char *s, char *escapes)
 /* #define FORM_UNRESERVED_CHARS	"$-_.!*'()," */ /* don't want + as it is used for ' ' */ 
 #define FORM_UNRESERVED_CHARS	"*-.@_"
 
-void url_escape_cat(char *buffer, char *in, int len)
+void url_escape_cat(char *buffer, const char *in, int len)
 {
     int i,j;
     int sl;
@@ -596,7 +597,7 @@ void url_escape_cat(char *buffer, char *in, int len)
     buffer[j] = 0;
 }
 
-void url_escape_to_file(char *s, FILE *f)
+void url_escape_to_file(const char *s, FILE *f)
 {
     char c;
 

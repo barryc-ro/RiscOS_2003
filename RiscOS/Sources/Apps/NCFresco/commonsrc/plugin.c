@@ -89,6 +89,9 @@ struct plugin_private
     wimp_t task;			/* plugin's wimp task handle */
 
     plugin_stream_private *streams;	/* list of currently active streams */
+
+    int play_state;			/* state returned by last BUSY message */
+    int opening_flags;			/* flags from opening, busy flag gets updated */
 };
 
 /* ----------------------------------------------------------------------------- */
@@ -560,6 +563,28 @@ int plugin_send_focus(plugin pp)
 
 /* ----------------------------------------------------------------------------- */
 
+int plugin_send_action(plugin pp, int new_action)
+{
+    wimp_msgstr msg;
+    message_plugin_action *action = (message_plugin_action *) &msg.data;
+
+    OBJDBG(("plugin: send action %p state %d\n", pp, pp->state));
+
+    /* Build message block */
+    action->flags = 0;
+    action->new_state = new_action;
+
+    msg.hdr.size = sizeof(msg.hdr) + sizeof(*action);
+    msg.hdr.action = (wimp_msgaction)MESSAGE_PLUGIN_ACTION;
+    msg.hdr.your_ref = 0;
+
+    plugin_send_message(&msg, pp);
+
+    return 1;
+}
+
+/* ----------------------------------------------------------------------------- */
+
 static void plugin_send_stream_new(plugin_stream_private *psp, int your_ref)
 {
     wimp_msgstr msg;
@@ -957,6 +982,43 @@ void plugin_destroy(plugin pp)
 
 /* ----------------------------------------------------------------------------- */
 
+void plugin_info(plugin pp, int *flags, int *state)
+{
+    if (!pp)
+    {
+	if (flags)
+	    *flags = 0;
+	if (state)
+	    *state = 0;
+    }
+
+    if (flags)
+    {
+	int f = 0;
+
+	if (pp->opening_flags & plugin_opening_BUSY)
+	    f |= be_plugin_BUSY;
+	
+	if (pp->opening_flags & plugin_opening_CAN_ACTION)
+	    f |= be_plugin_CAN_ACTION;
+
+	if (pp->opening_flags & plugin_opening_HELPER)
+	    f |= be_plugin_HELPER;
+
+	if (pp->opening_flags & plugin_opening_CAN_FOCUS)
+	    f |= be_plugin_CAN_FOCUS;
+
+	*flags = f;
+    }
+
+    if (state)
+    {
+	*state = pp->state;
+    }
+}
+
+/* ----------------------------------------------------------------------------- */
+
 
 /*
  * Handles:
@@ -1017,8 +1079,11 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    pp->state = plugin_state_OPEN;
 		    pp->instance = opening->instance.plugin;
 		    pp->task = msg->hdr.task;
+		    pp->opening_flags = opening->flags;
 
 		    obj = pp->obj;
+
+/* 		    frontend_update_plugin_state(pp->doc->parent, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state); */
 
 		    if (pp->pending_reshape)
 		    {
@@ -1044,7 +1109,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 			mm_free(url);
 		    }
-		    
+
 		    break;
 		}
 		}
@@ -1254,10 +1319,30 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	/* ------------------------------------------------------------ */
 
+	case MESSAGE_PLUGIN_BUSY:
+	{
+ 	    message_plugin_busy *busy = (message_plugin_busy *)&msg->data;
+
+	    OBJDBG(("plugin: msg busy %p state %d\n", pp, pp->state));
+
+	    if (busy->flags & plugin_busy_STATE_VALID)
+		pp->play_state = busy->state;
+
+	    if (busy->flags & plugin_busy_BUSY)
+		pp->opening_flags |= plugin_opening_BUSY;
+	    else
+		pp->opening_flags &= ~plugin_opening_BUSY;
+
+/* 	    frontend_update_plugin_state(pp->doc->parent, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state); */
+
+	    break;
+	}
+
+	/* ------------------------------------------------------------ */
+
 	break;
 	}
     }
-    /* It is an ACK so check that the msg ref matches */
     else 
     {
 	/* Free any strings referenced by this msg reference */

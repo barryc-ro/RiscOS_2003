@@ -6,10 +6,13 @@
  * 02/08/96: SJM: check that exactly one RADIO button is selected.
  * 07/08/96: SJM: check that at least one OPTION is selected.
  * 04/09/96: SJM: only check one SELECT is selected if not multiple.
+ * 27/02/97: SJM: Moved text_item_push_input() code into here.
  */
 
 
 #include "htmlparser.h"
+
+extern void translate_escaped_text(char *src, char *dest, int len);
 
 extern void startform (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
@@ -91,25 +94,175 @@ extern void finishform (SGMLCTX * context, ELEMENT * element)
 extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
+    rid_text_item_input *new;
+    rid_text_item *nb = NULL;
+    rid_input_item *in;
+    rid_input_tag tag = (rid_input_tag) -1;
+
+    VALUE *checked;
+    VALUE *disabled;
+    VALUE *nocursor;
+    VALUE *numbers;
+    VALUE *type;
+    VALUE *maxlength;
+    VALUE *size;
+    VALUE *width, *height;
 
     generic_start (context, element, attributes);
 
-    text_item_push_input(me, 0,
-			 &attributes->value[HTML_INPUT_ALIGN],
-			 &attributes->value[HTML_INPUT_CHECKED],
-			 &attributes->value[HTML_INPUT_DISABLED],
-			 &attributes->value[HTML_INPUT_MAXLENGTH],
-			 &attributes->value[HTML_INPUT_NAME],
-			 &attributes->value[HTML_INPUT_SIZE],
-			 &attributes->value[HTML_INPUT_SRC],
-			 &attributes->value[HTML_INPUT_TYPE],
-			 &attributes->value[HTML_INPUT_VALUE],
-			 &attributes->value[HTML_INPUT_ID],
-			 &attributes->value[HTML_INPUT_BGCOLOR],
-			 &attributes->value[HTML_INPUT_SELCOLOR],
-			 &attributes->value[HTML_INPUT_CURSOR],
-			 &attributes->value[HTML_INPUT_NOCURSOR],
-			 &attributes->value[HTML_INPUT_NUMBERS]);
+    PRSDBG(("text_item_push_input(%p)\n", me));
+
+    type = &attributes->value[HTML_INPUT_TYPE];
+    switch (type->type == value_enum ? type->u.i : HTML_INPUT_TYPE_TEXT)
+    {
+    case HTML_INPUT_TYPE_TEXT:
+	tag = rid_it_TEXT;
+	break;
+    case HTML_INPUT_TYPE_PASSWORD:
+	tag = rid_it_PASSWD;
+	break;
+    case HTML_INPUT_TYPE_CHECKBOX:
+	tag = rid_it_CHECK;
+	break;
+    case HTML_INPUT_TYPE_RADIO:
+	tag = rid_it_RADIO;
+	break;
+    case HTML_INPUT_TYPE_IMAGE:
+	tag = rid_it_IMAGE;
+	break;
+    case HTML_INPUT_TYPE_HIDDEN:
+	tag = rid_it_HIDDEN;
+	break;
+    case HTML_INPUT_TYPE_SUBMIT:
+	tag = rid_it_SUBMIT;
+	break;
+    case HTML_INPUT_TYPE_RESET:
+	tag = rid_it_RESET;
+	break;
+    case HTML_INPUT_TYPE_BUTTON:
+	tag = rid_it_BUTTON;
+	break;
+    }
+
+    in = mm_calloc(1, sizeof(*in));
+
+    if (tag != rid_it_HIDDEN)
+    {
+	new = mm_calloc(1, sizeof(*new));
+	new->input = in;
+	nb = &(new->base);
+	in->base.display = nb;
+    }
+    else
+	new = NULL;
+
+    in->base.tag = rid_form_element_INPUT;
+    in->tag = tag;
+
+    in->base.id = valuestringdup(&attributes->value[HTML_INPUT_ID]);
+    htmlriscos_colour(&attributes->value[HTML_INPUT_BGCOLOR], &in->base.colours.back);
+    htmlriscos_colour(&attributes->value[HTML_INPUT_SELCOLOR], &in->base.colours.select);
+    htmlriscos_colour(&attributes->value[HTML_INPUT_CURSOR], &in->base.colours.cursor);
+
+    nocursor = &attributes->value[HTML_INPUT_NOCURSOR];
+    if (nocursor->type != value_none)
+	in->flags |= rid_if_NOCURSOR;
+
+    numbers = &attributes->value[HTML_INPUT_NUMBERS];
+    if (numbers->type != value_none)
+	in->flags |= rid_if_NUMBERS;
+
+    checked = &attributes->value[HTML_INPUT_CHECKED];
+    if (checked->type != value_none)
+	in->flags |= rid_if_CHECKED;
+
+    disabled = &attributes->value[HTML_INPUT_DISABLED];
+    if (disabled->type != value_none)
+	in->flags |= rid_if_DISABLED;
+
+    in->name = valuestringdup(&attributes->value[HTML_INPUT_NAME]);
+    in->value = valuestringdup(&attributes->value[HTML_INPUT_VALUE]);
+    if (tag == rid_it_SUBMIT || tag == rid_it_RESET || tag == rid_it_BUTTON)
+    {
+	VALUE *borderimage = &attributes->value[HTML_INPUT_BORDERIMAGE];
+	in->src = valuestringdup(borderimage->type == value_string ? borderimage : &attributes->value[HTML_INPUT_SRC]);
+	in->src_sel = valuestringdup(&attributes->value[HTML_INPUT_SELIMAGE]);
+    }
+    else
+	in->src = valuestringdup(&attributes->value[HTML_INPUT_SRC]);
+
+    size = &attributes->value[HTML_INPUT_SIZE];
+#if 0
+    in->xsize = in->ysize = -1;
+    /* NOTE: If SHORTISH is defined as short, rather than int, then */
+    /* this scanf needs to be %hd if stray memory is not to be written! */
+
+    if (size->type == value_string)
+    {
+	sscanf(size->u.s.ptr, "%hd,%hd", &in->xsize, &in->ysize);
+    }
+    if (in->xsize == -1)
+	in->xsize = 20;
+#else
+    in->xsize = size->type == value_integer ? size->u.i : -1;
+#endif
+
+    width = &attributes->value[HTML_INPUT_WIDTH];
+    in->ww = width->type == value_integer ? width->u.i : -1;
+    
+    height = &attributes->value[HTML_INPUT_HEIGHT];
+    in->hh = height->type == value_integer ? height->u.i : -1;
+    
+    maxlength = &attributes->value[HTML_INPUT_MAXLENGTH];
+    if (maxlength->type == value_integer)
+	in->max_len = maxlength->u.i;
+
+    if (in->max_len == 0)
+	in->max_len = 256;
+
+    if (me->form)
+	rid_form_element_connect(me->form, &in->base);
+
+    switch (tag)
+    {
+    case rid_it_CHECK:
+    case rid_it_RADIO:
+	in->data.tick = ((in->flags & rid_if_CHECKED) != 0);
+	break;
+    case rid_it_TEXT:
+    case rid_it_PASSWD:
+	in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
+	if (in->value)
+	{
+	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); /* add one here as len is len of output buffer */
+	}
+	else
+	{
+	    in->data.str[0] = 0;
+	}
+	break;
+    case rid_it_IMAGE:
+    {
+	VALUE *align = &attributes->value[HTML_INPUT_ALIGN];
+	decode_img_align(align->type == value_enum ? align->u.i : -1, &in->data.image.flags, &nb->flag);
+	break;
+    }
+    }
+
+    if (nb)
+    {
+	nb->tag = rid_tag_INPUT;
+/* 	if (flags & rid_flag_LINE_BREAK) */
+/* 	    nb->flag |= rid_flag_LINE_BREAK; */
+	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
+	    nb->flag |= rid_flag_NO_BREAK;
+	nb->aref = me->aref;	/* Current anchor, or NULL */
+	if (me->aref && me->aref->first == NULL)
+	    me->aref->first = nb;
+	GET_ROSTYLE(nb->st);
+
+	rid_text_item_connect(me->rh->curstream, nb);
+    }
 }
 
 /*****************************************************************************/

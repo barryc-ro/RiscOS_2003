@@ -324,18 +324,27 @@ typedef struct rid_input_item {
     rid_input_flags flags;
     char *name;
     char *value;
-/*    SHORTISH xsize, ysize; */              /* -1 if not set */
-    int xsize;
+    int xsize;			/* physical size in characters */
     char *src;                  /* If we have an image */
-    int max_len;
+    char *src_sel;		/* URL of image */
+    int ww, hh;			/* specified size for IMAGE or BORDERIMAGE */
+    int max_len;		/* max buffer size in characters */
     union {
         char *str;              /* Used for TEXT and PASSWORD */
         int tick;               /* Used for RADIO and CHECKBOX */
-        struct {
-            void *im;           /* Used for IMAGE */
+        struct
+	{
+            void *im;
             rid_image_flags flags;
-            SHORTISH x,y;               /* Click position */
-        } image;
+            SHORTISH x,y;       /* Click position */
+        } image;		/* Used for IMAGE */
+	struct
+	{
+            void *im;           /* base image */
+	    void *im_sel;	/* selected base image */
+            rid_image_flags flags;
+	    int tick;
+	} button;		/* Used for SUBMIT, RESET, BUTTON */
     } data;
 } rid_input_item;
 

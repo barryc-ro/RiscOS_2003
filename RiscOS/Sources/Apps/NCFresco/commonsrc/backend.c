@@ -106,6 +106,7 @@
 #include "access.h"
 
 #include "objects.h"
+#include "pluginfn.h"
 
 #ifndef PP_DEBUG
 #define PP_DEBUG 0
@@ -585,6 +586,10 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 
 	    if (((rid_text_item_image *)ti)->usemap)
 	    {
+		/* amazingly this didn't seem to get called before*/
+		if (object_table[ti->tag].imh != NULL)
+		    imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+
 		f |= be_item_info_USEMAP;
 
 		if (link || title)
@@ -671,6 +676,14 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 
         if (ti->tag == rid_tag_SELECT)
             f |= be_item_info_MENU;
+
+	if (ti->tag == rid_tag_OBJECT)
+	{
+	    rid_text_item_object *tio = (rid_text_item_object *)ti;
+	    imh = tio->object->state.plugin.pp;
+	    f |= be_item_info_PLUGIN;
+	}
+
     }
     else
     {
@@ -1547,7 +1560,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 			}
 			break;
 		    case rid_it_SUBMIT:
-			if (iis->data.tick && iis->name)
+			if (iis->data.button.tick && iis->name)
 			{
 			    antweb_append_query(&buffer, iis->name,
 						iis->value ? iis->value : "", &buf_size);
@@ -1652,7 +1665,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 			}
 			break;
 		    case rid_it_SUBMIT:
-			if (iis->data.tick && iis->name)
+			if (iis->data.button.tick && iis->name)
 			{
 			    antweb_write_query(f, iis->name, iis->value ? iis->value : "", &first);
 			}
@@ -4990,6 +5003,25 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
 	if (frontend_view_has_caret(doc->parent))
 	    antweb_place_caret(doc);
     }
+}
+
+void backend_plugin_action(be_doc doc, be_item item, int action)
+{
+    if (item && item->tag == rid_tag_OBJECT)
+    {
+	rid_text_item_object *tio = (rid_text_item_object *) item;
+	rid_object_item *obj = tio->object;
+
+	if (obj->type == rid_object_type_PLUGIN)
+	    plugin_send_action(obj->state.plugin.pp, action);
+    }
+    NOT_USED(doc);
+}
+
+void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state)
+{
+    plugin_info(pp, flags, state);
+    NOT_USED(doc);
 }
 
 /* eof backend.c */

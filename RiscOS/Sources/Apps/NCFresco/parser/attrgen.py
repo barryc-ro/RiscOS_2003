@@ -44,7 +44,9 @@ copyright = '(C) Copyright ANT Limited 1996. All rights reserved.'
 
 logmsg = """
 
-$Log$
+Revision 1.1.2.3  1997/02/24 21:30:28  smiddle
+Various changes
+
 Revision 1.8  1997/02/24 16:28:26  borris
 Merged diffs from Si into BORRIS_970218
 

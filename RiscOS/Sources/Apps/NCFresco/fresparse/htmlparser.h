@@ -197,7 +197,8 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *selcolor,
 				 VALUE *cursor,
 				 VALUE *nocursor,
-				 VALUE *numbers);
+				 VALUE *numbers,
+				 VALUE *selimage);
 extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt);
 
 /* hparse.c */

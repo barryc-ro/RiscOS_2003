@@ -62,9 +62,8 @@
 
 #define ALT_FONT    (WEBFONT_SIZE(2) + WEBFONT_FLAG_FIXED)
 
-static void oimage_size_alt_text(rid_text_item *ti, int *iw, int *ih, BOOL defer_images)
+static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int *iw, int *ih)
 {
-    rid_text_item_image *tii = (rid_text_item_image *) ti;
     font_string fs;
     struct webfont *wf;
     int imw, imh;
@@ -72,12 +71,12 @@ static void oimage_size_alt_text(rid_text_item *ti, int *iw, int *ih, BOOL defer
     IMGDBG(("Sizing alt text: %d,%d\n", *iw, *ih));
 
     /* if we are not deferring images and either have alt text or both sizes are specified then use what we've got */
-    if (tii->alt == NULL || (!defer_images && tii->ww != -1 && tii->hh != -1))
+    if (alt == NULL || (!defer_images && req_ww != -1 && req_hh != -1))
     {
-	if (tii->ww != -1)
-	    *iw = tii->ww * 2;
-	if (tii->hh != -1)
-	    *ih = tii->hh * 2;
+	if (req_ww != -1)
+	    *iw = req_ww * 2;
+	if (req_hh != -1)
+	    *ih = req_hh * 2;
         return;
     }
 
@@ -88,20 +87,20 @@ static void oimage_size_alt_text(rid_text_item *ti, int *iw, int *ih, BOOL defer
 	font_setfont(wf->handle);
 
         /* if no width given (currently this includes havig a percentage width) then use what we need */
-        if (defer_images || tii->ww == -1 || (tii->flags & rid_image_flag_PERCENT))
+        if (defer_images || req_ww == -1 || (flags & rid_image_flag_PERCENT))
         {
 	    fs.x = 1 << 30;
 	    fs.y = 1 << 30;
 	    fs.split = -1;
 
-	    fs.s = tii->alt ? tii->alt : NONE_STRING;
+	    fs.s = alt ? (char *)alt : NONE_STRING;
 	    fs.term = strlen(fs.s);
 	    font_strwidth(&fs);
 
 	    fs.x /= MILIPOINTS_PER_OSUNIT;
 
 	    imw = fs.x + PLINTH_PAD;
-	    imh = defer_images || tii->hh == -1 ? wf->max_up + wf->max_down + PLINTH_PAD : tii->hh*2;
+	    imh = defer_images || req_hh == -1 ? wf->max_up + wf->max_down + PLINTH_PAD : req_hh*2;
         }
         else
         {
@@ -109,24 +108,24 @@ static void oimage_size_alt_text(rid_text_item *ti, int *iw, int *ih, BOOL defer
             int ww, height = 0;
 
 #if 0
-    	    if (tii->flags & rid_image_flag_PERCENT)
+    	    if (flags & rid_image_flag_PERCENT)
 	    {
-    	        ww = tii->ww*2*antweb_get_edges(ti, NULL, NULL)/100;
+    	        ww = req_ww*2*antweb_get_edges(ti, NULL, NULL)/100;
 		if (ww == 0)
 		    ww = *iw;
 	    }
             else
 #endif
-    	        ww = tii->ww*2;
+    	        ww = req_ww*2;
 
-            write_text_in_box_height(tii->alt, ww - PLINTH_PAD, wf->handle, &height);
+            write_text_in_box_height(alt, ww - PLINTH_PAD, wf->handle, &height);
 
 	    imw = ww;
 	    imh = height + PLINTH_PAD;
 	}
     }
 #else  /* BUILDERS */
-    imw = strlen(tii->alt ? tii->alt : NONE_STRING);
+    imw = strlen(alt ? alt : NONE_STRING);
     imh = 16;
 #endif /* BUILDERS */
     *iw = imw;
@@ -135,43 +134,15 @@ static void oimage_size_alt_text(rid_text_item *ti, int *iw, int *ih, BOOL defer
     IMGDBG(("Done sizing alt text: %d,%d\n", *iw, *ih));
 }
 
-
-void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int *iw, int *ih)
 {
-    rid_text_item_image *tii = (rid_text_item_image *) ti;
     int width, height;
-    image_flags fl;
 
-    int new_im = 0;
+    width = *iw * scale_value/100;
+    height = *ih * scale_value/100;
 
-    if (tii->im == NULL)
-    {
-	char *url;
-	int ffl;
-
-	new_im = 1;
-
-	url = url_join(BASE(doc), tii->src);
-	
-	ffl = (doc->flags & doc_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
-	if ((doc->flags & doc_flag_FROM_HISTORY) == 0)
-	    ffl |= image_find_flag_CHECK_EXPIRE;
-	
-	image_find(url, BASE(doc), ffl, &antweb_doc_image_change, doc, render_get_colour(render_colour_BACK, doc), (image*) &(tii->im));
-
-	mm_free(url);
-    }
-
-    image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
-    
-    if (new_im && (fl & image_flag_REALTHING))
-	tii->flags |= rid_image_flag_REAL;
-
-    width = width*doc->scale_value/100;
-    height = height*doc->scale_value/100;
-
-    IMGDBG(("Old width %d, height %d, flags 0x%x\n", width, height, fl));
-    IMGDBG(("Image object given width %d, height %d\n", tii->ww, tii->hh));
+    IMGDBG(("Old width %d, height %d, scale %d%% rid flags 0x%x\n", *iw, *ih, scale_value, flags));
+    IMGDBG(("Image object given width %d, height %d\n", req_ww, req_hh));
 
     /* if we have an image
      *   if two sizes specified then use those
@@ -185,41 +156,96 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
      * note: width and height are in OS coords
      */
 
-    if (fl & image_flag_REALTHING)
+    if (flags & rid_image_flag_REAL)
     {
         /* if a width or height is specified, for now a percent width means not specified  */
-	if ((tii->ww != -1 && (tii->flags & rid_image_flag_PERCENT) == 0) || tii->hh != -1)
+	if ((req_ww != -1 && (flags & rid_image_flag_PERCENT) == 0) || req_hh != -1)
 	{
             double aspect = (double)width/height;
 
-    	    if (tii->ww != -1)
+    	    if (req_ww != -1)
     	    {   /* If width is specified, use that */
 #if 0
-    	        if (tii->flags & rid_image_flag_PERCENT)
+    	        if (flags & rid_image_flag_PERCENT)
 		{
-    	            int ww = tii->ww*2*antweb_get_edges(ti, NULL, NULL)/100;
+    	            int ww = req_ww*2*antweb_get_edges(ti, NULL, NULL)/100;
 		    if (ww == 0)
 			width = ww;
 		}
                 else
 #endif
-    	            width = tii->ww*2 * doc->scale_value/100;
+    	            width = req_ww*2 * scale_value/100;
     	    }
     	    else
     	    {   /* If width is not specified, calculate from height */
-    	        width = (int)(tii->hh * aspect * doc->scale_value/100) * 2;
+    	        width = (int)(req_hh * aspect * scale_value/100) * 2;
     	    }
 
-    	    height = tii->hh != -1 ? tii->hh*2 : (int)(width * doc->scale_value/100 / aspect);
+    	    height = req_hh != -1 ? req_hh*2 : (int)((double)width * scale_value/100 / aspect);
     	}
     }
     else
     {
         /* if not real then size from the text */
-	oimage_size_alt_text(ti, &width, &height, doc->flags & doc_flag_DEFER_IMAGES ? 1 : 0);
+	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, &width, &height);
     }
 
     IMGDBG(("Now width %d, height %d\n", width, height));
+
+    *iw = width;
+    *ih = height;
+}
+
+image oimage_fetch_image(antweb_doc *doc, const char *src)
+{
+    char *url, *base;
+    int ffl;
+    image imh;
+
+    ffl = (doc->flags & doc_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
+    if ((doc->flags & doc_flag_FROM_HISTORY) == 0)
+	ffl |= image_find_flag_CHECK_EXPIRE;
+
+    base = BASE(doc);
+    url = url_join(base, src);
+
+    imh = NULL;
+    image_find(url, base, ffl,
+	       &antweb_doc_image_change, doc, render_get_colour(render_colour_BACK, doc),
+	       &imh);
+
+    mm_free(url);
+
+    return imh;
+}
+
+void oimage_flush_image(image im)
+{
+    int f;
+    if (im &&
+	image_info(im, NULL, NULL, NULL, &f, NULL, NULL) == NULL &&
+	(f & image_flag_FETCHED) == 0)
+    {
+	image_mark_to_flush(im, image_find_flag_DEFER);
+    }
+}
+
+void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+{
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+    int width, height;
+    image_flags fl;
+
+    if (tii->im == NULL)
+	tii->im = oimage_fetch_image(doc, tii->src);
+
+    image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
+    
+    if (fl & image_flag_REALTHING)
+	tii->flags |= rid_image_flag_REAL;
+
+    oimage_size_image(tii->alt, tii->ww, tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
+    
     IMGDBG(("bwidth %d, hspace %d, vspace %d\n", tii->bwidth, tii->hspace, tii->vspace));
 
     width += (tii->bwidth + tii->hspace) * 4;
@@ -510,16 +536,8 @@ void *oimage_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 	return tii->im;
 
     case object_image_ABORT:
-    {
-	int f;
-	if (tii->im &&
-	    image_info(tii->im, NULL, NULL, NULL, &f, NULL, NULL) == NULL &&
-	    (f & image_flag_FETCHED) == 0)
-	{
-	    image_mark_to_flush(tii->im, image_find_flag_DEFER);
-	}
+	oimage_flush_image(tii->im);
 	break;
-    }
 
     case object_image_BOX:
     {

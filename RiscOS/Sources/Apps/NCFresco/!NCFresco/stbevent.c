@@ -459,6 +459,11 @@ static void url_event_handler(int event, fe_view v)
 	frontend_complain(frontend_open_url(s, v, NULL, NULL, 0));
 }
 
+static void codec_event_handler(int event, fe_view v)
+{
+    
+}
+
 void fevent_handler(int event, fe_view v)
 {
     STBDBG(("fevent_handler(): event %x v %p\n", event, v));
@@ -513,6 +518,9 @@ void fevent_handler(int event, fe_view v)
 		break;
 	    case fevent_SUB_CLASS_TOOLBAR:
 		toolbar_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_CODEC:
+		codec_event_handler(event, v);
 		break;
             }
 	    break;

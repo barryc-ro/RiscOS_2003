@@ -363,6 +363,7 @@ os_error *backend_item_info(be_doc doc, be_item ti, int *flags, char **link, voi
 #define be_item_info_ACTION	(1 << 6) /* The item is submit button */
 #define be_item_info_USEMAP	(1 << 7) /* The item is a clientside imagemap */
 #define be_item_info_SECURE	(1 << 8) /* If ACTION then dest URL is https:... */
+#define be_item_info_PLUGIN	(1 << 9) /* The item is a plugin, 'im' is the internal plugin handle */
 
 os_error *backend_image_size_info(be_doc doc, void *imh, int *width, int *height, int *bpp);
 os_error *backend_image_file_info(be_doc doc, void *imh, int *load, int *exec, int *size);
@@ -463,6 +464,16 @@ extern void backend_doc_reformat(be_doc doc);
 extern void backend_doc_set_scaling(be_doc doc, int scale_value);
 
 extern BOOL backend_submit_form(be_doc doc, const char *id, int right);
+
+extern void backend_plugin_action(be_doc doc, be_item item, int action);
+
+#define be_plugin_BUSY		0x0001
+#define be_plugin_MUTED		0x0002
+#define be_plugin_CAN_FOCUS	0x0100
+#define be_plugin_CAN_ACTION	0x0200
+#define be_plugin_HELPER	0x0400
+
+extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state);
 
 #endif /* __interface_h */
 

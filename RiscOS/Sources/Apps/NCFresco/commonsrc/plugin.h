@@ -252,6 +252,8 @@ typedef struct
 #define plugin_state_REWIND		3
 #define plugin_state_FAST_FORWARD	4
 #define plugin_state_RECORD		5
+#define plugin_state_MUTE		6
+#define plugin_state_UNMUTE		7
 
 typedef struct
 {

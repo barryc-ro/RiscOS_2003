@@ -12,6 +12,7 @@
  * 01/08/96: SJM: add 1 to MAXLENGTH for terminating null.
  * 02/08/96: SJM: changed bwidth to 0 if no anchor around it.
  * 11/09/96: SJM: new_area_item was checking for valid coords which obviously don't exist for SHAPE=DEFAULT
+ * 27/02/97: SJM: Added new attributes to INPUT, TEXTAREA, SELECT for background colours and images
  */
 
 #include <stdlib.h>
@@ -850,6 +851,7 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
 
 /*****************************************************************************/
 
+#if 0				/* moved to forms.c */
 extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *align,
 				 VALUE *checked,
@@ -865,7 +867,8 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *selcolor,
 				 VALUE *cursor,
 				 VALUE *nocursor,
-				 VALUE *numbers)
+				 VALUE *numbers,
+				 VALUE *selimage)
 {
     rid_text_item_input *new;
     rid_text_item *nb = NULL;
@@ -935,12 +938,10 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
     if (disabled->type != value_none)
 	in->flags |= rid_if_DISABLED;
 
-    if (name->type == value_string)
-	in->name = stringdup(name->u.s);
-    if (value->type == value_string)
-	in->value = stringdup(value->u.s);
-    if (src->type == value_string)
-	in->src = stringdup(src->u.s);
+    in->name = valuestringdup(name);
+    in->value = valuestringdup(value);
+    in->src = valuestringdup(src);
+    in->src_sel = valuestringdup(selimage);
 
 
 #if 0
@@ -1005,6 +1006,7 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
 	rid_text_item_connect(me->rh->curstream, nb);
     }
 }
+#endif
 
 /*****************************************************************************
 
