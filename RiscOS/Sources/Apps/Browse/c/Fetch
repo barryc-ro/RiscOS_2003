@@ -34,6 +34,7 @@
 #include "History.h"
 #include "Images.h"
 #include "Memory.h"
+#include "Meta.h"
 #include "Redraw.h"
 #include "Reformat.h"
 #include "Toolbars.h"
@@ -57,13 +58,10 @@ static char     * fetch_buffer  = NULL; /* For html_get_next_token to shovel in 
 
 #define AuthorisationStr "Authorization: Basic "
 
-/* Temporary compilation definitions */
-
-#define TPTR_TRACE
-#undef TPTR_TRACE
+/* Local compilation options */
 
 #define FRAMES_SUPPORT
-//#undef FRAMES_SUPPORT
+#undef  DUMP_HEADERS
 
 /* Static function prototypes */
 
@@ -564,7 +562,6 @@ void fetch_preprocess_token(browser_data * b, HStream * tptr)
 
   else if ISHEAD(tptr)
   {
-
     /* Deal with header (HEAD) tags */
 
     if ((tptr->style & TITLE) && tptr->text)
@@ -614,7 +611,7 @@ void fetch_preprocess_token(browser_data * b, HStream * tptr)
         image_new_image(b, HtmlBODYbackground(tptr), tptr, 2);
       }
 
-      /* Get the 24-bit background colour, if any.                      */
+      /* Get the 24-bit background colour, if any. */
 
       if (HtmlBODYbgcolour(tptr) != NULL_COLOUR)
       {
@@ -627,22 +624,35 @@ void fetch_preprocess_token(browser_data * b, HStream * tptr)
         /* If there's no actual background image, set the anti-alias */
         /* colour to be the same as the background colour.           */
 
-//        if (b->backimage < 0 || b->idata[b->backimage].istore->width <= 0) b->aacol = b->backgroundcol;
+// Can *probably* remove this, as it could lead to the colour getting
+// stuck just because the background image had fetched yet... Need to
+// check that first though.
+//
+// if (b->backimage < 0 || b->idata[b->backimage].istore->width <= 0) b->aacol = b->backgroundcol;
+
         if (b->backimage < 0) b->aacol = b->backgroundcol;
 
         browser_update_bottom(b, 0);
       }
 
-      /* Get the rest of the colour info out.                           */
+      /* Get the rest of the colour info out. */
 
-      if (HtmlBODYtext(tptr)  != NULL_COLOUR) b->textcol = HtmlBODYtext(tptr);
-      if (HtmlBODYlink(tptr)  != NULL_COLOUR) b->linkcol = HtmlBODYlink(tptr);
+      if (HtmlBODYtext (tptr) != NULL_COLOUR) b->textcol = HtmlBODYtext (tptr);
+      if (HtmlBODYlink (tptr) != NULL_COLOUR) b->linkcol = HtmlBODYlink (tptr);
       if (HtmlBODYvlink(tptr) != NULL_COLOUR) b->usedcol = HtmlBODYvlink(tptr);
       if (HtmlBODYalink(tptr) != NULL_COLOUR) b->follcol = HtmlBODYalink(tptr);
 
-      /* Also pull out the onload and onunload scripts.                 */
-      if (HtmlBODYonload(tptr))   b->onload   = HtmlBODYonload(tptr);
+      /* Also pull out the onload and onunload scripts. */
+
+      if (HtmlBODYonload  (tptr)) b->onload   = HtmlBODYonload  (tptr);
       if (HtmlBODYonunload(tptr)) b->onunload = HtmlBODYonunload(tptr);
+    }
+
+    /* Deal with META... tags */
+
+    if (tptr->tag == META)
+    {
+      meta_process_tag(b, tptr);
     }
 
     /* Closure of long else to see if the HStream structure represented */
@@ -1017,6 +1027,12 @@ void fetch_fetcher(browser_data * b)
 
         b->nesting_level = 0;
         b->filling_frame = 0;
+
+        /* Cancel any pending automatic fetches */
+
+        if (b->meta_refresh_at) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) meta_check_refresh, b);
+        b->meta_refresh_at  = 0;
+        b->meta_refresh_url = NULL;
 
         /* Cancel pending reformats */
 
@@ -2085,11 +2101,6 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
   char              ref_url[2048];
   urlstat         * up;
 
-  #ifdef TPTR_TRACE
-    HStream * debugrecord1;
-    HStream * debugrecord2;
-  #endif
-
   #ifdef TRACE
     if (tl & (1u<<6)) Printf("html_get_next_token: Called\n");
   #endif
@@ -2098,10 +2109,6 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
   /* through *token.                                              */
 
   if (token) *token = NULL;
-
-  #ifdef TPTR_TRACE
-    debugrecord1 = debugrecord2 = NULL;
-  #endif
 
   /* Until we know better, signal that we're waiting */
 
@@ -2429,14 +2436,6 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
         up->lasttoken     = up->stream;
         if (token) *token = up->lasttoken;
 
-        #ifdef TPTR_TRACE
-          if (token)
-          {
-            Printf("Last: %p\n", (void *) up->lasttoken);
-            debugrecord1 = debugrecord2 = *token;
-          }
-        #endif
-
         *waiting = (!up->stream && up->fetching) ? 1 : 0;
       }
       else
@@ -2451,14 +2450,6 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
         {
           up->lasttoken     = up->lasttoken->next;
           if (token) *token = up->lasttoken;
-
-          #ifdef TPTR_TRACE
-            if (token)
-            {
-              Printf("Next: %p\n", (void *) up->lasttoken);
-              debugrecord1 = debugrecord2 = *token;
-            }
-          #endif
 
           *waiting = 0;
         }
@@ -2479,28 +2470,12 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
             up->lasttoken     = up->stream;
             if (token) *token = up->lasttoken;
-
-            #ifdef TPTR_TRACE
-              if (token)
-              {
-                Printf("Reset last: %p\n", (void *) up->lasttoken);
-                debugrecord1 = debugrecord2 = *token;
-              }
-            #endif
           }
           else
           {
             *waiting = (up->fetching) ? 1 : 0;
 
             if (token) *token = NULL;
-
-            #ifdef TPTR_TRACE
-              if (token)
-              {
-                Printf("Null: %p\n", NULL);
-                debugrecord1 = debugrecord2 = *token;
-              }
-            #endif
           }
         }
       }
@@ -2962,19 +2937,6 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
     {
       if (!e) Printf("html_get_next_token: Successful\n");
       else Printf("html_get_next_token: Exitting with an error\n");
-    }
-  #endif
-
-  #ifdef TPTR_TRACE
-    if (token)
-    {
-      if (
-           *token != debugrecord1 ||
-           *token != debugrecord2 ||
-           debugrecord1 != debugrecord2
-         )
-
-         Printf ("INTERNAL INCONSISTENCY DETECTED\n");
     }
   #endif
 
