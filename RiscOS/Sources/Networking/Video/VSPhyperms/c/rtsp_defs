@@ -1,0 +1,836 @@
+#include "stdlib.h"
+#include "string.h"
+#include "ctype.h"
+#include "math.h"
+
+#include "netdb.h"
+#include "sys/errno.h"
+
+#include "unixlib.h"
+#include "socklib.h"
+#include "inetlib.h"
+#include "sys/uio.h"
+
+#include "rtsp_defs.h"
+#include "vsp_types.h"
+
+/* strings should be allocated based on their entire string including escape
+ * characters (i.e. \ or %s etc.) then body lengths calculated after filling
+ * in or parsing these strings using the printf methods
+ */
+const char *RTSP_describe_header =
+      "RTSP/1.0 %s %s\r\n"
+      "CSeq:%s\r\n"
+      "Content-Type: application/sdp\r\n"
+      "Content-Length: %s\r\n\r\n";
+      
+const char *RTSP_describe_body =
+      "v=0\r\n"
+      "o=- %s %s IN IP4 %s\r\n"
+      "s=nec hyperms\r\n"
+      "t=0 0\r\n"
+      "a=range:npt=0.00-%s\r\n"
+      "a=X-conttype:%s\r\n"
+      "a=X-contstatus:%s\r\n"
+      "a=X-fplayback:%s\r\n"
+      "a=X-trickmodes:%s\r\n"
+      "a=framerate:%s\r\n"
+      "m=application 0 udp nec-video\r\n"
+      "b=AS:%s\r\n";
+
+const char *RTSP_play_response =
+      "RTSP/1.0 %s %s\r\n"
+      "CSeq: %s\r\n"
+      "Range:npt=%s-%s\r\n"
+      "Speed: %s\r\n";
+      
+typedef struct
+{
+    const server_response_type server_response;
+    const RTSP_status status;
+} RTSP_status_table;
+
+const RTSP_status_table status_table[] = 
+{
+    NEC_OK,                200, "200", "OK",
+    NEC_NoHighSpeedFile,   503, "503", "Service Unavailable",
+    NEC_WritingInProgress, 404, "404", "Not Found",
+    NEC_NoGOPatJump,       457, "457", "Invalid Range",
+    NEC_ParameterError,    401, "401", "Unauthorised",
+    NEC_NoLiveStream,      455, "455", "Method Not Valid in This State",
+    RTSP_MethodNotAllowed, 405, "405", "Method Not Allowed",
+    NEC_SystemError,       500, "500", "Internal Server Error",
+    RESPONSE_default,      400, "400", "Bad Request", /* all the rest, also acts as terminator */
+};
+
+#ifdef DEBUGLIB
+#include "DebugLib/DebugLib.h"
+
+
+#define magic_value    (('M' << 24) + ('E' << 16) + ('M' << 8) + ('\0')) 
+#define fill_character 'h'
+#define extra_size     248
+#define initial_offset 124
+
+static int outstanding_data = 0;
+
+#if (initial_offset + 4) > extra_size
+#error offset must be less than the offset
+#endif
+
+void malloc_check(void)
+{
+    if (0 != outstanding_data)
+    {
+        dprintf(("","outstanding malloc (%i)\n", outstanding_data));
+    }
+    else
+    {
+        dprintf(("","outstanding malloc OK\n"));
+    }
+  
+}
+void* my_malloc(size_t size)
+{
+  char* tmp = malloc(size + extra_size);
+  
+  memset(tmp, fill_character, size + extra_size);
+  
+  ((int*)tmp)[0] = magic_value;
+  
+  ((int*)tmp)[1] = size;
+  
+  outstanding_data += size;
+  
+  return (tmp + initial_offset);
+}
+
+void my_free(void* ptr)
+{
+  if (NULL == ptr)
+  {
+      dprintf(("", "attempt to free a NULL pointer\n"));
+  }
+  else
+  {
+      char* tmp = ((char*)ptr - initial_offset);
+      int size = ((int*)tmp)[1];
+      
+      if (magic_value != ((int*)tmp)[0])
+      {
+          dprintf(("", "attempt to free an unallocated block\n"));
+      }
+      else
+      {
+          int i;
+          memset(ptr, fill_character, size);
+          
+          for (i=8; i < (size + extra_size); i++)
+          {
+              if (fill_character != tmp[i])
+              {
+                  if ((tmp[i] > '~') || (tmp[i] < ' '))
+                  {
+                      dprintf(("", "memory overwritten @ (%i) for size (%i) ASCII = (%i) \n", i, size, tmp[i]));
+                  }
+                  else
+                  {
+                      dprintf(("", "memory overwritten @ (%i) for size (%i)  char = (%c) \n", i, size, tmp[i]));
+                  }
+              }
+          }
+      }
+      outstanding_data -= size;
+      free (tmp);
+  }
+}
+#endif
+
+const RTSP_status *RTSP_get_status(server_response_type nec_server_response)
+{
+    const RTSP_status_table *tmp = status_table;
+    int i;
+    
+    for (i = 0; (tmp && (RESPONSE_default != tmp[i].server_response)); i++)
+    {
+        if (tmp[i].server_response == nec_server_response)
+            break;
+    }
+    
+    return &(tmp[i].status);
+}
+
+const char* RTSP_get_encoding_type(ULINT encoding_type)
+{
+    const char* content_type;
+    
+    switch (encoding_type)
+    {
+         case 0:
+           content_type = "m1s";
+           break;
+         case 6:
+           content_type = "m2s";
+           break;
+         case 12:
+           content_type = "m1t";
+           break;
+         default:
+           content_type = "m2t";
+    }
+    return content_type;
+}
+
+
+const char* RTSP_get_disk_status(ULINT video_status)
+{
+  return ((video_status == 0) ? "Disk" : "Feed");
+}
+
+const char* RTSP_get_video_type (ULINT video_type)
+{
+  return ((video_type == 4) ? "29.97":"25.00");
+}
+
+char* RTSP_get_alloc_tricks_array(ULINT trick_modes)
+{
+    char* tricks = (char*)my_malloc(30);
+    
+    sprintf(tricks, "%s%s%s%s%s%s%s%s%s\0",
+              ((trick_modes & trick_fast_forward  )? " ff":""),
+              ((trick_modes & trick_fast_rewind   )? " fr":""),
+              ((trick_modes & trick_forward_skip  )? " fs":""),
+              ((trick_modes & trick_backward_skip )? " bs":""),
+              ((trick_modes & trick_forward_jump  )? " fj":""),
+              ((trick_modes & trick_backward_jump )? " bj":""),
+              ((trick_modes & trick_slow_play     )? " sp":""),
+              ((trick_modes & trick_pause         )? " ps":""),
+              ((trick_modes & trick_jump_most_rec )? " lp":"")
+           );
+    
+    
+    return tricks;
+}
+/*************************************************** text to data methods *****/
+/*  These methods have the form;
+ *
+ *  parse_<EBNF tag>(const char* query, const char** next...);
+ *
+ *  This will parse the tags as specified the next ptr if present is updated 
+ *  to reflect the end of the parsed string.  All other variables and the
+ *  return value are the extracted information the return value will sometimes
+ *  be used to return error pointers.
+ */
+
+/* this extracts an integer and returns its value.  */
+int parse_isdigit(const char* query, const char** next)
+{
+   int value = atoi(query);
+   
+   if (next)
+   {
+      int i;
+      
+      for (i = 0; isdigit(query[i]); i++);
+      
+      (*next) = query + i;
+   }
+   return value;
+}
+
+/* parses specification = "asset="<atoi>"[&start="<atoi>["&end="<atoi>]]; */
+int parse_asset_specification(const char* query, const char **next,
+                                         ULINT* asset, ULINT* start, ULINT* end)
+{
+    const char* asset_sn = "asset=";
+    const char* start_sn  = "&start=";
+    const char* end_sn    = "&end=";
+    const char* initial_query = query;
+    int tmp_digit = 0;
+    
+    if (0 == strncmp(query, asset_sn, strlen(asset_sn)))
+    {
+      query += strlen(asset_sn);
+      
+      tmp_digit  = parse_isdigit(query, &query);
+      if (asset) (*asset) = tmp_digit;
+      
+      if (0 == strncmp(query, start_sn, strlen(start_sn)))
+      {
+          query += strlen(start_sn);
+          
+          tmp_digit = (parse_isdigit(query, &query) << 1);
+          
+          if ('.' == (*query))
+          {
+              query++;
+              
+              if (isdigit(*query))
+              {
+                 if ('5' <= (*query))
+                 {
+                    tmp_digit++; 
+                 }
+                 
+                 parse_isdigit(query, &query); /* ignore other characters */
+              }
+          }
+          if (start) (*start) = tmp_digit;
+      }
+      
+      
+      if (0 == strncmp(query, end_sn, strlen(end_sn)))
+      {
+          query += strlen(end_sn);
+          
+          tmp_digit = (parse_isdigit(query, &query) << 1);
+          
+          if ('.' == (*query))
+          {
+              query++;
+              
+              if (isdigit(*query))
+              {
+                 if ('5' <= (*query))
+                 {
+                    tmp_digit++; 
+                 }
+                 
+                 parse_isdigit(query, &query); /* ignore other characters */
+              }
+          }
+          if (end) (*end) = tmp_digit;
+      }
+    }
+    if (next) (*next) = query;
+    
+    return (int)(initial_query - query);
+}
+
+/* this parses := <isdigit>[("."|"/")<isdigit>] to define two digits
+ * forward;   boolean true mean forward negative meaning reverse
+ * the numerator and denominator are derived from the scalar value.  Decimal
+ * representation is converted to fractional.
+ * fractions are not reduced.
+ */ 
+int parse_number(const char* query, const char** next,
+                                               int *numerator, int *denominator)
+{
+    int firstnum = 0, secondnum = 1;
+    const char *initial_query = query;
+    bool parsed = true;
+        
+    firstnum = parse_isdigit(query, &query);
+        
+    if ('.' == (*query)) /* decimal */
+    {
+        int accuracy;
+        const char* start_digit = ++query;
+        
+        secondnum = parse_isdigit(query, &query);
+        
+        accuracy = query - start_digit;
+        
+        if (accuracy > 0)
+        {
+            accuracy = (int)pow(10, accuracy);
+            firstnum = (accuracy * firstnum) + secondnum;
+            
+            secondnum = accuracy;
+        }
+        else
+        {
+            secondnum = 1;
+        }
+    }
+    else
+    {
+        if ('/' == (*query))
+        {
+            ++query;
+            
+            secondnum = parse_isdigit(query, &query);
+            
+            if (0 == secondnum)
+            {
+                parsed = false;
+            }
+        }
+    }
+    
+    if (next) (*next) = query;
+    
+    if (numerator)   (*numerator)   = firstnum;
+    if (denominator) (*denominator) = secondnum;
+    
+    if (parsed == true)
+    {
+        parsed = (initial_query != query) ? true : false;
+    }
+    
+    return parsed;
+}
+
+/* this adds a direction to the above parse ["-"]<number> */
+int parse_speed(const char* query, const char** next,
+                                bool *forward, int *numerator, int *denominator)
+{
+    if ('-' == (*query))
+    {
+        if (forward) (*forward) = false;
+        query++;
+    }
+    else
+    {
+        if (forward) (*forward) = true;
+    }
+    
+    return parse_number(query, next, numerator, denominator);
+}
+
+/* parses time reference ("live"|"now"|"end"|<time seconds>) */
+bool parse_time_reference(const char* query, const char** next,
+                                                             position_type *pos)
+{
+    const char* live = "live";
+    const char* now = "now";
+    const char* end = "end";
+    
+    bool parsed = true;
+    
+    int num, den;
+    
+    /* "live" */
+    if (0 == strncmp(query, live, strlen(live)))
+    {
+        query += strlen(live);
+        num = TIME_live;
+        den = 0;
+    }
+    else
+      /* "now" */
+    if (0 == strncmp(query, now, strlen(now)))
+    {
+        query += strlen(now);
+        num = TIME_now;
+        den = 0;
+    }
+    else
+      /* "end" */
+    if (0 == strncmp(query, end, strlen(end)))
+    {
+        query += strlen(end);
+        num = TIME_end;
+        den = 0;
+    }
+    else
+      /* time seconds */
+    {
+        num = 0;
+        den = 1;
+        
+        if (!parse_number(query, &query, &num, &den))
+        {
+            num = TIME_undef;
+            den = 0;
+            
+            parsed = false;
+        }
+    }
+    
+    if (pos)
+    {
+        pos->numer = num;
+        pos->denom = den;
+    }
+    
+    if (next)
+    {
+        (*next) = query;
+    }
+    return parsed;
+}
+
+/* parses npt=<time reference> */
+int parse_position(const char* query, const char* next,
+                                         position_type *from, position_type *to)
+{
+    const char* npt = "npt=";
+    const char* start = query;
+    bool parsed = true;
+    
+    if (0 == strncmp(query, npt, strlen(npt)))
+    {
+        query += strlen(npt);
+        
+        if ('-' == (*query))
+        {
+            query++;
+            
+            if (from)
+            {
+                from->numer = TIME_undef;
+                from->denom = 0;
+            }
+            
+            parse_time_reference(query, &query, to);
+        }
+        else
+        {
+            parse_time_reference(query, &query, from);
+            
+            if ('-' == (*query))
+            {
+                query++;
+                
+                parse_time_reference(query, &query, to);
+            }
+            else
+            {
+                if (to)
+                {
+                    to->numer = TIME_undef;
+                    to->denom = 0;
+                }
+            }
+        }
+    }
+    else
+    {
+        if (from)
+        {
+            from->numer = TIME_undef;
+            from->denom = 0;
+        }
+        
+        if (to)
+        {
+            to->numer = TIME_undef;
+            to->denom = 0;
+        }
+    }
+    
+    if ((true == parsed)&&(query == start))
+    {
+        parsed = false;
+    }
+    
+    return (parsed == true);
+}
+
+bool parse_server_address(const char *query, struct in_addr *addr)
+{
+    bool ret_val = true;
+    // it string is a dotted decimal
+    if ( !inet_aton(query, addr) )
+    {
+        struct hostent *he;
+        // look up the string in the host table
+        he = gethostbyname(query);
+
+        if (he == NULL)
+        {
+            ret_val = false;
+        }
+        else
+        {
+            (*addr) = (*(struct in_addr *)*he->h_addr_list);
+        }
+    }
+    return ret_val;
+}
+
+/* this parses an URL as defined in the URL module (1215,220/FS) next refers
+ * to the beginning of any query data in the URL */
+/* if a given server does not exist an ip address of zero will be returned */
+_kernel_oserror* parse_URL_server(const char *query, const char** next,
+                                  struct in_addr *address, int* port, 
+                                  PlayElementRequest **play_elements, int *assets_cnt)
+{
+    _kernel_oserror* err;
+    
+    int block_size = 0;
+    int size_block[10];
+    char* pointer_block[10];
+    char *data_block = NULL;
+
+    err = _swix(URL_ParseURL, _INR(0,4), 0, URL_ParseURL_Reason_FindLengths, 
+                                                          query, 0, size_block);
+    if (!err)
+    {
+        block_size += size_block[2] + 1;// hostname
+        block_size += size_block[3] + 1;// port number
+        block_size += size_block[8] + 1;// query
+        
+        if (next)
+        {
+            int i = 0;
+            (*next) = query;
+            
+            while ((i < size_block[0])&&('?' != (**next)))
+            {
+               i++;
+               (*next)++;
+            }
+            (*next)++;
+        }
+        
+        data_block = (char*) my_malloc(block_size);
+        
+        // set the 10 integers to all null pointers
+        memset(pointer_block, 0, sizeof(pointer_block));
+        
+        if (data_block)
+        {
+            memset(data_block, 0, block_size);
+            
+            pointer_block[2] = data_block;
+            pointer_block[3] = data_block + size_block[2];
+            pointer_block[8] = data_block + size_block[2] + size_block[3];
+            
+            err = _swix(URL_ParseURL, _INR(0,4), 0, 
+                                      URL_ParseURL_Reason_FillBuffers, 
+                                      query, 0, pointer_block);
+            if (!err)
+            {   
+                if ((address)&&(pointer_block[2]))
+                {
+                    if (false == 
+                        parse_server_address(pointer_block[2], address))
+                    {
+                        address->s_addr = 0;
+                    }
+                }
+                
+                if ((port) && (pointer_block[3]))
+                {
+                    (*port) = atoi(pointer_block[3]);
+                }
+                
+                
+                if ((NULL != play_elements) && 
+                    (NULL == (*play_elements))&&(0 != size_block[8]))
+                {
+                    int i = 0;
+                    int assets = 1;
+                    
+                    /* approximate the number of assets */
+                    while ((i < size_block[8])&&('\0' != pointer_block[8][i])
+                                                  &&('#'!= pointer_block[8][i]))
+                    {
+                        if ('&' == pointer_block[8][i])
+                        {
+                           if ('a' == pointer_block[8][i+1])
+                               assets++;
+                        }
+                        else
+                        if (('=' != pointer_block[8][i])&&
+                             ('.' != pointer_block[8][i])&&
+                             (!isalnum(pointer_block[8][i])))
+                        {
+                           assets = 0;
+                           break;
+                        }
+                        i++;
+                    }
+                    
+                    if (assets > 0)
+                    {
+                        (*play_elements) = my_malloc(assets * sizeof(PlayElementRequest));
+                        
+                        if (*play_elements)
+                        {   
+                            int i = 0;
+                            const char* query = pointer_block[8];
+                            memset((*play_elements), 0, assets * sizeof(PlayElementRequest));
+                            
+                            while(i < assets)
+                            {                                
+                                
+                                if (!parse_asset_specification(query, &query,
+                                                &((*play_elements)[i].asset_id),
+                                                &((*play_elements)[i].viewing_start_time),
+                                                &((*play_elements)[i].viewing_end_time)) )
+                                {
+                                    break;
+                                }
+                                
+                                i++;
+                                
+                                if ('&' == (*query))
+                                {
+                                    query++;
+                                }
+                                else
+                                {
+                                   break;
+                                }
+                            }
+                            if (assets_cnt) (*assets_cnt) = i;
+                        }
+                    }
+                }
+            }
+            my_free(data_block);
+        }
+    }
+    return err;
+}
+
+/********************************************** video control methods ************/
+
+_kernel_oserror* VideoControlInformNewStatus(ULINT identity)
+{
+    return _swix(VideoControl_ProtocolNotify, _INR(0,4), 0, identity, VideoControlProtocolNotifyNewStatus, 0, 0);
+}
+
+_kernel_oserror* VideoControlInformPrepareForData(ULINT identity, ULINT client, int* handle)
+{
+     _kernel_oserror *err = NULL;
+     /* because I control the playback rate of the decoder the speed as a string is not used
+      though it is specified as necessary */
+     
+     err = _swix(VideoControl_ProtocolNotify, _INR(0,4), 0, identity, 0, 1, "1");
+     
+     if ((!err) && (handle))
+     {
+         int tag[4] = { 21, 1, 0, -1 };
+         
+         /*tag[0] = 21; tag[1] = 1; tag[3] = -1;*/
+         
+         err = _swix(VideoControl_ProtocolOptions, _INR(0,2), 0, client, tag);
+         
+         if (handle) (*handle) = tag[2];          
+     }
+     return err;
+}
+/********************************************** diagnostic methods ************/
+#ifdef DEBUGLIB
+
+const char* get_TIME(position_type* pos)
+{
+    const char* time;
+    
+    if (pos->denom != 0)
+    {
+        time="out of bounds";
+    }
+    else
+    {
+        switch (pos->numer)
+        {
+            case TIME_now:
+            {
+                time = "now";
+                break;
+            }
+            case TIME_live:
+            {
+                time = "live";
+                break;
+            }
+            case TIME_end:
+            {
+                time = "end";
+                break;
+            }
+            case TIME_undef:
+            {
+                time = "undefined";
+                break;
+            }
+            default:
+            {
+                time = "out of bounds";
+                break;
+            }
+        }
+    }
+    return time;
+}
+
+void parse_test_entry(const char* margv[], int margc)
+{
+    const char* url = "URL";
+    const char* speed = "speed";
+    const char* position = "position";
+    
+    if (margc > 1)
+    {
+        if (0 == strncmp(margv[0], url, strlen(url)))
+        {
+            struct in_addr address;
+            int port = 0, queries = 0;
+            const char* query = margv[1];
+            _kernel_oserror* err = NULL;
+            PlayElementRequest *play_elements = NULL;
+            
+            printf("parsing query (%s)\n", query);
+            
+            err = parse_URL_server(query, &query, &address, &port, &play_elements, &queries);
+            
+            if (err)
+            {
+                printf(" error (%i:%s)\n", err->errnum, err->errmess);
+            }
+            else
+            {
+                int serv = (int)ntohl(address.s_addr);
+                int i;
+                
+                printf("-parsed URL\n");
+                printf(" server = %i.%i.%i.%i\n", (int)((serv >> 24) & 0xff),(int)((serv >> 16) & 0xff),
+                                                  (int)((serv >> 8) & 0xff),(int)((serv) & 0xff));
+                printf(" port = %i\n", port);
+                printf(" queries %i play elements %p\n", queries, play_elements);
+                
+                if ((queries > 0) && (play_elements))
+                {
+                    for (i=0; i<queries; i++)
+                    {
+                        printf("asset (%i) [%i->%i]\n", 
+                                (int)play_elements[i].asset_id,
+                                (int)play_elements[i].viewing_start_time,
+                                (int)play_elements[i].viewing_end_time );                    
+                    }  
+                    my_free( play_elements );
+                    play_elements = NULL;
+                }
+            }
+        }
+        else
+        if (0 == strncmp(margv[0], speed, strlen(speed)))
+        {
+            bool forward = true;
+            int denominator = 0, numerator = 0;
+            
+            parse_speed(margv[1], NULL, &forward, &numerator, &denominator);
+            
+            printf("speed [forward (%s), %i/%i]\n", (forward)?"TRUE":"FALSE", numerator, denominator);
+        }
+        else
+        if (0 == strncmp(margv[0], position, strlen(position)))
+        {
+            position_type from, to;
+            int success;
+            
+            success = parse_position(margv[1], NULL, &from, &to);
+            
+            printf("position [success = (%i)]\n", success);
+            if (from.denom ==0)
+                printf(" from (%s)\n", get_TIME(&from));
+            else
+                printf(" from (%i/%i)\n", from.numer, from.denom);
+            
+            if (to.denom == 0)
+                printf(" to   (%s)\n", get_TIME(&to));
+            else
+                printf(" to  (%i/%i)\n", to.numer, to.denom);
+        }
+    }
+    else
+    {
+        printf("insufficient parameters\n");
+    }
+}
+#endif
