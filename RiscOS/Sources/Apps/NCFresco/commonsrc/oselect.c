@@ -352,7 +352,10 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 
 	/* deselect it and select the next one, wrapping around */
 	if (oi == NULL)
-	    sel->options->flags |= rid_if_SELECTED;
+	{
+	    if (sel->options)
+		sel->options->flags |= rid_if_SELECTED;
+	}
 	else
 	{
 	    oi->flags &= ~rid_if_SELECTED;

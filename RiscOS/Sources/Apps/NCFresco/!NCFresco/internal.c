@@ -180,7 +180,7 @@ static os_error *fe_display_options_write_file(FILE *f)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static void internal_decode_print_options(const char *query)
+static int internal_decode_print_options(const char *query)
 {
     char *s;
     BOOL cancel;
@@ -217,6 +217,8 @@ static void internal_decode_print_options(const char *query)
 
 	print__ul = strstr(query, "f=ul") != 0;
     }
+
+    return fe_internal_url_NO_ACTION;
 }
 
 static os_error *fe_print_options_write_file(FILE *f)
@@ -979,7 +981,7 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
     if (url && url[0])
     {
 	char *nocache = extract_value(query, "opt=");
-	char *remove = extract_value(query, "remove=");
+/* 	char *remove = extract_value(query, "remove="); */
 
 	if (nocache && strcasestr(nocache, "nocache"))
 	    *flags |= access_NOCACHE;
@@ -988,13 +990,13 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
     
 	*new_url = check_url_prefix(url);
 
-	if (remove)
-	    fe_dispose_view(fe_locate_view(remove));
+/* 	if (remove) */
+/* 	    fe_dispose_view(fe_locate_view(remove)); */
 
 	tb_status_button(fevent_OPEN_URL, FALSE);
        
 	mm_free(nocache);
-	mm_free(remove);
+/* 	mm_free(remove); */
 
 	generated = fe_internal_url_REDIRECT;
     }
@@ -1372,7 +1374,7 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     }
     else if (strcasecomp(page, "printoptions") == 0)
     {
-	internal_decode_print_options(query);
+	generated = internal_decode_print_options(query);
     }
     else if (strcasecomp(page, "find") == 0)
     {
@@ -1432,6 +1434,7 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 {
     internal_url_str *uu;
     BOOL generated = FALSE;
+    char *remove = extract_value(query, "remove=");
 
     STBDBG(("frontend_internal_url(): action '%s'\n", path));
     
@@ -1444,6 +1447,12 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 	    generated = uu->fn(query, bfile, referer, file, new_url, flags);
 	    break;
 	}
+    }
+
+    if (remove)
+    {
+	fe_dispose_view(fe_locate_view(remove));
+	mm_free(remove);
     }
 
     return generated;

@@ -31,6 +31,7 @@ struct layout_spacing_info
     rid_frameset_item *container;   /* the containing frameset */
     int index;                      /* row or column number */
     BOOL resize_heights;
+    int divider_index;			/* reference for the frame divider array[] */
 };
 
 /* ---------------------------------------------------------------------------------------------------------- */
@@ -149,14 +150,17 @@ static void fix_frame_sizes(rid_stdunits *vals, int n, rid_frame_unit_totals *to
 }
 #endif
 
+static int divider_current_index = 0;
+
 static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe_frame_info *info, char **urls, antweb_doc *doc)
 {
     const rid_frameset_item *fs = &frameset->data.frameset;
-    const rid_frame *frame;
+    rid_frame *frame;
     int nframes = fs->ncols*fs->nrows;
     int frames_added = 0;
     int *xpos, *ypos;
     int i;
+    int last_row_divider = 0, last_col_divider = 0;
 
     PRSDBG(( "layout: %p/%p %dx%d sizes @%p,%p\n", frameset, fs, fs->ncols, fs->nrows, fs->widths, fs->heights));
 
@@ -186,7 +190,27 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
 	PRSDBG(( "layout: frame %d resize %d\n", i, this_can_resize));
 
-        if (row > 0 && this_can_resize)
+	/* set up dividers */
+	frame->dividers[rid_frame_divider_TOP] = row == 0 ?
+	    frameset->dividers[rid_frame_divider_TOP] :		/* copy top from parent */
+	    last_row_divider;					/* use the divider created last time around */
+	
+	frame->dividers[rid_frame_divider_BOTTOM] = row == fs->nrows-1 ?
+	    frameset->dividers[rid_frame_divider_BOTTOM] :	/* copy bottom from parent */
+	    (last_row_divider = divider_current_index++);		/* create new divider and store */
+
+	
+	frame->dividers[rid_frame_divider_LEFT] = col == 0 ?
+	    frameset->dividers[rid_frame_divider_LEFT] :		/* copy left from parent */
+	    last_col_divider;					/* use the divider created last time around */
+	
+	frame->dividers[rid_frame_divider_RIGHT] = row == fs->ncols-1 ?
+	    frameset->dividers[rid_frame_divider_RIGHT] :	/* copy right from parent */
+	    (last_col_divider = divider_current_index++);		/* create new divider and store */
+
+
+	/* set up spacing array */
+	if (row > 0 && this_can_resize)
         {
             layout_spacing_info *spacing = mm_calloc(sizeof(struct layout_spacing_info), 1);
 
@@ -268,6 +292,9 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
                 info->margin.y0 = f->marginheight != -1 ? f->marginheight : DEFAULT_MARGIN_Y;
                 info->margin.y1 = -info->margin.y0;
 
+		/* copy in divider values */
+		memcpy(info->dividers, frame->dividers, sizeof(info->dividers));
+		
                 /* also fill in the url of this frame */
                 if (urls)
                     *urls++ = f->src;
@@ -319,6 +346,13 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only)
     PRSDBG(( "layout: max %d framesin %dx%d\n", doc->rh->nframes, totalw, -totalh));
 
     /* the initial frame count is the maximum there could be not counting nesting */
+
+    /* initialise the outermost divider array */
+    divider_current_index = 0;
+    for (i = 0; i < 4; i++)
+	doc->rh->frames->dividers[i] = divider_current_index++;
+
+    /* kick off the layout with the outer frameset */
     doc->rh->nframes = be_frame_layout_1(doc->rh->frames, &box, info, urls, doc);
 
 #if DEBUG >= 2

@@ -49,16 +49,24 @@ typedef struct awp_page_str {
 
 #define doc_selection_tag_TEXT	0
 #define doc_selection_tag_AREF	1
-#define doc_selection_tag_AREA	2
+#define doc_selection_tag_MAP	2
 
-typedef struct			/* the currently selected item. Could be an anchor or a text item */
+#define doc_selection_offset_UNKNOWN	(-1)
+#define doc_selection_offset_NO_CARET	(-2)
+
+typedef struct				/* the currently selected item. Could be an anchor or a text item or a map */
 {				
     int tag;		       
     union			
-    {			
-	rid_text_item *text;	/* a TEXT covers the other highlightable objects */
-	rid_aref_item *aref;	/* an AREF covers an anchor linking several text items, or */
-				/* a label anchor linking text and inputs  */
+    {
+	struct
+	{
+	    rid_text_item *item;	/* a TEXT covers the other highlightable objects */
+	    int input_offset;		/* caret offset */
+	} text;
+
+	rid_aref_item *aref;		/* an AREF covers an anchor linking several text items, or */
+					/* a label anchor linking text and inputs  */
 	struct
 	{
 	    rid_area_item *area;	/* an AREA covers an individual item in a client-side imagemap or SHAPED OBJECT */
@@ -129,8 +137,8 @@ typedef struct _antweb_doc {
     int im_in_transit;		/* The number of bytes in the images in transit */
     int im_so_far;		/* The bytes so far for those in transit */
 
-    rid_text_item *input;
-    int text_input_offset;
+/*     rid_text_item *input; */
+/*     int text_input_offset; */
 
     antweb_selection_t selection; /* holds currently selected object */
     antweb_selection_list_descr selection_list;	/* array to help move selection around */
@@ -177,6 +185,8 @@ extern os_error *antweb_document_sizeitems(antweb_doc *doc);
 /* from keyhl.c */
 
 extern void antweb_build_selection_list(antweb_doc *doc);
+extern rid_text_item *be_doc_read_caret(antweb_doc *doc);
+extern BOOL be_item_has_caret(antweb_doc *doc, rid_text_item *ti);
 
 #endif
 

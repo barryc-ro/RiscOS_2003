@@ -172,7 +172,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 
     fg = tai->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
     bg = tai->base.colours.back == -1 ? render_colour_WRITE :
-	    doc->input == ti && tai->base.colours.select != -1 ?
+	    be_item_has_caret(doc, ti) && tai->base.colours.select != -1 ?
 	    tai->base.colours.select | render_colour_RGB : tai->base.colours.back | render_colour_RGB;
 
     if (fs->lf != webfonts[WEBFONT_TTY].handle)
@@ -371,7 +371,7 @@ char *otextarea_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x,
 	}
     }
 
-    antweb_place_caret(doc, ti, -1);
+    antweb_place_caret(doc, ti, doc_selection_offset_UNKNOWN);
 #endif /* BUILDERS */
     return NULL;		/* Do not follow links */
 }
@@ -402,9 +402,9 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
     if (repos == object_caret_FOCUS && tai->base.colours.select != -1)
 	antweb_update_item(doc, ti);
     
-    if (doc->text_input_offset < 0)
+    if (doc->selection.data.text.input_offset < 0)
     {
-	doc->text_input_offset = 0;
+	doc->selection.data.text.input_offset = 0;
 	repos = object_caret_REPOSITION;
     }
 
@@ -493,7 +493,8 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     }
     else
     {
-	switch (lookup_key_action(key))
+	input_key_action action = lookup_key_action(key);
+	switch (action)
 	{
 	case key_action_NEWLINE:
 	case key_action_NEWLINE_SUBMIT_ALWAYS:
@@ -641,27 +642,25 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    break;
 	}
 	case key_action_LEFT:
+	case key_action_LEFT_OR_OFF:
 	    if (tai->cx > 0)
 	    {
 		tai->cx--;
 	        flags |= REPOS_CARET;
 	    }
-#ifdef STBWEB
-            else
+            else if (action == key_action_LEFT_OR_OFF)
                 flags &= ~CHAR_USED;
-#endif
 	    break;
 
 	case key_action_RIGHT:
+	case key_action_RIGHT_OR_OFF:
 	    if (tai->cx < MAX_TEXT_LINE)
 	    {
 		tai->cx++;
 	        flags |= REPOS_CARET;
 	    }
-#ifdef STBWEB
-            else
+            else if (action == key_action_RIGHT_OR_OFF)
                 flags &= ~CHAR_USED;
-#endif
 	    break;
 
 	case key_action_START_OF_LINE:

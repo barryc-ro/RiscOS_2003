@@ -737,9 +737,9 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
     if (new_sprite_area)
 	wobj->window.sprite_area = new_sprite_area;
 
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, template_name, &object));
+    STBDBG(("tb_bar_create(): %d buttons sprite_area %p\n", wobj->gadget_count, wobj->window.sprite_area));
 
-    STBDBG(("tb_bar_create(): %d buttons\n", wobj->gadget_count));
+    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, template_name, &object));
 
     /* create a list of the gadgets in the window */
     gadget = (struct gadget_object *)wobj->gadgets;
@@ -873,6 +873,18 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	tbi->object_handle = object_handle;
 	tbi->window_handle = window_handle(object_handle);
 
+
+#if DEBUG
+	{
+	    wimp_winfo info;
+	    info.w = tbi->window_handle;
+	    wimp_get_wind_info((wimp_winfo *)((int)&info | 1));
+
+	    STBDBG(("tb_bar_init(): sprite_area %p\n", info.info.spritearea));
+	}
+#endif
+
+    
 	tbi->buttons = button_list;
 	tbi->n_buttons = n_buttons;
     

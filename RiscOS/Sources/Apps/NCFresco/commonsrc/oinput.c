@@ -75,6 +75,22 @@
 
 /* ---------------------------------------------------------------------- */
 
+#define BUTTON_NAME_OPTION	4
+#define BUTTON_NAME_RADIO	0
+#define BUTTON_NAME_ON		2
+#define BUTTON_NAME_OFF		0
+#define BUTTON_NAME_HIGHLIGHT	1
+
+static char *button_names[] =
+{
+    "radiooff", "radiooff1",
+    "radioon", "radioon1",
+    "optoff", "optoff1",
+    "opton", "opton1"
+};
+
+/* ---------------------------------------------------------------------- */
+
 extern void translate_escaped_text(char *src, char *dest, int len);
 
 /* ---------------------------------------------------------------------- */
@@ -345,7 +361,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 	bg = ii->base.colours.back == -1 ? render_colour_WRITE :
-	    doc->input == ti && ii->base.colours.select != -1 ?
+	    be_item_has_caret(doc, ti) && ii->base.colours.select != -1 ?
 	    ii->base.colours.select | render_colour_RGB : ii->base.colours.back | render_colour_RGB;
     
 	if (fs->lf != webfonts[WEBFONT_TTY].handle)
@@ -360,12 +376,12 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    render_set_font_colours(fs->lfc, bg, doc);
 	}
 
-	if (ti == doc->input)
+	if (be_item_has_caret(doc, ti))
 	{
-	    if (doc->text_input_offset < 0)
-		doc->text_input_offset = strlen(ii->data.str);
+/* 	    if (doc->selection.data.text.input_offset < 0) */
+/* 		doc->selection.data.text.input_offset = strlen(ii->data.str); */
 
-	    plotx = get_string_start(ii->data.str, doc->text_input_offset,
+	    plotx = get_string_start(ii->data.str, doc->selection.data.text.input_offset,
 				     plotx, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
 				     ii->flags & rid_if_NUMBERS);
 	}
@@ -506,10 +522,18 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	}
 	else
 	{
-	    char *sname = ((ii->tag == rid_it_RADIO) ?
-		     (ii->data.radio.tick ? "radioon" : "radiooff") :
-		     (ii->data.radio.tick ? "opton" : "optoff") );
-	    render_plot_icon(sname, hpos + 4, bline - ti->max_down + 4);
+	    /* try and draw a different sprite (suffix '1') for the highlighted version of the radio/check boxes */
+	    int index = (ii->tag == rid_it_RADIO ? BUTTON_NAME_RADIO : BUTTON_NAME_OPTION) + (ii->data.radio.tick ? BUTTON_NAME_ON : BUTTON_NAME_OFF);
+
+	    if (draw_selection_box &&
+		render_plot_icon(button_names[index + BUTTON_NAME_HIGHLIGHT], hpos + 4, bline - ti->max_down + 4) == NULL)
+	    {
+		draw_selection_box = FALSE;
+	    }
+	    else
+	    {
+		render_plot_icon(button_names[index], hpos + 4, bline - ti->max_down + 4);
+	    }
 	}
 	break;
     }
@@ -632,12 +656,12 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 
 	    /* take into account scrolled strings */
 
-	    if (ti == doc->input)
+	    if (be_item_has_caret(doc, ti))
 	    {
-		if (doc->text_input_offset < 0)
-		    doc->text_input_offset = len;
+/* 		if (doc->selection.data.text.input_offset < 0) */
+/* 		    doc->selection.data.text.input_offset = len; */
 		
-		x = get_string_start(ii->data.str, doc->text_input_offset,
+		x = get_string_start(ii->data.str, doc->selection.data.text.input_offset,
 				     x, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
 				     ii->flags & rid_if_NUMBERS);
 	    }
@@ -750,12 +774,13 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 			iis->data.str[0] = 0;
 		    }
 
-		    if (iis->base.display == doc->input)
-		    {
-			int len = strlen(iis->data.str);
-			if (doc->text_input_offset > len)
-			    doc->text_input_offset = len;
-		    }
+		    /* SJM: removed 1/4/97: the caret is repositioned at the end anyway */
+/* 		    if (be_item_has_caret(doc, iis->base.display)) */
+/* 		    { */
+/* 			int len = strlen(iis->data.str); */
+/* 			if (doc->selection.data.text.input_offset > len) */
+/* 			    doc->selection.data.text.input_offset = len; */
+/* 		    } */
 		    touch = 1;
 		    break;
 		case rid_it_CHECK:
@@ -794,10 +819,11 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    }
 	}
 
-	if (doc->input)
+	if (doc->selection.tag == doc_selection_tag_TEXT &&
+	    object_table[doc->selection.data.text.item->tag].caret)
 	{
-	    doc->text_input_offset = -1;
-	    (object_table[doc->input->tag].caret)(doc->input, doc->rh, doc, TRUE);
+	    doc->selection.data.text.input_offset = -1;
+	    (object_table[doc->selection.data.text.item->tag].caret)(doc->selection.data.text.item, doc->rh, doc, TRUE);
 	}
 
 	ii->data.button.tick = FALSE;
@@ -894,14 +920,14 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 
 	slen = strlen(ii->data.str);
 	
-	if (doc->text_input_offset < 0)
+	if (doc->selection.data.text.input_offset < 0)
 	{
-	    doc->text_input_offset = slen;
+	    doc->selection.data.text.input_offset = slen;
 	    repos = object_caret_REPOSITION;
 	}
-	if (doc->text_input_offset >= ii->max_len && (ii->flags & rid_if_NUMBERS))
+	if (doc->selection.data.text.input_offset >= ii->max_len && (ii->flags & rid_if_NUMBERS))
 	{
-	    doc->text_input_offset = ii->max_len-1;
+	    doc->selection.data.text.input_offset = ii->max_len-1;
 	    repos = object_caret_REPOSITION;
 	}
 
@@ -909,12 +935,12 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	if (ep)
 	    break;
 
-	x1 = string_length_upto(ii->data.str, doc->text_input_offset) / MILIPOINTS_PER_OSUNIT;
+	x1 = string_length_upto(ii->data.str, doc->selection.data.text.input_offset) / MILIPOINTS_PER_OSUNIT;
 	x2 = string_length_upto(ii->data.str, slen) / MILIPOINTS_PER_OSUNIT;
 
 	if (ii->flags & rid_if_NUMBERS)
 	{
-	    x1 += (doc->text_input_offset > 0 ? doc->text_input_offset : 0) * NUMBERS_SPACING_X;
+	    x1 += (doc->selection.data.text.input_offset > 0 ? doc->selection.data.text.input_offset : 0) * NUMBERS_SPACING_X;
 	    x2 += (slen > 0 ? slen-1 : 0) * NUMBERS_SPACING_X;
 	}
 	
@@ -976,12 +1002,12 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
     ii = ((rid_text_item_input *) ti)->input;
 
-    OIDBG((stderr, "oinput_key(): key %d tag %d text_input_offset %d\n", key, ii->tag, doc->text_input_offset));
+    OIDBG((stderr, "oinput_key(): key %d tag %d text_input_offset %d\n", key, ii->tag, doc->selection.data.text.input_offset));
 
-    if (doc->text_input_offset < 0)
-	doc->text_input_offset = strlen(ii->data.str);
+/*     if (doc->selection.data.text.input_offset < 0) */
+/* 	doc->selection.data.text.input_offset = strlen(ii->data.str); */
 
-    i = doc->text_input_offset;
+    i = doc->selection.data.text.input_offset;
 
     switch (ii->tag)
     {
@@ -1002,8 +1028,8 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    if (i == len)
 			ii->data.str[i+1] = 0;
 
-		    if (doc->text_input_offset < ii->max_len-1)
-			doc->text_input_offset++;
+		    if (doc->selection.data.text.input_offset < ii->max_len-1)
+			doc->selection.data.text.input_offset++;
 		    
 		    redraw = TRUE;
 		    used = TRUE;
@@ -1020,7 +1046,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    memmove(ii->data.str + i + 1, ii->data.str + i, (len + 1 - i));
 
 		    ii->data.str[i] = key;
-		    doc->text_input_offset++;
+		    doc->selection.data.text.input_offset++;
 		    redraw = TRUE;
 		}
 		else
@@ -1100,14 +1126,14 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		if (i > 0)
 		{
 		    memmove(ii->data.str + i - 1, ii->data.str + i, (len + 1 - i));
-		    doc->text_input_offset--;
+		    doc->selection.data.text.input_offset--;
 		    redraw = TRUE;
 		}
 		break;
 	    case key_action_DELETE_ALL:
 	    case key_action_DELETE_ALL_AREA:
 		ii->data.str[0] = 0;
-		doc->text_input_offset = 0;
+		doc->selection.data.text.input_offset = 0;
 		redraw = TRUE;
 		break;
 
@@ -1125,42 +1151,36 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		break;
 
 	    case key_action_LEFT:
-#ifdef STBWEB
+	    case key_action_LEFT_OR_OFF:
 		if (i > 0)
 		{
-		    doc->text_input_offset--;
+		    doc->selection.data.text.input_offset--;
 		    redraw = TRUE;
 		}
-#else
-		if (i > 0)
-		    doc->text_input_offset--;
-		redraw = TRUE;
-#endif
+		else
+		    redraw = action == key_action_LEFT;
 		break;
 
 	    case key_action_RIGHT:
-#ifdef STBWEB
+	    case key_action_RIGHT_OR_OFF:
 		if (i < (ii->flags & rid_if_NUMBERS ? len-1 : len))
 		{
-		    doc->text_input_offset++;
+		    doc->selection.data.text.input_offset++;
 		    redraw = TRUE;
 		}
-#else
-		if (i < len)
-		    doc->text_input_offset++;
-		redraw = TRUE;
-#endif
+		else
+		    redraw = action == key_action_RIGHT;
 		break;
 
 	    case key_action_START_OF_LINE:
 	    case key_action_START_OF_AREA:
-		doc->text_input_offset = 0;
+		doc->selection.data.text.input_offset = 0;
 		redraw = TRUE;
 		break;
 
 	    case key_action_END_OF_LINE:
 	    case key_action_END_OF_AREA:
-		doc->text_input_offset = ii->flags & rid_if_NUMBERS ? len-1 : len;
+		doc->selection.data.text.input_offset = ii->flags & rid_if_NUMBERS ? len-1 : len;
 		redraw = TRUE;
 		break;
 
@@ -1360,8 +1380,9 @@ void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)
     case rid_tag_INPUT:
     {
 	rid_input_item *ii = ((rid_text_item_input *) ti)->input;
-	update_full = (ii->tag == rid_it_SUBMIT || ii->tag ==  rid_it_RESET || ii->tag == rid_it_BUTTON) &&
-	    ii->data.button.im_sel;
+	update_full = ((ii->tag == rid_it_SUBMIT || ii->tag ==  rid_it_RESET || ii->tag == rid_it_BUTTON) &&
+	    ii->data.button.im_sel) ||
+	    ii->tag == rid_it_CHECK || ii->tag == rid_it_RADIO;
 	break;
     }
     case rid_tag_SELECT:

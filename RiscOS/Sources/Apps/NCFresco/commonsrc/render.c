@@ -23,6 +23,7 @@
 #include "bbc.h"
 #include "colourtran.h"
 #include "swis.h"
+#include "resspr.h"
 
 #include "interface.h"
 #include "rid.h"
@@ -399,7 +400,7 @@ int render_background( rid_header *rh, rid_text_item *ti, antweb_doc *doc )
     return render_colour_BACK;
 }
 
-void render_plot_icon(char *sprite, int x, int y)
+os_error *render_plot_icon(char *sprite, int x, int y)
 {
     sprite_pixtrans pt[16];
     sprite_factors facs;
@@ -409,27 +410,33 @@ void render_plot_icon(char *sprite, int x, int y)
     os_regset r;
     os_error *ep;
 
-    ep = os_swix(Wimp_BaseOfSprites, &r);
-
-    if (ep)
-	return;
-
-    area = (sprite_area *) (long) r.r[1];
-
     id.tag = sprite_id_name;
     id.s.name = sprite;
 
+    area = resspr_area();
     ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
 
     if (ep)
     {
-	area = (sprite_area *) (long) r.r[0];
+	ep = os_swix(Wimp_BaseOfSprites, &r);
+
+	if (ep)
+	    return ep;
+
+	area = (sprite_area *) (long) r.r[1];
+
+	ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+
+	if (ep)
+	{
+	    area = (sprite_area *) (long) r.r[0];
+	}
     }
 
     ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
 
     if (ep)
-	return;
+	return ep;
 
     id.tag = sprite_id_addr;
     id.s.addr = sph;
@@ -437,9 +444,9 @@ void render_plot_icon(char *sprite, int x, int y)
     ep = wimp_readpixtrans(area, &id, &facs, pt);
 
     if (ep)
-	return;
+	return ep;
 
-    sprite_put_scaled(area, &id, 0x8, x, y, &facs, pt);
+    return sprite_put_scaled(area, &id, 0x8, x, y, &facs, pt);
 }
 
 

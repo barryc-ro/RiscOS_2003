@@ -178,7 +178,6 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 /**********************************************************************/
 
 static be_doc document_list = NULL;
-static int encoding_default = be_encoding_LATIN1;
 
 /**********************************************************************/
 
@@ -2895,6 +2894,9 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
     if (ti == NULL)
 	return NULL;
 
+    if (doc->encoding != be_encoding_LATIN1)
+	_swix(Font_WideFormat, _IN(0), doc->encoding);
+
     /* Zero w|h for all table descendent streams as well */
     rid_zero_widest_height(&doc->rh->stream);
 
@@ -2906,6 +2908,9 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
 #ifndef BUILDERS
     antweb_build_selection_list(doc);
 #endif
+
+    if (doc->encoding != be_encoding_LATIN1)
+	_swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
 
 #if DEBUG
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
@@ -2958,6 +2963,8 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 #if 1
 	if (oti->tag == rid_tag_TABLE)
 	    ti = oti;
+	else if (!oti->line)
+	    ti = NULL;
 	else
 #endif
 	    ti = oti->line->first;
@@ -4586,7 +4593,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->magic = ANTWEB_DOC_MAGIC;
     new->parent = v;
     new->scale_value = config_display_scale_image;
-    new->encoding = encoding_default;
+    new->encoding = config_display_encoding;
     
     /* new: add the url here */
 /*     new->url = strdup(url); */
@@ -4717,7 +4724,7 @@ BOOL backend_image_saver_sprite(char *fname, void *h)
 
 os_error *backend_doc_key(be_doc doc, int key, int *used)
 {
-    rid_text_item *ti = doc->input;
+    rid_text_item *ti = be_doc_read_caret(doc);
 
     *used = 0;
 
@@ -5513,15 +5520,15 @@ extern int backend_doc_encoding(be_doc doc, int encoding)
 
     if (doc == NULL)
     {
-	old_encoding = encoding_default;
+	old_encoding = config_display_encoding;
 	if (encoding != be_encoding_READ)
-	    encoding_default = encoding;
+	    config_display_encoding = encoding;
     }
     else
     {
 	old_encoding = doc->encoding;
 	if (encoding != be_encoding_READ)
-	    encoding_default = doc->encoding = encoding;
+	    config_display_encoding = doc->encoding = encoding;
     }
 
     return old_encoding;

@@ -14,6 +14,7 @@
 
 /* Methods for text objects */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -68,10 +69,10 @@ static void dump_data(const char *s, int len)
 static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
 {
     struct webfont *wf;
-    if (doc->encoding == be_encoding_LATIN1)
-	wf = &webfonts[ti->st.wf_index];
-    else
+    if (doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT))
 	wf = &webfonts[(ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE];
+    else
+	wf = &webfonts[ti->st.wf_index];
     return wf;
 }
 
@@ -79,6 +80,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_text *tit = (rid_text_item_text *) ti;
     size_t str_len;
+
 #ifdef BUILDERS
     str_len = strlen(rh->texts.data + tit->data_off);
     ti->width = str_len * rh->cwidth;
@@ -86,52 +88,71 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->max_up = 1;
     ti->max_down = rh->cwidth == 1 ? 0 : 1;
 #else /* BUILDERS */
-    font_string fs;
     struct webfont *wf;
-    int len;
+    const char *s;
 
-    str_len = strlen(rh->texts.data + tit->data_off);
+    flexmem_noshift();		/* no shift whilst accessing text array */
 
+    s = rh->texts.data + tit->data_off;
+    str_len = strlen(s);
+
+    /* check to see if there are any wide characters in there */
+    if (doc->encoding != be_encoding_LATIN1)
+    {
+	int i;
+	for (i = 0; i < str_len; i++)
+	    if (s[i] & 0x80)
+	    {
+		ti->flag |= rid_flag_WIDE_FONT;
+		break;
+	    }
+    }
+
+    /* get font descriptor */
     wf = getwebfont(doc, ti);
-
-    font_setfont(wf->handle);
-
-    fs.x = 1 << 30;
-    fs.y = 1 << 30;
-    fs.split = -1;
-
-    flexmem_noshift();
-    fs.term = len = str_len;
-    fs.s = rh->texts.data + tit->data_off;
-    font_strwidth(&fs);
-    flexmem_shift();
-
-    ti->pad = (fs.x + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
-
-    fs.x = 1 << 30;
-    fs.y = 1 << 30;
-    fs.split = -1;
-
-    flexmem_noshift();
-    while(len && (rh->texts.data + tit->data_off)[len-1] == ' ')
-	len--;
-    fs.term = len;
-    fs.s = rh->texts.data + tit->data_off;
-    font_strwidth(&fs);
-    flexmem_shift();
-
-    ti->width = (fs.x + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 
     if (str_len == 0)
     {
+	ti->width = 0;
 	ti->pad = 0;
     }
     else
     {
-	ti->pad -= ti->width;
+	int flags = doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT) ? 1<<12 : 0;
+	int width1, width2;
+	int len;
+
+	/* set font and read width */
+/* 	font_setfont(wf->handle); */
+	flags |= (1<<8) | (1<<7);
+
+	_swix(Font_ScanString, _INR(0,7) | _OUT(3),
+	      wf->handle, s, flags,	      
+	      INT_MAX, INT_MAX,
+	      NULL, NULL, str_len,
+	      &width1);
+
+	len = str_len;
+	while (len && s[len-1] == ' ')
+	    len--;
+
+	/* read width again without added spaces */
+	_swix(Font_ScanString, _INR(0,7) | _OUT(3),
+	      wf->handle, s, flags,
+	      INT_MAX, INT_MAX,
+	      NULL, NULL, len,
+	      &width2);
+
+	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
+	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
+
+#if DEBUG
+	fprintf(stderr, "otext: scanstring '%s' str_len %d width1 %d width2 %d\n", s, str_len, width1, width2);
+#endif
     }
 
-#if 1
+    flexmem_shift();		/* shiftable */
+
     if (str_len == 0)
     {
         /* FIXME: We shouldn't really give blank things the height of the
@@ -148,7 +169,6 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	ti->max_down = 0;
     }
     else
-#endif
     {
         ti->max_up = wf->max_up;
         ti->max_down = wf->max_down;
@@ -250,13 +270,19 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     if (rh->texts.data[tit->data_off] == 0)
 	return;
     
+    tfc = render_text_link_colour(rh, ti, doc);
+    tbc = render_background(rh, ti, doc);
+
 #ifdef STBWEB
     draw_highlight_box = ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&
 	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED);
 
     if (draw_highlight_box && (doc->flags & doc_flag_SOLID_HIGHLIGHT))
     {
-	render_set_colour(render_link_colour(ti, doc), doc);
+	tbc = render_link_colour(ti, doc);
+
+	render_set_colour(tbc, doc);
+
 	bbc_rectanglefill(hpos, bline - ti->max_down, ti->width + ti->pad, ti->max_up + ti->max_down);
 	draw_highlight_box = FALSE;
     }
@@ -268,9 +294,6 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	fs->lf = wf->handle;
 	font_setfont(fs->lf);
     }
-
-    tfc = render_text_link_colour(rh, ti, doc);
-    tbc = render_background(rh, ti, doc);
 
     if ( fs->lfc != tfc || fs->lbc != tbc )
     {

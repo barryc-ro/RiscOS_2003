@@ -158,7 +158,9 @@ typedef enum
     key_action_START_OF_LINE,
     key_action_END_OF_LINE,
     key_action_START_OF_AREA,
-    key_action_END_OF_AREA
+    key_action_END_OF_AREA,
+    key_action_LEFT_OR_OFF,
+    key_action_RIGHT_OR_OFF
 } input_key_action;
 
 typedef struct

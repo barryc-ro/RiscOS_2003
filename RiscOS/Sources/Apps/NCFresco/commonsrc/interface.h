@@ -227,6 +227,7 @@ typedef struct
     char noresize;      /* 0=allow user resizing, 1=don't */
     wimp_box box;
     wimp_box margin;
+    int dividers[4];
 } fe_frame_info;
 
 void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refresh_only);

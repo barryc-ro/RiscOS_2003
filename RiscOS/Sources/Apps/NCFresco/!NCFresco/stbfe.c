@@ -156,6 +156,9 @@
 #define Service_SmartCard		0xBA
 #define smartcard_INSERTED		0x01
 
+#define KeyWatch_Register		0x4E940
+#define KeyWatch_Unregister		0x4E941
+
 /* -------------------------------------------------------------------------- */
 
 
@@ -220,8 +223,17 @@ static int user_status_open = TRUE;
 static int linedrop_time = 0;
 static int keyboard_state = fe_keyboard_ONLINE;
 
-wimp_t on_screen_kbd = 0;
-wimp_box on_screen_kbd_pos;
+
+/* On screen keyboard variables */
+
+wimp_t on_screen_kbd = 0;	/* task handle of OSK application */
+wimp_box on_screen_kbd_pos;	/* position in screen coordinates of OSK window */
+
+/* Keywatch variables */
+
+static int *keywatch_pollword = 0;		/* address of keywatch module pollword */
+static int keywatch_last_key_val = 0;		/* value read from pollword on last wimp key event */
+static BOOL keywatch_from_handset = FALSE;	/* was lasy key press from a handset */
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -431,7 +443,7 @@ static BOOL fe_caretise(fe_view v)
 
 static int caretise(void)
 {
-    return 0;			/* be_link_CARETISE */
+    return keywatch_from_handset ? 0 : be_link_CARETISE;
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -770,7 +782,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
 	{
-	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT" };
+	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL" };
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" }; /* order must agree with #defines in stbview.h */
 	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0])];
@@ -822,6 +834,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    /* check highlight flag */
 	    if (vals[6].value)
 		backend_doc_set_flags(v->displaying, be_openurl_flag_SOLID_HIGHLIGHT, be_openurl_flag_SOLID_HIGHLIGHT);
+
+	    /* check no scroll flag */
+	    v->scrolling = vals[7].value ? fe_scrolling_NO : fe_scrolling_AUTO;
 	    
 	    mm_free(ncmode);
 	}
@@ -1809,6 +1824,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
             if (frontend_complain(fe_new_view(v, &box, ip, TRUE, &vv)) == NULL && vv)
 	    {
 		vv->frame_index = i;
+		memcpy(vv->dividers, ip->dividers, sizeof(vv->dividers));
 		if (ip->src)
 		{
 		    os_error *e = frontend_open_url(ip->src, vv, NULL, NULL, fe_open_url_FROM_FRAME);
@@ -2098,6 +2114,8 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
 
     if (v && v->displaying)
         backend_doc_key(v->displaying, key, &used);
+
+    STBDBG(("fe_writeable_handle_keys: v %p key %d used %d\n", v, key, used));
 
     if (!used && on_screen_kbd)
     {
@@ -2485,7 +2503,9 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
     STBDBG(( "fe_move_highlight: old_link %p old_v %p new_link %p new_v %p\n", old_link, v, new_link, new_v));
 
     /* check for moving to the status bar */
-    if (use_toolbox && new_link == NULL && config_mode_cursor_toolbar && tb_is_status_showing() &&
+    if (use_toolbox &&
+	new_link == NULL &&
+	config_mode_cursor_toolbar && tb_is_status_showing() &&
 	((config_display_control_top && (flags & be_link_BACK)) || (!config_display_control_top && (flags & be_link_BACK) == 0)))
     {
 	fe_pointer_mode_update(pointermode_OFF);
@@ -2503,7 +2523,7 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
     }
     else /* if ((flags & be_link_VISIBLE) == 0) */
     {
-	if (v->displaying)
+	if (v->displaying && v->scrolling != fe_scrolling_NO)
 	{
 	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1);
 
@@ -2578,6 +2598,24 @@ void fe_move_highlight(fe_view v, int flags)
 {
     fe_move_highlight_xy(v, NULL, flags);
 }
+
+/* ------------------------------------------------------------------------------------------- */
+
+#if 0
+typedef struct
+{
+    fe_view v;
+    int 
+} frame_link;
+
+static void fe_build_frame_link_array(fe_view v)
+{
+    int vals[5];
+    memcpy(vals, v->dividers, sizeof(v->dividers));
+    vals[4] = 0;
+    iterate_frames(fe_find_top(v), fe__build_frame_link_array);
+}
+#endif
 
 /* ------------------------------------------------------------------------------------------- */
 
@@ -4671,9 +4709,22 @@ void fe_event_process(void)
 
         case wimp_EKEY:
         {
-            fe_view v = find_view(e.data.key.c.w);
+            fe_view v;
 
-            STBDBG(( "\nkey: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
+	    /* see if key was from handset and update last_key */
+	    keywatch_from_handset = FALSE;
+
+	    if (keywatch_pollword)
+	    {
+		if (keywatch_last_key_val == *keywatch_pollword)
+		    keywatch_from_handset = TRUE;
+
+		keywatch_last_key_val = *keywatch_pollword;
+	    }
+	    
+	    /* process key press */
+	    v = find_view(e.data.key.c.w);
+	    STBDBG(( "\nkey: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
 
 	    fe_key_handler(v, &e, use_toolbox, v ? v->browser_mode : main_view->browser_mode);
             break;
@@ -4716,12 +4767,22 @@ void fe_event_process(void)
 	    {
 		tb_status_highlight(FALSE);
 	    }
-            break;
+
+	    _swix(KeyWatch_Unregister, _IN(0), keywatch_pollword);
+
+	    break;
         }
 
         case wimp_EGAINCARET:
         {
             fe_view v_old, v_new;
+
+	    /* enable keywatch and initialise last_key_val */
+	    if (_swix(KeyWatch_Register, _IN(0) | _OUT(0), 0, &keywatch_pollword) == NULL && 
+		keywatch_pollword)
+	    {
+		keywatch_last_key_val = *keywatch_pollword;
+	    }
 
 	    v_old = fe_selected_view();
 	    v_new = find_view(e.data.c.w);
@@ -5064,7 +5125,7 @@ static BOOL fe_initialise(void)
 #endif
     atexit(&fe_tidyup);
 
-    gbf_flags &= ~GBF_FVPR | GBF_GUESS_ELEMENTS;
+    gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED);
 /*  gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; */
 
     gbf_init();

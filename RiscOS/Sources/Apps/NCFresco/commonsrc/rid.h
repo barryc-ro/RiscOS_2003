@@ -196,6 +196,7 @@ typedef SHORTISH rid_flag;
 #define rid_flag_FVPR		0x1000	/* Item reach FVPR style final values */
 #define rid_flag_COALESCED      0x2000  /* Item has been coalesced with next */
 #define rid_flag_RINDENT        0x4000  /* Right indent (or not! only one level) */
+#define rid_flag_WIDE_FONT	0x8000	/* item contains some 16bit characters */
 
 #define RID_COLOUR(rid) ( ( (rid)->st.flags >> STYLE_COLOURNO_SHIFT ) \
                          & STYLE_COLOURNO_MASK )
@@ -1121,6 +1122,11 @@ struct rid_frameset_item
 	rid_frame               *old_frameset;
 };
 
+#define rid_frame_divider_LEFT		0
+#define rid_frame_divider_TOP		1
+#define rid_frame_divider_RIGHT		1
+#define rid_frame_divider_BOTTOM	3
+
 struct rid_frame
 {
         rid_frame               *next;
@@ -1129,6 +1135,8 @@ struct rid_frame
         char                    border;             /* boolean, display border on frame or frames within frameset */
         int                     bordercolour;       /* standard colour for border region */
 
+	int			dividers[4];		/* divider numbers for each edge */
+    
         union
         {
             rid_frame_item      frame;

@@ -183,7 +183,7 @@ void antweb_build_selection_list(be_doc doc)
 	    backend_doc_item_bbox(doc, ti, &link->bbox);
 	    
 	    link->item.tag = doc_selection_tag_TEXT;
-	    link->item.data.text = ti;
+	    link->item.data.text.item = ti;
 
 	    link++;
 
@@ -273,7 +273,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 
 	if (link->item.tag == doc_selection_tag_TEXT)
 	{
-	    if (start_aref != NULL && link->item.data.text->aref == start_aref)	/* mustn't be part of same link */
+	    if (start_aref != NULL && link->item.data.text.item->aref == start_aref)	/* mustn't be part of same link */
 	    {
 /* 		LKDBG((stderr, "                        : same aref\n")); */
 		continue;
@@ -421,7 +421,7 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
     wimp_box bbox;
     be_item item = NULL;
 
-    LKDBG((stderr, "antweb_highlight_scan_link: doc %p selection %p item %p flags %x\n", doc, initial, initial ? initial->data.text : 0, flags));
+    LKDBG((stderr, "antweb_highlight_scan_link: doc %p selection %p item %p flags %x\n", doc, initial, initial ? initial->data.text.item : 0, flags));
 
     if (initial == NULL)
 	return NULL;
@@ -435,11 +435,11 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
 	break;
 
     case doc_selection_tag_TEXT:
-	item = initial->data.text;
+	item = initial->data.text.item;
 	backend_doc_item_bbox(doc, item, &bbox);
 	break;
 
-    case doc_selection_tag_AREA:
+    case doc_selection_tag_MAP:
 	item = initial->data.map.item;
 	backend_doc_item_bbox(doc, item, &bbox);
 	break;
@@ -504,24 +504,24 @@ static be_item backend_highlight_link_2D(be_doc doc, be_item item, int flags, co
 	else
 	{
 	    sel.tag = doc_selection_tag_TEXT;
-	    sel.data.text = item;
+	    sel.data.text.item = item;
 	}
 
 	link = antweb_highlight_scan_link(doc, &sel, flags, bounds);
     }
 
-    LKDBG((stderr, "backend_highlight_link_2D: return link %p tag %d item %p\n", link, link ? link->item.tag : 0, link ? link->item.data.text : 0));
+    LKDBG((stderr, "backend_highlight_link_2D: return link %p tag %d item %p\n", link, link ? link->item.tag : 0, link ? link->item.data.text.item : 0));
 
     new_item = NULL;
     if (link) switch (link->item.tag)
     {
     case doc_selection_tag_TEXT:
-	new_item = link->item.data.text;
+	new_item = link->item.data.text.item;
 	if (new_item->aref)
-	    new_item = link->item.data.text->aref->first;
+	    new_item = link->item.data.text.item->aref->first;
 	break;
 
-    case doc_selection_tag_AREA:
+    case doc_selection_tag_MAP:
 	new_item = link->item.data.map.item;
 	break;
     }
@@ -605,12 +605,12 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	if (link) switch (link->item.tag)
 	{
 	case doc_selection_tag_TEXT:
-	    ti = link->item.data.text;
+	    ti = link->item.data.text.item;
 	    if (ti->aref)
-		ti = link->item.data.text->aref->first;
+		ti = link->item.data.text.item->aref->first;
 	    break;
 	    
-	case doc_selection_tag_AREA:
+	case doc_selection_tag_MAP:
 	    ti = link->item.data.map.item;
 	    break;
 	}
@@ -692,7 +692,10 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 
 	/* de highlight original only if the highlight has ended up changing */
         if (item_changed && item && (flags & be_link_ONLY_CURRENT) == 0)
+	{
+	    antweb_place_caret(doc, NULL, 0);
 	    backend_update_link(doc, item, 0);
+	}
 
         if (ti)
         {
@@ -718,16 +721,16 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		{
 		    int offset;
 		    if (flags & be_link_VERT)
-			offset = item == doc->input ? doc->text_input_offset : -1;
+			offset = be_item_has_caret(doc, item) ? doc->selection.data.text.input_offset : -1;
 		    else
 			offset = flags & be_link_BACK ? -1 : 0;			/* end : beginning */
 
-		    LKDBG((stderr, "move_highlight: caretise flags %x old offset %d offset %d old item %p old input %p\n", flags, doc->text_input_offset, offset, item, doc->input));
+		    LKDBG((stderr, "move_highlight: caretise flags %x old offset %d offset %d old item %p old input %p\n", flags, doc->selection.data.text.input_offset, offset, item, doc->selection.data.text.item));
 		    antweb_place_caret(doc, ti, offset);
 		}
 		else
 		{
-		    antweb_place_caret(doc, NULL, -1);
+		    antweb_place_caret(doc, NULL, 0);
 		    backend_update_link(doc, ti, 1);
 		}
 
@@ -766,9 +769,13 @@ be_item backend_update_link(be_doc doc, be_item item, int selected)
     /* if it isn't actually a link then toggle the flag anyway */
     if (item->aref == NULL)
     {
-	doc->selection.tag = doc_selection_tag_TEXT;
-	doc->selection.data.text = item;
-
+	if (selected)
+	{
+	    doc->selection.tag = doc_selection_tag_TEXT;
+	    doc->selection.data.text.item = item;
+	    doc->selection.data.text.input_offset = doc_selection_offset_NO_CARET;
+	}
+	
 	item->flag = adjust_flag(item->flag, selected, &changed);
 	if (changed)
 	    be_update_item_highlight(doc, item);
@@ -831,7 +838,7 @@ void backend_clear_selected(be_doc doc)
 	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
     }
 
-    doc->selection.data.text = NULL;
+    doc->selection.data.text.item = NULL;
 }
 
 #ifdef STBWEB
@@ -857,16 +864,21 @@ be_item backend_find_selected(be_doc doc)
 void antweb_default_caret(antweb_doc *doc, BOOL take_caret)
 {
     if (take_caret || frontend_view_has_caret(doc->parent))
-        antweb_place_caret(doc, doc->input, -1);
+    {
+	rid_text_item *ti = be_doc_read_caret(doc);
+	if (ti)
+	    antweb_place_caret(doc, ti, doc->selection.data.text.input_offset);
+    }
 }
 
 void antweb_place_caret(antweb_doc *doc, rid_text_item *ti, int offset)
 {
-    rid_text_item *old_ti = doc->input;
+    rid_text_item *old_ti = be_doc_read_caret(doc);
     int repos = object_caret_REPOSITION;
 
-    doc->input = ti;		/* must set doc->input before calling the remove() function */
-    doc->text_input_offset = offset;
+    doc->selection.tag = doc_selection_tag_TEXT;
+    doc->selection.data.text.item = ti;		/* must set doc->input before calling the remove() function */
+    doc->selection.data.text.input_offset = offset;
 
     if (old_ti != ti)
     {
@@ -890,7 +902,7 @@ void antweb_place_caret(antweb_doc *doc, rid_text_item *ti, int offset)
 }
 
 /* ----------------------------------------------------------------------------- */
-
+#if 0
 /*
  * This mechanism bypasses the code in antweb_place_input() and so may need updating.
  */
@@ -922,102 +934,73 @@ static rid_text_item *antweb_next_text_input(rid_text_item *ti, be_doc doc)
 }
 
 /* ----------------------------------------------------------------------------- */
+#endif
 
 os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
 {
-    int redraw = FALSE;
-    rid_text_item *ti = doc->input;
-    rid_text_item *also_redraw = NULL;
-    int old_offset = doc->text_input_offset;
+    rid_text_item *ti, *old_ti;
 
-    doc->text_input_offset = -1;
-
-    *used = 0;
-
-    if (ti == NULL)
+    old_ti = be_doc_read_caret(doc);
+    if (old_ti == NULL)
+    {
+	*used = 0;
 	return NULL;
+    }
 
-    redraw = TRUE;		/* The default case negates this if we don't use the key */
-    also_redraw = ti;
+    ti = NULL;
     switch (motion)
     {
     case be_cursor_UP:
-    case (be_cursor_UP | be_cursor_WRAP):
-	/*ti = antweb_prev_text_item(ti);*/
-        ti = rid_scanbr(ti);
-        ti = antweb_prev_text_input(ti, doc);
-	if (ti)
-	{
-	    break;
-	}
-	if (motion == 0)
-	{
-	    ti = doc->input;
-	    redraw=FALSE;
-	    break;
-	}
-	/* Otherwise fall through */
-    case (be_cursor_DOWN | be_cursor_LIMIT):
-	ti = antweb_prev_text_input(doc->rh->stream.text_last, doc);
+	ti = backend_highlight_link(doc, old_ti, be_link_TEXT | be_link_BACK | be_link_CARETISE | be_link_DONT_WRAP);
 	break;
 
+    case be_cursor_UP | be_cursor_WRAP:
+	ti = backend_highlight_link(doc, old_ti, be_link_TEXT | be_link_BACK | be_link_CARETISE);
+	break;
+
+    case be_cursor_UP | be_cursor_LIMIT:
+	ti = backend_highlight_link(doc, NULL, be_link_TEXT | be_link_BACK | be_link_CARETISE | be_link_DONT_WRAP);
+	break;
+    
     case be_cursor_DOWN:
-    case (be_cursor_DOWN | be_cursor_WRAP):
-	/*ti = ti->next;*/
-        ti = rid_scanfr(ti);
-	ti = antweb_next_text_input(ti, doc);
-	if (ti)
-	{
-	    break;
-	}
-	if (motion == be_cursor_DOWN)
-	{
-	    ti = doc->input;
-	    redraw=FALSE;
-	    break;
-	}
-	/* Otherwise fall through */
-    case (be_cursor_UP | be_cursor_LIMIT):
-	ti = antweb_next_text_input(doc->rh->stream.text_list, doc);
+	ti = backend_highlight_link(doc, old_ti, be_link_TEXT | be_link_CARETISE | be_link_DONT_WRAP);
+	break;
+    
+    case be_cursor_DOWN | be_cursor_WRAP:
+	ti = backend_highlight_link(doc, old_ti, be_link_TEXT | be_link_CARETISE);
 	break;
 
-    default:
-	redraw=FALSE;
-	also_redraw = NULL;
+    case be_cursor_DOWN | be_cursor_LIMIT:
+	ti = backend_highlight_link(doc, NULL, be_link_TEXT | be_link_CARETISE | be_link_DONT_WRAP);
 	break;
     }
 
-    if (ti != doc->input)
-    {
-/* 	doc->input = ti; */
-	antweb_place_caret(doc, ti, doc->text_input_offset);
-    }
-    else
-    {
-	doc->text_input_offset = old_offset;
-    }
-
-    if (redraw)
-    {
-	antweb_update_item(doc, doc->input);
-
-	if (also_redraw && also_redraw != doc->input)
-	    antweb_update_item(doc, also_redraw);
-
-	*used = TRUE;
-    }
-
+    *used = old_ti != ti;
+    
     return NULL;
 }
 
 be_item backend_place_caret(be_doc doc, be_item item)
 {
-    be_item input = doc->input;
+    if (item == backend_place_caret_READ)
+	return be_doc_read_caret(doc);
 
-    if (item != backend_place_caret_READ)
-	antweb_place_caret(doc, item, -1);
+    antweb_place_caret(doc, item, doc_selection_offset_UNKNOWN);
+    return item;
+}
 
-    return input;
+/* ----------------------------------------------------------------------------- */
+
+be_item be_doc_read_caret(be_doc doc)
+{
+    return doc->selection.tag == doc_selection_tag_TEXT &&
+	doc->selection.data.text.input_offset != doc_selection_offset_NO_CARET ?
+	doc->selection.data.text.item : NULL;
+}
+
+BOOL be_item_has_caret(be_doc doc, be_item ti)
+{
+    return ti == be_doc_read_caret(doc);
 }
 
 /* ----------------------------------------------------------------------------- */
