@@ -44,15 +44,15 @@ SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 INETLIB_NORM=TCPIPLibs:o.inetlib
 SOCKLIB_NORM=TCPIPLibs:o.socklib
-REMOTEDB  = <Lib$Dir>.debug.o.remotezm
-#REMOTEDB  = 
+#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
+REMOTEDB  = 
 #
 # Include files
 #
 
 INCLUDES  = -IC:,TCPIPLibs:,<Lib$Dir>.
 
-DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -DFTP_PUT -DCSFS ${FTP_DB} ${FTP_REMOTE_DB}
+DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -DFTP_PUT -DCSFS ${FTP_DB} ${FTP_REMOTE_DB} -DCMHG_FINALISE=1
 
 #
 # Program specific options:
@@ -189,7 +189,6 @@ o.webftp:	h.status
 o.webftp:	h.webftp
 o.webftp:	h.pads
 o.webftp:	h.privwebftp
-o.webftp:	C:debug.h.remote
 o.webftp:	h.autofns
 o.webftp:	h.csfs
 o.q:	c.q
@@ -247,7 +246,6 @@ o.q:	h.status
 o.q:	h.webftp
 o.q:	h.pads
 o.q:	h.privwebftp
-o.q:	C:debug.h.remote
 o.q:	h.autofns
 o.q:	h.csfs
 o.files:	c.files
@@ -303,7 +301,6 @@ o.files:	h.status
 o.files:	h.webftp
 o.files:	h.pads
 o.files:	h.privwebftp
-o.files:	C:debug.h.remote
 o.files:	h.autofns
 o.support: s.support
 o.support: hdr.swinames
@@ -363,7 +360,6 @@ o.misc:	h.status
 o.misc:	h.webftp
 o.misc:	h.pads
 o.misc:	h.privwebftp
-o.misc:	C:debug.h.remote
 o.misc:	h.autofns
 o.misc:	h.csfs
 o.dirparse:	c.dirparse
@@ -421,6 +417,5 @@ o.dirparse:	h.status
 o.dirparse:	h.webftp
 o.dirparse:	h.pads
 o.dirparse:	h.privwebftp
-o.dirparse:	C:debug.h.remote
 o.dirparse:	h.autofns
 o.dirparse:	h.csfs
