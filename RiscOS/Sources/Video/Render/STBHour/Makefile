@@ -32,7 +32,7 @@ CPFLAGS = ~cfr~v
 COMPONENT = STBHour
 SOURCE    = s.Module
 TARGET    = rm.STBHour
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   = ${EXP_HDR}.Hourglass
 
 #
 # Generic rules:
@@ -55,7 +55,7 @@ ${TARGET}: ${SOURCE}
 	${MKDIR} rm
         ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
+${EXP_HDR}.Hourglass: hdr.Hourglass
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 #
