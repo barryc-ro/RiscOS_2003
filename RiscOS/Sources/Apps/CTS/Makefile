@@ -52,6 +52,7 @@ OBJS =\
  o.client\
  o.ctsmessage\
  o.ctsbrowser\
+ o.ctsui\
  o.plugclient\
  o.statetable\
  o.utils
@@ -60,6 +61,7 @@ DEBOBJS =\
  od.client\
  od.ctsmessage\
  od.ctsbrowser\
+ od.ctsui\
  od.plugclient\
  od.statetable\
  od.utils
@@ -112,6 +114,7 @@ coreres:
 	${CP} LocalRes:!Run ${EXPDIR}.!${COMPONENT}.!Run ${CPFLAGS}
 	${CP} LocalRes:Messages ${EXPDIR}.!${COMPONENT}.Messages ${CPFLAGS}
 	${CP} LocalRes:Res ${EXPDIR}.!${COMPONENT}.Res ${CPFLAGS}
+	${MKDIR} ${EXPDIR}.!${COMPONENT}.WebPages
 
 ${DIRS}:
 	${mkdir} o
