@@ -9,12 +9,22 @@
 /************************************************************************/
 
 #include "constants.h"
+#include "Interface/HighFSI.h"
 #include "main.h"
 #include "CmdLine.h"
 #include "VersionNum"
 
 ERROR_STRUCT( NOMEMORY, "NoStore" );
 ERROR_STRUCT( NOTDIR,   "IsntDir" );
+
+typedef struct {
+  unsigned int load;
+  unsigned int exec;
+  unsigned int length;
+  unsigned int attr;
+  unsigned int type;
+  char name[4];
+} osgbpb_response;
 
 #define WimpVersion    350
 
@@ -27,119 +37,130 @@ int iconbar_id           = 0;      /* ID iconbar object */
 int menu_iconbar_id      = 0;      /* ID of iconbar menu object */
 int verbose              = FALSE;  /* Verbose operation */
 
-static void print_verbose(char *dir)
-{
-  if (verbose == TRUE)
-    printf("EraseCVS: %s\n", dir);
-}
-
 /*
  */
 _kernel_oserror *
 error_lookup(_kernel_oserror *err, char *sub)
 {
-  _kernel_swi_regs reg;
-
-  reg.r[0] = (int)err;
-  reg.r[1] = 0;
-  reg.r[2] = 0;
-  reg.r[3] = 0;
-  reg.r[4] = (int)sub;
-  reg.r[5] = 0;
-  reg.r[6] = 0;
-  reg.r[7] = 0;
-  return (_kernel_swi(MessageTrans_ErrorLookup, &reg, &reg));
+  return _swix(MessageTrans_ErrorLookup, _INR(0,7), err, 0, 0, 0, sub, 0, 0, 0);
 }
 
 /*
  * remove CVS directories and /cvstag files
  */
-_kernel_oserror *
-remove_cvs(char *root, char *file, int *removed)
+
+enum cvs_flags {
+  flag_seen_cvs_dir = 1,
+  flag_seen_cvstag = 2
+};
+
+static char dirname[BUFSIZ];
+static char enumbuf[BUFSIZ];
+
+static _kernel_oserror *delete_files(char *leafbuf, char *src, char *fulldir)
 {
+  _kernel_swi_regs r;
+
+  r.r[0] = FSControl_Wipe;
+  r.r[1] = (int) fulldir;
+  r.r[2] = 0;
+  r.r[3] = 3; /* flags: R F */
+
+  strcpy(leafbuf, src);
+  return _kernel_swi(OS_FSControl, &r, &r);
+}
+
+static _kernel_oserror *do_remove_cvs(char *eodir, char *nptr, char *eptr)
+{
+  char *ptr;
+  int next;
   _kernel_oserror *err = NULL;
-  _kernel_swi_regs reg;
-  char buffer[96];
-  char *filename;
-  int type;
-  char *path;
-  int rem;
+  int flags = 0;
 
-  if ((path = malloc(strlen(root)+strlen(file)+5))==NULL)
-    return (error_lookup(ERROR(NOMEMORY),NULL));
+  for (ptr = nptr, next = flags = 0; err == NULL && next != -1;) {
+    char *p;
+    int count;
+
+    err = _swix(OS_GBPB, _INR(0,6)|_OUTR(3,4), OSGBPB_ReadDirEntriesInfo,
+      dirname, enumbuf, sizeof(enumbuf)/32, next, sizeof(enumbuf), NULL,
+      &count, &next);
+
+    if (!err) {
+      for (p = enumbuf; count-- > 0; ) {
+        osgbpb_response *o = (osgbpb_response *) p;
+        size_t namelen = strlen(o->name) + 1;
+        if (count) {
+#         define align_ptr(x) ((void *)((((int)(x))+3)&~3))
+          p = align_ptr(o->name + namelen);
+        }
 
 
-  strcpy(path,root);
-  if (file)
-  {
-    strcat(path,".");
-    strcat(path,file);
-  }
-
-  if (strcmp(filename,"/cvstag")==0)     /* .cvstag file */
-  {
-    reg.r[0] = 27; /* wipe */
-    reg.r[1] = (int)path;
-    reg.r[2] = 0;
-    reg.r[3] = 1<<1;
-    err=_kernel_swi(OS_FSControl,&reg,&reg);
-    if (removed)
-      *removed = 1;
-    goto exit_gracefully;
-  }
-  else if (strcmp(filename,"CVS")==0)    /* CVS directory */
-  {
-    print_verbose(root);
-
-    reg.r[0] = 27; /* wipe */
-    reg.r[1] = (int)path;
-    reg.r[2] = 0;
-    reg.r[3] = 1<<0 | 1<<1;
-    err=_kernel_swi(OS_FSControl,&reg,&reg);
-
-    if (removed)
-      *removed = 1;
-    goto exit_gracefully;
-  }
-
-  reg.r[0] = 10;
-  reg.r[1] = (int)path;
-  reg.r[2] = (int)buffer;
-  reg.r[3] = 1;
-  reg.r[4] = 0;
-  reg.r[5] = sizeof(buffer);
-  reg.r[6] = NULL;
-  do
-  {
-    ERR_GOTO(err,_kernel_swi(OS_GBPB,&reg,&reg));
-    if (reg.r[4] != -1)
-    {
-      type = *(int*)(buffer+16);
-      filename = buffer+20;
-      if (type==2)
-      {
-        ERR_GOTO(err,remove_cvs(path,filename,&rem));
-        if (rem)
-          reg.r[4] = 0;
-      }
-      else
-      {
-        if (strcmp(filename,"/cvstag")==0)          /* .cvstag file */
-        {
-          ERR_GOTO(err,remove_cvs(path,filename,&rem));
-          if (rem)
-            reg.r[4] = 0;
+        if (o->type == object_directory) {
+          if (strcmp(o->name, "CVS") == 0) {
+            flags |= flag_seen_cvs_dir;
+          }
+          else {
+            if (ptr + namelen < eptr) {
+              /* We only store it if we haven't run out of space! */
+              memcpy(ptr, o->name, namelen);
+              ptr += namelen;
+            }
+          }
+        }
+        else if (o->type == object_file && strcmp(o->name, "/cvstag") == 0) {
+          flags |= flag_seen_cvstag;
         }
       }
     }
-  } while (reg.r[4] != -1);
-  if (removed)
-    *removed = 0;
+  }
+  --ptr; /* point back at final terminating byte */
 
-exit_gracefully:
-  if (path)
-    free(path);
-  return (err);
+  /* Finished the enumeration now, so we can change the directory with
+   * complete impunity and NOT have to re-enumerate it.
+   *
+   * Scan back through all the directory names and call this routine
+   * recursively to process them.
+   */
+
+  *eodir++ = '.';
+
+  while (!err && ptr-- > nptr) {
+    size_t length = 0;
+
+    while (*ptr && ptr >= nptr) {
+      --ptr;
+      ++length;
+    }
+
+    memcpy(eodir, ptr + 1, length + 2);
+    err = do_remove_cvs(eodir + length, ptr + 1, eptr);
+  }
+
+  /* Do the "current" directory last to help the filing systems cache
+   * directory data more efficiently
+   */
+  if (!err && flags & flag_seen_cvstag) {
+    err = delete_files(eodir, "/cvstag", dirname);
+  }
+  if (!err && flags & flag_seen_cvs_dir) {
+    if (verbose) printf("EraseCVS: %s\n", dirname);
+    err = delete_files(eodir, "CVS", dirname);
+  }
+
+  eodir[-1] = '\0';
+
+  return err;
+}
+
+_kernel_oserror *remove_cvs(char *dir)
+{
+  /* Allocate a 32K buffer for holding all the leafnames */
+  static char names[8*BUFSIZ];
+  if (!dir || !*dir) {
+    dir = "@";
+  }
+  return do_remove_cvs(strchr(strcpy(dirname, dir), '\0'),
+    names+1, names + sizeof(names) - 1);
 }
 
 /*
@@ -251,7 +272,7 @@ message_data_open(WimpMessage *message, void *handle)
   if (proceed == TRUE)
   {
     _swix(Hourglass_On,0);
-    ERR_GOTO(err,remove_cvs(message->data.data_load_ack.leaf_name,NULL,NULL));
+    ERR_GOTO(err,remove_cvs(message->data.data_load_ack.leaf_name));
   }
 
   if (message->hdr.action_code == Wimp_MDataLoad)
