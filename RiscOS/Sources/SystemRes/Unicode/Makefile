@@ -15,9 +15,11 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
@@ -47,27 +49,35 @@ install_rom: ${TARGET}
 clean:
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resources-${SUBSET}
+        @echo ${COMPONENT}: resource files copied
+
+resources-Japan: resources-
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*CNS* ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*KS*  ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*GB*  ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.BigFive              ${WFLAGS}
+
+resources-:
         ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.Encodings            ${RESDIR}.Encodings  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Boot      ${RESAPP}.!Boot      ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Run       ${RESAPP}.!Run       ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Help      ${RESAPP}.!Help      ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Sprites   ${RESAPP}.!Sprites   ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Sprites22 ${RESAPP}.!Sprites22 ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Sprites23 ${RESAPP}.!Sprites23 ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+        ${CP} Resources.Encodings ${RESDIR}.Encodings  ${CPFLAGS}
+        ${CP} LocalRes:!Boot      ${RESAPP}.!Boot      ${CPFLAGS}
+        ${CP} LocalRes:!Run       ${RESAPP}.!Run       ${CPFLAGS}
+        ${CP} LocalRes:!Help      ${RESAPP}.!Help      ${CPFLAGS}
+        ${CP} LocalRes:!Sprites   ${RESAPP}.!Sprites   ${CPFLAGS}
+        ${CP} LocalRes:!Sprites22 ${RESAPP}.!Sprites22 ${CPFLAGS}
+        ${CP} LocalRes:!Sprites23 ${RESAPP}.!Sprites23 ${CPFLAGS}
 
 install: 
         ${MKDIR} ${INSTDIR}
-        ${CP} Resources.Encodings            ${INSTDIR}.Encodings  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Run       ${INSTDIR}.!Run       ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Help      ${INSTDIR}.!Help      ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Sprites   ${INSTDIR}.!Sprites   ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Sprites23 ${INSTDIR}.!Sprites23 ${CPFLAGS}
+        ${CP} Resources.Encodings ${INSTDIR}.Encodings  ${CPFLAGS}
+        ${CP} LocalRes:!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
+        ${CP} LocalRes:!Run       ${INSTDIR}.!Run       ${CPFLAGS}
+        ${CP} LocalRes:!Help      ${INSTDIR}.!Help      ${CPFLAGS}
+        ${CP} LocalRes:!Sprites   ${INSTDIR}.!Sprites   ${CPFLAGS}
+        ${CP} LocalRes:!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
+        ${CP} LocalRes:!Sprites23 ${INSTDIR}.!Sprites23 ${CPFLAGS}
 
 module:
 	modgen UnicodeRes UnicodeRes UnicodeRes 0.03 -via viafile
