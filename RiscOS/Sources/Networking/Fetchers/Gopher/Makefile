@@ -1,4 +1,4 @@
-# Makefile for Gopher
+# Makefile for a URL fetcher module
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -6,158 +6,43 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 10-Feb-98  SNB    Created
+# 06-Oct-98  SNB    Updated to use LocalRes and link 5.08
 #
 
-#
-# Component specific options:
-#
-COMPONENT  = Gopher
-ROM_MODULE = aof.${COMPONENT}
-RAM_MODULE = rm.${COMPONENT}
+COMMON_OBJ = o.commands o.connect o.processdir\
+ o.readdata o.ses_ctrl o.start o.status o.stop o.utils o.GopherHdr
 
+ROM_OBJS = o.moduleROM ${COMMON_OBJ}
 
-RESFSDIR   = Resources.URL.${COMPONENT}
+RAM_OBJS = o.module ${COMMON_OBJ} o.msgs
 
-#
-# Export Paths for Messages module
-#
-RESDIR = <resource$dir>.Resources2.URL
+DBG_OBJS = o.msgs od.module od.commands od.connect od.processdir\
+ od.readdata od.ses_ctrl od.start od.status od.stop od.utils o.GopherHdr
 
 #
-# Generic options:
+# Get main rules
 #
-MKDIR   = cdir
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-TLD	= tlink
-RM      = remove
-WIPE    = -wipe
-AS	= objasm
+include C:Fetchers.FetchMake
 
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
-
-AFLAGS   = -depend !Depend -NoCache 
-CFLAGS   = -c -depend !Depend ${INCLUDES} -throwback -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UTRACE
-ROMFLAGS = -DROM
-INCLUDES = -ITCPIPLibs:,C:
-
-#
-# Libraries
-#
-ANSILIB   = CLib:o.ansilib
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.abssym
-TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
-
-OBJS =\
- o.asmbits\
- o.commands\
- o.connect\
- o.dns\
- o.generic\
- o.module\
- o.processdir\
- o.readdata\
- o.ses_ctrl\
- o.start\
- o.status\
- o.stop\
- o.URLclient\
- o.utils\
- o.GopherHdr
-
-RAM_OBJS =\
- o.asmbits\
- o.commands\
- o.connect\
- o.dns\
- o.generic\
- o.moduleRAM\
- o.processdir\
- o.readdata\
- o.ses_ctrl\
- o.start\
- o.status\
- o.stop\
- o.URLclient\
- o.utils\
- o.GopherHdr
-
-MSGSF=o.msgs
-
-#
-# Rule patterns
-#
-.c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -p -o $@ $< -d $*.h
-.s.o:;	  ${AS} ${AFLAGS} -o $@ $<
-
-
-cmhg.GopherHdr: VersionNum
-	  @|
-
-GopherHdr.h: GopherHdr.o
-	  @|
-	  
-#
-# Main rules:
-#
-#
-all: ${RAM_MODULE}
-        @echo ${COMPONENT}: Module built (RAM)
-
-rom: ${ROM_MODULE}
-        @echo ${COMPONENT}: Module built (ROM)
-
-install_rom: ${ROM_MODULE}
-        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: Module installed (ROM)
-
-resources: Resources.${LOCALE}.Messages
-        ${MKDIR} ${RESDIR}
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied to Messages module
-
-clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} aof ${WFLAGS}
-        ${WIPE} rm ${WFLAGS}
-        ${WIPE} h.${COMPONENT}Hdr ${WFLAGS}
-        ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
+clean: fetcher-clean
         @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
-        ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ROMCSTUBS}
 
-# final link for ROM Image (using given base address)
-rom_link:
-        ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
+IMGFILES=LocalRes:Dir LocalRes:File
 
-${MSGSF}: Resources.${LOCALE}.Messages Resources.${LOCALE}.File Resources.${LOCALE}.Dir 
-	MkRes messages_file ${MSGSF} Resources.${LOCALE} ${RESFSDIR}
+resources: LocalRes:Messages ${IMGFILES}
+        ${MKDIR} ${RESDIR}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.Messages ${CPFLAGS}
+        ${CP} LocalRes:Dir       ${RESDIR}.Dir      ${CPFLAGS}
+        ${CP} LocalRes:File      ${RESDIR}.File     ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied to Messages module
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
-	${mkdir} rm
-        ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
-        Access $@ RW/R
-
-o.moduleRAM: module.c
-	$(CC) ${CFLAGS} -o $@ module.c
+o.msgs: LocalRes:Messages ${IMGFILES}
+        TokenCheck LocalRes:Messages
+        resgen messages_file $@ LocalRes:Messages ${RESFSDIR}.Messages \
+          LocalRes:Dir        ${RESFSDIR}.Dir \
+          LocalRes:File       ${RESFSDIR}.File
 
 
 #---------------------------------------------------------------------------
