@@ -88,6 +88,10 @@ int dhcp_prepare_request(dhcp_start_params *dsp, void *private_word)
 		        break;
 
 		case dhcpstate_INIT:
+		        /* A new request, so copy the packet options */
+		        di->binding = *dsp->request;
+		        break;
+
 		case dhcpstate_SELECTING:
 	        	/* It was either new, or a retry from some software
 	        	 * that was prodding the Internet module.  Resend
@@ -114,11 +118,12 @@ int dhcp_prepare_request(dhcp_start_params *dsp, void *private_word)
 	 */
 	interfaces_reschedule(private_word);
 
-	/* XXX: Need to block here waiting for the expiration of a timeout?
-	 *      Or do we return and rely on Internet's caller to do this.
-	 *      The caller will almost certainly be the IPConfig module, so
-	 *      it should be OK, but behaviour needs to be verified.
+	/* Need to block here waiting for the expiration of a timeout or
+	 * the arrival of a packet.  The caller will almost certainly be
+	 * the IPConfig module, so behaviour with IPConfig must be
+	 * verified.
 	 */
+	module_idle(mir_IDLE);
 
 	/* Tell Internet module not to bother with this request */
         return dhcp_CLAIM;
@@ -133,6 +138,11 @@ int dhcp_prepare_request(dhcp_start_params *dsp, void *private_word)
 void dhcp_deliver_incoming_packet(DHCP *d, void *private_word)
 {
         dhcp_interface *di = interfaces_find_by_xid(d->xid);
+
+	/* Release the block on the original caller, thus enforcing a timeout
+	 * or wakeup (in this case, a wakeup) so that the original caller's
+	 * retry algorithms can function correctly.
+	 */
 
         if (di == NULL) {
                 /* Couldn't match this packet on the transaction ID */
@@ -223,6 +233,9 @@ void dhcp_interpret_reply(dhcp_interface *di, dhcp_reply_params *drp, void *priv
 
 	/* Prod the timers - at least we can claim to have done something. */
 	interfaces_reschedule(private_word);
+	if (di->state == dhcpstate_BOUND) {
+	        module_idle(mir_WAKEUP);
+	}
 }
 
 void dhcp_discover(dhcp_interface *di)
@@ -337,12 +350,15 @@ void dhcp_request(dhcp_interface *di, dhcp_state next_state, enum dhcprequest_op
 	dhcp_copy_option(&di->di_dhcp, &di->offer, OPTION_SERVERIDENTIFIER);
 	dhcp_add_option(&di->di_dhcp, OPTION_REQUESTEDIPADDR, sizeof(di->offer.yiaddr), &di->offer.yiaddr);
 	di->di_dhcp.secs = di->temp.secs;
-	if (di->state == dhcpstate_SELECTING) {
+	if (di->state == dhcpstate_SELECTING || 1) {
 	        /* Only send this service call around if we are in the SELECTING state,
 	         * because if we are simply attempting a renew or rebind, we already
 	         * have the information.
 	         */
-		module_notify_dynamic_boot_start(di);
+	        /* XXX: Is that true now that we have a separate call for identifying
+	         * requests?  Added the || 1 to make this call always happen
+	         */
+		module_notify_dhcp_request(di);
 	}
 	di->first_send = interfaces_current_time();
 	di->interval = request_INITIAL_RETRY;
@@ -385,7 +401,7 @@ void dhcp_ack(dhcp_interface *di, dhcp_reply_params *drp)
          * do it ... see the iparp module to see if it does)
          */
 
-	trace(("DHCPACK message received\n"));
+	trace(("DHCPACK message received in state %s\n", dhcp_state_name(di)));
 
 	if (di->state == dhcpstate_BOUND) {
 	        /* Already bound.  Discard this message completely. */
@@ -425,6 +441,7 @@ void dhcp_ack(dhcp_interface *di, dhcp_reply_params *drp)
 	if (di->t1 <= interfaces_current_time()) {
 	        /* Address lease has already expired! */
 	        di->offer = *drp->reply;
+	        trace(("Renew time is earlier than time now!\n"));
 	        dhcp_decline(di);
 	        return;
 	}
@@ -462,6 +479,7 @@ void dhcp_nak(dhcp_interface *di, dhcp_reply_params *drp)
          */
 
 	trace(("DHCPNAK message received\n"));
+        module_idle(mir_WAKEUP);
 
 	/* Ensure that we cancel memory of any binding */
 	di->binding = *drp->reply;
@@ -483,6 +501,7 @@ void dhcp_decline(dhcp_interface *di)
         dhcp_time desired_lease = dhcp_infinite_lease; /* Default in case read from offer fails */
 
         /* We need to tell the server we weren't happy with the lease */
+        trace(("DHCPDECLINE: We are declining the proposed lease\n"));
 
         dhcp_init_packet(di, &di->offer, DHCPDECLINE);
 	dhcp_find_lease_expiry(&di->offer, &desired_lease, OPTION_IPADDRLEASETIME);
@@ -496,6 +515,7 @@ void dhcp_decline(dhcp_interface *di)
 	di->t2 = di->first_send + decline_TOTAL_TIMEOUT;
         di->state = dhcpstate_INIT;
         dhcp_transmit(di);
+        module_idle(mir_WAKEUP);
 }
 
 

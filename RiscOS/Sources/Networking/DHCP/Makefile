@@ -5,17 +5,18 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 26-Mar-99  SNB          Created
+# 22-Mar-99  SNB          Created
 #
 
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR = <cexport$dir>
 
 #
 # Generic options:
 #
+AWK     = awk
 MKDIR   = cdir
 AS      = objasm
 CC      = cc
@@ -30,6 +31,8 @@ TOUCH   = create
 
 COMPONENT = DHCP
 CMHGNAME  = DHCPhdr
+
+EXPORTS = ${EXP_HDR}.h.${COMPONENT}
 
 DEPENDS = -depend !Depend ${THROWBACK}
 
@@ -80,6 +83,7 @@ ROMTARGET = aof.${COMPONENT}
 OBJS      =	\
  o.dhcp		\
  o.dhcperrors	\
+ o.idle		\
  o.module	\
  o.interfaces	\
  o.iparp	\
@@ -90,7 +94,7 @@ OBJS      =	\
 #
 # Rule patterns
 #
-.SUFFIXES:  .o .s .c .h .x .cmhg
+.SUFFIXES:  .o .s .c .h .cmhg
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
@@ -108,7 +112,7 @@ all: ${TARGET}
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
 
-export: 
+export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${ROMTARGET}
@@ -151,6 +155,11 @@ rom_link:
 
 h.${CMHGNAME}: ${CMHGOBJ}
 	@|
+
+${EXPORTS}: h.${CMHGNAME} h.dhcpextern
+	${CP} h.dhcpextern $@ ${CPFLAGS}
+	${AWK} -- "/.define DHCP\_00/,/endif/" h.${CMHGNAME} { >> $@ }
+
 
 o.module: VersionNum
 

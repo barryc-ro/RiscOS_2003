@@ -19,6 +19,7 @@
 #include "protocols/dhcp.h"
 #include "sys/dcistructs.h"
 #include "netinet/in.h"
+#include "arpa/inet.h"
 
 #include "dhcp.h"
 #include "interfaces.h"
@@ -32,6 +33,27 @@
  */
 static int s;
 
+
+/* This routine pulls the loopback interface into existence, otherwise we are
+ * unable to bind to the bootp client port because there are no active IP
+ * addresses,
+ */
+static void sockets_get_loopback(void)
+{
+        struct ifreq req;
+        di_ifdhcpreq *dif = (di_ifdhcpreq *) &req; /* Note - not the full thing! */
+
+        (void) strncpy(dif->ifr_in.name, "lo0", IFNAMSIZ);
+        (void) memset(&dif->ifr_in.sin, '\0', sizeof(dif->ifr_in.sin));
+        dif->ifr_in.sin.sin_family = AF_INET;
+#ifndef COMPAT_INET4
+        dif->ifr_in.sin.sin_len = sizeof(dif->ifr_in.sin);
+#endif
+        dif->ifr_in.sin.sin_port = 0;
+        inet_aton("127.0.0.1", &dif->ifr_in.sin.sin_addr);
+        (void) socketioctl(s, SIOCSIFADDR, &req);
+}
+
 /* Creates a new datagram socket and binds it to the DHCP client port so that it
  * receives copies of any incoming datagrams on any interface.  This allows it
  * to bypass the Internet module.
@@ -42,22 +64,26 @@ void sockets_init(void)
 
         s = socket(PF_INET, SOCK_DGRAM, 0);
         if (s == -1) {
+                trace(("socket() failed -> errno %d (%s)\n", errno, _inet_err()));
                 return;
         }
 
+	(void) memset(&sin, '\0', sizeof(sin));
 	sin.sin_family = AF_INET;
 #ifndef COMPAT_INET4
 	sin.sin_len = sizeof(sin);
 #endif
 	sin.sin_addr.s_addr = htonl(INADDR_ANY);
 	sin.sin_port = htons(DHCP_client);
-	(void) memset(sin.sin_zero, '\0', sizeof(sin.sin_zero));
+
+	sockets_get_loopback();
 
 	if (bind(s, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
 	        /* Erk - unable to bind.  We have a problem - reset ourselves,
 	         * although it probably won't do much good.  This is serious.
 	         * Surely the Internet module must be broken if this fails?
 	         */
+                trace(("bind() failed -> errno %d (%s)\n", errno, _inet_err()));
 	        sockets_discard();
 	}
 	else {
@@ -159,13 +185,13 @@ static int sockets_set_address(dhcp_interface *di, struct in_addr in, u_long com
 
 	sockets_ensure_init();
 
+	(void) memset(sin, '\0', sizeof(*sin));
         sin->sin_family = AF_INET;
 #ifndef COMPAT_INET4
         sin->sin_len = sizeof(*sin);
 #endif
 	sin->sin_port = 0;
 	sin->sin_addr = in;
-	(void) memset(sin->sin_zero, '\0', sizeof(sin->sin_zero));
 
 	return socketioctl(s, command, &di->req.ifr);
 }
@@ -227,6 +253,8 @@ void sockets_transmit(dhcp_interface *di, int ioctl_flags)
         di->req.ifr.ifr_flags = ioctl_flags;
         if (socketioctl(s, SIOCGWHOIAMD, &di->req) < 0) {
                 trace(("sockets_transmit: Internet module error %d\n", errno));
+                sockets_discard();
+                sockets_ensure_init();
         }
 }
 
@@ -241,12 +269,16 @@ void sockets_transmit(dhcp_interface *di, int ioctl_flags)
 void sockets_trigger_internet_dhcp(const char *if_name)
 {
         struct ifreq ifr;
+        int res;
 
 	trace(("sockets_trigger_internet_dhcp: poking Internet module\n"));
 	sockets_ensure_init();
 	(void) memset(&ifr, '\0', sizeof(ifr));
        	(void) strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
-       	(void) socketioctl(s, SIOCGWHOIAMB, &ifr);
+       	res = socketioctl(s, SIOCGWHOIAMB, &ifr);
+       	if (res<0) {
+                trace(("SIOCWHOIAMB -> error %d\n", errno));
+        }
 }
 
 /* Called before using the socket to make sure we really did create it.  It may
