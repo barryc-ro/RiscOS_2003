@@ -55,8 +55,9 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        ${MKDIR} ${RESDIR}.BASIC
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.BASIC.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 rm.BASICTrans: s.TransSrc
