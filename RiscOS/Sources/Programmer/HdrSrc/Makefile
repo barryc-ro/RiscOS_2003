@@ -52,6 +52,7 @@ EXPORTS   = \
  ${HDRDIR}.Countries \
  ${HDRDIR}.CPU.ARM600 \
  ${HDRDIR}.CPU.Generic26 \
+ ${HDRDIR}.CPU.Generic32 \
  ${HDRDIR}.DDVMacros \
  ${HDRDIR}.Debug \
  ${HDRDIR}.Devices \
@@ -264,6 +265,7 @@ ${HDRDIR}.Machine.Machine:   hdr.Machine.Machine;   ${CP} hdr.Machine.Machine   
 ${HDRDIR}.ImageSize.<ImageSize>: hdr.ImageSize.<ImageSize>; ${CP} hdr.ImageSize.<ImageSize> $@ ${CPFLAGS}
 ${HDRDIR}.CPU.ARM600:        hdr.CPU.ARM600;        ${CP} hdr.CPU.ARM600           $@ ${CPFLAGS}
 ${HDRDIR}.CPU.Generic26:     hdr.CPU.Generic26;     ${CP} hdr.CPU.Generic26        $@ ${CPFLAGS}
+${HDRDIR}.CPU.Generic32:     hdr.CPU.Generic32;     ${CP} hdr.CPU.Generic32        $@ ${CPFLAGS}
 ${HDRDIR}.FDC.FDC711:        hdr.FDC.FDC711;        ${CP} hdr.FDC.FDC711           $@ ${CPFLAGS}
 ${HDRDIR}.IO.GenericIO:      hdr.IO.GenericIO;      ${CP} hdr.IO.GenericIO 	   $@ ${CPFLAGS}
 ${HDRDIR}.IO.IOC:            hdr.IO.IOC;            ${CP} hdr.IO.IOC               $@ ${CPFLAGS}
