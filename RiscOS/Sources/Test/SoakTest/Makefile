@@ -8,6 +8,7 @@
 # 10-Mar-95  TMD          Created.
 # 28-Aug-96  BAR          Updated to build differetn vsn.s for different
 #                         machine types
+# 29 Jul 1997 RWB	  Made image publicly readable.
 #
 
 #
@@ -68,6 +69,8 @@ clean:
 ${TARGET}: ${SOURCE} ${NONMPEGS}
         cdir rm.${MACHINE}
         ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
+        Access rm.${MACHINE}.${COMPONENT} RW/R
+
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
@@ -87,108 +90,6 @@ Sprites.Test.32bpp: Sprites.Test.4bpp Tools.ChangeFSI
 
 
 # Dynamic dependencies:
-rm.SoakTest: Hdr:ListOpts
-rm.SoakTest: Hdr:Macros
-rm.SoakTest: Hdr:System
-rm.SoakTest: Hdr:SWIs
-rm.SoakTest: Hdr:CPU.Generic26
-rm.SoakTest: Hdr:IO.GenericIO
-rm.SoakTest: Hdr:RISCOS
-rm.SoakTest: Hdr:Machine.<Machine>
-rm.SoakTest: Hdr:IO.IOMDL
-rm.SoakTest: Hdr:CMOS
-rm.SoakTest: Hdr:ModHand
-rm.SoakTest: Hdr:Services
-rm.SoakTest: Hdr:Proc
-rm.SoakTest: Hdr:FSNumbers
-rm.SoakTest: Hdr:NewErrors
-rm.SoakTest: Hdr:MsgTrans
-rm.SoakTest: Hdr:Debug
-rm.SoakTest: Hdr:Podule
-rm.SoakTest: Hdr:PoduleReg
-rm.SoakTest: Hdr:HighFSI
-rm.SoakTest: Hdr:Sprite
-rm.SoakTest: Hdr:MPEGCtrl
-rm.SoakTest: Hdr:MPEGVideo
-rm.SoakTest: Hdr:MPEGAudio
-rm.SoakTest: Hdr:MPEGCard
-rm.SoakTest: s.Module
-rm.Falcon.SoakTest: Hdr.<MACHINE>.GetAll_MS
-rm.Falcon.SoakTest: Hdr:ListOpts
-rm.Falcon.SoakTest: Hdr:Macros
-rm.Falcon.SoakTest: Hdr:System
-rm.Falcon.SoakTest: Hdr:SWIs
-rm.Falcon.SoakTest: Hdr:CPU.Generic26
-rm.Falcon.SoakTest: Hdr:IO.GenericIO
-rm.Falcon.SoakTest: Hdr:RISCOS
-rm.Falcon.SoakTest: Hdr:Machine.<Machine>
-rm.Falcon.SoakTest: Hdr:IO.IOMDL
-rm.Falcon.SoakTest: Hdr:CMOS
-rm.Falcon.SoakTest: Hdr:ModHand
-rm.Falcon.SoakTest: Hdr:Services
-rm.Falcon.SoakTest: Hdr:Proc
-rm.Falcon.SoakTest: Hdr:FSNumbers
-rm.Falcon.SoakTest: Hdr:NewErrors
-rm.Falcon.SoakTest: Hdr:MsgTrans
-rm.Falcon.SoakTest: Hdr:Debug
-rm.Falcon.SoakTest: Hdr:Podule
-rm.Falcon.SoakTest: Hdr:PoduleReg
-rm.Falcon.SoakTest: Hdr:HighFSI
-rm.Falcon.SoakTest: Hdr:Sprite
-rm.Falcon.SoakTest: Hdr:MPEGCtrl
-rm.Falcon.SoakTest: Hdr:MPEGVideo
-rm.Falcon.SoakTest: Hdr:MPEGAudio
-rm.Falcon.SoakTest: Hdr:MPEGCard
-rm.Falcon.SoakTest: Hdr:STBState
-rm.Falcon.SoakTest: s.Module
-rm.Omega.SoakTest: Hdr.<MACHINE>.GetAll_MS
-rm.Omega.SoakTest: Hdr:ListOpts
-rm.Omega.SoakTest: Hdr:Macros
-rm.Omega.SoakTest: Hdr:System
-rm.Omega.SoakTest: Hdr:SWIs
-rm.Omega.SoakTest: Hdr:CPU.Generic26
-rm.Omega.SoakTest: Hdr:IO.GenericIO
-rm.Omega.SoakTest: Hdr:RISCOS
-rm.Omega.SoakTest: Hdr:Machine.<Machine>
-rm.Omega.SoakTest: Hdr:IO.IOMDL
-rm.Omega.SoakTest: Hdr:CMOS
-rm.Omega.SoakTest: Hdr:ModHand
-rm.Omega.SoakTest: Hdr:Services
-rm.Omega.SoakTest: Hdr:Proc
-rm.Omega.SoakTest: Hdr:FSNumbers
-rm.Omega.SoakTest: Hdr:NewErrors
-rm.Omega.SoakTest: Hdr:MsgTrans
-rm.Omega.SoakTest: Hdr:Debug
-rm.Omega.SoakTest: Hdr:Podule
-rm.Omega.SoakTest: Hdr:PoduleReg
-rm.Omega.SoakTest: Hdr:HighFSI
-rm.Omega.SoakTest: Hdr:Sprite
-rm.Omega.SoakTest: s.Module
-rm.Omega.SoakTest: <Src$Dir>.Kernel.TestSrc.ToggleLED
-rm.RCA.SoakTest: Hdr.<MACHINE>.GetAll_MS
-rm.RCA.SoakTest: Hdr:ListOpts
-rm.RCA.SoakTest: Hdr:Macros
-rm.RCA.SoakTest: Hdr:System
-rm.RCA.SoakTest: Hdr:SWIs
-rm.RCA.SoakTest: Hdr:CPU.Generic26
-rm.RCA.SoakTest: Hdr:IO.GenericIO
-rm.RCA.SoakTest: Hdr:RISCOS
-rm.RCA.SoakTest: Hdr:Machine.<Machine>
-rm.RCA.SoakTest: Hdr:IO.IOMDL
-rm.RCA.SoakTest: Hdr:CMOS
-rm.RCA.SoakTest: Hdr:ModHand
-rm.RCA.SoakTest: Hdr:Services
-rm.RCA.SoakTest: Hdr:Proc
-rm.RCA.SoakTest: Hdr:FSNumbers
-rm.RCA.SoakTest: Hdr:NewErrors
-rm.RCA.SoakTest: Hdr:MsgTrans
-rm.RCA.SoakTest: Hdr:Debug
-rm.RCA.SoakTest: Hdr:Podule
-rm.RCA.SoakTest: Hdr:PoduleReg
-rm.RCA.SoakTest: Hdr:HighFSI
-rm.RCA.SoakTest: Hdr:Sprite
-rm.RCA.SoakTest: s.Module
-rm.RCA.SoakTest: <Src$Dir>.Kernel.TestSrc.ToggleLED
 rm.Boca.SoakTest: Hdr.<MACHINE>.GetAll_MS
 rm.Boca.SoakTest: Hdr:ListOpts
 rm.Boca.SoakTest: Hdr:Macros
