@@ -840,57 +840,111 @@ com_DealWithReadRecord
   return(0);
 }
 
+/*
+ *  'read interface layer' this reads an 'i' set of interface characters as described in
+ *  the most significant nibble of the Di-1 and loads them into the tA-D(ith level) updating
+ *  the checksum.  This method is only used in GetATR.
+ */ 
+ 
+void read_interface_layer(BYTE Di_1, char *tA_D, char *checksum)
+{
+    if (Di_1 & 0x10)	// TA(i) exists
+    	(*checksum) ^= tA_D[0] = blocking_readbyte();	
+    	
+    if (Di_1 & 0x20)  	// TB(i) exists
+    	(*checksum) ^= tA_D[1] = blocking_readbyte();
+    	
+    if (Di_1 & 0x40)	// TC(i) exists
+    	(*checksum) ^= tA_D[2] = blocking_readbyte();
+    	
+    if (Di_1 & 0x80)	// TD(i) exists
+	(*checksum) ^= tA_D[3] = blocking_readbyte(); 
+}
 
 /*
  *  com_GetATR - Gets the ATR off the card in slot2, and ditches it.
- */ 
-int
-com_GetATR
-(
-  void
-)
+ */
+#if (supported_HISTORICAL_CHARACTER_LENGTH != 10)
+#error comparisons are made on the length of the historical character vectors.
+#endif
+
+BYTE hist_char_reasona[supported_HISTORICAL_CHARACTER_LENGTH] = 
+	{ 0x80, 0x12, 0x39, 0x2f, 0x31, 0xc0, 0x73, 0x86, 0x21, 0x08 };
+	
+BYTE hist_char_std_78[supported_HISTORICAL_CHARACTER_LENGTH] = 
+	{ 0x80, 0x12, 0x39, 0x2f, 0x31, 0xc0, 0x73, 0xc7, 0x01, 0x49 };
+
+int com_GetATR( void )
 {
-#if FALSE
-  int	retval = 0;
+  int  i, t = 0; 			// counter, protocol type t=0 ?
+  char TCK = 0;				// EOR checksum
+  int ti;                               // Yi-1 (characters | protocol)
+  char tA_D[4];				// i characters
   
-  if( blocking_readbyte()        != 0x3B) retval = -1; /** TS **/
-  if( (t0 = blocking_readbyte()) != 0xE0) retval = -1; /** T0 **/
-
-  if(t0 & 0x10)
-  {
-    /** We read TA1 as next byte **/
-    dummy = blocking_readbyte();
-    retval = -1; /** No TA1 in the real thing **/
-  }
-  if(t0 & 0x20)
-  {
-    /** We read TB1 as next byte **/
-    if(blocking_readbyte() != 0x00) retval = -1;
-  }
-  if(t0 & 0x40)
-  {
-    /** We read TC1 as next byte **/
-    if(blocking_readbyte() != 0xFF) retval = -1;
-  }
-  if(t0 & 0x80)
-  {
-    if( (t0 = blocking_readbyte()) != 0x81) retval = -1; /* TD1 */
-    tck_exp = (t0 && 0x01); /* T=1 indicates TCK expected at end */
-  }
+  g_card_descriptor.card = card_Unknown;
+  g_card_descriptor.hist_characters = 0;
+  g_card_descriptor.failure = failure_none;
   
-  return(retval);
-#endif
-  if( blocking_readbyte() != 0x3B) return(-1);
-  if( blocking_readbyte() != 0xE0) return(-1);
-  if( blocking_readbyte() != 0x00) return(-1);
-  if( blocking_readbyte() != 0xFF) return(-1);
-  if( blocking_readbyte() != 0x81) return(-1);
-  if( blocking_readbyte() != 0xB1) return(-1);
-  if( blocking_readbyte() != 0x25) return(-1);
-  if( blocking_readbyte() != 0x45) return(-1);
-  if( blocking_readbyte() != 0x01) return(-1);
-  if( blocking_readbyte() != 0x4E) return(-1);
+  if( blocking_readbyte() == 0x3B) {			/** TS **/
 
-  return(0);
+       	TCK ^= ti = blocking_readbyte();			// begin checksum read t0
+    	g_card_descriptor.hist_characters = ti & 0x0f;		// least significant nibble contains the number of historical characters
+
+
+	// read the interface information to null this has been picked up by the micro.
+	while (ti & 0xf0) {
+		read_interface_layer( ti, tA_D, &TCK);
+					
+		ti = tA_D[3];
+		if (t!=0) t=tA_D[3] & 0x0f;
+	} // layer i+1... read the interface layer out
+	
+	
+	// read the historical characters (into the g_char_descriptor structure)
+	for (i=0; i < supported_HISTORICAL_CHARACTER_LENGTH; ++i) {
+		if (i <  g_card_descriptor.hist_characters)
+			TCK ^= g_card_descriptor.hist[i] =  blocking_readbyte();
+		else 	
+			g_card_descriptor.hist[i] = 0;
+        }
+        
+        // check that we recognise the card
+	if ((t!=0)&&((TCK ^ blocking_readbyte())!=NULL)){// checksum not sent if t=0
+		g_card_descriptor.failure = checksum_failure;
+	} else {
+	  	if (t!=1) {
+	  		g_card_descriptor.failure = protocol_not_teq1;
+	  	} else {
+        		if (g_card_descriptor.hist_characters != supported_HISTORICAL_CHARACTER_LENGTH) {
+        			g_card_descriptor.failure = incorrect_hist_chars;
+        	        } else {
+        	          	for (i=0;i< supported_HISTORICAL_CHARACTER_LENGTH; ++i){
+        	          		if (g_card_descriptor.hist[i] != hist_char_reasona[i])
+        	          		break;
+        	          	}
+        	          	
+        	          	if (i == supported_HISTORICAL_CHARACTER_LENGTH) {
+        	          		g_card_descriptor.card = card_Reasona_256;
+        	          	} else {
+        	          		for (i=0;i< supported_HISTORICAL_CHARACTER_LENGTH; ++i){
+        	          			if (g_card_descriptor.hist[i] != hist_char_std_78[i])
+        	          			break;
+        	          		}
+        	          		
+        	          		if (i == supported_HISTORICAL_CHARACTER_LENGTH) {
+        	          			g_card_descriptor.card = card_STD_78;
+        	          		} else {
+        	          			g_card_descriptor.failure = historical_unknown;
+        	          		}// std 7/ std 8
+				} // reasona 
+			} // number of history characters
+		} // t=1
+	}// checksum					
+  }// error in TS
+  else
+  	g_card_descriptor.failure = TS_byte_ne_3B;
+ 
+  return ((g_card_descriptor.card == card_Unknown) ? -1:0);
 }
-#endif
+	
+#endif // funai twinslot
