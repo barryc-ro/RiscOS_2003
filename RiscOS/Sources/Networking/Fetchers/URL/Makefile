@@ -129,7 +129,7 @@ od.protocol protocol.o: URLHdr.h
 # Main rules:
 #
 #
-all: ${RAM_MODULE} localdirs
+all: ${RAM_MODULE} o.dirs
 	@echo ${COMPONENT}: Module built (RAM)
 
 install: ${RAM_MODULE}
@@ -138,10 +138,10 @@ install: ${RAM_MODULE}
         ${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.URL.${COMPONENT}
 	@echo ${COMPONENT}: Module installed (Disc)
 
-ramtrace: ${DBG_MODULE} localdirs
+ramtrace: ${DBG_MODULE} o.dirs
 	@echo ${COMPONENT}: Module built (RAM - trace)
 
-rom: ${ROM_MODULE} localdirs
+rom: ${ROM_MODULE} o.dirs
 	@echo ${COMPONENT}: Module built (ROM)
 
 install_rom: ${ROM_MODULE}
@@ -155,15 +155,14 @@ resources: LocalRes:Messages LocalRes:ResList LocalRes:images
 	${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied to Messages module
 
-localdirs:
+o.dirs:
 	${MKDIR} o
 	${MKDIR} od
 	${MKDIR} i
 	${MKDIR} oi
 	${MKDIR} inst
 	${MKDIR} linked
-	${MKDIR} aof
-	${mkdir} rm
+	create o.dirs
 
 clean:
 	${WIPE} o ${WFLAGS}
@@ -181,7 +180,8 @@ ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
 	${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
-rom_link: localdirs
+rom_link: o.dirs
+	${MKDIR} aof
 	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
@@ -191,11 +191,13 @@ ${MSGSF}: LocalRes:Messages LocalRes:ResList
 	resgen messages_file ${MSGSF} -via LocalRes:ResList
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+	${mkdir} rm
 	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${MODSQZ} $@
 	Access $@ RW/R
 
 ${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+	${mkdir} rm
 	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} c:o.syslog
 	Access $@ RW/R
 
