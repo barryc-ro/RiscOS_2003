@@ -53,7 +53,8 @@ FILES =\
  ${LDIR}.Res
 
 OBJS =\
-  o.slider
+  o.slider \
+  o.saver
 
 #
 # Rule patterns
