@@ -111,6 +111,29 @@ static _kernel_oserror *register_with_url(void)
         #endif
 }
 
+#define EventV 0x10
+
+static void module_disable_internet_event(void)
+{
+	(void) _swix(OS_Byte, _INR(0,1), 13, 19); /* disable internet event */
+}
+
+static void module_enable_internet_event(void)
+{
+	(void) _swix(OS_Byte, _INR(0,1), 14, 19); /* enable internet event */
+}
+
+static _kernel_oserror *module_claim_event_vector(void *private_word)
+{
+	return _swix(OS_Claim, _INR(0,2), EventV, ftp_event, private_word);
+}
+
+static _kernel_oserror *module_release_event_vector(void *private_word)
+{
+	return _swix(OS_Release, _INR(0,2), EventV, ftp_event, private_word);
+}
+
+
 /*************************************************************/
 /* _kernel_oserror *module_init(char *cmd_fail, int podu...  */
 /*************************************************************/
@@ -183,9 +206,23 @@ _kernel_oserror *module_init(CMHG_CONST char *cmd_tail, int podule_base, void *p
     		return e;
     	}
 
+	e = module_claim_event_vector(pw);
+	if (e) {
+    		messages_file_close();
+                #ifndef ROM
+    		(void) _swix(ResourceFS_DeregisterFiles, _IN(0), messages_file());
+                #endif
+                (void) try_to_deregister();
+    		return e;
+	}
+
+	module_enable_internet_event();
+
   	callback_pending_flag = 0;
   	e = _swix(OS_CallEvery, _INR(0,2), 15*100-1, callevery_entry, pw);
   	if (e) {
+                module_disable_internet_event();
+                module_release_event_vector(pw);
     		messages_file_close();
                 #ifndef ROM
     		(void) _swix(ResourceFS_DeregisterFiles, _IN(0), messages_file());
@@ -242,6 +279,9 @@ _kernel_oserror *module_kill(int fatal, int podule, void *pw)
     	if (callback_pending_flag) {
       		(void) _swix(OS_RemoveCallBack, _INR(0,1), callback_entry, pw);
     	}
+
+    	module_disable_internet_event();
+    	module_release_event_vector(pw);
     	messages_file_close();
         #ifndef ROM
     	(void) _swix(ResourceFS_DeregisterFiles, _IN(0), messages_file());
@@ -284,6 +324,36 @@ _kernel_oserror *swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
         }
 }
 
+#define SOCKET_ASYNC_EVENT  1
+int ftp_event_handler(_kernel_swi_regs *r, void *pw)
+{
+        Session *s;
+        int sid;
+
+	if (r->r[1] == SOCKET_ASYNC_EVENT) for (sid = r->r[2], s = find_first_session(); s;) {
+		if (sid == s->data_sd) {
+			return 0; /* Intercept */
+	        }
+	        if (sid == s->control_sd) {
+	                if (!s->aborting && !s->threaded) {
+	                        _kernel_swi_regs r;
+			        int dataxfer = s->state >= FTP_READ_DATA && s->state <= FTP_WRITE_DATA;
+        			if (!dataxfer && s->state < FTP_STATUS_ENDED) {
+                                        char buffer[4];
+                		        r.r[0] = 0;
+	                	        r.r[1] = s->id;
+        	                	r.r[2] = (int) buffer;
+	                	        r.r[3] = 0;
+		                	swi_handler(FTPFetcher_ReadData - FTPFetcher_00, &r, pw);
+		                }
+	                }
+			return 0; /* Intercept */
+	        }
+	        s = s->next;
+	}
+
+	return 1; /* Pass it on */
+}
 
 int callback_handler(_kernel_swi_regs *r, void *pw)
 {
