@@ -17,19 +17,22 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = aasm 
+WIPE    = -wipe
+AS      = objasm 
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
+WFLAGS  = fr~c~v
 
 #
 # Program specific options:
 #
 COMPONENT = CMOSreset
 SOURCE    = s.Module
-TARGET    = rm.${MACHINE}.CMOSreset
+OBJECT    = o.Module
+TARGET    = rm.${MACHINE}.${COMPONENT}
 
 #
 # Generic rules:
@@ -42,14 +45,18 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${RM} ${TARGET}
+        ${WIPE} rm.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${SOURCE}
+${TARGET}: ${OBJECT}
         cdir rm.${MACHINE}
-        ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
+        link -o $@ -bin -base 0 ${OBJECT}
+        settype $@ Module
 
-# { > Log }
+${OBJECT}:
+	${MKDIR} o
+        ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
@@ -61,28 +68,4 @@ install: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: ${TARGET} installed
 
-maketime:
-        MakeTime
-
-version:
-        Version
-
 # Dynamic dependencies:
-rm.Omega.CMOSreset: Hdr:ListOpts
-rm.Omega.CMOSreset: Hdr:Macros
-rm.Omega.CMOSreset: Hdr:System
-rm.Omega.CMOSreset: Hdr:SWIs
-rm.Omega.CMOSreset: Hdr:CPU.Generic26
-rm.Omega.CMOSreset: Hdr:IO.GenericIO
-rm.Omega.CMOSreset: Hdr:RISCOS
-rm.Omega.CMOSreset: Hdr:Machine.<Machine>
-rm.Omega.CMOSreset: Hdr:Debug
-rm.Omega.CMOSreset: Hdr:Proc
-rm.Omega.CMOSreset: Hdr:CMOS
-rm.Omega.CMOSreset: Hdr:ModHand
-rm.Omega.CMOSreset: Hdr:Services
-rm.Omega.CMOSreset: Hdr:MsgTrans
-rm.Omega.CMOSreset: Hdr:FSNumbers
-rm.Omega.CMOSreset: Hdr:NewErrors
-rm.Omega.CMOSreset: Time+Date
-rm.Omega.CMOSreset: s.<Machine>.Settings
