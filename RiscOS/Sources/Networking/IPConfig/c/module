@@ -40,7 +40,10 @@
 #  include "IPConfHdr.h"
 #endif
 
+#define Service_Reset 0x27
+
 static void setcallback(void);
+static void clearcallback(void);
 
 #ifdef TRACE
 /* This variable is set to non-zero if the dynamic boot is to be executed
@@ -69,6 +72,16 @@ static int cli_state = 0;
 int module_read_command_options(void)
 {
         return cli_state;
+}
+
+static void module_set_flags(int set)
+{
+	cli_state |= set;
+}
+
+static void module_clear_flags(int clear)
+{
+	cli_state &= ~clear;
 }
 
 static _kernel_oserror *module_set_command_options(const char *cmd_tail)
@@ -101,22 +114,28 @@ static _kernel_oserror *module_set_command_options(const char *cmd_tail)
                 return make_error(error_REFUSE_INIT_SYNTAX_ERROR, 0);
         }
         cli_state = 0;
-        if (switches[0]) cli_state |= flag_RUN_EDITOR;
+        if (switches[0]) {
+                cli_state |= flag_RUN_EDITOR;
+        }
         if (switches[1]) {
                 cli_state |= flag_NO_DO_BOOT;
         }
         else {
-                if (switches[2]) cli_state |= flag_FORCE_BOOT;
+                if (switches[2]) {
+                        cli_state |= flag_FORCE_BOOT;
+                }
         }
 
         return 0;
 }
 
 /* release_module_resources closes and removes the messages file from the RMA
- * if necessary.
+ * if necessary, and removes any pending callback if there was one.
  */
 static void release_module_resources(void)
 {
+	clearcallback();
+	module_clear_flags(-1);
         (void) messages_file_close();
         #ifndef ROM
         (void) utils_deregister_msgs();
@@ -169,8 +188,13 @@ static _kernel_oserror *module_init_sub(const char *cmd_tail)
                 return make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
         }
 
+#ifdef TRACE
+	fprintf(stderr, Module_Title ": press interrupt keys NOW\a\n");
+	{ int i; for (i=0; i<100; ++i) (void) _kernel_osbyte(19,0,0); }
+#endif
+
         if (editconfig_initialise() == NULL) {
-                cli_state |= flag_RUN_EDITOR;
+                module_set_flags(flag_RUN_EDITOR);
         }
         else if ((opts & flag_NO_DO_BOOT) && !(opts & flag_FORCE_BOOT)) {
                 /* Do we need to perform our boot operations? */
@@ -183,6 +207,12 @@ static _kernel_oserror *module_init_sub(const char *cmd_tail)
 _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 {
         _kernel_oserror *e;
+
+
+#ifdef TRACE
+	fprintf(stderr, Module_Title ": initialisation\n");
+	{ int i; for (i=0; i<100; ++i) (void) _kernel_osbyte(19,0,0); }
+#endif
 
         (void) podule_base;
         module_wsp = pw;
@@ -213,6 +243,11 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
         (void) pw;
 
         release_module_resources();
+
+#ifdef TRACE
+	fprintf(stderr, Module_Title ": finalisation\n");
+	{ int i; for (i=0; i<100; ++i) (void) _kernel_osbyte(19,0,0); }
+#endif
 
         return 0;
 }
@@ -252,7 +287,7 @@ static int getvar(char *var, char *str, int len)
         }
 }
 
-/* Set the Inet$LocaAddr<n> variable to the given address string */
+/* Set the Inet$LocalAddr<n> variable to the given address string */
 static void setadrvar(int ifcnt, struct in_addr in)
 {
         char hex_address[12];
@@ -294,7 +329,7 @@ static void read_device_name(char *buf, struct ether_addr *macadr)
                 return;
         }
 
-        /* Construct the complete interface name fom the unit name and the unit number */
+        /* Construct the complete interface name from the unit name and the unit number */
         (void) strcat(strcpy(buf, (char *) d->chd_dib->dib_name), "0");
 
         /* Copy the 6-byte Ethernet MAC address */
@@ -303,7 +338,8 @@ static void read_device_name(char *buf, struct ether_addr *macadr)
         while (d) {
                 struct chaindib *d_next = d->chd_next;
                 /* specification requires chain blocks be in the RMA.   C library detects blocks
-                 * in RMA and frees them correctly with OS_Module
+                 * in RMA and frees them correctly with OS_Module.
+                 * ATM drivers have device names starting with an 'a'
                  */
                 if (d->chd_dib->dib_name[0] == 'a') {
                         found_atm_card();
@@ -316,11 +352,18 @@ static void read_device_name(char *buf, struct ether_addr *macadr)
 
 static void module_start_editor(void *pw)
 {
+
+#ifdef TRACE
+	fprintf(stderr, Module_Title ": module_start_editor() invoked\n");
+	{ int i; for (i=0; i<100; ++i) (void) _kernel_osbyte(19,0,0); }
+#endif
+
         {
                 /* Rather than duplicate code, we might as well "discover" the interface
                  * list through the read_device_name function and just throw away the
                  * results.  This is in a sub-block so that the call to editconfig_service
                  * is performed tail-recursively and without this baggage on the stack.
+                 * This call is performed solely to allow us to detect ATM drivers.
                  */
                 char buf[16];
                 struct ether_addr macadr;
@@ -328,7 +371,8 @@ static void module_start_editor(void *pw)
                 read_device_name(buf, &macadr);
         }
 
-        (void) editconfig_service(pw);
+        module_clear_flags(flag_RUN_EDITOR);
+        editconfig_service(pw);
 }
 
 static int establish_addresses_sub(int s)
@@ -402,12 +446,10 @@ again:
                 ifrconfig_result = ifrconfig(s, name);
                 (void) _swix(Hourglass_Off, 0);
                 switch (ifrconfig_result) {
-                        case 0:
-                                return (0);
                         case -1:
-                                cli_state |= flag_RUN_EDITOR;
-                                (void) editconfig_initialise();
                                 module_start_editor(module_wsp);
+                                return (0);
+                        case 0:
                                 return (0);
                         default:
                                 break;
@@ -433,10 +475,15 @@ static int establish_addresses(void)
                 result = 1;
         }
         else {
+		#ifdef TRACE
+		fprintf(stderr, Module_Title ": establish_addresses()\n");
+		{ int i; for (i=0; i<100; ++i) (void) _kernel_osbyte(19,0,0); }
+		#endif
                 result = establish_addresses_sub(s);
-                #ifdef TRACE
-                printf("establish_addresses_sub(...) completed - returned %d\n", result);
-                #endif
+		#ifdef TRACE
+		fprintf(stderr, Module_Title ": establish_addresses() - returned %d\n", result);
+		{ int i; for (i=0; i<100; ++i) (void) _kernel_osbyte(19,0,0); }
+		#endif
                 (void) socketclose(s);
         }
         return result;
@@ -459,8 +506,8 @@ _kernel_oserror *callb_handler(_kernel_swi_regs *r, void *pw)
                         module_start_editor(pw);
                 }
                 else if (ifcnt == 0) {
+                        module_clear_flags(flag_FORCE_BOOT);
                         (void) establish_addresses();
-                        cli_state &= ~flag_FORCE_BOOT;
                 }
         }
         return 0;
@@ -471,28 +518,47 @@ static void setcallback(void)
         if (callbackflag == 0) {
                 int opts = module_read_command_options();
                 if ((ifcnt == 0 && !(opts & flag_NO_DO_BOOT)) || (opts & flag_FORCE_BOOT)) {
-                        callbackflag = 1;
-                        if (_swix(OS_AddCallBack, _INR(0,1), callb_entry, module_wsp)) {
-                                callbackflag = 0;
+                        if (_swix(OS_AddCallBack, _INR(0,1), callb_entry, module_wsp) == NULL) {
+                                callbackflag = 1;
+                                module_set_flags(flag_NO_DO_BOOT);
                         }
                 }
+        }
+}
+
+static void clearcallback(void)
+{
+  	if (callbackflag != 0) {
+                callbackflag = 0;
+                (void) _swix(OS_RemoveCallBack, _INR(0,1), callb_entry, module_wsp);
         }
 }
 
 /* Module service call handler */
 void module_service(int sn, _kernel_swi_regs *r, void *pw)
 {
+
+#ifdef TRACE
+	fprintf(stderr, Module_Title ": service &%x (R0=%d; R2=%d)\n", sn, r->r[0], r->r[2]);
+	{ int i; for (i=0; i<100; ++i) (void) _kernel_osbyte(19,0,0); }
+#endif
+
         switch (sn) {
                 case Service_DCIDriverStatus:
+                        /* An interface has just gone UP, so set the callback to investigate
+                         * new status of modules.
+                         */
                         if (r->r[2] == 0) {
                                 setcallback();
                         }
                         break;
-                case Service_InternetStatus:
+                case Service_Reset:
+                        /* Must be Service_Reset - invoke the editor now if required */
+                        if (module_read_command_options() & flag_RUN_EDITOR) {
+                                module_start_editor(pw);
+                        }
                         break;
                 default:
-                        /* Must be Service_Reset */
-                        module_start_editor(pw);
                         break;
         }
 }
