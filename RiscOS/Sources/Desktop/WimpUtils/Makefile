@@ -14,7 +14,7 @@
 COMPONENT = WindowUtils
 TARGET    = WimpUtils2
 
-include Makefiles:StdTools
-include Makefiles:AAsmModule
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
