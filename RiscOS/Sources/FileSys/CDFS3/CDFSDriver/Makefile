@@ -81,7 +81,7 @@ OBJS = o.Hdr\
 #
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $<
 .s.o:;      ${AS} ${ASFLAGS} $< $@
-.cmhg.o:;    ${CMHG} -d @.h.module $< $@
+.cmhg.o:;    ${CMHG} -p -d @.h.module $< $@
 
 # Specific rules
 
@@ -91,7 +91,7 @@ messages.o: Res.UK.Messages
 swi.o: module.h
 
 module.h: cmhg.Hdr
-        cmhg -d @.h.module @.cmhg.Hdr -o @.o.Hdr
+        cmhg -p -d @.h.module @.cmhg.Hdr -o @.o.Hdr
 
 #
 # Generic rules:
@@ -149,81 +149,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.cdfsswi: s.cdfsswi
-o.globals:	c.globals
-o.globals:	h.globals
-o.aux:	c.aux
-o.aux:	C:h.kernel
-o.aux:	C:h.swis
-o.aux:	C:tgrlib.h.debug
-o.aux:	C:tgrlib.h.defines
-o.aux:	C:h.kernel
-o.aux:	h.aux
-o.aux:	h.cdmgr
-o.aux:	h.cdfsdriver
-o.cdfsdriver:	c.cdfsdriver
-o.cdfsdriver:	C:h.kernel
-o.cdfsdriver:	C:h.swis
-o.cdfsdriver:	C:tgrlib.h.defines
-o.cdfsdriver:	C:h.kernel
-o.cdfsdriver:	C:tgrlib.h.dbmalloc
-o.cdfsdriver:	C:tgrlib.h.debug
-o.cdfsdriver:	C:tgrlib.h.msgs
-o.cdfsdriver:	C:h.kernel
-o.cdfsdriver:	h.module
-o.cdfsdriver:	h.cdfsswi
-o.cdfsdriver:	h.swiextra
-o.cdfsdriver:	C:h.swis
-o.drive:	c.drive
-o.drive:	C:h.kernel
-o.drive:	C:h.swis
-o.drive:	C:tgrlib.h.defines
-o.drive:	C:h.kernel
-o.drive:	C:tgrlib.h.debug
-o.drive:	C:tgrlib.h.msgs
-o.drive:	C:h.kernel
-o.drive:	h.swiextra
-o.drive:	C:h.swis
-o.drive:	h.cdmgr
-o.drive:	h.module
-o.drive:	h.errors
-o.drive:	h.globals
-o.drive:	h.drive
-o.swi:	c.swi
-o.swi:	C:h.kernel
-o.swi:	C:h.swis
-o.swi:	C:tgrlib.h.defines
-o.swi:	C:h.kernel
-o.swi:	C:tgrlib.h.debug
-o.swi:	C:tgrlib.h.msgs
-o.swi:	C:h.kernel
-o.swi:	h.standards
-o.swi:	h.swiextra
-o.swi:	C:h.swis
-o.swi:	h.cdmgr
-o.swi:	h.cdfsdriver
-o.swi:	h.module
-o.swi:	h.errors
-o.swi:	h.globals
-o.swi:	h.aux
-o.swi:	h.drive
-o.command:	c.command
-o.command:	C:h.kernel
-o.command:	C:h.swis
-o.command:	C:tgrlib.h.defines
-o.command:	C:h.kernel
-o.command:	C:tgrlib.h.debug
-o.command:	C:tgrlib.h.msgs
-o.command:	C:h.kernel
-o.command:	h.ascii
-o.command:	h.standards
-o.command:	h.swiextra
-o.command:	C:h.swis
-o.command:	h.cdfs3
-o.command:	h.cdmgr
-o.command:	h.cdfsdriver
-o.command:	h.module
-o.command:	h.errors
-o.command:	h.globals
-o.command:	h.aux
-o.command:	h.drive
