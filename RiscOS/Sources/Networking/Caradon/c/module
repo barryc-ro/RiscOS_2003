@@ -10,7 +10,7 @@ Authors:	Anthony Frost, Acorn wrote the original Caradon dialler
 		9 Randwell Close	Email:		pskirrow@octosys.co.uk
 		IPSWICH  IP4 5ES	WWW:		www.octosys.co.uk
 
-Version:	0.17 (ISDN variant)
+Version:	0.18 (ISDN variant)
 
 Compiler:	Acorn C release 5
 
@@ -160,6 +160,24 @@ smart card not to be recognised.
 
 Ditto for CARDVALID transition - registry enquiries and file I/O are not good things to
 be doing from a service call handler!
+
+Mon 8 September 1997 (jfarrell)
+-------------------------------
+Fix bug of failure to make NFS mount on next login after "connect, standby, un-standby, redial, 
+card-out" sequence.  The problem was old filesystems left mounted under the names "NFSBoot" 
+and "NCDHome" preventing new mounts being made.
+Removed 5 second delay after IP-UP.
+
+Thu 11 September 1997 (jfarrell)
+--------------------------------
+Fix bug of supervisor stack overflow caused by IPCP going up and down during MLPPP
+connection establishment.  Only run NFSInit the first time IP comes up on the link (!online).  
+Could be a bug in MLPPP that it doesn't hide the member link IPCP, but this works around it.
+
+Fri 26 September 1997 (jfarrell)
+--------------------------------
+Previous change prevents crash but still getting IPCP loops with MLPPP.  Turn off VJ header
+compression as a workaround - seems to prevent the IPCP loop.
 */
 
 #include <ctype.h>
@@ -915,6 +933,7 @@ void Twiddle(void)
   ioctl_t param;
   serial_ctrl_t ctrl;
 
+  debug("*PPPDisconnect\n");
   oscli("PPPDisconnect");
   delay(100);
   
@@ -960,23 +979,36 @@ void Twiddle(void)
     Driver_Send("ATZ\r", outstream);
 #endif
     close_streams();
-    debug("Twiddle OK ");
+    debug("Twiddle OK\n");
   }
 #endif
 }
 
 void DumpIt(BOOL filestoo)
 {
+  debug("DumpIt(%d)\n", filestoo);
   restart = TRUE;
   if (dialplease != CALLBACK_NOOP)
   {
     removeticker(CDN_callafter_entry, pwp);
     dialplease = CALLBACK_NOOP;
   }
-  if (innfs.s_addr && filestoo)
+
+  /*  Unmount NFS filesystems if requested (e.g. on Card Out event).
+   *  We do this regardless of whether or not we think we have anything 
+   *  currently mounted since it's harmless and far better than the
+   *  alternative of possibly leaving mount names in use and being unable
+   *  to remount them on next login.
+   */
+  if (filestoo)
   {
-    _swix(NFS_Dismount, _INR(0, 1), 0, "NFSBoot");
-    _swix(NFS_Dismount, _INR(0, 1), 0, "NCDHome");
+    _kernel_oserror *err;
+    
+    if ((err = _swix(NFS_Dismount, _INR(0, 1), 0, "NFSBoot")) != NULL)
+    	debug("DumpIt: Dismount of NFSBoot failed: %s (%d)\n", err->errmess, err->errnum);
+
+    if ((err =_swix(NFS_Dismount, _INR(0, 1), 0, "NCDHome")) != NULL)
+    	debug("DumpIt: Dismount of NCDHome failed: %s (%d)\n", err->errmess, err->errnum);    
   }
 
   Twiddle();
@@ -996,7 +1028,8 @@ static BOOL DoNFS(struct in_addr ina)
 {
   char *mount;
   int length;
-
+  _kernel_oserror *err;
+  
   length = ncregenq("NFS_MOUNT", mount, 0);
   mount = malloc(length + 4);
   if (length == 0 || mount == NULL)
@@ -1004,16 +1037,16 @@ static BOOL DoNFS(struct in_addr ina)
   ncregenq("NFS_MOUNT", mount, length + 2);
   debug("NFS_MOUNT: %s\n", mount);
   
-  if (_swix(NFS_SetUser, _INR(0, 2), inet_ntoa(ina), "nobody", ""))
+  if ((err = _swix(NFS_SetUser, _INR(0, 2), inet_ntoa(ina), "nobody", "")) != NULL)
   {
-    debug("DoNFS: login failed\n");
+    debug("DoNFS: login failed: %s (%d)\n", err->errmess, err->errnum);
     free(mount);
     return(FALSE);
   }
 
-  if (_swix(NFS_Mount,   _INR(0, 2), inet_ntoa(ina), "NFSBoot", mount))
+  if ((err = _swix(NFS_Mount,   _INR(0, 2), inet_ntoa(ina), "NFSBoot", mount)) != NULL)
   {
-    debug("DoNFS: mount failed\n");
+    debug("DoNFS: mount failed: %s (%d)\n", err->errmess, err->errnum);
     free(mount);
     return(FALSE);
   }
@@ -1261,6 +1294,7 @@ int CDN_callback_handler (_kernel_swi_regs *r, void *pw)
   case CALLBACK_DODIAL:
     {
       dialplease = CALLBACK_NOOP;
+      online = FALSE;
       DoDial();
     }
     break;
@@ -1269,20 +1303,34 @@ int CDN_callback_handler (_kernel_swi_regs *r, void *pw)
     dialplease = CALLBACK_NOOP;
     _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, 4); /* Up */
     screen_redraw(-1);
-    NFS_Init();
+    if (!online)
+    {
+        online = TRUE;
+        NFS_Init();
+    }
     break;
 
   case CALLBACK_CONNECT:
     {
       debug("Callback_connect\n");
       doingit = FALSE;
-      render(connect, connect_len, scale());
-      removeticker(CDN_callafter_entry, pw);
-
-      debug(" Up\n");
+      
+      /* If 'online' is true, IPCP went up and down but the link wasn't lost.
+       */
+      if (!online)
+      {
+        render(connect, connect_len, scale());
+        removeticker(CDN_callafter_entry, pw);
+      }
+      
+      debug("Up\n");
 
       dialplease = CALLBACK_SAYUP;
+#ifdef ISDN
+      callafter(1, CDN_callafter_entry, pwp);   /* why wait? */
+#else
       callafter(500, CDN_callafter_entry, pwp);
+#endif
     }
     break;
 #endif
@@ -1641,6 +1689,7 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
   {
 #ifndef ETHERNET
   case CMD_ReDial:
+    debug("*CDN_Redial\n");
     if (doingit)
     {
       NewPage("file:/WWWRoot:BahHumbug"); 
@@ -1680,6 +1729,7 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 
   case CMD_Twiddle:
     {
+      debug("*CDN_Twiddle\n");
       Twiddle();
       _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, 0); /* down */
     }
@@ -1689,20 +1739,21 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
     {
       debug("*CDN_Startup\n");
       dialplease = CALLBACK_CONNECT;
-      callafter(10, CDN_callafter_entry, pwp);
-      online = TRUE;
+      callafter(10, CDN_callafter_entry, pwp);            
     }
     break;
 
   case CMD_CDN_GoingDown:
     {
+    debug("*CDN_GoingDown\n");
+
 /*       Twiddle(); */
       _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, 0); /* down */
-      online = FALSE;
     }
     break;
 
   case CMD_CDN_Dial:
+    debug("*CDN_Dial\n");
     if (doingit)
     {
       NewPage("file:/WWWRoot:BahHumbug"); 
@@ -1720,6 +1771,7 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 #endif
   case CMD_MWait:
     {
+      debug("*CDN_MWait\n");
       pause(500);
     }
     break;
@@ -1738,6 +1790,8 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
       char buffer[256], code1[20], code2[20], codec[20];
       int codes = 0, length, ret;
    
+   
+      debug("*CDN_Change\n");
       strcpy(buffer, strchr(arg_string, '?') + 1);
       Rip(buffer);
       nextbit = buffer;
@@ -1857,6 +1911,7 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 
   case CMD_CDN_MakeFiles:
     {
+      debug("*CDN_Makefiles\n");
       CreateFiles(&card);
     }
     break;
@@ -1865,6 +1920,7 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
     {
       message_block mb;
 
+      debug("*CDN_Repoint\n");
       memset (&mb, '\0', sizeof(message_block));
       mb.header.size   = 32;
       mb.header.action = 0x4AF84;
@@ -1914,6 +1970,7 @@ _kernel_oserror *main_service(int service, _kernel_swi_regs *r, void *pw)
   switch (service)
   {
   case Service_ResourceFSStarting:
+    debug("Service_ResourceFSStarting\n");
     ((P_FSStartingFN)(r->r[2]))(resources_base());
     break;
 
@@ -1925,7 +1982,7 @@ _kernel_oserror *main_service(int service, _kernel_swi_regs *r, void *pw)
       removeticker(CDN_callafter_entry, pw);
       semaphore = FALSE;
     }
-    debug("Status %02X Delta %02X\n", scstatus, scchange);
+    debug("Service_NCRegistryStatus - status %02X delta %02X\n", scstatus, scchange);
 #if FALSE
     {
       FILE *fout;
@@ -2002,10 +2059,12 @@ _kernel_oserror *main_service(int service, _kernel_swi_regs *r, void *pw)
     break;
 
   case Service_ModeChange:
+    debug("Service_ModeChange\n");
     Screen_CacheModeInfo();
     break;
 
   case Service_ShutDown:
+    debug("Service_Shutdown\n");
     if (doingit)
     {
       r->r[1] = 0;
@@ -2013,6 +2072,7 @@ _kernel_oserror *main_service(int service, _kernel_swi_regs *r, void *pw)
     break;
 
   case Service_ShutdownComplete:
+    debug("Service_ShutdownComplete\n");
     DumpIt(FALSE);
     break;
   }

@@ -98,14 +98,6 @@ o.serial:	C:h.swis
 o.serial:	h.serial
 o.serial:	C:h.string
 o.serial:	h.irqs
-o.filegen:	c.filegen
-o.filegen:	h.defs
-o.filegen:	C:h.kernel
-o.filegen:	h.screen
-o.filegen:	h.defs
-o.filegen:	h.smartcard
-o.filegen:	C:h.swis
-o.filegen:	Sockets.h.in
 o.screen:	c.screen
 o.screen:	h.defs
 o.screen:	C:h.kernel
@@ -139,3 +131,11 @@ o.module:	h.defs
 o.module:	h.configs
 o.module:	Sockets.h.in
 o.module:	h.log
+o.filegen:	c.filegen
+o.filegen:	h.defs
+o.filegen:	C:h.kernel
+o.filegen:	h.screen
+o.filegen:	h.defs
+o.filegen:	h.smartcard
+o.filegen:	C:h.swis
+o.filegen:	Sockets.h.in
