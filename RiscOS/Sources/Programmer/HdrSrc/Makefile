@@ -26,7 +26,7 @@ AS       = aasm
 CP       = copy
 RM       = remove
 TOKENISE = tokenise
-HDR2H    = perl.Hdr2H
+HDR2H    = build:Hdr2H
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -stamp -quit
@@ -109,7 +109,10 @@ EXPORTS   = \
  ${HDIR}.Global.h.EnvNumbers \
  ${HDIR}.Global.h.Heap \
  ${HDIR}.Global.h.KeyV \
- ${HDIR}.Global.h.PaletteV
+ ${HDIR}.Global.h.PaletteV \
+ ${HDIR}.Global.h.Pointer \
+ ${HDIR}.Global.h.Tokens \
+ ${HDIR}.Global.h.CMOS \
 
 #
 # Generic rules:
@@ -136,6 +139,8 @@ Dirs:
         ${MKDIR} ${HDRDIR}.VIDC
         ${MKDIR} ${HDIR}.Global
         ${MKDIR} ${HDIR}.Global.h
+        ${MKDIR} ${HDIR}.Interface
+        ${MKDIR} ${HDIR}.Interface.h
 
 clean:
          @echo ${COMPONENT}: NOT cleaning imported headers
@@ -183,14 +188,22 @@ ${HDIR}.Global.h.UpCall:     Import.Global.UpCall ${HDR2H};         perl ${HDR2H
 
 # The C versions of local header files.
 # Files which don't work yet:
-#   CMOS        Sprite      Tokens      Pointer     Messages
+#   No files remaining which do not work at all.
+# Files which work with some warnings (which indicate incorrect constants have been declared)
+# and have rules declared below but which are NOT GENERATED because they are not in the export list:
+#   Sprite      Messages
 # Files which have no equivalent.
 #   DDVMacros   Debug       ExtraLong   ListOpts    Macros      NdrDebug    Proc        Symbols
 ${HDIR}.Global.h.DevNos:     Hdr.DevNos ${HDR2H};         perl ${HDR2H} Hdr.DevNos     $@
 ${HDIR}.Global.h.EnvNumbers: Hdr.EnvNumbers ${HDR2H};     perl ${HDR2H} Hdr.EnvNumbers $@
 ${HDIR}.Global.h.Heap:       Hdr.Heap ${HDR2H};           perl ${HDR2H} Hdr.Heap       $@
 ${HDIR}.Global.h.KeyV:       Hdr.KeyV ${HDR2H};           perl ${HDR2H} Hdr.KeyV       $@
+${HDIR}.Global.h.Messages:   Hdr.Messages ${HDR2H};       perl ${HDR2H} Hdr.Messages   $@
+${HDIR}.Global.h.Pointer:    Hdr.Pointer ${HDR2H};        perl ${HDR2H} Hdr.Pointer    $@
 ${HDIR}.Global.h.PaletteV:   Hdr.PaletteV ${HDR2H};       perl ${HDR2H} Hdr.PaletteV   $@
+${HDIR}.Global.h.Sprite:     Hdr.Sprite ${HDR2H};         perl ${HDR2H} Hdr.Sprite     $@
+${HDIR}.Global.h.Tokens:     Hdr.Tokens ${HDR2H};         perl ${HDR2H} Hdr.Tokens     $@
+${HDIR}.Global.h.CMOS:       Hdr.CMOS ${HDR2H};           perl ${HDR2H} Hdr.CMOS       $@
 
 
 # Machine/hardware specific headers:
