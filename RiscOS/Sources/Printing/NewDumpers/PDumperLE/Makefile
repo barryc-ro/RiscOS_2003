@@ -47,7 +47,7 @@ DFLAGS    =
 #
 COMPONENT = PDumperLE
 TARGET    = aof.${COMPONENT}
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   =
 RESDIR    = <resource$dir>.Resources.${COMPONENT}
 OBJS      =	\
 	o.fcifkelv o.fcintfc o.fckelvin \
