@@ -602,8 +602,10 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
         	if (mb == NULL)	
         		break;
         	else {
-        		if (mb->special_play_id != get_current_play_id())
+        		if (mb->special_play_id != get_current_play_id()){
         			mb->deleted_block = 1;
+        			mb->completed = 1;
+        		}
         			
         		if (mb->deleted_block){
         			++last_block_sent;
@@ -937,12 +939,6 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
                		        }// less than dgrams/block and can find block number.
                		        else 
                		        {
-               		        	result = mem_map->memFreeDatagram(dgram);
-               		          	if ((result != ErrorOccurred)&&(mem_map->ErrorExists()))
-               		          	{
-       						  result = ErrorOccurred;
-       						  mem_map->ReturnCopyOfError();
-       					}
 #ifdef DEBUGLIB       	       							  
        	       				if (Debug(debug_blockerrors))
        	       				{
@@ -954,6 +950,12 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
          			   			if (mb->deleted_block) Debug("failed, deleted blk");
        	       				}
 #endif       	       							  		
+               		        	result = mem_map->memFreeDatagram(dgram);
+               		          	if ((result != ErrorOccurred)&&(mem_map->ErrorExists()))
+               		          	{
+       						  result = ErrorOccurred;
+       						  mem_map->ReturnCopyOfError();
+       					}
                		        }
 	               	}// (size > datagram header)
         	       	else 
@@ -1279,8 +1281,11 @@ SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace
 #endif                  	  	
  		   	  	pixel_height = header.H_pixels;
  		   	  	pixel_width  = header.V_pixels;
+#ifdef MULTICAST_REL2 		   	  	
+ 		   	  	bitrate = header.DataRate>>10;
+#else
  		   	  	bitrate = header.DataRate;
- 		   	  	
+#endif 		   	  	
                   	  	max_completed_block = last_block_sent = Multi_block_num(header.EMPacketID);
                   	  	
  		   		sd.setDgramSize((size_t)header.MaxLength);
@@ -1308,53 +1313,65 @@ SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace
 //
 //
 error_flag
-SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int*, int*)
+SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int *scene, int*)
 {
         MemBlock *mb;
         error_flag result = ErrorState();
 
+       _kernel_irqs_off();
+ 
         do {
         	mb = mem_map->findExistingBlock(last_block_sent + 1);
         	
         	if (mb == NULL)	break;
+        	else {
+        	  	if (mb->deleted_block){
+        			++last_block_sent;
+        			mb->completed = 1;
+        			mb->to_be_freed = 1;
+        		}
+        	}
         	
         } while (mb->deleted_block);
+        
+ 	if (mb != NULL && mb->inuse && mb->completed) {	
+                mb->mpeg_owned = 1;
+                last_block_sent = mb->block_id;
+        }
+        else
+        	mb = NULL;	// if we cannot use it
+
+  	_kernel_irqs_on(); // claimed our block
         	
- 	if (mb != NULL && mb->inuse && mb->completed) {
+ 	if (mb != NULL) {
         	result = mem_map->memMemBlockToNECBlock(mb, block);
           	//------- optimisation --
           	int j, i;
           	(*block)->num_buffers = 0;
           	(*block)->max_buffers = mb->dgrams_in_block;
-          	if ((*block)->buffers[0].buffer_length < sizeof(NECBlockHeader)){
-          		result = MakeError(VSP_DatagramSizeError);
-		}
-          	else
-          	{
-          		for (i = 0; i < mb->dgrams_in_block; ++i){
-          		  	j = i;
-          		  	while ((i+1 < mb->dgrams_in_block)&&
-          		  	    ((*block)->buffers[i+1].buffer_ptr == (*block)->buffers[i].buffer_ptr + (*block)->buffers[i].buffer_length)){	
-          		  		(*block)->buffers[j].buffer_length += (*block)->buffers[i+1].buffer_length;
-          		  		i++;
-          		  	}
-          		  	if (i+1 == mb->dgrams_in_block)
-          		  		(*block)->buffers[j].link = NULL;
-          		  	else 
-          		  		(*block)->buffers[j].link = &((*block)->buffers[i+1]);
-          		  	
-          		  	(*block)->buffers[j].free_routine = free_routine;
-          		  	(*block)->buffers[j].free_workspace = pw;
-          		  	(*block)->buffers[j].packets = 0;
-          		  		
-          		  	++(*block)->num_buffers;     		
+		for (i = 0; i < mb->dgrams_in_block; ++i){
+          		j = i;
+          		while ((i+1 < mb->dgrams_in_block)&&((*block)->buffers[i+1].buffer_ptr == (*block)->buffers[i].buffer_ptr + (*block)->buffers[i].buffer_length)){	
+          		  	(*block)->buffers[j].buffer_length += (*block)->buffers[i+1].buffer_length;
+          		  	i++;
           		}
-                }
+          		if (i+1 == mb->dgrams_in_block)
+          			(*block)->buffers[j].link = NULL;
+          		else 
+          			(*block)->buffers[j].link = &((*block)->buffers[i+1]);
+          		 	
+          		(*block)->buffers[j].free_routine = free_routine;
+          		(*block)->buffers[j].free_workspace = pw;
+          		(*block)->buffers[j].packets = 0;
+          		  		
+          		++(*block)->num_buffers;     		
+          	}
 		(*mpeg_buffer) = &((*block)->buffers[0]);
-	
-          	//-------
-                mb->mpeg_owned = 1;
-                last_block_sent = mb->block_id;
+#ifdef MULTICAST_REL2 		   	  	      						  
+		(*scene) = mb->special_play_id;
+#else
+		scene = scene;
+#endif				
 	}
         else 
                 *block = 0;
@@ -1434,6 +1451,9 @@ SourceMultiCast::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *t
        						mb->nec_block.buffers[Multi_dgram_num(dgram->EMPacketID)].buffer_length = (unsigned int) dgram->PayloadLength;
        							
        						if (mb->dgrams_received == 0){
+#ifdef MULTICAST_REL2 		   	  	      						  
+       						  	mb->special_play_id = dgram->SceneCounter;// this is overloaded for scenes
+#endif       						  	
        							deleted_blocks = 0;
        							unsigned int systime;
 							_swix(OS_ReadMonotonicTime, _OUT(0), &systime);
