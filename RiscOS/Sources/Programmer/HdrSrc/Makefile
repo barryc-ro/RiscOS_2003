@@ -123,6 +123,7 @@ EXPORTS   = \
  ${HDIR}.Global.h.Heap \
  ${HDIR}.Global.h.Keyboard \
  ${HDIR}.Global.h.KeyV \
+ ${HDIR}.Global.h.NewErrors \
  ${HDIR}.Global.h.OsWords \
  ${HDIR}.Global.h.PaletteV \
  ${HDIR}.Global.h.PDriverReg \
@@ -245,6 +246,7 @@ ${HDIR}.Global.h.FSNumbers:  Register.FSNumbers ${HDR2H};      perl ${HDR2H} Reg
 ${HDIR}.Global.h.Keyboard:   Register.Keyboard  ${HDR2H};      perl ${HDR2H} Register.Keyboard   $@
 ${HDIR}.Global.h.KeyV:       Register.KeyV ${HDR2H};           perl ${HDR2H} Register.KeyV       $@
 ${HDIR}.Global.h.Messages:   Register.Messages ${HDR2H};       perl ${HDR2H} Register.Messages   $@
+${HDIR}.Global.h.NewErrors:   Register.NewErrors ${HDR2H};       perl ${HDR2H} Register.NewErrors   $@
 # NewErrors still has a few problems.  Partial support is there.
 ${HDIR}.Global.h.OsWords:    Register.OsWords ${HDR2H};        perl ${HDR2H} Register.OsWords    $@
 ${HDIR}.Global.h.PaletteV:   Register.PaletteV ${HDR2H};       perl ${HDR2H} Register.PaletteV   $@
