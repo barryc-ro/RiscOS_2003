@@ -40,6 +40,7 @@ ABSSYM	  = RISC_OSLib:o.AbsSym
 SOCKLIB	   = TCPIPLibs:o.socklib5zm
 INETLIB	   = TCPIPLibs:o.inetlibzm
 UNIXLIB    = TCPIPLibs:o.unixlibzm
+NETLIBS    = ${UNIXLIB} ${INETLIB} ${SOCKLIB}
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
@@ -118,23 +119,22 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${NETLIBS} ${ROMCSTUBS} ${RLIB}
 	${MKDIR} aof
-	${LD} -o $@ -aof ${OBJS} ${LIBS} ${ASMUTILS} ${ROMCSTUBS}
+	${LD} -o $@ -aof ${OBJS} ${LIBS} ${NETLIBS} ${ASMUTILS} ${RLIB} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
 	${MKDIR} linked
-	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB} ${ASMUTILS}
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-${TARGETSA}: ${OBJS} ${CLIB}
+${TARGETSA}: ${OBJS} ${NETLIBS} ${CLIB}
         ${MKDIR} rm
-	${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB} ${ASMUTILS}
-#	${LD} -v -map -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
+	${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${NETLIBS} ${RLIB} ${ASMUTILS}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
