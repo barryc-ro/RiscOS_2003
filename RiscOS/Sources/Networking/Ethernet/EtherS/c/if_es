@@ -1,0 +1,1632 @@
+/*
+ * Name:	EtherI driver
+ * Purpose:	DCI 4 driver for EtherI ethernet cards
+ * Author:	Acorn Computers, Irlam Instruments Ltd. and Microlynx
+ * Version:	2.00
+ *
+ * Adapted from the Ether2 source tree by Acorn computers
+ * for use with the EtherI card
+ *
+ *
+ * Copyright(c) 1995   Acorn Computers Ltd., Cambridge, England
+ * Copytight(c) 1997   Irlam Instruments Ltd., Uxbridge, Middlesex
+ * Copyright(c) 1998-9 Microlynx, Ely, England
+ *
+ * Revision 1.1  95/09/18  15:17:53  kwelton
+ * Initial revision
+ *
+ * Adapted for use on NC's ethernet card by Irlam Instruments
+ * Massive patching to work around MX chipset
+ * Big fixed ensuring alignment of mbuf data.  Required for LanManFS.
+ * Modification for large packet buffers
+ *
+ * 10/7/98 Gary Stephenson
+ * Changes for machines with on-board Ethernet eg: BOCA NC2
+ *
+ * 26/8/98 Paul Skirrow
+ * Bug fix to make EtherI work with MAC OTP address starting 0000 in OTP area of EEROM.
+ *
+ * 26/8/98 Paul Skirrow
+ * Removed code to read MAC address from Dallas chip (it is excluded if DALLAS is 0
+ * and DALLAS=0 is defined in the h.Dallas header file).
+ * The DeskLite board does not have a Dallas chip and although the Boca 2 board
+ * has an option to fit one it is very unlikely every to be used as we now use
+ * the OTP area in the EEROM). See the h.Dallas file for more details.
+ *
+ * 3.01 31/3/99 Gary Stephenson
+ * Changes to reduce interrupt latency caused by driver, now enables IRQs during reception
+ *
+ * 3.02 8/4/99 Gary Stephenson
+ * Stopped driver reading from configb register in order to allow rcbr1 to be used, this
+ * means we can't check the goodlink!
+ * Removed MXPATCH routines, now uses rbcr1 during data transfers
+ * Added delay for remote dma completion in es_memtest and es_run_diags
+ *
+ * 3.03 14/4/99 Gary Stephenson
+ * Stopped driver waiting for RDC forever in two places
+ * Now checks irq_active flag on entry to transmit
+ *
+ * 3.04 20/4/99 Gary Stephenson
+ * Removed border debug code.
+ * Added code to validate Ethernet address, checks for all 0 or 0xff
+ *
+ * 3.05 3/5/99 Gary Stephenson
+ * Now checks if tx packet is pending in es_update_multicast_filter(), was failing to send packets
+ * during multicast channel changing.
+ * 'if' changed to 'while' in es_intr() so it clears all ints before exiting
+ * Added stats to record tx and rx ints
+ * Disables ints during manipulation of tx queue in tx_done()
+ */
+
+/* 12/4/99 Outstanding issues
+ * Need to find out what the problem with configb and rbcr1 is.
+ * Optimisation of receive to pass multiple frames to protocol modules.
+ * The way multicast addresses are handled could be improved.
+ */
+
+/* RDW 1999-06-09
+   Removed #undef DALLAS.  Other #undefs should be removed too, otherwise
+   how can they be passed in as options from the MakeFile?
+   Changed #if DALLAS to #ifdef DALLAS
+   Implemented support for Proton Dallas chips
+ */
+
+/* RDW 1999-12-17
+   Removed dropcrc: code from es_read() as it locks up on Nat. Semi.
+   controller.  Code was redunant anyway and looks like it worked on
+   MX controller by luck rather than judgement.
+ */
+
+
+#define ENABLE_IRQS
+#define USE_DEVICEVECTOR
+
+#undef ADDRESS_BODGE
+#undef BORDER
+#undef TXBUF_PROFILE
+#undef ONBOARD_ETHERNET
+
+#ifdef TXBUF_PROFILE
+static int max_txbuf = 100;
+#endif
+
+#define MBCTL_NAME MBCTL
+
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <limits.h>
+
+#include "kernel.h"
+#include "swis.h"
+#include "delay.h"
+
+#include "sys/types.h"
+#include "sys/dcistructs.h"
+#include "sys/mbuf.h"
+#include "sys/errno.h"
+
+#include "net/ethernet.h"
+
+#include "int_hndlr.h"
+#include "xcb.h"
+#include "ioc.h"
+
+#include "if_es.h"
+#include "esmodule.h"
+#include "eshdr.h"
+#include "support.h"
+
+//#include "parallel.h"
+
+#undef XCB_SLOTS
+#define XCB_SLOTS	(8)
+
+
+/*
+ * MXPATCH
+ *
+ * The MX chipset seems to mess up the SENDP command, and also
+ * the rbcr1 registers seems to be messed too, so we cannot DMA
+ * more than 256 bytes in one bit.  This results in a little
+ * loss in performance.
+ */
+
+/*
+ * XXX TRACE XXX
+ *
+ * if someone could tell me why this value has
+ * been altered to 700 (it is usually 100), I
+ * would be really interested
+ */
+#define HZ 100
+
+struct es_softc *es_softc[8];
+
+extern void es_io_out(u_char *src, volatile u_int *dst, int nbytes, u_int *bytebuf);
+extern void es_flush_output(volatile u_int *dst, u_int *bytebuf);
+extern void es_io_in(volatile u_int *src, void *dst, int nbytes);
+extern int xcb_add_ethernet_card(int unit, int slot);
+
+static void es_recv(struct es_softc *es, NIC *nic, int unit);
+static void es_xmit(struct es_softc *es, NIC *nic);
+static void es_xmitempty(struct es_softc *es, NIC *nic);
+static void es_alloced(struct es_softc *es, NIC *nic);
+
+#ifdef BORDER
+extern void set_border(int);
+#endif
+
+#define ENCARD_ROM(slot)	(XCB_ADDRESS(FAST, slot))
+
+#ifndef NULL
+# define NULL 0
+#endif
+
+#define EN_TYPE (0x00000139)
+
+char es_lastlog[64] = { 0 };
+char es_lasterr[64] = { 0 };
+
+int escnt = 0;
+char slotmap[8];
+static int es_slots[8];
+volatile int es_irq_active = 0;
+volatile int es_tx_active = 0;
+
+extern void *module_wsp;
+struct int_hndlr intr_routine;
+
+extern DibRef dibs[];
+
+extern FilterSingleRef ieeefilter[8];
+extern FilterSingleRef e2monitor[8];
+extern FilterSingleRef e2sink[8];
+extern FilterChainRef e2specific[8];
+
+extern int (*address_filter)(FilterSingleRef fs, RxHdr *pack_hdr, struct es_softc *es);
+
+static struct stats st = { 0 };
+
+
+
+/**********************************************************************/
+
+
+/*
+void mbuf_dump ( struct mbuf *m )
+{
+    parallel_printf ( "struct mbuf {\n" );
+    parallel_printf ( "    struct mbuf         *m_next   = %08x\n", m->m_next   );
+    parallel_printf ( "    struct mbuf         *m_list   = %08x\n", m->m_list   );
+
+    parallel_printf ( "    ptrdiff_t            m_off    = %08x\n", m->m_off    );
+    parallel_printf ( "    size_t               m_len    = %08x\n", m->m_len    );
+    parallel_printf ( "    const ptrdiff_t     *m_inioff = %08x\n", m->m_inioff );
+    parallel_printf ( "    const ptrdiff_t     *m_inilen = %08x\n", m->m_inilen );
+
+    parallel_printf ( "    unsigned char        m_type   = %02x\n", m->m_type   );
+    parallel_printf ( "    const unsigned char  m_sys1   = %02x\n", m->m_sys1   );
+    parallel_printf ( "    const unsigned char  m_sys2   = %02x\n", m->m_sys2   );
+    parallel_printf ( "    const unsigned char  m_sys3   = %02x\n", m->m_sys3   );
+    parallel_printf ( "}" );
+}
+*/
+
+
+/**********************************************************************/
+
+void es_intr(int unit)
+{
+    struct es_softc *es = es_softc[unit];
+    NIC *nic = es->es_base;
+    int ist, msk, old_bank;
+
+    old_bank = ES_READ_BANK(nic);
+    ES_BANK(nic, 2);
+
+    ist = ES_READ_B(nic, R_IST);
+    msk = ES_READ_B(nic, R_MSK);
+    ist &= msk;
+    if (ist & RCV_INT)
+        es_recv(es, nic, unit);
+    if (ist & TXEMPTY_INT)
+        es_xmitempty(es, nic);
+    if (ist & TX_INT)
+        es_xmit(es, nic);
+    if (ist & ALLOC_INT)
+        es_alloced(es, nic);
+
+    ES_BANK(nic, old_bank);
+}
+
+/**********************************************************************/
+
+/*
+ * es_recv - deal with received packet interrupts
+ */
+static void es_recv(struct es_softc *es, NIC *nic, int unit)
+{
+    int old_bank, old_pktno;
+    int pktno,  old_ptr, type;
+    int status, len, i, mlen;
+    unsigned short *d;
+    struct mbuf *m0, *m;
+    RxHdr *hdr;
+    FilterSingleRef fs = NULL;
+
+    /* IRQs must be off on entry */
+
+    old_ptr = ES_READ_H(nic, R_PTR);
+
+    /* Prepare to read received packet */
+    ES_WRITE_H(nic, R_PTR, 0xE000);
+
+    status = ES_READ_H(nic, R_DATA);
+    len = ES_READ_H(nic, R_DATA) & 0x07FF;
+
+    /* Catalogue of errors */
+    if (status & (ALGNERR|BADCRC|TOOLNG|TOOSHORT))
+    {
+        if (status & ALGNERR)
+            es->es_stats.st_frame_alignment_errors++;
+        if (status & BADCRC)
+            es->es_stats.st_crc_failures++;
+        if (status & TOOLNG)
+            es->es_stats.st_overlong_frames++;
+        if (status & TOOSHORT)
+            es->es_stats.st_runt_frames++;
+    }
+
+
+    es->es_stats.st_rx_frames++;
+    es->es_stats.st_rx_bytes += len;
+
+    if (len < 4 + ETHER_HDR_LEN + 2)
+    {
+        es->es_stats.st_dropped_frames++;
+        goto finished;
+    }
+
+    m0 = m_alloc_s(sizeof(RxHdr), NULL);
+    if (!m0)
+    {
+        es->es_stats.st_dropped_frames++;
+        goto finished;
+    }
+    hdr = mtod(m0, RxHdr *);
+    hdr->rx_tag = 0;
+    hdr->rx_ptr = (void *) status; /* borrow this field */
+    hdr->_spad[0] = hdr->_spad[1] = hdr->_dpad[0] = hdr->_dpad[1] = 0;
+    for (i=0; i<6; i++)
+        hdr->rx_dst_addr[i] = ES_READ_B(nic, R_DATA);
+    for (i=0; i<6; i++)
+        hdr->rx_src_addr[i] = ES_READ_B(nic, R_DATA);
+    type = ES_READ_H(nic, R_DATA);
+    hdr->rx_frame_type = type = ntohs(type);
+    hdr->rx_error_level = status & 0xAC00;
+
+    len -= 4 + ETHER_HDR_LEN;
+
+
+    /*
+     * get the type, & decide if we can handle it
+     */
+
+#ifdef DEBUG
+    Printf("type = %x\n", hdr->rx_frame_type);
+#endif
+
+    /*
+     * 1st discrimination of frame type - is it
+     * an IEEE 802.3 or an Ethernet 2.0 frame?
+     */
+    if( type <= ETHERMTU )
+    {
+	fs = ieeefilter[unit];
+	SET_FRAMELEVEL(type, FRMLVL_IEEE);
+    }
+
+    /*
+     * it's an Ethernet 2.0 frame, do we have
+     * specific or sink filters active?
+     */
+    else if( e2specific[unit] || e2sink[unit] )
+    {
+	FilterChainRef fc;
+
+	/*
+	 * start by trying to match specific frame types
+	 */
+	for( fc = e2specific[unit]; fc; fc = fc->fc_next )
+	    if( fc->fc_type == type )
+	    {
+		fs = &fc->fc_filter;
+		SET_FRAMELEVEL(type, FRMLVL_E2SPECIFIC);
+		break;
+	    }
+
+	/*
+	 * default to sink filter if no specific matches
+	 */
+	if( !fc )
+	{
+	    fs = e2sink[unit];
+	    SET_FRAMELEVEL(type, FRMLVL_E2SINK);
+	}
+    }
+
+    /*
+     * all we have left is the Ethernet 2.0 monitor
+     */
+    else
+    {
+	fs = e2monitor[unit];
+	SET_FRAMELEVEL(type, FRMLVL_E2MONITOR);
+    }
+
+    /*
+     * pass the packet along if it is wanted
+     */
+    if( !fs || address_filter(fs, hdr, es) )
+    {
+	fs = NULL;
+	m_free(m0);
+	es->es_stats.st_unwanted_frames++;
+	goto finished;
+    }
+
+    m0->m_next = m_alloc(len, NULL);
+    if (!m0->m_next)
+    {
+        m_free(m0);
+	es->es_stats.st_dropped_frames++;
+        goto finished;
+    }
+
+    mlen = 0;
+    m = m0;
+    for ( ; len; len -= 2)
+    {
+        if (mlen == 0)
+        {
+            m = m->m_next;
+            mlen = m->m_len;
+            m->m_type = MT_DATA;
+            d = mtod(m, unsigned short *);
+        }
+        *d++ = ES_READ_H(nic, R_DATA);
+    }
+    /* Lop off control byte and maybe last stray byte */
+    if (d[-1] & 0x4000)
+        m->m_len -= 1;
+    else
+        m->m_len -= 2;
+
+    m0->m_type = MT_HEADER;
+
+    callproto(dibs[unit], m0, fs->fs_handler, fs->fs_pwptr);
+
+  finished:
+
+    /* Wait until not busy */
+    while (ES_READ_B(nic, R_MMUCR) & 1)
+        continue;
+    /* Remove and release top RX packet */
+    ES_WRITE_B(nic, R_MMUCR, 0x80);
+
+    ES_WRITE_H(nic, R_PTR, old_ptr);
+
+    return;
+
+}
+
+/**********************************************************************/
+
+/*
+ * es_xmit - deal with transmit interrupts
+ */
+static void es_xmit(struct es_softc *es, NIC *nic)
+{
+    /* Shouldn't happen. I think */
+    ES_WRITE_B(nic, R_ACK, TX_INT);
+}
+
+/**********************************************************************/
+
+/*
+ * es_xmitempty - deal with transmit empty interrupts
+ */
+static void es_xmitempty(struct es_softc *es, NIC *nic)
+{
+    int i;
+
+    /* Acknowledge the interrupt */
+    ES_WRITE_B(nic, R_ACK, TXEMPTY_INT);
+
+    i = ES_READ_B(nic, R_IST);
+
+    if (i & TX_INT)
+    {
+        int pkt, old_pnr, status;
+
+        /* Error condition. Read back status word from RAM */
+        old_pnr = ES_READ_B(nic, R_PNR);
+        pkt = ES_READ_B(nic, R_FIFO_TX);
+        ES_WRITE_B(nic, R_PNR, pkt);
+        ES_WRITE_H(nic, R_PTR, 0x8000);
+        status = ES_READ_H(nic, R_DATA);
+        es->es_stats.st_tx_general_errors++;
+        if (status & 0x0800)
+            es->es_stats.st_excess_collisions++;
+        /* Wait until not busy */
+        while (ES_READ_B(nic, R_MMUCR) & 1)
+            continue;
+        /* Release packet */
+        ES_WRITE_B(nic, R_MMUCR, 0xA0);
+        /* Acknowledge TX intr */
+        ES_WRITE_B(nic, R_ACK, TX_INT);
+        ES_BANK(nic, 0);
+        /* Re-enable transmission */
+        i = ES_READ_B(nic, R_TCR) | 1;
+        ES_WRITE_B(nic, R_TCR, i);
+        ES_BANK(nic, 2);
+        ES_WRITE_B(nic, R_PNR, old_pnr);
+        i = ES_READ_B(nic, R_IST);
+    }
+    else
+    {
+        if (es->es_current_xmit_len)
+        {
+            es->es_stats.st_tx_bytes += es->es_current_xmit_len;
+            es->es_stats.st_tx_frames++;
+            es->es_current_xmit_len = 0;
+        }
+    }
+
+    if (i & TXEMPTY_INT)
+    {
+        i = ES_READ_B(nic, R_MSK) &~ TXEMPTY_INT;
+        if (es->es_tx_queue)
+        {
+            struct mbuf *m = es->es_tx_queue;
+            int len;
+
+            /* Enable allocation completion */
+            i |= ALLOC_INT;
+
+            len = m_count_bytes(m);
+
+            es->es_current_xmit_len = len;
+            len = (len + 2) &~ 1;
+            len = (4 + len + 255) >> 8;
+            es->es_current_xmit_mem = len;
+            ES_WRITE_B(nic, R_MMUCR, 0x20+len);
+        }
+        ES_WRITE_B(nic, R_MSK, i);
+    }
+}
+
+/**********************************************************************/
+
+/*
+ * es_alloced - deal with allocation interrupts
+ */
+static void es_alloced(struct es_softc *es, NIC *nic)
+{
+    int result, len, i;
+    struct mbuf *m, *m0;
+    int type;
+    char *p;
+
+    result = ES_READ_B(nic, R_ARR);
+    ES_WRITE_B(nic, R_PNR, result);
+    ES_WRITE_H(nic, R_PTR, 0x4002);
+    len = (4 + es->es_current_xmit_len + 2) &~ 1;
+    ES_WRITE_H(nic, R_DATA, len);
+    for (m = m0 = es->es_tx_queue; m; m = m->m_next)
+    {
+        len = m->m_len;
+        p = mtod(m, char *);
+        /* Upgrade this to do 16 bits at a time later. Not necessary
+         * on the initial 8-bit hardware.
+         */
+        while (len--)
+        {
+            ES_WRITE_B(nic, R_DATA, *p);
+            p++;
+        }
+    }
+    if (es->es_current_xmit_len & 1)
+        ES_WRITE_B(nic, R_DATA, 0x30);
+    else
+    {
+        ES_WRITE_B(nic, R_DATA, 0);
+        ES_WRITE_B(nic, R_DATA, 0x10);
+    }
+
+    /* Enqueue the packet */
+    ES_WRITE_B(nic, R_MMUCR, 0xC0);
+    es->es_tx_queue = m0->m_list;
+    m_freem(m0);
+    /* Disable alloc interrupts and re-enable TX and TXEMPTY */
+    i = ES_READ_B(nic, R_MSK);
+    i = (i &~ ALLOC_INT) | TX_INT | TXEMPTY_INT;
+    ES_WRITE_B(nic, R_MSK, i);
+}
+
+
+/**********************************************************************/
+
+/*
+ * give the Ethernet card a soft reset
+ */
+static void es_reset_card(int slot)
+{
+    NIC *pc, *io;
+    volatile unsigned int *smc;
+
+    _swix(OS_Memory, _INR(0,2)|_OUT(3), 13, HW_PC_BASE, HW_PC_SIZE, &pc);
+    _swix(OS_Memory, _INR(0,2)|_OUT(3), 13, HW_IO_BASE, HW_IO_SIZE, &io);
+    _swix(OS_Memory, _INR(0,2)|_OUT(3), 13, SMC_BASE, SMC_SIZE, &smc);
+
+    /* Timing: CSCA = 1 cycle (34ns), CA = 2 cycles (54ns)
+     *         BWD  = 1 cycle (27ns), BRT = 1.5 cycles (33ns)
+     */
+    smc[IOCFG2] = 0x0DF50DF5;
+
+    /* Reset and activate the chip */
+  //  ES_WRITE_B(pc, R_ECOR, 0xC0);
+  //  ES_DELAY(io, 3);
+ //   ES_WRITE_B(pc, R_ECOR, 0x40);
+    ES_WRITE_B(pc, R_ECOR, 0x41);
+
+    ES_BANK(io, 0);
+
+    ES_WRITE_B(io, R_RCR+1, 0x80);
+    ES_WRITE_B(io, R_RCR+1, 0x00);
+
+    while ((ES_READ_BANK(io) & 7) != 2)
+        ES_BANK(io, 2);
+}
+
+void es_reset_all ()
+{
+    int i;
+    for( i = 0; i < XCB_SLOTS; i++ )
+    {
+        if ( es_slots[i] )
+            es_reset_card ( es_slots[i] );
+    }
+}
+
+
+/**********************************************************************/
+
+/*
+ * stats_init - initialise stats structures
+ */
+void stats_init(struct es_softc *es)
+{
+    int i;
+
+    /*
+     * actual statistics structure is easy - only one field to set
+     */
+    es->es_stats.st_interface_type = ST_TYPE_10BASET;
+
+    /*
+     * now fill in struct st which describes
+     * the stats. this interface supports.
+     */
+    st.st_interface_type = (u_char) ~0;
+    st.st_link_status = ST_STATUS_FULL_DUPLEX | ST_STATUS_RXMASK | ST_STATUS_ACTIVE;
+    st.st_link_polarity = 0;
+    st.st_blank1 = 0;
+    st.st_link_failures = 0;
+    st.st_network_collisions = 0;
+    st.st_collisions = ~0;
+    st.st_excess_collisions = ~0;
+    st.st_heartbeat_failures = ~0;
+    st.st_not_listening = 0;
+#if 0
+    st.st_net_error = 0;
+#endif
+    st.st_tx_frames = ~0;
+    st.st_tx_bytes = ~0;
+    st.st_tx_general_errors = ~0;
+    st.st_crc_failures = ~0;
+    st.st_frame_alignment_errors = ~0;
+    st.st_dropped_frames = ~0;
+    st.st_runt_frames = ~0;
+    st.st_overlong_frames = ~0;
+    st.st_jabbers = 0;
+    st.st_late_events = ~0;
+    st.st_unwanted_frames = ~0;
+    st.st_rx_frames = ~0;
+    st.st_rx_bytes = ~0;
+    st.st_rx_general_errors = ~0;
+
+    for( i = 0; i < 6; ++i )
+    {
+	st.st_last_dest_addr[i] = 0xff;
+	st.st_last_src_addr[i] = 0xff;
+    }
+
+    do
+    {
+	st.st_last_dest_addr[i] = 0;
+	st.st_last_src_addr[i] = 0;
+	++i;
+    } while( ++i < sizeof(st.st_last_dest_addr) );
+}
+
+/**********************************************************************/
+
+/*
+ * high priority XCB card initialisation - reset the card
+ */
+static void es_init_high(int slot)
+{
+    es_reset_card(slot);
+}
+
+
+/**********************************************************************/
+
+/*
+ * low priority XCB card initialisation - first round with ints off
+ * allocates memory for control structures; second round declares the driver
+ * to the network interface code.
+ */
+static void es_init_low(int slot, int irqs_on)
+{
+    if( !irqs_on )
+    {
+	static int esunits;
+	struct es_softc *es;
+	int unit = esunits++;
+	int i;
+	NIC *iobase;
+	char *flash_constants;
+        int c, size, osid, next;
+        char *buf;
+
+#ifdef DEBUG1
+	printf("DEBUG: es_init_low entered for slot:%x\n", slot);
+#endif
+
+	/* this is hardwired for the ONBOARD_ETHERNET NC */
+	_swix(OS_Memory, _INR(0,2)|_OUT(3), 13, HW_IO_BASE, HW_IO_SIZE, &iobase);
+
+	/* get some memory for the control structure */
+	es = (struct es_softc *)malloc(sizeof *es);
+	memset(es, 0, sizeof *es);
+	es_softc[unit] = es;
+
+	/* record which logical slot this is */
+	slotmap[slot] = unit;
+
+	/* initialise the es_softc structure */
+	es->es_unit = unit;
+	es->es_slot = slot;
+	es->es_flags = 0;
+	es->es_base = iobase;
+	es->es_device_no = HW_INTR;
+
+        ES_BANK(iobase, 0);
+        es->es_log2M = ((ES_READ_B(iobase, R_MCR+1) & 0x0E) >> 1) - 1;
+        es->es_ram = ES_READ_B(iobase, R_MIR) << (8 + es->es_log2M);
+
+	/*
+	 * initialise stats structures
+	 */
+	stats_init(es);
+
+	ES_BANK(iobase, 1);
+
+	for (i=0; i<6; i++)
+	    es->es_addr[i] = ES_READ_B(iobase, R_IAR+i);
+
+	/* validate the Ethernet address */
+	for ( i=0; i<6; i++ )
+	{
+	    if ((es->es_addr[i]!=0)&&(es->es_addr[i]!=0xff))
+                break;
+        }
+
+    	if ( i==6 )
+    	{
+    	    sprintf ( es_lasterr, "Ethernet address missing %d\n", slot );
+            //es->es_flags |= ES_FAULTY;
+            es->es_addr[0] = 0x16;  // bit 1 set => non-allocated address
+            es->es_addr[1] = 0x86;
+            es->es_addr[2] = 0xE4;
+            es->es_addr[3] = 0x33;
+            es->es_addr[4] = 0xE5;
+            es->es_addr[5] = 0x00;
+            for (i=0; i<6; i++)
+                ES_WRITE_B(iobase, R_IAR+i, es->es_addr[i]);
+    	}
+
+	ES_BANK(iobase, 2);
+
+    	_swix(OS_ClaimDeviceVector, _INR(0,2), es->es_device_no, es_irq_entry, module_wsp);
+    }
+    else
+    {
+	int unit = slotmap[slot];
+	struct es_softc *es;
+
+	if( unit >= 8 )
+	    return;
+	else
+	    es = es_softc[unit];
+    }
+}
+
+/**********************************************************************/
+
+/*
+ * XCB shutdown entry point - reset the card
+ */
+static void es_shutdown(int slot)
+{
+    es_reset_card(slot);
+}
+
+
+/**********************************************************************/
+
+/*
+ * calculate the Autodin II CRC for the passed data
+ */
+static u_char *calc_crc(u_char *data, int datalen)
+{
+    u_long crc, swap = 0;
+    int i, j;
+    static u_char retc[sizeof(crc)];
+
+    crc = ~0;
+    for( i = 0; i < datalen; ++i )
+    {
+	u_long next = *data++;
+	for( j = 0; j < NBBY; ++j )
+	{
+	    if( (next & 1) ^ (crc >> 31) )
+		crc = (crc << 1) ^ POLYNOMIAL;
+	    else
+		crc <<= 1;
+	    next >>= 1;
+	}
+    }
+
+    /* reverse, nibble swap & complement the result */
+    for( i = 0; i < (NBBY * sizeof(crc)); ++i )
+    {
+	swap <<= 1;
+	swap |= ((crc & 0x01) ? 1 : 0);
+	crc >>= 1;
+    }
+
+    for( i = 0; i < sizeof(crc); ++i)
+    {
+	retc[i] = (u_char) ~swap;
+	swap >>= NBBY;
+    }
+
+    return(retc);
+}
+
+
+unsigned int calc_crc2 ( unsigned char *data, int datalen )
+{
+    unsigned int crc, swap;
+    unsigned int bit, byte, j;
+
+    crc = 0xffffffff;
+
+    for ( byte=0; byte<datalen; byte++ )
+    {
+        for ( bit=*(data++),j=0;j<8;j++, bit>>=1 )
+            crc = (crc>>1) ^ (((crc^bit)&0x01)?0xedb88320:0 );
+    }
+
+    for ( swap=0, bit=0; bit<32; bit++ )
+    {
+        swap<<=1;
+        swap |= crc&1;
+        crc>>=1;
+    }
+
+    return swap;
+}
+
+
+
+/**********************************************************************/
+
+char *bina ( unsigned char num )
+{
+    int c;
+    static char text[9];
+
+    for ( c=7; c>=0; c-- )
+        text[7-c] = ((num>>c)&1) ? '1' : '0';
+    text[8] = 0;
+
+    return text;
+}
+
+char *bina32 ( unsigned int num )
+{
+    int c;
+    static char text[33];
+
+    for ( c=31; c>=0; c-- )
+        text[31-c] = ((num>>c)&1) ? '1' : '0';
+    text[32] = 0;
+
+    return text;
+}
+
+/*
+ * es_setup - initialise the NIC, but do not bring it up onto the network.
+ * returns <> 0 if all OK, 0 if hardware determined to be faulty.
+ */
+static int es_setup(int unit)
+{
+    struct es_softc *es = es_softc[unit];
+    NIC *nic = es->es_base;
+
+    /* Soft reset */
+    ES_BANK(nic, 0);
+    ES_WRITE_H(nic, R_RCR, 0x8000);
+    ES_WRITE_H(nic, R_RCR, 0x0200);
+    ES_WRITE_H(nic, R_TCR, 0x0080);
+    ES_BANK(nic, 1);
+    ES_WRITE_H(nic, R_CTR, 0x0900);
+    ES_BANK(nic, 2);
+
+    /* all done OK */
+    return(1);
+}
+
+
+/**********************************************************************/
+
+/*
+ * es_bringup - bring the card up live onto the network - returns 0
+ * if all OK, else errno.
+ */
+static int es_bringup(int unit)
+{
+    struct es_softc *es = es_softc[unit];
+    NIC *nic = es->es_base;
+    int s;
+    int cb;
+
+    /* do not do this if already running */
+    if( es->es_flags & ES_RUNNING )
+    {
+	return(0);
+    }
+
+    if( !es_setup(unit) )
+	/*
+	 * unit is faulty
+	 */
+	return(ENXIO);
+
+    s = ensure_irqs_off();
+
+    ES_BANK(nic, 0);
+
+    /* set the NIC running, take it out of loopback mode */
+    ES_WRITE_H(nic, R_RCR, 0x0300);
+    ES_WRITE_H(nic, R_TCR, 0x0081);
+
+    ES_BANK(nic, 2);
+
+    ES_WRITE_B(nic, R_MSK, RCV_INT);
+
+    /* mark this interface as active */
+    es->es_flags |= ES_RUNNING;
+
+    /* all done */
+    restore_irqs(s);
+    return(0);
+}
+
+/**********************************************************************/
+
+void es_init(void)
+{
+    int i;
+    u_char buffer[16];
+    _kernel_oserror *e;
+    _kernel_swi_regs rin,rout;
+    int s;
+    int id;
+
+    s = ensure_irqs_off();
+
+/* Mod for Boca hardware
+ * there is no podule manager or bus!
+ */
+    for( i = 0; i < XCB_SLOTS; ++i )
+    {
+	es_slots[i] = 0;
+	slotmap[i] = (char)-1;
+    }
+    es_slots[0] = (++escnt);
+    es_init_high(0);
+
+    for( i = 0; i < XCB_SLOTS; ++i )
+	if( es_slots[i] )
+	    es_init_low (i, 0);
+
+    restore_irqs(s);
+
+    for( i = 0; i < XCB_SLOTS; i++ )
+	if( es_slots[i] )
+	    es_init_low (i, 1);
+
+    rin.r[0] = (int)"Inet$EtherType";
+    rin.r[1] = (int)"es0";
+    rin.r[2] = 3;
+    rin.r[3] = 0;
+    rin.r[4] = 0;
+    _kernel_swi(OS_SetVarVal, &rin, &rout);
+}
+
+/**********************************************************************/
+
+int es_transmit(_kernel_swi_regs *r)
+{
+    u_int flags = r->r[0];
+    u_int unit = r->r[1];
+    u_int type = r->r[2];
+    struct mbuf *m, *m0 = (struct mbuf *)(r->r[3]), **np, *n0 = NULL;
+    u_char *edst = (u_char *)(r->r[4]);
+    struct es_softc *es = es_softc[unit];
+    u_char *esrc = (flags & TX_FAKESOURCE) ? (u_char *)r->r[5] : es->es_addr;
+    NIC *nic = es->es_base;
+    int error = 0, s, i;
+    int old_bank;
+
+    n0 = m0;
+    m0 = NULL;
+    np = &m0;
+    while (n0)
+    {
+        struct mbuf *n;
+        char *p;
+        m = n0;
+        n0 = m->m_list;
+        /* First ensure data is safe to keep */
+        if (flags & TX_PROTOSDATA)
+            n = m_copy(m, 0, M_COPYALL);
+        else
+            n = m_ensure_safe(m);
+        /* Then find room for a contiguous Ethernet header */
+        if (n)
+        {
+            if (n->m_off - n->m_inioff >= ETHER_HDR_LEN)
+            {
+                n->m_off -= ETHER_HDR_LEN;
+                n->m_len += ETHER_HDR_LEN;
+            }
+            else
+            {
+                struct mbuf *n1;
+                n1 = m_alloc_s(ETHER_HDR_LEN, NULL);
+                if (n1)
+                    n1->m_next = n;
+                else
+                    m_freem(n);
+                n = n1;
+            }
+        }
+
+        if (!n)
+        {
+            error = ENOBUFS;
+            goto error_free;
+        }
+        p = mtod(n, char *);
+        memcpy(p, edst, 6);
+        memcpy(p+6, esrc, 6);
+        p[12] = type >> 8;
+        p[13] = type;
+
+        *np = n;
+        np = &n->m_list;
+    }
+
+    /* Now add the packets to our queue. We'll split up their list as
+       we add them */
+
+    s = ensure_irqs_off();
+    m = es->es_tx_queue;
+    np = &es->es_tx_queue;
+    while (*np)
+        np = &(*np)->m_list;
+    *np = m0;
+    m0 = NULL;
+
+    old_bank = ES_READ_BANK(nic);
+    ES_BANK(nic, 2);
+    i = ES_READ_B(nic, R_MSK);
+    if (!(i & (TXEMPTY_INT|ALLOC_INT)))
+        ES_WRITE_B(nic, R_MSK, i | TXEMPTY_INT | TX_INT);
+    ES_BANK(nic, old_bank);
+    restore_irqs(s);
+
+error_free:
+
+    while (n0)
+    {
+        m = n0->m_list;
+        m_freem(n0);
+        n0 = m;
+    }
+
+    while (m0)
+    {
+        m = m0->m_list;
+        m_freem(m0);
+        m0 = m;
+    }
+
+    return error;
+}
+
+/**********************************************************************/
+
+_kernel_oserror *es_irq_handler(_kernel_swi_regs *r, void *pw)
+{
+    int i,s,s2;
+    struct es_softc *es;
+
+    /* Mmmmm */
+    es_intr(0);
+
+    return (NULL);
+}
+
+/**********************************************************************/
+
+void es_final(void)
+{
+    struct es_softc *es;
+    int i;
+
+    for ( i=0; i<XCB_SLOTS; i++ )
+    {
+	if (es_slots[i])
+	{
+	    es = es_softc[slotmap[i]];
+	    es_shutdown(i);
+
+	    /* If we didn't claim, this swi will return an error and we will ignore it */
+              _swix ( OS_ReleaseDeviceVector, _INR(0,2), es->es_device_no, es_irq_entry, module_wsp);
+	}
+    }
+}
+
+/**********************************************************************/
+
+u_char *es_addresses(int unit)
+{
+    struct es_softc *es = es_softc[unit];
+
+    return((u_char *)es->es_addr);
+}
+
+/**********************************************************************/
+
+#if 0
+void filter_multi ( FilterSingleRef filter )
+{
+    unsigned char zeroaddr[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  };
+    unsigned int c;
+
+    if ( filter->fs_multiall )
+    {
+        printf ( "All multicast\n" );
+        return;
+    }
+
+    for ( c=0; c<filter->fs_multitablesize; c++ )
+    {
+        if ( memcmp ( &filter->fs_multitable[c], zeroaddr, 8 ) )
+            printf ( "%s", ether_sprintf ( filter->fs_multitable[c].address ) );
+    }
+
+    printf ( "\n" );
+}
+#endif
+
+#ifdef HASHED_MULTICAST
+void prmulticount(unsigned int *mc)
+{
+#if 1
+    int i, j, b;
+    printf("         multicasts");
+    #if MULTICAST_HASHSIZE != 64
+    #error Expecting 64 hash entries
+    #endif
+    for (i = 0; i < 8; i++)
+    {
+        b = 0;
+        for (j = 0; j < 8; j++)
+        {
+            if (mc[i*8+j])
+                b |= 1 << j;
+        }
+        printf("%s%02X", i==0?" ":":", b);
+    }
+    printf("\n");
+#else
+    int i;
+    char l='[';
+
+    for (i=0; i<MULTICAST_HASHSIZE; i++)
+    {
+        if (mc[i] != UINT_MAX)
+            break;
+    }
+
+    if (i==MULTICAST_HASHSIZE)
+    {
+        printf("All multicasts\n");
+        return;
+    }
+
+    for (i=0; i<MULTICAST_HASHSIZE; i++)
+    {
+        if (mc[i] != 0)
+        {
+            printf("%c%d:", l, i);
+            if (mc[i] == UINT_MAX)
+                putchar('x');
+            else
+                printf("%d", mc[i]);
+            l = ',';
+        }
+    }
+
+    if (l=='[')
+        printf("No multicasts\n");
+    else
+        printf("]\n");
+#endif
+}
+#endif
+
+static const char *straddrlevel(int addrlevel)
+{
+    switch (addrlevel)
+    {
+        case ADDRLVL_SPECIFIC:    return "(specific)   ";
+        case ADDRLVL_NORMAL:      return "(normal)     ";
+        case ADDRLVL_MULTICAST:   return "(multicast)  ";
+        case ADDRLVL_PROMISCUOUS: return "(promiscuous)";
+        default:                  return "";
+    }
+}
+
+int presstats(int flag)
+{
+    struct es_softc *es;
+    int i, unit;
+    int esfound = 0;
+    int filters_active;
+    register NIC *nic;
+
+    for( unit = 0; unit < escnt; ++unit)
+    {
+	int slot;
+
+	es = es_softc[unit];
+	nic = es->es_base;
+	filters_active = 0;
+
+#ifdef TXBUF_PROFILE
+	printf ( "DEBUG %d\n", max_txbuf );
+#endif
+	if ( (es->es_addr[0]==0)&&(es->es_addr[1]==0)&&(es->es_addr[2]==0)&&
+	     (es->es_addr[3]==0)&&(es->es_addr[4]==0)&&(es->es_addr[5]==0) )
+	{
+	    printf ( "es%d 8-bit transfers COMPUTER COULD NOT SUPPLY AN ETHERNET ADDRESS\n", unit );
+	}
+	else
+	{
+	    printf ( "es%d 8-bit transfers Ethernet address %02X:%02X:%02X:%02X:%02X:%02X\n",
+		unit, es->es_addr[0], es->es_addr[1], es->es_addr[2],
+		      es->es_addr[3], es->es_addr[4], es->es_addr[5] );
+	    printf("es%d: RAM %dKB\n",
+		unit, (es->es_ram + 512) / 1024 );
+	}
+
+	for( slot = 0; slot < XCB_SLOTS; ++slot )
+	    if( slotmap[slot] == i )
+		break;
+
+	printf ( "   TX frames %10ld : TX errors %10ld : TX bytes %10ld\n",
+	 		es->es_stats.st_tx_frames,
+	        	es->es_stats.st_tx_general_errors,
+	        	es->es_stats.st_tx_bytes);
+
+	printf ( "   RX frames %10ld : RX errors %10ld : RX bytes %10ld\n\n",
+	        	es->es_stats.st_rx_frames,
+	        	es->es_stats.st_rx_general_errors,
+	        	es->es_stats.st_rx_bytes);
+
+
+	printf ( "   Frame types claimed:\n" );
+
+	if( ieeefilter[unit] )
+	{
+	    printf ( "      IEEE 802.3       %s handler=(%08X,%08X)\n",
+	             straddrlevel(ieeefilter[unit]->fs_addrlevel),
+	             (u_int) ieeefilter[unit]->fs_handler, ieeefilter[unit]->fs_pwptr );
+#ifdef HASHED_MULTICAST
+	    if (ieeefilter[unit]->fs_addrlevel == ADDRLVL_MULTICAST)
+	    	prmulticount(ieeefilter[unit]->fs_multicount);
+#endif
+	}
+
+	if( e2monitor[unit] )
+	{
+	    printf ( "      Ethernet Monitor %s handler=(%08X,%08X)\n",
+	             straddrlevel(e2monitor[unit]->fs_addrlevel),
+	             (u_int) e2monitor[unit]->fs_handler, e2monitor[unit]->fs_pwptr );
+#ifdef HASHED_MULTICAST
+	    if (e2monitor[unit]->fs_addrlevel == ADDRLVL_MULTICAST)
+	        prmulticount(e2monitor[unit]->fs_multicount);
+#endif
+	}
+
+	if( e2sink[unit] )
+	{
+	    printf ( "      Ethernet Sink    %s handler=(%08X,%08X)\n",
+	             straddrlevel(e2sink[unit]->fs_addrlevel),
+	             (u_int) e2sink[unit]->fs_handler, e2sink[unit]->fs_pwptr );
+#ifdef HASHED_MULTICAST
+	    if (e2sink[unit]->fs_addrlevel == ADDRLVL_MULTICAST)
+	        prmulticount(e2sink[unit]->fs_multicount);
+#endif
+	}
+
+	if( e2specific[unit] )
+	{
+	    FilterChainRef fc = e2specific[unit];
+
+	    ++filters_active;
+
+	    while( fc )
+	    {
+		printf ( "      Ethernet %04x    %s handler=(%08X,%08X)\n", fc->fc_type,
+	             straddrlevel(fc->fc_filter.fs_addrlevel),
+	             (u_int) fc->fc_filter.fs_handler, fc->fc_filter.fs_pwptr );
+#ifdef HASHED_MULTICAST
+	        if (fc->fc_filter.fs_addrlevel == ADDRLVL_MULTICAST)
+	            prmulticount(fc->fc_filter.fs_multicount);
+#endif
+		fc = fc->fc_next;
+	    }
+	}
+
+	printf ( "\n   link 10BaseT\n" );
+    }
+
+        printf ( "   multicast filter %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\n",
+	es->es_mar[0], es->es_mar[1], es->es_mar[2], es->es_mar[3],
+	es->es_mar[4], es->es_mar[5], es->es_mar[6], es->es_mar[7] );
+
+    if( es_lasterr[0] )
+    {
+        printf("   last error %s\n", es_lasterr);
+        es_lasterr[0] = '\0';
+    }
+
+    if( es_lastlog[0] )
+    {
+        printf("   last log %s\n", es_lastlog);
+        es_lastlog[0] = '\0';
+    }
+
+
+    return(esfound);
+}
+
+/**********************************************************************/
+
+int xcb_add_ethernet_card(int unit, int slot)
+{
+    return( unit > 8 ? 0 : 1 );
+}
+
+/**********************************************************************/
+
+/*
+ * set_receive_level - either turn the hardware for the unit off
+ * (if addrlevel = -1), or enable appropriate levels of packet
+ * reception
+ */
+void set_receive_level(int unit, int addrlevel)
+{
+    struct es_softc *es = es_softc[unit];
+    NIC *nic = es->es_base;
+
+    es->es_stats.st_link_status &= ~(ST_STATUS_RXMASK);
+
+    if( addrlevel == -1 )
+    {
+	/*
+	 * take the hardware down
+	 */
+	esioctl(unit, 1, 0);
+
+	es->es_stats.st_link_status &= ~ST_STATUS_ACTIVE;
+    }
+    else
+    {
+        int rcr;
+	u_char status = ST_STATUS_BROADCAST;
+	int old_bank;
+
+        old_bank = ES_READ_BANK(nic);
+	ES_BANK(nic, 0);
+
+	rcr = ES_READ_H(nic, R_RCR);
+	rcr &=~ PRMS;
+
+	if( addrlevel >= ADDRLVL_MULTICAST )
+	{
+	    status = ST_STATUS_MULTICAST;
+	}
+
+	if( addrlevel >= ADDRLVL_PROMISCUOUS )
+	{
+	    rcr |= PRMS;
+
+	    status = ST_STATUS_PROMISCUOUS;
+	}
+
+#ifdef DEBUG
+	Printf("\021\06set_receive_level: rcr = %x (addrlevel = %x)\021\07\n",
+	       rcrbits, addrlevel);
+#endif
+
+	/*
+	 * update the recieve control register on the chip
+	 */
+	ES_WRITE_H(nic, R_RCR, rcr);
+	ES_BANK(nic, old_bank);
+
+	es->es_stats.st_link_status |= (status | ST_STATUS_ACTIVE);
+    }
+}
+
+/**********************************************************************/
+
+int es_stats(_kernel_swi_regs *r)
+{
+    struct stats *sptr;
+    struct es_softc *es;
+    register NIC *nic;
+
+    es = es_softc[r->r[1]];
+    nic = es->es_base;
+
+    switch ( r->r[0] )
+    {
+      case 0:
+	sptr = &st;
+	break;
+
+      case 1:
+	sptr = &(es->es_stats);
+	break;
+
+      default:
+	return(EINVAL);
+    }
+
+    (void)memcpy((char *)(r->r[2]), (char *)sptr, sizeof(*sptr));
+    return(0);
+}
+
+/**********************************************************************/
+
+int esioctl(int unit, int cmd, int flag)
+{
+    register struct es_softc *es;
+    int s, error = 0;
+
+    if (unit < 0 || unit > 4)
+	return (1);
+    es = es_softc[unit];
+    switch(cmd)
+    {
+      case 0:
+	if( es->es_flags & ES_FAULTY )
+	    return (1);
+	error = es_bringup(unit);
+	break;
+
+      case 1:
+	s = ensure_irqs_off();
+
+	/*
+	 * log a message on next CD/Heartbeat error
+	 */
+
+	if( (es->es_flags & ES_FAULTY) )
+	{
+	    es_reset_card(es->es_slot);
+	    break;
+	}
+
+	if( flag == 0 && (es->es_flags & ES_RUNNING) )
+	{
+	    /* take the card down */
+	    es_reset_card(es->es_slot);
+	    es->es_flags &= ~ES_RUNNING;
+	}
+	else if( flag && !(es->es_flags & ES_RUNNING) )
+	    error = es_bringup(unit);
+
+	restore_irqs(s);
+	break;
+
+      default:
+	break;
+    }
+
+    /* that's all */
+    return(error);
+}
+
+
+
+#ifndef HASHED_MULTICAST
+static int es_add_addrs ( struct es_softc *es, FilterSingleRef filter )
+{
+    NIC *nic = es->es_base;
+    unsigned char zeroaddr[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    unsigned int crc, byte, bit, c;
+
+    if ( filter==0 )
+        return 0;
+
+    if ( filter->fs_multiall )
+    {
+        /* Open up the filter and return no more work */
+        for ( c=0; c<8; c++)
+            ES_WRITE_B(nic, R_MT+c, 0xff);
+
+        memset(&es->es_mar[0], 0xff, sizeof(es->es_mar));
+
+        return 1;
+    }
+
+    /* Add all the addresses */
+    for ( c=0; c<filter->fs_multitablesize; c++ )
+    {
+        if ( !memcmp ( &filter->fs_multitable[c], zeroaddr, 8 ) )
+            continue;
+
+        /* We have an address to add here */
+	crc = calc_crc2 ( (unsigned char *)&filter->fs_multitable[c], 6 );
+
+        /* crc is 6 MS bits of crc */
+        crc = crc>>(32-6);
+        byte = (crc>>3)&0x7;
+        bit  = 1<<(crc&0x7);
+
+        es->es_mar[byte] |= bit;
+        ES_WRITE_B(nic, R_MT+byte, es->es_mar[byte]);
+    }
+
+    return 0;
+}
+#endif
+
+static const u_char empty_mar[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+static const u_char full_mar[8] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+void es_update_multicast_filter ( int unit )
+{
+    struct es_softc *es = es_softc[unit];
+    NIC *nic = es->es_base;
+    FilterSingleRef filter=0;
+    FilterChainRef chain;
+    u_char mar_buf[8];
+    const u_char *new_mar;
+    int s = ensure_irqs_off();
+    int i, j;
+    int rxstatus;
+    int old_bank;
+
+    old_bank = ES_READ_BANK(nic);
+
+#ifdef HASHED_MULTICAST
+    rxstatus = es->es_st_link_status & ST_STATUS_RXMASK;
+
+    if (rxstatus < ST_STATUS_MULTICAST)
+        new_mar = empty_mar;
+    else if (rxstatus > ST_STATUS_MULTICAST)
+        new_mar = full_mar;
+    else {
+        for (i = 0; i < 8; i++) {
+            mar_buf[i] = 0x00;
+            for (j = 0; j < 8; j++)
+                if (es->es_multicount[i * 8 + j])
+                    mar_buf[i] |= 1 << j;
+        }
+        new_mar = mar_buf;
+    }
+
+    if (memcmp(new_mar, es->es_mar, 8) == 0)
+    {
+        restore_irqs(s);
+        return;                 /* registers haven't changed */
+    }
+
+
+    ES_BANK(3);
+
+    memcpy(es->es_mar, new_mar, 8);
+
+    for (i=0; i<8; i++)
+        ES_WRITE_B(nic, R_MT+i, new_mar[i]);
+
+#else
+
+    ES_BANK(nic, 3);
+
+    for (i=0; i<8; i++)
+        ES_WRITE_B(nic, R_MT+i, 0);
+
+    memset(&es->es_mar[0], 0, sizeof(es->es_mar));
+
+    filter = e2sink[unit];
+    if ( (es_add_addrs ( es, filter ))!=0 ) goto out;
+
+    filter = e2monitor[unit];
+    if ( (es_add_addrs ( es, filter ))!=0 ) goto out;
+
+    filter = ieeefilter[unit];
+    if ( (es_add_addrs ( es, filter ))!=0 ) goto out;
+
+    for ( chain=e2specific[unit]; chain; chain=chain->fc_next )
+    {
+        filter = &chain->fc_filter;
+        if ( (es_add_addrs ( es, filter ))!=0 ) goto out;
+    }
+
+out:
+
+#endif
+    ES_BANK(nic, old_bank);
+
+    restore_irqs(s);
+}
+
+#ifdef BORDER
+#define VIDC ((volatile unsigned int *)0x03500000)
+
+void set_border(int colour)
+{
+    *VIDC = 0x40000000u | ((255 << (colour*8)) & 0x00FFFFFF);
+}
+#endif
+
+
+/**********************************************************************/
+
+/* EOF if_es.c */
