@@ -36,7 +36,8 @@ struct SymDefsFile {
   unsigned32 sym_count;
   SymDefSymbol *syms;
   SymDefSymbol **last;
-  int32 include_all_syms;
+  int include_all_syms:1;
+  int our_buffer:1;
 };
 
 
@@ -72,7 +73,7 @@ static char *Strdup(const char *s1)
         }
 }
 
-static SymDefSymbol *sds_new(SymDefsFile *sf, char *name, int32 val, SymDefSymbolType t)
+static SymDefSymbol *sds_new(SymDefsFile *sf, char *name, int32 val, SymDefSymbolType t, void *data)
 {
   const size_t name_len = strlen(name) + 1;
   SymDefSymbol *sds = malloc(sizeof(SymDefSymbol) + name_len);
@@ -89,6 +90,7 @@ static SymDefSymbol *sds_new(SymDefsFile *sf, char *name, int32 val, SymDefSymbo
     memcpy(sds + 1, name, name_len);
   }
 
+  (void) data;
   return sds;
 }
 
@@ -111,7 +113,7 @@ static void sds_delete(SymDefsFile *sf, SymDefSymbol *sds)
 }
 
 
-extern int sf_parse(SymDefsFile *sf, SymDefCallback callback)
+extern int sf_parse(SymDefsFile *sf, SymDefCallback callback, void *data)
 /*
  * Parse a symdef file.  Each symbol that is located in the file is passed to
  * the supplied callback function which *must* always return NULL.  (The CLX library
@@ -119,7 +121,7 @@ extern int sf_parse(SymDefsFile *sf, SymDefCallback callback)
  * specification files)
  */
 {
-  char *p = sf->buffer + sf->header_size;
+  char *p = sf->buffer + sf->header_size, *ep = sf->buffer + sf->buffer_length;
   char *sym, temp;
   int32 val;
   SymDefSymbolType type;
@@ -135,29 +137,29 @@ extern int sf_parse(SymDefsFile *sf, SymDefCallback callback)
   /* Single-character string buffer for strcspn */
   typebuf[1] = 0;
 
-  while (*p) {
-    while (*p && isspace(*p)) ++p;
-    if (!*p) return 0;
+  while (p < ep) {
+    while (p < ep && isspace(*p)) ++p;
+    if (p == ep) return 0;
     if (*p == ';' || *p == '#') {
       /* This line is a comment */
-      while (*p && *p != '\n') ++p;
+      while (p < ep && *p != '\n') ++p;
       continue;
     }
     /* We have found a line of data now.  Should be [address] [type] [sym] */
     start = (p - sf->buffer);
     val = (int32) strtoul(p, &p, 0);
-    while (*p && isspace(*p)) ++p;
-    if (!*p) return -1;
+    while (p < ep && isspace(*p)) ++p;
+    if (p == ep) return -1;
     *typebuf = *p++;
     type = (SymDefSymbolType) strcspn(SYMDEF_TYPES, typebuf);
-    while (*p && isspace(*p)) ++p;
-    if (!*p) return -1;
+    while (p < ep && isspace(*p)) ++p;
+    if (p == ep) return -1;
     sym = p;
-    while (*p && !isspace(*p)) ++p;
+    while (p < ep && !isspace(*p)) ++p;
     end = (p - sf->buffer);
     temp = *p;
     *p = '\0';
-    if ((sds = (*callback)(sf, sym, val, type)) != NULL) {
+    if ((sds = (*callback)(sf, sym, val, type, data)) != NULL) {
       sds->start = start;
       sds->end = end;
     }
@@ -165,6 +167,43 @@ extern int sf_parse(SymDefsFile *sf, SymDefCallback callback)
   }
 
   return 0;
+}
+
+extern SymDefsFile *sf_open_inplace(char *filename, SymDefsFile *sf, char *buffer, int32 size,
+  SymDefsOpenMode mode, SymDefCallback callback, void *data)
+{
+/* On entry, 'filename' is a decorative name of the file which is assumed to be
+ * in a block of memory pointed to by 'buffer' of length 'size'.  It can be used
+ * instead of sf_open and sf_load to initialise a SymDefsFile.  'mode' may only
+ * be SFOPEN_INPUT or SFOPEN_INPUT_IDENT_ONLY.
+ *
+ * If the buffer does not contain a SYMDEFS file, this function returns NULL.
+ * If it does, this function returns 'sf'.  If 'mode' is invalid, it returns NULL.
+ *
+ * If 'mode' is SFOPEN_INPUT, the file will be parsed and the callback
+ * function invoked for each loaded symbol.
+ */
+  if (sf->our_buffer) free(sf->buffer);
+  sf->our_buffer = 0;
+  sf->buffer_length = size;
+  sf->buffer = buffer;
+  free(sf->filename);
+  sf->filename = Strdup(filename);
+
+  if (mode != SFOPEN_INPUT && mode != SFOPEN_INPUT_IDENT_ONLY ||
+     sf->buffer_length < sizeof(FILESIG) ||
+     memcmp(sf->buffer, FILESIG, sizeof(FILESIG)-1)) {
+    /* Not a valid symdefs file - don't know what to do with the file */
+    return NULL;
+  }
+
+  sf->include_all_syms = 0;
+  sf->header_size = strcspn(sf->buffer, "\r\n"); /* length of top line */
+
+  if (mode != SFOPEN_INPUT_IDENT_ONLY) {
+    sf_parse(sf, callback ? callback : sds_new, data);
+  }
+  return sf;
 }
 
 extern SymDefsFile *sf_open(char *filename, SymDefsFile *sf, SymDefsOpenMode mode)
@@ -221,11 +260,11 @@ extern SymDefsFile *sf_open(char *filename, SymDefsFile *sf, SymDefsOpenMode mod
     return sf;
   }
   else {
-    return sf_load(sf, sds_new);
+    return sf_load(sf, sds_new, NULL);
   }
 }
 
-extern SymDefsFile *sf_load(SymDefsFile *sf, SymDefCallback callback)
+extern SymDefsFile *sf_load(SymDefsFile *sf, SymDefCallback callback, void *data)
 {
 /* Allocate memory, load an input symdefs file and enter symbols into
  * destination symbol table.  'sf' was previously returned from sf_open
@@ -253,7 +292,7 @@ extern SymDefsFile *sf_load(SymDefsFile *sf, SymDefCallback callback)
   sf->include_all_syms = 0;
   sf->header_size = strcspn(sf->buffer, "\r\n"); /* length of top line */
 
-  sf_parse(sf, callback);
+  sf_parse(sf, callback, data);
   return sf;
 }
 
@@ -377,6 +416,7 @@ extern SymDefsFile *sf_new(void)
     sf->filename = NULL;
     sf->buffer_length = -1;
     sf->include_all_syms = 1;
+    sf->our_buffer = 1;
   }
 
   return sf;
@@ -390,7 +430,7 @@ extern void sf_delete(SymDefsFile *sf)
  */
   while (sf->syms) sds_delete(sf, sf->syms);
   free(sf->filename);
-  free(sf->buffer);
+  if (sf->our_buffer) free(sf->buffer);
   free(sf);
 }
 
@@ -415,7 +455,7 @@ extern SymDefSymbol *sf_update_symbol(SymDefsFile *sf, char *name, int32 val, Sy
   }
 
   if (sds == NULL && sf->include_all_syms) {
-    sds = sds_new(sf, name, val, t);
+    sds = sds_new(sf, name, val, t, NULL);
     if (sds != NULL) {
       sds->updated = 1;
     }
