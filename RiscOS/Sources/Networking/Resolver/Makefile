@@ -29,7 +29,7 @@ AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -pcc
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-LDFLAGS = -v
+LDFLAGS = 
 
 #
 # Libraries
@@ -42,6 +42,7 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 INETLIB=InetInc:^.^.libs.inetlib.inetlibzm
 SOCKLIB=InetInc:^.^.libs.socklib.socklibzm
+UNIXLIB=InetInc:^.^.libs.unixlib.unixlibzm
 DESKLIB=libs.desklib.DeskLib_rm
 #
 # Include files
@@ -59,7 +60,7 @@ OBJS      = res_query.o Events.o \
 	    Cache.o ExtLib.o Hosts.o Resolver.o \
 	    res_comp.o res_init.o res_mkquer.o  \
 	    StrCaseCmp.o Stubs.o SWI.o
-LIBS      = ${DESKLIB} ${INETLIB} ${SOCKLIB} #libs.inetlib libs.socklib
+LIBS      = ${DESKLIB} ${INETLIB} ${SOCKLIB} ${UNIXLIB}
 EXPORTS   =
 
 #
