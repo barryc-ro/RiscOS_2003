@@ -2,14 +2,11 @@
 
 
 # Toolflags:
-CCflags        = -c -depend !Depend -IC: -fussy
-#CCflags        = -c -depend !Depend -IC: -fussy -throwback
-C++flags       = -c -depend !Depend -IC:
-#C++flags       = -c -depend !Depend -IC: -throwback
+CCflags        = -c -depend !Depend -IC: -fussy -throwback
+C++flags       = -c -depend !Depend -IC: -throwback
 Linkflags      = -aif -v -c++ -o $@ 
 DrLinkflags    = -aif -verbose -nounused -o $@ 
-ObjAsmflags    = -NoCache -depend !Depend
-#ObjAsmflags    = -throwback -NoCache -depend !Depend
+ObjAsmflags    = -throwback -NoCache -depend !Depend
 CMHGflags      = 
 LibFileflags   = -c -o $@
 Squeezeflags   = -f -v $@

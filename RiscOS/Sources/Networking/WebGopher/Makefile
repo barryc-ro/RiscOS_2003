@@ -25,8 +25,8 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM ${INCLUDES} ${DFLAGS}
+AFLAGS = -depend !Depend -throwback -Stamp -quit
+CFLAGS  = -c -depend !Depend -throwback -zM ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
