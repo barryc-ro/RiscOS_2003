@@ -1,0 +1,242 @@
+/* File:    swi.c
+ * Purpose: To handle CDFS SWIs
+ * Author:  Timothy Roddis
+ * History: 14-Feb-96: TGR: created
+ */
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <string.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* commonlib headers */
+
+#include "debug.h"
+#include "msgs.h"
+
+/* local headers */
+
+#include "main.h"
+#include "swi.h"
+#include "aux.h"
+#include "direc.h"
+#include "disc.h"
+
+/* Auxiliary functions */
+
+_kernel_oserror *check_file_and_magic_number (Bool *found, DiscInfoPtr *disc_info, DirInfoPtr dir_info, char *pathname, unsigned int len, char *filename, char *magic_number, unsigned int n, SectorBuffer *sector_buffer);
+
+/* The SWI handler
+ *
+ * on entry:
+ *    swi_no contains SWI No. - SWI chunk base
+ *    r      contains the values of the registers the SWI was called with
+ *    pw     is the modules privat word
+ *
+ * on exit:
+ *    returns an error for failure or NULL
+ */
+
+
+_kernel_oserror *swi_handler (int swi_no, _kernel_swi_regs *r, void *pw) {
+
+   _kernel_oserror *e = NULL;
+   DiscInfoPtr     disc_info;
+
+   /* These SWIs use the same code as command_ for decoding disc pathnames / discnames
+      in arguments - it can be found in aux.c (as the function names suggest  */
+
+   IGNORE (pw);
+
+   e = _swix (OS_FSControl, I0|I1, OS_FSControl_SetTemporaryFileSystem,
+              CDFS_FileSystemString FS_NameAndDiscSpecSeparatorString);
+
+   if (e) return e;
+
+   switch (swi_no + CDFS_SWIChunkBase) {
+      case CDFS_LogicalBlockSize:
+         if ((e = aux_find_disc_from_argument (&disc_info, (char *)r->r[1])) != NULL) {
+            break;
+         }
+         r->r[0] = disc_info->logical_block_size;
+         break;
+      case CDFS_LocateFile:
+      case CDFS_ISODirectoryRecord:
+      {
+         DiscInfoPtr  disc_info;
+         DirInfoPtr   dir_info;
+
+         if ((dir_info = malloc (sizeof (DirInfoRec))) == NULL) {
+            e = msgs_make_error (Error_MemAlloc);
+            if (e) break;
+         }
+         if ((e = aux_find_object_from_argument (&disc_info, dir_info, (char *)r->r[1])) != NULL) {
+            goto free_23_1;
+         }
+         if (swi_no + CDFS_SWIChunkBase == CDFS_LocateFile) {
+            M_loadword_bigendian(r->r[0],
+                                 ((char*)dir_info->dir_rec_ptr+ISO9660_DirRec_ExtentAddrOffset));
+            M_loadword_bigendian(r->r[2],
+                                 ((char*)dir_info->dir_rec_ptr+ISO9660_DirRec_DataLenOffset));
+
+            r->r[1] = ((char *) dir_info->dir_rec_ptr) [ISO9660_DirRec_EARLenOffset];
+         } else {
+            unsigned int size,
+                         name_len,
+                         sys_use_offset,
+                         sys_use_len;
+
+            size     = ((char *) dir_info->dir_rec_ptr) [ISO9660_DirRec_RecordLenOffset];
+            name_len = ((char *) dir_info->dir_rec_ptr) [ISO9660_DirRec_FileIdentLenOffset];
+
+            sys_use_offset = name_len + ISO9660_DirRec_FileIdentOffset + (name_len + 1) % 2;
+            sys_use_len    = dir_info->dir_rec_length - sys_use_offset;
+
+            r->r[0] = (int) (r->r[2] + sys_use_offset);
+            r->r[1] = sys_use_len;
+
+            if (r->r[2]) {
+               memcpy ((void*)r->r[2], dir_info->dir_rec_ptr,
+                       (r->r[3] = MIN (r->r[3], dir_info->dir_rec_length)));
+            } else {
+               r->r[3] = dir_info->dir_rec_length;
+            }
+         }
+         free_23_1:
+            free (dir_info);
+            break;
+      }
+      case CDFS_DiscType:
+      {
+         if ((e = aux_find_disc_from_argument (&disc_info, (char *)r->r[1])) != NULL) {
+            break;
+         }
+         r->r[0] = disc_info->type;
+         if (disc_info->type & CDFS_DiscTypeFlags_CDIBridge) {
+            unsigned int  tmp, n, len;
+            char         *pathname;
+            Bool          found;
+            SectorBuffer *sector_buffer;
+            DirInfoPtr    dir_info;
+
+            if ((sector_buffer = malloc (sizeof (SectorBuffer)
+                                         + sizeof(DirInfoRec)
+                                         + FS_MaxPathnameLength)) == NULL) {
+               e = msgs_make_error (Error_MemAlloc);
+               break;
+            }
+            dir_info = (DirInfoPtr) (sector_buffer + 1); /* Just after the sector buffer */
+            pathname = (char *)     (dir_info + 1);      /* Just after the Directory Info Record */
+
+            len = strlen(disc_info->name);
+
+            /* Build ":<discname>.$." */
+
+            *pathname = FS_NameAndDiscSpecSeparator;
+
+            strncpy (pathname + 1, disc_info->name, len);
+
+            pathname[1 + len] = FS_DirectorySeparator;
+            pathname[2 + len] = FS_RootDirectoryIdentifier;
+            pathname[3 + len] = FS_DirectorySeparator;
+
+            /* Video CDs */
+
+            strcpy (pathname + 4 + len, VideoCD_MusicFile);
+
+            e = direc_find_object_on_discs (&disc_info, dir_info, pathname);
+
+            if (e) goto free_dt1;
+
+            tmp = (disc_info)->logical_block_size;
+
+            for (n = 0; tmp != 0 && tmp != 1; n++) {
+               tmp = tmp >> 1;
+            }
+
+            found = (dir_info->object_type == FS_ObjectType_NotFound) ? FALSE : TRUE;
+
+            if (!found) {
+
+               strcpy (pathname + 4 + len, VideoCD_AVFile);
+
+               e = direc_find_object_on_discs (&disc_info, dir_info, pathname);
+
+               if (e) goto free_dt1 ;
+
+               found = (dir_info->object_type == FS_ObjectType_NotFound) ? FALSE : TRUE;
+
+               if (!found) {
+
+                  e = check_file_and_magic_number (&found, &disc_info, dir_info, pathname, len,
+                                                   VideoCD_InfoFile,
+                                                   VideoCD_InfoFile_MagicNumber, n,
+                                                   sector_buffer);
+
+                  if (e) goto free_dt1;
+               }
+            }
+            if (found) {
+               r->r[0] |= CDFS_DiscTypeFlags_VideoCD;
+            }
+            e = check_file_and_magic_number (&found, &disc_info, dir_info, pathname, len,
+                                             PhotoCD_InfoFile, PhotoCD_InfoFile_MagicNumber,
+                                             n, sector_buffer);
+            if (e) goto free_dt1;
+
+            if (found) {
+               r->r[0] |= CDFS_DiscTypeFlags_PhotoCD;
+            }
+            e = check_file_and_magic_number (&found, &disc_info, dir_info, pathname, len,
+                                             EnhancedCD_InfoFile, EnhancedCD_InfoFile_MagicNumber,
+                                             n, sector_buffer);
+            if (e) goto free_dt1;
+
+            if (found) {
+               r->r[0] |= CDFS_DiscTypeFlags_EnhancedAudioCD;
+            }
+            free_dt1:
+               free (sector_buffer);
+         }
+         break;
+      }
+      case CDFS_CurrentDrive:
+         r->r[0] = global_current_drive;
+         break;
+   }
+   _swi (OS_FSControl, I0, OS_FSControl_RestoreCurrentFileSystem);
+
+   return e;
+}
+
+_kernel_oserror *check_file_and_magic_number (Bool *found, DiscInfoPtr *disc_info, DirInfoPtr dir_info, char *pathname, unsigned int len, char *filename, char *magic_number, unsigned int n, SectorBuffer *sector_buffer) {
+
+   unsigned int     sector;
+   _kernel_oserror *e;
+
+   strcpy (pathname + 4 + len, filename);
+
+   e = direc_find_object_on_discs (disc_info, dir_info, pathname);
+
+   if (e) return e;
+
+   if (dir_info->object_type != FS_ObjectType_NotFound) {
+
+      sector = dir_info->disc_addr / (ISO9660_LogicalSectorSize>>n);
+
+      e = disc_read_sectors (disc_info, sector_buffer, sector, 1,
+                             CDMgr_DataMode_Mode1OrMode2Form1);
+      if (e) return e;
+
+      *found = !memcmp (sector_buffer, magic_number, CD_InfoFile_MagicNumberLength);
+   } else {
+      *found = FALSE;
+   }
+   return NULL;
+}
+

@@ -1,0 +1,780 @@
+/* File:    filesys.c
+ * Purpose: Disc level filing system functions
+ * Author:  Timothy Roddis
+ * History: 16-Oct-95: TGR: created
+ */
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <limits.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* Commonlib headers */
+
+#include "defines.h"
+#include "msgs.h"
+#include "debug.h"
+#include "dbmalloc.h"
+
+/* Local headers */
+
+#include "main.h"
+#include "aux.h"
+#include "fname.h"
+#include "cache.h"
+#include "disc.h"
+#include "direc.h"
+#include "filesys.h"
+#include "wild.h"
+
+/* Auxiliary functions */
+
+static _kernel_oserror *read_disc_info (DiscInfoPtr *disc_info, int drive_no, int sequence_no);
+
+static _kernel_oserror *scan_for_disc (DiscInfoPtr *disc_info, char *discname, int ignore_drive);
+
+/* Very similar to the FSEntry point in character, this routine canonicalisesa disc name or
+ * textual number
+ * entry:  pointer to string array (pointer), pointer to buffer length , discname string
+ *         buffer length = 0 indicates no buffer
+ * exit:   buffer length updated with number of bytes by which the buffer has been overflowed
+ */
+
+
+_kernel_oserror *filesys_canonicalise (char **buffer, unsigned int *buffer_len, char *discname) {
+
+   int              drive_no    = -1;
+   _kernel_oserror *e;
+   DiscInfoPtr      disc_info;
+
+   /* Parse discname */
+
+   DEBUG debug_output ("f", "CDFS: (filesys) canonicalising discname \"%s\"\n", discname?discname:"NULL");
+
+   if (!discname || !*discname) { /* Interpret NULL disc identifiers as being for the currently selected drive */
+      drive_no = global_current_drive;
+   } else if (isdigit(discname[0])) {
+      drive_no = discname[0] - '0';
+
+      if (discname[1]) {
+         if (isdigit(discname[1]) && !discname[2]) {
+            drive_no = drive_no * 10 + discname[1];
+         } else {
+            drive_no = -1;
+         }
+      }
+   }
+   DEBUG debug_output ("f", "CDFS: drive no = %d\n", drive_no);
+
+   if (drive_no == -1) {
+      if (!strpbrk (discname, "*#")) {
+         if (*buffer_len) {
+            strncpy (*buffer, discname, *buffer_len);
+         } else {
+            *buffer = discname;
+         }
+         *buffer_len = strlen (discname) - *buffer_len;
+
+         DEBUG debug_output ("f", "CDFS: discname \"%s\" [%d]\n", discname, strlen(discname));
+
+         if ((int) *buffer_len < 0) *buffer_len = 0;
+
+         return NULL;
+      } else { /* Handle wild-carded canonicalisation. YEUCH! */
+         unsigned int     i         = 0;
+         unsigned int     max_drive = UINT_MAX;
+         DiscInfoPtr      this_disc;
+
+         DEBUG debug_output ("f1", "CDFS: wildcard canonicalisation\n");
+
+         disc_info = NULL;
+
+         do {
+            if ((e = filesys_retrieve_disc_info_for_drive (&this_disc, i)) != NULL) {
+               if ((e->errnum & OS_ErrorNumberBitMask) == CDMgr_Error_DriveNotKnown) {
+                  if (max_drive == UINT_MAX) {
+                     e = _swix (CDMgr_DriveOp, I0|O0, CDMgr_DriveOp_EnumerateDrives, &max_drive);
+
+                     if (e) return (e); /* Unknown SWI */
+
+                     DEBUG debug_output ("f1", "CDFS: maximum drive no is %u\n", max_drive);
+                  }
+               } else {
+                  DEBUG debug_output ("f1", "CDFS: error 0x%x - \"%s\"\n", e->errnum, e->errmess);
+               }
+            } else {
+                if (this_disc && wild_match (discname, (this_disc)->name)) { /* Found it! */
+
+                  DEBUG debug_output ("f1", "CDFS: found a \"%s\"\n", (this_disc)->name);
+
+                  if (disc_info) return msgs_make_error (Error_MultiMatchedDiscName);
+
+                  disc_info = this_disc;
+                } else {
+                   DEBUG debug_output ("f1", "CDFS: searching for '%s', found '%s'\n", discname, (this_disc && (this_disc)->drive_no != -1)?(this_disc)->name:"Nowt");
+                }
+            }
+            DEBUG debug_output ("f1", "CDFS: drive %u/%u\n", i, max_drive);
+            i++;
+         } while (i <= max_drive);
+
+         if (!disc_info) return msgs_make_error (Error_DiscNotFound);
+
+         drive_no = disc_info->drive_no;
+      }
+   }
+   if ((e = filesys_retrieve_disc_info_for_drive (&disc_info, drive_no)) != NULL) {
+      return e;
+   }
+   DEBUG debug_output ("f", "CDFS: found disc \"%s\" in drive %d\n", (disc_info->name)?(disc_info->name):"", drive_no);
+
+   if (disc_info) {
+      if (*buffer_len) {
+         /*fname_discname_conv (*buffer, disc_info->name, *buffer_len);*/
+         strncpy (*buffer, disc_info->name, *buffer_len);
+      }
+      *buffer_len = strlen (disc_info->name) - *buffer_len;
+
+      if ((int) *buffer_len < 0) *buffer_len = 0;
+
+      return NULL;
+   }
+   *buffer = NULL;
+   return NULL;
+}
+
+
+void filesys_open_file (DiscInfoPtr *disc_info, DirInfoPtr dir_info,
+                        unsigned int *file_handle, char *pathname,
+                        unsigned int fs_handle) {
+
+   _kernel_oserror *e;
+   FileOpenPtr      file_open_rec;
+
+   DEBUG debug_output ("f2", "CDFS: attempting to open file with FS handle 0x%x\n", fs_handle);
+
+   if (((e = direc_find_object_on_discs (disc_info, dir_info, pathname)) != NULL)
+   || (dir_info->flags & CDFS_DirInfoFlags_Interleaved)
+   || (dir_info->object_type == FS_ObjectType_NotFound)
+   || ((file_open_rec = malloc (sizeof(FileOpenRec))) == NULL)) {
+      DEBUG {if(e)debug_output("f2","CDFS: error being thrown away 0x%x - \"%s\"\n", e->errnum, e->errmess);}
+
+      *file_handle = 0;
+      return;
+   }
+   /* Add file information into open file linked list ... */
+
+   *file_handle  =  (int) file_open_rec;
+
+   file_open_rec->file_start_addr    =  dir_info->disc_addr;
+   file_open_rec->fileswitch_handle  =  fs_handle;
+   file_open_rec->disc_info          =  *disc_info;
+   file_open_rec->next               =  global_files_open;
+   global_files_open                 =  file_open_rec;
+}
+
+void filesys_close_file (FileOpenPtr file_handle) {
+
+   FileOpenPtr      f,
+                    prev = NULL,
+                    next = NULL;
+
+   /* Taken from aquarius, should be pretty reliable */
+
+   f = global_files_open;
+
+   while (f != NULL) {
+
+      next = f->next;
+
+      if (f == file_handle) {
+
+        if (f == global_files_open) {
+           global_files_open = next;
+        } else {
+           prev->next = next;
+        }
+        free (f);
+
+        break;
+      }
+      prev = f;
+      f    = next;
+   }
+   return;
+}
+
+
+/* dismout a disc and close all files on it
+ *
+ * ON ENTRY:
+ *     disc info record for disc to dismount
+ * ON EXIT:
+ *     error (if one has been returned by SWI to do service call)
+ */
+
+_kernel_oserror *filesys_dismount_disc (DiscInfoPtr disc_info) {
+
+   int              size,
+                    i;
+   char             path_component[ISO9660_PVD_VolumeIdentifierLength];
+   char            *string;
+   char            *buffer;
+   char            *ptr;
+   _kernel_oserror *e;
+   FileOpenPtr      f,
+                    prev = NULL,
+                    next = NULL;
+
+   DEBUG debug_output ("f", "CDFS: dismounting disc \"%s\"\n",disc_info->name);
+
+   /* The following code looks to see if any of the special directories are
+    * on this disc. If any are, they are unset. */
+
+  for (i = OS_FSControl_Special_Current; i <= OS_FSControl_Special_Library; i++) {
+      if (!_swix (OS_FSControl, I0|I1|I2|I3|I5|O5, OS_FSControl_ReadDirPath, 0, i,
+      CDFS_FileSystemName, 0, /* OUT = */ &size)) {
+
+         if ((buffer = malloc (-size)) != NULL) {
+
+            if (!_swix (OS_FSControl, I0|I1|I2|I3|I5|O1, OS_FSControl_ReadDirPath, buffer, i,
+            CDFS_FileSystemName, -size, /* OUT = */ &ptr)) {
+
+               if (ptr) { /* If CSD is set */
+                  fname_get_path_component(path_component,++ptr,ISO9660_PVD_VolumeIdentifierLength);
+
+                  if (!fname_strcmp (disc_info->name, path_component)) {
+                     DEBUG debug_output("f", "CDFS: unsetting special (%i) directory\n",i, disc_info->name);
+                     _swi (OS_FSControl, I0|I1|I2|I3|I6, OS_FSControl_SetDirPath, 0, i,
+                     CDFS_FileSystemName, 0);
+                  }
+               }
+            }
+            free(buffer);
+         }
+      }
+   }
+   /* Purge from open file lists DISMOUNT ONLY */
+
+   /* Taken from aquarius, should be pretty reliable */
+
+   f = global_files_open;
+
+   while (f != NULL) {
+
+      next = f->next;
+
+      if (f->disc_info == disc_info) {
+
+#ifndef APP
+        DEBUG debug_output ("f2", "CDFS: (dismounting) closing file with FS handle 0x%x\n", f->fileswitch_handle);
+
+        if ((e = _swix (OS_Find, I0|I1, OS_Find_CloseFile, f->fileswitch_handle)) != NULL) {
+           return e;
+        }
+#else
+        if (f == global_files_open) {
+           global_files_open = next;
+        } else {
+           prev->next = next;
+        }
+        free (f);
+
+        break;
+#endif
+      }
+      prev = f;
+      f    = next;
+   }
+   if ((string = malloc(CDFS_FileSystemName_Length + 2 + strlen (disc_info->name)+1)) == NULL) {
+      e = msgs_make_error (Error_MemAlloc);
+   } else {
+      sprintf (string, "%s%c%c%s", CDFS_FileSystemName, FS_NameAndDiscSpecSeparator,
+               FS_NameAndDiscSpecSeparator, disc_info->name);
+
+      e = _swix (OS_ServiceCall, I1|I2, Service_DiscDismounted, string);
+      free (string);
+   }
+   cache_dismount_disc (disc_info);
+
+   return e;
+}
+
+/* read the Primary Volume Descriptor (see ISO 9660)
+ * This function has a whole host of side effects and is fairly large.
+ * Furthermore it has a partnered, large function that handles the cache side of things
+ * in the cache file.
+ *
+ * ENTRY:
+ *     disc_info is a REFERENCE VARIABLE into which is copied a pointer to a disc info record
+ * EXIT:
+ *     returns a error or NULL, in which case disc_info will contain a pointer to a DiscInfoRec
+ *
+ * This function will attempt to allocate and use a disc info record if the disc appears to
+ * contain a valid ISO9660 file system. It will attempt to allocate a free disc info record, but
+ * may fail.
+ *
+ */
+
+/* NON-REENTRANT  NON-REENTRANT  NON-REENTRANT  NON-REENTRANT  NON-REENTRANT  NON-REENTRANT
+ *
+ * No two drives' PVDs may be read simulataneously
+ */
+
+_kernel_oserror *read_disc_info (DiscInfoPtr *disc_info, int drive_no, int sequence_no) {
+
+   int                        sector_addr, root_dir_addr, root_dir_size;
+   unsigned int               disc_type = 0,
+                              whichdisc, size, *session_start;
+   unsigned short             logical_block_size;
+   char                      *iso_discname;
+   static char                fs_discname[ISO9660_PVD_VolumeIdentifierLength + 1];
+   _kernel_oserror           *e = NULL;
+   DirInfoPtr                 dir_info;
+   SectorBuffer              *sector_buffer = NULL;
+   CDMgr_ReadTOC_Ptr          toc_info;
+   CDMgr_ReadTOC_TrackInfoPtr track_info;
+
+   /* First see if it could be an ISO 9660 disc and check for multiple sessions ... */
+
+   DEBUG debug_output ("f1", "CDFS: just before read TOC on drive %d [%d]\n", drive_no, sequence_no);
+
+   if ((e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|I4|I5|O3,
+                  CDMgr_ReadTOC_ReturnTrackInfo | CDMgr_ReadTOC_ReturnSessionInfo,
+                  drive_no, sequence_no, NULL, /* track = */ 0, /* All sessions */ 0,
+                  &size)) != NULL) {
+      return aux_process_cdmgr_error (e);
+   }
+   DEBUG debug_output ("f1", "CDFS: size of TOC data %d (0x%x)\n", size, size);
+
+   if ((toc_info = malloc (size)) == NULL) return msgs_make_error (Error_MemAlloc);
+
+   DEBUG debug_output ("f1", "buffer mallocated at 0x%x\n", toc_info);
+
+   if ((e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|I4|I5|O3|O4|O5,
+                  CDMgr_ReadTOC_ReturnTrackInfo | CDMgr_ReadTOC_ReturnSessionInfo,
+                  drive_no, sequence_no, toc_info, /* track = */ 0, /* All sessions */ 0,
+                  &size, &track_info, &session_start)) != NULL) {
+
+      e = aux_process_cdmgr_error (e);
+
+      goto free0;
+   }
+   DEBUG debug_output ("f1", "CDFS: after having read the TOC, tracks (%d-%d) @0x%p, sessions (%d-%d)@0x%p\n", toc_info->first_track, toc_info->last_track, track_info, toc_info->first_session, toc_info->last_session, session_start);
+
+   /* Determine what type of disc this is */
+
+   switch (toc_info->disc_type) {
+      case TOC_DiscType_RedOrYellowBook:
+         disc_type |= CDFS_DiscTypeFlags_CDROM;
+         break;
+      case TOC_DiscType_CDI:
+         disc_type |= CDFS_DiscTypeFlags_CDI;
+         break;
+      case TOC_DiscType_CDROMXA:
+         disc_type |= CDFS_DiscTypeFlags_XA_TOC;
+   }
+   if (disc_type & CDFS_DiscTypeFlags_CDI) { /* multiple session CD-I discs not supported
+                                              * CD-I defines PVD as being at 0x10 */
+      sector_addr = ISO9660_SessionOffsetForPVD;
+   } else {
+
+      /* Is the first track on the last session audio? */
+
+      if (~(track_info[session_start[toc_info->last_session-toc_info->first_session]-1].audio_mode)
+          & CDMgr_AudioModeFlags_Data) {
+
+         DEBUG debug_output ("f1", "CDFS: disc is audio\n");
+
+         e = msgs_make_error (Error_AudioDisc);
+         goto free0;
+      }
+      if (toc_info->first_session == toc_info->last_session) {
+         sector_addr = ISO9660_SessionOffsetForPVD;
+      } else {
+         /* multiple sessions */
+
+         disc_type |= CDFS_DiscTypeFlags_MultiSession;
+
+         sector_addr
+
+            /* Start of last session + 16 physical sectors
+             *
+             *                        track no. of start of last session
+             *            ____________________________/\______________________________
+             *           /                                                            \
+             *           |                                                            |
+             *           |                 index into array of session start tracks   |
+             *           |              _____________________/\______________________ |
+             *           |             /                                             \| */
+            = (track_info[session_start[toc_info->last_session-toc_info->first_session]-1].address)
+                                                                  + ISO9660_SessionOffsetForPVD;
+      }
+   }
+   if ((sector_buffer = malloc (sizeof(SectorBuffer))) == NULL) {
+      e = msgs_make_error (Error_MemAlloc);
+      goto free0;
+   }
+   DEBUG debug_output ("f", "CDFS: disc is data, try for PVD addr 0x%x on drive %d into buffer 0x%p\n", sector_addr, drive_no, sector_buffer);
+
+   /* Must go direct here - dangerous to use disc_read_sectors:
+      disc_read_sectors uses a disc_info record and calls te function that calls here */
+
+   if ((e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6, CDMgr_ReadData_User,
+                   drive_no, sequence_no, sector_buffer, sector_addr,
+                   /* no. of sectors = */ 1,
+                   CDMgr_DataMode_Mode1OrMode2Form1)) != NULL) {
+
+      e = aux_process_cdmgr_error (e);
+
+      goto free1;
+   }
+   if (strncmp ((char *) sector_buffer + ISO9660_PVD_StandardIdentifierOffset
+   ,            ISO9660_PVD_StandardIdentifier,
+                ISO9660_PVD_StandardIdentifierLength)) {
+
+      /* If this disc is not a standard ISO 9660 disc */
+
+      if (!strncmp ((char *) sector_buffer + HiSierra_PVD_StandardIdentifierOffset
+      ,               HiSierra_PVD_StandardIdentifier, HiSierra_PVD_StandardIdentifierLength)) {
+
+         DEBUG debug_output ("f", "CDFS: It's a High Sierra disc\n");
+
+         disc_type |= CDFS_DiscTypeFlags_HiSierra;
+
+      } else if (strncmp ((char *) sector_buffer + ISO9660_PVD_StandardIdentifierOffset,
+                          CDI_PVD_StandardIdentifier, CDI_PVD_StandardIdentifierLength)) {
+         e = msgs_make_error (Error_BadFormat);
+         goto free1;
+      }
+   }
+   if (!strncmp ((char *) sector_buffer + XA_PVD_IdentifyingSignatureOffset
+   ,             XA_PVD_IdentifyingSignature, XA_PVD_IdentifyingSignatureLength)) {
+      DEBUG debug_output ("f", "CDFS: It's an /XA disc\n");
+
+      disc_type |= CDFS_DiscTypeFlags_XA_PVD;
+
+      if (!strncmp ((char *) sector_buffer + ISO9660_PVD_SystemIdentifierOffset
+      ,            XABridge_PVD_SystemIdentifier, XABridge_PVD_SystemIdentifierLength)) {
+
+         DEBUG debug_output ("f", "CDFS: It's an /XA Bridge disc\n");
+         disc_type |= CDFS_DiscTypeFlags_CDIBridge;
+      }
+   }
+   if ((dir_info = malloc (sizeof(DirInfoRec))) == NULL) {
+      e = msgs_make_error (Error_MemAlloc);
+      goto free1;
+   }
+   if (~disc_type & CDFS_DiscTypeFlags_HiSierra) { /* ISO 9660 derived */
+
+      /* Video, Photo and Enhanced music CDs will be dealt with by other code, specific to the
+         DiscType SWI */
+
+      iso_discname = (char *) sector_buffer + ISO9660_PVD_VolumeIdentifierOffset;
+
+      fname_discname_conv (fs_discname, iso_discname, ISO9660_PVD_VolumeIdentifierLength + 1);
+
+      M_loadshort_bigendian(logical_block_size,
+                              ((char *)sector_buffer+ISO9660_PVD_LogicalBlockSizeOffset));
+
+      if (~disc_type & CDFS_DiscTypeFlags_CDI) { /* Has top-level directory rec */
+         if ((e = direc_get_directory_record(disc_type, dir_info,
+                                     (char *) sector_buffer + ISO9660_PVD_RootDirRecOffset,
+                                     ISO9660_PVD_RootDirRecLength)) != NULL) {
+            goto free2;
+          }
+      } else { /* CD-I disc - go via path table */
+         M_loadword_bigendian (sector_addr,
+                                (char *) sector_buffer + ISO9660_PVD_PathTableAddressOffset);
+
+         DEBUG debug_output ("f", "CDFS: CD-I disc, looking at sector 0x%x for path table\n",sector_addr);
+
+         /* Can't use disc_read_sectors */
+
+         if ((e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6, CDMgr_ReadData_User,
+                         drive_no, sequence_no, sector_buffer, sector_addr,
+                         /* no. of sectors = */ 1,
+                         CDMgr_DataMode_Mode1OrMode2Form1)) != NULL) {
+
+            e = aux_process_cdmgr_error (e);
+
+            goto free2;
+         }
+         M_loadword_bigendian (sector_addr,
+                               (char *) sector_buffer + ISO9660_PathTable_ExtentAddrOffset);
+
+         DEBUG debug_output ("f", "CDFS: CD-I disc, looking at sector 0x%x for root directory\n",sector_addr);
+
+         if ((e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6, CDMgr_ReadData_User,
+                         drive_no, sequence_no, sector_buffer, sector_addr,
+                         /* no. of sectors = */ 1,
+                         CDMgr_DataMode_Mode1OrMode2Form1)) != NULL) {
+
+            e = aux_process_cdmgr_error (e);
+
+            goto free2;
+         }
+         if ((e = direc_get_directory_record (disc_type, dir_info,
+                                              (char *) sector_buffer,
+                                              ISO9660_DirecRec_MaxLength)) != NULL) {
+            goto free2;
+         }
+      }
+   } else { /* HiSierra */
+
+      /* Perhaps an ironic choice of variable name ... */
+
+      iso_discname = (char *) sector_buffer + HiSierra_PVD_VolumeIdentifierOffset;
+
+      fname_discname_conv (fs_discname, iso_discname, ISO9660_PVD_VolumeIdentifierLength + 1);
+
+      if (!*fs_discname) {
+         iso_discname = (char *) sector_buffer + HiSierra_PVD_VolumeSetIdentifierOffset;
+
+         fname_discname_conv (fs_discname, iso_discname, ISO9660_PVD_VolumeIdentifierLength + 1);
+      }
+      M_loadshort_littleendian(logical_block_size,
+                               ((char *)sector_buffer + HiSierra_PVD_LogicalBlockSizeOffset));
+
+
+      if ((e = direc_get_directory_record(disc_type, dir_info,
+                               (char *) sector_buffer + HiSierra_PVD_RootDirRecOffset,
+                               ISO9660_PVD_RootDirRecLength)) != NULL) {
+         goto free2;
+      }
+   }
+
+   root_dir_addr = dir_info->disc_addr;
+   root_dir_size = dir_info->size;
+   e = _swix (CDMgr_MiscOp, I0|I1|I2|O0, CDMgr_MiscOp_WhichDisc, drive_no, sequence_no, &whichdisc);
+
+   if (e) {
+
+      e = aux_process_cdmgr_error (e);
+
+      goto free2;
+   }
+
+   if (!*fs_discname) {
+     sprintf (fs_discname, "UNKNOWN%08x", whichdisc);
+   }
+   *disc_info = cache_cache_disc_info (fs_discname, drive_no, sequence_no, disc_type,
+                                       root_dir_addr, root_dir_size, whichdisc,
+                                       logical_block_size);
+
+   if (*disc_info == NULL) {
+      e = msgs_make_error (Error_TooManyFiles); /* "There are files open on too many discs" */
+   }
+   free2:
+      free (dir_info);
+   free1:
+      free (sector_buffer);
+   free0:
+      free (toc_info);
+      return e;
+}
+
+/* Auxiliary function for function below:
+ * Finds disc_information record for a given drive
+ * ENTRY: disc_info is a pointer to a disc info pointer, drive_no is the drive number to check
+ * EXIT:  returns error or else disc_info is updated
+ * Cannot return disc not found (what would it mean?)
+ */
+
+_kernel_oserror *filesys_retrieve_disc_info_for_drive (DiscInfoPtr *disc_info, int drive_no) {
+
+   int              sequence_no;
+   unsigned int     start_time;
+   unsigned int     current_time;
+   unsigned int     timeout;
+   _kernel_oserror *e;
+   Bool             carry_on;
+
+   DEBUG debug_output ("f1", "CDFS: retrieving info for drive %d\n", drive_no);
+
+   if ((e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_BusyTimeOut,
+                   drive_no, &timeout)) != NULL) return e;
+
+   if ((e = _swix (OS_ReadMonotonicTime, _OUT(0), &start_time)) != NULL) return e;
+
+   /* Section the next block off as disc_get_sequence_no */
+
+   do {
+      carry_on = FALSE;
+      if ((e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_GetSequenceNumber, drive_no, &sequence_no)) != NULL) {
+
+         if (e && ((e->errnum & OS_ErrorNumberBitMask) == CDMgr_Error_BecomingReady)) {
+            if ((e = _swix (OS_ReadMonotonicTime, _OUT(0), &current_time)) != NULL) return e;
+
+            carry_on = (current_time - start_time <= timeout);
+         }
+      }
+   } while (carry_on);
+
+   if (e) return aux_process_cdmgr_error(e);
+
+   DEBUG debug_output ("f1", "CDFS: got sequence number for drive %d [%d]\n",
+                             drive_no, sequence_no);
+
+   *disc_info = cache_find_disc_by_drive (drive_no, sequence_no);
+
+   DEBUG debug_output ("f1", "CDFS: disc information was%s in cache\n", *disc_info?"":"n't");
+
+   /* Ultimately a media changed event should lead to us ending up here.
+    * This is the logical place to age the drive, since we can age it here (and here alone)
+    * and be sure that (a) this will be called by media changed condition handlers and
+    * (b) disc info records for a drive will have been aged _before_ any new record
+    * referring to that drive comes into being */
+
+   if (*disc_info) {
+      if ((*disc_info)->sequence_no == sequence_no) {
+         return NULL;
+      } else {
+         cache_age_drive (drive_no);
+      }
+   }
+   return read_disc_info (disc_info, drive_no, sequence_no);
+}
+
+
+/* Auxiliary function for function below, scans through for the right disc.
+ *
+ * NB: this function returns a NULL DiscInfoPtr if the disc is not found.
+ *
+ * The only error this should return is SWI not known
+ */
+
+_kernel_oserror *scan_for_disc (DiscInfoPtr *disc_info, char *discname, int drive_ignore) {
+
+   unsigned int     i         = 0;
+   unsigned int     max_drive = UINT_MAX;
+   _kernel_oserror *e;
+
+   DEBUG debug_output ("f1", "CDFS: scanning for disc \"%s\", ignore %d, up to drive %u initially\n", discname, drive_ignore, max_drive);
+
+   do {
+      if (i != drive_ignore) {
+         if ((e = filesys_retrieve_disc_info_for_drive (disc_info, i)) != NULL) {
+            if ((e->errnum & OS_ErrorNumberBitMask) == CDMgr_Error_DriveNotKnown) {
+               if (max_drive == UINT_MAX) {
+                  e = _swix (CDMgr_DriveOp, I0|O0, CDMgr_DriveOp_EnumerateDrives, &max_drive);
+
+                  if (e) {
+                     return e;
+                  }
+                  DEBUG debug_output ("f1", "CDFS: maximum drive no is %u\n", max_drive);
+               }
+            } else {
+               DEBUG debug_output ("f1", "CDFS: error 0x%x - \"%s\"\n", e->errnum, e->errmess);
+
+               if (e->errnum == OS_Error_SWINotKnown) return e;
+            }
+         } else {
+             if (*disc_info && !fname_strcmp (discname, (*disc_info)->name)) { /* Found it! */
+
+               DEBUG debug_output ("f1", "CDFS: found a \"%s\"\n", (*disc_info)->name);
+
+               return NULL;
+             } else {
+                DEBUG debug_output ("f1", "CDFS: searching for '%s', found '%s'\n", discname, (*disc_info && (*disc_info)->drive_no != -1)?(*disc_info)->name:"Nowt");
+             }
+         }
+      }
+      DEBUG debug_output ("f1", "CDFS: drive %u/%u\n", i, max_drive);
+      i++;
+   } while (i <= max_drive);
+
+   *disc_info = NULL; /* Not found */
+
+   return NULL; /* Not found is not an error condition at this point */
+}
+
+/* Find a given disc using the given discname and a drive to ignore, which may be -1 in which
+ * case it is assumed that we haven't met with a disc by this discname before.
+ *
+ * ENTRY: disc_info is a pointer to a disc info pointer,
+ *        discname is nul-terminated discname
+ *        ignore_drive is the drive to ignore
+ * EXIT:  returns an error or else disc_info has been updated with a pointer (to a pointer) to
+ *        a valid disc info record or a pointer to a NULL pointer.
+ * returns DiscNotFound
+ */
+
+_kernel_oserror *filesys_find_disc (DiscInfoPtr *disc_info, char *discname, int ignore_drive) {
+
+   int              i;
+   int              upcall_val;
+   _kernel_oserror *e;
+
+   DEBUG debug_output ("f", "CDFS: looking for disc \"%s\"\n", discname);
+
+   /* Disc not found is not at this stage an error ... scan_for_disc will return
+    * a NULL DiscInfoPtr instead */
+
+   e = scan_for_disc (disc_info, discname, ignore_drive);
+
+   if (e) return e;
+
+   if (*disc_info) return NULL;
+
+   /* Keep trying to ask user for disk (or whatever) */
+
+   DEBUG debug_output ("f", "CDFS: disc \"%s\" not found - ask for it\n", discname);
+
+   for (i=0; TRUE; i++) {
+      e = _swix (OS_UpCall, I0 | I1 | I2 | I3 | I4 | I5 | I6 | O0,
+                 ignore_drive = -1 ? OS_UpCall_MediaNotKnown
+                                   : OS_UpCall_MediaNotPresent,
+                 CDFS_FSNumber, discname, -1, i, CDFS_UpCall_TimeoutValue,
+                 CDFS_MediumType, &upcall_val);
+      if (e) return e;
+      if (upcall_val == OS_UpCall_Media_NotWanted) {
+         e = msgs_make_error (Error_DiscNotFound);
+         break;
+      }
+      e = scan_for_disc (disc_info, discname, -1);
+
+      if (e) return e;
+
+      if (*disc_info) break;
+   }
+   _swi (OS_UpCall, I0, OS_UpCall_MediaSearchEnd); /* Just hope for no errors */
+
+   return e; /* Which may be NULL */
+}
+
+
+/* Find a disc using name alone.
+ *
+ * on entry:
+ *    disc_info is an unset, updateable pointer to a disc record information block pointer
+ *    discname is the discname
+ * on entry:
+ *    returns an error upon failure or NULL
+ * returns:
+ *    filesys_find_disc() UNION cache_find_disc_by_name() UNION {DiscNotFound}
+ */
+
+_kernel_oserror *filesys_find_disc_by_name (DiscInfoPtr *disc_info, char *discname) {
+
+   _kernel_oserror *e;
+
+   *disc_info = cache_find_disc_by_name (discname);
+
+   if (!*disc_info) {
+      /* Find a new disc in the drives */
+
+      if ((e = filesys_find_disc (disc_info, discname, -1)) != NULL) return e;
+
+      if (!*disc_info) return msgs_make_error (Error_DiscNotFound);
+   }
+   return NULL;
+}
