@@ -59,7 +59,7 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.<System>.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<System>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<System>.Sprites ${RESDIR}.${COMPONENT}.Sprites ${CPFLAGS}
        -${CP} Resources.${LOCALE}.<System>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
@@ -70,7 +70,7 @@ resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+	print Resources.${LOCALE}.<System>.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
