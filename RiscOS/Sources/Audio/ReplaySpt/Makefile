@@ -17,7 +17,7 @@ EXP_HDR1 = <export$dir>.^.Interface2
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -123,10 +123,12 @@ export_libs: o.replay
         @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 install: rm.${COMPONENT} 
+        ${MKDIR} ${INSTDIR}
 	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
@@ -140,6 +142,7 @@ clean:
 	${RM} h.replay
 	${RM} hdr.replay
 	${RM} o.replay
+	${RM} rm.${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
 local_dirs:
