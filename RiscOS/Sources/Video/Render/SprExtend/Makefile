@@ -12,6 +12,7 @@
 #                    - exported to ChangeFSI at install time
 # 01-Feb-95  GPS     Now compiles with cc505
 # 13-Feb-95  GPS     CFSIjpeg now compiles with cc505
+# 15-May-01  SNB     Re-engineered to use objasm throughout, not aasm
 #
 
 #
@@ -22,31 +23,17 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-AASM    = aasm
-CC      = cc
-CP      = copy
-LINK    = link
-# -d does debug tables
-MKDIR   = cdir
-OBJASM  = objasm
-RM      = remove
-WIPE    = -wipe
-SED     = Sed
+include StdTools
 
 # To switch between making debugging and non-debugging versions of SprExtend:
 #   change the #define of DEBUG at the top of c.PutScaled
 #   change the SETL of 'debug' in sources.SprExtend.
 
-ASFLAGS  = -depend !Depend -Stamp -quit -module
-OBJFLAGS = -depend !Depend -APCS 3/32bit/nofp -Stamp -quit
-CFLAGS   = -depend !Depend ${INCLUDES} ${DFLAGS}
+ASFLAGS  = -APCS 3/32bit/nofp
 TFLAGS   = -APCS 3/32bit/nofp
-DFLAGS   = -DRISCOS -DASMHUFF
-#DFLAGS   = -DRISCOS -DASMHUFF -DDEBUG
-CPFLAGS  = ~cfr~v
-WFLAGS   = ~c~v
-
-INCLUDES = -IC:
+CDEFINES = -DRISCOS -DASMHUFF
+#CDEFINES += -DDEBUG
+CINCLUDES = -IC:
 
 #
 # Libraries
@@ -56,10 +43,11 @@ CLIB = CLIB:o.stubs
 #
 # Program specific options:
 #
-COMPONENT = SprExtend
-SOURCE    = Sources.SprExtend
-TARGET    = rm.SprExtend
-LOCALMSG  = rm.SprExtendM
+COMPONENT = SpriteExtend
+TARGET    = SprExtend
+ROM_SOURCE= sources.${TARGET}
+ROM_TARGET= rm.${TARGET}
+LOCALMSG  = rm.${TARGET}M
 EXPORTS   = ${EXP_HDR}.SprExtend
 
 SFILES =\
@@ -83,7 +71,7 @@ CFSI-JPEG  = data.CFSIjpeg
 
 .c.o:;       ${CC} -c ${CFLAGS} ${TFLAGS} -o $@ $<
 .c.oh:;      ${CC} -c ${CFLAGS} -o $@ $<
-.sources.o:; ${OBJASM} ${OBJFLAGS} -from $< -to $@
+.sources.o:; ${AS} ${ASFLAGS} -from $< -to $@
 
 #
 # Rules:
@@ -102,18 +90,18 @@ cfsi-jpeg: ${CFSI-JPEG}
 #
 # Generic rules:
 #
-rom: ${TARGET}
+rom: ${ROM_TARGET}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+install_rom: ${ROM_TARGET}
+        ${CP} ${ROM_TARGET} ${INSTDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${RM} ${TARGET}
+        ${RM} ${ROM_TARGET}
         ${RM} ${LOCALMSG}
         ${RM} ${GENPALETTE}
         ${RM} ${GENYUVTABS}
@@ -125,17 +113,25 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        ${MKDIR} ${RESDIR}.${TARGET}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${TARGET}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} ${SFILES}
-        ${AASM} ${ASFLAGS} -From ${SOURCE} -To $@
+
+ROM_OBJECT  = ${TARGET}.o
+${ROM_OBJECT}: ${ROM_SOURCE} ${SFILES}
+        do mkdir -p o
+        ${AS} ${ASFLAGS} -o $@ ${ROM_SOURCE}
+${ROM_TARGET}: ${ROM_OBJECT}
+        ${LD} -o $@ -rmf ${ROM_OBJECT}
 
 # Get the Messages from somewhere other than Resources:$.Resources.SprExtend
-${LOCALMSG}: Sources.LocalMsgs ${SFILES}
-        ${AASM} ${ASFLAGS} -From Sources.LocalMsgs -To $@
+LCL_OBJECT = ${TARGET}M.o
+${LOCALMSG}: ${LCL_OBJECT}
+        ${LD} -rmf -o $@ ${LCL_OBJECT}
+${LCL_OBJECT}: ${ROM_SOURCE} ${SFILES}
+        ${AS} ${ASFLAGS} -o $@ ${ROM_SOURCE} -PD "localmessages SETL {TRUE}"
 
 # Export the SWI definitions to Hdr:
 ${EXP_HDR}.SprExtend: hdr.SprExtend
@@ -143,70 +139,59 @@ ${EXP_HDR}.SprExtend: hdr.SprExtend
 #
 # Generate the SFILES
 #
-s.putscaled: c.putscaled
-        ${CC} -s ${CFLAGS} ${TFLAGS} -ff -zps1 -DEMBED c.putscaled
-        @echo ${COMPONENT}: making s.putscaled aasm compatible
-        ${SED} s/__rt_sdiv/|__rt_sdiv|/g < s.putscaled > s.temp
-        ${SED} s/_swix/|_swix|/g < s.temp > s.putscaled
-
+.c.s:;  ${CC} -S ${CFLAGS} ${TFLAGS} -ff -zps1 -DEMBED -DSOURCE_IS_$* $*.c
+        ${SED} /IMPORT/d;/dataseg/d;/codeseg/d;/AREA/d < s.$* > s.temp
+        ${CP} s.temp s.$* ${CPFLAGS}d
+        
 s.yuvtabs: ${GENYUVTABS}
-        ${GENYUVTABS} > s.yuvtabs
+        ${GENYUVTABS} > $@
 
 s.stdpalette: ${GENPALETTE}
-        ${GENPALETTE} > s.stdpalette
+        ${GENPALETTE} > $@
 
 s.jhdr: ${MAKEJHDR}
-        ${MAKEJHDR} > s.jhdr
+        ${MAKEJHDR} > $@
 
 ${GENPALETTE}: oh.genpalette ${CLIB}
-        ${LINK} -o $@ oh.genpalette ${CLIB}
+        ${LD} -o $@ oh.genpalette ${CLIB}
 
 ${GENYUVTABS}: oh.genyuvtabs ${CLIB}
-        ${LINK} -o $@ oh.genyuvtabs ${CLIB}
+        ${LD} -o $@ oh.genyuvtabs ${CLIB}
 
 ${MAKEJHDR}: oh.makejhdr ${CLIB}
-        ${LINK} -o $@ oh.makejhdr ${CLIB}
+        ${LD} -o $@ oh.makejhdr ${CLIB}
 #
 # For ChangeFSI:
 #
 ${CFSI-JPEG}: Sources.cfsi-jpeg s.jhdr s.rojpeg s.stdpalette
-        ${AASM} ${ASFLAGS} -From Sources.cfsi-jpeg -To $@
-        SetType $@ Data
-
-# needed for the ChangeFSI inclusion:
-s.rojpeg: c.rojpeg
-        ${CC} -s ${CFLAGS} ${TFLAGS} -ff -zps1 -DEMBED -DCFSI c.rojpeg
-        ${SED} s/__rt_sdiv/|__rt_sdiv|/g < s.rojpeg > s.temp
-        ${CP} s.temp s.rojpeg ${CPFLAGS}
-#        Run w.ZapS-ROJ
+        ${AS} ${ASFLAGS} -o o.cfsi-jpeg Sources.cfsi-jpeg
+        ${LD} -bin -o $@ o.cfsi-jpeg
 
 #
 # Other bits:
 #
 j2s: o.j2s o.jdhuff o.jrevdct o.jcconv o.diffuse
-        ${LINK} -o j2s o.j2s o.jdhuff o.jrevdct o.jcconv o.diffuse ${CLIB}
+        ${LD} -o $@ o.j2s o.jdhuff o.jrevdct o.jcconv o.diffuse ${CLIB}
 
 o.diffuse: sources.diffuseo s.stdpalette
-        ${OBJASM} ${OBJFLAGS} -from sources.diffuseo -to $@
+        ${AS} ${ASFLAGS} -from sources.diffuseo -to $@
 
 o.jcconv: sources.jcconvo s.yuvtabs
-        ${OBJASM} ${OBJFLAGS} -from sources.jcconvo -to $@
+        ${AS} ${ASFLAGS} -from sources.jcconvo -to $@
 
 o.jdhuff: sources.jdhuffo s.jhdr
-        ${OBJASM} ${OBJFLAGS} -from sources.jdhuffo -to $@
+        ${AS} ${ASFLAGS} -from sources.jdhuffo -to $@
 
 o.jrevdct: sources.jrevdcto
-        ${OBJASM} ${OBJFLAGS} -from sources.jrevdcto -to $@
+        ${AS} ${ASFLAGS} -from sources.jrevdcto -to $@
 
 put: o.put
-        ${LINK} -o put o.put ${CLIB}
+        ${LD} -o $@ o.put ${CLIB}
 
 jput: o.jput
-        ${LINK} -o jput o.jput ${CLIB}
+        ${LD} -o $@ o.jput ${CLIB}
 
 tdct: o.testdct o.idcto
-        ${LINK} -o tdct o.testdct o.idcto ${CLIB}
-
-o.swiv: sources.swiv
+        ${LD} -o $@ o.testdct o.idcto ${CLIB}
 
 # Dynamic dependencies:
