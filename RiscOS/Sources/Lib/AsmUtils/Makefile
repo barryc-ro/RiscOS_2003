@@ -62,11 +62,14 @@ TARGETZ    = alf.${COMPONENTZ}
 SOURCE     = 
 EXPORTS    = 
 
-OBJS=   o.callbacks o.sixtyfour o.heapswis o.rminfo o.irqs
+OBJS=   o.callbacks o.sixtyfour o.heapswis o.rminfo o.irqs \
+        o.osvarlen o.muldiv
 
-OBJSZ=  oz.callbacks oz.sixtyfour oz.heapswis oz.rminfo oz.irqs
+OBJSZ=  oz.callbacks oz.sixtyfour oz.heapswis oz.rminfo oz.irqs \
+        oz.osvarlen oz.muldiv
 
-HDRS=   h.callbacks h.sixtyfour h.heapswis h.rminfo h.irqs
+HDRS=   h.callbacks h.sixtyfour h.heapswis h.rminfo h.irqs \
+        h.osvarlen h.muldiv 
 
 LIBS = ${TARGET} ${TARGETZ}
 
@@ -107,6 +110,8 @@ export_hdrs: ${HDRS} export_dirs
 	${CP} h.rminfo     ${LIBDIR}.h.rminfo    ${CPFLAGS}
 	${CP} h.heapswis   ${LIBDIR}.h.heapswis  ${CPFLAGS}
 	${CP} h.irqs       ${LIBDIR}.h.irqs      ${CPFLAGS}
+	${CP} h.osvarlen   ${LIBDIR}.h.osvarlen  ${CPFLAGS}
+	${CP} h.muldiv     ${LIBDIR}.h.muldiv    ${CPFLAGS}
 	${CP} VersionNum   ${LIBDIR}.VersionNum  ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
