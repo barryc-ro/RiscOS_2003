@@ -43,6 +43,7 @@ Date		Who	Change
 #include "Mess.h"
 #include "MiscAsm.h"
 #include "Module.h"
+#include "RecogAC3.h"
 #include "RecogMPA.h"
 #include "Registers.h"
 #include "Stuffing.h"
@@ -76,7 +77,6 @@ typedef struct
   audio_parameters_structure_t audio_parms;
   a_v_state_t audio;
   struct {
-    unsigned autodetecting: 1;
     unsigned muted: 1;
     unsigned eos_callback_requested: 1;
     unsigned suppress_sync_to_stream: 1;
@@ -137,6 +137,10 @@ static void (*TickerV_Veneer) (void);
 /* Private constants */
 /*********************/
 
+#define MAGIC_WORD      (0x4D647541)
+
+#define STREAM_ID_AUDIO (0xC0)
+
 #define DEFAULT_AUDIO_BUFFER_PREFILL         (16*1024)
 #define DEFAULT_AUDIO_BUFFER_LOW_WATER_MARK  (8*1024)
 #define DEFAULT_AUDIO_BUFFER_HIGH_WATER_MARK (24*1024)
@@ -179,7 +183,7 @@ _kernel_oserror *AudGeneric_Initialise (bool *use)
     }
     else
     {
-//    e = RecogAC3_Init ();
+      e = RecogAC3_Init ();
       if (e)
       {
         RecogMPA_Final ();
@@ -190,7 +194,7 @@ _kernel_oserror *AudGeneric_Initialise (bool *use)
         e = ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
         if (e)
         {
-//        RecogAC3_Final ();
+          RecogAC3_Final ();
           RecogMPA_Final ();
           MiscAsm_DestroySimpleVeneer (TickerV_Veneer);
         }
@@ -254,7 +258,7 @@ _kernel_oserror *AudGeneric_Finalise (void)
       }
       else
       {
-//      e = RecogAC3_Final ();
+        e = RecogAC3_Final ();
         if (e)
         {
           ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
@@ -266,7 +270,7 @@ _kernel_oserror *AudGeneric_Finalise (void)
           e = RecogMPA_Final ();
           if (e)
           {
-//          RecogAC3_Init ();
+            RecogAC3_Init ();
             ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
 //          ZoranMMap_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
 //          AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
@@ -379,18 +383,27 @@ static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) handle;
+  static PES_header_t audio_PES_header;
+  static bitstream_packet_t audio_PES_header_packet = { NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, 0, 0, 0, 0, 1 };
   bitstream_packet_t *list_head;
   unsigned int not_consumed;
   while ((list_head = stream->audio.packet_list_head) != NULL)
   {
     if (list_head->mpeg_start)
     {
-      if (/*stream->audio.state == stream_prefilling && */(stream->audio.first_PTS.msb & 0xFE) && stream->audio.packet_list_head->PTS_valid)
+      if (stream->audio.state == stream_prefilling && (stream->audio.first_PTS.msb & 0xFE) && stream->audio.packet_list_head->PTS_valid)
       {
         /* Store only the first PTS received */
         stream->audio.first_PTS.msb = stream->audio.packet_list_head->PTS.msb & 1;
         stream->audio.first_PTS.lsw = stream->audio.packet_list_head->PTS.lsw;
 Stream.audio.first_PTS = stream->audio.first_PTS;
+      }
+      if (flags & 1)
+      {
+        /* Insert PES header into bitstream packet list */
+        audio_PES_header_packet.start = (unsigned char *) &audio_PES_header;
+        Stuffing_InsertPESHeader (&stream->audio, &audio_PES_header_packet, STREAM_ID_AUDIO);
+        list_head = stream->audio.packet_list_head;
       }
     }
     e = stream->decoder->consumedata (0, stream->decoder_session_id, list_head->start, list_head->length, &not_consumed);
@@ -597,6 +610,8 @@ _kernel_oserror *AudGeneric_SWIOpenStream (stream_flags_t *flags, control_stream
   
   if (!e)
   {
+    stream->magic = MAGIC_WORD;
+    
     /* Cache StreamFlags, ControlStreamHandle and AudioParametersStructure */
     stream->s_flags = *flags;
     stream->csh = csh;
@@ -818,7 +833,10 @@ _kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, stream_handle_t 
   
   if (!e)
   {
-    stream->s_flags.audio_present = false;
+//    stream->s_flags.audio_present = false;
+    
+    stream->magic = 0;
+    free (stream);
   }
   return e;
 }
@@ -1205,7 +1223,6 @@ static _kernel_oserror *static_AudioStart (audio_structure_t *stream)
   stream->audio.first_PTS.msb = 0x80; /* flag that no PTS has been found yet */
   stream->audio.first_PTS.lsw = 0;
 //  stream->audio_header.word = 0;
-  stream->aud_flags.autodetecting = true;
 //  stream->aud_flags.first_header_received = false;
 //  stream->aud_flags.muted_across_sampling_frequency_transition = false;
 //  stream->aud_flags.PTS_valid = false;
@@ -1307,19 +1324,16 @@ Out:		Pointer to error block
 
 static _kernel_oserror *static_CheckHandle (audio_structure_t *stream)
 {
-  /*
-  if (ash == (stream_handle_t) &Stream)
+  if (stream->magic == MAGIC_WORD)
   {
     return NULL;
   }
   else
   {
     char handle_string [12];
-    sprintf (handle_string, "%p", ash);
+    sprintf (handle_string, "%p", stream);
     return Mess_GenerateError ("Err_BadAudioHandle", errno_BAD_AUDIO_HANDLE, 1, handle_string);
   }
-  */
-  return NULL;
 }
 
 #else
