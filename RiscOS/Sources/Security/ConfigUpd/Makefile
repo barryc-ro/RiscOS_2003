@@ -25,7 +25,7 @@ STRIP   = -StripDepnd
 ZIP     = zip
 
 ASFLAGS   = -depend !Depend -ffah -Stamp -quit -module
-CCFLAGS   = -c ${THROWBACK} -zm -zps1 -depend !Depend -ffah ${INCLUDES}
+CCFLAGS   = -c ${THROWBACK} -zm -zps1 -depend !Depend -ffah ${INCLUDES} ${OPTS}
 CPFLAGS   = ~cfr~v
 WFLAGS    = ~c~v
 CMHGFLAGS = -p -depend !Depend -throwback
@@ -68,7 +68,7 @@ COMPONENT = ConfigUpd
 TARGET    = aof.ConfigUpd
 TARGETSA  = rm.ConfigUpd
 EXPORTS   = 
-OBJS      = o.main o.nvram o.utils o.exclusions o.header o.module o.errors
+OBJS      = o.main o.nvram o.utils o.exclusions o.header o.module o.errors o.validation
 
 
 #
@@ -114,6 +114,7 @@ resources:
         ${CP} LocalRes:infileinc ${RESDIR}.${COMPONENT}.infileinc ${CPFLAGS}
         ${CP} LocalRes:test ${RESDIR}.${COMPONENT}.test ${CPFLAGS}
         ${CP} LocalRes:passwords ${RESDIR}.${COMPONENT}.passwords ${CPFLAGS}
+        ${CP} LocalRes:usage ${RESDIR}.${COMPONENT}.usage ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 
