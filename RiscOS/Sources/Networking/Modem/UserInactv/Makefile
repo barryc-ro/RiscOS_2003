@@ -26,7 +26,7 @@ WIPE    	= -wipe
 STRIP		= stripdepnd
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
-CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} ${DEBUG}
+CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} ${DEBUG} ${OPTS}
 CPFLAGS		= ~cfr~v
 CMHGFLAGS	= -depend !Depend -p -throwback
 WFLAGS		= ~c~v
