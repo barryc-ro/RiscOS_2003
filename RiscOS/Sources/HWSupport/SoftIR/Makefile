@@ -29,8 +29,8 @@ CD      = dir
 TOUCH   = create
 STRIP   = -stripdepnd
 
-AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ffa ${INCLUDES} ${DFLAGS}
+AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit -PD "${Build}${UserIF} SETL {TRUE}"
+CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ffa ${INCLUDES} ${DFLAGS} -DSysIdent=${Build}${UserIF}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
