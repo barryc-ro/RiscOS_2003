@@ -133,6 +133,7 @@ rom_link:
 
 
 o.header: cmhg.header
+        ${MKDIR} ^.Common.h
 	cmhg -o o.header -p -d @.^.Common.h.SHOUTcast cmhg.header
 
 ${DIRS}:
