@@ -11,6 +11,18 @@
 # 26-Feb-2001	ADH	Created from Video Control makefile
 
 # -----------------------------------------------------------------------------
+# Export Paths for Messages module
+#
+
+RESDIR		= <resource$dir>.Resources2.PRISM
+
+# -----------------------------------------------------------------------------
+# Export Path for header files
+#
+
+LIBDIR		= <Lib$Dir>
+
+# -----------------------------------------------------------------------------
 # Component specific options
 #
 
@@ -20,13 +32,7 @@ SWI_PREFIX	= PFCBuffer
 ROM_MODULE	= aof.${COMPONENT}
 RAM_MODULE	= rm.${COMPONENT}
 DBG_MODULE	= rm.${COMPONENT}-tr
-EXPORTS		= <CExport$Dir>.h.${COMPONENT}
-
-# -----------------------------------------------------------------------------
-# Export Paths for Messages module
-#
-
-RESDIR		= <resource$dir>.Resources2.PRISM
+EXPORTS		= ${LIBDIR}.PRISM.h.${COMPONENT}
 
 # -----------------------------------------------------------------------------
 # Generic options
@@ -234,6 +240,7 @@ rom_link: ${DIRS} ${ROM_MODULE}
 	@echo ${COMPONENT}: rom_link complete
 
 ${EXPORTS}: h.${CMHG_HDR} h.PFCBuffer
+        ${MKDIR} ${LIBDIR}.PRISM.h
 	${CP} h.PFCBuffer $@ ${CPFLAGS}
 	Do ${AWK} -- "/.define ${SWI_PREFIX}\_00/,/endif/" h.${CMHG_HDR} >>$@
 
