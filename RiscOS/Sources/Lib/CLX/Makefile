@@ -27,7 +27,7 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 
-CCFLAGS = -c -depend !Depend -fah ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -faho ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -71,8 +71,8 @@ OBJSZ=	oz.bytesex oz.chunkfls oz.disass oz.dtos oz.err oz.fname \
 	oz.ieeeflt oz.prgname oz.re oz.wholefls 
 
 HDRS=	h.aif h.aof h.aout h.asdfmt h.asdllfmt h.bytesex h.chunkfls h.chunkfmt \
-	h.disass h.err h.fname h.host_scr h.ieeeflt h.libflfmt h.ovrflfmt \
-	h.prgname h.re h.scr_drv h.set_host h.wholefls
+	h.disass h.err h.fname h.ieeeflt h.libflfmt h.ovrflfmt \
+	h.prgname h.re h.wholefls
 
 LIBS = ${TARGET} ${TARGETD} ${TARGETZ}
 
@@ -124,14 +124,11 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.disass ${CLXLIBDIR}.h.disass ${CPFLAGS}
 	${CP} h.err ${CLXLIBDIR}.h.err ${CPFLAGS}
 	${CP} h.fname ${CLXLIBDIR}.h.fname ${CPFLAGS}
-	${CP} h.host_scr ${CLXLIBDIR}.h.host_scr ${CPFLAGS}
 	${CP} h.ieeeflt ${CLXLIBDIR}.h.ieeeflt ${CPFLAGS}
 	${CP} h.libflfmt ${CLXLIBDIR}.h.libflfmt ${CPFLAGS}
 	${CP} h.ovrflfmt ${CLXLIBDIR}.h.ovrflfmt ${CPFLAGS}
 	${CP} h.prgname ${CLXLIBDIR}.h.prgname ${CPFLAGS}
 	${CP} h.re ${CLXLIBDIR}.h.re ${CPFLAGS}
-	${CP} h.scr_drv ${CLXLIBDIR}.h.scr_drv ${CPFLAGS}
-	${CP} h.set_host ${CLXLIBDIR}.h.set_host ${CPFLAGS}
 	${CP} h.wholefls ${CLXLIBDIR}.h.wholefls ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
@@ -213,3 +210,27 @@ od.re:	c.re
 od.re:	h.re
 od.wholefls:	c.wholefls
 od.wholefls:	h.wholefls
+oz.bytesex:	c.bytesex
+oz.bytesex:	h.bytesex
+oz.bytesex:	c.bytesex
+oz.bytesex:	h.bytesex
+oz.chunkfls:	c.chunkfls
+oz.chunkfls:	h.chunkfls
+oz.chunkfls:	h.chunkfmt
+oz.chunkfls:	h.bytesex
+oz.disass:	c.disass
+oz.disass:	h.disass
+oz.dtos:	c.dtos
+oz.dtos:	h.ieeeflt
+oz.err:	c.err
+oz.err:	h.err
+oz.fname:	c.fname
+oz.fname:	h.fname
+oz.ieeeflt:	c.ieeeflt
+oz.ieeeflt:	h.ieeeflt
+oz.prgname:	c.prgname
+oz.prgname:	h.prgname
+oz.re:	c.re
+oz.re:	h.re
+oz.wholefls:	c.wholefls
+oz.wholefls:	h.wholefls
