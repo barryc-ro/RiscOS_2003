@@ -1,3 +1,5 @@
+#include "MemCheck:h.MemCheck"
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -30,9 +32,13 @@ static void free_private_data(http_data_t data) {
 
   if (data) {
     Free(data->host);
+    data->host = NULL;
     Free(data->path);
-    if (data->addr)
+    data->path = NULL;
+    if (data->addr) {
       TcpFreeAddr(data->addr);
+      data->addr = NULL;
+    }
     if (data->conn) {
       TcpClose(data->conn);
       TcpDelete(data->conn);
@@ -43,6 +49,7 @@ static void free_private_data(http_data_t data) {
       data->listen = NULL;
     }
     Free(data->header);
+    data->header = NULL;
   }
 }
 
@@ -166,6 +173,11 @@ static char *header_scan(http_data_t data, const char *string) {
 
   int start, len, match;
 
+  if (data->header == NULL)
+    return NULL;
+
+  MemCheck_RegisterMiscBlock(string, 256);
+
   start = 0;
   match = -1;
   len = 0;
@@ -183,6 +195,7 @@ static char *header_scan(http_data_t data, const char *string) {
     }
   }
 
+  MemCheck_UnRegisterMiscBlock(string);
   if (match == -1)
     return NULL;
   return &data->header[match];
@@ -270,6 +283,7 @@ int HTTP_GetData(http_data_t data, char *buffer, int size) {
   char c;
   int count, n;
   char *header;
+  tcp_conn_state_t state;
 
   //printf(">%d", data->state);
   //fflush(stdout);
@@ -311,6 +325,13 @@ int HTTP_GetData(http_data_t data, char *buffer, int size) {
         data->state = SC_HEADERS;
         break;
       case SC_HEADERS:
+        state = TcpConnState(data->conn);
+        if ((state == TCP_CONN_WRITE_ONLY) ||
+            (state == TCP_CONN_CLOSED))
+        {
+          data->state = SC_FAILED;
+          break;
+        }
         do {
           count = TcpRead(&c, 1, data->conn);
           if (count) {
@@ -371,7 +392,13 @@ int HTTP_GetData(http_data_t data, char *buffer, int size) {
         break;
       case SC_METADATA:
         /* Meta data fetch */
-        //printf("Meta Fetch!\n");
+        state = TcpConnState(data->conn);
+        if ((state == TCP_CONN_WRITE_ONLY) ||
+            (state == TCP_CONN_CLOSED))
+        {
+          data->state = SC_FAILED;
+          break;
+        }
         n = 0;
         do {
           count = TcpRead(&c, 1, data->conn);
@@ -400,6 +427,13 @@ int HTTP_GetData(http_data_t data, char *buffer, int size) {
         break;
       case SC_FETCHING:
         /* Real data fetch */
+        state = TcpConnState(data->conn);
+        if ((state == TCP_CONN_WRITE_ONLY) ||
+            (state == TCP_CONN_CLOSED))
+        {
+          data->state = SC_FAILED;
+          break;
+        }
         if (data->size == -1)
           n = size;
         else
@@ -436,7 +470,8 @@ int HTTP_GetData(http_data_t data, char *buffer, int size) {
         break;
     }
   }
-  ExceptCatch {
+  ExceptCatch
+  {
     //printf("!");
     //fflush(stdout);
     /* Connection failed */
@@ -446,14 +481,18 @@ int HTTP_GetData(http_data_t data, char *buffer, int size) {
     data->addr = NULL;
     ExceptTry
     {
-      TcpClose(data->conn);
+      if (data->conn) {
+        TcpClose(data->conn);
+      }
     }
     ExceptCatch
     {
     }
     ExceptTry
     {
-      TcpDelete(data->conn);
+      if (data->conn) {
+        TcpDelete(data->conn);
+      }
     }
     ExceptCatch
     {
