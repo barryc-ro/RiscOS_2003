@@ -31,6 +31,7 @@ CC		= cc
 RM		= remove
 LD		= link
 WIPE		= -wipe
+SQZ		= squeeze
 
 CCFLAGS		= -c -depend !Depend -ffah -strict\
 		  -I$(INCLUDES) $(DFLAGS) $(THROWBACK) $(CCEXTRA)
@@ -39,6 +40,7 @@ CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
 WFLAGS		= ~CF~V
 LDFLAGS		= -c++
+SQZFLAGS	= -f
 
 
 
@@ -107,6 +109,7 @@ clean:
 
 $(TARGET): $(OBJS) $(LIBS) local_dirs
 	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+	${SQZ} ${SQZFLAGS} $@
 
 local_dirs:
 	$(MKDIR) o
