@@ -1,0 +1,493 @@
+/*
+ * hostdep.c - Host system dependent bits of the ARM linker.
+ * 
+ * Copyright (C) 1991 Advanced RISC Machines. All rights reserved.
+ */
+
+#include <stdio.h>
+#include "options.h"
+#include "hostdep.h"
+
+
+#ifdef LINKING_ON_UNIX
+
+extern int32 filesize(fname)
+char *fname;
+{   struct stat fileinfo;
+    if (stat(fname, &fileinfo)) return (int32)(-1);
+    return fileinfo.st_size;
+}
+
+#ifdef TIME
+extern int32 cs_wall_clock(void)
+{   /* Return centi-second timer value */
+    /* NOT YET IMPLEMENTED */
+    return 0;
+}
+#endif /* TIME */
+
+#endif /* LINKING_ON_UNIX */
+
+#ifdef __riscos
+
+#include <string.h>
+#include "kernel.h"
+
+#define FILEFOUND 1
+#define READATTR  5
+#define OSFILE_CREATE 7
+#define OSFILE_CREATEDIR 8
+#define OSFILE_DELETE 6
+#define OSFILE_SETTYPE 18
+
+#define OSGBPB_FAILED -2
+#define OSGBPB_READ 4
+
+#define OSFIND_OPEN (64 + 0)
+#define OSFIND_OPENOUT (192 + 0)
+#define OSFIND_CLOSE 0
+
+#define OSARGS_WRITESEQPTR 1
+
+#define OSWORD_READSYSCLOCK 1
+
+struct osfile_block
+{
+    int32 load, exec;
+    int32 start, end;
+};
+
+static struct osgbpb_parms {
+    char *data;
+    int32 nentries;
+    int32 start;
+    int32 len;
+    char *pattern;
+} dir_search_rec;
+
+static char *dir_search_path;
+static int32 dir_gotfile;
+
+
+extern int32 filesize(char *fname)
+{   _kernel_osfile_block fileinfo;
+    if (_kernel_osfile(READATTR, fname, &fileinfo) != FILEFOUND)
+        return (int32)(-1);
+    return fileinfo.start;
+}
+
+extern int close(int fd)
+{   if (fd > 0) _kernel_osfind(OSFIND_CLOSE, (char *)fd);
+    return 0;
+}
+
+extern int open(char *file, int flags)
+{   int fd;
+    if (flags == BINARY_OPEN_MODE)
+    {   fd = _kernel_osfind(OSFIND_OPEN, file);
+        if (fd <= 0) fd = -1;
+    }    
+    else
+        fd = -1;
+    return fd;
+}
+
+extern int mkdir(char *name, int mode)
+{   struct osfile_block b;
+    mode = mode;
+    b.start = 0;
+    return _kernel_osfile(OSFILE_CREATEDIR, name, (_kernel_osfile_block *)&b);
+}
+
+extern int32 lseek(int fd, int32 offset, int whence)
+{   int32 result;
+    if (whence != L_SET) return -1;    /* no can do */
+    result = _kernel_osargs(OSARGS_WRITESEQPTR, fd, offset);
+    if (result < 0) result = -1;
+    return result;
+}
+
+extern int32 read(int fd, char *buff, int32 n)
+{
+    struct osgbpb_parms p;
+    p.data = buff;
+    p.nentries = n;
+    if (_kernel_osgbpb(OSGBPB_READ, fd, (_kernel_osgbpb_block *)&p) != OSGBPB_FAILED)
+        return n - p.nentries;
+    return -1;
+}
+
+extern void settype(char *file, int ftype)
+{   _kernel_osfile_block fileinfo;
+    fileinfo.load = ftype;
+    _kernel_osfile(OSFILE_SETTYPE, file, &fileinfo);
+}
+
+extern void startdirsearch(char *arg)
+{
+    static char name[MAXNAMELEN], searchbuf[MAXNAMELEN], path[MAXPATHLEN];
+    char c, *cp;
+    char *root, *extn;
+
+    strcpy(path, arg);
+    extn = root = cp = path;
+    while ((c = *cp++) != 0) {               /* Find posn of extn (ie ".o") */
+        if (c == ':')                        /* And parent directory */
+            extn = root = cp;
+        if (c == '.') {
+            root = extn;
+            extn = cp;
+        }
+    }
+    strcpy(name, extn);                 /* filename = extn by default */
+    if (root == extn)
+        *extn = '\0';                        /* parent = extn => no extn */
+    else
+        *(extn - 1) = '\0';
+    if ((*extn | 0x20) == 'o' && *(extn+1) == '\0') { /* extn = ".o"? */
+        strcpy(name, root);                /* name becomes 'parent' directory */
+        strcpy(root, extn);                /* add ".o" to dir path */
+    }
+    dir_search_path = path;
+    dir_search_rec.data = searchbuf;
+    dir_search_rec.start = 0;
+    dir_search_rec.len = MAXNAMELEN;
+    dir_search_rec.pattern = name;
+    dir_gotfile = 0;
+}
+
+extern char *getwildcard(int *err)
+{
+    static char fnamebuff[MAXPATHLEN];
+    char *cp;
+
+    *err = 0;
+    cp = dir_search_rec.pattern;
+    while (*cp)
+    {   if (*cp == '*' || *cp == '#') break;
+        cp++;
+    }
+    if (*cp)
+        do
+        {   dir_search_rec.nentries = 1;
+            if (_kernel_osgbpb(9, (int)dir_search_path, (_kernel_osgbpb_block *)&dir_search_rec)
+                                                        == OSGBPB_FAILED)
+            {   *err = 1;
+                return dir_search_path;
+            }
+            if (dir_search_rec.start < 0) return NULL;
+        }
+        while (!dir_search_rec.nentries);
+    else
+    {   strcpy(dir_search_rec.data, dir_search_rec.pattern);
+        if (dir_gotfile) return NULL;
+        dir_gotfile = 1;
+    }
+    strcpy(fnamebuff, dir_search_path);
+    if (*fnamebuff && *(fnamebuff + strlen(fnamebuff) -1) != ':')
+        strcat(fnamebuff, ".");
+    strcat(fnamebuff, dir_search_rec.data);
+    return fnamebuff;
+}
+
+#ifdef TIME
+extern int32 cs_wall_clock(void)
+{   int32 time[2];
+    /* Return centi-second timer value */
+    _kernel_osword(OSWORD_READSYSCLOCK, time);
+    return time[0];
+}
+#endif
+
+#endif /* __riscos */
+
+#ifdef LINKING_ON_MSDOS
+
+#ifdef TIME
+extern int32 cs_wall_clock(void)
+{   /* Return centi-second timer value */
+    /* NOT YET IMPLEMENTED */
+    return 0;
+}
+#endif /* TIME */
+
+#endif /* LINKING_ON_MSDOS */
+
+
+#ifndef __STDC__                 /* memcpy always present in ANSI */
+#  ifdef HOST_HAS_NO_MEMCPY
+void memcpy(p1, p2, n)
+char *p1;
+char *p2;
+int32 n;
+{
+    while (n--) *p1++ = *p2++;
+}
+#  endif
+#endif
+
+#ifdef LINKING_ON_MAC
+
+#include <Types.h>
+#include <Memory.h>
+#include <Files.h>
+#include <Strings.h>
+#include <stdlib.h>
+#include <Errors.h>
+
+extern int32 filesize(char *fname)
+{   ParamBlockRec    pb;
+    OSErr            err;
+
+    pb.fileParam.ioNamePtr = c2pstr(fname);
+    pb.fileParam.ioVRefNum = 0;
+    pb.fileParam.ioFVersNum = 0;
+    pb.fileParam.ioFDirIndex = 0;
+    err = PBGetFInfoSync(&pb);
+
+    p2cstr(fname);
+
+    return (err == noErr) ? pb.fileParam.ioFlLgLen : -1L;
+}
+
+extern int mkdir(char*, int)
+{
+    fprintf (stderr, "mkdir is not supported yet");
+    exit (1);
+    return -1;
+}
+
+#ifdef TIME
+extern int32 cs_wall_clock(void)
+{   /* Return centi-second timer value */
+    /* NOT YET IMPLEMENTED */
+    return 0;
+}
+#endif /* TIME */
+
+/*
+     File sections: ChunkList.c, TrackedMemory.c
+     Contains:      Implementation of ChunkLists, Tracked NewHandle,
+                    DisposeHandle, malloc and free using temporary memory
+     Written by:    scott douglass
+     Copyright:     C 1992 by Apple Computer, Inc., all rights reserved.
+     Change History (most recent first):
+                     6/23/92     sad          started recreating
+*/
+
+#define CHUNKS_ARE_HANDLES 1
+
+#if CHUNKS_ARE_HANDLES
+typedef struct ListChunk** ListChunkPtr;
+#else
+typedef struct ListChunk* ListChunkPtr;
+#endif
+
+typedef ListChunkPtr ChunkList;
+
+typedef struct ChunkListIterator
+{   ListChunkPtr fChunk;
+#if CHUNKS_ARE_HANDLES
+    int fCurrentIndex;
+#else
+    void** fCurrentSlot;
+    void** fSlotLimit;
+#endif
+} ChunkListIterator;
+
+#if CHUNKS_ARE_HANDLES
+#  define DEREF(chunkptr) (*(chunkptr))
+#else
+#  define DEREF(chunkptr) (chunkptr)
+#endif
+
+enum { kNumSlots = 32 };
+
+typedef struct ListChunk
+{   ListChunkPtr fNext;
+    void* fSlots[kNumSlots];
+} ListChunk;
+
+
+static void SetupIteratorForNextChunk(ChunkListIterator* iter,
+        ListChunkPtr chunk)
+{
+    iter->fChunk = chunk;
+#if CHUNKS_ARE_HANDLES
+    iter->fCurrentIndex = 0;
+#else
+    if (chunk)
+    {   void** firstSlot = &DEREF(chunk)->fSlots[0];
+        iter->fCurrentSlot = firstSlot;
+        iter->fSlotLimit = firstSlot + kNumSlots;
+    }
+#endif
+}
+
+static void BeginChunkListIteration(ChunkListIterator* iter, ChunkList list)
+{   SetupIteratorForNextChunk(iter, list);
+}
+
+
+static void** NextSlot(ChunkListIterator* iter)
+        /* returns a pointer to the next void* */
+{
+    void** result = 0;
+    ListChunkPtr chunkptr = iter->fChunk;
+
+    if (chunkptr)
+    {   ListChunk* chunk = DEREF(chunkptr);
+#if CHUNKS_ARE_HANDLES
+        result = &chunk->fSlots[iter->fCurrentIndex++];
+        if (kNumSlots <= iter->fCurrentIndex)
+#else
+        result = iter->fCurrentSlot++;
+        if (iter->fSlotLimit <= iter->fCurrentSlot)
+#endif
+            SetupIteratorForNextChunk(iter, chunk->fNext);
+    }
+
+    return result;
+}
+
+
+static void EndChunkListIteration(ChunkListIterator*) {}
+
+
+static int Add(ChunkList* list, void* item)
+{   int result = 1;
+    void** slot;
+    ChunkListIterator iter;
+
+    BeginChunkListIteration(&iter, *list);
+    while ((slot = NextSlot(&iter)) != NULL) if (*slot == NULL) break;
+    EndChunkListIteration(&iter);
+
+    if (slot != NULL)
+        *slot = item;
+    else
+    {   /* Allocate a new chunk, all nils */
+#if CHUNKS_ARE_HANDLES
+        OSErr err;
+        ListChunkPtr newChunk =
+                (ListChunkPtr)TempNewHandle(sizeof(ListChunk), &err);
+#else
+        ListChunkPtr newChunk = (ListChunkPtr)calloc(1, sizeof(ListChunk));
+            /* ### relying on calloc to allocate all nils is, prehaps, sleezy */
+#endif
+        if (newChunk)
+        {   ListChunk* chunk = DEREF(newChunk);
+            chunk->fSlots[0] = item;
+#if CHUNKS_ARE_HANDLES
+            {   void** slot = &chunk->fSlots[1];
+                void** slotLimit = slot + kNumSlots - 1;
+
+                while (slot < slotLimit) *slot++ = 0;
+            }
+#endif
+            chunk->fNext = *list;
+            *list = newChunk;
+        }
+        else
+            result = 0;
+    }
+    return result;
+}
+
+
+static int Remove(ChunkList list, void* item)
+{   void** slot;
+    ChunkListIterator iter;
+
+    BeginChunkListIteration(&iter, list);
+    while ((slot = NextSlot(&iter)) != NULL) if (*slot == item) break;
+    EndChunkListIteration(&iter);
+
+    if (slot != NULL) *slot = NULL;
+
+    return (slot != NULL);
+}
+
+
+static void Destroy(ChunkList* list)
+{   ListChunkPtr chunk;
+    ListChunkPtr next = *list;
+
+    while ((chunk = next) != NULL)
+    {   next = DEREF(chunk)->fNext;
+#if CHUNKS_ARE_HANDLES
+        {   OSErr err;
+            TempDisposeHandle((Handle)chunk, &err);
+        }
+#else
+        free(chunk);
+#endif
+    }
+    *list = 0;
+}
+
+
+static ChunkList gTempHandles;
+
+static Handle TrackedNewHandle(Size size, OSErr* err)
+/* returns a pointer to a relocatable block of tracked memory */
+{
+    Handle h = TempNewHandle(size, err);
+    if (h == NULL)
+    {   h = NewHandle(size);
+        *err = MemError();
+    }
+
+    if (h != NULL)
+    {   if (Add(&gTempHandles, h) == 0)
+        {   DisposeHandle(h);                        // Add failed
+            *err = memFullErr;                       // a guess
+            h = 0;
+        }
+    }
+    return h;
+}
+
+static void TrackedDisposeHandle(Handle h, OSErr* err)
+/* frees a relocatable block of tracked memory */
+{   if (h != NULL)
+    {   Remove(gTempHandles, h);
+        DisposeHandle(h);
+        *err = MemError();
+    }
+}
+
+void* Tracked_malloc(size_t size)
+/* returns a pointer to a non-relocatable block of tracked memory */
+{   OSErr err;
+    void* result = 0;
+    Handle h = TrackedNewHandle(size, &err);
+
+    if (h != NULL)
+    {   HLock(h);
+        result = *h;
+    }
+    return result;
+}
+
+
+static void TrackedFreeAll(void)
+/* frees all the tracked memory */
+{   Handle* slot;
+    ChunkListIterator iter;
+
+    BeginChunkListIteration(&iter, gTempHandles);
+    while ((slot = (Handle*)NextSlot(&iter)) != NULL)
+        if (*slot != NULL)
+        {   OSErr err;
+            TempDisposeHandle(*slot, &err);
+        }
+    EndChunkListIteration(&iter);
+    Destroy(&gTempHandles);
+}
+
+void Tracked_init(void)
+{   atexit(TrackedFreeAll);
+}
+
+#endif /* LINKING_ON_MAC */

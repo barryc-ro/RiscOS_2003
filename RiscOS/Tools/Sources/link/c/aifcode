@@ -1,0 +1,133 @@
+/*
+  Title:     Acorn Image Format - Standard linker-appended code
+  Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+  $Revision$ 27-Nov-96
+*/
+
+#include "aif.h"
+#include "aifcode.h"
+
+static struct aif_hdr builtin_aif_header = {
+  AIF_NOOP,   /* compress_br */
+  AIF_NOOP,   /* reloc_br */
+  AIF_NOOP,   /* zinit_br */
+  AIF_NOOP,   /* entry_br */
+  OS_EXIT,    /* exit SWI in case of return from entry_br */
+  0, 0, 0, 0, /* ro, rw,dbg and zi sizes */
+  0,          /* dbgtype */
+  AIF_IMAGEBASE,
+  0,          /* workspace (link -rel -w only) */
+  0, 0, 0, 0, /* spare */
+  AIF_NOOP,   /* debug SWI */
+  {           /* Zero-Initialisation code    */
+  0xE04EC00F, /* SUB     ip, lr, pc  ; base+12+[PSR]-(ZeroInit+12+PSR]) */
+              /*                     ; = base-ZeroInit                  */
+  0xE08FC00C, /* ADD     ip, pc, ip  ; base-ZeroInit+ZeroInit+16        */
+              /*                     ; = base+16                        */
+  0xE99C000F, /* LDMIB   ip, {r0,r1,r2,r3} ; various sizes              */
+  0xE24CC010, /* SUB     ip, ip, #16 ; image base                       */
+  0xE59C2030, /* LDR     r2, [ip, #48] ; flags                          */
+  0xE3120C01, /* TST     r2, #256    ; separate data area?              */
+  0x159CC034, /* LDRNE   ip, [ip, #52] ; Yes, so get it...              */
+  0x008CC000, /* ADDEQ   ip, ip, r0  ; No, so add + RO size             */
+  0xE08CC001, /* ADD     ip, ip, r1  ; + RW size = base of 0-init area  */
+  0xE3A00000, /* MOV     r0, #0      */
+  0xE3530000, /* CMPS    r3, #0      */
+  0xD1A0F00E, /* 00 MOVLE   pc, lr   ; nothing left to do               */
+  0xE48C0004, /* STR     r0, [ip],#4 */
+  0xE2533004, /* SUBS    r3, r3, #4  */
+  0xEAFFFFFB  /* B       %B00        */
+  }
+};
+struct aif_hdr *aif_header = &builtin_aif_header;
+
+/*
+ * NOTE: This code MUST begin with a NOP and end with 2 relocatable addresses,
+ *       as the linker relies on it.
+ */
+static unsigned32 builtin_amf_reloc_code[] = {
+  /* For RISC OS modules, ip is the data word pointer so we use fp as an */
+  /* extra work register. An APCS stack hasn't been set up yet anyway.   */
+  /*               |__RelocCode|                 */
+  0xE1A00000, /*   NOP                           */
+  0xE59F1034, /*   LDR     r1, AMFRelocCode      */
+  0xE24FB010, /*   ADR     fp, __RelocCode       */
+  0xE28F0034, /*   ADR     r0, AMFRelocList      */
+  0xE05B1001, /*   SUBS    r1, fp, r1            */
+  0x01A0F00E, /*   MOVEQ   pc, lr                */
+  0xE59FB024, /*   LDR     fp, AMFImageBase      */
+  0xE08BB001, /*   ADD     fp, fp, r1            */
+  /*               AMFRelocLoop                  */
+  0xE4902004, /*   LDR     r2, [r0], #4          */
+  0xE1B02142, /*   MOVS    r2, r2, ASR #2        */
+  0x428F0018, /*   ADRMI   r0, AMFRelocList      */
+  0x41A0F00E, /*   MOVMI   pc, lr                */
+  0xE79B3102, /*   LDR     r3, [fp, r2, LSL #2]  */
+  0xE0833001, /*   ADD     r3, r3, r1            */
+  0xE78B3102, /*   STR     r3, [fp, r2, LSL #2]  */
+  0xEAFFFFF7, /*   B       AMFRelocLoop          */
+  /*               AMFRelocCode                  */
+  0x00000000, /*   DCD     |__RelocCode|         */
+  /*               AMFImageBase                  */
+  0x00000000  /*   DCD     |Image$$RO$$Base|     */
+  /*               AMFRelocList                  */
+};
+unsigned32 *amf_reloc_code = builtin_amf_reloc_code;
+int amf_reloc_code_size = (sizeof(builtin_amf_reloc_code));
+
+static unsigned32 builtin_aif_reloc_code[] = {
+              /* AIFRelocCode                                            */
+  0xE1A00000, /*     NOP                 ; MUST start NOP                */
+  0xE04EC00F, /*     SUB     ip, lr, pc  ; base+8+[PSR]-(Reloc+12+[PSR]) */
+              /*                         ; = base-Reloc-4                */
+  0xE08FC00C, /*     ADD     ip, pc, ip  ; base-Reloc-4+Reloc+16         */
+              /*                         ; = base+12                     */
+  0xE24CC00C, /*     SUB     ip, ip, #12 ; base                          */
+  0xE51F0018, /*     LDR     r0, AIFRelocCode ; NOP                      */
+  0xE58C0004, /*     STR     r0, [ip, #4] ; BL AIFRelocCode -> NOP       */
+  0xE59C902C, /*     LDR     r9, [ip, #&2c] ; [base +&2c] == workspace   */
+  0xE3590000, /*     CMPS    r9, #0                                      */
+  0x0A000018, /*     BEQ     AIFRelocateOnly ; not self-moving           */
+  0xE59C0020, /*     LDR     r0, [ip, #&20] ; ZISize                     */
+  0xE0899000, /*     ADD     r9, r9, r0  ; workspace + ZISize            */
+  0xEF000010, /*     SWI     &10         ; memlimit -> r1                */
+  0xE28F2080, /*     ADR     r2, AIFEnd  ; reloc table follows           */
+  0xE4920004, /* 01  LDR     r0, [r2], #4                                */
+  0xE3700001, /*     CMNS    r0, #1      ; marked at end by -1           */
+  0x1AFFFFFC, /*     BNE     %B01                                        */
+  0xE0413009, /*     SUB     r3, r1, r9  ; new end of image              */
+  0xE0530002, /*     SUBS    r0, r3, r2  ; see if below AIFEnd...        */
+  0xDA00000E, /*     BLE     AIFRelocateOnly                             */
+  0xE3C0000F, /*     BIC     r0, r0, #15 ; the displacement up memory    */
+  0xE0823000, /*     ADD     r3, r2, r0  ; the new end of image...       */
+  0xE24F8004, /*     ADR     r8, %F02                                    */
+  0xE93200F0, /* 02  LDMDB   r2!, {r4-r7} ; copy up, 16 bytes at a time  */
+  0xE92300F0, /*     STMDB   r3!, {r4-r7} ; in descending address order  */
+  0xE1520008, /*     CMP     r2, r8      ; until copied label 01         */
+  0xCAFFFFFB, /*     BGT     %B02                                        */
+  0xE08F4000, /*     ADD     r4, pc, r0  ; and jump to copied version    */
+  0xE1A0F004, /*     MOV     pc, r4                                      */
+  0xE93200F0, /* 03  LDMDB   r2!, {r4-r7}                                */
+  0xE92300F0, /*     STMDB   r3!, {r4-r7}                                */
+  0xE152000C, /*     CMP     r2, ip                                      */
+  0xCAFFFFFB, /*     BGT     %B03                                        */
+  0xE08CC000, /*     ADD     ip, ip, r0  ; moved header                  */
+  0xE08EE000, /*     ADD     lr, lr, r0  ; moved return address          */
+              /* AIFRelocateOnly                                         */
+  0xE59C1028, /*     LDR     r1, [ip, #&28] ; imagebase                  */
+  0xE05C1001, /*     SUBS    r1, ip, r1  ; base - imagebase == reloc off */
+  0x01A0F00E, /*     MOVEQ   pc, lr      ; already there                 */
+  0xE58CC028, /*     STR     ip, [ip, #&28] ; new imagebase              */
+  0xE28F2018, /*     ADR     r2, AIFEnd                                  */
+  0xE4920004, /* 04  LDR     r0, [r2], #4 ; get the offset               */
+  0xE3700001, /*     CMNS    r0, #1      ; finished?                     */
+  0x01A0F00E, /*     MOVEQ   pc, lr      ; yes, return                   */
+  0xE79C3000, /*     LDR     r3, [ip, r0] ; load word to be relocated    */
+  0xE0833001, /*     ADD     r3, r3, r1  ; relocate it                   */
+  0xE78C3000, /*     STR     r3, [ip, r0] ; and store it back            */
+  0xEAFFFFF8  /*     B       %B04                                        */
+              /* AIFEnd                                                  */
+};
+unsigned32 *aif_reloc_code = builtin_aif_reloc_code;
+int aif_reloc_code_size = (sizeof(builtin_aif_reloc_code));
+
