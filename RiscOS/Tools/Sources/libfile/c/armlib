@@ -1,0 +1,1135 @@
+/*
+ * armlib - AOF Librarian.
+ * Copyright (C) 1991, 1992 Advanced RISC Machines Ltd. All rights reserved.
+ */
+
+/*
+ * RCS $Revision$
+ * Checkin $Date$
+ * Revising $Author$
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <ctype.h>
+#ifdef __STDC__
+#  include <stdarg.h>
+#  include <stdlib.h>
+#  ifdef __GNUC__
+#    include <unistd.h>
+#  endif
+#else
+#  include <varargs.h>
+#  define SEEK_SET  0
+#  define SEEK_END  2
+extern char *malloc();
+#endif
+
+#ifdef __acorn
+#include "kernel.h"
+#include "swis.h"
+#endif
+
+#include "chunkfmt.h"
+#include "libflfmt.h"
+#include "aof.h"
+#include "bytesex.h"
+#include "prgname.h"
+
+#ifdef unix
+#  ifndef __unix
+#    define __unix 1
+#  endif
+#endif
+
+#define WILD_FILENAMES 1
+#ifdef __riscos
+#ifdef __acorn
+#include "kernel.h"
+#define __riscos_osgbpb_block _kernel_osgbpb_block
+#define __riscos_osgbpb(a,b,c) _kernel_osgbpb(a,b,c)
+#else
+#  include "riscos.h"
+#endif
+#  define WILDCH  '#'
+#else
+#  define WILDCH  '?'
+#endif
+
+#ifdef MSDOS
+#  include <io.h>
+#  undef WILD_FILENAMES
+#endif
+
+#define SELF  "AOF Librarian"
+#define VSN   "5.00"
+
+#ifndef __DATE__
+#  include "datenow.h"
+#endif
+
+#define CREATE_FN    1
+#define EXTRACT_FN   2
+#define DELETE_FN    3
+#define INSERT_FN    4
+
+#define LOC(p, n)    ((char *)(p) + (n))
+#define RUP(n)       (((n) + 3) & ~3)
+
+#define hv(v)        (bytesex_hostval(v))        /* host value... */
+#define tv(v)        (bytesex_hostval(v))        /* target value... */
+
+#define LIB_TIME_SIZE     sizeof(lib_timestamp)
+#define LIB_VRSN_SIZE     sizeof(int32)
+#define CF_HEADER_SIZE    (3 * sizeof(int32))
+#define DIRY_ENTRY_SIZE   (3 * sizeof(int32))
+
+typedef lib_timestamp TS;
+static TS prog_start;
+
+static struct aentry {
+    struct aentry *next;
+    char name[1];
+} *argumentlist, *argumentlistq;
+
+static struct mentry {
+    struct mentry *next;
+    char *location;
+    int32 size;
+    TS *time;
+    char name[1];
+} *memberlist, *memberlistq;
+
+struct ofl_frag {
+    int32 len;
+    char *fragment;
+};
+
+static char myname[32];
+static char **file_ptr_array;
+static int32 *lib_vrsn_buff;
+static TS *lib_time_buff, *ofl_time_buff;
+static char *ofl_symt_buff;
+
+#ifdef __acorn
+static char *csd;
+#endif
+static char *libfile, *lib_buff, *diry_buff;
+static int hassymboltab, wantssymboltab, list, symlist, fn;
+static int32 lib_size, lib_strsize, cf_magic;
+static int members;
+static cf_header *lib_header;
+
+static cf_entry *lib_diry, *lib_time, *lib_vrsn, *ofl_time, *ofl_symt;
+
+/*
+ * The following function determines the byte-sex of the output as a side-
+ * effect. This leads to some delicate sequencing constraints in mklib().
+ * Note that is_cf_magic() may remain undecided (cf_magic == 0) if never
+ * called with a valid magic number. In this case, the sex of the library
+ * set to the sex of the host, just before it is created.
+ */
+static int is_cf_magic(int32 magic)
+{   if (cf_magic == 0)
+    {   if (magic == CF_MAGIC)
+        {   cf_magic = magic;
+            return 1;
+        }
+        bytesex_reverse(1);
+        if (hv(magic) == CF_MAGIC)
+        {   cf_magic = magic;
+            prog_start.msw = tv(prog_start.msw);
+            prog_start.lsw = tv(prog_start.lsw);
+            return 1;
+        }
+        bytesex_reverse(0);
+        return 0;
+    }
+    return magic == cf_magic;
+}
+
+#ifndef __STDC__
+static void memcpy(char *a, char *b, int n)
+{
+    int32 *wa, *wb;
+    char *ca, *cb;
+
+    if ((((int)a | (int)b) & 3 == 0))
+    {   wa = (int32 *) a;  wb = (int32 *) b;
+        while (n >= 4) {*wa++ = *wb++;  n -= 4;}
+    }
+    ca = a;  cb = b;
+    while (n--) *ca++ = *cb++;
+}
+#endif
+
+static int match(char *pat, char *str)
+{   /* return 0 if matched, non-0 otherwise */
+    for (;;)
+    {   if (*pat=='*')
+        {   int t;
+            while (*++pat == '*');
+            for (; *str != 0;  ++str)
+                if ((t = match(pat, str)) == 0) return 0;
+        }
+        if (*str == '\0') return *pat;
+        if (*pat != WILDCH && (*pat | 0x20) != (*str | 0x20)) return 1;
+        pat++;
+        str++;
+    }
+}
+
+static cf_entry *findchunk(cf_header *cfhdr, char *key)
+{   struct cf_entry *entry, *hdrend;
+
+    entry = cfhdr->cf_chunks;
+    for (hdrend = entry + hv(cfhdr->cf_maxchunks);  entry < hdrend;  ++entry)
+        if (entry->cfe_offset != 0 &&
+            strncmp(entry->cfe_key, key, sizeof(entry->cfe_key)) == 0)
+            return entry;
+    return NULL;
+}
+
+#define CSEC_DIFFL  1855547904
+#define CSEC_DIFFH          51
+
+static char *time_to_str(TS *ts, char *buff)
+{
+    unsigned32 tim[2], lsw = hv(ts->lsw), msw = hv(ts->msw);
+    time_t clock;
+
+    if (lib_vrsn == NULL || ts == NULL)
+        return strcpy(buff, "<unset date>");
+    tim[0] = (lsw >> 16) | (msw << 16);
+    tim[1] = msw >> 16;
+
+    if (tim[0] < CSEC_DIFFL) tim[1] -= 1;
+    tim[0] -= CSEC_DIFFL;
+    tim[1] -= CSEC_DIFFH;
+    clock = 0;
+    while (tim[1])
+    {   if (tim[0] < 0xEE6B2800) tim[1] -= 1;     /* 4 * 10^9 */
+        tim[0] -= 0xEE6B2800;                     /* 4 * 10^9 */
+        clock += (time_t) 0x2625A00;              /* 4 * 10^7 */
+    }
+    clock += (time_t) (tim[0] / 100);
+    strcpy(buff, ctime(&clock));
+    *(buff + strlen(buff) - 1) = '\0';            /* kill \n */
+    return buff;
+}
+
+#ifdef __riscos
+extern int _vfprintf(FILE *, char *, va_list);
+#endif
+
+static void error(char *fmt, ...)
+{   va_list ap;
+    int severity = *fmt++;
+
+    fprintf(stderr, "%s: ", SELF);
+    if (severity == '1')
+        fprintf(stderr, "(Warning) ");
+    else if (severity == '2')
+        fprintf(stderr, " (Error)  ");
+    else if (severity > '2')
+        fprintf(stderr, " (Fatal)  ");
+    va_start(ap, fmt);
+#ifdef __riscos
+    _vfprintf(stderr, fmt, ap);
+#else
+    vfprintf(stderr, fmt, ap);
+#endif
+    fprintf(stderr, "\n");
+    va_end(ap);
+    if (severity > '1') exit(1);
+}
+
+static char *halloc(int32 n)
+{   char *r;
+    if ((int32)(size_t)n != n) error("3Memory request %lu too big.", n);
+    if (n <= 0) error("2Zero or negative memory request %ld.", n);
+    r = (char *)malloc((size_t)n);
+    if (r == NULL) error("3Out of memory.");
+    memset(r, 0, (size_t)n);
+    return r;
+}
+
+static void munge_filename(char *s)
+{
+#ifdef __riscos
+    char *extn, *root, c;
+
+    extn = root = s;
+    while ((c = *s++)!= 0)
+    {   if (c == ':')  extn = root = s;
+        if (c == '.')
+        {   root = extn;
+            extn = s;
+        }
+    }
+    if (root != extn && (*extn | 0x20) == 'o' && !*(extn + 1))
+    {   extn--; s--;
+        do {*--s = *--extn;} while (extn > root);
+        *root = 'o';
+        *(root + 1) = '.';
+    }
+#endif
+}
+
+static void readlib(void)
+{   cf_header *cfh;
+    int32 size, maxchunks;
+    int32 headsize, module_offset, module_size;
+    FILE *fp;
+    lib_direntry *diry, *diryend;
+    int i;
+
+    if ((fp = fopen(libfile,"rb")) == NULL)
+        error("2Unable to open library %s.", libfile);
+    cfh = (cf_header *) halloc((int32)sizeof(cf_header));
+    if (fread((char *)cfh, sizeof(cf_header) - sizeof(cf_entry), 1, fp) != 1)
+        goto cantread;
+    if (!is_cf_magic(cfh->cf_magic) ||
+        hv(cfh->cf_numchunks) > hv(cfh->cf_maxchunks)) goto notalib;
+    fseek(fp, 0L, SEEK_SET);
+    maxchunks = hv(cfh->cf_maxchunks);
+    headsize = (3 + 4*maxchunks) * sizeof(int32);
+    lib_buff = halloc(headsize);
+    if (fread(lib_buff, (size_t)headsize, 1, fp) != 1)
+        goto cantread;
+    file_ptr_array = (char **)halloc((maxchunks + 1) * sizeof(char *));
+    for (i = 0; i <= maxchunks; i++) file_ptr_array[i] = NULL;
+    lib_header = cfh = (cf_header *) lib_buff;
+    if ((lib_diry = findchunk(cfh, "LIB_DIRY")) == NULL) goto notalib;
+    ofl_symt = findchunk(cfh, "OFL_SYMT");
+    if (ofl_symt != NULL && ofl_symt->cfe_size != 0)
+    {   hassymboltab = 1;
+        ofl_symt_buff = halloc(hv(ofl_symt->cfe_size));
+        fseek(fp, hv(ofl_symt->cfe_offset), SEEK_SET);
+        if (fread(ofl_symt_buff, (size_t)hv(ofl_symt->cfe_size), 1, fp) != 1)
+            goto cantread;
+    }
+    if (hassymboltab || list || symlist)
+    {   lib_vrsn = findchunk(cfh, "LIB_VRSN");
+        lib_vrsn_buff = (int32 *)halloc((int32)LIB_VRSN_SIZE);
+        fseek(fp, hv(lib_vrsn->cfe_offset), SEEK_SET);
+        if (fread(lib_vrsn_buff, LIB_VRSN_SIZE, 1, fp) != 1) goto cantread;
+        lib_time = findchunk(cfh, "LIB_TIME");
+        lib_time_buff = (TS *)halloc((int32)LIB_TIME_SIZE);
+        fseek(fp, hv(lib_time->cfe_offset), SEEK_SET);
+        if (fread(lib_time_buff, LIB_TIME_SIZE, 1, fp) != 1) goto cantread;
+        ofl_time = findchunk(cfh, "OFL_TIME");
+        if (ofl_time != NULL)
+        {   ofl_time_buff = (TS *)halloc((int32)LIB_TIME_SIZE);
+            fseek(fp, hv(ofl_time->cfe_offset), SEEK_SET);
+            if (fread(ofl_time_buff, LIB_TIME_SIZE, 1, fp) != 1) goto cantread;
+        }
+    }
+    if (hv(lib_diry->cfe_size) != 0)
+    {   diry_buff = halloc((int32)hv(lib_diry->cfe_size));
+        fseek(fp, hv(lib_diry->cfe_offset), SEEK_SET);
+        if (fread(diry_buff, (size_t)hv(lib_diry->cfe_size), 1, fp) != 1)
+            goto cantread;
+        diry = (lib_direntry *) diry_buff;
+        for (diryend = (lib_direntry *) LOC(diry, hv(lib_diry->cfe_size));
+            diry < diryend;
+            diry = (lib_direntry *) LOC(diry, hv(diry->lib_entrylength)))
+        {
+            module_offset =
+                hv(cfh->cf_chunks[hv(diry->lib_chunkidx)].cfe_offset);
+            module_size = hv(cfh->cf_chunks[hv(diry->lib_chunkidx)].cfe_size);
+            file_ptr_array[hv(diry->lib_chunkidx)] = halloc(module_size);
+            fseek(fp, module_offset, SEEK_SET);
+            if (fread(file_ptr_array[hv(diry->lib_chunkidx)],
+                (size_t)module_size, 1, fp) != 1) goto cantread;
+        }
+    }
+    fclose(fp);
+    return;
+notalib:
+    error("2%s is not a library file.", libfile);
+    return;
+cantread:
+    error("2Unable to read %s.", libfile);
+    return;
+}
+
+static void add_member(char *name, char *loc, int32 size, TS *t)
+{
+    struct mentry *mep;
+    int l;
+
+    members++;
+    lib_size += RUP(size);;
+    lib_strsize += (l = RUP(strlen(name)+1));
+    mep = (struct mentry *) halloc(sizeof(struct mentry) + (int32)l);
+    strcpy(mep->name, name);
+    mep->time = t;
+    mep->location = loc;
+    mep->size = size;
+    mep->next = NULL;
+    if (memberlistq != NULL)
+        memberlistq->next = mep;
+    else
+        memberlist = mep;
+    memberlistq = mep;
+}
+
+static void expand_member_list(void)
+{
+    struct aentry *aep;
+    lib_direntry *diry, *diryend;
+    cf_header *cfh;
+    int gotmatch;
+
+    cfh = lib_header;
+    aep = argumentlist;
+    while (aep)
+    {   munge_filename(aep->name);
+        gotmatch = 0;
+        if (lib_diry == NULL) error("2No match for %s.", aep->name);
+        diry = (lib_direntry *) diry_buff;
+        for (diryend = (lib_direntry *) LOC(diry, hv(lib_diry->cfe_size));
+            diry < diryend;
+            diry = (lib_direntry *) LOC(diry, hv(diry->lib_entrylength)))
+        {
+            if (diry->lib_chunkidx != 0 &&
+                !match(aep->name, diry->lib_entry))
+            {   gotmatch = 1;
+                if (fn != DELETE_FN)
+add_member(diry->lib_entry,
+    file_ptr_array[hv(diry->lib_chunkidx)],
+    hv(cfh->cf_chunks[hv(diry->lib_chunkidx)].cfe_size),
+    (TS *) LOC(diry->lib_entry, RUP(strlen(diry->lib_entry)+1)));
+                diry->lib_chunkidx = 0;
+            }
+        }
+        if (!gotmatch) error("2No match for %s.", aep->name);
+        aep = aep->next;
+    }
+}
+
+static void expand_file_list(void)
+{
+#ifndef __riscos
+    struct aentry *aep;
+
+    for (aep = argumentlist;  aep != NULL;  aep = aep->next)
+    {
+        FILE *fp = fopen(aep->name, "rb");
+        if(fp != NULL)
+        {
+            lib_direntry *diry, *diryend;
+            int32 size;
+
+            /* ANSI says that seek in a binary file is undefined... */
+            fseek(fp, 0L, SEEK_END);
+            size = ftell(fp);
+            fclose(fp);
+
+            add_member(aep->name, 0, size, &prog_start);
+            if (lib_diry == NULL) continue;
+            diry = (lib_direntry *) diry_buff;
+            for (diryend = (lib_direntry *) LOC(diry, hv(lib_diry->cfe_size));
+                 diry < diryend;
+                 diry = (lib_direntry *) LOC(diry, hv(diry->lib_entrylength)))
+            {
+                if (diry->lib_chunkidx != 0 &&
+                    !match(aep->name, diry->lib_entry))
+                    diry->lib_chunkidx = 0;
+            }
+        }
+        else
+            error("2Can't find file %s.", aep->name);
+    }
+
+#else
+
+#define MAXFNAMELEN 128
+#define DIR_SEARCH 9
+
+    struct aentry *aep;
+    char searchbuff[MAXFNAMELEN], name[MAXFNAMELEN], pattern[MAXFNAMELEN];
+    char *s, *root, *extn, c;
+    int gotfile;
+    __riscos_osgbpb_block sr;
+    lib_direntry *diry, *diryend;
+    FILE *fp;
+    int32 size;
+
+    for (aep = argumentlist;  aep != NULL;  aep = aep->next)
+    {   munge_filename(aep->name);
+        root = extn = s = aep->name;
+        while ((c = *s++) != 0)
+        {   if (c == ':') extn = root = s;
+            if (c == '.')
+            {   root = extn;
+                extn = s;
+            }
+        }
+        strcpy(sr.wild_fld = pattern, extn);
+        if (root == extn)
+            *extn = 0;
+        else
+            extn[-1] = 0;
+        sr.dataptr = searchbuff;
+        sr.fileptr = 0;
+        sr.buf_len = MAXFNAMELEN;
+        gotfile = 0;
+        do {
+            s = sr.wild_fld;
+            while (*s) {
+                if (*s == '*' || *s == '#')
+                    break;
+                s++;
+            }
+            if (*s)
+                do {
+                    sr.nbytes = 1;
+                    __riscos_osgbpb(DIR_SEARCH, (unsigned)aep->name, &sr);
+                    if (sr.fileptr < 0) break;
+                }
+                while (sr.nbytes == 0);
+            else
+                if (gotfile)
+                    sr.fileptr = -1;
+                else
+                    strcpy((char *)sr.dataptr, sr.wild_fld);
+            if (sr.fileptr >= 0)
+            {   strcpy(name, aep->name);
+                if (name[0] && name[strlen(name) - 1] != ':')
+                    strcat(name, ".");
+                strcat(name, (char *)sr.dataptr);
+
+                fp = fopen(name, "rb");
+                if(fp != NULL)
+                {
+                    /* ANSI says that seek in a binary file is undefined... */
+                    fseek(fp, 0L, SEEK_END);
+                    size = ftell(fp);
+                    fclose(fp);
+
+                    add_member(name, 0, size, &prog_start);
+                    if (lib_diry != NULL)
+                        for (
+diry = (lib_direntry *) diry_buff,
+diryend = (lib_direntry *)((char *) diry + hv(lib_diry->cfe_size));
+                          diry < diryend;
+diry = (lib_direntry *)((char *) diry + hv(diry->lib_entrylength)))
+                            if (diry->lib_chunkidx != 0 &&
+                                !match(name, diry->lib_entry))
+                                diry->lib_chunkidx = 0;
+                }
+                else
+                    error("2Can't find file %s.", name);
+                gotfile = 1;
+            }
+        }
+        while (sr.fileptr >= 0);
+        if (!gotfile) error("2No match for %s.", pattern);
+    }
+#endif
+}
+
+static void merge_diry(void)
+{
+    lib_direntry *diry, *diryend;
+    cf_header *cfh;
+
+    if (lib_diry == NULL) return;
+
+    cfh = lib_header;
+    diry = (lib_direntry *) diry_buff;
+    for (diryend = (lib_direntry *) LOC(diry, hv(lib_diry->cfe_size));
+         diry < diryend;
+         diry = (lib_direntry *) LOC(diry, hv(diry->lib_entrylength)))
+    {
+        if (diry->lib_chunkidx != 0)
+add_member(diry->lib_entry,
+    file_ptr_array[hv(diry->lib_chunkidx)],
+    hv(cfh->cf_chunks[hv(diry->lib_chunkidx)].cfe_size),
+    (TS *) LOC(diry->lib_entry, RUP(strlen(diry->lib_entry)+1)));
+    }
+}
+
+#ifdef __acorn
+static void create_dir (char *name)
+{
+    _kernel_swi_regs regs;
+
+    regs.r[0] = 8;  /* create dir */
+    regs.r[1] = (int)name;
+    regs.r[4] = 0;
+    _kernel_swi (OS_File, &regs, &regs);
+}
+#endif
+
+static void extract_files(void)
+{   struct mentry *mep;
+
+#ifdef __acorn
+     char cmd [256];
+     if (csd)
+     {
+        char new_csd[256];
+        create_dir (csd);
+        sprintf(new_csd, "%s.o", csd);
+        create_dir (new_csd);
+        sprintf (cmd, "*prefix %s", csd);
+        system (cmd);
+        csd = NULL;
+     }
+#endif
+    for (mep = memberlist;  mep != NULL;  mep = mep->next)
+    {
+        /* was wf_save(mep->name, mep->location, mep->size); */
+        FILE *fp = fopen(mep->name, "wb");
+        if (fp == NULL)
+            error("2Unable to open file %s.", mep->name);
+        else
+        {
+            if (fwrite(mep->location, mep->size, 1, fp) != 1)
+                error("2Unable to write file %s.", mep->name);
+            fclose(fp);
+        }
+    }
+}
+
+static cf_entry *addchunk(cf_entry *ch, char *t, int32 offset, int32 size)
+{
+    strncpy(ch->cfe_key, t, sizeof(ch->cfe_key));
+    ch->cfe_offset = tv(offset);
+    ch->cfe_size = tv(size);
+    return ch;
+}
+
+static void mk_lib(void)
+{
+    int32 ch_offset, out_size, diry_size, idx, l, t_len, symt_len = 0;
+    int chunks, count = 0;
+    cf_header *cfh, *mcfh;
+    cf_entry *ch;
+    char *out_buff;
+    struct mentry *mep;
+    lib_direntry *diry;
+    FILE *fp;
+    struct ofl_frag *ofl_array = NULL;
+
+    if (members != 0)
+        ofl_array = (struct ofl_frag *)
+            halloc((int32)members * sizeof(struct ofl_frag));
+
+    chunks = members + 3;
+    if (wantssymboltab) chunks += 2;
+    diry_size = lib_strsize + (int32)members * (DIRY_ENTRY_SIZE+LIB_TIME_SIZE);
+    ch_offset = (int32)chunks * sizeof(cf_entry) +
+        CF_HEADER_SIZE + LIB_TIME_SIZE + LIB_VRSN_SIZE;
+    out_size = ch_offset + diry_size;
+    lib_header = cfh = (cf_header *)
+        (lib_buff = out_buff = halloc(out_size + LIB_TIME_SIZE));
+    diry = (lib_direntry *) (out_buff + ch_offset);
+    ch_offset += diry_size;
+
+    fp = fopen(libfile,"wb");
+    if (fp == NULL) error("2Unable to open file %s.", libfile);
+    if ((int32)fwrite(out_buff, 1, (size_t)ch_offset, fp) != ch_offset)
+        error("2Error writing file %s.", libfile);
+
+    idx = 3;
+    ch = &(cfh->cf_chunks[idx]);
+
+    for (mep = memberlist;  mep != NULL;  ++idx, mep = mep->next)
+    {
+        if (mep->location == NULL)
+        {
+            /* file specified on command-line needs to be loaded now */
+            if (mep->size != 0)
+            {
+                FILE *fp = fopen(mep->name, "rb");
+                mep->location = halloc ((int32)mep->size);
+             
+                /* was wf_load(mep->name, mep->location, mep->size); */
+                if (fp == NULL)
+                    error("2Unable to open file %s.");
+                else
+                {
+                    if (fread(mep->location, mep->size, 1, fp) != 1)
+                        error("2Unable to read file %s.");
+                    fclose(fp);
+                }
+            }
+        }
+
+        if ((int32)fwrite(mep->location, 1, (size_t)mep->size, fp) != mep->size)
+            error("2Error writing file %s.",libfile);
+
+        mcfh = (cf_header *)mep->location;
+        (void)is_cf_magic(mcfh->cf_magic);
+        addchunk(ch++, "LIB_DATA", ch_offset, mep->size);
+        ch_offset += mep->size;
+        while ((ch_offset & 3L) != 0)
+        {   if (fwrite("\0", 1, 1, fp) != 1)
+                error("2Error writing file %s.", libfile);
+            ch_offset++;
+        }
+        diry->lib_chunkidx = tv(idx);
+        l = RUP(strlen(mep->name)+1L);
+        diry->lib_datalength = tv(l + LIB_TIME_SIZE);
+        diry->lib_entrylength = tv(l + LIB_TIME_SIZE + DIRY_ENTRY_SIZE);
+        strncpy(diry->lib_entry, mep->name, (size_t)l);
+        diry = (lib_direntry *) ((char *) diry + hv(diry->lib_entrylength));
+        *(TS *) ((char *) diry - sizeof(TS)) = *(mep->time);
+
+        if (wantssymboltab)
+        {   cf_entry *ce;
+            aof_header *aofhdr;
+            aof_symbol *aofsymt, *syend, *t_aofsymt;
+            char *strt;
+            lib_direntry *oe;
+            int32 nsyms;
+
+            if (mep->size < sizeof(cf_header) ||
+                mcfh->cf_magic != cf_magic    ||
+                hv(mcfh->cf_numchunks) > hv(mcfh->cf_maxchunks) ||
+                (ce = findchunk(mcfh, OBJ_HEAD)) == NULL)
+            {   error("2Bad library member %s.", mep->name);
+                goto nosymt;
+            }
+            aofhdr = (aof_header *) LOC(mcfh, hv(ce->cfe_offset));
+
+            if ((ce = findchunk(mcfh, OBJ_SYMT)) == NULL)
+            {   error("1No symbol table in %s.", mep->name);
+                goto nosymt;
+            }
+            aofsymt = (aof_symbol *) LOC(mcfh, hv(ce->cfe_offset));
+
+            if ((ce = findchunk(mcfh, OBJ_STRT)) == NULL)
+            {   error("2No string table in %s.", mep->name);
+                goto nosymt;
+            }
+            strt = LOC(mcfh, hv(ce->cfe_offset));
+
+            nsyms = hv(aofhdr->aof_nsyms);
+            syend = aofsymt+nsyms;
+            t_len = 0;
+            for (t_aofsymt = aofsymt;  t_aofsymt < syend;  t_aofsymt++)
+            {   if ((hv(t_aofsymt->sym_AT) & SYM_REFDEFMASK) != SYM_GLOBALDEFAT)
+                    continue;
+                l = RUP(strlen(strt + hv(t_aofsymt->sym_name))+1L);
+                t_len += l + sizeof(int32)*3;
+            }
+            symt_len += t_len;
+            if (t_len == 0)
+            {   error("1No exported symbols in %s.", mep->name);
+                goto nosymt;
+            }
+
+            if ((ofl_array[count].len = (size_t)t_len) != t_len)
+                error("2Symbol table (size %lu) too big in %s.",
+                    t_len, mep->name);
+
+            ofl_array[count].fragment = halloc((int32)t_len);
+
+            oe = (lib_direntry *) ofl_array[count++].fragment;
+            for (syend = aofsymt+nsyms;  aofsymt < syend;  aofsymt++)
+            {   if ((hv(aofsymt->sym_AT) & SYM_REFDEFMASK) != SYM_GLOBALDEFAT)
+                    continue;
+                l = RUP(strlen(strt + hv(aofsymt->sym_name))+1L);
+                oe->lib_chunkidx = tv(idx);
+                oe->lib_datalength = tv(l);
+                oe->lib_entrylength = tv(l + sizeof(int32)*3);
+                strncpy(oe->lib_entry, strt+hv(aofsymt->sym_name), (size_t)l);
+                oe = (lib_direntry *) ((char *)oe + (l + sizeof(int32)*3));
+            }
+nosymt:;
+        }
+    }
+
+    if (wantssymboltab)
+    {   lib_time = addchunk(ch++, "OFL_TIME", ch_offset, LIB_TIME_SIZE);
+        if (fwrite((char *) &prog_start, sizeof(TS), 1, fp) != 1)
+            error("2Error writing file %s.", libfile);
+        ch_offset += LIB_TIME_SIZE;
+        ofl_symt = addchunk(ch++, "OFL_SYMT", ch_offset, symt_len);
+        ch_offset += l;
+    }
+
+    cfh->cf_magic = (cf_magic != 0) ? cf_magic : CF_MAGIC;
+    cfh->cf_maxchunks = cfh->cf_numchunks = tv(chunks);
+    ch_offset = (int32)chunks * sizeof(cf_entry) + CF_HEADER_SIZE;
+    ch = cfh->cf_chunks;
+
+    lib_time = addchunk(ch++, "LIB_TIME", ch_offset, LIB_TIME_SIZE);
+    *(TS *) (out_buff + ch_offset) = prog_start;
+    ch_offset += LIB_TIME_SIZE;
+
+    lib_vrsn = addchunk(ch++, "LIB_VRSN", ch_offset, LIB_VRSN_SIZE);
+    *(int32 *) (out_buff + ch_offset) = tv(1);
+    ch_offset += LIB_VRSN_SIZE;
+
+    lib_diry = addchunk(ch++, "LIB_DIRY", ch_offset, diry_size);
+
+    if (wantssymboltab)
+    {   for (count = 0; count < members; count++)
+        if (fwrite (ofl_array[count].fragment, 1,
+            (size_t)ofl_array[count].len, fp) != ofl_array[count].len)
+            error("2Error writing file %s.", libfile);
+    }
+    ch_offset = (int32)chunks * sizeof(cf_entry) + diry_size +
+        CF_HEADER_SIZE + LIB_TIME_SIZE + LIB_VRSN_SIZE;
+    fseek(fp, 0L, SEEK_SET);
+    if (fwrite(out_buff, 1, (size_t)ch_offset, fp) != ch_offset)
+        error("2Error writing file %s.", libfile);
+    fclose(fp);
+}
+
+static void list_lib()
+{
+    struct mentry *mep;
+    int l;
+    char buff[80];
+
+    if (list)
+    {   printf("\nFormat version: ");
+        if (lib_vrsn == NULL)
+            printf("None");
+        else
+            printf("%ld\n",hv(*lib_vrsn_buff));
+        printf("\nLast Modification: %s\n", time_to_str(lib_time_buff, buff));
+        printf("\nContents\n\n");
+        for (mep = memberlist;  mep != NULL;  mep = mep->next)
+        {   printf("  %s", mep->name);
+            l = strlen(mep->name) + 8;
+            do { putchar(' '); } while (++l < 40);
+            printf("%6ld", mep->size);
+            printf("    %s\n", time_to_str(mep->time, buff));
+        }
+        printf("\nEnd of Library\n");
+    }
+    if (symlist)
+    {   lib_direntry *diry, *diryend;
+        char **mnames;
+        int32 *chunkmap;
+        lib_direntry *symt, *symtend;
+
+        if (ofl_symt == NULL) error("2No external symbol table.");
+        if (list) printf("\n");
+
+        mnames = (char **)
+            halloc(hv(lib_header->cf_maxchunks) * sizeof(char *));
+        chunkmap = (int32 *)
+            halloc((hv(lib_header->cf_maxchunks)+1)*sizeof(int32));
+        diry = (lib_direntry *) diry_buff;
+        diryend = (lib_direntry *) LOC(diry, hv(lib_diry->cfe_size));
+        l = 0;
+        while (diry < diryend)
+        {   mnames[hv(diry->lib_chunkidx)] = diry->lib_entry;
+            chunkmap[++l] = hv(diry->lib_chunkidx);
+            diry = (lib_direntry *) LOC(diry, hv(diry->lib_entrylength));
+        }
+        printf("External Symbol Table, generated: %s\n\n",
+            time_to_str(ofl_time_buff, buff));
+        symt = (lib_direntry *) ofl_symt_buff;
+        symtend = (lib_direntry *) ((char *) symt + hv(ofl_symt->cfe_size));
+        while (symt < symtend)
+        {   if (symt->lib_chunkidx != 0)
+            {   printf("  %s", symt->lib_entry);
+                l = strlen(symt->lib_entry)+10;
+                while (l >= 40) l -= 8;;
+                do { putchar(' '); } while (++l < 40);
+                if (lib_vrsn == NULL)
+                    symt->lib_chunkidx = chunkmap[symt->lib_chunkidx];
+                printf("    from    %s\n", mnames[hv(symt->lib_chunkidx)]);
+            }
+            symt = (lib_direntry *) LOC(symt, hv(symt->lib_entrylength));
+        }
+        printf("\nEnd of Table\n");
+    }
+}
+
+static void give_help(void)
+{
+    printf("\
+%s version %s [%s]\n       - AOF library creation and maintenance tool\n\n\
+Command format:\n\n\
+%s options library [ file_list | member_list ]\n\n",
+SELF, VSN, __DATE__, myname);
+
+    printf("Wildcards '%c' and '*' may be used in %s<member_list>\n\n",
+        WILDCH,
+#ifdef WILD_FILENAMES
+        "<file_list> and ");
+#else
+        "");
+#endif
+
+    printf("\
+Options:-\n\
+\n\
+-c      Create a new library containing files in <file_list>.\n\
+-i      Insert files in <file_list>, replace existing members of the same name.\n\
+-d      Delete the members in <member_list>.\n\
+-e      Extract members in <member_list> placing in files of the same name.\n");
+    printf("\
+-o      Add an external symbol table to an object library.\n\
+-l      List library, may be specified with any other option.\n\
+-s      List symbol table, may be specified with any other option.\n\
+-v file Take additional arguments from via file.\n\
+\n");
+
+    printf("\
+Examples:-\n\
+\n\
+        %s -c -o mylib %s\n\
+        %s -e mylib %csort*\n\
+        %s -d mylib hash\n\
+        %s -i mylib quick_sort quick_hash1\n\
+        %s -l -s ansilib\n\n", myname,
+#ifdef WILD_FILENAMES
+    "*",
+#else
+    "obj1 obj2 obj3...",
+#endif
+    myname, WILDCH, myname, myname, myname);
+}
+
+static char *skipword(char *s)
+{   char *p;
+
+    while (isgraph(*s)) ++s;
+    p = s;
+    while (*s != 0 && !isgraph(*s)) ++s;
+    *p = 0;
+    return s;
+}
+
+static void parse_cmd(char *args)
+{
+    char *endp, *s;
+    static int infilelist = 0;
+    int f;
+    int32 size;
+    FILE *fp;
+
+    while (*args != 0 && *args <= ' ') ++args;
+
+    for (endp = args; *args != 0;  args = endp)
+    {   endp = skipword(args);
+        if (isdigit(*args)) continue;
+
+        if (*args != '-')
+        {   if (infilelist) {
+                struct aentry *aep = (struct aentry *)
+                    halloc((int32)sizeof(struct aentry) + strlen(args));
+                strcpy(aep->name, args);
+                aep->next = NULL;
+                if (argumentlistq != NULL)
+                    argumentlistq->next = aep;
+                else
+                    argumentlist = aep;
+                argumentlistq = aep;
+            }
+            else
+            {   if (libfile)
+                    error("2Multiple libraries: %s amd %s.", libfile, args);
+                libfile = strcpy(halloc(strlen(args) + 1L), args);
+                infilelist = 1;
+            }
+        }
+        else while (*++args != 0)
+        {   infilelist = (int) libfile;
+            f = 0;
+            switch (*args | 0x20)
+            {
+default:
+                error("2Unrecognised option(s) -%s.", args);
+                break;
+#ifdef __acorn
+case 'q':
+                args = endp;
+                if (!*args)
+                    error("1No path on -q qualifier.");
+                endp = skipword(args);
+                csd = strcpy(halloc(strlen(args) + 1), args);
+                args = " ";
+                break;
+#endif
+case 'v':
+                args = endp;
+                if (*args == 0) error("2No filename on -via qualifier.");
+                endp = skipword(args);
+                fp = fopen(args, "rb");
+                if(fp == NULL)
+                    error("2Via file %s not found.", args);
+                else
+                {
+                    fseek(fp, 0L, SEEK_END);
+                    size = ftell(fp);
+                    fseek(fp, 0L, SEEK_SET);
+                    s = halloc(size + 1);
+                    if(fread(s, size, 1, fp) != 1)
+                        error("2Unable to read via file.");
+                    else
+                    {            
+                        *(s + size) = 0;
+                        parse_cmd(s);
+                        args = " ";
+                    }
+                    fclose(fp);
+                }
+                break;
+case 'f':
+case 'm':
+                if (!match("files", args) || !match("memb*", args)) args = " ";
+                infilelist = 1;
+                break;
+case 'h':
+                give_help();
+                exit(0);
+                break;
+case 'l':
+                if (!match("lib*", args))
+                {   infilelist = 0;
+                    args = " ";
+                    break;
+                }
+                list = 1;
+                break;
+case 'o':
+                if (!match("ob*", args) || !match("oc", args)) args = " ";
+                wantssymboltab = 1;
+                break;
+case 's':
+                if (!match("sy*", args)) args = " ";
+                symlist = 1;
+                break;
+case 'i':
+                if (!match("in*", args)) args = " ";
+                f++;
+                /*FALLTHRU*/
+case 'd':
+                if (!match("delet*", args)) args = " ";
+                f++;
+                /*FALLTHRU*/
+case 'e':
+                if (!match("ex*", args)) args = " ";
+                f++;
+                /*FALLTHRU*/
+case 'c':
+                if (!match("cr*", args)) args = " ";
+                f++;
+            }
+            if (f > 0)
+            {   if (fn) error("2Only one of -c, -i, -d and -e may be used.");
+                fn = f;
+            }
+        }
+    }
+}
+
+static void flib(char *args, unsigned32 *tim)
+{
+    prog_start.lsw = tim[0] << 16;
+    prog_start.msw = (((tim[1] & 0xff) << 16) | (tim[0] >> 16));
+
+    while (*args && *args <= ' ') args++;
+    args = skipword(args);
+    parse_cmd(args);
+
+    if (!libfile)
+       error("2No library file specified.");
+    if (!wantssymboltab && !list && !fn && !symlist)
+        error("2Please use at least one of -c, -i, -d, -e, -o, -l or -s.");
+    if (fn && fn != CREATE_FN && !argumentlist)
+        error("2No file or member list specified.");
+    if (argumentlist && !fn)
+        error("2Invalid file or member list.");
+
+    munge_filename(libfile);
+
+    if (fn != CREATE_FN) readlib();
+
+    if (fn == EXTRACT_FN || fn == DELETE_FN)
+    {   expand_member_list();
+        if (fn == EXTRACT_FN)
+        {   extract_files();
+            fn = 0;
+        }
+    }
+    else
+        expand_file_list();
+
+    merge_diry();
+
+    if( hassymboltab != 0 ) wantssymboltab = hassymboltab;
+    if ( ( fn == CREATE_FN || fn == DELETE_FN || fn == INSERT_FN ) ||
+      ( wantssymboltab != hassymboltab ) )
+          mk_lib();
+
+    list_lib();
+}
+
+int main(int argc, char *argv[])
+{
+    char **av;
+    char *args, *cp;
+    int alen;
+    time_t clock;
+    unsigned32 tim[2];
+    int i;
+
+    (void) program_name(argv[0], myname, sizeof(myname));
+
+    argumentlist = argumentlistq = NULL;
+    memberlist = memberlistq = NULL;
+
+    lib_size = lib_strsize = cf_magic = 0;
+    lib_diry = lib_time = lib_vrsn = ofl_time = ofl_symt = NULL;
+    lib_buff = diry_buff = ofl_symt_buff = NULL;
+    file_ptr_array = NULL;
+    lib_vrsn_buff = NULL;
+    lib_time_buff = ofl_time_buff = NULL;
+    members = 0;
+    fn = hassymboltab = wantssymboltab = list = symlist = 0;
+    libfile = NULL;
+
+    if (argc <= 1)
+    {   give_help();
+        exit(1);
+    }
+
+    av = argv;                          /* get len of args */
+    alen = 0;
+    while (av[0] != NULL)
+    {   alen += strlen(av[0]) + 1;
+        av++;
+    }
+    args = halloc((int32)alen + 1);
+
+    cp = args;                          /* make contiguous, writable copy,  */
+    av = argv;                          /* later munged by pattern matching */
+    while (av[0] != NULL)
+    {   strcpy(cp, av[0]);
+        cp += strlen(cp);
+        *cp++ = ' ';
+        av++;
+    }
+    cp[-1] = 0;
+
+    clock = time(NULL);                 /* seconds since 1970 */
+    tim[0] = 0;
+    tim[1] = 0;
+
+    for (i = 0; i < 100; i++)
+    {   tim[0] += clock;
+        if (tim[0] < clock) tim[1]++;   /* cs since 1970 */
+    }
+    tim[0] += CSEC_DIFFL;
+    if (tim[0] < CSEC_DIFFL) tim[1]++;
+    tim[1] += CSEC_DIFFH;               /* cs since 1900, in 5 bytes */
+
+    flib(args, tim);                    /* OK, do it... */
+
+    return 0;
+}
