@@ -17,7 +17,7 @@ APP        = !Edit
 MODULE     = rm.Edit
 ROM_MODULE = aof.Edit
 RDIR       = Resources
-LDIR       = ${RDIR}.${LOCALE}
+LDIR       = LocalRes:
 
 #
 # Export Paths for Messages module
@@ -64,9 +64,9 @@ FILES =\
  ${RDIR}.!Run\
  abs.!RunImage\
  ${RDIR}.Export\
- ${LDIR}.!Help\
- ${LDIR}.Messages\
- ${LDIR}.Templates
+ ${LDIR}!Help\
+ ${LDIR}Messages\
+ ${LDIR}Templates
 
 # Include these in the ROM module
 RESFILES =\
@@ -96,12 +96,12 @@ rom: ${ROM_MODULE}
 
 install: ${FILES}
         ${CP} ${RDIR}.!Boot        ${INSTDIR}.!Boot     ${CPFLAGS}
-        ${CP} ${LDIR}.!Help        ${INSTDIR}.!Help     ${CPFLAGS}
+        ${CP} ${LDIR}!Help         ${INSTDIR}.!Help     ${CPFLAGS}
         ${CP} ${RDIR}.!Run         ${INSTDIR}.!Run      ${CPFLAGS}
         ${CP} abs.!RunImage        ${INSTDIR}.!RunImage ${CPFLAGS}
         ${CP} ${RDIR}.Export       ${INSTDIR}.Export    ${CPFLAGS}
-        ${CP} ${LDIR}.Messages     ${INSTDIR}.Messages  ${CPFLAGS}
-        ${CP} ${LDIR}.Templates    ${INSTDIR}.Templates ${CPFLAGS}
+        ${CP} ${LDIR}Messages      ${INSTDIR}.Messages  ${CPFLAGS}
+        ${CP} ${LDIR}Templates     ${INSTDIR}.Templates ${CPFLAGS}
         Access ${INSTDIR}.!Boot      lr/r
         Access ${INSTDIR}.!Help      lr/r
         Access ${INSTDIR}.!Run       lr/r
@@ -119,17 +119,16 @@ resources:
         ${MKDIR} ${RESDIR}
         ${MKDIR} ${RESAPP}
         ${CP} ${RDIR}.!Boot     ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} ${LDIR}.!Help     ${RESAPP}.!Help ${CPFLAGS}
+        ${CP} ${LDIR}!Help      ${RESAPP}.!Help ${CPFLAGS}
         ${CP} ${RDIR}.ROM.!Run  ${RESAPP}.!Run  ${CPFLAGS}
-        ${CP} ${LDIR}.Messages  ${RESDIR}.Messages ${CPFLAGS}
-        ${CP} ${LDIR}.Templates ${RESDIR}.Templates ${CPFLAGS}
+        ${CP} ${LDIR}Messages   ${RESDIR}.Messages ${CPFLAGS}
+        ${CP} ${LDIR}Templates  ${RESDIR}.Templates ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} od.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${RM} abs.!RunImage
         ${RM} ${ROM_MODULE}
@@ -158,9 +157,7 @@ ${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -170,8 +167,8 @@ oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
 s.ModuleWrap: ${WRAPPER}
         ${CP} ${WRAPPER} $@ ${CPFLAGS}
 
-s.AppName: ${LDIR}.Messages
-        awk -f awk.AppName ${LDIR}.Messages > $@
+s.AppName: ${LDIR}Messages
+        awk -f awk.AppName ${LDIR}Messages > $@
 
 #---------------------------------------------------------------------------
 # Debugging version:
