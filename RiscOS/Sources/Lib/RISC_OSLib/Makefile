@@ -327,6 +327,8 @@ ROM_OBJS =\
  rm_o_rl.fileicon \
  rm_o_rl.flex \
  rm_o_rl.font \
+ rm_o_rl.fontlist \
+ rm_o_rl.fontselect \
  rm_o_rl.heap \
  rm_o_rl.magnify \
  rm_o_rl.menu \
@@ -373,12 +375,12 @@ RLIB_OBJS =\
  o_rl.colourtran o_rl.coords o_rl.ctl o_rl.dbox o_rl.dboxfile o_rl.dboxquery \
  o_rl.dboxtcol o_rl.dragasprit o_rl.drawcheck o_rl.drawfdiag o_rl.drawfiles \
  o_rl.drawfobj o_rl.drawmod o_rl.drawtextc o_rl.event o_rl.fileicon o_rl.flex \
- o_rl.font o_rl.heap o_rl.help o_rl.magnify o_rl.menu o_rl.msgs o_rl.os \
- o_rl.pointer o_rl.poll o_rl.print o_rl.res o_rl.resspr o_rl.saveas o_rl.sprite \
- o_rl.swi o_rl.template o_rl.trace o_rl.txt o_rl.txt1 o_rl.txt3 o_rl.txtar \
- o_rl.txtedit o_rl.txtfile o_rl.txtfind o_rl.txtmisc o_rl.txtopt o_rl.txtoptmenu \
- o_rl.txtregexp o_rl.txtscrap o_rl.txtundo o_rl.txtwin o_rl.visdelay \
- o_rl.werr o_rl.wimp o_rl.wimpt o_rl.win o_rl.xferrecv o_rl.xfersend
+ o_rl.font o_rl.fontlist o_rl.fontselect o_rl.heap o_rl.help o_rl.magnify o_rl.menu \
+ o_rl.msgs o_rl.os o_rl.pointer o_rl.poll o_rl.print o_rl.res o_rl.resspr \
+ o_rl.saveas o_rl.sprite o_rl.swi o_rl.template o_rl.trace o_rl.txt o_rl.txt1 \
+ o_rl.txt3 o_rl.txtar o_rl.txtedit o_rl.txtfile o_rl.txtfind o_rl.txtmisc \
+ o_rl.txtopt o_rl.txtoptmenu o_rl.txtregexp o_rl.txtscrap o_rl.txtundo o_rl.txtwin \
+ o_rl.visdelay o_rl.werr o_rl.wimp o_rl.wimpt o_rl.win o_rl.xferrecv o_rl.xfersend
 
 #
 # Objects for RISCOSLIB:o.riscoslibm
@@ -389,13 +391,13 @@ RLIB_MOD_OBJS =\
  m_o_rl.dboxfile m_o_rl.dboxquery  m_o_rl.dboxtcol m_o_rl.dragasprit \
  m_o_rl.drawcheck m_o_rl.drawfdiag m_o_rl.drawfiles m_o_rl.drawfobj m_o_rl.drawmod \
  m_o_rl.drawtextc m_o_rl.event m_o_rl.fileicon m_o_rl.flex m_o_rl.font \
- m_o_rl.heap m_o_rl.help m_o_rl.magnify m_o_rl.menu m_o_rl.msgs m_o_rl.os \
- m_o_rl.pointer m_o_rl.poll m_o_rl.print m_o_rl.res m_o_rl.resspr m_o_rl.saveas \
- m_o_rl.sprite m_o_rl.swi m_o_rl.template m_o_rl.trace m_o_rl.txt m_o_rl.txt1 \
- m_o_rl.txt3 m_o_rl.txtar m_o_rl.txtedit m_o_rl.txtfile m_o_rl.txtfind \
- m_o_rl.txtmisc m_o_rl.txtopt m_o_rl.txtoptmenu m_o_rl.txtregexp \
- m_o_rl.txtscrap m_o_rl.txtundo m_o_rl.txtwin m_o_rl.visdelay m_o_rl.werr \
- m_o_rl.wimp m_o_rl.wimpt m_o_rl.win m_o_rl.xferrecv m_o_rl.xfersend
+ m_o_rl.fontlist m_o_rl.fontselect m_o_rl.heap m_o_rl.help m_o_rl.magnify \
+ m_o_rl.menu m_o_rl.msgs m_o_rl.os m_o_rl.pointer m_o_rl.poll m_o_rl.print \
+ m_o_rl.res m_o_rl.resspr m_o_rl.saveas m_o_rl.sprite m_o_rl.swi m_o_rl.template \
+ m_o_rl.trace m_o_rl.txt m_o_rl.txt1 m_o_rl.txt3 m_o_rl.txtar m_o_rl.txtedit \
+ m_o_rl.txtfile m_o_rl.txtfind m_o_rl.txtmisc m_o_rl.txtopt m_o_rl.txtoptmenu \
+ m_o_rl.txtregexp m_o_rl.txtscrap m_o_rl.txtundo m_o_rl.txtwin m_o_rl.visdelay \
+ m_o_rl.werr m_o_rl.wimp m_o_rl.wimpt m_o_rl.win m_o_rl.xferrecv m_o_rl.xfersend
 
 #
 # Build rules:
