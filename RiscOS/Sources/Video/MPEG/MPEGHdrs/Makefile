@@ -48,6 +48,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${EXP_HDR}.DVBControl \
             ${EXP_HDR}.VSP \
             ${EXP_HDR}.Macrovisio \
+            ${EXP_HDR}.UpCallMPEG \
             ${C_EXP_HDR}.h.AV110 \
             ${C_EXP_HDR}.h.CL450 \
             ${C_EXP_HDR}.h.MPEGAudio \
@@ -60,7 +61,8 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${C_EXP_HDR}.h.MPEG2cCard \
             ${C_EXP_HDR}.h.DVBControl \
             ${C_EXP_HDR}.h.VSP \
-            ${C_EXP_HDR}.h.Macrovisio
+            ${C_EXP_HDR}.h.Macrovisio \
+            ${C_EXP_HDR}.h.UpCallMPEG \
 
 #
 # Generic rules:
@@ -122,6 +124,9 @@ ${EXP_HDR}.VSP: hdr.VSP
 ${EXP_HDR}.Macrovisio: Hdr.Macrovisio
 	${CP} hdr.Macrovisio $@ ${CPFLAGS}
 
+${EXP_HDR}.UpCallMPEG: Hdr.UpCallMPEG
+	${CP} hdr.UpCallMPEG $@ ${CPFLAGS}
+
 ${C_EXP_HDR}.h.AV110: hdr.AV110
 	${PERL} Hdr.AV110 $@
 
@@ -160,6 +165,9 @@ ${C_EXP_HDR}.h.VSP: hdr.VSP
 
 ${C_EXP_HDR}.h.Macrovisio: Hdr.Macrovisio
 	${PERL} Hdr.Macrovisio $@
+
+${C_EXP_HDR}.h.UpCallMPEG: Hdr.UpCallMPEG
+	${PERL} Hdr.UpCallMPEG $@
 
 
 # Dynamic dependencies:
