@@ -42,6 +42,7 @@ FILES=\
  ${SDIR}.ifconfig.IfConfig\
  ${SDIR}.inetstat.InetStat\
  ${SDIR}.map-mbone.Map-MBone\
+ ${SDIR}.mrinfo.MRInfo\
  ${SDIR}.mtrace.MTrace\
  ${SDIR}.ping.Ping\
  ${SDIR}.pong.Pong\
@@ -67,6 +68,7 @@ NETUTILS = \
         ${SDIR}.ifconfig.IfConfig    \
         ${SDIR}.inetstat.InetStat    \
         ${SDIR}.map-mbone.Map-MBone  \
+        ${SDIR}.mrinfo.MRInfo        \
         ${SDIR}.mtrace.MTrace        \
         ${SDIR}.ping.Ping            \
         ${SDIR}.pong.Pong            \
@@ -103,6 +105,7 @@ install: ${FILES}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${INSTDIR}.bin.IfConfig     ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${INSTDIR}.bin.InetStat     ${CPFLAGS}
         ${CP} ${SDIR}.map-mbone.Map-MBone   ${INSTDIR}.bin.Map-MBone    ${CPFLAGS}
+        ${CP} ${SDIR}.mrinfo.MRInfo         ${INSTDIR}.bin.MRInfo       ${CPFLAGS}
         ${CP} ${SDIR}.mtrace.MTrace         ${INSTDIR}.bin.MTrace       ${CPFLAGS}
         ${CP} ${SDIR}.ping.Ping             ${INSTDIR}.bin.Ping         ${CPFLAGS}
         ${CP} ${SDIR}.pong.Pong             ${INSTDIR}.bin.Pong         ${CPFLAGS}
@@ -141,6 +144,7 @@ resources-NetUtils: ${NETUTILS}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${RESD}.bin.IfConfig     ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${RESD}.bin.InetStat     ${CPFLAGS}
         ${CP} ${SDIR}.map-mbone.Map-MBone   ${RESD}.bin.Map-MBone    ${CPFLAGS}
+        ${CP} ${SDIR}.mrinfo.MRInfo         ${RESD}.bin.MRInfo       ${CPFLAGS}
         ${CP} ${SDIR}.mtrace.MTrace         ${RESD}.bin.MTrace       ${CPFLAGS}
         ${CP} ${SDIR}.ping.Ping             ${RESD}.bin.Ping         ${CPFLAGS}
         ${CP} ${SDIR}.pong.Pong             ${RESD}.bin.Pong         ${CPFLAGS}
@@ -187,6 +191,15 @@ ${SDIR}.map-mbone.Map-MBone: ${SDIR}.map-mbone.c.Map-MBone \
 	${SDIR}.map-mbone.c.inet \
 	${SDIR}.map-mbone.c.kern
 	dir ${SDIR}.map-mbone
+	@amu_machine
+	@up
+	@up
+
+${SDIR}.mrinfo.MRInfo: ${SDIR}.mrinfo.c.MRInfo \
+	${SDIR}.mrinfo.c.igmp \
+	${SDIR}.mrinfo.c.inet \
+	${SDIR}.mrinfo.c.kern
+	dir ${SDIR}.mrinfo
 	@amu_machine
 	@up
 	@up
