@@ -108,11 +108,14 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.tqueue:	c.tqueue
-o.tqueue:	C:h.kernel
-o.tqueue:	C:h.swis
-o.tqueue:	h.tqueue
-o.tqueue:	h.utils
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.utils
+o.module:	h.ir_api
+o.module:	h.module
+o.module:	h.driver
+o.module:	h.ueiblast
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -136,3 +139,13 @@ o.ir_api:	C:h.swis
 o.ir_api:	h.utils
 o.ir_api:	h.ir_api
 o.ir_api:	h.veneers
+o.tqueue:	c.tqueue
+o.tqueue:	C:h.kernel
+o.tqueue:	C:h.swis
+o.tqueue:	h.tqueue
+o.tqueue:	h.utils
+o.tqueue:	c.tqueue
+o.tqueue:	C:h.kernel
+o.tqueue:	C:h.swis
+o.tqueue:	h.tqueue
+o.tqueue:	h.utils
