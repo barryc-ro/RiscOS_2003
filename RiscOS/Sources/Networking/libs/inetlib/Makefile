@@ -7,7 +7,7 @@
 #
 # Makefile for inetlib.a
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.3  95/06/01  15:37:14  kwelton
 # Added rresvport(), remade dependencies.
 # 
