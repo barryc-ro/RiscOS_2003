@@ -19,6 +19,7 @@ Date		Who	Change
 14/12/1999	BJGA	API updated in line with issue D specification
 03/03/2000	BJGA	Implemented SWI PlatformFeatures 0 and 1, and SWI TVSetup
 09/03/2000	BJGA	Implemented SWI SetState, PlatformFeatures 3, GetState, LoadMacrovisionKey
+08/08/2000	BJGA	Implemented SWI LoadCaptions
 
 ***************************************************************************/
 
@@ -62,6 +63,7 @@ platform_features_3_block_t;
 /**********************/
 
 static bool static_MatchStrings (const char *s1, const char *s2);
+static void static_WriteToFIFO (fifo_t *fifo, char byte);
 
 /********************/
 /* Public variables */
@@ -159,16 +161,98 @@ _kernel_oserror *SWI_SetState (unsigned int flags, unsigned int state, bool ntsc
 /******	SWI_LoadCaptions() *************************************************
 
 Purpose:	Handles Macrovision_LoadCaptions
-Note:		A future enhancement, does nothing yet
+In:		flags: bit 0 is field indicator (0 = odd, 1 = even)
+		       bit 1 set => parity bit may need correcting
+		       bit 2 set => flush FIFO before inserting data
+		bytes -> data bytes to encode
+		length = number of bytes pointed to by |bytes|
+Out:		Pointer to error block
 
 ***************************************************************************/
 
 _kernel_oserror *SWI_LoadCaptions (unsigned int flags, char *bytes, unsigned int length)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(flags);
-  IGNORE(bytes);
-  IGNORE(length);
+  char byte;
+  fifo_t *fifo = ((flags & 1) == 0) ? &Module_OddFIFO : &Module_EvenFIFO;
+  if ((flags & 4) != 0)
+  {
+    /* Flush and reinitialise the FIFO */
+    fifo->read_ptr = fifo->write_ptr;
+    fifo->write_state = normal;
+  }
+  for (; length > 0; length--)
+  {
+    byte = *bytes++;
+    if ((flags & 2) != 0)
+    {
+      /* Set odd parity */
+      char temp = byte ^ (byte >> 4); /* combine bits 4 apart */
+      temp ^= (temp >> 2);            /* combine bits 2 apart */
+      temp ^= (temp >> 1);            /* combine bits 1 apart */
+      if ((temp & 1) == 0) byte ^= 0x80;
+    }
+    if ((flags & 1) != 0)
+    {
+      /* Even field: attempt no error correction */
+      static_WriteToFIFO (fifo, byte);
+    }
+    else
+    {
+      /* Odd field: ensure that all control codes are entered in pairs */
+      switch (fifo->write_state)
+      {
+        case second_byte_first_copy:
+          if (byte == fifo->control_code[0])
+          {
+            /* It's probably just the first byte of the repetition of the control code, as we were */
+            /* expecting, and we've already put the second copy of the control code in the FIFO */
+            fifo->write_state = first_byte_second_copy;
+            break;
+          }
+          /* else drop through... */
+        case normal:
+          if ((byte & 0x70) == 0x10)
+          {
+            /* Start of new control code */
+            fifo->control_code[0] = byte;
+            fifo->write_state = first_byte_first_copy;
+          }
+          else
+          {
+            static_WriteToFIFO (fifo, byte);
+            fifo->write_state = normal;
+          }
+          break;
+          
+        case first_byte_second_copy:
+          if (byte == fifo->control_code[1])
+          {
+            /* Definitely a complete match; nothing else to do */
+            fifo->write_state = normal;
+            break;
+          }
+          /* else drop through... */
+        case first_byte_first_copy:
+          fifo->control_code[1] = byte;
+          static_WriteToFIFO (fifo, fifo->control_code[0]);
+          static_WriteToFIFO (fifo, byte);
+          if ((byte & 0x60) != 0)
+          {
+            /* It's a control character defined in current standards (0x20-0x7F), send a second copy */
+            static_WriteToFIFO (fifo, fifo->control_code[0]);
+            static_WriteToFIFO (fifo, byte);
+            fifo->write_state = second_byte_first_copy;
+          }
+          else
+          {
+            /* Don't know about this code; don't assume a second copy is required */
+            fifo->write_state = normal;
+          }
+          break;
+      }
+    }
+  }
   return e;
 }
 
@@ -598,4 +682,24 @@ static bool static_MatchStrings (const char *s1, const char *s2)
   }
   while (!match);
   return match;
+}
+
+/******	static_WriteToFIFO() ***********************************************
+
+Purpose:	Insert one byte into a closed caption fifo
+In:		Byte to insert, pointer to fifo_t struct for the fifo to use
+Notes:		No action is taken if the fifo overflows
+
+***************************************************************************/
+
+static void static_WriteToFIFO (fifo_t *fifo, char byte)
+{
+  unsigned int new_write_ptr = fifo->write_ptr + 1;
+  if (new_write_ptr == FIFO_LENGTH) new_write_ptr = 0;
+  if (new_write_ptr != fifo->read_ptr)
+  {
+    /* There is space in the buffer, so write byte */
+    fifo->buffer[fifo->write_ptr] = byte;
+    fifo->write_ptr = new_write_ptr;
+  }
 }

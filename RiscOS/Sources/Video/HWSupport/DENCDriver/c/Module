@@ -37,6 +37,9 @@ Date		Who	Change
 06/07/2000	BJGA	Added global variable Module_InStandby so that
 			Macrovision_SetState doesn't need to use getenv
 06/07/2000(sic)	BJGA	Satisfied the _swix type checking on new version of cc
+08/08/2000	BJGA	Implemented Event_VSync handler, in order to poll the
+			DENC state at regular intervals, and if possible pass
+			closed caption data to it
 
 ***************************************************************************/
 
@@ -82,6 +85,8 @@ Date		Who	Change
 /* Private prototypes */
 /**********************/
 
+static char static_ReadFromFIFO (fifo_t *fifo);
+
 /********************/
 /* Public variables */
 /********************/
@@ -99,7 +104,12 @@ tv_standard      Module_PendingTVStandard;
 bool             Module_SwitchStandardOnNextModeChange = true;
 bool             Module_MacrovisionEnabled = false;
 bool             Module_InStandby = false;
+bool             Module_EventVClaimed = false;
 
+fifo_t           Module_OddFIFO = { 0, 0, normal, { '\0', '\0' }, "" };
+fifo_t           Module_EvenFIFO = { 0, 0, normal, { '\0', '\0' }, "" };
+
+void             *Module_PrivateWord;
 int              Module_MessageFD [4] = { 0, 0, 0, 0 };  /* message file descriptor */
 
 /*********************/
@@ -142,7 +152,9 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   unsigned int standard = 0;
   IGNORE(podule_base);
   IGNORE(cmd_tail);
-
+  
+  Module_PrivateWord = pw;
+  
   debug_initialise ("DENCDriver", "null:", "");
   debug_atexit ();
   debug_set_taskname_prefix (false);
@@ -297,6 +309,13 @@ extern _kernel_oserror *Module_Final(int fatal, int podule, void *pw)
   _kernel_oserror *e = NULL;
   IGNORE(fatal);
   IGNORE(podule);
+  
+  if (Module_EventVClaimed)
+  {
+    _swix (OS_Byte, _INR(0,1), 13, Event_VSync); /* disable VSync event */
+    _swix (OS_Release, _INR(0,2), EventV, eventv_handler, pw);
+    Module_EventVClaimed = false;
+  }
   
   _swix (OS_Release, _INR(0,2), PaletteV, PaletteV_Routine, pw);
   _swix (MessageTrans_CloseFile, _IN(0), &Module_MessageFD);
@@ -507,7 +526,67 @@ Out:		0 to intercept, 1 to pass on
 
 extern int Module_EventV(_kernel_swi_regs *r, void *pw)
 {
+  char status;
+  char iic_block [3];
+  _kernel_oserror *e;
   IGNORE(r);
   IGNORE(pw);
+  
+  /* Address the status register in the DENC */
+  /* This call will return an error if the IIC bus is in use (IIC module 0.17 or later is required) */
+  status = 9;
+  e = _swix (IIC_Control, _INR(0,2), 0x40, &status, 1);
+  if (!e)
+  {
+    /* Read status byte */
+    _swix (IIC_Control, _INR(0,2), 0x41, &status, 1);
+    
+    /* Send odd-field data if possible and necessary */
+    if ((status & 0x10) != 0 && Module_OddFIFO.read_ptr != Module_OddFIFO.write_ptr)
+    {
+      iic_block [0] = 39;
+      iic_block [1] = static_ReadFromFIFO (&Module_OddFIFO);
+      iic_block [2] = static_ReadFromFIFO (&Module_OddFIFO);
+      _swix (IIC_Control, _INR(0,2), 0x40, iic_block, 3);
+    }
+    
+    /* Send even-field data if possible and necessary */
+    if ((status & 0x20) != 0 && Module_EvenFIFO.read_ptr != Module_EvenFIFO.write_ptr)
+    {
+      iic_block [0] = 41;
+      iic_block [1] = static_ReadFromFIFO (&Module_EvenFIFO);
+      iic_block [2] = static_ReadFromFIFO (&Module_EvenFIFO);
+      _swix (IIC_Control, _INR(0,2), 0x40, iic_block, 3);
+    }
+  }
+  
   return 1;
+}
+
+/*********************/
+/* Private functions */
+/*********************/
+
+/******	static_ReadFromFIFO() **********************************************
+
+Purpose:	Read one byte from a closed caption fifo
+In:		Pointer to fifo_t struct for the fifo to use
+Out:		Byte from FIFO
+Notes:		&80 (odd-parity null) is returned if underflow occurs
+
+***************************************************************************/
+
+static char static_ReadFromFIFO (fifo_t *fifo)
+{
+  if (fifo->read_ptr == fifo->write_ptr)
+  {
+    return 0x80;
+  }
+  else
+  {
+    char result = fifo->buffer[fifo->read_ptr];
+    fifo->read_ptr++;
+    if (fifo->read_ptr == FIFO_LENGTH) fifo->read_ptr = 0;
+    return result;
+  }
 }
