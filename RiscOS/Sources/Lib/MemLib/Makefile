@@ -48,7 +48,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Include files
 #
 INCLUDES  = -IC:
-DFLAGS    = -DRISCOS
+DFLAGS    = -DRISCOS -DACORN_BUILD
 
 #
 # Program specific options:

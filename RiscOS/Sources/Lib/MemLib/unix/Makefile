@@ -4,7 +4,7 @@ CC = armcc
 AS = armasm
 CCflags = -c -I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 	-I$(RISCOS_BUILD_EXPORT)/Lib/CLib \
-	-ffa -Ospace -DRISCOS
+	-ffa -Ospace -DRISCOS -DACORN_BUILD
 
 ASflags = -Stamp -quit
 
