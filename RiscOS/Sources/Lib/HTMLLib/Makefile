@@ -49,7 +49,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Include files
 #
 INCLUDES  = -Itbox:,C:,TCPIPLibs:
-DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables -DUNIFONT
+DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables
 
 #
 # Program specific options:
