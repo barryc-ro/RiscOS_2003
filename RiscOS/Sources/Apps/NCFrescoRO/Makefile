@@ -45,6 +45,7 @@ resources:
 	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.,Resources.Common.UK.
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
+	${MKDIR} ${RESRES}.html
 	${CP} NCFrescoRORes:!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
 	${CP} NCFrescoRORes:!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
 	${CP} NCFrescoRORes:!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
@@ -55,12 +56,12 @@ resources:
 	${CP} NCFrescoRORes:SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
 	${CP} NCFrescoRORes:Config      ${RESRES}.Config   ${CPFLAGS}
+	${CP} NCFrescoRORes:html.sslcert  ${RESRES}.html.sslcert  ${CPFLAGS}
+	${CP} NCFrescoRORes:html.sslpin   ${RESRES}.html.sslpin   ${CPFLAGS}
+	${CP} NCFrescoRORes:html.sslserv  ${RESRES}.html.sslserv  ${CPFLAGS}
+	${CP} NCFrescoRORes:html.ssltoken ${RESRES}.html.ssltoken ${CPFLAGS}
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
-
-#resources:
-#	${CP} Resources.* <resource$dir>.* ${CPFLAGS}
-#       @echo ${COMPONENT}: resource files copied
 
 export: export_${PHASE}
 
