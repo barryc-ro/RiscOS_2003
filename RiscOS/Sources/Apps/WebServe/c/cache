@@ -26,6 +26,8 @@
 #include "debug.h"
 
 
+#define FAST_STARTUP
+
 /* allocate space for exported variables */
 int global_cache_writeback_delayed = 0;
 host_list global_cacheroot;
@@ -68,6 +70,18 @@ static int convert_text_to_time(char *date_start, /*out*/time_t *p_date);
 
 
 
+/*********************************************************************************************************/
+
+static void cache_deferred_cacheindex_load(host_list hostentry)
+{
+        if (hostentry->cache_loaded == FALSE) {
+		global_cachesize -= hostentry->dirsize;
+                hostentry->dirsize = 0;
+		cache__read_cacheindex(hostentry);  /* also validates entries */
+		check_only_cachelist(hostentry);
+		cache__write_cacheindex(hostentry); /* we may have removed naff entries */
+        }
+}
 
 /*********************************************************************************************************/
 
@@ -373,6 +387,9 @@ void cache_flush(void)
 
 	/* flush each host in turn */
 	while (hostentry != NULL) {
+	        #ifdef FAST_STARTUP
+	        cache_deferred_cacheindex_load(hostentry);
+	        #endif
 		urllist_flush(hostentry);
 
 		if (hostentry->cache == NULL) {
@@ -419,6 +436,13 @@ void cache_minimise(void)
 
 		/* minimise each host in turn */
 		while (hostentry != NULL) {
+		        #ifdef FAST_STARTUP
+		        if (hostentry->cache_loaded == FALSE) {
+		                insert = &hostentry->next;
+		                hostentry = *insert;
+		                continue;
+		        }
+		        #endif
 			urllist_minimise(hostentry);
 
 			if (hostentry->cache == NULL) {
@@ -465,6 +489,9 @@ void cache_minimise(void)
 
 			/* flush each host in turn */
 			while ((global_cachesize > global_cachesizemax) && (hostentry != NULL)) {
+			        #ifdef FAST_STARTUP
+			        cache_deferred_cacheindex_load(hostentry);
+			        #endif
 				urllist_flush(hostentry);
 				/* we remove the host (iff empty) later on! */
 				hostentry = hostentry->next;
@@ -486,7 +513,7 @@ void cache_minimise(void)
 				hostentry = list;
 				list	  = list->next;
 
-				if (hostentry->cache == NULL) {
+				if (hostentry->cache == NULL && hostentry->cache_loaded) {
 					/* no files left on this host, so delete it */
 					delete_host_dir(hostentry);
 					free_host_record(hostentry);
@@ -733,12 +760,15 @@ void cache_read_index(void)
 	cache__write_hostindex();     /* we may have removed naff entries */
 
 	for (hostentry = global_cacheroot; hostentry != NULL; hostentry = hostentry->next) {
-		cache__read_cacheindex(hostentry);  /* also validates entries */
-		cache__write_cacheindex(hostentry); /* we may have removed naff entries */
+		#ifndef FAST_STARTUP
+		cache_deferred_cacheindex_load(hostentry);
+		#endif
 	}
 
 	/* purge any junk from the Cache directory */
+	#ifndef FAST_STARTUP
 	check_cachedir_against_cache();
+	#endif
 }
 
 
@@ -773,6 +803,9 @@ host_list hostlist_search(host_list listroot, char *hostname, int portnumber)
 	host_list hostentry;
 	for (hostentry = listroot; hostentry != NULL; hostentry = hostentry->next) {
 		if (strcmp(hostname, hostentry->hostname) == 0 && portnumber == hostentry->portnumber) {
+			#ifdef FAST_STARTUP
+			cache_deferred_cacheindex_load(hostentry);
+		        #endif
 		        return hostentry;
 		}
 	}
@@ -821,6 +854,7 @@ host_list new_host_record(char *hostname, char *dirname, int portnumber)
 		hostentry->cache	    = NULL;		/* no cached URLs yet */
 		hostentry->file_alloc.alloc_dir = -1;		/* Nothing allocated, flags not yet initialised */
 		hostentry->next		     = NULL;
+		hostentry->cache_loaded     = TRUE;		/* Default to YES we have loaded the cache */
 
 		/* if either string copy failed, free all the claimed memory, then indicate failure */
 		if ((hostentry->hostname == NULL) || (hostentry->dirname == NULL)) {
@@ -872,10 +906,15 @@ void cache__read_hostindex(void)
 	if (fp == NULL) return;
 
 	while (filemanage_gets(line, sizeof(line), fp)) {
+	        int argc, size;
+
 		/* Allow '|' as first character for a comment */
 		if (line[0] == '|') continue;
 
-		if (sscanf(line, "%s %s", dirname, hostname) != 2) continue;
+		argc = sscanf(line, "%s %s %d", dirname, hostname, &size);
+		if (argc < 2) continue;
+		if (argc < 3) size = 0;
+
 		colon = strrchr(hostname, ':');
 		if (colon != NULL) {
 		        port = atoi(colon + 1);
@@ -891,6 +930,11 @@ void cache__read_hostindex(void)
 		if (objtype != 1 || filesize <= 0 /*|| filetype != filetype_text*/) continue;
 		hostentry = new_host_record(hostname, dirname, port);
 		if (hostentry == NULL) continue;
+		#ifdef FAST_STARTUP
+		hostentry->cache_loaded = FALSE; /* we shall defer this */
+		hostentry->dirsize += size;	/* update running total */
+		global_cachesize += size;	/* update running total */
+		#endif
 		/* insert this host at the tail of the list */
 		*cacheroot_insert = hostentry;
 		cacheroot_insert  = &(hostentry->next);
@@ -911,7 +955,12 @@ void cache__write_hostindex(void)
 		host_list entry;
 		for (entry = global_cacheroot; entry && !filemanage_error(fp); entry = entry->next) {
 			/* for each host entry, write the directory name and the host that it holds */
-			filemanage_printf(fp, "%s %s\n", entry->dirname, entry->hostname);
+		        if (entry->dirsize > 0) {
+				filemanage_printf(fp, "%s %s %d\n", entry->dirname, entry->hostname, entry->dirsize);
+		        }
+		        else {
+				filemanage_printf(fp, "%s %s\n", entry->dirname, entry->hostname);
+		        }
 		}
 		filemanage_close(fp);
 	}
@@ -1114,6 +1163,8 @@ void cache__read_cacheindex(host_list hostentry)
 	insert		   = &(hostentry->cache);
 	hostentry->file_alloc.alloc_dir = -1; /* Nothing allocated, flags not yet initialised */
 
+	hostentry->cache_loaded = TRUE;
+
 	sprintf(buffer, "<WebServe$CacheRoot>.%s.CacheIndex", hostentry->dirname);
 
 	fp = filemanage_open(buffer, "r");
@@ -1156,6 +1207,10 @@ void cache__write_cacheindex(host_list hostentry)
 {
 	char	   buffer[256];
 	filemanage_FILE	  *fp;
+
+	if (hostentry->cache_loaded == FALSE) {
+	        return;
+	}
 
 	sprintf(buffer, "<WebServe$CacheRoot>.%s.CacheIndex", hostentry->dirname);
 	fp = filemanage_open(buffer, "w");
