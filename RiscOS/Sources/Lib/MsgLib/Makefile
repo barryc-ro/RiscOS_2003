@@ -143,21 +143,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.msghandle:	c.msghandle
-o.msghandle:	h.msghandle
-o.msghandle:	tbox:h.toolbox
-o.msghandle:	C:h.kernel
-o.msghandle:	tbox:h.wimp
-o.msghandle:	tbox:h.wimp
-o.msghandle:	tbox:h.wimplib
-o.msghandle:	C:h.kernel
-o.msghandle:	C:h.swis
-z.msghandle:	c.msghandle
-z.msghandle:	h.msghandle
-z.msghandle:	tbox:h.toolbox
-z.msghandle:	C:h.kernel
-z.msghandle:	tbox:h.wimp
-z.msghandle:	tbox:h.wimp
-z.msghandle:	tbox:h.wimplib
-z.msghandle:	C:h.kernel
-z.msghandle:	C:h.swis

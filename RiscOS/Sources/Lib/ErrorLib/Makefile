@@ -142,15 +142,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.error:	c.error
-o.error:	h.errors
-o.error:	C:h.kernel
-o.error:	C:h.swis
-o.error:	tbox:h.wimp
-o.error:	tbox:h.wimplib
-z.error:	c.error
-z.error:	h.errors
-z.error:	C:h.kernel
-z.error:	C:h.swis
-z.error:	tbox:h.wimp
-z.error:	tbox:h.wimplib

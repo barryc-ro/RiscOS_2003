@@ -156,18 +156,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.flashlib:	c.flashlib
-o.flashlib:	C:h.swis
-o.flashlib:	C:h.kernel
-o.flashlib:	C:h.kernel
-o.flashlib:	h.flashlib
-z.flashlib:	c.flashlib
-z.flashlib:	C:h.swis
-z.flashlib:	C:h.kernel
-z.flashlib:	C:h.kernel
-z.flashlib:	h.flashlib
-ot.flashlib:	c.flashlib
-ot.flashlib:	C:h.swis
-ot.flashlib:	C:h.kernel
-ot.flashlib:	C:h.kernel
-ot.flashlib:	h.flashlib
