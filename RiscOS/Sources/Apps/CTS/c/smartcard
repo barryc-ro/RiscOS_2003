@@ -224,3 +224,114 @@ void cts_sc_atexit(void)
 {
         (void) cts_sc_close();
 }
+
+
+void *cts_sc_construct_pin_op_apdu(
+	cts_sc_pin_op op,
+	const char *pin,
+	size_t pin_length,
+	int keyid,
+	size_t *apdu_length)
+{
+        struct {
+                unsigned char cla;
+                unsigned char ins;
+                unsigned char p1;
+                unsigned char p2;
+        } sc_header;
+        char *result;
+        size_t total_length;
+
+        total_length = sizeof(sc_header) + sizeof(unsigned char) + pin_length;
+
+        /* We must hex encode it as if it had come from the server, so double
+         * the buffer size so that there is space to perform the encode operation
+         */
+        *apdu_length = total_length << 1;
+
+	result = malloc(total_length << 1);
+	if (result != NULL) {
+	        switch (op) {
+	                case cts_sc_pin_op_VERIFY:
+	                        sc_header.cla = 0x00;
+	                        sc_header.ins = 0x20;
+	                        sc_header.p1  = 0x00;
+	                        sc_header.p2  = 0x80 | keyid;
+	                        break;
+                        case cts_sc_pin_op_CHANGE:
+	                        sc_header.cla = 0x80;
+	                        sc_header.ins = 0x32;
+	                        sc_header.p1  = 0x00;
+	                        sc_header.p2  =0x80 | keyid;
+                                break;
+                        default:
+                                dprintf(("", "Unknown pin_op when building APDU!\n"));
+                                free(result);
+                                return NULL;
+	        }
+	}
+	else {
+	        return NULL;
+	}
+
+	memcpy(result, &sc_header, sizeof(sc_header));
+	result[4] = pin_length;
+	memcpy(result+5, pin, pin_length);
+	cts_utils_binary_encode(result, result, total_length);
+
+        return result;
+}
+
+cts_sc_status cts_sc_pin_op_response(
+	cts_sc_pin_op op,
+	char *sw1sw2_response,
+	cts_sc_pin_op_response_codes *response,
+	size_t *retries_remaining)
+{
+        if (op == cts_sc_pin_op_VERIFY) {
+                static const struct {
+                        cts_sc_pin_op_response_codes response;
+                        char sw1;
+                        char sw2;
+                } mappings[] = {
+                        { pin_op_SUCCESS,		0x90, 0x00 },
+			{ pin_op_FAIL_RETRY_INVALID,	0x63, 0x00 },
+        		{ pin_op_FAIL_NO_EFID,		0x6A, 0x88 },
+        		{ pin_op_FAIL_WAS_LOCKED,	0x69, 0x84 },
+        		{ pin_op_FAIL_NOW_LOCKED,	0x63, 0xC0 },
+        		{ pin_op_FAIL_UNKNOWN,		0xFF, 0xFF }
+                };
+                const char sw1 = sw1sw2_response[0];
+                const char sw2 = sw1sw2_response[1];
+                const size_t map_size = sizeof(mappings) / sizeof(*mappings);
+                size_t i;
+
+                if (sw1 == 0x63 && (sw2 & 0xF0) == 0xC0) {
+                        *response = pin_op_FAIL_RETRY_VALID;
+                        *retries_remaining = sw2 & 0xF;
+                }
+                else for (i=0; i<map_size; ++i) {
+		        if (sw1 == mappings[i].sw1 &&
+		            sw2 == mappings[i].sw2 ||
+		            mappings[i].sw1 == 0xFF) {
+		                *response = mappings[i].response;
+		                break;
+		        }
+		}
+        }
+        else if (op == cts_sc_pin_op_CHANGE) {
+                if (sw1sw2_response[0] == '\x90' && sw1sw2_response[1] == '\0') {
+		        *response = pin_op_SUCCESS;
+                }
+                else {
+                        *response = pin_op_FAIL_UNKNOWN;
+                }
+        }
+        else {
+                /* Unknown verify op! */
+                cts_last_error.code = SCI_E_API;
+                return cts_sc_status_FAILED;
+        }
+
+        return cts_sc_status_COMPLETE;
+}
