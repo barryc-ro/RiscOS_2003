@@ -100,7 +100,10 @@ extern int errno;
 #define SYM_DEXSYM    0x04000000 /* directly-exported from a shared lib. */
 #define SYM_FNVSYM    0x08000000 /* exported via address-taken fn veneer */
 #define SYM_SCANLIB   0x10000000 /* scan library to satisfy reference */
-#define SYM_LINKFLAGS 0x1f000000
+#define SYM_KEEPSYM   0x20000000 /* retain this symbol in the output symt */
+#define SYM_STT_FILE  0x40000000 /* this was an STT_FILE symbol from an ELF file */
+#define SYM_STT_SECTION 0x80000000 /* this was an STT_SECTION symbol from an ELF file */
+#define SYM_LINKFLAGS 0xff000000
 
 #define MAXLINESIZE   256        /* Program limitation(s) */
 #define MAXSYMLEN     256        /* max symbol name length */
@@ -307,6 +310,8 @@ struct aentry {
     aof_reloc *cachedrelocs;
 #ifdef TARGET_HAS_ELF
     Elf32_Rela *relocp;
+    int32 elfsection;
+    struct hentry *elfsectionsym;
 #endif
 #ifdef LINKING_ON_ACORN_RISC_OS
     struct __link_list *area__link_list;   /* static ctors for CFront C++ */
@@ -380,7 +385,39 @@ static size_t pagesize;
 #endif
 
 #ifdef TARGET_HAS_ELF
+/* The output file */
 static Elf32_Ehdr *elfouthdr;
+static int32 elfouthdrsize;
+static char **elfshstrtaba;
+static char *elfshstrtab;
+static int32 elfshstrtabsize;
+
+/* All ELF files that we generate will be in the same format.  The first
+ * few sections are fixed down to OUTELF_FIRST_PROG.  Then the sections
+ * go in pairs: a relocation section then the section that the table relocates.
+ * This is done to simplify the generation of the section header table.  It
+ * also enables the most efficient section header string table section to be
+ * generated as substrings can be used.  If you change this layout, then
+ * init_elf_section() needs to know about it and so do various other section
+ * handling routines.
+ */
+
+/* Define some fixed section numbers for output files */
+#define OUTELF_NULL            0 /* Null first section */
+#define OUTELF_COMMENT         1 /* Comment section */
+#define OUTELF_SHSTRT          2 /* section header string table */
+#define OUTELF_SYMTAB          3 /* symbol table */
+#define OUTELF_STRTAB          4 /* string table */
+#define OUTELF_FIRST_PROG      5 /* first section to contain program data */
+#define OUTELFCOMMENT_COMPANY  "Pace"
+#define OUTELFCOMMENT_DESC     SELF IDFNSTR
+/* The following two macros give the section numbers for ov->outarea[n] and its relocations */
+#define ELFRELSECTION(n)       (OUTELF_FIRST_PROG + 0 + 2 * (n))
+#define ELFSECTION(n)          (OUTELF_FIRST_PROG + 1 + 2 * (n))
+/* The following macro gives a section header pointer for the given section number in the ELF output file */
+#define ELFSECTIONHEADER(shn)  (((Elf32_Shdr *) (elfouthdr + 1)) + (shn))
+
+/* A structure for representing an ELF section that has been mapped into memory */
 typedef struct {
     char *data;                /* Mapped data block */
     int32 size;                /* Size of mapped data block */
@@ -388,6 +425,16 @@ typedef struct {
     int32 count;               /* Number of entries in array if this section is array format */
     int32 base;                /* base index of this array (to allow disjoint arrays) */
 } mapped_elf_section;
+
+/* Sort based on ELF output ordering requirements */
+typedef enum {
+      elfsym_STT_FILE,
+      elfsym_MAPPINGS,
+      elfsym_STT_LOCAL,
+      elfsym_STT_GLOBAL,
+      elfsym_OTHER,
+      elfsym__MAX
+} elf_sym_class;
 #endif
 
 static struct aentry *entryarea, *outentryarea;
@@ -439,6 +486,8 @@ static char libdataflag;       /* put shared lib data in the library */
 static char cplusplusflag;     /* support CFront-style ctors and dtors, and name demangling */
 static int warned_cpp;
 #endif
+
+static struct hentry *globinsert(const char *name, struct sym *sy, char *id);
 
 
 static unsigned char match_opts;
@@ -544,6 +593,9 @@ struct listspec
 
 static struct listspec reloclist;
 static struct listspec aofreloclist;
+#ifdef TARGET_HAS_ELF
+static struct listspec elfreloclist;
+#endif
 #ifdef TARGET_HAS_AOUT
 static struct listspec aoutreloclist;
 #endif
@@ -566,6 +618,9 @@ static struct globalfile fout;
 #define BSS_AREA         2
 
 
+/* reversing_bytes must be 0 or 1 as it is XORed with the result
+ * of find_host_endianness
+ */
 static int reversing_bytes = 0;
 static int magic_encode_init = -1;
 
@@ -606,7 +661,10 @@ static unsigned short tvs(int32 v)
     return (unsigned short) v;
 }
 
-/* Return 1 if this host is big-endian, 0 if it is little-endian */
+/* Return 1 if this host is big-endian, 0 if it is little-endian
+ * No other value is acceptable as other parts of the code XOR
+ * this value with reversing_bytes.
+ */
 static int find_host_endianness(void)
 {
     static int endianness = -1;
@@ -818,14 +876,19 @@ static void closeout(struct oventry *ov)
           }
 #    ifdef TARGET_HAS_ELF
           else if (output_type == ELF)
-          {  ftype = 0xffd;                     /* object file */
+          {  if (plinkflag)
+             { ftype = 0xffd;                   /* object file */
+             }
+             else
+             { ftype = 0xe1f;                   /* program file */
+             }
           }
 #    endif
           settype(outf, ftype);
         }
 #  endif
 #endif
-        if (fatal_count || error_count)
+        if (verboseflag < 2) if (fatal_count || error_count)
         {   remove( outf );
             fprintf(stderr, msgtext(misc_removeoutput), SELF, outf);
         }
@@ -1475,21 +1538,93 @@ static void fix_up_aout_header(void)
 
 #ifdef TARGET_HAS_ELF
 
+static int32 elf_add_shstrt_entry(char *name)
+{
+  int32 i;
+  int32 offset = 0;
+  int32 nlen = strlen(name);
+
+  for (i = 0; elfshstrtaba[i]; ++i) {
+    char *substr = strstr(elfshstrtaba[i], name);
+    if (substr && !substr[nlen]) {
+      return offset + (substr - elfshstrtaba[i]);
+    }
+    offset += strlen(elfshstrtaba[i]) + 1L;
+  }
+  elfshstrtaba[i] = name;
+  return offset;
+}
+
+/* Initialise an ELF section header.  All the fields are initialised, and those that require a specific
+ * entry size or reference to another section have those fields filled in correctly.  Thus this routine
+ * relies on the fixed layout format specified at the top of this file.
+ */
+static Elf32_Shdr *init_elf_section(Elf32_Shdr *sections, int32 idx, Elf32_Word type, char *name, Elf32_Word flags)
+{
+  Elf32_Shdr *s = sections + idx;
+  s->sh_name = tv(elf_add_shstrt_entry(name));
+  s->sh_type = tv(type);
+  s->sh_flags = tv(flags);
+  s->sh_addr = tv(0);
+  s->sh_offset = tv(0);
+  s->sh_size = tv(0);
+  s->sh_addralign = (type == SHT_PROGBITS || type == SHT_NOBITS) ? tv(4) : tv(0);
+  if (type == SHT_REL || type == SHT_RELA) {
+    s->sh_link = tv(OUTELF_SYMTAB);
+    s->sh_info = tv(idx + 1);
+    s->sh_entsize = tv(type == SHT_REL ? sizeof(Elf32_Rel) : sizeof(Elf32_Rela));
+  }
+  else if (type == SHT_SYMTAB) {
+    s->sh_link = tv(OUTELF_STRTAB);
+    s->sh_info = tv(0);
+    s->sh_entsize = tv(sizeof(Elf32_Sym));
+  }
+  else {
+    s->sh_info = tv(0);
+    s->sh_link = tv(SHN_UNDEF);
+    s->sh_entsize = tv(0);
+  }
+  return s;
+}
+
+static char *write_elf_comment(int32 *size)
+{
+  char *data;
+
+  *size = (sizeof(OUTELFCOMMENT_COMPANY " " OUTELFCOMMENT_DESC) + 3) & ~3;
+  data = salloc(*size);
+  memcpy(data, OUTELFCOMMENT_COMPANY " " OUTELFCOMMENT_DESC, (size_t) *size);
+  return data;
+}
+
 static void write_elf_header(struct oventry *ov)
 {
   Elf32_Shdr *sections;
-  int i;
+  int32 i, j;
+  int32 shstrtabsize, hdrtotal, commentsize;
+  char *shstrtab, *psh, *comment;
 
   if (ov == &root) {
-    int32 nsections = ov->noofoutareas + 1 /* section header string table */ + 1 /* section 0 */;
-    elfouthdr = (Elf32_Ehdr *) salloc(sizeof(Elf32_Ehdr) + nsections * sizeof(Elf32_Shdr));
+    int32 nsections =
+        ov->noofoutareas /* Count each output area */
+      + ov->noofoutareas /* each area may require a relocation section (always use Elf32_Rel) */
+      + 1 /* section 0 */
+      + 1 /* section header string table */
+      + 1 /* string table */
+      + 1 /* symbol table */
+      + 1 /* comment section */
+      ;
+    hdrtotal = sizeof(Elf32_Ehdr) + nsections * sizeof(Elf32_Shdr);
+    elfshstrtaba = (char **) halloc(nsections * sizeof(char *));
+    for (i=0; i<nsections; ++i) elfshstrtaba[i] = NULL;
+    elfouthdr = (Elf32_Ehdr *) halloc(hdrtotal);
     sections = (Elf32_Shdr *) (elfouthdr + 1);
     elfouthdr->e_ident[EI_MAG0] = ELFMAG0;
     elfouthdr->e_ident[EI_MAG1] = ELFMAG1;
     elfouthdr->e_ident[EI_MAG2] = ELFMAG2;
     elfouthdr->e_ident[EI_MAG3] = ELFMAG3;
     elfouthdr->e_ident[EI_CLASS] = ELFCLASS32;
-    elfouthdr->e_ident[EI_DATA] = ELFDATA2LSB;
+    elfouthdr->e_ident[EI_DATA] = (find_host_endianness() ^ reversing_bytes) ? ELFDATA2MSB : ELFDATA2LSB;
     elfouthdr->e_ident[EI_VERSION] = EV_CURRENT;
     for (i = EI_PAD; i < EI_NIDENT; ++i)
       elfouthdr->e_ident[i] = 0;
@@ -1498,36 +1633,94 @@ static void write_elf_header(struct oventry *ov)
     elfouthdr->e_version = tv(EV_CURRENT);
     elfouthdr->e_entry = tv(0);
     elfouthdr->e_phoff = tv(0);
-    elfouthdr->e_shoff = tv(elfouthdr->e_ehsize);
+    elfouthdr->e_shoff = tv(sizeof(Elf32_Ehdr));
     elfouthdr->e_flags = tv(0);
     elfouthdr->e_ehsize = tvs(sizeof(Elf32_Ehdr));
     elfouthdr->e_phentsize = tvs(0);
     elfouthdr->e_phnum = tvs(0);
     elfouthdr->e_shentsize = tvs(sizeof(Elf32_Shdr));
     elfouthdr->e_shnum = tvs(nsections);
-    elfouthdr->e_shstrndx = tvs(1);
-    sections->sh_name = tv(0);
-    sections->sh_type = tv(SHT_NULL);
-    sections->sh_flags = tv(0);
-    sections->sh_addr = tv(0);
-    sections->sh_offset = tv(0);
-    sections->sh_size = tv(0);
-    sections->sh_link = tv(SHN_UNDEF);
-    sections->sh_info = tv(0);
-    sections->sh_addralign = tv(0);
-    sections->sh_entsize = tv(0);
-    writebytes(0, (char *) elfouthdr, sizeof(Elf32_Ehdr) + nsections * sizeof(Elf32_Shdr));
+    elfouthdr->e_shstrndx = tvs(OUTELF_SHSTRT);
+    init_elf_section(sections, OUTELF_NULL, SHT_NULL, "", 0);
+    init_elf_section(sections, OUTELF_COMMENT, SHT_PROGBITS, ".comment", 0)->sh_addralign = tv(0);
+    init_elf_section(sections, OUTELF_SHSTRT, SHT_STRTAB, ".shstrtab", 0);
+    init_elf_section(sections, OUTELF_SYMTAB, SHT_SYMTAB, ".symtab", SHF_ALLOC);
+    init_elf_section(sections, OUTELF_STRTAB, SHT_STRTAB, ".strtab", 0);
+    for (i = 0; i < ov->noofoutareas; ++i) {
+      /* Note that we might NULL out some of these later on (e.g. relocation
+       * sections for the zero-init data), but that doesn't matter as we can
+       * simply reset the type of the section to NULL.  Don't worry about the
+       * wasted space in the section header string table - we're only talking
+       * about a few bytes (and many of those will be shared with the actual
+       * area name!)
+       */
+      Elf32_Shdr *s;
+      Elf32_Word sh_flags;
+      struct sym tsym;
+      struct aentry *aep = ov->outareas[i];
+      char *name = salloc((strlen(aep->h->name) + 5L));
+      sprintf(name, ".rel%s", aep->h->name);
+      sh_flags = SHF_ALLOC;
+      if (!(aep->attrs & AOF_RONLYAT)) sh_flags |= SHF_WRITE;
+      if (aep->attrs & AOF_CODEAT) sh_flags |= SHF_EXECINSTR;
+      if (aep->attrs & AOF_COMDEFAT) sh_flags |= SHF_COMDEF;
+      init_elf_section(sections, ELFRELSECTION(i), SHT_REL, name, 0);
+      s = init_elf_section(sections, ELFSECTION(i), SHT_PROGBITS, name + 4, sh_flags);
+      s->sh_addralign = tv(1L<<(aep->attrs & AOF_ALMASK));
+      aep->elfsection = ELFSECTION(i);
+      zmem((char *) &tsym, sizeof(tsym));
+//      tsym.value = 0;
+//      tsym.area = aep;
+//      tsym.flags = SYM_LOCALDEFAT | SYM_STT_SECTION;
+//      aep->elfsectionsym = globinsert(elfshstrtaba[i], &tsym, aep->oep->objectid);
+    }
+    /* Construct the section header string table */
+    for (j = 0, i = 0; elfshstrtaba[i]; ++i) {
+      j += 1L + strlen(elfshstrtaba[i]);
+    }
+    shstrtabsize = (j + 3 & ~3);
+    sections[OUTELF_SHSTRT].sh_offset = tv(hdrtotal);
+    sections[OUTELF_SHSTRT].sh_size = tv(j);
+    elfshstrtab = shstrtab = halloc(j);
+    elfshstrtabsize = j;
+    strtsize += j * 2; /* HACK.  Account for shared strings here */
+    zmem(shstrtab + j - 4, 4);
+    for (i = 0, psh = shstrtab; elfshstrtaba[i]; ++i) {
+      strcpy(psh, elfshstrtaba[i]);
+      psh = strchr(psh, '\0') + 1;
+    }
+    /* Done. shstrsize[shstrtabsize] constructed ready to write to file */
+    /* Construct the information string to put in the comment section */
+    comment = write_elf_comment(&commentsize);
+    sections[OUTELF_COMMENT].sh_size = tv(commentsize);
+    sections[OUTELF_COMMENT].sh_offset = tv(hdrtotal + shstrtabsize);
+    /* Done. */
+
+    /* Setup the first code area's offset */
+    sections[ELFSECTION(0)].sh_offset = tv(hdrtotal + shstrtabsize + commentsize);
+
+    /* OK - write out the first bits of the file */
+    elfouthdrsize = hdrtotal;
+    writebytes(0, (char *) elfouthdr, hdrtotal);
+    writebytes(fout.currentpos, shstrtab, shstrtabsize);
+    writebytes(fout.currentpos, comment, commentsize);
+
   }
 
-  msg("3ELF output is not supported at this time. Sorry.");
+  areaoutposn = fout.currentpos;
+  relocposn = fout.currentpos + ov->outareas[0]->areasiz;
 }
 
 static void fix_up_elf_globals(void)
 {
+  /* Nothing to do! ELF does not require you to grub around fiddling
+   * with chunk and area offsets like AOF does.
+   */
 }
 
 static void fix_up_elf_header(void)
 {
+    writebytes(0, (char *) elfouthdr, elfouthdrsize);
 }
 
 #endif /* TARGET_HAS_ELF */
@@ -2086,6 +2279,9 @@ static struct aentry *addarea(char *name, struct oentry *oep, int32 areaoff,
                 a->oep = oep;
                 a->areano = areano;
                 a->attrs = attrs;
+#ifdef TARGET_HAS_ELF
+                a->elfsection = SHN_UNDEF;
+#endif
             }
             return a;
         }
@@ -2118,6 +2314,7 @@ new_area:
     a->nxt = NULL;
 #ifdef TARGET_HAS_ELF
     a->relocp = NULL;
+    a->elfsection = SHN_UNDEF;
 #endif
 #ifdef LINKING_ON_ACORN_RISC_OS
     a->area__link_list = 0;
@@ -2213,7 +2410,7 @@ static int32 filetype(struct fentry *fep)
                 msg(fatal_badelf_type(fep->fname," relocatable"));
             }
             /* We are only interested if this object has sections */
-            if (hv(e->e_shnum) > 0)
+            if (tvs(e->e_shnum) > 0)
                 return ELF;
         }
 #endif
@@ -2662,24 +2859,24 @@ static int32 elf_match_relocs(Elf32_Shdr *sections, int32 nsections, mapped_elf_
 static char *elf_relocation_type_name(int32 num)
 {
     switch (num) {
-        case R_ARM_NONE       : return " 0 /* Any                  No relocation */"; break;
-        case R_ARM_PC24       : return " 1 /* ARM B/BL             S - P + A */    "; break;
-        case R_ARM_ABS32      : return " 2 /* 32-bit word          S + A */        "; break;
-        case R_ARM_REL32      : return " 3 /* 32-bit word          S - P + A */    "; break;
-        case R_ARM_PC13       : return " 4 /* ARM LDR r,[pc,...]   S - P + A */    "; break;
-        case R_ARM_ABS16      : return " 5 /* 16-bit halfword      S + A */        "; break;
-        case R_ARM_ABS12      : return " 6 /* ARM LDR/STR          S + A */        "; break;
-        case R_ARM_THM_ABS5   : return " 7 /* Thumb LDR/STR        S + A */        "; break;
-        case R_ARM_ABS8       : return " 8 /* 8-bit byte           S + A */        "; break;
-        case R_ARM_SBREL32    : return " 9 /* Word                 S - B + A */    "; break;
-        case R_ARM_THM_PC22   : return "10 /* Thumb BL pair        S - P + A */    "; break;
-        case R_ARM_THM_PC8    : return "11 /* Thumb LDR r,[pc,...] S - P + A */    "; break;
-        case R_ARM_AMP_VCALL9 : return "12 /* AMP VCALL            S - B + A */    "; break;
-        case R_ARM_SWI24      : return "13 /* ARM SWI              S + A */        "; break;
-        case R_ARM_THM_SWI8   : return "14 /* Thumb SWI            S + A */        "; break;
-        case R_ARM_XPC25      : return "15 /* ARM BLX              S - P + A */    "; break;
-        case R_ARM_THM_XPC22  : return "16 /* Thumb BLX pair       S - P + A */    "; break;
-        default:                return "-- unknown - unknown - unknown - unknown --"; break;
+        case R_ARM_NONE       : return "None"                ; break; /*  0 */
+        case R_ARM_PC24       : return "ARM B/BL"            ; break; /*  1 */
+        case R_ARM_ABS32      : return "32-bit word"         ; break; /*  2 */
+        case R_ARM_REL32      : return "32-bit word"         ; break; /*  3 */
+        case R_ARM_PC13       : return "ARM LDR r,[pc,...]"  ; break; /*  4 */
+        case R_ARM_ABS16      : return "16-bit halfword"     ; break; /*  5 */
+        case R_ARM_ABS12      : return "ARM LDR/STR"         ; break; /*  6 */
+        case R_ARM_THM_ABS5   : return "Thumb LDR/STR"       ; break; /*  7 */
+        case R_ARM_ABS8       : return "8-bit byte"          ; break; /*  8 */
+        case R_ARM_SBREL32    : return "Word"                ; break; /*  9 */
+        case R_ARM_THM_PC22   : return "Thumb BL pair"       ; break; /* 10 */
+        case R_ARM_THM_PC8    : return "Thumb LDR r,[pc,...]"; break; /* 11 */
+        case R_ARM_AMP_VCALL9 : return "AMP VCALL"           ; break; /* 12 */
+        case R_ARM_SWI24      : return "ARM SWI"             ; break; /* 13 */
+        case R_ARM_THM_SWI8   : return "Thumb SWI"           ; break; /* 14 */
+        case R_ARM_XPC25      : return "ARM BLX"             ; break; /* 15 */
+        case R_ARM_THM_XPC22  : return "Thumb BLX pair"      ; break; /* 16 */
+        default:                return "UNKNOWN"             ; break; /* Unknown */
     }
 }
 
@@ -2688,6 +2885,27 @@ static char *elf_string(mapped_elf_section *mes, int32 n)
     if (!mes || n >= mes->size || n == STN_UNDEF) return "";
     return mes->data + n;
 }
+
+/* This function converts an ELF alignment to an AOF alignment
+ * The former stores the alignment, the latter the log2 of it
+ */
+static unsigned32 elf_alignment(Elf32_Word alignment, struct oentry *oep, char *id)
+{
+    unsigned32 extra_bits = 0;
+
+    if (alignment != 0) {
+        int32 aalign = 0;
+        for (aalign = 0; aalign < 32; ++aalign) {
+          if (alignment == (1L<<aalign)) break;
+          if (alignment & (1L<<aalign))
+               msg(fatal_bad_alignment(oep->fep->fname, *id?id:"(unnamed)",alignment));
+        }
+        extra_bits = aalign;
+    }
+
+    return extra_bits & AOF_ALMASK;
+}
+
 #endif /* TARGET_HAS_ELF */
 
 static void load1_elf(struct oentry *oep)
@@ -2702,14 +2920,17 @@ static void load1_elf(struct oentry *oep)
     int32 num, i;
     int32 symno;
     int32 nrelocs;
+    int32 common_section_id;
+    int32 ncommons;
 
     mapped_elf_section *msec;
     mapped_elf_section *shstrt;
     mapped_elf_section *strt;
 
-    nsections = hv(elf->e_shnum);
+    nsections = tvs(elf->e_shnum);
     shstrgsectionid = hv(elf->e_shstrndx);
     strgsectionid = SHN_UNDEF;
+    ncommons = 0;
 
     if (nsections == 0 || elf->e_shoff == 0) {
         msg(fatal_badelf_file(oep->fep->fname));
@@ -2736,18 +2957,25 @@ static void load1_elf(struct oentry *oep)
         int32 shsize = hv(sections[num].sh_size);
         int32 shoffset = hv(sections[num].sh_offset);
 
+        if (verboseflag >= 2)
+            msg("0  Section %ld is at offset %#x and has size %#x", num, shoffset, shsize);
+
         msec[num].data = NULL;
         msec[num].type = type = hv(sections[num].sh_type);
         msec[num].size = hv(sections[num].sh_size);
         if (type == SHT_SYMTAB) {
             /* Ensure we have an array of symbols for the symbol table */
-            if (entsize == 0 || shsize == 0) {
+            if (entsize < sizeof(Elf32_Sym)) {
                 msg(fatal_badelf_badsymt(oep->fep->fname, num));
             }
             msec[num].count = shsize / entsize;
             msec[num].data = elf_load_array(shoffset, sizeof(Elf32_Sym), entsize, msec[num].count);
             msec[num].base = nsyms;
             nsyms += msec[num].count;
+            for (i = 0; i < msec[num].count; ++i) {
+              Elf32_Sym *sym = ((Elf32_Sym *) msec[num].data) + i;
+              if (xvs(sym->st_shndx) == SHN_COMMON) ++ncommons;
+            }
         }
         else if (type == SHT_REL || type == SHT_RELA) {
             /* Automatically upgrade all Elf32_Rel types to Elf32_Rela with r_addend=0 */
@@ -2764,21 +2992,18 @@ static void load1_elf(struct oentry *oep)
         }
         else if (type == SHT_STRTAB) {
             msec[num].data = map(hv(sections[num].sh_offset), msec[num].size);
-            if (num != shstrgsectionid) {
-                strgsectionid = num;
-            }
         }
         else {
-            /* We don't want to map this section */
+            /* We don't want to map this section yet (or maybe ever) */
         }
     }
 
     shstrt = msec + shstrgsectionid;
-    strt = msec + strgsectionid;
+    common_section_id = nsections;
 
     /* Areas */
-    oep->arealist = (struct aentry **) halloc(nsections * sizeof(struct aentry *));
-    for (sp = sections + (num = 1); num < nsections; ++num, ++sp) {
+    oep->arealist = (struct aentry **) halloc((nsections + ncommons) * sizeof(struct aentry *));
+    for (sp = sections + (num = 0); num < nsections; ++num, ++sp) {
       Elf32_Word type = hv(sp->sh_type);
       Elf32_Word flags = hv(sp->sh_flags);
       int32 attributes;
@@ -2789,8 +3014,8 @@ static void load1_elf(struct oentry *oep)
       const int is_code  = (flags & SHF_EXECINSTR) != 0;
 
       if (verboseflag >= 2)
-          msg("0    Section %ld has name %s, flags: %#lx  type: %#lx",
-              num, elf_string(shstrt, hv(sp->sh_name)), flags, type);
+          msg("0    Section %ld has name %s, flags: %#lx,  type: %#lx,  at offset %#x, length %#x",
+              num, elf_string(shstrt, hv(sp->sh_name)), flags, type, hv(sp->sh_offset), hv(sp->sh_size));
 
       /* The read-only attribute can be done easily and generically */
       attributes = is_write ? 0 : AOF_RONLYAT;
@@ -2826,13 +3051,7 @@ static void load1_elf(struct oentry *oep)
         }
 
         if (alignment != 0) {
-            int32 aalign = 0;
-            for (aalign = 0; aalign < 32; ++aalign) {
-              if (alignment == (1L<<aalign)) break;
-              if (alignment & (1L<<aalign))
-                  msg(fatal_bad_alignment(oep->fep->fname, *id?id:"(unnamed)",alignment));
-            }
-            attributes |= aalign;
+            attributes |= elf_alignment(alignment, oep,  *id?id:"(unnamed)");
         }
 
         /* Count relocations which alter section "num", copy to data pointer if non-NULL */
@@ -2870,6 +3089,7 @@ static void load1_elf(struct oentry *oep)
     symno = 0;
     for (i = 0; i < nsections; ++i) if (msec[i].type == SHT_SYMTAB) {
         Elf32_Sym *sybase = (Elf32_Sym *) msec[i].data;
+        strt = msec + hv(sections[i].sh_link);
         for (num = 0; num < msec[i].count; ++num) {
             Elf32_Sym *sy = sybase + num;
             struct sym tsym;
@@ -2877,6 +3097,11 @@ static void load1_elf(struct oentry *oep)
             unsigned char stb, stt;
             Elf32_Word secidx;
             int32 attributes;
+            int create_sym;
+            char *symname;
+
+            /* We will create this symbol by default (unless it is symbol 0) */
+            create_sym = (num != 0);
 
             zmem((char *) &tsym, sizeof(tsym));
             tsym.area = NULL;
@@ -2887,6 +3112,7 @@ static void load1_elf(struct oentry *oep)
             secidx = xvs(sy->st_shndx);
 
             attributes = 0;
+            symname = elf_string(strt, hv(sy->st_name));
 
             /* Treating unknown types as STB_LOCAL will avoid random symbols getting into
              * the global name space - but we MUST keep all the symbols in our array,
@@ -2906,15 +3132,23 @@ static void load1_elf(struct oentry *oep)
             }
 
             if (stt == STT_FILE) {
-                attributes |= SYM_ABSAT;
+                attributes |= SYM_ABSAT | SYM_STT_FILE;
             }
-            else if (stt == STT_FUNC || stt == STT_SECTION) {
+            else if (stt == STT_SECTION) {
+                /* Retain this symbol as being offset 0 into the section for which
+                 * it is the section symbol!
+                 */
+                tsym.value = 0;
+                attributes |= SYM_STT_SECTION;
+            }
+            else if (stt == STT_FUNC || stt == STT_NOTYPE) {
                 if (tsym.value & 1) attributes |= SYM_THUMBAT;
             }
             else if (stt == STT_OBJECT) {
                 attributes |= SYM_DATAAT;
             }
             else {
+                create_sym = 0;
             }
 
             if (secidx == SHN_UNDEF) {
@@ -2924,6 +3158,18 @@ static void load1_elf(struct oentry *oep)
                 attributes |= SYM_ABSAT;
             }
             else if (secidx == SHN_COMMON) {
+                /* In ELF, you don't get a section dedicated to the storage of this item,
+                 * so you need to create a fake area instead and make it zero-init data.
+                 * Make the *symbol* local, and offset 0 into the zero-init area representing
+                 * the common definition, as relocations may refer to the symbol.
+                 */
+                 unsigned32 flags = elf_alignment(hv(sy->st_value), oep, symname) | AOF_0INITAT | AOF_COMDEFAT;
+                 oep->arealist[common_section_id] = addarea(symname, oep, sizeof(*elf) /* needs to be a valid file offset */,
+                     hv(sy->st_size), USE_REL_CACHE, 0, flags, common_section_id);
+                attributes = ((attributes & ~SYM_REFDEFMASK) | SYM_LOCALDEFAT | SYM_COMMONAT | SYM_DATAAT);
+                tsym.area = oep->arealist[common_section_id];
+                tsym.value = 0;
+                 ++common_section_id;
             }
             else if (secidx > SHN_UNDEF && secidx < nsections) {
                 if (attributes & SYM_DEFAT) {
@@ -2936,20 +3182,19 @@ static void load1_elf(struct oentry *oep)
                 id = oep->objectid;
             else
                 id = "!!";                       /* magic id for globals */
-            if (num != 0) {
-                char *name = elf_string(strt, hv(sy->st_name));
-
+            if (create_sym) {
                 if (verboseflag >= 2) {
-                    msg("0    Symbol %ld (%s) %s%s%s%s%s (STT %#x, STB %#x)", num, name,
+                    msg("0    Symbol %ld (%s) %s%s%s%s%s%s (STT %#x, STB %#x, VAL %#lx)", num, symname,
+                        (attributes & SYM_COMMONAT) ? "common ": "",
                         (attributes & SYM_WEAKAT) ? "weak " : "",
                         (attributes & SYM_ABSAT) ? "absolute " : "",
                         (attributes & SYM_THUMBAT) ? "thumb " : "",
                         (attributes & SYM_DATAAT) ? "data " : "code ",
                         (attributes & SYM_REFDEFMASK) == SYM_GLOBALDEFAT ? "global definition" :
                         (attributes & SYM_REFDEFMASK) == SYM_LOCALDEFAT ? "local definition" : "external definition",
-                        stt, stb);
+                        stt, stb, tsym.value);
                 }
-                oep->numtosym[symno++] = globinsert(name, &tsym, id);
+                oep->numtosym[symno++] = globinsert(symname, &tsym, id);
             }
             else {
                 /* Special case for symbol number 0 (STN_UNDEF) */
@@ -2975,34 +3220,46 @@ static void load1_elf(struct oentry *oep)
  * The addend is the r_addend field of an Elf32_Rela relocation. The subend is the "- P" part of the relocation
  * which needs to be applied here when converting to an AOF relocation to make the relocation be relative to
  * the start of the area containing the data instead of relative to the position of the instruction inself.
+ *
+ * NOTE: Right-shifting a signed value which is negative results in either a logical or arithmetic shift, but
+ *       which one it is is implementation defined!  Therefore we must perform arithmetic shifts "manually"
+ *       in order to guarantee sign preservation.
+ *
+ * NOTE: Shifting by negative amounts is undefined behaviour, hence the sign checks on unitsshift.
+ *
+ * NOTE: This routine can also used for AOF->ELF translation by supplying P as the addend and 0 as the subend
  */
 static int32 elf_reloc_addend(int32 instr, int32 addend, int32 subend, int signextend, int msb, int unitsshift)
 {
     int32 r, mask, check;
 
     /* Firstly, split the value to be changed from the instruction */
-    if (msb < 31) {
-      mask = (int32) ((1L << msb) - 1);
+    if (msb == 31) {
+      mask = 0xffffffff;
+    }
+    else if (msb == 30) {
+      mask = 0x7fffffff;
     }
     else {
-      mask = 0xffffffff;
+      mask = (int32) ((1L << (msb+1)) - 1);
     }
     r = instr & mask;
     instr ^= r;
 
     /* Sign-extend if necessary */
-    if (msb < 31 && signextend) {
-      int shift = 31 - msb;
-      r = (r << shift) >> shift;
+    if (signextend && (r&(1L<<msb))) {
+      /* If sign bit was set, set all the other non-masked bits to match it */
+      r |= ~mask;
     }
 
     /* Convert units to bytes if not already bytes (e.g. R_ARM_PC24 encodes signed numbers of words) */
-    /* Shift by negative amount is undefined behaviour, so trap negative unit shifts explicitly      */
     if (unitsshift > 0) {
       r <<= unitsshift;
     }
     else if (unitsshift != 0) {
+      int32 top_bit = r >> 31;
       r >>= -unitsshift;
+      if (top_bit) r |= 0xffffffffl << (31 + unitsshift);
     }
 
     /* Add the addend, subtract the subend */
@@ -3011,10 +3268,12 @@ static int32 elf_reloc_addend(int32 instr, int32 addend, int32 subend, int signe
 
     /* Convert back to original units */
     if (unitsshift > 0) {
+      int32 top_bit = r >> 31;
       r >>= unitsshift;
+      if (top_bit) r |= 0xffffffffl << (31 - unitsshift);
     }
     else if (unitsshift != 0) {
-      r <<= unitsshift;
+      r <<= -unitsshift;
     }
 
     check = (r & ~mask);
@@ -3025,8 +3284,6 @@ static int32 elf_reloc_addend(int32 instr, int32 addend, int32 subend, int signe
         msg(fatal_badelf_ovun);
       }
     }
-
-    /* Check bit 31 and bit 31 - unitsshift are the same value if the value was signed? Shouldn't need to. */
 
     /* Merge new value back into the instruction */
     return instr | (r & mask);
@@ -3042,14 +3299,18 @@ static int32 elf_reloc_addend(int32 instr, int32 addend, int32 subend, int signe
  */
 static int elf_translate_relocation(aof_reloc *aofr, Elf32_Rela *elfr, struct aentry *aep, char *area, int32 size)
 {
-    int result = -1;
+    enum {
+      etr_NO_SUPPORT = 4,
+      etr_REWRITE    = 2,
+      etr_REMOVE     = 1
+    };
+    int result = 0;
     int32 instrword, *pinstr, temp;
     unsigned32 sid = REL_TYPE2 | (unsigned32) rel2_sid(ELF32_R_SYM(elfr->r_info));  /* Basic common flags */
     if (verboseflag >= 4) {
-        msg("0  Relocation: offset %#06x: %#04x: addend %#010x",
-            elfr->r_offset, ELF32_R_TYPE(elfr->r_info), elfr->r_addend);
-        msg("0    %s  (S = %s)", elf_relocation_type_name(ELF32_R_TYPE(elfr->r_info)),
-          aep->oep->numtosym[ELF32_R_SYM(elfr->r_info)]->name);
+        msg("0  Relocation: offset %#06x: %#04x (%s): addend %#010x: symbol %d (%s)",
+            elfr->r_offset, ELF32_R_TYPE(elfr->r_info), elf_relocation_type_name(ELF32_R_TYPE(elfr->r_info)),
+            elfr->r_addend, ELF32_R_SYM(elfr->r_info), aep->oep->numtosym[ELF32_R_SYM(elfr->r_info)]->name + 2);
     }
     aofr->rel_offset = elfr->r_offset;
     if (aofr->rel_offset < 0 || aofr->rel_offset >= size) {
@@ -3057,26 +3318,27 @@ static int elf_translate_relocation(aof_reloc *aofr, Elf32_Rela *elfr, struct ae
     }
     aofr->rel_flags = 0;
     pinstr = (int32 *) (area + (aofr->rel_offset & ~3));
+    area += aofr->rel_offset;
     instrword = hv(*pinstr);
 
     switch (ELF32_R_TYPE(elfr->r_info)) {
         case R_ARM_NONE      : /* Any                  No relocation */
-            result = 1;
+            result = etr_REMOVE;
             break;
         case R_ARM_PC24      : /* ARM B/BL             S - P + A */
             aofr->rel_flags = sid | REL_INSTR | REL_R | REL_A | rel_II(1);
             instrword = elf_reloc_addend(instrword, elfr->r_addend, aofr->rel_offset, 1, 23, 2);
-            result = 0;
+            result = etr_REWRITE;
             break;
         case R_ARM_ABS32     : /* 32-bit word          S + A */
             aofr->rel_flags = sid | REL_LONG | REL_A;
             instrword += elfr->r_addend;
-            result = 0;
+            result = etr_REWRITE;
             break;
         case R_ARM_REL32     : /* 32-bit word          S - P + A */
             aofr->rel_flags = sid | REL_LONG | REL_A | REL_R;
             instrword = elf_reloc_addend(instrword, elfr->r_addend, aofr->rel_offset, 0, 31, 0);
-            result = 0;
+            result = etr_REWRITE;
             break;
         case R_ARM_PC13      : /* ARM LDR r,[pc,...]   S - P + A */
             aofr->rel_flags = sid | REL_INSTR | REL_A | REL_R | rel_II(1);
@@ -3092,86 +3354,164 @@ static int elf_translate_relocation(aof_reloc *aofr, Elf32_Rela *elfr, struct ae
             }
             if (temp & 1000) { /* if result was negative */
                 instrword |= 1<<23;
-                temp = -((temp << 20) >> 20);
+                temp = -(temp | 0xfffff000l);
             }
             instrword |= (temp & 0xFFF);
-            result = 0;
+            result = etr_REWRITE;
             break;
         case R_ARM_ABS16     : /* 16-bit halfword      S + A */
             aofr->rel_flags = sid | REL_SHORT | REL_A;
             if (aofr->rel_offset & 2) {
                 /* Misaligned relocation */
-                instrword = (instrword & 0xffff) | elf_reloc_addend(instrword >> 16, elfr->r_addend << 16, 0, 0, 15, 16);
+                instrword = (instrword & 0xffff) | (elf_reloc_addend(instrword >> 16, elfr->r_addend << 16, 0, 0, 15, 16) << 16);
             }
             else {
                 /* Simple aligned relocation */
                 instrword = elf_reloc_addend(instrword, elfr->r_addend << 16, 0, 0, 15, 16);
             }
-            result = 0;
+            result = etr_REWRITE;
             break;
         case R_ARM_ABS12     : /* ARM LDR/STR          S + A */
             aofr->rel_flags = sid | REL_INSTR | rel_II(1) | REL_A;
-            instrword = elf_reloc_addend(instrword, elfr->r_addend, aofr->rel_offset, 0, 11, 0);
-            result = 0;
+            instrword = elf_reloc_addend(instrword, elfr->r_addend, 0, 0, 11, 0);
+            result = etr_REWRITE;
             break;
         case R_ARM_THM_ABS5  : /* Thumb LDR/STR        S + A */
-            result = -1;
+            result = etr_NO_SUPPORT;
             break;
         case R_ARM_ABS8      : /* 8-bit byte           S + A */
             aofr->rel_flags = sid | REL_BYTE | REL_A;
-            switch (aofr->rel_offset & 3) {
-                case 0: /* Bottom-byte of word */
-                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 7, 24);
-                    break;
-                case 1: /* bits 8-15 */
-                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 15, 16);
-                    break;
-                case 2: /* bits 16-23 */
-                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 23, 8);
-                    break;
-                case 3: /* bits 24-31 */
-                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 31, 0);
-                    break;
-            }
-            result = 0;
+            *area = (char) elf_reloc_addend(*area, elfr->r_addend, 0, 0, 7, 0);
             break;
         case R_ARM_SBREL32   : /* Word                 S - B + A */
             aofr->rel_flags = sid | REL_LONG | REL_B | REL_A;
             instrword += elfr->r_addend;
-            result = 0;
+            result = etr_REWRITE;
             break;
         case R_ARM_THM_PC22  : /* Thumb BL pair        S - P + A */
-            result = -1;
+            result = etr_NO_SUPPORT;
             break;
         case R_ARM_THM_PC8   : /* Thumb LDR r,[pc,...] S - P + A */
-            result = -1;
+            result = etr_NO_SUPPORT;
             break;
         case R_ARM_AMP_VCALL9: /* AMP VCALL            S - B + A */
-            result = -1;
+            result = etr_NO_SUPPORT;
             break;
         case R_ARM_SWI24     : /* ARM SWI              S + A */
             aofr->rel_flags = sid | REL_LONG | REL_A | REL_INSTR | rel_II(1);
             instrword = elf_reloc_addend(instrword, elfr->r_addend, 0, 0, 23, 0);
-            result = 0;
+            result = etr_REWRITE;
             break;
         case R_ARM_THM_SWI8  : /* Thumb SWI            S + A */
-            result = -1;
+            result = etr_NO_SUPPORT;
             break;
         case R_ARM_XPC25     : /* ARM BLX              S - P + A */
-            result = -1;
+            result = etr_NO_SUPPORT;
             break;
         case R_ARM_THM_XPC22 : /* Thumb BLX pair       S - P + A */
-            result = -1;
+            result = etr_NO_SUPPORT;
             break;
     }
 
-    if (result == -1) {
+    if (result & etr_NO_SUPPORT) {
         msg(fatal_badelf_norsupp(aep->oep->fep->fname, (int) ELF32_R_TYPE(elfr->r_info)));
     }
 
-    *pinstr = tv(instrword);
+    if (result & etr_REWRITE) {
+        *pinstr = tv(instrword);
+    }
 
-    return result;
+    return result & etr_REMOVE;
+}
+
+/* Translate an AOF relocation into an ELF relocation type
+ *
+ * If the ELF32_R_TYPE(Elf32_Rel.r_info) is filled in, return 0.
+ * If the ELF32_R_TYPE(Elf32_Rel.r_info) is not required, return 1.
+ * If the ELF32_R_TYPE(Elf32_Rel.r_info) cannot be generated due to lack of support for the relocation type, do not return.
+ *
+ * aofr.rel_offset is the offset within area.
+ *
+ * Basically, this routine needs to translate the flags in aof.rel_flags into an ELF relocation, remembering
+ * that PC-relative relocations need to be adjusted to be relative to the word being relocated and not the
+ * start of the area.
+ */
+static int32 instr_offset(int32 *p, int lim, unsigned char *rtype);
+static int aof_translate_relocation(aof_reloc *aofr, unsigned char *r_type, struct aentry *aep, char *area)
+{
+    unsigned32 flags = aofr->rel_flags;
+    unsigned32 ft, r, a, b;
+    int32 v, temp;
+    char *cp = area + aofr->rel_offset;
+    int32 *cp32;
+    int32 extra_displacement = aep->h->h_un.areaval->areaoff;
+
+    if (!rel_type2(flags)) msg(fatal_badelf_rsupp("AOF type 1 relocations are"));
+
+    ft = rel2_FT(flags);
+    b = rel2_B(flags);
+    r = rel2_R(flags);
+    a = rel2_A(flags);
+
+    switch (ft) {
+        case 0:
+            *r_type = R_ARM_ABS8;
+            break;
+        case 1:
+            *r_type = R_ARM_ABS16;
+            break;
+        case 2:
+            *r_type = b ? R_ARM_SBREL32 : r ? R_ARM_REL32 : R_ARM_ABS32;
+            break;
+        default:
+            *r_type = R_ARM_NONE;
+            break;
+    }
+
+    if (ft == 3) {
+        /* Instruction relocations are hard */
+
+        v = instr_offset((int32 *)(area + aofr->rel_offset), 1, r_type);
+
+        if (b && *r_type != R_ARM_NONE) {
+            *r_type = R_ARM_SBREL32;
+        }
+    }
+
+    cp32 = ((aofr->rel_offset & 3) == 0) ? (int32 *) cp : 0;
+
+    switch (*r_type) {
+        case R_ARM_PC24:
+            *cp32 = tv(elf_reloc_addend(hv(*cp32), aofr->rel_offset + extra_displacement, 0, 1, 23, 2));
+            break;
+        case R_ARM_REL32:
+            *cp32 = tv(elf_reloc_addend(hv(*cp32), aofr->rel_offset + extra_displacement, 0, 0, 31, 0));
+            break;
+        case R_ARM_PC13:
+            v = hv(*cp32);
+            temp = v & 0xFFF;
+            if (v & (1<<23))  temp = -temp;
+            v &= 0xFF7FF000;
+            temp = elf_reloc_addend(temp, aofr->rel_offset + extra_displacement, 0, 1, 12, 0);
+            if (temp == 0x1000) {
+              msg(fatal_badelf_ovun);
+            }
+            if (temp & 1000) {
+              v |= 1<<23;
+              temp = -(temp & 0xFFF);
+            }
+            v |= (temp & 0xFFF);
+            *cp32 = tv(v);
+            break;
+        default:
+            break;
+    }
+
+    if (*r_type == R_ARM_NONE) {
+       msg(fatal_badelf_rsupp("Instruction sequence relocations are"));
+    }
+
+    return 0;
 }
 #endif
 
@@ -3180,6 +3520,7 @@ static int elf_translate_relocation(aof_reloc *aofr, Elf32_Rela *elfr, struct ae
  * the symbol tables.  It must return NULL, whether addition of the symbol succeeded
  * or failed.
  */
+static struct oentry *sf_oep;
 static SymDefSymbol *sfcallback(SymDefsFile *sf, char *name, int32 val, SymDefSymbolType t)
 {
   struct sym sy;
@@ -3187,6 +3528,7 @@ static SymDefSymbol *sfcallback(SymDefsFile *sf, char *name, int32 val, SymDefSy
   zmem((char *)&sy, sizeof(sy));
   sy.value = val;
   sy.area = NULL;
+  sy.refobj = sf_oep;
   switch (t) {
     case symdef_DATA : sy.flags = SYM_GLOBALDEFAT | SYM_DATAAT ; break;
     case symdef_THUMB: sy.flags = SYM_GLOBALDEFAT | SYM_THUMBAT; break;
@@ -3205,6 +3547,7 @@ static void load1_symdefs(struct oentry *oep)
 {
 #ifdef TARGET_HAS_SYMDEFS
     if (oep->fep->f_un.sf != NULL) {
+      sf_oep = oep;
       sf_load(oep->fep->f_un.sf, sfcallback);
       sf_delete(oep->fep->f_un.sf);
       oep->fep->f_un.sf = NULL;
@@ -4943,6 +5286,75 @@ static void do_final_symbol_matching()
     if (common != NULL) common->areasiz = csize;
 }
 
+#ifdef TARGET_HAS_ELF
+/* ELF has strict requirements on the order in which symbols are placed in
+ * the symbol table.  All STT_FILE symbols must preceded all ARM mapping symbols
+ * which must precede all local symbols, which must precede all global symbols,
+ * which must precede all weak symbols, which must precede all references.
+ * We classify symbols here so that when middle() and write_symt() come to
+ * process the symbol table, the symbols "just happen" to be in the right order.
+ * Must be called before middle() assigns symbol numbers for the output symbols.
+ */
+static void sort_globsymtab_elf_format(void)
+{
+    struct {
+      struct hentry *head;
+      struct hentry **next;
+    } symlists[elfsym__MAX];
+    struct globsym *gs;
+    struct hentry *h;
+    int32 i;
+
+    /* Less than two symbols?  If so, the list is already sorted */
+    if (!firstglobsym || !firstglobsym->h_un.globval->next) return;
+
+    /* First, filter all the symbols into separate lists as per the ELF requirements
+     * (We ought to sort the elements as we go in their sublists - but we don't yet)
+     */
+    for (i = 0; i < elfsym__MAX; ++i) {
+      symlists[i].head = NULL;
+      symlists[i].next = &symlists[i].head;
+    }
+
+    for (h = firstglobsym; h != NULL; h = gs->next) {
+      elf_sym_class esc;
+      gs = h->h_un.globval;
+
+      if ((!shl_flag || (gs->symval.flags & (SYM_EFTSYM+SYM_LINKSYM))) &&
+          (gs->symval.area == NULL ||
+          !(gs->symval.area->flags & UNUSEDAREA)))
+          {
+            char *name = h->name;
+            if (gs->symval.flags & SYM_STT_FILE)
+              esc = elfsym_STT_FILE;
+            else if (name[2] == '$' && name[4] == '\0')
+              esc = elfsym_MAPPINGS;
+            else if ((gs->symval.flags & SYM_REFDEFMASK) != SYM_LOCALDEFAT)
+              esc = elfsym_STT_GLOBAL;
+            else
+              esc = elfsym_STT_LOCAL;
+          }
+      else
+        esc = elfsym_OTHER;
+
+      *(symlists[esc].next) = h;
+      symlists[esc].next = &gs->next;
+    }
+
+    /* Secondly, concetenate the lists back together again */
+    nextglobsym = &firstglobsym;
+    for (i = 0; i < elfsym__MAX; ++i) {
+      if (symlists[i].head != NULL) {
+        *nextglobsym = symlists[i].head;
+        nextglobsym = symlists[i].next;
+      }
+    }
+    *nextglobsym = NULL;
+
+    /* Done. */
+}
+#endif
+
 static void middle(void)
 {
     struct hentry *h;
@@ -5014,6 +5426,28 @@ oldsym("!!Image$$DataLimit", "Image$$RW$$Limit",
     }
     *nextglobsym = NULL;
     undefs = 0;
+#ifdef TARGET_HAS_ELF
+    if (output_type == ELF) {
+      int32 i;
+      ov = &root;
+      for (i=0; i<ov->noofoutareas; ++i) {
+          struct aentry *aep = ov->outareas[i];
+          struct sym tsym;
+          zmem((char *) &tsym, sizeof(tsym));
+          tsym.value = 0;
+          tsym.area = aep;
+          tsym.flags = SYM_LOCALDEFAT | SYM_STT_SECTION;
+          aep->elfsectionsym = globinsert(aep->name, &tsym, "!!");
+      }
+
+      /* ELF output requires that the symbol table is ordered in particular ways
+       * by various criteria.  By sorting the symbols here, we ensure that the
+       * old AOF symbol table generator just happens to spit things out in the
+       * right order.
+       */
+      sort_globsymtab_elf_format();
+    }
+#endif
     for (h = firstglobsym;  h != NULL;  h = gs->next)
     {   gs = h->h_un.globval;
         if ((!shl_flag || (gs->symval.flags & (SYM_EFTSYM+SYM_LINKSYM))) &&
@@ -5028,6 +5462,7 @@ oldsym("!!Image$$DataLimit", "Image$$RW$$Limit",
                 ((gs->symval.flags & SYM_REFDEFMASK) != SYM_LOCALDEFAT ||
                     output_type == AOUT || output_type == ELF))
             {   gs->symval.symno = symcount;
+                gs->symval.flags |= SYM_KEEPSYM;
                 symcount++;
                 strtsize += (int32)(size_t)(strlen(h->name));
                     /* The 2 char prefix to h->name is not output, but here */
@@ -5088,6 +5523,21 @@ static void writeaoutreloc( struct relocation_info *r )
 
 #endif /* TARGET_HAS_AOUT */
 
+#ifdef TARGET_HAS_ELF
+
+static void writeelfreloc( Elf32_Rel *r )
+{
+    Elf32_Rel reloc;
+
+    reloc.r_offset = tv(r->r_offset);
+    reloc.r_info   = tv(r->r_info);
+    /*reloc.r_addend = tv(r->r_addend);*/
+    listpush( &elfreloclist, (char *)r );
+    reloc_count++;
+}
+
+#endif /* TARGET_HAS_ELF */
+
 #ifdef TARGET_HAS_AOF
 
 static void writeaofreloc(int32 offset, int32 rflags)
@@ -5104,11 +5554,14 @@ static void writeaofreloc(int32 offset, int32 rflags)
 
 #endif /* TARGET_HAS_AOF */
 
-static int32 instr_offset(int32 *p, int lim)
+static int32 instr_offset(int32 *p, int lim, unsigned char *rtype)
 {   int32 v = hv(*p), op;
+
+    *rtype = R_ARM_NONE;                               /* We don't understand this reloc */
 
     if ((op = (v & 0x0e000000)) == 0x0a000000)         /* B, BL */
     {   /* B or BL */
+        *rtype = R_ARM_PC24;
         return (v << 8) >> 6;                          /* byte offset */
     }
 
@@ -5145,6 +5598,14 @@ static int32 instr_offset(int32 *p, int lim)
         if (op == 0x04000000 &&
             (Rd == -1 || ((v & 0x000f0000) >> 4) == Rd))
         {   /* LDR/STR immediate */
+            if (icount == 0) {
+              /* ELF cannot relocation instruction sequences */
+              if ((v & 0x000f0000) == 0x000f0000) {
+                *rtype = R_ARM_PC13;
+              } else {
+                *rtype = R_ARM_ABS12;
+              }
+            }
             op = v & 0xfffff000;
             v &= 0xfff;                                /* byte offset */
             if ((op & 0x00800000) == 0) v = -v;
@@ -5160,6 +5621,12 @@ static int32 instr_offset(int32 *p, int lim)
         }
         return offset;
     }
+
+    if ((op = (v & 0x0f000000)) == 0x0f000000)         /* SWI */
+    {
+       *rtype = R_ARM_SWI24;
+    }
+
     /* else error - not handled */
     return  -1L;
 }
@@ -5215,7 +5682,8 @@ static int32 instr_reloc(int32 *p, int32 value, int lim)
             if ((instr == 0x04000000 || instr == 0x00400090) &&
                 icount != lim)  /* LDR/STR follows */
             {   /* try to preserve the following LDR/STR offset */
-                imm = xx = value - instr_offset(p+icount, 1);
+                unsigned char unused_rtype;
+                imm = xx = value - instr_offset(p+icount, 1, &unused_rtype);
                 if (imm < 0) imm = -imm;
                 if ((imm >> (icount*8)) == 0)
                 {   value = xx;
@@ -5303,7 +5771,7 @@ static struct hentry *linker_set_locate(struct sym *s)
                 }
         }
 
-	return h;
+        return h;
 }
 
 /* Returns non-zero if the symbol s represents the name specified in sym */
@@ -5312,7 +5780,7 @@ static int linker_set_namecmp(const char *sym, struct sym *s)
         struct hentry *h;
         char *n, *sub1;
 
-	if ((h = linker_set_locate(s)) == NULL) {
+        if ((h = linker_set_locate(s)) == NULL) {
                 msg(err_undefsyms);
                 return 0;
         }
@@ -5325,8 +5793,8 @@ static int linker_set_namecmp(const char *sym, struct sym *s)
                 return !strncmp(sym, n, clen);
         }
 
-	/* Enable __link to work still */
-	return !strcmp(sym, n);
+        /* Enable __link to work still */
+        return !strcmp(sym, n);
 }
 #endif
 
@@ -5490,9 +5958,9 @@ nostrback:
             if ((relocflag || moduleflag) && savreloc &&
                                                 output_type != AOUT)
                 writereloc(areaoutposn + r->r_address,
-			   !(aep->attrs & AOF_RONLYAT) && /* from RW area */
-			   rel_wrt_area && /* relative to some area */
-			   !(rel_wrt_area->attrs & AOF_RONLYAT)); /* which is also RW */
+                           !(aep->attrs & AOF_RONLYAT) && /* from RW area */
+                           rel_wrt_area && /* relative to some area */
+                           !(rel_wrt_area->attrs & AOF_RONLYAT)); /* which is also RW */
             if (plinkflag && savreloc) {
                 r->r_address += (unsigned) aep->h->h_un.areaval->areaoff;
                 if (output_type == AOUT) {
@@ -5524,18 +5992,46 @@ nostrback:
         int len, pcrel, addsym, max_ins;
         int32 symno, psave, roffset;
         unsigned32 rflags;
+        int is_elf = (output_type == ELF);
 
+        /* If not the first area in this oventry ... */
         if (lastoutarea != aep->h->h_un.areaval)
-        {   areaoutposn += lastoutarea->relocs * sizeof(aof_reloc);
+        {
+#ifdef TARGET_HAS_ELF
+            Elf32_Shdr *section = ELFSECTIONHEADER(lastoutarea->elfsection);
+#endif
+            if (!is_elf) {
+                areaoutposn += lastoutarea->relocs * sizeof(aof_reloc);
+            }
+
             lastoutarea = aep->h->h_un.areaval;
             if (plinkflag)
             {
-                /* write aof relocations (from list structure) */
-                /* file pointer should be in correct place (after area) */
-                writereloclist( &aofreloclist );
-                /* would like to free up list here... but we can't */
-                listinit( &aofreloclist, sizeof( aof_reloc ) );
-                relocposn = areaoutposn + lastoutarea->areasiz;
+                if (is_elf) {
+#ifdef TARGET_HAS_ELF
+                    /* write ELF relocations (from list structure) */
+                    /* file pointer should be in correct place (after area) */
+                    /* End the previous section and write its relocation table */
+                    relocposn = fout.currentpos;
+                    section->sh_size = tv(relocposn - hv(section->sh_offset));
+                    section[-1].sh_offset = tv(relocposn);
+                    writereloclist( &elfreloclist );
+                    section[-1].sh_size = tv(fout.currentpos - hv(section[-1].sh_offset));
+                    /* Set the start offset for the next area */
+                    section[2].sh_offset = tv(fout.currentpos);
+                    listinit( &elfreloclist, sizeof( Elf32_Rel ));
+                    areaoutposn = fout.currentpos;
+                    relocposn = areaoutposn + lastoutarea->areasiz;
+#endif
+                }
+                else {
+                    /* write aof relocations (from list structure) */
+                    /* file pointer should be in correct place (after area) */
+                    writereloclist( &aofreloclist );
+                    /* would like to free up list here... but we can't */
+                    listinit( &aofreloclist, sizeof( aof_reloc ) );
+                    relocposn = areaoutposn + lastoutarea->areasiz;
+                }
             }
         }
 #ifdef LINKING_ON_ACORN_RISC_OS
@@ -5604,6 +6100,7 @@ so that we can generate a diagnostic for unlinked components.
                 struct hentry *h;
                 struct __link_list *set;
                 struct __head_list *hd;
+                assert(!is_elf);
                 for (set = aep->area__link_list; set; set = set->chain) {
                         struct __link_list *next;
                         sy = set->sy;
@@ -5614,14 +6111,14 @@ so that we can generate a diagnostic for unlinked components.
                         cp = area + (sy->value - aep->base); /* find pointer to object in memory */
                         for (next = set->next; next; next = next->next) {
                                 if (linker_set_namecmp(syname, next->sy) ) {
-              		        	*(int32 *)cp = next->sy->value;
+                                        *(int32 *)cp = next->sy->value;
                                         next->patched = 1; /* indicate that something points to this one */
-		                        writereloc(areaoutposn + sy->value - aep->base, 1);
-		                        break;
+                                        writereloc(areaoutposn + sy->value - aep->base, 1);
+                                        break;
                                 }
                         }
                 }
-		/* Now go through all the __head* symbols in this area and patch in the first item in the list */
+                /* Now go through all the __head* symbols in this area and patch in the first item in the list */
                 for (hd = g__head_list; hd; hd = hd->next) {
                         h = linker_set_locate(hd->sy);
                         assert(h != NULL);
@@ -5651,6 +6148,7 @@ so that we can generate a diagnostic for unlinked components.
         {
             if (aep->oep->fep->type & ELF_MASK) {
 #ifdef TARGET_HAS_ELF
+                /* Just in time translation of ELF relocations into AOF relocations */
                 if (elf_translate_relocation(r, elfreloc++, aep, area, areasiz)) {
                     --rend;
                     --r;
@@ -5694,7 +6192,7 @@ so that we can generate a diagnostic for unlinked components.
                 !pcrel && (rflags & REL_B) == 0)
                 msg(err_positiondependentreloc(roffset, aep->oep->oname,  aep->name));
             switch (len)
-            {
+            { unsigned char unused_rtype;
             case 0:
                 v = *cp;
                 break;
@@ -5705,7 +6203,7 @@ so that we can generate a diagnostic for unlinked components.
                 v = hv(*(int32 *)cp);
                 break;
             case 3:
-                v = instr_offset((int32 *)cp, max_ins);
+                v = instr_offset((int32 *)cp, max_ins, &unused_rtype);
                 if (v == -1)
                 {   msg(err_instreloc(hv(*(int32 *)cp), roffset, aep->oep->oname, aep->name));
                     v = 0;
@@ -5879,19 +6377,41 @@ if (verboseflag >= 3)
                 break;
             }
             if ((relocflag || moduleflag) &&
-                savreloc && output_type != AOUT)
+                savreloc && output_type != AOUT && !is_elf)
             {
                 writereloc(areaoutposn + roffset + (savreloc & 0x70000000),
-			   !(aep->attrs & AOF_RONLYAT) && /* from RW area */
-			   rel_wrt_area && /* relative to some area */
-			   !(rel_wrt_area->attrs & AOF_RONLYAT)); /* which is also RW */
+                           !(aep->attrs & AOF_RONLYAT) && /* from RW area */
+                           rel_wrt_area && /* relative to some area */
+                           !(rel_wrt_area->attrs & AOF_RONLYAT)); /* which is also RW */
             }
             if (plinkflag && psave && output_type != AOUT)
             {   aep->h->h_un.areaval->relocs++;
                 rflags |= symno + REL_TYPE2 + (int32)len*REL_SHORT;
                 if (pcrel)  rflags |= REL_R;
                 if (addsym) rflags |= REL_A;
-                writeaofreloc(aep->h->h_un.areaval->areaoff+roffset, rflags);
+                if (is_elf) {
+#ifdef TARGET_HAS_ELF
+                    unsigned char r_type;
+                    int ditchreloc;
+                    Elf32_Rel r;
+                    aof_reloc aofr;
+                    aofr.rel_offset = roffset;
+                    aofr.rel_flags = rflags;
+                    ditchreloc = aof_translate_relocation(&aofr, &r_type, aep, area);
+                    if (ditchreloc) {
+                        --(aep->h->h_un.areaval->relocs);
+                    }
+                    else {
+                        if (!addsym) symno = aep->overseg->outareas[symno]->elfsectionsym->h_un.globval->symval.symno;
+                        r.r_offset = aep->h->h_un.areaval->areaoff+roffset;
+                        r.r_info = ELF32_R_INFO(symno, r_type);
+                        writeelfreloc(&r);
+                    }
+#endif
+                }
+                else {
+                    writeaofreloc(aep->h->h_un.areaval->areaoff+roffset, rflags);
+                }
             }
         }
 #endif /* TARGET_HAS_AOF */
@@ -5926,14 +6446,14 @@ if (verboseflag >= 3)
     pop_stack();
 }
 
-#ifdef TARGET_HAS_AOF
+#if defined(TARGET_HAS_AOF) || defined(TARGET_HAS_ELF)
 
 static char *writeoutstr(char *st, char *s)
 {   while ((*st++ = *s++) != 0);
     return st;
 }
 
-#endif /* TARGET_HAS_AOF */
+#endif /* defined(TARGET_HAS_AOF) || defined(TARGET_HAS_ELF) */
 
 
 static void write_symt(void)
@@ -6037,12 +6557,6 @@ static void write_symt(void)
         writebytes(sposn, (char *)outsymt, symcount*sizeof(struct nlist));
 #endif /* TARGET has AOUT */
     }
-    else if (output_type == ELF)
-    {
-#ifdef TARGET_HAS_ELF
-        /* Output the symbol table section SHT_SYMTAB */
-#endif
-    }
     else if (output_type == AIF)
     {
 #ifdef TARGET_HAS_AOF
@@ -6097,21 +6611,75 @@ static void write_symt(void)
             writebytes(sposn, (char *) outsymt,
                                     symcount * sizeof(ItemSymbol));
     }
-    else /* output_type == AOF (methinks) */
-    {   aof_symbol *symtp, *outsymt;
+    else /* output_type == AOF or ELF (methinks) */
+    {
+        int is_elf = (output_type == ELF);
+        int32 seen_non_local = -1;
+        aof_symbol *symtp;
+        Elf32_Sym *esymtp, *start_esymtp;
+        char *outsymt;
         struct aentry *aep;
         int32 i;
+        int32 symt_size = symcount * (is_elf ? sizeof(Elf32_Sym) : sizeof(aof_symbol));
 
-        symtp = outsymt = (aof_symbol *) salloc(symcount*sizeof(aof_symbol));
         strtp = outstrt = (char *) salloc(strtsize);
-        *(int32 *) strtp = tv(strtsize);
+        outsymt = salloc(symt_size);
+        symtp = (aof_symbol *) outsymt;
+        esymtp = (Elf32_Sym *) outsymt;
+        start_esymtp = esymtp;
+        if (is_elf) {
+            Elf32_Shdr *sections = (Elf32_Shdr *) (elfouthdr + 1);
+            /* ELF does not preclude us from having the surplus null bytes at the front of
+             * the symbol table, so we'll have four of them to match the AOF format.
+             */
+            strtp[0] = '\0';
+            strtp[1] = '\0';
+            strtp[2] = '\0';
+            strtp[3] = '\0';
+            /* Write special symbol 0 */
+            esymtp->st_name = tv(0);
+            esymtp->st_value = tv(0);
+            esymtp->st_size = tv(0);
+            esymtp->st_info = 0;
+            esymtp->st_other = 0;
+            esymtp->st_shndx = tvs(SHN_UNDEF);
+            ++esymtp;
+            strposn = fout.currentpos;
+            sposn = strposn + ((strtsize + 3) & ~3);
+            sections[OUTELF_SYMTAB].sh_offset = tv(sposn);
+            sections[OUTELF_SYMTAB].sh_size = tv(symt_size);
+            sections[OUTELF_STRTAB].sh_offset = tv(strposn);
+            sections[OUTELF_STRTAB].sh_size = tv(sposn - strposn);
+        }
+        else {
+            *(int32 *) strtp = tv(strtsize);
+        }
         strtp += sizeof(int32);
-        if (plinkflag)
-            for (i = 0; i < root.noofoutareas; i++)
-            {   cp = root.outareas[i]->h->name;
-                root.outareas[i]->areaoff = strtp - outstrt;
-                strtp = writeoutstr(strtp, cp);
+        if (plinkflag) {
+            /* In ELF, the section names do NOT go into the string table but into the
+             * section header string table instead, so we don't insert them into the
+             * string table.  Furthermore, ELF symbols are defined relative to the section
+             * number in which they are defined (in AOF, the reference is to the string
+             * holding the name of the area containing the definition).
+             *
+             * Note the grubby re-use of areaoff to hold the string table offset (AOF) of
+             * the symbol's section.  For ELF output, we put the section index number in
+             * there instead.
+             */
+            if (is_elf) {
+                for (i = 0; i < root.noofoutareas; i++) {
+                    root.outareas[i]->areaoff = ELFSECTION(i);
+                    strtp = writeoutstr(strtp, root.outareas[i]->h->name);
+                }
             }
+            else {
+                for (i = 0; i < root.noofoutareas; i++) {
+                    cp = root.outareas[i]->h->name;
+                    root.outareas[i]->areaoff = strtp - outstrt;
+                    strtp = writeoutstr(strtp, cp);
+                }
+            }
+        }
         else
         {   if (root.textsize)
             {   textareanameidx = strtp - outstrt;
@@ -6137,18 +6705,7 @@ static void write_symt(void)
             int forcibly_link = force_head || plinkflag && (strncmp(h->name+2, "__link", 6) == 0);
 #endif
             gs = h->h_un.globval;
-            /* WARNING: changes to following expression must be duplicated
-               in function middle() where symcount is incremented! */
-            if (
-#ifdef LINKING_ON_ACORN_RISC_OS
-                !forcibly_link &&
-#endif
-                plinkflag && !debugflag &&
-                (gs->symval.flags & SYM_REFDEFMASK) == SYM_LOCALDEFAT
-                && output_type != AOUT && output_type != ELF ||
-                shl_flag &&
-                (gs->symval.flags & (SYM_EFTSYM+SYM_LINKSYM)) == 0)
-                    continue; /* don't output symbol */
+            if (!(gs->symval.flags & SYM_KEEPSYM)) continue; /* don't output symbol */
 
 #ifdef LINKING_ON_ACORN_RISC_OS
             if (forcibly_link && !force_head) {
@@ -6159,7 +6716,14 @@ static void write_symt(void)
                     gs->symval.flags = (gs->symval.flags & ~SYM_REFDEFMASK) | SYM_LOCALDEFAT;
             }
 #endif
-            symtp->sym_name = tv(strtp - outstrt);
+            if (is_elf) {
+                esymtp->st_name = tv(strtp - outstrt);
+                esymtp->st_size = tv(0);
+                esymtp->st_other = 0;
+            }
+            else {
+                symtp->sym_name = tv(strtp - outstrt);
+            }
             if ((gs->symval.flags & SYM_EFTSYM) && (i = gs->pcit_entry) >= 0)
             {   aep = inter_LU_code;
                 v = i * inter_LU_code_stride + aep->base;
@@ -6168,16 +6732,48 @@ static void write_symt(void)
             {   v = gs->symval.value;
                 aep = gs->symval.area;
             }
-            symtp->sym_value = tv(v);
+            if (is_elf) {
+                esymtp->st_value = tv(v);
+            }
+            else {
+                symtp->sym_value = tv(v);
+            }
             v = gs->symval.flags & ~SYM_LINKFLAGS;
             if (!plinkflag || aep == NULL)
                 /* AOF image at absolute address or recovery from previous */
                 /* error, or symbol defined in unreferenced/empty area...  */
                 v |= SYM_ABSAT;
-            symtp->sym_AT = tv(v);
-            symtp->sym_areaname = 0;
+            if (is_elf) {
+                unsigned char bind = STB_GLOBAL;
+                unsigned char type = STT_FUNC;
+
+                if ((v & SYM_REFDEFMASK) == SYM_DEFAT) bind = STB_LOCAL; else bind = STB_GLOBAL;
+                if (v & SYM_WEAKAT) bind = STB_WEAK;
+                if (v & SYM_DATAAT) type = STT_OBJECT;
+                if (gs->symval.flags & SYM_STT_FILE) {
+                    type = STT_FILE;
+                    bind = STB_LOCAL;
+                }
+                else if (gs->symval.flags & SYM_STT_SECTION) {
+                    type = STT_SECTION;
+                    bind = STB_LOCAL;
+                }
+
+                if (bind != STB_LOCAL && seen_non_local == -1) {
+                    /* First non-local symbol.  Needs to go in sh_info */
+                    seen_non_local = (esymtp - start_esymtp);
+                }
+
+                esymtp->st_info = ELF32_ST_INFO(bind, type);
+                esymtp->st_shndx = tvs(SHN_UNDEF);
+
+            }
+            else {
+                symtp->sym_AT = tv(v);
+                symtp->sym_areaname = 0;
+            }
             if (aep != NULL)
-            {   attrs = hv(symtp->sym_AT);
+            {   attrs = aep->attrs; /* XXX: sb, 11/10/2000: was "hv(symtp->sym_AT)"  Surely not right?!; */
                 if (plinkflag)
                 {   v = hv(symtp->sym_value);
                     v -= aep->h->h_un.areaval->base;
@@ -6194,17 +6790,33 @@ static void write_symt(void)
                     v = bssareanameidx;
                 else
                     v = dataareanameidx;
-                symtp->sym_areaname = tv(v);
+                if (is_elf) {
+                    esymtp->st_shndx = tvs(v);
+                }
+                else {
+                    symtp->sym_areaname = tv(v);
+                }
             }
             strtp = writeoutstr(strtp, h->name + 2);
-            symtp++;
+            if (is_elf) {
+                esymtp++;
+            }
+            else {
+                symtp++;
+            }
         }
-        if (symcount)
-            writebytes(sposn,(char *)outsymt,symcount*sizeof(aof_symbol));
+#ifdef TARGET_HAS_ELF
+        if (is_elf) {
+            (ELFSECTIONHEADER(OUTELF_SYMTAB))->sh_info = tv(seen_non_local == -1 ? STN_UNDEF : seen_non_local);
+        }
+#endif
+        if (symcount) {
+            writebytes(sposn, outsymt, symt_size);
+        }
 #endif /* TARGET_HAS_AOF */
     }
     while ((strtp - outstrt) < strtsize) *strtp++= 0;
-    if (strtsize > 4L) writebytes(strposn, outstrt, strtsize);
+    if (strtsize > 4L || output_type == ELF) writebytes(strposn, outstrt, strtsize);
 }
 
 static void intellec_write_symt(void)
@@ -6410,6 +7022,9 @@ static void put_image_segment(struct oventry *ov)
 
     /* these lists are initialised here, as they are on per-image basis */
     listinit( &reloclist, sizeof( int32 ) );
+#ifdef TARGET_HAS_ELF
+    listinit( &elfreloclist, sizeof( Elf32_Rel ) );
+#endif
 #ifdef TARGET_HAS_AOUT
     listinit( &aoutreloclist, sizeof( struct relocation_info ) );
 #endif
@@ -6454,7 +7069,19 @@ again_for_shl_liby_chunk:
             write_segment_pcit(ov);
     }
 #endif
-    writereloclist( &aofreloclist ); /* IJR: this may be redundant..? */
+#ifdef TARGET_HAS_ELF
+    if (output_type == ELF) {
+        Elf32_Shdr *lastsection = ELFSECTIONHEADER(lastoutarea->elfsection);
+        relocposn = fout.currentpos;
+        lastsection->sh_size = tv(relocposn - hv(lastsection->sh_offset));
+        lastsection[-1].sh_offset = tv(relocposn);
+        writereloclist( &elfreloclist );
+        lastsection[-1].sh_size = tv(fout.currentpos - hv(lastsection[-1].sh_offset));
+        areaoutposn = fout.currentpos;
+    }
+    else
+#endif
+      writereloclist( &aofreloclist ); /* IJR: this may be redundant..? */
 
     if (binaryflag == BIN_NOHDR)
     {   char zeroes[64];
@@ -6515,25 +7142,25 @@ again_for_shl_liby_chunk:
         p[-2] = tv(srcposn + base);
         p[-1] = tv(base);
 
-	/* RMJ: if we just write this out, the relocation code itself
-	/  won't have its endianness properly twiddled.  Therefore
-	/  twiddle it manually as we go. */
+        /* RMJ: if we just write this out, the relocation code itself
+        /  won't have its endianness properly twiddled.  Therefore
+        /  twiddle it manually as we go. */
 
-	/* writebytes(srcposn, (char *)amf_reloc_code, sz); */
-	{
-	    int n;
-	    int32 posn = srcposn;
-	    unsigned32 *q = amf_reloc_code;
-	    unsigned32 w;
+        /* writebytes(srcposn, (char *)amf_reloc_code, sz); */
+        {
+            int n;
+            int32 posn = srcposn;
+            unsigned32 *q = amf_reloc_code;
+            unsigned32 w;
 
-	    for (n = sz/sizeof(unsigned32) - 2; n > 0; n--, q++)
-	    {
-		w = tv(*q);
-		writebytes(posn, (char *)&w, sizeof(unsigned32));
-		posn += sizeof(unsigned32);
-	    }
-	    writebytes(posn, (char *)(p-2), 2*sizeof(unsigned32));
-	}
+            for (n = sz/sizeof(unsigned32) - 2; n > 0; n--, q++)
+            {
+                w = tv(*q);
+                writebytes(posn, (char *)&w, sizeof(unsigned32));
+                posn += sizeof(unsigned32);
+            }
+            writebytes(posn, (char *)(p-2), 2*sizeof(unsigned32));
+        }
 
         writereloclist( &reloclist );
         /* ijr no need to stack these (inc -1) - just write out direct */
@@ -7667,7 +8294,58 @@ scatter_format_image:
     return nextfile;
 }
 
-static void sort_glob_insert(struct hentry **list, struct hentry *newsym)
+
+#if 0
+static void sort_glob_insert_elf_fmt(struct hentry **list, struct hentry *newsym)
+{
+    struct globsym *gs;
+    struct globsym *ns = newsym->h_un.globval;
+    struct hentry *h;
+    int is_defat = (ns->symval.flags & SYM_DEFAT) != 0;
+    int32 new_val = ns->symval.value;
+    static char *sbuf = 0;
+    if (!sbuf) sbuf = halloc(MAXDBUF);
+
+#ifdef LINKING_ON_ACORN_RISC_OS
+    if (cplusplusflag) {
+      strcpy(sbuf, cplusplusname(newsym->name + 2));
+    }
+    else
+#endif
+      strcpy(sbuf, newsym->name + 2);
+
+    while ((h = *list) != NULL)
+    {
+      gs = h->h_un.globval;
+      if (!is_defat) {
+        /* Keep all the definitions together */
+        if (!(gs->symval.flags & SYM_DEFAT)) {
+          /* Alphabetic order then for the weak/undef symbols */
+          if (strcmp(h->name + 2, sbuf) < 0) {
+            /* Found the insertion point */
+            break;
+          }
+        }
+        /* Carry on searching ... */
+      }
+      else {
+        /* Compare on symbol value */
+        if (new_val < gs->symval.value) {
+          /* Found the insertion point */
+          break;
+        }
+      }
+
+      list = &gs->next;
+    }
+
+    /* *list points to the insertion point (could be start, middle or end of the list) */
+    newsym->h_un.globval->next = *list;
+    *list = newsym;
+}
+
+/* Sort based purely on symbol values */
+static void sort_glob_insert_numeric(struct hentry **list, struct hentry *newsym)
 {
     struct globsym *gs;
     struct globsym *ns = newsym->h_un.globval;
@@ -7715,8 +8393,10 @@ static void sort_glob_insert(struct hentry **list, struct hentry *newsym)
     newsym->h_un.globval->next = *list;
     *list = newsym;
 }
+#endif
 
-static void sort_global_syms(void)
+#if 0
+static void sort_global_syms(PFsymsortaux sortfn)
 {
     struct globsym *gs;
     struct hentry *h, *next;
@@ -7733,7 +8413,7 @@ static void sort_global_syms(void)
       gs = h->h_un.globval;
       next = gs->next;
       gs->next = NULL;
-      sort_glob_insert(&new_head, h);
+      (*sortfn)(&new_head, h);
       h = next;
     }
 
@@ -7745,6 +8425,7 @@ static void sort_global_syms(void)
       }
     }
 }
+#endif
 
 static void list_syms(void)
 {
@@ -7760,9 +8441,6 @@ static void list_syms(void)
         f = stdout;
     else if ((f = fopen(symfile, "w")) == 0)
         msg(fatal_openerr(symfile));
-
-    /* Don't call this for now */
-    (void) sort_global_syms;
 
     fprintf(f, msgtext(misc_sym_hdr));
     h = firstglobsym;
@@ -7891,7 +8569,9 @@ int main(int argc, char **argv)
     signal(SIGILL, endlink);
     signal(SIGABRT, endlink);
 /*  signal(SIGFPE, endlink); crashes IBM PS2/55SX with Watcom C/386 v9.01 */
+#if 0
     signal(SIGSEGV, endlink);
+#endif
 #ifdef TARGET_HAS_AOUT
     pagesize = PAGESIZE;
 #endif
@@ -8000,6 +8680,9 @@ int main(int argc, char **argv)
     }
 
     symcount = 0;
+    if (output_type == ELF)
+      ++symcount;  /* Allocate space for the unused entry in the ELF symbol table */
+
     for (fep = clifilelist;  fep != NULL;  fep = fep->next)
     {   struct oentry **lastobj;
         if (!(fep->type & OBJECT_MASK)) continue;
@@ -8007,7 +8690,7 @@ int main(int argc, char **argv)
         lastobj = nextobj;
         nextobj = addobject(nextobj, fep->fname, fep,
                             fep->f_un.hdrptr, 0, fep->size);
-        if (lastobj == &objectlist &&
+        if (lastobj == &objectlist && fep->type == AOF &&
             special_aof(*lastobj)) continue;
         if (verboseflag) msg(info_loadobj(fep->fname));
         load1(*lastobj);
