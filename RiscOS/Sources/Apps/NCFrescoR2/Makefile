@@ -10,6 +10,8 @@ RESAPP = <Resource$Dir>.Apps.!NCFresco
 RESRES = <Resource$Dir>.Resources.NCFresco
 RESRES_ALT = <Resource$Dir>.Resources.NCFrescoA
 INSTALLDIR = ${INSTDIR}.!NCFresco
+INSTALLRESDIR = ${INSTALLDIR}.Resources
+INSTALLRESLOCALEDIR=${INSTALLRESDIR}.${LOCALE}
 #
 # Generic options:
 #
@@ -27,7 +29,7 @@ CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 TRFLAGS = ${THROWBACK} -marko "{<" -markc ">}" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
-SQFLAGS = 
+SQFLAGS =
 WFLAGS  = ~CFR~V
 
 #
@@ -41,7 +43,7 @@ ABSSYM    = RISC_OSLib:o.c_abssym
 #
 # Generic rules:
 #
-rom: 
+rom:
         @echo ${COMPONENT}: rom module built
 
 clean:
@@ -131,39 +133,42 @@ install_NCFresco:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
 	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${INSTALLDIR}
-	${MKDIR} ${INSTALLDIR}.html
+	${MKDIR} ${INSTALLRESDIR}
+	${MKDIR} ${INSTALLRESLOCALEDIR}
+	${MKDIR} ${INSTALLRESLOCALEDIR}.html
 	${CP} NCFrescoRORes:!Boot    		${INSTALLDIR}.!Boot    ${CPFLAGS}
 	IfThere NCFrescoRORes:!Help Then ${CP} NCFrescoRORes:!Help ${INSTALLDIR}.!Help  ${CPFLAGS}
 	${CP} NCFrescoRORes:!Run     		${INSTALLDIR}.!Run     ${CPFLAGS}
 	${CP} NCFrescoRORes:!Sprites 		${INSTALLDIR}.!Sprites ${CPFLAGS}
-	${CP} NCFrescoRORes:Sprites  		${INSTALLDIR}.Sprites  ${CPFLAGS}
-	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLDIR}.Messages ${TRFLAGS}
-	${CP} NCFrescoRORes:Res         	${INSTALLDIR}.Res      ${CPFLAGS}
+	${CP} NCFrescoRORes:Sprites  		${INSTALLRESLOCALEDIR}.Sprites  ${CPFLAGS}
+	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLRESLOCALEDIR}.Messages ${TRFLAGS}
+	${CP} NCFrescoRORes:Res         	${INSTALLRESLOCALEDIR}.Res      ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     	${INSTALLDIR}.MimeMap  ${CPFLAGS}
 	-${CP} NCFrescoRORes:Config      	${INSTALLDIR}.Config   ${CPFLAGS}
 	${CP} NCFrescoRORes:fontmap/txt  	${INSTALLDIR}.fontmap/txt ${CPFLAGS}
+	${CP} <Lib$Dir>.LocaleRes.LocaleRes     ${INSTALLDIR}.LocaleRes ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
-	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLDIR}.html.alert     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favmove   -o ${INSTALLDIR}.html.favmove   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favrename -o ${INSTALLDIR}.html.favrename ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${INSTALLDIR}.html.favscatr  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favscats  -o ${INSTALLDIR}.html.favscats  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.global/css -o ${INSTALLDIR}.html.global/css ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLDIR}.html.hista     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLDIR}.html.histr     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.histt     -o ${INSTALLDIR}.html.histt     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${INSTALLDIR}.html.okcncl    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLDIR}.html.password  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLDIR}.html.printopts ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLDIR}.html.prompt    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${INSTALLDIR}.html.sslcert   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${INSTALLDIR}.html.sslpin    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLDIR}.html.sslserv   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLDIR}.html.ssltoken  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLDIR}.html.url       ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLRESLOCALEDIR}.html.alert     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLRESLOCALEDIR}.html.badurl    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favmove   -o ${INSTALLRESLOCALEDIR}.html.favmove   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favrename -o ${INSTALLRESLOCALEDIR}.html.favrename ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLRESLOCALEDIR}.html.favs      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${INSTALLRESLOCALEDIR}.html.favscatr  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscats  -o ${INSTALLRESLOCALEDIR}.html.favscats  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLRESLOCALEDIR}.html.favsd     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.global/css -o ${INSTALLRESLOCALEDIR}.html.global/css ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLRESLOCALEDIR}.html.hista     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLRESLOCALEDIR}.html.histr     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histt     -o ${INSTALLRESLOCALEDIR}.html.histt     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${INSTALLRESLOCALEDIR}.html.okcncl    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLRESLOCALEDIR}.html.password  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLRESLOCALEDIR}.html.printopts ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLRESLOCALEDIR}.html.prompt    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${INSTALLRESLOCALEDIR}.html.sslcert   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${INSTALLRESLOCALEDIR}.html.sslpin    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLRESLOCALEDIR}.html.sslserv   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLRESLOCALEDIR}.html.ssltoken  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLRESLOCALEDIR}.html.url       ${TRFLAGS}
 	${SQ} abs.!RunIm-${TYPE}                      ${INSTALLDIR}.!RunImage      ${SQFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
