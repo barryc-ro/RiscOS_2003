@@ -79,12 +79,14 @@ _kernel_oserror *process_nfsname
 {
         AUTH *authorisation;
         _kernel_oserror *err;
-        auth_args aargs;
-        auth_results *ares;
+        v2_auth_args aargs;
+        v2_auth_results *ares;
         unused_client *pcnfsd_client;
         char machname[MAX_MACHINE_NAME + 1];
         int len;
+        u_long version;
         int gids[NGRPS];
+        gid_t *gp;
 
         /*
                 Is the user nobody?
@@ -97,7 +99,10 @@ _kernel_oserror *process_nfsname
                         NULL,
                         UNIX_MagicNumber_UID_Nobody,
                         UNIX_MagicNumber_GID_Nobody,
-                        authunix_create_default() );
+                        authunix_create_default(),
+                        0,
+                        NULL,
+                        -1);
                 return err;
         }
 
@@ -117,14 +122,45 @@ _kernel_oserror *process_nfsname
                 password = "";
         }
 
-        err = get_pcnfsd_client_for_host( &pcnfsd_client, current_nameing_host );
+        version = current_nameing_host->pcnfs_version;
+
+        err = get_pcnfsd_client_for_host( &pcnfsd_client, current_nameing_host, version );
         if ( err )
                 return err;
 
+        gethostname(machname, MAX_MACHINE_NAME);
+        machname[MAX_MACHINE_NAME] = 0;
+
+        aargs.system = machname;
         aargs.id = encryptstring( username );
         aargs.pw = encryptstring( password );
+        aargs.cm = "";
 
-        ares = pcnfsd_auth_1( &aargs, pcnfsd_client->client );
+        if ( version == PCNFSDVERS)
+        {
+                static v2_auth_results ar2;
+                auth_args a;
+                auth_results *ar;
+                a.id = aargs.id;
+                a.pw = aargs.pw;
+                ar = pcnfsd_auth_1( &a, pcnfsd_client->client );
+                if (ar == NULL)
+                {
+                        ares = NULL;
+                }
+                else {
+                        ares = &ar2;
+                        ar2.stat = ar->stat;
+                        ar2.uid = ar->uid;
+                        ar2.gid = ar->gid;
+                        ar2.gids.gids_len = 0;
+                        ar2.def_umask = -1;
+                }
+        }
+        else
+        {
+                ares = pcnfsd2_auth_2( &aargs, pcnfsd_client->client );
+        }
 
         free( aargs.id );
         free( aargs.pw );
@@ -132,6 +168,8 @@ _kernel_oserror *process_nfsname
         if ( ares )
         {
                 release_client( pcnfsd_client );
+
+                if (ares->def_umask == 0) ares->def_umask = -1;
 
                 switch( ares->stat )
                 {
@@ -160,15 +198,21 @@ _kernel_oserror *process_nfsname
                 return err;
         }
 
-        release_client( pcnfsd_client );
+        if (version == PCNFSDVERS || ares->gids.gids_len == 0)
+        {
+                len = getgroups( NGRPS, gids );
+                gp = (gid_t *) gids;
+        }
+        else
+        {
+                len = ares->gids.gids_len;
+                gp = (gid_t *) ares->gids.gids_val;
+        }
 
-        gethostname(machname, MAX_MACHINE_NAME);
-        machname[MAX_MACHINE_NAME] = 0;
-        len = getgroups( NGRPS, gids );
+        authorisation = authunix_create( machname, ares->uid, ares->gid, len, gp );
 
-        authorisation = authunix_create( machname, ares->uid, ares->gid, len, (gid_t *) gids );
-
-        return new_user( &current_user, username, current_nameing_host, (int)ares->uid, (int)ares->gid, authorisation );
+        return new_user( &current_user, username, current_nameing_host, (int)ares->uid, (int)ares->gid, authorisation,
+                len, (gid3 *) gp, ares->def_umask);
 }
 
 /*
@@ -1022,7 +1066,18 @@ _kernel_oserror *command_nfsinfo
                 link = link->forwards )
         {
                 user = Link_Wrapper( link );
-                err = lightweight_printf( "name=<%0s>, uid=<%1d>, gid=<%2d>, usage = %3d\n", user->name, user->uid, user->gid, user->usage_count );
+                err = lightweight_printf( "name=<%0s>, uid=<%1d>, gid=<%2d>, default umask=<%4o> usage = %3d\n",
+                        user->name, user->uid, user->gid, user->usage_count, user->umask & 0777 );
+                if (!err && user->len > 0)
+                {
+                        int i;
+                        lightweight_printf("  groups:");
+                        for (i = 0; i < user->len; ++i)
+                        {
+                                lightweight_printf(" <%0d>", user->gids[i]);
+                        }
+                        lightweight_printf("\n");
+                }
         }
 
         return err;
