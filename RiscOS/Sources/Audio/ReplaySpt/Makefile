@@ -25,7 +25,9 @@ CP      = copy
 LD      = link
 TLD     = tlink
 RM      = remove
-WIPE    = -wipe
+WIPE    = wipe
+DESTROY = -Destroy
+IGNORE  = -IgnoreErr
 DEFMOD  = DefMod
 
 AFLAGS = -depend !Depend -Stamp -quit
@@ -73,7 +75,8 @@ EXPORTS   = h.replay hdr.replay o.replay
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.h:;   ${CMHG} -d h.$* $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
@@ -106,11 +109,16 @@ o.replay: Documents.def.replay
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: export_${PHASE}
+
+export_hdrs: h.replay hdr.replay
         ${CP} h.replay ${EXP_HDR}.h.replay ${CPFLAGS}
         ${CP} hdr.replay ${EXP_HDR1}.replay ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (hdrs)
+
+export_libs: o.replay
         ${CP} o.replay ${EXP_HDR}.o.replay ${CPFLAGS}
-        @echo ${COMPONENT}: export complete
+        @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -121,11 +129,15 @@ install: rm.${COMPONENT}
         @echo ${COMPONENT}: installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
+        ${DESTROY} ${OBJS}
+	${DESTROY} ${ROMOBJS}
+        ${IGNORE} ${WIPE}    linked.${COMPONENT} ${WFLAGS}
+        ${IGNORE} ${WIPE}    map.${COMPONENT} ${WFLAGS}
+        ${IGNORE} ${RM}      ${TARGET}
+	${RM} h.modhdr
+	${RM} h.replay
+	${RM} hdr.replay
+	${RM} o.replay
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -147,8 +159,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS}
-        ${TLD} -o $@ -module ${OBJS}
+rm.${COMPONENT}: ${OBJS} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 # Dynamic dependencies:
 o.resourcesz: s.resources
@@ -163,37 +175,39 @@ o.resourcesz: hdr:ModHand
 o.resourcesz: hdr:MsgTrans
 o.resourcesz: hdr:ResourceFS
 o.resourcesz: hdr:Proc
-o.resources: s.resources
-o.resources: hdr:ListOpts
-o.resources: hdr:Macros
-o.resources: hdr:System
-o.resources: Hdr:SWIs
-o.resources: Hdr:CPU.Generic26
-o.resources: Hdr:IO.GenericIO
-o.resources: Hdr:RISCOS
-o.resources: hdr:ModHand
-o.resources: hdr:MsgTrans
-o.resources: hdr:ResourceFS
-o.resources: hdr:Proc
-o.main:	c.main
-o.main:	C:h.swis
-o.main:	C:h.kernel
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.resourcefs
-o.main:	h.modhdr
-o.main:	h.main
-o.main:	h.replay
-o.main:	OS:h.osspriteop
-o.main:	h.msgs
-o.main:	h.resources
-o.main:	h.soundplay
-o.main:	C:h.soundfile
-o.main:	OS:h.osgbpb
-o.main:	h.play
-o.main:	h.utils
-o.main:	h.stream
-o.main:	OS:h.osfile
+oz.resources: s.resources
+oz.resources: hdr:ListOpts
+oz.resources: hdr:Macros
+oz.resources: hdr:System
+oz.resources: Hdr:SWIs
+oz.resources: Hdr:CPU.Generic26
+oz.resources: Hdr:IO.GenericIO
+oz.resources: Hdr:RISCOS
+oz.resources: hdr:ModHand
+oz.resources: hdr:MsgTrans
+oz.resources: hdr:ResourceFS
+oz.resources: hdr:Proc
+oz.resources: hdr.CVars
+oz.main:	c.main
+oz.main:	C:h.swis
+oz.main:	C:h.kernel
+oz.main:	OS:h.os
+oz.main:	OS:h.types
+oz.main:	OS:h.resourcefs
+oz.main:	OS:h.fileswitch
+oz.main:	h.modhdr
+oz.main:	h.main
+oz.main:	h.replay
+oz.main:	OS:h.osspriteop
+oz.main:	h.msgs
+oz.main:	h.resources
+oz.main:	h.soundplay
+oz.main:	C:h.soundfile
+oz.main:	OS:h.osgbpb
+oz.main:	h.play
+oz.main:	h.utils
+oz.main:	h.stream
+oz.main:	OS:h.osfile
 o.muldiv: s.muldiv
 o.access:	c.access
 o.access:	h.msgs
@@ -204,6 +218,7 @@ o.access:	OS:h.osspriteop
 o.access:	h.utils
 o.access:	h.stream
 o.access:	OS:h.osfile
+o.access:	OS:h.fileswitch
 o.access:	h.main
 o.arhdr:	c.arhdr
 o.arhdr:	h.replay
@@ -215,6 +230,7 @@ o.arhdr:	h.main
 o.arhdr:	h.msgs
 o.arhdr:	h.stream
 o.arhdr:	OS:h.osfile
+o.arhdr:	OS:h.fileswitch
 o.arhdr:	h.utils
 o.arinfo:	c.arinfo
 o.arinfo:	h.msgs
@@ -225,6 +241,7 @@ o.arinfo:	OS:h.osspriteop
 o.arinfo:	h.utils
 o.arinfo:	h.stream
 o.arinfo:	OS:h.osfile
+o.arinfo:	OS:h.fileswitch
 o.arinfo:	h.main
 o.arsnd:	c.arsnd
 o.arsnd:	h.msgs
@@ -235,6 +252,7 @@ o.arsnd:	OS:h.osspriteop
 o.arsnd:	h.utils
 o.arsnd:	h.stream
 o.arsnd:	OS:h.osfile
+o.arsnd:	OS:h.fileswitch
 o.arsnd:	h.main
 o.arsndcode:	c.arsndcode
 o.arsndcode:	C:h.swis
@@ -242,6 +260,7 @@ o.arsndcode:	C:h.kernel
 o.arsndcode:	OS:h.osfile
 o.arsndcode:	OS:h.types
 o.arsndcode:	OS:h.os
+o.arsndcode:	OS:h.fileswitch
 o.arsndcode:	h.msgs
 o.arsndcode:	h.utils
 o.arsndcode:	h.stream
@@ -262,6 +281,7 @@ o.play:	OS:h.macros
 o.play:	OS:h.osgbpb
 o.play:	OS:h.types
 o.play:	OS:h.os
+o.play:	OS:h.fileswitch
 o.play:	h.replay
 o.play:	OS:h.osspriteop
 o.play:	C:h.soundfile
@@ -297,6 +317,7 @@ o.stream:	C:h.kernel
 o.stream:	OS:h.osfind
 o.stream:	OS:h.types
 o.stream:	OS:h.os
+o.stream:	OS:h.fileswitch
 o.stream:	OS:h.osargs
 o.stream:	OS:h.osgbpb
 o.stream:	OS:h.macros
@@ -313,6 +334,7 @@ o.utils:	OS:h.os
 o.utils:	OS:h.types
 o.utils:	h.stream
 o.utils:	OS:h.osfile
+o.utils:	OS:h.fileswitch
 o.utils:	h.utils
 o.veneers: s.veneers
 o.veneers: os:hdr.macros
@@ -320,6 +342,7 @@ o.veneers: hdr:soundfile
 o.veneers: OS:Hdr.Types
 o.veneers: OS:Hdr.OS
 o.veneers: OS:Hdr.OSGBPB
+o.veneers: OS:Hdr.FileSwitch
 o.soundplay:	c.soundplay
 o.soundplay:	C:h.swis
 o.soundplay:	C:h.kernel
@@ -331,41 +354,43 @@ o.soundplay:	h.replay
 o.soundplay:	OS:h.osspriteop
 o.soundplay:	C:h.soundfile
 o.soundplay:	OS:h.osgbpb
+o.soundplay:	OS:h.fileswitch
 o.soundplay:	h.msgs
 o.soundplay:	h.play
 o.soundplay:	h.soundplay
 o.soundplay:	h.utils
 o.soundplay:	h.stream
 o.soundplay:	OS:h.osfile
-oz.resources: s.resources
-oz.resources: hdr:ListOpts
-oz.resources: hdr:Macros
-oz.resources: hdr:System
-oz.resources: Hdr:SWIs
-oz.resources: Hdr:CPU.Generic26
-oz.resources: Hdr:IO.GenericIO
-oz.resources: Hdr:RISCOS
-oz.resources: hdr:ModHand
-oz.resources: hdr:MsgTrans
-oz.resources: hdr:ResourceFS
-oz.resources: hdr:Proc
-oz.resources: hdr.CVars
-oz.main:	c.main
-oz.main:	C:h.swis
-oz.main:	C:h.kernel
-oz.main:	OS:h.os
-oz.main:	OS:h.types
-oz.main:	OS:h.resourcefs
-oz.main:	h.modhdr
-oz.main:	h.main
-oz.main:	h.replay
-oz.main:	OS:h.osspriteop
-oz.main:	h.msgs
-oz.main:	h.resources
-oz.main:	h.soundplay
-oz.main:	C:h.soundfile
-oz.main:	OS:h.osgbpb
-oz.main:	h.play
-oz.main:	h.utils
-oz.main:	h.stream
-oz.main:	OS:h.osfile
+o.resources: s.resources
+o.resources: hdr:ListOpts
+o.resources: hdr:Macros
+o.resources: hdr:System
+o.resources: Hdr:SWIs
+o.resources: Hdr:CPU.Generic26
+o.resources: Hdr:IO.GenericIO
+o.resources: Hdr:RISCOS
+o.resources: hdr:ModHand
+o.resources: hdr:MsgTrans
+o.resources: hdr:ResourceFS
+o.resources: hdr:Proc
+o.resources: hdr.CVars
+o.main:	c.main
+o.main:	C:h.swis
+o.main:	C:h.kernel
+o.main:	OS:h.os
+o.main:	OS:h.types
+o.main:	OS:h.resourcefs
+o.main:	OS:h.fileswitch
+o.main:	h.modhdr
+o.main:	h.main
+o.main:	h.replay
+o.main:	OS:h.osspriteop
+o.main:	h.msgs
+o.main:	h.resources
+o.main:	h.soundplay
+o.main:	C:h.soundfile
+o.main:	OS:h.osgbpb
+o.main:	h.play
+o.main:	h.utils
+o.main:	h.stream
+o.main:	OS:h.osfile
