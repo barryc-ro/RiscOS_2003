@@ -134,3 +134,6 @@ ${TARGETSA}: ${OBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${EX
 
 
 # Dynamic dependencies:
+o.dbug: c.dbug H.DBUG
+o.filecrc: c.filecrc C:h.kernel C:h.swis C:h.os h.CRC h.Display h.FileCRC h.DBUG h.types VersionNum
+o.display: c.display C:h.os C:h.kernel h.typedefs h.display C:h.kernel C:h.swis C:h.assert h.dbug
