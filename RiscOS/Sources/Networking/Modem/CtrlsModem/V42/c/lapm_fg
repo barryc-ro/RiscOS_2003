@@ -1,0 +1,640 @@
+/****************************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC  27615
+/               (919) 846-7171
+/
+/
+/       This document contains material confidential to RSA its contents must
+/       not be revealed, used or disclosed to anyone or company with out
+/       written permission by RSA.  The information contained herein is solely
+/       for the use of RSA.
+/
+/       File:           LAPM_FG.C
+/
+/       Module Version: 4.02
+/
+/       Function:       Routines to process received and transmitted packets.
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:    8/25/92
+/                       11/1/94 (V4.01) - Add ETC and update MNP10
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "lapm_ede.h"
+#include "edf.lapm_ctl"
+#include "edf.lapm_que"
+#include "edf.lapm_tmr"
+#include "edf.lapm_brk"
+#include "edf.lapm_lib"
+#include "edf.lapm_rej"
+#include "edf.lapm_tx"
+#include "edf.dce_line"
+#include "edf.v42"
+#include "edf.dte"
+
+
+ubyte verify_rcv_frame(struct lapm_receive_struct *,ubyte,ubyte,struct lapm_event_struct *);
+ubyte verify_rcv_NS(struct lapm_receive_struct *,struct lapm_event_struct *);
+ubyte verify_rcv_NR(struct lapm_receive_struct *,struct lapm_event_struct *);
+ubyte verify_rcv_break(struct lapm_receive_struct *,struct lapm_event_struct *);
+void tx_clear_buffer_check(struct lapm_dummy_struct *);
+void lapm_rx_work(struct lapm_receive_struct *);
+void lapm_rx_fg(void);
+
+extern const struct CmdTabEntry cmd_table[cmd_table_size];
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: verify_rcv_frame					       /
+/									       /
+/	 This routine verifies the size of the frame depending upon the type   /
+/	    and sets the errors, if any.				       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 rcv_frame - Pointer to the frame being verified	       /
+/		 (byte) 						       /
+/									       /
+/		 cmd - Command type of the frame			       /
+/		 (byte) 						       /
+/									       /
+/		 size - Correct size of the frame			       /
+/		 (byte) 						       /
+/									       /
+/		 event - Pointer to event associated with the frame	       /
+/		 (word) 						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+ubyte  verify_rcv_frame( struct lapm_receive_struct *rcv_frame,
+			 ubyte cmd,
+			 ubyte size,
+			 struct lapm_event_struct *event  )
+{
+	if (rcv_frame->len < size)
+	{
+		rcv_frame_short_count += 1;
+		event->type = DO_NOT_QUE;
+		return (FALSE);
+	}
+
+	if ((rcv_frame->addr != locAddr) && (rcv_frame->addr != rmtAddr))
+	{
+		rcv_frame_bad_count += 1;
+/*		rcv_frame->error = FRMRw;	*/
+		event->type = DO_NOT_QUE;
+		return (FALSE);
+	}
+
+	if (rcv_frame->error == OVERFLOW)
+	{
+/*		if (cmd == IFRM)
+			rcv_frame->error = FRMRy;
+		else
+			rcv_frame->error = FRMRw | FRMRx;
+							*/
+		rcv_frame_long_count += 1;
+		event->type = DO_NOT_QUE;
+		return (FALSE);
+	}
+
+	switch (cmd)
+	{
+		case IFRM:
+			lapm_reset_inactivity_timer();
+			return (TRUE);
+		case TEST:
+			lapm_reset_inactivity_timer();
+			return (TRUE);
+		case UI:
+			lapm_reset_inactivity_timer();
+			if (event->type == E_BRKACK)
+			{
+				if (rcv_frame->len == BRKACKsize)
+					return (TRUE);
+			}
+			else
+				if ((rcv_frame->len == BREAKsize) || (rcv_frame->len == BREAKsize-1))
+					return (TRUE);
+			break;
+		case FRMR:
+			if (rcv_frame->len == FRMRsize)
+				return (TRUE);
+			break;
+		case XID:
+			xid_length = (((uword)rcv_frame->data[2] << 8) & 0xff00) + rcv_frame->data[3];
+			if (rcv_frame->len >= xid_length + XIDsize)
+				return (TRUE);
+			break;
+		default:
+			if (rcv_frame->len == size)
+				return (TRUE);
+			break;
+	}
+
+
+/*	rcv_frame->error = FRMRw | FRMRx;	*/
+	rcv_frame_long_count += 1;
+	event->type = DO_NOT_QUE;
+	return (FALSE);
+
+}
+
+
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: verify_rcv_NS 					       /
+/									       /
+/	 This verifies the send sequence number of the frame. If the frame is  /
+/	    out of order the routine will  generate the appropiate event for   /
+/	    the retransmission method used.				       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 rcv_frame - Pointer to the frame being verified	       /
+/		 (word) 						       /
+/									       /
+/		 event - Pointer to event associated with the frame	       /
+/		 (word) 						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+ubyte  verify_rcv_NS( struct lapm_receive_struct *rcv_frame,
+		      struct lapm_event_struct *event )
+{
+	ubyte i,j,temp;
+
+	i = (rcv_frame->cmd >> 1) & 0x7f;
+
+	if (i == locVR)
+	{
+		rmtNS = i;
+		qq_lapm((struct lapm_que_struct *)&lapm_receive_que,
+			(struct lapm_dummy_struct *)rcv_frame);
+		if (in_seq == locVR)
+		{
+			in_seq = (i + 1) & SEQMOD-1;
+		}
+		locVR = (locVR + 1) & SEQMOD-1;
+		LAPMrej = FALSE;
+		return (TRUE);
+	}
+
+	/* Frame is out of order */
+	if (i < SEQMOD)
+	{
+		j = i;
+		temp = in_seq;
+		i = locVR + neg_parms.RK;
+		if (j < locVR)
+			j += SEQMOD;
+		if (temp < locVR)
+			temp += SEQMOD;
+
+		if (i < j)
+		{
+			event->type = E_IGNORE;
+			return (FALSE);
+		}
+
+		if (temp == j)
+		{
+			qq_lapm((struct lapm_que_struct *)&lapm_temp_rcv_que,
+			       (struct lapm_dummy_struct *)rcv_frame);
+			in_seq = (in_seq + 1) & SEQMOD-1;
+			return (TRUE);
+		}
+
+		if (temp > j)
+		    event->type = E_IGNORE;
+		else
+		{
+		    proclaim_error();
+		    if (!LAPMbusy)
+		    {
+		       if (neg_parms.supSREJ)
+		       {
+			  in_seq = (((rcv_frame->cmd >> 1) & 0x7f) + 1) & SEQMOD-1;
+			  process_NS(PFCLR,rcv_frame);
+			  event->buffer = NULL;
+		       }
+		       else
+		       {
+			  if (LAPMrej != TRUE)
+			  {
+			      LAPMrej = TRUE;
+			      send_rsp(PFCLR,REJ);
+			  }
+		       }
+		    }
+		    event->type = DO_NOT_QUE;
+		}
+	}
+	else
+	{
+		rcv_frame->error = FRMRw;
+		event->type = E_BADFRM;
+	}
+	return (FALSE);
+}
+
+
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: verify_rcv_NR 					       /
+/									       /
+/	 This routine verifies the receive sequence number of the frame and    /
+/	    sets errors accordingly.					       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 rcv_frame - Pointer to the frame being verified	       /
+/		 (word) 						       /
+/									       /
+/		 event - Pointer to event associated with the frame	       /
+/		 (word) 						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+ubyte verify_rcv_NR( struct lapm_receive_struct *rcv_frame,
+		     struct lapm_event_struct *event )
+{
+	rmtNR = (rcv_frame->data[0] >> 1) & 0x7f;
+
+	if (((locVA <= rmtNR) && (rmtNR <= locVS)) || ((locVS < locVA) && (locVA <= rmtNR))
+	      || ((rmtNR <= locVS) && (locVS < locVA)))
+		return (TRUE);
+	else
+	{
+		rcv_frame->error = FRMRz;
+		event->type = E_BADFRM;
+		return (FALSE);
+	}
+}
+
+
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: verify_rcv_break					       /
+/									       /
+/	 This routine verifies the received break .			       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 rcv_frame - Pointer to the frame being verified	       /
+/		 (word) 						       /
+/									       /
+/		 event - Pointer to event associated with the frame	       /
+/		 (word) 						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+ubyte verify_rcv_break( struct lapm_receive_struct *rcv_frame,
+			struct lapm_event_struct *event )
+{
+	if ((rcv_frame->data[0] & 0x7f) == BREAK)
+	{
+		if (rcv_frame->len == BREAKsize-1)
+			LAPMrx_brk_len = 0;
+		else
+			LAPMrx_brk_len = rcv_frame->data[2];
+
+		if (rmtVRB != (rcv_frame->data[0] & BRKnrb))
+			event->type = DO_NOT_QUE;
+		else if ((rcv_frame->data[1] & BREAKd) == BREAKd)
+		{
+			destructive_break();
+		}
+
+		rmtVRB = rcv_frame->data[0] & BRKnrb;
+		if ((rcv_frame->cmd & UNMFINAL) == UNMFINAL)
+		       send_break(RSP,UNMFINAL);
+		else
+		       send_break(RSP,PFCLR);
+
+		if (event->type == DO_NOT_QUE)
+			return (FALSE);
+
+		lapm_reset_inactivity_timer();
+
+		if ((rcv_frame->data[1] & BREAKs) == BREAKs)
+		{
+			if ((rcv_frame->data[1] & BREAKd) == BREAKd)
+				LAPMrx_brk_type = DestExp;
+			else
+				LAPMrx_brk_type = NonDestExp;
+
+			LAPMsend_dte_break = TRUE;
+			event->type = DO_NOT_QUE;
+			return (TRUE);
+		}
+
+		qq_lapm((struct lapm_que_struct *)&lapm_receive_que,
+			   (struct lapm_dummy_struct *)rcv_frame);
+		event->buffer = NULL;
+		return (TRUE);
+	}
+	else
+		if ((rcv_frame->data[0] & 0x7f) == BRKack)
+			if ((rcv_frame->data[0] & BRKnrb) != (locVRB & BRKnrb))
+			{
+				if ((lapm_break_buffer.data[1] & BREAKd) == BREAKd)
+				{
+					destructive_break();
+					LAPMbreak = FALSE;
+					exception_turnoff();
+					N400_init();
+					event->type = DO_NOT_QUE;
+					return (TRUE);
+				}
+				else
+				{
+					event->type = E_BRKACK;
+					return (TRUE);
+				}
+			}
+			else
+			{
+				event->type = E_IGNORE;
+				return (FALSE);
+			}
+		else
+		{
+			event->type = E_IGNORE;
+			return (FALSE);
+		}
+}
+
+
+void tx_clear_buffer_check( struct lapm_dummy_struct *input_buffer )
+{
+	/* Frame is a TEST frame */
+	if (input_buffer->cmd == TEST)
+	{
+		if (input_buffer->addr == locAddr)
+		{
+			lapm_reset_inactivity_timer();
+			lapm_put_empty((struct lapm_receive_struct *)input_buffer);
+		}
+	}
+
+	/* Frame is a control frame */
+	if (input_buffer->cmd & 0x01)
+	  if ((input_buffer->cmd != XID) && (input_buffer->cmd != TEST))
+	  {
+	    if ((input_buffer->cmd != UI) || ((input_buffer->cmd2 & BRKack) == BRKack))
+		  fq_lapm((struct lapm_que_struct *)&lapm_control_que,input_buffer);
+	  }
+
+	if (time_array[T401] == RESET_VALUE)
+		timer(TIMRestart,T403);
+}
+
+/*******************************************************************************
+/									       /
+*******************************************************************************/
+
+void lapm_rx_work( struct lapm_receive_struct *rcv_frame )
+{
+	word i;
+	ubyte cmd;			/* Frame's command value */
+	ubyte size;			/* Number of octets in header field */
+	ubyte temp_mask;
+	ubyte temp_cmd;
+	ubyte temp_view;
+	ubyte temp_poll;
+	ubyte temp_pollmask;
+
+	struct lapm_event_struct *add;
+
+	if (rcv_frame->error != 0)
+	{
+		proclaim_error();
+		line_buffer_rcvd_error();
+		lapm_put_empty(rcv_frame);
+
+/* start change keh 10/21/96 => use srejects */
+#if 0
+*		if (rcv_frame->len >= 6)
+*		{
+*		    if ((!LAPMbusy) && (!LAPMrej))
+*		    {
+*			LAPMrej = TRUE;
+*			send_rsp(PFCLR,REJ);
+*		    }
+*		}
+#endif
+/* end change keh 10/21/96 => use srejects */
+		return;
+	}
+	else
+	{
+		line_buffer_rcvd_ok();
+	}
+
+	if (time_array[T401] == RESET_VALUE)
+		timer(TIMRestart,T403);
+
+	rcv_frame_count += 1;
+
+	if ((LAPMmnpreferred) && ((rcv_frame->addr) + 1 == rcv_frame->len))
+	{
+		if (LAPMview == ORIG)
+		{
+			lapm_mnp_rcv_frame = (ubyte *)&rcv_frame->addr;
+			lapm_fallback_to_MNP = TRUE;
+			return;
+		}
+	}
+
+	local_event.buffer = rcv_frame;
+
+	local_event.type = DO_NOT_QUE;
+	for (i=0; i<cmd_table_size; i++)
+	{
+		 temp_mask = cmd_table[i].mask;
+		 temp_cmd = cmd_table[i].cmd;
+		 temp_view = cmd_table[i].view;
+		 temp_pollmask = cmd_table[i].pollmask;
+		 temp_poll = cmd_table[i].poll;
+
+		 if ((temp_mask & rcv_frame->cmd) == temp_cmd)
+		    if ((rcv_frame->addr == locAddr) == temp_view)
+		     if ((rcv_frame->data[0] & temp_pollmask) == temp_poll)
+		{
+			local_event.type = cmd_table[i].event;
+			cmd = temp_cmd;
+			if ((cmd & UNUMcmd) ==	UNUMcmd)
+			{
+				size = CUNMsize;
+				cmd = temp_cmd & ~UNMPOLL;
+			}
+			else
+				size = CNUMsize;
+
+			break;
+		}
+	}
+
+	if (local_event.type != DO_NOT_QUE)
+	{
+		if (verify_rcv_frame(rcv_frame,cmd,size,&local_event))
+		{
+			switch (cmd)
+			{
+				case IFRM:
+					LAPM_rcvd_UP_frame = TRUE;
+
+					if (verify_rcv_NR(rcv_frame,&local_event))
+					{
+						process_ack(rcv_frame);
+						if (LAPMbusy == TRUE)
+						{
+							LAPMrcv_IFRM_tossed = TRUE;
+							lapm_put_empty(rcv_frame);
+							local_event.buffer = NULL;
+							rcv_frame = (struct lapm_receive_struct *)lapm_temp_rcv_que.fill_begin;
+							while (rcv_frame != NULL)
+							{
+								rcv_frame = (struct lapm_receive_struct *)dq_lapm
+								       ((struct lapm_que_struct *)&lapm_temp_rcv_que);
+								lapm_put_empty(rcv_frame);
+								rcv_frame = (struct lapm_receive_struct *)lapm_temp_rcv_que.fill_begin;
+							}
+						}
+						else
+						{
+							if (verify_rcv_NS(rcv_frame,&local_event))
+							       local_event.buffer = NULL;
+						}
+					}
+					break;
+
+				case REJ:
+					if (verify_rcv_NR(rcv_frame,&local_event))
+					{
+					    process_ack(rcv_frame);
+					    proclaim_error();
+					}
+					break;
+
+				case RR:
+				case RNR:
+					LAPM_rcvd_UP_frame = TRUE;
+					if (verify_rcv_NR(rcv_frame,&local_event))
+					{
+						process_ack(rcv_frame);
+						lapm_put_empty(rcv_frame);
+						local_event.buffer = NULL;
+						if (LAPMbusy == TRUE)
+						{
+							rcv_frame = (struct lapm_receive_struct *)lapm_temp_rcv_que.fill_begin;
+							while (rcv_frame != NULL)
+							{
+							       rcv_frame = (struct lapm_receive_struct *)dq_lapm((struct lapm_que_struct *)&lapm_temp_rcv_que);
+							       lapm_put_empty(rcv_frame);
+							       rcv_frame = (struct lapm_receive_struct *)lapm_temp_rcv_que.fill_begin;
+							}
+						}
+					}
+					break;
+				case SREJ:
+					if (neg_parms.supSREJ)
+					{
+						if (verify_rcv_NR(rcv_frame,&local_event))
+						{
+							rexmit_srej();
+							proclaim_error();
+							local_event.type = DO_NOT_QUE;
+						}
+					}
+					else
+					{
+						local_event.type = E_BADFRM;
+						rcv_frame->error = FRMRw;
+					}
+					break;
+				case UI:
+					verify_rcv_break(rcv_frame,&local_event);
+					break;
+				case XID:
+					if ((local_event.type == E_RXID) && (!LAPMxid) && (LAPMview == ORIG))
+						local_event.type = E_IGNORE;
+					break;
+			}
+		}
+	}
+	else
+		rcv_frame->error = FRMRw;
+
+	if (local_event.type == DO_NOT_QUE)
+	{
+		if (local_event.buffer != NULL)
+			lapm_put_empty(rcv_frame);
+		return;
+	}
+
+	add = (struct lapm_event_struct *)aq_lapm((struct lapm_que_struct *)&lapm_event_que);
+	if (add != NULL)
+	{
+		add->type = local_event.type;
+		add->buffer = local_event.buffer;
+
+		if (add->type == E_REJNS)
+			qq1_lapm((struct lapm_que_struct *)&lapm_event_que,
+			       (struct lapm_dummy_struct *)add);
+		else
+			qq_lapm((struct lapm_que_struct *)&lapm_event_que,
+			       (struct lapm_dummy_struct *)add);
+	}
+	else
+		if (local_event.buffer != NULL)
+			lapm_put_empty(rcv_frame);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_rx_fg						       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/									       /
+/	 PARAMETERS OUT:						       /
+/									       /
+*******************************************************************************/
+void lapm_rx_fg(void)
+{
+	struct lapm_receive_struct *work_frame;
+
+	work_frame = (struct lapm_receive_struct *)lapm_get_received();
+
+	while (work_frame != NULL)
+	{
+		lapm_rx_work(work_frame);
+		work_frame = (struct lapm_receive_struct *)lapm_get_received();
+	}
+}
+

@@ -1,0 +1,308 @@
+/****************************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC  27615
+/               (919) 846-7171
+/
+/
+/       This document contains material confidential to RSA its contents must
+/       not be revealed, used or disclosed to anyone or company with out
+/       written permission by RSA.  The information contained herein is solely
+/       for the use of RSA.
+/
+/       File:           LAPM_LIB.C
+/
+/       Module Version: 4.02
+/
+/       Function:       Contains miscellanous LAPM "library" routines.
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:    8/11/92
+/                       11/1/94 (V4.01) - Add ETC and update MNP10
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "lapm_ede.h"
+#include "edf.lapm_que"
+#include "edf.lapm_fg"
+#include "edf.lapm_ctl"
+#include "edf.lapm_tmr"
+#include "edf.dce_line"
+#include "edf.dte"
+#include "edf.btinit"
+#include "edf.v42"          /* Get V42 ETC prototypes */
+
+ubyte send_lapm_frame(struct lapm_dummy_struct *,ubyte,ubyte);
+ubyte exception_timeout(void);
+void N400_init(void);
+void bring_up(void);
+void init_parms(void);
+void que_event(ubyte);
+void destructive_break(void);
+void exception_turnoff(void);
+void lapm_line_bg(void);
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: N400_init						       /
+/									       /
+/	 This routine initializes the retransmission counter		       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void N400_init(void)
+{
+    n400_cnt = 0;
+
+    /* Reset the V42 retransmit counter every time we reset N400 */
+    v42_frame_retry_update(0);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: send_lapm_frame					       /
+/									       /
+/	 This routine places the address of the frame to be transmitted into   /
+/	   tx_current if there is nothing being transmitted and calls blk_tx   /
+/	   to start transmission. If a frame is currently being transmitted    /
+/	   the address of the frame is placed into tx_holding and is	       /
+/	   transmitted during the transmit interrupt routine.		       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 frame_add - address of the frame to be transmitted	       /
+/		 (word) 						       /
+/									       /
+/		 addr - address specified in the frame			       /
+/		 (byte)      if Originator				       /
+/				      1 : Local address 		       /
+/				      3 : Remote address		       /
+/			     if Answerer				       /
+/				      3 : Local address 		       /
+/				      1 : Remote address		       /
+/									       /
+/		 data0 - contains the second octet of the command field        /
+/		 (byte) 	  for information and supervisory frames       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+ubyte send_lapm_frame(	struct lapm_dummy_struct *frame_add,
+			ubyte addr,
+			ubyte data0  )
+{
+    frame_add->addr = addr;
+    frame_add->cmd2 = data0;
+
+    if (LAPMtx_holding == NULL)
+    {
+        line_disable_interrupts();
+        LAPMtx_holding = frame_add;
+        line_enable_interrupts();
+    }
+    else
+        return(FALSE);
+
+    if (LAPMtx_current == NULL)
+    {
+        LAPMtx_holding = NULL;
+        LAPMtx_current = frame_add;
+        line_tx_block( (ubyte *) frame_add);
+    }
+    return (TRUE);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: exception_timeout					       /
+/									       /
+/	 This routine sends the appropiate command depending upon the state    /
+/	 of the processing.						       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+ubyte exception_timeout(void)
+{
+    if (LAPMbreak)
+    {
+        qq1_lapm((struct lapm_que_struct *)&lapm_control_que,(struct lapm_dummy_struct *)&lapm_break_buffer);
+        send_control();
+        return (TRUE);
+    }
+    if (LAPMxid)
+    {
+        qq_lapm((struct lapm_que_struct *)&lapm_control_que,(struct lapm_dummy_struct *)&lapm_xid_buffer);
+        send_control();
+        return (TRUE);
+    }
+    if (LAPMtest)
+    {
+        qq_lapm((struct lapm_que_struct *)&lapm_control_que,(struct lapm_dummy_struct *)&lapm_test_buffer);
+        send_control();
+        return (TRUE);
+    }
+    return (FALSE);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: init_parms						       /
+/									       /
+/	 This routine will initialize all parameters.			       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void init_parms(void)
+{
+    k = neg_parms.TK;
+
+    locVR = 0;
+    rmtNR = 0;
+    locVS = 0;
+    rmtNS = 0;
+    locVA = 0;
+    in_seq = 0;
+    next_to_deliver = 0;
+
+    LAPMrej = FALSE;
+}
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: bring_up						       /
+/									       /
+/	 This routine will reinitialize all parameters and set the status to   /
+/	 UP.								       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void bring_up(void)
+{
+    line_autoreliable_fallback(0,0,0,0);	/* TURN OFF AUTORELIABLE FALLBACK */
+    init_parms();
+    LAPMstatus = UP;
+    LAPMpoll = FALSE;
+
+    timer(TIMRestart,T403);
+    lapm_reset_inactivity_timer();
+    LAPMmnpreferred = 0;
+}
+
+void destructive_break(void)
+{
+    struct lapm_dummy_struct *add;
+    ubyte tmp_byte;
+
+    add = (struct lapm_dummy_struct *)lapm_receive_que.fill_begin;
+    while (add != NULL)
+    {
+        add = (struct lapm_dummy_struct *)dq_lapm((struct lapm_que_struct *)&lapm_receive_que);
+        lapm_put_empty((struct lapm_receive_struct *)add);
+        add = (struct lapm_dummy_struct *)lapm_receive_que.fill_begin;
+    }
+
+    add = (struct lapm_dummy_struct *)lapm_temp_rcv_que.fill_begin;
+    while (add != NULL)
+    {
+        add = (struct lapm_dummy_struct *)dq_lapm((struct lapm_que_struct *)&lapm_temp_rcv_que);
+        lapm_put_empty((struct lapm_receive_struct *)add);
+        add = (struct lapm_dummy_struct *)lapm_temp_rcv_que.fill_begin;
+    }
+
+    init_parms();
+    rcv_char_count = 0;
+    lapm_reset_inactivity_timer();
+
+    lapmtx_data_ptr = NULL;
+    LAPMdeliver_cont = FALSE;
+
+    line_disable_interrupts();
+    LAPMtx_data_holding = LAPMtx_holding = NULL;
+    iq_lapm_send_que();
+    iq_lapm_ack_que();
+    line_enable_interrupts();
+    cont_frame = NULL;
+    LAPMdeliver_cont = FALSE;
+
+    tmp_byte = BTInit(neg_parms.P0,neg_parms.P1,neg_parms.P2);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: que_event						       /
+/									       /
+/	 This routine ques up events that needed to be delayed		       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 type - Type of event to be qued			       /
+/		 (byte) 						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void que_event(ubyte type)
+{
+    struct lapm_event_struct *event_addr;
+
+    event_addr = (struct lapm_event_struct *)aq_lapm((struct lapm_que_struct *)&lapm_event_que);
+    if (event_addr == NULL)
+        return;
+
+    event_addr->type = type;
+    event_addr->buffer = NULL;
+    qq_lapm((struct lapm_que_struct *)&lapm_event_que,(struct lapm_dummy_struct *)event_addr);
+}
+
+void exception_turnoff(void)
+{
+    if ((LAPMbreak) || (LAPMpoll) || (LAPMtest) || (LAPMxid) || (RMTbusy) ||
+        (LAPMstatus == STOPPED))
+        return;
+
+    if (LAPMtx_que__ackin != LAPMtx_que__ackout)
+    {
+        timer(TIMRestart,T401);
+        timer(TIMCancel,T403);
+    }
+    else
+    {
+        timer(TIMCancel,T401);
+        timer(TIMRestart,T403);
+        N400_init();
+    }
+}
+
+void lapm_line_bg(void)
+{
+    line_bg();
+    lapm_rx_fg();
+}
+

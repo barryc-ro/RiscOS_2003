@@ -1,4 +1,4 @@
--BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+-rmf
  ac00mstr.o
   ac00sys0.o
   ac00sys1.o
@@ -59,11 +59,8 @@
  
  wl00stub.o
  
- ac00vc1.o
-  ac00vc2.o
-  ac00cmvc.o
-  ac00cmv1.o
- 
+ ac00vstb.o
+
  ac00fx1.o
   ac00fx2.o
   ac00cmfx.o
@@ -152,17 +149,6 @@ mt00if10.o
  mt_voice.o
  v80stub.o
  
-vc00mn.o
- vc00mem.o
- vc00lib.o
- vc00if.o
- vc00ex.o
- vc00prlb.o
- vc00cmd.o
- spkr_phn.o
- voc_ctls.o
- dv02cd10.o
- 
  pp00stb.o
   as_stub.o
   ac00ptt.o
@@ -186,22 +172,17 @@ vc00mn.o
   faxdata.o
   faxlink.o
   faxdat.o
-  rtstand.o
-  sleep.o
-   parallel.o
-  pnp.o
-  pcmcia.o
   musket.o
   linev8.o
-  powerup.o
-  eeread.o
-  eewrite.o
-  overmgr.o
   ringint.o
   callerid.o
   dsppatch.o
   patch_l.o
   vcepatch.o
   pwronptc.o
- 
- 
+
+riscos.o
+riscosasm.o
+voc_ctls.o
+modulehdr.o
+

@@ -1,0 +1,2089 @@
+/****************************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC  27615
+/               (919) 846-7171
+/
+/
+/       This document contains material confidential to RSA its contents must
+/       not be revealed, used or disclosed to anyone or company with out
+/       written permission by RSA.  The information contained herein is solely
+/       for the use of RSA.
+/
+/       File:           V42.C
+/
+/       Module Version: 4.02
+/
+/       Function:       This file contains the V.42 code.
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:    8/06/92
+/                       11/1/94 (V4.01) - Add ETC and update MNP10
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "edf.mnp_bg"
+#include "edf.mnp"
+#include "edf.dte"
+#include "edf.dce_line"
+#include "edf.m10_if"
+#include "m10_def.h"
+#include "lapm_ede.h"
+#include "edf.lapm_que"
+#include "edf.lapm_tx"
+#include "edf.v42_etc"          /* V42 ETC Driver external prototypes */
+
+/*============================================================================*/
+/*			  V42 CONTROL VALUES (internal) 		      */
+/*============================================================================*/
+
+/*  USED: current_mode */
+#define NO_MODE 0				/* V42 running no mode	       */
+#define MNP_MODE 1				/* V42 running MNP	       */
+#define SPEED_MODE 2				/* V42 running SPEED MATCHING  */
+#define LAPM_MODE 3				/* V42 running LAPM	       */
+#define DETECTION_MODE 100			/* V42 running DETECTION PHASE */
+
+/* USED: v42_detection_reason */
+#define DETECTION_REASON__UNKNOWN	0
+#define DETECTION_REASON__TIMEOUT	1
+#define DETECTION_REASON__USER_REQUEST	255
+
+/* USED: v42_mnp_level */
+#define MNP_LEVEL__NO_MNP		0
+#define MNP_LEVEL__MINIMAL_SERVICE	1
+#define MNP_LEVEL__STANDARD_SERVICE	2
+
+/*  USED: miscellanious */
+#define OK			0
+
+#define MNP_EXTENDED_TRUE	TRUE		/* indicates MNP EXTENDED service to LAPM    */
+#define MNP_EXTENDED_FALSE	FALSE		/* indicates no MNP EXTENDED service to LAPM */
+
+/*  USED: during DETECTION PHASE to post detection status */
+#define V42_RECVD__LAPM 	      0 	/* DETECTION received goto LAPM 	  */
+#define V42_RECVD__MNP		      1 	/* DETECTION received goto MNP		  */
+#define V42_RECVD__SPEED	      2 	/* DETECTION received goto SPEED MATCHING */
+#define V42_RECVD__UNKNOWN	      3 	/* DETECTION received but unknown	  */
+#define V42_NOT_RECVD__TIMEOUT	      4 	/* DETECTION disabled MNP only		  */
+#define V42_NOT_RECVD__LAPM_ONLY      5 	/* DETECTION disabled LAPM only 	  */
+#define V42_NOT_RECVD__MNP_ONLY       6 	/* DETECTION disabled MNP only		  */
+#define V42_NOT_RECVD__UNKNOWN	      7 	/* DETECTION disabled LAPM only 	  */
+
+/*============================================================================*/
+/*			  V42 CONTROL VALUES (interface)		      */
+/*============================================================================*/
+/* INTERFACE: v42_idle() */
+#define V42_NOT_IDLE	 -1			/* V42 not going idle as requested	  */
+
+/* INTERFACE: v42_bg()	 */
+#define V42_HALTED	  0			/* V42 halted				  */
+#define V42_CONNECTING	  1			/* V42 connecting			  */
+#define V42_IDLE	  2			/* V42 idle				  */
+#define V42_RUNNING_MNP   3			/* V42 running MNP			  */
+#define V42_DISCONNECTING 4			/* V42 disconnecting			  */
+#define V42_BUFFERING	  5			/* V42 SPEED MATCHING			  */
+#define V42_RUNNING_LAPM  6			/* V42 running LAPM			  */
+#define V42_LAPM_to_MNP   7			/* V42 LAPM falling to MNP		  */
+#define V42_RUNNING_MNP10 11			/* V42 running MNP10			  */
+
+/* INTERFACE: v42_start() */
+#define V42_ORIGINATE	      0 		/* V42 needs to goto ORIGINATE start state*/
+#define V42_ANSWER	      1 		/* V42 needs to goto ANSWER start state   */
+#define V42_CONTINUE	      2 		/* V42 needs to CONTINUE from idle	  */
+#define V42_NOTHING_STARTED   1 		/* return value if nothing was started	  */
+#define V42_NOTHING_CONTINUED 2 		/* return value if nothing was continued  */
+
+/* INTERFACE: v42_test_status() */
+#define V42_TEST_STATE__WAITING 	0xffff	/* still waiting			  */
+#define V42_TEST_STATE__COMPLETE__OK	0	/* test complete - OK			  */
+#define V42_TEST_STATE__ERROR__IN_DATA	1	/* test complete - error in the data	  */
+#define V42_TEST_STATE__ERROR__TIMEOUT	2	/* test complete - timeout error	  */
+#define V42_TEST_STATE__NOT_IN_LAPM	3	/* test could not be done - not in LAPM   */
+
+/* INTERFACE: v42_reason() */
+#define DISC_CODE__NO_MODE_STARTED 1	  /* halted : no mode was able to start     */
+
+/*  INTERFACE: dce_detection() */
+#define DETECTION_START__LAPM	 0x00		/* start LAPM DETECTION PHASE		  */
+#define DETECTION_START__MNP	 0x01		/* start MNP DETECTION PHASE		  */
+#define DETECTION_START__SPEED	 0x02		/* start SPEED MATCHING DETECTION PHASE   */
+#define V42_TURNOFF_DETECTION	 0x0ff		/* turn off detection phase		  */
+#define FALLING_BACK_REASON__TIMEOUT 0x0	/* falling back timeout code		  */
+
+#define v42_line_detc_length__ORIGINATE 150 /* length of detection ORIGINATE timer in 10 mSec intervals */
+#define v42_line_detc_length__ANSWER	300 /* length of detection ANSWER timer in 10 mSec intervals */
+
+/* INTERFACE: v42_detection_results() */
+#define DETECTION__SUCCESSFUL	 0x00
+#define DETECTION__TIMEOUT	 0x01
+#define DETECTION__LAPM_RECEIVED 0x02
+#define DETECTION__MNP_RECEIVED  0x03
+
+#define DETECT_CODE__LAPM	 0x00
+#define DETECT_CODE__MNP	 0x01
+#define DETECT_CODE__SPEED	 0x02
+
+/*============================================================================*/
+/*			      V42 CONTROL VARIABLES			      */
+/*============================================================================*/
+extern ubyte v42_mnp10_enabled;
+extern ubyte v42_32bit_crc;
+extern ubyte v42_cellular;
+extern ubyte v42_fallforward;
+extern ubyte v42_fallback;
+extern uword v42_wait_for_cd_time;
+extern uword v42_cd_recovery_time;
+extern uword v42_cd_loss_time;
+extern uword v42_mnp10_rates;
+extern ubyte v42_v32bis_enab;
+extern ubyte v42_enabled;
+extern ubyte v42_current_mode;
+extern ubyte v42_idle_flag;
+extern ubyte v42_halted_flag;
+extern ubyte v42_detection_end_flag;
+extern ubyte v42_start_code;
+extern ubyte v42_detc_response;
+extern ubyte v42_test_in_progress;
+extern ubyte v42_mnp_class;
+extern ubyte v42_mnp_stream_enabled;
+extern ubyte v42_attention_process;
+extern ubyte v42_attention_length;
+extern ubyte v42_retry_limit;
+extern uword v42_inactivity_limit;
+extern uword v42_mnp_autoreliable_limit;
+extern uword v42_max_data_size;
+extern ubyte v42_select_retransmit_enabled;
+extern ubyte v42_test_enabled;
+extern ubyte v42_mnp_data_optimization;
+extern ubyte v42_mnp_stream_size_256;
+extern ubyte v42_mnp_data_compression;
+extern ubyte v42_baud_rate;
+extern uword v42_test_state;
+extern ubyte v42_lapm_mnp_preferred;
+extern ubyte v42_detection_reason;
+extern ubyte v42_mnp_preferred;
+extern ubyte v42_detection_enabled;
+extern ubyte v42_mnp_level;
+extern ubyte v42_speed_enabled;
+extern ubyte v42_fallback_flag;
+extern ubyte v42_fallback_char;
+extern ubyte v42_got_dte_break;
+extern ubyte v42_dte_break_time;
+extern uword v42_dte_break_count;
+extern ubyte v42_got_line_break;
+extern ubyte v42_line_break_time;
+extern uword v42_line_break_count;
+extern ubyte v42_line_type;
+extern ubyte v42_compression_used;
+extern ubyte v42_negotiate_mnp10;
+extern ubyte v42_error_count;
+extern ubyte v42_line_error_rate;
+extern ubyte v42_line_rx_rate;
+extern uword v42_current_block_size;
+extern ubyte v42_btlz_request;
+extern uword v42_btlz_dict_size;
+extern ubyte v42_btlz_max_string_len;
+extern ubyte negot_data_optimization;
+
+#define ARRAY_COUNT 100
+extern ubyte v42_misc_buffer[ARRAY_COUNT];
+
+extern ubyte tx_send_pointer;
+extern ubyte tx_oldest_pointer;
+extern ubyte tx_input_pointer;
+extern ubyte process_que__in;
+extern ubyte process_que__out;
+
+/* ETC external prototypes */
+extern ubyte v42_ETC_enabled;
+extern ubyte v42_retransmit_count;
+
+/*============================================================================*/
+/*			       LAPM Prototypes				      */
+/*============================================================================*/
+
+ubyte lapm_bg (void);
+
+void lapm_reconfigure ( ubyte,
+			ubyte,
+			uword,
+			ubyte,
+			uword,
+			ubyte,
+			ubyte,
+			ubyte);
+
+void lapm_halt (ubyte);
+
+ubyte lapm_idle (void);
+
+void lapm_init ( ubyte,
+		 ubyte,
+		 ubyte,
+		 uword,
+		 ubyte,
+		 uword,
+		 ubyte,
+		 ubyte,
+		 uword,
+		 ubyte,
+		 ubyte,
+		 uword,
+		 ubyte,
+        ubyte,
+        ubyte );
+
+void lapm_get_mnp_parms(ubyte *,ubyte);
+
+void lapm_call_err(word);
+
+ubyte lapm_reason (void);
+
+void lapm_reset (void);
+
+void lapm_start (ubyte);
+
+uword lapm_test ( ubyte, ubyte *);
+
+uword lapm_test_status (void);
+
+void lapm_timer (void);
+
+ubyte lapm_tx_break (ubyte, uword);
+
+
+/*============================================================================*/
+/*				INTERNAL PROTOTYPES			      */
+/*============================================================================*/
+
+
+void v42_init ( ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		uword,
+		uword,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		uword,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		uword,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		ubyte,
+		uword,
+		uword,
+		uword,
+		uword,
+        ubyte,
+        ubyte );
+
+void v42_falling_back_to_speed ( ubyte );
+
+void v42_detection_results ( ubyte, ubyte );
+
+void v42_timer (void);
+
+ubyte v42_bg (void);
+
+ubyte v42_start ( ubyte );
+
+ubyte v42_idle (void);
+
+void v42_reset (void);
+
+void v42_halt ( ubyte );
+
+ubyte v42_tbrk ( ubyte, uword );
+
+ubyte v42_lbrk ( ubyte, uword );
+
+ubyte v42_reason (void);
+
+void v42_reconfigure ( ubyte,
+		       ubyte,
+		       uword,
+		       ubyte,
+		       uword,
+		       ubyte,
+		       ubyte,
+		       ubyte );
+
+uword v42_test ( ubyte, ubyte * );
+
+uword v42_test_status (void);
+
+void v42_info ( ubyte * );
+
+void line_type ( ubyte );
+
+void block_size_used ( uword );
+
+void compression_used ( ubyte );
+
+void proclaim_error (void);
+
+void v42_start_detection(void);
+void v42_init_lapm(void);
+void v42_init_mnp(void);
+void v42_init_speed(void);
+void v42_init_detection(ubyte);
+ubyte v42_detect_bg(void);
+void v42_call_err(word);
+void v42_i_mnp(void);
+
+
+/*******************************************************************************
+/
+/	Routine: v42_init
+/
+/	Author : RSA
+/
+/	Creation Date: 06/17/91
+/
+/	Description : This Routine will initilize the v42 variables.
+/
+/	Input Parameters:
+/	    ubyte v_mnp_level	   = 0 : no MNP
+/				     1 : minimal service
+/				     2 : standard service
+/
+/	    ubyte v_mnp_class	   = 0 : reserved
+/				     1 : ASYNC half duplex
+/				     2 : ASYNC full duplex
+/				     3 : SYNC full duplex
+/
+/	    ubyte v_mnp_stream	   = 0 : stream format
+/				     1 : block format
+/
+/	    ubyte v_attn_proc	   = 0 : ignore attention
+/				     1 : destructive/expidited
+/				     2 : nondestructive/expidited
+/				     3 : nondestructive/nonexpidited
+/
+/	    ubyte v_retry_limit    = 0	   : no limit for retries
+/				     non 0 : number of retries
+/
+/	    uword v_inact_tm	   = 0	   : inactivity timer no used
+/				     non 0 : number of inactivity seconds
+/
+/	    uword v_mnp_autorel_tm = 0	   : no autoreliable timer
+/				     non 0 : number of autoreliable seconds
+/
+/	    ubyte v_speed	   = 0 : disabled
+/				     1 : enabled
+/
+/	    ubyte v_select_enable  = 0 : no selective rejects
+/				     1 : selective rejects requested
+/
+/	    ubyte v_mnp_data_optim = 0 : no optimization
+/				     1 : optimization requested
+/
+/	    ubyte v_mnp_stream_size= 0 : disable (size 64)
+/				     1 : enabled (size can be greater than 64)
+/
+/	    ubyte v_mnp_compress_5 = 0 : disable
+/				     1 : enable
+/
+/	    ubyte v_line_baud_rate = see "baud_rate" definition
+/
+/	    ubyte v_attn_len	   = 0 : no length specified (use default)
+/				     1 to 254 : length of break in 1/100 sec
+/
+/	    uword v_max_data_size  = < 64 : max data size will be 64
+/				     = 64 : normal
+/				     > 256: max data size will be 256
+/
+/	    ubyte v_mnp_fall_flag  = 0 : disabled
+/				     1 : enabled - no characters buffered
+/				     2 : reserved
+/				     3 : enabled - 200 characters buffered
+/
+/	    ubyte v_mnp_fall_char  = autoreliable fallback flag
+/
+/	    ubyte v_enab	   = 0 : disabled
+/				     1 : enabled
+/
+/	    ubyte v_detect_enab    = 0 : disabled
+/				     1 : enabled
+/
+/	    ubyte v_mnp_pref_enab  = 0 : disabled
+/				     1 : enabled
+/
+/	    ubyte v_test_enab	   = 0 : LAPM loop tests disabled
+/				     1 : LAPM loop tests enabled
+/
+/	    ubyte v_btlz_request   = 0 : disable
+/				     1 : transmit only
+/				     2 : receive only
+/				     3 : both directions
+/
+/	    uword v_btlz_dict_size = 512 - 40960 : Normal operation
+/
+/	    ubyte v_btlz_max_str_len = 6 to 250  : maximum string length
+/
+/	    ubyte v_32bit_crc	     = 0 : 16 bit CRC
+/				       1 : 32 bit CRC
+/
+/	    ubyte v_mnp10_enabled    = 0 : MNP 10 disabled
+/				       1 : MNP 10 enabled
+/
+/	    ubyte v_cellular	     = 0 : MNP 10 cellular operation disabled
+/				       1 : MNP 10 cellular operation enabled
+/
+/	    ubyte v_fallforward      = 0 : MNP 10 fallforward disabled
+/				       1 : MNP 10 fallforward enabled
+/
+/	    ubyte v_fallback	     = 0 : MNP 10 fallback disabeld
+/				       1 : MNP 10 fallback enabled
+/
+/	    uword v_wait_for_cd_time = Wait for carrier detection
+/				       0 - 255 : in 100 msecs
+/
+/	    uword v_cd_recovery_time = Carrier recovery time
+/				       0 - 255 : in 100 msecs
+/
+/	    uword v_cd_loss_time     = Carrier loss time
+/				       0 - 255 : in 100 msecs
+/
+/	    uword v_mnp10_rates      = MNP 10 possible line speeds (bit mapped)
+/				       bit 0 : 1200 bps
+/				       bit 1 : 2400 bps
+/				       bit 2 : 4800 bps
+/				       bit 3 : 7200 bps
+/				       bit 4 : 9600 bps
+/				       bit 5 : 12000 bps
+/				       bit 6 : 14400 bps
+/				       bits 7 - 15 : reserved
+/
+/	    uword v_v32bis_enab      = 0 : Non V.32bis modem
+/				       1 : V.32bis modem
+/
+/	    ubyte v_etc_enabled = Status of ETC for this connection
+/                       0 : ETC Disabled
+/                       1 : ETC Enabled
+/
+/	Output Parameters: none
+/
+/	Global Variables Changed:
+/
+/	Users: Control code
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+void v42_init ( ubyte	v_mnp_level,
+		ubyte	v_mnp_class,
+		ubyte	v_mnp_stream,
+		ubyte	v_attn_proc,
+		ubyte	v_retry_limit,
+		uword	v_inact_tm,
+		uword	v_mnp_autorel_tm,
+		ubyte	v_speed,
+		ubyte	v_select_enable,
+		ubyte	v_mnp_data_optim,
+		ubyte	v_mnp_stream_size,
+		ubyte	v_mnp_compress_5,
+		ubyte	v_line_baud_rate,
+		ubyte	v_attn_len,
+		uword	v_max_data_size,
+		ubyte	v_mnp_fall_flag,
+		ubyte	v_mnp_fall_char,
+		ubyte	v_enab,
+		ubyte	v_detect_enab,
+		ubyte	v_mnp_pref_enab,
+		ubyte	v_test_enab,
+		ubyte	v_btlz_req,
+		uword	v_btlz_dict_size,
+		ubyte	v_btlz_max_str_len,
+		ubyte	v_32bit_crc,
+		ubyte	v_mnp10_enabled,
+		ubyte	v_cellular,
+		ubyte	v_fallforward,
+		ubyte	v_fallback,
+		uword	v_wait_for_cd_time,
+		uword	v_cd_recovery_time,
+		uword	v_cd_loss_time,
+		uword	v_mnp10_rates,
+		ubyte	v_v32bis_enab,
+      ubyte   v_etc_enabled
+      )
+{
+    v42_32bit_crc = v_32bit_crc;
+    v42_mnp10_enabled = v_mnp10_enabled;
+
+    v42_cellular = v_cellular;
+    v42_fallforward = v_fallforward;
+    v42_fallback = v_fallback;
+    v42_wait_for_cd_time = v_wait_for_cd_time;
+    v42_cd_recovery_time = v_cd_recovery_time;
+    v42_cd_loss_time = v_cd_loss_time;
+    v42_mnp10_rates = v_mnp10_rates;
+    v42_v32bis_enab = v_v32bis_enab;
+    v42_enabled = v_enab;
+
+/*
+ *	Make call into MNP 10 to determine if the code is available or if it
+ *	is stubbed out.  If it is stubbed out then force v42_mnp_preferred to
+ *	FALSE.
+ */
+
+    mmu_force_mnp_pg
+
+    if (mnp10_force_rate_change(0) == MNP10_NOT_AVAIL)
+        v42_mnp_preferred = FALSE;
+    else
+        v42_mnp_preferred = v_mnp_pref_enab;
+
+    v42_detection_enabled = v_detect_enab;
+    v42_mnp_level = v_mnp_level;
+    v42_speed_enabled = v_speed;
+
+    v42_retry_limit = v_retry_limit;
+    v42_max_data_size = v_max_data_size;
+    v42_attention_process = v_attn_proc;
+    v42_attention_length = v_attn_len;
+    v42_inactivity_limit = v_inact_tm;
+    v42_select_retransmit_enabled = v_select_enable;
+    v42_test_enabled = v_test_enab;
+    v42_baud_rate = v_line_baud_rate;
+    v42_mnp_autoreliable_limit = v_mnp_autorel_tm;
+
+    v42_current_mode = NO_MODE;
+    v42_test_in_progress = FALSE;
+    v42_idle_flag = FALSE;
+    v42_detection_reason = DETECTION_REASON__UNKNOWN;
+    v42_halted_flag = TRUE;
+
+    v42_fallback_flag = v_mnp_fall_flag;
+    v42_fallback_char = v_mnp_fall_char;
+
+    v42_btlz_request = v_btlz_req;
+    v42_btlz_dict_size = v_btlz_dict_size;
+    v42_btlz_max_string_len = v_btlz_max_str_len;
+
+    v42_got_dte_break = 0;
+    v42_got_line_break = 0;
+
+    v42_line_type = 0;
+    v42_compression_used = 0;
+    v42_error_count = 0;
+    v42_line_error_rate = 0;
+    v42_line_rx_rate = 0;
+    v42_retransmit_count = 0;
+
+    v42_current_block_size = 0;
+
+    /* Initialize all remaining dynamic variables */
+    v42_start_code = V42_ORIGINATE;
+    v42_detc_response = V42_RECVD__UNKNOWN;
+    v42_test_state = V42_TEST_STATE__COMPLETE__OK;
+    v42_lapm_mnp_preferred = FALSE;
+
+
+    /* Initialize all MNP variables to disabled */
+    v42_mnp_class = 2; /* MNP class 2 */
+    v42_mnp_stream_enabled =
+        v42_mnp_data_optimization =
+        v42_mnp_stream_size_256 =
+        v42_mnp_data_compression =
+        v42_negotiate_mnp10 = FALSE;
+
+    if (v42_enabled == TRUE)
+    {
+        if ((v42_mnp_preferred) && (v_mnp_class == 3)
+            && (v42_mnp_level == MNP_LEVEL__STANDARD_SERVICE))
+            v42_lapm_mnp_preferred = MNP_EXTENDED_TRUE;
+        else
+            v42_lapm_mnp_preferred = MNP_EXTENDED_FALSE;
+    }
+
+    if (v42_mnp_level != MNP_LEVEL__NO_MNP)
+    {
+        v42_mnp_class = v_mnp_class;
+        v42_mnp_stream_enabled = v_mnp_stream;
+        v42_mnp_data_optimization = v_mnp_data_optim;
+        v42_mnp_data_compression = v_mnp_compress_5;
+        v42_mnp_stream_size_256 = v_mnp_stream_size;
+        v42_fallback_flag = v_mnp_fall_flag;
+        v42_fallback_char = v_mnp_fall_char;
+    }
+
+    /* Set global ETC flag for lapm_init and detetection code */
+    if (v_etc_enabled)
+        v42_ETC_enabled = TRUE;
+    else
+        v42_ETC_enabled = FALSE;
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_init_lapm 					      */
+/*									      */
+/* Purpose	: initialize and start LAPM				      */
+/*============================================================================*/
+void v42_init_lapm(void)
+{
+
+     mmu_force_lapm_pg
+
+     lapm_reset();
+
+     lapm_init ( v42_baud_rate,
+		 v42_attention_process,
+		 v42_attention_length,
+		 v42_inactivity_limit,
+		 v42_retry_limit,
+		 v42_max_data_size,
+		 v42_select_retransmit_enabled,
+		 v42_test_enabled,
+		 v42_mnp_autoreliable_limit,
+/* start change keh 8/27/96 => remove fix for #102 that caused #170;correct#102 */
+/*		 (v42_lapm_mnp_preferred|v42_mnp10_enabled), */
+		 v42_lapm_mnp_preferred,
+/* end change keh 8/27/96 => remove fix for #102 that caused #170;correct#102 */
+		 v42_btlz_request,
+		 v42_btlz_dict_size,
+		 v42_btlz_max_string_len,
+		 v42_32bit_crc,
+		 v42_ETC_enabled);
+
+     lapm_start ( v42_start_code );
+
+     v42_current_mode = LAPM_MODE;
+     v42_halted_flag = FALSE;
+
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_init_mnp						      */
+/*									      */
+/* Purpose	: initialize and start MNP				      */
+/*============================================================================*/
+void v42_i_mnp(void)
+{
+     mnp_init ( v42_mnp_level,			/* p_request_service   */
+		v42_mnp_class,			/* p_service_class     */
+		v42_mnp_stream_enabled, 	/* p_service_type      */
+		v42_attention_process,		/* p_attention_process */
+		v42_retry_limit,		/* p_max_retries       */
+		v42_inactivity_limit,		/* p_inactivity_limit  */
+		v42_mnp_autoreliable_limit,	/* p_autoreliable_time */
+		v42_speed_enabled,		/* p_buffering_enabled */
+		v42_select_retransmit_enabled,	/* p_selective_enable  */
+		v42_mnp_data_optimization,	/* p_data_optimization */
+		v42_mnp_stream_size_256,	/* p_stream_256        */
+		v42_mnp_data_compression,	/* p_data_compression  */
+		v42_baud_rate,			/* p_baud_rate	       */
+		v42_attention_length,		/* p_attention_length  */
+		v42_max_data_size,		/* p_max_data_size     */
+		v42_fallback_flag,		/* p_fallback_flag     */
+		v42_fallback_char,		/* p_fallback_char     */
+		v42_btlz_request,
+		v42_btlz_dict_size,
+		v42_btlz_max_string_len,
+		v42_mnp10_enabled,		/* p_mnp10_enabled     */
+		v42_cellular,
+		v42_fallforward,
+		v42_fallback,
+		v42_wait_for_cd_time,
+		v42_cd_recovery_time,
+		v42_cd_loss_time,
+		v42_mnp10_rates,
+		v42_v32bis_enab);
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_init_mnp						      */
+/*									      */
+/* Purpose	: initialize and start MNP				      */
+/*============================================================================*/
+void v42_init_mnp(void)
+{
+     mmu_force_mnp_pg
+     mnp_reset();
+     v42_i_mnp();
+
+     mnp_start ( v42_start_code );
+
+     v42_current_mode = MNP_MODE;
+     v42_halted_flag = FALSE;
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_start_detection					      */
+/*									      */
+/* Purpose	: initialize and start detection variables and the LINE.      */
+/*============================================================================*/
+void v42_start_detection(void)
+{
+     ubyte vml_detc,vmc_detc;
+
+     mmu_force_mnp_pg
+     mnp_reset ();
+
+     if (v42_mnp_level == MNP_LEVEL__NO_MNP)
+     {
+        vml_detc = 2;
+        vmc_detc = 2;
+     }
+     else
+     {
+        vml_detc = v42_mnp_level;
+        vmc_detc = v42_mnp_class;
+     }
+
+     mnp_init ( vml_detc,			/* p_request_service   */
+		vmc_detc,			/* p_service_class     */
+		v42_mnp_stream_enabled, 	/* p_service_type      */
+		v42_attention_process,		/* p_attention_process */
+		v42_retry_limit,		/* p_max_retries       */
+		v42_inactivity_limit,		/* p_inactivity_limit  */
+		v42_mnp_autoreliable_limit,	/* p_autoreliable_time */
+		v42_speed_enabled,		/* p_buffering_enabled */
+		v42_select_retransmit_enabled,	/* p_selective_enable  */
+		v42_mnp_data_optimization,	/* p_data_optimization */
+		v42_mnp_stream_size_256,	/* p_stream_256        */
+		v42_mnp_data_compression,	/* p_data_compression  */
+		v42_baud_rate,			/* p_baud_rate	       */
+		v42_attention_length,		/* p_attention_length  */
+		v42_max_data_size,		/* p_max_data_size     */
+		v42_fallback_flag,		/* p_fallback_flag     */
+		v42_fallback_char,		/* p_fallback_char     */
+		v42_btlz_request,
+		v42_btlz_dict_size,
+		v42_btlz_max_string_len,
+		v42_mnp10_enabled,		/* p_mnp10_enabled     */
+		v42_cellular,
+		v42_fallforward,
+		v42_fallback,
+		v42_wait_for_cd_time,
+		v42_cd_recovery_time,
+		v42_cd_loss_time,
+		v42_mnp10_rates,
+		v42_v32bis_enab);
+
+     mnp_start ( v42_start_code );
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_init_speed					      */
+/*									      */
+/* Purpose	: initialize and start SPEED MATCHING			      */
+/*									      */
+/*============================================================================*/
+void v42_init_speed(void)
+{
+    mmu_force_mnp_pg
+    mnp_reset();
+
+    mnp_init (  0,				/* p_request_service   */
+                0,				/* p_service_class     */
+                0,				/* p_service_type      */
+                v42_attention_process,		/* p_attention_process */
+                0,				/* p_max_retries       */
+                v42_inactivity_limit,		/* p_inactivity_limit  */
+                0,				/* p_autoreliable_time */
+                1,				/* p_buffering_enabled */
+                0,				/* p_selective_enable  */
+                0,				/* p_data_optimization */
+                0,				/* p_stream_256        */
+                0,				/* p_data_compression  */
+                v42_baud_rate,			/* p_baud_rate	       */
+                v42_attention_length,		/* p_attention_length  */
+                0,				/* p_max_data_size     */
+                0,				/* p_fallback_flag     */
+                0,				/* p_fallback_char     */
+                0,
+                v42_btlz_dict_size,
+                v42_btlz_max_string_len,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                v42_mnp10_rates,
+                0 );
+
+    mnp_start(0);	 /* speed matching does not correct require orig/ans */
+	                 /*  it needs to be set because when we go idle and  */
+                    /*  told to resume v42_start_code is 2 can go if so */
+
+    v42_current_mode = SPEED_MODE;
+    v42_halted_flag = FALSE;
+    v42_compression_used = FALSE; /* No compression under speed matching */
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_init_detection                                             */
+/*									                                         */
+/* Purpose	: initialize and start DETECTION			                     */
+/*									                                         */
+/* Input Parms	: v42_ADP_code	 = code to be passed to the DCE routines in  */
+/*				   order to indicate or respond to ite peer                  */
+/*									                                         */
+/*============================================================================*/
+void v42_init_detection (ubyte v42_ADP_code)
+{
+    uword detect_time;
+
+    /* If ETC link, get MNP autoreliable time.  This must be called
+        before "v42_start_detection()" (below) */
+    if (v42_ETC_enabled)
+    {
+        v42_mnp_autoreliable_limit =
+            v42_ETC_get_auto_time(v42_start_code,v42_mnp_class);
+    }
+
+    /* Get an ASYNC receive buffer ready for the DCE detetction code */
+    v42_start_detection();	 /* pass a receive buffer to the dce */
+
+    /* V.42 is now ready to begin detection mode */
+    v42_current_mode = DETECTION_MODE;
+    v42_detection_end_flag = FALSE;
+
+    /* If ETC is enabled, use ETC detection times (including MNP autoreliable
+        time from above */
+    if (v42_ETC_enabled)
+    {
+        detect_time = v42_ETC_get_detect_time(v42_start_code,v42_mnp_class);
+
+    }
+    /* Else no ETC so use standard detection times */
+    else if (v42_start_code == V42_ORIGINATE)
+    {
+        /* Start detection in ORIGINATE mode ? */
+        detect_time = v42_line_detc_length__ORIGINATE;
+    }
+    else /* Start detection in ANSWER mode */
+    {
+        detect_time = v42_line_detc_length__ANSWER;
+    }
+
+    /* Start the ADP/ODP detection code */
+    line_detection (v42_start_code, v42_ADP_code, detect_time);
+}
+
+/*============================================================================*/
+/* Name 	: v42_falling_back_to_speed				      */
+/*									      */
+/* Purpose	: initialize and start SPEED MATCHING after fallback event    */
+/*									      */
+/* Input Parms	: fallback_reason   0 = timed out			      */
+/*				    1 = autoreliable fallback character       */
+/*				    2 = 200 chars received without detection  */
+/*============================================================================*/
+void v42_falling_back_to_speed ( ubyte fallback_reason )
+{
+    mmu_force_mnp_pg
+    falling_back_to_speed(fallback_reason);
+
+    if (v42_current_mode == DETECTION_MODE)
+        line_detection(V42_TURNOFF_DETECTION,0,0);
+
+    if (v42_speed_enabled == TRUE)
+    {
+        if (v42_current_mode == LAPM_MODE)
+        {
+            v42_init_speed();
+        }
+        v42_current_mode = SPEED_MODE;
+        v42_halted_flag = FALSE;
+    }
+    else
+    {
+        v42_detection_reason = DETECTION_REASON__UNKNOWN;
+        v42_current_mode = NO_MODE;
+        v42_halted_flag = TRUE;
+    }
+
+    v42_negotiate_mnp10 = FALSE;
+    v42_compression_used = FALSE; /* No compression under speed matching */
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_detection_rec_frame				      */
+/*									      */
+/* Purpose	: The DCE will call the procedure when it receives a detection*/
+/*		  frame to determine if the detection phase was successful.   */
+/*									      */
+/* Input Parms	: v_detect_flag        : status of detection phase	      */
+/*		  v_detect_result_code : result of detection (if completed)   */
+/*============================================================================*/
+void v42_detection_results ( ubyte v_detect_flag,
+			     ubyte v_detect_result_code)
+{
+    switch (v_detect_flag)
+
+	   {
+
+	   case (DETECTION__SUCCESSFUL):
+
+		line_autoreliable_fallback (0,0,0,0);
+
+		switch (v_detect_result_code)
+
+		       {
+
+		       case (DETECT_CODE__LAPM):
+			    v42_detc_response = V42_RECVD__LAPM;
+			    break;
+
+		       case (DETECT_CODE__MNP):
+			    v42_detc_response = V42_RECVD__MNP;
+			    break;
+
+		       case (DETECT_CODE__SPEED):
+			    v42_detc_response = V42_RECVD__SPEED;
+			    break;
+
+		       default:
+			    v42_detc_response = V42_RECVD__UNKNOWN;
+			    break;
+
+		       } /* switch (v_detect_result_code) */
+
+		break;
+
+
+	   case (DETECTION__TIMEOUT):
+/*		line_autoreliable_fallback (0,0,0,0);		*/
+		v42_detc_response = V42_NOT_RECVD__TIMEOUT;
+		break;
+
+
+	   case (DETECTION__LAPM_RECEIVED):
+		line_autoreliable_fallback (0,0,0,0);
+		v42_detc_response = V42_NOT_RECVD__LAPM_ONLY;
+		break;
+
+
+	   case (DETECTION__MNP_RECEIVED):
+		v42_detc_response = V42_NOT_RECVD__MNP_ONLY;
+		break;
+
+	   default:
+		line_autoreliable_fallback (0,0,0,0);
+		v42_detc_response = V42_NOT_RECVD__UNKNOWN;
+		break;
+
+
+	   }  /* switch (v_detect_flag) */
+
+    v42_detection_end_flag = TRUE;
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_detect_bg 					      */
+/*									      */
+/* Purpose	: detection phase background processing 		      */
+/*									      */
+/* Output Parms : v42_detect_bg = current v42 status			      */
+/*============================================================================*/
+ubyte v42_detect_bg(void)
+{
+    if (v42_detection_end_flag == FALSE)
+       {
+       line_bg();
+       return (V42_CONNECTING);
+       } /* service line backgound if still in detection */
+
+
+    v42_halted_flag = FALSE;
+
+    switch ( v42_detc_response )
+	   {
+
+	   case (V42_RECVD__MNP):
+		if (v42_mnp_level != MNP_LEVEL__NO_MNP)
+		   {
+		   v42_init_mnp();
+		   return (V42_CONNECTING);
+		   }
+/*************	if EM received EC presumed if not in MNP
+		 v42_detection_reason = DETECTION_REASON__UNKNOWN;
+		 break;
+*************/
+
+	   case (V42_RECVD__LAPM):
+		if (v42_enabled == TRUE)
+		   {
+		   v42_init_lapm();
+		   return (V42_CONNECTING);
+		   }
+		v42_detection_reason = DETECTION_REASON__UNKNOWN;
+		break;
+
+	   case (V42_RECVD__SPEED):
+		if (v42_speed_enabled == TRUE)
+		   {
+		   v42_init_speed();
+		   return (V42_CONNECTING);
+		   }
+		v42_detection_reason = DETECTION_REASON__UNKNOWN;
+		break;
+
+
+	   case (V42_NOT_RECVD__TIMEOUT):
+		if ((v42_start_code == V42_ORIGINATE) && (v42_mnp_level != MNP_LEVEL__NO_MNP))
+		   {
+		   v42_current_mode = MNP_MODE;
+		   return (V42_CONNECTING);
+		   }
+		line_autoreliable_fallback (0,0,0,0);
+		if (v42_speed_enabled == TRUE)
+		   {
+		     mmu_force_mnp_pg
+		     falling_back_to_speed (FALLING_BACK_REASON__TIMEOUT);
+		     line_setup_speed();
+		     v42_current_mode = SPEED_MODE;
+            v42_negotiate_mnp10 = FALSE;
+		     return (V42_CONNECTING);
+		   }
+		v42_detection_reason = DETECTION_REASON__TIMEOUT;
+		break;
+
+
+	   case (V42_NOT_RECVD__LAPM_ONLY):
+		if (v42_enabled == TRUE)
+		   {
+		   if (v42_mnp_preferred)
+		      v42_lapm_mnp_preferred = MNP_EXTENDED_TRUE;
+		   else
+		      v42_lapm_mnp_preferred = MNP_EXTENDED_FALSE;
+		   v42_init_lapm();
+		   return (V42_CONNECTING);
+		   }
+		v42_detection_reason = DETECTION_REASON__UNKNOWN;
+		break;
+
+
+	   case (V42_NOT_RECVD__MNP_ONLY):
+		if (v42_mnp_level != MNP_LEVEL__NO_MNP)
+		   {
+		   v42_current_mode = MNP_MODE;
+		   return (V42_CONNECTING);
+		   }
+		line_autoreliable_fallback (0,0,0,0);
+		if (v42_speed_enabled == TRUE)
+		   {
+		   mmu_force_mnp_pg
+		   falling_back_to_speed (FALLING_BACK_REASON__TIMEOUT);
+		   line_setup_speed();
+		   v42_current_mode = SPEED_MODE;
+          v42_negotiate_mnp10 = FALSE;
+		   return (V42_CONNECTING);
+		   }
+		v42_detection_reason = DETECTION_REASON__UNKNOWN;
+		break;
+
+	   default:
+		v42_detection_reason = DETECTION_REASON__UNKNOWN;
+		break;
+
+	   } /* switch ( v42_detc_response ) */
+
+    v42_current_mode = NO_MODE;
+    v42_halted_flag = TRUE;
+    return (V42_HALTED);
+
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_timer						      */
+/*									      */
+/* Purpose	: This routine supports appropriate timer functions.  It is   */
+/*		  called by the control program every 1/10 of a second	      */
+/*============================================================================*/
+void v42_timer(void)
+{
+     switch (v42_current_mode)
+
+	    {
+
+	    case (MNP_MODE):
+		 mmu_force_mnp_pg
+		 mnp_timer();
+		 break;
+
+	    case (SPEED_MODE):
+		 mmu_force_mnp_pg
+		 mnp_timer();
+		 break;
+
+	    case (LAPM_MODE):
+		 mmu_force_lapm_pg
+		 lapm_timer();
+		 break;
+
+	    } /* switch (v42_current_mode) */
+
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_bg						      */
+/*									      */
+/* Purpose	: V42 background processing				      */
+/*									      */
+/* Output Parms : v42_bg  : current status of V42			      */
+/*			  = 0 : DOWN status				      */
+/*			  = 1 : CONNECTING status			      */
+/*			  = 2 : IDLE status				      */
+/*			  = 3 : RUNNING MNP status			      */
+/*			  = 4 : DISCONNECTING status			      */
+/*			  = 5 : BUFFERING status			      */
+/*			  = 6 : RUNNING LAPM status			      */
+/*============================================================================*/
+ubyte v42_bg(void)
+{
+   ubyte status_hold;
+
+   if (v42_got_dte_break != 0)
+   {
+       if (v42_tbrk(v42_dte_break_time, v42_dte_break_count))
+       {
+           dte_from_clear();
+           dte_to_clear();
+       }
+       v42_got_dte_break = 0;
+   }
+
+   if (v42_got_line_break != 0)
+   {
+       if (v42_lbrk(v42_line_break_time, v42_line_break_count))
+       {
+           line_from_clear();
+           line_to_clear();
+       }
+       v42_got_line_break = 0;
+   }
+
+   switch (v42_current_mode)
+   {
+       case (MNP_MODE):
+           mmu_force_mnp_pg
+           status_hold = mnp_bg();
+           if (status_hold == V42_BUFFERING)
+           {
+               v42_negotiate_mnp10 = FALSE;
+
+               if (v42_speed_enabled == TRUE)
+               {
+                   v42_current_mode = SPEED_MODE;
+                   v42_halted_flag = FALSE;
+                   v42_compression_used = FALSE; /* No compression under SM */
+               }
+           }
+           return (status_hold);
+
+
+       case (SPEED_MODE):
+           mmu_force_mnp_pg
+           status_hold = mnp_bg();
+           return (status_hold);
+
+
+       case (LAPM_MODE):
+           mmu_force_lapm_pg
+           if (v42_test_in_progress == TRUE)
+           {
+               v42_test_state = lapm_test_status();
+               if (v42_test_state != V42_TEST_STATE__WAITING)
+                   v42_test_in_progress = FALSE;
+           }
+           status_hold = lapm_bg();
+           if (status_hold == V42_LAPM_to_MNP)
+           {
+               lapm_get_mnp_parms(&v42_misc_buffer[0],ARRAY_COUNT);
+               mmu_force_mnp_pg
+               v42_i_mnp();
+               mnp10_go_now(&v42_misc_buffer[0],ARRAY_COUNT,v42_start_code);
+               v42_current_mode = MNP_MODE;
+               return (V42_CONNECTING);
+           }
+           return (status_hold);
+
+
+       case (DETECTION_MODE):
+           return (v42_detect_bg());
+
+
+       case (NO_MODE):
+           return (V42_HALTED);
+
+       default:
+           return (V42_HALTED);
+   } /* switch (v42_current_mode) */
+}
+
+
+/*******************************************************************************
+/
+/	Routine: v42_build_mnp_xid
+/
+/	Author : RSA
+/
+/	Creation Date: 03/13/92
+/
+/	Description : This Routine will build the MNP preferred string onto the
+/		      LAPM XID buffer.
+/
+/	Input Parameters: ubyte *xid_ptr - pointer to the beginning of the LR data.
+/
+/	Output Parameters: ubyte holder - Size of the LR data string
+/
+/	Global Variables Changed:  None
+/
+/	Users: v42_build_mnp_xid()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+ubyte v42_build_mnp_xid (ubyte *xid_ptr)
+{
+	ubyte holder;
+
+	mmu_open_mnp_pg
+
+	holder = mnp10_build_xid(xid_ptr,
+			       v42_max_data_size,
+			       v42_mnp10_enabled,
+			       v42_mnp_data_compression,
+			       v42_mnp_data_optimization,
+			       v42_cellular,
+			       v42_fallforward,
+			       v42_fallback,
+			       v42_mnp10_rates,
+			       v42_select_retransmit_enabled,
+			       v42_btlz_request,
+			       v42_btlz_dict_size,
+			       v42_btlz_max_string_len,
+			       v42_start_code);
+
+	mmu_restore_stored_pg
+
+	return (holder);
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_start						      */
+/*									      */
+/* Purpose	: startup v42						      */
+/*									      */
+/* Input Parms	: strt_cd   = 0 : ORIGINATE mode			      */
+/*			      1 : ANSWER mode				      */
+/*			      2 : CONTINUE from idle			      */
+/*									      */
+/* Output Parms : v42_start = 0 : OK					      */
+/*			      1 : not started				      */
+/*============================================================================*/
+ubyte v42_start (ubyte strt_cd)
+{
+    v42_start_code = strt_cd;
+
+    if (v42_halted_flag == FALSE)
+    {
+        if (v42_start_code == V42_CONTINUE)
+	{
+	    if (v42_idle_flag == TRUE)
+	    {
+	        v42_idle_flag = FALSE;
+	        switch (v42_current_mode)
+		{
+		     case (MNP_MODE):
+			     mmu_force_mnp_pg
+			     mnp_start(V42_CONTINUE);
+			     break;
+		     case (SPEED_MODE):
+			     mmu_force_mnp_pg
+			     mnp_start(V42_CONTINUE);
+			     break;
+		     case (LAPM_MODE):
+			     mmu_force_lapm_pg
+			     lapm_start(V42_CONTINUE);
+			     break;
+	        }
+	    }
+	    return (OK);
+        }
+        return(V42_NOTHING_CONTINUED);
+    }
+
+
+    if ((v42_start_code != V42_ANSWER) && (v42_start_code != V42_ORIGINATE))
+    {
+       v42_current_mode = NO_MODE;
+       return (V42_NOTHING_STARTED);
+    }
+
+    if (v42_detection_enabled == TRUE)
+    {
+        if (v42_mnp_preferred == TRUE)
+        {
+	  v42_init_detection(DETECTION_START__MNP);
+	  return(OK);
+	}
+
+        if (v42_enabled == TRUE)
+	{
+	  v42_init_detection(DETECTION_START__LAPM);
+	  return(OK);
+	}
+
+        if (v42_speed_enabled == TRUE)
+	{
+	  v42_init_detection(DETECTION_START__SPEED);
+	  return(OK);
+	}
+
+        v42_current_mode = NO_MODE;
+        return (V42_NOTHING_STARTED);
+
+    }
+
+
+    if (v42_enabled == TRUE)
+    {
+       v42_init_lapm();
+    }
+    else if (v42_mnp_level != MNP_LEVEL__NO_MNP)
+    {
+       v42_init_mnp();
+    }
+    else if (v42_speed_enabled == TRUE)
+    {
+       v42_init_speed();
+    }
+    else
+    {
+       v42_current_mode = NO_MODE;
+       return (V42_NOTHING_STARTED);
+    }
+
+    return (OK);
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_idle						      */
+/*									      */
+/* Purpose	: The routine is called by the control program to place v42   */
+/*		  in an idle state.  V42 will not be idle until the status    */
+/*		  of calling the routine v42_bg returns an "idle" condition   */
+/*									      */
+/* Output Parms : v42_idle = result code passed back from SPEED, MNP, or LAPM */
+/*============================================================================*/
+ubyte v42_idle(void)
+{
+
+    v42_idle_flag = TRUE;
+
+    switch (v42_current_mode)
+
+	   {
+
+	   case (MNP_MODE):
+		mmu_force_mnp_pg
+		return (mnp_idle());
+
+
+	   case (SPEED_MODE):
+		mmu_force_mnp_pg
+		return (mnp_idle());
+
+
+	   case (LAPM_MODE):
+		mmu_force_lapm_pg
+		return (lapm_idle());
+
+	   } /* switch (v42_current_mode) */
+
+
+    return (V42_NOT_IDLE);
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_reset						      */
+/*									      */
+/* Purpose	: This routine is called by the control program to reset V42  */
+/*============================================================================*/
+void v42_reset(void)
+{
+
+     switch (v42_current_mode)
+
+	    {
+
+	    case (MNP_MODE):
+		 mmu_force_mnp_pg
+		 mnp_reset();
+		 break;
+
+
+	    case (SPEED_MODE):
+		 mmu_force_mnp_pg
+		 mnp_reset();
+		 break;
+
+
+	    case (LAPM_MODE):
+		 mmu_force_lapm_pg
+		 lapm_reset();
+		 break;
+
+	    } /* switch (v42_current_mode) */
+
+
+     v42_error_count = 0;
+     v42_line_error_rate = 0;
+     v42_line_rx_rate = 0;
+     v42_current_mode = NO_MODE;
+     v42_halted_flag = TRUE;
+     v42_detection_reason = DETECTION_REASON__USER_REQUEST;
+     v42_negotiate_mnp10 = FALSE;
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_halt						      */
+/*									      */
+/* Purpose	: This routine is called by the control program to halt V42   */
+/*		  V42 will not be halted until the status of calling the      */
+/*		  routine v42_bg returns a "halted" condition                 */
+/*									      */
+/* Input Parms	: user_reason	: 0 = no user disconnect code		      */
+/*				  any other value will be sent as part of the */
+/*				  the disconnect message to the peer modem    */
+/*============================================================================*/
+void v42_halt ( ubyte user_reason )
+{
+
+     if (!user_reason)
+        v42_speed_enabled = TRUE;
+
+     v42_halted_flag = TRUE;
+
+     switch (v42_current_mode)
+
+	    {
+
+
+	    case (MNP_MODE):
+		 mmu_force_mnp_pg
+		 mnp_halt(user_reason);
+		 break;
+
+
+	    case (SPEED_MODE):
+		 mmu_force_mnp_pg
+		 mnp_halt(user_reason);
+		 break;
+
+
+	    case (LAPM_MODE):
+		 mmu_force_lapm_pg
+		 lapm_halt(user_reason);
+		 break;
+
+
+	    case (DETECTION_MODE):
+		 v42_detection_reason = DETECTION_REASON__USER_REQUEST;
+		 break;
+
+
+	    } /* switch (v42_current_mode) */
+
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_tbrk						      */
+/*									      */
+/* Purpose	: This routine is called by the DTE to code to inform v42     */
+/*		  that a "break" from the DTE has been detected.              */
+/*									      */
+/* Input Parms	: break_length	: length of break in 10 mSec intervals	      */
+/*				  A zero value indicates that the DTE was     */
+/*				  unable to determine the length of the break */
+/*                char_recvd	: number of characters in the DTE receive     */
+/*				  buffer when V42_tbrk is called              */
+/*				  unable to determine the length of the break */
+/*                                                                            */
+/* Output Parms	: destroy DTE Data                                            */
+/*         non 0 = destroy data : indicates to destroy the DTE transmit and   */
+/*                                receive data buffers because of a           */
+/*                                destructive break.            	      */
+/*                                                                            */
+/*============================================================================*/
+ubyte v42_tbrk ( ubyte break_length , uword char_recvd)
+{
+    switch (v42_current_mode)
+    {
+	   case (MNP_MODE):
+	   case (SPEED_MODE):
+		mmu_force_mnp_pg
+		return (mnp_tbrk ( break_length ,char_recvd));
+
+	   case (LAPM_MODE):
+		mmu_force_lapm_pg
+		return (lapm_tx_break ( break_length ,char_recvd));
+    }
+    return(0);
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_lbrk						      */
+/*									      */
+/* Purpose	: This routine is called by the DCE to code to inform v42     */
+/*		  that a "break" from the DCE has been detected.              */
+/*									      */
+/* Input Parms	: break_length	: length of break in 10 mSec intervals	      */
+/*				  A zero value indicates that the DCE was     */
+/*				  unable to determine the length of the break */
+/*                char_recvd	: number of characters in the DCE receive     */
+/*				  buffer when V42_tbrk is called              */
+/*				  unable to determine the length of the break */
+/*                                                                            */
+/* Output Parms	: destroy DCE Data                                            */
+/*         non 0 = destroy data : indicates to destroy the DCE transmit and   */
+/*                                receive data buffers because of a           */
+/*                                destructive break.            	      */
+/*============================================================================*/
+ubyte v42_lbrk ( ubyte break_length, uword char_recvd)
+{
+    if (v42_current_mode == SPEED_MODE)
+    {
+       mmu_force_mnp_pg
+       return(mnp_lbrk ( break_length ,char_recvd));
+    }
+    return(0);
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_reason						      */
+/*									      */
+/* Purpose	: get the reason for link disconnection 		      */
+/*									      */
+/* Output Parms : v42_reason = 0 : no reason				      */
+/*			       1 : could not connect			      */
+/*			       2 : incompatible protocol levels 	      */
+/*			       3 : unknown protocol levels		      */
+/*			       4 : retry limit reached			      */
+/*			       5 : inactivity limit reached		      */
+/*			       6 to 253 : reserved			      */
+/*			       254 : protocol error			      */
+/*			       255 : user request			      */
+/*============================================================================*/
+ubyte v42_reason(void)
+{
+
+    switch (v42_current_mode)
+
+	   {
+
+	   case (MNP_MODE):
+		return (mnp_reason());
+
+	   case (SPEED_MODE):
+		return (mnp_reason());
+
+	   case (LAPM_MODE):
+		return(lapm_reason());
+
+	   case (DETECTION_MODE):
+		return (v42_detection_reason);
+
+	   default:
+		return (DISC_CODE__NO_MODE_STARTED);
+
+	   } /* switch (v42_current_mode) */
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_reconfigure					      */
+/*									      */
+/* Purpose	: reconfigure some parts of V42 after link establishment      */
+/*									      */
+/* Input Parms	: v_attn_proc	   = 0 : ignore attention		      */
+/*				     1 : destructive/expidited		      */
+/*				     2 : nondestructive/expidited	      */
+/*				     3 : nondestructive/nonexpidited	      */
+/*									      */
+/*		  v_attn_len	   = 0 : no length specified (use default)    */
+/*				     1 to 254 : length of break in 1/100 sec  */
+/*									      */
+/*		  v_inact_tm	   = 0	   : inactivity timer no used	      */
+/*				     non 0 : number of inactivity seconds     */
+/*									      */
+/*		  v_retry_limit    = 0	   : no limit for retries	      */
+/*				     non 0 : number of retries		      */
+/*									      */
+/*		  v_max_data_size  = < 64 : max data size will be 64	      */
+/*				     = 64 : normal			      */
+/*				     > 256: max data size will be 256	      */
+/*									      */
+/*		  v_select_enable  = 0 : no selective rejects		      */
+/*				     1 : selective rejects requested	      */
+/*									      */
+/*		  v_test_enab	   = 0 : LAPM loop tests disabled	      */
+/*				     1 : LAPM loop tests enabled	      */
+/*									      */
+/*		  v_line_baud_rate = see "baud_rate" definition               */
+/*		     (byte)						      */
+/*									      */
+/*============================================================================*/
+void v42_reconfigure (	ubyte  v_attn_proc,
+			ubyte  v_attn_len,
+			uword  v_inact_tm,
+			ubyte  v_retry_limit,
+			uword  v_max_data_size,
+			ubyte  v_select_enable,
+			ubyte  v_test_enab,
+			ubyte  v_line_baud_rate )
+
+{
+     switch (v42_current_mode)
+
+	    {
+
+
+	    case (SPEED_MODE):
+	    case (MNP_MODE):
+
+		 v42_attention_process = v_attn_proc;
+		 v42_attention_length = v_attn_len;
+		 v42_inactivity_limit = v_inact_tm;
+		 v42_retry_limit = v_retry_limit;
+		 v42_max_data_size = v_max_data_size;
+		 v42_baud_rate = v_line_baud_rate;
+
+		 mmu_force_mnp_pg
+		 mnp_reconfigure ( v42_attention_process,
+				   v42_attention_length,
+				   v42_inactivity_limit,
+				   v42_retry_limit,
+				   v42_max_data_size,
+				   v42_baud_rate);
+
+		 break;
+
+
+
+	    case (LAPM_MODE):
+
+		 v42_attention_process = v_attn_proc;
+		 v42_attention_length = v_attn_len;
+		 v42_inactivity_limit = v_inact_tm;
+		 v42_retry_limit = v_retry_limit;
+		 v42_max_data_size = v_max_data_size;
+		 v42_select_retransmit_enabled = v_select_enable;
+		 v42_test_enabled = v_test_enab;
+		 v42_baud_rate = v_line_baud_rate;
+
+		 mmu_force_lapm_pg
+		 lapm_reconfigure ( v42_attention_process,
+				    v42_attention_length,
+				    v42_inactivity_limit,
+				    v42_retry_limit,
+				    v42_max_data_size,
+				    v42_select_retransmit_enabled,
+				    v42_test_enabled,
+				    v42_baud_rate);
+		 break;
+
+
+	    } /* switch (v42_current_mode) */
+
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_test						      */
+/*									      */
+/* Purpose	: send test frame to the peer of LAPM is running	      */
+/*									      */
+/* Input Parms	: test_count   : size of the test string		      */
+/*		  test_pointer : address of the test string		      */
+/*									      */
+/* Output Parms : v42_test     : current state of test			      */
+/*			       0 to 2 : reserved			      */
+/*			       3 : test not done - not in LAPM		      */
+/*			       4 : test not done - LAPM not negotiated	      */
+/*			       5 to 0FFFEh : reserved			      */
+/*			       0FFFFh : waiting for test to complete	      */
+/*============================================================================*/
+uword v42_test ( ubyte test_count,
+		 ubyte *test_pointer )
+{
+
+    if (v42_current_mode == LAPM_MODE)
+       {
+       v42_test_state = lapm_test (test_count,test_pointer);
+       if (v42_test_state == V42_TEST_STATE__WAITING)
+	  v42_test_in_progress = TRUE;
+       else
+	  v42_test_in_progress = FALSE;
+       } /* send test frame */
+
+    else
+       {
+       v42_test_state = V42_TEST_STATE__NOT_IN_LAPM;
+       v42_test_in_progress = FALSE;
+       } /* not in LAPM, cannot perform test */
+
+    return (v42_test_state);
+
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_test_status					      */
+/*									      */
+/* Purpose	: get the current status of the loopback test		      */
+/*									      */
+/* Output Parms : v42_test_status = 0 : test complete - OK		      */
+/*				    1 : test complete - data error	      */
+/*				    2 : test complete - timeout error	      */
+/*				    3 : test not done - not in LAPM	      */
+/*				    4 : test not done - LAPM not negotiated   */
+/*				    5 to 0FFFEh : reserved		      */
+/*				    0FFFFh : waiting for test to complete     */
+/*============================================================================*/
+uword v42_test_status(void)
+{
+    if (v42_current_mode == LAPM_MODE)
+	return (v42_test_state);
+    else
+	return (V42_TEST_STATE__NOT_IN_LAPM);
+}
+
+
+void v42_call_err(word num)
+{
+    if (v42_current_mode == MNP_MODE)
+    {
+	mmu_force_mnp_pg
+	mnp10_call_err(num);
+    }
+    else if (v42_current_mode == LAPM_MODE)
+    {
+	mmu_force_lapm_pg
+	lapm_call_err(num);
+    }
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_info						      */
+/*									      */
+/* Purpose	:							      */
+/*									      */
+/* Input Parms	: info_pointer						      */
+/*============================================================================*/
+
+void v42_info ( ubyte *info_pointer )
+{
+    *info_pointer++ = v42_line_type;		   /* indicate communication */
+    *info_pointer++ = v42_compression_used;	   /* compression	     */
+    *info_pointer++ = v42_current_block_size;	   /* no block size low byte */
+    *info_pointer++ = (v42_current_block_size>>8);	/* no block size low byte */
+    *info_pointer++ = v42_error_count; 	   /* retransmit	     */
+    *info_pointer++ = v42_line_rx_rate;	   /* # of line buffers (tot)*/
+    *info_pointer++ = v42_line_error_rate;	   /* # of line errors	     */
+    *info_pointer++ = negot_data_optimization;
+    *info_pointer++ = v42_negotiate_mnp10;
+    *info_pointer++ = v42_baud_rate;
+
+    switch (v42_current_mode)
+    {
+        case (MNP_MODE):
+            mmu_force_mnp_pg
+            if ((dte_from_num()) || (tx_input_pointer != tx_send_pointer)
+                || (tx_input_pointer != tx_oldest_pointer))
+            {
+                *info_pointer = 1;
+            }
+            else
+            {
+                *info_pointer = 0;
+            }
+
+            if (process_que__in != process_que__out)
+            {
+                *info_pointer |= 2;
+            }
+
+            info_pointer++;
+            break;
+
+        case (LAPM_MODE):
+            mmu_force_lapm_pg
+            if ((dte_from_num()) || (LAPMsrej_que__in != LAPMsrej_que__out)
+                || (LAPMtx_que__in != LAPMtx_que__out)
+                || (LAPMtx_que__ackout > LAPMtx_que__ackin))
+            {
+                *info_pointer = 1;
+            }
+            else
+            {
+                *info_pointer = 0;
+            }
+
+            if ((lapm_receive_que.fill_begin) || (LAPMdeliver_cont))
+            {
+                *info_pointer |= 2;
+            }
+            info_pointer++;
+            break;
+
+        default:
+            *info_pointer++ = 0;
+            break;
+    }
+
+    /* Add "mode" and retransmit count for ETC */
+    *info_pointer++ = v42_current_mode;
+    *info_pointer++ = v42_retransmit_count;
+
+    v42_error_count = 0;
+    v42_line_error_rate = 0;
+    v42_line_rx_rate = 0;
+}
+
+
+/*============================================================================*/
+/* Name 	: line_buffer_rcvd_error				      */
+/*									      */
+/* Purpose	: inform V42 that an error in a buffer was received	      */
+/*									      */
+/*============================================================================*/
+void line_buffer_rcvd_error ( void )
+{
+     v42_line_error_rate++;
+     v42_line_rx_rate++;
+}
+
+
+/*============================================================================*/
+/* Name 	: line_buffer_rcvd_ok					      */
+/*									      */
+/* Purpose	: inform V42 that a buffer was received 		      */
+/*									      */
+/*============================================================================*/
+void line_buffer_rcvd_ok ( void )
+{
+     v42_line_rx_rate++;
+}
+
+
+/*============================================================================*/
+/* Name 	: line_type						      */
+/*									      */
+/* Purpose	: inform V42 of the line type				      */
+/*									      */
+/* Input Parms	: v_line_type = 0 = ASYNC communication 		      */
+/*				1 = SYNC communication			      */
+/*============================================================================*/
+void line_type ( ubyte v_line_type )
+{
+     v42_line_type = v_line_type;
+}
+
+
+/*============================================================================*/
+/* Name 	: block_size_used					      */
+/*									      */
+/* Purpose	: inform V42 of the current block size			      */
+/*									      */
+/* Input Parms	: v_block_size	: new block size			      */
+/*============================================================================*/
+void block_size_used(uword);
+void block_size_used(uword v_block_size)
+{
+    v42_current_block_size = v_block_size;
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_compression					      */
+/*									      */
+/* Purpose	: inform V42 of the current status of data compression	      */
+/*									      */
+/* Input Parms	: v_compression_used = 0 : Off				      */
+/*				       1 : On				      */
+/*============================================================================*/
+void compression_used ( ubyte v_compression_used )
+{
+    v42_compression_used = v_compression_used;
+}
+
+
+/*============================================================================*
+/  Name 	: negotiate_mnp10
+/
+/  Purpose	: inform V42 if MNP 10 has been negotiated.
+/
+/  Input Parms	: 0 - No MNP10
+/ 				  1 - MNP10
+/ 				  2 - MNP10 CELLULAR
+/ 				  3 - MNP10 EC (enhanced cellular)
+/
+/============================================================================*/
+void negotiate_mnp10 ( ubyte v_mnp10_negotiated)
+{
+   v42_negotiate_mnp10 = v_mnp10_negotiated;
+}
+
+
+/*============================================================================*/
+/* Name 	: current_baud_rate					      */
+/*									      */
+/* Purpose	: inform V42 of the current line baud rate.		      */
+/*									      */
+/* Input Parms	: v_line_baud	     = 0 : Off				      */
+/*				       1 : On				      */
+/*============================================================================*/
+void current_baud_rate ( ubyte v_line_baud)
+{
+     v42_baud_rate = v_line_baud;
+}
+
+
+/*============================================================================*/
+/* Name 	: proclaim_error					      */
+/*									      */
+/* Purpose	: indicate that a frame ( MNP or LAPM ) was retransmitted.    */
+/*============================================================================*/
+void proclaim_error(void)
+{
+     if ( v42_error_count != 255 )
+	v42_error_count++;
+}
+
+extern ubyte v42_outgoing_empty(void);
+ubyte v42_outgoing_empty(void)
+{
+	return (0);
+}
+
+
+/*============================================================================*/
+/* Name 	: v42_mnp10_force_rate					      */
+/*									      */
+/* Purpose	: Forces MNP10 to perform a fall forward or a fall back.      */
+/*============================================================================*/
+ubyte v42_mnp10_force_rate(ubyte type)
+{
+	mmu_force_mnp_pg
+	return (mnp_force_rate_change(type));
+}
+
+
+/*******************************************************************************
+/
+/       Routine:            v42_retry_update
+/
+/       Author:             RSA
+/
+/       Creation Date:      7/01/94
+/
+/       Description:        This routine will keep a running total of
+/                           individual frame retransmissions by a V.42
+/                           protcol.
+/
+/                           For LAP-M, it's global access to the N401 counter.
+/
+/       Input Parameter:    ubyte count
+/                   0     = Reset retransmit counter
+/                   1-255 = Number frames retransmitted
+/
+/       Output Parameters: None
+/
+/       Global Variables Changed: v42_retransmit_count
+/
+/       Users: (for LAPM) inc_chk_n400, N400_init
+/              (for MMP) None (todate)
+/
+/       -------------------------------------------------------------
+/       -                   Modifications                           -
+/       -------------------------------------------------------------
+/
+/       Author & Date:	RSA
+/       Description:
+/       Reason:
+/
+*******************************************************************************/
+void v42_frame_retry_update(ubyte count)
+{
+    /* If the input is zero, reset the counter */
+    if (!count)
+    {
+        v42_retransmit_count = 0;
+    }
+    /* Else add in number of new retries */
+    else
+    {
+        /* Caution: No test for roll-over */
+        v42_retransmit_count += count;
+    }
+}

@@ -1,0 +1,1333 @@
+#include <stddef.h>
+#include <string.h>
+#include <stdio.h>
+
+#include "kernel.h"
+#include "swis.h"
+
+#include "Podule.h"
+
+#include "sys_def.h"
+#include "acu_def.h"
+#include "acu_mem.h"
+#include "mt_voice.h"
+#include "iohw_equ.h"
+#include "dsp_drv.h"
+#include "ee_def.h"
+#include "riscos.h"
+#include "tracemac.h"
+#include "modulehdr.h"
+
+#define Service_PreReset         0x45
+#define Service_DeviceFSStarting 0x70
+
+void *private_word;
+extern void ac00tab1_init_statics(void);
+extern void ac00tab2_init_statics(void);
+extern void podule_int_veneer(void);
+extern void enable_iomd_interrupts(void);
+void disable_int(void);
+extern void InitPktDescriptors(void);
+void Remove_Int(void);
+
+int RO_dcd, RO_cts, RO_ring, RO_dsr, RO_dtr;
+
+#ifdef PODULEBASED
+#define IOC   ((volatile unsigned char *)0x03200000)
+#define ECTCR 0xC8 /* I/O expansion card timing control */
+#endif
+
+#define IrqV 2
+
+#define NO_TRACE     0x00  /* Command Tracing Disabled */
+#define TX_TRACE     0x01  /* TX Command Tracing enabled */
+#define RX_TRACE     0x02  /* RX Command Tracing enabled */
+#define TXRX_TRACE   0x03  /* TX & RX Command Tracing enabled */
+
+#ifdef DEBUG
+#define NUM_CMMD_TRACE  10000
+
+/* Structure declarations */
+struct cmd_rec
+    {
+    int indx;
+    int nSource;                  /* Source or direction of transfer */
+    unsigned char data[12];
+    unsigned long tstamp;
+    };
+
+typedef struct cmd_rec cmd_t;
+
+int trace_cnt;
+int packet_cnt;
+int rx_packet_cnt;
+int tx_packet_cnt;
+cmd_t cmmd_trace [NUM_CMMD_TRACE];
+int TraceEnabled = TXRX_TRACE;
+extern unsigned long PIT_int_cnt;
+
+void clearscreen(void)
+{
+    _swix(OS_WriteI + 12, 0);
+}
+
+void cursor(int y, int x)
+{
+    _swix(OS_WriteI + 31, 0);
+    _swix(OS_WriteI + x, 0);
+    _swix(OS_WriteI + y, 0);
+}
+
+char *GetTraceMode(void)
+{
+char *trace_mode;
+
+    switch (TraceEnabled)
+    {
+        case NO_TRACE:
+            trace_mode = "DISABLED";
+            break;
+
+        case TX_TRACE:
+            trace_mode = "TX";
+            break;
+
+        case RX_TRACE:
+            trace_mode = "RX";
+            break;
+
+        case TXRX_TRACE :
+            trace_mode = "TX,RX";
+            break;
+
+        default:
+            trace_mode = "ERROR";
+            break;
+    }
+
+return (trace_mode);
+
+}
+
+/*--------------------------- init_trace    ------------------------*/
+/* This procedure will initialize the DSP trace variables           */
+/*------------------------------------------------------------------*/
+
+void init_trace(void)
+{
+int i;
+
+    trace_cnt = 0;
+    packet_cnt = 0;
+    tx_packet_cnt = 0;
+    rx_packet_cnt = 0;
+
+    for (i=0 ; i< NUM_CMMD_TRACE ; i++)
+    {
+        cmmd_trace[i].indx = i;
+        memset( cmmd_trace[i].data, 0, sizeof(cmmd_trace[i].data) );
+    }
+
+}
+
+/*---------------------------- display_cmmd_trace ------------------- */
+/* This procedure will display the last N DSP packets which were sent */
+/*------------------------------------------------------------------  */
+
+void display_cmmd_trace (void)
+{
+int i,j;
+int display_cnt;
+char *direction;
+char *trace_mode;
+extern char *PktDescr[0xff];
+
+    clearscreen();
+    cursor(0,0);
+    trace_mode = GetTraceMode();
+
+    printf ("Num: Dir ID   Data                                 (10ms)  Description\n\r");
+
+    if (packet_cnt > NUM_CMMD_TRACE )
+        display_cnt = NUM_CMMD_TRACE ;
+    else
+        display_cnt = trace_cnt;
+
+    /* Display trace buffer in sorted order, because of the wrap around
+       buffer the newest packet may be in the front of the buffer. We want
+       to display the oldest packets first.
+     */
+
+    for (i=trace_cnt ; i< display_cnt; i++)
+    {
+
+        direction =  (cmmd_trace[i].nSource == TRACE_TRANSMIT) ? "Tx" : "Rx";
+
+        printf ("%4d %2s %3x  ",cmmd_trace[i].indx,direction,cmmd_trace[i].data[0]);
+
+        for (j=0; j < 12; j++)
+        {
+            printf ("%3x",cmmd_trace[i].data[j]);
+        }
+        printf ("   %4lx   %.20s\n\r",cmmd_trace[i].tstamp,PktDescr[cmmd_trace[i].data[0]]);
+
+
+    }
+
+    for (i=0 ; i< trace_cnt; i++)
+    {
+
+        direction =  (cmmd_trace[i].nSource == TRACE_TRANSMIT) ? "Tx" : "Rx";
+
+        printf ("%4d %2s %3x  ",cmmd_trace[i].indx,direction,cmmd_trace[i].data[0]);
+
+        for (j=0; j < 12; j++)
+        {
+            printf ("%3x",cmmd_trace[i].data[j]);
+        }
+        printf ("   %4lx   %.20s\n\r",cmmd_trace[i].tstamp,PktDescr[cmmd_trace[i].data[0]]);
+
+    }
+
+
+    cursor(22,0);
+
+    printf ("Packets  RX=%d,  TX=%d, Command Trace/Capture Mode [%6.8s]",
+                rx_packet_cnt,tx_packet_cnt,trace_mode);
+    cursor(23,0);
+}
+
+/*------------------------ UpdateCommandTrace-----------------------*/
+/* This procedure is the interface for the RSA code to call when    */
+/* packets are sent to the DSP. See send_pkt_to_dsp()               */
+/*------------------------------------------------------------------*/
+
+void UpdateCommandTrace(void *cmmd_packet, uword source)
+{
+#ifdef TMLDEBUG
+  if (source & TraceEnabled)
+    {
+
+    int j;
+extern char *PktDescr[0xff];
+
+    if (trace_cnt == NUM_CMMD_TRACE ) /* check for wrap around */
+        trace_cnt = 0;
+
+    cmmd_trace[trace_cnt].indx = ++packet_cnt;
+    cmmd_trace[trace_cnt].tstamp = PIT_int_cnt;
+    cmmd_trace[trace_cnt].nSource = source;
+
+    if (source == TRACE_TRANSMIT)
+        tx_packet_cnt++;
+    else
+        rx_packet_cnt++;
+
+    memcpy (cmmd_trace[trace_cnt].data, cmmd_packet, 12);
+
+    if (cmmd_trace[trace_cnt].data[0] != 0x0c)
+    {
+        Printf("%4d %2s %3x  ", cmmd_trace[trace_cnt].indx,(cmmd_trace[trace_cnt].nSource == TRACE_TRANSMIT) ? "Tx" : "Rx",cmmd_trace[trace_cnt].data[0]);
+
+        for (j=0; j < 12; j++)
+        {
+            Printf ("%3x",cmmd_trace[trace_cnt].data[j]);
+        }
+        Printf("   %4x   %s\n",cmmd_trace[trace_cnt].tstamp, PktDescr[cmmd_trace[trace_cnt].data[0]]);
+    }
+
+    trace_cnt++;
+    }
+#else
+  if (source & TraceEnabled)
+    {
+
+    if (trace_cnt == NUM_CMMD_TRACE ) /* check for wrap around */
+        trace_cnt = 0;
+
+    cmmd_trace[trace_cnt].indx = ++packet_cnt;
+    cmmd_trace[trace_cnt].tstamp = PIT_int_cnt;
+    cmmd_trace[trace_cnt].nSource = source;
+
+    if (source == TRACE_TRANSMIT)
+        tx_packet_cnt++;
+    else
+        rx_packet_cnt++;
+
+    memcpy (cmmd_trace[trace_cnt].data, cmmd_packet, 12);
+
+    trace_cnt++;
+    }
+#endif
+}
+
+#endif
+
+/*******************************************************************************
+/
+/                   "init_ports"
+/
+/    Author:   RSA
+/
+/    Creation Date: 8/01/94
+/
+/    Description:    Init port A and port B for DTE controls and ring
+/
+/    Input Parameters:       None
+/
+/    Output Parameter:   None
+/
+/    Global Variables Changed:
+/
+/    Users: (routines that used this)
+/
+/    *****************************************************************
+/    *                Modifications               *
+/    *****************************************************************
+/
+/    Author & Date: RSA
+/    Description:
+/    Reason:
+/
+*******************************************************************************/
+void init_ports(void)
+{
+  RO_dtr = RO_cts = 1;
+  RO_dcd = RO_ring = 0;
+}
+
+static const char one = 1;
+
+_kernel_oserror *module_initialise(char *cmd_tail, int podule_base, void *pw)
+{
+    _kernel_oserror *e;
+    _kernel_swi_regs r;
+
+    private_word = pw;
+    #ifdef DEBUG
+    InitPktDescriptors();
+    #endif
+
+    /* _kernel_swi, because _swix won't fill in R2 on exit if an error is returned */
+    r.r[0] = (int) "CtrlsModem$Path";
+    r.r[2] = 1U<<31;
+    r.r[3] = 0;
+    _kernel_swi(OS_ReadVarVal, &r, &r);
+    if (r.r[2] == 0)
+    {
+        r.r[0] = (int) "CtrlsModem$Path";
+        r.r[1] = (int) "Resources:$.Resources.CtrlsModem.";
+        r.r[2] = strlen((char *) r.r[1]);
+        r.r[3] = 0;
+        r.r[4] = 0;
+        e = _kernel_swi(OS_SetVarVal, &r, &r);
+        if (e) return e;
+    }
+
+#ifdef NO_STATIC_INIT
+    ac00tab1_init_statics();
+    ac00tab2_init_statics();
+#endif
+
+#ifdef PODULEBASED
+    /*
+     * Can't use this because it's not a legal podule...
+     *
+    e = _swix(Podule_SetSpeed, _IN(0)|_IN(3), Podule_Speed_TypeC, 0);
+    if (e) return e;
+     */
+    //IOC[ECTCR] |= 0x01;
+#endif
+
+    e = register_with_devicefs();
+    if (e) return e;
+
+#ifdef USE_IRQV
+    e = _swix(OS_Claim, _INR(0,2), IrqV, podule_int_veneer, pw);
+#else
+    e = _swix(OS_ClaimDeviceVector, _INR(0,4), 13, podule_int_veneer, pw, &one, 1);
+#endif
+    if (e)
+        deregister_from_devicefs();
+
+    enable_iomd_interrupts();
+
+    return e;
+}
+
+_kernel_oserror *module_finalise(int fatal, int podule, void *pw)
+{
+#ifdef USE_IRQV
+    _swix(OS_Release, _INR(0,2), IrqV, podule_int_veneer, pw);
+#else
+    _swix(OS_ReleaseDeviceVector, _INR(0,4), 13, podule_int_veneer, pw, &one, 1);
+#endif
+
+    deregister_from_devicefs();
+
+    return NULL;
+}
+
+
+void module_service(int service_number, _kernel_swi_regs *r, void *pw)
+{
+    switch (service_number)
+    {
+      case Service_PreReset:
+        dspdrv_halt_dsp();
+        break;
+      case Service_DeviceFSStarting:
+        register_with_devicefs();
+        break;
+    }
+}
+
+
+/*
+ * EEPROM stuff...
+ */
+#define EEPROM_size 1024
+
+ubyte EEPROM[EEPROM_size];
+
+_kernel_oserror *eeprom_init(void)
+{
+    return _swix(OS_File, _INR(0,3), 255, "CtrlsModem:EEPROM", EEPROM, 0);
+}
+
+_kernel_oserror *eeprom_final(void)
+{
+    return _swix(OS_File, _INR(0,2)|_INR(4,5), 10, "CtrlsModem:EEPROM", 0xFFD, EEPROM, EEPROM + EEPROM_size);
+}
+
+ubyte modem_read_data(uword eeprom_addr, uword byte_count, ubyte *str_ptr)
+{
+    if (eeprom_addr + byte_count > EEPROM_size)
+        return 1;
+
+    memcpy(str_ptr, EEPROM + eeprom_addr, byte_count);
+
+    return 0;
+}
+
+ulong get_bytes_from_nvram(void)
+{
+
+/* read once for remove some ayn signal caused by hardware reset */
+
+   ulong serial_id = 0;
+   modem_read_data( PNP_SERIAL_ID_ADDR, 4,(ubyte *) &serial_id);
+   return(serial_id);
+}
+
+ubyte modem_write_data(uword eeprom_addr, uword byte_count, ubyte *str_ptr)
+{
+    if (eeprom_addr + byte_count > EEPROM_size)
+        return 1;
+
+    memcpy(EEPROM + eeprom_addr, str_ptr, byte_count);
+
+    return 0;
+}
+
+#ifdef DEBUG
+unsigned int svc_stack_dump[0x0800];
+unsigned int stack_ptr;
+
+void dump_svc_stack(void)
+{
+    int dummy;
+    memcpy(svc_stack_dump, (void *)0x01c00000, 0x2000);
+    stack_ptr = (unsigned int) &dummy;
+}
+#endif
+
+_kernel_oserror *module_command(char *arg_string, int argc, int cmd_no, void *pw)
+{
+    extern unsigned int total_irq_count, rx_irq_count, tx_irq_count, callbacks;
+    extern unsigned int drops_due_to_retrain, last_funny_border;
+    extern uword *sig_quality;
+    extern int modem_baud;
+    extern volatile int poll_loop_threaded;
+    unsigned int i,j,gpio;
+    static const char bps[23][8] = { "1200/75", "75/1200", "300", "1200", "2400",
+                                     "4800", "7200", "9600", "12000", "14400", "16800",
+                                     "19200", "38400", "57600", "600", "115200",
+                                     "21600", "24000", "26400", "28800", "31200",
+                                     "33600", "36000" };
+
+    switch (cmd_no)
+    {
+      #ifdef DEBUG
+      case CMD_PktTrace:
+        display_cmmd_trace();
+        break;
+
+      case CMD_ResetDSP:
+        ResetDSP();
+        break;
+
+      case CMD_ModemStats:
+      {
+        static const char *cpstrings[] =
+        {
+            "Undetermined",
+            "Dial tone",
+            "Ring on",
+            "Busy signal",
+            "Silence",
+            "Ringback",
+            "Answer tone",
+            "Ring off",
+            "Tone disconnect",
+            "Line signal",
+            "No answer tone",
+            "Caller ID",
+            "V8 answer tone",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "???",
+            "Bell answer tone/carrier",
+            "ANS detected, phase reversals not detected",
+            "ANS detected, phase reversals detected",
+            "ANSam detected, phase reversals not detected",
+            "ANSam detected, phase reversals detected",
+            "IFP tone detection results",
+            "V8 pre-ANSam"
+        };
+
+        /* Prevent reentrancy */
+        poll_loop_threaded=1;
+        i = read_dsp_call_progress_reg();
+        gpio = dp_voice_set_gpio(0, GPIO_READ_BYTE, GPIO_BANK_INTERNAL);
+        poll_loop_threaded=0;
+
+        printf("Total IRQs: %u\n"
+               "   Rx IRQs: %u\n"
+               "   Tx IRQs: %u\n"
+               " Callbacks: %u\n",
+               total_irq_count, rx_irq_count, tx_irq_count, callbacks);
+        //printf("Drops due to retrain: %u\n", drops_due_to_retrain);
+        printf("Last funny border:    %u\n", last_funny_border);
+        printf("Call progress:        %d: %s\n", i, i <=0x22 ? cpstrings[i] : "???");
+        printf("GPIO lines:           0:%s 1:%s 2:%s 3:%s\n",
+                                                             gpio & 1 ? "on" : "off",
+                                                             gpio & 2 ? "on" : "off",
+                                                             gpio & 4 ? "on" : "off",
+                                                             gpio & 8 ? "on" : "off");
+        printf("Modem speed:          %sbps\n", bps[modem_baud]);
+        printf("Signal quality:      &%x\n", *sig_quality);
+        printf("Control lines:        %s %s %s %s\n", RO_dcd ? "DCD" : "dcd",
+                                                      RO_ring ? "RI" : "ri",
+                                                      RO_dsr ? "DSR" : "dsr",
+                                                      RO_dtr ? "DTR" : "dtr");
+        break;
+      }
+
+      case CMD_StackDump:
+        printf("sp=%08x\n\n", stack_ptr);
+        for (j=0,i=((stack_ptr - 0x01c00000)>>2)&~3; i < 0x800; i += 4, j++)
+        {
+            printf("%08x: %08x %08x %08x %08x\n", 0x01c00000 + (i<<2), svc_stack_dump[i], svc_stack_dump[i+1], svc_stack_dump[i+2], svc_stack_dump[i+2]);
+
+        }
+        break;
+      #endif
+    }
+
+    return NULL;
+}
+
+#ifndef PollPeriod
+#define PollPeriod 3 /* centiseconds */
+#endif
+
+#define ControlLine_DTR     (1u<<0)
+#define ControlLine_RTS     (1u<<1)   /* Not implemented - read as 1 */
+#define ControlLine_CTS     (1u<<16)  /* Not implemented - read as 1 */
+#define ControlLine_DSR     (1u<<17)
+#define ControlLine_RI      (1u<<18)
+#define ControlLine_DCD     (1u<<19)
+#define ControlLine_FifosOn (1u<<20)  /* Not implemented - read as 1 */
+
+extern void acu_timer(void);
+extern void ACU_Main(void);
+extern void master_init(void);
+extern void init_trace(void);
+
+extern void devicefs_entry(void);
+extern void tickerv_veneer(void);
+extern void tickerv_veneer2(void);
+extern void callevery_veneer(void);
+extern void maincallback_veneer(void);
+
+extern void *private_word;
+
+#define TickerV 0x1C
+
+static int device_handle;
+void (*BuffManService)(void);
+void *BuffManWS;
+
+static volatile int devicefs_handler_threaded;
+
+ubyte sys_intr_disabled = TRUE;
+
+
+
+typedef struct ioctl_t
+{
+    unsigned int reason   : 16;
+    unsigned int group    : 8;
+    unsigned int          : 6;
+    unsigned int read     : 1;
+    unsigned int write    : 1;
+    unsigned int data;
+} ioctl_t;
+
+/*
+ * The structure describing our special field
+ */
+typedef struct sfblock
+{
+    unsigned int size;
+    unsigned int thresh;
+} sfblock;
+
+/*
+ * State information for each stream
+ */
+
+Stream InputStream, OutputStream;
+static int active_streams;
+
+/*
+ * Parameters for device_create_[tx|rx]_buffer
+ */
+typedef struct bufparams
+{
+    Stream *stream;
+    int flags;
+    int size;
+    int handle;
+    int threshold;
+} bufparams;
+
+static _kernel_oserror *device_initialise(int stream, int flags, int fileswitch_handle, sfblock *specialfield, int *ourstream);
+static _kernel_oserror *device_finalise(Stream *stream, void *pw);
+static _kernel_oserror *device_wakeupfortx(Stream *stream, void *pw);
+static _kernel_oserror *device_create_tx_buffer(bufparams *params);
+static _kernel_oserror *device_create_rx_buffer(bufparams *params);
+static _kernel_oserror *device_halt(Stream *stream);
+static _kernel_oserror *device_resume(Stream *stream);
+static _kernel_oserror *device_stream_created(Stream *stream, int buffer, void *pw);
+static _kernel_oserror *device_ioctl(Stream *stream, ioctl_t *param);
+static _kernel_oserror *ioctl_control_lines(ioctl_t *param);
+static _kernel_oserror *riscos_start_polling(void *pw);
+static void riscos_stop_polling(void *pw);
+static int podule_rx_int(void), podule_tx_int(void);
+
+#if PollPeriod == 1
+int callevery_handler(_kernel_swi_regs *r, void *pw);
+#else
+_kernel_oserror *callevery_handler(_kernel_swi_regs *r, void *pw);
+#endif
+
+#define BM_InsertByte      0
+#define BM_InsertBlock     1
+#define BM_RemoveByte      2
+#define BM_RemoveBlock     3
+#define BM_ExamineByte     4
+#define BM_ExamineBlock    5
+#define BM_UsedSpace       6
+#define BM_FreeSpace       7
+#define BM_PurgeBuffer     8
+#define BM_NextFilledBlock 9
+
+_kernel_oserror *register_with_devicefs(void)
+{
+    typedef struct device
+    {
+        ptrdiff_t name;
+        int flags;
+        int rxflags, rxsize;
+        int txflags, txsize;
+        int reserved;
+    } device;
+    static struct
+    {
+        device device1;
+        int end;
+    }
+    device_list =
+    {
+        {
+            0,
+            1,              /* Buffered, no "SoftModem$Path" */
+            0, 256,
+            0, 256,
+            0
+        },
+        0
+    };
+
+    /* This is an offset, not an address (yuck)! */
+    device_list.device1.name = "SoftModem" - (char *) &device_list.device1;
+
+    return _swix(DeviceFS_Register, _INR(0,7)|_OUT(0),
+                                    2, /* Full duplex character device */
+                                    &device_list,
+                                    devicefs_entry,
+                                    0,
+                                    private_word,
+                                    "size/Nthresh/N",
+                                    1, /* 1 input stream */
+                                    1, /* 1 output stream */
+                                    &device_handle);
+}
+
+_kernel_oserror *deregister_from_devicefs(void)
+{
+    return _swix(DeviceFS_Deregister, _IN(0), device_handle);
+}
+
+_kernel_oserror *devicefs_handler(_kernel_swi_regs *r, void *pw)
+{
+#ifdef TMLDEBUG
+    Printf("\021\006devicefs_handler: r0=%d\021\007\n", r->r[0]);
+#endif
+
+    switch (r->r[0])
+    {
+      case 0:
+        return device_initialise(r->r[2], r->r[3], r->r[4], (sfblock *)r->r[6], &r->r[2]);
+      case 1:
+        return device_finalise((Stream *)r->r[2], pw);
+      case 2:
+        return device_wakeupfortx((Stream *)r->r[2], pw);
+      case 3: /* Wake up for RX */
+      case 4: /* Sleep RX */
+      case 5: /* EnumDir */
+        return NULL;
+      case 6:
+        return device_create_tx_buffer((bufparams *)&r->r[2]);
+      case 7:
+        return device_create_rx_buffer((bufparams *)&r->r[2]);
+      case 8:
+        return device_halt((Stream *)r->r[2]);
+      case 9:
+        return device_resume((Stream *)r->r[2]);
+      case 10:
+        return NULL;
+      case 11:
+        return device_stream_created((Stream *)r->r[2], r->r[3], pw);
+      case 14:
+        return device_ioctl((Stream *)r->r[2], (ioctl_t *)r->r[3]);
+      default:
+        return (_kernel_oserror *) "\0\0\0\0Bad devicefs call"; /* /* Fix this */
+    }
+}
+
+/*
+ * DeviceDriver_Entry 0 : Initialise
+ *
+ * In: stream       = DeviceFS stream handle
+ *     flags        = flags for opening the stream (bit 0 -> TX/~RX)
+ *     specialfield = pointer to special field control block (PRM 2-422)
+ *
+ * Out: ourstream = our internal stream handle
+ *
+ * This routine is called as a stream is being opened onto the device by
+ * DeviceFS. It must store the relevant handles and setup the device.
+ *
+ * The special field control block will consist of a number of words each
+ * corresponding to the field in the device open string.
+ */
+_kernel_oserror *device_initialise(int devicefs_stream, int flags, int fileswitch_handle, sfblock *specialfield, int *ourstream)
+{
+    Stream *stream = (flags & 1) ? &OutputStream : &InputStream;
+
+    *ourstream = (int) stream;
+
+    devicefs_handler_threaded = 1;
+
+    stream->devicefs_stream = devicefs_stream;
+    stream->fileswitch_handle = fileswitch_handle;
+
+    if (specialfield->size != 0xDEADDEAD)
+        stream->buffersize = specialfield->size;
+
+    if (specialfield->thresh != 0xDEADDEAD)
+        stream->bufferthreshold = specialfield->thresh;
+
+    devicefs_handler_threaded = 0;
+
+    return NULL;
+}
+
+/*
+ * DeviceDriver_Entry 1 : Finalise
+ *
+ * In: stream       = internal stream handle (or 0 for all)
+ *
+ * This routine is called when a stream is being closed by DeviceFS. When
+ * received then we should halt the relevant transmission type until the stream
+ * is re-opened.
+ */
+static _kernel_oserror *device_finalise(Stream *stream, void *pw)
+{
+    if (stream == NULL)
+    {
+        device_finalise(&InputStream, pw);
+        device_finalise(&OutputStream, pw);
+    }
+    else
+    {
+        if (stream->devicefs_stream == 0)
+            return NULL;
+
+        devicefs_handler_threaded = 1;
+
+        stream->devicefs_stream=0;
+        stream->buffer=0;
+        stream->buffer_privid=-1;
+
+        /* If this is the last stream, shut down the hardware */
+        if (--active_streams == 0)
+        {
+            Remove_Int();
+
+            modem_disable_interrupts();
+
+            riscos_stop_polling(pw);
+
+            dspdrv_halt_dsp();
+
+            #ifdef DEBUG
+            set_border(0);
+            #endif
+
+            hard_reset();
+
+            eeprom_final();
+        }
+
+        devicefs_handler_threaded = 0;
+    }
+
+    return NULL;
+}
+
+static _kernel_oserror *device_wakeupfortx(Stream *stream, void *pw)
+{
+    /* Cause an extra call to the central loop for rapid response */
+    //callevery_handler(0, pw);
+
+    return NULL;
+}
+
+/*
+ * DeviceDriver_Entry 6 : Create buffer for TX
+ *
+ * In: stream       = internal stream handle
+ *     flags        = suggested flags for buffer being created
+ *     size         = suggested size for buffer
+ *     handle       = suggested buffer handle (-1 for unique generated one)
+ *     threshold    = suggested threshold for buffer
+ *
+ * Out: flags, size, handle, threshold modified as required
+ *
+ * This routine is called before the buffer is actually created, it allows the
+ * device to change the values and then return.
+ */
+static _kernel_oserror *device_create_tx_buffer(bufparams *params)
+{
+    if (OutputStream.buffersize)
+        params->size = OutputStream.buffersize;
+    else
+        OutputStream.buffersize = params->size;
+
+    if (OutputStream.bufferthreshold)
+        params->threshold = OutputStream.bufferthreshold;
+    else
+        OutputStream.bufferthreshold = params->threshold;
+
+    return NULL;
+}
+
+/*
+ * DeviceDriver_Entry 7 : Create buffer for RX
+ *
+ * In: stream       = internal stream handle
+ *     flags        = suggested flags for buffer being created
+ *     size         = suggested size for buffer
+ *     handle       = suggested buffer handle (-1 for unique generated one)
+ *     threshold    = suggested threshold for buffer
+ *
+ * Out: flags, size, handle, threshold modified as required
+ *
+ * This routine is called before the buffer is actually created, it allows the
+ * device to change the values and then return.
+ */
+_kernel_oserror *device_create_rx_buffer(bufparams *params)
+{
+    if (InputStream.buffersize)
+        params->size = InputStream.buffersize;
+    else
+        InputStream.buffersize = params->size;
+
+    if (InputStream.bufferthreshold)
+        params->threshold = InputStream.bufferthreshold;
+    else
+        InputStream.bufferthreshold = params->threshold;
+
+    return NULL;
+}
+
+static _kernel_oserror *device_halt(Stream *stream)
+{
+    return NULL;
+}
+
+static _kernel_oserror *device_resume(Stream *stream)
+{
+    return NULL;
+}
+
+/*
+ * DeviceDriver_Entry 11 : Stream created
+ *
+ * In: stream       = internal stream handle
+ *     handle       = buffer handle (-1 if none)
+ *     threshold    = suggested threshold for buffer
+ *
+ * This routine is called after the stream has been created, it gives me a chance
+ * to setup the device correctly and start transmission etc, etc...
+ */
+static _kernel_oserror *device_stream_created(Stream *stream, int buffer, void *pw)
+{
+    _kernel_oserror *e;
+
+    e = _swix(Buffer_InternalInfo, _IN(0)|_OUTR(0,2), buffer,
+                                                      &stream->buffer_privid,
+                                                      &BuffManService,
+                                                      &BuffManWS
+             );
+    if (e) return e;
+
+    /* If this is the first stream, lets kick the thing into life */
+    if (active_streams++ == 0)
+    {
+        #ifdef DEBUG
+        InitPktDescriptors();
+
+        init_trace();
+        #endif
+
+        eeprom_init();
+
+#ifdef TMLDEBUG
+        Printf("eeprom_init called\n");
+#endif
+
+        e = riscos_start_polling(pw);
+        if (e) return e;
+
+#ifdef TMLDEBUG
+        Printf("riscos_start_polling called\n");
+#endif
+    }
+
+
+    return NULL;
+}
+
+/*
+ * DeviceDriver_Entry 14 : IOCtl
+ *
+ * In: stream       = internal stream handle
+ *     param        = IOCtl parameter block as passed in R2 of OS_Args call
+ *
+ * This call is dispatched to the underlying device driver whenever the OS_Args IOCtl SWI is
+ * called or the SWI DeviceFS_CallDevice (14) is called.
+ */
+static _kernel_oserror *device_ioctl(Stream *stream, ioctl_t *param)
+{
+    switch (param->group)
+    {
+      case 0:
+        switch (param->reason)
+        {
+          case 6:
+            return ioctl_control_lines(param);
+        }
+    }
+    return NULL;
+}
+
+static _kernel_oserror *ioctl_control_lines(ioctl_t *param)
+{
+    if (param->write)
+    {
+        RO_dtr = param->data & ControlLine_DTR;
+    }
+    if (param->read)
+    {
+        unsigned int out = ControlLine_CTS | ControlLine_FifosOn;
+
+        if (RO_dtr)
+            out |= ControlLine_DTR;
+
+        if (RO_dcd)
+            out |= ControlLine_DCD;
+
+        if (RO_ring)
+            out |= ControlLine_RI;
+
+        if (RO_dsr)
+            out |= ControlLine_DSR;
+
+        param->data = out;
+
+    }
+
+    return NULL;
+}
+
+#define Event_RS423Error    7
+
+#define SerialEvent_Parity  (1U<<5)
+#define SerialEvent_Overrun (1U<<4)
+#define SerialEvent_Framing (1U<<3)
+#define SerialEvent_DSR     (1U<<2)
+#define SerialEvent_DCD     (1U<<1)
+
+void send_riscos_serial_event()
+{
+    unsigned int flags = 0;
+
+    if (RO_dsr)
+        flags |= SerialEvent_DSR;
+
+    if (RO_dcd)
+        flags |= SerialEvent_DCD;
+
+    _swix(OS_GenerateEvent, _INR(0,2), Event_RS423Error, flags, InputStream.fileswitch_handle);
+}
+
+/*
+ * This section deals with the main background polling needed. There are
+ * two basic jobs:
+ *
+ * 1) Calling acu_timer every centisecond. This hooked directly onto
+ *    TickerV.
+ * 2) Calling ACU_Main periodically. This is called as a transient
+ *    callback triggered every "PollPeriod" centiseconds using
+ *    OS_CallEvery.
+ */
+
+static _kernel_oserror *riscos_start_polling(void *pw)
+{
+    _kernel_oserror *e;
+
+    #if PollPeriod == 1
+    e=_swix(OS_Claim, _INR(0,2), TickerV, tickerv_veneer2, pw);
+    #else
+    e=_swix(OS_CallEvery, _INR(0,2), PollPeriod-1, callevery_veneer, pw);
+    #endif
+
+    return e;
+}
+
+static void riscos_stop_polling(void *pw)
+{
+    _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer, pw);
+
+    #if PollPeriod == 1
+    _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer2, pw);
+    #else
+    _swix(OS_RemoveTickerEvent, _INR(0,1), callevery_veneer, pw);
+    #endif
+
+    //_swix(OS_RemoveCallBack, _INR(0,1), maincallback_veneer, pw);
+}
+
+//static int maincallback_pending;
+volatile int poll_loop_threaded;
+static volatile int interrupt_handler_threaded;
+unsigned int callbacks = 0;
+
+#if PollPeriod == 1
+int callevery_handler(_kernel_swi_regs *r, void *pw)
+#else
+_kernel_oserror *callevery_handler(_kernel_swi_regs *r, void *pw)
+#endif
+{
+#if 0
+    _kernel_oserror *e;
+
+    if (!maincallback_pending)
+    {
+        e=_swix(OS_AddCallBack, _INR(0,1), maincallback_veneer, pw);
+
+        if (!e)
+            maincallback_pending=1;
+    }
+#else
+    if (!poll_loop_threaded && !interrupt_handler_threaded && !devicefs_handler_threaded)
+    {
+        poll_loop_threaded = 1;
+        _kernel_irqs_on();
+        callbacks++;
+
+        if (!acu_loop)
+            master_init();
+
+        if (acu_loop)
+        {
+            ACU_Main();
+        }
+
+        poll_loop_threaded = 0;
+    }
+
+#endif
+
+#if PollPeriod == 1
+    return 1;
+#else
+    return NULL;
+#endif
+}
+
+#if 0
+
+_kernel_oserror *maincallback_handler(_kernel_swi_regs *r, void *pw)
+{
+    maincallback_pending=0;
+    callbacks++;
+
+    if (!acu_loop)
+        master_init();
+
+    if (acu_loop)
+        ACU_Main();
+
+    return NULL;
+}
+
+#endif
+
+unsigned long PIT_int_cnt;
+
+int tickerv_handler(_kernel_swi_regs *r, void *pw)
+{
+    PIT_int_cnt++;
+
+    acu_timer();
+
+    return 1;
+}
+
+#ifdef PODULEBASED
+
+extern void line_tx_int(void), line_rx_int(void);
+extern void enable_iomd_interrupts(void);
+extern ubyte line_io_enabled;
+extern ubyte dce_length_semaphore, dce_status_semaphore;
+
+static ubyte line_ints_enabled;
+
+void line_enable_interrupts(void)
+{
+    line_ints_enabled = TRUE;
+    enable_iomd_interrupts();
+}
+
+void line_disable_interrupts(void)
+{
+    line_ints_enabled = FALSE;
+    disable_iomd_interrupts();
+}
+
+void Install_Int(void)
+{
+    _swix(OS_Claim, _INR(0,2), TickerV, tickerv_veneer, private_word);
+}
+
+void Remove_Int(void)
+{
+    _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer, private_word);
+}
+
+void enable_int(void)
+{
+    sys_intr_disabled = FALSE;
+#ifdef TMLDEBUG
+    Printf("enabled_ints\n");
+#endif
+}
+
+void disable_int(void)
+{
+    sys_intr_disabled = TRUE;
+#ifdef TMLDEBUG
+    Printf("disabled_ints\n");
+#endif
+}
+
+volatile unsigned int total_irq_count, rx_irq_count, tx_irq_count;
+
+/*
+ * These functions deal with interrupts from the DSP. Need to be careful with
+ * reentrancy.
+ *
+ * podule_[rt]x_int are adapted from dce_line_[rt]x_int in DCE_crus.c.lineint
+ */
+static int podule_rx_int(void)
+{
+    dce_length_semaphore = get_register(DSP_CP_DATA_LENGTH);
+    dce_status_semaphore = get_register(DSP_CP_DATA_STATUS);
+
+    if (dce_status_semaphore)
+        dce_length_semaphore = get_register(DSP_CP_DATA_LENGTH);
+
+    if (dce_length_semaphore || dce_status_semaphore)
+    {
+        /*Printf("\021\002R\021\007");*/
+        if (line_io_enabled && line_ints_enabled && !sys_intr_disabled)
+        {
+            rx_irq_count++;
+            line_rx_int();
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+static int podule_tx_int(void)
+{
+   dce_length_semaphore = get_register(CP_DSP_DATA_LENGTH);
+   dce_status_semaphore = get_register(CP_DSP_DATA_STATUS);
+
+   if (dce_length_semaphore == 0 && dce_status_semaphore == 0)
+   {
+       /*Printf("\021\001T\021\007");*/
+       if (line_io_enabled && line_ints_enabled && !sys_intr_disabled)
+       {
+            tx_irq_count++;
+           line_tx_int();
+       }
+       return 1;
+   }
+
+   return 0;
+}
+
+
+#ifdef USE_IRQV
+int podule_int_handler(_kernel_swi_regs *r, void *pw)
+#else
+_kernel_oserror *podule_int_handler(_kernel_swi_regs *r, void *pw)
+#endif
+{
+    interrupt_handler_threaded=1;
+#ifdef USE_IRQV
+    /*
+     * Call podule_rx_int, then podule_tx_int, and if either of them
+     * does something, claim IrqV
+     */
+    /*Printf("\021\003IRQ:");*/
+
+    /* clear DSP interrupt */
+    get_register(CP_INTERRUPT);
+
+    if (line_ints_enabled)
+        dspdrv_CommRamHandler();
+
+    interrupt_handler_threaded=0;
+
+    return (podule_rx_int() | podule_tx_int()) ? 0 : (/*Printf("\021\007??\n"),*/ 1);
+#else
+    total_irq_count++;
+
+    /* clear DSP interrupt */
+    get_register(CP_INTERRUPT);
+
+    dce_line_tx_int();
+    dce_line_rx_int();
+
+    //callevery_handler(0, pw);
+
+    interrupt_handler_threaded=0;
+
+    return NULL;
+#endif
+}
+#endif
+
+void install_poll_dte_interrupt()
+{
+}
+
+void install_poll_voice_dte_interrupt()
+{
+}
+
+#ifdef DEBUG
+int main()
+{
+    int t, t2;
+    InitPktDescriptors();
+    init_trace();
+    eeprom_init();
+
+    t = _swi(OS_ReadMonotonicTime, _RETURN(0));
+
+    for (;;)
+    {
+        if (!acu_loop)
+        {
+            printf("master_init\n");
+            master_init();
+        }
+        if (acu_loop)
+        {
+            printf("ACU_Main\n");
+            ACU_Main();
+        }
+            printf("acu_timer\n");
+            acu_timer();
+    }
+
+    return 0;
+
+}
+#endif
+
+/*
+ * wait t milliseconds
+ */
+void riscos_pause(int t)
+{
+    int n, s=_swi(OS_ReadMonotonicTime, _RETURN(0));
+
+    do
+    {
+        n = _swi(OS_ReadMonotonicTime, _RETURN(0));
+    }
+    while ((n - s) * 10 < t);
+}
