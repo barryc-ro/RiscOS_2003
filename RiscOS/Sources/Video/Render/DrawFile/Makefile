@@ -199,7 +199,7 @@ o.callback:	h.realloc
 o.callback:	C:h.trace
 o.callback:	h.riscos
 o.callback:	OS:h.territory
-o.callback:	C:h.trace
+o.callback:	h.jc_trace
 o.declare:	c.declare
 o.declare:	OS:h.drawfile
 o.declare:	OS:h.types
@@ -293,7 +293,7 @@ o.riscos:	h.m
 o.riscos:	h.realloc
 o.riscos:	C:h.trace
 o.riscos:	h.riscos
-o.riscos:	C:h.trace
+o.riscos:	h.jc_trace
 o.riscosa: asm.riscosa
 o.riscosa: OS:Hdr.OS
 o.riscosa: OS:Hdr.Types
@@ -326,7 +326,7 @@ o.trfm:	OS:h.macros
 o.trfm:	OS:h.os
 o.trfm:	OS:h.types
 o.trfm:	h.muldiv
-o.trfm:	C:h.trace
+o.trfm:	h.jc_trace
 o.trfm:	h.trfm
 o.verify:	c.verify
 o.verify:	OS:h.macros
