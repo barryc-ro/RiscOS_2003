@@ -40,7 +40,7 @@ CD	= dir
 AWK	= awk
 
 # Debug flags
-
+THROWBACK = -Throwback
 DEFINES = ${DEBUG} -DCOMPAT_INET4 ${THROWBACK}
 #DEFINES = ${DEBUG} ${THROWBACK}
 COMMONFLAGS = -zM -c -Wp -depend !Depend ${INCLUDES} ${DEFINES}
