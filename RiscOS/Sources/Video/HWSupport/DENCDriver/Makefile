@@ -8,6 +8,7 @@
 # 10-Sep-99      BJGA   Created
 # 22-Oct-99      BJGA   Added McCabe targets
 # 28-Oct-99      BJGA   Added debug build
+# 25-Jan-00      BJGA   Modified to allow assembler source
 #
 
 #
@@ -48,12 +49,12 @@ C_ABSSYM = RISC_OSLib:o.c_abssym
 LIBSD    = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
 UNIXLIB  = TCPIPLibs:o.UnixLibzm
 
-RAMOBJS  =  o.CLI  o.Config  o.Mess  o.Module    o.ResMess  o.Service  o.SWI o.ModHdr
-ROMOBJS  =  o.CLI  o.Config  o.Mess  o.ModuleROM            o.Service  o.SWI o.ModHdr
-SOBJS    =  s.CLI  s.Config  s.Mess  s.Module               s.Service  s.SWI o.ModHdr
-IOBJS    =  i.CLI  i.Config  i.Mess  i.Module               i.Service  i.SWI o.ModHdr
-IOOBJS   = io.CLI io.Config io.Mess io.Module    o.ResMess io.Service io.SWI o.ModHdr
-DOOBJS   = do.CLI do.Config do.Mess do.Module    o.ResMess do.Service do.SWI o.ModHdr
+RAMOBJS  =  o.CLI  o.Config  o.Mess  o.Module    o.PaletteV o.ResMess  o.Service  o.SWI o.ModHdr
+ROMOBJS  =  o.CLI  o.Config  o.Mess  o.ModuleROM o.PaletteV            o.Service  o.SWI o.ModHdr
+SOBJS    =  s.CLI  s.Config  s.Mess  s.Module                          s.Service  s.SWI o.ModHdr
+IOBJS    =  i.CLI  i.Config  i.Mess  i.Module                          i.Service  i.SWI o.ModHdr
+IOOBJS   = io.CLI io.Config io.Mess io.Module    o.PaletteV o.ResMess io.Service io.SWI o.ModHdr
+DOOBJS   = do.CLI do.Config do.Mess do.Module    o.PaletteV o.ResMess do.Service do.SWI o.ModHdr
 
 KEYS     = key.610PAL key.610NTSC key.701PAL key.701NTSC
 
@@ -99,6 +100,7 @@ resources: messages-${CMDHELP}
         @echo ${COMPONENT}: Resource files copied
 
 clean:
+        ifthere s.Module then rm ${SOBJS}
         ifthere Messages then ${WIPE} Messages ${WFLAGS}
         ifthere linked   then ${WIPE} linked   ${WFLAGS}
         ifthere inst     then ${WIPE} inst     ${WFLAGS}
@@ -111,7 +113,6 @@ clean:
         ifthere rm       then ${WIPE} rm       ${WFLAGS}
         ifthere i        then ${WIPE} i        ${WFLAGS}
         ifthere o        then ${WIPE} o        ${WFLAGS}
-        ifthere s        then ${WIPE} s        ${WFLAGS}
         ${RM} h.ModHdr
         stripdepnd
         @echo ${COMPONENT}: Cleaned
