@@ -74,7 +74,6 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
@@ -90,9 +89,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -101,10 +98,3 @@ rm.IR: ${OBJS} ${CLIB}
 
 
 # Dynamic dependencies:
-o.Debug:	c.Debug
-o.Debug:	C:h.swis
-o.Debug:	C:h.kernel
-o.Debug:	C:h.kernel
-o.Module:	c.Module
-o.Module:	C:h.kernel
-o.Module:	C:h.swis
