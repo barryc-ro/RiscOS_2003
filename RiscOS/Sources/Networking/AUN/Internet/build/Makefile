@@ -39,7 +39,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS   = -depend !Depend -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
-CFLAGS   = -depend !Depend -zps1 -zM -ffa -Wanp ${INCLUDES} ${DFLAGS} ${OPTS}
+CFLAGS   = -depend !Depend -zps1 -zM -ffa -Wacnps ${INCLUDES} ${DFLAGS} ${OPTS} ${THROWBACK}
 DFLAGS   = -DKERNEL -DINET -DGATEWAY -DCOMPAT_43 -DCOMPAT_OLDSOCK \
            -DDIRECTED_BROADCAST -DMULTICAST #-DMROUTING -DIPFIREWALL \
            -DIPFIREWALL_VERBOSE -DFLASHY_SCROLLLOCK -DTCPTDEBUG -DTCPDEBUG \

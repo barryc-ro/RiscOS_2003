@@ -65,6 +65,9 @@ extern struct ifqueue pkintrq;
 u_char	etherbroadcastaddr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 #define senderr(e) { error = (e); goto bad;}
 
+static int if_module_addmulti(struct ifreq *ifr, struct ifnet *ifp);
+static int if_module_delmulti(struct ifreq *ifr, struct ifnet *ifp);
+
 /**********************************************************************/
 
 int
@@ -446,6 +449,7 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
     _kernel_oserror *e = NULL;
     struct ifaddr *ifa = (struct ifaddr *)data;
     struct ifreq *ifr = (struct ifreq *)data;
+    int error = 0;
     int s = splimp();
 
     r.r[0] = ifp->if_unit;
@@ -481,33 +485,12 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
 	break;
 
 #ifdef MULTICAST
-#define ifp_to_dib(ifp) ((struct dib *)(ifp->if_dib))
-        case SIOCADDMULTI:
-        case SIOCDELMULTI:
-
-/*	if (!(ifp_to_dib(ifp)->dib_inquire & INQ_FILTERMCAST)) {
-	        printf("Driver %s did not set INQ_FILTERMCAST (%08x)\n", ifp_to_dib(ifp)->dib_name,
-	        	ifp_to_dib(ifp)->dib_inquire);
-	}*/
-
-	if (ifp_to_dib(ifp)->dib_inquire & INQ_FILTERMCAST) {
-	        struct sockaddr_in *sin = (struct sockaddr_in *)&ifr->ifr_addr;
-	        int flags = (cmd == SIOCDELMULTI ? MULTICAST_ADDR_REL : MULTICAST_ADDR_REQ);
-	        u_char ipmulticast_mac[6];
-
-	        if (sin->sin_addr.s_addr == INADDR_ANY) {
-	                flags |= MULTICAST_ALL_ADDR;
-	        }
-	        else {
-	                flags |= MULTICAST_SPECIFIC_ADDR;
-	                ETHER_MAP_IP_MULTICAST(&sin->sin_addr, ipmulticast_mac);
-	        }
-		e = dci4_mc_request(ifp_to_dib(ifp), flags, ETHERTYPE_IP, ipmulticast_mac,
-			(void *)&sin->sin_addr);
-		if (e != NULL) printf(">> SWI error: %s\n", e->errmess);
-	}
-        break;
-#undef ifp_to_dib
+      case SIOCADDMULTI:
+	error = if_module_addmulti(ifr, ifp);
+	break;
+      case SIOCDELMULTI:
+	error = if_module_delmulti(ifr, ifp);
+	break;
 #endif
 
 	case SIOCSIFFLAGS:
@@ -552,6 +535,9 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
     }
 
     splx(s);
+
+    if (error)
+        return (error);
 
     /*
      * 950227 KWelton
@@ -631,3 +617,159 @@ ether_sprintf(ap)
 	*--cp = 0;
 	return (etherbuf);
 }
+
+#define ifp_to_dib(ifp) ((struct dib *)(ifp->if_dib))
+
+#ifdef MULTICAST
+static int if_module_addmulti(struct ifreq *ifr, struct ifnet *ifp)
+{
+    u_long addr;
+    int flags = MULTICAST_ADDR_REQ;
+    u_char hwaddr[6];
+    struct if_multi *ifm;
+    struct sockaddr_in *sin;
+    _kernel_oserror *e;
+    u_int typenlevel = ETHERTYPE_IP;
+
+    if (!(ifp_to_dib(ifp)->dib_inquire & INQ_FILTERMCAST))
+    	return 0;
+
+    if (ifr->ifr_addr.sa_family != AF_INET)
+        return EAFNOSUPPORT;
+
+    sin = (struct sockaddr_in *)&ifr->ifr_addr;
+    addr = sin->sin_addr.s_addr;
+
+    if (!IN_MULTICAST(ntohl(addr)) && addr != INADDR_ANY)
+        return EINVAL;
+
+    for (ifm = ifp->if_multiaddrs; ifm; ifm = ifm->ifm_next)
+    {
+        /* We know all addrs in the list are AF_INET */
+        if (((struct sockaddr_in *)&ifm->ifm_addr)->sin_addr.s_addr == addr)
+        {
+            ++ifm->ifm_refcount;
+            return 0;
+        }
+    }
+
+    /* New address - allocate it and link it in */
+    ifm = (struct if_multi *) malloc(sizeof(*ifm), M_IFMADDR, M_NOWAIT);
+    if (ifm == NULL)
+        return ENOBUFS;
+
+    ifm->ifm_next = ifp->if_multiaddrs;
+    ifm->ifm_refcount = 1;
+    ifm->ifm_addr = ifr->ifr_addr;
+    ifp->if_multiaddrs = ifm;
+
+    if (addr == INADDR_ANY)
+        flags |= MULTICAST_ALL_ADDR;
+    else
+        ETHER_MAP_IP_MULTICAST(&sin->sin_addr, hwaddr);
+
+    SET_FRAMELEVEL(typenlevel, FRMLVL_E2SPECIFIC);
+    e = dci4_mc_request(ifp_to_dib(ifp), flags, typenlevel, hwaddr, &sin->sin_addr);
+    if (e)
+    {
+        errtunnel = *e;
+        return ETUNNEL;
+    }
+
+    return 0;
+}
+
+static int if_module_delmulti(struct ifreq *ifr, struct ifnet *ifp)
+{
+    u_long addr;
+    int flags = MULTICAST_ADDR_REL;
+    u_char hwaddr[6];
+    struct if_multi *ifm, **p;
+    struct sockaddr_in *sin;
+    _kernel_oserror *e;
+    u_int typenlevel = ETHERTYPE_IP;
+
+    if (!(ifp_to_dib(ifp)->dib_inquire & INQ_FILTERMCAST))
+    	return 0;
+
+    if (ifr->ifr_addr.sa_family != AF_INET)
+        return EAFNOSUPPORT;
+
+    sin = (struct sockaddr_in *)&ifr->ifr_addr;
+    addr = sin->sin_addr.s_addr;
+
+    for (ifm = ifp->if_multiaddrs; ifm; ifm = ifm->ifm_next)
+    {
+        /* We know all addrs in the list are AF_INET */
+        if (((struct sockaddr_in *)&ifm->ifm_addr)->sin_addr.s_addr == addr)
+           break;
+    }
+
+    if (ifm == NULL)
+        return ENXIO;
+
+    if (--ifm->ifm_refcount != 0)
+        return 0; /* Still some claims to this record */
+
+    /* Unlink this record */
+    for (p = &ifp->if_multiaddrs; *p != ifm; p = &(*p)->ifm_next)
+        continue;
+
+    *p = (*p)->ifm_next;
+    free(ifm, M_IFMADDR);
+
+    if (addr == INADDR_ANY)
+        flags |= MULTICAST_ALL_ADDR;
+    else
+        ETHER_MAP_IP_MULTICAST(&sin->sin_addr, hwaddr);
+
+    SET_FRAMELEVEL(typenlevel, FRMLVL_E2SPECIFIC);
+    e = dci4_mc_request(ifp_to_dib(ifp), flags, typenlevel, hwaddr, &sin->sin_addr);
+    if (!e && addr == INADDR_ANY)
+    {
+        /* We've just released our "all addresses" claim. DCI requires us to reclaim
+         * all our individual claims.
+         */
+         e = if_module_reclaimmulti(ifp);
+    }
+
+    if (e)
+    {
+        errtunnel = *e;
+        return ETUNNEL;
+    }
+
+    return 0;
+}
+
+_kernel_oserror *if_module_reclaimmulti(struct ifnet *ifp)
+{
+    _kernel_oserror *e;
+    struct sockaddr_in *sin;
+    u_long addr;
+    struct if_multi *ifm;
+    u_char hwaddr[6];
+    u_int typenlevel = ETHERTYPE_IP;
+
+    SET_FRAMELEVEL(typenlevel, FRMLVL_E2SPECIFIC);
+
+    for (ifm = ifp->if_multiaddrs; ifm; ifm = ifm->ifm_next)
+    {
+        int flags = MULTICAST_ADDR_REQ;
+
+        /* Again, we know all addresses are AF_INET */
+        sin = (struct sockaddr_in *)&ifm->ifm_addr;
+        addr = sin->sin_addr.s_addr;
+
+        if (addr == INADDR_ANY)
+            flags |= MULTICAST_ALL_ADDR;
+        else
+            ETHER_MAP_IP_MULTICAST(&sin->sin_addr, hwaddr);
+
+        e = dci4_mc_request(ifp_to_dib(ifp), flags, typenlevel, hwaddr, &sin->sin_addr);
+        if (e) return e;
+    }
+
+    return NULL;
+}
+#endif
