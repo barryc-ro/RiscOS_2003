@@ -127,6 +127,7 @@ dirs:
 	${MKDIR} o
 	${MKDIR} linked
 	${MKDIR} map
+	${MKDIR} aof
 
 #
 # ROM target (re-linked at ROM Image build time)
