@@ -63,3 +63,4 @@ rm.ROMFonts: Hdr:Variables
 rm.ROMFonts: Hdr:ResourceFS
 rm.ROMFonts: Version
 rm.ROMFonts: Hdr:NDRDebug
+rm.ROMFonts: s.<System>.Fonts

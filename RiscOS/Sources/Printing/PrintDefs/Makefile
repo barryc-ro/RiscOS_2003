@@ -30,7 +30,7 @@ RESDIR = <resource$dir>.Resources.${COMPONENT}
 COMPONENT   = STBPrint
 RDIR        = Resources
 RSRC        = ResSrc
-LDIR        = ${RDIR}.${LOCALE}.${MACHINE}
+LDIR        = ${RDIR}.${LOCALE}.${SYSTEM}
 
 # Include these in the ROM module
 #

@@ -55,7 +55,7 @@ DFLAGS   =
 COMPONENT = SoundFX
 TARGET    = aof.SoundFX
 OBJS      = o.CMHGSndFX o.SoundFX
-RDIR      = Resources.<Machine>
+RDIR      = Resources.<System>
 EXPORTS   =
 
 #
