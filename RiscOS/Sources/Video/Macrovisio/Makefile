@@ -46,7 +46,11 @@ rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom modules built
 
 clean:
-	-${WIPE} rm ~CR~V
+	${RM} rm.MacroA
+	${RM} rm.MacroB
+	${RM} rm.MacroC
+	${RM} rm.MacroD
+	-${WIPE} rm.${MACHINE} ~CFR~V
 	${RM} data.YUVTable
 	${STRIP}
         @echo ${COMPONENT}: module cleaned
