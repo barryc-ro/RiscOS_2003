@@ -47,12 +47,44 @@
 ;				Add calls to check for smart card to mosule init code. Needed 'cos ethernet
 ;				nc's will not exit looking for a server, thus soaktest module won't kick in.
 ; 20-Sep-96 			Sorted out the entry..exits to match.
+; 07 Mar 97 BAR   0.21          Fix bug in when calling NC_Registry module local work space is in ROM !
+;                               Change to use module work space.
+;                               This module uses the ToggleLED function in the POST Code, this has been updated
+;                               to handle two control lines for the LED'sm thus this code now ok.
+; 10 Mar 97                     Get the date string correct in the module header ....
+; 14 Mar 97 BAR   0.22          Add 640X480 VGAScreen mode switch.
+; 09 Apr 97 BAR   0.23          Change to new Managed Access SW instead of NCRegistry SWI.
+; 06 Jun 97 BAR   0.24          Change to use my own smart card reading cde
+;                               and not to use the managed access code.
+; 09 Jun 97                     Final check and testing
+; 11 Jun 97                     Removed exccess code from usermode_donowt -
+;                               tks Tim. Change card checking logic, if no
+;                               card then end, if not idle - loop.
+;                               Don't sit on Service_SmartCardRegistry.
+; 16 Jun 97 BAR   0.25          Sit on Service_Reset, then check smart card.
+; 18 Jun 97 BAR
+; 24 Jun 97 BAR   0.26          Don't check smart card on module init. debug
+;                               enabled when checking for service calls
+; 26 Jun 97                     Improve smart card checking code
+; 01 Jul 97 BAR   0.27          Add code to add a call back.
+;                               Pass correct value for ws pointer to call back
+; 02 Jul 97 BAR   0.28          Correct mistake in CheckSoakTest.
+; 02 Jul 97 BAR   0.29          Now sit on PostInit service call and then
+;                               add acall back.
+; 30 Jul 1997 RWB	0.30	Seriously re-write of smartcard handling code to
+;				make it work
+
 
         LEADR   Module_LoadAddr
 
+SCInterface_Read	        EQU	&04d342
+SCInterface_Status	        EQU	&04d34a
+XSCInterface_Read	        EQU	&06d342
+XSCInterface_Status	        EQU	&06d34a
 
-NCRegistry_Enquiry	EQU	&4d382				; DEFINE SWI names ! REMOVE REMOVE
-XNCRegistry_Enquiry	EQU	&6D382				; DEFINE SWI names ! REMOVE REMOVE
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 TAB     *       9
 LF      *       10
@@ -61,41 +93,44 @@ CR      *       13
 
 ; Values to write to ARM7500 IOLINES register to control LEDs
 
-LEDs_RedNotGreen	*	2_11111011	; bit 1 high, bit 2 low, other bits 1 so inputs
-LEDs_GreenNotRed	*	2_11111101	; bit 1 low, bit 2 high, other bits 1 so inputs
+LEDs_RedNotGreen * 2_11111011	; bit 1 high, bit 2 low, other bits 1 so inputs
+LEDs_GreenNotRed * 2_11111101	; bit 1 low, bit 2 high, other bits 1 so inputs
 
-; Timeouts for parallel port bootstrap
 
-Timeout_BGET		*	300		; go back to start of protocol if BGET takes longer than this
+Timeout_BGET			* 300	; timeouts for parallel port bootstrap
+Event_Expansion_SCInterface 	* 0
+Event_CardOK      		* 0	; card inserted and understood
+
+; workspace flag definitions
+flag_callback_set       * 1:SHL:0
+flag_claimed_events	* 1:SHL:1
 
 ; Header string from parallel port
-
 			GBLS	PTHeader
 PTHeader		SETS	"ProdTest"
 
 ; Module workspace
-
                         ^       0, wp
 EASISpaceAddress	#	4
-
+Flags			# 	4
+ [ SmartCardSupported
+Buffer			#	8
+ ]
  [ IncludeMPEGCode
 VideoPacketInUse	#	4
 VideoStreamHandle	#	4
-VideoPacketDescriptor	#	PacketDescriptorSize	; video packet descriptor
+VideoPacketDescriptor	#	PacketDescriptorSize ; video packet descriptor
 AudioPacketInUse	#	4
 AudioStreamHandle	#	4
-AudioPacketDescriptor	#	PacketDescriptorSize	; audio packet descriptor
+AudioPacketDescriptor	#	PacketDescriptorSize ; audio packet descriptor
  ]
 
-StackPtr		#	4			; flat stack ptr inside bootstrap
-
-PoduleBuffer      	#       16      		; podule header
-
+StackPtr		#	4	; flat stack ptr inside bootstrap
+PoduleBuffer      	#       16      ; podule header
  [ international
-MessageFile_Block #     16
-MessageFile_Open  #     4
+MessageFile_Block 	#     	16
+MessageFile_Open  	#     	4
  ]
-
 
 
 Module_WorkspaceSize * :INDEX: @
@@ -106,7 +141,7 @@ Module_BaseAddr
 
         &       0                               ; no app start entry
         &       Mod_Init    -Module_BaseAddr
-        &       Mod_Die     -Module_BaseAddr
+        &       Mod_Final   -Module_BaseAddr
         &       Mod_Service -Module_BaseAddr
         &       Mod_Title   -Module_BaseAddr
         &       Mod_HelpStr -Module_BaseAddr
@@ -116,28 +151,34 @@ Module_BaseAddr
         &       0				; SWI table
         &       0                               ; no swi name decode entry
 
-Mod_Title
-        =       "SoakTest", 0
+Mod_Title      =       "SoakTest", 0
 
-Mod_HelpStr
-        =       "SoakTest", TAB, "0.20 (20-Sep-96)", 0
+Mod_HelpStr    =       "SoakTest", TAB, "$Module_MajorVersion ($Module_Date)"
+ [ Module_MinorVersion <> ""
+               =       " $Module_MinorVersion"
+ ]
+               =       0
         ALIGN
 
 Mod_HC_Table
         Command SoakTest, 0, 0
 	Command Bootstrap, 0, 0
+ [ SmartCardSupported
+	Command CheckCard, 0, 0
+ ]
         =       0
 
-SoakTest_Help
-	=	"*SoakTest performs a soak test", CR
+SoakTest_Help	 = "*SoakTest performs a soak test", CR
+SoakTest_Syntax  = "Syntax: *SoakTest", 0
 
-SoakTest_Syntax
-        =       "Syntax: *SoakTest", 0
+Bootstrap_Help   = "*Bootstrap performs a parallel port bootstrap", CR
+Bootstrap_Syntax = "Syntax: *Bootstrap", 0
 
-Bootstrap_Help
-	=	"*Bootstrap performs a parallel port bootstrap", CR
-Bootstrap_Syntax
-	=	"Syntax: *Bootstrap", 0
+ [ SmartCardSupported
+CheckCard_Help   = "*CheckCard checks validity of soaktest card", CR
+CheckCard_Syntax = "Syntax: *CheckCard", 0
+ ]
+
         ALIGN
 
 ; **************************************************************************
@@ -145,123 +186,139 @@ Bootstrap_Syntax
 ;       Mod_Init - Initialisation entry
 ;
 
-Mod_Init Entry
-        LDR     r2, [r12]               ; have we got workspace yet ?
-        TEQ     r2, #0
-        BNE     %FT05
+Mod_Init 	ENTRY
+	        LDR     r2, [r12]	; have we got workspace yet ?
+        	TEQ     r2, #0
+	        BNE     %FT05
 
-        MOV     r0, #ModHandReason_Claim
-        LDR     r3, =Module_WorkspaceSize
-        SWI     XOS_Module
-        EXIT    VS
+        	MOV     r0, #ModHandReason_Claim
+	        LDR     r3, =Module_WorkspaceSize
+        	SWI     XOS_Module
+	        EXIT    VS
 
-; r2 -> workspace
+	        STR     r2, [wp]	; save address in my workspace pointer,
+05
+        	MOV     wp, r2
 
-        STR     r2, [r12]               ; save address in my workspace pointer,
-                                        ; so Tutu can free it for me when I die
+; clear workspace
+		MOV	r0, #0
+		STR	r0, Flags
 
  [ SmartCardSupported
-	; Ethernet NC's won't pass looking for a server, thus won't see the smart card !
-	; So check for the smart card on init.
-	BL	CheckForSmartCard		; On an NC we use the smart card.
-;	DREG	r0,"exit check for smart card at init, r0 = ",cc
-;	DLINE	"garbige"
-	CMP	r0, #2				; is r0 = 2 ? : BootStrap Smart Card
-	BLEQ    BootstrapWPEntry
-	CMP	r0, #1				; is r0 = 1 ? : SoakTest Smart Card
-	BLEQ	SoakTestWPEntry
+		BL	claim_vectors
+		EXIT	VS
  ]
-
-
-05
-        MOV     r12, r2
-
-; nothing else to do here now
-
-;	DLINE	"Exiting #3 "
-;	DREG	r13,"R13 = ",cc
-;	DREG	r14,"R14 = ",cc
-;	DREG	r15,"R15 = ",cc
-
-        CLRV
-        EXIT
+        	EXITS
 
 ; **************************************************************************
 ;
-;       Mod_Die - Die entry
+; Mod_Final
 ;
+Mod_Final	ENTRY	"r0-r3"
 
-Mod_Die * Module_BaseAddr	; nothing to do yet
+ [ SmartCardSupported
+ 		BL	release_vectors
+ ]
+		EXITS
 
 ; **************************************************************************
 ;
 ;       Mod_Service - Main entry point for services
 ;
 ; in:   R1 = service reason code
-;
 ; out:  R1 = 0 if we claimed it
 ;
 
- [ SmartCardSupported
-Service_SmartCardRegistryCalled *	&BA		; Could be changed if assigned a global name.
- ]
+Mod_Service 	ROUT
 
-Mod_Service ROUT
-	TEQ	r1, #Service_PostInit			; Was it a post init service call ?
- [ SmartCardSupported
-	TEQNE	r1, #Service_SmartCardRegistryCalled	; Was it a smart card registry call ?
- ]
-	MOVNE	pc, lr					; Not a service call we want - exit
-
-; Ok, we want the service call ... handle it
-	LDR     wp, [r12]
-	Entry   "r0-r6"
-; Check which service call and jump as reqd.
- [ SmartCardSupported
-	TEQ	r1, #Service_SmartCardRegistryCalled	; Was it a smart card registry call ?
-;	DLINE 	"Smart card - checking smc type ...."
-	BLEQ	CheckForSmartCard			; Yes : Jump to smart card code.
- ]
  [ JoysticksSupported
-	TEQNE	r1, #Service_PostInit			; Was it a post init service call ?
-	BLEQ	CheckForSoakConnector			; Yes : Jump to Joystick code.
+		TEQ	r1, #Service_PostInit	; look for post init
+		MOVNE	pc, lr
+ |
+ 		MOV	pc, lr
  ]
-	CMP	r0, #2					; is r0 = 2 ? : BootStrap Smart Card
-	BEQ	dobootstrap
-	CMP	r0, #1					; is r0 = 1 ? : SoakTest Smart Card
-	BEQ	dosoaktest
+		ENTRY
 
-;	DLINE	"Exiting #1 "
-;	DREG	r13,"R13 = ",cc
-;	DREG	r14,"R14 = ",cc
-;	DREG	r15,"R15 = ",cc
-	EXIT
+        	LDR     wp, [r12]	; sort out wp here rather than later
 
-;	DLINE	"Exiting module (aaa) "
-;	MOVNE	pc, lr					; Not a service call we want - exit
-
-; do soak test
-
-dosoaktest
-	BL	SoakTestWPEntry
-	EXIT
-
-; do parallel port bootstrap
-
-dobootstrap
-        BL      BootstrapWPEntry
-;	DLINE	"Exiting module ??? "
-;	DREG	r13,"R13 = ",cc
-;	DREG	r14,"R14 = ",cc
-;	DREG	r15,"R15 = ",cc
-	EXIT
-
-;
-; Here 'cos it was a post init service call.
-;
  [ JoysticksSupported
-; We have joystick hardware, check for a dongle
-; **************************************************************************
+		TEQ	r1, #Service_PostInit
+		BNE	%20
+		BL	CheckForSoakConnector
+
+		CMP	r0, #2		; is r0 = 2 ? : BootStrap Smart Card
+		BNE	%15
+		BL	BootstrapWPEntry
+		B	%30
+15
+		CMP	r0, #1		; is r0 = 1 ? : SoakTest Smart Card
+		BNE	%30
+		BL	SoakTestWPEntry
+		B	%30
+20
+ ]
+30
+		EXITS
+
+; *****************************************************************************
+
+ [ SmartCardSupported
+; *****************************************************************************
+; claim the event vector and enable the event
+;
+claim_vectors	ENTRY	"r0-r2"
+
+; claim vectors
+		MOV	r0, #EventV
+		ADDR	r1, event_handler
+		MOV	r2, wp
+		SWI	XOS_Claim
+		BVS	%10
+
+; enable expansion event
+		MOV	r0, #14			; enable
+		MOV	r1, #Event_Expansion
+		SWI	XOS_Byte
+                BVS   	%10
+
+                LDR	r0, Flags
+                ORR	r0, r0, #flag_claimed_events
+                STR	r0, Flags
+
+		EXITS
+; error
+10
+                STRVS   r0, [sp]
+                EXIT    VS
+
+; *****************************************************************************
+
+; *****************************************************************************
+; disable the event and release the vector
+release_vectors	ENTRY	"r0-r2"
+ 		LDR	r0, Flags
+ 		TST	r0, #flag_claimed_events
+ 		BEQ	%10
+
+; disable expansion event
+		MOV	r0, #13			; disable
+		MOV	r1, #Event_Expansion
+		SWI	XOS_Byte
+; release ventor
+		MOV	r0, #EventV
+		ADDR	r1, event_handler
+		MOV	r2, wp
+		SWI	XOS_Release
+10
+		EXITS
+; *****************************************************************************
+ ]
+
+
+; *****************************************************************************
+
+ [ JoysticksSupported
+; *****************************************************************************
 ;
 ;	CheckForSoakConnector
 ;
@@ -306,84 +363,265 @@ CheckForSoakConnector Entry "r1-r3"
 	EXIT
  ] ; end if joystick hardware suppot
 
+; *****************************************************************************
+
+
  [ SmartCardSupported
-; Smart Card hardware fitted, check them for special smart cards.
+event_handler	ENTRY	"r0-r2"
+		TEQ	r0, #Event_Expansion
+		TEQEQ	r1, #Event_Expansion_SCInterface
+		TEQEQ	r2, #Event_CardOK
+		EXITS	NE
+
+; look to see if callback already setup
+		LDR	r0, Flags
+		TST	r0, #flag_callback_set
+		EXITS	NE
+
+; indicate we are setting callback
+		ORR	r0, r0, #flag_callback_set
+		STR	r0, Flags
+
+		MOV	r2, pc			; push supervisor link register
+		ORR	r0, r2, #SVC_mode
+		TEQP	r0, #0
+		NOP
+
+		Push	"lr"
+	        ADDR    r0,event_callback
+        	MOV     r1,r12
+	        SWI     XOS_AddCallBack
+		Pull	"lr"
+
+		TEQP	r2, #0
+		NOP
+
+		EXITS
+; *****************************************************************************
 ;
-CheckForSmartCard	Entry
+; callback was set during post init
+;
+event_callback 	ENTRY "r0"
+
+		BL	release_vectors 	; detach from things
+		BL	CheckForSmartCard
+
+		CMP	r0, #2		; BootStrap Smart Card
+		BNE	%10
+		BL	standby_online
+		BL	BootstrapWPEntry
+		B	%20
+10
+		CMP	r0, #1		; SoakTest Smart Card
+		BNE	%20
+
+		BL	standby_online
+		BL	SoakTestWPEntry
+20
+		CMP	r0, #3		; continious test
+		BNE	%30
+		BL	standby_online
+		BL	ContTestEntry
+30
+		EXITS
+; *****************************************************************************
+
+standby_online 	ENTRY	"r0"
+
+		SWI	XStandby_State
+		BVS	%20
+		TST	r0, #1:SHL:0 	; bit 0 indicates state
+		BEQ	%20		; not in standby
+
+		MOV	r0, #0
+		SWI	XStandby_Online
+
+20
+		EXITS
+
 ; **************************************************************************
 ;
-;	CheckForSmartCard
+check_card_nothing  	= "SoakTest card not inserted",0
+check_card_soaktest 	= "SoakTest card inserted",0
+check_card_plip		= "PLIP card inserted",0
+check_card_cont		= "Continious self test card inserted",0
+
+CheckCard_Code 	ENTRY "r0-r2"
+		LDR	wp, [r12]
+
+		BL	CheckForSmartCard
+		CMP	r0, #0
+		BNE	%10
+		ADRL	r0, check_card_nothing
+		B	%40
+10
+		CMP	r0, #1
+		BNE	%20
+		ADRL	r0, check_card_soaktest
+		B	%40
+20
+		CMP	r0, #2
+		BNE	%30
+		ADRL	r0, check_card_plip
+		B	%40
+30
+		CMP	r0, #3
+		BNE	%50
+		ADRL	r0, check_card_cont
+40
+		SWI	XOS_Write0
+		SWI	XOS_NewLine
+50
+		EXITS
+; **************************************************************************
+
+; **************************************************************************
+continious_test_command = "ServiceTestCont 0",0
+
+ContTestEntry	ENTRY	"r0"
+		ADRL	r0, continious_test_command
+		SWI	XOS_CLI
+
+		EXITS
+; **************************************************************************
+
+; **************************************************************************
+;
+; CheckForSmartCard
 ;
 ; in:	-
-; out:	r0 = 0 => no smart card, data not vlaid or an error occured => dont do anything.
+; out:	r0 = 0 => no smart card, data not vlaid or an error occured
 ;	r0 = 1 => soak smart card detected => perform soak test.
-;	r0 = 2 => plip smart card detected => perform bootstrap from parallel interface.
+;	r0 = 2 => plip smart card detected => perform bootstrap
+;	r0 = 3 => continuous self test detected
 ;
+; now reads a file and looks for ...
+;          Soak Test    PLIP
+; word 0 = &00000000    &00000000
+; word 1 = &beefcafe    &cafebeef
 
-smcrd_source		*	2		; constant indicateing that the
-						; smart card was the source for the
-						; data.
-scrd_enqbuf_size	*	16		; Size (bytes) of buffer
-scrd_enqbuf		% scrd_enqbuf_size	; reserve the memory - zeroed.
+SoakTestTag       EQU &BEEFCAFE	                ; Soak Test tag
+PLIPTestTag       EQU &CAFEBEEF                 ; PLIP Test tag
+ContTestTag	  EQU &DEADBEEF			; continious self test
+MSC_StatusIdle    EQU &00000000                 ; }
+MSC_StatusNoCard  EQU &00000001                 ; } Smart Card
+MSC_StatusBusy    EQU &00000002                 ; } status flags
+MSC_StatusError   EQU &00000003                 ; }
 
-1
-	=	"SOAK_ENABLE",0
-2
-	=	"PLIP_ENABLE",0
+BusyTimeout	* 500		; timeout period (cs) for busy poll
 
-; Note : Because we are asking for specific flags the registrary modeule
-; shifts the bits down to the LSB, therefore we are always looking at bit 0.
-; Not the bit specefied in the relevent documentation.
+index_filename 	= "/4e43/20",0
 
-smcrd_checksoak
-	ADR	r0,%BT1			; Address of tag to get data on
-	ADR	r1,scrd_enqbuf		; Address of buffer
-	MOV	r2,#scrd_enqbuf_size	; Size of the buffer
-	SWI	XNCRegistry_Enquiry	; Make the SWi call
-					; V bit set (VS) if error
-	BVS	smcrd_end		; error -exit.
+CheckForSmartCard	Entry "r1-r5"
 
-	CMP	r0,#4			; Is length of data 4 bytes ?
-	CMPEQ	r1,#smcrd_source	; Does the data cone from the smart card ?
-	BLNE	smcrd_checkplip		; Not right size, not from smart card check for plip
+; look for card being present
+		BL      usermode_donothing
+		SWI     XSCInterface_Status	; get smart card status
 
-	ADR	r1,scrd_enqbuf		; Address of buffer
-	LDR	r0,[r1]			; get contents of buffer
-	AND	r0,r0,#1		; mask off all but bit 0
-	CMP	r0,#1			; is bit 0 = 1 ?
-	BLNE	smcrd_checkplip		; if <> 1, then check for plip
-	MOVEQ	r0,#1			; if == 1, then r0= 1 - soak flag
-	EXIT
+		CMP	r0, #MSC_StatusNoCard
+		CMPNE	r0, #MSC_StatusError
+		BEQ	sc_end
 
-smcrd_checkplip
-	ADR	r0,%BT2			; Address of tag to get data on
-	ADR	r1,scrd_enqbuf		; Address of buffer
-	MOV	r2,#scrd_enqbuf_size	; Size of the buffer
-	SWI	XNCRegistry_Enquiry	; Make the SWi call
-					; V bit set (VS) if error
-	BVS	smcrd_end		; error -exit.
+		CMP	r0, #MSC_StatusBusy
+		BNE	%10
 
-	CMP	r0,#4			; Is length of data 4 bytes ?
-	CMPEQ	r1,#smcrd_source	; Does the data cone from the smart card ?
-	BLNE	smcrd_end		; Not right size, not from smart card - exit
+; card interface seems to be busy, look for completion
+		SWI	XOS_ReadMonotonicTime
+		ADD	r3, r0, #BusyTimeout
+5
+		BL      usermode_donothing
+		SWI     XSCInterface_Status	; get smart card status
+		BVS	sc_end
+		CMP	r0, #MSC_StatusIdle
+		BEQ	%10
+		CMP	r0, #MSC_StatusNoCard
+		CMPNE	r0, #MSC_StatusError
+		BEQ	sc_end
 
-	ADR	r1,scrd_enqbuf		; Address of buffer
-	LDR	r0,[r1]			; get contents of buffer
-	AND	r0,r0,#1		; mask off all but bit 0
-	CMP	r0,#1			; is bit 0 = 1 ?
-	MOVNE	r0,#0                   ; if <> then r0 = 0 - don't do anything
-	MOVEQ	r0,#2			; if ==, then r0= 2 - plip flag
-	EXIT
+		SWI	XOS_ReadMonotonicTime	; check timeout
+		CMP	r0, r3
+		BLE	%5
+		B	sc_end
 
-smcrd_end
-	MOV	r0,#0			; don't do anything
-	EXIT				; exit from here
+10
+; read the card
+	        MOV     r0,#0                           ; flags
+        	ADR     r1,index_filename               ; filename
+	        MOV     r2,#0                           ; start offset
+        	ADR	r3,Buffer   		        ; results buffer
+	        MOV     r4,#8                           ; length
+        	MOV     r5,#0                           ; chv code
+	        MOV     r6,#0                           ; chv number
+        	SWI     XSCInterface_Read
+		BVS	sc_end       	        	; error -exit
+
+sc_read_wait_not_busy
+	        SWI     XSCInterface_Status     ; get smart card status
+        	CMP     r0,#MSC_StatusError
+	        BEQ	sc_end			; error -exit.
+        	BL      usermode_donothing      ; ensure callbacks get flushed
+	        CMP     r0,#MSC_StatusBusy
+        	BEQ     sc_read_wait_not_busy
+
+; Buffer now has the file that we asked to read, look for magic numbers
+; check for first word of zero
+		ADR	r0, Buffer		; get buffer pointer
+        	LDR     r1, [r0, #0]		; look at first word
+        	CMP	r1, #0			;   check for 0
+        	BNE	sc_end
+
+; check second word for soaktest value of <strange magic word>
+		LDR	r1, [r0, #4]		; look at second word
+		LDR 	r2, =SoakTestTag
+	        CMP     r1, r2
+	        BNE	%20
+	        MOV	r0, #1			; indicate soak test card
+	        EXITS
+20
+
+; check second word for continious test value of <strange magic word>
+		LDR 	r2, =ContTestTag
+	        CMP     r1, r2
+	        BNE	%30
+	        MOV	r0, #3			; indicate continious test card
+	        EXITS
+30
+
+; check second word for plip value of <strange magic word>
+		LDR 	r2, =PLIPTestTag
+	        CMP     r1, r2
+	        BNE	sc_end
+ 		MOV	r0, #2
+ 		EXITS
+
+sc_end
+		MOV	r0,#0			        ; don't do anything
+		EXITS					; ignore error
+
+; *****************************************************************************
+
+; *****************************************************************************
+;
+; Execute a SWI in user mode to trigger callbacks
+usermode_donothing ENTRY   "r0-r1"
+
+  	      	TEQP 	pc, #0                     ; To user mode
+        	MOV 	r0, #0
+	        MOV 	r1, #1
+        	SWI 	XOS_Byte
+	        SWI 	XOS_EnterOS                 ; Back to SVC mode
+
+        	EXITS
+
  ] ; end if smart card hardware support
 
- [ IncludeMPEGCode
-; **************************************************************************
+; *****************************************************************************
+
+; *****************************************************************************
 ;
 ;	Routines for MPEG soak test
+
+ [ IncludeMPEGCode
 
 VideoPacketFreeRoutine Entry "r12"
 	LDR	r12, [r0, #PacketDescriptor_FreeWorkspace]
@@ -406,10 +644,13 @@ SoakTest_Code
 	LDR	wp, [r12]
 
 SoakTestWPEntry Entry "r7-r11"
+;        DLINE   "SoakTestWPEntry Entry r7-r11"
 
 SoakTestInternalEntry
+;        DLINE   "SoakTestInternalEntry"
 
  [ MPEGandNonMPEG
+;        DLINE   "if MPEGandNonMPEG"
 	MOV	r3, #0						; Get podule header for podule 0
         ADR     r2, PoduleBuffer
 	SWI	XPodule_ReadHeader
@@ -424,10 +665,12 @@ SoakTestInternalEntry
  ]
 
  [ MPEGOnly
+;        DLINE   "if MPEGOnly"
 	B	SoakTestMPEG
  ]
 
  [ NonMPEGOnly
+;        DLINE   "if NonMPEGOnly"
 	B	SoakTestNonMPEG
  ]
 
@@ -439,16 +682,43 @@ SoakTestInternalEntry
 ;    a pointer to a descriptor block - the new way.
 ;
  [ UseModeDescriptors
-;		Format, X Size, Y Size, Pixel Depth, Frame Rate, Terminator
 VGAMode
+;		Format, X Size, Y Size, Pixel Depth, Frame Rate, Terminator
+ [ VGAScreenMode = "800X600"
 		&	1,800,600,3,60,-1
-;		Format, X Size, Y Size, Pixel Depth, Frame Rate, Terminator
+ ]
+ [ VGAScreenMode = "640X480"
+		&	1,640,480,3,60,-1
+ ]
+ [ VGAScreenMode = "640X240"
+		&	1,640,240,3,60,-1
+ ]
+		&	1,800,600,3,60,-1       ; default
+
 NTSCMode
-		&	1,768,480,3,30,-1
 ;		Format, X Size, Y Size, Pixel Depth, Frame Rate, Terminator
+ [ NTSCScreenMode = "768X480"
+		&	1,768,480,3,30,-1
+ ]
+ [ NTSCScreenMode = "640X480"
+                &       1,640,480,3,30,-1
+ ]
+ [ NTSCScreenMode = "800X400"
+                &       1,800,600,3,30,-1
+ ]
+ [ NTSCScreenMode = "1024X768"
+                &       1,1024,768,3,35,-1
+ ]
+		&	1,768,480,3,30,-1       ; default
+
 PALMode
+;		Format, X Size, Y Size, Pixel Depth, Frame Rate, Terminator
+ [ PALScreenMode = "768X576"
 		&	1,768,576,3,25,-1
- |
+ ]
+		&	1,768,576,3,25,-1       ; default
+
+ | ; Don't use mode descriptors.
 ; 		Select mode 50 - 768 x 576 (16bpp)
 VGAMode		*	50
 ; 		Select mode 55 - 768 x 480 (16bpp)
@@ -477,6 +747,7 @@ SoakTestMPEG
 	SWI	XSTBState_Control
  ]
 
+;        DLINE   "11111111111111"
 	ADR	r1, VideoPacketDescriptor
 	MOV	r0, #0
 	STR	r0, [r1, #PacketDescriptor_Link]		; only one packet
@@ -790,11 +1061,13 @@ SoakTestNonMPEG	ROUT
 	BVS	ScreenModeErrorTrap				; If error, then jump to error report code.
 
 ; Turn the screen cursor off.
+;        DLINE   "cursor offf"
 	ADR	r0, ScreenCursorOff				; r0 = addr of data to turn the cursor off
 	MOV	r1, #ScreenCursorOffEnd - ScreenCursorOff	; r1 = length of the data
 	SWI	XOS_WriteN					; execue the data !
 
 ; Make a note of the start time
+;        DLINE   "start time"
 	SWI	XOS_ReadMonotonicTime				; Get the TIME
 	MOV	r8, r0						; Temporary copy in r8
  [ UseNCFrontPanelLEDs
@@ -804,6 +1077,7 @@ SoakTestNonMPEG	ROUT
 ; Now enter the main loop, escape is the only way out.
 
 10
+;        DLINE   "Enter main loop"
 	SWI	XOS_ReadEscapeState				; check for ESCAPE
 	BCS	%FT95						; and bomb out if we get it
 
@@ -826,12 +1100,17 @@ SoakTestNonMPEG	ROUT
 	ADRNE	r6, SoakOddStruct				; Odd screen display
 
  [ UseNCFrontPanelLEDs
+;        DLINE   "ncfront pannel leds"
 	; See if 0.5 seconds are up, if so toggle the LED's
 	SWI	XOS_ReadMonotonicTime				; Get the TIME
+;        DLINE   "Time time according to ....."
 	CMP	r0, r9						; is r0 >= r9+50 (0.5 Secs)
+;        DLINE   "Compared the time"
 	ADDPL	r9, r0, #50					; r0 >= r9+50 then add on 0.5 seconds
+;        DLINE   "Lets go forth and toggle "
 	BLPL	tl_Toggle_LEDs					; r0 >= r9+50 then toggle LEDs
  |
+;        DLINE   "stbstate mousle"
 	[ UseSTBStateModule
 	AND	r0, r1, #1					; r0 = 0 or 1
 	ADD	r0, r0, #1					; r0 = 1 or 2
@@ -907,9 +1186,9 @@ InvalidBoxType
         LDR     r0,=IOMD_Base				; r1 = IOMD Base addr
 	MOV	r1,#0					; clear out r1
         LDRB    r1, [r0, #IOMD_CLINES]			; r0 = contents of r0+&0C
-	MOV	r2,#&FF-IOMD_STANDBY_LED_BIT		; create a mask
+	MOV	r2,#&FF-IOMD_LED_BITS		        ; create a mask
 	AND	r1,r2,r1				; Clear the stand-by LED bit.
-	ORR	r1,r1,#IOMD_IOLINES_INPUTS		; OR with the default I/O settings
+	ORR	r1,r1,#IOMD_C_ReadMask  		; OR with the default I/O settings
 	STRB	r1,[r0, #IOMD_CLINES]			; store a byte of r1 in to loc pointed to by r0
  |
 	[ UseSTBStateModule
@@ -1017,7 +1296,7 @@ RestartBootstrap
 	TEQ	r1, #0				; is stream already open?
 	BNE	%FT05				; if so then skip this
 
-	DLINE	"Opening Parallel stream"
+;        DLINE	"Opening Parallel stream"
 
 ;	ADRL	r0, CloseDevices
 ;	SWI	XOS_CLI
@@ -1068,14 +1347,14 @@ PTHeaderStringEnd
 
 	BL	GetWord
 	MOV	r6, r0
-	DREG	r6, "Module length = &"
+;        DREG	r6, "Module length = &"
 
 	MOV	r0, #ModHandReason_Claim
 	MOV	r3, r6
 	SWI	XOS_Module
 	BVS	%FT90
 
-	DLINE	"Reading module data", cc
+;        DLINE	"Reading module data", cc
 
 	MOV	r8, r2				; r8 -> module block
 	MOV	r7, #0				; current offset in module block
@@ -1098,20 +1377,20 @@ PTHeaderStringEnd
 ; we've received all the data, now read the checksum
 
 	SWI	XOS_NewLine
-	DLINE	"Received all data, reading checksum"
+;        DLINE	"Received all data, reading checksum"
 
 	BL	GetWord
 	TEQ	r0, r5
 	BNE	%FT50				; [checksum incorrect]
 
-	DLINE	"Checksum correct, closing parallel stream"
+;        DLINE	"Checksum correct, closing parallel stream"
 ;	DREG	r1,"Closing handle ",cc
 
 	MOV	r0, #0				; r0 = 0 = close file
 						; r1 = handle to close
 	SWI	XOS_Find			; close parallel stream
 
-	DLINE	"Initialising module"
+;        DLINE	"Initialising module"
 
 	MOV	r0, #ModHandReason_AddArea
 	MOV	r1, r8
@@ -1119,23 +1398,23 @@ PTHeaderStringEnd
 	MOV	r1, #0				; indicate stream not open
 	BVS	%FT40				; [module failed to initialise]
 
-	DLINE	"Module initialised OK, looking for another one"
+;        DLINE	"Module initialised OK, looking for another one"
 	MOV	r8, #0				; indicate no block claimed from RMA
 	B	RestartBootstrap
 
 ; module returned error in init
 
 40
-	DLINE	"Module returned error '", cc
+;        DLINE	"Module returned error '", cc
 	ADD	r0, r0, #4
 	SWI	XOS_Write0
-	DLINE	"' from initialisation, restarting"
+;        DLINE	"' from initialisation, restarting"
 	B	RestartAfterError
 
 ; checksum was incorrect
 
 50
-	DLINE	"Checksum incorrect"
+;        DLINE	"Checksum incorrect"
 RestartAfterError
 	LDR	r13, StackPtr
 	TEQ	r8, #0				; if we have a block claimed from RMA
@@ -1148,22 +1427,22 @@ RestartAfterError
 	B	RestartBootstrap
 
 90
-	DLINE	"Failed to allocate RMA block for module"
+;        DLINE	"Failed to allocate RMA block for module"
 	B	RestartAfterError
 98
 	; An escape has been detected
-	DLINE	"Escape detected ......"
+;        DLINE	"Escape detected ......"
 	TEQ	r1,#0				; is stream already open?
 	BEQ	%FT99				; not open, don't close
 						; parallel open, close it
-	DLINE	"Parallel: was open, closing it"
+;        DLINE	"Parallel: was open, closing it"
 ;	DREG	r1,"Closing handle ",cc
 	MOV	r0, #0				; r0 = 0 = close file
 						; r1 = handle to close
 	SWI	XOS_Find			; close parallel stream
 99
 	; exit stage right with CS
-;	DLINE	"Exit stage right with CS set"
+;        DLINE	"Exit stage right with CS set"
 	EXIT
 
 
@@ -1195,7 +1474,7 @@ GetByte Entry "r2"
 	CMP	r0, r11				; have we timed out?
 	BMI	%BT10				; [no, so loop]
 
-	DLINE	"BGET timeout, restarting"
+;        DLINE	"BGET timeout, restarting"
 	B	RestartAfterError
 
 20
@@ -1205,11 +1484,11 @@ GetByte Entry "r2"
 	SWI	XOS_BGet
 	EXIT	VC
 
-	DLINE	"OS_BGet returned error, restarting"
+;        DLINE	"OS_BGet returned error, restarting"
 	B	RestartAfterError
 
 90
-	DLINE	"OS_Args EOF check returned error, restarting"
+;        DLINE	"OS_Args EOF check returned error, restarting"
 	B	RestartAfterError
 
 
