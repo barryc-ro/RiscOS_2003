@@ -32,8 +32,20 @@
 #include "status.h"
 
 #ifndef NO_SECURE
+
+#define HEADER_DES_LOCL_H	/* prevents crypt() warning */
+#include "objects.h"		/* for NID */
+#include "pem.h"		/* for PEM_ */
+
 #include "ssl.h"
+
+/* port routines */
 extern _kernel_oserror *SSL_LibraryPresent( void );
+extern int SSL_verified(SSL *session);
+extern void riscos_ZM_Initialise( void );
+extern void *riscos_ZM_realloc( void *ptr, size_t newsize );
+extern void riscos_SSLLib_Init( void );
+
 #define CERT_VERIFY_DEPTH 10
 #endif
 
@@ -172,6 +184,7 @@ static _kernel_oserror *http_maptoriscos(http_maptoriscos_args *args);
 static _kernel_oserror *http_mapfromriscos(http_mapfromriscos_args *args);
 static _kernel_oserror *http_setfiletype(http_setfiletype_args *args);
 static _kernel_oserror *http_completedpart(http_completedpart_args *args);
+static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *r);
 static http_header_item *http_add_header_line( http_connection *c,
                                         char *key, char *value );
 static _kernel_oserror *http_prosecute( http_connection *c );
@@ -649,6 +662,9 @@ extern _kernel_oserror *module_swi_handler(int swinum, _kernel_swi_regs *regs, v
         /* CompletedPart */
         return http_completedpart((http_completedpart_args *) regs);
         break;
+    case HTTP_VerifyMessageDigest - HTTP_SWI_Base:
+        return http_verifymessagedigest((http_verifymessagedigest_args *) regs);
+        break;
     }
 
     return NULL;
@@ -1081,12 +1097,12 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
                         str=X509_NAME_oneline(X509_get_subject_name(peer));
                         /* str was allocated with malloc so we must free it*/
-                        http_add_header_line( c,"X-SSL-Certificate-Subject",
+                        http_add_header_line( c, SSL_HEADER_CERT_SUBJECT,
                                               str );
 			free(str);
 
                         str=X509_NAME_oneline(X509_get_issuer_name(peer));
-                        http_add_header_line( c, "X-SSL-Certificate-Issuer",
+                        http_add_header_line( c, SSL_HEADER_CERT_ISSUER,
                                               str );
 			free(str);
 
@@ -1094,11 +1110,11 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 }
 
                 if ( cipher )
-                    http_add_header_line( c, "X-SSL-Cipher",
+                    http_add_header_line( c, SSL_HEADER_CIPHER,
                                           cipher );
 
-                http_add_header_line( c, "X-SSL-Verified",
-                                      SSL_verified(c->SSL) ? "Yes" : "No"  );
+                http_add_header_line( c, SSL_HEADER_VERIFIED,
+                                      SSL_verified(c->SSL) ? SSL_HEADER_YES : SSL_HEADER_NO  );
 	    }
         }
 #endif
@@ -1383,7 +1399,7 @@ static _kernel_oserror *http_open(http_open_args *args)
     int rc;
     http_open_args args2 = *args;
     BOOL bQueued;
-    char *ptr;
+/*  char *ptr; */
 
 #if 0
     fdebugf(log_file, "Opening new conection.  Host = 0x%08lx, port = 0x%04x, object = '%s', fname = '%s'.\n\tHeaders stored at %p\n",
@@ -3137,3 +3153,143 @@ int cert_verify_callback( int ok, X509 *xs, X509 *xi, int depth, int error)
     return(ok);
 }
 #endif
+
+/*
+ * New function to use the crypto routines to verify a message digest against
+ * a public key and maybe a certificate.
+
+API:
+
+VerifyMessageDigest
+
+ IN
+   int    : flags
+          : type of key.certificate
+   char * : message data
+   int    : message data length
+   int    : digest type 
+   char * : digest received
+   int    : digest received length
+   char * : ptr to DER encoded public key
+   char * : filename of X509 certificate in PEM
+
+ OUT
+   Does it match or not? or error
+
+Here is what was sent to the NSA
+
+   API extension for HTTP-SSL module.
+   ==================================
+
+A new interface is created called HTTP_VerifyMessageDigest.
+
+The parameters to this are
+
+      flags word
+      pointer to and length of message
+      pointer to and length of encrypted message digest
+      message digest type
+      pointer to DER encoded public key
+      optional pointer to filename of X509 certificate in PEM or DER encoding
+
+If the X509 certificate is given then the public key is used to 
+verify the certificate and extract a new public key. This public
+key is then used to verify the message digest.
+
+If no certificate is given then the public key given is used to verify
+the message digest.
+
+The routine will return success or an error code giving at what point
+the failure to verify occurred. This will be one of
+   Input values bad in some way
+   Certificate failed to verify
+   Digest failed to verify
+
+   */
+
+static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *r)
+{
+#if defined(NO_SECURE) || !defined(VERIFY_MD)
+    return make_error(err_SSL_NOT_AVAILABLE);
+    r = r;
+#else
+    _kernel_oserror *e = NULL;
+    EVP_PKEY *pkey;
+    int rc = http_vmd_rc_BAD_INPUT;
+
+    /* get the initial public key - assume RSA type for now */
+    /* pp, length fields appear to be unused in RSA key stuff*/
+    pkey = d2i_PublicKey(EVP_PKEY_RSA, NULL, NULL, 0);
+    if (pkey == NULL)
+	rc = http_vmd_rc_BAD_INPUT;
+
+    /* if there's a certificate given then extract the public key from it to use instead */
+    if (pkey && r->in.certificate_filename)
+    {
+	FILE *f;
+	if ((f = fopen(r->in.certificate_filename, "rb")) != NULL)
+	{
+	    X509 *xcert;
+
+	    /* extract X509 certificate from file */
+	    if (r->in.flags & http_vmd_flag_CERT_DER)
+	    {
+		xcert = d2i_X509_fp(f, NULL);
+	    }
+	    else
+	    {
+		xcert = PEM_read_X509(f, NULL, 0); /* specify default callback function - could be awkward if it was called */
+	    }
+	    
+	    fclose(f);
+	    
+	    if (xcert)
+	    {
+		if (X509_verify(xcert, pkey))
+		{
+		    /* free the initial key */
+		    EVP_PKEY_free(pkey);
+
+		    /* replace with the new key */
+		    pkey = X509_extract_key(xcert);
+		    if (!pkey)
+			rc = http_vmd_rc_BAD_CERT;
+		}
+		else
+		    rc = http_vmd_rc_BAD_CERT;
+
+		X509_free(xcert);
+	    }
+	    else
+		rc = http_vmd_rc_BAD_INPUT;
+	}
+    }
+
+    /* if we have a public key by this point */
+    if (pkey)
+    {
+	EVP_MD_CTX md_ctx;
+	
+	/* set up and verify the message digest
+	 * assume MD5 only for now unless we need others
+	 */
+	EVP_VerifyInit(&md_ctx, EVP_md5());
+
+	EVP_VerifyUpdate(&md_ctx, (unsigned char *)r->in.message_data, r->in.message_data_len);
+
+	if (EVP_VerifyFinal(&md_ctx, (unsigned char *)r->in.digest_data, r->in.digest_data_len, pkey))
+	    rc = http_vmd_rc_VERIFIED;
+	else
+	    rc = http_vmd_rc_FAILED;
+	
+	/* free any key we have open */
+	EVP_PKEY_free(pkey);
+    }
+
+    r->out.rc = rc;
+    
+    return e;
+#endif
+}
+
+/* eof http.c */
