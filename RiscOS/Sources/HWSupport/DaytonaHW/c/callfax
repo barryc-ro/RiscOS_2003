@@ -1,0 +1,188 @@
+/* File:    callfax.c
+ * Purpose: Call the local fax machine
+ * Author:  Ben Laughton
+ * History: 1997-07-19: BAL: created
+ */
+
+
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+/* CLib */
+#include "kernel.h"
+#include <stddef.h>
+#include "swis.h"
+
+/* Miscellaneous libraries */
+#include "callx/callx.h"
+
+/* DaytonaHW */
+#include "callfax.h"
+#include "daytonahw.h"
+#include "faxreceivr.h"
+#include "global.h"
+#include "interrupts.h"
+#include "modulehdr.h"
+#include "pio_reg.h"
+
+
+
+
+/* =============================================================================
+ * Define contants
+ */
+
+#define LocalFaxRinger_Mask     (0x80)
+#define LocalFaxRinger_Active   (0x00)
+#define LocalFaxRinger_Inactive (0x80)
+
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+static int ring_pattern[] =
+{
+    200,    /* ring time in centiseconds */
+    400,    /* pause time in centiseconds */
+    -1      /* terminator */
+};
+
+static int pattern_stage = 0;
+static int state = Off;
+static bool calling_local_fax = FALSE;
+
+
+
+
+/* =============================================================================
+ * Declare function prototypes
+ */
+
+static _kernel_oserror *change_ring_state (_kernel_swi_regs *r,
+                                           void *pw,
+                                           void *handle);
+
+
+
+
+/* =============================================================================
+ * Define functions
+ */
+
+/* -----------------------------------------------------------------------------
++
+   call_local_fax
+
+   Call the local fax machine.
+
+   Inputs
+   action: new call state (on / off)
+   pw:        pointer to module's private workspace
+
+   Returns
+   success: NULL
+   failure: pointer to standard error block
+-
+ */
+
+extern _kernel_oserror *call_local_fax (const int action, void *pw)
+{
+    _kernel_oserror *e;
+
+    if (action == DaytonaHW_CallLocalFax_Start)
+    {
+        if (calling_local_fax)
+            return NULL;
+
+        calling_local_fax = TRUE;
+        pattern_stage = 0;
+        e = change_ring_state (NULL, pw, NULL);
+    }
+    else
+    {
+        if (!calling_local_fax)
+            return NULL;
+
+        e = callx_remove_callafter (change_ring_state, NULL);
+        pio_register_write (LocalFaxRinger_Mask, LocalFaxRinger_Inactive);
+        state = Off;
+        calling_local_fax = FALSE;
+    }
+
+    return e;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   change_ring_state
+
+   Change the ring state, cycling through the stages of the ring pattern.
+
+   Inputs
+   r:  pointer to register block
+   pw: pointer to module's private workspace
+
+   Returns
+   NULL
+-
+ */
+
+static _kernel_oserror *change_ring_state (_kernel_swi_regs *r,
+                                           void *pw,
+                                           void *handle)
+{
+    _kernel_oserror *e = NULL;
+
+
+    if (state == On)
+    {
+        state = Off;
+
+        pio_register_write (LocalFaxRinger_Mask, LocalFaxRinger_Inactive);
+
+        /* Fax off hook bit in processor I/O register only valid when ringer
+         * is off, so enable fax off hook detection now that the ringer is
+         * switched off.
+         */
+        e = local_fax_receiver_control (DaytonaHW_HookControl_Enable);
+    }
+
+    else
+    {
+        state = On;
+
+        /* Fax off hook bit in processor I/O register only valid when ringer
+         * is off, so disable fax off hook detection before switching the
+         * ringer on.
+         */
+        e = local_fax_receiver_control (DaytonaHW_HookControl_Disable);
+        if (e == NULL)
+            pio_register_write (LocalFaxRinger_Mask, LocalFaxRinger_Active);
+    }
+
+    if (e == NULL)
+    {
+        callx_add_callafter (ring_pattern[pattern_stage],
+                             change_ring_state,
+                             NULL);
+
+        if (ring_pattern[++pattern_stage] == -1)
+            pattern_stage = 0;
+    }
+
+    return NULL;
+
+    M_unused (r);
+    M_unused (pw);
+    M_unused (handle);
+}

@@ -1,0 +1,267 @@
+/* File:    module.c
+ * Purpose: Module initialisation, finalisation etc.
+ * Author:  B Laughton
+ * History: 14-Jul-97: BAL: created
+ */
+
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+/* CLib */
+#include <stddef.h>
+#include "kernel.h"
+#include <stdio.h>
+
+/* Miscellaneous libraries */
+#include "callx/callx.h"
+
+/* DaytonaHW */
+#include "buzzer.h"
+#include "callfax.h"
+#include "diallerb.h"
+#include "eeprom.h"
+#include "error.h"
+#include "fakeexch.h"
+#include "faxreceivr.h"
+#include "global.h"
+#include "led.h"
+#include "modem.h"
+#include "modulehdr.h"
+#include "watchdog.h"
+#include "wimpmsg.h"
+
+#include "daytonahw.h"
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+unsigned int g_flags = 0;
+
+
+
+
+/* =============================================================================
+ * Define functions
+ */
+
+/* -----------------------------------------------------------------------------
++
+   initialise
+
+   Module initialisation
+-
+ */
+
+#if CMHG_VERSION < 516
+extern _kernel_oserror *initialise (char *cmd_tail, int podule, void *pw)
+#else
+extern _kernel_oserror *initialise (const char *cmd_tail, int podule, void *pw)
+#endif
+{
+    _kernel_oserror *e = NULL;
+
+    callx_init (pw);
+    buzzer_initialise ();
+  #ifndef TEST
+    e = local_fax_receiver_initialise ();
+  #endif
+
+    return e;
+
+    M_unused (cmd_tail);
+    M_unused (podule);
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   finalise
+
+   Module finalisation
+-
+ */
+
+extern _kernel_oserror *finalise (int fatal, int podule, void *pw)
+{
+    led_finalise ();
+    buzzer_finalise ();
+    local_fax_receiver_control (DaytonaHW_HookControl_Disable);
+    fake_exchange (DaytonaHW_FakeExchange_Stop, 0, 0, 0, 0);
+
+    callx_remove_all_callbacks ();
+    callx_remove_all_callafters ();
+    callx_remove_all_calleverys ();
+
+    return NULL;
+
+    M_unused (fatal);
+    M_unused (podule);
+    M_unused (pw);
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   swi_handler
+
+   Inputs:
+   swi_num:          the SWI number
+   _kernel_swi_regs: pointer to SWI's input registers (may be modified for
+                     output).
+   pw:               modules's private word
+-
+ */
+
+extern void fake_exchange_debug (_kernel_swi_regs *r);
+extern void botch (_kernel_swi_regs *r);
+_kernel_oserror *swi_handler (int swi_num, _kernel_swi_regs *r, void *pw)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (swi_num)
+    {
+        case DaytonaHW_LED - DaytonaHW_00:
+            e = led ((unsigned int) r->r[1],       /* led to change */
+                     (unsigned int) r->r[2],       /* duration of new state */
+                     (unsigned int) r->r[3],       /* on time */
+                     (unsigned int) r->r[4]);      /* off time */
+            break;
+
+        case DaytonaHW_Buzzer - DaytonaHW_00:
+            e = buzzer ((bool) r->r[1],            /* new state */
+                        (unsigned int) r->r[2]);   /* new state duration */
+            break;
+
+        case DaytonaHW_ResetModem - DaytonaHW_00:
+            e = modem_reset (r->r[1],              /* modem to reset */
+                             r->r[2]);             /* serial */
+            break;
+
+        case DaytonaHW_CallLocalFax - DaytonaHW_00:
+            e = call_local_fax (r->r[1],          /* new state */
+                                pw);              /* module workspace */
+            break;
+
+        case DaytonaHW_ResetWatchdog - DaytonaHW_00:
+            watchdog_reset ();
+            break;
+
+        case DaytonaHW_FakeExchange - DaytonaHW_00:
+            e = fake_exchange (r->r[0],           /* reason code */
+                               r->r[1],           /* input buffer */
+                               r->r[2],           /* output buffer */
+                               r->r[3],           /* serial input stream */
+                               r->r[4]);          /* serial output stream */
+            break;
+
+        case DaytonaHW_HookControl - DaytonaHW_00:
+            e = local_fax_receiver_control (r->r[1]);   /* new state */
+            break;
+
+        case DaytonaHW_WimpMessages - DaytonaHW_00:
+            wimp_messages (r->r[0]);
+            break;
+
+        case DaytonaHW_ReadOTP - DaytonaHW_00:
+        {
+            int item;
+
+            item = r->r[0];     /* item to read */
+            if (item < 4)
+                e = EEPROM_ReadOTP (item, &r->r[0]);
+            else                /* presumably the Ethernet address */
+            {                   /* but cause error if not          */
+                e = EEPROM_ReadOTP (item, &r->r[0]);
+                if (!e)
+                    e = EEPROM_ReadOTP (item + 1, &r->r[1]);
+            }
+            break;
+        }
+
+        case DaytonaHW_ReadEEPROM - DaytonaHW_00:
+        {
+            int byte;
+
+            byte = EEPROM_ReadCMOS (r->r[0]);     /* offset */
+
+            if (byte != -1)
+            {
+                r->r[1] = byte;
+                e = NULL;
+            }
+            else
+                return M_error (Error_EEPROM_ReadFail);
+
+            break;
+        }
+
+        case DaytonaHW_WriteEEPROM - DaytonaHW_00:
+        {
+            int rc;
+
+            rc = EEPROM_WriteCMOS (r->r[0], r->r[1]);  /* offset, byte */
+
+            if (rc != -1)
+                e = NULL;
+            else
+                return M_error (Error_EEPROM_WriteFail);
+
+            break;
+        }
+
+#ifdef DEBUG
+        case DaytonaHW_Debug - DaytonaHW_00:
+            botch (r);
+            break;
+#endif
+
+        default:
+            return error_BAD_SWI;
+    }
+
+    return e;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   service_handler
+
+   Service call handler.
+
+   Inputs
+   service_number: service call number
+   r:              pointer to register block
+   pw:             module's private workspace pointer
+-
+ */
+
+extern void service_handler (int service_number, _kernel_swi_regs *r, void *pw)
+{
+    switch (service_number)
+    {
+        case Service_DiallerBStatus:
+            fakeexchange_check_dialler_status (r->r[0]);
+            break;
+
+        default:
+            break;
+    }
+
+    return;
+
+    M_unused (pw);
+}

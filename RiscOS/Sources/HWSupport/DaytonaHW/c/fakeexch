@@ -1,0 +1,957 @@
+/* File:    fakeexch.c
+ * Purpose: Fake a telephone exchange
+ * Author:  Ben Laughton
+ * History:
+ * 1997-07-21: MGR
+ * Created.
+ *
+ * 1997-07-22: BAL
+ * Integrated into DaytonaHW module.  Changed formatting to be consistent with
+ * other sources.
+ *
+ * 1997-09-11: SBF
+ * Increased dialtone sample amplitude and fixed modem buffer purge problem.
+ *
+ * 1997-10-02: MGR
+ * Dialtone sample amplitude not increased after all.  Better fix for dialtone
+ * replay termination.  Fix for possible failure to insert <DLE> sequence in
+ * modem buffer.
+ *
+ * 1997-10-08: MGR
+ * Remove pause time handling (no commas in captured).  Add silence time
+ * handling (if that much silence is detected, it is treated as if CNG).
+ * Remove overall timeout (silence time used instead).  Add error check for
+ * callafter restart.
+ *
+ * 1997-10-10: MGR
+ * Reinstate buffer purging when capturing first digit to ensure that the
+ * dialtone stops immediately.
+ *
+ * 1997-11-11: BAL, MGR
+ * Hangup script now sends <DLE><CAN> instead of fakeexchange itself (we
+ * beleive Dialler was flushing the buffers before the <DLE><CAN> actually got
+ * sent, which was making the test software fail.  No idea why we never observed
+ * this in 'normal' operation).
+ *
+ * 1997-11-27: BAL
+ * Added missing newline in hangup script on <DLE><CAN> - how embarrasing.
+ * Wonder how it ever worked at all really!
+ */
+
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+/* CLib */
+#include "kernel.h"
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include "swis.h"
+
+/* Toolbox */
+#include "wimp.h"
+
+/* Miscellaneous libraries */
+#include "callx/callx.h"
+
+/* DaytonaHW */
+#include "bufman.h"
+#include "daytonahw.h"
+#include "diallerb.h"
+#include "fakeexch.h"
+#include "global.h"
+#include "led.h"
+#include "modem.h"
+#include "modulehdr.h"
+
+
+
+
+/* =============================================================================
+ * Define contants
+ */
+
+#define DialtonePlayTimeSlice 4
+    /* In cs (make sure not too big -- underflow!) */
+    /* In practice the callafter will take 1 centisecond longer */
+    /* Must be smaller (after the 1 cs correction) than
+       SerialOutputBufferSize * 100 / DialTonemodemSampleRate
+       else sample play will underrun */
+
+#define DialtoneModemSampleRate 7200
+    /* In Hz */
+
+#define MaxDialtoneSampleSize 720
+    /* Needed for US (350 Hz + 440 Hz) at 7200 Hz */
+
+#define MaxDTMFCapturedSize 127
+    /* In characters, excluding terminator (must fit in Wimp message!) */
+
+/* ASCII control codes */
+#define NUL  0x00
+#define ETX  0x03
+#define LF   0x0a
+#define CR   0x0d
+#define DLE  0x10
+#define XON  0x11
+#define XOFF 0x13
+#define CAN  0x18
+
+enum
+{
+    State_Idle,
+    State_VoiceScript,
+    State_HangupScript,
+    State_CaptureNumber
+};
+
+enum
+{
+    Dialler_Waiting,
+    Dialler_FinishedScript,
+    Dialler_Failed
+};
+
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+static unsigned int dtmfcapturestart, dtmflastcaptured;
+static unsigned int /* dtmftimeout, */ dtmfsilenttime;
+static int          dialtoneDLErecd;
+static int          dialtonesamplesize;
+static char         dialtonesample[MaxDialtoneSampleSize];
+static char         dtmfcaptured[MaxDTMFCapturedSize + 1];
+static int          dtmfindex;
+static int          state = State_Idle;
+static unsigned int dtmfbufIDout, dtmfbufIDin;
+static void (*hangup_finished) (void);
+static _kernel_oserror error;
+#ifdef DEBUG
+static int bi;
+static char *b;
+static int *bt;
+static char *dtmfib;
+#endif
+
+
+
+
+/* =============================================================================
+ * Declare function prototypes
+ */
+
+/* In assembler code */
+extern char fakeexchangelo_generate_sample (int sfreq,
+                                            int snum,
+                                            int freq1,
+                                            int freq2);
+
+static _kernel_oserror *fake_exchange_callafter (_kernel_swi_regs *r,
+                                                 void *pw,
+                                                 void *handle);
+
+static _kernel_oserror *fake_exchange_callback (_kernel_swi_regs *r,
+                                                 void *pw,
+                                                 void *handle);
+
+static _kernel_oserror *fake_exchange_start (const int input_buffer,
+                                             const int output_buffer,
+                                             const int serial_in,
+                                             const int serial_out,
+                                          /* const int timeout, */
+                                             const int silenttime);
+
+static _kernel_oserror *fake_exchange_stop (void);
+
+static _kernel_oserror *fakeexchange_get_internalbufferIDs
+                       (const unsigned int dtmfbufferout,
+                        const unsigned int dtmfbufferin);
+
+static void fakeexchange_select_dialtone (int *const freq1, int *const freq2);
+
+static _kernel_oserror *fakeexchange_generate_dialtonesample
+                       (const int sfreq, const int freq1, const int freq2);
+
+static void monitor_voice_script (const unsigned int status);
+
+static void monitor_hangup_script (const unsigned int status);
+
+static void send_number_captured_message (void);
+
+static void send_overflow_message (void);
+
+static void send_os_error_message (void);
+
+/* static void send_timeout_message (void); */
+
+static void fakeexchange_send_message (const int code,
+                                       const char *const info);
+
+static void hangup (void (*fn) (void));
+
+
+
+/* =============================================================================
+ * Define functions
+ */
+
+/* -----------------------------------------------------------------------------
++
+   fake_exchange
+-
+ */
+
+extern _kernel_oserror *fake_exchange (const int          reason_code,
+                                       const int          input_buffer,
+                                       const int          output_buffer,
+                                       const int          serial_in,
+                                       const int          serial_out)
+{
+    _kernel_oserror *e = NULL;
+
+
+    if (reason_code == DaytonaHW_FakeExchange_Start)
+    {
+        e = fake_exchange_start (input_buffer,
+                                 output_buffer,
+                                 serial_in,
+                                 serial_out,
+/* Temporarily hardwaired at 15 seconds until Setup and Daytona can specify
+ * it.
+ */
+                                 1500);
+/*                                  silenttime); */
+    }
+    else
+        e = fake_exchange_stop ();
+
+    return e;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   fakeexchange_check_dialler_status
+
+   Check to see if the Dialler has finished executing the voice script (or if
+   it has aborted it wth an error!).
+
+   Inputs
+   status: dialler status word
+-
+ */
+
+extern void fakeexchange_check_dialler_status (unsigned int status)
+{
+    switch (state)
+    {
+        case State_VoiceScript:
+            monitor_voice_script (status);
+            break;
+
+        case State_HangupScript:
+            monitor_hangup_script (status);
+            break;
+
+        default:
+            break;
+    }
+
+    return;
+}
+
+
+
+
+static void monitor_voice_script (const unsigned int status)
+{
+    int dialler_state = Dialler_Waiting;
+    _kernel_oserror *e;
+
+    /* Turn the Dialler status word into easy to deal with numeric state
+     * codes for just the states we're interested in.
+     */
+    if ((status & Dialler_Connected) == Dialler_Connected &&
+        (status & Dialler_GeneralInfoMask) == 0)
+    {
+        dialler_state = Dialler_FinishedScript;
+    }
+    else if ((status & Dialler_ConnectedFlagsMask) == Dialler_Disconnected &&
+             (status & Dialler_GeneralInfoMask) > 0 &&
+             (status & Dialler_GeneralInfoMask) != Dialler_ExecutingScript_Dial)
+    {
+        dialler_state = Dialler_Failed;
+    }
+
+    switch (dialler_state)
+    {
+        case Dialler_FinishedScript:
+            /*  Get timing baselines */
+            _swix (OS_ReadMonotonicTime, _OUT (0), &dtmfcapturestart);
+            dtmflastcaptured = dtmfcapturestart;
+
+            /*  Initalise this and that... */
+            dialtoneDLErecd = FALSE;
+            dtmfindex = 0;
+
+#ifdef DEBUG
+            b = malloc (10240);
+            dtmfib = malloc (10240);
+            bt = malloc (10240*4);
+            bi = 0;
+#endif
+
+            /*  Start callafter */
+            e = callx_add_callafter (DialtonePlayTimeSlice,
+                                     fake_exchange_callafter,
+                                     NULL);
+            if (e != NULL)
+            {
+/*                 modem_reset (DaytonaHW_ResetModem_Local); */
+                hangup (send_os_error_message);
+            }
+            else
+                state = State_CaptureNumber;
+            break;
+
+        case Dialler_Failed:
+            state = State_Idle;
+    /*             modem_reset (DaytonaHW_ResetModem_Local); */
+            fakeexchange_send_message (
+                DaytonaHW_MFakeExchange_Error_DiallerFailed,
+               "");
+            break;
+
+        default:
+            /* not interested in any other states: come back when know for sure
+             * if failed or succeeded.
+             */
+            break;
+    }
+}
+
+
+
+
+static void monitor_hangup_script (const unsigned int status)
+{
+    int dialler_state = Dialler_Waiting;
+
+    /* Turn the Dialler status word into easy to deal with numeric state
+     * codes for just the states we're interested in.
+     */
+    if ((status & Dialler_ConnectedFlagsMask) == Dialler_Disconnected &&
+        (status & Dialler_GeneralInfoMask) == 0)
+    {
+        dialler_state = Dialler_FinishedScript;
+    }
+    else if ((status & Dialler_GeneralInfoMask) > 0 &&
+             (status & Dialler_GeneralInfoMask) !=
+                 Dialler_ExecutingScript_Hangup)
+    {
+        dialler_state = Dialler_Failed;
+    }
+
+    switch (dialler_state)
+    {
+        /* If the script failed then the modem should be reset anyway so
+         * proceed as if it worked.
+         */
+
+        case Dialler_FinishedScript:
+        case Dialler_Failed:
+            state = State_Idle;
+            if (hangup_finished != NULL)
+                (*hangup_finished) ();
+            break;
+
+        default:
+            /* not interested in any other states: come back when know for sure
+             * if failed or succeeded.
+             */
+            break;
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   fakeexchange_callafter_handler
+
+   Inputs
+   pw          (pointer to private word)
+   r           (input values of registers R0-R9)
+
+   Outputs
+   nothing
+
+   Assumptions
+   buffer set up, statics initialised
+   local modem port
+
+   Returns
+   NULL
+-
+ */
+
+static _kernel_oserror *fake_exchange_callafter (_kernel_swi_regs *r,
+                                                 void *pw,
+                                                 void *handle)
+{
+    callx_add_callback (fake_exchange_callback, NULL);
+
+    return NULL;
+
+    M_unused (r);
+    M_unused (pw);
+    M_unused (handle);
+}
+
+
+
+static _kernel_oserror *fake_exchange_callback (_kernel_swi_regs *r,
+                                                 void *pw,
+                                                 void *handle)
+{
+    int nfree, byte;
+    unsigned int t;
+    _kernel_oserror *e;
+
+    /* Check time */
+    _swix (OS_ReadMonotonicTime, _OUT (0), &t);
+
+#if 0
+    if (t - dtmfcapturestart > dtmftimeout)
+    {
+        /* Send <DLE><CAN> to terminate voice playback mode */
+        buffermanager_put_block (dtmfbufIDout, "\x10\x18", 2);
+/*         modem_reset (DaytonaHW_ResetModem_Local); */
+        hangup (send_timeout_message);
+        return NULL;
+    }
+#endif
+
+    /* Significant silence since last digit? */
+    if (dtmfsilenttime && t - dtmflastcaptured > dtmfsilenttime)
+    {
+       goto silence_detected;
+    }
+
+    /* Squeeze in some more sample iff not captured any DTMF yet */
+    if (dtmfindex == 0)
+    {
+        /* Squeeze in only as many as will fit!
+           The - 2 ensures there is always space for a
+           <DLE> sequence. */
+        nfree = buffermanager_get_nfree (dtmfbufIDout) - 2;
+
+        while (nfree >= dialtonesamplesize)
+        {
+            buffermanager_put_block (dtmfbufIDout,
+                                     dialtonesample,
+                                     dialtonesamplesize);
+            nfree -= dialtonesamplesize;
+        }
+    }
+
+    /* See if there are any bytes waiting to be read in... */
+    while ((byte = buffermanager_get_byte (dtmfbufIDin)) != -1)
+    {
+#ifdef DEBUG
+        _swix (OS_ReadMonotonicTime, _OUT (0), &bt[bi]);
+        b[bi] = byte;
+        dtmfib[bi] = (char) dtmfindex;
+        ++bi;
+#endif
+        if (byte == DLE)
+            dialtoneDLErecd = TRUE;
+        else
+        {
+            /* <DLE>d character? */
+            if (dialtoneDLErecd)
+            {
+                 /* DTMF digits?  Store! */
+                 if ((byte >= '0' && byte <= '9')
+                     || byte == '*' || byte == '#'
+                     || (byte >= 'A' && byte <= 'D'))
+                 {
+                     /* Pause sample playback if 1st digit */
+                     if (dtmfindex == 0)
+                     {
+#ifdef DEBUG
+                         bt[bi] = 0;
+                         b[bi] = 0;
+                         dtmfib[bi] = 0;
+                         ++bi;
+#endif
+                         /* Purge serial output buffer to make sure abort
+                            takes immediate effect -- don't need to worry
+                            about <DLE>s because sample is cunningly
+                            arranged not to have <DLE>s! */
+                         buffermanager_purge (dtmfbufIDout);
+
+                         /* Send <DLE>p to pause sample playback */
+                         buffermanager_put_block (dtmfbufIDout, "\x10p", 2);
+                     }
+
+                     /* Store digit, and complain if overflow */
+                     dtmfcaptured[dtmfindex++] = byte;
+                     if (dtmfindex == sizeof dtmfcaptured)
+                     {
+                         /* Send <DLE><CAN> to terminate voice playback mode */
+#if 0
+                         buffermanager_put_block (dtmfbufIDout, "\x10\x18", 2);
+/*                          modem_reset (DaytonaHW_ResetModem_Local); */
+#endif
+                         hangup (send_overflow_message);
+                         return NULL;
+                     }
+
+                     dtmflastcaptured = t;
+
+                 }
+
+                 /* CNG?  We're done! */
+                 if (byte == 'c')
+                 {
+                     silence_detected:
+
+                     dtmfcaptured[dtmfindex] = '\0';
+
+                     /* Send <DLE><CAN> to terminate voice playback mode */
+#if 0
+                     buffermanager_put_block (dtmfbufIDout, "\x10\x18", 2);
+/*                      modem_reset (DaytonaHW_ResetModem_Local); */
+#endif
+                     hangup (send_number_captured_message);
+                     return NULL;
+                 }
+
+                /* We don't care about other <DLE>d characters
+                 * (<DLE>u, <DLE>d, etc.)
+                 */
+            }
+
+            dialtoneDLErecd = FALSE;
+
+            /* We don't care about non-<DLE>d characters
+             * (expect only XON and XOFF)
+             */
+        }
+    }
+
+    /* Restart callafter */
+    e = callx_add_callafter (DialtonePlayTimeSlice,
+                             fake_exchange_callafter,
+                             NULL);
+    if (e != NULL)
+    {
+/*         modem_reset (DaytonaHW_ResetModem_Local); */
+        hangup (send_os_error_message);
+    }
+    else
+       state = State_CaptureNumber;
+    return NULL;
+
+    M_unused (r);
+    M_unused (pw);
+    M_unused (handle);
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   fake_exchange_start
+-
+ */
+
+static _kernel_oserror *fake_exchange_start (const int input_buffer,
+                                             const int output_buffer,
+                                             const int serial_in,
+                                             const int serial_out,
+                                          /* const int timeout, */
+                                             const int silenttime)
+{
+    _kernel_oserror *e;
+    int freq1, freq2;
+    char voice_script[] =
+        "TIMEOUT 5\n"
+        "\"\" AT#CLS=8;#VBS=8;#BDR=48;#VLS=4;A\n"
+        "\\r\\nVCON\\r\\n AT#VTX\n"
+        "\\r\\nCONNECT\\r\\n \\c\n";
+    char hangup_script[] =
+        "TIMEOUT 5\n"
+        "\"\" \\020\\030\\c\n"    /* <DLE><CAN> */
+        "\\r\\nVCON\\r\\n ATH\n"
+        "\\r\\nOK\\r\\n \\c\n";
+
+
+    if (state != State_Idle)
+    {
+        error.errnum = 0;
+        strcpy (error.errmess, "Fake exchange is busy.");
+        return &error;
+    }
+
+
+    /* Set up buffers */
+    e = fakeexchange_get_internalbufferIDs (output_buffer, input_buffer);
+    if (e) return e;
+
+    /* Generate sample */
+    fakeexchange_select_dialtone (&freq1, &freq2);
+    e = fakeexchange_generate_dialtonesample (DialtoneModemSampleRate,
+                                              freq1,
+                                              freq2);
+    if (e) return e;
+
+    /*  Copy time parameters */
+ /* dtmftimeout = timeout; */
+    dtmfsilenttime = silenttime;
+
+    /* Send AT commands for voice:
+     * "AT#CLS=8;#VBS=8;#BDR=48;#VLS=0;A" -> "OK"
+     * "AT#VTX" -> "CONNECT"
+     */
+    state = State_VoiceScript;
+    _swix (DiallerB_Dial, _INR (0, 6),
+
+           Dialler_Flags_UseGivenHandles | Dialler_Flags_DialScriptInMemory |
+           Dialler_Flags_HangupScriptInMemory,
+           0,
+           voice_script,
+           hangup_script,
+           0,    /* use current baud rate */
+           serial_in,
+           serial_out);
+
+    return NULL;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   fake_exchange_stop
+-
+ */
+
+static _kernel_oserror *fake_exchange_stop ()
+{
+    _kernel_oserror *e;
+
+    e = callx_remove_callafter (fake_exchange_callafter, NULL);
+
+#if 0
+    /* Send <DLE><CAN> to terminate voice playback mode */
+    buffermanager_put_block (dtmfbufIDout, "\x10\x18", 2);
+#endif
+
+    switch (state)
+    {
+        case State_VoiceScript:
+        case State_CaptureNumber:
+            hangup (NULL);
+            break;
+
+        default:
+            break;
+    }
+
+/*     modem_reset (DaytonaHW_ResetModem_Local); */
+    return e;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   fakeexchange_get_internalbufferIDs
+
+   Also fills in buffermanger service routine and workspace details.
+
+   Inputs
+   dtmfbufferout
+   dtmfbufferin
+
+   Outputs
+   dtmfbufIDout
+   dtmfbufIDin
+
+   Returns
+   success: NULL
+   failure: pointer to error block
+-
+ */
+
+static _kernel_oserror *fakeexchange_get_internalbufferIDs
+                       (const unsigned int dtmfbufferout,
+                        const unsigned int dtmfbufferin)
+{
+    _kernel_oserror *e;
+
+    e = _swix (Buffer_InternalInfo, _IN (0) | _OUTR (0 ,2),
+
+               dtmfbufferout,
+
+               &dtmfbufIDout,
+               &buffermanager_service_routine,
+               &buffermanager_service_pw);
+    if (e) return e;
+
+    e = _swix (Buffer_InternalInfo, _IN (0) | _OUT (0),
+               dtmfbufferin, &dtmfbufIDin);
+    if (e) return e;
+
+    return NULL;
+}
+
+
+/* -----------------------------------------------------------------------------
++
+   fakeexchange_select_dialtone
+
+   Outputs
+   freq1
+   freq2       (0 if none)
+-
+ */
+
+static void fakeexchange_select_dialtone (int *const freq1, int *const freq2)
+{
+    int territory;
+
+    _swix (Territory_Number, _OUT (0), &territory);
+
+    switch (territory)
+    {
+
+        case 1: /* GB */
+
+            *freq1 = 350;
+            *freq2 = 450;
+            break;
+
+        case 6: /* F */
+
+            *freq1 = 440;
+            *freq2 = 0;
+            break;
+
+        case 7: /* D */
+
+            *freq1 = 425;
+            *freq2 = 0;
+            break;
+
+        case 48: /* USA */
+        case 17: /* Canada1 */
+        case 18: /* Canada2 */
+        case 19: /* Canada */
+        default: /* 350 + 440 is a nice compromise for everybody */
+
+            *freq1 = 350;
+            *freq2 = 440;
+            break;
+
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   fakeexchange_generate_dialtonesample
+
+   Inputs
+   sfreq
+   freq1
+   freq2 (0 if none)
+
+   Assumptions
+   not called from interrupt routine
+
+   Returns
+   success: NULL
+   failure: pointer to error block
+-
+ */
+
+static _kernel_oserror *fakeexchange_generate_dialtonesample
+                       (const int sfreq, const int freq1, const int freq2)
+{
+    int f1, f2;
+    int i;
+
+    if (freq1 <= 0 || freq2 < 0 || sfreq <= 0)
+    {
+        static _kernel_oserror e =
+        {
+            DaytonaHW_MFakeExchange_Error_BadFrequency,
+            "Bad frequency"
+        };
+        return &e;
+    }
+
+    /* Need to find greatest common divisor of the frequencies... */
+    f1 = freq1;
+
+    if (freq2)
+    {
+        f2 = freq2;
+        while (f1 != f2) /* Euclid's algorithm */
+            if (f1 > f2)
+                f1 -= f2;
+            else
+                f2 -= f1;
+    }
+
+    f2 = sfreq;
+    while (f1 != f2) /* It's cool, eh? */
+        if (f1 > f2)
+            f1 -= f2;
+        else
+            f2 -= f1;
+
+    /* OK, now f1 contains g.c.d. of freq1, freq2 and sfreq */
+    dialtonesamplesize = sfreq / f1;
+
+    if (dialtonesamplesize > MaxDialtoneSampleSize)
+    {
+        static _kernel_oserror e =
+        {
+            DaytonaHW_MFakeExchange_Error_DialtoneOverflow,
+            "Internal sample buffer too small"
+        };
+        return &e;
+    }
+
+    /* Allow a few repeats if necessary to make sample a bit longer */
+    while (dialtonesamplesize <= MaxDialtoneSampleSize / 2)
+        dialtonesamplesize *= 2;
+
+    /*  Generate sample */
+    for (i = 0; i < dialtonesamplesize; ++i)
+    {
+         /* This does the FP work and will die if
+          * called from interrupt routine.
+          */
+         dialtonesample[i] = fakeexchangelo_generate_sample (sfreq, i,
+                                                             freq1, freq2);
+    }
+
+    return NULL;
+}
+
+
+
+
+static void send_number_captured_message (void)
+{
+    fakeexchange_send_message (DaytonaHW_MFakeExchange_CapturedNumber,
+                               dtmfcaptured);
+}
+
+
+
+
+static void send_overflow_message (void)
+{
+    fakeexchange_send_message (DaytonaHW_MFakeExchange_Error_DTMFOverflow,
+                               "");
+}
+
+
+
+
+static void send_os_error_message (void)
+{
+    fakeexchange_send_message (DaytonaHW_MFakeExchange_Error_OSError,
+                               "");
+}
+
+
+
+
+/*
+static void send_timeout_message (void)
+{
+    fakeexchange_send_message (DaytonaHW_MFakeExchange_Error_DTMFTimeout,
+                               "");
+}
+*/
+
+
+
+/* -----------------------------------------------------------------------------
++
+   fakeexchange_send_message
+
+   Broadcasts Wimp message.
+
+   Inputs
+   code        (return code)
+   info        (additional info)
+
+   Outputs
+   Wimp message
+-
+ */
+
+static void fakeexchange_send_message (const int code,
+                                       const char *const info)
+{
+    if ((g_flags & Flags_SuppressWimpMessages) == 0)
+    {
+        WimpMessage m;
+
+        m.hdr.size = sizeof (m.hdr) + sizeof (int) + (strlen (info) & ~3) + 4;
+        m.hdr.your_ref = 0;
+        m.hdr.action_code = Wimp_MDaytonaHW_FakeExchange;
+        m.data.words[0] = code;
+        strcpy (&m.data.bytes[4], info);
+        _swix (TaskModule_SendMessage, _INR (0, 4), 0, &m, 0, 0, 0);
+    }
+}
+
+
+
+
+static void hangup (void (*fn) (void))
+{
+    state = State_HangupScript;
+    hangup_finished = fn;
+    _swix (DiallerB_HangUp, 0);
+}
+
+
+
+
+#ifdef DEBUG
+extern void botch (_kernel_swi_regs *r)
+{
+
+    r->r[0] = (int) b;
+    r->r[1] = bi;
+    r->r[2] = (int) bt;
+    r->r[3] = (int) dtmfib;
+}
+#endif
+
