@@ -112,11 +112,11 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${APPDIR}
-        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot
-        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run
-        ${CP} ${RDIR}.Messages ${RESAPP}.Messages
-        ${CP} ${RDIR}.res ${RESAPP}.res
+        ${MKDIR} ${RESAPP}
+        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot ${CPFLAGS}
+        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run ${CPFLAGS}
+        ${CP} ${RDIR}.Messages ${RESAPP}.Messages ${CPFLAGS}
+        ${CP} ${RDIR}.res ${RESAPP}.res ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -158,6 +158,26 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+oz.ModuleWra1: s.ModuleWrap
+oz.ModuleWra1: s.AppName
+oz.ModuleWra1: Hdr:ListOpts
+oz.ModuleWra1: Hdr:Macros
+oz.ModuleWra1: Hdr:System
+oz.ModuleWra1: Hdr:SWIs
+oz.ModuleWra1: Hdr:CPU.Generic26
+oz.ModuleWra1: Hdr:IO.GenericIO
+oz.ModuleWra1: Hdr:RISCOS
+oz.ModuleWra1: Hdr:ModHand
+oz.ModuleWra1: Hdr:EnvNumbers
+oz.ModuleWra1: Hdr:Proc
+oz.ModuleWra1: Hdr:FSNumbers
+oz.ModuleWra1: Hdr:NewErrors
+oz.ModuleWra1: Hdr:Services
+oz.ModuleWra1: Hdr:ResourceFS
+oz.ModuleWra1: Hdr:MsgTrans
+oz.ModuleWra1: Hdr:Variables
+oz.ModuleWra1: Hdr:UpCall
+oz.ModuleWra1: s.ResFiles
 oz.handlers:	c.handlers
 oz.handlers:	C:h.kernel
 oz.handlers:	tbox:h.wimp
@@ -210,26 +230,6 @@ oz.windowops:	tbox:h.gadgets
 oz.windowops:	h.NCKeybd
 oz.windowops:	h.windowops
 oz.windowops:	h.NCKeybd
-oz.ModuleWra1: s.ModuleWrap
-oz.ModuleWra1: s.AppName
-oz.ModuleWra1: Hdr:ListOpts
-oz.ModuleWra1: Hdr:Macros
-oz.ModuleWra1: Hdr:System
-oz.ModuleWra1: Hdr:SWIs
-oz.ModuleWra1: Hdr:CPU.Generic26
-oz.ModuleWra1: Hdr:IO.GenericIO
-oz.ModuleWra1: Hdr:RISCOS
-oz.ModuleWra1: Hdr:ModHand
-oz.ModuleWra1: Hdr:EnvNumbers
-oz.ModuleWra1: Hdr:Proc
-oz.ModuleWra1: Hdr:FSNumbers
-oz.ModuleWra1: Hdr:NewErrors
-oz.ModuleWra1: Hdr:Services
-oz.ModuleWra1: Hdr:ResourceFS
-oz.ModuleWra1: Hdr:MsgTrans
-oz.ModuleWra1: Hdr:Variables
-oz.ModuleWra1: Hdr:UpCall
-oz.ModuleWra1: s.ResFiles
 oz.ModuleWrap: s.ModuleWrap
 oz.ModuleWrap: s.AppName
 oz.ModuleWrap: Hdr:ListOpts
