@@ -77,6 +77,18 @@ static int global_count = 0;
 
 /* --------------------------------------------------------------------------------------------- */
 
+#if DEBUG
+static void dump_frames(const fe_history_item *hist)
+{
+    int i;
+    STBDBG(("history: frame list for %p\n", hist));
+    for (i = 0; i < hist->n_frames; i++)
+    {
+	STBDBG(("  %d: '%s' = '%s'\n", i, hist->frame[i].specifier, hist->frame[i].url));
+    }
+}
+#endif
+
 /*
 static char *strip_fragment(const char *url)
 {
@@ -250,11 +262,15 @@ os_error *fe__global_write_list(FILE *f)
             STBDBG(("hist: frag '%s'\n", fp->fragment));
 #endif
 
+#if 1
+	fprintf(f, msgs_lookup("histAI"), i, i, item->title ? item->title : item->url);
+#else
 	fprintf(f, msgs_lookup("histAIa"), i);
 
 	url_escape_to_file(item->url, f);
 
         fprintf(f, msgs_lookup("histAIb"), item->title ? item->title : item->url);
+#endif
         fputc('\n', f);
     }
 
@@ -324,16 +340,41 @@ void fe_global_history_dispose(void)
     global_hist_list = NULL;
 }
 
+static fe_global_history_item *fe_global_lookup_index(int index)
+{
+    fe_global_history_item *item;
+    int i;
+    for (i = 0, item = global_hist_list; i < index && item; i++, item = item->next)
+	;
+    return item;
+}
+
 /* ---------------------------------------------------------------------------------------------*/
 
 static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
 {
     const fe_history_frame_item *hfi;
 
-    /* only wirte out an item if there are no frames */
-    if (item->n_frames > 1)
-	return FALSE;
+    /* only write out an item if there are no frames */
+/*     if (item->n_frames > 1) */
+/* 	return FALSE; */
     
+#if 1
+    hfi = &item->frame[0];
+
+    if (item->title)
+    {
+        char *frag = strrchr(hfi->url, '#');
+        if (frag)
+            fprintf(f, msgs_lookup("histRI"), i, i, item->title, frag);
+        else
+            fprintf(f, msgs_lookup("histAI"), i, i, item->title);
+    }
+    else
+    {
+        fprintf(f, msgs_lookup("histRI"), i, i, hfi->url);
+    }
+#else
     fprintf(f, msgs_lookup("histRIa"), i);
 
     hfi = &item->frame[0];
@@ -352,7 +393,7 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
     {
         fprintf(f, msgs_lookup("histRIb"), hfi->url);
     }
-
+#endif
     fputc('\n', f);
 
     return TRUE;
@@ -372,9 +413,9 @@ os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_
     s = getenv(PROFILE_NAME_VAR);
     fprintf(f, msgs_lookup("histR1"), strsafe(s));
 
-    /* onyl write out top level frame changes */
+    /* only write out top level frame changes */
     for (i = 0, item = start; item; i++, item = item->prev)
-	if (strcmp(item->frame[0].specifier, "_0") == 0)
+	if (item->title /* strcmp(item->frame[0].specifier, "_0") == 0 */)
 	    fe_hist_write_item(f, item, i);
 
     fputs(msgs_lookup("histRF"), f);
@@ -622,7 +663,7 @@ os_error *fe_history_move(fe_view v, int direction)
     }
 
     index = 0;
-#if 1
+
     do
     {
 	vv = fe_frame_specifier_decode(v, dest->frame[index].specifier);
@@ -630,9 +671,7 @@ os_error *fe_history_move(fe_view v, int direction)
 	    dest = dest->prev;
     }
     while (!vv && dest);
-#else    
-    vv = fe_frame_specifier_decode(v, dest->frame[index].specifier);
-#endif
+
     if (vv)
     {
 	/* set scroll offsets in target frame */
@@ -645,7 +684,52 @@ os_error *fe_history_move(fe_view v, int direction)
 	/* open the new url */
 	return frontend_open_url(dest->frame[index].url, vv, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
     }
+
     return makeerror(ERR_NO_HISTORY);
+}
+
+
+int fe_history_move_alpha_index(fe_view v, int index, char **new_url)
+{
+    fe_global_history_item *item = fe_global_lookup_index(index);
+    if (item)
+    {
+	*new_url = strdup(item->url);
+	return TRUE;
+    }
+    
+    return FALSE;
+}
+
+int fe_history_move_recent_index(fe_view v, int index, char **new_url)
+{
+    fe_history_item *item;
+    int i;
+
+    for (i = 0, item = v->last; i < index && item; i++, item = item->prev)
+	;
+
+    if (item)
+    {
+	fe_view vv = fe_frame_specifier_decode(v, item->frame[0].specifier);
+	
+	/* set scroll offsets in target frame */
+	vv->fetching_data.xscroll = item->frame[0].x_scroll;
+	vv->fetching_data.yscroll = item->frame[0].y_scroll;
+
+	/* set new hist in top frame */
+	v->fetching_data.hist = item;
+
+	if (vv == v)
+	{
+	    *new_url = strdup(item->frame[0].url);
+	    return TRUE;
+	}
+
+	/* open the new url */
+	frontend_open_url(item->frame[0].url, vv, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
+    }
+    return FALSE;
 }
 
 void fe_history_dispose(fe_view v)
@@ -683,6 +767,13 @@ int fe_history_visit(fe_view v, const char *url, const char *title)
 
     top = fe_find_top(v);
     item = top->hist_at;
+
+    if (v == top && item)
+    {
+        /* If the url is of the current page, ignore it */
+        if (item->frame[0].url && strcmp(url, item->frame[0].url) == 0)
+	    return 0;
+    }
     
 #if 0
     if (item)
@@ -744,7 +835,6 @@ static int locate_item(fe_history_item *hist, const char *specifier)
     return -1;
 }
 
-#if 1
 static int count_sections(const char *s)
 {
     int c, count = 0;
@@ -782,19 +872,6 @@ static int compare_specifiers(const void *o1, const void *o2)
 
     return 0;
 }
-
-#if DEBUG
-static void dump_frames(const fe_history_item *hist)
-{
-    int i;
-    STBDBG(("history: frame list for %p\n", hist));
-    for (i = 0; i < hist->n_frames; i++)
-    {
-	STBDBG(("  %d: '%s' = '%s'\n", i, hist->frame[i].specifier, hist->frame[i].url));
-    }
-}
-#endif
-#endif
     
 /* Store the current state of the view in 'hist_at' */
 
@@ -856,11 +933,9 @@ void fe_history_update_current_state(fe_view v)
 	hfi->url = strdup(url);
 	memcpy(hfi->specifier, specifier, sizeof(specifier));
 
-#if 1
 	qsort(hist->frame, hist->n_frames, sizeof(hist->frame[0]), compare_specifiers);
 #if DEBUG
 	dump_frames(hist);
-#endif
 #endif
     }
     else
@@ -879,6 +954,19 @@ void fe_history_update_current_state(fe_view v)
     }
     
     STBDBG(("history: %p '%s' write scroll pos %d\n", hist, hfi->url, state.o.y));
+}
+
+char *fe_history_lookup_specifier(fe_view v, const char *specifier, int *xoffset, int *yoffset)
+{
+    int index = locate_item(v->hist_at, specifier);
+    if (index != -1)
+    {
+	fe_history_frame_item *hfi = &v->hist_at->frame[index];
+	*xoffset = hfi->x_scroll;
+	*yoffset = hfi->y_scroll;
+	return hfi->url;
+    }
+    return NULL;
 }
 
 /* ---------------------------------------------------------------------------------------------*/

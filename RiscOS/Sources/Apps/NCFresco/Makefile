@@ -153,9 +153,7 @@ zzz=		-W \
 		-pedantic \
 		\
 
-UNIX_INCS=	-I../rocompat -I../RISC_OSLib $(BASE_INCS) -I../unix
-UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g \
-		-Wall \
+UNIX_GCC_FLAGS=-Wall \
 		-Wformat \
 		-Wimplicit \
 		-Wcomment \
@@ -169,6 +167,11 @@ UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g \
 		-Wno-switch \
 		-Wuninitialized \
 		-ansi -funsigned-char
+
+UNIX_INCS=	-I../rocompat -I../RISC_OSLib $(BASE_INCS) -I../unix
+UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g $(UNIX_GCC_FLAGS)
+#UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g 
+
 UNIX_VPATH=	../rocompat:../RISC_OSLib:$(BASE_VPATH)
 UNIX_OBJS=	basic1.o $(BASE_OBJS)
 UNIX_LIBS=	-lc -lm
@@ -260,8 +263,8 @@ PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
 		loformat.o cs2.o oscaff.o
-PLOTCHECK_LIBS=
-#PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
+#PLOTCHECK_LIBS=
+PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
 
 
 RECONS_INCS=	-I../reconsparse -I../RISC_OSLib

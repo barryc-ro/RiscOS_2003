@@ -45,8 +45,16 @@
 #endif
 #endif
 
+#ifdef STBWEB
+#define SELECT_BORDER_X		8 /* border size in OS units on each side */
+#define SELECT_BORDER_Y		8
+#else
 #define SELECT_BORDER_X		4 /* border size in OS units on each side */
 #define SELECT_BORDER_Y		4
+#endif
+
+#define SELECT_SPACE_X		4	/* space on either side of item */
+#define SELECT_SPACE_Y		4
 
 #define GRIGHT_SIZE		48
 
@@ -126,17 +134,17 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     rid_option_item *oi;
     int width, height;
     font_string fs;
-/*  int checked = FALSE; */
     int line_space;
     int i;
-#ifdef SELECT_CURRENT_FONT
     struct webfont *wf;
-#endif
 
     sel->doc = doc;
 
 #ifdef SELECT_CURRENT_FONT
     wf = &webfonts[ti->st.wf_index];
+#else
+    wf = &webfonts[WEBFONT_TTY];
+#endif
 
     line_space = wf->max_up + wf->max_down;
 
@@ -145,13 +153,7 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     if (font_setfont(wf->handle) != 0)
 	return;
-#else
-    line_space = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
-    width = webfont_tty_width(6, 1); /* Length of '<none>' in chars */
 
-    if (font_setfont(webfonts[WEBFONT_TTY].handle) != 0)
-	return;
-#endif
     height = 0;
 
     for(oi = sel->options; oi; oi = oi->next)
@@ -225,19 +227,14 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	}
     }
 
-    ti->width = width + 8 + 2*SELECT_BORDER_X;
+    ti->width = width + 2*SELECT_SPACE_X + 2*SELECT_BORDER_X;
     
     /* add on width for the the POPUP icon */
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	ti->width += GRIGHT_SIZE;
 
-#ifndef SELECT_CURRENT_FONT
-    ti->max_up = webfonts[WEBFONT_TTY].max_up + 6;
-    ti->max_down = webfonts[WEBFONT_TTY].max_down + 8;
-#else
-    ti->max_up = wf->max_up + 2*SELECT_BORDER_Y - 2;
-    ti->max_down = wf->max_down + 2*SELECT_BORDER_Y;
-#endif
+    ti->max_up = wf->max_up + SELECT_SPACE_Y + SELECT_BORDER_Y - 2;
+    ti->max_down = wf->max_down + SELECT_SPACE_Y + SELECT_BORDER_Y;
 #endif /* BUILDERS */
 }
 
@@ -283,15 +280,15 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 		       selected ? plinth_col_HL_L : plinth_col_L, 
 		       selected ? plinth_col_HL_D : plinth_col_D,
 		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
-		       hpos + SELECT_BORDER_X, bline - ti->max_down + SELECT_BORDER_Y,
-		       ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_BORDER_X*2,
-		       (ti->max_up + ti->max_down) - SELECT_BORDER_Y*2,
+		       hpos + SELECT_SPACE_X, bline - ti->max_down + SELECT_SPACE_Y,
+		       ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_SPACE_X*2,
+		       (ti->max_up + ti->max_down) - SELECT_SPACE_Y*2,
 		       doc );
 #else
     render_plinth(bg, render_plinth_IN,
-		  hpos + SELECT_BORDER_X, bline - ti->max_down + SELECT_BORDER_Y,
-		  ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_BORDER_X*2,
-		  (ti->max_up + ti->max_down) - SELECT_BORDER_Y*2,
+		  hpos + SELECT_SPACE_X, bline - ti->max_down + SELECT_SPACE_Y,
+		  ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_SPACE_X*2,
+		  (ti->max_up + ti->max_down) - SELECT_SPACE_Y*2,
 		  doc );
 #endif
 
@@ -337,11 +334,13 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     font_strwidth(&fstr);
 
     font_paint(str, font_OSCOORDS,
-	       hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - 20 - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1) + 10,
+	       hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1),
 	       bline);
 
     if ((sel->flags & rid_if_NOPOPUP) == 0)
-	render_plot_icon("gright", hpos + ti->width - GRIGHT_SIZE, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
+	render_plot_icon("gright",
+			 hpos + ti->width - GRIGHT_SIZE - SELECT_SPACE_X,
+			 bline + ((ti->max_up - ti->max_down) >> 1) - GRIGHT_SIZE/2 + 2);
 
 #endif /* BUILDERS */
 }
@@ -405,7 +404,7 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
             sel->menuh = frontend_menu_create( doc->parent,
                                                select_menu_callback, ti,
                                                sel->count, sel->items,
-                                               sel->size, ti->width-GRIGHT_SIZE-16 );
+                                               sel->size, ti->width - GRIGHT_SIZE - 2*SELECT_SPACE_Y - 2*SELECT_BORDER_Y );
         }
 
 	frontend_menu_raise(((rid_text_item_select *)ti)->select->menuh, box.x1, box.y1);

@@ -439,6 +439,8 @@ static rid_header *pparse_html_rh(void *h)
 
 static void html_free_context(HTMLCTX *htmlctx)
 {
+    mm_free(htmlctx->basetarget);
+
     mm_free(htmlctx);
 }
 

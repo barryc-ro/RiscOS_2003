@@ -985,7 +985,7 @@ static void be_dispose_doc_contents( be_doc doc )
 	be_refresh_document(0, doc);
 #endif
 
-#if DEBUG >= 2
+#if DEBUG > 2
     if (doc->rh) dump_header(doc->rh);
 #endif
 
@@ -2873,13 +2873,15 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 
 	if ( gbf_active(GBF_NEW_FORMATTER) )
 	{
+	    fe_view_dimensions fvd;
 	    { static int WARNING_FIX_ME_REQUIRED; }
 	    /* The 100 needs to be replaced with the window
                height. This is the value we get if a table has a
                height of 100%. Thus, just as widening the window might
                want to trigger a reformat, making the window taller
                can also potentially trigger a reformat. */
-	    rid_toplevel_format(doc, rh, NULL, rh->stream.fwidth, 100);
+	    frontend_view_get_dimensions(doc->parent, &fvd);
+	    rid_toplevel_format(doc, rh, NULL, rh->stream.fwidth, fvd.layout_height);
 	}
 	else
 	{
@@ -4563,6 +4565,9 @@ extern os_error *backend_doc_set_flags(be_doc doc, int mask, int eor)
     if (mask & be_openurl_flag_HISTORY)
 	doc->flags &= ~doc_flag_FROM_HISTORY;
 
+    if (mask & be_openurl_flag_FAST_LOAD)
+	doc->flags &= ~doc_flag_FAST_LOAD;
+
 
     if (eor & be_openurl_flag_ANTIALIAS)
 	doc->flags ^= doc_flag_ANTIALIAS;
@@ -4578,6 +4583,9 @@ extern os_error *backend_doc_set_flags(be_doc doc, int mask, int eor)
 
     if (eor & be_openurl_flag_HISTORY)
 	doc->flags ^= doc_flag_FROM_HISTORY;
+
+    if (eor & be_openurl_flag_FAST_LOAD)
+	doc->flags ^= doc_flag_FAST_LOAD;
 
     return NULL;
 }
@@ -4613,6 +4621,7 @@ extern void backend_set_margin(be_doc doc, wimp_box *margin)
     }
 }
 #endif
+
 
 extern os_error *backend_open_url(fe_view v, be_doc *docp,
 				  char *url, char *bfile, char *referer,
@@ -4666,7 +4675,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     ep = access_url(use_url,
 		    (flags & be_openurl_flag_NOCACHE ? access_NOCACHE : 0) |
 		    (flags & be_openurl_flag_HISTORY ? 0 : access_CHECK_EXPIRE) |
-		    (flags & be_openurl_flag_FAST_LOAD ? 0 : access_MAX_PRIORITY) |
+		    (flags & be_openurl_flag_FAST_LOAD ? access_MAX_PRIORITY : 0) |
 		    access_CHECK_FILE_TYPE | access_PRIORITY,
 		    NULL, bfile, referer,
 		    &antweb_doc_progress, &antweb_doc_complete, new, &new->ah);
@@ -4707,7 +4716,6 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 
 	case ANTWEB_ERROR_BASE + ERR_NO_ACTION:
 	    frontend_view_status(v, sb_status_FINISHED);
-	    ep = NULL;
 	    break;
 
 	default:
@@ -4945,6 +4953,12 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
 }
 
 #ifndef BUILDERS
+
+/*
+ * FIXME: Note that really this routine should enumerate the plugins
+ * for the ALL and HELPERS cases.
+ */
+
 static void be__plugin_abort_or_action(be_item item, int action)
 {
     plugin pp = NULL;

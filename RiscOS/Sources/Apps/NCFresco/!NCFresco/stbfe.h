@@ -161,6 +161,8 @@ extern int fe_encoding(fe_view v, int encoding);
 extern int caretise(void);
 extern int movepointer(void);
 
+extern void fe_no_new_page(fe_view v, os_error *e);
+
 /* From internal.h */
 
 extern int print__copies, print__ul;

@@ -2198,7 +2198,7 @@ void tb_event_handler(int event, fe_view v)
 	    if (config_display_control_top || !return_highlight(v, tbi, be_link_VERT | be_link_BACK))
 	    {
 		pointer_mode = pointermode_ON;
-		fevent_handler(fevent_SCROLL_DOWN, v);
+		fevent_handler(fevent_SCROLL_UP, v);
 		pointer_mode = pointermode_OFF;
 	    }
 	    break;

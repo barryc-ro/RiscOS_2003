@@ -563,8 +563,8 @@ static key_list platform_riscos_keys[] =
     { akbd_Sh + akbd_Ctl + akbd_Fn11,	    fevent_GLOBAL_OPEN_MEM_DUMP },
 
     { 27, fevent_TOOLBAR_EXIT },
-    { akbd_Fn+4, fevent_HISTORY_BACK },
-    { akbd_Fn+5, fevent_HISTORY_FORWARD },
+    { akbd_Fn+4, fevent_HISTORY_BACK+fevent_WINDOW },
+    { akbd_Fn+5, fevent_HISTORY_FORWARD+fevent_WINDOW },
     
     { 0 }
 };

@@ -1079,7 +1079,8 @@ void backend_remove_highlight(be_doc doc)
 
 #ifdef STBWEB
 	/* Give the window the input focus but no visable caret */
-	frontend_view_caret(doc->parent, 0, 0, -1, 0);
+	if (frontend_view_has_caret(doc->parent))
+	    frontend_view_caret(doc->parent, 0, 0, -1, 0);
 #endif
     }
 #ifndef STBWEB
@@ -1090,6 +1091,9 @@ void backend_remove_highlight(be_doc doc)
 
 be_item backend_read_highlight(be_doc doc, BOOL *had_caret)
 {
+    if (!doc)
+	return NULL;
+
     if (had_caret)
     {
 	*had_caret = doc->selection.tag == doc_selection_tag_TEXT &&

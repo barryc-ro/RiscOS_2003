@@ -612,6 +612,12 @@ int plugin_send_close(plugin pp)
     wimp_msgstr msg;
     message_plugin_close *close = (message_plugin_close *) &msg.data;
 
+    if (pp == NULL)
+	pp = helper_list;
+
+    if (pp == NULL)
+	return 0;
+    
     OBJDBG(("plugin: send close %p state %d\n", pp, pp->state));
 
     if (!pp->instance)
@@ -636,6 +642,12 @@ int plugin_send_focus(plugin pp)
     wimp_msgstr msg;
     message_plugin_focus *focus = (message_plugin_focus *) &msg.data;
 
+    if (pp == NULL)
+	pp = helper_list;
+    
+    if (pp == NULL)
+	return 0;
+    
     OBJDBG(("plugin: send focus %p state %d\n", pp, pp->state));
 
     if ((pp->opening_flags & plugin_opening_CAN_FOCUS) == 0)
@@ -664,6 +676,9 @@ int plugin_send_action(plugin pp, int new_action)
     if (pp == NULL)
 	pp = helper_list;
     
+    if (pp == NULL)
+	return 0;
+    
     OBJDBG(("plugin: send action %p state %d\n", pp, pp->state));
 
     /* Build message block */
@@ -687,6 +702,9 @@ int plugin_send_abort(plugin pp)
     /* if no plugin specified then use the top of the helper list */
     if (pp == NULL)
 	pp = helper_list;
+
+    if (pp == NULL)
+	return 0;
     
     OBJDBG(("plugin: send abort %p state %d\n", pp, pp->state));
 

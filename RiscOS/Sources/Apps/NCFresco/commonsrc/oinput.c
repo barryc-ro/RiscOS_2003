@@ -144,30 +144,30 @@ static int get_string_start(const char *str, int text_input_offset, int boxx, in
     
     if (numbers)
     {
-	x1 += (text_input_offset > 0 ? text_input_offset : 0) * NUMBERS_SPACING_X;
-	x2 += (slen > 0 ? slen-1 : 0) * NUMBERS_SPACING_X;
+	x1 += (slen > 0 ? slen-1 : 0) * NUMBERS_SPACING_X;
+	x2 += (text_input_offset > 0 ? text_input_offset : 0) * NUMBERS_SPACING_X;
     }
     
-    if (x2 <= boxw)
+    if (x1 <= boxw)
     {
 	/* The whole string fits in the box */
     }
     else
     {
-	if (x1 <= (boxw >> 1) )
+	if (x2 <= (boxw >> 1) )
 	{
 	    /* At the left end */
 	}
-	else if (x1 >= (x2 - (boxw >> 1)))
+	else if (x2 >= (x1 - (boxw >> 1)))
 	{
 	    /* At the right end */
-	    plotx -= x2;
+	    plotx -= x1;
 	    plotx += boxw;
 	}
 	else
 	{
 	    /* Center the caret */
-	    plotx -= x1;
+	    plotx -= x2;
 	    plotx += (boxw >> 1);
 	}
     }
@@ -252,8 +252,14 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     case rid_it_TEXT:
     case rid_it_PASSWD:
     {
-	int n = ii->flags & rid_if_NUMBERS ? ii->xsize : text_displayable_width(ii->xsize, doc);
-	ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
+	if (ii->ww.type == value_absunit)
+	    ti->width = (int)ii->ww.u.f;
+	else
+	{
+	    int n = ii->flags & rid_if_NUMBERS ? ii->xsize : text_displayable_width(ii->xsize, doc);
+	    ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
+	}
+	
 	ti->max_up = webfonts[WEBFONT_TTY].max_up + INPUT_TEXT_BORDER_Y;
 	ti->max_down = webfonts[WEBFONT_TTY].max_down + INPUT_TEXT_BORDER_Y;
 	break;

@@ -12,6 +12,7 @@
 #include "wimp.h"
 #include "werr.h"
 
+#include "makeerror.h"
 #include "interface.h"
 #include "config.h"
 #include "memwatch.h"
@@ -214,7 +215,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     char *referer = NULL, *title = NULL;
     int oflags;
     
-    STBDBG(("frontend_open_url '%s' in window '%s'\n", url ? url : "<none>", target ? target : "<none>"));
+    STBDBG(("frontend_open_url '%s' in window '%s' parent v%p '%s'\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : ""));
 
     if (target && parent)
     {
@@ -346,6 +347,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
      if (strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
 	 strncmp(url, "ncint:", sizeof("ncint:")-1) == 0)
         oflags |= be_openurl_flag_BODY_COLOURS;
+
+     if (keyboard_state == fe_keyboard_OFFLINE)
+	 oflags |= be_openurl_flag_FAST_LOAD;
 #if 0
     if (bfile)
     {
@@ -364,18 +368,32 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     
     parent->threaded++;
 
+    STBDBG(("frontend_open_url: backend IN transient %d\n", parent->open_transient));
     ep = backend_open_url(parent, &parent->fetching, url, bfile, referer, oflags);
+    STBDBG(("frontend_open_url: backend OUT error %x\n", ep ? ep->errnum : 0));
 
-#if 1
-    if (ep && parent->open_transient)
-	fe_dispose_view(parent);
-    else 
-#endif
-	fe_check_download_finished(parent);
+    if (ep)
+    {
+	if (ep->errnum == ANTWEB_ERROR_BASE + ERR_NO_ACTION)
+	{
+	    fe_no_new_page(parent, NULL);
+	    ep = NULL;
+	}
+	else if (parent->open_transient)
+	    fe_dispose_view(parent);
+    }
+    else
+    {
+	/* if there was no error then check to see if download has finished */
+/*  	fe_check_download_finished(parent); */
+    }
 
-    parent->threaded--;
-    if (parent->delete_pending)
+    if (--parent->threaded == 0 && parent->delete_pending > 0)
+    {
+	fe_no_new_page(parent, NULL);
+/*   	fe_check_download_finished(parent); */
 	fe_dispose_view(parent);
+    }
     
     return ep;
 }
@@ -610,6 +628,8 @@ void fe_dispose_view(fe_view v)
 
     STBDBG(("fe_dispose_view: disposing\n"));
 
+    v->delete_pending = -1;
+    
     fe_internal_deleting_view(v);
 
 #if 1

@@ -12,6 +12,7 @@
 #include <locale.h>
 
 #include "memwatch.h"
+#include "unwind.h"
 
 #include "coords.h"
 #include "wimp.h"
@@ -224,7 +225,7 @@ static fe_message_handler_item *message_handlers = NULL;
 
 static int user_status_open = TRUE;
 
-static int keyboard_state = fe_keyboard_ONLINE;
+int keyboard_state = fe_keyboard_OFFLINE;
 
 
 /* On screen keyboard variables */
@@ -422,7 +423,7 @@ int caretise(void)
 
 int movepointer(void)
 {
-    return on_screen_kbd ? 0 : be_link_MOVE_POINTER;
+    return on_screen_kbd || pointer_mode == pointermode_ON ? 0 : be_link_MOVE_POINTER;
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -644,7 +645,54 @@ static void children_update_state(fe_view v)
     if (v->children)
 	iterate_frames(v->children, children__update_state, NULL);
 }
-     
+
+/*
+ * This function is called when a fetch finishes and the current page is not
+ * updated for some reason. There is an optional error message to display
+ */
+
+void fe_no_new_page(fe_view v, os_error *e)
+{
+    if (e)
+    {
+	/* report error if there was one */
+	frontend_complain(e);
+
+	/* log page as failed */
+	session_log("", session_FAILED);
+    }
+
+    if (!v)
+	return;
+    
+    /* restore the url of the displaying document */
+    if (v->displaying)
+    {
+	char *durl;
+	if (backend_doc_info(v->displaying, NULL, NULL, &durl, NULL) == NULL &&
+	    durl)
+	    frontend_view_status(v, sb_status_URL, durl);
+    }
+
+    /* clear various variables that store state whilst fetching and rendering */
+    v->fetching = NULL;
+    v->had_completed = TRUE;
+    v->images_waiting = 0;
+
+    v->fetching_data.xscroll = v->fetching_data.yscroll = 0;
+    v->fetching_data.hist = NULL;
+	
+    /* update the toolbar */
+    if (use_toolbox)
+	tb_status_update_fades(fe_find_top(v));
+
+    fe_update_page_info(v);
+
+    /* hide progress indicator if popped up */
+    fe_status_clear_fetch_only();
+}
+
+
 /*
  * If there is a fragment id then 'url' parameter will always contain it.
 
@@ -664,35 +712,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     
     if (doc == NULL)    /* lookup failed re visit the current one   */
     {
-#if 1
- 	frontend_complain(makeerrorf(ERR_CANT_GET_URL, strsafe(url)));
-#else
- 	frontend_complain(makeerrorf(ERR_CANT_GET_URL, strsafe(title)));
-#endif
-	if (v->displaying)
-	{
-	    char *durl;
-	    backend_doc_info(v->displaying, NULL, NULL, &durl, NULL);
-
-	    if (durl)
-		frontend_view_status(v, sb_status_URL, durl);
-	}
-
-        session_log("", session_FAILED);
-
-	/* clear various variables that store state whilst fetching and rendering */
-	v->fetching = NULL;
-	v->had_completed = TRUE;
-
-	v->fetching_data.xscroll = v->fetching_data.yscroll = 0;
-	v->fetching_data.hist = NULL;
-	
-	/* update the toolbar */
-        if (use_toolbox)
-            tb_status_update_fades(fe_find_top(v));
-
-        fe_status_clear_fetch_only();
-
+	fe_no_new_page(v, makeerrorf(ERR_CANT_GET_URL, strsafe(url)));
 	return 1;
     }
 
@@ -782,7 +802,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     fe_dispose_view_children(v);
 
     v->displaying = doc;
-    v->current_link = NULL;
+/*     v->current_link = NULL; */
     v->find_last_item = NULL;
     
     /* check for special page instructions - but only on top page   */
@@ -972,47 +992,6 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
-
-#if 0
-static wimp_caretstr dbox_saved_caret;
-
-void fe_dbox_dispose(void)
-{
-    if (dbox_view)
-    {
-	fe_view selected_view = fe_selected_view();
-	STBDBG(( "fe_dbox_dispose: sel %p db %p\n", selected_view, dbox_view));
-
-#if LINK_DBOX && 0
-	/* unlink from chain */
-	if (dbox_view->prev)
-	    dbox_view->prev->next = dbox_view->next;
-	if (dbox_view->next)
-	    dbox_view->next->prev = dbox_view->prev;
-#endif
-	/* return caret whence it came */
-	if (selected_view == dbox_view)
-        {
-	    wimp_set_caret_pos(&dbox_saved_caret);
-/*             fe_get_wimp_caret(main_view->w); */
-/*             selected_view = main_view; */
-        }
-
-        fe_dispose_view(dbox_view);
-        dbox_view = NULL;
-
-        fe_status_mode(main_view, main_view->browser_mode, -1);
-
-	/* update main view with the correct URL */
-        if (main_view->displaying)
-        {
-            char *url;
-            backend_doc_info(main_view->displaying, NULL, NULL, &url, NULL);
-            frontend_view_status(main_view, sb_status_URL, url);
-        }
-    }
-}
-#endif
 
 fe_view fe_dbox_view(const char *name)
 {
@@ -1210,7 +1189,6 @@ static int print_events[] =
 
 static os_error *fe__print(fe_view v, int size)
 {
-    char *s;
     os_error *e = NULL;
     int old_size = -1;
 
@@ -1478,6 +1456,8 @@ int fe_check_download_finished(fe_view v)
 
     if (fe_is_download_finished(top))
     {
+	STBDBG(( "fe_check_download_finished: v%p finished transient %d %s %s\n", v, top->open_transient, caller(1), caller(2)));
+
 	/* clear various variables */
 	v->fetching = NULL;
 
@@ -1527,7 +1507,7 @@ int fe_check_download_finished(fe_view v)
     {
 	fe_view vcaret;
 
-	STBDBG(( "stbfe: check download finished current link %p/%p top %p\n", v, v->current_link, top));
+	STBDBG(( "stbfe: check download finished current link %p top %p\n", v, top));
 
 	/* if opening a transient then that definitely gets the highlight */
 	if (top->open_transient)
@@ -1557,11 +1537,12 @@ int fe_check_download_finished(fe_view v)
 	if (vcaret && vcaret->displaying)
 	{
 	    int flags = 0;
+	    be_item item = backend_read_highlight(vcaret->displaying, NULL);
 
 	    if (v->selected_id)
 	    {
-		vcaret->current_link = backend_locate_id(vcaret->displaying, v->selected_id);
-		if (vcaret->current_link)
+		item = backend_locate_id(vcaret->displaying, v->selected_id);
+		if (item)
 		    flags = be_link_ONLY_CURRENT | caretise();
 	    }
 
@@ -1573,8 +1554,8 @@ int fe_check_download_finished(fe_view v)
 		flags |= be_link_ONLY_CURRENT;
 	    }
 	    
-	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags | movepointer());
-	    STBDBG(( "stbfe: current link %p/%p\n", vcaret, vcaret->current_link));
+	    /* vcaret->current_link = */ backend_highlight_link(vcaret->displaying, item, flags | movepointer());
+	    STBDBG(( "stbfe: current link %p\n", vcaret));
 	}
     }
 
@@ -1850,6 +1831,10 @@ int frontend_is_interface_down(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
+/*
+ * Called from the backend when a file is downloadeded that we can't deal with.
+ */
+
 void frontend_pass_doc(fe_view v, char *url, char *cfile, int ftype)
 {
     wimp_msgstr msg;
@@ -1868,14 +1853,16 @@ void frontend_pass_doc(fe_view v, char *url, char *cfile, int ftype)
     
     if (v)
     {
-	v->fetching = NULL;
-	
-	v->had_completed = TRUE;
-	fe_check_download_finished(v);
+	fe_no_new_page(v, NULL);
+/* 	fe_check_download_finished(v); */
     }
 
     STBDBG(( "frontend_pass_doc: out\n"));
 }
+
+/*
+ * Called from the backend when an unknown type of URL is accessed.
+ */
 
 void frontend_url_punt(fe_view v, char *url, char *bfile)
 {
@@ -1888,13 +1875,8 @@ void frontend_url_punt(fe_view v, char *url, char *bfile)
 
     if (v == NULL)
 	v = main_view;
-
-    if (v)
-    {
-	v->had_completed = TRUE;
-	fe_check_download_finished(v);
-    }
-
+    else
+	fe_no_new_page(v, NULL);
 #if 0
     if (strncasecomp(url, INTERNAL_PREFIX, INTERNAL_PREFIX_SIZE) == 0)
     {
@@ -1985,6 +1967,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
     int i;
     coords_cvtstr cvt;
     fe_view child = NULL;
+    fe_view top;
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return;
@@ -1998,7 +1981,8 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
     /* ensure at top of visible screen  */
     frontend_view_ensure_visable(v, -v->margin.x0, 0, 0);
 
-    fe_find_top(v)->dividers_max = dividers_max;
+    top = fe_find_top(v);
+    top->dividers_max = dividers_max;
 
     cvt = fe_get_cvt(v);
     for (i = 0; i < nframes; i++)
@@ -2028,11 +2012,31 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
 
             if (frontend_complain(fe_new_view(v, &box, ip, TRUE, &vv)) == NULL && vv)
 	    {
-		vv->frame_index = i;
+		char *url;
 
-		if (ip->src)
+		vv->frame_index = i;
+		url = ip->src;
+
+		/* if we are coming from history then need to use the
+		 * urls from the history item and fill in the scroll
+		 * offsets */
+		if (top->hist_at)
 		{
-		    os_error *e = frontend_open_url(ip->src, vv, NULL, NULL, fe_open_url_FROM_FRAME);
+		    char specifier[32];
+		    char *new_url;
+
+		    specifier[0] = 0;
+		    fe_frame_specifier_create(vv, specifier, sizeof(specifier));
+		    new_url = fe_history_lookup_specifier(top, specifier, &vv->fetching_data.xscroll, &vv->fetching_data.yscroll);
+		    if (new_url)
+			url = new_url;
+
+		    STBDBG(("frontend_frame_layout: history override '%s' gets url '%s' offsets %dx%d\n", specifier, strsafe(new_url), vv->fetching_data.xscroll, vv->fetching_data.yscroll));
+		}
+		
+		if (url)
+		{
+		    os_error *e = frontend_open_url(url, vv, NULL, NULL, fe_open_url_FROM_FRAME);
 		    if (e && e->errnum != ANTWEB_ERROR_BASE + ERR_NO_SUCH_FRAG)
 			frontend_complain(e);
 		}
@@ -2849,7 +2853,7 @@ os_error *fe_status_open_toolbar(fe_view v, int bar)
 
 void fe_scroll_changed(fe_view v, int x, int y)
 {
-    STBDBG(("fe_scroll_changed(): v %p link %p\n", v, v ? v->current_link : 0));
+    STBDBG(("fe_scroll_changed(): v %p\n", v));
 
     if (use_toolbox)
     {
@@ -3215,11 +3219,13 @@ static void fe_idle_handler(void)
 
 	if (v)
 	{
-	    highlight_moved = v->current_link != highlight_last_link;
-	    highlight_last_link = v->current_link;
+	    be_item item = backend_read_highlight(v->displaying, NULL);
 
-	    if (v->current_link)
-		frontend_complain(backend_item_info(v->displaying, v->current_link, &flags, &link, NULL));
+	    highlight_moved = item != highlight_last_link;
+	    highlight_last_link = item;
+
+	    if (item)
+		frontend_complain(backend_item_info(v->displaying, item, &flags, &link, NULL));
 
 	    if (highlight_moved)
 		fe_update_link(v, flags, link);
@@ -3261,8 +3267,14 @@ static void fe_idle_handler(void)
     }
 
     v = v_over;
-    highlight_moved = v->current_link != highlight_last_link;
-    highlight_last_link = v->current_link;
+
+    /* see if highlight moved at all */
+    {
+	be_item item = backend_read_highlight(v->displaying, NULL);
+
+	highlight_moved = item != highlight_last_link;
+	highlight_last_link = item;
+    }
 
     /* if old mode then pulse a bit */
     if (!use_toolbox)
@@ -3366,7 +3378,7 @@ static void fe_idle_handler(void)
 	    ti = NULL;
 	
 	/* try dragging highlight */
-	if (!akbd_pollctl() && pointer_moved && v->displaying && ti != v->current_link)
+	if (!akbd_pollctl() && pointer_moved && v->displaying && ti != backend_read_highlight(v->displaying, NULL) /* v->current_link */)
 	{
 	    if (ti)
 	    {
@@ -3377,7 +3389,7 @@ static void fe_idle_handler(void)
  		backend_remove_highlight(v->displaying);
 	    }
 
-	    v->current_link = ti;
+/* 	    v->current_link = ti; */
 	}
     }
 }
@@ -3615,7 +3627,6 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	if (m->bbits == wimp_BRIGHT)
 	{
 	    frontend_complain(fe_status_open_toolbar(main_view, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
-/* 	    fe_open_version(NULL); */
 	}
         return FALSE;
     }
@@ -3730,7 +3741,9 @@ static void fe_redraw_handler(fe_view v, wimp_w w)
             else
             {
                 int gcol;
-                colourtran_setGCOL(config_colours[render_colour_BACK], 0, 0, &gcol);
+		wimp_paletteword pw;
+		pw.word = 0;
+                colourtran_setGCOL(pw /* config_colours[render_colour_BACK] */, 0, 0, &gcol);
                 bbc_rectanglefill(r.g.x0, r.g.y0, r.g.x1 - r.g.x0, r.g.y1 - r.g.y0);
             }
         }
@@ -4174,6 +4187,8 @@ static void fe_mode_changed(void)
     feutils_init_1();
     feutils_init_2();
 
+    dbginit();
+    
     STBDBG(( "modechange: old eig %d,%d new %d,%d\n", dx, dy, frontend_dx, frontend_dy));
     STBDBG(( "modechange: new size %d,%d\n", screen_box.x1, screen_box.y1));
 
@@ -4709,7 +4724,7 @@ void fe_event_process(void)
 		    v_old->is_selected = FALSE;
 		    fe_frame_link_array_free(v_old);
 
-		    v_old->current_link = NULL;
+/* 		    v_old->current_link = NULL; */
 		}
 
 		/* set the new view as the selected one */
@@ -4888,14 +4903,16 @@ void fe_event_process(void)
 
     if (pending_error)
     {
-	char buf[128];
+	char buf[512];
 	int n;
 
 	n = sprintf(buf, "ncint:openpanel?name=error&error=E%x&message=", pending_error->errnum);
-	n += sprintf(buf+n, "%s", pending_error->errmess);
+	url_escape_cat(buf+n, pending_error->errmess, sizeof(buf)-n);
+
 	if (pending_error_retry)
 	{
-	    n += sprintf(buf+n, "&again=");
+	    strcat(buf, "&again=");
+	    n = strlen(buf);
 	    url_escape_cat(buf+n, pending_error_retry, sizeof(buf)-n);
 	}
 

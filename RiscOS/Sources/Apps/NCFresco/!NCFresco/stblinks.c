@@ -368,7 +368,7 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
 
         if (vv->displaying)
         {
-            vv->current_link = backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | caretise() | movepointer());
+            /* vv->current_link =  */backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | caretise() | movepointer());
         }
     }
 }
@@ -471,15 +471,15 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	
 	/* ensure caret and pointer are in window */
 	fe_get_wimp_caret(v->w);
-	v->current_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags);
+	new_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags);
 
-	if (v->current_link == NULL)
-	    v->current_link = backend_highlight_link(v->displaying, NULL, flags);
+	if (new_link == NULL)
+	    new_link = backend_highlight_link(v->displaying, NULL, flags);
 
-	if (v->current_link == NULL)
+	if (new_link == NULL)
 	    centre_pointer(v);
 
-	STBDBG(("fe_move_highlight_xy: XY v %p link %p\n", v, v->current_link));
+	STBDBG(("fe_move_highlight_xy: XY v %p link %p\n", v, new_link));
 	return;
     }
 
@@ -501,16 +501,16 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	/* try and find link on page without using fallback link */
 	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP_H)) != NULL)
 	{
-	    v->current_link = new_link;
-	    STBDBG(("fe_move_highlight_xy: frames v %p link %p\n", v, v->current_link));
+/* 	    v->current_link = new_link; */
+	    STBDBG(("fe_move_highlight_xy: frames v %p link %p\n", v, new_link));
 	    return;
 	}
 
 	/* get coordinates of current link in screen coords */
-	if (v->current_link)
+	if (old_link)		/* was v->current_link */
 	{
 	    coords_cvtstr cvt;
-	    backend_doc_item_bbox(v->displaying, v->current_link, &link_box);
+	    backend_doc_item_bbox(v->displaying, old_link, &link_box);
 
 	    cvt = fe_get_cvt(v);
 	    coords_box_toscreen(&link_box, &cvt);
@@ -575,11 +575,11 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    {
 		if ((new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP_H)) != NULL)
 		{
-		    v->current_link = new_link;
+/* 		    v->current_link = new_link; */
 		}
 
 		/* return if scrolled whether or not new link found */
-		STBDBG(("fe_move_highlight_xy: frames v %p scrolled link %p (current %p)\n", v, new_link, v->current_link));
+		STBDBG(("fe_move_highlight_xy: frames v %p scrolled link %p (current %p)\n", v, new_link, new_link));
 		return;
 	    }
 	}
@@ -595,19 +595,19 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 		cvt = fe_get_cvt(new_v);
 		coords_box_toworkarea(&link_box, &cvt);
 		
-		new_v->current_link = backend_highlight_link_xy(new_v->displaying, NULL, &link_box, flags | be_link_XY);
-		STBDBG(("fe_move_highlight_xy: frames v %p direct link %p\n", new_v, new_v->current_link));
+		new_link = backend_highlight_link_xy(new_v->displaying, NULL, &link_box, flags | be_link_XY);
+		STBDBG(("fe_move_highlight_xy: frames v %p direct link %p\n", new_v, new_link));
 	    }
 
 	    /* give caret to new window */
 	    fe_get_wimp_caret(new_v->w);
-	    if (new_v->current_link == NULL)
+	    if (new_link == NULL)
 	    {
-		new_v->current_link = backend_highlight_link(new_v->displaying, NULL, flags);
-		STBDBG(("fe_move_highlight_xy: frames v %p indirect link %p\n", new_v, new_v->current_link));
+		new_link = backend_highlight_link(new_v->displaying, NULL, flags);
+		STBDBG(("fe_move_highlight_xy: frames v %p indirect link %p\n", new_v, new_link));
 	    }
 
-	    if (new_v->current_link == NULL)
+	    if (new_link == NULL)
 	    {
 		centre_pointer(new_v);
 		STBDBG(("fe_move_highlight_xy: frames v %p set ptr %d,%d\n", new_v, (new_v->box.x1 - new_v->box.x0)/2, - (new_v->box.y1 - new_v->box.y0)/2));
@@ -624,7 +624,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	/* try and find link on page */
 	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
 	{
-	    v->current_link = new_link;
+/* 	    v->current_link = new_link; */
 	    STBDBG(("fe_move_highlight_xy: no frames v %p new link %p\n", v, new_link));
 	    return;
 	}
@@ -632,7 +632,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	/* try moving to toolbar */
 	if (move_to_toolbar(flags))
 	{
-	    v->current_link = NULL;
+/* 	    v->current_link = NULL; */
 	    return;
 	}
 
@@ -647,17 +647,17 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    {
 		if ((new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
 		{
-		    v->current_link = new_link;
+/* 		    v->current_link = new_link; */
 		}
 
 		/* return if scrolled whether or not new link found */
-		STBDBG(("fe_move_highlight_xy: no frames v %p scrolled new link %p\n", v, v->current_link));
+		STBDBG(("fe_move_highlight_xy: no frames v %p scrolled new link %p\n", v, new_link));
 		return;
 	    }
 	}
 
 	/* give warning noise */
-	STBDBG(("fe_move_highlight_xy: no frames v %p can't find new link %p\n", v, v->current_link));
+	STBDBG(("fe_move_highlight_xy: no frames v %p can't find new link %p\n", v, new_link));
 	sound_event(snd_WARN_NO_FIELD);
     }
 }
@@ -686,7 +686,7 @@ int fe_ensure_highlight(fe_view v, int flags)
 {
     if (pointer_mode == pointermode_OFF && v && v->displaying)
     {
-	v->current_link = backend_highlight_link(v->displaying, v->current_link,
+	/* v->current_link =  */backend_highlight_link(v->displaying, backend_read_highlight(v->displaying, NULL)/* v->current_link */,
 						 (flags & be_link_BACK) | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | movepointer());
     }
     return 0;
@@ -987,7 +987,7 @@ void fe_cursor_movement(fe_view v, int x, int y)
     if (on_screen_kbd == 0)
 	flags |= movepointer();
     
-    v->current_link = backend_highlight_link(v->displaying, v->current_link, flags);					     
+    /* v->current_link = */ backend_highlight_link(v->displaying, backend_read_highlight(v->displaying, NULL), flags);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -1024,10 +1024,13 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	    return e;
     }
     else
-	ti = v->current_link;
+	ti = backend_read_highlight(v->displaying, NULL); /* v->current_link; */
     
     STBDBG(( "stbfe: activate link %p x %d y %d bbits %d\n", ti, x, y, bbits));
 
+    if (!ti)
+	return NULL;
+    
     if ((e = backend_item_info(v->displaying, ti, &flags, NULL, NULL)) != NULL)
 	return e;
     

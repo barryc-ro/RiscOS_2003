@@ -1270,6 +1270,9 @@ extern void format_stream(antweb_doc *doc,
 
     FMTDBGN(("format_stream(%p): Format complete: width %d, height %d, widest %d.\n", 
 	     fmt, fmt->stream->width, fmt->stream->height, fmt->stream->widest));
+
+    /* SJM: added freeing */
+    rid_free_pos(fmt->text_line);
 }
 
 /*****************************************************************************

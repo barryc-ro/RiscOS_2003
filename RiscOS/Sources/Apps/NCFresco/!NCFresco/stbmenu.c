@@ -136,6 +136,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 		opcol = col_BG;
 	    }
 
+	    /* set the font colours */
 	    if (lfc != nfc)
 	    {
 		int maxcols = 14;
@@ -151,15 +152,19 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 		colourtran_setfontcolours(&fh, &bb, &ff, &maxcols);
 	    }
 
+	    /* draw the left and right edges */
 	    colourtran_setGCOL(config_colours[col_BG], 0, 0, &junk);
 	    bbc_rectanglefill(ox - X_BORDER, h + oy - line_space, X_BORDER, line_space-1);
-	    bbc_rectanglefill(ox - X_BORDER*2 + width, h + oy - line_space, X_BORDER, line_space-1);
+	    bbc_rectanglefill(ox + width, h + oy - line_space, X_BORDER, line_space-1);
 
+	    /* draw the background for the text */
 	    colourtran_setGCOL(config_colours[opcol], 0, 0, &junk);
 	    bbc_rectanglefill(ox, h + oy - line_space, width, line_space-1);
 
+	    /* draw the text itself */
 	    font_paint(mh->items[i].name, font_OSCOORDS, ox, h + oy - webfonts[MENU_FONT].max_up);
 
+	    /* draw the selection box */
             if (i == mh->highlight && pointer_mode == pointermode_OFF)
             {
                 colourtran_setGCOL(config_colours[col_HIGHLIGHT], 0, 0, &junk);
@@ -308,6 +313,32 @@ static void fe_menu_move_highlight(fe_menu mh, int dir)
 
         fe_menu_ensure_item(mh, new_highlight);
     }
+}
+
+static int get_widest_entry(fe_menu_item *items, int n)
+{
+    int i, widest;
+    fe_menu_item *item;
+    
+    font_setfont(webfonts[MENU_FONT].handle);
+    widest = 0;
+
+    for (i = 0, item = items; i < n; i++, item++)
+    {
+	font_string fs;
+
+	fs.s = strsafe(item->name);
+	fs.x = fs.y = fs.term = (1 << 30);
+	fs.split = -1;
+
+	if (font_strwidth(&fs) == NULL)
+	{
+	    if (widest < fs.x)
+		widest = fs.x;
+	}
+    }
+
+    return widest / 400; /* MILIPOINTS_PER_OSUNIT; */
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -469,8 +500,8 @@ fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n
     menu->h = handle;
     menu->n = n;
     menu->items = items;
-    menu->size = size;
-    menu->width = width;
+    menu->size = n; /* size; change to use the full size */
+    menu->width = get_widest_entry(items, n);
     menu->parent = v;
 
     fe_menu_window(menu);

@@ -1054,7 +1054,7 @@ void frontend_fatal_error(os_error *e)
                 e->errmess);
 
 #if DEVELOPMENT
-        usrtrc("fatal '%s'\n", e->errmess);
+        usrtrc("fatal %x '%s'\n", e->errnum, e->errmess);
         usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
 #endif
 #if 1
@@ -1071,7 +1071,7 @@ os_error *frontend_complain(os_error *e)
     if (e)
     {
 #if DEVELOPMENT
-        usrtrc("complain '%s'\n", e->errmess);
+        usrtrc("complain %x '%s'\n", e->errnum, e->errmess);
         usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
 #endif
 

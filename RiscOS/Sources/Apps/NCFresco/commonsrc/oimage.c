@@ -235,6 +235,8 @@ image oimage_fetch_image(antweb_doc *doc, const char *src, BOOL need_size)
 	ffl |= image_find_flag_CHECK_EXPIRE;
     if (need_size)
 	ffl |= image_find_flag_NEED_SIZE;
+    if (doc->flags & doc_flag_FAST_LOAD)
+	ffl |= image_find_flag_URGENT;
     
     base = BASE(doc);
     url = url_join(base, src);

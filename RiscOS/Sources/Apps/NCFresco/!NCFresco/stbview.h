@@ -97,7 +97,7 @@ struct _frontend_view
     int slider_start;
     int slider_end;
 
-    be_item current_link;   /* currently highlighted link */
+/*     be_item current_link; */   /* currently highlighted link */
 
     int x_scroll_bar;
     int y_scroll_bar;
@@ -173,6 +173,8 @@ struct _frontend_view
 #define fe_keyboard_UNKNOWN	(-1)
 #define fe_keyboard_ONLINE	0
 #define fe_keyboard_OFFLINE	1
+
+extern int keyboard_state;
 
 #define fe_object_type_NONE      0
 #define fe_object_type_LINK      1

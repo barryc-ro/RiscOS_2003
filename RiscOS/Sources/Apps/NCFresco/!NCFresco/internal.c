@@ -698,7 +698,7 @@ static int internal_decode_hotlist_delete(const char *query)
 	{
 	    be_item ti = backend_locate_id(v->displaying, id);
 
-	    STBDBG(("internal_action_select: v %p id '%s' ti %p\n", v, id, ti));
+	    STBDBG(("internal_decode_histlist_delete: v %p id '%s' ti %p\n", v, id, ti));
 
 	    if (ti)
 		backend_activate_link(v->displaying, ti, 0);
@@ -850,7 +850,7 @@ static os_error *fe_error_write_file(FILE *f, const char *query)
     STBDBG(("error: again '%s'\n", strsafe(again)));
     
     /* write out header, including error for reference on return */
-    fprintf(f, msgs_lookup("errorT"), which, again);
+    fprintf(f, msgs_lookup("errorT"), which, strsafe(again));
 
     /* write message */
     s = msgs_lookup(which);
@@ -1586,6 +1586,42 @@ static int internal_decode_error(const char *query, char **new_url, int *flags)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+static int internal_decode_history_alpha(const char *query, char **new_url, int *flags)
+{
+    char *which = extract_value(query, "url.");
+    int generated = fe_internal_url_NO_ACTION;
+
+    if (fe_history_move_alpha_index(main_view, atoi(which), new_url))
+    {
+	generated = fe_internal_url_REDIRECT;
+	*flags &= ~access_CHECK_EXPIRE;
+    }
+        
+    mm_free(which);
+    
+    return generated;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
+static int internal_decode_history_recent(const char *query, char **new_url, int *flags)
+{
+    char *which = extract_value(query, "url.");
+    int generated = fe_internal_url_NO_ACTION;
+
+    if (fe_history_move_recent_index(main_view, atoi(which), new_url))
+    {
+	generated = fe_internal_url_REDIRECT;
+	*flags &= ~access_CHECK_EXPIRE;
+    }
+        
+    mm_free(which);
+    
+    return generated;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
 /*
  * Format of hotlist delet query data is
  * i=n1&i=n2&i=n3... for however many sites we have selected to delete
@@ -1625,7 +1661,17 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     {
 	generated = internal_decode_error(query, new_url, flags);
     }
+    else if (strcasecomp(page, "historyalpha") == 0)
+    {
+	generated = internal_decode_history_alpha(query, new_url, flags);
+    }
+    else if (strcasecomp(page, "historyrecent") == 0)
+    {
+	generated = internal_decode_history_recent(query, new_url, flags);
+    }
     
+    mm_free(page);
+
     return generated;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1718,6 +1764,8 @@ void fe_internal_deleting_view(fe_view v)
     }
     else if (strcasecomp(v->name, "__favsdelete") == 0)
     {
+	backend_submit_form(v->displaying, "favsd", FALSE);
+
 	tb_status_button(fevent_HOTLIST_SHOW_DELETE, tb_status_button_INACTIVE);
     }
     else if (strcasecomp(v->name, "__historyalpha") == 0)
@@ -1801,7 +1849,7 @@ os_error *fe_internal_toggle_panel(const char *panel_name)
 
 os_error *fe_open_version(fe_view v)
 {
-    fe_open_info(v, v->current_link, 0, 0, TRUE);
+    fe_open_info(v, backend_read_highlight(v->displaying, NULL), 0, 0, TRUE);
     return NULL;
 }
 

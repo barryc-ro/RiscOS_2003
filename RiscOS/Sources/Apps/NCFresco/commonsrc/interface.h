@@ -517,6 +517,18 @@ extern void backend_doc_set_scaling(be_doc doc, int scale_value);
 
 extern BOOL backend_submit_form(be_doc doc, const char *id, int right);
 
+/*
+ * This function sends one of three different messages to the plugin.
+ * CLOSE: sends a close message - tells the plugin to remove its window as if the
+ *	page were being left.
+ * ABORT: sends an ABORT message - tells the plugin to stop what its doing but to
+ *	leave the window open so the user can see what happened.
+ * action: an ACTION message (STOP, PLAY etc.) the window stays open.
+ *
+ * The message can be directed at a specific embedded object, all helpers, or all
+ * helpers and embedded objects.
+ */
+
 #define be_plugin_action_ABORT		(-1)
 #define be_plugin_action_CLOSE		(-2)
 #define be_plugin_action_item_HELPERS	((be_item)-1)

@@ -42,8 +42,8 @@ static colour_info colour_array[] =
 	{ "darkcyan", 0x008B8B },
 	{ "darkgoldenrod", 0xB8860B },
 	{ "darkgray", 0xA9A9A9 },
-	{ "darkgrey", 0xA9A9A9 },
 	{ "darkgreen", 0x006400 },
+	{ "darkgrey", 0xA9A9A9 },
 	{ "darkkhaki", 0xBDB76B },
 	{ "darkmagenta", 0x8B008B },
 	{ "darkolivegreen", 0x556B2F },
@@ -178,6 +178,8 @@ VALUE colour_lookup(STRING name)
     colour_info test, *match;
     VALUE v;
 
+    PRSDBGN(("colour_lookup: %.*s\n", name.bytes, name.ptr));
+    
     /* special processing for grey */
     if (name.bytes >= 4 &&
 	(strncasecomp(name.ptr, "grey", 4) == 0 ||
@@ -199,20 +201,26 @@ VALUE colour_lookup(STRING name)
 	    v.u.b = 0x888888;
 	}
 	
+	PRSDBGN(("colour_lookup: grey %08x\n", v.u.b));
+
 	return v;
     }
-
+    
     /* else look it up in the array */
     test.name = stringdup(name);
     match = bsearch(&test, colour_array, sizeof(colour_array) / sizeof(colour_array[0]), sizeof(colour_array[0]), colour_compare_function);
     mm_free(test.name);
 
     if (match == NULL)
+    {
 	v.type = value_none;
+	PRSDBGN(("colour_lookup: no match\n"));
+    }
     else
     {
 	v.type = value_tuple;
 	v.u.b = match->rgb_word;
+	PRSDBGN(("colour_lookup: tuple %08x\n", v.u.b));
     }
     
     return v;

@@ -803,7 +803,7 @@ int frontend_view_caret(fe_view v, int x, int y, int hh, int on_screen)
     if (!v->w)
         return 1;
 
-    STBDBGN(("viewcaret: @ %d,%d h %d on %d current %p\n", x, y, height, on_screen, v->current_link));
+    STBDBGN(("viewcaret: v %p w %p @ %d,%d h %d on %d %s %s\n", v, v->w, x, y, height, on_screen, caller(1), caller(2)));
 
     if (on_screen && height > 0)
     {
@@ -822,10 +822,10 @@ int frontend_view_caret(fe_view v, int x, int y, int hh, int on_screen)
 
     r = frontend_complain(wimp_set_caret_pos(&cs)) == NULL;
 
-    if (height >= 0 && v->current_link)
-        v->current_link = backend_read_highlight(v->displaying, NULL);
+/*     if (height >= 0 && v->current_link) */
+/*         v->current_link = backend_read_highlight(v->displaying, NULL); */
 
-    STBDBGN(("viewcaret: end %p \n", v->current_link));
+/*     STBDBGN(("viewcaret: end %p \n", v->current_link)); */
 
     return r;
 }

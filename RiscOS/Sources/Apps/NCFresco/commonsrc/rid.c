@@ -397,6 +397,9 @@ extern void rid_free_aref(rid_aref_item *p)
 	if (p->target)
 	    mm_free(p->target);
 
+	if (p->title)
+	    mm_free(p->title);
+
 	mm_free(p);
 	p = next;
     }
@@ -497,6 +500,8 @@ extern void rid_free_form(rid_form_item *p)
 
 	if (p->target)
 	    mm_free(p->target);
+
+	mm_free(p->id);
 
 	mm_free(p);
 

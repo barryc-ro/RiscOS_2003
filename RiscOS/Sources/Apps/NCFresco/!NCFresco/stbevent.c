@@ -583,10 +583,9 @@ static void codec_event_handler(int event, fe_view v)
     int action = event - fevent_CODEC_STOP;
     if (action < sizeof(codec_actions)/sizeof(codec_actions[0]))
     {
-	be_item item = be_plugin_action_item_HELPERS;
-
-	if (v && v->displaying)
-	    item = v->current_link;
+	be_item item = backend_read_highlight(v->displaying, NULL);
+	if (item == NULL)
+	    item = be_plugin_action_item_HELPERS;
 
 	backend_plugin_action(v->displaying, item, codec_actions[action]);
     }
@@ -596,10 +595,9 @@ static void codec_event_handler(int event, fe_view v)
     }
     else if (event == fevent_CODEC_CLOSE)
     {
-	be_item item = be_plugin_action_item_HELPERS;
-
-	if (v && v->displaying)
-	    item = v->current_link;
+	be_item item = backend_read_highlight(v->displaying, NULL);
+	if (item == NULL)
+	    item = be_plugin_action_item_HELPERS;
 
 	backend_plugin_action(v->displaying, item, be_plugin_action_CLOSE);
     }
@@ -622,7 +620,7 @@ void fevent_handler(int event, fe_view v)
 
     case fevent_CLASS_WINDOW:
 	event &= ~fevent_WINDOW;
-	v = fe_find_top(v);
+	v = fe_find_top_nopopup(v);
 	/* fall-through */
 
     case fevent_CLASS_FRAME:
