@@ -34,6 +34,10 @@ cts_statetable_result_apdu cts_statetable_apdu_SM (cts_statetable_action action_
 
   static cts_statetable_states_apdu state = S_APDU_Idle;
   static cts_server_message *apdu_message = NULL;
+  static const char **apdus = NULL;
+  static char **apdu_responses = NULL;
+  static int num_apdus = 0;
+  static int apdu_count = 0;
 
 #ifdef DEBUGLIB
   static cts_statetable_states_apdu last_state = S_APDU_Idle;
@@ -43,9 +47,22 @@ cts_statetable_result_apdu cts_statetable_apdu_SM (cts_statetable_action action_
   if (action_code == AC_Start)
   {
     dprintf (("StateMachine", "SM> APDU - Initialising (moving to ReceiveResponse state)\n"));
+    /* Extract the APDU commands from the message */
+    if (apdus)
+      free (apdus);
+    apdus = cts_statetable_aux_extract_apdus (sm, &num_apdus);
+    /* And allocate a buffer for the array of responses */
+    if (apdu_responses)
+      free (apdu_responses);
+    apdu_responses = calloc (num_apdus, sizeof (const char *));
+
     /* Open "accessing smart card" dialogue */
     cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_2);
-    /* Send first command -- TODO */
+
+    /* Send first command */
+    apdu_count = 0;
+    cts_sc_send_apdu (apdus[apdu_count], strlen (apdus[apdu_count]));
+
     apdu_message = sm;
     state = S_APDU_ReceiveResponse;
     return RC_APDU_Pending;
@@ -108,53 +125,90 @@ cts_statetable_result_apdu cts_statetable_apdu_SM (cts_statetable_action action_
           break;
 #endif
         case AC_Continue:
-          /* poll for response completion -- TODO */
-          if (/*finished*/0)
+        {
+          cts_sc_status status;
+          char sw1sw2_response[2];
+          char *buffer;
+          size_t length;
+          int i;
+
+          /* Check for response completion */
+          cts_sc_read_data (NULL, 0, &length, NULL);
+          buffer = malloc (length);
+          status = cts_sc_read_data (buffer, length, NULL, sw1sw2_response);
+          switch (status)
           {
-            if (/*error*/0)
-            {
-              /* Close "accessing smart card" dbox */
-              cts_ui_close_dbox (apdu_message->plugin);
-              /* Open error message dbox (code 03) */
-              cts_ui_open_dbox (apdu_message->plugin, NULL, ui_code_03);
-              /* Free the "apdu" command message */
-              cts_server_message_destroy (apdu_message);
-              apdu_message = NULL;
-              rc =  RC_APDU_ErrorDialogue;
-              state = S_APDU_Idle;
-            }
-            else
-            {
-              /* need to make up list of responses for each command -- TODO */
-              if (/*more commands*/0)
+            case cts_sc_status_COMPLETE:
+              apdu_responses[apdu_count++] = buffer;
+
+              if (apdu_count < num_apdus)
               {
-                /* send next command -- TODO */
+                /* Send next command */
+                cts_sc_send_apdu (apdus[apdu_count], strlen (apdus[apdu_count]));
                 rc = RC_APDU_Pending;
               }
               else
               {
-                /* finished */
+                /* Finished */
                 /* Close "accessing smart card" dbox */
                 cts_ui_close_dbox (apdu_message->plugin);
                 /* Open "communicating with server" dbox (code 01-1) */
                 cts_ui_open_dbox (apdu_message->plugin, NULL, ui_code_01_1);
                 /* Send response (includes text for APDUT case) */
-                cts_statetable_aux_sendresult_apdu (apdu_message, NULL/*TODO*/);
+                cts_statetable_aux_sendresult_apdu (apdu_message, apdus, num_apdus);
+                /* Free the apdu responses */
+                for (i=0; i<num_apdus; i++)
+                  free (apdu_responses[i]);
+                free (apdu_responses);
+                apdu_responses = NULL;
+                /* Free the apdu command array */
+                free (apdus);
+                apdus = NULL;
                 /* Free the "apdu" command message */
                 cts_server_message_destroy (apdu_message);
                 apdu_message = NULL;
                 state = S_APDU_Idle;
                 rc = RC_APDU_Finished;
               }
-            }
-          }
-          else
-          {
-            rc = RC_APDU_Pending;
+              break;
+
+            case cts_sc_status_INPROGRESS:
+              free (buffer);
+              rc = RC_APDU_Pending;
+              break;
+
+            case cts_sc_status_FAILED:
+              free (buffer);
+              /* Close "accessing smart card" dbox */
+              cts_ui_close_dbox (apdu_message->plugin);
+              /* Open error message dbox (code 03) */
+              cts_ui_open_dbox (apdu_message->plugin, NULL, ui_code_03);
+              /* Free the apdu responses */
+              for (i=0; i<apdu_count; i++)
+                free (apdu_responses[i]);
+              free (apdu_responses);
+              apdu_responses = NULL;
+              /* Free the apdu command array */
+              free (apdus);
+              apdus = NULL;
+              /* Free the "apdu" command message */
+              cts_server_message_destroy (apdu_message);
+              apdu_message = NULL;
+              rc =  RC_APDU_ErrorDialogue;
+              state = S_APDU_Idle;
+              break;
+
+            default:
+              dprintf (("StateMachine", "SM> APDU - ERROR, invalid result from read_data\n"));
+              free (buffer);
+              state = S_APDU_Idle;
+              rc = RC_APDU_Error;
           }
           break;
+        }
 
         default:
+          dprintf (("StateMachine", "SM> APDU - ERROR, invalid action in RecieveResponse state\n"));
           /* Any other action in this state is illegal */
           state = S_APDU_Idle;
           rc = RC_APDU_Error;
@@ -163,6 +217,7 @@ cts_statetable_result_apdu cts_statetable_apdu_SM (cts_statetable_action action_
 
     /* INVALID STATE */
     default:
+      dprintf (("StateMachine", "SM> APDU - ERROR, invalid state!!\n"));
       /* Error */
       state = S_APDU_Idle;
       rc = RC_APDU_Error;
