@@ -26,6 +26,7 @@ AS       = aasm
 CP       = copy
 RM       = remove
 TOKENISE = tokenise
+HDR2H    = perl.Hdr2H
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -stamp -quit
@@ -162,34 +163,34 @@ ${HDRDIR}.SWIs:       Import.Global.SWIs;           ${CP} Import.Global.SWIs    
 ${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall     $@ ${CPFLAGS}
 
 # The C versions of imported files.
-${HDIR}.Global.h.AUN:        Import.Global.AUN;            perl perl.Hdr2H Import.Global.AUN        $@
-${HDIR}.Global.h.Countries:  Import.Global.Countries;      perl perl.Hdr2H Import.Global.Countries  $@
-${HDIR}.Global.h.Devices:    Import.Global.Devices;        perl perl.Hdr2H Import.Global.Devices    $@
-${HDIR}.Global.h.DrawObj:    Import.Global.DrawObj;        perl perl.Hdr2H Import.Global.DrawObj    $@
-${HDIR}.Global.h.DrawTags:   Import.Global.DrawTags;       perl perl.Hdr2H Import.Global.DrawTags   $@
-${HDIR}.Global.h.FileTypes:  Import.Global.FileTypes;      perl perl.Hdr2H Import.Global.FileTypes  $@
-${HDIR}.Global.h.FreeWay:    Import.Global.FreeWay;        perl perl.Hdr2H Import.Global.FreeWay    $@
-${HDIR}.Global.h.FSNumbers:  Import.Global.FSNumbers;      perl perl.Hdr2H Import.Global.FSNumbers  $@
+${HDIR}.Global.h.AUN:        Import.Global.AUN ${HDR2H};            perl ${HDR2H} Import.Global.AUN        $@
+${HDIR}.Global.h.Countries:  Import.Global.Countries ${HDR2H};      perl ${HDR2H} Import.Global.Countries  $@
+${HDIR}.Global.h.Devices:    Import.Global.Devices ${HDR2H};        perl ${HDR2H} Import.Global.Devices    $@
+${HDIR}.Global.h.DrawObj:    Import.Global.DrawObj ${HDR2H};        perl ${HDR2H} Import.Global.DrawObj    $@
+${HDIR}.Global.h.DrawTags:   Import.Global.DrawTags ${HDR2H};       perl ${HDR2H} Import.Global.DrawTags   $@
+${HDIR}.Global.h.FileTypes:  Import.Global.FileTypes ${HDR2H};      perl ${HDR2H} Import.Global.FileTypes  $@
+${HDIR}.Global.h.FreeWay:    Import.Global.FreeWay ${HDR2H};        perl ${HDR2H} Import.Global.FreeWay    $@
+${HDIR}.Global.h.FSNumbers:  Import.Global.FSNumbers ${HDR2H};      perl ${HDR2H} Import.Global.FSNumbers  $@
 # NewErrors still has a few problems.  Partial support is there.
-${HDIR}.Global.h.OsWords:    Import.Global.OsWords;        perl perl.Hdr2H Import.Global.OsWords    $@
-${HDIR}.Global.h.PDriverReg: Import.Global.PDriverReg;     perl perl.Hdr2H Import.Global.PDriverReg $@
-${HDIR}.Global.h.PDumperReg: Import.Global.PDumperReg;     perl perl.Hdr2H Import.Global.PDumperReg $@
-${HDIR}.Global.h.PoduleReg:  Import.Global.PoduleReg;      perl perl.Hdr2H Import.Global.PoduleReg  $@
+${HDIR}.Global.h.OsWords:    Import.Global.OsWords ${HDR2H};        perl ${HDR2H} Import.Global.OsWords    $@
+${HDIR}.Global.h.PDriverReg: Import.Global.PDriverReg ${HDR2H};     perl ${HDR2H} Import.Global.PDriverReg $@
+${HDIR}.Global.h.PDumperReg: Import.Global.PDumperReg ${HDR2H};     perl ${HDR2H} Import.Global.PDumperReg $@
+${HDIR}.Global.h.PoduleReg:  Import.Global.PoduleReg ${HDR2H};      perl ${HDR2H} Import.Global.PoduleReg  $@
 # PrintTypes is just full of comments
-${HDIR}.Global.h.Services:   Import.Global.Services;       perl perl.Hdr2H Import.Global.Services   $@
-${HDIR}.Global.h.SWIs:       Import.Global.SWIs;           perl perl.Hdr2H Import.Global.SWIs       $@
-${HDIR}.Global.h.UpCall:     Import.Global.UpCall;         perl perl.Hdr2H Import.Global.UpCall     $@
+${HDIR}.Global.h.Services:   Import.Global.Services ${HDR2H};       perl ${HDR2H} Import.Global.Services   $@
+${HDIR}.Global.h.SWIs:       Import.Global.SWIs ${HDR2H};           perl ${HDR2H} Import.Global.SWIs       $@
+${HDIR}.Global.h.UpCall:     Import.Global.UpCall ${HDR2H};         perl ${HDR2H} Import.Global.UpCall     $@
 
 # The C versions of local header files.
 # Files which don't work yet:
 #   CMOS        Sprite      Tokens      Pointer     Messages
 # Files which have no equivalent.
 #   DDVMacros   Debug       ExtraLong   ListOpts    Macros      NdrDebug    Proc        Symbols
-${HDIR}.Global.h.DevNos:     Hdr.DevNos;         perl perl.Hdr2H Hdr.DevNos     $@
-${HDIR}.Global.h.EnvNumbers: Hdr.EnvNumbers;     perl perl.Hdr2H Hdr.EnvNumbers $@
-${HDIR}.Global.h.Heap:       Hdr.Heap;           perl perl.Hdr2H Hdr.Heap       $@
-${HDIR}.Global.h.KeyV:       Hdr.KeyV;           perl perl.Hdr2H Hdr.KeyV       $@
-${HDIR}.Global.h.PaletteV:   Hdr.PaletteV;       perl perl.Hdr2H Hdr.PaletteV   $@
+${HDIR}.Global.h.DevNos:     Hdr.DevNos ${HDR2H};         perl ${HDR2H} Hdr.DevNos     $@
+${HDIR}.Global.h.EnvNumbers: Hdr.EnvNumbers ${HDR2H};     perl ${HDR2H} Hdr.EnvNumbers $@
+${HDIR}.Global.h.Heap:       Hdr.Heap ${HDR2H};           perl ${HDR2H} Hdr.Heap       $@
+${HDIR}.Global.h.KeyV:       Hdr.KeyV ${HDR2H};           perl ${HDR2H} Hdr.KeyV       $@
+${HDIR}.Global.h.PaletteV:   Hdr.PaletteV ${HDR2H};       perl ${HDR2H} Hdr.PaletteV   $@
 
 
 # Machine/hardware specific headers:
