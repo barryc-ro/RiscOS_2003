@@ -48,7 +48,7 @@ Stream::test_empty_buffers(void)
   error_flag result = ErrorState();
   int token_id = -1;
   
-  if ((state != state_step)||( (--step_times) >= 0)){
+  if ((state != state_step)||( (--state_value) >= 0)){
  	
    	if ( (result != ErrorOccurred)&&(state != state_stop) ) {
    	  
@@ -109,7 +109,7 @@ Stream::test_empty_buffers(void)
   error_flag result = ErrorState();
   int token_id;
   
-  if ((state != state_step)||( (--step_times) >= 0)){
+  if ((state != state_step)||( (--state_value) >= 0)){
     
   
   	if ( (result != ErrorOccurred)&&(state != state_stop) ) {
@@ -123,17 +123,24 @@ Stream::test_empty_buffers(void)
   			buffers[token_id].in_use = claim_token;	// paired with free block
   			_kernel_irqs_on();
   		
-  			int scene_num = 0;		
-	    		result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num);
+  			int scene_num = 0;
+  			int play_id = 0;		
+	    		result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num, &play_id);
  	
 	 		if (result != ErrorOccurred){
 	 			if(buffers[token_id].block != NULL){
 					buffers[token_id].blocks_returned = 0;
-					if ((scene_blanking == true)&&(scene_num != 0)){
-						if (current_scene != scene_num){
-						  	if (current_scene != 0)
-								reset_sink(mysource->get_most_significant_mode());
-							current_scene = scene_num;
+					if (play_id != currentMPEG_playid){
+					  	if (play_id != 0)
+					  		reset_sink(mysource->get_most_significant_mode());
+					  	currentMPEG_playid = play_id;
+					} else {
+						if ((scene_blanking == true)&&(scene_num != 0)){
+							if (currentMPEG_scene != scene_num){
+							  	if (currentMPEG_scene != 0)
+									reset_sink(mysource->get_most_significant_mode());
+								currentMPEG_scene = scene_num;
+							}
 						}
 					}
 					if ((result = mysink.FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
@@ -154,6 +161,18 @@ Stream::test_empty_buffers(void)
   return result;
 }
 #endif
+   	
+inline void
+Stream::reset_sink(play_mode mode)
+{ 
+	if ((mode == mode_fastforward)||(mode == mode_fastrewind)) 
+  		mysink.ResetStream(1); 
+  	else 
+  		mysink.ResetStream(3);
+  	
+  	// if we need to 
+  	if (state == state_slow) mysink.SetSpeed(state_value);
+}
 
 
 Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_recvspace, int NumBlocks, int BufferBlocks, int TCP_TimeOut, void *pwork)
@@ -170,7 +189,7 @@ Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_
   callback_pending = callback_bufferswait;	// buffer management is in a state of waiting for buffer blocks
   state = state_play;				// set the state of play
   buffer_blocks = BufferBlocks;
-  current_scene = 0;
+  currentMPEG_playid = currentMPEG_scene = 0;
   scene_blanking = false;
   inet_udp_reenter = inet_tcp_reenter = 0;
    
@@ -215,7 +234,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   callback_pending = callback_bufferswait;	// buffer management is in a state of waiting for buffer blocks
   state = state_prestart;			// set the state of play
   buffer_blocks = BufferBlocks;	
-  current_scene = 0;
+  currentMPEG_playid = currentMPEG_scene = 0;
   scene_blanking = sceneblank;
   inet_udp_reenter = inet_tcp_reenter = 0;
    
@@ -551,8 +570,9 @@ error_flag
 Stream::SetSpeed(int direction, int speed)		// call to Decoder
 {
  if (ErrorState() != ErrorOccurred){
+ 	state_value = speed;		// this is the speed of the mpeg player
+ 	
  	if ((direction == 2)&&(trick_modes() & trick_step_play)){
- 		step_times = speed;
  		change_state(state_step);
  	}
  	else 
@@ -645,11 +665,13 @@ Stream::ReadNPT(ULINT *NPT_time)
 				err_ptr = &(mysink.ReturnCopyOfError());
 	}
 	else {
-#ifdef DEBUGLIB	  
+#ifdef DEBUGLIB
+	if (Debug(debug_time)) { 
 	    	int current_min = (int)((getNECTime() >> 1) / 60);
  		Debug("NPT (%2i:%2i:%2i) %i, (%i)", 
   					   (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
   					   getNECTime(), mysource->get_most_significant_mode());
+  	}
 #endif
 		(*NPT_time) = (getNECTime() >> 1);
 	}
@@ -798,7 +820,8 @@ Stream::timeslice(Statistics *stats)
    			  		callback_pending -= callback_timeout;
      					_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
      				}     				
-     	 			myserver->send_playback_request( mysource->get_current_play_id(), RequestNum, AckNum, from, mode);
+     				
+     				myserver->send_playback_request( mysource->get_current_play_id(), RequestNum, AckNum, from, mode);
      	 			
      	 			if (myserver->ErrorExists()){
      	 			  	if (myserver->ErrorNum() == IP_NoBuffer){
@@ -810,9 +833,6 @@ Stream::timeslice(Statistics *stats)
      	 			 		if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
      	 			}
      	 			else{
-     	 			  	if (mysink.SetSpeed(0) == ErrorOccurred){
-       						if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
-       					}
      	 			  	myserver->reset_message_sent();
      	 			  	callback_pending += callback_bufferswait;
      	 			  	
@@ -975,7 +995,6 @@ Stream::source_inetevent(int code, Statistics *stats)
                                 }
                                 else {
   					if (mysource->getFullBlocks() > buffer_blocks){
-  				  		reset_sink(mysource->get_most_significant_mode());
 						callback_pending -= callback_bufferswait;
 						test_empty_buffers();
 #ifdef DEBUGLIB

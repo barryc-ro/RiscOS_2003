@@ -88,7 +88,10 @@ Source::calculateMaxCompleteBlock(void)
   while (((mb = mem_map->findExistingBlock(max_completed_block+1)) != NULL)&&(mb->inuse)&&(mb->completed))
   	max_completed_block++;
   
-  full_blocks = (int)(max_completed_block - last_block_sent);
+  if (max_completed_block > last_block_sent)
+  	full_blocks = (size_t)(max_completed_block - last_block_sent);
+  else
+  	full_blocks = 0;
   	
   return ErrorState();
 }
@@ -196,44 +199,57 @@ Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_
 				result = MakeError(IP_TimeOutOnCommunication);			
 		}
 		else {
-			if ((mb->dgrams_received == 0)||(mb->dgrams_in_block == 0)){
-				local_naks = mem_map->dgramsPerBlock();
-				++stats->block_naks_sent;
-				if (server->SendNak((max_completed_block+1), 0, (max_completed_block+1), -1) == ErrorOccurred){
-					if (err_ptr == NULL)
-       	        	 			err_ptr = &(server->ReturnCopyOfError());
-       	        	 		result = ErrorOccurred;
-       			        }
-       			}
-       			else {					  
-       	      			dgm = 0;                 	  	                 	  	
-				while ((dgm < mb->dgrams_in_block)&&(result != ErrorOccurred)){
-       	       		  
-       					while ((mb->nec_block.buffers[dgm].buffer_ptr != NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
-        	       		  		
-       			  		min_val = dgm;
-               			  	
-      			  		while ((mb->nec_block.buffers[dgm].buffer_ptr == NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
-                 		  			
-      			  		max_val = dgm - 1;
-
-	       				if (min_val <= max_val){
-              				  	local_naks += (max_val - min_val)+1;
-               				  	mb->pending_nak = 1;
-               				  	if (server->SendNak(mb->block_id, min_val, mb->block_id, max_val) == ErrorOccurred) {
-							if (err_ptr == NULL) err_ptr = &(server->ReturnCopyOfError());
-        		       				result = ErrorOccurred;
-        		                  	}
-        		                }
-        		        }// while datagrams
-        		        stats->naks_sent += local_naks;
-        		}//else
+		  	if (mb->special_play_id != current_play_id){
+		  	  	mb->deleted_block = 1;
+        			mb->completed = 1;	// assign completed block
+				mb->pending_nak = 0;
+								
+				++(stats->deleted_blocks);
+				result = calculateMaxCompleteBlock();	// calculate most completed
+			
+				if (( ++deleted_blocks > Acceptable_deleted_blocks)&&(getStartEnd() == 0))
+					result = MakeError(IP_TimeOutOnCommunication);	
+			}
+			else {
+				if ((mb->dgrams_received == 0)||(mb->dgrams_in_block == 0)){
+					local_naks = mem_map->dgramsPerBlock();
+					++stats->block_naks_sent;
+					if (server->SendNak((max_completed_block+1), 0, (max_completed_block+1), -1) == ErrorOccurred){
+						if (err_ptr == NULL)
+       	        		 			err_ptr = &(server->ReturnCopyOfError());
+       	        		 		result = ErrorOccurred;
+       				        }
+       				}
+       				else {					  
+       	      				dgm = 0;                 	  	                 	  	
+					while ((dgm < mb->dgrams_in_block)&&(result != ErrorOccurred)){
+       	       			  
+       						while ((mb->nec_block.buffers[dgm].buffer_ptr != NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
+        	       			  		
+       				  		min_val = dgm;
+               				  	
+      				  		while ((mb->nec_block.buffers[dgm].buffer_ptr == NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
+                 			  			
+      				  		max_val = dgm - 1;
+	
+		       				if (min_val <= max_val){
+        	      				  	local_naks += (max_val - min_val)+1;
+               					  	mb->pending_nak = 1;
+               					  	if (server->SendNak(mb->block_id, min_val, mb->block_id, max_val) == ErrorOccurred) {
+								if (err_ptr == NULL) err_ptr = &(server->ReturnCopyOfError());
+        			       				result = ErrorOccurred;
+        			                  	}
+        			                }
+        			        }// while datagrams
+        			        stats->naks_sent += local_naks;
+        			}//else
 #ifdef DEBUGLIB				
-        		if (Debug(debug_naks))
-        			Debug("nak (%i)(%i)[%i] @ %i, %i/%i (%i)",
-              				mb->completed!=0, mb->inuse!=0, mb->block_id, mb_time, 
-              				mb->dgrams_received, mb->dgrams_in_block, local_naks);
+        			if (Debug(debug_naks))
+        				Debug("nak (%i)(%i)[%i] @ %i, %i/%i (%i)",
+              					mb->completed!=0, mb->inuse!=0, mb->block_id, mb_time, 
+              					mb->dgrams_received, mb->dgrams_in_block, local_naks);
 #endif	
+                        }
                 }
 			
         }
@@ -494,11 +510,8 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
         result = getBlockStatus(0, 0, &freebuf);
      	if (freebuf > NEC_databurstval)
    		freebuf = NEC_databurstval;
-   		// this adds a margin just outside any possibly requested block
-   	if (mode == mode_streamlive)
-		(*max_complete) = (int)(last_block_sent = (max_completed_block = 0));
-	else
-		(*max_complete) = (int)(last_block_sent = (max_completed_block += NEC_databurstval+1));
+	
+	(*max_complete) = (int)(last_block_sent = max_completed_block);
 		
 	(*request_num) = (int)(max_completed_block + freebuf);
    	
@@ -524,7 +537,7 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
 //
 //
 error_flag
-Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int *scene)
+Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int *scene, int *playid)
 {
        MemBlock *mb;
        error_flag result = ErrorState();
@@ -588,6 +601,7 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
           	        }
                 }
                 (*scene) = ((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->scene_number;	// in network order, no problem
+           	(*playid) = mb->special_play_id;
            	(*block)->buffers[0].buffer_ptr    +=  sizeof(NECBlockHeader);
   		(*block)->buffers[0].buffer_length -=  sizeof(NECBlockHeader);
   		
@@ -644,7 +658,6 @@ Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pen
                 	result = mem_map->freeBlock_background(mb);
                 }
         }
-        full_blocks = (int)(max_completed_block - last_block_sent);
         
  	if ((*callback_pending) & callback_fullblocks)
   		(*callback_pending) -= callback_fullblocks;
@@ -668,7 +681,7 @@ Source::foregroundExecute(InternetObject *server, Statistics *stats, ULINT *time
     size_t freeblocks = 0;
     	
     if (!ErrorExists()){
-      	
+      	calculateMaxCompleteBlock();
        	calculatePosNAKSequence(server, stats, &naks, timeout);
         	
        	if ((naks != 0)&&(naks != -1)){
@@ -809,8 +822,6 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
 								}
 								else
 									(*flags) = callback_fullblocks;
-									
-        							full_blocks = (int)(max_completed_block - last_block_sent);
         							
 								if (dgram->status_word & 0x01){
 #ifdef DEBUGLIB       	       							  
@@ -897,7 +908,7 @@ Source::getMiscInfo(misc_info_flags flags, void *ptr)
 #ifdef DEBUGLIB
 	default:
 		{
-		Debug("MiscInfo - max comp %i-%i", max_completed_block, last_block_sent);
+		Debug("MiscInfo - max comp %i-%i c_id = %i", max_completed_block, last_block_sent, current_play_id);
 		
          		for (int i = 0; ( (i < mem_map->maxBlocks())&&(result != ErrorOccurred) ); i++) {
          		      MemBlock *mb = mem_map->getBlock(i);
@@ -1177,7 +1188,7 @@ SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace
 //
 //
 error_flag
-SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int*)
+SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int*, int*)
 {
         MemBlock *mb;
         error_flag result = ErrorState();
