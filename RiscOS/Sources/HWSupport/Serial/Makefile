@@ -80,3 +80,42 @@ ${TARGETSA}: s.StandAlone ${RESOURCES}
         ${AS} ${ASFLAGS} s.StandAlone
 
 # Dynamic dependencies:
+rm.SerialSA: s.Serial
+rm.SerialSA: Hdr:ListOpts
+rm.SerialSA: Hdr:Macros
+rm.SerialSA: Hdr:System
+rm.SerialSA: Hdr:SWIs
+rm.SerialSA: Hdr:CPU.Generic26
+rm.SerialSA: Hdr:IO.GenericIO
+rm.SerialSA: Hdr:RISCOS
+rm.SerialSA: Hdr:ModHand
+rm.SerialSA: Hdr:FSNumbers
+rm.SerialSA: Hdr:HighFSI
+rm.SerialSA: Hdr:NewErrors
+rm.SerialSA: Hdr:DevNos
+rm.SerialSA: Hdr:Services
+rm.SerialSA: Hdr:Symbols
+rm.SerialSA: Hdr:UpCall
+rm.SerialSA: Hdr:NdrDebug
+rm.SerialSA: Hdr:DDVMacros
+rm.SerialSA: Hdr:CMOS
+rm.SerialSA: Hdr:DeviceFS
+rm.SerialSA: Hdr:Serial
+rm.SerialSA: Hdr:RS423
+rm.SerialSA: Hdr:Buffer
+rm.SerialSA: Hdr:IO.IOC-A1
+rm.SerialSA: Hdr:IO.IOC
+rm.SerialSA: Hdr:IO.IOEB
+rm.SerialSA: Hdr:IO.IOC
+rm.SerialSA: Hdr:MsgTrans
+rm.SerialSA: Hdr:Proc
+rm.SerialSA: Hdr:ResourceFS
+rm.SerialSA: Hdr:Portable
+rm.SerialSA: Hdr:HostFS
+rm.SerialSA: Version
+rm.SerialSA: s.Macros
+rm.SerialSA: s.Errors
+rm.SerialSA: s.Init
+rm.SerialSA: s.ResFiles
+rm.SerialSA: s.Common
+rm.SerialSA: s.Serial710
