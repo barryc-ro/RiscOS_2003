@@ -93,20 +93,19 @@ sub read_accounts_file
       $passwords[$record_number] = substr($fields[1], 0, length($fields[1]) - 1);
     }
 
+    if ($fields[0] eq "flags")
+    {
+      $flags[$record_number] = substr($fields[1], 0, length($fields[1]) - 1);
+    }
+
     if ($fields[0] eq "emailaddress")
     {
       ($addresses[$record_number],$temp) = split("@", substr($fields[1], 0, length($fields[1]) - 1));
 
       print "<INPUT TYPE=HIDDEN NAME=hidden_address".$record_number." VALUE=".$addresses[$record_number].">";
-    }
 
-    if ($fields[0] eq "flags")
-    {
-      $flags[$record_number] = substr($fields[1], 0, length($fields[1]) - 1);
-
-      # increment the record_number when the flags are found as it is the last part of each account record
+      # increment the record_number when the email address is found as it is the last part of each account record
       $record_number += 1;
-
     }
   }
 
