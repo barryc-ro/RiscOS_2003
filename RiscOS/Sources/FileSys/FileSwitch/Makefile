@@ -12,6 +12,7 @@
 # Paths
 #
 EXP_HDR = <export$dir>
+C_EXP_HDR = <cexport$dir>.Interface.h
 
 #
 # Generic options:
@@ -32,7 +33,9 @@ COMPONENT = FileSwitch
 SOURCE    = s.FileSwitch
 TARGET    = rm.FileSwitch
 EXPORTS   = ${EXP_HDR}.LowFSI \
-            ${EXP_HDR}.HighFSI
+            ${EXP_HDR}.HighFSI \
+            ${C_EXP_HDR}.HighFSI
+# Add LowFSI if ever required - Hdr2H doesn't like it yet
 
 #
 # Generic rules:
@@ -79,5 +82,13 @@ ${EXP_HDR}.LowFSI: hdr.LowFSI
 
 ${EXP_HDR}.HighFSI: hdr.HighFSI
         ${CP} hdr.HighFSI $@ ${CPFLAGS}
+
+${C_EXP_HDR}.LowFSI: hdr.LowFSI
+        ${MKDIR} ${C_EXP_HDR}
+        perl Build:Hdr2H hdr.LowFSI $@
+
+${C_EXP_HDR}.HighFSI: hdr.HighFSI
+        ${MKDIR} ${C_EXP_HDR}
+        perl Build:Hdr2H hdr.HighFSI $@
 
 # Dynamic dependencies:
