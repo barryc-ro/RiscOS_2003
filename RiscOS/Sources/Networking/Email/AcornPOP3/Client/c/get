@@ -4,7 +4,7 @@
 
 	FILE:		get.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.04 for RISC OS
+	VERSION:	0.09 for RISC OS
 
 	OVERVIEW
 	========
@@ -20,6 +20,17 @@
 	09/03/98	0.04	RDW	get_line_FSM_STORE_CHAR() realloc size added 1
 					to it for NULL char so strncpy() after it is
 					safe.
+	12/03/98	0.05	RDW	Elib_priv.h taken from EmailLib now
+	18/03/98	0.06	RDW	get_line_CAhandler(), get_line_CBhandler() and
+					get_line_CAtimeouthandler() unused params. tidied up
+	25/03/98	0.07	RDW	#include debuglib corrected
+	19/05/98	0.08	RDW	Only switches process1.state into GET
+					on a EWOULDBLOCK.  Also, on exit now
+					ensures there is no callafter or
+					callback pending
+					SLEEP_TIME changed from 1 to 20cs
+	02/06/98	0.09	RDW	Re-entracy changes as per cmdresp.c
+					0.05
 */
 
 
@@ -40,8 +51,8 @@
 /* Include header files - External Libraries                                  */
 /*                                                                            */
 /* ************************************************************************** */
-#include "DebugLib.h"
-#include "Elib_priv.h"
+#include "DebugLib/debuglib.h"
+#include "Email/EmailLib/Elib_priv.h"
 #include "callx/callx.h"
 
 
@@ -54,6 +65,7 @@
 #include "errortable.h"
 #include "callbacks.h"
 #include "get.h"
+#include "pop_utils.h"
 
 
 /* ************************************************************************** */
@@ -72,10 +84,11 @@ typedef enum
 
 typedef struct
 {
-  int               sem;							/* semaphore */
+  BOOL              in_FSM;							/* Thread currently executing in FSM                                   */
+  BOOL              pending_CB;							/* There is a CallBack/re-entrancy into the FSM pending                */
+  BOOL              need_CB;							/* There needs to be a CallBack set to re-enter the FSM                */
   int               s;								/* socket to read from                                                 */
   int               timeout;							/* timeout for this get line                                           */
-//  char              c;								/* character read from the socket                                      */
   CONNECTION_EVENT  event;							/* event from Internet Event handler if it is driving the FSM          */
   function          func;							/* function to callback once FSM has terminated                        */
   char            **line;							/* pointer to set to point to the read in line of data. FSM allocs mem */
@@ -97,7 +110,7 @@ typedef struct
 /* Constants                                                                  */
 /*                                                                            */
 /* ************************************************************************** */
-static const int SLEEP_TIME    = 1;
+static const int SLEEP_TIME    = 20;
 static const int TIME_SLICE    = 50;						/* Time slice to use                                                   */
 static const int LINE_BUF_SIZE = 255;						/* granuality of buffer size to allocated with                         */
 
@@ -129,9 +142,14 @@ static void              get_line_FSM_READ_CHAR(get_line_context *context);
 static void              get_line_FSM_STORE_CHAR(get_line_context *context);
 static void              get_line_FSM_ERROR(get_line_context *context);
 static void              get_line_FSM_COMPLETED(get_line_context *context);
-static _kernel_oserror*  get_line_FSM(get_line_context *context);
+/*static _kernel_oserror*  get_line_FSM(get_line_context *context);*/		/* commented out to stop compiler warning about unused earlier
+										   declaration of 'get_.....'  Why should it complain?  Surely it's
+										   good practice to declare func. prototypes always, whether they
+										   are really needed or not...*/
 static _kernel_oserror*  get_line_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror*  get_line_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror*  get_line_CAtimeouthandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror*  CA_get_line_from_server(void *data);
 
 
 /* ************************************************************************** */
@@ -139,42 +157,6 @@ static _kernel_oserror*  get_line_CAhandler(_kernel_swi_regs *r, void *pw, void 
 /* Functions                                                                  */
 /*                                                                            */
 /* ************************************************************************** */
-
-/* ************************************************************************** */
-/*
-   FUNCTION:       new_get_line_context
-   DESCRIPTION:    Function to create a new context for the get_line_FSM
-   DEPENDENCIES:      			errortable		errortable.h
-   		   function		malloc			stdlib.h
-   		   function		memset			string.h
-   		   type			get_line_context	
-   DEPENDED ON BY: function		get_line_from_server
-   INPUT PARAMS:   NONE
-   OUTPUT PARAMS:  NONE
-   RETURN VALUE:   			NULL		if failed
-   CONSTANTS:      NONE
-   VARIABLES:      _kernel_oserror*	error		result to return
-   		   va_list		arg		variable arguments of this function
-   		   char*		buffer		string buffer to create command string in
-   		   int			reallen		real length of command including line termination sequence (EOL)
-   		   int			rc		send() return code
- */
-/* ************************************************************************** */
-static get_line_context *new_get_line_context(void)
-{
-  get_line_context *c = malloc(sizeof(get_line_context));			/* create new context        */
-  
-  if (c)									/* if created, initialise it */
-  {
-    memset(c, 0, sizeof(get_line_context));					/* init. context to NULL     */
-    c->s        = -1;								/* init. socket to INVALID   */
-    c->state    = INIT;								/* init. FSM state           */
-    c->sem      = 0;
-  }
-  
-  return c;
-}
-
 
 /* ************************************************************************** */
 /*
@@ -215,19 +197,19 @@ extern _kernel_oserror *get_line_from_server(int               s,
   _kernel_oserror *error = 0;
   
   if ((s < 0) || (func == 0) || (internet_err == 0))				/* If invalid socket or function */
-    error = ERROR(NULLADDR);						/* error is NULL address         */
+    error = ERROR(NULLADDR);							/* error is NULL address         */
   
   if (!error)									/* If noerror then,              */
   {
     if (string == 0)								/* If string ptr is NULL         */
-      error = ERROR(NULLADDR);						/* error is NULL address         */
+      error = ERROR(NULLADDR);							/* error is NULL address         */
   }
   
   if (!error)
   {
     get_line_context *context = new_get_line_context();				/* create a new context for the FSM */
     process1.get_context = context;
-    process1.state = GET;
+/*    process1.state = GET;*/
     
     if (context)
     {
@@ -240,17 +222,49 @@ extern _kernel_oserror *get_line_from_server(int               s,
       context->end      = FALSE;
       context->error2   = error2;
       context->data     = data;
-//      error = get_line_FSM(context);
-//      error = set_callback(/*CB_DATA_GETLINE, */CB_CALLER_FSM, EVENT_NONE, &get_line_CBhandler, context);
-//      dprintf(("", "SETTING CALLAFTER to get_line\n"));
-//      error = callx_add_callafter(SLEEP_TIME, &get_line_CAhandler, context);
+      process1.state    = PROCESSING;						/* make sure main state is IDLE so event handler doesn't do anything */
       error = CB_get_line_from_server(context);
     }
     else									/* else, malloc failed           */
-      error = ERROR(MALLOCFAILED);					/* return error                  */
+      error = ERROR(MALLOCFAILED);						/* return error                  */
   }
   
   return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       new_get_line_context
+   DESCRIPTION:    Function to create a new context for the get_line_FSM
+   DEPENDENCIES:      			errortable		errortable.h
+   		   function		malloc			stdlib.h
+   		   function		memset			string.h
+   		   type			get_line_context	
+   DEPENDED ON BY: function		get_line_from_server
+   INPUT PARAMS:   NONE
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   			NULL		if failed
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error		result to return
+   		   va_list		arg		variable arguments of this function
+   		   char*		buffer		string buffer to create command string in
+   		   int			reallen		real length of command including line termination sequence (EOL)
+   		   int			rc		send() return code
+ */
+/* ************************************************************************** */
+static get_line_context *new_get_line_context(void)
+{
+  get_line_context *c = malloc(sizeof(get_line_context));			/* create new context        */
+  
+  if (c)									/* if created, initialise it */
+  {
+    memset(c, 0, sizeof(get_line_context));					/* init. context to NULL     */
+    c->s        = -1;								/* init. socket to INVALID   */
+    c->state    = INIT;								/* init. FSM state           */
+  }
+  
+  return c;
 }
 
 
@@ -265,8 +279,7 @@ static _kernel_oserror *get_line_FSM(get_line_context *context)
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
-    context->sem--;
-    if (context->sem < 0) context->sem = 0;
+    context->exit = FALSE;
     do
     {
       if (context->error)
@@ -322,34 +335,33 @@ static _kernel_oserror *get_line_FSM(get_line_context *context)
     } while ((!expired(context->t_slice)) && (!context->end) && (!context->exit));	// end while on FSM
   }
   
-/*      dprintf(("", "REMOVING CALLAFTER to get_line\n"));
-      error = callx_remove_callafter(&get_line_CAhandler, context);
-      if (error)
-      {
-        dprintf(("", "REMOVEING CALLAFTER GAVE ERROR: %d %s\n", error->errnum, error->errmess));
-      }
-      error = callx_remove_callback(&get_line_CBhandler, context);
-      if (error)
-      {
-        dprintf(("", "REMOVEING CALLBACK GAVE ERROR: %d %s\n", error->errnum, error->errmess));
-      }*/
   if (!error)
   {
-    if (context->end)
+    int state = pop_irqs_off();							/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
-      free(context);
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&get_line_CAtimeouthandler, context);		/* Ensure timeout is cleared                  */
+      callx_remove_callafter(&get_line_CAhandler, context);			/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&get_line_CBhandler, context);			/* Ensure any pending callback is removed     */
+      free(context);								/* destroy the context                        */
       context = 0;
     }
-    else if (!context->exit)
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
     {
-      error = CA_get_line_from_server(context);
-//      dprintf(("", "SETTING CALLAFTER to get_line\n"));
-//      error = callx_add_callafter(SLEEP_TIME, &get_line_CAhandler, context);
-//      error = set_callback(/*CB_DATA_GETLINE, */CB_CALLER_FSM, EVENT_NONE, &get_line_CBhandler, context);
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_get_line_from_server(context);					/* set a callafter to re-enter the FSM later  */
     }
-    else
-      context->exit = FALSE;
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_get_line_from_server(context);					/* set a callback to re-enter the FSM         */
+    }
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
+
 
   return error;
 }
@@ -357,45 +369,73 @@ static _kernel_oserror *get_line_FSM(get_line_context *context)
 
 extern _kernel_oserror* CA_get_line_from_server(void *data)
 {
-  get_line_context *c = (get_line_context*)data;
-  
-  if (c->sem == 0)
-  {
-    dprintf(("", "SETTING CALLAFTER to get_line\n"));
-    c->sem++;
-    return callx_add_callafter(SLEEP_TIME, &get_line_CAhandler, c);
-  }
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &get_line_CAhandler, data);
   else
-    return 0;
+    return ERROR(NULLADDR);
 }
 
 
 extern _kernel_oserror* CB_get_line_from_server(void *data)
 {
-  get_line_context *c = (get_line_context*)data;
+  _kernel_oserror *error = 0;
+  int              state;
+  get_line_context *context = (get_line_context*)data;
   
-  if (c->sem == 0)
+  if (context)
   {
-    dprintf(("", "SETTING CALLBACK to get_line\n"));
-    c->sem++;
-    return callx_add_callback(&get_line_CBhandler, c);
+    state = pop_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&get_line_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
   }
   else
-    return 0;
+    error = ERROR(NULLADDR);
+    
+  return error;
 }
 
   
 static _kernel_oserror* get_line_CAhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  UNUSED(r);
+  UNUSED(pw);
+
   dprintf(("", "ENTERED: get_line_CAhandler\n"));
-  return callx_add_callback(&get_line_CBhandler, data);
+  return CB_get_line_from_server(data);
 }
 
 
 static _kernel_oserror* get_line_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  get_line_context *context = (get_line_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
   dprintf(("", "ENTERED: get_line_CBhandler\n"));
-  return get_line_FSM(data);
+  UNUSED(r);
+  UNUSED(pw);
+  
+  if (context)
+  {
+    state = pop_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    pop_restore_irqs(state);
+    error = get_line_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
 }
 
 
@@ -403,6 +443,8 @@ static _kernel_oserror* get_line_CAtimeouthandler(_kernel_swi_regs *r, void *pw,
 {
   get_line_context *c = (get_line_context*)data;
   
+  UNUSED(r);
+  UNUSED(pw);
   c->event = EVENT_TIMEOUT;
   
   return CB_get_line_from_server(c);
@@ -490,6 +532,7 @@ static void get_line_FSM_READ_CHAR(get_line_context *context)
   
   if ((!context->error) && (do_a_recv))
   {
+    process1.state = GET;						/* NEW */
     rc = recv(context->s, process1.read_buffer, process1.read_buf_size-1, 0);						// receive char from server
     dprintf(("", "recv: rc: %d\nrecv: process1.read_buffer: %s\nprocess1.read_buf_len: %d\n", rc, process1.read_buffer, process1.read_buf_len));
     if (rc < 0)
