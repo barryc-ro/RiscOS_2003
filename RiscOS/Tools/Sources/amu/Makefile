@@ -26,7 +26,7 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 
-CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} -Wc
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -42,6 +42,8 @@ ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 CLXLIB    = ${CLXDIR}.o.clxlib
+
+DIRS=o._dirs
 
 #
 # Include files
@@ -97,13 +99,14 @@ export_hdrs:
 export_libs: 
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+${DIRS}:
 	${MKDIR} o
+	create $@
 
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} local_dirs
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
 
 
