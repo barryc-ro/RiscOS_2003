@@ -60,24 +60,6 @@ h.cmhg:  amu.makefile cmhg.vsphdr
          cmhg -p -d h.cmhg cmhg.VSPhdr
 
 # Dynamic dependencies:
-o.vspc:	c.vspc
-o.vspc:	h.debug
-o.vspc:	C:h.kernel
-o.vspc:	TCPIPlibs:sys.h.types
-o.vspc:	TCPIPlibs:sys.h.cdefs
-o.vspc:	TCPIPlibs:machine.h.endian
-o.vspc:	TCPIPlibs:machine.h.ansi
-o.vspc:	TCPIPlibs:machine.h.types
-o.vspc:	C:h.kernel
-o.vspc:	C:h.swis
-o.vspc:	h.vsp
-o.vspc:	h.misc
-o.vspc:	h.vspc
-o.vspc:	h.mzswrap
-o.vspc:	h.module
-o.debug:	c.debug
-o.debug:	C:h.kernel
-o.debug:	C:h.swis
 o.mzscl:	rts.src.vid.c.mzscl
 o.mzscl:	mx_pri:h.sysi
 o.mzscl:	mx_pri:h.sysx
@@ -158,6 +140,9 @@ o.mzsclii:	rts:h.mzscl
 o.mzsclii:	mx_pub:h.mzscli
 o.mzsclii:	mx_pub:h.mzs
 o.mzsclii:	mx_inc:h.mzsclii
+o.debug:	c.debug
+o.debug:	C:h.kernel
+o.debug:	C:h.swis
 o.smnudp:	c.smnudp
 o.smnudp:	C:h.kernel
 o.smnudp:	C:h.swis
@@ -216,6 +201,21 @@ o.smnudp:	h.udpNIO
 o.smnudp:	h.rosevents
 o.smnudp:	h.options
 o.smnudp:	h.module
+o.vspc:	c.vspc
+o.vspc:	h.debug
+o.vspc:	C:h.kernel
+o.vspc:	TCPIPlibs:sys.h.types
+o.vspc:	TCPIPlibs:sys.h.cdefs
+o.vspc:	TCPIPlibs:machine.h.endian
+o.vspc:	TCPIPlibs:machine.h.ansi
+o.vspc:	TCPIPlibs:machine.h.types
+o.vspc:	C:h.kernel
+o.vspc:	C:h.swis
+o.vspc:	h.vsp
+o.vspc:	h.misc
+o.vspc:	h.vspc
+o.vspc:	h.mzswrap
+o.vspc:	h.module
 o.mzswrap:	c.mzswrap
 o.mzswrap:	mx_pri:h.sysi
 o.mzswrap:	mx_pri:h.sysx
