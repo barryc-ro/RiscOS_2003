@@ -287,7 +287,7 @@ com_ReadFunaiHeader
   }
   else
   {
-    readbyte = serial_read_byte(iInputStream);
+    readbyte = serial_read_byte(iInputStream); /** Normally the slot indicator **/
     switch(g_funai_header)
     {
       case RET_CARDOPEN:   com_ProcessCardOpen(readbyte);
@@ -384,16 +384,31 @@ com_ProcessCardInserted
     a = serial_read_byte(iInputStream);
 //    printf("c a=%d\n",a);
 
-    if(a == MSG_CARDINSERT)
+    switch(a)
     {
-//    printf("d\n");
-      if(serial_read_byte(iInputStream) == SLOT_2)
-      {
-//	printf("Got slot2 too. Pending set.\n");
-        serial_write_byte(iOutputStream, ACK); /** Got to ACK it here or it'll be too late... **/
-        /* Flag it for later consumption */
-        g_card2_insertpending = TRUE;
-      }
+      case MSG_CARDINSERT: if(serial_read_byte(iInputStream) == SLOT_2)
+      			   {
+//			     printf("Got slot2 too. Pending set.\n");
+		             /* Flag it for later consumption */
+		             g_card2_insertpending = TRUE;
+			   }
+			   /** Can't get a slot1 insert, cos it's already in... **/
+ 			   serial_write_byte(iOutputStream, ACK); /** Got to ACK it here or it'll be too late... **/
+			   break;
+      case MSG_CARDREMOVE: if(serial_read_byte(iInputStream) == SLOT_2)
+      			   {
+      			     g_card2_insertpending = FALSE; /** don't really need this but what the hell **/
+ 			     serial_write_byte(iOutputStream, ACK); /** Got to ACK it **/
+      			   }
+      			   else
+      			   {
+      			     /** Uh oh, card1 removed before we've accepted it... **/
+ 			     serial_write_byte(iOutputStream, ACK); /** Got to ACK it **/
+ 			     g_slot2_state = IDLE;
+ 			     g_uc_state = UC_IDLE;
+ 			     return;
+      			   }
+      			   break;
     }
   }
   g_slot2_state = IDLE; /** Re-enable async events **/
@@ -427,14 +442,16 @@ com_ProcessCardRemoved
     {
       g_card2_in = FALSE;
       g_slot2datablock_state = SCI_E_OUT;
+      g_slot2_state = IDLE;
       /** send card2_removed service **/
       sys_SigBroadcast(SCI_REMOVED2);
     }
   }
-  else
+  else /** Slot 2 **/
   {
     g_card2_in = FALSE;
     g_slot2datablock_state = SCI_E_OUT;
+    g_slot2_state = IDLE;
     /** send card2_removed service **/
     sys_SigBroadcast(SCI_REMOVED2);
   }
@@ -616,16 +633,15 @@ com_StartReadSlot2
   switch(g_slot2_state)
   {
     case VERIFY_SEND:
-                        g_slot2_state = VERIFY_RESPONSE;
                         /** Issue APDU for PIN '00000000' against IEF1 **/
                         cmd[0] = 0x00;
                         cmd[1] = 0x20;
                         cmd[2] = 0x00;
                         cmd[3] = 0x94;
                         strcpy((char *)block, "00000000");
-//                        com_SendFunaiHeader(SLOT_2, CMD_APDU);
-                        t1_StartCommand(SLOT_2, cmd, 8, block, 0);
+                        g_slot2_state = VERIFY_RESPONSE;
     			g_uc_state = UC_IDLE;
+                        t1_StartCommand(SLOT_2, cmd, 8, block, 0);
     			break;
 
     case VERIFY_RESPONSE:
@@ -660,11 +676,10 @@ com_StartReadSlot2
                         cmd[2] = g_record; /*Record*/
                         cmd[3] = 0xD4;
                         block[0] = 0x1B;
-//                        com_SendFunaiHeader(SLOT_2, CMD_APDU);
-                        t1_StartCommand(SLOT_2, cmd, 0, block, 0x1B);
-
+			if(g_slot2_state == IDLE) break; /** Check card in at last possible moment **/
     			g_slot2_state = RECORDREAD_RESPONSE;
     			g_uc_state = UC_IDLE;
+                        t1_StartCommand(SLOT_2, cmd, 0, block, 0x1B);
     			break;
 
 
@@ -680,9 +695,10 @@ com_StartReadSlot2
                           cmd[2] = g_record; /*Record*/
                           cmd[3] = 0xD4;
                           block[0] = 0x1B;
-                          t1_StartCommand(SLOT_2, cmd, 0, block, 0x1B);
+			  if(g_slot2_state == IDLE) break; /** Check card in at last possible moment **/
     			  g_slot2_state = RECORDREAD_RESPONSE;
       			  g_uc_state = UC_IDLE;
+                          t1_StartCommand(SLOT_2, cmd, 0, block, 0x1B);
       			  break;
     			}
     			else if(retval == -1)
@@ -692,11 +708,13 @@ com_StartReadSlot2
     			  g_uc_state = UC_IDLE;
     			  return;
     			}
+
     			g_record++;
     			/** If it was the last one... **/
     			if(g_record == 8)
     			{
     			  g_record = 1; /** Reset :-) */
+    			  g_uc_state = UC_IDLE;
     			  g_slot2_state = IDLE;
     			  g_slot2datablock_state = SCI_SUCCESS;
     			}
@@ -709,9 +727,11 @@ com_StartReadSlot2
                           cmd[3] = 0xD4;
                           block[0] = 0x1B;
 //                          com_SendFunaiHeader(SLOT_2, CMD_APDU);
+			  if(g_slot2_state == IDLE) break; /** Check card in at last possible moment **/
+    			  g_slot2_state = RECORDREAD_RESPONSE;
+      			  g_uc_state = UC_IDLE;
                           t1_StartCommand(SLOT_2, cmd, 0, block, 0x1B);
     			}
-    			g_uc_state = UC_IDLE;
     			break;
 
     default:
@@ -744,6 +764,7 @@ com_DealWithVerify
   }
   if(data[2] != 2)
   {
+    /** SHOULD READ THE DATA HERE **/
     g_slot2datablock_state = SCI_E_BADCARD; /* It confused me... */
     return(-1);
   }
@@ -787,6 +808,8 @@ com_DealWithReadRecord
   }
   if(data[2] != 0x1d)
   {
+    /** SHOULD READ THE DATA HERE? **/
+    
     g_slot2datablock_state = SCI_E_BADCARD;
     return(-1);
   }
