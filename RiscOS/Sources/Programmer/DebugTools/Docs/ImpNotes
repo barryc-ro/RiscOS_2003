@@ -1,0 +1,157 @@
+Various implementation notes.
+
+---
+
+Module initialisation - we try to establish where lots of
+things are in the Kernel's workspace. We can either use
+things like OS_ReadSysInfo 6 (if available), "know" the
+addresses of things or look for them.
+
+At the moment, I know the addresses of various things which
+have remained constant throughout most revisions of RISC OS
+which I expect this module to run on.
+
+The IRQ timing stuff is set up in module initialisation, as
+is the SWI patching stuff.
+
+---
+
+Module finalisation - tears-down all the IRQ stuff and all
+of the SWI patching stuff (in an safe manner) and frees
+all RMA blocks claimed.
+
+---
+
+IRQ stuff.
+
+On module init, I copy a block of code into the RMA, along
+with some other bits. The Kernel's IRQ handler despatch code
+is patched so that this code is entered on every IRQ.
+
+The code records the time (using timer zero) at entry,
+despatches the device claimant, and records the time on
+return. The difference is added to a running total for that
+device number.
+
+Also during module init, a one second CallEvery is created
+to copy the timing totals from the space in the RMA block
+after our despatch code, into the module's workspace for
+output via a *command or SWI.
+
+The despatch code is carefully written to be as fast as
+possible, to preserve all registers which should be
+preserved, and to be re-entrant.
+
+The patch to the Kernel despatcher is removed in module
+final, the CallEvery is removed, then the RMA block for the
+code is freed.
+
+Note:
+
+R0 is preserved even though it is not documented as being
+required. In fact, no claimant I have found /does/ rely on
+the value in R0 (the device number times three) BUT (and
+that's a big BUT) the Kernel itself does require R0 for any
+unknown devices.
+
+These pass along IrqV (called IRQ2V in the Kernel sources)
+and the default handler uses R0 to mask-out the
+corresponding IRQ for that device number. This is the
+standard way to disable an IRQ after removing a device
+driver (i.e. the driver should not do it itself).
+
+Also note:
+
+This code is (AFAICT) re-entrant. It manages this by
+recording the current device number in a private word and
+then checking if any other was running. If there was, it
+decrements the interrupting handler's time from the
+interrupted one.
+
+This works even if a device driver re-enables interrupts and
+gets re-entered itself.
+
+---
+
+OS SWI claiming stuff.
+
+During module init, we derive the address of the base of the
+Kernel's OS SWI despatch table. This is an array of 256
+pointers to code for each of the SWIs 0..255.
+
+Note: on RISC OS 4 and above, SWI 0 short-cuts the despatch
+code, missing this table. As this SWI is already vectored
+through WrchV, we don't mind too much).
+
+We then copy a block of code into RMA with a despatch table
+following it. The despatch table (I'll call it a patch table
+to avoid confusing it with the Kernel one) is zero-initialised.
+
+When a Kernel SWI is initially claimed, the despatch table
+entry for that SWI is modified to point to our despatch code
+in the RMA.
+
+A vector containing two nodes is created and the patch table
+points to the first node.
+
+Each node is a 12 byte block of RMA, of this form:
+
+  0 - next block pointer (zero for tail of vector)
+  4 - private word for claimant (value in R12 on entry)
+  8 - address of claimant code
+
+The head node contains the new claimant's details and the tail
+node contains the Kernel's details (i.e. the code address which
+was in the despatch table before we modified it).
+
+Whenever a claimant is added to a vector, it is placed at the
+head of the chain.
+
+When a claimant is removed from the vector, we check to see if
+the only claimant left is the original Kernel code. If so, we
+restore the original despatch table entry, reset the patch table
+entry to zero and free the last node.
+
+Thus, OS SWIs which are not vectored suffer no loss in
+performance.
+
+The despatch code is very carefully written to be re-entrant.
+It tries to impose as small an overhead on vectored SWI calls
+as possible.
+
+The entry and exit conditions for claimants (including the
+Kernel) are very tightly controlled and there are not really
+any scratch registers to play with - hence our stack frame
+of four words.
+
+Note:
+
+When a claimant claims the SWI rather than passing it on, we
+return via the Kernel's own SWI return code. This is done
+using our knowledge that the word immediately following the
+despatch table contains a branch to the Kernel's own SWI
+exit code. This is called the 'dirty branch'.
+
+Also note:
+
+During the development of RISC OS 4, the Kernel SWI despatch
+code was optimised and made 32 bit clean. This involved a
+change in the use of R12 and R14.
+
+To avoid our despatch code falling-over on older Kernels,
+an instruction near the start is altered if the old Kernel
+despatch code is detected.
+
+Looking at the sources during the change, the most tell-tail
+signal is an instruction 16 bytes back from the despatch
+table which used to contain:
+
+  BICNE R14,R14,#V_bit
+
+and now contains a branch to the OS_WriteC code (the shortcut
+I described earlier).
+
+If DebugTools finds the BIC instruction during the process
+of copying our code into RMA, our despatch code is patched.
+
+---
