@@ -27,7 +27,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ffah -strict ${CFLAGSEXTRA} ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ffah -strict ${CFLAGSEXTRA} ${INCLUDES} ${DFLAGS} ${DLFLAGS}
 CMHGFLAGS = -p -depend !Depend
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -59,6 +59,14 @@ OBJS      = header.o module.o veneer.o standby.o task.o cstart.o robase.o
 EXPORTS   = ${EXP_HDR}.${COMPONENT} ${EXPC_HDR}.${COMPONENT}
 HDR       = h.header
 LIBS      = <Lib$Dir>.tboxlibs.o.wimplib
+
+#
+# DebugLib support.
+# Uncomment these or pass to AMU to enable debug build.
+#
+#DLFLAGS	= -Throwback -fn -DDEBUGLIB
+#LIBSDL = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklibzm TCPIPLibs:o.inetlibzm
+
 
 #
 # Rule patterns
@@ -119,8 +127,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${RAMTARGET}: ${OBJS} ${HDR} ${LIBS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${HDR} ${LIBS} ${CLIB} ${LIBSDL}
+        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSDL}
 
 ${EXP_HDR}.${COMPONENT}: export.hdr.${COMPONENT}
         ${CP} export.hdr.${COMPONENT} $@ ${CPFLAGS}
