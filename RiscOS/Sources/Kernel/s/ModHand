@@ -1995,6 +1995,12 @@ CallInit         ROUT
   ; to make sure module's init entry is called before service entry (command
   ; and SWI hashing don't have these worries - they won't be used yet)
 
+ [ Oscli_HashedCommands
+  ; see if we need to update command hash nodes
+        BL      AddCmdHashEntries
+        BVS     %FT02
+ ]
+
   ; see if we need to set up a module swi node
 
         BL      CheckForSWIEntries
@@ -2094,6 +2100,9 @@ CallInit         ROUT
 
 02      LDR     R12, [stack, #4*(6+2)]
         BL      FreeIncarnation
+  [ Oscli_HashedCommands
+        BL      FreeCmdHashEntries
+  ]
   [ ChocolateService
         BL      RemoveFromServiceChains
   ]
@@ -2201,6 +2210,216 @@ FreeSWIEntry ROUT
          BL      FreeSysHeapNode
   ]
          Pull   "R0-R4, R12, PC",,^
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+  [ Oscli_HashedCommands
+
+         ASSERT  Oscli_MHashValMask = &ff
+
+;entry: R11 -> module cmd table, R4-> 8-word (256-bit) sieve workspace
+;exit:  sieve updated, R0-R3,R5,R6 trashed
+;
+CmdHashSieve ROUT
+         MOV     R0,R4
+         MOV     R1,#0
+         MOV     R2,#8
+10
+         STR     R1,[R0],#4                        ;zero the sieve
+         SUBS    R2,R2,#1
+         BNE     %BT10
+         ;commands with either of these flags set in information word won't be of interest:
+         MOV     R5,#FS_Command_Flag :OR: Status_Keyword_Flag
+         MOV     R0,R11
+18
+         MOV     R6,#0                             ;hash value accumulator
+         LDRB    R1,[R0],#1
+         CMP     R1,#0
+         BEQ     %FT40                             ;no more entries
+20
+         UpperCase R1,R2
+         ADD     R6,R6,R1                          ;hash value is sum of upper cased char values
+         LDRB    R1,[R0],#1
+         CMP     R1,#0
+         BNE     %BT20
+         ADD     R0,R0,#3
+         BIC     R0,R0,#3                          ;align to word boundary
+         LDR     R1,[R0,#4]                        ;pick up information word
+         TST     R1,R5
+         BNE     %FT30                             ;not interested in this type of command
+         AND     R6,R6,#&FF                        ;hash value (256-wide)
+         AND     R2,R6,#&1F
+         MOV     R3,#1
+         MOV     R3,R3,LSL R2                      ;position in sieve word
+         MOV     R6,R6,LSR #5                      ;sieve word index
+         LDR     R1,[R4,R6,LSL #2]
+         ORR     R1,R1,R3                          ;set bit in sieve for this hash value
+         STR     R1,[R4,R6,LSL #2]
+30
+         ADD     R0,R0,#4*4                        ;next command entry (skip 4 word fields)
+         B       %BT18
+40
+         MOV     PC,LR
+
+;
+;entry: R0 -> Oscli_CmdHashLists array
+;       R6 =  hash index
+;exit:  node created/expanded if necessary to allow room for at least 1 more hash ptr
+;       R1 -> node (may have moved, or been created)
+;       OR V set, error returned if no room
+;
+; - a cmd hash node is:
+;           1 word  = max count (according to current size of node)
+;           1 word  = current count (N)
+;           N words = the entries themselves (entries are module node pointers)
+;
+CheckRoomForNewCmdHash ROUT
+         Push    "R0,R2,R3,LR"
+         LDR     R1,[R0,R6,LSL #2]     ;pick up list for this hash value
+         CMP     R1,#0
+         BNE     %FT10
+         Push    "R0,R1"
+         MOV     R3,#(5+2)*4           ;enough for 5 entries, plus the two count words
+         BL      ClaimSysHeapNode
+         STRVS   R0,[SP]
+         Pull    "R0,R1"
+         BVS     %FT90
+         MOV     R1,R2
+         MOV     R3,#5
+         STR     R3,[R1,#0]            ;set the max count word
+         MOV     R3,#0
+         STR     R3,[R1,#4]            ;zero the current count word
+         STR     R1,[R0,R6,LSL #2]     ;store pointer to node in array
+         B       %FT90
+10
+         LDR     R3,[R1,#0]            ;pick up the max count
+         LDR     R2,[R1,#4]            ;pick up thr current count
+         ADD     R2,R2,#1              ;need one more entry
+         CMP     R2,R3
+         BLS     %FT90
+         Push    "R0"
+         MOV     R0,#HeapReason_ExtendBlock
+         MOV     R2,R1
+         MOV     R3,#4*4               ;enough for 4 more entries
+         BL      DoSysHeapOpWithExtension
+         STRVS   R0,[SP]
+         Pull    "R0"
+         BVS     %FT90
+         MOV     R1,R2
+         STR     R1,[R0,R6,LSL #2]     ;store pointer to node in array (may have moved)
+         LDR     R3,[R1,#0]
+         ADD     R3,R3,#4
+         STR     R3,[R1,#0]            ;bump max count by 4
+90
+         STRVS   R0,[SP]
+         Pull    "R0,R2,R3,PC"
+;
+;
+;entry: R9 -> module node
+;exit:  module entered into command hash table(s) where appropriate
+;       OR V set, error returned if no room
+;
+AddCmdHashEntries ROUT
+         Push    "R0-R6,R11,R12,LR"
+         LDR     R12,[R9,#Module_incarnation_list]
+         CMP     R12,#0
+         BNE     %FT90                             ;only do stuff if no incarnations yet
+         LDR     R12,[R9,#Module_code_pointer]
+         LDR     R11,=UtilityMod
+         CMP     R12,R11
+         BEQ     %FT90                             ;ignore UtilityModule (Oscli deals directly with it)
+         LDR     R11,[R12,#Module_HC_Table]
+         CMP     R11,#0
+         BEQ     %FT90                             ;no commands
+         ADD     R11,R12,R11                       ;R11 -> command table
+         SUB     SP,SP,#8*4                        ;256-bit workspace for 256-wide hashing sieve
+         MOV     R4,SP
+         BL      CmdHashSieve
+         ;now our sieve has a bit set for each hash value that this module occupies for commands
+         MOV     R0,#0
+         LDR     R0,[R0,#Oscli_CmdHashLists]
+         MOV     R6,#0
+42
+         AND     R2,R6,#&1F
+         MOV     R3,#1
+         MOV     R3,R3,LSL R2                      ;position in sieve word
+         MOV     R5,R6,LSR #5                      ;sieve word index
+         LDR     R1,[R4,R5,LSL #2]
+         TST     R1,R3
+         BEQ     %FT50                             ;module does not occupy this hash value
+         BL      CheckRoomForNewCmdHash            ;returns R1 -> cmd hash node
+         BVS     %FT88
+         LDR     R2,[R1,#4]                        ;current no. of entries on list
+         ADD     R2,R2,#1
+         STR     R2,[R1,#4]
+         ADD     R1,R1,#4
+         STR     R9,[R1,R2,LSL #2]                 ;store ptr to module node at end of list
+50
+         ADD     R6,R6,#1                          ;next hash value
+         CMP     R6,#256
+         BLO     %BT42
+88
+         ADD     SP,SP,#8*4                        ;drop sieve workspace
+90
+         STRVS   R0,[SP]
+         Pull    "R0-R6,R11,R12,PC"
+;
+;
+;entry: R9 -> module node
+;exit:  module removed from cmd hash table(s) as necessary
+;
+FreeCmdHashEntries ROUT
+         Push    "R0-R6,R11,R12,LR"
+         LDR     R12,[R9,#Module_incarnation_list]
+         CMP     R12,#0
+         BNE     %FT90                             ;only do stuff if no incarnations
+         LDR     R12,[R9,#Module_code_pointer]
+         LDR     R11,=UtilityMod
+         CMP     R12,R11
+         BEQ     %FT90                             ;ignore UtilityModule (Oscli deals directly with it)
+         LDR     R11,[R12,#Module_HC_Table]
+         CMP     R11,#0
+         BEQ     %FT90                             ;no commands
+         ADD     R11,R12,R11                       ;R11 -> command table
+         SUB     SP,SP,#8*4                        ;256-bit workspace for 256-wide hashing sieve
+         MOV     R4,SP
+         BL      CmdHashSieve
+         ;now our sieve has a bit set for each hash value that this module occupies for commands
+         MOV     R0,#0
+         LDR     R0,[R0,#Oscli_CmdHashLists]
+         MOV     R6,#0
+42
+         AND     R2,R6,#&1F
+         MOV     R3,#1
+         MOV     R3,R3,LSL R2                      ;position in sieve word
+         MOV     R5,R6,LSR #5                      ;sieve word index
+         LDR     R1,[R4,R5,LSL #2]
+         TST     R1,R3
+         BEQ     %FT50                             ;module does not occupy this hash value
+         LDR     R1,[R0,R6,LSL #2]                 ;pick up list for this hash value
+         LDR     R2,[R1,#4]                        ;current no. of entries on list
+         SUB     R2,R2,#1
+         STR     R2,[R1,#4]
+         ADD     R1,R1,#8                          ;scrunch list to remove module (R9)
+         MOV     R3,R1
+         CMP     R2,#0
+         BEQ     %FT50
+         ADD     R2,R2,#1
+40
+         LDR     R5,[R1],#4
+         CMP     R5,R9
+         STRNE   R5,[R3],#4
+         SUBS    R2,R2,#1
+         BNE     %BT40
+50
+         ADD     R6,R6,#1                          ;next hash value
+         CMP     R6,#256
+         BLO     %BT42
+         ADD     SP,SP,#8*4                        ;drop sieve workspace
+90
+         Pull    "R0-R6,R11,R12,PC",,^             ;MUST preserve flags
+;
+  ] ;Oscli_HashedCommands
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -2820,6 +3039,9 @@ ModuleIsntCAO
 HaveKilled
   |
          BVS     %BT01
+  ]
+  [ Oscli_HashedCommands
+         BL      FreeCmdHashEntries
   ]
          BL      FreeSWIEntry
 
