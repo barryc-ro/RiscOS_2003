@@ -63,6 +63,7 @@ MSGTOK2 = ${UTILS}.MsgTok2
 TOKGEN2 = ${UTILS}.TokGen2
 SCANRES = ${UTILS}.ScanRes
 RESCOMM = ${UTILS}.ResCommon
+LOCALECHK = ${UTILS}.LocaleChk
 
 #
 # Generic rules:
@@ -90,6 +91,7 @@ clean:
         ${RM} ${DICTTAGS}
         ${WIPE} ${RESDIR}.^.* ${WFLAGS}
         ${WIPE} ${PROCESSDIR}.^.* ${WFLAGS}
+        ${RM} s.LocaleList
         @echo ${COMPONENT}: cleaned (Dictionary & HelpTokens not removed)
 
 #
@@ -99,6 +101,7 @@ clean_all:
 	${WIPE} Data ${WFLAGS}
 	${WIPE} o ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
+	${RM} s.LocaleList
         ${WIPE} Resources.* ${WFLAGS}
 	${WIPE} Processed.* ${WFLAGS}
         @echo ${COMPONENT}: all cleaned
@@ -110,19 +113,22 @@ resources:
         Unset LocalGlobal$Path
         @echo ${COMPONENT}: resource files copied
 
-
-${BUILTDIR}.Messages: ${SOURCE} ${DATA}.Tokenised ${DIRS}
+${BUILTDIR}.Messages: s.LocaleList ${SOURCE} ${DATA}.Tokenised ${DIRS} force
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-${BUILTDIR}.MessagesHI: ${SOURCE} ${DIRS}
+${BUILTDIR}.MessagesHI: s.LocaleList ${SOURCE} ${DIRS} force
         ${MKDIR} rm.${BUILD}.<Build$LocaleListNumeric>
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
 
 ${BUILTDIR}.MessData: ${DATA}.Tokenised ${DIRS}
         ${SCANRES} ${PROCESSDIR} $@
+
+force:; @|
+
+s.LocaleList:; Utils.LocaleChk
 
 #
 # Tokenise the Messages file using Help and Dictionary Tokens
@@ -178,5 +184,4 @@ ${DIRS}:
 	${MKDIR} rm.${BUILD}.<Build$LocaleListNumeric>
 	${TOUCH} ${DIRS}
 	
-
 # Dynamic dependencies:
