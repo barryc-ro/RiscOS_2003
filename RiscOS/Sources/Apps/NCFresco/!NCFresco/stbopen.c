@@ -370,7 +370,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     STBDBG(("frontend_open_url: backend IN transient %d\n", parent->open_transient));
     ep = backend_open_url(parent, &parent->fetching, url, bfile, referer, oflags);
-    STBDBG(("frontend_open_url: backend OUT error %x\n", ep ? ep->errnum : 0));
+    STBDBG(("frontend_open_url: backend OUT fetching %p error %x\n", parent->fetching, ep ? ep->errnum : 0));
 
     if (ep)
     {
@@ -520,6 +520,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     if (config_display_body_colours)
 	view->flags |= be_openurl_flag_BODY_COLOURS;
 
+    /* if a top level window */
     if (parent == NULL)
     {
 	view->margin = ip->margin;
@@ -539,6 +540,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     }
     else
     {
+	/* if a frame */
 	view->backend_margin = ip->margin;
     }
 

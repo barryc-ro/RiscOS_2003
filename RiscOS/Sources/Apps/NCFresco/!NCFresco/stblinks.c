@@ -10,6 +10,7 @@
 
 #include "bbc.h"
 #include "resspr.h"
+#include "swis.h"
 
 #include "debug.h"
 #include "interface.h"
@@ -824,7 +825,13 @@ void fe_frame_link_array_build(fe_view v)
     /* use the left arrow which gives its width as the small size and its height as the large size */
     id.tag = sprite_id_name;
     id.s.name = "flleft";
-    sprite_readsize(resspr_area(), &id, &info);
+    if (sprite_readsize(resspr_area(), &id, &info) != NULL)
+    {
+	sprite_area *rom, *ram;
+	_swix(Wimp_BaseOfSprites, _OUTR(0,1), &rom, &ram);
+	if (sprite_readsize(ram, &id, &info) != NULL)
+	    sprite_readsize(rom, &id, &info);
+    }
     
     vals[0] = (int) v;		/* target view */
     vals[1] = NULL;		/* list is put in here */

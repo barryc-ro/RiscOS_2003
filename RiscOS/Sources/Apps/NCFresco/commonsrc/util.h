@@ -42,6 +42,8 @@ extern BOOL gstrans_not_null(const char *input);
 
 unsigned int string_hash(const char *s);
 
+extern int str_split_point(int handle, const char *s, int width);
+
 /* Try and reallocate in lower memory (returns s if it can't) */
 char *optimise_string( char *s );
 

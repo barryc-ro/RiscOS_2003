@@ -1352,7 +1352,7 @@ static void access_http_fetch_alarm(int at, void *h)
 	memcheck_register_list(si.out.headers);
 
 #if DUMP_HEADERS
-	usrtrc("\nHeaders...\n");
+	usrtrc("\nHeaders for 0x%x '%s'\n", d->flags, d->url);
 	for (list = si.out.headers; list; list = list->next)
 	{
 	    usrtrc("%s: %s\n", list->key, list->value);
@@ -2713,7 +2713,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
     /* this prevents internal state flags from being passed back in from relocates (like proxy and secure flags) */
     flags &= access_INTERNAL_FLAGS;
 
-    usrtrc( "access_url: %s from %s flags %x\n", url, referer ? referer : "<none>", flags);
+    usrtrc( "access_url: %s from %s flags 0x%x\n", url, referer ? referer : "<none>", flags);
 
     *result = 0;
 

@@ -453,7 +453,6 @@ int frontend_view_get_dimensions(fe_view v, fe_view_dimensions *fvd)
 int frontend_view_set_dimensions(fe_view v, int width, int height)
 {
     wimp_redrawstr r;
-    int bbh, sbh;
     wimp_wstate ws;
     BOOL old_y_scroll_bar;
 
@@ -468,13 +467,6 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
 	v->doc_width = width;
     if (height)
 	v->doc_height = height;
-
-/*
-    if (v->sb)
-	statusbar_bar_heights(v->sb, &bbh, &sbh);
-    else
- */
-	bbh = sbh = 0;
 
     /* if not top view*/
     if (v->parent)
@@ -515,10 +507,10 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
 	get_dimensions(v, &ws.o, &fvd);
 
 	r.box.x0 = - v->margin.x0;
-	r.box.y1 = bbh - v->margin.y1;
+	r.box.y1 = - v->margin.y1;
 #if 1
 	r.box.x1 = fvd.wa_width - v->margin.x1;
-	r.box.y0 = fvd.wa_height - (sbh + v->margin.y0) - v->stretch_document;
+	r.box.y0 = fvd.wa_height - v->margin.y0 - v->stretch_document;
 #else
 	r.box.x0 = - v->margin.x0;
 	r.box.y1 = bbh - v->margin.y1;
@@ -648,8 +640,8 @@ int frontend_view_margins(fe_view v, wimp_box *box)
 #if USE_MARGINS
     *box = v->backend_margin;
 
-    /* zero margin where the toolbar is touching */
-    if (use_toolbox && tb_is_status_showing())
+    /* zero margin where the toolbar is touching if not a frame */
+    if (v->parent == NULL && use_toolbox && tb_is_status_showing())
     {
 	if (config_display_control_top)
 	    box->y1 = 0;

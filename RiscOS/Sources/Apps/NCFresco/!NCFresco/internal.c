@@ -536,7 +536,7 @@ os_error *fe_find_open(fe_view v)
         bb.x0 = -1000;		/* Get the first on the line ignoring margins */
         backend_doc_locate_item(v->displaying, &bb.x0, &bb.y1, &v->find_last_item);
 
-	e = fe_internal_url_with_source(v, "openpanel?name=find", TARGET_DBOX);
+	e = fe_internal_url_with_source(v, "openpanel?name=find", TARGET_FIND);
     }
     return e;
 }

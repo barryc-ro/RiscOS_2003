@@ -601,6 +601,36 @@ os_error *write_text_in_box(int handle, const char *str, void *bbox)
     return e;
 }
 
+/*
+ * Find the nearest split point before width OS units are passed
+ * and return its index. If the end of the string is reached
+ * then return length of string.
+ */
+
+int str_split_point(int handle, const char *s, int width)
+{
+    int coords[5];
+    const char *split;
+    
+    memset(coords, 0, 4*sizeof(coords[0]));
+    coords[4] = -1;
+
+    _swix(Font_ScanString, _INR(0,5) | _OUT(1),
+	  handle,
+	  s,
+	  (1<<8) | (1<<5),	/* pass handle, use coord block */
+	  width << 8, 0,
+	  coords,
+	  &split);
+
+#if DEBUG
+    fprintf(stderr, "split_point: handle %d width %d inptr %p outptr %p\n", handle, width, s, split);
+#endif
+    
+    return split - s;
+}
+
+
 /**********************************************************************/
 
 int kbd_pollalt(void)

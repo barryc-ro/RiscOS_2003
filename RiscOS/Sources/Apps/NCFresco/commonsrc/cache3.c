@@ -703,6 +703,7 @@ static BOOL cache_get_header_info(char *url, unsigned *date, unsigned *last_modi
 static void cache_dump_dir_read(int dir)
 {
     FILE *fh;
+    time_t now = time(NULL);
 
     sprintf(scrap_leaf_ptr, "%02d./cachedump", dir);
     fh = fopen(scrapname, "r");
@@ -800,11 +801,12 @@ static void cache_dump_dir_read(int dir)
 
 		url = strtok(NULL, SEPS);
 
-                /* insert into cache structure */
-                if (url && strncmp(url, "file:", sizeof("file:")-1) != 0
+                /* insert into cache structure - if not expired */
+                if (/* cc->header.expires > now && */
+		    url && strncasecomp(url, "file:", sizeof("file:")-1) != 0
 #ifdef STBWEB
-                    && strncmp(url, "ncint:", sizeof("ncint:")-1) != 0
-                    && strncmp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0
+                    && strncasecomp(url, "ncint:", sizeof("ncint:")-1) != 0
+                    && strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0
 #endif
                     )
                 {

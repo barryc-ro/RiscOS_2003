@@ -71,6 +71,10 @@ os_error *webfonts_init_font(int n)
 	return NULL;
 
     size = (n & WEBFONT_SIZE_MASK) >> WEBFONT_SIZE_SHIFT;
+    /* size 7 is not used - the value in config_font_sizes is not filled in */
+    if (size == 7)
+	return NULL;
+
     size = config_font_sizes[size];
 #ifdef STBWEB
     if ((n & (WEBFONT_SPECIAL_TYPE_MASK|WEBFONT_FLAG_SPECIAL)) != (WEBFONT_SPECIAL_TYPE_MENU|WEBFONT_FLAG_SPECIAL))
@@ -86,7 +90,7 @@ os_error *webfonts_init_font(int n)
 	e = font_find(buffer, size * 16, size * 16, 0, 0, &(item->handle));
     }
 
-#ifdef STBWEB
+#if 0
     if (e == NULL)
     {
 	e = font_readinfo(item->handle, &fi);

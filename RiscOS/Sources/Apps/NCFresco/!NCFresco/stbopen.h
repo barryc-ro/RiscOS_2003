@@ -13,12 +13,13 @@
 #define TARGET_VERY_TOP	"__top"
 #define TARGET_DBOX	"__dbox"
 #define TARGET_PASSWORD	"__passwd"
-#define TARGET_FAVS	"__favs"
+/* #define TARGET_FAVS	"__favs" */
 #define TARGET_HISTORY	"__history"
 #define TARGET_INFO	"__info"
-#define TARGET_OPEN	"__open"
-#define TARGET_CUSTOM	"__custom"
+/* ;#define TARGET_OPEN	"__open" */
+/* ;#define TARGET_CUSTOM	"__custom" */
 #define TARGET_ERROR	"__error"
+#define TARGET_FIND	"__find"
 
 extern fe_view fe_find_top(fe_view v);
 extern fe_view fe_find_window(fe_view start, wimp_w w);

@@ -16,6 +16,7 @@
 #include "filetypes.h"
 #include "url.h"
 #include "util.h"
+#include "webfonts.h"
 
 #include "stbview.h"
 #include "stbhist.h"
@@ -248,6 +249,13 @@ static void fe_global_add(const char *url, const char *title)
     mm_free(fragment);
 }
 
+/* Write out the global history items
+ * truncating appropriately.
+ */
+
+#define ITEM_WIDTH		600
+#define ITEM_WIDTH_PADDING	64
+
 os_error *fe__global_write_list(FILE *f)
 {
     fe_global_history_item *item;
@@ -255,22 +263,17 @@ os_error *fe__global_write_list(FILE *f)
 
     for (item = global_hist_list, i = 0; item; item = item->next, i++)
     {
-#if 0
-        fe_global_history_fragment *fp;
-        STBDBG(("hist: write %p '%s'\n", item, item->url));
-        for (fp = item->frag_list; fp; fp = fp->next)
-            STBDBG(("hist: frag '%s'\n", fp->fragment));
-#endif
+	char *s = item->title ? item->title : item->url;
+	int split;
+	char *suffix;
 
-#if 1
-	fprintf(f, msgs_lookup("histAI"), i, i, item->title ? item->title : item->url);
-#else
-	fprintf(f, msgs_lookup("histAIa"), i);
+	split = str_split_point(webfonts[WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_MENU + WEBFONT_SIZE(4)].handle, s, ITEM_WIDTH*2 - ITEM_WIDTH_PADDING);
+	suffix = split == strlen(s) ? "" : "...";
 
-	url_escape_to_file(item->url, f);
+	STBDBG(("hist: write list '%s' split %d suffix '%s'\n", s, split, suffix));
+	
+	fprintf(f, msgs_lookup("histAI"), i, ITEM_WIDTH, i, split, s, suffix);
 
-        fprintf(f, msgs_lookup("histAIb"), item->title ? item->title : item->url);
-#endif
         fputc('\n', f);
     }
 
@@ -884,7 +887,7 @@ void fe_history_update_current_state(fe_view v)
     int index;
     char specifier[MAX_SPECIFIER_SIZE];
 
-    if (v->dont_add_to_history || v->open_transient)
+    if (v->dont_add_to_history || v->open_transient || v->displaying == NULL)
 	return;
     
     /* must store state for all documents even framesets */

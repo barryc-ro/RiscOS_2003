@@ -1384,7 +1384,7 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
     oy += doc->margin.y1;
 #endif
 
-    RENDBG(("Rendering rectangle.  ox=%d, oy=%d, encoding=%d.\n", ox, oy, doc->encoding));
+    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, doc->margin.x0, doc->margin.y1));
 
 #ifdef RISCOS
     if (doc->encoding != be_encoding_LATIN1)
@@ -4067,7 +4067,7 @@ static void be_doc_fetch_bg(antweb_doc *doc)
 
     url = url_join(BASE(doc), doc->rh->tile.src);
 
-    image_find(url, BASE(doc), (doc->flags & doc_flag_FROM_HISTORY ? 0 : image_find_flag_CHECK_EXPIRE) | image_find_flag_URGENT,
+    image_find(url, BASE(doc), (doc->flags & doc_flag_FROM_HISTORY ? 0 : image_find_flag_CHECK_EXPIRE) | image_find_flag_URGENT | image_flag_NO_BLOCKS,
 	       &antweb_doc_background_change, doc, render_get_colour(render_colour_BACK, doc),
 	       (image*) &(doc->rh->tile.im));
 
@@ -4355,6 +4355,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	/* if failed to connect pass cfile (actually error message) in the title field
 	 * pretty nasty but then we're gonna rewrite this anyway aren't we?
 	 */
+
 	if (cfile == NULL)
 	{
 	    char tag[16];
@@ -4363,7 +4364,9 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	}
 
 	frontend_view_visit(doc->parent, NULL, url,
-			    (status == status_FAIL_CONNECT || status == status_FAIL_DNS) ? cfile : NULL);
+			    status == status_BAD_FILE_TYPE ?
+			    (char *)makeerror(ERR_UNSUPORTED_SCHEME) :
+			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile));
 
 	backend_dispose_doc(doc);
 	return 0;

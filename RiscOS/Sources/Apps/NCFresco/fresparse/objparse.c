@@ -75,7 +75,7 @@ static int extension_to_filetype(STRING s)
 
 /* -------------------------------------------------------------------------- */
 
-static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, const VALUE *classid_type, const VALUE *data, const VALUE *data_type, const VALUE *id)
+static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, const VALUE *classid_type, const VALUE *data, const VALUE *data_type, const VALUE *id, BOOL always_include)
 {
     int classid_ftype, data_ftype, ftype;
     rid_object_item *obj;
@@ -110,16 +110,12 @@ static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, con
 
     /* SJM: 4/3/96: remove check for whether we know about plugin or not */
     ftype = classid_ftype != -1 ? classid_ftype : data_ftype;
-#if 1
-    if (ftype == -1)		/* Unknonw mime type or extension */
+    if (!always_include && ftype == -1)		/* Unknonw mime type or extension */
 	return NULL;
-#endif
 				/* Known type but no plugin present */
     objtype = objects_type_test(ftype);
-#if 1
-    if (objtype == rid_object_type_UNKNOWN)
+    if (!always_include && objtype == rid_object_type_UNKNOWN)
 	return NULL;
-#endif
 
     /* Can handle it so allocate structure and fill in values */
     obj = mm_calloc(sizeof(*obj), 1);
@@ -357,7 +353,7 @@ extern void startapplet (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 		&java_type,
 		&none,
 		&none,
-		&attributes->value[HTML_APPLET_ID]);
+		&attributes->value[HTML_APPLET_ID], FALSE);
 
     if (obj)
     {
@@ -532,7 +528,7 @@ extern void startobject(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&attributes->value[HTML_OBJECT_CODETYPE],
 		&attributes->value[HTML_OBJECT_DATA],
 		&attributes->value[HTML_OBJECT_TYPE],
-		&attributes->value[HTML_OBJECT_ID]);
+		&attributes->value[HTML_OBJECT_ID], FALSE);
 
     if (obj)
     {
@@ -592,7 +588,7 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&none,
 		&attributes->value[HTML_EMBED_SRC],
 		&none,
-		&attributes->value[HTML_EMBED_ID]);
+		&attributes->value[HTML_EMBED_ID], TRUE);
 
     if (obj)
     {
@@ -676,7 +672,7 @@ extern void startbgsound(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&none,
 		&attributes->value[HTML_BGSOUND_SRC],
 		&none,
-		&none);
+		&none, FALSE);
 
     if (obj)
     {

@@ -197,6 +197,12 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     else if ((attr = &attributes->value[HTML_FRAMESET_FRAMESPACING])->type == value_integer)
         frameset->bwidth = attr->u.i*2;
 
+#ifdef STBWEB
+    /* border must be 0 or >= DEFAULT */
+    if (frameset->bwidth && frameset->bwidth < DEFAULT_BORDER_WIDTH)
+	frameset->bwidth = DEFAULT_BORDER_WIDTH;
+#endif
+
     if ((attr = &attributes->value[HTML_FRAMESET_FRAMEBORDER])->type == value_bool)
         container->border = attr->u.i;
 

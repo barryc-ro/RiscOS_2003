@@ -117,7 +117,7 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 	    fs.x /= MILIPOINTS_PER_OSUNIT;
 
 	    imw = fs.x + PLINTH_PAD;
-	    imh = defer_images || req_hh->type != value_absunit ? (wf->max_up + wf->max_down + PLINTH_PAD) : (int)(req_hh->u.f*2);
+	    imh = defer_images || req_hh->type != value_absunit ? (wf->max_up + wf->max_down + PLINTH_PAD*2) : (int)(req_hh->u.f*2);
         }
         else
         {

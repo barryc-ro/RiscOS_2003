@@ -91,6 +91,10 @@
 
 #define FLEX_FUDGE		16		/* get round sprite extend bug with reading over end of sprite areas */
 
+#define SPRITE_NAME_ERROR	"sprerror"
+#define SPRITE_NAME_DEFERRED	"deferred"
+#define SPRITE_NAME_UNKNOWN	"unknown"
+
 /* ------------------------------------------------------------------------- */
 
 /*
@@ -225,6 +229,7 @@ static void image_fetch_next(void);
 static void image_issue_callbacks(image i, int changed, wimp_box *box);
 static void image_animation_alarm(int at, void *h);
 static void image_startup_animation(image i);
+static os_error *find_area_and_info(image i, sprite_info *info);
 
 /* ------------------------------------------------------------------------- */
 
@@ -677,7 +682,7 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
 {
     BOOL success;
 
-    IMGDBG(("image_handle_internal: check internal\n"));
+    IMGDBG(("image_handle_internal: i%p fh %d buffer %p from %d to %d\n", i, fh, buffer, from, to));
 
     if (i->data_area == NULL)
     {
@@ -689,7 +694,7 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
 	success = flex_extend(&i->data_area, to);
     }
 
-    IMGDBG(("image_handle_internal: flex has returned\n"));
+    IMGDBG(("image_handle_internal: flex has returned success=%d\n", success));
 
     if (success)
     {
@@ -943,19 +948,45 @@ static char *image_process_to_end(image i, char *cfile)
 
 /* ------------------------------------------------------------------------- */
 
+static void set_default_image(image i, const char *name, BOOL set_size)
+{
+    sprite_info info;
+
+    strcpy(i->sname, name);
+    i->id.tag = sprite_id_name;
+    i->id.s.name = i->sname;
+
+    i->plotter = plotter_SPRITE;
+    i->areap = &(i->their_area);
+
+#ifndef BUILDERS
+    i->their_area = resspr_area();	/* start with the private area */
+    find_area_and_info(i, &info);	/* update their_area correctly for where it is found */
+
+    if (set_size)
+    {
+	i->width = info.width;
+	i->height = info.height;
+
+	fillin_scales(i, info.mode);
+    }
+#else
+    if (set_size)
+    {
+	i->width = i->height = 34;
+
+	fillin_scales(i, 27);
+    }
+#endif
+}
+
 static void image_set_error(image i)
 {
     IMGDBG(("im%p: in set_error\n", i));
     i->flags |= (image_flag_ERROR | image_flag_CHANGED);
     i->flags &= ~image_flag_RENDERABLE;
 
-    i->their_area = resspr_area(); /* Wimp sprite area */
-    i->areap = &(i->their_area);
-    strcpy(i->sname, "sprerror");
-    i->id.tag = sprite_id_name;
-    i->id.s.name = i->sname;
-    i->plotter = plotter_SPRITE;
-
+    set_default_image(i, SPRITE_NAME_ERROR, FALSE);
     free_pt(i);
 }
 
@@ -1492,8 +1523,6 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
     }
     else
     {
-	sprite_info info;
-
 	IMGDBG(("Making new image\n"));
 
 	i = mm_calloc(1, sizeof(*i));
@@ -1516,29 +1545,10 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->flags = image_flag_WAITING;
 	if (flags & image_find_flag_DEFER)
 	    i->flags |= image_flag_DEFERRED;
-	i->their_area = resspr_area(); /* Wimp sprite area */
-	i->areap = &(i->their_area);
-	strcpy(i->sname, (flags & image_find_flag_DEFER) ? "deferred" : "unknown");
-	i->id.tag = sprite_id_name;
-	i->id.s.name = i->sname;
-	i->plotter = plotter_SPRITE;
+
+	set_default_image(i, (flags & image_find_flag_DEFER) ? SPRITE_NAME_DEFERRED : SPRITE_NAME_UNKNOWN, TRUE);
+
 	i->find_flags = flags;
-
-#ifndef BUILDERS
-	if (sprite_readsize(i->their_area, &i->id, &info) == NULL)
-	{
-	    i->width = info.width;
-	    i->height = info.height;
-
-	    fillin_scales(i, info.mode);
-	}
-	else
-#endif
-	{
-	    i->width = i->height = 34;
-	    fillin_scales(i, 27);
-	}
-
 	i->cache_bgcol = bgcol;
     }
 
@@ -1641,7 +1651,6 @@ os_error *image_stream(char *url, int ft, int *already, image *result)
 
     if (!i)
     {
-	sprite_info info;
 	IMGDBG(("Making new image\n"));
 
 	i = mm_calloc(1, sizeof(*i));
@@ -1662,24 +1671,8 @@ os_error *image_stream(char *url, int ft, int *already, image *result)
 	i->use_count = 0;
 	i->url = strdup(url);
 	i->hash = hash;
-	i->their_area = resspr_area(); /* Wimp sprite area */
-	i->areap = &(i->their_area);
-	strcpy(i->sname, "unknown");
-	i->id.tag = sprite_id_name;
-	i->id.s.name = i->sname;
-	i->plotter = plotter_SPRITE;
 
-	if (sprite_readsize(i->their_area, &i->id, &info) == NULL)
-	{
-	    i->width = info.width;
-	    i->height = info.height;
-	    fillin_scales(i, info.mode);
-	}
-	else
-	{
-	    i->width = i->height = 34;
-	    fillin_scales(i, 27);
-	}
+	set_default_image(i, SPRITE_NAME_UNKNOWN, TRUE);
     }
 
     *result = i;
@@ -1965,12 +1958,8 @@ int image_memory_panic(void)
 	    i->data_so_far = i->data_size = 0;
 	    i->file_type = 0;
 	    i->flags = image_flag_WAITING | image_flag_DEFERRED | image_flag_TO_RELOAD;
-	    i->their_area = resspr_area(); /* Wimp sprite area */
-	    i->areap = &(i->their_area);
-	    strcpy(i->sname, "deferred");
-	    i->id.tag = sprite_id_name;
-	    i->id.s.name = i->sname;
-	    i->plotter = plotter_SPRITE;
+
+	    set_default_image(i, SPRITE_NAME_DEFERRED, FALSE);
 	}
     }
 
@@ -2048,12 +2037,8 @@ os_error *image_flush(image i, int flags)
 	i->file_type = 0;
 	i->flags = image_flag_WAITING;
 	i->flags |= image_flag_TO_RELOAD;
-	i->their_area = resspr_area(); /* Wimp sprite area */
-	i->areap = &(i->their_area);
-	strcpy(i->sname, (flags & image_find_flag_DEFER) ? "deferred" : "unknown");
-	i->id.tag = sprite_id_name;
-	i->id.s.name = i->sname;
-	i->plotter = plotter_SPRITE;
+
+	set_default_image(i, (flags & image_find_flag_DEFER) ? SPRITE_NAME_DEFERRED : SPRITE_NAME_UNKNOWN, FALSE);
 
 	IMGDBG(("..4"));
 
@@ -3205,7 +3190,8 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 
     image_reduce_scales(&facs);
 
-    IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi));
+    _swix(OS_File, _INR(0,5), 10, "<NCFresco$Dir>.^.jpeg", 0xc85, 0, i->data_area, (char *)i->data_area + i->data_size);
+    IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d dx/dy %d/%d data ptr %p size %d pos %d,%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi, i->dx, i->dy, i->data_area, i->data_size, x, y));
 
     _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, config_display_jpeg & 3);
 }
@@ -3603,7 +3589,7 @@ int image_average_colour(image i)
 
     IMGDBG(("Calculating average colour\n"));
 
-    if (i == NULL || i->magic != IMAGE_MAGIC)
+    if (i == NULL || i->magic != IMAGE_MAGIC || i->plotter != plotter_SPRITE)
 	return (int) config_colours[render_colour_BACK].word;
 
     flexmem_noshift();
@@ -4411,11 +4397,11 @@ static void image_animation_alarm(int at, void *h)
 
 static void image_startup_animation(image i)
 {
-    IMGDBG(("Animation starting, %d frames, %d cycles.\n", i->frames, i->repeats));
-
     if (i->frames > 1)
     {
 	os_error *e;
+
+	IMGDBG(("Animation starting, %d frames, %d cycles.\n", i->frames, i->repeats));
 
 	image_animation_dump_info(i);
 

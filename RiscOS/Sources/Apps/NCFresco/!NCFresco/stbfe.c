@@ -378,10 +378,20 @@ void fe_set_pointer(int item_flags)
         if (info->name)
         {
             sprite_id id;
+	    os_error *e;
+
             id.tag = sprite_id_name;
             id.s.name = info->name;
-            if (pointer_set_shape(resspr_area(), &id, info->x, info->y) != NULL)
-                pointer_set_shape(wimp_spritearea, &id, info->x, info->y);
+
+	    if (pointer_set_shape(resspr_area(), &id, info->x, info->y) != NULL)
+	    {
+		sprite_area *rom, *ram;
+		_swix(Wimp_BaseOfSprites, _OUTR(0,1), &rom, &ram);
+		if (pointer_set_shape(ram, &id, info->x, info->y) != NULL)
+		    pointer_set_shape(rom, &id, info->x, info->y);
+
+/* 		STBDBG(("stbfe: set pointer to wimp area %p error '%s'\n", wimp_spritearea, e ? e->errmess : "")); */
+	    }
         }
         else
         {
@@ -711,7 +721,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     
     if (doc == NULL)    /* lookup failed re visit the current one   */
     {
-	fe_no_new_page(v, makeerrorf(ERR_CANT_GET_URL, strsafe(url)));
+	fe_no_new_page(v, (os_error *)title);
 	return 1;
     }
 
@@ -1846,7 +1856,7 @@ int frontend_can_handle_file_type(int ft)
     if (s && *s)
         return TRUE;
 
-    fe_report_error(msgs_lookup("nold"));
+/*  fe_report_error(msgs_lookup("nold")); */
 
     return FALSE;
 }
@@ -2775,10 +2785,11 @@ void fe_status_clear_fetch_only(void)
 
 void fe_status_open_fetch_only(fe_view v)
 {
+#if 0
     /* don't show spinny if current mode is offline */
     if (keyboard_state == fe_keyboard_OFFLINE)
 	return;
-
+#endif
     if (use_toolbox)
     {
         tb_status_show(TRUE);
@@ -2896,8 +2907,10 @@ BOOL fe_status_unstack_possible(fe_view source_v)
     v = fe_find_top_popup(source_v ? source_v : main_view);
 
     if (v && v->open_transient)
-	return TRUE;
-
+    {
+	return strcmp(v->name, TARGET_DBOX) != 0; /* externally opened boxes cannot be opened by this method */
+    }
+    
     if (tb_status_unstack_possible())
 	return TRUE;
     
@@ -4852,8 +4865,9 @@ void fe_event_process(void)
 
 	    fe_get_wimp_caret(e.data.c.w);
 
-	    /* see if iconhigh is running */
-	    _swix(IconHigh_GetDirection, _IN(0) | _OUT(3), 0, &mode);
+	    /* see if iconhigh is running, no iconhigh means not active obviously */
+	    if (_swix(IconHigh_GetDirection, _IN(0) | _OUT(3), 0, &mode) != NULL)
+		mode = 0;
 	    STBDBG(("ptrenter: w%x iconhigh mode %d\n", e.data.c.w, mode));
 
 	    if (mode != 0)
@@ -5315,7 +5329,8 @@ static BOOL fe_initialise(void)
     fe_stored_url = NULL;
     frontend_complain(webfonts_init());
 
-    statuswin_sprite_init();
+    if (!use_toolbox)
+	statuswin_sprite_init();
 
     {
         fe_frame_info info;
