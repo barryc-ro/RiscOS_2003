@@ -46,6 +46,7 @@ DICTTAGS  = ${DATA}.DictTags
 DICTMESS  = ${DATA}.DictMess
 DICTTOKENS= ${DATA}.DictTokens
 DICTIONARY= ${DATA}.Dictionary
+DIRS      = ${DATA}.Dirs
 
 MINDICT   = Global.${LOCALE}.MinDict
 MINDICTT  = Global.${LOCALE}.MinDictT
@@ -102,7 +103,7 @@ resources:
         ${CP} Global.${LOCALE}.Messages ${RESDIR}.Resources.Global.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} ${DATA}.Tokenised dirs
+${TARGET}: ${SOURCE} ${DATA}.Tokenised ${DIRS}
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
@@ -121,7 +122,7 @@ ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
 #
 # Copy Local Resources, then extract Help and Dictionary token tags
 #
-${HELPTAGS}: ${TAGEXT} dirs
+${HELPTAGS}: ${TAGEXT} ${DIRS}
         @echo Copying Resources to Processed directory for tokenising ...
         ${CP} Resources Processed ${CPFLAGS}
         ${TAGEXT} ${PROCESSDIR} ${DICTTAGS} ${HELPTAGS}
@@ -152,11 +153,14 @@ ${TAGEXT}:
         ${MAKE}
         Up
 
-dirs:
+${DIRS}:
 	${MKDIR} Data
 	${MKDIR} Data.${LOCALE}
 	${MKDIR} ${DATA}
+	${MKDIR} rm
+	${MKDIR} rm.${LOCALE}
 	${MKDIR} rm.${LOCALE}.${BUILD}
+	${TOUCH} ${DIRS}
 
 # Dynamic dependencies:
 rm.Morris4.Messages: Hdr:ListOpts
