@@ -35,6 +35,10 @@
 ;; 16-Sep-93  0.30 SMC  Now passes on Service_ShutDown correctly.
 ;; 14-Dec-93  0.31 SMC  Clear V before looking up Banner token in ReportError
 ;;                      (so that "RAMFS Filer" appears in title rather than "Banner").
+;; 29-May-97  0.33 RML  Checks for Message_DataSave, so that files can be saved in
+;;                      root directory by dragging to the iconbar icon.
+;; 15-Jan-98  0.34 RML  Issues Message_FilerDevicePath if files are dragged onto
+;;                      it's icon.
 ;;----------------------------------------------------------------------------
 
 Module_BaseAddr
@@ -58,7 +62,7 @@ Module_BaseAddr
         GET     Hdr:MsgMenus
         GET     Hdr:ResourceFS
 
-        GET     Version
+        GET     VersionASM
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -70,6 +74,9 @@ debug           SETL    False
 
                 GBLL    Host_Debug
 Host_Debug      SETL    debug:LAND:True
+
+                GBLL    DragsToIconBar  ; RML: Are drags from save boxes/filer windows
+DragsToIconBar  SETL    {TRUE}          ;      to our icon allowed?
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Register names
@@ -164,8 +171,11 @@ ram_menustart   #       0
 m_ramfs         #       m_headersize + mi_size * 2      ; Two menu entries
 ram_menuend     #       0
 
-userdata        #       &100
+userdata_size   *       &200
+userdata        #       userdata_size
 end_userdata    #       0
+
+filenamebuffer  #       &100
 
 stackbot        #       &100
 stacktop        #       0
@@ -198,12 +208,13 @@ RAMFSFiler_WorkspaceSize *  :INDEX: @
  |
         DCD     0
  ]
+        DCD     RAMFSFiler_ModuleFlags  -Module_BaseAddr
 
 
 RAMFSFiler_HelpString
         DCB     "RAMFSFiler"
         DCB     TAB
-        DCB     "$VString ($Date)", 0
+        DCB     "$Module_MajorVersion ($Module_Date)", 0
 
  [ International_Help=0
 Desktop_RAMFSFiler_Help
@@ -234,6 +245,8 @@ RAMFSFiler_StarCommand
         DCB     0                       ; End of table
         ALIGN
 
+RAMFSFiler_ModuleFlags DCD ModuleFlag_32bit
+
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Had *command to enter RAMFSFiler, so start up via module handler
 
@@ -259,8 +272,28 @@ ErrorBlock_CantStartRAMFSFiler
 
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Table of service calls we want
+
+        ASSERT  Service_Reset > Service_Memory
+
+ServiceTable
+        DCD     0
+        DCD     ServiceUrsula - Module_BaseAddr
+        DCD     Service_Reset
+        DCD     Service_StartFiler
+        DCD     Service_StartedFiler
+        DCD     Service_FilerDying
+        DCD     Service_MessageFileClosed
+        DCD     Service_ShutDown
+        DCD     0
+        DCD     ServiceTable - Module_BaseAddr
+
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 RAMFSFiler_Service ROUT
+
+        MOV     r0, r0                  ; Indicates there is a service call table
 
 ; OSS Changed to be as fast as possible in the case that we are not
 ; interested, which is true 99% of the time.
@@ -272,6 +305,8 @@ RAMFSFiler_Service ROUT
         TEQNE   r1, #Service_StartedFiler
         TEQNE   r1, #Service_ShutDown
         MOVNE   pc, lr
+
+ServiceUrsula
 
         TEQ     r1, #Service_Reset
         BEQ     RAMFSFiler_Service_Reset
@@ -307,7 +342,7 @@ RAMFSFiler_Service_Shutdown
         SWI     XOS_File                ; R0 = 0 => RAM filing system is empty
         MOVVS   R0,#0
         CMP     R0,#0                   ; CLRV  ; see if it's empty
-        LDMEQIA sp!, {r0-r5, pc}^
+        LDMEQIA sp!, {r0-r5, pc}
         ADRL    r1, ramfsnotempty               ; Token.
         ADR     r2, userdata+4                  ; Use our buffer for string.
         MOV     r3, #(end_userdata-userdata)-4  ; Buffer length
@@ -321,7 +356,7 @@ RAMFSFiler_Service_Shutdown
         TEQ     R1,#1                   ; unless OK selected, forget it
         LDMIA   sp!, {r0-r5, lr}
         MOVNE   R1,#0
-        MOVS    pc,lr
+        MOV     pc,lr
 
 RAMFSFiler_Service_StartFiler ENTRY "r2,r3,r6"
 
@@ -367,14 +402,14 @@ RAMFSFiler_Service_Reset ENTRY "r0-r6"
         STRGT   r0, mytaskhandle
         BLGT    freeworkspace
 
-        EXITS                           ; Sorry, but no can do errors here
+        EXIT                            ; Sorry, but no can do errors here
 
 
 RAMFSFiler_Service_MessageFileClosed ENTRY "r0"
 
         LDR     r12, [r12]              ; are we active?
         CMP     r12, #0
-        EXITS   LE                      ; No, so exit.
+        EXIT    LE                      ; No, so exit.
 
  [ debug
         DLINE   "Our message file closed"
@@ -382,7 +417,7 @@ RAMFSFiler_Service_MessageFileClosed ENTRY "r0"
         MOV     r0, #1                  ; Tell the wimp task about it
         STR     r0, message_file_changed
         STR     r0, message_file_invalid; File is no good now
-        EXITS
+        EXIT
 
 
 RAMFSFiler_Die ROUT                     ; Module die entry - free worspace
@@ -391,7 +426,8 @@ RAMFSFiler_Service_FilerDying ENTRY "r0-r6"
         LDR     wp, [r12]
         BL      freeworkspace
 
-        EXITS                           ; Sorry, but no can do errors here
+        CLRV
+        EXIT                            ; Sorry, but no can do errors here
 
 
 ; Corrupts r1-r6. MUST preserve r0 and V bit.
@@ -408,7 +444,6 @@ freeworkspace ROUT
         CMP     r0, #0
         LDRGT   r1, taskidentifier
         SWIGT   XWimp_CloseDown         ; ignore errors from this
-        CLRV
 
         BL      close_message_file      ; can use the stack until block freed
 
@@ -437,11 +472,13 @@ CloseDownAndExit ROUT
 
 ; List of Wimp messages that we are interested in.
 
-      [ Version >= 21
 MessagesList
         DCD     Message_HelpRequest
+        [ DragsToIconBar
+        DCD     Message_DataSave
+        DCD     Message_DataLoad
+        ]
         DCD     Message_Quit            ; Zero ie. terminates the list
-      ]
 
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -515,15 +552,9 @@ RAMFSFiler_Start ROUT
         BVS     no_banner_abort_error   ; Moan and quit if no file/token
 
 ; r2 now points to the banner
-      [ Version >= 21
         MOV     r0, #300                ; has messages list
-      |
-        MOV     r0, #223                ; needs help on menus
-      ]
         LDR     r1, taskidentifier
-      [ Version >= 21
         ADR     r3,MessagesList
-      ]
         SWI     XWimp_Initialise        ; OSS There is another Wimp_Init later
         STRVC   r1, mytaskhandle
 
@@ -606,20 +637,13 @@ event_poll_word_non_zero ENTRY
         CMP     r0, #0
         LDRGT   r1, taskidentifier
         SWIGT   XWimp_CloseDown         ; Ignore errors from this.
-        CLRV
 
 ; Now do the Initialise.
 
-      [ Version >= 21
         MOV     r0, #300                ; has messages list
-      |
-        MOV     r0, #223                ; needs help on menus
-      ]
         LDR     r1, taskidentifier
         ADR     r2, userdata
-      [ Version >= 21
         ADR     r3, MessagesList
-      ]
         SWI     XWimp_Initialise
         MOVVS   r1, #0                  ; Error, so set task handle to zero.
         STR     r1, mytaskhandle
@@ -870,28 +894,29 @@ testramfs ENTRY   "r0-r2"
         MOV     r3, r0                  ; r3 = original fs
         MOV     r2, #0
         BL      writefs                 ; write fs 0
-        MOV     r2, #fsnumber_ramfs
+        MOV     r2, #23 ;fsnumber_ramfs
         BL      writefs                 ; try fs in question
         BL      readfs
-        TEQ     r0, r2                  ; did it work?
+        MOV     r1, r2
         MOV     r2, r3
         BL      writefs                 ; re-write original fs
+        TEQ     r0, r1                  ; did it work?
         EXIT
 
 readfs  ENTRY   "r1-r2"
         MOV     r0, #0
         MOV     r1, #0
         SWI     XOS_Args
-        EXITS                           ; r0 = current fs
+        EXIT                            ; r0 = current fs
 
 writefs ENTRY   "r0-r2"
         MOV     r0, #&8F                ; try filing system r2
         MOV     r1, #18
         SWI     XOS_Byte
-        EXITS
+        EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-; Out   VC => r0 = icon index, flags preserved
+; Out   VC => r0 = icon index, flags trashed
 ;       VS => r0 -> error, flags trashed
 
 ;                          r6  r7  r8  r9
@@ -943,10 +968,9 @@ AllocateIcon ENTRY "r1-r4, x0, y0, x1, y1, r10"
         LDR     r0, =WimpPriority_RAMFS
         ADR     r1, userdata
         SWI     XWimp_CreateIcon
-        EXIT    VS
 
-        STR     r0, iconbaricon                 ; Save the icon handle.
-        EXITS                                   ; Preserve flags if no error
+        STRVC   r0, iconbaricon                 ; Save the icon handle.
+        EXIT
 
         LTORG
 
@@ -980,14 +1004,24 @@ event_user_message ENTRY
         CMP     r0, r14
         BEQ     returnhelp
 
+        [ DragsToIconBar
+        LDR     r14, =Message_DataSave
+        CMP     r0, r14
+        BEQ     message_datasave
+
+        LDR     r14, =Message_DataLoad
+        CMP     r0, r14
+        BEQ     message_dataload
+        ]
+
         CMP     r0, #Message_Quit
         EXIT    NE
 
         B       go_fl_quit
 ;       NOEXIT
 
-;............................................................................
 
+;............................................................................
 ; In    r1 -> message block containing help request
 ;       LR stacked
 ; Out   Message_HelpReply sent
@@ -1033,6 +1067,30 @@ returnhelp
 99
         EXIT
 
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; strcpy_advance
+; ==============
+
+; In    r1 -> dest string
+;       r2 -> source string
+
+; Out   r1 -> terminating null
+
+strcpy_advance ENTRY "r2"
+
+10      LDRB    r14, [r2], #1           ; Copy from *r2++
+        CMP     r14, #delete            ; Order, you git!
+        CMPNE   r14, #space-1           ; Any char < space is a terminator
+        MOVLS   r14, #0                 ; Terminate dst with 0
+        STRB    r14, [r1], #1           ; Copy to *r1++
+        BHI     %BT10
+
+        SUB     r1, r1, #1
+        EXIT
+
+
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In:   r0 -> error block
 ;       r1 = state for ReportError
@@ -1041,9 +1099,8 @@ returnhelp
 
 ReportError ENTRY "r2-r5"
         MOV     r4, r0                          ; Save error
-        MOV     r5, r1                          ; Save flags
+        ADDS    r5, r1, #0                      ; Save flags; clear V to lookup token.
 
-        CLRV                                    ; Clear error flag so we can lookup token.
         addr    r1, RAMFSFiler_Banner_Token     ; Token for banner.
         MOV     r2, #0                          ; Direct pointer please.
         BL      lookup_nopars
@@ -1055,6 +1112,179 @@ ReportError ENTRY "r2-r5"
         EXIT
 
         LTORG
+
+
+ [ DragsToIconBar
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; message_datasave
+;
+; handles the datasave message for when a user drags a file onto an iconbar icon
+; to save.
+;
+; In: r1 -> wimp event structure
+;
+; Out : registers may be corrupted - going back to wimp poll.
+
+message_datasave
+
+        MOV     r5, r1                   ; Stick r1 into r5 for later
+
+        ; Copy the name specified in the message to the filenamebuffer
+        Push    "r1"
+        ADR     r1, filenamebuffer
+        ADD     r2, r5, #44
+        BL      strcpy_advance
+        Pull    "r1"
+
+        ; Make up a filename
+        ADR     r2, ramfspath
+        ADD     r1, r5, #44
+        BL      strcpy_advance
+        MOV     r2, #256                 ; maximum length for append_dotdefaultpath
+        BL      append_dotdefaultpath    ; add '.<ADFSFiler$DefaultPath>' (if it exists)
+        MOV     r0, #46
+        STRB    r0, [r1], #1             ; add a '.'
+        ADR     r2, filenamebuffer
+        BL      strcpy_advance
+
+        ; send a DataSaveAck message specifying the new pathname
+        MOV     r1, r5                   ; put wimp event structure pointer back in r1
+        MOV     r0, #256
+        STR     r0, [r1]
+        LDR     r0, [r1, #8]
+        STR     r0, [r1, #12]            ; Your ref.
+        MOV     r0, #Message_DataSaveAck
+        STR     r0, [r1, #16]            ; Message action
+        LDR     r2, [r1, #4]             ; task handle of sender (to send back to)
+        MOV     r0, #17                  ; event code
+        SWI     XWimp_SendMessage
+
+        Pull    "pc"
+
+ramfspath       DCB "RAM::RamDisc0.$",0
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; message_dataload
+;
+; handles dataload messages
+;
+; In: r1 -> wimp event structure
+;
+; Out : registers may be corrupted - going back to wimp poll.
+
+message_dataload
+
+        LDR     r4, [r1, #24]            ; icon handle (for opening viewer)
+
+        ; Check why we've got this message
+        LDR     r0, [r1, #12]
+        CMP     r0, #0
+        BNE     %FT10
+
+; Case 1: Message is because user has tried to copy a selection of files to an
+; icon bar device, so send a Message_FilerDevicePath.
+
+        LDR     r6, [r1, #4]                 ; task handle of sender (to send back to)
+        MOV     r5, r1                       ; store message block pointer in r5
+
+        MOV     r0, #256
+        STR     r0, [r1]                     ; Length of message
+        MOV     r0, #0
+        STR     r0, [r1, #12]                ; Your ref.
+        LDR     r0, =Message_FilerDevicePath ; Message action
+        STR     r0, [r1, #16]                ; Message action
+        ADD     r1, r5, #20
+        ADR     r2, ramfs_media_name         ; Specify RamFS media name
+        BL      strcpy_advance
+        MOV     r2, #256                     ; Maximum size for default path
+        BL      append_dotdefaultpath        ; append RAMFSFiler$DefaultPath
+
+        MOV     r1, r5                       ; location of message data
+        MOV     r2, r6                       ; task handle of sender (to send back to)
+        MOV     r0, #17                      ; event code
+        SWI     XWimp_SendMessage            ; send the message
+        B       %FT20
+
+; Case 2: Message is part of a save protocol, because user has saved a file
+; to an icon bar device, so send the Message_DataLoadAck.
+10
+        LDR     r0, [r1, #8]
+        STR     r0, [r1, #12]            ; Your ref.
+        MOV     r0, #Message_DataLoadAck
+        STR     r0, [r1, #16]            ; Message action
+        LDR     r2, [r1, #4]             ; task handle of sender (to send back to)
+        MOV     r0, #17                  ; event code
+        SWI     XWimp_SendMessage
+
+; Open the directory viewer of the dir we're copying/saving to.
+
+20
+        ADR     r1,userdata
+        ADRL    r2,FilerOpenDirCommand       ; Build a *Filer_OpenDir command
+        BL      strcpy_advance
+        MOV     r2, #256                     ; Maximum size for default path
+        BL      append_dotdefaultpath        ; append RAMFSFiler$DefaultPath
+
+        ADR     r0,userdata
+        SWI     XOS_CLI                      ; Issue the command
+
+        Pull    "pc"
+
+ramfs_media_name DCB "RAM::RamDisc0.$",0
+FilerOpenDirCommand DCB "%Filer_OpenDir RAM::RamDisc0.$",0
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; append_dotdefaultpath
+;
+; Read value of RAMFSFiler$DefaultPath and append it to the path in r1
+; (ie. does string1 becomes string1.value)
+;
+; In: r1 -> destination buffer
+;     r2 -> size of buffer
+;
+; Out: r0 = corrupted
+;      r1 -> next free byte in buffer
+;      r2 = corrupted.
+;      All other regs preserved.
+
+append_dotdefaultpath ENTRY "r3-r7"
+
+        MOV     r7, r1
+        MOV     r6, r2
+
+        ADR     r0, ramfsfiler_defaultpath
+        MOV     r2, #-1
+        MOV     r3, #0
+        MOV     r4, #0
+        SWI     XOS_ReadVarVal
+        CMP     r2, #0
+        EXIT    EQ                       ; exit if variable doesn't exist
+
+        MVN     r0, r2
+        ADD     r0, r0, #1
+        CMP     r0, r6
+        EXIT    GT                       ; exit if buffer not big enough
+
+        ADR     r0, ramfsfiler_defaultpath
+        ADD     r1, r7, #1
+        MOV     r2, #256
+        MOV     r3, #0
+        MOV     r4, #0
+        SWI     XOS_ReadVarVal           ; Put variable into buffer, leaving room for '.'
+
+        ADD     r1, r1, r2
+        MOV     r0, #46
+        STRB    r0, [r7]                 ; Put '.' before variable's value
+        MOV     r0, #0
+        STRB    r0, [r1]                 ; Put NULL at end of whole string.
+
+        EXIT
+
+ramfsfiler_defaultpath DCB "RAMFSFiler$DefaultPath",0
+ ]
+
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
