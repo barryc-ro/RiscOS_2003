@@ -19,7 +19,7 @@ RMDIR=		rmdir
 
 # Flags
 
-CCFLAGS=	-c -fa -Fn ${INCLUDES} ${DFLAGS}
+CCFLAGS=	-c -fa ${INCLUDES} ${DFLAGS}
 ASFLAGS=	-Stamp -quit ${ASINCLUDES}
 LIBFILEFLAGS=	-c
 CPFLAGS=	-p

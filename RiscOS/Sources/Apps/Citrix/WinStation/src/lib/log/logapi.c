@@ -572,6 +572,11 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	    while (area != -1);
 	    handled = 1;
 	}
+	else if (stricmp(argv[1], "gdi") == 0)
+	{
+	    dump_objects();
+	    handled = 1;
+	}
     }
     else if (stricmp(argv[0], "set") == 0)
     {
@@ -657,6 +662,8 @@ static void LogMem(void)
     LogPrintf(TC_ALL, TT_ERROR,
 	      "mall: area %dK size %dK",
 	      _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), malloc_da)/1024, malloc_size/1024);
+
+    twreportmem();
 }
 
 #endif

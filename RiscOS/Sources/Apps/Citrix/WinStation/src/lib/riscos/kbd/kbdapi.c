@@ -378,6 +378,8 @@ KbdReadChar( int * pChar, int *pShiftState )
 	const key_event *k = (const key_event *)buf;
 	int shift_state = convert_shift_state(k->flags);
 
+	TRACE((TC_KEY, TT_API1, "KbdReadChar: flags %x scan %x key %x", k->flags, k->scan_code, k->key_code));
+	
 	// check for hotkeys
 	if ((k->flags & KeyWatch_Event_SCAN_CODE_VALID) &&
 	    (Hotkey = KbdCheckHotkey( k->scan_code, shift_state )) != 0)
@@ -438,6 +440,8 @@ KbdReadScan( int * pScanCode, int * pShiftState )
 	const key_event *k = (const key_event *)buf;
 	int shift_state = convert_shift_state(k->flags);
 
+	TRACE((TC_KEY, TT_API1, "KbdReadScan: flags %x scan %x key %x", k->flags, k->scan_code, k->key_code));
+
 	if ((k->flags & KeyWatch_Event_SCAN_CODE_VALID) == 0)
 	    return CLIENT_STATUS_NO_DATA;
 
@@ -456,7 +460,7 @@ KbdReadScan( int * pScanCode, int * pShiftState )
 
     LogPrintf( LOG_CLASS, LOG_KEYBOARD,
                "KEYBOARD: scan (%02X) shift (%04X)",
-               *pScanCode, *pScanCode, *pShiftState );
+               *pScanCode, *pShiftState );
 
     return( CLIENT_STATUS_SUCCESS );
 }

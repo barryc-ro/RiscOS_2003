@@ -51,7 +51,7 @@ extern ULONG   LargeCacheSize;   //jkscaffold bugbug
 
 static int timesinit = 0;      //should only init once if dont destroy
 
-static HGLOBAL  hstatic_buffer;      //holds handle for static buffer
+HGLOBAL  hstatic_buffer;      //holds handle for static buffer
 
 extern HDC vhdc;
 extern HWND vhWnd;
@@ -168,6 +168,7 @@ BOOL ThinDestroyOnce()
    //get rid of static buffer
    GlobalUnlock(hstatic_buffer);
    hretcode = GlobalFree(hstatic_buffer);
+   hstatic_buffer = NULL;
    ASSERT(!hretcode, 0);
 
    //destroy the compatible DC if it was created
@@ -732,4 +733,24 @@ Destroy256Color()
 
     TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_CONNECT, "Destroy256Color: exit"));
     return(jretcode);
+}
+
+    
+void twreportmem(void)    
+{
+    int i;
+    extern HGLOBAL vhLogPalette, htiny_cache, hcontrol_area, hstatic_buffer;
+    extern LARGE_CACHE_SEGMENTS large_cache_segments[];
+    extern BRUSHDIB BrushDIB[];
+
+    LogPrintf(TC_ALL, TT_ERROR, "vhLogPalette:   %p\n", vhLogPalette);
+    LogPrintf(TC_ALL, TT_ERROR, "htiny_cache:    %p\n", htiny_cache);
+    LogPrintf(TC_ALL, TT_ERROR, "hcontrol_area:  %p\n", hcontrol_area);
+    LogPrintf(TC_ALL, TT_ERROR, "large_cache:    %p\n", large_cache_segments[0].hsegment);
+    LogPrintf(TC_ALL, TT_ERROR, "hstatic_buffer: %p\n", hstatic_buffer);
+
+    for (i = 0 ; i < MAXBRUSHREALIZED + 1; i++)
+    {
+	LogPrintf(TC_ALL, TT_ERROR, "BrushDIB[%d]: %p\n", i, BrushDIB[i].dib_handle);
+    }	
 }

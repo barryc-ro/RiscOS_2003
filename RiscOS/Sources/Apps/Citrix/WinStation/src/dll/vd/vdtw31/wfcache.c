@@ -46,13 +46,13 @@
 
 #include "../../../inc/clib.h"
 
-static HGLOBAL  htiny_cache;
+HGLOBAL  htiny_cache;
 
 static allocated_chunks_2K;      //number of 2K chunks allocated for large c
 
 static UINT segments_needed;     //number 60K segments needed to hold
 
-static HGLOBAL  hcontrol_area;   //the large cache control area
+HGLOBAL  hcontrol_area;   //the large cache control area
 static LPBYTE   lpcontrol_area;
 
 //60K = 61440
@@ -64,7 +64,7 @@ static LARGE_CACHE_SEGMENTS large_cache_segments[137];
 #endif
 
 #if defined(WIN32) || defined(RISCOS)
-static LARGE_CACHE_SEGMENTS large_cache_segments[1];      //only need 1 segment for 32 bit mode
+LARGE_CACHE_SEGMENTS large_cache_segments[1];      //only need 1 segment for 32 bit mode
 #endif
 
 //the following global variables are used to keep track of the state
@@ -130,6 +130,7 @@ BOOL  TWCache_Init(UINT chunks_2K)
    ASSERT(lptiny_cache, 0);
    if (!lptiny_cache) {
       hretcode = GlobalFree(htiny_cache);
+      htiny_cache = NULL;
       ASSERT(!hretcode, 0);
       return(FALSE);
    }
@@ -151,6 +152,7 @@ BOOL  TWCache_Init(UINT chunks_2K)
    if (!hcontrol_area) {
       GlobalUnlock(htiny_cache);
       hretcode = GlobalFree(htiny_cache);
+      htiny_cache = NULL;
       ASSERT(!hretcode, 0);
       return(FALSE);
    }
@@ -159,8 +161,10 @@ BOOL  TWCache_Init(UINT chunks_2K)
    if (!lpcontrol_area) {
       GlobalUnlock(htiny_cache);
       hretcode = GlobalFree(htiny_cache);
+      htiny_cache = NULL;
       ASSERT(!hretcode, 0);
       hretcode = GlobalFree(hcontrol_area);
+      hcontrol_area = NULL;
       ASSERT(!hretcode, 0);
       return(FALSE);
    }
@@ -175,8 +179,10 @@ BOOL  TWCache_Init(UINT chunks_2K)
    if (!large_cache_segments[0].hsegment) {
       GlobalUnlock(htiny_cache);
       hretcode = GlobalFree(htiny_cache);
+      htiny_cache = NULL;
       ASSERT(!hretcode, 0);
       GlobalUnlock(hcontrol_area);
+      hcontrol_area = NULL;
       hretcode = GlobalFree(hcontrol_area);
       ASSERT(!hretcode, 0);
       return(FALSE);
@@ -185,12 +191,15 @@ BOOL  TWCache_Init(UINT chunks_2K)
    ASSERT(large_cache_segments[0].lpsegment, 0);
    if (!large_cache_segments[0].lpsegment) {
       hretcode = GlobalFree(large_cache_segments[0].hsegment);
+      large_cache_segments[0].hsegment = NULL;
       ASSERT(!hretcode, 0);
       GlobalUnlock(htiny_cache);
       hretcode = GlobalFree(htiny_cache);
+      htiny_cache = NULL;
       ASSERT(!hretcode, 0);
       GlobalUnlock(hcontrol_area);
       hretcode = GlobalFree(hcontrol_area);
+      hcontrol_area = NULL;
       ASSERT(!hretcode, 0);
       return(FALSE);
    }
@@ -230,13 +239,16 @@ BOOL  TWCache_Init(UINT chunks_2K)
       if (!(large_cache_segments[i].hsegment && large_cache_segments[i].lpsegment)) {
          GlobalUnlock(htiny_cache);
          hretcode = GlobalFree(htiny_cache);
+	 ntiny_cache = NULL;
          ASSERT(!hretcode, 0);
          GlobalUnlock(hcontrol_area);
          hretcode = GlobalFree(hcontrol_area);
+	 hcontrol_area = NULL;
          ASSERT(!hretcode, 0);
          for (j=0 ; j<=1 ; j++ ) {
             GlobalUnlock(large_cache_segments[j].hsegment);
             hretcode = GlobalFree(large_cache_segments[j].hsegment);
+	    large_cache_segments[j].hsegment = NULL;
             ASSERT(!hretcode, 0);
          }
          return(FALSE);
@@ -267,6 +279,7 @@ BOOL  TWCache_Destroy()
 
       GlobalUnlock(large_cache_segments[i].hsegment);
       hretcode1 = GlobalFree(large_cache_segments[i].hsegment);
+      large_cache_segments[i].hsegment = NULL;
       ASSERT(!hretcode1, 0);
       if (hretcode1) {
          hretcode2 = hretcode1;
@@ -275,10 +288,12 @@ BOOL  TWCache_Destroy()
 
    GlobalUnlock(htiny_cache);
    hretcode1 = GlobalFree(htiny_cache);
+   htiny_cache = NULL;
    ASSERT(!hretcode1, 0);
 
    GlobalUnlock(hcontrol_area);
    hretcode3 = GlobalFree(hcontrol_area);
+   hcontrol_area = NULL;
    ASSERT(!hretcode3, 0);
 
    TRACE((TC_TW,TT_TW_CACHE,"TWCacheDestroy: out"));

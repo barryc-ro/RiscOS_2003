@@ -530,17 +530,23 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
 			      szKeyboardLayout, sizeof(szKeyboardLayout) );
 
     // special new string to say pick up from local machine configuration
+
+    TRACE((TC_WENG, TT_API1, "KeyboardLayout: '%s'\n", szKeyboardLayout));
     if (strcmpi(szKeyboardLayout, "(Auto Detect)") == 0)
     {
 	KEYBOARDLAYOUT LocalLayout;
 	
 	if (GetLocalKeyboard(LocalLayout, sizeof(LocalLayout)) == CLIENT_STATUS_SUCCESS)
 	    strcpy(szKeyboardLayout, LocalLayout);
+
+	TRACE((TC_WENG, TT_API1, "KeyboardLayout: '%s' (local '%s')\n", szKeyboardLayout, LocalLayout));
     }
 
     G_pUiData->KeyboardLayout = bGetPrivateProfileLong( pIni,
 							szKeyboardLayout,
 							(long)0 );
+
+    TRACE((TC_WENG, TT_API1, "KeyboardLayout: %d\n", G_pUiData->KeyboardLayout));
 
 #if 0
     G_pUiData->Lpt1  = bGetPrivateProfileInt( pIni, INI_LPT1, DEF_LPT1 );

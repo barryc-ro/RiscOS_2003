@@ -473,6 +473,78 @@ static const char *objects[] =
 /* ---------------------------------------------------------------------------------------------------- */
 
 #ifdef DEBUG
+ 
+static void dump_object(HGDIOBJ obj)
+{
+    switch (obj->gdi.tag)
+    {
+    case OBJ_PEN:
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: pen"));
+	break;
+	
+    case OBJ_BITMAP:
+    {
+	HBITMAP bitmap = (HBITMAP)obj;
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: bitmap  sprite @ %p", obj, bitmap->data.sprite.area));
+	break;
+    }
+
+    case OBJ_BRUSH:
+    {
+	HBRUSH brush = (HBRUSH)obj;
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: brush   sprite @ %p", obj, brush->data.sprite.area));
+	break;
+    }
+
+    case OBJ_DC:
+    {
+	HDC dc = (HDC)obj;
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: dc      palette %p brush %p save_area placeholder %p",
+	       obj, dc->data.current.palette, dc->data.realized.brush.area, dc->data.save_area, dc->data.bitmap_placeholder));
+	break;
+    }
+
+    case OBJ_MEMDC:
+    {
+	HDC dc = (HDC)obj;
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: memdc   palette %p brush %p save_area placeholder %p",
+	       obj, dc->data.current.palette, dc->data.realized.brush.area, dc->data.save_area, dc->data.bitmap_placeholder));
+	break;
+    }
+
+    case OBJ_PAL:
+    {
+	HPALETTE palette = (HPALETTE)obj;
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: palette data %p", obj, palette->data.colours));
+	break;
+    }
+
+    case OBJ_REGION:
+    {
+	HRGN rgn = (HRGN)obj;
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: region  base %p", obj, rgn->data.base));
+	break;
+    }
+
+    case OBJ_CURSOR:
+    {
+	HCURSOR cursor = (HCURSOR)obj;
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: cursor  sprite %p", obj, cursor->data.sprite.area));
+	break;
+    }
+
+    default:
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: unknown tag %d", obj, obj->gdi.tag));
+	break;
+    }
+}
+
+void dump_objects(void)
+{
+    HGDIOBJ obj;
+    for (obj = gdi_objects; obj; obj = obj->gdi.next)
+	dump_object(obj);
+}
 
 static void save_sprite(const sprite_descr *descr, const char *name)
 {

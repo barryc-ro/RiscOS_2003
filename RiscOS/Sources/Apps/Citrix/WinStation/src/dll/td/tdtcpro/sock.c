@@ -267,11 +267,22 @@ int Receive( PPD pPd, int Socket, char * pBuffer, int ByteCount, int *pAmountRea
    AmountRead = recv( Socket, pBuffer, ByteCount, 0 );
 
    /* error return */
-   if ( AmountRead <= 0 ) {
+   
+   if ( AmountRead < 0)
+   {
       *pAmountRead = 0;
-      rc = CLIENT_STATUS_NO_DATA;
+       if (errno == EWOULDBLOCK)
+	   rc = CLIENT_STATUS_NO_DATA;
+       else
+	   rc = errno;
    }
-   else {
+   else if ( AmountRead == 0 )
+   {
+      *pAmountRead = 0;
+      rc = CLIENT_ERROR_CONNECTION_TIMEOUT; // SJM: not sure this is the right value but it should give the right results
+   }
+   else
+   {
       *pAmountRead = AmountRead;
       rc = CLIENT_STATUS_SUCCESS;
    }

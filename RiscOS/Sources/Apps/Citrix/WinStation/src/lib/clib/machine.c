@@ -22,11 +22,16 @@
 
 int GetLocalKeyboard(char *s, int len)
 {
-    int layout, out;
-    return LOGERR(_swix(OS_Byte, _INR(0,1) | _OUT(1), 71, 255, &layout)) == NULL &&
-	LOGERR(_swix(OS_ServiceCall, _INR(1,5) | _OUT(1), 0x43, 2, layout, s, len, &out)) == NULL &&
-	out == 0 ? CLIENT_STATUS_SUCCESS : CLIENT_ERROR;
-}
+    int layout, out, outlen;
+    if (LOGERR(_swix(OS_Byte, _INR(0,1) | _OUT(1), 71, 255, &layout)) != NULL)
+	return CLIENT_ERROR;
 
+    if (LOGERR(_swix(OS_ServiceCall, _INR(1,5) | _OUT(1) | _OUT(5), 0x43, 2, layout, s, len, &out, &outlen)) != NULL)
+	return CLIENT_ERROR;
+
+    s[outlen] = '\0';
+
+    return out == 0 ? CLIENT_STATUS_SUCCESS : CLIENT_ERROR;
+}
 
 /* eof machine.c */

@@ -586,7 +586,7 @@ int TWFreeObjectCaches( VOID )
  ******************************************************************************/
 USHORT TWReadCacheParameters( PVOID pIniSection )
 {
-    int freemem;
+    int freemem, limit;
     
     /*
      *  Get large cache size (in 1KB chunks)
@@ -606,10 +606,11 @@ USHORT TWReadCacheParameters( PVOID pIniSection )
      */
     LargeCacheSize <<= 10;
 
-    // don't use more than half the free memory
+    // ensure there is some memory left (0.5Mb) for sprites etc.
     _swix(Wimp_SlotSize, _INR(0,1) | _OUT(2), -1, -1, &freemem);
-    if (LargeCacheSize > freemem/2)
-	LargeCacheSize = (freemem/2) &~ 1023;
+    limit = (freemem - 512*1024) &~ 1023;
+    if (LargeCacheSize > limit)
+	LargeCacheSize = limit;
     
     return( CLIENT_STATUS_SUCCESS );
 }
