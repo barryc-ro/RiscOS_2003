@@ -82,8 +82,11 @@
 /*                          specified to render_make_animation is now a palette entry and not  */
 /*                          an index.                                                          */
 /*          09-Oct-97: RML: Background wasn't being filled in correctly on animations.         */
+/*          21-Oct-97: KJB: Lots and lots and lots of redraw errors fixed.                     */
+/*                          Various optimisations.                                             */
 /*---------------------------------------------------------------------------------------------*/
 /* To do (inanimate) :                                                                         */
+/* Progressive rendering of incomplete images generally shafted in non-2x2 modes.              */
 /*                                                                                             */
 /* To do (animated) :                                                                          */
 /* When disposing of frame 0 with disposal type 3, code wrongly assumes local colour palette   */
@@ -147,7 +150,7 @@ static _kernel_oserror* animate_error_and_abandon(int handle, char *s);
 static _kernel_oserror* render_start_fast(int handle);
 static _kernel_oserror* render_row_fast(int handle);
 static _kernel_oserror* render_convert_interlace(int handle);
-static int              render_which_row_is_this(int handle, int n);
+static int              render_which_row_is_this(int handle, unsigned int n);
 static _kernel_oserror* render_between(int handle, int first_line, int last_line);
 static _kernel_oserror* render_between_interlace(int handle, int first_line, int last_line);
 static _kernel_oserror* render_between_scaled(int handle, int first_line, int last_line);
@@ -158,8 +161,9 @@ static _kernel_oserror* render_save_area(void);
 static _kernel_oserror* render_vdu_back_to_screen(void);
 static int              render_valid_handle(int handle);
 static void             render_initialise(void);
-static int              render_which_interlace_offset(int handle, int n, int *pass);
-static void             render_which_row_and_pass_is_this(int handle, int n, int* row, int* pass);
+static int              render_which_interlace_offset(int handle, unsigned int n, int *pass);
+static void             render_which_row_and_pass_is_this(int handle, int n, unsigned int* row, int* pass);
+static unsigned int     render_previous_interlace_line(int handle, int row);
 static _kernel_oserror* render_whole(int handle);
 static int              render_animate_which_row_is_this(int handle, int n);
 static void             render_animate_initialise(void);
@@ -245,7 +249,7 @@ _kernel_oserror* render_start(char type, int w, int h, int i, int tp, render_fla
     im->width         = w;                  // width
     im->height        = h;                  // height
     im->type          = type;               // type
-    im->scanline      = 1;                  // current scanline being recompressed
+    im->scanline      = 0;                  // current scanline being recompressed
     im->interlace     = i;                  // interlace flag
     im->row           = 0;                  // row being plotted (not = scanline if interlaced)
     im->blk_off[0]    = 0;                  // first block offset is zero
@@ -356,9 +360,9 @@ static void render_initialise(void)
 static void render_read_mode_variables(void)
 {
     /* Set up scale factors for pixels -> OS units */
-    xos = 1 << _swi(OS_ReadModeVariable,_IN(0)|_IN(1)|_RETURN(2),-1,4);
-    yos = 1 << _swi(OS_ReadModeVariable,_IN(0)|_IN(1)|_RETURN(2),-1,5);
-    bpp = 1 << _swi(OS_ReadModeVariable,_IN(0)|_IN(1)|_RETURN(2),-1,9);
+    xos = 1 << _swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,4);
+    yos = 1 << _swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,5);
+    bpp = 1 << _swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,9);
 
     if      (bpp==32) mode = (6<<27) + (90<<14) + (90<<1) + 1;
     else if (bpp==16) mode = (5<<27) + (90<<14) + (90<<1) + 1;
@@ -483,12 +487,12 @@ _kernel_oserror* render_row(int handle, char **return_address)
     }
 
     /* If this is the first row, then start the compressor */
-    if (im->scanline==1)
+    if (im->scanline==0)
     {
         im->lzw_handle = LZW_compress_new();
         if (im->lzw_handle==-1)
             return render_error_and_abandon(handle, "Compressor is working on too many images already.");
-        e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, 'T', 8, NULL, NULL, im->lzw_handle);
+        e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, im->lzw_handle);
         if (e) return render_error_and_abandon(handle, e->errmess);
     }
 
@@ -496,7 +500,7 @@ _kernel_oserror* render_row(int handle, char **return_address)
     LZW_compress_next( (uint8*)im->lzw_data + im->lzw_ptr, (uint8*)im->rgb_data, im->width, im->lzw_handle);
 
     /* If we're at the end of a block, then flush and start again */
-    if ((im->scanline % im->flags.lpb)==0)
+    if (((im->scanline+1) % im->flags.lpb)==0)
     {
         /* Flush compression table, so beginning a new block */
         LZW_compress_flush(&nb, im->lzw_handle, (uint8*)im->lzw_data + im->lzw_ptr);
@@ -508,7 +512,7 @@ _kernel_oserror* render_row(int handle, char **return_address)
         /* Restart compression (as long as this isn't the last row) */
         if (im->scanline < im->height)
         {
-            e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, 'T', 8, NULL, NULL, im->lzw_handle);
+            e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, im->lzw_handle);
             if (e) return render_error_and_abandon(handle, e->errmess);
         }
     }
@@ -517,7 +521,7 @@ _kernel_oserror* render_row(int handle, char **return_address)
     im->scanline++;
 
     /* Check if this is the bottom of the image */
-    if (im->scanline>im->height) render_end(handle);
+    if (im->scanline>=im->height) render_end(handle);
 
     *return_address = im->rgb_data;
 
@@ -550,11 +554,11 @@ static _kernel_oserror* render_row_fast(int handle)
 
     /* If interlaced picture, then calculate which row in the sprite to put this row of data */
     line=im->scanline;
-    if (im->interlace) line=render_which_row_is_this(handle, im->scanline-1);
+    if (im->interlace) line=render_which_row_is_this(handle, im->scanline);
 
     /* Copy the data from the bitstream buffer to the sprite */
     spr_head = (sprite_header*) ((char*)im->spr_data + sizeof(sprite_area));
-    spr_data = (char*)spr_head + spr_head->image + ((line-1) * sw);
+    spr_data = (char*)spr_head + spr_head->image + (line * sw);
     memcpy(spr_data, im->rgb_data, im->width);
 
     /* Increment scanline */
@@ -749,12 +753,16 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
     sprite_header    *row_spr;
     char             *row_msk;
     char             *row_img;
-    int               bytes, x, l, tp, first, last, top, py; //, l1, l2;
+    #ifdef TRACE
+    int               bytes;
+    #endif
+    int               x, l, tp, first, last, top, py; //, l1, l2;
     int               width = im->width;
     int               height = im->height;
     int               dcb[8];
     signed int        y;
     gbox              gw;
+    int               plotflags;
 
     debug_value("  render whole scaled ",handle);
 
@@ -776,7 +784,8 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
     im->scale = scale;
 
     /* If we've not brought in much of the image, then don't bother */
-    if ( (im->scanline<4) && (!(im->flags.image_fast)) ) return NULL;
+    /*if ( (im->scanline<4) && (!(im->flags.image_fast)) ) return NULL;*/
+    if (!im->scanline) return NULL;
 
     /* If it's a fast image, then call fast routines */
     if (im->flags.image_fast)
@@ -836,16 +845,16 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
     /* If not interlaced, then check that the last line doesn't exceed the scanline */
     if (!im->interlace)
     {
-        if (im->type==InternalType)
-        {
-            if (last  > (im->scanline-1))  last=im->scanline-1;
-            if (first > (im->scanline-1)) first=im->scanline-1;
-        }
+        /*if (im->type==InternalType)
+        {*/
+            if (last  >= im->scanline)  last=im->scanline-1;
+            if (first >= im->scanline) first=im->scanline-1;
+        /*}
         else
         {
             if (last  > (im->scanline-4))  last=im->scanline-4;
             if (first > (im->scanline-4)) first=im->scanline-4;
-        }
+        }*/
     }
 
     /* If we're not plotting the whole image, then call routine to plot between */
@@ -864,15 +873,19 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
     debug_value("    height ",height);
 
     /* Check we've scanned upto the last line */
-    if (last > im->scanline-1) last=im->scanline-1;
+    if (last > im->scanline) last=im->scanline;
 
     /* We're drawing the whole image, so set the lzw data pointer to the start */
-    e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) im->lzw_data);
+    e=LZW_decompress_start((uint8*) im->lzw_data);
     if (e) return render_error_and_abandon(handle, e->errmess);
 
     /* Work out x co-ordinates of destination coordinate block - these don't change */
     dcb[0] = dcb[6] = im->x * 256;                                                        /* x0 */
     dcb[2] = dcb[4] = dcb[0] + ((im->scale.x_mul*xos*256*width) / im->scale.x_div);   /* x1 */
+
+    plotflags = 0;
+    if (osver >= WideTableOSV) plotflags |= 32;
+    if (tp != -1) plotflags |= 8;
 
     /* Loop through from the top of the image to the bottom */
     for (l=0; l<height; l++)
@@ -880,11 +893,15 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
         py = (height-l-1);
 
         /* Decompress next row */
+        #ifdef TRACE
         e=LZW_decompress_next((uint8*)row_img, width, (uint8*) im->lzw_data, &bytes);
+        #else
+        e=LZW_decompress_next((uint8*)row_img, width, (uint8*) im->lzw_data);
+        #endif
         if (e) return render_error_and_abandon(handle, e->errmess);
 
         /* Setup mask */
-        if (im->transparency!=-1)
+        if (tp!=-1)
         {
             for (x=0; x<width; x++)
             {
@@ -894,7 +911,9 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
         }
 
         /* If a whole row hasn't been returned, then something's gone wrong */
+        #ifdef TRACE
         if (bytes!=width) return render_error_and_abandon(handle, "Couldn't decompress whole row.");
+        #endif
 
         /* Update y0 and y1 */
         dcb[1] = dcb[3] = (256*im->y) + ( ( 256*yos*im->scale.y_mul *   py    ) / im->scale.y_div );  /* y0 */
@@ -902,12 +921,12 @@ _kernel_oserror* render_whole_scaled(int handle, int xc, int yc, scale_factor sc
 
         /* Plot sprite */
         e=_swix(OS_SpriteOp, _INR(0,7),
-                             256+SprPutTrans,
-                             (int)im->spr_data,
-                             "row",
+                             512+SprPutTrans,
+                             im->spr_data,
+                             row_spr,
                              1,
                              0,
-                             osver>=WideTableOSV ? 40:8,
+                             plotflags,
                              dcb,
                              im->trtab);
         if (e) return e;
@@ -940,7 +959,10 @@ static _kernel_oserror* render_between_scaled(int handle, int first_line, int la
     char             *row_msk;
     char             *row_img;
     char             *data;
-    int               first_block, last_block, l, bytes, x, tp, lzw_redraw_ptr;
+    #ifdef TRACE
+    int               bytes;
+    #endif
+    int               first_block, last_block, l, x, tp, lzw_redraw_ptr, plotflags;
     int               width = im->width;
     int               height = im->height;
     int               dcb[8];
@@ -952,9 +974,12 @@ static _kernel_oserror* render_between_scaled(int handle, int first_line, int la
     row_img = (char*)row_spr + row_spr->image;
     row_msk = (char*)row_spr + row_spr->mask;
     tp=im->transparency;
+    plotflags = 0;
+    if (osver >= WideTableOSV) plotflags |= 32;
+    if (tp != -1) plotflags |= 8;
 
     /* Check that we've actually read the last line - if not, set it to the last one we have */
-    if ( last_line > (im->scanline-2) ) last_line=im->scanline-2;
+    if ( last_line >= im->scanline ) last_line=im->scanline-1;
 
     /* Work out the first block (the block the first line is in) and the last block  */
     /* (the block the last line is in) - we will have to decompress fully all blocks */
@@ -965,7 +990,7 @@ static _kernel_oserror* render_between_scaled(int handle, int first_line, int la
     /* Set the LZW data pointer to the first block */
     lzw_redraw_ptr = im->blk_off[first_block];
     data = (char*) ( (int)im->lzw_data + lzw_redraw_ptr);
-    e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) data);
+    e=LZW_decompress_start((uint8*) data);
     if (e) return e;
 
     /* Work out x co-ordinates of destination coordinate block - these don't change */
@@ -976,16 +1001,22 @@ static _kernel_oserror* render_between_scaled(int handle, int first_line, int la
     for (l=(first_block * im->flags.lpb); l<=last_line; l++)
     {
         /* Decompress next row */
+        #ifdef TRACE
         e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data, &bytes);
+        #else
+        e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data);
+        #endif
         if (e) return e;
 
+        #ifdef TRACE
         /* If not a whole row of data, something's gone wrong */
         if (bytes!=width) return render_error("Decompression failed - not a whole row.\n");
+        #endif
 
         /* Setup mask */
-        if (im->transparency!=-1)
+        if (tp!=-1)
         {
-            for (x=0; x<width; x++)
+            for (x=width-1; x>=0; x--)
             {
                 if (row_img[x]==tp) row_msk[x]=0;
                 else row_msk[x]=255;
@@ -1001,9 +1032,9 @@ static _kernel_oserror* render_between_scaled(int handle, int first_line, int la
 
             /* Plot sprite */
             e=_swix(OS_SpriteOp, _INR(0,7),
-          		         256+SprPutTrans,
-        			 (int)im->spr_data,
-        			 "row",
+          		         512+SprPutTrans,
+        			 im->spr_data,
+        			 row_spr,
         			 1,
         			 0,
         			 osver>=WideTableOSV ? 40:8,
@@ -1042,17 +1073,26 @@ static _kernel_oserror* render_between_scaled_interlace(int handle, int first_li
     char             *row_msk;
     char             *row_img;
     char             *data;
-    int               l, m, bytes, x, tp, pass, lzw_redraw_ptr;
+    #ifdef TRACE
+    int               bytes;
+    #endif
+    int               m, x, tp, pass, lzw_redraw_ptr;
+    unsigned int      l;
+    int               b, c;
     int               width = im->width;
     int               height = im->height;
     int               dcb[8];
+    int               plotflags;
 
     debug_value("  render between scaled interlace ",handle);
 
+    b = im->interlace_b;
+    c = im->interlace_c;
+
     /* If it's the first pass and we're trying to plot further down than we've fetched, don't bother */
     render_which_row_and_pass_is_this(handle, im->scanline, &l, &pass);
-    if ((pass==1) && (first_line>l)) return NULL;
-    if ((pass==1) && (last_line>l)) last_line=l;
+    if ((pass==1) && (first_line>=l)) return NULL;
+    if ((pass==1) && (last_line>=l)) last_line=l-1;
 
     /* Calculate the location of the single row sprite, it's image data and it's mask data */
     row_spr = (sprite_header*) ((char*)im->spr_data + sizeof(sprite_area));
@@ -1063,6 +1103,14 @@ static _kernel_oserror* render_between_scaled_interlace(int handle, int first_li
     /* Work out x co-ordinates of destination coordinate block - these don't change    */
     dcb[0] = dcb[6] = im->x * 256;                                                        /* x0 */
     dcb[2] = dcb[4] = dcb[0] + ((im->scale.x_mul*xos*256*width) / im->scale.x_div);   /* x1 */
+    plotflags = 0;
+    if (osver >= WideTableOSV) plotflags |= 32;
+    if (tp != -1) plotflags |= 8;
+
+    /* Wind back first_line to a line we actually have */
+    m = render_which_interlace_offset(handle, first_line, &pass);
+    if (m >= im->scanline)
+        first_line = render_previous_interlace_line(handle, first_line);
 
     for (l=first_line; l<=last_line; l++)
     {
@@ -1074,23 +1122,29 @@ static _kernel_oserror* render_between_scaled_interlace(int handle, int first_li
         m = render_which_interlace_offset(handle, l, &pass);
 
         /* If we have fetched this row, then... */
-        if (m < (im->scanline - 1))
+        if (m < im->scanline)
         {
             /* Set LZW data pointer to this line */
             lzw_redraw_ptr = im->blk_off[m];
             data = (char*) ( (int)im->lzw_data + lzw_redraw_ptr);
-            e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) data);
+            e=LZW_decompress_start((uint8*) data);
             if (e) return e;
 
             /* Decompress row */
+            #ifdef TRACE
             e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data, &bytes);
+            #else
+            e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data);
+            #endif
             if (e) return e;
 
+            #ifdef TRACE
             /* If not a whole row of data, something's gone wrong */
             if (bytes!=width) return render_error("Decompression failed - not a whole row.\n");
+            #endif
 
             /* Do mask */
-            if (im->transparency!=-1)
+            if (tp!=-1)
             {
                 for (x=0; x<width; x++)
                 {
@@ -1110,7 +1164,7 @@ static _kernel_oserror* render_between_scaled_interlace(int handle, int first_li
        			     "row",
        			     1,
        			     0,
-       			     osver>=WideTableOSV ? 40:8,
+       			     plotflags,
        			     dcb,
        			     im->trtab);
         if (e) return e;
@@ -1142,11 +1196,15 @@ static _kernel_oserror* render_whole(int handle)
     sprite_header    *row_spr;
     char             *row_msk;
     char             *row_img;
-    int               bytes, x, first, last, tp, py;
+    #ifdef TRACE
+    int               bytes;
+    #endif
+    int               x, first, last, tp, py;
     int               width = im->width;
     int               height = im->height;
     signed int        y;
     gbox              gw;
+    int               plotflags;
 
     debug_value("  render whole ",handle);
 
@@ -1154,6 +1212,10 @@ static _kernel_oserror* render_whole(int handle)
     row_img = (char*)row_spr + row_spr->image;
     row_msk = (char*)row_spr + row_spr->mask;
     tp=im->transparency;
+
+    plotflags = 0;
+    if (osver >= WideTableOSV) plotflags |= 32;
+    if (tp != -1) plotflags |= 8;
 
     /* Read the graphics clipping window */
     gw=read_graphics_window();
@@ -1171,23 +1233,23 @@ static _kernel_oserror* render_whole(int handle)
 
     /* Check for strange values of first and last lines - paranoia? */
     if (last<0) return NULL;
-    if (first>height) first=0;
+    if (first>=height) first=height-1;
 
     if (first<0) first=0;
 
     /* If not interlaced, then check that the last line doesn't exceed the scanline */
     if (!im->interlace)
     {
-        if (im->type==InternalType)
-        {
-            if (last  > (im->scanline-1))  last=im->scanline-1;
-            if (first > (im->scanline-1)) first=im->scanline-1;
-        }
+        /*if (im->type==InternalType)
+        {*/
+            if (last  >= im->scanline)  last=im->scanline-1;
+            if (first >= im->scanline) first=im->scanline-1;
+        /*}
         else
         {
             if (last  > (im->scanline-4))  last=im->scanline-4;
             if (first > (im->scanline-4)) first=im->scanline-4;
-        }
+        }*/
     }
 
     /* Check that above conditions haven't made last>first */
@@ -1206,10 +1268,10 @@ static _kernel_oserror* render_whole(int handle)
     debug_print("  Still in render whole");
 
     /* Check we've scanned upto the last line */
-    if (last > (im->scanline-2)) last=im->scanline-2;
+    if (last > im->scanline-1) last=im->scanline-1;
 
     /* Else we're plotting the whole image, so move the redraw pointer to the start of the data */
-    e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) im->lzw_data);
+    e=LZW_decompress_start((uint8*) im->lzw_data);
     if (e) return e;
 
     for (y=0; y<height; y++)
@@ -1217,14 +1279,20 @@ static _kernel_oserror* render_whole(int handle)
         py = (height-y-1) * yos;
 
         /* Decompress next row */
+        #ifdef TRACE
         e=LZW_decompress_next((uint8*)row_img, width, (uint8*) im->lzw_data, &bytes);
+        #else
+        e=LZW_decompress_next((uint8*)row_img, width, (uint8*) im->lzw_data);
+        #endif
         if (e) return e;
 
+        #ifdef TRACE
         /* If not a whole row of data, something's gone wrong */
         if (bytes!=width) return render_error("Decompression failed - not a whole row.\n");
+        #endif
 
         /* Setup mask */
-        if (im->transparency!=-1)
+        if (tp!=-1)
         {
             for (x=0; x<width; x++)
             {
@@ -1235,12 +1303,12 @@ static _kernel_oserror* render_whole(int handle)
 
         /* Plot sprite */
         e=_swix(OS_SpriteOp, _INR(0,7),
-                             256+SprPutScaled,
-      			     (int)im->spr_data,
-      			     "row",
+                             512+SprPutScaled,
+      			     im->spr_data,
+      			     row_spr,
       			     im->x,
       			     im->y + py,
-      			     osver>=WideTableOSV ? 40:8,
+      			     plotflags,
       			     0,
       		             im->trtab);
         if (e) return e;
@@ -1273,7 +1341,10 @@ static _kernel_oserror* render_between(int handle, int first_line, int last_line
     char             *data;
     char             *row_msk;
     char             *row_img;
-    int               first_block, last_block, x, y, l, bytes, tp, lzw_redraw_ptr;
+    #ifdef TRACE
+    int               bytes;
+    #endif
+    int               first_block, last_block, x, y, l, tp, lzw_redraw_ptr;
     int               width = im->width;
     int               height = im->height;
 
@@ -1294,7 +1365,7 @@ static _kernel_oserror* render_between(int handle, int first_line, int last_line
     /* Set the LZW data pointer to the first block */
     lzw_redraw_ptr = im->blk_off[first_block];
     data = (char*) ( (int)im->lzw_data + lzw_redraw_ptr);
-    e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) data);
+    e=LZW_decompress_start((uint8*) data);
     if (e) return e;
 
     debug_value("    b first line ",first_line);
@@ -1306,11 +1377,17 @@ static _kernel_oserror* render_between(int handle, int first_line, int last_line
         y = yos * (height - l - 1);
 
         /* Decompress next row */
+        #ifdef TRACE
         e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data, &bytes);
+        #else
+        e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data);
+        #endif
         if (e) return e;
 
+        #ifdef TRACE
         /* If not a whole row of data, something's gone wrong */
-        if (bytes!=width) return render_error("Decompression failed - not a whole row.\n");
+        if (bytes!=width) return render_error("Decompression failed - not a whole row.");
+        #endif
 
         /* Setup mask */
         if (tp!=-1)
@@ -1367,9 +1444,13 @@ static _kernel_oserror* render_between_interlace(int handle, int first_line, int
     char             *row_msk;
     char             *row_img;
     char             *data;
-    int               i, y, l, m, bytes, x, tp, pass, scanpass, lzw_redraw_ptr;
+    int               y, m, x, tp, pass, scanpass, lzw_redraw_ptr, plotflags;
+    unsigned int      l;
+    #ifdef TRACE
+    int               bytes;
+    #endif
     int               scanline = im->scanline;
-    int               na, nb;
+    int               b, c;
     int               imx = im->x;
     int               imy = im->y;
     int               width = im->width;
@@ -1377,15 +1458,13 @@ static _kernel_oserror* render_between_interlace(int handle, int first_line, int
 
     debug_value("  render between interlace ",handle);
 
-    na = im->interlace_b - im->interlace_a;
-    nb = im->interlace_c - im->interlace_b;
+    b = im->interlace_b;
+    c = im->interlace_c;
 
     /* If it's the first pass and we're trying to plot further down than we've fetched, don't bother */
     render_which_row_and_pass_is_this(handle, scanline, &l, &scanpass);
-    if ((scanpass==1) && (first_line>l)) return NULL;
-    if ((scanpass==1) && (last_line>l)) last_line=l;
-
-    scanline-=2;
+    if ((scanpass==1) && (first_line>=l)) return NULL;
+    if ((scanpass==1) && (last_line>=l)) last_line=l-1;
 
     /* Calculate location of the single row sprite, it's image data and it's mask data */
     row_spr = (sprite_header*) ((char*)im->spr_data + sizeof(sprite_area));
@@ -1393,56 +1472,46 @@ static _kernel_oserror* render_between_interlace(int handle, int first_line, int
     row_msk = (char*)row_spr + row_spr->mask;
     tp=im->transparency;
 
+    plotflags = 0;
+    if (osver >= WideTableOSV) plotflags |= 32;
+    if (tp != -1) plotflags |= 8;
+
+    /* Wind back first_line to a line we actually have */
+    m = render_which_interlace_offset(handle, first_line, &pass);
+    if (m >= scanline)
+        first_line = render_previous_interlace_line(handle, first_line);
+
+    y = yos * (height - first_line);
     for (l=first_line; l<=last_line; l++)
     {
         /* Calculate y co-ordinate */
-        y = yos * (height - l - 1);
+        y -= yos;
 
         /* Find out where line l is in the data */
         m = render_which_interlace_offset(handle, l, &pass);
 
-         /* If we've not fetched this yet, find the closest */
-        if (m>scanline)
-        {
-            if (scanpass==1)
-            {
-                if ((scanline * 8) >= l) i = (l &~ 7);
-                else i = 0;
-            }
-            else if (scanpass==2)
-            {
-                if (((scanline - na) * 8 + 4) >= l)  i = (l &~ 3);
-                else i = (l &~ 7);
-            }
-            else if (scanpass==3)
-            {
-                if (((scanline - nb - na) * 4 + 2) >= l) i = (l &~ 1);
-                else i = (l &~ 3);
-            }
-            else
-            {
-                i = l - 1;
-            }
-
-            m = render_which_interlace_offset(handle, i, &pass);
-        }
-
-        /* If we have fetched this row, and it's not already in the sprite buffer. */
-        if ( (m<=scanline) && (im->last_sprite_row!=m) )
+        /* If we have fetched this row, then... */
+        if (m < im->scanline)
         {
             /* Set LZW data pointer to this line */
             lzw_redraw_ptr = im->blk_off[m];
             data = (char*) ( (int)im->lzw_data + lzw_redraw_ptr);
-            e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) data);
+            e=LZW_decompress_start((uint8*) data);
             if (e) return e;
 
             /* Decompress row */
+            #ifdef TRACE
             e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data, &bytes);
+            #else
+            e=LZW_decompress_next((uint8*)row_img, width, (uint8*) data);
+            #endif
             if (e) return e;
 
+            #ifdef TRACE
             /* If not a whole row of data, something's gone wrong */
             if (bytes!=width)
                 return render_error("Decompression failed - not a whole row.\n");
+            #endif
 
             /* Do mask */
             if (tp!=-1)
@@ -1471,19 +1540,17 @@ static _kernel_oserror* render_between_interlace(int handle, int first_line, int
             //_swi(OS_WriteC,_IN(0),4);
             //_swi(OS_WriteC,_IN(0),26);
             //printf("\nblank m %d    ",m);
-
-            memset(row_msk, 0, width);
-            im->last_sprite_row = -1;
+            continue;
         }
 
         /* Plot sprite */
         e=_swix(OS_SpriteOp, _INR(0,7),
-                             256+SprPutScaled,
+                             512+SprPutScaled,
                              (int)im->spr_data,
-                             "row",
+                             row_spr,
                              imx,
                              imy + y,
-                             osver>=WideTableOSV ? 40:8,
+                             plotflags,
          		     0,
                              im->trtab);
 
@@ -1557,8 +1624,9 @@ static _kernel_oserror* render_convert_interlace(int handle)
 {
     internal_header *im=images[handle];
     char            *lzw;
-    int              n, offset, new_ptr, old_ptr, size;
-    int              a = im->interlace_a;
+    int              offset, new_ptr, old_ptr, size;
+    unsigned int     n;
+    /*int              a = im->interlace_a;*/
     int              b = im->interlace_b;
     int              c = im->interlace_c;
     int              d = im->interlace_d;
@@ -1567,7 +1635,7 @@ static _kernel_oserror* render_convert_interlace(int handle)
 
     debug_value("  render convert interlace ",handle);
 
-    if ((im->scanline - 1) != height) return NULL;
+    if (im->scanline != height) return NULL;
 
     if (!flex_alloc((flex_ptr)&new_blk_off, sizeof(int)*height))
         return render_error("Can't allocate memory to convert interlaced picture.");
@@ -1589,10 +1657,10 @@ static _kernel_oserror* render_convert_interlace(int handle)
     {
         /* Work out where in the order the nth row came in eg. the 8th row of the
            image is actually sent as the 2nd row. */
-             if ( ( (n-0) % 8)==0 ) offset = a + ( (n-0+8) /8 ) -1;
-        else if ( ( (n-4) % 8)==0 ) offset = b + ( (n-4+8) /8 ) -1;
-        else if ( ( (n-2) % 4)==0 ) offset = c + ( (n-2+4) /4 ) -1;
-        else                        offset = d + ( (n-1+2) /2 ) -1;
+             if ((n & 7) == 0) offset = /*a +*/ (n >> 3);
+        else if ((n & 3) == 0) offset = b + ((n-4) >> 3);
+        else if ((n & 1) == 0) offset = c + ((n-2) >> 2);
+        else                   offset = d + ((n-1) >> 1);
 
         if (offset>height) offset=height;
 
@@ -1636,48 +1704,44 @@ static _kernel_oserror* render_convert_interlace(int handle)
  * Returns: the order the row came in (0 being first)                                         *
  *--------------------------------------------------------------------------------------------*/
 
-static int render_which_interlace_offset(int handle, int n, int *pass)
+static int render_which_interlace_offset(int handle, unsigned int n, int *pass)
 {
     internal_header *im=images[handle];
-    int              a = im->interlace_a;
-    int              b = im->interlace_b;
-    int              c = im->interlace_c;
-    int              d = im->interlace_d;
     int              offset;
 
     /* Work out where in the order the nth row came in eg. the 8th row of the image is actually sent as the 2nd row. */
 
-    if (n<0) return 10000;
+    if ((int) n < 0) return 10000;
 
     /* Row was in first pass */
-    if ( ( (n - 0) % 8)==0 )
+    if ( (n & 7) == 0 )
     {
-        offset = a + ( (n - 0 + 8) / 8 ) - 1;
+        offset = /*im->interlace_a +*/ n >> 3;
         *pass = 8;
     }
 
     /* Row was in second pass */
-    else if ( ( (n - 4) % 8)==0 )
+    else if ( (n & 3) == 0 )
     {
-        offset = b + ( (n - 4 + 8) / 8 ) - 1;
+        offset = im->interlace_b + ((n - 4) >> 3);
         *pass = 4;
     }
 
     /* Row was in third pass */
-    else if ( ( (n - 2) % 4)==0 )
+    else if ( (n & 1) == 0 )
     {
-        offset = c + ( (n - 2 + 4) / 4 ) - 1;
+        offset = im->interlace_c + ((n - 2) >> 2);
         *pass = 2;
     }
 
     /* Row was in final pass */
     else
     {
-        offset = d + ( (n - 1 + 2) / 2 ) - 1;
+        offset = im->interlace_d + ((n - 1) >> 1);
         *pass = 1;
     }
 
-    if ( offset > (im->scanline-2) ) return 20000;
+    if ( offset > (im->scanline-1) ) return 20000;
     else return offset;
 }
 
@@ -1694,23 +1758,21 @@ static int render_which_interlace_offset(int handle, int n, int *pass)
  * Returns: int - actual row in image.                                                        *
  *--------------------------------------------------------------------------------------------*/
 
-static int render_which_row_is_this(int handle, int n)
+static int render_which_row_is_this(int handle, unsigned int n)
 {
     internal_header *im=images[handle];
-    int              a = im->interlace_a;
+    /*int              a = im->interlace_a;*/
     int              b = im->interlace_b;
     int              c = im->interlace_c;
     int              d = im->interlace_d;
     int              offset;
 
-         if (n<b) offset = ( (n-a) * 8 ) + 0;
-    else if (n<c) offset = ( (n-b) * 8 ) + 4;
-    else if (n<d) offset = ( (n-c) * 4 ) + 2;
-    else          offset = ( (n-d) * 2 ) + 1;
+         if (n<b) offset = ( (n/*-a*/) << 3 ) + 0;
+    else if (n<c) offset = ( (n-b) << 3 ) + 4;
+    else if (n<d) offset = ( (n-c) << 2 ) + 2;
+    else          offset = ( (n-d) << 1 ) + 1;
 
-    offset++;
-
-    if (offset > im->height) offset = im->height;
+    if (offset >= im->height) offset = im->height - 1;
 
     return offset;
 }
@@ -1729,38 +1791,90 @@ static int render_which_row_is_this(int handle, int n)
  *          pass - pass row arrived in.                                                       *
  *--------------------------------------------------------------------------------------------*/
 
-static void render_which_row_and_pass_is_this(int handle, int n, int* row, int* pass)
+static void render_which_row_and_pass_is_this(int handle, int n, unsigned int* row, int* pass)
 {
     internal_header *im=images[handle];
-    int              a = im->interlace_a;
+    /*int              a = im->interlace_a;*/
     int              b = im->interlace_b;
     int              c = im->interlace_c;
     int              d = im->interlace_d;
 
     if (n < 0) n=0;
-    if (n > im->height) n = im->height;
+    if (n >= im->height) n = im->height - 1;
 
     if (n<b)
     {
-        *row  = ( (n-a) * 8 ) + 0;
+        *row  = ( (n/*-a*/) << 3 ) + 0;
         *pass = 1;
     }
     else if (n<c)
     {
-        *row  = ( (n-b) * 8 ) + 4;
+        *row  = ( (n-b) << 3 ) + 4;
         *pass = 2;
     }
     else if (n<d)
     {
-        *row  = ( (n-c) * 4 ) + 2;
+        *row  = ( (n-c) << 2 ) + 2;
         *pass = 3;
     }
     else
     {
-        *row  = ( (n-d) * 2 ) + 1;
+        *row  = ( (n-d) << 1 ) + 1;
         *pass = 4;
     }
 
+}
+
+
+/*--------------------------------------------------------------------------------------------*
+ * render_previous_interlace_line                                                             *
+ *                                                                                            *
+ * For interlaced images, given a physical line in the image, return the closest previous     *
+ * physical line that we've actually received. Assumes that row hasn't actually been fetched, *
+ * and that row isn't below the scanline on the first pass                                    *
+ *                                                                                            *
+ * In: handle - identifier for this image.                                                    *
+ *     row    - physical row to arrive.                                                       *
+ *                                                                                            *
+ * Returns: int  - actual row in image.                                                       *
+ *          pass - pass row arrived in.                                                       *
+ *--------------------------------------------------------------------------------------------*/
+
+static unsigned int render_previous_interlace_line(int handle, int row)
+{
+    internal_header *im=images[handle];
+    unsigned int     n, scanline = im->scanline;
+    int              pass;
+
+    render_which_row_and_pass_is_this(handle, scanline, &n, &pass);
+
+    if (row <= 0) return 0;
+    if (row >= im->height) row = im->height - 1;
+
+    switch (pass)
+    {
+      case 1:
+        return row &~ 7;
+        break;
+
+      case 2:
+        if (row < (scanline - im->interlace_b) * 8 + 4)
+            return row &~ 3;
+        else
+            return row &~ 7;
+        break;
+
+      case 3:
+        if (row < (scanline - im->interlace_c) * 4 + 2)
+            return row &~ 1;
+        else
+            return row &~ 3;
+        break;
+
+      default:
+        return row &~ 1;
+        break;
+    }
 }
 
 
@@ -1800,7 +1914,7 @@ static void render_calculate_interlace_offsets(int handle)
 
     a=0; b=a+na; c=b+nb; d=c+nc;
 
-    images[handle]->interlace_a = a;
+    /*images[handle]->interlace_a = a;*/
     images[handle]->interlace_b = b;
     images[handle]->interlace_c = c;
     images[handle]->interlace_d = d;
@@ -1892,7 +2006,14 @@ _kernel_oserror* render_mode_change(int handle)
 void render_changed(int handle, int first, int last, int interlace, BBox *changed)
 {
     internal_header  *im=images[handle];
-    int               first_row, first_pass, last_row, last_pass;
+    int               first_pass, last_pass;
+    unsigned int      first_row, last_row;
+
+    if (first == last)
+    {
+        changed->xmin = changed->xmax = changed->ymin = changed->ymax = 0;
+        return;
+    }
 
     changed->xmin = 0;
     changed->xmax = im->width * xos;
@@ -1900,27 +2021,22 @@ void render_changed(int handle, int first, int last, int interlace, BBox *change
     if (interlace==0)
     {
         changed->ymin = (im->height - last) * yos;
-        changed->ymax = (im->height - first + 2) * yos;
+        changed->ymax = (im->height - first) * yos;
         return;
     }
 
     render_which_row_and_pass_is_this(handle, first, &first_row, &first_pass);
     render_which_row_and_pass_is_this(handle, last,  &last_row,  &last_pass);
 
-    //if (last_pass==(first_pass+1))
-    //{
-    //   changed->ymin = (im->height - last_row) * yos;
-    //   changed->ymax = (im->height - first_row) * yos;
-    //}
-    if (first_pass!=last_pass)
+    if (last_pass==first_pass || last_pass==first_pass+1)
     {
-        changed->ymin = 0;
-        changed->ymax = im->height * yos;
+        changed->ymin = (im->height - last_row) * yos;
+        changed->ymax = (im->height - first_row) * yos;
     }
     else
     {
-        changed->ymin = (im->height - last_row) * yos;
-        changed->ymax = (im->height - first_row + 2) * yos;
+        changed->ymin = 0;
+        changed->ymax = im->height * yos;
     }
 }
 
@@ -2181,7 +2297,7 @@ _kernel_oserror* render_animate_new_frame(int handle, frame_str frame_data, int 
     /* Store the new data size */
     an->rgb_size = new_size;
     an->no_frames++;
-    an->scanline = 1;
+    an->scanline = 0;
 
     /* Calculate the address to put the new data */
     spr_area = (sprite_area*) an->rgb_data;
@@ -2305,7 +2421,7 @@ char* render_animate_row(int handle)
 
     fr = FindFrame(handle, frame);
 
-    row = render_animate_which_row_is_this(handle, an->scanline);
+    row = render_animate_which_row_is_this(handle, an->scanline + 1);
 
     /* Where is the sprite header for this frame? */
     spr_hdr = (sprite_header*) ((char*)an->rgb_data + fr->frame_off);
@@ -2344,7 +2460,7 @@ char* render_animate_return_spr_address(int handle)
 
     fr = FindFrame(handle, frame);
 
-    row = render_animate_which_row_is_this(handle, an->scanline -1);
+    row = render_animate_which_row_is_this(handle, an->scanline);
 
     /* Where is the sprite header for this frame? */
     spr_hdr = (sprite_header*) ((char*)an->rgb_data + fr->frame_off);
@@ -3564,7 +3680,7 @@ static int render_animate_which_row_is_this(int handle, int n)
     animated_str    *an=anims[handle];
     frame_str       *fr;
     int              frame=an->no_frames-1;
-    int              a, b, c, d, offset, na, nb, nc, nd, h;
+    unsigned int     /*a, */b, c, d, na, nb, nc, nd, offset, h;
 
     fr = FindFrame(handle, frame);
 
@@ -3593,14 +3709,14 @@ static int render_animate_which_row_is_this(int handle, int n)
     if ( ((nd*2)+1) >= h) nd--;
 
     na++; nb++; nc++; nd++;
-    a=0; b=a+na; c=b+nb; d=c+nc;
+    /*a=0;*/ b=/*a+*/na; c=b+nb; d=c+nc;
 
-         if (n<b) offset = ( (n-a) * 8 ) + 0;
+         if (n<b) offset = ( (n/*-a*/) * 8 ) + 0;
     else if (n<c) offset = ( (n-b) * 8 ) + 4;
     else if (n<d) offset = ( (n-c) * 4 ) + 2;
     else          offset = ( (n-d) * 2 ) + 1;
 
-    if (offset>h) offset=h;
+    if (offset>=h) offset=h-1;
 
     return offset;
 }
@@ -3637,7 +3753,10 @@ _kernel_oserror* render_make_animation(int render_handle, frame_str frame_data, 
     char            *dest_img;
     char            *dest_msk;
     char            *data;
-    int              an_handle, img_width, bytes, y, i;
+    int              an_handle, img_width, y, i;
+    #ifdef TRACE
+    int              bytes;
+    #endif
 
     e=render_animate_start(screen_x, screen_y, loops, &an_handle);
     if (e) return animate_error_and_abandon(render_handle, e->errmess);
@@ -3645,7 +3764,7 @@ _kernel_oserror* render_make_animation(int render_handle, frame_str frame_data, 
     e=render_animate_new_frame(an_handle, frame_data, back, &data);
     if (e) return animate_error_and_abandon(render_handle, e->errmess);
 
-    e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) im->lzw_data);
+    e=LZW_decompress_start((uint8*) im->lzw_data);
     if (e) return animate_error_and_abandon(render_handle, e->errmess);
 
     /* Copy a few variables from the still structure to the animated structure */
@@ -3669,7 +3788,11 @@ _kernel_oserror* render_make_animation(int render_handle, frame_str frame_data, 
     i=0;
     for (y=0; y<im->height; y++)
     {
+        #ifdef TRACE
         e=LZW_decompress_next((uint8*)dest_img + i, im->width, (uint8*) im->lzw_data, &bytes);
+        #else
+        e=LZW_decompress_next((uint8*)dest_img + i, im->width, (uint8*) im->lzw_data);
+        #endif
         if (e) return animate_error_and_abandon(render_handle, e->errmess);
         i += img_width;
     }
@@ -3957,7 +4080,10 @@ _kernel_oserror* render_export_sprite(int handle, char*filename)
     int              w = im->width;
     int              h = im->height;
     int              tp = im->transparency;
-    int              oldstate, sw, size, bytes, x, y;
+    int              oldstate, sw, size, x, y;
+    #ifdef TRACE
+    int              bytes;
+    #endif
 
     /* Check it's a valid handle */
     if (!render_valid_handle(handle)) return NULL;
@@ -3980,16 +4106,16 @@ _kernel_oserror* render_export_sprite(int handle, char*filename)
     /* Initialise sprite area, then create sprite */
     spr->size   = size;
     spr->sproff = 16;
-    e=_swix(OS_SpriteOp, _INR(0,1), 256+SprInitArea, (int)spr);
-    e=_swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, (int)spr, "image", 0, w, h, 28);
+    e=_swix(OS_SpriteOp, _INR(0,1), 256+SprInitArea, spr);
+    e=_swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, spr, "image", 0, w, h, 28);
     if (e) FreeMemoryAndReturn
 
     /* Add 256 entry palette */
-    e=_swix(OS_SpriteOp, _INR(0,3), 256+SprAddPalette, (int)spr, "image", (1U<<31)+1);
+    e=_swix(OS_SpriteOp, _INR(0,3), 256+SprAddPalette, spr, "image", (1U<<31)+1);
     if (e) FreeMemoryAndReturn
 
     /* If transparent, add mask */
-    if (im->transparency!=-1) e=_swix(OS_SpriteOp, _INR(0,2), 256+SprAddMask, (int)spr, "image");
+    if (tp!=-1) e=_swix(OS_SpriteOp, _INR(0,2), 256+SprAddMask, spr, "image");
     if (e) FreeMemoryAndReturn
 
     spr_head = (sprite_header*) ((char*)spr + sizeof(sprite_area));
@@ -4003,15 +4129,20 @@ _kernel_oserror* render_export_sprite(int handle, char*filename)
     /* Copy the palette data */
     memcpy(spr_pal, src_pal, 2048);
 
-    e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) im->lzw_data);
+    e=LZW_decompress_start((uint8*) im->lzw_data);
     if (e) FreeMemoryAndReturn
 
     for (y=0; y<h; y++)
     {
         /* Decompress next row */
+        #ifdef TRACE
         e=LZW_decompress_next((uint8*)spr_img, w, (uint8*)im->lzw_data, &bytes);
+        #else
+        e=LZW_decompress_next((uint8*)spr_img, w, (uint8*)im->lzw_data);
+        #endif
         if (e) FreeMemoryAndReturn
 
+        #ifdef TRACE
         /* If not a whole row of data, something's gone wrong */
         if (bytes!=w)
         {
@@ -4019,9 +4150,10 @@ _kernel_oserror* render_export_sprite(int handle, char*filename)
             flex_set_budge(oldstate);
             return render_error("Decompression failed - not a whole row.\n");
         }
+        #endif
 
-        /* Setup mask */
-        if (im->transparency!=-1)
+        /* Set up mask */
+        if (tp!=-1)
         {
             for (x=0; x<w; x++)
             {

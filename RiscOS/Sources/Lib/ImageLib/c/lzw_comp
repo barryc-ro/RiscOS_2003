@@ -2,7 +2,9 @@
 
 /* Version 2.01:
      handles LZW compression with enough flexibility to support
-     TIFF or GIF images (2..8 bit data in, 3..12 bit codes) */
+     TIFF or GIF images (2..8 bit data in, 3..12 bit codes)
+
+     Not any more!!! KJB... */
 
 /*---------------------------------------------------------------------------------------*/
 /* Changes for direct image rendering code :                                             */
@@ -15,6 +17,8 @@
 /*                 above.                                                                */
 /* 14-Mar-97: RML: Replaced malloc with flex.						 */
 /* 24-Mar-97: RML: Improved error handling.						 */
+/* 20-Oct-97: KJB: Stripped it down into a lean, mean compressing machine. (ish)         */
+/*                 Changed to using 11-bit LZW to save memory in the tables.             */
 /*---------------------------------------------------------------------------------------*/
 /* To do :                                                                               */
 /*---------------------------------------------------------------------------------------*/
@@ -35,14 +39,12 @@
 #include "rml_misc.h"
 
   /* depth of input data items; TIFF says 8 */
-static int DataInBits; /* 2..8 */
-static int DataInSize; /* = (1<<DataInBits) ; this many codes set at start */
+#define DataInBits 8
+#define DataInSize (1<<8) /* ; this many codes set at start */
 
-  /* 'T' means TIFF, 'G' means GIF */
-static char ClientType;
 
   /* max bits of LZW codes; TIFF, GIF says 12 */
-#define LZWbits 12
+#define LZWbits 11
 #define TableSize (1<<LZWbits)
 #define RestartTableSize (TableSize-4)
 
@@ -68,7 +70,7 @@ static char ClientType;
 typedef struct
 {
   int16 parent;     /* index of parent (previous item of coded string) */
-  int16 suffix;     /* last data item of coded string */
+  uint8 suffix;     /* last data item of coded string */
   int16 siblings;   /* index of next code from same root */
   int16 children;   /* index of first new code, from this code as root */
 } CodeTableEntry_t;
@@ -88,8 +90,6 @@ typedef struct
   int               OutBuffBits;     /* no. bits used in *OutBuffPtr (0..7) */
   int               OutBuffSize;     /* passed to LZW_compress_start */
   int               OutBytesLeft;    /* bytes remaining in buffer */
-  void             *ClientHandle;    /* the client buffer emptier (GIF) */
-  emptier_proc      ClientEmptier;
   int               BytesIn;         /* for tracing compression ratio */
   int               BytesOut;
   int               InProgress;
@@ -143,8 +143,6 @@ static void initialise_CodeTable(void)
     cs->CodeTable[c].children = EndOfList;
     if (c < DataInSize)
       cs->CodeTable[c].suffix = c;
-    else
-      cs->CodeTable[c].suffix = ReservedCode;
   }
 
 }
@@ -163,8 +161,6 @@ static void write_code(uint32 code)
 
 /* fprintf(stderr,"lzwc: write code = %4.4x (%2d)\n",code,BitsPerCode); */
 
-//  if (ClientType == 'T') /* TIFF */
-//  {
     if (cs->OutBuffBits)
       wcode |= (*cs->OutBuffPtr << (cs->BitsPerCode - 8 + cs->OutBuffBits));
     wcodebits += cs->OutBuffBits;
@@ -173,15 +169,6 @@ static void write_code(uint32 code)
     cs->OutBuffPtr[0] = (wcode >> 16);
     if (wcodebits >  8) cs->OutBuffPtr[1] = (wcode >>  8) & 0xff;
     if (wcodebits > 16) cs->OutBuffPtr[2] = wcode & 0xff;
-//  }
-//  else /* ClientType == 'G' (GIF) */
-//  {
-//    if (OutBuffBits) wcode = *OutBuffPtr | (code << OutBuffBits);
-//    wcodebits += OutBuffBits;
-//    OutBuffPtr[0] = wcode & 0xff;
-//    if (wcodebits >  8) OutBuffPtr[1] = (wcode >>  8) & 0xff;
-//    if (wcodebits > 16) OutBuffPtr[2] = (wcode >> 16);
-//  }
 
   cs->OutBuffPtr   += (wcodebits >> 3);
   cs->OutBytesLeft -= (wcodebits >> 3);
@@ -190,8 +177,6 @@ static void write_code(uint32 code)
 /* fprintf(stderr,"%4.4x %6.6x cb=%1d obb=%1d obl=%4d\n",code,wcode,
          wcodebits,OutBuffBits,OutBytesLeft); */
 
-  //if ((cs->OutBytesLeft < 4) || (cs->BytesOut > cs->BytesIn + 256))
-  //    printf("compression ineffective\n");
 
   if (code == EndOfBlock)
   {
@@ -202,27 +187,7 @@ static void write_code(uint32 code)
       cs->OutBytesLeft--;
       cs->OutBuffBits = 0;
     }
-//    if (ClientType == 'G')
-//    {
-      /* we'd better flush GIF block to client */
-//      Nbytes = OutBuffSize - OutBytesLeft;
-//      BytesOut += Nbytes + 1; /* 1 for count byte */
-//      ClientEmptier(OutBuff,Nbytes,ClientHandle);
-//      OutBuffPtr   = OutBuff;
-//      OutBytesLeft = OutBuffSize;
-//    }
   }
-
-//  if ((ClientType == 'G') && (OutBuffSize - OutBytesLeft > 250))
-//  {
-    /* GIF block (up to 256 bytes) nearly full */
-//    Nbytes = OutBuffSize - OutBytesLeft; /* excludes part-filled byte */
-//    BytesOut += Nbytes + 1; /* 1 for count byte */
-//    ClientEmptier(OutBuff,Nbytes,ClientHandle); /* flush it */
-//    if (OutBuffBits) *OutBuff = *OutBuffPtr;
-//    OutBuffPtr   = OutBuff;
-//    OutBytesLeft = OutBuffSize;
-//  }
 
 }
 
@@ -242,10 +207,7 @@ static void add_table_entry(int suffix)
 
   cs->CodeTable[parent].children = cs->NextCode;
 
-//  if (ClientType == 'T')
-    bump_it = (cs->NextCode == cs->ExtraBitAt-1);
-//  else /* ClientType == 'G' */
-//    bump_it = ((NextCode == ExtraBitAt) && (ExtraBitAt < TableSize));
+  bump_it = (cs->NextCode == cs->ExtraBitAt-1);
 
   cs->NextCode++;
   if (bump_it)
@@ -257,16 +219,11 @@ static void add_table_entry(int suffix)
 
 /* ------------------------------------------------------------------------ */
 
-_kernel_oserror* LZW_compress_start(uint8 *buffer, int buffer_size, char client_id,
-                                    int data_bits, emptier_proc emptier, void *handle, int hdl)
+_kernel_oserror* LZW_compress_start(uint8 *buffer, int buffer_size, int hdl)
 {
   /* Begin LZW compression sequence, giving specification of buffer for
        (block of) compression output (this need only be 256 bytes in GIF
-       case.
-     client_id is 'G' for GIF images, 'T' for TIFF images
-     data_bits is nominal bits per data item (2..8)
-     emptier is registered function to empty block buffer (NULL for TIFF)
-     handle is arbitrary client pointer which will be passed to emptier   */
+       case.   */
 
   comp_str *cs;
 
@@ -290,13 +247,6 @@ _kernel_oserror* LZW_compress_start(uint8 *buffer, int buffer_size, char client_
   cs->OutBuffSize   = buffer_size;
   cs->OutBytesLeft  = buffer_size;
   cs->OutBuffBits   = 0;
-
-  DataInBits    = data_bits;
-  DataInSize    = (1 << DataInBits);
-
-  ClientType    = client_id;
-  cs->ClientHandle  = handle;
-  cs->ClientEmptier = emptier;
 
   if (!cs->InProgress) cs->BytesIn = cs->BytesOut = 0;
   cs->InProgress = 1;
@@ -413,22 +363,20 @@ void LZW_compress_flush(int *Nbytes, int hdl, uint8 *buffer)
 
   *Nbytes = cs->OutBuffSize - cs->OutBytesLeft;
 
-  if (ClientType == 'T') cs->BytesOut += *Nbytes;
+  cs->BytesOut += *Nbytes;
 }
 
 /* ------------------------------------------------------------------------ */
 
-float LZW_compress_end(int hdl)
+void LZW_compress_end(int hdl)
 {
-  /* free memory used by compressor; returns compression ratio (as
-     percentage) of last compression task */
+  /* free memory used by compressor;  */
 
   comp_str *cs;
-  float     result;
 
   debug_value("    LZW_compress_end ",hdl);
 
-  if (!lzwcomp_valid_handle(hdl)) return 0;
+  if (!lzwcomp_valid_handle(hdl)) return;
 
   lzw_handle=hdl;
   cs=array_ptr[lzw_handle];
@@ -441,10 +389,6 @@ float LZW_compress_end(int hdl)
   if (cs) free(cs);
 
   array_ptr[lzw_handle]=0;
-
-  //result=(float)cs->BytesOut*100.0F/(float)cs->BytesIn;
-  result=0;
-  return result;
 }
 
 /* ------------------------------------------------------------------------ */

@@ -2,7 +2,9 @@
 
 /* Version 2.00:
      handles LZW decompression with enough flexibility to support
-     TIFF or GIF images (2..8 bit data in, 3..12 bit codes) */
+     TIFF or GIF images (2..8 bit data in, 3..12 bit codes)
+
+     Not any more!!! KJB... */
 
 /*---------------------------------------------------------------------------------------*/
 /* Changes for direct image rendering code :                                             */
@@ -12,6 +14,8 @@
 /* 10-Mar-97: RML: Made decompress_next take in the value of the buffer (instead of just */
 /*                 decompress_start), as this removes problems with flex.                */
 /* 04-Sep-97: RML: Made PendingBuff be a flex block.                                     */
+/* 20-Oct-97: KJB: Stripped it down into a lean, mean decompressing machine.             */
+/*                 Changed to using 11-bit LZW to save memory in the tables.             */
 /*---------------------------------------------------------------------------------------*/
 
 
@@ -26,24 +30,16 @@
 #include "lzw_decomp.h"
 
   /* depth of input data items; TIFF says 8 */
-static int DataInBits; /* 2..8 */
-static int DataInSize; /* = (1 << DataInBits) ; this many codes set at start */
-
-  /* 'T' means TIFF, 'G' means GIF */
-static char ClientType;
+#define DataInBits 8
+#define DataInSize (1 << 8)
 
   /* max bits of LZW codes; TIFF, GIF say 12 */
-#define LZWbits 12
+#define LZWbits 11
 #define TableSize (1<<LZWbits)
 #define RestartTableSize (TableSize-3)
 
-  /* the maximum number of bytes which will be requested from client */
-#define InBufferSize (16*1024)
-
   /* special values */
 #define EndOfList -1
-#define ReservedCode -2
-#define NullCode -3
 
   /* reserved indices in code table; 0..DataInSize-1 are initial encodings */
 #define NumReserved 2
@@ -56,15 +52,14 @@ static char ClientType;
 typedef struct
 {
   int16 parent;     /* index of parent (previous item of coded string) */
-  int16 suffix;     /* last data item of coded string */
-  int16 item1;      /* first data item of coded string */
   int16 length;     /* length of coded string (no. of data items) */
+  uint8 suffix;     /* last data item of coded string */
+  uint8 item1;      /* first data item of coded string */
 } CodeTableEntry_t; /* this structure differs from the compress version */
 
 /* ------------------------------------------------------------------------ */
 
-  /* to be allocated as CodeTable[TableSize] */
-static CodeTableEntry_t *CodeTable = NULL;
+static CodeTableEntry_t CodeTable[TableSize];
 
 static int    NextCode;        /* next unused code */
 static int    BitsPerCode;     /* current bits-per-code; TIFF,GIF say use
@@ -72,33 +67,28 @@ static int    BitsPerCode;     /* current bits-per-code; TIFF,GIF say use
 static int    ExtraBitAt;      /* value of NextCode at which bits-per-code
                                   should next increment */
 
-static uint8  *PendingBuff;    /* pointer to pending decompress buffer */
-//static uint8  *PendingBuffPtr; /* next byte in buffer */
-static int    PendingBuffPtr;  /* next byte in buffer */
+static uint8  PendingBuff[TableSize]; /* pending decompress buffer */
+static uint8  *PendingBuffPtr; /* next byte in buffer */
 static int    PendingLeft;     /* number of bytes still to output from last
                                   decompress (pending because client's
                                   receiving buffer filled) */
-
 static uint8  *InBuffer;       /* pointer to fixed input buffer */
 static uint8  *InBuffPtr;      /* next available input byte */
-static int    InBytesLeft;     /* input bytes remaining */
 static int    InBuffBits;      /* bits not yet used in *InBuffPtr (0..8) */
 
-  /* the client infiller */
-static void          *ClientHandle;
-static infiller_proc ClientInfiller;
-static int           InfillerExhausted;
 
 /* ------------------------------------------------------------------------ */
 
+#ifdef TRACE
 static _kernel_oserror* lzwdecomp_error(char *s)
 {
   static _kernel_oserror e;
 
   e.errnum=1;
-  sprintf(e.errmess,"Error from compressor: %s\n",s);
+  sprintf(e.errmess,"Error from decompressor: %s\n",s);
   return &e;
 }
+#endif
 
 
 static void initialise_CodeTable(void)
@@ -120,32 +110,10 @@ static void initialise_CodeTable(void)
     CodeTable[c].length = 1;
     if (c < DataInSize)
       CodeTable[c].suffix = CodeTable[c].item1 = c;
-    else
-      CodeTable[c].suffix = CodeTable[c].item1 = ReservedCode;
   }
 
 }
 
-/* ------------------------------------------------------------------------ */
-#if 0
-static void refill_InBuffer(void)
-{
-  int i;
-
-  if (InfillerExhausted) return;
-
-/* fprintf(stderr,"lzwd: refill_InBuffer\n"); */
-
-  exit(0); /* RML */
-  if (InBytesLeft) memcpy(InBuffer,InBuffPtr,InBytesLeft);
-  InBuffPtr = InBuffer;
-
-  i = ClientInfiller(InBuffer+InBytesLeft,InBufferSize-InBytesLeft,
-                     ClientHandle);
-  InBytesLeft += i;
-  InfillerExhausted = (i < 2);
-}
-#endif
 /* ------------------------------------------------------------------------ */
 
 static uint32 read_next_code(void)
@@ -157,36 +125,14 @@ static uint32 read_next_code(void)
   uint32 code, codemask = (1 << BitsPerCode) - 1;
   int    bytes, morebits = BitsPerCode - InBuffBits;
 
-//  if (InBytesLeft < 4) refill_InBuffer(); /* no partial codes! */
-
-  if (InBytesLeft*8 + InBuffBits < BitsPerCode)
-  {
-    /* must be end of input data */
-    InBytesLeft = 0;
-    InBuffBits  = 0;
-    InfillerExhausted = 1;
-/* fprintf(stderr,"lzwd: input exhausted\n"); */
-    return(EndOfBlock);
-  }
-
-//  if (ClientType == 'T') /* TIFF */
-//  {
     code = ((uint32)InBuffPtr[0] << 16) | ((uint32)InBuffPtr[1] << 8) |
             (uint32)InBuffPtr[2];
     code = (code >> (InBuffBits + 16 - BitsPerCode)) & codemask;
-//  }
-//  else /* ClientType == 'G' (GIF) */
-//  {
-//    code = ((uint32)InBuffPtr[2] << 16) | ((uint32)InBuffPtr[1] << 8) |
-//            (uint32)InBuffPtr[0];
-//    code = (code >> (8 - InBuffBits)) & codemask;
-//  }
 
   if (morebits >= 0)
   {
     bytes =  1 + (morebits >> 3);
     InBuffPtr += bytes;
-    InBytesLeft -= bytes;
     InBuffBits = 8 - (morebits &  7);
   }
   else InBuffBits -= BitsPerCode;
@@ -195,7 +141,6 @@ static uint32 read_next_code(void)
   {
     InBuffBits = 8;
     InBuffPtr++;
-    InBytesLeft--;
   }
 
   /* ignore EndOfBlock (except at end of all data) */
@@ -206,7 +151,6 @@ static uint32 read_next_code(void)
     {
       /* next block starts with new byte */
       InBuffBits = 8;
-      InBytesLeft--;
       InBuffPtr++;
     }
     BitsPerCode = DataInBits + 1; /* bits-per-code restart */
@@ -236,10 +180,7 @@ static void add_table_entry(int suffix, int parent)
 
   NextCode++;
 
-//  if (ClientType == 'T')
     bump_it = (NextCode == ExtraBitAt-1);
-//  else /* ClientType == 'G' */
-//    bump_it = ((NextCode == ExtraBitAt) && (ExtraBitAt < TableSize));
 
   if (bump_it)
   {
@@ -256,13 +197,14 @@ static void decompress_code(uint32 code, uint8 **buffptr, int *buff_left)
   /* output decompressed code to *buffptr, holding pending output if it
      exceeds buff_left bytes */
 
-  int   cl, max_out = *buff_left;
+  int   cl;
+  int   max_out = *buff_left;
   uint8 *ptr, *buffout = *buffptr;
 
   if ((cl = CodeTable[code].length) > max_out)
   {
     /* spill-over to pending buffer */
-    PendingBuffPtr = 0; //PendingBuff;
+    PendingBuffPtr = PendingBuff;
     PendingLeft    = cl - max_out;
 /* fprintf(stderr,"lzwd: spill over %1d\n",PendingLeft); */
     for (ptr = PendingBuff + PendingLeft - 1;
@@ -284,46 +226,16 @@ static void decompress_code(uint32 code, uint8 **buffptr, int *buff_left)
 
 /* ------------------------------------------------------------------------ */
 
-_kernel_oserror* LZW_decompress_start(infiller_proc infiller, char client_id,
-                          int data_bits, void *handle, uint8 *data)
+_kernel_oserror* LZW_decompress_start(uint8 *data)
 {
-  /* Begin LZW decompression sequence, registering infiller function provided
-       by client which will, on request, provide a batch of bytes to be
-       decompressed.
-     client_id is 'G' for GIF images, 'T' for TIFF images
-     data_bits is nominal bits per decoded data item (2..8)
-     handle is arbitrary client pointer which will be passed to infiller */
+  /* Begin LZW decompression sequence */
 
-  ClientType = client_id;
-  DataInBits = data_bits;
-  DataInSize = (1 << DataInBits);
-
-  //CodeTable = malloc(TableSize*sizeof(CodeTableEntry_t));
-  //if (!CodeTable) return lzwdecomp_error("Not enough memory for code table.");
-  if (!flex_alloc((flex_ptr) &CodeTable, TableSize*sizeof(CodeTableEntry_t)))
-     return lzwdecomp_error("Not enough memory for code table.");
-
-  //InBuffer = malloc(InBufferSize + 4);
   InBuffer = data;
-  
-  if (!flex_alloc((flex_ptr)&PendingBuff, TableSize))
-    return lzwdecomp_error("Not enough memory for decompressor.");
-  //PendingBuff = malloc(TableSize);
 
-  if ((CodeTable == NULL) || (InBuffer == NULL) || (PendingBuff == NULL))
-    return lzwdecomp_error("Not enough memory for decompressor.");
+  PendingLeft = 0;
 
   InBuffPtr   = InBuffer;
-  //InBytesLeft = 0;
-  InBytesLeft = 9999999; /* RML: arbitary figure to ensure that buffer never empty */
   InBuffBits  = 8; /* ie. will be 8 bits in first byte, when filled */
-
-  PendingBuffPtr = 0; //PendingBuff;
-  PendingLeft    = 0;
-
-  ClientInfiller    = infiller;
-  ClientHandle      = handle;
-  InfillerExhausted = 0;
 
   initialise_CodeTable();
   return NULL;
@@ -331,7 +243,12 @@ _kernel_oserror* LZW_decompress_start(infiller_proc infiller, char client_id,
 
 /* ------------------------------------------------------------------------ */
 
+
+#ifdef TRACE
 _kernel_oserror* LZW_decompress_next(uint8 *buffer, int buffer_size, uint8 *indata, int* bytes_out)
+#else
+_kernel_oserror* LZW_decompress_next(uint8 *buffer, int buffer_size, uint8 *indata)
+#endif
 {
   /* decompress next batch, writing up to 'buffer_size' output bytes to
      buffer; returns actual number of bytes written (less than buffer_size
@@ -340,7 +257,7 @@ _kernel_oserror* LZW_decompress_next(uint8 *buffer, int buffer_size, uint8 *inda
   static int old_code; /* remember across calls */
 
   uint8  *buffptr = buffer;
-  int    Nxfer, Nout_left = buffer_size;
+  int    Nout_left = buffer_size;
   int    diff;
   uint32 code;
 
@@ -352,9 +269,8 @@ _kernel_oserror* LZW_decompress_next(uint8 *buffer, int buffer_size, uint8 *inda
   {
 /* fprintf(stderr,"lzwd: pending output\n"); */
     /* output bytes from pending decompress output*/
-    Nxfer = (Nout_left < PendingLeft) ? Nout_left : PendingLeft;
-    //memcpy(buffptr,PendingBuffPtr,Nxfer);
-    memcpy(buffptr,PendingBuff + PendingBuffPtr,Nxfer);
+    int Nxfer = (Nout_left < PendingLeft) ? Nout_left : PendingLeft;
+    memcpy(buffptr,PendingBuffPtr,Nxfer);
     PendingBuffPtr += Nxfer;
     buffptr += Nxfer;
     Nout_left   -= Nxfer;
@@ -387,12 +303,14 @@ _kernel_oserror* LZW_decompress_next(uint8 *buffer, int buffer_size, uint8 *inda
       else
       {
         if (code != NextCode) {
-          char s[255];
+          /*char s[255];*/
+          #ifdef TRACE
           *bytes_out=buffer_size;
+          #endif
           return NULL;
 
-          sprintf(s,"bad compressed image (code: %4.4x %4.4x)\n",code,NextCode);
-          return lzwdecomp_error(s);
+          /*sprintf(s,"bad compressed image (code: %4.4x %4.4x)\n",code,NextCode);
+          return lzwdecomp_error(s);*/
         }
         /* put code in table, and decompress it */
         add_table_entry(CodeTable[old_code].item1,old_code);
@@ -402,7 +320,9 @@ _kernel_oserror* LZW_decompress_next(uint8 *buffer, int buffer_size, uint8 *inda
     }
   } /* while */
 
+  #ifdef TRACE
   *bytes_out=(buffer_size - Nout_left);
+  #endif
 
   return NULL;
   //return(buffer_size - Nout_left);
@@ -414,14 +334,11 @@ void LZW_decompress_end(void)
 {
   /* free memory used by LZW decompressor */
 
-  flex_free((flex_ptr) &CodeTable);
+  /*flex_free((flex_ptr) &CodeTable);*/
   //free(CodeTable);
   //free(InBuffer);
-  //free(PendingBuff);
-  flex_free((flex_ptr)&PendingBuff);
+  /*flex_free((flex_ptr)&PendingBuff);*/
 
-  CodeTable   = NULL;
   InBuffer    = NULL;
-  PendingBuff = NULL;
 }
 
