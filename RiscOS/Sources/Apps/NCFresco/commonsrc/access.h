@@ -73,7 +73,16 @@ typedef struct _access_item *access_handle;
  * The ofile value can be given to specify a destination file.
  */
 
-extern os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile,
+typedef struct
+{
+    char *body_file;
+    char *content_type;
+} access_post_info;
+
+#define mimetype_FORM_URLENCODED	"application/x-www-form-urlencoded"
+#define mimetype_MULTIPART_FORM		"multipart/form-data"
+
+extern os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post_info *post,
 			    char *referer,
 			    access_progress_fn progress, access_complete_fn complete,
 			    void *h, access_handle *result);

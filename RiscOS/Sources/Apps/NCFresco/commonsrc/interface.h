@@ -59,7 +59,13 @@ extern int frontend_dx, frontend_dy;
 #define fe_open_url_FROM_FRAME		(1<<3)	/* url was initiated from a frameset */
 #define fe_open_url_NO_REFERER		(1<<4)	/* url is unrelated to current document */
 
-os_error *frontend_open_url(char *url, fe_view parent, char *windowname, char *bfile, int flags);
+typedef struct			/* note must be the same as access_post_info */
+{
+    char *body_file;
+    char *content_type;
+} fe_post_info;
+
+os_error *frontend_open_url(char *url, fe_view parent, char *windowname, fe_post_info *bfile, int flags);
 
 /* Try to make sure that a vertical line from the height top down to
  * height bottom, at a horizontal position x, is visable in the view.
@@ -190,7 +196,7 @@ void frontend_passwd_dispose(fe_passwd pw);
 
 /* @@@@ */
 
-void frontend_url_punt(fe_view v, char *url, char *bfile);
+void frontend_url_punt(fe_view v, char *url, fe_post_info *bfile);
 
 /* Given a file in the cache, cause the document to be opened.  This
  * will be called when a document of a type that can not be directly
@@ -271,7 +277,7 @@ extern void frontend_fade_frame(fe_view v, wimp_paletteword colour);
 #define fe_internal_url_NEW		3 /* New file created in 'file' */
 #define fe_internal_url_HELPER		4 /* Some kind of helper fired off */
 
-extern int frontend_internal_url(const char *path, const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags);
+extern int frontend_internal_url(const char *path, const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags);
 
 extern void frontend_pointer_set_position(fe_view v, int x, int y);
 
@@ -321,7 +327,7 @@ os_error *backend_screen_changed(int flags);
  * if there is a problem but note that if the URL is punted this is
  * not a problem. */
 os_error *backend_open_url(fe_view v, be_doc *docp,
-			   char *url, char *bfile, char *referer,
+			   char *url, fe_post_info *bfile, char *referer,
 			   int flags);
 #define be_openurl_flag_NOCACHE		(1 << 0)
 #define be_openurl_flag_DEFER_IMAGES	(1 << 1)

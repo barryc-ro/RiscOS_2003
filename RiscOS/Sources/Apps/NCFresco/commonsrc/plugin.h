@@ -97,7 +97,7 @@ typedef struct
 #define plugin_parameter_USER_AGENT	"USERAGENT"
 #define plugin_parameter_UA_VERSION	"UAVERSION"
 #define plugin_parameter_API_VERSION	"APIVERSION"
-#define plugin_parameter_PASSWORDS	"PASSWORDS"
+#define plugin_parameter_BGCOLOR	"BGCOLOR"
 
 #define plugin_API_VERSION_100	"1.00"
 #define plugin_API_VERSION_110	"1.10"

@@ -1070,11 +1070,12 @@ static void plugin_stream_dispose_all(plugin pp)
 
 /* ----------------------------------------------------------------------------- */
 
-plugin_stream_private *plugin_stream_create_new(plugin pp, const char *url, const char *bfile)
+plugin_stream_private *plugin_stream_create_new(plugin pp, const char *url, const char *bfile, const char *content_type)
 {
     plugin_stream_private *psp = mm_calloc(sizeof(*psp), 1);
     os_error *e;
     access_handle ah;
+    access_post_info post;
 
     OBJDBG(("plugin: create stream new %p from objpp %p url '%s' bfile '%s'\n", psp, pp, url, strsafe(bfile)));
 
@@ -1089,7 +1090,9 @@ plugin_stream_private *plugin_stream_create_new(plugin pp, const char *url, cons
     psp->stream_state = plugin_stream_state_STARTED;
 
     /* start the stream going */
-    e = access_url(psp->url, access_MUST_BE_FOUND /* flags */, NULL /* ofile */, (char *)bfile,
+    post.body_file = (char *)bfile;
+    post.content_type = (char *)content_type;
+    e = access_url(psp->url, access_MUST_BE_FOUND /* flags */, NULL /* ofile */, &post,
 		   pp->doc ? pp->doc->url : NULL,
 		   plugin_stream_progress, plugin_stream_complete, psp, &ah);
     if (!e && ah)
@@ -1444,7 +1447,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    {
 			url = url_join(doc ? BASE(doc) : NULL, pp->objd.data);
 
-			plugin_stream_create_new(pp, url, NULL);
+			plugin_stream_create_new(pp, url, NULL, NULL);
 
 			mm_free(url);
 		    }
@@ -1453,7 +1456,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    {
 			url = url_join(pp->objd.codebase ? pp->objd.codebase : doc ? BASE(doc) : NULL, pp->objd.classid);
 
-			plugin_stream_create_new(pp, url, NULL);
+			plugin_stream_create_new(pp, url, NULL, NULL);
 
 			mm_free(url);
 		    }
@@ -1522,6 +1525,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		if (target && target[0])
 		{		
 		    /* open url in browser */
+		    fe_post_info post, *postp;
 
 		    /* FIXME: This doesn't allow several things
 		     * 1) including headers in the POST
@@ -1529,18 +1533,26 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		     * 3) Get or Post Notify
 		     */
 
+		    if (url_access->flags & plugin_url_access_POST)
+		    {
+			post.body_file = get_ptr(url_access, url_access->data);
+			post.content_type = NULL;
+			postp = &post;
+		    }
+		    else
+			postp = NULL;
+
 		    frontend_complain(frontend_open_url(get_ptr(url_access, url_access->url),
 							pp->doc ? pp->doc->parent : NULL,
-							target, 
-							url_access->flags & plugin_url_access_POST ? get_ptr(url_access, url_access->data) : 0, 
-							0));
+							target, postp, 0));
 		}
 		else
 		{		
 		    plugin_stream_private *psp;
 		    /* send data to plugin */
 		    psp = plugin_stream_create_new(pp, get_ptr(url_access, url_access->url), 
-						   url_access->flags & plugin_url_access_POST ? get_ptr(url_access, url_access->data) : 0);
+						   url_access->flags & plugin_url_access_POST ? get_ptr(url_access, url_access->data) : 0,
+						   NULL);
 
 		    if (psp)
 		    {

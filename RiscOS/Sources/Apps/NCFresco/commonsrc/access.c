@@ -166,7 +166,7 @@ typedef struct _access_item {
     struct _access_item *next, *prev;
     union {
 	struct {
-	    char *body_file;
+	    access_post_info post;
 	    int had_auth;	/* Set when the access was made with authentication */
 	    int had_proxy_auth;	/* Set when the proxy access was made with authentication */
 	    int had_passwd;     /* Set if we hav eto ask the user for a password */
@@ -291,7 +291,7 @@ static http_header_item licence_hdr = {
 static http_header_item content_type_hdr = {
     NULL,
     "Content-type",
-    "application/x-www-form-urlencoded"
+    NULL			/* was "application/x-www-form-urlencoded", now filled in when sending */
     };
 
 static http_header_item accept_type_hdr = {
@@ -649,7 +649,8 @@ static void access_free_item(access_handle d)
     switch(d->access_type)
     {
     case access_type_HTTP:
-	FREE(d->data.http.body_file);
+	FREE(d->data.http.post.body_file);
+	FREE(d->data.http.post.content_type);
 #if SSL_UI
 	FREE(d->data.http.ssl.info.issuer);
 	FREE(d->data.http.ssl.info.subject);
@@ -963,9 +964,10 @@ static os_error *access_http_fetch_start(access_handle d)
     accept_type_hdr.next = hlist;
     hlist = &accept_type_hdr;
 
-    if (d->data.http.body_file)
+    if (d->data.http.post.body_file)
     {
 	content_type_hdr.next = hlist;
+	content_type_hdr.value = d->data.http.post.content_type ? d->data.http.post.content_type : mimetype_FORM_URLENCODED;
 	hlist = &content_type_hdr;
     }
 
@@ -1047,7 +1049,7 @@ static os_error *access_http_fetch_start(access_handle d)
     httpo.in.object = d->request_string;
     httpo.in.headers = hlist;
     httpo.in.fname = d->ofile ? d->ofile : cache->scrapfile_name();
-    httpo.in.bname = d->data.http.body_file;
+    httpo.in.bname = d->data.http.post.body_file;
     httpo.in.flags = 0;
     if ( d->flags & access_SECURE)
     {
@@ -1092,6 +1094,9 @@ static os_error *access_http_fetch_start(access_handle d)
 
     cookie_free_headers();
     
+    /* set to NULL to avoid referencing again */
+    content_type_hdr.value = NULL;
+
     if (ep == NULL)
 	d->transport_handle = httpo.out.handle;
 
@@ -1241,7 +1246,7 @@ static void access_http_auth_rerequest(access_handle d, realm rr, auth_requester
     access_http_close(d->transport_handle, http_close_DELETE_FILE);	/* Don't delete body; we still need it */
     d->transport_handle = NULL;
 
-    access_url(d->url, d->flags, d->ofile, d->data.http.body_file, d->url,
+    access_url(d->url, d->flags, d->ofile, &d->data.http.post, d->url,
 	       &access_redirect_progress, &access_redirect_complete, d, &(d->redirect));
 }
 
@@ -1667,7 +1672,7 @@ static void access_http_fetch_alarm(int at, void *h)
 		d->transport_handle = NULL;
 
 		ep = access_url(new_url, d->flags, d->ofile,
-				config_broken_formpost ? NULL : d->data.http.body_file,
+				config_broken_formpost ? NULL : &d->data.http.post,
 				d->url,
 				&access_redirect_progress, &access_redirect_complete,
 				d, &(d->redirect));
@@ -1676,7 +1681,7 @@ static void access_http_fetch_alarm(int at, void *h)
 		 * an unknown scheme
 		 */
 		if (ep && ep->errnum == ANTWEB_ERROR_BASE + ERR_USED_HELPER)
-		    frontend_url_punt(NULL, new_url, d->data.http.body_file);
+		    frontend_url_punt(NULL, new_url, d->data.http.post.body_file ? (fe_post_info *)&d->data.http.post : NULL);
 
 		mm_free(new_url);
 		done = FALSE;
@@ -2707,7 +2712,7 @@ static int access_match_host(char *host, char *matchlist)
 
 /* ------------------------------------------------------------ */
 
-static os_error *access_new_http(char *url, access_url_flags flags, char *ofile, char *bfile, char *referer,
+static os_error *access_new_http(char *url, access_url_flags flags, char *ofile, access_post_info *bfile, char *referer,
 				 access_progress_fn progress, access_complete_fn complete,
 				 void *h, access_handle *result, char *dest_host, char *request_string)
 {
@@ -2721,7 +2726,11 @@ static os_error *access_new_http(char *url, access_url_flags flags, char *ofile,
     if (ofile)
 	d->ofile = strdup(ofile);
     d->referer = strdup(referer);
-    d->data.http.body_file = strdup(bfile);
+    if (bfile)
+    {
+	d->data.http.post.body_file = strdup(bfile->body_file);
+	d->data.http.post.content_type = strdup(bfile->content_type);
+    }
     d->progress = progress;
     d->complete = complete;
     d->h = h;
@@ -2946,7 +2955,7 @@ static void access_internal_fetch_alarm(int at, void *h)
 }
 
 static os_error *access_new_internal(char *url, const char *path, const char *query,
-				     access_url_flags flags, char *ofile, char *bfile, char *referer,
+				     access_url_flags flags, char *ofile, access_post_info *bfile, char *referer,
 				 access_progress_fn progress, access_complete_fn complete,
 				 void *h, access_handle *result)
 {
@@ -2963,7 +2972,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
     d = NULL;
     ep = NULL;
 
-    rtype = frontend_internal_url(path, query, bfile, referer, file, &new_url, &flags);
+    rtype = frontend_internal_url(path, query, (fe_post_info *)bfile, referer, file, &new_url, &flags);
     switch (rtype)
     {
     case fe_internal_url_ERROR:
@@ -3044,7 +3053,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 	/* if this call returned a want ot use helper error then do the punt and convert to a no action */
 	if (ep->errnum == ANTWEB_ERROR_BASE + ERR_USED_HELPER)
 	{
-	    frontend_url_punt(NULL, d->url, bfile);
+	    frontend_url_punt(NULL, d->url, (fe_post_info *)bfile);
 	    ep = makeerror(ERR_NO_ACTION);
 	}
 
@@ -3083,7 +3092,7 @@ static void write_buf(char *buffer, const char *path, const char *params, const 
 }
 #endif
 
-os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile, char *referer,
+os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post_info *bfile, char *referer,
 		     access_progress_fn progress, access_complete_fn complete,
 		     void *h, access_handle *result)
 {

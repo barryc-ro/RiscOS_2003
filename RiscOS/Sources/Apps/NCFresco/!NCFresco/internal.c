@@ -1250,7 +1250,7 @@ static char *get_url(fe_view v)
  * New internal URL handlers
  */
 
-static int internal_url_openpanel(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_url_openpanel(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *panel_name = extract_value(query, "name=");
     char *mode = extract_value(query, "mode=");
@@ -1515,7 +1515,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
     NOT_USED(referer);
 }
 
-static int internal_url_loadurl(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_url_loadurl(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *url = extract_value(query, "url=");
     int generated = fe_internal_url_NO_ACTION;
@@ -1558,7 +1558,7 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
     NOT_USED(file);
 }
 
-static int internal_url_openpage(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_url_openpage(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *page_name = extract_value(query, "name=");
     int generated = fe_internal_url_ERROR;
@@ -1618,13 +1618,13 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
  * For backwards compatibility
  */
 
-static int internal_url_home(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_url_home(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     return internal_url_openpage("name=home", bfile, referer, file, new_url, flags);
     NOT_USED(query);
 }
 
-static int internal_url_hotlist(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_url_hotlist(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     return internal_url_openpanel("name=favs", bfile, referer, file, new_url, flags);
     NOT_USED(query);
@@ -1632,7 +1632,7 @@ static int internal_url_hotlist(const char *query, const char *bfile, const char
 
 #define SENDURL_PREFIX	"mailto:?url="
 
-static int internal_url_sendurl(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_url_sendurl(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
     char *url = get_url(v);
@@ -1656,7 +1656,7 @@ static int internal_url_sendurl(const char *query, const char *bfile, const char
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static int internal_action_current(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_current(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1679,7 +1679,7 @@ static int internal_action_current(const char *query, const char *bfile, const c
     NOT_USED(file);
 }
 
-static int internal_action_back(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_back(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1702,7 +1702,7 @@ static int internal_action_back(const char *query, const char *bfile, const char
     NOT_USED(file);
 }
 
-static int internal_action_forward(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_forward(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1725,7 +1725,7 @@ static int internal_action_forward(const char *query, const char *bfile, const c
     NOT_USED(file);
 }
 
-static int internal_action_close(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_close(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1739,7 +1739,7 @@ static int internal_action_close(const char *query, const char *bfile, const cha
     NOT_USED(flags);
 }
 
-static int internal_action_playmovie(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_playmovie(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_handle_playmovie(query);
 
@@ -1750,7 +1750,7 @@ static int internal_action_playmovie(const char *query, const char *bfile, const
     NOT_USED(flags);
 }
 
-static int internal_action_stop(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_stop(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1764,7 +1764,7 @@ static int internal_action_stop(const char *query, const char *bfile, const char
     NOT_USED(flags);
 }
 
-static int internal_action_reload(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_reload(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1780,7 +1780,7 @@ static int internal_action_reload(const char *query, const char *bfile, const ch
     NOT_USED(flags);
 }
 
-static int internal_action_favoritesadd(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_favoritesadd(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1794,7 +1794,7 @@ static int internal_action_favoritesadd(const char *query, const char *bfile, co
     NOT_USED(flags);
 }
 
-static int internal_action_favoritesremove(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_favoritesremove(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1808,7 +1808,7 @@ static int internal_action_favoritesremove(const char *query, const char *bfile,
     NOT_USED(flags);
 }
 
-static int internal_action_printpage(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_printpage(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
     char *size;
@@ -1842,7 +1842,7 @@ static int internal_action_printpage(const char *query, const char *bfile, const
     NOT_USED(flags);
 }
 
-static int internal_action_keyboard(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_keyboard(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
 
@@ -1856,7 +1856,7 @@ static int internal_action_keyboard(const char *query, const char *bfile, const 
     NOT_USED(flags);
 }
 
-static int internal_action_select(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_select(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *id = extract_value(query, "id=");
     char *source = extract_value(query, "source=");
@@ -1884,7 +1884,7 @@ static int internal_action_select(const char *query, const char *bfile, const ch
     NOT_USED(flags);
 }
 
-static int internal_action_submit(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_submit(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *id = extract_value(query, "id=");
     char *source = extract_value(query, "source=");
@@ -1911,7 +1911,7 @@ static int internal_action_submit(const char *query, const char *bfile, const ch
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static int internal_action_opentoolbar(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_opentoolbar(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *bar = extract_value(query, "name=");
     int generated = fe_internal_url_ERROR;
@@ -1941,7 +1941,7 @@ static int internal_action_opentoolbar(const char *query, const char *bfile, con
 
 /* ------------------------------------------------------------------------------------------- */
 
-static int internal_action_crash(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_action_crash(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
 #if DEBUG
     *(int *)(-1) = 0;
@@ -1955,7 +1955,7 @@ static int internal_action_crash(const char *query, const char *bfile, const cha
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static int internal_decode_cancel(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_decode_cancel(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_dbox_cancel();
 
@@ -2059,7 +2059,7 @@ static int internal_decode_history_recent(const char *query, char **new_url, int
  * We know they will be in order
  */
 
-static int internal_decode_process(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+static int internal_decode_process(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *page = extract_value(query, "name=");
     int generated = fe_internal_url_NO_ACTION;
@@ -2128,7 +2128,7 @@ static int internal_decode_process(const char *query, const char *bfile, const c
 typedef struct
 {
     const char *name;
-    int (*fn)(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags);
+    int (*fn)(const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags);
 } internal_url_str;
 
 static internal_url_str internal_url_info[] =
@@ -2166,7 +2166,7 @@ static internal_url_str internal_url_info[] =
     { 0, 0 }
 };
 
-int frontend_internal_url(const char *path, const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+int frontend_internal_url(const char *path, const char *query, const fe_post_info *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     internal_url_str *uu;
     int generated = fe_internal_url_ERROR;

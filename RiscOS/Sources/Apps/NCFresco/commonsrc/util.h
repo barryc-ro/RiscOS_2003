@@ -345,4 +345,9 @@ extern void mmfclose(FILE *f);
 int mkdir( const char *dir, int mode );
 #endif
 
+extern void quoted_printable_to_file_n(FILE *f, const char *s, int len, int *pos);
+extern void quoted_printable_to_file(FILE *f, const char *s, int *pos);
+extern BOOL quoted_printable_necessary_n(const char *s, int len);
+extern BOOL quoted_printable_necessary(const char *s);
+
 /* eof util.h */

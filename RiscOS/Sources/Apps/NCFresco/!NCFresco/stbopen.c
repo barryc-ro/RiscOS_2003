@@ -208,7 +208,7 @@ static BOOL check_recursion(fe_view v, const char *new_url)
 
  */
 
-os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile, int flags)
+os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_info *bfile, int flags)
 {
     os_error *ep;
     char *referer = NULL, *title = NULL;
@@ -386,12 +386,12 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	 oflags |= be_openurl_flag_FAST_LOAD;
 
 
-#if 0
-    if (bfile)
+#if 1
+    if (bfile && bfile->body_file)
     {
         char buf[256];
         strcpy(buf, "filer_run ");
-        strcat(buf, bfile);
+        strcat(buf, bfile->body_file);
         wimp_starttask(buf);
     }
 #endif

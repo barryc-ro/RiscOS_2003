@@ -148,7 +148,7 @@ extern void rid_zero_widest_height_from_item(rid_text_item *item);
 
 /* and these two are here 'cos I'm lazy tonight which is worse */
 extern void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *len);
-extern void otextarea_write_to_file(rid_textarea_item *tai, FILE *f);
+extern void otextarea_write_to_file(rid_textarea_item *tai, FILE *f, BOOL url_encode);
 
 /**********************************************************************/
 
@@ -1854,7 +1854,7 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
     fputc('=', f);
 
 #if NEW_TEXTAREA
-    otextarea_write_to_file(tai, f);
+    otextarea_write_to_file(tai, f, TRUE);
 #else
     for(tal = tai->lines; tal; tal = tal->next)
     {
@@ -1863,6 +1863,45 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
 	 */
 	if (tal->next)
 	    fputs("%0D%0A", f);
+    }
+#endif
+}
+
+/*
+ * Need to quoted-printable encode the name and value
+ */
+
+static void antweb_multipart_write_query(FILE *f, char *name, char *value, char *boundary)
+{
+    fprintf(f, "--%s\r\n", boundary);
+    fprintf(f, "Content-Disposition: form-data; name=\"%s\"\r\n", strsafe(name));
+
+    fprintf(f, "\r\n");
+
+    if (value)
+    {
+	fputs(value, f);
+	fputs("\r\n", f);
+    }
+}
+
+static void antweb_multipart_write_textarea(FILE *f, rid_textarea_item *tai, char *boundary)
+{
+#if !NEW_TEXTAREA
+    rid_textarea_line *tal;
+#endif
+
+    fprintf(f, "--%s\r\n", boundary);
+    fprintf(f, "Content-Disposition: form-data; name=\"%s\"\r\n", strsafe(tai->name));
+    fputs("\r\n", f);
+
+#if NEW_TEXTAREA
+    otextarea_write_to_file(tai, f, FALSE);
+#else
+    for(tal = tai->lines; tal; tal = tal->next)
+    {
+	fputs(tal->text, f);
+	fputs("\r\n", f);
     }
 #endif
 }
@@ -1885,6 +1924,8 @@ BOOL backend_submit_form(be_doc doc, const char *id, int right)
 }
 #endif
 
+#define POST_CONTENT_TYPE_FORMAT	"multipart/form-data; boundary="
+
 /* The 'right' flag indicates a right click */
 
 void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
@@ -1892,6 +1933,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
     os_error *ep = NULL;
     rid_form_element *fis;
     char *target = right ? "_blank" : form->target;
+    char boundary[48];
 
     BENDBG(( "Submit form: action='%s', method='%s'\n",
 	    form->action ? form->action : "<none>",
@@ -1901,6 +1943,11 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	      "POST" :
 	      "<unknown>") ) ));
 
+    if (form->enc_type && strcasecomp(form->enc_type, mimetype_MULTIPART_FORM) == 0)
+	sprintf(boundary, "--------" "--------" "--------" "---" "%08x%08x", time(NULL), rand());
+    else
+	boundary[0] = 0;
+    
     switch(form->method)
     {
     case rid_fm_GET:
@@ -2031,8 +2078,12 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    switch (iis->tag)
 		    {
 		    case rid_it_HIDDEN:
-			antweb_write_query(f, iis->name, iis->value, &first);
+			if (boundary[0])
+			    antweb_multipart_write_query(f, iis->name, iis->value, boundary);
+			else
+			    antweb_write_query(f, iis->name, iis->value, &first);
 			break;
+
 		    case rid_it_IMAGE:
 			if (iis->data.image.x != -1)
 			{
@@ -2046,28 +2097,44 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 			     */
 			    strcat( buf3, (*buf3) ? ".x" : "x" );
 			    sprintf(buf2, "%d", iis->data.image.x);
-			    antweb_write_query(f, buf3, buf2, &first);
+			    if (boundary[0])
+				antweb_multipart_write_query(f, buf3, buf2, boundary);
+			    else
+				antweb_write_query(f, buf3, buf2, &first);
 
 			    buf3[strlen(buf3)-1] = 'y';
 			    sprintf(buf2, "%d", iis->data.image.y);
-			    antweb_write_query(f, buf3, buf2, &first);
+			    if (boundary[0])
+				antweb_multipart_write_query(f, buf3, buf2, boundary);
+			    else
+				antweb_write_query(f, buf3, buf2, &first);
 			}
 			break;
 		    case rid_it_TEXT:
 		    case rid_it_PASSWD:
-			antweb_write_query(f, iis->name, iis->data.str, &first);
+			if (boundary[0])
+			    antweb_multipart_write_query(f, iis->name, iis->data.str, boundary);
+			else
+			    antweb_write_query(f, iis->name, iis->data.str, &first);
 			break;
 		    case rid_it_CHECK:
 		    case rid_it_RADIO:
 			if (iis->data.radio.tick)
 			{
-			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first);
+			    char *val = iis->value ? iis->value : "on";
+			    if (boundary[0])
+				antweb_multipart_write_query(f, iis->name, val, boundary);
+			    else
+				antweb_write_query(f, iis->name, val, &first);
 			}
 			break;
 		    case rid_it_SUBMIT:
 			if (iis->data.button.tick && iis->name)
 			{
-			    antweb_write_query(f, iis->name, strsafe(iis->value), &first);
+			    if (boundary[0])
+				antweb_multipart_write_query(f, iis->name, strsafe(iis->value), boundary);
+			    else
+				antweb_write_query(f, iis->name, strsafe(iis->value), &first);
 			}
 			break;
 		    }
@@ -2080,19 +2147,29 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    rid_option_item *ois;
 		    for(ois = sis->options; ois; ois = ois->next)
 			if (ois->flags & rid_if_SELECTED)
-			    antweb_write_query(f, sis->name, ois->value ? ois->value : ois->text, &first);
+			{
+			    if (boundary[0])
+				antweb_multipart_write_query(f, sis->name, ois->value ? ois->value : ois->text, boundary);
+			    else
+				antweb_write_query(f, sis->name, ois->value ? ois->value : ois->text, &first);
+			}
 		    break;
 		}
 
 		case rid_form_element_TEXTAREA:
 		{
 		    rid_textarea_item *tai = (rid_textarea_item *)fis;
-		    antweb_write_textarea(f, tai, &first);
+		    if (boundary[0])
+			antweb_multipart_write_textarea(f, tai, boundary);
+		    else
+			antweb_write_textarea(f, tai, &first);
 		    break;
 		}
 		}
 	    }
 
+	    if (boundary[0])
+		fprintf(f, "--%s--\r\n", boundary);
 #if 0
 	    fputs("\r\n", f);
 #endif
@@ -2101,7 +2178,26 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    dest = url_join(BASE(doc), form->action);
 
 	    /* Never get a form query from the cache */
-	    ep = frontend_complain(frontend_open_url(dest, doc->parent, target, fname, fe_open_url_NO_CACHE));
+	    {
+		fe_post_info post;
+		post.body_file = fname;
+		if (boundary[0])
+		{
+		    post.content_type = mm_malloc(sizeof(POST_CONTENT_TYPE_FORMAT) + strlen(boundary));
+		    strcpy(post.content_type, POST_CONTENT_TYPE_FORMAT);
+		    strcat(post.content_type, boundary);
+		}
+		else
+		{
+		    post.content_type = form->enc_type;
+		}
+			
+		ep = frontend_complain(frontend_open_url(dest, doc->parent, target, &post, fe_open_url_NO_CACHE));
+
+		if (boundary[0])
+		    mm_free(post.content_type);
+	    }
+
 	    mm_free(dest);
 	}
 	break;
@@ -4323,7 +4419,7 @@ extern void backend_set_margin(be_doc doc, wimp_box *margin)
 
 
 extern os_error *backend_open_url(fe_view v, be_doc *docp,
-				  char *url, char *bfile, char *referer,
+				  char *url, fe_post_info *bfile, char *referer,
 				  int flags)
 {
     antweb_doc *new;
@@ -4378,7 +4474,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 		    (flags & be_openurl_flag_HISTORY ? 0 : access_CHECK_EXPIRE) |
 		    (flags & be_openurl_flag_FAST_LOAD ? access_MAX_PRIORITY : 0) |
 		    access_CHECK_FILE_TYPE | access_PRIORITY,
-		    NULL, bfile, referer,
+		    NULL, (access_post_info *)bfile, referer,
 		    &antweb_doc_progress, &antweb_doc_complete, new, &new->ah);
 
     mm_free(use_url);

@@ -1534,4 +1534,68 @@ void fskipline(FILE *in)
     while (c != EOF && c != '\n');
 }
 
+/* ---------------------------------------------------------------------------------------------------- */
+
+#if 0
+BOOL quoted_printable_necessary_n(const char *s, int len)
+{
+    while (len-- && (c = *s++) != 0)
+    {
+	BOOL encode = (c < 32 && c != 9) || c == 61 || c > 126;
+	if (encode)
+	    return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL quoted_printable_necessary(const char *s)
+{
+    return quoted_printable_necessary(s, INT_MAX);
+}
+
+/* **** This needs to cope with spaces at the end of lines ****
+ *
+ * It also assumes that it won't be given CRLF sequences. It won't go wrong
+ * if it does it will just generate encoded characters rather than hard line breaks.
+ */
+
+void quoted_printable_to_file_n(FILE *f, const char *s, int len, int *pos)
+{
+    int c;
+    int count = pos ? *pos : 0;
+
+    while (len-- && (c = *s++) != 0)
+    {
+	BOOL encode = (c < 32 && c != 9) || c == 61 || c > 126;
+
+	if (count >= (encode ? 72 : 74))
+	{
+	    fputs("=\r\n", f);
+	    count = 0;
+	}
+
+	if (encode)
+	{
+	    fprintf(f, "=%02X", c);
+	    count += 3;
+	}
+	else
+	{
+	    fputc(c, f);
+	    count++;
+	}
+    }
+
+    if (pos)
+	*pos = count;
+}
+
+void quoted_printable_to_file(FILE *f, const char *s, int *pos)
+{
+    quoted_printable_to_file(f, s, INT_MAX, pos);    
+}
+#endif
+
+/* ---------------------------------------------------------------------------------------------------- */
+
 /* eof portutil.c */

@@ -1409,7 +1409,7 @@ void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *blen
     flexmem_shift();
 }
 
-void otextarea_write_to_file(rid_textarea_item *tai, FILE *f)
+void otextarea_write_to_file(rid_textarea_item *tai, FILE *f, int url_encoding)
 {
     int i;
 
@@ -1420,13 +1420,18 @@ void otextarea_write_to_file(rid_textarea_item *tai, FILE *f)
 	int len = line_length(tai, i);
 	BOOL terminated = (tai->lines[i+1] - tai->lines[i]) != len;
 
-	url_escape_to_file_n(tai->text.data + tai->lines[i], f, len);
+	if (url_encoding)
+	    url_escape_to_file_n(tai->text.data + tai->lines[i], f, len);
+	else
+	    fwrite(tai->text.data + tai->lines[i], len, 1, f);
 
-	if (i != tai->n_lines-1 &&
+	if ((i != tai->n_lines-1 || !url_encoding) &&
 	    (tai->wrap == rid_ta_wrap_HARD || terminated))
-	    fputs("%0D%0A", f);
+	{
+	    fputs(url_encoding ? "%0D%0A" : "\r\n", f);
+	}
     }
-
+    
     flexmem_shift();
 }
 #endif

@@ -475,8 +475,8 @@ typedef struct rid_form_item {
     char *action;
     char *target;
     char *id;
+    char *enc_type;
 } rid_form_item;
-
 
 /*****************************************************************************/
 

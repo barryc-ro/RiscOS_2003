@@ -485,7 +485,7 @@ extern void text_item_revoke_break( HTMLCTX *me )
 
 /*****************************************************************************/
 
-extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id)
+extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id, VALUE *enctype)
 {
     rid_form_item *new;
 
@@ -509,6 +509,9 @@ extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *tar
     if (id->type == value_string)
 	new->id = stringdup(id->u.s);
 
+    if (enctype->type == value_string)
+	new->enc_type = stringdup(enctype->u.s);
+    
     rid_form_item_connect(me->rh, new);
     me->form = new;
 }
@@ -928,6 +931,12 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
 
     if (tabindex->type == value_integer)
 	ta->base.tabindex = tabindex->u.i;
+
+    /*
+     * HARD is the only attribute that causes NS and IE to do hard wrapping.
+     * WRAP with any other attribute causes NS to soft wrap.
+     * IE always softwraps with or without WRAP.
+     */
 
     if (wrap->type == value_none)
 	ta->wrap = rid_ta_wrap_NONE;

@@ -148,7 +148,8 @@ static VALUE sgml_do_parse_enum_void_case(SGMLCTX *context, ATTRIBUTE *attribute
 	PRSDBGN(("Could not guess a matching enumeration\n"));
     }
 
-    v.type = value_none;
+    /* SJM: 27Feb98: changed to return void rather than none if no enum matches */
+    v.type = value_void;
     v.u.i = 0;
     return v;
 }

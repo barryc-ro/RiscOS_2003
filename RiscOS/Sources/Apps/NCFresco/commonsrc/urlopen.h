@@ -32,6 +32,7 @@ typedef union {
         int flags;
         string_value body_file;
         string_value target;
+        string_value content_type;
     } indirect;
 } urlopen_data;
 

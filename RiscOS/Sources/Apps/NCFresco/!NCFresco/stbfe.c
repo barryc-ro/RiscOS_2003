@@ -2336,7 +2336,7 @@ void frontend_pass_doc(fe_view v, char *url, char *cfile, int ftype)
  * Called from the backend when an unknown type of URL is accessed.
  */
 
-void frontend_url_punt(fe_view v, char *url, char *bfile)
+void frontend_url_punt(fe_view v, char *url, fe_post_info *bfile)
 {
     wimp_eventstr e;
     urlopen_data *ud = (urlopen_data*) &(e.data.msg.data);
@@ -2367,14 +2367,15 @@ void frontend_url_punt(fe_view v, char *url, char *bfile)
     len = strlen(url);
 
     /* Use strictly less */
-    if (bfile == NULL && len < sizeof(ud->url))
+    if ((bfile == NULL || bfile->body_file == NULL) && len < sizeof(ud->url))
     {
 	strcpy(ud->url, url);
 	e.data.msg.hdr.size = sizeof(wimp_msghdr) + ((len + 4) & ~3);
     }
     else
     {
-        if (bfile) len += strlen(bfile) + 1;
+        if (bfile && bfile->body_file) len += strlen(bfile->body_file) + 1;
+        if (bfile && bfile->content_type) len += strlen(bfile->content_type) + 1;
         if (target) len += strlen(target) + 1;
 
 	ud->indirect.tag = 0;
@@ -2386,11 +2387,11 @@ void frontend_url_punt(fe_view v, char *url, char *bfile)
 	    strcpy(ptr, url);
 	    ptr += strlen(url) + 1;
 
-	    if (bfile)
+	    if (bfile && bfile->body_file)
 	    {
 	        ud->indirect.body_file.ptr = ptr;
-	        strcpy(ptr, bfile);
-	        ptr += strlen(bfile) + 1;
+	        strcpy(ptr, bfile->body_file);
+	        ptr += strlen(bfile->body_file) + 1;
 	    }
 
 	    if (target)
@@ -2398,6 +2399,13 @@ void frontend_url_punt(fe_view v, char *url, char *bfile)
 	        ud->indirect.target.ptr = ptr;
 	        strcpy(ptr, target);
 	        /* ptr += strlen(target) + 1; */
+	    }
+
+	    if (bfile && bfile->content_type)
+	    {
+	        ud->indirect.content_type.ptr = ptr;
+	        strcpy(ptr, bfile->content_type);
+	        ptr += strlen(bfile->content_type) + 1;
 	    }
 	}
 
@@ -4936,10 +4944,11 @@ static void fe_handle_dataload(wimp_msgstr *msg)
     }
 }
 
-static void fe__handle_openurl(wimp_msgstr *msg, char *url, char *target, char *body_file)
+static void fe__handle_openurl(wimp_msgstr *msg, char *url, char *target, char *body_file, char *content_type)
 {
     char *curl;
     int len;
+    fe_post_info post;
 
     curl = strdup(url);
     len = strlen(curl);
@@ -4951,7 +4960,9 @@ static void fe__handle_openurl(wimp_msgstr *msg, char *url, char *target, char *
 
     url_canonicalise(&curl);
 
-    frontend_complain(frontend_open_url(curl, NULL, target, body_file, fe_open_url_NO_REFERER));
+    post.body_file = body_file;
+    post.content_type = content_type;    
+    frontend_complain(frontend_open_url(curl, NULL, target, &post, fe_open_url_NO_REFERER));
 
     mm_free(curl);
 
@@ -4963,15 +4974,16 @@ static void fe_handle_openurl(wimp_msgstr *msg)
 {
     urlopen_data *ud = (urlopen_data*) &msg->data;
     char *scheme;
-    char *url, *body_file, *target;
+    char *url, *body_file, *target, *content_type;
 
-    body_file = target = NULL;
+    body_file = target = content_type = NULL;
     if (ud->indirect.tag == 0)
     {
         url = get_ptr(ud, ud->indirect.url);
         if (msg->hdr.size > 28)
         {
             body_file = get_ptr(ud, ud->indirect.body_file);
+            content_type = get_ptr(ud, ud->indirect.content_type);
             target = get_ptr(ud, ud->indirect.target);
         }
     }
@@ -4986,7 +4998,7 @@ static void fe_handle_openurl(wimp_msgstr *msg)
 
     if (access_is_scheme_supported(scheme))
     {
-	fe__handle_openurl(msg, url, target, body_file);
+	fe__handle_openurl(msg, url, target, body_file, content_type);
     }
 
     mm_free(scheme);

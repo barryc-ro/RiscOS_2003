@@ -23,7 +23,8 @@ extern void startform (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 		  &attributes->value[HTML_FORM_ACTION],
 		  &attributes->value[HTML_FORM_METHOD],
 		  &attributes->value[HTML_FORM_TARGET],
-		  &attributes->value[HTML_FORM_ID]);
+		  &attributes->value[HTML_FORM_ID],
+		  &attributes->value[HTML_FORM_ENCTYPE]);
 }
 
 #if 0
