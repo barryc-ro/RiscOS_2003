@@ -127,6 +127,7 @@ Stream::Stream(int inet_timeout, char* group, int port, int MPEGid, int source_r
   source = source_multicast;
   
   message_sent = false;
+  high_speed_file = false;
   source_flag = free_token;
   server_flag = claim_token;
   comms_timeout = inet_timeout;
@@ -179,6 +180,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
 
   // STB specific variables
   message_sent = false;
+  high_speed_file = false;
   source = source_vod;
   source_flag = server_flag = free_token;
   comms_timeout = inet_timeout;
@@ -304,10 +306,6 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
         	message_sent = true;
         }
   }
-        
-//#ifdef DEBUGLIB
-//  ErrorDump();
-//#endif	  
 } 	// stream constructor
 
 Stream::~Stream(void)
@@ -399,7 +397,7 @@ Stream::change_state(state_of_play new_state)
 #ifdef DEBUGLIB
    	Debug("state %i -> %i", state, new_state);
 #endif
-	   
+
    switch (new_state) {
      case state_slow:
      	if (trick_modes & trick_slow_play)
@@ -494,12 +492,14 @@ Stream::change_state(state_of_play new_state)
    
    if (callback_pending & callback_trickplay) {
 #ifdef DEBUGLIB
-  	int current_min, future_min;
+  	ULINT current_min, future_min;
   	
-  	current_min = (int)((getNECTime()>>1) / 60);
+  	current_min = (int)((getNECTime() >> 1) / 60);
   	future_min = (int)((from >> 1)/ 60);
-  	Debug("trick play (%2i:%2i:%2i) -> (%2i:%2i:%2i)", (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
-  							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60));
+  	Debug("trick play (%2i:%2i:%2i) -> (%2i:%2i:%2i) %i -> %i", 
+  							   (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
+  							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60),
+  							   getNECTime(), from);
 #endif
 
   	_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
@@ -526,7 +526,7 @@ Stream::GetSinkHandle(void)
 error_flag 
 Stream::CheckEOS(int *play_state)			// call to Decoder
 {
-  if ((state == state_stop)||(state == state_endreceived)){
+  if ((ErrorExists())||(state == state_stop)||(state == state_endreceived)){ 
   	(*play_state) = 1;
   }
   else
@@ -604,10 +604,12 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
 #ifdef DEBUGLIB
   		int current_min, future_min;
   	
-  		current_min = (int)((NEC_time>>1) / 60);
+  		current_min = (int)((getNECTime()>>1) / 60);
   		future_min = (int)((from >> 1)/ 60);
-  		Debug("trick play (%2i:%2i:%2i) -> (%2i:%2i:%2i)", (int)(current_min/60), (int)(current_min % 60), (int)((NEC_time>>1) % 60),
-  							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60));
+  		Debug("trick play (%2i:%2i:%2i) -> (%2i:%2i:%2i), %i -> %i", 
+  							   (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
+  							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60), 
+  							   	getNECTime(), from);
 #endif
   		callback_pending += callback_trickplay;
   		_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
@@ -625,7 +627,7 @@ Stream::getNECTime(void)
 {
   ULINT time;
   
-  if ((state == state_fast_forward)||(state == state_fast_rewind))
+  if (high_speed_file == true)
     	time = (ULINT)(mysource->get_most_significant_time()) * fast_playback_ratio;
   else
   	time = (ULINT)mysource->get_most_significant_time();
@@ -748,22 +750,30 @@ Stream::timeslice(Statistics *stats)
 		  
         		ULINT playback_id;
         		ULONG RequestNum;
-        		size_t AckNum, play_mode = 0;
+        		size_t AckNum, play_mode;
         	
         		callback_pending -= callback_trickplay;
        			
        			switch (state){
         			case state_fast_forward:
+        				high_speed_file = true;
+        				from /= fast_playback_ratio;
         	  			play_mode = 3;
         	  			break;
         	  		case state_fast_rewind:
+        				from /= fast_playback_ratio;
+        				high_speed_file = true;
         	  			play_mode = 4;
         	  			break;
         	  		case state_streamlive:
+        				high_speed_file = false;
         	  		  	callback_pending += callback_bufferswait;
         	  			play_mode = 7;
         	  			break;
-        	  		//default 0;
+        	  		default:
+        				high_speed_file = false;
+        				play_mode = 0;
+        				break;
         		}
         	
         		mysource->clearFinalBlock();	// ignore any previous end block numbs
@@ -773,7 +783,11 @@ Stream::timeslice(Statistics *stats)
    			  	if (callback_pending & callback_timeout){
    			  		callback_pending -= callback_timeout;
      					_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
-     				}	 
+     				}
+#ifdef DEBUGLIB	 	
+	  			ULINT from_min = (int)((from >> 1) / 60);
+  				Debug("play from %2i:%2i:%2i, %i", (int)(from_min/60), (int)(from_min % 60), (int)(from_min % 60), from );
+#endif  				
      	 			result = myserver->send_playback_request(playback_id, RequestNum, AckNum, from, play_mode);
      	 			
      	 			if (result == ErrorOccurred){
@@ -813,12 +827,16 @@ Stream::timeslice(Statistics *stats)
   			}
   				
   			if (callback_pending & callback_nak){
-                		callback_pending += callback_nak;
-     				_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), ((comms_timeout+1)>>1), VSP_CallAfterVeneer, pw);	  	
- 				if (e != NULL){
-  					MakeError(e);
-  					result = ErrorOccurred;
- 				} 
+  			  	//if ((mysource->getFullBlocks() == 0)&&(tokenfree()))
+  			  		//MakeError(IP_TimeOutOnCommunication);
+  			  	//else {	
+                			callback_pending += callback_nak;
+     					_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), ((comms_timeout+1)>>1), VSP_CallAfterVeneer, pw);	  	
+ 					if (e != NULL){
+  						MakeError(e);
+  						result = ErrorOccurred;
+ 					}
+ 				//} 
  			}
  		}
   	}
@@ -1117,6 +1135,9 @@ StreamList::Remove(int identifier)	// returns a boolean success value
 
   		if (decreasesize() == ErrorOccurred)		// this does test for sufficient decrease in size
   			result = ErrorOccurred;
+#ifdef DEBUGLIB  			
+  		Debug("close asset");
+#endif  		
   	}
   }
 
