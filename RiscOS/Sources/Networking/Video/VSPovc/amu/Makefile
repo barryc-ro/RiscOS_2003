@@ -25,8 +25,8 @@ CMHG=cmhg
 OBJASM=objasm
 
 #CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG -DUSEOLDREAD_POS
-CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG -DSOS -DUSEOLDREAD_POS
-#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG
+#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG -DSOS -DUSEOLDREAD_POS
+CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
 
 
 INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
