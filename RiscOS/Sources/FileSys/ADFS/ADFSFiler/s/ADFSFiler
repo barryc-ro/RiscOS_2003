@@ -156,6 +156,7 @@
 ;; 28-May-97  0.85 RML Trap datasave messages and allow file saves to the iconbar icon
 ;;                     (resulting in saves to the root directory).
 ;; 08-Sep-97  0.86 RML Generate a Message_FilerDevicePath in response to Message_FilerSelection.
+;; 26-Mar-98  0.87 RML Added Ursula service call table.
 ;;----------------------------------------------------------------------------
 
 
@@ -207,6 +208,9 @@ bodgedisc       SETL    {TRUE}          ; needed for old FileCore modules
 
                 GBLL    chkbkpdefects
 chkbkpdefects   SETL    {TRUE}          ; SMC: don't allow backup to disc with defects
+
+                GBLL    DragsToIconBar  ; RML: Are drags from save boxes/filer windows to our icon allowed?
+DragsToIconBar  SETL    {TRUE}
 
 ;XADFS_DescribeDisc      *       Auto_Error_SWI_bit + &40245
 
@@ -679,17 +683,55 @@ ErrorBlock_CantStartADFSFiler
         DCB     "UseDesk", 0
         ALIGN
 
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Table of service calls we want
+
+        ASSERT  Service_StartFiler > Service_Reset
+        ASSERT  Service_StartedFiler > Service_StartFiler
+        ASSERT  Service_FilerDying > Service_StartedFiler
+        ASSERT  Service_MessageFileClosed > Service_FilerDying
+        ASSERT  Service_ResourceFSStarting > Service_MessageFileClosed
+
+ServiceTable
+        DCD     0
+        DCD     ServiceUrsula - Module_BaseAddr
+        DCD     Service_Reset
+        DCD     Service_StartFiler
+        DCD     Service_StartedFiler
+        DCD     Service_FilerDying
+        DCD     Service_MessageFileClosed
+      [ standalonemessages
+        DCD     Service_ResourceFSStarting
+      ]
+        DCD     0
+        DCD     ServiceTable - Module_BaseAddr
+
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 ADFSFiler_Service ROUT
 
+        MOV     r0, r0                  ; Indicates there is a service call table
+
+        ; Fast rejection code
+        TEQ     r1, #Service_Reset
+        TEQNE   r1, #Service_StartFiler
+        TEQNE   r1, #Service_StartedFiler
+        TEQNE   r1, #Service_FilerDying
+        TEQNE   r1, #Service_MessageFileClosed
+      [ standalonemessages
+        TEQNE   r1, #Service_ResourceFSStarting
+      ]
+        MOVNE   pc, lr
+
+ServiceUrsula
+
         TEQ     r1, #Service_Reset
         BEQ     ADFSFiler_Service_Reset
 
-      [ Version >= 25
         TEQ     r1, #Service_MessageFileClosed
         BEQ     ADFSFiler_Service_MessageFileClosed
-      ]
 
         TEQ     r1, #Service_FilerDying
         BEQ     ADFSFiler_Service_FilerDying
@@ -896,7 +938,7 @@ MessagesList    DCD     Message_HelpRequest
       [ Version >= 33
                 DCD     Message_MenuWarning
       ]
-      [ Version >= 85
+      [ DragsToIconBar
                 DCD     Message_DataSave
                 DCD     Message_DataLoad
       ]
@@ -3176,7 +3218,7 @@ event_user_message ENTRY
         BEQ     returnhelp
       ]
       
-      [ Version >= 85
+      [ DragsToIconBar
         LDR     r14, =Message_DataSave
         CMP     r0, r14
         BEQ     message_datasave
@@ -4043,6 +4085,8 @@ IdUnformatted
      ]
 
 
+ [ DragsToIconBar
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; message_datasave
 ;
@@ -4082,12 +4126,10 @@ message_datasave
         BL      strcpy_advance           ; do the copy
         ADR     r2, dotdollar3         
         BL      strcpy_advance           ; add a '.$' to the medianame (eg. 'ADFS::Flibble.$.')
-        ADD     r2, r5, #256
-        SUB     r2, r2, r1
-        MOV     r2, #256
+        MOV     r2, #256                 ; maximum length for append_dotdefaultpath
         BL      append_dotdefaultpath    ; add '.<ADFSFiler$DefaultPath>' (if it exists)
         MOV     r0, #46
-        STRB    r0, [r1], #1
+        STRB    r0, [r1], #1             ; add a '.'
         ADR     r2, filenamebuffer
         BL      strcpy_advance           ; add the filename specified by the datasave message
 
@@ -4102,10 +4144,12 @@ message_datasave
         LDR     r2, [r1, #4]             ; task handle of sender (to send back to)
         MOV     r0, #17                  ; event code
         SWI     Wimp_SendMessage
+
         Pull    "pc"
 
-dotdollar3       DCB ".$",0
+dotdollar3       DCB ".$", 0
 dotdollardot     DCB ".$.", 0
+
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; message_dataload
@@ -4120,7 +4164,8 @@ message_dataload
 
         LDR     r4, [r1, #24]            ; icon handle (for opening viewer)
 
-        ; Check why we've got this message
+; Check why we've got this message
+
         LDR     r0, [r1, #12]
         CMP     r0, #0                   ; we only send a DataLoadAck if the DataLoad
         BNE     %FT10                    ; was in reply to a DataSaveAck
@@ -4128,14 +4173,14 @@ message_dataload
 ; Case 1: Message is because user has tried to copy a selection of files to an
 ; icon bar device, so send a Message_FilerDevicePath.
 
-        LDR     r6, [r1, #4]                 ; task handle of sender (to send back to)
+        LDR     r6, [r1, #4]                 ; store task handle of sender (to send back to)
         MOV     r5, r1                       ; store message block pointer in r5
  
         MOV     r0, #256
         STR     r0, [r1]                     ; Length of message
         MOV     r0, #0
         STR     r0, [r1, #12]                ; Your ref.
-        LDR     r0, =Message_FilerDevicePath ; Message action
+        LDR     r0, =Message_FilerDevicePath
         STR     r0, [r1, #16]                ; Message action
 
         BL      matchdriveicon               ; returns r1 -> drive_spec
@@ -4143,50 +4188,47 @@ message_dataload
         BL      GetMediaName                 ; returns r1 -> media name
         MOV     r2, r1
         ADD     r1, r5, #20
-        BL      strcpy_advance               ; copy media name into the message
+        BL      strcpy_advance               ; copy media name into the message block
         ADR     r2, dotdollar3
         BL      strcpy_advance               ; add a .$
-        ADD     r2, r5, #userdata_size
-        SUB     r2, r2, r1
-        BL      append_dotdefaultpath          ; Add the value of ADFSFiler$DefaultPath if it exists
+        MOV     r2, #256                     ; maximum size we'll allow for append_dotdefaultpath
+        BL      append_dotdefaultpath        ; Add the value of ADFSFiler$DefaultPath if it exists
                
         MOV     r1, r5                       ; location of message data
         MOV     r2, r6                       ; task handle of sender (to send back to)
         MOV     r0, #17                      ; event code
-        SWI     Wimp_SendMessage             ; send the message 
+        SWI     XWimp_SendMessage            ; send the message 
         B       %FT20
 
 ; Case 2: Message is part of a save protocol, because user has saved a file
 ; to an icon bar device, so send the Message_DataLoadAck.      
-
-10    
+10
         LDR     r0, [r1, #8]
         STR     r0, [r1, #12]            ; Your ref.
         MOV     r0, #Message_DataLoadAck
         STR     r0, [r1, #16]            ; Message action
         LDR     r2, [r1, #4]             ; task handle of sender (to send back to)
         MOV     r0, #17                  ; event code
-        SWI     Wimp_SendMessage
+        SWI     XWimp_SendMessage
 
-20      ; Open the directory viewer of the dir we're copying/saving to.
+; Open the directory viewer of the dir we're copying/saving to.
+20
         BL      matchdriveicon           ; returns r1 -> drive_spec
         Pull    "pc", NE
         BL      GetMediaName             ; returns r1 -> media name
         Push    "r1"
         ADR     r1,userdata
-        ADRL    r2,FilerOpenDirCommand
+        ADRL    r2,FilerOpenDirCommand   ; Now create a Filer_OpenDir command
         BL      strcpy_advance
         Pull    "r2"
-        BL      strcpy_advance
+        BL      strcpy_advance           ; copy the media name
         ADR     r2, dotdollar3
-        BL      strcpy_advance
-
-        ADD     r2, r5, #userdata_size
-        SUB     r2, r2, r1
-        BL      append_dotdefaultpath          ; Add the value of ADFSFiler$DefaultPath if it exists
+        BL      strcpy_advance           ; add a '.$'
+        MOV     r2, #256
+        BL      append_dotdefaultpath    ; Add the value of ADFSFiler$DefaultPath if it exists
 
         ADR     r0,userdata
-        SWI     XOS_CLI
+        SWI     XOS_CLI                  ; Execute command
         
         Pull    "pc"
 
@@ -4238,6 +4280,7 @@ append_dotdefaultpath ENTRY "r3-r7"
         STRB    r0, [r1]                 ; Put NULL at end of whole string.
         
         EXIT        
+ ]
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
