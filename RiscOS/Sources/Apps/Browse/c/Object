@@ -32,6 +32,8 @@
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "FetchHTML.h"
 #include "Images.h"
+#include "Memory.h"
+#include "MiscDefs.h"
 #include "PlugIn.h"
 #include "Redraw.h"
 #include "Reformat.h"
@@ -39,3 +41,340 @@
 #include "URLveneer.h"
 
 #include "Object.h"
+
+/* Static function prototypes */
+
+static int               object_get_token_object (browser_data * b, HStream * t);
+static _kernel_oserror * object_get_object_size  (browser_data * b, int object, BBox * size);
+
+/*************************************************/
+/* object_new_object()                           */
+/*                                               */
+/* Adds a structure for a new Object to a        */
+/* browser's array of Objects.                   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to add to;                        */
+/*                                               */
+/*             Pointer to a token representing   */
+/*             the Object (OBJECT, EMBED or      */
+/*             APPLET tag).                      */
+/*************************************************/
+
+_kernel_oserror * object_new_object(browser_data * b, HStream * t)
+{
+  _kernel_oserror * e;
+
+  /* If this isn't an Object token, do nothing (well, */
+  /* complain about it in TRACE builds).              */
+
+  if (!t || t->tagno != TAG_OBJECT)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Token %08x passed to object_new_object does not represent an OBJECT, APPLET or EMBED tag",
+              (int) t);
+
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* Allocate memory for the item */
+
+  RetError(memory_set_chunk_size(b,
+                                 NULL,
+                                 CK_OBJB,
+                                 (b->nobjects + 1) * sizeof(object_info)));
+
+  /* Fill in the new item */
+
+  b->odata[b->nobjects].browser_instance_handle = 0;
+  b->odata[b->nobjects].plugin_instance_handle  = 0;
+  b->odata[b->nobjects].plugin_task_handle      = 0;
+  b->odata[b->nobjects].token                   = t;
+
+  /* Width and height initially come from the token, but if this */
+  /* ends up leading to a Plug-In being called, that Plug-In     */
+  /* could ask for the size to change; hence the 'width' and     */
+  /* 'height' fields.                                            */
+
+  b->odata[b->nobjects].units                   = UNITS_PIXELS;
+  b->odata[b->nobjects].width                   = t->rows;
+  b->odata[b->nobjects].height                  = t->cols;
+
+  /* Finally, increment the objects counter */
+
+  b->nobjects++;
+
+  return NULL;
+}
+
+/*************************************************/
+/* object_discard()                              */
+/*                                               */
+/* Discards all Objects held by a given browser. */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Objects.          */
+/*************************************************/
+
+_kernel_oserror * object_discard(browser_data * b)
+{
+  b->nobjects = 0;
+
+  return memory_set_chunk_size(b, NULL, CK_OBJB, 0);
+}
+
+/*************************************************/
+/* object_get_token_object()                     */
+/*                                               */
+/* Return the number of the Object represented   */
+/* in the given browser by the given token.      */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Objects;          */
+/*                                               */
+/*             Pointer to a token representing   */
+/*             the Object (OBJECT, EMBED or      */
+/*             APPLET tag).                      */
+/*                                               */
+/* Returns:    Number of the Object from 0 to    */
+/*             number of Objects minus 1, or -1  */
+/*             if the Object cannot be found.    */
+/*************************************************/
+
+static int object_get_token_object(browser_data * b, HStream * t)
+{
+  int found = -1;
+  int i;
+
+  /* If this isn't an Object token, do nothing (well, */
+  /* complain about it in TRACE builds).              */
+
+  if (!t || t->tagno != TAG_OBJECT)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Token %08x passed to object_new_object does not represent an OBJECT, APPLET or EMBED tag",
+              (int) t);
+
+      show_error_ret(&erb);
+
+    #endif
+
+    return -1;
+  }
+
+  /* Otherwise, try to find the item */
+
+  for (i = 0; i < b->nobjects; i++)
+  {
+    if (b->odata[i].token == t)
+    {
+      found = i;
+      break;
+    }
+  }
+
+  return found;
+}
+
+/*************************************************/
+/* object_get_object_size()                      */
+/*                                               */
+/* Returns the size of a given Object.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to add to;                        */
+/*                                               */
+/*             Number of the Object, from 0 to   */
+/*             number of Objects minus 1;        */
+/*                                               */
+/*             Pointer to a BBox, in which the   */
+/*             size of the Object will be        */
+/*             written.                          */
+/*************************************************/
+
+static _kernel_oserror * object_get_object_size(browser_data * b, int object, BBox * size)
+{
+  /* Can't do anything without a bounding box! */
+
+  if (!size)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+      strcpy(erb.errmess, "Null bounding box pointer passed to object_get_object_size");
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* Fill in zeros to start with */
+
+  size->xmin = size->ymin = 0;
+  size->xmax = size->ymax = 0;
+
+  /* Is this a valid object number? */
+
+  if (object < 0 || object >= b->nobjects)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid object number %d for passed to object_get_object_size (browser %08x, nobjects = %d)",
+              object,
+              (int) b,
+              b->nobjects);
+
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* Find its size */
+
+  if (b->odata[object].units == UNITS_PIXELS)
+  {
+    size->xmax = b->odata[object].width  * 2; /* A 'web pixel' -> 2 OS units under RISC OS */
+    size->ymax = b->odata[object].height * 2;
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* object_get_token_object_size()                */
+/*                                               */
+/* Returns the size of a given Object.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to add to;                        */
+/*                                               */
+/*             Pointer to a token representing   */
+/*             the Object (OBJECT, EMBED or      */
+/*             APPLET tag);                      */
+/*                                               */
+/*             Pointer to a BBox, in which the   */
+/*             size of the Object will be        */
+/*             written.                          */
+/*************************************************/
+
+_kernel_oserror * object_get_token_object_size(browser_data * b, HStream * t, BBox * size)
+{
+  return object_get_object_size(b, object_get_token_object(b, t), size);
+}
+
+/*************************************************/
+/* object_redraw()                               */
+/*                                               */
+/* Does a high level redraw of an Object, using  */
+/* an outline to show where the Object should be */
+/* if it isn't plotted by some other method.     */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Pointer to a RedrawWindowBlock    */
+/*             struct which holds information    */
+/*             about the current redraw session; */
+/*                                               */
+/*             Address of the token representing */
+/*             the OBJECT, APPLET or EMBED tag;  */
+/*                                               */
+/*             The X offset in window coords (so */
+/*             OS units) of the left hand edge   */
+/*             of the Object;                    */
+/*                                               */
+/*             The Y offset in window coords (so */
+/*             OS units) of the bottom edge of   */
+/*             the Object.                       */
+/*************************************************/
+
+_kernel_oserror * object_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStream * token, int x, int y)
+{
+  int object  = object_get_token_object(b, token);
+  int plotted = 0;
+
+  // Here would go some code to check if this is, say, an image,
+  // and if so call the image redraw code instead. This would set
+  // the 'plotted' flag as appropriate - may need to extend image
+  // library API to say if it was about to draw a placeholder
+  // itself, so that plotted stays unset (assuming it isn't possible
+  // to easily generalise the image placeholder plotting).
+
+  if (!plotted)
+  {
+    /* Plot a placeholder */
+
+    BBox box;
+
+    object_get_object_size(b, object, &box);
+
+    box.xmin += x;
+    box.ymin += y;
+    box.xmax += x - box.xmin;
+    box.ymax += y - box.ymin;
+
+    box.xmin &= ~(wimpt_dx() - 1);
+    box.ymin &= ~(wimpt_dy() - 1);
+Printf("%d, %d\n",box.xmax,box.ymax);
+    if (box.xmax > 8 && box.ymax > 8)
+    {
+      /* xmin, ymin hold the bottom left hand corner coordinates, whilst */
+      /* xmax, ymax hold the width and height. The adjustments are to    */
+      /* account for the way the bbc_rectanglefill function works; e.g., */
+      /* to get a width of 4 OS units, ask for 3 (as it adds this to the */
+      /* x coordinate and treats it as an inclusive x coordinate max).   */
+      /* There are corrections to plot 2 OS units inside of the real     */
+      /* bounding box (looks better when images touch each other) and to */
+      /* get the darker sides of the 'slabbed in' box overlapping the    */
+      /* lighter sides by the right amount.                              */
+
+      redraw_set_colour(Redraw_Colour_AlmostWhite);
+      bbc_rectanglefill(box.xmin + 2,
+                        box.ymin + 2,
+                        box.xmax - 5,
+                        3);
+      bbc_rectanglefill(box.xmax + box.xmin - 6,
+                        box.ymin + 2,
+                        3,
+                        box.ymax - 5);
+
+      redraw_set_colour(Redraw_Colour_MidGrey);
+      bbc_rectanglefill(box.xmin + 2,
+                        box.ymax + box.ymin - 6,
+                        box.xmax - 7,
+                        3);
+      bbc_rectanglefill(box.xmin + 2,
+                        box.ymin + 4,
+                        3,
+                        box.ymax - 7);
+    }
+    else
+    {
+      if (box.xmax < 2) box.xmax = 2;
+      if (box.ymax < 2) box.ymax = 2;
+
+      redraw_set_colour(0);
+      bbc_rectangle(box.xmin,box.ymin,box.xmax - 1,box.ymax - 1);
+    }
+  }
+
+  return NULL;
+}

@@ -206,6 +206,7 @@ OBJS = \
  o.Menus		\
  o.Meta			\
  o.Mouse		\
+ o.Object		\
  o.OpenURL		\
  o.Printing		\
  o.PrintStyle		\
@@ -253,6 +254,7 @@ OBJSZ = \
  oz.Menus		\
  oz.Meta		\
  oz.Mouse		\
+ oz.Object		\
  oz.OpenURL		\
  oz.Printing		\
  oz.PrintStyle		\
@@ -300,6 +302,7 @@ OBJSD = \
  od.Menus		\
  od.Meta		\
  od.Mouse		\
+ od.Object		\
  od.OpenURL		\
  od.Printing		\
  od.PrintStyle		\
@@ -349,6 +352,7 @@ OBJSDZ = \
  odz.Menus		\
  odz.Meta		\
  odz.Mouse		\
+ odz.Object		\
  odz.OpenURL		\
  odz.Printing		\
  odz.PrintStyle		\
@@ -397,6 +401,7 @@ OBJS_SURF = \
  o_surf.Menus		\
  o_surf.Meta		\
  o_surf.Mouse		\
+ o_surf.Object		\
  o_surf.OpenURL		\
  o_surf.Printing	\
  o_surf.PrintStyle	\
@@ -443,6 +448,7 @@ OBJSD_SURF = \
  od_surf.Menus		\
  od_surf.Meta		\
  od_surf.Mouse		\
+ od_surf.Object		\
  od_surf.OpenURL	\
  od_surf.Printing	\
  od_surf.PrintStyle	\
@@ -492,6 +498,7 @@ OBJS_ITALK = \
  o_italk.Menus		\
  o_italk.Meta		\
  o_italk.Mouse		\
+ o_italk.Object		\
  o_italk.OpenURL	\
  o_italk.Printing	\
  o_italk.PrintStyle	\
@@ -539,6 +546,7 @@ OBJSD_ITALK = \
  od_italk.Menus		\
  od_italk.Meta		\
  od_italk.Mouse		\
+ od_italk.Object	\
  od_italk.OpenURL	\
  od_italk.Printing	\
  od_italk.PrintStyle	\
