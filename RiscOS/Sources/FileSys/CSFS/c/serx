@@ -141,113 +141,13 @@ static _kernel_oserror * getstat(fstat * f,char ** pp,char ** name,int * nlen)
 #define HCHUNK (16*sizeof(heads))
 
 
-/*
- * get the contents of directory specified by ind and fill into a temp
- * buffer.
- */
 
-
-_kernel_oserror * servicegetdir(int acn,int ind,heads ** hdr,int * size)
-{
- _kernel_oserror * err;
- char              arcpath[NAMELEN];
- int               sh;
- fstat             f;
- fstat             f1;
- char            * buffer;
- char            * p;
- int               session;
- int               fn;
- int               n;
- int               m;
- char            * name;
- int               nlen;
- int               s;
+typedef _kernel_oserror * (*insertfn)(int acn,int ind,int fn,heads ** base);
 
 
 
-/*  printf("CSFS: servicegetdir() dir = %d\n",ind); */
- *hdr=NULL;
- err=filepath(arcpath,acn,ind);
- if(!err)
- {
-  err=sc_create(&sh);
-  if(!err)
-  {
-   err=opensession(acn,CSFS_GET,arcpath,sc_name(sh),&session,NULL);
-   if(!err)
-   {
-    err=runsession(acn,session,NULL);
-    err=closesession(acn,session,err);
-
-    if(!err)
-    {
-     err=stat(sc_name(sh),&f1);
-     if(!err && f1.object)
-     {
-      err=flex_alloc((flex_ptr)&buffer,f1.length+1);
-      if(!err)
-      {
-       err=loadblock(sc_name(sh),buffer);
-       if(!err)
-       {
-        buffer[f1.length]=0;
-        fn=0;
-        n=0;
-        err=flex_alloc((flex_ptr)hdr,HCHUNK);
-        if(!err)
-        {
-         while(n<f1.length)
-         {
-          p=buffer+n;
-          err=getstat(&f,&p,&name,&nlen);
-          n=p-buffer;
-          m=name-buffer;
-
-          if(err) break;
-          if(!f.object) break;
-
-          err=flex_chunk((flex_ptr)hdr,sizeof(heads)*(fn+1),HCHUNK);
-          if(err) break;
-
-          if(f.object)
-          {
-           err=mkstring(nlen,&s);
-           if(err) break;
-
-           strcpy(stringptr(s),buffer+m);
-           (*hdr)[fn].name=s;
-
-           memset((*hdr)+fn,0,sizeof(heads));
-           (*hdr)[fn].dirn=(f.object==1)?DNFILE:DFLAT;
-           (*hdr)[fn].load=f.load;
-           (*hdr)[fn].exec=f.exec;
-           (*hdr)[fn].acc =f.acc;
-           (*hdr)[fn].length=f.length;
-           fn++;
-          }
-         }
-         *size=fn;
-        }
-        delete(sc_name(sh));
-       }
-       flex_free((flex_ptr)&buffer);
-      }
-     }
-    }
-   }
-   err=sc_remove(sh,err);
-  }
- }
-
- return(err);
-}
-
-/*
- * get the contents of directory specified by ind and insert entries into
- * the main file header structure.
- */
-_kernel_oserror * serviceopendir(int acn,int ind)
+static _kernel_oserror * serviceopendirsub(int acn,int ind,int * fnp,
+                                                heads ** base,insertfn insfn)
 {
  _kernel_oserror * err;
  char              arcpath[NAMELEN];
@@ -267,7 +167,7 @@ _kernel_oserror * serviceopendir(int acn,int ind)
 
 
 /*  printf("CSFS: serviceopendir() %d,%d\n",acn,ind); */
- if(ind>=0) arc[acn].hdr[ind].dirn=0;
+
  err=filepath(arcpath,acn,ind);
  if(!err)
  {
@@ -292,7 +192,7 @@ _kernel_oserror * serviceopendir(int acn,int ind)
        if(!err)
        {
         buffer[f1.length]=0;
-        fn=ind+1;                    /* nb is OK for fmain == -1 */
+        fn=*fnp;
         n=0;
         while(n<f1.length)
         {
@@ -304,25 +204,24 @@ _kernel_oserror * serviceopendir(int acn,int ind)
          if(err) break;
          if(!f.object) break;
 
-         err=insentry(acn,fn,ind,1);
+         err=insfn(acn,ind,fn,base);
          if(err) break;
 
-         if(f.object)
-         {
-          err=mkstring(nlen,&s);
-          if(err) break;
+         err=mkstring(nlen,&s);
+         if(err) break;
 
-          arc[acn].hdr[fn].name=s;
-          strcpy(stringptr(s),buffer+m);
+         strcpy(stringptr(s),buffer+m);
+         (*base)[fn].name=s;
 
-          arc[acn].hdr[fn].dirn=(f.object==1)?DNFILE:DFLAT;
-          arc[acn].hdr[fn].load=f.load;
-          arc[acn].hdr[fn].exec=f.exec;
-          arc[acn].hdr[fn].acc =f.acc;
-          arc[acn].hdr[fn].length=f.length;
-         }
+         (*base)[fn].dirn=(f.object==1)?DNFILE:DFLAT;
+         (*base)[fn].load=f.load;
+         (*base)[fn].exec=f.exec;
+         (*base)[fn].acc =f.acc;
+         (*base)[fn].length=f.length;
+
          fn++;
         }
+        *fnp=fn;
         delete(sc_name(sh));
        }
        flex_free((flex_ptr)&buffer);
@@ -335,6 +234,56 @@ _kernel_oserror * serviceopendir(int acn,int ind)
  }
 
  return(err);
+}
+
+
+
+
+
+/*
+ * get the contents of directory specified by ind and fill into a temp
+ * buffer.
+ */
+
+static _kernel_oserror * getdirfn(int acn,int ind,int fn,heads ** base)
+{
+ _kernel_oserror * err;
+ if(!*base) err=flex_alloc((flex_ptr)base,HCHUNK);
+ else       err=flex_chunk((flex_ptr)base,sizeof(heads)*(fn+1),HCHUNK);
+ if(!err)   memset((*base)+fn,0,sizeof(heads));
+ return(err);
+ USE(acn);
+ USE(ind);
+}
+
+
+_kernel_oserror * servicegetdir(int acn,int ind,heads ** hdr,int * size)
+{
+ *hdr=NULL;
+ *size=0;
+ return(serviceopendirsub(acn,ind,size,hdr,getdirfn));
+}
+
+
+/*
+ * get the contents of directory specified by ind and insert entries into
+ * the main file header structure.
+ */
+
+
+static _kernel_oserror * opendirfn(int acn,int ind,int fn,heads ** base)
+{
+ return(insentry(acn,fn,ind,1));
+ USE(base);
+}
+
+
+_kernel_oserror * serviceopendir(int acn,int ind)
+{
+ int fn;
+ if(ind>=0) arc[acn].hdr[ind].dirn=0;
+ fn=ind+1;                    /* nb is OK for fmain == -1 */
+ return(serviceopendirsub(acn,ind,&fn,&arc[acn].hdr,opendirfn));
 }
 
 
