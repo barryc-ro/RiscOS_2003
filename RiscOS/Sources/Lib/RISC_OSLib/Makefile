@@ -124,6 +124,8 @@ HEADERS =\
  CLIB:h.ctype \
  CLIB:h.errno \
  CLIB:h.float \
+ CLIB:h.inttypes \
+ CLIB:h.iso646 \
  CLIB:h.kernel \
  CLIB:h.limits \
  CLIB:h.locale \
@@ -131,7 +133,9 @@ HEADERS =\
  CLIB:h.setjmp \
  CLIB:h.signal \
  CLIB:h.stdarg \
+ CLIB:h.stdbool \
  CLIB:h.stddef \
+ CLIB:h.stdint \
  CLIB:h.stdio \
  CLIB:h.stdlib \
  CLIB:h.string \
@@ -497,24 +501,29 @@ ${EXP_HDR}.SharedCLib: hdr.SharedCLib
         ${CP} hdr.SharedCLib $@ ${CPFLAGS}
 
 # Headers:
-CLIB:h.assert: clib.h.assert;   ${CP} clib.h.assert $@ ${CPFLAGS}
-CLIB:h.ctype: clib.h.ctype;     ${CP} clib.h.ctype $@ ${CPFLAGS}
-CLIB:h.errno: clib.h.errno;     ${CP} clib.h.errno $@ ${CPFLAGS}
-CLIB:h.float: clib.h.float;     ${CP} clib.h.float $@ ${CPFLAGS}
-CLIB:h.kernel: clib.h.kernel;   ${CP} clib.h.kernel $@ ${CPFLAGS}
-CLIB:h.limits: clib.h.limits;   ${CP} clib.h.limits $@ ${CPFLAGS}
-CLIB:h.locale: clib.h.locale;   ${CP} clib.h.locale $@ ${CPFLAGS}
-CLIB:h.math: clib.h.math;       ${CP} clib.h.math $@ ${CPFLAGS}
-CLIB:h.setjmp: clib.h.setjmp;   ${CP} clib.h.setjmp $@ ${CPFLAGS}
-CLIB:h.signal: clib.h.signal;   ${CP} clib.h.signal $@ ${CPFLAGS}
-CLIB:h.stdarg: clib.h.stdarg;   ${CP} clib.h.stdarg $@ ${CPFLAGS}
-CLIB:h.stddef: clib.h.stddef;   ${CP} clib.h.stddef $@ ${CPFLAGS}
-CLIB:h.stdio: clib.h.stdio;     ${CP} clib.h.stdio $@ ${CPFLAGS}
-CLIB:h.stdlib: clib.h.stdlib;   ${CP} clib.h.stdlib $@ ${CPFLAGS}
-CLIB:h.string: clib.h.string;   ${CP} clib.h.string $@ ${CPFLAGS}
-CLIB:h.swis: derived.swis;      ${CP} derived.swis $@ ${CPFLAGS}
-CLIB:h.time: clib.h.time;       ${CP} clib.h.time $@ ${CPFLAGS}
-CLIB:h.varargs: clib.h.varargs; ${CP} clib.h.varargs $@ ${CPFLAGS}
+CLIB:h.assert: clib.h.assert  ;   ${CP} clib.h.assert $@ ${CPFLAGS}
+CLIB:h.ctype: clib.h.ctype;       ${CP} clib.h.ctype $@ ${CPFLAGS}
+CLIB:h.errno: clib.h.errno;       ${CP} clib.h.errno $@ ${CPFLAGS}
+CLIB:h.float: clib.h.float;       ${CP} clib.h.float $@ ${CPFLAGS}
+CLIB:h.inttypes: clib.h.inttypes; ${CP} clib.h.inttypes $@ ${CPFLAGS}
+CLIB:h.iso646: clib.h.iso646;     ${CP} clib.h.iso646 $@ ${CPFLAGS}
+CLIB:h.kernel: clib.h.kernel;     ${CP} clib.h.kernel $@ ${CPFLAGS}
+CLIB:h.limits: clib.h.limits;     ${CP} clib.h.limits $@ ${CPFLAGS}
+CLIB:h.locale: clib.h.locale;     ${CP} clib.h.locale $@ ${CPFLAGS}
+CLIB:h.math: clib.h.math;         ${CP} clib.h.math $@ ${CPFLAGS}
+CLIB:h.setjmp: clib.h.setjmp;     ${CP} clib.h.setjmp $@ ${CPFLAGS}
+CLIB:h.signal: clib.h.signal;     ${CP} clib.h.signal $@ ${CPFLAGS}
+CLIB:h.stdarg: clib.h.stdarg;     ${CP} clib.h.stdarg $@ ${CPFLAGS}
+CLIB:h.stdbool: clib.h.stdbool;   ${CP} clib.h.stdbool $@ ${CPFLAGS}
+CLIB:h.stddef: clib.h.stddef;     ${CP} clib.h.stddef $@ ${CPFLAGS}
+CLIB:h.stdint: clib.h.stdint;     ${CP} clib.h.stdint $@ ${CPFLAGS}
+CLIB:h.stdio: clib.h.stdio;       ${CP} clib.h.stdio $@ ${CPFLAGS}
+CLIB:h.stdlib: clib.h.stdlib;     ${CP} clib.h.stdlib $@ ${CPFLAGS}
+CLIB:h.string: clib.h.string;     ${CP} clib.h.string $@ ${CPFLAGS}
+CLIB:h.swis: derived.swis;        ${CP} derived.swis $@ ${CPFLAGS}
+CLIB:h.time: clib.h.time;         ${CP} clib.h.time $@ ${CPFLAGS}
+CLIB:h.varargs: clib.h.varargs;   ${CP} clib.h.varargs $@ ${CPFLAGS}
+
 
 RISC_OSLib:h.akbd: rlib.h.akbd;              ${CP} rlib.h.akbd $@ ${CPFLAGS}
 RISC_OSLib:h.alarm: rlib.h.alarm;            ${CP} rlib.h.alarm $@ ${CPFLAGS}
