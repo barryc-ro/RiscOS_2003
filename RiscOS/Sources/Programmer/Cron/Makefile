@@ -42,9 +42,9 @@ TOKENFILE  = ${RESDIR}.Resources.Kernel.Dictionary
 #
 # Generic rules:
 #
-install: ${TARGET}
+install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: module installed
+        @echo ${COMPONENT}: rom module installed
 
 clean:
         ${RM} ${TARGET}
