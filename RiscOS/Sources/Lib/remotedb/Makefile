@@ -28,6 +28,8 @@ SOCKLIBZM = TCPIPLibs:o.socklibzm
 SOCKLIB   = TCPIPLibs:o.socklib
 UNIXLIBZM = TCPIPLibs:o.unixlibzm
 UNIXLIB   = TCPIPLibs:o.unixlib
+INETLIBZM = TCPIPLibs:o.inetlibzm
+INETLIB   = TCPIPLibs:o.inetlib
 
 DEBUGLIB = <Lib$Dir>.debug
 
@@ -70,10 +72,10 @@ all: ${OBJ} ${OBJZM} local_dirs
         @echo ${COMPONENT}: all complete
 
 ${COMPONENT}: ${OBJ}
-        ${LD} -o ${COMPONENT}   -aof ${OBJ}   ${SOCKLIB} ${UNIXLIB}
+   ${LD} -o ${COMPONENT}   -aof ${OBJ}   ${SOCKLIB} ${UNIXLIB} ${INETLIB}
 
 ${COMPONENTZM}: ${OBJZM}
-        ${LD} -o ${COMPONENTZM} -aof ${OBJZM} ${SOCKLIBZM} ${UNIXLIBZM}
+   ${LD} -o ${COMPONENTZM} -aof ${OBJZM} ${SOCKLIBZM} ${UNIXLIBZM} ${INETLIBZM}
 
 local_dirs:
         ${MKDIR} o
