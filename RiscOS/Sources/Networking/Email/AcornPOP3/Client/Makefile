@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.07 for RISC OS
+#	VERSION:	0.08 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -18,6 +18,7 @@
 #	08/10/97	0.05	RDW	get.o added callbacks.o added
 #	17/12/97	0.06	RDW	changes from BAL put in
 #	27/01/98	0.07	RDW	Support added to output preprocessed source for McCabe tool
+#	12/03/98	0.08	RDW	elib_priv obect removed, replaced with EmailLib
 
 #
 # Paths
@@ -54,6 +55,7 @@ INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 CALLX     = <Lib$Dir>.callx.o.callx
+EMAILLIB  = <Lib$Dir>.Email.EmailLib.o.EmailLibzm
 
 #
 # Program specific options:
@@ -90,14 +92,14 @@ ASMFLAGS=
 DOBJS=          #tml_podule.o debuglib.o trace_PL.o #MemCheck:o.MC_M
 
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
-                errortable.o get.o send.o cmdresp.o callbacks.o elib_priv.o getnummsgs.o \
+                errortable.o get.o send.o cmdresp.o callbacks.o getnummsgs.o \
                 getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o \
-		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS}
+		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB}
 		
 OBJSCP=		cp.swihndlers cp.handlers cp.logon cp.logout cp.pop_utils cp.module o.header \
-                cp.errortable cp.get cp.send cp.cmdresp cp.callbacks cp.elib_priv cp.getnummsgs \
+                cp.errortable cp.get cp.send cp.cmdresp cp.callbacks cp.getnummsgs \
                 cp.getlistmsg cp.getmsgfile cp.deletemsg cp.getuniquei cp.getlistuid \
-		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS}
+		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB}
 
 EXTRAS=         acornpop3.o
 
@@ -142,18 +144,28 @@ clean:
                 $(WIPE) rm.*     $(WFLAGS)
                 $(WIPE) aof.*    $(WFLAGS)
 		$(RM) link/sym
+		$(RM) rm
+		$(RM) aof
+		$(RM) linked
+		$(RM) map
+		$(RM) o
+
+local_dirs:
+	${MKDIR} o
+	${MKDIR} aof
+	${MKDIR} rm
 
 #
 # Target 
 #
-${TARGET}:	$(OBJS) $(EXTRAS)
+${TARGET}:	$(OBJS) $(EXTRAS) local_dirs
 		$(MemCheckLD) $(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJS) $(STUBS)
 		ModSqz rm.AcornPOP3u $@
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS}
+${ROMTARGET}: ${OBJS} $(EXTRAS) local_dirs
         ${LD} -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
