@@ -29,8 +29,12 @@
 #include <stdlib.h>
 
 #include "PRISM/PRISM.h"
+#include "PRISM/PFCClock.h"
+#include "DebugLib/DebugLib.h"
 
 #include "decoder.h"
+#include "global.h"
+#include "mess.h"
 
 
 /*****************************************************************************
@@ -56,6 +60,7 @@
 /*****************************************************************************
 * Function prototypes - Private to this file
 *****************************************************************************/
+static bool CompareDecoders(const void *a, const void *b);
 
 
 /*****************************************************************************
@@ -79,9 +84,81 @@
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *decoder_Register(uint32_t flags, prism_id_t decode_id, uint32_t decode_handle, stream_handle_t clock_handle, void (*function_table)(void), uint32_t latency, uint32_t *r_flags, void (**r_function_table)(void))
+_kernel_oserror *decoder_Register(uint32_t flags, prism_id_t decoder_id, stream_handle_t decoder_handle, stream_handle_t clock_handle, const prism_function_table_clock_to_decoder_t *restrict function_table, uint32_t latency,
+                                  uint32_t *restrict r_flags, const prism_function_table_decoder_to_clock_t **restrict r_function_table)
 {
-  return NULL;
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "DecoderRegister");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  
+  llist_step_t step;
+  llist_StartWalk(&step, &clock->decoder_list, false);
+  while (step.data != NULL)
+  {
+    decoder_t *decoder = (decoder_t *) step.data;
+    if (decoder->decoder_id == decoder_id && *(uint32_t *)&decoder->decoder_handle == *(uint32_t *)&decoder_handle)
+    {
+      llist_AbortWalk(&step);
+      return mess_MakeError(pfcclock_ERROR_DECODER_ALREADY_REGISTERED, 0);
+    }
+    llist_NextStep(&step, false);
+  }
+  
+  decoder_t decoder =
+  {
+//    .preferred_sync_master = flags & 1,
+//    .decoder_id            = decoder_id,
+//    .decoder_handle        = decoder_handle,
+//    .functions             = function_table,
+//    .latency               = latency
+    0
+  };
+  decoder.preferred_sync_master = flags & 1;
+  decoder.decoder_id            = decoder_id;
+  decoder.decoder_handle        = decoder_handle;
+  decoder.function_table        = function_table;
+  decoder.latency               = latency;
+  
+  if (llist_AddSorted(&clock->decoder_list, &decoder, CompareDecoders))
+  {
+    *r_flags = 0;
+    static bool my_table_initialised = false;
+    static prism_function_table_decoder_to_clock_t my_table;
+    if (!my_table_initialised++)
+    {
+//      my_table =
+//      {
+//        global_Veneers->decoder_Deregister,
+//        global_Veneers->decoder_BeginSession,
+//        global_Veneers->decoder_EndSession,
+//        global_Veneers->clock_StreamInfo,
+//        global_Veneers->decoder_SetEvent,
+//        global_Veneers->decoder_ClearEvent,
+//        global_Veneers->decoder_PTSNotify
+//      };
+      my_table.Deregister = global_Veneers->decoder_Deregister;
+      my_table.BeginSession = global_Veneers->decoder_BeginSession;
+      my_table.EndSession = global_Veneers->decoder_EndSession;
+      my_table.StreamInfo = global_Veneers->clock_StreamInfo;
+      my_table.SetEvent = global_Veneers->decoder_SetEvent;
+      my_table.ClearEvent = global_Veneers->decoder_ClearEvent;
+      my_table.PTSNotify = global_Veneers->decoder_PTSNotify;
+    }
+    *r_function_table = &my_table;
+    return NULL;
+  }
+  else
+  {
+    return mess_MakeError(prism_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+}
+
+static bool CompareDecoders(const void *a, const void *b)
+{
+  return ((const decoder_t *) a)->decoder_id > ((const decoder_t *) b)->decoder_id;
 }
 
 /*****************************************************************************
@@ -101,8 +178,35 @@ _kernel_oserror *decoder_Register(uint32_t flags, prism_id_t decode_id, uint32_t
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *decoder_Deregister(uint32_t flags, prism_id_t decoder_id, uint32_t decoder_handle, stream_handle_t clock_handle)
+_kernel_oserror *decoder_Deregister(uint32_t flags, prism_id_t decoder_id, stream_handle_t decoder_handle, stream_handle_t clock_handle)
 {
+  IGNORE(flags);
+  
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "DecoderRegister");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  
+  llist_step_t step;
+  llist_StartWalk(&step, &clock->decoder_list, false);
+  while (true)
+  {
+    if (step.data == NULL)
+    {
+      return mess_MakeError(pfcclock_ERROR_DECODER_NOT_REGISTERED, 0);
+    }
+    decoder_t *decoder = (decoder_t *) step.data;
+    if (decoder->decoder_id == decoder_id && *(uint32_t *)&decoder->decoder_handle == *(uint32_t *)&decoder_handle)
+    {
+      break;
+    }
+    llist_NextStep(&step, false);
+  }
+  llist_Delink(&step);
+  llist_AbortWalk(&step);
+  
   return NULL;
 }
 
@@ -123,8 +227,44 @@ _kernel_oserror *decoder_Deregister(uint32_t flags, prism_id_t decoder_id, uint3
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, uint32_t decoder_handle, stream_handle_t clock_handle, uint32_t sync_master_buffer)
+_kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, stream_handle_t decoder_handle, stream_handle_t clock_handle, uint32_t min_buffer)
 {
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "DecoderBeginSession");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  decoder_t *decoder;
+  
+  llist_step_t step;
+  llist_StartWalk(&step, &clock->decoder_list, false);
+  while (true)
+  {
+    if (step.data == NULL)
+    {
+      return mess_MakeError(pfcclock_ERROR_DECODER_NOT_REGISTERED, 0);
+    }
+    decoder = (decoder_t *) step.data;
+    if (decoder->decoder_id == decoder_id && *(uint32_t *)&decoder->decoder_handle == *(uint32_t *)&decoder_handle)
+    {
+      break;
+    }
+    llist_NextStep(&step, false);
+  }
+  
+  decoder->session_active = true;
+  if (flags & 1)
+  {
+    decoder->min_buffer = min_buffer;
+  }
+  else
+  {
+    decoder->min_buffer = clock->default_min_decoder_buffer;
+  }
+  
+  llist_AbortWalk(&step);
+  
   return NULL;
 }
 
@@ -145,8 +285,36 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, uin
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *decoder_EndSession(uint32_t flags, prism_id_t decoder_id, uint32_t decoder_handle, stream_handle_t clock_handle)
+_kernel_oserror *decoder_EndSession(uint32_t flags, prism_id_t decoder_id, stream_handle_t decoder_handle, stream_handle_t clock_handle)
 {
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "DecoderEndSession");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  decoder_t *decoder;
+  
+  llist_step_t step;
+  llist_StartWalk(&step, &clock->decoder_list, false);
+  while (true)
+  {
+    if (step.data == NULL)
+    {
+      return mess_MakeError(pfcclock_ERROR_DECODER_NOT_REGISTERED, 0);
+    }
+    decoder = (decoder_t *) step.data;
+    if (decoder->decoder_id == decoder_id && *(uint32_t *)&decoder->decoder_handle == *(uint32_t *)&decoder_handle)
+    {
+      break;
+    }
+    llist_NextStep(&step, false);
+  }
+  
+  decoder->session_active = false;
+  
+  llist_AbortWalk(&step);
+  
   return NULL;
 }
 
@@ -214,6 +382,28 @@ _kernel_oserror *decoder_ClearEvent(uint32_t flags, prism_id_t decoder_id, uint3
 _kernel_oserror *decoder_PTSNotify(uint32_t flags, stream_handle_t clock_handle, mpeg_time_t *pts)
 {
   return NULL;
+}
+
+/*****************************************************************************
+* decoder_LinkFreed
+*
+* Handles freeing up of a decoder_t link (see llist.c)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  link: pointer to decoder_t link that is being freed
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void decoder_LinkFreed(void *link)
+{
+  /* Currently, nothing needs freeing */
 }
 
 /*****************************************************************************

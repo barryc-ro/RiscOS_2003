@@ -27,6 +27,7 @@
 * Include header files
 *****************************************************************************/
 #include <stdlib.h>
+#include <stdio.h>
 #include <assert.h>
 #include <stdbool.h>
 #include "kernel.h"
@@ -45,6 +46,7 @@
 #include "decoder.h"
 #include "global.h"
 #include "mess.h"
+#include "module.h"
 #include "resmess.h"
 
 
@@ -75,30 +77,6 @@ static bool static_RegisteredWithPRISM = false;
 *****************************************************************************/
 static _kernel_oserror *RegisterWithPRISM(void);
 static _kernel_oserror *DeregisterWithPRISM(void);
-PRISM_DECLARE_FUNCTION_2(static _kernel_oserror *, ComponentInfo, uint32_t /*tag*/, uintptr_t */*result*/)
-
-static const struct
-{
-  void (*function)(void);
-  uint32_t stack_words;
-} static_CreateVeneerTable[] =
-{
-  PRISM_FUNCTION_ENTRY(ComponentInfo),        /*  0 */
-  PRISM_FUNCTION_ENTRY(clock_Deregister),     /*  1 */
-  PRISM_FUNCTION_ENTRY(clock_BeginSession),   /*  2 */
-  PRISM_FUNCTION_ENTRY(clock_EndSession),     /*  3 */
-  PRISM_FUNCTION_ENTRY(clock_StreamInfo),     /*  4 */
-  PRISM_FUNCTION_ENTRY(clock_SpeedChange),    /*  5 */
-  PRISM_FUNCTION_ENTRY(clock_PCRNotify),      /*  6 */
-  PRISM_FUNCTION_ENTRY(clock_NPTMapping),     /*  7 */
-  PRISM_FUNCTION_ENTRY(clock_FreezeClock),    /*  8 */
-  PRISM_FUNCTION_ENTRY(decoder_Deregister),   /*  9 */
-  PRISM_FUNCTION_ENTRY(decoder_BeginSession), /* 10 */
-  PRISM_FUNCTION_ENTRY(decoder_EndSession),   /* 11 */
-  PRISM_FUNCTION_ENTRY(decoder_SetEvent),     /* 12 */
-  PRISM_FUNCTION_ENTRY(decoder_ClearEvent),   /* 13 */
-  PRISM_FUNCTION_ENTRY(decoder_PTSNotify)     /* 14 */
-};
 
 
 /*****************************************************************************
@@ -134,6 +112,7 @@ _kernel_oserror *module_Init(const char *cmd_tail, int podule_base, void *pw)
   bool FileRegistered = false;
 #endif
   bool MessagesOpen = false;
+  bool ClockInitialised = false;
   bool CallbackSet = false;
   IGNORE(cmd_tail);
   IGNORE(podule_base);
@@ -170,6 +149,12 @@ _kernel_oserror *module_Init(const char *cmd_tail, int podule_base, void *pw)
   {
     MessagesOpen = true;
     
+    e = clock_Init();
+  }
+  if (!e)
+  {
+    ClockInitialised = true;
+    
     e = RegisterWithPRISM();
   }
   if (!e)
@@ -188,6 +173,7 @@ _kernel_oserror *module_Init(const char *cmd_tail, int podule_base, void *pw)
                               module_callback_from_init,
                               global_PrivateWord);
   if (e && static_RegisteredWithPRISM) DeregisterWithPRISM();
+  if (e && ClockInitialised) clock_Final();
   if (e && MessagesOpen) _swix(MessageTrans_CloseFile, _IN(0),
                                &global_MessageFD);
 #ifndef ROM_MODULE
@@ -258,16 +244,17 @@ _kernel_oserror *module_Final(int fatal, int podule, void *pw)
     _swix(OS_RemoveCallBack, _INR(0,1),
           module_callback_from_init,
           global_PrivateWord);
-    if (static_RegisteredWithPRISM)
-    {
-      DeregisterWithPRISM();
-    }
     _swix(OS_ServiceCall, _INR(0,4),
           PRISMModuleDying,
           Service_PRISM_Core,
           0,
           PFCClock_PRISMID,
           Module_Version);
+    if (static_RegisteredWithPRISM)
+    {
+      DeregisterWithPRISM();
+    }
+    clock_Final();
     _swix(MessageTrans_CloseFile, _IN(0),
           &global_MessageFD);
 #ifndef ROM_MODULE
@@ -383,13 +370,18 @@ void module_Service(int service_number, _kernel_swi_regs *r, void *pw)
 _kernel_oserror *module_Commands(const char *arg_string, int argc, int cmd_no, void *pw)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(arg_string);
+  uint32_t verbose;
   IGNORE(argc);
   IGNORE(pw);
+  RETURN_ERROR(_swix(OS_ReadArgs, _INR(0,3),
+                 "verbose/S",
+                 arg_string,
+                 &verbose,
+                 sizeof verbose));
   switch (cmd_no)
   {
     case CMD_PFCClockClients:
-      clock_ListClients();
+      e = clock_ListClients(verbose);
       break;
       
     default:
@@ -428,9 +420,9 @@ _kernel_oserror *module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw)
       e = clock_Register((uint32_t) r->r[0],
                          (prism_id_t) r->r[1],
                          *(stream_handle_t *) (r->r+2),
-                         (uint32_t *) (r->r+0),
-                         (stream_handle_t *) (r->r+2),
-                         (void (**)(void)) (r->r+3));
+                         (uint32_t *restrict) (r->r+0),
+                         (stream_handle_t *restrict) (r->r+2),
+                         (const prism_function_table_unwrap_to_clock_t **restrict) (r->r+3));
       if (!e)
       {
         r->r[1] = PFCClock_PRISMID;
@@ -487,12 +479,12 @@ _kernel_oserror *module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw)
       int original_r3 = r->r[3];
       e = decoder_Register((uint32_t) r->r[0],
                            (prism_id_t) r->r[1],
-                           (uint32_t) r->r[2],
+                           *(stream_handle_t *) (r->r+2),
                            *(stream_handle_t *) (r->r+3),
-                           (void (*)(void)) r->r[4],
+                           (const prism_function_table_clock_to_decoder_t *restrict) r->r[4],
                            (uint32_t) r->r[5],
                            (uint32_t *) (r->r+0),
-                           (void (**)(void)) (r->r+3));
+                           (const prism_function_table_decoder_to_clock_t **restrict) (r->r+3));
       if (!e)
       {
         r->r[1] = PFCClock_PRISMID;
@@ -504,14 +496,14 @@ _kernel_oserror *module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw)
     case PFCClock_DecoderDeregister - PFCClock_00:
       e = decoder_Deregister((uint32_t) r->r[0],
                              (prism_id_t) r->r[1],
-                             (uint32_t) r->r[2],
+                             *(stream_handle_t *) (r->r+2),
                              *(stream_handle_t *) (r->r+3));
       break;
       
     case PFCClock_DecoderBeginSession - PFCClock_00:
       e = decoder_BeginSession((uint32_t) r->r[0],
                                (prism_id_t) r->r[1],
-                               (uint32_t) r->r[2],
+                               *(stream_handle_t *) (r->r+2),
                                *(stream_handle_t *) (r->r+3),
                                (uint32_t) r->r[4]);
       break;
@@ -519,7 +511,7 @@ _kernel_oserror *module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw)
     case PFCClock_DecoderEndSession - PFCClock_00:
       e = decoder_EndSession((uint32_t) r->r[0],
                              (prism_id_t) r->r[1],
-                             (uint32_t) r->r[2],
+                             *(stream_handle_t *) (r->r+2),
                              *(stream_handle_t *) (r->r+3));
       break;
       
@@ -580,10 +572,33 @@ static _kernel_oserror *RegisterWithPRISM(void)
   RETURN_ERROR(_swix(PRISM_ComponentRegister, _INR(0,1),
                      0,
                      PFCClock_PRISMID));
+  static const struct
+  {
+    void (*function)(void);
+    uint32_t stack_words;
+  }
+  function_descriptor_table[] =
+  {
+    PRISM_FUNCTION_DESCRIPTOR(module_ComponentInfo), /*  0 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_Deregister),     /*  1 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_BeginSession),   /*  2 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_EndSession),     /*  3 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_StreamInfo),     /*  4 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_SpeedChange),    /*  5 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_PCRNotify),      /*  6 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_NPTMapping),     /*  7 */
+    PRISM_FUNCTION_DESCRIPTOR(clock_FreezeClock),    /*  8 */
+    PRISM_FUNCTION_DESCRIPTOR(decoder_Deregister),   /*  9 */
+    PRISM_FUNCTION_DESCRIPTOR(decoder_BeginSession), /* 10 */
+    PRISM_FUNCTION_DESCRIPTOR(decoder_EndSession),   /* 11 */
+    PRISM_FUNCTION_DESCRIPTOR(decoder_SetEvent),     /* 12 */
+    PRISM_FUNCTION_DESCRIPTOR(decoder_ClearEvent),   /* 13 */
+    PRISM_FUNCTION_DESCRIPTOR(decoder_PTSNotify)     /* 14 */
+  };
   RETURN_ERROR(_swix(PRISM_CreateVeneers, _INR(0,4)|_OUT(1),
                      1,
-                     static_CreateVeneerTable,
-                     sizeof(static_CreateVeneerTable) / sizeof(*static_CreateVeneerTable),
+                     function_descriptor_table,
+                     sizeof(function_descriptor_table) / sizeof(*function_descriptor_table),
                      global_PrivateWord,
                      PFCClock_PRISMID,
                      &global_Veneers));
@@ -591,7 +606,7 @@ static _kernel_oserror *RegisterWithPRISM(void)
                      0,
                      PFCClock_PRISMID,
                      PRISM_Notify_DeclareInformation,
-                     global_Veneers[0]));
+                     global_Veneers->module_ComponentInfo));
   static_RegisteredWithPRISM = true;
   return NULL;
 }
@@ -631,7 +646,7 @@ static _kernel_oserror *DeregisterWithPRISM(void)
 }
 
 /*****************************************************************************
-* ComponentInfo
+* module_ComponentInfo
 *
 * Returns information about the PRISM component
 *
@@ -647,7 +662,7 @@ static _kernel_oserror *DeregisterWithPRISM(void)
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-static _kernel_oserror *ComponentInfo(uint32_t tag, uintptr_t *result)
+_kernel_oserror *module_ComponentInfo(uint32_t tag, uintptr_t *result)
 {
   switch (tag)
   {
@@ -679,8 +694,26 @@ static _kernel_oserror *ComponentInfo(uint32_t tag, uintptr_t *result)
     
     case 4:
     {
-      const char *string;
-      RETURN_ERROR(mess_LookUpDirect("C00", &string, NULL));
+      static char string[80];
+      if (string[0] == 0)
+      {
+        char year[5];
+        sscanf(Module_Date, "%*u %*s %4s", year);
+        RETURN_ERROR(mess_LookUpBuffer("C00", string, sizeof string, 1, year));
+      }
+      * (const char **) result = string;
+      return NULL;
+    }
+    
+    case 5:
+    {
+      static char string[80];
+      if (string[0] == 0)
+      {
+        char year[5];
+        sscanf(Module_Date, "%*u %*s %4s", year);
+        RETURN_ERROR(mess_LookUpBuffer("S00", string, sizeof string, 2, Module_HelpVersion, year));
+      }
       * (const char **) result = string;
       return NULL;
     }

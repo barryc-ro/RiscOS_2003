@@ -27,10 +27,17 @@
 * Include header files
 *****************************************************************************/
 #include <stdlib.h>
+#include <stdio.h>
+#include "swis.h"
 
 #include "PRISM/PRISM.h"
+#include "PRISM/PFCClock.h"
+#include "DebugLib/DebugLib.h"
 
 #include "clock.h"
+#include "decoder.h"
+#include "global.h"
+#include "mess.h"
 
 
 /*****************************************************************************
@@ -46,16 +53,19 @@
 /*****************************************************************************
 * Constants
 *****************************************************************************/
+#define DEFAULT_JITTER_BUFFER_SIZE (600)
+#define DEFAULT_DECODER_BUFFER_SIZE (300)
 
 
 /*****************************************************************************
-* File scope Global variables
+* Global variables
 *****************************************************************************/
 
 
 /*****************************************************************************
 * Function prototypes - Private to this file
 *****************************************************************************/
+static const char *ReturnInfoString(prism_id_t id, uint32_t tag);
 
 
 /*****************************************************************************
@@ -63,9 +73,31 @@
 *****************************************************************************/
 
 /*****************************************************************************
-* clock_ListClients
+* clock_Init
 *
-* Enumerates all registrations, as per *PFCClockClients
+* Module initialisation entry
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *clock_Init(void)
+{
+  return NULL;
+}
+
+/*****************************************************************************
+* clock_Final
+*
+* Module finalisation (or initialisation failure) entry
 *
 * Assumptions
 *  NONE
@@ -79,8 +111,149 @@
 * Returns
 *  NOTHING
 *****************************************************************************/
-void clock_ListClients(void)
+void clock_Final(void)
 {
+}
+
+/*****************************************************************************
+* clock_ListClients
+*
+* Enumerates all registrations, as per *PFCClockClients
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  verbose: whether to print verbose information
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *clock_ListClients(bool verbose)
+{
+  _kernel_oserror *e;
+  const char *string;
+  size_t len;
+  if (global_ClockMax == 0)
+  {
+    e = mess_LookUpDirect("PC00", &string, &len);
+    if (!e)
+    {
+      printf("%.*s\n", len, string);
+    }
+    return e;
+  }
+  
+  /* We're going to be printing things, so might get pre-empted, so to walk */
+  /* the decoder lists, we need a block of memory that doesn't get paged */
+  /* out, yet still has local scope - we're going to have to malloc it. */
+  llist_step_t *step = malloc(sizeof(llist_step_t));
+  if (step == 0)
+  {
+    return mess_MakeError(prism_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+  e = mess_LookUpDirect("PC01", &string, &len);
+  if (!e)
+  {
+    printf("%.*s\n", len, string);
+    for (uint32_t i = 0; i < 9; i++)
+    {
+      printf("========");
+    }
+    printf("=======\n");
+    for (size_t clock_index = 1; !e && clock_index <= global_ClockMax; clock_index++)
+    {
+      clock_t *clock = global_ClockArray[clock_index];
+      /* First line is always about the unwrapper */
+      e = mess_LookUpDirect(clock->session_active ? (clock->pcr_seen ?
+                            "PCS3" : "PCS2") : "PCS1",
+                            &string, &len);
+      if (e) break;
+      printf("&%08X &%08X &%08X %-6.*s ",
+             *(uint32_t *) &(clock->clock_handle),
+             clock->unwrap_id,
+             *(uint32_t *) &(clock->unwrap_handle),
+             len,
+             string);
+      if (verbose)
+      {
+        printf("%.42s\n", ReturnInfoString(clock->unwrap_id, 0));
+        printf("                                     %.42s\n", ReturnInfoString(clock->unwrap_id, 2));
+        printf("                                     %.42s\n\n", ReturnInfoString(clock->unwrap_id, 4));
+      }
+      else
+      {
+        printf("%.42s\n", ReturnInfoString(clock->unwrap_id, 5));
+      }
+      /* Subsequent lines are about the decoders */
+      llist_StartWalk(step, &clock->decoder_list, false);
+      while (!e && step->data != NULL)
+      {
+        decoder_t *decoder = (decoder_t *) step->data;
+        e = mess_LookUpDirect(decoder->session_active ? (decoder->sync_master ?
+                              "PCS3" : "PCS2") : "PCS1",
+                              &string, &len);
+        if (e) break;
+        printf("          &%08X &%08X %-6.*s ",
+               decoder->decoder_id,
+               *(uint32_t *) &(decoder->decoder_handle),
+               len,
+               string);
+        if (verbose)
+        {
+          printf("%.42s\n", ReturnInfoString(decoder->decoder_id, 0));
+          printf("                                     %.42s\n", ReturnInfoString(decoder->decoder_id, 2));
+          printf("                                     %.42s\n\n", ReturnInfoString(decoder->decoder_id, 4));
+        }
+        else
+        {
+          printf("%.42s\n", ReturnInfoString(decoder->decoder_id, 5));
+        }
+        llist_NextStep(step, false);
+      }
+    }
+  }
+  free(step);
+  return e;
+}
+
+/*****************************************************************************
+* ReturnInfoString
+*
+* Veneer to ComponentInfo that can also return an error string
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  id:  PRISM ID of component to enquire about
+*  tag: information tag to request
+*
+* Outputs
+*  NOTHING
+*
+* Returns
+*  either the string associated with the tag, or the error string
+*****************************************************************************/
+static const char *ReturnInfoString(prism_id_t id, uint32_t tag)
+{
+  const char *string;
+  _kernel_oserror *e = _swix(PRISM_ComponentInfo, _INR(0,2)|_OUT(2),
+                             0,
+                             id,
+                             tag,
+                             &string);
+  if (e == NULL)
+  {
+    return string;
+  }
+  else
+  {
+    return e->errmess;
+  }
 }
 
 /*****************************************************************************
@@ -100,9 +273,86 @@ void clock_ListClients(void)
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *clock_Register(uint32_t flags, prism_id_t unwrap_id, stream_handle_t unwrap_handle, uint32_t *r_flags, stream_handle_t *r_clock_handle, void (**r_function_table)(void))
+_kernel_oserror *clock_Register(uint32_t flags, prism_id_t unwrap_id, stream_handle_t unwrap_handle,
+                                uint32_t *restrict r_flags, stream_handle_t *restrict r_clock_handle, const prism_function_table_unwrap_to_clock_t **restrict r_function_table)
 {
-  return NULL;
+  _kernel_oserror *e;
+  clock_t *clock = malloc(sizeof(clock_t));
+  uint32_t local_handle;
+  
+  if (clock == NULL)
+  {
+    return mess_MakeError(prism_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+  e = _swix(PRISM_AllocateHandle, _INR(0,4)|_OUTR(1,3),
+            0,
+            PFCClock_PRISMID,
+            global_ClockArray,
+            clock,
+            0,
+            &local_handle,
+            &global_ClockArray,
+            &global_ClockMax);
+  if (!e)
+  {
+    clock->clock_handle.client_handle = unwrap_handle.client_handle;
+    clock->clock_handle.local_handle = local_handle;
+    clock->sync_to_stream = flags & 1;
+    clock->jitter_buffer = flags & 2;
+    clock->session_active = clock->pcr_seen = false;
+    clock->unwrap_id = unwrap_id;
+    clock->unwrap_handle = unwrap_handle;
+    e = _swix(OS_ReadUnsigned, _INR(0,1)|_OUT(2),
+              0,
+              getenv("PRISM$JitterBuffer"),
+              &clock->jitter_buffer_size);
+    if (e)
+    {
+      clock->jitter_buffer_size = DEFAULT_JITTER_BUFFER_SIZE;
+    }
+    e = _swix(OS_ReadUnsigned, _INR(0,1)|_OUT(2),
+              0,
+              getenv("PRISM$MinDecoderBuffer"),
+              &clock->default_min_decoder_buffer);
+    if (e)
+    {
+      clock->default_min_decoder_buffer = DEFAULT_DECODER_BUFFER_SIZE;
+    }
+    clock->total_fasts = clock->session_fasts = clock->total_slows = clock->session_slows = 0;
+    clock->current_STC_speed = clock->current_NPT_wrt_STC = clock->pending_STC_speed = clock->next_STC_speed = 0x10000;
+    llist_Create(&clock->decoder_list, sizeof(decoder_t), malloc, free, decoder_LinkFreed, 4);
+    
+    *r_flags = 0;
+    *r_clock_handle = clock->clock_handle;
+    static bool my_table_initialised = false;
+    static prism_function_table_unwrap_to_clock_t my_table;
+    if (!my_table_initialised++)
+    {
+//      my_table =
+//      {
+//        global_Veneers->clock_Deregister,
+//        global_Veneers->clock_BeginSession,
+//        global_Veneers->clock_EndSession,
+//        global_Veneers->clock_StreamInfo,
+//        global_Veneers->clock_SpeedChange,
+//        global_Veneers->clock_PCRNotify,
+//        global_Veneers->clock_NPTMapping,
+//        global_Veneers->clock_FreezeClock
+//      };
+      my_table.Deregister = global_Veneers->clock_Deregister;
+      my_table.BeginSession = global_Veneers->clock_BeginSession;
+      my_table.EndSession = global_Veneers->clock_EndSession;
+      my_table.StreamInfo = global_Veneers->clock_StreamInfo;
+      my_table.SpeedChange = global_Veneers->clock_SpeedChange;
+      my_table.PCRNotify = global_Veneers->clock_PCRNotify;
+      my_table.NPTMapping = global_Veneers->clock_NPTMapping;
+      my_table.FreezeClock = global_Veneers->clock_FreezeClock;
+    }
+    *r_function_table = &my_table;
+    return NULL;
+  }
+  free(clock);
+  return e;
 }
 
 /*****************************************************************************
@@ -124,7 +374,27 @@ _kernel_oserror *clock_Register(uint32_t flags, prism_id_t unwrap_id, stream_han
 *****************************************************************************/
 _kernel_oserror *clock_Deregister(uint32_t flags, stream_handle_t clock_handle)
 {
-  return NULL;
+  _kernel_oserror *e;
+  clock_t *clock = NULL;
+  
+  IGNORE(flags);
+  if (clock_handle.local_handle <= global_ClockMax) /* check sane (else error is generated by ForgetHandle below) */
+  {
+    clock = global_ClockArray[clock_handle.local_handle];
+  }
+  e = _swix(PRISM_ForgetHandle, _INR(0,3)|_OUTR(2,3),
+            0,
+            PFCClock_PRISMID,
+            global_ClockArray,
+            clock_handle.local_handle,
+            &global_ClockArray,
+            &global_ClockMax);
+  if (!e)
+  {
+    llist_Destroy(&clock->decoder_list);
+    free(clock);
+  }
+  return e;
 }
 
 /*****************************************************************************
@@ -146,6 +416,18 @@ _kernel_oserror *clock_Deregister(uint32_t flags, stream_handle_t clock_handle)
 *****************************************************************************/
 _kernel_oserror *clock_BeginSession(uint32_t flags, stream_handle_t clock_handle)
 {
+  IGNORE(flags);
+  
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "BeginSession");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  
+  clock->session_active = true;
+  clock->session_fasts = clock->session_slows = 0;
+  
   return NULL;
 }
 
@@ -168,6 +450,27 @@ _kernel_oserror *clock_BeginSession(uint32_t flags, stream_handle_t clock_handle
 *****************************************************************************/
 _kernel_oserror *clock_EndSession(uint32_t flags, stream_handle_t clock_handle)
 {
+  IGNORE(flags);
+  
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "EndSession");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  
+  clock->session_active = false;
+  clock->pcr_seen = false;
+  
+  llist_step_t step;
+  llist_StartWalk(&step, &clock->decoder_list, false);
+  while (step.data != NULL)
+  {
+    decoder_t *decoder = (decoder_t *) step.data;
+    decoder->session_active = false;
+    decoder->sync_master = false;
+  }
+  
   return NULL;
 }
 

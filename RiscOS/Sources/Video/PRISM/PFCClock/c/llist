@@ -70,6 +70,8 @@ typedef struct
 {
   struct link *head;
   struct link *tail;
+  struct step *next_list; /* list of steps for whom there is no next link */
+  struct step *prev_list;
   size_t data_size;
   void *(*malloc)(size_t);
   void (*free)(void *);
@@ -77,14 +79,14 @@ typedef struct
   size_t cluster_size;
   unused_t *unused_list;
   cluster_t *cluster_list;
-} int_head_t;
+} int_list_t;
 
 typedef struct link
 {
-  int_head_t *head;
+  int_list_t *list;
   struct link *next;
   struct link *prev;
-  struct step *next_list;
+  struct step *next_list; /* list of steps for whom we are the next link */
   struct step *prev_list;
   uint32_t usage; /* top bit set => linked */
 } link_t;
@@ -117,9 +119,9 @@ __swi(OS_IntOff) void inline_OS_IntOff(void);
 static void HookStep(int_step_t *s, link_t *link);
 static void UnhookStep(int_step_t *s);
 #ifdef LLIST_CLUSTER
-static link_t *GetLink(int_head_t *list);
+static link_t *GetLink(int_list_t *list);
 #endif
-static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *next);
+static void InitLink(link_t *current, int_list_t *list, link_t *prev, link_t *next);
 
 
 /*****************************************************************************
@@ -129,7 +131,7 @@ static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *ne
 /*****************************************************************************
 * llist_Create
 *
-* Creates a llist_head_t struct
+* Creates a llist_list_t struct
 *
 * Assumptions
 *  NONE
@@ -144,14 +146,14 @@ static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *ne
 *  cluster_size: number of links to allocate together (ignored unless LLIST_CLUSTER is defined)
 *
 * Outputs
-*  head:         filled in appropriately
+*  list:         filled in appropriately
 *
 * Returns
 *  NOTHING
 *****************************************************************************/
-void llist_Create(llist_head_t *list, size_t data_size, void *(*malloc)(size_t), void (*free)(void *), void (*atremoval)(void *), size_t cluster_size)
+void llist_Create(llist_list_t *list, size_t data_size, void *(*malloc)(size_t), void (*free)(void *), void (*atremoval)(void *), size_t cluster_size)
 {
-  int_head_t *l = (int_head_t *) list;
+  int_list_t *l = (int_list_t *) list;
   l->data_size = data_size;
   l->malloc = malloc;
   l->free = free;
@@ -159,6 +161,8 @@ void llist_Create(llist_head_t *list, size_t data_size, void *(*malloc)(size_t),
   l->cluster_size = cluster_size;
   l->head = NULL;
   l->tail = NULL;
+  l->next_list = NULL;
+  l->prev_list = NULL;
   l->unused_list = NULL;
   l->cluster_list = NULL;
 }
@@ -166,11 +170,11 @@ void llist_Create(llist_head_t *list, size_t data_size, void *(*malloc)(size_t),
 /*****************************************************************************
 * llist_Destroy
 *
-* Finishes with a llist_head_t struct
+* Finishes with a llist_list_t struct
 *
 * Assumptions
 *  No walks remain that are using the list
-*  (because the llist_head_t struct needs to be referenced when freeing links)
+*  (because the llist_list_t struct needs to be referenced when freeing links)
 *
 * Inputs
 *  list: the head of the list to free
@@ -181,9 +185,9 @@ void llist_Create(llist_head_t *list, size_t data_size, void *(*malloc)(size_t),
 * Returns
 *  NOTHING
 *****************************************************************************/
-void llist_Destroy(llist_head_t *list)
+void llist_Destroy(llist_list_t *list)
 {
-  int_head_t *l = (int_head_t *) list;
+  int_list_t *l = (int_list_t *) list;
   /* First delink anything left on the list */
   llist_step_t step;
   llist_StartWalk(&step, list, false);
@@ -227,11 +231,11 @@ void llist_Destroy(llist_head_t *list)
 * Returns
 *  NOTHING
 *****************************************************************************/
-void llist_StartWalk(llist_step_t *step, llist_head_t *list, bool backwards)
+void llist_StartWalk(llist_step_t *step, llist_list_t *list, bool backwards)
 {
   bool irqs_were_off = _kernel_irqs_disabled();
   int_step_t *s = (int_step_t *) step;
-  int_head_t *l = (int_head_t *) list;
+  int_list_t *l = (int_list_t *) list;
   link_t *newlink;
   if (!irqs_were_off) INT_OFF
 #ifdef LLIST_DOUBLE
@@ -246,6 +250,42 @@ void llist_StartWalk(llist_step_t *step, llist_head_t *list, bool backwards)
   else
   {
     HookStep(s, newlink);
+  }
+  if (!irqs_were_off) INT_ON
+}
+
+/*****************************************************************************
+* llist_StartWalkAt
+*
+* Starts a walk along a list at a known link
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  list:     the list head of the list to walk
+*  position: pointer to the data field of the link we want to start at
+*
+* Outputs
+*  step:     filled in appropriately; step.data = NULL if the link isn't on the list
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void llist_StartWalkAt(llist_step_t *step, llist_list_t *list, void *position)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  int_step_t *s = (int_step_t *) step;
+  int_list_t *l = (int_list_t *) list;
+  link_t *link = (link_t *) position - 1;
+  if (!irqs_were_off) INT_OFF
+  if (link->list != l || (link->usage & 0x80000000) == 0)
+  {
+    s->data = NULL;
+  }
+  else
+  {
+    HookStep(s, link);
   }
   if (!irqs_were_off) INT_ON
 }
@@ -343,13 +383,24 @@ void llist_AbortWalk(llist_step_t *step)
 *****************************************************************************/
 static void HookStep(int_step_t *s, link_t *link)
 {
-  if ((s->next = link->next) != NULL)
+  s->data = link + 1;
+  if ((s->next = link->next) == NULL)
+  {
+    s->next_link = link->list->next_list;
+    link->list->next_list = s;
+  }
+  else
   {
     s->next_link = s->next->next_list;
     s->next->next_list = s;
   }
 #ifdef LLIST_DOUBLE
-  if ((s->prev = link->prev) != NULL)
+  if ((s->prev = link->prev) == NULL)
+  {
+    s->prev_link = link->list->prev_list;
+    link->list->prev_list = s;
+  }
+  else
   {
     s->prev_link = s->prev->prev_list;
     s->prev->prev_list = s;
@@ -379,9 +430,27 @@ static void HookStep(int_step_t *s, link_t *link)
 *****************************************************************************/
 static void UnhookStep(int_step_t *s)
 {
-  if (s->next != NULL)
+  link_t *link = ((link_t *) s->data) - 1;
+  int_step_t *p;
+  if (s->next == NULL)
   {
-    int_step_t *p = s->next->next_list;
+    p = link->list->next_list;
+    if (p == s)
+    {
+      link->list->next_list = s->next_link;
+    }
+    else
+    {
+      while (p->next_link != s)
+      {
+        p = p->next_link;
+      }
+      p->next_link = s->next_link;
+    }
+  }
+  else
+  {
+    p = s->next->next_list;
     if (p == s)
     {
       s->next->next_list = s->next_link;
@@ -396,9 +465,25 @@ static void UnhookStep(int_step_t *s)
     }
   }
 #ifdef LLIST_DOUBLE
-  if (s->prev != NULL)
+  if (s->prev == NULL)
   {
-    int_step_t *p = s->prev->prev_list;
+    p = link->list->prev_list;
+    if (p == s)
+    {
+      link->list->prev_list = s->prev_link;
+    }
+    else
+    {
+      while (p->prev_link != s)
+      {
+        p = p->prev_link;
+      }
+      p->prev_link = s->prev_link;
+    }
+  }
+  else
+  {
+    p = s->prev->prev_list;
     if (p == s)
     {
       s->prev->prev_list = s->prev_link;
@@ -413,27 +498,24 @@ static void UnhookStep(int_step_t *s)
     }
   }
 #endif
+  link->usage--;
+  if (link->usage == 0)
   {
-    link_t *link = ((link_t *) s->data) - 1;
-    link->usage--;
-    if (link->usage == 0)
+    if (link->list->atremoval != NULL)
     {
-      if (link->head->atremoval != NULL)
-      {
-        link->head->atremoval(s->data);
-      }
-#ifdef LLIST_CLUSTER
-      {
-        unused_t *unused = (unused_t *) link;
-        unused_t **unused_list = &link->head->unused_list;
-        unused->nlinks = 1;
-        unused->next = *unused_list;
-        *unused_list = unused;
-      }
-#else
-      link->head->free(link);
-#endif
+      link->list->atremoval(s->data);
     }
+#ifdef LLIST_CLUSTER
+    {
+      unused_t *unused = (unused_t *) link;
+      unused_t **unused_list = &link->list->unused_list;
+      unused->nlinks = 1;
+      unused->next = *unused_list;
+      *unused_list = unused;
+    }
+#else
+    link->list->free(link);
+#endif
   }
 }
 
@@ -456,10 +538,10 @@ static void UnhookStep(int_step_t *s)
 * Returns
 *  true if successful
 *****************************************************************************/
-bool llist_AddAtLimit(llist_head_t *list, bool backwards, const void *data)
+bool llist_AddAtLimit(llist_list_t *list, bool backwards, const void *data)
 {
   bool irqs_were_off = _kernel_irqs_disabled();
-  int_head_t *l = (int_head_t *) list;
+  int_list_t *l = (int_list_t *) list;
 #ifdef LLIST_CLUSTER
   link_t *link = GetLink(l);
 #else
@@ -514,7 +596,7 @@ bool llist_AddAdjacent(llist_step_t *step, bool backwards, const void *data)
   int_step_t *s = (int_step_t *) step;
   link_t *current = ((link_t *) step->data) - 1;
   link_t *link;
-  int_head_t *l = (((link_t *) step->data) - 1)->head;
+  int_list_t *l = (((link_t *) step->data) - 1)->list;
 #ifdef LLIST_CLUSTER
   link = GetLink(l);
 #else
@@ -584,6 +666,57 @@ bool llist_AddAdjacent(llist_step_t *step, bool backwards, const void *data)
   return true;
 }
 
+/*****************************************************************************
+* llist_AddSorted
+*
+* Creates a new link in a sorted list
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  list:      the list to add the link to
+*  data:      pointer to data to be copied into the new link's data field
+*  later:     pointer to a function that returns true when the first argument
+*             should be placed later in the list than the second argument
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  true if successful
+*****************************************************************************/
+bool llist_AddSorted(llist_list_t *list, const void *data, bool (*later)(const void *, const void *))
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  int_list_t *l = (int_list_t *) list;
+#ifdef LLIST_CLUSTER
+  link_t *link = GetLink(l);
+#else
+  link_t *link = l->malloc(sizeof(link_t) + l->data_size);
+#endif
+  if (link == NULL)
+  {
+    return false;
+  }
+  memcpy(link + 1, data, l->data_size);
+  if (!irqs_were_off) INT_OFF
+  link_t *prev = NULL;
+  link_t *next = l->head;
+  while (true)
+  {
+    if (next == NULL || later(next + 1, data))
+    {
+      InitLink(link, l, prev, next);
+      break;
+    }
+    prev = next;
+    next = next->next;
+  }
+  if (!irqs_were_off) INT_ON
+  return true;
+}
+
 #ifdef LLIST_CLUSTER
 /*****************************************************************************
 * GetLink
@@ -603,7 +736,7 @@ bool llist_AddAdjacent(llist_step_t *step, bool backwards, const void *data)
 * Returns
 *  pointer to new link struct, or NULL if cluster alloc failed
 *****************************************************************************/
-static link_t *GetLink(int_head_t *list)
+static link_t *GetLink(int_list_t *list)
 {
   bool irqs_were_off = _kernel_irqs_disabled();
   if (!irqs_were_off) INT_OFF
@@ -664,12 +797,28 @@ static link_t *GetLink(int_head_t *list)
 * Returns
 *  NOTHING
 *****************************************************************************/
-static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *next)
+static void InitLink(link_t *current, int_list_t *list, link_t *prev, link_t *next)
 {
-  current->head = list;
+  struct step *s;
+  
+  current->list = list;
   
   current->next = next;
 #ifdef LLIST_DOUBLE
+  if (prev == NULL)
+  {
+    current->prev_list = list->prev_list;
+    list->prev_list = NULL;
+  }
+  else
+  {
+    current->prev_list = prev->prev_list;
+    prev->prev_list = NULL;
+  }
+  for (s = current->prev_list; s != NULL; s = s->prev_link)
+  {
+    s->prev = current;
+  }
   if (next == NULL)
   {
     list->tail = current;
@@ -681,6 +830,20 @@ static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *ne
   
   current->prev = prev;
 #endif
+  if (next == NULL)
+  {
+    current->next_list = list->next_list;
+    list->next_list = NULL;
+  }
+  else
+  {
+    current->next_list = next->next_list;
+    next->next_list = NULL;
+  }
+  for (s = current->next_list; s != NULL; s = s->next_link)
+  {
+    s->next = current;
+  }
   if (prev == NULL)
   {
     list->head = current;
@@ -690,10 +853,6 @@ static void InitLink(link_t *current, int_head_t *list, link_t *prev, link_t *ne
     prev->next = current;
   }
   
-  current->next_list = NULL;
-#ifdef LLIST_DOUBLE
-  current->prev_list = NULL;
-#endif
   current->usage = 0x80000000;
 }
 
@@ -727,7 +886,7 @@ void llist_Delink(llist_step_t *step)
 #ifdef LLIST_DOUBLE
     if (link->next == NULL)
     {
-      link->head->tail = link->prev;
+      link->list->tail = link->prev;
     }
     else
     {
@@ -735,20 +894,20 @@ void llist_Delink(llist_step_t *step)
     }
     if (link->prev == NULL)
     {
-      link->head->head = link->next;
+      link->list->head = link->next;
     }
     else
     {
       link->prev->next = link->next;
     }
 #else
-    if (link == link->head->head)
+    if (link == link->list->head)
     {
-      link->head->head = link->next;
+      link->list->head = link->next;
     }
     else
     {
-      link_t *prev = link->head->head;
+      link_t *prev = link->list->head;
       while (prev->next != link)
       {
         prev = prev->next;
