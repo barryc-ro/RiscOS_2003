@@ -88,6 +88,7 @@ o.close	    \
 o.args	    \
 o.getbytes  \
 o.putbytes  \
+o.xstr	    \
 o.usermode
 
 #
