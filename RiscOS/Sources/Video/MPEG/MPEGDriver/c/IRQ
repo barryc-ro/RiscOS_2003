@@ -140,6 +140,9 @@ Date		Who	Change
 			(this was due to considering the protected area rather than the active area);
 			now uses interpolation forms of chroma reconstruction where possible (ie where it
 			doesn't coincide with bugs in the STi3520L)
+16/06/2000	BJGA	Lipsync error now stored in Stream for access from *PacketInfo; does a pipeline
+			reset before every decode in trick-play mode for added stability
+20/06/2000	BJGA	Video PTSs now obtained from software PTS list, rather from broken hardware PES parser
 
 ***************************************************************************/
 
@@ -979,9 +982,9 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
           {
             /* Check PTS of display frame, to see if we need to set a pending skip or repeat */
             presentation_error old_presentation_error = Stream.video_presentation_error;
-            clk PTS_error = Clk_Subtract (Clk_ConvertSTCtoPCR (Stream.video.latched_STC), Stream.display_frames->PTS);
-            dprintf (("IRQ", "INT_VS: PTS_error = %c%08X\n", PTS_error.msb ? '1' : '0', PTS_error.lsw));
-            if (Clk_Greater (PTS_error, one_frame_time))
+            Stream.video_PTS_error = Clk_Subtract (Clk_ConvertSTCtoPCR (Stream.video.latched_STC), Stream.display_frames->PTS);
+            dprintf (("IRQ", "INT_VS: PTS_error = %c%08X\n", Stream.video_PTS_error.msb ? '1' : '0', Stream.video_PTS_error.lsw));
+            if (Clk_Greater (Stream.video_PTS_error, one_frame_time))
             {
               Stream.video_presentation_error = pe_presented_late;
               if (old_presentation_error == pe_presented_late && /* only skip if there's a reasonable amount of data to skip */ ((VID_VBL & 0x3FFF) > 10))
@@ -996,7 +999,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
             else
             {
               clk zero = { 0, 0 };
-              if (Clk_Less (Clk_Add (PTS_error, one_frame_time), zero))
+              if (Clk_Less (Clk_Add (Stream.video_PTS_error, one_frame_time), zero))
               {
                 Stream.video_presentation_error = pe_presented_early;
                 if (old_presentation_error == pe_presented_early)
@@ -1732,11 +1735,30 @@ static void static_ProcessVideoPictureHdr (void)
   /* Get the PTS for this frame, if any */
   if (Stream.current_picture_structure != ps_first_field_picture)
   {
-    READ_PES_TSx(Stream.decode_frames->PTS);
-    if (Stream.decode_frames->PTS.msb & PES_TSx_32_TSA)
+    unsigned int SCDcount;
+    signed int difference;
+    READ_VID_SCDcount(SCDcount);
+    SCDcount = (SCDcount << 1) & 0xFFFFFF; /* adjust for this being measured in half-words */
+    Stream.decode_frames->PTS_valid = false;
+    /* We're interested in the last entry in the list (if any) which has a count lower than the current one */
+    while (Stream.video_PTS_read_ptr != Stream.video_PTS_write_ptr)
     {
-      Stream.decode_frames->PTS_valid = true;
-      Stream.decode_frames->PTS.msb &= 1;
+      difference = Stream.video_PTS_queue[Stream.video_PTS_read_ptr].count - SCDcount; /* signed 24-bit number */
+      if ((difference & 0x800000) != 0) /* 24-bit sign comparison */
+      {
+        /* CDcount was lower than SCDcount, and is therefore a potential candidate for a match */
+        Stream.decode_frames->PTS_valid = true;
+        Stream.decode_frames->PTS = Stream.video_PTS_queue[Stream.video_PTS_read_ptr].PTS;
+        Stream.video_PTS_read_ptr = (Stream.video_PTS_read_ptr + 1) % PTS_LIST_SIZE;
+      }
+      else
+      {
+        /* Read pointer is now pointing at an entry for some future frame */
+        break;
+      }
+    }
+    if (Stream.decode_frames->PTS_valid)
+    {
       Stream.video.since_open.PTSs_out ++;
       Stream.video.since_reset.PTSs_out ++;
       dprintf (("IRQ", "ProcessVideoPictureHdr: New PTS received: %c%08X\n", Stream.decode_frames->PTS.msb ? '1' : '0', Stream.decode_frames->PTS.lsw));
@@ -2455,6 +2477,12 @@ static void static_WriteDecodeInstruction (bool FIS)
   }
   else
   {
+    if (Stream.rs_flags.trick_play_mode)
+    {
+      /* Make sure that the pipeline really is idle - seems to help enormously with trick play streams, */
+      /* but unfortunately severely hinders error recovery for non-trick play streams. No idea why.     */
+      STi3520L_PipelineReset ();
+    }
     VID_TIS = (Stream.decode_frames->seq.mpeg2 ? VID_TIS_MP2 : 0) | ((Stream.next_picture_structure != ps_frame_picture || FIS) ? 0 : VID_TIS_RPT) | (FIS ? VID_TIS_FIS : 0) | VID_TIS_EXE;
   }
   Stream.vid_flags.last_instruction_was_a_decode = true;

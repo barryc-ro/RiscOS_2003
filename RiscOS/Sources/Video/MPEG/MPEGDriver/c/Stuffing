@@ -33,6 +33,9 @@ Date		Who	Change
 			disabled while video is playing out; audio fasts/slows smoothed out to fill the time between
 			tests, rather than being compressed into a single-frame "warble"
 18/05/2000	BJGA	Issues UpCall_MPEG &1003 when the video speed indicator changes
+20/06/2000	BJGA	Reverted to the "backwards compatible" video PTS mechanism because the 3520's video PES parser
+			seems unable to reliably parse some of our MPEG streams (generally those where pictures aren't
+			aligned with PES packets) - this consists of maintaining a PTS/byte-index list in software
 
 ***************************************************************************/
 
@@ -114,9 +117,7 @@ static void static_InsertPESHeader (a_v_state_t *av, bitstream_packet_t *private
 
 static bool video_callback_requested = false;
 static bool audio_callback_requested = false;
-static PES_header_t video_PES_header;
 static PES_header_t audio_PES_header;
-static bitstream_packet_t video_PES_header_packet = { NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, 0, 0, 0, 1 };
 static bitstream_packet_t audio_PES_header_packet = { NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, 0, 0, 0, 1 };
 
 /*********************/
@@ -197,14 +198,24 @@ void Stuffing_VideoCallback (void)
             WRITE_VID_VBT(prefill); /* may cause interrupts to go off */
           }
         }
+        /* Pretend that we're sending a new PES packet */
+        /* (The crappy PES parser in the 3520 can't cope with all streams!) */
+        Stream.video.since_open.PES_packets_sent ++;
+        Stream.video.since_reset.PES_packets_sent ++;
         if (Stream.video.packet_list_head->PTS_valid)
         {
-          dprintf (("Stuffing", "Inserting video PTS %c%08X\n",
-              Stream.video.packet_list_head->PTS.msb ? '1' : '0', Stream.video.packet_list_head->PTS.lsw));
+          unsigned int next_write_ptr = (Stream.video_PTS_write_ptr + 1) % PTS_LIST_SIZE;
+          if (next_write_ptr != Stream.video_PTS_read_ptr) /* mustn't fill up completely, because that's indistinguishable from empty */
+          {
+            dprintf (("Stuffing", "Inserting video PTS %c%08X\n",
+                Stream.video.packet_list_head->PTS.msb ? '1' : '0', Stream.video.packet_list_head->PTS.lsw));
+            Stream.video.since_open.PTSs_in ++;
+            Stream.video.since_reset.PTSs_in ++;
+            READ_VID_CDcount(Stream.video_PTS_queue[Stream.video_PTS_write_ptr].count); /* already only 24 bits */
+            Stream.video_PTS_queue[Stream.video_PTS_write_ptr].PTS = Stream.video.packet_list_head->PTS;
+            Stream.video_PTS_write_ptr = next_write_ptr;
+          }
         }
-        /* Insert PES header into bitstream packet list */
-        video_PES_header_packet.start = (unsigned char *) &video_PES_header;
-        static_InsertPESHeader (&Stream.video, &video_PES_header_packet, STREAM_ID_VIDEO);
       }
       
       bytes_to_send_this_time = MIN(space_in_bit_buffer, Stream.video.packet_list_head->length);

@@ -61,6 +61,8 @@ Date		Who	Change
 			implemented MPEGVideo_Stats; extra initialisation added to static_VideoStart()
 18/05/2000	BJGA	Issues UpCall_MPEG &1003 when the video speed indicator changes
 26/05/2000	BJGA	Implemented MPEGVideo_GetSprite; fixed an immediate access to a multi-cycle register
+13/06/2000	BJGA	Initialisations for *PacketInfo
+20/06/2000	BJGA	Initialisations for video PTS list; FullPackets now discards data until the first sequence header
 
 ***************************************************************************/
 
@@ -232,14 +234,52 @@ _kernel_oserror *Video_SWIFullPackets (unsigned int flags, stream_handle_t vsh, 
     {
       if (packets->mpeg_start == true)
       {
-        Stream.video.prefill_state = ps_initialising;
-        dprintf (("Video", "SWIFullPackets: video.prefill_state = initialising\n"));
+        Stream.video.prefill_state = ps_searching_for_first_sequence_header;
+        dprintf (("Video", "SWIFullPackets: video.prefill_state = searching for first sequence header\n"));
+        Stream.seqhdrsearch_stage = unlocked;
       }
       else
       {
         dprintf (("Video", "SWIFullPackets: discarding partial packet\n"));
         packets = MiscAsm_FreePacket (packets);
         /* Note that the rest of the function can cope fine if this sets |packets| to NULL */      
+      }
+    }
+    
+    /* I really despair of this MPEG chip. If there isn't a sequence header close to the beginning of    */
+    /* the stream it receives, it's liable to lock up with the bitbuffer full and the header fifo empty. */
+    /* Instead, we'll have to do the sequence header search ourselves, in software.                      */
+    while (Stream.video.prefill_state == ps_searching_for_first_sequence_header && packets != NULL)
+    {
+      while (Stream.seqhdrsearch_stage != b3 && packets->length > 0)
+      {
+        unsigned char byte = *packets->start;
+        packets->start ++;
+        packets->length --;
+        if (Stream.seqhdrsearch_stage == unlocked && byte == 0) Stream.seqhdrsearch_stage = first_zero;
+        else if ((Stream.seqhdrsearch_stage == first_zero || Stream.seqhdrsearch_stage == second_zero) && byte == 0) Stream.seqhdrsearch_stage = second_zero;
+        else if (Stream.seqhdrsearch_stage == second_zero && byte == 1) Stream.seqhdrsearch_stage = one;
+        else if (Stream.seqhdrsearch_stage == one && byte == 0xb3) Stream.seqhdrsearch_stage = b3;
+        else Stream.seqhdrsearch_stage = unlocked;
+      }
+      if (packets->length == 0)
+      {
+        packets = MiscAsm_FreePacket (packets);
+      }
+      if (Stream.seqhdrsearch_stage == b3)
+      {
+        /* We've found the sequence header */
+        /* To compensate for the fact that we've skipped the real sequence header start code, */
+        /* now insert a dedicated packet that contains only a sequence header start code      */
+        static bitstream_packet_t sequence_header_packet; /* initialises to zero */
+        static const unsigned char sequence_header_payload [4] = { 0, 0, 1, 0xb3 };
+        sequence_header_packet.start = sequence_header_payload;
+        sequence_header_packet.length = 4;
+        sequence_header_packet.link = Stream.video.packet_list_head;
+        Stream.video.packet_list_head = Stream.video.packet_list_tail = &sequence_header_packet;
+        /* Update state machine */
+        Stream.video.prefill_state = ps_initialising;
+        dprintf (("Video", "SWIFullPackets: video.prefill_state = initialising\n"));
       }
     }
     
@@ -1075,7 +1115,11 @@ static _kernel_oserror *static_VideoStart (void)
       break;
   }
   Stream.next_B_frame_buffer = SDRAM_FRAME_BUFFER_4_START/256;
+  Stream.video_PTS_write_ptr = 0;
+  Stream.video_PTS_read_ptr = 0;
   Stream.video_presentation_error = pe_acceptable; /* don't do lipsync until we've found two consecutive errors */
+  Stream.video_PTS_error.msb = 0;
+  Stream.video_PTS_error.lsw = 0;
   Stream.protected_horizontal_size = Stream.protected_vertical_size = 0;
   Stream.protected_aspect_ratio = 0x10000;
   Stream.active_area_is_at_top = false;
@@ -1087,7 +1131,7 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.old_active_aspect_ratio = 0x10000;
   Stream.old_displayed_active_centre_x = Stream.old_displayed_active_centre_y = 0;
   Stream.old_displayed_active_width = Stream.old_displayed_active_height = 0;
-  WRITE_VID_VBT(0);
+  WRITE_VID_VBT(0x3FFF);
   if (!Stream.rs_flags.audio_present) Stream.aud_flags.first_header_received = false; /* don't offer audio headers in *VideoInfo */
   
   /* Claim interrupts */
