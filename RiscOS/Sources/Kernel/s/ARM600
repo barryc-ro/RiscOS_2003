@@ -180,9 +180,10 @@ SixteenMByte            EQU     (1024*1024 * 16)
 
 ; **************************************************************************************
 ;
-;       BangCamUpdate - Update CAM entry and soft copy
+;       BangCamUpdate - Update CAM, MMU for page move, coping with page currently mapped in
 ;
-; This part of the routine has to do more work on ARM600
+; mjs Oct 2000
+; reworked to use generic ARM ops (vectored to appropriate routines during boot)
 ;
 ; First look in the CamEntries table to find the logical address L this physical page is
 ; currently allocated to. Then check in the Level 2 page tables to see if page L is currently
@@ -249,12 +250,10 @@ BangCamUpdate ROUT
 
 ; **************************************************************************************
 ;
-;       BangCam - Update CAM entry, but not soft copy
+;       BangCam - Update CAM, MMU for page move, assuming page currently mapped out
 ;
 ; This routine maps a physical page to a given logical address
-; For ARM600, I assume that the physical page was previously not mapped
-; anywhere else - on MEMC1 it would automatically unmap any logical
-; address that the physical page was previously at, but on ARM600 it won't
+; It is assumed that the physical page is currently not mapped anywhere else
 ;
 ; in:   r2 = physical page number
 ;       r3 = logical address (2nd copy if doubly mapped)
@@ -269,17 +268,6 @@ BangCamUpdate ROUT
 ; NB Also - the physical page number MUST be in range.
 
 ; This routine must work in 32-bit mode
-
-        GBLL    UsePPLCBBits
-UsePPLCBBits    SETL    {TRUE}
-
-;if we can assume no code above 64Mb (ie. 26bit code space), big optimise for StrongARM
-        GBLL    AssumeNoCodeAbove64Mb
-AssumeNoCodeAbove64Mb  SETL    No32bitCode
-
-;if we just use sledgehammer approach anyway
-        GBLL    AlwaysSledgehammer
-AlwaysSledgehammer SETL {FALSE}
 
 BangCam ROUT
         TST     r11, #DynAreaFlags_DoublyMapped ; if area doubly mapped
@@ -298,16 +286,18 @@ BangCamAltEntry
         ADR     r1, PPLTrans
         AND     r4, r11, #3             ; first use PPL bits
         LDR     r1, [r1, r4, LSL #2]    ; get PPL bits and SmallPage indicator
- [ UsePPLCBBits
+
         TST     r11, #DynAreaFlags_NotCacheable
         TSTEQ   r11, #PageFlags_TempUncacheableBits
         ORREQ   r1, r1, #L2_C           ; if cacheable (area bit CLEAR + temp count zero), then OR in C bit
         TST     r11, #DynAreaFlags_NotBufferable
         ORREQ   r1, r1, #L2_B           ; if bufferable (area bit CLEAR), then OR in B bit
- ]
+
         ORR     r0, r0, r1
 
         LDR     r1, =L2PT               ; point to level 2 page tables
+
+        ;fall through to BangL2PT
 
 ;internal entry point for updating L2PT entry
 ;
@@ -316,188 +306,46 @@ BangCamAltEntry
 ; exit: r0,r1,r4,r6 corrupted
 ;
 BangL2PT                                        ; internal entry point used only by BangCamUpdate
-  [ AlwaysSledgehammer
-        B       BangL2PT_sledgehammer
-  |
+        Push    "lr"
+        MOV     r6, r0
+
         TST     r11, #DynAreaFlags_DoublyMapped
         BNE     BangL2PT_sledgehammer           ;if doubly mapped, don't try to be clever
-  ]
-  [ ARM810support
-    ;if we are mapping out a cacheable page on an ARM810, must clean+flush cache _before_
-    ;remapping, since ARM810 relies on virtual addresses for writebacks
-        ARM_read_ID r4
-        AND     r4,r4,#&F000                    ;ARM ID nibble now in r4
-        CMP     r0,#0                           ;EQ if map out
-        TSTEQ   r11,#DynAreaFlags_NotCacheable  ;EQ if also cacheable
-        CMPEQ   r4,#&8000                       ;EQ if also ARM 8
-        BNE     BangL2PT_noARM810flush
-    [ ARM810cleanflushbroken
-        ARM8_cleanflush_IDC r6,r4
-        MOV     r4,#&8000
-    |
-        ARM8_cleanflush_IDC r6
-    ]
-BangL2PT_noARM810flush
-  ]
-        STR     r0, [r1, r3, LSR #10]           ;update L2PT
-  [ :LNOT: ARM810support
-        ARM_read_ID r4
-        AND     r4,r4,#&F000                    ;ARM ID nibble in r4
-  ]
-        CMP     r0,#0
-        BEQ     BangL2PT_mapout                 ;the update is a map out => cache(s) may need clean/flush
-;else update is a map in (and nothing should be there at the moment) => no cache worries
-        CMP     r4,#&A000
-        BEQ     BangL2PT_mapin_StrongARM
 
-        MOV     r0, r3
-        Push    "r2,r3,lr"
-        ARMop   TLB_InvalidateEntry             ;invalidate TLB entry for this page
-        Pull    "r2,r3,pc"
+        ;we sort out cache coherency _before_ remapping, because some ARMs might insist on
+        ;that order (write back cache doing write backs to logical addresses)
+        ;we need to worry about cache only if mapping out a cacheable page
+        ;
+        TEQ     r6, #0                          ;EQ if mapping out
+        TSTEQ   r11, #DynAreaFlags_NotCacheable ;EQ if also cacheable
+        MOV     r0, r3                          ;MMU page entry address
+        ADR     lr, %FT20
+        MOV     r4, #0
+        ARMop   MMU_ChangingEntry, EQ, tailcall, r4
+        ARMop   MMU_ChangingUncachedEntry, NE, tailcall, r4
 
-BangL2PT_mapin_StrongARM
-        ARMA_drain_WB                           ;in case L2PT entry itself is in a bufferable area
-        ARMA_flush_DTLBentry r3                 ;flush data TLB entry for this page
-  [ AssumeNoCodeAbove64Mb
-        CMP     r3,#64*1024*1024                ;if logical address above 64Mb, assume no code (26 bit)
-        MOVHS   pc,lr
-  ]
-        ARMA_flush_ITLB                         ;but if there is code, we must flush instruction TLB
-        MOV     pc,lr
+20      STR     r6, [r1, r3, LSR #10]           ;update L2PT entry
 
-BangL2PT_mapout
-        CMP     r4,#&A000
-        BEQ     BangL2PT_mapout_StrongARM
-  [ ARM810support
-        CMP     r4,#&8000
-        ARM8_flush_TLBentry r3,EQ                 ;flush TLB entry for this page, ARM 8
-        MOVEQ   pc,lr                             ;ARM8 cache already flushed, if necessary
-  ]
-;else assume ARM 6,7
-        MOV     r0, r3
-        Push    "r2,r3,lr"
-        TST     r11,#DynAreaFlags_NotCacheable
-        ARMop   MMU_ChangingEntry, EQ             ;flush instruction/data cache if necessary
-        TST     r11,#DynAreaFlags_NotCacheable
-        ARMop   TLB_InvalidateEntry, NE           ;flush TLB entry for this page
-        Pull    "r2,r3,pc"
-
-BangL2PT_mapout_StrongARM
-        TST     r11,#DynAreaFlags_NotCacheable
-        BNE     BangL2PT_mapin_StrongARM        ;if NotCacheable, no flush needed (ie. same as mapin)
-;note that we are cleaning *after* remapping, so relying on StrongARM writebacks using physical address
-        MOV     r4,r3
-        ADD     r6,r3,#4*1024                   ;clean/flush data cache over 4k range of page
-
-  [ SAcleanflushbroken        ; ARMA_cleanflush_DCentry instruction seems to be ineffective
-01
-        ARMA_clean_DCentry r4
-        ARMA_flush_DCentry r4
-        ADD     r4,r4,#32
-        ARMA_clean_DCentry r4
-        ARMA_flush_DCentry r4
-        ADD     r4,r4,#32
-        ARMA_clean_DCentry r4
-        ARMA_flush_DCentry r4
-        ADD     r4,r4,#32
-        ARMA_clean_DCentry r4
-        ARMA_flush_DCentry r4
-        ADD     r4,r4,#32
-        CMP     r4,r6
-        BLO     %BT01
-  |
-01
-        ARMA_cleanflush_DCentry r4
-        ADD     r4,r4,#32
-        ARMA_cleanflush_DCentry r4
-        ADD     r4,r4,#32
-        ARMA_cleanflush_DCentry r4
-        ADD     r4,r4,#32
-        ARMA_cleanflush_DCentry r4
-        ADD     r4,r4,#32
-        CMP     r4,r6
-        BLO     %BT01
-  ]
-
-        ARMA_drain_WB
-        ARMA_flush_DTLBentry r3                 ;flush data TLB entry for this page
-  [ AssumeNoCodeAbove64Mb
-        CMP     r3,#64*1024*1024                ;if logical address above 64Mb, assume no code (26 bit)
-        MOVHS   pc,lr
-  ]
-        ARMA_flush_IC WithoutNOPs
-        MOV     r0,r0                           ;NOPs to ensure 4 instructions before return, after IC flush
-        MOV     r0,r0
-        ARMA_flush_ITLB
-        MOV     pc,lr
+        Pull    "pc"
 
 BangL2PT_sledgehammer
-  [ ARM810support
-        ;if necessary, clean+flush _before_ reamapping, since ARM810 writebacks use virtual addresses
-        ARM_read_ID r4
-        AND     r4,r4,#&F000
-        CMP     r4,#&8000
-        TSTEQ   r11,#DynAreaFlags_NotCacheable
-        BNE     BangL2PT_sledge_noARM810flush
-    [ ARM810cleanflushbroken
-        ARM8_cleanflush_IDC r4,r6
-    |
-        ARM8_cleanflush_IDC r4
-    ]
-BangL2PT_sledge_noARM810flush
-  ]
-        BICS    r4, r3, #(3 :SHL: 10)   ; ensure going to be on word boundary
- [ {FALSE}      ; this breaks too many things at the moment
-        BICEQ   r0, r0, #&30            ; if logical page zero, then make 1st 1K no user access
-        ORREQ   r0, r0, #&10
- ]
- [ :LNOT: UsePPLCBBits
-        LDR     r6, [r1, r4, LSR #10]   ; read current contents
-        AND     r6, r6, #L2_C :OR: L2_B ; preserve old CB bits (set up by soft loader)
-        ORR     r0, r0, r6              ; but OR in new address and PPL bits
- ]
-        STR     r0, [r1, r4, LSR #10]!  ; update level 2 page table (and update pointer so we can use bank-to-bank offset
+
+        ;sledgehammer is super cautious and does cache/TLB coherency on a global basis
+        ;should only be used for awkward cases                                       
+        ;
+        TEQ     r6, #0                          ;EQ if mapping out
+        TSTEQ   r11, #DynAreaFlags_NotCacheable ;EQ if also cacheable
+        ADR     lr, %FT30
+        MOV     r4, #0
+        ARMop   MMU_Changing, EQ, tailcall, r4
+        ARMop   MMU_ChangingUncached, NE, tailcall, r4
+
+30      STR     r6, [r1, r3, LSR #10]!          ; update level 2 page table (and update pointer so we can use bank-to-bank offset     
         TST     r11, #DynAreaFlags_DoublyMapped ; if area doubly mapped
-        STRNE   r0, [r1, r9, LSR #10]   ; then store entry for 2nd copy as well
-        ADDNE   r3, r3, r9              ; and point logical address back at 2nd copy
+        STRNE   r6, [r1, r9, LSR #10]           ; then store entry for 2nd copy as well
+        ADDNE   r3, r3, r9                      ; and point logical address back at 2nd copy
 
-        ARM_read_ID r4
-        AND     r4,r4,#&F000
-        CMP     r4,#&A000
-        BEQ     BangL2PT_sledgehammer_StrongARM
-  [ ARM810support
-        CMP     r4,#&8000
-        ARM8_flush_TLB EQ
-        MOVEQ   pc, lr      ;ARM8 cache already flushed if necessary
-  ]
-;else assume ARM 6,7
-        Push    "r2,r3,lr"
-        TST     r11,#DynAreaFlags_NotCacheable
-        ARMop   MMU_Changing, EQ             ;flush instruction/data cache+TLB if necessary
-        TST     r11,#DynAreaFlags_NotCacheable
-        ARMop   TLB_InvalidateAll, NE        ;flush TLB
-        Pull    "r2,r3,pc"
-BangL2PT_sledgehammer_StrongARM
-        TST     r11,#DynAreaFlags_NotCacheable
-        BNE     BangL2PT_sledgehammer_StrongARM_NotC
-
-        MOV     r4,#ARMA_Cleaner_flipflop
-        LDR     r0,[r4]                   ;last cleaner address
-        EOR     r0,r0,#16*1024            ;flip it (r0 -> cleaner address to use)
-        STR     r0,[r4]
-
-        ARMA_clean_DC r0,r4,r6            ;effectively, clean/flush DC fully with respect to non-interrupt stuff
-        ARMA_drain_WB
-        ARMA_flush_IC WithoutNOPs         ;do *not* flush DC - there may be some stuff from interrupt routines
-        MOV     r0,r0                     ;NOPs to ensure 4 instructions before return, after IC flush
-        MOV     r0,r0
-        ARMA_flush_TLBs
-        MOV     pc,lr
-
-BangL2PT_sledgehammer_StrongARM_NotC    ;no flush necessary if NotCacheable
-        ARMA_drain_WB
-        ARMA_flush_TLBs
-        MOV     pc,lr
+        Pull    "pc"
 
 
 PPLTrans
@@ -2526,9 +2374,10 @@ MMUControl_ModifyControl ROUT
         TST     lr, #MMUC_C             ; if cache turning on then flush cache before we do it
         BEQ     %FT10
 
-        Push    "r0-r3"
-        ARMop   Cache_InvalidateAll
-        Pull    "r0-r3"
+        Push    "r0"
+        MOV     r0, #0
+        ARMop   Cache_InvalidateAll,,,r0
+        Pull    "r0"
 10
   [ ARM810support
         CMP     r5,#8

@@ -1403,7 +1403,7 @@ AllocateBackingLevel2 Entry "r0-r8,r11"
         STR     lr, [r8, #8]                            ; store entry for 3rd MB
         ADD     lr, lr, #1024                           ; advance L2 pointer
         STR     lr, [r8, #12]                           ; store entry for 4th MB
-        ARM_flush_TLB r6                                ; junk TLB(s) (probably not needed)
+        ;;;ARM_flush_TLB r6                junk TLB(s) shouldn't be needed, would have to be ARMop now
 25
         ADD     r3, r3, #4096                           ; advance L2PT logical address
         ADD     r8, r8, #16                             ; move onto L1 for next 4M
@@ -2460,7 +2460,7 @@ DoTheGrowPagesSpecified
         ORR     lr, lr, #PageFlags_Required     ; set bit in flags to say page will be needed
         STR     lr, [r4, #4]                    ; and store back
 
-; work out physical address direct from physical page number, NOT from logical address, since log addr may be 01F08000 (multiply mapped)
+; work out physical address direct from physical page number, NOT from logical address, since log addr may be Nowhere (multiply mapped)
 
         MOV     r4, #PhysRamTable
 42
@@ -2481,30 +2481,6 @@ DoTheGrowPagesSpecified
         LDR     r3, NumEntries                  ; r3 = number of entries in page block
         MOV     r1, #Service_PagesUnsafe
         BL      Issue_Service
-
-  [ StrongARM
-    ;
-    ;Ahem! The data is moved to new pages by reading old pages via 'physical address' (flat copy of
-    ;      physical space at virtual addr. 2G). This means data read may not be up to date wrt data in
-    ;      StrongARM's write-back cache, and is a potential cache incoherency anyway (two virtual mappings
-    ;      to one physical).
-    ;      So, clean/flush StrongARM data cache wrt to pages first. Incidentally, since StrongARM does
-    ;      not support burst read LDMs from uncacheable areas, the read is going to be a little slow anyway).
-    ;
-    ;
-    ARM_number r0
-    CMP     r0,#&A
-    BLEQ    dtgps_SAcleanflush
-  ]
-
-  [ ARM810support
-    ;
-    ; ARM810 has writeback cache too
-    ;
-    ARM_number r0
-    CMP     r0,#8
-    BLEQ    dtgps_810cleanflush
-  ]
 
 ; now move the pages
 
@@ -2633,7 +2609,8 @@ DoTheGrowPagesSpecified
         MOV     r1, #Service_ClaimFIQ
         BL      Issue_Service
 
-        WritePSRc I_bit+SVC_mode, r6            ; disable IRQs round here
+        WritePSRc I_bit+SVC_mode, r6            ; disable IRQs round here (we don't want interrupt code to update
+                                                ; the old mapping behind us while we're trying to copy it)
 
         LDR     r6, [r8, #0]                    ; r6 = page number required
         LDR     lr, [r8, #PageBlockSize+0]      ; lr = page number of replacement page
@@ -2641,9 +2618,21 @@ DoTheGrowPagesSpecified
         Pull    "r0-r4,r7-r12", EQ              ; then restore registers
         BEQ     %FT76                           ; and skip copy and first page move
 
+        ;mjs
+        ; - if the old page is currently mapped in, copy normally
+        ; - if the old page is not mapped in, copy via temporary mapping
+        ; The old scheme, always copying from other mapping, had interrupt cache coherency hole, at least for
+        ; ARM with writeback cache (bug in 3.7, fixed in Ursula, then lost)
+ 
         LDR     r0, [r0, lr, LSL #3]            ; r0 = log. address for replacement page (NB use logical address to write to, for cache consistency)
- [ HAL
-        SUB     sp, sp, #4
+
+        LDR     r6, [r8, #4]                    ;logical address of src page
+        LDR     r3, =Nowhere
+        TEQ     r6, r3                          ;will be 'Nowhere' if not mapped in
+        BNE     %FT71
+
+        ASSERT  HAL
+        SUB     sp, sp, #4                      ; for oldp
         Push    "r0,r1"
         MOV     r0, #0
         LDR     r1, [r8, #8]                    ; r1 = physical address of src for copy
@@ -2651,20 +2640,21 @@ DoTheGrowPagesSpecified
         BL      RISCOS_AccessPhysicalAddress
         MOV     r6, r0                          ; r6 = logical address of src for copy
         Pull    "r0,r1"
- |
-        LDR     r6, [r8, #8]                    ; r6 = physical address of src for copy
-        ORR     r6, r6, #PhysSpace              ; must use physical address, as page may be mapped to 01F08000 along with others
- ]
+
+71
         ADD     lr, r6, r5                      ; lr = end src address
 72
         LDMIA   r6!, {r2, r3, r4, r7, r9, r10, r11, r12}
         STMIA   r0!, {r2, r3, r4, r7, r9, r10, r11, r12}
         TEQ     r6, lr
         BNE     %BT72
- [ HAL
-        Pull    "r0"
-        BL      RISCOS_ReleasePhysicalAddress
- ]
+
+        LDR     r0, [r8, #4]                    ;logical address of src page
+        LDR     r3, =Nowhere
+        TEQ     r0, r3
+
+        Pull    "r0", EQ                        ; oldp
+        BLEQ    RISCOS_ReleasePhysicalAddress
 
 ; now check if page we're replacing is in L2PT, and if so then adjust L1PT entries (4 of these)
 
