@@ -4,7 +4,7 @@
 # Paths
 #
 EXP_HDR = <export$dir>
-RESDIR  = <Resource$Dir>.Resources.Test
+RESDIR  = <Resource$Dir>.Resources2.Test
 #
 # Generic options:
 #
@@ -71,13 +71,6 @@ OBJS      = ${OM}.Main ${OM}.support
 all: ${TARGET}
         @echo ${COMPONENT}: all complete
 
-#Not really a ROM Build but its built in the ROM phase
-#to fit into a ROM build.  The application is copied to ResourceFS in the
-#install so that it can be included in the ROM.
-
-rom: ${TARGET}
-        @echo ${COMPONENT}: all complete
-
 clean:
         ${WIPE}	o.*		${WFLAGS}
         @echo ${COMPONENT}: cleaned
@@ -91,13 +84,8 @@ clean_all: clean
         ${STRIP}
 	@echo ${COMPONENT}: cleaned all
 
-install: ${TARGET}
-	${MKDIR} ${APP}
-	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
-	${CP} Resources.* ${APP}.* ${CPFLAGS}
-	${MKDIR} ${RESDIR}
-	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
-	@echo ${COMPONENT}: installed
+resources: ${TARGET}
+        @echo ${COMPONENT}: all complete
 
 dirs:
 	${MKDIR} o
@@ -108,7 +96,12 @@ dirs:
 #
 ${TARGET}: ${OBJS} dirs
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
-        @echo ${COMPONENT}: link stage complete
+	${MKDIR} ${APP}
+	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
+	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${MKDIR} ${RESDIR}
+	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
+	@echo ${COMPONENT}: built & installed
         
 
 # Dynamic dependencies:
