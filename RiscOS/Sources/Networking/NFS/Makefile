@@ -9,6 +9,7 @@
 # 09 Feb 96  DNW          Now make a 'h' file from the cmhg info
 #                         Makes decodeing the *cmd easier
 # 12-Mar-97  jmf	  Upgrade to Internet 5 libraries.
+# 11-Nov-98  SNB          Replaced NFSSTB entity (post Spinner merge) with dummy
 #
 
 #
@@ -30,11 +31,23 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 
+#
+# Uncomment this to add the access counting to the *NFSInfo output
+#
+#OPTIONS   = -DNETACCESSCOUNT
 
-AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -zM -wdp -ffcah -zps1 ${INCLUDES} -depend !Depend -Darm -DDEBUGON=$(DBUG) -DPACKETSIZE_COMMAND $(STB) $(COMPAT)
-CPCCFLAGS=-c -zM -pcc -ffa -zps1 ${INCLUDES} -DDEBUGON=$(DBUG) -DPACKETSIZE_COMMAND $(STB) $(COMPAT)
+COMPONENT = NFS
+CMHGNAME  = nfscmhg
 
+XCOMPONENT = NFSSTB
+
+DEPENDS = -depend !Depend ${THROWBACK}
+DEFINES = -DPACKETSIZE_COMMAND -DDEBUGON=$(DBUG) ${COMPAT} ${OPTIONS} -Darm
+
+AFLAGS = ${DEPENDS} -Stamp -quit
+CFLAGS  = -c -zM -wdp -ffcah -zps1 ${INCLUDES} ${DEPENDS} ${DEFINES}
+CPCCFLAGS=-c -zM -pcc -ffa -zps1 ${INCLUDES} ${DEPENDS} ${DEFINES}
+CMHGFLAGS = -p ${DEPENDS}
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -68,24 +81,15 @@ INCLUDES = -IC:,TCPIPLibs:
 # Debug flag
 #
 DBUG = 0
-#
-# Uncomment the following lines if we are building NFSSTB
-# rather than vanilla RISC OS NFS
-#
-STB       = -DNETACCESSCOUNT
-CMHGNAME  = nfsstbcmhg
-COMPONENT = NFSSTB
-#
-# and uncomment the following lines if we are building RISC OS NFS
-#CMHGNAME  = nfscmhg
-#COMPONENT = NFS
-#
+
 #
 # Program specific options:
 #
-TARGET    = rm.NFS
+TARGET    = rm.${COMPONENT}
+XTARGET   = rm.${XCOMPONENT}
 CMHGOBJ   = o.$(CMHGNAME)
-ROMTARGET = aof.NFS
+ROMTARGET = aof.${COMPONENT}
+
 OBJS      =	  \
   $(CMHGOBJ)   	  \
   o.ModuleWrap    \
@@ -129,7 +133,7 @@ OBJS      =	  \
 #
 #  .SUFFIXES:  .o .s .c .h .cmhg
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -154,6 +158,7 @@ install_rom: ${ROMTARGET}
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} ${XTARGET}
         ${RM} ${ROMTARGET}
         ${RM} linked.${COMPONENT}
         ${RM} h.${CMHGNAME}
@@ -162,7 +167,7 @@ clean:
 #
 # Target 
 #
-${TARGET}: ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
+${TARGET}: ${XTARGET} ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
         ${LD} -o $@ -rmf ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
         $(MODSQZ) $(TARGET)
 
@@ -196,4 +201,13 @@ h.nfsstbcmhg:	$(CMHGOBJ)
 h.nfscmhg:	$(CMHGOBJ)
 	@
 
+o.Commands:     h.nfscmhg
+o.ModuleWrap:   h.nfscmhg
+
+# Note, cannot replace -bin -base 0 with -rmf here otherwise you get all sorts
+# of extra relocation code inserted into the final image.
+${XTARGET}: o.${XCOMPONENT}
+	${LD} -o $@ -bin -base 0 o.${XCOMPONENT}
+	SetType $@ Module
+	
 # Dynamic dependencies:
