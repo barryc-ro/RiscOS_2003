@@ -87,6 +87,9 @@ clean_all: clean
 resources: ${TARGET}
         @echo ${COMPONENT}: all complete
 
+install: ${TARGET}
+         @echo ${COMPONENT}: installed
+
 dirs:
 	${MKDIR} o
 	${MKDIR} rm
