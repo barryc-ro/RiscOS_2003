@@ -11,51 +11,30 @@
 #
 # Paths
 #
-VPATH=  @ riscos
-
-LIBDIR	= ${INSTDIR}.Library.Acorn
-INSTAPP    = ${INSTDIR}.Apps.!DecAOF
+LIBDIR  = ${INSTDIR}.Library.Acorn
+INSTAPP = ${INSTDIR}.Apps.!DecAOF
 
 #
 # Generic options:
 #
-MKDIR   = mkdir -p
-AS      = objasm
-CP      = copy
-CC      = cc
-CM      = cmhg
-RM      = remove
-LD      = link
-LB      = libfile
-SQZ	= squeeze
-TOUCH   = create
-WIPE    = -wipe
-MKDIR   = do mkdir -p
+include Makefiles:StdTools
 
-CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
-CPFLAGS = ~cfr~v
 LBFLAGS = -c
-WFLAGS  = ~CFR~V
 SQZFLAGS= -f
 
 #
 # Libraries
 #
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-CLXLIB    = C:CLX.o.clxlib
+include Makefiles:AppLibs
 
 DIRS      = o._dirs
 
 #
 # Include files
 #
-INCLUDES  = -IC:CLX -IC: -Iriscos
+INCLUDES  = -IC:CLX -IC:
 DFLAGS    = -DEXECUTE_ON_RISCOS
 
 #
@@ -66,9 +45,9 @@ TARGET     = ${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
 
-OBJS= o.decaof o.decasd o.dem 
-OBJSI= i.decaof i.decasd i.dem 
-OBJSINST= oi.decaof oi.decasd oi.dem oi.instlib
+OBJS= o.decaof o.decasd
+OBJSI= i.decaof i.decasd
+OBJSINST= oi.decaof oi.decasd oi.instlib
 
 HDRS=h.decasd 
 
