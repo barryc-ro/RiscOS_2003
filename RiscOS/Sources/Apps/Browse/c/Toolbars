@@ -30,6 +30,7 @@
 
 #include "Browser.h"
 #include "Fetch.h"
+#include "Handlers.h"
 #include "Images.h"
 #include "Memory.h"
 #include "Mouse.h"
@@ -2027,24 +2028,122 @@ void toolbars_update_url(browser_data * b)
 }
 
 /*************************************************/
-/* toolbars_update_dialler()                     */
+/* toolbars_update_dialler_time()                */
 /*                                               */
 /* Updates the dialler status display in the     */
 /* upper toolbar. Should only be called if there */
 /* is a Display Field component, ID 0xF, which   */
 /* can take the required display values.         */
 /*                                               */
+/* This shows online time. It is expected that   */
+/* the function will only be called from a null  */
+/* event handler to update the time regularly.   */
+/*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the display.          */
 /*************************************************/
 
-_kernel_oserror * toolbars_update_dialler(browser_data * b)
+_kernel_oserror * toolbars_update_dialler_time(browser_data * b)
 {
   _kernel_oserror * e;
   ObjectId          t;
   int               status, start_time, time_now;
+  char              display[MaxDiaLen];
+  char              compare[sizeof(display)];
+
+  t = toolbars_get_upper(b);
+  if (!t) return NULL;
+
+  e = _swix(Dialler_Status,
+            _IN(0) | _OUTR(0,1),
+
+            Dialler_Status_ConnectTime,
+
+            &status,
+            &start_time);
+
+  /* If the dialler isn't present, don't want to end up */
+  /* with a recursive error report, so fail silently.   */
+
+  if (e) return NULL;
+
+  _swix(OS_ReadMonotonicTime,
+        _OUT(0),
+
+        &time_now);
+
+  /* Only update as often as specified in the Messages file */
+
+  if (time_now - b->dialler_last > fixed.show_dstat_for)
+  {
+    /* If connected, must display an online time, else show offline. */
+
+    if (status & Dialler_Connected)
+    {
+      int hours, minutes, seconds;
+
+      /* Remember when this was done */
+
+      b->dialler_last = time_now;
+
+      /* Work out how long we've been online */
+
+      time_now -= start_time;
+
+      if (time_now < 0) time_now = 0;
+
+      hours     = time_now / 360000;
+      time_now -= (hours * 360000);
+      minutes   = time_now / 6000;
+      time_now -= (minutes * 6000);
+      seconds   = (time_now / (fixed.quantise * 100)) * fixed.quantise;
+
+      if (hours > 99) hours = 99;
+
+      sprintf(display, "%02u:%02u:%02u\0", hours, minutes, seconds);
+
+      /* Get the current string into 'compare' */
+
+      e = displayfield_get_value(0, t, DiallerStatus, compare, sizeof(compare), NULL);
+      if (e) return e;
+
+      /* Update the display field if necessary, else exit */
+
+      if (strcmp(display, compare))
+      {
+        e = displayfield_set_value(0, t, DiallerStatus, display);
+        if (e) return e;
+      }
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* toolbars_update_dialler_status()              */
+/*                                               */
+/* Updates the dialler status display in the     */
+/* upper toolbar. Should only be called if there */
+/* is a Display Field component, ID 0xF, which   */
+/* can take the required display values.         */
+/*                                               */
+/* If the status is 'online', a null event       */
+/* handler will be installed to call             */
+/* toolbars_update_dialler_time to show the      */
+/* online time. If the status is not 'online',   */
+/* that handler will be deregistered if present. */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the display.          */
+/*************************************************/
+
+_kernel_oserror * toolbars_update_dialler_status(browser_data * b)
+{
+  _kernel_oserror * e;
+  ObjectId          t;
+  int               status;
   int               showing_time = 0;
-  static int        last_called = 0;
   char              display[MaxDiaLen];
   char              statstr[MaxDiaLen];
   char              compare[sizeof(display)];
@@ -2081,130 +2180,72 @@ _kernel_oserror * toolbars_update_dialler(browser_data * b)
 
     *lasttokn = 0;
     StrNCpy0(tokens, statstr);
-
-    /* Setting last_called to -1 flags that a special message string is */
-    /* being displayed, and starts the timer that counts down until the */
-    /* Messages file configured time ('ShowDStatFor') has expired. At   */
-    /* this point another display, e.g. online time, will be reverted   */
-    /* to.                                                              */
-
-    last_called = -1;
   }
   else
   {
-    status &= Dialler_GeneralInfoMask;
+    int info = status & Dialler_GeneralInfoMask;
 
     /* Get the relevant status text in the 'tokens' messages buffer. */
     /* If an item is missing from the Messages file, the lookup will */
     /* fail silently leaving '!' in the tokens buffer. This is taken */
     /* to mean 'don't show this status', and the routine will exit.  */
 
-    switch (status)
+    switch (info)
     {
-      case Dialler_ExecutingScript_Dial:     lookup_token("Dialling",  0, 0); last_called = -1; break; /* Executing dialling script */
-      case Dialler_ExecutingScript_Hangup:   lookup_token("Hangup",    0, 0); last_called = -1; break; /* Executing hangup script   */
-      case Dialler_ExecutingScript_Answer:   lookup_token("Answering", 0, 0); last_called = -1; break; /* Answering                 */
-      case Dialler_AbortedScript_Syntax:     lookup_token("SError",    0, 0); last_called = -1; break; /* Script syntax error       */
-      case Dialler_AbortedScript_Timeout:    lookup_token("Timeout",   0, 0); last_called = -1; break; /* Timed out                 */
-      case Dialler_AbortedScript_NoCarrier:  lookup_token("Carrier",   0, 0); last_called = -1; break; /* No carrier                */
-      case Dialler_AbortedScript_Error:      lookup_token("MError",    0, 0); last_called = -1; break; /* 'ERROR' from modem        */
-      case Dialler_AbortedScript_NoDialtone: lookup_token("Dialtone",  0, 0); last_called = -1; break; /* No dialtone               */
-      case Dialler_AbortedScript_Busy:       lookup_token("MBusy",     0, 0); last_called = -1; break; /* 'BUSY' from modem         */
-      case Dialler_AbortedScript_NoAnswer:   lookup_token("Answer",    0, 0); last_called = -1; break; /* No answer                 */
+      case Dialler_ExecutingScript_Dial:     lookup_token("Dialling",  0, 0); break; /* Executing dialling script */
+      case Dialler_ExecutingScript_Hangup:   lookup_token("Hangup",    0, 0); break; /* Executing hangup script   */
+      case Dialler_ExecutingScript_Answer:   lookup_token("Answering", 0, 0); break; /* Answering                 */
+      case Dialler_AbortedScript_Syntax:     lookup_token("SError",    0, 0); break; /* Script syntax error       */
+      case Dialler_AbortedScript_Timeout:    lookup_token("Timeout",   0, 0); break; /* Timed out                 */
+      case Dialler_AbortedScript_NoCarrier:  lookup_token("Carrier",   0, 0); break; /* No carrier                */
+      case Dialler_AbortedScript_Error:      lookup_token("MError",    0, 0); break; /* 'ERROR' from modem        */
+      case Dialler_AbortedScript_NoDialtone: lookup_token("Dialtone",  0, 0); break; /* No dialtone               */
+      case Dialler_AbortedScript_Busy:       lookup_token("MBusy",     0, 0); break; /* 'BUSY' from modem         */
+      case Dialler_AbortedScript_NoAnswer:   lookup_token("Answer",    0, 0); break; /* No answer                 */
 
-      /* If there's no specific special status, report the online time */
+      /* If there's no specific special status, are we online? */
 
       default:
       {
-        e = _swix(Dialler_Status,
-                  _IN(0) | _OUTR(0,1),
-
-                  Dialler_Status_ConnectTime,
-
-                  &status,
-                  &start_time);
-
-        /* If the dialler isn't present, don't want to end up */
-        /* with a recursive error report, so fail silently.   */
-
-        if (e) return NULL;
-
-        _swix(OS_ReadMonotonicTime,
-              _OUT(0),
-
-              &time_now);
-
-        /* May have to wait a while if an unusual status is being displayed, */
-        /* flagged through last_called being non-zero.                       */
-
-        if (!last_called || time_now - last_called > fixed.show_dstat_for)
-        {
-          /* If connected, must display an online time, else show offline. */
-
-          if (status & Dialler_Connected)
-          {
-            int hours, minutes, seconds;
-
-            last_called = 0;
-
-            time_now -= start_time;
-
-            if (time_now < 0) time_now = 0;
-
-            hours     = time_now / 360000;
-            time_now -= (hours * 360000);
-            minutes   = time_now / 6000;
-            time_now -= (minutes * 6000);
-            seconds   = (time_now / (fixed.quantise * 100)) * fixed.quantise;
-
-            if (hours > 99) hours = 99;
-
-            *lasttokn = 0; /* Must do this or subsequent lookup_token calls could silently fail! */
-            sprintf(tokens, "%02u:%02u:%02u\0", hours, minutes, seconds);
-
-            showing_time = 1;
-          }
-          else lookup_token("Offline", 0, 0);
-        }
-        else
-        {
-          *lasttokn = 0; /* Must do this or subsequent lookup_token calls could silently fail! */
-          strcpy(tokens, "!"); /* Force an exit if we don't want to display yet */
-        }
+        if (status & Dialler_Connected) showing_time = 1;
+        else lookup_token("Offline", 0, 0);
       }
       break;
     }
   }
 
-  /* If last_called is < 0, one of the status conditions above     */
-  /* was met. So want to read the monotonic time into last_called, */
-  /* to allow this status message to be shown for some time before */
-  /* any online time or offline message is displayed.              */
-
-  if (last_called < 0)
+  if (showing_time)
   {
-    _swix(OS_ReadMonotonicTime, _OUT(0), &last_called);
-    if (last_called == 0) last_called = 1; /* (...otherwise there'd be no delay!) */
+    /* If we want to show online time, install the handler to do so */
+    /* (if it isn't already installed).                             */
+
+    if (!b->dialler_time)
+    {
+      b->dialler_time = 1;
+      register_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_dialler_display, b);
+    }
   }
-
-  /* Exit if the messages lookup appears to have failed. */
-
-  if (!strcmp(tokens,"!")) return NULL;
-
-  /* Copy the token contents to the display buffer and update the field */
-  /* if the value has changed.                                          */
-
-  StrNCpy0(display, tokens);
-
-  e = displayfield_get_value(0, t, DiallerStatus, compare, sizeof(compare), NULL);
-  if (e) return e;
-
-  /* Update the display field if necessary, else exit */
-
-  if (strcmp(display, compare))
+  else
   {
-    e = displayfield_set_value(0, t, DiallerStatus, display);
+    /* Otherwise, remove the handler if it is installed */
+
+    if (b->dialler_time) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_dialler_display, b);
+
+    /* Copy the token contents to the display buffer and update the field */
+    /* if the value has changed.                                          */
+
+    StrNCpy0(display, tokens);
+
+    e = displayfield_get_value(0, t, DiallerStatus, compare, sizeof(compare), NULL);
     if (e) return e;
+
+    /* Update the display field if necessary, else exit */
+
+    if (strcmp(display, compare))
+    {
+      e = displayfield_set_value(0, t, DiallerStatus, display);
+      if (e) return e;
+    }
   }
 
   /* May need to alter the label on this display, if there is one */
