@@ -141,7 +141,6 @@ oBoca.module:	C:h.swis
 oBoca.module:	h.module
 oBoca.module:	h.uniqueid
 oBoca.module:	h.error
-oBoca.idblock: s.Boca.idblock
 oBoca.uniqueid:	c.uniqueid
 oBoca.uniqueid:	C:h.kernel
 oBoca.uniqueid:	C:h.swis
@@ -149,3 +148,4 @@ oBoca.uniqueid:	h.module
 oBoca.uniqueid:	h.uniqueid
 oBoca.uniqueid:	h.idblock
 oBoca.uniqueid:	C:h.nvram
+oBoca.idblock: s.Boca.idblock
