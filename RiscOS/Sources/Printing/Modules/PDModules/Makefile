@@ -22,8 +22,8 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
+CCFLAGS = -c -depend !Depend -IC: ${THROWBACK}
+ASFLAGS = -depend !Depend -Stamp -quit -module ${THROWBACK}
 CPFLAGS = ~cfr~v
 
 #
