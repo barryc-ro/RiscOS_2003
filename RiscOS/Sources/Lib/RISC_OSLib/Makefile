@@ -66,6 +66,17 @@ DFLAGS =\
  -DALLOW_OLD_PATTERNS\
  -DSET_MISC_OPTIONS
 
+# ANSILib flags
+CLFLAGS =\
+ -DDEFAULT_TEXT
+
+ALFLAGS =\
+ -PD "DEFAULT_TEXT SETL {TRUE}"
+
+VLFLAGS =\
+ -DLIB_SHARED="\"\""\
+ -DLIB_APCS="\"R\""
+
 # Shared C Library flags
 CSFLAGS =\
  -I@,^.clib\
@@ -76,22 +87,18 @@ VSFLAGS =\
  -DLIB_SHARED="\"Shared \""\
  -DLIB_APCS="\"R\""
 
-VLFLAGS =\
- -DLIB_SHARED="\"\""\
- -DLIB_APCS="\"R\""
-
 VPATH = @ kernel clib rlib
 
 .SUFFIXES:  .o .o_rl .m_o_rl .rm_o .rm_o_rl
 #
 # Rule patterns
 #
-.c.o:;        ${CC} ${CFLAGS} -fah -o $@ $<
+.c.o:;        ${CC} ${CFLAGS} -fah ${CLFLAGS} -o $@ $<
 .c.o_rl:;     ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.m_o_rl:;   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zM -o $@ $<
 .c.rm_o:;     ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -o $@ $<
 .c.rm_o_rl:;  ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} -o $@ $<
-.s.o:;        ${OBJASM} ${AFLAGS} $< $@
+.s.o:;        ${OBJASM} ${AFLAGS} ${ALFLAGS} $< $@
 .s.o_rl:;     ${OBJASM} ${AFLAGS} $< $@
 .s.m_o_rl:;   ${OBJASM} ${AFLAGS} $< $@
 .s.rm_o:;     ${OBJASM} ${AFLAGS} $< $@
@@ -222,7 +229,7 @@ EXPORTS   = ${MODWRAP} \
 #
 ANSI_OBJS =\
  o.alloc o.armprof o.armsys o.clib o.ctype o.error o.fpprintf \
- o.kernel o.locale o.math o.memcpy o.overmgr o.printf o.scanf \
+ o.kernel o.locale o.math o.memcpset o.overmgr o.printf o.scanf \
  o.signal o.sort o.stdio o.stdlib o.string o.swiv o.time
 
 RM_OBJS =\
@@ -236,7 +243,7 @@ RM_OBJS =\
  rm_o.fpprintf \
  rm_o.locale \
  rm_o.math \
- rm_o.memcpy \
+ rm_o.memcpset \
  rm_o.printf \
  rm_o.scanf \
  rm_o.signal \
@@ -583,10 +590,10 @@ RISC_OSLib:s.modulewrap: s.modulewrap;       ${CP} s.modulewrap $@ ${CPFLAGS}
 # Objects whose name isn't the same as their source
 #
 o.clib: clib.s.cl_obj_r
-        ${OBJASM} ${AFLAGS} -from clib.s.cl_obj_r -to $@
+        ${OBJASM} ${AFLAGS} ${ALFLAGS} -from clib.s.cl_obj_r -to $@
 
 o.kernel: kernel.s.k_obj_r
-        ${OBJASM} ${AFLAGS} -from kernel.s.k_obj_r -to $@
+        ${OBJASM} ${AFLAGS} ${ALFLAGS} -from kernel.s.k_obj_r -to $@
 
 rm_o.bsearch_a: c.bsearch
         ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -zkA -o $@ c.bsearch
@@ -616,19 +623,19 @@ rm_o_rl.initmodule: rlib.s.initmod_r
 # Objects that require extra flags
 #
 o.armsys: c.armsys
-        ${CC} ${CFLAGS} -fah ${VLFLAGS} -o $@ c.armsys
+        ${CC} ${CFLAGS} -fah ${CLFLAGS} ${VLFLAGS} -o $@ c.armsys
 
 o.armprof: c.armprof
-        ${CC} ${CFLAGS} -fah ${VLFLAGS} -pcc -o $@ c.armprof
+        ${CC} ${CFLAGS} -fah ${CLFLAGS} ${VLFLAGS} -pcc -o $@ c.armprof
 
 o.string: c.string
-        ${CC} ${CFLAGS} -fah -DSEPERATE_MEMCPY -o $@ c.string
+        ${CC} ${CFLAGS} -fah ${CLFLAGS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 rm_o.armsys: c.armsys
         ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${VSFLAGS} -o $@ c.armsys
 
 rm_o.string: c.string
-        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -DSEPERATE_MEMCPY -o $@ c.string
+        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 #
 # Special case: use "rom_defs" for ROM library (o_rm), "defs" for the others
