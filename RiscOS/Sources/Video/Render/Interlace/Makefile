@@ -10,6 +10,7 @@
 # 21-Feb-95  TMD	  Made modes 50,51,55 in a single binary
 # 17-Mar-95  JRH	  Stopped all target from doing an install
 # 17-Oct-95  TMD	  Removed obsolete variants 't','u','v' from disc build
+# 18-Jul-96  TMD	  Added 'y' variant for STB1 MPEG2
 #
 
 #
@@ -34,15 +35,17 @@ CPFLAGS = ~cfr~v
 COMPONENT = Interlace
 ROMTARGET =	rm.${MACHINE}.Interlace
 
-DISCTARGETS =	rm.Interlw \
-		rm.Interls \
-		rm.Interlx
+DISCTARGETS =	rm.Interls \
+		rm.Interlw \
+		rm.Interlx \
+		rm.Interly
 
 INSTROMTARGET = ${INSTDIR}.${COMPONENT}
 
-INSTALLTARGETS = ${INSTDIR}.Interlw \
-		 ${INSTDIR}.Interls \
-		 ${INSTDIR}.Interlx
+INSTALLTARGETS = ${INSTDIR}.Interls \
+		 ${INSTDIR}.Interlw \
+		 ${INSTDIR}.Interlx \
+		 ${INSTDIR}.Interly
 
 .SUFFIXES: .Hdr .rm
 
@@ -80,6 +83,9 @@ ${INSTDIR}.Interlv: rm.Interlv
 ${INSTDIR}.Interlw: rm.Interlw
 	${CP} $? $@ ${CPFLAGS}
 
+${INSTDIR}.Interly: rm.Interly
+	${CP} $? $@ ${CPFLAGS}
+
 
 #
 # ROM variants
@@ -92,6 +98,10 @@ rm.Falcon.Interlace: rm.Interlw
         ${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 
+rm.Peregrine.Interlace: rm.Interly
+	${MKDIR} rm.${MACHINE}
+	${CP} $? $@ ${CPFLAGS}
+	
 .Hdr.rm:; ${AS} ${ASFLAGS} -From $< -To $@
 
 # Dynamic dependencies:
@@ -203,7 +213,6 @@ rm.Interls: Hdr:Debug
 rm.Interls: Hdr:VduExt
 rm.Interls: Hdr:Podule
 rm.Interls: Hdr:PoduleReg
-rm.Interls: Hdr:MPEGCard
 rm.Interls: Hdr:MEMM.ARM600
 rm.Interls: Hdr.Modes
 rm.Interls: s.Common
@@ -244,6 +253,7 @@ rm.Interlx: Hdr:CPU.Generic26
 rm.Interlx: Hdr:IO.GenericIO
 rm.Interlx: Hdr:RISCOS
 rm.Interlx: Hdr:Machine.<Machine>
+rm.Interlx: Hdr:Machine.<Machine>
 rm.Interlx: Hdr:IO.IOMDL
 rm.Interlx: Hdr:PublicWS
 rm.Interlx: Hdr.GrubbyWS
@@ -262,3 +272,31 @@ rm.Interlx: Hdr:MPEGCard
 rm.Interlx: Hdr:MEMM.ARM600
 rm.Interlx: Hdr.Modes
 rm.Interlx: s.Common
+rm.Interly: Hdr.GetAll
+rm.Interly: Hdr:ListOpts
+rm.Interly: Hdr:Macros
+rm.Interly: Hdr:System
+rm.Interly: Hdr:SWIs
+rm.Interly: Hdr:CPU.Generic26
+rm.Interly: Hdr:IO.GenericIO
+rm.Interly: Hdr:RISCOS
+rm.Interly: Hdr:Machine.<Machine>
+rm.Interly: Hdr:Machine.<Machine>
+rm.Interly: Hdr:IO.IOMDL
+rm.Interly: Hdr:PublicWS
+rm.Interly: Hdr.GrubbyWS
+rm.Interly: Hdr:CMOS
+rm.Interly: Hdr:ModHand
+rm.Interly: Hdr:Services
+rm.Interly: Hdr:Proc
+rm.Interly: Hdr:FSNumbers
+rm.Interly: Hdr:NewErrors
+rm.Interly: Hdr:MsgTrans
+rm.Interly: Hdr:Debug
+rm.Interly: Hdr:VduExt
+rm.Interly: Hdr:Podule
+rm.Interly: Hdr:PoduleReg
+rm.Interly: Hdr:MPEG2Card
+rm.Interly: Hdr:MEMM.ARM600
+rm.Interly: Hdr.Modes
+rm.Interly: s.Common

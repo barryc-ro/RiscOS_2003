@@ -78,4 +78,4 @@ ${COMPONENT}: ${OBJS}
 o.serial_ven:	c.serial_ven
 o.serial_ven:	C:h.kernel
 o.serial_ven:	C:h.swis
-o.serial_ven:	h.serial_ven
+o.serial_ven:	h.serial
