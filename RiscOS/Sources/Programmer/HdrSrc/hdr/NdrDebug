@@ -19,7 +19,7 @@ OldOpt	SETA	{OPT}
 ;  2-Jan-91	NDR	Ensure Debug macro still works if V set on entry
 ;  3-Jan-91	NDR	Ensure debug_flush deals correctly when no debug output
 ;  4-Jan-91	NDR	Preserve R2 in Neil_Write0 and Neil_Newline
-; 10-Apr-91	OSS	Changed all macros, particularly InsertNDRDebugRoutines, 
+; 10-Apr-91	OSS	Changed all macros, particularly InsertNDRDebugRoutines,
 ;			to not put any code in if the debug flag is not set. This
 ;			is because too many modules are cocking things up and
 ;			are putting debugging code into the ROM!
@@ -34,11 +34,21 @@ OldOpt	SETA	{OPT}
 ;  2-Aug-93	SAH	Added conditional versions (DebugIf, DebugaIf, DebugSIf)
 ; 13-Oct-93	AMG	Merge the two copies of NdrDebug together, and remove
 ;			the one from hdr - ATTENTION: NdrDebug lives in hdr2 !!!
-; 20-Sep-94	SMC	Added support for DebugIt module (set debug_module to true, 
+; 20-Sep-94	SMC	Added support for DebugIt module (set debug_module to true,
 ;			hostvdu should be false).
-; 17-Apr-97	JRC	If debug_file is set, it is a file name which is opened, 
+; 17-Apr-97	JRC	If debug_file is set, it is a file name which is opened,
 ;			written to and closed in each call to Debug. Even better
 ;			than debug_flush!
+; 15-Jan-98     KJB     Added support for PDebug module (set pdebug_module to true,
+;			hostvdu should be false).
+; 21-May-99	BJGA	Added support for debugging null-terminated strings:
+;			top-bit-clear characters (other than CR and LF) are effectively
+;			reverse-GSTrans'd (set debug_nullterminatedstrings to true).
+;			Also added support for DADebug module (set daddebug_module true).
+;			hostvdu is now defined, and set false, if not yet defined.
+;			Debug_Open and Debug_Close only generate code in cases where the
+;			output mechanism needs it, so they no longer need to be
+;			bracketed conditionally in the source code.
 
 	GBLL	debug
 	GBLL	debug_flush
@@ -55,8 +65,21 @@ OldOpt	SETA	{OPT}
 	GBLL	debug_noscratchspace
 debug_noscratchspace	SETL	{TRUE}
 
+ [ :LNOT: :DEF: hostvdu
+	GBLL	hostvdu
+hostvdu		SETL	{FALSE}
+ ]
 	GBLL	debug_module
 debug_module	SETL	{FALSE}
+
+	GBLL	pdebug_module
+pdebug_module	SETL	{FALSE}
+
+	GBLL	dadebug_module
+dadebug_module	SETL	{FALSE}
+
+	GBLL	debug_nullterminatedstrings
+debug_nullterminatedstrings	SETL	{FALSE}
 
 true		SETL	1=1
 false		SETL	1=0
@@ -70,7 +93,16 @@ debug_file	SETS	""	; default - can be altered before InsertNDRDebugRoutines
 	MACRO
 $lab	Debug_Open	$filename
 $lab
-	[	debug
+	[ debug :LAND: :LNOT: hostvdu :LAND: :LNOT: debug_module :LAND: :LNOT: pdebug_module
+	[	dadebug_module	; this doesn't use $filename
+	Push	"R0, LR"
+	SWI	&731C0		; XDADebug_GetWriteCAddress
+	MOVVS	R0, #0
+	ADRL	LR, dadebug_writec
+	STR	R0, [LR]
+	CLRV
+	Pull	"R0, LR"
+	|
 	[	debug_file = ""
 	Push	"R1, LR"
 	ADR	R1, %FT00
@@ -85,15 +117,25 @@ $lab
 	Debug	"", "------------------------------------------------------------"
 	]
 	]
+	]
 	MEND
 
 	MACRO
 $lab	Debug_Close
 $lab
-	[ debug :LAND: debug_file = ""
+	[ debug :LAND: :LNOT: hostvdu :LAND: :LNOT: debug_module :LAND: :LNOT: pdebug_module
+	[ dadebug_module
+	Push	"LR"
+	MOV	LR, #0
+	STR	LR, dadebug_writec
+	Pull	"LR"
+	|
+	[ debug_file = ""
 	Push	"LR"
 	BL	Neil_CloseFile
 	Pull	"LR"
+	]
+	]
 	]
 	MEND
 
@@ -425,7 +467,11 @@ Neil_Write0_R2max
 	Push	"R0, LR"
 	MOV	R1, R0		; R1 -> string, R2 = max length (unsigned)
 01	LDRB	R0, [R1], #1
+	[	debug_nullterminatedstrings
+	CMP	R0, #1
+	|
 	CMP	R0, #32		; terminate on any ctrl-char
+	]
 	SUBCSS	R2, R2, #1
 	BLCS	Neil_WriteC
 	BCS	%BT01
@@ -433,16 +479,61 @@ Neil_Write0_R2max
 	Pull	"R0, PC", , ^
 
 Neil_WriteC
+	[	debug_nullterminatedstrings
+	CMN	R0, #0		; clear C
+	TEQ	R0, #""""	; TEQ without shift preserves C
+	TEQNE	R0, #"|"
+	TEQNE   R0, #"<"
+	EOREQ	R0, R0, #"@"	; these characters don't need converting when prefixed by "|"
+	TEQNE	R0, #127
+	CMPNE	R0, #32		; CS if >= Space, except ", |, < and Delete
+	TEQ	R0, #0
+	TEQNE	R0, #10
+	TEQNE	R0, #13
+	CMPEQ	R0, #0		; now also CS if R0 was 0, 10 or 13
+	EORCC	R0, R0, #"@"	; if non line-end control character, generate escaped character
+	Push	"R0, LR", CC
+	MOVCC	R0, #"|"	; and prefix with "|"
+	BLCC	%FT01		; preserves flags, fortunately
+	Pull	"R0, LR", CC
+01
+	]
+	[	pdebug_module
+	Push	"R0-R2, LR"
+	|
 	Push	"R0, R1, LR"
+	]
 	LDR	R1, Neil_FileHandle
 	CMP	R1, #0		; 0 => writec, -1 => none, >0 => file
 	[	debug_module
 	SWIEQ	XDebugIt_WriteC
 	|
+	[	pdebug_module
+	MOVEQ	R0,#0
+	MOVEQ	R1,R13		; yuck :)
+	MOVEQ	R2,#1
+	SWIEQ	&6F900		; XPDebugM_Send
+	|
+	[	dadebug_module
+	BGT	%FT01
+	LDR	LR, dadebug_writec
+	CMP	LR, #0		; undefined?
+	BEQ	%FT01
+	MOV	LR, PC
+	LDR	PC, dadebug_writec
+	CMP	R0, R0		; ensure not GT
+01
+	|
 	SWIEQ	XOS_WriteC
 	]
+	]
+	]
 	SWIGT	XOS_BPut
+	[	pdebug_module
+	Pull	"R0-R2, PC", , ^
+	|
 	Pull	"R0, R1, PC", , ^
+	]
 
 Neil_NewLine
 	ROUT
@@ -484,7 +575,7 @@ Neil_OpenFile
 	SWI	XOS_Find
 	Pull	"R0-R2, PC", VS
 	TEQ	r0, #0			; object exists?
-	BEQ	%20			
+	BEQ	%20
 
 	;File found---get the extent
 	MOV	r1, r0			; file handle
@@ -531,6 +622,10 @@ Neil_CloseFile
 	Pull	"R0-R1, PC", , ^
 
 Neil_FileHandle	DCD	0		; default state => writec debugging
+
+	[	dadebug_module
+dadebug_writec	DCD	0		; workspace to hold routine pointer
+	]
 
 	]	; End debug
 
