@@ -64,7 +64,7 @@ TOUCH		= create
 AFLAGS          = $(THROWBACK) -depend !Depend -nocache -stamp -quit
 CFLAGS          = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
 C++FLAGS        = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
-LDFLAGS		= -c++
+LDFLAGS		= -c++ $(EXTRALDFLAGS)
 CPFLAGS         = ~cfr~v~n
 SQFLAGS         = -f
 WFLAGS          = ~cf~vr
@@ -170,7 +170,7 @@ LIBSHP = \
  $(CLIB)\
 
 LIBSMC = \
- $(NBLIB)\
+ $(NBLIB)MC\
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
@@ -440,7 +440,6 @@ abs.!RI: $(UI) $(APPENGINE)
 abs.!RI_MC: $(UI) $(APPENGINE) 
         @echo
         @$(LD) $(LDFLAGS) -s syms.!RI_MC -o $@ $(OBJSMC) $(LIBSMC) MemCheck:o.MC
-        @$(SQUEEZE) $(SQFLAGS) $@
 
 abs.!RI_HP: $(UI) $(APPENGINE) 
         @echo
