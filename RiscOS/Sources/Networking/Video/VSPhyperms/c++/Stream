@@ -32,7 +32,7 @@ StreamToken::~StreamToken(void)
 }
 
 #if (NUM_MPEG_Tokens != 2)
-#error Re-defining the number of MPEG tokens; be aware of optimisations used. This has not been made reentrant frendly.
+#error Re-defining the number of MPEG tokens;
 inline bool
 Stream::tokenfree(void)
 {
@@ -50,40 +50,48 @@ Stream::test_empty_buffers(void)
   
   if ((state != state_step)||( (--step_times) >= 0)){
  	
- 	for (int i = 0; i < NUM_MPEG_Tokens; ++i){
- 	  	if (buffers[i].in_use == free_token){
- 	  	  	token_id = i;
- 	  	  	break;
- 	  	}
- 	}
+   	if ( (result != ErrorOccurred)&&(state != state_stop) ) {
+		_kernel_irqs_off();
+	
+  		for (int i = 0; i < NUM_MPEG_Tokens; ++i){
+ 		  	if (buffers[i].in_use == free_token){
+ 		  	  	token_id = i;
+ 		  	  	break;
+ 		  	}
+ 		}
   
-  	if ( (result != ErrorOccurred)&&(state != state_stop)&&(token_id != -1) ) {
-		buffers[token_id].in_use = claim_token;	// paired with free block
-		int scene_num = 0;
-	    	result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num);
+  		if (token_id == -1)
+  			_kernel_irqs_on();
+  		else {
+  			buffers[token_id].in_use = claim_token;	// paired with free block
+  			_kernel_irqs_on();
+  			
+			int scene_num = 0;
+	    		result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num);
  	
-	 	if (result != ErrorOccurred){
-	 		if(buffers[token_id].block != NULL){
-				buffers[token_id].blocks_returned = 0;
-				if ((scene_blanking == true)&&(scene_num != 0)){
-					if (current_scene != scene_num){
-					  	if (current_scene != 0)
-							reset_sink(mysource->get_most_significant_mode());
-						current_scene = scene_num;
+	 		if (result != ErrorOccurred){
+	 			if(buffers[token_id].block != NULL){
+					buffers[token_id].blocks_returned = 0;
+					if ((scene_blanking == true)&&(scene_num != 0)){
+						if (current_scene != scene_num){
+						  	if (current_scene != 0)
+								reset_sink(mysource->get_most_significant_mode());
+							current_scene = scene_num;
+						}
+					}
+					if ((result = mysink.FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
+					  	if (err_ptr == NULL) err_ptr = &(mysink.ReturnCopyOfError());
+						buffers[token_id].in_use = free_token;
 					}
 				}
-				if ((result = mysink.FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
-				  	if (err_ptr == NULL) err_ptr = &(mysink.ReturnCopyOfError());
+				else
 					buffers[token_id].in_use = free_token;
-				}
-			}
-			else
-				buffers[token_id].in_use = free_token;
-	        }
-	 	else {
-	                buffers[token_id].in_use = free_token;
-	 	  	if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
-	 	} // !get block error occurred
+		        }
+		 	else {
+		                buffers[token_id].in_use = free_token;
+		 	  	if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
+		 	} // !get block error occurred
+		}
 	}
   }  
   return result;
@@ -337,12 +345,13 @@ inline error_flag
 Stream::swap_source(void)
 {
   	
+  	_kernel_irqs_on();
   	if (source == source_streamlive){
      		Source *tmp = mysource;
-        	_kernel_irqs_off();
+   		_kernel_irqs_off();
      		mysource = new Source((*tmp));
      		delete tmp; tmp = NULL;
-        	_kernel_irqs_on();
+   		_kernel_irqs_on();
      		if (mysource->ErrorExists()){
      			if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
      		}
@@ -354,10 +363,10 @@ Stream::swap_source(void)
         else {
         	if (source == source_vod){
     	  		Source *tmp = mysource;
-        		_kernel_irqs_off();
+   			_kernel_irqs_off();
      	  		mysource = new SourceLIVE((*tmp));
      	  		delete tmp; tmp = NULL;
-        		_kernel_irqs_on();
+   			_kernel_irqs_on();
      			if (mysource->ErrorExists()){
      			  	if (err_ptr == NULL) err_ptr = &ReturnCopyOfError();
      			}
@@ -367,6 +376,8 @@ Stream::swap_source(void)
 #endif        	
                 }
         }
+  	_kernel_irqs_off();
+  	
         return (ErrorExists() ? ErrorOccurred : NoError);
 }
 //
@@ -397,6 +408,7 @@ Stream::change_state(state_of_play new_state)
    	Debug("state %i -> %i, from = %i", state, new_state, from);
 #endif
 		
+  	_kernel_irqs_off();
 	switch (new_state) {
      		case state_slow:
      			if (trick_modes() & trick_slow_play)
@@ -420,10 +432,14 @@ Stream::change_state(state_of_play new_state)
         			if (ErrorExists()) RemoveErr(); // just try to stop
       				  		
    				if (state != state_stop){
+   				    	_kernel_irqs_on();
+
   					if ((myserver->streamrunning())&&(myserver->AssetEnd(0, (state != state_endreceived)) == ErrorOccurred)){
   						if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
   					}
    					mysource->setEndPlayState();		// this ensures no more data is copied upriver.
+   					_kernel_irqs_off();
+   					
      					state = state_stop;
         			}
         			{
@@ -447,8 +463,11 @@ Stream::change_state(state_of_play new_state)
      			break;
      		case state_play:
         		if (trick_modes() & trick_normal_play) {
-     	  			if (source != source_vod)
+     	  			if (source != source_vod){
+   					_kernel_irqs_on();
      	  				swap_source();
+   					_kernel_irqs_off();
+   				}
          	 			
          	      		if (mysource->get_most_significant_mode() != mode_normalplay)	// do we need to change server file
 					callback_pending += callback_trickplay;
@@ -460,7 +479,9 @@ Stream::change_state(state_of_play new_state)
      			if (trick_modes() & trick_jump_most_rec){
      	  			if (mysource->get_most_significant_mode() != mode_streamlive){	// do we need to change server file
 					callback_pending += callback_trickplay;
+   					_kernel_irqs_on();
 					swap_source();
+   					_kernel_irqs_off();
      					from = 0xFFFFFFFF;
      					state = state_streamlive;
      				}
@@ -481,7 +502,8 @@ Stream::change_state(state_of_play new_state)
 			}
      			break;
         }
-   
+   	_kernel_irqs_on();
+   	
    	if (old_state == state_step)
      		test_empty_buffers();
      		
@@ -994,7 +1016,7 @@ Stream::DummyAckCall(void)
 }
 
 #if (NUM_MPEG_Tokens != 2)
-#error Re-defining the number of MPEG tokens; be aware of optimisations used. not reentrant friendly
+#error Re-defining the number of MPEG tokens; be aware of optimisations used.
 inline error_flag
 Stream::MPEGInterrupt(int buffer_descriptor)
 {
@@ -1004,7 +1026,9 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   while (i < NUM_MPEG_Tokens) {	// remember if num_blocks is zero we cannot touch it.
     	if ((buffers[i].in_use == claim_token)&&(buffer_descriptor >= (int)buffers[i].block->buffers)&&
       	    (buffer_descriptor <  (((int)buffers[i].block->buffers) + (buffers[i].block->max_buffers * sizeof(BitstreamBufferDescriptor))) )){
+  		_kernel_irqs_off();
       	  	buffers[i].blocks_returned++;
+  		_kernel_irqs_on();
       	  	
       	  	if (buffers[i].blocks_returned == buffers[i].block->num_buffers){	// if we have received all the blocks free it 			
   			if ((mysource->freeBlock(buffers[i].block) == ErrorOccurred )&&(err_ptr == NULL))
