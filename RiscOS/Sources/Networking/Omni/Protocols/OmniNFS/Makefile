@@ -51,7 +51,8 @@ MEMCHECK_TARGET	= OmniNFSmc
 HIERPROF_TARGET	= OmniNFShp
 DEBUG_TARGET	= OmniNFSd
 
-HDR = h.OmniNFSHdr
+NORMAL_HDR =	h.OmniNFSHdr
+DEBUG_HDR =	h.OmniNFSDbg
 
 A_DEBUG_ON	= "-pd \"DEBUG SETL {TRUE}\""
 A_DEBUG_OFF	= "-pd \"DEBUG SETL {FALSE}\""
@@ -71,62 +72,55 @@ C_DEBUG_OFF	= -DNDEBUG
 # Local
 
 all:
-	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS=$(C_DEBUG_OFF) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS=$(C_DEBUG_OFF) HDR=$(NORMAL_HDR) EXT=o
 	@echo $(COMPONENT): build complete
 
-debug:	debug_$(TYPE)
+debug:
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_ON) EXTRA_C_FLAGS="$(C_DEBUG_ON) -DDEBUGLIB" HDR=$(DEBUG_HDR) EXT=od
 	@echo $(COMPONENT): debug build complete
 
-debug_:
-	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_ON) EXTRA_C_FLAGS="$(C_DEBUG_ON) -DDEBUGLIB" EXT=od
-
-debug_NEC:
-	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_ON) EXTRA_C_FLAGS="$(C_DEBUG_ON) -DDEBUGLIB -DDHCP" EXTRAOBJS="od.dhcpboot" EXT=od
-
 memcheck:
-	@amu -f MainMake $(MFLAGS) TARGET=$(MEMCHECK_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS="$(C_DEBUG_OFF) -DDEBUGLIB -DMemCheck_MEMCHECK" EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=$(MEMCHECK_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS="$(C_DEBUG_OFF) -DDEBUGLIB" HDR=$(NORMAL_HDR) EXT=oMC
 	@echo $(COMPONENT): memcheck build complete
 
 preprocess:
-	@amu -f MainMake $(MFLAGS)  EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS=$(C_DEBUG_OFF) EXT=i
+	@amu -f MainMake $(MFLAGS)  EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS=$(C_DEBUG_OFF) HDR=$(NORMAL_HDR) EXT=i
 	@echo $(COMPONENT): preprocessing complete
 
 
 # RISC OS ROM build rules
 
 rom:
-	@amu -f MainMake $(MFLAGS) EXTRAFLAGS=-DROM TARGET=$(NORMAL_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) EXTRAFLAGS=-DROM TARGET=$(NORMAL_TARGET) HDR=$(NORMAL_HDR) EXT=o
 	@echo $(COMPONENT): build complete
 
 export:
 	@amu -f MainMake $(MFLAGS)  EXT=AvoidAMUBug
 
 install:
-	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) HDR=$(NORMAL_HDR) EXT=o
 
 install_rom:
-	@amu -f MainMake $(MFLAGS) TARGET=$(ROM_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(ROM_TARGET) HDR=$(NORMAL_HDR) EXT=o
 
 rom_link:
-	@amu -f MainMake $(MFLAGS) TARGET=$(ROM_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(ROM_TARGET) HDR=$(NORMAL_HDR) EXT=o
 
 resources: LocalRes:Messages
-	$(MKDIR) $(RESDIR)
-	TokenCheck LocalRes:Messages
-	$(CP) LocalRes:Messages $(RESDIR).Messages $(CPFLAGS)
 	@echo $(COMPONENT): resource files copied to Messages module
 
 clean:
-	@amu -f MainMake $(MFLAGS)  TARGET=Dummy EXT=o
-	@amu -f MainMake $(MFLAGS)  TARGET=Dummy EXT=oMC
-	@amu -f MainMake $(MFLAGS)  TARGET=Dummy EXT=oHP
-	@amu -f MainMake $(MFLAGS)  TARGET=Dummy EXT=od
-	@amu -f MainMake $(MFLAGS)  TARGET=Dummy EXT=i
+	@amu -f MainMake $(MFLAGS)  TARGET=Dummy HDR=$(NORMAL_HDR) EXT=o
+	@amu -f MainMake $(MFLAGS)  TARGET=Dummy HDR=$(NORMAL_HDR) EXT=oMC
+	@amu -f MainMake $(MFLAGS)  TARGET=Dummy HDR=$(NORMAL_HDR) EXT=oHP
+	@amu -f MainMake $(MFLAGS)  TARGET=Dummy HDR=$(NORMAL_HDR) EXT=od
+	@amu -f MainMake $(MFLAGS)  TARGET=Dummy HDR=$(NORMAL_HDR) EXT=i
 	@$(WIPE) linked $(WFLAGS)
 	@$(WIPE) map    $(WFLAGS)
 	@$(WIPE) rm     $(WFLAGS)
 	@$(WIPE) aof    $(WFLAGS)
-	@$(RM) $(HDR)
+	@$(RM) $(NORMAL_HDR)
+	@$(RM) $(DEBUG_HDR)
 	@$(STRIPDEPND) MainMake
 	@echo $(COMPONENT): cleaned
 
