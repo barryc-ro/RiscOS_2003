@@ -18,6 +18,8 @@
 #			used to correctly recreate o, oz, etc. Some
 #			aesthetic formatting changes done in passing.
 # 29-Oct-98	ADH	-DFUNAI3_POLL removed from DFLAGS.
+# 12-Nov-98     SBF     Removed -DFUNAI3; define this in the build components
+#                       file instead using ${BUILDFLAGS}
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -66,7 +68,7 @@ LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
 LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
-DFLAGS   = -DFUNAI3
+DFLAGS   = ${BUILDFLAGS}
 
 # -----------------------------------------------------------------------------
 # Program specific options
