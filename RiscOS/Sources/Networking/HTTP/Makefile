@@ -24,12 +24,13 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -zps1 -ff -wp ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -zps1 -ff -wpc ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
+CMHGFLAGS = -p ${DFLAGS} ${INCLUDES} ${THROWBACK}
 
 #
 # Libraries
@@ -56,6 +57,8 @@ PKCS11LIB=C:CryptoBox.o.cryptolib
 #
 INCLUDES  = -IC:,C:TCPIPLibs.,${SSLDIR}.
 DFLAGS =  ${DB} -DCOMPAT_INET4 -DFLAVOUR_TRANSPORT_MODULES=0 -DHTTPMOD -DRISCOS -DACORN_BUILD ${D}
+
+DIRS = o._dirs
 #
 # Program specific options:
 #
@@ -80,6 +83,7 @@ EXPORTS   = h.httppub h.pads
 .c.p:;      ${CC} ${CFLAGS} -E -C $< > p.$*
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< -DNO_SECURE
 .cmhg.os:;  ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .cmhg.op:;  ${CMHG} ${CMHGFLAGS} -o $@ $< -DFLAVOUR_PKCS11=1 
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
@@ -112,80 +116,87 @@ install: rm.${COMPONENT}mod rm.${COMPONENT}smod
         @echo ${COMPONENT}: installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} os.* ${WFLAGS}
-        ${WIPE} op.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} os ${WFLAGS}
+        ${WIPE} op ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${RM} h.ModHead
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
+
+${DIRS}:
+        @${MKDIR} aof
+        @${MKDIR} linked
+        @${MKDIR} map
+        @${MKDIR} o
+        @${MKDIR} os
+        @${MKDIR} op
+        @${MKDIR} rm
+        create ${DIRS}
+        stamp  ${DIRS}
 
 resources:
 #        ${MKDIR} ${RESDIR}.${COMPONENT}
 #        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
 #        @echo ${COMPONENT}: resource files copied
 
-local_dirs:
-	${MKDIR} o	
-	${MKDIR} op
-	${MKDIR} os
-	${MKDIR} aof
-	${MKDIR} rm
-	echo Made local dirs
-
-dirs:
-	${MKDIR} linked
-	echo Made dirs
-
 #
 # ROM target (re-linked at ROM Image build time)
 #
 
-rom_pkcs11_strong: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS} local_dirs
+rom_pkcs11_strong: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
         ${LD} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS}
 
-rom_pkcs11_secure: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS} local_dirs
+rom_pkcs11_secure: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
         ${LD} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS}
 
-rom_strong: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS} local_dirs
+rom_strong: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS} ${DIRS}
         ${LD} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
 
-rom_secure: ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS} local_dirs
+rom_secure: ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS} ${DIRS}
         ${LD} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS}
 
-rom_ rom_insecure: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS} local_dirs
+rom_ rom_insecure: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS} ${DIRS}
         ${LD} -o ${TARGET} -aof ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link: dirs
+rom_link: ${DIRS}
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}mod: ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS} local_dirs
+rm.${COMPONENT}mod: ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS} ${DIRS}
         ${LD} -o $@ -module ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}smod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS} local_dirs
+rm.${COMPONENT}smod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS} ${DIRS}
         ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}sxmod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS} local_dirs
+rm.${COMPONENT}sxmod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS} ${DIRS}
         ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}spmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} local_dirs
+rm.${COMPONENT}spmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
         ${LD} -o $@ -module ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}spxmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} local_dirs
+rm.${COMPONENT}spxmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
         ${LD} -o $@ -module ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS}
         Access $@ RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+# Static dependencies
+
+o.module: h.ModHead
+os.module: h.ModHead
+op.module: h.ModHead
 
 # Dynamic dependencies:

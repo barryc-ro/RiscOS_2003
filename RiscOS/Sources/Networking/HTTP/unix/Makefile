@@ -112,6 +112,8 @@ clean:
 	${WIPE} *.op ${WFLAGS}
 	${WIPE} *,ffa ${WFLAGS}
 	${WIPE} *.linked ${WFLAGS}
+	${WIPE} *.c ${WFLAGS}
+	${WIPE} *.h ${WFLAGS}
 	${RM} ${TARGET}
 	@echo ${COMPONENT}: cleaned
 
