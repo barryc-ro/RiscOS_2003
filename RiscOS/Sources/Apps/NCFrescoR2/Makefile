@@ -104,9 +104,13 @@ resources_NCFresco_base:
 	${TR} -i NCFrescoROTransRes:html.favmove    -o ${RESRES}.html.favmove    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename  -o ${RESRES}.html.favrename  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs       -o ${RESRES}.html.favs       ${TRFLAGS}
+	IfThere NCFrescoROTransRes:html.favsb Then \
+	  ${TR} -i NCFrescoROTransRes:html.favsb   -o ${RESRES}.html.favsb       ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscatr   -o ${RESRES}.html.favscatr   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscats   -o ${RESRES}.html.favscats   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd      -o ${RESRES}.html.favsd      ${TRFLAGS}
+	IfThere NCFrescoROTransRes:html.favsf Then \
+	  ${TR} -i NCFrescoROTransRes:html.favsf   -o ${RESRES}.html.favsf       ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.global/css -o ${RESRES}.html.global/css ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista      -o ${RESRES}.html.hista      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr      -o ${RESRES}.html.histr      ${TRFLAGS}
@@ -170,9 +174,13 @@ install_NCFresco_common:
 	${TR} -i NCFrescoROTransRes:html.favmove    -o ${INSTALLRESLOCALEDIR}.html.favmove    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename  -o ${INSTALLRESLOCALEDIR}.html.favrename  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs       -o ${INSTALLRESLOCALEDIR}.html.favs       ${TRFLAGS}
+	IfThere NCFrescoROTransRes:html.favsb Then \
+	  ${TR} -i NCFrescoROTransRes:html.favsb    -o ${INSTALLRESLOCALEDIR}.html.favsb      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscatr   -o ${INSTALLRESLOCALEDIR}.html.favscatr   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscats   -o ${INSTALLRESLOCALEDIR}.html.favscats   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd      -o ${INSTALLRESLOCALEDIR}.html.favsd      ${TRFLAGS}
+	IfThere NCFrescoROTransRes:html.favsf Then \
+	  ${TR} -i NCFrescoROTransRes:html.favsf    -o ${INSTALLRESLOCALEDIR}.html.favsf      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.global/css -o ${INSTALLRESLOCALEDIR}.html.global/css ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista      -o ${INSTALLRESLOCALEDIR}.html.hista      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr      -o ${INSTALLRESLOCALEDIR}.html.histr      ${TRFLAGS}
