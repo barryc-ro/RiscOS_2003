@@ -35,8 +35,10 @@ extern int system();
 #include "fname.h"
 #include "host.h"
 #include "err.h"
-#ifdef DDE
+#if defined(DDE) || defined(NESTEDMAKEFILES)
 #include "wholefls.h"
+#endif
+#ifdef DDE
 #include "swis.h"
 #endif
 
@@ -133,6 +135,12 @@ typedef struct
   int idx;
   MakefileDetails file[INCLUDEDEPTH];
 } Makefile;
+
+typedef struct include_search_path {
+  struct include_search_path *next;
+  char path[4];
+} include_search_path;
+
 #endif
 
 typedef struct {
@@ -146,6 +154,7 @@ typedef struct {
 
 typedef struct {
   int idx;
+  int pop_pending;
   pattern_substitution patterns[1];
 } pattern_table;
 
@@ -173,6 +182,9 @@ static int dir_sep = '.';
 
 static int  ch, nch, nch0, lineno, nerrors, amu_flags;
 #ifdef NESTEDMAKEFILES
+   static include_search_path include_dirs = { NULL, { 0 } };
+   static include_search_path **next_include_dir = &include_dirs.next;
+
    static HashTable inc_tab;
    static Makefile _in = { -1 };
    static Makefile *in = &_in;
@@ -268,7 +280,7 @@ static void prefix_init(char *fname)
     char prefix[1024];
     _kernel_swi_regs r;
 
-    if (!_swix(OS_FSControl, _INR(0,2)|_IN(5), 37, fname, prefix, sizeof(prefix)))
+    if (!_swix(OS_FSControl, _INR(0,5), 37, fname, prefix, 0, 0, sizeof(prefix)))
     {  char *ldot = strrchr(prefix, dir_sep);
        if (ldot)
        {  *ldot=0;
@@ -286,7 +298,7 @@ static void prefix_init(char *fname)
         p = t = prefix;
         while ((c = *t++ = *s++) > ' ')
             if (c == ':' || c == '.')
-                p = t;
+                p = t - 1;
         *p = 0;
         r.r[0] = (int)prefix;
         _kernel_swi(DDEUtils_Prefix, &r, &r);
@@ -388,12 +400,34 @@ static char *amu_getc_ptr(void)
   return in->file[in->idx].in;
 }
 
+static char *include_resolve_name(char *name)
+{
+  char filename[CMDLEN];
+  include_search_path *i;
+
+  for (i = &include_dirs; i; i = i->next) {
+    strcpy(filename, i->path);
+    strcat(filename, name);
+    if (wf_filesize(filename) != -1) break;
+  }
+
+  if (!i) {
+    strcpy(filename, name);
+  }
+
+  return Strdup_fail(filename);
+}
+
 static void push_include(char *name, int includeline, char *ptr)
 {
 #ifdef PREVENT_MULTIPLE_REINCLUSION
   HashId h;
 #endif
   MakefileDetails *md = in->file + in->idx + 1;
+
+  /* Allocates returned buffer via malloc */
+  name = include_resolve_name(name);
+  if (amu_flags & DEBUGGING2) err_report("Resolved makefile name is %s", name);
 
   --lineno;
 #ifdef PREVENT_MULTIPLE_REINCLUSION
@@ -405,7 +439,7 @@ static void push_include(char *name, int includeline, char *ptr)
     return;
   }
   hash_enter(inc_tab, name, &h);
-  hash_assoc(inc_tab, h, Strdup_fail(name));
+  hash_assoc(inc_tab, h, resolved_name);
 #endif
 
   if (in->idx >= (INCLUDEDEPTH-1))
@@ -423,6 +457,31 @@ static void push_include(char *name, int includeline, char *ptr)
   lineno = 1;
   nch = nch0 = 0;
   if (amu_flags & DEBUGGING) err_report("loading sub-makefile %s", name);
+}
+
+static void add_include_path(const char *path)
+{
+  while (*path) {
+    size_t prefix_len = strcspn(path, ",");
+    if (prefix_len > 0) {
+      char *end_of_path;
+      include_search_path *i;
+      i = *next_include_dir = malloc(prefix_len + sizeof(**next_include_dir));
+      next_include_dir = &i->next;
+      i->next = NULL;
+      memcpy(i->path, path, prefix_len);
+      end_of_path = i->path + prefix_len - 1;
+      if (*end_of_path != ':' && *end_of_path != '.') {
+        *++end_of_path = '.';
+      }
+      end_of_path[1] = '\0';
+      if (amu_flags & DEBUGGING) err_report("added directory '%s' to the search path", i->path);
+    }
+    path += prefix_len;
+    if (*path) {
+      ++path;
+    }
+  }
 }
 #endif
 
@@ -582,6 +641,13 @@ static int getch0()
   /* sequences, counting input lines, and splicing physical input lines  */
   /* together into longer logical lines. It uses the global nch0 to hold */
   /* a single character of lookahead.                                    */
+  if (patterns.pop_pending) {
+    patterns.pop_pending = 0;
+    while (patterns.idx > 0) {
+      pop_substitution();
+    }
+  }
+
   if (macro != NULL)
   { /* input from macro */
     if (nch0) {ch0 = nch0; nch0 = 0;} else ch0 = *macro++;
@@ -605,7 +671,9 @@ static int getch0()
   }
   else {
     ch0 = getc(in);
-    while (patterns.idx > 0) pop_substitution();
+    if (patterns.idx > 0) {
+      patterns.pop_pending = 1;
+    }
   }
   splicing = 0;
   if (ch0 == '\\')
@@ -722,16 +790,63 @@ static void skip_whitespace()
 static int do_substitutions(char *buffer, int curr_len, int max_len)
 {
   int sub;
+  int word_start = curr_len;
+
+  if (!patterns.idx) return curr_len;
+
+  if (word_start > 0) {
+    for (word_start = curr_len - 1; word_start > 0; --word_start) {
+      if (isspace(buffer[word_start])) {
+        ++word_start;
+        break;
+      }
+    }
+  }
 
   for (sub = 0; sub < patterns.idx; ++sub) {
     pattern_substitution *const p = &patterns.patterns[sub];
-    if (p->has_percents && 0) { /* Not implemented yet */
-      printf("WARNING: %% subst\n");
-      if (p->pre[0] == '%') {
+    if (p->has_percents) { /* Not implemented yet */
+      int pre_prefix_len = strcspn(p->pre, "%");
+      int pre_suffix_len = p->pre_len - pre_prefix_len - 1;
+      int post_prefix_len = strcspn(p->post, "%");
+      int post_suffix_len = p->post_len - post_prefix_len - 1;
+      int data_to_copy;
+      char *data;
 
+      if (pre_prefix_len && memcmp(buffer + word_start, p->pre, pre_prefix_len)) {
+        continue;
       }
-      else {
+      if (pre_suffix_len && memcmp(buffer + curr_len - pre_suffix_len, p->pre + p->pre_len - pre_suffix_len, pre_suffix_len)) {
+        continue;
       }
+
+      data = malloc(p->post_len + curr_len - word_start + 1);
+      if (post_prefix_len) memcpy(data, p->post, post_prefix_len);
+      data[post_prefix_len] = '\0';
+      if (pre_suffix_len) {
+        data_to_copy = curr_len - word_start - pre_suffix_len;
+        if (data_to_copy > 0) {
+          strncpy(data + post_prefix_len, buffer + word_start + pre_prefix_len, data_to_copy);
+        }
+        data[post_prefix_len + data_to_copy] = '\0';
+      }
+      if (post_suffix_len) {
+        strcat(data, p->post + post_prefix_len + 1);
+      }
+
+      if (amu_flags & DEBUGGING2) {
+        err_report("Converted: >>%s<< to >>%s<<", buffer + word_start, data);
+      }
+
+      data_to_copy = strlen(data);
+      if (word_start + data_to_copy >= max_len) {
+        data_to_copy = max_len - word_start - 1;
+      }
+      memcpy(buffer + word_start, data, data_to_copy);
+      curr_len = word_start + data_to_copy;
+      buffer[curr_len] = '\0';
+
+      free(data);
     }
     else {
       int prefix = curr_len - p->pre_len;
@@ -1005,6 +1120,7 @@ next_source_line:
         }
         if (j >= MACROLEN) j = MACROLEN-1;
         macro_body[j] = 0;
+        j = do_substitutions(macro_body, j, MACROLEN);
         amu_flags &= ~IN_RE_MACRO;
         if (recursive_vardefn) {
           amu_flags &= ~IN_RE_MACRO;
@@ -1439,6 +1555,7 @@ Node *node;
     if (*cmdtxt == '@')
     { flags |= SILENT;  ++cmdtxt;
     }
+    if (amu_flags & NO_ACTION) flags &= ~SILENT;
     /* N.B. '?' MUST be first or it won't get expanded */
     cmdtxt = expand(cmdtxt, node, 0);
     if (strlen(cmdtxt) > CMDLENLIM)
@@ -1876,6 +1993,23 @@ char *argv[];
         strong_definitions = 0;          /* Prevent any new strong definitions */
         cli_tab = hash_cinew(TAGTABSZ);  /* Wipe out the hash table - leaks, sorry */
       }
+#ifdef NESTEDMAKEFILES
+      else if (arg[1] == 'I')
+      {
+        char *path;
+        if (arg[2]) {
+          path = &arg[2];
+        }
+        else {
+          ++j;
+          path = argv[j];
+          if (j >= argc) {
+            err_fail("missing argument to %s option", arg);
+          }
+        }
+        add_include_path(path);
+      }
+#endif
       else
       switch (safe_tolower(arg[1]))
       {
@@ -1975,6 +2109,7 @@ default:  err_report("unrecognised option '%s'", arg);
 #endif
 
 #ifdef NESTEDMAKEFILES
+  add_include_path("Makefiles:");
   push_include(in_file, 1, NULL);
   define_macro("__SPACE", " ", 1);
 #elif defined(DDE)
