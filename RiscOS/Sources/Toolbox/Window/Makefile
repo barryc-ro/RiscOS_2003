@@ -49,7 +49,7 @@ AFLAGS   = -depend !Depend -Stamp -quit -CloseExec
 CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
 DFLAGS   = -D${SYSTEM}
 ROMFLAGS = -DROM
-INCLUDES = -IC:tboxlibint.,C:tboxlibs,C:
+INCLUDES = -I<Lib$Dir>.tboxlibint.,<Lib$Dir>.tboxlibs:,C:
 
 #
 # Libraries
