@@ -52,6 +52,8 @@
 ; 19-Feb-98  TMD  1.60		(Conditionally) parse OVS NPTReferenceDescriptor to spot transitions
 ; 20-Feb-98  TMD  1.61		Invalidate stream-type PEH PIDs on SelectProgram call
 ; 09-Mar-98  TMD  1.62		Invalidate PMT, video, audio and stream-type PEH PIDs on ResetStream
+; 08-May-98  TMD  1.63		(Conditionally) only accept first PAT and PMT after program change, for use with faint signal.
+; 29-May-98  TMD  1.64		Return NPT descriptor from MPEGControl_Stats.
 ;
 
         LEADR   Module_LoadAddr
@@ -84,6 +86,9 @@ NobbleVideoPacketLengths SETL {FALSE}			; easier to do it in MPEG2Video module i
 
 		GBLL	ParseOVSNPT
 ParseOVSNPT	SETL	{TRUE}
+
+		GBLL	OnlyAcceptFirstPATandPMT
+OnlyAcceptFirstPATandPMT SETL {FALSE}			; for use with a faint signal, since we don't check CRCs.
 
  [ :LNOT: CoroutineStackCopied
 TransportStack          *       &01C00800               ; 3/4 way down normal SVC stack
@@ -312,7 +317,7 @@ Mod_Title
         =       "MPEGControl", 0
 
 Mod_HelpStr
-        =       "MPEGControl", TAB, "1.62 (09 Mar 1998) (MPEG 2 Transport layer version)", 0
+        =       "MPEGControl", TAB, "1.64 (29 May 1998) (MPEG 2 Transport layer version)", 0
         ALIGN
 
 Mod_SWITable
@@ -1170,6 +1175,9 @@ ResetStream Entry "r0-r3"
 	MOV	r3, #0
 	STR	r3, [sp, #2*4]			; zero the returned r2
 	STR	r3, [sp, #3*4]			; zero the returned r3
+ [ ParseOVSNPT
+	STRB	r3, [r1, #CSH_NPTDescLength]	; no bytes in stored descriptor
+ ]
 
         LDR     r3, [r1, #CSH_StreamFlags]
  [ SkipToCorrectTrickMode
@@ -1674,6 +1682,10 @@ ts_process_PID0 ROUT
         BL      ts_getbytedec
         ORRS    r9, r7, r9, LSL #8
 	LDR	lr, [r1, #CSH_PMT_PID]
+ [ OnlyAcceptFirstPATandPMT
+	CMP	lr, #-1				; if already know PMT_PID
+	BNE	ts_skip_to_next_packet		; then skip to next packet
+ ]
         STR     r9, [r1, #CSH_PMT_PID]
 	CMP	lr, r9
 	LDRNE	r7, [r1, #CSH_StreamFlags]
@@ -1755,6 +1767,10 @@ ts_process_rest_of_PMT
 	BNE	%FT60				; not our stream so ignore
 
 	LDR	lr, [r1, #CSH_Video_PID]
+ [ OnlyAcceptFirstPATandPMT
+	CMP	lr, #-1				; if we already know this PID
+	BNE	%FT60				; then ignore it
+ ]
         STR     r10, [r1, #CSH_Video_PID]
 	TEQ	lr, r10				; check if same as old
 	LDRNE	r7, [r1, #CSH_StreamFlags]
@@ -1783,6 +1799,10 @@ ts_process_rest_of_PMT
 	BNE	%FT60				; not our stream so ignore
 
 	LDR	lr, [r1, #CSH_Audio_PID]
+ [ OnlyAcceptFirstPATandPMT
+	CMP	lr, #-1				; if we already know this PID
+	BNE	%FT60				; then ignore it
+ ]
         STR     r10, [r1, #CSH_Audio_PID]
 	TEQ	lr, r10				; check if same as old
 	LDRNE	r7, [r1, #CSH_StreamFlags]
@@ -1813,6 +1833,11 @@ ts_process_rest_of_PMT
 	LDREQ	lr, [lr, #PEH_StreamType]	; get stream type for PEH
 	TEQEQ	lr, r9				; check stream type against PEH's
 	BNE	%FT75				; no match, go to next one
+ [ OnlyAcceptFirstPATandPMT
+	LDR	lr, [r2, #PEHPID_PID]
+	CMP	lr, #-1				; if we already know this PID
+	BNE	%FT75				; then ignore it
+ ]
 	STR	r10, [r2, #PEHPID_PID]		; save PID value
 	LDR	r0, [r2, #PEHPID_PIDSlot]	; get PID slot
 	CMP	r0, #-1				; if not valid
@@ -2435,6 +2460,7 @@ Stats	Entry "r0-r2, r5-r6"
 
 ; loop over all tags in input list, advancing input list pointer r2
 
+StatsLoopReEntry
 10
 	LDR	r5, [r2], #4			; get next requested tag word
 	CMP	r5, #-1				; if end of list
@@ -2504,6 +2530,25 @@ Stats_SkippingUntilCorrectMode Entry
 	MOVNE	r6, #1
 	EXIT
 
+ [ ParseOVSNPT
+Stats_NPTDescriptor ROUT
+	LDRB	r6, [r1, #CSH_NPTDescLength]
+	ADD	lr, r6, #11			; add on two words for tag + length + round up to a word
+	BIC	lr, lr, #3
+	SUBS	r4, r4, lr
+	BMI	StatsLoopReEntry		; not enough space to store entry
+
+	SUBS	lr, lr, #8			; length not including tag + length, but including round-up
+	STMIA	r3!, {r5, lr}
+	ADD	r5, r1, #CSH_NPTContentID	; point at first byte of descriptor
+10
+	SUBS	lr, lr, #1			; if a byte left
+	LDRCSB	r6, [r5], #1
+	STRCSB	r6, [r3], #1
+	BCS	%BT10
+	B	StatsLoopReEntry		; now parse next tag
+ ]
+
 ; The table containing all the statistics
 
 StatsTable
@@ -2518,6 +2563,9 @@ StatsTable
 	StatsTableEntry &0006, CSH_DataReturned
 	StatsTableEntry &0007, Stats_SkippingUntilCorrectMode, Code
 	StatsTableEntry &0008, CSH_DataDiscarded
+ [ ParseOVSNPT
+	StatsTableEntry &0009, Stats_NPTDescriptor, Code
+ ]
 	&	-1
 
 ; **************************************************************************
