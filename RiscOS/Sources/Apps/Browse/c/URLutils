@@ -26,7 +26,7 @@
 #include "Utils.h"
 
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
-#include "Save.h"  /* (For filetype definitions)        */
+#include "Filetypes.h"
 
 #include "URLutils.h"
 
@@ -420,6 +420,7 @@ int urlutils_filetype_from_url(const char * url)
   /* Archives */
 
   if (ExtensionMatches(url, len, ".zip"))   return FileType_ARC;
+  if (ExtensionMatches(url, len, ".arc"))   return FileType_ARC;
   if (ExtensionMatches(url, len, ".spk"))   return FileType_ARC;
   if (ExtensionMatches(url, len, ".arj"))   return FileType_ARC;
   if (ExtensionMatches(url, len, ".gz"))    return FileType_ARC;
@@ -667,12 +668,10 @@ char * urlutils_fix_url(char * buffer, int buffersize)
 /*************************************************/
 /* urlutils_load_uri_file()                      */
 /*                                               */
-/* Takes the given file, opens it, and copies    */
-/* its contents to the given buffer. This is     */
-/* intended for URI files, where the contents    */
-/* may be a URL string with no terminator.       */
+/* Loads a URI file. Will take ANT URL files     */
+/* too.                                          */
 /*                                               */
-/* The copy terminates when the buffer is full   */
+/* The load terminates when the buffer is full   */
 /* except for the last byte (to allow for a      */
 /* forced terminator), or a control code is met  */
 /* in the URI file. Note that the buffer is      */
@@ -680,8 +679,8 @@ char * urlutils_fix_url(char * buffer, int buffersize)
 /* file is opened.                               */
 /*                                               */
 /* If there is an error opening the file or the  */
-/* file is empty, the first byte of the buffer   */
-/* will be zero.                                 */
+/* file is empty, the contents of the buffer are */
+/* undefined.                                    */
 /*                                               */
 /* Parameters: Pointer to the buffer;            */
 /*                                               */
@@ -698,22 +697,269 @@ void urlutils_load_uri_file(char * buffer, size_t size, char * path)
 {
   FILE * fp;
   int    byte, counter = 0;
+  int    type, found;
 
+  /* Warning - heavy use of 'goto's coming up shortly...! */
+
+  if (!size) return;
   memset(buffer, 0, size);
+
+  /* Find the filetype */
+
+  if (
+       _swix(OS_File,
+             _INR(0,1) | _OUT(0) | _OUT(6),
+
+             23, /* Read catalogue info for named, stamped object */
+             path,
+
+             &found,
+             &type)
+     )
+     return;
+
+  /* 'found' should be 1 (a file, rather than not found, a directory, etc.). */
+
+  if (found != 1) return;
+
+  /* Don't load if not the correct type */
+
+  if (type != FileType_URI && type != FileType_URL) return;
+
+  /* Open the file */
 
   fp = fopen(path, "rb");
 
   if (fp)
   {
-    do
+    byte = getc(fp);
+
+    /* For URL files, go straight to URL reading - they're just */
+    /* a terminated, or unterminated URL in a file.             */
+
+    if (type == FileType_URL) goto urlutils_load_uri_file_read_uri;
+
+    /* If it is a URI file, it must start with 'URI'. */
+
+    if (byte != 'U') goto urlutils_load_uri_file_not_a_uri_file;
+
+    byte = getc(fp);
+    if (byte != 'R') goto urlutils_load_uri_file_not_a_uri_file;
+
+    byte = getc(fp);
+    if (byte != 'I') goto urlutils_load_uri_file_not_a_uri_file;
+
+    /* Get to first character after the 'I' */
+
+    byte = getc(fp);
+
+    /* Now find the version number - skip white space */
+
+urlutils_load_uri_file_skip_white_space_1:
+
+    while (byte != EOF && byte < ' ') byte = getc(fp);
+
+    /* If we've hit a hash, this is a comment line - terminated by white */
+    /* space or end of file.                                             */
+
+    if (byte == '#')
     {
-      byte = getc(fp);
-      if (byte != EOF && byte >= ' ') buffer[counter++] = byte;
+      /* Now want to *find* the white space to skip the comment */
+
+      while (byte != EOF && byte >= ' ') byte = getc(fp);
+
+      /* If we're not at the end of the file, loop back and continue */
+      /* skipping white space.                                       */
+
+      if (byte != EOF) goto urlutils_load_uri_file_skip_white_space_1;
     }
-    while (byte != EOF && byte >= ' ' && counter < size - 1);
+
+    /* By now, we're either at EOF or the start of the first real entry */
+    /* after 'URL', which will be the file version. URI file versions   */
+    /* are guaranteed backwards compatible, so we can skip this bit.    */
+
+    while (byte != EOF && byte >= ' ') byte = getc(fp);
+
+    /* Now we want to get to the URI, so again, skip white space */
+    /* and comment lines. After that, we'll be on the first byte */
+    /* of the URI (or end of file, if it's broken).              */
+
+urlutils_load_uri_file_skip_white_space_2:
+
+    while (byte != EOF && byte < ' ') byte = getc(fp);
+
+    if (byte == '#')
+    {
+      while (byte != EOF && byte >= ' ') byte = getc(fp);
+
+      if (byte != EOF) goto urlutils_load_uri_file_skip_white_space_2;
+    }
+
+    /* Load the URI component - assume everything from here up */
+    /* to any control chracter or EOF is part of the URI. Note */
+    /* that 'byte' already contains the first character.       */
+
+urlutils_load_uri_file_read_uri:
+
+    while (byte != EOF && byte >= ' ' && counter < size - 1)
+    {
+      buffer[counter++] = byte;
+      byte              = getc(fp);
+    }
 
     fclose(fp);
   }
+
+  return;
+
+  /* Error condition exits */
+
+urlutils_load_uri_file_not_a_uri_file:
+
+  /* Not a URI / URL file */
+
+  if (fp) fclose(fp);
+
+  erb.errnum = Utils_Error_Custom_Message;
+
+  StrNCpy0(erb.errmess,
+           lookup_token("NotAURI:This is not a valid URI file.",
+                        0,
+                        0));
+
+  show_error_ret(&erb);
+
+  return;
+}
+
+/*************************************************/
+/* urlutils_extract_uri()                        */
+/*                                               */
+/* Looks at a URI file loaded into a buffer, and */
+/* overwrites it with the URL contents extracted */
+/* from the body.                                */
+/*                                               */
+/* Parameters: Pointer to the buffer holding the */
+/*             URI file;                         */
+/*                                               */
+/*             Size of the file (the buffer is   */
+/*             assumed to be at least this size  */
+/*             but not assumed to be larger).    */
+/*                                               */
+/* Returns:    Contents of the buffer are        */
+/*             updated to hold a null terminated */
+/*             URI.                              */
+/*************************************************/
+
+void urlutils_extract_uri(char * buffer, size_t file_size)
+{
+  int copy, counter;
+
+  if (!buffer || !file_size) return;
+
+  /* Ensure it starts with 'URI' */
+
+  if (strncmp(buffer, "URI", 3)) goto urlutils_extract_uri_not_a_uri_file;
+
+  /* Point to the first byte after the 'URI' indentifier */
+
+  counter = 3;
+
+  /* Skip white space to find the version number */
+
+urlutils_extract_uri_skip_white_space_1:
+
+  while (
+          counter < file_size   &&
+          buffer[counter]       &&
+          buffer[counter] < ' '
+        )
+        counter++;
+
+  /* If we find a comment, skip the comment body */
+
+  if (buffer[counter] == '#')
+  {
+    while (
+            counter < file_size    &&
+            buffer[counter]        &&
+            buffer[counter] >= ' '
+          )
+          counter++;
+
+    /* Now go back to skip the white space after the comment, and */
+    /* thus any other comments that follow.                       */
+
+    if (buffer[counter]) goto urlutils_extract_uri_skip_white_space_1;
+  }
+
+  /* Skip the file version */
+
+  while (
+          counter < file_size    &&
+          buffer[counter]        &&
+          buffer[counter] >= ' '
+        )
+        counter++;
+
+  /* Again, skip white space and comments */
+
+urlutils_extract_uri_skip_white_space_2:
+
+  while (
+          counter < file_size   &&
+          buffer[counter]       &&
+          buffer[counter] < ' '
+        )
+        counter++;
+
+  if (buffer[counter] == '#')
+  {
+    while (
+            counter < file_size    &&
+            buffer[counter]        &&
+            buffer[counter] >= ' '
+          )
+          counter++;
+
+    if (buffer[counter]) goto urlutils_extract_uri_skip_white_space_2;
+  }
+
+  /* Now we're at the URI. Copy it to the start of the buffer. */
+
+  copy = 0;
+
+  while (
+          counter < file_size    &&
+          buffer[counter]        &&
+          buffer[counter] >= ' '
+        )
+        buffer[copy++] = buffer[counter++];
+
+  /* Need to make sure that the string is terminated - if we're */
+  /* likely to overflow the buffer, we must overwrite the last  */
+  /* char with a terminator. You never know, it could be a non- */
+  /* essential last character (e.g. trailing '/').              */
+
+  if (copy && copy < file_size) buffer[copy] = 0;
+  else buffer[copy - 1] = 0;
+
+  return;
+
+urlutils_extract_uri_not_a_uri_file:
+
+  /* Not a URI / URL file */
+
+  erb.errnum = Utils_Error_Custom_Message;
+
+  StrNCpy0(erb.errmess,
+           lookup_token("NotAURI:This is not a valid URI file.",
+                        0,
+                        0));
+
+  show_error_ret(&erb);
+
+  return;
 }
 
 /*************************************************/

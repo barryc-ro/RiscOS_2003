@@ -15,7 +15,10 @@
 #include "swis.h"
 #include "flex.h"
 
+#include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
+
 #include "wimp.h"
+#include "wimplib.h"
 #include "event.h"
 
 #include "toolbox.h"
@@ -28,456 +31,55 @@
 #include "Utils.h"
 
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
+#include "Filetypes.h"
 #include "Hotlist.h"
+#include "Protocols.h"
 #include "URLutils.h"
 
 #include "Save.h"
 
-/* Locals */
-
-static browser_data * save_origin = NULL;
-static ObjectId       save_dbox   = 0;
-
-//static char         * save_buffer = NULL;
-
 /*************************************************/
-/* save_return_dialogue_id()                     */
+/* save_save_source()                            */
 /*                                               */
-/* Returns the object ID of the currently open   */
-/* save dialogue. This may be 0 if none has been */
-/* opened, or if it was closed through normal    */
-/* methods (successful save).                    */
+/* Saves the document source for a given browser */
+/* to the given path, setting the filetype as    */
+/* HTML or text as appropriate.                  */
 /*                                               */
-/* Returns: Object ID of the current save dbox.  */
+/* Parameters: Pointer to a null-terminated      */
+/*             pathname to save to;              */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             owning the source to save.        */
 /*************************************************/
 
-ObjectId save_return_dialogue_id(void)
+_kernel_oserror * save_save_source(char * path, browser_data * b)
 {
-  return save_dbox;
-}
+  _kernel_oserror * e;
 
-/*************************************************/
-/* save_fill_in()                                */
-/*                                               */
-/* Examines where the SaveAs_AboutToBeShown      */
-/* event (which led to this function being       */
-/* called) came from, and then calls a function  */
-/* relevant to that source.                      */
-/*                                               */
-/* Parameters are as for a standard Toolbox      */
-/* event handler.                                */
-/*************************************************/
+  /* Sanity checks */
 
-int save_fill_in(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  switch (idb->parent_component)
+  if (!b || !b->source || !path || !*path)
   {
-    case -1:
-    case SaveSetAsHTML:
-    case SaveAsHTML: return (save_fill_for_html(idb));
-    break;
-
-    #ifndef REMOTE_HOTLIST
-
-      case SaveHotlist:
-      break;
-
-    #endif
-
-    case ExportAsDraw:
-    break;
-
-    case ExportAsText:
-    break;
-
-    case ExportLink:
-    break;
-
-    case ExportSprite:
-    break;
-
     #ifdef TRACE
-      default:
-      {
-        erb.errnum = 0;
-        StrNCpy0(erb.errmess,
-                 "WhatSve:Internal error - Save dialogue origin not understood in save_fill_in.");
 
-        show_error_cont(&erb);
-      }
-      break;
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid parameters to save_save_source: %p, %p (source %p)",
+              path,
+              b,
+              b ? b->source : NULL);
+
+      return &erb;
+
+    #else
+
+      return NULL;
+
     #endif
   }
 
-  return 1;
-}
-
-/*************************************************/
-/* save_fill_for_html()                          */
-/*                                               */
-/* Fills in the Save As dialogue for saving an   */
-/* HTML file.                                    */
-/*                                               */
-/* Parameters: An ID block containing the ID of  */
-/*             the save dialogue in self_id, and */
-/*             the ID of the browser window in   */
-/*             ancestor_id (e.g. as passed in to */
-/*             a Toolbox event handler).         */
-/*                                               */
-/* Returns:    1 for success, 0 for failure.     */
-/*************************************************/
-
-int save_fill_for_html(IdBlock *idb)
-{
-  browser_data * b;
-
-  ChkError(toolbox_get_client_handle(0, idb->ancestor_id, (void *) &b));
-
-  if (!b) return 0;
-
-  /* For saving a frameset, work out the required browser_data struct */
-
-  if (idb->parent_component == SaveSetAsHTML)
-  {
-    if      (b->parent      && b->parent     ->source) b = b->parent;
-    else if (b->real_parent && b->real_parent->source) b = b->real_parent;
-    else if (b->ancestor    && b->ancestor   ->source) b = b->ancestor;
-  }
-
-  /* Remember which browser the save dialogue was for, */
-  /* and the dialogue's object ID.                     */
-
-  save_origin = b;
-  save_dbox   = idb->self_id;
-
-  /* Reset the transferred data counter */
-
-  b->save_transferred = 0;
-
-  /* Only fill it in if there's document source */
-
-  if (b->source)
-  {
-    char test[Limits_OS_Pathname];
-
-    ChkError(saveas_get_file_name(0,
-                                  idb->self_id,
-                                  test,
-                                  sizeof(test),
-                                  NULL));
-    test[sizeof(test) - 1] = 0;
-
-    /* If there's not already a path filled in, then set just the file name */
-
-    if (!strstr(test,".")) ChkError(saveas_set_file_name(0,
-                                                         idb->self_id,
-                                                         urlutils_leafname_from_url(b->urlddata,
-                                                                                    test,
-                                                                                    sizeof(test))));
-
-    /* Set the filetype and estimated file size (of coure, if */
-    /* more document comes in underneath the save window this */
-    /* will become inaccurate).                               */
-
-    if (b->page_is_text)
-    {
-      ChkError(saveas_set_file_type(0,
-                                    idb->self_id,
-                                    FileType_TEXT));
-    }
-    else
-    {
-      ChkError(saveas_set_file_type(0,
-                                    idb->self_id,
-                                    FileType_HTML));
-    }
-
-    ChkError(saveas_set_file_size(0,
-                                  idb->self_id,
-                                  flex_size((flex_ptr) &b->source)));
-
-//    ChkError(saveas_set_data_address(0,
-//                                     idb->self_id,
-//                                     b->source,
-//                                     flex_size((flex_ptr) &b->source),
-//                                     NULL,
-//                                     0));
-
-    return 1;
-  }
-
-  else return 0;
-}
-
-/*************************************************/
-/* save_fill_for_object()                        */
-/*                                               */
-/* Creates and initialises a Save As dialogue    */
-/* for an object of type determined by the       */
-/* save_type field of the given browser_data     */
-/* structure.                                    */
-/*                                               */
-/* Because these dialogues can persist, so that  */
-/* if several fetches come in at once they       */
-/* won't keep closing one another, a different   */
-/* (browser local) scheme is used to keep track  */
-/* of the dialogue.                              */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the object save fetch */
-/*             (which should be in progress);    */
-/*                                               */
-/*             The URL being fetched, from which */
-/*             a leafname will be derived (or    */
-/*             NULL for a generic response).     */
-/*************************************************/
-
-_kernel_oserror * save_fill_for_object(browser_data * b, char * url)
-{
-  _kernel_oserror * e;
-  char              test[Limits_OS_Pathname];
-
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_fill_for_object: Called for browser %p and url '%s'\n",b,url);
-  #endif
-
-  if (!b) return NULL;
-
-  if (!b->save_dbox)
-  {
-    e = toolbox_create_object(0, "SaveObject", &b->save_dbox);
-    if (e) return e;
-  }
-
-  /* Cancel any existing menu-based save */
-
-  if (save_origin)
-  {
-    e = _swix(Wimp_CreateMenu,
-              _IN(1),
-
-              -1);
-    if (e) return e;
-
-    save_origin = NULL;
-
-    /* Don't clear save_dbox as this is used to distinguish */
-    /* between the box we're about to open being closed and */
-    /* the one above being closed.                          */
-  }
-
-  /* Get the filename in the dialogue (as we could be */
-  /* reusing an old one)                              */
-
-  *test = 0;
-
-  e = saveas_get_file_name(0,
-                           b->save_dbox,
-                           test,
-                           sizeof(test),
-                           NULL);
-  if (e) return e;
-
-  test[sizeof(test) - 1] = 0;
-
-  /* If there's not already a path filled in, then set just the file name */
-
-  if (!strstr(test,"."))
-  {
-    e = saveas_set_file_name(0,
-                             b->save_dbox,
-                             urlutils_leafname_from_url(url ? url : lookup_token("NoURLobje:PageObject", 0, 0),
-                                                        test,
-                                                        sizeof(test)));
-    if (e) return e;
-  }
-
-  /* Set the filetype and estimated file size (-1, it's unknown) */
-
-  e = saveas_set_file_type(0,
-                           b->save_dbox,
-                           b->save_type);
-  if (e) return e;
-
-  e = saveas_set_file_size(0, b->save_dbox, -1);
-  if (e) return e;
-
-  /* Set the clint handle so we know where this came from */
-
-  e = toolbox_set_client_handle(0, b->save_dbox, b);
-  if (e) return e;
-
-  /* Show the window */
-
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_fill_for_object: Exitting through toolbox_show_object\n");
-  #endif
-
-  return toolbox_show_object(0,
-                             b->save_dbox,
-                             Toolbox_ShowObject_AtPointer,
-                             NULL,
-                             0,
-                             -1);
-}
-
-/*************************************************/
-/* save_save_to_file()                           */
-/*                                               */
-/* Called on reception of a Save_SaveToFile      */
-/* event. Handles saving document source to a    */
-/* file, saving page objects, etc.               */
-/*                                               */
-/* Parameters are as standard for a Toolbox      */
-/* event handler.                                */
-/*************************************************/
-
-int save_save_to_file(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  int               file_type;
-  _kernel_oserror * e;
-
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_save_to_file: Called\n");
-  #endif
-
-  if (!save_origin)
-  {
-    if (save_dbox && save_dbox == idb->self_id)
-    {
-      /* This was a menu-opened save dialogue being closed */
-
-      #ifdef TRACE
-        if (tl & (1u<<26)) Printf("save_save_to_file: No origin but menu save case\n");
-      #endif
-
-      save_dbox = 0;
-    }
-    else
-    {
-      browser_data * b;
-      char           filename[Limits_OS_Pathname];
-
-      #ifdef TRACE
-        if (tl & (1u<<26)) Printf("save_save_to_file: No origin no menu save case\n");
-      #endif
-
-      /* If save_origin is NULL and save_dbox is 0, this must be the */
-      /* completion of an object save dialogue                       */
-
-      ChkError(toolbox_get_client_handle(0, idb->self_id, (void *) &b));
-
-      /* Quick sanity check */
-
-      if (!b || b->save_dbox != idb->self_id)
-      {
-        #ifdef TRACE
-          if (tl & (1u<<26)) Printf("save_save_to_file: Exitting - no browser, or dbox ID didn't match\n");
-        #endif
-
-        return 0;
-      }
-
-      ChkError(saveas_get_file_name(0, b->save_dbox, filename, sizeof(filename), NULL));
-      filename[sizeof(filename) - 1] = 0;
-
-      /* App to app transfer? */
-
-      if (!strstr(filename, ".")) strcpy(filename, Save_ScrapFile);
-
-      /* Don't need the dialogue now */
-
-      toolbox_delete_object(0, b->save_dbox);
-      b->save_dbox = 0;
-
-      /* If using a small fetch window, set the title to the save pathname */
-
-      if (b->small_fetch)
-      {
-        char title[Limits_Title];
-
-        StrNCpy0(title, filename);
-
-        show_error_ret(window_set_title(0, b->self_id, title));
-      }
-
-      /* Open the file */
-
-      b->save_file = fopen(filename, "wb");
-
-      if (!b->save_file)
-      {
-        fetch_stop(b, 0);
-        show_error_ret(_kernel_last_oserror());
-      }
-      else if (b->source)
-      {
-        int bytes;
-
-        /* Set the filetype to DEADDEAD, to represent an incomplete */
-        /* file (particularly good on later Filers, which display   */
-        /* a special sprite for this).                              */
-
-        _swix(OS_File,
-              _INR(0,2),
-
-              2, /* Set load address */
-              filename,
-              0xdeaddead);
-
-        _swix(OS_File,
-              _INR(0,1) | _IN(3),
-
-              3, /* Set exec address */
-              filename,
-              0xdeaddead);
-
-        /* Any data in the source store represents already */
-        /* fetched bits of the file                        */
-
-        flex_set_budge(0);
-
-        bytes = fwrite(b->source,
-                       1,
-                       flex_size((flex_ptr) &b->source),
-                       b->save_file);
-
-        flex_set_budge(1);
-
-        if (bytes != flex_size((flex_ptr) &b->source))
-        {
-          /* Report any errors */
-
-          fetch_stop(b, 0);
-
-          show_error_ret(_kernel_last_oserror());
-        }
-        else
-        {
-          /* Otherwise, get rid of the data in the source store */
-          /* as it's been written to the file                   */
-
-          flex_free((flex_ptr) &b->source);
-          b->source = NULL;
-        }
-      }
-    }
-
-    return 1;
-  }
-
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_save_to_file: Origin menu save case\n");
-  #endif
-
-  /* Otherwise, this is a defined save for something from a menu */
-
-  ChkError(saveas_get_file_type(0, idb->self_id, &file_type));
-
-  /* Using RISC OS SWIs rather than C functions as */
-  /* the former are better suited to the RISC OS   */
-  /* I/O system and return errors in a more useful */
-  /* fashion than the standard C functions.        */
+  /* Save the file - lock flex heap to ensure save transfer */
 
   flex_set_budge(0);
 
@@ -485,162 +87,632 @@ int save_save_to_file(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
             _INR(0,2) | _INR(4,5),
 
             10, /* Save block of memory as a typed file */
-            ((SaveAsSaveToFileEvent *) event)->filename,
-            file_type,
-            save_origin->source,
-            ((char *) save_origin->source) + flex_size((flex_ptr) &save_origin->source));
+            path,
+            b->page_is_text ? FileType_TEXT : FileType_HTML,
+            b->source,
+            ((char *) b->source) + flex_size((flex_ptr) &b->source));
+
+  /* Unlock flex */
 
   flex_set_budge(1);
 
-  if (e) show_error_cont(e);
-
-  /* Tell the SaveAs dialogue that the save has been done */
-
-  ChkError(saveas_file_save_completed(SaveAs_SelectionSaved,
-                                      idb->self_id,
-                                      ((SaveAsSaveToFileEvent *) event)->filename));
-
-  return 1;
+  return e;
 }
 
 /*************************************************/
-/* save_fill_buffer()                            */
+/* save_transfer_source()                        */
 /*                                               */
-/* Fills a give buffer with a chunk of document  */
-/* source. Parameters are as standard for a      */
-/* Toolbox event handler responding to a         */
-/* SaveAs_FillBuffer event.                      */
+/* Save a browser's page source as an HTML file, */
+/* through a RAM transfer buffer with            */
+/* Wimp_TransferBlock.                           */
+/*                                               */
+/* Intended to be called as a response to a      */
+/* Message_RAMFetch from another task.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the document source;  */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             amount of data transferred so     */
+/*             far should be stored on entry;    */
+/*                                               */
+/*             Pointer to the WimpMessage struct */
+/*             corresponding to the              */
+/*             Message_RAMFetch that led to this */
+/*             function being called.            */
+/*                                               */
+/* Returns:    The contents of the int holding   */
+/*             the amount of data transferred    */
+/*             prior to the function call are    */
+/*             updated with the new amount       */
+/*             transferred. Callers should use   */
+/*             this in any future calls, and it  */
+/*             *must* be checked for a value of  */
+/*             -1, which indicates the transfer  */
+/*             is complete (so any tidying up    */
+/*             should be done if there is an     */
+/*             error returned, or if the int is  */
+/*             filled in with a value of -1).    */
+/*                                               */
+/* Assumes:    The various pointers may be NULL, */
+/*             though if they are the function   */
+/*             does nothing (it just exits).     */
 /*************************************************/
 
-int save_fill_buffer(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+_kernel_oserror * save_transfer_source(browser_data * b, int * transferred, WimpMessage * m)
 {
-  SaveAsFillBufferEvent * fill;
-  int                     datasize, copy = 0;
+  _kernel_oserror * e     = NULL;
+  int               size  = save_source_size(b);
+  int               left;
+  int               write;
 
-  fill = (SaveAsFillBufferEvent *) event;
+  /* Sanity check */
 
-  if (!save_origin) return 0;
-
-  /* How much data is there? */
-
-  datasize = flex_size((flex_ptr) &save_origin->source);
-
-  /* If the amount transferred is less than the total, proceed */
-
-  if (fill->no_bytes < datasize)
+  if (!b || !b->source || !transferred || !m)
   {
-    /* Work out how much to transfer */
+    #ifdef TRACE
 
-    datasize -= fill->no_bytes;
+      erb.errnum = Utils_Error_Custom_Normal;
 
-    if (fill->size)
-    {
-      if (datasize < fill->size) copy = datasize;
-      else                       copy = fill->size;
-    }
+      sprintf(erb.errmess,
+              "Invalid parameters to save_transfer_source: %p (source %p), %p, %p",
+              b,
+              b ? b->source : NULL,
+              transferred,
+              m);
+
+      return &erb;
+
+    #else
+
+      return NULL;
+
+    #endif
   }
 
-  /* Call the buffer filled function to tell the Toolbox */
-  /* how much to transfer (a somewhat inappropriately    */
-  /* named function in the context of its use here).     */
+  left = size - *transferred;
 
-  ChkError(saveas_buffer_filled(0,
-                                idb->self_id,
-                                ((char *) save_origin->source) + save_origin->save_transferred,
-                                copy));
+  /* If we have data to transfer, do so */
 
-  save_origin->save_transferred += copy;
-
-  return 1;
-}
-
-/*************************************************/
-/* save_save_completed()                         */
-/*                                               */
-/* Called when a document save is complete.      */
-/* Parameters are as standard for a Toolbox      */
-/* event handler responding to a                 */
-/* SaveAs_SaveCompleted event.                   */
-/*************************************************/
-
-int save_save_completed(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_save_completed: Called\n");
-  #endif
-
-  save_origin = NULL;
-  save_dbox   = 0;
-
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_save_completed: Successful\n");
-  #endif
-
-  return 1;
-}
-
-/*************************************************/
-/* save_dialogue_completed()                     */
-/*                                               */
-/* Called when a save dialogue is cancelled.     */
-/* Parameters are as standard for a Toolbox      */
-/* event handler responding to a                 */
-/* SaveAs_DialogueCompleted event.               */
-/*************************************************/
-
-int save_dialogue_completed(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_dialogue_completed: Called\n");
-  #endif
-
-  if (!save_origin)
+  if (left >= 0)
   {
-    if (save_dbox && save_dbox == idb->self_id)
+    /* Use either the buffer size, or the bytes left, whichever */
+    /* is the smallest.                                         */
+
+    write = left > m->data.ram_fetch.buffer_size ? m->data.ram_fetch.buffer_size : left;
+
+    if (write)
     {
-      /* This was a menu-opened save dialogue being closed */
+      /* Transfer the data - must lock the flex heap for the */
+      /* duration of this...                                 */
 
-      #ifdef TRACE
-        if (tl & (1u<<26)) Printf("save_dialogue_completed: No origin but menu save case\n");
-      #endif
+      flex_set_budge(0);
 
-      return save_save_completed(eventcode, event, idb, handle);
+      e = wimp_transfer_block(task_handle,
+                              (char *) b->source + (*transferred),
+                              m->hdr.sender,
+                              m->data.ram_fetch.buffer,
+                              write);
+
+      /* Unlock flex and report any errors */
+
+      flex_set_budge(1);
+
+      if (e) return e;
+    }
+
+    /* If we have any data left to send, reply with a Message_RAMTransmit */
+
+    e = protocols_atats_send_ram_transmit(m, write, write < m->data.ram_fetch.buffer_size);
+
+    /* Increment the transferred counter */
+
+    *transferred += write;
+    left         -= write;
+  }
+
+  /* Finished */
+
+  return e;
+}
+
+/*************************************************/
+/* save_source_size()                            */
+/*                                               */
+/* Returns the size that a given HTML source     */
+/* document would take on disc.                  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             owning the source to save.        */
+/*                                               */
+/* Returns:    Size the file will be.            */
+/*************************************************/
+
+int save_source_size(browser_data * b)
+{
+  /* Sanity check */
+
+  if (!b || !b->source)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid parameters to save_source_size: %p (source %p)",
+              b,
+              b ? b->source : NULL);
+
+      show_error_ret(&erb);
+
+    #endif
+
+    return 0;
+  }
+
+  /* For now this is trivially simple, but in future it */
+  /* could take account of, for example, inserting a    */
+  /* <BASE> tag into the document.                      */
+
+  return flex_size((flex_ptr) &b->source);
+}
+
+/*************************************************/
+/* save_save_object()                            */
+/*                                               */
+/* Called when a fetch is to be spooled to disc. */
+/* Handles saving as much data as is already     */
+/* fetched, and setting the relevant parts of    */
+/* the given browser_data structure up with the  */
+/* output file details.                          */
+/*                                               */
+/* Parameters: Pointer to a null-terminated      */
+/*             pathname to save to;              */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             relevant to the object to save.   */
+/*************************************************/
+
+_kernel_oserror * save_save_object(char * path, browser_data * b)
+{
+  /* Sanity check */
+
+  if (!b || !path || !*path)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid parameters to save_save_object: %p, %p",
+              path,
+              b);
+
+      return &erb;
+
+    #else
+
+      return NULL;
+
+    #endif
+  }
+
+  /* If using a small fetch window, set the title to the save pathname */
+
+  if (b->small_fetch)
+  {
+    char title[Limits_Title];
+
+    StrNCpy0(title, path);
+
+    /* Don't treat any errors here as fatal */
+
+    show_error_ret(window_set_title(0, b->self_id, title));
+  }
+
+  /* Open the file */
+
+  b->save_file = fopen(path, "wb");
+
+  if (!b->save_file)
+  {
+    fetch_stop(b, 0);
+
+    return _kernel_last_oserror();
+  }
+  else if (b->source)
+  {
+    int bytes;
+
+    /* Set the filetype to DEADDEAD, to represent an incomplete */
+    /* file (particularly good on later Filers, which display   */
+    /* a special sprite for this).                              */
+
+    _swix(OS_File,
+          _INR(0,2),
+
+          2, /* Set load address */
+          path,
+          0xdeaddead);
+
+    _swix(OS_File,
+          _INR(0,1) | _IN(3),
+
+          3, /* Set exec address */
+          path,
+          0xdeaddead);
+
+    /* Any data in the source store represents already */
+    /* fetched bits of the file. Must lock flex down   */
+    /* over the save to make sure the heap doesn't     */
+    /* shift over the call to fwrite.                  */
+
+    flex_set_budge(0);
+
+    bytes = fwrite(b->source,
+                   1,
+                   flex_size((flex_ptr) &b->source),
+                   b->save_file);
+
+    flex_set_budge(1);
+
+    /* If we didn't transfer as much as we expected, complain */
+
+    if (bytes != flex_size((flex_ptr) &b->source))
+    {
+      /* Report any errors */
+
+      fetch_stop(b, 0);
+
+      return _kernel_last_oserror();
     }
     else
     {
-      browser_data * b;
+      /* Otherwise, get rid of the data in the source store */
+      /* as it's been written to the file.                  */
 
-      #ifdef TRACE
-        if (tl & (1u<<26)) Printf("save_dialogue_completed: No origin no menu save case\n");
-      #endif
-
-      /* If save_origin is NULL and save_dbox is 0, this must be the */
-      /* cancellation of an object save dialogue.                    */
-
-      ChkError(toolbox_get_client_handle(0, idb->self_id, (void *) &b));
-
-      /* Quick sanity check */
-
-      if (!b || b->save_dbox != idb->self_id)
-      {
-        #ifdef TRACE
-          if (tl & (1u<<26)) Printf("save_dialogue_completed: Exitting - no browser, or dbox ID didn't match\n");
-        #endif
-
-        return 0;
-      }
-
-      /* Cancel the fetch (this deletes the dialogue too) */
-
-      fetch_stop(b, 0);
+      flex_free((flex_ptr) &b->source);
+      b->source = NULL;
     }
-
-    return 1;
   }
 
-  #ifdef TRACE
-    if (tl & (1u<<26)) Printf("save_dialogue_completed: Origin menu save case\n");
-  #endif
+  return NULL;
+}
 
-  return save_save_completed(eventcode, event, idb, handle);
+/*************************************************/
+/* save_object_size()                            */
+/*                                               */
+/* Returns the estimated size that a given       */
+/* object will be after being spooled through    */
+/* the fetcher.                                  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the object to save.   */
+/*                                               */
+/* Returns:    *Estimated* size of the object.   */
+/*************************************************/
+
+int save_object_size(browser_data * b)
+{
+  /* For now, we just don't know this information... */
+
+  return -1;
+}
+
+/*************************************************/
+/* save_save_uri()                               */
+/*                                               */
+/* Save the contents of a link as a URI file.    */
+/*                                               */
+/* Parameters: Pointer to a null-terminated      */
+/*             pathname to save to;              */
+/*                                               */
+/*             Pointer to the URL to save;       */
+/*                                               */
+/*             0 to save as a URI file, else     */
+/*             save as a non-terminated string   */
+/*             with type FileType_URL (ANT       */
+/*             suite URL file).                  */
+/*************************************************/
+
+_kernel_oserror * save_save_uri(char * path, char * url, int write_url)
+{
+  _kernel_oserror * e = NULL;
+  FILE            * file;
+
+  /* Sanity check */
+
+  if (!path || !*path || !url || !*url)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid parameters to save_save_uri: %p, %p, %d",
+              path,
+              url,
+              write_url);
+
+      return &erb;
+
+    #else
+
+      return NULL;
+
+    #endif
+  }
+
+  /* Try and open the file */
+
+  file = fopen(path, "wb");
+
+  if (!file) return _kernel_last_oserror();
+
+  /* Write the contents */
+
+  if (!write_url)
+  {
+    /* URI file */
+
+    if (
+         fprintf(file,
+                 "URI\t100\r\t# %s v",
+                 lookup_token("_TaskName",1,0)) < 0
+       )
+       e = _kernel_last_oserror();
+
+    else if (
+              fprintf(file,
+                      "%s\r\r\t%s",
+                      lookup_token("Version:(Unknown!)",0,0),
+                      url) < 0
+            )
+            e = _kernel_last_oserror();
+  }
+  else
+  {
+    /* URL file */
+
+    if (fprintf(file, url) < 0) e = _kernel_last_oserror();
+  }
+
+  /* Close the file and return any error that may have */
+  /* happened during the file writing stage            */
+
+  fclose(file);
+
+  if (e) return e;
+
+  /* Exit via. setting the filetype */
+
+  return _swix(OS_File,
+               _INR(0,2),
+
+               18, /* Set type of named object */
+               path,
+               write_url ? FileType_URL : FileType_URI);
+}
+
+/*************************************************/
+/* save_transfer_uri()                           */
+/*                                               */
+/* Save the contents of a link as a URI file,    */
+/* through a RAM transfer buffer with            */
+/* Wimp_TransferBlock.                           */
+/*                                               */
+/* Intended to be called as a response to a      */
+/* Message_RAMFetch from another task.           */
+/*                                               */
+/* Parameters: Pointer to the URL to save;       */
+/*                                               */
+/*             0 to save as a URI file, else     */
+/*             save as a non-terminated string   */
+/*             with type FileType_URL (ANT       */
+/*             suite URL file);                  */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             amount of data transferred so     */
+/*             far should be stored on entry;    */
+/*                                               */
+/*             Pointer to the WimpMessage struct */
+/*             corresponding to the              */
+/*             Message_RAMFetch that led to this */
+/*             function being called.            */
+/*                                               */
+/* Returns:    The contents of the int holding   */
+/*             the amount of data transferred    */
+/*             prior to the function call are    */
+/*             updated with the new amount       */
+/*             transferred. Callers should use   */
+/*             this in any future calls, and it  */
+/*             *must* be checked for a value of  */
+/*             -1, which indicates the transfer  */
+/*             is complete (so any tidying up    */
+/*             should be done if there is an     */
+/*             error returned, or if the int is  */
+/*             filled in with a value of -1).    */
+/*                                               */
+/* Assumes:    The various pointers may be NULL, */
+/*             though if they are the function   */
+/*             does nothing (it just exits).     */
+/*************************************************/
+
+_kernel_oserror * save_transfer_uri(char * url, int write_url, int * transferred, WimpMessage * m)
+{
+  _kernel_oserror * e        = NULL;
+  char            * uri_file = NULL;
+  int               size     = save_uri_size(url, write_url);
+  int               left;
+  int               write;
+
+  /* Sanity check */
+
+  if (!url || !*url || !transferred || !m)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid parameters to save_transfer_uri: %p, %d, %p, %p",
+              url,
+              write_url,
+              transferred,
+              m);
+
+      return &erb;
+
+    #else
+
+      return NULL;
+
+    #endif
+  }
+
+  left = size - *transferred;
+
+  /* Each time the function is called, rebuild the URI file in a */
+  /* temporary buffer.                                           */
+
+  if (size > 0 && left > 0)
+  {
+    uri_file = malloc(size + 1); /* + 1 to account for terminators */
+
+    if (!uri_file)
+    {
+      e = make_no_memory_error(10);
+      goto save_transfer_uri_exit;
+    }
+
+    /* Build the URI or URL file */
+
+    if (!write_url)
+    {
+      int written;
+
+      /* URI file */
+
+      written = sprintf(uri_file,
+                        "URI\t100\r\t# %s v",
+                        lookup_token("_TaskName",1,0));
+
+      sprintf(uri_file + written,
+              "%s\r\r\t%s",
+              lookup_token("Version:(Unknown!)",0,0),
+              url);
+    }
+    else
+    {
+      /* URL file */
+
+      strcpy(uri_file, url);
+    }
+  }
+
+  /* If we have data to transfer, do so */
+
+  if (left >= 0)
+  {
+    /* Use either the buffer size, or the bytes left, whichever */
+    /* is the smallest.                                         */
+
+    write = left > m->data.ram_fetch.buffer_size ? m->data.ram_fetch.buffer_size : left;
+
+    if (write)
+    {
+      /* Transfer the data */
+
+      e = wimp_transfer_block(task_handle,
+                              uri_file + (*transferred),
+                              m->hdr.sender,
+                              m->data.ram_fetch.buffer,
+                              write);
+
+      if (e) goto save_transfer_uri_exit;
+    }
+
+    /* If we have any data left to send, reply with a Message_RAMTransmit */
+
+    e = protocols_atats_send_ram_transmit(m, write, write < m->data.ram_fetch.buffer_size);
+
+    /* Increment the transferred counter */
+
+    *transferred += write;
+    left         -= write;
+  }
+
+  /* Finished */
+
+save_transfer_uri_exit:
+
+  /* Free the URI file buffer, if we claimed one */
+
+  if (uri_file) free (uri_file);
+
+  return e;
+}
+
+/*************************************************/
+/* save_uri_size()                               */
+/*                                               */
+/* Returns the size, in bytes, that a URI or URL */
+/* file will be.                                 */
+/*                                               */
+/* Parameters: Pointer to the URL that would be  */
+/*             saved;                            */
+/*                                               */
+/*             0 to find the length of a URI     */
+/*             file, 1 to find the length of a   */
+/*             URL file (as in save_save_uri).   */
+/*                                               */
+/* Returns:    The size, in bytes, that the file */
+/*             will be.                          */
+/*************************************************/
+
+int save_uri_size(char * url, int write_url)
+{
+  int len = 0;
+
+  /* Sanity check */
+
+  if (!url || !*url)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid parameters to save_uri_size: %p, %d",
+              url,
+              write_url);
+
+      show_error_ret(&erb);
+
+    #endif
+
+    return 0;
+  }
+
+  if (!write_url)
+  {
+    /* URI file */
+
+    len =  strlen("URI\t100\r\t# ");
+    len += strlen(lookup_token("_TaskName",1,0));
+
+    len += strlen(" v");
+    len += strlen(lookup_token("Version:(Unknown!)",0,0));
+
+    len += strlen("\r\r\t");
+    len += strlen(url);
+  }
+  else
+  {
+    /* URL file */
+
+    len = strlen(url); /* (No terminator needed in URL files, so no '+ 1') */
+  }
+
+  return len;
 }

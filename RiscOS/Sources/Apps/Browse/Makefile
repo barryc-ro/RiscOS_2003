@@ -84,7 +84,7 @@ WFLAGS		= ~cf~vr
 # build (plus debug), the Surfboard RAM build (plus debug), and the
 # Intertalk build (plus debug).
 
-DFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DALIAS_URLS -DHACK_LINEONE
+DFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DALIAS_URLS
 DDFLAGS		= ${DFLAGS} -DSTRICT_PARSER -DTRACE
 DZFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DHIDE_CGI -DANTI_TWITTER
 DDZFLAGS	= ${DZFLAGS} -DSTRICT_PARSER -DTRACE
@@ -211,6 +211,8 @@ OBJS = \
  o.Redraw		\
  o.Reformat		\
  o.Save			\
+ o.SaveFile		\
+ o.SaveObject		\
  o.Tables		\
  o.TokenUtils		\
  o.Toolbars		\
@@ -253,6 +255,8 @@ OBJSZ = \
  oz.Redraw		\
  oz.Reformat		\
  oz.Save		\
+ oz.SaveFile		\
+ oz.SaveObject		\
  oz.Tables		\
  oz.TokenUtils		\
  oz.Toolbars		\
@@ -295,6 +299,8 @@ OBJSD = \
  od.Redraw		\
  od.Reformat		\
  od.Save		\
+ od.SaveFile		\
+ od.SaveObject		\
  od.svcprint		\
  od.Tables		\
  od.TokenUtils		\
@@ -339,6 +345,8 @@ OBJSDZ = \
  odz.Redraw		\
  odz.Reformat		\
  odz.Save		\
+ odz.SaveFile		\
+ odz.SaveObject		\
  odz.svcprint		\
  odz.Tables		\
  odz.TokenUtils		\
@@ -382,6 +390,8 @@ OBJS_SURF = \
  o_surf.Redraw		\
  o_surf.Reformat	\
  o_surf.Save		\
+ o_surf.SaveFile	\
+ o_surf.SaveObject	\
  o_surf.Tables		\
  o_surf.TokenUtils	\
  o_surf.Toolbars	\
@@ -423,6 +433,8 @@ OBJSD_SURF = \
  od_surf.Redraw		\
  od_surf.Reformat	\
  od_surf.Save		\
+ od_surf.SaveFile	\
+ od_surf.SaveObject	\
  od_surf.svcprint	\
  od_surf.Tables		\
  od_surf.TokenUtils	\
@@ -466,7 +478,8 @@ OBJS_ITALK = \
  o_italk.Protocols	\
  o_italk.Redraw		\
  o_italk.Reformat	\
- o_italk.Save		\
+ o_italk.SaveFile	\
+ o_italk.SaveObject	\
  o_italk.Tables		\
  o_italk.TokenUtils	\
  o_italk.Toolbars	\
@@ -508,7 +521,8 @@ OBJSD_ITALK = \
  od_italk.Protocols	\
  od_italk.Redraw	\
  od_italk.Reformat	\
- od_italk.Save		\
+ od_italk.SaveFile	\
+ od_italk.SaveObject	\
  od_italk.svcprint	\
  od_italk.Tables	\
  od_italk.TokenUtils	\

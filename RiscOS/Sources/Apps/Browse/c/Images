@@ -571,6 +571,8 @@ static void image_delay(browser_data * b, int image)
 
 static void image_abandon(browser_data * b, int image)
 {
+  BBox end;
+
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_abandon: Called for image %d\n",image);
   #endif
@@ -606,11 +608,11 @@ static void image_abandon(browser_data * b, int image)
 //
 //      /* If not in Strict mode, ignore any errors */
 //
-    idata[image].istore -> EndLoad(idata[image].istore);
+    idata[image].istore -> EndLoad(idata[image].istore, &end);
 //
 //    #endif
 
-    image_update_image(b, image, NULL);
+    image_update_image(b, image, &end);
   }
 
   /* There may be a new overall fetch status, so ensure the */
@@ -742,7 +744,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
   /* Can't proceed without the URL to fetch! */
 
-  if (!url) return NULL;
+  if (!url) url = ""; /* Point to *something*, even if it is blank */
 
   xref = -1;
   tp   = token;
@@ -843,7 +845,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   /* Increment the image counter, zero the contents of the image_info structure */
   /* and fill in some of the fields where contents are known now.               */
 
-  memset(&idata[nimages], 0, sizeof(image_info)); /* Precautionary catchall */
+  memset(&idata[nimages], 0, sizeof(image_info)); /* Precautionary catch-all */
 
   idata[nimages].owner      = b;
   idata[nimages].x          = -1;
@@ -1005,7 +1007,7 @@ _kernel_oserror * image_process_null(browser_data * b)
                      #endif
 
                      0,                                  /* 0 = Don't parse fetched data     */
-                     !b->reloading);                    /* 1 = Proxy can be used, 0 = can't */
+                     !b->reloading);                     /* 1 = Proxy can be used, 0 = can't */
 
         if (e)
         {
@@ -1034,12 +1036,12 @@ _kernel_oserror * image_process_null(browser_data * b)
         /* call gives an error, abandon the image fetch and */
         /* exit.                                            */
 
-        e =  fetch_get_raw_data(NULL,                   /* The browser_data structure */
-                                idata[image].handle,    /* Fetch handle */
-                                buffer,                 /* Buffer for fetched data */
-                                sizeof(buffer),         /* Buffer's size */
-                                &done,                  /* 'done' = 1 for fetch completed, else 0 */
-                                &bytes);                /* Number of bytes put into buffer */
+        e = fetch_get_raw_data(NULL,                /* The browser_data structure */
+                               idata[image].handle, /* Fetch handle */
+                               buffer,              /* Buffer for fetched data */
+                               sizeof(buffer),      /* Buffer's size */
+                               &done,               /* 'done' = 1 for fetch completed, else 0 */
+                               &bytes);             /* Number of bytes put into buffer */
 
         if (e)
         {
@@ -1070,6 +1072,8 @@ _kernel_oserror * image_process_null(browser_data * b)
 
         if (done)
         {
+          BBox end;
+
           html_close(idata[image].handle);
 
           idata[image].handle  = 0;
@@ -1082,7 +1086,7 @@ _kernel_oserror * image_process_null(browser_data * b)
 
               /* Report any errors as Continue-only in strict parser mode */
 
-              e = idata[image].istore -> EndLoad(idata[image].istore);
+              e = idata[image].istore -> EndLoad(idata[image].istore, &end);
 
               if (e)
               {
@@ -1094,7 +1098,7 @@ _kernel_oserror * image_process_null(browser_data * b)
 
               /* If not in Strict mode, ignore any errors */
 
-              idata[image].istore -> EndLoad(idata[image].istore);
+              idata[image].istore -> EndLoad(idata[image].istore, &end);
 
             #endif
           }
@@ -1141,7 +1145,7 @@ _kernel_oserror * image_process_null(browser_data * b)
             else b->aacol = redraw_backcol(b);
           }
 
-          image_update_image(b, image, NULL);
+          image_update_image(b, image, &end);
         }
       }
       else
@@ -1824,7 +1828,10 @@ void image_reload(browser_data * b, HStream * token)
 {
   if (nimages)
   {
-    int image;
+    int i, image;
+
+    /* First, start a fetch on the base image if necessary, */
+    /* otherwise just set the priority flag and redraw it.  */
 
     image = image_get_token_image_xref(b, token);
 
@@ -1855,6 +1862,18 @@ void image_reload(browser_data * b, HStream * token)
     {
       idata[image].priority = 1;
       image_update_image(b, image, NULL);
+    }
+
+    /* Now set the priority flag on all images that cross */
+    /* reference the base image.                          */
+
+    for (i = 0; i < nimages; i++)
+    {
+      if (idata[i].xref == image)
+      {
+        idata[i].priority = 1;
+        image_update_image(b, i, NULL);
+      }
     }
   }
 }
@@ -2307,17 +2326,30 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
 
       /* Set the 'whole' BBox to the size of the base image in OS units */
 
-      whole.xmax = idata[image].currw + 1;
-      whole.ymax = idata[image].currh + 1;
+      whole.xmax = idata[i].currw;
+      whole.ymax = idata[i].currh;
 
       /* Ensure the redraw box returned by the image Load call */
       /* (or the BBox 'whole' from above) is scaled to fit the */
       /* actual image's dimensions.                            */
+      /*                                                       */
+      /* We don't scale if box = &whole, as in that case the   */
+      /* bbox is already scaled, or if for some reason the     */
+      /* width or height fields in the ImageLib image struct   */
+      /* seem to be invalid.                                   */
 
-      partial.xmin = (box->xmin  * idata[i].currw) / idata[image].currw;
-      partial.ymin = (box->ymin  * idata[i].currh) / idata[image].currh;
-      partial.xmax = ((box->xmax * idata[i].currw) / idata[image].currw) + 1;
-      partial.ymax = ((box->ymax * idata[i].currh) / idata[image].currh) + 1;
+      if (
+           box != &whole                      &&
+           idata[image].istore->width_os  > 0 &&
+           idata[image].istore->height_os > 0
+         )
+      {
+        partial.xmin = (box->xmin * idata[i].currw) / idata[image].istore->width_os;
+        partial.ymin = (box->ymin * idata[i].currh) / idata[image].istore->height_os;
+        partial.xmax = (box->xmax * idata[i].currw) / idata[image].istore->width_os;
+        partial.ymax = (box->ymax * idata[i].currh) / idata[image].istore->height_os;
+      }
+      else partial = *box;
 
       /* If the image doesn't have position information, can't plot it */
 
@@ -4378,4 +4410,99 @@ _kernel_oserror * image_return_click_offset(browser_data * b, HStream * t, WimpG
   image_convert_to_pixels(b, t, x, y);
 
   return NULL;
+}
+
+/*************************************************/
+/* image_export_sprite()                         */
+/*                                               */
+/* Saves an image represented by the given token */
+/* as a sprite at the given path.                */
+/*                                               */
+/* Parameters: Pointer to the path to save to;   */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             that owns the image;              */
+/*                                               */
+/*             Pointer to the token representing */
+/*             the image, or NULL for the page's */
+/*             background image.                 */
+/*************************************************/
+
+_kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * image)
+{
+  int i;
+
+  /* Find the image number */
+
+  if (!image) i = b->backimage;
+  else        i = image_get_token_image_xref(b, image);
+
+  /* Complain if we can't in TRACE builds */
+
+  if (i < 0)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "In image_export_foreground_sprite, can't find an image that is represented by the token %p for the browser %p.",
+              image,
+              b);
+
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* Must have image data...! */
+
+  if (!idata[i].istore || !idata[i].istore->DumpSprite)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "There is no data for this image in image_export_foreground_sprite.");
+
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* Export the image */
+
+  return idata[i].istore -> DumpSprite(idata[i].istore,
+                                       path,
+                                       -1);
+}
+
+/*************************************************/
+/* image_sprite_size()                           */
+/*                                               */
+/* Returns the size that the given image would   */
+/* be as a sprite on disc.                       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             that owns the image;              */
+/*                                               */
+/*             Pointer to the token representing */
+/*             the image, or NULL for the page's */
+/*             background image.                 */
+/*                                               */
+/* Returns:    The size the image would be as a  */
+/*             sprite file saved to disc, in     */
+/*             bytes.                            */
+/*************************************************/
+
+int image_sprite_size(browser_data * b, HStream * image)
+{
+  /* ...And for now, we don't know. */
+
+  return -1;
 }
