@@ -16,7 +16,6 @@
 #define TEXTUAL_EMAIL 0
 #define HARDCOPY_FINISHED 1
 #define NEWCODE 1
-#define NEW_COUNTER 1
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,7 +191,6 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
         case LX_SQ_NEW_PAGE:
         case LX_SQ_PAGE_COMPLETE:
         case LX_SQ_DOCUMENT_COMPLETE:
-        case UI_SQ_CANCEL:
 			{
 				rx_States nextstate = rx_state;
 
@@ -429,16 +427,6 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 									nextstate = rxIDLE;
 								}
 								break;
-#if SUPPORT_UI
-                            case UI_SQ_CANCEL:
-                                /* ask user to confirm Cancel button (if not already doing so) */
-                                if (scan_document->Suspended == FALSE)
-                                {
-                                    scan_document->Suspended = TRUE;
-                                    Screen_QuerryCancel(scan_document->ProcessId);
-                                }
-                                break;
-#endif
                         }
                         break;
                 } /* switch (rx_state) */
@@ -542,6 +530,30 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 				NAN_document->ReRouteAvailable = TRUE;
 			}
        		break;
+
+        case UI_SQ_CANCEL:
+            if ((scan_document != NULL) && (scan_document != transmit_document))
+            {
+                /* not yet sending, so inhibit sending, then                   */
+                /* ask user to confirm Cancel button (if not already doing so) */
+                if (scan_document->Suspended == FALSE)
+                {
+                    scan_document->Suspended = TRUE;
+                    Screen_QuerryCancel(scan_document->ProcessId);
+                }            
+            }
+#if 0
+            else
+            {
+                if (transmit_document != NULL)
+                {
+                    StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_ABORT_OUTGOING, NULL);
+                    aborting_outgoing = TRUE;
+                    transmit_document->aborting;
+                }
+            }
+#endif
+            break;
 
         case SC_SQ_CANCEL_CONFIRMED:
             NAN_document = document_from_pid(messageData->data.sc_sq_cancel_confirmed.pid);
@@ -1553,9 +1565,8 @@ static void Log_RxConnectedError(messageDataBlock *messageData)
 
 static char log_tx_dial_number[30] = { 0 };
 static int  log_tx_error_count = 0;
-#if NEW_COUNTER
 static int  log_tx_dataXfer = 0;
-#endif
+
 
 /*
  * Capture time when dialup started
@@ -1575,6 +1586,7 @@ static void Log_TxConnecting(enum _SendRoute route, PhoneConnection *connection,
 
 	strcpy(log_tx_dial_number, dial_number);
 	log_tx_error_count = 0;
+    log_tx_dataXfer = 0;
 
 	if (route == RouteISP)
 	{
@@ -1716,12 +1728,7 @@ static void Log_TxConnected(enum _SendRoute route, PhoneConnection *connection)
 	connection->TimeConnect = now;
 	connection->TimeEnd     = now;
 
-
 	log_tx_error_count = 0;	/* unlikely not to be zero */
-
-#if NEW_COUNTER
-    log_tx_dataXfer = 0;
-#endif
 
 	if (route == RouteISP)
 	{
@@ -1741,9 +1748,7 @@ static void Log_TxConnected(enum _SendRoute route, PhoneConnection *connection)
 
 static void Log_TxConnectedSentData(enum _SendRoute route, PhoneConnection *connection)
 {
-#if NEW_COUNTER
     log_tx_dataXfer = 1;    
-#endif
 }
 
 static void strncat_recipient(char *buffer, enum _SendRoute route, Document document, int bufsize)
@@ -1816,6 +1821,11 @@ static void Log_TxConnectedErrorSendingDoc(enum _SendRoute route, PhoneConnectio
 
 		strncat(buffer, " Error ", sizeof(buffer));
 		strncat(buffer, messageData->data.os_error.err.errmess, sizeof(buffer));
+
+#if SUPPORT_EMAIL
+        if (route == RouteISP)
+            document->SMTPSendFailures++;
+#endif
 
         LogFileIF_Message(buffer);
     }
@@ -1894,14 +1904,12 @@ static void Log_TxSentDocument(enum _SendRoute route, Document document)
 	/* switch in when HANGUP followed by immediate dial failure is fixed */
 	connection->RetryTime   = time(NULL) + 30;	/*now() + something(connection->RetryCount);*/	
 #endif
-#if NEW_COUNTER
     if (route == RouteDIRECT)
     {
         /* if trying to send data, but non went, count the connection as bad */
         if (log_tx_dataXfer == 0)
             document->Connection.BadConnection++;
     }
-#endif
 }
 
 #if SUPPORT_EMAIL
@@ -1925,12 +1933,11 @@ static void Log_TxDisconnected(enum _SendRoute route, PhoneConnection *connectio
         strncat_time(buffer, connection->TimeEnd - connection->TimeConnect, sizeof(buffer));
 
         LogFileIF_Message(buffer);
+
+        /* if trying to send data, but non went, count the connection as bad */
+        if ((log_tx_dataXfer == 0) && (log_tx_error_count != 0))
+            connection->BadConnection++;
     }
-#if NEW_COUNTER
-    /* if trying to send data, but non went, count the connection as bad */
-    if (log_tx_dataXfer == 0)
-        connection->BadConnection++;
-#endif
 }
 #endif
 #if SUPPORT_EMAIL
@@ -1945,6 +1952,9 @@ static void Log_TxEncodingError(enum _SendRoute route, messageDataBlock *message
 	strncat(buffer, " Error ", sizeof(buffer));
 	strncat(buffer, messageData->data.os_error.err.errmess, sizeof(buffer));
 
+    if (route == RouteISP)
+        document->MimeEncodeFailures++;
+
     LogFileIF_Message(buffer);
 }
 #endif
@@ -1955,10 +1965,8 @@ static BOOL connection_impossible(enum _SendRoute route, PhoneConnection *connec
 	if (connection->RetryCount >= (*connection->RetryLimit))
 		return(TRUE);	/* exhausted our dial-up limit and still not got through! */
 
-#if NEW_COUNTER
     if (connection->BadConnection >= 3)
         return(TRUE);   /* we can connect, but no data transfer happens */
-#endif
 
     return(FALSE);
 }
@@ -2035,6 +2043,8 @@ static _kernel_oserror *SendQ_CreateDocument(Document *p_document)
         document->HardCopyProcessID = 0;		/* no PrintQ document */
 
         document->RequestReceipt = FALSE;       /* set TRUE for notes & forms if receipt required */
+        document->MimeEncodeFailures = 0;
+        document->SMTPSendFailures = 0;
 
 	    document->ScanState = ScanIDLE;			/* idle (0) */
     	document->ScanCount = 0;				/* no pages received yet */
@@ -2053,9 +2063,8 @@ static _kernel_oserror *SendQ_CreateDocument(Document *p_document)
 	    document->Connection.RetryLimit = &setup_phone_fax_redial_count;	/* address not value, so changes in setup will be seen */
 	    document->Connection.RetryCount = 0;	/* not yet tried to direct dial */
 	    document->Connection.RetryTime = time(NULL);	/* time now, to trigger dial as soon as document needs it */
-#if NEW_COUNTER
         document->Connection.BadConnection = 0;  /* no connection failures so far */
-#endif
+
 		document->SearchRef = 0;                /* address book search ref */
 #if SUPPORT_ADDRESSBOOK
 		document->AddressRecord.SearchFlags  = ADDRBOOKIF_SEARCH_FLAGS;   /* } Search complete when either */
@@ -2202,7 +2211,7 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
 				            		case RouteISP:
 				            			/* don't use connection_impossible(RouteISP, &isp_dialup.Connection[isp_dialup.use_next] as our   */
 				            			/* caller uses it and always leaves structure isp_dialup looking as if connection would work */
-										if (isp_unavailable)
+										if ((isp_unavailable) || (document->MimeEncodeFailures >= 2) || (document->SMTPSendFailures >= 3))
 				            			{
 				            				
 				            				/* we've dialled the ISP many times on many numbers and failed to get through */
@@ -2568,9 +2577,7 @@ extern void SendQ_TickerHandler(void)
                 }
        			isp_dialup.Connection[i].RetryCount = 0;	/* haven't tried this number yet */
        			isp_dialup.Connection[i].RetryTime  = now;
-#if NEW_COUNTER
        			isp_dialup.Connection[i].BadConnection = 0; /* no bad connections so far */
-#endif
             }
     
             /* start with the Primary route (first number) */
