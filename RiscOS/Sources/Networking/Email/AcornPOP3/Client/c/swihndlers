@@ -4,7 +4,7 @@
 
 	FILE:		swihndlers.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.12 for RISC OS
+	VERSION:	0.13 for RISC OS
 
 	OVERVIEW
 	========
@@ -38,6 +38,13 @@
 					address (ie. pollword contents)
 					DeRegister now closes socket if it's
 					not already
+	18/11/98	0.13	RDW	Register() updated to support global flag setting for progress notification
+					of all operations and initialise the returned data queue
+					DeRegister() updated to destroy the returned data queue
+					Logon() updated to support local toggling of progress notification
+					ReleaseData() updated to call ProcessQueue() to put
+					the next queued returned data structure for the client
+					in the pollword.
 */
 
 
@@ -73,6 +80,7 @@
 #include "getuniquei.h"
 #include "getlistuid.h"
 #include "errortable.h"
+#include "pop_utils.h"
 
 
 /* ************************************************************************** */
@@ -121,7 +129,7 @@ extern int timeouts[];								// default timeouts
    		   to the structure holding the returned information.
    DEPENDENCIES:   BOOL			inuse		module.c
    		   			errortable	errortable.h
-   DEPENDED ON BY: 
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    OUTPUT PARAMS:  _kernel_swi_regs*	r		registers
@@ -129,8 +137,8 @@ extern int timeouts[];								// default timeouts
    							r->r[1] = Address of pollword
     RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_Register(_kernel_swi_regs *r, void *pw)
@@ -140,13 +148,20 @@ _kernel_oserror* handle_swi_AcornPOP3_Register(_kernel_swi_regs *r, void *pw)
   void			*pollword_addr = 0;					// address of pollword
 
   UNUSED(pw);
-  
+
   flags = (unsigned int)r->r[0];
 
 
+  dprintf(("", "Register(): flags: %x\n", flags));
   /* check flags */
   if (flags != 0)
   {
+    if (flags & AcornPOP3_PROGRESS_NOTIFICATION)
+    {
+      dprintf(("", "Global Notification requested\n"));				// set this processes flags to indicate client wants progress notification
+      process1.flags = process1.flags | AcornPOP3_PROGRESS_NOTIFICATION;	// for all operations
+    }
+
     if (flags & REGISTER_WIMPMSG)
     {
       dprintf(("", "Register: WIMPMSG\n"));
@@ -154,7 +169,8 @@ _kernel_oserror* handle_swi_AcornPOP3_Register(_kernel_swi_regs *r, void *pw)
       process1.taskhandle = r->r[1];
       dprintf(("", "process1.taskhandle: %x\n", process1.taskhandle));
     }
-    else if (flags & REGISTER_UNUSED_MASK)					/* check no other bits are set which we don't support */
+
+    if (flags & REGISTER_UNUSED_MASK)						/* check no other bits are set which we don't support */
     {
       flags = flags & REGISTER_UNUSED_MASK;
       result = ERROR(FAILED);
@@ -162,25 +178,29 @@ _kernel_oserror* handle_swi_AcornPOP3_Register(_kernel_swi_regs *r, void *pw)
     else
       flags = 0;								/* all accepted */
   }
-  
+
   if (!result)
   {
     if (inuse)									// We only support one caller at a time in this version
-      result = ERROR(NOMOREPROCESSES);					// so return an error
+      result = ERROR(NOMOREPROCESSES);						// so return an error
     else
     {
-      process1.pollword = 0;							// set pollword to 0
-      process1.state    = PROCESSING;
-      pollword_addr     = &(process1.pollword);					// set pollword address as address of pollword ptr in process1 struct
-      result = 0;								// set no error
-      inuse  = TRUE;								// set inuse to TRUE, we have a client
+      result = InitQueue(&(process1.queue));					/* initialise returned data queue */
+      if (result == 0)
+      {
+        process1.pollword = 0;							// set pollword to 0
+        process1.state    = PROCESSING;
+        pollword_addr     = &(process1.pollword);				// set pollword address as address of pollword ptr in process1 struct
+        result = 0;								// set no error
+        inuse  = TRUE;								// set inuse to TRUE, we have a client
+      }
     }
   }
-  
+
   // setup registers for return from SWI
   r->r[0] = flags;								// r0 unchanged
   r->r[1] = (int)pollword_addr;							// r1 is address of pollword
-  
+
   return result;
 }
 
@@ -191,8 +211,8 @@ _kernel_oserror* handle_swi_AcornPOP3_Register(_kernel_swi_regs *r, void *pw)
    DESCRIPTION:    Function to handle AcornPOP3_DeRegister SWI
    		   Function to allow a client of the AcornPOP3 to deregister
    		   with it.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -201,8 +221,8 @@ _kernel_oserror* handle_swi_AcornPOP3_Register(_kernel_swi_regs *r, void *pw)
    							r->r[1] = 0 if success, else unchanged
     RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 #pragma -z0									/* horrible hack to get round compiler optimiser bug */
@@ -226,6 +246,7 @@ _kernel_oserror* handle_swi_AcornPOP3_DeRegister(_kernel_swi_regs *r, void *pw)
         socketclose(process1.socknum);
         process1.socknum = -1;
       }
+      DestroyQueue(&(process1.queue));						/* destroy queued returned data, ignore any error */
       inuse = FALSE;
     }
     else
@@ -233,14 +254,14 @@ _kernel_oserror* handle_swi_AcornPOP3_DeRegister(_kernel_swi_regs *r, void *pw)
   }
   else
     result = ERROR(FAILED);
- 
+
   // setup registers for return from SWI
   r->r[0] = r->r[0];								// r0 unchanged
   if (result)
     r->r[1] = r->r[1];								// r1 unchanged if an error
   else
     r->r[1] = (int)0;								// r1 set to 0 if deregistered okay
-  
+
   return result;
 }
 #pragma -z1									/* horrible hack to get round compiler optimiser bug */
@@ -253,8 +274,8 @@ _kernel_oserror* handle_swi_AcornPOP3_DeRegister(_kernel_swi_regs *r, void *pw)
    		   Function to free the block of memory now that the client has
    		   indicated they are finisehd with it.  NOTE: does nothing just now
    		   in this version as only 1 client supported and data is static
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -267,8 +288,8 @@ _kernel_oserror* handle_swi_AcornPOP3_DeRegister(_kernel_swi_regs *r, void *pw)
    							r->r[3] = 0 if success, else unchanged
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_ReleaseData(_kernel_swi_regs *r, void *pw)
@@ -284,10 +305,10 @@ _kernel_oserror* handle_swi_AcornPOP3_ReleaseData(_kernel_swi_regs *r, void *pw)
   pollword_addr = (void*)r->r[1];						// get pollword_addr;
   swinum        = (int)r->r[2];							// get message id
   IDnum         = (void*)r->r[3];						// get returned data unique id
-  
+
   if ((!inuse) && (pollword_addr != (&(process1.pollword))))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-    
+
   // setup registers for return from SWI
   if (!result)									// If no error, then
   {
@@ -296,6 +317,7 @@ _kernel_oserror* handle_swi_AcornPOP3_ReleaseData(_kernel_swi_regs *r, void *pw)
     r->r[2] = 0;								// set to 0
     r->r[3] = 0;								// set to 0
     process1.pollword = 0;							// set pollword to 0
+    ProcessQueue(&process1);							/* Dequeue the next data notification for the client, if there is one */
   }
   else
   {
@@ -329,10 +351,12 @@ _kernel_oserror* handle_swi_AcornPOP3_ReleaseData(_kernel_swi_regs *r, void *pw)
                    timeouts are used if >= 0.  If they are -ve, then the system.var
                    settings are used.  For those vars. that are not set the compiled
                    in values are used.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
+   							  bit 4 -   set(1) = invert global notify progress setting
+   							  bit 4 - unset(0) = use global notify progress setting
    							r->r[1] = Address of pollword
    							r->r[2] = Address of username string
    							r->r[3] = Address of password string
@@ -346,8 +370,8 @@ _kernel_oserror* handle_swi_AcornPOP3_ReleaseData(_kernel_swi_regs *r, void *pw)
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_Logon(_kernel_swi_regs *r, void *pw)
@@ -362,6 +386,11 @@ _kernel_oserror* handle_swi_AcornPOP3_Logon(_kernel_swi_regs *r, void *pw)
   int			 timeout_USER  = 2;					// timeout for USER command (mins)
   int			 timeout_PASS  = 2;					// timeout for PASS command (mins)
   int                    timeout_greeting = 2;					// timeout to wait for greeting from server (mins)
+  BOOL                   notification  = FALSE;
+
+
+  if (process1.flags & AcornPOP3_PROGRESS_NOTIFICATION)				// Default to Client's want progress notification setting on registration
+    notification = TRUE;
 
   UNUSED(pw);
   flags         = (unsigned int)r->r[0];					// get flags
@@ -373,7 +402,14 @@ _kernel_oserror* handle_swi_AcornPOP3_Logon(_kernel_swi_regs *r, void *pw)
 //  timeout_USER  = (int)r->r[6];
 //  timeout_PASS  = (int)r->r[7];
 //  timeout_greeting = (int)r->r[8];
-  
+  if (flags & AcornPOP3_PROGRESS_NOTIFICATION)					// if notification flag set in flags for this SWI, then
+  {
+    if (notification == TRUE)
+      notification = FALSE;							// invert the global setting of notification
+    else
+      notification = TRUE;
+  }
+
 //  if ((!inuse) || (pollword_addr != &caller_data))				// If not registered or pollword address is wrong
   #ifdef MemCheck_MEMCHECK
     if (username) MemCheck_RegisterMiscBlock_String(username);
@@ -382,21 +418,24 @@ _kernel_oserror* handle_swi_AcornPOP3_Logon(_kernel_swi_regs *r, void *pw)
   #endif
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   if ((!result) && ((username == 0) || (password == 0) || (hostname == 0)))	// If no error yet and username,password or hostname string is NULL
     result = ERROR(NULLADDR);							// Return NULL address error
-    
+
   if ((!result) && (*username == '\0'))						// If username is a zero length string
-    result = ERROR(NULLADDR);						// Return NULL address error
-    
+    result = ERROR(NULLADDR);							// Return NULL address error
+
   if (!result)									// If no errors, do SWI operation
-    result = logon_USER_PASS(username, password, hostname, port_number, timeout_USER, timeout_PASS, timeout_greeting);
-  
+    result = logon_USER_PASS(username, password, hostname, port_number,
+                             timeout_USER, timeout_PASS, timeout_greeting,
+                             notification);
+
   // setup registers for return from SWI
   if (!result)									// If no error, then
   {
     r->r[0] = r->r[0];								// r0 unchanged
     r->r[1] = (int)&(process1.logon);						// Unique ID to identify returned structure
+    dprintf(("", "Logon: UniqueID r[1]: %x\n", r->r[1]));
   }
   else
   {
@@ -407,7 +446,7 @@ _kernel_oserror* handle_swi_AcornPOP3_Logon(_kernel_swi_regs *r, void *pw)
     if (username) MemCheck_UnRegisterMiscBlock(username);
     if (password) MemCheck_UnRegisterMiscBlock(password);
     if (hostname) MemCheck_UnRegisterMiscBlock(hostname);
-  #endif    
+  #endif
 
   return result;
 }
@@ -419,8 +458,8 @@ _kernel_oserror* handle_swi_AcornPOP3_Logon(_kernel_swi_regs *r, void *pw)
    DESCRIPTION:    Function to handle AcornPOP3_Disconnect SWI
    		   Function to disconnect from the POP server.  Uses POP QUIT
 		   command and closes the socket.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -430,8 +469,8 @@ _kernel_oserror* handle_swi_AcornPOP3_Logon(_kernel_swi_regs *r, void *pw)
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_Disconnect(_kernel_swi_regs *r, void *pw)
@@ -445,14 +484,14 @@ _kernel_oserror* handle_swi_AcornPOP3_Disconnect(_kernel_swi_regs *r, void *pw)
   flags         = (unsigned int)r->r[0];					// get flags
   pollword_addr = (void*)r->r[1];						// get pollword_addr;
 //  timeout_QUIT  = (int)r->r[2];
-  
+
 //  if ((!inuse) || (pollword_addr != &caller_data))				// If not registered or pollword address is wrong
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);						// Return Invalid ID error
-  
+
   if (!result)									// If no errors, do SWI operation
     result = logout(timeout_QUIT);
-  
+
   // setup registers for return from SWI
   if (!result)									// If no error, then
   {
@@ -477,8 +516,8 @@ _kernel_oserror* handle_swi_AcornPOP3_Disconnect(_kernel_swi_regs *r, void *pw)
 		   connection.  Uses POP3 STAT command.  Size returned is just a
 		   guide due to differences in EOL characters that can be used be
 		   servers, and other considerations.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -488,8 +527,8 @@ _kernel_oserror* handle_swi_AcornPOP3_Disconnect(_kernel_swi_regs *r, void *pw)
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_GetNumOfMessages(_kernel_swi_regs *r, void *pw)
@@ -503,13 +542,13 @@ _kernel_oserror* handle_swi_AcornPOP3_GetNumOfMessages(_kernel_swi_regs *r, void
   flags         = (unsigned int)r->r[0];					// get flags
   pollword_addr = (void*)r->r[1];						// get pollword_addr;
 //  timeout_STAT  = (int)r->r[2];
-  
+
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   if (!result)									// If no errors, do SWI operation
     result = get_number_of_messages(timeout_STAT, &(process1.getnumofmessages.num_messages), &(process1.getnumofmessages.mailbox_size));
-  
+
   // setup registers for return from SWI
   if (!result)									// If no error, then
   {
@@ -544,8 +583,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetNumOfMessages(_kernel_swi_regs *r, void
 		   size of the list, then the list will be filled up, and this
 		   function should be called again to get the rest of the
 		   outstanding messages.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -557,8 +596,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetNumOfMessages(_kernel_swi_regs *r, void
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_GetListOfMessages(_kernel_swi_regs *r, void *pw)
@@ -576,20 +615,20 @@ _kernel_oserror* handle_swi_AcornPOP3_GetListOfMessages(_kernel_swi_regs *r, voi
   data          = (void*)r->r[2];						// get address of data block to use
   num_entries   = (unsigned int)r->r[3];					// get number of MSG_LIST structs that will fit in data block
 //  timeout_LIST  = (int)r->r[4];							// get timeout value in minutes
-  
+
 //  if ((!inuse) || (pollword_addr != &caller_data))				// If not registered or pollword address is wrong
   #ifdef MemCheck_MEMCHECK
     if (data) MemCheck_RegisterMiscBlock(data, num_entries*sizeof(MSG_LIST));
   #endif
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   if ((!result) && (data == 0))							// if data address = 0, return error
     result = ERROR(NULLADDR);
-  
+
   if (!result)									// If no errors, do SWI operation
     result = get_list_of_messages(data, num_entries, timeout_LIST);
-  
+
   // setup registers for return from SWI
   if (!result)									// If no error, then
   {
@@ -604,7 +643,7 @@ _kernel_oserror* handle_swi_AcornPOP3_GetListOfMessages(_kernel_swi_regs *r, voi
   #ifdef MemCheck_MEMCHECK
     if (data) MemCheck_UnRegisterMiscBlock(data);
   #endif
-  
+
   return result;
 }
 
@@ -620,17 +659,17 @@ _kernel_oserror* handle_swi_AcornPOP3_GetListOfMessages(_kernel_swi_regs *r, voi
 		   be called again with the correct size of memory assigned to
 		   message.  Or, give up and use the File based version of this
 		   call: get_message_to_file.  Uses POP RETR command.
-		   
+
 		   OR
-		   
+
 		   Function to get a given message from the server into a file.  If
 		   the size of the message causes the filesystem the message file
 		   is to be put on to fillup, then the message is aborted and an
 		   error returned.  Caller should close and delete the file.
 		   Actual size of the mail message is returned in size.  Uses POP
 		   RETR command.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							  bit0 -   set(1) = file based
@@ -646,8 +685,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetListOfMessages(_kernel_swi_regs *r, voi
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_GetMessage(_kernel_swi_regs *r, void *pw)
@@ -669,13 +708,13 @@ _kernel_oserror* handle_swi_AcornPOP3_GetMessage(_kernel_swi_regs *r, void *pw)
   message_id    = (unsigned int)r->r[4];					// get message id
   delete_flag   = (BOOL)r->r[5];						// get delete flag
 //  timeout_RETR  = (int)r->r[6];							// get timeout value in minutes
-  
+
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   if ((!result) && (data == 0))							// if data address = 0, return error
     result = ERROR(NULLADDR);
-  
+
   #ifdef MemCheck_MEMCHECK
     if (data) MemCheck_RegisterMiscBlock_String(data);
   #endif
@@ -704,7 +743,7 @@ _kernel_oserror* handle_swi_AcornPOP3_GetMessage(_kernel_swi_regs *r, void *pw)
         break;
       }
     }
-    
+
 /*    if ((!result) && (delete_flag == TRUE))
     {
       result = delete_message(message_id, timeout_RETR);				// Use default of timeout_DELE in future when I put timeouts in
@@ -723,7 +762,7 @@ _kernel_oserror* handle_swi_AcornPOP3_GetMessage(_kernel_swi_regs *r, void *pw)
   }
   #ifdef MemCheck_MEMCHECK
     if (data) MemCheck_UnRegisterMiscBlock(data);
-  #endif  
+  #endif
   return result;
 }
 
@@ -737,18 +776,18 @@ _kernel_oserror* handle_swi_AcornPOP3_GetMessage(_kernel_swi_regs *r, void *pw)
 		   TOP command.  If the memory block given is not big enough, then
 		   it is filled up and the actual size needed is set in size on
 		   return.  Actual size is aways set in size on return.
- 
+
                    OR
-                   
+
                    Function to get the header, blank line and X lines of the body
 		   text of a given message from the server into a file.  Uses POP
 		   TOP command.  If the filesystem the message file is to be put on
 		   to fills up, then the message is aborted and an error returned.
  		   Actual size of space of the header+blank line+Xlines of body
 		   text is set on return in size.  Caller should close and delete
-		   the file.  Actual size of the mail message is returned in size.  
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+		   the file.  Actual size of the mail message is returned in size.
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							  bit0 -   set(1) = file based
@@ -764,8 +803,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetMessage(_kernel_swi_regs *r, void *pw)
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_GetXLinesOfMessage(_kernel_swi_regs *r, void *pw)
@@ -787,13 +826,13 @@ _kernel_oserror* handle_swi_AcornPOP3_GetXLinesOfMessage(_kernel_swi_regs *r, vo
   message_id    = (unsigned int)r->r[4];					// get message id
   num_lines     = (unsigned int)r->r[5];					// get number of lines of body to get from server
 //  timeout_TOP   = (int)r->r[6];							// get timeout value in minutes
-  
+
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   if ((!result) && (data == 0))							// if data address = 0, return error
     result = ERROR(NULLADDR);
-  
+
   #ifdef MemCheck_MEMCHECK
     if (data) MemCheck_RegisterMiscBlock_String(data);
   #endif
@@ -835,7 +874,7 @@ _kernel_oserror* handle_swi_AcornPOP3_GetXLinesOfMessage(_kernel_swi_regs *r, vo
   }
   #ifdef MemCheck_MEMCHECK
     if (data) MemCheck_UnRegisterMiscBlock(data);
-  #endif  
+  #endif
 
   return result;
 }
@@ -847,8 +886,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetXLinesOfMessage(_kernel_swi_regs *r, vo
    DESCRIPTION:    Function to handle AcornPOP3_DeleteMessage SWI
    		   Function to delete the given message from the mailbox on the
 		   server.  Uses POP DELE command.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -859,8 +898,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetXLinesOfMessage(_kernel_swi_regs *r, vo
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_DeleteMessage(_kernel_swi_regs *r, void *pw)
@@ -876,13 +915,13 @@ _kernel_oserror* handle_swi_AcornPOP3_DeleteMessage(_kernel_swi_regs *r, void *p
   pollword_addr = (void*)r->r[1];						// get pollword_addr;
   message_id    = (int)r->r[2];							// get message id
 //  timeout_DELE  = (int)r->r[3];							// get timeout value in minutes
-  
+
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   if (!result)									// If no errors, do SWI operation
     result = delete_message(message_id, timeout_DELE);
-  
+
   // setup registers for return from SWI
   if (!result)									// If no error, then
   {
@@ -905,8 +944,8 @@ _kernel_oserror* handle_swi_AcornPOP3_DeleteMessage(_kernel_swi_regs *r, void *p
    DESCRIPTION:    Function to handle AcornPOP3_GetUniqueID SWI
    		   Function to get the unique ID string for a given message.
    		   Uses POP3 UIDL command.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -917,8 +956,8 @@ _kernel_oserror* handle_swi_AcornPOP3_DeleteMessage(_kernel_swi_regs *r, void *p
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_GetUniqueID(_kernel_swi_regs *r, void *pw)
@@ -934,10 +973,10 @@ _kernel_oserror* handle_swi_AcornPOP3_GetUniqueID(_kernel_swi_regs *r, void *pw)
   pollword_addr = (void*)r->r[1];						// get pollword_addr;
   message_id    = (unsigned int)r->r[2];
 //  timeout_UIDL  = (int)r->r[3];
-  
+
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   dprintf(("","handle_swi_AcornPOP3_GetUniqueID: ID: %d\n", message_id));
   if (!result)									// If no errors, do SWI operation
     result = get_message_uniqueID(timeout_UIDL, message_id, process1.getuniqueid.unique_id);
@@ -975,8 +1014,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetUniqueID(_kernel_swi_regs *r, void *pw)
 		   size of the list, then the list will be filled up, and this
 		   function should be called again to get the rest of the
 		   outstanding messages.
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
+   DEPENDENCIES:
+   DEPENDED ON BY:
    INPUT PARAMS:   _kernel_swi_regs*	r		registers
    							r->r[0] = flags
    							r->r[1] = Address of pollword
@@ -988,8 +1027,8 @@ _kernel_oserror* handle_swi_AcornPOP3_GetUniqueID(_kernel_swi_regs *r, void *pw)
    							r->r[1] = Unique ID to identified return data
    RETURN VALUE:   			NULL		if SWI handled successfully,
    							else ptr to error block
-   CONSTANTS:      
-   VARIABLES:      
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 _kernel_oserror* handle_swi_AcornPOP3_GetListOfUniqueIDs(_kernel_swi_regs *r, void *pw)
@@ -1007,17 +1046,17 @@ _kernel_oserror* handle_swi_AcornPOP3_GetListOfUniqueIDs(_kernel_swi_regs *r, vo
   data          = (void*)r->r[2];						// get address of data block to use
   num_entries   = (unsigned int)r->r[3];					// get number of UID_MSG_LIST structs that will fit in data block
 //  timeout_UIDL  = (int)r->r[4];							// get timeout value in minutes
-  
+
 //  if ((!inuse) || (pollword_addr != &caller_data))				// If not registered or pollword address is wrong
   #ifdef MemCheck_MEMCHECK
     if (data) MemCheck_RegisterMiscBlock(data, num_entries*sizeof(UID_MSG_LIST));
   #endif
   if ((!inuse) && (pollword_addr != &(process1.pollword)))			// If not registered or pollword address is wrong
     result = ERROR(INVALIDID);							// Return Invalid ID error
-  
+
   if ((!result) && (data == 0))							// if data address = 0, return error
     result = ERROR(NULLADDR);
-  
+
   dprintf(("", "GetListOfUniqueIDs: num_entries: %d", num_entries));
   if (!result)									// If no errors, do SWI operation
     result = get_list_of_uids(data, num_entries, timeout_UIDL);

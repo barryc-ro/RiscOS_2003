@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.12 for RISC OS
+#	VERSION:	0.13 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -33,6 +33,7 @@
 #					OBJSCI now OBJSINST.  .i.o rule changed to .inst.o  OBJSINST
 #					changed from o.xxx to inst.xxx
 #	17/09/98	0.12	RDW	-Fn removed from CFLAGS
+#	18/11/98	0.13	RDW	queue.o added to OBJS
 
 #
 # Paths
@@ -47,6 +48,7 @@ EXP_HDR = <export$dir>
 MKDIR   = cdir
 AS      = objasm -tb
 CC      = $(MemCheckCC) cc
+C++	= $(MemCheckCC) c++
 CMHG    = cmhg
 CP      = copy
 LD      = $(MemCheckLD) link
@@ -61,14 +63,15 @@ WFLAGS = ~c~v
 #
 # Include files
 #
-INCLUDES=	TCPIPLibs:,C:,<Lib$Dir>
+INCLUDES=	TCPIPLibs:,C:,<Lib$Dir>.C++Lib,<Lib$Dir>
 
 INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 CALLX     = <Lib$Dir>.callx.o.callx
 EMAILLIB  = <Lib$Dir>.Email.EmailLib.o.EmailLibzm
-LIBS      = ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB} ${EXTRALIBS}
+C++LIB    = <Lib$Dir>.C++Lib.o.c++lib
+LIBS      = ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB} ${C++LIB}z ${EXTRALIBS}
 
 #
 # Program specific options:
@@ -88,6 +91,10 @@ COMPAT=		-DCOMPAT_INET4
 CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -depend !Depend -c ${THROWBACK} \
 		-D${SYSTEM} ${EXTRACCFLAGS}
+C++FLAGS=	-ffa -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
+		-zps1 -Wp -depend !Depend -c ${THROWBACK} \
+		-D${SYSTEM} ${EXTRAC++FLAGS}
+
 
 CMHGFLAGS = -p -IC: -d h.header ${THROWBACK}
 
@@ -95,18 +102,19 @@ ASMFLAGS=
 
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
                 errortable.o get.o send.o cmdresp.o getnummsgs.o \
-                getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o \
+                getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o queue.o \
 		${LIBS}
 		
 OBJSI=		i.swihndlers i.handlers i.logon i.logout i.pop_utils i.module o.header \
                 i.errortable i.get i.send i.cmdresp i.getnummsgs \
-                i.getlistmsg i.getmsgfile i.deletemsg i.getuniquei i.getlistuid \
+                i.getlistmsg i.getmsgfile i.deletemsg i.getuniquei i.getlistuid i.queue \
 		${LIBS}
 
 OBJSINST=	inst.swihndlers inst.handlers inst.logon inst.logout inst.pop_utils inst.module \
 		o.header \
                 inst.errortable inst.get inst.send inst.cmdresp inst.getnummsgs \
                 inst.getlistmsg inst.getmsgfile inst.deletemsg inst.getuniquei inst.getlistuid \
+		inst.queue \
 		${LIBS}
 
 EXTRAS=         acornpop3.o
@@ -114,8 +122,10 @@ EXTRAS=         acornpop3.o
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .s .c .i .cmhg .inst
+.SUFFIXES:	.o .s .c .c++ .i .cmhg .inst
 .c.o:;		$(CC) $(CFLAGS) -o $@ $<
+.c++.o:;	$(C++) $(C++FLAGS) -o $@ $<
+.c++.i:;	$(C++) $(C++FLAGS) -c -C -E $< >> $@
 .c.i:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
 .i.inst:;	$(CC) $(CFLAGS) -C++ -o $@ $<
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
@@ -134,7 +144,7 @@ preprocess: ${OBJSI} local_dirs
 	@echo ${COMPONENT}: preprocess build complete
 
 instrument: ${OBJSINST} inst.instlib local_dirs 
-	$(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJSINST) inst.instlib $(STUBS)
+	$(LD) -c++ -rmf -s link/sym -o rm.AcornPOP3u $(OBJSINST) inst.instlib $(STUBS)
 	ModSqz rm.AcornPOP3u rm.AcornPOP3
 	@echo ${COMPONENT}: instrument build complete
 
@@ -178,14 +188,14 @@ local_dirs:
 # Target 
 #
 ${TARGET}:	$(OBJS) $(EXTRAS) local_dirs
-		$(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJS) $(STUBS)
+		$(LD) -c++ -rmf -s link/sym -o rm.AcornPOP3u $(OBJS) $(STUBS)
 		ModSqz rm.AcornPOP3u $@
 
 #
 # ROM Target 
 #
 ${ROMTARGET}: ${OBJS} $(EXTRAS) local_dirs
-        ${LD} -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} -c++ -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -193,7 +203,7 @@ ${ROMTARGET}: ${OBJS} $(EXTRAS) local_dirs
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
+        ${LD} -c++ -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 

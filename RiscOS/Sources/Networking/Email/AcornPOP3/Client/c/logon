@@ -4,7 +4,7 @@
 
 	FILE:		logon.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.17 for RISC OS
+	VERSION:	0.18 for RISC OS
 
 	OVERVIEW
 	========
@@ -52,6 +52,12 @@
 					are removed and process1.state = PROCESSING
 					Fixed MemCheck faulting on read in GET_HOST_NB
 					Re-entracy changes as per cmdresp.c 0.05
+	18/11/98	0.18	RDW	notify_progress added to logon_context
+					Notifies client of AcornPOP3_CS_Resolving,
+					ConnectingSocket, WaitingForGreeting and LoggingIn on
+					switch into GET_HOST (or GET_HOST_NB), CONNECT,
+					GREETING and USER respectively
+					logon_USER_PASS(), notify_progress parameter added.
 */
 
 
@@ -140,6 +146,8 @@ typedef enum
 
 typedef struct
 {
+  AcornPOP3_Logon_data* logon_return_data;					/* return data structure to use                        */
+  BOOL                notify_progress;						/* notify client of state changes? (true = yes)        */
   BOOL                in_FSM;							/* Thread currently executing in FSM                   */
   BOOL                pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
   BOOL                need_CB;							/* There needs to be a CallBack set to re-enter the FSM*/
@@ -192,6 +200,8 @@ extern _kernel_oserror *logon_FSM(logon_context *context);
 static _kernel_oserror *logon_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror* CA_logon(void *data);
+static void logon_notify_state_change(logon_context*              c,
+                                      AcornPOP3_ConnectionStates  state);
 
 
 /* ************************************************************************** */
@@ -214,7 +224,8 @@ static _kernel_oserror* CA_logon(void *data);
    		   char[]		hostname	hostname of POP3 server
    		   int			port_number	TCP port number to use to connect to on server
    		   int			timeout_USER	timeout for USER command
-   		   int			timeout_PASS	timeout for PASS command   		   
+   		   int			timeout_PASS	timeout for PASS command
+   		   BOOL			notify_progress	notify client when we reach major state milestones?
    OUTPUT PARAMS:  int*			internet_err	Internet errno
    RETURN VALUE:   			NULL		if handled successfully,
    							else ptr to error block
@@ -234,19 +245,21 @@ extern _kernel_oserror* logon_USER_PASS(char  username[],
                                         int   port_number,
                                         int   timeout_USER,
                                         int   timeout_PASS,
-                                        int   timeout_greeting)
+                                        int   timeout_greeting,
+                                        BOOL  notify_progress)
 {
   _kernel_oserror    *error           = 0;					/* result to return                                              */
   logon_context *context = new_logon_context();					/* create a new logon context for this operation                 */
-  
+
   if (context == 0)								/* if failed to create new context, return error                 */
     error = ERROR(MALLOCFAILED);
   else										/* else make copies of the given parameters                      */
   {
+    context->notify_progress = notify_progress;
     context->username = (char*)malloc(strlen(username)+1);
     context->password = (char*)malloc(strlen(password)+1);
     context->hostname = (char*)malloc(strlen(hostname)+1);
-    
+
     if ((context->username == 0) ||
         (context->password == 0) ||
         (context->hostname == 0))						/* if any of the mallocs failed, then destroy any that succeeded */
@@ -267,54 +280,61 @@ extern _kernel_oserror* logon_USER_PASS(char  username[],
       context->pass_timeout = timeout_PASS;
       process1.logon_context = context;
       process1.state        = PROCESSING;					/* make sure main state is IDLE so event handler doesn't do anything */
+      logon_notify_state_change(context, AcornPOP3_CS_INITIAL);			/* Tell client of initial state about to entered                 */
       error = CB_logon(context);
     }
   }
-  
+
   return error;
 }
 
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static logon_context *new_logon_context(void)
 {
   logon_context *c = malloc(sizeof(logon_context));
   dprintf(("", "new_logon_context\n"));
-  
+
   if (c)
   {
     memset(c, 0, sizeof(logon_context));
     c->sock = -1;
     c->state = INIT;
+    c->logon_return_data = (AcornPOP3_Logon_data*)malloc(sizeof(AcornPOP3_Logon_data));
+    if (c->logon_return_data == 0)
+    {
+      free(c);
+      c = 0;
+    }
   }
-  
+
   return c;
 }
 
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void destroy_logon_context(logon_context **context)
@@ -324,7 +344,7 @@ static void destroy_logon_context(logon_context **context)
     if (*context)
     {
       logon_context *c = *context;
-      
+
       if (c->username)	free(c->username);
       if (c->password)	free(c->password);
       if (c->hostname)	free(c->hostname);
@@ -339,25 +359,25 @@ static void destroy_logon_context(logon_context **context)
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 extern _kernel_oserror *logon_FSM(logon_context *context)
 {
   _kernel_oserror *error = 0;
-  
+
   dprintf(("", "logon_FSM: context: %x\n", context));
   if (context == 0)								/* make sure we've been given a context */
     error = ERROR(INTERNALERR);
-  
+
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
@@ -416,7 +436,7 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
       } /* end switch */
     } while ((!expired(context->t_slice)) && (!context->end) && (!context->exit));
   } /* endif */
-  
+
   if (!error)
   {
     int state = pop_irqs_off();							/* CRITICAL SECTION start, turn off interrupts */
@@ -426,7 +446,7 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
       process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
       callx_remove_callafter(&logon_CAhandler, context);			/* Ensure any pending callafter is removed    */
       callx_remove_callback(&logon_CBhandler, context);				/* Ensure any pending callback is removed     */
-      notify_client(&(process1.logon));
+      notify_client(context->logon_return_data, &(process1.logon), sizeof(process1.logon));
       destroy_logon_context(&context);						/* destroy the context                        */
     }
     else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
@@ -442,22 +462,22 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
     }
     pop_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
-  
+
   return error;
 }
 
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static _kernel_oserror* CA_logon(void *data)
@@ -474,7 +494,7 @@ extern _kernel_oserror* CB_logon(void *data)
   _kernel_oserror *error = 0;
   int              state;
   logon_context *context = (logon_context*)data;
-  
+
   if (context)
   {
     state = pop_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
@@ -492,17 +512,17 @@ extern _kernel_oserror* CB_logon(void *data)
   }
   else
     error = ERROR(NULLADDR);
-    
+
   return error;
 }
 
-  
+
 static _kernel_oserror* logon_CAhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
   dprintf(("", "ENTERED: logon_CAhandler\n"));
   UNUSED(r);
   UNUSED(pw);
-  
+
   return CB_logon(data);
 }
 
@@ -512,10 +532,10 @@ static _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *dat
   logon_context *context = (logon_context*)data;
   int state;
   _kernel_oserror *error = 0;
-  
+
   UNUSED(r);
   UNUSED(pw);
-  
+
   if (context)
   {
     state = pop_irqs_off();
@@ -526,22 +546,22 @@ static _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *dat
   }
   else
     error = ERROR(NULLADDR);
-  
+
   return error;
 }
 
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_INIT(logon_context *c)
@@ -557,7 +577,8 @@ static void logon_FSM_INIT(logon_context *c)
     c->r.r[0] = 0;
     c->r.r[1] = (int)"Resolver_GetHost";
     c->error = _kernel_swi(OS_SWINumberFromString, &(c->r), &(c->r));		/* Test for presence of the ANT Resolver module  */
-  
+
+    logon_notify_state_change(c, AcornPOP3_CS_Resolving);			/* Tell client of state change                   */
     if (c->error == 0)								/* ANT Resolver present                          */
       c->state = GET_HOST_NB;
     else
@@ -572,22 +593,22 @@ static void logon_FSM_INIT(logon_context *c)
            &(c->addr),
            sizeof(c->addr));
     c->pop_server_addr.sin_family = AF_INET;
-    c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT                          */      
+    c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT                          */
   }
 }
 
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_GET_HOST_NB(logon_context *c)
@@ -631,11 +652,11 @@ static void logon_FSM_GET_HOST_NB(logon_context *c)
              c->pop_server->h_length);
       c->pop_server_addr.sin_family = AF_INET;
       c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT               */
-      #ifdef MemCheck_MEMCHECK  
+      #ifdef MemCheck_MEMCHECK
         MemCheck_UnRegisterMiscBlock((void*)c->pop_server->h_addr);
       #endif
     }
-    #ifdef MemCheck_MEMCHECK  
+    #ifdef MemCheck_MEMCHECK
       MemCheck_UnRegisterMiscBlock((void*)c->r.r[1]);
     #endif
   }
@@ -644,15 +665,15 @@ static void logon_FSM_GET_HOST_NB(logon_context *c)
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_GET_HOST(logon_context *c)
@@ -677,15 +698,15 @@ static void logon_FSM_GET_HOST(logon_context *c)
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_PREPARE_CONNECT(logon_context *c)
@@ -694,7 +715,7 @@ static void logon_FSM_PREPARE_CONNECT(logon_context *c)
     c->pop_server_addr.sin_port = c->pop_service->s_port;
   else										/* else, take the given port number and convert to network byte order     */
     c->pop_server_addr.sin_port = htons(c->port_number);
-  
+
   c->sock = socket(AF_INET, SOCK_STREAM, 0);					/* create socket                                                          */
   dprintf(("", "logon_FSM_PREPARE_CONNECT: c->sock: %d\n", c->sock));
   if (c->sock < 0)								/* if socket creation failed, switch to error state                       */
@@ -706,7 +727,7 @@ static void logon_FSM_PREPARE_CONNECT(logon_context *c)
   else										/* else socket created successfully, so                                   */
   {
     int on = 1;
-    
+
     if (socketioctl(c->sock, FIONBIO, &on) < 0)					/* make socket NON blocking                                               */
     {
       c->error = ERROR(INTERNETERR);
@@ -723,7 +744,10 @@ static void logon_FSM_PREPARE_CONNECT(logon_context *c)
         c->state = ERROR;
       }
       else									/* if socket successfully non-blocking and asyncronous, then              */
+      {
+        logon_notify_state_change(c, AcornPOP3_CS_ConnectingSocket);		/* Tell client of state change                   */
         c->state = CONNECT;							/* switch to CONNECT state                                                */
+      }
     }
   }
 }
@@ -731,15 +755,15 @@ static void logon_FSM_PREPARE_CONNECT(logon_context *c)
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_CONNECT(logon_context *c)
@@ -761,7 +785,10 @@ static void logon_FSM_CONNECT(logon_context *c)
       c->exit = TRUE;
     }
     else									/* else, we are connected so switch to GREETING state                     */
+    {
+      logon_notify_state_change(c, AcornPOP3_CS_WaitingForGreeting);		/* Tell client of state change                   */
       c->state = GREETING;
+    }
   }
   else										/* else, connect succeeded straight away so switch to GREETING state      */
     c->state = GREETING;
@@ -770,15 +797,15 @@ static void logon_FSM_CONNECT(logon_context *c)
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_GREETING(logon_context *c)
@@ -796,23 +823,24 @@ static void logon_FSM_GREETING(logon_context *c)
     c->state = ERROR;
   else										/* else, switch to USER state and exit logon FSM as command_response will */
   {										/* call logon_FSM back with our context (c) when it is completed          */
+    logon_notify_state_change(c, AcornPOP3_CS_LoggingIn);			/* Tell client of state change                   */
     c->state = USER;
     c->exit = TRUE;
   }
 }
 
-  
+
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_USER(logon_context *c)
@@ -862,15 +890,15 @@ static void logon_FSM_USER(logon_context *c)
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_PASS(logon_context *c)
@@ -921,15 +949,15 @@ static void logon_FSM_PASS(logon_context *c)
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_COMPLETED(logon_context *c)
@@ -943,31 +971,34 @@ static void logon_FSM_COMPLETED(logon_context *c)
   }
   else										/* else, logon completed successfully so setup data for caller            */
   {
-    process1.logon.flags = 0;
-    process1.logon.error = 0;
-    process1.logon.errno = 0;
+    c->logon_return_data->flags = 0;
+    c->logon_return_data->error = 0;						/* copy over the error                                                    */
+    c->logon_return_data->errno = 0;						/* copy over the internet errno error                                     */
     c->end = TRUE;								/* end of FSM                                                             */
   }
-  
+
   destroy_response(&(c->response));						/* destroy the response now we're finished with it                        */
 }
 
 
 /* ************************************************************************** */
 /*
-   FUNCTION:       
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   CONSTANTS:      
-   VARIABLES:      
+   FUNCTION:
+   DESCRIPTION:
+   DEPENDENCIES:
+   DEPENDED ON BY:
+   INPUT PARAMS:
+   OUTPUT PARAMS:
+   RETURN VALUE:
+   CONSTANTS:
+   VARIABLES:
  */
 /* ************************************************************************** */
 static void logon_FSM_ERROR(logon_context *c)
 {
+  c->logon_return_data->flags = 0;
+  c->logon_return_data->error = c->error;						/* copy over the error                                                    */
+  c->logon_return_data->errno = c->errno;						/* copy over the internet errno error                                     */
   if (c->send_data)	free(c->send_data);					/* destroy the USERname command data sent to the server                   */
   c->send_data = 0;
   if (c->sock >= 0)								/* if socket created, then shut it down, close and deallocate it          */
@@ -976,10 +1007,45 @@ static void logon_FSM_ERROR(logon_context *c)
     socketclose(c->sock);
   }
   process1.socknum = -1;							/* clear the process1 socket descriptor                                   */
-  process1.logon.flags = 0;
-  process1.logon.error = c->error;						/* copy over the error                                                    */
-  process1.logon.errno = c->errno;						/* copy over the internet errno error                                     */
   c->end = TRUE;								/* end of FSM                                                             */
 }
 
 
+/* ************************************************************************** */
+/*
+   FUNCTION:       logon_notify_state_change
+   DESCRIPTION:    Function to notify client of state change progress.
+                   c must be a pointer to a valid logon_context and state a
+                   valid AcornPOP3_ConnectionState
+   DEPENDENCIES:   type			logon_context		logon.c
+                   type			AcornPOP3_ConnectionStates	common.h
+                   function		notify_client		pop3_utils.h
+   DEPENDED ON BY: All functions in this source file
+   INPUT PARAMS:   logon_context*	c			logon context
+                   AcornPOP3_ConnectionStates	state		state to pass on
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   NONE
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+static void logon_notify_state_change(logon_context*              c,
+                                      AcornPOP3_ConnectionStates  state)
+{
+  dprintf(("", "logon_notify_state_change\n"));
+  if (c->notify_progress == TRUE)
+  {
+    AcornPOP3_Logon_data* logon_data = (AcornPOP3_Logon_data*)malloc(sizeof(AcornPOP3_Logon_data));
+    dprintf(("", "notify_progress is TRUE\n"));
+
+    if (logon_data)								/* if malloc failed, we fail silently */
+    {
+      logon_data->flags = AcornPOP3_PROGRESS_NOTIFICATION;			/* set this flag, same position as one when client requests notification
+      										   to indicate that the state field is valid */
+      logon_data->error = 0;
+      logon_data->errno = 0;
+      logon_data->state = state;
+      notify_client(logon_data, &(process1.logon), sizeof(process1.logon));
+    }
+  }
+}
