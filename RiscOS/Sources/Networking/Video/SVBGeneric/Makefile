@@ -83,7 +83,6 @@ ROM_OBJS =	\
  o.Module	\
  o.MoreInfo	\
  o.Options	\
- o.ParseURL	\
  o.Play		\
  o.Response	\
  o.Setup	\
@@ -104,7 +103,6 @@ RAM_OBJS =	\
  oSL.Module	\
  oSL.MoreInfo	\
  oSL.Options	\
- oSL.ParseURL	\
  oSL.Play	\
  oSL.Response	\
  oSL.Setup	\
@@ -125,7 +123,6 @@ DBG_OBJS =	\
  oSLd.Module	\
  oSLd.MoreInfo	\
  oSLd.Options	\
- oSLd.ParseURL	\
  oSLd.Play	\
  oSLd.Response	\
  oSLd.Setup	\
