@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.08 for RISC OS
+#	VERSION:	0.09 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -28,6 +28,11 @@
 #					command line.  -C++ option added to .cp.o suffix rule to get
 #					round fault in CC.  CC takes cp.filename and trys to use
 #					cp.c.filename!
+#	24/08/98	0.09	RDW	System build environment def. passed to source now for
+#					errortable.c to select correct report string
+#					analyse target (McCabe) changed to preprocess.  OBJSCP now OBJSI
+#					OBJSCI now OBJSINST.  .i.o rule changed to .inst.o  OBJSINST
+#					changed from o.xxx to inst.xxx
 
 #
 # Paths
@@ -82,7 +87,7 @@ COMPAT=		-DCOMPAT_INET4
 
 CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -depend !Depend -Fn -c -throwback ${TINYSTUBS}\
-		${EXTRACCFLAGS}
+		-D${SYSTEM} ${EXTRACCFLAGS}
 
 CMHGFLAGS = -p -IC: -d h.header ${THROWBACK}
 
@@ -92,13 +97,12 @@ OBJS=		swihndlers.o handlers.o smtp_utils.o module.o sendmail.o header.o \
                 errortable.o get.o sendline.o send.o cmdresp.o \
                 ${LIBS}
 
-OBJSCP=		cp.swihndlers cp.handlers cp.smtp_utils cp.module cp.sendmail o.header \
-                cp.errortable cp.get cp.sendline cp.send cp.cmdresp \
+OBJSI=		i.swihndlers i.handlers i.smtp_utils i.module i.sendmail o.header \
+                i.errortable i.get i.sendline i.send i.cmdresp \
                 ${LIBS}
                 
-OBJSCI=		o.swihndlers o.handlers o.smtp_utils o.module o.sendmail o.header \
-                o.errortable o.get o.sendline o.send o.cmdresp \
-                o.instlib \
+OBJSINST=	inst.swihndlers inst.handlers inst.smtp_utils inst.module inst.sendmail o.header \
+                inst.errortable inst.get inst.sendline inst.send inst.cmdresp \
                 ${LIBS}
 
 EXTRAS=         acornsmtp.o
@@ -106,10 +110,10 @@ EXTRAS=         acornsmtp.o
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .s .c .cp .cmhg
+.SUFFIXES:	.o .s .c .i .cmhg .inst
 .c.o:;		$(CC) $(CFLAGS) -o $@ $<
-.c.cp:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
-.cp.o:;		$(CC) $(CFLAGS) -C++ -o $@ $<
+.c.i:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
+.i.inst:;	$(CC) $(CFLAGS) -C++ -o $@ $<
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 .cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
 
@@ -122,12 +126,13 @@ all: ${TARGET}
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
 
-analyse: ${OBJSCP} local_dirs
-	@echo ${COMPONENT}: analysis build complete
+preprocess: ${OBJSI} local_dirs
+	@echo ${COMPONENT}: preprocess build complete
 
-instrument: ${OBJSCI} local_dirs
-	$(LD) -rmf -s link/sym -o rm.AcornSMTPu $(OBJSCI) $(STUBS)
+instrument: ${OBJSINST} inst.instlib local_dirs
+	$(LD) -rmf -s link/sym -o rm.AcornSMTPu $(OBJSINST) inst.instlib $(STUBS)
 	ModSqz rm.AcornSMTPu rm.AcornSMTP
+	@echo ${COMPONENT}: instrument build complete
 
 export:	export_${PHASE}
 
@@ -145,7 +150,8 @@ install_rom: ${ROMTARGET}
 
 clean:
 		$(WIPE) o.*      $(WFLAGS)
-		$(WIPE) cp.*      $(WFLAGS)
+		$(WIPE) i.*      $(WFLAGS)
+		$(WIPE) inst.*   $(WFLAGS)
                 $(WIPE) rm.*     $(WFLAGS)
                 $(WIPE) aof.*    $(WFLAGS)
 		$(RM) link/sym
@@ -153,14 +159,16 @@ clean:
 		$(RM) aof
 		$(RM) linked
 		$(RM) map
-		$(RM) cp
+		$(RM) i
+		$(RM) inst
 		$(RM) o
 
 local_dirs:
 	${MKDIR} o
 	${MKDIR} aof
 	${MKDIR} rm
-	${MKDIR} cp
+	${MKDIR} i
+	${MKDIR} inst
 
 #
 # Target 
