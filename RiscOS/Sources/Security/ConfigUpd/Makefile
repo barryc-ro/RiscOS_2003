@@ -29,7 +29,7 @@ CCFLAGS   = -c ${THROWBACK} -zm -zps1 -depend !Depend -ffah ${INCLUDES} ${OPTS}
 CPFLAGS   = ~cfr~v
 WFLAGS    = ~c~v
 CMHGFLAGS = -p -depend !Depend -throwback
-INCLUDES  = -IC: -IC:NCMAlib -IC:AsmUtils
+INCLUDES  = -IC: -IC:NCMAlib -IC:AsmUtils, -IC:TCPIPLibs
 DIRS      = o._dirs
 
 #
@@ -115,6 +115,7 @@ resources:
         ${CP} LocalRes:test ${RESDIR}.${COMPONENT}.test ${CPFLAGS}
         ${CP} LocalRes:passwords ${RESDIR}.${COMPONENT}.passwords ${CPFLAGS}
         ${CP} LocalRes:usage ${RESDIR}.${COMPONENT}.usage ${CPFLAGS}
+        ${CP} LocalRes:exclude ${RESDIR}.${COMPONENT}.exclude ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 
