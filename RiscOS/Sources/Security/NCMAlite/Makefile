@@ -85,7 +85,6 @@ ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
 COMPONENT = NCMAlite
 TARGET    = aof.NCMAlite
 TARGETSA  = rm.NCMAlite
-EXPORTS   = ${EXP_C_H}.smtags
 
 # Normal ROM, RAM an denug objects.
 BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
@@ -130,9 +129,6 @@ all: ${TARGETSA} ${DIRS}
 
 rom: ${TARGET} ${DIRS}
         @echo ${COMPONENT}: rom complete
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -194,11 +190,6 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB
         ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
 
 #
-# Exported interface headers
-#
-${EXP_C_H}.smtags:	h.smtags
-	${CP} h.smtags $@ ${CPFLAGS}
-
 #
 # ROM target (re-linked at ROM Image build time)
 #
