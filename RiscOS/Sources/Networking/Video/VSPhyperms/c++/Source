@@ -500,36 +500,10 @@ Source::setNewPlayState(ULINT *play_state, ULONG *request_num, size_t *max_compl
 error_flag
 Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw)
 {
-        MemBlock *mb;
-        error_flag result = ErrorState();
-#ifdef DEBUGLIB
-	char string[16];
-	size_t full_blocks;
-	
-	getBlockStatus(&full_blocks);
-	
-	int startval = 16 - (mem_map->maxBlocks()+3);// two brackets and null
-	
-	int i=0;
-	while (i < startval) { string[i] = ' '; ++i; }
-	string[startval] = '[';
-	++i;
-	while (i < 14){
-		if (i <= (startval+full_blocks))
-			string[i] = '*';
-		else
-			string[i] ='-';
-		++i;
-	}
-	string[14] = ']';
-	string[15] = '\0';
-#ifdef DEBUG_SCREEN
-	printf("%s\n", string);
-#else
-	Debug("%s", string);
-#endif	
-#endif        
-        do {
+       MemBlock *mb;
+       error_flag result = ErrorState();
+
+       do {
         	mb = mem_map->findExistingBlock(last_block_sent + 1);
         	
         	if (mb == NULL)	break;
@@ -862,6 +836,9 @@ Source::getMiscInfo(misc_info_flags flags, void *ptr)
   error_flag result = ErrorState();
   
 	switch (flags) {
+	  case type_buffers:
+	  		result = getBlockStatus(((size_t*)ptr));
+	  	break;
 	  case type_misc_5_10:
 	  	{
   			NECBlockHeader most_significant_block;
@@ -1138,7 +1115,7 @@ SourceMultiCast::SourceMultiCast(const char *hostname, size_t source_recvspace, 
  		   	  	pixel_width  = header.V_pixels;
  		   	  	bitrate = header.DataRate;
  		   	  	
-                  	  	max_completed_block = last_block_sent = header.EMPacketID>>4;
+                  	  	max_completed_block = last_block_sent = Multi_block_num(header.EMPacketID);
                   	  	
  		   		sd.setDgramSize((size_t)header.MaxLength);
         
@@ -1146,7 +1123,7 @@ SourceMultiCast::SourceMultiCast(const char *hostname, size_t source_recvspace, 
         			// datagrams received.  These may be divided in two (indicated by a continuity
         			// flag. On these rare occations we copy the remainder of one into the former.
 					// allocate 8 datagrams per block to decrease traffic
-  				mem_map = new SourceMemMap(numBlocks, (size_t)header.EMPacketSize<<4, (size_t)header.EMPacketSize);
+  				mem_map = new SourceMemMap(numBlocks, (size_t)Multi_mul_dgrams_per_block(header.EMPacketSize), (size_t)header.EMPacketSize);
   				if (mem_map->ErrorState() == ErrorOccurred){
    					err = &(mem_map->ReturnCopyOfError());	// this will be VSP_Alloc
    					delete mem_map;
@@ -1170,34 +1147,6 @@ SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buf
         MemBlock *mb;
         error_flag result = ErrorState();
 
-#ifdef DEBUGLIB
-	char string[16];
-	size_t full_blocks;
-	
-	getBlockStatus(&full_blocks);
-
-	int startval = 16 - (mem_map->maxBlocks()+3);// two brackets and null
-	
-	int i=0;
-	while (i < startval) { string[i] = ' '; ++i; }
-	string[startval] = '[';
-	++i;
-	while (i < 14){
-		if (i <= (startval+full_blocks))
-			string[i] = '*';
-		else
-			string[i] ='-';
-		++i;
-	}
-	string[14] = ']';
-	string[15] = '\0';
-#ifdef DEBUG_SCREEN
-	printf("%s\n", string);
-#else
-	Debug("%s", string);
-#endif	
-#endif
-        
         do {
         	mb = mem_map->findExistingBlock(last_block_sent + 1);
         	
@@ -1314,20 +1263,20 @@ SourceMultiCast::ReadDatagrams(callback_flag current_flags, callback_flag *flags
                   	  	
                 	  	ntoh_structure(dgram, map_MultiCastDatagram, MultiCastDatagram);
                 	  	
-				if ((mb = mem_map->findOrReplaceBlock(dgram->EMPacketID>>4, &last_block_sent, &max_completed_block, stats)) != NULL ) {
+				if ((mb = mem_map->findOrReplaceBlock(Multi_block_num(dgram->EMPacketID), &last_block_sent, &max_completed_block, stats)) != NULL ) {
          				// if no information has arrived
-       					if (mb->nec_block.buffers[dgram->EMPacketID&0x0F].buffer_ptr == NULL) {
-       					  	mb->nec_block.buffers[dgram->EMPacketID&0x0F].buffer_ptr = iov[1].iov_base;
-       						mb->nec_block.buffers[dgram->EMPacketID&0x0F].buffer_length = (unsigned int) dgram->PayloadLength;
+       					if (mb->nec_block.buffers[Multi_dgram_num(dgram->EMPacketID)].buffer_ptr == NULL) {
+       					  	mb->nec_block.buffers[Multi_dgram_num(dgram->EMPacketID)].buffer_ptr = iov[1].iov_base;
+       						mb->nec_block.buffers[Multi_dgram_num(dgram->EMPacketID)].buffer_length = (unsigned int) dgram->PayloadLength;
        						
        										// assign that datagram to the block
 						if (!dgram->Continuity){
 							++mb->dgrams_received;
 							
-							if (mb->dgrams_received == 16){
+							if (mb->dgrams_received == Multi_dgrams_per_block){
 						  		mb->completed = 1;	// assign completed block
 								mb->pending_nak = 0;
-								mb->dgrams_in_block = 16;
+								mb->dgrams_in_block = Multi_dgrams_per_block;
 													
 	       							result = calculateMaxCompleteBlock();	// calculate most completed
 							}
@@ -1339,17 +1288,18 @@ SourceMultiCast::ReadDatagrams(callback_flag current_flags, callback_flag *flags
 					}
 					else{ // possibly continued datagram
 						memcpy(
-							(void*)(mb->nec_block.buffers[dgram->EMPacketID&0x0F].buffer_ptr+dgram->fragmentOffset),
+							(void*)(mb->nec_block.buffers[Multi_dgram_num(dgram->EMPacketID)].buffer_ptr+dgram->fragmentOffset),
 							(void*)(iov[1].iov_base), 
 							(unsigned int)dgram->PayloadLength
 						      );
 						     	
+       						mb->nec_block.buffers[Multi_dgram_num(dgram->EMPacketID)].buffer_length += (unsigned int) dgram->PayloadLength;
 						++mb->dgrams_received;
 						
-					 	if (mb->dgrams_received == 16){
+					 	if (mb->dgrams_received == Multi_dgrams_per_block){
 						  	mb->completed = 1;	// assign completed block
 							mb->pending_nak = 0;
-							mb->dgrams_in_block = 16;
+							mb->dgrams_in_block = Multi_dgrams_per_block;
 													
 	       						result = calculateMaxCompleteBlock();	// calculate most completed
 						}						// stream live or full buffers
@@ -1391,6 +1341,9 @@ SourceMultiCast::getMiscInfo(misc_info_flags flags, void *ptr)
   error_flag result = ErrorState();
   
 	switch (flags) {
+	  case type_buffers:
+	  		result = getBlockStatus(((size_t*)ptr));
+	  	break;
 	  case type_misc_5_10:
 	  	{
 	  	  misc_5_10 *ptr_misc_5_10 = (misc_5_10*)ptr;
