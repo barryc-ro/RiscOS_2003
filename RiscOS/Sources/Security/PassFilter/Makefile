@@ -189,6 +189,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
+        ${MKDIR} ${RESDIR}
         ${CP} Resources.${USERIF}.Config ${RESDIR}.Config ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
