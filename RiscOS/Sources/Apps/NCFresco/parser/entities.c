@@ -22,8 +22,6 @@
 /** THIS TABLE MUST BE IN strncmp() ORDER FOR THIS TO WORK **/
 /** ALSO, NO NAME MAY ALSO BE A STEM OF ANOTHER NAME */
 
-#if 1
-
 /** entities all in lower case */
 
 char *entity_names[] =
@@ -180,223 +178,7 @@ static char ISO_Latin1[] = {
 	'\377', '\337' /* small y, dieresis or umlaut mark */
 };
 
-#else
-
-char *entity_names[] =
-{
-  "AElig",      /* capital AE diphthong (ligature) */
-  "Aacute",     /* capital A, acute accent */
-  "Acirc",      /* capital A, circumflex accent */
-  "Agrave",     /* capital A, grave accent */
-  "Aring",      /* capital A, ring */
-  "Atilde",     /* capital A, tilde */
-  "Auml",       /* capital A, dieresis or umlaut mark */
-  "Ccedil",     /* capital C, cedilla */
-  "ETH",        /* capital Eth, Icelandic */
-  "Eacute",     /* capital E, acute accent */
-  "Ecirc",      /* capital E, circumflex accent */
-  "Egrave",     /* capital E, grave accent */
-  "Euml",       /* capital E, dieresis or umlaut mark */
-  "Iacute",     /* capital I, acute accent */
-  "Icirc",      /* capital I, circumflex accent */
-  "Igrave",     /* capital I, grave accent */
-  "Iuml",       /* capital I, dieresis or umlaut mark */
-  "Ntilde",     /* capital N, tilde */
-  "Oacute",     /* capital O, acute accent */
-  "Ocirc",      /* capital O, circumflex accent */
-  "Ograve",     /* capital O, grave accent */
-  "Oslash",     /* capital O, slash */
-  "Otilde",     /* capital O, tilde */
-  "Ouml",       /* capital O, dieresis or umlaut mark */
-  "THORN",      /* capital THORN, Icelandic */
-  "Uacute",     /* capital U, acute accent */
-  "Ucirc",      /* capital U, circumflex accent */
-  "Ugrave",     /* capital U, grave accent */
-  "Uuml",       /* capital U, dieresis or umlaut mark */
-  "Yacute",     /* capital Y, acute accent */
-  "aacute",     /* small a, acute accent */
-  "acirc",      /* small a, circumflex accent */
-  "acute",      /* acute accent */
-  "aelig",      /* small ae diphthong (ligature) */
-  "agrave",     /* small a, grave accent */
-  "amp",       	/* ampersand */
-  "aring",      /* small a, ring */
-  "atilde",     /* small a, tilde */
-  "auml",       /* small a, dieresis or umlaut mark */
-  "brvbar",     /* broken (vertical) bar */
-  "ccedil",     /* small c, cedilla */
-  "cedil",      /* cedilla */
-  "cent",       /* cent sign */
-  "copy",       /* copyright sign */
-  "curren",     /* general currency sign */
-  "deg",        /* degree sign */
-  "divide",     /* divide sign */
-  "eacute",     /* small e, acute accent */
-  "ecirc",      /* small e, circumflex accent */
-  "egrave",     /* small e, grave accent */
-  "eth",        /* small eth, Icelandic */
-  "euml",       /* small e, dieresis or umlaut mark */
-  "frac12",     /* fraction one-half */
-  "frac14",     /* fraction one-quarter */
-  "frac34",     /* fraction three-quarters */
-  "gt",        	/* greater than */
-  "iacute",     /* small i, acute accent */
-  "icirc",      /* small i, circumflex accent */
-  "iexcl",      /* inverted exclamation mark */
-  "igrave",     /* small i, grave accent */
-  "iquest",     /* inverted question mark */
-  "iuml",       /* small i, dieresis or umlaut mark */
-  "laquo",      /* angle quotation mark, left */
-  "lt",        	/* greater than */
-  "macr",       /* macron */
-  "micro",      /* micro sign */
-  "middot",     /* middle dot */
-  "nbsp",       /* no-break space */
-  "not",        /* not sign */
-  "ntilde",     /* small n, tilde */
-  "oacute",     /* small o, acute accent */
-  "ocirc",      /* small o, circumflex accent */
-  "ograve",     /* small o, grave accent */
-  "ordf",       /* ordinal indicator, feminine */
-  "ordm",       /* ordinal indicator, masculine */
-  "oslash",     /* small o, slash */
-  "otilde",     /* small o, tilde */
-  "ouml",       /* small o, dieresis or umlaut mark */
-  "para",       /* pilcrow (paragraph sign) */
-  "plusmn",     /* plus-or-minus sign */
-  "pound",      /* pound sterling sign */
-  "quot",       /* double quote sign - June 94 */
-  "raquo",      /* angle quotation mark, right */
-  "reg",        /* registered sign */
-  "sect",       /* section sign */
-  "shy",        /* soft hyphen */
-  "sup1",       /* superscript one */
-  "sup2",       /* superscript two */
-  "sup3",       /* superscript three */
-  "szlig",      /* small sharp s, German (sz ligature) */
-  "thorn",      /* small thorn, Icelandic */
-  "times",      /* multiply sign */
-  "trade",      /* trademark sign */
-  "uacute",     /* small u, acute accent */
-  "ucirc",      /* small u, circumflex accent */
-  "ugrave",     /* small u, grave accent */
-  "uml",        /* umlaut (dieresis) */
-  "uuml",       /* small u, dieresis or umlaut mark */
-  "yacute",     /* small y, acute accent */
-  "yen",        /* yen sign */
-  "yuml"       /* small y, dieresis or umlaut mark */
-};
-
-/* 	Entity values -- for ISO Latin 1 local representation
-**
-**	This MUST match exactly the table above
-*/
-char * ISO_Latin1[] = {
- 	"\306", /* capital AE diphthong (ligature) */
-	"\301", /* capital A, acute accent */
-	"\302", /* capital A, circumflex accent */
-	"\300", /* capital A, grave accent */
-	"\305", /* capital A, ring */
-	"\303", /* capital A, tilde */
-	"\304", /* capital A, dieresis or umlaut mark */
-	"\307", /* capital C, cedilla */
-	"\320", /* capital Eth, Icelandic */
-	"\311", /* capital E, acute accent */
-	"\312", /* capital E, circumflex accent */
-	"\310", /* capital E, grave accent */
-	"\313", /* capital E, dieresis or umlaut mark */
-	"\315", /* capital I, acute accent */
-	"\316", /* capital I, circumflex accent */
-	"\314", /* capital I, grave accent */
-	"\317", /* capital I, dieresis or umlaut mark */
-	"\321", /* capital N, tilde */
-	"\323", /* capital O, acute accent */
-	"\324", /* capital O, circumflex accent */
-	"\322", /* capital O, grave accent */
-	"\330", /* capital O, slash */
-	"\325", /* capital O, tilde */
-	"\326", /* capital O, dieresis or umlaut mark */
-	"\336", /* capital THORN, Icelandic */
-	"\332", /* capital U, acute accent */
-	"\333", /* capital U, circumflex accent */
-	"\331", /* capital U, grave accent */
-	"\334", /* capital U, dieresis or umlaut mark */
-	"\335", /* capital Y, acute accent */
-	"\341", /* small a, acute accent */
-	"\342", /* small a, circumflex accent */
-	"\264", /* acute accent */
-	"\346", /* small ae diphthong (ligature) */
-	"\340", /* small a, grave accent */
-	"\046",	/* ampersand */
-	"\345", /* small a, ring */
-	"\343", /* small a, tilde */
-	"\344", /* small a, dieresis or umlaut mark */
-	"\246", /* broken (vertical) bar */
-	"\347", /* small c, cedilla */
-	"\270", /* cedilla */
-	"\242", /* cent sign */
-	"\251", /* copyright sign */
-	"\244", /* general currency sign */
-	"\260", /* degree sign */
-	"\367", /* divide sign */
-	"\351", /* small e, acute accent */
-	"\352", /* small e, circumflex accent */
-	"\350", /* small e, grave accent */
-	"\360", /* small eth, Icelandic */
-	"\353", /* small e, dieresis or umlaut mark */
-	"\275", /* fraction one-half */
-	"\274", /* fraction one-quarter */
-	"\276", /* fraction three-quarters */
-	"\076",	/* greater than */
-	"\355", /* small i, acute accent */
-	"\356", /* small i, circumflex accent */
-	"\241", /* inverted exclamation mark */
-	"\354", /* small i, grave accent */
-	"\277", /* inverted question mark */
-	"\357", /* small i, dieresis or umlaut mark */
-	"\253", /* angle quotation mark, left */
-	"\074",	/* less than */
-	"\257", /* macron */
-	"\265", /* micro sign */
-	"\267", /* middle dot */
-	"\240", /* no-break space */
-	"\254", /* not sign */
-	"\361", /* small n, tilde */
-	"\363", /* small o, acute accent */
-	"\364", /* small o, circumflex accent */
-	"\362", /* small o, grave accent */
-	"\252", /* ordinal indicator, feminine */
-	"\272", /* ordinal indicator, masculine */
-	"\370", /* small o, slash */
-	"\365", /* small o, tilde */
-	"\366", /* small o, dieresis or umlaut mark */
-	"\266", /* pilcrow (paragraph sign) */
-	"\261", /* plus-or-minus sign */
-	"\243", /* pound sterling sign */
-	"\042", /* double quote sign - June 94 */
-	"\273", /* angle quotation mark, right */
-	"\256", /* registered sign */
-	"\247", /* section sign */
-	"\255", /* soft hyphen */
-	"\271", /* superscript one */
-	"\262", /* superscript two */
-	"\263", /* superscript three */
-	"\337", /* small sharp s, German (sz ligature) */
-	"\376", /* small thorn, Icelandic */
-	"\327", /* multiply sign */
-	"\215", /* trademark sign */
-	"\372", /* small u, acute accent */
-	"\373", /* small u, circumflex accent */
-	"\371", /* small u, grave accent */
-	"\250", /* umlaut (dieresis) */
-	"\374", /* small u, dieresis or umlaut mark */
-	"\375", /* small y, acute accent */
-	"\245", /* yen sign */
-	"\377" /* small y, dieresis or umlaut mark */
-};
-
-#endif
-
+#if !UNICODE
 /*
  * keys with names below have been translated to the appropriate key
  * in the PC/Mac keyset.
@@ -444,6 +226,7 @@ char convert_undefined_key_code(char c)
 	return pc_translate_keys[c-128];
     return c;
 }
+#endif
 
 /*****************************************************************************/
 
@@ -452,25 +235,20 @@ char convert_undefined_key_code(char c)
 
 static int entity_compare_function(const void *ain, const void *bin)
 {
-    char *ap = (char *) ain, **bp = (char **)bin;
+    const UCHARACTER *ap = (const UCHARACTER *) ain;
+    const char **bp = (const char **)bin;
 
     PRSDBGN(("entity_compare_function('%s', '%s')\n", ap, *bp));
 
-    return strncasecomp( ap, *bp, strlen(*bp));
+    return strnicmpu( ap, *bp, strlen(*bp));
 }
 
-/* FIXME: THESE NEED TO ALTER THE BEHAVIOUR */
-#if 0
-#define SGMLTRANS_WARNINGS	16 /* Send warnings down sgml_note_message() */
-#define SGMLTRANS_STRICT	32 /* Remove invalid translations */
-#endif
-
-extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int rules)
+extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, int rules)
 {
 #if DEBUG
-    char *orig_ptr = in_ptr;
+    UCHARACTER *orig_ptr = in_ptr;
 #endif
-    char *out_ptr;
+    UCHARACTER *out_ptr;
     int out_bytes;
 
     if (context == NULL)
@@ -494,13 +272,16 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
     for (out_ptr = in_ptr, out_bytes = 0; in_bytes > 0; in_bytes--)
     {
 	BOOL used = FALSE;
-	const char c = *in_ptr++;
 
+	const UCHARACTER c = *in_ptr++;
+	
 	if ((c == '\n' || c == '\r') && (rules & SGMLTRANS_STRIP_NEWLINES) != 0)
 	{
             /* throw them away */
 	    used = TRUE;
 	}
+#if 0
+	/* None of this is used anymore - see url.c instead */
 	if (c == '+' && (rules & SGMLTRANS_PLUS_TO_SPACE) != 0)
 	{
 	    *out_ptr++ = ' ';
@@ -509,7 +290,7 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 	}
 	else if (c == '%' && (rules & SGMLTRANS_PERCENT) != 0)
 	{
-	    if (in_bytes >= 2)
+	    if (in_bytes >= 2 && in_ptr[0] < 256 && in_ptr[1] < 256)
 	    {
 		const char c1 = tolower(in_ptr[0]), c2 = tolower(in_ptr[1]);
 		if ( isxdigit((int)c1) && isxdigit((int)c2) )
@@ -533,9 +314,7 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 			used = TRUE;
 			in_ptr += 2;
 			in_bytes -= 2;
-#if 0
-			PRSDBG(("Recognised as '%c'\n", x));
-#endif
+/* 			PRSDBG(("Recognised as '%c'\n", x)); */
 		    }
 		}
 	    }
@@ -546,7 +325,9 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 				  "Insufficient characters to expand %%XX sequence");
 #endif
 	}
-	else if (c == '&' &&
+	else
+#endif
+	    if (c == '&' &&
 		 (rules & SGMLTRANS_HASH) != 0 &&
 		 in_bytes > 1 &&
 		 (in_ptr[0] == '#'/*  || isdigit(in_ptr[0]) */))
@@ -554,7 +335,7 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 	       don't know why I put this in in the first place but
 	       NS doesn't do it */
 	{
-	    char *end;
+	    UCHARACTER *end;
 	    long x;
 
 	    PRSDBG(("Trying to do numeric entity\n"));
@@ -565,20 +346,26 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 		in_ptr++;
 	    }
 
-	    x = in_bytes >= 1 ? strtol(in_ptr, &end, 10) : (end = in_ptr, -1);
+	    x = in_bytes >= 1 ? ustrtol(in_ptr, &end, 10) : (end = in_ptr, -1);
 
 	    if (end != in_ptr &&
 		x > 0 &&
 		x != 127 &&
+#if !UNICODE
 		x < 256 &&
+		(x >= 32 || (x < 256 && isspace((char)x)))
+#else
 		(x >= 32 || isspace((char)x))
+#endif
 		)
 	    {
+#if !UNICODE
 		if (gbf_active(GBF_TRANSLATE_UNDEF_CHARS))
 		    x = convert_undefined_key_code((int)x);
-
-		*out_ptr++ = (char) x;
+#endif
+		*out_ptr++ = (UCHARACTER) x;
 		out_bytes++;
+
 		in_bytes -= end - in_ptr;
 		in_ptr = end;
 
@@ -613,7 +400,7 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 		/* was not valid memory. I think this is unlikely. */
 		/* Also relies upon there being no entity name that is */
 		/* also a stem for another entity name. */
-		BOOL upper_case = isupper(in_ptr[0]);
+		BOOL upper_case = in_ptr[0] < 128 && isupper(in_ptr[0]);
 		char **matchp = bsearch(in_ptr,
 					entity_names,
 					sizeof(entity_names) / sizeof(entity_names[0]),
@@ -630,8 +417,10 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 			in_ptr++;
 			in_bytes--;
 		    }
+
 		    *out_ptr++ = ISO_Latin1[ (matchp - entity_names)*2 + (upper_case ? 1 : 0) ];
 		    out_bytes++;
+
 		    used = TRUE;
 		}
 	    }
@@ -644,7 +433,8 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 				  in_ptr - 1);
 #endif
        	}
-	else if ((c < 32 || c == 127) && (rules & SGMLTRANS_STRIP_CTRL) != 0)
+#if 0
+	    else if ((c < 32 || c == 127) && (rules & SGMLTRANS_STRIP_CTRL) != 0)
 	{
 	    /* SJM: I'm not sure whether taking NULLs out would mess stuff up */
 	    if (c != 0)
@@ -654,7 +444,8 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 		used = TRUE;
 	    }
 	}
-
+#endif
+	
 	if (! used)
 	{
 	    *out_ptr++ = c;
@@ -673,11 +464,11 @@ extern void entity_recognition(SGMLCTX *context)
     const int new_entity = sgml_translation(context,
 				     context->inhand.data,
 				     context->inhand.ix,
-/*				     SGMLTRANS_PERCENT | */ /* Precent shouldn't be expanded in HTML I don't think*/
 				     SGMLTRANS_AMPERSAND |
 				     SGMLTRANS_HASH |
 				     SGMLTRANS_WARNINGS);
     context->inhand.ix = new_entity;
+
     push_inhand(context);
 }
 

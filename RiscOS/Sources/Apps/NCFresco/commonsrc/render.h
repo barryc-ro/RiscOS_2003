@@ -31,4 +31,5 @@ int render_caret_colour(be_doc doc, int back, int cursor);
 extern int render_text(be_doc doc, const char *text, int x, int y);
 extern void *render_sprite_locate(const char *sprite, void **sptr_out);
 extern void render_plinth_from_list(int bcol, wimp_paletteword *cols, int flags, int x, int y, int w, int h, be_doc doc);
+extern void render_set_wide_format(int fh);
 

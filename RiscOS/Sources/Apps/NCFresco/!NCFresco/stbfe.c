@@ -89,6 +89,11 @@
 #include "memheap.h"
 #endif
 
+#if UNICODE
+#include "encoding.h"
+#include "unictype.h"
+#endif
+
 #ifdef HierProf_PROFILE
 #include "hierprof/HierProf.h"
 #endif
@@ -1909,7 +1914,9 @@ int fe_check_download_finished(fe_view v)
 		_kernel_setenv(PROFILE_NUM_VAR, buffer);
 
 		/* set the user name variable */
-		translate_escaped_text(strsafe(v->pending_user_name), buffer, sizeof(buffer));
+/* 		translate_escaped_text(strsafe(v->pending_user_name), buffer, sizeof(buffer)); */
+		url_unescape_cat(buffer, strsafe(v->pending_user_name), sizeof(buffer), FALSE);
+
 		_kernel_setenv(PROFILE_NAME_VAR, buffer);
 
 		/* re read the config and flush the cache */
@@ -5925,6 +5932,11 @@ static BOOL fe_initialise(void)
 
     dbginit();
 
+#if UNICODE
+    encoding_set_alloc_fns(mm_malloc, mm_free);
+    unictype_init();
+#endif
+
     _swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 7, &wimp_version);
     if (wimp_version < 380)
 	wimp_version = 350;
@@ -6134,7 +6146,11 @@ int main(int argc, char **argv)
     HierProf_ProfileAllFunctions();
 #endif
 
+#if UNICODE
+    setlocale(LC_ALL, "C");
+#else
     setlocale(LC_ALL, "");
+#endif
     setbuf(stderr, NULL);   /* no caching   */
 
     MemCheck_Init();

@@ -173,10 +173,6 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 
 /**********************************************************************/
 
-#ifndef Font_WideFormat
-#define Font_WideFormat	0x400A9
-#endif
-
 static be_doc document_list = NULL;
 
 /**********************************************************************/
@@ -1618,12 +1614,6 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
     RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, 0, 0));
 #endif
 
-
-#ifdef RISCOS
-    if (doc->encoding != be_encoding_LATIN1)
-	_swix(Font_WideFormat, _IN(0), doc->encoding);
-#endif
-
     if (rh)
     {
 	top = rr->g.y1 - oy;
@@ -1655,11 +1645,6 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 	highlight_render(rr, doc);
 #endif
     }
-
-#ifdef RISCOS
-    if (doc->encoding != be_encoding_LATIN1)
-	_swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
-#endif
 
     RENDBG(("Render done\n"));
 
@@ -2316,11 +2301,6 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 
         FMTDBG(("be_formater_loop - building\n"));
 
-#ifdef RISCOS
-	if (doc->encoding != be_encoding_LATIN1)
-	    _swix(Font_WideFormat, _IN(0), doc->encoding);
-#endif
-
 /*     fvpr_progress_stream(&doc->rh->stream); */
 
 	{
@@ -2334,10 +2314,6 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 	antweb_build_selection_list(doc);
 #endif
 
-#ifdef RISCOS
-	if (doc->encoding != be_encoding_LATIN1)
-	    _swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
-#endif
         FMTDBG(("be_formater_loop done\n"));
 
 #if DEBUG > 2
@@ -3772,15 +3748,43 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 	    lastptr = 0;
 
 	PPDBG(("Data arriving; type = 0x%03x, file=%d, last had %d, now got %d\n",
-		ftype, fh, lastptr, so_far));
+	       ftype, fh, lastptr, so_far));
 
 	if (doc->pd == NULL)
 	    doc->pd = be_lookup_parser(ftype);
 
 	if (doc->ph == NULL && ((pparse_details*)doc->pd)->new)
 	{
+	    int encoding = 0;
+#if UNICODE
+	    if (config_encoding_user_override)
+		encoding = config_encoding_user;
+	    else
+	    {
+		http_header_item *list = access_get_headers(doc->ah);
+	    
+		for (; list; list = list->next)
+		{
+		    if (strcasecomp(list->key, "CONTENT-TYPE") == 0)
+		    {
+			static const char *tags[] = { "CHARSET", 0 };
+			name_value_pair output[1];
+			char *s = strdup(list->value);		    
+		    
+			parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
+
+			if (output[0].name)
+			    encoding = encoding_number_from_name(output[0].value);
+
+			mm_free(s);
+			break;
+		    }
+		}
+	    }
+#endif
 	    PPDBG(("About to make a new parser stream\n"));
-	    doc->ph = (((pparse_details*)doc->pd)->new)(url, ftype);
+
+	    doc->ph = (((pparse_details*)doc->pd)->new)(url, ftype, encoding);
 	    if (doc->ph)
 	    {
 		/* new: check if URL has changed - since we set the URL on entry now */
@@ -3802,32 +3806,33 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 	    }
 	}
 
+#ifndef BUILDERS
+	/* can't put this code in complete as http_close will have been called */
+	if (doc->rh && (doc->flags & doc_flag_HAD_HEADERS) == 0)
+	{
+	    http_header_item *list = access_get_headers(doc->ah);
+
+	    BENDBG(( "doc%p: add meta ah %p list %p\n", doc, doc->ah, list));
+
+	    for (; list; list = list->next)
+	    {
+		rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
+		
+		BENDBG(( "doc%p: add meta rh %p list %p\n", doc, doc->rh, list));
+
+		m->httpequiv = strdup(list->key);
+		m->content = strdup(list->value);
+
+		rid_meta_connect(doc->rh, m);
+	    }
+
+	    doc->flags |= doc_flag_HAD_HEADERS;
+	}
+#endif
+
 	if (doc->ph)
 	    progress_parse_and_format(doc, fh, lastptr, so_far);
     }
-
-#ifndef BUILDERS
-    /* can't put this code in complete as http_close will have been called */
-    if (status == status_GETTING_BODY && doc->rh && (doc->flags & doc_flag_HAD_HEADERS) == 0)
-    {
-	http_header_item *list = access_get_headers(doc->ah);
-
-	BENDBG(( "doc%p: add meta ah %p list %p\n", doc, doc->ah, list));
-
-	for (; list; list = list->next)
-	{
-	    rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
-
-	    BENDBG(( "doc%p: add meta rh %p list %p\n", doc, doc->rh, list));
-
-	    m->httpequiv = strdup(list->key);
-	    m->content = strdup(list->value);
-
-	    rid_meta_connect(doc->rh, m);
-	}
-	doc->flags |= doc_flag_HAD_HEADERS;
-    }
-#endif
 
     doc->lstatus = status;
     doc->lbytes = so_far;
@@ -4331,7 +4336,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->magic = ANTWEB_DOC_MAGIC;
     new->parent = v;
     new->scale_value = config_display_scale_image;
-    new->encoding = config_display_encoding;
+    new->encoding = config_encoding_user;
 
     /* new: add the url here */
     new->url = strdup(url);
@@ -4831,15 +4836,15 @@ extern int backend_doc_encoding(be_doc doc, int encoding)
 
     if (doc == NULL)
     {
-	old_encoding = config_display_encoding;
+	old_encoding = config_encoding_user;
 	if (encoding != be_encoding_READ)
-	    config_display_encoding = encoding;
+	    config_encoding_user = encoding;
     }
     else
     {
 	old_encoding = doc->encoding;
 	if (encoding != be_encoding_READ)
-	    config_display_encoding = doc->encoding = encoding;
+	    config_encoding_user = doc->encoding = encoding;
     }
 
     return old_encoding;

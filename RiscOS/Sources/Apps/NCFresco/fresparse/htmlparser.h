@@ -152,7 +152,6 @@ extern void htmlriscos_colour(VALUE *col, int *word);
 extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space);
 extern void decode_img_align(int align, rid_image_flags *img_flags, rid_flag *item_flags);
 extern void text_item_push_image(HTMLCTX * me,
-				 int flags,
 				 VALUE *src,
 				 VALUE *alt,
 				 VALUE *align,

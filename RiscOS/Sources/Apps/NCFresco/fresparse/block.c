@@ -35,8 +35,14 @@ extern void startblockquote (SGMLCTX * context, ELEMENT * element, VALUES * attr
 #ifndef STBWEB
     SET_EFFECTS(context->tos, STYLE_WF_INDEX, WEBFONT_BLOCK);
 #endif
+
 #ifdef STBWEB
-    text_item_push_word(htmlctxof(context), rid_flag_LINE_BREAK, FALSE);
+#if NEW_BREAKS
+    rid_scaff_item_push(htmlctxof(context)->rh->curstream, rid_break_MUST);
+#else
+    rid_scaff_item_push(htmlctxof(context)->rh->curstream, rid_flag_LINE_BREAK);
+#endif
+/*  text_item_push_word(htmlctxof(context), rid_flag_LINE_BREAK, FALSE); */
 #endif
     bump_current_indent(context);
     bump_current_rindent(context);

@@ -173,6 +173,16 @@ os_error *webfonts_initialise( void )
     if ( !e )
         e = webfont_find_font( WEBFONT_TTY );
 
+#ifdef STBWEB
+    /* nasty hack to ensure that japanese font is always open */
+    if (!e && config_encoding_internal != 0)
+    {
+	for (i = 1; !e && i <= WEBFONT_SIZES; i++)
+	    e = webfont_find_font( WEBFONT_JAPANESE + WEBFONT_SIZE(i) );
+	e = NULL;
+    }
+#endif
+    
     return e;
 }
 

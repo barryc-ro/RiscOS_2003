@@ -188,8 +188,12 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 	    bbc_rectanglefill(ox, h + oy - line_space, width, line_space-1);
 
 	    /* draw the text itself */
+#if 1
+	    render_text(NULL, mh->items[i].name, ox, h + oy - webfonts[MENU_FONT].max_up);
+#else
 	    font_paint(mh->items[i].name, font_OSCOORDS, ox, h + oy - webfonts[MENU_FONT].max_up);
-
+#endif
+	    
 #if 0
 	    /* draw the selection box */
 	    if (i == mh->highlight/*  && pointer_mode == pointermode_OFF */)

@@ -39,6 +39,7 @@ struct config_str
     char *help_file;
     char *cookie_file;
     char *history_file;
+    char *encoding_path;
 
     int auth_file_crypt;
     char *animation_name;
@@ -80,12 +81,15 @@ struct config_str
     int display_leading;
     int display_leading_percent;
     int display_char_password;
-    int display_encoding;
 
     int display_highlight_style;
     int display_highlight_width;
 
     int display_tables;
+
+    int encoding_user;
+    int encoding_user_override;
+    int encoding_internal;
 
     int proxy_http_on;
     int proxy_https_on;
@@ -201,6 +205,8 @@ extern struct config_str config_array;
 #define config_cookie_file (config_array.cookie_file)
 #define config_history_file (config_array.history_file)
 
+#define config_encoding_path (config_array.encoding_path)
+
 #define config_auth_file_crypt (config_array.auth_file_crypt)
 #define config_doc_default (config_array.doc_default)
 #define config_document_handler_user (config_array.document_handler_user)
@@ -242,7 +248,10 @@ extern struct config_str config_array;
 #define config_display_leading (config_array.display_leading)
 #define config_display_leading_percent (config_array.display_leading_percent)
 #define config_display_char_password (config_array.display_char_password)
-#define config_display_encoding (config_array.display_encoding)
+
+#define config_encoding_user (config_array.encoding_user)
+#define config_encoding_user_override (config_array.encoding_user_override)
+#define config_encoding_internal (config_array.encoding_internal)
 
 #define highlight_style_SIMPLE	0
 #define highlight_style_RCA	1

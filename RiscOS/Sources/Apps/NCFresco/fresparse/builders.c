@@ -329,6 +329,16 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	    me, xf, space, space ? "WITH SPACE" : "WITHOUT SPACE", bytes, ptr ? ptr : "**NULL**",
 	    bytes, ptr));
 
+#if NEW_BREAKS
+    if (me->no_break && GET_BREAK(xf) == rid_break_CAN)
+	SET_BREAK(xf, rid_break_MUST_NOT);
+
+    if (space)
+    {
+	xf |= rid_flag_SPACE;
+	space = FALSE;
+    }
+#else
     if (me->no_break)
 	xf |= rid_flag_NO_BREAK;
 
@@ -337,7 +347,8 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	PRSDBG(("\ntext_item_push_word(): both LINE_BREAK and NO_BREAK - clearing NO_BREAK\n\n"));
 	xf &= ~rid_flag_NO_BREAK;
     }
-
+#endif
+    
 #if DEBUG
     flexmem_noshift();
     PRSDBG(("PUSH WORD '%.*s'\n", bytes, ptr));
@@ -479,8 +490,16 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 
 extern void text_item_revoke_break( HTMLCTX *me )
 {
+#if NEW_BREAKS
+    if ( me->rh && me->rh->curstream && me->rh->curstream->text_last  &&
+	 GET_BREAK(me->rh->curstream->text_last->flag) == rid_break_MUST )
+    {
+	SET_BREAK(me->rh->curstream->text_last->flag, rid_break_CAN);
+    }
+#else
     if ( me->rh && me->rh->curstream && me->rh->curstream->text_last )
         me->rh->curstream->text_last->flag &= ~rid_flag_LINE_BREAK;
+#endif
 }
 
 /*****************************************************************************/
@@ -557,7 +576,6 @@ extern void decode_img_align(int align, rid_image_flags *img_flags, rid_flag *it
 }
 
 extern void text_item_push_image(HTMLCTX * me,
-				 int flags,
 				 VALUE *src,
 				 VALUE *alt,
 				 VALUE *align,
@@ -572,7 +590,7 @@ extern void text_item_push_image(HTMLCTX * me,
     rid_text_item_image *new;
     rid_text_item *nb;
 
-    PRSDBG(("text_item_push_image(%p,%x,etc): width=%p\n", me, flags, ww));
+    PRSDBG(("text_item_push_image(%p): width=%p\n", me, ww));
 
     new = mm_calloc(1, sizeof(*new));
     nb = &(new->base);
@@ -632,9 +650,14 @@ extern void text_item_push_image(HTMLCTX * me,
 
     nb->tag = rid_tag_IMAGE;
 
-    nb->flag |= rid_flag_LINE_BREAK & flags;
+/*     nb->flag |= rid_flag_LINE_BREAK & flags; */
+#if NEW_BREAKS
+    if (me->mode == HTMLMODE_PRE || me->no_break)
+	SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
     if (me->mode == HTMLMODE_PRE || me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
+#endif
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
@@ -871,8 +894,13 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
     rid_form_element_connect(me->form, &sel->base);
     me->form->last_select = sel;
 
+#if NEW_BREAKS
+    if (me->no_break)
+	SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
     if (me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
+#endif
 
     nb->tag = rid_tag_SELECT;
     nb->aref = me->aref;	/* Current anchor, or NULL */
@@ -935,9 +963,14 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
     rid_form_element_connect(me->form, &ta->base);
     me->form->last_text = ta;
 
+#if NEW_BREAKS
+    if (me->no_break)
+	SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
     if (me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
-
+#endif
+    
     nb->tag = rid_tag_TEXTAREA;
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
@@ -950,165 +983,6 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
 #endif
     rid_text_item_connect(me->rh->curstream, nb);
 }
-
-/*****************************************************************************/
-
-#if 0				/* moved to forms.c */
-extern void text_item_push_input(HTMLCTX * me, int flags,
-				 VALUE *align,
-				 VALUE *checked,
-				 VALUE *disabled,
-				 VALUE *maxlength,
-				 VALUE *name,
-				 VALUE *size,
-				 VALUE *src,
-				 VALUE *type,
-				 VALUE *value,
-				 VALUE *id,
-				 VALUE *bgcolor,
-				 VALUE *selcolor,
-				 VALUE *cursor,
-				 VALUE *nocursor,
-				 VALUE *numbers,
-				 VALUE *selimage)
-{
-    rid_text_item_input *new;
-    rid_text_item *nb = NULL;
-    rid_input_item *in;
-    rid_input_tag tag = (rid_input_tag) -1;
-
-    PRSDBG(("text_item_push_input(%p, %x, etc)\n", me, flags));
-
-    switch (type->type == value_enum ? type->u.i : HTML_INPUT_TYPE_TEXT)
-    {
-    case HTML_INPUT_TYPE_TEXT:
-	tag = rid_it_TEXT;
-	break;
-    case HTML_INPUT_TYPE_PASSWORD:
-	tag = rid_it_PASSWD;
-	break;
-    case HTML_INPUT_TYPE_CHECKBOX:
-	tag = rid_it_CHECK;
-	break;
-    case HTML_INPUT_TYPE_RADIO:
-	tag = rid_it_RADIO;
-	break;
-    case HTML_INPUT_TYPE_IMAGE:
-	tag = rid_it_IMAGE;
-	break;
-    case HTML_INPUT_TYPE_HIDDEN:
-	tag = rid_it_HIDDEN;
-	break;
-    case HTML_INPUT_TYPE_SUBMIT:
-	tag = rid_it_SUBMIT;
-	break;
-    case HTML_INPUT_TYPE_RESET:
-	tag = rid_it_RESET;
-	break;
-    case HTML_INPUT_TYPE_BUTTON:
-	tag = rid_it_BUTTON;
-	break;
-    }
-
-    in = mm_calloc(1, sizeof(*in));
-
-    if (tag != rid_it_HIDDEN)
-    {
-	new = mm_calloc(1, sizeof(*new));
-	new->input = in;
-	nb = &(new->base);
-	in->base.display = nb;
-    }
-    else
-	new = NULL;
-
-    in->base.tag = rid_form_element_INPUT;
-    in->tag = tag;
-
-    in->base.id = valuestringdup(id);
-    htmlriscos_colour(bgcolor, &in->base.colours.back);
-    htmlriscos_colour(selcolor, &in->base.colours.select);
-    htmlriscos_colour(cursor, &in->base.colours.cursor);
-
-    if (nocursor->type != value_none)
-	in->flags |= rid_if_NOCURSOR;
-    if (numbers->type != value_none)
-	in->flags |= rid_if_NUMBERS;
-
-    if (checked->type != value_none)
-	in->flags |= rid_if_CHECKED;
-    if (disabled->type != value_none)
-	in->flags |= rid_if_DISABLED;
-
-    in->name = valuestringdup(name);
-    in->value = valuestringdup(value);
-    in->src = valuestringdup(src);
-    in->src_sel = valuestringdup(selimage);
-
-
-#if 0
-    in->xsize = in->ysize = -1;
-    /* NOTE: If SHORTISH is defined as short, rather than int, then */
-    /* this scanf needs to be %hd if stray memory is not to be written! */
-
-    if (size->type == value_string)
-    {
-	sscanf(size->u.s.ptr, "%hd,%hd", &in->xsize, &in->ysize);
-    }
-    if (in->xsize == -1)
-	in->xsize = 20;
-#else
-    in->xsize = size->type == value_integer ? size->u.i : -1;
-#endif
-
-    if (maxlength->type == value_integer)
-	in->max_len = maxlength->u.i;
-
-    if (in->max_len == 0)
-	in->max_len = 256;
-
-    if (me->form)
-	rid_form_element_connect(me->form, &in->base);
-
-    switch (tag)
-    {
-    case rid_it_CHECK:
-    case rid_it_RADIO:
-	in->data.tick = ((in->flags & rid_if_CHECKED) != 0);
-	break;
-    case rid_it_TEXT:
-    case rid_it_PASSWD:
-	in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
-	if (in->value)
-	{
-	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); /* add one here as len is len of output buffer */
-	}
-	else
-	{
-	    in->data.str[0] = 0;
-	}
-	break;
-    case rid_it_IMAGE:
-	decode_img_align(align->type == value_enum ? align->u.i : -1, &in->data.image.flags, &nb->flag);
-	break;
-    }
-
-    if (nb)
-    {
-	nb->tag = rid_tag_INPUT;
-	if (flags & rid_flag_LINE_BREAK)
-	    nb->flag |= rid_flag_LINE_BREAK;
-	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
-	    nb->flag |= rid_flag_NO_BREAK;
-	nb->aref = me->aref;	/* Current anchor, or NULL */
-	if (me->aref && me->aref->first == NULL)
-	    me->aref->first = nb;
-	GET_ROSTYLE(nb->st);
-
-	rid_text_item_connect(me->rh->curstream, nb);
-    }
-}
-#endif
 
 /*****************************************************************************
 
@@ -1177,11 +1051,19 @@ extern void text_item_push_break(HTMLCTX * me)
     {
 	/* if previous has a line break and isn't an explicitly pushed break
 	   then don't push break item but mark that we had it */
+#if NEW_BREAKS
+	if (GET_BREAK(nb->flag) == rid_break_MUST)
+	{
+	    SET_BREAK(nb->flag, rid_break_EXPLICIT);
+	    add_break = FALSE;
+	}
+#else
 	if ((nb->flag & (rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK)) == rid_flag_LINE_BREAK)
 	{
 	    nb->flag |= rid_flag_EXPLICIT_BREAK;
 	    add_break = FALSE;
 	}
+#endif
     }
 
     if (add_break)
@@ -1193,7 +1075,11 @@ extern void text_item_push_break(HTMLCTX * me)
 	nb = (rid_text_item *) ti;
 
 	nb->tag = rid_tag_TEXT;
+#if NEW_BREAKS
+	SET_BREAK(nb->flag, rid_break_EXPLICIT);
+#else
 	nb->flag |= rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK;
+#endif
 	nb->aref = me->aref;	/* Current anchor, or NULL */
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
@@ -1234,7 +1120,11 @@ extern void text_item_ensure_break(HTMLCTX * me)
         nb = mm_calloc(1, sizeof(*nb));
 
 	nb->tag = rid_tag_PBREAK;
+#if NEW_BREAKS
+	SET_BREAK(nb->flag, rid_break_MUST);
+#else
 	nb->flag |= rid_flag_LINE_BREAK;
+#endif
 	nb->aref = me->aref;	/* Current anchor, or NULL */
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
@@ -1256,11 +1146,21 @@ extern void text_item_push_hr(HTMLCTX *me, VALUE *align, VALUE *noshade, VALUE *
     /* This implies LINE_BREAK overrides NO_BREAK. Don't forget this
        when altering the formatter! */
     if ( (ti = me->rh->curstream->text_last) != NULL )
+#if NEW_BREAKS
+	SET_BREAK(ti->flag, rid_break_MUST);
+#else
 	ti->flag |= rid_flag_LINE_BREAK;
+#endif
 
     item = mm_calloc(1, sizeof(*item));
     item->base.tag = rid_tag_HLINE;
+
+#if NEW_BREAKS
+    SET_BREAK(item->base.flag, rid_break_MUST);
+#else
     item->base.flag |= rid_flag_LINE_BREAK;
+#endif
+    
     item->base.aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
         me->aref->first = &item->base;
@@ -1354,7 +1254,7 @@ extern void pseudo_html(HTMLCTX *ctx, const char *fmt, ...)
     context->state = get_state_proc(context);
     clear_inhand(context);
 
-    sgml_feed_characters(context, buffer, strlen(buffer));
+    sgml_feed_characters_ascii(context, buffer, strlen(buffer));
 
     sgml_recursion_warning_post(context);
     va_end(arglist);

@@ -372,10 +372,13 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     font_strwidth(&fstr);
 
+#if 1
+    render_text(doc, str, hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1), bline);
+#else
     font_paint(str, font_OSCOORDS,
 	       hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1),
 	       bline);
-
+#endif
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	render_plot_icon("gright",
 			 hpos + ti->width - GRIGHT_SIZE - SELECT_SPACE_X,

@@ -13,6 +13,10 @@
 #include "util.h"
 #include "htmlparser.h"
 
+#if UNICODE
+#include "encoding.h"
+#endif
+
 /* Collect text into a temporary string */
 
 extern void starttitle (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -39,7 +43,8 @@ extern void finishtitle (SGMLCTX * context, ELEMENT * element)
     if (ss.bytes)
     {
         /* Expand the entities and strip newlines (we've already stripped spaces) */
-        ss.bytes = sgml_translation(context, ss.ptr, ss.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL);
+	/* removed as entities are already expanded and space and controls are already stripped */
+/*         ss.bytes = sgml_translation(context, ss.ptr, ss.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
 
 	if (htmlctx->rh->title != NULL)
 	{
@@ -137,6 +142,29 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	m->httpequiv = valuestringdup(&attributes->value[HTML_META_HTTP_EQUIV]);
 	m->content = valuestringdup(&attributes->value[HTML_META_CONTENT]);
 	rid_meta_connect(me->rh, m);
+
+#if UNICODE
+	/* only set encoding from here if not set by HTTP header or user */
+	if (context->enc_num == 0 && 
+	    strcasecomp((m->httpequiv ? m->httpequiv : m->name), "CONTENT-TYPE") == 0)
+	{
+	    static const char *tags[] = { "CHARSET", 0 };
+	    name_value_pair output[1];
+	    char *s = strdup(m->content);		    
+		    
+	    parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
+
+	    if (output[0].name)
+	    {
+		int encoding = encoding_number_from_name(output[0].value);
+
+		context->enc_num = encoding;
+		sgml_set_encoding(context, encoding);
+	    }
+
+	    mm_free(s);
+	}
+#endif
     }
 }
 

@@ -3518,7 +3518,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 		    if (path && path[0] && path[1])
 		    {
-			buffer = strcatx1(strdup_unescaped(path + 2), NULL);
+			buffer = strcatx1(url_unescape(path + 2, FALSE), NULL);
+/* 			buffer = strcatx1(strdup_unescaped(path + 2), NULL); */
 /* 			translate_escaped_text(path + 2, buffer, sizeof(buffer)); */
 			d->data.gopher.gopher_tag = path[1];
 		    }

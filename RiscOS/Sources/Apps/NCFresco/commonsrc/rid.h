@@ -166,14 +166,35 @@ typedef SHORTISH rid_tag;
 #define rid_tag_MASK            0xf
 
 typedef SHORTISH rid_flag;
+
+#if NEW_BREAKS
+
+#define GET_BREAK(a)		((a) & 0x03)
+#define SET_BREAK(a,b)		do { (a) = ((a) &~ 0x03) | (b); } while (0)
+
+#define rid_flag_BREAK		0x01	/* if set then there is and implied or explicit line break */
+#define rid_flag_FORCE		0x02	/* if set then the given state is definite */
+
+#define rid_flag_SPACE		0x80
+
+#define rid_break_CAN		0					/* we can break after this word if we want to */
+#define rid_break_MUST_NOT	(rid_flag_FORCE)			/* we must break after this word */
+#define rid_break_MUST		(		  rid_flag_BREAK)	/* we must not break after this word */
+#define rid_break_EXPLICIT	(rid_flag_FORCE | rid_flag_BREAK)	/* the user has put a BR tag in here */
+
+#else
+
 #define rid_flag_LINE_BREAK     0x1     /* A line break MUST follow this item */
 #define rid_flag_NO_BREAK       0x2     /* The break is just a style change and we are in an unbreakable object. */
+#define rid_flag_EXPLICIT_BREAK	0x80	/* a BR element was used */
+
+#endif
+
 #define rid_flag_SELECTED       0x4     /* This item is highlit */
 #define rid_flag_LEFTWARDS      0x08    /* Floating or clearing leftwards */
 #define rid_flag_RIGHTWARDS     0x10    /* Floating or clearing rightwards */
 #define rid_flag_CLEARING	0x20	/* Clear floating items */
 #define rid_flag_ACTIVATED	0x40	/* item is being clicked on */
-#define rid_flag_EXPLICIT_BREAK	0x80	/* a BR element was used */
 
 #define rid_flag_COLOUR_MASK   0xF00    /* Up to 16 colours per page */
 #define rid_flag_COLOUR_SHIFT      8
@@ -187,9 +208,14 @@ typedef SHORTISH rid_flag;
 #define rid_flag_RINDENT        0x4000  /* Right indent (or not! only one level) */
 #define rid_flag_WIDE_FONT	0x8000	/* item contains some 16bit characters */
 
+#if NEW_BREAKS
+#define MUST_BREAK(ti)	(((ti)->flag & rid_flag_BREAK) != 0)
+#define DONT_BREAK(ti)	(GET_BREAK((ti)->flag) == rid_break_MUST_NOT)
+#else
 /* LINE_BREAK is higher strength than NO_BREAK */
 #define MUST_BREAK(ti)	(((ti)->flag & (rid_flag_EXPLICIT_BREAK | rid_flag_LINE_BREAK)) != 0)
 #define DONT_BREAK(ti)	( ! MUST_BREAK(ti) && ((ti)->flag & (rid_flag_NO_BREAK)) != 0)
+#endif
 
 #define TEXT_ITEMS_THIS_LINE(pi)	( (pi)->first != NULL )
 #define FLOATERS_THIS_LINE(pi)		( (pi)->floats == NULL ? FALSE : ( (pi)->floats->left != NULL || (pi)->floats->right != NULL ) )

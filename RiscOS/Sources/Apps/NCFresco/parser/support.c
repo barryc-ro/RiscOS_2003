@@ -10,10 +10,18 @@
 #include "gbf.h"
 #include "util.h"
 
-STRING empty_string = { NULL, 0 },
-    space_string = { " ", 1 },
-    eol_string = { "\n", 1};
+#if UNICODE
+#include "config.h"
+#include "unictype.h"
+#include "utf8.h"
+#endif
 
+static char space = ' ',
+	newline = '\n';
+
+STRING empty_string = { NULL, 0 },
+    space_string = { &space, 1 },
+    eol_string = { &newline, 1};
 
 #define decode_element_start	0x01
 #define decode_element_body	0x02
@@ -133,8 +141,8 @@ extern void nullfree(void **vpp)
 
 extern int strnicmp(const char *a, const char *b, int n)
 {
-    const char *p =a;
-    const char *q =b;
+    const char *p;
+    const char *q;
 
     for(p=a, q=b;; p++, q++) {
 	int diff;
@@ -145,6 +153,24 @@ extern int strnicmp(const char *a, const char *b, int n)
     }
     /*NOTREACHED*/
 }
+
+#if UNICODE
+extern int strnicmpu(const UCHARACTER *a, const char *b, int n)
+{
+    const UCHARACTER *p;
+    const char *q;
+
+    for(p=a, q=b;; p++, q++) {
+	int diff;
+	if (p == a+n) return 0;	/*   Match up to n characters */
+	if (*p >= 256) return *p - *q;
+	if (!(*p && *q)) return *p - *q;
+	diff = tolower(*p) - tolower(*q);
+	if (diff) return diff;
+    }
+    /*NOTREACHED*/
+}
+#endif
 
 /*****************************************************************************/
 
@@ -237,6 +263,126 @@ extern STRING mkstring(char *ptr, int n)
 
     return s;
 }
+
+#if UNICODE
+extern STRING mkstringu(UCHARACTER *ptr, int n)
+{
+    STRING s;
+
+    s.bytes = 0;
+    
+    if ( n == 0 )
+    {
+	s.ptr = NULL;
+    }
+    else
+    {
+	int i;
+
+#if 0
+	{
+	    USTRING u;
+	    u.ptr = ptr;
+	    u.bytes = n;
+	    PRSDBG(("mkstringu: src '%s'\n", usafe(u)));
+	}
+#endif
+	    
+	/* find space needed */
+	switch (config_encoding_internal)
+	{
+	case 0:
+	    s.bytes = n;
+	    break;
+	default:
+	    for (i = 0; i < n; i++)
+		s.bytes += UTF8_codelen(ptr[i]);
+	    break;
+	}
+
+	/* allocate space */
+	if ( (s.ptr = mm_malloc(s.bytes)) == NULL )
+	{
+	    s.bytes = 0;
+	}
+	else 
+	{
+	    /* write out UTF8 string */
+	    char *ss = s.ptr;
+	    for (i = 0; i < n; i++)
+	    {
+		switch (config_encoding_internal)
+		{
+		case 0:
+		    *ss++ = ptr[i] >= 256 ? '?' : ptr[i];
+		    break;
+		default:
+		    ss = UCS4_to_UTF8(ss, ptr[i]);
+		    break;
+		}
+	    }
+
+	    PRSDBGN(("mkstringu: written %d chars\n", ss - s.ptr));
+	}
+
+ 	PRSDBGN(("mkstringu: %d chars become %d bytes '%.*s'\n", n, s.bytes, s.bytes, s.ptr));
+    }
+
+    return s;
+}
+#endif
+
+#if 0
+extern int extract_numbers(char *buffer, int bufsize, USTRING string)
+{
+    int i, out;
+
+    for (i = 0; i < string.bytes && string.ptr[i] == ' '; i++)
+	;
+    
+    for (out = 0; i < string.bytes && out < bufsize-1; i++)
+    {
+	int c = string.ptr[i];
+	if ((c >= '0' && c <= '9') || c == '.')
+	{
+	    buffer[out++] = c;
+	}
+	else
+	    break;
+    }
+    buffer[out] = 0;
+    return out;
+}
+#endif
+
+
+#if 0
+extern USTRING mkustring(UCHARACTER *ptr, int n)
+{
+    USTRING s;
+
+    s.bytes = 0;
+    
+    if ( (s.bytes = n) == 0 )
+    {
+	s.ptr = NULL;
+    }
+    else
+    {
+	if ( (s.ptr = mm_malloc(s.bytes * sizeof(ptr[0]))) == NULL )
+	{
+	    usrtrc( "Failed to allocate %d bytes of string storage\n", n * sizeof(ptr[0]) );
+	    s.bytes = 0;
+	}
+	else
+	{
+	    memcpy(s.ptr, ptr, n * sizeof(ptr[0]));
+	}
+    }
+
+    return s;
+}
+#endif
 
 /*****************************************************************************/
 
@@ -335,9 +481,14 @@ STRING stringtok(STRING *s1, const char *s2)
 
 /* strip spaces from the start of a string, modifying the STRING */
 
+static int strip_char(int c)
+{
+    return c < 128 && (isspace( c ) || iscntrl( c ));
+}
+
 extern STRING string_strip_start(STRING s)
 {
-    while (s.bytes > 0 && isspace( (int) s.ptr[0] ) )
+    while (s.bytes > 0 && strip_char( (int)s.ptr[0] ) )
     {
         s.ptr++;
 	s.bytes--;
@@ -349,7 +500,7 @@ extern STRING string_strip_start(STRING s)
 
 extern STRING string_strip_end(STRING s)
 {
-    while (s.bytes > 0 && isspace( (int) s.ptr[s.bytes - 1] ) )
+    while (s.bytes > 0 && strip_char( (int)s.ptr[s.bytes - 1] ) )
 	s.bytes--;
     return s;
 }
@@ -357,6 +508,31 @@ extern STRING string_strip_end(STRING s)
 extern STRING string_strip_space(STRING in)
 {
     return string_strip_end(string_strip_start(in));
+}
+
+
+extern USTRING ustring_strip_start(USTRING s)
+{
+    while (s.bytes > 0 && strip_char( (int)s.ptr[0] ) )
+    {
+        s.ptr++;
+	s.bytes--;
+    }
+    return s;
+}
+
+/* strip spaces from the end of a ustring, modifying the USTRING */
+
+extern USTRING ustring_strip_end(USTRING s)
+{
+    while (s.bytes > 0 && strip_char( (int)s.ptr[s.bytes - 1] ) )
+	s.bytes--;
+    return s;
+}
+
+extern USTRING ustring_strip_space(USTRING in)
+{
+    return ustring_strip_end(ustring_strip_start(in));
 }
 
 /* count occurrences of character c */
@@ -423,50 +599,100 @@ extern void string_list_free(STRING_LIST *ptr)
 
 /*****************************************************************************/
 
+static void count_positions(STRING item, int *ppos, int *pextra)
+{
+    int i = 0;			/* index into input string */
+    int pos = *ppos;		/* display position */
+    int extra = *pextra;	/* extra space chars needed */
+
+    while (i < item.bytes)
+    {
+	pos ++;		/* advance one display character position */
+	    
+	if (item.ptr[i] == '\t')
+	{
+	    while ( (pos & 7) != 0 )
+	    {
+		pos++;
+		extra++;
+	    }
+	}
+
+	/* consume next UTF8 character sequence */
+#if UNICODE
+	i += UTF8_seqlen(item.ptr[i]);
+#else
+	i++;
+#endif
+    }
+
+    *ppos = pos;
+    *pextra = extra;
+}
+
 /*
  * Take 'item', append to 'inhand' and expand its tabs
- * Returns a new malloced string
+ * Returns a new malloced string. Both strings are UTF8.
  */
 
 STRING get_tab_expanded_string(STRING item, STRING inhand)
 {
     STRING t;
-    int i, extra = inhand.bytes;
+    int extra = 0, inhand_pos = 0;
+    int i, pos, out;
 
-    for (i = 0; i < item.bytes; i++)
-    {
-	extra++;
-	    
-	if (item.ptr[i] == '\t')
-	{
-	    PRSDBG(("Performing tab expansion\n"));
-	    while ( (extra & 7) != 0 )
-		extra++;
-	}
-    }
+    PRSDBG(("get_tab_expanded_string: inhand '%.*s' item '%.*s'\n", inhand.bytes, inhand.ptr, item.bytes, item.ptr));
 
-    t.bytes = extra;
-    t.ptr = mm_malloc(extra + 1);
+    count_positions(inhand, &inhand_pos, &extra);
+
+    PRSDBG(("get_tab_expanded_string: inhand_pos %d extra %d\n", inhand_pos, extra));
+
+    pos = inhand_pos;
+    count_positions(item, &pos, &extra);
+    
+    PRSDBG(("get_tab_expanded_string: pos %d extra %d\n", pos, extra));
+
+    t.bytes = inhand.bytes + item.bytes + extra + 1;
+    t.ptr = mm_malloc(t.bytes);
 
     if (inhand.bytes)
 	memcpy(t.ptr, inhand.ptr, inhand.bytes);
-    extra = inhand.bytes;
 
-    for (i = 0; i < item.bytes; i++)
+    pos = inhand_pos;
+    out = inhand.bytes;
+    for (i = 0; i < item.bytes; )
     {
 	if (item.ptr[i] == '\t')
 	{
-	    t.ptr[extra++] = ' ';
-	    while ( (extra & 7) != 0 )
-		t.ptr[extra++] = ' ';
+	    t.ptr[out++] = ' ';
+	    pos++;
+	    i++;
+
+	    while ( (pos & 7) != 0 )
+	    {
+		t.ptr[out++] = ' ';
+		pos++;
+	    }
 	}
 	else
 	{
-	    t.ptr[extra++] = item.ptr[i];
+#if UNICODE
+	    int j, len;
+
+	    len = UTF8_seqlen(item.ptr[i]);
+	    for (j = 0; j < len; j++, i++)
+ 		t.ptr[out++] = item.ptr[i];
+#else
+	    t.ptr[out++] = item.ptr[i];
+	    i++;
+#endif
+	    pos++;
 	}
     }
 
-    t.ptr[extra] = 0;
+    
+    /* I guess this is being added for safety - it shouldn't really be needed */
+    t.ptr[out] = 0;
 
     return t;
 }
@@ -543,43 +769,75 @@ extern void sgml_support_initialise(void)
     sgml_do_parser_fixups();
 }
 
-extern BOOL is_whitespace(char c)
+extern BOOL is_whitespace(UCHARACTER c)
 {
+#if UNICODE
+    if (c >= 128)
+	return FALSE;
+#endif
     return char_decode[(int)c] & decode_whitespace;
 }
 
-extern BOOL is_element_start_character(char c)
+extern BOOL is_element_start_character(UCHARACTER c)
 {
+#if UNICODE
+    if (c >= 128)
+	return FALSE;
+#endif
     return char_decode[(int)c] & decode_element_start;
 }
 
-extern BOOL is_element_body_character(char c)
+extern BOOL is_element_body_character(UCHARACTER c)
 {
+#if UNICODE
+    if (c >= 128)
+	return FALSE;
+#endif
     return char_decode[(int)c] & decode_element_body;
 }
 
-extern BOOL is_attribute_start_character(char c)
+extern BOOL is_attribute_start_character(UCHARACTER c)
 {
+#if UNICODE
+    if (c >= 128)
+	return FALSE;
+#endif
     return char_decode[(int)c] & decode_attribute_start;
 }
 
-extern BOOL is_attribute_body_character(char c)
+extern BOOL is_attribute_body_character(UCHARACTER c)
 {
+#if UNICODE
+    if (c >= 128)
+	return FALSE;
+#endif
     return char_decode[(int)c] & decode_attribute_body;
 }
 
-extern BOOL is_value_start_character(char c)
+extern BOOL is_value_start_character(UCHARACTER c)
 {
+#if UNICODE
+    if (c >= 128)
+	return FALSE;
+#endif
     return char_decode[(int)c] & decode_value_start;
 }
 
-extern BOOL is_value_body_character(char c)
+extern BOOL is_value_body_character(UCHARACTER c)
 {
+#if UNICODE
+    if (c > 255)		/* not sure about this - but we best not rule anything out */
+	return TRUE;
+#endif
     return char_decode[(int)c] & decode_value_body;
 }
 
-extern BOOL is_entity_character(char c)
+extern BOOL is_entity_character(UCHARACTER c)
 {
+#if UNICODE
+    if (c >= 128)
+	return FALSE;
+#endif
     return char_decode[(int)c] & decode_entity;
 }
 
@@ -636,11 +894,11 @@ extern int string_str_cmp(const void *a, const void *b)
 
 static int element_search_fn(const void *a, const void *b)
 {
-    STRING *sp = (STRING *)a;
+    USTRING *sp = (USTRING *)a;
     ELEMENT *ep = (ELEMENT *)b;
     const int sl = sp->bytes;
     const int el = ep->name.bytes;
-    const int n = strnicmp(sp->ptr, ep->name.ptr, sl < el ? sl : el );
+    const int n = strnicmpu(sp->ptr, ep->name.ptr, sl < el ? sl : el );
 
     if (n == 0 && sl != el)
     {
@@ -655,7 +913,7 @@ static int element_search_fn(const void *a, const void *b)
     return n;
 }
 
-extern int find_element(SGMLCTX *context, STRING s)
+extern int find_element(SGMLCTX *context, USTRING s)
 {
     ELEMENT *element;
 
@@ -686,7 +944,7 @@ extern int find_element(SGMLCTX *context, STRING s)
 		    if (x > element->name.bytes)
 			break;
 
-		    if ( strnicmp(element->name.ptr, s.ptr, x) != 0 )
+		    if ( strnicmpu(s.ptr, element->name.ptr, x) != 0 )
 			continue;
 
 		    PRSDBG(("%.*s against %.*s, x %d, best_ix %d, best_len %d\n",
@@ -733,7 +991,7 @@ extern int find_element(SGMLCTX *context, STRING s)
 
   */
 
-extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *guessed)
+extern int find_attribute(SGMLCTX *context, ELEMENT *element, USTRING s, BOOL *guessed)
 {
     int ix = 0;
     ATTRIBUTE **attributep = element->attributes, *attribute;
@@ -741,7 +999,7 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *gu
 
     while ( (attribute = *attributep)->name.ptr != NULL )
     {
-	if ( s.bytes == attribute->name.bytes && strnicmp(s.ptr, attribute->name.ptr, s.bytes) == 0 )
+	if ( s.bytes == attribute->name.bytes && strnicmpu(s.ptr, attribute->name.ptr, s.bytes) == 0 )
 	{
 	    PRSDBGN(("Attribute '%.*s' is %d\n", s.bytes, s.ptr, ix));
 
@@ -753,6 +1011,11 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *gu
 	attributep++;
     }
 
+#if UNICODE
+    {
+	static int unicode_not_done_yet;
+    }
+#else
     if (gbf_active(GBF_GUESS_ATTRIBUTES))
     {
 	int dist;
@@ -803,7 +1066,8 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *gu
 
 	PRSDBGN(("Failed to make any form of guess on the attribute!\n"));
     }
-
+#endif
+    
     return SGML_NO_ATTRIBUTE;
 }
 
@@ -1020,14 +1284,14 @@ extern STACK_ITEM *find_element_in_stack (SGMLCTX *context, ELEMENT *element)
     return tos;
 }
 
-static void apply_effects (BITS *new, BITS *old, BITS *fx, BITS *app, BITS *mask)
+static void apply_effects (BITS *neu, BITS *old, BITS *fx, BITS *app, BITS *mask)
 {
     int i;
-    new[0] = (new[0] & ~mask[0]) | ((old[0] | (fx[0] & app[0])) & STYLE_OR_MASK  & mask[0])
+    neu[0] = (neu[0] & ~mask[0]) | ((old[0] | (fx[0] & app[0])) & STYLE_OR_MASK  & mask[0])
                                  | ((old[0] ^ app[0]) & STYLE_XOR_MASK & mask[0]);
     for (i = 1; i < words_of_effects_bitpack; i++)
     {
-        new[i] = (new[i] & ~mask[i]) | ((old[i] | (fx[i] & app[i])) & mask[i]);
+        neu[i] = (neu[i] & ~mask[i]) | ((old[i] | (fx[i] & app[i])) & mask[i]);
     }
 }
 
@@ -1042,17 +1306,17 @@ static void apply_effects_without (STACK_ITEM *item, STACK_ITEM *tos)
     STACK_ITEM *next;
     for (next=item->inner; next != NULL && next->outer != tos; next=next->inner)
     {
-        BITS *this  = next->effects_active;
+        BITS *thisone  = next->effects_active;
 #if DEBUG_STACK
-        PRSDBG(("Before apply_effects: prior %08x this %08x fx %08x app %08x mask %08x\n",
-                 prior[0], this[0], next->effects_active[0], next->effects_applied[0], mask[0]));
+        PRSDBG(("Before apply_effects: prior %08x thisone %08x fx %08x app %08x mask %08x\n",
+                 prior[0], thisone[0], next->effects_active[0], next->effects_applied[0], mask[0]));
 #endif
-        apply_effects (this, prior, next->effects_active, next->effects_applied, mask);
+        apply_effects (thisone, prior, next->effects_active, next->effects_applied, mask);
 #if DEBUG_STACK
-        PRSDBG(("After apply_effects: this: %08x\n", this[0]));
+        PRSDBG(("After apply_effects: thisone: %08x\n", thisone[0]));
 #endif
 
-        prior = this;
+        prior = thisone;
     }
 }
 
@@ -1198,7 +1462,7 @@ extern void clear_inhand(SGMLCTX *context)
     if ( context->inhand.data == NULL )
     {
 	PRSDBG(("clear_inhand(%p): creating initial inhand buffer\n", context));
-	context->inhand.data = (char *) mm_malloc(256);
+	context->inhand.data = (void *) mm_malloc(256 * sizeof(context->inhand.data[0]));
 	context->inhand.max = 256;
 	ASSERT(context->inhand.data != NULL);
     }
@@ -1218,7 +1482,7 @@ extern void reset_tokeniser_state(SGMLCTX *context)
 
 /*****************************************************************************/
 
-extern void free_buffer(BUFFER *bp)
+extern void free_buffer(UBUFFER *bp)
 {
     if (bp != NULL)
     {
@@ -1230,14 +1494,14 @@ extern void free_buffer(BUFFER *bp)
 
 /*****************************************************************************/
 
-extern void add_to_buffer(BUFFER *buffer, char input)
+static void add_to_ubuffer(UBUFFER *buffer, UCHARACTER input)
 {
     ASSERT( buffer->max >= buffer->ix );
     ASSERT( buffer->ix >= 0 );
 
     if (buffer->max == buffer->ix)
     {
-	char *newptr = mm_realloc( buffer->data, buffer->max + 256 );
+	void *newptr = mm_realloc( buffer->data, (buffer->max + 256)*sizeof(buffer->data[0]) );
 	if (newptr == NULL)
 	{
 	    usrtrc( "Not enough memory to extend a string\n");
@@ -1250,35 +1514,35 @@ extern void add_to_buffer(BUFFER *buffer, char input)
     buffer->data[ buffer->ix++ ] = input;
 }
 
-extern void add_char_to_inhand(SGMLCTX *context, char input)
+extern void add_to_prechop_buffer(SGMLCTX *context, UCHARACTER input)
 {
+    UBUFFER *buffer;
+
     ASSERT(context->magic == SGML_MAGIC);
 
-#if 1
-    add_to_buffer(&context->inhand, input);
-#else
-    ASSERT( context->inhand.max >= context->inhand.ix );
-    ASSERT( context->inhand.ix >= 0 );
+    buffer = &context->prechop;
 
-    if ( context->inhand.max == context->inhand.ix )
-    {
-	char *newptr = mm_realloc( context->inhand.data, context->inhand.max + 256 );
-	ASSERT( newptr != NULL );
-	context->inhand.data = newptr;
-	context->inhand.max += 256;
-    }
+    add_to_ubuffer(buffer, input);
+}
 
-    context->inhand.data[ context->inhand.ix++ ] = input;
-#endif
-#if 0
-    fprintf(stderr, "Inhand now '%.*s' %d\n",
-	    context->inhand.ix, context->inhand.data, context->inhand.ix);
-#endif
+/* Optionally the inhand buffer can be a UCS2 buffer in which case
+ * each element is 16 bits and max and ix refer to elements, not bytes
+ */
+
+extern void add_char_to_inhand(SGMLCTX *context, UCHARACTER input)
+{
+    UBUFFER *buffer;
+    
+    ASSERT(context->magic == SGML_MAGIC);
+
+    buffer = &context->inhand;
+
+    add_to_ubuffer(buffer, input);
 }
 
 extern void push_inhand(SGMLCTX *context)
 {
-    STRING s;
+    USTRING s;
 
     ASSERT(context->magic == SGML_MAGIC);
 
@@ -1364,7 +1628,7 @@ extern void push_bar_last_inhand(SGMLCTX *context)
 #endif
     if (context->inhand.ix > 1)
     {
-	STRING s;
+	USTRING s;
 
 	s.ptr = context->inhand.data;
 	s.bytes = context->inhand.ix - 1;
@@ -1450,6 +1714,58 @@ extern void set_effects_wf_flag_fn (STACK_ITEM *st, BITS value)
     PRSDBGN(("set_effects_wf_flag_fn(): st: %p value: %08x\n -> %08x %08x %08x\n",
              st, value, st->effects_active[0], st->effects_active[1], st->effects_active[2]));
 #endif
+}
+
+/*****************************************************************************/
+
+#if SGML_REPORTING && UNICODE
+char *usafe(USTRING s)
+{
+    static char buf[MAXSTRING];
+    char *ss;
+    int i, n;
+
+    ss = buf;
+    n = s.bytes < MAXSTRING-1 ? s.bytes : MAXSTRING-1;
+
+    for (i = 0; i < n; i++)
+    {
+	int c = s.ptr[i];
+	*ss++ = c >= 128 ? '.' : c;
+    }
+
+    *ss = 0;
+    
+    return buf;
+}
+#endif
+
+/*****************************************************************************/
+
+long ustrtol(UCHARACTER *u, UCHARACTER **end, int base)
+{
+    char buf[16];
+    int i;
+    for (i = 0; i < sizeof(buf) - 1; i++, u++)
+    {
+	UCHARACTER c = *u;
+	if (c < 128 && (
+		(base == 10 && isdigit(c)) ||
+		(base == 16 && isxdigit(c)) )
+	    )
+	{
+	    buf[i] = (char)c;
+	}
+	else
+	    break;
+    }
+
+    buf[i] = 0;
+
+    if (end)
+	*end = u;
+
+    return strtol(buf, NULL, base);
 }
 
 /*****************************************************************************/

@@ -596,12 +596,6 @@ extern void backend_mark_page_visited( const char *url );
 extern be_item backend_locate_id(be_doc doc, const char *id);
 
 #define be_encoding_READ	(-1)
-#define be_encoding_LATIN1	0
-#define be_encoding_SJIS	1
-#define be_encoding_JIS		2
-#define be_encoding_UNICODE	8
-#define be_encoding_EUC		9
-
 extern int backend_doc_encoding(be_doc doc, int encoding);
 
 /* Functions in layout.c */

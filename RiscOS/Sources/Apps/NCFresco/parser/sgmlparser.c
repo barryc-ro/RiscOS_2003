@@ -4,6 +4,9 @@
 #include "sgmlparser.h"
 #include "gbf.h"
 #include "profile.h"
+#if UNICODE
+#include "Unicode/charsets.h"
+#endif
 
 /*****************************************************************************/
 
@@ -43,6 +46,48 @@ extern void sgml_note_message(SGMLCTX * context, const char *fmt, ... )
 
 #endif
 
+/* ----------------------------------------------------------------------------- */
+
+#if UNICODE
+
+static int sgml_handle_char(void *handle, UCS4 c)
+{
+    SGMLCTX *context = handle;
+    
+    add_char_to_inhand(context, (UCS2) c);
+
+    (*context->state)(context, (UCS2) c);
+
+    return context->pending_close;
+}
+
+extern void sgml_set_encoding(SGMLCTX *context, int enc_num)
+{
+    PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d\n", context, enc_num));
+    
+    if (context->encoding)
+	encoding_delete(context->encoding);
+    context->encoding = encoding_new(enc_num);
+}
+
+extern void sgml_feed_characters_ascii(SGMLCTX *context, const char *buffer, int bytes)
+{
+    int i;
+
+    PRSDBGN(("sgml_feed_characters_ascii(): '%.*s'\n", bytes, buffer));
+
+    for (i = 0; i < bytes && !context->pending_close; i++, buffer++)
+    {
+	char c = *buffer;
+	
+	add_char_to_inhand(context, c);
+
+	(*context->state) (context, c);
+    }
+}
+
+#endif
+
 /*****************************************************************************
 
     Feed new characters into the SGML parser.  Any number of characters can
@@ -52,6 +97,11 @@ extern void sgml_note_message(SGMLCTX * context, const char *fmt, ... )
 
 extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes)
 {
+#if UNICODE
+    PRSDBGN(("sgml_feed_characters(): '%.*s'\n", bytes, buffer));
+
+    encoding_read(context->encoding, sgml_handle_char, buffer, bytes, context);
+#else
     int i;
     BOOL convert_char = gbf_active(GBF_TRANSLATE_UNDEF_CHARS);
 
@@ -66,10 +116,12 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
     {
 	char c = *buffer;
 
+#if !UNICODE
 	/* optionally convert undefined keys to PC keymap */
 	if (convert_char)
 	    c = convert_undefined_key_code(c);
-
+#endif
+	
 	add_char_to_inhand(context, c);
 #if 0
 	PRSDBGN(("sgml_feed_characters(): '%c' in '%s'\n", c, get_state_name(context->state)));
@@ -81,6 +133,7 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
     {
 	PRSDBG(("sgml_feed_characters(%p): aborted after %d of %d bytes\n", context, i, bytes));
     }
+#endif
 #endif
 }
 
@@ -95,21 +148,27 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
 
 extern void sgml_stream_finished (SGMLCTX *context)
 {
-    static STRING s = { NULL, 0 };
+    static USTRING s = { NULL, 0 };
     
     ASSERT(context->magic == SGML_MAGIC);
 
     if ((context->state == state_comment_wait_dash_1 || context->state == state_comment_wait_dash_2) 
         && context->comment_anchor != -1)
     {
-        int stream_end = context->inhand.ix; context->inhand.ix = context->comment_anchor;
+        int stream_end = context->inhand.ix;
+	context->inhand.ix = context->comment_anchor;
         do_got_element (context);
 
         PRSDBG(("End of document suggests missing comment close - backtracking\n"));
         sgml_note_missing_close(context, &context->elements[context->tos->element]);
         PRSDBG(("Recovering in %s\n", get_state_name (context->state)));
 
-        sgml_feed_characters (context, &context->inhand.data [context->comment_anchor], stream_end - context->comment_anchor);
+#if UNICODE
+	/* kill current encoding and restart as Unicode11 (UCS2) */
+	sgml_set_encoding(context, csUnicode11);
+#endif
+
+        sgml_feed_characters (context, (char *)&context->inhand.data [context->comment_anchor], stream_end - context->comment_anchor);
 
         sgml_stream_finished (context);
     }
@@ -165,6 +224,11 @@ extern void sgml_free_context(SGMLCTX *context)
 
     sgml_free_report(context);
 
+#if UNICODE
+    if (context->encoding)
+	encoding_delete(context->encoding);
+#endif
+    
     mm_free(context);
 }
 

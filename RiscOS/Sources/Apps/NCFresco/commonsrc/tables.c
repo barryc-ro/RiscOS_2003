@@ -1833,7 +1833,12 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	{
 	    rid_text_item *ti;
 	    if ( (ti = me->rh->curstream->text_last) != NULL )
+#if NEW_BREAKS
+		if (GET_BREAK(ti->flag) == rid_break_CAN)
+		    SET_BREAK(ti->flag, rid_break_MUST);
+#else
 		ti->flag |= rid_flag_LINE_BREAK;
+#endif    
 	    /* DAF: 970319: don't put back with NEW_UNEXP_TABLE */
 /* 	text_item_ensure_break(me); */
 	}
@@ -2034,7 +2039,12 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 	{
 	    rid_text_item *ti;
 	    if ( (ti = me->rh->curstream->text_last) != NULL )
+#if NEW_BREAKS
+		if (GET_BREAK(ti->flag) == rid_break_CAN)
+		    SET_BREAK(ti->flag, rid_break_MUST);
+#else
 		ti->flag |= rid_flag_LINE_BREAK;
+#endif    
 	}
 	rid_text_item_connect(me->rh->curstream, &table->parent->base);
     }
@@ -2064,11 +2074,16 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 
     /* SJM: tables now have to manage their own breaks so ensure one if we are not floating */
     /* SJM: push null item for convenience of scanning */
+#if NEW_BREAKS
+    rid_scaff_item_push(me->rh->curstream,
+			(table->parent->base.flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0 ? rid_break_MUST : rid_break_CAN);
+#else
     if ((table->parent->base.flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0)
 	text_item_push_word(me, rid_flag_LINE_BREAK, FALSE);
     else
 	text_item_push_word(me, 0, FALSE);
-
+#endif
+    
 #if DEBUG == 3
     dump_cell_map(table, "</TABLE>");
 #endif

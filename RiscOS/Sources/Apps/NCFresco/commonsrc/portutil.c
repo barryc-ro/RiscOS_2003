@@ -498,8 +498,6 @@ static int find_tag(const char *tags[], const char *name)
 
  */
 
-#if 1
-
 static int add_tag(char *name, int name_len, char *value, int value_len, const char *tags[], name_value_pair *output, int free_offset)
 {
     int tag_num;
@@ -717,59 +715,6 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
     return unknown;
 }
 
-#else
-
-#define SEPARATORS ";\n\r"
-
-
-void parse_http_header(char *header_data, const char *tags[], char *values[])
-{
-    char *s;
-    int i;
-
-    /* zero the output array first */
-    for (i = 0; tags[i]; i++)
-        values[i] = NULL;
-
-    s = strtok(header_data, SEPARATORS);
-    if (s) do
-    {
-        char *name;
-        char *equals, *value;
-        int tag_num;
-
-        /* s is either NAME or VALUE or NAME=VALUE, whitespace can be anywhere */
-        name = skip_space(s);
-        value = "";
-        equals = strchr(s, '=');
-
-        if (equals)
-        {
-            *equals = '\0';
-            value = equals + 1;
-        }
-
-        tag_num = find_tag(tags, name);
-        if (tag_num != -1)
-        {
-            values[tag_num] = skip_space(value);
-        }
-        else
-        {
-            /* if searching for the null entry use full NAME=VALUE */
-            if (equals)
-                *equals = '=';
-
-            tag_num = find_tag(tags, "");
-            if (tag_num != -1)
-                values[tag_num] = name;
-        }
-    }
-    while ((s = strtok(NULL, SEPARATORS)) != NULL);
-}
-
-#endif
-
 /* ---------------------------------------------------------------------------------------------------------- */
 
 char *skip_space(const char *s)
@@ -781,6 +726,7 @@ char *skip_space(const char *s)
 
 /* ---------------------------------------------------------------------------------------------------- */
 
+#if 0
 /* As originally used.
  * 'src' is a null-terminated string
  * 'dest' is an output buffer of size 'len' bytes.
@@ -800,20 +746,6 @@ extern void translate_escaped_text(char *src, char *dest, int len)
     dest[new_len] = 0;
 }
 
-extern char *strdup_unescaped(const char *src)
-{
-    char *dest = strdup(src);
-    int new_len;
-
-    new_len = sgml_translation(NULL,
-			       dest,
-			       strlen(dest), SGMLTRANS_PERCENT | SGMLTRANS_HASH );
-    dest[new_len] = 0;
-
-    return strtrim(dest);
-}
-
-
 #ifdef STBWEB
 extern void translate_escaped_form_text(char *src, char *dest, int len)
 {
@@ -829,7 +761,7 @@ extern void translate_escaped_form_text(char *src, char *dest, int len)
     dest[new_len] = 0;
 }
 #endif
-
+#endif
 
 /*****************************************************************************
 

@@ -23,6 +23,10 @@
 
 #include "htmldefs.h"
 
+#if UNICODE
+#include "encoding.h"
+#endif
+
 /* Various configuration type values */
 
 #define default_inhand_size		256
@@ -69,7 +73,6 @@ enum
     PARSE_STDUNIT_VOID,
     PARSE_STDUNIT_LIST,		/* For coords */
     PARSE_ENUM_STRING,
-    PARSE_ENUM_CASE,             /* For case sensitive enums (OL TYPE) */
     PARSE_BOOL,
     PARSE_COLOUR
 
@@ -202,6 +205,13 @@ typedef struct VALUES                   VALUES;
 typedef struct STACK_ITEM		STACK_ITEM;
 typedef struct STDUNIT_LIST		STDUNIT_LIST;
 typedef struct sgml_chopper_state	sgml_chopper_state;
+typedef struct USTRING			USTRING;
+typedef struct UBUFFER			UBUFFER;
+#if UNICODE
+typedef unsigned short			UCHARACTER;
+#else
+typedef char				UCHARACTER;
+#endif
 
 struct EBLOCK { void *ptr; int elts; }; /* Elements, eg int, struct */
 struct MBLOCK { char *ptr; int size; }; /* Memory, bytes */
@@ -211,6 +221,8 @@ struct STRING_LIST { STRING string; STRING_LIST *prev, *next; };
 struct BUFFER { char *data; int max, ix; };     /* ix is next to use */
 struct ACT_ELEM { int action, element; };
 struct STDUNIT_LIST { int num; VALUE *items; };
+struct UBUFFER { UCHARACTER *data; int max, ix; };	/* This must be identical to BUFFER except for data type or else free_buffer won't work */
+struct USTRING { UCHARACTER *ptr; int bytes; };		/* bytes is actually the number of elements, *NOT* the number of bytes */
 
 /*****************************************************************************
 
@@ -308,7 +320,7 @@ struct ELEMENT
     void (*element_close) (SGMLCTX *ctx, ELEMENT *elem);
 };
 
-typedef void (*state_fn)(SGMLCTX *, char) ;
+typedef void (*state_fn)(SGMLCTX *, UCHARACTER) ;
 
 typedef void (*sgml_deliver_fn) (SGMLCTX *, int, STRING, ELEMENT *);
 
@@ -403,8 +415,8 @@ struct SGMLCTX
     /* Tokeniser context */
 
     int line;
-    BUFFER inhand;
-    BUFFER prechop;
+    UBUFFER inhand;
+    UBUFFER prechop;
     int comment_anchor; /* DL for bad comment recovery */
     state_fn state;
 
@@ -412,10 +424,11 @@ struct SGMLCTX
 
     sgml_chopper_state chopper_state;
 
-    void (*chopper) (SGMLCTX *, STRING);
+    void (*chopper) (SGMLCTX *, USTRING);
 
     sgml_deliver_list *dlist;
-    void (*deliver) (SGMLCTX *, int, STRING, ELEMENT *);
+    sgml_deliver_fn deliver;
+/*     void (*deliver) (SGMLCTX *, int, STRING, ELEMENT *); */
 
     STRING unexpected_string;
 
@@ -423,6 +436,11 @@ struct SGMLCTX
     REPORT report;
 
     BITS dont_stack_elements_open[words_of_elements_bitpack];
+
+#if UNICODE
+    Encoding *encoding;
+    int enc_num;
+#endif
 };
 
 

@@ -104,8 +104,8 @@ extern char *skip_space(const char *s);
 
 extern int pmatch2(char *s, char *p);
 extern int pattern_match(char *s, char *pat, int cs);
-extern void translate_escaped_text(char *src, char *dest, int len);
-extern void translate_escaped_form_text(char *src, char *dest, int len);
+/* extern void translate_escaped_text(char *src, char *dest, int len); */
+/* extern void translate_escaped_form_text(char *src, char *dest, int len); */
 
 extern os_error *write_text_in_box(int handle, const char *str, void *box);
 extern os_error *write_text_in_box_height(const char *str, int width, int handle, int *height);

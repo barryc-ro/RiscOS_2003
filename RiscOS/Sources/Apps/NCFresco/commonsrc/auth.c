@@ -43,7 +43,7 @@
 #define AUTHDBG(a) DBG(a)
 #define AUTHDBGN(a)
 
-extern void translate_escaped_text(char *src, char *dest, int len);
+/* extern void translate_escaped_text(char *src, char *dest, int len); */
 
 typedef struct auth_realm {
     struct auth_realm *next/* , *prev */;
@@ -621,7 +621,8 @@ os_error *auth_load_file(char *fname)
 		if (t && u)
 		{
 		    unsigned char uucode[256];
-		    char unescaped[256];
+/* 		    char unescaped[256]; */
+		    char *unescaped;
 
 		    if (p && p[0] == '(')
 		    {
@@ -630,12 +631,14 @@ os_error *auth_load_file(char *fname)
 			p = (char *) uucode;
 
 			AUTHDBG(("Password uudecoded to '%s'\n", p));
-
 		    }
 
-		    translate_escaped_text(r, unescaped, sizeof(unescaped) );
+/* 		    translate_escaped_text(r, unescaped, sizeof(unescaped) ); */
+		    unescaped = url_unescape(r, FALSE);
 
 		    auth_add_realm(unescaped, t, u, p);
+
+		    mm_free(unescaped);
 		}
 	    }
 	}

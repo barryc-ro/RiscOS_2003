@@ -13,7 +13,7 @@
 
 #include "htmlparser.h"
 
-extern void translate_escaped_text(char *src, char *dest, int len);
+/* extern void translate_escaped_text(char *src, char *dest, int len); */
 
 extern void startform (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
@@ -253,7 +253,8 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
 	if (in->value)
 	{
-	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); /* add one here as len is len of output buffer */
+/* 	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); */ /* add one here as len is len of output buffer */
+	    strcpy(in->data.str, in->value);
 	}
 	else
 	{
@@ -279,8 +280,13 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	nb->tag = rid_tag_INPUT;
 /* 	if (flags & rid_flag_LINE_BREAK) */
 /* 	    nb->flag |= rid_flag_LINE_BREAK; */
+#if NEW_BREAKS
+	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
+	    SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
 	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
 	    nb->flag |= rid_flag_NO_BREAK;
+#endif
 	nb->aref = me->aref;	/* Current anchor, or NULL */
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
@@ -387,8 +393,9 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
         s = me->inhand_string;
 
         /* Expand the entities and strip newlines */
-        s.bytes = sgml_translation(context, s.ptr, s.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL);
+/*       s.bytes = sgml_translation(context, s.ptr, s.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
 
+	/* SJM: FIXME: check this still works, entity translation should have been done in state machine */
 	opt->text = stringdup(string_strip_space(s));
     }
     else

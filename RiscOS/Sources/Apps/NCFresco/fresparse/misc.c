@@ -284,7 +284,6 @@ extern void finishfont (SGMLCTX * context, ELEMENT * element)
 extern void finishfootnote (SGMLCTX * context, ELEMENT * element)
 {    generic_finish (context, element);	}
 
-
 extern void finishhead (SGMLCTX * context, ELEMENT * element)
 {    generic_finish (context, element);	}
 

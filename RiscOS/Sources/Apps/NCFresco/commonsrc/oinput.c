@@ -96,7 +96,7 @@ static int have_selected_sprites = -1;
 
 /* ---------------------------------------------------------------------- */
 
-extern void translate_escaped_text(char *src, char *dest, int len);
+/* extern void translate_escaped_text(char *src, char *dest, int len); */
 
 /* ---------------------------------------------------------------------- */
 
@@ -1034,7 +1034,8 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 		case rid_it_PASSWD:
 		    if (iis->value)
 		    {
-			translate_escaped_text(iis->value, iis->data.str, iis->max_len);
+/* 			translate_escaped_text(iis->value, iis->data.str, iis->max_len); */
+			strcpy(iis->data.str, iis->value);
 		    }
 		    else
 		    {

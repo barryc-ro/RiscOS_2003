@@ -2,7 +2,7 @@
 
 /* parsers.h */
 
-typedef void *(*pparse_new_fn)(char *url, int ft);
+typedef void *(*pparse_new_fn)(char *url, int ft, int encoding);
 typedef int (*pparse_data_fn)(void *h, char *buffer, int len, int more);
 typedef rid_header *(*pparse_rh_fn)(void *h);
 typedef void (*pparse_rhvoid_fn)(void *h);

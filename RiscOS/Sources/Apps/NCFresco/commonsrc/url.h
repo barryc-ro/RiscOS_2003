@@ -25,6 +25,10 @@ BOOL url_escape_file_to_file(FILE *in, FILE *out);
 extern int url_escape_cat_n(char *buffer, const char *in, int len, int n);
 extern void url_escape_to_file_n(const char *s, FILE *f, int n);
 
+extern char *url_unescape(const char *url, BOOL plus_translate);
+extern char *url_unescape_cat(char *output, const char *in, int output_size, BOOL plus_translate);
+extern char *url_unescape_cat_n(char *output, const char *in, int output_size, int in_size, BOOL plus_translate);
+
 extern char *url_path_trans(const char *s, int topath);
 
 /* returns 1 if *path_ptr was changed */

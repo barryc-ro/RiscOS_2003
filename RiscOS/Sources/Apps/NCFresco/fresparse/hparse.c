@@ -43,6 +43,10 @@
 
 #include "htmlparser.h"
 
+#if UNICODE
+#include "Unicode/charsets.h"
+#endif
+
 #ifndef PARSE_DEBUG
 #define PARSE_DEBUG 0
 #endif
@@ -258,10 +262,12 @@ static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
     return me;
 }
 
-static SGMLCTX * SGML_new(HTMLCTX *me)
+static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 {
     SGMLCTX *context = sgml_new_context();
 
+    PRSDBG(("SGML_new: htmlctx %p sgmlctx %p encoding %d\n", me, context, encoding));
+    
     if (context == NULL)
     {
 	/* FIXME: better handling */
@@ -277,6 +283,12 @@ static SGMLCTX * SGML_new(HTMLCTX *me)
     context->deliver = sgml_deliver;
     context->callback = def_callback;
 
+#if UNICODE
+    /* set encoding to 4 (Latin1) if not set, this value will come from user or HTTP header */
+    context->encoding = encoding_new(encoding == 0 || encoding == csAutodetectJP ? csISOLatin1 : encoding);
+    context->enc_num = encoding;
+#endif
+    
 #if SGML_REPORTING
     context->report.output = DBGOUT;
     (*context->callback.reset_report) (context);
@@ -293,7 +305,7 @@ static SGMLCTX * SGML_new(HTMLCTX *me)
 /* Create an SGMLCTX and  an HTMLCTX, bind and initialise them, */
 /* and return the HTMLCTX pointer. */
 
-static HTMLCTX *create_new_html(void)
+static HTMLCTX *create_new_html(int encoding)
 {
     SGMLCTX *sgmlctx;
     HTMLCTX *htmlctx;
@@ -303,7 +315,7 @@ static HTMLCTX *create_new_html(void)
     if (htmlctx == NULL)
 	return NULL;
 
-    sgmlctx = SGML_new( htmlctx );
+    sgmlctx = SGML_new( htmlctx, encoding );
 
     /* FIXME:  should free HTMLCTX and descendent data */
     if (sgmlctx == NULL)
@@ -320,6 +332,10 @@ static HTMLCTX *create_new_html(void)
 /*****************************************************************************/
 
 #define FREAD_BUFSIZE	4096
+
+/*
+ * SJM: Hopefully this isn't used anymore. Doesn't support encodings.
+ */
 
 static rid_header *parse_some_file(char *fname, char *url, int ft)
 {
@@ -338,7 +354,7 @@ static rid_header *parse_some_file(char *fname, char *url, int ft)
 	return 0;
     }
 
-    h = ppd->new(url, ft);
+    h = ppd->new(url, ft, 0);
     if (h == NULL)
     {
 	usrtrc( "Can't create pparse_details\n" );
@@ -386,12 +402,12 @@ static rid_header *parse_html_file(char *fname, char *url)
 
   */
 
-static void *pparse_html_new(char *url, int ft)
+static void *pparse_html_new(char *url, int ft, int encoding)
 {
     SGMLCTX *sgmlctx;
     HTMLCTX *htmlctx;
 
-    htmlctx = create_new_html();
+    htmlctx = create_new_html(encoding);
 
     if (htmlctx == NULL)
 	return NULL;
@@ -529,12 +545,12 @@ static rid_header *pparse_html_close(void *h, char *cfile)
 
   */
 
-static void *pparse_text_new(char *url, int ft)
+static void *pparse_text_new(char *url, int ft, int encoding)
 {
     SGMLCTX *sgmlctx;
     HTMLCTX *htmlctx;
 
-    htmlctx = create_new_html();
+    htmlctx = create_new_html(encoding);
 
     if (htmlctx == NULL)
 	return NULL;
@@ -572,12 +588,12 @@ static int pparse_text_data(void *h, char *buffer, int len, int more)
     /* SJM: mark as threaded */
     sgmlctx->threaded = 1;
     
-#if 0
+#if UNICODE
     /* Correct, but horendously slow */
     sgml_feed_characters(sgmlctx, buffer, len);
 #else
     {
-	STRING s;
+	USTRING s;
 
 	s.ptr = buffer;
 	s.bytes = len;
@@ -711,7 +727,7 @@ static int pparse_image_data(void *h, char *buffer, int len, int more)
     return TRUE;
 }
 
-static void *pparse_image_new(char *url, int ft)
+static void *pparse_image_new(char *url, int ft, int encoding)
 {
     imp_str *impp;
 
@@ -719,7 +735,7 @@ static void *pparse_image_new(char *url, int ft)
 
     if (impp)
     {
-	impp->me = create_new_html();
+	impp->me = create_new_html(0);
 
 	if (impp->me == NULL)
 	{
@@ -734,6 +750,7 @@ static void *pparse_image_new(char *url, int ft)
     }
 
     return impp;
+    encoding = encoding;
 }
 
 /*****************************************************************************/
@@ -743,7 +760,7 @@ static rid_header *parse_gif_file(char *fname, char *url)
     HTMLCTX* me;
     rid_header *result;
 
-    me = create_new_html();
+    me = create_new_html(0);
 
     if (me == NULL)
 	return NULL;
@@ -772,14 +789,14 @@ typedef struct {
     char buffer[1024];
 } gparse_str;
 
-static void *pparse_gopher_new(char *url, int ft)
+static void *pparse_gopher_new(char *url, int ft, int encoding)
 {
     gparse_str *gp;
 
     gp = mm_malloc(sizeof(*gp));
     if (gp)
     {
-	gp->me = create_new_html();
+	gp->me = create_new_html(0);
 
 	if (gp->me == NULL)
 	{

@@ -1005,4 +1005,27 @@ int get_free_memory_size(void)
 
 /*****************************************************************************/
 
+#if UNICODE
+
+/* used by the encoding library code */
+
+extern void encoding_leaf_to_path(char *out, const char *leaf)
+{
+    int c;
+
+    strcpy(out, config_encoding_path);
+
+    c = out[strlen(out)-1];
+    if (c != ':' && c != '.')
+	strcat(out, ".");
+
+    strcat(out, leaf);
+
+    PRSDBG(("encoding_leaf_to_path: path '%s' leaf '%s' out '%s'\n", config_encoding_path, leaf, out));
+}
+
+#endif
+
+/*****************************************************************************/
+
 /* eof util.c */

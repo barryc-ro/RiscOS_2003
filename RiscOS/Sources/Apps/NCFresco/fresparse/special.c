@@ -182,7 +182,7 @@ extern void startimg (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 			 &attributes->value[HTML_IMG_VSPACE]));
 #endif
 
-    text_item_push_image(me, 0,
+    text_item_push_image(me,
 			 &attributes->value[HTML_IMG_SRC],
 			 &attributes->value[HTML_IMG_ALT],
 			 &attributes->value[HTML_IMG_ALIGN],
@@ -431,7 +431,11 @@ extern void finisha (SGMLCTX * context, ELEMENT * element)
 	if (me->rh->curstream->text_last)
 	    me->aref->first = me->rh->curstream->text_last;
 	else if (me->rh->curstream != &me->rh->stream)			/* only if not top level stream */
+#if NEW_BREAKS
+	    text_item_push_word(me, rid_break_MUST_NOT, FALSE);
+#else
 	    text_item_push_word(me, rid_flag_NO_BREAK, FALSE);
+#endif
     }
 
     me->aref = NULL;

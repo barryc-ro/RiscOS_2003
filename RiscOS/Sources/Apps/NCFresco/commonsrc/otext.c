@@ -45,7 +45,6 @@
 /* Make this 1 to see item boundaries */
 #define DEBUG_ITEMS 0
 
-
 #if DEBUG
 static void dump_data(const char *s, int len)
 {
@@ -67,7 +66,7 @@ static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
 {
     int whichfont;
 
-    if (doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT))
+    if (ti->flag & rid_flag_WIDE_FONT)
 	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
     else
 	whichfont = ti->st.wf_index;
@@ -87,6 +86,12 @@ static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
     }
 
     antweb_doc_ensure_font( doc, whichfont );
+
+#if UNICODE && defined(RISCOS)
+    /* if we are claiming a wide font then always set it to Unicode encoding */
+    if (ti->flag & rid_flag_WIDE_FONT)
+	render_set_wide_format(webfonts[whichfont].handle);
+#endif
 
     return &webfonts[whichfont];
 }
@@ -114,8 +119,15 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     s = rh->texts.data + tit->data_off;
     str_len = strlen(s);
 
-    /* check to see if there are any wide characters in there */
-    if (doc->encoding != be_encoding_LATIN1)
+#if UNICODE
+    /* check to see if there are any wide characters in there */ 
+    switch (config_encoding_internal)
+    {
+    case 0:			/* latin1 */
+	break;
+
+    case 1:			/* utf8 */
+    case 3:			/* utf8 plot as sjis */
     {
 	int i;
 	for (i = 0; i < str_len; i++)
@@ -124,8 +136,15 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 		ti->flag |= rid_flag_WIDE_FONT;
 		break;
 	    }
+	break;
     }
 
+    case 2:			/* utf8 plot as unicode */
+	ti->flag |= rid_flag_WIDE_FONT;
+	break;
+    }
+#endif
+    
     /* get font descriptor */
     wf = getwebfont(doc, ti);
 
@@ -136,13 +155,25 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     }
     else
     {
-	int flags = doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT) ? 1<<12 : 0;
+#if NEW_BREAKS
+	int width2;
+
+	_swix(Font_ScanString, _INR(0,6) | _OUT(3),
+	      wf->handle, s, (1<<8),
+	      INT_MAX, INT_MAX,
+	      NULL, NULL, 
+	      &width2);
+
+	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
+	ti->pad = wf->space_width;
+#else
+	int flags; 
 	int width1, width2;
 	int len;
 
 	/* set font and read width */
-/* 	font_setfont(wf->handle); */
-	flags |= (1<<8) | (1<<7);
+/* 	flags = doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT) ? 1<<12 : 0; */
+	flags = (1<<8) | (1<<7);		/* use font handle, use length */
 
 	_swix(Font_ScanString, _INR(0,7) | _OUT(3),
 	      wf->handle, s, flags,
@@ -163,7 +194,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
-
+#endif
 #if 0
 	fprintf(stderr, "otext: scanstring '%s' str_len %d width1 %d width2 %d\n", s, str_len, width1, width2);
 #endif
