@@ -1,0 +1,705 @@
+/******	RecogAC3.c *********************************************************
+
+Project:	STB-400
+Component:	MPEGDriver
+This file:	AC-3 audio recogniser
+
+Copyright 2001 Pace Micro Technology plc. All rights reserved.
+
+This material is the confidential trade secret and proprietary information
+of Pace Micro Technology plc. It may not be reproduced, used, sold, or
+transferred to any third party without the prior written consent of
+Pace Micro Technology plc.
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+14/12/2001	BJGA	Created
+
+***************************************************************************/
+
+#ifdef GENERIC
+
+/************/
+/* Includes */
+/************/
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "AudGeneric.h"
+#include "Defs.h"
+#include "Mess.h"
+#include "Module.h"
+#include "RecogAC3.h"
+
+#include "VersionNum"
+
+#include "Debug.h"
+#if Debugging==1
+#include "DWrite.h"
+#endif
+
+/*****************/
+/* Private types */
+/*****************/
+
+typedef struct client
+{
+  struct client *link;
+  const buffer_fns_t *buffer;
+  const recogniser_fns_t *recogniser;
+}
+client_t;
+
+typedef union
+{
+  unsigned char byte [16]; /* need at most 15 bytes to reach origbs field */
+  struct
+  {
+    unsigned syncwordhi: 8;
+    
+    unsigned syncwordlo: 8;
+    
+    unsigned : 16; /* crc not relevant */
+    
+    unsigned frmsizecod: 6;
+    unsigned fscod: 2;
+    
+    unsigned bsmod: 3;
+    unsigned bsid: 5;
+  } fields;
+}
+audio_header_t;
+
+typedef struct candidate
+{
+  struct candidate *next;
+  unsigned int locks;
+  audio_header_t first_header;
+  audio_header_t latest_header;
+  unsigned int frame_length;
+  int next_index;
+  bool first_pts_valid;
+  mpeg_time_t first_pts;
+}
+candidate_t;
+
+typedef struct
+{
+  client_t *client;
+  void *client_handle;
+  candidate_t *candidates;
+  int byte_index;
+  union
+  {
+    unsigned int word [8];
+    unsigned char byte [32];
+  }
+  buffer;
+  unsigned int buffer_offset;
+  bool recognised;
+  audio_header_t result;
+  unsigned int result_bitrate;
+  unsigned int result_samplerate;
+  unsigned char result_acmod;
+  unsigned char result_lfeon;
+  unsigned char result_copyrightb;
+  unsigned char result_origbs;
+  bool result_first_pts_valid;
+  mpeg_time_t result_first_pts;
+}
+session_t;
+
+/**********************/
+/* Private prototypes */
+/**********************/
+
+static unsigned char static_ReadBits(unsigned int bits, unsigned char *init);
+
+/********************/
+/* Public variables */
+/********************/
+
+/*********************/
+/* Private variables */
+/*********************/
+
+static client_t TopLevel; /* This is where the top-level recogniser's function pointers would go */
+static client_t *Clients = NULL;
+
+/*********************/
+/* Private constants */
+/*********************/
+
+#define SYNC_REPEATS_NEEDED_TO_LOCK (2) /* 1 in 2^32 = 1 in 4 billion chance of false positive */
+#define MAX_FRAME_LENGTH (1920)
+
+static const unsigned short BitRate [19] = { 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640 };
+
+static const unsigned short SampleRate [3] = { 48000, 44100, 32000 };
+
+static const unsigned short FrameLength [38][3] = /* in 16-bit words */
+{
+  /* sampling rate   48000     44100     32000 */
+  {                     64,       69,       96 },
+  {                     64,       70,       96 },
+  {                     80,       87,      120 },
+  {                     80,       88,      120 },
+  {                     96,      104,      144 },
+  {                     96,      105,      144 },
+  {                    112,      121,      168 },
+  {                    112,      122,      168 },
+  {                    128,      139,      192 },
+  {                    128,      140,      192 },
+  {                    160,      174,      240 },
+  {                    160,      175,      240 },
+  {                    192,      208,      288 },
+  {                    192,      209,      288 },
+  {                    224,      243,      336 },
+  {                    224,      244,      336 },
+  {                    256,      278,      384 },
+  {                    256,      279,      384 },
+  {                    320,      348,      480 },
+  {                    320,      349,      480 },
+  {                    384,      417,      576 },
+  {                    384,      418,      576 },
+  {                    448,      487,      672 },
+  {                    448,      488,      672 },
+  {                    512,      557,      768 },
+  {                    512,      558,      768 },
+  {                    640,      696,      960 },
+  {                    640,      697,      960 },
+  {                    768,      835,     1152 },
+  {                    768,      836,     1152 },
+  {                    896,      975,     1344 },
+  {                    896,      976,     1344 },
+  {                   1024,     1114,     1536 },
+  {                   1024,     1115,     1536 },
+  {                   1152,     1253,     1728 },
+  {                   1152,     1254,     1728 },
+  {                   1280,     1393,     1920 },
+  {                   1280,     1394,     1920 }
+};
+
+/********************/
+/* Public functions */
+/********************/
+
+/******	RecogAC3_Init() ****************************************************
+
+Purpose:	Initialise recogniser non-stream-specifically
+Out:		Error pointer if we can't initialise
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_Init(void)
+{
+  _kernel_oserror *e = NULL;
+  /* In a real PRISM protocol module, we'd register with the top-level recogniser module */
+  IGNORE(TopLevel);
+  return e;
+}
+
+/******	RecogAC3_Final() ***************************************************
+
+Purpose:	Finalise
+Out:		Error pointer if we can't finalise
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_Final(void)
+{
+  _kernel_oserror *e = NULL;
+  client_t *ptr;
+  client_t *next;
+  /* In a real PRISM protocol module, we'd deregister with the top-level recogniser module */
+  for (ptr = Clients; ptr != NULL; ptr = next)
+  {
+    next = ptr->link;
+    free(ptr);
+  }
+  Clients = NULL;
+  return e;
+}
+
+/******	RecogAC3_RegisterCharacterisationClient() **************************
+
+Purpose:	A module other than the top-level recogniser is registering
+		its interest in the protocol module's services, for the
+		purpose of stream characterisation
+In:		Flags; buffer and recogniser callback function structures
+Out:		Error pointer; handle for client to use when calling RecogAC3_Register
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_RegisterCharacterisationClient(unsigned int flags, const buffer_fns_t *buffer, const recogniser_fns_t *recogniser, void **client)
+{
+  _kernel_oserror *e = NULL;
+  client_t *newclient = malloc(sizeof(client_t));
+  IGNORE(flags);
+  if (newclient == NULL)
+  {
+    e = Mess_GenerateError("NoMem", errno_NO_MEM, 0);
+  }
+  if (!e)
+  {
+    newclient->link = Clients;
+    Clients = newclient;
+    newclient->buffer = buffer;
+    newclient->recogniser = recogniser;
+    *client = newclient;
+  }
+  return e;
+}
+
+/******	RecogAC3_DeregisterCharacterisationClient() ************************
+
+Purpose:	Reverses the effect of RecogAC3_RegisterCharacterisationClient()
+In:		Flags; client handle
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_DeregisterCharacterisationClient(unsigned int flags, void *client)
+{
+  _kernel_oserror *e = NULL;
+  client_t *ptr;
+  client_t *prev = NULL;
+  IGNORE(flags);
+  for (ptr = Clients; ptr != NULL; prev = ptr, ptr = ptr->link)
+  {
+    if (ptr == client)
+    {
+      if (prev == NULL)
+      {
+        Clients = ptr->link;
+      }
+      else
+      {
+        prev->link = ptr->link;
+      }
+      break;
+    }
+  }
+  free(client);
+  return e;
+}
+
+/******	RecogAC3_Register() ************************************************
+
+Purpose:	Stream initialisation
+In:		Flags; handle of client to receive callbacks; client's handle
+Out:		Error pointer; handle for client to use when calling us (session ID)
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_Register(unsigned int flags, void *client, void *handle, void **session_id)
+{
+  _kernel_oserror *e = NULL;
+  session_t *newsession = malloc(sizeof(session_t));
+  IGNORE(flags);
+  if (newsession == NULL)
+  {
+    e = Mess_GenerateError("NoMem", errno_NO_MEM, 0);
+  }
+  if (!e)
+  {
+    newsession->client = client;
+    newsession->client_handle = handle;
+    *session_id = newsession;
+  }
+  return e;
+}
+
+/******	RecogAC3_Deregister() **********************************************
+
+Purpose:	Stream finalisation
+In:		Flags; session ID
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_Deregister(unsigned int flags, void *session_id)
+{
+  session_t *session = session_id;
+  _kernel_oserror *e = NULL;
+  IGNORE(flags);
+  free(session);
+  return e;
+}
+
+/******	RecogAC3_BeginSession() ********************************************
+
+Purpose:	Stream segment initialisation
+In:		Flags; session ID
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_BeginSession(unsigned int flags, void *session_id)
+{
+  session_t *session = session_id;
+  _kernel_oserror *e = NULL;
+  IGNORE(flags);
+  session->candidates = NULL;
+  session->byte_index = -16; /* we never identify any header until we have all 16 bytes */
+  session->buffer.word[0] = session->buffer.word[1] = session->buffer.word[2] = session->buffer.word[3] = 0;
+  session->buffer_offset = 0;
+  session->recognised = false;
+  return e;
+}
+
+/******	RecogAC3_EndSession() **********************************************
+
+Purpose:	Stream segment finalisation
+In:		Flags; session ID
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_EndSession(unsigned int flags, void *session_id)
+{
+  session_t *session = session_id;
+  _kernel_oserror *e = NULL;
+  candidate_t *ptr;
+  candidate_t *next;
+  IGNORE(flags);
+  for (ptr = session->candidates; ptr != NULL; ptr = next)
+  {
+    next = ptr->next;
+    free(ptr);
+  }
+  return e;
+}
+
+/******	RecogAC3_ComponentInfo() *******************************************
+
+Purpose:	Return stream-agnostic information
+In:		Tag word
+Out:		Error pointer; value associated with tag
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_ComponentInfo(unsigned int tag, unsigned int *result)
+{
+  _kernel_oserror *e = NULL;
+  switch (tag)
+  {
+    case 0:
+      *result = (unsigned int) "Dolby Digital AC-3 audio recogniser";
+      break;
+    case 1:
+      *result = 0;
+      break;
+    case 2:
+      *result = (unsigned int) Module_ComponentName " " Module_HelpVersion;
+      break;
+    case 3:
+      *result = Module_Version;
+      break;
+    case 4:
+      *result = (unsigned int) "© 2002 Pace Micro Technology PLC";
+      break;
+    case 5:
+      *result = (unsigned int) "AC-3 audio recogniser " Module_HelpVersion " © Pace 2002";
+      break;
+    default:
+      e = Mess_GenerateError("Err_UkTag", errno_UK_TAG, 0);
+      break;
+  }
+  return e;
+}
+
+/******	RecogAC3_DataAvailable() *******************************************
+
+Purpose:	Notification that data has arrived in a hitherto empty buffer
+In:		Flags; session ID
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_DataAvailable(unsigned int flags, void *session_id)
+{
+  session_t *session = session_id;
+  _kernel_oserror *e = NULL;
+  IGNORE(flags);
+  session->client->buffer->givemedata(0 /* no PES wrapping */, session->client_handle);
+  return e;
+}
+
+/******	RecogAC3_ConsumeData() *********************************************
+
+Purpose:	Accept contiguous data block (called multiple times in response to givemedata())
+In:		Flags; session ID; start/length pair
+Out:		Error pointer; amount of the block that was not used and should be queued (always 0 for recognisers)
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_ConsumeData(unsigned int flags, void *session_id, const unsigned char *start, unsigned int length, const mpeg_time_t *pts, unsigned int *not_consumed)
+{
+  session_t *session = session_id;
+  _kernel_oserror *e = NULL;
+  bool header_found;
+  IGNORE(flags);
+  while (length != 0)
+  {
+    session->buffer.byte[session->buffer_offset++] = *start++; /* copy byte to our rolling buffer */
+    length--;
+    session->buffer.word[4] = session->buffer.word[0]; /* repeating block makes reading bytes easier */
+    session->buffer.word[5] = session->buffer.word[1];
+    session->buffer.word[6] = session->buffer.word[2];
+    session->buffer.word[7] = session->buffer.word[3];
+    session->buffer_offset &= 15; /* loop rolling buffer pointer */
+    session->byte_index++;
+    header_found = (session->buffer.byte[session->buffer_offset] == 0x0B && session->buffer.byte[session->buffer_offset+1] == 0x77);
+    /* Check no fields in the new header have forbidden/reserved values */
+    if (header_found)
+    {
+      if ((session->buffer.byte[session->buffer_offset+4] & 0xC0) == 0xC0 ||
+          (session->buffer.byte[session->buffer_offset+4] & 0x3F)  > 0x25 ||
+          (session->buffer.byte[session->buffer_offset+5] & 0xF8)  > 0x40)
+      {
+        header_found = false;
+      }
+    }
+    /* Check outstanding candidates */
+    {
+      candidate_t *prev = NULL;
+      candidate_t *ptr = session->candidates;
+      candidate_t *next;
+      for (; ptr != NULL; prev = ptr, ptr = next)
+      {
+        next = ptr->next;
+        if (ptr->next_index == session->byte_index)
+        {
+          if (header_found)
+          {
+            /* Encouraging... */
+            ptr->locks++;
+            if (ptr->locks == SYNC_REPEATS_NEEDED_TO_LOCK)
+            {
+              /* Hooray, we've recognised the stream - note what we need, free all candidates, and exit */
+              session->result = ptr->first_header;
+              session->result_bitrate = BitRate [session->result.fields.frmsizecod >> 1];
+              session->result_samplerate = SampleRate [session->result.fields.fscod];
+              session->result_acmod = static_ReadBits(3, session->result.byte + 6);
+              if ((session->result_acmod & 0x1) && (session->result_acmod != 0x1)) static_ReadBits(2, NULL);
+              if (session->result_acmod & 0x4) static_ReadBits(2, NULL);
+              if (session->result_acmod == 0x2) static_ReadBits(2, NULL);
+              session->result_lfeon = static_ReadBits(1, NULL);
+              static_ReadBits(5, NULL);
+              if (static_ReadBits(1, NULL)) static_ReadBits(8, NULL);
+              if (static_ReadBits(1, NULL)) static_ReadBits(8, NULL);
+              if (static_ReadBits(1, NULL)) static_ReadBits(7, NULL);
+              if (session->result_acmod == 0)
+              {
+                static_ReadBits(5, NULL);
+                if (static_ReadBits(1, NULL)) static_ReadBits(8, NULL);
+                if (static_ReadBits(1, NULL)) static_ReadBits(8, NULL);
+                if (static_ReadBits(1, NULL)) static_ReadBits(7, NULL);
+              }
+              session->result_copyrightb = static_ReadBits(1, NULL);
+              session->result_origbs = static_ReadBits(1, NULL);
+              session->result_first_pts_valid = ptr->first_pts_valid;
+              session->result_first_pts = ptr->first_pts;
+              session->recognised = true;
+              for (ptr = session->candidates; ptr != NULL; ptr = next)
+              {
+                next = ptr->next;
+                free(ptr);
+              }
+              session->candidates = NULL;
+              session->client->recogniser->streamrecognised(1, session->client_handle);
+              *not_consumed = 0;
+              return NULL;
+            }
+            else
+            {
+              /* Look for another one */
+              /* Distance to next frame may be different, so recalculate */
+              memcpy(ptr->latest_header.byte, session->buffer.byte + session->buffer_offset, 16);
+              ptr->frame_length = FrameLength [ptr->latest_header.fields.frmsizecod] [ptr->latest_header.fields.fscod] << 1;
+              ptr->next_index += ptr->frame_length;
+            }
+          }
+          else
+          {
+            /* This candidate was bogus - remove it */
+            if (prev == NULL)
+            {
+              session->candidates = next;
+            }
+            else
+            {
+              prev->next = next;
+            }
+            free(ptr);
+            ptr = prev;
+          }
+        }
+      }
+    }
+    /* If we're still in range of the start of the stream and we have a new header, create a new candidate */
+    if (header_found && session->byte_index < MAX_FRAME_LENGTH)
+    {
+      candidate_t *newcandidate = malloc(sizeof(candidate_t));
+      if (newcandidate != NULL)
+      {
+        newcandidate->locks = 0;
+        memcpy(newcandidate->first_header.byte, session->buffer.byte + session->buffer_offset, 16);
+        newcandidate->latest_header = newcandidate->first_header;
+        newcandidate->first_pts_valid = (pts != NULL);
+        if (pts != NULL) newcandidate->first_pts = *pts;
+        newcandidate->frame_length = FrameLength [newcandidate->latest_header.fields.frmsizecod] [newcandidate->latest_header.fields.fscod] << 1;
+        newcandidate->next_index = session->byte_index + newcandidate->frame_length;
+        newcandidate->next = session->candidates;
+        session->candidates = newcandidate;
+      }
+    }
+    /* If we're out of range and there are no candidates left, we've failed */
+    if (session->candidates == NULL && session->byte_index >= MAX_FRAME_LENGTH)
+    {
+      session->byte_index = -16;
+      session->buffer.word[0] = session->buffer.word[1] = session->buffer.word[2] = session->buffer.word[3] = 0;
+      session->buffer_offset = 0;
+      session->client->recogniser->streamrecognised(0, session->client_handle);
+      *not_consumed = 0;
+      return NULL;
+    }
+  }
+  *not_consumed = 0;
+  return e;
+}
+
+/******	static_ReadBits() **************************************************
+
+Purpose:	Aid to reading variable-format left-bit-first bitstreams
+In:		Number of bits to read;
+		pointer to address to reinitialise to, or NULL to continue from last call
+Out:		Value of bits
+
+***************************************************************************/
+
+static unsigned char static_ReadBits(unsigned int bits, unsigned char *init)
+{
+  static unsigned int bitsleft;
+  static unsigned char *ptr;
+  unsigned char result = 0;
+  if (init != NULL)
+  {
+    ptr = init;
+    bitsleft = 8;
+  }
+  while (bits > 0)
+  {
+    unsigned int bitsthistime = MIN(bits, bitsleft);
+    unsigned char tmp;
+    tmp = *ptr >> (bitsleft - bitsthistime);
+    tmp &= (1 << bitsthistime) - 1;
+    bits -= bitsthistime;
+    bitsleft -= bitsthistime;
+    if (bitsleft == 0)
+    {
+      ptr++;
+      bitsleft = 8;
+    }
+    result = (result << bitsthistime) | tmp;
+  }
+  return result;
+}
+
+/******	RecogAC3_ReadFullness() ********************************************
+
+Purpose:	Return amount of data currently buffered (always 0 for recognisers)
+In:		Flags; session ID
+Out:		Error pointer; amount buffered
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_ReadFullness(unsigned int flags, void *session_id, unsigned int *occupancy)
+{
+  _kernel_oserror *e = NULL;
+  IGNORE(flags);
+  IGNORE(session_id);
+  *occupancy = 0;
+  return e;
+}
+
+/******	RecogAC3_StreamInfo() **********************************************
+
+Purpose:	Return stream information
+In:		Flags; session ID
+Out:		Error pointer; amount buffered
+
+***************************************************************************/
+
+_kernel_oserror *RecogAC3_StreamInfo(void *session_id, unsigned int tag, unsigned int *result)
+{
+  session_t *session = session_id;
+  _kernel_oserror *e = NULL;
+  static const unsigned char main_channels [8] = { 2, 1, 2, 3, 2, 3, 2, 3 };
+  static const unsigned char surround_channels [8] = { 0, 0, 0, 0, 1, 1, 2, 2 };
+  if (session->recognised)
+  {
+    switch (tag)
+    {
+      case ptlaudio_STREAM_INFO_FULL_NAME:
+        *result = (unsigned int) "Dolby Digital";
+        break;
+      case ptlaudio_STREAM_INFO_NAME:
+        *result = (unsigned int) "AC-3";
+        break;
+      case ptlaudio_STREAM_INFO_SAMPLING_RATE:
+        *result = session->result_samplerate;
+        break;
+      case ptlaudio_STREAM_INFO_BITRATE:
+        *result = session->result_bitrate * 1000;
+        break;
+      case ptlaudio_STREAM_INFO_MAIN_CHANNELS:
+        *result = main_channels [session->result_acmod];
+        break;
+      case ptlaudio_STREAM_INFO_SURROUND_CHANNELS:
+        *result = surround_channels [session->result_acmod];
+        break;
+      case ptlaudio_STREAM_INFO_LFE_CHANNELS:
+        *result = session->result_lfeon;
+        break;
+      case ptlaudio_STREAM_INFO_DOWNMIX_AVAILABLE:
+        if (session->result_acmod == 0)
+        {
+          *result = 1;
+        }
+        else if ((session->result.fields.bsmod == 7) && (session->result_acmod >= 2))
+        {
+          *result = 2;
+        }
+        else
+        {
+          *result = 0;
+        }
+        break;
+      case ptlaudio_STREAM_INFO_COPYRIGHTED:
+        *result = session->result_copyrightb;
+        break;
+      case ptlaudio_STREAM_INFO_ORIGINAL_NOT_COPY:
+        *result = session->result_origbs;
+        break;
+      case ptlaudio_STREAM_INFO_FIRST_PTS:
+        *result = session->result_first_pts_valid ? (unsigned int) &session->result_first_pts : 0;
+        break;
+      default:
+        e = Mess_GenerateError("Err_UkTag", errno_UK_TAG, 0);
+        break;
+    }
+  }
+  else
+  {
+    e = Mess_GenerateError("Err_NoInfo", errno_NO_INFO, 0);
+  }
+  return e;
+}
+
+#else
+extern int RecogAC3_NotUsed;
+#endif

@@ -1,0 +1,220 @@
+/******	PCompos.c **********************************************************
+
+Project:	STB-400
+Component:	MPEGDriver
+This file:	PRISM component registration
+
+Copyright 2002 Pace Micro Technology plc. All rights reserved.
+
+This material is the confidential trade secret and proprietary information
+of Pace Micro Technology plc. It may not be reproduced, used, sold, or
+transferred to any third party without the prior written consent of
+Pace Micro Technology plc.
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+18/04/2002	BJGA	Created
+
+***************************************************************************/
+
+#ifdef GENERIC
+
+/************/
+/* Includes */
+/************/
+
+#include <stdlib.h>
+#include <stdbool.h>
+#include "swis.h"
+
+#include "PRISM/PRISM.h"
+
+#include "Module.h"
+#include "PCompos.h"
+
+#include "Debug.h"
+#if Debugging==1
+#include "DWrite.h"
+#endif
+
+/*****************/
+/* Private types */
+/*****************/
+
+typedef struct
+{
+  prism_id_t prism_id;
+  const void *veneer_defs;
+  size_t nveneers;
+  void (*const **veneers) ();
+} component_t;
+
+/**********************/
+/* Private prototypes */
+/**********************/
+
+/********************/
+/* Public variables */
+/********************/
+
+/*********************/
+/* Private variables */
+/*********************/
+
+static component_t *static_Component = NULL;
+static size_t static_NComponents = 0;
+static bool static_ServiceCallsSent = false;
+
+/*********************/
+/* Private constants */
+/*********************/
+
+/********************/
+/* Public functions */
+/********************/
+
+/******	PCompos_Register() *************************************************
+
+Purpose:	Takes note of the completed initialisation of one of
+		our PRISM components. If MPEGDriver is already linked into
+		the module chain, then the component is registered, and
+		service calls are issued immediately
+In:		PRISM ID of component;
+		component's veneer definition table (first one must be ComponentInfo);
+		number of entries in table;
+		address to fill in with pointer to veneers when created by PRISM
+
+***************************************************************************/
+
+void PCompos_Register (prism_id_t prism_id, const void *veneer_defs, size_t nveneers, void (*const **veneers) ())
+{
+  static_NComponents++;
+  static_Component = realloc (static_Component, static_NComponents * sizeof (component_t));
+  static_Component[static_NComponents-1].prism_id = prism_id;
+  static_Component[static_NComponents-1].veneer_defs = veneer_defs;
+  static_Component[static_NComponents-1].nveneers = nveneers;
+  static_Component[static_NComponents-1].veneers = veneers;
+  if (static_ServiceCallsSent)
+  {
+    unsigned int version;
+    _swix (PRISM_ComponentRegister, _INR(0,1), 0, prism_id);
+    _swix (PRISM_CreateVeneers, _INR(0,4)|_OUT(1), 1, veneer_defs, nveneers, Module_PrivateWord, prism_id, veneers);
+    _swix (PRISM_ComponentNotify, _INR(0,3), 0, prism_id, PRISM_Notify_DeclareInformation, (*veneers)[0]);
+    _swix (PRISM_ComponentInfo, _INR(0,2)|_OUT(2), 0, prism_id, 3, &version);
+    _swix (OS_ServiceCall, _INR(0,4), PRISMModuleStarted, Service_PRISM_Core, 0, prism_id, version);
+  }
+}
+
+/******	PCompos_Deregister() ***********************************************
+
+Purpose:	Takes note of the irrevocable finalisation of one of
+		our PRISM components *prior* to death of the whole of
+		MPEGDriver; if we have issued the service calls
+		to announce the presence of our components, this also
+		issues another service call to announce its death
+In:		PRISM ID of component
+
+***************************************************************************/
+
+void PCompos_Deregister (prism_id_t prism_id)
+{
+  size_t index;
+  for (index = 0; index < static_NComponents; index++)
+  {
+    if (static_Component[index].prism_id == prism_id)
+    {
+      break;
+    }
+  }
+  if (index == static_NComponents)
+  {
+    return; /* shouldn't happen, but bail out just in case */
+  }
+  if (static_ServiceCallsSent)
+  {
+    unsigned int version;
+    _swix (PRISM_ComponentInfo, _INR(0,2)|_OUT(2), 0, prism_id, 3, &version);
+    _swix (OS_ServiceCall, _INR(0,4), PRISMModuleDying, Service_PRISM_Core, 0, prism_id, version);
+  }
+  _swix (PRISM_FreeVeneers, _INR(0,2), 0, *static_Component[index].veneers, prism_id);
+  _swix (PRISM_ComponentDeregister, _INR(0,1), 0, prism_id);
+  for (; index < static_NComponents - 1; index++)
+  {
+    static_Component[index] = static_Component[index+1];
+  }
+  if (--static_NComponents == 0)
+  {
+    free (static_Component);
+  }
+  else
+  {
+    static_Component = realloc (static_Component, static_NComponents * sizeof (component_t));
+  }
+}
+
+/******	PCompos_ModuleInitialising() ***************************************
+
+Purpose:	Called from module init, or from Service_PRISM_Core when
+		PRISM has initialised, this tries to register each component
+		with the PRISM module
+
+***************************************************************************/
+
+void PCompos_ModuleInitialising (void)
+{
+  for (size_t index = 0; index < static_NComponents; index++)
+  {
+    _swix (PRISM_ComponentRegister, _INR(0,1), 0, static_Component[index].prism_id);
+    _swix (PRISM_CreateVeneers, _INR(0,4)|_OUT(1), 1, static_Component[index].veneer_defs, static_Component[index].nveneers, Module_PrivateWord, static_Component[index].prism_id, static_Component[index].veneers);
+    _swix (PRISM_ComponentNotify, _INR(0,3), 0, static_Component[index].prism_id, PRISM_Notify_DeclareInformation, (*static_Component[index].veneers)[0]);
+  }
+}
+
+/******	PCompos_MPEGDriverInitialised() ************************************
+
+Purpose:	Called from a callback from module init, this issues
+		Service_PRISM_Core to announce the presence of each component
+
+***************************************************************************/
+
+void PCompos_MPEGDriverInitialised (void)
+{
+  for (size_t index = 0; index < static_NComponents; index++)
+  {
+    unsigned int version;
+    _swix (PRISM_ComponentInfo, _INR(0,2)|_OUT(2), 0, static_Component[index].prism_id, 3, &version);
+    _swix (OS_ServiceCall, _INR(0,4), PRISMModuleStarted, Service_PRISM_Core, 0, static_Component[index].prism_id, version);
+  }
+  static_ServiceCallsSent = true;
+}
+
+/******	PCompos_MPEGDriverDying() ******************************************
+
+Purpose:	Called from a module finalisation or init failure, this issues 
+		death service calls for all components, then deregisters them
+
+***************************************************************************/
+
+void PCompos_MPEGDriverDying (void)
+{
+  for (size_t index = 0; index < static_NComponents; index++)
+  {
+    if (static_ServiceCallsSent)
+    {
+      unsigned int version;
+      _swix (PRISM_ComponentInfo, _INR(0,2)|_OUT(2), 0, static_Component[index].prism_id, 3, &version);
+      _swix (OS_ServiceCall, _INR(0,4), PRISMModuleDying, Service_PRISM_Core, 0, static_Component[index].prism_id, version);
+    }
+    _swix (PRISM_FreeVeneers, _INR(0,2), 0, *static_Component[index].veneers, static_Component[index].prism_id);
+    _swix (PRISM_ComponentDeregister, _INR(0,1), 0, static_Component[index].prism_id);
+  }
+  if (static_Component != NULL)
+  {
+    free (static_Component);
+  }
+}
+
+#else
+extern int PCompos_NotUsed;
+#endif

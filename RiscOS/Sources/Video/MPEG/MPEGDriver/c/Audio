@@ -52,6 +52,7 @@ Date		Who	Change
 #include "DebugLib/DebugLib.h"
 #include "MPEG/MPEGAudio.h"
 #include "MPEG/MPEGCtrl.h"
+#include "NVRAM.h"
 
 #include "Audio.h"
 #include "Defs.h"
@@ -75,7 +76,8 @@ Date		Who	Change
 static unsigned int static_ReadBufferVariable (const char *name, unsigned int default_value);
 static _kernel_oserror *static_AudioStart (void);
 static unsigned int static_AudioStop (bool play_out);
-static _kernel_oserror *static_CheckHandle (stream_handle_t ash);
+static void static_ApplyVolume (void);
+static _kernel_oserror *static_CheckHandle (mpeg_stream_handle_t ash);
 
 /********************/
 /* Public variables */
@@ -106,17 +108,23 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_handle_t csh, audio_parameters_structure_t *aps, stream_handle_t *return_ash)
+_kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_handle_t csh, audio_parameters_structure_t *aps, mpeg_stream_handle_t *return_ash)
 {
   _kernel_oserror *e = NULL;
+#ifndef GENERIC
   bool old_video_present_flag;
+#endif
   dprintf (("Audio", "SWIOpenStream\n"));
   
   /* Cache StreamFlags (other than our copies of the video_present and audio_present flags), ControlStreamHandle and AudioParametersStructure */
+#ifndef GENERIC
   old_video_present_flag = Stream.s_flags.video_present;
+#endif
   Stream.s_flags = *flags;
+#ifndef GENERIC
   Stream.s_flags.audio_present = true;
   Stream.s_flags.video_present = old_video_present_flag;
+#endif
   Stream.csh = csh;
   Stream.audio_parms = *aps;
   if (Stream.audio_parms.dual_channel_specifier_present == false)
@@ -140,8 +148,17 @@ _kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.audio.since_open.sync_losses = 0;
   Stream.aud_flags.muted = false;
   Stream.aud_flags.suppress_sync_to_stream = false;
-  Stream.volume = 256;
-  AUD_LCA = AUD_RCA = 256 - Stream.volume;
+  Stream.base_peak_volume = 127; /* default if error */
+  _swix (Sound_Volume, _IN(0)|_OUT(0), 0, &Stream.base_peak_volume); /* read system setting */
+  Stream.line_mode = 0; /* default if error */
+  _swix (NVRAM_Read, _INR(0,2), "DolbyAudioMode", &Stream.line_mode, 0);
+  if (Stream.line_mode == 1)
+  {
+    Stream.base_peak_volume = (Stream.base_peak_volume < 127-29) ? Stream.base_peak_volume + 29 : 127;
+  }
+  Stream.base_peak_volume = (127 - Stream.base_peak_volume) * 3 / 4; /* convert from .375 dB to .5 dB units */
+  Stream.relative_volume = 256;
+  static_ApplyVolume();
   Stream.audio_buffer_prefill = static_ReadBufferVariable ("MPEG2$AudioBufferPreFill", DEFAULT_AUDIO_BUFFER_PREFILL);
   Stream.audio_buffer_low_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferLowWaterMark", DEFAULT_AUDIO_BUFFER_LOW_WATER_MARK);
   Stream.audio_buffer_high_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferHighWaterMark", DEFAULT_AUDIO_BUFFER_HIGH_WATER_MARK);
@@ -153,7 +170,7 @@ _kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   if (!e)
   {
     /* Return a pointer to Stream as the audio stream handle */
-    *return_ash = (stream_handle_t) &Stream;
+    *return_ash = (mpeg_stream_handle_t) &Stream;
   }
   return e;
 }
@@ -161,16 +178,34 @@ _kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_hand
 /******	Audio_SWIFullPackets() *********************************************
 
 Purpose:	Handles MPEGAudio_FullPackets
-In:		Flags; audio stream handle; list of bitstream packets
+In:		Type (0 = MPEG audio, 1 = AC-3 audio); flags;
+		audio stream handle; list of bitstream packets
 Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWIFullPackets (unsigned int flags, stream_handle_t ash, bitstream_packet_t *packets)
+_kernel_oserror *Audio_SWIFullPackets (unsigned int type, unsigned int flags, mpeg_stream_handle_t ash, bitstream_packet_t *packets)
 {
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
   IGNORE(flags);
+  
+  if (type != 0)
+  {
+    /* The MPEG audio core can only handle MPEG audio data - we can only discard anything else */
+    while (packets != NULL)
+    {
+      packets = MiscAsm_FreePacket (packets);
+    }
+    if (Stream.audio.state == stream_prefilling && Stream.audio.prefill_state == ps_searching_for_first_PES_header)
+    {
+      Stream.s_flags.no_lip_sync = true; /* play video at nominal rate - can't synchronise to audio! */
+      Stream.audio.prefill_state = ps_waiting_for_play_command;
+      _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, Stream.csh);
+    }
+    return e;
+  }
+  
   e = static_CheckHandle (ash);
   
   if (!e)
@@ -238,7 +273,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWICloseStream (unsigned int flags, stream_handle_t ash)
+_kernel_oserror *Audio_SWICloseStream (unsigned int flags, mpeg_stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   IGNORE(flags);
@@ -250,7 +285,9 @@ _kernel_oserror *Audio_SWICloseStream (unsigned int flags, stream_handle_t ash)
     /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
     static_AudioStop (Stream.rs_flags.video_present && Stream.video.speed_indicator == 1 && Stream.audio.state == stream_open);
     
+#ifndef GENERIC
     Stream.s_flags.audio_present = false;
+#endif
   }
   return e;
 }
@@ -263,7 +300,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWIPlay (unsigned int flags, stream_handle_t ash)
+_kernel_oserror *Audio_SWIPlay (unsigned int flags, mpeg_stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
@@ -317,7 +354,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWISetSpeed (unsigned int flags, stream_handle_t ash, unsigned int speed)
+_kernel_oserror *Audio_SWISetSpeed (unsigned int flags, mpeg_stream_handle_t ash, unsigned int speed)
 {
   _kernel_oserror *e = NULL;
   IGNORE(flags);
@@ -341,7 +378,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWIResetStream (reset_stream_flags_t *flags, stream_handle_t ash, unsigned int *return_discarded_data_size)
+_kernel_oserror *Audio_SWIResetStream (reset_stream_flags_t *flags, mpeg_stream_handle_t ash, unsigned int *return_discarded_data_size)
 {
   _kernel_oserror *e = NULL;
   e = static_CheckHandle (ash);
@@ -381,7 +418,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWIMuteSound (unsigned int flags, stream_handle_t ash)
+_kernel_oserror *Audio_SWIMuteSound (unsigned int flags, mpeg_stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   e = static_CheckHandle (ash);
@@ -404,26 +441,21 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWISoundVolume (unsigned int flags, stream_handle_t ash, int volume, int *return_old_volume)
+_kernel_oserror *Audio_SWISoundVolume (unsigned int flags, mpeg_stream_handle_t ash, int volume, int *return_old_volume)
 {
   _kernel_oserror *e = NULL;
-  unsigned char attenuation;
   IGNORE(flags);
   e = static_CheckHandle (ash);
   
   if (!e)
   {
-    *return_old_volume = Stream.volume;
+    *return_old_volume = Stream.relative_volume;
     if (volume != -1)
     {
       volume = MAX(volume, 0);
       volume = MIN(volume, 256);
-      Stream.volume = volume;
-      attenuation = (256 - volume) / 4;
-      if (attenuation == 64) attenuation = 63;
-      AUD_LCA = attenuation;
-      AUD_RCA = attenuation;
-      IRQ_UpdateMuteState (); /* if maximum attenuation is selected, mute instead */
+      Stream.relative_volume = volume;
+      static_ApplyVolume ();
     }
   }
   return e;
@@ -439,7 +471,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWIStats (unsigned int flags, stream_handle_t ash, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
+_kernel_oserror *Audio_SWIStats (unsigned int flags, mpeg_stream_handle_t ash, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
 {
   _kernel_oserror *e = NULL;
   IGNORE(flags);
@@ -459,7 +491,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWISetAudioParameters0 (stream_handle_t ash, int new_state, int *return_old_state)
+_kernel_oserror *Audio_SWISetAudioParameters0 (mpeg_stream_handle_t ash, int new_state, int *return_old_state)
 {
   _kernel_oserror *e = NULL;
   e = static_CheckHandle (ash);
@@ -487,7 +519,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWISetAudioParameters1 (stream_handle_t ash, dual_channel_specifier new_state, dual_channel_specifier *return_old_state, audio_channel_type *return_channel_type)
+_kernel_oserror *Audio_SWISetAudioParameters1 (mpeg_stream_handle_t ash, dual_channel_specifier new_state, dual_channel_specifier *return_old_state, audio_channel_type *return_channel_type)
 {
   _kernel_oserror *e = NULL;
   audio_channel_type mode;
@@ -539,7 +571,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWISetAudioParameters2 (stream_handle_t ash, int new_state, int *return_old_state)
+_kernel_oserror *Audio_SWISetAudioParameters2 (mpeg_stream_handle_t ash, int new_state, int *return_old_state)
 {
   _kernel_oserror *e = NULL;
   e = static_CheckHandle (ash);
@@ -566,7 +598,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Audio_SWIReadParameters3 (stream_handle_t ash, unsigned int *return_STC_lo, unsigned int *return_STC_hi)
+_kernel_oserror *Audio_SWIReadParameters3 (mpeg_stream_handle_t ash, unsigned int *return_STC_lo, unsigned int *return_STC_hi)
 {
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
@@ -592,6 +624,18 @@ _kernel_oserror *Audio_SWIReadParameters3 (stream_handle_t ash, unsigned int *re
     }
   }
   return e;
+}
+
+/******	Audio_ChangeAudioMode() ********************************************
+
+Purpose:	Responds to a change in Dolby audio operational mode
+
+***************************************************************************/
+
+void Audio_ChangeAudioMode (bool line_mode)
+{
+  Stream.line_mode = line_mode;
+  static_ApplyVolume();
 }
 
 /*********************/
@@ -731,6 +775,35 @@ static unsigned int static_AudioStop (bool play_out)
   return discarded_data;
 }
 
+/******	static_ApplyVolume() ***********************************************
+
+Purpose:	Calculates Stream.effective_volume, then applies it
+
+***************************************************************************/
+
+static void static_ApplyVolume (void)
+{
+  int volume; /* scratch value */
+  if (Stream.line_mode)
+  {
+    volume = Stream.base_peak_volume + 22; /* scale everything down 11 dB */
+  }
+  else
+  {
+    volume = Stream.base_peak_volume;
+  }
+  volume = Stream.relative_volume - volume;
+  if (volume < 0) volume = 0;
+  Stream.effective_volume = volume;
+  
+  volume = (256 - volume) / 4;
+  if (volume == 64) volume = 63;
+  AUD_LCA = volume;
+  AUD_RCA = volume;
+  
+  IRQ_UpdateMuteState (); /* if maximum attenuation is selected, mute instead */
+}
+
 /******	static_CheckHandle() ***********************************************
 
 Purpose:	Checks validity of an audio stream handle
@@ -739,9 +812,9 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-static _kernel_oserror *static_CheckHandle (stream_handle_t ash)
+static _kernel_oserror *static_CheckHandle (mpeg_stream_handle_t ash)
 {
-  if (ash == (stream_handle_t) &Stream)
+  if (ash == (mpeg_stream_handle_t) &Stream)
   {
     return NULL;
   }

@@ -1,0 +1,1670 @@
+/******	AudGeneric.c *******************************************************
+
+Project:	STB-400
+Component:	MPEGDriver
+This file:	Generic version of audio handling
+
+Copyright 2001 Pace Micro Technology plc. All rights reserved.
+
+This material is the confidential trade secret and proprietary information
+of Pace Micro Technology plc. It may not be reproduced, used, sold, or
+transferred to any third party without the prior written consent of
+Pace Micro Technology plc.
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+10/10/2001	BJGA	Created
+
+***************************************************************************/
+
+#ifdef GENERIC
+
+/************/
+/* Includes */
+/************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <inttypes.h>
+#include "kernel.h"
+#include "swis.h"
+
+#include "Global/RISCOS.h"
+#include "Global/SWIs.h"
+#include "Global/IO/GenericIO.h"
+#include "Global/IO/IOMD.h"
+#include "DebugLib/DebugLib.h"
+#include "MPEG/MPEGAudio.h"
+#include "MPEG/MPEGCtrl.h"
+#include "PRISM/PRISM.h"
+#include "NVRAM.h"
+
+#include "AudGeneric.h"
+#include "Defs.h"
+#include "IRQ.h"
+#include "Mess.h"
+#include "MiscAsm.h"
+#include "Module.h"
+#include "RecogAC3.h"
+#include "RecogMPA.h"
+#include "Registers.h"
+#include "Stuffing.h"
+#include "Sync.h"
+#include "Types.h"
+
+#include "ZoranPara.h"
+
+#include "Debug.h"
+#if Debugging==1
+#include "DWrite.h"
+#endif
+
+/*****************/
+/* Private types */
+/*****************/
+
+typedef struct
+{
+  unsigned int flags;
+  protocol_fns_t *protocol_module;
+}
+protocol_module_t;
+
+typedef struct audio_structure
+{
+  unsigned int magic;
+  struct audio_structure *next;
+  
+  control_stream_handle_t csh;
+  stream_handle_t clock_handle;
+  stream_flags_t s_flags;
+  reset_stream_flags_t rs_flags;
+  audio_parameters_structure_t audio_parms;
+  a_v_state_t audio;
+  struct {
+    unsigned muted: 1;
+    unsigned eos_callback_requested: 1;
+    unsigned suppress_sync_to_stream: 1;
+    unsigned effective_dual_channel_mode: 2;
+    unsigned dual_channel_mute: 1;
+  } aud_flags;
+  unsigned int base_peak_volume; /* fixed at stream start; 16.16 fixed point attenuation */
+  unsigned int line_mode; /* affects dialogue volume relative to peak volume */
+  unsigned int relative_volume; /* as exposed by MPEGAudio_Volume API */
+  
+  unsigned int current_data_type;
+  bool session_begun;
+  protocol_fns_t *decoder;
+  void *decoder_session_id;
+}
+audio_structure_t;
+
+/**********************/
+/* Private prototypes */
+/**********************/
+
+static _kernel_oserror *static_RegisterMe (unsigned int flags, protocol_fns_t *me);
+static _kernel_oserror *static_DeregisterMe (unsigned int flags, protocol_fns_t *me);
+static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int max, unsigned int *bytes);
+static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle);
+static _kernel_oserror *static_Underrun (unsigned int flags, void *handle);
+static _kernel_oserror *static_StreamInfo (void *handle, unsigned int tag, unsigned int *result);
+static _kernel_oserror *static_StreamInfoChanging (unsigned int flags, void *handle);
+
+static _kernel_oserror *static_AudioStart (audio_structure_t *stream);
+static unsigned int static_AudioStop (audio_structure_t *stream, bool play_out);
+static _kernel_oserror *static_CheckHandle (audio_structure_t *stream);
+static void static_CheckDualChannelChange (audio_structure_t *stream, unsigned int downmix_mode);
+
+/********************/
+/* Public variables */
+/********************/
+
+/*********************/
+/* Private variables */
+/*********************/
+
+static audio_structure_t *static_Streams = NULL;
+
+static protocol_module_t MPEG_Decoder [2]; /* Just make these arrays for now, for simplicity */
+static unsigned int MPEG_Decoders = 0;
+static protocol_module_t AC3_Decoder [2];
+static unsigned int AC3_Decoders = 0;
+
+static const common_toplevel_fns_t TopLevel = { static_RegisterMe, static_DeregisterMe };
+static const buffer_fns_t Buffer = { static_HowMuchData, static_GiveMeData };
+static const scheduler_fns_t Scheduler = { static_Underrun };
+static const presentation_fns_t Presentation = { static_StreamInfo, static_StreamInfoChanging };
+
+/*********************/
+/* Private constants */
+/*********************/
+
+#define MAGIC_WORD      (0x4D647541)
+
+#define STREAM_ID_AUDIO (0xC0) /* not really correct for generic audio, but haven't hit a decoder that minds yet */
+
+#define NULL_DATA_TYPE ((unsigned int) 0xFFFFFFFF)
+
+/********************/
+/* Public functions */
+/********************/
+
+/******	AudGeneric_Initialise() ********************************************
+
+Purpose:	Check whether any hardware we support is present or not, and
+		initialise it if so
+In:		Pointer to bool to indicate whether we should be called in
+		preference to the original STi3520L audio code
+Out:		Error pointer if something prevented us from detecting hardware
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_Initialise (bool *use)
+{
+  _kernel_oserror *e = NULL;
+  e = RecogMPA_Init ();
+  if (!e)
+  {
+    e = RecogAC3_Init ();
+    if (e)
+    {
+      RecogMPA_Final ();
+    }
+    else
+    {
+      e = ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+      if (e)
+      {
+        RecogAC3_Final ();
+        RecogMPA_Final ();
+      }
+      else
+      {
+        /* Extend this as follows:
+        e = ZoranMMap_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+        if (e)
+        {
+          ZoranPara_Final ();
+          RecogAC3_Final ();
+          RecogMPA_Final ();
+        }
+        else
+        {
+          e = AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+          if (e)
+          {
+            ZoranMMap_Final ();
+            ZoranPara_Final ();
+            RecogAC3_Final ();
+            RecogMPA_Final ();
+          }
+        }
+        */
+      }
+    }
+  }
+  *use = (MPEG_Decoders != 0 || AC3_Decoders != 0);
+  return e;
+}
+
+/******	AudGeneric_Finalise() **********************************************
+
+Purpose:	Return hardware to state before module initialised
+Out:		Error pointer if hardware cannot currently be restored
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_Finalise (void)
+{
+  _kernel_oserror *e = NULL;
+//e = AudL64105_Final ();
+  if (!e)
+  {
+//  e = ZoranMMap_Final ();
+    if (e)
+    {
+//    AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+    }
+    else
+    {
+      e = ZoranPara_Final ();
+      if (e)
+      {
+//      ZoranMMap_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+//      AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+      }
+      else
+      {
+        e = RecogAC3_Final ();
+        if (e)
+        {
+          ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+//        ZoranMMap_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+//        AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+        }
+        else
+        {
+          e = RecogMPA_Final ();
+          if (e)
+          {
+            RecogAC3_Init ();
+            ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+//          ZoranMMap_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+//          AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+          }
+        }
+      }
+    }
+  }
+  return e;
+}
+
+/******	static_RegisterMe() ************************************************
+
+Purpose:	Protocol module registration
+In:		flags:          bit 0 clear = MPEG audio, bit 0 set = AC-3 audio
+		                bit 1 set => step decoder, else stream decoder
+		me:             pointer to list of functions in this protocol module
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_RegisterMe (unsigned int flags, protocol_fns_t *me)
+{
+  _kernel_oserror *e = NULL;
+  if ((flags & 1) == 0)
+  {
+    /* MPEG decoder */
+    MPEG_Decoder[MPEG_Decoders].flags = flags;
+    MPEG_Decoder[MPEG_Decoders].protocol_module = me;
+    MPEG_Decoders++;
+  }
+  else
+  {
+    /* AC-3 decoder */
+    AC3_Decoder[AC3_Decoders].flags = flags;
+    AC3_Decoder[AC3_Decoders].protocol_module = me;
+    AC3_Decoders++;
+  }
+  return e;
+}
+
+/******	static_DeregisterMe() **********************************************
+
+Purpose:	Protocol module deregistration
+In:		flags:          as for registerme()
+		me:             as for registerme()
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_DeregisterMe (unsigned int flags, protocol_fns_t *me)
+{
+  _kernel_oserror *e = NULL;
+  /* For now, we know that decoders are deregistered in reverse order */
+  IGNORE (me);
+  if ((flags & 1) == 0)
+  {
+    /* MPEG decoder */
+    MPEG_Decoders--;
+    /* Free stuff here for interrupt safety */
+  }
+  else
+  {
+    /* AC-3 decoder */
+    AC3_Decoders--;
+    /* Free stuff here for interrupt safety */
+  }
+  return e;
+}
+
+/******	static_HowMuchData() ***********************************************
+
+Purpose:	Enquire how much data is available to be stuffed
+In:		flags:          reserved, mbz
+		handle:         audio stream handle
+		max:		the maximum amount we're interested in hearing about, or 0 to return the total amount
+Out:		Error pointer
+		bytes:          number of bytes available for stuffing (excluding PES headers)
+
+***************************************************************************/
+
+static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int max, unsigned int *bytes)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) handle;
+  bitstream_packet_t *ptr = stream->audio.packet_list_head;
+  unsigned int datacount = 0;
+  IGNORE (flags);
+  for (; ptr != NULL; ptr = ptr->link)
+  {
+    datacount += ptr->length;
+    if (max != 0 && datacount >= max)
+    {
+      datacount = max;
+      break;
+    }
+  }
+  *bytes = datacount;
+  return e;
+}
+
+/******	static_GiveMeData() ************************************************
+
+Purpose:	Request for stuffing
+In:		flags:          bit 0 set => wrap data in PES packets, bit 0 clear => no PES wrapping (implies no timestamps conveyed!)
+		handle:         audio stream handle
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) handle;
+  static PES_header_t audio_PES_header;
+  static bitstream_packet_t audio_PES_header_packet = { NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, 0, 0, 0, 0, 1 };
+  bitstream_packet_t *list_head;
+  unsigned int not_consumed;
+  while ((list_head = stream->audio.packet_list_head) != NULL)
+  {
+    if (list_head->mpeg_start)
+    {
+      if (flags & 1)
+      {
+        /* Insert PES header into bitstream packet list */
+        audio_PES_header_packet.start = (unsigned char *) &audio_PES_header;
+        Stuffing_InsertPESHeader (&stream->audio, &audio_PES_header_packet, STREAM_ID_AUDIO);
+        list_head = stream->audio.packet_list_head;
+      }
+    }
+    e = stream->decoder->consumedata (0, stream->decoder_session_id, list_head->start, list_head->length, &not_consumed);
+    if (e)
+    {
+      not_consumed = list_head->length; /* assume nothing consumed */
+      e = NULL; /* swallow error (but dropping through with not_consumed nonzero will cause us to return) */
+    }
+    if (list_head->private_PES_header_flag == false) /* don't count the PES headers in the amount that we've sent to the chip */
+    {
+      uint32_t amount_consumed = list_head->length - not_consumed;
+      *(uint64_t *)&stream->audio.since_open.amount_sent += amount_consumed;
+      *(uint64_t *)&stream->audio.since_reset.amount_sent += amount_consumed;
+    }
+    if (not_consumed == 0)
+    {
+      Stuffing_FreePacket (&stream->audio);
+    }
+    else
+    {
+      list_head->start += list_head->length - not_consumed;
+      list_head->length = not_consumed;
+      break;
+    }
+  }
+  return e;
+}
+
+/******	static_Underrun() **************************************************
+
+Purpose:	Decoding has underrun
+In:		flags:          reserved, mbz
+		handle:         audio stream handle
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_Underrun (unsigned int flags, void *handle)
+{
+  IGNORE(flags);
+  audio_structure_t *stream = (audio_structure_t *) handle;
+  if (stream->aud_flags.eos_callback_requested)
+  {
+    stream->aud_flags.eos_callback_requested = false;
+    _swix (MPEGControl_Play, _INR(0,1), PlayFlags_AudioIdle, stream->csh);
+  }
+  return NULL;
+}
+
+/******	static_StreamInfo() ************************************************
+
+Purpose:	Returns stream information
+In:		handle:         audio stream handle
+		tag:		information tag
+		result:		address at which to return value
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_StreamInfo (void *handle, unsigned int tag, unsigned int *result)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) handle;
+  switch (tag)
+  {
+    case ptlaudio_STREAM_INFO_MUTE_RAW:
+      *result = stream->aud_flags.muted;
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_ATTENUATION_RAW:
+    case ptlaudio_STREAM_INFO_RIGHT_ATTENUATION_RAW:
+      if (stream->relative_volume == 0)
+      {
+        *result = -1; /* ie muted for all intents and purposes */
+      }
+      else
+      {
+        *result = (256 - stream->relative_volume) * 0x8000;
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION:
+    case ptlaudio_STREAM_INFO_RIGHT_DIALOGUE_ATTENUATION:
+      if (stream->aud_flags.muted || stream->relative_volume == 0 || stream->aud_flags.dual_channel_mute)
+      {
+        *result = -1; /* ie muted for all intents and purposes */
+        if (!stream->line_mode)
+        {
+          *result -= 0xB0000; /* maintain the delta between peak and dialogue */
+        }
+      }
+      else
+      {
+        *result = stream->base_peak_volume + (256 - stream->relative_volume) * 0x8000;
+        if (stream->line_mode)
+        {
+          *result += 0xB0000;
+        }
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION:
+    case ptlaudio_STREAM_INFO_RIGHT_PEAK_ATTENUATION:
+      if (stream->aud_flags.muted || stream->relative_volume == 0 || stream->aud_flags.dual_channel_mute)
+      {
+        *result = -1; /* ie muted for all intents and purposes */
+      }
+      else
+      {
+        *result = stream->base_peak_volume + (256 - stream->relative_volume) * 0x8000;
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION_LINEAR:
+    case ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION_LINEAR:
+    case ptlaudio_STREAM_INFO_RIGHT_DIALOGUE_ATTENUATION_LINEAR:
+    case ptlaudio_STREAM_INFO_RIGHT_PEAK_ATTENUATION_LINEAR:
+      ;unsigned int log_value;
+      e = static_StreamInfo (handle, tag + (ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION - ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION_LINEAR), &log_value);
+      if (!e)
+      {
+        log_value /= 6; /* now a 16.16 fixed point number of amplitude halvings */
+                        /* bits 31-16 are shift, bits 15-12 are index into LogTable, bits 11-0 are interpolation coefficient */
+        if (log_value > 0x100000)
+        {
+          /* Shift > 16 => must be 0 */
+          *result = 0;
+        }
+        else
+        {
+          static const unsigned short LogTable[17] = { 0xFFFF, 0xF525, 0xEAC0, 0xE0CC, 0xD744, 0xCE24, 0xC567, 0xBD08, 0xB504, 0xAD58, 0xA5FE, 0x9EF5, 0x9837, 0x91C3, 0x8B95, 0x85AA, 0x7FFF };
+          unsigned int index = (log_value >> 12) & 0xF;
+          unsigned int factor = LogTable[index] - (((LogTable[index] - LogTable[index+1]) * (log_value & 0xFFF)) >> 12);
+          factor >>= log_value >> 16;
+          *result = factor;
+        }
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_DUAL_CHANNEL_MODE_RAW:
+      *result = stream->audio_parms.specifier;
+      break;
+      
+    case ptlaudio_STREAM_INFO_DUAL_CHANNEL_MODE:
+      *result = stream->aud_flags.effective_dual_channel_mode;
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_PCM:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutPCM", result, 0);
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_MPEG:
+      *result = 2; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutMPEG", result, 0);
+      *result ^= 2; /* compensate for default */
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_AC3:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutAC3", result, 0);
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_DTS:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutDTS", result, 0);
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_SDDS:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutSDDS", result, 0);
+      break;
+      
+    default:
+      e = Mess_GenerateError ("Err_UkTag", errno_UK_TAG, 0);
+      break;
+  }
+  return e;
+}
+
+/******	static_StreamInfoChanging() ****************************************
+
+Purpose:	Stream information has been initialised or updated
+		(new values have effect from next presentation unit)
+In:		flags:          reserved, mbz
+		handle:         audio stream handle
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_StreamInfoChanging (unsigned int flags, void *handle)
+{
+  IGNORE(flags);
+  /* In a real PRISM system, this would be dispatched to all interested parties */
+  /* The only action we take currently is to check for a change in/out of dual channel mode */
+  audio_structure_t *stream = (audio_structure_t *) handle;
+  unsigned int downmix_mode = 0; /* default in case of error */
+  stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DOWNMIX_AVAILABLE, &downmix_mode);
+  static_CheckDualChannelChange (stream, downmix_mode);
+  return NULL;
+}
+
+/******	AudGeneric_CLIAudioInfo() ******************************************
+
+Purpose:	Handles *AudioInfo when generic audio is in use
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_CLIAudioInfo (void)
+{
+  audio_structure_t *stream = static_Streams;
+  if (stream == NULL)
+  {
+    printf ("No audio streams are open\n");
+  }
+  for (; stream != NULL; stream = stream->next)
+  {
+    _kernel_oserror *e;
+    printf ("AUDIO STREAM %08"PRIX32"  (control stream %08"PRIX32")\n", (uint32_t) stream, (uint32_t) stream->csh);
+    printf ("\n");
+    printf ("                           Since open    Since reset\n");
+    printf ("Bytes received:       %15"PRIu64"%15"PRIu64"\n", *(uint64_t *)&stream->audio.since_open.amount_received, *(uint64_t *)&stream->audio.since_reset.amount_received);
+    printf ("Bytes delivered:      %15"PRIu64"%15"PRIu64"\n", *(uint64_t *)&stream->audio.since_open.amount_sent, *(uint64_t *)&stream->audio.since_reset.amount_sent);
+    printf ("PES packets delivered:     %10"PRIu32"     %10"PRIu32"\n", stream->audio.since_open.PES_packets_sent, stream->audio.since_reset.PES_packets_sent);
+    printf ("PTSs delivered:            %10"PRIu32"     %10"PRIu32"\n", stream->audio.since_open.PTSs_in, stream->audio.since_reset.PTSs_in);
+    
+    uint32_t temp1;
+    uint32_t temp2;
+    e = _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_TOTAL_CORRECTIONS, stream->clock_handle, &temp1);
+    if (!e) e= _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_CORRECTIONS, stream->clock_handle, &temp2);
+    printf ("Clock corrections:         ");
+    if (e) printf ("%s\n", e->errmess);
+    else printf ("%10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    
+    e = _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_TOTAL_SLOWS, stream->clock_handle, &temp1);
+    if (!e) e = _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_SLOWS, stream->clock_handle, &temp2);
+    printf ("Slows:                     ");
+    if (e) printf ("%s\n", e->errmess);
+    else printf ("%10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    
+    e = _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_TOTAL_FASTS, stream->clock_handle, &temp1);
+    if (!e) e = _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_FASTS, stream->clock_handle, &temp2);
+    printf ("Fasts:                     ");
+    if (e) printf ("%s\n", e->errmess);
+    else printf ("%10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    
+    if (stream->decoder)
+    {
+      e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_TOTAL_ERRORS, &temp1);
+      if (!e) e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_ERRORS, &temp2);
+    }
+    else
+    {
+      temp1 = temp2 = 0;
+      e = NULL;
+    }
+    printf ("Errors:                    ");
+    if (e) printf ("%s\n", e->errmess);
+    else printf ("%10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    
+    if (stream->decoder)
+    {
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_TOTAL_UNDERRUNS, &temp1);
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_UNDERRUNS, &temp2);
+    }
+    else
+    {
+      temp1 = temp2 = 0;
+      e = NULL;
+    }
+    printf ("Underruns:                 ");
+    if (e) printf ("%s\n", e->errmess);
+    else printf ("%10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    
+    printf ("\n");
+    
+    printf ("State:                          ");
+    if (stream->current_data_type == NULL_DATA_TYPE)
+    {
+      printf ("Prefill (waiting for data to arrive)\n");
+    }
+    else
+    {
+      if (stream->decoder == NULL)
+      {
+        printf ("Unable to allocate decoding resource\n");
+      }
+      else
+      {
+        switch (stream->audio.state)
+        {
+          case stream_prefilling: /* now includes "open" state */
+          {
+            uint32_t open = false;
+            stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DECODING_ACTIVE, &open);
+            if (!open)
+            {
+              printf ("Prefill (");
+              switch (stream->audio.prefill_state)
+              {
+                case ps_searching_for_first_PES_header:
+                  printf ("searching for first PES header)\n");
+                  break;
+                case ps_initialising:
+                  printf ("buffering data)\n");
+                  break;
+                default:
+                  printf ("unknown)\n");
+                  break;
+              }
+            }
+            else
+            {
+              printf ("Open\n");
+            }
+            break;
+          }
+          case stream_closing:
+            printf ("Closing\n");
+            break;
+          case stream_closed:
+            printf ("Closed\n");
+            break;
+          default:
+            printf ("Unknown\n");
+            break;
+        }
+        
+        printf ("\nHeader information:\n");
+        
+        uint32_t result;
+        e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_FULL_NAME, &result);
+        printf ("    encoding:           ");
+        if (e) printf ("%s\n", e->errmess);
+        else printf ("%s\n", (const char *) result);
+        
+        e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_SAMPLING_RATE, &result);
+        printf ("    sampling rate:      ");
+        if (e) printf ("%s\n", e->errmess);
+        else
+        {
+          printf ("%d", result / 1000);
+          if ((result %= 1000) != 0)
+          {
+            if ((result % 100) == 0) printf (".%01d", result / 100);
+            else if ((result % 10) == 0) printf (".%02d", result / 10);
+            else printf (".%03d", result);
+          }
+          printf (" kHz\n");
+        }
+        
+        e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_BITRATE, &result);
+        printf ("    bitrate:            ");
+        if (e) printf ("%s\n", e->errmess);
+        else
+        {
+          printf ("%d", result / 1000);
+          if ((result %= 1000) != 0)
+          {
+            if ((result % 100) == 0) printf (".%01d", result / 100);
+            else if ((result % 10) == 0) printf (".%02d", result / 10);
+            else printf (".%03d", result);
+          }
+          printf (" kbit/s\n");
+        }
+        
+        uint32_t result2;
+        uint32_t result3;
+        e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_MAIN_CHANNELS, &result);
+        if (!e) e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_SURROUND_CHANNELS, &result2);
+        if (!e) e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_LFE_CHANNELS, &result3);
+        printf ("    audio channels:     ");
+        if (e) printf ("%s\n", e->errmess);
+        else printf ("%d.%d (%d/%d%s)\n", result + result2, result3, result, result2, result3 ? "L" : "");
+        
+        e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DOWNMIX_AVAILABLE, &result);
+        printf ("    downmix options:    ");
+        if (e) printf ("%s\n", e->errmess);
+        else printf ("%s\n", result ? (result == 2 ? "available (karaoke)" : "available (dual mono)") : "not available");
+        
+        e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_COPYRIGHTED, &result);
+        printf ("    copyright:          ");
+        if (e) printf ("%s\n", e->errmess);
+        else printf ("%s\n", result ? "copyright protected" : "no copyright");
+        
+        e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_ORIGINAL_NOT_COPY, &result);
+        printf ("    original/copy:      ");
+        if (e) printf ("%s\n", e->errmess);
+        else printf ("%s\n", result ? "original" : "copy");
+      }
+    }
+    
+    if (stream->next != NULL)
+    {
+      printf ("\n\n");
+    }
+  }
+  return NULL;
+}
+
+/******	AudGeneric_CLIPacketInfo() ******************************************
+
+Purpose:	Handles half of *PacketInfo when generic audio is in use
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_CLIPacketInfo (void)
+{
+  audio_structure_t *stream = static_Streams;
+  if (stream == NULL)
+  {
+    printf ("No audio streams are open\n");
+  }
+  for (; stream != NULL; stream = stream->next)
+  {
+    printf ("Audio stream %08"PRIX32"  (control stream %08"PRIX32")\n", (uint32_t) stream, (uint32_t) stream->csh);
+    unsigned int audio_packets = 0;
+    unsigned int audio_packets_length = 0;
+    bool irqs_were_disabled = _kernel_irqs_disabled ();
+    if (!irqs_were_disabled) _kernel_irqs_off ();
+    for (bitstream_packet_t *packet = stream->audio.packet_list_head; packet != NULL; packet = packet->link)
+    {
+      audio_packets ++;
+      audio_packets_length += packet->length;
+    }
+    if (!irqs_were_disabled) _kernel_irqs_on ();
+    printf ("  Number of audio packets:  %d packets\n", audio_packets);
+    printf ("  Audio packet data length: %d bytes\n", audio_packets_length);
+    unsigned int audio_in_bitbuffer = 0;
+    if (stream->decoder)
+    {
+      stream->decoder->readfullness (0, stream->decoder_session_id, &audio_in_bitbuffer);
+    }
+    printf ("  Audio data in bitbuffer:  %d bytes\n", audio_in_bitbuffer);
+  }
+  return NULL;
+}
+
+/******	AudGeneric_SWIOpenStream() *****************************************
+
+Purpose:	Handles MPEGAudio_OpenStream when generic audio is in use
+In:		Control stream flags; control stream handle; audio parameters
+		structure; address to write audio stream handle into
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWIOpenStream (stream_flags_t *flags, control_stream_handle_t csh, audio_parameters_structure_t *aps, mpeg_stream_handle_t *return_ash)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream;
+  dprintf (("AudGeneric", "SWIOpenStream\n"));
+#if Debugging==1 && DebugSWIs==1
+  DWrite_Write0 ("AudGeneric_SWIOpenStream ");
+#endif
+  
+  stream = calloc (1, sizeof (audio_structure_t));
+  if (stream == NULL)
+  {
+    e = Mess_GenerateError ("NoMem", errno_NO_MEM, 0);
+  }
+  
+  if (!e)
+  {
+    stream->magic = MAGIC_WORD;
+    
+    /* Cache StreamFlags, ControlStreamHandle and AudioParametersStructure */
+    stream->s_flags = *flags;
+    stream->csh = csh;
+    stream->audio_parms = *aps;
+    if (stream->audio_parms.dual_channel_specifier_present == false)
+    {
+      stream->audio_parms.specifier = dc_both; /* default to playing both dual-channels unless otherwise specified */
+    }
+    stream->aud_flags.effective_dual_channel_mode = dc_both; /* don't know whether stream is dual channel yet, but initialise anyway */
+    stream->aud_flags.dual_channel_mute = false;
+    
+    /* Start up the sync system if necessary */
+    if (stream->s_flags.video_present)
+    {
+      e = Sync_GetHandleFromCSH (stream->csh, &stream->clock_handle);
+    }
+    else
+    {
+      e = Sync_Open (stream->csh, stream->s_flags.sync_to_stream, &stream->clock_handle);
+      if (!e)
+      {
+        e = Sync_Start (stream->clock_handle);
+      }
+    }
+  }
+  
+  if (!e)
+  {
+    /* Initialise various variables */
+    stream->rs_flags.video_present = stream->s_flags.video_present;
+    stream->rs_flags.audio_present = stream->s_flags.audio_present;
+    stream->rs_flags.trick_play_mode = false;
+    stream->audio.since_open.amount_received.lsw = stream->audio.since_open.amount_received.msw = 0;
+    stream->audio.since_open.amount_sent.lsw = stream->audio.since_open.amount_sent.msw = 0;
+    stream->audio.since_open.PES_packets_sent = 0;
+    stream->audio.since_open.PTSs_in = 0;
+    stream->aud_flags.muted = false;
+    stream->aud_flags.suppress_sync_to_stream = false;
+    stream->base_peak_volume = 127; /* default if error */
+    _swix (Sound_Volume, _IN(0)|_OUT(0), 0, &stream->base_peak_volume); /* read system setting */
+    stream->line_mode = 0; /* default if error */
+    _swix (NVRAM_Read, _INR(0,2), "DolbyAudioMode", &stream->line_mode, 0);
+    if (stream->line_mode == 1)
+    {
+      stream->base_peak_volume = (stream->base_peak_volume < 127-29) ? stream->base_peak_volume + 29 : 127;
+    }
+    stream->base_peak_volume = (127 - stream->base_peak_volume) * 0x6000;
+    stream->relative_volume = 256;
+    stream->current_data_type = NULL_DATA_TYPE; /* don't know what it is yet */
+    
+    /* Initialise the new stream */
+    e = static_AudioStart (stream);
+  }
+  
+  /* Link new audio struct into global list */
+  bool irqs_were_disabled = _kernel_irqs_disabled ();
+  if (!irqs_were_disabled) _kernel_irqs_off ();
+  stream->next = static_Streams;
+  static_Streams = stream;
+  if (!irqs_were_disabled) _kernel_irqs_on ();
+  
+  if (!e)
+  {
+    /* Return a pointer to the audio_structure_t as the audio stream handle */
+    *return_ash = (mpeg_stream_handle_t) stream;
+  }
+  return e;
+}
+
+/******	AudGeneric_SWIFullPackets() ****************************************
+
+Purpose:	Handles MPEGAudio_FullPackets when generic audio is in use
+In:		Type (0 = MPEG audio, 1 = AC-3 audio); flags;
+		audio stream handle; list of bitstream packets
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWIFullPackets (unsigned int type, unsigned int flags, mpeg_stream_handle_t ash, bitstream_packet_t *packets)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  bool packet_list_was_empty;
+  IGNORE(flags);
+  e = static_CheckHandle (stream);
+  
+  if (!e)
+  {
+    /* If this is the first data for this stream, or if the data type has changed, (re)register new decoder */
+    /* For now, we assume that data type changes only happen at ResetStream, so any old decoder has already had its session ended */
+    if (type != stream->current_data_type)
+    {
+      protocol_module_t *decoder;
+      unsigned int decoder_index_max;
+      unsigned int decoder_index = 0;
+      if (stream->current_data_type != NULL_DATA_TYPE && stream->decoder)
+      {
+        e = stream->decoder->Deregister (0, stream->decoder_session_id);
+      }
+      if (type == 0)
+      {
+        decoder = MPEG_Decoder;
+        decoder_index_max = MPEG_Decoders;
+      }
+      else
+      {
+        decoder = AC3_Decoder;
+        decoder_index_max = AC3_Decoders;
+      }
+      for (; !e && decoder_index < decoder_index_max; decoder_index++)
+      {
+        e = decoder->protocol_module->Register (0, stream, stream->clock_handle, &stream->decoder_session_id);
+        if (!e)
+        {
+          /* Success! */
+          stream->decoder = decoder->protocol_module;
+          break;
+        }
+        if (e->errnum == errno_AUDIO_IN_USE)
+        {
+          /* It's okay for now if this decoder's maxed out, maybe another one isn't */
+          /* Any other errors should be reported, though */
+          e = NULL;
+        }
+      }
+      if (!e && decoder_index == decoder_index_max)
+      {
+        /* Every decoder is in use - reinstate the error */
+        e = Mess_GenerateError ("Err_AudioInUse", errno_AUDIO_IN_USE, 0);
+      }
+      if (e)
+      {
+        /* Generate the error using our special mechanism */
+        /* but don't report back to the FullPackets caller, there's probably nothing they can do */
+        stream->decoder = NULL;
+        e = NULL;
+      }
+      stream->current_data_type = type;
+    }
+    
+    /* Call the decoder with BeginSession() if we haven't done so yet for this stream segment */
+    if (!stream->session_begun)
+    {
+      if (stream->decoder)
+      {
+        stream->decoder->BeginSession (0, stream->decoder_session_id); /* ignore errors */
+      }
+      stream->session_begun = true;
+    }
+    
+    /* If we're just starting, discard bitstream packets until the beginning of the first PES packet */
+    while (stream->audio.prefill_state == ps_searching_for_first_PES_header && packets != NULL)
+    {
+      if (packets->mpeg_start == true)
+      {
+        stream->audio.prefill_state = ps_initialising;
+        dprintf (("AudGeneric", "SWIFullPackets: audio.prefill_state = initialising\n"));
+      }
+      else
+      {
+        dprintf (("AudGeneric", "SWIFullPackets: discarding partial packet\n"));
+        packets = MiscAsm_FreePacket (packets);
+        /* Note that the rest of the function can cope fine if this sets |packets| to NULL */      
+      }
+    }
+    
+    /* Disable IRQs while we update the packet list */
+    if (irqs_were_enabled) _kernel_irqs_off ();
+    
+    /* Remember whether the packet list was empty before we started */
+    packet_list_was_empty = (stream->audio.packet_list_tail == NULL);
+    
+    /* If packet list is empty, point list head at the first new packet, otherwise add it to the end */
+    if (packet_list_was_empty)
+    {
+      stream->audio.packet_list_head = packets;
+    }
+    else
+    {
+      stream->audio.packet_list_tail->link = packets;
+    }
+    
+    /* Step along the list of new packets */
+    while (packets != NULL)
+    {
+      unsigned int old_value;
+      /* Add the length of each bitstream packet to the amount we've received */
+      old_value = stream->audio.since_open.amount_received.lsw;
+      stream->audio.since_open.amount_received.lsw += packets->length;
+      if (stream->audio.since_open.amount_received.lsw < old_value) stream->audio.since_open.amount_received.msw ++;
+      
+      old_value = stream->audio.since_reset.amount_received.lsw;
+      stream->audio.since_reset.amount_received.lsw += packets->length;
+      if (stream->audio.since_reset.amount_received.lsw < old_value) stream->audio.since_reset.amount_received.msw ++;
+      
+      /* Update list tail pointer */
+      stream->audio.packet_list_tail = packets;
+      
+      /* Move on to next packet */
+      packets = packets->link;
+    }
+    
+    /* Restore IRQ state */
+    if (irqs_were_enabled) _kernel_irqs_on ();
+    
+    /* Start a data push if the receiver wants it */
+    /* It shouldn't matter if an interrupt just went off and emptied the packet list again */
+    if (stream->decoder && packet_list_was_empty)
+    {
+      stream->decoder->dataavailable (0, stream->decoder_session_id); /* ignore errors */
+    }
+  }
+  return e;
+}
+
+/******	AudGeneric_SWICloseStream() ****************************************
+
+Purpose:	Handles MPEGAudio_CloseStream when generic audio is in use
+In:		Flags; audio stream handle
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, mpeg_stream_handle_t ash)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  IGNORE(flags);
+  e = static_CheckHandle (stream);
+  dprintf (("AudGeneric", "SWICloseStream\n"));
+#if Debugging==1 && DebugSWIs==1
+  DWrite_Write0 ("AudGeneric_SWICloseStream ");
+#endif
+  
+  if (!e)
+  {
+    /* Stop playing the old stream */
+    static_AudioStop (stream, false);
+    
+    if (stream->current_data_type != NULL_DATA_TYPE && stream->decoder)
+    {
+      e = stream->decoder->Deregister (0, stream->decoder_session_id);
+    }
+  }
+  
+  if (!e)
+  {
+    /* Shut down the sync system */
+    e = Sync_Stop (stream->clock_handle);
+  }
+  if (!e)
+  {
+    e = Sync_Close (stream->clock_handle);
+  }
+  
+  if (!e)
+  {
+    bool irqs_were_disabled = _kernel_irqs_disabled ();
+    audio_structure_t *prev = NULL;
+    if (!irqs_were_disabled) _kernel_irqs_off ();
+    audio_structure_t *ptr = static_Streams;
+    while (ptr != stream && ptr!= NULL)
+    {
+      prev = ptr;
+      ptr = ptr->next;
+    }
+    if (ptr != NULL)
+    {
+      if (prev == NULL)
+      {
+        static_Streams = ptr->next;
+      }
+      else
+      {
+        prev->next = ptr->next;
+      }
+    }
+    if (!irqs_were_disabled) _kernel_irqs_on ();
+    
+    stream->magic = 0;
+    free (stream);
+  }
+  return e;
+}
+
+/******	AudGeneric_SWIPlay() ***********************************************
+
+Purpose:	Handles MPEGAudio_Play when generic audio is in use
+In:		Flags; audio stream handle
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWIPlay (unsigned int flags, mpeg_stream_handle_t ash)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  e = static_CheckHandle (stream);
+  dprintf (("AudGeneric", "SWIPlay\n"));
+#if Debugging==1 && DebugSWIs==1
+  DWrite_Write0 ("AudGeneric_SWIPlay ");
+#endif
+  
+  if (!e)
+  {
+    if ((flags & AudioPlayFlags_Stop) != 0)
+    {
+      uint32_t underrunning = true;
+      if (stream->decoder)
+      {
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_UNDERRUNNING, &underrunning);
+      }
+      if (underrunning)
+      {
+        e = _swix (MPEGControl_Play, _INR(0,1), PlayFlags_AudioIdle, stream->csh);
+      }
+      else
+      {
+        stream->aud_flags.eos_callback_requested = true;
+      }
+    }
+  }
+  return e;
+}
+
+/******	AudGeneric_SWISetSpeed() *******************************************
+
+Purpose:	Handles MPEGAudio_SetSpeed when generic audio is in use
+In:		Flags; audio stream handle;
+		speed (0 => pause, 1 => normal, 2-16 => 1/2 - 1/16th speed)
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWISetSpeed (unsigned int flags, mpeg_stream_handle_t ash, unsigned int speed)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  IGNORE(flags);
+  e = static_CheckHandle (stream);
+  dprintf (("AudGeneric", "SWISetSpeed\n"));
+#if Debugging==1 && DebugSWIs==1
+  DWrite_Write0 ("AudGeneric_SWISetSpeed ");
+#endif
+  
+  if (!stream->s_flags.video_present)
+  {
+    e = _swix (PFCClock_SpeedChange, _INR(0,2), 0, stream->clock_handle, speed ? 0x10000 / speed : 0);
+  }
+  
+  return e;
+}
+
+/******	AudGeneric_SWIResetStream() ****************************************
+
+Purpose:	Handles MPEGAudio_ResetStream when generic audio is in use
+In:		ResetStream flags; audio stream handle;
+		address to write discarded data count into
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWIResetStream (reset_stream_flags_t *flags, mpeg_stream_handle_t ash, unsigned int *return_discarded_data_size)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  e = static_CheckHandle (stream);
+  dprintf (("AudGeneric", "SWIResetStream\n"));
+#if Debugging==1 && DebugSWIs==1
+  DWrite_Write0 ("AudGeneric_SWIResetStream ");
+#endif
+  
+  if (!e)
+  {
+    /* Cache ResetStreamFlags */
+    stream->rs_flags = *flags;
+    if (stream->s_flags.video_present == false) stream->rs_flags.video_present = false;
+    if (stream->s_flags.audio_present == false) stream->rs_flags.audio_present = false;
+    
+    /* Stop and start the sync system, if necessary */
+    if (!stream->s_flags.video_present)
+    {
+      e = Sync_Stop (stream->clock_handle);
+      if (!e)
+      {
+        e = Sync_Start (stream->clock_handle);
+      }
+    }
+  }
+  if (!e)
+  {
+    *return_discarded_data_size = 0;
+    if (stream->decoder)
+    {
+      stream->decoder->readfullness (0, stream->decoder_session_id, return_discarded_data_size);
+    }
+    
+    /* Stop playing the old stream immediately */
+    *return_discarded_data_size += static_AudioStop (stream, false);
+    
+    /* Initialise the new stream */
+    e = static_AudioStart (stream);
+  }
+  return e;
+}
+
+/******	AudGeneric_SWIMuteSound() ******************************************
+
+Purpose:	Handles MPEGAudio_MuteSound when generic audio is in use
+In:		Flags (bit 0 set => mute); audio stream handle
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWIMuteSound (unsigned int flags, mpeg_stream_handle_t ash)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  e = static_CheckHandle (stream);
+  
+  if (!e)
+  {
+    stream->aud_flags.muted = flags & 1;
+    if (stream->decoder)
+    {
+      stream->decoder->volume (0, stream->decoder_session_id);
+    }
+  }
+  return e;
+}
+
+/******	AudGeneric_SWISoundVolume() ****************************************
+
+Purpose:	Handles MPEGAudio_SoundVolume when generic audio is in use
+In:		Flags; audio stream handle; new volume (0 => mute,
+		1-256 => .5 dB ramp up to 0 dB, -1 => just read old volume);
+		address to write old volume into
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWISoundVolume (unsigned int flags, mpeg_stream_handle_t ash, int volume, int *return_old_volume)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  IGNORE(flags);
+  e = static_CheckHandle (stream);
+  
+  if (!e)
+  {
+    *return_old_volume = stream->relative_volume;
+    if (volume != -1)
+    {
+      volume = MAX(volume, 0);
+      volume = MIN(volume, 256);
+      stream->relative_volume = volume;
+      if (stream->decoder)
+      {
+        stream->decoder->volume (0, stream->decoder_session_id);
+      }
+    }
+  }
+  return e;
+}
+
+/******	AudGeneric_SWIStats() **********************************************
+
+Purpose:	Handles MPEGAudio_Stats when generic audio is in use
+In:		Flags; audio stream handle; pointer to tags list; buffer to
+		write ino (pointer/size); address to write updated buffer
+		pointer into; address to write space remaining into (may be <0)
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWIStats (unsigned int flags, mpeg_stream_handle_t ash, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
+{
+  _kernel_oserror *e = NULL;
+  IGNORE(flags);
+  IGNORE(ash);
+  IGNORE(tags);
+  *return_pointer = buffer;
+  *return_buffer_remaining = buffer_size;
+  return e;
+}
+
+/******	AudGeneric_SWISetAudioParameters0() ********************************
+
+Purpose:	Handles MPEGAudio_SetAudioParameters 0 when generic audio is in use
+In:		Audio stream handle; new mute-on-error state (or -1 just
+		to read old state); address to write old state into
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWISetAudioParameters0 (mpeg_stream_handle_t ash, int new_state, int *return_old_state)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  e = static_CheckHandle (stream);
+  
+  if (!e)
+  {
+    *return_old_state = stream->audio_parms.mute_audio_on_errors;
+    
+    if ((int) new_state != -1) /* -1 means only return current value */
+    {
+      stream->audio_parms.mute_audio_on_errors = new_state;
+      /* Don't take any action: muting errors should always be used, so no point in propagating the API further */
+    }
+  }
+  return e;
+}
+
+/******	AudGeneric_SWISetAudioParameters1() ********************************
+
+Purpose:	Handles MPEGAudio_SetAudioParameters 1 when generic audio is in use
+In:		Audio stream handle; new dual-channel state (or -1 just
+		to read old state); address to write old dual-channel state
+		into; address to write current channel type into
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWISetAudioParameters1 (mpeg_stream_handle_t ash, dual_channel_specifier new_state, dual_channel_specifier *return_old_state, audio_channel_type *return_channel_type)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  e = static_CheckHandle (stream);
+  
+  if (!e)
+  {
+    *return_old_state = stream->audio_parms.specifier;
+    
+    if (irqs_were_enabled) _kernel_irqs_off (); /* downmix options might change under our feet otherwise */
+    
+    unsigned int downmix_mode = 0; /* default in case of error */
+    unsigned int main_channels;
+    unsigned int surround_channels;
+    if (stream->decoder)
+    {
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DOWNMIX_AVAILABLE, &downmix_mode);
+      e = stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_MAIN_CHANNELS, &main_channels);
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_SURROUND_CHANNELS, &surround_channels);
+    }
+    
+    if ((int) new_state != -1) /* -1 means only return current values */
+    {
+      stream->audio_parms.specifier = new_state;
+      
+      static_CheckDualChannelChange (stream, downmix_mode);
+    }
+    
+    if (irqs_were_enabled) _kernel_irqs_on ();
+    
+    if (e || !stream->decoder || main_channels == 0 || main_channels > 3 || surround_channels > 2)
+    {
+      *return_channel_type = ct_unknown;
+      e = NULL;
+    }
+    else
+    {
+      static const audio_channel_type channel_type_lut[3][3][3] = {
+                        /* 1/0         1/1         1/2             2/0           2/1         2/2             3/0         3/1         3/2        */
+      /* no downmix */ { { ct_mono,    ct_unknown, ct_unknown }, { ct_stereo,    ct_2_1,     ct_2_2     }, { ct_3_0,     ct_3_1,     ct_3_2     } },
+      /* dual mono */  { { ct_unknown, ct_unknown, ct_unknown }, { ct_dual_mono, ct_unknown, ct_unknown }, { ct_unknown, ct_unknown, ct_unknown } },
+      /* karaoke */    { { ct_unknown, ct_unknown, ct_unknown }, { ct_2_0_k,     ct_2_1_k,   ct_2_2_k   }, { ct_3_0_k,   ct_3_1_k,   ct_3_2_k   } } };
+      *return_channel_type = channel_type_lut[downmix_mode][main_channels-1][surround_channels];
+    }
+  }
+  return e;
+}
+
+/******	AudGeneric_SWISetAudioParameters2() ********************************
+
+Purpose:	Handles MPEGAudio_SetAudioParameters 2 when generic audio is in use
+In:		Audio stream handle; new suppress-sync-to-stream state
+		(or -1 just to read old state); address to write old state into
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWISetAudioParameters2 (mpeg_stream_handle_t ash, int new_state, int *return_old_state)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  e = static_CheckHandle (stream);
+  
+  if (!e)
+  {
+    *return_old_state = stream->aud_flags.suppress_sync_to_stream;
+    
+    if ((int) new_state != -1) /* -1 means only return current value */
+    {
+      stream->aud_flags.suppress_sync_to_stream = new_state;
+      /* We don't take any action here because PFCClock has no API to change the sync-to-stream state on the fly */
+      /* Ideally sync-to-stream should be inaudible anyway, and so this option shouldn't be necessary; it certainly isn't needed for the Zoran dongle */
+    }
+  }
+  return e;
+}
+
+/******	AudGeneric_SWIReadParameters3() ************************************
+
+Purpose:	Handles MPEGAudio_ReadParameters 3 when generic audio is in use
+In:		Audio stream handle;
+		address to write least significant 32 bits of STC into;
+		address to write most significant 1 bit of STC into
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_SWIReadParameters3 (mpeg_stream_handle_t ash, unsigned int *return_STC_lo, unsigned int *return_STC_hi)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  e = static_CheckHandle (stream);
+  
+  if (!e)
+  {
+    mpeg_time_t time;
+    e = _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_STC, stream->clock_handle, &time);
+    if (e)
+    {
+      *return_STC_lo = 0;
+      *return_STC_hi = 0;
+    }
+    else
+    {
+      *return_STC_lo = time.word.lo;
+      *return_STC_hi = time.word.hi;
+    }
+    return NULL;
+  }
+  return e;
+}
+
+/******	AudGeneric_ChangeAudioMode() ***************************************
+
+Purpose:	Responds to a change in Dolby audio operational mode
+
+***************************************************************************/
+
+void AudGeneric_ChangeAudioMode (bool line_mode)
+{
+  audio_structure_t *stream = static_Streams;
+  for (; stream != NULL; stream = stream->next)
+  {
+    stream->line_mode = line_mode;
+    if (stream->decoder)
+    {
+      stream->decoder->volume (0, stream->decoder_session_id);
+    }
+  }
+}
+
+/******	AudGeneric_ChangeSPDIF() *******************************************
+
+Purpose:	Responds to a change in a S/PDIF setting
+
+***************************************************************************/
+
+void AudGeneric_ChangeSPDIF (void)
+{
+  audio_structure_t *stream = static_Streams;
+  for (; stream != NULL; stream = stream->next)
+  {
+    if (stream->decoder)
+    {
+      stream->decoder->spdif (0, stream->decoder_session_id);
+    }
+  }
+}
+
+/*********************/
+/* Private functions */
+/*********************/
+
+/******	static_AudioStart() ************************************************
+
+Purpose:	Common code between OpenStream and ResetStream when generic audio is in use
+In:		Stream handle
+Out:		Pointer to error block
+
+***************************************************************************/
+
+static _kernel_oserror *static_AudioStart (audio_structure_t *stream)
+{
+  _kernel_oserror *e = NULL;
+  
+  /* Initialise various variables */
+  stream->audio.state = stream_prefilling;
+  stream->audio.prefill_state = ps_searching_for_first_PES_header;
+  stream->audio.speed_indicator = 1;
+  stream->audio.fast_slow_state = fss_normal_speed;
+  stream->audio.packet_list_head = NULL;
+  stream->audio.packet_list_tail = NULL;
+  stream->audio.since_reset.amount_received.lsw = stream->audio.since_reset.amount_received.msw = 0;
+  stream->audio.since_reset.amount_sent.lsw = stream->audio.since_reset.amount_sent.msw = 0;
+  stream->audio.since_reset.PES_packets_sent = 0;
+  stream->audio.since_reset.PTSs_in = 0;
+  stream->aud_flags.eos_callback_requested = false;
+  stream->session_begun = false;
+  
+  /* We don't use this as a machanism to time starts anymore, but don't delay anything that might be relying on us */
+  _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
+  
+  return e;
+}
+
+/******	static_AudioStop() *************************************************
+
+Purpose:	Common code between ResetStream and CloseStream when generic audio is in use
+In:		Stream handle; |true| if the currently queueing data should be allowed to play out
+Out:		Number of data bytes that were not played
+
+***************************************************************************/
+
+static unsigned int static_AudioStop (audio_structure_t *stream, bool play_out)
+{
+  unsigned int discarded_data = 0; /* default if we're playing out, or if there are no queuing packets */
+  
+  if (play_out)
+  {
+    /* Play out the old audio data, but don't send any more to the decoder */
+    stream->audio.state = stream_closing;
+    
+    /* Wait until all data is sent to the decoder */
+    MiscAsm_UserModeWait (&stream->audio.packet_list_head);
+    
+    /* Wait for the decoder to consume the data */
+    unsigned int decoding = false;
+    do
+    {
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DECODING_ACTIVE, &decoding);
+    }
+    while (decoding);
+  }
+  
+  /* Stop any active session */
+  if (stream->session_begun)
+  {
+    if (stream->decoder)
+    {
+      stream->decoder->EndSession (0, stream->decoder_session_id); /* ignore errors */
+    }
+    stream->session_begun = false;
+  }
+  
+  /* Now we are closed */
+  stream->audio.state = stream_closed;
+  
+  /* If we went directly to closed, then free queued packets */
+  if (!play_out)
+  {
+    while (stream->audio.packet_list_head != NULL)
+    {
+      discarded_data += stream->audio.packet_list_head->length;
+      Stuffing_FreePacket (&stream->audio);
+    }
+  }
+  return discarded_data;
+}
+
+/******	static_CheckHandle() ***********************************************
+
+Purpose:	Checks validity of an audio stream handle
+In:		Handle to check
+Out:		Pointer to error block
+
+***************************************************************************/
+
+static _kernel_oserror *static_CheckHandle (audio_structure_t *stream)
+{
+  if (stream->magic == MAGIC_WORD)
+  {
+    return NULL;
+  }
+  else
+  {
+    char handle_string [12];
+    sprintf (handle_string, "%p", stream);
+    return Mess_GenerateError ("Err_BadAudioHandle", errno_BAD_AUDIO_HANDLE, 1, handle_string);
+  }
+}
+
+/******	static_CheckDualChannelChange() ************************************
+
+Purpose:	Sees if an effective dual channel mode change has happened,
+		and enforces it if so
+In:		Handle of stream, downmix mode reported by decoder
+
+***************************************************************************/
+
+static void static_CheckDualChannelChange (audio_structure_t *stream, unsigned int downmix_mode)
+{
+  dual_channel_specifier new_effective_dual_channel_mode = (downmix_mode == 0) ? dc_both : (dual_channel_specifier) stream->audio_parms.specifier;
+  bool new_dual_channel_mute = (new_effective_dual_channel_mode == dc_neither && downmix_mode == 1);
+  if (new_dual_channel_mute) new_effective_dual_channel_mode = dc_both;
+  if (new_effective_dual_channel_mode != stream->aud_flags.effective_dual_channel_mode)
+  {
+    stream->aud_flags.effective_dual_channel_mode = new_effective_dual_channel_mode;
+    if (stream->decoder)
+    {
+      stream->decoder->downmix (0, stream->decoder_session_id);
+    }
+  }
+  if (new_dual_channel_mute != stream->aud_flags.dual_channel_mute)
+  {
+    stream->aud_flags.dual_channel_mute = new_dual_channel_mute;
+    if (stream->decoder)
+    {
+      stream->decoder->volume (0, stream->decoder_session_id);
+    }
+  }
+}
+
+#else
+extern int AudGeneric_NotUsed;
+#endif
