@@ -20,8 +20,7 @@
 #                     Made SysPaths set Boot$OSVersion if not already set,
 #                     and correct "3.50" to "350".
 # 10-Aug-98      SNB  Added DDEUtils source and removed binary imports.
-
-VPATH = @ <Support$Dir>
+# 04-Oct-99      SNB  Removed dependency on Support lib.
 
 #
 # Program specific options:
@@ -46,7 +45,7 @@ SQUEEZE = squeeze
 WIPE    = -wipe
 
 AFLAGS  = ${THROWBACK} -depend !Depend -nocache -stamp -quit
-CFLAGS  = ${THROWBACK} -c -depend !Depend -fah ${INCLUDES} ${DFLAGS} -wp
+CFLAGS  = ${THROWBACK} -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} -wp
 CPFLAGS = ~cfr~v
 SQFLAGS = -f
 WFLAGS  = ~c~v
@@ -55,12 +54,11 @@ WFLAGS  = ~c~v
 # Libraries
 #
 CLIB      = CLib:o.Stubs
-OSLIB     = OSLib:o.OSLib
 
 #
 # Include files
 #
-INCLUDES  = -ISupport:,OS:
+INCLUDES  = -IC:,C:RMVersion
 
 MODULES = \
       310.Modules.ABCLib \
@@ -88,7 +86,8 @@ FILES =\
  ${MODULES}\
  abs.SysPaths
 
-OBJS = o.main o.x
+OBJS = o.main
+LIBS = C:RMVersion.o.RMVersion
 
 #
 # Rule patterns
@@ -182,12 +181,12 @@ clean_all:
 #
 # Static dependencies:
 #
-abs.SysPaths: ${OBJS} ${OSLIB} ${CLIB}
-        ${LD} -o $@ ${OBJS} ${OSLIB} ${CLIB}
+abs.SysPaths: ${OBJS} ${LIBS} ${CLIB}
+        ${LD} -o $@ ${OBJS} ${LIBS} ${CLIB}
         ${SQUEEZE} ${SQFLAGS} $@
 
-abs.SysPathsD: ${OBJSD} ${OSLIB} ${CLIB}
-        ${LD} -o $@ -debug ${OBJSD} ${OSLIB} ${CLIB}
+abs.SysPathsD: ${OBJSD} ${LIBS} ${CLIB}
+        ${LD} -o $@ -debug ${OBJSD} ${LIBS} ${CLIB}
 
 ${DDEUTILS}: o.DDEUtils
 	${LD} -m -o $@ o.DDEUtils

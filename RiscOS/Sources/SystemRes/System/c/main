@@ -1,145 +1,154 @@
-/*main.c - generate system variables for System application*/
+/*
+ * SysPaths
+ *
+ * Copyright (C) Pace Micro Technology plc. 1999
+ *
+ *
+ * This application code will ensure that Boot$OSVersion is set correctly
+ * (without a dot in the version number) and will setup Sys$Path to be
+ * a canonical version of "<System$Dir>.", and will set System$Path to refer
+ * to all appropriate numeric subdirectories of <System$Dir> (in descending order)
+ * with <System$Dir>. as the final path component.
+ *
+ *
+ * History:
+ *
+ * 04-Oct-1999   SBrodie   Rewrote this utility without OS_GBPB misuse bug.
+ *
+ *
+ */
 
-/*From CLib*/
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
-/*From OSLib*/
-#include "macros.h"
-#include "os.h"
-#include "osgbpb.h"
-#include "osmodule.h"
+#include "kernel.h"
+#include "swis.h"
 
-/*From Support*/
-#include "x.h"
+#include "RMVersion.h"
 
-/* J R C  2nd Mar 1995  Sorts the path elements, rather than assuming they
-                        come out in numerical order.
-                        Use x-clear SWI's.
-                        Match any numerical directory. Sort in numerical
-                        order.
-*/
+#define ENTRY_LIMIT 256 /* Number of path elements we can cope with. */
 
-#define ENTRY_LIMIT 32 /*Number path elements we can cope with.*/
+static int directories[ENTRY_LIMIT];
 
-x_STATIC_ERROR (Too_Many_Entries, 1, "Too many entries")
-
-static int Compare (void const *i0, void const *i1)
-      {return atoi (*(char **) i1) - atoi (*(char **) i0);}
-
-/*
- * Return the version number of a ROM module.
+/* Auxiliary comparison function for qsort - requires that the entries
+ * are in order highest to lowest.
  */
-static int Module_Version(const char *module)
+static int qsort_aux(const void *v0, const void *v1)
 {
-   int v = 0, m, s;
-   char *name;
-   x_exception x;
+        const int *i0 = v0;
+        const int *i1 = v1;
 
-   m = 0, s = -1;
-   x_TRY (&x)
-      /*Bizarrely, this call only stops when it gets an error ...*/
-      while (TRUE)
-      {  m = osmodule_enumerate_rom_with_info (m, s, &s, &name, NULL,
-            NULL, &v);
-
-         if (strcmp (name, module) == 0)
-            break;
-      }
-   x_CATCH (&x)
-      ;
-
-   return v >> 8;
+        return *i1 - *i0;
 }
 
-int main (void)
 
-{  char info [os_FILE_NAME_LIMIT + 1], system_path [1024 + 1],
-      system_dir [1024 + 1], sys_path [os_CLI_LIMIT + 1],
-      os_version [os_CLI_LIMIT + 1], *entries [ENTRY_LIMIT];
-   int context, version, n, used, v, entry, entry_count;
-   char *point;
-   x_exception x;
-   os_error *e;
+/* Construct System$Path by examining the objects inside !System which are
+ * entirely numeric in nature
+ */
+static void build_system_path(const char *basedir, int version)
+{
+        static char buffer[BUFSIZ];
+        size_t bufsize = sizeof(buffer) - 32; /* Allow safety margin */
+        char *buf;
+        int entry_count = 0;
+        int context = 0;
 
-   x_TRY (&x)
-   {  /*Fix fault: ignore arguments, and read System$Dir instead. J R C
-         20th Mar 1995*/
-      os_read_var_val ("System$Dir", system_dir, sizeof system_dir, 0,
-            os_VARTYPE_STRING, &used, NULL);
-      system_dir [used] = '\0';
+        while (context != -1) {
+                char *buf = buffer;
+                int count;
+                if (_swix(OS_GBPB, _INR(0,6)|_OUTR(3,4),
+                        9, basedir, buffer, 256, context, bufsize, 0,
+                        &count, &context)) break;
 
-      /*Set Sys$Path*/
-      sprintf (sys_path, "%s.", system_dir);
-      os_set_var_val ("Sys$Path", (byte *) sys_path, strlen (sys_path), 0,
-            os_VARTYPE_STRING, NULL);
+                while (count-- > 0 && entry_count < ENTRY_LIMIT) {
+                        int buflen = strlen(buf), v, n;
+                        /* Process name pointed to by 'buf' */
+                        sscanf(buf, "%d%n", &v, (n = -1, &n));
+                        if (n == buflen && v <= version) {
+                                directories[entry_count++] = v;
+                        }
+                        buf += buflen + 1;
+                }
+        }
 
-      /*Which OS are we running under?*/
-      e = xos_read_var_val ("Boot$OSVersion", os_version, sizeof os_version, 0,
-            os_VARTYPE_STRING, &used, NULL, NULL);
-      if (e->errnum == error_VAR_CANT_FIND)
-      {
-         /* Set it if not already set */
-         sprintf(os_version, "%X0%n", Module_Version("UtilityModule")/16, &used);
-         os_set_var_val("Boot$OSVersion", (byte *) os_version, used, 0,
-                        os_VARTYPE_STRING, NULL);
-      }
-      else if (e)
-         x_THROW(e);
-      else
-         os_version [used] = '\0';
+        if (entry_count > 1) {
+                qsort(directories, entry_count, sizeof(*directories), qsort_aux);
+        }
 
-      /* Turn "3.50" into "350" */
-      if ((point = strchr(os_version, '.')) != NULL)
-      {
-         do
-         {
-            *point=*(point+1);
-         }
-         while (*++point);
-         os_set_var_val("Boot$OSVersion", (byte *) os_version, used, 0,
-                        os_VARTYPE_STRING, NULL);
-     }
 
-      sscanf (os_version, "%d%n", &version, (n = -1, &n));
-      if (n == strlen (os_version))
-      {  entry_count = 0;
-         context = 0;
-         while ((context = osgbpb_dir_entries (system_dir,
-               (osgbpb_string_list *) info, 1, context, sizeof info, "*",
-               NULL)) != osgbpb_NO_MORE)
-         {  /*Check that the name is composed of digits.*/
-            sscanf (info, "%d%n", &v, (n = -1, &n));
+        buf = buffer;
+        *buf = '\0';
 
-            if (n == strlen (info) && v <= version)
-            {  /*Add this directory to our table.*/
-               if (entry_count == ENTRY_LIMIT)
-                  x_THROW (Too_Many_Entries);
+        for (context=0; context<entry_count; ++context) {
+                const size_t length = sprintf(buf, "Sys:%d.,", directories[context]);
+                buf += length;
+                if (length > bufsize) break; /* overflow - oh dear */
+                bufsize -= length;
+        }
 
-               strcpy (entries [entry_count++] = x_alloc (strlen (info) + 1),
-                     info);
-            }
-         }
+        sprintf(buf, "%s.", basedir);
+        _kernel_setenv("System$Path", buffer);
+}
 
-         /*Sort the list we just made.*/
-         qsort (entries, entry_count, sizeof *entries, &Compare);
+static int syspaths_os_version(void)
+{
+        static char os_version[16];
+        const char *bootosversion;
+        unsigned int version, n;
 
-         CLEAR (system_path);
-         for (entry = 0; entry < entry_count; entry++)
-         {  if (!EMPTY (system_path)) strcat (system_path, ",");
-            sprintf (system_path + strlen (system_path), "Sys:%s.",
-                 entries [entry]);
-         }
+        bootosversion = getenv("Boot$OSVersion");
+        if (!bootosversion) {
+                if (rmversion(rmversion_ROM, "UtilityModule", &version)) return 0;
+                sprintf(os_version, "%X0", version >> 4);
+        }
+        else {
+                /* Remove unnecessary dots. ie. turn "3.50" into "350" */
+                char *dst = os_version;
+                const char *eodst = os_version + sizeof(os_version) - 1;
+                while (*bootosversion && dst < eodst) {
+                        if ((*dst++ = *bootosversion++) == '.') {
+                                --dst;
+                        }
+                }
+                *dst = '\0';
+        }
 
-         if (!EMPTY (system_path)) strcat (system_path, ",");
-         strcat (system_path, sys_path);
+        _kernel_setenv("Boot$OSVersion", os_version);
+        sscanf (os_version, "%u%n", &version, (n = -1, &n));
+        if (n == strlen(os_version)) {
+                return version;
+        }
+        else {
+                return 0;
+        }
+}
 
-         os_set_var_val ("System$Path", (byte *) system_path,
-               strlen (system_path), 0, os_VARTYPE_STRING, NULL);
-      }
-   }
-   x_CATCH (&x)
-      ;
+static const char *syspaths_system_dir(void)
+{
+        static char system_dir[BUFSIZ];
+        size_t length;
 
-   x_EXIT (&x);
+        if (_kernel_getenv("System$Dir", system_dir, sizeof(system_dir))) {
+                return 0;
+        }
+        length = strlen(system_dir);
+        system_dir[length] = '.';
+        system_dir[length+1] = '\0';
+        _kernel_setenv("Sys$Path", system_dir);
+        system_dir[length] = '\0';
+
+        return system_dir;
+}
+
+int main(void)
+{
+        const char *basedir = syspaths_system_dir();
+        const int version   = syspaths_os_version();
+
+        if (basedir && version) {
+                build_system_path(basedir, version);
+        }
+
+        return 0;
 }
