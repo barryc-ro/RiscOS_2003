@@ -388,6 +388,7 @@ clean_common:
         @$(WIPE) odz             $(WFLAGS)
         @$(WIPE) rm              $(WFLAGS)
         @$(WIPE) syms            $(WFLAGS)
+        @$(WIPE) h               $(WFLAGS)
         @$(RM)   s.ModuleWrap
 	@$(RM)   syms
         @$(RM)   o.dirs
