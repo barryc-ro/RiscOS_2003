@@ -12,9 +12,11 @@
 # Component specific options:
 #
 COMPONENT  = java
+APP	   = !$(COMPONENT)
 ROM_MODULE = aof.$(COMPONENT)
 
 RESDIR = <resource$dir>.Resources2.$(COMPONENT)
+RDIR   = Resources
 
 SYMFILTER = filter
 GENINDEX = genindex
@@ -67,6 +69,12 @@ ENTRIES = \
 	$(ENTRY).$(NET) \
 	$(ENTRY).$(MMEDIA)
 
+FILES = \
+	$(RDIR).!Boot \
+	$(RDIR).!Run \
+	$(RDIR).CallASWI \
+	$(RDIR).!Sprites22
+	
 SYMBOLS = syms
 
 #
@@ -76,6 +84,15 @@ SYMBOLS = syms
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
+install: $(FILES)
+	$(MKDIR) $(INSTDIR).$(APP)
+	$(CP) $(RDIR).!Boot $(INSTDIR).$(APP).!Boot $(CPFLAGS)
+	$(CP) $(RDIR).!Run $(INSTDIR).$(APP).!Run $(CPFLAGS)
+	$(CP) $(RDIR).CallASWI $(INSTDIR).$(APP).CallASWI $(CPFLAGS)
+	$(CP) $(RDIR).!Sprites22 $(INSTDIR).$(APP).!Sprites22 $(CPFLAGS)
+	Access $(INSTDIR).$(APP).* lr/r
+	@echo $(COMPONENT): Application installed
+	
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
