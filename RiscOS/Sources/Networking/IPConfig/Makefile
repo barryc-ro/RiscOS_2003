@@ -145,7 +145,7 @@ export:
 #
 ${RAM_MODULE}:	${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 	${MKDIR} rm
-	$(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+	$(LD) -o $@ -Map -rmf ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
         ${MODSQZ} $@
         Access $@ RW/R
 
@@ -168,8 +168,7 @@ ${DBGRESF}: LocalRes:Messages
 		LocalRes:Messages ${RESFSDIR}.Messages \
 		Inet:bin.IfConfig IfConfig \
 		Inet:bin.InetStat InetStat \
-		Inet:bin.Route Route \
-		LocalRes:SIFAddr SIFAddr
+		Inet:bin.Route Route
 
 #
 # Final link for the ROM Image (using given base address)
