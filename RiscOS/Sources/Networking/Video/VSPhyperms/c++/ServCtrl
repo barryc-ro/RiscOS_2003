@@ -222,11 +222,11 @@ Server::get_assetlist_response(int *number, AssetIDDescriptor *buffer, int *buff
   	MakeError(VSP_ServerCertError);
   	return ErrorOccurred;
   }
-  
   if ((*number) == 0)
   	(*number) = (int)alr_header.total_number_of_assets;
   else {
     	asset_count = 0;
+    	//AssetIDDescriptor *asset;
     	while ((asset_count < (*number))&&(asset_count < alr_header.number_of_entries)
     		&&( (asset_count+1) * sizeof(AssetIDDescriptor) <= (*buffer_size)) ) {
     		  
@@ -237,12 +237,118 @@ Server::get_assetlist_response(int *number, AssetIDDescriptor *buffer, int *buff
   	  		MakeError(TCP_ReadFail);
   			return ErrorOccurred;
   		}
+  		/*
+  		asset = &buffer[asset_count];
+  		Debug("asset id (%i)", asset->asset_id);  
+        	Debug("last update%8.8X%8.8X", (int)asset->time_of_last_update[8], (int)asset->time_of_last_update);     
+        	Debug("registration %i", asset->registration);         
+        	Debug("bitrate %i", asset->bit_rate);            
+        	Debug("asset type %i", asset->asset_type);         
+        	Debug("encoding %i", asset->encoding);           
+        	Debug("block_length %i", asset->block_length);      
+        	Debug("total time %i", asset->total_time);       
+        	Debug("short title %s", asset->video_title); 
+        	Debug("long title  %s", asset->full_title); 
+        	Debug("ff time  %i", asset->ff_time);     
+        	Debug("rw time  %i", asset->rw_time);     
+        	Debug("video type  %i", asset->video_type);    
+        	Debug("video status  %i", asset->video_status);
+		*/
   		asset_count++;
   	}// while
   	(*number) = asset_count;
   	(*buffer_size) -= (asset_count)*sizeof(AssetIDDescriptor);
   }
   if (alr_header.result != 0){
+    MakeError(VSP_ServerError);
+    return ErrorOccurred;
+  }
+  return NoError;
+}
+
+error_flag
+Server::send_scenelist_request(int asset_id)
+{
+  SceneListRequest request;
+ 
+  request.interface_number = 0;
+  request.route_type = 0;
+  request.command_number = COMMAND_scenelist_request;
+  request.command_length = sizeof(SceneListRequest)-8;
+  request.certification_code = certification_code;
+  request.asset_id = asset_id;
+  request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
+
+  if (hton_structure(&request, map_SceneListRequest, SceneListRequest) == ErrorOccurred){
+  	MakeError(TCP_SendFail);
+  	return ErrorOccurred;
+  }
+  
+  if (SendData((void*)&request, sizeof(SceneListRequest)) == ErrorOccurred)
+  	return ErrorOccurred;
+
+  return NoError;
+}
+
+error_flag
+Server::get_scenelist_response(int *number, SceneInformationDescriptor *buffer, int *buffer_size)
+{
+  // reads a maximum of number of assets into the buffer 
+  
+  SceneListHeader header;
+  int asset_count;
+ 
+  if (ErrorExists())
+  	return ErrorOccurred;
+
+  if (GetData((void*)&header, sizeof(SceneListHeader)) == ErrorOccurred)
+  	return ErrorOccurred;	//Null
+
+  if (ntoh_structure(&header, map_SceneListHeader, SceneListHeader) == ErrorOccurred){
+    	MakeError(TCP_SendFail);
+  	return ErrorOccurred;
+  }
+
+  if (header.command_number != COMMAND_scenelist_response) {
+    	MakeError(VSP_UnknownMessage);
+    	return ErrorOccurred;
+  }
+
+  if (header.certification_code != certification_code++){
+  	MakeError(VSP_ServerCertError);
+  	return ErrorOccurred;
+  }
+  
+  if ((*number) == 0)
+  	(*number) = (int)header.number_of_scenes;
+  else {
+    	asset_count = 0;
+    	while ((asset_count < (*number))&&(asset_count < header.number_of_scenes)
+    		&&( (asset_count+1) * sizeof(SceneInformationDescriptor) <= (*buffer_size)) ) {
+    		  
+   		if (GetData((void*)&(buffer[asset_count]), sizeof(SceneInformationDescriptor)) == ErrorOccurred)
+  			return ErrorOccurred;	//Null
+  		
+  		if (ntoh_structure((void*)&(buffer[asset_count]), map_SceneInformationDescriptor, SceneInformationDescriptor) == ErrorOccurred){
+  	  		MakeError(TCP_ReadFail);
+  			return ErrorOccurred;
+  		}
+  		asset_count++;
+  	}// while
+   	(*number) = asset_count;
+  	(*buffer_size) -= (asset_count)*sizeof(SceneInformationDescriptor);
+  }
+  
+  // read the rest of the scenes from the socket
+  if (asset_count >= header.number_of_scenes){
+    	SceneInformationDescriptor descriptor;
+  	while (asset_count < header.number_of_scenes){
+  	   	if (GetData(&descriptor, sizeof(SceneInformationDescriptor)) == ErrorOccurred)
+  			return ErrorOccurred;	//Null
+  		++asset_count;
+          }
+  }
+  if (header.result != 0){
     MakeError(VSP_ServerError);
     return ErrorOccurred;
   }
@@ -768,10 +874,22 @@ Server::GetAssetList(_kernel_swi_regs *regs)
 error_flag
 Server::GetSceneAssetList(_kernel_swi_regs *regs)
 {
-  regs = regs;
+  error_flag result = ErrorState();
   
-  MakeError(VSP_Unimplemented);
-  return ErrorOccurred;
+  if (  (result != ErrorOccurred)&&(regs->r[5] != 0)&&
+  	(( send_scenelist_request(regs->r[3]) == ErrorOccurred) ||
+  	    (get_scenelist_response(&(regs->r[4]), (SceneInformationDescriptor*)regs->r[5], (int*)(&regs->r[6])) == ErrorOccurred)) )
+  		result = ErrorOccurred;
+  else {
+    if ((result != ErrorOccurred)&&(regs->r[5] == 0)){
+      if (regs->r[4] != 0)
+      	regs->r[6] = regs->r[4] * sizeof(SceneInformationDescriptor);
+      else
+      	regs->r[6] = MAX_scene_list * sizeof(SceneInformationDescriptor);
+    }
+  }
+
+  return result;
 }
 
 error_flag
