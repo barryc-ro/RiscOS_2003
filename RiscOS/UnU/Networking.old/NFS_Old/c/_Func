@@ -1,0 +1,1614 @@
+/*	C._FUNC
+
+Purpose :
+
+Functions : set_directory
+	    eval_dir_strings
+	    print_listing_header
+	    characters_across_screen
+	    do_cat
+	    examine_width
+	    examine_object
+	    do_ex_in_directory
+	    do_ex
+	    do_ex_objects
+	    nfs_riscos_rename
+	    place_string_with_byte
+	    read_name_and_privilege_byte
+	    read_dir_entries
+	    set_nfs_access
+	    fsentry_func
+
+History :
+Date	Who    Comments
+-----------------------------------------------------------------------------
+07/05/93  ??    Initial version
+12/01/95  CP    Changed get_riscosname to take an entry as a parameter
+13/01/95  CP	Changed do_cat, read_dir_entries, set_nfs_access
+	  	& do_ex_in_directory to use Get_NFS_Directory(...).
+	  	Changed get_riscosname to take a char * as argument for name.
+7/2/95    CP	Added contents listing
+13/2/95   CP	Changed nature of showcalls to use a pipe
+23/2/95   KSR   Activated FSEntry_Func_Reason_BootFilingSystem via nfs_boot()
+****************************************************************************/
+#ifndef ___NFS_NFS_H
+#include "NFS.h"
+#endif
+
+#include "enumdir.h"
+
+#ifdef SHOWCALLS
+extern FILE *pipe_debug;
+#endif
+
+/*
+	Entry point for FSEntry_Func 0 & 1
+
+        Set one of the directory roots
+
+        This sets the directory point after checking the path for validity. It
+        handles the previously selected directory if it is the current directory
+        being changed.
+
+        Expects
+        *  pointer to directory point being set
+        *  new path for directory point
+        returns
+        *  error if fails
+*/
+_kernel_oserror *set_directory
+(
+        DirectoryPoint *dir, /* current directory */
+        char *path,    	     /* path to change to */
+        char *default_path   /* default */
+)
+{
+        _kernel_oserror *err;
+        char *path_to_leaf;
+        char *leaf_position;
+        nfs_file_descriptor ndesc;
+
+        /*
+                Use default if path not given
+        */
+        if ( !path[0] )
+                path = default_path;
+
+        /*
+                Find the leaf
+        */
+        err = find_directory_leaf( path, &ndesc, &path_to_leaf, &leaf_position, &current_directory );
+
+        if ( err )
+                return err;
+
+        free( ndesc.desc.name );
+
+        /*
+                If found, check if we're changing the current directory. If
+                it is current directory being changed, then set previous directory
+        */
+        if ( dir == &current_directory )
+        {
+                if ( previous_directory.full_path )
+                        free( previous_directory.full_path );
+
+                previous_directory = current_directory;
+
+                current_directory.full_path = NULL;
+        }
+
+        /*
+                Change the directory point
+        */
+        dir->mount_point = ndesc.mp;
+
+        if ( dir->full_path )
+                free( dir->full_path );
+
+        dir->full_path = path_to_leaf;
+
+        return NULL;
+}
+
+static void eval_dir_strings
+(
+        char **str1,
+        char **str2,
+        DirectoryPoint *dir
+)
+{
+        if ( dir->mount_point == NULL )
+        {
+                *str1 = DirectoryUnsetString;
+                *str2 = "";
+        }
+        else
+        {
+                *str1 = strrchr( dir->full_path, FileChar_DirectorySeparator );
+
+                if ( *str1 == NULL )
+                {
+                        *str1 = FileString_Root;
+                }
+                else
+                {
+                        (*str1)++;
+                }
+
+                *str2 = dir->mount_point->mount_point_name;
+        }
+}
+
+/*
+        Print the banner for directory/examine functions
+
+        Expects
+        *  leaf name for banner
+        *  mount name for banner
+        returns
+        *  error if fails (only lightweight_printf s can fail, and this should be rare)
+*/
+static _kernel_oserror *print_listing_header
+(
+        char *leaf,
+        char *mount_point_name
+)
+{
+        _kernel_oserror *err;
+        char *str1;
+        char *str2;
+
+        /*
+                Leafname and mount point for listing
+        */
+        err = lightweight_printf( "%0Js10. Mount %1Js10.", leaf[0]?leaf:FileString_Root, mount_point_name );
+
+        /*
+                User root directory
+        */
+        if ( !err )
+        {
+                eval_dir_strings( &str1, &str2, &user_root_directory );
+
+                err = lightweight_printf( " URD %0Js10. %1Js10.", str1, str2 );
+        }
+
+        /*
+                Current directory
+        */
+        if ( !err )
+        {
+                eval_dir_strings( &str1, &str2, &current_directory );
+
+                err = lightweight_printf( " Dir. %0Js10. %1Js10.", str1, str2 );
+        }
+
+        /*
+                Library directory
+        */
+        if ( !err )
+        {
+                eval_dir_strings( &str1, &str2, &library_directory );
+
+                err = lightweight_printf( " Lib. %0Js10. %1Js10.\n\n", str1, str2 );
+        }
+
+        return err;
+}
+
+/*
+        Return the number of characters across the screen. If during the
+        calculation of this an error occurs, then a suitable guess will
+        be returned (80).
+*/
+static int characters_across_screen
+(
+        void
+)
+{
+        _kernel_oserror *err;
+        _kernel_swi_regs r;
+        int line_length;
+
+        r.r[0] = -1;
+        r.r[1] = 6;     /* line length */
+        err = _kernel_swi( XOS_Bit | OS_ReadModeVariable, &r, &r );
+
+        if ( err )
+                return 80;
+
+        line_length = r.r[2];
+
+        r.r[1] = 10;    /* bytes per character */
+        err = _kernel_swi( XOS_Bit | OS_ReadModeVariable, &r, &r );
+
+        if ( err )
+                return 80;
+
+        return line_length >> r.r[2];
+}
+
+static _kernel_oserror *get_riscosname( char *name, char **riscosname, nfs_file_descriptor *ndesc )
+{
+        fattr *nattr;
+        _kernel_oserror *err;
+        /*
+                Get nfs name of object
+        */
+ 	ndesc->desc.name = name;
+
+        /*
+                         get attributes
+        */
+        err = nfs_lookup( &ndesc->file, &nattr, ndesc->mp, &ndesc->dir, ndesc->desc.name );
+        if ( err )
+                return err;
+        ndesc->desc.attr = *nattr;
+        /*
+                convert nfs name to riscos name
+        */
+        return nfsname_to_riscos_name( riscosname, ndesc->desc.name, ndesc );
+}
+
+#define CAT_COLUMN_WIDTH 15
+
+/***** do_cat *************************************************************
+
+Purpose : Catalogue the given path
+
+Parameters : pointer to path
+	     directory point
+
+Returns : NULL if OK, pointer to _kernel_oserror otherwise
+
+****************************************************************************/
+
+static _kernel_oserror *do_cat (char *path,
+                                DirectoryPoint *dirpoint)
+{
+        _kernel_oserror *err;
+        char *path_to_leaf;
+        char *leaf_position;
+        char *riscosname;
+        int screen_width = characters_across_screen();
+        int position_across_line;
+        YesNoAnswer at_end_of_name;
+        int rlen;
+        int spacing;
+        nfs_file_descriptor ndesc;
+        char *ThisFileName;
+
+        /*
+                Find it
+        */
+        err = find_directory_leaf( path, &ndesc, &path_to_leaf, &leaf_position, dirpoint );
+
+        if ( err )
+                return err;
+
+        free( ndesc.desc.name );
+
+        /*
+                Print the banner at the top of a catalogue
+        */
+        err = print_listing_header( leaf_position, ndesc.mp->mount_point_name );
+
+        /*
+                Don't need this any more
+        */
+        free( path_to_leaf );
+
+        if ( err )
+        {
+                return err;
+        }
+
+	/* initialise variables */
+
+        position_across_line = 0;
+        at_end_of_name = No;
+
+
+           /* Open the directory */
+        err = GetNFSDirEntry(ndesc.mp, ndesc.file, 0, &ThisFileName, NULL);
+
+        if ( err )
+           return err; /* something went wrong */
+
+#if DEBUGON
+printf("do_cat: directory opened.  First file name is %s\n", ThisFileName);
+#endif
+
+
+        /* Carry on while there's no error and there's more directory to
+           pull across */
+
+        while (ThisFileName != NULL)
+        {
+	   /* Go through the dir list */
+           err = get_riscosname( ThisFileName, &riscosname, &ndesc );
+           if ( err )
+              break;
+
+           rlen = strlen( riscosname );
+
+/*
+           Calculate spacing to next name:
+           Add a space after the last name (if there), and go up to next (CAT_COLUMN_WIDTH character) tab stop
+           Round down to the (CAT_COLUMN_WIDTH character) tab stop
+           find the difference between where we are and where we want to be
+*/
+           spacing = position_across_line + (at_end_of_name?1:0) + CAT_COLUMN_WIDTH - 1;
+           spacing -= spacing % CAT_COLUMN_WIDTH;
+           spacing -= position_across_line;
+
+/*
+           If following a name on this line and this name overflows the line
+           then start a new line.
+*/
+           if ( at_end_of_name && position_across_line + spacing + rlen > screen_width )
+           {
+               err = lightweight_printf( "\n" );
+               if ( err )
+                  break;
+
+               at_end_of_name = No;
+               position_across_line = 0;
+               spacing = 0;
+           }
+
+           position_across_line += spacing + rlen;
+
+ /*
+           Space out to where we want to print the name
+ */
+           while( !err && spacing > 0 )
+           {
+              err = lightweight_printf( " " );
+              spacing--;
+           }
+
+           err = lightweight_printf( "%0s", riscosname );
+           at_end_of_name = Yes;
+
+/*
+           don't free nfsname because we don't own it
+*/
+           free( riscosname );
+
+           /* Get next file, don't check for cache freshness */
+
+           err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+           if(err)
+              return err;
+
+#if DEBUGON
+printf("do_cat: retrieved next file name - %s\n", ThisFileName);
+#endif
+
+        } /* endwhile (ThisFileName != NULL) */
+
+        /*
+                Don't want to be left half way across the screen!
+        */
+        if ( !err && at_end_of_name )
+                err = lightweight_printf( "\n" );
+
+        return err;
+
+}  /* endfunction do_cat */
+
+/*
+        Return the width that this object's examine would be on screen
+*/
+static _kernel_oserror *examine_width
+(
+        int *width,
+        nfs_file_descriptor *ndesc
+)
+{
+        _kernel_oserror *err;
+        char *riscosname;
+
+        /*
+                Get the leaf name.
+        */
+        err = nfsname_to_riscos_name( &riscosname, ndesc->desc.name, ndesc );
+        if ( err )
+                return err;
+
+        *width = strlen( riscosname );
+
+        if ( *width < 12 )
+                *width = 12;
+
+        /*        sp +Dwr/wr +directory +sp +hh:mm:ss +sp +dd-mmm-yyyy +sp +ssss Mbytes */
+        *width += 1  +6      +9         +1  +8        +1  +11          +1  +11;
+
+        free( riscosname );
+
+        return NULL;
+}
+
+/*
+        Examine a given object.
+*/
+#define NormalExWidth 63
+static _kernel_oserror *examine_object
+(
+        nfs_file_descriptor *ndesc
+)
+{
+        _kernel_oserror *err;
+        RISCOSAttributes rattr;
+        int cnt;
+        _kernel_swi_regs r;
+        char ex_buffer[ EX_BufferLen ];
+        YesNoAnswer object_is_dated;
+        char *riscosname;
+
+        /*
+                Translate the object's attributes
+        */
+        nfs_to_riscos_attributes( &rattr, &ndesc->desc );
+
+        /*
+                Get the leaf name.
+        */
+        err = nfsname_to_riscos_name( &riscosname, ndesc->desc.name, ndesc );
+
+        if ( err )
+                return err;
+
+        /*
+                Output the leafname
+        */
+        err = lightweight_printf( "%0Js12. ", riscosname );
+
+        free( riscosname );
+
+        if ( err )
+                return err;
+
+        /*
+                Output the type/access attributes
+        */
+
+        cnt = 0;
+
+        if ( rattr.type == FileType_Directory )
+        {
+                err = lightweight_printf( "D" );
+                cnt++;
+        }
+        else
+        {
+                if ( rattr.access & FileAccess_OwnerRead )
+                {
+                        err = lightweight_printf( "R" );
+                        cnt++;
+                }
+                if ( !err && (rattr.access & FileAccess_OwnerWrite) )
+                {
+                        err = lightweight_printf( "W" );
+                        cnt++;
+                }
+                if ( !err && (rattr.access & (FileAccess_PublicRead | FileAccess_PublicWrite)) )
+                {
+                        err = lightweight_printf( "/" );
+                        cnt++;
+                }
+                if ( !err && (rattr.access & FileAccess_PublicRead) )
+                {
+                        err = lightweight_printf( "r" );
+                        cnt++;
+                }
+                if ( !err && (rattr.access & FileAccess_PublicWrite) )
+                {
+                        err = lightweight_printf( "w" );
+                        cnt++;
+                }
+        }
+
+        /*
+                Justify to 6 characters total
+        */
+        for ( ;
+                !err && cnt < 6;
+                cnt++ )
+        {
+                err = lightweight_printf( " " );
+        }
+
+        if ( err )
+                return err;
+
+        /*
+                Knowing that nothing is untyped, we can output type, date and
+                time.
+        */
+
+        if ( rattr.type == FileType_Directory )
+        {
+                err = lightweight_printf( "Directory " );
+                object_is_dated = Yes;
+        }
+        else
+        {
+                if ( ( rattr.load_address & 0xfff00000 ) == 0xfff00000 )
+                {
+                        /*
+                                The type of the file
+                        */
+                        r.r[0] = FSControl_ConvertFileTypeToText;
+                        r.r[2] = (rattr.load_address >> FileType_Shift) & FileType_Mask;
+
+                        err = _kernel_swi( XOS_Bit | OS_FSControl, &r, &r );
+
+                        if ( err )
+                                return err;
+
+                        r.r[4] = 0;
+                        err = lightweight_printf( "%0Js9. ", &r.r[2] );
+
+                        object_is_dated = Yes;
+                }
+                else
+                {
+                        object_is_dated = No;
+                }
+        }
+
+        if ( err )
+                return err;
+
+
+        if ( object_is_dated )
+        {
+                /*
+                        The date and time stamp of the file
+                */
+                r.r[0] = (int)&rattr.execute_address;
+                r.r[1] = (int)ex_buffer;
+                r.r[2] = EX_BufferLen;
+                r.r[3] = (int)EX_DateFormat;
+
+                err = _kernel_swi( XOS_Bit | OS_ConvertDateAndTime, &r, &r );
+
+                if ( err )
+                        return err;
+
+                err = lightweight_printf( "%0s ", ex_buffer );
+        }
+        else
+        {
+                err = lightweight_printf( "             %0Y %1Y ", rattr.load_address, rattr.execute_address );
+        }
+
+        if ( err )
+                return err;
+
+        /*
+                The size of the file
+        */
+
+        r.r[0] = rattr.file_length;
+        r.r[1] = (int)ex_buffer;
+        r.r[2] = EX_BufferLen;
+
+        err = _kernel_swi( XOS_Bit | OS_ConvertFixedFileSize, &r, &r );
+
+        if ( err )
+                return err;
+
+        return lightweight_printf( "%0s", ex_buffer );
+}
+
+
+/*********** do_ex_in_directory *********************************************
+
+Purpose : ex the given path
+
+Inputs :
+
+Returns :
+
+****************************************************************************/
+#define ExColumnWidth (NormalExWidth + 1)
+static _kernel_oserror *do_ex_in_directory(nfs_file_descriptor *ndesc,
+        	       			   char *dirtitle,
+        				   char *whichfiles)
+{
+        _kernel_oserror *err;
+        char *riscosname;
+        int screen_width = characters_across_screen();
+        int position_across_line;
+        int rlen;
+        int spacing;
+        YesNoAnswer is_a_mismatch;
+        YesNoAnswer exed_one = No;
+        YesNoAnswer at_end_of_ex;
+        char *ThisFileName;
+
+        /*
+                Print the banner at the top of a catalogue
+        */
+        if ( dirtitle )
+        {
+                err = print_listing_header( dirtitle, ndesc->mp->mount_point_name );
+
+                if ( err )
+                {
+                        return err;
+                }
+        }
+
+	/* initialise variables */
+        position_across_line = 0;
+        at_end_of_ex = No;
+
+
+           /* Open the directory */
+        err = GetNFSDirEntry(ndesc->mp, ndesc->file, 0, &ThisFileName, NULL);
+
+        if ( err )
+           return err; /* something went wrong */
+
+#if DEBUGON
+printf("do_ex_in_directory: directory opened.  First file name is %s\n", ThisFileName);
+#endif
+
+        /* Carry on while there's no error and there's more directory
+                items to pull across */
+
+        while (ThisFileName != NULL)
+        {
+           err = get_riscosname( ThisFileName, &riscosname, ndesc );
+           if ( err )
+              continue;
+
+           is_a_mismatch = caseless_wildncmp( whichfiles, riscosname, max_riscos_name_length );
+
+           free( riscosname );
+
+           if ( !is_a_mismatch )
+           {
+              err = examine_width( &rlen, ndesc );
+              if ( err )
+                 continue;
+
+              spacing = position_across_line + (at_end_of_ex?1:0) + ExColumnWidth - 1;
+              spacing -= spacing % ExColumnWidth;
+              spacing -= position_across_line;
+
+              if ( at_end_of_ex && position_across_line + spacing + rlen > screen_width )
+              {
+                 err = lightweight_printf( "\n" );
+                 if ( err )
+                    continue;
+
+                 at_end_of_ex = No;
+                 position_across_line = 0;
+                 spacing = 0;
+              }
+
+              position_across_line += spacing + rlen;
+
+/*
+             Space out to where we want to print the name
+*/
+              while( !err && spacing > 0 )
+              {
+                 err = lightweight_printf( " " );
+                 spacing--;
+              }
+
+              err = nfs_lookup_extended( ndesc );
+              if ( err )
+                 continue;
+
+              err = examine_object( ndesc );
+
+/*
+             Don't free ndesc.desc.name as we don't own it
+*/
+
+              exed_one = Yes;
+              at_end_of_ex = Yes;
+           } /* endif (!is_a_mismatch) */
+
+            /* Get next file, don't check for cache freshness */
+           err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+           if(err)
+              return err;
+
+#if DEBUGON
+printf("do_ex_in_directory: next file name is %s\n", ThisFileName);
+#endif
+
+        } /* endwhile ( ThisFileName != NULL ) */
+
+        /*
+                Don't want to be left half way across the screen!
+        */
+        if ( !err && exed_one )
+                err = lightweight_printf( "\n" );
+
+        if ( !err && !exed_one && dirtitle == NULL )
+                err = &mb_nfserr_noent;
+
+        return err;
+}
+
+static _kernel_oserror *do_ex
+(
+        char *path,
+        DirectoryPoint *dirpoint
+)
+{
+        _kernel_oserror *err;
+        nfs_file_descriptor ndesc;
+        char *path_to_leaf;
+        char *leaf_position;
+
+        /*
+                Find it
+        */
+        err = find_directory_leaf( path, &ndesc, &path_to_leaf, &leaf_position, dirpoint );
+
+        if ( err )
+                return err;
+
+        free( ndesc.desc.name );
+
+        ndesc.dir = ndesc.file;
+
+        err = do_ex_in_directory( &ndesc, leaf_position, FileString_MatchAny );
+
+        free( path_to_leaf );
+
+        return err;
+}
+
+
+/*
+        *EX a peaticular file. This is equivalent of *FileInfo.
+*/
+static _kernel_oserror *do_ex_objects
+(
+        char *path
+)
+{
+        _kernel_oserror *err;
+        nfs_file_descriptor ndesc;
+        char *path_to_leaf;
+        char *leaf_position;
+
+        err = find_dir_for_leaf( path, &ndesc, &path_to_leaf, &leaf_position, &current_directory );
+
+        if ( err )
+                return err;
+
+        err = do_ex_in_directory( &ndesc, NULL, leaf_position );
+
+        free( path_to_leaf );
+
+        return err;
+}
+
+/*
+        Do a rename
+*/
+static _kernel_oserror *nfs_riscos_rename
+(
+        char *from,
+        char *to,
+        YesNoAnswer *invalid
+)
+{
+        _kernel_oserror *err;
+        char *path_from;
+        char *leaf_from;
+        char *path_to;
+        char *leaf_to;
+        RISCOSAttributes rattr;
+        char *to_name;
+        nfs_file_descriptor from_ndesc;
+        nfs_file_descriptor to_ndesc;
+
+
+        /*
+                Find what we're renaming from.
+        */
+        err = find_leaf( from, &from_ndesc, &path_from, &leaf_from, &current_directory );
+
+        if ( err )
+                return err;
+
+        free( path_from );
+
+        /*
+                Find dir we're renaming to.
+        */
+        err = find_dir_for_leaf( to, &to_ndesc, &path_to, &leaf_to, &current_directory );
+
+        if ( err )
+                return err;
+
+        /*
+                Is it on the same mount point?
+        */
+        if ( from_ndesc.mp != to_ndesc.mp )
+        {
+                *invalid = Yes;
+                free( path_to );
+                return NULL;
+        }
+
+        /*
+                Check whether we're renaming onto something
+        */
+        err = find_object_in_directory( &to_ndesc, leaf_to );
+
+        if ( !err && (memcmp( &to_ndesc.dir, &from_ndesc.dir, sizeof( to_ndesc.dir )) != 0 ||
+                      strcmp( from_ndesc.desc.name, to_ndesc.desc.name ) != 0) )
+        {
+                /*
+                        Destination exists and isn't the source (different directory or different name)
+                */
+                free( path_to );
+                free( from_ndesc.desc.name );
+                free( to_ndesc.desc.name );
+                *invalid = Yes;
+                return NULL;
+        }
+        else if ( err && err != &mb_nfserr_noent )
+        {
+                /*
+                        Error looking for destination
+                */
+                free( path_to );
+                free( from_ndesc.desc.name );
+                return err;
+        }
+
+        /*
+                Construct the destination filename
+        */
+        nfs_to_riscos_attributes( &rattr, &from_ndesc.desc );
+
+        err = riscos_name_to_nfsname( &to_name, leaf_to, &rattr );
+
+        free( path_to );
+
+        if ( err )
+        {
+                free( from_ndesc.desc.name );
+                return err;
+        }
+
+        /*
+                Do the rename.
+        */
+        err = nfs_rename_safely( to_ndesc.mp, &to_ndesc.dir, to_name, &from_ndesc.dir, from_ndesc.desc.name );
+
+        free( from_ndesc.desc.name );
+        free( to_name );
+
+        *invalid = No;
+
+        return err;
+}
+
+/*
+        At destination put:
+        <strlen source><source without nul terminator><byte>
+        Useful for some fscontrol calls.
+*/
+static void place_string_with_byte
+(
+        char *destination,
+        char *string,
+        char byte
+)
+{
+        *destination = strlen( string );
+        strcpy( destination + 1, string );
+        destination[ *destination + 1 ] = byte;
+}
+
+/*
+        Evaluate the ownership for the given directory then save that
+        and the directory leaf name to the given destination in
+        FSEntry_Func 12 and 13 format.
+*/
+static _kernel_oserror *read_name_and_privilege_byte
+(
+        char *dest,
+        DirectoryPoint *dir
+)
+{
+        _kernel_oserror *err;
+        char *wstr;
+        char prot_byte;
+        char *full_path;
+        char *path_to_leaf;
+        char *leaf_position;
+        nfs_file_descriptor ndesc;
+
+        if ( dir->mount_point == NULL )
+        {
+                /*
+                        directory unset
+                */
+                wstr = DirectoryUnsetString;
+                prot_byte = '\0';
+        }
+        else
+        {
+                /*
+                        Find the leaf name
+                */
+                wstr = strrchr( dir->full_path, FileChar_DirectorySeparator );
+                if ( wstr == NULL )
+                {
+                        wstr = dir->full_path;
+                }
+
+                /*
+                        Get the protection for that directory
+                */
+                err = construct_full_path( &full_path, dir );
+
+                if ( err )
+                        return err;
+
+                err = find_directory_leaf( full_path, &ndesc, &path_to_leaf, &leaf_position, &current_directory );
+
+                if ( err )
+                {
+                        free( full_path );
+
+                        if ( err == &mb_nfserr_noent )
+                        {
+                                /*
+                                        Directory has been deleted - can't be the owner then.
+                                */
+                                err = NULL;
+                                prot_byte = 0xff;
+                        }
+                        else
+                        {
+                                return err;
+                        }
+                }
+                else
+                {
+                        /*
+                                Directory exists, so check uid for ownership
+                        */
+                        free( ndesc.desc.name );
+
+                        if ( ndesc.desc.attr.uid == ndesc.mp->user->uid )
+                        {
+                                prot_byte = 0x00;
+                        }
+                        else
+                        {
+                                prot_byte = 0xff;
+                        }
+
+                        free( full_path );
+                        free( path_to_leaf );
+                }
+        }
+
+        /*
+                Fill in the values
+        */
+        *dest = 0x00;
+
+        place_string_with_byte( dest+1, wstr, prot_byte );
+
+        return NULL;
+}
+
+/********** read_dir_entries ************************************************
+
+Purpose : Generic read directory entries to location routine.  Parameters
+	  seem to be closely related to those of OS_GBPB8 (SWI &0C).
+
+
+Inputs :  int whichinfo     controls which info is transfered.
+          char *dirname
+          char *dest        Where to put the data
+          int *nobjects     How many directory items to get
+          int *nexttoread   Next item on directory to get (0 => start at top)
+          int buffer_length Size (in bytes?) of buffer to store data
+
+
+Returns : NULL if OK, pointer to error if not.
+	  noobjects holds number of objects retrieved.
+	  nexttoread holds number of next item in directory, or -1 in the
+	  case of an overflow (eg asking for more entries than there are in
+	  the directory).
+	  dest holds the actual data requested.
+****************************************************************************/
+
+static _kernel_oserror *read_dir_entries(int  which_info,
+        	       			 char *dirname,
+        				 char *dest,
+        				 int  *nobjects,
+        				 int  *nexttoread,
+        				 int  buffer_length)
+{
+        _kernel_oserror *err;
+        char *path_to_leaf;
+        char *leaf_position;
+        int entry_count;
+        char *riscos_name;
+        RISCOSAttributes rattr;
+        nfs_file_descriptor ndesc;
+        nfs_file_descriptor ndescf;
+        char *odest;
+        char *ThisFileName;
+
+#if DEBUGON
+printf("read_dir_entries: parameters for call...\n");
+printf("whichinfo=%i name=%s notoread=%i nxttoread=%i bufferlength=%i\n", which_info, dirname, *nobjects, *nexttoread, buffer_length);
+#endif
+
+
+        err = find_directory_leaf( dirname, &ndesc, &path_to_leaf, &leaf_position, &current_directory );
+
+        if ( err )
+                return err;
+
+        free( ndesc.desc.name );
+        free( path_to_leaf );
+
+
+           /* Open the directory */
+
+#if DEBUGON
+printf("read_dir_entries: opening directory....");
+#endif
+        err = GetNFSDirEntry(ndesc.mp, ndesc.file, *nexttoread, &ThisFileName, NULL);
+
+        if ( err )
+           return err; /* something went wrong */
+
+#if DEBUGON
+printf("First file name is %s\n", ThisFileName);
+#endif
+
+
+	/* peThisEntry should now be pointing to the correct entry */
+
+        ndescf.mp = ndesc.mp;
+        ndescf.dir = ndesc.file;
+
+        entry_count = *nobjects;
+        *nobjects = 0;
+
+        /* While there is no error AND still need to get entries AND
+           there is buffer space AND HAVE NOT reached end of directory */
+
+        while( !err && (entry_count > 0) && (buffer_length > 0) && ThisFileName != NULL)
+        {
+          /*
+              Read the file name
+          */
+          err = get_riscosname( ThisFileName, &riscos_name, &ndescf );
+
+          if ( err )
+             return err;
+
+          /*
+              If we're getting some info too
+          */
+          if ( which_info )
+          {
+              /*
+                  Move dest to a word boundary
+              */
+              odest = dest;
+              dest = (char *)( ((unsigned)dest + 3) & ~3 );
+              buffer_length -= dest-odest;
+
+              /*
+                    get extended info for this file
+              */
+              err = nfs_lookup_extended( &ndescf );
+
+              if ( err )
+              {
+                  free( riscos_name );
+                  return err;
+              }
+
+              /*
+                   Convert the attributes to RISCOS form
+              */
+              nfs_to_riscos_attributes( &rattr, &ndescf.desc );
+
+              /*
+                   Transfer the attributes as flagged
+              */
+              if ( which_info & Read_LoadAddress )
+              {
+                 buffer_length -= 4;
+
+                 if ( buffer_length < 0 )
+                 {
+                     free( riscos_name );
+                     continue;
+                 }
+
+                 *(int *)dest = rattr.load_address;
+                 dest += sizeof( int );
+              }
+
+              if ( which_info & Read_ExecuteAddress )
+              {
+                  buffer_length -= 4;
+
+                  if ( buffer_length < 0 )
+                  {
+                     free( riscos_name );
+                     continue;
+                  }
+
+                  *(int *)dest = rattr.execute_address;
+                  dest += sizeof( int );
+              }
+
+              if ( which_info & Read_Length )
+              {
+                  buffer_length -= 4;
+
+                  if ( buffer_length < 0 )
+                  {
+                      free( riscos_name );
+                      continue;
+                  }
+
+                  *(int *)dest = rattr.file_length;
+                  dest += sizeof( int );
+              }
+
+              if ( which_info & Read_Attributes )
+              {
+                 buffer_length -= 4;
+
+                 if ( buffer_length < 0 )
+                 {
+                     free( riscos_name );
+                     continue;
+                 }
+
+                 *(int *)dest = rattr.access;
+                 dest += sizeof( int );
+              }
+
+              if ( which_info & Read_ObjectType )
+              {
+                   buffer_length -= 4;
+
+                   if ( buffer_length < 0 )
+                   {
+                      free( riscos_name );
+                      continue;
+                   }
+
+                   *(int *)dest = rattr.type;
+                   dest += sizeof( int );
+              }
+
+              if ( which_info & Read_SIN )
+              {
+                  buffer_length -= 4;
+
+                  if ( buffer_length < 0 )
+                  {
+                      free( riscos_name );
+                      continue;
+                  }
+
+                  *(int *)dest = 0;
+                  dest += sizeof( int );
+               }
+
+               if ( which_info & Read_DateTime )
+               {
+                   buffer_length -= 5;
+
+                   if ( buffer_length < 0 )
+                   {
+                       free( riscos_name );
+                       continue;
+                   }
+
+                   *(int *)dest = rattr.execute_address;
+                   dest += sizeof( int );
+                   *(char *)dest = rattr.load_address & 0xff;
+                   dest += sizeof( char );
+               }
+          } /* endif(whichinfo)  some attributes to copy over */
+
+          /*
+              copy the name across
+          */
+          buffer_length -= strlen( riscos_name ) + 1;
+
+          if ( buffer_length < 0 )
+          {
+              free( riscos_name );
+              continue;
+          }
+
+          strcpy( dest, riscos_name );
+
+          dest += strlen( riscos_name ) + 1;
+
+          free( riscos_name );
+
+          /*
+                  Finished one file's transfer, count this successful
+                  transfer and move on to the next.
+          */
+          (*nobjects)++;
+          (*nexttoread)++;
+          entry_count--;
+
+           /* Get next file, don't check for cache freshness */
+#if DEBUGON
+printf("read_dir_entries: getting next filename...");
+#endif
+           err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+           if(err)
+              return err;
+#if DEBUGON
+printf("it is %s\n", ThisFileName);
+#endif
+
+        } /* endwhile( !err && (entry_count > 0) && (buffer_length > 0) && ThisName != NULL)  */
+
+#if DEBUGON
+if(buffer_length < 0)
+   printf("read_dir_entries: exit reason no bufferspace left\n");
+#endif
+
+        if (ThisFileName == NULL  && (entry_count > 0))
+        {
+           	/* asked for too much */
+                *nexttoread = -1;
+        }
+
+        return err;
+}   /* endfunction read_dir_entries */
+
+/*********** set_nfs_access *************************************************
+
+Purpose : The gubbins of a *access command fscontrol
+
+Inputs :
+
+Returns :
+****************************************************************************/
+
+static _kernel_oserror *set_nfs_access(char *path,
+        	       		       char *access)
+{
+        int riscos_access = 0;
+        int setting_public;
+        int stop_reading_access;
+        nfs_file_descriptor ndesc;
+        char *path_to_leaf;
+        char *leaf_position;
+        _kernel_oserror *err = NULL;
+        char *riscosname;
+        int is_a_mismatch;
+        int accessed_one = No;
+	char *ThisFileName;
+
+        setting_public = No;
+        stop_reading_access = No;
+
+        while ( *access && !stop_reading_access )
+        {
+                switch( *access++ )
+                {
+                case SetAccessChar_Read_UC:
+                case SetAccessChar_Read_LC:
+                        if ( !setting_public )
+                                riscos_access |= FileAccess_OwnerRead;
+                        else
+                                riscos_access |= FileAccess_PublicRead;
+                        break;
+
+                case SetAccessChar_Write_UC:
+                case SetAccessChar_Write_LC:
+                        if ( !setting_public )
+                                riscos_access |= FileAccess_OwnerWrite;
+                        else
+                                riscos_access |= FileAccess_PublicWrite;
+                        break;
+
+                case SetAccessChar_Lock_UC:
+                case SetAccessChar_Lock_LC:
+                        riscos_access |= FileAccess_Locked;
+                        break;
+
+                case SetAccessChar_Public:
+                        if ( !setting_public )
+                                setting_public = Yes;
+                        else
+                                stop_reading_access = Yes;
+                        break;
+
+                default:
+                        if ( !iscntrl( access[-1] ) && access[-1] != ' ' )
+                                err = &mb_bad_access_string;
+                        stop_reading_access = Yes;
+                        break;
+                }
+        }
+
+        if ( err )
+                return err;
+
+        err = find_dir_for_leaf( path, &ndesc, &path_to_leaf, &leaf_position, &current_directory );
+
+        if ( err )
+                return err;
+
+
+
+
+           /* Open the directory */
+        err = GetNFSDirEntry(ndesc.mp, ndesc.file, 0, &ThisFileName, NULL);
+
+        if ( err )
+           return err; /* something went wrong */
+
+#if DEBUGON
+printf("set_nfs_access: directory opened.  First file name is %s\n", ThisFileName);
+#endif
+
+
+        /* Carry on while there's no error and there's more directory to
+           pull across */
+
+        while (ThisFileName != NULL)
+        {
+           err = get_riscosname(ThisFileName, &riscosname, &ndesc );
+           if ( err )
+              break;
+
+           is_a_mismatch = caseless_wildncmp( leaf_position, riscosname, max_riscos_name_length );
+
+           free( riscosname );
+
+           if ( !is_a_mismatch )
+           {
+              err = nfs_lookup_extended( &ndesc );
+
+              if ( err )
+                      continue;
+
+              err = change_info_given_file( &ndesc, NULL, NULL, &riscos_access );
+
+              accessed_one = Yes;
+           }
+
+           /* Get next file, don't check for cache freshness */
+           err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+           if(err)
+              return err;
+
+#if DEBUGON
+printf("set_nfs_access: next file name is %s\n", ThisFileName);
+#endif
+
+        } /* endwhile (ThisFileName != NULL) */
+
+        if ( !err && !accessed_one )
+        {
+                err = &mb_nfserr_noent;
+        }
+
+        free( path_to_leaf );
+
+        return err;
+}   /* endfunction set_nfs_access */
+
+
+
+
+_kernel_oserror *fsentry_func
+(
+        FSEntry_Func_Parameter *parm
+)
+{
+        _kernel_oserror *err = NULL;
+        char *wstr;
+
+        hourglass_on();
+
+#ifdef SHOWCALLS
+        fprintf(pipe_debug,
+                "FSEntry_Func( %d )\n",
+                parm->reason );
+	fflush(pipe_debug);
+#endif
+
+        if ( parm->special_field_1 )
+        {
+                err = &mb_bad_op_on_spool;
+        }
+
+        if ( !err )
+        {
+                switch ( parm->reason )
+                {
+/* FSEntry_Func0 */
+                case FSEntry_Func_Reason_SetCurrentDirectory:
+                        err = set_directory( &current_directory, parm->first_parameter.name_1, FileString_URD );
+                        break;
+
+/* FSEntry_Func1 */
+                case FSEntry_Func_Reason_SetLibraryDirectory:
+                        err = set_directory( &library_directory, parm->first_parameter.name_1, FileString_Root );
+                        break;
+
+/* FSEntry_Func2 */
+                case FSEntry_Func_Reason_CatalogueDirectory:
+                        err = do_cat( parm->first_parameter.name_1, &current_directory );
+                        break;
+
+/* FSEntry_Func3 */
+                case FSEntry_Func_Reason_ExamineCurrentDirectory:
+                        err = do_ex( parm->first_parameter.name_1, &current_directory );
+                        break;
+
+/* FSEntry_Func4 */
+                case FSEntry_Func_Reason_CatalogueLibraryDirectory:
+                        err = do_cat( parm->first_parameter.name_1, &library_directory );
+                        break;
+
+/* FSEntry_Func5 */
+                case FSEntry_Func_Reason_ExamineLibraryDirectory:
+                        err = do_ex( parm->first_parameter.name_1, &library_directory );
+                        break;
+
+/* FSEntry_Func6 */
+                case FSEntry_Func_Reason_ExamineObjects:
+                        err = do_ex_objects( parm->first_parameter.name_1 );
+                        break;
+
+/* FSEntry_Func7 */
+                case FSEntry_Func_Reason_SetFilingSystemOptions:
+                        err = &mb_no_opts_for_nfs;
+                        break;
+
+/* FSEntry_Func8 */
+                case FSEntry_Func_Reason_RenameObject:
+                        if ( parm->special_field_2 && parm->special_field_2[0] )
+                        {
+                                err = &mb_bad_op_on_spool;
+                        }
+                        else
+                        {
+                                err = nfs_riscos_rename( parm->first_parameter.name_1, parm->second_parameter.name_2, &parm->first_parameter.rename_invalid );
+                        }
+                        break;
+
+/* FSEntry_Func9 */
+                case FSEntry_Func_Reason_AccessObjects:
+                        err = set_nfs_access( parm->first_parameter.name_1, parm->second_parameter.access_string );
+                        break;
+
+/* FSEntry_Func10 */
+                case FSEntry_Func_Reason_BootFilingSystem:
+                        err = nfs_boot( );
+                        break;
+
+/* FSEntry_Func11 */
+                case FSEntry_Func_Reason_ReadNameAndBootOptionOfDisc:
+                        if ( current_directory.mount_point == NULL )
+                        {
+                                wstr = DirectoryUnsetString;
+                        }
+                        else
+                        {
+                                wstr = current_directory.mount_point->mount_point_name;
+                        }
+
+                        place_string_with_byte( parm->second_parameter.destination_address, wstr, 0 );
+
+                        err = NULL;
+                        break;
+
+/* FSEntry_Func12 */
+                case FSEntry_Func_Reason_ReadCurrentDirectoryNameAndPrivilegeByte:
+                        err = read_name_and_privilege_byte( parm->second_parameter.destination_address, &current_directory );
+                        break;
+
+/* FSEntry_Func13 */
+                case FSEntry_Func_Reason_ReadLibraryDirectoryNameAndPrivilegeByte:
+                        err = read_name_and_privilege_byte( parm->second_parameter.destination_address, &library_directory );
+                        break;
+
+/* FSEntry_Func14 */
+                case FSEntry_Func_Reason_ReadDirectoryEntries:
+                        err = read_dir_entries(
+                                0,
+                                parm->first_parameter.name_1,
+                                parm->second_parameter.destination_address,
+                                &parm->third_parameter.read_number,
+                                &parm->read_offset,
+                                parm->buffer_length );
+                        break;
+
+/* FSEntry_Func15 */
+                case FSEntry_Func_Reason_ReadDirectoriesAndInformation:
+                        err = read_dir_entries(
+                                Read_LoadAddress | Read_ExecuteAddress | Read_Length |
+                                        Read_Attributes | Read_ObjectType,
+                                parm->first_parameter.name_1,
+                                parm->second_parameter.destination_address,
+                                &parm->third_parameter.read_number,
+                                &parm->read_offset,
+                                parm->buffer_length );
+                        break;
+
+/* FSEntry_Func16 */
+                case FSEntry_Func_Reason_ShutDown:
+                        err = nfs_dismount_all();
+                        if ( !err )
+                                err = process_nfsname( User_Nobody, "" );
+                        break;
+
+/* FSEntry_Func17 */
+                case FSEntry_Func_Reason_PrintStartUpBanner:
+                        err = lightweight_printf( "Acorn RISC OS NFS client\n" );
+                        break;
+
+                case FSEntry_Func_Reason_SetDirectoryContexts:
+                        err = &mb_func18_not_supported;
+                        break;
+
+/* FSEntry_Func18 */
+                case FSEntry_Func_Reason_ReadDirectoryEntriesAndInformation:
+                        err = read_dir_entries(
+                                Read_LoadAddress | Read_ExecuteAddress | Read_Length |
+                                        Read_Attributes | Read_ObjectType |
+                                        Read_SIN | Read_DateTime,
+                                parm->first_parameter.name_1,
+                                parm->second_parameter.destination_address,
+                                &parm->third_parameter.read_number,
+                                &parm->read_offset,
+                                parm->buffer_length );
+                        break;
+
+/* FSEntry_Func19 */
+                case FSEntry_Func_Reason_OutputFullInformationOnObjects:
+                        err = &mb_func20_not_supported;
+                        break;
+
+                default:
+                        return &mb_nfserr_BadParameters;
+                        break;
+                }
+        }
+
+        hourglass_off();
+
+        return err;
+}

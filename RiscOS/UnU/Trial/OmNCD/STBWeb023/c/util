@@ -1,0 +1,726 @@
+/* -*-c-*- */
+
+/*
+ * 21/3/96: SJM: added wait_for_release
+ * 26/3/96: SJM: added parse_http_header
+ * 23/4/96: SJM: merged path_is_directory() and file_type() changes
+ */
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <ctype.h>
+
+#include "memwatch.h"
+
+#include "os.h"
+#include "swis.h"
+#include "filetypes.h"
+#include "config.h"
+#include "flex.h"
+#include "kernel.h"
+
+#include "util.h"
+
+#define MAPPING_FILE	"<Inet$MimeMappings>"
+#define MAX_LINE	256
+
+extern int strcasecomp(const char *s1, const char *s2);
+
+/* util.c */
+
+/* pmatch2 always does a case sensitive match and calls itself recursively */
+int pmatch2(char *s, char *p)
+{
+    char *q, *r;
+    int len;
+    char t;
+
+    /* Spot the trivial */
+    if (*s == 0 && *p == 0)
+	return 1;
+
+    q = strpbrk(p, "*?");
+
+    /* No wild cards?  Return whether we match */
+    if (q == NULL)
+	return (strcmp(s,p) == 0);
+
+    /* Some before the wild card?  Give up now if that does not match */
+    if (q != p && strncmp(s,p, (q-p)) != 0)
+	return 0;
+
+    /* Move up to the wild card */
+    s += (q-p);
+    p = q;
+
+    /* Strip off ant question marks */
+    while (*p == '?')
+    {
+	/* A question mark does not match an empty string */
+	if (*s == 0)
+	    return 0;
+	/* Skip the next letter */
+	s++;
+	p++;
+    }
+
+    /* If we are at the end off the patten, it ok if we are at the end of the srting to */
+    if (*p == 0)
+	return (*s == 0);
+
+    /* We are not on a question mark, if we are not on an asterisk just call again */
+    if (*p != '*')
+	return pmatch2(s,p);
+
+    /* We are now on an asterisk in the patern */
+    /* Find out what is after the asterisk */
+    q = p+1;
+
+    /* Ignore strings of wild cards */
+    while (*q == '*' || *q == '?')
+    {
+	/* except that ever question mark must tack up a character at some stage */
+	if (*q == '?')
+	{
+	    if (*s == 0)
+		return 0;
+	    else
+		s++;
+	}
+	q++;
+    }
+
+    /* If there is nothing after the asterisk the tail must match */
+    if (*q == 0)
+	return 1;
+
+    /* Check for any more wide cards down the line */
+    r = strpbrk(q, "*?");
+
+    /* Work out how much we look for */
+    if (r == NULL)
+	len = strlen(q);
+    else
+	len = (r-q);
+
+    /* Look for matches of the next stretch */
+    do {
+	t = q[len];
+	q[len] = 0;
+	r = strstr(s, q);
+	q[len] = t;
+
+	if (r)
+	{
+	    /* If we match the stretch... */
+	    /* We know the head matches, so we can skip that */
+	    if (pmatch2(r + len, q + len))
+		/* A recusive match might work */
+		return 1;
+	    else
+		/* Otherwise skip this match and try again */
+		s = r+1;
+	}
+	else
+	{
+	    /* If we can't match the stretch then we fail */
+	    return 0;
+	}
+	/* Keep going as long as there is something to look for a match in */
+    } while (*s);
+
+    return 0;
+}
+
+int pattern_match(char *s, char *pat, int cs)
+{
+    char *ss, *pp;
+    char *p;
+    int match = 1;
+
+    ss = strdup(s);
+    pp = strdup(pat);
+
+    if (ss == NULL || pp == NULL)
+	goto done;
+
+    if (cs == 0)
+    {
+	for(p = ss; *p; p++)
+	    *p = toupper(*p);
+
+	for(p = pp; *p; p++)
+	    *p = toupper(*p);
+    }
+
+    match = pmatch2(ss, pp);
+
+ done:
+    mm_free(ss);
+    mm_free(pp);
+    return match;
+}
+
+
+char *strdup(const char *s)
+{
+    char *ss;
+
+    if (s == NULL)
+	return NULL;
+
+    ss = mm_malloc(strlen(s)+1);
+    if (ss)
+	strcpy(ss, s);
+
+    return ss;
+}
+
+char *strndup(const char *s, int maxlen)
+{
+    char *s1 = NULL;
+    if (s)
+    {
+        const char *end = memchr(s, 0, maxlen);
+        int len = end ? end - s : maxlen;
+        s1 = mm_malloc(len + 1);
+        if (s1)
+        {
+            memcpy(s1, s, len);
+            s1[len] = '\0';
+        }
+    }
+    return s1;
+}
+
+void strncpysafe(char *s1, char *s2, int n)
+{
+    strncpy(s1, s2, n-1);
+
+    s1[n-1] = 0;
+}
+
+void strlencat(char *s1, char *s2, int len)
+{
+    int len2;
+
+    len2 = len - strlen(s1) - 1;
+
+    if (len2 > 1)
+    {
+	strncat(s1, s2, len2);
+	s1[len-1] = 0;
+    }
+}
+
+unsigned int string_hash(char *s)
+{
+    unsigned int h;
+
+    h = 0;
+
+    while (*s)
+    {
+	h = (h << 13) | (h >> 19);
+
+	h ^= *s++;
+    }
+
+    return h;
+}
+
+int suffix_to_file_type(char *suffix)
+{
+    FILE *mf;
+    char line[MAX_LINE];
+    int ft = -1;
+
+    mf = fopen(MAPPING_FILE, "r");
+
+    if (mf == NULL)
+	return ft;
+
+    while (!feof(mf))
+    {
+	char *p;
+	char *mmaj, *mmin, *roft, *rofthex, *item;
+
+	if (fgets(line, MAX_LINE, mf) == NULL)
+	    break;
+
+	p = line;
+	while (isspace(*p))
+	    p++;
+
+	if (*p == '#')
+	    continue;
+
+	mmaj = strtok(p, "/");
+	mmin = strtok(NULL, " \t");
+	roft = strtok(NULL, " \t\n");
+	rofthex = strtok(NULL, " \t\n");
+
+	if (mmaj == NULL || mmin == NULL || roft == NULL || rofthex == NULL || roft[0] == '*')
+	    continue;
+
+	do
+	{
+	    item = strtok(NULL, " \t\n");
+	    if (item)
+	    {
+		if (item[0] == '.' || item[0] == '/')
+		    item++;
+
+		if (strcasecomp(suffix, item) == 0)
+		    break;	/* From the DO loop */
+	    }
+	} while (item);
+
+	if (item)
+	{
+	    os_regset r;
+	    os_error *ep;
+
+	    r.r[0] = 31;
+	    r.r[1] = (int) roft;
+
+	    ep = os_swix(OS_FSControl, &r);
+
+	    if (ep)
+	    {
+		r.r[0] = 31;
+		r.r[1] = (int) rofthex;
+
+		ep = os_swix(OS_FSControl, &r);
+	    }
+
+	    if (ep == NULL)
+	    {
+		ft = r.r[2];
+		break;		/* From while(!feof()) */
+	    }
+	}
+    }
+
+    fclose(mf);
+
+    return ft;
+}
+
+int set_file_type(char *fname, int ft)
+{
+    os_filestr osf;
+
+    osf.action = 18;
+    osf.name = fname;
+    osf.loadaddr = ft;
+
+    return (os_file(&osf) == NULL);
+}
+
+int file_type(char *fname)
+{
+    os_filestr ofs;
+    os_error *ep;
+    int ft, ft2;
+    char *dot, *suffix;
+    os_regset r;
+
+    ofs.action = 5;
+    ofs.name= fname;
+
+    ep = os_file(&ofs);
+
+    if (ep)
+	return -1;
+
+    if (ofs.action == 2)
+	return FILETYPE_DIRECTORY;
+
+    if (ofs.action != 1 && ofs.action != 3)
+	return -1;
+
+    r.r[0] = 38;
+    r.r[1] = (int) ofs.name;
+    r.r[2] = ofs.loadaddr;
+    r.r[3] = ofs.execaddr;
+    r.r[4] = ofs.start;
+    r.r[5] = ofs.end;
+    r.r[6] = 1;
+
+    ep = os_swix(OS_FSControl, &r);
+    if (ep)
+	return -1;
+
+    ft = r.r[2];
+
+    if (ft != FILETYPE_TEXT && ft != FILETYPE_DATA && ft != FILETYPE_DOS)
+	return ft;
+
+    suffix = strrchr(fname, '/');
+    dot = strrchr(fname, '.');
+
+    if (suffix == NULL || dot > suffix || suffix[1] == 0)
+	return ft;
+
+    suffix++;
+
+    ft2 = suffix_to_file_type(suffix);
+
+    if (ft2 != -1)
+	ft = ft2;
+
+    return ft;
+}
+
+int path_is_directory(char *path)
+{
+    os_filestr ofs;
+    os_error *ep;
+
+    ofs.action = 5;
+    ofs.name = path;
+
+    ep = os_file(&ofs);
+
+    /* A directory if no error, not a file and not not found */
+    return ((ep == NULL) && (ofs.action != 1) && (ofs.action != 0));
+}
+
+char *reduce_file_name(char *fname, char *temp, char *pathname)
+{
+    char temp2[256];
+    int len;
+
+    if (os_swi6(XOS_Bit | OS_FSControl, 37, (int) pathname, (int) temp, 0, 0, 256) != NULL)
+	return NULL;
+
+    if (os_swi6(XOS_Bit | OS_FSControl, 37, (int) fname, (int) temp2, 0, 0, 256) != NULL)
+	return NULL;
+
+    len = strlen(temp);
+
+    if (strncmp(temp, temp2, len) == 0)
+    {
+	strcpy(temp, pathname);
+	strcat(temp, temp2+len+1);
+
+	return temp;
+    }
+
+    return NULL;
+}
+
+char encode_table[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+void uuencode(char *in, char *out, int out_len)
+{
+    int inbytes, outbytes;
+    int acc;
+    int shift;
+    unsigned char *ii;
+    char *oout = out;
+
+    ii = (unsigned char *) in;
+
+    inbytes = strlen(in);
+
+    outbytes = ((inbytes*4)+2)/3;
+    if (outbytes >= out_len)
+	outbytes = out_len - 1;
+
+    acc = shift = 0;
+
+    while (outbytes && inbytes)
+    {
+	acc += *(ii++) << (8 - shift);
+	inbytes--;
+	shift += 8;
+
+	while (shift >= 6)
+	{
+	    *(out++) = encode_table[acc >> 10];
+	    outbytes--;
+	    acc <<= 6;
+	    acc &= 0xffff;
+	    shift -= 6;
+	}
+    }
+
+    if (shift != 0)
+    {
+	    *(out++) = encode_table[acc >> 10];
+	    outbytes--;
+	    acc <<= 6;
+	    acc &= 0xffff;
+	    shift -= 6;
+    }
+
+    while ((out-oout)&3)
+    {
+	/* Pad with equals signs */
+	*out++ = '=';
+    }
+
+    *out = 0;
+}
+
+int pr2six[256]={
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,62,64,64,64,63,
+    52,53,54,55,56,57,58,59, 60,61,64,64,64,64,64,64,
+    64, 0, 1, 2, 3, 4, 5, 6,  7, 8, 9,10,11,12,13,14,
+    15,16,17,18,19,20,21,22, 23,24,25,64,64,64,64,64,
+    64,26,27,28,29,30,31,32, 33,34,35,36,37,38,39,40,
+    41,42,43,44,45,46,47,48, 49,50,51,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64, 64,64,64,64,64,64,64,64
+};
+
+void uudecode(char *bufcoded, unsigned char *bufplain, int outbufsize)
+{
+    int nbytesdecoded;
+    char *bufin = bufcoded;
+    unsigned char *bufout = bufplain;
+    int nprbytes;
+
+    /* Strip leading whitespace. */
+
+    while(*bufcoded==' ' || *bufcoded == '\t')
+	bufcoded++;
+
+    /* Figure out how many characters are in the input buffer.
+     * If this would decode into more bytes than would fit into
+     * the output buffer, adjust the number of input bytes downwards.
+     */
+    bufin = bufcoded;
+    while(pr2six[*(bufin++)] <= 63)
+	;
+    nprbytes = bufin - bufcoded - 1;
+    nbytesdecoded = ((nprbytes+3)/4) * 3;
+    if(nbytesdecoded > outbufsize)
+    {
+        nprbytes = (outbufsize*4)/3;
+    }
+
+    bufin = bufcoded;
+
+    while (nprbytes > 0)
+    {
+        *(bufout++) =
+            (unsigned char) (pr2six[*bufin] << 2 | pr2six[bufin[1]] >> 4);
+        *(bufout++) =
+            (unsigned char) (pr2six[bufin[1]] << 4 | pr2six[bufin[2]] >> 2);
+        *(bufout++) =
+            (unsigned char) (pr2six[bufin[2]] << 6 | pr2six[bufin[3]]);
+        bufin += 4;
+        nprbytes -= 4;
+    }
+
+    if(nprbytes & 03)
+    {
+        if(pr2six[bufin[-2]] > 63)
+            nbytesdecoded -= 2;
+        else
+            nbytesdecoded -= 1;
+    }
+    bufplain[nbytesdecoded] = '\0';
+}
+
+/**********************************************************************/
+void *rma_alloc(size_t n)
+{
+    os_regset r;
+
+    r.r[0] = 6;
+    r.r[3] = n;
+
+    if (os_swix(OS_Module, &r) != NULL)
+	return NULL;
+
+    return (void*) r.r[2];
+}
+
+void rma_free(void *p)
+{
+    os_regset r;
+
+    r.r[0] = 7;
+    r.r[2] = (int) p;
+
+    os_swix(OS_Module, &r);
+}
+
+/**********************************************************************/
+
+#ifndef STBWEB
+static int _no_budge_count = 0;
+static _kernel_ExtendProc *old_budge = 0;
+
+/* SJM */
+static int dont_budge(int n, void **a)
+{
+   return 0;
+}
+
+/* Increment the count of users that don't want the flex blocks to shift */
+void flexmem_noshift(void)
+{
+    if (_no_budge_count == 0)
+	old_budge = _kernel_register_slotextend(dont_budge);
+
+    _no_budge_count++;
+
+#if 0
+    fprintf(stderr, "flexmem_noshift called, count now %d\n", _no_budge_count);
+#endif
+}
+
+/* Decrement the count of users that don't want the flex blocks to shift */
+void flexmem_shift(void)
+{
+    if (_no_budge_count)
+	_no_budge_count--;
+
+    if (_no_budge_count == 0)
+	_kernel_register_slotextend(old_budge);
+
+#if 0
+    fprintf(stderr, "flexmem_shift called, count now %d\n", _no_budge_count);
+#endif
+}
+#endif
+
+/**********************************************************************/
+/*
+ * The bcmp and bzero functions are needed by various internet library
+ * calls.  I just pass them through to the memXXX versions.
+ */
+
+int bcmp(void *s1, void *s2, size_t s)
+{
+    return memcmp(s1, s2, s);
+}
+
+void bzero(void *p, int s)
+{
+    memset(p, 0, s);
+}
+
+/**********************************************************************/
+
+/*
+ * wait for all mouse buttons to be released or 'max' centiseconds to elapse
+ */
+
+void wait_for_release(int max)
+{
+    os_regset r;
+    int end;
+
+    os_swix(OS_ReadMonotonicTime, &r);
+    end = r.r[0] + max;
+
+    for (;;)
+    {
+        os_swix(OS_Mouse, &r);
+        if (r.r[2] == 0)
+            break;
+
+        os_swix(OS_ReadMonotonicTime, &r);
+        if (r.r[0] >= end)
+            break;
+    }
+}
+
+/* ---------------------------------------------------------------------------------------------------------- */
+
+static int find_tag(const char *tags[], const char *name)
+{
+    int i;
+
+    for (i = 0; tags[i]; i++)
+        if (strcasecomp(tags[i], name) == 0)
+            return i;
+
+    return -1;
+}
+
+/*
+ * This function takes a list of tags and a header string and writes out an
+ * array of values. The output values are pointers into the original data.
+
+ * A single value (no =) is initially assumed to be a flag and is matched
+ * against the tag list passed in. If found the output value is set to "".
+ * If not found then it is assumed to be an unnamed value and a name of ""
+ * is searched for and the value filled in if found.
+ */
+
+#define SEPARATORS ";\n\r"
+
+void parse_http_header(char *header_data, const char *tags[], char *values[])
+{
+    char *s;
+    int i;
+
+    /* zero the output array first */
+    for (i = 0; tags[i]; i++)
+        values[i] = NULL;
+
+    s = strtok(header_data, SEPARATORS);
+    if (s) do
+    {
+        char *name;
+        char *equals, *value;
+        int tag_num;
+
+        /* s is either NAME or VALUE or NAME=VALUE */
+        name = skip_space(s);
+        value = "";
+        equals = strchr(s, '=');
+
+        if (equals)
+        {
+            *equals = '\0';
+            value = equals + 1;
+        }
+
+        tag_num = find_tag(tags, name);
+        if (tag_num != -1)
+        {
+            values[tag_num] = skip_space(value);
+        }
+        else
+        {
+            /* if searching for the null entry use full NAME=VALUE */
+            if (equals)
+                *equals = '=';
+
+            tag_num = find_tag(tags, "");
+            if (tag_num != -1)
+                values[tag_num] = name;
+        }
+    }
+    while ((s = strtok(NULL, SEPARATORS)) != NULL);
+}
+
+/* ---------------------------------------------------------------------------------------------------------- */
+
+char *skip_space(const char *s)
+{
+    if (s) while (*s && isspace(*s))
+	s++;
+    return (char *)s;
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/* eof util.c */

@@ -1,0 +1,1032 @@
+/* > stbtb.c
+
+ * Toolbox support for the web browser
+
+ * We only have one menu tree and one status bar.
+ * The status bar is considered to be statically independent of all windows and what its
+ * context relates to is decided by the calling functions (ie stbfe mostly).
+
+ */
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "bbc.h"
+#include "colourtran.h"
+#include "msgs.h"
+#include "swis.h"
+#include "wimp.h"
+
+#include "config.h"
+#include "interface.h"
+#include "memwatch.h"
+#include "util.h"
+
+#include "stbtb.h"
+#include "stbutils.h"
+#include "stbfe.h"
+#include "stbhist.h"
+#include "stbopen.h"
+#include "fevents.h"
+
+// --------------------------------------------------------------------------
+
+#define Toolbox_CreateObject                    0x44EC0
+#define Toolbox_DeleteObject                    0x44EC1
+#define Toolbox_ShowObject                      0x44EC3
+#define Toolbox_HideObject                      0x44EC4
+#define Toolbox_GetObjectInfo                   0x44EC5
+#define Toolbox_ObjectMiscOp                    0x44EC6
+#define Toolbox_SetClientHandle                 0x44EC7
+#define Toolbox_GetClientHandle                 0x44EC8
+#define Toolbox_GetObjectClass                  0x44EC9
+#define Toolbox_GetParent                       0x44ECA
+#define Toolbox_GetAncestor                     0x44ECB
+#define Toolbox_GetTemplateName                 0x44ECC
+#define Toolbox_RaiseToolboxEvent               0x44ECD
+#define Toolbox_GetSysInfo                      0x44ECE
+#define Toolbox_Initialise                      0x44ECF
+#define Toolbox_TemplateLookUp                  0x44EFB
+
+// --------------------------------------------------------------------------
+
+// Some toolbox headers from OSLib for convenience
+
+struct toolbox_resource_file_object
+   {  int class_no;
+      int flags;
+      int version;
+      char name [12];
+      int size;
+      int header_size;
+      int body_size;
+//      int object [UNKNOWN];
+   };
+
+typedef char *toolbox_msg_reference;
+typedef char *toolbox_string_reference;
+typedef void *toolbox_sprite_area_reference;
+typedef int *toolbox_object_offset;
+
+struct menu_object
+   {  int flags;
+      toolbox_msg_reference title;
+      int title_limit;
+      toolbox_msg_reference help;
+      int help_limit;
+      int show_action;
+      int hide_action;
+      int entry_count;
+//      menu_entry_object entries [UNKNOWN];
+   };
+
+typedef struct
+{
+    int x, y;
+} os_coord;
+
+typedef struct
+{
+  int     size;
+  int     ref_no;
+  int     action_no;
+  int     flags;
+  union
+  {
+    char          bytes [212];
+    int           words [53];
+  } data;
+} toolbox_action;
+
+union window_icon_data
+   {  struct
+      {  toolbox_msg_reference text;
+         toolbox_string_reference validation;
+         int size;
+      }
+      indirected_text;
+   };
+
+struct window_window
+   {  wimp_box visible;
+      int xscroll;
+      int yscroll;
+      wimp_w next;
+      int flags;
+      char title_fg;
+      char title_bg;
+      char work_fg;
+      char work_bg;
+      char scroll_outer;
+      char scroll_inner;
+      char highlight_bg;
+      char reserved;
+      wimp_box extent;
+      int title_flags;
+      int work_flags;
+      toolbox_sprite_area_reference sprite_area;
+      short xmin;
+      short ymin;
+      union window_icon_data title_data;
+      int icon_count;
+   };
+
+struct window_object
+   {  int flags;
+      toolbox_msg_reference help_message;
+      int help_limit;
+      toolbox_string_reference sprite_name;
+      int pointer_limit;
+      os_coord hotspot;
+      toolbox_string_reference menu_name;
+      int shortcut_count;
+      toolbox_object_offset shortcuts;
+      int gadget_count;
+      toolbox_object_offset gadgets;
+      int default_focus;
+      int show_action;
+      int hide_action;
+      toolbox_string_reference toolbar_ibl;
+      toolbox_string_reference toolbar_itl;
+      toolbox_string_reference toolbar_ebl;
+      toolbox_string_reference toolbar_etl;
+      struct window_window window;
+//      int data [UNKNOWN];
+   };
+
+// --------------------------------------------------------------------------
+
+typedef enum
+{
+    status_CLOSED,
+    status_OPEN,
+    status_OPEN_SMALL
+} tb_status_state_t;
+
+// --------------------------------------------------------------------------
+
+// messagetrans and toolbox id blocks
+static int m_block[4];
+static int tb_block[6];
+
+// list of supported toolbox messages
+static int tb_list[] =
+{
+    0
+};
+
+// toolbox object handles
+static int menu_object[2] = { 0, 0 };
+static int status_object = 0;
+static int find_object = 0;
+static int print_object = 0;
+
+// extents of these dboxs
+static wimp_box status_box, find_box, print_box;
+
+// which sprite from the animation
+static int turn_ctr = 0;
+
+static tb_status_state_t status_state = status_CLOSED;
+
+// --------------------------------------------------------------------------
+
+// toolbox utility functions
+
+static os_error *mfade(int obj, int cmp, int fade)
+{
+    return (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 2, cmp, fade);
+}
+
+static os_error *mtick(int obj, int cmp, int tick)
+{
+    return (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0, cmp, tick);
+}
+
+static os_error *gfade(int obj, int cmp, int fade)
+{
+    unsigned flags;
+    os_error *e;
+    e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 0x40, cmp, &flags);
+    if (!e)
+    {
+        int old_fade = (flags & 0x80000000) != 0;
+        if (old_fade != fade)
+            e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x41, cmp, flags ^ 0x80000000);
+    }
+    return e;
+}
+
+static os_error *sethelp(int obj, int cmp, const char *msg)
+{
+    os_error *e;
+
+    if (cmp == -1)
+        e = _swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, obj, 0x7, msg);
+    else
+        e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x42, cmp, msg);
+
+    return e;
+}
+
+static os_error *setfield(int obj, int cmp, const char *msg, int check)
+{
+    int type;
+    _kernel_oserror *e;
+    e = _swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 70, cmp, &type);
+    if (!e)
+    {
+        int read = 0, write = 0;
+        switch (type)
+        {
+            case 128:   // action
+                write = 128;
+                read = 129;
+                break;
+            case 448:   // display
+                write = 448;
+                read = 449;
+                break;
+            case 512:   // writable
+                write = 512;
+                read = 513;
+                break;
+            case 960:   // button
+                write = 962;
+                read = 963;
+                break;
+        }
+        if (write)
+        {
+            if (msg == NULL)
+                msg = "";
+
+            if (check)
+            {
+                char buf[256];
+                e = _swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, obj, read, cmp, buf, sizeof(buf));
+                buf[sizeof(buf)-1] = 0;
+                if (!e && strcmp(buf, msg) == 0)
+                    return NULL;
+            }
+            if (!e)
+                e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, write, cmp, msg);
+        }
+    }
+
+    return (os_error *)e;
+}
+
+static char *getwriteable(int obj, int cmp)
+{
+    int size;
+    char *s;
+    _kernel_oserror *e;
+    e = _swix(Toolbox_ObjectMiscOp, _INR(0,5)|_OUT(5), 0, obj, 513, cmp, 0, 0, &size);
+    if (e)
+        return strdup(e->errmess);
+
+    s = mm_malloc(size);
+    e = _swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, obj, 513, cmp, s, size);
+    if (e)
+    {
+        mm_free(s);
+        return strdup(e->errmess);
+    }
+    return s;
+}
+
+static int getval(int obj, int cmp)
+{
+    int type, val;
+    _kernel_oserror *e;
+    e = _swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 70, cmp, &type);
+    if (!e)
+    {
+        int read = 0;
+        switch (type)
+        {
+            case 192:   // option button
+                read = 197;
+                break;
+            case 384:   // radio button
+                read = 389;
+                break;
+            case 576:   // slider button
+                read = 577;
+                break;
+            case 832:   // numberrange button
+                read = 833;
+                break;
+        }
+        e = _swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, obj, read, cmp, &val);
+    }
+    return e ? 0 : val;
+}
+
+static os_error *setval(int obj, int cmp, int val)
+{
+    int type;
+    _kernel_oserror *e;
+    e = _swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 70, cmp, &type);
+    if (!e)
+    {
+        int write = 0;
+        switch (type)
+        {
+            case 192:   // option button
+                write = 196;
+                break;
+            case 384:   // radio button
+                write = 388;
+                break;
+            case 576:   // slider button
+                write = 576;
+                break;
+            case 832:   // numberrange button
+                write = 832;
+                break;
+        }
+        e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, write, cmp, val);
+    }
+    return e;
+}
+
+static int getstate(int obj, int cmp)
+{
+    int val = getval(obj, cmp);
+    return val != 0;
+}
+
+static os_error *setstate(int obj, int cmp, int state)
+{
+    return setval(obj, cmp, state);
+}
+
+static os_error *movegadget(int obj, int cmp, int x0diff, int x1diff)
+{
+    _kernel_oserror *e;
+    wimp_box box;
+    e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 72, cmp, &box);
+    if (!e)
+    {
+        box.x0 += x0diff;
+        box.x1 += x1diff;
+        e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 71, cmp, &box);
+    }
+    return (os_error *)e;
+}
+
+static os_error *thickenborder(int obj, int cmp, const wimp_redrawstr *r)
+{
+    wimp_box box;
+    wimp_paletteword col;
+    int gcol;
+    os_error *e;
+
+    e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 72, cmp, &box);
+
+    col.word = 0;
+    colourtran_setGCOL(col, 0, 0, &gcol);
+
+    bbc_rectangle(
+        box.x0-2 - r->scx + r->box.x0,
+        box.y0-2 - r->scy + r->box.y1,
+        box.x1-box.x0+2, box.y1-box.y0+2);
+    return e;
+}
+
+static wimp_w window_handle(int obj)
+{
+    wimp_w w;
+    if (obj == 0)
+        return 0;
+
+    frontend_fatal_error(_swix(Toolbox_ObjectMiscOp, _INR(0,2)|_OUT(0), 0, obj, 0, &w));
+    return w;
+}
+
+static void remove_title_bar(const char *name)
+{
+    struct toolbox_resource_file_object *obj;
+    struct menu_object *mobj;
+    frontend_fatal_error(_swix(Toolbox_TemplateLookUp, _INR(0,1) | _OUT(0), 0, name, &obj));
+    mobj = (struct menu_object *)obj->header_size;
+    mobj->title = NULL;
+}
+
+// --------------------------------------------------------------------------
+
+/*
+static char *menu_list[] =
+{
+    "editM",
+    "fileM",
+    "hotlistM",
+    "mainM",
+    "navigateM",
+    "toolsM",
+    "viewM"
+};
+*/
+
+/* returns wimp task handle */
+
+int tb_init(int *m_list)
+{
+    int t;
+
+    frontend_fatal_error((os_error *)_swix(Toolbox_Initialise, _INR(0,6) | _OUT(1), 0, 310,
+        m_list, tb_list, "<STBWeb$Dir>", m_block, tb_block, &t));
+
+    // and create the main menu
+#if 1
+    remove_title_bar("mouseM");
+    frontend_fatal_error(_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "mouseM", &menu_object[0]));
+
+    remove_title_bar("irM");
+    frontend_fatal_error(_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "irM", &menu_object[1]));
+#else
+    frontend_fatal_error(_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "mainM", &menu_object));
+#endif
+
+    {
+/*
+        struct toolbox_resource_file_object *obj;
+        struct window_object *wobj;
+        frontend_fatal_error(_swix(Toolbox_TemplateLookUp, _INR(0,1) | _OUT(0), 0, "statusW", &obj));
+        wobj = (struct window_object *)obj->header_size;
+        wobj->window.work_bg = 135;
+        wobj->window.flags |= wimp_REAL_COLOURS;
+ */
+        frontend_fatal_error(_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "statusW", &status_object));
+    }
+
+    frontend_fatal_error(_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, status_object, 16, &status_box));
+
+#if 0
+    frontend_fatal_error(_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "findW", &find_object));
+    frontend_fatal_error(_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, find_object, 16, &find_box));
+
+    frontend_fatal_error(_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "printW", &print_object));
+    frontend_fatal_error(_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, print_object, 16, &print_box));
+#endif
+
+    return t;
+}
+
+// --------------------------------------------------------------------------
+
+void tb_menu_show(fe_view v, int which_menu)
+{
+    int obj;
+    int flags;
+
+    obj = menu_object[which_menu];
+    if (obj == NULL)
+        return;
+
+    if (frontend_complain(_swix(Toolbox_GetObjectInfo, _INR(0,1) | _OUT(0), 0, obj, &flags)) == NULL &&
+        (flags & 1))
+    {
+        frontend_complain(_swix(Toolbox_HideObject, _INR(0,1), 0, obj));
+    }
+    else
+    {
+        os_coord coord;
+
+        coord.x = text_safe_box.x0;
+        coord.y = text_safe_box.y1 + status_box.y0;
+
+        frontend_complain(_swix(Toolbox_ShowObject, _INR(0,5), 1, obj, 2, &coord, 0, -1)); //tb_block[4], tb_block[5]));
+        frontend_complain(_swix(Toolbox_SetClientHandle, _INR(0,2), 0, obj, v));
+    }
+}
+
+// --------------------------------------------------------------------------
+
+/*
+ * The menu setup functions all take an fe_view to get their context from
+ */
+
+static void mshow_file(fe_view v, int obj)
+{
+    int have_printer = fe_print_possible(v);
+    mfade(obj, fevent_PRINT, !have_printer);
+//    mfade(obj, fevent_OPEN_PRINT_OPTIONS, !have_printer);
+    mfade(obj, fevent_STOP_LOADING, !fe_abort_fetch_possible(v));
+}
+
+static void mshow_edit(fe_view v, int obj)
+{
+    mfade(obj, fevent_COPY_IMAGE, !fe_copy_image_possible(v));
+    mfade(obj, fevent_COPY_TEXT, !fe_copy_text_possible(v));
+}
+
+static void mshow_view(fe_view v, int obj)
+{
+    mfade(obj, fevent_RELOAD, !fe_reload_possible(v));
+    mtick(obj, fevent_TOGGLE_COLOURS, fe_doc_flag_state(v, be_openurl_flag_BODY_COLOURS));
+    mtick(obj, fevent_TOGGLE_IMAGES, !fe_doc_flag_state(v, be_openurl_flag_DEFER_IMAGES));
+}
+
+static void mshow_navigate(fe_view v, int obj)
+{
+    mfade(obj, fevent_HISTORY_BACK, !fe_history_possible(v, history_PREV));
+    mfade(obj, fevent_HISTORY_FORWARD, !fe_history_possible(v, history_NEXT));
+//    mfade(obj, fevent_HISTORY_HOME, !fe_home_possible(v));
+}
+
+static void mshow_hotlist(fe_view v, int obj)
+{
+}
+
+static void mshow_tools(fe_view v, int obj)
+{
+    mfade(obj, fevent_OPEN_FIND, !fe_find_possible(v));
+}
+
+static void mshow_mouse(fe_view v, int obj)
+{
+//    mfade(obj, fevent_OPEN_PRINT_OPTIONS, fe_print_possible(v));
+    mfade(obj, fevent_COPY_TEXT, !fe_copy_text_possible(v));
+    mfade(obj, fevent_COPY_IMAGE, !fe_copy_image_possible(v));
+    mfade(obj, fevent_OPEN_FIND, !fe_find_possible(v));
+}
+
+static void mshow_ir(fe_view v, int obj)
+{
+    int have_printer = fe_print_possible(v);
+    mfade(obj, fevent_PRINT, !have_printer);
+//    mfade(obj, fevent_OPEN_PRINT_OPTIONS, !have_printer);
+    mfade(obj, fevent_COPY_TEXT, !fe_copy_text_possible(v));
+    mfade(obj, fevent_COPY_IMAGE, !fe_copy_image_possible(v));
+    mfade(obj, fevent_OPEN_FIND, !fe_find_possible(v));
+    mfade(obj, fevent_FIND_AGAIN, !fe_find_again_possible(v));
+    mfade(obj, fevent_RELOAD, !fe_reload_possible(v));
+}
+
+static void mshow_handler(int event, int *tb_block)
+{
+    fe_view v;
+    frontend_complain(_swix(Toolbox_GetClientHandle, _INR(0,1) | _OUT(0), 0, tb_block[4], &v)); // ancestor
+    if (!v && tb_block[0])
+        frontend_complain(_swix(Toolbox_GetClientHandle, _INR(0,1) | _OUT(0), 0, tb_block[0], &v)); // ancestor
+    switch (event)
+    {
+        case 0xf00:     // Main menu about to be shown
+            break;
+        case 0xf01:     // File menu about to be shown
+            mshow_file(v, tb_block[4]);
+            break;
+        case 0xf02:     // Edit menu about to be shown
+            mshow_edit(v, tb_block[4]);
+            break;
+        case 0xf03:     // View menu about to be shown
+            mshow_view(v, tb_block[4]);
+            break;
+        case 0xf04:     // Navigate menu about to be shown
+            mshow_navigate(v, tb_block[4]);
+            break;
+        case 0xf05:     // Hotlist menu about to be shown
+            mshow_hotlist(v, tb_block[4]);
+            break;
+        case 0xf06:     // Tools menu about to be shown
+            mshow_tools(v, tb_block[4]);
+            break;
+
+        case 0xf07:     // irM about to be shown
+            mshow_ir(v, tb_block[4]);
+            break;
+        case 0xf08:     // mouseM about to be shown
+            mshow_mouse(v, tb_block[4]);
+            break;
+    }
+}
+
+// --------------------------------------------------------------------------
+
+/*
+ * The status update function takes an fe_view to get its context from.
+ */
+
+//#define I_URL       	0x10
+//#define I_URL_LABEL     0x14
+#define I_STATUS        0x12
+//#define I_STATUS_LABEL  0x11
+#define I_WORLD        	0x13
+//#define I_RING       	0x16
+
+void tb_status_update_fades(fe_view v)
+{
+    int obj = status_object;
+    gfade(obj, fevent_HISTORY_BACK, !fe_history_possible(v, history_PREV));
+//    gfade(obj, fevent_HISTORY_FORWARD, !fe_history_possible(v, history_NEXT));
+//    gfade(obj, fevent_RELOAD, !fe_reload_possible(v));
+//    gfade(obj, fevent_OPEN_FIND, !fe_find_possible(v));
+    gfade(obj, fevent_PRINT, !fe_print_possible(v));
+    gfade(obj, fevent_STOP_LOADING, !fe_abort_fetch_possible(v));
+}
+
+void tb_status_show(int small_only)
+{
+    wimp_openstr o;
+    int open = FALSE;
+
+    if (!small_only)
+    {
+        o.box.x0 = 0;
+        o.box.y0 = text_safe_box.y1 + status_box.y0;
+        o.box.x1 = screen_box.x1;
+        o.box.y1 = screen_box.y1;
+        o.x = - margin_box.x0;
+        o.y = - margin_box.y1;
+
+        open = TRUE;
+        status_state = status_OPEN;
+    }
+    else
+    {
+        if (status_state != status_OPEN)
+        {
+            frontend_complain(_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 72, I_WORLD, &o.box));
+
+            o.box.x0 += text_safe_box.x0;
+            o.box.x1 += text_safe_box.x0;
+            o.box.y0 += text_safe_box.y1;
+            o.box.y1 += text_safe_box.y1;
+
+            o.x = - text_safe_box.x0 + o.box.x0;
+            o.y = - text_safe_box.y1 + o.box.y1;
+
+            open = TRUE;
+            status_state = status_OPEN_SMALL;
+        }
+    }
+
+    if (open)
+    {
+        o.behind = (wimp_w)-1;
+        frontend_complain(_swix(Toolbox_ShowObject, _INR(0,5), 0, status_object, 1, &o.box, 0, 0));// tb_block[4], tb_block[5]));
+    }
+}
+
+void tb_status_hide(int only_if_small)
+{
+    if ((status_state != status_CLOSED && !only_if_small) || status_state == status_OPEN_SMALL)
+    {
+        frontend_complain(_swix(Toolbox_HideObject, _INR(0,1), 0, status_object));
+        status_state = status_CLOSED;
+    }
+}
+
+int tb_is_status_showing(void)
+{
+    return status_state == status_OPEN;
+/*
+    int flags = 0;
+    frontend_complain(_swix(Toolbox_GetObjectInfo, _INR(0,1) | _OUT(0), 0, status_object, &flags));
+    return flags & 1;
+ */
+}
+
+int tb_status_height(void)
+{
+    return - status_box.y0;
+}
+
+int tb_status_w(void)
+{
+    return window_handle(status_object);
+}
+
+os_error *tb_status_set_url(const char *url)
+{
+    char buf[256];
+
+    strcpy(buf, msgs_lookup("url"));
+    strlencat(buf, (char *)url, sizeof(buf));
+
+    // set help on status and background to be the URL
+    sethelp(status_object, I_STATUS, buf);
+    sethelp(status_object, -1, buf);
+
+//    return setfield(status_object, I_URL, url, FALSE);
+    return NULL;
+}
+
+os_error *tb_status_set_messagef(const char *label, const char *msg, ...)
+{
+    char buffer[256];
+    va_list ap;
+
+    va_start(ap, msg);
+    vsprintf(buffer, msg, ap);
+    va_end(ap);
+
+    return tb_status_set_message(label, msg);
+}
+
+os_error *tb_status_set_message(const char *label, const char *msg)
+{
+    os_error *e;
+    char *s;
+
+    if (strlen(msg) >= 256)
+    {
+        s = mm_malloc(256);
+        memcpy(s, msg, 255);
+        s[255] = 0;
+    }
+    else
+        s = NULL;
+
+//    e = setfield(status_object, I_STATUS_LABEL, label, TRUE);
+    e = setfield(status_object, I_STATUS, s ? s : msg, TRUE);
+
+    mm_free(s);
+
+    return e;
+}
+
+void tb_status_rotate(void)
+{
+    char sprite_name[13];
+
+    if (++turn_ctr == config_animation_frames)
+	turn_ctr = 0;
+
+    sprintf(sprite_name, "%s%02d", config_animation_name, turn_ctr);
+    _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 962, I_WORLD, sprite_name);
+}
+
+/*
+ * For a neater display will wish to
+ *  Move the world to the right
+ *  Resize the URL field
+ *  Resize the status field
+ *  Move the print and stop icons to the right
+ */
+
+void tb_status_resize(int xdiff, int ydiff)
+{
+    if (xdiff || ydiff)
+    {
+        movegadget(status_object, fevent_SCROLL_PAGE_UP, xdiff, xdiff);
+        movegadget(status_object, fevent_SCROLL_PAGE_DOWN, xdiff, xdiff);
+        movegadget(status_object, I_WORLD, xdiff, xdiff);
+//      movegadget(status_object, I_RING, xdiff, xdiff);
+        movegadget(status_object, fevent_STOP_LOADING, xdiff, xdiff);
+//      movegadget(status_object, fevent_PRINT, xdiff, xdiff);
+//      movegadget(status_object, I_URL, 0, xdiff);
+        movegadget(status_object, I_STATUS, 0, xdiff);
+    }
+}
+
+int tb_status_redraw(wimp_redrawstr *r)
+{
+#if 0
+fprintf(stderr, "stbtb: redraw %x status %x\n", r->w, tb_status_w());
+#endif
+    if (r->w == tb_status_w())
+    {
+//        thickenborder(status_object, I_URL, r);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+void tb_status_init(void)
+{
+    wimp_box box;
+    frontend_fatal_error(_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 72, I_WORLD, &box));
+    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - box.x1, 0);
+}
+
+// --------------------------------------------------------------------------
+
+// open the contents of the URL writable field
+// open in our default top window
+
+void tb_open_url(void)
+{
+    return;
+/*
+    char *url = getwriteable(status_object, I_URL);
+    char *url1;
+
+    url1 = check_url_prefix(url);
+    mm_free(url);
+
+    frontend_complain(frontend_open_url(url1, NULL, "__top", NULL, 0));
+
+    mm_free(url1);
+ */
+}
+
+// --------------------------------------------------------------------------
+
+static os_error *tb_show_centered(int obj, const wimp_box *bbox)
+{
+    os_coord coord;
+    coord.x = ((screen_box.x1 - screen_box.x0) - (bbox->x1 - bbox->x0)) / 2;
+    coord.y = text_safe_box.y1 + (tb_is_status_showing() ? status_box.y0 : 0);
+    return (os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 1, obj, 2, &coord, tb_block[4], tb_block[5]);
+}
+
+static wimp_caretstr saved_caret;
+
+// --------------------------------------------------------------------------
+
+#define I_FIND_TEXT         0x0
+#define I_FIND_BACKWARDS    0x4
+#define I_FIND_CASE         0x5
+
+os_error *tb_find_open(fe_view v)
+{
+    os_error *e;
+
+    wimp_get_caret_pos(&saved_caret);
+
+    e = (os_error *)_swix(Toolbox_SetClientHandle, _INR(0,2), 0, find_object, v);
+
+    return e ? e : tb_show_centered(find_object, &find_box);
+}
+
+static void tb_find(void)
+{
+    char *text;
+    BOOL backwards, casesense;
+    fe_view v;
+
+    text = getwriteable(find_object, I_FIND_TEXT);
+    backwards = getstate(find_object, I_FIND_BACKWARDS);
+    casesense = getstate(find_object, I_FIND_CASE);
+
+    frontend_complain(_swix(Toolbox_GetClientHandle, _INR(0,1) | _OUT(0), 0, find_object, &v));
+    fe_find(v, text, backwards, casesense);
+
+    mm_free(text);
+}
+
+static void tb_find_closed(void)
+{
+    wimp_set_caret_pos(&saved_caret);
+}
+
+int tb_find_redraw(wimp_redrawstr *r)
+{
+    if (r->w == window_handle(find_object))
+    {
+        thickenborder(find_object, I_FIND_TEXT, r);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+// --------------------------------------------------------------------------
+
+#define I_PRINT_OPTIONS_TYPE        0
+#define I_PRINT_OPTIONS_COPIES      1
+#define I_PRINT_OPTIONS_SCALE       2
+#define I_PRINT_OPTIONS_SIDEWAYS    4
+#define I_PRINT_OPTIONS_NOPICS      5
+#define I_PRINT_OPTIONS_NOBG        6
+#define I_PRINT_OPTIONS_NOCOL       8
+#define I_PRINT_OPTIONS_COLLATED    9
+#define I_PRINT_OPTIONS_REVERSED    10
+
+// pass in which frame to print at this point
+
+os_error *tb_print_options_open(fe_view v)
+{
+    wimp_get_caret_pos(&saved_caret);
+
+    setfield(print_object, I_PRINT_OPTIONS_TYPE, fe_printer_name(), FALSE);
+
+    setstate(print_object, I_PRINT_OPTIONS_NOPICS, config_print_nopics);
+    setstate(print_object, I_PRINT_OPTIONS_NOBG, config_print_nobg);
+    setstate(print_object, I_PRINT_OPTIONS_NOCOL, config_print_nocol);
+    setstate(print_object, I_PRINT_OPTIONS_SIDEWAYS, config_print_sideways);
+    setstate(print_object, I_PRINT_OPTIONS_COLLATED, config_print_collated);
+    setstate(print_object, I_PRINT_OPTIONS_REVERSED, config_print_reversed);
+
+    setval(print_object, I_PRINT_OPTIONS_SCALE, config_print_scale);
+
+    _swix(Toolbox_SetClientHandle, _INR(0,2), 0, print_object, v);
+
+    return tb_show_centered(print_object, &print_box);
+}
+
+static void tb_print(void)
+{
+    fe_view v;
+
+    config_print_nopics = getstate(print_object, I_PRINT_OPTIONS_NOPICS);
+    config_print_nobg = getstate(print_object, I_PRINT_OPTIONS_NOBG);
+    config_print_nocol = getstate(print_object, I_PRINT_OPTIONS_NOCOL);
+    config_print_sideways = getstate(print_object, I_PRINT_OPTIONS_SIDEWAYS);
+    config_print_collated = getstate(print_object, I_PRINT_OPTIONS_COLLATED);
+    config_print_reversed = getstate(print_object, I_PRINT_OPTIONS_REVERSED);
+
+    config_print_scale = getval(print_object, I_PRINT_OPTIONS_SCALE);
+
+    frontend_complain(_swix(Toolbox_GetClientHandle, _INR(0,1) | _OUT(0), 0, print_object, &v));
+    frontend_complain(fe_print(v));
+}
+
+static void tb_print_closed(void)
+{
+    wimp_set_caret_pos(&saved_caret);
+}
+
+int tb_print_redraw(wimp_redrawstr *r)
+{
+    if (r->w == window_handle(print_object))
+    {
+        thickenborder(print_object, I_PRINT_OPTIONS_SCALE, r);
+        thickenborder(print_object, I_PRINT_OPTIONS_COPIES, r);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+// --------------------------------------------------------------------------
+
+void tb_events(int *event, fe_view v)
+{
+    toolbox_action *e = (toolbox_action *)event;
+
+    switch (e->action_no)
+    {
+        case 0x44EC0:   // toolbox error
+            frontend_complain((os_error *)e->data.bytes);
+            break;
+
+        case 0xf20:     // find activated
+            tb_find();
+            break;
+
+        case 0xf21:     // find closed
+            tb_find_closed();
+            break;
+
+        case 0xf22:     // print activated from print options box
+            tb_print();
+            break;
+
+        case 0xf23:     // print close
+            tb_print_closed();
+            break;
+
+        default:
+            if ((e->action_no & 0xff0) == 0xf00)
+                mshow_handler(e->action_no, tb_block);
+            else if (e->action_no < 0x10000)
+                fevent_handler(e->action_no, v);
+            break;
+    }
+}
+
+// --------------------------------------------------------------------------
+
+static void *tb_resspr_sprite_area = NULL;
+
+void *tb_resspr_area(void)
+{
+    return tb_resspr_sprite_area;
+}
+
+void tb_resspr_init(void)
+{
+    _swix(Toolbox_GetSysInfo, _IN(0)|_OUT(0), 4, &tb_resspr_sprite_area);
+}
+
+// --------------------------------------------------------------------------
+
+void tb_msgs_init(void)
+{
+}
+
+char *tb_msgs_lookup(char *tag)
+{
+    char *out;
+
+    if (_swix(MessageTrans_Lookup, _INR(0,7) | _OUT(2),
+        m_block, tag, NULL, 0,
+        NULL, NULL, NULL, NULL,
+        &out))
+        return tag;
+
+    return out;
+}
+
+// --------------------------------------------------------------------------
+
+void tb_res_init(char *program_name)
+{
+    program_name = program_name;
+}
+
+// --------------------------------------------------------------------------

@@ -1,0 +1,298 @@
+/* > stbhist.c
+ *
+ */
+
+#include <stdio.h>
+#include <string.h>
+
+#include "msgs.h"
+#include "wimp.h"
+
+#include "interface.h"
+#include "makeerror.h"
+#include "memwatch.h"
+#include "filetypes.h"
+#include "util.h"
+
+#include "stbview.h"
+#include "stbhist.h"
+#include "stbutils.h"
+
+#define HISTORY_LEN	32
+
+extern int strcasecomp(const char *s1, const char *s2);
+extern int strncasecomp(const char *s1, const char *s2, int n);
+
+// ---------------------------------------------------------------------------------------------
+
+static os_error *fe_hist_write_file(FILE *f, void *handle)
+{
+    const fe_history_item *item;
+    const fe_history_item *start = (const fe_history_item *)handle;
+
+    fputs(msgs_lookup("histT"), f);
+    fputc('\n', f);
+
+    for (item = start; item; item = item->next)
+    {
+        fprintf(f, msgs_lookup("histI"), item->url, item->title ? item->title : item->url);
+        fputc('\n', f);
+    }
+
+    fputs(msgs_lookup("histF"), f);
+    fputc('\n', f);
+    return NULL;
+}
+
+os_error *fe_history_show(fe_view v)
+{
+    fe_open_temp_file(v, fe_hist_write_file, (void *)v->first);
+    return NULL;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+/* history functions */
+
+static void fe_free_hist_item(fe_history_item *i)
+{
+    if (i == NULL)
+	return;
+
+    mm_free(i->url);
+    mm_free(i->title);
+    mm_free(i);
+}
+
+static void fe_history_truncate(fe_view v)
+{
+    fe_history_item *chop, *c2;
+
+#if 0
+fprintf(stderr, "Truncate: last=%p, at=%p(%d) at->next=%p\n",
+	v->last, v->hist_at, v->hist_at->seq_no, v->hist_at->next);
+#endif
+
+    if (v->hist_at == v->last)
+	return;
+
+    for(chop = v->hist_at->next; chop; chop = c2)
+    {
+	c2 = chop->next;
+#if 0
+	fprintf(stderr, "Chop=%p(%d), c2=%p\n", chop, chop->seq_no, c2);
+#endif
+	fe_free_hist_item(chop);
+    }
+
+    v->last = v->hist_at;
+    v->last->next = 0;
+}
+
+static fe_history_item *find_entry(const char *url, fe_history_item *start, int direction)
+{
+    fe_history_item *item = start;
+    int h = string_hash((char *)url);
+
+    while (item)
+    {
+        if (h == item->hash &&
+            strcasecomp(url, item->url) == 0)
+            return item;
+
+        item = direction == history_PREV ? item->prev : item->next;
+    }
+    return NULL;
+}
+
+static fe_history_item *fe_history_add(fe_view v, const char *url, const char *title)
+{
+    fe_history_item *h;
+
+    /* Trim off the history tail if it is there */
+    /* This should be trimmed in local history but still kept in global history */
+    fe_history_truncate(v);
+
+    h = mm_calloc(1, sizeof(*h));
+
+    if (h == 0)
+	return NULL;
+
+    h->url = strdup(url);
+    h->title = strdup(title);
+    h->hash = string_hash((char *)url);
+
+//    h->scroll_pos = fe_get_cvt(v->w).scy;
+
+#if 1
+fprintf(stderr, "history: %p add '%s'\n", h, url);
+#endif
+
+    if (v->first)
+    {
+#if 0
+	fprintf(stderr, "h=%p, first=%p, last=%p\n", h, v->first, v->last);
+#endif
+	v->last->next = h;
+	h->prev = v->last;
+	h->seq_no = v->last->seq_no + 1;
+	v->last = h;
+#if 0
+	fprintf(stderr, "Last#=%d, first#=%d\n", v->last->seq_no, v->first->seq_no);
+#endif
+	if ( (v->last->seq_no - v->first->seq_no) > HISTORY_LEN )
+	{
+	    fe_history_item *chop;
+
+	    chop = v->first;
+#if 0
+	    fprintf(stderr, "Chop=%p\n", chop);
+#endif
+	    v->first = v->first->next;
+	    v->first->prev = NULL;
+
+	    fe_free_hist_item(chop);
+	}
+
+    }
+    else
+    {
+	v->first = v->last = h;
+    }
+
+    return h;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+static os_error *get_url_if_different(fe_view v, int a, char **url_out)
+{
+    fe_history_item *dest;
+    os_error *e;
+    char *url;
+
+    if (!v || !v->displaying)
+    {
+        *url_out = NULL;
+        return NULL;
+    }
+
+    e = backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
+    if (e)
+        return e;
+
+    dest = v->hist_at;
+
+    if (dest && dest->url && strcasecomp(dest->url, url) == 0)
+    {
+	switch(a)
+	{
+            case history_FIRST:
+                dest = v->first;
+                break;
+            case history_PREV:
+                dest = v->hist_at->prev;
+                break;
+            case history_NEXT:
+                dest = v->hist_at->next;
+                break;
+            case history_LAST:
+                dest = v->last;
+                break;
+	}
+    }
+
+    if (dest == 0 || dest->url == 0)
+	return makeerror(ERR_NO_HISTORY);
+
+    *url_out = dest->url;
+
+    return NULL;
+}
+
+int fe_history_possible(fe_view v, int direction)
+{
+    char *url;
+    os_error *e;
+    e = get_url_if_different(v, direction, &url);
+    return e == NULL && url != NULL;
+}
+
+/*
+ * This should use hist_at if it is differnet to the current page
+
+ */
+
+os_error *fe_history_move(fe_view v, int a)
+{
+    char *url;
+    os_error *e = get_url_if_different(v, a, &url);
+    return e ? e : frontend_open_url(url, v, NULL, 0, 0);
+}
+
+void fe_history_dispose(fe_view v)
+{
+    if (v->first)
+    {
+	v->hist_at = v->first;
+	fe_history_truncate(v);
+	fe_free_hist_item(v->first);
+	v->first = v->hist_at = v->last = 0;
+    }
+}
+
+
+/*
+ * This is called whenever any page is visited.
+
+ * v->hist_at points to the history for the (ex)current page
+ * url/title is for the new page being loaded in
+ */
+
+int fe_history_visit(fe_view v, const char *url, const char *title)
+{
+    fe_history_item *item = v->hist_at;
+
+    if (v->dont_add_to_history)
+        return 0;
+
+    /* If the url is of the current page, ignore it */
+    if (item && item->url && strcasecomp(url, item->url) == 0)
+	return 0;
+
+    /* If the user went back and then follow the same link, move forward */
+    if (item && item->next && item->next->url && strcasecomp(item->next->url, url) == 0)
+    {
+	v->hist_at = item->next;
+	return 0;
+    }
+
+    // if it is in the history somewhere then set history to that page
+    item = find_entry(url, v->last, history_PREV);
+    if (item)
+    {
+#if 1
+fprintf(stderr, "history: %p found '%s' scroll %d\n", item, url, item->scroll_pos);
+#endif
+        v->hist_at = item;
+        return item->scroll_pos;
+    }
+
+    // otherwise add it to the history
+    item = fe_history_add(v, url, title);
+    if (item)
+        v->hist_at = item;
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+int fe_test_history(fe_view v, const char *url)
+{
+    return find_entry(url, v->first, history_NEXT) != NULL;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+// eof stbhist.c

@@ -1,0 +1,486 @@
+/* -*-c-*- */
+
+/* oimage.c */
+
+/*
+ *    3/96: SJM: re-did oimage_click to handle clientside maps and do its own click and place_caret
+ * 18/3/96: SJM: Added IMAGE_SCALE_TO_TAG switch for scaling images
+ * 21/3/96: SJM: Removed my bogus max_down in oimage_click, added active link
+ * 28/3/96: SJM: Changed image scaling again - doen't do strange things with one size and default image
+ * 02/4/96: SJM: oimage_click with ctl held will select the object and deselect everything else.
+ * 09/4/96: SJM: redraw will always redraw the box if selected whatever the type
+ * 18/4/96: SJM: changed use of be_update_link to backend_update_link
+ *  3/5/96: SJM: added display_scale use and changed unset tii->ww and hh to be -1 rather than 0
+ *  7/5/96: SJM: added hspace, vspace
+ * 11/6/96: SJM: do config image scaling here rather than in image_info().
+ * 13/6/95: SJM: added _update_highlight method
+ * 20/6/95: SJM: added check for imagemap error in oclick()
+ */
+
+/* Methods for image objects */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "memwatch.h"
+
+#include "akbd.h"
+#include "wimp.h"
+#include "bbc.h"
+
+#include "antweb.h"
+#include "interface.h"
+#include "images.h"
+#include "rid.h"
+#include "webfonts.h"
+#include "url.h"
+#include "consts.h"
+#include "config.h"
+#include "util.h"
+#include "render.h"
+#include "rcolours.h"
+
+#include "dfsupport.h"
+
+#include "imagemap.h"
+#include "object.h"
+#include "version.h"
+
+#ifndef IMAGE_SCALE_TO_TAG
+#define IMAGE_SCALE_TO_TAG 1
+#endif
+
+#ifndef DRAW_AREA_HIGHLIGHT
+#define DRAW_AREA_HIGHLIGHT 0
+#endif
+
+void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+{
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+    int width, height;
+    image_flags fl;
+#if 0
+    fprintf(stderr, "Sizing image\n");
+#endif
+    if (tii->src)
+    {
+	int new = 0;
+
+	if (tii->im == NULL)
+	{
+	    char *url;
+	    int ffl;
+
+	    new = 1;
+
+	    url = url_join(BASE(doc), tii->src);
+
+	    ffl = (doc->flags & doc_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
+
+	    image_find(url, BASE(doc), ffl, &antweb_doc_image_change, doc, (image*) &(tii->im));
+
+	    mm_free(url);
+	}
+
+	image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
+
+	if (new && (fl & image_flag_REALTHING))
+	    tii->flags |= rid_image_flag_REAL;
+    }
+    else
+    {
+	fl = 0;
+	width = 68;
+	height = 68;
+    }
+
+    width = width*config_display_scale_image/100;
+    height = height*config_display_scale_image/100;
+
+#if 0
+    fprintf(stderr, "Old width %d, height %d, flags 0x%x\n", width, height, fl);
+    fprintf(stderr, "Image object given width %d, height %d\n", tii->ww, tii->hh);
+#endif
+
+#if IMAGE_SCALE_TO_TAG
+    /* if we have an image
+     *   if two sizes specified then use those
+     *   if one size specified then use that and maintain aspect ratio
+     *   if no sizes specified then use the images own size
+     * if we don't have an image yet
+     *   if two sizes specified then use those
+     *   if one size specified then use that and the default images size
+     *   if no sizes specified then use the default images size
+     * note: width and height are in OS coords
+     */
+    if (tii->ww != -1 || tii->hh != -1)
+    {
+        if (fl & image_flag_REALTHING)
+        {
+            double aspect = (double)width/height;
+    	    width = (tii->ww != -1 ? tii->ww : (int)(tii->hh * aspect)) * 2;
+    	    height = (tii->hh != -1 ? tii->hh : (int)(tii->ww / aspect)) * 2;
+    	}
+    	else
+        {
+    	    if (tii->ww != -1)
+	        width = tii->ww * 2;
+	    if (tii->hh != -1)
+	        height = tii->hh * 2;
+        }
+    }
+#else
+    /* If we don't have the real thing but we have a size, use the size */
+    if ((fl & image_flag_REALTHING) == 0)
+    {
+	if (tii->ww != -1)
+	    width = tii->ww * 2;
+	if (tii->hh != -1)
+	    height = tii->hh * 2;
+    }
+#endif
+#if 0
+    fprintf(stderr, "Now width %d, height %d\n", width, height);
+#endif
+    width += (tii->bwidth + tii->hspace) * 4;
+    height += (tii->bwidth + tii->vspace) * 4;
+
+    ti->width = width;
+    ti->pad = 0;
+
+    if (tii->flags & rid_image_flag_ATOP)
+    {
+	ti->max_up = webfonts[WEBFONT_BASE].max_up;
+    }
+    else if (tii->flags & rid_image_flag_ABOT)
+    {
+	ti->max_up = height;
+    }
+    else if (tii->flags & rid_image_flag_ABSALIGN)
+    {
+	ti->max_up = (webfonts[WEBFONT_BASE].max_up + height) >> 1;
+    }
+    else
+    {
+	ti->max_up = height >> 1;
+    }
+    ti->max_down = height - ti->max_up;
+#if 0
+    fprintf(stderr, "Done sizing\n");
+#endif
+}
+
+void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy)
+{
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+    int is_link = (ti->aref != NULL && ti->aref->href != NULL) || (tii->usemap != NULL);    /* SJM added usemap */
+    int bw = tii->bwidth;
+    int drawit = 0;
+    int x, y, w, h;
+
+    if (tii->im)
+    {
+	int fl;
+	image_info((image) tii->im, 0, 0, 0, &fl, 0, 0);
+
+	if ((fl & image_flag_REALTHING) || tii->hh == -1 || tii->ww == -1)
+	    drawit = 1;
+    }
+
+    x = hpos + tii->hspace*2;
+    y = bline - ti->max_down + tii->vspace*2;
+    w = ti->width - tii->hspace*2*2;
+    h = ti->max_up + ti->max_down - tii->vspace*2*2;
+
+    if (drawit)
+    {
+#if 1
+	image_render((image) tii->im, x + (bw*2), y + (bw*2), tii->ww, tii->hh, config_display_scale_image);
+#else
+	image_render((image) tii->im, hpos + tii->hspace*2 + (bw*2), bline + tii->vspace*2 + (bw*2) - ti->max_down, tii->ww, tii->hh, config_display_scale_image);
+#endif
+    }
+    else
+    {
+#if 1
+	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
+		      x + (bw*2), y + (bw*2),
+		      w - (bw*4), h - (bw*4),
+		      doc);
+#else
+	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
+		      hpos + tii->hspace*2 + (bw*2), bline + tii->vspace*2 + (bw*2) - ti->max_down,
+		      ti->width - tii->hspace*4 - (bw*4), (ti->max_up + ti->max_down) - tii->hspace*4 - (bw*4),
+		      doc);
+#endif
+#if 0
+        /* modify this not to draw outside the image box */
+        {
+        struct webfont *wf;
+        int tfc;
+
+        wf = &webfonts[WEBFONT_PRE];
+
+        if (fs->lf != wf->handle)
+        {
+	    fs->lf = wf->handle;
+	    font_setfont(fs->lf);
+        }
+
+        if (fs->lfc != (tfc = render_link_colour(ti, doc) ) )
+        {
+	    fs->lfc = tfc;
+	    render_set_font_colours(fs->lfc, render_colour_BACK, doc);
+        }
+
+        font_paint(tii->alt ? tii->alt : "[IMAGE]",
+            font_OSCOORDS + (config_display_blending ? 0x800 : 0),
+            hpos + bw*2 + 2, bline + ti->max_up - bw*4 - wf->max_up - 2);
+        }
+#endif
+    }
+
+    /* SJM added SELECTED bits */
+/*    if ((bw || (ti->flag & rid_flag_SELECTED)) && (tii->im == NULL || is_link || (doc->flags & doc_flag_NO_PICS))) */
+    if ((ti->flag & rid_flag_SELECTED) || (bw && (tii->im == NULL || is_link || (doc->flags & doc_flag_NO_PICS))))
+    {
+	render_set_colour(render_link_colour(ti, doc), doc);
+
+#if DRAW_AREA_HIGHLIGHT
+        if (tii->usemap && tii->data.usemap.selection)
+        {
+            imagemap_draw_area(doc, tii, x, bline + ti->max_up - tii->vspace*2);
+        }
+        else
+#endif
+        {
+
+	if (bw <= 1)
+	{
+            bbc_rectangle(x, y, w-frontend_dx, h-frontend_dy);
+            bbc_rectangle(x+2, y+2, w-2*2-frontend_dx, h-2*2-frontend_dy);
+	}
+	else
+	{
+#if 1
+	    bbc_rectanglefill(x, y, w-frontend_dx, bw*2-frontend_dy);
+	    bbc_rectanglefill(x, y + h - (bw*2), w-frontend_dx, bw*2-frontend_dy);
+	    bbc_rectanglefill(x, y + (bw*2), bw*2-frontend_dx, h - (bw*4)-frontend_dy);
+	    bbc_rectanglefill(x + w - (bw*2), y + (bw*2), bw*2-frontend_dx, h - (bw*4)-frontend_dy);
+#else
+	    bbc_rectanglefill(hpos, bline - ti->max_down,
+			      ti->width, bw*2);
+	    bbc_rectanglefill(hpos, bline + ti->max_up - (bw*2),
+			      ti->width, bw*2);
+	    bbc_rectanglefill(hpos, bline - ti->max_down + (bw*2),
+			      bw*2, ti->max_up + ti->max_down - (bw*4));
+	    bbc_rectanglefill(hpos + ti->width - (bw*2), bline - ti->max_down + (bw*2),
+			      bw*2, ti->max_up + ti->max_down - (bw*4));
+#endif
+	}
+
+        }
+    }
+}
+
+void oimage_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+{
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+
+    image_loose((image) tii->im, &antweb_doc_image_change, doc);
+}
+
+char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb)
+{
+    char qbuffer[64];
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+    int flags;
+
+    image_info((image) tii->im, NULL, NULL, NULL, &flags, NULL, NULL);
+
+    qbuffer[0] = 0;
+
+    if (flags & image_flag_DEFERRED)
+    {
+	frontend_complain(image_flush((image) tii->im, 0));
+	return NULL;
+    }
+
+    /* try selecting items */
+    if (akbd_pollctl() && (flags & image_flag_FETCHED))
+    {
+        backend_select_item(doc, ti, -1);
+        antweb_place_caret(doc);
+        return NULL;
+    }
+
+    if (tii->usemap || (tii->flags & rid_image_flag_ISMAP) != 0)
+    {
+	/* Remember that the y is in work area co-ordinates */
+
+	x = x - (tii->bwidth * 2) - tii->hspace*2;
+	y = ((ti->max_up) - (tii->bwidth *2) - tii->vspace*2) - y;
+
+        image_os_to_pixels((image)tii->im, &x, &y, config_display_scale_image);
+
+        if (tii->usemap)
+        {
+            rid_map_item *map;
+            map = imagemap_find_map(rh, tii->usemap);
+            if (map && (map->flags & rid_map_ERROR) == 0)
+            {
+                rid_area_item *area;
+                area = imagemap_find_area(map, x, y);
+
+                if (area)
+                {
+                    if (config_display_time_activate)
+                    {
+                        int was_selected = ti->flag & rid_flag_SELECTED;
+
+                        /* highlight the area (and dehighlight image) */
+                        tii->data.usemap.selection = area;
+                        backend_update_link(doc, ti, 1);
+
+                        wait_for_release(config_display_time_activate);
+
+                        /* de highlight the area */
+                        backend_update_link(doc, ti, 0);
+
+                        /* restore the original selection if there was one */
+                        tii->data.usemap.selection = NULL;
+                        if (was_selected)
+                            backend_update_link(doc, ti, 1);
+                    }
+
+                    frontend_complain(antweb_handle_url(doc, area->href, NULL,
+                        bb & wimp_BRIGHT ? "_blank" : area->target));
+                }
+
+                /* if there is no area then there is no link to follow */
+                return NULL;
+            }
+            /* if we can't find the right map then fall through to check server map */
+        }
+
+        if ((tii->flags & rid_image_flag_ISMAP) != 0)
+	    sprintf(qbuffer, "?%d,%d", x, y);
+    }
+
+    /* follow link or just place caret */
+    if (ti->aref && ti->aref->href)
+    {
+        if (config_display_time_activate)
+        {
+	    backend_update_link(doc, ti, -1);
+            wait_for_release(config_display_time_activate);
+	    backend_update_link(doc, ti, -1);
+	}
+
+        frontend_complain(antweb_handle_url(doc, ti->aref->href, qbuffer,
+            bb & wimp_BRIGHT ? "_blank" : ti->aref->target));
+    }
+    else
+        antweb_place_caret(doc);
+
+    return NULL;
+}
+
+void oimage_astext(rid_text_item *ti, rid_header *rh, FILE *f)
+{
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+
+    if (tii->alt)
+	fprintf(f, "<%s>", tii->alt);
+    else
+	fputs("<IMAGE>", f);
+}
+
+void *oimage_image_handle(rid_text_item *ti, antweb_doc *doc)
+{
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+
+    return tii->im;
+}
+
+void oimage_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
+		  int x, int y, int *fileoff, wimp_box *bb)
+{
+    rid_text_item_image *tii = (rid_text_item_image *) ti;
+    int is_link = (ti->aref != NULL && ti->aref->href != NULL);
+    int bw = tii->bwidth;
+    wimp_box tb;
+    wimp_paletteword palw;
+
+    palw = render_get_colour(render_link_colour(ti, doc), doc);
+
+    if (tii->im)
+    {
+	tb.x0 = x + 2*bw + 2*tii->hspace;
+	tb.y0 = y - ti->max_down + 2*bw + 2*tii->vspace;
+	tb.x1 = x + ti->width - 2*bw - 2*tii->hspace;
+	tb.y1 = y + ti->max_up - 2*bw - 2*tii->vspace;
+
+	image_save_as_draw(tii->im, fh, &tb, fileoff);
+    }
+
+    if (tii->im == NULL || (bw && is_link))
+    {
+	tb.x0 = x;
+	tb.y0 = y - ti->max_down;
+	tb.x1 = x + ti->width;
+	tb.y1 = y + ti->max_up;
+
+	if (bw == 0)
+	    bw = 1;
+
+	df_write_border(fh, &tb, palw, 2*bw, fileoff);
+    }
+
+    df_stretch_bb(bb, &tb);
+}
+
+void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc)
+{
+    rid_text_item_image *tii = (rid_text_item_image *)ti;
+    wimp_box trim;
+    int bw;
+
+    memset(&trim, 0, sizeof(trim));
+
+    bw = tii->bwidth < 2 ? 2*2 : tii->bwidth*2;
+
+    trim.x0 =   tii->hspace*2;
+    trim.x1 = - tii->hspace*2;
+    trim.y0 =   tii->vspace*2;
+    trim.y1 = - tii->vspace*2;
+
+#if DRAW_AREA_HIGHLIGHT
+    if (tii->data.usemap.selection)
+    {
+        image_flags fi;
+        image_info((image) tii->im, 0, 0, 0, &fi, NULL, NULL);
+        antweb_update_item_trim(doc, ti, &trim, fi & image_flag_MASK ? 1 : 0);
+    }
+    else
+#endif
+    {
+        trim.x0 = ti->width - tii->hspace*2 - bw;
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+        trim.x0 = tii->hspace*2;
+
+        trim.y0 = ti->max_up + ti->max_down - tii->vspace*2 - bw;
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+        trim.y0 = tii->vspace*2;
+
+        trim.x1 = - (ti->width - tii->hspace*2 - bw);
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+        trim.x1 = - tii->hspace*2;
+
+        trim.y1 = - (ti->max_up + ti->max_down - tii->vspace*2 - bw);
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+    }
+}
+
+/* eof oimage.c */

@@ -1,0 +1,3313 @@
+/* -*-C-*- commonsrc/tables.c - tables manipulation and support */
+/*
+
+Author: borris@ant.co.uk
+Music used:
+        Smash, Offspring.
+        Formaldehyde, Terrorvision
+        How to make friends and influence people, Terrorvision.
+        Regular Urban Survirors, Terrorvision.
+
+28-02-96 DAF    File created. Basic table structure building.
+01-03-96 DAF    Added more support routines.
+11-03-96 DAF    Polishing, borders, better formatting, etc
+12-03-96 DAF    Better table construction - esp. better grouping
+                into different phases, giving better fixed points
+                where can be more definite about state of things.
+26-03-96 DAF    Improved handling of table and cell borders.
+26-03-96 DAF    Tweak for ALIGN=CHAR for me->align_char.
+26-03-96 DAF    Fixed minor COLGROUP bug
+27-03-96 DAF	Fixed height calculation bug
+
+Todo:
+
+        text_item_push_word doesn't always add a text item
+        fixed width
+        align=right - half done (needs style flag setting still)
+
+        better response to naff html
+        check halign and valign behave correctly
+        check text searching still works
+        relative non-zero widths
+        share_proportionally
+
+
+    Summary of 23-1-96 DRAFT Tables DTD section
+
+    <!ELEMENT table - - (caption?, (col*|colgroup*), thead?, tfoot?, tbody+)>
+    <!ELEMENT caption - - (%text;)+>
+    <!ELEMENT thead - O (tr+)>
+    <!ELEMENT tfoot - O (tr+)>
+    <!ELEMENT tbody O O (tr+)>
+    <!ELEMENT colgroup - O (col*)>
+    <!ELEMENT col - O EMPTY>
+    <!ELEMENT tr - O (th|td)+>
+    <!ELEMENT (th|td) - O %body.content>
+
+    In order that curstream of rid_header is never NULL, just in case we need
+    to store some text somewhere when not expecting any, we take the attitude
+    that any spurious text should not be thrown away if possible.  Ideally it
+    should be put somewhere "sensible".  This implementation chooses the
+    <CAPTION> section as good as any place to put such text.  This splits the
+    CAPTION processing throughout the code a bit.  We can remove the caption
+    if, when we get a </TABLE>, the caption contains no text and no
+    properties.
+
+    Some of the paranoia about checking whether we expect particular tags is
+    so that we can let the right things happen in the right place.  For
+    instance, a <TD> tag when a <TR> tag has never been seen is liable to
+    dereference NULL.  Also, different phases make use of xscaff, etc, and
+    these need coordinating.
+
+    If a column count is specified in the <TABLE> tag, then this is taken as
+    the authoritive answer, and we can perform dynamic rendering.  If no
+    column count is given, we add columns as they are refered to.
+
+    mm_blah() are not NULL checked. Nicko says they shouldn't return with a NULL.
+    Will need to update code if this changes.
+*/
+
+
+
+
+#if 0
+#define TABDBG(X)       fprintf X
+#else
+#define TABDBG(X)	(void)0
+#endif
+
+
+#define NTABDBG(X)	(void)0
+
+
+/*****************************************************************************/
+
+#include <string.h>
+#include <ctype.h>
+#include <assert.h>
+#include <math.h>
+#include "myassert.h"
+#include "memwatch.h"
+
+#include "wimp.h"
+#include "consts.h"
+#include "HTMLRISCOS.h"         /* Now includes bits that were local */
+#include "HTMLPDTD.h"
+#include "HTStream.h"
+#include "SGML.h"
+
+#include "rid.h"
+#include "charsets.h"
+#include "util.h"
+#include "webfonts.h"
+#include "url.h"
+
+#include "config.h"
+#include "filetypes.h"
+#include "parsers.h"
+#include "images.h"
+
+#include "tables.h"
+
+/*****************************************************************************/
+
+/*****************************************************************************/
+
+static strtag strtag_stdunits[] =
+{
+        { "pt",         rid_stdunit_PT          },
+        { "px",         rid_stdunit_PX          },
+        { "pi",         rid_stdunit_PI          },
+        { "in",         rid_stdunit_IN          },
+        { "cm",         rid_stdunit_CM          },
+        { "mm",         rid_stdunit_MM          },
+        { "%",          rid_stdunit_PCENT       },
+        { "*",          rid_stdunit_MULT        },
+        { NULL,         rid_stdunit_UNKNOWN     }
+};
+
+static strtag strtag_valign[] =
+{
+        { "TOP",        rid_vt_TOP      },
+        { "MIDDLE",     rid_vt_MIDDLE   },
+        { "BOTTOM",     rid_vt_BOTTOM   },
+        { "BASELINE",   rid_vt_BASELINE },
+        { NULL,         rid_vt_UNKNOWN  }
+
+};
+
+static strtag strtag_halign[] =
+{
+        { "LEFT",       rid_ht_LEFT     },
+        { "RIGHT",      rid_ht_RIGHT    },
+        { "CENTER",     rid_ht_CENTER   },
+        { "CENTRE",     rid_ht_CENTER   },
+        { "JUSTIFY",    rid_ht_JUSTIFY  },
+        { "CHAR",       rid_ht_CHAR     },
+        { NULL,         rid_ht_UNKNOWN  }
+};
+
+static strtag strtag_dir[] =
+{
+        { "LRT",        rid_dt_LTR    },
+        { "RTL",        rid_dt_RTL    },
+        { NULL,         rid_dt_UNKNOWN}
+};
+
+static strtag strtag_frame[] =
+{
+        { "VOID",       rid_ft_VOID     },
+        { "ABOVE",      rid_ft_ABOVE    },
+        { "BELOW",      rid_ft_BELOW    },
+        { "HSIDES",     rid_ft_HSIDES   },
+        { "LHS",        rid_ft_LHS      },
+        { "RHS",        rid_ft_RHS      },
+        { "VSIDES",     rid_ft_VSIDES   },
+        { "BOX",        rid_ft_BOX      },
+        { "BORDER",     rid_ft_BORDER   },
+        { NULL,         rid_ft_UNKNOWN  }
+
+};
+
+
+static strtag strtag_rules[] =
+{
+        { "NONE",       rid_rt_NONE     },
+        { "GROUPS",     rid_rt_GROUPS   },
+        { "ROWS",       rid_rt_ROWS     },
+        { "COLS",       rid_rt_COLS     },
+        { "ALL",        rid_rt_ALL      },
+        { NULL,         rid_rt_UNKNOWN  }
+
+};
+
+static strtag strtag_calign[] =
+{
+        { "TOP",        rid_ct_TOP      },
+        { "BOTTOM",     rid_ct_BOTTOM   },
+        { "LEFT",       rid_ct_LEFT     },
+        { "RIGHT",      rid_ct_RIGHT    },
+        { NULL,         rid_ct_UNKNOWN  }
+
+};
+
+/*****************************************************************************
+
+    On entry *xp and *yp indicate where the last match was.  That cell can
+    never be returned.  If NULL is returned, there are no further cells in
+    the table and *xp and *yp values should not be used.  If a cell is
+    detected, *xp and *yp are its coordinates on return.  For
+    rid_next_root_cell, first call should have *xp=-1 and *yp=0.  For
+    rid_prev_root_cell, first call should have *xp=table->cells.x,
+    *yp=table->cells.y-1.
+
+*/
+
+extern rid_table_cell * rid_next_root_cell(rid_table_item *table, int *xp, int *yp)
+{
+        rid_table_cell *cell = NULL;
+        int x = *xp, y = *yp;
+
+        TASSERT(table != NULL);
+
+        if (table->cells.x == 0 || table->cells.y == 0)
+                return NULL;
+
+        while (1)
+        {
+                x++;
+                if (x >= table->cells.x)
+                {
+                        x = 0;
+                        y++;
+                }
+                if (y >= table->cells.y)
+                        return NULL;
+                cell = *CELLFOR(table, x, y);
+                if (cell == NULL)
+                        continue;
+                if (cell->cell.x == x && cell->cell.y == y)
+                {
+                        *xp = x;
+                        *yp = y;
+                        return cell;
+                }
+        }
+
+        return NULL;
+}
+
+extern rid_table_cell *rid_prev_root_cell(rid_table_item *table, int *xp, int *yp)
+{
+        rid_table_cell *cell = NULL;
+        int x = *xp, y = *yp;
+
+        TASSERT(table != NULL);
+
+        if (table->cells.x == 0 || table->cells.y == 0)
+                return NULL;
+
+        while (1)
+        {
+                x--;
+                if (x < 0)
+                {
+                        x = table->cells.x - 1;
+                        y--;
+                }
+                if (y < 0)
+                        return NULL;
+                cell = *CELLFOR(table, x, y);
+                if (cell == NULL)
+                        continue;
+                if (cell->cell.x == x && cell->cell.y == y)
+                {
+                        *xp = x;
+                        *yp = y;
+                        return cell;
+                }
+        }
+
+        return NULL;
+}
+
+
+/*****************************************************************************
+
+    share_span_evenly():  the supplied width is shared equally amongst the
+    range of items.
+
+    ensure_span_evenly():  On exit, the sum of the widths of the items
+    spanned will equal or exceed the width value supplied.
+
+    A negative value indicates the item has a used specified fixed size.  If
+    there are items with positive values, then negative items are ignored
+    when distributing size.  If only negative values are present, then we
+    still need to force the minimum size.
+
+*/
+
+static void share_span_evenly(int *list, const int start, const int span,
+			      const int width, const int stretch)
+{
+        const int end = start + span;
+        int num_neg = 0, num_pos = 0, x, wleft = width, step;
+
+        if (list == NULL || start < 0 || span <= 0 || width <= 0)
+                return;
+
+        for (x = start; x < end; x++)
+        {
+                if (list[x] < 0)
+                        num_neg += 1;
+                else
+                        num_pos += 1;
+        }
+
+        NTABDBG((stderr, "%d negative items, %d positive items\n", num_neg, num_pos));
+
+        TASSERT(num_neg > 0 || num_pos > 0);
+
+	if (num_pos != 0)
+        {       /* Share amongst columns not notched out */
+                step = width / num_pos;
+                NTABDBG((stderr, "Some positive, step %d\n", step));
+                /* Course division */
+                for (x = start; x < end; x++)
+                {
+                        if (list[x] >= 0)
+                        {
+                                list[x] += step;
+                                wleft -= step;
+                        }
+                }
+                /* Fine division */
+                for (x = start; wleft > 0 && x < end ; x++)
+                {
+                        if (list[x] >= 0)
+                        {
+                                list[x] += 1;
+                                wleft -= 1;
+                        }
+                }
+                ASSERT(wleft == 0);
+        }
+        else if (stretch)   /* num_neg != 0 && num_pos == 0 */
+        {       /* Only have fixed width columns - force spreading */
+                ASSERT(num_neg == span);
+                step = width / num_neg;
+                NTABDBG((stderr, "Only notched case, step %d\n", step));
+                /* Course division */
+                for (x = start; x < end; x++)
+                {
+                        list[x] -= step;
+                        wleft -= step;
+                }
+                /* Fine division */
+                for (x = start; wleft > 0 && x < end ; x++)
+                {
+                        list[x] -= 1;
+                        wleft -= 1;
+                }
+                ASSERT(wleft == 0);
+        }
+
+#if 0
+	dump_span(list, start + span);
+#endif
+}
+
+static void ensure_span_evenly(int *list, const int start, const int span,
+			       const int width, const int stretch)
+{
+        const int end = start + span;
+        int got, x;
+
+        NTABDBG((stderr, "ensure_span_evenly(%p, %d, %d, %d, %d)\n",
+		 list, start, span, width, stretch));
+
+        for (got = 0, x = start; x < end; x++)
+                got += abs( list[x] );
+
+        if (got < width)
+                share_span_evenly(list, start, span, width - got, stretch);
+}
+
+static void ensure_max_over_min(int *max, int *min, const int start, const int span)
+{
+        const int end = start + span;
+        int x;
+
+        NTABDBG((stderr, "ensure_max_over_min(%p, %p, %d, %d)\n",
+		 max, min, span, width));
+
+	for (x=start; x < end; x++)
+	{
+	    int amin = abs(min[x]);
+	    if (abs(max[x]) < amin)
+	    {
+		max[x] = (max[x] < 0 ? -1 : 1) * amin;
+	    }
+	}
+}
+
+/*****************************************************************************/
+
+static int tag_from_str(const char *str, strtag *tags)
+{
+        ASSERT(str != NULL);
+
+        while (tags->str)
+        {
+                if ( strcasecomp(str, tags->str) == 0 )
+                        return tags->tag;
+                tags++;
+        }
+
+        TABDBG((stderr, "Warning: tag %s not matched\n", str));
+
+        return tags->tag;
+}
+
+/*****************************************************************************
+
+    Notionally, pixels are at 90dpi, and osunits are at 180dpi.  Points are
+    72dpi, or 2.5 OSunits/point.  Convert the measurement such that we have
+    either a PX measurement (but actually in osunits) or a MULT relative
+    value.
+
+*/
+
+extern rid_stdunits rid_canonicalise_stdunits(rid_stdunits u)
+{
+        switch (u.type)
+        {
+        case rid_stdunit_UNKNOWN:
+                break;
+        case rid_stdunit_PX     :
+                u.count = (float) (u.count * 2.0);
+                break;
+        case rid_stdunit_PT     :
+                u.count = (float) (u.count * 180.0 / 72.0);
+                u.type = rid_stdunit_PX;
+                break;
+        case rid_stdunit_PI     :
+                u.type = rid_stdunit_UNKNOWN;
+                break;
+        case rid_stdunit_IN     :
+                u.count = (float) (u.count * 180.0);
+                u.type = rid_stdunit_PX;
+                break;
+        case rid_stdunit_CM     :
+                u.count = (float) (u.count * 180.0 / 2.54);
+                u.type = rid_stdunit_PX;
+                break;
+        case rid_stdunit_MM     :
+                u.count = (float) (u.count * 180.0 / 25.4);
+                u.type = rid_stdunit_PX;
+                break;
+        case rid_stdunit_EM     :
+                u.type = rid_stdunit_UNKNOWN;
+                break;
+        case rid_stdunit_PCENT  :
+                u.count = (float) (u.count / 100.0);
+                u.type = rid_stdunit_MULT;
+                break;
+        case rid_stdunit_MULT   :
+                break;
+        default:
+                ASSERT2(FALSE, "Unknown stdunits tag");
+                break;
+        }
+
+        if (u.count < 0.0)
+                u.count = (float) (0.0);
+
+        if (u.type == rid_stdunit_PX)
+            u.count = u.count*config_display_scale/100;
+
+        return u;
+}
+
+/*****************************************************************************
+
+    Parse a "standard units" denotation.  This is a pretty slack
+    implementation and will accept things we're not specified to accept.  If
+    someone gets bored, they're welcome to do a better version.
+
+*/
+
+extern rid_stdunits parse_stdunits(const char *c)
+{
+        rid_stdunits x;
+        char buf[8];
+
+        if ( sscanf(c, "%f%4s", &x.count, buf) == 2 )
+        {
+                x.type = tag_from_str(buf, strtag_stdunits);
+        }
+        else if ( sscanf(c, "%f", &x.count) == 1 )
+        {
+                x.type = rid_stdunit_DEFAULT;
+        }
+	else if ( (x.type = tag_from_str(c, strtag_stdunits)) != rid_stdunit_UNKNOWN)
+	{
+	  	x.count = 1.0;
+	}
+        else
+        {
+                x.count = 1.0;
+                x.type = rid_stdunit_UNKNOWN;
+        }
+
+        return rid_canonicalise_stdunits(x);
+}
+
+
+/*****************************************************************************
+
+    Parse the properties stored within a rid_table_props structure.  Returns
+    NULL if no values are specified.
+
+*/
+
+static rid_table_props *parse_table_props(const char *valign,
+                                          const char *halign,
+                                          const char *ch,
+                                          const char *choff,
+                                          const char *lang,
+                                          const char *dir,
+                                          const char *style
+                                         )
+{
+        rid_table_props *p;
+        int used = 0, tag;
+
+        p = mm_calloc(1, sizeof(*p));
+
+        if (p == NULL)
+                return NULL;
+
+        if (valign)
+        {
+                tag = tag_from_str(valign, strtag_valign);
+                if (tag != rid_vt_UNKNOWN)
+                {
+                        used++;
+                        p->valign = (rid_valign_tag) tag;
+                }
+        }
+
+        if (halign)
+        {
+                tag = tag_from_str(halign, strtag_halign);
+                if (tag != rid_ht_UNKNOWN)
+                {
+                        used++;
+                        p->halign = (rid_halign_tag) tag;
+                }
+        }
+
+        if (dir)
+        {
+                tag = tag_from_str(dir, strtag_dir);
+                if (tag != rid_dt_UNKNOWN)
+                {
+                        used++;
+                        p->dir = (rid_dir_tag) tag;
+                }
+        }
+
+        if (ch)
+        {
+                /* Todo: default and internationalisation */
+                p->ch = ch[0];
+                used++;
+        }
+
+        if (choff)
+        {
+                p->choff = parse_stdunits(choff);
+                if (p->choff.type != rid_stdunit_UNKNOWN)
+                        used++;
+        }
+
+        if (lang)
+        {
+                p->lang = strdup(lang);
+                if (p->lang)
+                        used++;
+        }
+
+        if (style)
+        {
+                p->style = strdup(style);
+                if (p->lang)
+                        used++;
+        }
+
+        if (!used)
+        {
+                mm_free(p);
+                return NULL;
+        }
+
+        return p;
+}
+
+/*****************************************************************************
+
+
+*/
+
+static rid_table_props *replicate_props(rid_table_props *props)
+{
+        rid_table_props *new;
+
+        if (props == NULL)
+        	return NULL;
+
+        new = mm_calloc(1, sizeof(*new));
+
+        new->valign = props->valign;
+        new->halign = props->halign;
+        new->dir = props->dir;
+        new->ch = props->ch;
+        new->choff = props->choff;
+        new->lang = strdup(props->lang);
+        new->style = strdup(props->style);
+
+        return new;
+}
+
+/*needs to set group border for colgroups*/
+
+static void set_column_flags(rid_table_item *table, int x)
+{
+        if ( table->colhdrs[x].userwidth.type == rid_stdunit_PX )
+        {
+                table->colhdrs[x].flags |= rid_chf_ABS_WIDTH;
+        }
+        else if ( table->colhdrs[x].userwidth.type == rid_stdunit_MULT )
+        {
+                table->colhdrs[x].flags |= rid_chf_REL_WIDTH;
+        }
+        else if ( table->colhdrs[x].colgroup->userwidth.type == rid_stdunit_PX ||
+        	  table->colhdrs[x].colgroup->userwidth.type == rid_stdunit_MULT)
+        {
+                /* If inheriting this from colgroup, copy it now for ease */
+                table->colhdrs[x].userwidth = table->colhdrs[x].colgroup->userwidth;
+                set_column_flags(table, x);
+                return;
+        }
+}
+
+/*****************************************************************************
+
+Add a column before reached end of colgroup section. No rows exist.
+table->scaff.x is next column header to initialise, and not advanced
+here
+
+*/
+
+static rid_table_colhdr * add_new_colhdr(rid_table_item *table)
+{
+        rid_table_colhdr *colhdr;
+
+        TABDBG((stderr, "add_new_colhdr(%p): from %d to %d columns, %p\n", table, table->cells.x, table->cells.x + 1, table->colhdrs));
+
+        if (table->cells.x != 0)
+        {
+        	ASSERT(table->colhdrs != NULL);
+        }
+
+        colhdr = table->cells.x == 0 ?
+        	mm_calloc(1, sizeof(*colhdr)) :
+        	mm_realloc(table->colhdrs, (table->cells.x + 1) * sizeof(*colhdr));
+        ASSERT(colhdr != NULL);
+        table->colhdrs = colhdr;
+        colhdr += table->cells.x;
+        memset(colhdr, 0, sizeof(*colhdr));
+        table->cells.x += 1;
+
+        return colhdr;
+}
+
+/*****************************************************************************
+
+    Column groups are only added during the colgroup section - there can be
+    no rows in the table at this point.
+
+*/
+
+static rid_table_colgroup * add_new_colgroup(rid_table_item *table)
+{
+        rid_table_colgroup *colgroup;
+
+        NTABDBG((stderr, "add_new_colgroup(%p): from %d to %d colgroups\n", table, table->num_groups.x, table->num_groups.x + 1));
+
+	table->flags |= rid_tf_IN_COLGROUP;
+
+        colgroup = table->num_groups.x == 0 ?
+        	mm_calloc(1, sizeof(*colgroup)) :
+        	mm_realloc(table->colgroups, (table->num_groups.x + 1) * sizeof(*colgroup));
+        table->colgroups = colgroup;
+        colgroup += table->num_groups.x;
+        memset(colgroup, 0, sizeof(*colgroup));
+        table->num_groups.x += 1;
+
+        return colgroup;
+}
+
+/*needs to set group border for rowgroup*/
+
+static rid_table_rowgroup * add_new_rowgroup(rid_table_item *table)
+{
+        rid_table_rowgroup *rowgroup;
+
+        NTABDBG((stderr, "add_new_rowgroup(%p): from %d to %d rowgroups\n", table, table->num_groups.y, table->num_groups.y + 1));
+
+        rowgroup = table->num_groups.y == 0 ?
+        	mm_calloc(1, sizeof(*rowgroup)) :
+        	mm_realloc(table->rowgroups, (table->num_groups.y + 1) * sizeof(*rowgroup));
+        table->rowgroups = rowgroup;
+        rowgroup += table->num_groups.y;
+        memset(rowgroup, 0, sizeof(*rowgroup));
+        table->num_groups.y += 1;
+
+        return rowgroup;
+}
+
+static void copy_colhdr_props(rid_table_colhdr *from, rid_table_colhdr *to)
+{
+        /* Bulk copy */
+        *to = *from;
+
+        /* Replicate subsidary allocated memory */
+        to->props         = replicate_props(to->props);
+        to->id            = strdup(to->id);
+        to->class         = strdup(to->class);
+}
+
+
+/*****************************************************************************
+
+    Add a column to the table after the end of the colgroup section.  We
+    perform the array reshaping through a memory copy - it's more reliable at
+    this phase of development.  A new rid_table_colhdr item is also added.
+    If the number of columns has been fixed through <TABLE COLS=N> then we
+    cannot add another column - should not be called under such
+    circumstances.  We might have to replicate rid_table_colhdr attributes.
+    scaff.x is not updated.  colgroup->span is updated if we "are in a
+    COLGROUP" - after the colgroup section, we set table->cur_colgroup if we
+    don't have a fixed number of columns to indicate that the last column
+    group should still get its span updated whenever a new column is created.
+    The number of columns covered by a rid_cf_INF_HORIZ item must be
+    incremented so it has the actual span count by the time we come to format
+    the table.
+
+*/
+
+static void add_retro_col(rid_table_item *table)
+{
+        rid_table_cell *cell, **cellp, **dstp, **srcp;
+        rid_table_colhdr *colhdr;
+        size_t dsts, srcs, cpys, size;
+        int x, y;
+
+        NTABDBG((stderr, "add_retro_col(%p) - from %d to %d columns\n", table, table->cells.x, table->cells.x+1));
+
+        if (table->state == tabstate_BAD)
+                return;
+
+        ASSERT( (table->flags & rid_tf_COLS_FIXED) == 0 );
+
+        /* First add a column header */
+
+        colhdr = add_new_colhdr(table);
+
+        /* Maybe replicate previous colhdr attributes */
+
+        if ( table->cells.x > 1 && (colhdr[-1].flags & rid_chf_REPLICATE) != 0 )
+        {
+                NTABDBG((stderr, "Replicating previous colhdr properties\n"));
+                copy_colhdr_props(&colhdr[-1], colhdr);
+        }
+
+        set_column_flags(table, table->cells.x - 1);
+
+        if (table->cells.y == 0)
+        {
+                /* no rows yet - no actual size to cell array */
+                if ( table->cur_colgroup != NULL )
+                        table->cur_colgroup->span++;
+                TABDBG((stderr, "No rows, so done add_retro_col()\n"));
+                return;
+        }
+
+        /* Then add another column */
+
+        size = (table->cells.x) * table->cells.y * sizeof(*cellp);
+        cellp = mm_calloc( 1, size );
+
+        dstp = cellp;
+        srcp = table->array;
+        dsts = table->cells.x;
+        srcs = table->cells.x - 1;
+        cpys = srcs * sizeof(*cellp);
+
+        NTABDBG((stderr, "Reshape array: size %d, dstp %p, srcp %p, dsts %d, srcs %d, cpys %d\n",
+                size, dstp, srcp, dsts, srcs, cpys));
+
+        /* Reshape the array by copying slices - no overlaps as new memory */
+
+        for (y = 0; y < table->cells.y; y++)
+        {
+                memcpy(dstp, srcp, cpys);
+                dstp += dsts;
+                srcp += srcs;
+        }
+
+        mm_free(table->array);
+        table->array = cellp;
+
+        if ( table->cur_colgroup != NULL )
+                table->cur_colgroup->span++;
+	else
+		NTABDBG((stderr, "No colgroup to bump in add_retro_col()\n"));
+        /* Then spread any cells wanting it */
+
+        x = table->cells.x - 1;
+        if (x < 1)
+        {
+                TABDBG((stderr, "Not enough columns to have any replication\n"));
+                return;
+        }
+
+        NTABDBG((stderr, "Replicating any necessary cells\n"));
+
+        for (y = 0; y < table->cells.y; y++)
+        {
+                cell = * CELLFOR(table, x - 1, y);
+                if (cell != NULL && cell->flags & rid_cf_INF_HORIZ)
+                {
+                        * CELLFOR(table, x, y) = cell;
+                        cell->span.x += 1;
+                        NTABDBG((stderr, "Cell %d,%d is replicated from %d,%d\n", x, y, cell->cell.x, cell->cell.y));
+                }
+        }
+}
+
+
+
+/*****************************************************************************
+
+    Add a row to the table and then spread any existing rid_cf_MULTIPLE
+    cells.  No rowgroup is created here.  No header/footer count is
+    incrememented here.  If there are no columns, we add one - the colgroup
+    section is finished by now.  rowhdrs is extended.  Completion marking is
+    performed in a seperate phase so that eg a 2x2 cell gets marked complete
+    when all cells have been grown, rather than when the 1st cell reaches
+    maximum extent.  The number of columns covered by a rid_cf_INF_VERT item
+    must be incremented so it has the actual span count by the time we come
+    to format the table.  The span count of the current rowgroup is also
+    incremented.
+
+    Assert that we have a colgroup by the time we create a row - and it's current
+    if we're not fixed width.
+
+*/
+
+static void add_new_row(rid_table_item *table)
+{
+        rid_table_cell *cell, **cellp;
+        rid_table_rowhdr *rowhdr;
+        size_t size, off;
+        int x, y, did_repl;
+
+        NTABDBG((stderr, "add_new_row(%p) - from %d to %d rows\n", table, table->cells.y, table->cells.y+1));
+
+        if (table->state == tabstate_BAD)
+                return;
+
+        if (table->cells.x == 0)
+        {
+                NTABDBG((stderr, "No columns when adding a row - force one\n"));
+                add_retro_col(table);
+        }
+
+        /* Add another rowhdr item */
+
+        rowhdr = table->cells.y == 0 ?
+        	mm_calloc(1, sizeof(*rowhdr)) :
+        	mm_realloc(table->rowhdrs, (table->cells.y + 1) * sizeof(*rowhdr));
+        table->rowhdrs = rowhdr;
+        rowhdr += table->cells.y;
+        memset(rowhdr, 0, sizeof(*rowhdr));
+
+	rowhdr->rowgroup = table->cur_rowgroup;
+	rowhdr->rowgroup->span += 1;
+
+        NTABDBG((stderr, "Bumping rowgroup span from %d to %d\n", rowhdr->rowgroup->span-1, rowhdr->rowgroup->span));
+
+	if (table->cur_rowgroup->span == 1 && table->num_groups.y > 0)
+	{
+	  	rowhdr->flags |= rid_rhf_GROUP_ABOVE;
+		if (table->cells.y >= 1)
+			table->rowhdrs[table->cells.y - 1].flags |= rid_rhf_GROUP_BELOW;
+	}
+
+        /* then add another row */
+
+        size = table->cells.x * (table->cells.y + 1) * sizeof(*cellp);
+        cellp = table->array == NULL ? mm_calloc(1, size) : mm_realloc(table->array, size);
+        off = table->cells.x * table->cells.y * sizeof(*cellp);
+        size = table->cells.x * sizeof(*cellp);
+        memset(off + (char *) cellp, 0, size);
+        table->cells.y++;
+        table->array = cellp;
+
+        y = table->cells.y - 1;
+        if (y < 1)
+        {
+                NTABDBG((stderr, "Not enough rows to have anything to spread\n"));
+                return;
+        }
+
+        NTABDBG((stderr, "Performing any spreading to row %d from row %d\n", y, y-1));
+
+        for (did_repl = 0, x = 0; x < table->cells.x; x++)
+        {
+                cell = * CELLFOR(table, x, y - 1);
+                if (cell != NULL && ( (cell->flags & rid_cf_COMPLETE) == 0 || (cell->flags & rid_cf_INF_VERT) != 0 ) )
+                {
+                        if ( (cell->flags & rid_cf_INF_VERT) == 0 )
+                                did_repl = 1;
+                        NTABDBG((stderr, "Replicating %d,%d from %d,%d\n", x, y, cell->cell.x, cell->cell.y));
+                        * CELLFOR(table, x, y) = cell;
+                        if ( (cell->flags & rid_cf_INF_VERT) != 0 )
+                        	cell->span.y += 1;
+                        cell->sleft -= 1;
+                }
+        }
+
+        if (! did_repl)
+        {
+                NTABDBG((stderr, "No completion to check for\n"));
+                return;
+        }
+
+        NTABDBG((stderr, "Replicated non INF_VERT item - checking for completion\n"));
+
+        /* Then spread completions of cells */
+
+        for (x = 0; x < table->cells.x; x++)
+        {
+                cell = * CELLFOR(table, x, y - 1);
+                if (cell != NULL && (cell->flags & rid_cf_COMPLETE) == 0 && (cell->flags & rid_cf_INF_VERT) == 0 )
+                {
+                        NTABDBG((stderr, "Considering cell %d,%d\n", cell->cell.x, cell->cell.y));
+                        if (cell->sleft <= 0)
+                        {
+                                NTABDBG((stderr, "Marking cell %d,%d as completed vertically, spans %d, %d\n", cell->cell.x, cell->cell.y, cell->span.x, cell->span.y));
+                                cell->flags |= rid_cf_COMPLETE;
+                        }
+                }
+        }
+
+        /* And update row group */
+}
+
+
+/*****************************************************************************
+
+    Guts of (implied) </COLGROUP>
+
+    Eg <COLGROUP SPAN=2> implies the possible creation of two columns.
+    However, <COL> inside <COLGROUP> overrides the SPAN=N, so we cannot
+    create implied columns until we get to the (implied) closing </COLGROUP>.
+    <TABLE COLS=N> still constrains the creation of columns as it does for
+    <COL>.  Remember we might have SPAN=0 and no cells to create, assuming no
+    <COL> given.
+
+    Might accept <TABLE> </COLGROUP> ...  </TABLE> when it shouldn't.
+
+    Any colhdrs created (when not got fixed number of columns) or stepped
+    over (fixed columns) gets its colgroup set correctly.
+
+*/
+
+static void close_existing_colgroup(rid_table_item *table)
+{
+        rid_table_colgroup *group;
+        int x;
+
+        NTABDBG((stderr, "close_existing_colgroup(%p)\n", table));
+
+        if (table->state == tabstate_BAD)
+                return;
+
+        ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
+        ASSERT( table->cur_colgroup != NULL );
+        ASSERT( (table->flags & rid_tf_NO_MORE_CELLS) == 0 );
+        ASSERT( table->num_groups.x > 0 );
+
+        table->flags &= ~ rid_tf_IN_COLGROUP;
+        table->cur_colgroup = NULL;
+
+        if ( (table->flags & rid_tf_GROUP_SPAN) == 0 )
+                return;
+
+        /* Create implied columns - no <COL> within <COLGROUP> */
+
+        table->flags &= ~rid_tf_GROUP_SPAN;
+        group = &table->colgroups[table->num_groups.x - 1];
+
+        if (group->span == 0)
+                return;
+
+        if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
+        {       /* Constrained by <TABLE COLS=N> */
+                ASSERT( table->scaff.x < table->cells.x );
+                if (table->scaff.x + group->span > table->cells.x)
+                {       /* Now accounted for all columns */
+                        table->flags |= rid_tf_NO_MORE_CELLS;
+                        group->span = table->cells.x - table->scaff.x;
+                }
+                NTABDBG((stderr, "Setting colgroup of %d columns\n", group->span));
+                for (x = table->scaff.x; x < table->scaff.x + group->span; x++)
+                        table->colhdrs[x].colgroup = group;
+                table->scaff.x += group->span;
+        }
+        else
+        {       /* Create columns as necessary */
+                NTABDBG((stderr, "Creating columns due to <COLGROUP SPAN=%d>\n", group->span));
+                for (x = 0; x < group->span; x++)
+                        add_new_colhdr(table)->colgroup = group;
+                table->scaff.x = table->cells.x;
+        }
+}
+
+/*****************************************************************************
+
+    This routine is called when we leave the COLGROUP stuff and begin the
+    table proper.  This marks a changeover on the type of construction being
+    performed - in particular, the use of table->scaff changes.
+
+    If no caption text has been added, then the text stream (will be) is removed.
+
+*/
+
+
+static void finished_colgroup_section(rid_table_item *table)
+{
+  	int x;
+        TABDBG((stderr, "finished_colgroup_section(%p)\n", table));
+
+        if (table->state == tabstate_BAD)
+                return;
+
+        ASSERT( (table->flags & rid_tf_IN_COLGROUP) == 0 );
+	table->flags &= ~ rid_tf_NO_MORE_CELLS;
+
+        if ( (table->flags & rid_tf_COLS_FIXED) == 0 )
+        {
+                /* Set flag so any new columns update last colgroup's span */
+                table->flags |= rid_tf_IN_COLGROUP;
+                if ( table->cur_colgroup == NULL )
+                {
+                        if (table->cells.x > 0)
+                        {
+                                TABDBG((stderr, "Reinstating previously closed COLGROUP\n"));
+                                table->cur_colgroup = &table->colgroups[table->num_groups.x];
+                        }
+                        else
+                        {
+                                TABDBG((stderr, "Didn't have a last colgroup - creating one\n"));
+                                table->cur_colgroup = add_new_colgroup(table);
+                        }
+                }
+        }
+        else
+        {       /* If fixed, shouldn't need this again. */
+                table->cur_colgroup = NULL;
+        }
+
+        /* Note columns that have a user supplied absolute width */
+        for (x = 0; x < table->cells.x; x++)
+        {
+                set_column_flags(table, x);
+        }
+
+        /* Changing uses of scaff - reset */
+        table->flags |= rid_tf_DONE_COLGROUP;
+        table->scaff.x = 0;
+        table->scaff.y = 0;
+}
+
+
+static void start_col_fixed(rid_table_item *table, int cols, int *firstp, int *countp)
+{
+        NTABDBG((stderr, "start_col_fixed(%p, %d, %p, %p)\n", table, cols, firstp, countp));
+
+        ASSERT( table->cur_colgroup != NULL );
+        ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
+
+        if (cols == 0)
+        {       /* Replicate to last column then no more columns */
+                *firstp = table->scaff.x;
+                *countp = table->cells.x - table->scaff.x;
+                table->scaff.x = table->cells.x;
+                table->flags |= rid_tf_NO_MORE_CELLS;
+        }
+        else
+        {
+                if ( table->scaff.x + cols > table->cells.x )
+                {
+                        cols = table->cells.x - table->scaff.x;
+                }
+                *firstp = table->scaff.x;
+                *countp = cols;
+                table->scaff.x += cols;
+        }
+
+        table->cur_colgroup->span += *countp;
+}
+
+static void start_col_growing(rid_table_item *table, int cols, int *firstp, int *countp)
+{
+        rid_table_colhdr *colhdr = &table->colhdrs[table->cells.x -1];
+
+        TABDBG((stderr, "start_col_growing(%p, %d, %p, %p)\n", table, cols, firstp, countp));
+
+        ASSERT( table->cur_colgroup != NULL );
+        ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
+
+        if ( table->cells.x > 0 && (colhdr->flags & rid_chf_REPLICATE) != 0 )
+        {       /* Have to replicate previous column */
+                *firstp = *countp = 0;  /* Current <COL> contributes only a span */
+                if (cols == 0)
+                        cols = 1;
+                table->scaff.x += cols;
+                table->cur_colgroup->span += cols;
+                while (cols-- > 0)
+                        copy_colhdr_props(colhdr, add_new_colhdr(table));
+        }
+        else if (cols == 0)
+        {       /* Replicate to end of table */
+                *firstp = table->cells.x;
+                *countp = 1;
+                table->cur_colgroup->span += 1;
+                add_new_colhdr(table)->flags |= rid_chf_REPLICATE;
+                /*table->cells.x += 1;*/ /* done by add_new_colhdr */
+        }
+        else
+        {       /* Add as many columns as requested */
+                *firstp = table->scaff.x;
+                *countp = cols;
+                table->scaff.x += cols;
+                table->cur_colgroup->span += cols;
+                while (cols-- > 0)
+                        add_new_colhdr(table);
+        }
+}
+
+/*****************************************************************************
+
+    The table is finished. The dimensions are now stable. Some things are
+    only easily done now such as deciding where column seperator lines are
+    (otherwise the implicitly created columns really mess things up). This
+    does mean we virtually always will require a reformat at the end of the
+    table :-(
+
+    Any cells spanning multiple rows that never actually saw as many rows as
+    expected (ie N for ROWSPAN=N greater than number of <TR>s) needs reeling
+    back in.
+
+*/
+
+static void tidy_table(rid_table_item *table)
+{
+	const int maxy = table->cells.y;
+	int x, y;
+	rid_table_cell *cell;
+
+	for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
+	{
+	 	if (cell->cell.y + cell->span.y > maxy)
+	 	{
+	 		cell->span.y = maxy - cell->cell.y;
+	 	  	TABDBG((stderr, "Restraining %d,%d to span %d\n", cell->cell.x, cell->cell.y, cell->span.y));
+		}
+        }
+
+        /* Assign correct border information */
+
+        for (x = 0; x < table->cells.x; x++)
+        {
+                rid_table_colhdr *colhdr = &table->colhdrs[x];
+
+                colhdr->lborder = colhdr->rborder =
+                        table->cell_border.x + table->cellpadding + table->cellspacing;
+
+                /* If a column group starts here, have a thicker left border */
+                if ( x != 0 && colhdr->colgroup->first == x )
+                        colhdr->lborder += table->group_border.x;
+
+                /* If a column group ends here, have a thicker right border */
+                if ( x != table->cells.x - 1 && (colhdr->colgroup->first + colhdr->colgroup->span - 1) == x )
+                        colhdr->rborder += table->group_border.x;
+        }
+
+        for (y = 0; y < table->cells.y; y++)
+        {
+                rid_table_rowhdr *rowhdr = &table->rowhdrs[y];
+
+                rowhdr->tborder = rowhdr->bborder =
+                        table->cell_border.y + table->cellpadding + table->cellspacing;
+
+                /* If a row group starts here, have a thicker top border */
+                if ( y != 0 && rowhdr->rowgroup->first == y )
+                        rowhdr->tborder += table->group_border.y;
+
+                /* If a row group ends here, have a thicker bottom border */
+                if ( y != table->cells.y - 1 && (rowhdr->rowgroup->first + rowhdr->rowgroup->span - 1) == y )
+                        rowhdr->bborder += table->group_border.y;
+        }
+
+
+}
+
+/*****************************************************************************
+
+    Inheritence of attributes:
+
+    Each cell can have a number of attributes, either directly specified with
+    the cell or inherited from its surroundings.  The order of inheritence is
+    defined as follows:
+
+    HALIGN, CHAR and CHAROFF
+        cells > columns > column groups > rows > row groups > default
+        xcCrRd
+    VALIGN, LANG, DIR and STYLE
+        cells > rows > row groups > columns > column groups > table > default
+        xrRcCtd
+
+    Within rid_getprop(), this is translated into a control string indicating
+    where to look next for the attribute.  The magic characters are:
+
+    x       cells
+    r       rows
+    R       row groups
+    c       columns
+    C       column groups
+    t       table
+    d       default
+
+    Given how frequently this gets used, should perhaps be writing something
+    that executes faster.
+
+    colhdr gets userwidth copied automatically from its colgroup
+*/
+
+extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *result)
+{
+        static rid_stdunits dsu = { rid_stdunit_MULT, (float) (1.0) };
+
+        char *control;
+        rid_table_cell *cell = * CELLFOR(table, x, y);
+        rid_table_props *props = NULL;
+        int hdr = cell ? (cell->flags & rid_cf_HEADER) : 0;
+
+	ASSERT(x < table->cells.x);
+	ASSERT(y < table->cells.y);
+
+        switch (prop)
+        {
+        case rid_PROP_HALIGN:
+        case rid_PROP_CH    :
+        case rid_PROP_CHOFF :
+                control = "xcCrRd";
+                break;
+
+        case rid_PROP_VALIGN:
+        case rid_PROP_DIR   :
+        case rid_PROP_LANG  :
+        case rid_PROP_STYLE :
+                control = "xrRcCtd";
+                break;
+
+        case rid_PROP_WIDTH :
+                {
+                        rid_table_colhdr *hdr = &table->colhdrs[x];
+                        rid_table_colgroup *grp = hdr->colgroup;
+
+			ASSERT(hdr != NULL);
+
+                        if (hdr->userwidth.type != rid_stdunit_UNKNOWN)
+                        {
+                                * ((rid_stdunits *)result) = hdr->userwidth;
+                        }
+                        else if (grp->userwidth.type != rid_stdunit_UNKNOWN)
+                        {
+                                * ((rid_stdunits *)result) = grp->userwidth;
+                        }
+                        else
+                        {
+                                * ((rid_stdunits *)result) = dsu;
+                        }
+                        return;
+                }
+                break;
+
+        default:
+                return;
+                break;
+        }
+
+        while (1)
+        {
+                switch ( *control++ )
+                {
+                case 'x':       /* cells */
+                	ASSERT(cell != NULL);
+                        props = cell->props;
+                        break;
+                case 'r':       /* rows */
+                        props = table->rowhdrs[y].props;
+                        break;
+                case 'R':       /* row groups */
+			if (table->rowhdrs[y].rowgroup != NULL)
+	                        props = table->rowhdrs[y].rowgroup->props;
+                        break;
+                case 'c':       /* columns */
+                        props = table->colhdrs[x].props;
+                        break;
+                case 'C':       /* column groups */
+                	if (table->colhdrs[x].colgroup != NULL)
+	                        props = table->colhdrs[x].colgroup->props;
+                        break;
+                case 't':       /* table */
+                        props = table->props;
+                        break;
+                default:
+                case 'd':       /* default */
+                        switch (prop)
+                        {
+                        case rid_PROP_HALIGN:
+                                * ((rid_halign_tag *)result) = hdr ? rid_ht_CENTER : rid_ht_LEFT;
+                                return;
+                        case rid_PROP_CH    :
+                                * ((char *)result) = '.';       /* needs lang attention */
+                                return;
+                        case rid_PROP_VALIGN:
+                                * ((rid_valign_tag *)result) = rid_vt_MIDDLE;
+                                return;
+                        case rid_PROP_DIR   :
+                                * ((rid_dir_tag *)result) = rid_dt_LTR;
+                                return;
+                        case rid_PROP_LANG  :
+                        case rid_PROP_STYLE :
+                        case rid_PROP_CHOFF :
+                                /* not used yet - might need notable work */
+                                return;
+                        }
+                        break;
+                }
+
+                if (props == NULL)
+                        continue;
+
+                switch (prop)
+                {
+                case rid_PROP_HALIGN:
+                        if (props->halign != rid_ht_UNKNOWN)
+                        {
+                                * ((rid_halign_tag *)result) = props->halign;
+                                return;
+                        }
+                        break;
+                case rid_PROP_CH    :
+                        if (props->ch)
+                        {
+                                * ((char *)result) = props->ch;
+                                return;
+                        }
+                        break;
+                case rid_PROP_DIR   :
+                        if (props->dir != rid_dt_UNKNOWN)
+                        {
+                                * ((rid_dir_tag *)result) = props->dir;
+                                return;
+                        }
+                        break;
+                case rid_PROP_VALIGN:
+                        if (props->valign != rid_vt_UNKNOWN)
+                        {
+                                * ((rid_valign_tag *)result) = props->valign;
+                                return;
+                        }
+                        break;
+                case rid_PROP_LANG  :
+                case rid_PROP_CHOFF :
+                case rid_PROP_STYLE :
+                        return;
+                }
+        }
+}
+
+/*****************************************************************************
+
+    <TABLE>
+
+    A new table is inserted as a single rid_text_item within the current
+    rid_text_stream.
+
+    Values are parsed and a rid_table_item initialised accordingly.
+
+    A rid_text_stream is created in the caption position to capture any
+    "floating" text outside <TD> items.  If we didn't do this, the creation
+    would be performed by table_start_caption().
+
+    curstream of the rid_header is updated to reference the caption item.
+
+    <TABLE COLS=N> causes initialisation and fixing of the number of columns.
+    COLGROUP and COL can still initialise them.
+
+*/
+
+extern unsigned char table_start_table(HTStructured *me,
+                              const char *halign,
+                              const char *border,
+                              const char *cellpadding,
+                              const char *cellspacing,
+                              const char *class,
+                              const char *cols,
+                              const char *dir,
+                              const char *frame,
+                              const char *id,
+                              const char *lang,
+                              const char *rules,
+                              const char *style,
+                              const char *userwidth
+                             )
+{
+        rid_table_item *tab;
+        rid_text_item_table *rtit;
+        rid_table_caption *rtc;
+        rid_text_item *nb;
+	unsigned char ret = 0;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nstart_table: halign %s, border %s, cellpadding %s, cellspacing %s\n"
+                        "class %s, cols %s, dir %s, frame %s, id %s\n"
+                        "lang %s, rules %s, style %s, userwidth %s\n",
+                        halign ? halign : "-",
+                        border ? border : "-",
+                        cellpadding ? cellpadding : "-",
+                        cellspacing ? cellspacing : "-",
+                        class ? class : "-",
+                        cols ? cols : "-",
+                        dir ? dir : "-",
+                        frame ? frame : "-",
+                        id ? id : "-",
+                        lang ? lang : "-",
+                        rules ? rules : "-",
+                        style ? style : "-",
+                        userwidth ? userwidth : "-"
+                );
+#endif
+
+        /* tab is the new table. rtit contains tab and rtc is contained by tab */
+        /* Very important that everything in the table starts at zero! */
+
+        tab = (rid_table_item *) mm_calloc(1, sizeof(*tab));
+        rtit = (rid_text_item_table *) mm_calloc(1, sizeof(*rtit));
+        rtc = (rid_table_caption *) mm_calloc(1, sizeof(*rtc));
+
+        /* Fill in available values. */
+
+        tab->props = parse_table_props(NULL, halign, NULL, NULL, lang, dir, style);
+        tab->class = strdup(class);
+        tab->id = strdup(id);
+        tab->state = tabstate_PRE;
+        /* Set by default, clear if get a <COLGROUP> */
+        tab->flags = rid_tf_IMPLIED_COLGROUP | rid_tf_3D_BORDERS;
+
+	if (tab->props != NULL && tab->props->halign == rid_ht_CENTER)
+	{
+	  	TABDBG((stderr, "Centering table\n"));
+		ret |= rid_sf_CENTERED;
+        }
+
+        if (border)
+                tab->userborder = parse_stdunits(border);
+        if (frame)
+                tab->frame = tag_from_str(frame, strtag_frame);
+        if (tab->frame == rid_ft_BOX)
+        	tab->frame = rid_ft_BORDER;
+        if (rules)
+                tab->rules = tag_from_str(rules, strtag_rules);
+        if (userwidth)
+                tab->userwidth = parse_stdunits(userwidth);
+        if (cellspacing)
+                tab->usercellspacing = parse_stdunits(cellspacing);
+        if (cellpadding)
+                tab->usercellpadding = parse_stdunits(cellpadding);
+
+        if (tab->usercellpadding.type != rid_stdunit_PX ||
+           (tab->cellpadding = (int) ceil(tab->usercellpadding.count)) < 0 )
+        {
+                tab->cellpadding = DEFAULT_CELL_PADDING;
+        }
+
+        if (tab->usercellspacing.type != rid_stdunit_PX ||
+           (tab->cellspacing = (int) ceil(tab->usercellspacing.count)) < 0 )
+        {
+                tab->cellspacing = DEFAULT_CELL_SPACING;
+        }
+
+        if (border != NULL)
+        {       /* User included a BORDER attribute */
+                if (tab->userborder.type == rid_stdunit_PX)
+                {       /* Plausible type size given to border */
+                        int x = (int) ceil(tab->userborder.count);
+                        if (x > 0)
+                        {       /* Actual border, implies frame type */
+                                tab->lborder = x > 255 ? 255 : x;
+                                tab->frame = rid_ft_BORDER;
+                        }
+                        else
+                        {       /* Empty border */
+                                tab->frame = rid_ft_VOID;
+                        }
+                }
+                else
+                {       /* Assume <TABLE BORDER> for <TABLE BORDER=garbage> */
+                        tab->lborder = 1;
+                        tab->frame = rid_ft_BORDER;
+                }
+        }
+        else
+        {       /* No border specified - use frame attribute */
+                if (frame != NULL)
+                	tab->lborder = 1;
+        }
+
+        tab->cell_border.x = tab->cell_border.y = tab->lborder;
+        tab->rborder = tab->tborder = tab->bborder = tab->lborder;
+
+        switch (tab->frame)
+        {
+        case rid_ft_UNKNOWN :
+        case rid_ft_VOID    :
+        case rid_ft_BOX     :
+        case rid_ft_BORDER  :
+                break;
+        case rid_ft_ABOVE   :
+                tab->lborder = tab->rborder = tab->bborder = 0;
+                break;
+        case rid_ft_BELOW   :
+                tab->lborder = tab->rborder = tab->tborder = 0;
+                break;
+        case rid_ft_HSIDES  :
+                tab->tborder = tab->bborder = 0;
+                break;
+        case rid_ft_LHS     :
+                tab->bborder = tab->rborder = tab->tborder = 0;
+                break;
+        case rid_ft_RHS     :
+                tab->bborder = tab->lborder = tab->tborder = 0;
+                break;
+        case rid_ft_VSIDES  :
+                tab->lborder = tab->rborder = 0;
+                break;
+        }
+
+        switch (tab->rules)
+        {
+        case rid_rt_NONE    :
+                tab->cell_border.x = tab->cell_border.y = 0;
+                break;
+        case rid_rt_GROUPS  :
+                tab->cell_border.x = tab->cell_border.y = 0;
+                tab->group_border.x = tab->group_border.y = 1;
+                break;
+        case rid_rt_ROWS    :
+                tab->cell_border.x = 0;
+                tab->cell_border.y = 1;
+                tab->group_border.x = tab->group_border.y = 1;
+                break;
+        case rid_rt_COLS    :
+                tab->cell_border.x = 1;
+                tab->cell_border.y = 0;
+                tab->group_border.x = tab->group_border.y = 1;
+                break;
+        case rid_rt_UNKNOWN :
+        case rid_rt_ALL     :
+                tab->group_border.x = tab->group_border.y = 1;
+                break;
+        }
+
+        /* Can we do on-the-fly rendering? */
+
+        if (cols != NULL)
+        {       /* We'll ignore if it looks bogus */
+                int c = atoi(cols);
+                if (c > 0)
+                {
+                        TABDBG((stderr, "Table fixed at %d columns\n", c));
+                        if (tab->userwidth.type == rid_stdunit_UNKNOWN)
+                        {       /* Suggested by 23-1-96 DRAFT */
+                                tab->userwidth.type = rid_stdunit_PCENT;
+                                tab->userwidth.count = (float) (100.0);
+                        }
+                        while (c--)
+                                add_new_colhdr(tab);
+                        tab->flags |= rid_tf_COLS_FIXED;
+                }
+                /* else let table size itself */
+        }
+
+        /* Link structures together */
+        tab->caption = rtc;
+
+        rtc->table = tab;
+	rtc->stream.parent = rtc;
+        rtc->stream.partype = rid_pt_CAPTION;
+        rtit->table = tab;
+        tab->parent = rtit;
+        nb = &rtit->base;
+        nb->tag = rid_tag_TABLE;
+        nb->aref = me->aref;	/* Current anchor, or NULL */
+        if (me->aref && me->aref->first == NULL)
+                me->aref->first = nb;
+        nb->st = me->sp[0].style;
+
+        rid_text_item_connect(me->rh->curstream, &rtit->base);
+
+        /* Switch over to the caption stream until we know better */
+
+        tab->oldstream = me->rh->curstream;
+        tab->oldtable = me->table;
+        me->rh->curstream = &rtc->stream;
+        me->table = tab;
+
+	NTABDBG((stderr, "Started table %p, current stream now %p\n", tab, me->rh->curstream));
+
+	return ret;
+}
+
+/*****************************************************************************
+
+    </TABLE>
+
+    This routine is called when the </TABLE> tag is found.  This triggers
+    some post processing.
+
+    me->rh->curstream and me->table are updated to reflect the unwinding of
+    nesting.
+
+    Maybe should add a soft space after the table - this means, once the
+    document has been fully parsed, text_last of rid_text_stream cannot refer
+    to a table, which simplifies possible reformatting tests (might otherwise
+    have last item as a table that was incomplete and is now complete but the
+    text_last item is still the same).
+
+*/
+
+extern void table_end_table(HTStructured *me)
+{
+        rid_table_item *table = me->table;
+
+        NTABDBG((stderr, "\nend_table:\n"));
+
+        if (table == NULL)
+                return;
+
+        switch (table->state)
+        {
+        case tabstate_BDTR:
+                TABDBG((stderr, "Table finished with an okay status\n"));
+                table->state = tabstate_POST;
+                break;
+
+        case tabstate_PRE :
+        case tabstate_CAPT:
+        case tabstate_CGRP:
+        case tabstate_COL :
+        case tabstate_HEAD:
+        case tabstate_HDTR:
+        case tabstate_FOOT:
+        case tabstate_FTTR:
+        case tabstate_BODY:
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                table->state = tabstate_BAD;
+                TABDBG((stderr, "\nTable finished with  BAD  status\n\n"));
+                return;
+                break;
+        }
+
+        tidy_table(table);
+
+        me->rh->curstream = table->oldstream;
+        me->table = table->oldtable;
+}
+
+/*****************************************************************************
+
+    <CAPTION>
+
+    If we didn't generate the caption text stream as soon as the table is
+    entered, we would be generating it here.  However, we still have to parse
+    any options and store them with the caption.
+
+*/
+
+extern unsigned char table_start_caption(HTStructured *me,
+                                const char *calign,
+                                const char *class,
+                                const char *dir,
+                                const char *id,
+                                const char *lang,
+                                const char *style
+                               )
+{
+        rid_table_caption *cap;
+        rid_table_item *tab = me->table;
+	unsigned char ret = 0;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nstart_caption: calign %s, class %s\n"
+                        "dir %s, id %s, lang %s, style %s\n",
+                        calign ? calign : "-",
+                        class ? class : "-",
+                        dir ? dir : "-",
+                        id ? id : "-",
+                        lang ? lang : "-",
+                        style ? style : "-"
+                );
+#endif
+
+        if (tab == NULL)
+                return ret;
+
+        switch (tab->state)
+        {
+        case tabstate_PRE :
+                tab->state = tabstate_CAPT;
+                break;
+
+        case tabstate_CAPT:
+        case tabstate_CGRP:
+        case tabstate_COL :
+        case tabstate_HEAD:
+        case tabstate_HDTR:
+        case tabstate_FOOT:
+        case tabstate_FTTR:
+        case tabstate_BODY:
+        case tabstate_BDTR:
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                tab->state = tabstate_BAD;
+                return ret;
+                break;
+        }
+
+        cap = tab->caption;
+
+        cap->class = strdup(class);
+        cap->id = strdup(id);
+        cap->props = parse_table_props(NULL, NULL, NULL, NULL, lang, dir, style);
+        cap->calign = calign ? tag_from_str(calign, strtag_calign) : rid_ct_UNKNOWN;
+
+        /* text stream is already attached */
+
+	if (cap->props == NULL)
+	{
+	  	ret |= rid_sf_CENTERED;
+	}
+	else if (cap->props->halign == rid_ht_CENTER)
+	{
+	  	ret |= rid_sf_CENTERED;
+	}
+	else if (cap->props->halign == rid_ht_RIGHT)
+	{
+	  	ret |= rid_sf_RIGHTALIGN;
+	}
+
+	return ret;
+}
+
+/*****************************************************************************
+
+    <COLGROUP>
+
+    Starts a new column group, unless columns already full.  Closes any
+    existing column group If a span is supplied, start with this but get
+    ready for <COL> overwriting it.  Span can be zero to permit things like
+    <COLGROUP SPAN=0 ID="wibble">
+
+    If no more cells will fit, then we do not add a COLGROUP, even for
+    <COLGROUP SPAN=0 ID="wibble"></COLGROUP>
+
+*/
+
+extern void table_start_colgroup(HTStructured *me,
+                               const char *halign,
+                               const char *ch,
+                               const char *choff,
+                               const char *class,
+                               const char *dir,
+                               const char *id,
+                               const char *lang,
+                               const char *span,
+                               const char *style,
+                               const char *valign,
+                               const char *width
+                              )
+{
+        rid_table_item *table = me->table;
+        rid_table_colgroup *colgroup;
+        int cols;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nstart_colgroup: halign %s, ch %s, choff %s, class %s\n"
+                        "dir %s, id %s, lang %s, span %s\n"
+                        "style %s, valign %s, width %s\n",
+                        halign ? halign : "-",
+                        ch ? ch : "-",
+                        choff ? choff : "-",
+                        class ? class : "-",
+                        dir ? dir : "-",
+                        id ? id : "-",
+                        lang ? lang : "-",
+                        span ? span : "-",
+                        style ? style : "-",
+                        valign ? valign : "-",
+                        width ? width : "-"
+                );
+#endif
+
+        if (table == NULL)
+                return;
+
+        switch (table->state)
+        {
+        case tabstate_PRE :
+        case tabstate_CAPT:
+                table->state = tabstate_CGRP;
+                break;
+
+        case tabstate_CGRP:
+                if ( (table->flags & rid_tf_IN_COLGROUP) != 0)
+                        close_existing_colgroup(table);
+                break;
+
+        case tabstate_COL :
+                if ( (table->flags & rid_tf_IN_COLGROUP) != 0)
+                        close_existing_colgroup(table);
+                table->state = tabstate_CGRP;
+                break;
+
+        case tabstate_HEAD:
+        case tabstate_FOOT:
+        case tabstate_BODY:
+        case tabstate_HDTR:
+        case tabstate_FTTR:
+        case tabstate_BDTR:
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                table->state = tabstate_BAD;
+                return;
+                break;
+        }
+
+        if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
+                return;
+        /* else must be enough room for at least one cell */
+
+        table->flags &= ~rid_tf_IMPLIED_COLGROUP;
+        colgroup = add_new_colgroup(table);
+        colgroup->props = parse_table_props(valign, halign, ch, choff, lang, dir, style);
+        colgroup->id = strdup(id);
+        colgroup->class = strdup(class);
+        colgroup->userwidth = parse_stdunits(width);
+
+        NTABDBG((stderr, "Colgroup width type %d, value %f\n", colgroup->userwidth.type, colgroup->userwidth.count));
+
+        table->cur_colgroup = colgroup;
+
+        if ( span == NULL || sscanf(span, "%d", &cols) != 1 )
+        {
+                cols = 0;
+        }
+        else if (cols < 0)
+        {
+                cols = 0;
+        }
+
+        colgroup->span = cols;
+
+        if (cols > 0)
+        {       /* <COLGROUP> may span zero columns */
+                table->flags |= rid_tf_GROUP_SPAN;
+        }
+
+        /*table->flags |= rid_tf_IN_COLGROUP;*/
+}
+
+/*****************************************************************************
+
+    </COLGROUP>
+
+    Close the current column group.  Mainly handled in
+    close_existing_colgroup so implied </COLGROUP> can share the same code.
+
+*/
+
+extern void table_end_colgroup(HTStructured *me)
+{
+        rid_table_item *table = me->table;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nend_colgroup\n");
+#endif
+
+        if (table == NULL)
+                return;
+
+        switch (table->state)
+        {
+        case tabstate_COL :
+                if (table->flags & rid_tf_IN_COLGROUP)
+                        close_existing_colgroup(table);
+                else
+                        table->state = tabstate_BAD;
+                break;
+        case tabstate_CGRP:
+                if (table->flags & rid_tf_IN_COLGROUP)
+                        close_existing_colgroup(table);
+                break;
+        case tabstate_PRE :
+        case tabstate_CAPT:
+        case tabstate_HEAD:
+        case tabstate_FOOT:
+        case tabstate_BODY:
+        case tabstate_HDTR:
+        case tabstate_FTTR:
+        case tabstate_BDTR:
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                table->state = tabstate_BAD;
+                break;
+        }
+}
+
+/*****************************************************************************
+
+    <COL>
+
+    Add another column header (rid_table_colhdr) to the table.  If the
+    maximum number of columns have already been supplied, do nothing.
+    Replicate attributes across multiple columns if <COL SPAN=N> with N > 1.
+    A <COL SPAN=0> does not automatically prevent other <COL> items being
+    processed - it merely overrides the user attributes with those of the
+    colhdr being replicated.
+
+    If we are in a COLGROUP, then increment it's span.  xscaff on entry
+    indicates the (first) column we refer to.  xscaff on exit indicates the
+    next column to write to, or rid_tf_NO_MORE_CELLS is set to indicate we
+    cannot accomodate any more colhdr items (either reached column count or
+    last colhdr extends to extent of table).
+
+*/
+
+extern void table_start_col(HTStructured *me,
+                            const char *halign,
+                            const char *ch,
+                            const char *choff,
+                            const char *class,
+                            const char *dir,
+                            const char *id,
+                            const char *lang,
+                            const char *span,
+                            const char *style,
+                            const char *valign,
+                            const char *width
+                           )
+{
+        rid_table_item *table = me->table;
+        rid_table_colhdr *hdr;
+/*        rid_table_colgroup *group;*/
+        int cols, first, count, x;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nstart_col: halign %s, ch %s, choff %s, class %s\n"
+                        "dir %s, id %s, lang %s, span %s\n"
+                        "style %s, valign %s, width %s\n",
+                        halign ? halign : "-",
+                        ch ? ch : "-",
+                        choff ? choff : "-",
+                        class ? class : "-",
+                        dir ? dir : "-",
+                        id ? id : "-",
+                        lang ? lang : "-",
+                        span ? span : "-",
+                        style ? style : "-",
+                        valign ? valign : "-",
+                        width ? width : "-"
+                );
+#endif
+
+        if (table == NULL)
+                return;
+
+        switch (table->state)
+        {
+        case tabstate_PRE :
+        case tabstate_CAPT:
+                /* Create a single enclosing implied <COLGROUP> */
+                table->state = tabstate_COL;
+                table->cur_colgroup = add_new_colgroup(table);
+                break;
+
+        case tabstate_CGRP:
+                if ( (table->flags & rid_tf_IN_COLGROUP) == 0 )
+                        table->state = tabstate_BAD;
+                else
+                        table->state = tabstate_COL;
+                break;
+
+        case tabstate_COL :
+                if ( (table->flags & rid_tf_IN_COLGROUP) == 0 )
+                        table->state = tabstate_BAD;
+                break;
+
+        case tabstate_HEAD:
+        case tabstate_HDTR:
+        case tabstate_FOOT:
+        case tabstate_FTTR:
+        case tabstate_BODY:
+        case tabstate_BDTR:
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                table->state = tabstate_BAD;
+                return;
+                break;
+        }
+
+        if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
+        {
+                NTABDBG((stderr, "Can't add any more cells\n"));
+                return;
+        }
+
+        ASSERT( table->cur_colgroup != NULL );
+        ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
+
+        if ( (table->flags & rid_tf_GROUP_SPAN) != 0 )
+        {
+                NTABDBG((stderr, "Cancelling <COLGROUP SPAN=%d> from earlier\n", table->cur_colgroup->span));
+                table->flags &= ~rid_tf_GROUP_SPAN;
+                table->cur_colgroup->span = 0;
+        }
+
+        if ( span == NULL || sscanf(span, "%d", &cols) != 1 )
+        {
+                cols = 1;
+        }
+        else if (cols < 0)
+        {
+                cols = 1;
+        }
+
+        if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
+                start_col_fixed(table, cols, &first, &count);
+        else
+                start_col_growing(table, cols, &first, &count);
+
+        /* Columns will have been created. Range to initialise has */
+        /* been determined. Any replication has already been handled. */
+
+        NTABDBG((stderr, "<COL SPAN=%d>: properties copy: first %d, count %d\n", cols, first, count));
+
+        for (x = first; count > 0; x++, count--)
+        {
+                hdr = &table->colhdrs[x];
+                hdr->props = parse_table_props(valign, halign, ch, choff, lang, dir, style);
+                hdr->userwidth = parse_stdunits(width);
+                hdr->id = strdup(id);           /* Maybe should always use? */
+                hdr->class = strdup(class);     /* Maybe should always use? */
+                hdr->colgroup = table->cur_colgroup;
+        }
+
+        return;
+}
+
+/*****************************************************************************
+
+    <THEAD> <TFOOT> <TBODY>
+
+    element_number is one of HTML_THEAD, HTML_TFOOT or HTML_TBODY.  Each
+    introduces the start of a new row group, which must contain at least one
+    <TR> item.  This creates a new entry in the rowgroups list, and advances
+    the state.
+
+*/
+
+extern void table_start_rowgroup(HTStructured *me,
+                                 int element_number,
+                                 const char *halign,
+                                 const char *ch,
+                                 const char *choff,
+                                 const char *class,
+                                 const char *dir,
+                                 const char *id,
+                                 const char *lang,
+                                 const char *style,
+                                 const char *valign
+                                )
+{
+        rid_table_item *table = me->table;
+        rid_table_rowgroup *rowgroup;
+        int new_state;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nstart_rowgroup: tag %d, halign %s, ch %s, choff %s\n"
+                        "class %s, dir %s, id %s, lang %s, style %s, valign %s\n",
+                        element_number,
+                        halign ? halign : "-",
+                        ch ? ch : "-",
+                        choff ? choff : "-",
+                        class ? class : "-",
+                        dir ? dir : "-",
+                        id ? id : "-",
+                        lang ? lang : "-",
+                        style ? style : "-",
+                        valign ? valign : "-"
+                );
+#endif
+
+        assert(element_number == HTML_THEAD ||element_number == HTML_TFOOT ||element_number == HTML_TBODY);
+
+        if (table == NULL)
+                return;
+
+        /* Precalculation */
+        switch (element_number)
+        {
+        case HTML_THEAD:
+                new_state = tabstate_HEAD;
+                break;
+        case HTML_TFOOT:
+                new_state = tabstate_FOOT;
+                break;
+        case HTML_TBODY:
+                new_state = tabstate_BODY;
+                break;
+        default:
+                new_state = tabstate_BAD;
+                break;
+        }
+
+        /* Slightly fiddly */
+        switch (table->state)
+        {
+        case tabstate_PRE :
+        case tabstate_CAPT:
+                assert(table->num_groups.x == 0);
+                table->cur_colgroup = add_new_colgroup(table);
+                close_existing_colgroup(table);
+                finished_colgroup_section(table);
+                table->state = new_state;
+                break;
+
+        case tabstate_CGRP:
+        case tabstate_COL :
+                if ( (table->flags & rid_tf_IN_COLGROUP) != 0 )
+                        close_existing_colgroup(table);
+                finished_colgroup_section(table);
+                table->state = new_state;
+                break;
+
+        case tabstate_HDTR:
+                switch (element_number)
+                {
+                default:
+                case HTML_THEAD:        table->state = tabstate_BAD;  break;
+                case HTML_TFOOT:        table->state = tabstate_FOOT; break;
+                case HTML_TBODY:        table->state = tabstate_BODY; break;
+                }
+                break;
+
+        case tabstate_FTTR:
+                switch (element_number)
+                {
+                default:
+                case HTML_THEAD:
+                case HTML_TFOOT:        table->state = tabstate_BAD;  break;
+                case HTML_TBODY:        table->state = tabstate_BODY; break;
+                }
+                break;
+
+        case tabstate_BDTR:
+                switch (element_number)
+                {
+                default:
+                case HTML_THEAD:
+                case HTML_TFOOT:        table->state = tabstate_BAD;  break;
+                case HTML_TBODY:        table->state = tabstate_BODY; break;
+                }
+                break;
+
+        case tabstate_HEAD:
+        case tabstate_FOOT:
+        case tabstate_BODY:
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                table->state = tabstate_BAD;
+                break;
+        }
+
+        if (table->state == tabstate_BAD)
+                return;
+
+        rowgroup = add_new_rowgroup(table);
+        rowgroup->props = parse_table_props(valign, halign, ch, choff, lang, dir, style);
+        rowgroup->id = strdup(id);
+        rowgroup->class = strdup(class);
+        table->cur_rowgroup = rowgroup;
+}
+
+
+/*****************************************************************************
+
+    <TR>
+
+    Start a new table row.  We might increment the header_rows or footer_rows
+    values.  A new row is added to the table, initially containing empty
+    cells.
+
+    Any previous cells that have not yet finished spreading are grown down by
+    one row.  A new rowhdr value is added and filled in with the <TR>
+    attributes.  We then determine the first free position to put the
+    scaffold cursor at.  This can lead to rid_tf_NO_MORE_CELLS being set if
+    all the cells of the row were occupied by the spreading.  If this flag is
+    not set, the scaffolding refers to the cell to contain the text stream
+    that the next <TH> or <TD> should create and attach.
+
+    We might have an implied end to <CAPTION> or <COLGROUP> and an implied
+    <TBODY>.
+
+*/
+
+extern void table_start_tr(HTStructured *me,
+                           const char *halign,
+                           const char *ch,
+                           const char *choff,
+                           const char *class,
+                           const char *dir,
+                           const char *id,
+                           const char *lang,
+                           const char *style,
+                           const char *valign
+                          )
+{
+        rid_table_item *table = me->table;
+        rid_table_rowhdr *hdr;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nstart_tr: halign %s, ch %s, choff %s\n"
+                        "class %s, dir %s, id %s, lang %s, style %s, valign %s\n",
+                        halign ? halign : "-",
+                        ch ? ch : "-",
+                        choff ? choff : "-",
+                        class ? class : "-",
+                        dir ? dir : "-",
+                        id ? id : "-",
+                        lang ? lang : "-",
+                        style ? style : "-",
+                        valign ? valign : "-"
+                );
+#endif
+
+        if (table == NULL)
+                return;
+
+        switch (table->state)
+        {
+
+        case tabstate_PRE :
+        case tabstate_CAPT:
+                table->cur_colgroup = add_new_colgroup(table);
+                close_existing_colgroup(table);
+                finished_colgroup_section(table);
+                table->cur_rowgroup = add_new_rowgroup(table);
+                if (table->state != tabstate_BAD)
+                        table->state = tabstate_BDTR;
+                break;
+
+        case tabstate_CGRP:
+        case tabstate_COL :
+                if ( (table->flags & rid_tf_IN_COLGROUP) != 0)
+                        close_existing_colgroup(table);
+                finished_colgroup_section(table);
+                table->cur_rowgroup = add_new_rowgroup(table);
+                if (table->state != tabstate_BAD)
+                        table->state = tabstate_BDTR;
+                break;
+
+        case tabstate_BODY:
+                table->state = tabstate_BDTR;
+                break;
+
+        case tabstate_HEAD:
+                table->header_rows++;
+                table->state = tabstate_HDTR;
+                break;
+
+        case tabstate_FOOT:
+                table->footer_rows++;
+                table->state = tabstate_FTTR;
+                break;
+
+        case tabstate_HDTR:
+                table->header_rows++;
+                break;
+
+        case tabstate_FTTR:
+                table->footer_rows++;
+                break;
+
+        case tabstate_BDTR:
+                break;
+
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                table->state = tabstate_BAD;
+                break;
+        }
+
+        /* By default, we can add cells */
+
+        table->flags &= ~ rid_tf_NO_MORE_CELLS;
+
+        /* Add another row, and perform any necessary spreading */
+
+        add_new_row(table);		/* bumps row span */
+
+        if (table->state == tabstate_BAD)
+                return;
+
+        /* fill in rowhdr values */
+
+        ASSERT( table->cur_rowgroup->span != NULL );
+        /*table->cur_rowgroup->span += 1;*/
+        hdr = &table->rowhdrs[table->cells.y - 1];
+        hdr->props = parse_table_props(valign, halign, ch, choff, lang, dir, style);
+        hdr->id = strdup(id);
+        hdr->class = strdup(class);
+
+        /* Position the scaffolding for where we are to start looking for an empty cell */
+
+        ASSERT(table->cells.y > 0);
+        table->scaff.x = 0;
+        table->scaff.y = table->cells.y - 1;
+}
+
+/*****************************************************************************
+
+    <TH> <TD>
+
+    Attempt to create a new text stream for writing into.  The scaffolding
+    indicates where to start looking for an empty cell - it might not be
+    empty itself.
+
+    If we are operating with a known number of columns, we might not be able
+    to find an empty cell.
+
+    Without a fixed number of columns, we can always find a cell in this row.
+    It might entail adding more than one column.  Adding a rid_cf_INF_HORIZ
+    item will set rid_tf_NO_MORE_CELLS - new_retro_col() will ensure this
+    gets grown as far as required. Otherwise, all the span of a cell will
+    either be created or truncated (eg ROWSPAN=2 from above).
+
+*/
+
+extern unsigned char table_start_th_td(HTStructured *me,
+                              int element_number,
+                              const char *halign,
+                              const char *axes,
+                              const char *axis,
+                              const char *ch,
+                              const char *choff,
+                              const char *class,
+                              const char *colspan,
+                              const char *dir,
+                              const char *id,
+                              const char *lang,
+                              int nowrap,
+                              const char *rowspan,
+                              const char *style,
+                              const char *valign
+                             )
+{
+        rid_table_item *table = me->table;
+        rid_table_cell *cell, **cellp;
+	rid_halign_tag htag;
+        int x;
+        unsigned char ret = element_number == HTML_TH ? rid_sf_CENTERED : 0;
+
+#if PARSE_DEBUG
+        fprintf(stderr, "\nstart_th_td: tag %d, halign %s, axes %s, axis %s\n"
+                        "ch %s, choff %s, class %s, colspan %s\n"
+                        "dir %s, id %s, lang %s, nowrap %d\n"
+                        "rowspan %s, style %s, valign %s\n",
+                        element_number,
+                        halign ? halign : "-",
+                        axes ? axes : "-",
+                        axis ? axis : "-",
+                        ch ? ch : "-",
+                        choff ? choff : "-",
+                        class ? class : "-",
+                        colspan ? colspan : "-",
+                        dir ? dir : "-",
+                        id ? id : "-",
+                        lang ? lang : "-",
+                        nowrap,
+                        rowspan ? rowspan : "-",
+                        style ? style : "-",
+                        valign ? valign : "-"
+               );
+#endif
+
+        if (table == NULL)
+                return ret;
+
+        switch (table->state)
+        {
+        case tabstate_HDTR:
+        case tabstate_FTTR:
+        case tabstate_BDTR:
+                break;
+
+        case tabstate_PRE :
+        case tabstate_CAPT:
+        case tabstate_CGRP:
+        case tabstate_COL :
+        case tabstate_HEAD:
+        case tabstate_FOOT:
+        case tabstate_BODY:
+		table_start_tr(me, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+		break;
+
+        case tabstate_POST:
+        case tabstate_BAD :
+        case tabstate_IDLE:
+        default:
+                table->state = tabstate_BAD;
+                return ret;
+                break;
+        }
+
+	if (table->state == tabstate_BAD)
+		return ret;
+
+        /* Might be directed not to add more cells */
+        if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
+                return ret;
+
+        NTABDBG((stderr, "Start looking for <TD> cell from scaffolding %d,%d\n", table->scaff.x, table->scaff.y));
+
+        if ( (table->flags & rid_tf_COLS_FIXED) == 0 )
+        {       /* Can grow to add enough columns */
+                for (x = table->scaff.x; x < table->cells.x; x++)
+                {
+                        if ( * CELLFOR(table, x, table->scaff.y) == NULL)
+                                break;
+                }
+                if (x >= table->cells.x)
+                {       /* Must create some more cells first */
+                        if (table->cells.x == 0)
+                        {       /* Can't be anything to spread */
+                                add_retro_col(table);
+                                x = 0;
+                        }
+                        else
+                        {
+                                x--;
+                                ASSERT( ( (*CELLFOR(table, x, table->scaff.y))->flags & rid_cf_INF_HORIZ) == 0 );
+                                /* @@@@ Is this known bounded? */
+                                do
+                                {
+                                        add_retro_col(table);
+                                        if (table->state == tabstate_BAD)
+                                                return ret;
+                                        x++;
+                                } while ( * CELLFOR(table, x, table->scaff.y) != NULL ) ;
+                        }
+                }
+                table->scaff.x = x;
+        }
+        else
+        {       /* Must fit within available columns */
+
+                for (x = table->scaff.x; x < table->cells.x; x++)
+                {
+                        if ( * CELLFOR(table, x, table->scaff.y) == NULL)
+                                break;
+                }
+                if (x >= table->cells.x)
+                {
+                        NTABDBG((stderr, "Current row is full - not adding\n"));
+                        table->flags |= rid_tf_NO_MORE_CELLS;
+                        return ret;
+                }
+                table->scaff.x = x;
+        }
+
+        /* The cell must now exist at scaff.x, scaff.y */
+
+        NTABDBG((stderr, "New cell going at %d, %d\n", table->scaff.x, table->scaff.y));
+        ASSERT( table->scaff.x < table->cells.x);
+        ASSERT( table->scaff.y < table->cells.y);
+
+        /* Create a new cell and text stream at the specified scaffold position */
+        cellp = CELLFOR(table, table->scaff.x, table->scaff.y);
+        cell = mm_calloc(1, sizeof(*cell));
+
+        cell->parent = table;
+	cell->stream.parent = cell;
+        cell->stream.partype = rid_pt_CELL;
+
+        ASSERT(*cellp == NULL);
+        *cellp = cell;
+
+        /* Sketch out values */
+        cell->props = parse_table_props(valign, halign, ch, choff, lang, dir, style);
+        cell->id = strdup(id);
+        cell->axis = strdup(axis);
+        cell->axes = strdup(axes);
+        cell->class = strdup(class);
+        cell->flags = nowrap ? rid_cf_NOWRAP : 0;
+        cell->cell.x = table->scaff.x;
+        cell->cell.y = table->scaff.y;
+        if ( colspan == NULL || sscanf(colspan, "%d", &cell->span.x) != 1 )
+                cell->span.x = 1;
+        if ( rowspan == NULL || sscanf(rowspan, "%d", &cell->span.y) != 1 )
+                cell->span.y = 1;
+
+        /* Refine */
+        if (element_number == HTML_TH)
+                cell->flags |= rid_cf_HEADER;
+        if (cell->span.x < 0)
+                cell->span.x = 1;
+        if (cell->span.y < 0)
+                cell->span.y = 1;
+
+        cell->sleft = cell->span.y - 1;
+
+	table->scaff.x += 1;		/* Starting looking after this */
+
+        /* That's the new cell created at the right position */
+        /* Do cell spreading: horizontal now, vertical row by row as table grows */
+        /* Advance scaffolding and see if still have room. */
+
+        /* Select new text stream */
+
+        me->rh->curstream = &cell->stream;
+
+	rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_HALIGN, &htag);
+
+	switch (htag)
+	{
+	case rid_ht_CENTER:
+		ret = rid_sf_CENTERED;
+		TABDBG((stderr, "Choosing centered text for cell\n"));
+		break;
+	case rid_ht_RIGHT:
+		TABDBG((stderr, "Choosing right aligned text for cell\n"));
+		ret = rid_sf_RIGHTALIGN;
+		break;
+	case rid_ht_CHAR:
+		TABDBG((stderr, "Choosing character alignment for cell\n"));
+                rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_CH, &me->align_char);
+                break;
+	default:
+		ret = 0;
+		break;
+	}
+
+        if (cell->span.y == 0)
+                cell->flags |= rid_cf_INF_VERT;
+        if (cell->span.x == 0)
+                cell->flags |= rid_cf_INF_HORIZ;
+        if (cell->span.x != 1 || cell->span.y != 1)
+                cell->flags |= rid_cf_MULTIPLE;
+
+        /* Common work done - can start returning now */
+
+        if (cell->span.x == 1 && cell->span.y == 1)
+        {       /* 1x1 cell - no more work */
+                cell->flags |= rid_cf_COMPLETE;
+                return ret;
+        }
+
+        if (cell->span.x == 1)
+        {       /* Only vertical growth - done in add_row() */
+                return ret;
+        }
+
+        /* Something about the cell's shape requires extra work */
+
+        if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
+        {       /* Constrained in number of columns */
+                if (cell->span.x == 0)
+                {       /* Extend to end of row, then we're full */
+                        for (x = cell->cell.x + 1; x < table->cells.x; x++)
+                        {       /* Stop early if hit cell coming down from above */
+                                cellp = CELLFOR(table, x, table->scaff.y);
+                                if (*cellp != NULL)
+                                        break;
+                                *cellp = cell;
+                        }
+                        table->flags |= rid_tf_NO_MORE_CELLS;
+                }
+                else
+                {       /* Try to fit */
+                        if (cell->cell.x + cell->span.x > table->cells.x)
+                        {       /* Filled up. Reduce span. */
+                                table->flags |= rid_tf_NO_MORE_CELLS;
+                                cell->span.x = table->cells.x - cell->cell.x;
+                        }
+                        for (x = cell->cell.x + 1; x < table->cells.x + cell->span.x; x++)
+                        {       /* Replicate cell pointer */
+                                cellp = CELLFOR(table, x, table->scaff.y);
+                                if (*cellp != NULL)
+                                        break;
+                                *cellp = cell;
+                        }
+                        cell->span.x = x - cell->cell.x;
+                        ASSERT(cell->span.x > 0);
+                }
+
+                return ret;
+        }
+
+        if (cell->span.x == 0)
+        {       /* Extends to edge of table */
+                table->flags |= rid_tf_NO_MORE_CELLS;
+                return ret;
+        }
+
+        /* Grow col(s) to fit cell, if possible */
+        /* Have cell->span.x > 1 and not fixed columns. */
+
+        NTABDBG((stderr, "Growing to meet span of %d\n", cell->span.x));
+
+        for (x = 1; x < cell->span.x; x++)
+        {       /* Add another column if we need it */
+                if (cell->cell.x + x >= table->cells.x)
+                {
+                        add_retro_col(table);
+                        if (table->state == tabstate_BAD)
+                                return ret;
+                }
+                /* See if would overlap with a previous cell */
+                cellp = CELLFOR(table, cell->cell.x + x, table->scaff.y);
+                if (*cellp != NULL)
+                {       /* Would overlap - constrict current cell */
+                        cell->span.x = x;       /* ? */
+                        return ret;
+                }
+                /* Grow the cell horizontally into the neighbouring cell */
+                *cellp = cell;
+        }
+
+	if (cell->span.y == 1)
+		cell->flags |= rid_cf_COMPLETE;
+
+
+	return ret;
+}
+
+
+/*****************************************************************************/
+
+/* Sizing of tables - maybe no pos list */
+
+/*****************************************************************************
+
+    Called after the size method of each object has been invoked and before
+    the outermost be_formater_loop().  This will recursively descend the text
+    stream tree, calculating minimum and maximum width information.  All of
+    this information must be collected prior to formatting.
+
+    For the minimum width, we require a smallest value that will not cause
+    overflow.  This hsa to tie up with the way formatting is actually done.
+
+*/
+
+
+
+static void rid_size_table( rid_table_item *table, rid_fmt_info *parfmt );
+
+extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flags)
+{
+        rid_width_info *info = &stream->width_info;
+        rid_text_item *ti = stream->text_list;
+
+        NTABDBG((stderr, "rid_size_stream(%p, %p, %x)\n", stream, fmt, flags));
+
+	/* Do this seperately or we do twice the work? */
+
+        for (; ti != NULL; ti = rid_scanf(ti))
+        {
+                if (ti->tag == rid_tag_TABLE)
+                {
+                        rid_size_table( ((rid_text_item_table *)ti)->table, fmt );
+                }
+        }
+
+        if ( (flags & rid_fmt_MAX_WIDTH) == 0 )
+        {
+                fmt->left  = &info->minleft;
+                fmt->right = &info->minright;
+                fmt->width = &info->minwidth;
+                be_formater_loop_core(stream, stream->text_list, fmt, flags | rid_fmt_MIN_WIDTH);
+        }
+
+        if ( (flags & rid_fmt_MIN_WIDTH) == 0 )
+        {
+                fmt->left  = &info->maxleft;
+                fmt->right = &info->maxright;
+                fmt->width = &info->maxwidth;
+                be_formater_loop_core(stream, stream->text_list, fmt, flags | rid_fmt_MAX_WIDTH);
+        }
+
+        if ( (flags & rid_fmt_MIN_WIDTH) != 0 )
+        {
+                info->maxleft  = info->minleft;
+                info->maxright = info->minright;
+                info->maxwidth = info->minwidth;
+        }
+
+        if ( (flags & rid_fmt_MAX_WIDTH) != 0 )
+        {
+                info->minleft  = info->maxleft;
+                info->minright = info->maxright;
+                info->minwidth = info->maxwidth;
+        }
+}
+
+static void rid_size_table( rid_table_item *table, rid_fmt_info *parfmt )
+{
+        rid_text_stream *stream;
+        rid_table_colgroup *colgroup;
+        rid_table_colhdr *colhdr;
+        rid_text_item *ti;
+        rid_table_cell *cell;
+        rid_fmt_info fmt;
+        rid_halign_tag halign;
+        rid_stdunits width_units, choff_units;
+        int x, y, i, j;
+        int *min_widths, *max_widths;
+        int nwidths;
+
+        fmt = *parfmt;
+
+        NTABDBG((stderr, "rid_size_table(%p)\n", table));
+
+        if (table->caption)
+        {       /* Size the caption. No borders on captions. */
+                stream = &table->caption->stream;
+                rid_size_stream(stream, &fmt, 0);
+        }
+
+        for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+        {       /* Size cell. Include any border type spacing */
+                /* Might be prevented from wrapping by cell */
+                /* Might be forced to minimum width by col or colgroup */
+                int flags = 0;
+                stream = &cell->stream;
+
+                memset( &stream->width_info, 0, sizeof(stream->width_info));
+
+                rid_getprop(table, x, y, rid_PROP_HALIGN, &halign);
+                rid_getprop(table, x, y, rid_PROP_WIDTH, &width_units);
+
+                if (halign == rid_ht_CHAR)
+                {
+                        rid_getprop(table, x, y, rid_PROP_CH, &fmt.align_char);
+                        rid_getprop(table, x, y, rid_PROP_CHOFF, &choff_units);
+                        if (choff_units.type == rid_stdunit_PX)
+                        {
+                                stream->width_info.minleft = stream->width_info.maxleft = (int) ceil(choff_units.count);
+                        }
+                        flags |= rid_fmt_CHAR_ALIGN;
+                }
+
+                if ( (cell->flags & rid_cf_NOWRAP) != 0 )
+                {
+                        flags |= rid_fmt_MAX_WIDTH;
+                }
+                else if ( width_units.type == rid_stdunit_MULT && width_units.count == 0.0 )
+                {
+                        flags |= rid_fmt_MIN_WIDTH;
+                }
+
+                rid_size_stream(&cell->stream, &fmt, flags);
+
+                colhdr = &table->colhdrs[x];
+
+                cell->stream.width_info.minwidth +=
+                	colhdr->lborder + table->colhdrs[x + cell->span.x - 1].rborder;
+
+                cell->stream.width_info.maxwidth +=
+                        colhdr->lborder + table->colhdrs[x + cell->span.x - 1].rborder;
+
+                if (cell->stream.width_info.minleft > colhdr->width_info.minleft)
+                	colhdr->width_info.minleft = cell->stream.width_info.minleft;
+                if (cell->stream.width_info.maxleft > colhdr->width_info.maxleft)
+                	colhdr->width_info.maxleft = cell->stream.width_info.maxleft;
+
+                if (cell->stream.width_info.minright > colhdr->width_info.minright)
+                	colhdr->width_info.minright = cell->stream.width_info.minright;
+                if (cell->stream.width_info.maxright > colhdr->width_info.maxright)
+                	colhdr->width_info.maxright = cell->stream.width_info.maxright;
+        }
+
+        memset(&table->width_info, 0, sizeof(table->width_info));
+
+        if (table->caption)
+        {
+                table->width_info.minwidth = table->caption->stream.width_info.minwidth;
+                table->width_info.maxwidth = table->caption->stream.width_info.maxwidth;
+        }
+
+        nwidths = table->cells.x;
+
+        if (nwidths != 0)
+        {       /* Have cells to do as well */
+
+                min_widths = mm_calloc(sizeof(int), nwidths);
+                max_widths = mm_calloc(sizeof(int), nwidths);
+
+                /* If the user gave an absolute width for a column, start with this */
+                /* If any column groups have absolute widths, apply these */
+                /* Negate any widths got - these are notched out of the sharing, */
+                /* unless only notched out values are present, when we force sharing */
+
+                for (x = 0; x < nwidths; x++)
+                {
+                        colhdr = &table->colhdrs[x];
+                        colgroup = colhdr->colgroup;
+
+                        if ( (colhdr->flags & rid_chf_ABS_WIDTH) != 0 )
+                        {
+				NTABDBG((stderr, "\nSharing widths for absolute sized column %d, %d pixels\n\n", x, (int) ceil(colhdr->userwidth.count)));
+                                ensure_span_evenly(min_widths, x, 1,
+						   (int) ceil(colhdr->userwidth.count), 1);
+				ensure_max_over_min(max_widths, min_widths, x, 1);
+                                ensure_span_evenly(max_widths, x, 1,
+						   (int) ceil(colhdr->userwidth.count), 0);
+                                min_widths[x] = -min_widths[x];
+                                max_widths[x] = -max_widths[x];
+                        }
+                }
+
+                /* Now ensure each cells width across its columns */
+
+                for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+                {
+		    int worst_span = nwidths - cell->cell.x;
+#if 1
+		    if (worst_span > cell->span.x)
+			worst_span = cell->span.x;
+#else
+		    worst_span = cell->span.x;
+#endif
+		    NTABDBG((stderr, "\nSharing for cell %d,%d, span %d,%d\n", cell->cell.x, cell->cell.y, cell->span.x, cell->span.y));
+		    ensure_span_evenly(min_widths, cell->cell.x, worst_span,
+				       cell->stream.width_info.minwidth, 1);
+		    ensure_max_over_min(max_widths, min_widths, cell->cell.x, worst_span);
+		    ensure_span_evenly(max_widths, cell->cell.x, worst_span,
+				       cell->stream.width_info.maxwidth, 0);
+                }
+
+                /* Cancel negation for notching */
+
+                for (x = 0; x < nwidths; x++)
+                {
+                        if (min_widths[x] < 0)
+                                min_widths[x] = -min_widths[x];
+                        if (max_widths[x] < 0)
+                                max_widths[x] = -max_widths[x];
+                }
+
+                /* Write back revised minimum widths */
+                /* Calculate table min|max widths */
+                /* i is table minwidth, j is table maxwidth */
+                for (x = 0, i = 0, j = 0; x < nwidths; x++)
+                {
+                        if (max_widths[x] > table->colhdrs[x].width_info.maxwidth)
+                                table->colhdrs[x].width_info.maxwidth = max_widths[x];
+                        table->colhdrs[x].width_info.minwidth = min_widths[x];
+                        i += min_widths[x];
+                        j += table->colhdrs[x].width_info.maxwidth;
+                }
+
+                i += table->lborder;
+                i += table->rborder;
+                j += table->lborder;
+                j += table->rborder;
+
+                if(i > j)
+                        j = i;
+
+                if (i > table->width_info.minwidth)
+                        table->width_info.minwidth = i;
+                if (j > table->width_info.maxwidth)
+                        table->width_info.maxwidth = j;
+
+                if ( table->userwidth.type == rid_stdunit_PX )
+                {
+                        int x = (int) ceil(table->userwidth.count);
+                        if (x < table->width_info.minwidth)
+                        {
+				NTABDBG((stderr, "Table width %d smaller than min width %d - using minwidth\n", x, table->width_info.minwidth));
+                                table->width_info.maxwidth = table->width_info.minwidth;
+                        }
+                        else
+                        {
+                          	NTABDBG((stderr, "Table width %d chosen over %d|%d\n", x, table->width_info.minwidth, table->width_info.maxwidth));
+                                table->width_info.maxwidth = table->width_info.minwidth = x;
+                        }
+                }
+
+                if (table->width_info.minwidth > table->width_info.maxwidth)
+                        table->width_info.maxwidth = table->width_info.minwidth;
+
+                nullfree((void**)&min_widths);
+                nullfree((void**)&max_widths);
+        }
+
+        /* Until we are actually formatted, we have a width anywhere */
+        /* between the minimum and maximum width, except probably in */
+        /* big jumps at word breaks. */
+
+        ti = (rid_text_item *)table->parent;
+        ti->width = table->width_info.minwidth;
+}
+
+/*****************************************************************************/
+
+/* Table formatting */
+/* fwidth of all text streams - possibly excluding borders */
+/* sizex of all columns - borders are included here */
+/* size.x of all cells/caption - borders are included here */
+
+
+static void rid_table_share_min_width(rid_table_item *table)
+{
+        rid_table_cell *cell;
+        int x, y;
+
+        table->size.x = table->width_info.minwidth;
+
+        if (table->caption)
+        {       /* No borders on caption */
+                table->caption->stream.fwidth = table->width_info.minwidth;
+                table->caption->size.x = table->width_info.minwidth;
+        }
+
+        for (x = 0, y = 0; x < table->cells.x; x++)
+        {
+                table->colhdrs[x].sizex = table->colhdrs[x].width_info.minwidth;
+        }
+
+        for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+        {       /* Cells can have borders */
+                cell->stream.fwidth =
+                        cell->stream.width_info.minwidth -
+                        table->colhdrs[x].lborder -
+                        table->colhdrs[x + cell->span.x - 1].lborder;
+        }
+}
+
+static void rid_table_share_max_width(rid_table_item *table)
+{
+        rid_table_cell *cell;
+        int x, y;
+
+        table->size.x = table->width_info.maxwidth;
+
+        if (table->caption)
+        {
+                table->caption->stream.fwidth = table->width_info.maxwidth;
+                table->caption->size.x = table->width_info.maxwidth;
+        }
+
+        for (x = 0; x < table->cells.x; x++)
+        {
+                table->colhdrs[x].sizex = table->colhdrs[x].width_info.maxwidth;
+        }
+
+        for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+        {
+                cell->stream.fwidth =
+                        cell->stream.width_info.maxwidth -
+                        table->colhdrs[x].lborder -
+                        table->colhdrs[x + cell->span.x - 1].lborder;
+        }
+}
+
+
+static void rid_table_share_spare_width(rid_text_stream *stream, rid_table_item *table)
+{
+        rid_table_cell *cell;
+        int sum_min = 0, sum_range = 0, sum_max = 0;
+        int left;
+        int *widths, nwidths;
+        int x, y;
+        int force_share;
+
+        /* Should be that at least one of a caption and a cell exist */
+        /* but set here just in case */
+        table->size.x = stream->fwidth;
+
+        if (table->caption)
+        {       /* No borders on caption */
+                table->caption->stream.fwidth = stream->fwidth;
+                table->caption->size.x = stream->fwidth;
+        }
+
+        nwidths = table->cells.x;
+
+        if (nwidths < 1)
+                return;
+
+        left = stream->fwidth - table->lborder - table->rborder;
+        widths = mm_calloc(sizeof(int), nwidths);
+
+        /* Calculate sums, set widths to minimum. */
+
+        for (x = 0; x < table->cells.x; x++)
+        {
+                rid_width_info *info = &table->colhdrs[x].width_info;
+                sum_min += info->minwidth;
+                sum_max += info->maxwidth;
+                sum_range += info->maxwidth - info->minwidth;
+                widths[x] = info->minwidth;
+        }
+
+#if 0	/* @@@@ this should be sorted out! */
+        /* Case 1: if not given enough width, use minimum widths */
+        ASSERT(left >= sum_min);
+        /* Case 2: have enough room for longest line */
+        ASSERT(left <= sum_max);
+        /* Case 3: share out available space */
+#endif
+
+        left -= sum_min;
+
+	force_share = 0;
+
+	while (left > 0)
+	{
+	  	int oleft = left;
+	        /*share_span_proportionally(widths, 0, nwidths, left);*/
+        	share_span_evenly(widths, 0, nwidths, left, 1);
+
+		for (left = 0, x = 0; x < table->cells.x; x++)
+		{
+		  	const int d = widths[x] - table->colhdrs[x].width_info.maxwidth;
+
+			if ((d >= 0) && (force_share == 0))
+			{
+			  	left += d;
+			  	widths[x] = -( widths[x] - d ) ;
+			}
+		}
+
+		if (oleft == left)
+			force_share = 1;
+	}
+
+
+        for (x = 0; x < table->cells.x; x++)
+        {
+                if (widths[x] < 0)
+                        widths[x] = -widths[x];
+                table->colhdrs[x].sizex = widths[x];
+        }
+
+        for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+        {
+                int i, t;
+
+                for (t = 0, i = cell->cell.x; i < cell->cell.x + cell->span.x; i++)
+                        t += widths[i];
+
+                cell->stream.fwidth =
+                        t - table->colhdrs[x].lborder - table->colhdrs[x + cell->span.x - 1].lborder;
+
+        }
+
+        nullfree((void**)&widths);
+}
+
+/*
+        caption
+        1 unit seperator line
+        table top border
+        table contents
+        table bottom border
+*/
+
+static void rid_table_share_spare_height(rid_table_item *table)
+{
+        rid_table_cell *cell;
+        int x, y, i, t;
+        int *heights = NULL, nheights;
+        int offy = table->caption != NULL ? -table->caption->stream.height : 0 ;
+
+        nheights = table->cells.y;
+        table->size.y = 0;
+
+        NTABDBG((stderr, "Sharing spare height out over %d rows\n", nheights));
+
+        if (nheights > 0)
+        {
+                offy += table->tborder;
+
+                heights = mm_calloc(sizeof(int), nheights);
+
+                /* Ensure adequate heights */
+                for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+                {   /* Even distribution is probably better than proportional */
+		    /* distribution for the vertical spreading. */
+		    int worst_span = nheights - cell->cell.y;
+
+		    if (worst_span > cell->span.y)
+			worst_span = cell->span.y;
+
+		    ensure_span_evenly(heights,
+				       cell->cell.y,
+				       worst_span,
+				       -cell->stream.height +
+				       table->rowhdrs[y].tborder +
+				       table->rowhdrs[y + worst_span - 1].bborder, 1 );
+                }
+#if 0
+		fprintf(stderr, "Heights after ensuring\n");
+		dump_span(heights, nheights);
+#endif
+                /* Record for later easier examination */
+                for (y = 0; y < table->cells.y; y++)
+                {
+                        rid_table_rowhdr *hdr = &table->rowhdrs[y];
+                        hdr->offy = -offy;
+                        hdr->sizey = heights[y];
+                        offy += heights[y];
+                }
+
+        	for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+                {
+		    for (t = 0, i = cell->cell.y ;
+			 i < cell->cell.y + cell->span.y && i < nheights;
+			 i++)
+		    {
+			t += heights[i];
+		    }
+		    cell->size.y = t;
+                }
+
+                offy += table->bborder;
+
+                nullfree((void**)&heights);
+        }
+
+        table->size.y = offy;
+}
+
+/*****************************************************************************
+
+We don't have height information until after we have formatted, but
+formatting sets top fields. So, we format each child text stream as if
+at the top of the table, and then move individual streams down after we've
+shared out height information. This ends up with all items in the table
+correctly positioned if the text table starts at zero.
+
+*/
+
+/* Called by be_formater_loop */
+/* Formats child text streams. */
+/* Chooses widths and then heights */
+/* Sets xoff and yoff for items */
+
+extern void rid_table_share_width(rid_text_stream *stream, rid_text_item *orig_item, rid_fmt_info *parfmt)
+{
+        rid_table_item *table = ((rid_text_item_table *)orig_item)->table;
+        rid_table_cell *cell;
+        int x, y, t, i;
+        int given_width = stream->fwidth;
+	rid_fmt_info fmt;
+
+	fmt = *parfmt;
+
+	if (table->userwidth.type == rid_stdunit_PX)
+	{
+	  	const int old_fwidth = stream->fwidth;
+	  	NTABDBG((stderr, "Applying absolute table width\n"));
+	 	given_width = (int) ceil(table->userwidth.count);
+		if (given_width < table->width_info.minwidth)
+			given_width = table->width_info.minwidth;
+		stream->fwidth = given_width;
+                rid_table_share_spare_width(stream, table);
+	 	stream->fwidth = old_fwidth;
+	}
+	else
+	{
+                if (table->userwidth.type == rid_stdunit_MULT)
+                {       /* Try to apply a relative width */
+        		NTABDBG((stderr, "Applying relative table width\n"));
+                        given_width = (int) ceil(table->userwidth.count * (double) given_width);
+                }
+
+                /* Items have min|max sizes */
+
+                if (given_width < table->width_info.minwidth)
+                {       /* Use minimum widths all over */
+                        NTABDBG((stderr, "Setting table to minimum width %d, instead of offered width %d\n", table->width_info.minwidth, given_width));
+                        rid_table_share_min_width(table);
+                }
+                else if (given_width > table->width_info.maxwidth)
+                {       /* Use maximum widths all over */
+                        NTABDBG((stderr, "Setting table to maximum width %d, instead of offered width %d\n", table->width_info.maxwidth, given_width));
+                        rid_table_share_max_width(table);
+                }
+                else
+                {       /* Minimum widths + share of what's left */
+                        NTABDBG((stderr, "Setting table width to min=%d < given=%d < max=%d\n", table->width_info.minwidth, given_width, table->width_info.maxwidth));
+                        rid_table_share_spare_width(stream, table);
+                }
+
+	}
+
+        /* Set the horizontal offset for each column */
+        for (x = 0, y = table->lborder; x < table->cells.x; x++)
+        {
+                table->colhdrs[x].offx = y;
+                y += table->colhdrs[x].sizex;
+        }
+
+	for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
+	{
+	  	for (t = 0, i = cell->cell.x; i < cell->cell.x + cell->span.x; i++)
+	  		t += table->colhdrs[i].sizex;
+	  	cell->size.x = t;
+	}
+
+        /* Each stream now has an fwidth to format with - it is guarenteed */
+        /* to be big enough to hold the single largest item, or I've coded it wrong. */
+        /* Each column and the caption also have their size field - this includes */
+        /* any borders that the fwidth may have excluded. */
+        /* Recursively format all components of the table first */
+
+        if (table->caption)
+        {
+                table->caption->off.x = 0;
+                table->caption->off.y = 0;
+                be_formater_loop_core(&table->caption->stream,
+                	table->caption->stream.text_list,
+                	&fmt, rid_fmt_BUILD_POS);
+
+                /* Leave a small gap between caption and table */
+                table->caption->stream.height -= DEFAULT_CAPTION_SPACING;
+        }
+
+        for ( x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+        {
+                be_formater_loop_core(&cell->stream, cell->stream.text_list, &fmt, rid_fmt_BUILD_POS);
+        }
+
+        /* Now, eventually, we can get some height information */
+
+        rid_table_share_spare_height(table);
+
+        /* Now each stream has real width and height. */
+        /* Calculate the sizes */
+        /* for the rid_text_item holding the table */
+
+        orig_item->max_up = table->size.y;
+        orig_item->max_down = 0;
+        orig_item->width = table->size.x;
+        orig_item->pad = 0;
+
+        /* The rid_text_item containing the table has correct width */
+        /* and height information.  */
+
+        NTABDBG((stderr, "Finished sharing widths\n"));
+}
+
+/*****************************************************************************/
+
+/* eof commonsrc/tables.c */
+

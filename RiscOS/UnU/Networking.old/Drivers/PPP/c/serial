@@ -1,0 +1,256 @@
+/* -*-C-*-
+ *
+ * $Header$
+ * $Source$
+ *
+ * Copyright (c) 1995 Acorn Computers Ltd., Cambridge, England
+ *
+ * $Log$
+ */
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "errno.h"
+
+#include "sys/types.h"
+#include "sys/dcistructs.h"
+
+#pragma no_warn_deprecated
+#include "netinet/if_ether.h"
+#include "sys/signal.h"
+#include "sys/syslog.h"
+#pragma warn_deprecated
+
+#include "kernel.h"
+#include "swis.h"
+
+#include "ppp_io.h"
+#include "pppmodule.h"
+#include "blockdrive.h"
+#include "if_ppp.h"
+
+#include "pppd/main.h"
+#include "serial.h"
+
+#define TickerV 0x1C
+
+extern int splhi(void);
+extern void splx(int);
+
+#define Event_OutputEmpty 0
+#define Event_SerialError 7
+
+#define SerialError_Overrun 0x10
+#define SerialError_Framing 0x08
+#define SerialError_DCD     0x02
+
+int *driver_speedtable;
+int driver_noofspeeds;
+
+int serialevents_active;
+
+static volatile u_char *framing_error;
+
+extern void *module_wsp;
+
+int poll_pending = 0;
+int portnumber=0;
+
+extern int poll_entry(void);
+extern int event_entry(void);
+extern int hupcheck_entry(void);
+extern int hup_entry(void);
+extern int term_entry(void);
+
+
+/*
+ * iprelease - remove routine from InsV so we no longer catch serial
+ * input characters
+ */
+static void release_ticker(void)
+{
+    _swix(OS_RemoveTickerEvent, _INR(0,1), hupcheck_entry, module_wsp);
+    _swix(OS_Release, _INR(0,2), TickerV, ticker_handler, module_wsp);
+}
+
+/**********************************************************************/
+
+/*
+ * ipcatch - add routine to InsV to catch serial input characters
+ */
+static _kernel_oserror *claim_ticker(void)
+{
+    _kernel_oserror *e=0;
+
+    e=_swix(OS_CallEvery, _INR(0,2), 99, hupcheck_entry, module_wsp);
+    if (e)
+        return e;
+
+    return _swix(OS_Claim, _INR(0,2), TickerV, ticker_handler, module_wsp);
+}
+
+/**********************************************************************/
+
+int hupcheck_handler(_kernel_swi_regs *r, void *pw)
+{
+    idle_time++;
+
+    if (modem && (driver_modemcontrol() & 8) == 0)
+        _swix(OS_AddCallBack, _INR(0,1), hup_entry, module_wsp);
+    else if (idle_time_limit && idle_time >= idle_time_limit)
+        _swix(OS_AddCallBack, _INR(0,1), term_entry, module_wsp);
+
+    return 1;
+}
+
+/**********************************************************************/
+
+int hup_handler(_kernel_swi_regs *r, void *pw)
+{
+    NOT_USED(pw);
+    NOT_USED(r);
+
+    pppd_signal_handler(SIGHUP);
+
+    return 1;
+}
+
+int term_handler(_kernel_swi_regs *r, void *pw)
+{
+    NOT_USED(pw);
+    NOT_USED(r);
+
+    syslog(LOG_INFO, "Idle for %d seconds", idle_time_limit);
+
+    pppd_signal_handler(SIGTERM);
+
+    return 1;
+}
+
+void serial_enableevents(void)
+{
+    serialevents_active=1;
+}
+
+/**********************************************************************/
+
+/*
+ * poll_cancel - remove any pending call to poll_entry
+ */
+static void poll_cancel(void)
+{
+    int s = splhi();
+
+    if( poll_pending )
+    {
+        _swix(OS_RemoveCallBack, _INR(0,1), poll_entry, module_wsp);
+
+	poll_pending = 0;
+    }
+
+    splx(s);
+}
+
+/**********************************************************************/
+
+/* XXX Trace */
+extern int rxerrors;
+
+/*
+ * poll_handler - it is time to check whether there are any characters
+ * in the input buffer again.  try to drain the buffer, then reset the
+ * timeout to call this routine again
+ */
+int poll_handler(_kernel_swi_regs *r, void *pw)
+{
+
+    char buffer[256], *p=buffer;
+    int bytes, s, error;
+
+    NOT_USED(pw);
+    NOT_USED(r);
+    _kernel_irqs_on();
+
+    bytes=driver_getblock(buffer, sizeof buffer);
+    error=(driver_rxerrors() & 7);
+
+    while (bytes)
+    {
+        /*s=splhi();*/
+        p=buffer;
+
+        while (bytes)
+        {
+            pppinput(*p, 0);
+            bytes--;
+            p++;
+        }
+        if (error)
+        {
+            /*rxerrors++;*/
+            pppinput(256, 0);
+        }
+
+        /*splx(s);*/
+        bytes=driver_getblock(buffer, sizeof buffer);
+        error=(driver_rxerrors() & 7);
+    }
+
+    poll_pending = 0;
+
+    /*
+     * all done, return a non-zero value so
+     * cmhg veneers take the correct exit
+     */
+    return 1;
+}
+
+/**********************************************************************/
+
+_kernel_oserror *serial_finalise(void)
+{
+    release_ticker();
+
+    poll_cancel();
+
+    driver_closedown();
+
+    return(NULL);
+}
+
+
+/**********************************************************************/
+
+_kernel_oserror *serial_initialise(struct ppp_softc *sc)
+{
+    char *error;
+    _kernel_oserror *e=0;
+
+
+#   ifdef TINYSTUBS
+    poll_pending=0;
+    portnumber=0;
+#   endif
+
+    error=driver_initialise();
+
+    if (error)
+    {
+        strcpy(_ppp_errblk.errmess, error);
+        _ppp_errblk.errnum = 1;
+        e=&_ppp_errblk;
+    }
+
+    if (!e)
+        e=claim_ticker();
+
+    driver_speedtable=driver_block+64;
+
+    return e;
+}
+
+
+
+/**********************************************************************/
+
+/* EOF serial.c */

@@ -1,0 +1,856 @@
+/* > cookie.c
+
+ * http://www.netscape.com/newsref/std/cookie_spec.html
+ *
+ * 26/3/96: SJM: Started
+ *
+ */
+
+#include <ctype.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#ifdef STBWEB
+#include "http.h"
+#else
+#include "../http/httppub.h"
+#endif
+
+#include "os.h"
+#include "memwatch.h"
+#include "url.h"
+#include "util.h"
+#include "cookie.h"
+#include "version.h"
+
+#ifndef DEBUG_COOKIE
+#define DEBUG_COOKIE 1
+#endif
+
+extern int strcasecomp(const char *s1, const char *s2);
+extern int strncasecomp(const char *s1, const char *s2, int n);
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/* Time parsing code nicked from LibWWW, WWWStr.c */
+
+static int HTTimeZone = 0;		       /* Offset from GMT in seconds */
+static int daylight = 0;
+static char * months[12] = {
+    "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
+};
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/*	Date and Time Parser
+**	--------------------
+**	These functions are taken from the server written by Ari Luotonen
+*/
+
+static int make_num (const char *  s)
+{
+    if (*s >= '0' && *s <= '9')
+	return 10 * (*s - '0') + *(s+1) - '0';
+    else
+	return *(s+1) - '0';
+}
+
+static int make_month (const char *  s)
+{
+    int i;
+    for (i=0; i<12; i++)
+	if (!strncasecomp(months[i], s, 3))
+	    return i;
+    return 0;
+}
+
+static time_t get_time(void)
+{
+    return time(NULL);
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/* This parses more than we need for cookies but we'll leave it all in in case its useful sometime */
+
+/*
+**	Parse a str in GMT format to a local time time_t representation
+**	Four formats are accepted:
+**
+**		Wkd, 00 Mon 0000 00:00:00 GMT		(rfc1123)
+**		Weekday, 00-Mon-00 00:00:00 GMT		(rfc850)
+**		Wkd Mon 00 00:00:00 0000 GMT		(ctime)
+**		1*DIGIT					(delta-seconds)
+*/
+
+static time_t HTParseTime (const char *  str)
+{
+    const char * s;
+    struct tm tm;
+    time_t t;
+
+    if (!str) return 0;
+
+    if ((s = strchr(str, ',')) != NULL) {	 /* Thursday, 10-Jun-93 01:29:59 GMT */
+	s++;				/* or: Thu, 10 Jan 1993 01:29:59 GMT */
+	while (*s && *s==' ') s++;
+	if (strchr(s,'-')) {				     /* First format */
+	    if ((int)strlen(s) < 18) {
+		return 0;
+	    }
+	    tm.tm_mday = make_num(s);
+	    tm.tm_mon = make_month(s+3);
+	    tm.tm_year = make_num(s+7);
+	    tm.tm_hour = make_num(s+10);
+	    tm.tm_min = make_num(s+13);
+	    tm.tm_sec = make_num(s+16);
+	} else {					    /* Second format */
+	    if ((int)strlen(s) < 20) {
+		return 0;
+	    }
+	    tm.tm_mday = make_num(s);
+	    tm.tm_mon = make_month(s+3);
+	    tm.tm_year = (100*make_num(s+7) - 1900) + make_num(s+9);
+	    tm.tm_hour = make_num(s+12);
+	    tm.tm_min = make_num(s+15);
+	    tm.tm_sec = make_num(s+18);
+
+	}
+    } else if (isdigit(*str)) {				    /* delta seconds */
+	t = get_time() + atoi(str);	      /* Current local calendar time */
+	return t;
+
+    } else {	      /* Try the other format:  Wed Jun  9 01:29:59 1993 GMT */
+	s = str;
+	while (*s && *s==' ') s++;
+	if ((int)strlen(s) < 24) {
+	    return 0;
+	}
+	tm.tm_mday = make_num(s+8);
+	tm.tm_mon = make_month(s+4);
+	tm.tm_year = make_num(s+22);
+	tm.tm_hour = make_num(s+11);
+	tm.tm_min = make_num(s+14);
+	tm.tm_sec = make_num(s+17);
+    }
+    if (tm.tm_sec  < 0  ||  tm.tm_sec  > 59  ||
+	tm.tm_min  < 0  ||  tm.tm_min  > 59  ||
+	tm.tm_hour < 0  ||  tm.tm_hour > 23  ||
+	tm.tm_mday < 1  ||  tm.tm_mday > 31  ||
+	tm.tm_mon  < 0  ||  tm.tm_mon  > 11  ||
+	tm.tm_year <70  ||  tm.tm_year >120) {
+	return 0;
+    }
+
+    tm.tm_isdst = daylight;
+
+    t = mktime(&tm);
+    t += HTTimeZone;
+
+    return t;
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+typedef struct cookie_item cookie_item;
+typedef struct cookie_domain cookie_domain;
+
+struct cookie_item
+{
+    cookie_item *next;          /* link to next cookie */
+
+    char *name;                 /* name of this cookie */
+    char *value;                /* value of this cookie */
+    char *path;                 /* path to match to decide on sending the cookie */
+
+    char secure;                /* if TRUE then only send cookie over an SSL channel */
+    time_t expires;             /* when does this expire, UINT_MAX means at end of session */
+};
+
+struct cookie_domain
+{
+    cookie_domain *next;        /* link to next domain */
+    char *domain;               /* as originally passed in the set-cookie header */
+    int cookie_count;           /* number of cookies in the cookie_list */
+    cookie_item *cookie_list;   /* cookies in the domain */
+};
+
+/* maximum numbers defined in netscape spec */
+/* we trim the cookie size when we receive it originally */
+/* we check the numbers whenever we add a new cookie */
+/* if either of the numbers are exceeded then this triggers an expiry operation */
+
+#define MAX_COOKIES             300
+#define MAX_COOKIES_PER_DOMAIN  20
+#define MAX_COOKIE_SIZE         (4*1024)
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+static cookie_domain *domain_list = NULL;   /* top level unordered list of domains */
+static int cookie_count = 0;                /* total count of cookies stored */
+
+/* these top level domains mean we only check for 2 dots in a domain name rather than 3 */
+static const char *special_domains[] = { "COM", "EDU", "GOV", "INT", "MIL", "NET", "ORG", NULL };
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+static void cookie_free(cookie_item *c)
+{
+    if (c)
+    {
+        mm_free(c->name);
+        mm_free(c->value);
+        mm_free(c->path);
+        mm_free(c);
+    }
+}
+
+static void cookie_unlink_and_free(cookie_domain *d, cookie_item *last_c, cookie_item *c)
+{
+    if (last_c)
+        last_c->next = c->next;
+    else
+        d->cookie_list = c->next;
+
+    cookie_free(c);
+    d->cookie_count--;
+    cookie_count--;
+}
+
+/*
+ * Check the cookies in this domain to see if any hav expired, if so remove them
+ */
+
+static void cookie_check_expiry_domain(cookie_domain *d, time_t now)
+{
+    cookie_item *c, *last;
+
+    c = d->cookie_list;
+    last = NULL;
+    while (c)
+    {
+        cookie_item *next = c->next;
+
+        if (now >= c->expires)
+            cookie_unlink_and_free(d, last, c);
+        else
+            last = c;
+
+        c = next;
+    }
+}
+
+/*
+ * Check all domains for expired cookies
+ */
+
+static void cookie_check_expiry(time_t now)
+{
+    cookie_domain *d;
+    for (d = domain_list; d; d = d->next)
+        cookie_check_expiry_domain(d, now);
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/*
+ * Find a matching domain name in the global domain list
+ */
+
+static cookie_domain *find_domain(const char *domain)
+{
+    cookie_domain *d;
+
+    /* search for the domain */
+    for (d = domain_list; d; d = d->next)
+    {
+        if (strcasecomp(domain, d->domain) == 0)
+            break;
+    }
+
+    return d;
+}
+
+/*
+ * See if the tails of these two domains match
+ */
+
+static BOOL tail_compare(const char *subdomain, const char *domain)
+{
+    int len1 = strlen(domain);
+    int len2 = strlen(subdomain);
+    int start = len2 - len1;
+    return start >= 0 && strcasecomp(subdomain, &domain[start]);
+}
+
+/*
+ * Search a list of strings for a matching string
+ */
+
+static int match_strings(const char *match, const char *strings[])
+{
+    int i;
+    for (i = 0; strings[i]; i++)
+    {
+        if (strcasecomp(match, strings[i]) == 0)
+            return i;
+    }
+    return -1;
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/*
+ * This routine must do several things
+ * If domain is set then
+ *   check it is part of the hosts domain
+ *   check it has requisite number of components
+ * If domain is unset then
+ *   use hosts domain
+ * If path is unset
+ *   use path of url (ie strip leaf name off)
+
+ * It takes any pointer in and writes out malloced pointers
+ */
+
+static BOOL get_domain_and_path(const char *domain_in, const char *path_in, const char *url, char **domain_out, char **path_out)
+{
+    char *scheme, *netloc, *path, *params, *query, *frag;
+
+    /* if null url passed in then we were loading from the cookie file */
+    /* there shouldn't be any errors in this... */
+    if (!url)
+    {
+        if (domain_in == NULL || path_in == NULL)
+        {
+#if DEBUG_COOKIE
+            fprintf(stderr, "cookie: null domain or path on reading from file\n");
+#endif
+            return FALSE;
+        }
+
+        *domain_out = strdup(domain_in);
+        *path_out = strdup(path_in);
+        return TRUE;
+    }
+
+    url_parse((char *)url, &scheme, &netloc, &path, &params, &query, &frag);
+
+    if (domain_in)
+    {
+        const char *s;
+        const char *top_level;
+        int c, dots;
+
+        if (!tail_compare(netloc, domain_in))
+        {
+#if DEBUG_COOKIE
+            fprintf(stderr, "cookie: attempt to set cookie for wrong domain\n  domain '%s'\n  cookie '%s'\n", netloc, domain_in);
+#endif
+            return FALSE;
+        }
+
+        /* count the dots and find the top level domain */
+        s = domain_in;
+        top_level = NULL;
+        dots = 0;
+        for (c = *s++; c; c = *s++)
+            if (c == '.')
+            {
+                top_level = s;
+                dots++;
+            }
+
+        /* check right number of dots */
+        if (dots < 2 || (dots == 2 && match_strings(top_level, special_domains) == -1))
+        {
+#if DEBUG_COOKIE
+            fprintf(stderr, "cookie: too high level domain '%s' %d dots\n", domain_in, dots);
+#endif
+            return FALSE;
+        }
+
+        *domain_out = strdup(domain_in);
+    }
+    else
+    {
+        *domain_out = netloc;
+        netloc = NULL;
+    }
+
+    if (path_in)
+    {
+        *path_out = strdup(path_in);
+    }
+    else
+    {   /* strip off the leaf name from the document path */
+        char *slash = strrchr(path, '/');
+        if (slash && slash != path && slash != path + strlen(path))
+            *slash = '\0';
+
+        *path_out = path;
+        path = NULL;
+    }
+
+    url_free_parts(scheme, netloc, path, params, query, frag);
+
+    return TRUE;
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+static void cookie_add(char *name, char *value, char *domain, char *path, time_t expires, int secure)
+{
+    cookie_domain *d;
+    cookie_item *c, *last_c, *new_c;
+    time_t time_now = get_time();
+
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: add name '%s' value '%s' domain '%s' path '%s' expires %x secure %d\n",
+        strsafe(name), strsafe(value), strsafe(domain), strsafe(path), expires, secure);
+#endif
+
+    d = find_domain(domain);
+
+    if (d)
+    {
+#if DEBUG_COOKIE
+        fprintf(stderr, "cookie: found domain\n");
+#endif
+        /* if found then free the domain we passed in */
+        mm_free(domain);
+    }
+    else
+    {
+#if DEBUG_COOKIE
+        fprintf(stderr, "cookie: new domain\n");
+#endif
+        /* if not found then allocate a new domain */
+        d = mm_calloc(sizeof(cookie_domain), 1);
+        d->domain = domain;
+
+        /* add domain on the front of the list */
+        d->next = domain_list;
+        domain_list = d;
+    }
+
+    /* search for the right insert point */
+    last_c = NULL;
+    new_c = NULL;
+    for (c = d->cookie_list; c; c = c->next)
+    {
+        int cmp = strcasecomp(path, c->path);
+
+        if (cmp > 0)
+        {
+            /* add new cookie before current point */
+            if (expires > time_now)
+            {
+                new_c = mm_calloc(sizeof(cookie_item), 1);
+                new_c->next = c;
+#if DEBUG_COOKIE
+                fprintf(stderr, "cookie: add before '%s'\n", c->path);
+#endif
+            }
+#if DEBUG_COOKIE
+            else
+                fprintf(stderr, "cookie: already expired\n");
+#endif
+            break;
+        }
+
+        /* if the path matches */
+        if (cmp == 0)
+        {
+            /* if name is the same then overwrite new values */
+            /* unless it has expired (ie explicit delete) */
+            if (strcasecomp(c->name, name) == 0)
+            {
+                mm_free(name);
+                mm_free(path);
+
+                if (expires <= time_now)
+                {
+                    mm_free(value);
+                    cookie_unlink_and_free(d, last_c, c);
+#if DEBUG_COOKIE
+                    fprintf(stderr, "cookie: delete '%s'\n", name);
+#endif
+                }
+                else
+                {
+                    mm_free(c->value);
+                    c->value = value;
+
+                    c->expires = expires;
+                    c->secure = secure;
+#if DEBUG_COOKIE
+                    fprintf(stderr, "cookie: overwrite '%s'\n", name);
+#endif
+                }
+                /* c != NULL and new_c = NULL so nothing more will happen */
+                break;
+            }
+            /* otherwise go on to the next one */
+        }
+
+        last_c = c;
+    }
+
+    /* if reached the end then allocate a new cookie */
+    if (c == NULL)
+    {
+#if DEBUG_COOKIE
+        fprintf(stderr, "cookie: add at end\n");
+#endif
+        new_c = mm_calloc(sizeof(cookie_item), 1);
+    }
+
+    /* if we have a new cookie then fill in and link in */
+    if (new_c)
+    {
+        if (expires < time_now)
+        {
+#if DEBUG_COOKIE
+            fprintf(stderr, "cookie: already expired\n");
+#endif
+            mm_free(name);
+            mm_free(value);
+            mm_free(path);
+        }
+        else
+        {
+#if DEBUG_COOKIE
+            fprintf(stderr, "cookie: link in\n");
+#endif
+            d->cookie_count++;
+            cookie_count++;
+
+            new_c->name = name;
+            new_c->value = value;
+            new_c->path = path;
+            new_c->expires = expires;
+            new_c->secure = secure;
+
+            if (last_c)
+                last_c->next = new_c;
+            else
+                d->cookie_list = new_c;
+
+            /* check for exceeding limits */
+            if (d->cookie_count > MAX_COOKIES_PER_DOMAIN)
+                cookie_check_expiry_domain(d, time_now);
+
+            if (cookie_count > MAX_COOKIES)
+                cookie_check_expiry(time_now);
+        }
+    }
+}
+
+/*
+ * The cookies are ordered in alphabetical order by path
+ * with more qualified paths first.
+ *   eg /gerbil/next, /gerbil, /fred, /
+ * the names for the same path are unordered.
+ */
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+void cookie_received_header(const char *header, const char *url)
+{
+    static const char *cookie_tags[] = { "", "DOMAIN", "PATH", "EXPIRES", "SECURE", NULL };
+
+    char *header_copy = strdup(header);
+    char *vals[5];
+
+    char *name, *value, *domain, *path;
+    time_t expires;
+    int secure;
+    char *equals;
+
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: header '%s' from '%s'\n", strsafe(header), strsafe(url));
+#endif
+
+    parse_http_header(header_copy, cookie_tags, vals);
+
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: vals '%s' domain '%s' path '%s' expires '%s' '%s'\n",
+        strsafe(vals[0]), strsafe(vals[1]), strsafe(vals[2]), strsafe(vals[3]), vals[4] ? "secure" : "");
+#endif
+
+    /* must have a name=value to be valid */
+    if (vals[0] == NULL)
+    {
+        mm_free(header_copy);
+        return;
+    }
+
+    /* get the domain and path, checking that its valid */
+    if (!get_domain_and_path(vals[1], vals[2], url, &domain, &path))
+    {
+        mm_free(header_copy);
+        return;
+    }
+
+    /* check max size and truncate if exceeded */
+    if (strlen(vals[0]) > MAX_COOKIE_SIZE)
+        (vals[0])[MAX_COOKIE_SIZE] = '\0';
+
+    /* split up the name/value pair */
+    equals = strchr(vals[0], '=');
+    value = NULL;
+    if (equals)
+    {
+        *equals++ = '\0';
+        value = strdup(equals);
+    }
+    name = strdup(vals[0]);
+
+    /* decode the expiry time and secure flag */
+    expires = vals[3] ? HTParseTime(vals[3]) : UINT_MAX;
+    secure = vals[4] != NULL;
+
+    mm_free(header_copy);
+
+    /* add to list */
+    cookie_add(name, value, domain, path, expires, secure);
+}
+
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+static int cookie_len = 0;
+static http_header_item cookie_http_header =
+{
+    NULL,
+    "Cookie",
+    NULL
+};
+
+http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, int secure)
+{
+    cookie_domain *d;
+    cookie_item *c;
+    char *scheme, *netloc, *path, *params, *query, *frag;
+    int len_netloc, len_path;
+
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: get cookies for '%s'\n", url);
+#endif
+
+    /* free last used cookie value */
+    mm_free(cookie_http_header.value);
+    cookie_http_header.value = NULL;
+    cookie_len = 0;
+
+    /* check which URL we are coming from */
+    url_parse((char *)url, &scheme, &netloc, &path, &params, &query, &frag);
+
+    if (netloc == NULL)
+        netloc = strdup("");
+    if (path == NULL)
+        path = strdup("/");
+
+    len_netloc = strlen(netloc);
+    len_path = strlen(path);
+
+    for (d = domain_list; d; d = d->next)
+    {
+        int start;
+
+        /* check host */
+        start = len_netloc - strlen(d->domain);
+        if (start < 0 || strcasecomp(d->domain, netloc + start) != 0)
+            continue;
+
+#if DEBUG_COOKIE
+        fprintf(stderr, "cookie: found matching domain '%s'\n", d->domain);
+#endif
+
+        for (c = d->cookie_list; c; c = c->next)
+        {
+            int len;
+
+            /* check secure first as it's quickest */
+            if (c->secure && !secure)
+            {
+#if DEBUG_COOKIE
+                fprintf(stderr, "cookie: requires secure channel\n");
+#endif
+                continue;
+            }
+
+            /* check path */
+            if (strncasecomp(c->path, path, strlen(c->path)) != 0)
+            {
+#if DEBUG_COOKIE
+                fprintf(stderr, "cookie: path '%s' doesn't match '%s'\n", c->path, path);
+#endif
+                continue;
+            }
+
+#if DEBUG_COOKIE
+            fprintf(stderr, "cookie: send %s=%s\n", c->name, c->value);
+#endif
+            /* add cookie to string */
+            len = strlen(c->name) + 1 + strlen(c->value);
+            if (cookie_len)
+                len += 2;
+
+            if (cookie_http_header.value)
+                cookie_http_header.value = mm_realloc(cookie_http_header.value, cookie_len + len + 1);
+            else
+                cookie_http_header.value = mm_malloc(cookie_len + len + 1);
+            sprintf(cookie_http_header.value + cookie_len, "%s%s=%s", cookie_len ? "; " : "", c->name, c->value);
+
+            cookie_len += len;
+        }
+    }
+
+    url_free_parts(scheme, netloc, path, params, query, frag);
+
+    /* if we added any cookies then add to header_item list */
+    if (cookie_http_header.value)
+    {
+        cookie_http_header.next = hlist;
+        hlist = &cookie_http_header;
+    }
+
+    return hlist;
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+static void cookie_dispose(void)
+{
+    cookie_domain *d = domain_list;
+    while (d)
+    {
+        cookie_domain *next = d->next;
+
+        /* free all the cookies */
+        cookie_check_expiry_domain(d, UINT_MAX);
+
+        mm_free(d);
+        d = next;
+    }
+    domain_list = NULL;
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/*#define COOKIE_FILE "<"PROGRAM_NAME"$Cookies>" */
+
+#define FORMAT_IDENT    "Format: "
+#define FORMAT_NUMBER   1
+
+void cookie_write_file(const char *file_name)
+{
+    FILE *f;
+
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: write '%s'\n", file_name);
+#endif
+
+    f = fopen(file_name, "w");
+    if (f)
+    {
+        cookie_domain *d;
+        cookie_item *c;
+        time_t now = get_time();
+
+        fprintf(f, "# "PROGRAM_NAME" Cookie file\n");
+        fprintf(f, "# Written on %s", ctime(&now));
+        fprintf(f, "Format: 1\n");
+
+        /* write each cookie out in the header format */
+        for (d = domain_list; d; d = d->next)
+        {
+#if DEBUG_COOKIE
+            fprintf(stderr, "cookie: domain '%s'\n", d->domain);
+#endif
+            for (c = d->cookie_list; c; c = c->next)
+            {
+#if DEBUG_COOKIE
+                fprintf(stderr, "cookie: path '%s'\n", c->path);
+#endif
+                /* if no expiry then they are not saved and vanish at session end */
+                if (c->expires != UINT_MAX)
+                {
+    	            struct tm *gmt = gmtime(&c->expires);
+    	            char buf[40];
+
+                    fprintf(f, "%s=%s; domain=%s; path=%s", c->name, c->value, d->domain, c->path);
+
+        	    if (gmt)
+        	        strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", gmt);
+        	    fputs("; expires=", f);
+        	    fputs(buf, f);
+
+                    if (c->secure)
+                        fputs("; secure", f);
+
+                    fputc('\n', f);
+                }
+            }
+        }
+
+        fclose(f);
+    }
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: write close\n");
+#endif
+}
+
+#define BUF_SIZE (5*1024)
+
+void cookie_read_file(const char *file_name)
+{
+    FILE *f;
+
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: read '%s'\n", file_name);
+#endif
+
+    f = fopen(file_name, "r");
+    if (f)
+    {
+        char *buf = mm_malloc(BUF_SIZE);
+
+        do
+        {
+            if (fgets(buf, BUF_SIZE, f) == NULL)
+                break;
+
+            if (buf[0] == '#')
+                continue;
+
+            if (strncasecomp(buf, FORMAT_IDENT, sizeof(FORMAT_IDENT)-1) == 0)
+            {
+                int version = atoi(&buf[sizeof(FORMAT_IDENT)-1]);
+                if (version > FORMAT_NUMBER)
+                    break;
+
+                continue;
+            }
+
+            if (buf[0])
+                cookie_received_header(buf, NULL);
+        }
+        while (!feof(f));
+
+        mm_free(buf);
+        fclose(f);
+    }
+#if DEBUG_COOKIE
+    fprintf(stderr, "cookie: read close\n");
+#endif
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/* eof cookie.c */
