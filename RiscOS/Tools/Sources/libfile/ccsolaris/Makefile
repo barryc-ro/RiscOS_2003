@@ -19,8 +19,8 @@ ${COMPONENT}: $(OBJS)
 	@echo "Made ${COMPONENT}"
 
 clean:
-	-rm ${OBJS}
-	-rm ${COMPONENT}
+	-rm -f ${OBJS}
+	-rm -f ${COMPONENT}
 	@echo cleaned ${COMPONENT}
 
 realclean: clean
