@@ -13,58 +13,141 @@
 #include "^.Service.h"
 #include "^.Module.h"
 
-
-
-typedef struct	{
+typedef struct
+{
 	Desk_linklist_header	header;
+
+	union
+	{
+		struct
+		{
+			unsigned int	preserve_order	: 1;
+			unsigned int			: 31;
+		}
+		bits;
+
+		unsigned int		value;
+	}
+	flags;
+
 	int			service;
 	Desk_task_handle	task;
-	}
-	TaskModule_service_block;
+}
+TaskModule_service_block;
 
 
-typedef struct	{
+typedef struct
+{
 	Desk_linklist_header		header;
 	TaskModule_service_block*	info;
 	_kernel_swi_regs		registers;
-	}
-	TaskModule_servicewaiting_block;
+}
+TaskModule_servicewaiting_block;
 
 
 #define	Message_Service	0x4d300
 
-static Desk_linklist_header	waiting_messages	= { NULL, NULL};
-static Desk_linklist_header	service_blocks		= { NULL, NULL};
+static Desk_linklist_header	waiting_messages		= { NULL, NULL};
+static Desk_linklist_header	ordered_waiting_messages	= { NULL, NULL};
+static Desk_linklist_header	service_blocks			= { NULL, NULL};
+
+static Desk_bool oehr = Desk_bool_FALSE;
 
 static void	FreeWaitingMessage( TaskModule_servicewaiting_block* wait);
+static void	FreeOrderedWaitingMessage( TaskModule_servicewaiting_block* wait);
+
+
+
+
+static Desk_bool	OrderedNonZeroPollWordHandler( Desk_event_pollblock* event, void* reference)
+{
+	Desk_linklist_header*			waiting	= (Desk_linklist_header*) reference;
+	TaskModule_servicewaiting_block*	s;
+
+	Desk_Debug_Printf( Desk_error_PLACE "OrderedNonZeroPollWordHandler called\n");
+
+	s = Desk_LinkList_FirstItem( waiting);
+	if	( s)
+	{
+		Desk_message_block			message;
+
+		Desk_Error2_Try
+		{
+			message.header.size	= 15*4;
+			message.header.yourref	= 0;
+			message.header.action	= (Desk_message_action) Message_Service;
+
+			* (_kernel_swi_regs*) &message.data	= s->registers;
+
+			Desk_Debug_Printf( Desk_error_PLACE "Sending service call %i to task %x\n", s->registers.r[1], s->info->task);
+
+			_swix( Wimp_SendMessage, _INR(0,3), Desk_event_USERMESSAGE, &message, s->info->task, 0);
+		}
+		Desk_Error2_Catch
+		{
+		}
+		Desk_Error2_EndCatch
+
+		FreeOrderedWaitingMessage( s);
+		return Desk_bool_TRUE;
+	}
+
+	return Desk_bool_FALSE;
+	Desk_UNUSED( event);
+}
+
+
+
+
+static void	FreeOrderedWaitingMessage( TaskModule_servicewaiting_block* wait)
+{
+	Desk_LinkList_Unlink( &ordered_waiting_messages, &wait->header);
+	if	( Desk_LinkList_ListLength( &ordered_waiting_messages) == 0)
+	{
+		Desk_Event_Release( Desk_event_NONZEROPOLLWORD,
+			Desk_event_ANY,
+			Desk_event_ANY,
+			OrderedNonZeroPollWordHandler,
+			&ordered_waiting_messages
+			);
+		oehr = Desk_bool_FALSE;
+	}
+	Desk_DeskMem_Free( wait);
+	TaskModule_globalblock.pollword--;
+}
+
+
+
 
 static Desk_bool	NonZeroPollWordHandler( Desk_event_pollblock* event, void* reference)
-	{
+{
 	TaskModule_servicewaiting_block*	s	= (TaskModule_servicewaiting_block*) reference;
 	Desk_message_block			message;
-	
-	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_SendServiceMessages called\n");
-	
-	Desk_Error2_Try	{
+
+	Desk_Debug_Printf( Desk_error_PLACE "NonZeroPollWordHandler called\n");
+
+	Desk_Error2_Try
+	{
 		message.header.size	= 15*4;
 		message.header.yourref	= 0;
 		message.header.action	= (Desk_message_action) Message_Service;
-		
+
 		* (_kernel_swi_regs*) &message.data	= s->registers;
-		
+
 		Desk_Debug_Printf( Desk_error_PLACE "Sending service call %i to task %x\n", s->registers.r[1], s->info->task);
-		
+
 		_swix( Wimp_SendMessage, _INR(0,3), Desk_event_USERMESSAGE, &message, s->info->task, 0);
-		}
-	Desk_Error2_Catch	{
-		}
+	}
+	Desk_Error2_Catch
+	{
+	}
 	Desk_Error2_EndCatch
-	
+
 	FreeWaitingMessage( s);
-	
+
 	return Desk_bool_FALSE;
 	Desk_UNUSED( event);
-	}
+}
 
 
 static void	FreeWaitingMessage( TaskModule_servicewaiting_block* wait)
@@ -80,84 +163,107 @@ static void	FreeWaitingMessage( TaskModule_servicewaiting_block* wait)
 
 
 void	TaskModule_Service_Register( _kernel_swi_regs* r, void* pw)
-	{
-	int				flags		= (int)			r->r[0];
+{
+	unsigned int			flags		= (unsigned int)	r->r[0];
 	int				service_no	= (int)			r->r[1];
 	Desk_task_handle		task		= (Desk_task_handle)	r->r[2];
-	TaskModule_service_block*	s	= NULL;
-	
+	TaskModule_service_block* volatile	s_volatile	= NULL;
+	TaskModule_service_block*	s;
+
 	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_Register called\n");
-	
-	Desk_Error2_Try	{
+
+	Desk_Error2_Try
+	{
 		s = Desk_DeskMem_MallocType( TaskModule_service_block);
+		s_volatile	= s;
+		s->flags.value	= flags;
 		s->service	= service_no;
 		s->task		= task;
 		Desk_LinkList_AddToTail( &service_blocks, &s->header);
 		Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_Register: list length is %i\n", Desk_LinkList_ListLength( &service_blocks));
-		}
-	Desk_Error2_Catch	{
-		Desk_DeskMem_Free( s);
+
+	}
+	Desk_Error2_Catch
+	{
+		Desk_DeskMem_Free( (void *) s_volatile );
 		Desk_Error2_ReThrow();
-		}
+	}
 	Desk_Error2_EndCatch
-	
+
 	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_Register returning\n");
-	
+
 	Desk_UNUSED( flags);
 	Desk_UNUSED( pw);
-	}
+}
 
 
 
 
 void	TaskModule_Service_DeRegister( _kernel_swi_regs* r, void* pw)
-	{
+{
 	int				flags		= (int)			r->r[0];
 	int				service_no	= (int)			r->r[1];
 	Desk_task_handle		task		= (Desk_task_handle)	r->r[2];
-	
+
 	TaskModule_service_block*	service	= NULL;
-	
+
 	Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_DeRegister called for service %i, task 0x%x\n",
 		service_no, task
 		);
-	
+
 	#ifdef Desk_DEBUG
 		Desk_BackTrace_OutputToFFunctionWithPrefix( Desk_Debug_PrintfRef, NULL, Desk_error_PLACE);
 	#endif
-	
+
 	for	(
 		service = Desk_LinkList_FirstItem( &service_blocks);
 		service;
 		)
-		{
+	{
 		TaskModule_service_block*	next = Desk_LinkList_NextItem( &service->header);
-		
-		if ( (service==0 || (service->service == service_no)) && (service->task == task))	{
+
+		if ( ( service_no==0 || service->service == service_no ) && service->task == task)
+		{
 			TaskModule_servicewaiting_block*	wait;
-			
+
 			Desk_LinkList_Unlink( &service_blocks, &service->header);
-			Desk_DeskMem_Free( service);
-			
+
 			Desk_Debug_Printf( Desk_error_PLACE "Freeing all waiting messages associated with this service and task\n");
-			
-			for	(
-				wait = Desk_LinkList_FirstItem( &waiting_messages);
-				wait;
-				)
-				{
-				TaskModule_servicewaiting_block*	next = Desk_LinkList_NextItem( &wait->header);
-				if ( wait->info == service)	FreeWaitingMessage( wait);
-				wait = next;
-				}
+
+			if ( service->flags.bits.preserve_order)
+			{
+				wait = Desk_LinkList_FirstItem( &ordered_waiting_messages);
 			}
-		
-		service = next;
+			else
+			{
+				wait = Desk_LinkList_FirstItem( &waiting_messages);
+			}
+
+			while	( wait)
+			{
+				TaskModule_servicewaiting_block*	next = Desk_LinkList_NextItem( &wait->header);
+				if ( wait->info == service)
+				{
+					if ( service->flags.bits.preserve_order)
+					{
+						FreeOrderedWaitingMessage( wait);
+					}
+					else
+					{
+						FreeWaitingMessage( wait);
+					}
+				}
+				wait = next;
+			}
+			Desk_DeskMem_Free( service);
 		}
-	
+
+		service = next;
+	}
+
 	Desk_UNUSED( flags);
 	Desk_UNUSED( pw);
-	}
+}
 
 
 
@@ -168,20 +274,20 @@ void	TaskModule_Service_ServiceHandler( int service_no, _kernel_swi_regs *r, voi
 	{
 	TaskModule_block*		app	= &TaskModule_globalblock;
 	TaskModule_service_block*	service;
-	
+
 	#ifdef Desk_DEBUG
-		if ( service_no==1)	Desk_Debug_Printf( Desk_error_PLACE "Service 1 recived.\n");
+		if ( service_no==1)	dprintf(( "Service 1 recived."));
 	#endif
-	
+
 	if ( service_no == Service_WimpCloseDown && Desk_LinkList_FirstItem( &service_blocks))
-		{	// Cancel all service handlers that the dying task has registered with us.
+	{	// Cancel all service handlers that the dying task has registered with us.
 		_kernel_swi_regs	r2;
 		r2.r[0] = 0;		// flags.
 		r2.r[1] = 0;		// all service numbers.
 		r2.r[2] = r->r[2];	// task handle of task that is dying.
 		TaskModule_Service_DeRegister( &r2, pw);
-		}
-	
+	}
+
 	Desk_Error2_Try
 	{
 		for	(
@@ -193,23 +299,50 @@ void	TaskModule_Service_ServiceHandler( int service_no, _kernel_swi_regs *r, voi
 			if ( service_no == service->service)
 			{
 				TaskModule_servicewaiting_block*	waiting = Desk_DeskMem_MallocType( TaskModule_servicewaiting_block);
-				
+
 				Desk_Debug_Printf( Desk_error_PLACE "Received service call %i - storing for task to send\n", service_no);
-				
+
 				waiting->info		= service;
 				waiting->registers	= *r;
-				
-				Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_Register: waiting list length is %i, pollword=%i\n", 
+
+				Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_Register: waiting list length is %i, "
+					"ordered list length is %i, pollword=%i\n",
 					Desk_LinkList_ListLength( &waiting_messages),
+					Desk_LinkList_ListLength( &ordered_waiting_messages),
 					app->pollword
 					);
-				
-				Desk_LinkList_AddToTail( &waiting_messages, &waiting->header);
-				Desk_Event_Claim( Desk_event_NONZEROPOLLWORD, Desk_event_ANY, Desk_event_ANY, NonZeroPollWordHandler, waiting);
+
+				if	( service->flags.bits.preserve_order)
+				{
+					if	( Desk_LinkList_ListLength( &ordered_waiting_messages) == 0)
+					{
+						Desk_Event_Claim( Desk_event_NONZEROPOLLWORD,
+							Desk_event_ANY,
+							Desk_event_ANY,
+							OrderedNonZeroPollWordHandler,
+							&ordered_waiting_messages
+						);
+						oehr = Desk_bool_TRUE;
+					}
+					Desk_LinkList_AddToTail( &ordered_waiting_messages, &waiting->header);
+				}
+				else
+				{
+					Desk_Event_Claim( Desk_event_NONZEROPOLLWORD,
+						Desk_event_ANY,
+						Desk_event_ANY,
+						NonZeroPollWordHandler,
+						waiting
+						);
+					Desk_LinkList_AddToTail( &waiting_messages, &waiting->header);
+				}
+
 				app->pollword++;
-				
-				Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_Register: waiting list length is %i, pollword=%i\n", 
+
+				Desk_Debug_Printf( Desk_error_PLACE "TaskModule_Service_Register: waiting list length is %i, "
+					"ordered list length is %i, pollword=%i\n",
 					Desk_LinkList_ListLength( &waiting_messages),
+					Desk_LinkList_ListLength( &ordered_waiting_messages),
 					app->pollword
 					);
 			}
@@ -217,10 +350,8 @@ void	TaskModule_Service_ServiceHandler( int service_no, _kernel_swi_regs *r, voi
 	}
 	Desk_Error2_Catch
 	{
-        }
-        Desk_Error2_EndCatch
-        
-        
-        
-	Desk_UNUSED( pw);
 	}
+	Desk_Error2_EndCatch
+
+	Desk_UNUSED( pw);
+}
