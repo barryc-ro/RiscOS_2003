@@ -110,15 +110,53 @@
 
 	MEND
 
+ [ {FALSE}
+        MACRO
+$lab    SavePSR $reg
+$lab
+  [ No32bitCode
+        MOV     $reg, pc
+  |
+        mrs    ,$reg, CPSR
+  ]
+        MEND
+
+        MACRO
+$lab    RestPSR $reg
+$lab
+  [ No32bitCode
+        TEQP    $reg, #0
+  |
+        msr    ,CPSR_cf, $reg
+  ]
+        MEND
+ ]
+
 ; IRQsOff turns the IRQ and FIQ off
 
 	MACRO
-$lbl	IRQsOff
+$lbl	IRQsOff $tempreg
 
-$lbl	MOV	lr,pc
-	ORR	lr,lr,#3<<26
+$lbl
+  [ No32bitCode
+	MOV	$tempreg,pc
+	ORR	lr,$tempreg,#3<<26
 	TEQP	lr,#0
+  |
+        mrs    ,$tempreg,CPSR
+        ORR     lr, $tempreg, #I32_bit+F32_bit
+        msr    ,CPSR_c, lr
+  ]
 	MEND
+
+        MACRO
+$lbl    IRQsRestore $tempreg
+  [ No32bitCode
+        TEQP    $tempreg, #0
+  |
+        msr    ,CPSR_cf, $tempreg
+  ]
+        MEND
 
 ; Constants
 
@@ -209,13 +247,13 @@ service							; No service (yet)
 	DCD	swicode-s				; SWI handler
 	DCD	switabl-s				; SWI table
 	DCD	0					; No SWI decoding code
+ [ :LNOT: No32bitCode
+	DCD     0                                       ; No international messages
+	DCD     moduleflags-s                           ; Module flags word
+ ]
 
 title	=	"PPADriver",0
-help	=	"PPA Driver",9,"$Module_MajorVersion ($Module_Date)"
- [ Module_MinorVersion <> ""
-	=	" $Module_MinorVersion"
- ]
-	=	" SPP/EPPx4",0
+help	=	"PPA Driver",9,"$Module_HelpVersion SPP/EPPx4",0
 	ALIGN
 
 hcom	=	"IZipPrinter",0
@@ -258,6 +296,9 @@ switabl	=	"PPADriver",0				; SWI Group name
 	=	0
 	ALIGN
 
+ [ :LNOT: No32bitCode
+moduleflags DCD ModuleFlag_32bit
+ ]
 ; Module initialisation handler
 
 init	STMFD	r13!,{r1-r9,lr}				; Store R14 (we're calling SWIs here)
@@ -278,8 +319,7 @@ init	STMFD	r13!,{r1-r9,lr}				; Store R14 (we're calling SWIs here)
 
 	MOV	r0,#6					; Start of module memory claim
 	SWI	XOS_Module				; Claim the memory
-	LDMVSFD	r13!,{lr}				; Ooops - can't claim - recall exit
-	ORRVSS	pc,lr,#1<<26				; Set V, but preserve other flags
+	LDMVSFD	r13!,{pc}				; Ooops - can't claim - recall exit
 
 	STR	r2,[r12]				; Store that in the pointer
 
@@ -303,8 +343,8 @@ init_cm1
 
 	BL	ConfigureEPP
 
-	LDMFD	r13!,{r1-r9,lr}				; Read the return register
-	BICS	pc,lr,#1<<28				; Clear V, just in case it's been set
+        CLRV
+	LDMFD	r13!,{r1-r9,pc}				; Read the return register, return clear V
 
 ; Finalisation handler
 
@@ -317,7 +357,18 @@ final	STMFD	r13!,{r14}
 
 ; Standard SWI handler
 
-swicode	LDR	r12,[r12]				; Get workspace pointer
+swicode
+        STR     r14,[r13, #-4]!
+        BL      swicodeorig
+        LDR     r14,[r13], #4
+        TEQ     pc, pc
+        MOVEQ   pc, r14
+        BICCC   r14, r14, #(1<<29)
+        ORRCS   r14, r14, #(1<<29)
+        MOVVCS  pc, r14
+        ORRVSS  pc, r14, #(1<<28)
+swicodeorig
+        LDR	r12,[r12]				; Get workspace pointer
 	CMP	r11,#(ukswi-swijump)/4			; Is the SWI table too high?
 	ADDCC	pc,pc,r11,LSL#2
 	BCS	ukswi
@@ -327,14 +378,15 @@ swijump	B	Initialise
 	B	SCSICommandRetries
  [ DoReadOp = 1
 	B	ReadOp
-	MOVS	pc,lr
+	MOV	pc,lr
  |
 	B	PrintStatus
 	B	VPI0Detect
  ]
 
 ukswi	ADR	r0,ukswie				; Point to error
-	ORRS	pc,lr,#1<<28				; Set V and exit
+        SETV
+        MOV     pc, lr
 
 ukswie	DCD	&1e6
 	=	"Unknown PPADriver operation",0
@@ -371,7 +423,8 @@ Initialise_Fail1
 	BL	EnableIRQ
 	LDMFD	r13!,{r0-r3,lr}
 	ADR	r0,inite2				; Point to error
-	ORRS	pc,lr,#1<<28				; Set V on exit
+	SETV
+	MOV     pc, lr
 
 inite2	DCD	errorchunk+error_init1
 	=	"Bad response from Zip Drive - is it plugged in?",0
@@ -407,8 +460,8 @@ Initialise_Pass2
 	BL	ZipDisconnect
 
 	BL	EnableIRQ
-	LDMFD	r13!,{r0-r3,lr}
-	BICS	pc,lr,#1<<28				; Exit cleanly
+	CLRV
+	LDMFD	r13!,{r0-r3,pc}
 
 ; ZipConnect connects using EPP mode
 
@@ -532,13 +585,13 @@ SCRLoop	BL	SCSICommand				; Perform the SCSI command
 
 	TEQ	r0,#2
 	BEQ	SCRStat
-	TEQ	r0,#0					; Success!
+	CMP	r0,#0					; Success! (clears V)
 	ADDEQ	r13,r13,#16
-	LDMEQFD	r13!,{r4,pc}^
+	LDMEQFD	r13!,{r4,pc}
 
-SCRCont	SUBS	r4,r4,#1				; Failure, but if we've done the 5...
+SCRCont	SUBS	r4,r4,#1				; Failure, but if we've done the 5... (clears V if EQ)
 	ADDEQ	r13,r13,#16				; ...commands, return back...
-	LDMEQFD	r13!,{r4,pc}^				; ...to whence we came...
+	LDMEQFD	r13!,{r4,pc}				; ...to whence we came...
 
 	BL	Initialise
 	SUBS	r4,r4,#1
@@ -558,9 +611,9 @@ SCRStat	ADR	r0,StatCmd
 	TEQ	r0,#0
 	BNE	SCRCont					; If it didn't succeed, reinitialise...
 
-	SUBS	r4,r4,#1				; Failure, but if we've done the 5...
+	SUBS	r4,r4,#1				; Failure, but if we've done the 5... (clears V if EQ)
 	ADDEQ	r13,r13,#16				; ...commands, return back...
-	LDMEQFD	r13!,{r4,pc}^				; ...to whence we came...
+	LDMEQFD	r13!,{r4,pc}				; ...to whence we came...
 
 	SUBS	r4,r4,#1
 	LDMIA	r13,{r0-r3}
@@ -584,11 +637,10 @@ SCSICommand
 
 	STMFD	r13!,{r0-r2}
 	BL	PrintStatus
-	TEQ	r1,#0					; Is there stuff in the CC queue?
+	CMP	r1,#0					; Is there stuff in the CC queue? (clears V)
 	LDMFD	r13!,{r0-r2}				; Nope, so let's return...
-	LDMNEFD	r13!,{r1-r10,lr}			; ...
 	MOVNE	r0,#ppa_printerused			; ...
-	BICNES	pc,lr,#1<<28				; ... back to the SWI caller
+	LDMNEFD	r13!,{r1-r10,pc}			; ... back to the SWI caller
 
 SC_noprinter
 
@@ -603,7 +655,7 @@ SC_noprinter
 	LDRB	r9,[r0,#1]				; Get LUN etc.
 	MOV	r9,r9,LSR#5				; Mask out the LUN
 	TEQ	r9,#ppa_host				; Is it me?
-	BEQ	SCSIMeUp				; Then go to it!
+	BEQ	SCSIMeUp				; Then go to it! (V must be clear - see CMP 20 lines up)
 
 	MOV	r6,r0					; Store TX pointer...
 	MOV	r7,r1					; ... and length
@@ -647,7 +699,8 @@ SC_Error
  [ cmd_history = 1
 	BL	end_command
  ]
-	LDMFD	r13!,{r1-r10,pc}^			; ...and exit
+        CLRV
+	LDMFD	r13!,{r1-r10,pc}			; ...and exit
 
 SC_Selected
 	MOV	r2,#0
@@ -834,7 +887,8 @@ SC_EndCommand
 	BL	end_command
  ]
 	STMIB	r13,{r8,r9}				; Oh, and update the data pointer/length
-	LDMFD	r13!,{r1-r10,pc}^
+	CLRV
+	LDMFD	r13!,{r1-r10,pc}
 
 ; This is the SPP handler code, migrated from PPADriver 0.80
 
@@ -851,7 +905,8 @@ SC_SPP
 	BL	ZipDisconnect				; It didn't, so disconnect
 	BL	EnableIRQ
 	MOV	r0,#ppa_noconnect			; Set error...
-	LDMFD	r13!,{r1-r10,pc}^			; ...and exit
+	CLRV
+	LDMFD	r13!,{r1-r10,pc}			; ...and exit
 
 ; This is the SPP mode code.
 
@@ -868,12 +923,12 @@ SC_SelectedSPP
 SC_TxHLoop
 	BL	Wait
 
-	TEQ	r0,#0					; Did the wait finish successfully?
+	CMP	r0,#0					; Did the wait finish successfully? (clears V if EQ)
 	MOVEQ	r0,#ppa_timeout				; No - it timed out..
  [ cmd_history = 1
 	BLEQ	end_command
  ]
-	LDMEQFD	r13!,{r1-r10,pc}^			; ...and exit
+	LDMEQFD	r13!,{r1-r10,pc}			; ...and exit
 
 	LDRB	r0,[r6,r5]				; Get the byte
 	TEQ	r5,#1					; Is it the target byte?
@@ -894,12 +949,12 @@ SC_TxHLoop
 	MOV	r10,#ppa_hspeed				; Gonna do it FAST
 
 	BL	Wait
-	TEQ	r0,#0
+	CMP	r0,#0                                   ; clears V if EQ
 	MOVEQ	r0,#ppa_timeout
  [ cmd_history = 1
 	BLEQ	end_command
  ]
-	LDMEQFD	r13!,{r1-r10,pc}^
+	LDMEQFD	r13!,{r1-r10,pc}
 
 ; r6 and r7 can now be freed for other things...
 
@@ -923,10 +978,10 @@ SC_TxHLoop
 	MOVNE	r3,#&25					; ...and these two for Rx
 	MOVNE	r4,#&27
 
-	TEQ	r0,#0					; This is the reply from the previous Wait call...
+	CMP	r0,#0					; This is the reply from the previous Wait call... (clears V if EQ)
 SC_TxRxLoopTO
 	MOVEQ	r0,#ppa_timeout				; Ooh dear, looks like a timeout...
-	LDMEQFD	r13!,{r1-r10,pc}^			; ... so we'd better exit then
+	LDMEQFD	r13!,{r1-r10,pc}			; ... so we'd better exit then
 
 	TEQ	r0,#&f0
 	BEQ	SC_TxRxEpilogue
@@ -972,7 +1027,8 @@ SC_TxRxOverrun
 	BL	ZipDisconnect				; Yes, so disconnect from the ZIP drive...
 	BL	EnableIRQ
 	MOV	r0,#ppa_overrun				; Mark the error...
-	LDMFD	r13!,{r1-r10,pc}^			; ...and exit
+	CLRV
+	LDMFD	r13!,{r1-r10,pc}			; ...and exit
 
 SC_TxRxOkay
 
@@ -1065,7 +1121,7 @@ SC_TxRxNotBulk
 SC_TxRxE
 	BL	Wait					; Wait for a response
 
-	TEQ	r0,#0					; Has it timed out?
+	CMP	r0,#0					; Has it timed out? (clears V if EQ)
 	BEQ	SC_TxRxLoopTO				; Yes, it's timed out
 
 	TEQ	r0,#&f0					; Does the Zip drive expect any more data to be transferred?
@@ -1112,7 +1168,8 @@ SC_TxRxEpilogue
 	BL	end_command
  ]
 	STMIB	r13,{r8,r9}				; Update r2 and r3
-	LDMFD	r13!,{r1-r10,pc}^
+	CLRV
+	LDMFD	r13!,{r1-r10,pc}
 
 SC_TxRxSRx
 	STRB	r3,CommandReg
@@ -1142,21 +1199,21 @@ SC_TxRxSRx
 ; SCSIMeUp is code that handles SCSI activity to the host (ie ourselves)
 ; It currently only handles ID.
 
-SCSIMeUp
+SCSIMeUp                                                ; V must be clear on entry
 	LDRB	r9,[r0]					; Find out what command it was
 	TEQ	r9,#&12					; Is it device inqury?
 	MOVNE	r0,#&fe					; Bad command
-	LDMNEFD	r13!,{r1-r10,pc}^
+	LDMNEFD	r13!,{r1-r10,pc}
 	ADR	r4,MyInquiry
 SMU_12L	LDRB	r0,[r4],#1				; Copy the command over...
 	STRB	r0,[r2],#1				; ...to the SCSI data buffer
 	SUBS	r3,r3,#1
 	BGT	SMU_12L
-	MOV	r0,#0					; This returned okay
+	SUBS    r0, r0, r0				; This returned okay (R0 := 0, clears V)
  [ cmd_history = 1
 	BL	end_command
  ]
-	LDMFD	r13!,{r1-r10,pc}^
+	LDMFD	r13!,{r1-r10,pc}
 
 ; MyInquiry is basically a memory pointer which is a fake SCSI ID result,
 ; used for the host.
@@ -1176,7 +1233,8 @@ MI_End
 
 ConfigureEPP
 	STMFD	r13!,{r0-r4,r11,lr}
-	IRQsOff
+	IRQsOff r0
+	STR     r0, [r13, #-4]!
 	LDR	r11,ParallelAddress
 	ADD	r11,r11,#(&3f0-&278)<<2			; Point to the configuration register
 	MOV	r0,#&55
@@ -1200,7 +1258,7 @@ ConfigureEPP
 	MOV	r1,#&aa
 	STRB	r1,[r11,#0]
 	TEQ	r0,#0					; If we can't establish EPP mode, then we're gonna have to check SMC669...
-	LDMNEFD	r13!,{r0-r4,r11,pc}^			; Note that the IRQs are automatically restored here
+	BNE     Exit_ConfigureEPP
 
 ; This code just repeats itself a bit... Nice to compress!
 
@@ -1220,11 +1278,13 @@ ConfigureEPP
 	MOVNE	r0,#0
 	MOVEQ	r0,#2					; Special &370 mode for configuration...
 	STRB	r0,PPAMode
-
-	LDMFD	r13!,{r0-r4,r11,pc}^			; Similarly, IRQs are restored here...
+Exit_ConfigureEPP
+        LDR     r0, [r13], #4
+        IRQsRestore r0
+	LDMFD	r13!,{r0-r4,r11,pc}			; Similarly, IRQs are restored here...
 
 DeconfigureEPP
-	MOVS	pc,lr
+	MOV	pc,lr
 
  [ DoReadOp = 1
 
@@ -1243,7 +1303,7 @@ MakeRWCommand
 	MOV	r0,#0
 	STR	r0,SCSITemp+4				; Some other bits
 	STR	r0,SCSITemp+8				; And some more bits
-	MOVS	pc,lr
+	MOV	pc,lr
 
 ; SetSector sets the 10-byte read/write command's sector
 ; On entry, r0 is sector number (for Zip, 0->&2ffff)
@@ -1257,7 +1317,7 @@ SetSector
 	STRB	r0,SCSITemp+3				; LMSB
 	MOV	r0,r0,LSR#8
 	STRB	r0,SCSITemp+2				; MMSB
-	MOVS	pc,lr
+	MOV	pc,lr
 
 ; SetSectors sets the 10-byte read/write command's number of sectors to read
 ; On entry, r0 is #sectors 0 to &ffff
@@ -1267,7 +1327,7 @@ SetSectors
 	STRB	r0,SCSITemp+8				; LSB
 	MOV	r0,r0,LSR#8
 	STRB	r0,SCSITemp+7				; MSB
-	MOVS	pc,lr
+	MOV	pc,lr
 
 ; SectorOp performs the read/write sector
 ; r1 is the number of bytes to transfer
@@ -1281,9 +1341,9 @@ SectorOp
 	ADR	r0,SCSITemp				; Point to command
 	MOV	r1,#10					; 10 byte long command
 	BL	SCSICommand				; Perform the SCSI command
-	MOVS	r1,r3					; This is how many bytes not read
+	SUBS    r1,r3,#0				; This is how many bytes not read (R1 := R3, clears V)
 	MOVMI	r1,#0					; Due to a slight problem with PPA3, an extra byte is read
-	LDMFD	r13!,{r2-r3,pc}^			; Exit (SCSICommand will set up the error)
+	LDMFD	r13!,{r2-r3,pc}				; Exit (SCSICommand will set up the error)
 
 ; ReadOp is a FileCore_DiscOp compliant sector reader
 ; On entry:
@@ -1299,7 +1359,7 @@ Read
 ReadOp
 
 	CMP	r4,#0					; If there's no data, don't do it
-	MOVLES	pc,lr
+	MOVLE	pc,lr
 
 	STMFD	r13!,{r0,r1,lr}
 
@@ -1330,9 +1390,8 @@ ReadOp
 
 	SUB	r2,r2,r1				; If any's been unread, decrement address
 	SUB	r3,r3,r1				; Similarly, for sectors
-	MOV	r4,r1
-	LDMFD	r13!,{r0,r1,lr}
-	BICS	pc,lr,#1<<28				; And exit
+	SUBS	r4,r1,#0                                ; R4 := R1, clears V
+	LDMFD	r13!,{r0,r1,pc}
 
 RO_Error
 ;
@@ -1340,7 +1399,8 @@ RO_Error
 ;
 	LDMFD	r13!,{r0,r1,lr}
 	ADR	r0,ROErr				; Point to error
-	ORRS	pc,lr,#1<<28				; And exit
+	SETV
+	MOV     pc, lr
 
 ROErr	DCD	errorchunk+error_read
 	=	"Read error from Zip drive",0
@@ -1357,7 +1417,7 @@ IF1	TST	r0,r1
 	MOVS	r1,r1,LSR#1
 	BNE	IF1
 	SWI	&20100+')'
-	LDMFD	r13!,{r0-r1,pc}^
+	LDMFD	r13!,{r0-r1,pc}
  ]
 
 parallel
@@ -1412,7 +1472,8 @@ DIL	MOV	r0,#3
 	LDMFD	r13!,{r0-r4,r11,lr}			; Restore all the registers
 
 	ADR	r0,DI_Error
-	ORRS	pc,lr,#1<<28
+	SETV
+	MOV     pc, lr
 DI_Error
 	DCD	errorchunk+error_printer
 	=	"The printer port is busy, and the Zip drive cannot be accessed.",0
@@ -1425,11 +1486,11 @@ EDIL
 	STRB	r1,SCSIOperation			; We are using the parallel port...
 
 	LDRB	r0,PPAMode
-	TEQ	r0,#0					; SPP mode doesn't need reconfiguring each time
-	LDMEQFD	r13!,{r0-r4,r11,lr}
-	BICEQS	pc,lr,#1<<28
+	CMP	r0,#0					; SPP mode doesn't need reconfiguring each time (clears V if EQ)
+	LDMEQFD	r13!,{r0-r4,r11,pc}
 
-	IRQsOff
+	IRQsOff r11
+	STR     r11, [r13, #-4]!
 
 	LDR	r11,ParallelAddress
 	TEQ	r0,#1
@@ -1460,8 +1521,9 @@ EDIL
 
 	MOV	r0,#&aa
 	STRB	r0,[r11,#0]				; Return the configuration mode back to normal
-	LDMFD	r13!,{r0-r4,r11,lr}
-	BICS	pc,lr,#1<<28
+	LDR     r11, [r13], #4
+	IRQsRestore r11
+	LDMFD	r13!,{r0-r4,r11,pc}
 
 ; Similarly, EnableIRQ doesn't enable the IRQ - it returns the mode back to
 ; ECP/SPP. For historical reasons it is called EnableIRQ, because that's what
@@ -1471,10 +1533,10 @@ EnableIRQ
 	STMFD	r13!,{r0-r4,r11,lr}
 
 	LDRB	r0,PPAMode				; What mode are we in?
+	IRQsOff r11
+	STR     r11, [r13, #-4]!
 	TEQ	r0,#0					; SPP mode - we didn't configure it, honest!
 	BEQ	EI_NotEPP
-
-	IRQsOff
 
 	LDR	r11,ParallelAddress
 	TEQ	r0,#1
@@ -1516,7 +1578,10 @@ EI_NotEPP
 	MOV	r0,#0
 	STRB	r0,SCSIOperation			; Clear the SCSI operation flag
 
-	LDMFD	r13!,{r0-r4,r11,pc}^
+	LDR     r0, [r13], #4
+	IRQsRestore r0
+
+	LDMFD	r13!,{r0-r4,r11,pc}
 
 ; ppa_setprinterstatus allows the user to turn the printer check on/off.
 
@@ -1556,25 +1621,25 @@ sps_fs2	LDRB	r2,[r0],#1				; Get the next character
 	CMP	r2,#32
 	BGE	sps_badsyntax				; If the terminator isn't there, it's wrong again.
 
-	MOV	r0,#0					; Mark the printer check as being not used
+	SUBS	r0,r0,r0				; Mark the printer check as being not used (R0 := 0, clears V)
 	STRB	r0,PPAPrinter
-	MOVS	pc,lr
+	MOV	pc,lr
 
 sps_printeron
 	LDRB	r2,[r0],#1
-	CMP	r2,#32
+	CMP	r2,#32                                  ; clears V (R2 guaranteed a byte value)
 	BGE	sps_badsyntax				; If the Arnie isn't there, it's wrong again.
-
 	MOV	r0,#1					; Check for the printer now
 	STRB	r0,PPAPrinter
-	MOVS	pc,lr
+	MOV	pc,lr
 
 sps_badsyntax
 	STMFD	r13!,{r14}
 	SWI	&20100+'?'
 	LDMFD	r13!,{r14}
 	ADR	r0,sps_syntax2
-	ORR	pc,lr,#1<<28				; It's an error
+	SETV
+	MOV     pc, lr
 
 sps_syntax2
 	DCD	220					; This is the syntax error
@@ -1583,7 +1648,7 @@ sps_syntax2
 
  [ cmd_history = 1
 
-; print_commandhistory diplsays the last <cmd_historysize> SCSI commands,
+; print_commandhistory displays the last <cmd_historysize> SCSI commands,
 ; useful for debugging purposes. There isn't much in the way of comments here
 ; - it isn't really used for release, but the command is still there.
 
@@ -1693,13 +1758,15 @@ pch_nost2
 	SWI	XOS_NewLine
 	SUBS	r10,r10,#1
 	BGT	pch_loop
-	LDMFD	r13!,{r0-r11,pc}^
+	LDMFD	r13!,{r0-r11,pc}
 
 ; add_history adds a command to the history list. All the commands are
-; shuffled, so it gets placed at the bottom.
+; shuffled, so it gets placed at the bottom.  MUST PRESERVE FLAGS
 
 add_history
 	STMFD	r13!,{r0-r11,lr}
+        SavePSR r4
+        STR     r4, [r13, #-4]!
 ;	SWI	&20100+'.'
 	LDR	r4,Commands
 	ADD	r4,r4,#1
@@ -1722,10 +1789,14 @@ ah_cmdl	LDRB	r2,[r0],#1
 	STRB	r2,[r10],#1
 	SUBS	r1,r1,#1
 	BPL	ah_cmdl
-	LDMFD	r13!,{r0-r11,pc}^
+	LDR     r4, [r13], #4
+	RestPSR r4
+	LDMFD	r13!,{r0-r11,pc}
 
+; MUST PRESERVE FLAGS
 end_command
 	STMFD	r13!,{r0-r11,lr}
+	SavePSR r2
 	CMP	r0,#255
 	MOVGT	r0,#255
 ;	SWI	&20100+'.'
@@ -1737,7 +1808,8 @@ end_command
 	STRB	r0,History+16+15
 ;	MOV	r0,#15
 ;	STRB	r0,History
-	LDMFD	r13!,{r0-r11,pc}^
+        RestPSR r2
+	LDMFD	r13!,{r0-r11,pc}
  ]
 
 PrintStatus
@@ -1765,10 +1837,10 @@ PS_noccqueue
 
 	MOV	r0,#3
 	SWI	XBuffer_GetInfo				; Find out the number of characters in the print queue
-	MOV	r0,r6					; Store these into r0
+	SUBS	r0,r6,#0				; Store these into r0 (R0:=R6, clears V)
 	MOV	r1,r9					; Store the number of characters in CC print queue in r1
 	LDRB	r2,SCSIOperation			; Read the SCSI operation status...
-	LDMFD	r13!,{r3-r9,pc}^			; and exit
+	LDMFD	r13!,{r3-r9,pc}			        ; and exit
 
 VPI0Detect
 	STMFD	r13!,{r1-r3,lr}
@@ -1800,13 +1872,14 @@ VPI0Detect
 	BL	EnableIRQ
 
 	MOV	r0,#1
-	LDMFD	r13!,{r1-r3,pc}^
+	CLRV
+	LDMFD	r13!,{r1-r3,pc}
 
 vpi0_none
 	BL	ZipDisconnect
 	BL	EnableIRQ
 
-	MOV	r0,#0
-	LDMFD	r13!,{r1-r3,pc}^
+	SUBS	r0,r0,r0 ; R0 := 0, clears V
+	LDMFD	r13!,{r1-r3,pc}
 
 	END
