@@ -9,6 +9,10 @@
  * Error pages come from <WebServe$ErrorRoot>
  *
  */
+
+/*#define FILEWATCH*/
+
+
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
@@ -23,6 +27,8 @@
 
 host_list global_serveroot = NULL;
 static host_list global_errorroot = NULL;
+
+char **serve_home_names = NULL;
 
 /* GRAVE WARNING: Do not be tempted to alter this structure, because it is passed
  *                *directly* to OS_GBPB 12 to receive file information.
@@ -61,6 +67,38 @@ static void build_index(host_list hostentry, DirTreeRecord * list, char *filepre
 static void write_index(host_list hostentry, char *filename);
 
 
+#ifdef FILEWATCH
+static void *filewatch_serve_handle = 0;
+
+static void filewatch_terminate(void)
+{
+        if (filewatch_serve_handle != 0) {
+                (void) _swix(0x4d241, _INR(0,1), 0, filewatch_serve_handle);
+                filewatch_serve_handle = 0;
+        }
+}
+#endif
+
+void serve_check_files_changed(void)
+{
+        #ifdef FILEWATCH
+        _kernel_oserror *e;
+        char buffer[256];
+        size_t size = sizeof(buffer);
+        int count;
+
+	if (filewatch_serve_handle == 0) return;
+	e = _swix(0x4d242, _INR(0,3)|_OUT(4), 0, filewatch_serve_handle, buffer, size, &count);
+	if (e) {
+	        _swix(Wimp_ReportError, _INR(0,2), e, 2, "WebServe");
+	}
+	else if (count > 0) {
+	        _swix(Wimp_ReportError, _INR(0,2), "    Count > 0", 2, "WebServe");
+	}
+
+        #endif
+}
+
 /**************************************************************************************************/
 /*
  * Local page serving.
@@ -76,11 +114,26 @@ void serve_build_index(void)
 	/* create one host record to represent the serving machine */
 	global_serveroot = new_host_record(local_host_name(), "", server_port);    /*NB cache_openfile relies on dirname of "" */
 	if (global_serveroot != NULL) {
+	        #ifdef FILEWATCH
+	        int reasons[] = { 0, 1, 2, 3, 4, 6, 7, 8, 257, 258, 520, 521, -1 };
+	        _kernel_oserror *e;
+	        #endif
 		DirTreeRecord * tree = filesupport_buildfiletree("<WebServe$ServeRoot>");
 		insert_cacheentry = &(global_serveroot->cache);	    /* hang CacheIndex here */
 		build_index(global_serveroot, tree, "", "/");   /* build CacheIndex in memory */
 		/* NB build_index frees the file tree after use */
 		if (getenv("WebServe$ServeIndex")) write_index(global_serveroot, "<WebServe$ServeIndex>");
+		#ifdef FILEWATCH
+		_swix(OS_CLI, _IN(0), "RMEnsure FileWatch 0.04 IfThere System:Modules.FileWatch Then RMLoad System:Modules.FileWatch");
+		_swix(OS_CLI, _IN(0), "RMEnsure FileWatch 0.04 IfThere <WebServe$Dir>.rm.FileWatch Then RMLoad <WebServe$Dir>.rm.FileWatch");
+		if ((e=_swix(0x4d240, _INR(0,2)|_OUT(0), 0, reasons, "<WebServe$ServeRoot>", &filewatch_serve_handle)), e) {
+		        filewatch_serve_handle = 0;
+		        _swix(Wimp_ReportError, _INR(0,2), e, 2, "WebServe");
+		}
+		else {
+		        atexit(filewatch_terminate);
+		}
+		#endif
 	}
 }
 
@@ -110,16 +163,33 @@ cache_list serve_search(char *hostname, char *url, int *censorship)
 		/* expiry time/flag etc not used on served files */
 
 		if (!cacheentry) {
-			if (url[strlen(url)-1] == '/') {
-				char *url_home = (char *)malloc(strlen(url) + 10);
+	        	const size_t len = strlen(url);
+			if (url[len-1] == '/') {
+			        if (serve_home_names) {
+			        	char **tries;
 
-				/* url not found, try appending 'Home' ie ..ether75/ becomes ..ether75/Home */
-				if (url_home) {
-					strcpy(url_home, url);
-					strcat(url_home, "Home");
-					cacheentry = urllist_search(hostentry, url_home);
-					free(url_home);
-				}
+				        for (tries = serve_home_names; *tries && !cacheentry; ++tries) {
+				                char *url_home = malloc(strlen(*tries) + len + 1);
+
+				                if (url_home) {
+				                        memcpy(url_home, url, len);
+				                        strcpy(url_home + len, *tries);
+				                        cacheentry = urllist_search(hostentry, url_home);
+				                        free(url_home);
+				                }
+				        }
+			        }
+			        else {
+					char *url_home = malloc(len + 10);
+
+					/* url not found, try appending 'Home' ie ..ether75/ becomes ..ether75/Home */
+					if (url_home) {
+						memcpy(url_home, url, len);
+						strcpy(url_home + len, "Home");
+						cacheentry = urllist_search(hostentry, url_home);
+						free(url_home);
+					}
+			        }
 			}
 		}
 
