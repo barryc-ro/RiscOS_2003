@@ -26,6 +26,15 @@
 
 
 #
+# Component specific options:
+#
+COMPONENT  = CtrlsModem
+ROM_MODULE = aof.CtrlsModem
+TARGET     = rm.CtrlsModem
+RDIR       = Resources
+LDIR       = ${RDIR}.${LOCALE}
+
+#
 # Setup flags and linker base options
 #
 
@@ -75,29 +84,76 @@ CFLAGS  = -depend !Depend -zps -zM -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(
 AFLAGS  = -LI $(A_DBG_FLAGS)
 #LFLAGS  = -map -ERRORS LINK.ERR -o $(TNAME) -via link/cmd 
 #LFLAGS  = -map -ERRORS LINK.ERR -o bin  -via link/cmd 
-LFLAGS  = -o SoftModem -via link/cmd -sym Syms
+LFLAGS  = -via link/cmd -sym Syms
 
 CC      = CC
 AS      = ObjAsm
-LK      = Link
+LD      = Link
 LB      = C:o.Stubs
+MODSQZ  = ModSqz
+MKDIR   = cdir
+WIPE    = -Wipe
 
 VPATH=ACU AS IO MT_Ctls1 PP Voice
  
+#
+# Rule patterns
+#
 .SUFFIXES: .o .c
 .c.o:;	$(CC) $(CFLAGS) -o $@ $<
 
+
+#
+# Main rules:
+#
+all: ${TARGET}
+	@echo ${COMPONENT}: Module built (Relocatable)
+
+rom: ${ROM_MODULE}
+	${MKDIR} aof
+        @echo ${COMPONENT}: Module built (ROM)
+
+install_rom: ${ROM_MODULE}
+        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: Module installed (ROM)
+
+resources:
+        @echo ${COMPONENT}: No resources
+
+clean:
+        ${RM} ${ROM_MODULE}
+        ${WIPE} linked.* ${WFLAGS}
+        ${WIPE} map.* ${WFLAGS}
+        ${WIPE} o.* ${WFLAGS}
+	${WIPE} Syms $(WFLAGS)
+        @echo ${COMPONENT}: cleaned
+
+${ROM_MODULE}: ${TARGET} ${ROMCSTUBS}
+	${MKDIR} aof
+        ${LD} -aof -o $@ $(LFLAGS) $(ROMCSTUBS)
+
+# final link for ROM Image (using given base address)
+rom_link:
+        ${MKDIR} linked
+        ${MKDIR} map
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
+              -map > map.${COMPONENT}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 
 
 #
 #    Musket w/ Cirrus Cutlass I data pump for EMULATOR No wireless code
 #
-pndb5i-v:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ) linktop
+${TARGET}:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ) linktop
+	    $(MKDIR) o
+	    ${MKDIR} rm
             amu -f acumf/arm hdrs acucore !etc !v25bis !wireless !voice fax !voiceview
             amu -f faxmf/arm hdrs fx1
             amu -f v42mf/arm hdrs v42code btlzcode etcstub m10stub cl5code
             amu -f mtmf/arm hdrs cutlass_1
-            $(LK) $(LFLAGS) $(LB)
+            $(LD) -rmf -o $@ $(LFLAGS) $(LB)
+	    $(MODSQZ) $@
 
 
 

@@ -1,4 +1,3 @@
--rmf
  ac00mstr.o
   ac00sys0.o
   ac00sys1.o
