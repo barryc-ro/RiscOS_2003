@@ -68,7 +68,6 @@ o.arcs     \
 o.arcf     \
 o.dir      \
 o.cat      \
-o.virt     \
 o.flex     \
 o.fx       \
 o.mem      \
@@ -149,6 +148,7 @@ rom_link:
 #
 rm.${COMPONENT}: ${OBJS} ${CLIB}
         ${LD} -rmf -o $@ ${OBJS} ${CLIB} ${INETLIB}
+        Access rm.${COMPONENT} RW/R
 
 #
 # Dynamic dependencies:
@@ -204,7 +204,6 @@ o.sfs:	h.etc
 o.sfs:	h.allerrs
 o.sfs:	h.arcs
 o.sfs:	h.dir
-o.sfs:	h.virt
 o.sfs:	h.cat
 o.sfs:	h.fs
 o.sfs:	h.sff
@@ -213,6 +212,7 @@ o.sfs:	h.mem
 o.sfs:	h.fx
 o.sfs:	h.scrap
 o.sfs:	h.service
+o.sfs:	h.xstr
 o.sfs:	h.sfs
 o.sff:	c.sff
 o.sff:	C:h.kernel
@@ -226,6 +226,7 @@ o.sff:	h.Interface
 o.sff:	h.fsentries
 o.sff:	h.ModuleWrap
 o.sff:	h.flex
+o.sff:	h.xstr
 o.sff:	h.str
 o.sff:	h.etc
 o.sff:	h.fs
@@ -273,6 +274,7 @@ o.arcs:	h.flex
 o.arcs:	h.str
 o.arcs:	h.etc
 o.arcs:	h.scrap
+o.arcs:	h.xstr
 o.arcs:	h.fs
 o.arcs:	h.sfs
 o.arcs:	h.fx
@@ -297,6 +299,7 @@ o.arcf:	h.sfs
 o.arcf:	h.arcs
 o.arcf:	h.cat
 o.arcf:	h.link
+o.arcf:	h.xstr
 o.arcf:	h.arcf
 o.dir:	c.dir
 o.dir:	C:h.kernel
@@ -316,6 +319,7 @@ o.dir:	h.sfs
 o.dir:	h.arcs
 o.dir:	h.cat
 o.dir:	h.link
+o.dir:	h.xstr
 o.dir:	h.dir
 o.cat:	c.cat
 o.cat:	C:h.kernel
@@ -335,23 +339,6 @@ o.cat:	h.sfs
 o.cat:	h.arcs
 o.cat:	h.fx
 o.cat:	h.cat
-o.virt:	c.virt
-o.virt:	C:h.kernel
-o.virt:	C:h.swis
-o.virt:	h.Consts
-o.virt:	h.AllErrs
-o.virt:	h.RMInfo
-o.virt:	h.Statics
-o.virt:	h.veneers
-o.virt:	h.Interface
-o.virt:	h.fsentries
-o.virt:	h.ModuleWrap
-o.virt:	h.flex
-o.virt:	h.str
-o.virt:	h.fs
-o.virt:	h.sfs
-o.virt:	h.arcs
-o.virt:	h.virt
 o.flex:	c.flex
 o.flex:	C:h.kernel
 o.flex:	C:h.swis
@@ -410,40 +397,16 @@ o.mount:	h.etc
 o.mount:	h.allerrs
 o.mount:	h.consts
 o.mount:	h.flex
+o.mount:	h.xstr
+o.mount:	h.fs
 o.mount:	h.str
 o.mount:	h.csfs
 o.mount:	h.link
 o.mount:	h.arcs
-o.mount:	h.fs
 o.mount:	h.cat
 o.mount:	h.dir
 o.mount:	h.service
 o.mount:	h.mount
-o.service:	c.service
-o.service:	C:h.kernel
-o.service:	C:h.swis
-o.service:	h.Consts
-o.service:	h.AllErrs
-o.service:	h.RMInfo
-o.service:	h.Statics
-o.service:	h.veneers
-o.service:	h.Interface
-o.service:	h.fsentries
-o.service:	h.ModuleWrap
-o.service:	h.flex
-o.service:	h.str
-o.service:	h.etc
-o.service:	h.csfs
-o.service:	h.scrap
-o.service:	h.fs
-o.service:	h.sfs
-o.service:	h.arcs
-o.service:	h.cat
-o.service:	h.fx
-o.service:	h.mount
-o.service:	h.service
-o.service:	h.usermode
-o.service:	C:h.kernel
 o.serx:	c.serx
 o.serx:	C:h.kernel
 o.serx:	C:h.swis
@@ -456,6 +419,7 @@ o.serx:	h.Interface
 o.serx:	h.fsentries
 o.serx:	h.ModuleWrap
 o.serx:	h.flex
+o.serx:	h.xstr
 o.serx:	h.str
 o.serx:	h.etc
 o.serx:	h.scrap
@@ -481,13 +445,13 @@ o.update:	h.Interface
 o.update:	h.fsentries
 o.update:	h.ModuleWrap
 o.update:	h.flex
+o.update:	h.xstr
 o.update:	h.str
 o.update:	h.csfs
 o.update:	h.etc
 o.update:	h.allerrs
 o.update:	h.arcs
 o.update:	h.dir
-o.update:	h.virt
 o.update:	h.cat
 o.update:	h.fs
 o.update:	h.sff
@@ -526,6 +490,7 @@ o.link:	h.Interface
 o.link:	h.fsentries
 o.link:	h.ModuleWrap
 o.link:	h.flex
+o.link:	h.xstr
 o.link:	h.str
 o.link:	h.etc
 o.link:	h.scrap
@@ -566,6 +531,7 @@ o.gbpb:	h.veneers
 o.gbpb:	h.Interface
 o.gbpb:	h.fsentries
 o.gbpb:	h.ModuleWrap
+o.gbpb:	h.etc
 o.gbpb:	h.mem
 o.gbpb:	h.sfi
 o.func:	c.func
@@ -651,6 +617,11 @@ o.putbytes:	h.fsentries
 o.putbytes:	h.ModuleWrap
 o.putbytes:	h.mem
 o.putbytes:	h.sfi
+o.xstr:	c.xstr
+o.xstr:	C:h.kernel
+o.xstr:	C:h.swis
+o.xstr:	h.flex
+o.xstr:	h.xstr
 o.usermode: s.usermode
 o.usermode: Hdr:ListOpts
 o.usermode: Hdr:Macros
@@ -660,3 +631,29 @@ o.usermode: Hdr:CPU.Generic26
 o.usermode: Hdr:IO.GenericIO
 o.usermode: Hdr:RISCOS
 o.usermode: Hdr:EnvNumbers
+o.service:	c.service
+o.service:	C:h.kernel
+o.service:	C:h.swis
+o.service:	h.Consts
+o.service:	h.AllErrs
+o.service:	h.RMInfo
+o.service:	h.Statics
+o.service:	h.veneers
+o.service:	h.Interface
+o.service:	h.fsentries
+o.service:	h.ModuleWrap
+o.service:	h.flex
+o.service:	h.str
+o.service:	h.etc
+o.service:	h.csfs
+o.service:	h.scrap
+o.service:	h.fs
+o.service:	h.sfs
+o.service:	h.arcs
+o.service:	h.cat
+o.service:	h.fx
+o.service:	h.mount
+o.service:	h.service
+o.service:	h.usermode
+o.service:	C:h.kernel
+o.service:	h.xstr
