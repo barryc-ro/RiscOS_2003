@@ -5,85 +5,15 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 08-Jun-94  AMcC         Created.
+# 10-May-01  KJB          Nicked
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT     = Debugger
+HELPSRC       = HelpSrc
+TOKENSOURCE   = TokHelpSrc
+TOKHELPSRC    = ${TOKENSOURCE}
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-WIPE    = -wipe
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-WFLAGS  = ~cr~v
-
-TOKENISE = tokenise
-TOKENS   = Hdr:Tokens
-
-#
-# Program specific options:
-#
-COMPONENT = Debugger
-SOURCE    = s.Debugger
-TARGET    = rm.${MACHINE}.Debugger
-EXPORTS   = ${EXP_HDR}.Debugger
-
-#
-# Generic rules:
-#
-rom: $(TARGET) local_dirs
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: $(TARGET)
-        $(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${WIPE} rm ${WFLAGS}
-        $(RM) $(TARGET)
-        $(RM) TokHelpSrc
-        @echo ${COMPONENT}: cleaned
-
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
-
-local_dirs:
-        ${MKDIR} rm
-        ${MKDIR} rm.${MACHINE}
-
-$(TARGET): $(SOURCE) TokHelpSrc
-        ${MKDIR} rm.${MACHINE}
-        $(AS) $(ASFLAGS) $(SOURCE)
-
-${EXP_HDR}.Debugger: hdr.Debugger
-        ${CP} hdr.Debugger $@ ${CPFLAGS}
-
-TokHelpSrc: $(TOKENS) HelpSrc
-        $(TOKENISE) $(TOKENS) HelpSrc $@
-
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
