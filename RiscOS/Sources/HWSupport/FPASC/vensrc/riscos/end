@@ -26,43 +26,95 @@ FPEHelp
 ; On exit:  All registers preserved
 ;
 veneer_newhandlers      ROUT
-        STMFD   sp!, {r0-r4, lr}
+  [   Arm600
 
-        AdrWS   r0
-	LDR	r4, [r0, #:INDEX:FPAFlags]
+; In the case of a 32-bit handler, we don't support the core attempting
+; to change the handler dynamically. Version 1.07 won't ever do this (we hope).
+;
+        STMFD   sp!, {r10, lr}
 
-    [   Arm600
-;
-; save the address of the true handler for the veneer to use
-;
-        STR     r1, [r0, #:INDEX:CoreVector]
+        ASSERT  Rwp = r10
+        AdrWS   r10
 
 ;
-; have recorded the core's new handler, make sure that the
-; veneer is only installed upon the system vector once.
+; Make sure the veneer is only installed on the vector once. (This case will be the common
+; one hit on almost every context switch.)
 ;
-	TST	r4, #OnVector
-	BNE	%F55
+        [ {CONFIG}=26
+        ;
+        ; save the address of the true handler for the veneer to use
+        ;
+        STR     r1, CoreVector
+        ]
+
+        LDRB    lr, OnVector
+        TEQ     lr, #0
+        LDMNEFD sp!, {r10, pc}
+
+        [ {CONFIG}=32
+        STMFD   sp!, {r0-r2}
+        |
+        STMFD   sp!, {r0-r1}
+        ]
+
+        [ {CONFIG}=32
+        ;
+        ; Save the address of the handler so we can use OS_ClaimProcessorVector to remove it
+        ;
+        STR     r1, CoreVector
+        ]
 
 ;
 ; the new 32-bit PC machines now have a SWI for installing
 ; a vector - use it to install the veneer
 ;
+    [   {CONFIG}=32
+        ; Install directly
+        MRS     r2, CPSR        ; calling SWI will probably chuck us into SVC26 (we were entered
+                                ; in SVC32), so save the CPSR
+    |
+        ; Install our pre-veneer
         ADR     r1, UI_veneer
+    ]
+
         MOV     r0, #1
         ORR     r0, r0, #1 :SHL: 8      ; claiming undef. instr. vector
 
         SWI     XOS_ClaimProcessorVector
-        MOV     r2, r1
+
+
+    [   {CONFIG}=32
+        MSR     CPSR_all, r2            ; back into original mode
+    ]
+
+;
+; save old vector in module workspace
+;
+        STR     r1, UIVector
 
 ;
 ; mark veneer as installed upon system vector.
 ;
-	ORRVC	r4, r4, #OnVector
+        MOV     lr, #1
+        STRB    lr, OnVector
 
-        AdrWS   r0
-
+;
+; finished
+;
+    [   {CONFIG}=32
+        LDMFD   sp!, {r0-r2, r10, pc}
     |
+        LDMFD   sp!, {r0-r1, r10, pc}
+    ]
+
+  | ; Arm600
+        STMFD   sp!, {r0-r2, r10, lr}
+
+        ASSERT  Rwp = r10
+        AdrWS   r10
+
+        LDRB    r2, OnVector
+
 ;
 ; convert from address to branch instruction
 ;
@@ -70,34 +122,29 @@ veneer_newhandlers      ROUT
         MOV     r1, r1, LSR #2          ; byte offset -> word offset
         ORR     r1, r1, #&ea000000      ; add opcode for branch
 
-        MOV     r3, #Undef_vector
-        LDR     r2, [r3]
-        STR     r1, [r3]
+        MOV     r0, #Undef_vector
+        LDR     lr, [r0]
+        STR     r1, [r0]
 
 ;
 ; be careful not to install the vector twice, thereby
 ; losing the true value of the old vector.
 ;
-	TST	r4, #OnVector
-	BNE	%F55
+        TEQ     r2, #0
+        LDMNEFD sp!, {r0-r2, r10, pc}^
 
-	ORR	r4, r4, #OnVector
-    ]
+        STRB    r0, OnVector            ; r0 != at this point
 
 ;
 ; save old vector in module workspace
 ;
-        STR     r2, [r0, #:INDEX:UIVector]
-
-;
-; save new flags word back
-;
-	STR	r4, [r0, #:INDEX:FPAFlags]
+        STR     lr, UIVector
 
 ;
 ; finished
 ;
-55      LDMFD   sp!, {r0-r4, pc}^
+        LDMFD   sp!, {r0-r2, r10, pc}^
+  ] ; Arm600
 
 ;
 ; **********************************************************************
@@ -108,48 +155,92 @@ veneer_newhandlers      ROUT
 ; On exit:  All registers preserved
 ;
 veneer_restorehandlers  ROUT
-        STMFD   sp!, {r0-r4, lr}
+  [  Arm600
+        [ {CONFIG} = 32
+        STMFD   sp!, {r0-r3, r10, lr}
+        |
+        STMFD   sp!, {r0-r2, r10, lr}
+        ]
 
 ;
 ; load old vector from module workspace...
 ;
-        AdrWS   r3
-        LDR     r1, [r3, #:INDEX:UIVector]
+        AdrWS   r10
+        LDR     r1, UIVector
 
 ;
 ; fetch flags word and check that we are installed on the system vector
 ;
-	LDR	r4, [r3, #:INDEX:FPAFlags]
-	TST	r4, #OnVector
-	BEQ	%F55
+        LDRB    lr, OnVector
+        TEQ     lr, #0
+     [ {CONFIG}=32
+        LDMEQFD sp!, {r0-r3, r10, pc}
+     |
+        LDMEQFD sp!, {r0-r2, r10, pc}
+     ]
 
-    [ Arm600
-        MOV     r0, #1
+     [ {CONFIG}=32
+        MRS     r3, CPSR                ; Calling SWI will probably chuck us into SVC26
+        LDR     r2, CoreVector
+     |
         ADR     r2, UI_veneer
+     ]
+        MOV     r0, #1
         SWI     XOS_ClaimProcessorVector
 
 ;
 ; mark module as off the undef. instr. vector if the SWI succeeded.
 ;
-	BICVC	r4, r4, #OnVector
-    |
-;
-; ... and put it back
-;
-        MOV     r0, #Undef_vector
-        STR     r1, [r0]
-
-;
-; mark the module as being off the undef. instr. vector
-;
-	BIC	r4, r4, #OnVector
-    ]
+     [ {CONFIG}=32
+        MSR     CPSR_all, r3            ; Back into SVC32
+     ]
 
 ;
 ; done - save new flags away and return
 ;
-	STR	r4, [r3, #:INDEX:FPAFlags]
-55      LDMFD   sp!, {r0-r4, pc}^
+        MOV     r0, #0
+        STRB    r0, OnVector
+
+     [ {CONFIG}=32
+        LDMFD   sp!, {r0-r3, r10, pc}
+     |
+        LDMFD   sp!, {r0-r2, r10, pc}
+     ]
+
+  | ; Arm600
+
+        STMFD   sp!, {r0, r10, lr}
+
+        AdrWS   r10
+;
+; fetch flags word and check that we are installed on the system vector
+;
+        LDRB    lr, OnVector
+        TEQ     lr, #0
+        LDMEQFD sp!, {r0, r10, pc}^
+
+;
+; load old vector from module workspace...
+;
+        LDR     r0, UIVector
+
+;
+; ... and put it back
+;
+        MOV     lr, #Undef_vector
+        STR     r0, [lr]
+
+;
+; mark the module as being off the undef. instr. vector
+;
+        MOV     r0, #0
+        STRB    r0, OnVector
+
+;
+; done - return
+;
+        LDMFD   sp!, {r0, r10, pc}^
+  ]
 
 ;
 ; **********************************************************************
@@ -166,9 +257,13 @@ veneer_coredisabled     ROUT
 ;
 ; recover user registers from stack
 ;
+   [ {CONFIG}=32
+        LDR     r0, [r12, #-4]
+        MSR     SPSR_all, r0
+   ]
         MOV     sp, r12
         LDMFD   sp, {r0-r14}^
-        AND     r0, r0, r0                      ; NOP after banked reg. access
+        NOP                              ; NOP after banked reg. access
 
 ;
 ; move stack pointer past user registers and restart instruction
@@ -282,22 +377,28 @@ handle_exception        ROUT
 ; registers
 ;
         ADD     sp, r12, #8                     ; lose r0, r1
-        LDMIA   sp!, {r2-r12}
+        LDMFD   sp!, {r2-r12}
         ADD     sp, sp, #8                      ; lose r13, r14
-        LDMIA   sp!, {lr}
+        LDMFD   sp!, {r1}                       ; really r14_und
+
+; flatten Supervisor stack
+
+    [   {CONFIG}=32
+        SetMode SVC26_mode, r14
+        LDR     sp, =SVCSTK
+    ]
 
 ;
 ; (I think because we are raising the SWI in SVC mode) OS_GenerateError
 ; expects a certain pattern of registers at the top of the SVC stack, so
 ; generate this pattern
 ;
-        STMDB   sp!, {r10-r12}
-        STMDB   sp!, {lr}
+        STMFD   sp!, {r1, r10-r12}
 
 ;
 ; read the error message from the tags file, there
 ; is no %0 argument, so clear r1.
-;       
+;
         MOV     r1, #0
         BL      copy_error_one
 
@@ -323,7 +424,7 @@ veneer_corefaulty       ROUT
 
 fpc_sick
         DCD     ErrorBase_FloatingPoint + 5
-        DCB     "BadFPC", NULL 
+        DCB     "BadFPC", NULL
 
 ;
 ; **********************************************************************
@@ -339,7 +440,7 @@ fpc_sick
 copy_error_one Entry "r2-r7"
         MOV     r4, r1                          ; Move input %0
         BL      open_message_file_stack         ; Open the file
-        EXIT    VS                              ; Return the error 
+        EXIT    VS                              ; Return the error
 
         MOV     r1, sp                          ; Messages file handl on stack
         MOV     r2, #0                          ; Use MessageTrans buffer
@@ -408,6 +509,7 @@ close_message_file_stack ROUT
 ;
     [   Arm600
 
+     [  {CONFIG}=26
 ;
 ; **********************************************************************
 ;
@@ -417,36 +519,41 @@ close_message_file_stack ROUT
 ;
 UI_veneer       ROUT
 
-        STMFD   sp!, {r0}
-        AdrWS   r0
+        STR     r10, [sp, #-4]!         ; STR faster than STM of one register on many ARMs
+        AdrWS   r10
 
-        STR     lr_undef, [r0, #:INDEX:SavedLR]
-        MRS     lr_undef, SPSR_all
-        STR     lr_undef, [r0, #:INDEX:SavedPSR]
+        STR     lr_undef, SavedLR
+        MRS     lr_undef, SPSR
+        STR     lr_undef, SavedPSR
 
-        LDMFD   sp!, {r0}               ; restore sp_undef before mode change
-        SetMode SVC26_mode, lr_undef
+        LDR     r10, [sp], #4            ; restore sp_undef before mode change
+
+        MRS     lr_undef, CPSR
+        BIC     lr_undef, lr_undef, #2_11100     ; switch from UND32 to SVC26
+        MSR     CPSR_all, lr_undef
 
 ;
 ; build svc26 mode lr from saved components of undef32 state and pass
 ; the call along to the core handlers
 ;
         SUB     sp, sp, #4
-        STMFD   sp!, {r0-r2}
+        STMFD   sp!, {r1-r2, r10}
 
-        AdrWS   r0
-        LDR     lr, [r0, #:INDEX:SavedLR]
-        LDR     r1, [r0, #:INDEX:SavedPSR]      
+        AdrWS   r10
+        LDR     lr, SavedLR
+        LDR     r1, SavedPSR
         AND     r2, r1, #&f0000003      ; get saved NZCV and 26 bit mode bits
         ORR     lr, lr, r2              ; and merge with lr
         AND     r2, r1, #I32_bit + F32_bit      ; extract I & F from new place
         ORR     lr, lr, r2, LSL #IF32_26Shift   ; and merge with lr, in
                                                 ; old place
 
-        LDR     r1, [r0, #:INDEX:CoreVector]
+        LDR     r1, CoreVector
         STR     r1, [sp, #3*4]
-        LDMFD   sp!, {r0-r2, pc}
+        LDMFD   sp!, {r1-r2, r10, pc}
+    ]
 
+    [   {CONFIG}=26
 ;
 ; **********************************************************************
 ;
@@ -463,16 +570,16 @@ PassAlong_veneer        ROUT
 ; dumped on the r13_svc stack.
 ;
         TEQP    pc, #SVC26_mode :OR: I_bit
-        MOV     r0, r0                  ; NOP
+        NOP
 
-        STMDB   sp, {r0-r4, lr, pc}     ; XXX no writeback
+        STMDB   sp, {r1-r4, r10, lr, pc}     ; XXX no writeback
         SUB     r3, sp, #7 * 4          ; r3 -> base of register dump
 
 ;
 ; load address of next handler
 ;
-        AdrWS   r0
-        LDR     r2, [r0, #:INDEX:UIVector]
+        AdrWS   r10
+        LDR     r2, UIVector
 
 ;
 ; calculate value for lr_undef
@@ -483,21 +590,20 @@ PassAlong_veneer        ROUT
 ; switch mode (keeping IRQs disabled)
 ;
         MRS     r4, CPSR_all
-        BIC     r4, r4, #&1f
-        ORR     r4, r4, #UND32_mode
+        ORR     r4, r4, #UND32_mode     ; Go from SVC26 to UND32 mode
         MSR     CPSR_all, r4
 
 ;
-; place values for sp, lr and pc onto stack
+; place values for lr and pc onto stack
 ;
-        ADD     r0, r3, #5 * 4
-        STMIA   r0, {r1, r2}
+        ADD     r4, r3, #5 * 4
+        STMIA   r4, {r1, r2}
 
 ;
 ; pop registers and pass call along to next handler
 ;
-        LDMIA   r3, {r0-r4, lr, pc}
-
+        LDMIA   r3, {r1-r4, r10, lr, pc}
+     ]
     ]
 
 ;

@@ -31,11 +31,15 @@ FPESWIBase      *       &40480
 
 Module_BaseAddr
 
-        ASSERT  (. - Module_BaseAddr) = 0       
+        ASSERT  (. - Module_BaseAddr) = 0
 
         DCD     0                               ; Start code (there isn't any)
         DCD     FPEInit - Module_BaseAddr       ; Initialisation code
+        [ {CONFIG}=32
         DCD     FPEFinal - Module_BaseAddr      ; Finalisation code
+        |
+        DCD     core_shutdown - Module_BaseAddr ; Finalisation code
+        ]
         DCD     FPEServ - Module_BaseAddr       ; Service Call handler
         DCD     FPETitle - Module_BaseAddr      ; Title string
         DCD     FPEHelp - Module_BaseAddr       ; Help string
@@ -57,10 +61,15 @@ FPESTable
         DCB     "Version", 0
         DCB     "DeactivateContext", 0
         DCB     "ActivateContext", 0
+        [ MultipleContexts
+        DCB     "ChangeContext", 0
+        DCB     "ContextLength", 0
+        DCB     "InitContext", 0
+        ]
         DCB     0
         ALIGN
 
-BadSWItoken
+BadSWIToken
         DCD     &1E6
         DCB     "BadSWI", 0
         ALIGN
@@ -78,41 +87,130 @@ BadSWItoken
 ;
 ; **********************************************************************
 ;
-; FPESWI
+; FPESWI - R10 to R12 may be corrupted
+;
+; The core routines called here will expect to be called in SVC32 mode
+; if we're using the 32-bit core (ie if {CONFIG} = 32)
 ;
 FPESWI          ROUT
-        CMP     r11,#(FPESWIJumpTableEnd - FPESWIJumpTable) /4
+        CMP     r11, #(EndOfSWIJumpTable - SWIJumpTable) / 4
         ADDLO   pc, pc, r11, LSL #2
-        B       BadSWI
-FPESWIJumpTable
+        B       UnknownSWIError
+SWIJumpTable
         B       FPESWI_Version
+        [ {CONFIG} = 32
         B       FPESWI_DeactivateContext
+        |
+        B       core_deactivatecontext
+        ]
         B       FPESWI_ActivateContext
-FPESWIJumpTableEnd
+        [ MultipleContexts
+        B       FPESWI_ChangeContext
+        B       FPESWI_ContextLength
+        B       FPESWI_InitContext
+        ]
+EndOfSWIJumpTable
 
-BadSWI
-        STMFD   sp!, {r1,r2,r4,lr}
-        ADR     r0, BadSWItoken
+UnknownSWIError
+        STMFD   sp!,{r0-r2,r4,lr}
+        ADR     r0, BadSWIToken
         MOV     r1, #0
         MOV     r2, #0
         ADR     r4, FPETitle
         SWI     XMessageTrans_ErrorLookup
-        LDMFD   sp!, {r1,r2,r4,pc}
+        LDMFD   sp!,{r0-r2,r4,pc}
 
 FPESWI_Version
         LDR     r0, =Verno
         MOVS    pc, lr
 
+        [ {CONFIG} = 32
 FPESWI_DeactivateContext
-        STMFD   sp!, {lr}
+        MOV     r12, lr
+        MRS     r11, CPSR
+        ORR     lr, r11, #&10
+        MSR     CPSR_all, lr            ; Switch up to SVC32 mode
         BL      core_deactivatecontext
-        LDMFD   sp!, {pc}^
+        MSR     CPSR_all, r11
+        MOVS    pc, r12
+        ]
+
+        ASSERT  Rwp = r10
 
 FPESWI_ActivateContext
-        STMFD   sp!, {r10, lr}
+        CMP     r0, #-1
+      [ MultipleContexts
+        LDREQ   Rwp, [r12]
+        ADREQ   r0, DefaultContext
+      |
+        LDREQ   r0, [r12]
+      ]
+
+        MOV     r12, lr
+        [ {CONFIG} = 32
+        MRS     r11, CPSR
+        ORR     lr, r11, #&10
+        MSR     CPSR_all, lr            ; Switch to SVC32 mode
+        ]
         MOV     r10, r0
         BL      core_activatecontext
-        LDMFD   sp!, {r10, pc}^
+        [ {CONFIG} =32
+        MSR     CPSR_all, r11
+        ]
+        MOVS    pc, r12
+
+    [ MultipleContexts
+FPESWI_ChangeContext
+        CMP     r0, #-1
+      [ MultipleContexts
+        LDREQ   Rwp, [r12]
+        ADREQ   r0, DefaultContext
+      |
+        LDREQ   r0, [r12]
+      ]
+
+        MOV     r12, lr
+        [ {CONFIG} = 32
+        MRS     r11, CPSR
+        ORR     lr, r11, #&10
+        MSR     CPSR_all, lr            ; Switch to SVC32 mode
+        ]
+        MOV     r10, r0
+        BL      core_deactivatecontext
+        BL      core_activatecontext
+        [ {CONFIG} =32
+        MSR     CPSR_all, r11
+        ]
+        MOVS    pc, r12
+
+FPESWI_ContextLength
+        MOV     r0, #ContextLength
+        MOVS    pc, lr
+
+FPESWI_InitContext
+        CMP     r0, #-1
+      [ MultipleContexts
+        LDREQ   Rwp, [r12]
+        ADREQ   r0, DefaultContext
+      |
+        LDREQ   r0, [r12]
+      ]
+
+        MOV     r12, lr
+        [ {CONFIG} = 32
+        MRS     r11, CPSR
+        ORR     lr, r11, #&10
+        MSR     CPSR_all, lr            ; Switch to SVC32 mode
+        ]
+        MOV     r10, r0
+        BL      core_initcontext
+        [ {CONFIG} =32
+        MSR     CPSR_all, r11
+        ]
+        MOVS    pc, r12
+
+    ]
+
 
 ;
 ; **********************************************************************
@@ -120,13 +218,13 @@ FPESWI_ActivateContext
 ; FPEInit - Initialisation Code
 ;
 FPEInit         ROUT
-        STR     lr, [sp, #-4]!
+        STMFD   sp!, {r10, lr}
 
 ;
 ; check whether workspace already allocated
 ;
         LDR     r2, [r12]
-        CMP     r2, #0
+        TEQ     r2, #0
         BNE     %F5
 
 ;
@@ -139,22 +237,22 @@ FPEInit         ROUT
 ;
 ; return error if SWI failed
 ;
-        LDRVS   lr, [sp], #4
-        ORRVSS  pc, lr, #V_bit
+        LDMVSFD sp!, {r10, pc}
 
 ;
 ; workspace claim succeeded: zero it and save it in private word
 ;
-        BL      MemClear
         STR     r2, [r12]
-5       MOV     r12, r2
+5       MOV     r10, r2         ; r2 must be preserved from here on, so r10 can be reset later
 
 ;
 ; workspace pointer claimed if necessary, save it away in our
 ; private piece of page 0, ready for retrieval during traps.
 ;
-        LDR     r0, =FPEAnchor
-        STR     r12, [r0]
+        MOV     r0, #0
+        STR     r10, [r0, #FPEAnchor]
+
+        STRB    r0, OnVector
 
     [ Arm600
 ;
@@ -167,10 +265,13 @@ FPEInit         ROUT
 ; to the passalong veneer (which won't actually be used until we
 ; get to veneer_newhandlers)
 
-        AdrWS   r0
-        ADD     r1, r0, #:INDEX:UnwantedAddr
+      [ {CONFIG}=32
+        ADR     r1, UIVector
+      |
+        ADR     r1, UnwantedAddr
         ADRL    r0, PassAlong_veneer
         STR     r0, [r1]
+      ]
     |
 ;
 ; load the current undefined instruction vector, and ascertain
@@ -222,8 +323,7 @@ FPEInit         ROUT
 ;
 ; save this branch target in module workspace
 ;
-        ADD     r1, r12, #:INDEX:UIBranchDest
-        STR     r0, [r1]
+        STR     r0, UIBranchDest
 
      [  debug > 1
         DREG    r0, "Current vector is B "
@@ -235,11 +335,19 @@ FPEInit         ROUT
 ; which is exactly what core_initws is expecting - load other registers
 ; and make the call
 ;
-15      MOV     r10, r12
-
+15
     [   debug > 5
         DREG    r1, "Calling core_initws with r1 = ", cc
         DREG    r10, ", r10 = "
+    ]
+
+    [   {CONFIG}=32
+;
+; Up into SVC32 mode to call all the core routines
+;
+        MRS     r3, CPSR
+        ORR     r0, r3, #&10
+        MSR     CPSR_all, r0
     ]
 
         BL      core_initws
@@ -256,6 +364,10 @@ FPEInit         ROUT
         CMP     r0, #SysID_FPA
         BEQ     %F20
 
+     [ {CONFIG} = 32
+        MSR     CPSR_ctl, r3    ; back to SVC26 mode to exit
+     ]
+
 ;
 ; load message token. NOTE:  this is a new message, that does not
 ; appear in the default resources file in the RISC OS 3 ROMs, so
@@ -268,7 +380,7 @@ FPEInit         ROUT
 ;
 ; return *without* restoring PSR (need to return V set)
 ;
-        LDMFD   sp!, {pc}
+        LDMFD   sp!, {r10, pc}
 
 NoHWMesg
         DCD     ErrorBase_FloatingPoint + 6
@@ -276,27 +388,52 @@ NoHWMesg
         ALIGN
     ]
 
+20
 ;
-; workspace is initialised, now activate the context.  the context is at
-; the base of the claimed workspace, address is already in r10.
+; if using multiple-context version of core, initialise our default
+; context
 ;
-20      BL      core_activatecontext
+    [   MultipleContexts
+        ADR     r10, DefaultContext
+        BL      core_initcontext
+    ]
+
+;
+; Workspace is initialised, now activate the context.  Whether multiple
+; contexts or not, address is already in r10.
+;
+        BL      core_changecontext
+
+    [   {CONFIG} = 32
+; back down to SVC26 mode
+        MSR     CPSR_ctl, r3
+    ]
 
 ;
 ; that's all folks
 ;
-        LDMFD   sp!, {pc}^
+        LDMFD   sp!, {r10, pc}^
 
+     [  {CONFIG}=32
 ;
 ; **********************************************************************
 ;
 ; FPEFinal - Finalisation code
 ;
-; all we need to do is call core_shutdown,
-; do not bother coming back here
+; all we need to do is call core_shutdown
+;
+; mjs 18-Feb-98 fix for Ursula (now uses FPE in 32-bit flavour)
+; must not corrupt r0,r3 in service call handler (used to just push lr)
 ;
 FPEFinal        ROUT
-        B       core_shutdown
+        STMFD   sp!,{r0,r3,lr}
+        MRS     r3, CPSR
+        ORR     r0, r3, #&10
+        MSR     CPSR_all, r0            ; Into SVC32 mode
+        BL      core_shutdown
+        MSR     CPSR_all, r3
+        LDMFD   sp!,{r0,r3,pc}^
+     ]
 
 ;
 ; **********************************************************************
@@ -308,13 +445,30 @@ FPEFinal        ROUT
 ; branch to core_shutdown); on a ServiceReset it should re-initialise the
 ; system if a soft-reset has just occured.
 ;
+
+;mjs Updated to support Ursula format, with service table
+;
+
+        ASSERT Service_Reset < Service_PreReset
+FPEServTab
+        DCD     0                            ;flags word
+        DCD     FPEServUrs - Module_BaseAddr ;offset to handler (skipping pre-rejection code)
+        DCD     Service_Reset                ;service 1
+        DCD     Service_PreReset             ;service 2
+        DCD     0                            ;terminator
+        DCD     FPEServTab - Module_BaseAddr ;anchor for table (precedes magic instruction)
 FPEServ         ROUT
-
-        CMP     r1, #Service_PreReset
-        BEQ     core_shutdown
-
-        CMP     r1, #Service_Reset
+        MOV     r0, r0                       ;magic instruction to identify Ursula format
+        TEQ     r1, #Service_PreReset
+        TEQNES  r1, #Service_Reset
         MOVNES  pc, lr
+FPEServUrs
+        TEQ     r1, #Service_PreReset
+    [   {CONFIG}=32
+        BEQ     FPEFinal
+    |
+        BEQ     core_shutdown
+    ]
 
 ;
 ; Service_Reset: read last reset type, ignore if not soft-reset
@@ -324,7 +478,7 @@ FPEServ         ROUT
         MOV     r1, #0
         MOV     r2, #255
 
-	SWI	XOS_Byte
+        SWI     XOS_Byte
 
         CMP     r1, #0
         LDMNEFD sp!, {r0-r3, pc}^
@@ -333,68 +487,12 @@ FPEServ         ROUT
 ; there has just been a soft-reset, get workspace pointer in r12
 ; and call initialisation routine
 ;
-        AdrWS   r12
         BL      FPEInit
 
 ;
 ; finished
 ;
         LDMFD   sp!, {r0-r3, pc}^
-
-;
-; **********************************************************************
-;
-; MemClear - clear (word aligned) memory claimed via OS_Module 6
-;
-; On entry: r2 = pointer to claimed block, r3 = byte count
-;
-MemClear        ROUT
-        STMFD   sp!, {r0-r9, lr}
-
-        MOV     r3, r3, LSR #2                          ; bytes -> words
-
-;
-; most fills are done 8 words at a time: clear up residual first
-;
-        ANDS    r1, r3, #7
-        MOV     r0, #0
-        BEQ     %F1
-
-;
-; fill residual 1 byte at a time
-;
-0       STR     r0, [r2], #4
-        SUBS    r1, r1, #1
-        BNE     %B0
-
-;
-; filling 8-words at a time, adjust count
-;
-1       MOVS    r3, r3, LSR #3
-        LDMEQFD sp!, {r0-r9, pc}^
-
-;
-; initialise all registers
-;
-        MOV     r1, r0
-        MOV     r4, r0
-        MOV     r5, r0
-        MOV     r6, r0
-        MOV     r7, r0
-        MOV     r8, r0
-        MOV     r9, r0
-
-;
-; now fill rest of the block
-;
-2       STMIA   r2!, {r0-r1, r4-r9}
-        SUBS    r3, r3, #1
-        BNE     %B2
-
-;
-; finished
-;
-        LDMIA   sp!, {r0-r9, pc}^
 
 ;
 ; **********************************************************************
