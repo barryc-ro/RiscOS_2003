@@ -78,11 +78,15 @@
 /*                          render_export_animated_sprites)                                    */
 /*          23-Sep-97: KJB: Added support for looping an animation a specified number of times.*/
 /*          07-Oct-97: RML: Fixed problem which can cause flex_error if screen size is smaller */
-/*                          than image_size (illegal GIF header)                               */
+/*                          than image_size (illegal GIF header). The background colour        */
+/*                          specified to render_make_animation is now a palette entry and not  */
+/*                          an index.                                                          */
 /*---------------------------------------------------------------------------------------------*/
 /* To do (inanimate) :                                                                         */
 /*                                                                                             */
 /* To do (animated) :                                                                          */
+/* When disposing of frame 0 with disposal type 3, code wrongly assumes local colour palette   */
+/* and 8bpp.                                                                                   */
 /*---------------------------------------------------------------------------------------------*/
 
 #include <stdio.h>
@@ -2114,10 +2118,6 @@ _kernel_oserror* render_animate_new_frame(int handle, frame_str frame_data, int 
 
     debug_value("render animate new frame ",handle);
 
-    /* Check if screen_size is smaller than frame size */
-    if (an->screen_width < w) an->screen_width=w;
-    if (an->screen_height < h) an->screen_height=h;
-
     /* Allocate memory to store the frame data */
     if (frame>1)
     {
@@ -2377,7 +2377,7 @@ _kernel_oserror* render_animate_done_frame(int handle)
     char            *image;
     char            *mask;
     int              frame = an->no_frames-1;
-    int              w, h, sw, tp, x, y, bg;
+    int              w, h, sw, tp, x, y;
 
     fr = FindFrame(handle, frame);
 
@@ -2387,18 +2387,13 @@ _kernel_oserror* render_animate_done_frame(int handle)
     image    = (char*)spr_hdr + spr_hdr->image;
     mask     = (char*)spr_hdr + spr_hdr->mask;
 
-    bg = an->background;
     tp = fr->transparency;
     w  = fr->width;
     h  = fr->height;
     sw = AlignSize(w);
 
-    if (frame==0)
-    {
-        /* Do we need to worry about the background showing through? */
-        if ((an->background>0) && (fr->transparency==-1)) an->flags.background=0;
-        else an->flags.background=1;
-    }
+    /* Do we need to worry about the background showing through? */
+    if (frame==0) an->flags.background = fr->transparency==-1 ? 0:1;
 
     /* Loop through image data and compare each pixel with transparent colour(s) */
     for (y=0; y<h; y++)
@@ -2886,7 +2881,7 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
         if (e) return e;
 
 
-        /* Not sure if we can make the bpp<8 the case for ALL bpp - need to think/test */
+        /* Not sure if we can make the bpp<8 the case for ALL bpp */
         if (bpp<8)
         {
             _swi(ColourTrans_GenerateTable, _INR(0,5), an->last_screen, "sprite", -1, -1, an->trtab, 0);
@@ -2899,7 +2894,7 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
         e=render_vdu_back_to_screen();
         if (e) return e;
 
-        /* Not sure if we can make the bpp<8 the case for ALL bpp  - need to think/test */
+        /* Not sure if we can make the bpp<8 the case for ALL bpp */
         if (bpp<8)
         {
             _swi(ColourTrans_GenerateTable, _INR(0,5), bg_sprarea, "sprite", -1, -1, an->trtab, 0);
@@ -2929,7 +2924,7 @@ static _kernel_oserror* render_animate_plot_image(int handle, int plot_x, int pl
                              "sprite",
                              plot_x,
                              plot_y,
-                             osver>=WideTableOSV ? 40:8,
+                             osver>=WideTableOSV ? 32:0,
                              &scale,
                              an->trtab);
         if (e) return e;
@@ -2969,6 +2964,7 @@ static _kernel_oserror* render_animate_frame_to_last_screen(int handle, int fram
     int               cf_width, cf_height, rs_img_width, rs_msk_width, cf_img_width;
     int               msk_size, img_size, startmask, bitmask, byte, copy_width, top;
     int               ls_width = an->screen_width;
+    int               ls_height = an->screen_height;
     int               ls_msk_width = an->ls_msk_width;
     int               ls_img_width = an->ls_img_width;
 
@@ -2998,6 +2994,9 @@ static _kernel_oserror* render_animate_frame_to_last_screen(int handle, int fram
     cf_img       = (char*)cf_sprheader + cf_sprheader->image;
     cf_msk       = (char*)cf_sprheader + cf_sprheader->mask;
     cf_img_width = AlignSize(cf_width);
+
+    /* Adjust cf_height for overflow */
+    if ((cf_height + fr->top) > ls_height) cf_height = ls_height - fr->top;
 
     ls_sprheader = (sprite_header*) ((char*)an->last_screen + sizeof(sprite_area));
     ls_img  = (char*)ls_sprheader + ls_sprheader->image;
@@ -3030,8 +3029,8 @@ static _kernel_oserror* render_animate_frame_to_last_screen(int handle, int fram
         rs_img_width = AlignSize(rs_img_width);
         rs_msk_width = AlignSize(rs_msk_width);
 
-        img_size = rs_img_width * cf_height;
-        msk_size = rs_msk_width * cf_height;
+        img_size = rs_img_width * fr->height;
+        msk_size = rs_msk_width * fr->height;
 
         /* Allocate memory for the restore buffer */
         if (!flex_extend((flex_ptr)&an->restore, img_size + msk_size))
@@ -3189,14 +3188,14 @@ static _kernel_oserror* render_animate_do_disposal(int handle)
     char             *ls_msk;
     char             *rs_msk;
     char             *rs_img;
-    char             *ctable;
-    int               a, y, i, j, f, tp, background, disposal, img_size, msk_size, copy_width;
-    int               cf_width, cf_height, cf_img_width, rs_img_width, rs_msk_width;
+    int               a, y, i, j, f, tp, disposal, img_size, msk_size, copy_width;
+    int               cf_width, cf_height, rs_img_width, rs_msk_width;
     int               restore_frame=an->restore_frame;
     int               ls_width  = an->screen_width;
+    int               ls_height = an->screen_height;
     int               ls_img_width = an->ls_img_width;
     int               ls_msk_width = an->ls_msk_width;
-    uint32            c;
+    uint32            c, m;
 
     f = an->last_frame;
 
@@ -3211,8 +3210,10 @@ static _kernel_oserror* render_animate_do_disposal(int handle)
     cf_width     = fr->width;
     cf_height    = fr->height;
     tp           = fr->transparency;
-    background   = an->background;
-    cf_img_width = AlignSize(cf_width);
+
+    /* Ensure there's no overflow */
+    if ((fr->left + cf_width) > ls_width) cf_width = ls_width - fr->left;
+    if ((fr->top + cf_height) > ls_height) cf_height = ls_height - fr->top;
 
     /* Work out where on the last screen image (and mask) to start plotting this */
     ls_sprheader = (sprite_header*) ((char*)an->last_screen + sizeof(sprite_area));
@@ -3228,53 +3229,42 @@ static _kernel_oserror* render_animate_do_disposal(int handle)
     /* Disposal type 2 - set to background colour */
     if (disposal==2)
     {
-        ctable = an->fr_trtabs + fr->trtab;                                    // Location of colour translation table
-        c      = ctable[background];                                           // We'll assume an 8bit translation table, unless OS >3.5
+        if (bpp>=8) _swix(ColourTrans_ReturnColourNumberForMode, _INR(0,2)|_OUT(0), an->background, -1, -1, &c);
+        else        _swix(ColourTrans_ReturnColourNumberForMode, _INR(0,2)|_OUT(0), an->background, 12, 0, &c);
+
+        m = an->flags.background;
 
         if (bpp<=8)
         {
-            c = ctable[background];
-
             for (y=0; y<cf_height; y++)
             {
-                memset(ls_img + i, c, cf_width);
-                memset(ls_msk + i, 0, cf_width);
-                //if (background==0)       memset(ls_msk + i, 0, cf_width);
-                //else if (background==tp) memset(ls_msk + i, 0, cf_width);
-                //else                     memset(ls_msk + i, 255, cf_width);
+                if (m)
+                    memset(ls_msk + i, 0, cf_width);
+                else
+                    memset(ls_img + i, c, cf_width);
                 i+=ls_img_width;
             }
         }
         else if (bpp==16)
         {
-            if (osver>=WideTableOSV) c = ctable[background*2] + (ctable[background*2+1]<<8);
             a = fr->left % 8;
 
             for (y=0; y<cf_height; y++)
             {
                 rml_misc_memset16bit(ls_img + i, c, cf_width);
-                rml_misc_memset1bit(ls_msk + j, 0, cf_width, a);
-                //if (background==0)       rml_misc_memset1bit(ls_msk + j, 0, cf_width, a);
-                //else if (background==tp) rml_misc_memset1bit(ls_msk + j, 0, cf_width, a);
-                //else                     rml_misc_memset1bit(ls_msk + j, 1, cf_width, a);
+                rml_misc_memset1bit(ls_msk + j, 1, cf_width, a);
                 i+=ls_img_width;
                 j+=ls_msk_width;
             }
         }
         else if (bpp==32)
         {
-            int* ct32 = (int*)ctable;
-
-            if (osver>=WideTableOSV) c = ct32[background];
             a = fr->left % 8;
 
             for (y=0; y<cf_height; y++)
             {
                 rml_misc_memset32bit(ls_img + i, c, cf_width);
-                rml_misc_memset1bit(ls_msk + j, 0, cf_width, a);
-                //if (background==0)       rml_misc_memset1bit(ls_msk + j, 0, cf_width, a);
-                //else if (background==tp) rml_misc_memset1bit(ls_msk + j, 0, cf_width, a);
-                //else                     rml_misc_memset1bit(ls_msk + j, 1, cf_width, a);
+                rml_misc_memset1bit(ls_msk + j, 1, cf_width, a);
                 i+=ls_img_width;
                 j+=ls_msk_width;
             }
@@ -3303,8 +3293,8 @@ static _kernel_oserror* render_animate_do_disposal(int handle)
         rs_msk_width = AlignSize(rs_msk_width);
 
         /* How much room do we need for the restore image and mask? */
-        img_size = rs_img_width * cf_height;
-        msk_size = rs_msk_width * cf_height;
+        img_size = rs_img_width * fr->height;
+        msk_size = rs_msk_width * fr->height;
 
         rs_img = (char*)an->restore;
         rs_msk = (char*)an->restore + img_size;
@@ -3315,7 +3305,9 @@ static _kernel_oserror* render_animate_do_disposal(int handle)
         if (f==0)
         {
             int setmask;
-            int bgcol = an->background;
+            int bgcol;
+
+            _swix(ColourTrans_ReturnColourNumberForMode, _INR(0,2)|_OUT(0), an->background, 28, 0, &bgcol);
 
             if (an->flags.background) setmask=0;
             else setmask=255;
