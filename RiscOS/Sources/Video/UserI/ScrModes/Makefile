@@ -59,7 +59,7 @@ EXPORTS   = ${EXP_HDR}.${COMPONENT}
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -84,14 +84,23 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.ScreenMode
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.ScreenMode.Messages  ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
+
+resources_common:
+        ${MKDIR} ${RESDIR}.ScreenMode
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.ScreenMode.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.ScreenMode.Messages }
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -103,8 +112,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
