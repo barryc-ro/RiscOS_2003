@@ -432,6 +432,10 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
 
     hfi = &item->frame[0];
 
+#if 1
+    /* This must always use the recent list item as it may encode which list to read it from */
+    fprintf(f, msgs_lookup("histR.I"), i, i, item->title ? item->title : hfi->url);
+#else
     if (item->title)
     {
         char *frag = strrchr(hfi->url, '#');
@@ -444,6 +448,7 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
     {
         fprintf(f, msgs_lookup("histR.I"), i, i, hfi->url);
     }
+#endif
     fputc('\n', f);
 
     return TRUE;

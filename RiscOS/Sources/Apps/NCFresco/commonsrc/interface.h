@@ -281,6 +281,17 @@ extern void frontend_pointer_set_position(fe_view v, int x, int y);
 
 extern int frontend_memory_panic(void);
 
+
+/*
+ * Read the state of the underlying link
+ */
+
+#define fe_interface_UP		1	/* link is up, IP is flowing */
+#define fe_interface_DOWN	0	/* link is down */
+#define fe_interface_ERROR	(-1)	/* link is down, error occurred trying to bring it up */
+
+extern int frontend_interface_state(void);
+
 /***************************************************************************/
 /* Functions for talking to the back end */
 

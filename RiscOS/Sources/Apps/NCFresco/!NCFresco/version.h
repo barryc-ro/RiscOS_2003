@@ -7,6 +7,10 @@
 #include "debug.h"
 #endif
 
+#ifdef STBWEB
+#include "VersionNum"
+#endif
+
 /* version.h */
 
 extern char *fresco_version;
@@ -15,13 +19,15 @@ extern char *program_title;
 
 #define PROGRAM_NAME		"NCFresco"
 #define PROGRAM_TITLE		"NCBrowser"
-#define VERSION_NUMBER		"1.32"
+
+#define VERSION_NUMBER		Module_MajorVersion
+
 #define BASE_VERSION_NUMBER	"1.63" /* Fresco version */
 
 #ifdef PRODUCTION
-#define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER")"
+#define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER")" Module_MinorVersion
 #else
-#define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER" Development)"
+#define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER" Development)" Module_MinorVersion
 #endif
 
 #define ANTI_TWITTER		1	/* Define non-zero for thick lines etc. */

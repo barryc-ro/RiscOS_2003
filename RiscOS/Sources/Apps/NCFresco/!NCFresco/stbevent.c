@@ -642,7 +642,11 @@ static void url_event_handler(int event, fe_view v)
 
 	s = getenv(buf);
 	if (s && s[0])
+	{
+	    sound_event(snd_URL_SHOW);
+
 	    frontend_complain(frontend_open_url(s, v, NULL, NULL, fe_open_url_NO_REFERER));
+	}
     }
 }
 

@@ -197,6 +197,7 @@ typedef struct _access_item {
     struct
     {
         alarm_handler continue_fn;
+	int had_error;
     } redial;
 #endif
 } access_item;
@@ -344,26 +345,15 @@ static http_header_item host_hdr = {
 # else
 
 #ifdef CBPROJECT
-static int frontend_is_interface_up(void)
+int frontend_interface_state(void)
 {
     int st;
     InetDial_Status( &st, NULL, NULL );
-    return st == inetdial_ONLINE;
+    return st == inetdial_ONLINE ? 1 : 0;
 }
-static int frontend_is_interface_down(void)
-{
-    int st;
-    InetDial_Status( &st, NULL, NULL );
-    return st == inetdial_OFFLINE;
-}
-#else
-/* in stbfe.c */
-extern int frontend_is_interface_up(void);
-extern int frontend_is_interface_down(void);
 #endif
 
 static void access_redial_alarm(int at, void *h);
-
 
 static BOOL access_do_redial(access_handle d, alarm_handler continue_fn)
 {
@@ -371,10 +361,9 @@ static BOOL access_do_redial(access_handle d, alarm_handler continue_fn)
     if (d->redial.continue_fn)
         return TRUE;
 
-    /* is the interface is down */
-    if (frontend_is_interface_down())
+    /* is the interface down */
+    if (frontend_interface_state() == fe_interface_DOWN && !d->redial.had_error)
     {
-
 #ifdef CBPROJECT
         InetDial_Connect();
 #else
@@ -399,19 +388,42 @@ static void access_redial_alarm(int at, void *h)
 {
     access_handle d = h;
 
-    if (!frontend_is_interface_up())
+    switch (frontend_interface_state())
     {
+    case fe_interface_DOWN:
 	if (d->progress)
 	    d->progress(d->h, status_REDIALLING, -1, -1, 0, -1, NULL);
 	access_reschedule(&access_redial_alarm, d, POLL_INTERVAL);
-    }
-    else
-    {
+	break;
+	
+    case fe_interface_UP:
 	if (d->progress)
 	    d->progress(d->h, status_DNS, -1, -1, 0, -1, NULL);
 
 	access_reschedule(d->redial.continue_fn, d, POLL_INTERVAL);
         d->redial.continue_fn = 0;
+	break;
+	
+    case fe_interface_ERROR:
+	ACCDBG(("Redial failed\n"));
+#if 1
+	if (d->complete)
+	    d->complete(d->h, status_FAIL_REDIAL, NULL, d->url);
+
+	access_done_flag = 1;
+
+	access_unlink(d);
+	access_free_item(d);
+#else
+	if (d->progress)
+	    d->progress(d->h, status_DNS, -1, -1, 0, -1, NULL);
+
+	access_reschedule(d->redial.continue_fn, d, POLL_INTERVAL);
+        d->redial.continue_fn = 0;
+
+	d->redial.had_error = TRUE;
+#endif
+	break;
     }
 }
 

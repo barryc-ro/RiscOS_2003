@@ -210,7 +210,7 @@ extern int nvram_write(const char *tag, int new_val);
 #define soundfx_BROWSER_HOME	0x00010002
 #define soundfx_BROWSER_SOUND_ON	0x00010003
 #define soundfx_BROWSER_SOUND_OFF	0x00010004
-
+#define soundfx_BROWSER_FORWARD	0x00010005
 
 /* mappgins from slightly more generic browser conditions to the above map */
 #define snd_NONE		0
@@ -222,7 +222,7 @@ extern int nvram_write(const char *tag, int new_val);
 
 #define snd_HISTORY_SHOW	soundfx_ACTION_OK
 #define snd_HISTORY_BACK	soundfx_BROWSER_BACK
-#define snd_HISTORY_FORWARD	soundfx_ACTION_OK
+#define snd_HISTORY_FORWARD	soundfx_BROWSER_FORWARD
 
 #define snd_HOTLIST_SHOW	soundfx_ACTION_OK
 #define snd_HOTLIST_DELETE_SHOW	soundfx_ACTION_OK
@@ -244,6 +244,7 @@ extern int nvram_write(const char *tag, int new_val);
 #define snd_PRINT_OPTIONS_SHOW	soundfx_ACTION_OK
 #define snd_PRINT_FRAMES_SHOW	soundfx_ACTION_OK
 #define snd_RELATED_SHOW	soundfx_ACTION_OK
+#define snd_URL_SHOW		soundfx_ACTION_OK
 
 #define snd_SCROLL_LINE		0
 #define snd_SCROLL_PAGE		0
