@@ -118,4 +118,3 @@ export_libs: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} local_dir
 
 #
 # Dynamic dependencies:
-
