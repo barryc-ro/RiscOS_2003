@@ -58,12 +58,16 @@ $l      LDR     $reg1, =VIDC
  ]
         MEND
 
-; Fake a 26-bit pc, given a PSR currently in lr, and the 32-bit address on
+; Fake a 26-bit pc, given a PSR currently in lr (or reg), and the 32-bit address on
 ; the stack. The stacked address is pulled, and the result is left in lr.
 
         MACRO
-        FakeLR  $temp, $dontpull
+        FakeLR  $temp, $dontpull, $reg
+ [ "$reg" = ""
         AND     $temp,lr,#&F0000003
+ |
+        AND     $temp,$reg,#&F0000003
+ ]
         AND     lr,lr,#I32_bit+F32_bit
         ORR     $temp,$temp,lr,LSL #IF32_26Shift
  [ "$dontpull" = "dontpull"
@@ -380,6 +384,7 @@ EndData
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SWI return handler: checks callback
+; no branches or interlocks in the common case: V clear, no callback
 
 SVCDespatcher ROUT
 
@@ -397,31 +402,32 @@ SLVK_TestV * {PC}-SWIRelocation
 SLVK * {PC}-SWIRelocation
  ! 0,"SLVK       at ":CC:(:STR:SLVK)
 
-        LDR     r11, [sp], #4
+        LDR     r12, [sp], #4
+        MOV     r10, #0
+        LDRB    r11, [r10, #CallBack_Flag]
+
         TST     lr, #V_bit
-        BEQ     %FT40
+        BNE     %FT50
+
+SWIReturnWithCallBackFlag * {PC}-SWIRelocation
+ ! 0,"SWIReturnWithCallBackFlag at ":CC:(:STR:SWIReturnWithCallBackFlag)
+
+40      TEQ     r11, #0
+
+        msr EQ ,CPSR_c, #I32_bit + SVC32_mode           ; IRQs off for SPSR use
+        msr EQ ,SPSR_cxsf, lr
+        LDREQ   lr, [sp], #4
+        Pull    "r10-r12", EQ
+        MOVEQS  pc, lr
+
+        B       callback_checking + SWIRelocation
 
  ! 0,"VSetReturn at ":CC:(:STR:({PC}-SWIRelocation))
-        TST     r11, #Auto_Error_SWI_bit
-        BEQ     VSet_GenerateError + SWIRelocation
+50      TST     r12, #Auto_Error_SWI_bit
+        BNE     %BT40
 
-SWIReturn * {PC}-SWIRelocation
- ! 0,"SWIReturn  at ":CC:(:STR:SWIReturn)
+        B       VSet_GenerateError + SWIRelocation
 
-40      MOV     r10, #0
-        LDRB    r11, [r10, #CallBack_Flag]
-        CMP     r11, #0
-        BNE     callback_checking + SWIRelocation
-
-SWIReturnNoCallback * {PC}-SWIRelocation
- ! 0,"SWIReturnNoCallback at ":CC:(:STR:SWIReturnNoCallback)
-back_to_user * SWIReturnNoCallback
-        msr AL, CPSR_c, #I32_bit + SVC32_mode           ; IRQs off for SPSR use
-back_to_user_irqs_already_off * {PC}-SWIRelocation
-        msr     AL, SPSR_cxsf, lr
-        LDR     lr, [sp], #4
-        Pull    "r10-r12"
-        MOVS    pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; The SWI Despatch routine
@@ -429,28 +435,30 @@ back_to_user_irqs_already_off * {PC}-SWIRelocation
 SVC * {PC}-SWIRelocation
 
         Push    "r10-r12"
-        LDR     r11, [r14, #-4]         ; r11 = calling instruction
-        STR     r14, [r13, #-4]!        ; push return address
-        mrs     AL, r14, SPSR           ; r14 = saved PSR
+ [ No26bitCode
+        mrs    ,r12, SPSR               ; r12 = saved PSR
+        TST     r12, #T32_bit           ; depending on processor state (ARM/Thumb)
+        LDREQ   r11, [r14, #-4]         ; extract SWI number to r11
+        LDRNEB  r11, [r14, #-2]         ; (ordering to prevent interlocks)
+        BICEQ   r11, r11, #&FF000000
+ |
+        LDR     r11, [r14, #-4]         ; extract SWI number to r11
+        mrs    ,r12, SPSR               ; r12 = saved PSR
+        BIC     r11, r11, #&FF000000    ; (ordering to prevent interlocks)
+ ]
 
-SVCContinue * {PC}-SWIRelocation
+        Push    "r11,r14"               ; push SWI number and return address
 
-        BIC     r11, r11, #&FF000000
-        STR     r11, [r13, #-4]!        ; push SWI number
-        [ StrongARM
 SVC_CallASWI * {PC}-SWIRelocation       ; CallASWI,CallASWIR12 re-entry point
-        ]
 
         BICS    r11, r11, #Auto_Error_SWI_bit
         BEQ     SWIWriteC + SWIRelocation
 
-        AND     r10, r14, #I32_bit+F32_bit
+        AND     r10, r12, #I32_bit+F32_bit
         ORR     r10, r10, #SVC2632      ; set IFTMMMMM = IF0x0011
-        msr     AL, CPSR_c, r10         ; restore caller's IRQ state
+        msr    ,CPSR_c, r10             ; restore caller's IRQ state
 
-        CMP     r11, #OS_BreakPt
-        CMPNE   r11, #OS_CallAVector
-        BICNE   r14, r14, #V_bit        ; clear V unless BreakPoint/CallVector
+        BIC     r14, r12, #V_bit        ; clear V (some SWIs need original PSR in r12)
 
         CMP     r11, #OS_WriteI
         LDRLO   pc, [pc, r11, LSL #2]
@@ -667,7 +675,10 @@ VSet_GenerateError ROUT
 
         Pull    lr                      ; which raises error; otherwise just
         BIC     lr, lr, #V_bit          ; return with V clear: error claimed!
-        B       SWIReturn
+
+        MOV     r10, #0                 ; set up r10 and r11 as required
+        LDRB    r11, [r10, #CallBack_Flag]
+        B       SWIReturnWithCallBackFlag
 
         LTORG
 
@@ -741,12 +752,11 @@ ErrHandler ROUT
 callback_checking
 
         TST     lr, #I32_bit+&0F        ; user 26/32 mode, ints enabled?
- [ {FALSE} ; original code
+        msr NE ,CPSR_c, #I32_bit + SVC32_mode
+        msr NE ,SPSR_cxsf, lr
+        LDRNE   lr, [sp], #4
         Pull    "r10-r12", NE
         MOVNES  pc, lr                  ; Skip the branch for SVC code speed
- |
-        BNE     SWIReturnNoCallback     ; hey, it'll be in the cache (probably)
- ]
 
 ; Further checks: postpone callback if returning V set and R0->RAM
 
@@ -761,7 +771,13 @@ callback_checking
         LDRB    r11, [r10, #CallBack_Flag]
         ORR     r11, r11, #CBack_Postpone      ; signal to IRQs
         STRB    r11, [r10, #CallBack_Flag]
-        B       back_to_user_irqs_already_off
+back_to_user
+        msr    ,CPSR_c, #I32_bit + SVC32_mode
+back_to_user_irqs_already_off
+        msr    ,SPSR_cxsf, lr
+        LDR     lr, [sp], #4
+        Pull    "r10-r12"
+        MOVS    pc, lr
 
 Do_CallBack                                    ; CallBack allowed:
         TST     r11, #CBack_VectorReq          ; now process any vector entries
@@ -865,13 +881,14 @@ process_callback_chain ROUT
 ; SWI OS_WriteC
 
 ; In    r11 = 0 (look, up there ^) !
+;       r12 = SPSR
 
 SWIWriteC ROUT
 
         msr    ,CPSR_c, #SVC2632        ; enable interrupts
 
-        BIC     lr, lr, #V_bit          ; clear caller's V cos we didn't before
-        Push    lr
+        BIC     lr, r12, #V_bit         ; clear caller's V cos we didn't before
+        STR     lr, [sp, #-4]!
 
         LDR     r11, [r11, #VecPtrTab+WrchV*4] ; load top node pointer
         CMP     r11, #ROM
