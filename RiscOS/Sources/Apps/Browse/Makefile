@@ -20,8 +20,7 @@ COMPONENT	= Browse
 APP		= !Browse
 MODULE		= rm.!Browse
 ROM_MODULE	= aof.Browse
-RDIR		= Resources
-LDIR		= ${RDIR}.${LOCALE}
+LDIR		= ${RDIR}.${LOCALE}.${SYSTEM}
 
 
 # ------------------------------------------------------------------------------
@@ -125,29 +124,29 @@ LIBSD = \
 INCLUDES	= -IC:,tbox:,HTMLLib:,ImageLib:,Libraries.URILib.,TCPIPLibs:
 
 FILES = \
- ${RDIR}.!Boot \
+ ${LDIR}.!Boot \
  ${LDIR}.!Run \
- ${RDIR}.!Sprites \
- ${RDIR}.!Sprites22 \
+ ${LDIR}.!Sprites \
+ ${LDIR}.!Sprites22 \
  ${LDIR}.Messages \
  ${LDIR}.Res \
  abs.!RunImage
 
 FILESD = \
- ${RDIR}.!Boot \
+ ${LDIR}.!Boot \
  ${LDIR}.!Run \
- ${RDIR}.!Sprites \
- ${RDIR}.!Sprites22 \
+ ${LDIR}.!Sprites \
+ ${LDIR}.!Sprites22 \
  ${LDIR}.Messages \
  ${LDIR}.Res \
- ${RDIR}.!Sprites \
+ ${LDIR}.!Sprites \
  abs.!RunImageD
 
 # Include these in the ROM module
 RESFILES = \
- ${RDIR}.Sprites \
- ${RDIR}.!Sprites \
- ${RDIR}.!Sprites22
+ ${LDIR}.Sprites \
+ ${LDIR}.!Sprites \
+ ${LDIR}.!Sprites22
 
 DFILES = \
  Debug.${APP}.!Boot \
@@ -274,18 +273,18 @@ rom: ${ROM_MODULE}
 	@echo ${COMPONENT}: Module built (ROM)
 
 install: ${FILES}
-	${CP} ${RDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}
+	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}
 	${CP} abs.!RunImage		${INSTDIR}.!RunImage	${CPFLAGS}
-	${CP} ${RDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}
-	${CP} ${RDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}
-	${CP} ${RDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}
+	${CP} ${LDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}
+	${CP} ${LDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}
+	${CP} ${LDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${INSTDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}
-	${CP} ${RDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}
+	${CP} ${LDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}
 	${MKDIR} ${INSTDIR}.User
-	${CP} ${RDIR}.User.History	${INSTDIR}.User.History	${CPFLAGS}
-	${CP} ${RDIR}.User.Hotlist	${INSTDIR}.User.Hotlist	${CPFLAGS}
+	${CP} ${LDIR}.User.History	${INSTDIR}.User.History	${CPFLAGS}
+	${CP} ${LDIR}.User.Hotlist	${INSTDIR}.User.Hotlist	${CPFLAGS}
 	-Access ${INSTDIR}.!Boot	lr/r
 	-Access ${INSTDIR}.!Run		lr/r
 	-Access ${INSTDIR}.!RunImage	lr/r
@@ -304,15 +303,15 @@ install_rom: ${ROM_MODULE}
 	@@echo ${COMPONENT}: Module installed (ROM)
 
 installd: ${FILESD}
-	${CP} ${RDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}ln
+	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}ln
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}ln
 	${CP} abs.!RunImageD		${INSTDIR}.!RunImage	${CPFLAGS}ln
-	${CP} ${RDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}ln
-	${CP} ${RDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}ln
-	${CP} ${RDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}ln
+	${CP} ${LDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}ln
+	${CP} ${LDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}ln
+	${CP} ${LDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}ln
 	${CP} ${LDIR}.Messages		${INSTDIR}.Messages	${CPFLAGS}ln
 	${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}ln
-	${CP} ${RDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}ln
+	${CP} ${LDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}ln
 	${MKDIR} ${INSTDIR}.User
 	-Access ${INSTDIR}.!Boot	lr/r
 	-Access ${INSTDIR}.!Run		lr/r
@@ -331,16 +330,16 @@ resources:
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESDIR}.User
-	${CP} ${RDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
-	${CP} ${RDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
-	${CP} ${RDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
-	${CP} ${RDIR}.!Sprites22	${RESDIR}.!Sprites22	${CPFLAGS}
-	${CP} ${RDIR}.Choices		${RESDIR}.Choices	${CPFLAGS}
+	${CP} ${LDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
+	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
+	${CP} ${LDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
+	${CP} ${LDIR}.!Sprites22	${RESDIR}.!Sprites22	${CPFLAGS}
+	${CP} ${LDIR}.Choices		${RESDIR}.Choices	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
-	${CP} ${RDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
-	${CP} ${RDIR}.User.History	${RESDIR}.User.History	${CPFLAGS}
-	${CP} ${RDIR}.User.Hotlist	${RESDIR}.User.Hotlist	${CPFLAGS}
+	${CP} ${LDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
+	${CP} ${LDIR}.User.History	${RESDIR}.User.History	${CPFLAGS}
+	${CP} ${LDIR}.User.Hotlist	${RESDIR}.User.Hotlist	${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
@@ -461,23 +460,23 @@ Debug.${APP}.!RunImage: ${OBJSD} ${LIBSD}
 	SetType $@ Absolute
 	Squeeze $@
 
-Debug.${APP}.!Boot: ${RDIR}.!Boot
-	${CP} ${RDIR}.!Boot $@ ${CPFLAGS}
+Debug.${APP}.!Boot: ${LDIR}.!Boot
+	${CP} ${LDIR}.!Boot $@ ${CPFLAGS}
 
 Debug.${APP}.!Run: ${LDIR}.!Run
 	${CP} ${LDIR}.!Run $@ ${CPFLAGS}
 
-Debug.${APP}.!Sprites: ${RDIR}.!Sprites
-	${CP} ${RDIR}.!Sprites $@ ${CPFLAGS}
+Debug.${APP}.!Sprites: ${LDIR}.!Sprites
+	${CP} ${LDIR}.!Sprites $@ ${CPFLAGS}
 
-Debug.${APP}.!Sprites22: ${RDIR}.!Sprites22
-	${CP} ${RDIR}.!Sprites22 $@ ${CPFLAGS}
+Debug.${APP}.!Sprites22: ${LDIR}.!Sprites22
+	${CP} ${LDIR}.!Sprites22 $@ ${CPFLAGS}
 
 Debug.${APP}.Messages: ${LDIR}.Messages
 	${CP} ${LDIR}.Messages $@ ${CPFLAGS}
 
-Debug.${APP}.Sprites: ${RDIR}.Sprites
-	${CP} ${RDIR}.Sprites $@ ${CPFLAGS}
+Debug.${APP}.Sprites: ${LDIR}.Sprites
+	${CP} ${LDIR}.Sprites $@ ${CPFLAGS}
 
 Debug.${APP}.Templates: ${LDIR}.Templates
 	${CP} ${LDIR}.Templates $@ ${CPFLAGS}
