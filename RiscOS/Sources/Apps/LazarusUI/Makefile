@@ -139,7 +139,6 @@ resources: translate
         $(CP) LazUILocalRes:NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) LazUILocalRes:STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
         $(CP) LazUILocalRes:$(APP).bin.command $(RESAPP).bin.command $(CPFLAGS)
-        $(CP) LazUILocalRes:$(APP).Utils.SetTVType $(RESAPP).Utils.SetTVType $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
         UnSet LazUILocalRes$path
         
