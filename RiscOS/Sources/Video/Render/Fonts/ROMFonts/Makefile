@@ -6,10 +6,6 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
-# 05-Oct-99  SNB          Added ability to build STB Baseline !Fonts application.
-#                         Can build UK-only, UK & Japanese, or UK, Japanese & Chinese
-#                         by passing in OPTIONS=J, OPTIONS=C or OPTIONS=CJ to the makefile.
-#                         UK will build without any OPTIONS flag.
 #
 
 #
@@ -21,14 +17,12 @@ CP      = copy
 RM      = remove
 LD      = link
 WIPE    = -wipe
-MKDIR   = mkdir -p
-CHMOD   = attr ${CHMODFLAGS}
+MKDIR   = cdir
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -o $@
 LDFLAGS = -bin -o $@
 CPFLAGS = ~cfr~v
 WFLAGS  = ~cfr~v
-CHMODFLAGS = +ow +or +wr -ww
 
 #
 # Program specific options:
@@ -61,36 +55,6 @@ resources:
 	Obey Config.${USERIF}
         @echo ${COMPONENT}: resource files copied
 
-install_:
-	Obey Config.DiscBuild.$(USERIF) UK
-
-install_J:
-	Obey Config.DiscBuild.$(USERIF) Japan
-        @echo Japanese installed.
-
-install_C:
-	Obey Config.DiscBuild.$(USERIF) China
-        @echo Chinese installed.
-
-install_CJ: install_C install_J
-        @echo Unicode installed.
-
-install_JC: install_C install_J
-        @echo Unicode installed.
-
-install: install_$(OPTIONS) dirs aliases
-        $(CP) LocalUserIFRes:!Boot $(INSTDIR).!Boot $(CPFLAGS)
-        $(CP) LocalUserIFRes:!Help $(INSTDIR).!Help $(CPFLAGS)
-        $(CHMOD) $(INSTDIR)
-        @echo $(COMPONENT): installed to $(INSTDIR)
-
-aliases: 
-        @Set Alias$MFD $(MKDIR) $(INSTDIR).%0
-	@Set Alias$CFF $(CP) Fonts.%0 $(INSTDIR).%0 $(CPFLAGS)
-
-dirs:
-	$(MKDIR) $(INSTDIR)
-        
 o.ROMFonts: ${SOURCE}
         ${MKDIR} o
         ${AS} ${ASFLAGS} ${SOURCE}
