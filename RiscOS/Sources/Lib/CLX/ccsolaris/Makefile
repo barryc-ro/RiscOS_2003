@@ -7,12 +7,14 @@ CFLAGS=-c -O2 -I. $(CFL)
 CC=gcc
 DERIVED= datenow.h
 OBJALL=bytesex.o chunkfls.o disass.o err.o fname.o prgname.o re.o ieeeflt.o \
-dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o filestamp.o dem.o symdefs.o
+dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o filestamp.o dem.o symdefs.o \
+pathmacro.o
 HSOURCE=aif.h disass.h libflfmt.h scr_drv.h aof.h bytesex.h err.h \
 ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
-chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h dem.h symdefs.h
+chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h dem.h symdefs.h pathmacro.h
 
 CFLhost= -I${RISCOS_CLIB_HDRS}
+CFLpathmacro= -Dkernelheader=\"${RISCOS_CLIB_HDRS}/kernel.h\"
 CFLfilestamp= -I${RISCOS_CLIB_HDRS}
 
 noarg: clx.a
@@ -56,6 +58,12 @@ hash.o:	hash.h
 host.o:	host.c
 host.o:	host.h
 	$(CC) $(CFLAGS) $(CFLhost) host.c -o host.o
+pathmacro.o:	pathmacro.c
+pathmacro.o:	pathmacro.h
+pathmacro.o:	wholefls.h
+pathmacro.o:	hash.h
+pathmacro.o:	host.h
+	$(CC) $(CFLAGS) $(CFLpathmacro) pathmacro.c -o pathmacro.o
 host_scr.o:	host_scr.c
 host_scr.o:	host_scr.h
 host_scr.o:	set_host.h
