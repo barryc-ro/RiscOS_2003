@@ -76,8 +76,19 @@ extern void Delay(int t);
 #define     ERROR_DEFAULT           0xffff
 extern int LoadString( const char *base, int idResource, char *szBuffer, int cbBuffer );
 
+#if 1
+
+#include "kernel.h"
+typedef _kernel_oserror os_error;
+#include "MemLib/memheap.h"
+
+#define GlobalAlloc(flags, size)	((HGLOBAL)MemHeap_malloc(size))
+#define GlobalFree(ptr)			(MemHeap_free((void *)(ptr)), (HGLOBAL)0)
+#else
 #define GlobalAlloc(flags, size)	((HGLOBAL)malloc(size))
 #define GlobalFree(ptr)			(free((void *)(ptr)), (HGLOBAL)0)
+#endif
+
 #define GlobalLock(ptr)			((void *)ptr)
 #define GlobalUnlock(ptr)		
 

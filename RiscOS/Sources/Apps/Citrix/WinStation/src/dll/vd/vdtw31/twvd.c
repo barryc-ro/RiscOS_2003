@@ -90,6 +90,7 @@
 *************************************************************************/
 
 #include "windows.h"
+#include "fileio.h"
 
 /*
  *  Includes
@@ -208,7 +209,7 @@ STATIC ULONG PrefHRes;
 STATIC ULONG PrefVRes;
 STATIC BOOL  vfFullScreen = FALSE;
 
-extern int vwScreen, vhScreen;
+extern int vwScreen, vhScreen, vSVGAmode;
 static BOOL vVariableRes = FALSE;
 
 extern HWND vhWnd;
@@ -342,28 +343,48 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     pVdOpen->ChannelMask = (1L << VirtualThinWire);
  
     /*
-     *  Check preferred res
+     *  Check for super VGA
      */
-    PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-				      INI_DESIREDHRES, DEF_DESIREDHRES );
+    bGetPrivateProfileString( pVdOpen->pIniSection, INI_SVGACAPABILITY, DEFAULT_SVGACAP,
+                              string, sizeof(string) );
+
+    vSVGAmode = 0;
+    vVariableRes = FALSE;
+    PrefHRes = 0;
+    PrefVRes = 0;
+    vfFullScreen = FALSE;
+
+    if (!stricmp(string, "Off")) {
+	/* Off means only 640x480 available */
+    }
+    else if (!stricmp(string, VARIABLE_SVGACAP)) {
+	/* auto means default to the set value and send complete set */
+        PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+                                          INI_DESIREDHRES, DEF_DESIREDHRES );
      
-    PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-				      INI_DESIREDVRES, DEF_DESIREDVRES );
+        PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+                                          INI_DESIREDVRES, DEF_DESIREDVRES );
      
-    /*
-     *  Force to resonable values
-     */
-    PrefHRes = (PrefHRes == 0) ? DEF_DESIREDHRES : PrefHRes;
-    PrefVRes = (PrefVRes == 0) ? DEF_DESIREDVRES : PrefVRes;
-    
-    vVariableRes = TRUE;
+        vSVGAmode = 1;
+        vVariableRes = TRUE;
+    }
+    else {
+	/* auto means default to the set value and send complete set */
+        PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+                                          INI_DESIREDHRES, DEF_DESIREDHRES );
+     
+        PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+                                          INI_DESIREDVRES, DEF_DESIREDVRES );
+     
+        vSVGAmode = 1;
+    }
 
     /*
      *  Force to resonable values (defined in wfengapi.h)
      */
     if ( (((USHORT)PrefHRes & 0xffff) == 0xffff) && 
          (((USHORT)PrefVRes & 0xffff) == 0xffff) ) {
-	GetModeSpec(&PrefHRes, &PrefVRes);
+	GetModeSpec((int *)&PrefHRes, (int *)&PrefVRes);
         vfFullScreen = TRUE;
     }
     else {
@@ -377,7 +398,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
      *  Get preferred color depth
      */
     iColorDepth = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                         INI_DESIREDCOLOR, DEF_DESIREDCOLOR );
+					 INI_DESIREDCOLOR, DEF_DESIREDCOLOR );
 
     TRACE((TC_TW,TT_TW_PALETTE, "VDTW: Requested ColorDepth %04x", iColorDepth));
 
@@ -416,7 +437,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
             //  remove trailing backslash
             if ( pszTemp[strlen(pszTemp)-1] == '.' ) {
-                pszTemp[strlen(pszTemp)-1] == '\0';
+                pszTemp[strlen(pszTemp)-1] = '\0';
             }
 
             //  just to insure directory is there
@@ -492,8 +513,6 @@ done:
 static int 
 DriverClose( PVD pVd, PDLLCLOSE pVdClose )
 {
-   pVdClose;
-
    TWDeallocCache(pVd);
    CacheHasBeenAllocated = FALSE;
 
@@ -530,18 +549,6 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     PVDTW_C2H pVdData;
     PMODULE_C2H pHeader;
     PTHINWIRECAPS pCaps, pPref;
-#ifndef DOS
-    USHORT i;
-    ULONG sysHRes;
-    ULONG sysVRes;
-    ULONG sysHResWorkArea;
-    ULONG sysVResWorkArea;
-    BOOL   fResStandard  = FALSE;
-    BOOL   fResViolation = FALSE;
-    WDQUERYINFORMATION wdqi;
-    ENCRYPTIONINIT     eieio;
-//  PWFEINSTANCE pInstanceData = (PWFEINSTANCE)GetWindowLong( vhWnd, GWL_INSTANCEDATA );
-#endif
 
     /*
      *  Get byte count necessary to hold data
@@ -591,8 +598,8 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     pCaps->flGraphicsCaps = GCAPS_COMPLEX_CURVES;
     pCaps->ResCapsCnt     = 1;
     pCaps->ResCapsOff     = (USHORT)((LPBYTE)&pCaps->ResCaps - (LPBYTE)pCaps);
-    pCaps->ResCaps.HRes   = 640;
-    pCaps->ResCaps.VRes   = 480;
+    pCaps->ResCaps.HRes   = (USHORT)PrefHRes;
+    pCaps->ResCaps.VRes   = (USHORT)PrefVRes;
 
     /*
      * Now specify thinwire mode preference for this client
@@ -604,164 +611,28 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     pPref->flGraphicsCaps = GCAPS_COMPLEX_CURVES;
     pPref->ResCapsCnt     = 1;
     pPref->ResCapsOff     = (USHORT)((LPBYTE)&pPref->ResCaps - (LPBYTE)pPref);
-#if defined (DOS) || defined(RISCOS)
 
-    pPref->ResCaps.HRes   = (USHORT)PrefHRes;
-    pPref->ResCaps.VRes   = (USHORT)PrefVRes;
-    pCaps->ResCaps.HRes   = (USHORT)PrefHRes;
-    pCaps->ResCaps.VRes   = (USHORT)PrefVRes;
+    viBitsPerPixel = iColorDepth == CCAPS_4_BIT ? 4 : 8;
 
-    pCaps->fColorCaps     |= CCAPS_8_BIT;
-    pCaps->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
-
-    pPref->fColorCaps     |= CCAPS_8_BIT;
-    pPref->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
-
-    viBitsPerPixel = 8;
-#else // defined (DOS) || defined(RISCOS)
-
-    /*
-     *  Get max system resolution
-     */
-    GetModeSpec(&sysHResWorkArea, &sysVResWorkArea);
-    sysHRes = sysHResWorkArea;
-    sysVRes = sysVResWorkArea;
+    pCaps->ResCapsCnt = EnumerateModes(&pCaps->ResCaps,
+				       sizeof(pVdData->ResCaps)/sizeof(pVdData->ResCaps[0]) + 1, &viBitsPerPixel);
+    if (!vSVGAmode)
+	pCaps->ResCapsCnt = 1;
     
-    /*
-     *  Get client's preference
-     */
-    pPref->ResCaps.HRes   = (USHORT)PrefHRes;
-    pPref->ResCaps.VRes   = (USHORT)PrefVRes;
+    pPref->ResCaps.HRes   = pCaps->ResCaps.HRes;
+    pPref->ResCaps.VRes   = pCaps->ResCaps.VRes;
 
-#if 0
-    /*
-     *  Get host encryption level 
-     */
-    eieio.EncryptionLevel    = 1;
-    wdqi.WdInformationClass  = WdEncryptionInit;
-    wdqi.pWdInformation      = &eieio;
-    wdqi.WdInformationLength = sizeof(VDWRITEHOOK);
-    WdCall(pVd, WD__QUERYINFORMATION, &wdqi);
-
-    /*
-     *  On encryption level >1 variable resolution is supported
-     */
-    if ( (cHostLevel = eieio.EncryptionLevel) > 1 ) {
-
-        HDC hdc = CreateIC( "DISPLAY", NULL, NULL, NULL );
-
-        /*
-         *  Variable res
-         */
-        pPref->flGraphicsCaps |= (GCAPS_RES_VARIABLE|GCAPS_SSB_1BYTE_PP);
-        pCaps->flGraphicsCaps |= (GCAPS_RES_VARIABLE|GCAPS_SSB_1BYTE_PP);
-
-        /*
-         *  Max resolution
-         */
-        pCaps->ResCaps.HRes = (USHORT)sysHRes;
-        pCaps->ResCaps.VRes = (USHORT)sysVRes;
-
-        /*
-         *  Raster Display?
-         */
-        if ( (GetDeviceCaps( hdc, TECHNOLOGY ) & DT_RASDISPLAY) ) {
-
-            /*
-             *  Get BPP for device
-             */
-            viBitsPerPixel = GetDeviceCaps( hdc, BITSPIXEL );
-
-            /*
-             *  Get user's color preference
-             */
-            pPref->fColorCaps = iColorDepth;
-
-            /*
-             *  Set client capabilities accordingly
-             */
-            switch ( viBitsPerPixel ) {
-
-                case 8 :
-                    pCaps->fColorCaps |= CCAPS_8_BIT;
-                    pPref->fColorCaps  = (pPref->fColorCaps & pCaps->fColorCaps) ?
-                                         (pPref->fColorCaps & pCaps->fColorCaps) :
-                                         CCAPS_8_BIT;
-                    break;
-
-                case 16 :
-                    pPref->flGraphicsCaps &= ~(GCAPS_SSB_1BYTE_PP);
-                    pCaps->flGraphicsCaps &= ~(GCAPS_SSB_1BYTE_PP);
-                    pCaps->fColorCaps     |= CCAPS_8_BIT;
-                    pPref->fColorCaps      = (pPref->fColorCaps & pCaps->fColorCaps) ?
-                                             (pPref->fColorCaps & pCaps->fColorCaps) :
-                                             CCAPS_8_BIT;
-                    break;
-
-                case 24 :
-                case 32 :
-                    pPref->flGraphicsCaps &= ~(GCAPS_SSB_1BYTE_PP);
-                    pCaps->flGraphicsCaps &= ~(GCAPS_SSB_1BYTE_PP);
-                    pCaps->fColorCaps     |= CCAPS_8_BIT;
-                    pPref->fColorCaps      = (pPref->fColorCaps & pCaps->fColorCaps) ?
-                                             (pPref->fColorCaps & pCaps->fColorCaps) :
-                                             CCAPS_8_BIT;
-                    break;
-            }
-
-        }
-
-        TRACE((TC_TW,TT_TW_PALETTE, 
-               "VDTW: Device BPP %u, pCaps->fColorCaps %04x, pPref->fColorCaps %04x", 
-               viBitsPerPixel, pCaps->fColorCaps, pPref->fColorCaps));
-
-        TRACE((TC_TW,TT_TW_PALETTE, 
-               "VDTW: Device pCaps->flGraphicsCaps %04x, pPref->flGraphicsCaps %04x", 
-               pCaps->flGraphicsCaps, pPref->flGraphicsCaps));
-
-        DeleteDC( hdc );
-    }
-    else
-#endif
+    if (viBitsPerPixel == 8)
     {
+	pCaps->fColorCaps     |= CCAPS_8_BIT;
+	pCaps->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
 
-        /*
-         *  Gather up valid client modes
-         */
-        for ( i=0; i<MAX_CLIENT_RES; i++ ) {
-    
-            /*
-             *  Fits within client's screen?
-             */
-            if ((aresClient[i].hres <= (USHORT)sysHRes) && (aresClient[i].vres <= (USHORT)sysVRes)) {
-    
-                pVdData->ResCaps[pCaps->ResCapsCnt - 1].HRes = aresClient[i].hres;
-                pVdData->ResCaps[pCaps->ResCapsCnt - 1].VRes = aresClient[i].vres;
-    
-                if ( fResViolation ) {
-                    pPref->ResCaps.HRes = aresClient[i].hres;
-                    pPref->ResCaps.VRes = aresClient[i].vres;
-                }
-    
-                if ( (pPref->ResCaps.HRes == aresClient[i].hres) &&
-                     (pPref->ResCaps.VRes == aresClient[i].vres) ) { 
-                    fResStandard = TRUE;
-                }
-                ++pCaps->ResCapsCnt;
-            }
-        }
-
-        /*
-         *  Add any non-standard display resolutions to list
-         */
-        if ( !fResStandard ) {
-            pVdData->ResCaps[pCaps->ResCapsCnt - 1].HRes = pPref->ResCaps.HRes;
-            pVdData->ResCaps[pCaps->ResCapsCnt - 1].VRes = pPref->ResCaps.VRes;
-            ++pCaps->ResCapsCnt;
-        }
+	pPref->fColorCaps     |= CCAPS_8_BIT;
+	pPref->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
     }
-#endif // defined (DOS) || defined(RISCOS)
 
+    TRACE((TC_TW,TT_TW_PALETTE, "VDTW: %d modes sent %d bpp", pCaps->ResCapsCnt, viBitsPerPixel));
+    
     /*
      *  Initialize cache data
      */

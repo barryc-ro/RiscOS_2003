@@ -176,8 +176,7 @@ int WFCAPI LogOpen( PLOGOPEN pLogOpen )
 //       return( CLIENT_STATUS_SUCCESS );
 
 #if defined(REMOTE_DEBUG) && defined(DEBUG)
-   if (guLogFlags & LOG_REMOTE)
-       rdebug_open();
+   rdebug_open();
 #endif
    
    // check for nul device
@@ -278,21 +277,6 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
        if (!(LogClass & guLogClass) ||
 	   !(LogEnable & (LogClass == TC_TW ? guLogTWEnable : guLogEnable)))
 	   return;
-/*
-       if (!(LogClass & guLogClass))
-	   return;
-	   
-       if (LogClass == TC_TW)
-       {
-	   if (!(LogEnable & guLogTWEnable))
-	       return;
-       }
-       else
-       {
-	   if (!(LogEnable & guLogEnable))
-	       return;
-       }
-*/
    }
 
    {
@@ -327,7 +311,7 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
    if( guLogFlags & LOG_PRINTF )
       printf( "%s", Buffer );
 
-   if ( ghLogHandle != -1 ) {
+   if ( ghLogHandle != -1 && guLogFlags & LOG_FILE) {
       write( ghLogHandle, Buffer, strlen(Buffer) );
       if ( guLogFlags & LOG_FLUSH )
          flush( ghLogHandle );
@@ -395,7 +379,7 @@ LogBuffer( ULONG LogClass, ULONG LogEnable,
       if( guLogFlags & LOG_PRINTF )
          printf( "\n" );
 
-      if ( ghLogHandle != -1 ) {
+      if ( ghLogHandle != -1 && guLogFlags & LOG_FILE ) {
          write(ghLogHandle, "\n", 1 );
          if(guLogFlags & LOG_FLUSH)
             flush( ghLogHandle );
@@ -430,7 +414,7 @@ logWrite( char far * pFormat, ... )
    va_start( arg_marker, pFormat );
    bc = vsprintf( Buffer, pFormat, arg_marker );
 
-   if ( ghLogHandle != -1 )
+   if ( ghLogHandle != -1 && guLogFlags & LOG_FILE )
       write(ghLogHandle, Buffer, bc);
 
    if( guLogFlags & LOG_PRINTF )
@@ -482,7 +466,7 @@ LogAssert( PCHAR pExpr, PCHAR pFileName, int LineNumber, int rc )
  *
  ******************************************************************************/
 
-void LogErr( void *err, PCHAR pFileName, int LineNumber )
+void *LogErr( void *err, PCHAR pFileName, int LineNumber )
 {
     if (err)
     {
@@ -494,6 +478,7 @@ void LogErr( void *err, PCHAR pFileName, int LineNumber )
 	LogPrintf( LOG_ASSERT, TT_ERROR, "%s", Buffer );
 	fprintf(stderr,  "%s\n", Buffer );
     }
+    return err;
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -502,7 +487,9 @@ void LogErr( void *err, PCHAR pFileName, int LineNumber )
 
 #define HELP_INFO_1	\
 			"help\n" \
-			"set log (class|enable|twenable) x\n"
+			"message <message>\n" \
+			"set log (class|enable|twenable) x\n" \
+			"set log (file|remote) (1|0)\n"
 
 static void cleanup(void)
 {
@@ -512,12 +499,27 @@ static void cleanup(void)
 
 static int debug_cmd_handler(int argc, char *argv[], void *handle)
 {
-    int handled = -1;
+    int i, handled = -1;
 
     if (stricmp(argv[0], "help") == 0)
     {
 	debug_print_line(db_sess, HELP_INFO_1);
 	handled = 1;
+    }
+    else if (stricmp(argv[0], "message") == 0)
+    {
+	handled = 0;
+	if (argc > 1)
+	{
+	    char s[1024];
+
+	    strcpy(s, "*** MESSAGE *** ");
+	    for (i = 1; i < argc; i++)
+		strcat(s, argv[i]);
+
+	    debug_print_line(db_sess, s);
+	    handled = 1;
+	}
     }
     else if (stricmp(argv[0], "show") == 0)
     {
@@ -540,6 +542,22 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 			guLogEnable = strtoul(argv[3], NULL, 16);
 		    else if (stricmp(argv[2], "twenable") == 0)
 			guLogTWEnable = strtoul(argv[3], NULL, 16);
+
+		    else if (stricmp(argv[2], "remote") == 0)
+		    {
+			if (atoi(argv[3]))
+			    guLogFlags |= LOG_REMOTE;
+			else
+			    guLogFlags &= ~LOG_REMOTE;
+		    }
+		    else if (stricmp(argv[2], "file") == 0)
+		    {
+			if (atoi(argv[3]))
+			    guLogFlags |= LOG_FILE;
+			else
+			    guLogFlags &= ~LOG_FILE;
+		    }
+
 		    else
 			handled = 0;
 		}

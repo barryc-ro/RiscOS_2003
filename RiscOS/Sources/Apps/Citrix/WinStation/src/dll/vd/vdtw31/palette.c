@@ -10,6 +10,9 @@
 *   Author: Kurt Perry (kurtp) 14-Sep-1995
 *
 *   $Log$
+*   Revision 1.2  1998/01/28 18:14:47  smiddle
+*   Safety checkin
+*
 *   Revision 1.1  1998/01/19 19:12:43  smiddle
 *   Added loads of new files (the thinwire, modem, script and ne drivers).
 *   Discovered I was working around the non-ansi bitfield packing in totally
@@ -1164,6 +1167,7 @@ TWDeleteDefaultPalette( HWND hwnd, HDC hdc )
 #ifndef RISCOS
     RealizePalette( hdc );
 #endif
+
     /*
      *  Restore system default palette to compatible dc
      */

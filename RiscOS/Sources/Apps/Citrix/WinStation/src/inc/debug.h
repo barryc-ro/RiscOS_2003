@@ -73,7 +73,7 @@
 #define DASSERT(exp,rc) { }
 
 #ifdef DEBUG
-#define LOGERR(e) LogErr( e, __FILE__, __LINE__ ); 
+#define LOGERR(e) LogErr( e, __FILE__, __LINE__ )
 #else
 #define LOGERR(e) e
 #endif

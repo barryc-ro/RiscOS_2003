@@ -189,7 +189,22 @@ CfgIniLoad( HANDLE   hClientHandle,
     int i;
     ENCRYPTIONLEVEL szEncryptionLevelSession; 
 
+#ifdef RISCOS
+    DefIniSect[0].pINISect = ModuleSect;
+    DefIniSect[1].pINISect = WfclientSect;
+    
+    WfclientSect[0].pSectDefault = szWFThinWireSect;
+    WfclientSect[1].pSectDefault = szWfclientSect;
 
+    ModuleSect[0].pSectDefault = szTCPIPSect;
+    ModuleSect[1].pSectDefault = szICA30Sect;
+    ModuleSect[2].pSectDefault = szRFrameSect;
+    ModuleSect[3].pSectDefault = szEncryptSect;
+    ModuleSect[4].pSectDefault = szThinwire30Sect;
+    ModuleSect[5].pSectDefault = szClientDriveSect;
+    ModuleSect[6].pSectDefault = szClientPrinterSect;
+    ModuleSect[7].pSectDefault = szClipboardSect;    
+#endif
 
     *pszDeviceName = '\0';
     pEncryption = (char*) malloc(15);      // storage for our encryption PD trap

@@ -116,5 +116,6 @@
 #define LOG_FLUSH        0x00000002
 #define LOG_PRINTF       0x00000004
 #define LOG_REMOTE       0x00000008
+#define LOG_FILE	 0x00000010
 
 #endif //__LOGFLAGS_H__

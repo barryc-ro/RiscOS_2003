@@ -189,14 +189,14 @@ static char szClipboardSect[] =
 //"\0\0";
 
 static DEFINISECT ModuleSect[] = {
-    {"TCP/IP",szTCPIPSect},
-    {"ICA 3.0",szICA30Sect},
-    {"RFrame",szRFrameSect},
-    {"Encrypt",szEncryptSect},
-    {"Thinwire3.0",szThinwire30Sect},
-    {"ClientDrive",szClientDriveSect},
-    {"ClientPrinter",szClientPrinterSect},
-    {"Clipboard",szClipboardSect},
+    {"TCP/IP"/*,szTCPIPSect*/},
+    {"ICA 3.0"/*,szICA30Sect*/},
+    {"RFrame"/*,szRFrameSect*/},
+    {"Encrypt"/*,szEncryptSect*/},
+    {"Thinwire3.0"/*,szThinwire30Sect*/},
+    {"ClientDrive"/*,szClientDriveSect*/},
+    {"ClientPrinter"/*,szClientPrinterSect*/},
+    {"Clipboard"/*,szClipboardSect*/},
 //    {"Hotkey Shift States",szHotkeyShiftSect},
 //    {"Hotkey Keys",szHotkeyKeysSect},
 //    {"KeyboardLayout",szKeyboardLayoutSect},
@@ -221,15 +221,15 @@ static char szWFThinWireSect[] =
 
 // default sections for WFCLIENT.INI
 static DEFINISECT WfclientSect[] = {
-    {"Thinwire3.0",szWFThinWireSect},
-    {"WFClient",szWfclientSect},
+    {"Thinwire3.0"/*,szWFThinWireSect*/},
+    {"WFClient"/*,szWfclientSect*/},
     {NULL,NULL}
     };
 
 // default ini files for WFCLIENT.INI and MODULE.INI
 DEFINIFILE DefIniSect[] = {
-    {"module.ini", ModuleSect},
-    {"wfclient.ini", WfclientSect},
+    {"module"/*, ModuleSect*/},
+    {"wfclient"/*, WfclientSect*/},
     {NULL,NULL}
     };
 

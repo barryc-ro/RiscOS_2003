@@ -9,7 +9,7 @@
 
 /* --------------------------------------------------------------------------------------------- */
 
-#define APP_NAME	"WSClient"
+#define APP_NAME	"WinFrame"
 
 #define APP_DIR_VAR	APP_NAME"$Dir"
 #define APP_DIR		"<"APP_DIR_VAR">"
@@ -19,7 +19,6 @@
 #define INI_PATH	APP_NAME"Ini:"
 
 #define VERSION_STRING	Module_MajorVersion " (" Module_Date ") " Module_MinorVersion
-/* #define VERSION_STRING	"0.01 (17-Dec-97)" */
 
 /* --------------------------------------------------------------------------------------------- */
 

@@ -10,6 +10,12 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.3  1998/02/06 17:11:10  smiddle
+*   First alpha release. Fixed problems with palettes, brushes. Added mouse
+*   pointers and sorted out running and quitting problems.
+*
+*   Version 0.06. Tagged as 'WinStation-0_06'
+*
 *   Revision 1.2  1998/01/27 18:39:07  smiddle
 *   Lots more work on Thinwire, resulting in being able to (just) see the
 *   log on screen on the test server.
@@ -126,6 +132,10 @@ int TWPaint( PVD pVd, HWND hWnd );
 INT  wfnEnumRects( HWND, HDC, LPRECT FAR *, INT *, LPRECT );
 VOID wfnFreeRects( LPRECT );
 int WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam );
+
+void GetModeSpec(int *width, int *height);
+void SetMode(int colorcaps, int xres, int yres);
+int EnumerateModes(SCREENRES *res_start, int max, int *bpp);
 
 
 ////////////////////////////////////////////////////////////////////

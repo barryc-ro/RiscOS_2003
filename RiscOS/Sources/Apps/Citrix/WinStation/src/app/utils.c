@@ -142,4 +142,14 @@ void setenv(char *var_name, char *value)
 
 /* --------------------------------------------------------------------------------------------- */
 
+#ifdef DEBUG
+/* For when linking with debug memlib */
+char *caller(int level)
+{
+    return "";
+}
+#endif
+    
+/* --------------------------------------------------------------------------------------------- */
+
 /* eof utils.c */

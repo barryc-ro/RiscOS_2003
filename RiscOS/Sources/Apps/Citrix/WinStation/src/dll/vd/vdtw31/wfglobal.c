@@ -10,6 +10,14 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:04  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.13   15 Apr 1997 18:16:58   TOMA
 *  autoput for remove source 4/12/97
@@ -44,6 +52,17 @@ COLORREF  twsolidcolor[16] = {
    PALETTEINDEX( 4 ),
    PALETTEINDEX( 5 ),
    PALETTEINDEX( 6 ),
+#ifdef RISCOS
+   PALETTEINDEX( 7 ),
+   PALETTEINDEX( 8 ),
+   PALETTEINDEX( 9 ),
+   PALETTEINDEX( 10 ),
+   PALETTEINDEX( 11 ),
+   PALETTEINDEX( 12 ),
+   PALETTEINDEX( 13 ),
+   PALETTEINDEX( 14 ),
+   PALETTEINDEX( 15 )
+#else
    PALETTEINDEX( 12 ),
    PALETTEINDEX( 7 ),
    PALETTEINDEX( 13 ),
@@ -53,6 +72,7 @@ COLORREF  twsolidcolor[16] = {
    PALETTEINDEX( 17 ),
    PALETTEINDEX( 18 ),
    PALETTEINDEX( 19 )
+#endif
 };
 #else
 STATIC COLORREF  twsolidcolor[16] = {
@@ -139,7 +159,11 @@ BITMAPINFO_4BPP_PALETTE bitmapinfo_4BPP_PALETTE = {
     0,                           //fixed   biClrUsed  - all colors used
     0                            //fixed   biClrImportant - all colors imp.
    },
+#ifdef RISCOS
+   {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }
+#else
    {0, 1, 2, 3, 4, 5, 6, 12, 7, 13, 14, 15, 16, 17, 18, 19 }
+#endif
 };
 
 //jk256

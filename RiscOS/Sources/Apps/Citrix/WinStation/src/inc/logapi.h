@@ -88,7 +88,7 @@ void WFCAPI LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID ar
 void WFCAPI LogBuffer( ULONG LogClass, ULONG LogEnable,
                        LPVOID pBuffer, ULONG ByteCount );
 void WFCAPI LogAssert( PCHAR, PCHAR, int, int );
-void LogErr( void *err, PCHAR pFileName, int LineNumber );
+void *LogErr( void *err, PCHAR pFileName, int LineNumber );
 void LogPoll(void);
     
 #else

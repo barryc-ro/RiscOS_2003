@@ -37,6 +37,12 @@
 
 /* --------------------------------------------------------------------------------------------- */
 
+//typedef _kernel_oserror os_error;
+//#include "MemLib/memheap.h"
+#include "MemLib/memflex.h"
+
+/* --------------------------------------------------------------------------------------------- */
+
 #define POLL_TIME	            100	/* 1 second */
 #define MIN_ESC_TIME	            50	/* cs */
 
@@ -76,6 +82,7 @@ static char *cli_logfile = NULL;
 static int cli_iconbar = FALSE;
 static int cli_dopostmortem = FALSE;
 static int cli_remote_debug = FALSE;
+static int cli_file_debug = FALSE;
 
 static Session current_session = NULL;
 
@@ -130,6 +137,18 @@ static void signal_setup(void)
 
 /* --------------------------------------------------------------------------------------------- */
 
+static void kill_current_session(void)
+{
+    Session s = current_session;
+    if (s)
+    {
+	current_session = NULL;
+	session_close(s);
+    }
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
 static int connect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
@@ -152,11 +171,7 @@ static int disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *id_b
 {
     TRACE((TC_UI, TT_API1, "disconnect_handler:\n"));
 
-    if (current_session)
-    {
-	session_close(current_session);
-	current_session = NULL;
-    }
+    kill_current_session();
 
     return 1;
     NOT_USED(event_code);
@@ -202,11 +217,7 @@ static void cleanup(void)
 {
     TRACE((TC_UI, TT_API1, "cleanup:\n"));
 
-    if (current_session)
-    {
-	session_close(current_session);
-	current_session = NULL;
-    }
+    kill_current_session();
     
     LOGERR(_swix(Hourglass_Smash, 0));	/* just in case */
 
@@ -223,6 +234,8 @@ static void cleanup(void)
 
 static int quit_handler(WimpMessage *message, void *handle)
 {
+    kill_current_session();
+
     exit(EXIT_SUCCESS);
     return 1;
     NOT_USED(message);
@@ -249,8 +262,7 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
 	{
 	    TRACE((TC_UI, TT_API1, "null_handler: poll returned 0\n"));
 
-	    session_close(current_session);
-	    current_session = NULL;
+	    kill_current_session();
 	}    
     
     return 0;
@@ -336,11 +348,16 @@ static int log_init(void)
 
    LogClose();
    
-   EMLogInfo.LogFlags   = (cli_remote_debug ? LOG_REMOTE : 0);
-#if 0
+   EMLogInfo.LogFlags   = 0;
+   if (cli_remote_debug)
+       EMLogInfo.LogFlags |= LOG_REMOTE;
+   if (cli_file_debug)
+       EMLogInfo.LogFlags |= LOG_FILE;
+
+#if 1
    EMLogInfo.LogClass   = TC_UI | TC_TW;
-   EMLogInfo.LogEnable  = TT_ERROR;
-   EMLogInfo.LogTWEnable = TT_TW_res4;
+   EMLogInfo.LogEnable  = 0;
+   EMLogInfo.LogTWEnable = 0;
 #else
    EMLogInfo.LogClass   = TC_ALL;
    EMLogInfo.LogEnable  = TT_ERROR;
@@ -380,7 +397,11 @@ static void process_args(int argc, char *argv[])
 		cli_logfile = strdup(argv[++i]);
 		break;
 
-	    case 'r':	    /* remote debugging */
+	    case 'g':	    /* enable log file */
+		cli_file_debug = TRUE;
+		break;
+
+	    case 'r':	    /* enable remote debugging */
 		cli_remote_debug = TRUE;
 		break;
 
@@ -416,21 +437,15 @@ static void initialise(int argc, char *argv[])
 #ifdef DEBUG
     log_init();
 #endif
-    
+
     /* initialise toolbox first to get messages file */
-#if 0
-    /* Wimp 380 needed for embedded windows */
-    if (toolbox_initialise(0, 380, &Wimp_MessageList[0], &ToolBox_EventList[0], APP_DIR,
-			      &message_block, &event_id_block,
-			      &current_wimp, &task, &sprite) != NULL)
-#endif
-    {
-    	/* Wimp 310 needed for other facilities */
- 	err_fatal(toolbox_initialise(0, 310, &Wimp_MessageList[0], ToolBox_EventList, APP_DIR,
+    err_fatal(toolbox_initialise(0, 310, &Wimp_MessageList[0], ToolBox_EventList, APP_DIR,
 				     &message_block, &event_id_block,
 				     &current_wimp, &task, &sprite));
-    }
 
+    LOGERR(MemFlex_Initialise2(APP_NAME " flex"));
+    LOGERR(MemHeap_Initialise(APP_NAME " heap"));
+    
     /* cleanup that needs task running */
     atexit(cleanup_task);
 
@@ -496,7 +511,7 @@ int main(int argc, char *argv[])
 	int event_code, t;
 	WimpPollBlock poll_block;
 
-	LOGERR(_swix(OS_ReadMonotonicTime, _OUT(0), &t));
+//	LOGERR(_swix(OS_ReadMonotonicTime, _OUT(0), &t));
 //      event_poll_idle(&event_code, &poll_block, t + 100, NULL);
         event_poll(&event_code, &poll_block, NULL);
 

@@ -93,6 +93,9 @@ static BOOL		bPDError=FALSE;
 
 extern LPBYTE gScriptFile;
 extern LPBYTE gScriptDriver;
+extern BOOL   sdLoad( LPBYTE pScriptFile, LPBYTE pScriptDriver );
+extern BOOL   sdPoll( VOID);
+extern VOID   sdUnload( VOID);
 
 extern int gbContinuePolling;
 
@@ -473,7 +476,7 @@ static int EMEngOpen(Session sess)
     WFEOpen.pszLogLabel      = "IWFC";     
     WFEOpen.pszTitle         = sess->gszServerLabel;
     WFEOpen.pszClientSN      = "";                 
-    WFEOpen.pszIconPath      = "<WSClient$Dir>";     
+    WFEOpen.pszIconPath      = APP_DIR;
     WFEOpen.uIconIndex       = 0;      
     WFEOpen.reserved         = 0; //(ULONG)&WFEOpenp;
 //    WFEOpenp.hWndPlugin      = 
@@ -671,6 +674,9 @@ Session session_open(const char *ica_file)
 
     connect_close(sess);
     
+    // initialise this here as it is statically inited in wengine
+    gbContinuePolling = TRUE;
+
     return sess;
 }
 
@@ -786,20 +792,21 @@ extern int SdLoad( PDLLLINK );
 
 int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable )
 {
+    static BOOL inited = FALSE;
     static struct
     {
 	PCHAR pName;
 	PLIBPROCEDURE fnLoad;
 	PPLIBPROCEDURE fnTable;
-    } modules[] =
+    } modules[8] =
     {
-	{ "tdtcpro",	(PLIBPROCEDURE)TdLoad, TdTcpRODeviceProcedures },
-	{ "pdrfram",	(PLIBPROCEDURE)PdLoad, PdRFrameDeviceProcedures },
-	{ "pdcrypt",	(PLIBPROCEDURE)PdLoad, PdCryptDeviceProcedures },
+	{ "tdtcpro",	(PLIBPROCEDURE)TdLoad/*, TdTcpRODeviceProcedures */ },
+	{ "pdcrypt",	(PLIBPROCEDURE)PdLoad/*, PdCryptDeviceProcedures */ },
+	{ "pdrfram",	(PLIBPROCEDURE)PdLoad/*, PdRFrameDeviceProcedures */ },
 //	{ "pdmodem",	(PLIBPROCEDURE)PdLoad, PdModemDeviceProcedures },
-	{ "wdtty",	(PLIBPROCEDURE)WdLoad, WdTTYEmulProcedures },
-	{ "wdica30",	(PLIBPROCEDURE)WdLoad, WdICA30EmulProcedures },
-	{ "vdtw30",	(PLIBPROCEDURE)VdLoad, VdTW31DriverProcedures },
+	{ "wdica30",	(PLIBPROCEDURE)WdLoad/*, WdICA30EmulProcedures */ },
+	{ "wdtty",	(PLIBPROCEDURE)WdLoad/*, WdTTYEmulProcedures */ },
+	{ "vdtw30",	(PLIBPROCEDURE)VdLoad/*, VdTW31DriverProcedures */ },
 	{ "nrtcpro",	(PLIBPROCEDURE)NrLoad, NULL },
 //	{ "neica",	(PLIBPROCEDURE)NeLoad, NeICADeviceProcedures },
 //	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
@@ -807,6 +814,17 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
     }, *mp;
 
     TRACE((TC_UI, TT_API1, "ModuleLookup: '%s'\n", pName));
+
+    if (!inited)
+    {
+	modules[0].fnTable = TdTcpRODeviceProcedures;
+	modules[1].fnTable = PdCryptDeviceProcedures;
+	modules[2].fnTable = PdRFrameDeviceProcedures;
+	modules[3].fnTable = WdICA30EmulProcedures;
+	modules[4].fnTable = WdTTYEmulProcedures;
+	modules[5].fnTable = VdTW31DriverProcedures;
+	inited = TRUE;
+    }
     
     for (mp = modules; mp->pName; mp++)
     {

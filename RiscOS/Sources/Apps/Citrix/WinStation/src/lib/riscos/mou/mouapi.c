@@ -9,6 +9,12 @@
 * $Author$  Andy (3/15/94)
 *
 * $Log$
+* Revision 1.4  1998/02/06 17:11:36  smiddle
+* First alpha release. Fixed problems with palettes, brushes. Added mouse
+* pointers and sorted out running and quitting problems.
+*
+* Version 0.06. Tagged as 'WinStation-0_06'
+*
 * Revision 1.3  1998/01/30 19:11:02  smiddle
 * Fixed clipping (as long as its simple), and palettes (mostly) and text.
 * Fixed a few more dodgy alignmenet structures and made some progress
@@ -1025,7 +1031,8 @@ ExitExit:
  ******************************************************************************/
 int mouAllocQueue( USHORT uEntries )
 {
-   int rc=CLIENT_STATUS_SUCCESS;
+    int rc=CLIENT_STATUS_SUCCESS;
+#if 0
    PMOUSEDATA pnewq;
    PMOUSEDATA poldq;
    USHORT ucnt;
@@ -1079,9 +1086,9 @@ int mouAllocQueue( USHORT uEntries )
       free(poldq);
 
    }
-
 ExitExit:
    TRACE(( TC_MOU, TT_API2, "mouAllocQueue: rc=%u", rc ));
+#endif
    return(rc);
 
 }
