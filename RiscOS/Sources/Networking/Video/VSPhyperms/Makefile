@@ -21,7 +21,7 @@ ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
 TOOLBOXLIB = C:tboxlibs.o.toolboxlib
 EVENTLIB   = C:tboxlibs.o.eventlib
-WIMPLIB	   = C:tboxlibs.o.wimplib
+WIMPLIB    = C:tboxlibs.o.wimplib
 
 #
 # Generic options:
@@ -29,14 +29,14 @@ WIMPLIB	   = C:tboxlibs.o.wimplib
 MKDIR   = cdir
 AS      = objasm
 CC      = cc
-C++	= c++
+C++     = c++
 CMHG    = cmhg
 CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
-CD	= dir
-AWK	= awk
+CD      = dir
+AWK     = awk
 
 # Debug flags
 #THROWBACK = -Throwback
@@ -72,9 +72,10 @@ o.SourceMem	\
 o.ServCtrl	\
 o.ServerATM	\
 o.Sink		\
-o.Error         \
+o.Error		\
 o.vspSocket	\
 o.NECstruct	\
+o.rtsp_defs	\
 o.htonstruct
 
 d_OBJS      =	\
@@ -89,9 +90,10 @@ d_o.SourceMem	\
 d_o.ServCtrl	\
 d_o.ServerATM	\
 d_o.Sink	\
-d_o.Error       \
+d_o.Error	\
 d_o.vspSocket	\
 d_o.NECstruct	\
+d_o.rtsp_defs	\
 d_o.htonstruct
 
 OBJSI     =	\
@@ -105,9 +107,10 @@ i.SourceMem	\
 i.ServCtrl	\
 i.ServerATM	\
 i.Sink		\
-i.Error         \
+i.Error		\
 i.vspSocket	\
 i.htonstruct	\
+i.rtsp_defs	\
 i.NECstruct
 
 OBJSINST   =	\
@@ -122,10 +125,11 @@ oi.SourceMem	\
 oi.ServCtrl	\
 oi.ServerATM	\
 oi.Sink		\
-oi.Error        \
+oi.Error	\
 oi.vspSocket	\
 oi.htonstruct	\
 oi.NECstruct	\
+oi.rtsp_defs	\
 oi.instlib
 
 #
@@ -163,7 +167,7 @@ local_dirs:
 preprocess: ${OBJSI} local_dirs
 	@echo ${COMPONENT}: preprocess build complete
 
-instrument: ${OBJSINST} local_dirs 
+instrument: ${OBJSINST} local_dirs
 	${LD} -rmf -s link/sym -o ${TARGET}u ${OBJSINST} ${STUBS}
 	ModSqz ${TARGET}u ${TARGET}
 	@echo ${COMPONENT}: instrument build complete
@@ -187,7 +191,7 @@ ${TARGET}: ${OBJS} o.VSPHdr
 
 ${TARGETDB}: ${d_OBJS} o.VSPHdr
         ${LD} ${Linkflags} -s syms ${d_OBJS} ${COBJ} ${CLIB} ${TCPIPLib} ${DebugLib}
-        
+
 h.VSPHdr:	cmhg.VSPHdr
 		${CMHG} ${CMHGFLAGS} -o o.$* $? $@
 		@stamp $@
