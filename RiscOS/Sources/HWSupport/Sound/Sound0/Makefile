@@ -14,7 +14,7 @@ HEADER1   = Sound
 HELPSRC   = HelpSrc
 TOKHELPSRC= ${TOKENSOURCE}
 RESFSDIR  = ${RESDIR}.${COMPONENT}
-ASFlags   = -cpu 4T
+ASFlags   = -cpu 4T -PD "${BOARD} SETL {TRUE}"
 
 include StdTools
 include AAsmModule
