@@ -65,11 +65,11 @@ CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 
 ROM_OBJS	= or.module or.ifrconfig or.editconfig or.utils o.ipconfhdr  \
-		  or.lineedit
+		  or.lineedit o.iicpoke
 RAM_OBJS	= o.module  o.ifrconfig  o.editconfig  o.utils  o.ipconfhdr  \
-		  o.lineedit  ${RESF}
+		  o.lineedit  o.iicpoke ${RESF}
 DBG_OBJS	= od.module od.ifrconfig od.editconfig od.utils od.ipconfhdr \
-		  od.lineedit ${RESF}
+		  od.lineedit o.iicpoke ${RESF}
 
 RESF		= o.msgs
 
