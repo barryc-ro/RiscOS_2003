@@ -4,7 +4,7 @@
 
 	FILE:		logon.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.11 for RISC OS
+	VERSION:	0.12 for RISC OS
 
 	OVERVIEW
 	========
@@ -33,6 +33,9 @@
 					it clears and sets all the data members of the structure.
 					Before, if an error had occured from a previous logon attempt, the error would
 					still be set in the structure!
+	10/02/98	0.12	RDW	INADDR_NONE constant used in place of 0xffffffff
+					inet_addr() call removed from GET_HOST and GET_HOST_NB
+					states and moved into INIT state so it's tried first
 */
 
 
@@ -468,17 +471,29 @@ static void logon_FSM_INIT(logon_context *c)
     c->pop_service = getservbyname("pop3", "tcp");				/* look it up in the services file               */
   if (c->pop_service == 0)							/* if the lookup failed, then use the default    */
     c->port_number = PORT_NUMBER;
-    
-  c->r.r[0] = 0;
-  c->r.r[1] = (int)"Resolver_GetHost";
-  c->error = _kernel_swi(OS_SWINumberFromString, &(c->r), &(c->r));		/* Test for presence of the ANT Resolver module  */
-  
-  if (c->error == 0)								/* ANT Resolver present                          */
-    c->state = GET_HOST_NB;
-  else
+
+  c->addr = inet_addr(c->hostname);						/* convert dotted IP address                                */
+  if (c->addr == INADDR_NONE)							/* if failed, switch to GET_HOST or GET_HOST_NB state       */
   {
-    c->error = 0;								/* clear error                                   */
-    c->state = GET_HOST;							/* do blocking gethostbyname                     */
+    c->r.r[0] = 0;
+    c->r.r[1] = (int)"Resolver_GetHost";
+    c->error = _kernel_swi(OS_SWINumberFromString, &(c->r), &(c->r));		/* Test for presence of the ANT Resolver module  */
+  
+    if (c->error == 0)								/* ANT Resolver present                          */
+      c->state = GET_HOST_NB;
+    else
+    {
+      c->error = 0;								/* clear error                                   */
+      c->state = GET_HOST;							/* do blocking gethostbyname                     */
+    }
+  }
+  else										/* else, inet_addr succeeded, so hostname is IP addr */
+  {
+    memcpy((char*)&(c->pop_server_addr.sin_addr),
+           &(c->addr),
+           sizeof(c->addr));
+    c->pop_server_addr.sin_family = AF_INET;
+    c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT                          */      
   }
 }
 
@@ -498,6 +513,7 @@ static void logon_FSM_INIT(logon_context *c)
 /* ************************************************************************** */
 static void logon_FSM_GET_HOST_NB(logon_context *c)
 {
+  memset(&(c->r), 0, sizeof(_kernel_swi_regs));
   c->r.r[0] = (int)c->hostname;
   c->error = _kernel_swi(Resolver_GetHost, &(c->r), &(c->r));			/* Lookup hostname                               */
   if (c->error)									/* If error, then go into ERROR state            */
@@ -512,27 +528,7 @@ static void logon_FSM_GET_HOST_NB(logon_context *c)
     #ifdef MEMCHECK
       MemCheck_RegisterMiscBlock((void*)c->r.r[1], sizeof(struct hostent));
     #endif
-    if (c->r.r[0] == -1)
-    {
-      /* host not found, assume IP address? */
-      /* should move below code to another state/function to share with GET_HOST state machine */
-      c->addr = inet_addr(c->hostname);						/* convert dotted IP address                                */
-      if (c->addr == 0xffffffff)						/* if failed, switch to ERROR state                         */
-      {
-        c->error = ERROR(INTERNETERR);
-        c->errno = errno;
-        c->state = ERROR;
-      }
-      else									/* else, copy out address                                   */
-      {
-        memcpy((char*)&(c->pop_server_addr.sin_addr),
-               &(c->addr),
-               sizeof(c->addr));
-        c->pop_server_addr.sin_family = AF_INET;
-        c->state = PREPARE_CONNECT;						/* switch to state PREPARE_CONNECT                          */
-      }
-    }
-    else if (c->r.r[0] < 0)
+    if (c->r.r[0] < 0)
     {
       /* error, remote failure */
       c->error = ERROR(RESOLVERFAILED);
@@ -579,21 +575,9 @@ static void logon_FSM_GET_HOST(logon_context *c)
   c->pop_server = gethostbyname(c->hostname);					/* do blocking gethostbyname to get the server address      */
   if (c->pop_server == 0)							/* if lookup failed, assume hostname is a dotted IP address */
   {
-    c->addr = inet_addr(c->hostname);						/* convert dotted IP address                                */
-    if (c->addr == 0xffffffff)							/* if failed, switch to ERROR state                         */
-    {
-      c->error = ERROR(INTERNETERR);
-      c->errno = errno;
-      c->state = ERROR;
-    }
-    else									/* else, copy out address                                   */
-    {
-      memcpy((char*)&(c->pop_server_addr.sin_addr),
-             &(c->addr),
-             sizeof(c->addr));
-      c->pop_server_addr.sin_family = AF_INET;
-      c->state = PREPARE_CONNECT;						/* switch to state PREPARE_CONNECT                          */
-    }
+    c->error = ERROR(INTERNETERR);
+    c->errno = errno;
+    c->state = ERROR;
   }
   else										/* else, gethostbyname succeeded so, copy out address       */
   {
