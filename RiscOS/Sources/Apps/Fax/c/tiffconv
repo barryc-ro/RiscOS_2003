@@ -1,0 +1,441 @@
+/*****************************************************************************/
+/* File:    tiffconv.c                                                       */
+/* Purpose: TIFF converting for !Fax application                             */
+/* Owner:   Mark RISON                                                       */
+/* History: 1997-09-29  MGR   Created                                        */
+/*****************************************************************************/
+
+#include "fax/global.h"
+
+#include "fax/RCcodes.h"
+#include "tiff.h"
+#include "tiffconv.h"
+
+#include "mgrlib/misc.h"
+#include "mgrlib.h"
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Constants
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Typedefs
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Interns
+
+intern ReturnCode tiffconv_open_read (const char *const pathname
+                                     , TIFFInfo *const t, uint *const handle
+                                     , int *const word1, int *const word2);
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Regionals
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Enumerations
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Macros
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// tiffconv_open
+//
+// Initiates a TIFF encoding conversion.
+//
+// Opens an input TIFF file and reads in the IFD.
+// The file pointer is left pointing at the input image data.
+// Opens an output TIFF file and makes space for an IFD.
+// The file pointer is left pointing at the desired location for output data.
+//
+// On error, any opened input stream is closed, and any opened output file is
+// closed and deleted.
+//
+// Inputs:  tcs         (TIFF converter state)
+//          pathnamein  (pathname of input TIFF file)
+//          pathnameout (pathname of output TIFF file)
+//          encoding    (desired output encoding -- 0 for internal)
+//
+// Outputs: tcs         (TIFF converter state)
+//          word1       (suberror word, if an error occurred, else zero)
+//          word2       (suberror word, if an error occurred, else zero)
+//
+// Assumes: nothing
+//
+// Returns: !TIFFConv return code (zero if no error)
+//
+///////////////////////////////////////////////////////////////////////////////
+
+extern TIFFConvError tiffconv_open (TIFFConvState *const tcs
+                                   , const char *const pathnamein
+                                   , const char *const pathnameout
+                                   , int encoding, int *const word1, int *const word2)
+{
+   ReturnCode rc;
+
+   // Requesting internal encoding?
+   if (encoding == 0)
+      encoding = TIFFEncoding_T6;          // That's 2D MMR
+
+   // Requested an unsupported encoding?
+   if (encoding != TIFFEncoding_T6
+      && encoding != TIFFEncoding_CCITT) { // Only 2D MMR and CCITT MH are currently supported
+
+      *word1 = encoding;
+      *word2 = 0;
+      return TIFFConvError_Bad_Encoding;
+
+   }
+
+   // Try to open the input TIFF file
+   rc = tiffconv_open_read (pathnamein, &tcs->tin, &tcs->handlein, word1, word2);
+   if (rc == 0) { // In this case word1 and word2 have been zeroed, and tcs->handlein is active
+
+      // Try to open the output TIFF file
+      tcs->streamout = tiff_open_write (pathnameout);
+      if (tcs->streamout == NULL) {
+
+         mgr_close (tcs->handlein);
+         *word1 = TIFFConvSubError_Open_Write_Failed;
+         return TIFFConvError_Write_Error;
+
+      } else {
+
+         int nentries, nextra;
+
+         // Try to create the output TIFF file's IFD
+         tiff_get_ifdsize ((TIFFEncoding) encoding, &nentries, &nextra);
+         tcs->tiffifdptr = tiff_create_ifd (tcs->streamout, 0x00000004
+                                           , nentries, nextra);
+         if (tcs->tiffifdptr == 0) {
+
+            mgr_close (tcs->handlein);
+            fclose (tcs->streamout);
+            remove (pathnameout);
+            *word1 = TIFFConvSubError_IFD_Create_Failed;
+            return TIFFConvError_Write_Error;
+
+         } else {
+
+            // We've made it!
+            tcs->refline = tcs->rawline1;
+            tcs->currline = tcs->rawline2;
+            tcs->refline[0] = tcs->tin.ImageWidth;
+            tcs->refline[1] = 0; // 2D MR EOL guard
+            tcs->decword = tcs->encword = 0;
+            tcs->decinuse = 24;
+            tcs->tout = tcs->tin;
+            tcs->tout.ImageLength = tcs->tout.StripByteCounts = 0;
+            tcs->tout.Compression = encoding;
+            tcs->tout.FillOrder = 1;
+
+         }
+
+      }
+
+   } else if (rc == Error_TIFF_Read_Error)
+
+      return TIFFConvError_Read_Error;
+
+   return (TIFFConvError) rc;
+
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// tiffconv_open_read
+//
+// Opens an input TIFF file and reads in the IFD.
+// The file pointer is left pointing at the image data.
+//
+// On error, any opened stream is closed.
+//
+// Inputs:  pathname    (pathname of TIFF file to open)
+//
+// Outputs: t           (IFD contents)
+//          handle      (file handle for opened TIFF file)
+//          word1       (suberror word, if an error occurred, else zero)
+//          word2       (suberror word, if an error occurred, else zero)
+//
+// Assumes: nothing
+//
+// Returns: !Fax return code (zero if no error)
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern ReturnCode tiffconv_open_read (const char *const pathname
+                                     , TIFFInfo *const t, uint *const handle
+                                     , int *const word1, int *const word2)
+{
+   FILE* tifffile;
+   long int ifdpos;
+   int irc, endian;
+   ReturnCode rc;
+
+   *word1 = 0;
+   *word2 = 0;
+
+   tifffile = tiff_open_read (pathname, &ifdpos, &endian);
+   if (!tifffile) {
+
+      *word1 = TIFFConvSubError_Open_Read_Failed;
+      return Error_TIFF_Read_Error;
+
+   }
+
+   irc = tiff_read_ifd (tifffile, ifdpos, t, endian);
+   fclose (tifffile);
+   if (irc) {
+
+      if (irc == TIFFError_Read_Error) {
+
+         *word1 = TIFFConvSubError_ReadIFD_Failed;
+         return Error_TIFF_Read_Error;
+
+      } else if (irc == TIFFError_Bad_Count) {
+
+         return Error_TIFF_Bad_Count;
+
+      } else { // Should never occur
+
+         *word1 = TIFFConvSubError_Eeek;
+         return Error_TIFF_Read_Error;
+
+      }
+
+   }
+
+   fclose (tifffile);
+   rc = tiffconv_sanitycheck_ifd (t, word1, word2);
+   if (rc) {
+
+      return rc;
+
+   }
+
+   *handle = mgr_openin (pathname);
+   if (*handle == 0) {
+
+      *word1 = TIFFConvSubError_Reopen_Failed;
+      return Error_TIFF_Read_Error;
+
+   }
+
+   mgr_set_ptr (*handle, t->StripOffsets);
+
+   return (ReturnCode) 0;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// tiffconv_sanitycheck_ifd
+//
+// Makes sure IFD contains valid information.
+//
+// Inputs:  t           (IFD contents)
+//
+// Outputs: word1       (suberror word, if an error occurred)
+//          word2       (suberror word, if an error occurred)
+//
+// Assumes: nothing
+//
+// Returns: !Fax return code (zero if no error)
+//
+///////////////////////////////////////////////////////////////////////////////
+
+extern ReturnCode tiffconv_sanitycheck_ifd (const TIFFInfo *const t
+                                           , int *const word1, int *const word2)
+{
+   double xres;
+
+   // Do all the boring checks
+   if (t->ImageLength == ~0U || t->ImageLength == 0) {
+      *word1 = t->ImageLength;
+      *word2 = 0;
+      return Error_TIFF_Bad_ImageLength;
+   }
+
+   if (t->BitsPerSample != 1) {
+      *word1 = t->BitsPerSample;
+      *word2 = 0;
+      return Error_TIFF_Bad_BitsPerSample;
+   }
+
+   if (t->Compression != TIFFEncoding_T6 && t->Compression != TIFFEncoding_CCITT) {
+      *word1 = t->Compression;
+      *word2 = 0;
+      return Error_TIFF_Bad_Compression;
+   }
+
+   if (t->PhotometricInterpretation != 0) {
+      *word1 = t->PhotometricInterpretation;
+      *word2 = 0;
+      return Error_TIFF_Bad_PhotometricInterpretation;
+   }
+
+   if (t->FillOrder != 1 && t->FillOrder != 2) {
+      *word1 = t->FillOrder;
+      *word2 = 0;
+      return Error_TIFF_Bad_FillOrder;
+   }
+
+   if (t->StripOffsets == ~0U) {
+      *word1 = t->StripOffsets;
+      *word2 = 0;
+      return Error_TIFF_Bad_StripOffsets;
+   }
+
+   if (t->SamplesPerPixel != 1) {
+      *word1 = t->SamplesPerPixel;
+      *word2 = 0;
+      return Error_TIFF_Bad_SamplesPerPixel;
+   }
+
+   if (t->StripByteCounts == ~0U || t->StripByteCounts == 0) {
+      *word1 = t->StripByteCounts;
+      *word2 = 0;
+      return Error_TIFF_Bad_StripByteCounts;
+   }
+
+   if (t->XResolution.numerator == ~0U || t->XResolution.denominator == 0) {
+      *word1 = t->XResolution.numerator;
+      *word2 = t->XResolution.denominator;
+      return Error_TIFF_Bad_XResolution;
+   }
+
+   if (t->YResolution.numerator == ~0U || t->YResolution.denominator == 0) {
+      *word1 = t->YResolution.numerator;
+      *word2 = t->YResolution.denominator;
+      return Error_TIFF_Bad_YResolution;
+   }
+
+   if (t->T6Options != 0) {
+      *word1 = t->T6Options;
+      *word2 = 0;
+      return Error_TIFF_Bad_T6Options;
+   }
+
+   if (t->ResolutionUnit != 2 && t->ResolutionUnit != 3) {
+      *word1 = t->ResolutionUnit;
+      *word2 = 0;
+      return Error_TIFF_Bad_ResolutionUnit;
+   }
+
+   // Having established XResolution and ResolutionUnit were OK, check ImageWidth
+   xres = (double) t->XResolution.numerator / t->XResolution.denominator;
+   if (t->ResolutionUnit == 3) // Convert from pels/cm to dpi
+      xres *= 2.54;
+
+   if (xres > 250.0) {
+      if (t->ImageWidth != 3456 && t->ImageWidth != 4096 && t->ImageWidth != 4864) {
+         *word1 = t->ImageWidth;
+         *word2 = (int) xres;
+         return Error_TIFF_Bad_ImageWidth;
+      }
+   } else {
+      if (t->ImageWidth != 1728 && t->ImageWidth != 2048 && t->ImageWidth != 2432) {
+         *word1 = t->ImageWidth;
+         *word2 = (int) xres;
+         return Error_TIFF_Bad_ImageWidth;
+      }
+   }
+
+   // Looks OK!
+   return (ReturnCode) 0;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// tiffconv_convert_line
+//
+// Converts one line of the input TIFF file to the output TIFF file encoding.
+//
+// Currently only T6 and CCITT encodings are supported.
+//
+// Inputs:  tcs         (TIFF converter state)
+//
+// Outputs: tcs         (TIFF converter state)
+//
+// Assumes: nothing
+//
+// Returns: non-zero if conversion has terminated for any reason
+//             (EOF, decode error, etc.)
+//
+///////////////////////////////////////////////////////////////////////////////
+
+extern int tiffconv_convert_line (TIFFConvState *const tcs)
+{
+   int rc, enclen;
+
+   // Decode
+   if (tcs->tin.Compression == TIFFEncoding_T6)
+      rc = tiff_decode_2dmmr (tcs->handlein, tcs->currline, tcs->refline
+                             , tcs->tin.FillOrder != 2 ? tcs->tin.ImageWidth : -tcs->tin.ImageWidth
+                             , &tcs->decword, &tcs->decinuse);
+   else if (tcs->tin.Compression == TIFFEncoding_CCITT)
+      rc = tiff_decode_ccittmh (tcs->handlein, tcs->currline
+                               , tcs->tin.FillOrder != 2 ? tcs->tin.ImageWidth : -tcs->tin.ImageWidth
+                               , &tcs->decword, &tcs->decinuse);
+   else
+      rc = 1; // Should never be hit
+   if (rc) return rc;
+
+   // Encode
+   if (tcs->tout.Compression == TIFFEncoding_T6)
+      enclen = tiff_encode_2dmmr (tcs->currline, tcs->encline, tcs->refline
+                                 , &tcs->encword, tcs->tout.ImageWidth);
+   else if (tcs->tout.Compression == TIFFEncoding_CCITT)
+      enclen = tiff_encode_ccittmh (tcs->currline, tcs->encline
+                                   , tcs->tout.ImageWidth);
+   else
+      return 1; // Should never be hit either
+
+   // Reverse if FillOrder 2 required
+   if (tcs->tout.FillOrder == 2) {
+
+      int i;
+
+      for (i = 0; i < enclen; ++i) {
+
+         tcs->encline[i] = tifflo_reverse (tcs->encline[i]);
+
+      }
+
+   }
+
+   // Write out
+   fwrite (tcs->encline, 1, enclen, tcs->streamout);
+   tcs->tout.StripByteCounts += enclen;
+   ++tcs->tout.ImageLength;
+
+   // Swap reference and current scaled line pointers
+   SWAP (short int *, tcs->currline, tcs->refline);
+
+   return 0;
+}
