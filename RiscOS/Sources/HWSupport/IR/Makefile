@@ -20,7 +20,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-CFLAGS  = -depend !Depend -c -zM ${DFLAGS}
+CFLAGS  = -depend !Depend -c -zM -ffa -wp ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 

@@ -22,8 +22,15 @@
  * 2.02 JRH Swallows F10 in keyboard buffer on initialisation
  *          Calls SWI STBState_Standby on Standby press when in Init and Final
  *          states, as well as when in On state
+ * 2.03 TMD Modify to cope with variable address of IR hardware between MPEG 1
+ * 	    and MPEG 2 variants
 
- *      CP  Disabled standby call to get over bug in STB22
+16/7/97   CP   protected callback_handler() calls from stacking up.  Relies
+               on flag callback_activeG being TRUE if callback pending.
+
+21/7/97   CP   remove pending callbacks when module exits.
+
+2.04 released.
  */
 
 #include <stdio.h>
@@ -57,13 +64,18 @@
 #define NULL_CODE 0x7d
 #define TOGGLE_BIT 0x80
 
-#define EXTENDED_EXPANSION_SPACE 0x80000000
-#define MPEG_CARD_OFFSET         0x08000000
-#define MPEG_IR_OFFSET           0x00c00000
-#define PODULE_SLOT		 0
+#define PRODUCT_TYPE_STB2_MPEG0  0x0111
+#define PRODUCT_TYPE_STB2_MPEG1  0x010E
+#define PRODUCT_TYPE_STB1_MPEG2  0x010F
+#define PRODUCT_TYPE_STB2_MPEG2  0x0121
+
+#define MPEG1_IR_OFFSET          0x00c00000
+#define MPEG2_IR_OFFSET		 0x00600000
+#define PODULE_NUMBER		 0
+#define PODULE_READINFO_EASILOGICAL 0x200
 
 /* Macro for getting the IR RC5 code including the toggle bit */
-#define IR_READ ((int)*(char *)(EXTENDED_EXPANSION_SPACE + MPEG_CARD_OFFSET + MPEG_IR_OFFSET + (PODULE_SLOT << 24)))
+#define IR_READ ((int)*ir_address)
 
 #define MPEGVideo_CardControl	0x49305
 #define STBState_Standby	0x4b404
@@ -190,6 +202,13 @@ FILE *outfile;
 int keyv_ok = 0 ;
 int on_keyv = 0 ;
 
+volatile char *ir_address;
+_kernel_oserror err_UnknownIRHardware = { 0, "Unknown IR hardware" };
+
+
+/* 16/7/97:CP:flag to indicate pending callback */
+static int callback_activeG = FALSE;
+
 /*
  * Forward function decls
  */
@@ -225,11 +244,23 @@ void IR_modfinal (void)
     regs.r[2] = (int) private_word_pointer ;
     _kernel_swi (OS_Release, &regs, &regs) ;
   }
+
+/* 21/7/97:CP:remove pending callback */
+  if( callback_activeG == TRUE )
+  {
+    regs.r[0] = (int) IR_callback_entry;
+    regs.r[1] = (int) private_word_pointer;
+    _kernel_swi(OS_RemoveCallBack, &regs, &regs);
+  }
 }
 
 _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
 {
   int carry;
+  char podule_header_buffer[16];
+  int product_type;
+  int ir_offset;
+
   private_word_pointer = pw;
 
 #ifdef DEBUG
@@ -238,6 +269,39 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
 #  endif
   fprintf(OUTFILE, "IR module\n");
 #endif
+
+  /* Before we access the IR micro, we first have to find its address,
+   * since the IR hardware moved to a different address on MPEG 2 machines.
+   */
+
+  regs.r[2] = (int) podule_header_buffer;
+  regs.r[3] = (int) PODULE_NUMBER;
+  e = _kernel_swi (Podule_ReadHeader, &regs, &regs);
+  if (e) return (e);
+  product_type = ((int) podule_header_buffer[3]) | ( ((int) podule_header_buffer[4]) << 8);
+  switch (product_type)
+  {
+      case PRODUCT_TYPE_STB2_MPEG0:		/* STB 2 with no MPEG */
+      case PRODUCT_TYPE_STB2_MPEG1:		/* STB 2 with MPEG 1 */
+      	   ir_offset = MPEG1_IR_OFFSET;
+      	   break;
+
+      case PRODUCT_TYPE_STB1_MPEG2:		/* STB 1 with MPEG 2 podule */
+      case PRODUCT_TYPE_STB2_MPEG2:		/* STB 2 with MPEG 2        */
+      	   ir_offset = MPEG2_IR_OFFSET;
+      	   break;
+      default:
+           return (&err_UnknownIRHardware);
+  }
+
+  /* Now read address of base of EASI space for podule */
+  regs.r[0] = PODULE_READINFO_EASILOGICAL;
+  regs.r[1] = (int)&ir_address;			/* address to return value into */
+  regs.r[2] = 4;
+  regs.r[3] = PODULE_NUMBER;
+  e = _kernel_swi (Podule_ReadInfo, &regs, &regs);
+  if (e) return (e);
+  ir_address += ir_offset;
 
   /*
    * Wait for IR micro to take the online/standby code away
@@ -320,9 +384,17 @@ void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
 #ifdef DEBUG
     fprintf(OUTFILE, "IR:Service_Sleep, state=%d\n", r->r[0]);
 #endif
-    regs.r[0] = (int) IR_callback_entry;
-    regs.r[1] = (int) private_word_pointer;
-    _kernel_swi(OS_AddCallBack, &regs, &regs);
+
+/* 16/7/97:CP:added callback goof-proofing */
+    if(callback_activeG == FALSE)
+    {
+      /* no callback pending, so set one up */
+       regs.r[0] = (int) IR_callback_entry;
+       regs.r[1] = (int) private_word_pointer;
+       _kernel_swi(OS_AddCallBack, &regs, &regs);
+
+       callback_activeG = TRUE;
+    }
 
     r->r[1] = 0;	/* Claim the service */
   }
@@ -338,10 +410,13 @@ int IR_callback_handler (_kernel_swi_regs *r, void *pw)
 #ifdef DEBUG
   fprintf(OUTFILE, "IR:STBState_Standby\n");
 #endif
-/*
-  14/4/97:CP:disabled due to bug in STB22s
-  _kernel_swi(STBState_Standby, &regs, &regs);
-*/
+
+  if(callback_activeG == TRUE) /* paranoia never hurt anyone ;-) */
+  {
+     _kernel_swi(STBState_Standby, &regs, &regs);
+
+     callback_activeG = FALSE;
+  }
 
   return (1);
 }
@@ -364,9 +439,17 @@ int IR_callevery_handler (_kernel_swi_regs *r, void *pw)
     _kernel_swi(STBState_State, &regs, &regs);
     if ((regs.r[0] == STATE_ON) || (regs.r[0] == STATE_FATAL) || (regs.r[0] == STATE_INIT))
     {
-      regs.r[0] = (int) IR_callback_entry;
-      regs.r[1] = (int) private_word_pointer;
-      _kernel_swi(OS_AddCallBack, &regs, &regs);
+
+      /* 16/7/97:CP:added goof-proofing around callback */
+      if(callback_activeG == FALSE)
+      {
+        /* no callback pending, so set one up */
+         regs.r[0] = (int) IR_callback_entry;
+         regs.r[1] = (int) private_word_pointer;
+         _kernel_swi(OS_AddCallBack, &regs, &regs);
+
+         callback_activeG = TRUE;
+      }
 
       last_code = STANDBY_CODE;
     }
