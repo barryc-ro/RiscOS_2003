@@ -122,7 +122,7 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${RM}: ${OBJS} ${LIBSD} ${CLIB}
+${RM}: ${OBJS} ${LIBS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
 ${RMD}: ${OBJSD} ${LIBSD} ${CLIB}
@@ -131,11 +131,3 @@ ${RMD}: ${OBJSD} ${LIBSD} ${CLIB}
 KeyWatch.c: KeyWatchHd.h
 
 # Dynamic dependencies:
-o.KeyWatch:	c.KeyWatch
-o.KeyWatch:	C:h.kernel
-o.KeyWatch:	C:h.swis
-o.KeyWatch:	C:tboxlibs.h.wimp
-o.KeyWatch:	VersionNum
-o.KeyWatch:	h.KeyWatchHd
-o.KeyWatch:	h.KeyWatch
-o.KeyWatch:	C:debug.h.remote
