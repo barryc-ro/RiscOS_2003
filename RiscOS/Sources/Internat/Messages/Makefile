@@ -32,10 +32,10 @@ WFLAGS  = ~cr~v
 #
 COMPONENT = Messages
 SOURCE    = s.Messages
-TARGET    = rm.${SYSTEM}.Messages
-RESDIR    = Resources.${LOCALE}.${SYSTEM}
+TARGET    = rm.${BUILD}.Messages
+RESDIR    = Resources.${LOCALE}.${BUILD}
 UTILS     = Utils
-DATA      = Data
+DATA      = Data.${BUILD}
 # Note: RESDATA mustn't be in RESDIR !!
 RESDATA   = ${DATA}.Data
 HELPTAGS  = ${DATA}.HelpTags
@@ -46,7 +46,7 @@ DICTMESS  = ${DATA}.DictMess
 DICTTOKENS= ${DATA}.DictTokens
 DICTIONARY= ${DATA}.Dictionary
 
-MINDICT   = ${DATA}.MinDict
+MINDICT   = Global.${LOCALE}.MinDict
 
 #
 # Utility programs:
@@ -64,7 +64,7 @@ SCANRES = ${UTILS}.ScanRes
 # Generic rules:
 #
 rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built for System: ${SYSTEM}
+        @echo ${COMPONENT}: rom module built for Build: ${BUILD}
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
@@ -79,20 +79,12 @@ clean:
         ${RM} ${DATA}.Tokenised
         ${RM} ${HELPTAGS}
         ${RM} ${DICTTAGS}
-        ${WIPE} Resources.* ${WFLAGS}
+        ${WIPE} ${RESDIR}.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned (Dictionary & HelpTokens not removed)
 
 clean_all:
-        ${RM} ${TARGET}
-        ${RM} ${RESDATA}
-        ${RM} ${DATA}.Tokenised
-        ${RM} ${HELPTAGS}
-        ${RM} ${HELPMESS}
-        ${RM} ${HELPTOKENS}
-        ${RM} ${DICTTAGS}
-        ${RM} ${DICTMESS}
-        ${RM} ${DICTTOKENS}
-        ${RM} ${DICTIONARY}
+	${WIPE} Data.* ${WFLAGS}
+	${WIPE} rm.* {WFLAGS}
         ${WIPE} Resources.* ${WFLAGS}
         @echo ${COMPONENT}: all cleaned
 
@@ -101,8 +93,8 @@ resources:
         ${CP} Global.${LOCALE}.Messages ${RESDIR}.Resources.Global.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} ${DATA}.Tokenised
-        ${MKDIR} rm.${SYSTEM}
+${TARGET}: ${SOURCE} ${DATA}.Tokenised dirs
+        ${MKDIR} rm.${BUILD}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
@@ -129,6 +121,9 @@ ${TAGEXT}:
         Dir ${UTILS}
         ${MAKE}
         Up
+
+dirs:
+	${MKDIR} ${DATA}
 
 # Dynamic dependencies:
 rm.Morris2.Messages: Hdr:ListOpts
@@ -170,3 +165,55 @@ rm.Omega4.Messages: Hdr:Proc
 rm.Omega4.Messages: Hdr:ResourceFS
 rm.Omega4.Messages: Version
 rm.Omega4.Messages: Hdr:NDRDebug
+rm.RCA4.Messages: Hdr:ListOpts
+rm.RCA4.Messages: Hdr:Macros
+rm.RCA4.Messages: Hdr:System
+rm.RCA4.Messages: Hdr:SWIs
+rm.RCA4.Messages: Hdr:CPU.Generic26
+rm.RCA4.Messages: Hdr:IO.GenericIO
+rm.RCA4.Messages: Hdr:RISCOS
+rm.RCA4.Messages: Hdr:ModHand
+rm.RCA4.Messages: Hdr:Services
+rm.RCA4.Messages: Hdr:Proc
+rm.RCA4.Messages: Hdr:ResourceFS
+rm.RCA4.Messages: Version
+rm.RCA4.Messages: Hdr:NDRDebug
+rm.RCA.Messages: Hdr:ListOpts
+rm.RCA.Messages: Hdr:Macros
+rm.RCA.Messages: Hdr:System
+rm.RCA.Messages: Hdr:SWIs
+rm.RCA.Messages: Hdr:CPU.Generic26
+rm.RCA.Messages: Hdr:IO.GenericIO
+rm.RCA.Messages: Hdr:RISCOS
+rm.RCA.Messages: Hdr:ModHand
+rm.RCA.Messages: Hdr:Services
+rm.RCA.Messages: Hdr:Proc
+rm.RCA.Messages: Hdr:ResourceFS
+rm.RCA.Messages: Version
+rm.RCA.Messages: Hdr:NDRDebug
+rm.RCA8.Messages: Hdr:ListOpts
+rm.RCA8.Messages: Hdr:Macros
+rm.RCA8.Messages: Hdr:System
+rm.RCA8.Messages: Hdr:SWIs
+rm.RCA8.Messages: Hdr:CPU.Generic26
+rm.RCA8.Messages: Hdr:IO.GenericIO
+rm.RCA8.Messages: Hdr:RISCOS
+rm.RCA8.Messages: Hdr:ModHand
+rm.RCA8.Messages: Hdr:Services
+rm.RCA8.Messages: Hdr:Proc
+rm.RCA8.Messages: Hdr:ResourceFS
+rm.RCA8.Messages: Version
+rm.RCA8.Messages: Hdr:NDRDebug
+rm.Boca8.Messages: Hdr:ListOpts
+rm.Boca8.Messages: Hdr:Macros
+rm.Boca8.Messages: Hdr:System
+rm.Boca8.Messages: Hdr:SWIs
+rm.Boca8.Messages: Hdr:CPU.Generic26
+rm.Boca8.Messages: Hdr:IO.GenericIO
+rm.Boca8.Messages: Hdr:RISCOS
+rm.Boca8.Messages: Hdr:ModHand
+rm.Boca8.Messages: Hdr:Services
+rm.Boca8.Messages: Hdr:Proc
+rm.Boca8.Messages: Hdr:ResourceFS
+rm.Boca8.Messages: Version
+rm.Boca8.Messages: Hdr:NDRDebug
