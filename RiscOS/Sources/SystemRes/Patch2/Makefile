@@ -1,29 +1,39 @@
 # Project:  ROMpatch
 
-TARGET    = Install.ROMPatch.ROMpatchU
+COMPONENT = ROMpatchU
+TARGET    = Util.${COMPONENT}
 
 OBJS = o.debug o.rompatch o.asmutils o.module
 
 LIBS = ${CLIB}
-       
+
 include Makefiles:AppLibs
 include Makefiles:StdTools
 include Makefiles:AppStdRule
 
 # Final targets:
 
-ROMpatch: ${TARGET}
-        ${ECHO} ${TARGET}: ROMpatch utility built
-
 clean:
-        ${XWIPE} o.* ${WFLAGS}
-        ${RM} ${TARGET}
-        ${STRIPDEPEND}
+        ${WIPE} o    ${WFLAGS}
+        ${WIPE} Util ${WFLAGS}
+
+ram: ${TARGET} dirs
+        @echo ${TARGET}: utility built (disc).
+
+dirs:
+        ${MKDIR} o
+        ${MKDIR} Util
+
+install: ram
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: module installed (disc).
 
 # User-editable dependencies:
 
 ${TARGET}: ${OBJS} ${LIBS}
         ${LD} ${OBJS} ${LIBS} -o ${TARGET}
+        @echo ${COMPONENT}: built (disc).
 
 # Static dependencies:
 
