@@ -14,10 +14,15 @@
 #include "ReadMsg.h"
 #include "Inbox.h"
 #include "EscapeHTML.h"
+#include "PopUp.h"
+
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
 
 /* -------------------------------------- GLOBAL VARIABLES -------------------------------------- */
+
+/* This is used to pass around MessageIds in the case of Delete messages. */
+char *readmsg_id_ptr = NULL;
 
 /* ----------------------------------------- FUNCTIONS ------------------------------------------ */
 
@@ -148,36 +153,98 @@ void readmsg_reply_selected(int num_args, url_param *  arg)
 void readmsg_delete_selected(int num_args, url_param *  arg)
 {
   int		 counter;
-  uint32	*item;
-  eng_rcode	 rc;
+  int		 found = 0;
 
-  /* DO NOT FREE THIS MALLOC.  It is free'd by the engine. */
-  if ((item = (uint32 *) malloc(sizeof(uint32))) == NULL)
+  for (counter = 0; counter < num_args; counter++)
+  {
+    if (nb_case_insensitive_strcmp(arg[counter].name, Template_Tag_ID) == 0)
+    {
+      found = counter;
+    }
+  }
+
+  /* This malloc is free'd in the readmsg_delete_cbf function */
+  if ((readmsg_id_ptr = malloc(strlen(arg[found].value) + 2)) == NULL)
   {
     ncmui_error_display(1);
   }
   else
   {
-    for (counter = 0; counter < num_args; counter++)
-    {
-      if (nb_case_insensitive_strcmp(arg[counter].name, Template_Tag_ID) == 0)
-      {
-        /* Delete Message */
-        status.state = State_ReadMsg_Delete;
-        item[0] = atoi(arg[counter].value);
-        dprintf(("UI", "DELETE SELECTED on item: %d\n", item[0]));
+    strcpy(readmsg_id_ptr, arg[found].value);
 
-        /* No need to mark for deletion here because eng_mark_for_deletion() calls the UI upate
-         * cbf.
-         */
-        rc = eng_mark_for_deletion(1, item);
-        if ( (rc != ENG_COMPLETED) && (rc != ENG_RUNNING) )
-        {
-          ncmui_error_display(6);
-        }
+    dprintf(("UI", "malloc'd into msg_id_ptr as:       %s\n", readmsg_id_ptr));
+
+    popup_2_open_dialogue( nb_messagetrans_lookup(message_block, "READMSG_Delete"),
+                           nb_messagetrans_lookup(message_block, "BUTTON_Delete"),
+                           nb_messagetrans_lookup(message_block, "BUTTON_Cancel"),
+                           readmsg_delete_cbf,
+                           (void *) readmsg_id_ptr );
+  }
+}
+
+
+/************************************************************************/
+/* readmsg_delete_cbf                                                   */
+/*                                                                      */
+/* Function is called when the user clicks on either of the buttons on  */
+/* the Popup dialogue.                                                  */
+/*                                                                      */
+/* Parameters:                                                          */
+/*                                                                      */
+/* Returns:                                                             */
+/*                                                                      */
+/************************************************************************/
+void readmsg_delete_cbf(bool default_sel, void *handle)
+{
+  uint32 id;
+  uint32	*item;
+  eng_rcode	 rc;
+
+  dprintf(("UI", "readmsg_delete_cbf entered with handle of: %d\n", (uint32) handle));
+
+  /* For now keep this in until really sending is implemented. */
+  status.ui_locked = false;
+
+  /* User selected Delete */
+  if (default_sel == true)
+  {
+    id = atoi( (char *)handle );
+
+    dprintf(("UI", "DELETE SELECTED on message: %d\n", id));
+    dprintf(("UI", "Mode is %d:\n", status.state));
+
+    /* Delete Message */
+    /* DO NOT FREE THIS MALLOC.  It is free'd by the engine. */
+    if ((item = (uint32 *) malloc(sizeof(uint32))) == NULL)
+    {
+      ncmui_error_display(1);
+    }
+    else
+    {
+      status.state = State_ReadMsg_Delete;
+      item[0] = id;
+      dprintf(("UI", "DELETE SELECTED on item: %d\n", item[0]));
+
+      /* No need to mark for deletion here because eng_mark_for_deletion() calls the UI upate
+       * cbf.
+       */
+      rc = eng_mark_for_deletion(1, item);
+      if ( (rc != ENG_COMPLETED) && (rc != ENG_RUNNING) )
+      {
+        ncmui_error_display(6);
       }
+      popup_close_dialogue();
     }
   }
+  else
+  {
+    /* User wants to continue.  So just close the PopUp. */
+    popup_close_dialogue();
+  }
+
+  /* Free the message id global pointer */
+  free(readmsg_id_ptr);
+  readmsg_id_ptr = NULL;
 }
 
 
@@ -226,7 +293,6 @@ void readmsg_inbox_message_selected(uint32 num_args, url_param *arg)
 /* ============================================================================================== */
 
 
-
 /************************************************************************/
 /* readmsg_build_screen                                                 */
 /*                                                                      */
@@ -249,7 +315,13 @@ void readmsg_build_screen(uint32 msg_id)
   ncmui_tidy_output_dir();
   rc = eng_get_message(msg_id, NULL, ncmui_get_message_cbf);
   if (rc != ENG_RUNNING)
+  {
+    popup_1_open_dialogue( nb_messagetrans_lookup(message_block, "READMSG_GetMsgFail"),
+                           nb_messagetrans_lookup(message_block, "BUTTON_OK"),
+                           readmsg_getmsgfail_cbf,
+                           NULL );
     ncmui_error_display(8);
+  }
 
   dprintf(("UI", "*******************************************************\n"));
 }
@@ -273,46 +345,74 @@ void ncmui_get_message_cbf(eng_rcode rc, MessageDescriptor *msg, void *handle)
 
   NB_UNUSED(handle);
 
-  dprintf(("UI", "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"));
-  dprintf(("UI", "Got message %d back from engine\n", msg->ID));
-  dprintf(("UI", "From:    %s\n", msg->fromreal));
-  dprintf(("UI", "Address: %s\n", msg->fromaddr));
-  dprintf(("UI", "Subject: %s\n", msg->subject));
-
-  /* Copy parent file across */
-  if (nb_file_copy(0, Template_ReadMsg_Parent, Generated_ReadMsg_Parent) != NULL)
+  if (rc != ENG_GETMSGFAILED)
   {
-    rc1 = false;
-    ncmui_error_display(16);
-  }
-  /* Parse Inbox Listing file and build proper screen */
-  rc2 = parser_parse_file(PageType_ReadMsg,Template_ReadMsg_Header,Generated_ReadMsg_Header,
-                        (void *) msg);
-  rc3 = parser_parse_file(PageType_ReadMsg, Template_ReadMsg_Body, Generated_ReadMsg_Body,
+    dprintf(("UI", "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"));
+    dprintf(("UI", "Got message %d back from engine\n", msg->ID));
+    dprintf(("UI", "From:    %s\n", msg->fromreal));
+    dprintf(("UI", "Address: %s\n", msg->fromaddr));
+    dprintf(("UI", "Subject: %s\n", msg->subject));
+
+    /* Copy parent file across */
+    if (nb_file_copy(0, Template_ReadMsg_Parent, Generated_ReadMsg_Parent) != NULL)
+    {
+      rc1 = false;
+      ncmui_error_display(16);
+    }
+    /* Parse Inbox Listing file and build proper screen */
+    rc2 = parser_parse_file(PageType_ReadMsg,Template_ReadMsg_Header,Generated_ReadMsg_Header,
                           (void *) msg);
+    rc3 = parser_parse_file(PageType_ReadMsg, Template_ReadMsg_Body, Generated_ReadMsg_Body,
+                            (void *) msg);
 
-  if ( (rc1 == false) || (rc2 == false) || (rc3 == false) )
-  {
-    /* *** FATAL ERROR *** */
-    error_parser_failed();
-    ncmui_error_display(17);
+    if ( (rc1 == false) || (rc2 == false) || (rc3 == false) )
+    {
+      /* *** FATAL ERROR *** */
+      error_parser_failed();
+      ncmui_error_display(17);
+    }
+    else
+    {
+      browserif_sendurl(Open_ReadMsg, false);
+      status.state = State_ReadMsg;
+
+      /* Update the state of the message to read */
+      er = eng_mark_as_read(msg->ID);
+      if ( (er != ENG_COMPLETED) && (er != ENG_RUNNING) )
+        ncmui_error_display(9);
+    }
+
+    /* Unlock the UI */
+    status.ui_locked = false;
+
+    dprintf(("UI", "FINISHED BUILDING READMSG PAGE\n"));
+    dprintf(("UI", "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"));
   }
   else
   {
-    browserif_sendurl(Open_ReadMsg, false);
-    status.state = State_ReadMsg;
-
-    /* Update the state of the message to read */
-    er = eng_mark_as_read(msg->ID);
-    if ( (er != ENG_COMPLETED) && (er != ENG_RUNNING) )
-      ncmui_error_display(9);
+    popup_1_open_dialogue( nb_messagetrans_lookup(message_block, "READMSG_GetMsgFail"),
+                           nb_messagetrans_lookup(message_block, "BUTTON_OK"),
+                           readmsg_getmsgfail_cbf,
+                           NULL );
   }
+}
 
-  /* Unlock the UI */
-  status.ui_locked = false;
 
-  dprintf(("UI", "FINISHED BUILDING READMSG PAGE\n"));
-  dprintf(("UI", "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"));
+/************************************************************************/
+/* readmsg_getmsgfail_cbf                                               */
+/*                                                                      */
+/* Function is called when the engine returns ENG_GETMSGFAILED in the   */
+/* callback for eng_get_message().  Must redisplay the inbox.           */
+/*                                                                      */
+/* Parameters:                                                          */
+/*                                                                      */
+/* Returns:                                                             */
+/*                                                                      */
+/************************************************************************/
+void readmsg_getmsgfail_cbf(bool sel, void *handle)
+{
+  popup_close_dialogue();
+  inbox_build_screen();
 }
 
 
