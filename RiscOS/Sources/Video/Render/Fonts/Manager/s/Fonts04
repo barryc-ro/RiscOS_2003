@@ -27,7 +27,7 @@
 ;; pixelsptr       RN      R9
 ;;----------------------------------------------------------------------------
 
-SetMetricsPtrs  PEntry Cac_Metrics, "R0-R3,R6,R7"
+SetMetricsPtrs  PEntry Cac_Metrics, "R0-R7"
 
      ;; CheckCache "SetMetricsPtrs entry"
 
@@ -47,20 +47,34 @@ SetMetricsPtrs  PEntry Cac_Metrics, "R0-R3,R6,R7"
         BLVC    getmetricsblock                 ; this routine may recurse
         BVS     %FT99                           ; R0 = no of chars if V clear
 
-        ASSERT  flg_nobboxes < &100
+        ASSERT  flg_nobboxes   < &100
         ASSERT  flg_noxoffsets < &100
         ASSERT  flg_noyoffsets < &100
-        ASSERT  flg_prescaled < &100
+        ASSERT  flg_prescaled  < &100
+        ASSERT  flg_mapsized   < &100
 
         LDRB    R1,[R6,#met_flags]              ; R1 = bottom byte of flags
 
+        ADD     metricsptr,R6,#met_chmap        ; metricsptr --> char map
+
+      [ newmapping
+        TST     R1,#flg_mapsized
+        LDRNEB  R4,[metricsptr],#1
+        LDRNEB  R14,[metricsptr],#1
+        ORRNE   R4,R4,R14,LSL #8                ; R4 = number of entries in map (0 if no map at all)
+        MOVEQ   R4,#256                         ; if map not sized, there are always 256 entries
+        STR     R4,metchmapsize
+      |
+        MOV     R4,#256
+      ]
+
         TST     R1,#flg_prescaled               ; allow for 16- or 32-bit quantities
         MOVEQ   R2,R0,LSL #1
-        MOVNE   R2,R0,LSL #2
+        MOVNE   R2,R0,LSL #2                    ; R2 = size of a block of n entries (R0 = n)
 
         TST     R1,#flg_nobboxes
         MOVNE   R14,#0
-        ADDEQ   R14,R6,#met_data                ; x0
+        ADDEQ   R14,metricsptr,R4               ; x0
         STR     R14,bboxx0
         ADDEQ   R14,R14,R2                      ; y0
         STR     R14,bboxy0
@@ -69,9 +83,16 @@ SetMetricsPtrs  PEntry Cac_Metrics, "R0-R3,R6,R7"
         ADDEQ   R14,R14,R2                      ; y1
         STR     R14,bboxy1
         ADDEQ   R14,R14,R2
-        ADDNE   R14,R6,#met_data                ; R14 -> data after bboxes
+        ADDNE   R14,metricsptr,R4               ; R14 -> data after bboxes
 
         MOV     R3,#0
+
+      [ newmapping
+        STR     R3,bboxx0                       ; IGNORE these bounding boxes if present - just use the outlines
+        STR     R3,bboxy0
+        STR     R3,bboxx1
+        STR     R3,bboxy1
+      ]
 
         TST     R1,#flg_noxoffsets
         STRNE   R3,xoffset
@@ -83,11 +104,27 @@ SetMetricsPtrs  PEntry Cac_Metrics, "R0-R3,R6,R7"
         STREQ   R14,yoffset
         ADDEQ   R14,R14,R2                      ; R14 -> data after y offsets
 
-        ADD     metricsptr,R6,#met_chmap        ; metricsptr --> char map
+; Stash offsets to the extra data areas at the end of the metrics (if present)
+
+      [ newmapping
+        TST     R1,#flg_moredata
+        STREQ   R3,metmisc
+        STREQ   R3,metkerns
+        LDRNEB  R2,[R14,#fmet_table0]                     ; offset to the first 2 tables (combined)
+        LDRNEB  R3,[R14,#fmet_table0+1]
+        ADDNE   R2,R14,R2
+        ADDNE   R2,R2,R3,LSL #8
+        STRNE   R2,metmisc
+        LDRNEB  R2,[R14,#fmet_table1]                     ; offset to the first 2 tables (combined)
+        LDRNEB  R3,[R14,#fmet_table1+1]
+        ADDNE   R2,R14,R2
+        ADDNE   R2,R2,R3,LSL #8
+        STRNE   R2,metkerns
+      ]
 
         LDR     R14,scratchblock
-        TEQ     R14,#0                  ; doesn't affect V
-        MOVNE   pixelsptr,#0            ; must reallocate scratchblock
+        TEQ     R14,#0                          ; doesn't affect V
+        MOVNE   pixelsptr,#0                    ; must reallocate scratchblock
         STRNE   pixelsptr,scratchblock
 
         Debug   me,"SetMetricsPtr: metricsptr,R0 =",metricsptr,R0
@@ -102,19 +139,54 @@ SetMetricsPtrs  PEntry Cac_Metrics, "R0-R3,R6,R7"
 ;; Exit:   R6 --> metrics block (in slave or master as appropriate)
 ;;         R0 = no of defined characters
 ;;         pixelsptr may have been relocated
+;; [newmapping]: x/ymetscale,x/ymetfactor set up from slave and master font headers
 ;;----------------------------------------------------------------------------
 
-getmetricsblock ROUT
-        Push    "R8,LR"
+getmetricsblock Entry "R7,R8"
 
-        Debug   me,"getmetricsblock: R6, metricsmatrix =",R6,#metricsmatrix
+      [ newmapping
 
+; Don't ever load metrics for a slave font - they're always scaled dynamically from the master
+; Since metrics scaling is dynamic, we must make sure x/yscale and x/yfactor are set up every time here.
+
+        ADD     R14,R6,#hdr_xsize
+        LDMIA   R14,{R0,R14}
+        Debug   me,"getmetricsblock: R6, metricsmatrix, xsize =",R6,#metricsmatrix,R0
+        ADR     R8,xmetscale
+        STMIA   R8,{R0,R14}                     ; set up xscale, yscale
+        ADR     R8,xmetfactor
+        STMIA   R8,{R0,R14}                     ; set up xfactor, yfactor
+
+        LDRB    R0,[R6,#hdr_masterfont]         ; master font or slave?
+        TEQ     R0,#0
+        BEQ     %FT01
+
+        BL      getfontheaderptr                ; error if master font lost
+        BVS     %FT99
+
+        MOV     R6,R7                           ; R6 -> master font header
         LDR     R14,[R6,#hdr_MetSize]           ; 0 => metrics header not cached
-        TEQ     R14,#0
+        TEQ     R14,#0                          ; NOTE: slave fonts have this set to 1 already!
         BLEQ    GetMetricsHeader                ; doesn't cause the cache to move
         BVS     %FT99
 
         MarkAge R6, R8,R14                      ; mark font block 'accessed'
+
+        ADD     R14,R6,#hdr_xsize
+        LDMIA   R14,{R0,R14}
+        ADR     R8,xmetfactor
+        STMIA   R8,{R0,R14}                     ; set up xfactor, yfactor
+01
+      |
+        LDR     R14,[R6,#hdr_MetSize]           ; 0 => metrics header not cached
+        TEQ     R14,#0                          ; NOTE: slave fonts have this set to 1 already!
+        BLEQ    GetMetricsHeader                ; doesn't cause the cache to move
+        BVS     %FT99
+
+        MarkAge R6, R8,R14                      ; mark font block 'accessed'
+      ]
+
+        Debug   me,"getmetricsblock: x/yscale, x/yfactor",#xscale,#yscale,#xfactor,#yfactor
 
         LDR     R14,[R6,#hdr_MetricsPtr]        ; (incorrect if slave font
         TEQ     R14,#0                          ; and not yet cached)
@@ -126,9 +198,12 @@ getmetricsblock ROUT
         PullP   "pixelsptr",pixelsptr
 
         MarkAccessed R6,R14, VC                 ; mark metrics 'accessed' (if in cache)
+
+        Debug   me,"getmetricsblock: R6, R0 on exit",R6,R0
+
 99
-        Pull    "R8,PC",VC,^
-        Pull    "R8,LR"
+        EXITS   VC
+        PullEnv
         ORRS    PC,LR,#V_bit
 
 
@@ -142,6 +217,10 @@ getmetricsblock ROUT
 ;;----------------------------------------------------------------------------
 
 CacheMetrics PEntry Cac_Metrics, "R0-R5,cacheptr,R8"
+
+      [ :LNOT: newmapping
+
+        ;; With newmapping set, this routine is only ever called for master fonts
 
         LDRB    R0,[R6,#hdr_masterfont]         ; master font or slave?
         TEQ     R0,#0
@@ -159,6 +238,9 @@ rammetrics
 
         LDRVC   R1,[R6,#hdr_xsize]      ; save parameters to ScaleMetrics
         LDRVC   R2,[R6,#hdr_ysize]
+
+        Debug   me,"rammetrics: xfactor, yfactor",R1,R2
+
         LDRVCB  R14,[R6,#hdr_masterflag]
         Push    "R1,R2,R14"
 
@@ -170,6 +252,7 @@ rammetrics
         PullP   "Master font header",R7
 
         Pull    "R1,R2,R14"
+        Debug   me,"rammetrics2: xfactor, yfactor",R1,R2
         STRVC   R1,xfactor
         STRVC   R2,yfactor
         STRVC   R14,incache             ; parameters for ScaleMetrics
@@ -226,7 +309,7 @@ rammetrics
 
         ADD     R1,sp,#2*4              ; R1 -> input lookup table (allow for 2 extra words on stack)
         ADD     R2,R1,#&400             ; R2 -> output lookup table
-        BL      ScaleMetrics            ; R5 = no of entries to process, R6 -> 
+        BL      ScaleMetrics            ; R5 = no of entries to process, R6 ->
 
         Pull    "R1-R2"
         STR     R1,xscale               ; restore these for paintdraw
@@ -239,6 +322,9 @@ rammetrics
 ; the metrics info is on disc or in ROM
 
 discmetrics
+
+      ] ; above code isn't required if newmapping set
+
         ADD     R8,R6,#hdr_MetricsPtr   ; R8 --> link (used later)
 
         LDR     R5,[R6,#hdr_nchars]     ; R5 = no of defined chars
@@ -341,6 +427,8 @@ err_exitcm
 ;;      R8 relocated if necessary
 ;;----------------------------------------------------------------------------
 
+      [ :LNOT: newmapping               ; not required if we do the remapping
+                                        ; when we read the chars from the Font_Paint string
 RemapMetrics Entry "R1-R4,R9-R11"
 
         PushP   "RemapMetrics: old metrics",R6
@@ -800,6 +888,46 @@ scalelp
         BLT     scalelp
 
         EXITS
+      ] ; don't need this if newmapping set
+
+;..............................................................................
+
+; In    R2,R3 = x,y offset
+;       x/ymetscale, x/ymetfactor = multiplication and division factors
+; Out   R2,R3 scaled
+
+      [ newmapping
+
+scalewidth Entry "R0,R1"
+
+        Debug   me,"scalewidth in: x,y, x/ymetscale, x/ymetfactor",R2,R3,#xmetscale,#ymetscale,#xmetfactor,#ymetfactor
+
+        LDR     R1,xmetscale
+        MUL     R0,R1,R2
+        LDR     R1,xmetfactor
+        TEQ     R1,#16
+        MOVEQ   R2,R0,ASR #4                    ; quick divide by 16
+        BLNE    divide                          ; R2 := R0 / R1
+
+        Debug   me,"scalewidth out: x",R2
+
+        TEQ     R3,#0                           ; most y-offsets are zero, in fact
+        EXITS   EQ
+
+        Push    "R2"
+        LDR     R1,ymetscale
+        MUL     R0,R1,R3
+        LDR     R1,ymetfactor
+        TEQ     R1,#16
+        MOVEQ   R2,R0,ASR #4                    ; quick divide by 16
+        BLNE    divide
+        MOV     R3,R2
+        Pull    "R2"
+
+        Debug   me,"scalewidth out: y",R3
+
+        EXITS
+      ]
 
 ;;----------------------------------------------------------------------------
 ;; SetPixelsPtr
@@ -823,9 +951,11 @@ SetPixelsPtr    PEntry Cac_Pixels, "R0-R1,R6-R8"
         TEQ     pixelsptr,#0
         BEQ     %FT01                   ; must reset it
 
-        LDRB    R14,currentchunk        ; this is set to 0 (impossible) if cacheing from outlines direct
+        LDR     R14,currentchunk        ; this is set to 0 (impossible) if cacheing from outlines direct
         TEQ     R14,R0,ASR #5           ; same chunk?
         BNE     %FT01                   ;  no - must recache
+
+        Debug   cc,"SetPixelsPtr: pixelsptr =",pixelsptr
 
         BL      getcharfromindex        ; yes - see if we already have this character
         CacheHit Pixels, NE
@@ -835,7 +965,7 @@ SetPixelsPtr    PEntry Cac_Pixels, "R0-R1,R6-R8"
 
 01      STR     R0,currentchar
         MOV     R0,R0,ASR #5            ; R0 <-- chunk number
-        STRB    R0,currentchunk
+        STR     R0,currentchunk
 
 ; get R6 -> font header
 
@@ -859,6 +989,7 @@ SetPixelsPtr    PEntry Cac_Pixels, "R0-R1,R6-R8"
         TEQ     R7,#0
         BLEQ    ensureheaders_untransformed
         BLNE    ensureheaders_transformed
+        DebugE  trn,"Error in SetPixelsPtr:"
         BVS     %FT99
 
 ; now get hold of the actual pixel chunk (may already be cached)
@@ -935,23 +1066,23 @@ ensureheaders_transformed Entry "R8"
 
         ASSERT  leaf_none < leaf_scanfontdir
 
-        LDRB    R14,[R8,#trn4_leafname]
+        LDRB    R14,[R8,#trn_leafname]
         CMP     R14,#leaf_scanfontdir
         BLT     %FT02
         BLEQ    GetPixels4Header        ; try 4-bpp first
         MOVVC   R7,#hdr4_leafname
         BVC     %FT03
 
-02      LDRB    R14,[R8,#trn1_leafname]
+02      LDRB    R14,[R8,#trn_leafname]
         CMP     R14,#leaf_scanfontdir
         BLT     %FT21
         BLEQ    GetPixels1Header        ; try 1-bpp first / or if no 4-bpp
         MOVVC   R7,#hdr1_leafname
         BVC     %FT03
 
-21      LDRB    R14,[R8,#trn4_leafname]
+21      LDRB    R14,[R8,#trn_leafname]
         CMP     R14,#leaf_scanfontdir
-        BLE     GetPixels4Header        ; try 4-bpp next - this time it must work or else!
+        BLEQ    GetPixels4Header        ; try 4-bpp next - this time it must work or else!
         MOVVC   R7,#hdr4_leafname
 03
         EXITS   VC
@@ -967,6 +1098,8 @@ ensureheaders_transformed Entry "R8"
 ;       EQ => character is not yet cached (loop back within SetPixelsPtr)
 
 getcharfromindex Entry "R0,R1"
+
+        Debug   cc,"getcharfromindex: pixelsptr, char code =",pixelsptr,R0
 
         MOVS    inptr,pixelsptr
         BEQ     %FT01
@@ -1023,6 +1156,7 @@ getcharfromindex Entry "R0,R1"
 
 ; In    R6 -> font header
 ;       [paintmatrix] -> current paint matrix (0 => unit matrix)
+;       [aliascolours] = 0 => 1-bpp, else 4-bpp
 ; Out   [transformptr] -> corresponding transform block (0 => unit matrix)
 ;       [rendermatrix] -> render matrix
 ;       [metricsmatrix] -> metrics matrix
@@ -1068,7 +1202,11 @@ Proc_RegList    SETS    "R0-R5,R7-R11"          ; NB: assume only LR stacked ini
         EOR     R14,R14,R14,ROR #16             ; make sure all bits participate!
         EOR     R14,R14,R14,ROR #8
         EOR     R14,R14,R14,ROR #4
-        AND     R14,R14,#&F                     ; R14 = index in range 0..15
+;       AND     R14,R14,#&F                     ; R14 = index in range 0..15
+        AND     R14,R14,#&7                     ; R14 = index in range 0..7
+        LDRB    R8,aliascolours
+        TEQ     R8,#0
+        ADDEQ   R14,R14,#8                      ; map to hdr1_transforms if 1-bpp
 
 ; search the appropriate transform chain to find the block we want
 
@@ -1136,19 +1274,53 @@ Proc_RegList    SETS    "R0-R5,R7-R11"          ; NB: assume only LR stacked ini
 03
         PushP   "Saving font header ptr",R6
 
-        MOV     R6,#trn_end
+;       MOV     R6,#trn_end
+
+; Now we *must* be scaling from outlines here, as there's a transform
+; This must be a slave font, so we find out how many chunks are in the master outlines
+
+        Debug   trn,"Calculating nchunks for a new transform block"
+
+        LDRB    R0,[R6,#hdr_masterfont]         ; must be a slave font here
+        BL      getfontheaderptr                ; error if master font lost
+        BVS     %FT99
+
+; TODO: Call GetPixels1Header to read the master font nchunks
+
+        LDR     R1,[R7,#hdr1_nchunks]           ; R7 -> master font header
+      [ debugbrk
+        CMP     R1,#0
+        BreakPt "Master outlines nchunks = 0 when allocating transform block",EQ
+      ]
+
+        Debug   trn,"Allocating transform block: nchunks =",R1
+
+        MOV     R6,#trn_PixelsPtrs
+        ADD     R6,R6,R1,LSL #2
         BL      reservecache                    ; R6 -> new block
         BVS     %FT99                           ; no block to delete
 
+        Debug   trn,"transform nchunks =",R1
+        STR     R1,[R6,#trn_nchunks]
+
         MOV     R14,#leaf_scanfontdir           ; GetPixelsHeader sets these up properly
-        STRB    R14,[R6,#trn4_leafname]
-        STRB    R14,[R6,#trn1_leafname]
+        STRB    R14,[R6,#trn_leafname]
+
+      [ debugbrk
+        MOV     R14,#0
+        STR     R14,[R6,#trn_boxx0]
+        STR     R14,[R6,#trn_boxy0]
+        LDR     R14,=2   ; &DEADDEAD    ; v. small bbox - let's see if it goes wrong!
+        STR     R14,[R6,#trn_boxx1]
+        STR     R14,[R6,#trn_boxy1]
+      ]
 
         MOV     R14,#0
-        MOV     R1,#trn_pixarray1-trn_pixarray0
-        ADD     R2,R6,#trn_pixarray0
+;       MOV     R1,#trn_pixarray1-trn_pixarray0
+;       ADD     R2,R6,#trn_pixarray0
+        ADD     R2,R6,#trn_PixelsPtrs
 04      STR     R14,[R2],#4
-        SUBS    R1,R1,#4
+        SUBS    R1,R1,#1
         BNE     %BT04
 
 ; set up the new matrices in this transform block
@@ -1184,12 +1356,13 @@ Proc_RegList    SETS    "R0-R5,R7-R11"          ; NB: assume only LR stacked ini
 95
         DiscardBlock R6,R1,R14
         B       %BT99
+        LTORG
 
 ;.............................................................................
 
 ; In    R0 = character code required (PIX_ALLCHARS => all) - version 2.69 onwards
 ;       [antialiasx/y] = subpixel offsets (if required)
-;       [currentchunk] = character chunk required (0..7)
+;       [currentchunk] = character chunk required (0..nchunks-1)
 ;       R6 -> font header block
 ;       R7 = #hdr1/4_leafname (depending on which type is required)
 ;       metricsptr --> font metrics (or 0 if not yet accessed)
@@ -1247,27 +1420,47 @@ setpixelsptr2   PEntry Cac_Pixels, "R2,inptr,R7-R8"
         Debug   cc :LOR: debugtrn," transform =",#transformptr
       ]
 
-        ASSERT  hdr1_PixelsPtrs = hdr4_PixelsPtrs + 4*8
-        ASSERT  trn1_PixelsPtrs = trn4_PixelsPtrs + 4*8
-
-        LDRB    R14,currentchunk
-        TEQ     R7,#hdr1_leafname
-        ADDEQ   R14,R14,#8                      ; R14 = chunk number (+8 if 1-bpp), ie. 0..15 (not MaxChunks)
-
         LDR     R8,transformptr
         TEQ     R8,#0
-        ADDNE   R8,R8,#trn4_PixelsPtrs
-        ADDEQ   R8,R6,#hdr4_PixelsPtrs
-        LDR     R14,[R8,R14,LSL #2]!            ; R14 = [R8] = previous chunk pointer
+        BNE     %FT05
 
-        TEQ     R14,#0
-        BEQ     %FT06                           ; definitely recache if not present
+; Non-transformed version - obtain chunk index (may have to allocate one)
+
+        TEQ     R7,#hdr1_leafname
+        LDREQ   R8,[R6,#hdr1_PixoPtr]
+        LDRNE   R8,[R6,#hdr4_PixoPtr]
+        Debug   cc,"pixo block was at",R8
+        CMP     R8,#0
+        BLEQ    readpixoblock                   ; could be direct from file, or a slave font
+        BVS     %FT99
+        ADD     R8,R8,#pixo_pointers
+        LDR     R14,currentchunk
+        Debug   cc,"pixo pointers, current chunk",R8,R14
+        LDR     R14,[R8,R14,LSL #2]!            ; R14 = [R8] = previous chunk pointer
+        B       %FT06
+
+05
+        LDR     R14,currentchunk
+      [ debugbrk
+        LDR     R2,[R8,#trn_nchunks]
+        CMP     R14,R2
+        BreakPt "chunk too big for transform block",HS
+      ]
+        ADD     R8,R8,#trn_PixelsPtrs
+        LDR     R14,[R8,R14,LSL #2]!            ; R14 = [R8] = previous chunk pointer (4-bpp)
+
+;       ADDNE   R8,R8,#trn4_PixelsPtrs
+;       ADDEQ   R8,R6,#hdr4_PixelsPtrs
+;       LDR     R14,[R8,R14,LSL #2]!            ; R14 = [R8] = previous chunk pointer
+
+06      TEQ     R14,#0
+        BEQ     %FT16                           ; definitely recache if not present
         LDR     R2,switch_buffer                ; always recache if going to buffer
         TEQ     R2,#0                           ; since we need the outlines
-        BNE     %FT06
+        BNE     %FT16
 
         TEQ     R0,#PIX_ALLCHARS
-        BNE     %FT01
+        BNE     %FT11
         LDR     R2,[R14,#pix_flags]
         TST     R2,#pp_splitchunk
         MOVEQ   R6,R14                          ; correct format chunk - OK
@@ -1280,20 +1473,21 @@ setpixelsptr2   PEntry Cac_Pixels, "R2,inptr,R7-R8"
 ;;      CheckCache "CachePixels exit #2"
         B       %FT90
 
-01      ADD     pixelsptr,R14,#pix_index
+11      ADD     pixelsptr,R14,#pix_index
+        Debug   cc,"setpixelsptr2: pixelsptr =",pixelsptr
         BL      getcharfromindex                ; EQ => inptr=PIX_UNCACHED
 ;;      CheckCache "getcharfromindex exit"
         SUBNE   R6,pixelsptr,#pix_index
-        BNE     %FT07                           ; NE => inptr -> character header
+        BNE     %FT17                           ; NE => inptr -> character header
 
-06      BL      CachePixels                     ; exit: R6 = [R8] -> pixel chunk
+16      BL      CachePixels                     ; exit: R6 = [R8] -> pixel chunk
 ;;      CheckCache "CachePixels exit #3"
 
-07
+17
       [ debugcpm
-        BVC     %FT08
+        BVC     %FT18
         Debug   cpm,"V flag set in setpixelsptr2!"
-08
+18
       ]
         BVS     %FT99
 
@@ -1306,10 +1500,170 @@ setpixelsptr2   PEntry Cac_Pixels, "R2,inptr,R7-R8"
         PullP   "setpixelsptr: font header",R6
         PExit
 
+; ............................................................................
+
+; In    R7 -> font header
+; Out   R8 -> pixo block for the 1-bpp bit
+;       R7 relocated if required
+;       R0 preserved unless error
+
+readpixoblock_outlines Entry "R6"
+
+      [ debugcc
+        LDR     R14,[R7,#hdr_xsize]
+        Debug   cc,"readpixoblock_outlines: R7, xsize =",R7,R14
+      ]
+
+        MOV     R6,R7
+        MOV     R7,#hdr1_leafname
+        BL      readpixoblock
+        MOV     R7,R6                   ; R7 relocated if required
+
+      [ debugcc
+        LDR     R14,[R7,#hdr_xsize]
+        Debug   cc,"readpixoblock_outlines2: R7, xsize =",R7,R14
+      ]
+
+        EXIT
+
+; . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+; In    R0 = character code required
+;       R6 -> font header
+;       R7 = hdr1/4_leafname
+; Out   R8 -> new pixo block
+;       R6 relocated
+;       VC => R0 preserved
+;       VS => error (cache full)
+
+readpixoblock Entry "R0-R4,R7"                  ; stack accessed directly
+
+        Debug   cc,"readpixoblock: R6,R7 =",R6,R7
+
+        TEQ     R7,#hdr1_leafname
+        ADDEQ   R8,R6,#hdr1_PixoPtr
+        ADDNE   R8,R6,#hdr4_PixoPtr
+
+        ADD     R7,R6,R7
+        LDR     R3,[R7,#hdr4_nchunks-hdr4_leafname]      ; R3 = number of chunks
+        LDR     R4,[R7,#hdr4_PixOffStart-hdr4_leafname]  ; R4 = file offset of chunk table
+        CMP     R4,#0
+        BNE     %FT20                           ; read from file
+
+        LDRB    R0,[R6,#hdr_masterfont]         ; must be a slave font here
+        BL      getfontheaderptr                ; error if master font lost
+        LDRVC   R0,[R7,#hdr1_nchunks]           ; R7 -> master font header
+        BVS     %FT90
+
+        LDR     R7,[SP,#5*4]
+        ADD     R7,R6,R7
+      [ debugbrk
+        LDR     R14,[R7,#hdr1_nchunks-hdr1_leafname]
+        CMP     R14,#0
+        BreakPt "reservepixoblock_forslave: hdr_nchunks non-zero",NE
+      ]
+        STR     R0,[R7,#hdr1_nchunks-hdr1_leafname]
+
+        RSB     R0,R0,#0                        ; In: R0 -ve => no file offsets required
+        BL      reservepixoblock                ; In: R6 -> font header, R7 -> font header + hdr1/4_leafname
+        MOVVC   R8,R0
+90
+        STRVS   R0,[SP]
+        EXIT
+
+; Now we need to allocate a pixo block of the right size to contain the chunk file offsets and pointers
+; We'll also need to open the file handle
+
+20      SUB     R7,R7,R6                        ; convert to offset now so it's relocated correctly
+
+        MOV     R0,R3
+        BL      reservepixoblock                ; Out: [R0]->pixo block, R6 relocated
+        MOVVC   R8,R0                           ; R8 -> new pixo block
+
+      [ debugcc
+        LDR     R14,[R6,#hdr_xsize]
+        Debug   cc,"Before openpixels: font header, xsize, R2, R7",R6,R14,R2,R7
+      ]
+
+        TEQ     R7,#hdr1_leafname
+        MOVEQ   R2,#hdr1_pixelshandle
+        MOVNE   R2,#hdr4_pixelshandle
+        ADD     R7,R6,R7
+        BL      openpixels_R2R7                 ; Out: R1 = file handle
+        BVS     %BT90
+
+      [ debugcc
+        LDR     R14,[R6,#hdr_xsize]
+        Debug   cc,"After openpixels: font header, xsize, R2, R7",R6,R14,R2,R7
+      ]
+
+;       ADD     R2,R7,#hdr4_PixOffsets-hdr4_leafname    ; R2 -> PixOffsets array in font header
+        ADD     R2,R8,#pixo_pointers
+        ADD     R2,R2,R3,LSL #2                         ; R2 -> pixo_offsets array in pixo block
+        MOV     R3,R3,LSL #2
+        ADD     R3,R3,#4                                ; R3 = size (4*nchunks+4 bytes)
+        MOV     R0,#OSGBPB_ReadFromGiven
+        BL      xos_gbpb
+        BL      tidyfiles_R7
+        B       %BT90
+
+; . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+; In    R0 = number of chunks in font (-ve if we don't need file offsets)
+;       R6 -> font header
+;       R7 -> font header + hdr1/4_leafname
+; Out   R0 -> new block (initialised with nchunks and pointers set to 0)
+;       R6,R7 relocated
+;       [R6,#hdr1/4_PixoPtr] -> new block as well
+
+reservepixoblock Entry "R3,R8"
+
+        PushP   "reservepixoblock: R6",R6
+
+        SUB     R7,R7,R6
+        TEQ     R7,#hdr4_leafname
+        ADDEQ   R8,R6,#hdr4_PixoPtr
+        ADDNE   R8,R6,#hdr1_PixoPtr
+
+        SUBS    R3,R0,#0
+        RSBLT   R3,R3,#0                  ; -ve => no file offsets required (for slave font)
+        MOVLT   R6,R3,LSL #2
+        ADDLT   R6,R6,#pixo_pointers
+        MOVGE   R6,R3,LSL #3              ; 8 bytes per chunks (file offset and pointer)
+        ADDGE   R6,R6,#pixo_pointers + 4  ; allow for an extra 4 bytes (there are n+1 file offsets)
+
+        Debug   cc,"pixo block nchunks, size",R3,R6
+
+        BL      reservecache
+        BVS     %FT90
+
+        MakeLink R6,R8                  ; link block in immediately
+
+        LDR     R14,[R6,#std_size]      ; lock pixo blocks permanently
+        ORR     R14,R14,#size_claimed :OR: size_locked
+        STR     R14,[R6,#std_size]
+
+        ADD     R0,R6,#pixo_pointers
+
+        Debug   cc,"pixo block addr,pointers,nchunks",R6,R0,R3
+
+        MOV     R14,#0
+01      STR     R14,[R0],#4             ; initialise the pointer array
+        SUBS    R3,R3,#1
+        BNE     %BT01
+
+        MOV     R0,R6                   ; R0 -> new block (initialised except for file offsets)
+90
+        PullP   "reservepixoblock:restoring R6",R6
+
+        ADD     R7,R6,R7                ; restore R7
+
+        EXIT
+
 ;;----------------------------------------------------------------------------
 ;; CachePixels
 ;; Entry:  R0 = character code required, or PIX_ALLCHARS (whole chunk)
-;;         [currentchunk] = chunk number required (0..7)
+;;         [currentchunk] = chunk number required (0..nchunks-1)
 ;;         [antialiasx/y] = subpixel positions (ditto)
 ;;         R6 -> font header
 ;;         R7 = #hdr1/4_leafname (GetPixelsHeader already called)
@@ -1371,9 +1725,10 @@ CachePixels Entry "R0-R4,cacheptr"
 
 ; cache chunk via transformptr - lock transform block first
 
-02      TEQ     R7,#hdr4_leafname
-        LDREQB  R4,[R1,#trn4_leafname]
-        LDRNEB  R4,[R1,#trn1_leafname]
+02  ;   TEQ     R7,#hdr4_leafname
+    ;   LDREQB  R4,[R1,#trn4_leafname]
+    ;   LDRNEB  R4,[R1,#trn1_leafname]
+        LDRB    R4,[R1,#trn_leafname]
 
         Debug   trn,"Calling CacheChunk via transform block",R1
 
@@ -1399,7 +1754,7 @@ CachePixels Entry "R0-R4,cacheptr"
 ; In    R0 = character code or PIX_ALLCHARS
 ;       R4 = first character of 'leafname'
 ;       R6 -> font header (used to obtain master font handle)
-;       R8 -> pointer which will contain chunk address (in font header or transform block)
+;       R8 -> pointer which will contain chunk address (in pixo block or transform block)
 ;       [charflags] :AND: chf_1bpp => 1-bpp or 4-bpp
 ;       [currentchunk] = chunk number (for loading outlines)
 ;       [rendermatrix] -> render matrix
@@ -1459,7 +1814,7 @@ CacheChunk Entry "R0-R4,cacheptr"
 ;.............................................................................
 
 ; load new format chunk from disc
-; In    [currentchunk] = chunk number (0..7)
+; In    [currentchunk] = chunk number (0..nchunks-1)
 ;       R6 -> font header
 ;       R7 = #hdr1/4_leafname
 ;       R8 -> link -> chunk
@@ -1467,7 +1822,7 @@ CacheChunk Entry "R0-R4,cacheptr"
 ;       R8 may be relocated
 
 cache_newchunk
-        LDRB    R0,currentchunk
+        LDR     R0,currentchunk
         BL      readnewchunk            ; R6 --> data block
         B       exitpix
 
@@ -1475,7 +1830,7 @@ cache_newchunk
 
 ; Load old-style 'chunk' from x90y45 file
 ; We must search the index to see which parts of the file are relevant
-; In    [currentchunk] = chunk number (0..7)
+; In    [currentchunk] = chunk number (0..nchunks-1)
 ;       R6 -> font header
 ;       R8 -> link for new pixel chunk
 
@@ -1519,9 +1874,9 @@ cache_x90y45
 
 ; look for offsets of start & end of chunk (in original table)
 ; cacheptr -> table (256 * 2-byte offsets, 0 => no char)
-; In:   [currentchunk] = chunk number (0..7)
+; In:   [currentchunk] = chunk number (0..nchunks-1)
 
-        LDRB    R0,currentchunk
+        LDR     R0,currentchunk
         Debug   cc,"Load x90y45 chunk",R0
         BL      findoffset              ; R3 --> start of chunk
         ADD     R0,R0,#1                ; find 1st char in next chunk
@@ -1696,7 +2051,7 @@ copychardown    ROUT
 
 ; Scale master font's 4-bpp bitmaps according to x/yscale
 ;       R0 = character code required, or PIX_ALLCHARS => load whole chunk
-;       [currentchunk] = chunk number required (0..7)
+;       [currentchunk] = chunk number required (0..nchunks-1)
 ;       R6 -> slave font header
 ;       R7 -> master font header
 
@@ -1823,25 +2178,31 @@ cache_fromoutlines ROUT
 
 cache_fromoutlines_direct ROUT
 
+        Debug   th,"cache_fromoutlines_direct: font",R6
+
+      [ :LNOT: newmapping
         BL      getmapping_fromR6       ; need to translate to internal character code
         BVS     exitpix
 
         TEQ     R1,#0
         LDRNE   R0,[R1,R0,LSL #2]
         STRNE   R0,currentchar          ; R0 = remapped char code (for SetPixelsPtr)
+      ]
 
 01      LDRB    R14,charflags           ; ensure paintchar knows format
         ORR     R14,R14,#chf_outlines :OR: chf_1bpp
         STRB    R14,charflags           ; must be 1-bpp if drawing direct
 
+      [ :LNOT: newmapping  ; KJB added conditional
         MOV     R14,R0,LSR #5
-        STRB    R14,currentchunk
+        STR     R14,currentchunk
+      ]
         MOV     R4,#0                   ; no time offset (needed directly)
         BL      cacheoutlines           ; R6 -> outlines
         BVS     exitpix
 
-        MOV     R14,#0                  ; ensure SetPixelsPtr won't match currentchunk next time
-        STRB    R14,currentchunk        ; characters 0..31 can't be accessed using SetPixelsPtr
+        MOV     R14,#-1                 ; ensure SetPixelsPtr won't match currentchunk next time
+        STR     R14,currentchunk        ; don't use 0, as characters 0..31 wouldn't be accessible using SetPixelsPtr
 
         TEQ     R6,#0
         BEQ     justunlockem
@@ -1953,6 +2314,8 @@ setup_xsysxfyf Entry "R0,R1,R7"
         LDR     R14,[R7,#hdr_yscale]
         STR     R14,yfactor
 
+        Debug   me,"setup_xsysxfyf: xscale, yscale, xfactor, yfactor",#xscale,#yscale,#xfactor,#yfactor
+
         LDR     R0,xfactor
         LDR     R1,xscale
 
@@ -1990,7 +2353,7 @@ setup_xsysxfyf Entry "R0,R1,R7"
 ; Do we need to process this character?
 ;
 ; In    R6 = counter = character required (within 32-char chunk)
-;       [currentchunk] = chunk number (0..7)
+;       [currentchunk] = chunk number (0..nchunks-1)
 ;       [charlistptr] --> block containing string
 ; Out   Z unset --> use char, else forget it
 
@@ -2002,7 +2365,7 @@ checkchar Entry "R1,R2,counter"
         TEQ     R2,#0
         BEQ     %FT99                   ; OK - no string specified
 
-        LDRB    R14,currentchunk
+        LDR     R14,currentchunk
         ADD     counter,counter,R14,ASL #5
         ADD     R2,R2,#std_end
 
@@ -2392,7 +2755,7 @@ getorigin       ROUT
 
         Debug   sc2,"Shift to origin:",R0
 
-        MOV     R4,R1                           ; whole of pixel 
+        MOV     R4,R1                           ; whole of pixel
         MOV     R3,#0                           ; offset
         TEQ     R0,#0
         BEQ     doneorigin
@@ -2469,8 +2832,8 @@ readnewchunk    PEntry Cac_PixDisc, "R1-R5,R7"
         MOVNE   R2,#hdr4_pixelshandle
         ADD     R7,R6,R7                ; R7 -> leafname
 
-        LDR     R14,[R7,#hdr4_nchunks-hdr4_leafname]
-        CMP     R0,R14
+        LDR     R3,[R7,#hdr4_nchunks-hdr4_leafname]    ; R3 = number of chunks
+        CMP     R0,R3
         MOVGE   R6,#0
         PExit   GE                      ; give up if chunk off the end
 
@@ -2479,11 +2842,13 @@ readnewchunk    PEntry Cac_PixDisc, "R1-R5,R7"
 
         PushP   "Saving font header ptr",R6
 
-        ADD     R3,R7,#hdr1_PixOffsets-hdr1_leafname
+        LDRB    R5,[R7,#hdr1_flags-hdr1_leafname]   ; used later
 
-        LDRB    R5,[R3,#hdr1_flags-hdr1_PixOffsets]   ; used later
+;       ADD     R3,R7,#hdr1_PixOffsets-hdr1_leafname
+;       LDR     R4,[R3,R0,LSL #2]!      ; R4 = file offset
 
-        LDR     R4,[R3,R0,LSL #2]!      ; R4 = file offset
+        ADD     R3,R8,R3,LSL #2         ; R3 -> file offset (later in pixo block after the pointer (R8) itself)
+        LDR     R4,[R3]
         LDR     R3,[R3,#4]
         SUBS    R3,R3,R4                ; R3 = no of bytes to read
         Debug   cc,"File offset,size =",R4,R3
@@ -2582,8 +2947,9 @@ loadscaffold    PEntry Cac_PixDisc, "R1-R4,R8"
 
 ;.............................................................................
 
+; NOTE: If newmapping set, R0 = internal character code
 ; In    R0 = external character code, or PIX_ALLCHARS => load whole chunk
-;       [currentchunk] = external chunk number (0..7)
+;       [currentchunk] = external chunk number (0..nchunks-1)
 ;       R4 = time offset to add to the age of this block
 ;            (0 => suppress subsequent non-zero offsets)
 ;       R6 -> font header, [R6,#masterfont] = master font handle
@@ -2603,6 +2969,8 @@ loadscaffold    PEntry Cac_PixDisc, "R1-R4,R8"
 ;       Keep them locked while allocating memory, then call unlockoutlines.
 
 cacheoutlines_remapping ROUT
+
+      [ :LNOT: newmapping                       ; drop through to cacheoutlines if this is set
 
         LDR     R7,[R6,#hdr_encoding]
         TEQ     R7,#0
@@ -2625,9 +2993,9 @@ cacheoutlines_remapping ROUT
 
         STR     R1,mapping2                     ; this remapping only occurs within convertchunk
 
-        LDRVC   R14,[R1,#std_size - map_index]  ; NB: R1 <> 0, as the encoding is definitely not null
+        LDRVC   R14,[R1,#std_size - map_lookup] ; NB: R1 <> 0, as the encoding is definitely not null
         ORRVC   R14,R14,#size_locked
-        STRVC   R14,[R1,#std_size - map_index]
+        STRVC   R14,[R1,#std_size - map_lookup]
 
         BLVC    getoutlinesinfo                 ; R7 -> master font header, other stuff set up
         BVS     %FT99
@@ -2647,7 +3015,7 @@ cacheoutlines_remapping ROUT
 ; nasty case - remap all 32 characters, pulling in all the chunks required for them
 
 01      MOV     R2,#-1                          ; R2 = flag wordprevious chunk number (optimisation)
-        LDRB    R3,currentchunk
+        LDR     R3,currentchunk
         MOV     R3,R3,LSL #5                    ; R3 = first character code to do
         MOV     R4,#32                          ; R4 = number of character codes to do
 
@@ -2664,10 +3032,11 @@ cacheoutlines_remapping ROUT
 
         MOV     R0,#PIX_ALLCHARS                ; restore R0 - note that R6 is not used on exit in this case
         EXIT
+      ] ; just drop through to cacheoutlines if newmapping set
 
 ;.............................................................................
 
-; In    [currentchunk] = chunk number (0..7)
+; In    [currentchunk] = chunk number (0..nchunks-1)
 ;       R4 = time offset to add to the age of this block
 ;            (0 => suppress subsequent non-zero offsets)
 ;       R6 -> font header, [R6,#masterfont] = master font handle
@@ -2684,7 +3053,7 @@ cacheoutlines_remapping ROUT
 cacheoutlines Entry "R0"
 
         BL      getoutlinesinfo         ; set up rendermatrix etc.
-        LDRVCB  R0,currentchunk
+        LDRVC   R0,currentchunk
         BLVC    loadoutlinechunk
 
         STRVS   R0,[sp]
@@ -2830,15 +3199,24 @@ makelink Entry ""
 ;       R4 = time offset to add to the age of this block
 ; Out   R6 -> outline chunk (loaded from disc if necessary)
 ;       R7 may be relocated
+;       R8 corrupted
 ;       outline chunk is locked (if any)
 
 setoutlineptr Entry "R0"
 
-        Debug   cc,"setoutlineptr: R7,R0 =",R7,R0
+      [ debugcc
+        LDR     R14,[R7,#hdr_xsize]
+        Debug   cc,"setoutlineptr: R7,R0,xsize =",R7,R0,R14
+      ]
 
         PushP   "master font header",R7
 
-        ADD     R8,R7,#hdr1_PixelsPtrs
+;       ADD     R8,R7,#hdr1_PixelsPtrs
+        LDR     R8,[R7,#hdr1_PixoPtr]
+        CMP     R8,#0
+        BLEQ    readpixoblock_outlines      ; relocates R7 if required
+        BVS     %FT90
+        ADD     R8,R8,#pixo_pointers
         LDR     R14,[R8,R0,LSL #2]!         ; R8 -> chunk pointer
         TEQ     R14,#0
         MOVNE   R6,R14
@@ -2846,7 +3224,7 @@ setoutlineptr Entry "R0"
         MOVEQ   R7,#hdr1_leafname           ; put outlines in 1-bpp section
         CacheHit Outlines, NE
         BLEQ    readnewchunk
-
+90
         PullP   "master font header",R7
 
         STRVS   R0,[sp]
@@ -2884,11 +3262,13 @@ setoutlineptr Entry "R0"
 
 unlockoutlines  Entry "R1,R6-R8"
 
+      [ :LNOT: newmapping
         LDR     R1,mapping2
         TEQ     R1,#0
-        LDRNE   R14,[R1,#std_size - map_index]
+        LDRNE   R14,[R1,#std_size - map_lookup]
         BICNE   R14,R14,#size_locked
-        STRNE   R14,[R1,#std_size - map_index]
+        STRNE   R14,[R1,#std_size - map_lookup]
+      ]
 
         LDR     R14,[R7,#hdr1_address]  ; ROM blocks don't need locking
         TEQ     R14,#0
@@ -2902,8 +3282,11 @@ unlockoutlines  Entry "R1,R6-R8"
         BICNE   R14,R14,#size_locked
         STRNE   R14,[R6,#std_size]
 
-        ADD     R8,R7,#hdr1_PixelsPtrs
-        MOV     R1,#MaxChunks           ; 24 possible outline chunks
+;       ADD     R8,R7,#hdr1_PixelsPtrs
+        LDR     R8,[R7,#hdr1_PixoPtr]
+        ADD     R8,R8,#pixo_pointers
+;       MOV     R1,#MaxChunks
+        LDR     R1,[R7,#hdr1_nchunks]
 01      LDR     R6,[R8],#4
         TEQ     R6,#0
         LDRNE   R14,[R6,#std_size]
@@ -2920,7 +3303,7 @@ unlockoutlines  Entry "R1,R6-R8"
 ;       [antialiasx/y] = subpixel offsets
 ;       R6 -> slave font header block
 ;       R8 -> link word (which will contain chunk pointer)
-;       [currentchunk] = chunk number (0..7)
+;       [currentchunk] = chunk number (0..nchunks-1)
 ;       [charflags] :AND: chf_1bpp ==> produce 1-bpp results, else 4-bpp
 ;       [subpixelflags] bits 0,1 => do subpixel scaling (h and v)
 ; Out   R6 -> new pixels block
@@ -2942,9 +3325,10 @@ cachebitmaps Entry "R0-R4,R7,R9,R11"
         TEQ     R2,#0
         BEQ     %FT01
 
-        TST     R14,#chf_1bpp
-        ADDEQ   R2,R2,#trn4_boxx0
-        ADDNE   R2,R2,#trn1_boxx0
+;       TST     R14,#chf_1bpp
+;       ADDEQ   R2,R2,#trn4_boxx0
+;       ADDNE   R2,R2,#trn1_boxx0
+        ADD     R2,R2,#trn_boxx0
         B       %FT02
 
 01      TST     R14,#chf_1bpp
@@ -3052,11 +3436,13 @@ cachebitmaps Entry "R0-R4,R7,R9,R11"
 
 11
         Debug   cc,"Input index, output index,data,flags =",R3,R6,R2,R4
-                
+
 ; if mapping2 <> 0, set R3 -> array of outline chunk pointers in master font header
 ; otherwise leave R3 -> index of outline chunk (or 0 if no sprite)
 
-      [ Version >= 299         
+      [ :LNOT: newmapping               ; this remapping no longer takes place at this point!
+
+      [ Version >= 299
         TEQ     R3,#0                   ; is there any point in converting the character?
         LDRNE   R14,mapping2
         TEQNE   R14,#0
@@ -3067,9 +3453,12 @@ cachebitmaps Entry "R0-R4,R7,R9,R11"
         LDRNEB  R14,outlinefont
         LDRNE   R7,cacheindex
         LDRNE   R7,[R7,R14,LSL #2]      ; R7 -> master font header (must exist by now)
-        ADDNE   R3,R7,#hdr1_PixelsPtrs
+;       ADDNE   R3,R7,#hdr1_PixelsPtrs
+        LDRNE   R3,[R7,#hdr1_PixoPtr]
+        ADDNE   R3,R3,#pixo_pointers
 
         Debug   cc,"Mapping2, R7,R3 =",#mapping2,R7,R3
+      ]
 
 ; now, if R0=PIX_ALLCHARS on entry, do whole chunk, else do specified character
 
@@ -3269,7 +3658,7 @@ unlockblock Entry ""
 ;       R6 -> output chunk index
 ;       R2 -> output char data
 ;       R7,R9 = x,y pixel offsets to apply to anti-aliased chars
-;       [currentchunk] = output chunk number (0..7)
+;       [currentchunk] = output chunk number (0..nchunks-1)
 ;       [percentadd] = subpixel chunk number (0..15 depending on flags)
 ; Out   R2 updated, pixel characters generated
 
@@ -3290,11 +3679,13 @@ convertloop
         LDRB    R1,percentadd
         ADD     R1,R4,R1,LSL #5         ; R1 = output char index
 
+      [ :LNOT: newmapping               ; no remapping at this point any more!
+
         LDR     R14,mapping2
         TEQ     R14,#0                  ; skip this bit if no remapping
         BEQ     %FT01
 
-        LDRB    R0,currentchunk
+        LDR     R0,currentchunk
         ADD     R0,R4,R0,LSL #5         ; R0 = external character code
 
         Debuga  cc,"Map at",R14
@@ -3304,7 +3695,7 @@ convertloop
 
         MOV     R14,R4,LSR #5           ; R14 = internal chunk number
         AND     R0,R4,#&1F              ; R0 = index within chunk
-      
+
       [ Version >= 299
         TEQ     R3,#0
         LDRNE   R3,[R3,R14,LSL #2]      ; R3 -> chunk block (may be null, if char out of range)
@@ -3316,10 +3707,12 @@ convertloop
         LDRNE   R14,[R3,R0,LSL #2]      ; R14 = offset to character within chunk (0 => none)
         B       %FT02
 
+      ] ; if not newmapping
+
 01      MOVS    R14,R3                  ; treat char as null if no output sprite
         LDRNE   R14,[R3,R4,LSL #2]      ; otherwise obtain offset to character
 
-        LDRB    R0,currentchunk
+        LDR     R0,currentchunk
         ADD     R4,R4,R0,LSL #5         ; R4 = char code (for scaffolding)
 02
         Debuga  cc,"Input index, offset",R3,R14
@@ -3344,7 +3737,7 @@ convertloop
         MOVVC   R2,#0                   ; R2,R3,R4 = matrix,inptr,charcode
         BLVC    drawchar                ; uses [scratchblock]
       [ debugcc
-        BLVC    showsprite1bpp
+;       BLVC    showsprite1bpp
       ]
 
 ; anti-alias the result (if 4-bpp)
@@ -3378,7 +3771,7 @@ ex_90
         ProfOut
 
       [ debugcc
-        BLVC    showsprite4bpp
+;       BLVC    showsprite4bpp
       ]
 
         MOVVC   R3,R3,LSR #2            ; R3 = no of rows of anti-aliased stuff (must be >= 1)
@@ -3489,7 +3882,9 @@ drawchar Entry "R1-R6,R8,R9"
         LDRB    R14,outlinefont
         LDR     R8,cacheindex           ; must be present
         LDR     R8,[R8,R14,LSL #2]      ; R8 -> outline font header
-        ADD     R8,R8,#hdr1_PixelsPtrs  ; R8 -> outline chunk index
+;       ADD     R8,R8,#hdr1_PixelsPtrs
+        LDR     R8,[R8,#hdr1_PixoPtr]
+        ADD     R8,R8,#pixo_pointers    ; R8 -> outline chunk index
 
 ; scan list of components with their offsets
 
@@ -3527,7 +3922,9 @@ drawchar_composite
         LDRB    R9,outlinefont
         LDR     R8,cacheindex           ; index must be present
         LDR     R8,[R8,R9,LSL #2]       ; R8 -> outline font header
-        ADD     R8,R8,#hdr1_PixelsPtrs  ; R8 -> outline chunk index
+;       ADD     R8,R8,#hdr1_PixelsPtrs
+        LDR     R8,[R8,#hdr1_PixoPtr]
+        ADD     R8,R8,#pixo_pointers    ; R8 -> outline chunk index
 
         MOV     R6,R3                   ; R6 -> composite character codes
 
@@ -3612,15 +4009,15 @@ drawcomponent Entry "R6"
         LDR     R1,switch_buffer
         TEQ     R1,#0                   ; doesn't affect V
         BNE     drawchar_tobuffer
-                                                   
+
       [ nonzerofilling
-                                 
+
 ; This code handles the Version 8 fonts with non-zero filling rules,
 ; we must attempt to find the outline data and check the flags and
 ; use the appropriate filling algorithm.
 
         BVS     %FT01                   ; exit if already errored (assume R0 setup)
-        
+
         ProfIn  Cac_Draw
 
         LDRB    LR,outlinefont          ; should be defined, already checked
@@ -3628,7 +4025,7 @@ drawcomponent Entry "R6"
         LDR     R1,[R1,LR,LSL #2]       ; get pointer to suitable outline data
         LDRB    R1,[R1,#hdr1_flags]
 
-        TST     R1,#pp_fillnonzero   
+        TST     R1,#pp_fillnonzero
         MOVEQ   R1,#&32                 ; fill 1/2 boundary, even-odd rule
         MOVNE   R1,#&30                 ; fill 1/2 boundary, non-zero rule
 
@@ -3851,7 +4248,9 @@ outputtosprite  Entry "R4-R5,R7,R9-R11"
 
         STR     R0,currentchar                  ; used if remapping
 
-        ADD     R9,R7,#hdr1_PixelsPtrs          ; R9 -> outline chunk array (only needed if remapping)
+;       ADD     R9,R7,#hdr1_PixelsPtrs
+        LDR     R9,[R7,#hdr1_PixoPtr]
+        ADD     R9,R9,#pixo_pointers            ; R9 -> outline chunk array (only needed if remapping)
 
         Debug   cc,"outputtosprite: R0,R6,R4,R8 =",R0,R6,R4,R8
 
@@ -3898,11 +4297,15 @@ outputtosprite  Entry "R4-R5,R7,R9-R11"
         MOVNE   R7,#0                   ; we don't need to allocate a new one
         MOVEQ   R7,#pix_data
 
+      [ newmapping
+        ADD     R6,R6,#pix_index        ; R6 -> index (one chunk only if no remapping)
+      |
         LDR     R10,mapping2
         MOVS    R14,R10
         ADDEQ   R6,R6,#pix_index        ; R6 -> index (one chunk only if no remapping)
-        LDRNEB  R14,currentchunk
+        LDRNE   R14,currentchunk
         MOVNE   R14,R14,LSL #5          ; R14 = offset to add to R11 later
+      ]
 
 ; if whole chunk to do, start at first char in chunk and set counter to 32
 
@@ -4078,8 +4481,10 @@ outputtosprite  Entry "R4-R5,R7,R9-R11"
 
 outputt_remap Entry ""
 
+      [ :LNOT: newmapping
         TEQ     R10,#0
         BNE     %FT01
+      ]
 
         Debuga  cc2,"outputt_remap: R6,R11 =",R6,R11
 
@@ -4090,6 +4495,7 @@ outputt_remap Entry ""
 
         EXIT
 
+      [ :LNOT: newmapping
 01
         Debuga  cc2,"outputt_remap: outlines,map,code =",R9,R10,R11
 
@@ -4104,6 +4510,7 @@ outputt_remap Entry ""
         Debug   cc2," chunk,offset",R6,R0
 
         EXIT
+      ]
 
 ;.............................................................................
 
@@ -4120,7 +4527,7 @@ restoreoutput PEntry Cac_Switch, "R0-R3"
         MOVNE   R14,#0
         STRNE   R14,sprite_switchsave
         STRNE   R14,sprite_params_addr          ; no current output sprite
-      [ debugbrk
+      [ debugsp
         BEQ     %FT00
         Debug   sp,"Output restored to",R0,R1,R2,R3
 00
