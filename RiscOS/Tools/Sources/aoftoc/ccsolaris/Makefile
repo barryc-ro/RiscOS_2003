@@ -32,5 +32,5 @@ links:
 	@echo made ${COMPONENT} links
 
 install: ${COMPONENT}
-	cp -p ${COMPONENT} ${RISCOS_BUILD_TOOLS}
+	install ${COMPONENT} ${RISCOS_BUILD_TOOLS}
 	@echo "Installed ${COMPONENT}"
