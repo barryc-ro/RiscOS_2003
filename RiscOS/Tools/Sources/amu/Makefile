@@ -6,16 +6,19 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 16-Oct-98  SJM          Created.
+# 09-Nov-99  NB           Added install: rule to build FrontEnd res.
 #
 
 #
 # Paths
 #
 CLXDIR  = C:CLX
+LIBDIR	= ${INSTDIR}.Library.Acorn
+INSTAPP    = ${INSTDIR}.Apps.!AMU
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CP      = copy
 CC      = cc
@@ -93,6 +96,22 @@ install_rom: ${TARGET}
 install_tool: ${TARGET}
 	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
 	@echo ${COMPONENT}: tool installed in library
+
+install: install_tool install_dirs
+	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
+	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
+	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
+	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
+	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
+	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
+	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
+
+install_dirs:
+	${MKDIR} ${INSTAPP}
+	${MKDIR} ${INSTAPP}
+	${MKDIR} ${LIBDIR}.Docs
 
 clean:
         ${WIPE} o ${WFLAGS}
