@@ -50,8 +50,7 @@ static hotlist_item * hotlist_newitem;                    /* When ever a new ite
 
 static int            menu_itemno = 0;                    /* Item over which menu was pressed */
 
-static hotlist_item * selected_parent    = NULL;          /* The parent directory of all selected items */
-static int            number_selected    = 0;             /* The number of items selected */
+static int            menu_select        = 0;             /* 1 if an item had to be selected when the menu was opened */
 static unsigned int   last_selected_item = 0xffffffff;    /* The last item which was selected */
 
 static int            hotlist_dragging   = 0;             /* Holds a set of values for different dragging cases (see Hotlist.h) */
@@ -114,6 +113,10 @@ static hotlist_item    * _hotlist_find_selected_item     (hotlist_item * list);
 static hotlist_item    * hotlist_find_selected_item      (void);
 static void              _hotlist_count_displayed_items  (hotlist_item * list);
 static unsigned int      hotlist_count_displayed_items   (hotlist_item * list);
+static void              _hotlist_count_selected_items  (hotlist_item * list);
+static unsigned int      hotlist_count_selected_items   (void);
+static unsigned int      hotlist_contents_selected(hotlist_item *item);
+static unsigned int      hotlist_no_contents_selected(hotlist_item *item);
 static void              _hotlist_draw                   (hotlist_item * list, unsigned int first_item, unsigned int last_item, unsigned int indent);
 static void              hotlist_draw                    (hotlist_item * list, unsigned int first_item, unsigned int last_item);
 static void              _hotlist_get_max_width          (hotlist_item * list, unsigned int indent);
@@ -828,13 +831,36 @@ static void hotlist_delete_item(hotlist_item * item)
 
 static _kernel_oserror * hotlist_move_item(hotlist_item * source, hotlist_item * target, unsigned int position)
 {
-  /* Unlink item from directory structure */
+  hotlist_item *newdir, *tempptr;
+  if (!(source->type == hl_directory && !hotlist_contents_selected(source->data.directory_content)))
+  {
+    /* Unlink item from directory structure */
 
-  hotlist_unlink(source);
+    hotlist_unlink(source);
 
-  /* Link into new position in directory structure */
+    /* Link into new position in directory structure */
 
-  return hotlist_link(source, target, position);
+    return hotlist_link(source, target, position);
+  }
+  else
+  {
+    /* Special case - moving a directory whose contents are only partially selected */
+    /* we can't move a directory whose contents are only partially to be moved,     */
+    /* there would be no where to leave the items which were not moved.             */
+    RetError(hotlist_new_directory(target, source->name, position, &newdir));
+    source = source->data.directory_content;
+    while(source)
+    {
+      tempptr = source->next;
+      if (source->flags & HOTLIST_G_IS_SELECTED)
+      {
+        hotlist_move_item(source, newdir, HOTLIST_POSITION_END); /* move items into new directory */
+        source->flags &= ~HOTLIST_G_IS_SELECTED;
+      }
+      source = tempptr;
+    }
+  }
+  return NULL;
 }
 
 /*************************************************/
@@ -898,10 +924,13 @@ static _kernel_oserror * hotlist_copy_item(hotlist_item * source, hotlist_item *
       /* Now copy the contents recursively */
 
       content = source->data.directory_content;
-
+      
       while (content)
       {
-        RetError(hotlist_copy_item(content, newdir, HOTLIST_POSITION_END, NULL));
+        if (content->flags & HOTLIST_G_IS_SELECTED)
+        {
+          RetError(hotlist_copy_item(content, newdir, HOTLIST_POSITION_END, NULL));
+        }
 
         content = content->next;
       }
@@ -1606,6 +1635,9 @@ static void hotlist_directory_open_close(hotlist_item *item, unsigned int itemno
   hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
 
   item->flags ^= HOTLIST_D_IS_OPEN;
+  
+  hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+  
   hotlist_window_preopen(already_open);
   show_error(window_get_wimp_handle(0, hotlist_windowid, &window_handle));
 
@@ -1669,7 +1701,6 @@ static void hotlist_clear_selection(void)
 {
   hotlist_clear_flags(hotlist_root->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
   hotlist_redraw_now();
-  number_selected = 0;
 }
 
 /*************************************************/
@@ -1719,7 +1750,6 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno,
         break;
       }
     item->flags &= ~HOTLIST_G_IS_SELECTED;
-    number_selected--;
     hotlist_redraw_items(itemno, itemno);
     }
     break; /* Double click select */
@@ -1739,7 +1769,6 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno,
         break;
       }
       item->flags &= ~HOTLIST_G_IS_SELECTED;
-      number_selected--;
       hotlist_redraw_items(itemno, itemno);
     }
     break; /* Double click adjust */
@@ -1752,9 +1781,7 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno,
     if (!(item->flags & HOTLIST_G_IS_SELECTED))
     {
       item->flags |= HOTLIST_G_IS_SELECTED;
-      number_selected++;
 
-      selected_parent = item->parent;
       last_selected_item = itemno;
     }
     hotlist_start_drag();
@@ -1769,30 +1796,33 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno,
     else
     {
       hotlist_clear_selection();
-      item->flags |= HOTLIST_G_IS_SELECTED;
-      selected_parent = item->parent;
-      number_selected++;
-      hotlist_redraw_items(itemno, itemno);
+      item->flags |= HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW;
+      if (item->type == hl_directory)
+      {
+        hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+      }
+      hotlist_redraw_now();
     }
     last_selected_item = itemno;
     break;
 
     case 256:                   /* Click adjust */
-    if (selected_parent != item->parent && item->type != hl_url) hotlist_clear_selection();
     item->flags ^= HOTLIST_G_IS_SELECTED;
-    if (item->flags & HOTLIST_G_IS_SELECTED)
-    {
-      number_selected++;
-    }
-    else
-    {
-      number_selected--;
-    }
-    hotlist_redraw_items(itemno, itemno);
-    selected_parent = item->parent;
+    item->flags |= HOTLIST_G_REDRAW_NOW;
     last_selected_item = itemno;
+    if (item->type == hl_directory)
+    {
+      if (item->flags & HOTLIST_G_IS_SELECTED)
+      {
+        hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED); 
+      }
+      else
+      {
+        hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED); 
+      }
+    }
+    hotlist_redraw_now();
     break;
-
   }
 
   return NULL;
@@ -1984,10 +2014,10 @@ static int hotlist_mouse_click_handler(int event_code, WimpPollBlock *event, IdB
 static int hotlist_menuclose_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
 {
   ObjectId submenu_id;
-  if (number_selected == -1)
+  if (menu_select)
   {
     hotlist_clear_selection();
-    number_selected = 0;
+    menu_select = 0;
   }
   show_error(menu_get_sub_menu_show(0, id_block->self_id, HOTLIST_URL_MENUITEM, &submenu_id));
   if (submenu_id) show_error(toolbox_delete_object(0, submenu_id));
@@ -2003,7 +2033,7 @@ void hotlist_setmenu_details(ObjectId menuid)
   char entrytext[32];
   ObjectId submenu_id;
 
-  switch(number_selected)
+  switch(hotlist_count_selected_items())
   {
     case 0:
     menu_set_entry_text(0, menuid, HOTLIST_URL_MENUITEM, "URL ''");
@@ -2080,7 +2110,7 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
     menu_itemno = -pointerblock.y / item_height;
   }
 
-  if (number_selected == 0)
+  if (hotlist_count_selected_items() == 0)
   {
     item = hotlist_find_item(hotlist_root->data.directory_content, menu_itemno);
 
@@ -2092,8 +2122,7 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
     if (item && pointerblock.x >= xmin && pointerblock.x <= xmax)
     {
       item->flags |= HOTLIST_G_IS_SELECTED;
-      selected_parent = item->parent;
-      number_selected = -1;
+      menu_select = 1;
       hotlist_redraw_items(menu_itemno, menu_itemno);
     }
   }
@@ -2745,6 +2774,10 @@ _kernel_oserror * hotlist_initialise(void)
                                           HotlistNewRenameDirectoryCancel,
                                           hotlist_reset_directory_handler,
                                           NULL));
+
+hotlist_load("InetDBase:hotlist\n");
+hotlist_open(Toolbox_ShowObject_Default, 0, 0);
+
   return NULL;
 }
 
@@ -2813,11 +2846,10 @@ static int hotlist_menu_selectall_handler(int event_code, ToolboxEvent *event, I
   if (item && item->parent)
   {
     item = item->parent->data.directory_content;
-    number_selected = 0;
     while(item)
     {
       item->flags |= HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW;
-      number_selected++;
+      if (item->type == hl_directory) hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
       item = item->next;
     }
     hotlist_redraw_now();
@@ -2905,13 +2937,12 @@ static int hotlist_menu_delete_handler(int event_code, ToolboxEvent *event, IdBl
 
   noitems = hotlist_count_displayed_items(hotlist_root->data.directory_content);
 
-  if (!number_selected) return 0;
+  if (!hotlist_count_selected_items()) return 0;
 
   while((item = hotlist_find_selected_item())!=NULL)
   {
     hotlist_delete_item(item);
   }
-  number_selected = 0;
   hotlist_redraw_items(0, noitems);
   hotlist_window_preopen(already_open);
   toolbox_hide_object(0, id_block->ancestor_id);
@@ -3326,7 +3357,7 @@ static _kernel_oserror *_hotlist_start_drag(void)
 
   hotlist_get_shape(&xmin, &xmax, item);
   item = item->next;
-  if (number_selected > 1)
+  if (hotlist_count_selected_items() > 1)
   {
     while(item)
     {
@@ -3357,7 +3388,20 @@ static _kernel_oserror *_hotlist_start_drag(void)
 
   if (_kernel_osbyte(161, 28, 0) & (1<<(8+1))) /* solid drag */
   {
-    if (number_selected == 1)
+    item = hotlist_find_selected_item();
+
+    if (
+         (hotlist_count_selected_items() == 1 && item->type == hl_url) ||
+         (
+           hotlist_count_selected_items() == 1 && 
+           item->type == hl_directory && 
+           (
+             !(item->flags & HOTLIST_D_IS_OPEN) || 
+             hotlist_no_contents_selected(item->data.directory_content)   || 
+             item->data.directory_content == NULL
+           )
+         )
+       )
     {
       box.dragging_box.xmin = xmin-xorigin;                          /* box shape */
       box.dragging_box.ymin = bottom-yorigin;
@@ -3564,6 +3608,8 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
 
     /* Check to see if moving the selection to this position is acceptable -----------------------*/
 
+    /* This section is not sufficient for the new selection model ///////// */
+
     tempitem = sourceitem;
     while(tempitem)
     {
@@ -3590,8 +3636,12 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
     if (!shift)
     {
       /* Move selected items */
+      
       hotlist_move_item(sourceitem, targetitem, position);                      /* Move first item to specified position */
                                                                                 /* before/after/in target                */
+      
+      if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+      
       targetitem = sourceitem;
 
       while((sourceitem = hotlist_find_selected_item()) != NULL)
@@ -3599,14 +3649,19 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
         sourceitem->flags &= ~HOTLIST_G_IS_SELECTED;
         hotlist_move_item(sourceitem, targetitem, HOTLIST_POSITION_AFTER);      /* Move all subsequent items to follow   */
                                                                                 /* first moved item                      */
+        if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
         targetitem = sourceitem;
       }
     }
     else
     {
       /* Copy selected items */
+      
+      
       hotlist_copy_item(sourceitem, targetitem, position, &targetitem);         /* Copy first item to specified position */
                                                                                 /* before/after/in target                */
+      if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+
       while((sourceitem = hotlist_find_selected_item()) != NULL)
       {
         sourceitem->flags &= ~HOTLIST_G_IS_SELECTED;
@@ -3614,11 +3669,9 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
                           targetitem,                                           /* first copied item                     */
                           HOTLIST_POSITION_AFTER,
                           &targetitem);
+        if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
       }
     }
-
-    number_selected = 0;
-    selected_parent = NULL;
 
     bottom2 = hotlist_count_displayed_items(hotlist_root->data.directory_content);
     if (bottom2 > bottom) bottom = bottom2;
@@ -3826,6 +3879,16 @@ _kernel_oserror *hotlist_selection_box_start(void)
   return NULL;
 }
 
+/*************************************************/
+/* hotlist_null_drag_select_handler()            */
+/*                                               */
+/* This function is called as a null handler,    */
+/* it is responsible for selecting for selecting */
+/* and deselecting items within and outside of   */
+/* the rubber box drag started by                */
+/* hotlist_selection_box_start                   */
+/*************************************************/
+
 int hotlist_null_drag_select_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
 {
   WimpGetPointerInfoBlock pointerblock;
@@ -3875,34 +3938,28 @@ int hotlist_null_drag_select_handler(int event_code, WimpPollBlock *event, IdBlo
       if (itemno >= item_min && itemno <= item_max)
       {
         hotlist_get_shape(&itemxmin, &itemxmax, item);
-        if (number_selected == 0)
+        if ((!(maxx < itemxmin || minx > itemxmax)))
         {
-          if (!(maxx < itemxmin || minx > itemxmax) && (!(item->flags & HOTLIST_G_IS_SELECTED)))
+          if (!(item->flags & HOTLIST_G_IS_SELECTED))
           {
             item->flags |= HOTLIST_G_IS_SELECTED;
             hotlist_redraw_items(itemno, itemno);
-            selected_parent = item->parent;
-            number_selected++;
+            if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN)) /* If directory is closed select everything in it */
+            {
+              hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+              hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_REDRAW_NOW);
+            }
           }
         }
         else
         {
-          if (!(maxx < itemxmin || minx > itemxmax))
+          if (item->flags & HOTLIST_G_IS_SELECTED)
           {
-            if ((selected_parent == item->parent || item->type == hl_url) && (!(item->flags & HOTLIST_G_IS_SELECTED)))
+            item->flags &= ~HOTLIST_G_IS_SELECTED;
+            hotlist_redraw_items(itemno, itemno);
+            if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN)) /* If directory is closed unselect everything in it */
             {
-              item->flags |= HOTLIST_G_IS_SELECTED;
-              hotlist_redraw_items(itemno, itemno);
-              number_selected++;
-            }
-          }
-          else
-          {
-            if (item->flags & HOTLIST_G_IS_SELECTED)
-            {
-              item->flags &= ~HOTLIST_G_IS_SELECTED;
-              hotlist_redraw_items(itemno, itemno);
-              number_selected--;
+              hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW);
             }
           }
         }
@@ -3913,11 +3970,113 @@ int hotlist_null_drag_select_handler(int event_code, WimpPollBlock *event, IdBlo
         {
           item->flags &= ~HOTLIST_G_IS_SELECTED;
           hotlist_redraw_items(itemno, itemno);
-          number_selected--;
+          if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN)) /* If directory is closed unselect everything in it */
+          {
+            hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW);
+          }
         }
       }
     }
   }
 
   return 0;
+}
+
+
+/*************************************************/
+/* _hotlist_count_selected_items()               */
+/*                                               */
+/* This routine does all the work for            */
+/* hotlist_count_selected_items()                */
+/*************************************************/
+
+static void _hotlist_count_selected_items(hotlist_item *list)
+{
+  while(list)
+  {
+    if (list->flags & HOTLIST_G_IS_SELECTED)
+    {
+      item_number++;
+    }
+    else /* Only recurse through directories which are not selected */
+    {
+      if (list->type == hl_directory)
+      {
+        _hotlist_count_selected_items(list->data.directory_content);
+      }
+    }
+    list = list->next;
+  }
+}
+
+/*************************************************/
+/* hotlist_count_selected_items()                */
+/*                                               */
+/* This routine counts the number of selected    */
+/* items                                         */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item         */
+/*                                               */
+/* Returns:    the number of selected items      */
+/*************************************************/
+
+static unsigned int hotlist_count_selected_items(void)
+{
+  item_number = 0;
+  _hotlist_count_selected_items(hotlist_root->data.directory_content);
+  return item_number;
+}
+
+/*************************************************/
+/* hotlist_contents_selected()                   */
+/*                                               */
+/* Checks if all items and subdirectories are    */
+/* selected                                      */
+/*                                               */
+/* Parameters: Pointer to the first hotlist_item */
+/*             to check                          */
+/*                                               */
+/* Returns:    1 if all items are selected       */
+/*             0 if there are unselected items   */
+/*************************************************/
+
+static unsigned int hotlist_contents_selected(hotlist_item *item)
+{
+  while(item)
+  {
+    if (!item->flags & HOTLIST_G_IS_SELECTED) return 0;
+    if (item->type == hl_directory)
+    {
+      if (!hotlist_contents_selected(item->data.directory_content)) return 0;
+    }
+    item = item->next;
+  }
+  return 1;
+}
+
+/*************************************************/
+/* hotlist_no_contents_selected()                */
+/*                                               */
+/* Checks if all items and subdirectories are    */
+/* selected                                      */
+/*                                               */
+/* Parameters: Pointer to the first hotlist_item */
+/*             to check                          */
+/*                                               */
+/* Returns:    1 if all items are selected       */
+/*             0 if there are unselected items   */
+/*************************************************/
+
+static unsigned int hotlist_no_contents_selected(hotlist_item *item)
+{
+  while(item)
+  {
+    if (item->flags & HOTLIST_G_IS_SELECTED) return 0;
+    if (item->type == hl_directory)
+    {
+      if (!hotlist_no_contents_selected(item->data.directory_content)) return 0;
+    }
+    item = item->next;
+  }
+  return 1;
 }
