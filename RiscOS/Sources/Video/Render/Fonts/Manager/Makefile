@@ -71,4 +71,3 @@ ${EXP_HDR}.Font: hdr.Font
         ${CP} hdr.Font $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-
