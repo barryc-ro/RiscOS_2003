@@ -22,12 +22,12 @@ scripts:
 	cp Unix/Sources/Scripts/mtftpd.conf ${TARDIR}/mtftpd.conf
 
 modgen resgen: clx
-	(cd Tools/Sources/ResGen/ports/solaris; ./mklinks; make)
-	cp Tools/Sources/ResGen/ports/solaris/modgen ${TARDIR}/modgen
+	(cd RiscOS/Tools/Sources/ResGen/ports/solaris; ./mklinks; make)
+	cp RiscOS/Tools/Sources/ResGen/ports/solaris/modgen ${TARDIR}/modgen
 
 modsqz: clx
-	(cd Tools/Sources/modsqz/ports/solaris; ./mklinks; make)
-	cp Tools/Sources/modsqz/ports/solaris/modsqz ${TARDIR}/modsqz
+	(cd RiscOS/Tools/Sources/modsqz/ports/solaris; ./mklinks; make)
+	cp RiscOS/Tools/Sources/modsqz/ports/solaris/modsqz ${TARDIR}/modsqz
 
 mtftpd:
 	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make ARCH=${ARCH})
