@@ -66,11 +66,11 @@ INCLUDES = -IC:
 RESDIR = <resource$dir>.Resources2.${COMPONENT}
 LDIR = Res.${LOCALE}
 
-OBJS = o.main\
-       o.resources\
-       o.swicode\
-       o.veneer\
-       o.modhdr
+OBJS = main.o	 \
+       swicode.o \
+       veneer.o	 \
+       modhdr.o	 \
+       resources.o
 
 #
 # Rule patterns
@@ -81,8 +81,8 @@ OBJS = o.main\
 
 # Specific rules
 
-resources.c: Res.UK.Messages
-        mkresource CDManager Res.UK.Messages
+resources.o: Res.UK.Messages
+        resgen messages_file @.o.resources @.Res.UK.Messages Resources.${COMPONENT}.Messages
 
 swi.o: module.h
 
@@ -113,6 +113,8 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof.* ${WFLAGS}
         ${RM} aof
+        ${WIPE} linked.* ${WFLAGS}
+        ${RM} linked
         @echo ${COMPONENT}: cleaned
 
 ${MODULE}: ${OBJS} ${TGRLIB}
