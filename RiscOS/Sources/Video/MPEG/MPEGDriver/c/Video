@@ -66,6 +66,8 @@ Date		Who	Change
 06/07/2000	BJGA	Implemented MPEGVideo_Play 1 (part of timeout/EOS detection)
 08/07/2000	BJGA	Video state is now reported as idle durng prefill; fixed incorrect parameters to _swix(MPEGControl_Play)
 14/07/2000	BJGA	Initialisations for repeat sequence header parsing and error counts
+10/08/2000	BJGA	Implemented (De)registerHandler SWIs;
+			sends clear-overlay CC control codes to TV on non-internal resets and CloseStreams
 
 ***************************************************************************/
 
@@ -361,6 +363,7 @@ _kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
     _swix (OS_RemoveCallBack, _INR(0,1), video_reset_callback, Module_PrivateWord);
     
     /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
+    Stream.vid_flags.internal_reset = false;
     static_VideoStop (Stream.video.speed_indicator == 1 && Stream.video.state == stream_open && !Stream.rs_flags.trick_play_mode);
     
     if (flags & CloseStreamFlags_BlankVideo)
@@ -738,6 +741,61 @@ _kernel_oserror *Video_SWIStats (unsigned int flags, stream_handle_t vsh, unsign
     e = Mess_GenerateError ("Err_BufOvf", ErrorNumber_BuffOverflow, 0);
   }
   
+  return e;
+}
+
+/******	Video_SWIRegisterHandler() *****************************************
+
+Purpose:	Handles MPEGVideo_RegisterHandler
+In:		Handler number; handler pointer; handler workspace pointer
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *Video_SWIRegisterHandler (unsigned int number, const void *handler, const void *wsptr)
+{
+  _kernel_oserror *e = NULL;
+  handler_t *new_handler;
+  e = _swix (OS_Module, _IN(0)|_IN(3)|_OUT(2), 6 /*ModHandReason_Claim*/, sizeof (handler_t), &new_handler);
+  if (!e)
+  {
+    new_handler->next = Module_Handlers;
+    new_handler->number = number;
+    new_handler->handler = handler;
+    new_handler->wsptr = wsptr;
+    Module_Handlers = new_handler;
+  }
+  return e;
+}
+
+/******	Video_SWIDeregisterHandler() ***************************************
+
+Purpose:	Handles MPEGVideo_DeregisterHandler
+In:		Handler number; handler pointer; handler workspace pointer
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *Video_SWIDeregisterHandler (unsigned int number, const void *handler, const void *wsptr)
+{
+  _kernel_oserror *e = NULL;
+  handler_t *prev = (handler_t *)&Module_Handlers; /* treat the list head as though it were the first word of another link */
+  handler_t *ptr = Module_Handlers;
+  while (ptr != NULL)
+  {
+    if (ptr->number == number && ptr->handler == handler && ptr->wsptr == wsptr)
+    {
+      prev->next = ptr->next;
+      prev = ptr;
+      ptr = ptr->next;
+      _swix (OS_Module, _IN(0)|_IN(2), 7 /*ModHandReason_Free*/, prev);
+    }
+    else
+    {
+      prev = ptr;
+      ptr = ptr->next;
+    }
+  }
   return e;
 }
 
@@ -1123,6 +1181,7 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.unused_frames->decode_link->decode_link->decode_link = &(Stream.frame[3]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link = &(Stream.frame[4]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link->decode_link = NULL;
+  Stream.previous_anchor_frame = NULL;
   /* If we are displaying one of the anchor frames, then we must decode the prefill anchor frames into the *other* two anchor frame buffers */
   READ_VID_XFA(my_VID_XFA);
   switch ((VID_DFP & 0x3FFF) + 2 * (my_VID_XFA & 0x3FFF))
@@ -1208,12 +1267,27 @@ static unsigned int static_VideoStop (bool play_out)
   IRQ_DisableCommonIRQs ();
   IRQ_DisableVideoIRQs ();
   
+  /* Clear closed caption overlays */
+  if (!Stream.vid_flags.internal_reset)
+  {
+    static const char erase_odd_captions [16] =  { 0x14, 0x2c, 0x14, 0x2c,    /* Erase Displayed Memory, captions channel 1 */
+                                                   0x1c, 0x2c, 0x1c, 0x2c,    /* Erase Displayed Memory, captions channel 2 */
+                                                   0x14, 0x2e, 0x14, 0x2e,    /* Erase Nondisplayed Memory, captions channel 1 */
+                                                   0x1c, 0x2e, 0x1c, 0x2e  }; /* Erase Nondisplayed Memory, captions channel 2 */
+    static const char erase_even_captions [16] = { 0x15, 0x2c, 0x15, 0x2c,    /* Erase Displayed Memory, captions channel 1 */
+                                                   0x1d, 0x2c, 0x1d, 0x2c,    /* Erase Displayed Memory, captions channel 2 */
+                                                   0x15, 0x2e, 0x15, 0x2e,    /* Erase Nondisplayed Memory, captions channel 1 */
+                                                   0x1d, 0x2e, 0x1d, 0x2e  }; /* Erase Nondisplayed Memory, captions channel 2 */
+    MiscAsm_CallHandler (1, 6 /* odd fields, calculate parity, flush buffer */, erase_odd_captions, 16);
+    MiscAsm_CallHandler (2, 7 /* even fields, calculate parity, flush buffer */, erase_even_captions, 16);
+  }
+  
   return discarded_data;
 }
 
 /******	static_CompleteScalingTypeParameters() *****************************
 
-Purpose:	Fills in missing ScalinType parameters from NVRAM
+Purpose:	Fills in missing ScalingType parameters from NVRAM
 In:		Whether to recache NVRAM settings
 
 ***************************************************************************/

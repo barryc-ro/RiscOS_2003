@@ -163,6 +163,8 @@ Date		Who	Change
 14/07/2000	BJGA	Altered display of 2x enlarged interlaced pictures and 4x enlarged progressive pictures to avoid display artefacts;
 			takes advantage of fixed MPEG sequence header fields to cope with corruption of sequence header data;
 			ignores picture_display_extension unless sequence_display_extension is present
+09/08/2000	BJGA	Parses DiviCom and C-Cube format closed caption user data; once per frame decode (not display, ie gets in before
+			frame skips) calls caption handlers; added support for 3:2 pulldown (23.976 fps material on NTSC displays)
 
 ***************************************************************************/
 
@@ -190,6 +192,7 @@ Date		Who	Change
 #include "Defs.h"
 #include "Fixed.h"
 #include "IRQ.h"
+#include "MiscAsm.h"
 #include "ModHdr.h"
 #include "Module.h"
 #include "Registers.h"
@@ -258,6 +261,7 @@ static void static_ProcessVideoQuantMatrixExt (void);
 static void static_ProcessVideoPictureDisplayExt (void);
 static void static_ProcessVideoUserData (void);
 static void static_ProcessVideoDTG1UserData (void);
+static void static_ProcessVideoDiviComUserData (unsigned char dataLength, unsigned char dataType, unsigned char extDataType);
 static void static_ProcessVideoSliceHdr (void);
 static unsigned int static_GetVideoHdrBits (unsigned char bits);
 static void static_PerhapsWriteNewInstruction (void);
@@ -269,6 +273,7 @@ static void static_SetNextDisplayField (bool top_field);
 static void static_PositionVideo (signed short frame_centre_horizontal_offset, signed short frame_centre_vertical_offset, unsigned char active_format);
 static void static_SetUpScalingRegisters (signed int centre_x, signed int centre_y, fixed horizontal_downscaling, vertical_scaling_factor vertical_scaling_index);
 static void static_SetDFP (void);
+static void static_ProcessCCData (unsigned int handler, unsigned int flags, const char *data);
 
 /********************/
 /* Public variables */
@@ -1086,12 +1091,12 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
                 Stream.fields_till_next_AU = 4;
               }
             }
-            else
+          }
+          else
+          {
+            if (Stream.display_frames->repeat_first_field && Stream.display_frames->top_field_first)
             {
-              if (Stream.display_frames->repeat_first_field && Stream.display_frames->top_field_first)
-              {
-                Stream.fields_till_next_AU = 4; /* first step in 3:2 pulldown support */
-              }
+              Stream.fields_till_next_AU = 4; /* make this a long frame if slow-motion 3:2 pulldown */
             }
           }
           if (Stream.video.fast_slow_state == fss_next_frame_slow)
@@ -1108,11 +1113,27 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
             /* For pause mode, we rely upon this not reaching 0 for a long time! */
             /* We use -2 instead of -1 so that the field polarity can be preserved when exiting pause */
           }
+          if (Stream.display_frames->display_link->top_field_first != Stream.display_frames->top_field_first)
+          {
+            /* Next frame starts on the opposite field - typically due to 3:2 pulldown */
+            /* so we actually need to display for an odd number of fields. */
+            /* Our current estimate will be too long if this is a top-field-first frame, and too short if this is a bottom-field-first frame */
+            if (Stream.display_frames->top_field_first)
+            {
+              Stream.fields_till_next_AU --;
+            }
+            else
+            {
+              Stream.fields_till_next_AU ++;
+            }
+          }
           if (Stream.current_picture_structure == ps_first_field_picture || (Stream.current_picture_structure == ps_frame_picture && Stream.prev_picture_structure != ps_frame_picture))
           {
-            Stream.fields_till_next_AU --; /* account for different field polarity of next picture */
+            Stream.fields_till_next_AU --; /* account for one field already having been taken up by the first decode in this PU */
           }
         }
+dprintf (("3:2", "rff = %d, tff = %d, next tff = %d\n", Stream.display_frames->repeat_first_field, Stream.display_frames->top_field_first, Stream.display_frames->display_link->top_field_first));
+dprintf (("3:2", "fields_till_next_AU set to %d\n", Stream.fields_till_next_AU));
         
         /* Whatever the picture_structure, flag that we've stalled (only persists until the last instruction is written) */
         Stream.vid_flags.final_instruction_has_been_written_during_this_AU = false;
@@ -1566,6 +1587,8 @@ static void static_NewPictureDecode (void)
     Stream.decode_frames->PTS_valid = false;
     /* Write picture parameters into the first picture_t struct */
     Stream.decode_frames->lastpic = &Stream.decode_frames->pic1;
+    /* Initialise the CC data once per frame, in case field coding is used and user data is provided on a field-wise basis */
+    *(unsigned int *)Stream.decode_frames->CC_odd_data = *(unsigned int *)Stream.decode_frames->CC_even_data = 0;
   }
   else
   {
@@ -2115,7 +2138,7 @@ static void static_ProcessVideoUserData (void)
   unsigned char dataType;
   unsigned char extDataType;
   bool first_chunk = true;
-  bool DiviCom_format;
+  bool DiviCom_format = true;
   dprintf (("IRQ", "ProcessVideoUserData\n"));
   do
   {
@@ -2184,7 +2207,12 @@ static void static_ProcessVideoUserData (void)
       }
       first_chunk = false;
     }
-    /* Closed captioning support goes here */
+    
+    if (!DiviCom_format)
+    {
+      dataLength --; /* convert C-Cube to DiviCom format */
+    }
+    static_ProcessVideoDiviComUserData (dataLength, dataType, extDataType);
   }
   while (dataLength != 0);
 }
@@ -2206,6 +2234,39 @@ static void static_ProcessVideoDTG1UserData (void)
   {
     static_GetVideoHdrBits (4); /* skip reserved bits */
     Stream.decode_frames->lastpic->active_format = static_GetVideoHdrBits (4);
+  }
+}
+
+/******	static_ProcessVideoDiviComUserData() *******************************
+
+Purpose:	Parses DiviCom format MPEG user_data()
+
+***************************************************************************/
+
+static void static_ProcessVideoDiviComUserData (unsigned char dataLength, unsigned char dataType, unsigned char extDataType)
+{
+  IGNORE(extDataType);
+  dprintf (("IRQ", "ProcessVideoDiviComUserData\n"));
+  if (dataType == 0x09 || dataType == 0x0A)
+  {
+    /* Closed captioning data! */
+    char *buffer = (dataType == 0x09) ? Stream.decode_frames->CC_odd_data : Stream.decode_frames->CC_even_data;
+    int index = 0;
+    if (dataLength == 2 && (buffer[0] != 0 || buffer[1] != 0))
+    {
+      index = 2; /* cope with 3:2 pulldown data being split into two packets */
+    }
+    while (dataLength-- > 0)
+    {
+      buffer[index++] = static_GetVideoHdrBits (8);
+    }
+  }
+  else
+  {
+    while (dataLength-- > 0)
+    {
+      static_GetVideoHdrBits (8); /* just skip the data for unsupported packets */
+    }
   }
 }
 
@@ -2328,6 +2389,29 @@ static void static_ProcessVideoSliceHdr (void)
         /* The current field type must be used to determine top_field_first flag */
         Stream.decode_frames->top_field_first = (Stream.decode_frames->lastpic->picture_structure == TOP_FIELD_PICTURE);
         break;
+    }
+  }
+  
+  /* Deal with closed captioning */
+  /* Unfortunately, since the closed captioning is tied to individual frames, we have to deal with it now,    */
+  /* and descramble the decode order, just so that we don't lose data when we do a synchronisation frame skip */
+  /* Only do this after parsing the headers for the last picture of each frame */
+  /* To determine this, we use next_picture_structure as set up just above */
+  if (Stream.next_picture_structure != ps_first_field_picture)
+  {
+    if (Stream.decode_frames->lastpic->picture_coding_type != B_PICTURE)
+    {
+      if (Stream.previous_anchor_frame != NULL)
+      {
+        static_ProcessCCData (1, 0, Stream.previous_anchor_frame->CC_odd_data);
+        static_ProcessCCData (2, 1, Stream.previous_anchor_frame->CC_even_data);
+      }
+      Stream.previous_anchor_frame = Stream.decode_frames;
+    }
+    else
+    {
+      static_ProcessCCData (1, 0, Stream.decode_frames->CC_odd_data);
+      static_ProcessCCData (2, 1, Stream.decode_frames->CC_even_data);
     }
   }
   
@@ -3503,5 +3587,33 @@ static void static_SetDFP (void)
     }
     WRITE_VID_DFP(best_frame->frame_buffer - luma_offset);
     WRITE_VID_XFA(luma_offset / 2);
+  }
+}
+
+/******	static_ProcessCCData() *********************************************
+
+Purpose:	Farms out the processing od closed caption data for an
+		individual frame
+In:		Pointer to the frame struct for the frame to process
+
+***************************************************************************/
+
+static void static_ProcessCCData (unsigned int handler, unsigned int flags, const char *data)
+{
+  if (!Stream.rs_flags.trick_play_mode)
+  {
+    unsigned int length = 4;
+    if (data[2] == 0 && data[3] == 0)
+    {
+      length = 2;
+      if (data[0] == 0 && data[1] == 0)
+      {
+        length = 0;
+      }
+    }
+    if (length > 0)
+    {
+      MiscAsm_CallHandler (handler, flags, data, length);
+    }
   }
 }
