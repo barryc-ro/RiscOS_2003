@@ -49,7 +49,7 @@ WFLAGS  = f~c~vr
 #
 # Include files
 #
-INCLUDES=       -ISupport011,icons,OS:,C:
+INCLUDES=       -IC:AsmUtils,Support011,icons,OS:,C:
 
 #
 # Libraries
@@ -58,6 +58,7 @@ CLIB            = Clib:o.Stubs
 ROMCSTUBS       = RISCOSLIB:o.romcstubs
 ABSSYM          = RISC_OSLib:o.AbsSym
 OSLIB           = OSLib:o.OSLib
+ASMUTILS        = C:AsmUtils.o.AsmUtilsZM
 
 DEPEND          = -depend !Depend
 DBGFLAGS        = -DTRACE
@@ -65,10 +66,10 @@ DEFINES         =
 CENV            = ${DEPEND} ${THROWBACK}
 
 ASFLAGS         = ${DEPEND} ${THROWBACK}
-CFLAGS          = -c -ffh -zM -zps1 -Wcp ${INCLUDES} ${DEFINES} ${CENV}
+CFLAGS          = -W -c -ffh -zM -zps1 -Wcp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS       = ${DEPEND} ${THROWBACK} -p
 
-OTHER_OBJS        = o.muldiv o.veneer o.header
+OTHER_OBJS      = o.veneer o.header
 
 ROM_OBJS        = or.cmyk  or.dialogue  or.helpreply  or.hsv              \
                   or.main  or.model     or.rgb        or.tables           \
@@ -194,19 +195,19 @@ export:
 #
 # Targets
 #
-${RAM_MODULE}:  ${RAM_OBJS} ${CLIB} ${OSLIB} ${ICONS}
+${RAM_MODULE}:  ${RAM_OBJS} ${CLIB} ${OSLIB} ${ICONS} ${ASMUTILS}
         ${MKDIR} rm
-        $(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${OSLIB}
+        $(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${OSLIB} ${ASMUTILS}
         ${MODSQZ} $@
         Access $@ RW/R
 
-${ROM_MODULE}:  ${ROM_OBJS} ${OSLIB} ${ROMCSTUBS} ${ICONS}
+${ROM_MODULE}:  ${ROM_OBJS} ${OSLIB} ${ROMCSTUBS} ${ICONS} ${ASMUTILS}
         ${MKDIR} aof
-        $(LD) -o $@ -aof ${ROM_OBJS} ${OSLIB} ${ROMCSTUBS}
+        $(LD) -o $@ -aof ${ROM_OBJS} ${OSLIB} ${ROMCSTUBS} ${ASMUTILS}
 
-${DBG_MODULE}:  ${DBG_OBJS} ${CLIB} ${OSLIB} ${ICONS}
+${DBG_MODULE}:  ${DBG_OBJS} ${CLIB} ${OSLIB} ${ICONS} ${ASMUTILS}
         ${MKDIR} rm
-        $(LD) -o $@ -rmf ${DBG_OBJS} ${OSLIB} ${CLIB}
+        $(LD) -o $@ -rmf ${DBG_OBJS} ${OSLIB} ${CLIB} ${ASMUTILS}
         Access $@ RW/R
 
 ${RESF}: ${RESOURCEFILES}
