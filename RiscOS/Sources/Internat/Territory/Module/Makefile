@@ -52,7 +52,7 @@ resources:
 	TokenCheck Resources.${COMPONENT}.Territory
 	TokenCheck LocalRes:Messages
         ${CP} Resources.${COMPONENT}.Territory ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-	Print LocalRes:Messages { > ${RESDIR}.${COMPONENT}.Messages }
+	Print LocalRes:Messages { >> ${RESDIR}.${COMPONENT}.Messages }
         @echo ${COMPONENT}: resource files copied
 
 ${OBJECT}: ${SOURCE}
