@@ -1344,6 +1344,8 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
 	}
     }
 
+    mm_free(page_name);
+    
     return generated;
     NOT_USED(bfile);
     NOT_USED(referer);

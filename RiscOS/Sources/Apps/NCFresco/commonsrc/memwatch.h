@@ -32,7 +32,7 @@ extern void *mm_realloc(void *x, size_t y);
 extern int mm_can_we_recover(int abort);
 extern void mm_free(void *x);
 
-extern void mm_poll(void);
+extern int mm_poll(void);
 extern void mm_check(void);
 extern void mm_summary(void);
 extern void mm_dump(void);

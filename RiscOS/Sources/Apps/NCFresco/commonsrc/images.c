@@ -101,6 +101,10 @@
 #define SPRITE_NAME_DEFERRED	"deferred"
 #define SPRITE_NAME_UNKNOWN	"unknown"
 
+#define THREAD_STACK_SIZE	(4096+2048)	/* SJM: upped it a bit as PNG seems to need a bit more */
+
+#define IMAGE_THREAD_BUFFER_SIZE	4096
+
 /* ------------------------------------------------------------------------- */
 
 /*
@@ -674,7 +678,8 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 
     if ( i->width == 0 || i->height == 0 )
     {
-        i->flags |= image_flag_ERROR;
+	image_set_error(i);
+/*      i->flags |= image_flag_ERROR; */
         return FALSE;
     }
 
@@ -840,18 +845,18 @@ static int image_thread_start(image i)
 
     MemCheck_SetChecking(1,1);
 
-    i->tt = thread_start(&bastard_main, 0, (char**) i, 4096);
+    i->tt = thread_start(&bastard_main, 0, (char**) i, THREAD_STACK_SIZE);
 
     IMGDBG(("im%p: thread %p started\n", i, i->tt));
 
     return (i->tt != 0);
 }
 
-#define IMAGE_THREAD_BUFFER_SIZE	4096
+static char thread_buffer[IMAGE_THREAD_BUFFER_SIZE];
 
 static int image_thread_process(image i, int fh, int from, int to)
 {
-    char *buffer;
+    char *buffer = thread_buffer;
     int from_base = from;
 
     IMGDBGN(("image_thread_process: in: i %p fh %d from %d to %d\n", i, fh, from, to));
@@ -859,7 +864,7 @@ static int image_thread_process(image i, int fh, int from, int to)
     if ( !i->tt )
         return FALSE;
 
-    buffer = mm_malloc(IMAGE_THREAD_BUFFER_SIZE);	/* taken off stack so doesn't affect wimpslot */
+/*  buffer = mm_malloc(IMAGE_THREAD_BUFFER_SIZE); */	/* taken off stack so doesn't affect wimpslot */
 
     while (from < to && i->tt->status == thread_ALIVE)
     {
@@ -906,7 +911,7 @@ static int image_thread_process(image i, int fh, int from, int to)
 
     IMGDBGN(("im%p: image_thread_process out: status %d\n", i, i->tt->status));
 
-    mm_free(buffer);
+/*  mm_free(buffer); */
 
     if ( do_memory_panic )
     {
@@ -2603,7 +2608,7 @@ static void fixup_scale(sprite_factors *facs, int scale_image)
 
 static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image, sprite_factors *facs)
 {
-    if ((i->flags & (image_flag_REALTHING|image_flag_ERROR)) == image_flag_REALTHING && (w != -1 && h != -1))
+    if ((i->flags & (image_flag_REALTHING|image_flag_ERROR|image_flag_DEFERRED)) == image_flag_REALTHING && (w != -1 && h != -1))
     {
 #if 0   /*pdh*/
 	facs->xmag = w*2;

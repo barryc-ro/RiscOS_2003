@@ -127,8 +127,9 @@ extern int antweb_doc_abort_all(int level);
 
 static void *emergency_memory = NULL;
 
-extern void mm_poll(void)
+extern BOOL mm_poll(void)
 {
+    BOOL full = TRUE;
     /* bring stash back to full size */
 #if !MEMLIB
     if (emergency_memory == NULL)
@@ -158,19 +159,29 @@ extern void mm_poll(void)
 		    gbf_flags &= ~GBF_LOW_MEMORY;
 		if (size > EMERGENCY_MEMORY_UNIT)
 		    gbf_flags &= ~GBF_VERY_LOW_MEMORY;
+
+		if (size < EMERGENCY_MEMORY_STASH)
+		    full = FALSE;
 	    }
 	    else
 	    {
 		DBG(("mm_poll: failed to reallocate stash to %d\n", size + EMERGENCY_MEMORY_UNIT));
+
+		full = FALSE;
 	    }
 	}
     }
+    return full;
 }
 
 extern int mm_can_we_recover(int abort)
 {
     int r = 0;
 
+    /* Note this is set here but only cleared in memwatch when the
+       stash is made complete. End of downloading in frontend should
+       also check for stash being full and whether it should then
+       clear the flag */
     gbf_flags |= GBF_LOW_MEMORY;
     
     if (image_memory_panic())
@@ -243,8 +254,9 @@ extern int mm_can_we_recover(int abort)
 
 #else /* ITERATIVE_PANIC */
 
-extern void mm_poll(void)
+extern BOOL mm_poll(void)
 {
+    return TRUE;
 }
 
 extern int mm_can_we_recover(int abort)

@@ -1880,6 +1880,11 @@ int fe_check_download_finished(fe_view v)
   	    access_optimise_cache();
  	    auth_optimise();
 /* 	    plugin_list_optimise(); */
+
+	    /* when finished page, check if stash is full, in which
+               case clear the low memory flag */
+	    if (mm_poll())
+		gbf_flags &= ~GBF_LOW_MEMORY;
 	}
 	
 	/* optionally dump out the current memory use */

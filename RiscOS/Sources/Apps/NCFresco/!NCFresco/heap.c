@@ -86,7 +86,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 
 #if DEBUG
     if (oldptr)
-	STBDBGN(("heapda_realloc: %p to %d (heap %d da %d) (%s/%s)\n", oldptr, size_request, heap__size, da_size, caller(1), caller(2)));
+	STBDBGN(("heapda_realloc: %p to %d (heap %d da %d) (%s/%s/%s/%s)\n", oldptr, size_request, heap__size, da_size, caller(1), caller(2), caller(3), caller(4)));
 #endif
     /* if shrink to zero then just remove it */
     if (size_request == 0)
@@ -176,7 +176,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 
 void *heapda_alloc(unsigned int size)
 {
-    STBDBGN(("heapda_alloc: %d (heap %d da %d) (%s/%s)\n", size, heap__size, da_size, caller(1), caller(2)));
+    STBDBGN(("heapda_alloc: %d (heap %d da %d) (%s/%s/%s/%s)\n", size, heap__size, da_size, caller(1), caller(2), caller(3), caller(4)));
     return heapda_realloc(NULL, size);
 }
 

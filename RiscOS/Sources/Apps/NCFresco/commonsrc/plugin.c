@@ -1281,10 +1281,11 @@ BOOL plugin_is_there_enough_memory(int ft, int size)
     int extra = 0;
 
     /* if we don't know the size then we have to say yes */
-    if (size = -1)
+    if (size == -1)
 	return TRUE;
 
     extra += 32*1024;		/* for CodecCtl */
+    extra += 128*1024;		/* for ARMovie task */
     switch (ft)
     {
     case 0xae7:			/* video replay */
