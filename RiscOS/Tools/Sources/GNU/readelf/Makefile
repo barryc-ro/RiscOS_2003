@@ -67,6 +67,7 @@ install: install_tool
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
 	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
 	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
 
