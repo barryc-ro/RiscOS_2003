@@ -9,36 +9,42 @@
 #include <stdlib.h>
 #include <swis.h>
 
+#include "sys/types.h"
+
 #include "module.h"
 
 #define MPEGControl_FullBuffers 0x492c1
 
 struct bs_buffer *bs_fullp = 0;
 struct bs_buffer *bs_full_q = 0;
-static int wasempty = 0;
-/*extern struct bs_buffer *get_empty_buffer();
-extern struct bs_buffer *bswait_consume();*/
 struct bs_buffer *bs_empty_q = 0;
 struct bs_buffer *bs_emptyp = 0;
-static int bs_sent = 0;
-static int bs_received = 0;
-static int bs_saved = 0;
-static int callbs = 0;
-static int callbreqs = 0;
-static int bufs_hiwat = 0;
-static int norbufcnt = 0;
-static int bufs_sent = 0;
+
+static u_int bs_sent = 0;
+static u_int bs_received = 0;
+static u_int bs_saved = 0;
+static u_int bs_hiwater = 0;
+static u_int bs_overflows = 0;
+static u_int bs_underflows = 0;
+static u_int bs_lowbufs = 0;
+static int bufs_used = 0;
 
 int bs_minbufs_check = 0;
 
-int bufs_used = 0;
+static int callbs = 0;
+static int callbreqs = 0;
+
 int skipcnt = 0;
 
 extern int n_bs_buffers;
 extern int bs_bufsize;
 extern int mpeg_handle;
 extern int bs_minbufs;
-extern int bs_bytes_sent;
+extern u_long bs_bytes_sent;
+
+extern struct bs_buffer *bs_current_buf;
+extern int bs_current_residue;
+
 
 void init_mpeg_buffers ( void );
 struct bs_buffer *full_buffer ( void );
@@ -76,39 +82,37 @@ void init_mpeg_buffers()
 
 void print_bufs()
 {
-    int nbufs = 0;
-    struct bs_buffer *b;
+    int nbufs = bs_empty_q_cnt();
 
-    for (b = bs_empty_q; b; b = b->bs_next)
-    {
-      nbufs++;
-    }
     printf("Buffers:\n");
     printf("    Empty bufs=%d (of %d)\n",nbufs, n_bs_buffers);
-    printf("    Empty_q=%p, emptyp=%p, Full_q=%p, fullp=%p\n",
-                bs_empty_q, bs_emptyp, bs_full_q, bs_fullp);
-    printf("    bs_queued=%d, bs_sent=%d, bs_returned=%d\n",
-                bs_saved, bs_sent, bs_received);
-    printf("    norbufs=%d, exhaustions=%d, bs_inuse=%d, bs_hiwat=%d\n",
-                norbufcnt, wasempty, bufs_used, bufs_hiwat);
+    printf("    bs_queued=%d, bs_sent=%d, bs_returned=%d, bs_inuse=%d\n",
+                bs_saved, bs_sent, bs_received, bufs_used);
+    printf("    bs_underflows=%d, bs_lowbufs=%d\n", bs_underflows, bs_lowbufs);
+    printf("    bs_overflows=%d, bs_hiwater=%d\n", bs_overflows, bs_hiwater);
     if (bs_sent > 0)
     {
       printf("    bs_buf average content=%d\n", bs_bytes_sent/bs_sent);
     }
+#ifdef DEBUG
+    printf("    Empty_q=%p, emptyp=%p, Full_q=%p, fullp=%p\n",
+                bs_empty_q, bs_emptyp, bs_full_q, bs_fullp);
+#endif
 }
+
 
 int init_bs_buffers(void)
 {
     struct bs_buffer *b,**bp;
     int i;
 
-    bprotos = (struct bs_buffer **)calloc(sizeof(struct bs_buffer *),n_bs_buffers);
+    bprotos = (struct bs_buffer **)calloc(sizeof(struct bs_buffer *), n_bs_buffers);
     if (bprotos == NULL)
     {
       return(0);
     }
     bp = bprotos;
-    b = (struct bs_buffer *)calloc(n_bs_buffers,sizeof(struct bs_buffer));
+    b = (struct bs_buffer *)calloc(sizeof(struct bs_buffer), n_bs_buffers);
     if (b == 0)
     {
         return(0);
@@ -136,7 +140,6 @@ void reinit_bs_buffers(void)
     struct bs_buffer *b,**bp;
     int i;
 
-    printf("In reinit\n");
     bp = bprotos;
     for (i = 0; i < n_bs_buffers; i++)
     {
@@ -149,16 +152,22 @@ void reinit_bs_buffers(void)
         b->bs_packets = 0;
         return_empty_buf(b, 0);
     }
-    bs_received = 0;
-    bufs_used = 0;
-    bs_sent = 0;
+    bs_saved      = 0;
+    bs_sent       = 0;
+    bs_received   = 0;
+    bufs_used     = 0;
     bs_bytes_sent = 0;
-    bs_saved = 0;
-    bs_minbufs_check = 0;
+    bs_underflows = 0;
+    bs_lowbufs   = 0;
+    bs_overflows  = 0;
+    bs_hiwater    = 0;
+    bs_minbufs_check   = 0;
+    bs_current_buf     = NULL;
+    bs_current_residue = 0;
 }
 
 /*
- * Returns a used buffer to the end of the empty queue
+ * Returns a now unused buffer to the end of the empty queue
  */
 int return_empty_buf(struct bs_buffer *b, int flag)
 {
@@ -167,12 +176,25 @@ int return_empty_buf(struct bs_buffer *b, int flag)
         int s = ensure_irqs_off();
         bs_received++;
         bufs_used--;
+
         if (bs_emptyp == 0)
            bs_empty_q = b;
         else
            bs_emptyp->bs_next = b;
         bs_emptyp = b;
+
         restore_irqs(s);
+        if (flag)
+        {
+          if (bufs_used <= 1) /* only bs_buf in use is one filling */
+          {
+            bs_underflows++;
+          }
+          if (bufs_used <= bs_minbufs) /* Allow for the one being filled */
+          {
+            bs_lowbufs++;
+          }
+        }
     }
     return(1);
 }
@@ -201,15 +223,17 @@ struct bs_buffer *get_empty_buffer(void)
 
     if (b == 0)
     {
-        wasempty++;
+        bs_overflows++;
         restore_irqs(s);
         return ((struct bs_buffer *)0);
     }
     bs_empty_q = b->bs_next;
     if (bs_empty_q == 0)
         bs_emptyp = 0;
-    if (++bufs_used > bufs_hiwat)
-        bufs_hiwat = bufs_used;
+    if (++bufs_used > bs_hiwater)
+    {
+      bs_hiwater = bufs_used;
+    }
     restore_irqs(s);
     b->bs_next = 0;
     b->bs_len = 0;
@@ -225,17 +249,26 @@ void save_full_buf(struct bs_buffer * b, int datalost)
 {
     int s = ensure_irqs_off();
     b->bs_next = 0;
+
     if (skipcnt > 0)
     {
         b->bs_offset = b->bs_data + skipcnt;
         b->bs_len -= skipcnt;
     }
     else
+    {
         b->bs_offset = b->bs_data;
+    }
+
     if (bs_fullp == 0)
+    {
        bs_full_q = b;
+    }
     else
+    {
        bs_fullp->bs_next = b;
+    }
+
     bs_fullp = b;
     bs_saved++;
     restore_irqs(s);

@@ -34,12 +34,13 @@
 
 void *module_wsp = 0;
 int v_state = IDLE;
-static int bs_sent = 0;
+
 static int discards = 0;
-static int overflows = 0;
+static int oversized = 0;
+static int empty_failures = 0;
+
 int default_video_port = 0;
 int video_port = 0;
-static int rxsize = 0;
 int bs_bufsize = 0;
 int n_bs_buffers = 0;
 int bs_minbufs = 0;
@@ -51,6 +52,9 @@ extern int bs_minbufs_check;
 
 int mpeg_handle, vsock, vssock;
 int do_debug = 0;
+
+struct bs_buffer *bs_current_buf;
+int bs_current_residue;
 
 extern _kernel_oserror *calleverytick(void);
 extern struct bs_buffer *get_empty_buffer(void);
@@ -178,7 +182,7 @@ _kernel_oserror *udpv_init(char *cmd_tail, int pbase, void *pw)
     return ((_kernel_oserror *)0);
 }
 
-/*ARGSUSED*/
+
 _kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, void *pw)
 {
     struct client *callp;
@@ -215,11 +219,15 @@ _kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, v
 
 void udpv_show(int argc, char **argv)
 {
-    printf("videoport=%d (%x), lastport=%d, rxbufsize=%d\n",
-               default_video_port, default_video_port, video_port, rxsize);
-    printf("bs_bufpool=%d, n_buffers=%d, bufsize=%d, bs_minbufs=%d (%d)\n",
+    printf("videoport=%d (%x), lastport=%d, emptyfailure=%d\n",
+               default_video_port, default_video_port, video_port, empty_failures);
+    printf("bs_bufpool=%d, n_buffers=%d, bufsize=%d, bs_minbufs=%d (%d frames)\n",
                bs_bufpool, n_bs_buffers, bs_bufsize, bs_minbufs, bs_minbufs_check);
-    printf("discards=%d, overflows=%d\n", discards, overflows);
+    printf("bs_discards=%d, frame oversized=%d\n", discards, oversized);
+#ifdef DEBUG
+    printf("bs_current_buf=%p, bs_current_residue=%d\n",
+               bs_current_buf, bs_current_residue);
+#endif
     print_bufs();
 }
 
@@ -304,7 +312,7 @@ int udpv_endofplay(_kernel_swi_regs *r)
 int udpv_empty_buf(_kernel_swi_regs *r)
 {
     if (r->r[2] != 0)
-        return_empty_buf((struct bs_buffer *)r->r[2],0);
+        return_empty_buf((struct bs_buffer *)r->r[2],1);
     r->r[2] = 0;
     return (0);
 }
@@ -347,94 +355,82 @@ void close_session(void)
 
 int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int ack_buf)
 {
-    struct mbuf *m, *m0, *m1;
-    struct bs_buffer *bs = 0;
-    int mlen, residue = 0;
-    char *bptr;
+    struct mbuf *m0, *m1;
+    int mlen;
+    static char *bptr;
 
     m0 = (struct mbuf *)a;
     m1 = (struct mbuf *)ack_buf;
-    if (m0 == 0)
-        goto out;
-/*    for (m = m0; m; m = m->m_next)
+
+    if (m0 != NULL)
     {
-        mlen = m->m_len;
-        if (mlen == 0)
-            continue;
-        if (mlen > residue)
+      /* Replacement for block of Keith's code:    *
+       * use MBuf manager supplied routines rather *
+       * than walking mbuf chains manually & using *
+       * CLib memcpy - the mbuf manager is likely  *
+       * to be more optimal.                       *
+       */
+
+      mlen = (*mbctl.count_bytes)(&mbctl, m0);
+      if (mlen > bs_bufsize)
+      {
+        oversized++;
+      }
+      while (mlen > 0)
+      {
+        while (mlen > bs_current_residue)
         {
-            if (bs != 0)
-                save_full_buf(bs, 0);
-            if ((bs = get_empty_buffer()) == 0)
-            {
-                discards++;
-                break;
-            }
-            residue = bs_bufsize;
-            bptr = bs->bs_data;
-            bs->bs_len = 0;
-            bs->bs_handle = 0;
-            bs->bs_flags = FREE_BUFFER_SWI;
+          if (bs_current_buf != NULL)
+          {
+             /* remove residue bytes from mbuf chain, copy to bptr,
+                and update mbuf chain to reflect the removal of these */
+            (void) TRIM(m0, bs_current_residue, bptr);
+            bs_current_buf->bs_len += bs_current_residue;
+            mlen -= bs_current_residue;
+            save_full_buf(bs_current_buf, 0);
+          }
+          bs_current_buf = get_empty_buffer();
+          if (bs_current_buf == 0)
+          {
+            discards++;
+            bs_current_residue = 0;
+            break; /* Fall out of inner while loop */
+          }
+          bs_current_residue = bs_bufsize;
+          bs_current_buf->bs_len = 0;
+          bs_current_buf->bs_handle = 0;
+          bs_current_buf->bs_flags = FREE_BUFFER_SWI;
+          bptr = bs_current_buf->bs_data;
         }
-        memcpy(bptr, mtod(m, char *), mlen);
-        bs->bs_len += mlen;
+        /* When we fall out of the above loop, we've either exhausted the buffer pool,
+           or there are less than bs_current_residue bytes left in the mbuf chain */
+        if (bs_current_residue == 0)
+        {
+          break; /* Fall out of outer while loop */
+        }
+        /* remove remaining mlen bytes from mbuf chain, copy to bptr,
+           and update mbuf chain to reflect the removal of these */
+        (void) TRIM(m0, mlen, bptr);
+        bs_current_buf->bs_len += mlen;
         bptr += mlen;
-        residue -= mlen;
-   }
-   if (bs != 0)
-   {
-        rxsize = bs->bs_len;
-        save_full_buf(bs, 0);
-   }
-   bs_bytes_sent += send_buffers();
-   m0->m_len = 0;
-*/
-/* Replacement for block of Keith's code:    *
- * use MBuf manager supplied routines rather *
- * than walking mbuf chains manually & using *
- * CLib memcpy - the mbuf manager is likely  *
- * to be more optimal.                       *
- */
-
-    mlen = (*mbctl.count_bytes)(&mbctl, m0);
-    bs = get_empty_buffer();
-    if (bs == 0)
-    {
-      discards++;
-    }
-    else
-    {
-      residue = bs_bufsize;
-      bptr = bs->bs_data;
-      bs->bs_len = 0;
-      bs->bs_handle = 0;
-      bs->bs_flags = FREE_BUFFER_SWI;
-      if (mlen <= bs_bufsize)
-      {
-        (void) EXPORT(m0, mlen, bptr);
-        bs->bs_len += mlen;
-        bptr += mlen;
-        residue -= mlen;
+        bs_current_residue -= mlen;
+        mlen = 0;
+        /* catch case where this exactly fills the bs_buffer */
+        if (bs_current_residue == 0)
+        {
+          save_full_buf(bs_current_buf, 0);
+          bs_current_buf = NULL;
+        }
       }
-      else
+      bs_bytes_sent += send_buffers(); /* Send any buffers we've queued */
+      if (mlen != 0) /* Suggests bs_buf exhaustion has occurred */
       {
-        overflows++;
-        (void) EXPORT(m0, bs_bufsize, bptr);
-        bs->bs_len += bs_bufsize;
-        bptr += bs_bufsize;
-        residue -= bs_bufsize;
-      }
-      if (bs != 0)
-      {
-         rxsize = bs->bs_len;
-         save_full_buf(bs, 0);
+        empty_failures++;
+        (void) TRIM(m0, M_COPYALL, NULL); /* Force this buf to be empty */
       }
     }
-    bs_bytes_sent += send_buffers();
-    m0->m_len = 0;
 
-out:
-    if (m1)
+    if (m1) /* Tidy up the KSR back door approach to the stack */
     {
         m_freem(m1);
     }
