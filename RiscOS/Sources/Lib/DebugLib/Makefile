@@ -23,6 +23,7 @@ RM		= remove
 LD		= link
 LB		= libfile
 WIPE		= -wipe
+STRIPDEPEND	= stripdepnd
 
 CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS		= -depend !Depend -Stamp -quit
@@ -45,10 +46,8 @@ ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
 
 REMOTEDBLIB	= ${LIBDIR}.debug.o.lremote
-PDEBUG		= Libs.PD_PL
-PDEBUGZM	= Libs.PD_M_PL
-#PDEBUG		= ${LIBDIR}.PDebug.o.Lib_PL
-#PDEBUGZM	= ${LIBDIR}.PDebug.o.Lib_M_PL
+PDEBUG		= ${LIBDIR}.PDebug.o.Lib_PL
+PDEBUGZM	= ${LIBDIR}.PDebug.o.Lib_M_PL
 
 
 # ------------------------------------------------------------------------------
@@ -126,6 +125,7 @@ clean:
 	${WIPE} oz ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGETZ}
+	${STRIPDEPEND} Makefile
 	@echo ${COMPONENT}: cleaned
 
 export_hdrs: h.DebugLib dirs
