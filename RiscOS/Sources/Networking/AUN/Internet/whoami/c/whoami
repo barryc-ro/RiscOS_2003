@@ -10,7 +10,7 @@
  * :RCS Log discontinued:
  * Revision 1.5  95/11/14  12:08:41  pwain
  * Check in for jdavies@csd
- * 
+ *
  * Added use of AUN_state flag to control AUN REVARP behaviour.
  *
  * Revision 1.4  95/07/06  08:50:39  kwelton
@@ -19,22 +19,22 @@
  * is to a request from the local machine; *always* raise an internet event
  * for the revarp reply, as this is used (and needed) by the Net module when
  * talking to Gateway machines.
- * 
+ *
  * Revision 1.3  95/01/24  17:17:46  kwelton
  * Whoops - missed an occurence of MMAXOFF within revarp_broadcastclientaddrs,
  * which should have been changed to MAXOFF(m) in the new mbuf scheme.
- * 
+ *
  * Revision 1.2  95/01/24  16:24:53  kwelton
  * Several changes, mostly concerned with fixing remote address lookup,
  * which was badly broken in the DCI 2 version of the module.  Added the
  * new routine revarp_broadcastclientaddrs(), which implements the
  * functionality of the new ioctl SIOCSWHOTHEYARE.
- * 
+ *
  * Used the opportunity to add a few debug lines.
- * 
+ *
  * Revision 1.1  94/12/02  11:58:02  kwelton
  * Initial revision
- * 
+ *
  */
 #include "kernel.h"
 #include "swis.h"
@@ -70,8 +70,13 @@
 char *inet_ntoa();
 void revarp_myaddr();
 
-#define BOOTPSERVERVAR "Inet$BootServer"
+#define BOOTPSERVERVAR  "Inet$BootServer"
 #define BOOTPSERVERFILE "Inet$BootFile"
+#define BOOTPGATEWAYVAR "Inet$Gateway"
+#define BOOTPNETMASKVAR "Inet$EtherIPMask"
+#define BOOTPDNSVAR     "Inet$Resolvers"
+#define BOOTPHOSTVAR    "Inet$HostName"
+
 
 int if_whoamimns(struct ifnet *ifp)
 {
@@ -233,6 +238,72 @@ int in_bootpresponse(u_short port)
 
 static u_long BOOTPserver = 67;
 
+/* Extract an IP address from 4 bytes.
+ */
+static u_long
+vend_extractaddr(u_char *cp)
+{
+    return *cp + (*(cp+1) << 8) + (*(cp+2) << 16) + (*(cp+3) << 24);
+}
+
+/* Verify that vendor info is compliant with RFC-1048
+ * by checking magic cookie.
+ */
+static int
+vend_verify(BOOTP *pkt)
+{
+    return vend_extractaddr(pkt->vend) == RFC1048MAGIC;
+}
+
+/* Find code in vendor specific information
+ * (returns pointer to length byte or NULL).
+ */
+static u_char *
+vend_find_code(BOOTP *pkt, u_char code)
+{
+    u_char *cp = pkt->vend + 4;     /* Skip magic cookie. */
+    u_char c;
+
+    while ((c = *cp++) != TAG_END)
+    {
+        if (c == TAG_PAD) continue;
+        if (c == code) return cp;
+        cp += *cp + 1;
+    }
+
+    return NULL;
+}
+
+/* Extract an IP address specified by data code from vendor specific data
+ * (returns netmask or 0).
+ */
+static u_long
+vend_iaddr(BOOTP *pkt, u_char code)
+{
+    u_char *cp = vend_find_code(pkt, code);
+
+    return (cp++ != NULL) ? vend_extractaddr(cp) : 0;
+}
+
+/* Extract a string from the vendor specific data
+ * (returns length of string)
+ */
+static int
+vend_string(BOOTP *pkt, u_char code, char *buf)
+{
+    u_char *cp = vend_find_code(pkt, code);
+
+    if (cp != NULL)
+    {
+        int len = (int)*cp++;
+        strncpy(buf, cp, len);
+        buf[len] = '\0';
+        return len;
+    }
+
+    return 0;
+}
+
 /*
  * A bootstrap packet reply has been received
  */
@@ -276,6 +347,25 @@ bootp_udp_input(struct ifnet *ifp, struct mbuf *m)
 
     setriscosvar(BOOTPSERVERVAR, inet_ntoa(pkt.siaddr));
     setriscosvar(BOOTPSERVERFILE, pkt.file);
+
+    /* If this packet is RFC-1048 compliant then extract any pertinent
+     * information from the vendor data.
+     */
+    if (vend_verify(&pkt))
+    {
+        char buf[VEND_MAX];
+        u_long tmp;
+
+        tmp = vend_string(&pkt, TAG_HOST_NAME, buf);
+        if (tmp) setriscosvar(BOOTPHOSTVAR, buf);
+        tmp = vend_iaddr(&pkt, TAG_SUBNET_MASK);
+        if (tmp) setriscosvar(BOOTPNETMASKVAR, inet_ntoa(tmp));
+        tmp = vend_iaddr(&pkt, TAG_GATEWAY);
+        if (tmp) setriscosvar(BOOTPGATEWAYVAR, inet_ntoa(tmp));
+        tmp = vend_iaddr(&pkt, TAG_DOMAIN_SERVER);
+        if (tmp) setriscosvar(BOOTPDNSVAR, inet_ntoa(tmp));
+    }
+
     bzero((caddr_t)&ifr, sizeof(ifr));
     sin = (struct sockaddr_in *)&ifr.ifr_addr;
     sin->sin_family = AF_INET;
@@ -725,7 +815,7 @@ revarpinput(struct arpcom *ac, struct mbuf *m)
 			    memcpy(ea->arp_spa,
 			    (caddr_t)&((struct sockaddr_in *)&ifa->ifa_addr)->sin_addr,
 			    sizeof(ea->arp_spa));
-			memcpy(ea->arp_tpa, 
+			memcpy(ea->arp_tpa,
 			    (caddr_t)&((struct sockaddr_in *)&ifa->ifa_addr)->sin_addr,
 			    sizeof(ea->arp_tpa));
 			ea->arp_tpa[3] = 0; /* MNS station id */
@@ -845,10 +935,10 @@ void revarp_broadcastclientaddrs(struct arpcom *ac)
     {
 	if (ifa->ifa_ifp == ifp)
 	{
-	    memcpy(ea->arp_spa, 
+	    memcpy(ea->arp_spa,
 		   (caddr_t)&((struct sockaddr_in *)&ifa->ifa_addr)->sin_addr,
 		   sizeof(ea->arp_spa));
-	    memcpy(ea->arp_tpa, 
+	    memcpy(ea->arp_tpa,
 		   (caddr_t)&((struct sockaddr_in *)&ifa->ifa_addr)->sin_addr,
 		   sizeof(ea->arp_tpa));
 
