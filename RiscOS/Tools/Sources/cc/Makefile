@@ -157,6 +157,7 @@ install: install_tool install_dirs
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
 	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
 	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
 install_dirs:
