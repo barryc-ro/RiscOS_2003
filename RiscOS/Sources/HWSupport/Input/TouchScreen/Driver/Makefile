@@ -173,4 +173,3 @@ ${DIRS}:
 	${TOUCH} $@
 
 # Dynamic dependencies:
-o.header: cmhg.header VersionNum C:Global.h.Services
