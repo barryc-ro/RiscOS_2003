@@ -124,17 +124,3 @@ ${LDIR}.ROM.!RunLink: bas.!RunLink
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-rm.Help: s.AppName
-rm.Help: Hdr:ListOpts
-rm.Help: Hdr:Macros
-rm.Help: Hdr:System
-rm.Help: Hdr:SWIs
-rm.Help: Hdr:CPU.Generic26
-rm.Help: Hdr:IO.GenericIO
-rm.Help: Hdr:RISCOS
-rm.Help: Hdr:ModHand
-rm.Help: Hdr:Services
-rm.Help: Hdr:Proc
-rm.Help: Hdr:ResourceFS
-rm.Help: s.Version
-rm.Help: s.ResFiles

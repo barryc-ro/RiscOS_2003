@@ -137,17 +137,3 @@ ${RDIR}.Code: bas.AlarmSrc
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-rm.Alarm: s.AppName
-rm.Alarm: Hdr:ListOpts
-rm.Alarm: Hdr:Macros
-rm.Alarm: Hdr:System
-rm.Alarm: Hdr:SWIs
-rm.Alarm: Hdr:CPU.Generic26
-rm.Alarm: Hdr:IO.GenericIO
-rm.Alarm: Hdr:RISCOS
-rm.Alarm: Hdr:ModHand
-rm.Alarm: Hdr:Services
-rm.Alarm: Hdr:Proc
-rm.Alarm: Hdr:ResourceFS
-rm.Alarm: s.Version
-rm.Alarm: s.ResFiles
