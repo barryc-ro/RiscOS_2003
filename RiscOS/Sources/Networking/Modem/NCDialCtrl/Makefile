@@ -84,6 +84,11 @@ h.cmhg_modem: cmhg.HeaderMod
 
 c.module: h.cmhg_modem
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic-resources-get-alias
+  BBE_Export_Dir ResModem
+
 #
 # RISC OS ROM build rules:
 #
