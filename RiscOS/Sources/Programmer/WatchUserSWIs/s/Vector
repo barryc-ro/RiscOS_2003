@@ -1,0 +1,292 @@
+        GET     Hdr:ListOpts
+        GET     Hdr:Macros
+        GET     Hdr:APCS.<APCS>
+        GET     Hdr:System
+        GET     Hdr:Proc
+        GET     Hdr:Wimp
+        GET     Hdr:Switcher
+        GET     Hdr:Filter
+        GET     Hdr:NdrDebug
+
+        IMPORT  |x$stack_overflow|
+        IMPORT  |malloc|
+        IMPORT  |_memcpy|
+        IMPORT  |free|
+
+                GBLL    debug
+debug           SETL    {TRUE}	        ; this enables NdrDebug real-time debugging
+                GBLL    debug_irqsafe
+debug_irqsafe   SETL    {TRUE}	        ; emulate SWI OS_ConvertHex8
+                GBLL    hostvdu
+                GBLL    debug_module
+                GBLL    pdebug_module
+                GBLL    dadebug_module
+hostvdu         SETL    {FALSE}	        ;
+debug_module    SETL    {FALSE}	        ;
+pdebug_module   SETL    {FALSE}	        ;
+dadebug_module  SETL    {TRUE}	        ; this is probably the only safe one
+
+
+        AREA    |Asm$$Code|, CODE, READONLY
+
+; void Vector_Init(void);
+        EXPORT  Vector_Init
+Vector_Init
+        FunctionEntry "v1,v2", MakeFrame
+        CMP     sp, sl
+        BLLT    |x$stack_overflow|
+
+        Debug_Open
+
+        ; Register the Wimp filter
+        ADR     r0, FilterName
+        ADR     r1, FilterCode
+        StaticBaseFromSL r2
+        MOV     r3, #0
+        MOV     r4, #0
+        SWI     XFilter_RegisterPostFilter
+        MOV     v2, r2
+
+        ; Create trampoline
+        MOV     a1, #TrampolineEnd - Trampoline
+        BL      |malloc|
+        MOVS    v1, a1
+        Return  "v1,v2", fpbased, EQ
+        STRVar  v1, v2, TrampBlock, lr
+
+        ADR     a2, Trampoline
+        MOV     a3, #TrampolineData_Code - Trampoline
+        BL      |_memcpy|
+        ADR     a1, SWIInterceptCode
+        STR     a1, [v1, #TrampolineData_Code - Trampoline]
+        STR     v2, [v1, #TrampolineData_WS - Trampoline]
+
+        MOV     r0, #1
+        MOV     r1, v1
+        ADD     r2, r1, #TrampolineData_Code - Trampoline - 4
+        SWI     XOS_SynchroniseCodeAreas
+
+        ; Find the location to patch in the SWI despatcher
+        MOV     r0, #6
+        MOV     r1, #0
+        MOV     r2, #18
+        SWI     XOS_ReadSysInfo
+        MOVVS   r2, #0
+        MOVS    r1, r2
+        LDREQ   r1, =&01F033FC
+        LDR     r2, OriginalInstruction
+01      LDR     r0, [r1, #-4]!
+        TEQ     r0, r2
+        BNE     %BT01
+        STRVar  r1, v2, PokeLocation, lr
+
+        SUB     r0, v1, r1
+        SUB     r0, r0, #8
+        MOV     r0, r0, LSR#2
+        BIC     r0, r0, #&FF000000
+        ORR     r0, r0, #&EA000000
+        STRVar  r0, v2, ReplacementInstruction, lr
+
+        ADD     r1, r1, #4
+        STR     r1, [v1, #TrampolineData_Return - Trampoline]
+
+        MOV     r0, #6
+        MOV     r1, #0
+        MOV     r2, #16
+        SWI     XOS_ReadSysInfo
+        MOVVS   r2, #0
+        MOVS    r1, r2
+        LDREQ   r1, =&01C02000
+        SUB     r1, r1, #4*4 ; account for r14,r10-r12 on otherwise empty SVC stack
+        STR     r1, [v1, #TrampolineData_SVCCheck - Trampoline]
+
+        Return  "v1,v2", fpbased
+
+
+; void Vector_Final(void);
+        EXPORT  Vector_Final
+Vector_Final
+        FunctionEntry "v1", MakeFrame
+        CMP     sp, sl
+        BLLT    |x$stack_overflow|
+        ; Register the Wimp filter
+        ADR     r0, FilterName
+        ADR     r1, FilterCode
+        StaticBaseFromSL r2
+        MOV     r3, #0
+        MOV     r4, #0
+        SWI     XFilter_DeRegisterPostFilter
+        MOV     v1, r2
+
+        ; Remove the SWI despatch poke
+        LDR     r0, OriginalInstruction
+        LDRVar  r1, v1, PokeLocation
+        STR     r0, [r1]
+
+        ; Free the trampoline block
+        LDRVar  a1, v1, TrampBlock
+        BL      |free|
+
+        Debug_Close
+
+        Return  "v1", fpbased
+
+
+FilterName
+        =       "WatchUserSWIs", 0
+        ALIGN
+
+
+FilterCode
+        Entry   "r0-r3"
+        MOV     r0, #5
+        SWI     XWimp_ReadSysInfo
+        TEQ     r0, #0
+        EXIT    EQ
+        SWI     XTaskManager_TaskNameFromHandle
+        LDRVar  r1, r12, TaskName
+01      LDRB    r2, [r0], #1
+        CMP     r2, #' '
+        MOVCC   r2, #0
+        LDRB    r3, [r1], #1
+        CMP     r3, #' '
+        MOVCC   r3, #0
+        EORS    lr, r2, r3
+        BNE     %FT02 ; not a match
+        TEQ     r2, #0
+        BNE     %BT01
+
+        ; Exiting to the task we're interested in
+        LDRVar  r0, r12, ReplacementInstruction
+02      ; Exiting to another task (if NE)
+        LDRNE   r0, OriginalInstruction
+03      LDRVar  r1, r12, PokeLocation
+        STR     r0, [r1]
+
+        EXIT
+
+
+Trampoline
+        ; r12 = SWI number, including X bit
+        ; lr = return PSR
+        TST     lr, #3 ; quick exit if not returning to USR mode
+        MOVNE   r10, #0
+        LDRNE   pc, TrampolineData_Return ; back to SWI despatch
+        LDR     r11, TrampolineData_SVCCheck
+        TEQ     sp, r11 ; SVC stack empty (apart from r14,r10-r12)?
+        LDRNE   pc, TrampolineData_Return
+        Push    "lr"
+        MOV     r11, lr ; keep hold of return flags, they're useful
+        LDR     r10, TrampolineData_WS
+        MOV     lr, pc
+        LDR     pc, TrampolineData_Code
+        Pull    "lr"
+OriginalInstruction
+        MOV     r10, #0
+        LDR     pc, TrampolineData_Return
+TrampolineData_Code
+        DCD     0
+TrampolineData_WS
+        DCD     0
+TrampolineData_SVCCheck
+        DCD     0
+TrampolineData_Return
+        DCD     0
+TrampolineEnd
+
+
+SWIInterceptCode
+        ; On entry
+        ;   r0-r9 hold values that will be returned to caller
+        ;   r10 = our static base
+        ;   r11 = PSR that will be returned from SWI
+        ;   r12 = SWI number, including X bit
+        ;   [sp,#8+0] -> instruction after SWI
+        ;   [sp,#8+4] = caller r10
+        ;   [sp,#8+8] = caller r11
+        ;   [sp,#8+12] = caller r12
+        ;   lr = address for use to return to
+        ; On exit
+        ;   r10,r11,lr may be corrupted
+        Entry   "r0-r2"
+        ; Print the SWI name
+        MOV     r0, r12
+        BL      PrintSWIName
+        BIC     r0, r0, #Auto_Error_SWI_bit_number
+        TEQ     r0, #OS_CallASWI
+        TEQNE   r0, #OS_CallASWIR12
+        BNE     %FT10
+        ; If it's a CallASWI SWI, print the actual SWI name
+        MOV     r0, #' '
+        BL      Neil_WriteC
+        MOV     r0, #'('
+        BL      Neil_WriteC
+        TEQ     r0, #OS_CallASWI
+        LDREQ   r0, [sp, #16+8+4]
+        LDRNE   r0, [sp, #16+8+12]
+        BL      PrintSWIName
+        MOV     r0, #')'
+        BL      Neil_WriteC
+10      ; If returning an error, print it
+        TST     r11, #V_bit
+        BEQ     %FT90
+        MOV     r0, #' '
+        BL      Neil_WriteC
+        LDR     r0, [sp, #0]
+        ADD     r0, r0, #4
+        BL      Neil_Write0
+90      ; Do a newline
+        BL      Neil_NewLine
+        EXIT
+
+PrintSWIName
+        Entry   "r0"
+        SUB     sp, sp, #100
+        MOV     r1, sp
+        MOV     r2, #100
+        SWI     XOS_SWINumberToString
+        LDRB    lr, [r1]
+        TEQ     lr, #'X'
+        ADDEQ   r2, r1, #1
+        MOVNE   r2, r1
+        LDRB    lr, [r2], #1
+        TEQ     lr, #'U'
+        LDREQB  lr, [r2], #1
+        TEQEQ   lr, #'s'
+        LDREQB  lr, [r2], #1
+        TEQEQ   lr, #'e'
+        LDREQB  lr, [r2], #1
+        TEQEQ   lr, #'r'
+        MOVNE   r0, r1
+        BNE     %FT80
+        ; Unknown SWI - print number instead
+        MOV     lr, #'&'
+        STRB    lr, [r1], #1
+        MOV     r2, #99
+        SWI     XOS_ConvertHex6
+        MOV     r0, sp
+80      ; Now we have the string to print in r0
+        BL      Neil_Write0
+        ADD     sp, sp, #100
+        EXIT
+
+
+        InsertNDRDebugRoutines
+
+
+        IMPORTVar TaskName
+        LocalVar TrampBlock
+        LocalVar PokeLocation
+        LocalVar ReplacementInstruction
+
+
+        AREA    |Asm$$Data|, DATA
+
+TrampBlock
+        DCD     0
+PokeLocation
+        DCD     0
+ReplacementInstruction
+        DCD     0
+
+        END
