@@ -34,7 +34,6 @@ TRANSLATE	= translate
 #
 INRESDIR	= LocalUserIFRes:Applet
 INVSNFILE	= LocalUserIFRes:Version
-INCHOICEDIR	= LocalUserIFRes:Choices
 #INPREDIR	= LocalUserIFRes:PreDesktop
 #INDESKDIR	= LocalUserIFRes:Desktop
 
@@ -57,6 +56,7 @@ CHMODFLAGS	= +ow +or +wr -ww
 TRANSFLAGS	= $(THROWBACK) -marko "««" -markc "»»" -htmlo "" -htmlc "‘‘"
 TRANSMAPPINGS	= TranslateRes:Mappings
 TRANSCHOICEDIR	= TranslateRes:Choices
+TRANSAPPLETDIR	= TranslateRes:Applet
 
 #
 # Rule patterns:
@@ -100,7 +100,6 @@ rom_link:
 #
 install: translate dirs
 	$(CP) $(INRESDIR).*    $(OUTRESDIR).*       $(CPFLAGS)
-	$(CP) $(INCHOICEDIR).* $(OUTCHOICEDIR).*    $(CPFLAGS)
 	$(CP) $(INVSNFILE)     $(OUTVSNFILE)        $(CPFLAGS)
 	Do $(AWK) -- "/.define.*CMHG.*/" VersionNum >>$(OUTVSNFILE)
         $(CHMOD) $(INSTDIR)
@@ -109,7 +108,7 @@ install: translate dirs
 translate: dirs
         @echo Translating Choices dir...
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSCHOICEDIR).Channels -o $(OUTCHOICEDIR).Channels
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSCHOICEDIR).Errors   -o $(OUTCHOICEDIR).Errors
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSAPPLETDIR).Errors   -o $(OUTRESDIR).Errors
         @echo Translation Complete.
 
 dirs:
