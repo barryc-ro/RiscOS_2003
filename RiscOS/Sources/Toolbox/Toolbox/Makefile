@@ -7,7 +7,10 @@
 # ----       ----   -----------
 # 06-Jan-94  AMcC   Created
 # 04-Feb-98  SNB    Updated to allow RAM builds
+# 11-Jun-98  SNB    Updated to allow debug builds and add -p option to cmhg.
 #
+
+.SUFFIXES: .c .o .od .s
 
 #
 # Component specific options:
@@ -15,6 +18,7 @@
 COMPONENT  = Toolbox
 ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
+DBG_MODULE = rm.D${COMPONENT}
 
 #
 # Export Paths for Messages module
@@ -85,13 +89,29 @@ RAM_OBJS =\
  o.resf\
  o.task
 
+DBG_OBJS =\
+ o.Modhdr_NoD\
+ o.base\
+ o.callback\
+ od.event\
+ od.filters\
+ o.filter_ven\
+ od.globals\
+ od.mainRAM\
+ od.memory\
+ o.memswis\
+ od.object\
+ od.resf\
+ od.task
+
 RESF=o.msgs
 
 #
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.c.od:;    ${CC} ${CFLAGS} ${ROMFLAGS} -Ddebugging=1 -o $@ $<
+.cmhg.o:; ${CMHG} -p -o $@ $<
 .s.o:;    ${AS} ${AFLAGS} -o $@ $<
 
 #
@@ -121,6 +141,10 @@ clean:
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
+trace: ${DBG_MODULE}
+       @echo ${COMPONENT}: Debug module build (RAM)
+
+
 ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
         ${MKDIR} aof
         ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
@@ -146,8 +170,16 @@ ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${CLIB}
         ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
         Access $@ RW/R
 
+${DBG_MODULE}: ${DBG_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${CLIB}
+	${mkdir} rm
+        ${LD} -o $@ -module ${DBG_OBJS} ${TBOXLIB} ${RESF} ${CLIB} <Lib$Dir>.tboxlibint.o.debuglibm 
+        Access $@ RW/R
+
 o.mainRAM: main.c
 	$(CC) ${CFLAGS} -o $@ main.c
+
+od.mainRAM: main.c
+	$(CC) ${CFLAGS} -Ddebugging=1 -o $@ main.c
 
 
 #---------------------------------------------------------------------------
