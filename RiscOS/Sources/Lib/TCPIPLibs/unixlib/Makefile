@@ -41,7 +41,7 @@ CFILES=		access.c chdir.c chmod.c close.c filestat.c flushinput.c \
 		memops.c osreadc.c read.c readdir.c readv.c strcasecmp.c \
 		stubs.c write.c writev.c xgets.c xperror.c xputchar.c \
 		getopt.c strsep.c kvm.c err.c errlst.c xstrerror.c \
-		strdup.c
+		strdup.c sleep.c ffs.c
 
 OFILES=		access.o chdir.o chmod.o close.o filestat.o flushinput.o \
 		fstat.o getdtabsiz.o getegid.o geteuid.o getgroups.o \
@@ -51,7 +51,7 @@ OFILES=		access.o chdir.o chmod.o close.o filestat.o flushinput.o \
 		memops.o osreadc.o read.o readdir.o readv.o strcasecmp.o \
 		stubs.o write.o writev.o xgets.o xperror.o xputchar.o \
 		getopt.o strsep.o kvm.o err.o errlst.o xstrerror.o \
-		strdup.o
+		strdup.o sleep.o ffs.o
 
 ZFILES=		z.access z.chdir z.chmod z.close z.filestat z.flushinput \
 		z.fstat z.getdtabsiz z.getegid z.geteuid z.getgroups \
@@ -61,7 +61,7 @@ ZFILES=		z.access z.chdir z.chmod z.close z.filestat z.flushinput \
 		z.memops z.osreadc z.read z.readdir z.readv z.strcasecmp \
 		z.stubs z.write z.writev z.xgets z.xperror z.xputchar \
 		z.getopt z.strsep z.kvm z.err z.errlst z.xstrerror \
-		z.strdup
+		z.strdup z.sleep z.ffs
 
 .SUFFIXES:	.z .o .c .s
 
