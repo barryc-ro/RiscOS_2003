@@ -16,19 +16,17 @@
 
 /* CLib */
 #include "kernel.h"
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include "swis.h"
 
-/* OSLib - only used for definitions */
-#include "OS:os.h"
-#include "OS:osbyte.h"
-#include "OS:osserialop.h"
+#include "DebugLib/DebugLib.h"
 
 /* Dialler */
 #include "asmutils.h"
-#include "bool.h"
 #include "chat.h"
+#include "defs.h"
 #include "dialler.h"
 #include "error.h"
 #include "flags.h"
@@ -60,6 +58,11 @@
 #define SerialEvent_Overrun 0x10
 #define SerialEvent_Parity  0x20
 
+#define Event_RS423Error                        0x7
+#define osbyte_DISABLE_EVENT                    0xDu
+#define osbyte_ENABLE_EVENT                     0xEu
+
+
 
 
 
@@ -68,6 +71,7 @@
  */
 
 int need_rx_data_present = false;
+int line_drop_pending = false;
 static int callafter_pending = false;
 static int data_handler_attached = false;
 static int hangup_handler_attached = false;
@@ -80,7 +84,6 @@ static int hangup_handler_attached = false;
  */
 
 /* -----------------------------------------------------------------------------
-+
    handlers_attach
 
    Attach the data handlers and hangup check handlers
@@ -88,7 +91,6 @@ static int hangup_handler_attached = false;
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_attach (void)
@@ -110,7 +112,6 @@ extern _kernel_oserror *handlers_attach (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    handlers_release
 
    Release the data handlers and hangup check handlers
@@ -118,7 +119,6 @@ extern _kernel_oserror *handlers_attach (void)
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_release (void)
@@ -140,7 +140,6 @@ extern _kernel_oserror *handlers_release (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    handlers_attach_data_handler
 
    Attatch handlers to:
@@ -151,7 +150,6 @@ extern _kernel_oserror *handlers_release (void)
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 #ifdef BLOCKDRIVERS
@@ -217,13 +215,11 @@ extern _kernel_oserror *handlers_attach_data_handler (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    handlers_attach_hangup_handler
 
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 #ifdef BLOCKDRIVERS
@@ -297,13 +293,11 @@ extern _kernel_oserror *handlers_attach_hangup_handler (void)
 #ifdef BLOCKDRIVERS
 
 /* -----------------------------------------------------------------------------
-+
    handlers_release_data_handler
 
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_release_data_handler (void)
@@ -362,13 +356,11 @@ extern _kernel_oserror *handlers_release_data_handler (void)
 #ifdef BLOCKDRIVERS
 
 /* -----------------------------------------------------------------------------
-+
    handlers_release_hangup_handler
 
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_release_hangup_handler (void)
@@ -417,7 +409,6 @@ extern _kernel_oserror *handlers_release_hangup_handler (void)
 
 #ifdef BLOCKDRIVERS
 /* -----------------------------------------------------------------------------
-+
    poll_handler
 
    Check if dialler is expecting more incoming data.
@@ -429,7 +420,6 @@ extern _kernel_oserror *handlers_release_hangup_handler (void)
    Returns
    to pass on the vector   : 0
    to intercept the vector : 1
--
  */
 
 
@@ -438,7 +428,7 @@ extern int poll_handler (_kernel_swi_regs *r, void *pw)
     if (need_rx_data_present && !chat_do_script_pending &&
         driver_checkrx () > 0)
     {
-/*         M_debug (("adding callback")); */
+/*         dprintf (("", "adding callback\n")); */
         need_rx_data_present = false;
         handlers_add_callback ();
     }
@@ -452,7 +442,6 @@ extern int poll_handler (_kernel_swi_regs *r, void *pw)
 #else
 
 /* -----------------------------------------------------------------------------
-+
    upcall_handler
 
    Deal with Device_RxDataPresent upcalls (data has entered a previouly empty
@@ -466,7 +455,6 @@ extern int poll_handler (_kernel_swi_regs *r, void *pw)
    Returns
    to pass on the vector   : 1
    to intercept the vector : 0
--
  */
 
 extern int upcall_handler (_kernel_swi_regs *r, void *pw)
@@ -478,11 +466,6 @@ extern int upcall_handler (_kernel_swi_regs *r, void *pw)
     if (r->r[1] != serial_in)
         return 1;    /* pass on vector call */
 
-
-#if 0
-    syslog ("Upcall_DeviceRxDataPresent: n=%d c=%d",
-            need_rx_data_present, chat_do_script_pending);
-#endif
     if (need_rx_data_present && !chat_do_script_pending)
     {
         /* Get RISC OS to call chat_do_script sometime  */
@@ -583,11 +566,9 @@ extern _kernel_oserror *hangup_check (_kernel_swi_regs *r, void *pw)
 #else
 
 /* -----------------------------------------------------------------------------
-+
    rs423_event_handler
 
    Deal with an RS423 error event.
--
  */
 
 extern int rs423_event_handler (_kernel_swi_regs *r, void *pw)
@@ -609,7 +590,7 @@ extern int rs423_event_handler (_kernel_swi_regs *r, void *pw)
         if ((control_lines & IOCtl_control_line_DCD) == 0)
         {
             /* DCD has dropped - other end has dropped line */
-            M_debug (("DCD dropped"));
+            dprintf (("", "DCD dropped\n"));
             _swix (OS_AddCallBack, _INR (0, 1), line_dropped_entry, pw);
         }
 
@@ -631,7 +612,6 @@ extern int rs423_event_handler (_kernel_swi_regs *r, void *pw)
 
 
 /* -----------------------------------------------------------------------------
-+
    handlers_add_callback
 
    Add a callback to chat_do_script if there isn't already one pending.
@@ -639,7 +619,6 @@ extern int rs423_event_handler (_kernel_swi_regs *r, void *pw)
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_add_callback (void)
@@ -649,7 +628,7 @@ extern _kernel_oserror *handlers_add_callback (void)
 
     if (!chat_do_script_pending)
     {
-        M_debug (("adding callback"));
+        dprintf (("", "adding callback\n"));
         e = _swix (OS_AddCallBack, _INR (0, 1), chat_do_script_entry, pword);
         chat_do_script_pending = true;
     }
@@ -661,7 +640,6 @@ extern _kernel_oserror *handlers_add_callback (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    handlers_add_callafter
 
    Add a callafter to a callback to chat_do_script.
@@ -672,7 +650,6 @@ extern _kernel_oserror *handlers_add_callback (void)
    Returns
    success: NULL
    failure: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_add_callafter (const unsigned int t)
@@ -692,7 +669,6 @@ extern _kernel_oserror *handlers_add_callafter (const unsigned int t)
 
 
 /* -----------------------------------------------------------------------------
-+
    handlers_remove_queued_callback
 
    Check if there is a callback to chat_do_script waiting, and if so remove it.
@@ -700,7 +676,6 @@ extern _kernel_oserror *handlers_add_callafter (const unsigned int t)
    Returns
    success: NULL
    failuer: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_remove_queued_callback (void)
@@ -721,7 +696,6 @@ extern _kernel_oserror *handlers_remove_queued_callback (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    handlers_remove_queued_callafter
 
    Check if there is a callafter waiting, and if so remove it.
@@ -729,7 +703,6 @@ extern _kernel_oserror *handlers_remove_queued_callback (void)
    Returns
    success: NULL
    failuer: pointer to error block
--
  */
 
 extern _kernel_oserror *handlers_remove_queued_callafter (void)
@@ -752,7 +725,6 @@ extern _kernel_oserror *handlers_remove_queued_callafter (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    line_dropped
 
    Inform clients that the line has dropped.  Also tell active client that it
@@ -760,7 +732,6 @@ extern _kernel_oserror *handlers_remove_queued_callafter (void)
 
    Returns
    NULL
--
  */
 
 extern _kernel_oserror *line_dropped (_kernel_swi_regs *r, void *pw)
@@ -774,7 +745,6 @@ extern _kernel_oserror *line_dropped (_kernel_swi_regs *r, void *pw)
     {
         status |= Dialler_LineDropped;
         status |= Dialler_RemoteDroppedLine;
-        status_changed ();
     }
 
 
@@ -783,12 +753,28 @@ extern _kernel_oserror *line_dropped (_kernel_swi_regs *r, void *pw)
         general_info == Dialler_ExecutingScript_Answer ||
         general_info == Dialler_ExecutingScript_Hangup)
     {
+        status_changed ();
         script_abort (true);
     }
     else
     {
-        /* Always force a modem reset in this case */
-        dialler_disconnect (true);
+        /* If we're not executing a script then there may be a client active. */
+
+        if (dialler_client_active)
+        {
+            status |= Dialler_RelinquishAccess;
+            line_drop_pending = true;
+            status_changed ();
+        }
+        else
+        {
+            status_changed ();
+
+            /* Close down immediately.  No need to force a hangup because
+             * the line has already dropped.
+             */
+            dialler_disconnect (false);
+        }
     }
 
     return NULL;
@@ -798,14 +784,12 @@ extern _kernel_oserror *line_dropped (_kernel_swi_regs *r, void *pw)
 
 
 /* -----------------------------------------------------------------------------
-+
    callafter_handler
 
    Add a callback to chat_do_script
 
    Returns
    NULL
--
  */
 
 extern _kernel_oserror *callafter_handler (_kernel_swi_regs *r, void *pw)
