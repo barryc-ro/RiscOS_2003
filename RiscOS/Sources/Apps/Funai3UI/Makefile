@@ -77,12 +77,12 @@ dirs:
         $(MKDIR) $(RESRES).NCFrescoA
         $(MKDIR) $(RESRES).ScrSaver
         IfThere Resources.$(USERIF).$(LOCALE).$(APP) Then \
-	  $(CP) Resources.$(USERIF).$(LOCALE).$(APP) $(RESAPP) T~V~CFQR
-	$(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) T~V~CFQR
+          $(CP) Resources.$(USERIF).$(LOCALE).$(APP) $(RESAPP) T~V~CFQR
+        $(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) T~V~CFQR
 
 translate:
         @echo ** Translating NCDialler...
-	$(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Dialling.Busy -o $(RESAPP).HTML.Dialling.Busy
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Dialling.Busy -o $(RESAPP).HTML.Dialling.Busy
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Dialling.Connect -o $(RESAPP).HTML.Dialling.Connect
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Dialling.Dialling -o $(RESAPP).HTML.Dialling.Dialling
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Dialling.Error -o $(RESAPP).HTML.Dialling.Error
@@ -92,8 +92,8 @@ translate:
         @echo ** Translating ISPCapture...
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC1 -o $(RESAPP).HTML.ISPCapture.ISPC1
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC2 -o $(RESAPP).HTML.ISPCapture.ISPC2
-         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC3 -o $(RESAPP).HTML.ISPCapture.ISPC3
-       @echo ** Translating NCMALite...
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC3 -o $(RESAPP).HTML.ISPCapture.ISPC3
+        @echo ** Translating NCMALite...
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badpin -o $(RESAPP).HTML.MA.badpin
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badsvc -o $(RESAPP).HTML.MA.badsvc
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badurl -o $(RESAPP).HTML.MA.badurl
@@ -134,12 +134,14 @@ translate:
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Text -o $(RESAPP).HTML.Setup.Text
         
 resources: translate dirs
-	@echo ** Exporting non-translatable resource files
+        @echo ** Exporting non-translatable resource files
         $(CP) LocalUserIFRes:!Boot.!Run $(RESAPP).!Run $(CPFLAGS)
         $(CP) LocalUserIFRes:!Boot.Palette $(RESAPP).Palette $(CPFLAGS)
         $(CP) LocalUserIFRes:!Boot.HTML $(RESAPP).HTML $(CPFLAGS)
         IfThere LocalUserIFRes:!Boot.HTML-Ether Then $(CP) LocalUserIFRes:!Boot.HTML-Ether $(RESAPP).HTML-Ether $(CPFLAGS)
         IfThere LocalUserIFRes:!Boot.HTML-Modem Then $(CP) LocalUserIFRes:!Boot.HTML-Modem $(RESAPP).HTML-Modem $(CPFLAGS)
+        IfThere LocalUserIFRes:NCFresco Then $(CP) LocalUserIFRes:NCFresco $(RESRES).NCFresco $(CPFLAGS)
+        IfThere LocalUserIFRes:NCFrescoA Then $(CP) LocalUserIFRes:NCFrescoA $(RESRES).NCFrescoA $(CPFLAGS)
         $(CP) LocalUserIFRes:!Boot.Utils $(RESAPP).Utils $(CPFLAGS)
         $(CP) LocalUserIFRes:NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) LocalUserIFRes:Wimp.Sprites $(RESRES).Wimp.Sprites $(CPFLAGS)
