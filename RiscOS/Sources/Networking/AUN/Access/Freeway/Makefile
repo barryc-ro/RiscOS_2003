@@ -14,6 +14,8 @@
 #
 COMPONENT  = Freeway
 ROM_MODULE = aof.Freeway
+RAM_MODULE = rm.Freeway
+DBG_MODULE = rm.DbgFreeway
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 RESDIR     = ^.^.AUNMsgs.Resources.${Locale}.Resources.${COMPONENT}
@@ -29,9 +31,11 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+SQZ     = modsqz
+TOUCH   = create
 
 AFLAGS  = -depend !Depend -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
-CFLAGS  = -ansi -zM -zps1 -ffah -Wp ${INCLUDES} ${DFLAGS}
+CFLAGS  = -zM -zps1 -ffah -Wp ${INCLUDES} ${DFLAGS} ${THROWBACK}
 DFLAGS  = -DAUTH32 -DCOMPAT_INET4
 # -DDEBUG -DDEBUGSER
 CPFLAGS = ~cfr~v
@@ -45,12 +49,13 @@ INCLUDES  = -ITCPIPLibs:,C:
 ANSILIB   = CLib:o.ansilib
 CLIB      = C:o.stubs
 RLIB      = RISC_OSLIB:o.risc_oslib
-#ROMCSTUBS = RISCOSLIB:o.romcstubs
+ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
 C_ABSSYM  = RISCOSLIB:o.c_abssym
 
 SOCKLIBZM = TCPIPLibs:o.socklibzm
 INETLIBZM = TCPIPLibs:o.inetlibzm
+DEBUGLIB  = C:DebugLib.o.DebugLibZM
 
 OBJS =\
  o.fwhdr\
@@ -58,15 +63,23 @@ OBJS =\
  o.module\
  o.objects
 
-# o.inetfn\
+DBG_OBJS=\
+ o.fwhdr\
+ o.irqs\
+ od.module\
+ od.objects
 
+DIRS=od._dirs
 #
 # Rule patterns
 #
+.SUFFIXES:  .od
 .c.o:;      ${CC} -c -depend !Depend ${CFLAGS} -o $@ $<
+.c.od:;      ${CC} -c -depend !Depend ${CFLAGS} -DDEBUG -o $@ $<
 .c.s:;      ${CC} -S ${CFLAGS} $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d $@ $<
 
 #
 # Main rules:
@@ -74,6 +87,12 @@ OBJS =\
 #
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
+
+all: ${RAM_MODULE}
+        @echo ${COMPONENT}: Module built (RAM)
+
+trace: ${DBG_MODULE}
+        @echo ${COMPONENT}: Module built (RAM trace)
 
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -84,10 +103,12 @@ resources:
 
 clean:
         ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
         ${RM} ${ROM_MODULE}
+        ${RM} ${RAM_MODULE}
+        ${RM} ${DBG_MODULE}
+        ${RM} h.FwHdr
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 clean_all: clean
@@ -98,19 +119,28 @@ ${ROM_MODULE}: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS}
         ${MKDIR} aof
         ${LD} -o $@ -aof ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS}
 
-rm.Freeway: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB}
+${RAM_MODULE}: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB}
         ${LD} -o $@ -rmf ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} 
+        ${SQZ} $@
 
+${DBG_MODULE}: ${DBG_OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} ${DIRS} ${DEBUGLIB}
+        ${LD} -o $@ -rmf ${DBG_OBJS} ${DEBUGLIB} ${SOCKLIBZM} ${INETLIBZM} ${CLIB}
+        ${SQZ} $@
 
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${C_ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${C_ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
+
+# Static dependencies:
+o.module: h.FwHdr
+od.module: h.FwHdr
+
+${DIRS}:
+	${MKDIR} od
+	${TOUCH} $@
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
