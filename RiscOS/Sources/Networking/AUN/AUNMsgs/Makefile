@@ -56,4 +56,8 @@ ${TARGET}: ${FILELIST} versionvar
 versionvar:
         ${PL} ${PLSCRIPT} ${VERSIONVAR}
 
+BBETYPE = aunmsgs
+bbe-aunmsgs: bbe-generic-resources-get-alias
+        @| Do nothing
+
 # Dynamic dependencies:
