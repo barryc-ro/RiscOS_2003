@@ -1,5 +1,5 @@
 ; >s.SWIs
-; Copyright © Pace Micro Technology plc, 2001
+; Copyright © Pace Micro Technology plc, 2002
 ; All rights reserved.
 ;
 ; This source file contains the SWI handler and the main body of the
@@ -26,7 +26,7 @@
 ; *
 Mod_SWIHandler
 	ROUT
-	LDR	R12, [R12]
+	LDR	WS, [R12]
 	RSBS	R11, R11, #(swi_end - swi_start) :SHR: 2
 	ADDHS	PC, PC, R11, LSL #2
 	B	BadSWI_Err
@@ -50,14 +50,20 @@ swi_end;B	SWI_SetCASID		; 0
 ; *   R13	= full-descending stack pointer
 ; *   R14	= return address
 ; * Out...
-; *   R0	= corrupted (or pointer to error block)
+; *   R0	= previous global CA_system_ID value
 ; *   R1-R9	= preserved
 ; *   R10-R11	= corrupted
 ; *   R12-R13	= preserved
 ; *   R14	= corrupted
 ; *
 SWI_SetCASID ROUT
-	STR	R1, [R12, #WS_CASID]
+  [ DEBUG
+	Push	"LR"
+	DAWriteS "SWI SetCASID", LF
+	Pull	"LR"
+  ];DEBUG
+	LDR	R0, [WS, #WS_CASID]
+	STR	R1, [WS, #WS_CASID]
 	MOV	PC, LR
 
 
@@ -70,7 +76,8 @@ SWI_SetCASID ROUT
 ; * pointer to a C function which the MPEG NDS module will call.
 ; *
 ; * In...
-; *   R0	= flags (should be zero)
+; *   R0	= flags:
+; *               bit 0 - R2 contains CA_system_ID for this client (else, use global)
 ; *   R1	= pointer to function pointer block
 ; *   R12	= module workspace pointer
 ; *   R13	= full-descending stack pointer
@@ -82,71 +89,33 @@ SWI_SetCASID ROUT
 ; *   R12-R13	= preserved
 ; *   R14	= corrupted
 ; *
-SWI_RegisterHandlers Entry "R1-R11"
+SWI_RegisterHandlers Entry "R1-R6"
 	; Is R2 the CA system ID for these handlers?
-;	TST	R0, #1 :SHL: 0
-;	MOVNE	R1, R2
-;	MOVEQ	R1, #-1
-
-  [ DEMO_BODGE
-	LDR	R0, [R12, #WS_ClientList]
-	TEQ	R0, #0
-	BNE	Reg_Err
-
-	DAWriteS "Register...", 10
-
+	DAWriteS "SWI Reg", 10
+	TST	R0, #RegFlag_CAS
+	LDREQ	R10, [WS, #WS_CASID]
+	MOVNE	R10, R2
+	CMP	R10, #-1
+	BEQ	Reg_Err
 	; Claim client block...
-	MOV	R0, #ModHandReason_Claim
-	MOV	R3, #CLIENT_BLK_SIZE
-	SWI	XOS_Module
+	DAWriteS "  Reg:ClaimCL", 10
+	BL	Claim_CL
 	EXIT	VS
-	MOV	R11, R2
-	STR	R11, [R12, #WS_ClientList]
-
-	; Initialise client block...
-	STR	R12, [R11, #CL_ModuleWorkspace]
-	MOV	R0, SP, LSR #20
-	MOV	R0, R0, LSL #20
-	LDMIA	R0, {R2-R3}
-	ADD	R0, R11, #CL_RelocModifiers
-	STMIA	R0, {R2-R3}
+	; Initialise the client block...
+	DAWriteS "  Reg:InitCL", 10
 	LDMIA	R1, {R2-R6,R14}
-	ADD	R0, R11, #CL_OpenStream
-	STMIA	R0, {R2-R6,R14}
-	LDR	R0, [R12, #WS_CASID]
-	MOV	R1, #0
-	STR	R0, [R11, #CL_CASID]
-	STR	R1, [R11, #CL_Prev]
-	STR	R1, [R11, #CL_Next]
-	STR	R1, [R11, #CL_ClaimList]
-
-	; Claim DSH block...
-	MOV	R3, #DSH_BLOCK_SIZE
-	BL	Client_Claim
-	EXIT	VS
-	MOV	R10, R2
-	STR	R10, [R12, #WS_DSHBlock]
-
-	; Initialise DSH block...
-	STR	R12, [R10, #DSH_ModuleWorkspace]
-	STR	R11, [R10, #DSH_ClientBlock]
-	MOV	R0, #0
-	STR	R0, [R10, #DSH_ClientHandle]
-	STR	R0, [R10, #DSH_Flags]
-	STR	R0, [R10, #DSH_ControlStreamHandle]
-	STR	R0, [R10, #DSH_ECMPID]
-	STR	R0, [R10, #DSH_Limit]
-	STR	R0, [R10, #DSH_Fetched]
-
-	; Register the descrambling handler...
-	MOV	R0, #0
-	ADR	R2, DescramblingHandler
-	MOV	R3, R10
-	SWI	XMPEGControl_RegisterPayloadDescramblingHandler
-
-	DAWriteS "Registered.", 10
-  ];DEMO_BODGE
-
+	ADD	R0, CL, #CL_OpenStream
+	STMIA	R0, {R2-R6,R14}				; The client's function pointers
+	STR	R10, [CL, #CL_CASID]			; The CA_system_ID to use for this client
+	; Register a DSH with MPEGControl on all streams...
+	DAWriteS "  Reg:RegDSH", 10
+	BL	Register_DSH
+	EXIT	VC
+	; If registration fails with MPEGControl, remove this client from the list...
+	MOV	R1, R0
+	BL	Free_CL
+	MOV	R0, R1
+	SETV
 	EXIT
 
 
@@ -171,37 +140,26 @@ SWI_RegisterHandlers Entry "R1-R11"
 ; *   R12-R13	= preserved
 ; *   R14	= corrupted
 ; *
-SWI_DeregisterHandlers Entry "R1-R11"
-  [ DEMO_BODGE
-	LDR	R0, [R12, #WS_ClientList]
-	TEQ	R0, #0
+SWI_DeregisterHandlers Entry "R1"
+	; Find the head of the client list...
+	DAWriteS "SWI Dereg", 10
+	LDR	CL, [WS, #WS_ClientList]
+	TEQ	CL, #0
 	BEQ	Dereg_Err
-
-	DAWriteS "Deregister...", 10
-
-	; Deregister descrambling handler...
-	MOV	R0, #0
-	LDR	R3, [R12, #WS_DSHBlock]
-	ADR	R2, DescramblingHandler
-	TEQ	R3, #0
-	SWINE	XMPEGControl_DeregisterPayloadDescramblingHandler
-	EXIT	VS
-
-	DAWriteS "  Free DSH block", 10
-
-	; Free the DSH block...
-	LDR	R2, [R12, #WS_DSHBlock]
-	MOV	R0, #ModHandReason_Free
-	TEQ	R2, #0
-	SWINE	XOS_Module
-	EXIT	VS
-
-	DAWriteS "  Free client's blocks", 10
-
-	BL	Free_All_Clients
-
-	DAWriteS "Deregistered.", 10
-  ];DEMO_BODGE
+	; Search for a client matching this one...
+	DAWriteS "  Dereg:Search", 10
+	LDR	R1, [R1]
+00	LDR	R14, [CL, #CL_OpenStream]
+	TEQ	R1, R14
+	BEQ	%FT01
+	LDR	CL, [CL, #CL_Next]
+	TEQ	CL, #0
+	BNE	%BT00
+	DAWriteS "  Dereg:NoMatch", 10
+	B	Dereg_Err
+01	;
+	DAWriteS "  Dereg:RemvCL", 10
+	BL	Free_CL
 	EXIT
 
 

@@ -1,5 +1,5 @@
 ; >s.Module
-; Copyright © Pace Micro Technology plc, 2001
+; Copyright © Pace Micro Technology plc, 2002
 ; All rights reserved.
 ;
 ; Main module body of the MPEG NDS module. This is a glue layer between the
@@ -18,7 +18,7 @@ SWIBase			*	0x000555C0	; Base of our SWI chunk
 TAB			*	9
 LF			*	10
 CR			*	13
-|_Lib$Reloc$Off|	*	540
+|_Lib$Reloc$Off|	*	540		; Funny, I can't get this from any global Hdr file :(
 InfoWord_SubReason	*	2_11111110	; Mask to extract sub-reason code
 
 
@@ -70,12 +70,6 @@ Mod_HelpStr
   [ DEBUG
 	DCB	" (debug)"
   ];DEBUG
-  [ DEMO_BODGE
-	DCB	" (demo)"
-  ];DEMO_BODGE
-  [ PDH_TEST
-	DCB	" (pdh)"
-  ];PDH_TEST
 	DCB	0
 	ALIGN
 
@@ -86,11 +80,20 @@ Mod_HelpStr
 ; *
 Mod_HC_Table
 	Command	MPEGNDS_Clients, 0, 0
+  [ DEBUG
+	Command	MPEGNDS_DebugSave, 1, 1
+  ];DEBUG
 	DCB	0
 MPEGNDS_Clients_Help
 	DCB	"This command will output a list of all the currently active MPEG NDS clients.", CR
 MPEGNDS_Clients_Syntax
 	DCB	"Syntax: *MPEGNDS_Clients", 0
+  [ DEBUG
+MPEGNDS_DebugSave_Help
+	DCB	"This command saves the MPEG NDS debug dynamic area as a text file.", CR
+MPEGNDS_DebugSave_Syntax
+	DCB	"Syntax: *MPEGNDS_DebugSave <filename>", 0
+  ];DEBUG
 	ALIGN
 
 
@@ -147,27 +150,22 @@ Mod_Init Entry	"R10-R11"
 	EXIT	VS
 	; If claim was successful, initialise the workspace...
 	STR	R2, [R12]
-	MOV	R12, R2
+	MOV	WS, R2
 	MOV	R0, #0
-	STR	R0, [R12, #WS_ClientList]
-	STR	R0, [R12, #WS_FreeList]
-	STR	R0, [R12, #WS_CASID]
-	STR	R0, [R12, #WS_Flags]
-
-	; Get the direct call interface to MPEGControl sorted...
-	BL	Init_CtrlInterface
-
+	STR	R0, [WS, #WS_ClientList]
+	STR	R0, [WS, #WS_FreeList]
+	STR	R0, [WS, #WS_Flags]
+	MOV	R0, #-1
+	STR	R0, [WS, #WS_CASID]
 	DAInit; "NDS Debug"
-	DAWriteS "Module initialise", 10
-
-  [ DEMO_BODGE
-	MOV	R0, #0
-	STR	R0, [R12, #WS_DSHBlock]
-  ];DEMO_BODGE
-
+	; Get the direct call interface to MPEGControl sorted...
+	DAWriteS "Init:CtrlIf", LF
+	BL	Init_CtrlInterface
+	EXIT	VS
 	; Create a CallBack for issuing our "starting" service call...
+	DAWriteS "Init:CallBack", LF
 	ADR	R0, CallBack_Handler
-	MOV	R1, R12
+	MOV	R1, #1 :OR: (CtrlStarting_NDSInit :SHL: 1)
 	SWI	XOS_AddCallBack
 	EXIT
 
@@ -191,31 +189,34 @@ Mod_Init Entry	"R10-R11"
 ; *   V flag	= set if R0 is a pointer to an error block
 ; *
 Mod_Die	Entry	"R10-R11"
-	LDR	R12, [R12]
-	TEQ	R12, #0
+	LDR	WS, [R12]
+	TEQ	WS, #0
 	EXIT	EQ
 	; Remove our CallBack (if it is still active)...
+	DAWriteS "Final:RemvCB", LF
 	ADR	R0, CallBack_Handler
-	MOV	R1, R12
+	MOV	R1, WS
 	SWI	XOS_RemoveCallBack
+	; Deregister and remove all handlers for all clients...
+	DAWriteS "Final:FreeCLs", LF
+	BL	Free_All_CL
+	EXIT	VS
+	; Free any bitstream buffers in our free list...
+	DAWriteS "Final:FreePkts", LF
+	BL	Release_Free_List	; (never returns errors)
 	; Issue a service call to inform everyone that we've died...
-	MOV	R0, #1 :OR: (CtrlStarting_NDSDie :SHL: 1)
-	MOV	R1, #Service_MPEGControlStarting
-	SWI	XOS_ServiceCall
-	DAWriteS "Module finalise", 10
-	DAKill
-
-  [ DEMO_BODGE
-	BL	SWI_DeregisterHandlers
-	BL	Release_Free_List
-  ];DEMO_BODGE
-
+	DAWriteS "Final:CallBack", LF
+	ADR	R0, CallBack_Handler
+	MOV	R1, #1 :OR: (CtrlStarting_NDSDie :SHL: 1)
+	SWI	XOS_AddCallBack
+	EXIT	VS
 	; Free our module workspace...
+	DAKill
 	MOV	R0, #ModHandReason_Free
-	MOVS	R2, R12
-	SWINE	XOS_Module
+	MOV	R2, WS
+	SWI	XOS_Module
 	MOV	R0, #0
-	STR	R0, [R12]
+	STR	R0, [WS]
 	EXIT
 
 
@@ -251,6 +252,8 @@ Mod_Service ROUT
 	TEQ	R1, #Service_MPEGControlStarting
 	MOVNE	PC, LR
 FastSvc	Entry	"R0"
+	LDR	WS, [R12]
+	DAWriteS "SVC", LF
 	; The service call is "MPEGControlStarting"...
 	AND	R0, R0, #InfoWord_SubReason
 	; If it is the MPEGControl module which has died, free any stream
@@ -263,10 +266,12 @@ FastSvc	Entry	"R0"
 	CLRV
 	EXIT
 00	; MPEGControl has died...
+	DAWriteS "  SVC CtrlDie", LF
 	BL	Remove_CtrlInterface
 	CLRV
 	EXIT
 01	; MPEGControl has (re)initialised...
+	DAWriteS "  SVC CtrlInit", LF
 	BL	Init_CtrlInterface
 	CLRV
 	EXIT
@@ -286,7 +291,7 @@ FastSvc	Entry	"R0"
 ; *   R14	= corrupted
 ; *
 CallBack_Handler Entry "R0-R12"
-	MOV	R0, #1 :OR: (CtrlStarting_NDSInit :SHL: 1)
+	MOV	R0, R12
 	MOV	R1, #Service_MPEGControlStarting
 	SWI	XOS_ServiceCall
 	EXIT
@@ -314,13 +319,14 @@ CallBack_Handler Entry "R0-R12"
 ; *   V flag	= set if R0 is a pointer to an error block
 ; *
 MPEGNDS_Clients_Code Entry
-	LDR	R12, [R12]
+	LDR	WS, [R12]
+	DAWriteS "*Clients", LF
 	; Output the list heading...
 	SWI	XOS_WriteS
 	DCB	"MPEG NDS registered clients:", CR, LF, 0
 	ALIGN
 	; Early exit if there are no registered clients...
-	LDR	R4, [R12, #WS_ClientList]
+	LDR	R4, [WS, #WS_ClientList]
 	TEQ	R4, #0
 	BNE	%FT00
 	SWI	XOS_WriteS
@@ -356,7 +362,7 @@ MPEGNDS_Clients_Code Entry
 	SWIVC	XOS_NewLine
 	ADR	R0, DESCRAM
 	SWI	XOS_Write0
-	LDR	R0, [R4, #CL_Descrambler]
+	LDR	R0, [R4, #CL_Descrambling]
 	BL	Hex8
 	SWIVC	XOS_NewLine
 	ADR	R0, CASID
@@ -389,7 +395,8 @@ CASID	DCB	"  CA System ID           - &", 0
 ; *   R13	= full-descending stack pointer
 ; *   R14	= return address
 ; * Out...
-; *   R0-R2	= corrupted (or pointer to error block)
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
 ; *   R3-R13	= preserved
 ; *   R14	= corrupted
 ; *   V flag	= set if R0 is a pointer to an error block
@@ -414,7 +421,8 @@ Hex4	Entry
 ; *   R13	= full-descending stack pointer
 ; *   R14	= return address
 ; * Out...
-; *   R0-R2	= corrupted (or pointer to error block)
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
 ; *   R3-R13	= preserved
 ; *   R14	= corrupted
 ; *   V flag	= set if R0 is a pointer to an error block
@@ -427,6 +435,48 @@ Hex8	Entry
 	SWIVC	XOS_Write0
 	ADD	SP, SP, #12
 	EXIT
+
+
+; ****************************************************
+; *
+; * *MPEGNDS_DebugSave
+; *
+; * Save the MPEG NDS debug dynamic area as a text file. Debug builds
+; * only.
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= may be corrupted (or pointer to error block)
+; *   R1-R6	= may be corrupted
+; *   R7-R11	= must be preserved
+; *   R12	= may be corrupted
+; *   R13	= must be preserved
+; *   R14	= may be corrupted
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+  [ DEBUG
+MPEGNDS_DebugSave_Code Entry
+	LDR	WS, [R12]
+	DAWriteS "*DebugSave", LF
+	TEQ	R1, #1
+	BNE	DebugSave_Err
+	MOV	R1, R0
+	DASave
+	EXIT
+DebugSave_Err
+	ADR	R0, DebugSave_ErrBlk
+	SETV
+	EXIT
+DebugSave_ErrBlk
+	DCD	490
+	DCB	"Syntax: *MPEGNDS_DebugSave <filename>", 0
+	ALIGN
+  ];DEBUG
 
 
 	END
