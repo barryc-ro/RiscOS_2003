@@ -172,7 +172,7 @@ enum _States { IDLE = 0,
  /*fax*/       INCOMING_2a, INCOMING_2b, INCOMING_2c, INCOMING_2d,
                INCOMING_SWITCHOVER,
  /*Daytona*/   INCOMING_3a, INCOMING_3b, INCOMING_3c, INCOMING_3d, INCOMING_3e,
-               OUTGOING_4a, OUTGOING_4b, OUTGOING_4c, OUTGOING_4d, OUTGOING_4e, OUTGOING_4f,
+               OUTGOING_4a, OUTGOING_4b, OUTGOING_4c, /*OUTGOING_4d,*/ OUTGOING_4e, OUTGOING_4f,
                OUTGOING_SWITCHOVER,
                OUTGOING_5a, OUTGOING_5b, OUTGOING_5c, OUTGOING_5d, OUTGOING_5e, OUTGOING_5f,
                OUTGOING_6a, OUTGOING_6b, OUTGOING_6c, OUTGOING_6d,
@@ -193,6 +193,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 	static unsigned int stash_loPage;
 	static unsigned int stash_hiPage;
     static BOOL   stash_pageStream;
+    static unsigned int stash_fax_lastpage;
 #if SUPPORT_EMAIL
     /* Email send/retrieve variables */
     static BOOL isp_via_dialler = TRUE;	/* when FALSE, using LAN */
@@ -817,14 +818,17 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 	
 						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_DOCUMENT, &sendMessage);	/* starting to send document */
 						sendMessage->data.rx_sq_sending_document.pid = stash_Process_Id;
-					
-						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
+
+                        stash_fax_lastpage = messageData->data.fx_sending_page.lastpage;    /* always reports lastpage of zero for sending first page */					
+						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, &sendMessage);
+					  /*sendMessage->data.rx_sq_sending_page.pid = stash_Process_Id;*/
+						sendMessage->data.rx_sq_sending_page.page = stash_loPage;           /* because of redials, first page may not be one, so use loPage we gave to fax */
 						nextstate = OUTGOING_4e;
 					}
 					break;
 			}
 			break;
-
+#if 0
 		case OUTGOING_4d:	/* identical to OUTGOING_4c, but excludes FX_SWITCHOVER */
 			switch (messageNumber)
 			{
@@ -847,37 +851,71 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					break;
 			}
 			break;
+#endif
+
+        /* NB We don't use the FX_SENT_PAGE message because it is confusing!. */
+        /*    Fax sends multiple FX_SENDING_PAGE & FX_SENT_PAGE pairs if the  */
+        /*    receiver requests a retransmission of a corrupt page, or if a   */
+        /*    large page is chopped into smaller ones for sending.            */
+        /*                                                                    */
+        /*    Instead, we use the 'lastpage successfully sent' field of the   */
+        /*    FX_SENDING_PAGE & FX_NORMAL_TERMINATION messages to determine   */
+        /*    when to send our LX_PQ_SENDING_PAGE & LX_PQ_PAGE_SENT messages. */
 
 		case OUTGOING_4e:
 			switch (messageNumber)
 			{
 				case FX_ERROR:
 					RemXfer_ForwardError(SendQ_MessageHandler, RX_SQ_ERROR, messageNumber, messageData);	/* forward the error to SendQ */
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_FAILED, NULL);
+					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_FAILED, NULL); /*>>>is this used?*/
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DOCUMENT_SENT, NULL);
 					StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
 					nextstate = OUTGOING_4f;
 					break;
 
 				case FX_NORMAL_TERMINATION:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_SENT, NULL);
+				    if (stash_fax_lastpage != messageData->data.fx_normal_termination.lastpage)
+				    {
+				        messageDataBlock *sendMessage;
+				        
+				        /* fax now reporting a different lastpage, so must have sent a page */
+				        stash_fax_lastpage = messageData->data.fx_normal_termination.lastpage;
+				        
+					    StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_SENT, &sendMessage);
+					  /*sendMessage->data.rx_sq_page_sent.pid = stash_Process_Id;*/
+					    sendMessage->data.rx_sq_page_sent.page = stash_fax_lastpage;
+					}
+					
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_DOCUMENT_SENT, NULL);
 					StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
 					nextstate = OUTGOING_4f;
 					break;
 
-/*if defined(Info_Sent_Page)*/
+#if 0
 				case FX_SENT_PAGE:
 					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_SENT, NULL);
 					nextstate = OUTGOING_4d;
 					break;
-/*else*/
+#else
 				case FX_SENDING_PAGE:
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_SENT, NULL);
-					StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
+				    if (stash_fax_lastpage != messageData->data.fx_sending_page.lastpage)
+				    {
+				        messageDataBlock *sendMessage;
+				        
+				        /* fax now reporting a different lastpage, so must have sent a page */
+				        stash_fax_lastpage = messageData->data.fx_sending_page.lastpage;
+
+					    StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_SENT, &sendMessage);
+                      /*sendMessage->data.rx_sq_page_sent.pid = stash_Process_Id;*/
+                        sendMessage->data.rx_sq_page_sent.page = stash_fax_lastpage;
+
+                        StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, &sendMessage);
+					  /*sendMessage->data.rx_sq_sending_page.pid = stash_Process_Id;*/
+						sendMessage->data.rx_sq_sending_page.page = stash_fax_lastpage + 1;					
+					}
 					nextstate = OUTGOING_4e;
 					break;
-/*endif*/
+#endif
 			}
 			break;
 
@@ -1046,7 +1084,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         /* Construct the full pathname of the page (file) to send */
                         sprintf(pathname, "%s.%d", directory, page_counter);
 
-                        StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
+                        StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, &sendMessage);
+                      /*sendMessage->data.rx_sq_sending_page.pid = stash_Process_Id;*/
+                        sendMessage->data.rx_sq_sending_page.page = page_counter;
 
                         /* Send the page using ZModem protocols */
                         ZModemIF_SendMessage(REMMODEM, pathname, WM_ZMODEM_TX, &zmodemtx);
@@ -1071,9 +1111,13 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
                 case ZM_RX_NORMAL_TERMINATION:  /* Confirmation that previous page was sent OK */
                     {
+                        messageDataBlock *sendMessage;
                         ZModemMessage zmodemtx;
 
-                        StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_SENT, NULL);
+                        StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_PAGE_SENT, &sendMessage);
+                      /*sendMessage->data.rx_sq_page_sent.pid = stash_Process_Id;*/  
+                        sendMessage->data.rx_sq_page_sent.page = page_counter;
+                        
                         /*>>> Delete page <pathname> here if desired, code follows <<<*/
                         #if 0
                         {
@@ -1093,7 +1137,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 /* Old code we need to remove */
 /*>>>would be a good idea to check if the page exists here!*/
                         /* Tell SendQ that the send is about to commence */
-                        StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
+                        StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, &sendMessage);
+                      /*sendMessage->data.rx_sq_sending_page.pid = stash_Process_Id;*/
+                        sendMessage->data.rx_sq_sending_page.page = page_counter;
 
                         /* Send the page using ZModem protocols */
                         ZModemIF_SendMessage(REMMODEM, pathname, WM_ZMODEM_TX, &zmodemtx);
@@ -1110,7 +1156,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         if (page_counter <= stash_hiPage)
                         {
                             /* Tell SendQ that the send is about to commence */
-                            StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, NULL);
+                            StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_SENDING_PAGE, &sendMessage);
+                          /*sendMessage->data.rx_sq_sending_page.pid = stash_Process_Id;*/
+                            sendMessage->data.rx_sq_sending_page.page = page_counter;
 
                             /* Send the page using ZModem protocols */
                             ZModemIF_SendMessage(REMMODEM, pathname, WM_ZMODEM_TX, &zmodemtx);
@@ -2932,7 +2980,7 @@ static void send_file_report_to_printq (const PageClasses  page_class,
 
 static int do_missing_page_reports (const NFE_address *const  from)
 {
-	char *        email_address = NULL;
+  /*char *        email_address = NULL;*/
 	char          remote_report_filename[257];
 	char *        local_report;
 	int           rc;
