@@ -3,109 +3,129 @@
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
-# Date       Name         Description
-# ----       ----         -----------
-# 09-Aug-99  SNB          Created from OmegaNC2UI
+# Date         Name       Description
+# ----         ----       -----------
+# 09-Aug-99    SNB        Created from OmegaNC2UI
+# 29-Mar-2000  SAR        Updated.
 #
+
+COMPONENT = STBBoot
 
 #
 # Generic options:
 #
-MKDIR   	= mkdir -p
-CP      	= copy
-TRANSLATE	= translate
-RM      	= remove
+AWK		= awk
+MKDIR		= mkdir -p
+AS		= objasm
+CC		= cc
+CMHG		= cmhg
+CP		= copy
+LD		= link
+RM		= remove
+MODSQZ		= modsqz
 WIPE		= -wipe
+CD		= dir
+TOUCH		= create
+CHMOD		= attr $(CHMODFLAGS)
+TRANSLATE	= translate
 
-CPFLAGS 	= ~cfr~v
-WFLAGS		= ~cf~vr
+#
+# Paths and filenames for files and directories within this component:
+#
+INRESDIR	= LocalUserIFRes:Applet
+INVSNFILE	= LocalUserIFRes:Version
+INCHOICEDIR	= LocalUserIFRes:Choices
+INPREDIR	= LocalUserIFRes:PreDesktop
+INDESKDIR	= LocalUserIFRes:Desktop
+INLIBDIR	= LocalUserIFRes:Library
+INUTILDIR	= LocalUserIFRes:Utilities
 
-# Translate flags
+#
+# Destination paths and filenames for files and directories to be installed to:
+#
+OUTRESDIR	= $(INSTDIR).$(RES)
+OUTVSNDIR	= $(INSTDIR).$(VERSN)
+OUTVSNFILE	= $(OUTVSNDIR).$(COMPONENT)
+OUTCHOICEDIR	= $(OUTRESDIR).$(CHOICES)
+OUTPREDIR	= $(OUTRESDIR).$(PRE)
+OUTDESKDIR	= $(OUTRESDIR).$(DESK)
+OUTLIBDIR	= $(OUTRESDIR).$(LIB)
+OUTUTILDIR	= $(OUTRESDIR).$(UTIL)
+
+#
+# Flags and translation macros:
+#
+CPFLAGS		= ~cfr~v
+WFLAGS		= ~c~v
+CHMODFLAGS	= +ow +or +wr -ww
 TRANSFLAGS	= $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
 TRANSMAPPINGS	= TranslateRes:Mappings
-TRANSRES	= TranslateRes:
-TRANSOUT	= $(INSTDIR)
-
-# Copy Flags
-CPFLAGS		= QRF~C~V
+TRANSRESDIR	= TranslateRes:Applet
+TRANSUTILDIR	= TranslateRes:Utilities
 
 #
-# Program specific options:
+# Rule patterns
 #
-COMPONENT	= STBBoot
-APP		= !STBBoot
-SOURCE		=
-TARGET		=
-
-#
-# Export Paths for Messages module
-#
-RESAPP		= $(INSTDIR)
-RESRES 		= $(INSTDIR).Resources
+.SUFFIXES:	.o .s .c .h .cmhg
+.c.o:;		$(CC) $(CFLAGS) -o $@ $<
+.cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
+.cmhg.h:;	$(CMHG) $(CMHGFLAGS) -d $@ $<
+.s.o:;		$(AS) $(AFLAGS) $< $@
 
 #
 # Generic rules:
 #
 rom: $(TARGET)
-        @echo $(COMPONENT): ROM module built
+	@echo $(COMPONENT): ROM module built
 
 export: $(EXPORTS)
-        @echo $(COMPONENT): export complete
+	@echo $(COMPONENT): export complete
 
 install_rom: $(TARGET)
-        @echo $(COMPONENT): ROM module installed
+	@echo $(COMPONENT): ROM module installed
 
 install: translate dirs
-        @echo Installing top level...
-	$(CP) LocalUserIFRes:!Boot                        $(RESAPP).!Boot                        $(CPFLAGS)
-	$(CP) LocalUserIFRes:!Sprites                     $(RESAPP).!Sprites                     $(CPFLAGS)
-	$(CP) LocalUserIFRes:!Sprites22                   $(RESAPP).!Sprites22                   $(CPFLAGS)
-	$(CP) LocalUserIFRes:!Sprites23                   $(RESAPP).!Sprites23                   $(CPFLAGS)
-	$(CP) LocalUserIFRes:Library.IRDefault            $(RESAPP).Library.IRDefault            $(CPFLAGS)
-	$(CP) LocalUserIFRes:Utilities.BootErrors         $(RESAPP).Utilities.BootErrors         $(CPFLAGS)
-	$(CP) LocalUserIFRes:Utilities.BootVars           $(RESAPP).Utilities.BootVars           $(CPFLAGS)
-	$(CP) LocalUserIFRes:Utilities.CheckLocal         $(RESAPP).Utilities.CheckLocal         $(CPFLAGS)
-	$(CP) LocalUserIFRes:Utilities.ClearPtr           $(RESAPP).Utilities.ClearPtr           $(CPFLAGS)
-	$(CP) LocalUserIFRes:Utilities.NormPtr            $(RESAPP).Utilities.NormPtr            $(CPFLAGS)
-        @echo $(COMPONENT): RAM module installed
+	@echo Installing top level...
+	$(CP) $(INRESDIR).*      $(OUTRESDIR).*      $(CPFLAGS)
+	$(CP) $(INCHOICEDIR).*   $(OUTCHOICEDIR).*   $(CPFLAGS)
+	$(CP) $(INPREDIR).*      $(OUTPREDIR).*      $(CPFLAGS)
+	$(CP) $(INDESKDIR).*     $(OUTDESKDIR).*     $(CPFLAGS)
+	$(CP) $(INLIBDIR).*      $(OUTLIBDIR).*      $(CPFLAGS)
+	$(CP) $(INUTILDIR).*     $(OUTUTILDIR).*     $(CPFLAGS)
+	$(CP) $(INVSNFILE)       $(OUTVSNFILE)       $(CPFLAGS)
+	Do $(AWK) -- "/.define.*CMHG.*/" VersionNum >>$(OUTVSNFILE)
+	$(CHMOD) $(INSTDIR)
+	@echo $(COMPONENT): RAM module installed
 
 clean:
 	@echo $(COMPONENT): cleaned
 
 local_clean:
-        $(WIPE) Translated $(WFLAGS)
-        @echo $(COMPONENT): cleaned local resources directory
+	$(WIPE) Translated $(WFLAGS)
+	@echo $(COMPONENT): cleaned local resources directory
 
 dirs:
-        $(MKDIR) $(RESAPP)
-        $(MKDIR) $(RESAPP).Choices
-        $(MKDIR) $(RESAPP).Choices.Multicast
-        $(MKDIR) $(RESAPP).Choices.Monitors
-        $(MKDIR) $(RESAPP).Choices.Territory
-        $(MKDIR) $(RESAPP).Desktop
-        $(MKDIR) $(RESAPP).Desktop.220
-        $(MKDIR) $(RESAPP).Desktop.300
-        $(MKDIR) $(RESAPP).Desktop.400
-        $(MKDIR) $(RESAPP).PreDesktop
-        $(MKDIR) $(RESAPP).PreDesktop.220
-        $(MKDIR) $(RESAPP).PreDesktop.300
-        $(MKDIR) $(RESAPP).PreDesktop.400
-        $(MKDIR) $(RESAPP).Library
-        $(MKDIR) $(RESAPP).Resources
-        $(MKDIR) $(RESAPP).Resources.220
-        $(MKDIR) $(RESAPP).Resources.220.Misc
-        $(MKDIR) $(RESAPP).Resources.300
-        $(MKDIR) $(RESAPP).Resources.300.Misc
-        $(MKDIR) $(RESAPP).Resources.400
-        $(MKDIR) $(RESAPP).Resources.400.Misc
-        $(MKDIR) $(RESAPP).Utilities
+	$(MKDIR) $(OUTRESDIR).Resources.220.Misc
+	$(MKDIR) $(OUTRESDIR).Resources.300.Misc
+	$(MKDIR) $(OUTRESDIR).Resources.400.Misc
+	$(MKDIR) $(OUTCHOICEDIR)
+	$(MKDIR) $(OUTLIBDIR)
+	$(MKDIR) $(OUTUTILDIR)
+	$(MKDIR) $(OUTDESKDIR).220
+	$(MKDIR) $(OUTDESKDIR).300
+	$(MKDIR) $(OUTDESKDIR).400
+	$(MKDIR) $(OUTPREDIR).220
+	$(MKDIR) $(OUTPREDIR).300
+	$(MKDIR) $(OUTPREDIR).400
+	$(MKDIR) $(OUTVSNDIR)
 
 translate: dirs
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSRES)!Run                    -o $(TRANSOUT).!Run
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSRES)Utilities.Desktop       -o $(TRANSOUT).Utilities.Desktop
-        @echo Translation Complete.
-        
-resources: 
-        @echo $(COMPONENT): resource files copied
-        
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSRESDIR).!Run        -o $(OUTRESDIR).!Run
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSUTILDIR).Desktop    -o $(OUTUTILDIR).Desktop
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSUTILDIR).PreDesktop -o $(OUTUTILDIR).PreDesktop
+	@echo Translation Complete.
+
+resources:
+	@echo $(COMPONENT): resource files copied
+
 # Dynamic dependencies:
