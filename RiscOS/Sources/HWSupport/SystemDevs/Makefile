@@ -5,63 +5,15 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
-#
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
+# 09-Mar-01  SNB          Recreated
 
 #
 # Program specific options:
 #
-COMPONENT = SystemDevs
-SOURCE    = s.SystemDevs
-TARGET    = rm.SystemDevs
-TARGETSA  = rm.sa.SystemDevs
-RESOURCES = LocalRes:Messages
+COMPONENT = SystemDevices
+TARGET    = SystemDevs
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: 
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} ${TARGETSA}
-        @echo ${COMPONENT}: cleaned
-
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-#
-# Makes a stand-alone version with messages bound in
-#
-standalone: ${TARGETSA}
-        @echo ${COMPONENT}: standalone module built
-
-${TARGETSA}: s.StandAlone ${RESOURCES}
-        ${AS} ${ASFLAGS} s.StandAlone
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
