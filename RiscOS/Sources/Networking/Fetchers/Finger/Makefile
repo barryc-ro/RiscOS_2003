@@ -97,6 +97,9 @@ MSGSF=o.msgs
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $< -d $*.h
 
+FingerHdr.h: FingerHdr.o
+	  @|
+	  
 #
 # Main rules:
 #

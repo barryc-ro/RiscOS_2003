@@ -1,4 +1,4 @@
-# Makefile for Finger
+# Makefile for FTP
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -11,7 +11,7 @@
 #
 # Component specific options:
 #
-COMPONENT  = Finger
+COMPONENT  = FTP
 ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
 
@@ -34,10 +34,12 @@ LD      = link
 TLD	= tlink
 RM      = remove
 WIPE    = -wipe
+AS	= objasm
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
+AFLAGS   = -depend !Depend -NoCache 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -throwback -zM -Wp -ffah -zps1 ${DFLAGS}
 DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UTRACE
 ROMFLAGS = -DROM
@@ -54,40 +56,46 @@ ABSSYM    = RISC_OSLib:o.abssym
 TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
 
 OBJS =\
+ o.asmbits\
+ o.base64\
  o.commands\
  o.connect\
  o.dns\
  o.generic\
- o.headers\
+ o.header\
  o.module\
+ o.processdir\
  o.protocol\
  o.readdata\
+ o.rewrite\
  o.ses_ctrl\
  o.start\
  o.status\
  o.stop\
  o.URLclient\
  o.utils\
- o.writedata\
- o.FingerHdr
+ o.FTPHdr
 
 RAM_OBJS =\
+ o.asmbits\
+ o.base64\
  o.commands\
  o.connect\
  o.dns\
  o.generic\
- o.headers\
+ o.header\
  o.moduleRAM\
+ o.processdir\
  o.protocol\
  o.readdata\
+ o.rewrite\
  o.ses_ctrl\
  o.start\
  o.status\
  o.stop\
  o.URLclient\
  o.utils\
- o.writedata\
- o.FingerHdr
+ o.FTPHdr
 
 MSGSF=o.msgs
 
@@ -96,7 +104,11 @@ MSGSF=o.msgs
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $< -d $*.h
+.s.o:;	  ${AS} ${AFLAGS} -o $@ $<
 
+FTPHdr.h: FTPHdr.o
+       @|
+       
 #
 # Main rules:
 #
@@ -121,6 +133,7 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
+        ${WIPE} h.${COMPONENT}Hdr ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
@@ -139,8 +152,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${MSGSF}: @.Resources.${LOCALE}.Messages
-	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages ${RESFSDIR}.Messages
+${MSGSF}: Resources.${LOCALE}.Messages Resources.${LOCALE}.File Resources.${LOCALE}.FileGrey Resources.${LOCALE}.Dir Resources.${LOCALE}.DirGrey
+	MkRes messages_file ${MSGSF} Resources.${LOCALE} ${RESFSDIR}
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS}
 	${mkdir} rm
