@@ -1,0 +1,959 @@
+/*********************************************************************
+/
+/  Copyright, 1988 - 1995.  All Rights Reserved by:
+/      RSA
+/      7701 Six Forks Road
+/      Suite 120
+/      Raleigh, NC 27615
+/      (919) 846-7171
+/
+/  This document contains material confidential to RSA.
+/  Its contents must not be revealed, used or disclosed to
+/  anyone or company with out written permission by RSA.
+/  The information contained herein is solely for the use of RSA.
+/
+/  File:       linev80.c
+/
+/  Version:    1.00
+/
+/  Function:   This file contains the V.80 Line I/O routines
+/
+/  Product:    Merlin/Cutlass V.80 Line I/O
+/
+/  History:    None
+/
+/  Created:    07/26/96
+/
+/  ----------------------------
+/  -       Modifications      -
+/  ----------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"           /* system definitions */
+#include "iohw_equ.h"          /* First Flight hardware defs */
+#include "lineequ.h"           /* line constant defs */
+#include "lineedf.h"           /* line external variable defs */
+#include "linelink.h"          /* linelink.c prototypes */
+#include "dsp_drv.h"           /* DSP driver prototypes */
+#include "mt_macro.h"
+#include "mt_codef.h"
+#include "mt_coext.h"
+#include "cp_dsp.h"
+#include "mt_v8v34.h"
+#include "linev80.h"           /* V.80 DCE I/O definitions */
+
+/* external function prototypes */
+extern enable_processor_interrupts(void);
+extern disable_processor_interrupts(void);
+extern void send_pkt_to_dsp(void);
+extern ubyte current_command[];
+extern ubyte ack_or_response;
+
+extern void v80_tx_underrun(void);
+extern void v80_rx_overrun(void);
+extern void line_from_clear(void);
+extern dte_process_unum(void);
+
+/* local function prototypes */
+void line_v80_configure(ubyte,ubyte,ubyte,ubyte,ubyte,ubyte,ubyte,ubyte);
+void line_enter_sub_mode(ubyte);
+void line_enter_hunt_mode(void);
+void line_tx_abort(void);
+void insert_rx_byte(ubyte);
+void line_write_exit(ubyte,ubyte,ubyte);
+void v80_tx_int(void);
+void v80_rx_int(void);
+
+
+/**********************************************************************
+/
+/  Procedure:          line_v80_configure
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/26/96
+/
+/  Description:        This routine will handle the configurations
+/                      of the V.80 DCE I/O module operation.
+/
+/  Input Parameters:
+/
+/      ubyte tmp_t_idle:
+/          0 = tx 8-bit SYN1 during TSM tx underrun, do not enter hunt mode
+/          1 = tx 8-bit SYN1 during TSM tx underrun, HUNT NOT SUPPORTED
+/          2 = tx 16-bit SYN1,2 during TSM tx underrun, HUNT NOT SUPPORTED
+/          
+/      ubyte tmp_f_idle:
+/          0 = tx HDLC FLAGS during FSM tx underrun
+/          1 = tx MARKS during FSM tx underrun
+/          
+/      ubyte tmp_f_un_ov:
+/          0 = tx ABORT in mid-frame during FSM tx underrun
+/          1 = tx FLAGS in mid-frame during FSM tx underrun
+/          
+/      ubyte tmp_hd_auto:
+/          0 = NOT SUPPORTED
+/          1 = NOT SUPPORTED
+/          
+/      ubyte tmp_crc_type:
+/          0 = CRC generation/checking disabled
+/          1 = CRC generation/checking enabled
+/          
+/      ubyte tmp_nrzi_en:
+/          0 = NRZI encoding disabled
+/          1 = NRZI encoding enabled
+/          
+/      ubyte tmp_syn1:
+/          0x00-0xFF = SYN1 8-bit/MSB_16-bit sync pattern
+/          
+/      ubyte tmp_syn2:
+/          0x00-0xFF = SYN2 8-bit/LSB_16-bit sync pattern
+/          
+/  Output Parameters:  None
+/
+/  Globals Changed:    trans_idle, framed_idle, framed_un_ov, hd_auto,
+/                      crc_type, nrzi_en, syn1, syn2
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void line_v80_configure(ubyte tmp_t_idle, ubyte tmp_f_idle,
+                        ubyte tmp_f_un_ov, ubyte tmp_hd_auto,
+                        ubyte tmp_crc_type, ubyte tmp_nrzi_en,
+                        ubyte tmp_syn1, ubyte tmp_syn2)
+{
+   ubyte temp_byte;
+   extern void line_port_init(ubyte);
+
+   /* save the supported parameters */
+   trans_idle = tmp_t_idle;
+   framed_idle = tmp_f_idle;
+   framed_un_ov = tmp_f_un_ov;
+   hd_auto = tmp_hd_auto;
+   crc_type = tmp_crc_type;
+   nrzi_en = tmp_nrzi_en;
+   syn1 = tmp_syn1;
+   syn2 = tmp_syn2;
+
+   temp_byte = v80_sam;
+   v80_sam = TRUE;
+   if (current_sub_mode == TRANSPARENT_SUB_MODE)
+      line_port_init(BIT_SYNC_PORT);
+   else
+      line_port_init(SYNC_PORT);
+   v80_sam = temp_byte;
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          line_enter_sub_mode
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/27/96
+/
+/  Description:        This routine will dynamically switch between
+/                      V.80 Transparent Sub-Mode and Framed Sub-Mode
+/                      when using V.80 Synchronous Access Mode.
+/
+/  Input Parameters:
+/
+/      ubyte tmp_sub_mode:
+/          0 = Transparent Sub-Mode
+/          1 = Framed Sub-Mode
+/          
+/  Output Parameters:  None
+/
+/  Globals Changed:    current_sub_mode
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void line_enter_sub_mode(ubyte sub_mode)
+{
+   /*
+    * NOTE: The (1) framed idle character, (2) framed under/overrun
+    *       character, and (3) SYN1 character will not be changed
+    *       when dynamically switching Sub-Modes.  These values
+    *       can only change by calling LINE_V80_CONFIGURE().
+    */
+
+   /* save the current sub mode */
+   current_sub_mode = sub_mode;
+
+   /* flush the receive data buffer */
+   line_from_clear();
+
+   /* if using TSM operation */
+   if (sub_mode == TRANSPARENT_SUB_MODE)
+   {
+       /* configure DSP as a transparent sychronous controller */
+       line_port_init(BIT_SYNC_PORT);
+
+       /* always insert <EM><UNDER> into the rx data stream */
+       insert_rx_byte(EM_CODE);
+       insert_rx_byte(UNDER_CODE);
+   }
+   /* else if using FSM operation */
+   else
+   {
+       /* configure DSP as an HDLC controller */
+       line_port_init(SYNC_PORT);
+
+       /* discard all data until an HDLC flag is detected */
+       hunt_mode_en = TRUE;
+   }
+
+   line_disable_interrupts();
+   dce_tx_enabled = TRUE;    /* Fake TX IE */
+   dspdrv_ping_cram_intr();  /* kick start Merlin */
+   line_enable_interrupts();
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          line_enter_hunt_mode
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/27/96
+/
+/  Description:        This routine is called to immediately notify
+/                      the V.80 DCE I/O that the <EM><HUNT> command
+/                      has been received from the DTE device.  This
+/                      will take the appropriate action based upon
+/                      the current sub-mode:
+/
+/                          - if (TSM _and_ TX IDLE with NO HUNT)
+/                            - NO EFFECT
+/                          - if (TSM _and_ TX IDLE with SYN1,2 HUNT)
+/                            - SYN HUNT NOT SUPPORTED
+/                          - if (FSM)
+/                            - flush the receive data buffer
+/                            - discard all data until HDLC flag detected
+/
+/  Input Parameters:   None
+/          
+/  Output Parameters:  None
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void line_enter_hunt_mode(void)
+{
+   /*
+    *  The V.80 module should call _or_ "dynamically stub" this
+    *  routine based on the current Sub-Mode and DTE device inputs
+    *  For protection, this routine will check that the configuration
+    *  is appropriate before entering HUNT mode.
+    */
+
+   /* if the using TSM operation */
+   if (current_sub_mode == TRANSPARENT_SUB_MODE)
+   {
+       /* if configured to TX IDLE with NO HUNT in TSM */
+       if (trans_idle == TIDLE_NO_HUNT)
+       {
+           /* NO EFFECT. SHOULD HAVE BEEN DYNAMICALLY STUBBED. */
+       }
+       /* else if configured to TX IDLE with SYN1,2 HUNT in TSM */
+       else
+       {
+           /* NOT SUPPORTED. SHOULD HAVE BEEN DYNAMICALLY STUBBED. */
+       }
+   }
+   /* else if using FSM operation */
+   else
+   {
+       /* flush the receive data buffer */
+       line_from_clear();
+
+       /* discard all data until an HDLC flag is detected */
+       hunt_mode_en = TRUE;
+   }
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          line_tx_resume
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/27/96
+/
+/  Description:        This routine is called when the <EM><RESUME>
+/                      command is received from the DTE device.  It
+/                      is the responsibility of this routine to
+/                      determine if this command is in response to
+/                      a DCE I/O TX_UNDERRUN indication while in
+/                      Framed Sub-Mode.  If the DCE I/O is in
+/                      Transparent Sub-Mode _or_ if the <EM><RESUME>
+/                      command is in response to a TX_OVERRUN
+/                      indication from the DTE I/O, then this routine
+/                      should take no action.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  None
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void line_tx_resume(void)
+{
+   /*
+    *  IF in FSM _AND_ the DCE I/O has sent a TX_UNDERRUN
+    *  indication _AND_ the DCE I/O is waiting for a <EM><RESUME>
+    *  command from the DTE device, then resume transmission.
+    */
+
+   if ((current_sub_mode == FRAMED_SUB_MODE) && (dce_tx_underrun == TRUE))
+   {
+       dce_tx_enabled = TRUE;
+       dce_tx_underrun = FALSE;
+       dce_tx_resumed = TRUE;
+   }
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          line_get_flag_count
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/27/96
+/
+/  Description:        This support routine is used get the current
+/                      number of HDLC flags received by the DSP.
+/                      This routine should only be used perform
+/                      FLAG HUNT while in FSM.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  uword:
+/                      number of HDLC flags rx by DSP
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+uword line_get_flag_count(void)
+{
+   uword temp_word;
+
+   /* get the current DSP flag count */
+   current_command[0] = 0x0A;  /* READ BANK0 PACKET ID */
+   current_command[1] = 0x00;  /* filler */
+   current_command[2] = 0x02;  /* packet length */
+   current_command[3] = 0x00;  /* filler */
+
+   /* LSByte DSP address */
+   current_command[4] = (ubyte)(HDLC_FLAG_COUNT & 0x00FF);
+
+   /* MSByte DSP address */
+   current_command[5] = (ubyte)((HDLC_FLAG_COUNT >> 8) & 0x00FF);
+
+   dsp_cp_packet = 0x0A;
+   ack_or_response = RESPONSE;
+   send_pkt_to_dsp();
+
+   temp_word = (dsp_response_data[1] << 8) & 0xFF00;
+   temp_word |= dsp_response_data[0];
+
+   return(temp_word);
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          line_hunt_complete
+/
+/  Author:             RSA
+/
+/  Creation Date:      08/19/96
+/
+/  Description:        This line interface routine informs the
+/                      V.80 DCE I/O that HDLC FLAGS have been
+/                      detected.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  None:
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void line_hunt_complete(void)
+{
+   ubyte status;
+   ubyte data_count;
+
+   /* insert the <EM><ERR> code into the rx data stream */
+   insert_rx_byte(EM_CODE);
+   insert_rx_byte(ERR_CODE);
+
+/* DEBUG ONLY - mlc */
+#if 0
+   insert_rx_byte(EM_CODE);
+   insert_rx_byte(0xBE);
+   insert_rx_byte(0x2E);
+   insert_rx_byte(0x2E);
+#endif
+/* DEBUG ONLY - mlc */
+
+/* START CHANGE - mlc */
+   /* insert the opening <EM><FLAG> code into the rx data stream */
+   insert_rx_byte(EM_CODE);
+   insert_rx_byte(FLAG_CODE);
+/* START CHANGE - mlc */
+
+   /* set a waiting timer to allow the DSP to flush out the
+      remaining received data before disabling hunt mode */
+   hunt_end_wait_timer = HUNT_DISABLE_WAIT_TIME;
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          insert_rx_byte
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/27/96
+/
+/  Description:        This support routine is used insert <EM> code
+/                      indications in-band into the DTE I/O transmit
+/                      data stream.  This routine does not check for
+/                      rx overruns in the DCE I/O buffers.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  None
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void insert_rx_byte(ubyte rx_char)
+{
+   /* insert the byte into the rx data stream */
+   dce_rx_buffer[dce_rx_insert++] = rx_char;
+   dce_rx_count++;
+
+   /* if the buffer insert pointer needs to wrap */
+   if (dce_rx_insert == DCE_BUFFER_SIZE)
+       dce_rx_insert = 0;
+}
+
+   
+/**********************************************************************
+/
+/  Procedure:          line_write_exit
+/
+/  Author:             RSA
+/
+/  Creation Date:      09/10/96
+/
+/  Description:        This routine write the ISR exit data to the
+/                      COM-RAM interface. This routine was added
+/                      to help reduce code size.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  None
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 DCE I/O
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void line_write_exit(ubyte status,ubyte data_count,ubyte length)
+{
+   dspdrv_WriteCram(CP_DSP_DATA_STATUS,&status,length);
+	dspdrv_WriteCram(CP_DSP_DATA_LENGTH,&data_count,length);
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          v80_tx_int
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/27/96
+/
+/  Description:        This routine handles the V.80 transmit
+/                      interrupts.  This routine will call the
+/                      specific Transparent Sub-Mode or Framed
+/                      Sub-Mode ISR handler.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  None
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void v80_tx_int(void)
+{
+   /*
+    * NOTE: This is only a first guess.  It is not intended
+    *       to be used as working code yet!!!
+    */
+
+	ubyte status;       /* status byte of data area semaphore to write */
+	ubyte data_count;   /* number of tx data bytes */
+	uword address;      /* address of Comm RAM to write data */
+   ubyte temp_byte;    /* temporary local byte */
+   ubyte temp_byte2;   /* temporary local byte */
+
+/* DEBUG ONLY - mlc */
+   uword max_tx_size = 0xFFFF;
+   extern ubyte v80_frame_count;
+/* DEBUG ONLY - mlc */
+
+	/* init variables */
+	address = CP_DSP_DATA_AREA_BASE;
+	data_count = 0;
+   status = NO_STATUS;
+
+   /* if TX_UNDERRUN indicated from the DSP */
+   if (((current_sub_mode == FRAMED_SUB_MODE) || dce_tx_count) &&
+        (dce_tx_resumed == TRUE))
+   {
+      /* set packet length and status */
+      status = TX_IDLE;
+      data_count = 0xFF;
+      line_write_exit(status,data_count,1);
+      dce_tx_resumed = FALSE;
+
+/* DEBUG ONLY - mlc */
+	   dce_tx_interrupt_expected = FALSE;
+/* DEBUG ONLY - mlc */
+
+      return;
+   }
+
+   /* If "spoofed" TX IE is false, then exit */
+	if (dce_tx_enabled == FALSE)
+		return;
+
+/* DEBUG ONLY - mlc */
+#if 0
+	if ((v80_frame_count == 0) && (dce_tx_count <= 64))
+#endif
+	if (v80_frame_count == 0)
+	{
+	   dce_tx_interrupt_expected = FALSE;
+      return;
+	}
+/* DEBUG ONLY - mlc */
+
+/* DEBUG ONLY - mlc */
+#if 0
+   /* while data is available and there is room in COMM-RAM */
+	while (dce_tx_count && (data_count < DATA_AREA_SIZE))
+#endif
+	while (dce_tx_count && (data_count < DATA_AREA_SIZE) && max_tx_size)
+/* DEBUG ONLY - mlc */
+
+	{
+      /* get the next byte for transmission */
+      temp_byte = dce_tx_buffer[dce_tx_remove];
+
+/* DEBUG ONLY - mlc */
+      max_tx_size--;
+/* DEBUG ONLY - mlc */
+
+      /* point to the next buffer byte */
+      dce_tx_count--;
+      if (++dce_tx_remove == DCE_BUFFER_SIZE)
+         dce_tx_remove = 0;
+
+      /* if an <EM> code sequence */
+      if ((temp_byte == EM_CODE) && (dce_tx_count != 0) &&
+           (dce_tx_buffer[dce_tx_remove] != EM_CODE))
+      {
+         /* get the next byte for transmission */
+         temp_byte = dce_tx_buffer[dce_tx_remove];
+
+         /* point to the next buffer byte */
+         dce_tx_count--;
+         if (++dce_tx_remove == DCE_BUFFER_SIZE)
+            dce_tx_remove = 0;
+
+         switch (temp_byte)
+         {
+            case FLAG_CODE:
+               /* use the IDLE STATUS to send a flag */
+               status = TX_FLAG;
+               if (data_count == 0)
+                  data_count = 0xFF;
+               line_write_exit(status,data_count,1);
+
+               /* set the EOF status */
+               dce_tx_eof = TRUE;
+               v80_frame_count--;
+
+               /* exit now so that the FLAG will delimit the data */
+               return;
+
+            case ERR_CODE:
+               /* use the IDLE STATUS to send a flag */
+               status = TX_ABORT;
+               if (data_count == 0)
+                  data_count = 0xFF;
+               line_write_exit(status,data_count,1);
+               return;
+
+            default:
+               /* CHARACTER TRANSPARENCY */
+               /* write <EM> byte into COMM-RAM for transmission */
+               temp_byte2 = EM_CODE;
+               dspdrv_WriteCram(address,&temp_byte2,1);
+
+               /* update buffering variables */
+               address += WORD_OR_BYTE_ADD_INC;
+               data_count++;
+
+               /* write data byte into COMM-RAM for transmission */
+               dspdrv_WriteCram(address,&temp_byte,1);
+
+               /* update buffering variables */
+               address += WORD_OR_BYTE_ADD_INC;
+               data_count++;
+               dce_tx_eof = FALSE;
+               break;
+         }
+      }
+      else
+      {
+         /* write byte into COMM-RAM for transmission */
+         dspdrv_WriteCram(address,&temp_byte,1);
+
+         /* update buffering variables */
+         address += WORD_OR_BYTE_ADD_INC;
+         data_count++;
+         dce_tx_eof = FALSE;
+      }
+   }
+
+   /* set packet length and status */
+   line_write_exit(status,data_count,1);
+}
+
+
+/**********************************************************************
+/
+/  Procedure:          v80_rx_int
+/
+/  Author:             RSA
+/
+/  Creation Date:      07/27/96
+/
+/  Description:        This routine handles the V.80 receive
+/                      interrupts.  This routine will call the
+/                      specific Transparent Sub-Mode or Framed
+/                      Sub-Mode ISR handler.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  None
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 Module
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void v80_rx_int(void)
+{
+   /*
+    * NOTE: This is only a first guess.  It is not intended
+    *       to be used as working code yet!!!
+    */
+
+	uword address;      /* address of Comm RAM to write data */
+   ubyte tmp_sub_mode; /* temporary variable for the current sub-mode */
+   ubyte tmp_byte;
+   uword tmp_word;     
+   ubyte length_and_status;
+
+   /* init variables */
+	address = DSP_CP_DATA_AREA_BASE;
+   tmp_sub_mode = current_sub_mode;
+
+   /* hunt for the first FLAGS in FSM */
+   if (hunt_mode_en == TRUE)
+   {
+      /* clear semaphores and DO NOT STORE DATA */
+      dce_status_semaphore = 0;
+      dce_length_semaphore = 0;
+      dspdrv_WriteCram(DSP_CP_DATA_LENGTH,&dce_length_semaphore,1);
+      dspdrv_WriteCram(DSP_CP_DATA_STATUS,&dce_status_semaphore,1);
+      return;
+   }
+
+   if (dce_status_semaphore == TX_UNDERRUN)
+   {
+      /*
+       * This status is a acts only as an indicator.
+       * The DSP indicates that the transmitter has
+       * detected underrun by sending a packet of
+       * length zero and a status of value TX_UNDERRUN.
+       * Data will never be included in this packet.
+       */
+
+      /* reset the semaphore */
+      dce_status_semaphore = 0;
+
+/* DEBUG ONLY - mlc */
+	   dce_tx_interrupt_expected = FALSE;
+/* DEBUG ONLY - mlc */
+
+      /*
+       *  Indicate transmit underrun to the DTE device
+       *  by inserting the <EM><UNDER> code in-band
+       *  when operating in either TSM or FSM.
+       *
+       *  Always send <EM><UNDER> in TSM.
+       *  Only send <EM><UNDER> in FSM when the tx underrun
+       *  occurred during a NON-FLAG sequence.
+       */
+
+      /* if the <EM><UNDER> indication is valid */
+      if ((tmp_sub_mode == TRANSPARENT_SUB_MODE) ||
+         ((tmp_sub_mode == FRAMED_SUB_MODE) && (dce_tx_eof == FALSE)))
+      {
+         /* always force the DSP to enter TX_IDLE state */
+         dce_tx_resumed = TRUE;
+
+         if (tmp_sub_mode == FRAMED_SUB_MODE)
+         {
+            /* indicate mid-frame tx underrun to the DTE I/O */
+            dce_tx_underrun = TRUE;
+            dte_process_unum();
+         }
+         else
+         {
+            /* insert the <EM><UNDER> code into the rx data stream */
+            insert_rx_byte(EM_CODE);
+            insert_rx_byte(UNDER_CODE);
+         }
+      }
+
+      /* clear the DSP semaphores */
+      length_and_status = 0;
+      dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+      dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+
+      /* clear the semaphore values */
+      dce_length_semaphore = 0;
+      dce_status_semaphore = 0;
+
+      /* RETURN IMMEDIATELY, THERE IS NO DATA, STATUS ONLY */
+      return;
+   }
+
+	while (dce_length_semaphore)
+	{
+		 dspdrv_ReadCram(address,&dce_rx_buffer[dce_rx_insert],1);
+
+       tmp_byte = dce_rx_buffer[dce_rx_insert];
+
+       /* if room in the rx buffer */
+       if (dce_rx_count < (DCE_BUFFER_SIZE - 2))
+       {
+           /* if receiver was overrun */
+           if (dce_rx_overrun == TRUE)
+              dce_rx_overrun = FALSE;
+
+           /* generate <EM> character transparency codes */
+           switch (tmp_byte)
+           {
+               case EM_CODE:
+                   /* overwrite 0x19 with the <EM><t1> code */
+                   insert_rx_byte(EM_CODE);
+                   insert_rx_byte(T1_CODE);
+                   break;
+               case EMP_CODE:
+                   /* overwrite 0x99 with the <EM><t2> code */
+                   insert_rx_byte(EM_CODE);
+                   insert_rx_byte(T2_CODE);
+                   break;
+               case DC1_CODE:
+                   /* overwrite 0x11 with the <EM><t3> code */
+                   insert_rx_byte(EM_CODE);
+                   insert_rx_byte(T3_CODE);
+                   break;
+               case DC3_CODE:
+                   /* overwrite 0x13 with the <EM><t4> code */
+                   insert_rx_byte(EM_CODE);
+                   insert_rx_byte(T4_CODE);
+                   break;
+               default:
+                   /* Pop in buffer and bump indicies */
+                   dce_rx_insert++;        /* array index */
+                   dce_rx_count++;         /* dce receive buffer */
+            
+                   /* if need to wrap the rx buffer ptr */
+                   if (dce_rx_insert == DCE_BUFFER_SIZE)
+                       dce_rx_insert = 0;
+                   break;
+           }
+       }
+
+       /* if receiver overrun and not already indicated */
+       else if (dce_status_semaphore != RX_OVERRUN)
+       {
+           if (dce_rx_overrun == FALSE)
+           {
+              /* insert the <EM><ROVER> indication into the receive data */
+              insert_rx_byte(EM_CODE);
+              insert_rx_byte(ROVER_CODE);
+
+              /* set the receiver overrun flag */
+              dce_rx_overrun = TRUE;
+           }
+       }
+
+       /* adjust buffer and counting variables */
+       address += WORD_OR_BYTE_ADD_INC;
+		 dce_length_semaphore--;
+	}
+
+   /* examine and act upon the status set by the DSP */
+   switch (dce_status_semaphore)
+   {
+       case RX_OVERRUN:
+
+           /* insert the <EM><ROVER> code into the rx data stream */
+           insert_rx_byte(EM_CODE);
+           insert_rx_byte(ROVER_CODE);
+           break;
+
+       case RX_HDLC_ABORT:
+
+           /* insert the <EM><MARK> code into the rx data stream */
+           insert_rx_byte(EM_CODE);
+           insert_rx_byte(MARK_CODE);
+           break;
+
+       case EOF_CRC_GOOD:
+       case EOF_CRC_BAD:
+
+           /* insert the <EM><FLAG> code into the rx data stream */
+           insert_rx_byte(EM_CODE);
+           insert_rx_byte(FLAG_CODE);
+           break;
+
+       case RX_BREAK:
+       case NO_STATUS:
+       default:
+           /* NOTHING TO INSERT */
+           break;
+   }
+
+	/* clear semaphores */
+	dce_status_semaphore = 0;
+	dspdrv_WriteCram(DSP_CP_DATA_LENGTH,&dce_length_semaphore,1);
+	dspdrv_WriteCram(DSP_CP_DATA_STATUS,&dce_status_semaphore,1);
+}

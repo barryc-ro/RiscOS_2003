@@ -63,7 +63,10 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.<System>.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        Set Kernel$Messages Resources.${LOCALE}.Messages
+        IfThere Resources.${LOCALE}.<UserIF>.Messages Then Set Kernel$Messages Resources.${LOCALE}.<UserIF>.Messages
+        ${CP} <Kernel$Messages>  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        UnSet Kernel$Messages
 
 resources-None: resources_common
 	@

@@ -1,0 +1,257 @@
+/*********************************************************************
+/
+/    Copyright, 1988 - 1995.  All Rights Reserved by:
+/         RSA
+/         7701 Six Forks Road
+/         Suite 120
+/         Raleigh, NC 27615
+/         (919) 846-7171
+/
+/    This document contains material confidential to RSA.
+/    Its contents must not be revealed, used or disclosed to
+/    anyone or company with out written permission by RSA.
+/    The information contained herein is solely for the use of RSA.
+/
+/    File:          linesync.c
+/
+/    Version:       1.0
+/
+/    Function:      This file contains routines relative to MNP 3.
+/
+/    Product:     First Flight line I/O
+/
+/    History:       Modified from LINESYNC.C
+/
+/    Created:  January 30, 1995
+/
+/    ----------------------------
+/    -    Modifications     -
+/    ----------------------------
+/
+/    Author & Date: RSA
+/    Description:
+/    Reason:
+/
+*************************************************************************/
+
+#include "sys_def.h"            /* system definitions */
+#include "iohw_equ.h"           /* First Flight hardware defs */
+#include "lineequ.h"            /* line constant defs */
+#include "lineedf.h"            /* line external variable defs */
+#include "linelink.h"           /* linelink.c prototypes */
+#include "local.h"              /* typedefs for DSP drivers */
+#include "dsp_drv.h"            /* DSP driver prototypes */
+
+/***************** external procedures used locally *********************/
+	/*** from file mnp.c ***/
+extern ubyte *mnp_tx(void);
+extern ubyte *mnp_rx(void);
+/*****************************************************************************
+/
+/    Procedure:  sync_tx_int   
+/
+/    Author: RSA
+/
+/    Creation Date: January 30, 1995
+/
+/    Description: This routine will handle a SCC tx ready interrupt during
+/         mnp3 (sync) protocol.
+/
+/    Input Parameters:  None
+/
+/    Output Parameters:  None
+/
+/    Global Variables Changed:  
+/
+/    Users:    
+/
+/    -------------------------
+/    -     Modifications -
+/    -------------------------
+/
+/    Author & Date: RSA
+/    Description:
+/    Reason:
+/
+********************************************************************/
+void sync_tx_int(void)
+{
+	ubyte length;
+	ubyte tx_data_status = 0;
+	ubyte tx_status_reg;
+
+   /* If "spoofed" TX IE is false, the obey */
+	if (dce_tx_enabled == FALSE) 
+		return;
+
+   /*   If we're done w/ the current packet, get another */
+	if ( tx_char_count == 0 )
+	{
+
+      /* Get next tx packet from mnp */
+		mnp_tx_packet_ptr = (MNP_PACKET_TYPE *)mnp_tx();
+
+      /* If a valid packet, set up the buffer */
+		if ( mnp_tx_packet_ptr )
+		{
+			mnp_tx_data_ptr = mnp_tx_packet_ptr->data;
+			tx_char_count = mnp_tx_packet_ptr->count;
+			tx_data_status = NO_STATUS;
+		}
+		else
+		{
+         /* Else no more packets to send */
+         dce_tx_enabled = FALSE;
+			return;
+		}
+	}
+
+   /* Determine length of data to send, (size of data area vs. count) */
+   if (tx_char_count > DATA_AREA_SIZE )
+	    length = DATA_AREA_SIZE;
+	else
+	{
+		length = (ubyte) tx_char_count;
+		tx_data_status = TX_EOF;
+	}
+
+
+   /* Send one packet of data through Comm RAM data area */
+	line_send_data(mnp_tx_data_ptr, length, tx_data_status);
+
+   /* Decrement count, pointer */
+	tx_char_count -= length;
+	mnp_tx_data_ptr += length;
+}
+
+
+
+/*****************************************************************************
+/
+/    Procedure:  sync_rx_int   
+/
+/    Author: RSA
+/
+/    Creation Date: January 30, 1995
+/
+/    Description: This routine will handle a SCC rx ready interrupt during
+/         mnp3 (sync) protocol.
+/
+/    Input Parameters:  None
+/
+/    Output Parameters:  None
+/
+/    Global Variables Changed:  rx_char_count, mnp_rx_packet_ptr,
+/         mnp_rx_data_ptr, line_bg_error_flags 
+/
+/    Users:    
+/
+/    -------------------------
+/    -     Modifications -
+/    -------------------------
+/
+/    Author & Date: RSA
+/    Description:
+/    Reason:
+/
+******************************************************************************/
+void sync_rx_int(void)
+{
+	ubyte length_and_status;
+
+	/* If rx overrun, set flag */
+	if (dce_status_semaphore == RX_OVERRUN)
+	{
+		line_bg_error_flags = 1;
+	}
+
+	/* If abort received, reset to receive new packet and return */
+	if (dce_status_semaphore == RX_HDLC_ABORT)
+	{
+		rx_char_count = 0;
+
+		if ( mnp_rx_packet_ptr )
+		{
+		   mnp_rx_packet_ptr->count = 0;
+		   mnp_rx_packet_ptr->status = 0;
+		   mnp_rx_data_ptr = mnp_rx_packet_ptr->data;
+		}
+	   length_and_status = 0;
+	   dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+	   dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+	}
+	else /* not abort */
+	{
+		if (mnp_rx_packet_ptr != NULL)
+		{
+         /*
+            Verify that the amount of data in COMRAM wont
+            blow away our receive frame boundary. This problem
+            can occur when line gets dropped by remote end in V.34,
+            and a we train on our own TX data, fooling us into
+            detecting unbounded fake data.
+         */
+         if( (rx_char_count + dce_length_semaphore) > MNP_MAX_FRAME_SIZE )
+         {
+			   dce_status_semaphore = EOF_CRC_BAD;  /* Get rid of it */
+         }
+         else
+         {
+			   dspdrv_ReadCram(DSP_CP_DATA_AREA_BASE, mnp_rx_data_ptr, dce_length_semaphore);
+			   mnp_rx_data_ptr += dce_length_semaphore;
+			   rx_char_count += dce_length_semaphore;
+         }
+
+			length_and_status = 0;
+			dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+			dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+
+			/* Check to see if end of frame rx'd */
+			if ((dce_status_semaphore == EOF_CRC_GOOD) ||
+				(dce_status_semaphore == EOF_CRC_BAD))
+			{
+				
+				rx_char_count -= 2;
+				mnp_rx_packet_ptr->count = rx_char_count;
+
+				/* Check to see if CRC error rx'd */
+				if (dce_status_semaphore == EOF_CRC_BAD)
+				{
+					line_bg_error_flags = 1;
+				}
+	
+				/* if any errors, set status of MNP packet */
+				if (line_bg_error_flags)
+				{
+					mnp_rx_packet_ptr->status = BAD_BLOCK;
+					line_bg_error_flags = 0;
+				}
+
+				/* Get next rx packet from V42 */
+				mnp_rx_packet_ptr = (MNP_PACKET_TYPE *)mnp_rx();
+		
+				/* If a new packet is ready, set up it's pointers */
+				if ( mnp_rx_packet_ptr )
+				{
+					rx_char_count = 0;
+					mnp_rx_packet_ptr->status = 0;
+					mnp_rx_packet_ptr->count = 0;
+					mnp_rx_data_ptr = mnp_rx_packet_ptr->data;
+				}
+			} /* end if EOF */
+		} /* end else packet ptr is valid */
+	   else
+	   {
+			line_bg_error_flags = 1;
+			length_and_status = 0;
+			dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+			dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+			
+	   }
+	} /* end else not abort */
+	
+	dce_length_semaphore = 0;
+	dce_status_semaphore = 0;
+}
+
+

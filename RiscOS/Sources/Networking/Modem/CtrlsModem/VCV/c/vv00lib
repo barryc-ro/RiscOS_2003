@@ -1,0 +1,836 @@
+/*****************************************************************************
+/
+/   Copyright, 1988,1989,1990,1991,1992,1993,1994, 1995.
+/        All Rights Reserved by :
+/	 RSA
+/	 7701 Six Forks Road
+/	 Suite 201
+/	 Raleigh, NC  27615
+/	 (919) 846-7171
+/
+/   This document contains material confidential to RSA. Its contents
+/   must not be revealed, used or disclosed to anyone or company without
+/   written permission by RSA. The information contained herein is solely
+/   for the use of RSA.
+/
+/   File     : vv00mn.c
+/
+/   Version  : 1.00
+/
+/   Function : Contains the support routines for the VoiceView module.
+/
+/   Product  :
+/
+/   History  :
+/
+/   Created  : 9/6/94
+/
+/   -----------------------------------------------------------
+/   -			    Modifications		      -
+/   -----------------------------------------------------------
+/
+/   Author & Date: 
+/   Description:
+/   Reason:
+/
+******************************************************************************/
+#include "sys_def.h"
+#include "vcv_def.h"
+#include "vcv_mem.h"
+#include "vcv_cpro.h"
+#include "lineequ.h"
+#include "assert.h"
+#include "tracemac.h"
+
+
+#if defined(WeWantTrace)
+  #include <stdio.h>
+  #include <string.h>
+
+  static ubyte TraceLevel = 0;
+  static byte  *MyName = "vv00lib";
+  static byte  tracebuf[80];
+#endif
+
+void vcv_schedule_tx_packet(ubyte, ubyte *, ubyte);
+ubyte *vcv_rx(void);
+ubyte *vcv_tx(void);
+ubyte vcv_error(ubyte, ubyte);
+uword vcv_stored_capabilities(ubyte, uword);
+ubyte vcv_check_mi(struct vcv_hdlc_packet *);
+void vcv_get_mi_string(ubyte, ubyte *);
+void vcv_update_options(void);
+ubyte vcv_check_options(ubyte, ubyte);
+void vcv_set_statevars(ubyte, ubyte);
+
+
+void vcv_tone_handler(void);
+uword vcv_tone_time;
+ubyte vcv_tone_state;
+
+/******************************************************************************
+/
+/   Routine: vcv_schedule_tx_packet
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: This routine prepares the indicated packet and queues it up
+/                for transmission.
+/
+/   Input Parameters: none
+/
+/   Output Parameters: none
+/
+/   Global Variables Changed: vcv_tail_index
+/
+/   Users: 
+/          
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+void vcv_schedule_tx_packet(ubyte packet_type, ubyte *data, ubyte cr_bit)
+{
+    struct vcv_hdlc_packet *buffer_ptr;
+    uword index;
+
+    index=0;
+
+    /* get a pointer to the next free packet */
+    buffer_ptr = &vcv_buffer_array[vcv_head_index++];
+    if (vcv_head_index == VCV_HDLC_BUFFER_COUNT) {
+        vcv_head_index = 0;
+    }
+
+    switch(packet_type) {
+
+        case CAPABILITIES_FRAME: {
+            /* Build & Tx Capabilites frame. */
+            buffer_ptr->data[VCV_FRAME_ADDRESS]=cr_bit | 0x01;
+ buffer_ptr->data[VCV_FRAME_CONTROL]=0x13; /* control 000(p/f)0011 */
+#if 0
+            if (vcv_sqr_switch==TRUE) {
+                buffer_ptr->data[VCV_FRAME_CONTROL]=0x13; /* control 000(p/f)0011 */
+            } else {
+                buffer_ptr->data[VCV_FRAME_CONTROL]=0x03; /* control 000(p/f)0011 */
+            }
+#endif
+            buffer_ptr->data[VCV_FRAME_TYPE]   =0x05; /* message type         */
+            
+            for (index=0;index<vcv_num_capabilities;) {
+                buffer_ptr->data[VCV_FRAME_BASE_DATA+index++]= *(data++);
+            }
+
+            /* fill in frame length */
+            buffer_ptr->data[VCV_FRAME_LENGTH]=index;
+            buffer_ptr->count=index+4;
+
+            break;
+        }
+        case MODE_INDICATOR_FRAME: {
+
+            /* No address, control, or length fields in this frame */            
+            do { 
+                buffer_ptr->data[index++]=(ubyte)*data++;
+
+            } while((*(data))!='\0');
+
+            buffer_ptr->count=index;
+            break;
+        }
+        default: {
+            /* Shouldnt be here */
+            while(1);
+        }
+    }
+}
+/******************************************************************************
+/
+/   Routine: vcv_rx
+/
+/   Author: RSA
+/
+/   Creation Date: 1/15/92
+/
+/   Description: This routine will be called by the VoiceView I/O receive interrupt
+/                service routine. It indicates the complete reception of an
+/                hdlc packet. If the returned pointer is non-NULL, the new
+/                packet is setup for a receive, otherwise no new packet is
+/                received.
+/
+/   Input Parameters: none
+/
+/   Output Parameters: ubyte *  address of hdlc buffer to receive into.
+/                               NULL indicates no buffer.
+/
+/   Global Variables Changed: None
+/
+/   Users: VoiceView DCE I/O
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+ubyte *vcv_rx(void)
+{
+
+    vcv_head_index++;
+
+    /* if at the end of the ring list then rotate to the top */
+    if (vcv_head_index == VCV_HDLC_BUFFER_COUNT)
+        vcv_head_index = 0;
+
+    /* if the head and tail pointers are equal then no more packets available */
+    if (vcv_tail_index == vcv_head_index)
+    {
+        if (vcv_head_index==0)
+        {
+            vcv_head_index=VCV_HDLC_BUFFER_COUNT-1;
+        }
+        else
+        {
+            vcv_head_index--;
+        }
+        return(NULL); /* indicate no more buffers to avail. */
+    }
+
+    /* return the address of the next free buffer */
+    return((ubyte *)&vcv_buffer_array[vcv_head_index]);
+}
+
+/******************************************************************************
+/
+/   Routine: vcv_tx
+/
+/   Author: RSA
+/
+/   Creation Date: 09/21/92
+/
+/   Description: This routine will be called by the VoiceView I/O transmit interrupt
+/                service routine. It indicates the complete transmission of an
+/                hdlc packet. If the returned pointer is non-NULL, the new
+/                packet is transmitted, otherwise no new transmission is
+/                performed.
+/
+/   Input Parameters: none
+/
+/   Output Parameters: ubyte *  address of hdlc buffer to transmit.
+/                               NULL indicates no buffer.
+/
+/   Global Variables Changed: None
+/
+/   Users: VoiceView DCE I/O
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+ubyte *vcv_tx(void)
+{
+    vcv_tail_index++; /* update the tail queue pointer */
+
+    /* if at the end of the ring list then rotate to the top */
+    if (vcv_tail_index == VCV_HDLC_BUFFER_COUNT)
+        vcv_tail_index = 0;
+
+    /* if the head and tail pointers are equal then no more packets to transmit */
+    if (vcv_tail_index == vcv_head_index)
+    {
+        vcv_tx_status=FALSE;
+        return(NULL); /* indicate no more buffers to transmit */
+    }
+
+    vcv_tx_status=TRUE;
+
+    /* return the next buffer for transmission */
+    return((ubyte *)&vcv_buffer_array[vcv_tail_index]);
+}
+
+/******************************************************************************
+/
+/   Routine: vcv_check_mi
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: Checks the validity of a received mode indicator.
+/
+/   Input Parameters: none
+/
+/   Output Parameters: Returns the type of mode indicator
+/
+/   Global Variables Changed: None
+/
+/   Users:
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+ubyte vcv_check_mi(struct vcv_hdlc_packet *mi_packet)
+{
+
+    ubyte return_code,rc;
+    ubyte mo1, mo2;
+    ubyte speed_request;
+
+    speed_request=0;
+
+    /* Check to see that the packet is the correct size */
+    if (mi_packet->count != 4) {
+
+        return(VCV_BAD_MODE);
+    }
+
+    /* Check to see that the packet has correct CRC */
+    if (mi_packet->status == BAD_BLOCK) {
+        return(VCV_BAD_MODE);
+    }
+
+    /* Extract the two mode octets */
+    mo1=mi_packet->data[0];
+    mo2=mi_packet->data[1];
+
+    switch(mo1) {
+        case 0x10: {  /* MODEM or FAX modes */
+            switch(mo2) {
+                case 0x00: {
+                    speed_request=MODEM_SPEED;
+                    return_code=VCV_MODEM_MODE;
+                    break;
+                }
+                case 0x01: {
+                    speed_request=FAX_SPEED;
+                    return_code=VCV_FAX_MODE;
+                    break;
+                }
+                default: {
+                    return_code=VCV_BAD_MODE;
+                    break;
+                }
+            }
+            break;
+        }
+        case 0x02: {  /* VoiceView data modes */
+
+            return_code=VCV_VOICEVIEW_MODE;
+
+            if (mo2>7) {
+                return(VCV_BAD_MODE);
+            }
+            /* verify that mode is turned on */
+            rc=vcv_check_options(VCV_VOICEVIEW_MODE, mo2);
+            if (rc!=COMPATIBLE) {
+                return_code=VCV_BAD_MODE;
+            } else {
+                speed_request=vcv_speed_array[mo2].config_val;
+            }
+            break;
+        }
+
+        default: {
+            return_code=VCV_BAD_MODE;
+            break;
+        }
+    }
+    vcv_current_hispeed = speed_request;
+    return(return_code);
+}
+/******************************************************************************
+/
+/   Routine: vcv_stored_capabilities
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: 
+/
+/   Input Parameters: type - REQUEST - returns current capabilities
+/                            ADD     - adds a capability
+/                            REMOVE  - removes a capability
+/
+/                     bits - bit to modify
+/
+/   Output Parameters: Returns the type of mode indicator
+/
+/   Global Variables Changed: None
+/
+/   Users: VoiceView DCE I/O
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+uword vcv_stored_capabilities(ubyte type, uword bits)
+{
+    uword return_code;
+
+    switch(type) {
+
+        case REQUEST: {
+            return_code = vcv_supported_capabilities;
+            break;
+        }
+
+        case ADD: {
+            vcv_supported_capabilities = vcv_supported_capabilities | bits;
+            return_code = 0;
+            break;
+        }
+
+        case REMOVE: {
+            vcv_supported_capabilities = vcv_supported_capabilities & ~bits;
+            return_code = 0;
+        }
+        default: {
+            break;
+        }
+    }
+    return(return_code);
+}
+
+/******************************************************************************
+/
+/   Routine: vcv_error
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: 
+/
+/   Input Parameters: type - REQUEST - returns current capabilities
+/                            ADD     - adds a capability
+/                     code - error code
+/   Output Parameters: VCV_OK, or error code
+/
+/   Global Variables Changed: None
+/
+/   Users: 
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+ubyte vcv_error(ubyte type, ubyte code)
+{
+    ubyte return_code;
+
+    return_code=VCV_OK;
+
+    switch(type) {
+        case REQUEST: {
+            return_code = vcv_last_error;
+            vcv_last_error=0x00;
+            break;
+        }
+        case ADD: {
+            vcv_last_error = code;
+            break;
+        }
+    }
+    return(return_code);
+}
+/******************************************************************************
+/
+/   Routine: vcv_init_statevars
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: Initialized state variables.
+/
+/   Input Parameters: none
+/
+/   Output Parameters: none
+/
+/   Global Variables Changed: None
+/
+/   Users: VoiceView tx & rx state machines
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+void vcv_init_statevars()
+{
+    Vr=0;
+    Vs=0;
+    Va=0;
+    Ns=0;
+    Nr=0;
+    vcv_rx_sav_Nr=0;
+    vcv_rx_sav_Ns=0;
+    vcv_rx_sav_Vr=0;
+    vcv_rx_sav_Vs=0;
+    vcv_rx_sav_Va=0;
+    vcv_tx_sav_Nr=0;
+    vcv_tx_sav_Ns=0;
+    vcv_tx_sav_Vr=0;
+    vcv_tx_sav_Vs=0;
+    vcv_tx_sav_Va=0;
+
+}
+/*******************************************************************************
+/
+/   Routine: vcv_set_statevars
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description:
+/
+/   Input Parameters: None
+/
+/   Output Parameters:
+/
+/   Global Variables Changed:  None
+/
+/   Users:
+/
+/   -------------------------------------------------------------
+/   -			Modifications			        -
+/   -------------------------------------------------------------
+/
+/
+/       Author & Date: 
+/       Description: 
+/       Reason:
+/
+*******************************************************************************/
+void vcv_set_statevars(ubyte mode, ubyte type)
+{
+   if (type==SAVE) {
+      if (mode==RX) {
+         vcv_rx_sav_Nr=Nr;
+         vcv_rx_sav_Ns=Ns;
+         vcv_rx_sav_Vr=Vr;
+         vcv_rx_sav_Vs=Vs;
+         vcv_rx_sav_Va=Va;
+      } else {
+         /* mode is TX */
+         vcv_tx_sav_Nr=Nr;
+         vcv_tx_sav_Ns=Ns;
+         vcv_tx_sav_Vr=Vr;
+         vcv_tx_sav_Vs=Vs;
+         vcv_tx_sav_Va=Va;
+      }
+   } else { /* type is RESTORE */
+      if (mode == RX) {
+         Nr=vcv_rx_sav_Nr;
+         Ns=vcv_rx_sav_Ns;
+         Vr=vcv_rx_sav_Vr;
+         Vs=vcv_rx_sav_Vs;
+         Va=vcv_rx_sav_Va;
+      } else {
+         /* mode is TX */
+         Nr=vcv_tx_sav_Nr;
+         Ns=vcv_tx_sav_Ns;
+         Vr=vcv_tx_sav_Vr;
+         Vs=vcv_tx_sav_Vs;
+         Va=vcv_tx_sav_Va;
+      }
+   }
+}
+/******************************************************************************
+/
+/   Routine: vcv_get_mi_string
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: Initialized state variables.
+/
+/   Input Parameters: none
+/
+/   Output Parameters: none
+/
+/   Global Variables Changed: None
+/
+/   Users: VoiceView tx & rx state machines
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+void vcv_get_mi_string(ubyte speed, ubyte *data)
+{
+    data[0]=02;
+
+    switch (speed) {
+        case V27TER_4800: {
+            data[1]=01;
+            break;
+        }
+        case V29_9600: {
+            data[1]=02;
+            break;
+        }
+        case V29_4800: {
+            data[1]=03;
+            break;
+        }
+        case V17_7200: {
+            data[1]=04;
+            break;
+        }
+        case V17_9600: {
+            data[1]=05;
+            break;
+        }
+        case V17_12000: {
+            data[1]=06;
+            break;
+        }
+        case V17_14400: {
+            data[1]=07;
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+
+    data[2]='\0';
+
+    return;
+}
+
+/******************************************************************************
+/
+/   Routine: vcv_update_options
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: Scans the capabilities, and updates the options available
+/                for use when determining if incoming data rates/modes are
+/                available.
+/
+/   Input Parameters: none
+/
+/   Output Parameters: none
+/
+/   Global Variables Changed: None
+/
+/   Users:
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+void vcv_update_options(void)
+{
+    ubyte last_location, j;
+
+    last_location=0;
+
+    /* Reset all options currently set */
+    vcv_voiceview_options=0x00;
+    vcv_fax_options=0x00;
+    vcv_modem_options=0x00;
+
+    last_location=vcv_num_capabilities;
+
+    for(j=0; j<last_location; j++) {
+        switch(vcv_cap_struct[j]) {
+            case 0xFF: {
+                /* Proprietary options - skip over */
+                j=j+vcv_cap_struct[j+1]+2;
+                break;
+            }
+            case 0x44: {
+                /* VoiceView data mode options */
+                vcv_voiceview_options=vcv_cap_struct[j+1];
+                j+=1;
+                break;
+            }
+            case 0x42: {
+                /* Fax data mode options */
+                /* Using reserved bit 8 to ind. fax is avail */
+                vcv_fax_options=0x80 | vcv_cap_struct[j+1];
+                j+=1;
+                break;
+            }
+
+            case 0x41: {
+                /* Modem data mode options */
+                /* Using reserved bit 8 to ind. modem is avail */
+                vcv_modem_options=0x80 | vcv_cap_struct[j+1];
+                j+=1;
+                break;
+            }
+
+            default: {
+                break;
+            }
+        }
+    }
+}
+
+
+/******************************************************************************
+/
+/   Routine: vcv_check_options
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: Uses mode indicator info and determines if mode requested
+/                is supported.
+/
+/   Input Parameters: mode  - VoiceView, modem, or fax
+/                     value - protocol
+/
+/   Output Parameters: none
+/
+/   Global Variables Changed: None
+/
+/   Users: VoiceView tx & rx state machines
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+ubyte vcv_check_options(ubyte mode, ubyte value)
+{
+    ubyte return_code;
+
+    return_code=INCOMPATIBLE;
+
+    switch (mode) {
+        case VCV_MODEM_MODE: {
+            if (vcv_modem_options & 0x80) {
+                return_code=COMPATIBLE;
+            }
+            break;
+        }
+
+        case VCV_FAX_MODE: {
+            if (vcv_fax_options & 0x80) {
+                return_code=COMPATIBLE;
+            }
+            break;
+        }
+
+        case VCV_VOICEVIEW_MODE: {
+            if (value==0x01 || value==0x02) {
+                return_code=COMPATIBLE;
+                break;
+            }
+            value= (value << 2);
+            if (value & vcv_voiceview_options) {
+                return_code=COMPATIBLE;
+                break;
+            }
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+    return(return_code);
+}
+/******************************************************************************
+/
+/   Routine: vcv_tone_handler
+/
+/   Author: RSA
+/
+/   Creation Date: 01/30/95
+/
+/   Description: Uses mode indicator info and determines if mode requested
+/                is supported.
+/
+/   Input Parameters: mode  - VoiceView, modem, or fax
+/                     value - protocol
+/
+/   Output Parameters: none
+/
+/   Global Variables Changed: None
+/
+/   Users: VoiceView tx & rx state machines
+/
+/   -------------------------------------------------------------
+/   -                       Modifications                       -
+/   -------------------------------------------------------------
+/
+/   Author & Date: RSA
+/   Descritpion:
+/   Reason:
+/
+*******************************************************************************/
+void vcv_tone_handler(void)
+{
+
+    if (vcv_tone_state==FALSE) {
+        vcv_tone_time=1000-vcv_st_timer;
+        vcv_st_timer=1000;
+        vcv_tone_state=TRUE;
+    } else {
+        vcv_tone_time=1000-vcv_st_timer;
+        vcv_tone_state=FALSE;
+    }
+}
+
+         
+

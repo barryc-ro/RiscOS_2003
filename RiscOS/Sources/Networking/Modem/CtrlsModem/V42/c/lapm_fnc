@@ -1,0 +1,856 @@
+/****************************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC  27615
+/               (919) 846-7171
+/
+/
+/       This document contains material confidential to RSA its contents must
+/       not be revealed, used or disclosed to anyone or company with out
+/       written permission by RSA.  The information contained herein is solely
+/       for the use of RSA.
+/
+/       File:           LAPM_FNC.C
+/
+/       Module Version: 4.02
+/
+/       Function:       LAPM interface functions to V42.C
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:    8/25/92
+/                       11/1/94 (V4.01) - Add ETC and update MNP10
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "lapm_ede.h"
+#include "edf.lapm_que"
+#include "edf.lapm_sta"
+#include "edf.lapm_ctl"
+#include "edf.lapm_brk"
+#include "edf.lapm_tst"
+#include "edf.lapm_lib"
+#include "edf.lapm_tmr"
+#include "edf.lapm_tx"
+#include "edf.dte"
+#include "edf.dce_line"
+#include "edf.v42"
+#include "edf.btencode"
+#include "edf.btinit"
+#include "edf.lapm_etc"
+
+ubyte lapm_idle(void);
+ubyte lapm_tx_break(ubyte, uword);
+void lapm_start(ubyte);
+void lapm_halt(ubyte);
+void lapm_reset(void);
+ubyte lapm_reason(void);
+void lapm_reconfigure(ubyte,ubyte,uword,ubyte,uword,ubyte,ubyte,ubyte);
+void lapm_init(ubyte,ubyte,ubyte,uword,ubyte,uword,ubyte,ubyte,
+	       uword,ubyte,ubyte,uword,ubyte,ubyte,ubyte);
+uword lapm_test(ubyte,ubyte *);
+uword lapm_test_status(void);
+void lapm_timer(void);
+void lapm_call_err(word);
+void lapm_get_mnp_parms(ubyte *,ubyte);
+void process_state(void);
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_idle						       /
+/									       /
+/	 This routine places LAPM into an idle state.			       /
+/									       /
+/	PARAMETERS IN: none						       /
+/									       /
+/	PARAMETERS OUT: OK						       /
+/									       /
+*******************************************************************************/
+ubyte lapm_idle(void)
+{
+    idle_flag = TRUE;
+    LAPMidle = TRUE;
+    LAPMstatus = IDLE;
+    event = (struct lapm_event_struct *)aq_lapm((struct lapm_que_struct*)&lapm_event_que);
+    if (event == NULL)
+        return (1);
+    event->type = E_LOCBUSY;
+    LAPMbusy = TRUE;
+    event->buffer = NULL;
+    qq_lapm((struct lapm_que_struct *)&lapm_event_que,(struct lapm_dummy_struct *)event);
+    send_cmd(PFCLR,RNR);
+    return (0);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_tx_break 					       /
+/									       /
+/	 This routine processes all of the data in the DTE and tries	       /
+/	     to send it. It then  calls send_break.			       /
+/									       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/									       /
+/		 len  - Length of the break				       /
+/		 (byte)      0 :  default break length			       /
+/			     1 to 254 : number of			       /
+/			     255 : reserved				       /
+/									       /
+/                char_recvd: number of characters in the DTE receive           /
+/		    	     buffer when V42_tbrk is called                    /
+/			     unable to determine the length of the break       /
+/                                                                              /
+/	PARAMETERS OUT:                                                        /
+/                                                                              /
+/                non 0 = destroy data : indicates to destroy the DTE transmit  /
+/                                       and receive data buffers because of a  /
+/                                       destructive break.                     /
+/									       /
+*******************************************************************************/
+ubyte lapm_tx_break(ubyte len, uword char_recvd)
+{
+    struct lapm_send_struct *frame_add;
+
+    if (((LAPMstatus == UP) || (LAPMstatus == IDLE))
+        && (!LAPMbrkpend) && (!LAPMbreak)
+        && (LAPMbrktype != Ignore))
+    {
+        frame_add = (struct lapm_send_struct *)lapm_send_que.fill_end;
+
+        if ((frame_add) && (frame_add->cmd == UI))
+            return(0);
+
+        if (len != 0)
+            LAPMbrklen = len;
+        else
+            LAPMbrklen = LAPMbrklen_init;
+
+        rcv_char_count = char_recvd;
+        send_break(CMD,PFCLR);
+        if (LAPMbrktype == DestExp)
+            return(1);
+    }
+    return(0);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_start						       /
+/									       /
+/	 This routine will start LAPM if the status is down or it will	       /
+/	     continue if LAPM was idle					       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 start_code -						       /
+/		 (byte)      0 : Originator				       /
+/			     1 : Answerer				       /
+/			     2 : Continue				       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void lapm_start( ubyte start_code )
+{
+    if (LAPMstatus == DOWN)
+    {
+        idle_flag = FALSE;
+        line_init(LAPM_SYNC);
+        LAPMview = start_code;
+        event = (struct lapm_event_struct *)aq_lapm((struct lapm_que_struct *)&lapm_event_que);
+        if (event == NULL)
+            return;
+
+        LAPMstatus = STARTED;
+
+        if (start_code == ORIG)
+        {
+            locAddr = ORIGaddr;
+            rmtAddr = ANSWaddr;
+            event->type = E_ORIG;
+            timer(TIMRestart,INITTIMER);
+        }
+        else
+        {
+            locAddr = ANSWaddr;
+            rmtAddr = ORIGaddr;
+            event->type = E_ANSW;
+        }
+
+        event->buffer = NULL;
+        qq_lapm((struct lapm_que_struct *)&lapm_event_que,(struct lapm_dummy_struct *)event);
+        line_disable_interrupts();
+        receive_active_frame = (struct lapm_receive_struct *)lapm_get_empty();
+        line_enable_interrupts();
+        line_rx_block ( (ubyte *) receive_active_frame);
+
+        lapm_timer_tick = 0;
+        if (LAPM_autoreliable != 0)
+            line_autoreliable_fallback(1,LAPM_autoreliable,0,0);
+    }
+
+    if ((start_code == CONTINUE) && (LAPMidle))
+    {
+        idle_flag = FALSE;
+        LAPMidle = FALSE;
+        LAPMstatus = UP;
+        event = (struct lapm_event_struct *)aq_lapm((struct lapm_que_struct *)&lapm_event_que);
+        if (event == NULL)
+            return;
+        event->type = E_LOCLEAR;
+        LAPMbusy = FALSE;
+        event->buffer = NULL;
+        qq_lapm((struct lapm_que_struct *)&lapm_event_que,(struct lapm_dummy_struct *)event);
+        send_cmd(PFCLR,RR);
+    }
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_halt						       /
+/									       /
+/	 This routine causes LAPM status to be set to STOPPED		       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		reason - reason for LAPM to go to a STOPPED state	       /
+/		(byte)							       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/                                                                              /
+*******************************************************************************/
+void lapm_halt( ubyte reason )
+{
+    if ((LAPMstatus == STARTED) || (LAPMstatus == UP) || (LAPMstatus == IDLE))
+    {
+        LAPMstatus = STOPPED;
+        event = (struct lapm_event_struct *)aq_lapm((struct lapm_que_struct *)&lapm_event_que);
+        if (event == NULL)
+            return;
+        event->type = E_STOP;
+        event->buffer = NULL;
+        if (reason == 0)
+            LAPMreason = reason;
+        else
+            LAPMreason = CONTROLLER;
+
+        qq_lapm((struct lapm_que_struct *)&lapm_event_que,(struct lapm_dummy_struct *)event);
+    }
+}
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_reset						       /
+/									       /
+/	 This routine causes LAPM status to be set to DOWN		       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void lapm_reset(void)
+{
+    LAPMstatus = DOWN;
+    state.cur_state = DOWN;
+    line_reset();
+
+    iq_lapm_control_que();
+    iq_lapm_send_que();
+    iq_lapm_ack_que();
+    iq_lapm_receive_que();
+
+    lapm_fallback_to_MNP = 0;
+    LAPMtest_status = 0;
+
+    LAPMtx_current = NULL;
+    LAPMtx_holding = NULL;
+    LAPMtx_data_holding = NULL;
+    LAPMtx_buffers_sent = NULL;
+    LAPMtx_buffers_sent2 = NULL;
+    LAPMtx_buffers_sent3 = NULL;
+    LAPMrx_next_receive = NULL;
+    LAPMrx_next_receive2 = NULL;
+    LAPMrx_next_receive3 = NULL;
+    event_frame = NULL;
+    idle_flag = FALSE;
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_reason						       /
+/									       /
+/	 This routine will return the reason for take down to the	       /
+/	     controlling function					       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT:						       /
+/		reason - Reason for takedown				       /
+/		(byte)	     0 : Peer initiated takedown		       /
+/			     1 : Cannot make connection 		       /
+/			     255 : Controller initiated takedown	       /
+/			     254 : Incorrect frame received		       /
+/			     5 : Inactivity timer expired		       /
+/			     4 : Retry limit was reached		       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+ubyte lapm_reason(void)
+{
+    return (LAPMreason);
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE:lapm_reconfigure						    /
+/									       /
+/	 This routine is called when the line needs to be reconfigured	       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 break_type - Type of break handling			       /
+/		 (byte)      0 : Ignore 				       /
+/			     1 : Destructive/Expedited			       /
+/			     2 : Non-Destructive/Expedited		       /
+/			     3 : Non-Destructive/Non-Expedited		       /
+/									       /
+/		 break_len  - Length of the break			       /
+/		 (byte)      0 :  default break length			       /
+/			     1 to 254 : number of			       /
+/			     255 : reserved				       /
+/									       /
+/		 valINACT - Value of the inactivity timer			/
+/		 (word)      0 : inactivity timer not used		       /
+/			     non 0 : number of inactivity seconds	       /
+/									       /
+/		 valN400 - Value of the maximum number of		       /
+/		 (byte) 	    retransmissions			       /
+/			     0 : No limit for retries			       /
+/			     non 0 : Number of retries			       /
+/									       /
+/		 max_info_size - Maximum information field size 	       /
+/		 (word) 						       /
+/									       /
+/		 supportSREJ - Value tells if selective reject is supported    /
+/		 (byte) 	     or not				       /
+/			     0 : Selective Reject not used		       /
+/			     1 : Selective reject used			       /
+/			     2 to 255 : Reserved			       /
+/									       /
+/		 supportTEST - Value tells if loop-back test is supported      /
+/		 (byte) 	     or not				       /
+/			     0 : Loop back test not selected		       /
+/			     1 : Loop back test selected		       /
+/			     2 to 255 : Reserved			       /
+/									       /
+/		 baud_rate - dce baud rate : see "baud_rate" definition        /
+/		 (byte) 						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void lapm_reconfigure(	ubyte break_type,
+			ubyte break_len,
+			uword valINACT,
+			ubyte valN400,
+			uword max_info_size,
+			ubyte supportSREJ,
+			ubyte supportTEST,
+			ubyte bd_rt   )
+{
+    LAPMbrktype = break_type;
+    LAPMbrklen_init = break_len;
+    valueBAUD_RATE = bd_rt;
+
+    valueINACTIVITY = valINACT * 10;
+    lapm_reset_inactivity_timer();
+    valueN400 = valN400;
+
+    if (!LAPMxid)
+    {
+        if (max_info_size < 20)
+            max_info_size = 20;
+        if (max_info_size > 128)
+            max_info_size = 128;
+
+        if (max_info_size <= max_info_data)
+            req_parms.TN401 = max_info_size;
+        else
+            req_parms.TN401 = max_info_data;
+
+        if (max_info_size <= max_receive_data)
+            req_parms.RN401 = max_info_size;
+        else
+            req_parms.RN401 = max_receive_data;
+
+        req_parms.RK = DEFAULT_RK;
+        req_parms.TK = DEFAULT_TK;
+
+        req_parms.supSREJ = supportSREJ;
+        req_parms.supTEST = supportTEST;
+    }
+
+    /* Configure per the LAPM ETC Driver */
+    if (lapm_ETC_enabled)
+        lapm_ETC_configure();
+}
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_init						       /
+/									       /
+/	 This routine is used to assign the parameters to the negotiated       /
+/	     parameter variables and to initialize other variables.	       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 baud_rate - Baud rate of the line, used to calculate	       /
+/		 (byte) 	    timer length			       /
+/			     0 : 110 bps				       /
+/			     1 : 150 bps				       /
+/			     2 : 300 bps				       /
+/			     3 : 600 bps				       /
+/			     4 : 1200 bps				       /
+/			     5 : 2400 bps				       /
+/			     6 : 4800 bps				       /
+/			     7 : 9600 bps				       /
+/			     8 to 255 : reserved			       /
+/									       /
+/		 break_type - Type of break handling			       /
+/		 (byte)      0 : Ignore 				       /
+/			     1 : Destructive/Expedited			       /
+/			     2 : Non-Destructive/Expedited		       /
+/			     3 : Non-Destructive/Non-Expedited		       /
+/									       /
+/		 break_len  - Length of the break			       /
+/		 (byte)      0 :  default break length			       /
+/			     1 to 254 : number of			       /
+/			     255 : reserved				       /
+/									       /
+/		 valINACT - Value of the inactivity timer			/
+/		 (word)      0 : inactivity timer not used		       /
+/			     non 0 : number of inactivity seconds	       /
+/									       /
+/		 valN400 - Value of the maximum number of		       /
+/		 (byte) 	    retransmissions			       /
+/			     0 : No limit for retries			       /
+/			     non 0 : Number of retries			       /
+/									       /
+/		 max_info_size - Maximum information field size 	       /
+/		 (word) 						       /
+/									       /
+/		 supportSREJ - Value tells if selective reject is supported    /
+/		 (byte) 	     or not				       /
+/			     0 : Selective Reject not used		       /
+/			     1 : Selective reject used			       /
+/			     2 to 255 : Reserved			       /
+/									       /
+/		 supportTEST - Value tells if loop-back test is supported      /
+/		 (byte) 	     or not				       /
+/			     0 : Loop back test not selected		       /
+/			     1 : Loop back test selected		       /
+/			     2 to 255 : Reserved			       /
+/									       /
+/		 etc_enabled - Value tells if LAPM should be running ETC       /
+/                       (Enhanced Throughput Cellular) or not          /
+/		 (ubyte)     0 : ETC disabled                                  /
+/			     1 : ETC enabled                                   /
+/
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void lapm_init( ubyte baud_rate,
+		ubyte break_type,
+		ubyte break_len,
+		uword valINACT,
+		ubyte valN400,
+		uword max_info_size,
+		ubyte supportSREJ,
+		ubyte supportTEST,
+		uword  auto_reliable,
+		ubyte mnp_preferred,
+		ubyte comp_type,
+		uword valP1,
+		ubyte valP2,
+		ubyte l_32bit_crc,
+		ubyte etc_enabled)
+{
+    ubyte i;
+
+    iq_lapm_control_que();
+    iq_lapm_send_que();
+    iq_lapm_ack_que();
+    iq_lapm_receive_que();
+
+    lapm_fallback_to_MNP = 0;
+    LAPMtest_status = 0;
+    lapm_32bit_crc = l_32bit_crc;
+
+    lapmtx_data_ptr = NULL;
+    LAPMtx_current = NULL;
+    LAPMtx_holding = NULL;
+    LAPMtx_data_holding = NULL;
+    LAPMtx_buffers_sent = NULL;
+    LAPMtx_buffers_sent2 = NULL;
+    LAPMtx_buffers_sent3 = NULL;
+    LAPMrx_next_receive = NULL;
+    LAPMrx_next_receive2 = NULL;
+    LAPMrx_next_receive3 = NULL;
+    LAPM_autoreliable = auto_reliable;
+    LAPM_rcvd_UP_frame = FALSE;
+
+    event_frame = NULL;
+    LAPMstatus = DOWN;
+    locVSB = 0;
+    locVRB = 0;
+    rmtVRB = 0;
+    next_to_deliver = NULL;
+    LAPMbreak = FALSE;
+    LAPMbrkpend = FALSE;
+    LAPMxid = FALSE;
+    LAPMtest = FALSE;
+    LAPMrej = FALSE;
+    LAPMidle = FALSE;
+    LAPMreason = NULL;
+    LAPMbusy = FALSE;
+    LAPMmnpreferred = mnp_preferred;
+    LAPMreconfigure = FALSE;
+    que_send_frame = FALSE;
+    idle_flag = FALSE;
+    LAPMreestablish = FALSE;
+
+    LAPMdeliver_cont = FALSE;
+    LAPMflush = FALSE;
+    LAPMbrktype = break_type;
+    LAPMbrklen_init = break_len;
+    valueBAUD_RATE = baud_rate;
+    valueINACTIVITY = valINACT * 10;
+    valueN400 = valN400;
+    resend_num = 0;
+    srej_num = 0;
+    LAPMrcv_IFRM_tossed = FALSE;
+
+    char_in_buffer = FALSE;
+    lapm_ETC_enabled = FALSE;
+
+    initialize_T401();				/* Initialize the retry timer */
+    initialize_TInit();				/* Initialize the initialization timer */
+    initialize_T403();				/* Initialize the acknowledgmant timer */
+    lapm_ONEsecond_count = 0;
+
+    req_parms.RK = DEFAULT_RK;
+    req_parms.TK = DEFAULT_TK;
+
+    if (max_info_size < 20)
+        max_info_size = 20;
+    if (max_info_size > 128)
+        max_info_size = 128;
+
+    if (max_info_size <= max_info_data)
+        req_parms.TN401 = max_info_size;
+    else
+        req_parms.TN401 = max_info_data;
+
+    if (max_info_size <= max_receive_data)
+        req_parms.RN401 = max_info_size;
+    else
+        req_parms.RN401 = max_receive_data;
+
+    req_parms.supSREJ = supportSREJ;
+    req_parms.supTEST = supportTEST;
+
+    if (comp_type > 3)
+        comp_type = 3;
+
+    /* Is the BTLZ code there? */
+    if (!BTInit(comp_type, valP1, valP2))
+        comp_type = 0;
+
+    req_parms.P0 = comp_type;
+
+    if (valP1 > DSIZE)
+        valP1 = DSIZE;
+    if (valP1 < DEFAULT_P1)
+        valP1 = DEFAULT_P1;
+    req_parms.P1 = valP1;
+
+    if (valP2 > 250)
+        valP2 = 250;
+    if (valP2 < 6)
+        valP2 = 6;
+    req_parms.P2 = valP2;
+
+    for (i=0; i<number_of_timers; i++)
+        timer(TIMCancel,i);
+
+    /* Set LAPM ETC global and configure LAPM for ETC if enabled */
+    if ((lapm_ETC_enabled = etc_enabled) == TRUE)
+        lapm_ETC_configure();
+
+    /* Initialize the negotiated parameters with the default values */
+    neg_parms.RK = DEFAULT_RK;
+    neg_parms.TK = DEFAULT_TK;
+    neg_parms.RN401 = DEFAULT_N401;
+    neg_parms.TN401 = DEFAULT_N401;
+    neg_parms.supSREJ = 0;
+    neg_parms.supTEST = 0;
+    neg_parms.P0 = 0;
+    neg_parms.P1 = DEFAULT_P1;
+    neg_parms.P2 = DEFAULT_P2;
+
+    block_size_used(req_parms.TN401);
+
+    iq_lapm_event_que();
+    init_parms();
+}
+
+
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_test						       /
+/									       /
+/	 This routine calls send_test to genetate and send a loop-back	       /
+/	     test frame.						       /
+/									       /
+/	 PARAMETERS IN: 						       /
+/		 count - Number of characters in test frame		       /
+/		 (byte) 						       /
+/									       /
+/		 test_ptr - pointer to the location in the DTE_FIFO where      /
+/		  (byte)      the test data begins			       /
+/									       /
+/	 PARAMETERS OUT:						       /
+/		 TEST_WAITING - 					       /
+/		 (word)      0xffff : Waiting for TEST frame to be sent        /
+/									       /
+/		 TEST_NOT_PROCESSED -					       /
+/		 (word)       4 : Not able to send TEST frame		       /
+/									       /
+*******************************************************************************/
+uword lapm_test( ubyte count, ubyte *test_ptr )
+{
+    if (((LAPMstatus == UP) || (LAPMstatus == IDLE)) && (neg_parms.supTEST == TRUE))
+    {
+        if (!LAPMtest)
+        {
+            send_test(count,test_ptr);
+            timer(TIMRestart,TESTTIMER);
+        }
+        LAPMtest_status = TEST_WAITING;
+        return (TEST_WAITING);
+    }
+    LAPMtest_status = TEST_NOT_PROCESSED;
+    return (TEST_NOT_PROCESSED);
+}
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_test_status					       /
+/									       /
+/	 This routine returns to the Controller the status of the test	       /
+/	     frame processing.						       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT:						       /
+/		 LAPMtest_status -					       /
+/		 (word)      0xffff : Waiting for TEST frame to be sent        /
+/			     0 : Test processing is complete		       /
+/			     1 : Error in TEST response 		       /
+/			     2 : Peer has not responded to TEST command frame  /
+/			     4 : Not able to send TEST frame		       /
+/									       /
+*******************************************************************************/
+uword lapm_test_status(void)
+{
+    if ((time_array[TESTTIMER] != RESET_VALUE) &&
+        (time_array[TESTTIMER] >= valueT401))
+    {
+        LAPMtest = FALSE;
+        LAPMtest_status = TEST_TIMEOUT;
+        timer(TIMCancel,TESTTIMER);
+    }
+    return (LAPMtest_status);
+}
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_timer						       /
+/									       /
+/	 This routine updates the LPAM timers				       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void lapm_timer(void)
+{
+    if (time_array[INACTIVITY] != RESET_VALUE)
+        time_array[INACTIVITY]++;
+    if (time_array[TESTTIMER] != RESET_VALUE)
+        time_array[TESTTIMER]++;
+    if (time_array[T403] != RESET_VALUE)
+        time_array[T403]++;
+    if (time_array[T401] != RESET_VALUE)
+        time_array[T401]++;
+
+    if (time_array[INITTIMER] != RESET_VALUE)
+        time_array[INITTIMER]++;
+}
+
+
+/*******************************************************************************
+/									       /
+/	 ROUTINE: lapm_reestablish					       /
+/									       /
+/	 This routine reinitializes LAPM when the link is to be 	       /
+/	  reestablished.						       /
+/									       /
+/	 PARAMETERS IN: none						       /
+/									       /
+/	 PARAMETERS OUT: none						       /
+/									       /
+*******************************************************************************/
+void lapm_reestablish(void)
+{
+/*********************
+
+	ubyte i;
+
+	line_init(LAPM_SYNC);
+
+	iq_lapm_control_que();
+	iq_lapm_send_que();
+	iq_lapm_ack_que();
+	iq_lapm_receive_que();
+
+	LAPMtx_current = NULL;
+	LAPMtx_holding = NULL;
+	LAPMtx_buffers_sent = NULL;
+	LAPMtx_buffers_sent2 = NULL;
+
+	event_frame = NULL;
+
+	LAPMstatus = DOWN;
+	LAPMreestablish = TRUE;
+	locVSB = 0;
+	locVRB = 0;
+	rmtVRB = 0;
+	LAPMbreak = FALSE;
+	LAPMbrkpend = FALSE;
+	LAPMxid = FALSE;
+	LAPMtest = FALSE;
+	LAPMrej = FALSE;
+	LAPMidle = FALSE;
+	LAPMreason = NULL;
+	LAPMbusy = FALSE;
+	LAPMreconfigure = FALSE;
+	que_send_frame = FALSE;
+	LAPMdeliver_cont = FALSE;
+	LAPMflush = FALSE;
+
+	resend_num = 0;
+	LAPMrcv_IFRM_tossed = FALSE;
+
+	initialize_T401();
+	initialize_TInit();
+	initialize_T403();
+	lapm_ONEsecond_count = 0;		************************/
+
+/*	req_parms.RK = DEFAULT_K;
+	req_parms.TK = DEFAULT_K;
+
+	if (max_info_size <= max_info_data)
+		req_parms.TN401 = max_info_size;
+	else
+		req_parms.TN401 = max_info_data;
+
+	if (max_info_size <= max_receive_data)
+		req_parms.RN401 = max_info_size;
+	else
+		req_parms.RN401 = max_receive_data;
+
+	req_parms.supSREJ = supportSREJ;
+	req_parms.supTEST = supportTEST;
+	req_parms.P0 = comp_type;
+	req_parms.P1 = valP1;
+	req_parms.P2 = valP2;			     */
+
+/*
+	for (i=0; i<number_of_timers; i++)
+		timer(TIMCancel,i);
+*/
+
+/*	LAPMview = start_code;
+	if (LAPMview == ORIG)
+	{
+		locAddr = ORIGaddr;
+		rmtAddr = ANSWaddr;
+	}
+	else
+	{
+		locAddr = ANSWaddr;
+		rmtAddr = ORIGaddr;
+	}*/
+
+	/* Initialize the negotiated parameters with the default values */
+/*	neg_parms.RK = DEFAULT_K;
+	neg_parms.TK = DEFAULT_K;
+	neg_parms.RN401 = DEFAULT_N401;
+	neg_parms.TN401 = DEFAULT_N401;
+	neg_parms.supSREJ = 0;
+	neg_parms.supTEST = 0;
+	neg_parms.P0 = 0;
+	neg_parms.P1 = DEFAULT_P1;
+	neg_parms.P2 = DEFAULT_P2;*/
+/*
+	block_size_used(req_parms.TN401);
+
+	iq_lapm_event_que();		*/
+}
+
+void lapm_get_mnp_parms(ubyte *ptr,ubyte count)
+{
+    if (lapm_fallback_to_MNP != 0)
+    {
+        while (count-- != 0)
+        {
+            *ptr++ = *lapm_mnp_rcv_frame++;
+        }
+    }
+}
+
+void lapm_call_err(word num)
+{
+    struct lapm_event_struct *add;
+
+    LAPMreason = num;     /* Holds the BLTZ specific reason (for tracing) */
+    LAPMreason = BTLZ_ERROR;
+    add = (struct lapm_event_struct *)aq_lapm((struct lapm_que_struct *)&lapm_event_que);
+    if (add == NULL)
+        return;
+    add->type = E_STOP;
+    add->buffer = NULL;
+    qq_lapm((struct lapm_que_struct *)&lapm_event_que,(struct lapm_dummy_struct *)add);
+}
+

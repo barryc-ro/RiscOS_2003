@@ -1,0 +1,306 @@
+/* File:    module.c
+ * Purpose: Module entry points
+ * Author:  DN Walker, Ben Laughton
+ * History:
+ *
+ * 1996-12-17: BAL
+ * Inherited.
+ *
+ * 1998-02-13: BAL
+ * Changes to SWI and *command handlers so that Dialler and DiallerB can be
+ * built from the same sources.
+ */
+
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+/* CLib */
+#include "kernel.h"
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "swis.h"
+
+/* Dialler */
+#include "chat.h"
+#include "dialler.h"
+#include "error.h"
+#include "flags.h"
+#include "handlers.h"
+#include "header.h"
+#include "log.h"
+#include "module.h"
+#include "script.h"
+#include "serial.h"
+#include "status.h"
+#include "swidefs.h"
+#include "timeout.h"
+
+#ifdef BLOCKDRIVERS
+  #include "driver.h"
+#endif
+
+/* Miscellaneous */
+#ifdef Trace_TRACE
+  #include "Trace/Trace.h"
+#endif
+
+/* #include "MemCheck/MemCheck.h" */
+
+
+
+
+/* =============================================================================
+ * Define constants
+ */
+
+#ifdef OLD_DIALLER
+    #define CMD_ThisDialler_Log       CMD_Dialler_Log
+    #define CMD_ThisDialler_Scripts   CMD_Dialler_Scripts
+#else
+    #define CMD_ThisDialler_Log       CMD_DiallerB_Log
+    #define CMD_ThisDialler_Scripts   CMD_DiallerB_Scripts
+#endif
+
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+unsigned int flags = 0;
+void *pword;
+
+
+
+
+/* =============================================================================
+ * Define functions
+ */
+
+/* -----------------------------------------------------------------------------
++
+   initialise
+
+   Module initialisation
+-
+ */
+
+#if CMHG_VERSION < 516
+_kernel_oserror *initialise (char *cmd_tail, int podule, void *pw)
+#else
+_kernel_oserror *initialise (const char *cmd_tail, int podule, void *pw)
+#endif
+{
+    /* _kernel_oserror *e; */
+    M_unused (podule);
+    M_unused (cmd_tail);
+
+
+  #ifdef PDebug_DEBUG
+    PDebug_XInit ();
+  #endif
+
+
+/*
+    MemCheck_InitNoDebug ();
+    MemCheck_RedirectToFilename ("<Dialler$Dir>.DialMemChk");
+    MemCheck_SetStoreMallocFunctions (1);
+    MemCheck_InterceptSCLStringFunctions();
+*/
+
+    pword = pw;
+
+    syslogflush ();
+
+  #ifdef Trace_TRACE
+    Trace_SetVerboseLevel (1);
+    Trace_IgnoreFunctions (
+        "MemCheck_* log_* Printf logf character swi_handler get_status "
+        "trace* poll_handler string* list* file_modified_upcall_handler");
+    Trace_SetHandlers (log_trace_enter, log_trace_exit);
+    Trace_InterceptAllFunctions ();
+  #endif
+
+    return NULL;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   finalise
+
+   Module finalisation
+-
+ */
+
+_kernel_oserror *finalise (int fatal, int podule, void *pw)
+{
+    M_unused (fatal);
+    M_unused (podule);
+    M_unused (pw);
+
+
+    if (dialler_client_active)
+        return ActiveClient;
+
+    chat_finalise ();
+
+#ifdef BLOCKDRIVERS
+    if (driver.data && M_flags_is_set (Flags_MyBlockdriver))
+    {
+        free (driver.data);
+        driver.data = NULL;
+    }
+#else
+    if (serial_device)
+    {
+        free (serial_device);
+        serial_device = NULL;
+    }
+#endif
+
+    timeout_cancel ();
+    connection_timeout_cancel ();
+    handlers_release ();
+    serial_close ();
+
+/*     MemCheck_OutputBlocksInfo (); */
+
+  #ifdef PDebug_DEBUG
+    PDebug_XFinal ();
+  #endif
+
+    return NULL;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   swi_handler
+
+   Handler for the Dialler's SWIs.  Deals with some simple SWIs itself, and
+   passes other more complex ones to routines in Script.c.
+
+   Inputs:
+   swi_num:          the SWI number
+   _kernel_swi_regs: pointer to SWI's input registers (may be modified for
+                     output).
+   pw:               modules's private word
+-
+ */
+
+_kernel_oserror *swi_handler (int swi_num, _kernel_swi_regs *r, void *pw)
+{
+    _kernel_oserror *e = NULL;
+
+    M_unused (pw);
+/*     MemCheck_RegisterMiscBlock (r, sizeof (_kernel_swi_regs)); */
+    switch (swi_num)
+    {
+        case ThisDialler_Dial - ThisDialler_00:
+          #ifdef DEBUG
+            strcpy (logfile_name, "<Dialler$Dir>.DialLog");
+          #endif
+            e = dialler_execute_script (Script_Dial, r);
+            break;
+
+        case ThisDialler_HangUp - ThisDialler_00:
+          #ifdef DEBUG
+            strcpy (logfile_name, "<Dialler$Dir>.HangupLog");
+          #endif
+            M_debug (("\n\nStarted new log\n\n"));
+            e = dialler_execute_script (Script_Hangup, r);
+            break;
+
+        case ThisDialler_Status - ThisDialler_00:
+           e = get_status (r);
+           break;
+
+        case ThisDialler_Answering - ThisDialler_00:
+            e = dialler_execute_script (Script_Answer, r);
+            break;
+
+        case ThisDialler_Configure - ThisDialler_00:
+          #ifdef DEBUG
+            strcpy (logfile_name, "<Dialler$Dir>.ConfigLog");
+          #endif
+            M_debug (("\n\nStarted new log\n\n"));
+            e = dialler_config (r);
+            break;
+
+        case ThisDialler_Register - ThisDialler_00:
+            r->r[0] = (int) &poll_word;
+            break;
+
+        case ThisDialler_Arbitrate - ThisDialler_00:
+            e = dialler_arbitrate (r);
+            break;
+
+        case ThisDialler_Timeout - ThisDialler_00:
+            e = connection_timeout_set (r);
+            break;
+
+        case ThisDialler_ResetCounter - ThisDialler_00:
+            connection_timeout_reset ();
+            break;
+
+        default:
+            e = error_BAD_SWI;
+            break;
+    }
+
+/*     MemCheck_UnRegisterMiscBlock (r); */
+
+    return e;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   cmd_handler
+-
+ */
+
+#if CMHG_VERSION < 516
+_kernel_oserror *cmd_handler (char *arg_string, int arg_count,
+                              int cmd_no, void *pw)
+#else
+_kernel_oserror *cmd_handler (const char *arg_string, int arg_count,
+                              int cmd_no, void *pw)
+#endif
+{
+    M_unused (arg_string);
+    M_unused (arg_count);
+    M_unused (pw);
+
+
+    switch (cmd_no)
+    {
+        case CMD_ThisDialler_Log:
+            printlog ();
+            break;
+
+        case CMD_ThisDialler_Scripts:
+            script_display_scripts ();
+            break;
+
+        default:
+            break;
+    }
+
+    return NULL;
+}
+

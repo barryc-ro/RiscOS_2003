@@ -59,7 +59,7 @@ OBJS =\
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.cmhg.o:; ${CMHG} -O $@ $<
 .s.o:;    ${AS} ${AFLAGS} -o $@ $<
 
 #

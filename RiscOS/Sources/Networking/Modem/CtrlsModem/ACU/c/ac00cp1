@@ -1,0 +1,450 @@
+/****************************************************************************
+/
+/    Copyright 1988,1989,1990,1991,1992,1993,1994.
+/       All Rights Reserved by:
+/        RSA
+/        7701 Six Forks Road
+/        Suite 120
+/        Raleigh, NC  27615
+/        (919) 846-7171
+/
+/
+/    This document contains material confidential to RSA its contents must
+/    not be revealed, used or disclosed to anyone or company with out
+/    written permission by RSA.  The information contained herein is solely
+/    for the use of RSA.
+/
+/    File:          ac00cp1.c
+/
+/    Module Version:     4.01
+/
+/    Function:  
+/
+/    Product:  ACU core code
+/
+/    History:   
+/
+/       Created: 
+/
+/         ---------------------------------------------------------
+/         -              Modifications            -
+/         ---------------------------------------------------------
+/
+/    Author & Date: RSA
+/    Description:
+/    Reason:
+/
+/       Author & Date: RSA 3/22/1994.
+/       Description: Added the new plusv_VIP routine.
+/       Reason: Needed to reset the voice_VNH_active flag. We could not
+/               reset the flag in its current scenario without violating
+/               the ACU - Voice interface, so the parsing and function call
+/               is now done here.        
+/
+*****************************************************************************/
+#include "sys_def.h"
+#include "acu_def.h"
+#include "acu_mem.h"
+#include "acu_pro.h"
+#include "acu_vce.h"
+#include "vce_pro.h"
+#include "mt_pro.h"
+#include "fp_pro.h"
+
+
+/* Defines for the command parameter passed to fax_execute_cmd() */
+#define FAX1_FTS_COMMAND        1
+#define FAX1_FRS_COMMAND        2
+#define FAX1_FTM_COMMAND        3
+#define FAX1_FRM_COMMAND        4
+#define FAX1_FTH_COMMAND        5
+#define FAX1_FRH_COMMAND        6
+#define FAX1_FTM_QUERY          7
+#define FAX1_FRM_QUERY          8
+#define FAX1_FTH_QUERY          9
+#define FAX1_FRH_QUERY          10
+
+
+void acu_connect_fax(void);
+void acu_config_fax(void);
+void acu_cmd_error_fax(void);
+
+extern ubyte     fclass_valid;
+extern ubyte     fax_active_before;
+
+
+/****************************************************************************
+/
+/  acu_cmd_error_fax
+/
+****************************************************************************/
+void acu_cmd_error_fax(void)
+{
+    error_occurred = TRUE;
+}
+
+/****************************************************************************
+/
+/  acu_connect_fax 
+/
+****************************************************************************/
+void acu_connect_fax(void)
+{
+    /* Return FAX back online to continue the protocol */
+
+    /*modem_serial_echo(OFF);*/ /* ramn 9/20/96 */ /* turn off hardware echo */
+
+    /* Make sure all ACU data is sent before giving up the port */
+    while (acu_to_num());
+    while (!check_all_sent());
+
+    /* Give up the DTE port */
+    acu_halt();
+
+    build_event(E_CONNECT, CONN_FAX);
+}    
+
+/****************************************************************************
+/
+/  acu_config_fax
+/
+****************************************************************************/
+void acu_config_fax(void)
+{
+    /* Setup the FAX environment */
+    fax_configure(fax_class, (ubyte)sr14.verbose_form, dte_baud,
+	   fax_class > 2 ? fax_flow_control : alt_fax_flow_control);
+}    
+
+/****************************************************************************
+/
+/  +FCLASS=?
+/
+****************************************************************************/
+void plus_FCLASS_eq(ubyte *param_ptr)
+{
+    ubyte index;
+
+    temp_array[0] = '0';        /* we can always do data mode */
+    index = 1;
+
+    /* is class 1 configured */
+    if (acu_cfg.fax_class & CLASS1_ENABLED_MASK)
+    {
+	   temp_array[index++] = ',';
+	   temp_array[index++] = '1';
+    }
+    /* is class 2 configured */
+    if (acu_cfg.fax_class & CLASS2_ENABLED_MASK)
+    {
+	   temp_array[index++] = ',';
+	   temp_array[index++] = '2';
+    }
+    /* is class 2.0 configured */
+    if (acu_cfg.fax_class & CLASS20_ENABLED_MASK)
+    {
+	   temp_array[index++] = ',';
+	   temp_array[index++] = '2';
+	   temp_array[index++] = '.';
+	   temp_array[index++] = '0';
+    }
+/* JAY - TIA Conversion Start */
+    if (acu_cfg.fax_class & CLASS8_ENABLED_MASK)
+    {
+	   temp_array[index++] = ',';
+	   temp_array[index++] = '8';
+    }
+/* JAY - TIA Conversion End */
+
+    temp_array[index] = '\0';   /* NULL terminate the response string */
+    output_info(temp_array, VERBOSE_FORM); /* send out the response */
+}
+
+/****************************************************************************
+/
+/  +FCLASS?
+/
+****************************************************************************/
+void plus_FCLASS_q(ubyte *param_ptr)
+{
+    /* process class indication */
+    if (fax_class > 9)  /* if two digit then indicate the decimal point */
+    {
+	   temp_array[0] = (fax_class / 10) + '0';
+	   temp_array[1] = '.';
+	   temp_array[2] = (fax_class % 10) + '0';
+	   temp_array[3] = '\0'; /* NULL terminate string */
+    }
+    else
+	   plusf_d_to_a(fax_class);    /* get the ASCII value */
+
+    output_info(temp_array, VERBOSE_FORM);   /* send information to DTE */
+}
+
+
+/****************************************************************************
+/
+/  +FCLASS=
+/
+****************************************************************************/
+void plus_FCLASS_e(ubyte *param_ptr)
+{
+    ubyte error, num, hold_class;
+
+    hold_class = fax_class;  /* save old setting to see if changed */
+    error = TRUE;
+
+    num = *param_ptr;
+
+    /* if number is 0 or not a numerical character*/
+    if (*param_ptr == '0')
+    {
+	   if (!fax_connected) /* if fax connected then ERROR */
+	   {
+		  
+		  fclass_valid = 0;
+		  fax_active_before = 1;
+		  
+		  fax_class = 0;  /* setup for data mode */
+		  voice_cmd_set = NO_VOICE;
+
+/* start change 3/21/94 */
+		  build_event(E_PARSE, CONN_DATA);
+/* end change 3/21/94 */
+	   }
+	   error = FALSE;
+
+    }
+    /* if number is 1 and class 1 configured */
+    else if (num == '1' && acu_cfg.fax_class & CLASS1_ENABLED_MASK)
+    {
+	   
+	   fclass_valid = 1;
+	   fax_active_before = 0;
+	   
+	   fax_class = 1;
+	   voice_cmd_set = NO_VOICE;
+	   error = FALSE;
+    }
+    else if (num == '2')  /* if number is 2 then +FCLASS=2 or 2.0 */
+    {
+	   if (*(param_ptr+1) == '.') /* look for 2.0 */
+	   {
+		  /* if 2.0 found and class 2.0 configured */
+		  if ((*(param_ptr+2) == '0') &&
+			 acu_cfg.fax_class & CLASS20_ENABLED_MASK)
+		  {
+			 voice_cmd_set = NO_VOICE;
+			 fax_class = 20;
+			 error = FALSE;
+		  }
+	   }
+	   /* if not "2." then must be "2" */
+	   /* if class 2 configured */
+	   else if (acu_cfg.fax_class & CLASS2_ENABLED_MASK)
+	   {
+		  fax_class = 2;
+		  voice_cmd_set = NO_VOICE;
+		  error = FALSE;
+	   }
+    }
+
+/* JAY - TIA Conversion Start 11/23/1993 */
+    /* if number is 8 -TIA voice */
+    else if (num == '8')
+    {
+	   voice_cmd_set = TIA_IS_101;
+	   fax_class = num;
+	   hook_control = TRUE;
+
+	   /* If voice is selected the place the ACU into a voice
+		  processing state */
+	   build_event(E_PARSE,CONN_VOICE);
+
+	   error = FALSE;
+    }
+/* JAY - TIA Conversion End 11/23/1993 */
+
+    /* if packet protocol and port rate setting need to change */
+    /* if fax_class change and it was set to zero or it used to be zero */
+    if (fax_class != hold_class && (!fax_class || !hold_class))
+    {
+	   if (fax_packet_protocol && fax_class)
+	   {
+		  acu_packet_protocol(ON, PP_TIMEOUT); /* turn on packet protocol */
+		  dont_echo = TRUE;               /* don't echo AT commands */
+	   }
+
+	   /* +FPR=!0 and +FCLASS=!0 then fix the dte port baudrate */
+	   if (fax_port_rate && fax_class)
+	   {
+		  /* translate +FPR setting to I/O baudrate configuration parameter */
+		  /* configure new baudrate after the final command response */
+		  new_dte_baud = translate_port_rate(fax_port_rate);
+		  dont_autobaud = TRUE;   /* don't autobaud */
+	   }
+
+	   if (!fax_class)     /* if +FCLASS=0 turn off fax environment */
+	   {
+		  if (fax_packet_protocol)
+		  {
+			 while (acu_to_num());       /* make sure all the outgoing data */
+			 while (!check_all_sent());  /* is flushed */
+			 acu_packet_protocol(OFF, PP_TIMEOUT); /* end packet protocol now */
+			 dont_echo = FALSE;          /* +FPP not active if +FCLASS=0 */
+		  }
+		  if (fax_port_rate)
+			 dont_autobaud = FALSE;      /* +FPR not active if +FCLASS=0 */
+	   }
+    }
+
+    if (error)
+	   error_occurred = TRUE;
+}
+
+
+/****************************************************************************
+/
+/  +FTS=
+/
+****************************************************************************/
+void plus_FTS_e(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+
+#if 0 /* keh don't think this is needed */
+    acu_config_fax();
+#endif
+
+    if (fax_execute_command(FAX1_FTS_COMMAND, param_ptr, &response_ptr) == FAX_ERROR)
+	   error_occurred = TRUE;
+}
+
+void plus_FRS_e(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+
+#if 0 /* keh don't think this is needed */
+    acu_config_fax();
+#endif
+
+    if (fax_execute_command(FAX1_FRS_COMMAND, param_ptr, &response_ptr) == FAX_ERROR)
+	   error_occurred = TRUE;
+}
+
+void plus_FTM_eq(ubyte *parm_ptr)
+{
+    ubyte *response_ptr;
+
+    acu_config_fax();
+
+    if (fax_execute_command(FAX1_FTM_QUERY, UNUSED, &response_ptr) == FAX_ERROR)
+	   acu_cmd_error_fax();
+    else
+	   output_info(response_ptr, UNFORMATTED);
+}
+
+void plus_FTM_e(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+    ubyte result;
+
+#if 0 /* keh don't think this is needed */
+    acu_config_fax();
+#endif
+
+    result = fax_execute_command(FAX1_FTM_COMMAND, param_ptr, &response_ptr);
+    
+    if (result == FAX_ERROR)
+	   acu_cmd_error_fax();
+    else if (result == FAX_GO_ONLINE)
+	   acu_connect_fax();
+}
+
+
+
+void plus_FRM_eq(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+
+    acu_config_fax();
+
+    if (fax_execute_command(FAX1_FRM_QUERY, UNUSED, &response_ptr) == FAX_ERROR)
+	   error_occurred = TRUE;
+    else
+	   output_info(response_ptr, UNFORMATTED);
+}
+
+void plus_FRM_e(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+    ubyte result;
+
+    acu_config_fax();
+
+    result = fax_execute_command(FAX1_FRM_COMMAND, param_ptr, &response_ptr);
+    
+    if (result == FAX_ERROR)
+	   acu_cmd_error_fax();
+    else if (result == FAX_GO_ONLINE)
+	   acu_connect_fax();
+}
+
+void plus_FTH_eq(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+
+    acu_config_fax();
+
+    if (fax_execute_command(FAX1_FTH_QUERY, UNUSED, &response_ptr) == FAX_ERROR)
+	   error_occurred = TRUE;
+    else
+	   output_info(response_ptr, UNFORMATTED);
+}
+
+void plus_FTH_e(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+    ubyte result;
+
+#if 0 /* keh don't think this is needed */
+    acu_config_fax();
+#endif
+
+    result = fax_execute_command(FAX1_FTH_COMMAND, param_ptr, &response_ptr);
+    
+    if (result == FAX_ERROR)
+	   acu_cmd_error_fax();
+    else if (result == FAX_GO_ONLINE)
+	   acu_connect_fax();
+}
+
+void plus_FRH_eq(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+
+    acu_config_fax();
+
+    if (fax_execute_command(FAX1_FRH_QUERY, UNUSED, &response_ptr) == FAX_ERROR)
+	   error_occurred = TRUE;
+    else
+	   output_info(response_ptr, UNFORMATTED);
+}
+
+void plus_FRH_e(ubyte *param_ptr)
+{
+    ubyte *response_ptr;
+    ubyte result;
+
+#if 0 /* keh don't think this is needed */
+    acu_config_fax();
+#endif
+
+    result = fax_execute_command(FAX1_FRH_COMMAND, param_ptr, &response_ptr);
+    
+    if (result == FAX_ERROR)
+	   acu_cmd_error_fax();
+    else if (result == FAX_GO_ONLINE)
+	   acu_connect_fax();
+}
+

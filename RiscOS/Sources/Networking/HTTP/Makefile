@@ -44,7 +44,8 @@ INETLIB   = C:TCPIPLibs.o.inetlibzm
 SOCKLIB   = C:TCPIPLibs.o.socklibzm
 UNIXLIB   = C:TCPIPLibs.o.unixlibzm
 SSLDIR    = C:SSL
-REMOTEDB  = C:debug.o.lremotezm
+REMOTEDB  =
+#REMOTEDB  = C:debug.o.remotezm
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB}
 SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
@@ -52,14 +53,15 @@ SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
 # Include files
 #
 INCLUDES  = -IC:,C:TCPIPLibs.,${SSLDIR}.
-DFLAGS =  ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DUSE_MIMEMAPMOD=0 -DPROXY_REDIRECT=0 -DVERIFY_MD
+DFLAGS =  ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DPROXY_REDIRECT=0 -DUSE_MIMEMAPMOD=0 -DCSFS -DVERIFY_MD
+#DFLAGS = ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DPROXY_REDIRECT=1 -DUSE_MIMEMAPMOD=0
 #
 # Program specific options:
 #
 COMPONENT = http
 TARGET    = aof.${COMPONENT}
 OBJS      = mimemap.o files.o http.o ModHead.o
-SECUREOBJS= os.mimemap os.files os.http os.ModHead os.predirect
+SECUREOBJS= os.mimemap os.files os.http os.ModHead
 EXPORTS   = h.httppub h.pads
 
 .SUFFIXES:   .os
@@ -131,21 +133,18 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}mod: ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
-        ${LD} -o $@ -module ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
+rm.${COMPONENT}mod: ${OBJS} ${CLIB} ${INSECURELIBS} ${REMOTEDB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INSECURELIBS} ${REMOTEDB}
         Access $@ RW/R
 
-rm.${COMPONENT}smod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
-        ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
+rm.${COMPONENT}smod: ${SECUREOBJS} ${CLIB} ${SECURELIBS} ${REMOTEDB}
+        ${LD} -o $@ -module ${SECUREOBJS} ${CLIB} ${SECURELIBS} ${REMOTEDB}
         Access $@ RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.mimemap:	c.mimemap
-o.mimemap:	C:h.kernel
-o.mimemap:	h.mimemap
 o.mimemap:	c.mimemap
 o.mimemap:	C:h.kernel
 o.mimemap:	h.mimemap
@@ -205,9 +204,7 @@ o.http:	h.pads
 o.http:	h.http
 o.http:	h.files
 o.http:	h.mimemap
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
+o.http:	h.csfs
 os.mimemap:	c.mimemap
 os.mimemap:	C:h.kernel
 os.mimemap:	h.mimemap
@@ -294,83 +291,4 @@ os.http:	h.pads
 os.http:	h.http
 os.http:	h.files
 os.http:	h.mimemap
-os.predirect:	c.predirect
-os.predirect:	C:SSL.h.objects
-os.predirect:	C:SSL.h.asn1
-os.predirect:	C:SSL.h.bn
-os.predirect:	C:SSL.h.stack
-os.predirect:	C:SSL.h.pem
-os.predirect:	C:SSL.h.rsa
-os.predirect:	C:SSL.h.bn
-os.predirect:	C:SSL.h.dsa
-os.predirect:	C:SSL.h.bn
-os.predirect:	C:SSL.h.x509
-os.predirect:	C:SSL.h.stack
-os.predirect:	C:SSL.h.asn1
-os.predirect:	C:SSL.h.envelope
-os.predirect:	C:SSL.h.md2
-os.predirect:	C:SSL.h.md5
-os.predirect:	C:SSL.h.sha
-os.predirect:	C:SSL.h.des
-os.predirect:	C:SSL.h.rc4
-os.predirect:	C:SSL.h.rc2
-os.predirect:	C:SSL.h.idea
-os.predirect:	C:SSL.h.rsa
-os.predirect:	C:SSL.h.dsa
-os.predirect:	C:SSL.h.dh
-os.predirect:	C:SSL.h.envelope
-os.predirect:	C:SSL.h.rsa
-os.predirect:	C:SSL.h.ssl
-os.predirect:	C:SSL.h.x509
-os.predirect:	C:h.kernel
-os.predirect:	C:h.swis
-os.predirect:	h.tcplibs
-os.predirect:	C:TCPIPLibs.sys.h.types
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.machine.h.endian
-os.predirect:	C:TCPIPLibs.machine.h.ansi
-os.predirect:	C:TCPIPLibs.machine.h.types
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.sys.h.errno
-os.predirect:	C:h.kernel
-os.predirect:	C:TCPIPLibs.net.h.if
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.net.h.if_arp
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.netinet.h.in
-os.predirect:	C:TCPIPLibs.sys.h.ioctl
-os.predirect:	C:TCPIPLibs.sys.h.ttycom
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.filio
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.sockio
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.h.netdb
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.netns.h.ns
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.h.socklib
-os.predirect:	C:TCPIPLibs.sys.h.types
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.sys.h.stat
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.sys.h.uio
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:h.kernel
-os.predirect:	C:TCPIPLibs.h.inetlib
-os.predirect:	C:TCPIPLibs.sys.h.types
-os.predirect:	C:TCPIPLibs.netinet.h.in
-os.predirect:	h.status
-os.predirect:	h.httppub
-os.predirect:	h.pads
-os.predirect:	h.http
-os.predirect:	h.files
-os.predirect:	h.mimemap
+os.http:	h.csfs
