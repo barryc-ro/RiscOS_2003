@@ -1,7 +1,6 @@
 /*
   Title:        Acorn 'make' utility - amu
   Copyright:    (C) 1987, Acorn Computers Ltd., Cambridge, England.
-  $Revision$  LDS 01-Aug-89
 */
 
 /*
@@ -38,6 +37,7 @@ extern int system();
 #include "err.h"
 #ifdef DDE
 #include "wholefls.h"
+#include "swis.h"
 #endif
 
 #include "VersionNum"
@@ -46,7 +46,7 @@ extern int system();
 #define  DATE             Module_Date
 #define  SELFNAME         "AMU"
 
-/* Compile-tine configuration */
+/* Compile-time configuration */
 #define  COLON            1     /* anything < ' ' bar EOF, 0 and '\n' */
 #define  COLONCOLON       2
 #define  EQUALS           3
@@ -123,6 +123,7 @@ typedef struct Node
 #define UNIX_NAMES      256     /* set by .UNIXNAMES */
 #define CMDS_OUTPUT     512     /* set if any cmds have been sent to 'out' */
 #define DEBUGGING      1024     /* set if debugging */
+#define STATE_REASONS  2048      /* State reasons without -n */
 
 static int dir_sep = '.';
 
@@ -193,12 +194,22 @@ static void dde_exit(void)
     }
 }
 
+static void define_macro(char *name, char *value);
+
 static void prefix_init(char *fname)
 {
     char *s, *p, *t;
     char c;
-    char prefix[256];
+    char prefix[1024];
     _kernel_swi_regs r;
+
+    if (!_swix(OS_FSControl, _INR(0,2)|_IN(5), 37, fname, prefix, sizeof(prefix)))
+    {  char *ldot = strrchr(prefix, dir_sep);
+       if (ldot)
+       {  *ldot=0;
+          define_macro("MAKEFILEDIR", prefix);
+       }
+    }
 
     if (desktop_prefix) {
         if (!exit_handler && atexit(dde_exit)) {
@@ -215,6 +226,7 @@ static void prefix_init(char *fname)
         r.r[0] = (int)prefix;
         _kernel_swi(DDEUtils_Prefix, &r, &r);
     }
+
 }
 #endif
 
@@ -892,7 +904,7 @@ TimeStamp t;
 
   if (n->time == FILESTAMP_NEVER)
   { if (n->flags & IS_DEPENDED_ON &&
-        ((amu_flags & (NO_ACTION|SILENT)) == NO_ACTION))
+        (amu_flags & STATE_REASONS))
       fprintf(stderr, "%s does not yet exist\n", n->name);
     return TRUE;
   }
@@ -902,7 +914,7 @@ TimeStamp t;
     if (n->cmds != NULL && nd->time > t ||
         n->cmds == NULL && out_of_date(nd, t))
     {
-        if ((amu_flags & (NO_ACTION|SILENT)) == NO_ACTION)
+        if (amu_flags & STATE_REASONS)
 fprintf(stderr, "%s is out of date w.r.t. %s\n", n->name, l->node->name);
         return TRUE;
     }
@@ -1036,7 +1048,7 @@ Node *n;
         n->flags |= uptodate;
       n->flags |= CMDS_EXECUTED;
     }
-    else if ((amu_flags & (NO_ACTION|SILENT)) == NO_ACTION)
+    else if (amu_flags & STATE_REASONS)
       fprintf(stderr, "(target updated by an earlier command)\n");
     n->time = ++now;
   }
@@ -1286,6 +1298,22 @@ static void initialise()
   ebuf = NULL;
 }
 
+static void check_version(char *v)
+{
+#ifdef Module_Version
+  char *eptr;
+  unsigned long version;
+  version = strtoul(v, &eptr, 10);
+  if (*eptr != '\0') err_report("Invalid version specifier");
+  if (version > Module_Version) {
+          int major = (int) version / 100;
+          int minor = (int) version % 100;
+          err_fail("This is %s version %s, code requires version %d.%02d or later",
+            amu, Module_MajorVersion, major, minor);
+  }
+#endif
+}
+
 static void give_help()
 {
   fprintf(stderr, "\n%s vsn %s [%s] - Acorn 'make' utility\n\n",
@@ -1300,6 +1328,7 @@ Options:-\n\
    each branch of the makefile that doesn't depend on the failing command.\n\
 -n Don't execute any commands - just show on the screen what commands\n\
    would be executed, giving a reason for wanting to execute each one.\n\
+-D Show on the screen the reasons for executing commands as they are executed.\n\
 -o commandfile\n\
    Don't execute commands to make the target[s] up to date - write them to\n\
    commandfile for later execution (*EXEC or *OBEY commandfile).\n\
@@ -1344,8 +1373,22 @@ char *argv[];
   { arg = argv[j];
     if (*arg == '-')
     {
+      if (arg[1] == 'D')
+      {
+        amu_flags |= STATE_REASONS;
+      }
+      else
       switch (safe_tolower(arg[1]))
       {
+case 'a':
+          if (hash_cistrcmp("muversion", arg+2) == 0) {
+            ++j;
+            if (j < argc)
+              check_version(argv[j]);
+            else
+              err_fail("missing argument to %s option", arg);
+          }
+          break;
 #ifdef DDE
 case 'x': /* -d is now -desktop */
 #else
@@ -1374,7 +1417,7 @@ case 'k':
           amu_flags |= CONTINUE;
           break;
 case 'n':
-          amu_flags |= NO_ACTION;
+          amu_flags |= NO_ACTION | STATE_REASONS;
           break;
 case 'o':
           if (arg[2] == 0)
@@ -1422,6 +1465,8 @@ default:  err_report("unrecognised option '%s'", arg);
       }
     }
   }
+
+  if (amu_flags & SILENT) amu_flags &= ~STATE_REASONS;
 
 #ifdef DDE
   prefix_init(in_file);

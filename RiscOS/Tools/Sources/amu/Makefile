@@ -87,9 +87,13 @@ export: export_${PHASE}
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
+        
+install_tool: ${TARGET}
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	@echo ${COMPONENT}: tool installed in library
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
         ${RM} ${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
