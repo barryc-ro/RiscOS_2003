@@ -63,37 +63,3 @@ s.HelpTokens: ${TOKENS} HelpTexts
         ${TOKENISE} ${TOKENS} HelpTexts $@
 
 # Dynamic dependencies:
-rm.NetFS: s.Module
-rm.NetFS: Hdr:ListOpts
-rm.NetFS: Hdr:Macros
-rm.NetFS: Hdr:System
-rm.NetFS: Hdr:SWIs
-rm.NetFS: Hdr:CPU.Generic26
-rm.NetFS: Hdr:IO.GenericIO
-rm.NetFS: Hdr:RISCOS
-rm.NetFS: Hdr:CMOS
-rm.NetFS: Hdr:ModHand
-rm.NetFS: Hdr:Heap
-rm.NetFS: Hdr:Services
-rm.NetFS: Hdr:Debug
-rm.NetFS: Hdr:FSNumbers
-rm.NetFS: Hdr:HighFSI
-rm.NetFS: Hdr:LowFSI
-rm.NetFS: Hdr:Econet
-rm.NetFS: Hdr:NewErrors
-rm.NetFS: Hdr:VduExt
-rm.NetFS: Hdr:Tokens
-rm.NetFS: Hdr:MsgTrans
-rm.NetFS: Hdr:Territory
-rm.NetFS: Hdr:Symbols
-rm.NetFS: Time+Date
-rm.NetFS: s.Memory
-rm.NetFS: s.Interface
-rm.NetFS: s.FileSystem
-rm.NetFS: s.Commands
-rm.NetFS: s.Configure
-rm.NetFS: s.OsFile
-rm.NetFS: s.Random
-rm.NetFS: s.Functions
-rm.NetFS: s.Catalog
-rm.NetFS: s.HelpTokens
