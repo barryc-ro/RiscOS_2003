@@ -14,6 +14,7 @@
 
 EXP_HDR		= <export$dir>
 LIBDIR		= <Lib$Dir>
+NFXLIBDIR	= <Lib$Dir>.Netfax
 EXPORT_DIR	= <Lib$Dir>.Netfax.UILib
 
 
@@ -107,8 +108,8 @@ all:	${TARGET} ${TARGETZ}
 export: export_${PHASE}
 
 clean:
-	${WIPE} o.* ${WFLAGS}
-	${WIPE} z.* ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} z ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGETZ}
 	@echo ${COMPONENT}: cleaned
@@ -128,6 +129,7 @@ local_dirs:
 
 dirs:
 	${MKDIR} ${LIBDIR}
+	${MKDIR} ${NFXLIBDIR}
 	${MKDIR} ${EXPORT_DIR}
 	${MKDIR} ${EXPORT_DIR}.h
 	${MKDIR} ${EXPORT_DIR}.o
@@ -203,8 +205,8 @@ o.animations:	tbox:h.iconbar
 o.animations:	tbox:h.textarea
 o.animations:	C:h.kernel
 o.animations:	C:h.swis
-o.animations:	<Lib$Dir>.MsgLib.h.MsgLib
-o.animations:	<Lib$Dir>.DebugLib.h.DebugLib
+o.animations:	C:msglib.h.MsgLib
+o.animations:	C:debuglib.h.DebugLib
 o.animations:	h.windows
 o.animations:	h.animations
 o.animations:	h.globals
@@ -224,8 +226,8 @@ o.font:	tbox:h.iconbar
 o.font:	tbox:h.textarea
 o.font:	C:h.kernel
 o.font:	C:h.swis
-o.font:	<Lib$Dir>.MsgLib.h.MsgLib
-o.font:	<Lib$Dir>.DebugLib.h.DebugLib
+o.font:	C:msglib.h.MsgLib
+o.font:	C:debuglib.h.DebugLib
 o.font:	h.font
 o.font:	h.globals
 o.help:	c.help
@@ -244,8 +246,8 @@ o.help:	tbox:h.iconbar
 o.help:	tbox:h.textarea
 o.help:	C:h.kernel
 o.help:	C:h.swis
-o.help:	<Lib$Dir>.MsgLib.h.MsgLib
-o.help:	<Lib$Dir>.DebugLib.h.DebugLib
+o.help:	C:msglib.h.MsgLib
+o.help:	C:debuglib.h.DebugLib
 o.help:	h.help
 o.openwinmsg:	c.openwinmsg
 o.openwinmsg:	h.include
@@ -263,8 +265,8 @@ o.openwinmsg:	tbox:h.iconbar
 o.openwinmsg:	tbox:h.textarea
 o.openwinmsg:	C:h.kernel
 o.openwinmsg:	C:h.swis
-o.openwinmsg:	<Lib$Dir>.MsgLib.h.MsgLib
-o.openwinmsg:	<Lib$Dir>.DebugLib.h.DebugLib
+o.openwinmsg:	C:msglib.h.MsgLib
+o.openwinmsg:	C:debuglib.h.DebugLib
 o.openwinmsg:	h.openwinmsg
 o.windows:	c.windows
 o.windows:	h.include
@@ -282,8 +284,8 @@ o.windows:	tbox:h.iconbar
 o.windows:	tbox:h.textarea
 o.windows:	C:h.kernel
 o.windows:	C:h.swis
-o.windows:	<Lib$Dir>.MsgLib.h.MsgLib
-o.windows:	<Lib$Dir>.DebugLib.h.DebugLib
+o.windows:	C:msglib.h.MsgLib
+o.windows:	C:debuglib.h.DebugLib
 o.windows:	h.font
 o.windows:	h.windows
 o.windows:	h.globals
@@ -303,8 +305,8 @@ z.animations:	tbox:h.iconbar
 z.animations:	tbox:h.textarea
 z.animations:	C:h.kernel
 z.animations:	C:h.swis
-z.animations:	<Lib$Dir>.MsgLib.h.MsgLib
-z.animations:	<Lib$Dir>.DebugLib.h.DebugLib
+z.animations:	C:msglib.h.MsgLib
+z.animations:	C:debuglib.h.DebugLib
 z.animations:	h.windows
 z.animations:	h.animations
 z.animations:	h.globals
@@ -324,8 +326,8 @@ z.font:	tbox:h.iconbar
 z.font:	tbox:h.textarea
 z.font:	C:h.kernel
 z.font:	C:h.swis
-z.font:	<Lib$Dir>.MsgLib.h.MsgLib
-z.font:	<Lib$Dir>.DebugLib.h.DebugLib
+z.font:	C:msglib.h.MsgLib
+z.font:	C:debuglib.h.DebugLib
 z.font:	h.font
 z.font:	h.globals
 z.help:	c.help
@@ -344,8 +346,8 @@ z.help:	tbox:h.iconbar
 z.help:	tbox:h.textarea
 z.help:	C:h.kernel
 z.help:	C:h.swis
-z.help:	<Lib$Dir>.MsgLib.h.MsgLib
-z.help:	<Lib$Dir>.DebugLib.h.DebugLib
+z.help:	C:msglib.h.MsgLib
+z.help:	C:debuglib.h.DebugLib
 z.help:	h.help
 z.openwinmsg:	c.openwinmsg
 z.openwinmsg:	h.include
@@ -363,8 +365,8 @@ z.openwinmsg:	tbox:h.iconbar
 z.openwinmsg:	tbox:h.textarea
 z.openwinmsg:	C:h.kernel
 z.openwinmsg:	C:h.swis
-z.openwinmsg:	<Lib$Dir>.MsgLib.h.MsgLib
-z.openwinmsg:	<Lib$Dir>.DebugLib.h.DebugLib
+z.openwinmsg:	C:msglib.h.MsgLib
+z.openwinmsg:	C:debuglib.h.DebugLib
 z.openwinmsg:	h.openwinmsg
 z.windows:	c.windows
 z.windows:	h.include
@@ -382,8 +384,8 @@ z.windows:	tbox:h.iconbar
 z.windows:	tbox:h.textarea
 z.windows:	C:h.kernel
 z.windows:	C:h.swis
-z.windows:	<Lib$Dir>.MsgLib.h.MsgLib
-z.windows:	<Lib$Dir>.DebugLib.h.DebugLib
+z.windows:	C:msglib.h.MsgLib
+z.windows:	C:debuglib.h.DebugLib
 z.windows:	h.font
 z.windows:	h.windows
 z.windows:	h.globals
