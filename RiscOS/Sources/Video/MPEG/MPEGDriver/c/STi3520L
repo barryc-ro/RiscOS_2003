@@ -25,6 +25,10 @@ Date		Who	Change
 25/01/2000	BJGA	Added lots of audio register initialisations to HardReset;
 			rewrote SoftReset to allow separate audio and video resets;
 			adjusted VID_XDO and VID_XDS as per new hardware timing scheme
+31/01/2000	BJGA	Sets the ARM to use D-cycles on initialisation;
+			adjusted VID_XDO and VID_XDS back again;
+			added CLOCK() macro to simplify clock specifcations;
+			implemented STi3520L_SetPCMClock()
 
 ***************************************************************************/
 
@@ -38,6 +42,7 @@ Date		Who	Change
 
 #include "DebugLib/DebugLib.h"
 #include "Global/IO/GenericIO.h"
+#include "Global/IO/IOMD.h"
 
 #include "Mess.h"
 #include "Registers.h"
@@ -97,6 +102,12 @@ static bool static_TestBlockMove (void);
 #define PATTERN_15      0x55
 #define PATTERN_16      0x55
 
+/******************/
+/* Private macros */
+/******************/
+
+#define CLOCK(ENA,DV2,PO,PR,Q) (((ENA)<<29)|((DV2)<<28)|((PO)<<24)|(((PR)>>3)<<16)|(((PR)&0x7)<<12)|((((Q)>>7)^0xF)<<8)|(((Q)&0x7F)^0x7F))
+
 /********************/
 /* Public functions */
 /********************/
@@ -111,6 +122,10 @@ void STi3520L_HardReset (void)
 {
   unsigned char outerloop;
   unsigned char innerloop;
+  
+  /* Set the ARM to use D-cycles when addressing the 3520 */
+  
+  * (volatile unsigned char *) (IOC + IOMD_IOTCR) |= IOMD_IOTCR_Network_TypeD; /* we're using address space originally assigned to the Ether NIM */
   
   /* Use the CFG_RST register to perform the hard reset */
 
@@ -184,13 +199,13 @@ void STi3520L_HardReset (void)
 // NTSC
 //  WRITE_VID_YDO(21);
 //  WRITE_VID_YDS(21+240-128-1); /* -1 because we're using vertical filter mode 0 */
-//  WRITE_VID_XDO(102);        /* -1 to get the chroma phases right on this system (?) */
-//  WRITE_VID_XDS(102+720+6);
+//  WRITE_VID_XDO(102-1);        /* -1 to get the chroma phases right on this system (?) */
+//  WRITE_VID_XDS(102+720+6-1);
 // PAL
   WRITE_VID_YDO(22);
   WRITE_VID_YDS(22+288-128-1); /* -1 because we're using vertical filter mode 0 */
-  WRITE_VID_XDO(112);        /* -1 to get the chroma phases right on this system (?) */
-  WRITE_VID_XDS(112+720+6);
+  WRITE_VID_XDO(112-1);        /* -1 to get the chroma phases right on this system (?) */
+  WRITE_VID_XDS(112+720+6-1);
   WRITE_VID_MWV(0xFF);  /* 0% background, 100% video */
   WRITE_VID_MWS(0xFF);  /* 0% background, 100% still picture (if we ever use it) */
   
@@ -283,6 +298,78 @@ _kernel_oserror *STi3520L_WriteSDRAM (unsigned char *from, unsigned int to, unsi
   return e;
 }
 
+/******	STi3520L_SetPCMClock() *********************************************
+
+Purpose:	Sets up CKG_PCM and related registers
+In:		Sample rate, flags to indicate whether to run fast or slow
+		(fast is 13/12ths speed, slow is 11/12ths speed)
+Notes:		Normally, we also maintain STC at 90 kHz (STC is derived
+		internally from PCMCLK, and so needs adjusting at the same time).
+		When we run the audio fast or slow for synchronisation reasons,
+		we can conveniently run STC fast or slow by the same factor
+		by doing nothing!
+
+***************************************************************************/
+
+void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
+{
+  switch (rate)
+  {
+    case sr_48k:
+      /* 256 * 48 kHz = 12.288 MHz */
+      if (fast)
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,8,219,1723));
+      }
+      else if (!slow)
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,8,909,1024)); /* perfect */
+      }
+      else
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,9,586,745));
+      }
+      WRITE_STC_DIV(2048); /* 90 kHz = 12288 kHz / 2048 * 15 */
+      WRITE_STC_INC(15);   /* STC granularity = 15 */
+      break;
+    case sr_44k1:
+      /* 256 * 44.1 kHz = 11.2896 MHz */
+      if (fast)
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,8,469,502));
+      }
+      else if (!slow)
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,9,1022,1341)); /* error = 0.044 ppm */
+      }
+      else
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,10,331,447));
+      }
+      WRITE_STC_DIV(3136); /* 90 kHz = 11289.6 kHz / 3136 * 25 */
+      WRITE_STC_INC(25);   /* STC granularity = 25 */
+      break;
+    case sr_32k:
+    default:
+      /* 256 * 32 kHz = 8.192 MHz */
+      if (fast)
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,12,643,931));
+      }
+      else if (!slow)
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,13,1007,1211)); /* error = 0.082 ppm */
+      }
+      else
+      {
+        WRITE_CKG_PCM(CLOCK(1,1,15,293,1629));
+      }
+      WRITE_STC_DIV(4096); /* 90 kHz = 8192 kHz / 4096 * 45 */
+      WRITE_STC_INC(45);   /* STC granularity = 45 */
+      break;
+  }
+}
+
 /*********************/
 /* Private functions */
 /*********************/
@@ -327,17 +414,17 @@ Purpose:	Stops the PLL itself, but initialises its inputs and outputs
 static void static_InitialisePLL (void)
 {
   /* Stop the PLL */
-  WRITE_CKG_PLL(0x20);        /* discharge the capacitor */
+  WRITE_CKG_PLL(0x20);              /* discharge the capacitor */
   static_WaitMicroseconds (100);
   /* Set up inputs/outputs and PLL dividers */
-  WRITE_CKG_CFG(0x23);        /* SDRAMCLK, PCMCLK pins set as outputs, AUDCLK, PIXCLK pins as inputs, video/audio decoder clocks generated internally */
-  WRITE_CKG_VID(0x22001F7E);  /* PO=2,  PR=1,    Q=1,    DV2=0  => 60.750 MHz  (must be 3/2 SDRAMCLK for 32Mbit SDRAM configuration) */
-  WRITE_CKG_AUD(0x28022F66);  /* P0=8,  PR=18,   Q=25,   DV2=0  => 25.000 MHz  */
-  WRITE_CKG_PCM(0x397F6542);  /* PO=9,  PR=1022, Q=1341, DV2=1  => 11.290 MHz  (example - 44.1 kHz audio at 256 ticks per sample) */
-  WRITE_CKG_MCK(0x00000F7E);  /* reset DIV3 */
-  WRITE_CKG_MCK(0x32000F7E);  /* PO=2,  PR=0,    Q=1,    DV2=1  => 40.500 MHz  (most conservative SDRAMCLK frequency for 32Mbit SDRAM configuration) */
-  WRITE_CKG_AUX(0x00000F7E);
-  WRITE_CKG_PIX(0x00000F7E);
+  WRITE_CKG_CFG(0x23);    /* SDRAMCLK, PCMCLK pins set as outputs, AUDCLK, PIXCLK pins as inputs, video/audio decoder clocks generated internally */
+  WRITE_CKG_VID(CLOCK(1,0,3,0,1));  /* 60.750 MHz  (must be 3/2 SDRAMCLK for 32Mbit SDRAM configuration) */
+  WRITE_CKG_AUD(CLOCK(1,0,8,0,1));  /* 27.000 MHz  */
+  WRITE_CKG_MCK(CLOCK(0,0,0,0,1));  /* reset DIV3  */
+  WRITE_CKG_MCK(CLOCK(1,1,2,0,1));  /* 40.500 MHz  (most conservative SDRAMCLK frequency for 32Mbit SDRAM configuration) */
+  WRITE_CKG_AUX(CLOCK(0,0,0,0,1));  /* disabled    */
+  WRITE_CKG_PIX(CLOCK(0,0,0,0,1));  /* disabled    */
+  STi3520L_SetPCMClock (sr_44k1, false, false);   /* audio unit only generates an IRQ when sample rate changes from 44.1 kHz */
 }
 
 /******	static_SelectPLLFreq() *********************************************

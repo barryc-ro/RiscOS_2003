@@ -78,6 +78,9 @@ Date		Who	Change
 			implemented audio start/stop; enabled VSyncs between
 			waiting_for_play_command and waiting_for_presentation_start;
 			adjusted VID_XDO and VID_XDS as per new hardware timing scheme
+31/01/2000	BJGA	Split video and audio IRQ handlers; implemented audio header
+			parsing, in order to set sample frequencies correctly;
+			adjusted VID_XDO and VID_XDS back again
 
 ***************************************************************************/
 
@@ -92,6 +95,7 @@ Date		Who	Change
 #include "Global/RISCOS.h"
 #include "Global/SWIs.h"
 #include "Global/IO/GenericIO.h"
+#include "Global/IO/IOMD.h"
 #include "DebugLib/DebugLib.h"
 #include "MPEG/MPEG2cCard.h"
 #include "MPEG/MPEGCtrl.h"
@@ -124,6 +128,8 @@ static void static_INT_BBE (void);
 static void static_INT_PER (void);
 static void static_INT_SER (void);
 static void static_INT_PDE (void);
+static void static_INT_VHR (void);
+static void static_INT_SFC (void);
 static void static_ProcessVideoHdr (void *argument);
 static void static_NewPictureDecode (void);
 static void static_ProcessVideoSequenceHdr (void);
@@ -228,22 +234,20 @@ static const unsigned char default_intra_quantizer_matrix[64] =
 /* Public functions */
 /********************/
 
-/******	IRQ_Handler() ******************************************************
+/******	IRQ_HandleVideoIRQ() ***********************************************
 
-Purpose:	Main IRQ entry point
+Purpose:	Video IRQ entry point
 
 ***************************************************************************/
 
-void IRQ_Handler (void)
+void IRQ_HandleVideoIRQ (void)
 {
   static unsigned int video_ints; /* must be static because the coroutine only takes a copy of the address on entry */
-  static unsigned int audio_ints;
   do
   {
     video_ints = VID_ITS;
-//    dprintf (("IRQ", "IRQ_Handler: VID_ITS before masking = %06X\n", video_ints));
+//    dprintf (("IRQ", "IRQ_HandleVideoIRQ: VID_ITS before masking = %06X\n", video_ints));
     video_ints  &= VID_ITM;
-    audio_ints = AUD_ITR & AUD_ITM;
     
     if (video_ints != 0)  /* quick reject if no video interrupts */
     {
@@ -260,7 +264,7 @@ void IRQ_Handler (void)
         else if (video_ints & VIDEO_INT_PSD) static_INT_PSD (&video_ints);
         else if (video_ints & VIDEO_INT_PID) static_INT_PID (&video_ints);
         else if (video_ints & VIDEO_INT_HFF) static_INT_HFF (&video_ints);
-//        dprintf (("IRQ", "IRQ_Handler: video_ints = %06X\n", video_ints));
+//        dprintf (("IRQ", "IRQ_HandleVideoIRQ: video_ints = %06X\n", video_ints));
       }
       /* Now deal with the other interrupts. */
 /*    if (video_ints & VIDEO_INT_BFF) static_INT_BFF ();*/
@@ -279,15 +283,37 @@ void IRQ_Handler (void)
 /*    if (video_ints & VIDEO_INT_SCR) static_INT_SCR ();*/
 /*    if (video_ints & VIDEO_INT_ERR) static_INT_ERR ();*/
     }
+  }
+  /* Only exit when we're satisfied that we're not about to raise another IRQ. */
+  /* This also allows for the clearing of any interrupts that may have been */
+  /* triggered, but already serviced within an interrupt handler (having been */
+  /* detected by using reads from VID_STA rather than VID_ITS). */
+  while (video_ints != 0);
+}
+
+/******	IRQ_HandleAudioIRQ() ***********************************************
+
+Purpose:	Audio IRQ entry point
+
+***************************************************************************/
+
+void IRQ_HandleAudioIRQ (void)
+{
+  static unsigned int audio_ints;
+  do
+  {
+    audio_ints = AUD_ITR & AUD_ITM;
+    dprintf (("IRQ", "IRQ_HandleAudioIRQ: AUD_ITR = %04X\n", audio_ints));
+    
     if (audio_ints != 0)  /* quick reject if no audio interrupts */
     {
 /*    if (audio_ints & AUDIO_INT_CSS) static_INT_CSS ();*/
-/*    if (audio_ints & AUDIO_INT_VHR) static_INT_VHR ();*/
+      if (audio_ints & AUDIO_INT_VHR) static_INT_VHR ();
 /*    if (audio_ints & AUDIO_INT_VPR) static_INT_VPR ();*/
 /*    if (audio_ints & AUDIO_INT_CRC) static_INT_CRC ();*/
 /*    if (audio_ints & AUDIO_INT_ADF) static_INT_ADF ();*/
 /*    if (audio_ints & AUDIO_INT_POU) static_INT_POU ();*/
-/*    if (audio_ints & AUDIO_INT_SFC) static_INT_SFC ();*/
+      if (audio_ints & AUDIO_INT_SFC) /*static_INT_SFC ()*/;
 /*    if (audio_ints & AUDIO_INT_DCH) static_INT_DCH ();*/
 /*    if (audio_ints & AUDIO_INT_IFT) static_INT_IFT ();*/
 /*    if (audio_ints & AUDIO_INT_IFF) static_INT_IFF ();*/
@@ -295,10 +321,7 @@ void IRQ_Handler (void)
     }
   }
   /* Only exit when we're satisfied that we're not about to raise another IRQ. */
-  /* This also allows for the clearing of any interrupts that may have been */
-  /* triggered, but already serviced within an interrupt handler (having been */
-  /* detected by using reads from VID_STA rather than VID_ITS). */
-  while (video_ints != 0 || audio_ints != 0);
+  while (audio_ints != 0);
 }
 
 /******	IRQ_EnableCommonIRQs() *********************************************
@@ -312,38 +335,10 @@ Notes:		Usage is counted so that it may be called more than once
 _kernel_oserror *IRQ_EnableCommonIRQs (void)
 {
   _kernel_oserror *e = NULL;
-  bool irqs_were_enabled = !_kernel_irqs_disabled ();
-  int discard;
-  clk discard_clk;
   if (CommonIRQsClaimedCount == 0)
   {
-    /* Mask off all interrupts inside 3520 */
-    WRITE_AUD_ITM(0);
-    WRITE_AUD_IMS(0);
-    WRITE_VID_ITM(0);
-    /* Clear all the interrupt bits in case any erroneous interrupts are generated as soon as we enable them */
-    READ_AUD_ITR(discard);
-    READ_AUD_ANC(discard);
-    READ_AUD_PTS(discard_clk);
-    READ_AUD_HDR(discard);
-    READ_AUD_SYS(discard);
-    READ_AUD_ITS(discard);
-    READ_VID_ITS(discard);
-    if (!e)
-    {
-      /* Claim 3520 IRQs */
-      e = _swix (OS_ClaimDeviceVector, _INR(0,4), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
-        sti3520l_irq_handler, Module_PrivateWord);
-    }
-    if (!e)
-    {
-      /* Enable nINT4 in IOMD */
-      if (irqs_were_enabled) _kernel_irqs_off ();
-      * (unsigned char *) (IOC + IOCIRQMSKB) |= 1 << (IOMDr_MPEGVideo_DevNo - 8);
-      if (irqs_were_enabled) _kernel_irqs_on ();
-      /* Get on TickerV */
-      e = _swix (OS_Claim, _INR(0,2), TickerV, tickerv_handler, Module_PrivateWord);
-    }
+    /* Get on TickerV */
+    e = _swix (OS_Claim, _INR(0,2), TickerV, tickerv_handler, Module_PrivateWord);
   }
   CommonIRQsClaimedCount++;
   if (e)
@@ -368,10 +363,7 @@ void IRQ_DisableCommonIRQs (void)
   {
     CommonIRQsClaimedCount = 0;
     /* Get off TickerV */
-     _swix (OS_Release, _INR(0,2), TickerV, tickerv_handler, Module_PrivateWord);
-    /* Release 3520 IRQs */
-     _swix (OS_ReleaseDeviceVector, _INR(0,4), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
-        sti3520l_irq_handler, Module_PrivateWord);
+    _swix (OS_Release, _INR(0,2), TickerV, tickerv_handler, Module_PrivateWord);
   }
 }
 
@@ -385,15 +377,36 @@ Out:		Pointer to error block
 _kernel_oserror *IRQ_EnableVideoPrefillIRQs (void)
 {
   _kernel_oserror *e = NULL;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  int discard;
+  dprintf (("IRQ", "EnableVideoPrefillIRQs\n"));
   
-  /* Initialise things local to this source file */
-  Stream.video.header_parser = Co_Create (&static_ProcessVideoHdr); /* initialise coroutine */
-  VideoPrefillSize = -1; /* special value to flag that it hasn't been calculated yet */
+  /* Mask off all interrupts inside 3520 */
+  WRITE_VID_ITM(0);
   
-  /* Enable appropriate interrupts (BBE is deferred until we've parsed the first headers, PSD until we enable decoding) */
-  WRITE_VID_ITM(VID_ITM | VIDEO_INT_SCH | VIDEO_INT_BBF | VIDEO_INT_PER | VIDEO_INT_PID | VIDEO_INT_SER | VIDEO_INT_PDE);
-  VID_CTL &= ~VID_CTL_EDC;              /* don't start decoding the first frame until we've reached buffer threshold */
-  VID_TIS = VID_TIS_FIS | VID_TIS_EXE;  /* kick off the sequence header search */
+  /* Clear all the interrupt bits in case any erroneous interrupts are generated as soon as we enable them */
+  READ_VID_ITS(discard);
+  
+  /* Claim 3520 video IRQs */
+  e = _swix (OS_ClaimDeviceVector, _INR(0,4), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
+    sti3520l_video_irq_handler, Module_PrivateWord);
+  
+  if (!e)
+  {
+    /* Enable nINT4 in IOMD */
+    if (irqs_were_enabled) _kernel_irqs_off ();
+    * (volatile unsigned char *) (IOC + IOCIRQMSKB) |= IOMDr_MPEGVideo_IRQ_bit;
+    if (irqs_were_enabled) _kernel_irqs_on ();
+    
+    /* Initialise things local to this source file */
+    Stream.video.header_parser = Co_Create (&static_ProcessVideoHdr); /* initialise coroutine */
+    VideoPrefillSize = -1; /* special value to flag that it hasn't been calculated yet */
+    
+    /* Enable appropriate interrupts (BBE is deferred until we've parsed the first headers, PSD until we enable decoding) */
+    WRITE_VID_ITM(VID_ITM | VIDEO_INT_SCH | VIDEO_INT_BBF | VIDEO_INT_PER | VIDEO_INT_PID | VIDEO_INT_SER | VIDEO_INT_PDE);
+    VID_CTL &= ~VID_CTL_EDC;              /* don't start decoding the first frame until we've reached buffer threshold */
+    VID_TIS = VID_TIS_FIS | VID_TIS_EXE;  /* kick off the sequence header search */
+  }
   
   return e;
 }
@@ -408,9 +421,11 @@ Out:		Pointer to error block
 _kernel_oserror *IRQ_EnableVideoIRQs (void)
 {
   _kernel_oserror *e = NULL;
+  
   /* Update state machine */
   Stream.video.prefill_state = ps_waiting_for_presentation_start;
   dprintf (("IRQ", "EnableVideoIRQs: video.prefill_state = waiting_for_presentation_start\n"));
+  
   return e;
 }
 
@@ -422,10 +437,15 @@ Purpose:	Disables video interrupts
 
 void IRQ_DisableVideoIRQs (void)
 {
+  dprintf (("IRQ", "DisableVideoIRQs\n"));
   WRITE_VID_ITM(0);  /* mask off all video interrupts */
   VID_CTL &= ~VID_CTL_EDC;  /* stop video decoding */
   
   Co_Destroy (&Stream.video.header_parser); /* finalise coroutine */
+  
+  /* Release 3520 video IRQs */
+  _swix (OS_ReleaseDeviceVector, _INR(0,4), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
+    sti3520l_video_irq_handler, Module_PrivateWord);
 }
 
 /******	IRQ_EnableAudioPrefillIRQs() ***************************************
@@ -438,7 +458,42 @@ Out:		Pointer to error block
 _kernel_oserror *IRQ_EnableAudioPrefillIRQs (void)
 {
   _kernel_oserror *e = NULL;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  int discard;
+  clk discard_clk;
   dprintf (("IRQ", "EnableAudioPrefillIRQs\n"));
+  
+  /* Mask off all interrupts inside 3520 */
+  WRITE_AUD_ITM(0);
+  WRITE_AUD_IMS(0);
+  
+  /* Clear all the interrupt bits in case any erroneous interrupts are generated as soon as we enable them */
+  READ_AUD_ITR(discard);
+  READ_AUD_ANC(discard);
+  READ_AUD_PTS(discard_clk);
+  READ_AUD_HDR(discard);
+  READ_AUD_SYS(discard);
+  READ_AUD_ITS(discard);
+  
+  /* Claim 3520 audio IRQs */
+  e = _swix (OS_ClaimDeviceVector, _INR(0,4), IOMDr_MPEGAudio_DevNo /* aka 10, aka IRQRQB bit 2, aka nINT6 */,
+    sti3520l_audio_irq_handler, Module_PrivateWord);
+  
+  if (!e)
+  {
+    /* Enable nINT6 in IOMD */
+    if (irqs_were_enabled) _kernel_irqs_off ();
+    * (volatile unsigned char *) (IOC + IOCIRQMSKB) |= IOMDr_MPEGAudio_IRQ_bit;
+    if (irqs_were_enabled) _kernel_irqs_on ();
+    
+    /* Enable appropriate interrupts */
+//    AUD_ITM_8 |= AUDIO_INT_SFC>>8;
+    AUD_ITM_0 |= AUDIO_INT_VHR>>0;
+    
+    /* Assume a 44.1 kHz sample rate unless told otherwise */
+    STi3520L_SetPCMClock (sr_44k1, false, false);
+  }
+  
   return e;
 }
 
@@ -467,8 +522,8 @@ _kernel_oserror *IRQ_EnableAudioIRQs (void)
   }
   if (retry_count == 0) dprintf (("IRQ", "EnableAudioIRQs: audio restart failed\n"));
   
-  AUD_MUT = 0;
-  AUD_PLY = 1;
+  AUD_MUT = 0; /* unmute */
+  AUD_PLY = 1; /* start decoding */
   return e;
 }
 
@@ -481,8 +536,16 @@ Purpose:	Disables audio interrupts
 void IRQ_DisableAudioIRQs (void)
 {
   dprintf (("IRQ", "DisableAudioIRQs\n"));
-  AUD_MUT = 1;
-  AUD_PLY = 0;
+  
+  WRITE_AUD_ITM(0);  /* mask off all audio interrupts */
+  WRITE_AUD_IMS(0);
+  
+  AUD_MUT = 1; /* mute */
+  AUD_PLY = 0; /* stop decoding */
+  
+  /* Release 3520 audio IRQs */
+  _swix (OS_ReleaseDeviceVector, _INR(0,4), IOMDr_MPEGAudio_DevNo /* aka 10, aka IRQRQB bit 2, aka nINT6 */,
+    sti3520l_audio_irq_handler, Module_PrivateWord);
 }
 
 /******	IRQ_AudioFast() ****************************************************
@@ -864,6 +927,38 @@ static void static_INT_PDE (void)
   dprintf (("IRQ", "INT_PDE\n"));
   Stream.video.since_open.picture_decode_errors += 1;
   Stream.video.since_reset.picture_decode_errors += 1;
+}
+
+/******	static_INT_VHR() ***************************************************
+
+Purpose:	Handles Valid Header Registered audio IRQ
+Notes:		This is enabled throughout prefill and normal play.
+
+***************************************************************************/
+
+static void static_INT_VHR (void)
+{
+  sample_rate old_sampling_frequency = (sample_rate) Stream.audio_header.fields.sampling_frequency;
+  dprintf (("IRQ", "INT_VHR\n"));
+  Stream.audio_header.word = AUD_HDR;
+  if (!Stream.aud_flags.pcmclk_set_up_for_this_stream || (sample_rate) Stream.audio_header.fields.sampling_frequency != old_sampling_frequency)
+  {
+    STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, false, false);
+    Stream.aud_flags.pcmclk_set_up_for_this_stream = true;
+  }
+}
+
+/******	static_INT_SFC() ***************************************************
+
+Purpose:	Handles Sampling Frequency Changed audio IRQ
+Notes:		This is enabled throughout prefill and normal play.
+
+***************************************************************************/
+
+static void static_INT_SFC (void)
+{
+  dprintf (("IRQ", "INT_SFC\n"));
+  STi3520L_SetPCMClock ((sample_rate) (AUD_SFR & 3), false, false);
 }
 
 /******	static_ProcessVideoHdr() *******************************************
@@ -1774,9 +1869,9 @@ static void static_SetUpDisplayForNewAU (void)
         WRITE_VID_LSR(adder - 1);
         actual_display_width = (Stream.display_frames->seq.coded_horizontal_size-1)*256/adder+1;
 // NTSC
-//        WRITE_VID_XDS(102+actual_display_width+6);
+//        WRITE_VID_XDS(102+actual_display_width+6-1);
 // PAL
-        WRITE_VID_XDS(112+actual_display_width+6);
+        WRITE_VID_XDS(112+actual_display_width+6-1);
       }
       WRITE_VID_DCF(VID_DCF | VID_DCF_EVD);
       WRITE_VID_DFP(Stream.display_frames->frame_buffer->addr);
