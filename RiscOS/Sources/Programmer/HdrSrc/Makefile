@@ -127,6 +127,7 @@ EXPORTS   = \
  ${HDIR}.Global.h.PoduleReg \
  ${HDIR}.Global.h.Pointer \
  ${HDIR}.Global.h.Services \
+ ${HDIR}.Global.h.Sprite \
  ${HDIR}.Global.h.SWIs \
  ${HDIR}.Global.h.Upcall \
  ${HDIR}.Global.h.Tokens \
@@ -259,8 +260,7 @@ ${HDIR}.Global.h.SWIs:       ${SWIS} ${HDR2H};                 perl ${HDR2H} ${S
 # Files which don't work yet:
 #   No files remaining which do not work at all.
 # Files which work with some warnings (which indicate incorrect constants have been declared)
-# and have rules declared below but which are NOT GENERATED because they are not in the export list:
-#   Sprite      Messages
+#   Sprite
 # Files which have no equivalent.
 #   DDVMacros   Debug       ExtraLong   ListOpts    Macros      NdrDebug    Proc        Symbols
 ${HDIR}.Global.h.Heap:       Hdr.Heap ${HDR2H};           perl ${HDR2H} Hdr.Heap       $@
