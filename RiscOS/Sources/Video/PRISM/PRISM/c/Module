@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 #include <Global/RISCOS.h>
 #include <Global/Services.h>
@@ -35,6 +36,7 @@
 #include "Clients.h"
 #include "Components.h"
 #include "Handles.h"
+#include "VersionNum"
 #include "PRISMHdr.h"
 #include "Utils.h"
 #include "VeneerMgr.h"
@@ -71,6 +73,11 @@ static bool   clibrary_realloc_routine_is_buggy = false;
 static bool   callback_pending_flag             = false;
 static bool   upcallv_claimed                   = false;
 
+static struct
+{
+  uint32_t code[4];
+}           * veneers;
+
 /* Local functions */
 
 static void              module_check_os_version      (void);
@@ -78,6 +85,68 @@ static void              module_atexit                (void);
 
 static _kernel_oserror * module_claim_upcall_vector   (void);
 static _kernel_oserror * module_release_upcall_vector (void);
+
+PRISM_DECLARE_FUNCTION_2(static _kernel_oserror *, module_ComponentInfo, uint32_t /*tag*/, uintptr_t * /*result*/)
+
+/**************************************************************/
+/* module_ComponentInfo()                                     */
+/*                                                            */
+/* Returns useful information about the component             */
+/*                                                            */
+/* See PRISM_ProtocolNotify 0 docs.                           */
+/**************************************************************/
+
+_kernel_oserror *module_ComponentInfo(uint32_t tag, uintptr_t *result)
+{
+  switch (tag)
+  {
+    case 0:
+    {
+      const char * buffer = NULL;
+      size_t       len;
+      RetError(read_message("V00", &buffer, &len));
+      * (const char **) result = buffer;
+      return NULL;
+    }
+    
+    case 1:
+    {
+      const char * buffer = NULL;
+      size_t       len;
+      RetError(read_message("V00", &buffer, &len));
+      sscanf(buffer, "%*[^0123456789]%" SCNuPTR, result);
+      return NULL;
+    }
+    
+    case 2:
+    {
+      * (const char **) result = Module_ComponentName " " Module_HelpVersion;
+      return NULL;
+    }
+    
+    case 3:
+    {
+      *result = Module_Version;
+      return NULL;
+    }
+    
+    case 4:
+    {
+      const char * buffer = NULL;
+      size_t       len;
+      RetError(read_message("C00", &buffer, &len));
+      * (const char **) result = buffer;
+      return NULL;
+    }
+    
+    default:
+    {
+      return make_error(prism_ERROR_INVALID_PARAMETERS,
+                        1,
+                        "ComponentInfo");
+    }
+  }
+}
 
 /**************************************************************/
 /* module_check_os_version()                                  */
@@ -431,6 +500,12 @@ _kernel_oserror * swi_handler(int swi_no, _kernel_swi_regs * r, void * pw)
     case PRISM_ComponentDeregister                - PRISM_00:
       return components_component_deregister(r);
 
+    case PRISM_ComponentNotify                    - PRISM_00:
+      return components_component_notify(r);
+
+    case PRISM_ComponentInfo                      - PRISM_00:
+      return components_component_info(r);
+
     case PRISM_CreateVeneers                      - PRISM_00:
     {
       _kernel_oserror *e;
@@ -495,7 +570,6 @@ _kernel_oserror * command_line_handler(CMHG_CONST char * a, int ac, int cmd_no, 
 
 void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
 {
-  (void) pw;
   (void) r;
 
   dprintf(("Module", "service_handler: Called for &%08X (%d, %d, &%08X)\n", service_number, r->r[0], r->r[2], r->r[3]));
@@ -549,13 +623,39 @@ void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
             dprintf(("Module", "service_handler: Registering with myself\n"));
 
             _swix(PRISM_ComponentRegister,
-                  _INR(0,4),
+                  _INR(0,1),
 
                   0,
-                  PRISM_00,
+                  PRISM_PRISMID);
+
+            {
+              struct
+              {
+                void (*function)(void);
+                uint32_t stack_words;
+              } entries[1] =
+              {
+                PRISM_FUNCTION_ENTRY(module_ComponentInfo)
+              };
+              _swix(PRISM_CreateVeneers,
+                    _INR(0,4)|_OUT(1),
+
+                    1,
+                    &entries,
+                    sizeof(entries) / sizeof(*entries),
+                    pw,
+                    PRISM_PRISMID,
+
+                    &veneers);
+            }
+
+            _swix(PRISM_ComponentNotify,
+                  _INR(0,3),
+
+                  0,
                   PRISM_PRISMID,
-                  Module_VersionNumber,
-                  Module_Help " © Pace 2002 (" Module_Date ")");
+                  PRISM_Notify_DeclareInformation,
+                  veneers + 0);
           }
         }
       }

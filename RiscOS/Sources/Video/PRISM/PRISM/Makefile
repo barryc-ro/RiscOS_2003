@@ -51,7 +51,7 @@ CFLAGS		= -c -throwback -depend !Depend ${INCLUDES} -zM -Wpc -ffah -zps1 ${DFLAG
 DFLAGS		= -D${SYSTEM} -DCOMPAT_INET4 -UDIRECTSWI
 ROMFLAGS	= -DROM
 RAMFLAGS	= -UROM
-INCLUDES	= -ITCPIPLibs:,C:
+INCLUDES	= -ITCPIPLibs:,C: -JC:
 
 DIRS		= o._dirs_
 
