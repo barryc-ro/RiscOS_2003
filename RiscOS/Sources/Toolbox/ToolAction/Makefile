@@ -17,7 +17,7 @@ EXP_HDR1 = <export$dir>.^.Interface2
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -120,6 +120,8 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 install: rm.${COMPONENT} 
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
 clean:
