@@ -26,13 +26,16 @@
 /* Definitions */
 #define PORT "2"                                                                /* Serial port number */
 #define BAUD "9600"                                                             /* Baud rate to use; our IR micro uses 9600  */
+#define BUFFER_SIZE  64                                                         /* Size of serial buffer */
+#define SERIAL_PORT  "Devices#buffer%d;baud" BAUD ";data8;stop1;noparity;nohandshake:$.Serial" PORT
 
-#define SERIAL_PORT  "Devices#baud" BAUD ";data8;stop1;noparity;nohandshake;size64;thres1:$.Serial" PORT
-#define SERIAL_INPUT (0x4f)
+#define SERIAL_INPUT (0x4f)                                                     /* Serial flags */
+#define BUFFER_FLAGS (0x00)                                                     /* Buffer flags */
 
 /* Global variables */
 int flags = 0;                                                                  /* General flags word */
 int i_handle = -1;                                                              /* DeviceFS serial stream handle */
+static int buffer_handle = -1;                                                  /* Buffer handle */
 
 static int address = -1;                                                        /* RCMM device address */
 static _kernel_oserror *error;                                                  /* Error returns */
@@ -85,8 +88,8 @@ _kernel_oserror *driver_flush_buffer(int handle)
 
 void driver_disable(void)
 {
-  key_finalise();
-  mouse_finalise();
+  key_finalise();                                                               /* Tidy up keyboard handling... */
+  mouse_finalise();                                                             /* ...and the mouse */
 
   if (i_handle != -1)
   {
@@ -95,7 +98,13 @@ void driver_disable(void)
     i_handle = -1;                                                              /* Invalidate the handle */
   }
 
-  address = -1;                                                                 /* Invalidate the device address */
+  if (buffer_handle != -1)
+  {
+    _swix(Buffer_Remove, _IN(0), buffer_handle);                                /* Remove the buffer */
+    buffer_handle = -1;                                                         /* Invalidate the handle */
+  }
+
+  address = -1;                                                                 /* Invalidate the RCMM device address */
 
   _swix(OS_Release, _INR(0, 2), UpCallV, module_upcall_entry, mod_wsp);         /* Release UpCallV vector */
   _swix(OS_Release, _INR(0, 2), KeyV, module_keyv_entry, mod_wsp);              /* Release KeyV vector */
@@ -107,6 +116,7 @@ void driver_disable(void)
 _kernel_oserror *driver_enable(void)
 {
   i_handle = -1;                                                                /* Reset serial stream handle */
+  buffer_handle = -1;                                                           /* Reset buffer handle */
 
   /* Vector claims */
   error = _swix(OS_Claim, _INR(0, 2), UpCallV, module_upcall_entry, mod_wsp);
@@ -115,10 +125,18 @@ _kernel_oserror *driver_enable(void)
   if (!error)
     error = _swix(OS_Claim, _INR(0, 2), PointerV, module_pointerv_entry, mod_wsp);
 
-  /* Serial streams */
+  /* Buffer creation */
   if (!error)
+    error = _swix(Buffer_Create, _INR(0, 2) | _OUT(0), BUFFER_FLAGS, BUFFER_SIZE, -1, &buffer_handle);
+
+  /* Serial stream creation */
+  if (!error)
+  {
+    char filename[256];
+    sprintf(filename, SERIAL_PORT, buffer_handle);                              /* Add the buffer handle to the string */
     error = _swix(OS_Find, _INR(0, 1) | _OUT(0), SERIAL_INPUT,
-                                                 SERIAL_PORT, &i_handle);       /* Open serial input stream */
+                                                 filename, &i_handle);          /* Open serial input stream */
+  }
   dprintf(("Serial_0", "Stream handle: input = %d\n", i_handle));
 
   /* Serial setup */
@@ -159,22 +177,22 @@ _kernel_oserror *driver_initialise(void)
 
 void driver_device_data_present(void)
 {
-  unsigned int byte, extent;
+  _kernel_oserror *error = NULL;
+  unsigned int byte;
   static unsigned int byte_count = 0, message = 0, bytes_expected = 0;
-  int irq_status;
+  int irq_status, buffer_flags;
 
   irq_status = _kernel_irqs_disabled();                                         /* Preserve interrupt status */
   _kernel_irqs_off();                                                           /* Disable interrupts */
 
-  extent = 0;                                                                   /* Reset extent */
-  _swix(OS_Args, _INR(0, 1) | _OUT(2), OSArgs_Extent, i_handle, &extent);       /* Is there really any data? */
+  error = _swix(OS_Byte, _INR(0, 1) | _OUT(2) | _OUT(_FLAGS), 145,              /* Is there a byte to be read? */
+                                         buffer_handle, &byte, &buffer_flags);
 
-  while (extent)                                                                /* Iterate until all bytes read */
+  while (!error && !(buffer_flags & _C))                                        /* If so, iterate until all bytes read */
   {
-    _swix(OS_BGet, _IN(1) | _OUT(0), i_handle, &byte);                          /* Obtain the byte */
     dprintf(("Serial_1", "Byte read = 0x%X\n", byte));
 
-    message |= (byte << (24 - byte_count * 8));                                 /* Add new bytes to the message */
+    message |= (byte << (24 - byte_count * 8));                                 /* Add new byte to the message */
     byte_count++;                                                               /* Increment counter */
     if (byte_count == 2)
         bytes_expected = driver_message_length(message);                        /* Calculate how many bytes are expected */
@@ -190,8 +208,8 @@ void driver_device_data_present(void)
       byte_count = 0;
       bytes_expected = 0;
     }
-    extent = 0;                                                                 /* Reset extent */
-    _swix(OS_Args, _INR(0, 1) | _OUT(2), OSArgs_Extent, i_handle, &extent);     /* Any more data? */
+    error = _swix(OS_Byte, _INR(0, 1) | _OUT(2) | _OUT(_FLAGS), 145,            /* Any more bytes? */
+                                         buffer_handle, &byte, &buffer_flags);
   }
 
   if (!irq_status) _kernel_irqs_on();                                           /* Enable interrupts if necessary */
