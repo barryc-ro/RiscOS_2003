@@ -20,7 +20,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-CFLAGS  = -depend !Depend -c -zM ${DFLAGS}
+CFLAGS  = -depend !Depend -c -zM -ffa -wp ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -42,6 +42,7 @@ TARGET    = aof.IR
 
 DFLAGS    = 
 
+#OBJS      = o.Debug o.Module o.IRiface o.poduleirq
 OBJS      = o.Debug o.Module o.IRiface
 
 #
