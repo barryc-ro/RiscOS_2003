@@ -176,8 +176,18 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 extern void startlink (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
+    VALUE none;
 
-    starta (context, element, attributes);
+    generic_start (context, element, attributes);
+
+    none.type = value_none;
+    new_aref_item(me,
+		  &attributes->value[HTML_LINK_HREF],
+		  &attributes->value[HTML_LINK_NAME],
+		  &attributes->value[HTML_LINK_REL],
+		  &none,
+		  &attributes->value[HTML_LINK_TITLE]);
+    /* starta (context, element, attributes); */
 
     /* SJM: stop the rest of the document getting linked... */
     me->aref = NULL;

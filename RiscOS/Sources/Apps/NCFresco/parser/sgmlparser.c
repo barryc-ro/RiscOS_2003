@@ -56,13 +56,13 @@ static int sgml_handle_char(void *handle, UCS4 c)
 {
     SGMLCTX *context = handle;
 
-/*  PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20)); */
+    /* PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20)); */
     
     add_char_to_inhand(context, (UCS2) c);
 
     (*context->state)(context, (UCS2) c);
 
-/*  PRSDBG(("sgml_handle_char: out %d/%d\n", context->pending_close, context->pending_enc_num)); */
+    /* PRSDBG(("sgml_handle_char: out %d/%d\n", context->pending_close, context->pending_enc_num)); */
 
     return context->pending_close || context->pending_enc_num;
 }
@@ -338,7 +338,8 @@ extern SGMLCTX * sgml_new_context(void)
     context->magic = SGML_MAGIC;
     context->tos = mm_calloc(1, sizeof(STACK_ITEM));
     ASSERT(context->tos != NULL);
-    context->inhand.data = mm_calloc(1, 4096);
+
+    context->inhand.data = mm_calloc(sizeof(context->inhand.data[0]), 4096);
     context->inhand.max = 4096;
     
     reset_tokeniser_state(context);

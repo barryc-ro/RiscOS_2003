@@ -244,8 +244,14 @@ static int insert_char(rid_input_item *ii, int pos, int c)
     memmove(str + pos + clen, str + pos, len - pos + 1); /* +1 to move the NUL also */
 #if UNICODE
     if (config_encoding_internal == 1)
+    {
 	UCS4_to_UTF8(str + pos, c);
+    }
+    else
 #endif
+    {
+	str[pos] = c;
+    }
     
     return clen;
 }

@@ -288,11 +288,15 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	}
 #endif
 
+	PRSDBG(("mkstringu: %d chars from %p\n", n, ptr));
+	
 	for (i = 0; i < n; i++)
 	    encoding_write(encoding, ptr[i], NULL, &s.bytes);
 
 	s.bytes = -s.bytes;
 	
+	PRSDBG(("mkstringu: %d bytes needed\n", s.bytes));
+
 	/* allocate space */
 	if ( (s.ptr = mm_malloc(s.bytes+1)) == NULL )
 	{
@@ -303,6 +307,9 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	    /* write out string */
 	    char *ss = s.ptr;
 	    int bufsize = s.bytes;
+
+	    PRSDBG(("mkstringu: write to %p\n", s.ptr));
+
 	    for (i = 0; i < n; i++)
 		encoding_write(encoding, ptr[i], &ss, &bufsize);
 
@@ -1454,7 +1461,7 @@ static void add_to_ubuffer(UBUFFER *buffer, UCHARACTER input)
     ASSERT( buffer->max >= buffer->ix );
     ASSERT( buffer->ix >= 0 );
 
-    /* PRSDBGN(("add_to_ubuffer: %p in %x (max %d ix %d)\n", buffer, input, buffer->max, buffer->ix)); */
+    /* PRSDBG(("add_to_ubuffer: %p in %03x (max %d ix %d)\n", buffer, input, buffer->max, buffer->ix)); */
 
     if (buffer->max == buffer->ix)
     {

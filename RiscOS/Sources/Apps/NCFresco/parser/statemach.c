@@ -90,7 +90,17 @@ extern void state_end_find_element (SGMLCTX *context, UCHARACTER input)
         {
                 context->state = state_end_find_element_body;
         }
-        else
+#if 0
+	/* SJM: this might be needed but I;m not sure right now */
+	else if ( is_whitespace (input) )
+	{
+	    /* SJM: allow whitespace in close tag </   element>
+	     *      remove it to make rest easier
+	     */
+	    context->inhand.ix--;
+	}
+#endif
+	else
         {
                 push_inhand (context);
                 context->state = state_end_tag_only;
@@ -419,12 +429,33 @@ extern void state_in_element_name (SGMLCTX *context, UCHARACTER input)
 	}
 }
 
+/* Seen the </ for some closing markup */
+
+extern void state_had_markup_open_slash (SGMLCTX *context, UCHARACTER input)
+{
+	if ( is_element_start_character (input) )
+	{ context->state = state_in_element_name; }
+	else if ( is_whitespace (input) )
+	{ ; }
+	else if ( input =='>' )
+	{ do_got_element (context); }
+	else
+	{
+		/* Not valid, so assume not markup */
+#if SGML_REPORTING
+		sgml_note_message (context, ("Does not look like markup"));
+#endif
+		push_inhand (context);
+		context->state = state_all_tags ;
+	}
+}
+
 /* Seen the < for some markup. Decide what's happening */
 
 extern void state_had_markup_open (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='/' )
-	{ ; }
+	{ context->state = state_had_markup_open_slash; }
 	else if ( input =='!'  )
 	{ context->state = state_comment_maybe; }
 	else if ( is_element_start_character (input) )
@@ -623,6 +654,7 @@ static state_name_str state_names[] =
     { state_some_sgml_command, "state_some_sgml_command" },
     { state_stuck_text, "state_stuck_text" },
     { state_unquoted_value, "state_unquoted_value" },
+    { state_had_markup_open_slash, "state_had_markup_open_slash" },
     { 0, 0 }
 };
 
