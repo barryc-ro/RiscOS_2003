@@ -52,7 +52,7 @@ CLXLIB    = C:CLX.o.clxlib
 # Include files
 #
 INCLUDES  = -ITCPIPLibs:,C:CLX,C:
-DFLAGS    = -DRISCOS -Dunlink=remove
+DFLAGS    = -DRISCOS -DTARGET_IS_RISCOS -Dunlink=remove
 
 #
 # Program specific options:
