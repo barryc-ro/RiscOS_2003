@@ -115,6 +115,7 @@ _kernel_oserror *LoadSprite(Image *this, const char *data, int len, BBox *change
 _kernel_oserror *EndLoadSprite(Image *this, BBox *changed)
 {
     int    w, h;
+    int *pal;
     Spriteloaddata *load=(Spriteloaddata *) this->private_data;
     int mask, mode;
     _kernel_oserror *e;
@@ -134,9 +135,11 @@ _kernel_oserror *EndLoadSprite(Image *this, BBox *changed)
     if (e) return e;
 
     /* Check whether we have a palette */
-    e=_swix(OS_SpriteOp, _INR(0,3)|_OUT(3), 256+37, this->private_data2, load->name, -1,
-                                                    &load->pal);
+    e=_swix(OS_SpriteOp, _INR(0,3)|_OUTR(3,4), 256+37, this->private_data2, load->name, -1,
+                                                       &load->palsize, &pal);
     if (e) return e;
+
+    load->paloffset = pal - this->private_data2;
 
     this->width=w;
     this->height=h;
@@ -149,8 +152,8 @@ _kernel_oserror *EndLoadSprite(Image *this, BBox *changed)
     if (e) return e;
 
     /* We can't utilise non-256 entry 8bpp palettes */
-    if (load->bpp==3 && load->pal != 256)
-        load->pal=0;
+    if (load->bpp==3 && load->palsize != 256)
+        load->paloffset=0;
 
     if (this->width_os==-1)
         this->width_os=w<<load->xeig;
@@ -172,48 +175,6 @@ _kernel_oserror *ModeChangeSprite(Image *this)
 
     e=_swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 9, &log2bpp);
 
-    /* don't need a table if going into 16 or 32bpp, and we have a palette */
-
-    if (!(load->pal && load->bpp >= 4))
-    {
-        if (!e)
-        e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4), this->private_data2,
-                                                              load->name,
-                                                              -1, -1, 0, 2,
-                                                              &bufsize);
-
-        if (!e)
-        {
-            free(this->table);
-            this->table=malloc(bufsize);
-            if (!this->table)
-                e=spriteError("Insufficient memory");
-        }
-
-        if (!e)
-        e=_swix(ColourTrans_GenerateTable, _INR(0,5), this->private_data2,
-                                                      load->name, -1, -1,
-                                                      this->table, 2);
-    }
-
-    if (!e && this->table && log2bpp <= 3 && log2bpp == load->bpp)
-    {
-        int i, islinear = 1;
-        char *table = (char *) this->table;
-
-        for (i=0; i<bufsize; i++)
-            if (table[i] != i)
-            {
-                islinear = 0;
-                break;
-            }
-        if (islinear)
-        {
-            free(this->table);
-            this->table=NULL;
-        }
-    }
-
     if (!e)
     e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 4, &xeig);
     if (!e)
@@ -226,6 +187,61 @@ _kernel_oserror *ModeChangeSprite(Image *this)
         this->factors[2]=this->width<<(2);
         this->factors[3]=this->height<<(2);
     }
+
+    /* don't need a table if going into 16 or 32bpp, and we have a palette */
+    if (load->paloffset && load->bpp >= 4)
+        return e;
+
+    /* Check for matching palettes */
+    if (!e && log2bpp == load->bpp && log2bpp <= 3 && load->paloffset)
+    {
+        unsigned int palette[256];
+        e = _swix(ColourTrans_ReadPalette, _INR(0,4), -1, -1, palette, sizeof palette, 0);
+        if (!e)
+        {
+            int end, i, same = 1, *pal;
+            end = 1 << (1 << log2bpp);
+            pal = this->private_data2 + load->paloffset;
+
+            for (i = 0; i < end; i++)
+            {
+                if ((pal[i * 2] & 0xFFFFFF00) != (palette[i] & 0xFFFFFF00))
+                {
+                    same = 0;
+                    break;
+                }
+            }
+
+            if (same)
+            {
+                if (this->table)
+                {
+                    free(this->table);
+                    this->table = NULL;
+                }
+                return NULL;
+            }
+        }
+    }
+
+    if (!e)
+    e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4), this->private_data2,
+                                                          load->name,
+                                                          -1, -1, 0, 2,
+                                                          &bufsize);
+
+    if (!e)
+    {
+        this->table=realloc(this->table, bufsize);
+        if (!this->table)
+            e=spriteError("Insufficient memory");
+    }
+
+    if (!e)
+    e=_swix(ColourTrans_GenerateTable, _INR(0,5), this->private_data2,
+                                                  load->name, -1, -1,
+                                                  this->table, 2);
+
     return e;
 }
 
@@ -281,8 +297,7 @@ _kernel_oserror *RenderSprite(Image *this, int x, int y, int scale, int x_size, 
 
     if (e) return e;
 
-    if (log2bpp <= 3 && load->bpp == log2bpp && this->table == NULL &&
-        fac[0] == fac[2] && fac[1] == fac[3])
+    if (load->bpp == log2bpp && this->table == NULL && fac[0] == fac[2] && fac[1] == fac[3])
         e=_swix(OS_SpriteOp, _INR(0,5), 256+PutSprite,
                                         this->private_data2,
                                         load->name,
@@ -297,7 +312,7 @@ _kernel_oserror *RenderSprite(Image *this, int x, int y, int scale, int x_size, 
                                                         PutSpriteScaled_UseMask
                                                       : PutSpriteScaled_UseMask,
                                         fac,
-                                        (log2bpp <=3 || !load->pal) ? this->table : 0);
+                                        (log2bpp <=3 || !load->paloffset) ? this->table : 0);
 
     return e;
 }

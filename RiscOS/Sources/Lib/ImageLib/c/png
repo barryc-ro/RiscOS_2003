@@ -81,9 +81,10 @@ typedef struct png_loaddata
     unsigned int finished:1;
     unsigned int eightbpphack:1; /* Processing 8bpp + alpha data */
     unsigned int have_bkgd:1;
+    unsigned int have_bkgd_index:1;
     unsigned int isreally32bit:1;
     unsigned int convto16bit:1;
-    unsigned int bkgd;
+    unsigned int bkgd;           /* Background colour (BBGGRRNN in file gamma, NN=palette number) */
     #ifdef TRACE
     FILE *trace;
     #endif
@@ -326,18 +327,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
         }
     }
 
-    //if (/*this->flags & IMAGE_FAST ||*/ osver < 0xA5)
-       // this->full_alpha = 0;
-
-    /*if (this->full_alpha)
-    {
-        ModeChange(NULL);
-
-        if (log2bpp < 3)
-            this->full_alpha = 0;
-    }*/
-
-    if (this->full_alpha)
+    if (this->full_alpha || info->valid & PNG_INFO_bKGD)
     {
         /* Make some extra gamma tables... */
         double g;
@@ -483,6 +473,61 @@ void info_callback(png_struct *png_ptr, png_info *info)
             png_set_premultiply_alpha(png_ptr);
     }
 
+    /* Extract the background colour in a useful form */
+    if (info->valid & PNG_INFO_bKGD)
+    {
+        unsigned int bg_r = info->background.red;
+        unsigned int bg_g = info->background.green;
+        unsigned int bg_b = info->background.blue;
+        unsigned int bg_m = info->background.gray;
+        unsigned int bg_i = 0x100;
+
+        switch (png_ptr->color_type)
+        {
+          case PNG_COLOR_TYPE_GRAY:
+          case PNG_COLOR_TYPE_GRAY_ALPHA:
+            bg_i = bg_m;
+            switch (info->bit_depth)
+            {
+              case 1:
+                bg_m *= 0xFF;
+                break;
+              case 2:
+                bg_m *= 0x55;
+                break;
+              case 4:
+                bg_m *= 0x11;
+                break;
+              case 16:
+                bg_m >>= 8;
+                break;
+            }
+            bg_r = bg_g = bg_b = bg_m;
+            break;
+
+          case PNG_COLOR_TYPE_PALETTE:
+            bg_i = info->background.index;
+            bg_r = info->palette[bg_i].red;
+            bg_g = info->palette[bg_i].green;
+            bg_b = info->palette[bg_i].blue;
+            break;
+
+          case PNG_COLOR_TYPE_RGB:
+          case PNG_COLOR_TYPE_RGB_ALPHA:
+            if (info->bit_depth == 16)
+            {
+              bg_r >>= 8;
+              bg_g >>= 8;
+              bg_b >>= 8;
+            }
+            break;
+        }
+
+        load->bkgd = (bg_b << 24) | (bg_g << 16) | (bg_r << 8) | (bg_i & 0xFF);
+        load->have_bkgd = 1;
+        if (bg_i != 0x100) load->have_bkgd_index = 1;
+    }
+
     /* Enable filling in of interlace */
     png_set_interlace_handling(png_ptr);
 
@@ -537,10 +582,42 @@ void info_callback(png_struct *png_ptr, png_info *info)
     this->width = info->width;
     this->height = info->height;
 
-    if (this->width_os==-1)
-        this->width_os = info->width * 2;
-    if (this->height_os==-1)
-        this->height_os = info->height * 2;
+    if ((info->valid & PNG_INFO_pHYs) && info->phys_unit_type < PNG_RESOLUTION_LAST)
+    {
+        switch (info->phys_unit_type)
+        {
+          case PNG_RESOLUTION_UNKNOWN:
+            if (this->width_os==-1)
+            {
+                if (info->x_pixels_per_unit > info->y_pixels_per_unit)
+                    this->width_os = info->width * 2;
+                else
+                    this->width_os = info->width * 2 * info->y_pixels_per_unit / info->x_pixels_per_unit;
+            }
+            if (this->height_os==-1)
+            {
+                if (info->x_pixels_per_unit > info->y_pixels_per_unit)
+                    this->height_os = info->height * 2 * info->x_pixels_per_unit / info->y_pixels_per_unit;
+                else
+                    this->height_os = info->height * 2;
+            }
+            break;
+
+          case PNG_RESOLUTION_METER:
+            if (this->width_os==-1)
+                this->width_os = info->width * 180.0F / (info->x_pixels_per_unit * 0.0254F);
+            if (this->height_os==-1)
+                this->height_os = info->height * 180.0F / (info->y_pixels_per_unit * 0.0254F);
+            break;
+        }
+    }
+    else
+    {
+        if (this->width_os==-1)
+            this->width_os = info->width * 2;
+        if (this->height_os==-1)
+            this->height_os = info->height * 2;
+    }
 
     if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
         riscos_rowbytes = info->width;
@@ -705,7 +782,6 @@ void info_callback(png_struct *png_ptr, png_info *info)
                 if (this->full_alpha || !(info->valid & PNG_INFO_gAMA))
                 {
                     /* Palette not important - just fill a simple one in anyway */
-                  dont_bother_with_gray_gamma:
                     for (i = 0; i < num_palette; i++)
                     {
                         c = (i << 24) | (i << 16) | (i << 8);
@@ -716,11 +792,10 @@ void info_callback(png_struct *png_ptr, png_info *info)
                 else
                 {
                     /* Need a gamma corrected palette */
-                    int g, end, step;
+                    int g, end, step, do_gamma;
                     double gamma = 1.0 / (info->gamma * SCREEN_GAMMA);
 
-                    if (fabs(gamma - 1.0) < PNG_GAMMA_THRESHOLD)
-                        goto dont_bother_with_gray_gamma;
+                    do_gamma = fabs(gamma - 1.0) >= PNG_GAMMA_THRESHOLD;
 
                     this->private_data2[15] = this->private_data2[16] = 0;
 
@@ -729,7 +804,10 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
                     for (i = 1, g = step; i < end; i++, g += step)
                     {
-                        c = (png_byte)(pow((double)g / 255.0, gamma) * 255.0 + .5);
+                        if (do_gamma)
+                            c = (png_byte)(pow((double)g / 255.0, gamma) * 255.0 + .5);
+                        else
+                            c = g;
                         c = (c << 24) | (c << 16) | (c << 8);
 
                         this->private_data2[15 + i * 2] =
@@ -789,19 +867,25 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
     load->color_type = info->color_type;
 
-    if (info->valid & PNG_INFO_bKGD)
-    {
-        load->bkgd = ((info->background.blue>>(info->bit_depth-8))<<24) |
-                     ((info->background.green>>(info->bit_depth-8))<<16) |
-                     ((info->background.red>>(info->bit_depth-8))<<8);
-        load->have_bkgd = 1;
 
+    if (load->have_bkgd)
+    {
         if (!(osver < 0xA5 && mode==MODE(6,90,90)))
         {
             /* Clear the background */
             _swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 256+60, this->private_data2, "png", 0,
             	    	    	    	    	     &r1, &r2, &r3);
-            _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), load->bkgd, 128, 0);
+            if (load->have_bkgd_index)
+                _swix(OS_SetColour, _INR(0,1), 0x10, load->bkgd & 0xFF);
+            else
+            {
+                unsigned int bg, bg_r, bg_g, bg_b;
+                bg_r = load->file_to_screen[(load->bkgd >> 8) & 0xFF];
+                bg_g = load->file_to_screen[(load->bkgd >> 16) & 0xFF];
+                bg_b = load->file_to_screen[load->bkgd >> 24];
+                bg = (bg_b << 24) | (bg_g << 16) | (bg_r << 8);
+                _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), bg, 128, 0);
+            }
             _swix(OS_WriteI + 16, 0);
             _swix(OS_SpriteOp, _INR(0,3), 256+60, r1, r2, r3);
         }
@@ -1525,8 +1609,7 @@ static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size,
     {
         int job = 0;
         _swix(PDriver_CurrentJob, _OUT(0), &job);
-        //if (job || log2bpp >= 3)
-            return RenderWithAlpha(this, x, y, scale, x_size, y_size, job ? (osver >= 0xA5 ? 5 : 3) : log2bpp, job);
+        return RenderWithAlpha(this, x, y, scale, x_size, y_size, job ? (osver >= 0xA5 ? 5 : 3) : log2bpp, job);
     }
 
     if (load->isreally32bit)
@@ -1578,9 +1661,6 @@ static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size,
 
 static void blend_image(int width, int height, char *sprdata, char *maskdata, int *palette, int type, int rowwidth, char *bgsprdata, int bgrowwidth, int *bgpalette, int bglog2bpp);
 
-/*
- * Assumes : log2bpp = 3,4,5
- */
 static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, int x_size, int y_size, int log2bpp, int printing)
 {
     int bgwidth;
@@ -1905,7 +1985,13 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride)
 
     /* What background colour? */
     if (!dontoverride && load->have_bkgd)
-        bg = load->bkgd;
+    {
+        unsigned int bg_r, bg_g, bg_b;
+        bg_r = load->file_to_screen[(load->bkgd >> 8) & 0xFF];
+        bg_g = load->file_to_screen[(load->bkgd >> 16) & 0xFF];
+        bg_b = load->file_to_screen[load->bkgd >> 24];
+        bg = (bg_b << 24) | (bg_g << 16) | (bg_r << 8);
+    }
 
     /* Set background colour */
     _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), bg, 128, 0);
@@ -1942,7 +2028,6 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride)
 
     this->DumpSprite=SpriteDumpSprite;
     this->Render=RenderSprite;
-    this->ModeChange=ModeChangeSprite;
     this->DumpToCache=DumpToCacheSprite;
     this->StartExport=StartExportSprite;
     this->Export=Export;
@@ -1960,7 +2045,14 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride)
     l->xeig=_swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 4);
     l->yeig=_swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 5);
     l->bpp =_swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 9);
-    l->pal =0;
+    {
+        int *pal;
+        _swi(OS_SpriteOp, _INR(0,3)|_OUTR(3,4), 256+37, this->private_data2, "sprite", -1, &l->palsize, &pal);
+        if (pal)
+            l->paloffset = pal - this->private_data2;
+        else
+            l->paloffset = 0;
+    }
     this->table = 0;
     this->factors[0]=this->factors[1]=this->factors[2]=this->factors[3]=1;
     strcpy(l->name, "sprite");

@@ -16,6 +16,8 @@
 #include "swis.h"
 #include "defines.h"
 #include "imagetrans.h"
+#include "internal.h"
+#include "sprite.h"
 #include "datastruct.h"
 #include "gif.h"
 #include "gif_stream.h"
@@ -29,8 +31,8 @@ static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *just
 static _kernel_oserror *LoadFromCache(Image *this, const char *filename);
 static _kernel_oserror *ModeChange(Image *this);
 static _kernel_oserror *StartExportGIF(Image *this, int *size);
-static _kernel_oserror *Export(Image *this, char *buffer, int *len);
-static _kernel_oserror *EndExport(Image *this);
+static _kernel_oserror *ExportGIF(Image *this, char *buffer, int *len);
+static _kernel_oserror *EndExportGIF(Image *this);
 static _kernel_oserror *BGColGIF(Image *this, int *bgcol, int dontoverride);
 static _kernel_oserror *Delete(Image *this);
 static _kernel_oserror *GIFNeedRedraw(Image *this, int* need, BBox *changed);
@@ -71,8 +73,8 @@ int NewGIF(Image *im)
     im->LoadFromCache  = LoadFromCache;
     im->DumpToCache    = DumpToCache;
     im->StartExport    = StartExportGIF;
-    im->Export         = Export;
-    im->EndExport      = EndExport;
+    im->Export         = ExportGIF;
+    im->EndExport      = EndExportGIF;
     im->BGCol          = BGColGIF;
     im->NeedRedraw     = GIFNeedRedraw;
     im->RegisterFiller = GIFRegisterFiller;
@@ -196,10 +198,10 @@ _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size, int y_
     yos = 1 << _swi(OS_ReadModeVariable,_IN(0)|_IN(1)|_RETURN(2),-1,5);
 
     /* By default, scale is specfied by 'scale' variable */
-    s.x_mul = scale * 2;
-    s.x_div = 100 * xos;
-    s.y_mul = scale * 2;
-    s.y_div = 100 * yos;
+    //s.x_mul = scale * 2;
+    //s.x_div = 100 * xos;
+    //s.y_mul = scale * 2;
+    //s.y_div = 100 * yos;
 
     /* If specified, scale so that image is x_size wide and y_size high */
     if ((x_size>0) && (y_size>0))
@@ -211,12 +213,20 @@ _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size, int y_
     }
 
     /* if defined by host application, scale is specified by width_os and height_os */
-    else if ((this->width_os>0) && (this->width_os != this->width*xos))
+    else //if ((this->width_os>0) && (this->width_os != this->width*xos))
     {
         s.x_mul = this->width_os;
         s.y_mul = this->height_os;
         s.x_div = this->width * xos;
         s.y_div = this->height * yos;
+
+        if (scale != 100)
+        {
+            s.x_mul *= scale;
+            s.x_div *= 100;
+            s.y_mul *= scale;
+            s.y_div *= 100;
+        }
     }
 
     /* Plot the image */
@@ -303,7 +313,7 @@ _kernel_oserror *StartExportGIF(Image *this, int *size)
 }
 
 
-_kernel_oserror *Export(Image *this, char *buffer, int *len)
+_kernel_oserror *ExportGIF(Image *this, char *buffer, int *len)
 {
     int gif_handle=this->flags;
 
@@ -315,7 +325,7 @@ _kernel_oserror *Export(Image *this, char *buffer, int *len)
 }
 
 
-_kernel_oserror *EndExport(Image *this)
+_kernel_oserror *EndExportGIF(Image *this)
 {
     int gif_handle=this->flags;
 
@@ -328,8 +338,132 @@ _kernel_oserror *EndExport(Image *this)
 _kernel_oserror *BGColGIF(Image *this, int *bgcol, int dontoverride)
 {
     int gif_handle=this->flags;
+    int *newarea;
+    void *mode;
+    unsigned int log2bpp, size, r1, r2, r3, nw, nh;
+    _kernel_oserror *e;
+    Spriteloaddata *l;
+    scale_factor scale;
 
-    return gifstream_background_colour(gif_handle, bgcol);
+    l = (Spriteloaddata *)malloc(sizeof *l);
+    if (!l)
+        return NULL;
+
+    /*
+     * Right, this is obviously a background image, so lets munge it into
+     * a sprite of the current mode and palette!
+     */
+    _swix(OS_Byte, _IN(0)|_OUT(2), 135, &mode);
+    log2bpp=_swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 9);
+
+    scale.x_mul = 2;
+    scale.x_div = 1 << _swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 4);
+    scale.y_mul = 2;
+    scale.y_div = 1 << _swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 5);
+
+    nw=this->width * scale.x_mul / scale.x_div;
+    nh=this->height * scale.y_mul / scale.y_div;
+
+    size = SpriteAreaSize(mode, nw, nh);
+    if (log2bpp <= 3)
+        /* Add the palette... */
+        size += 8 << (1 << log2bpp);
+
+    newarea = malloc(size);
+    if (!newarea)
+        return NULL;
+
+    newarea[0] = size;
+    newarea[2] = 16;
+    /* Initialise sprite area */
+    _swix(OS_SpriteOp, _INR(0,1), 256+SprInitArea, newarea);
+
+    /* Create sprite */
+    e=_swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, newarea, "sprite",
+                                    0, nw, nh, mode);
+
+    /* Add the palette */
+    if (!e && log2bpp <= 3)
+    {
+        void *palette;
+        e=_swix(OS_SpriteOp, _INR(0,3), 256+SprAddPalette, newarea, "sprite", (1U<<31)+1);
+        if (!e)
+            e=_swix(OS_SpriteOp, _INR(0,3)|_OUT(4), 256+SprAddPalette, newarea, "sprite", -1, &palette);
+        if (!e)
+            e=_swix(ColourTrans_ReadPalette, _INR(0,4), -1, -1, palette, 8<<(1<<log2bpp), 2);
+    }
+    if (e)
+    {
+        free(newarea);
+        return NULL;
+    }
+
+    /* Switch output to it */
+    e=_swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 256+SprSwitchVdu, newarea, "sprite", 0,
+                                               &r1, &r2, &r3);
+    if (e)
+    {
+        free(newarea);
+        return NULL;
+    }
+
+    /* Set background colour */
+    _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), *bgcol, 128, 0);
+    /* CLG */
+    _swix(OS_WriteI+16, 0);
+
+    //this->RegisterFiller(this, bgfiller, this, (int *) &bg);
+
+    /* Plot the image */
+    this->Render(this, 0, 0, 100, -1, -1);
+
+    /* Unswitch output */
+    _swix(OS_SpriteOp, _INR(0,3), 256+SprSwitchVdu, r1, r2, r3);
+
+    BGCol(newarea, bgcol);
+
+    if (flex_alloc((flex_ptr) &this->private_data2, size) == 0)
+    {
+        free(newarea);
+        return NULL;
+    }
+
+    gifstream_delete(gif_handle);
+
+    memcpy(this->private_data2, newarea, size);
+    free(newarea);
+
+    this->DumpSprite=SpriteDumpSprite;
+    this->Render=RenderSprite;
+    this->DumpToCache=DumpToCacheSprite;
+    this->StartExport=StartExportSprite;
+    this->Export=Export;
+    this->EndExport=EndExport;
+    this->Delete=DeleteSprite;
+    this->private_data=l;
+    this->transparent=0;
+    this->mutable_mask=0;
+    this->width=nw;
+    this->height=nh;
+    this->NeedRedraw=0;
+    this->RegisterFiller=0;
+
+    l->memory=size;
+    l->xeig=_swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 4);
+    l->yeig=_swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 5);
+    l->bpp =_swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 9);
+    {
+        int *pal;
+        _swi(OS_SpriteOp, _INR(0,3)|_OUTR(3,4), 256+37, this->private_data2, "sprite", -1, &l->palsize, &pal);
+        if (pal)
+            l->paloffset = pal - this->private_data2;
+        else
+            l->paloffset = 0;
+    }
+    this->table = 0;
+    this->factors[0]=this->factors[1]=this->factors[2]=this->factors[3]=1;
+    strcpy(l->name, "sprite");
+    return NULL;
 }
 
 
