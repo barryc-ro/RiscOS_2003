@@ -65,6 +65,8 @@ Date      Who     Description of change
 #include "Global/Upcall.h"
 #include "Global/Services.h"
 
+#include "PortMan.h"
+
 #include "STBstate.h"
 
 #undef DEBUG			/* Debug mode */
@@ -91,10 +93,6 @@ Date      Who     Description of change
 #  define Sound_SampleRate 0x40146
 #endif
 
-#ifndef Service_Standby
-#  define Service_Standby 0xAD
-#endif
-
 /*
  * CMOS stuff
  */
@@ -108,13 +106,6 @@ Date      Who     Description of change
  */
 #define KeyBdDisable 0xC9
 
-/*
- * Bits in Morris' 8-bit IO port
- */
-#define RED_BIT		2
-#define GREEN_BIT	4
-#define DOG_BIT		128
-
 
 /*
  * Bits in IRQA mask
@@ -126,8 +117,15 @@ Date      Who     Description of change
  * Types
  */
 typedef unsigned char byte;
-typedef enum { LED_OFF, LED_ON, LED_FLASH } led_t;
-typedef enum { DOG_ON=0, DOG_OFF=DOG_BIT } dog_t;
+typedef enum {
+  LED_OFF=PORTMAN_FLAG_CLEAR,
+  LED_ON=PORTMAN_FLAG_SET,
+  LED_FLASH=PORTMAN_FLAG_TOGGLE
+} led_t;
+typedef enum {
+  DOG_ON=PORTMAN_FLAG_CLEAR,
+  DOG_OFF=PORTMAN_FLAG_SET
+} dog_t;
 
 /*
 State info?  As guessed CP 30/7/97.
@@ -150,7 +148,6 @@ typedef enum { OFF_PT = 0, OFF_LP = 1,
 /*
  * Globals (dontcha love em) (No!  CP, 12/8/97)
  */
-volatile byte *io_port = (byte *) 0x320000C;	/* Morris 8-bit I/O port      */
 volatile byte *susp_reg = (byte *) 0x320001C;	/* Morris SUSPENDMODE register*/
 volatile byte *irqmska = (byte *) 0x3200018;	/* Morris IRQA interrupt mask */
 volatile byte *stop_reg = (byte *) 0x320002C;	/* Morris STOPMODE register   */
@@ -162,10 +159,8 @@ volatile byte *resettype = (byte *) 0x322;	/* ResetType in PublicWS      */
 _kernel_oserror *e;
 _kernel_swi_regs regs;
 
-byte io_softcopy = 0xff;		/* softcopy of contents of I/O port   */
 byte cmospowerdown;
 int red_flash = 0, green_flash = 0;	/* non-zero if led should be flashing */
-int leds_changing = FALSE;		/* semaphore                          */
 state_t state = INIT;			/* The state we're in (man)           */
 int timer = 0;				/* timeout timer                      */
 int busy_level = 0;			/* Nested Busys, 0 = not busy         */
@@ -375,47 +370,21 @@ _kernel_oserror *STBState_cli_handler(const char *arg_string, int arg_count,
  */
 void set_io_port(led_t red, led_t green, dog_t watch)
 {
-  /* Clear the leds and the watchdog bit */
-  int new_io = io_softcopy & ~(RED_BIT | GREEN_BIT | DOG_BIT);
-  int old_leds_changing = leds_changing;
-
-  /*
-   * Signal that callevery handler shouldn't try to twiddle the leds cos we're
-   * twiddling them
-   */
-  leds_changing = TRUE;
-
-  if (red == LED_FLASH)
-  {
-    red_flash = TRUE;
-    /* toggle RED_BIT in new_io */
-    new_io |= (RED_BIT & ~io_softcopy);
-  }
-  else
-  {
-    red_flash = FALSE;
-    if (red == LED_ON)
-      new_io |= RED_BIT;
-  }
-
-  if (green == LED_FLASH)
-  {
-    green_flash = TRUE;
-    /* toggle GREEN_BIT in new_io */
-    new_io |= (GREEN_BIT & ~io_softcopy);
-  }
-  else
-  {
-    green_flash = FALSE;
-    if (green == LED_ON)
-      new_io |= GREEN_BIT;
-  }
-
-  *io_port = io_softcopy = (new_io | watch);
-#ifdef DEBUG
-  printf("io port = %x\n", io_softcopy);
-#endif
-  leds_changing = old_leds_changing;
+  _kernel_swi_regs regs;
+  
+  red_flash=(red==LED_FLASH);
+  regs.r[0]=red;
+  regs.r[1]=(int)PortMan_LED_Red;
+  _kernel_swi(PortMan_AccessBit, &regs, &regs);
+  
+  green_flash=(green==LED_FLASH);
+  regs.r[0]=green;
+  regs.r[1]=(int)PortMan_LED_Green;
+  _kernel_swi(PortMan_AccessBit, &regs, &regs);
+  
+  regs.r[0]=watch;
+  regs.r[1]=(int)PortMan_Watchdog;
+  _kernel_swi(PortMan_AccessBit, &regs, &regs);
 }
 
 
@@ -429,7 +398,7 @@ void set_io_port(led_t red, led_t green, dog_t watch)
  */
 extern _kernel_oserror *STBState_callevery_handler(_kernel_swi_regs *r, void *pw)
 {
-  int new_io;
+  _kernel_swi_regs regs;
 
   /*
    * Check timeout
@@ -440,20 +409,18 @@ extern _kernel_oserror *STBState_callevery_handler(_kernel_swi_regs *r, void *pw
   else
 #endif
 
-  /*
-   * Check that set_leds isn't twiddling the leds
-   */
-  if (!leds_changing)
+  if (red_flash)
   {
-    new_io = io_softcopy;
+    regs.r[0]=PORTMAN_FLAG_TOGGLE;
+    regs.r[1]=(int)PortMan_LED_Red;
+    _kernel_swi(PortMan_AccessBit, &regs, &regs);
+  }
 
-    if (red_flash)
-      new_io = (io_softcopy & ~RED_BIT) | (RED_BIT & ~io_softcopy);
-
-    if (green_flash)
-      new_io = (io_softcopy & ~GREEN_BIT) | (GREEN_BIT & ~io_softcopy);
-
-    *io_port = io_softcopy = new_io;
+  if (green_flash)
+  {
+    regs.r[0]=PORTMAN_FLAG_TOGGLE;
+    regs.r[1]=(int)PortMan_LED_Green;
+    _kernel_swi(PortMan_AccessBit, &regs, &regs);
   }
 
   return 0;
@@ -585,7 +552,7 @@ void tv_on(void)
   _kernel_swi(OS_CLI, &regs, &regs);
   
   /* Send service call to inform other modules that standby state has changed */
-  _swix (OS_ServiceCall, _INR(0,1), Service_Standby, 0);
+  _swix (OS_ServiceCall, _INR(0,1), 0, Service_Standby);
 }
 
 
@@ -625,7 +592,7 @@ void tv_off(int stop)
   _kernel_swi(OS_CLI, &regs, &regs);
   
   /* Send service call to inform other modules that standby state has changed */
-  _swix (OS_ServiceCall, _INR(0,1), Service_Standby, 1);
+  _swix (OS_ServiceCall, _INR(0,1), 1, Service_Standby);
 #endif
 }
 
