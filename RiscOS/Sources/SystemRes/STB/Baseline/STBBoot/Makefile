@@ -8,7 +8,7 @@ INSTAPP      = ${INSTDIR}.!${COMPONENT}
 LOCALRES     = Resources.${UserIF}.${Locale}
 TRANSRES     = Translate.${UserIF}.${Locale}
 TRANSMAP     = ${TRANSRES}.Mappings
-NOP          = |
+NOP          = @|
 CP2FLAGS     = F~R~C~V~N
 
 CHMODFLAGS   = -R 0755
@@ -35,7 +35,8 @@ install_STB3:
 	${CP} ${LOCALRES}.PreDesktop.300      ${INSTAPP}.PreDesktop.300 ${CPFLAGS}
 
 install_STB4:
-	${CP} ${LOCALRES}.PreDesktop.400      ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
+	${CP} ${LOCALRES}.PreDesktop.400                        ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
+	${CP} ^.^.^.^.HWSupport.NVRAM.resources.${Machine}.Tags ${INSTAPP}.Utilities.Tags ${CPFLAGS}
 
 install_Teletext:
 	${CP} ${LOCALRES}.PreDesktop.Teletext ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
@@ -64,6 +65,7 @@ dirs_STB4:
 	${MKDIR} ${INSTAPP}.Desktop.400
 	${MKDIR} ${INSTAPP}.PreDesktop.400
 	${MKDIR} ${INSTAPP}.Resources.400.Misc
+	${MKDIR} ${INSTAPP}.Utilities
 
 dirs_Teletext:
 	${MKDIR} ${INSTAPP}.PreDesktop.400
