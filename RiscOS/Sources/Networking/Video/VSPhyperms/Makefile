@@ -41,8 +41,8 @@ AWK	= awk
 
 # Debug flags
 
-#DEFINES = ${DEBUG} -DCOMPAT_INET4 ${THROWBACK}
-DEFINES = ${DEBUG} ${THROWBACK}
+DEFINES = ${DEBUG} -DCOMPAT_INET4 ${THROWBACK}
+#DEFINES = ${DEBUG} ${THROWBACK}
 COMMONFLAGS = -zM -c -Wp -depend !Depend ${INCLUDES} ${DEFINES}
 
 AFLAGS = -depend !Depend -Stamp -quit

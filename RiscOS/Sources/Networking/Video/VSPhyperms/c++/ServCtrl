@@ -31,35 +31,40 @@ ServerList::~ServerList(void){
   		object[i] = NULL;
   	}
   }
+  ExpectedSize = CurrentSize = 0;
 }
 
 error_flag
 ServerList::Remove(int identifier)
 {
   int i =0;	// count value
+  error_flag result = ErrorState();
   
-  if (SwitchError() == ErrorOccurred) {
-    return ErrorOccurred;
-  }	// if we cannot recover from this error
+  --ExpectedSize;
   
-  while( (i < CurrentSize)&&(identifiers[i] != identifier) ) i++;
+  if (result != ErrorOccurred) {
   
-  if (i == CurrentSize){
-  	MakeError(VSP_UnknownObj);
-        return ErrorOccurred;
-  }
+  	while( (i < CurrentSize)&&(identifiers[i] != identifier) ) i++;
+  
+  	if (i == CurrentSize){
+  		MakeError(VSP_UnknownObj);
+        	result = ErrorOccurred;
+  	}
 
-  delete (Server*)object[i]; object[i] = NULL;
+	if (result != ErrorOccurred){
+  		delete (Server*)object[i]; object[i] = NULL;
   
-  while (i < CurrentSize -1){
-    object[i] = object[i+1];
-    identifiers[i] = identifiers[i+1];
-    i++;
+  		while (i < CurrentSize -1){
+    			object[i] = object[i+1];
+    			identifiers[i] = identifiers[i+1];
+    			i++;
+  		}
+  		--CurrentSize;
+  
+  		if (decreasesize() != ErrorOccurred)		// this does test for sufficient decrease in size
+  			result = ErrorOccurred;
+  	}
   }
-  CurrentSize--;
-  
-  if (decreasesize() != ErrorOccurred)		// this does test for sufficient decrease in size
-  	return NoError;
   return ErrorOccurred;
 }
 
@@ -84,6 +89,9 @@ Server::setSocketError(int socket_result)
                         case EINVAL:
                                 MakeError(TCP_BadPortSpecification);
                                 break;
+                        case ENOBUFS:
+                        	MakeError(TCP_NoBuffer);
+                        	break;
                 }
                 result = ErrorOccurred;
         }
@@ -521,12 +529,28 @@ Server::getSocket(Socket *s)
 error_flag
 Server::SendData(void *buffer, int size)
 {
-    if (SocketDescriptor.write(buffer, size) != size) {
-        MakeError(TCP_SendFail);
-        return ErrorOccurred;
+  error_flag result = ErrorState();
+ 
+  unsigned int t1, t2;
+  int sent_size = 0;
+  
+  (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
+   
+   while ((sent_size = SocketDescriptor.write(buffer, size)) != size) {
+     	if (sent_size < 0){
+     		result = setSocketError(sent_size);
+     		break;
+     	}
+     		
+   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+     	if (t2 > (t1 + timeout_period)){
+        	MakeError(TCP_SendFail);
+        	result = ErrorOccurred;
+        	break;
+     	}
     }
     
-  return NoError;
+  return result;
 }
 
 error_flag
@@ -535,10 +559,16 @@ Server::GetData(void *buffer, int size)
   error_flag result = ErrorState();
  
   unsigned int t1, t2;
+  int get_size = 0;
   
   (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
    
-  while (SocketDescriptor.read(buffer, size, MSG_PEEK) != size) {
+  while ((get_size = SocketDescriptor.read(buffer, size, MSG_PEEK)) != size) {
+    	if (get_size < 0){
+    		result = setSocketError(get_size);
+    		break;
+    	}
+    		
    	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
    	if (t2 > (t1 + timeout_period)){
    		MakeError(TCP_TimeOutOnReceive);
@@ -554,6 +584,23 @@ Server::GetData(void *buffer, int size)
 
    return NoError;
 }
+
+#ifdef DEBUGLIB
+int
+Server::ReadDataToDebug(void)
+{
+  int data, size, size_total = 0;
+  
+    while ( (size = SocketDescriptor.read(&data, sizeof(int))) == sizeof(int) ) {
+    	size_total += size;
+    	Debug("data %8.8X", data);
+    }
+    if (size == -1)    
+    	Debug("data errno %i", errno);
+    	
+    return size_total;
+} 
+#endif  
 
 error_flag
 Server::PeekHeader(int *command)
@@ -612,18 +659,22 @@ Server::inetevent(int *event, ULINT *result)
 error_flag
 Server::SendAck(ULINT MAX_storableBlocks, ULINT MAX_complete_block, ACK_type datatype)
 {
+  ULINT tmp_storable = (MAX_storableBlocks);
+  
   	ack.data_type =    (LINT)ntohl(datatype);
   	ack.min_sequence = (ULINT)ntohl(MAX_complete_block);
-  	ack.max_sequence = (ULINT)ntohl(MAX_requested_block = MAX_storableBlocks);
+  	ack.max_sequence = (ULINT)ntohl(tmp_storable);
 
   	comms_flag = comms;		// communicated with server;
-
-  	if (SocketDescriptor.write((void*)&ack, sizeof(ACK_Block)) != sizeof(ACK_Block)) {
-        	MakeError(TCP_SendFail);
-        	return ErrorOccurred;
-    	}
-    	else
-    		return NoError;
+  	if (SendData((void*)&ack, sizeof(ACK_Block)) == ErrorOccurred){
+  		if (ErrorNum() == TCP_NoBuffer){
+  			RemoveErr();
+  		}
+  	}
+  	else
+  		MAX_requested_block = (MAX_storableBlocks);
+  		
+  return ErrorState();
 }
 
 error_flag
@@ -636,12 +687,12 @@ Server::SendNak(ULINT BlockStart, LINT DatagramStart, ULINT BlockEnd, LINT Datag
 
 	comms_flag = comms;		// communicated with server;
 	
-  	if (SocketDescriptor.write((void*)&nak, sizeof(NAK_Block)) != sizeof(NAK_Block)) {
-        	MakeError(TCP_SendFail);
-        	return ErrorOccurred;
-  	}
-  	else
-  		return NoError;
+  	if (SendData((void*)&nak, sizeof(NAK_Block)) == ErrorOccurred)
+  		if (ErrorNum() == TCP_NoBuffer){
+  			RemoveErr();
+  		}
+  			
+  return ErrorState();	
 }
 
 error_flag
@@ -700,9 +751,10 @@ Server::AssetEnd(int status, int endflag)
 {
    AssetEndRequest request;
    AssetEndResponse response;
-   int command;
+   int command = 0;
    ULINT result;
-      
+   unsigned int t1, t2;
+   
    if (ErrorExists()){
      switch(ErrorNum()){
         case TCP_UnknownService:
@@ -722,7 +774,7 @@ Server::AssetEnd(int status, int endflag)
    }
    
    SocketDescriptor.eventsOff();
-   SocketDescriptor.makeBlocking();
+   //SocketDescriptor.makeBlocking();
   
    request.interface_number = 0;
    request.route_type = 0;
@@ -738,16 +790,41 @@ Server::AssetEnd(int status, int endflag)
      	return ErrorOccurred;
    }
 
-   if  (SendData((void*)&request, sizeof( AssetEndRequest)) == ErrorOccurred)
+   (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
+   
+   while (SendData((void*)&request, sizeof( AssetEndRequest)) == ErrorOccurred){
+   	if (ErrorNum() == TCP_NoBuffer){
+  		RemoveErr();
+  	}	
+  	else
      	return ErrorOccurred;
+     	
+   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+   	
+     	if (t2 > (t1 + timeout_period)){
+     	  	MakeError(TCP_TimeOutOnReceive);
+     		return ErrorOccurred;
+     	}
+   }
+   // sent data regardless even if full buffers.
    
    PeekHeader(&command);
-   
+
+   (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
+    
    while (command != COMMAND_assetend_response) {	// internet events are off but we will need to
-     	if (inetevent(&command, &result) == ErrorOccurred)		// clear the queue
+   
+   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+   	
+     	if (t2 > (t1 + timeout_period)){
+     	  	//MakeError(TCP_TimeOutOnReceive);
+     		break;
+     	}
+     	
+     	if (inetevent(&command, &result) == ErrorOccurred)	// clear the queue this clears start end notifications
      		return ErrorOccurred;
    }
-
+   
    if (GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred)
    	return ErrorOccurred;
 
