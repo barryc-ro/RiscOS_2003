@@ -65,6 +65,23 @@ clean:
         ${WIPE} o.* ${WFLAGS}
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.lookup:	c.lookup
+o.lookup:	C:h.kernel
+o.lookup:	C:h.swis
+o.lookup:	h.lookup
+o.robase: s.robase
+o.asw: s.asw
+o.asw: Hdr:ListOpts
+o.asw: Hdr:CPU.Generic26
+o.asw: Hdr:Macros
+o.asw: Hdr:SWIs
+o.asw: Hdr:RISCOS
+o.fwupcall: s.fwupcall
+o.leaf:	c.leaf
+o.leaf:	h.util
+o.leaf:	h.interface
+o.leaf:	C:h.kernel
+o.leaf:	h.lookup
 o._Args:	c._Args
 o._Args:	h.FS
 o._Args:	h.ker
@@ -255,20 +272,3 @@ o.fswrap:	h.util
 o.fswrap:	h.lookup
 o.fswrap:	h.fscore
 o.fswrap:	h.lookup
-o.lookup:	c.lookup
-o.lookup:	C:h.kernel
-o.lookup:	C:h.swis
-o.lookup:	h.lookup
-o.robase: s.robase
-o.asw: s.asw
-o.asw: Hdr:ListOpts
-o.asw: Hdr:CPU.Generic26
-o.asw: Hdr:Macros
-o.asw: Hdr:SWIs
-o.asw: Hdr:RISCOS
-o.fwupcall: s.fwupcall
-o.leaf:	c.leaf
-o.leaf:	h.util
-o.leaf:	h.interface
-o.leaf:	C:h.kernel
-o.leaf:	h.lookup

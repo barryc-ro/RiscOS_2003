@@ -53,7 +53,6 @@ clean:
 
 
 # Dynamic dependencies:
-o.caller: s.caller
 o.ralloc:	c.ralloc
 o.ralloc:	C:h.kernel
 o.ralloc:	C:h.swis
@@ -66,3 +65,4 @@ o.roverwr:	c.roverwr
 o.roverwr:	C:h.kernel
 o.roverwr:	C:h.swis
 o.roverwr:	h.ralloc
+o.caller: s.caller

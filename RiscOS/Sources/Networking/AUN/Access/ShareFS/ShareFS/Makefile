@@ -42,9 +42,9 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 LEVEL    = ^.^.^
-INCLUDES = ^.rmalib,^.fslib,InetInc:,RISC_OSLib:,C:
+INCLUDES = ^.rmalib,^.fslib,TCPIPLibs:,RISC_OSLib:,C:
 DFLAGS   = -DDCI4 -DLOOKUPERR "-DFSNAME=\"Remote\"" #-DDEBUG -DPROFILING
-CFLAGS   = -I${INCLUDES} -zM -zps1 -ffah ${DFLAGS} ${PLUSFLAGS} -wd
+CFLAGS   = -I${INCLUDES} -zM -Wp -zps1 -ffah ${DFLAGS} ${PLUSFLAGS} -wd
 AFLAGS   = -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
 
 # Always build Access+
@@ -62,7 +62,7 @@ C_ABSSYM  = RISCOSLIB:o.c_abssym
 
 FSLIB     = ^.fslib.o.fslib
 RMALIB    = ^.rmalib.o.rmalib
-TCPLIB	  = ^.^.^.libs.socklib.socklibzm
+TCPLIB	  = TCPIPLibs:o.socklibzm
 
 # sharefsBITS
 OBJS =\
@@ -113,6 +113,8 @@ ${EXP_HDR}.ShareD: hdr.ShareD
         ${CP} hdr.ShareD $@ ${CPFLAGS}
 
 clean:
+        dir ^.fslib; amu clean; back
+        dir ^.rmalib; amu clean; back
         ${WIPE} o.* ${WFLAGS}
         ${RM} ${ROM_MODULE}
         ${WIPE} linked.* ${WFLAGS}
@@ -146,29 +148,27 @@ rom_link:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.share:	c.share
-o.share:	^.fslib.h.ker
-o.share:	C:h.kernel
-o.share:	^.fslib.h.ModuleWrap
-o.share:	C:h.kernel
-o.share:	^.fslib.h.lookup
-o.share:	^.rmalib.h.ralloc
-o.share:	^.fslib.h.util
-o.share:	^.fslib.h.interface
-o.share:	^.fslib.h.lookup
-o.share:	h.remswis
-o.share:	h.errnum
-o.share:	^.fslib.h.debug
-o.share:	C:h.swis
-o.share:	h.how
-o.share:	h.msgproc
-o.share:	^.fslib.h.ticker
-o.share:	h.modface
-o.share:	h.freeway
-o.svcprint:	c.svcprint
-o.svcprint:	C:h.kernel
-o.svcprint:	C:h.swis
-o.svcprint:	^.fslib.h.debug
+o.window:	c.window
+o.window:	^.fslib.h.debug
+o.window:	^.fslib.h.ker
+o.window:	C:h.kernel
+o.window:	C:h.swis
+o.window:	^.fslib.h.interface
+o.window:	^.fslib.h.ModuleWrap
+o.window:	C:h.kernel
+o.window:	^.fslib.h.util
+o.window:	^.fslib.h.lookup
+o.window:	^.fslib.h.fscore
+o.window:	^.fslib.h.evil
+o.window:	^.rmalib.h.ralloc
+o.window:	^.fslib.h.visdelay
+o.window:	^.fslib.h.esc
+o.window:	h.remswis
+o.window:	h.errnum
+o.window:	h.stream
+o.window:	h.window
+o.window:	h.msgproc
+o.window:	^.fslib.h.ticker
 o.irqs: s.irqs
 o.irqs: <Hdr$Dir>.Global.ListOpts
 o.irqs: <Hdr$Dir>.Global.Macros
@@ -310,39 +310,44 @@ o.shareinet:	h.resourcefs
 o.shareinet:	h.modface
 o.shareinet:	h.how
 o.shareinet:	h.tcplibs
-o.shareinet:	InetInc:sys.h.types
-o.shareinet:	InetInc:sys.h.time
-o.shareinet:	InetInc:netinet.h.in
-o.shareinet:	InetInc:sys.h.socket
-o.shareinet:	InetInc:sys.h.ioctl
-o.shareinet:	InetInc:sys.h.ttychars
-o.shareinet:	InetInc:sys.h.ttydev
-o.shareinet:	InetInc:h.netdb
-o.shareinet:	InetInc:sys.h.errno
-o.shareinet:	InetInc:sys.^.h.errno
+o.shareinet:	TCPIPLibs:sys.h.types
+o.shareinet:	TCPIPLibs:sys.h.cdefs
+o.shareinet:	TCPIPLibs:machine.h.endian
+o.shareinet:	TCPIPLibs:machine.h.ansi
+o.shareinet:	TCPIPLibs:machine.h.types
+o.shareinet:	TCPIPLibs:sys.h.time
+o.shareinet:	TCPIPLibs:sys.h.cdefs
+o.shareinet:	TCPIPLibs:netinet.h.in
+o.shareinet:	TCPIPLibs:sys.h.socket
+o.shareinet:	TCPIPLibs:sys.h.cdefs
+o.shareinet:	TCPIPLibs:sys.h.ioctl
+o.shareinet:	TCPIPLibs:sys.h.ttycom
+o.shareinet:	TCPIPLibs:sys.h.ioccom
+o.shareinet:	TCPIPLibs:sys.h.ioccom
+o.shareinet:	TCPIPLibs:sys.h.filio
+o.shareinet:	TCPIPLibs:sys.h.ioccom
+o.shareinet:	TCPIPLibs:sys.h.sockio
+o.shareinet:	TCPIPLibs:sys.h.ioccom
+o.shareinet:	TCPIPLibs:sys.h.cdefs
+o.shareinet:	TCPIPLibs:h.netdb
+o.shareinet:	TCPIPLibs:sys.h.cdefs
+o.shareinet:	TCPIPLibs:sys.h.errno
 o.shareinet:	C:h.kernel
-o.shareinet:	InetInc:net.h.if
-o.shareinet:	InetInc:sys.h.mbuf
-o.shareinet:	InetInc:net.h.if_arp
-o.shareinet:	InetInc:sys.h.socket
-o.window:	c.window
-o.window:	^.fslib.h.debug
-o.window:	^.fslib.h.ker
-o.window:	C:h.kernel
-o.window:	C:h.swis
-o.window:	^.fslib.h.interface
-o.window:	^.fslib.h.ModuleWrap
-o.window:	C:h.kernel
-o.window:	^.fslib.h.util
-o.window:	^.fslib.h.lookup
-o.window:	^.fslib.h.fscore
-o.window:	^.fslib.h.evil
-o.window:	^.rmalib.h.ralloc
-o.window:	^.fslib.h.visdelay
-o.window:	^.fslib.h.esc
-o.window:	h.remswis
-o.window:	h.errnum
-o.window:	h.stream
-o.window:	h.window
-o.window:	h.msgproc
-o.window:	^.fslib.h.ticker
+o.shareinet:	TCPIPLibs:net.h.if
+o.shareinet:	TCPIPLibs:sys.h.socket
+o.shareinet:	TCPIPLibs:sys.h.time
+o.shareinet:	TCPIPLibs:net.h.if_arp
+o.shareinet:	TCPIPLibs:sys.h.socket
+o.shareinet:	TCPIPLibs:h.socklib
+o.shareinet:	TCPIPLibs:sys.h.types
+o.shareinet:	TCPIPLibs:sys.h.socket
+o.shareinet:	TCPIPLibs:sys.h.stat
+o.shareinet:	TCPIPLibs:sys.h.time
+o.shareinet:	TCPIPLibs:sys.h.cdefs
+o.shareinet:	TCPIPLibs:sys.h.time
+o.shareinet:	TCPIPLibs:sys.h.uio
+o.shareinet:	TCPIPLibs:sys.h.cdefs
+o.shareinet:	C:h.kernel
+o.shareinet:	TCPIPLibs:h.inetlib
+o.shareinet:	TCPIPLibs:sys.h.types
+o.shareinet:	TCPIPLibs:netinet.h.in
