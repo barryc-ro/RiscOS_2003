@@ -10,27 +10,27 @@ MAKE    = @amu ${MFLAGS} RESDIR=${RESDIR}
 
 BUILD = \
  AudioDemos \
- Tutorials \
- Sounds \
- Videos \
- Images \
  SlideShow \
  PrintDefs \
  PrintEdit \
  FontPrint \
+ Verify \
  T1ToFont \
+ SaveCMOS \
+ TCP/IP \
  SparkFS \
- PCEmPatch \
- DDE \
- AdvancePch \
+ SSound \
+ SCSIDM \
+ CallASWI \
+ ansilib \
  Patch \
+ Access+ \
  HForm \
  PhotoView \
  CDPlayer \
  SpriteExtend \
  ChangeFSI \
  ShowScrap \
- SaveCMOS \
  Calibrate \
  ArtWorks \
  Puzzle \
@@ -49,12 +49,17 @@ BUILD = \
  CloseUp \
  ARPlayer \
  ResetBoot \
+ Repeat \
  Public \
  PhotoCD \
+ NetI \
+ Drivers \
  JCompMod \
  BASIC64 \
  System \
  Scrap \
+ Internet \
+ InetSetup \
  Fonts \
  FontMerge \
  Configure \
@@ -146,6 +151,28 @@ Fonts:
         @${CD} ${SRCDIR}.SystemRes.Fonts
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.!Boot.Resources INSTFLAG=all
 
+InetSetup:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot
+        @Access ${INSTDIR}.HardDisc4.!Boot /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources /r
+        @${CD} ${SRCDIR}.SystemRes.InetSetup
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.!Boot.Resources 
+
+Internet:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot
+        @Access ${INSTDIR}.HardDisc4.!Boot /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources /r
+        @${CD} ${SRCDIR}.SystemRes.Internet
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.!Boot.Resources 
+
 Scrap:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
@@ -202,6 +229,42 @@ JCompMod:
         @${CD} ${SRCDIR}.OS_Core.Video.Render.jcompmod
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.!Boot.Resources.!System.350.Modules 
 
+Drivers:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot
+        @Access ${INSTDIR}.HardDisc4.!Boot /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources.!System
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources.!System /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources.!System.310
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources.!System.310 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources.!System.310.Modules
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources.!System.310.Modules /r
+        @${CD} ${SRCDIR}.NetWorking.AUN.Drivers
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.!Boot.Resources.!System.310.Modules 
+
+NetI:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot
+        @Access ${INSTDIR}.HardDisc4.!Boot /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources.!System
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources.!System /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources.!System.370
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources.!System.370 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources.!System.370.Modules
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources.!System.370.Modules /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Resources.!System.370.Modules.Network
+        @Access ${INSTDIR}.HardDisc4.!Boot.Resources.!System.370.Modules.Network /r
+        @${CD} ${SRCDIR}.NetWorking.AUN.Net
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.!Boot.Resources.!System.370.Modules.Network 
+
 PhotoCD:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
@@ -228,16 +291,25 @@ Public:
         @${CD} ${SRCDIR}.SystemRes.Public
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Public 
 
+Repeat:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot
+        @Access ${INSTDIR}.HardDisc4.!Boot /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.!Boot.Library
+        @Access ${INSTDIR}.HardDisc4.!Boot.Library /r
+        @${CD} ${SRCDIR}.OS_Core.BootCmds
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.!Boot.Library COMPONENT=Repeat
+
 ResetBoot:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
         @Access ${INSTDIR}.HardDisc4 /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Diversions
-        @Access ${INSTDIR}.HardDisc4.Diversions /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Diversions.Tools
-        @Access ${INSTDIR}.HardDisc4.Diversions.Tools /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities
+        @Access ${INSTDIR}.HardDisc4.Utilities /r
         @${CD} ${SRCDIR}.SystemRes.Boot
-        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Diversions.Tools COMPONENT=ResetBoot
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities COMPONENT=ResetBoot
 
 ARPlayer:
         @echo $@ ...
@@ -396,17 +468,6 @@ Calibrate:
         @${CD} ${SRCDIR}.Utilities.Calibrate
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Diversions.Tools 
 
-SaveCMOS:
-        @echo $@ ...
-        @${MKDIR} ${INSTDIR}.HardDisc4
-        @Access ${INSTDIR}.HardDisc4 /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Diversions
-        @Access ${INSTDIR}.HardDisc4.Diversions /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Diversions.Tools
-        @Access ${INSTDIR}.HardDisc4.Diversions.Tools /r
-        @${CD} ${SRCDIR}.Utilities.SaveCMOS
-        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Diversions.Tools 
-
 ShowScrap:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
@@ -465,6 +526,15 @@ HForm:
         @${CD} ${SRCDIR}.Utilities.HForm
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities 
 
+Access+:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities
+        @Access ${INSTDIR}.HardDisc4.Utilities /r
+        @${CD} ${SRCDIR}.NetWorking.AUN.Access+
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities COMPONENT=Access+
+
 Patch:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
@@ -476,7 +546,7 @@ Patch:
         @${CD} ${SRCDIR}.Utilities.Patches.Patch
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities.Patches 
 
-AdvancePch:
+ansilib:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
         @Access ${INSTDIR}.HardDisc4 /r
@@ -484,10 +554,10 @@ AdvancePch:
         @Access ${INSTDIR}.HardDisc4.Utilities /r
         @${MKDIR} ${INSTDIR}.HardDisc4.Utilities.Patches
         @Access ${INSTDIR}.HardDisc4.Utilities.Patches /r
-        @${CD} ${SRCDIR}.Utilities.Patches.AdvancePch
+        @${CD} ${SRCDIR}.Utilities.Patches.ansilib
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities.Patches 
 
-DDE:
+CallASWI:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
         @Access ${INSTDIR}.HardDisc4 /r
@@ -495,10 +565,10 @@ DDE:
         @Access ${INSTDIR}.HardDisc4.Utilities /r
         @${MKDIR} ${INSTDIR}.HardDisc4.Utilities.Patches
         @Access ${INSTDIR}.HardDisc4.Utilities.Patches /r
-        @${CD} ${SRCDIR}.Utilities.Patches.DDE
+        @${CD} ${SRCDIR}.Utilities.Patches.CallASWI
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities.Patches 
 
-PCEmPatch:
+SCSIDM:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
         @Access ${INSTDIR}.HardDisc4 /r
@@ -506,7 +576,18 @@ PCEmPatch:
         @Access ${INSTDIR}.HardDisc4.Utilities /r
         @${MKDIR} ${INSTDIR}.HardDisc4.Utilities.Patches
         @Access ${INSTDIR}.HardDisc4.Utilities.Patches /r
-        @${CD} ${SRCDIR}.Utilities.Patches.PCEmPatch
+        @${CD} ${SRCDIR}.Utilities.Patches.SCSIDM
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities.Patches 
+
+SSound:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities
+        @Access ${INSTDIR}.HardDisc4.Utilities /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities.Patches
+        @Access ${INSTDIR}.HardDisc4.Utilities.Patches /r
+        @${CD} ${SRCDIR}.Utilities.Patches.SSound
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities.Patches 
 
 SparkFS:
@@ -520,6 +601,26 @@ SparkFS:
         @${CD} ${SRCDIR}.Utilities.Patches.SparkFS
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities.Patches 
 
+TCP/IP:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities
+        @Access ${INSTDIR}.HardDisc4.Utilities /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities.Patches
+        @Access ${INSTDIR}.HardDisc4.Utilities.Patches /r
+        @${CD} ${SRCDIR}.Utilities.Patches.TCP/IP
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities.Patches 
+
+SaveCMOS:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities
+        @Access ${INSTDIR}.HardDisc4.Utilities /r
+        @${CD} ${SRCDIR}.Utilities.SaveCMOS
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities 
+
 T1ToFont:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.HardDisc4
@@ -527,6 +628,15 @@ T1ToFont:
         @${MKDIR} ${INSTDIR}.HardDisc4.Utilities
         @Access ${INSTDIR}.HardDisc4.Utilities /r
         @${CD} ${SRCDIR}.Printing.T1ToFont
+        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities 
+
+Verify:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.HardDisc4
+        @Access ${INSTDIR}.HardDisc4 /r
+        @${MKDIR} ${INSTDIR}.HardDisc4.Utilities
+        @Access ${INSTDIR}.HardDisc4.Utilities /r
+        @${CD} ${SRCDIR}.Utilities.Verify
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Utilities 
 
 FontPrint:
@@ -564,42 +674,6 @@ SlideShow:
         @Access ${INSTDIR}.HardDisc4.Images /r
         @${CD} ${SRCDIR}.Demos.SlideShow
         ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Images 
-
-Images:
-        @echo $@ ...
-        @${MKDIR} ${INSTDIR}.HardDisc4
-        @Access ${INSTDIR}.HardDisc4 /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Images
-        @Access ${INSTDIR}.HardDisc4.Images /r
-        @${CD} ${SRCDIR}.Demos.Images
-        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Images 
-
-Videos:
-        @echo $@ ...
-        @${MKDIR} ${INSTDIR}.HardDisc4
-        @Access ${INSTDIR}.HardDisc4 /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Video
-        @Access ${INSTDIR}.HardDisc4.Video /r
-        @${CD} ${SRCDIR}.Demos.Videos
-        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Video 
-
-Sounds:
-        @echo $@ ...
-        @${MKDIR} ${INSTDIR}.HardDisc4
-        @Access ${INSTDIR}.HardDisc4 /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Sound
-        @Access ${INSTDIR}.HardDisc4.Sound /r
-        @${CD} ${SRCDIR}.Demos.Sounds
-        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Sound INSTFLAG=all
-
-Tutorials:
-        @echo $@ ...
-        @${MKDIR} ${INSTDIR}.HardDisc4
-        @Access ${INSTDIR}.HardDisc4 /r
-        @${MKDIR} ${INSTDIR}.HardDisc4.Tutorials
-        @Access ${INSTDIR}.HardDisc4.Tutorials /r
-        @${CD} ${SRCDIR}.Demos.Tutorials
-        ${MAKE} INSTDIR=${INSTDIR}.HardDisc4.Tutorials 
 
 AudioDemos:
         @echo $@ ...

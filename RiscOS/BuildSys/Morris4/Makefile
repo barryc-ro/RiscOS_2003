@@ -9,6 +9,7 @@ RESDIR  = <resource$dir>.Resources
 MAKE    = @amu ${MFLAGS} RESDIR=${RESDIR}
 
 BUILD = \
+ UnSqzAIF \
  CDFSFiler \
  CDFS \
  Toshiba \
@@ -40,6 +41,7 @@ BUILD = \
  PDumperLJ \
  PDumperIW \
  PDumperDM \
+ PDumperCX \
  RemotePrinterSupport \
  PDumperSpt \
  PDriverPS \
@@ -59,6 +61,7 @@ BUILD = \
  Internet \
  MManager \
  AUNMsgs \
+ PCCardFS \
  BootCommands \
  DrawFile \
  ScreenModes \
@@ -66,6 +69,7 @@ BUILD = \
  DOSFS \
  Filer_Action \
  SharedCLibrary \
+ BatMgr \
  Percussion \
  StringLib \
  WaveSynth \
@@ -108,6 +112,7 @@ BUILD = \
  GameModes \
  Free \
  FPEmulator \
+ ITable \
  FontManager \
  FSLock \
  FilerSWIs \
@@ -130,6 +135,7 @@ BUILD = \
  ADFSFiler \
  TaskManager \
  PS2Driver \
+ Portable \
  Mouse \
  Desktop \
  WindowManager \
@@ -147,7 +153,6 @@ EXPORT = \
  OSLib \
  SCSIFS \
  SCSIDriver \
- Portable \
  HostFS \
  DDT \
  ARM3 \
@@ -188,12 +193,10 @@ dirs:
         ${MKDIR} <build$dir>.Export.Hdr.Global
         ${MKDIR} <build$dir>.Export.Hdr.Interface
         ${MKDIR} <build$dir>.Export.Lib
-        ${MKDIR} <messages$dir>.Resources
-        ${MKDIR} <messages$dir>.Resources.${LOCALE}
-        ${MKDIR} <messages$dir>.Resources.${LOCALE}.${SYSTEM}
-        ${MKDIR} <messages$dir>.Resources.${LOCALE}.${SYSTEM}.Resources
-        ${MKDIR} <messages$dir>.Resources.${LOCALE}.${SYSTEM}.Resources2
-        ${MKDIR} <messages$dir>.Resources.${LOCALE}.${SYSTEM}.Apps
+        ${MKDIR} <resource$dir>
+        ${MKDIR} <resource$dir>.Resources
+        ${MKDIR} <resource$dir>.Resources2
+        ${MKDIR} <resource$dir>.Apps
 
 #
 # Component rules:
@@ -230,11 +233,6 @@ DDT:
 HostFS:
         @echo $@ ...
         @${CD} ${SRCDIR}.Programmer.HostFS
-        ${MAKE}
-
-Portable:
-        @echo $@ ...
-        @${CD} ${SRCDIR}.OS_Core.HWSupport.Portable
         ${MAKE}
 
 SCSIDriver:
@@ -326,6 +324,13 @@ Mouse:
         @${MKDIR} ${INSTDIR}.ROM.Morris
         @${CD} ${SRCDIR}.OS_Core.HWSupport.Mouse
         ${MAKE} INSTDIR=${INSTDIR}.ROM.Morris
+
+Portable:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.ROM
+        @${MKDIR} ${INSTDIR}.ROM.OS_Core
+        @${CD} ${SRCDIR}.OS_Core.HWSupport.Portable
+        ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
 
 PS2Driver:
         @echo $@ ...
@@ -479,6 +484,13 @@ FontManager:
         @${MKDIR} ${INSTDIR}.ROM
         @${MKDIR} ${INSTDIR}.ROM.OS_Core
         @${CD} ${SRCDIR}.OS_Core.Video.Render.Fonts.Manager
+        ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
+
+ITable:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.ROM
+        @${MKDIR} ${INSTDIR}.ROM.OS_Core
+        @${CD} ${SRCDIR}.OS_Core.Video.Render.Fonts.ITable
         ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
 
 FPEmulator:
@@ -775,6 +787,13 @@ Percussion:
         @${CD} ${SRCDIR}.OS_Core.HWSupport.Sound.Voices.Percussion
         ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
 
+BatMgr:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.ROM
+        @${MKDIR} ${INSTDIR}.ROM.OS_Core
+        @${CD} ${SRCDIR}.OS_Core.HWSupport.BatMgr
+        ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
+
 SharedCLibrary:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.ROM
@@ -822,6 +841,13 @@ BootCommands:
         @${MKDIR} ${INSTDIR}.ROM
         @${MKDIR} ${INSTDIR}.ROM.OS_Core
         @${CD} ${SRCDIR}.OS_Core.BootCmds
+        ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
+
+PCCardFS:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.ROM
+        @${MKDIR} ${INSTDIR}.ROM.OS_Core
+        @${CD} ${SRCDIR}.OS_Core.FileSys.PCCardFS.PCCardFS
         ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
 
 AUNMsgs:
@@ -955,6 +981,13 @@ RemotePrinterSupport:
         @${MKDIR} ${INSTDIR}.ROM
         @${MKDIR} ${INSTDIR}.ROM.Printing
         @${CD} ${SRCDIR}.Printing.Printers.Modules.RemPrnSpt
+        ${MAKE} INSTDIR=${INSTDIR}.ROM.Printing
+
+PDumperCX:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.ROM
+        @${MKDIR} ${INSTDIR}.ROM.Printing
+        @${CD} ${SRCDIR}.Printing.Printers.PDumpers
         ${MAKE} INSTDIR=${INSTDIR}.ROM.Printing
 
 PDumperDM:
@@ -1173,4 +1206,11 @@ CDFSFiler:
         @${MKDIR} ${INSTDIR}.ROM.CD
         @${CD} ${SRCDIR}.OS_Core.FileSys.CDFS.CDFSFiler
         ${MAKE} INSTDIR=${INSTDIR}.ROM.CD
+
+UnSqzAIF:
+        @echo $@ ...
+        @${MKDIR} ${INSTDIR}.ROM
+        @${MKDIR} ${INSTDIR}.ROM.OS_Core
+        @${CD} ${SRCDIR}.OS_Core.HWSupport.UnSqzAIF
+        ${MAKE} INSTDIR=${INSTDIR}.ROM.OS_Core
 
