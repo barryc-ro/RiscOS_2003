@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 01-Feb-96  JRH          Created.
+# 15-Jun-00  BJGA         Changed to use objasm.
 #
 
 #
