@@ -1,151 +1,42 @@
-# Makefile for DCS
+# Makefile for a Toolbox Object module
 #
-# ***********************************
-# ***    C h a n g e   L i s t    ***
-# ***********************************
-# Date       Name   Description
-# ----       ----   -----------
-# 06-Jan-94  AMcC   Created
-# 04-Feb-98  SNB    Updated to allow RAM builds
-#
-
+# $Id$
 #
 # Component specific options:
 #
-COMPONENT  = DCS
-ROM_MODULE = aof.${COMPONENT}
-RAM_MODULE = rm.${COMPONENT}
+RAMRESOURCES = o.msgs
+
+COMMON_OBJ = o.Modhdr_NoD o.create o.delete o.events o.getstate\
+ o.hide o.miscop o.show o.task
+
+ROM_OBJS = o.mainROM ${COMMON_OBJ}
+
+RAM_OBJS = o.main ${RAMRESOURCES} ${COMMON_OBJ}
+
+DBG_OBJS = od.main ${RAMRESOURCES} o.Modhdr od.create od.delete od.events od.getstate\
+ od.hide od.miscop od.show od.task
 
 #
-# Export Paths for Messages module
+# Get main rules
 #
-RESDIR = <resource$dir>.Resources2
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-TLD	= tlink
-MODSQZ  = modsqz
-RM      = remove
-WIPE    = -wipe
-
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
-
-CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffa -zps1 ${DFLAGS}
-DFLAGS   = -D${SYSTEM}
-ROMFLAGS = -DROM
-INCLUDES = -I<Lib$Dir>.tboxlibint.,<Lib$Dir>.tboxlibs:,C:
+include C:tboxlibint.TboxMake
 
 #
-# Libraries
+# Module specific rules:
 #
-ANSILIB   = CLib:o.ansilib
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.abssym
-TBOXLIB   = <Lib$Dir>.tboxlibint.o.tboxlibm
-
-OBJS =\
- o.ModNoDebug\
- o.create\
- o.delete\
- o.events\
- o.getstate\
- o.hide\
- o.main\
- o.miscop\
- o.show\
- o.task
-
-RAM_OBJS =\
- o.ModNoDebug\
- o.create\
- o.delete\
- o.events\
- o.getstate\
- o.hide\
- o.mainRAM\
- o.miscop\
- o.show\
- o.task
-
-DCSRESF=o.res_dcs
-DCSMESS=o.msgs_dcs
-QUITRESF=o.res_quit
-QUITMESS=o.msgs_quit
-
-ALLRESOURCES=${DCSRESF} ${DCSMESS} ${QUITRESF} ${QUITMESS}
-
-
-#
-# Rule patterns
-#
-.c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -depend !Depend -p -o $@ $<
-
-#
-# Main rules:
-#
-#
-all: ${RAM_MODULE}
-        @echo ${COMPONENT}: Module built (RAM)
-
-rom: ${ROM_MODULE}
-        @echo ${COMPONENT}: Module built (ROM)
-
-install_rom: ${ROM_MODULE}
-        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: Module installed (ROM)
-
-resources: Resources.${LOCALE}.DCS.Messages Resources.${LOCALE}.DCS.Res Resources.${LOCALE}.Quit.Messages Resources.${LOCALE}.Quit.Res
+resources: LocalRes:DCS.Messages LocalREs:DCS.Res LocalRes:Quit.Messages LocalRes:Quit.Res
         ${CP} Resources.${LOCALE}.*   ${RESDIR}.*  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
-clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} aof ${WFLAGS}
-        ${WIPE} rm ${WFLAGS}
-        ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
+${RAMRESOURCES}: LocalRes:DCS.Messages LocalRes:DCS.Res LocalRes:Quit.Messages LocalRes:Quit.Res
+        resgen res_files $@ \
+          LocalRes:DCS.Res Resources.DCS.Res \
+          LocalRes:DCS.Messages Resources.DCS.Messages \
+          LocalRes:Quit.Res Resources.Quit.Res \
+          LocalRes:Quit.Messages Resources.Quit.Messages
+
+clean: toolbox-clean
         @echo ${COMPONENT}: cleaned
-
-${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
-        ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
-
-# final link for ROM Image (using given base address)
-rom_link:
-        ${MKDIR} linked
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
-
-${DCSRESF}: @.Resources.${LOCALE}.DCS.Res
-	resgen dcsres_file ${DCSRESF} Resources.${LOCALE}.DCS.Res Resources.DCS.Res
-${DCSMESS}: @.Resources.${LOCALE}.DCS.Messages
-	resgen dcsmess_file ${DCSMESS} Resources.${LOCALE}.DCS.Messages Resources.DCS.Messages
-${QUITRESF}: @.Resources.${LOCALE}.Quit.Res
-	resgen quitres_file ${QUITRESF} Resources.${LOCALE}.Quit.Res Resources.Quit.Res
-${QUITMESS}: @.Resources.${LOCALE}.Quit.Messages
-	resgen quitmess_file ${QUITMESS} Resources.${LOCALE}.Quit.Messages Resources.Quit.Messages
-
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${ALLRESOURCES} ${CLIB}
-	${mkdir} rm
-        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${ALLRESOURCES} ${CLIB}
-        ${MODSQZ} $@
-        Access $@ RW/R
-
-o.mainRAM: main.c
-	$(CC) ${CFLAGS} -o $@ main.c
-
-
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
