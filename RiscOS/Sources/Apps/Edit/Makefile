@@ -64,6 +64,7 @@ DFLAGS     =
 FILES =\
  ${RDIR}.!Boot\
  ${RDIR}.!Run\
+ ${RDIR}.!Sprites22\
  abs.!RunImage\
  ${RDIR}.Export\
  ${LDIR}!Help\
@@ -98,16 +99,18 @@ rom: ${ROM_MODULE}
 
 install: ${FILES}
         ${MKDIR} ${INSTDIR}
-        ${CP} ${RDIR}.!Boot        ${INSTDIR}.!Boot     ${CPFLAGS}
-        ${CP} ${LDIR}!Help         ${INSTDIR}.!Help     ${CPFLAGS}
-        ${CP} ${RDIR}.!Run         ${INSTDIR}.!Run      ${CPFLAGS}
-        ${CP} abs.!RunImage        ${INSTDIR}.!RunImage ${CPFLAGS}
-        ${CP} ${RDIR}.Export       ${INSTDIR}.Export    ${CPFLAGS}
-        ${CP} ${MSGS}              ${INSTDIR}.Messages  ${CPFLAGS}
-        ${CP} ${LDIR}Templates     ${INSTDIR}.Templates ${CPFLAGS}
+        ${CP} ${RDIR}.!Boot        ${INSTDIR}.!Boot      ${CPFLAGS}
+        ${CP} ${LDIR}!Help         ${INSTDIR}.!Help      ${CPFLAGS}
+        ${CP} ${RDIR}.!Run         ${INSTDIR}.!Run       ${CPFLAGS}
+        ${CP} ${RDIR}.!Sprites22   ${INSTDIR}.!Sprites22 ${CPFLAGS}
+        ${CP} abs.!RunImage        ${INSTDIR}.!RunImage  ${CPFLAGS}
+        ${CP} ${RDIR}.Export       ${INSTDIR}.Export     ${CPFLAGS}
+        ${CP} ${MSGS}              ${INSTDIR}.Messages   ${CPFLAGS}
+        ${CP} ${LDIR}Templates     ${INSTDIR}.Templates  ${CPFLAGS}
         Access ${INSTDIR}.!Boot      lr/r
         Access ${INSTDIR}.!Help      lr/r
         Access ${INSTDIR}.!Run       lr/r
+        Access ${INSTDIR}.!Sprites22 lr/r
         Access ${INSTDIR}.!RunImage  lr/r
         Access ${INSTDIR}.Export     lr/r
         Access ${INSTDIR}.Messages   lr/r
@@ -121,11 +124,12 @@ install_rom: ${ROM_MODULE}
 resources: ${MSGS}
         ${MKDIR} ${RESDIR}
         ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!Boot     ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} ${LDIR}!Help      ${RESAPP}.!Help ${CPFLAGS}
-        ${CP} ${RDIR}.ROM.!Run  ${RESAPP}.!Run  ${CPFLAGS}
-        ${CP} ${MSGS}           ${RESDIR}.Messages ${CPFLAGS}
-        ${CP} ${LDIR}Templates  ${RESDIR}.Templates ${CPFLAGS}
+        ${CP} ${RDIR}.!Boot      ${RESAPP}.!Boot      ${CPFLAGS}
+        ${CP} ${LDIR}!Help       ${RESAPP}.!Help      ${CPFLAGS}
+        ${CP} ${RDIR}.ROM.!Run   ${RESAPP}.!Run       ${CPFLAGS}
+        ${CP} ${RDIR}.!Sprites22 ${RESAPP}.!Sprites22 ${CPFLAGS}
+        ${CP} ${MSGS}            ${RESDIR}.Messages   ${CPFLAGS}
+        ${CP} ${LDIR}Templates   ${RESDIR}.Templates  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
