@@ -116,3 +116,4 @@ o.chrontel:	C:h.kernel
 o.chrontel:	C:h.swis
 o.chrontel:	h.chrontel
 o.chrontel:	h.iomd
+o.chrontel:	h.nvram
