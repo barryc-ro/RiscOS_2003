@@ -63,25 +63,3 @@ s.IntHelp: IntHelpSrc IntHelpBody
         ${AS} -depend !Depend -Stamp -quit -To $@ -From IntHelpSrc
 
 # Dynamic dependencies:
-rm.Inter: s.InterBody
-rm.Inter: Hdr:ListOpts
-rm.Inter: Hdr:Macros
-rm.Inter: Hdr:System
-rm.Inter: Hdr:SWIs
-rm.Inter: Hdr:CPU.Generic26
-rm.Inter: Hdr:IO.GenericIO
-rm.Inter: Hdr:RISCOS
-rm.Inter: Hdr:CMOS
-rm.Inter: Hdr:ModHand
-rm.Inter: Hdr:Services
-rm.Inter: Hdr:Proc
-rm.Inter: Hdr:FSNumbers
-rm.Inter: Hdr:NewErrors
-rm.Inter: Hdr:MsgTrans
-rm.Inter: Hdr:ResourceFS
-rm.Inter: s.IntHelpTok
-rm.Inter: Hdr:Tokens
-rm.Inter: s.InterFonts
-s.IntHelp: IntHelpBod
-s.IntHelp: Hdr:ListOpts
-s.IntHelp: Hdr:ModHand

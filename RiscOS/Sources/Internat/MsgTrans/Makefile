@@ -64,24 +64,3 @@ ${EXP_HDR}.MsgMenus: hdr.MsgMenus
         ${CP} hdr.MsgMenus $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.MsgTrans: Hdr:ListOpts
-rm.MsgTrans: Hdr:Macros
-rm.MsgTrans: Hdr:Symbols
-rm.MsgTrans: Hdr:System
-rm.MsgTrans: Hdr:SWIs
-rm.MsgTrans: Hdr:CPU.Generic26
-rm.MsgTrans: Hdr:IO.GenericIO
-rm.MsgTrans: Hdr:RISCOS
-rm.MsgTrans: Hdr:ModHand
-rm.MsgTrans: Hdr:FSNumbers
-rm.MsgTrans: Hdr:HighFSI
-rm.MsgTrans: Hdr:NewErrors
-rm.MsgTrans: Hdr:WimpSpace
-rm.MsgTrans: Hdr:Messages
-rm.MsgTrans: Hdr:Proc
-rm.MsgTrans: Hdr:Services
-rm.MsgTrans: Hdr:MsgTrans
-rm.MsgTrans: Hdr:NDRDebug
-rm.MsgTrans: Hdr:PublicWS
-rm.MsgTrans: Hdr:Squash
-rm.MsgTrans: Version

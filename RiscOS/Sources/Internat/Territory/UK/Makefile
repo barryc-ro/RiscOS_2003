@@ -52,31 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.UK: Hdr:ListOpts
-rm.UK: Hdr:Macros
-rm.UK: Hdr:System
-rm.UK: Hdr:SWIs
-rm.UK: Hdr:CPU.Generic26
-rm.UK: Hdr:IO.GenericIO
-rm.UK: Hdr:RISCOS
-rm.UK: Hdr:ModHand
-rm.UK: Hdr:Services
-rm.UK: Hdr:FSNumbers
-rm.UK: Hdr:NewErrors
-rm.UK: Hdr:Variables
-rm.UK: Hdr:Proc
-rm.UK: Hdr:Messages
-rm.UK: Hdr:CMOS
-rm.UK: Hdr:MsgTrans
-rm.UK: Hdr:Territory
-rm.UK: Hdr:NdrDebug
-rm.UK: Version
-rm.UK: s.ModHead
-rm.UK: s.Entries
-rm.UK: s.TimeZones
-rm.UK: s.Symbols
-rm.UK: s.Calendar
-rm.UK: s.Tables
-rm.UK: s.DateTime
-rm.UK: s.Transform
-rm.UK: s.tail

@@ -52,29 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.RAMFSFiler: Hdr:ListOpts
-rm.RAMFSFiler: Hdr:Macros
-rm.RAMFSFiler: Hdr:System
-rm.RAMFSFiler: Hdr:SWIs
-rm.RAMFSFiler: Hdr:CPU.Generic26
-rm.RAMFSFiler: Hdr:IO.GenericIO
-rm.RAMFSFiler: Hdr:RISCOS
-rm.RAMFSFiler: Hdr:ModHand
-rm.RAMFSFiler: Hdr:FSNumbers
-rm.RAMFSFiler: Hdr:HighFSI
-rm.RAMFSFiler: Hdr:NewErrors
-rm.RAMFSFiler: Hdr:Wimp
-rm.RAMFSFiler: Hdr:WimpSpace
-rm.RAMFSFiler: Hdr:Messages
-rm.RAMFSFiler: Hdr:Sprite
-rm.RAMFSFiler: Hdr:VduExt
-rm.RAMFSFiler: Hdr:Proc
-rm.RAMFSFiler: Hdr:Services
-rm.RAMFSFiler: Hdr:Variables
-rm.RAMFSFiler: Hdr:MsgTrans
-rm.RAMFSFiler: Hdr:MsgMenus
-rm.RAMFSFiler: Hdr:ResourceFS
-rm.RAMFSFiler: Version
-rm.RAMFSFiler: Hdr:HostFS
-rm.RAMFSFiler: Hdr:Debug
-rm.RAMFSFiler: s.MsgCode

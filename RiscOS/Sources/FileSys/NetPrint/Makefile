@@ -59,32 +59,3 @@ s.HelpTokens: ${TOKENS} HelpTexts
         ${TOKENISE} ${TOKENS} HelpTexts $@
 
 # Dynamic dependencies:
-rm.NetPrint: s.Module
-rm.NetPrint: Hdr:ListOpts
-rm.NetPrint: Hdr:Macros
-rm.NetPrint: Hdr:System
-rm.NetPrint: Hdr:SWIs
-rm.NetPrint: Hdr:CPU.Generic26
-rm.NetPrint: Hdr:IO.GenericIO
-rm.NetPrint: Hdr:RISCOS
-rm.NetPrint: Hdr:CMOS
-rm.NetPrint: Hdr:ModHand
-rm.NetPrint: Hdr:Services
-rm.NetPrint: Hdr:Econet
-rm.NetPrint: Hdr:LowFSi
-rm.NetPrint: Hdr:FSNumbers
-rm.NetPrint: Hdr:HighFSI
-rm.NetPrint: Hdr:Debug
-rm.NetPrint: Hdr:NewErrors
-rm.NetPrint: Hdr:Tokens
-rm.NetPrint: Hdr:MsgTrans
-rm.NetPrint: Hdr:Hourglass
-rm.NetPrint: Hdr:Territory
-rm.NetPrint: Hdr:Symbols
-rm.NetPrint: Hdr:Proc
-rm.NetPrint: Hdr:HostFS
-rm.NetPrint: Time+Date
-rm.NetPrint: s.Interface
-rm.NetPrint: s.Commands
-rm.NetPrint: s.HelpTokens
-rm.NetPrint: s.FileSystem

@@ -52,31 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.USA: Hdr:ListOpts
-rm.USA: Hdr:Macros
-rm.USA: Hdr:System
-rm.USA: Hdr:SWIs
-rm.USA: Hdr:CPU.Generic26
-rm.USA: Hdr:IO.GenericIO
-rm.USA: Hdr:RISCOS
-rm.USA: Hdr:ModHand
-rm.USA: Hdr:Services
-rm.USA: Hdr:FSNumbers
-rm.USA: Hdr:NewErrors
-rm.USA: Hdr:Variables
-rm.USA: Hdr:Proc
-rm.USA: Hdr:Messages
-rm.USA: Hdr:CMOS
-rm.USA: Hdr:MsgTrans
-rm.USA: Hdr:Territory
-rm.USA: Hdr:NdrDebug
-rm.USA: Version
-rm.USA: s.ModHead
-rm.USA: s.Entries
-rm.USA: s.TimeZones
-rm.USA: s.Symbols
-rm.USA: s.Calendar
-rm.USA: s.Tables
-rm.USA: s.DateTime
-rm.USA: s.Transform
-rm.USA: s.tail

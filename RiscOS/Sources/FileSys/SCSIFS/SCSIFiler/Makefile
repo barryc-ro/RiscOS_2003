@@ -55,27 +55,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.SCSIFiler: hdr:ListOpts
-rm.SCSIFiler: hdr:Macros
-rm.SCSIFiler: hdr:System
-rm.SCSIFiler: Hdr:SWIs
-rm.SCSIFiler: Hdr:CPU.Generic26
-rm.SCSIFiler: Hdr:IO.GenericIO
-rm.SCSIFiler: Hdr:RISCOS
-rm.SCSIFiler: hdr:ModHand
-rm.SCSIFiler: hdr:FSNumbers
-rm.SCSIFiler: hdr:HighFSI
-rm.SCSIFiler: hdr:NewErrors
-rm.SCSIFiler: hdr:Wimp
-rm.SCSIFiler: hdr:WimpSpace
-rm.SCSIFiler: hdr:Messages
-rm.SCSIFiler: hdr:Sprite
-rm.SCSIFiler: hdr:VduExt
-rm.SCSIFiler: hdr:Proc
-rm.SCSIFiler: hdr:Services
-rm.SCSIFiler: hdr:SCSIFS
-rm.SCSIFiler: hdr:FileCore
-rm.SCSIFiler: Version
-rm.SCSIFiler: hdr:Debug
-rm.SCSIFiler: hdr:HostDebug
-rm.SCSIFiler: s.format

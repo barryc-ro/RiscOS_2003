@@ -53,37 +53,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.ADFSFiler: Hdr:ListOpts
-rm.ADFSFiler: Hdr:Macros
-rm.ADFSFiler: Hdr:System
-rm.ADFSFiler: Hdr:SWIs
-rm.ADFSFiler: Hdr:CPU.Generic26
-rm.ADFSFiler: Hdr:IO.GenericIO
-rm.ADFSFiler: Hdr:RISCOS
-rm.ADFSFiler: Hdr:ModHand
-rm.ADFSFiler: Hdr:CMOS
-rm.ADFSFiler: Hdr:FSNumbers
-rm.ADFSFiler: Hdr:HighFSI
-rm.ADFSFiler: Hdr:NewErrors
-rm.ADFSFiler: Hdr:Wimp
-rm.ADFSFiler: Hdr:WimpSpace
-rm.ADFSFiler: Hdr:Messages
-rm.ADFSFiler: Hdr:Sprite
-rm.ADFSFiler: Hdr:VduExt
-rm.ADFSFiler: Hdr:Variables
-rm.ADFSFiler: Hdr:Proc
-rm.ADFSFiler: Hdr:Services
-rm.ADFSFiler: Hdr:MsgTrans
-rm.ADFSFiler: Hdr:MsgMenus
-rm.ADFSFiler: Hdr:ADFS
-rm.ADFSFiler: Hdr:Territory
-rm.ADFSFiler: Hdr:FileCore
-rm.ADFSFiler: Hdr:MultiFS
-rm.ADFSFiler: Hdr:UpCall
-rm.ADFSFiler: Hdr:ResourceFS
-rm.ADFSFiler: Hdr:ShareD
-rm.ADFSFiler: Hdr:ExtraLong
-rm.ADFSFiler: Version
-rm.ADFSFiler: Hdr:NdrDebug
-rm.ADFSFiler: s.Format
-rm.ADFSFiler: s.Backup

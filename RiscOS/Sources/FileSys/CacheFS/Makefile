@@ -56,28 +56,3 @@ CheckIt: s.CheckIt
         SetType CheckIt Utility
 
 # Dynamic dependencies:
-rm.CacheFS: s.Declare
-rm.CacheFS: Hdr:ListOpts
-rm.CacheFS: Hdr:Macros
-rm.CacheFS: Hdr:System
-rm.CacheFS: Hdr:SWIs
-rm.CacheFS: Hdr:CPU.Generic26
-rm.CacheFS: Hdr:IO.GenericIO
-rm.CacheFS: Hdr:RISCOS
-rm.CacheFS: Hdr:ModHand
-rm.CacheFS: Hdr:Services
-rm.CacheFS: Hdr:CMOS
-rm.CacheFS: Hdr:Proc
-rm.CacheFS: Hdr:FSNumbers
-rm.CacheFS: Hdr:HighFSI
-rm.CacheFS: Hdr:LowFSi
-rm.CacheFS: Hdr:NewErrors
-rm.CacheFS: Hdr:Variables
-rm.CacheFS: Hdr:Wimp
-rm.CacheFS: Hdr:UpCall
-rm.CacheFS: Hdr:MsgTrans
-rm.CacheFS: Version
-rm.CacheFS: Hdr:Trace
-rm.CacheFS: s.MyMacros
-rm.CacheFS: s.MoveBytes
-rm.CacheFS: s.Test

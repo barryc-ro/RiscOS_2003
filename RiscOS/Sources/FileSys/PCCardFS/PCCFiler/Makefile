@@ -69,34 +69,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.PCCFiler: Hdr:ListOpts
-rm.PCCFiler: Hdr:Macros
-rm.PCCFiler: Hdr:System
-rm.PCCFiler: Hdr:SWIs
-rm.PCCFiler: Hdr:CPU.Generic26
-rm.PCCFiler: Hdr:IO.GenericIO
-rm.PCCFiler: Hdr:RISCOS
-rm.PCCFiler: Hdr:ModHand
-rm.PCCFiler: Hdr:Wimp
-rm.PCCFiler: Hdr:WimpSpace
-rm.PCCFiler: Hdr:Messages
-rm.PCCFiler: Hdr:Sprite
-rm.PCCFiler: Hdr:VduExt
-rm.PCCFiler: Hdr:NdrDebug
-rm.PCCFiler: Hdr:HostFS
-rm.PCCFiler: Hdr:PCMCIA
-rm.PCCFiler: Hdr:PCCardFS
-rm.PCCFiler: Hdr:MsgTrans
-rm.PCCFiler: Hdr:MsgMenus
-rm.PCCFiler: Hdr:Free
-rm.PCCFiler: Hdr:Hourglass
-rm.PCCFiler: Version
-rm.PCCFiler: s.ModHead
-rm.PCCFiler: s.Service
-rm.PCCFiler: s.StarCmd
-rm.PCCFiler: s.Wimpcore
-rm.PCCFiler: s.events
-rm.PCCFiler: s.fsops
-rm.PCCFiler: s.Free
-rm.PCCFiler: s.Format
-rm.PCCFiler: s.Tail

@@ -65,23 +65,3 @@ ${EXP_HDR}.CDFS: hdr.CDFS
         ${CP} hdr.CDFS $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.CDFS: hdr.Hashes
-rm.CDFS: hdr.Macros
-rm.CDFS: Version
-rm.CDFS: s.Args
-rm.CDFS: s.Strings
-rm.CDFS: s.Misc
-rm.CDFS: s.DiscOp
-rm.CDFS: s.FileMan
-rm.CDFS: s.Filer
-rm.CDFS: s.Directory
-rm.CDFS: s.EntryFile
-rm.CDFS: s.Open
-rm.CDFS: s.SWI
-rm.CDFS: s.Error
-rm.CDFS: s.Tables
-rm.CDFS: s.StarHelp
-rm.CDFS: s.WordTable2
-rm.CDFS: s.WordTable3
-rm.CDFS: s.Sprites
-rm.CDFS: s.Variables

@@ -58,22 +58,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.DynAreas: Version
-rm.DynAreas: Hdr:ListOpts
-rm.DynAreas: Hdr:Macros
-rm.DynAreas: Hdr:System
-rm.DynAreas: Hdr:SWIs
-rm.DynAreas: Hdr:CPU.Generic26
-rm.DynAreas: Hdr:IO.GenericIO
-rm.DynAreas: Hdr:RISCOS
-rm.DynAreas: Hdr:CMOS
-rm.DynAreas: Hdr:ModHand
-rm.DynAreas: Hdr:Services
-rm.DynAreas: Hdr:FSNumbers
-rm.DynAreas: Hdr:FileTypes
-rm.DynAreas: Hdr:NewErrors
-rm.DynAreas: Hdr:Variables
-rm.DynAreas: Hdr:Messages
-rm.DynAreas: Hdr:Proc
-rm.DynAreas: Hdr:MsgTrans
-rm.DynAreas: Hdr:NDRDebug

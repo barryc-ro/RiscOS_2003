@@ -52,26 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.ResFiler: Hdr:ListOpts
-rm.ResFiler: Hdr:Macros
-rm.ResFiler: Hdr:System
-rm.ResFiler: Hdr:SWIs
-rm.ResFiler: Hdr:CPU.Generic26
-rm.ResFiler: Hdr:IO.GenericIO
-rm.ResFiler: Hdr:RISCOS
-rm.ResFiler: Hdr:ModHand
-rm.ResFiler: Hdr:CMOS
-rm.ResFiler: Hdr:FSNumbers
-rm.ResFiler: Hdr:NewErrors
-rm.ResFiler: Hdr:Wimp
-rm.ResFiler: Hdr:WimpSpace
-rm.ResFiler: Hdr:Messages
-rm.ResFiler: Hdr:Sprite
-rm.ResFiler: Hdr:VduExt
-rm.ResFiler: Hdr:Proc
-rm.ResFiler: Hdr:Services
-rm.ResFiler: Hdr:Variables
-rm.ResFiler: Hdr:MsgTrans
-rm.ResFiler: Hdr:MsgMenus
-rm.ResFiler: Hdr:ResourceFS
-rm.ResFiler: Version

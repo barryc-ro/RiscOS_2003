@@ -55,20 +55,3 @@ $(TARGET): $(SOURCE)
         $(AS) $(ASFLAGS) $(SOURCE)
 
 # Dynamic dependencies:
-rm.Obey: hdr:ListOpts
-rm.Obey: hdr:Macros
-rm.Obey: hdr:System
-rm.Obey: Hdr:SWIs
-rm.Obey: Hdr:CPU.Generic26
-rm.Obey: Hdr:IO.GenericIO
-rm.Obey: Hdr:RISCOS
-rm.Obey: hdr:ModHand
-rm.Obey: hdr:Services
-rm.Obey: hdr:UpCall
-rm.Obey: hdr:FSNumbers
-rm.Obey: hdr:HighFSI
-rm.Obey: hdr:NewErrors
-rm.Obey: hdr:EnvNumbers
-rm.Obey: hdr:NdrDebug
-rm.Obey: hdr:MsgTrans
-rm.Obey: Version

@@ -68,31 +68,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.RAMFS: Version
-rm.RAMFS: Hdr:ListOpts
-rm.RAMFS: Hdr:Macros
-rm.RAMFS: Hdr:System
-rm.RAMFS: Hdr:SWIs
-rm.RAMFS: Hdr:CPU.Generic26
-rm.RAMFS: Hdr:IO.GenericIO
-rm.RAMFS: Hdr:RISCOS
-rm.RAMFS: Hdr:Services
-rm.RAMFS: Hdr:ModHand
-rm.RAMFS: Hdr:UpCall
-rm.RAMFS: Hdr:Tokens
-rm.RAMFS: Hdr:Proc
-rm.RAMFS: Hdr:MsgTrans
-rm.RAMFS: Hdr:FileCore
-rm.RAMFS: Hdr:FSNumbers
-rm.RAMFS: Hdr:NewErrors
-rm.RAMFS: s.MyMacros
-rm.RAMFS: s.Defns
-rm.RAMFS: s.DebugOpts
-rm.RAMFS: s.Header
-rm.RAMFS: s.Errors
-rm.RAMFS: s.RamFS00
-rm.RAMFS: s.RamFS05
-rm.RAMFS: s.RamFS15
-rm.RAMFS: s.TokenHelp
-rm.RAMFS: s.RamFS50
-rm.RAMFS: s.MsgCode

@@ -70,31 +70,3 @@ ${TOKENISED}: ${MESSAGES}
 #	${TOKENISE} ${TOKENFILE} ${MESSAGES} ${TOKENISED}
 
 # Dynamic dependencies:
-rm.SACron: s.init
-rm.SACron: Hdr:ListOpts
-rm.SACron: Hdr:NdrDebug
-rm.SACron: Hdr:Macros
-rm.SACron: Hdr:System
-rm.SACron: Hdr:SWIs
-rm.SACron: Hdr:CPU.Generic26
-rm.SACron: Hdr:IO.GenericIO
-rm.SACron: Hdr:RISCOS
-rm.SACron: Hdr:ModHand
-rm.SACron: Hdr:Symbols
-rm.SACron: Hdr:Proc
-rm.SACron: Hdr:Messages
-rm.SACron: Hdr:ResourceFS
-rm.SACron: Hdr:MsgTrans
-rm.SACron: Hdr:FSNumbers
-rm.SACron: Hdr:NewErrors
-rm.SACron: Hdr:Territory
-rm.SACron: Hdr:Debug
-rm.SACron: Version
-rm.SACron: s.error
-rm.SACron: s.main
-rm.SACron: s.swis
-rm.SACron: s.internat
-rm.SACron: s.commands
-rm.SACron: s.schedule
-rm.SACron: s.callback
-rm.SACron: s.execute
