@@ -20,11 +20,11 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
-WIPE    = wipe
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
+WFLAGS  = ~cr~v
 
 TOKENISE = tokenise
 TOKENS   = Hdr:Tokens
@@ -51,9 +51,7 @@ install_rom: $(TARGET)
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} rm.${MACHINE} ${WFLAGS}
-        ${RM} rm.${MACHINE}
-        ${RM} rm
+        ${WIPE} rm ${WFLAGS}
         $(RM) $(TARGET)
         $(RM) TokHelpSrc
         @echo ${COMPONENT}: cleaned

@@ -6,7 +6,7 @@
 ;               Tim Dobson (Adjusting headers, ARM600 variant)
 ;               Alan Glover (fixes/enhancements, ARM6/ARM7 instructions)
 ;               William Turner (StrongARM compatibility)
-;               Kevin Bracey (Architecture 4 instructions, fixes)
+;               Kevin Bracey (ARMv4+5, Thumb, fixes/enhancements, 32-bit)
 
 ; 1.18  SKS     Fixed disassembly of #xx,yy operands
 ; 1.19  SKS     Fixed disassembly of LSR #32, ASR #32
@@ -161,12 +161,24 @@
 ;                        and use of lr and pc. Addresses are not wrapped
 ;                        to 64M. This makes sense for our 32-bit ARM in 26-bit
 ;                        mode.
+; 1.57-1.59              Build changes only.
+; 1.60  KJB 20-Apr-00    32-bit compatibility added.
+;                        New *ShowFPRegs command.
+;                        Added ARMv5 instructions (BLX, CLZ, BKPT, CDP2 et al)
+;                        Handling of instruction extension space adjusted as
+;                        per ARMv4.
+;                        Fixed some Thumb instructions.
+;                        Added "info" form of LDC and STC
+;                        NV condition code is now undefined, except for the
+;                        new instructions using it.
+;
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
         GET     Hdr:ListOpts
         GET     Hdr:Macros
         GET     Hdr:System
         GET     Hdr:Machine.<Machine>
+        GET     Hdr:PublicWS
         GET     Hdr:ModHand
         GET     Hdr:Services
         GET     Hdr:FSNumbers
@@ -176,6 +188,8 @@
         GET     Hdr:VduExt
         GET     Hdr:Tokens
         GET     Hdr:MsgTrans
+        GET     Hdr:FPEmulator
+        GET     Hdr:CPU.FPA
 
         GET     Hdr:Debugger
 
@@ -183,27 +197,26 @@
 
         GET     Hdr:Debug
 
-        GBLL    debug
-debug   SETL    False
-;debug   SETL    True
+                GBLL    debug
+debug           SETL    False
 
-        GBLL    rp0512
-rp0512  SETL    False ;False = do not implement RP0512 bug fix coding
+                GBLL    national
+national        SETL    False
 
-        GBLL    Addr26
-Addr26  SETL    True ; true for 26 bit wrap on addresses
+                GBLL    StrongARM
+StrongARM       SETL    True
 
-        GBLL    national
-national SETL   False
+                GBLL    WarnSArev2
+WarnSArev2      SETL    False           ; Warn about hitting the SA revision 2 STM^ bug
 
-	GBLL	StrongARM
-StrongARM SETL  True
+                GBLL    WarnARMv5
+WarnARMv5       SETL    True            ; Indicate ARMv5 or later instructions
 
-	GBLL	WarnSArev2
-WarnSArev2	SETL False	; Warn about hitting the SA revision 2 STM^ bug
+                GBLL    Thumb
+Thumb           SETL    True
 
-	GBLL	Thumb
-Thumb	SETL	True
+                GBLL    CirrusDSP
+CirrusDSP       SETL    False
 
 
 ; Continue not up to much
@@ -224,8 +237,9 @@ BreakCodeEnd    #       0               ; End of copied area
 ; Areas accessed pc relative by relocated breakpoint code
 
 TrapStore       #       4               ; Store for breakpoint id
-Registers       #       4*16            ; Register dump area
+Registers       #       4*17            ; Register dump area
 pc_register     *       Registers + 4*15 ; dumped pc
+psr_register    *       Registers + 4*16 ; dumped psr
 r12Store        #       4               ; r12 for breakpoint code
 JumpStore       #       4               ; address of breakpoint code in ROM
 
@@ -247,15 +261,17 @@ OldThumbInst	#	4		; last Thumb instruction disassembled
 MessageFile_Block #     16              ; File handle for MessageTrans
 MessageFile_Open  #     4               ; Opened message file flag
 
+SysIs32bit      #       1               ; non-zero if on a 32-bit system
+                #       3
+
 StringBuffer    #       160             ; Temp string buffer. Big enough to
                                         ; hold a disassembled instruction
-                                        ; and a full register set + two instrs
+                                        ; and a full register set + three instrs
 TotalSpace      *       :INDEX: @
 
 ; List of mistakes
 
 		^	1
-Mistake_NV	#	1
 Mistake_PlingHat #	1
 Mistake_Banked	#	1
 Mistake_SWICDP	#	1
@@ -274,6 +290,7 @@ Mistake_RdHiRm	#	1
 Mistake_Rninlist #	1
 Mistake_RdRm	#	1
 Mistake_STMHat	#	1
+Mistake_ARMv5   #       1
 
 		^	-1
 Potential_SWICDP #	-1
@@ -283,20 +300,14 @@ Potential_SWICDP_Next #	-1
 
 ; Overlaid workspace
 
- [ StrongARM
-ExeBufLen	*	4+4+4*16
- ]
+ExeBufLen	*	4+4+4+?Registers
 
                 ^       :INDEX: StringBuffer, wp
 CoreBuffer      #       16              ; Enough for a line of bytes
  ASSERT ?StringBuffer >= ?CoreBuffer
 
                 ^       :INDEX: StringBuffer, wp
- [ StrongARM
 ExecuteBuffer   #       ExeBufLen
- |
-ExecuteBuffer   #       4+4+4*16
- ]
  ASSERT ?StringBuffer >= ?ExecuteBuffer
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -324,13 +335,13 @@ delete  *       &7F
 ;          optionally adding the ARM condition field - eg
 ;              AddStr BX_string,,conds
 	MACRO
-	AddStr	$c,$cond,$conds
+	AddStr	$c,$cond,$conds,$two
 	ADR$cond R10,$c
-	[ "$conds" <> ""
-	  BL$cond  SaveStringConditions
-	|
+        [ "$conds" <> ""
+	  BL$cond  SaveStringConditions$two
+        |
 	  BL$cond  SaveString
-	]
+        ]
 	MEND
 
 ; TestBit - check to see if a bit is set, and add one of two characters
@@ -359,13 +370,13 @@ delete  *       &7F
 ;           cases. Optionally add the ARM condition field. eg
 ;                  TestStr 20,Ldr,Str,conds
 	MACRO
-	TestStr	$bit,$set,$unset,$conds
+	TestStr	$bit,$set,$unset,$conds,$two
 	TSTS	R4,#1:SHL:$bit
 	[ "$set" <> "" :LAND: "$unset" <> ""
 	ADREQ	R10,$unset
 	ADRNE	R10,$set
 	  [ "$conds" <> ""
-	  BL	SaveStringConditions
+	  BL	SaveStringConditions$two
 	  |
 	  BL	SaveString
 	  ]
@@ -401,6 +412,9 @@ Module_BaseAddr
  |
         DCD     0
  ]
+ [ :LNOT: No32bitCode
+        DCD     Debug_Flags - Module_BaseAddr
+ ]
 
 Debug_Title ; share with
 Debug_SWI_Name
@@ -418,6 +432,11 @@ Debug_HelpStr
  ]
         DCB     0
         ALIGN
+
+ [ :LNOT: No32bitCode
+Debug_Flags
+        DCD     ModuleFlag_32bit
+ ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0-r6 trashable
@@ -466,7 +485,7 @@ Debug_Init ENTRY
         BNE     %BT10
 
         ADR     r1, Registers           ; Clear register dump area
-        MOV     r3, #16
+        MOV     r3, #17
         MOV     r14, #0
         STR     r14, MessageFile_Open
 20      STR     r14, [r1], #4
@@ -478,6 +497,8 @@ Debug_Init ENTRY
         SWI     XOS_ChangeEnvironment
         STRVC   r1, OldExceptionDumpArea
 
+        EXIT    VS
+
         MOV     r3, #0
         STR     R3, Mistake
         STR     R3, OldAddress          ;Init vars for dodgy code detection
@@ -485,6 +506,31 @@ Debug_Init ENTRY
 	STR	R3, OldThumbAddress
 	STR	R3, OldThumbInst
 	]
+        mrs    ,R3, CPSR
+        ANDS    R3, R3, #2_11100        ; non-zero if in a 32-bit mode
+        STRB    R3, SysIs32bit
+
+        EXIT    EQ
+
+; Fill in the zero page branch table
+
+        ASSERT  nbreakpoints*8 <= ?DebuggerSpace
+        MOV     R0, #DebuggerSpace + nbreakpoints*8
+        LDR     R1, =&E51FF004          ; LDR PC,[PC,#-4]
+        ADR     R2, BreakCodeStart
+30      STMDB   R0!, {R1, R2}
+        ADD     R2, R2, #8
+        CMP     R0, #DebuggerSpace
+        BHI     %BT30
+
+ [ StrongARM
+	MOV	r0, #1
+	MOV	r1, #DebuggerSpace
+        ADD     r2, r1, #(nbreakpoints)*8-4
+	SWI	XOS_SynchroniseCodeAreas
+        CLRV
+ ]
+
         EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -536,7 +582,8 @@ Debug_Die ENTRY
 	MOV	r0, #0
 	STR	r0, MessageFile_Open
 
-        EXITS                           ; Don't refuse to die
+        CLRV
+        EXIT                            ; Don't refuse to die
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;                        (No. of Parameters)
@@ -558,6 +605,7 @@ Debug_HC_Table ; Name       Max  Min
         Command MemoryI,     5,   1,; A +/- B + C
  ]
         Command ShowRegs,    0,   0,
+        Command ShowFPRegs,  0,   0,
         |
         Command BreakClr,    1,   0, International_Help
         Command BreakList,   0,   0, International_Help
@@ -573,12 +621,15 @@ Debug_HC_Table ; Name       Max  Min
         Command MemoryI,     5,   1, International_Help     ; A +/- B + C
  ]
         Command ShowRegs,    0,   0, International_Help
+        Command ShowFPRegs,  0,   0, International_Help
         ]
 
         DCB     0                       ; end of table
 
         GET     TokHelpSrc
         ALIGN
+
+        LTORG
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 = instruction to disassemble
@@ -762,36 +813,52 @@ Swi     LDR     R10, Mistake
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Branch, Branch and Link
 
-	; arrive here with cccc 101x xxxx xxxx xxxx xxxx xxxx xxxx
-	; format is        cccc 101l oooo oooo oooo oooo oooo oooo
-	;
-	; B{L}{cond} address
-	;
-	; where cccc = condition
-	;          l = Link
-	;          o = 24-bit signed offset (in words)
+        ; arrive here with cccc 101x xxxx xxxx xxxx xxxx xxxx xxxx
+        ; format is        cccc 101l oooo oooo oooo oooo oooo oooo
+        ;
+        ; B{L}{cond} address
+        ;
+        ; where cccc = condition
+        ;          l = Link
+        ;          o = 24-bit signed offset (in words)
 
 Branch ROUT
 
-	AddChar	"B"
-	TestBit	24,"L"
+        MOV     r14, r4, LSR #28        ; if "NV" condition code
+        TEQ     r14, #15
+        BEQ     BLX_offset              ; then it's BLX
+
+        AddChar "B"
+        TestBit 24,"L"
 
         BL      Conditions
 
         BL      Tab
 
- [ Addr26
-        ADD     r8, r9, r4, LSL #2      ; Form offset from required address
- |
-        MOV     r8, r4, ASL #8          ; shift offset up to top
-        ADD     r8, r9, r8, ASR #6      ; convert to signed offset and add
- ]
+        MOV     r4, r4, ASL #8          ; shift offset up to top
+BranchCommon
+        ADD     r8, r9, r4, ASR #6
+        ADD     r8, r8, #8              ; pc + 8
+
+        LDRB    r2, SysIs32bit
+        TEQ     r2, #0
+
+        BICEQ   r8, r8, #ARM_Addr_Mask  ; Wrap in 64MByte space for 26-bit
+        BEQ     BranchLdrStrCommon
+
+; Check no wrap for 32-bit. Wrap detected by one address being < &10000000
+; and one being >= &80000000.
+
+        TST     r8, #&F0000000
+        TSTNE   r9, #&F0000000
+        BNE     BranchLdrStrCommon      ; EQ if one of the addresses is < &10000000
+
+        ORRS    r2, r8, r9              ; MI if one of the addresses is >= &80000000
+
+        MOVMI   r2, #Mistake_Unpred     ; must have wrapped
+        STRMI   r2, Mistake
 
 BranchLdrStrCommon
-        ADD     r8, r8, #8              ; pc advanced by 8
- [ Addr26
-        BIC     r8, r8, #ARM_Addr_Mask    ; Wrap in 64MByte space
- ]
         MOV     r2, #32-4                 ; (keeping byte offsets)
         BL      StoreHex
 
@@ -975,16 +1042,14 @@ Xxm_End
 LdrStr	ROUT
 	; Load and Store Word or Byte
 	; arrive here with cccc 01xx xxxx xxxx xxxx xxxx xxxx xxxx
-	; (nn != 00)
-	; format is        cccc 010p ubwl nnnn dddd rrrr rtt0 mmmm
-	;        or        cccc 011p ubwl nnnn dddd iiii iiii iiii
+	; format is        cccc 010p ubwl nnnn dddd iiii iiii iiii
+	;        or        cccc 011p ubwl nnnn dddd rrrr rtt0 mmmm
 	;
 	; <LDR|STR>{cond}{B}    Rd,[Rn,#offset]{!}
 	; 	                Rd,[Rn,{+|-}Rm{,shift}]{!}
 	; <LDR|STR>{cond}{B}{T} Rd,[Rn],#offset
 	;                       Rd,[Rn],{+|-}Rm{,shift}
 	; where cccc = condition
-	;          i = Immediate/~Register offset
 	;	   p = Pre-indexed/~Post-indexed
 	;	   u = Up/~Down
 	;	   b = Byte/~Word
@@ -1062,13 +1127,14 @@ DataTransfer_Common ; for CPDT - address part similar to LDR/STR (no reg index)
 	TEQ	R5,#15
 	BNE	not_rel
 
-	TestBit 21
+	TestBit 21                      ; Writeback bit set?
 	MOVNE	r10, #Mistake_PCwriteback
 	STRNE	r10, Mistake
-	TestBit	24
+        TST     r4, #2_1001 :SHL: 24    ; or post-indexed LDR/STR? (can have post-indexed CPDT without writeback)
 	MOVEQ	r10, #Mistake_PCwriteback
 	STREQ	r10, Mistake
 
+        ; if immediate offset, pre-indexed, no writeback then it's PC-relative
 	AND	r14,R4,#2_11001 :SHL: 21
 	TEQS	r14,#2_01000 :SHL: 21
 	BNE	not_rel
@@ -1086,6 +1152,7 @@ DataTransfer_Common ; for CPDT - address part similar to LDR/STR (no reg index)
         SUBEQ   r8, r9, r8              ; Form offset from required address
         ADDNE   r8, r9, r8
 
+        ADD     r8, r8, #8
         B       BranchLdrStrCommon
 
 not_rel
@@ -1101,6 +1168,10 @@ not_rel
 
 ; Immediate offset
 
+        AND     r14, r4, #2_1111001 :SHL: 21 ; post-indexed CPDT, no writeback?
+        TEQ     r14, #2_1100000 :SHL: 21
+        BEQ     CPDT_info
+
 	AddChar	"#"
 
 	TestBit	23,,"-"                 ; Up/~Down bit
@@ -1111,19 +1182,6 @@ not_rel
         MOVNE   r8, r8, LSL #2          ; Word offset if coprocessor
         BL      StoreDecimal
 
-        AND     r5, r5, #&0F
-        TEQS    r5, #&0F                ; If [pc, #xxx] then comment it
-        MOVNE   r8, #-1
-        BNE     %FT80
-
-        TestBit	24		        ; Pre/~Post bit
-        MOVEQ   r8, #-1
-        BEQ     %FT80                   ; [postincrement, so wacky]
-
-        TestBit 23		        ; Up/~Down bit
-        SUBEQ   r8, r9, r8              ; Form offset from required address
-        ADDNE   r8, r9, r8
-
 80
 	TestBit	24,"]"                 ; Pre/~Post bit
                                        ; [preincrement, so close]
@@ -1132,13 +1190,15 @@ not_rel
         TEQS    r10,     #2_1001 :SHL: 21 ; preincrement with writeback ?
 	AddChar	"!",EQ
 
-        CMP     r8, #-1
-        BEQ     InstructionEnd
+        B       InstructionEnd
 
-        BL      Tab                     ; Will also insert '; '
-
-        B       BranchLdrStrCommon
-
+; CPDT info form
+CPDT_info
+        AddChar "{"
+        AND     r8, r4, #&FF
+        BL      StoreDecimal
+        AddChar "}"
+        B       InstructionEnd
 
 
 ; Register offset
@@ -1150,7 +1210,6 @@ not_rel
 
         BL      ShiftField
 
-        MOV     r8, #-1
         B       %BT80
 
 Ldr     DCB     "LDR", 0
@@ -1160,35 +1219,28 @@ Close_B DCB     "],", 0
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-Mul     DCB     "MUL", 0
-Mla     DCB     "MLA", 0
 Mull    DCB     "MULL",0
 Mlal    DCB     "MLAL",0
-aswp    DCB     "SWP",0
+Mul     DCB     "MUL", 0
+Mla     DCB     "MLA", 0
+aswp    DCB     "SWP", 0
         ALIGN
 
 UndefinedDataProcessing ROUT
-	; Arrive here with cccc 00xx xxxx xxxx xxxx xxxx 1xx1 xxxx
+	; Arrive here with cccc 000x xxxx xxxx xxxx xxxx 1xx1 xxxx
 
-        AND     R10,R4,#&F0             ; forcible check for &xxxxxx9x
-        TEQS    R10,#&90
-        BNE	LdrStrH
+        TSTS    R4,#2_11:SHL:5
+        TSTEQS  R4,#2_1:SHL:24
+        BNE     LoadStoreExtension
 
-        MOV     R5,R4,LSR #23
-        AND     R5,R5,#&1F
-                                        ; vvv - tested
-        TST     r4, #&38 :SHL: 22       ; 0000 00AS dddd nnnn ssss 1001 mmmm ?
-        BNE     Undefined               ; test was &3F - changed to allow SWP,MULL,MLAL through
+ArithmeticExtension
+	; Arrive here with cccc 0000 oooo xxxx xxxx xxxx 1001 xxxx
+        AND     R5,R4,#2_1111:SHL:20
+        CMP     R5,#2_1000:SHL:20
+        BHS     mul_long                ; opcode 8-15 = long multiply
 
-        TEQS    R5,#2_00001
-        BEQ     mul_long
-
-        CMPS    R5,#2_00010
-        BEQ     swp
-	BHS	Undefined
-
-	TestBit	22
-	BNE	Undefined
+        CMP     R5,#2_0100:SHL:20
+        BHS     Undefined               ; opcode 4-7 undefined
 
 	; Multiply + Multiply-with-Accumulate
 	; Arrive here with cccc 0000 00xx xxxx xxxx xxxx 1001 xxxx
@@ -1368,6 +1420,16 @@ swp
 	]
         B       InstructionEnd
 
+LoadStoreExtension
+        ; Arrive here with cccc 000p xxxx xxxx xxxx xxxx 1oo1 xxxx
+        ; (poo != 000)
+        TSTS    r4, #2_11:SHL:5
+        TSTEQS  r4, #1:SHL:23
+        BEQ     swp
+
+        TSTS    r4, #2_11:SHL:5
+        BEQ     Undefined
+
 LdrStrH	; Load and Store Halfword or Load Signed Byte
 	; arrive here with cccc 000x xxxx xxxx xxxx xxxx 1nn1 xxxx
 	; (nn != 00)
@@ -1508,6 +1570,7 @@ ldrstrh_reg
 	TestBit	21,"!"                  ; Writeback bit
 	B	InstructionEnd
 
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Data processing opcodes
 
@@ -1560,7 +1623,7 @@ DataProcessing ROUT
 notADR
 	AND	r5, r4, #2_11001 :SHL: 20
 	TEQS	r5, #2_10000 :SHL: 20		; Check for opcodes 8-11 with S clear
-	BEQ	is_MRSorMSR
+	BEQ	ControlExtension
 
         ADR     r10, OpcTAB
         ADD     r10, r10, r6, LSL #2
@@ -1692,12 +1755,44 @@ CPSR_or_SPSR
         ADRNE   R10,spsr_tab
         B       SaveString
 
-is_MRSorMSR
-	; arrive here with cccc 00x1 0xx0 xxxx xxxx xxxx xxxx xxxx
-	TestBit	21
+ControlExtension
+        ; arrive here with cccc 00i1 0xx0 xxxx xxxx xxxx rxxs xxxx
+        ; (irs != 011)
+        ;
+        ; This was simple when it was just MRS and MSR, but
+        ; ARMv5 and 5E have made it much harder. The approach we
+        ; take is to first split between register and immediate,
+        ; then split the regester form up by bits 4:7.
+
+	TestBit	25
+        BNE     ControlExtension_immediate
+
+        ANDS    r5, r4, #2_1111 :SHL: 4         ; 0 = MRS/MSR
+        BEQ     MRS_MSR_reg
+
+        TEQ     r5, #2_0001 :SHL: 4
+        TEQNE   r5, #2_0011 :SHL: 4
+        BEQ     CLZ_BX_type                     ; 1,3 = CLZ/BX
+
+        TEQ     r5, #2_0111 :SHL: 4             ; 7 = BKPT
+        BEQ     is_BKPT
+
+        B       Undefined
+
+ControlExtension_immediate
+        ; arrive here with cccc 0011 0xx0 xxxx xxxx xxxx xxxx xxxx
+        LDR     r3, =1:SHL:21 + 2_1111:SHL:12
+        AND     r5, r4, r3
+        TEQ     r5, r3
+        BEQ     is_MSR
+        B       Undefined
+
+MRS_MSR_reg
+        ; arrive here with cccc 0001 0xx0 xxxx xxxx xxxx 0000 xxxx
+        TestBit 21
 	BNE	is_MSR
 
-is_MRS	; arrive here with cccc 00x1 0x00 xxxx xxxx xxxx xxxx xxxx
+is_MRS	; arrive here with cccc 0001 0x00 xxxx xxxx xxxx 0000 xxxx
 	;
 	; format is        cccc 0001 0r00 1111 dddd 0000 0000 0000
 	;
@@ -1708,8 +1803,6 @@ is_MRS	; arrive here with cccc 00x1 0x00 xxxx xxxx xxxx xxxx xxxx
 	BNE	Undefined
 	AND	r14, r4, #2_1111 :SHL: 16  ; bits 16-19 should be 1
 	TEQS	r14, #2_1111 :SHL: 16
-	BNE	Undefined
-	TestBit	25
 	BNE	Undefined
 
 	AddStr	MrsTAB,,conds
@@ -1724,7 +1817,8 @@ spsr_tab DCB    "SPSR",0
 
         ALIGN
 
-is_MSR	; arrive here with cccc 00x1 0x10 xxxx xxxx xxxx xxxx xxxx
+is_MSR	; arrive here with cccc 0001 0x10 xxxx xxxx xxxx 0000 xxxx
+        ;               or cccc 0011 0x10 xxxx 1111 xxxx xxxx xxxx
 	;
 	; format is        cccc 0001 0r10 fsxc 1111 0000 0000 mmmm
 	;        or        cccc 0011 0r10 fsxc 1111 rrrr iiii iiii
@@ -1740,25 +1834,12 @@ is_MSR	; arrive here with cccc 00x1 0x10 xxxx xxxx xxxx xxxx xxxx
 	TestBit	25       	      ; if register, bits 4-11 must be 0
 	BNE	%FT01
 
-	; Check it's not a BX (encoded as MSR CPSR_cxsf, Rm, LSL PC)
-	BIC	r5, r4, #&F000000F
-	LDR	r10, =&012FFF10
-	TEQS	r5, r10
-	BEQ	is_BX
-
 	TST	r4, #2_11111111 :SHL: 4
 	BNE	Undefined
 
 01	AND	r10, r4, #2_1111 :SHL: 12
 	TEQ	r10, #2_1111 :SHL: 12
 	BNE	Undefined
-
-	; Can't use cxs bits in an immediate MSR
-	TestBit	25
-	BEQ	%FT05
-	TST	r4, #2_0111 :SHL: 16
-	MOVNE	r10, #Mistake_Unpred
-	STRNE	r10, Mistake
 
 05	ADR	r10, MsrTAB
 	BL	SaveStringConditions
@@ -1772,24 +1853,132 @@ is_MSR	; arrive here with cccc 00x1 0x10 xxxx xxxx xxxx xxxx xxxx
 	BL	AddComma
 	B	Operand_2
 
-is_BX	; arrive here with cccc 0001 0010 1111 1111 1111 0001 xxxx
+CLZ_BX_type
+        TEQ     r5, #2_0010:SHL:4
+        BEQ     Undefined
+
+        ; arrive here with cccc 0001 0xx0 xxxx xxxx xxxx 00x1 xxxx
+        TestBit 22
+        BNE     is_CLZ
+
+is_BX	; arrive here with cccc 0001 00x0 xxxx xxxx xxxx 00x1 xxxx
+        ; (oo != 00)
 	;
-	; format is        cccc 0001 0010 1111 1111 1111 0001 nnnn
+	; format is        cccc 0001 0010 1111 1111 1111 00l1 nnnn
 	;
-	; BX{cond} Rn
+	; B{L}X{cond} Rn
 	;
 	; where cccc = condition
+        ;          l = Link
 	;	nnnn = Rn
-	AddStr	BxTAB,,conds
+        LDR     r3, =&002FFF00
+        AND     r5, r4, r3
+        TEQ     r5, r3
+        BNE     Undefined
+
+        TestStr 5,BlxTAB,BxTAB,conds
 	AND	R5,R4,#2_1111
 	BL	Tab_Dis_Register
 
+        [ WarnARMv5
+        TestBit 5
+        MOVNE   r10, #Mistake_ARMv5
+        STRNE   r10, Mistake
+        ]
+
 	B	InstructionEnd
+
+BLX_offset
+        ; arrive here with 1111 101x xxxx xxxx xxxx xxxx xxxx xxxx
+        ; format is        1111 101h oooo oooo oooo oooo oooo oooo
+        ;
+        ; BLX address
+        ;
+        ; where    h = bit 1 of offset
+        ;          o = signed offset (bits 25-2)
+        [ WarnARMv5
+        MOV     r10, #Mistake_ARMv5
+        STR     r10, Mistake
+        ]
+
+        ADR     r10, BlxTAB
+        BL      SaveString
+        BL      Tab
+
+        MOVS    r4, r4, ASL #8          ; shift offset up to top (bit 1 into C)
+        ADDCS   r4, r4, #1 :SHL: 7      ; put bit 1 underneath
+        B       BranchCommon
+
+
+is_CLZ  ; arrive here with cccc 0001 01x0 xxxx xxxx xxxx 00x1 xxxx
+        ; (oo != 00)
+        ;
+        ; format is        cccc 0001 0110 1111 dddd 1111 0001 nnnn
+        ;
+        ; CLZ{cond} Rd, Rn
+        ;
+        ; where cccc = condition
+        ;       dddd = Rd
+        ;       nnnn = Rn
+        LDR     r3, =&002F0F10
+        TestBit 5
+        BNE     Undefined
+        AND     r5, r4, r3
+        TEQ     r5, r3
+        BNE     Undefined
+
+        [ WarnARMv5
+        MOV     r10, #Mistake_ARMv5
+        STR     r10, Mistake
+        ]
+
+        ADR     r10, ClzTAB
+        BL      SaveStringConditions
+        MOV     r5, r4, LSR #12
+        BL      Tab_Dis_Register
+        MOV     r5, r4
+        BL      Comma_Dis_Register
+        B       InstructionEnd
+
+is_BKPT ; arrive here with cccc 0001 0xx0 xxxx xxxx xxxx 0111 xxxx
+        ;
+        ; format is        1110 0001 0010 nnnn nnnn nnnn 0111 nnnn
+        ;
+        ; BKPT <number>     (note conditional not permitted)
+        ;
+        ; where nnnn = number
+        AND     r5, r4, #2_11:SHL:21
+        TEQ     r5, #2_01:SHL:21
+        BNE     Undefined
+        AND     r5, r4, #2_1111:SHL:28
+        TEQ     r5, #2_1110:SHL:28
+        BNE     Undefined
+
+        [ WarnARMv5
+        MOV     r10, #Mistake_ARMv5
+        STR     r10, Mistake
+        ]
+
+        ADR     r10, BkptTAB
+        BL      SaveString
+        BL      Tab
+
+        MOV     r8, r4, LSR #8
+        MOV     r8, r8, LSL #20
+        AND     r5, r4, #2_1111
+        ORR     r8, r5, r8, LSR #16
+        MOV     r2, #16-4
+        BL      StoreHex
+        B       InstructionEnd
+
 
 AdrTAB  DCB     "ADR",0
 MrsTAB  DCB     "MRS",0
 MsrTAB  DCB     "MSR",0
 BxTAB   DCB     "BX", 0
+BkptTAB DCB     "BKPT",0
+BlxTAB  DCB     "BLX",0
+ClzTAB  DCB     "CLZ",0
 	ALIGN
 OpcTAB  DCB     "AND",0
         DCB     "EOR",0
@@ -1824,13 +2013,24 @@ Coprocessor
 	; arrive here with cccc 11nn xxxx xxxx xxxx xxxx xxxx xxxx
 	; with nn <> 11
 
+        MOV     r2, r4, LSR #28         ; No currently known coprocessors use "2" opcodes
+        TEQ     r2, #15
+        BEQ     Coprocessor_NotFP
+
         AND     r2, r4, #2_1111 :SHL: 8 ; r2 := CP# << 8
 
-        TEQS    r2, #2_0001 :SHL: 8
+        TEQS    r2, #1 :SHL: 8
         BEQ     Floating_Point          ; [Floating Point coprocessor]
 
-        TEQS    r2, #2_0010 :SHL: 8
+        TEQS    r2, #2 :SHL: 8
         BEQ     New_FPA                 ;new FPA
+
+ [ CirrusDSP
+        CMPS    r2, #4 :SHL: 8
+        BLO     Coprocessor_NotFP
+        CMPS    r2, #6 :SHL: 8
+        BLS     CirrusDSPInstruction
+ ]
 
 Coprocessor_NotFP
 
@@ -1839,29 +2039,33 @@ Coprocessor_NotFP
         TEQS    r3, #&0E
         BEQ     Co_Operations
 
+Co_Transfer
+
 	; arrive here with cccc 110x xxxx xxxx xxxx xxxx xxxx xxxx
 	; format is        cccc 110p unwl nnnn dddd #### iiii iiii
 	;
 	; <LDC|STC>{cond}{L} CP#,Cd,[Rn,#imm]{!}
 	;		     CP#,Cd,[Rn],#imm
+        ;                    CP#,Cd,[Rn],{info}
+        ; <LDC|STC>2{L}      ...
 	;
 	; where cccc = condition
 	;	   p = Pre-indexed/~Post-indexed
 	;	   u = Up/~Down
 	;	   n = Transfer length
-	;	   w = Writeback (must be 1 if post-indexed)
+	;	   w = Writeback
 	;	   l = Load/~Store
 	;	nnnn = Rn
 	;	dddd = Cd
 	;	#### = CP#
-	;	iiii = immediate offset (in words)
+	;	iiii = immediate offset (in words), or info (puw = 010)
 
 ; Coprocessor Data Transfer (CPDT)
 
-	TST	r4, #1:SHL:24 :OR: 1:SHL:21
-	BEQ	Undefined		; Post-indexed, but no writeback!
+        TST     r4, #2_1101 :SHL: 21
+        BEQ     Undefined               ; Post-indexed, down, no writeback
 
-	TestStr	20,Ldc,Stc,conds        ; Load/~Store bit
+	TestStr	20,Ldc,Stc,conds,2      ; Load/~Store bit
 
 	TestBit	22,"L"                  ; Length bit
 
@@ -1869,7 +2073,6 @@ Coprocessor_NotFP
 
         MOV     r5, r4, LSR #12         ; CRd
         BL      Dis_C_Register
-
 
 CPDT_Common                             ; FP entry point from below
 
@@ -1893,6 +2096,7 @@ Co_Operations
 	; format is        cccc 1110 oooo nnnn dddd #### iii0 mmmm
 	;
 	; CDP{cond} CP#,op,Cd,Cn,Cm{,info}
+	; CDP2      CP#,op,Cd,Cn,Cm{,info}
 	;
 	; where cccc = cond
 	;	oooo = operation
@@ -1905,7 +2109,7 @@ Co_Operations
         MOV     R10, #Potential_SWICDP_Next ;deferred warning in case SWI next
         STR     R10, Mistake
 
-	AddStr	Cdp,,conds
+	AddStr	Cdp,,conds,2
 
         BL      Tab_CPN                 ; CP#
 
@@ -1949,8 +2153,7 @@ CPRT_CPDO_Common
         ADR     R10,msgtable
         ADD     R10,R10,R5,LSR #14
         BL      lookup_r10
-        BL      SaveString
-        B       InstructionEnd
+        B       SaveStringEnd
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1961,6 +2164,7 @@ Co_Transfers
 	; format is        cccc 1110 oool nnnn dddd #### iii1 mmmm
 	;
 	; <MCR|MRC>{cond} CP#,op,Rd,Cn,Cm{,info}
+        ; <MCR|MRC>2      CP#,op,Rd,Cn,Cm{,info}
 	;
 	; where cccc = cond
 	;	 ooo = operation
@@ -1971,7 +2175,7 @@ Co_Transfers
 	;        iii = info
 	;       mmmm = Cm
 
-	TestStr	20,Mrc,Mcr,conds        ; Load/~Store bit
+	TestStr	20,Mrc,Mcr,conds,2      ; Load/~Store bit
 
         BL      Tab_CPN                 ; CP#
 
@@ -2092,7 +2296,7 @@ ShiftROR ;used for wacky zero shifts
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r5 = fp register
 
-Dis_F_Register ENTRY "r2"
+Dis_F_Register EntryS "r2"
 
 	AND	r5, r5, #2_111		; Only 8 FP registers
 
@@ -2135,7 +2339,7 @@ Dis_Register ALTENTRY
 	AddChar "1",HS
         SUBHS   r2, r2, #10
         STRB    r2, [r0], #1
-        EXIT
+        EXITS
 
 ; .............................................................................
 
@@ -2167,13 +2371,13 @@ Tab_Dis_Register ALTENTRY
 
 ; Out   r0 ++, r10++
 
-SaveString ENTRY
+SaveString EntryS
 
 10      LDRB    r14, [r10], #1
         CMPS    r14, #32
         STRHSB  r14, [r0], #1
         BHS     %BT10
-        EXIT
+        EXITS
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r4 = instruction
@@ -2183,17 +2387,17 @@ SaveString ENTRY
 Conditions ENTRY "r1, r10"
 
 10      MOV     r1, r4, LSR #28
-        TEQS    R1, #15
-        MOVEQ   R10,#Mistake_NV
-        STREQ   R10,Mistake
-        ADR     R10, CondSym
-        ADD     r1, r10, r1, LSL #1
-        LDRB    r10, [r1], #1
-        TEQS    r10, #0
-        STRNEB  r10, [r0], #1
-        LDRNEB  r10, [r1], #1
-        STRNEB  r10, [r0], #1
-        EXIT
+        CMPS    r1, #14
+        EXIT    EQ                      ; 14 = AL (no code printed)
+        ADRLO   r10, CondSym            ; 15 was NV, now undefined
+        ADDLO   r1, r10, r1, LSL #1
+        LDRLOB  r10, [r1], #1
+        STRLOB  r10, [r0], #1
+        LDRLOB  r10, [r1], #1
+        STRLOB  r10, [r0], #1
+        EXIT    LO
+        PullEnv
+        B       Undefined
 
 
 CondSym DCB     "EQ"                    ; 0
@@ -2211,8 +2415,6 @@ CondSym DCB     "EQ"                    ; 0
         DCB     "LT"                    ; 11
         DCB     "GT"                    ; 12
         DCB     "LE"                    ; 13
-        DCB     0,0                     ; 14 : AL cc
-        DCB     "NV"                    ; 15
 
         ALIGN
 
@@ -2222,6 +2424,23 @@ SaveStringConditions ALTENTRY
 
         BL      SaveString
         B       %BT10
+
+; .............................................................................
+
+SaveStringConditions2 ALTENTRY
+
+        BL      SaveString
+        MOV     r14, r4, LSR #28
+        TEQ     r14, #15
+        BNE     %BT10
+        [ WarnARMv5
+        LDR     r10, Mistake
+        TEQ     r10, #0
+        MOVNE   r10, #Mistake_ARMv5
+        STRNE   r10, Mistake
+        ]
+        AddChar "2"
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Pad with spaces to operand field or comment field
@@ -2264,7 +2483,6 @@ exitM
         EXIT
 
 Silly
-        =       "M09",0		; Use of NV
         =       "M10",0		; ! and ^
         =       "M11",0		; Not R8-R14
         =       "M12",0		; SWI after CDP
@@ -2283,6 +2501,7 @@ Silly
      	=	"M64",0		; Rn in list
 	=	"M66",0		; Rd=Rm
 	=	"M67",0		; Only 1 reg on SA-110 rev 2
+        =       "M68",0         ; ARMv5 or later
 
         ALIGN
 
@@ -2313,7 +2532,7 @@ StoreHex ENTRY "r2"
 
 ; Out   r0++
 
-StoreDecimal ENTRY "r1-r2, r4"
+StoreDecimal EntryS "r1-r2, r4"
 
         SUB     sp, sp, #16
         MOV     r4, r0
@@ -2330,7 +2549,7 @@ StoreDecimal ENTRY "r1-r2, r4"
         BNE     %BT10
 
         ADD     sp, sp, #16
-        EXIT
+        EXITS
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -2348,7 +2567,7 @@ AddComma ALTENTRY
 
 50
 	AddChar ","
-        EXITS
+        EXIT
 
 ; .............................................................................
 
@@ -2406,10 +2625,6 @@ MemoryI_Code ENTRY "r6-r11"
         ADD     r7, r7, r6
 
 05
-        [       rp0512
-        BL      memorytest
-        ]
-
         BL      SwapAllBreakpoints
 
 10 ; Loop doing disassembly until ESCape or ended
@@ -2579,11 +2794,71 @@ ShowRegs_Code_Common ENTRY "r6-r11"
         TEQS    r4, #16
         BNE     %BT10
 
+        SWI     XOS_NewLine
+        EXIT    VS
 
 ; Display processor mode (r10 = dumped pc at end of loop)
 
-        SWI     XOS_NewLine
+; Check whether we're 26 or 32 bit
+        LDRB    r0, SysIs32bit
+        TEQ     r0, #0
+        BEQ     ShowRegs_Mode_26
+
+        BL      message_writes
+        DCB     "M19", 0                ; "Mode "
+        ALIGN
+
+        LDRVC   r10, [r11, #4*16]       ; get saved PSR
+
+        ANDVC   r2, r10, #2_11111       ; Mask with M[4:0] bits
+        ADRVC   r0, ARM32_Modes
+        ADDVC   r0, r0, r2, LSL #2
+        ADDVC   r0, r0, r2, LSL #1
+        SWIVC   XOS_Write0
         EXIT    VS
+
+        BL      message_writes
+        DCB     "M20", 0                ; " flags set: "
+        ALIGN
+
+        MOVVC   r0, #"N"
+        MOVVC   r1, #N_bit
+        BLVC    DoFlagBit
+
+        MOVVC   r0, #"Z"
+        MOVVC   r1, #Z_bit
+        BLVC    DoFlagBit
+
+        MOVVC   r0, #"C"
+        MOVVC   r1, #C_bit
+        BLVC    DoFlagBit
+
+        MOVVC   r0, #"V"
+        MOVVC   r1, #V_bit
+        BLVC    DoFlagBit
+
+        MOVVC   r0, #"I"
+        MOVVC   r1, #I32_bit
+        BLVC    DoFlagBit
+
+        MOVVC   r0, #"F"
+        MOVVC   r1, #F32_bit
+        BLVC    DoFlagBit
+
+        MOVVC   r0, #"T"
+        MOVVC   r1, #T32_bit
+        BLVC    DoFlagBit
+        EXIT    VS
+
+        BL      message_writes
+        DCB     "M14", 0                ; "   PSR = "
+        BLVC    DisplayHexWord
+
+        SWIVC   XOS_NewLine
+        EXIT
+
+ShowRegs_Mode_26
+
         BL      message_writes
         DCB     "M19", 0	        ; "Mode "
         ALIGN
@@ -2632,7 +2907,42 @@ ARM_Modes
         DCB     "IRQ", 0
         DCB     "SVC", 0
 
+ARM32_Modes
+        DCB     "USR26", 0
+        DCB     "FIQ26", 0
+        DCB     "IRQ26", 0
+        DCB     "SVC26", 0
+        DCB     "00100", 0
+        DCB     "00101", 0
+        DCB     "00110", 0
+        DCB     "00111", 0
+        DCB     "01000", 0
+        DCB     "01001", 0
+        DCB     "01010", 0
+        DCB     "01011", 0
+        DCB     "01100", 0
+        DCB     "01101", 0
+        DCB     "01110", 0
+        DCB     "01111", 0
+        DCB     "USR32", 0
+        DCB     "FIQ32", 0
+        DCB     "IRQ32", 0
+        DCB     "SVC32", 0
+        DCB     "10100", 0
+        DCB     "10101", 0
+        DCB     "10110", 0
+        DCB     "ABT32", 0
+        DCB     "11000", 0
+        DCB     "11001", 0
+        DCB     "11010", 0
+        DCB     "UND32", 0
+        DCB     "11100", 0
+        DCB     "11101", 0
+        DCB     "11110", 0
+        DCB     "SYS32", 0
         ALIGN
+
+        LTORG
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r1 = flag bit to test
@@ -2677,10 +2987,6 @@ Memory_Code ENTRY "r6-r11"
 
         TEQS    r7, r9                  ; If same, ensure we do one byte/word
         ADDEQ   r7, r7, r6
-
-        [       rp0512
-        BL      memorytest
-        ]
 
         BL      SwapAllBreakpoints
 
@@ -2951,18 +3257,8 @@ MemoryA_Code ENTRY "r6-r11"
         TEQS    r6, #4                  ; round down if words
         BICEQ   r9, r9, #3
 
-        [       rp0512
-        MOV     r2, r7                 ; avoid walking over the value to write
-        MOV     r7,r9
-
-        BL      memorytest2
-        ]
-
         BL      SwapAllBreakpoints
 
-        [       rp0512
-        MOV     r7, r2                  ; and back where it should be
-        ]
         TST     r8, #secondparm
         BEQ     Interactive             ; [no second parameter]
 
@@ -3081,11 +3377,6 @@ Interactive ROUT
         BL      SkipSpaces
         ADDCC   r9, r9, r8              ; No parm, just advance in current dirn
         MOVCC   r7,r9
-        [       rp0512
-        ADDCC   sp,sp,#256
-        BLCC    memorytest2             ;ensure not walking into prohibited space
-        SUBCC   sp,sp,#256
-        ]
 
         BCC     %BT10
 
@@ -3152,17 +3443,16 @@ BreakSet_Code ENTRY "r6-r11"
         TST     r8, #parmfollowed
         BNE     BreakSetError0
 
+        LDRB    r4, SysIs32bit
         BIC     r7, r7, #3              ; Can only set at word address
+        TEQ     r4, #0
+        BNE     %FT05
+
         CMP     r7, #&04000000          ; Can only set in bottom 64M (has to
                                         ; construct a branch)
         BHS     BreakSetError1
 
-        [       rp0512
-        MOV     r9,r7
-        BL      memorytest
-        ]
-
-        ADR     r4, Breaklist           ; Check for breakpoint already in list
+05      ADR     r4, Breaklist           ; Check for breakpoint already in list
         MOV     r3, #(nbreakpoints-1)*8
 10      LDR     r1, [r4, r3]
         TEQ     r1, r7
@@ -3192,9 +3482,12 @@ BreakSet_Code ENTRY "r6-r11"
 
 40 ; Place branch at breakpoint address, r3 = breakpoint number*8, r1 valid
 
-        ADR     r0, BreakCodeStart
-        ADD     r0, r0, r3              ; each code entry is 8 bytes too
-        BL      MakeBranch
+        LDRB    r0, SysIs32bit
+        TEQ     r0, #0
+        ADREQ   r0, BreakCodeStart
+        ADDEQ   r0, r0, r3              ; each code entry is 8 bytes too
+        BLEQ    MakeBranch
+        BLNE    MakeMOVPC
         STR     r2, [r1]
  [ StrongARM
 	;Do the IMB thingy here, for the replaced instruction
@@ -3271,9 +3564,12 @@ BreakList_Code ENTRY "r6-r11"
         BLVC    DisplayHexWord          ; r10 = old data
         EXIT    VS
 
-        ADR     r0, BreakCodeStart      ; Check still B debugger
-        ADD     r0, r0, r3              ; each code entry is 8 bytes too
-        BL      MakeBranch              ; r1 from up there
+        LDRB    r0, SysIs32bit
+        TEQ     r0, #0
+        ADREQ   r0, BreakCodeStart      ; Check still B debugger
+        ADDEQ   r0, r0, r3              ; each code entry is 8 bytes too
+        BLEQ    MakeBranch              ; r1 from up there
+        BLNE    MakeMOVPC
         LDR     r14, [r1]
         TEQS    r14, r2
         BEQ     %FT50                   ; [breakpoint present and correct]
@@ -3379,9 +3675,12 @@ ClearBreakpoint ENTRY "r0-r2, r10"
         MOV     r14, #-1                ; Always clear breakpoint entry
         STR     r14, [r4, r3]           ; Only need to zap address field
 
-        ADR     r0, BreakCodeStart      ; Check that breakpoint was valid
-        ADD     r0, r0, r3              ; Each code entry is 8 bytes too
-        BL      MakeBranch
+        LDRB    r0, SysIs32bit
+        TEQ     r0, #0
+        ADREQ   r0, BreakCodeStart      ; Check that breakpoint was valid
+        ADDEQ   r0, r0, r3              ; Each code entry is 8 bytes too
+        BLEQ    MakeBranch
+        BLNE    MakeMOVPC
         LDR     r14, [r1]
         TEQS    r14, r2
         ADDEQ   r14, r4, #4             ; breakpoint was good, so put data back
@@ -3399,7 +3698,7 @@ ClearBreakpoint ENTRY "r0-r2, r10"
         DCB     "M37", 0		; "Bad breakpoint at &"
         ALIGN
         MOVVC   r10, r1
-        BICVC   R10,R10,#ARM_CC_Mask
+;        BICVC   R10,R10,#ARM_CC_Mask
         BLVC    DisplayHexWord
         EXIT    VS
         BL      message_writes
@@ -3414,8 +3713,11 @@ Continue_Code ENTRY "r6-r11"
 
         LDR     wp, [r12]
 
+        LDRB    r4, SysIs32bit
+        TEQ     r4, #0
+
         LDR     r14, pc_register        ; Get pc from exception dump
-        BIC     r14, r14, #ARM_CC_Mask
+        BICEQ   r14, r14, #ARM_CC_Mask
 
         ADR     r4, Breaklist           ; Check breakpoint list for pc
         MOV     r3, #(nbreakpoints-1)*8
@@ -3436,9 +3738,13 @@ Continue_Code ENTRY "r6-r11"
 
 20 ; Check branch at breakpoint
 
-        ADR     r0, BreakCodeStart
-        ADD     r0, r0, r3
-        BL      MakeBranch
+        LDRB    r0, SysIs32bit
+        TEQ     r0, #0
+
+        ADREQ   r0, BreakCodeStart
+        ADDEQ   r0, r0, r3
+        BLEQ    MakeBranch
+        BLNE    MakeMOVPC
         LDR     r14, [r1]
         TEQ     r14, r2
         BNE     ContinueError1          ; [not kosher]
@@ -3448,7 +3754,7 @@ Continue_Code ENTRY "r6-r11"
         ALIGN
 
         MOVVC   r10, r1
-        BICVC   R10,R10,#ARM_CC_Mask
+;        BICVC   R10,R10,#ARM_CC_Mask
         BLVC    DisplayHexWord
         EXIT    VS
 
@@ -3470,16 +3776,20 @@ Continue_Code ENTRY "r6-r11"
 ; Execute instruction out-of-line
 
         Push    "r1, r3, r4"
-        ADR     r8, ExecuteBuffer+8
+        ADR     r8, ExecuteBuffer+12
         ADR     r9, Registers
+        LDRB    r0, SysIs32bit
+        TEQ     r0, #0
         LDMIA   r9!, {r0-r7}            ; Get + Store first 8 registers
         STMIA   r8!, {r0-r7}
         LDMIA   r9!, {r0-r6}            ; Get next 7 registers
-        LDR     r14, pc_register
-        AND     r14, r14, #ARM_CC_Mask
+        LDREQ   r14, pc_register
+        ANDEQ   r14, r14, #ARM_CC_Mask
         ADR     r7, ExecuteBuffer
-        ORR     r7, r7, r14             ; dumped pc -> ExecBuffer +mode +flags
+        ORREQ   r7, r7, r14             ; dumped pc -> ExecBuffer +mode +flags
         STMIA   r8!, {r0-r7}
+        LDRNE   r0, [r9, #4]            ; do CPSR for 32-bit
+        STRNE   r0, [r8]
         Pull    "r1, r3, r4"
 
 ; See if we can do any better for pc relatives in this version
@@ -3492,6 +3802,8 @@ Continue_Code ENTRY "r6-r11"
  ]
         AND     r0, r14, #&0F000000     ; If it's a Bxx, correct for new loc'n
         TEQ     r0,      #&0A000000
+        LDREQB  r0, SysIs32bit
+        TEQEQ   r0, #0                  ; only works for 26-bit, probably
         MOVEQ   r0, r14, LSL #8
         ADDEQ   r0, r0, r1, LSL #6      ; r0 = destination of branch-8
  [ debug
@@ -3511,11 +3823,10 @@ Continue_Code ENTRY "r6-r11"
  ]
         STR     r14, ExecuteBuffer
 
-
-        ADD     r0, r1, #4              ; Make a BAL to the next instruction
-        ADR     r1, ExecuteBuffer+4     ; that it wants to execute after this
-        BL      MakeBranch              ; one, ie. back in real program @ r1+4
-        STR     r2, [r1]
+        LDR     r14, =&E51FF004         ; LDR PC,[PC,#-4]
+        STR     r14, ExecuteBuffer+4
+        ADD     r14, r1, #4             ; address of next instruction in
+        STR     r14, ExecuteBuffer+8    ; real program
  [ StrongARM
 	;Best IMB the ExecuteBuffer here
 	MOV	r0, #1			; Guess what? It's a ranged sync
@@ -3523,10 +3834,14 @@ Continue_Code ENTRY "r6-r11"
 	ADD	r2, r1, #ExeBufLen
 	SWI	XOS_SynchroniseCodeAreas
  ]
-        ADR     r0, ExecuteBuffer+8     ; and drop into ...
+        ADR     r0, ExecuteBuffer+12    ; and drop into ...
 
 
 90 ; Nice simple continuation. r0 -> register state to continue with
+
+        LDRB    r14, SysIs32bit
+        TEQ     r14, #0
+        BNE     Continue32
 
         LDR     r14_svc, [r0, #15*4]
         ANDS    r14_svc, r14_svc, #SVC_mode
@@ -3539,10 +3854,37 @@ Continue_Code ENTRY "r6-r11"
 
 95      MOV     r14_svc, r0
         LDMIA   r14_svc, {r0-r12, r13_usr, r14_usr}^
-; ECN: Inserted NOP to avoid registers being trashed.
         NOP
         LDR     r14_svc, [r14_svc, #15*4]
         MOVS    pc, r14_svc             ; Jump to instruction in right mode
+
+Continue32
+
+        LDR     r14_svc, [r0, #16*4]
+        TST     r14_svc, #2_01111
+        BEQ     %FT97                   ; [user mode harder]
+
+        TST     r14_svc, #2_11100
+        ORREQ   r1, r14_svc, #&10+F32_bit+I32_bit ; convert 26-bit modes to 32-bit form
+        ORRNE   r1, r14_svc, #F32_bit+I32_bit ; otherwise, just ints off
+        msr    ,CPSR_c, r1              ; Enter correct mode, ints off
+        msr    ,SPSR_cxsf, r14_svc      ; Set up SPSR ready for return
+        LDMIA   r0, {r0-pc}^            ; Restore int state, r0 never banked
+
+97
+        mrs    ,r14_svc, CPSR
+        ORR     r14_svc, r14_svc, #I32_bit
+        msr    ,CPSR_c, r14_svc         ; IRQs off for SPSR use
+
+        LDR     r14_svc, [r0, #16*4]
+        msr    ,SPSR_cxsf, r14_svc      ; Set up SPSR ready for return
+
+        MOV     r14_svc, r0
+        LDMIA   r14_svc, {r0-r12, r13_usr, r14_usr}^
+        NOP
+        LDR     r14_svc, [r14_svc, #15*4]
+        MOVS    pc, r14_svc             ; Jump to instruction in right mode
+
 
 
 ContinueError1
@@ -3552,7 +3894,6 @@ ContinueError1
         DCB     "M41", 0		; "Bad breakpoint at &"
         ALIGN
         MOVVC   r10, r1
-        BICVC   R10,R10,#ARM_CC_Mask
         BLVC    DisplayHexWord
         EXIT    VS
         BL      message_writes
@@ -3733,8 +4074,10 @@ MarkBreakpoints ENTRY "r2, r3"
 
 MarkPC ALTENTRY
 
+        LDRB    r0, SysIs32bit
         LDR     r14, pc_register
-        BIC     r14, r14, #ARM_CC_Mask
+        TEQ     r0, #0
+        BICEQ   r14, r14, #ARM_CC_Mask
         TEQS    r14, r9
         MOVEQ   r0, #"<"                ; [found]
         MOVNE   r0, #":"                ; [not found]
@@ -3744,7 +4087,7 @@ MarkPC ALTENTRY
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Swap old data back into core, remembering our branches
 
-SwapAllBreakpoints ENTRY "r1-r5"
+SwapAllBreakpoints EntryS "r1-r5"
 
         ADR     r4, Breaklist
         ADD     r5, r4, #4              ; r5 -> old data list to index on
@@ -3793,6 +4136,10 @@ JumpStore_ROM   *       (JumpStore - BreakCodeStart) + RelocatedCodeStart
 ; A breakpoint has been hit
 
 BreakTrap ROUT
+        MOV     r4, #0
+        mrs    ,r4, CPSR
+        TST     r4, #2_11100
+        BNE     BreakTrap32
 
         SWI     XOS_EnterOS             ; And why not too!
 
@@ -3804,14 +4151,23 @@ BreakTrap ROUT
         SUB     r0, r0, #8
         ADR     r1, Breaklist
         LDR     r10, [r1, r0]
-        ORR     r10, r10, r3
-        STR     r10, pc_register        ; Save pc+psr from breakpoint
 
+        LDRB    r2, SysIs32bit
+        TEQ     r2, #0
+
+        ORREQ   r10, r10, r3            ; recombine pc+psr for a 26-bit dump
+        STREQ   r10, pc_register
+
+        STRNE   r10, pc_register        ; separate pc+psr for a 32-bit dump
+        STRNE   r4, psr_register
+
+        BIC     R10,R10,#ARM_CC_Mask
+
+BreakTrapCommonExit
         BL      message_writes
         DCB     "M44", 0
         ALIGN
 
-        BIC     R10,R10,#ARM_CC_Mask
         BLVC    DisplayHexWord          ; Tee hee, nowhere to go if VS! <<<
         SWIVC   XOS_NewLine
 
@@ -3820,6 +4176,33 @@ BreakTrap ROUT
 
         SWI     XOS_NewLine
         SWI     XOS_Exit
+
+
+; When we're hit in a 32-bit mode
+BreakTrap32
+
+        SWI     XOS_EnterOS             ; And why not too!
+
+        LDR     r1, TrapStore
+        ADR     r0, BreakCodeStart      ; Calculate Breakpoint number we hit
+        SUB     r0, r1, r0
+        SUB     r0, r0, #8
+        ADR     r1, Breaklist
+        LDR     r10, [r1, r0]
+
+        LDRB    r2, SysIs32bit
+        TEQ     r2, #0
+
+        BICEQ   r2, r10, #ARM_CC_Mask   ; keep r10 whole for message
+        ANDEQ   r4, r4, #ARM_CC_Mask    ; although we can't put it in the dump
+        ORREQ   r2, r2, r4
+        STREQ   r2, pc_register         ; combine pc+psr for a 26-bit dump
+
+        STRNE   r10, pc_register        ; separate pc+psr for a 32-bit dump
+        STRNE   r4, psr_register
+
+        B       BreakTrapCommonExit
+
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 -> string
@@ -3960,23 +4343,25 @@ ReadParm ENTRY "r2"
         TEQ     r0, #"r"
         BEQ     %FT50                   ; register
 
+        LDRB    r7, SysIs32bit
+
         TEQ     r0, #"p"
-        MOVEQ   r0, #"c"                ; Expect 'c'
-        LDREQ   r7, pc_register
- [ :LNOT: Addr26
+        BNE     %FT20
+        MOV     r0, #"c"                ; Expect 'c'
+        TEQ     r7, #0
+        LDR     r7, pc_register
         BICEQ   r7, r7, #ARM_CC_Mask    ; knock off psr bits for "pc" but not for "r15"
- ]
-        BEQ     %FT60
+        B       %FT60
 
-        TEQ     r0, #"l"
-        MOVEQ   r0, #"r"                ; Expect 'r'
-        LDREQ   r7, Registers + 14*4
- [ :LNOT: Addr26
+20      TEQ     r0, #"l"
+        BNE     %FT30
+        MOV     r0, #"r"                ; Expect 'r'
+        TEQ     r7, #0
+        LDR     r7, Registers + 14*4
         BICEQ   r7, r7, #ARM_CC_Mask    ; knock off psr bits for "lr" but not for "r14"
- ]
-        BEQ     %FT60
+        B       %FT60
 
-        TEQ     r0, #"s"
+30      TEQ     r0, #"s"
         MOVEQ   r0, #"p"                ; Expect 'p'
         LDREQ   r7, Registers + 13*4
         BEQ     %FT60
@@ -4066,7 +4451,18 @@ MakeBranch ROUT
  DREG r1," from ",cc
  DREG r2," is "
  ]
-        MOVS    pc, lr
+        MOV     pc, lr
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; In    r3 = breakpoint number*8
+
+; Out   r2 = instruction
+MakeMOVPC ROUT
+        ASSERT  DebuggerSpace < &400
+        LDR     r2, =&E3A0FF00 + (DebuggerSpace :SHR: 2)
+        ADD     r2, r2, r3, LSR #2
+        MOV     pc, lr
+
 
 lookup_r10 ENTRY r0-r7
         BL      open_messagefile
@@ -4087,7 +4483,9 @@ lookup_r10 ENTRY r0-r7
 
 message_writes
         ENTRY   r0-r7
-        BIC     r0, lr, #&fc000003
+        SUB     r0, lr, pc              ; processor independent
+        ADD     r0, pc, r0              ; extraction of pc from lr
+        SUB     r0, r0, #4
         MOV     r2, r0
 10      LDRB    r1, [r2], #1
         TEQS    r1, #0
@@ -4163,89 +4561,6 @@ open_messagefile ENTRY r0-r2
         MOV     r0, #1
         STR     r0, MessageFile_Open
         EXIT
-
-; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
- [ rp0512
-
-memorytest2
-;for memorya - only allow values <&3000000
-  STMFD R13!,{R7-R9,R14}
-  CMPS R7,#&3000000
-  CMPLTS R9,#&3000000
-  BHS bad_write_addr
-  B memtest
-
-memorytest
-  STMFD R13!,{R7-R9,R14}
-memtest
-  ;address range=R9 to R7
-
-  ;under <&2000000 call OS_ValidateAddress
-  ;no if within &3000000-&33FFFFF
-  ;yes if &3400000-&3FFFFFF
-
-  ;is high address above validated area ?
-  CMPS r7,#&2000000
-  BHS above_logical
-
-  ;feed both through OS_ValidateAddress
-  MOV r0,r9
-  MOV r1,r7
-  SWI XOS_ValidateAddress
-  BCS bad_addr
-values_ok
-  LDMFD R13!,{R7-R9,R15}
-
-
-above_logical
-  ;is low address below this range
-  CMPS r9,#&2000000
-  BHS not_logical
-
-  ;validate from low address to end of logical ram
-  MOV r0,r9
-  MOV r1,#&2000000
-  SUB r1,r1,#1
-  SWI XOS_ValidateAddress
-  BCS bad_addr
-
-not_logical
-  ;now bounce if either involve, or pass &3000000-&33FFFFF
-  ;logic - if low addr<&33FFFFF and hi>&3000000 bounce it - crosses the range
-  ;then bounce if either is within the range &3000000-&33FFFFF
-
-  MOV r8,#&3400000
-  SUB r8,r8,#1
-
-  CMPS r9,r8
-  BHS values_ok ;lower is >end of area, so higher must be
-
-  CMPS r7,#&3000000
-  BLT values_ok ; higher is before area, so lower must be
-
-bad_addr
-  ADR R0,badaddr
-bad_common
-  LDMFD R13!,{R7-R9,R14} ;recover regs and return for BL
-  LDMFD R13!,{R6-R11,R14}
-  B CopyError
-
-bad_write_addr
-  ADR R0,badwrite
-  B bad_common
-
-badaddr
-  DCD ErrorNumber_CoreNotReadable
-  = "BadRead",0
-  ALIGN
-
-badwrite
-  DCD ErrorNumber_CoreNotWriteable
-  = "BadWrt",0
-  ALIGN
-
- ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
