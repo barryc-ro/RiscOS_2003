@@ -81,7 +81,6 @@ OBJS =\
 	o.riscos_uti \
 	o.riscos_gra \
 	o.Font \
-	o.debug \
 	o.TextMan \
 	o.MemMan \
 	o.Text \
@@ -103,7 +102,6 @@ RAM_OBJS =\
 	o.riscos_uti \
 	o.riscos_gra \
 	o.Font \
-	o.debug \
 	o.TextMan \
 	o.MemMan \
 	o.Text \
