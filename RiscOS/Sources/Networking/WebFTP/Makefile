@@ -27,6 +27,7 @@ WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -wp
+CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #
@@ -41,13 +42,15 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
+INETLIB_NORM=TCPIPLibs:o.inetlib
+SOCKLIB_NORM=TCPIPLibs:o.socklib
 #
 # Include files
 #
 
 INCLUDES  = -IC:,TCPIPLibs:
 
-DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DDEBUG=0 -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4
+DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DDEBUG=0 -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -DFTP_PUT -DCSFS
 
 #
 # Program specific options:
@@ -61,14 +64,13 @@ EXPORTS   = h.webftp
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
 all: rm.${COMPONENT}
-
 #
 # RISC OS ROM build rules:
 #
@@ -121,6 +123,13 @@ rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
+test: o.test1
+        ${LD} -o $@ o.test1 ${CLIB} ${INETLIB_NORM}
+        @echo Test built
+
+o.test1: c.test1
+        ${CC} -c ${INCLUDES} ${DFLAGS} -o $@ c.test1
+
 # Dynamic dependencies:
 o.webftp:	c.webftp
 o.webftp:	h.all
@@ -168,6 +177,7 @@ o.webftp:	C:h.kernel
 o.webftp:	TCPIPLibs:h.inetlib
 o.webftp:	TCPIPLibs:sys.h.types
 o.webftp:	TCPIPLibs:netinet.h.in
+o.webftp:	TCPIPLibs:netinet.h.tcp_timer
 o.webftp:	C:h.kernel
 o.webftp:	C:h.swis
 o.webftp:	h.files
@@ -177,6 +187,7 @@ o.webftp:	h.webftp
 o.webftp:	h.pads
 o.webftp:	h.privwebftp
 o.webftp:	h.autofns
+o.webftp:	h.csfs
 o.q:	c.q
 o.q:	h.all
 o.q:	h.tcplibs
@@ -223,6 +234,7 @@ o.q:	C:h.kernel
 o.q:	TCPIPLibs:h.inetlib
 o.q:	TCPIPLibs:sys.h.types
 o.q:	TCPIPLibs:netinet.h.in
+o.q:	TCPIPLibs:netinet.h.tcp_timer
 o.q:	C:h.kernel
 o.q:	C:h.swis
 o.q:	h.files
@@ -232,6 +244,7 @@ o.q:	h.webftp
 o.q:	h.pads
 o.q:	h.privwebftp
 o.q:	h.autofns
+o.q:	h.csfs
 o.files:	c.files
 o.files:	h.tcplibs
 o.files:	TCPIPLibs:sys.h.types
@@ -335,6 +348,7 @@ o.misc:	C:h.kernel
 o.misc:	TCPIPLibs:h.inetlib
 o.misc:	TCPIPLibs:sys.h.types
 o.misc:	TCPIPLibs:netinet.h.in
+o.misc:	TCPIPLibs:netinet.h.tcp_timer
 o.misc:	C:h.kernel
 o.misc:	C:h.swis
 o.misc:	h.files
@@ -344,6 +358,7 @@ o.misc:	h.webftp
 o.misc:	h.pads
 o.misc:	h.privwebftp
 o.misc:	h.autofns
+o.misc:	h.csfs
 o.dirparse:	c.dirparse
 o.dirparse:	h.all
 o.dirparse:	h.tcplibs
@@ -390,6 +405,7 @@ o.dirparse:	C:h.kernel
 o.dirparse:	TCPIPLibs:h.inetlib
 o.dirparse:	TCPIPLibs:sys.h.types
 o.dirparse:	TCPIPLibs:netinet.h.in
+o.dirparse:	TCPIPLibs:netinet.h.tcp_timer
 o.dirparse:	C:h.kernel
 o.dirparse:	C:h.swis
 o.dirparse:	h.files
@@ -399,3 +415,4 @@ o.dirparse:	h.webftp
 o.dirparse:	h.pads
 o.dirparse:	h.privwebftp
 o.dirparse:	h.autofns
+o.dirparse:	h.csfs
