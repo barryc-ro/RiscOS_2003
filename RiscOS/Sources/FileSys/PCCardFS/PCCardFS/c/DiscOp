@@ -121,6 +121,8 @@ int PCCardFS_DiscOp(_kernel_swi_regs *reg)
 int DiscOp__ReadSectors(_kernel_swi_regs *reg)
     {
     int                 error = 0;                      /* ie. no error                  */
+    int                 bytes_left, next_disc_address, driveused, bytes_to_write;
+    int                *scatter_list_pointer;
     _kernel_swi_regs    pcmcia;
     _kernel_swi_regs    regblock;
 
@@ -142,27 +144,91 @@ int DiscOp__ReadSectors(_kernel_swi_regs *reg)
     regblock.r[1] = (reg ->r[2] >> 29) & 0x07; /** carddrive in question **/
     _kernel_swi(PCMCIA_FSOp, &regblock, &regblock);
 
-    if(regblock.r[1] == 0) return(ERROR__FILECORE__DRIVE_EMPTY);
+    if(regblock.r[2] == PARTITION_STATUS__DRIVEEMPTY) {
+        Emptyness = Emptyness & !(1 << ((reg ->r[2] >> 29) & 0x07));
+        return(ERROR__FILECORE__DRIVE_EMPTY);
+    }
 
-    /*********************************************************************************/
-    /***    Call the PCMCIA_Read SWI to read the data.                             ***/
-    /*********************************************************************************/
-    pcmcia.r[0] = 1;                                /* Use read type 'Raw'           */
-    pcmcia.r[1] = ((reg ->r[2] >> 29) & 0x07);      /* ie. card X                    */
-    pcmcia.r[2] = reg ->r[2] & 0x1FFFFFFF;          /* byte address (ie. same as disc address) */
-    pcmcia.r[3] = reg ->r[3];                       /* buffer to write data to       */
-    pcmcia.r[4] = reg ->r[4];                       /* bytes to read                 */
-    if(_kernel_swi(PCMCIA_Read, &pcmcia, &pcmcia) == NULL) {
-        reg ->r[2] += reg ->r[4];                   /* next disc address to read     */
-        reg ->r[3] += reg ->r[4];                   /* next buffer address           */
-        reg ->r[4] = pcmcia.r[4];                   /* bytes not transfered          */
+    if ((reg ->r[1] & 0x20) != 0) {
+        #if Debug == TRUE
+            DebugMessage("kR", "       Using Scatter List Transfer on a READ!\n");
+        #endif
+        /*****************************************************************************/
+        /***    use scatter list information in transfer.                          ***/
+        /*****************************************************************************/
+        next_disc_address = reg ->r[2] & 0x1FFFFFFF;    /* keeps track of disc address   */
+        driveused = (reg ->r[2] >> 29) & 0x07;
+        bytes_left = reg ->r[4];                        /* bytes to read                 */
+        scatter_list_pointer = (int *) reg ->r[3];      /* pointer to scatter list       */
+
+        do {
+            pcmcia.r[0] = 1;
+            pcmcia.r[1] = driveused;                        /* ie. card X                    */
+            pcmcia.r[2] = next_disc_address;                /* byte address (ie. same as disc address) */
+            pcmcia.r[3] = *(scatter_list_pointer + 0);      /* buffer to write data from     */
+            pcmcia.r[4] = *(scatter_list_pointer + 1);      /* bytes to write                */
+            if(pcmcia.r[4] > bytes_left) pcmcia.r[4] = bytes_left;
+
+            bytes_to_write = pcmcia.r[4];
+
+            #if Debug == TRUE
+                DebugMessage("kR", "Scatter list address: %d, length %d\n",pcmcia.r[3], *(scatter_list_pointer+1));
+            #endif
+
+            #if Debug == TRUE
+                DebugMessage("kR", "PCMCIA_Read sent R2 s &%8X, R3 as &%8X, and R4 as &%8X\n",pcmcia.r[2], pcmcia.r[3], pcmcia.r[4]);
+            #endif
+
+            if (_kernel_swi(PCMCIA_Read, &pcmcia, &pcmcia) != NULL) {
+                error = pcmcia.r[0];                        /* point to error message */
+                #if Debug == TRUE
+                    DebugMessage("cK", ">Error returned from PCMCIA_Read\n");
+                #endif
+            }
+
+            #if Debug == TRUE
+                DebugMessage("kR", "PCMCIA_Read returned R3 as &%8X, and R4 as &%8X\n",pcmcia.r[3], pcmcia.r[4]);
+            #endif
+
+            next_disc_address += (bytes_to_write - pcmcia.r[4]);
+            bytes_left -= (bytes_to_write - pcmcia.r[4]);
+
+            if(bytes_left != 0) scatter_list_pointer +=2;
+
+            #if Debug == TRUE
+                DebugMessage("kR", "    DONE ONE SCATTER READ. bytes_left is %d\n",bytes_left);
+            #endif
+
+        } while(bytes_left != 0);
+
+        reg ->r[2] = next_disc_address;                 /* next read position           */
+        *(scatter_list_pointer + 0) = *(scatter_list_pointer + 0) + (bytes_to_write - pcmcia.r[4]);
+        *(scatter_list_pointer + 1) = *(scatter_list_pointer + 1) - (bytes_to_write - pcmcia.r[4]);
+        reg ->r[3] = (int) scatter_list_pointer;        /* last scatter list entry point */
+        reg ->r[4] = bytes_left;
     }
     else
     {
-        error = pcmcia.r[0];                        /* point to error message */
-        #if Debug == TRUE
-            DebugMessage("cK", ">Error returned from PCMCIA_Read\n");
-        #endif
+        /*********************************************************************************/
+        /***    Call the PCMCIA_Read SWI to read the data.                             ***/
+        /*********************************************************************************/
+        pcmcia.r[0] = 1;                                /* Use read type 'Raw'           */
+        pcmcia.r[1] = ((reg ->r[2] >> 29) & 0x07);      /* ie. card X                    */
+        pcmcia.r[2] = reg ->r[2] & 0x1FFFFFFF;          /* byte address (ie. same as disc address) */
+        pcmcia.r[3] = reg ->r[3];                       /* buffer to write data to       */
+        pcmcia.r[4] = reg ->r[4];                       /* bytes to read                 */
+        if(_kernel_swi(PCMCIA_Read, &pcmcia, &pcmcia) == NULL) {
+            reg ->r[2] += reg ->r[4];                   /* next disc address to read     */
+            reg ->r[3] += reg ->r[4];                   /* next buffer address           */
+            reg ->r[4] = pcmcia.r[4];                   /* bytes not transfered          */
+        }
+        else
+        {
+            error = pcmcia.r[0];                        /* point to error message */
+            #if Debug == TRUE
+                DebugMessage("cK", ">Error returned from PCMCIA_Read\n");
+            #endif
+        }
     }
 
     #if Debug == TRUE
@@ -197,7 +263,7 @@ int DiscOp__ReadSectors(_kernel_swi_regs *reg)
 int DiscOp__WriteSectors(_kernel_swi_regs *reg)
     {
     int                 error = 0;                      /* ie. no error                  */
-    int                 bytes_left, next_disc_address, bytes_to_write;
+    int                 bytes_left, next_disc_address, driveused, bytes_to_write;
     int                *scatter_list_pointer;
     _kernel_swi_regs    pcmcia;
     _kernel_swi_regs    regblock;
@@ -220,11 +286,16 @@ int DiscOp__WriteSectors(_kernel_swi_regs *reg)
     regblock.r[1] = (reg ->r[2] >> 29) & 0x07; /** Carddrive **/
     _kernel_swi(PCMCIA_FSOp, &regblock, &regblock);
 
-    if(regblock.r[1] == 0) return(ERROR__FILECORE__DRIVE_EMPTY);
-
+    if(regblock.r[2] == PARTITION_STATUS__DRIVEEMPTY) {
+        Emptyness = Emptyness & !(1 << ((reg ->r[2] >> 29) & 0x07));
+        return(ERROR__FILECORE__DRIVE_EMPTY);
+    }
 
     /*** Update the sequence number 'cos summats gonna change... ****/
-
+    #if Debug == TRUE
+        DebugMessage("cK", "Updating the sequence number\n");
+    #endif
+/*    Sequence[(reg ->r[2] >> 29) & 0x07] = Sequence[(reg ->r[2] >> 29) & 0x07]+1; */
 
     /*********************************************************************************/
     /***    Call the PCMCIA_Write SWI to write the data.                           ***/
@@ -237,31 +308,57 @@ int DiscOp__WriteSectors(_kernel_swi_regs *reg)
         /***    use scatter list information in transfer.                          ***/
         /*****************************************************************************/
         next_disc_address = reg ->r[2] & 0x1FFFFFFF;    /* keeps track of disc address   */
+        driveused = (reg ->r[2] >> 29) & 0x07;
         bytes_left = reg ->r[4];                        /* bytes to read                 */
         scatter_list_pointer = (int *) reg ->r[3];      /* pointer to scatter list       */
 
         do {
             pcmcia.r[0] = 1;
-            pcmcia.r[1] = (reg ->r[2] >> 29) & 0x07;        /* ie. card X                    */
+            pcmcia.r[1] = driveused;                        /* ie. card X                    */
             pcmcia.r[2] = next_disc_address;                /* byte address (ie. same as disc address) */
             pcmcia.r[3] = *(scatter_list_pointer + 0);      /* buffer to write data from     */
             pcmcia.r[4] = *(scatter_list_pointer + 1);      /* bytes to write                */
-            if(pcmcia.r[4] > bytes_left) {
-                pcmcia.r[4] = bytes_left;
-            }
+            if(pcmcia.r[4] > bytes_left) pcmcia.r[4] = bytes_left;
+
             bytes_to_write = pcmcia.r[4];
+
+            #if Debug == TRUE
+                DebugMessage("kC", "Scatter list address: %d, length %d\n",pcmcia.r[3], *(scatter_list_pointer+1));
+            #endif
+
+            #if Debug == TRUE
+                DebugMessage("kC", "PCMCIA_Write sent R2 s &%8X, R3 as &%8X, and R4 as &%8X\n",pcmcia.r[2], pcmcia.r[3], pcmcia.r[4]);
+            #endif
 
             if (_kernel_swi(PCMCIA_Write, &pcmcia, &pcmcia) != NULL) {
                 error = pcmcia.r[0];                        /* point to error message */
                 #if Debug == TRUE
-                    DebugMessage("cK", ">Error returned from PCMCIA_Write\n");
+                    DebugMessage("cK", ">Error returned from PCMCIA_Write - was %s\n",(error+4));
                 #endif
+                if(next_disc_address == pcmcia.r[2]) {
+                    #if Debug == TRUE
+                        DebugMessage("cK", "Erm, we think it is a disc-protected error\n");
+                    #endif
+                    error = ERROR__FILECORE__DISC_PROTECTED;
+                    reg ->r[0] = ERROR__FILECORE__DISC_PROTECTED;
+                }
             }
-            next_disc_address = pcmcia.r[3];
+
+            #if Debug == TRUE
+                DebugMessage("kC", "PCMCIA_Write returned R3 as &%8X, and R4 as &%8X\n",pcmcia.r[3], pcmcia.r[4]);
+            #endif
+
+            next_disc_address += (bytes_to_write - pcmcia.r[4]);
             bytes_left -= (bytes_to_write - pcmcia.r[4]);
 
-            if ((error != 0) && (bytes_left != 0)) scatter_list_pointer +=2;
-        } while((bytes_left !=0) && (error == 0));
+            if(bytes_left != 0) scatter_list_pointer +=2;
+
+            #if Debug == TRUE
+                DebugMessage("kC", "    DONE ONE SCATTER WRITE. bytes_left is %d\n",bytes_left);
+            #endif
+
+        } while((bytes_left != 0) && error == 0);
+
         reg ->r[2] = next_disc_address;                 /* next write position           */
         *(scatter_list_pointer + 0) = *(scatter_list_pointer + 0) + (bytes_to_write - pcmcia.r[4]);
         *(scatter_list_pointer + 1) = *(scatter_list_pointer + 1) - (bytes_to_write - pcmcia.r[4]);
@@ -287,8 +384,14 @@ int DiscOp__WriteSectors(_kernel_swi_regs *reg)
         {
             error = pcmcia.r[0];                        /* point to error message */
             #if Debug == TRUE
-                DebugMessage("cK", ">Error returned from PCMCIA_Write\n");
+                DebugMessage("cK", ">Error returned from PCMCIA_Write - was %s\n",(error+4));
             #endif
+            if((reg->r[2] & 0x1FFFFFFF) == pcmcia.r[2]) {
+                #if Debug == TRUE
+                    DebugMessage("cK", "Erm, we think it is a disc-protected error\n");
+                #endif
+                error = ERROR__FILECORE__DISC_PROTECTED;
+            }
         }
     }
 

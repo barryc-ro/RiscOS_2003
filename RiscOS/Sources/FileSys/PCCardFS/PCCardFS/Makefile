@@ -9,6 +9,11 @@
 # 11-Oct-94  WT           Changed constituent files.
 
 #
+# Paths
+#
+EXP_HDR = <export$dir>
+
+#
 # Generic options:
 #
 MKDIR   = cdir
@@ -46,6 +51,14 @@ INCLUDES = -IC:
 COMPONENT   = PCCardFS
 RELOC_MOD   = rm.PCCardFS
 TARGET      = aof.PCCardFS
+EXPORTS     = ${EXP_HDR}.PCCardFS
+RDIR        = Resources
+LDIR        = ${RDIR}.${LOCALE}
+
+#
+# Export Paths for Messages module
+#
+RESDIR = <resource$dir>.Resources2.${COMPONENT}
 
 OBJS =\
  Debug.o\
@@ -93,8 +106,8 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${MKDIR} ${RESDIR}
+        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # ROM target (re-linked at ROM Image build time)
@@ -102,20 +115,43 @@ resources:
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
-rom_image:
+rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} { > map.${COMPONENT} }
-        GetArSize AS map.${COMPONENT} Stub$$Data
-        @echo Truncating <AS> bytes from linked.${COMPONENT}
-        @Truncate linked.${COMPONENT} <AS>
-        @Unset AS
-        @echo ${COMPONENT}: rom_image complete
+        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 
 ${RELOC_MOD}: ${OBJS} ${CLIB}
         ${LD} -o $@ -Module ${OBJS} ${CLIB}
 
+${EXP_HDR}.PCCardFS: hdr.PCCardFS
+        ${CP} hdr.PCCardFS $@ ${CPFLAGS}
+
 # Dynamic dependencies:
+o.Debug:	c.Debug
+o.Debug:	C:h.swis
+o.Debug:	C:h.kernel
+o.Debug:	C:h.kernel
+o.DefaultCIS: s.DefaultCIS
+o.DiscOp:	c.DiscOp
+o.DiscOp:	C:h.kernel
+o.DiscOp:	h.Defs
+o.DiscOp:	h.Structs
+o.DiscOp:	h.Variables
+o.DiscOp:	h.DiscOp
+o.DiscOp:	h.Error
+o.DiscOp:	h.Misc
+o.DiscOp:	h.Debug
+o.Error:	c.Error
+o.Error:	C:h.kernel
+o.Error:	h.Defs
+o.Error:	h.Structs
+o.Error:	h.Error
+o.Error:	h.Debug
+o.Error:	h.Variables
+o.FS_Veneer: s.FS_Veneer
 o.Init:	c.Init
 o.Init:	C:h.kernel
 o.Init:	h.Defs
@@ -154,6 +190,7 @@ o.Resources:	h.Debug
 o.Services:	c.Services
 o.Services:	C:h.kernel
 o.Services:	h.Defs
+o.Services:	h.Misc
 o.Services:	h.Structs
 o.Services:	h.Variables
 o.Services:	h.Services
@@ -181,23 +218,3 @@ o.Variables:	c.Variables
 o.Variables:	C:h.kernel
 o.Variables:	h.Defs
 o.Variables:	h.Structs
-o.Debug:	c.Debug
-o.Debug:	C:h.swis
-o.Debug:	C:h.kernel
-o.Debug:	C:h.kernel
-o.DiscOp:	c.DiscOp
-o.DiscOp:	C:h.kernel
-o.DiscOp:	h.Defs
-o.DiscOp:	h.Structs
-o.DiscOp:	h.Variables
-o.DiscOp:	h.DiscOp
-o.DiscOp:	h.Error
-o.DiscOp:	h.Misc
-o.DiscOp:	h.Debug
-o.Error:	c.Error
-o.Error:	C:h.kernel
-o.Error:	h.Defs
-o.Error:	h.Structs
-o.Error:	h.Error
-o.Error:	h.Debug
-o.Error:	h.Variables
