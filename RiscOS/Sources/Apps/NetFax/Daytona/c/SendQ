@@ -16,6 +16,7 @@
 #define TEXTUAL_EMAIL 0
 #define HARDCOPY_FINISHED 1
 #define NEWCODE 1
+#define NEW_COUNTER 1
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,14 +69,15 @@ enum _HL_RC { OK = 0, Error_MultipleNAN, Error_NoMemory, OS_Error };
 typedef enum _HL_RC HL_RC;
 
 
-/* external flags that trigger in immediate dialup */
-BOOL isp_dialup_timer_request = FALSE;      /* } both are cleared as soon as a SQ_RX_DIAL_ISP starts, but we set          */
-BOOL isp_dialup_user_request = FALSE;		/* } isp_dialup_redial_needed to cause a later redial if the connection fails */
+/* external flags that trigger an immediate dialup (for send then receive) */
+BOOL isp_dialup_timer_request = FALSE;      /* } all are cleared as soon as a SQ_RX_DIAL_ISP starts,  */
+BOOL isp_dialup_user_request = FALSE;		/* } but we set isp_dialup_redial_needed to cause a later */
+BOOL isp_dialup_download_request = FALSE;   /* } redial if the connection fails                       */
 
 /* local flags that trigger a dialup when time() is connection->RetryTime */
 static BOOL isp_dialup_redial_needed = FALSE;      /* this should only be cleared when the complete send/receive cycle has happened */
 static BOOL isp_dialup_watermark_reached = FALSE;  /* this can be cleared after each complete document has been sent */
-                                                   /*>>>RCM says rename this, as it is set when a documents RequestTX flag is set*/
+                                                   /*>>>RCM says rename this, as it is set when a documents RequestTx flag is set*/
                                                    /*>>>    ie when watermark reached or scan complete and document should be sent immediatly*/
 
 BOOL user_request_cancel_fax = FALSE;
@@ -117,6 +119,7 @@ static void Log_TxConnectingError(enum _SendRoute route, PhoneConnection *connec
 #endif
 static void Log_TxConnectingFailed(enum _SendRoute route, PhoneConnection *connection);
 static void Log_TxConnected(enum _SendRoute route, PhoneConnection *connection);
+static void Log_TxConnectedSentData(enum _SendRoute route, PhoneConnection *connection);
 static void Log_TxConnectedErrorSendingDoc(enum _SendRoute route, PhoneConnection *connection, messageDataBlock *messageData, Document document);
 static void Log_TxConnectedError(enum _SendRoute route, messageDataBlock *messageData);
 #if SUPPORT_UI
@@ -861,6 +864,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								if (transmit_document)
 								{
 								    transmit_document->SendState = SendRUNNING; 	/* in progress (2) */
+								    transmit_document->ResumeTx  = TRUE;            /* consistant with email, but not really needed? */
 					transmit_document->RequestTx = FALSE;	/*>>>try this*/
 
 									/* start screen animations for direct send */
@@ -903,6 +907,8 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								    
 								    LogFileIF_show_decimal_uint(LOG_DEBUG, "RX_SQ_PAGE_SENT page", messageData->data.rx_sq_page_sent.page);
 								    LogFileIF_show_decimal_uint(LOG_DEBUG, "           SendCount", transmit_document->SendCount);
+
+                                    Log_TxConnectedSentData(RouteDIRECT, &(transmit_document->Connection));
 								}
 								break;
 					
@@ -919,9 +925,8 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 
                                     /*REPORT: PagesSent & status*/ 
 									Log_TxSentDocument(RouteDIRECT, transmit_document);	/* log transmission of document */
-
-#if 1 /* PAN-xxxx */
-                                    /* fix PAN-xxxx */
+#if 1 /* PAN-01708 & PAN-0xxxx */
+                                    /* Part of fix for PAN-01708 (T-FAX) & PAN-0xxxx (Daytona equivalant) */
                                     transmit_document->RequestTx = FALSE;   /* if still scanning, don't redial until scan completes or HWM hit again */
 #endif
 								    transmit_document->SendState = SendCOMPLETE;	/* complete (3) */
@@ -956,6 +961,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 							case RX_SQ_GOING_IDLE:
 								/* the send has just completed */
 #if 0
+                                /* N.B. transmit_document MUST NOT be used after RX_SQ_DOCUMENT_SENT has been processed */ 
                                 if (transmit_document)
                                     Log_TxDisconnected(RouteDIRECT, &(transmit_document->Connection);
 
@@ -990,12 +996,14 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								/* count a failed dialup, calculate when the next attempt should be */
 								Log_TxConnectingFailed(RouteISP, &isp_dialup.Connection[isp_dialup.using_now]);
 								isp_dialup.using_now = -1;    /* dormant */
+								RemXfer_Lockout_Incoming = FALSE;   /* MUST clear any inhibit incoming call flags here */
 	                    		nextstate = txIDLE;
 								break;
 
                             case RX_SQ_CONNECTED:
 					            Log_TxConnected(RouteISP, &isp_dialup.Connection[isp_dialup.using_now]);	/* log successful connection to ISP */
-					            isp_dialup.use_next = -1;   /* if call fails now, reset retry counters, retry with first number */ 
+					            isp_dialup.use_next = -1;   /* if call fails now, reset retry counters, retry with first number */
+					            RemXfer_Lockout_Incoming = FALSE;   /* MUST clear any inhibit incoming call flags here */
 								nextstate = txISPCONNECTED;
 								break;
 						}
@@ -1016,7 +1024,8 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								if (transmit_document)
 								{
                                     transmit_document->SendState = SendRUNNING; 	/* in progress (2) */
-
+                                    transmit_document->ResumeTx  = TRUE;            /* we clear RequestTx on RX_SQ_DOCUMENT_SENT, so ensure that */
+                                                                                    /* the tail end of a document that streams gets sent */ 
 								    Log_TxSendDocument(RouteISP, transmit_document);
 
 									/* start screen animations for email sending */
@@ -1040,6 +1049,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								/* delete pages that failed to move/delete the lot if HardCopy not required */
 								purge_directory(transmit_document->Directory, messageData->data.page_range_sent.loPage, messageData->data.page_range_sent.hiPage);
 #endif
+                                Log_TxConnectedSentData(RouteISP, &isp_dialup.Connection[isp_dialup.using_now]);
 								break;
 
 							case RX_SQ_DOCUMENT_SENT:
@@ -1056,7 +1066,10 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								    sendMessage->data.sq_sc_document_sent.pagesSent = transmit_document->SendCount;
 
 									Log_TxSentDocument(RouteISP, transmit_document);
-									
+#if 1 /* PAN-0yyyy email version of PAN-01708 & PAN-0xxxx */
+                                    /* fix PAN-0yyyy */
+                                    transmit_document->RequestTx = FALSE;   /* if still scanning, don't redial until scan completes or HWM hit again */
+#endif
 								    transmit_document->SendState = SendCOMPLETE;	/* complete (3) */
 								    transmit_document = NULL;	/* this handler no longer needs to reference this document */
 #if 0
@@ -1118,7 +1131,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 					sendMessage->data.this_document.hiText = 0;
 					sendMessage->data.this_document.loPage = transmit_document->SendCount + 1;
 					sendMessage->data.this_document.hiPage = transmit_document->ScanCount;
-					sendMessage->data.this_document.pageStream = (transmit_document->ScanState != ScanCOMPLETE);
+					sendMessage->data.this_document.pageStream = (BOOL)(transmit_document->ScanState != ScanCOMPLETE);
 					strcpy(sendMessage->data.this_document.directory, transmit_document->Directory);
                 }
                 
@@ -1146,7 +1159,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 			    	sendMessage->data.this_document.hiText = 0;
 			    	sendMessage->data.this_document.loPage = transmit_document->SendCount + 1;
 			    	sendMessage->data.this_document.hiPage = transmit_document->ScanCount;
-			    	sendMessage->data.this_document.pageStream = (transmit_document->ScanState != ScanCOMPLETE);
+			    	sendMessage->data.this_document.pageStream = (BOOL)(transmit_document->ScanState != ScanCOMPLETE);
 					strcpy(sendMessage->data.this_document.directory, transmit_document->Directory);
 				}
 				else
@@ -1168,7 +1181,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 				    	sendMessage->data.this_document.hiText = 0;
 				    	sendMessage->data.this_document.loPage = encoding_document->SendCount + 1;
 				    	sendMessage->data.this_document.hiPage = encoding_document->ScanCount;
-				    	sendMessage->data.this_document.pageStream = (encoding_document->ScanState != ScanCOMPLETE);
+				    	sendMessage->data.this_document.pageStream = (BOOL)(encoding_document->ScanState != ScanCOMPLETE);
 						strcpy(sendMessage->data.this_document.directory, encoding_document->Directory);
 					}
 				else
@@ -1540,6 +1553,9 @@ static void Log_RxConnectedError(messageDataBlock *messageData)
 
 static char log_tx_dial_number[30] = { 0 };
 static int  log_tx_error_count = 0;
+#if NEW_COUNTER
+static int  log_tx_dataXfer = 0;
+#endif
 
 /*
  * Capture time when dialup started
@@ -1565,11 +1581,12 @@ static void Log_TxConnecting(enum _SendRoute route, PhoneConnection *connection,
         /* we clear all the 'dial now' flags, setting a redial later flag incase the dial fails */
         /* if the dial fails, a redial will occur sometime later, or immediately if one of the  */
         /* 'dial now' flags is set again */
-        if (isp_dialup_timer_request || isp_dialup_user_request)
+        if (isp_dialup_timer_request || isp_dialup_user_request || isp_dialup_download_request)
             isp_dialup_redial_needed = TRUE;
 
 		isp_dialup_timer_request = FALSE;
 	    isp_dialup_user_request = FALSE;
+        isp_dialup_download_request = FALSE;
 
         /* log the connection attempt */
 		strcpy(buffer, "Dialling ISP on ");
@@ -1654,11 +1671,12 @@ static void Log_TxConnectingFailed(enum _SendRoute route, PhoneConnection *conne
 	{
         /* if any of the 'dial now' flags were set after dialling started, turn them into dial later request */
         /* the redial will occur sometime later, or immediately if one of the 'dial now' flags is set again */
-        if (isp_dialup_timer_request || isp_dialup_user_request)
+        if (isp_dialup_timer_request || isp_dialup_user_request || isp_dialup_download_request)
             isp_dialup_redial_needed = TRUE;
             
 		isp_dialup_timer_request = FALSE;
 	    isp_dialup_user_request = FALSE;
+	    isp_dialup_download_request = FALSE;
 	}
 
 	/*>>>Report the failure to the screen and LogFile */
@@ -1701,6 +1719,10 @@ static void Log_TxConnected(enum _SendRoute route, PhoneConnection *connection)
 
 	log_tx_error_count = 0;	/* unlikely not to be zero */
 
+#if NEW_COUNTER
+    log_tx_dataXfer = 0;
+#endif
+
 	if (route == RouteISP)
 	{
 #if 1
@@ -1716,6 +1738,13 @@ static void Log_TxConnected(enum _SendRoute route, PhoneConnection *connection)
 	}
 }
 
+
+static void Log_TxConnectedSentData(enum _SendRoute route, PhoneConnection *connection)
+{
+#if NEW_COUNTER
+    log_tx_dataXfer = 1;    
+#endif
+}
 
 static void strncat_recipient(char *buffer, enum _SendRoute route, Document document, int bufsize)
 {
@@ -1865,6 +1894,14 @@ static void Log_TxSentDocument(enum _SendRoute route, Document document)
 	/* switch in when HANGUP followed by immediate dial failure is fixed */
 	connection->RetryTime   = time(NULL) + 30;	/*now() + something(connection->RetryCount);*/	
 #endif
+#if NEW_COUNTER
+    if (route == RouteDIRECT)
+    {
+        /* if trying to send data, but non went, count the connection as bad */
+        if (log_tx_dataXfer == 0)
+            document->Connection.BadConnection++;
+    }
+#endif
 }
 
 #if SUPPORT_EMAIL
@@ -1880,6 +1917,7 @@ static void Log_TxDisconnected(enum _SendRoute route, PhoneConnection *connectio
         
         isp_dialup_timer_request = FALSE;   /* timer and user requests to dial the ISP received  */
         isp_dialup_user_request = FALSE;    /* during a connection to the ISP are ignored        */
+      /*NB leave isp_dialup_download_request alone, it must be allowed to trigger a dial if set */  
       /*isp_dialup_redial_needed = FALSE;*/
 
         strcpy(buffer, "Disconnected from ISP OK");
@@ -1888,6 +1926,11 @@ static void Log_TxDisconnected(enum _SendRoute route, PhoneConnection *connectio
 
         LogFileIF_Message(buffer);
     }
+#if NEW_COUNTER
+    /* if trying to send data, but non went, count the connection as bad */
+    if (log_tx_dataXfer == 0)
+        connection->BadConnection++;
+#endif
 }
 #endif
 #if SUPPORT_EMAIL
@@ -1911,6 +1954,11 @@ static BOOL connection_impossible(enum _SendRoute route, PhoneConnection *connec
 	/* NB we require SetupIF to ensure (*connection->RetryLimit) >= 1 for setup_phone_fax_redial_count */
 	if (connection->RetryCount >= (*connection->RetryLimit))
 		return(TRUE);	/* exhausted our dial-up limit and still not got through! */
+
+#if NEW_COUNTER
+    if (connection->BadConnection >= 3)
+        return(TRUE);   /* we can connect, but no data transfer happens */
+#endif
 
     return(FALSE);
 }
@@ -1997,6 +2045,7 @@ static _kernel_oserror *SendQ_CreateDocument(Document *p_document)
     	document->TextCount = 0;
 #endif
    	    document->RequestTx = FALSE;
+   	    document->ResumeTx  = FALSE;
     	document->SendState = SendIDLE;			/* idle (0) */
     	document->SendCount = 0;                /* no pages transmitted yet */
 	    document->Cancelled = FALSE;
@@ -2004,6 +2053,9 @@ static _kernel_oserror *SendQ_CreateDocument(Document *p_document)
 	    document->Connection.RetryLimit = &setup_phone_fax_redial_count;	/* address not value, so changes in setup will be seen */
 	    document->Connection.RetryCount = 0;	/* not yet tried to direct dial */
 	    document->Connection.RetryTime = time(NULL);	/* time now, to trigger dial as soon as document needs it */
+#if NEW_COUNTER
+        document->Connection.BadConnection = 0;  /* no connection failures so far */
+#endif
 		document->SearchRef = 0;                /* address book search ref */
 #if SUPPORT_ADDRESSBOOK
 		document->AddressRecord.SearchFlags  = ADDRBOOKIF_SEARCH_FLAGS;   /* } Search complete when either */
@@ -2104,8 +2156,8 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
 		            else
 		            	{
 		            		if (((document->RequestTx) || (document->ScanState == ScanCOMPLETE)) &&
-#if 1
-                                /* Part of fix for PAN-xxxx                                                                             */
+#if 1 /* PAN-01708 & PAN-0xxxx */
+                                /* Part of fix for PAN-01708 (T-FAX) & PAN-0xxxx (Daytona equivalant)                                   */
                                 /* if a streaming send exhausts and hangs up, don't redial until we have scanned at least one more page */
                                 (document->SendCount < document->ScanCount) &&
 #endif
@@ -2173,7 +2225,10 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
 					            				send_next_RouteISP = document;
 	
 											if (document->RequestTx)
-												isp_dialup_watermark_reached = TRUE;	/* trigger a DIAL_ISP, which will send all the queued emails */	
+												isp_dialup_watermark_reached = TRUE;	/* trigger a DIAL_ISP, which will send all the queued emails */
+
+                                            if (document->ResumeTx)
+                                                isp_dialup_watermark_reached = TRUE;	/* trigger a DIAL_ISP, which will send all the queued emails */
 										}
 				            			break;
 				            	}		
@@ -2243,7 +2298,7 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
 static void SendQ_NextDocument(BOOL *p_email_flag, Document *p_document)
 {
 
-	if (isp_dialup_timer_request || isp_dialup_user_request ||
+	if (isp_dialup_timer_request || isp_dialup_user_request || isp_dialup_download_request ||
 	    ((isp_dialup_redial_needed || isp_dialup_watermark_reached) && connection_requested_now(RouteISP, &isp_dialup.Connection[isp_dialup.use_next]))
 	   )
 	{
@@ -2404,7 +2459,7 @@ extern void SendQ_requestreceipt_from_pid(BOOL *p_request_receipt, unsigned int 
 
     if ((document = document_from_pid(pid)) != NULL)
     {
-        *p_request_receipt = (BOOL)document->RequestReceipt;
+        *p_request_receipt = document->RequestReceipt;
     }
 }
 
@@ -2513,6 +2568,9 @@ extern void SendQ_TickerHandler(void)
                 }
        			isp_dialup.Connection[i].RetryCount = 0;	/* haven't tried this number yet */
        			isp_dialup.Connection[i].RetryTime  = now;
+#if NEW_COUNTER
+       			isp_dialup.Connection[i].BadConnection = 0; /* no bad connections so far */
+#endif
             }
     
             /* start with the Primary route (first number) */
@@ -2544,6 +2602,7 @@ extern void SendQ_TickerHandler(void)
     		/* unable to contact ISP by any of the known routes - send by direct routing if available */
     		isp_dialup.use_next = -1;	/* initialisation required */
     		isp_unavailable = TRUE;
+    		RemXfer_Lockout_Incoming = FALSE;   /* MUST clear any inhibit incoming call flags here */
     	}
     }
 #if 0
@@ -2564,6 +2623,7 @@ extern void SendQ_TickerHandler(void)
             /* MUST clear all the ISP_DIALUP_xxxx flags that SendQ_NextDocument looks at */    
             isp_dialup_timer_request = FALSE;
 			isp_dialup_user_request = FALSE;
+			isp_dialup_download_request = FALSE;
 
             isp_dialup_redial_needed = FALSE;
             isp_dialup_watermark_reached = FALSE;   /* incase a direct fax was rerouted as email */   
