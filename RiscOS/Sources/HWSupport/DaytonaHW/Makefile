@@ -6,6 +6,9 @@
 # Date		Name		Description
 # ----		----		-----------
 # 1997-07-18	BAL		Created
+# 1998-03-27	RDW		MemCheckCC & LD added to CC & LD
+#				${EXTRALIBS} added to LIBS
+#				${EXTRACFLAGS} added to CFLAGS
 #
 
 
@@ -21,17 +24,17 @@ EXP_C_H = <CExport$dir>.h
 #
 MKDIR		= cdir
 AS		= objasm
-CC		= cc
+CC		= $(MemCheckCC) cc
 CMHG		= cmhg
 CP		= copy
-LD		= link
+LD		= $(MemCheckLD) link
 RM		= remove
 MODSQZ		= modsqz
 RESGEN		= resgen
 WIPE		= -wipe
 
 ASMFLAGS	= -depend !Depend -Stamp -quit -throwback
-CFLAGS		= -c -depend !Depend -strict -wp -zM -zps1 -ffah -throwback ${INCLUDES}
+CFLAGS		= -c -depend !Depend -strict -wp -zM -zps1 -ffah -throwback ${INCLUDES} ${EXTRACFLAGS}
 CMHGFLAGS	= -depend !Depend -p -throwback ${DFLAGS}
 CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
@@ -125,7 +128,7 @@ OBJSSA = \
 
 HDRS = h.modulehdr
 
-LIBS = <Lib$Dir>.callx.o.callx
+LIBS = <Lib$Dir>.callx.o.callx ${EXTRALIBS}
 
 LIBSD =\
  <Lib$Dir>.callx.o.callx\
