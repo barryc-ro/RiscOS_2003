@@ -30,9 +30,8 @@ TOKENS   = Hdr:Tokens
 #
 # Program specific options:
 #
-COMPONENT = BASIC
 EXPORTS   = 
-TARGETS   = rm.BASIC105
+TARGETS   = rm.${COMPONENT}
 
 #
 # Generic rules:
@@ -52,7 +51,7 @@ install: rm.BASIC64
         @echo ${COMPONENT}: BASIC64 installed (Disc)
 
 install_rom: ${TARGETS}
-        ${CP} rm.BASIC105 ${INSTDIR}.BASIC105 ${CPFLAGS}
+        ${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
