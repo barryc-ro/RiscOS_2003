@@ -36,31 +36,31 @@ DEBUG_TARGET	= DCILibd
 #
 
 all:
-	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=$(MODULE_TARGET) EXT=o
 	@echo $(COMPONENT): build complete
 
 debug:
-	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRAFLAGS="-DDEBUGLIB" EXT=od
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=$(DEBUG_TARGET) EXTRAFLAGS="-DDEBUGLIB" EXT=od
 	@echo $(COMPONENT): debug build complete
 
 preprocess:
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=AvoidAMUBug EXT=i
 	@echo $(COMPONENT): preprocessing complete
 
 export: export_$(PHASE)
 
 export_hdrs:
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=AvoidAMUBug EXT=AvoidAMUBug
 	@echo $(COMPONENT): export complete (hdrs)
 
 export_libs:
-	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=$(NORMAL_TARGET) EXT=o
 	@echo $(COMPONENT): export complete (libs)
 
 clean:
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=AvoidAMUBug EXT=o
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=AvoidAMUBug EXT=od
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS)  TARGET=AvoidAMUBug EXT=i
 	@$(RM) $(MODULE_TARGET)
 	@$(RM) $(DEBUG_TARGET)
 	@$(STRIPDEPEND) MainMake
