@@ -1,4 +1,5 @@
 ; 19-Feb-01  KJB   Separated IIC operations from NVMemory and RTC code
+; 05-Feb-02  BJGA  Added re-entrant capability
 
 
 PollMax		*	150	; Number of times to poll for an Ack (increase if you clock faster - need to
@@ -16,6 +17,87 @@ I2Cticks        *       3
 I2Cticks        *       10
   ]
   ]
+
+
+IICStackAlignment       *       7       ; log2 of stack size, also stack alignment
+                                        ; current requirement is 19 words = 2_01001100 bytes
+
+                ^       0
+IICLink_Next    #       4
+IICLink_Error   #       4
+IICLink_Array   #       4
+IICLink_Size    #       4
+
+; SVC stack format, in descending address order:
+;    16 bytes   first link (also bottom of stacked registers)
+;     n bytes   align to address with bottom x bits set
+; 2^x-4 bytes   align to address with bottom x bits clear (the local stack)
+;     4 bytes   linked list head
+;     4 bytes   linked list tail
+;     4 bytes   original sp
+;      .
+;      .
+;      .
+;    16 bytes   another link (also bottom of stacked registers)
+;     4 bytes   original sp
+
+; IRQ stack format, in descending address order, for reference:
+;     4 bytes   lr_irq-4 (interrupted PC)
+;     4 bytes   r0
+;     4 bytes   spsr_irq (interrupted CPSR)
+;    20 bytes   r1-r3, r11, r12
+;     4 bytes   IRQsema link
+
+
+iicsp   RN      11
+iiclr   RN      12
+
+
+        MACRO
+$label  iicBL   $destination, $cond
+$label  MOV$cond iiclr, pc
+        B$cond  $destination
+        MEND
+
+        MACRO
+$label  iicPull $reglist, $cond, $hat
+        LCLS   temps
+        LCLL   onereg
+temps   SETS   "$reglist"
+onereg  SETL   "$hat" = ""
+        WHILE  onereg :LAND: :LEN: temps > 0
+        [ temps :LEFT: 1 = "," :LOR: temps :LEFT: 1 = "-"
+onereg  SETL   {FALSE}
+        ]
+temps   SETS   temps :RIGHT: (:LEN: temps - 1)
+        WEND
+        [ onereg
+$label  LDR$cond $reglist, [iicsp], #4
+        |
+$label  LDM$cond.FD iicsp!, {$reglist}$hat
+        ]
+        MEND
+
+        MACRO
+$label  iicPush $reglist, $cond
+        LCLS   temps
+        LCLL   onereg
+temps   SETS   "$reglist"
+onereg  SETL   {TRUE}
+        WHILE  onereg :LAND: :LEN: temps > 0
+        [ temps :LEFT: 1 = "," :LOR: temps :LEFT: 1 = "-"
+onereg  SETL   {FALSE}
+        ]
+temps   SETS   temps :RIGHT: (:LEN: temps - 1)
+        WEND
+        [ onereg
+$label  STR$cond $reglist, [iicsp, #-4]!
+        |
+$label  STM$cond.FD iicsp!, {$reglist}
+        ]
+        MEND
+
+
 
 IICOpSWI
         Push    LR
@@ -56,48 +138,163 @@ IIC_Op
 ;                                 word 1 -> data block
 ;                                 word 2 = length of data block
 IIC_OpV ROUT
-        Push    "R0-R7,R10,R11,LR"
-        MOV     R7, #0
-        MRS     R6, CPSR
-        BIC     R5, R6, #I32_bit
-        MSR     CPSR_c, R5              ; enable interrupts - this may take some time
+        Push    "r0-r3,r6-r12,lr"
+        MOV     lr, #0
+        STR     lr, [sp, #-8]!
+        MRS     r10, CPSR
+        BIC     r7, r10, #I32_bit :OR: F32_bit
+        ORR     r8, r7, #I32_bit
+      [ HAL
+        AddressHAL
+      |
+        MOV     r9, #IOC
+      ]
+        MOV     r2, #IRQsema
+        MOV     r12, sp                 ; original sp, also pointer to link
+        ORR     lr, r8, #2_10000
+        MSR     CPSR_c, lr              ; IRQs off, force 32-bit mode
 
-        MOV     R4, R0
-        MOV     R5, R1
+01      LDR     r2, [r2]
+        TEQ     r2, #0
+        BEQ     %FT50                   ; I²C code not in IRQ stack
+        LDR     r6, [r2, #4*8]          ; interrupted PC
+IIC_OpV_PCReference
+        RSB     lr, pc, r6
+        LDR     r0, =(interrupt_protected_end-4) - (IIC_OpV_PCReference+8)
+        CMP     lr, r0
+        RSBLES  lr, lr, #interrupt_protected_start - (IIC_OpV_PCReference+8)
+        BGT     %BT01
 
-05      SUBS    R5, R5, #1
+        ; I²C code is already threaded
+        Push    "r12"                   ; put original sp on stack for our exit routine
+        LDR     r0, [r2, #4*4]          ; retrieve interrupted iicsp
+        BIC     r0, r0, #(1:SHL:IICStackAlignment)-1
+        LDR     r1, [r0, #-8]           ; old list tail
+        STR     r12, [r0, #-8]          ; new list tail
+        STR     r12, [r1, #IICLink_Next] ; point old link to new link
+        ADR     r0, IIC_OpV_CommonExit
+        STR     r0, [r2, #4*8]          ; poke IRQ stack so previous operation returns as though completed
+        LDR     r0, [r2, #4*6]          ; get interrupted CPSR
+        MSR     SPSR_cxsf, r0           ; stick it in SPSR (okay, because IRQs are off)
+        LDR     r0, [r2, #4*7]
+        LDMIB   r2, {r1-r3,r11,r12}
+        MOVS    pc, r6                  ; copy SPSR to CPSR and resume execution
+
+50      ; I²C code not currently threaded - create new environment
+        ADD     iicsp, sp, #4
+        BIC     iicsp, iicsp, #(1:SHL:IICStackAlignment)-1
+        SUB     iicsp, iicsp, #4
+        BIC     sp, iicsp, #(1:SHL:IICStackAlignment)-1
+        Push    "r12"                   ; list head pointer
+        Push    "r12"                   ; list tail pointer
+        Push    "r12"                   ; original sp
+        LDR     r0, [r12, #IICLink_Array]
+        LDR     r1, [r12, #IICLink_Size]
+        B       IICStart                ; start working through list
+
+IIC_OpV_CommonExit
+        MSR     CPSR_c, r10             ; restore original IRQ disable state
+        LDR     sp, [sp]
+        ADD     sp, sp, #4              ; skip next pointer
+        Pull    "r0"
+        CMP     r0, #0
+        Pull    "r0-r3,r6-r12,pc", EQ
+        SETV
+        ADD     sp, sp, #4
+        Pull    "r1-r3,r6-r12,pc"
+
+
+interrupt_protected_start
+
+; Protected routines register usage:
+;   r0-r3   general purpose
+;    r7     MRS style PSR with c bits = SVC26/32, IRQs/FIQs enabled
+;    r8     MRS style PSR with c bits = SVC26/32, IRQs disabled, FIQs enabled
+;    r9     IOC, or base of HAL workspace, depending on HAL switch
+;    r11    stack pointer
+;    r12    link register / general purpose
+;    CPSR is also non-volatile
+
+IICStart
+        MSR     CPSR_c, r7              ; enable IRQs (inside protected code) - this may take some time
+        ; drop through...
+
+; *****************************************************************************
+;
+;       IICLoop - serial-execution outermost loop, stepping along pending IIC operations
+;
+
+IICLoop
+     iicBL      IICDoOp
+        MOVVC   r0, #0
+        BIC     r1, iicsp, #(1:SHL:IICStackAlignment)-1
+        LDR     r2, [r1, #-4]           ; list head
+        STR     r0, [r2, #IICLink_Error] ; set up return value
+        MSR     CPSR_c, r8              ; disable IRQs while we work on the list
+        LDR     r2, [r2]
+        TEQ     r2, #0                  ; end of list?
+        BEQ     IIC_OpV_CommonExit      ; finished!
+        STR     r2, [r1, #-4]           ; update list head
+        MSR     CPSR_c, r7              ; IRQs back on
+        LDR     r0, [r2, #IICLink_Array]
+        LDR     r1, [r2, #IICLink_Size] ; get next array
+        B       IICLoop                 ; and loop
+
+; *****************************************************************************
+;
+;       IICDoOp - main serial-execution entry point
+;
+; in:   R0 -> array of transfer descriptors
+;       R1 = number of transfers
+;
+; out:  if V set, r0 -> error block
+;       otherwise r0-r3,r12 may be corrupted
+;
+
+IICDoOp ROUT
+        MOV     R2, #0
+     iicPush    "R1,R2,iiclr"           ; two words on stack are RepeatedStart flag and transfers remaining
+
+        MOV     R3, R0
+
+05      LDR     R0, [iicsp]
+        SUBS    R0, R0, #1
         BCC     %FT90
+        STR     R0, [iicsp]
 
-        LDMIA   R4!, {R0-R2}
+        LDMIA   R3!, {R0-R2}
         TST     R0, #1:SHL:31           ; skip start?
         BNE     %FT08
 
-        TEQ     R7,#0
-        BLEQ    Start
-        TEQ     R7,#0
-        BLNE    RepeatedStart
+        LDR     iiclr, [iicsp, #4]
+        TEQ     iiclr, #0
+        MOV     iiclr, pc
+        ADD     iiclr, iiclr, #8
+        BEQ     Start
+        BNE     RepeatedStart           ; these are effectively conditional BL's
 
         TST     R0, #1:SHL:29
         BNE     %FT06
-        BL      TXAck                   ; transmit device address without retries
+     iicBL      TXAck                   ; transmit device address without retries
         B       %FT07
 
-06      BL      TXPollAck               ; transmit device address with retries
+06
+     iicBL      TXPollAck               ; transmit device address with retries
 07      BVS     %FT80
 
-08      MOV     R7, #1
-        MOV     R11, R1
-        MOVS    R10, R2
+08      MOV     iiclr, #1
+        STR     iiclr, [iicsp, #4]
+        TEQ     R2, #0
         BEQ     %BT05
 
         TST     R0, #1                  ; Z => write, NZ => read
         BNE     %FT20
 
 ; Write case
-10      LDRB    R0, [R11], #1           ; read byte from data block
-        BL      TXAck                   ; transmit, checking for ack
+10      LDRB    R0, [R1], #1            ; read byte from data block
+     iicBL      TXAck                   ; transmit, checking for ack
         BVS     %FT80
-        SUBS    R10, R10, #1            ; decrement byte count
+        SUBS    R2, R2, #1              ; decrement byte count
         BNE     %BT10                   ; loop until finished
         B       %BT05                   ; then next transfer
 
@@ -105,63 +302,82 @@ IIC_OpV ROUT
         BNE     %FT30
 
 ; Read case
-21      BL      RXByte                  ; read byte from bus
-        STRB    R0, [R11], #1           ; store in data block
-        SUBS    R10, R10, #1            ; is it last byte ?
-        MOVNE   R0, #0                  ; no, then acknowledge with 0 bit
-        MOVEQ   R0, #1                  ; yes, then don't acknowledge
-        BL      ClockData               ; but always send ack clock pulse
-        BNE     %BT21
+21
+     iicBL      RXByte                  ; read byte from bus
+        STRB    R0, [R1], #1            ; store in data block
+        MOV     R0, #1                  ; start with the assumption that it's the last byte, and so shouldn't be acknowledged
+        SUBS    R2, R2, #1              ; is it last byte in this descriptor?
+        MOVNES  R0, R0, LSR #2          ; no, so definitely needs acknowledging (with 0 bit)
+                                        ; now Z is set, and C set => just read last byte for this descriptor
+        LDRCS   iiclr, [iicsp]
+        TEQCS   iiclr, #0               ; if we've finished this descriptor, check for another transfer descriptor
+                                        ; Z clear => last byte, and there is another descriptor
+        LDRNE   iiclr, [R3]
+        TSTNE   iiclr, #1:SHL:31        ; if appropriate, check if next descriptor is a continuation
+        MOVNE   R0, #0                  ; if read is going to continue, we need to acknowledge
+     iicBL      ClockData               ; but always send ack clock pulse
+        BCC     %BT21
         B       %BT05                   ; next transfer
 
 ; Checksum case
-30      MOV     R11, #0
+30      MOV     R1, #0
 31
-        BL      RXByte                  ; read byte from bus
-        ADD     R11, R11, R0
-        SUBS    R10, R10, #1
-        MOVNE   R0, #0                  ; no, then acknowledge with 0 bit
-        MOVEQ   R0, #1                  ; yes, then don't acknowledge
-        BL      ClockData               ; but always send ack clock pulse
-        BNE     %BT31
-        STR     R11, [R4, #-8]          ; store checksum
+     iicBL      RXByte                  ; read byte from bus
+        ADD     R1, R1, R0
+        MOV     R0, #1                  ; start with the assumption that it's the last byte, and so shouldn't be acknowledged
+        SUBS    R2, R2, #1              ; is it last byte in this descriptor?
+        MOVNES  R0, R0, LSR #2          ; no, so definitely needs acknowledging (with 0 bit)
+                                        ; now Z is set, and C set => just read last byte for this descriptor
+        LDRCS   iiclr, [iicsp]
+        TEQCS   iiclr, #0               ; if we've finished this descriptor, check for another transfer descriptor
+                                        ; Z clear => last byte, and there is another descriptor
+        LDRNE   iiclr, [R3]
+        TSTNE   iiclr, #1:SHL:31        ; if appropriate, check if next descriptor is a continuation
+        MOVNE   R0, #0                  ; if read is going to continue, we need to acknowledge
+     iicBL      ClockData               ; but always send ack clock pulse
+        BCC     %BT31
+        STR     R1, [R3, #-8]           ; store checksum
         B       %BT05                   ; next transfer
 
-90      BL      Stop
+90
+     iicBL      Stop
         CLRV
-        MSR     CPSR_c, R6              ; restore interrupts
-        Pull    "R0-R7,R10,R11,PC"
+        ADD     iicsp, iicsp, #8        ; skip junk on stack
+     iicPull    "pc"
 
-80      BL      Stop
+80
+     iicBL      Stop
         ADR     R0, ErrorBlock_IIC_NoAcknowledge
  [ International :LAND: {FALSE}
         ; KJB - problematical - this may be done very early, before SWI dispatch
-        ; is ready, so we can't call MessageTrans. Also, the MakeErrorBlock seems
-        ; to not be giving us a token (sigh). Think about this.
+        ; is ready, so we can't call MessageTrans. Think about this.
+        ; BJGA - we also can't use TranslateError, because it doesn't conform to
+        ; our calling standard (unless we turn interrupts off)
         BL      TranslateError
  |
         SETV
  ]
-        ADD     R13, R13, #4
-        Pull    "R1-R7,R10,R11,PC"
+        ADD     iicsp, iicsp, #8        ; skip junk on stack
+     iicPull    "pc"
 
-        MakeErrorBlock IIC_NoAcknowledge
+        MakeInternatErrorBlock IIC_NoAcknowledge,, "NoAck:No acknowledge from IIC device"
 
 ; *****************************************************************************
 ;
 ;	SetC1C0 - Set clock and data lines to values in R1 and R0 respectively
 ;
-; out:	ATPCS
+; out:  r0,r1 corrupted
 ;
 
 SetC1C0 ROUT
-        Push    "R9,R14"
+     iicPush    "r2,r3,iiclr"
  [ HAL
-        AddressHAL
         MOV     R2, R1
         MOV     R1, R0
         MOV     R0, #0
+        MRS     CPSR_c, r8              ; IRQs off for use of ATPCS
         CallHAL HAL_IICSetLines
+        MRS     CPSR_c, r7              ; IRQs back on
  |
 	ADD	R0, R0, R1, LSL #1	; R0 := C0 + C1*2
 
@@ -185,68 +401,68 @@ SetC1C0 ROUT
       |
         MOV     R0, #10                         ; default to slowest value if we have E2ROMSupport is false
       ]
-	BL	DoMicroDelay
+     iicBL      iicDoMicroDelay
 
-        Pull    "R9,PC"
+     iicPull    "r2,r3,pc"
 
 ; *****************************************************************************
 ;
 ;	ReadC1C0 - Read clock and data lines to  R1 and R0 respectively
 ;
-; out:	R0, R1 updated - otherwise ATPCS
+; out:	R0, R1 updated
 ;
 
 ReadC1C0 ROUT
  [ HAL
-        Push    "sb,lr"
-        AddressHAL
+     iicPush    "r2,r3,iiclr"
+        MRS     CPSR_c, r8              ; IRQs off for use of ATPCS
         CallHAL HAL_IICReadLines
-        Pull    "sb,pc"
+        MRS     CPSR_c, r7              ; IRQs back on
+     iicPull    "r2,r3,pc"
  |
-        MOV     a3, #IOC
-        LDRB    a1, [a3, #IOCControl]
+        LDRB    a1, [r9, #IOCControl]
         MOV     a2, a1, LSR #1
         AND     a1, a1, #1
         AND     a2, a2, #1
-        MOV     pc, lr
+        MOV     pc, iiclr
  ]
 
 ; *****************************************************************************
 ;
-;	DoMicroDelay - Delay for >= R0/2 microseconds
+;       iicDoMicroDelay - Delay for >= R0/2 microseconds, IIC calling standard
 ;
 ; in:	R0 = time delay in 1/2 microsecond units
-;	R2 -> IOC
 ;	On ARM600, we may or may not be in a 32-bit mode
 ;
 ; out:	R0,R1 corrupted
 ;
 
-DoMicroDelay ROUT
+iicDoMicroDelay ROUT
   [ HAL
-        Push    "a3,a4,sb,ip,lr"
-        AddressHAL
+     iicPush    "a3,a4,iiclr"
         MOVS    a1, a1, LSR #1
         ADC     a1, a1, #0
+        MRS     CPSR_c, r8              ; IRQs off for use of ATPCS
         CallHAL HAL_CounterDelay
-        Pull    "a3,a4,sb,ip,pc"
+        MRS     CPSR_c, r7              ; IRQs back on
+     iicPull    "a3,a4,pc"
   |
-        Push    R14
-	STRB	R0, [R2, #Timer0LR]	; copy counter into output latch
-	LDRB	R1, [R2, #Timer0CL]	; R1 := low output latch
+     iicPush    "iiclr"
+        STRB    R0, [R9, #Timer0LR]     ; copy counter into output latch
+        LDRB    R1, [R9, #Timer0CL]     ; R1 := low output latch
 10
-	STRB	R0, [R2, #Timer0LR]	; copy counter into output latch
-	LDRB	R14, [R2, #Timer0CL]	; R14 := low output latch
-	TEQ	R14, R1			; unchanged ?
-	BEQ	%BT10			; then loop
-	MOV	R1, R14			; copy anyway
-	SUBS	R0, R0, #1		; decrement count
-	BNE	%BT10			; loop if not finished
+        STRB    R0, [R9, #Timer0LR]     ; copy counter into output latch
+        LDRB    iiclr, [R9, #Timer0CL]  ; iiclr := low output latch
+        TEQ     iiclr, R1               ; unchanged ?
+        BEQ     %BT10                   ; then loop
+        MOV     R1, iiclr               ; copy anyway
+        SUBS    R0, R0, #1              ; decrement count
+        BNE     %BT10                   ; loop if not finished
 
-	Pull	PC
+     iicPull    "pc"
   ]
 
-	LTORG
+        LTORG
 
 ; *****************************************************************************
 ;
@@ -259,129 +475,96 @@ DoMicroDelay ROUT
 
 ClockData ROUT
  [ No26bitCode
-	Push	"R0-R3,R4,R5,R12,R14"
-        MRS     R4,CPSR
+     iicPush    "R0-R3,iiclr"
+        MRS     R2,CPSR
  |
-	Push	"R0-R3,R5,R12,R14"
+     iicPush    "R0-R1,R3,iiclr"
  ]
-        MOV     R5, R0
+        MOV     R3, R0
 
 	MOV	R1, #0			; Clock lo
-	BL	SetC1C0
+     iicBL      SetC1C0
 
- [ No26bitCode
-        ORR     R1,R4,#I32_bit
-        MSR     CPSR_c,R1
- |
 ; Disable interrupts to ensure clock hi with data hi is only transient
 ; This allows BMU to detect idle condition by polling
+        MSR     CPSR_c, r8
 
-	MOV	R1,PC
-	ORR	R1,R1,#I_bit
-	TEQP	PC,R1
- ]
-        MOV     R0, R5
+        MOV     R0, R3
 	MOV	R1, #1			; Clock hi
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 ; Delay here must be >= 4.0 microsecs
 
-        MOV     R0, R5
+        MOV     R0, R3
 	MOV	R1, #0			; Clock lo
-	BL	SetC1C0
+     iicBL      SetC1C0
 
  [ No26bitCode
-        MSR     CPSR_cf,R4              ; Restore interrupts
-        Pull    "R0-R3,R4,R5,R12,PC"
+        MSR     CPSR_cf,R2              ; Restore interrupts and flags
+     iicPull    "R0-R3,PC"
  |
-	Pull	"R0-R3,R5,R12,PC",,^
+     iicPull    "R0-R1,R3,PC",,^
  ]
-
-ClockData0 ROUT				; Clock a zero bit
-	Push	"R0, R14"
-	MOV	R0, #0
-	BL	ClockData               ; preserves PSR
-	Pull	"R0, PC"
 
 ; *****************************************************************************
 ;
 ;	Start - Send the Start signal
 ;
-; out:	All registers preserved, including PSR
+; out:	All registers preserved, PSR corrupted
 ;
 
 Start	ROUT
- [ No26bitCode
-	Push	"R0-R3,R4,R12,R14"
-        MRS     R4, CPSR
- |
-	Push	"R0-R3,R12,R14"
- ]
+     iicPush    "R0-R1,iiclr"
 
 	MOV	R0, #1			; clock HI, data HI
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 ; Delay here must be >= 4.7 microsecs (1.3 for fast device)
 
 	MOV	R0, #0			; clock HI, data LO
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 ; Delay here must be >= 4.0 microsecs (0.6 for fast device)
 
 	MOV	R0, #0			; clock LO, data LO
 	MOV	R1, #0
-	BL	SetC1C0
+     iicBL      SetC1C0
 
- [ No26bitCode
-        MSR     CPSR_f, R4
-	Pull	"R0-R3,R4,R12,PC"
- |
-	Pull	"R0-R3,R12,PC",,^
- ]
+     iicPull    "R0-R1,PC"
 
 ; *****************************************************************************
 ;
 ;	RepeatedStart - Send a Repeated Start signal
 ;
-; out:	All registers preserved, including PSR
+; out:	All registers preserved, PSR corrupted
 ;
 
 RepeatedStart	ROUT
- [ No26bitCode
-	Push	"R0-R3,R4,R12,R14"
-        MRS     R4, CPSR
- |
-	Push	"R0-R3,R12,R14"
- ]
+     iicPush    "R0-R1,iiclr"
 
         MOV     R0, #1
         MOV     R1, #0                  ; clock LO, data HI
-        BL      SetC1C0
+     iicBL      SetC1C0
 
 	MOV	R0, #1			; clock HI, data HI
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 ; Delay here must be >= 4.7 microsecs (1.3 for fast device)
 
 	MOV	R0, #0			; clock HI, data LO
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 ; Delay here must be >= 4.0 microsecs (0.6 for fast device)
 
 	MOV	R0, #0			; clock LO, data LO
 	MOV	R1, #0
-	BL	SetC1C0
+     iicBL      SetC1C0
 
- [ No26bitCode
-        MSR     CPSR_f, R4
-	Pull	"R0-R3,R4,R12,PC"
- |
-	Pull	"R0-R3,R12,PC",,^
- ]
+     iicPull    "R0-R1,PC"
 
 ; *****************************************************************************
 ;
@@ -393,82 +576,68 @@ RepeatedStart	ROUT
 ;
 
 Acknowledge ROUT
-	Push	"R0-R4,R12,R14"
+     iicPush    "R0-R2,iiclr"
 
 	MOV	R0, #1			; clock LO, data HI
 	MOV	R1, #0
-	BL	SetC1C0
+     iicBL      SetC1C0
 
  [ {TRUE}
 ; Disable interrupts to ensure clock hi with data hi is only transient
 ; This allows BMU to detect idle condition by polling
 
-        MRS     R1,CPSR
-        Push    "R1"
-        ORR     R1,R1,#I32_bit
-        MSR     CPSR_c,R1
+        MSR     CPSR_c, R8
  ]
 	MOV	R0, #1			; clock HI, data HI
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 ; Delay here must be >= 4.0 microsecs (0.6 for fast device)
 
-        BL      ReadC1C0
-        MOV     R4, R0                  ; should be LO for correct acknowledge
+     iicBL      ReadC1C0
+        MOV     R2, R0                  ; should be LO for correct acknowledge
 
 	MOV  	R0, #1
 	MOV  	R1, #0			; clock LO, data HI
-	BL  	SetC1C0
+     iicBL      SetC1C0
 
  [ {TRUE}
-	Pull	"R1"
-	MSR     CPSR_c,R1
+        MSR     CPSR_c, R7
  ]
 
-        TST     R4, #1
+        TST     R2, #1
         MRS     R2, CPSR
 	BICEQ	R2, R2, #V_bit		; clear V if correct acknowledge
 	ORRNE	R2, R2, #V_bit		; set V if no acknowledge
         MSR     CPSR_f, R2
 
-	Pull	"R0-R4,R12,PC"
+     iicPull    "R0-R2,PC"
 
 ; *****************************************************************************
 ;
 ;	Stop - Send the Stop signal
 ;
-; out:	All registers preserved, including PSR
+; out:	All registers preserved, PSR corrupted
 ;
 
 Stop	ROUT
- [ No26bitCode
-	Push	"R0-R3,R4,R12,R14"
-        MRS     R4, CPSR
- |
-	Push	"R0-R3,R12,R14"
- ]
+     iicPush    "R0-R1,iiclr"
 
 	MOV	R0, #0			; clock LO, data LO
 	MOV	R1, #0
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 	MOV	R0, #0			; clock HI, data LO
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
 ; Delay here must be >= 4.0 microsecs (0.6 for fast device)
 
 	MOV	R0, #1			; clock HI, data HI
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
- [ No26bitCode
-        MSR     CPSR_f, R2
-	Pull	"R0-R3,R4,R12,PC"
- |
-	Pull	"R0-R3,R12,PC",,^
- ]
+     iicPull    "R0-R1,PC"
 
 ; *****************************************************************************
 ;
@@ -476,35 +645,25 @@ Stop	ROUT
 ;
 ; in:	R0 = byte to be transmitted
 ;
-; out:	All registers preserved, including PSR
+; out:	All registers preserved, PSR corrupted
 ;
 
 TXByte	ROUT
- [ No26bitCode
-	Push	"R0-R3,R14"
-        MRS     R3, CPSR
- |
-	Push	"R0-R2,R14"
- ]
+     iicPush    "R0-R2,iiclr"
 	MOV	R1, #&80		; 2^7 the bit mask
 	MOV	R2, R0			; byte goes into R2
 10
 	ANDS	R0, R2, R1		; zero if bit is zero
 	MOVNE	R0, #1
-	BL	ClockData		; send the bit
+     iicBL      ClockData               ; send the bit
 	MOVS	R1, R1, LSR #1
 	BNE	%BT10
- [ No26bitCode
-        MSR     CPSR_f, R3
-	Pull	"R0-R3,PC"
- |
-	Pull	"R0-R2,PC",,^
- ]
+     iicPull    "R0-R2,PC"
 
 TXAck	ROUT
-	Push	R14
-	BL	TXByte
-        Pull    R14
+     iicPush    iiclr
+     iicBL      TXByte
+     iicPull    iiclr
 	B	Acknowledge
 
 
@@ -521,79 +680,107 @@ TXAck	ROUT
 ;
 
 TXPollAck	ROUT
-	Push	"R1,R14"
+     iicPush    "R1,iiclr"
 	MOV	R1, #1
 10
-	BL	TXByte
-	BL	Acknowledge
-        Pull    "R1,PC",VC
+     iicBL      TXByte
+     iicBL      Acknowledge
+     iicPull    "R1,PC",VC
         ADD     R1, R1, #1
 	TEQ	R1, #PollMax
         BEQ     %FT90
  [	{FALSE}
 	BREG	R1, "i2c tries:"
  ]
-        BL      RepeatedStart
+     iicBL      RepeatedStart
         B       %BT10
 90
-	Pull	"R1,PC"
+     iicPull    "R1,PC"
 
 ; *****************************************************************************
 ;
 ;	RXByte - Receive a byte
 ;
 ; out:	R0 = byte received
-;	All other registers preserved, including PSR
+;	All other registers preserved, PSR corrupted
 ;
 
 RXByte	ROUT
- [ No26bitCode
-	Push	"R1-R6,R12,R14"
-        MRS     R5, CPSR
- |
-	Push	"R1-R4, R6, R12, R14"
- ]
-	MOV	R6, #0			; byte:=0
-	MOV	R4, #7
+     iicPush    "R1-R3,iiclr"
+        MOV     R3, #0                  ; byte:=0
+        MOV     R2, #7
 
 	MOV	R0, #1			; clock LO, data HI
 	MOV	R1, #0
-	BL	SetC1C0
+     iicBL      SetC1C0
 10
  [ {TRUE}
 ; Disable interrupts to ensure clock hi with data hi is only transient
 ; This allows BMU to detect idle condition by polling
 
-        MRS     R1,CPSR
-        Push    "R1"
-        ORR     R1,R1,#I32_bit
-        MSR     CPSR_c,R1
+        MSR     CPSR_c, R8
  ]
 	MOV	R0, #1			; pulse clock HI
 	MOV	R1, #1
-	BL	SetC1C0
+     iicBL      SetC1C0
 
-        BL      ReadC1C0
-        ADD     R6, R0, R6, LSL #1      ; byte:=byte*2+ SDA
+     iicBL      ReadC1C0
+        ADD     R3, R0, R3, LSL #1      ; byte:=byte*2+ SDA
 
 	MOV	R0, #1			; return clock LO
 	MOV	R1, #0
-	BL	SetC1C0
+     iicBL      SetC1C0
 
  [ {TRUE}
-	Pull	"R1"
-	MSR     CPSR_c,R1
+        MSR     CPSR_c, R7
  ]
-	SUBS	R4, R4, #1
+        SUBS    R2, R2, #1
 	BCS	%BT10
 
-	MOV	R0, R6			; return the result in R0
- [ No26bitCode
-        MSR     CPSR_f, R5
-	Pull	"R1-R6, R12, PC"
- |
-	Pull	"R1-R4, R6, R12, PC",,^
- ]
+	MOV	R0, R3			; return the result in R0
+     iicPull    "R1-R3,PC"
+
+
+interrupt_protected_end
+
+
+; We need to retain a version of DoMicroDelay with standard calling conventions, because
+; it is called from elsewhere in the kernel. But it can't live inside the protected
+; region above in case it's interrupted by a routine that does an IIC operation.
+
+; *****************************************************************************
+;
+;       DoMicroDelay - Delay for >= R0/2 microseconds
+;
+; in:   R0 = time delay in 1/2 microsecond units
+;       R2 -> IOC
+;       On ARM600, we may or may not be in a 32-bit mode
+;
+; out:  R0,R1 corrupted
+;
+
+DoMicroDelay ROUT
+  [ HAL
+        Push    "a3,a4,sb,ip,lr"
+        AddressHAL
+        MOVS    a1, a1, LSR #1
+        ADC     a1, a1, #0
+        CallHAL HAL_CounterDelay
+        Pull    "a3,a4,sb,ip,pc"
+  |
+        Push    R14
+        STRB    R0, [R2, #Timer0LR]     ; copy counter into output latch
+        LDRB    R1, [R2, #Timer0CL]     ; R1 := low output latch
+10
+        STRB    R0, [R2, #Timer0LR]     ; copy counter into output latch
+        LDRB    R14, [R2, #Timer0CL]    ; R14 := low output latch
+        TEQ     R14, R1                 ; unchanged ?
+        BEQ     %BT10                   ; then loop
+        MOV     R1, R14                 ; copy anyway
+        SUBS    R0, R0, #1              ; decrement count
+        BNE     %BT10                   ; loop if not finished
+
+        Pull    PC
+  ]
 
         END
-
