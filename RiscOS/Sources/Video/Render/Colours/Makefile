@@ -53,6 +53,7 @@ clean:
         ${RM} ${TARGET}
         ${WIPE} Tables.* ${WFLAGS}
         ${WIPE} MkTables.o.* ${WFLAGS}
+        ${WIPE} Palettes.* ${WFLAGS}
         ${RM} MkTables.maketables
         @echo ${COMPONENT}: cleaned
 
