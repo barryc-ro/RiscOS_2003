@@ -46,6 +46,14 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 TARGET    = aof.${COMPONENT}
 OBJS      = module.o driver.o ir_api.o header.o veneers.o
 
+dirs:
+        ${MKDIR} o
+        ${MKDIR} aof
+        ${MKDIR} rm
+        ${MKDIR} linked
+        ${MKDIR} map
+
+
 #
 # Rule patterns
 #
@@ -79,9 +87,6 @@ clean:
 	${RM} ${TARGET}
 	@echo ${COMPONENT}: cleaned
 
-dirs:
-	${MKDIR} o
-	${MKDIR} aof
 
 #
 # Stand-alone module
@@ -108,6 +113,13 @@ rom_link:
 
 
 # Dynamic dependencies:
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.utils
+o.module:	h.ir_api
+o.module:	h.module
+o.module:	h.driver
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
