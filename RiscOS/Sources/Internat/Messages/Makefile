@@ -160,19 +160,35 @@ ${DIRS}:
 	${MKDIR} rm
 	${MKDIR} rm.${LOCALE}
 	${MKDIR} rm.${LOCALE}.${BUILD}
+	${MKDIR} Processed
+	${MKDIR} Processed.${LOCALE}
+	${MKDIR} Processed.${LOCALE}.${BUILD}
 	${TOUCH} ${DIRS}
 
 # Dynamic dependencies:
-rm.Morris4.Messages: Hdr:ListOpts
-rm.Morris4.Messages: Hdr:Macros
-rm.Morris4.Messages: Hdr:System
-rm.Morris4.Messages: Hdr:SWIs
-rm.Morris4.Messages: Hdr:CPU.Generic26
-rm.Morris4.Messages: Hdr:IO.GenericIO
-rm.Morris4.Messages: Hdr:RISCOS
-rm.Morris4.Messages: Hdr:ModHand
-rm.Morris4.Messages: Hdr:Services
-rm.Morris4.Messages: Hdr:Proc
-rm.Morris4.Messages: Hdr:ResourceFS
-rm.Morris4.Messages: Version
-rm.Morris4.Messages: Hdr:NDRDebug
+rm.UK.Morris4.Messages: Hdr:ListOpts
+rm.UK.Morris4.Messages: Hdr:Macros
+rm.UK.Morris4.Messages: Hdr:System
+rm.UK.Morris4.Messages: Hdr:SWIs
+rm.UK.Morris4.Messages: Hdr:CPU.Generic26
+rm.UK.Morris4.Messages: Hdr:IO.GenericIO
+rm.UK.Morris4.Messages: Hdr:RISCOS
+rm.UK.Morris4.Messages: Hdr:ModHand
+rm.UK.Morris4.Messages: Hdr:Services
+rm.UK.Morris4.Messages: Hdr:Proc
+rm.UK.Morris4.Messages: Hdr:ResourceFS
+rm.UK.Morris4.Messages: Version
+rm.UK.Morris4.Messages: Hdr:NDRDebug
+rm.UK.Ursula4.Messages: Hdr:ListOpts
+rm.UK.Ursula4.Messages: Hdr:Macros
+rm.UK.Ursula4.Messages: Hdr:System
+rm.UK.Ursula4.Messages: Hdr:SWIs
+rm.UK.Ursula4.Messages: Hdr:CPU.Generic26
+rm.UK.Ursula4.Messages: Hdr:IO.GenericIO
+rm.UK.Ursula4.Messages: Hdr:RISCOS
+rm.UK.Ursula4.Messages: Hdr:ModHand
+rm.UK.Ursula4.Messages: Hdr:Services
+rm.UK.Ursula4.Messages: Hdr:Proc
+rm.UK.Ursula4.Messages: Hdr:ResourceFS
+rm.UK.Ursula4.Messages: Version
+rm.UK.Ursula4.Messages: Hdr:NDRDebug
