@@ -70,7 +70,7 @@ db_printf(char *format, ...)
 
 #define SERIAL_PORT	"2"
 #define SERIAL_BAUD	"9600"
-#define SERIAL_DEVICE	"devices#baud" SERIAL_BAUD ";data8;stop1;noparity;nohandshake;size64;thres48:$.serial" SERIAL_PORT
+#define SERIAL_DEVICE	"devices#baud" SERIAL_BAUD ";data8;stop1;noparity;nohandshake;size640;thres480:$.serial" SERIAL_PORT
 
 #endif
 
@@ -105,6 +105,12 @@ static void process_raw(unsigned int raw);
 static void process_tag_status_report(unsigned int raw);
 
 static char default_ir_registry_path[]="Resources:$.Resources.IR.";
+
+static unsigned short ces[16];
+static unsigned char cpl[16];
+
+non_twirp_recognition_params_t non_twirp_params;
+
 
 
 /*------------------------------------------------------------------------------
@@ -153,7 +159,7 @@ static _kernel_oserror *Enable( void )
     err = _swix(OS_Claim, _INR(0,2), UpcallV, module_upcall_entry, PrivateWord);
     if (err)
     {
-        DEBUGFN(2, db_printf("Enable:1:%d,%s\n",err->errnum,err->errmess));
+        DEBUGFN(DBG_MODULE, db_printf("Enable:1:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
 
@@ -161,7 +167,7 @@ static _kernel_oserror *Enable( void )
                           SERIAL_INPUT, SERIAL_DEVICE, &in_handle);
     if (err)
     {
-        DEBUGFN(2, db_printf("Enable:2:%d,%s\n",err->errnum,err->errmess));
+        DEBUGFN(DBG_MODULE, db_printf("Enable:2:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
 
@@ -171,21 +177,21 @@ static _kernel_oserror *Enable( void )
                           OSArgs_IOCtl, in_handle, &ioctlblock);
     if (err)
     {
-        DEBUGFN(2, db_printf("Enable:3:%d,%s\n",err->errnum,err->errmess));
+        DEBUGFN(DBG_MODULE, db_printf("Enable:3:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
     err = _swix(OS_Find, _INR(0,1)|_OUT(0),
                           SERIAL_OUTPUT, SERIAL_DEVICE, &out_handle);
     if (err)
     {
-        DEBUGFN(2, db_printf("Enable:4:%d,%s\n",err->errnum,err->errmess));
+        DEBUGFN(DBG_MODULE, db_printf("Enable:4:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
-    DEBUGFN(2, db_printf("Handles: in=%d, out=%d, pw=%p\n",
+    DEBUGFN(DBG_SERIAL, db_printf("Handles: in=%d, out=%d, pw=%p\n",
                                    in_handle, out_handle, PrivateWord));
     if (err)
     {
-        DEBUGFN(2, db_printf("Enable:5:%d,%s\n",err->errnum,err->errmess));
+        DEBUGFN(DBG_MODULE, db_printf("Enable:5:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
 
@@ -195,7 +201,7 @@ static _kernel_oserror *Enable( void )
 
     if (err)
     {
-        DEBUGFN(2, db_printf("Enable:5 and a half:%d,%s\n",err->errnum,err->errmess));
+        DEBUGFN(DBG_MODULE, db_printf("Enable:5 and a half:%d,%s\n",err->errnum,err->errmess));
     }
 
 
@@ -205,7 +211,7 @@ static _kernel_oserror *Enable( void )
                     "IRRegistry$Path",default_ir_registry_path,strlen(default_ir_registry_path),0,4);
         if (err)
         {
-            DEBUGFN(2, db_printf("Enable:6:%d,%s\n",err->errnum,err->errmess));
+            DEBUGFN(DBG_MODULE, db_printf("Enable:6:%d,%s\n",err->errnum,err->errmess));
             return err;
         }
     }
@@ -218,6 +224,9 @@ static _kernel_oserror *Enable( void )
         send_setup_and_run(get_irfamily());
         set_edge_offsets(get_first_edge_offset(),get_all_edges_offset());
         send_status_report_request(1);
+
+        non_twirp_params.ces = ces;
+        non_twirp_params.cpl = cpl;
 
     }
     else
@@ -273,7 +282,7 @@ int ir_DeviceRxDataPresent(void)
     if (busy)
     {
         reentered = TRUE;
-DEBUGFN(3,db_printf("re-entered!\n"));
+DEBUGFN(DBG_SERIAL,db_printf("re-entered!\n"));
         return TRUE;
     }
     busy = TRUE;
@@ -286,13 +295,15 @@ DEBUGFN(3,db_printf("re-entered!\n"));
 
     while (extent)
     {
+        DEBUGFN(DBG_SERIAL,db_printf("extent=%d\n",extent));
+
     /* Get up to a (raw) packet's worth of data.
         * We should have 1 to 4 bytes in the buffer after this call */
         if (_swix(OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_OUT(2),
             OSGBPB_Read, in_handle, next, MIN(extent,4-(next-buffer)),
             &next) )
         {
-            DEBUGFN(1, db_printf("Read returned error!\n"));
+            DEBUGFN(DBG_SERIAL, db_printf("Read returned error!\n"));
             Disable();
             return TRUE;
         }
@@ -302,7 +313,7 @@ DEBUGFN(3,db_printf("re-entered!\n"));
         /* Check bit 7 of 1st byte set */
         if (!(*buffer & 0x80))
         {
-            DEBUGFN(1, db_printf("Not a header!\n"));
+            DEBUGFN(DBG_SERIAL, db_printf("Not a header!\n"));
 
             /* Find the first header packet */
             for (first=buffer+1; first<next; first++)
@@ -327,7 +338,7 @@ DEBUGFN(3,db_printf("re-entered!\n"));
                 {
                     if (*first & 0x80)
                     {
-                        DEBUGFN(1, db_printf("Not a whole packet!\n"));
+                        DEBUGFN(DBG_SERIAL, db_printf("Not a whole packet!\n"));
 
                         /*
                         Shift the data up so header packet
@@ -464,13 +475,13 @@ static void put_command(command_packet_t command, size_t size)
     /*
     Output the command, byte by byte.
     */
-    DEBUGFN(1, db_printf("put_command: "));
+    DEBUGFN(DBG_PACKETS, db_printf("put_command: "));
     for (count = 0; count < size; count++)
     {
-        DEBUGFN(2, db_printf("%02x ", command.byte_array[count]));
+        DEBUGFN(DBG_PACKETS, db_printf("%02x ", command.byte_array[count]));
         _swix(OS_BPut, _INR(0,1), command.byte_array[count], out_handle);
     }
-    DEBUGFN(1, db_printf("\n"));
+    DEBUGFN(DBG_PACKETS, db_printf("\n"));
 }
 
 /*------------------------------------------------------------------------------
@@ -610,7 +621,93 @@ void send_ir_detector_tuning(ir_detector_tuning_t dt)
 }
 
 
+void send_non_twirp_configuration(void)
+{
+    unsigned int num_packets;
+    ir_non_twirp_t packet;
+    unsigned char *dest;
+    unsigned int loop;
+    unsigned char buf[((2+2+1+1+(3*16)+(2*16))/2)+1];
 
+    buf[1] = non_twirp_params.mes;
+    buf[2] = (non_twirp_params.nces<<4)|non_twirp_params.ncpl;
+    dest = &buf[3];
+
+    for (loop = 0; loop <= non_twirp_params.nces; loop +=2)
+    {
+        *(dest++) = (ces[loop]&0xff0)>>4;
+        *dest = ((ces[loop]&0xf)<<4);
+
+        if ((!((non_twirp_params.nces+1)&1)) ||
+            (loop < non_twirp_params.nces))
+        {
+            *(dest++) |= ((ces[loop+1]&0xf00)>>8);
+            *(dest++) = ces[loop+1]&0xff;
+        }
+    }
+
+
+    if ((non_twirp_params.nces+1)&1)
+    {
+        /*
+            There were an odd number of CESs.
+            Pad it.
+        */
+        dest++;
+    }
+
+    memcpy(dest,cpl,non_twirp_params.ncpl+1);
+    dest+=non_twirp_params.ncpl+1;
+
+    /*
+        Set the size field.
+    */
+    buf[0] = dest-(buf+1);
+
+
+    /*
+        size+mes+nces+ncpl+(3*nces)+(2*ncpl)
+    */
+    num_packets = 2+2+1+1+(3*(non_twirp_params.nces+1))+2*(non_twirp_params.ncpl+1);
+    if ((non_twirp_params.nces+1)&1)
+    {
+        num_packets++;
+    }
+
+
+
+#if (DEBUG&DBG_NONTWIRP)
+    db_printf("\nTotal of %d nibbles:\n",num_packets);
+    for (loop = 0; loop < num_packets; loop++)
+    {
+        if (loop &1)
+        {
+            db_printf("%x ",(buf[loop>>1]&0xf));
+        }
+        else
+        {
+            db_printf("%x ",(buf[loop>>1]&0xf0)>>4);
+        }
+
+    }
+#endif
+
+    num_packets += 5;
+    num_packets /= 6;
+    DEBUGFN(DBG_NONTWIRP,db_printf("\nTotal packets = %d\n",num_packets));
+
+    dest=buf;
+
+    for (loop = 0;loop < num_packets;loop++)
+    {
+        packet.byte_array[0] = *(dest++);
+        packet.byte_array[1] = *(dest++);
+        packet.byte_array[2] = *(dest++);
+
+        put_command(munge(CMD_OUT_NON_TWIRP,packet.byte_array),4);
+
+    }
+}
 
 
 
@@ -643,7 +740,7 @@ static void process(packet_t packet)
         unsigned int ext_bits, ext_tag;
     } ext_state[2] = {{ -1, -1 }, { -1, -1 }};	/* A bit of state */
 
-    DEBUGFN(3, db_printf("Data: %06x\n", packet.word));
+    DEBUGFN(DBG_PACKETS, db_printf("Data: %06x\n", packet.word));
 
     switch (packet.generic.tag)
     {
@@ -656,7 +753,7 @@ static void process(packet_t packet)
             ext_state[next_ext].ext_bits = (packet.reg_extended.num_hi << 24) |
                                            (packet.reg_extended.num_15 << 15) |
                                            (packet.reg_extended.num_lo << 16);
-            DEBUGFN(2, db_printf("Remembering extended info for tag %x\n",
+            DEBUGFN(DBG_PACKETS, db_printf("Remembering extended info for tag %x\n",
                                  ext_state[next_ext].ext_tag));
             next_ext = 1 - next_ext;
             break;
@@ -695,7 +792,8 @@ static void process(packet_t packet)
 
             /*
                 Try and find the driver in the list of loaded drivers.
-                First attempt to use the list of tags to see if we can get
+                First check to see if it's a non-TWIRP packet, then
+                attempt to use the list of tags to see if we can get
                 a registry number/driver number pair, so we don't have
                 to use the registry where possible.
 
@@ -703,26 +801,49 @@ static void process(packet_t packet)
                 is done via a callback, which means any data packets
                 to be sent to the driver need to be held onto for a while.
             */
-            DEBUGFN(3,db_printf("looking in tag table...\n"));
-            tag = tags_find_tag_by_registry_number(registry_number);
-            if ((tag == NULL)||(tag->driver_number == 7))
+
+            if (registry_number == 1638)
             {
-                DEBUGFN(3,db_printf("Adding new device %x to unknown device list\n",
-                                    registry_number));
+                DEBUGFN((DBG_NONTWIRP|DBG_REGISTRY),db_printf("This is a Non-TWIRP peripheral...\n"));
+                driver_number = drv_non_twirp_driver_number;
+                if (driver_number == DRIVER_UNUSED_NUMBER)
+                {
+                    DEBUGFN(DBG_REGISTRY,db_printf("Using default driver...\n"));
+                    reg_add_unknown_device(registry_number,packet.reg_basic.new_tag);
+                    _swix(OS_AddCallBack,
+                          _INR(0,1),
+                          reg_load_entry,
+                          PrivateWord);
 
-                reg_add_unknown_device(registry_number,packet.reg_basic.new_tag);
-                _swix(OS_AddCallBack,
-                      _INR(0,1),
-                      reg_load_entry,
-                      PrivateWord);
-
-                driver_number = -1;
+                    driver_number = -1;
+                }
+                else
+                {
+                    DEBUGFN(DBG_REGISTRY,db_printf("Using driver %x\n",driver_number));
+                }
             }
             else
             {
-                driver_number = tag->driver_number;
-            }
+                DEBUGFN(DBG_REGISTRY,db_printf("looking in tag table...\n"));
+                tag = tags_find_tag_by_registry_number(registry_number);
+                if ((tag == NULL)||(tag->driver_number == 7))
+                {
+                    DEBUGFN(DBG_REGISTRY,db_printf("Adding new device %x to unknown device list\n",
+                                        registry_number));
 
+                    reg_add_unknown_device(registry_number,packet.reg_basic.new_tag);
+                    _swix(OS_AddCallBack,
+                          _INR(0,1),
+                          reg_load_entry,
+                          PrivateWord);
+
+                    driver_number = -1;
+                }
+                else
+                {
+                    driver_number = tag->driver_number;
+                }
+            }
             tags_associate_tag(packet.reg_basic.new_tag,
                                registry_number,
                                driver_number);
@@ -745,7 +866,7 @@ static void process(packet_t packet)
                 }
                 else
                 {
-                    DEBUGFN(3,db_printf("Saving packet %06x for registry %x\n",
+                    DEBUGFN((DBG_PACKETS|DBG_REGISTRY),db_printf("Saving packet %06x for registry %x\n",
                                         packet.word,
                                         tag->registry_number));
 
@@ -756,12 +877,12 @@ static void process(packet_t packet)
             }
             else
             {
-                DEBUGFN(1,db_printf("Received packet from device with unassigned tag %x!\n",
+                DEBUGFN((DBG_PACKETS|DBG_REGISTRY),db_printf("Received packet from device with unassigned tag %x!\n",
                                     tag->tag_number));
             }
         }
     }
-    DEBUGFN(3,db_printf("\nLeaving process\n\n"));
+    DEBUGFN(DBG_PACKETS,db_printf("\nLeaving process\n\n"));
 }
 
 
@@ -817,7 +938,7 @@ static void process_controller_status_report(unsigned int raw)
     driver_list_node_t *node;
     packet_t packet = demunge(raw);
 
-    DEBUGFN(3,db_printf("packet = %06x\n", packet.word));
+    DEBUGFN(DBG_PACKETS,db_printf("packet = %06x\n", packet.word));
 
     for (node = drv_driver_list; node != NULL; node = node->next)
     {
@@ -863,13 +984,13 @@ static void process_completion_status_report(unsigned int raw)
     driver_list_node_t *drv;
     packet_t packet = demunge(raw);
 
-    DEBUGFN(3,db_printf("comp status:%06x\n",packet.word));
+    DEBUGFN(DBG_PACKETS,db_printf("comp status:%06x\n",packet.word));
     /*
         Is this a completion of blasting?
     */
     if (packet.comp_status_report.db)
     {
-        DEBUGFN(3,db_printf("TS Controller says done blasting...\n"));
+        DEBUGFN((DBG_PACKETS|DBG_BLASTING),db_printf("TS Controller says done blasting...\n"));
 
         /*
             If the whole blast string has been sent,
@@ -879,13 +1000,13 @@ static void process_completion_status_report(unsigned int raw)
         {
             unsigned int driver_number = blast_get_driver_number();
             drv = drv_find_driver_by_driver_number(drv_driver_list,driver_number);
-DEBUGFN(3,db_printf("blast_complete\n"));
+DEBUGFN(DBG_BLASTING,db_printf("blast_complete\n"));
             if (drv != NULL)
             {
-DEBUGFN(3,db_printf("found driver\n"));
+DEBUGFN(DBG_BLASTING,db_printf("found driver\n"));
                 if (drv->callbacks->notify_flags.bits.notify_on_comp_status_report)
                 {
-DEBUGFN(3,db_printf("driver wants completion status reports\n"));
+DEBUGFN(DBG_BLASTING,db_printf("driver wants completion status reports\n"));
                     if (drv->callbacks->accept_report_packet)
                     {
                         _kernel_swi_regs r;
@@ -898,11 +1019,22 @@ DEBUGFN(3,db_printf("driver wants completion status reports\n"));
                 }
             }
             blast_end();
-            blast_start();
+            if (!blast_start())
+            {
+                /*
+                    There's no more data to blast.
+                    If there is a driver which is dealing
+                    with non-twirp IR, resend the configuration.
+                */
+                if (drv_non_twirp_driver_number != DRIVER_UNUSED_NUMBER)
+                {
+                    send_non_twirp_configuration();
+                }
+            }
         }
         else
         {
-DEBUGFN(3,db_printf("blast didn't complete\n"));
+DEBUGFN(DBG_BLASTING,db_printf("blast didn't complete\n"));
             blast_next_block();
         }
     }
@@ -924,31 +1056,31 @@ static void process_raw(unsigned int raw)
         }
         case CMD_IN_TAG_STATUS_REPORT:
         {
-            DEBUGFN(1, db_printf("Received tag status report\n"));
+            DEBUGFN(DBG_PACKETS, db_printf("Received tag status report\n"));
             process_tag_status_report(raw);
             break;
         }
         case CMD_IN_CTRL_STATUS_REPORT:
         {
-            DEBUGFN(1, db_printf("Received controller status report\n"));
+            DEBUGFN(DBG_PACKETS, db_printf("Received controller status report\n"));
             process_controller_status_report(raw);
             break;
         }
         case CMD_IN_COMMS_STATUS_REPORT:
         {
-            DEBUGFN(1, db_printf("Received communications status report\n"));
+            DEBUGFN(DBG_PACKETS, db_printf("Received communications status report\n"));
             process_comms_status_report(raw);
             break;
         }
         case CMD_IN_COMP_STATUS_REPORT:
         {
-            DEBUGFN(1, db_printf("Received completion status report\n"));
+            DEBUGFN(DBG_PACKETS, db_printf("Received completion status report\n"));
             process_completion_status_report(raw);
             break;
         }
         default:
         {
-            DEBUGFN(1, db_printf("Bogus raw packet: type %d!\n", raw & 0X0f));
+            DEBUGFN(DBG_PACKETS, db_printf("Bogus raw packet: type %d!\n", raw & 0X0f));
             break;
         }
     }
@@ -992,12 +1124,9 @@ void ir_timeout(char tag_number)
     tag_info_t *tag = tags_find_tag(tag_number);
     context_t *context = &(tag->context);
 
-    DEBUGFN(1, (DEBUG<=1 ? db_printf("#") : db_printf("Device with tag %d timed out!\n", tag_number)));
-
     /* Timeout happened while being cancelled? */
     if (context->word == INACTIVE)
     {
-        DEBUGFN(2, db_printf("no context to clean up!\n"));
         return;
     }
 
