@@ -43,9 +43,12 @@
 #include "dsp_drv.h"            /* DSP driver prototypes */
 
 /***************** external procedures used locally *********************/
-	/*** from file mnp.c ***/
+    /*** from file mnp.c ***/
 extern ubyte *mnp_tx(void);
 extern ubyte *mnp_rx(void);
+
+extern void line_write_exit(ubyte,ubyte,ubyte);
+
 /*****************************************************************************
 /
 /    Procedure:  sync_tx_int   
@@ -76,52 +79,64 @@ extern ubyte *mnp_rx(void);
 ********************************************************************/
 void sync_tx_int(void)
 {
-	ubyte length;
-	ubyte tx_data_status = 0;
-	ubyte tx_status_reg;
+    ubyte status;       /* status byte of data area semaphore to write */
+    ubyte data_count;   /* number of tx data bytes */
+    ubyte length;
+    ubyte tx_data_status = 0;
 
    /* If "spoofed" TX IE is false, the obey */
-	if (dce_tx_enabled == FALSE) 
-		return;
+    if (dce_tx_enabled == FALSE) 
+        return;
+
+   /* if TX_UNDERRUN indicated from the DSP */
+   if ((tx_char_count) && (dce_tx_resumed == TRUE))
+   {
+      /* set packet length and status */
+      status = TX_IDLE;
+      data_count = 0xFF;
+      line_write_exit(status,data_count,1);
+      dce_tx_resumed = FALSE;
+      return;
+   }
 
    /*   If we're done w/ the current packet, get another */
-	if ( tx_char_count == 0 )
-	{
+    if ( tx_char_count == 0 )
+    {
 
       /* Get next tx packet from mnp */
-		mnp_tx_packet_ptr = (MNP_PACKET_TYPE *)mnp_tx();
+        mnp_tx_packet_ptr = (MNP_PACKET_TYPE *)mnp_tx();
 
       /* If a valid packet, set up the buffer */
-		if ( mnp_tx_packet_ptr )
-		{
-			mnp_tx_data_ptr = mnp_tx_packet_ptr->data;
-			tx_char_count = mnp_tx_packet_ptr->count;
-			tx_data_status = NO_STATUS;
-		}
-		else
-		{
+        if ( mnp_tx_packet_ptr )
+        {
+            mnp_tx_data_ptr = mnp_tx_packet_ptr->data;
+            tx_char_count = mnp_tx_packet_ptr->count;
+            tx_data_status = NO_STATUS;
+        }
+        else
+        {
          /* Else no more packets to send */
          dce_tx_enabled = FALSE;
-			return;
-		}
-	}
+            return;
+        }
+    }
 
    /* Determine length of data to send, (size of data area vs. count) */
    if (tx_char_count > DATA_AREA_SIZE )
-	    length = DATA_AREA_SIZE;
-	else
-	{
-		length = (ubyte) tx_char_count;
-		tx_data_status = TX_EOF;
-	}
+        length = DATA_AREA_SIZE;
+    else
+    {
+        length = (ubyte) tx_char_count;
+        tx_data_status = TX_EOF;
+    }
 
 
    /* Send one packet of data through Comm RAM data area */
-	line_send_data(mnp_tx_data_ptr, length, tx_data_status);
+    line_send_data(mnp_tx_data_ptr, length, tx_data_status);
 
    /* Decrement count, pointer */
-	tx_char_count -= length;
-	mnp_tx_data_ptr += length;
+    tx_char_count -= length;
+    mnp_tx_data_ptr += length;
 }
 
 
@@ -157,33 +172,62 @@ void sync_tx_int(void)
 ******************************************************************************/
 void sync_rx_int(void)
 {
-	ubyte length_and_status;
+    ubyte length_and_status;
 
-	/* If rx overrun, set flag */
-	if (dce_status_semaphore == RX_OVERRUN)
-	{
-		line_bg_error_flags = 1;
-	}
+   if (dce_status_semaphore == TX_UNDERRUN)
+   {
+ 
+       line_bg_error_flags = 1;
 
-	/* If abort received, reset to receive new packet and return */
-	if (dce_status_semaphore == RX_HDLC_ABORT)
-	{
-		rx_char_count = 0;
+     /* reset the semaphore */
+     /* dce_status_semaphore = 0; */
 
-		if ( mnp_rx_packet_ptr )
-		{
-		   mnp_rx_packet_ptr->count = 0;
-		   mnp_rx_packet_ptr->status = 0;
-		   mnp_rx_data_ptr = mnp_rx_packet_ptr->data;
-		}
-	   length_and_status = 0;
-	   dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
-	   dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
-	}
-	else /* not abort */
-	{
-		if (mnp_rx_packet_ptr != NULL)
-		{
+       /* dce_tx_interrupt_expected = FALSE; */
+
+      /* always force the DSP to enter TX_IDLE state */
+      dce_tx_resumed = TRUE;
+
+      /* indicate mid-frame tx underrun to the DTE I/O */
+      /* dce_tx_underrun = TRUE; */
+
+      /* clear the DSP semaphores */
+      length_and_status = 0;
+      dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+      dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+
+      /* clear the semaphore values */
+      dce_length_semaphore = 0;
+      dce_status_semaphore = 0;
+
+      /* RETURN IMMEDIATELY, THERE IS NO DATA, STATUS ONLY */
+      return;
+   }
+
+    /* If rx overrun, set flag */
+    if (dce_status_semaphore == RX_OVERRUN)
+    {
+        line_bg_error_flags = 1;
+    }
+
+    /* If abort received, reset to receive new packet and return */
+    if (dce_status_semaphore == RX_HDLC_ABORT)
+    {
+        rx_char_count = 0;
+
+        if ( mnp_rx_packet_ptr )
+        {
+           mnp_rx_packet_ptr->count = 0;
+           mnp_rx_packet_ptr->status = 0;
+           mnp_rx_data_ptr = mnp_rx_packet_ptr->data;
+        }
+       length_and_status = 0;
+       dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+       dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+    }
+    else /* not abort */
+    {
+        if (mnp_rx_packet_ptr != NULL)
+        {
          /*
             Verify that the amount of data in COMRAM wont
             blow away our receive frame boundary. This problem
@@ -193,65 +237,65 @@ void sync_rx_int(void)
          */
          if( (rx_char_count + dce_length_semaphore) > MNP_MAX_FRAME_SIZE )
          {
-			   dce_status_semaphore = EOF_CRC_BAD;  /* Get rid of it */
+               dce_status_semaphore = EOF_CRC_BAD;  /* Get rid of it */
          }
          else
          {
-			   dspdrv_ReadCram(DSP_CP_DATA_AREA_BASE, mnp_rx_data_ptr, dce_length_semaphore);
-			   mnp_rx_data_ptr += dce_length_semaphore;
-			   rx_char_count += dce_length_semaphore;
+               dspdrv_ReadCram(DSP_CP_DATA_AREA_BASE, mnp_rx_data_ptr, dce_length_semaphore);
+               mnp_rx_data_ptr += dce_length_semaphore;
+               rx_char_count += dce_length_semaphore;
          }
 
-			length_and_status = 0;
-			dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
-			dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+            length_and_status = 0;
+            dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+            dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
 
-			/* Check to see if end of frame rx'd */
-			if ((dce_status_semaphore == EOF_CRC_GOOD) ||
-				(dce_status_semaphore == EOF_CRC_BAD))
-			{
-				
-				rx_char_count -= 2;
-				mnp_rx_packet_ptr->count = rx_char_count;
+            /* Check to see if end of frame rx'd */
+            if ((dce_status_semaphore == EOF_CRC_GOOD) ||
+                (dce_status_semaphore == EOF_CRC_BAD))
+            {
+                
+                rx_char_count -= 2;
+                mnp_rx_packet_ptr->count = rx_char_count;
 
-				/* Check to see if CRC error rx'd */
-				if (dce_status_semaphore == EOF_CRC_BAD)
-				{
-					line_bg_error_flags = 1;
-				}
-	
-				/* if any errors, set status of MNP packet */
-				if (line_bg_error_flags)
-				{
-					mnp_rx_packet_ptr->status = BAD_BLOCK;
-					line_bg_error_flags = 0;
-				}
+                /* Check to see if CRC error rx'd */
+                if (dce_status_semaphore == EOF_CRC_BAD)
+                {
+                    line_bg_error_flags = 1;
+                }
+    
+                /* if any errors, set status of MNP packet */
+                if (line_bg_error_flags)
+                {
+                    mnp_rx_packet_ptr->status = BAD_BLOCK;
+                    line_bg_error_flags = 0;
+                }
 
-				/* Get next rx packet from V42 */
-				mnp_rx_packet_ptr = (MNP_PACKET_TYPE *)mnp_rx();
-		
-				/* If a new packet is ready, set up it's pointers */
-				if ( mnp_rx_packet_ptr )
-				{
-					rx_char_count = 0;
-					mnp_rx_packet_ptr->status = 0;
-					mnp_rx_packet_ptr->count = 0;
-					mnp_rx_data_ptr = mnp_rx_packet_ptr->data;
-				}
-			} /* end if EOF */
-		} /* end else packet ptr is valid */
-	   else
-	   {
-			line_bg_error_flags = 1;
-			length_and_status = 0;
-			dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
-			dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
-			
-	   }
-	} /* end else not abort */
-	
-	dce_length_semaphore = 0;
-	dce_status_semaphore = 0;
+                /* Get next rx packet from V42 */
+                mnp_rx_packet_ptr = (MNP_PACKET_TYPE *)mnp_rx();
+        
+                /* If a new packet is ready, set up it's pointers */
+                if ( mnp_rx_packet_ptr )
+                {
+                    rx_char_count = 0;
+                    mnp_rx_packet_ptr->status = 0;
+                    mnp_rx_packet_ptr->count = 0;
+                    mnp_rx_data_ptr = mnp_rx_packet_ptr->data;
+                }
+            } /* end if EOF */
+        } /* end else packet ptr is valid */
+       else
+       {
+            line_bg_error_flags = 1;
+            length_and_status = 0;
+            dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+            dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+            
+       }
+    } /* end else not abort */
+    
+    dce_length_semaphore = 0;
+    dce_status_semaphore = 0;
 }
 
 

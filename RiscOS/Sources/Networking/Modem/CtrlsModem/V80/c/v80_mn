@@ -47,12 +47,35 @@ extern void system_rcv_escape(void);
 #include "dte.edf"
 #include "v80_mem.h"
 #include "mt_def.h"
+#include "acuiomem.h"
 
-/* DEBUG ONLY - mlc */
-ubyte V80_flag_detected = FALSE;
-ubyte V80_first_frame = FALSE;
-/* DEBUG ONLY - mlc */
+#if (FCLASS_80 == 1) 
 
+void V80_dte_to_indicate(ubyte);
+
+void PrintMsg(char *);
+void outchar(unsigned char);
+void outhex( unsigned char data );
+extern ubyte dce_tx_buffer[];
+extern uword dce_tx_remove;
+extern uword dce_tx_insert;
+
+extern uword line_to_free(void);
+extern uword dce_tx_count;
+extern void  line_send();
+
+
+#define TBUF_SIZE 0x2800
+
+
+void buffer_dump(void)
+{
+}
+
+
+void dump_dte_rx(void)
+{
+}
 
 /******************************************************************************
 /
@@ -135,11 +158,39 @@ void V80_configure(ubyte trans_idle, ubyte framed_idle, ubyte framed_un_ov, \
 *******************************************************************************/
 void V80_process_bg(void)
 {
+   extern ubyte dce_flag_count;
+   extern ubyte dte_flag_count;
+
+   ubyte skip_dte = FALSE;
+   ubyte skip_dce = FALSE;
 
    if (!V80_idle)
-   { 
-      V80_DTE_ch();
+   {
+      if (!v80_tx_timer)
+      {
+         V80_tx_frm_spacing_complete = TRUE;
+      }
+
       V80_DCE_ch();
+      V80_DTE_ch();
+
+      if (V80_modem_status == RETRAINING || V80_modem_status == RENEGOTIATING)
+      {
+         if (!local_rtn_request && !remote_rtn_request)
+         {
+            remote_rtn_request = TRUE;
+            if (V80_modem_status == RETRAINING)
+            {
+               V80_dte_to_indicate(EM_DTE_RTN);
+            }
+            else
+            {
+               V80_dte_to_indicate(EM_DTE_RRN);
+            }
+         }
+
+      }
+
    }
 }
 
@@ -176,11 +227,12 @@ void V80_DTE_ch(void)
 {
    uword temp_word;
 
-/* DEBUG ONLY - mlc */
+   uword xfer_cnt = 0;
+   ubyte done = FALSE;
+   extern ubyte dte_flag_count;
+
     ubyte temp_array[3];
     extern void line_to_block(ubyte*,ubyte);
-/* DEBUG ONLY - mlc */
-
 
    /*
     * while DTE has data for DCE and
@@ -190,32 +242,39 @@ void V80_DTE_ch(void)
    if (V80_flag_hunt == TRUE)
    {
       temp_word = line_get_flag_count();
-      if ( temp_word != V80_flag_count )    /* flags received! */
+
+      if ( temp_word != V80_flag_count )     /* flags received! */
       {
-         line_hunt_complete();  /* inform line that flags have been detected */
+         line_hunt_complete();               /* inform line that flags have been detected */
          V80_flag_hunt = FALSE;
+         V80_sub_mode = FSM;
+
       }
       return;
    }
 
     /* for MARK, FLAG, or EOT, wait for DCE buffer to send everything */
-    if ( V80_wait_DCE_empty )
+    if ( V80_wait_DCE_empty && v80_line_clear )
     {
+         V80_wait_DCE_empty = FALSE;
         if ( !line_to_num() )               /* if DCE buffer is empty */
         {
-            V80_wait_DCE_empty = FALSE;     /* now process the command */
             switch (V80_ch)
             {
                 case (EM_DTE_MARK):
+PrintMsg( "V80_DTE_MARK" );
                     V80_DTE_mark();
                     break;
                 case (EM_DTE_FLAG):
+PrintMsg( "DTE_FLAG" );
                     V80_DTE_flag();
                     break;
                 case (EM_DTE_EOT):
+PrintMsg( "V80_DTE_EOT" );
                     acu_v80_hangup();
                     break;
                 case (EM_DTE_HUNT):
+PrintMsg( "V80_DTE_HUNT" );
                     if (V80_sub_mode == FSM)
                     {
                         line_enter_hunt_mode();
@@ -235,171 +294,208 @@ void V80_DTE_ch(void)
         return;
     }
 
-   while (dte_from_num() && ( line_to_free() > V80_MAX_DCE_XLATE_BUF ))
+    if( V80_idle )
     {
-        /* process each character from the DTE buffer */
-        V80_ch = dte_from_char();
+      PrintMsg( "V80_idle = TRUE?" );
+      return;
+    }
 
-        /* if this char is EM and
-        * previous char was not DM set flag
-        */
-        if (( EM == ( V80_ch & V80_7BIT_MASK )) && ( V80_rcvd_EM_DTE == FALSE ))
+    /* If no room to do anything, get out */
+    if( line_to_free() <= V80_MAX_DCE_XLATE_BUF )
+      return;
+
+    if( !dte_from_num() )   /* TSM or FSM with no dte data */
+    {
+       dte_flag_count = 0;
+    }
+
+    if( V80_sub_mode == FSM )
+    {
+      /* If there is not enough to do for now, get out */
+      if( (dte_flag_count == 0) && (dte_from_num() < 100) && (line_to_num() > 100) )
+         return;
+
+    }
+    else /* handle TSM below */
+    {
+    }
+
+    xfer_cnt = dte_from_num();
+    temp_word = 0;
+
+    while( xfer_cnt && !done )
+    {
         {
-            V80_rcvd_EM_DTE = TRUE;
-        }
-        else
-        {
+            /* process each character from the DTE buffer */
+            V80_ch = dte_from_char();
+            xfer_cnt--;
+            temp_word++;
 
-/* DEBUG ONLY - mlc */
-            /* toggle flag back off */
-            if (V80_flag_detected && V80_rcvd_EM_DTE && (V80_ch == EM_DTE_FLAG))
-               V80_flag_detected = TRUE;
-            else
-               V80_flag_detected = FALSE;
-/* DEBUG ONLY - mlc */
+            /* if last char was em and this is not flag we're in tsm */
 
-            /* last char was EM, check this char
-             * for valid V80 command.
-            */
-            if ( V80_rcvd_EM_DTE == TRUE )
+            if ((V80_rcvd_EM_DTE == TRUE) &&  (V80_sub_mode == TSM))
             {
+               switch ( V80_ch )
+               {
+                  case EM_DTE_FLAG:
+                      if (line_to_num() != 0)
+                      {
+PrintMsg("tSm ");
+                        PrintMsg( "WAITING" );
+                        v80_purge_line();
+                        v80_line_clear = FALSE;
+                        return;
+                      }
+                      else
+                      {
+PrintMsg("TsM ");
+                        V80_DTE_flag();
+
+                        dte_flag_count--;
+                        done = TRUE;
+                        V80_rcvd_EM_DTE = FALSE;
+                      }
+                      return;
+                  case EM_DTE_MARK:
+                        break;
+
+
+                  default:
+PrintMsg("tsm and em_dte ");
+                  }
+               return;
+            }
+
+            /* end special case TSM processing */
+
+            /* if this char is EM and
+             * previous char was not EM set flag
+            */
+            if (( EM == ( V80_ch & V80_7BIT_MASK )) && ( V80_rcvd_EM_DTE == FALSE ))
+            {
+               V80_rcvd_EM_DTE = TRUE;
+            }
+            else
+            {
+               /* toggle flag back off */
+               if (V80_flag_detected && V80_rcvd_EM_DTE && (V80_ch == EM_DTE_FLAG))
+                  V80_flag_detected = TRUE;
+               else
+                  V80_flag_detected = FALSE;
+
+               /* last char was EM, check this char
+               * for valid V80 command.
+               */
+               if ( V80_rcvd_EM_DTE == TRUE )
+               {
+                V80_rcvd_EM_DTE = FALSE;
+
                 switch ( V80_ch )
                 {
-                   case (V80_CMD_IND_T1):
-                        V80_dce_send_EM( V80_EM_19 );
-                        break;
-                    case (V80_CMD_IND_T2):
-                        V80_dce_send_EM( V80_EM_99 );
-                        break;
-                    case (V80_CMD_IND_T3):
-                        line_to_char(DC1);
-                        break;
-                    case (V80_CMD_IND_T4):
-                        line_to_char(DC3);
-                        break;
-                    case (V80_CMD_IND_T5):
-                        V80_dce_send_EM( V80_EM_19 );
-                        V80_dce_send_EM( V80_EM_19 );
-                        break;
-                    case (V80_CMD_IND_T6):
-                        V80_dce_send_EM ( V80_EM_99 );
-                        V80_dce_send_EM ( V80_EM_99 );
-                        break;
-                    case (V80_CMD_IND_T7):
-                        line_to_char(DC1);
-                        line_to_char(DC1);
-                        break;
-                    case (V80_CMD_IND_T8):
-                        line_to_char(DC3);
-                        line_to_char(DC3);
-                        break;
-                    case (V80_CMD_IND_T9):
-                        V80_dce_send_EM( V80_EM_19 );
-                        V80_dce_send_EM( V80_EM_99 );
-                        break;
-                    case (V80_CMD_IND_T10):
-                        V80_dce_send_EM( V80_EM_19 );
-                        line_to_char(DC1);
-                        break;
-                    case (V80_CMD_IND_T11):
-                        V80_dce_send_EM( V80_EM_19 );
-                        line_to_char(DC3);
-                        break;
-                    case (V80_CMD_IND_T12):
-                        V80_dce_send_EM( V80_EM_99 );
-                        V80_dce_send_EM( V80_EM_19 );
-                        break;
-                    case (V80_CMD_IND_T13):
-                        V80_dce_send_EM( V80_EM_99 );
-                        line_to_char(DC1);
-                        break;
-                    case (V80_CMD_IND_T14):
-                        V80_dce_send_EM( V80_EM_99 );
-                        line_to_char(DC3);
-                        break;
-                    case (V80_CMD_IND_T15):
-                        line_to_char(DC1);
-                        V80_dce_send_EM( V80_EM_19 );
-                        break;
-                    case (V80_CMD_IND_T16):
-                        line_to_char(DC1);
-                        V80_dce_send_EM( V80_EM_99 );
-                        break;
-                    case (V80_CMD_IND_T17):
-                        line_to_char(DC1);
-                        line_to_char(DC3);
-                        break;
-                    case (V80_CMD_IND_T18):
-                        line_to_char(DC3);
-                        V80_dce_send_EM( V80_EM_19 );
-                        break;
-                    case (V80_CMD_IND_T19):
-                        line_to_char(DC3);
-                        V80_dce_send_EM( V80_EM_99 );
-                        break;
-                    case (V80_CMD_IND_T20):
-                        line_to_char(DC3);
-                        line_to_char(DC1);
-                        break;
-
                     case (EM_DTE_MARK):             /* begin TSM, when DCE buf is empty */
-                        V80_wait_DCE_empty = TRUE;
-                        break;
+PrintMsg( "EM_DTE_MARK" );
+                        if (line_to_num() != 0)
+                        {
+PrintMsg("wait dce");
+                           v80_line_clear = FALSE;
+                           v80_purge_line();
+                        }
+                        else
+                        {
+                           V80_DTE_mark();
+                        }
+                        return;
 
                     case (EM_DTE_FLAG):
                         if (V80_sub_mode == TSM)
                         {
-                           V80_wait_DCE_empty = TRUE;
+                           PrintMsg( "Exiting TSM" );
+                           if (line_to_num() != 0)
+                           {
+                              PrintMsg( "Wait!!!" );
+                              v80_line_clear = FALSE;
+                              v80_purge_line();
+                              return;
+                           }
+                           else
+                           {
+                              V80_DTE_flag();
+
+                              dte_flag_count--;
+                              done = TRUE;
+                           }
                         }
-                        else
+                        else  /* FSM processing for flags */
                         {
                            /* insert the FLAG into user data */
                            V80_DTE_flag();
+                           dte_flag_count--;
+                           done = TRUE;
                         }
                         break;
 
                     case (EM_DTE_ERR):              /* send abort */
+PrintMsg( "EM_DTE_ERR" );
                         if ( V80_sub_mode == FSM )
                         {
-/* DEBUG ONLY - mlc */
-#if 0
-                            line_to_char(EM);
-                            line_to_char(ABORT);
-#endif
                             temp_array[0] = EM;
                             temp_array[1] = ABORT;
                             line_to_block(&temp_array[0],2);
-/* DEBUG ONLY - mlc */
                         }
                         break;
-                    case (EM_DTE_HUNT):             /* enter hunt mode */
 
-                        V80_wait_DCE_empty = TRUE;
+                    case (EM_DTE_HUNT):             /* enter hunt mode */
+PrintMsg( "EM_DTE_HUNT" );
+                        if (line_to_num() != 0)
+                        {
+                           v80_line_clear = FALSE;
+                           v80_purge_line();
+                        }
+                        else 
+                        { 
+                           if (V80_sub_mode == FSM)
+                           {
+                              line_enter_hunt_mode();
+                              line_from_clear();
+                              dte_to_clear();
+                              V80_flag_count = line_get_flag_count();
+                              V80_flag_hunt = TRUE;
+                           }
+                        }
                         break;
 
                     case (EM_DTE_RESUME):     /*  should never see this */
+PrintMsg( "EM_DTE_RESUME" );
                         line_tx_resume();
                         break;
 
 
                     case (EM_DTE_EOT):        /* hang up when DCE buf is empty */
-                        V80_wait_DCE_empty = TRUE;
+PrintMsg( "EM_DTE_EOT" );
+                        acu_v80_hangup();
+
                         break;
 
                     case (EM_DTE_ECS):        /* goto online cmd state */
+PrintMsg( "EM_DTE_ESC" );
                         V80_idle = TRUE;      /* stop v80 cmd processing */
                         system_rcv_escape();
                         break;
 
                     case (EM_DTE_RRN):        /* req. rate reneg */
+PrintMsg( "EM_DTE_RRN" );
                         modem_renegotiate();
+                        local_rtn_request = TRUE;
                         break;
 
                     case (EM_DTE_RTN):        /* req. retrain */
+PrintMsg( "EM_DTE_RTN" );
                         modem_retrain();
+                        local_rtn_request = TRUE;
                         break;
 
                     case (EM_DTE_RATE):       /* set max tx, rx rate */
+PrintMsg( "EM_DTE_RATE" );
                         V80_inband_rate_chg = TRUE;
                         V80_rate = 0;
                         break;
@@ -410,25 +506,23 @@ void V80_DTE_ch(void)
 
                     case (EM_DTE_CTL):        /* go to ctl chan not supported */
                     case (EM_DTE_RTNC):       /* ctl chan retrain unsupported */
+PrintMsg( "EM_DTE_CTL/RTNC" );
+
                         break;
 
-                    default:                  /* not a valid cmd */
+                    case (EM_99):
+                    case (EM):                /* this is <em> <em> sequence which is invalid */
+                        return;               /* eat one, leaving the em detected flag set */
 
-/* DEBUG ONLY - mlc */
-#if 0
-                        line_to_char(EM);     /* send the EM rcvd previously */
-                        line_to_char(V80_ch); /* send this char */
-#endif
-                        temp_array[0] = EM;
-                        temp_array[1] = V80_ch;
-                        line_to_block(&temp_array[0],2);
-/* DEBUG ONLY - mlc */
+                    default:                  /* tx isr handles <em> <char> so send it on to dce tx buf */
+                              temp_array[0] = EM;
+                              temp_array[1] = V80_ch;
+                              line_to_block(&temp_array[0],2);
                         break;
                 }
-                   V80_rcvd_EM_DTE = FALSE;
-            }
-            else                                   
-            {
+               }
+               else                                   
+               {
                 if ( V80_inband_rate_chg )    /* this ch is max tx or rx rate */
                 {
                     if ( V80_rate == 0 )      /*  tx / rx rate data now avail.*/
@@ -442,21 +536,36 @@ void V80_DTE_ch(void)
 
                         V80_inband_rate_chg = FALSE;
                         V80_rate &= V80_RATE_MASK;
+#if MODEM_X2_MODE == 1
+                        modem_set_rate_seq( ( 1 << V80_rate ) - 1, FALSE,FALSE);
+#else
                         modem_set_rate_seq( ( 1 << V80_rate ) - 1, FALSE);
+#endif
                     }
                 }
-                else                          /* not an <EM> or cmd or rate */
-                    line_to_char(V80_ch);
+                else                          /* not cmd or rate */
+                     {
+                          temp_array[0] = V80_ch;
+                          line_to_block(&temp_array[0],1);
+                     }
+               }
             }
+
+            if( !xfer_cnt )
+               done = TRUE;
+
+            if( line_to_free() <= V80_MAX_DCE_XLATE_BUF )
+               done = TRUE;
         }
 
     }
+
 }
 
 
 /*******************************************************************************
 /
-/	Routine: V80_DCE_ch
+/    Routine: V80_DCE_ch
 /
 /    Author : RSA
 /
@@ -485,81 +594,113 @@ void V80_DTE_ch(void)
 void V80_DCE_ch(void)
 {
    ubyte ch;
+   uword i, temp_word = 0;
+   uword xfer_cnt = 0;
 
-   /* if retrain or renegotiation detected,
-    * send EM and indication
+   ubyte done = FALSE;
+   extern ubyte dce_flag_count;
+
+   /* if retrain or renegotiation just ended,
+    * send <EM><rate> indication
    */
 
-   if ((V80_new_rate_data_valid != FALSE) && \
-        (dte_to_free() > V80_RATE_DATA_SPACE_REQD))
+   if ((dte_to_free() > V80_RATE_DATA_SPACE_REQD) &&
+       (V80_new_rate_data_valid != FALSE))
    {
+PrintMsg( "DTE RATE" );
+
       dte_to_char(EM);
-
-      if (V80_new_rate_data_valid == RETRAINING)
-         dte_to_char(EM_DTE_RTN);
-      else
-         dte_to_char(EM_DTE_RRN);
-
+      dte_to_char(EM_DTE_RATE);
       dte_to_char(V80_tx_rate);
       dte_to_char(V80_rx_rate);
       V80_new_rate_data_valid = FALSE;
+      local_rtn_request = FALSE;
+      remote_rtn_request = FALSE;
    }
 
-    while (line_from_num() && (dte_to_free() > V80_MAX_DTE_XLATE_BUF) \
-        && !V80_idle)
+
+    if( V80_idle )
+    {
+      PrintMsg( "V80_idle = TRUE??" );
+      return;
+    }
+
+    /* If no room to do anything, get out */
+    if( dte_to_free() <= V80_MAX_DTE_XLATE_BUF )
+      return;
+
+    if( V80_sub_mode == FSM )
+    {
+        /* If there is not enough to do for now, get out */
+        if( (dce_flag_count == 0) && (line_from_num() < 100) && (dte_to_num() > 100) )
+         {
+            return;
+         }
+    }
+    else
+    {
+        /* IF there is no data in TSM, get out */
+        if( !line_from_num() )
+            return;
+    }
+      
+    temp_word = 0;
+    xfer_cnt = line_from_num();   /* we should exit because of flag received, rather than max data xfer */
+
+    while( xfer_cnt && !done )
     {
         /* process each character from the DCE buffer */
+
         ch = line_from_char();
+        xfer_cnt--;
+        temp_word++;
 
-        /* if this char is EM and
-         * previous char was not DM set flag
-        */
+        dte_to_char(ch);        /* send the character */
 
-/* START CHANGE - 09/13/96 - mlc */
-        dte_to_char(ch);
-#if 0
-        if (( EM == ( ch  & V80_7BIT_MASK )) && ( FALSE == V80_rcvd_EM_DCE ))
-            V80_rcvd_EM_DCE = TRUE;
-        else
+        if( V80_sub_mode == FSM )
         {
-            /* If last char was EM, check this
-             * char for valid V80 command.
-            */
-            if ( TRUE == V80_rcvd_EM_DCE )
+            if( ch == EM )
             {
-                switch ( ch )
-                {
-                    case (V80_CMD_IND_T1):
-                        V80_dte_send_EM( V80_EM_19 );
-                        break;
-                    case (V80_CMD_IND_T2):
-                        V80_dte_send_EM( V80_EM_99 );
-                        break;
-                    case (V80_CMD_IND_T3):
-                        dte_to_char(DC1);
-                        break;
-                    case (V80_CMD_IND_T4):
-                        dte_to_char(DC3);
-                        break;
-                    default:
-                        /*
-                         * command was not valid so don't translate
-                        */
+               /* process each character from the DCE buffer */
+               ch = line_from_char();
+               xfer_cnt--;
+               temp_word++;
 
-                        /* send EM char */
-                        /* send ch */
-                        dte_to_char(EM);
-                        dte_to_char(ch);
-                        break;
-                 }
-                 V80_rcvd_EM_DCE = FALSE;
+               /* send the character */
+               dte_to_char(ch);
+
+               if( ch == FLAG )
+               {
+                  done = TRUE;
+                  if (dce_flag_count == 0)
+                  {
+                     PrintMsg("cnt=0 ");
+                     outhex(temp_word >> 8);
+                     outhex(temp_word);
+                  }
+                  else
+                  {
+                     dce_flag_count--;
+                  }
+               }
             }
-            else                      /* normal char handling */
-                dte_to_char(ch);
-        }
-#endif
-/* END CHANGE - 09/13/96 - mlc */
 
+            if( xfer_cnt == 0 ) /* ending flag not received yet */
+            {
+               done = TRUE;
+            }
+        }
+        else      /* TSM */
+        {
+            if( !line_from_num() )
+               done = TRUE;
+        }
+
+
+        if( dte_to_free() <= V80_MAX_DTE_XLATE_BUF )
+        {
+            done = TRUE;
+        }
     }
 }
 
@@ -569,33 +710,50 @@ void V80_DCE_ch(void)
 /
 /    Routine: V80_init
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 07/31/1996
+/    Creation Date: 07/31/1996
 /
-/	Description : entry point used by the ACU module to initialize the V.80 
+/    Description : entry point used by the ACU module to initialize the V.80 
 /                
 /
-/	Input Parameters: none
+/    Input Parameters: none
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description:
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description:
+/    Reason: 
 /
 *******************************************************************************/
 void V80_init(void)
 {
+int i;
 
+/* test dte_rx_int ch sniff buffer */
+/* initialize the buffer */
+
+   tbuf_in = 0;
+
+   tbuf_ch = 0;
+   tbuf[i] = tbuf_ch;
+
+   for (i = 0; i < TBUF_SIZE; i++)
+   {
+      tbuf[tbuf_in] = 0;
+
+      tbuf_in++;
+      if (tbuf_in == TBUF_SIZE)
+         tbuf_in = 0;
+   }
     V80_sub_mode = TSM;
     V80_inband_detc = TRUE;
     V80_rcvd_EM_DTE = FALSE;
@@ -607,47 +765,55 @@ void V80_init(void)
     V80_flag_hunt = 0;
     V80_flag_count = 0;
 
+    V80_flag_detected = FALSE;
+    V80_first_frame = FALSE;
+    local_rtn_request = FALSE;
+    remote_rtn_request = FALSE;
+
     /* set to idle, let v80_resume() call enable */
     V80_idle = TRUE; /* on training V8 uses this buffer, ACU will enable us */
 
     V80_modem_status = 0;
 
     line_from_clear();  /* ensure V8 data is expunged */
-
 }
 
 
 /*******************************************************************************
 /
-/	Routine: V80_modem_state_ind
+/    Routine: V80_modem_state_ind
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 07/31/1996
+/    Creation Date: 07/31/1996
 /
-/	Description : interface routine used by Modem Task
+/    Description : interface routine used by Modem Task
 /                    to provide retrain info
 /                
 /
-/	Input Parameters: type
+/    Input Parameters: type
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description: 
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
 /
 *******************************************************************************/
 void V80_modem_state_ind(ubyte type, ubyte tx, ubyte rx)
 {
+
+   /* Unless we're active, we don't care */
+   if( V80_idle )
+      return;
 
    switch (type)
    {
@@ -705,40 +871,40 @@ void V80_modem_state_ind(ubyte type, ubyte tx, ubyte rx)
 
 /*******************************************************************************
 /
-/	Routine: V80_dte_send_EM
+/    Routine: V80_dte_send_EM
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 07/31/1996
+/    Creation Date: 07/31/1996
 /
-/	Description : 
+/    Description : 
 /                
 /
-/	Input Parameters: hi_bit_flag determines if 0x99 or 0x19 is DM char
+/    Input Parameters: hi_bit_flag determines if 0x99 or 0x19 is DM char
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
 /   ASSUMES: room is available in destination
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description:
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description:
+/    Reason: 
 /
 *******************************************************************************/
 void V80_dte_send_EM( ubyte hi_bit_flag )
 {
     if ( hi_bit_flag == V80_EM_99 )       /* send 0x99 as DM char */
-	    dte_to_char(EM | HI_BIT);
+        dte_to_char(EM | HI_BIT);
     else
-	    dte_to_char(EM);                  /* send 0x19 as DM char */
+        dte_to_char(EM);                  /* send 0x19 as DM char */
 
 }
 
@@ -746,72 +912,83 @@ void V80_dte_send_EM( ubyte hi_bit_flag )
 
 /*******************************************************************************
 /
-/	Routine: V80_dce_send_EM
+/    Routine: V80_dce_send_EM
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 07/31/1996
+/    Creation Date: 07/31/1996
 /
-/	Description : 
+/    Description : 
 /                
 /
-/	Input Parameters: hi_bit_flag determines if 0x99 or 0x19 is DM char
+/    Input Parameters: hi_bit_flag determines if 0x99 or 0x19 is DM char
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
+/
+/   ASSUMES: room is a
+/    Input Parameters: hi_bit_flag determines if 0x99 or 0x19 is DM char
+/
+/    Output Parameters: none
+/
+/    Global Variables Changed:
 /
 /   ASSUMES: room is available in destination
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description: 
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
 /
 *******************************************************************************/
 void V80_dce_send_EM( ubyte hi_bit_flag )
 {
-    if ( hi_bit_flag == V80_EM_99 )       /* send 0x99 as DM char */
-	    line_to_char(EM | HI_BIT);
-	else
-	    line_to_char(EM);                 /* send 0x19 as DM char */
+    ubyte temp_array[2];
+    extern void line_to_block(ubyte*,ubyte);
 
+    if ( hi_bit_flag == V80_EM_99 )
+         temp_array[0] = (EM | HI_BIT);
+    else
+         temp_array[0] = EM;
+
+    line_to_block(&temp_array[0],1);
 }
 
 
 /*******************************************************************************
 /
-/	Routine: V80_conf_inband_detc
+/    Routine: V80_conf_inband_detc
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 07/31/1996
+/    Creation Date: 07/31/1996
 /
-/	Description : entry point used by ACU parser to enable and disable the
+/    Description : entry point used by ACU parser to enable and disable the
 /                   processing if in-band commands when entering SAM using
 /                   +ES= command.
 /                
 /
-/	Input Parameters: none
+/    Input Parameters: none
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description: 
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
 /
 *******************************************************************************/
 void V80_conf_inband_detc(ubyte condition)
@@ -826,30 +1003,30 @@ void V80_conf_inband_detc(ubyte condition)
 
 /*******************************************************************************
 /
-/	Routine: V80_idle_state
+/    Routine: V80_idle_state
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 08/18/1996
+/    Creation Date: 08/18/1996
 /
-/	Description : used to set the V.80 module to an idle state while
+/    Description : used to set the V.80 module to an idle state while
 /                in online command mode
 /
-/	Input Parameters: none
+/    Input Parameters: none
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description: 
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
 /
 *******************************************************************************/
 void V80_resume(void)
@@ -860,34 +1037,37 @@ void V80_resume(void)
 
 /*******************************************************************************
 /
-/	Routine: V80_DTE_mark
+/    Routine: V80_DTE_mark
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 08/18/1996
+/    Creation Date: 08/18/1996
 /
-/	Description : mark detected in data stream, DCE buffer is empty
+/    Description : mark detected in data stream, DCE buffer is empty
 /                in online command mode
 /
-/	Input Parameters: none
+/    Input Parameters: none
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description: 
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
 /
 *******************************************************************************/
 void V80_DTE_mark(void)
 {
+    ubyte temp_array[3];
+    extern void line_to_block(ubyte*,ubyte);
+
     if ( V80_sub_mode == FSM )
     {
         V80_sub_mode = TSM;
@@ -895,47 +1075,50 @@ void V80_DTE_mark(void)
         dte_set_sub_mode(TSM);
     }
 
+   if (V80_sub_mode == TSM)
+   {
+      temp_array[0] = EM;
+      temp_array[1] = MARK;
+      line_to_block(&temp_array[0],2);
+   }
 }
 
 
 /*******************************************************************************
 /
-/	Routine: V80_DTE_flag
+/    Routine: V80_DTE_flag
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 08/18/1996
+/    Creation Date: 08/18/1996
 /
-/	Description : flag detected in data stream, DCE buffer is empty
+/    Description : flag detected in data stream, DCE buffer is empty
 /                
 /
-/	Input Parameters: none
+/    Input Parameters: none
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description: 
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
 /
 *******************************************************************************/
 void V80_DTE_flag(void)
 {
-/* DEBUG ONLY - mlc */
     ubyte temp_array[3];
     extern void line_to_block(ubyte*,ubyte);
-/* DEBUG ONLY - mlc */
 
     if (V80_sub_mode == TSM)
     {
-        V80_sub_mode = FSM;
         line_enter_sub_mode(FSM);
         dte_set_sub_mode(FSM);
         V80_flag_count = line_get_flag_count();
@@ -943,12 +1126,6 @@ void V80_DTE_flag(void)
     }
     else
     {
-
-/* DEBUG ONLY - mlc */
-#if 0
-      line_to_char(EM);
-      line_to_char(FLAG);
-#else
       /* discard back-to-back <EM><FLAG>s */
       if (V80_first_frame == FALSE)
       {
@@ -959,54 +1136,151 @@ void V80_DTE_flag(void)
       if (V80_flag_detected == FALSE)
       {
 
-/* DEBUG ONLY - mlc */
-#if 0
-         line_to_char(EM);
-         line_to_char(FLAG);
-#endif
          temp_array[0] = EM;
          temp_array[1] = FLAG;
          line_to_block(&temp_array[0],2);
-/* DEBUG ONLY - mlc */
       
          V80_flag_detected = TRUE;
       }
-#endif
-/* DEBUG ONLY - mlc */
-
     }
-
 }
 
 
 /*******************************************************************************
 /
-/	Routine: V80_rcv_escape
+/    Routine: V80_rcv_escape
 /
-/	Author : RSA
+/    Author : RSA
 /
-/	Creation Date: 08/18/1996
+/    Creation Date: 08/18/1996
 /
-/	Description : flag detected in data stream, DCE buffer is empty
+/    Description : flag detected in data stream, DCE buffer is empty
 /                
 /
-/	Input Parameters: none
+/    Input Parameters: none
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:
+/    Global Variables Changed:
 /
-/	Users:
+/    Users:
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	RSA 
-/	Description: 
-/	Reason: 
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
 /
 *******************************************************************************/
 void V80_rcv_escape(void)
 {
 }
+
+/*******************************************************************************
+/
+/    Routine: V80_start_hunt
+/
+/    Author : RSA
+/
+/    Creation Date: 11/07/1996
+/
+/    Description : Abort received from line, enter hunt mode, but don't
+/                trash the data already in transit to the DTE; there's
+/                probably an abort (<EM><mark>) on the end of it.
+/                
+/
+/    Input Parameters: none
+/
+/    Output Parameters: none
+/
+/    Global Variables Changed:
+/
+/    Users:
+/
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
+/
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
+/
+*******************************************************************************/
+void V80_start_hunt(void)
+{
+   V80_flag_count = line_get_flag_count();
+   V80_flag_hunt = TRUE;
+}
+
+/*******************************************************************************
+/
+/    Routine: V80_dte_to_indicate
+/
+/    Author : RSA
+/
+/    Creation Date: 11/07/1996
+/
+/    Description : Indicate to the DTE that the remote has requested a RTN/RRN
+/                
+/
+/    Input Parameters: none
+/
+/    Output Parameters: none
+/
+/    Global Variables Changed:
+/
+/    Users:
+/
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
+/
+/    Author & Date:    RSA 
+/    Description: 
+/    Reason: 
+/
+*******************************************************************************/
+void V80_dte_to_indicate(ubyte type)
+{
+   int i;
+   dte_to_char(EM);
+   dte_to_char(type);
+
+   PrintMsg( "V80_dte_to_indicate()" );
+}
+
+
+#else 
+
+void V80_conf_inband_detc(ubyte condition)
+{
+}
+
+void V80_process_bg(void)
+{
+}
+
+void V80_init(void)
+{
+}
+
+void V80_configure(ubyte trans_idle, ubyte framed_idle, ubyte framed_un_ov, \
+    ubyte hd_auto, ubyte crc_type, ubyte nrzi_en, ubyte syn1, ubyte syn2)
+{
+}
+
+void V80_modem_state_ind(ubyte type, ubyte tx, ubyte rx)
+{
+}
+
+void V80_idle_state(ubyte idle_en)
+{
+}
+
+void V80_resume(void)
+{
+}
+
+#endif

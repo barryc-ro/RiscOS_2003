@@ -54,10 +54,14 @@ extern void send_pkt_to_dsp(void);
 extern ubyte current_command[];
 extern ubyte ack_or_response;
 
+extern ubyte V80_wait_DCE_empty;
+
 extern void v80_tx_underrun(void);
 extern void v80_rx_overrun(void);
 extern void line_from_clear(void);
 extern dte_process_unum(void);
+extern uword dte_tx_count;
+extern uword dte_rx_count;
 
 /* local function prototypes */
 void line_v80_configure(ubyte,ubyte,ubyte,ubyte,ubyte,ubyte,ubyte,ubyte);
@@ -69,6 +73,15 @@ void line_write_exit(ubyte,ubyte,ubyte);
 void v80_tx_int(void);
 void v80_rx_int(void);
 
+ubyte dce_flag_count;
+
+extern uword v80_tx_timer;
+extern ubyte v80_line_clear;
+
+void PrintMsg(char *);
+void outchar(unsigned char);
+
+#if (FCLASS_80 == 1)
 
 /**********************************************************************
 /
@@ -135,7 +148,6 @@ void line_v80_configure(ubyte tmp_t_idle, ubyte tmp_f_idle,
                         ubyte tmp_crc_type, ubyte tmp_nrzi_en,
                         ubyte tmp_syn1, ubyte tmp_syn2)
 {
-   ubyte temp_byte;
    extern void line_port_init(ubyte);
 
    /* save the supported parameters */
@@ -146,15 +158,29 @@ void line_v80_configure(ubyte tmp_t_idle, ubyte tmp_f_idle,
    crc_type = tmp_crc_type;
    nrzi_en = tmp_nrzi_en;
    syn1 = tmp_syn1;
-   syn2 = tmp_syn2;
 
-   temp_byte = v80_sam;
+/* DEBUG ONLY - mlc */
+#if 0
+   syn2 = tmp_syn2;
+#endif
+   syn2 = 0x7E;
+/* DEBUG ONLY - mlc */
+
    v80_sam = TRUE;
+
+    /* Enable LINE I/O Code to handle V80 SAM */
+    line_init(INIT_V80_SAM); 
+
    if (current_sub_mode == TRANSPARENT_SUB_MODE)
       line_port_init(BIT_SYNC_PORT);
    else
       line_port_init(SYNC_PORT);
+
+#if 0    /* Not sure we would want to turn back off,
+         nothing will work and ISR's will bust!!
+        */
    v80_sam = temp_byte;
+#endif
 }
 
 
@@ -215,6 +241,7 @@ void line_enter_sub_mode(ubyte sub_mode)
        /* always insert <EM><UNDER> into the rx data stream */
        insert_rx_byte(EM_CODE);
        insert_rx_byte(UNDER_CODE);
+
    }
    /* else if using FSM operation */
    else
@@ -224,6 +251,9 @@ void line_enter_sub_mode(ubyte sub_mode)
 
        /* discard all data until an HDLC flag is detected */
        hunt_mode_en = TRUE;
+
+       dce_flag_count = 0;
+
    }
 
    line_disable_interrupts();
@@ -282,21 +312,7 @@ void line_enter_hunt_mode(void)
     */
 
    /* if the using TSM operation */
-   if (current_sub_mode == TRANSPARENT_SUB_MODE)
-   {
-       /* if configured to TX IDLE with NO HUNT in TSM */
-       if (trans_idle == TIDLE_NO_HUNT)
-       {
-           /* NO EFFECT. SHOULD HAVE BEEN DYNAMICALLY STUBBED. */
-       }
-       /* else if configured to TX IDLE with SYN1,2 HUNT in TSM */
-       else
-       {
-           /* NOT SUPPORTED. SHOULD HAVE BEEN DYNAMICALLY STUBBED. */
-       }
-   }
-   /* else if using FSM operation */
-   else
+   if (current_sub_mode == FRAMED_SUB_MODE)
    {
        /* flush the receive data buffer */
        line_from_clear();
@@ -407,7 +423,7 @@ uword line_get_flag_count(void)
    /* MSByte DSP address */
    current_command[5] = (ubyte)((HDLC_FLAG_COUNT >> 8) & 0x00FF);
 
-   dsp_cp_packet = 0x0A;
+   dsp_cp_packet = 0x15;
    ack_or_response = RESPONSE;
    send_pkt_to_dsp();
 
@@ -456,20 +472,11 @@ void line_hunt_complete(void)
    insert_rx_byte(EM_CODE);
    insert_rx_byte(ERR_CODE);
 
-/* DEBUG ONLY - mlc */
-#if 0
-   insert_rx_byte(EM_CODE);
-   insert_rx_byte(0xBE);
-   insert_rx_byte(0x2E);
-   insert_rx_byte(0x2E);
-#endif
-/* DEBUG ONLY - mlc */
-
-/* START CHANGE - mlc */
    /* insert the opening <EM><FLAG> code into the rx data stream */
    insert_rx_byte(EM_CODE);
    insert_rx_byte(FLAG_CODE);
-/* START CHANGE - mlc */
+   dce_flag_count = 1;
+
 
    /* set a waiting timer to allow the DSP to flush out the
       remaining received data before disabling hunt mode */
@@ -509,27 +516,30 @@ void line_hunt_complete(void)
 ********************************************************************/
 void insert_rx_byte(ubyte rx_char)
 {
-   /* insert the byte into the rx data stream */
-   dce_rx_buffer[dce_rx_insert++] = rx_char;
-   dce_rx_count++;
+   if( dce_rx_count != DCE_BUFFER_SIZE )
+   {
+      /* insert the byte into the rx data stream */
+      dce_rx_buffer[dce_rx_insert++] = rx_char;
+      dce_rx_count++;
 
-   /* if the buffer insert pointer needs to wrap */
-   if (dce_rx_insert == DCE_BUFFER_SIZE)
-       dce_rx_insert = 0;
+      /* if the buffer insert pointer needs to wrap */
+      if (dce_rx_insert == DCE_BUFFER_SIZE)
+         dce_rx_insert = 0;
+   }
+   else
+      PrintMsg( "dce_rx_buffer full!!! " );
 }
-
    
 /**********************************************************************
 /
-/  Procedure:          line_write_exit
+/  Procedure:          send_com_ram
 /
 /  Author:             RSA
 /
-/  Creation Date:      09/10/96
+/  Creation Date:      07/27/96
 /
-/  Description:        This routine write the ISR exit data to the
-/                      COM-RAM interface. This routine was added
-/                      to help reduce code size.
+/  Description:        ISR function. This routine sends dce tx data to the 
+/                      com ram
 /
 /  Input Parameters:   None
 /
@@ -537,7 +547,7 @@ void insert_rx_byte(ubyte rx_char)
 /
 /  Globals Changed:    None
 /
-/  Users:              V.80 DCE I/O
+/  Users:              V.80 Module
 /
 /  -------------------------
 /  -     Modifications     -
@@ -548,12 +558,402 @@ void insert_rx_byte(ubyte rx_char)
 /  Reason:
 /
 ********************************************************************/
-void line_write_exit(ubyte status,ubyte data_count,ubyte length)
+void send_com_ram(void)
 {
-   dspdrv_WriteCram(CP_DSP_DATA_STATUS,&status,length);
-	dspdrv_WriteCram(CP_DSP_DATA_LENGTH,&data_count,length);
-}
+#if 0
+    ubyte status;       /* status byte of data area semaphore to write */
+    ubyte data_count;   /* number of tx data bytes */
+    uword address;      /* address of Comm RAM to write data */
+   ubyte tx_two_bytes;
+   ubyte temp_byte;    /* temporary local byte */
+   ubyte temp_byte2;   /* temporary local byte */
+   ubyte tx_nothing;   /* if invalid em ?? received, don't transmit it */
 
+    /* init variables */
+    address = CP_DSP_DATA_AREA_BASE;
+    data_count = 0;
+   status = NO_STATUS;
+   tx_nothing = FALSE;
+
+#if 0
+outhex( dce_tx_count >> 8);
+outhex( dce_tx_count );
+outchar( ' ' );
+outhex( v80_frame_count );
+outchar( ' ' );
+outhex(v80_pframe_count);
+outchar( ' ' );
+outhex(dce_tx_interrupt_expected);
+outchar( ' ' );
+#endif
+
+      /* make sure there are at least two bytes left in Tx Comm-Ram
+         for <EM> codes that are translated into two bytes */
+
+       while (dce_tx_count && (data_count < (DATA_AREA_SIZE - 1)))
+       {
+         /* initialize local looping variables */
+
+         tx_two_bytes = FALSE;
+
+         /* get the next byte for transmission */
+
+         temp_byte = dce_tx_buffer[dce_tx_remove];
+
+         /* point to the next buffer byte */
+
+         dce_tx_count--;
+         if (++dce_tx_remove == DCE_BUFFER_SIZE)
+            dce_tx_remove = 0;
+
+         if ((temp_byte == EM_CODE) && (dce_tx_count == 0))
+         {
+            PrintMsg( "EM by itself??" );
+         }
+
+         /* if an <EM> code sequence 
+          * ck for em em cmd seq. 
+          * if em is followed by em, treat first em as data 
+         */
+
+         if (( temp_byte == EM_CODE ) && ( dce_tx_buffer[dce_tx_remove] != EM_CODE ))
+         {
+            /* get the next byte for transmission */
+
+            temp_byte = dce_tx_buffer[dce_tx_remove];
+
+            /* point to the next buffer byte */
+
+            dce_tx_count--;
+            if (++dce_tx_remove == DCE_BUFFER_SIZE)
+               dce_tx_remove = 0;
+
+            switch (temp_byte)
+            {
+               case EM_CODE:
+
+                  /* Drop 1st EM & Tx 2nd one */
+                  break;
+                  
+               case FLAG_CODE:
+                  /* use the IDLE STATUS to send a flag */
+                  status = TX_FLAG;
+
+                  if (data_count == 0)
+                  {
+                     data_count = 0xFF;
+                  }
+                  else
+                  {
+                     /* Since we peek ahead, there should NOT be
+                        '0' length <EM><FLAG>'s detected in the
+                        data stream.
+                     */
+                     line_write_exit(status,data_count,1);
+                  }
+
+#if 0
+                  line_write_exit(status,data_count,1);
+#endif
+                  /* set the EOF status */
+
+                  dce_tx_eof = TRUE;
+#if 0
+
+                  v80_tx_timer = 2;
+#else
+                  v80_tx_timer = 0;
+#endif
+
+#if 0
+                  if (dce_tx_count < 64 )    /* BRG 1-9 */
+                  {
+                     v80_pframe_count = 0;
+                  }
+#endif
+
+                  v80_frame_count--;
+                  if (v80_frame_count == 0)
+                     dce_tx_interrupt_expected = FALSE;
+
+                  if (dce_tx_count == 0)
+                     dce_tx_interrupt_expected = FALSE;  /* if no data stop trying to send to com ram */
+
+
+                  /* EXIT NOW SO THAT THE FLAG WILL DELIMIT THE DATA */
+#if 0
+outhex(data_count);
+outchar(' ');
+#endif
+
+                  return;
+            
+               case ERR_CODE:
+                  /* use the IDLE STATUS to send a flag */
+                  status = TX_ABORT;
+                  if (data_count == 0)
+                     data_count = 0xFF;
+                  line_write_exit(status,data_count,1);
+         
+                  dce_tx_eof = TRUE;
+
+                  if (dce_tx_count == 0)
+                     dce_tx_interrupt_expected = FALSE;  /* if no data stop trying to send to com ram */
+
+                  /* EXIT NOW SO THAT THE ABORT WILL DELIMIT THE DATA */
+
+#if 0
+outhex(data_count);
+outchar(' ');
+#endif
+
+                       return;
+
+               case T1_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte = EM_CODE;
+                  break;
+
+               case T2_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte = EMP_CODE;
+                  break;
+
+               case T3_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte = DC1_CODE;
+                  break;
+
+               case T4_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte = DC3_CODE;
+                  break;
+
+               case T5_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EM_CODE;
+                  temp_byte2 = EM_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T6_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EMP_CODE;
+                  temp_byte2 = EMP_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T7_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC1_CODE;
+                  temp_byte2 = DC1_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+            
+               case T8_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC3_CODE;
+                  temp_byte2 = DC3_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T9_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EM_CODE;
+                  temp_byte2 = EMP_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+         
+               case T10_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EM_CODE;
+                  temp_byte2 = DC1_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T11_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EM_CODE;
+                  temp_byte2 = DC3_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T12_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EMP_CODE;
+                  temp_byte2 = EM_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T13_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EMP_CODE;
+                  temp_byte2 = DC1_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T14_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = EMP_CODE;
+                  temp_byte2 = DC3_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+      
+               case T15_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC1_CODE;
+                  temp_byte2 = EM_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T16_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC1_CODE;
+                  temp_byte2 = EMP_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T17_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC1_CODE;
+                  temp_byte2 = DC3_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T18_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC3_CODE;
+                  temp_byte2 = EM_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T19_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC3_CODE;
+                  temp_byte2 = EMP_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               case T20_CODE:
+                  /* write byte into COMM-RAM for transmission */
+                  temp_byte  = DC3_CODE;
+                  temp_byte2 = DC1_CODE;
+                  tx_two_bytes = TRUE;
+                  break;
+
+               default:
+                  /* write <EM> byte and EXTRA byte into TX COMM-RAM */
+                  PrintMsg("{");
+                  outchar(EM_CODE);
+                  outchar(temp_byte);
+                  PrintMsg("}");
+
+#if 0
+                  temp_byte2 = temp_byte;
+                  temp_byte = EM_CODE;
+                  tx_two_bytes = TRUE;
+#else
+                  tx_nothing = TRUE;
+#endif
+                  break;
+            }
+         }
+
+         if (!tx_nothing)
+         {
+            /* write byte into COMM-RAM for transmission */
+            dspdrv_WriteCram(address,&temp_byte,1);
+
+#if 0
+   outchar(temp_byte);
+#endif
+
+            /* update buffering variables */
+            address += WORD_OR_BYTE_ADD_INC;
+            data_count++;
+            dce_tx_eof = FALSE;
+            /* check if there is a second byte for transmission */
+            if (tx_two_bytes == TRUE)
+            {
+               /* write byte into COMM-RAM for transmission */
+               dspdrv_WriteCram(address,&temp_byte2,1);
+
+#if 0
+   outchar(temp_byte2);
+#endif
+               /* update buffering variables */
+               address += WORD_OR_BYTE_ADD_INC;
+               data_count++;
+               tx_two_bytes = FALSE;
+            }
+         }
+         tx_nothing = FALSE;
+      }
+
+#if 0
+outhex(data_count);
+outchar(' ');
+#endif
+
+      if (!line_to_num()) /* if nothing left to send, clear FSM / TSM and TSM / FSM transition flag */
+      {
+         v80_line_clear = TRUE;
+         dce_tx_interrupt_expected = FALSE;  /* if no data stop trying to send to com ram */
+      }
+
+      /* In Polled operation, we may not have anything
+         to do. So why bother the DSP.
+      */
+      if( !status && !data_count )
+          return;
+
+#if 1
+
+
+      /* Only on 31/32 byte boundary, peek ahead for <EM><FLAG> sequence */
+       if( (data_count >= 31 ) && (v80_frame_count != 0) )
+      {
+         /* get the next byte for transmission */
+         temp_byte = dce_tx_buffer[dce_tx_remove];
+
+         /* if an <EM> code sequence */
+         if (temp_byte == EM_CODE)
+         {
+            /* Stash current remove index in case !<EM><FLAG> */
+            address = dce_tx_remove;
+
+            if (++dce_tx_remove == DCE_BUFFER_SIZE)
+               dce_tx_remove = 0;
+
+            /* get the next byte for transmission */
+            temp_byte = dce_tx_buffer[dce_tx_remove];
+
+            /* if an <EM> code sequence */
+            if (temp_byte == FLAG_CODE)
+            {
+               /* use the IDLE STATUS to send a flag */
+               status = TX_FLAG;
+
+               /* handle overhead */
+               dce_tx_eof = TRUE;
+               v80_frame_count--;
+               dce_tx_count -= 2;
+               if (++dce_tx_remove == DCE_BUFFER_SIZE)
+                  dce_tx_remove = 0;
+               }
+            else
+               /* Nope not the right sequence, so restore */
+               dce_tx_remove = address;
+         }
+      }
+
+#endif
+
+      /* set packet length and status */
+      line_write_exit(status,data_count,1);
+
+#endif
+}
 
 /**********************************************************************
 /
@@ -592,145 +992,48 @@ void v80_tx_int(void)
     *       to be used as working code yet!!!
     */
 
-	ubyte status;       /* status byte of data area semaphore to write */
-	ubyte data_count;   /* number of tx data bytes */
-	uword address;      /* address of Comm RAM to write data */
+    ubyte status;       /* status byte of data area semaphore to write */
+    ubyte data_count;   /* number of tx data bytes */
+    uword address;      /* address of Comm RAM to write data */
+   ubyte tx_two_bytes;
    ubyte temp_byte;    /* temporary local byte */
    ubyte temp_byte2;   /* temporary local byte */
 
-/* DEBUG ONLY - mlc */
-   uword max_tx_size = 0xFFFF;
-   extern ubyte v80_frame_count;
-/* DEBUG ONLY - mlc */
-
-	/* init variables */
-	address = CP_DSP_DATA_AREA_BASE;
-	data_count = 0;
+    /* init variables */
+    address = CP_DSP_DATA_AREA_BASE;
+    data_count = 0;
    status = NO_STATUS;
+
+
 
    /* if TX_UNDERRUN indicated from the DSP */
    if (((current_sub_mode == FRAMED_SUB_MODE) || dce_tx_count) &&
         (dce_tx_resumed == TRUE))
    {
+outchar( 'U' );
+
       /* set packet length and status */
       status = TX_IDLE;
       data_count = 0xFF;
       line_write_exit(status,data_count,1);
       dce_tx_resumed = FALSE;
 
-/* DEBUG ONLY - mlc */
-	   dce_tx_interrupt_expected = FALSE;
-/* DEBUG ONLY - mlc */
-
+       dce_tx_interrupt_expected = FALSE;
+outchar('!');
       return;
    }
 
    /* If "spoofed" TX IE is false, then exit */
-	if (dce_tx_enabled == FALSE)
-		return;
+    if (dce_tx_enabled == FALSE)
+        return;
 
-/* DEBUG ONLY - mlc */
-#if 0
-	if ((v80_frame_count == 0) && (dce_tx_count <= 64))
-#endif
-	if (v80_frame_count == 0)
-	{
-	   dce_tx_interrupt_expected = FALSE;
+    if (v80_pframe_count == 0 && v80_frame_count == 0 && !dce_tx_interrupt_expected)
+    {
       return;
-	}
-/* DEBUG ONLY - mlc */
+    }
 
-/* DEBUG ONLY - mlc */
-#if 0
-   /* while data is available and there is room in COMM-RAM */
-	while (dce_tx_count && (data_count < DATA_AREA_SIZE))
-#endif
-	while (dce_tx_count && (data_count < DATA_AREA_SIZE) && max_tx_size)
-/* DEBUG ONLY - mlc */
-
-	{
-      /* get the next byte for transmission */
-      temp_byte = dce_tx_buffer[dce_tx_remove];
-
-/* DEBUG ONLY - mlc */
-      max_tx_size--;
-/* DEBUG ONLY - mlc */
-
-      /* point to the next buffer byte */
-      dce_tx_count--;
-      if (++dce_tx_remove == DCE_BUFFER_SIZE)
-         dce_tx_remove = 0;
-
-      /* if an <EM> code sequence */
-      if ((temp_byte == EM_CODE) && (dce_tx_count != 0) &&
-           (dce_tx_buffer[dce_tx_remove] != EM_CODE))
-      {
-         /* get the next byte for transmission */
-         temp_byte = dce_tx_buffer[dce_tx_remove];
-
-         /* point to the next buffer byte */
-         dce_tx_count--;
-         if (++dce_tx_remove == DCE_BUFFER_SIZE)
-            dce_tx_remove = 0;
-
-         switch (temp_byte)
-         {
-            case FLAG_CODE:
-               /* use the IDLE STATUS to send a flag */
-               status = TX_FLAG;
-               if (data_count == 0)
-                  data_count = 0xFF;
-               line_write_exit(status,data_count,1);
-
-               /* set the EOF status */
-               dce_tx_eof = TRUE;
-               v80_frame_count--;
-
-               /* exit now so that the FLAG will delimit the data */
-               return;
-
-            case ERR_CODE:
-               /* use the IDLE STATUS to send a flag */
-               status = TX_ABORT;
-               if (data_count == 0)
-                  data_count = 0xFF;
-               line_write_exit(status,data_count,1);
-               return;
-
-            default:
-               /* CHARACTER TRANSPARENCY */
-               /* write <EM> byte into COMM-RAM for transmission */
-               temp_byte2 = EM_CODE;
-               dspdrv_WriteCram(address,&temp_byte2,1);
-
-               /* update buffering variables */
-               address += WORD_OR_BYTE_ADD_INC;
-               data_count++;
-
-               /* write data byte into COMM-RAM for transmission */
-               dspdrv_WriteCram(address,&temp_byte,1);
-
-               /* update buffering variables */
-               address += WORD_OR_BYTE_ADD_INC;
-               data_count++;
-               dce_tx_eof = FALSE;
-               break;
-         }
-      }
-      else
-      {
-         /* write byte into COMM-RAM for transmission */
-         dspdrv_WriteCram(address,&temp_byte,1);
-
-         /* update buffering variables */
-         address += WORD_OR_BYTE_ADD_INC;
-         data_count++;
-         dce_tx_eof = FALSE;
-      }
-   }
-
-   /* set packet length and status */
-   line_write_exit(status,data_count,1);
+   if (!v80_tx_timer)
+      send_com_ram();
 }
 
 
@@ -771,14 +1074,14 @@ void v80_rx_int(void)
     *       to be used as working code yet!!!
     */
 
-	uword address;      /* address of Comm RAM to write data */
+    uword address;      /* address of Comm RAM to write data */
    ubyte tmp_sub_mode; /* temporary variable for the current sub-mode */
    ubyte tmp_byte;
    uword tmp_word;     
    ubyte length_and_status;
 
    /* init variables */
-	address = DSP_CP_DATA_AREA_BASE;
+    address = DSP_CP_DATA_AREA_BASE;
    tmp_sub_mode = current_sub_mode;
 
    /* hunt for the first FLAGS in FSM */
@@ -805,9 +1108,7 @@ void v80_rx_int(void)
       /* reset the semaphore */
       dce_status_semaphore = 0;
 
-/* DEBUG ONLY - mlc */
-	   dce_tx_interrupt_expected = FALSE;
-/* DEBUG ONLY - mlc */
+       dce_tx_interrupt_expected = FALSE;
 
       /*
        *  Indicate transmit underrun to the DTE device
@@ -819,25 +1120,20 @@ void v80_rx_int(void)
        *  occurred during a NON-FLAG sequence.
        */
 
-      /* if the <EM><UNDER> indication is valid */
-      if ((tmp_sub_mode == TRANSPARENT_SUB_MODE) ||
-         ((tmp_sub_mode == FRAMED_SUB_MODE) && (dce_tx_eof == FALSE)))
-      {
-         /* always force the DSP to enter TX_IDLE state */
-         dce_tx_resumed = TRUE;
+      /* always force the DSP to enter TX_IDLE state */
+      dce_tx_resumed = TRUE;
 
-         if (tmp_sub_mode == FRAMED_SUB_MODE)
-         {
-            /* indicate mid-frame tx underrun to the DTE I/O */
-            dce_tx_underrun = TRUE;
-            dte_process_unum();
-         }
-         else
-         {
-            /* insert the <EM><UNDER> code into the rx data stream */
-            insert_rx_byte(EM_CODE);
-            insert_rx_byte(UNDER_CODE);
-         }
+      if (tmp_sub_mode == FRAMED_SUB_MODE)
+      {
+         /* indicate mid-frame tx underrun to the DTE I/O */
+         dce_tx_underrun = TRUE;
+         dte_process_unum();
+      }
+      else
+      {
+         /* insert the <EM><UNDER> code into the rx data stream */
+         insert_rx_byte(EM_CODE);
+         insert_rx_byte(UNDER_CODE);
       }
 
       /* clear the DSP semaphores */
@@ -853,9 +1149,9 @@ void v80_rx_int(void)
       return;
    }
 
-	while (dce_length_semaphore)
-	{
-		 dspdrv_ReadCram(address,&dce_rx_buffer[dce_rx_insert],1);
+    while (dce_length_semaphore)
+    {
+        dspdrv_ReadCram(address,&dce_rx_buffer[dce_rx_insert],1);
 
        tmp_byte = dce_rx_buffer[dce_rx_insert];
 
@@ -889,6 +1185,7 @@ void v80_rx_int(void)
                    insert_rx_byte(EM_CODE);
                    insert_rx_byte(T4_CODE);
                    break;
+
                default:
                    /* Pop in buffer and bump indicies */
                    dce_rx_insert++;        /* array index */
@@ -898,39 +1195,53 @@ void v80_rx_int(void)
                    if (dce_rx_insert == DCE_BUFFER_SIZE)
                        dce_rx_insert = 0;
                    break;
+                   break;
            }
        }
-
-       /* if receiver overrun and not already indicated */
-       else if (dce_status_semaphore != RX_OVERRUN)
+       else if( dce_rx_overrun != TRUE )
        {
-           if (dce_rx_overrun == FALSE)
-           {
-              /* insert the <EM><ROVER> indication into the receive data */
-              insert_rx_byte(EM_CODE);
-              insert_rx_byte(ROVER_CODE);
+            PrintMsg( "CP RX_OVERRUN" );
 
-              /* set the receiver overrun flag */
-              dce_rx_overrun = TRUE;
-           }
+            outchar(dce_rx_count >> 8 );
+            outchar(dce_rx_count);
+             outchar(dce_length_semaphore);
+
+           /* if receiver overrun and not already indicated */
+
+           /* insert the <EM><ROVER> indication into the receive data */
+           insert_rx_byte(EM_CODE);
+           insert_rx_byte(ROVER_CODE);
+
+           /* set the receiver overrun flag */
+           dce_rx_overrun = TRUE;
        }
 
        /* adjust buffer and counting variables */
        address += WORD_OR_BYTE_ADD_INC;
-		 dce_length_semaphore--;
-	}
+        dce_length_semaphore--;
+    }
 
    /* examine and act upon the status set by the DSP */
    switch (dce_status_semaphore)
    {
        case RX_OVERRUN:
 
-           /* insert the <EM><ROVER> code into the rx data stream */
-           insert_rx_byte(EM_CODE);
-           insert_rx_byte(ROVER_CODE);
+           PrintMsg( "DSP RX_OVERRUN" );
+
+           if( dce_rx_overrun != TRUE )
+           {
+               /* set the receiver overrun flag */
+               dce_rx_overrun = TRUE;
+
+               /* insert the <EM><ROVER> code into the rx data stream */
+               insert_rx_byte(EM_CODE);
+               insert_rx_byte(ROVER_CODE);
+           }
            break;
 
        case RX_HDLC_ABORT:
+
+           PrintMsg( "RX_HDLC_ABORT" );
 
            /* insert the <EM><MARK> code into the rx data stream */
            insert_rx_byte(EM_CODE);
@@ -943,17 +1254,72 @@ void v80_rx_int(void)
            /* insert the <EM><FLAG> code into the rx data stream */
            insert_rx_byte(EM_CODE);
            insert_rx_byte(FLAG_CODE);
+           dce_flag_count++;
+#if 1
+            outchar('+');
+            outhex(dce_flag_count);
+#endif
+           break;
+
+       case NO_STATUS:
+           /* Good old regular data */
            break;
 
        case RX_BREAK:
-       case NO_STATUS:
+
+           PrintMsg( "RX DSP BREAK" );
+
+           break;
+
        default:
+
+           PrintMsg( "Default RX DSP" );
+
            /* NOTHING TO INSERT */
            break;
    }
 
-	/* clear semaphores */
-	dce_status_semaphore = 0;
-	dspdrv_WriteCram(DSP_CP_DATA_LENGTH,&dce_length_semaphore,1);
-	dspdrv_WriteCram(DSP_CP_DATA_STATUS,&dce_status_semaphore,1);
+    /* clear semaphores */
+    dce_status_semaphore = 0;
+    dspdrv_WriteCram(DSP_CP_DATA_LENGTH,&dce_length_semaphore,1);
+    dspdrv_WriteCram(DSP_CP_DATA_STATUS,&dce_status_semaphore,1);
 }
+
+#endif
+
+
+/**********************************************************************
+/
+/  Procedure:          line_write_exit
+/
+/  Author:             RSA
+/
+/  Creation Date:      09/10/96
+/
+/  Description:        This routine write the ISR exit data to the
+/                      COM-RAM interface. This routine was added
+/                      to help reduce code size.
+/
+/  Input Parameters:   None
+/
+/  Output Parameters:  None
+/
+/  Globals Changed:    None
+/
+/  Users:              V.80 DCE I/O
+/
+/  -------------------------
+/  -     Modifications     -
+/  -------------------------
+/
+/  Author & Date: RSA
+/  Description:
+/  Reason:
+/
+********************************************************************/
+void line_write_exit(ubyte status,ubyte data_count,ubyte length)
+{
+   dspdrv_WriteCram(CP_DSP_DATA_STATUS,&status,length);
+   dspdrv_WriteCram(CP_DSP_DATA_LENGTH,&data_count,length);
+}
+
