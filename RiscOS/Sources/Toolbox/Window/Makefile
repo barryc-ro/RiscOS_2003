@@ -52,7 +52,7 @@ RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_abssym
 TBOXLIB   = tbox:tboxlib
-WIMPLIB   = ^.^.wimplib.wimplib
+WIMPLIB   = ^.wimplib.wimplib
 
 OBJS =\
  o.ModNoDbg\
