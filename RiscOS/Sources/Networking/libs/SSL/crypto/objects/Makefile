@@ -36,8 +36,8 @@ top:
 
 all:	obj_dat.h lib
 
-obj_dat.h: objects.h obj_dat.pl
-	perl ./obj_dat.pl < objects.h > obj_dat.h
+#obj_dat.h: objects.h obj_dat.pl
+#	perl ./obj_dat.pl < objects.h > obj_dat.h
 
 lib:	$(LIBOBJ)
 	armlib -i $(TOP)/cryptolib $(LIBOBJ)

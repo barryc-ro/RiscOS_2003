@@ -40,7 +40,8 @@ VERSION	= 0.6.0
 # TERMIOS - Define the termios terminal subsystem, Silicon Graphics.
 
 CC= armcc
-CFLAG= -zM -Wp -DEXPORT_ONLY -DRISCOS -DRISCOS_ZM -Drealloc=riscos_ZM_realloc -DNO_IDEA -Ospace -J/projects/spinner/Sources/Simon/Fresco/SSLeay-0.6.0/robits
+CFLAG= -zM -Wp -DEXPORT_ONLY -DRISCOS -DRISCOS_ZM -Drealloc=riscos_ZM_realloc -DNO_IDEA -Ospace -J`pwd`/robits
+#CFLAG= -zM -Wp -DEXPORT_ONLY -DRISCOS -DRISCOS_ZM -Drealloc=riscos_ZM_realloc -DNO_IDEA -Ospace -J$(RISCOS_BUILD_SOURCES)/Networking/libs/SSL/robits
 #CFLAG= -zM -Wp -DRISCOS -DRISCOS_ZM -Drealloc=riscos_ZM_realloc -DNO_IDEA -Ospace -J/net/ant/home/peter/develop/ssl/SSLeay-0.6.0/robits
 PEX_LIBS= -L. -L.. -L../.. -L../../..
 EX_LIBS=
@@ -217,5 +218,36 @@ install: all
 		util/ranlib.sh $(INSTALLTOP)/lib/$$i; \
 		chmod 644 $(INSTALLTOP)/lib/$$i ) \
 	done
+
+# -----------------------------------------------------------------------------
+
+riscos_export: riscos_libs
+	@-mkdir $(RISCOS_BUILD_EXPORT)
+	@-mkdir $(RISCOS_BUILD_EXPORT)/Lib
+	@-mkdir $(RISCOS_BUILD_EXPORT)/Lib/SSL
+	@echo Made export directories
+	@cp -p include/*.h $(RISCOS_BUILD_EXPORT)/Lib/SSL
+	@echo Copied headers
+	@cp -p cryptolib $(RISCOS_BUILD_EXPORT)/Lib/SSL/cryptolib.o
+	@cp -p ssllib $(RISCOS_BUILD_EXPORT)/Lib/SSL/ssllib.o
+	@echo Copied libraries
+
+riscos_libs: cryptolib ssllib pem.h
+	@echo Made SSL libraries
+
+cryptolib: pem.h
+	cd crypto ; make top
+
+ssllib: cryptolib
+	cd ssl ; make top
+
+robits:
+	cd robits ; make top
+
+pem.h:
+	echo making pem.h on starman
+	rsh starman "cd /home/smiddle/Sources/renaissa/RiscOS/Sources/Networking/libs/SSL/crypto/pem ; make pem.h"
+
+# -----------------------------------------------------------------------------
 
 # DO NOT DELETE THIS LINE -- make depend depends on it.

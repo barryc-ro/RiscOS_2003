@@ -82,7 +82,7 @@ links:
 	done;
 
 llib:	$(LIBOBJ)
-	armlib -i $(TOP)/cryptolib $(LIBOBJ)
+	armlib -c $(TOP)/cryptolib $(LIBOBJ)
 #	$(TOP)/util/ranlib.sh $(LIB)
 	@touch llib
 
