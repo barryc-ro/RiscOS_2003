@@ -253,6 +253,65 @@ static char *gettimedate(int territory, const struct tm *tt, char *buff, int swi
     return getterritorytimeinfo(territory, tt, "", buff, swi);
 }
 
+static char *gettimezone(int territory, char *buff)
+{
+    _kernel_swi_regs r;
+    int dst, offset;
+    r.r[0] = 161;
+    dst = _kernel_osbyte(161, 220, 0);
+    if (dst < 0) return "";
+    r.r[0] = territory;
+    if (_kernel_swi(Territory_ReadTimeZones, &r, &r))
+        return "";
+    offset = dst & 0x8000 ? r.r[3] : r.r[2];
+    if (offset < 0)
+       offset = -offset, buff[0] = '-';
+    else
+       buff[0] = '+';
+    offset = (offset + 3000) / 6000; /* centiseconds -> minutes */
+    sprintf(buff+1, "%.2d%.2d", offset / 60, offset % 60);
+    return buff;
+}
+
+static int daysinyear(int year)
+{
+    if (year % 4 != 0) return 365;
+    if (year % 100 != 0) return 366;
+    if (year % 400 != 0) return 365;
+    return 366;
+}
+
+static void getiso8601week(char *buff, int spec, int year, int wday, int yday)
+{
+    int start_of_week, week;
+    if (--wday < 0) wday += 7; /* convert from Sun = 0 to Mon = 0 */
+
+    start_of_week = yday - wday; /* day number (-6 to 365) of start of this week */
+    do
+    {
+        week = (start_of_week+7+3) / 7; /* basic week number (0-53) */
+        if (week == 0)
+        {
+            /* This week belongs to last year - go round again */
+            start_of_week += daysinyear(--year);
+        }
+        else if (week == 53 && start_of_week >= daysinyear(year)-3)
+        {
+            /* <=3 days of week 53 fall in this year, so we treat it as week 1 of next year */
+            week = 1;
+            ++year;
+        }
+    }
+    while (week == 0);
+
+    switch (spec)
+    {
+        case 'g': sprintf(buff, "%.2d", year % 100); break;
+        case 'G': sprintf(buff, "%d", year); break;
+        case 'V': sprintf(buff, "%.2d", week); break;
+    }
+}
+
 size_t strftime(char *s, size_t maxsize, const char *fmt, const struct tm *tt)
 {
     int p = 0, c;
@@ -272,7 +331,10 @@ size_t strftime(char *s, size_t maxsize, const char *fmt, const struct tm *tt)
             continue;
     case '%':
             ss = buff;
-            switch (c = *fmt++)
+            c = *fmt++;
+            if (c == 'E' || c == 'O') /* Ignore C99 modifiers */
+                c = *fmt++;
+            switch (c)
             {
         default:            /* Unknown directive - leave uninterpreted   */
                 push('%');  /* NB undefined behaviour according to ANSI  */
@@ -288,7 +350,7 @@ size_t strftime(char *s, size_t maxsize, const char *fmt, const struct tm *tt)
                 if (territory)
                     ss = gettimeinfo(territory, tt, "%WE", buff);
                 break;
-        case 'b':
+        case 'b': case 'h':
                 ss = abbrmonth[tt->tm_mon];
                 if (territory)
                     ss = gettimeinfo(territory, tt, "%M3", buff);
@@ -299,16 +361,34 @@ size_t strftime(char *s, size_t maxsize, const char *fmt, const struct tm *tt)
                     ss = gettimeinfo(territory, tt, "%MO", buff);
                 break;
         case 'c':
-/* Is this the locale-specific date & time format we want?               */
+                /* Format for "C" locale changed as per C99 */
                 if (!territory)
-                    sprintf(ss, "%02d %s %d %02d:%02d:%02d",
+                    sprintf(ss, "%s %s %2d %.2d:%.2d:%.2d %d",
+                                abbrweek[tt->tm_wday], abbrmonth[tt->tm_mon], tt->tm_mday,
+                                tt->tm_hour, tt->tm_min, tt->tm_sec, tt->tm_year + 1900);
+                    /*sprintf(ss, "%02d %s %d %02d:%02d:%02d",
                         tt->tm_mday, abbrmonth[tt->tm_mon], tt->tm_year + 1900,
-                        tt->tm_hour, tt->tm_min, tt->tm_sec);
+                        tt->tm_hour, tt->tm_min, tt->tm_sec);*/
                 else
                     ss = gettimedate(territory, tt, ss, Territory_ConvertStandardDateAndTime);
                 break;
+        case 'C':
+                sprintf(ss, "%.2d", (tt->tm_year + 1900) / 100);
+                break;
         case 'd':
                 sprintf(ss, "%.2d", tt->tm_mday);
+                break;
+        case 'D':
+                sprintf(ss, "%.2d/%.2d/%.2d", tt->tm_mon + 1, tt->tm_mday, tt->tm_year % 100);
+                break;
+        case 'e':
+                sprintf(ss, "%2d", tt->tm_mday);
+                break;
+        case 'F':
+                sprintf(ss, "%d-%.2d-%2.d", tt->tm_year + 1900, tt->tm_mon + 1, tt->tm_mday);
+                break;
+        case 'g': case 'G': case 'V':
+                getiso8601week(ss, c, tt->tm_year + 1900, tt->tm_wday, tt->tm_yday);
                 break;
         case 'H':
                 sprintf(ss, "%.2d", tt->tm_hour);
@@ -325,14 +405,37 @@ size_t strftime(char *s, size_t maxsize, const char *fmt, const struct tm *tt)
         case 'M':
                 sprintf(ss, "%.2d", tt->tm_min);
                 break;
+        case 'n':
+                strcpy(ss, "\n");
+                break;
         case 'p':
 /* I am worried here re 12.00 AM/PM and times near same.                 */
                 ss = ampmname[tt->tm_hour >= 12];
                 if (territory)
                     ss = gettimeinfo(territory, tt, "%AM", buff);
                 break;
+        case 'r':
+                if (!territory)
+                    sprintf(ss, "%.2d:%.2d:%.2d %s",
+                            (tt->tm_hour + 11) % 12 + 1, tt->tm_min, tt->tm_sec,
+                            ampmname[tt->tm_hour >= 12]);
+                else
+                    ss = gettimeinfo(territory, tt, "%12:%MI:%SE %AM", buff);
+                break;
+        case 'R':
+                sprintf(ss, "%.2d:%.2d", tt->tm_hour, tt->tm_min);
+                break;
         case 'S':
                 sprintf(ss, "%.2d", tt->tm_sec);
+                break;
+        case 't':
+                strcpy(ss, "\t");
+                break;
+        case 'T':
+                sprintf(ss, "%.2d:%.2d:%.2d", tt->tm_hour, tt->tm_min, tt->tm_sec);
+                break;
+        case 'u':
+                sprintf(ss, "%.1d", (tt->tm_wday + 6)%7 + 1);
                 break;
         case 'U':
                 sprintf(ss, "%.2d", findweek(tt->tm_yday, 0, tt->tm_wday));
@@ -345,15 +448,17 @@ size_t strftime(char *s, size_t maxsize, const char *fmt, const struct tm *tt)
                 break;
         case 'x':
 /* The next two had better agree with %c conversions                     */
+                /* Format for "C" locale changed as per C99 */
                 if (!territory)
-                    sprintf(ss, "%02d %s %d",
-                            tt->tm_mday, abbrmonth[tt->tm_mon], tt->tm_year + 1900);
+                    /*sprintf(ss, "%02d %s %d",
+                            tt->tm_mday, abbrmonth[tt->tm_mon], tt->tm_year + 1900);*/
+                    sprintf(ss, "%.2d/%.2d/%.2d", tt->tm_mon + 1, tt->tm_mday, tt->tm_year % 100);
                 else
                     ss = gettimedate(territory, tt, ss, Territory_ConvertStandardDate);
                 break;
         case 'X':
                 if (!territory)
-                    sprintf(ss, "%02d:%02d:%02d",
+                    sprintf(ss, "%.2d:%.2d:%.2d",
                             tt->tm_hour, tt->tm_min, tt->tm_sec);
                 else
                     ss = gettimedate(territory, tt, ss, Territory_ConvertStandardTime);
@@ -363,6 +468,11 @@ size_t strftime(char *s, size_t maxsize, const char *fmt, const struct tm *tt)
                 break;
         case 'Y':
                 sprintf(ss, "%d", tt->tm_year + 1900);
+                break;
+        case 'z':
+                ss = "";
+                if (territory)
+                    ss = gettimezone(territory, buff);
                 break;
         case 'Z':
                 /* No timezone exists here */
