@@ -173,7 +173,7 @@ install_NCFresco:
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLRESLOCALEDIR}.html.sslserv   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLRESLOCALEDIR}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLRESLOCALEDIR}.html.url       ${TRFLAGS}
-	${SQ} abs.!RunIm-${TYPE}                      ${INSTALLDIR}.!RunImage      ${SQFLAGS}
+${CP} rm.ncfrrm-${TYPE}                ${INSTALLDIR}.!RunImage               ${CPFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
