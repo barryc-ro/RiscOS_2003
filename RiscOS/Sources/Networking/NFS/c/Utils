@@ -626,6 +626,28 @@ void very_long_subtract
 #endif
 
 /*
+        Adjust quota sizes so results are in kilobytes
+*/
+static void normalise_quota(utils_quotastr *quota)
+{
+  if (quota->bsize < 1024) {
+    u_long multiplier = 1024ul / quota->bsize;
+
+    quota->usage /= multiplier;
+    quota->slim  /= multiplier;
+    quota->hlim  /= multiplier;
+  }
+  else if (quota->bsize > 1024) {
+    u_long divider = quota->bsize / 1024ul;
+    quota->usage *= divider;
+    quota->slim  *= divider;
+    quota->hlim  *= divider;
+  }
+
+  quota->bsize = 1024;
+}
+
+/*
         JRS 11/9/92 get quota numbers for free display
 */
 #include "rquota.h"
@@ -664,17 +686,26 @@ NetAccessCountG++;
                 space->active_quota = gq_rslt.getquota_rslt_u.gqr_rquota.rq_active;
                 if (!space->active_quota)
                         return RPC_SUCCESS;
-                space->sp.quota.space.usage = gq_rslt.getquota_rslt_u.gqr_rquota.rq_curblocks *
-                    (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize;
-                space->sp.quota.space.slim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsoftlimit *
-                    (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize;
-                space->sp.quota.space.hlim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_bhardlimit *
-                    (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize;
+                dprintf(("quota_1", "used: %#lx * %#lx\n",
+                  (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_curblocks,
+                  (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize));
+                dprintf(("quota_1", "soft: %#lx * %#lx\n",
+                  (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsoftlimit,
+                  (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize));
+                dprintf(("quota_1", "hard: %#lx * %#lx\n",
+                  (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bhardlimit,
+                  (u_long) gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize));
+                space->sp.quota.space.bsize = gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize;
+                space->sp.quota.space.usage = gq_rslt.getquota_rslt_u.gqr_rquota.rq_curblocks;
+                space->sp.quota.space.slim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsoftlimit;
+                space->sp.quota.space.hlim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_bhardlimit;
                 space->sp.quota.space.timeleft = gq_rslt.getquota_rslt_u.gqr_rquota.rq_btimeleft;
                 space->sp.quota.files.hlim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_fhardlimit;
                 space->sp.quota.files.slim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_fsoftlimit;
                 space->sp.quota.files.usage = gq_rslt.getquota_rslt_u.gqr_rquota.rq_curfiles;
                 space->sp.quota.files.timeleft = gq_rslt.getquota_rslt_u.gqr_rquota.rq_ftimeleft;
+                space->sp.quota.files.bsize = 1; /* set multiplier to 1 for file counts */
+                normalise_quota(&space->sp.quota.space);
                 return RPC_SUCCESS;
                 }
 
@@ -718,15 +749,21 @@ _kernel_oserror *utils_getfsspace( utils_spacestr *space,  char *mount_name )
         /*
         JRS 11/9/92 get quota numbers which are more useful than statfs numbers
         */
+        if (!getenv("NFS$NoQuotas"))
+        {
         err = get_quota_client( &quota_client, mount_point );
         if ( err == NULL )
         {
+                dprintf(("quota_1", "getnfsquota(%s,,use quota)\n", mount_name));
                 stat = getnfsquota( mount_point, quota_client->client, TRUE, space );
 
                 release_client( quota_client );
 
                 if ((stat == RPC_SUCCESS) && space->active_quota) /* quota is defined */
                         return NULL;
+
+                dprintf(("quota_1", "getnfsquota failed (%d, %d)\n", stat, space->active_quota));
+        }
         }
         /*
                  if quota info not available get results from statfs
@@ -752,10 +789,20 @@ _kernel_oserror *utils_getfsspace( utils_spacestr *space,  char *mount_name )
         {
                 static const unsigned shift = 10;
                 FSSTAT3resok *const res = &sres->FSSTAT3res_u.resok;
+
                 space->sp.statfs.bsize  = 1UL<<shift;
                 space->sp.statfs.blocks = ui64_value(ui64_shift_right(&res->tbytes, shift));
                 space->sp.statfs.bfree  = ui64_value(ui64_shift_right(&res->fbytes, shift));
                 space->sp.statfs.bavail = ui64_value(ui64_shift_right(&res->abytes, shift));
+
+                dprintf(("quota_1", "blocks on device: %#lx\n", space->sp.statfs.blocks));
+                dprintf(("quota_1", "free   on device: %#lx\n", space->sp.statfs.bfree));
+                dprintf(("quota_1", "avail  on device: %#lx\n", space->sp.statfs.bavail));
+
+                dprintf(("quota_1", "blocks on device: (high) %#lx\n", res->tbytes.high));
+                dprintf(("quota_1", "free   on device: (high) %#lx\n", res->fbytes.high));
+                dprintf(("quota_1", "avail  on device: (high) %#lx\n", res->abytes.high));
+
         }
 
         if (sres != NULL)
