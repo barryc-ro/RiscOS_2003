@@ -69,21 +69,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.Joystick: Hdr:ListOpts
-rm.Joystick: Hdr:Macros
-rm.Joystick: Hdr:System
-rm.Joystick: Hdr:SWIs
-rm.Joystick: Hdr:CPU.Generic26
-rm.Joystick: Hdr:IO.GenericIO
-rm.Joystick: Hdr:RISCOS
-rm.Joystick: Hdr:Machine.<Machine>
-rm.Joystick: Hdr:ModHand
-rm.Joystick: Hdr:MsgTrans
-rm.Joystick: Hdr:NdrDebug
-rm.Joystick: Hdr:Podule
-rm.Joystick: Version
-rm.Joystick: s.ModHead
-rm.Joystick: s.ticky
-rm.Joystick: s.SWI
-rm.Joystick: s.Service
-rm.Joystick: s.Tail
