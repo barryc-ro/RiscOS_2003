@@ -28,7 +28,7 @@ TOUCH   = create
 WIPE    = -wipe
 SQUEEZE = modsqz
 
-CCFLAGS  = -c -depend !Depend -ffa -APCS 3/fpe3 ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CCFLAGS  = -c -depend !Depend -ffa -APCS 3/26bit/fpe3 ${INCLUDES} ${DFLAGS} ${THROWBACK}
 CCDFLAGS = ${CCFLAGS} -DTRACE
 ASBFLAGS = -depend !Depend -CPU ARM7M -Stamp -quit ${THROWBACK}
 ASFLAGS  = ${ASBFLAGS} -PD "TRACE SETL {FALSE}"
