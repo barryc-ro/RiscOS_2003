@@ -18,7 +18,6 @@
 
 #include <Global/RISCOS.h>
 #include <Global/Services.h>
-#include <Global/Upcall.h>
 #include <swis.h>
 #include <sys/errno.h>
 
@@ -78,21 +77,13 @@
   #endif
 #endif
 
-/* Local definitions */
-
-#define CallBack_Pending_None    0
-#define CallBack_Pending_ForLoop 1
-
 /* Local variables */
 
 static void    * module_wsp                         = NULL;
 
 static bool      eventv_claimed                     = false;
 static bool      ievent_enabled                     = false;
-static bool      upcallv_claimed                    = false;
 
-static int       callback_pending_code              = CallBack_Pending_None;
-static session * callback_loop_session              = NULL;
 static int       registered                         = 0;
 static int       clibrary_realloc_routine_is_buggy  = 1;
 
@@ -104,9 +95,6 @@ static _kernel_oserror * module_register               (void);
 
 static void              module_check_os_version       (void);
 static void              module_atexit                 (void);
-
-static _kernel_oserror * module_claim_upcall_vector    (void);
-static _kernel_oserror * module_release_upcall_vector  (void);
 
 /**************************************************************/
 /* module_try_to_register()                                   */
@@ -432,11 +420,6 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
 
   #endif
 
-  /* Claim UpCallV to see MPEG end-of-stream UpCalls */
-
-  e = module_claim_upcall_vector();
-  if (e != NULL) return e;
-
   return callout_init(pw);
 }
 
@@ -452,17 +435,10 @@ static void module_atexit(void)
 {
   dprintf(("", "module_atexit: Called\n"));
 
+  /* This must be safe against later calling untimeout, since when */
+  /* the session system is shut down it may well do that.          */
+
   callout_final(module_wsp);
-
-  if (callback_pending_code != CallBack_Pending_None)
-  {
-    (void) _swix(OS_RemoveCallBack,
-                 _INR(0,1),
-                 callback_entry,
-                 module_wsp);
-
-    callback_pending_code = CallBack_Pending_None;
-  }
 
   /* We rely on the claimed and enabled flags to allow this blanket */
   /* call to disable the Internet event and release EventV. If we   */
@@ -471,10 +447,6 @@ static void module_atexit(void)
 
   module_disable_internet_event();
   module_release_event_vector();
-
-  /* Get rid of the UpCallV handler */
-
-  module_release_upcall_vector();
 
   /* Other critical "must go now" things */
 
@@ -504,106 +476,6 @@ static void module_atexit(void)
 }
 
 /**************************************************************/
-/* module_claim_upcall_vector()                               */
-/*                                                            */
-/* Claims the UpCall vector for the purpose of receiving the  */
-/* MPEG UpCall. A locking flag ensures multiple calls are     */
-/* dealt with correctly.                                      */
-/**************************************************************/
-
-_kernel_oserror * module_claim_upcall_vector(void)
-{
-  if (!upcallv_claimed)
-  {
-    _kernel_oserror * e;
-
-    e = _swix(OS_Claim,
-              _INR(0,2),
-
-              UpCallV,
-              upcall_entry,
-              module_wsp);
-
-    if (e == NULL) upcallv_claimed = true;
-    return e;
-  }
-
-  return NULL;
-}
-
-/**************************************************************/
-/* module_release_upcall_vector()                             */
-/*                                                            */
-/* Releases the UpCall vector. A locking flag ensures         */
-/* multiple calls are dealt with correctly.                   */
-/**************************************************************/
-
-_kernel_oserror * module_release_upcall_vector(void)
-{
-  if (upcallv_claimed)
-  {
-    _kernel_oserror * e;
-
-    e = _swix(OS_Release,
-              _INR(0,2),
-
-              UpCallV,
-              upcall_entry,
-              module_wsp);
-
-    if (e == NULL) upcallv_claimed = false;
-    return e;
-  }
-
-  return NULL;
-}
-
-/**************************************************************/
-/* callback_handler()                                         */
-/*                                                            */
-/* General callback handler. Currently only called when a     */
-/* looped session has an end of stream UpCall detected.       */
-/*                                                            */
-/* Parameters: As normal for a CMHG generic veneer.           */
-/**************************************************************/
-
-_kernel_oserror * callback_handler(_kernel_swi_regs * r, void * pw)
-{
-  unsigned int code = callback_pending_code;
-
-  (void) pw;
-  (void) r;
-
-  dprintf(("", "callback_handler: Called, flag = %d, pw = %p\n", callback_pending_code, pw));
-
-  callback_pending_code = CallBack_Pending_None;
-  if (code == CallBack_Pending_None) return NULL;
-
-  switch (code)
-  {
-    case CallBack_Pending_ForLoop:
-    {
-      /* We've been called because the UpCall handler saw UpCall_MPEG     */
-      /* with the "end of stream" reason code and matched the control     */
-      /* handle against the session it stored in 'callback_loop_session'. */
-
-      if (callback_loop_session != NULL)
-      {
-        session * s = callback_loop_session;
-
-        callback_loop_session = NULL;
-
-        play_replay(s);
-      }
-      else dprintf(("", "callback_handler: callback_loop_session was unexpectedly NULL!\n"));
-    }
-    break;
-  }
-
-  return NULL;
-}
-
-/**************************************************************/
 /* service_handler()                                          */
 /*                                                            */
 /* General service call handler.                              */
@@ -617,95 +489,41 @@ void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
 
   if (service_number == Service_VideoControl)
   {
-    /* 0 means "I started", 1 means "I went away - don't talk to me now" */
-
     switch (r->r[0])
     {
-      case 0: module_try_to_register(); break;
-      case 1: registered = 0; /* Can't actively deregister as Video Control has gone away */
-      default: break;
-    }
-  }
-}
-
-/**************************************************************/
-/* upcall_handler()                                           */
-/*                                                            */
-/* General UpCall handler.                                    */
-/*                                                            */
-/* Parameters: As normal for a CMHG generic veneer.           */
-/**************************************************************/
-
-#ifndef UpCall_MPEG
-  #define UpCall_MPEG 21
-#endif
-
-_kernel_oserror * upcall_handler(_kernel_swi_regs * r, void * pw)
-{
-  (void) pw;
-  (void) r;
-
-  // TEMPORARY, should be in Global/Upcall.h
-
-  if (r->r[0] == UpCall_MPEG)
-  {
-    _kernel_oserror * e;
-    int               opts[4];
-    session         * s;
-
-    dprintf(("", "upcall_handler: Got UpCall_MPEG, flags %08x, for handle %08x - reason code = %d\n",r->r[1],r->r[2],r->r[3]));
-
-    /* We only recognise reason code 0 (End Of Stream) right now */
-
-    if (r->r[3] == 0)
-    {
-      /* Need to search through each session and see if we recognise the handle */
-
-      for (s = session_return_head(); s; s = s->next)
+      case VideoControlModuleStarted: module_try_to_register(); break;
+      case VideoControlModuleDying:   registered = 0; /* Can't actively deregister as Video Control has gone away - "Dying" means "Died", really... */
+      case VideoControlNewPlayState:
       {
-        /* If looping is on, need to re-start playback */
+        /* Ooo, marvellous. New play state. End of stream? */
 
-        if (s->loop)
+        if ((r->r[3] & VC_SVC_NewPlayState_EndOfStreamSignalled) != 0)
         {
-          opts[0] = vc_tags_control_handle;
-          opts[1] = 1;
-          opts[2] = 0;
-          opts[3] = vc_tags__end;
+          session * s;
 
-          e = _swix(VideoControl_ProtocolOptions,
-                    _INR(0,2),
+          /* We need to match the Video Control client ID with our own session */
 
-                    0,
-                    s->vcid,
-                    opts);
-
-          if (e != NULL) break;
-
-          if (opts[2] == r->r[2])
+          for (s = session_return_head(); s; s = s->next)
           {
-            dprintf(("", "upcall_handler: Matched handle %08x to looping-active session %p\n", r->r[2], s));
+            if (s->vcid == r->r[2] && s->loop)
+            {
+              /* We need to flag that the timeout is set, otherwise if the session managed to */
+              /* die before the timeout fired we wouldn't know we needed to untimeout it.     */
 
-            /* Not a good idea to try calling play_replay right now. Do it on a callback. */
-
-            callback_loop_session = s;
-
-            if (
-                 _swix(OS_AddCallBack,
-                       _INR(0,1),
-
-                       callback_entry,
-                       module_wsp)
-
-                 == NULL
-               )
-               callback_pending_code = CallBack_Pending_ForLoop;
+              if (s->loop_ready == 0)
+              {
+                s->loop_ready = 1;
+                timeout(play_replay_on_callout, s, 1);
+              }
+            }
           }
         }
       }
+      break;
+
+      default: break;
     }
   }
-
-  return NULL;
 }
 
 /**************************************************************/
