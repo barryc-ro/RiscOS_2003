@@ -139,6 +139,7 @@ resources:
 
 clean:
         ${RM} ${ROM_MODULE}
+        ${RM} h.modulehdr
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} o.* ${WFLAGS}
 	${WIPE} Syms $(WFLAGS)
