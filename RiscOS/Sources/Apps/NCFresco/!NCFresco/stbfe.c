@@ -186,6 +186,11 @@
 
 #define MESSAGE_OFFER_FOCUS		0x14
 
+#define MESSAGE_URI_MPROCESS		0x4E383
+#define MESSAGE_URI_MPROCESSACK		0x4E384
+
+#define URI_RequestURI			0x4E382
+
 /* #define Service_NVRAM			0xE0 */
 /* #define nvram_INITIALISED		0 */
 /* #define nvram_DYING			1 */
@@ -772,7 +777,8 @@ static const char *content_tag_list[] =
     "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL",
     "FASTLOAD", "URL", "USER", "USERNAME",
     "BLANKRESET", "ONLOAD", "ONUNLOAD", "ENSURETOOLBAR",
-    "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON", "SPECIALSELECT"
+    "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON", "SPECIALSELECT",
+    NULL
 };
 
 /*
@@ -936,7 +942,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" };			/* order must agree with #defines in stbview.h */
 	    static const char *position_list[] = { "FULLSCREEN", "CENTERED", "TOOLBAR" };	/* order must agree with #defines in stbview.h */
-	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0])];
+	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0]) - 1];
 	    wimp_box box;
 	    int new_keyboard_state;
 
@@ -4901,8 +4907,10 @@ static void fe_handle_datasave(wimp_msgstr *msg)
         case FILETYPE_HTML:
         case FILETYPE_GOPHER:
         case FILETYPE_URL:
+        case FILETYPE_URI:
 	    msg->hdr.your_ref = msg->hdr.my_ref;
     	    msg->hdr.action = wimp_MDATASAVEOK;
+	    strcpy(msg->data.datasave.leaf, "<Wimp$ScrapFile>");
     	    frontend_fatal_error(wimp_sendmessage(wimp_ESEND, msg, msg->hdr.task));
             break;
     }
@@ -4928,6 +4936,7 @@ static void fe_handle_dataload(wimp_msgstr *msg)
         case FILETYPE_HTML:
         case FILETYPE_GOPHER:
         case FILETYPE_URL:
+        case FILETYPE_URI:
         case FILETYPE_DIRECTORY:
         case 0x2000:
 	    frontend_complain(fe_show_file(v, msg->data.dataload.name, FALSE));
@@ -5069,6 +5078,44 @@ static int offer_window_focus_handler(wimp_w w, int flags)
     fe_get_wimp_caret(w);
     return 1;
     NOT_USED(flags);
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+static BOOL uri_mprocess(int flags, const char *uri, int uri_handle)
+{
+    char *scheme;
+    BOOL supported = FALSE;
+    
+    url_parse(uri, &scheme, NULL, NULL, NULL, NULL, NULL);
+
+    if (access_is_scheme_supported(scheme))
+    {
+	supported = TRUE;
+
+	if ((flags & 0x01) == 0)
+	{
+	    int len;
+	    char *url = NULL;
+	    os_error *e;
+
+	    e = (os_error *)_swix(URI_RequestURI, _INR(0,1) | _IN(3) | _OUT(2), 0, 0, uri_handle, &len);
+	    if (!e)
+	    {
+		url = malloc(len);
+		e = (os_error *)_swix(URI_RequestURI, _INR(0,3), 0, url, len, uri_handle);
+	    }
+	    if (!e)
+		e = frontend_open_url(url, NULL, "_top", NULL, fe_open_url_NO_REFERER);
+
+	    frontend_complain(e);
+	    mm_free(url);
+	}
+    }
+
+    mm_free(scheme);
+
+    return supported;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -5779,6 +5826,15 @@ void fe_event_process(void)
 		offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]);
 		break;
 
+	    case MESSAGE_URI_MPROCESS:
+		if (uri_mprocess(msg->data.words[0], (char *)msg->data.words[1], msg->data.words[2]))
+		{
+		    msg->hdr.your_ref = msg->hdr.my_ref;
+		    msg->hdr.action = MESSAGE_URI_MPROCESSACK;
+		    wimp_sendmessage(wimp_ESEND, msg, msg->hdr.task);
+		}
+		break;
+		
 #if DEBUG
 	    case wimp_MINITTASK:
 	    {

@@ -558,7 +558,7 @@ config_item citems[] = {
       "Name of greek font",
       "Homerton"  },
 { config_FONT,
-      "font.iw",
+      "font.he",
       (void *)offsetof(struct config_str, font_names[19]),
       "Name of Hebrew font",
       "Homerton"  },

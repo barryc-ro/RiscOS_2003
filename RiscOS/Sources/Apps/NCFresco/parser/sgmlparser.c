@@ -203,7 +203,7 @@ extern void sgml_stream_finished (SGMLCTX *context)
 #if UNICODE
     if (context->enc_num == csAutodetectJP && context->autodetect.inhand.ix)
     {
-	PRSDBG(("sgml_stream_finished: encoding still undecided - choosing ShiftJIS and parsing rest"));
+	PRSDBG(("sgml_stream_finished: encoding still undecided - choosing ShiftJIS and parsing rest\n"));
 
 	sgml_set_encoding(context, csShiftJIS);
 

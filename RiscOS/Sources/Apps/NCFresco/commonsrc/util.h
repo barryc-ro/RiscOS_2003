@@ -325,6 +325,7 @@ os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor );
 
 
 extern char *xfgets(FILE *in);
+extern char *xfgets_ctrl(FILE *in);
 extern void fskipline(FILE *in);
 
 extern int get_free_memory_size(void);

@@ -3085,27 +3085,47 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 }
 #endif
 
-#if 0
-static void write_buf(char *buffer, const char *path, const char *params, const char *query)
+static char *uri_xfgets(FILE *in)
 {
-    if (path)
-	strcpy(buffer, path);
-    else
-	strcpy(buffer, "/");
+    char *s = NULL;
+    BOOL finished = FALSE;
 
-    if (params)
+    do
     {
-	strcat(buffer, ";");
-	strcat(buffer, params);
-    }
+	int blen;
+	char buffer[128], *bp;
 
-    if (query)
-    {
-	strcat(buffer, "?");
-	strcat(buffer, query);
+	if (fgets(buffer, sizeof(buffer), in) == NULL)
+	    return s;
+
+	blen = strlen(buffer);
+	if (buffer[blen-1] < ' ')
+	{
+	    buffer[blen-1] = '\0';
+	    finished = TRUE;
+	}
+
+	/* skip control characters at the start of the line */
+	bp = buffer;
+	while (*bp && *bp < ' ')
+	    bp++;
+	
+	s = strcatx(s, bp);
+
+/* 	DBG(("xfgets: read '%s' finished %d gives %s\n", buffer, finished, s)); */
     }
+    while (!finished && !feof(in) && !ferror(in));
+
+    return s;
 }
-#endif
+
+static char *uri_next_line(FILE *fh)
+{
+    char *s;
+    while ((s = uri_xfgets(fh)) != NULL && s[0] == '#')
+	mm_free(s);
+    return s;
+}
 
 os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile, char *referer,
 		     access_progress_fn progress, access_complete_fn complete,
@@ -3332,13 +3352,43 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		/* cfile will be freed at end of section */
 		*result = NULL;
 	    }
-	    else if (ft == FILETYPE_URL)
+	    else if (ft == FILETYPE_URL || ft == FILETYPE_URI)
 	    {
-		char *new_url;	/* SJM removed auto array */
+		char *new_url = NULL;
 		FILE *fh;
 
-		fh = mmfopen(cfile, "r");
-		if (fh && (new_url = xfgets(fh)) != NULL)
+		if ((fh = mmfopen(cfile, "r")) != NULL)
+		{
+		    if (ft == FILETYPE_URL)
+		    {
+			new_url = xfgets(fh);
+		    }
+		    else
+		    {
+			char *s = uri_xfgets(fh);
+			if (s && strcmp(s, "URI") == 0)
+			{
+			    /* free line 1 (id) */
+			    mm_free(s);
+
+			    /* get and free line 2 (version) */
+			    s = uri_next_line(fh);
+			    mm_free(s);
+
+			    /* get line 3 (URL) */
+			    new_url = uri_next_line(fh);
+			    if (new_url && strcmp(new_url, "*") == 0)
+			    {
+				mm_free(new_url);
+				new_url = NULL;
+			    }
+			}
+		    }
+
+		    mmfclose(fh);
+		}
+
+		if (new_url)
 		{
 		    d = mm_calloc(1, sizeof(*d));
 
@@ -3362,9 +3412,6 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		{
 		    ep = makeerrorf(ERR_CANT_READ_FILE, url);
 		}
-
-		if (fh)
-		    mmfclose(fh);
 	    }
 	    else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
 	    {

@@ -818,6 +818,11 @@ static void cache_dump_dir_read(int dir)
 		if (strncmp(buf2, FORMAT_STRING, sizeof(FORMAT_STRING)-1) == 0)
 		{
 		    format = atoi(buf2 + sizeof(FORMAT_STRING)-1);
+
+		    /* If this was written by a later version of Fresco then ignore it */
+		    if (format > CACHE_FORMAT)
+			break;
+
 		    continue;
 		}
 
@@ -869,6 +874,7 @@ static void cache_dump_dir_read(int dir)
                     && strncasecomp(url, "ncint:", sizeof("ncint:")-1) != 0
                     && strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0
 #endif
+		    && strchr(url, ':') != NULL			/* check that this is a valid URL */
                     )
                 {
                     /* Ignore errors */
