@@ -69,6 +69,10 @@ rom: ${TARGET}
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
+install: rm.IR
+        ${CP} rm.IR ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
