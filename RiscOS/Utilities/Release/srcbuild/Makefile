@@ -6,6 +6,7 @@
 # Date        Name         Description
 # ----        ----         -----------
 # 19 Aug 1997 RWB 	   new srcbuild
+# 05 Sep 1997 RWB          added install
 #
 
 #
@@ -68,6 +69,9 @@ clean:
         ${WIPE} ${TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
+install: ${TARGET}
+	${CP} ${TARGET} <Build$Dir>.Library.${COMPONENT} ${CPFLAGS}
+	@echo ${COMPONENT}: installed
 #
 # Target
 #
@@ -77,12 +81,12 @@ ${TARGET}: ${OBJS}
 
 #
 # Dynamic dependencies:
+o.parse:	c.parse
+o.parse:	h.srcbuild
 o.riscos:	c.riscos
 o.riscos:	C:h.kernel
 o.riscos:	C:h.swis
 o.riscos:	h.srcbuild
-o.parse:	c.parse
-o.parse:	h.srcbuild
 o.srcbuild:	c.srcbuild
 o.srcbuild:	h.srcbuild
 o.srcbuild:	h.build
@@ -90,4 +94,5 @@ o.srcbuild:	h.parse
 o.srcbuild:	h.riscos
 o.build:	c.build
 o.build:	h.srcbuild
+o.build:	h.parse
 o.build:	h.riscos
