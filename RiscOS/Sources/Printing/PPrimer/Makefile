@@ -118,8 +118,8 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${RLIB}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${RLIB} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
