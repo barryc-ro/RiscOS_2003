@@ -63,7 +63,7 @@ TARGET    = aof.${COMPONENT}
 BASEOBJS  = o.modhdr o.msgs o.utils \
 	o.toolact
 
-OBJS	= o.resources o.main ${BASEOBJS} 
+OBJS	= o.resources o.main o.string32 ${BASEOBJS} 
 ROMOBJS	= oz.resources oz.main o.string32 ${BASEOBJS} 
 
 EXPORTS   = h.ToolAction hdr.ToolAction o.ToolAction
@@ -74,6 +74,7 @@ EXPORTS   = h.ToolAction hdr.ToolAction o.ToolAction
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
 .cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.cmhg.h:;   ${CMHG} -o o.$* $< $@
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
@@ -121,10 +122,13 @@ install: rm.${COMPONENT}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} oz.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} h.toolaction
+        ${RM} h.modhdr
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -147,7 +151,7 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 rm.${COMPONENT}: ${OBJS} ${OSLIB}
-        ${TLD} -o $@ -module ${OBJS} ${OSLIB}
+        ${LD} -o $@ -module ${OBJS} ${OSLIB} ${CLIB}
 
 # Dynamic dependencies:
 o.resources: s.resources
@@ -162,30 +166,19 @@ o.resources: hdr:ModHand
 o.resources: hdr:MsgTrans
 o.resources: hdr:ResourceFS
 o.resources: hdr:Proc
+o.resources: hdr.CVars
 o.main:	c.main
 o.main:	C:h.swis
 o.main:	C:h.kernel
 o.main:	OS:h.os
 o.main:	OS:h.types
 o.main:	OS:h.resourcefs
+o.main:	OS:h.fileswitch
 o.main:	h.modhdr
-o.main:	h.main
 o.main:	h.msgs
 o.main:	h.resources
 o.main:	h.utils
 o.main:	h.toolact
-oz.resources: s.resources
-oz.resources: hdr:ListOpts
-oz.resources: hdr:Macros
-oz.resources: hdr:System
-oz.resources: Hdr:SWIs
-oz.resources: Hdr:CPU.Generic26
-oz.resources: Hdr:IO.GenericIO
-oz.resources: Hdr:RISCOS
-oz.resources: hdr:ModHand
-oz.resources: hdr:MsgTrans
-oz.resources: hdr:ResourceFS
-oz.resources: hdr:Proc
 o.string32:	c.string32
 o.string32:	h.string32
 o.msgs:	c.msgs
@@ -224,15 +217,3 @@ o.toolact:	h.toolaction
 o.toolact:	h.toolact
 o.toolact:	h.msgs
 o.toolact:	h.tbem
-oz.main:	c.main
-oz.main:	C:h.swis
-oz.main:	C:h.kernel
-oz.main:	OS:h.os
-oz.main:	OS:h.types
-oz.main:	OS:h.resourcefs
-oz.main:	h.modhdr
-oz.main:	h.main
-oz.main:	h.msgs
-oz.main:	h.resources
-oz.main:	h.utils
-oz.main:	h.toolact
