@@ -18,7 +18,7 @@ ROM_MODULE = aof.${COMPONENT}
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 CC      = cc
 ATTR    = -attr
 AS      = objasm
@@ -79,6 +79,8 @@ install_rom: ${ROM_MODULE}
         access ${INSTDIR}.${COMPONENT} RW/W
         |
         @echo ${COMPONENT}: Module installed (ROM)
+
+install: install_ram
 
 clean:
         ${WIPE} linked ${WFLAGS}
