@@ -16,6 +16,7 @@ APPNAME    = !CodecCtl
 ROM_MODULE = aof.${COMPONENT}
 MODULE     = rm.${COMPONENT}
 APP        = abs.!RunImage
+DAPP       = abs.!RunImage-D
 
 #
 # Generic options:
@@ -32,16 +33,17 @@ WIPE    = -wipe
 STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -depend !Depend ${INCLUDES} ${THROWBACK} ${DFLAGS} -wp -fk
+CFLAGS  = -c -depend !Depend ${INCLUDES} ${THROWBACK} -wp -fk
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 # Swap these lines to choose which version to make (only the second takes effect). Also,
 # m.c is only needed when making a TRACE or CHECK version.
 # NB!! This software currently *FAILS* for unexplained reasons if compiled without memory
 # checking.
-#DFLAGS   = -DTRACE=5 -DCHECK=1 -throwback -fah -strict
+DFLAGS   = -DTRACE=5 -DCHECK=1 -DDEBUGLIB -throwback -fah -strict
 #DFLAGS   = -DCHECK=1 -ff
-DFLAGS   = -ffah -strict ${OPTS}
+RFLAGS   = -ffah -strict
+#${OPTS}
 
 #
 # Libraries
@@ -58,6 +60,8 @@ LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
 LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM = ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
+TCPIPLib   = TCPIPLibs:o.unixlib TCPIPLibs:o.inetlib TCPIPLibs:o.socklib5
+DebugLib   = <Lib$Dir>.DebugLib.o.DebugLib
 #
 # Include files
 #
@@ -74,6 +78,7 @@ DIRS     = o._dirs
 #
 
 OBJS      = o.plugclient o.utils o.client_rep o.clientmidi o.m
+DOBJS      = od.plugclient od.utils od.client_rep od.clientmidi od.m
 OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap
 OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1 oz.m
 ASMS      = s.plugclient s.utils s.client_rep s.clientmidi s.event s.tbevent s.wimpevent s.wimpmsg s.m
@@ -93,8 +98,11 @@ RESAPP = <resource$dir>.Apps.${APPNAME}
 # Rule patterns
 #
 
-.c.o:;    ${CC} -c ${CFLAGS} $<
-.c.oz:;   ${CC} -c ${CFLAGS} -zM -o $@ $<
+.SUFFIXES: .od .o .s .c .c++ .i .cmhg .inst .io
+
+.c.o:;    ${CC} ${CFLAGS} ${RFLAGS} $<
+.c.od:;    ${CC} ${CFLAGS} ${DFLAGS} $<
+.c.oz:;   ${CC} ${CFLAGS} -zM -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $<
 .src.o:;  ${AS} ${AFLAGS} $< $@
 .c.s:;    ${CC} -s ${CFLAGS} $<
@@ -103,7 +111,9 @@ RESAPP = <resource$dir>.Apps.${APPNAME}
 # build a relocatable module:
 #
 
-all: ${APP}
+all: ${APP} ${DAPP}
+
+debug: ${DAPP}
 
 #
 # RISC OS ROM build rules:
@@ -128,6 +138,7 @@ clean:
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
         ${WIPE} oz ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} src ${WFLAGS}
@@ -143,6 +154,7 @@ ${DIRS}:
         @${MKDIR} linked
         @${MKDIR} map
         @${MKDIR} o
+        @${MKDIR} od
         @${MKDIR} oz
         @${MKDIR} rm
         @${MKDIR} src
@@ -177,7 +189,11 @@ install: ${FILES}
 #
 
 ${APP}: ${OBJS} ${LIBS} ${DIRS}
-        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS} ${DLIBS}
+        Access $@ rw/rw
+
+${DAPP}: ${DOBJS} ${LIBS} ${DebugLib} ${TCPIPLib} ${DIRS}
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS} ${DebugLib} ${TCPIPLib}
         Access $@ rw/rw
 
 ${MODULE}: ${OBJSZRAM} ${LIBSZRAM} ${DIRS}
