@@ -4,12 +4,24 @@
 #
 # Paths
 #
+
 EXP_HDR = <export$dir>
+
+#
+# Program specific options:
+#
+
+COMPONENT  = CodecCtl
+APPNAME    = !CodecCtl
+ROM_MODULE = aof.${COMPONENT}
+MODULE     = rm.${COMPONENT}
+APP        = abs.!RunImage
 
 #
 # Generic options:
 #
-MKDIR   = cdir
+
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -17,9 +29,10 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -depend !Depend ${INCLUDES} ${DFLAGS} -wp -fk
+CFLAGS  = -depend !Depend ${INCLUDES} ${THROWBACK} ${DFLAGS} -wp -fk
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 # Swap these lines to choose which version to make (only the second takes effect). Also,
@@ -33,32 +46,33 @@ DFLAGS   = -ffah -strict ${OPTS}
 #
 # Libraries
 #
-CLIB      = CLIB:o.stubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.C_AbsSym
-WRAPPER   = RISCOSLIB:s.ModuleWrap
 
-#
-# Include files
-#
-INCLUDES = -Itbox:,C:
+CLIB       = CLIB:o.stubs
+ROMSTUBS   = RISCOSLIB:o.romstubs
+ROMCSTUBS  = RISCOSLIB:o.romcstubs
+ABSSYM     = RISC_OSLib:o.C_AbsSym
+WRAPPER    = RISCOSLIB:s.ModuleWrap
+LOCAL_WRAP = src.ModuleWrap
 
 LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
 LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM = ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
 #
-# Program specific options:
+# Include files
 #
-COMPONENT = CodecCtl
-APPNAME   = !CodecCtl
-TARGET    = aof.${COMPONENT}
-RAMTARGET = rm.${COMPONENT}
-APP       = abs.!RunImage
-#OBJS      = o.plugclient o.utils o.client_rep o.clientmidi o.event o.tbevent o.wimpevent o.wimpmsg o.m
-#OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap oz.event oz.tbevent oz.wimpevent oz.wimpmsg oz.#m
-#OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1 oz.event oz.tbevent oz.wimpevent oz.wimpmsg oz.m
+
+INCLUDES = -Itbox:,C:
+
+FILES = \
+ ${APP}
+
+DIRS     = o._dirs
+
+#
+# Objects
+#
+
 OBJS      = o.plugclient o.utils o.client_rep o.clientmidi o.m
 OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap
 OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1 oz.m
@@ -72,11 +86,13 @@ EXPORTS   =
 #
 # Export Paths for Messages module
 #
+
 RESAPP = <resource$dir>.Apps.${APPNAME}
 
 #
 # Rule patterns
 #
+
 .c.o:;    ${CC} -c ${CFLAGS} $<
 .c.oz:;   ${CC} -c ${CFLAGS} -zM -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $<
@@ -86,84 +102,117 @@ RESAPP = <resource$dir>.Apps.${APPNAME}
 #
 # build a relocatable module:
 #
+
 all: ${APP}
 
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+
+rom: ${ROM_MODULE}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+install_rom: ${ROM_MODULE}
+        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-ram:    ${RAMTARGET}
-	@echo ${COMPONENT}: soft-load module installed
+ram:    ${MODULE}
+        @echo ${COMPONENT}: soft-load module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} oz.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} src.* ${WFLAGS}
-        ${RM} ${TARGET}
-        ${RM} ${RAMTARGET}
+        ${WIPE} abs ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} oz ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} src ${WFLAGS}
+        ${RM} ${ROM_MODULE}
+        ${RM} ${MODULE}
         ${RM} ${APP}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
+
+${DIRS}:
+        @${MKDIR} abs
+        @${MKDIR} aof
+        @${MKDIR} linked
+        @${MKDIR} map
+        @${MKDIR} o
+        @${MKDIR} oz
+        @${MKDIR} rm
+        @${MKDIR} src
+        ${CP} ${WRAPPER} ${LOCAL_WRAP} ${CPFLAGS}
+        create ${DIRS}
+        stamp  ${DIRS}
 
 resources:
         ${MKDIR} ${RESAPP}
-	Set CodecCtlRes$Path Resources.RCA.${LOCALE}.,Resources.RCA.UK.
-	TokenCheck CodecCtlRes:Messages
+        Set CodecCtlRes$Path Resources.RCA.${LOCALE}.,Resources.RCA.UK.
+        TokenCheck CodecCtlRes:Messages
         ${CP} CodecCtlRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
         ${CP} CodecCtlRes:!RunROM  ${RESAPP}.!Run ${CPFLAGS}
         ${CP} CodecCtlRes:Messages ${RESAPP}.Messages ${CPFLAGS}
         ${CP} CodecCtlRes:Res      ${RESAPP}.Res ${CPFLAGS}
-	Unset CodecCtlRes$Path
+        Unset CodecCtlRes$Path
         @echo ${COMPONENT}: resource files copied
 
+install: ${FILES}
+        ${MKDIR} ${INSTDIR}
+        Set CodecCtlRes$Path Resources.RCA.${LOCALE}.,Resources.RCA.UK.
+        TokenCheck CodecCtlRes:Messages
+        ${CP} CodecCtlRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
+        ${CP} CodecCtlRes:!Run  ${INSTDIR}.!Run ${CPFLAGS}
+        ${CP} CodecCtlRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
+        ${CP} CodecCtlRes:Res      ${INSTDIR}.Res ${CPFLAGS}
+        Unset CodecCtlRes$Path
+        ${CP} ${APP}               ${INSTDIR}.!RunImage ${CPFLAGS}
+        @echo ${COMPONENT}: Application installed to ${INSTDIR}
 #
 # Static dependencies
 #
-${APP}: ${OBJS} ${LIBS}
-	${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
-	Access $@ rw/rw
 
-${RAMTARGET}: ${OBJSZRAM} ${LIBSZRAM}
-	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
-	Access $@ rw/rw
+${APP}: ${OBJS} ${LIBS} ${DIRS}
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
+        Access $@ rw/rw
 
-oz.ModuleWrap: src.ModuleWrap s.AppName
-	${AS} ${AFLAGS} src.ModuleWrap $@
+${MODULE}: ${OBJSZRAM} ${LIBSZRAM} ${DIRS}
+        ${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
+        Access $@ rw/rw
 
-oz.ModuleWra1: src.ModuleWrap s.AppName
-	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" src.ModuleWrap $@
+oz.ModuleWrap: s.AppName ${DIRS}
+        ${AS} ${AFLAGS} ${LOCAL_WRAP} $@
 
-src.ModuleWrap: ${WRAPPER}
-        ${CP} ${WRAPPER} $@ ${CPFLAGS}
+oz.ModuleWra1: s.AppName ${DIRS}
+        ${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" ${LOCAL_WRAP} $@
 
 asms: ${ASMS}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ}
+
+${ROM_MODULE}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ} ${DIRS}
         ${LD} -o $@ -aof ${OBJSZ} ${LIBSZ}
-	Access $@ rw/rw
+        Access $@ rw/rw
 
 #
 # Final link for the ROM Image (using given base address)
 #
+
 rom_link:
         ${MKDIR} linked
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-#       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
 # Dynamic dependencies:
+o.plugclient: c.plugclient C:h.swis C:h.kernel tbox:h.toolbox tbox:h.wimp tbox:h.window tbox:h.gadgets tbox:h.quit h.event tbox:h.wimplib h.m C:h.plugin h.plugclient h.version VersionNum h.client h.utils h.utils
+o.utils: c.utils C:h.kernel C:h.swis h.m tbox:h.wimp tbox:h.wimplib h.version VersionNum h.utils
+o.client_rep: c.client_rep C:h.swis C:h.kernel tbox:h.wimplib tbox:h.wimp tbox:h.window tbox:h.toolbox tbox:h.gadgets h.event h.m h.plugclient C:h.plugin h.client h.utils h.utils
+o.clientmidi: c.clientmidi C:h.swis C:h.kernel tbox:h.wimplib tbox:h.wimp tbox:h.window tbox:h.toolbox tbox:h.gadgets h.event C:h.plugin h.m h.plugclient h.client h.utils h.version VersionNum h.utils
+o.m: c.m C:h.kernel h.m h.utils
