@@ -36,7 +36,7 @@ CMHGFLAGS	= -depend !Depend -p -throwback ${DFLAGS}
 CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
 
-DFLAGS		= -DTEST
+DFLAGS		= 
 DDFLAGS		= ${DFLAGS} -DTrace_TRACE -DDEBUGLIB
 
 
