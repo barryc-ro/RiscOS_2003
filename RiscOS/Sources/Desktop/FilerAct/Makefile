@@ -124,11 +124,19 @@ clean:
         ${RM} s.ModuleWrap
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resources-${CMDHELP}
+        @echo ${COMPONENT}: resource files copied
+
+resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         ${CP} Resources.${LOCALE}.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${EXP_HDR}.FilerAct: hdr.FilerAct
         ${CP} hdr.FilerAct $@ ${CPFLAGS}

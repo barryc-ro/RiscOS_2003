@@ -54,7 +54,10 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resources-${CMDHELP}
+        @echo ${COMPONENT}: resource files copied
+
+resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<Machine>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
@@ -62,7 +65,12 @@ resources:
        -${CP} Resources.${LOCALE}.<Machine>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
        -${CP} Resources.${LOCALE}.<Machine>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<Machine>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
