@@ -6,6 +6,7 @@
 # Date		Name		Description
 # ----		----		-----------
 # 1997-09-03	BAL		Created
+# 09 Oct 1997   RWB		Removed some reduntant phases
 #
 
 
@@ -141,24 +142,10 @@ OBJS		=\
 
 
 # ------------------------------------------------------------------------------
-# Build all the library
-#
-
-all:	${COMPONENT} ${COMPONENTZ}
-
-
-# ------------------------------------------------------------------------------
 # RISC OS ROM build rules
 #
 
-rom: ${TARGET}
-	@echo ${COMPONENT}: rom module built
-
 export: export_${PHASE}
-
-install_rom: ${TARGET}
-	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-	@echo ${COMPONENT}: rom module installed
 
 clean:
 	${WIPE} o.* ${WFLAGS}
