@@ -41,6 +41,7 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${RM} rm.${MACHINE}
         @echo ${COMPONENT}: cleaned
 
 resources:
