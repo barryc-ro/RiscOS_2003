@@ -89,6 +89,9 @@ rm.Wimp: Hdr:SWIs
 rm.Wimp: Hdr:CPU.Generic26
 rm.Wimp: Hdr:IO.GenericIO
 rm.Wimp: Hdr:RISCOS
+rm.Wimp: Hdr:Machine.<Machine>
+rm.Wimp: Hdr:Machine.Machine
+rm.Wimp: Hdr:IO.IOMDL
 rm.Wimp: Hdr:CMOS
 rm.Wimp: Hdr:PublicWS
 rm.Wimp: Hdr:ModHand
