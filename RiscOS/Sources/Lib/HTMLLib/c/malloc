@@ -5,6 +5,9 @@
  * $Source$
  *
  * $Log$
+ * Revision 1.1.2.1  1997/04/08 10:26:43  kbracey
+ * Initial revision
+ *
  * Revision 1.6  96/11/28  14:55:09  kbracey
  * Moved memlist structure into head of allocated block. Won't
  * attempt to find caller name unless MEMORY_DEBUG on.
@@ -44,6 +47,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "swis.h"
+#include "struct.h"
+#include "html2_ext.h"
+#include "internal.h"
 #ifdef MEMORY_DEBUG
 FILE *fp=NULL;
 #endif
@@ -53,23 +60,30 @@ FILE *fp=NULL;
 #include "get_fn_nam.c"
 #endif
 
-#define MEMLISTINBLOCK
+#define FRED 0x44455246u
+#define HTMG 0x474D5448u
 
 typedef struct MEMLIST {
   int  context;
-#ifndef MEMLISTINBLOCK
-  char *start;
-#endif
-  char *guard;
 #ifdef MEMORY_DEBUG
   char *allocated_in;
 #endif
   struct MEMLIST *own;
   struct MEMLIST *next;
+  unsigned int guard;
 } MemList, *MemListPtr;
 
 static MemList *main_memory=NULL;
-unsigned int __html_memory_context=0;
+static unsigned int __html_memory_context=0;
+static unsigned int __html_next_context=1;
+
+static void html_mem_error(char *s)
+{
+    _kernel_oserror e;
+    e.errnum = 1;
+    sprintf(e.errmess, "Internal error: %s", s);
+    _swix(Wimp_ReportError, _INR(0,2), &e, 3, "HTMLLib");
+}
 
 char *__html_malloc(size_t bytes, size_t size)
 {
@@ -100,11 +114,7 @@ MemList *memlist;
   Printf("Allocating memory trace structure (%d, %d)\n",bytes,size);
 #endif
 
-#ifdef MEMLISTINBLOCK
-memlist=calloc(sizeof(MemList) + (real_bytes*size) + 16, 1);
-#else
-memlist=calloc(sizeof(MemList), 1);
-#endif
+memlist=calloc(sizeof(MemList) + (real_bytes*size), 1);
 if (memlist==NULL) return NULL;
 memlist->next=main_memory;
 if (memlist->next) memlist->next->own=memlist;
@@ -124,30 +134,11 @@ if (fp==NULL)
 #endif /* MEMORY_DEBUG */
 
 
-#ifdef MEMLISTINBLOCK
    ptr=(char *)(memlist + 1);
-#else
-   ptr=calloc((real_bytes*size)+16,sizeof(char));
-
-   if (ptr==NULL) {
-#ifdef MEMORY_DEBUG
-     Printf("Failed to allocate memory - returning NULL\n");
-#endif
-     __html_memlist_free(memlist);
-     return NULL;
-   }
-#endif /* MEMLISTINBLOCK */
 
    p=ptr+(real_bytes*size);
 
-#ifndef MEMLISTINBLOCK
-   memlist->start=ptr;
-#endif
-   memlist->guard=p;
-   p[0]='H';
-   p[1]='T';
-   p[2]='M';
-   p[3]='\0';
+   memlist->guard=HTMG;
 #ifdef MEMORY_DEBUG
    fn_name = mem__get_fn_name(CALLER_FP());
    memlist->allocated_in=calloc(strlen(fn_name)+1,1);
@@ -157,16 +148,15 @@ if (fp==NULL)
      p++; fn_name++;
    }
    *p='\0';
-   p=memlist->guard;
 #endif
 
 #ifdef MEMORY_DEBUG
-   fprintf(fp,"%s asked for %d bytes (allocated: %d at %x (%x))\n",
+   fprintf(fp,"%s asked for %d bytes (allocated: %d at %x)\n",
        memlist->allocated_in, bytes*size, (real_bytes*size),
-       (int)ptr, (int)p);
-   Printf("%s asked for %d bytes (allocated: %d at %x (%x))\n",
+       (int)ptr);
+   Printf("%s asked for %d bytes (allocated: %d at %x)\n",
        memlist->allocated_in, bytes*size, (real_bytes*size),
-       (int)ptr, (int)p);
+       (int)ptr);
 #endif
 
 
@@ -177,8 +167,9 @@ if (fp==NULL)
 #include "swis.h"
 #endif
 
-void __html_memlist_free(MemList *memlist)
+static void __html_memlist_free(MemList *memlist)
 {
+   memlist->guard = FRED;
   if (memlist->own == NULL) {
     main_memory=memlist->next;
     if (memlist->next != NULL) memlist->next->own=NULL;
@@ -186,14 +177,12 @@ void __html_memlist_free(MemList *memlist)
     memlist->own->next=memlist->next;
     if (memlist->next != NULL) memlist->next->own=memlist->own;
   }
+
 #ifdef MEMORY_DEBUG
   _swix(OS_WriteI+4, 0);
   _swix(OS_WriteI+31, 0);
   _swix(OS_WriteI+0, 0);
   _swix(OS_WriteI+0, 0);
-#endif
-#ifndef MEMLISTINBLOCK
-  free(memlist->start);
 #endif
 #ifdef MEMORY_DEBUG
   free(memlist->allocated_in);
@@ -228,11 +217,7 @@ MemList *memlist, *next;
 #endif
 
    while(memlist != NULL) {
-#ifdef MEMLISTINBLOCK
      if ((char *)(memlist + 1) == ptr) break;
-#else
-     if (memlist->start==(char *)ptr) break;
-#endif
      memlist=memlist->next;
 #ifdef DEBUG
      Printf(".");
@@ -240,20 +225,28 @@ MemList *memlist, *next;
    }
 
    if (memlist==NULL) {
+     char buf[80];
 #ifdef MEMORY_DEBUG
      fprintf(fp,"%s asked to free %x - not found!\n", fn_name, (int)ptr);
 
 #endif
-     printf("ERROR - cannot free memory!\n");
+     sprintf(buf, "Asked to free unknown block %p (context %d)\n", ptr, ((int*)ptr)[-4]);
+     html_mem_error(buf);
 
      return;
+   }
+
+   if (memlist->guard != HTMG)
+   {
+       html_mem_error("Guard word corruptted");
+       return;
    }
 
 #ifdef MEMORY_DEBUG
    Printf(" found ");
 
-   fprintf(fp,"%s asked to free %x (allocated in %s - guardword=\"%s\")(%d)\n",
-       fn_name, (int)ptr, memlist->allocated_in, memlist->guard, free_all);
+   fprintf(fp,"%s asked to free %x (allocated in %s - guardword=\"%4s\")(%d)\n",
+       fn_name, (int)ptr, memlist->allocated_in, (char *)&memlist->guard, free_all);
 #endif
 
   if (free_all==0) {
@@ -267,6 +260,7 @@ MemList *memlist, *next;
     fprintf(fp,"Mass free called for:\n");
 #endif
     free_all=memlist->context;
+    /*Printf("MASS FREEING context %d\n", free_all);*/
     memlist=main_memory;
     while (memlist != NULL) {
       if (memlist->context==free_all) {
@@ -287,9 +281,9 @@ MemList *memlist, *next;
   }
 }
 
+#ifdef MEMORY_DEBUG
 void __html_memory_list(void)
 {
-#ifdef MEMORY_DEBUG
 MemList *m = main_memory;
 unsigned int count=0;
 
@@ -310,10 +304,15 @@ unsigned int count=0;
 
     fprintf(fp,"\nTotal: %d\n", (int) count);
     Printf("\nTotal: %d\n", (int) count);
+}
 #endif
+
+void __html_set_memory_context(unsigned int context)
+{
+   __html_memory_context=context;
 }
 
-void __html_memory_init(void)
+unsigned int __html_memory_init(void)
 {
-   __html_memory_context++;
+   return __html_memory_context=__html_next_context++;
 }

@@ -27,7 +27,7 @@ LD      = link
 LB      = libfile
 WIPE    = wipe
 
-CCFLAGS = -c -depend !Depend -fah -g -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -fah -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c -o
@@ -47,7 +47,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Include files
 #
 INCLUDES = -IC:
-DFLAGS    = -DLIBRARY -DNDEBUG
+DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING
 
 #
 # Program specific options:
@@ -133,7 +133,33 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+o.irqs: s.irqs
+o.irqs: Hdr:ListOpts
+o.irqs: Hdr:Macros
+o.irqs: Hdr:System
+o.irqs: Hdr:SWIs
+o.irqs: Hdr:CPU.Generic26
+o.irqs: Hdr:IO.GenericIO
+o.irqs: Hdr:RISCOS
+o.display:	c.display
+o.display:	h.html2_ext
+o.display:	h.tags
+o.display:	h.struct
+o.display:	C:h.string
+o.display:	h.internal
+o.display:	h.tags
+o.display:	h.struct
+o.display:	C:h.ctype
+o.display:	C:h.stdio
 o.malloc:	c.malloc
+o.malloc:	C:h.swis
+o.malloc:	C:h.kernel
+o.malloc:	h.struct
+o.malloc:	h.html2_ext
+o.malloc:	h.internal
+o.malloc:	h.tags
+o.malloc:	h.struct
+o.malloc:	C:h.ctype
 o.rules:	c.rules
 o.rules:	h.html2_ext
 o.rules:	h.internal
@@ -160,24 +186,19 @@ o.veneers:	C:h.ctype
 o.veneers:	C:h.flex
 o.veneers:	C:h.stdio
 o.veneers:	C:h.kernel
-o.font:	c.font
-o.font:	h.html2_ext
-o.font:	h.struct
-o.font:	h.tags
-o.font:	h.internal
-o.font:	h.tags
-o.font:	h.struct
-o.font:	C:h.ctype
-o.display:	c.display
-o.display:	h.html2_ext
-o.display:	h.tags
-o.display:	h.struct
-o.display:	C:h.string
-o.display:	h.internal
-o.display:	h.tags
-o.display:	h.struct
-o.display:	C:h.ctype
-o.display:	C:h.stdio
+o.new_stream:	c.new_stream
+o.new_stream:	h.html2_ext
+o.new_stream:	h.tags
+o.new_stream:	h.struct
+o.new_stream:	C:h.string
+o.new_stream:	h.internal
+o.new_stream:	h.tags
+o.new_stream:	h.struct
+o.new_stream:	C:h.ctype
+o.new_stream:	h.api
+o.new_stream:	h.html2_ext
+o.new_stream:	h.tags
+o.new_stream:	h.struct
 o.anchor_inf:	c.anchor_inf
 o.anchor_inf:	C:h.stdio
 o.anchor_inf:	C:h.stdlib
@@ -201,16 +222,11 @@ o.HTTPSuport:	h.struct
 o.HTTPSuport:	C:h.ctype
 o.HTTPSuport:	C:h.stdio
 o.HTTPSuport:	h.HTTPSuport
-o.new_stream:	c.new_stream
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tags
-o.new_stream:	h.struct
-o.new_stream:	C:h.string
-o.new_stream:	h.internal
-o.new_stream:	h.tags
-o.new_stream:	h.struct
-o.new_stream:	C:h.ctype
-o.new_stream:	h.api
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tags
-o.new_stream:	h.struct
+o.font:	c.font
+o.font:	h.html2_ext
+o.font:	h.struct
+o.font:	h.tags
+o.font:	h.internal
+o.font:	h.tags
+o.font:	h.struct
+o.font:	C:h.ctype
