@@ -32,6 +32,8 @@
 #include "version.h"
 #include "session.h"
 
+#include "winframe.h"
+
 #include "../inc/clib.h"
 #include "../inc/client.h"
 #include "../inc/debug.h"
@@ -51,7 +53,7 @@
 #ifdef DEBUG
 #define SPLASH_TIME		    100
 #else
-#define SPLASH_TIME		    500
+#define SPLASH_TIME		    200
 #endif
 
 #ifdef DEBUG
@@ -59,6 +61,29 @@
 #else
 #define VERSION		Module_MajorVersion " (" Module_Date ") " Module_MinorVersion
 #endif
+
+/* --------------------------------------------------------------------------------------------- */
+
+/* ANT URL Open protocol */
+
+#define wimp_MOPENURL	0x4AF80
+
+typedef union {
+  char *ptr;
+  int offset;
+} string_value;
+
+typedef union {
+    char url[236];
+    struct {
+        int tag;
+        string_value url;
+        int flags;
+        string_value body_file;
+        string_value target;
+        string_value content_type;
+    } indirect;
+} urlopen_data;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -78,6 +103,8 @@ static int ToolBox_EventList[] =
 
 static int Wimp_MessageList[] =
 {
+    message_WINFRAME_CONTROL,
+    wimp_MOPENURL,
     Wimp_MDataLoad,
     Wimp_MDataSave,
     Wimp_MDataOpen,
@@ -114,6 +141,9 @@ static int cli_iconbar = FALSE;
 static int cli_dopostmortem = FALSE;
 static int cli_remote_debug = FALSE;
 static int cli_file_debug = FALSE;
+static int cli_suspendable = FALSE;
+static int cli_file_is_url = FALSE;
+static int cli_loop = FALSE;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -182,6 +212,35 @@ static void kill_current_session(void)
 	current_session = NULL;
 	session_close(s);
     }
+}
+
+static void control_ack(WimpMessage *message, BOOL success)
+{
+    WimpMessage reply;
+    winframe_message_control *control = (winframe_message_control *) &message->data;
+    winframe_message_control_ack *ack = (winframe_message_control_ack *) &reply.data;
+
+    reply.hdr.size = sizeof(reply.hdr) + sizeof(winframe_message_control_ack);
+    reply.hdr.your_ref = message->hdr.my_ref;
+    reply.hdr.action_code = message_WINFRAME_CONTROL_ACK;
+    ack->reason = control->reason;
+    ack->flags = success ? 1 : 0;
+
+    LOGERR(wimp_send_message(Wimp_EUserMessage, &reply, message->hdr.sender, 0, NULL));
+}
+
+static void status_message(int status)
+{
+    WimpMessage message;
+    winframe_message_status *s = (winframe_message_status *) &s;
+
+    message.hdr.size = sizeof(message.hdr) + sizeof(winframe_message_status);
+    message.hdr.your_ref = 0;
+    message.hdr.action_code = message_WINFRAME_STATUS;
+    s->reason = status;
+    s->flags = 0;
+
+    LOGERR(wimp_send_message(Wimp_EUserMessage, &message, 0, 0, NULL));
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -379,16 +438,17 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
 static int datasave_handler(WimpMessage *message, void *handle)
 {
     WimpDataSaveMessage *msg = &message->data.data_save;
-
-    if (current_session)
-    {
-	msg_report(utils_msgs_lookup("conn"));
-	return 0;
-    }
     
     if (msg->file_type == filetype_ICA)
     {
 	WimpMessage reply;
+
+	/* report error if we are already connected */
+	if (current_session)
+	{
+	    msg_report(utils_msgs_lookup("conn"));
+	    return 0;
+	}
 
 	reply = *message;
 	reply.hdr.size = sizeof(WimpDataSaveAckMessage);
@@ -404,6 +464,7 @@ static int datasave_handler(WimpMessage *message, void *handle)
 	return 1;
     }
 
+    msg_report(utils_msgs_lookup("badtype"));
     return 0;
     NOT_USED(handle);
 }
@@ -411,16 +472,17 @@ static int datasave_handler(WimpMessage *message, void *handle)
 static int dataload_handler(WimpMessage *message, void *handle)
 {
     WimpDataLoadMessage *msg = &message->data.data_load;
-
-    if (current_session)
-    {
-	msg_report(utils_msgs_lookup("conn"));
-	return 0;
-    }
     
     if (msg->file_type == filetype_ICA)
     {
 	WimpMessage reply;
+
+	/* report error if we are already connected */
+	if (current_session)
+	{
+	    msg_report(utils_msgs_lookup("conn"));
+	    return 0;
+	}
 
 	reply = *message;
 	reply.hdr.size = sizeof(WimpDataLoadAckMessage);
@@ -443,6 +505,7 @@ static int dataload_handler(WimpMessage *message, void *handle)
 	return 1;
     }
 
+    msg_report(utils_msgs_lookup("badtype"));
     return 0;
     NOT_USED(handle);
 }
@@ -455,12 +518,6 @@ static int dataopen_handler(WimpMessage *message, void *handle)
     {
 	WimpMessage reply;
 
-	if (current_session)
-	{
-	    msg_report(utils_msgs_lookup("conn"));
-	    return 0;
-	}
-
 	reply = *message;
 	reply.hdr.size = sizeof(WimpDataLoadAckMessage);
 	reply.hdr.action_code = Wimp_MDataLoadAck;
@@ -468,6 +525,13 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 
 	err_fatal(wimp_send_message(Wimp_EUserMessage, &reply,
 				    message->hdr.sender, 0, NULL));
+
+	/* report error if we are already connected */
+	if (current_session)
+	{
+	    msg_report(utils_msgs_lookup("conn"));
+	    return 0;
+	}
 
 	/* wait for splash screen to close */
 	while (!splash_check_close())
@@ -479,6 +543,119 @@ static int dataopen_handler(WimpMessage *message, void *handle)
     }
     return 0;
 
+    NOT_USED(handle);
+}
+
+static char *get_ptr(urlopen_data *u, string_value sv)
+{
+    return sv.offset == 0 ? 0 : sv.offset <= 236 ? (char *)u + sv.offset : sv.ptr;
+}
+
+static int openurl_handler(WimpMessage *message, void *handle)
+{
+    urlopen_data *msg = (urlopen_data *)&message->data;
+    char *url;
+
+    if (msg->indirect.tag == 0)
+	url = get_ptr(msg, msg->indirect.url);
+    else
+	url = msg->url;
+
+    TRACE((TC_UI, TT_API1, "openurl_handler: url '%s' tag %d\n", url, msg->indirect.tag));
+
+    if (url && strnicmp(url, "ica:", 4) == 0)
+    {
+	WimpMessage reply;
+
+	/* claim message with acknowledge */
+	reply = *message;
+	reply.hdr.your_ref = message->hdr.my_ref;
+
+	err_fatal(wimp_send_message(Wimp_EUserMessageAcknowledge, &reply,
+				    message->hdr.sender, 0, NULL));
+
+	/* report error if we are already connected */
+	if (current_session)
+	{
+	    msg_report(utils_msgs_lookup("conn"));
+	    return 0;
+	}
+
+	/* wait for splash screen to close */
+	while (!splash_check_close())
+	    ;
+
+	current_session = session_open_url(url);
+
+	return 1;
+    }
+    return 0;
+
+    NOT_USED(handle);
+}
+
+static int control_handler(WimpMessage *message, void *handle)
+{
+    winframe_message_control *control = (winframe_message_control *)&message->data;
+	
+    TRACE((TC_UI, TT_API1, "control_handler: reason %d flags 0x%x server '%s'\n", control->reason, control->flags, strsafe(control->server)));
+
+    switch (control->reason)
+    {
+    case winframe_CONTROL_CONNECT:
+	/* report error if we are already connected */
+	if (current_session)
+	{
+	    control_ack(message, FALSE);
+	    return 1;
+	}
+
+	control_ack(message, TRUE);
+
+	/* wait for splash screen to close */
+	while (!splash_check_close())
+	    ;
+
+	current_session = session_open_server(control->server);
+	break;
+
+    case winframe_CONTROL_RECONNECT:
+	if (current_session == NULL)
+	{
+	    control_ack(message, FALSE);
+	    return 1;
+	}
+
+	control_ack(message, TRUE);
+
+	session_resume(current_session);
+	break;
+
+    case winframe_CONTROL_DISCONNECT:
+	if (current_session == NULL)
+	{
+	    control_ack(message, FALSE);
+	    return 1;
+	}
+
+	control_ack(message, TRUE);
+
+	kill_current_session();
+	break;
+
+    case winframe_CONTROL_QUIT:
+	if (current_session)
+	{
+	    control_ack(message, FALSE);
+	    return 1;
+	}
+
+	control_ack(message, TRUE);
+	running = FALSE;
+	break;
+    }
+
+    return 1;
     NOT_USED(handle);
 }
 
@@ -682,8 +859,8 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass   = TC_UI | TC_TW;
-   EMLogInfo.LogEnable  = 0;
+   EMLogInfo.LogClass   = TC_WD;
+   EMLogInfo.LogEnable  = TT_ERROR;
    EMLogInfo.LogTWEnable = TT_TW_res1;
 #else
    EMLogInfo.LogClass   = TC_ALL;
@@ -718,32 +895,42 @@ static void process_args(int argc, char *argv[])
 		cli_dopostmortem = TRUE;
 		break;
 
-	    case 'l':	    /* log file */
-		cli_logfile = strdup(argv[++i]);
+	    case 'f':      /* file to play initially */
+		if (i+1 < argc)
+	            cli_filename = strdup(argv[++i]);
 		break;
 
 	    case 'g':	    /* enable log file */
 		cli_file_debug = TRUE;
 		break;
 
+	    case 'i':      /* create iconbar icon */
+		cli_iconbar = TRUE;
+		cli_suspendable = TRUE;
+		break;
+
+	    case 'l':	    /* log file */
+		cli_logfile = strdup(argv[++i]);
+		break;
+
+	    case 'o':	    /* loop */
+		cli_loop = TRUE;
+		break;
+
 	    case 'r':	    /* enable remote debugging */
 		cli_remote_debug = TRUE;
 		break;
 
-	    case 'f':      /* file to play initially */
-		if (i+1 < argc)
-	            cli_filename = strdup(argv[++i]);
+	    case 's':      /* allow suspend and resume */
+		cli_suspendable = TRUE;
 		break;
 
-	    case 'i':      /* create iconbar icon */
-		cli_iconbar = TRUE;
+	    case 'u':      /* filename is a URL */
+		cli_file_is_url = TRUE;
 		break;
 	    } /* switch */
 	} /* if */
     } /* for */
-
-    TRACE((TC_UI, TT_API1, "(2) process_args result: file=\"%s\", dopostmortem=%d, iconbar=%d\n",
-	 strsafe(cli_filename), cli_dopostmortem, cli_iconbar));
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -797,6 +984,8 @@ static void initialise(int argc, char *argv[])
     err_fatal(event_register_message_handler(Wimp_MDataOpen, dataopen_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataSave, datasave_handler, NULL));
+    err_fatal(event_register_message_handler(wimp_MOPENURL, openurl_handler, NULL));
+    err_fatal(event_register_message_handler(message_WINFRAME_CONTROL, control_handler, NULL));
 
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
     err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, try_disconnect_handler, NULL));
@@ -834,9 +1023,11 @@ int main(int argc, char *argv[])
 	while (!splash_check_close())
 	    ;
 	
-	session_run(cli_filename);
+	do
+	    session_run(cli_filename, cli_file_is_url);
+	while (cli_loop);
 
-	if (!cli_iconbar)
+	if (!cli_suspendable)
 	    return EXIT_SUCCESS;
     }
 

@@ -55,11 +55,14 @@
 #include <time.h>
 
 extern const char *strsafe(const char *s);
+
 extern char *strdup(const char *s);
+extern char *strndup(const char *s, int maxlen);
+
 extern int strnicmp(const char *s1, const char *s2, int n);
 extern int stricmp(const char *s1, const char *s2);
-extern char *strupr(char *s);
 
+extern char *strupr(char *s);
 
 #define strcmpi(a,b) stricmp(a,b)
 #define memicmp(a,b,n) strncmp(a,b,n)

@@ -27,7 +27,9 @@ LDFLAGS=
 
 # ----------------------------------------------------------------------------------------------------
 
-DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4
+# -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT
+
+DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DINCL_PRINTER
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
 		-I${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs \
@@ -212,6 +214,7 @@ installrm: ${APPRM} install_base
 
 installrom: ${APPZ}
 	-${MKDIR} ${ROMDIR}
+	-${MKDIR} ${ROMDIR}/h
 	-${MKDIR} ${ROMDIR}/Resources/
 	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}
 	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}/ini
@@ -228,6 +231,7 @@ installrom: ${APPZ}
 	${CP} ${CPFLAGS} Resources/ini/wfclient			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
 	echo Installed ${COMPONENT} aof in ${ROMDIR}
+	${CP} ${CPFLAGS} src/app/winframe.h			${ROMDIR}/h/WinFrame
 
 cleaninstall:
 	${RM}	 ${APPNAME}/ini/*
@@ -541,10 +545,14 @@ cleanwd:
 
 # VD
 
+# common files
+
 VDCOMMONLIBSRC	=src/dll/vd/common/vdapi.c
 VDCOMMONLIBOBJS	=src/dll/vd/common/vdapi.o
 VDCOMMONLIBOBJSD=src/dll/vd/common/vdapi.od
 VDCOMMONLIBOBJSZ=src/dll/vd/common/vdapi.oz
+
+# Thinwire driver
 
 VDTW31LIBSRC=	\
 		src/dll/vd/vdtw31/palette.c \
@@ -646,6 +654,8 @@ VDTW31LIBOBJSZ=	\
 		src/dll/vd/vdtw31/wfstrips.oz \
 		src/dll/vd/vdtw31/winonly.oz
 
+# Client drive mapping driver
+
 VDCDMLIBSRC=	src/dll/vd/vdcdm/cdmapi.c \
 		src/dll/vd/vdcdm/cdmserv.c \
 		src/dll/vd/vdcdm/cdmtrans.c \
@@ -678,10 +688,50 @@ VDCDMLIBOBJSZ=	src/dll/vd/vdcdm/cdmapi.oz \
 		src/dll/vd/vdcdm/ringbuf.oz \
 		src/dll/vd/vdcdm/vdcdm.oz
 
-VDLIBSRC=	${VDCOMMONLIBSRC} ${VDTW31LIBSRC}
-VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS}
-VDLIBOBJSD=	${VDCOMMONLIBOBJSD} ${VDTW31LIBOBJSD}
-VDLIBOBJSZ=	${VDCOMMONLIBOBJSZ} ${VDTW31LIBOBJSZ}
+# Client printer driver (1.0)
+
+VDCPMLIBSRC=	src/dll/vd/vdcpm/common/cpmserv.c \
+		src/dll/vd/vdcpm/common/cpmtrans.c \
+		src/dll/vd/vdcpm/common/vdcpm.c \
+		src/dll/vd/vdcpm/spool/rospool.c
+
+VDCPMLIBOBJS=	src/dll/vd/vdcpm/common/cpmserv.o \
+		src/dll/vd/vdcpm/common/cpmtrans.o \
+		src/dll/vd/vdcpm/common/vdcpm.o \
+		src/dll/vd/vdcpm/spool/rospool.o
+
+VDCPMLIBOBJSD=	src/dll/vd/vdcpm/common/cpmserv.od \
+		src/dll/vd/vdcpm/common/cpmtrans.od \
+		src/dll/vd/vdcpm/common/vdcpm.od \
+		src/dll/vd/vdcpm/spool/rospool.od
+
+VDCPMLIBOBJSZ=	src/dll/vd/vdcpm/common/cpmserv.oz \
+		src/dll/vd/vdcpm/common/cpmtrans.oz \
+		src/dll/vd/vdcpm/common/vdcpm.oz \
+		src/dll/vd/vdcpm/spool/rospool.oz
+
+# Client printer driver (1.5)
+
+VDSPLLIBSRC=	src/dll/vd/vdspl/common/cpmserv.c \
+		src/dll/vd/vdspl/common/vdspl.c \
+		src/dll/vd/vdspl/spool/rospool.c
+
+VDSPLLIBOBJS=	src/dll/vd/vdspl/common/cpmserv.o \
+		src/dll/vd/vdspl/common/vdspl.o \
+		src/dll/vd/vdspl/spool/rospool.o
+
+VDSPLLIBOBJSD=	src/dll/vd/vdspl/common/cpmserv.od \
+		src/dll/vd/vdspl/common/vdspl.od \
+		src/dll/vd/vdspl/spool/rospool.od
+
+VDSPLLIBOBJSZ=	src/dll/vd/vdspl/common/cpmserv.oz \
+		src/dll/vd/vdspl/common/vdspl.oz \
+		src/dll/vd/vdspl/spool/rospool.oz
+
+VDLIBSRC=	${VDCOMMONLIBSRC} ${VDTW31LIBSRC} ${VDCPMLIBSRC} ${VDSPLLIBSRC}
+VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS} ${VDCPMLIBOBJS} ${VDSPLLIBOBJS}
+VDLIBOBJSD=	${VDCOMMONLIBOBJSD} ${VDTW31LIBOBJSD} ${VDCPMLIBOBJSD} ${VDSPLLIBOBJSD}
+VDLIBOBJSZ=	${VDCOMMONLIBOBJSZ} ${VDTW31LIBOBJSZ} ${VDCPMLIBOBJSZ} ${VDSPLLIBOBJSZ}
 
 ${VDLIB}:	${VDLIBOBJS}
 	${LIBFILE} ${LIBFILEFLAGS} -o ${VDLIB} ${VDLIBOBJS}

@@ -6,6 +6,7 @@
 
 #include "windows.h"
 
+#include <limits.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -501,20 +502,23 @@ static int EMEngLoadSession(Session sess)
 
 static void session_free(Session sess)
 {
-    TRACE((TC_UI, TT_API1, "session_free: %p\n", sess));
+    TRACE((TC_UI, TT_API1, "session_free: %p", sess));
 
     FlushPrivateProfileCache();
 
     if (global_session == sess)
 	global_session = NULL;
 
+    if (sess->tempICAFile)
+	remove(sess->gszICAFile);
+   
     free(sess->gszICAFile);
     free(sess);
 }
 
 static int session_abort(Session sess, int rc)
 {
-    TRACE((TC_UI, TT_API1, "session_abort: %p state %d\n", sess, rc));
+    TRACE((TC_UI, TT_API1, "session_abort: %p state %d", sess, rc));
 
     connect_close(sess);
     EMErrorPopup(sess, rc);
@@ -524,15 +528,157 @@ static int session_abort(Session sess, int rc)
     return rc;
 }
 
-Session session_open(const char *ica_file)
+static int session__open(Session sess)
 {
     int rc;
     char *pEnvVar;
+
+    TRACE((TC_UI, TT_API1, "session__open: %p", sess));
+
+    // determine the client name from environment variable first
+    // then use Win32 computername and then the default from the
+    // resource file
+    pEnvVar = getenv(ENV_CLIENTNAME);
+    if (pEnvVar == NULL)
+	pEnvVar = getenv(INET_HOSTNAME);
+
+    // use time stamp to creat an unique client name
+    if (pEnvVar == NULL)
+	sprintf(gszClientName, "Internet%08u", clock() & 0xffffff);
+    else
+	lstrcpy(gszClientName, pEnvVar);
+
+    // start the connect status dialog 
+    connect_open(sess);
+    connect_status(sess, CLIENT_STATUS_LOADING_STACK);
+
+    rc = srvWFEngLoad( NULL, NULL );  // Call the WFEngLoad API
+    if (rc != CLIENT_STATUS_SUCCESS)
+	return rc;
+
+    // open the engine
+    rc = EMEngOpen(sess);
+    if (rc != CLIENT_STATUS_SUCCESS)
+	return rc;
+
+    // load the session
+    rc = EMEngLoadSession(sess);
+    if (rc != CLIENT_STATUS_SUCCESS)
+	return rc;
+
+    // set the product id to Internet client
+    {
+       WFEPRODUCTID WFEProductID;
+       WFEProductID.ProductID = CLIENTID_CITRIX_RISCOS;
+       wdSetProductID( &WFEProductID, sizeof(WFEProductID));
+    }
+
+    // update the status to connecting
+    connect_status(sess, CLIENT_STATUS_CONNECTING);
+
+    rc = srvWFEngConnect(sess->hWFE);
+    if (rc != CLIENT_STATUS_SUCCESS)
+	return rc;
+
+    /*
+     *  Load script driver
+     */
+    if ( gScriptFile ) {
+        sess->fSdPoll = sess->fSdLoaded = sdLoad( gScriptFile, gScriptDriver );
+        free( gScriptDriver );
+        free( gScriptFile );
+        gScriptFile = NULL;
+	gScriptDriver = NULL;
+    }
+
+    connect_close(sess);
+    
+    // initialise this here as it is statically inited in wengine
+    gbContinuePolling = TRUE;
+
+    return rc;
+}
+
+Session session_open_url(const char *url)
+{
+    char *host = NULL;
+    char *path = NULL;
+    char *args = NULL;
+    const char *s;
+    int rc;
+
+    TRACE((TC_UI, TT_API1, "session_open_url: '%s'", url));
+
+    s = url + 4;
+    if (s[0] == '/' && s[1] == '/')
+    {
+	const char *start = s+2;
+	const char *end = strchr(start, '/');
+	host = strndup(start, end ? end - start : INT_MAX);
+	s = end;
+    }
+
+    if (s && s[0] == '/' && s[1] > ' ')
+    {
+	const char *start = s+1;
+	const char *end = strchr(start, '?');
+	path = strndup(start, end ? end - start : INT_MAX);
+	s = end;
+    }
+    
+    if (s && s[0] == '?' && s[1] > ' ')
+	args = strdup(s+1);
+
+    TRACE((TC_UI, TT_API1, "session_open_url: host '%s' path '%s' args '%s'",
+	   strsafe(host), strsafe(path), strsafe(args)));
+
+    return session_open_server(host);
+}
+
+Session session_open_server(const char *host)
+{
+    Session sess = NULL;
+    int rc;
+    if (host)
+    {
+	char name[L_tmpnam];
+	FILE *f;
+
+	global_session = sess = calloc(sizeof(struct session_), 1);
+	sess->HaveFocus = TRUE;
+
+	strncpy(sess->gszServerLabel, host, sizeof(sess->gszServerLabel));
+
+	if ((f = fopen(tmpnam(name), "w")) != NULL)
+	{
+	    fprintf(f, "[%s]\n", host);
+	    fprintf(f, "Address=%s\n", host);
+	    fprintf(f, "[ApplicationServers]\n");
+	    fprintf(f, "%s=\n", host);
+	    fclose(f);
+
+	    sess->gszICAFile = strdup(name);
+	    sess->tempICAFile = TRUE;
+	}
+	
+	if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
+	{
+	    session_abort(sess, rc);
+	    global_session = sess = NULL;
+	}
+    }
+    
+    return sess;
+}
+
+Session session_open(const char *ica_file)
+{
     Session sess;
+    int rc;
 
-    TRACE((TC_UI, TT_API1, "session_open: '%s'\n", ica_file));
+    TRACE((TC_UI, TT_API1, "session_open: '%s'", ica_file));
 
-    sess = global_session = calloc(sizeof(struct session_), 1);
+    global_session = sess = calloc(sizeof(struct session_), 1);
 
     sess->gszICAFile = strdup(ica_file);
     sess->HaveFocus = TRUE;
@@ -557,7 +703,7 @@ Session session_open(const char *ica_file)
 	}
     }
     
-    TRACE((TC_UI, TT_API1, "got server: '%s'\n", sess->gszServerLabel));
+    TRACE((TC_UI, TT_API1, "got server: '%s'", sess->gszServerLabel));
 
     GetPrivateProfileString(sess->gszServerLabel, INI_ENCRYPTIONLEVELSESSION, 
 			    "",
@@ -578,78 +724,11 @@ Session session_open(const char *ica_file)
 	return NULL;
     }
 
-    // determine the client name from environment variable first
-    // then use Win32 computername and then the default from the
-    // resource file
-    pEnvVar = getenv(ENV_CLIENTNAME);
-    if (pEnvVar == NULL)
-	pEnvVar = getenv(INET_HOSTNAME);
-
-    // use time stamp to creat an unique client name
-    if (pEnvVar == NULL)
-	sprintf(gszClientName, "Internet%08u", clock() & 0xffffff);
-    else
-	lstrcpy(gszClientName, pEnvVar);
-
-    // start the connect status dialog 
-    connect_open(sess);
-    connect_status(sess, CLIENT_STATUS_LOADING_STACK);
-
-    rc = srvWFEngLoad( NULL, NULL );  // Call the WFEngLoad API
-    if (rc != CLIENT_STATUS_SUCCESS)
+    if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
     {
 	session_abort(sess, rc);
-	return NULL;
+	global_session = sess = NULL;
     }
-
-    // open the engine
-    rc = EMEngOpen(sess);
-    if(rc != CLIENT_STATUS_SUCCESS)
-    {
-	session_abort(sess, rc);
-	return NULL;
-    }
-
-    // load the session
-    rc = EMEngLoadSession(sess);
-    if(rc != CLIENT_STATUS_SUCCESS)
-    {
-	session_abort(sess, rc);
-	return NULL;
-    }
-
-    // set the product id to Internet client
-    {
-       WFEPRODUCTID WFEProductID;
-       WFEProductID.ProductID = CLIENTID_CITRIX_RISCOS;
-       wdSetProductID( &WFEProductID, sizeof(WFEProductID));
-    }
-
-    // update the status to connecting
-    connect_status(sess, CLIENT_STATUS_CONNECTING);
-
-    rc = srvWFEngConnect(sess->hWFE);
-    if (rc != CLIENT_STATUS_SUCCESS)
-    {
-	session_abort(sess, rc);
-	return NULL;
-    }
-
-    /*
-     *  Load script driver
-     */
-    if ( gScriptFile ) {
-        sess->fSdPoll = sess->fSdLoaded = sdLoad( gScriptFile, gScriptDriver );
-        free( gScriptDriver );
-        free( gScriptFile );
-        gScriptFile = NULL;
-	gScriptDriver = NULL;
-    }
-
-    connect_close(sess);
-    
-    // initialise this here as it is statically inited in wengine
-    gbContinuePolling = TRUE;
 
     return sess;
 }
@@ -658,7 +737,7 @@ int session_poll(Session sess)
 {
     int rc;
     
-    DTRACE((TC_UI, TT_API1, "session_poll: state %x connected %d focus %d continuepolling %d\n", gState, gState & WFES_CONNECTED, sess->HaveFocus, gbContinuePolling ));
+    DTRACE((TC_UI, TT_API1, "session_poll: state %x connected %d focus %d continuepolling %d", gState, gState & WFES_CONNECTED, sess->HaveFocus, gbContinuePolling ));
 
 //  if ( gState & WFES_CONNECTED )
 //	srvWFEngMessageLoop( sess->hWFE );
@@ -687,7 +766,7 @@ int session_poll(Session sess)
 
 void session_close(Session sess)
 {
-    TRACE((TC_UI, TT_API1, "session_close: %p\n", sess));
+    TRACE((TC_UI, TT_API1, "session_close: %p", sess));
 
     /*
      *  Unload script driver
@@ -720,45 +799,38 @@ void session_close(Session sess)
     session_free(sess);
 }
 
-#if 0
-void session_close_all(void)
-{
-    TRACE((TC_UI, TT_API1, "session_close_all: \n"));
-
-    if (global_session)
-	session_close(global_session);
-}
-#endif
-
 /* --------------------------------------------------------------------------------------------- */
 
 void session_resume(Session sess)
 {
-    TRACE((TC_UI, TT_API1, "session_resume: %p\n", sess));
+    TRACE((TC_UI, TT_API1, "session_resume: %p", sess));
 
     // Give focus back to the engine
     if (!srvWFEngSetInformation(sess->hWFE, WFESetFocus, NULL, 0))
 	sess->HaveFocus = FALSE;
 }
 
-void session_run(const char *ica_file)
+void session_run(const char *file, int file_is_url)
 {
     Session sess;
 
-    TRACE((TC_UI, TT_API1, "session_run: %s\n", ica_file));
+    TRACE((TC_UI, TT_API1, "session_run: %s url %d", file, file_is_url));
 
-    sess = session_open(ica_file);
+    if (file_is_url)
+	sess = session_open_url(file);
+    else
+	sess = session_open(file);
 
-    TRACE((TC_UI, TT_API1, "session_run: entering poll\n"));
+    TRACE((TC_UI, TT_API1, "session_run: entering poll"));
 
     while (sess->HaveFocus && !sess->Connected)
 	session_poll(sess);
 
-    TRACE((TC_UI, TT_API1, "session_run: entering close\n"));
+    TRACE((TC_UI, TT_API1, "session_run: entering close"));
 
     session_close(sess);
 
-    TRACE((TC_UI, TT_API1, "session_run: going for cleanup Focus %d\n", sess->HaveFocus));
+    TRACE((TC_UI, TT_API1, "session_run: going for cleanup Focus %d", sess->HaveFocus));
 
     // allow cleanup
     while (session_poll(sess))
@@ -777,37 +849,55 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 	PCHAR pName;
 	PLIBPROCEDURE fnLoad;
 	PPLIBPROCEDURE fnTable;
-    } modules[8] =
+    } modules[] =
     {
 	{ "tdtcpro",	(PLIBPROCEDURE)TdLoad/*, TdTcpRODeviceProcedures */ },
 	{ "pdcrypt",	(PLIBPROCEDURE)PdLoad/*, PdCryptDeviceProcedures */ },
 	{ "pdrfram",	(PLIBPROCEDURE)PdLoad/*, PdRFrameDeviceProcedures */ },
-//	{ "pdmodem",	(PLIBPROCEDURE)PdLoad, PdModemDeviceProcedures },
+	{ "pdmodem",	(PLIBPROCEDURE)PdLoad/*, PdModemDeviceProcedures */ },
 	{ "wdica30",	(PLIBPROCEDURE)WdLoad/*, WdICA30EmulProcedures */ },
 	{ "wdtty",	(PLIBPROCEDURE)WdLoad/*, WdTTYEmulProcedures */ },
-	{ "vdtw30",	(PLIBPROCEDURE)VdLoad/*, VdTW31DriverProcedures */ },
 	{ "nrtcpro",	(PLIBPROCEDURE)NrLoad, NULL },
-//	{ "neica",	(PLIBPROCEDURE)NeLoad, NeICADeviceProcedures },
-//	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
+#ifdef INCL_ENUM
+	{ "neica",	(PLIBPROCEDURE)NeLoad/*, NeICADeviceProcedures */ },
+#else
+	{ "neica",	0 },
+#endif
+	{ "vdtw30",	(PLIBPROCEDURE)VdLoad/*, VdTW31DriverProcedures */ },
+	{ "vdcpm30",	(PLIBPROCEDURE)VdLoad/*, VdCpmDriverProcedures */ },
+	{ "vdspl",	(PLIBPROCEDURE)VdLoad/*, VdSplDriverProcedures */ },
+#ifdef INCL_SCRIPT
+	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
+#endif
 	{ NULL,		0,	NULL }
     }, *mp;
 
-    TRACE((TC_UI, TT_API1, "ModuleLookup: '%s'\n", pName));
+    TRACE((TC_UI, TT_API1, "ModuleLookup: '%s'", pName));
 
     if (!inited)
     {
 	modules[0].fnTable = TdTcpRODeviceProcedures;
 	modules[1].fnTable = PdCryptDeviceProcedures;
 	modules[2].fnTable = PdRFrameDeviceProcedures;
-	modules[3].fnTable = WdICA30EmulProcedures;
-	modules[4].fnTable = WdTTYEmulProcedures;
-	modules[5].fnTable = VdTW31DriverProcedures;
+#ifdef INCL_MODEM
+	modules[3].fnTable = PdModemDeviceProcedures;
+#endif
+	modules[4].fnTable = WdICA30EmulProcedures;
+	modules[5].fnTable = WdTTYEmulProcedures;
+#ifdef INCL_ENUM
+	modules[7].fnTable = NeICADeviceProcedures;
+#endif
+	modules[8].fnTable = VdTW31DriverProcedures;
+#ifdef INCL_PRINTER
+	modules[9].fnTable = VdCpmDriverProcedures;
+	modules[10].fnTable = VdSplDriverProcedures;
+#endif
 	inited = TRUE;
     }
     
     for (mp = modules; mp->pName; mp++)
     {
-	if (strcmpi(mp->pName, pName) == 0)
+	if (mp->fnLoad && strcmpi(mp->pName, pName) == 0)
 	{
 	    if (pfnLoad)
 		*pfnLoad = mp->fnLoad;
@@ -822,4 +912,3 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 }
 
 /* --------------------------------------------------------------------------------------------- */
-

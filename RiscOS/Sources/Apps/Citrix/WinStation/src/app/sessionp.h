@@ -17,6 +17,7 @@ struct session_
     char szClientType[15];
 
     char *gszICAFile;
+    int tempICAFile;
 
     HANDLE hWFE;
 

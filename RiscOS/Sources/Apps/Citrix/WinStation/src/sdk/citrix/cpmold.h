@@ -51,7 +51,7 @@
  * problems to RISC architectures with alignment restrictions.
  */
 
-#pragma pack(1)
+//#pragma pack(1)
 
 /*
  * General structures and formats used by the printer wire protocol.
@@ -97,6 +97,8 @@ typedef struct _CPM_OPEN_REQUEST_REPLY {
 
 } CPM_OPEN_REQUEST_REPLY, *PCPM_OPEN_REQUEST_REPLY;
 #define CPM_TYPE_OPEN_REPLY CPM_REPLY_BASE
+
+#define sizeof_CPM_OPEN_REQUEST_REPLY	6
 
 /*
  * Close the given device releasing the Context value.
@@ -173,6 +175,8 @@ typedef struct _CPM_WRITE1_REQUEST {
 } CPM_WRITE1_REQUEST, *PCPM_WRITE1_REQUEST;
 #define CPM_TYPE_WRITE1 CPM_TYPE_READ+1
 
+#define sizeof_CPM_WRITE1_REQUEST	2
+
 /*
  * Reply from a CPM_WRITE1_REQUEST
  *
@@ -219,6 +223,8 @@ typedef struct _CPM_GETSTATUS_REQUEST {
 
 } CPM_GETSTATUS_REQUEST, *PCPM_GETSTATUS_REQUEST;
 #define CPM_TYPE_GETSTATUS CPM_TYPE_WRITE2+1
+
+#define sizeof_CPM_GETSTATUS_REQUEST	2
 
 /*
  * Reply from a CPM_GETSTATUS_REQUEST
@@ -316,11 +322,13 @@ typedef struct _CPM_CONNECT_REQUEST {
 } CPM_CONNECT_REQUEST, *PCPM_CONNECT_REQUEST;
 #define CPM_TYPE_CONNECT CPM_TYPE_SETSTATUS+1
 
+#define sizeof_CPM_CONNECT_REQUEST	10
+
 /*
  * This is the maximum packet size define used by transport drivers
  * for calculating buffer space and timeout parameters.
  */
-#define CPMDL_MAX_PACKET_SIZE (sizeof(CPM_CONNECT_REQUEST))
+#define CPMDL_MAX_PACKET_SIZE (sizeof_CPM_CONNECT_REQUEST)
 
 /*
  * This is the defined maximum number of requests that the HOST
@@ -328,7 +336,7 @@ typedef struct _CPM_CONNECT_REQUEST {
  */
 #define CPMDL_MAXREQUEST_COUNT  4
 
-#pragma pack()
+//#pragma pack()
 
 #endif // _CPMOLD_
 

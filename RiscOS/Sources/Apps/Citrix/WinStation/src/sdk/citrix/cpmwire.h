@@ -51,7 +51,7 @@
  * problems to RISC architectures with alignment restrictions.
  */
 
-#pragma pack(1)
+//#pragma pack(1)
 
 /*
  * General structures and formats used by the printer wire protocol.
@@ -315,6 +315,8 @@ typedef struct _ENUMSTRUCT {
     USHORT ExtraSize;      // Size of extra information if supplied following Comment
 } ENUMSTRUCT, *PENUMSTRUCT;
 
+#define sizeof_ENUMSTRUCT	10
+
 
 typedef struct _CPM_ENUMPRINTER_REQUEST {
     UCHAR  h_type;
@@ -325,6 +327,8 @@ typedef struct _CPM_ENUMPRINTER_REQUEST {
 
 } CPM_ENUMPRINTER_REQUEST, *PCPM_ENUMPRINTER_REQUEST;
 #define CPM_TYPE_ENUMPRINTER CPM_REQUEST_BASE // 64
+
+#define sizeof_CPM_ENUMPRINTER_REQUEST	6
 
 /*
  * Reply from a CPM_ENUMPRINTER_REQUEST
@@ -374,6 +378,7 @@ typedef struct _CPM_OPENPRINTER_REQUEST_REPLY {
 } CPM_OPENPRINTER_REQUEST_REPLY, *PCPM_OPENPRINTER_REQUEST_REPLY;
 #define CPM_TYPE_OPENPRINTER_REPLY CPM_TYPE_ENUMPRINTER_REPLY+1 // 193
 
+#define sizeof_CPM_OPENPRINTER_REQUEST_REPLY	6
 
 /*
  * Close the given device releasing the Context value.
@@ -420,6 +425,7 @@ typedef struct _CPM_READPRINTER_REQUEST {
 } CPM_READPRINTER_REQUEST, *PCPM_READPRINTER_REQUEST;
 #define CPM_TYPE_READPRINTER CPM_TYPE_CLOSEPRINTER+1 // 67
 
+#define sizeof_CPM_READPRINTER_REQUEST	6
 
 /*
  * Reply from a CPM_READPRINTER_REQUEST
@@ -435,6 +441,8 @@ typedef struct _CPM_READPRINTER_REQUEST_REPLY {
     USHORT AmountRead;  // Amount read
 } CPM_READPRINTER_REQUEST_REPLY, *PCPM_READPRINTER_REQUEST_REPLY;
 #define CPM_TYPE_READPRINTER_REPLY CPM_TYPE_CLOSEPRINTER_REPLY+1 // 195
+
+#define sizeof_CPM_READPRINTER_REQUEST_REPLY	6
 
 /*
  * Client-Server printer write request.
@@ -453,6 +461,8 @@ typedef struct _CPM_WRITEPRINTER_REQUEST {
 } CPM_WRITEPRINTER_REQUEST, *PCPM_WRITEPRINTER_REQUEST;
 #define CPM_TYPE_WRITEPRINTER CPM_TYPE_READPRINTER+1 // 68
 
+#define sizeof_CPM_WRITEPRINTER_REQUEST	6
+
 /*
  * Reply from a CPM_WRITE_PRINTER_REQUEST
  */
@@ -464,6 +474,8 @@ typedef struct _CPM_WRITEPRINTER_REQUEST_REPLY {
     USHORT AmountWrote;   // Amount wrote
 } CPM_WRITEPRINTER_REQUEST_REPLY, *PCPM_WRITEPRINTER_REQUEST_REPLY;
 #define CPM_TYPE_WRITEPRINTER_REPLY CPM_TYPE_READPRINTER_REPLY+1
+
+#define sizeof_CPM_WRITEPRINTER_REQUEST_REPLY	6
 
 /*
  * Get printer status
@@ -478,6 +490,8 @@ typedef struct _CPM_GETPRINTER_REQUEST {
 
 } CPM_GETPRINTER_REQUEST, *PCPM_GETPRINTER_REQUEST;
 #define CPM_TYPE_GETPRINTER CPM_TYPE_WRITEPRINTER+1 // 69
+
+#define sizeof_CPM_GETPRINTER_REQUEST	10
 
 /*
  * Reply from a CPM_GETPRINTER_REQUEST
@@ -499,6 +513,8 @@ typedef struct _CPM_GETPRINTER_REQUEST_REPLY {
 } CPM_GETPRINTER_REQUEST_REPLY, *PCPM_GETPRINTER_REQUEST_REPLY;
 #define CPM_TYPE_GETPRINTER_REPLY CPM_TYPE_WRITEPRINTER_REPLY+1
 
+#define sizeof_CPM_GETPRINTER_REQUEST_REPLY	14
+
 /*
  * Set Printer Status
  */
@@ -513,6 +529,8 @@ typedef struct _CPM_SETPRINTER_REQUEST {
 
 } CPM_SETPRINTER_REQUEST, *PCPM_SETPRINTER_REQUEST;
 #define CPM_TYPE_SETPRINTER CPM_TYPE_GETPRINTER+1 // 70
+
+#define sizeof_SETPRINTER_REQUEST	14
 
 /*
  * Reply from a CPM_SETPRINTER_REQUEST
@@ -580,6 +598,8 @@ typedef struct _CPM_CONNECT2_REQUEST {
 } CPM_CONNECT2_REQUEST, *PCPM_CONNECT2_REQUEST;
 #define CPM_TYPE_CONNECT2 CPM_TYPE_ASYNC_STATUS_REQUEST+1
 
+#define sizeof_CPM_CONNECT2_REQUEST	10
+
 // Reserve this entry
 #define CPM_TYPE_CONNECT2_REPLY CPM_TYPE_ASYNC_STATUS+1 // 72
 
@@ -595,7 +615,7 @@ typedef struct _CPM_CONNECT2_REQUEST {
  */
 #define CPM_MAXREQUEST_COUNT  4
 
-#pragma pack()
+//#pragma pack()
 
 #endif // _CPMWIRE_
 
