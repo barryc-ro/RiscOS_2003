@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #ifdef __riscos
 #include "swis.h"
@@ -9,19 +10,26 @@
 /* Read word from (non-word-aligned) char *c */
 #define GETWORD(c) (*(c) + (*((c)+1)<<8) + (*((c)+2)<<16) + (*((c)+3)<<3))
 
-void getimage(char name[], char **image, int *ilen);
-void readimage(char *image, int ilen);
+void getimage(char **image, int *ilenptr);
+void readimage(int ilen);
 void readexp(char *image, char *romtype);
-void reados(char *image, int ilen);
-char *modinfo(char *base, char *info, int *total_size);
+void reados(int imageSize);
+char *modinfo(char *base, char *info, int *total_size, int size);
 char *memfind(char *mem, char *find);
 #ifdef __riscos
 void hourglass(int state);
 #endif
+fpos_t *strfind(char *find);
+int fsize(char *fileName);
+int findResourceFSBlockSize(void);
+int fastFindResourceFSBlockSize(void);
 
-int flag_csv = 0;
-int flag_loc = 0;
+static int flag_csv = 0;
+static int flag_loc = 0;
+static bool flag_ressize = false;
 char q = 34;
+
+FILE *imageFile;
 
 /*
  * tidy things up before exit
@@ -36,11 +44,10 @@ doexit(void)
 
 int main(int argc, char *argv[])
 {
-  char *iptr;
   int ilen;
-  static char id[] = "ROM information lister. V1.05. © Acorn 1996/1997.";
+  static char id[] = "ROM information lister. V1.06. © Acorn 1996-2000.";
   int i;
-  int ifirst =0; /* first none flag argument on command line */
+  int ifirst = 0; /* first none flag argument on command line */
 
   atexit(doexit);
 
@@ -52,24 +59,50 @@ int main(int argc, char *argv[])
     for (i=1; i<argc; i++)
     {
       if (!strcmp(argv[i],"-csv")||!strcmp(argv[i],"-csv"))
+      {
         flag_csv = 1;
+      }
+      else if (!strcmp(argv[i],"-ressize")||!strcmp(argv[i],"ressize"))
+      {
+        flag_ressize = true;
+      }
       else if (!strcmp(argv[i], "-loc")||!strcmp(argv[i], "loc"))
+      {
         flag_loc = 1;
+      }
       else if (*argv[i]!='-' && ifirst==0)
         ifirst=i;
     }
 
+    printf("Generating ROM contents (%s)\n", id);
+
     if (ifirst>0)
     {
+
 #ifdef __riscos
       hourglass(1);
 #endif
-      getimage(argv[ifirst], &iptr, &ilen);
-      readimage(iptr, ilen);
+
+      /* Open ROM image file */
+      if ((imageFile = fopen(argv[ifirst], "rb"))!=NULL) {
+        /* Calculate size of image file */
+        ilen = fsize(argv[ifirst]);
+
+        readimage(ilen);
+
+        /* Tidy up */
+        fclose(imageFile);
+      }
+      else {
+        printf("Cannot open image file.\n");
+        return EXIT_FAILURE;
+      }
+
 #ifdef __riscos
       hourglass(0);
 #endif
-      return EXIT_SUCCESS;
+
+return EXIT_SUCCESS;
     }
   }
 
@@ -78,7 +111,7 @@ int main(int argc, char *argv[])
    */
   fprintf(stderr, "%s\n\nGenerates a listing of the contents of an OS/Extension/Expansion ROM image.\n\n",id);
   fprintf(stderr, "Syntax:\tROMinfo <flags> <ROM image>\n\n");
-  fprintf(stderr, "Flags:\n  -csv Output details in CSV format\n  -loc Output start positions of module in ROM\n");
+  fprintf(stderr, "Flags:\n  -csv Output details in CSV format\n  -loc Output start positions of module in ROM\n  -ressize Output the size of the resourcefs area.\n");
   exit(EXIT_FAILURE);
 }
 
@@ -97,74 +130,62 @@ hourglass(int state)
 }
 #endif
 
-void getimage(char name[], char **image, int *ilenptr)
+void getimage(char **image, int *ilenptr)
 {
-  FILE *fptr;
 
-  if ((fptr = fopen(name, "rb")) == NULL)
-  {
-    fprintf(stderr, "Can't open %s\n", name);
-    exit(EXIT_FAILURE);
-  }
+  // Find size of image
+  fseek(imageFile, 0L, SEEK_END);
+  *ilenptr = (size_t) ftell(imageFile);
+  fseek(imageFile, 0L, SEEK_SET);
 
-  /* Find size of image */
-  fseek(fptr, 0L, SEEK_END);
-  *ilenptr = (size_t) ftell(fptr);
-  fseek(fptr, 0L, SEEK_SET);
-
-  /* Alloc & read entire image */
+  // Alloc & read entire image
   if ((*image = malloc(*ilenptr)) == NULL)
   {
     fprintf(stderr, "Can't allocate %dK for image\n", (*ilenptr)/1024);
     exit(EXIT_FAILURE);
   }
-  if (fread(*image, 1, *ilenptr, fptr) != *ilenptr)
+  if (fread(*image, 1, *ilenptr, imageFile) != *ilenptr)
   {
-    fprintf(stderr, "Can't read %s\n", name);
+    fprintf(stderr, "Can't read image file\n");
     exit(EXIT_FAILURE);
   }
 
-  fclose(fptr);
+  fclose(imageFile);
 }
 
 
 /*
  * Reads the image and prints blurb about image type etc.
  */
-void readimage(char *image, int ilen)
-{
-  if (!flag_csv)
-  {
-    printf("Image size:     %dK\n", ilen/1024);
-    printf("Image type:     ");
+void readimage(int ilen) {
+  char fileData = 0, *image;
+
+  if (!flag_csv) {
+    printf("Image size:    %d\n", ilen / 1024);
+    printf("Image type:    ");
   }
-  /* Look at header to determine image type */
-  if (*image & 0x80)
-  {
+
+  fileData = fgetc(imageFile);
+  if (fileData == 0x80) {
     printf("Non-conformant expansion card\n");
   }
-  else if (*image == 0x10)
-  {
-    if (!flag_csv)
+  else if (fileData & 0x10) {
+    if (!flag_csv) {
       printf("RISC OS\n");
-    reados(image,ilen);
+    }
+    reados(ilen);
   }
-  else if (*image & 0x38)
-  {
-    printf("Simple type &%X expansion card\n", (*image & 0x38) >> 3);
-  }
-  else if (*(image+3) + (*(image+4) << 8) == 0x87)
-  {
+  else if (fileData & 0x38) {
     printf("Extension ROM\n");
-    readexp(image, "Extn ROM  1");
+    getimage(&image, &ilen);
+    readexp(image, "Extn ROM 1");
   }
-  else
-  {
-    printf("Expansion card\n");
-    readexp(image, "Podule 1   ");
+  else {
+    printf("Extension card\n");
+    getimage(&image, &ilen);
+    readexp(image, "Podule 1");
   }
 }
-
 
 /*
  * Reads an expansion/extension image header and prints blurb about it.
@@ -206,7 +227,7 @@ void readexp(char *image, char *romtype)
     case 0x81:
       if (!(modno++))
         printf("\nNo. Position    Module Name             Description     Version Date             Size     Comment\n");
-      printf("%3d %s %s\n", modno, romtype, modinfo(cptr, info, &size));
+    printf("%3d %s %s\n", modno, romtype, modinfo(cptr, info, &size, 0));
       break;
     case 0x82:
       printf("BBC ROM\n");
@@ -255,78 +276,189 @@ void readexp(char *image, char *romtype)
   }
 }
 
-
 /*
- * Reads an os image header.
- * Returns pointer to the first module in image, or NULL if none.
+ * Reads an OS image file and prints out corresponding information
  */
-void reados(char *image,int rom_size)
-{
-  char *dptr, *p;
+void reados(int imageSize) {
+  fpos_t *startPos;
+  static char  *p, *dptr, *block;
   char info[256];
-  int modno = 0;
-  int total_size = 0;
+  int offset = 0, *size, modno = 0, totalsize = 0, resBlockSize = 0;
+  long modOffset = 0;
 
-  /* Find the title string of the first module */
-  p = memfind(image, "UtilityModule");
+  /*
+   * Find the title string of the first module
+   */
+  startPos = strfind("UtilityModule");
+  fsetpos(imageFile, startPos);
 
-  /* Search backwards for the pointer to it at offset 0x10 from module base */
-  dptr = (char *) (((int) p-0x14) & ~3 );	/* round down to word */
-  while (*((int *) (dptr+0x10)) != p-dptr)
-    dptr -= 4;
-
-  /* Point to size field before module base */
-  dptr -= 4;
-
-  if (flag_csv)
+  if ((block = malloc(510)) != NULL)
   {
-    printf("\n\"Number\",\"Module name\",\"Revision\",\"Size\"\n");
+     /*
+      * Grab data from file from start of title string back to (way) past
+      * module header
+      */
+     fseek(imageFile, (497 * -1), SEEK_CUR);
+     fread(block, 1, 510, imageFile);
 
-    while (*((int *) dptr) != 0)
-    {
-      printf("\"%d\",%s\n",++modno,modinfo(dptr+4, info,&total_size));
-      dptr += *((int *) dptr);
-    }
+     /*
+      * Point p at 'U' in block of memory
+      */
+     p = (block + 497);
+
+     dptr = (char *) (((int) p-0x14) & ~3);
+     /*
+      * Search back through block until p points at a position 0x10
+      * back from module title i.e. the title block pointer in the
+      * module header
+      */
+     while (*((int *) (dptr + 0x10)) != p-dptr) {
+       dptr -= 4;
+     }
+
+     /*
+      * Set file pointer back to 'U' in file
+      */
+     fsetpos(imageFile, startPos);
+     /*
+      * Calculate offset of module size field from title block
+      */
+     offset = (p - dptr + 4);
+     /*
+      * Set file pointer to module size field
+      */
+     fseek(imageFile, (long)(offset * -1), SEEK_CUR);
+
+     if (flag_csv) {
+       printf("\n\"Number\",\"Module name\",\"Revision\",\"Size\"\n");
+
+       if ((size = malloc(1))!=NULL) {
+         /*
+          * Grab module size from file, file pointer now at module base
+          * NOTE: size includes size of module + size of size field even
+          * though it comes BEFORE the module base.
+          */
+         fread(size, 1, 4, imageFile);
+
+         while (*size != 0) {
+           free(block);
+
+           if ((block = malloc(*size))!=NULL) {
+             /*
+              * Grab module from file to memory block, file pointer now at
+              * next module size field
+              */
+             fread(block, 1, (*size - 4), imageFile);
+             printf("\"%d\",%s\n", ++modno, modinfo(block, info, &totalsize, *size));
+           }
+           else {
+             printf("Unable to allocate memory. 3\n");
+           }
+
+           /*
+            * Read next size field
+            */
+           fread(size, 1, 4, imageFile);
+         }
+
+         free(size);
+       }
+       else {
+         printf("Unable to allocate memory. 2\n");
+       }
+
+     }  /* END OF FLAG_CSV */
+     else
+       if (flag_loc) {
+
+         printf("\nNo. Position   Location ByteSize Module Name             Description\n");
+
+         modOffset = ftell(imageFile);
+
+         if ((size = malloc(1))!=NULL)
+         {
+           fread(size, 1, 4, imageFile);
+
+           while (*size != 0) {
+             free(block);
+
+             if ((block = malloc(*size))!=NULL) {
+               fread(block, 1, (*size - 4), imageFile);
+               printf("%3d System ROM %8ld %s\n", ++modno, modOffset, modinfo(block, info, &totalsize, *size));
+             }
+             else {
+               printf("Unable to allocate memory. 3\n");
+             }
+
+             modOffset = ftell(imageFile);
+             fread(size, 1, 4, imageFile);
+           }
+
+         printf("Total ROM size %dk\n", imageSize/1024);
+         printf("Space utilised %dk (%d%%)\n",totalsize/1024, totalsize*100/imageSize);
+         if (flag_ressize)
+         {
+           resBlockSize = fastFindResourceFSBlockSize();
+           printf("ResourceFS block size %dk (%d%%)\n", resBlockSize/1024, resBlockSize*100/imageSize);
+         }
+         free(size);
+         }
+         else {
+           printf("Unable to allocate memory. 2\n");
+         }
+
+       }  /* END OF FLAG_LOC */
+     else {
+       printf("\nNo. Position    Module Name             Description     Version Date             Size      Comment\n");
+
+       if ((size = malloc(1))!=NULL) {
+         fread(size, 1, 4, imageFile);
+
+         while (*size != 0) {
+           free(block);
+
+           if ((block = malloc(*size))!=NULL) {
+             fread(block, 1, (*size - 4), imageFile);
+             printf("%3d System ROM  %s\n", ++modno, modinfo(block, info, &totalsize, *size));
+           }
+           else {
+             printf("Unable to allocate memory. 3\n");
+           }
+
+           fread(size, 1, 4, imageFile);
+         }
+
+       printf("Total ROM size %dk\n", imageSize/1024);
+       printf("Space utilised %dk (%d%%)\n",totalsize/1024, totalsize*100/imageSize);
+       if (flag_ressize)
+       {
+         resBlockSize = fastFindResourceFSBlockSize();
+         printf("ResourceFS block size %dk (%d%%)\n", resBlockSize/1024, resBlockSize*100/imageSize);
+       }
+       free(size);
+       }
+       else {
+         printf("Unable to allocate memory. 2\n");
+       }
+     } /* END OF NO FLAG */
+     free(block);
   }
-  else
-    if (flag_loc) {
-     printf("\nNo. Position   Location ByteSize Module Name             Description\n");
-
-    while (*((int *) dptr) != 0)
-    {
-      printf("%3d System ROM %p %s\n", ++modno, dptr+4, modinfo(dptr+4, info,&total_size));
-      dptr += *((int *) dptr);
-    }
-    printf("Total ROM size %dk\n",rom_size/1024);
-    printf("Space utilised %dk (%d%%)\n",total_size/1024,
-    		  total_size*100/rom_size);
-    }
-  else
-  {
-    printf("\nNo. Position    Module Name             Description     Version Date             Size      Comment\n");
-
-    while (*((int *) dptr) != 0)
-    {
-      printf("%3d System ROM  %s\n", ++modno, modinfo(dptr+4, info,&total_size));
-      dptr += *((int *) dptr);
-    }
-    printf("Total ROM size %dk\n",rom_size/1024);
-    printf("Space utilised %dk (%d%%)\n",total_size/1024,
-    		  total_size*100/rom_size);
+  else {
+    printf("Unable to allocate memory. 1\n");
   }
 }
+
+
 
 
 /*
  * Fills supplied info buffer with description of module pointed to by base.
  * Note that base may not be word-aligned.
  */
-char *modinfo(char *base, char *info, int *total_size)
+char *modinfo(char *base, char *info, int *total_size, int size)
 {
   char *title, *desc, *ver, *p;
-  int size;
 
-  size = *(int*)(base-4);
   (*total_size)+=size;
 
   /* Remove tabs from description, version and date fields */
@@ -353,7 +485,6 @@ char *modinfo(char *base, char *info, int *total_size)
     while (*p != '(')
       p++;
     *(p-1) = '\0';
-//    sprintf(info,"%-24s%-16s%-8.4s%-15.13s  %d  %s" , title, desc, ver, ver+5, size, ver+18);
     sprintf(info, "%8d %-24s%-16s", size, title, desc);
   }
   else
@@ -362,6 +493,9 @@ char *modinfo(char *base, char *info, int *total_size)
   }
   return info;
 }
+
+
+
 
 /*
  * Find an existing string in a block of memory. Returns pointer to string.
@@ -380,4 +514,117 @@ char *memfind(char *mem, char *find)
 
     c++;
   } while (1);
+}
+
+/*
+ * Find an existing string in a file, returns file position of 1st char
+ * of string
+ */
+fpos_t *strfind(char *find) {
+  static fpos_t *filePos;
+  unsigned int length = 0, found = 0;
+  char *testString;
+  length = strlen(find);
+  if ((testString = malloc(length))!=NULL)
+  {
+    while (!found) {
+      fgetpos(imageFile, filePos);
+      fread(testString, 1, length, imageFile);
+      if (!strncmp(testString, find, length)) {
+        found = 1;
+      }
+      else {
+        found = 0;
+      }
+     fseek(imageFile, (long)((length - 1) * -1), SEEK_CUR);
+    }
+
+  free(testString);
+  return filePos;
+  }
+  else {
+    printf("Unable to allocate memory\n");
+  }
+  return 0;
+}
+
+/*
+ * Finds size of file, returns size in bytes
+ */
+int fsize(char *fileName) {
+  _kernel_swi_regs regs;
+  unsigned int size = 0;
+
+  regs.r[0] = 23;
+  regs.r[1] = (int)fileName;
+  _kernel_swi(OS_File, &regs, &regs);
+
+  size = regs.r[4];
+
+  return size;
+}
+
+/*
+ * Calculates size of ResourceFS block placed after modules in ROM image
+ * It does this by locating the file pointer before the checksum and
+ * searching byte-by-byte until it finds something that is not 0xFF.  It
+ * is excruciatingly slooow...  (Why can't I make the HDD spin the other
+ * way *grin?*)
+ */
+int findResourceFSBlockSize() {
+  long endOfModules, endOfResourceFS;
+  int resourceFSSize = 0;
+
+  /* Set file pointer back to end of modules */
+  fseek(imageFile, -4, SEEK_CUR);
+
+  endOfModules = ftell(imageFile);
+
+  /* Jump to beginning of checksum at end of file (checksum 20B long)*/
+  fseek(imageFile, -32, SEEK_END);
+
+  /* Walk back through file to end of ResourceFS block */
+  /* Should reverse the HDD here... */
+  while (fgetc(imageFile) == 0xFF) {
+    fseek(imageFile, -2, SEEK_CUR);
+  }
+
+  endOfResourceFS = ftell(imageFile);
+
+  resourceFSSize = (int)(endOfResourceFS - endOfModules);
+
+  return resourceFSSize;
+}
+
+/*
+ * This one will be marginally faster than the first one but may be less
+ * reliable as if there is an 0xFF between where the search overshoots (
+ * as it undoubtably will) and the end of the ResourceFS block this will
+ * get picked up as the end of the block instead.  I don't know how much
+ * of a worry this is.  If accuracy is a problem then use the function above
+ */
+int fastFindResourceFSBlockSize() {
+  long endOfModules, endOfResourceFS;
+  int resourceFSSize = 0;
+
+  /* Set file pointer back to end of modules */
+  fseek(imageFile, -4, SEEK_CUR);
+
+  endOfModules = ftell(imageFile);
+
+  /* Jump to beginning of checksum at end of file (checksum 20B long)*/
+  fseek(imageFile, -32, SEEK_END);
+
+  /* Walk back through file to end of ResourceFS block */
+  while (fgetc(imageFile) == 0xFF) {
+    fseek(imageFile, -65, SEEK_CUR);
+  }
+  while (fgetc(imageFile) != 0xFF) {
+  }
+
+  endOfResourceFS = ftell(imageFile);
+
+  resourceFSSize = (int)(endOfResourceFS - endOfModules);
+
+  return resourceFSSize;
 }

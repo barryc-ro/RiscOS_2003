@@ -12,6 +12,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 ROMinfoRESS = squash
+STRIP   = stripdepnd
 
 AFLAGS  = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS}
@@ -52,7 +53,7 @@ OBJS = o.ROMinfo
 # Build for application:
 #
 ROMinfo:	${OBJS} ${CLIB} dirs
-	${LD} -o $@ ${OBJS} ${CLIB}
+		${LD} -o $@ ${OBJS} ${CLIB}
 
 dirs:
         ${MKDIR} o
@@ -66,8 +67,7 @@ all:	${APPLICATION}
 clean:
         ${RM} ${TARGET}
         ${WIPE} ${OBJS} ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${STRIP}
 
 # Dynamic dependencies:
-o.ROMinfo:	c.ROMinfo
-o.ROMinfo:	C:h.swis
-o.ROMinfo:	C:h.kernel
