@@ -1,21 +1,45 @@
-#Makefile for mt library
+# makefile for Medianet modules
+#
+# debug directives:
+#
+# NDEBUG - should disable ALL debugging when defined
+#
 
-# Toolflags:
-CCflags = -c -depend !Depend -IC:,mx_pri:,mx_pub:,mx_inc:,rts: -throwback  -DRISCOS -DSYSTEM -Zm -Wp
+TARGET=lib.mtlib
 
-# Final targets:
-@.lib.libmt: @.o.mtcctx @.o.mtrgx @.o.mtsp @.o.mtl
+VPATH=@ sosd.riscos
 
-# Static dependencies:
+LIBFILES =
+LINKFLAGS=-rmf
 
-@.o.mtcctx:   @.c.mtcctx
-        cc $(ccflags) -o @.o.mtcctx @.c.mtcctx 
-@.o.mtl:   @.c.mtl
-        cc $(ccflags) -o @.o.mtl @.c.mtl 
-@.o.mtrgx:   @.c.mtrgx
-        cc $(ccflags) -o @.o.mtrgx @.c.mtrgx 
-@.o.mtsp:   @.c.mtsp
-        cc $(ccflags) -o @.o.mtsp @.c.mtsp 
+CMHGFLAGS=-p
+
+
+CC = cc
+INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
+CMHG=cmhg
+OBJASM=objasm
+
+LIB=libfile
+LIBFLAGS=-c -o
+
+CFLAGS = -c -depend !Depend -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
+
+
+
+.SUFFIXES:	.o .c .cmhg
+.cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
+.c.o:;		$(CC) $(CFLAGS) $<
+.s.o:;		$(OBJASM) -from $< -to $@
+
+OBJS=o.mtcctx o.mtrgx o.mtsp o.mtl
+
+lib.mtlib:  $(OBJS)
+         $(LIB) $(LIBFLAGS) lib.mtlib $(OBJS)
+         @echo ***************************************
+         @echo * MT library constructed successfully *
+         @echo ***************************************
+
 
 # Dynamic dependencies:
 o.mtcctx:	c.mtcctx

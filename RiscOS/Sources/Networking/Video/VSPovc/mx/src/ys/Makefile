@@ -1,95 +1,80 @@
-#Makefile for libys library
+# makefile for Medianet modules
+#
+# debug directives:
+#
+# NDEBUG - should disable ALL debugging when defined
+#
 
-# Toolflags:
-CCflags = -c -depend !Depend -IC:,mx_pri:,mx_pub:,mx_inc:,rts: -throwback  -DRISCOS -DSYSTEM -Zm -Wp
+TARGET=lib.yslib
 
-# Final targets:
-@.lib.libys:  @.o.ys @.o.ysb8 @.o.ysc @.o.yscksm @.o.yse \
-            @.o.ysfe @.o.ysfmt @.o.yshsh \
-            @.o.ysid @.o.yslst @.o.ysm @.o.ysmdmp \
-            @.o.ysl @.o.yslog @.o.ysmsg \
-            @.o.ysr @.o.ysrand @.o.ysrarg \
-            @.o.ysv @.o.ystm @.o.ysthr \
-            @.o.ysrgx @.o.ysrprs @.o.yssp @.o.ysstr \
-            @.o.ysver @.o.ysx @.o.ysbv @.o.ysfo \
-            @.o.sysfp @.o.sysrld @.o.sysi @.o.systhr
-            libfile -c -o @.lib.libys o.*
+VPATH=@ sosd.riscos
 
-# Static dependencies:
+LIBFILES =
+LINKFLAGS=-rmf
 
-@.o.ys:   @.c.ys
-        cc $(ccflags) -o @.o.ys @.c.ys 
-@.o.ysb8:   @.c.ysb8
-        cc $(ccflags) -o @.o.ysb8 @.c.ysb8 
-@.o.ysc:   @.c.ysc 
-        cc $(ccflags) -o @.o.ysc @.c.ysc 
-@.o.ysbv:   @.c.ysbv 
-        cc $(ccflags) -o @.o.ysbv @.c.ysbv 
-@.o.ysfo:   @.c.ysfo 
-        cc $(ccflags) -o @.o.ysfo @.c.ysfo 
-@.o.yscksm:   @.c.yscksm
-        cc $(ccflags) -o @.o.yscksm @.c.yscksm 
-@.o.yse:   @.c.yse
-        cc $(ccflags) -o @.o.yse @.c.yse             
-@.o.ysfe:   @.c.ysfe
-        cc $(ccflags) -o @.o.ysfe @.c.ysfe 
-@.o.ysfmt:   @.c.ysfmt 
-        cc $(ccflags) -o @.o.ysfmt @.c.ysfmt 
-@.o.yshsh:   @.c.yshsh
-        cc $(ccflags) -o @.o.yshsh @.c.yshsh             
-@.o.ysid:   @.c.ysid
-        cc $(ccflags) -o @.o.ysid @.c.ysid 
-@.o.ysl:   @.c.ysl
-        cc $(ccflags) -o @.o.ysl @.c.ysl 
-@.o.yslog:   @.c.yslog
-        cc $(ccflags) -o @.o.yslog @.c.yslog
-@.o.yslst:   @.c.yslst 
-        cc $(ccflags) -o @.o.yslst @.c.yslst 
-@.o.ysm:   @.c.ysm 
-        cc $(ccflags) -o @.o.ysm @.c.ysm 
-@.o.ysmdmp:   @.c.ysmdmp
-        cc $(ccflags) -o @.o.ysmdmp @.c.ysmdmp             
-@.o.ysmsg:   @.c.ysmsg
-        cc $(ccflags) -o @.o.ysmsg @.c.ysmsg 
-@.o.ysmsgc:   @.c.ysmsgc
-        cc $(ccflags) -o @.o.ysmsgc @.c.ysmsgc
-@.o.ysr:   @.c.ysr 
-        cc $(ccflags) -o @.o.ysr @.c.ysr 
-@.o.ysrand:   @.c.ysrand 
-        cc $(ccflags) -o @.o.ysrand @.c.ysrand 
-@.o.ysrarg:   @.c.ysrarg
-        cc $(ccflags) -o @.o.ysrarg @.c.ysrarg             
-@.o.ysrgx:   @.c.ysrgx 
-        cc $(ccflags) -o @.o.ysrgx @.c.ysrgx 
-@.o.ysrprs:   @.c.ysrprs
-        cc $(ccflags) -o @.o.ysrprs @.c.ysrprs 
-@.o.yssp:   @.c.yssp 
-        cc $(ccflags) -o @.o.yssp @.c.yssp
-@.o.ysstr:   @.c.ysstr 
-        cc $(ccflags) -o @.o.ysstr @.c.ysstr 
-@.o.yst:   @.c.yst
-        cc $(ccflags) -o @.o.yst @.c.yst             
-@.o.ysthr:   @.c.ysthr 
-        cc $(ccflags) -o @.o.ysthr @.c.ysthr 
-@.o.ystm:   @.c.ystm 
-        cc $(ccflags) -o @.o.ystm @.c.ystm 
-@.o.ysv:   @.c.ysv 
-        cc $(ccflags) -o @.o.ysv @.c.ysv 
-@.o.ysver:   @.c.ysver 
-        cc $(ccflags) -o @.o.ysver @.c.ysver 
-@.o.ysx:   @.c.ysx
-        cc $(ccflags) -o @.o.ysx @.c.ysx
-@.o.sysfp:   @.sosd.riscos.c.sysfp
-        cc $(ccflags) -o @.o.sysfp @.sosd.riscos.c.sysfp 
-@.o.sysrld:   @.sosd.riscos.c.sysrld
-        cc $(ccflags) -o @.o.sysrld @.sosd.riscos.c.sysrld 
-@.o.sysi:   @.sosd.riscos.c.sysi
-        cc $(ccflags) -o @.o.sysi @.sosd.riscos.c.sysi 
-@.o.systhr:   @.sosd.riscos.c.systhr
-        cc $(ccflags) -o @.o.systhr @.sosd.riscos.c.systhr
+CMHGFLAGS=-p
+
+
+CC = cc
+INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
+CMHG=cmhg
+OBJASM=objasm
+
+LIB=libfile
+LIBFLAGS=-c -o
+
+CFLAGS = -c -depend !Depend -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
+
+
+
+.SUFFIXES:	.o .c .cmhg
+.cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
+.c.o:;		$(CC) $(CFLAGS) $<
+.s.o:;		$(OBJASM) -from $< -to $@
+
+OBJS=o.ys o.ysb8 o.ysc o.yscksm o.yse \
+            o.ysfe o.ysfmt o.yshsh \
+            o.ysid o.yslst o.ysm o.ysmdmp \
+            o.ysl o.yslog o.ysmsg \
+            o.ysr o.ysrand o.ysrarg \
+            o.ysv o.ystm o.ysthr \
+            o.ysrgx o.ysrprs o.yssp o.ysstr \
+            o.ysver o.ysx o.ysbv o.ysfo \
+            o.sysfp o.sysrld o.sysi o.systhr
+
+lib.yolib:  $(OBJS)
+         $(LIB) $(LIBFLAGS) lib.yslib $(OBJS)
+         @echo ***************************************
+         @echo * YS library constructed successfully *
+         @echo ***************************************
+
 
 # Dynamic dependencies:
-
+o.systhr:	sosd.riscos.c.systhr
+o.systhr:	mx_pri:h.sysi
+o.systhr:	mx_pri:h.sysx
+o.systhr:	mx_pri:h.sx
+o.systhr:	mx_pri:h.sysb8
+o.systhr:	mx_pub:h.ysid
+o.systhr:	mx_pub:h.ysb8
+o.systhr:	mx_pub:h.ys
+o.systhr:	mx_pub:h.ysbv
+o.systhr:	mx_pub:h.ysfo
+o.systhr:	mx_pub:h.ysstr
+o.systhr:	mx_pub:h.ysm
+o.systhr:	mx_pub:h.yslst
+o.systhr:	mx_pub:h.yshsh
+o.systhr:	mx_pub:h.ysc
+o.systhr:	mx_pub:h.yse
+o.systhr:	mx_pub:h.ystm
+o.systhr:	mx_pub:h.ysv
+o.systhr:	mx_pub:h.ysmsc
+o.systhr:	mx_pub:h.ysl
+o.systhr:	mx_pub:h.ysr
+o.systhr:	mx_pub:h.yslog
+o.systhr:	mx_pub:h.ysx
+o.systhr:	mx_pub:h.ysthr
+o.systhr:	mx_pri:h.systhr
 o.ys:	c.ys
 o.ys:	mx_pri:h.sysi
 o.ys:	mx_pri:h.sysx
@@ -894,28 +879,3 @@ o.sysi:	mx_pub:h.ysx
 o.sysi:	mx_pub:h.ysthr
 o.sysi:	C:h.kernel
 o.sysi:	C:h.swis
-o.systhr:	sosd.riscos.c.systhr
-o.systhr:	mx_pri:h.sysi
-o.systhr:	mx_pri:h.sysx
-o.systhr:	mx_pri:h.sx
-o.systhr:	mx_pri:h.sysb8
-o.systhr:	mx_pub:h.ysid
-o.systhr:	mx_pub:h.ysb8
-o.systhr:	mx_pub:h.ys
-o.systhr:	mx_pub:h.ysbv
-o.systhr:	mx_pub:h.ysfo
-o.systhr:	mx_pub:h.ysstr
-o.systhr:	mx_pub:h.ysm
-o.systhr:	mx_pub:h.yslst
-o.systhr:	mx_pub:h.yshsh
-o.systhr:	mx_pub:h.ysc
-o.systhr:	mx_pub:h.yse
-o.systhr:	mx_pub:h.ystm
-o.systhr:	mx_pub:h.ysv
-o.systhr:	mx_pub:h.ysmsc
-o.systhr:	mx_pub:h.ysl
-o.systhr:	mx_pub:h.ysr
-o.systhr:	mx_pub:h.yslog
-o.systhr:	mx_pub:h.ysx
-o.systhr:	mx_pub:h.ysthr
-o.systhr:	mx_pri:h.systhr

@@ -1,28 +1,48 @@
-#Makefile for yr.o
+# makefile for Medianet modules
+#
+# debug directives:
+#
+# NDEBUG - should disable ALL debugging when defined
+#
 
-# Toolflags:
-CCflags = -c -depend !Depend -IC:,mx_pri:,mx_pub:,mx_inc:,rts: -throwback  -DRISCOS -DSYSTEM -Zm -Wp
+TARGET=lib.yrlib
 
-# Final targets:
-@.ttt:  @.o.yr @.o.yrc @.o.yrwrite @.o.yrtk @.o.yrdump @.o.yrdst
+VPATH=@ sosd.riscos
 
-# Static dependencies:
+LIBFILES =
+LINKFLAGS=-rmf
 
-@.o.yr:   @.c.yr
-        cc $(ccflags) -o @.o.yr @.c.yr 
-@.o.yrc:   @.c.yrc
-        cc $(ccflags) -o @.o.yrc @.c.yrc 
-@.o.yrwrite:   @.c.yrwrite
-        cc $(ccflags) -o @.o.yrwrite @.c.yrwrite 
-@.o.yrtk:   @.c.yrtk
-        cc $(ccflags) -o @.o.yrtk @.c.yrtk 
-@.o.yrdump:   @.c.yrdump
-        cc $(ccflags) -o @.o.yrdump @.c.yrdump 
-@.o.yrdst:   @.c.yrdst
-        cc $(ccflags) -o @.o.yrdst @.c.yrdst 
+CMHGFLAGS=-p
+
+
+CC = cc
+INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
+CMHG=cmhg
+OBJASM=objasm
+
+LIB=libfile
+LIBFLAGS=-c -o
+
+CFLAGS = -c -depend !Depend -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
+
+
+
+.SUFFIXES:	.o .c .cmhg
+.cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
+.c.o:;		$(CC) $(CFLAGS) $<
+.s.o:;		$(OBJASM) -from $< -to $@
+
+OBJS=o.yr o.yrc o.yrwrite o.yrtk o.yrdump o.yrdst
+
+
+lib.yrlib:  $(OBJS)
+         $(LIB) $(LIBFLAGS) lib.yrlib $(OBJS)
+         @echo ***************************************
+         @echo * YR library constructed successfully *
+         @echo ***************************************
+
 
 # Dynamic dependencies:
-
 o.yr:	c.yr
 o.yr:	mx_pri:h.sysi
 o.yr:	mx_pri:h.sysx

@@ -1,48 +1,46 @@
-#Makefile for yo library
+# makefile for Medianet modules
+#
+# debug directives:
+#
+# NDEBUG - should disable ALL debugging when defined
+#
 
-# Toolflags:
-CCflags = -c -depend !Depend -IC:,mx_pri:,mx_pub:,mx_inc:,rts: -throwback  -DRISCOS -Zm -Wp
+TARGET=lib.yolib
 
-# Final targets:
-@.lib.libyo:  @.o.yo @.o.yoyd @.o.yocoa @.o.yort @.o.yocy \
-            @.o.yotkx @.o.yotkg @.o.yox @.o.yoevt @.o.yot \
-            @.o.yotk @.o.yoorb @.o.yoboa @.o.yogiop @.o.yorc5x @.o.yosx
-            libfile -c -o @.lib.libyo o.*
+VPATH=@ sosd.riscos
 
-# Static dependencies:
+LIBFILES =
+LINKFLAGS=-rmf
 
-@.o.yo:   @.c.yo
-        cc $(ccflags) -o @.o.yo @.c.yo
-@.o.yoyd:   @.c.yoyd
-        cc $(ccflags) -o @.o.yoyd @.c.yoyd
-@.o.yocoa:   @.c.yocoa
-        cc $(ccflags) -o @.o.yocoa @.c.yocoa
-@.o.yogiop:   @.c.yogiop
-        cc $(ccflags) -o @.o.yogiop @.c.yogiop
-@.o.yox:   @.c.yox
-        cc $(ccflags) -o @.o.yox @.c.yox
-@.o.yocy:   @.c.yocy
-        cc $(ccflags) -o @.o.yocy @.c.yocy
-@.o.yot:   @.c.yot
-        cc $(ccflags) -o @.o.yot @.c.yot
-@.o.yort:   @.c.yort
-        cc $(ccflags) -o @.o.yort @.c.yort
-@.o.yoevt:   @.c.yoevt
-        cc $(ccflags) -o @.o.yoevt @.c.yoevt
-@.o.yotkx:   @.c.yotkx
-        cc $(ccflags) -o @.o.yotkx @.c.yotkx
-@.o.yotkg:   @.c.yotkg
-        cc $(ccflags) -o @.o.yotkg @.c.yotkg
-@.o.yotk:   @.c.yotk
-        cc $(ccflags) -o @.o.yotk @.c.yotk
-@.o.yoorb:   @.c.yoorb
-        cc $(ccflags) -o @.o.yoorb @.c.yoorb
-@.o.yoboa:   @.c.yoboa
-        cc $(ccflags) -o @.o.yoboa @.c.yoboa
-@.o.yorc5x:   @.c.yorc5x
-        cc $(ccflags) -o @.o.yorc5x @.c.yorc5x
-@.o.yosx:   @.c.yosx
-        cc $(ccflags) -o @.o.yosx @.c.yosx
+CMHGFLAGS=-p
+
+
+CC = cc
+INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
+CMHG=cmhg
+OBJASM=objasm
+
+LIB=libfile
+LIBFLAGS=-c -o
+
+CFLAGS = -c -depend !Depend -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
+
+
+
+.SUFFIXES:	.o .c .cmhg
+.cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
+.c.o:;		$(CC) $(CFLAGS) $<
+.s.o:;		$(OBJASM) -from $< -to $@
+
+OBJS=o.yo o.yoyd o.yocoa o.yort o.yocy o.yotkx o.yotkg o.yox o.yoevt o.yot \
+            o.yotk o.yoorb o.yoboa o.yogiop o.yorc5x o.yosx
+
+lib.yolib:  $(OBJS)
+         $(LIB) $(LIBFLAGS) lib.yolib $(OBJS)
+         @echo ***************************************
+         @echo * YO library constructed successfully *
+         @echo ***************************************
+
 
 # Dynamic dependencies:
 o.yo:	c.yo
@@ -727,3 +725,73 @@ o.yosx:	mx_pub:h.ysx
 o.yosx:	mx_pub:h.ysthr
 o.yosx:	mx_pri:h.sysxcd
 o.yosx:	mx_pri:h.yosx
+o.yoidlC:	c.yoidlC
+o.yoidlC:	mx_pri:h.sysi
+o.yoidlC:	mx_pri:h.sysx
+o.yoidlC:	mx_pri:h.sx
+o.yoidlC:	mx_pri:h.sysb8
+o.yoidlC:	mx_pub:h.ysid
+o.yoidlC:	mx_pub:h.ysb8
+o.yoidlC:	mx_pub:h.ys
+o.yoidlC:	mx_pub:h.ysbv
+o.yoidlC:	mx_pub:h.ysfo
+o.yoidlC:	mx_pub:h.ysstr
+o.yoidlC:	mx_pub:h.ysm
+o.yoidlC:	mx_pub:h.yslst
+o.yoidlC:	mx_pub:h.yshsh
+o.yoidlC:	mx_pub:h.ysc
+o.yoidlC:	mx_pub:h.yse
+o.yoidlC:	mx_pub:h.ystm
+o.yoidlC:	mx_pub:h.ysv
+o.yoidlC:	mx_pub:h.ysmsc
+o.yoidlC:	mx_pub:h.ysl
+o.yoidlC:	mx_pub:h.ysr
+o.yoidlC:	mx_pub:h.yslog
+o.yoidlC:	mx_pub:h.ysx
+o.yoidlC:	mx_pub:h.ysthr
+o.yoidlC:	mx_pub:h.yo
+o.yoidlC:	mx_pub:h.ytex
+o.yoidlC:	mx_pub:h.yodefs
+o.yoidlC:	mx_pub:h.yotk
+o.yoidlC:	mx_pub:h.yrtypes
+o.yoidlC:	mx_pub:h.mn
+o.yoidlC:	mx_pub:h.mnerr
+o.yoidlC:	mx_pub:h.mnsem
+o.yoidlC:	mx_pub:h.mna
+o.yoidlC:	mx_pub:h.mnt
+o.yoidlC:	mx_pri:h.yoidl
+o.ydyoidlC:	c.ydyoidlC
+o.ydyoidlC:	mx_pri:h.sysi
+o.ydyoidlC:	mx_pri:h.sysx
+o.ydyoidlC:	mx_pri:h.sx
+o.ydyoidlC:	mx_pri:h.sysb8
+o.ydyoidlC:	mx_pub:h.ysid
+o.ydyoidlC:	mx_pub:h.ysb8
+o.ydyoidlC:	mx_pub:h.ys
+o.ydyoidlC:	mx_pub:h.ysbv
+o.ydyoidlC:	mx_pub:h.ysfo
+o.ydyoidlC:	mx_pub:h.ysstr
+o.ydyoidlC:	mx_pub:h.ysm
+o.ydyoidlC:	mx_pub:h.yslst
+o.ydyoidlC:	mx_pub:h.yshsh
+o.ydyoidlC:	mx_pub:h.ysc
+o.ydyoidlC:	mx_pub:h.yse
+o.ydyoidlC:	mx_pub:h.ystm
+o.ydyoidlC:	mx_pub:h.ysv
+o.ydyoidlC:	mx_pub:h.ysmsc
+o.ydyoidlC:	mx_pub:h.ysl
+o.ydyoidlC:	mx_pub:h.ysr
+o.ydyoidlC:	mx_pub:h.yslog
+o.ydyoidlC:	mx_pub:h.ysx
+o.ydyoidlC:	mx_pub:h.ysthr
+o.ydyoidlC:	mx_pub:h.yo
+o.ydyoidlC:	mx_pub:h.ytex
+o.ydyoidlC:	mx_pub:h.yodefs
+o.ydyoidlC:	mx_pub:h.yotk
+o.ydyoidlC:	mx_pub:h.yrtypes
+o.ydyoidlC:	mx_pub:h.mn
+o.ydyoidlC:	mx_pub:h.mnerr
+o.ydyoidlC:	mx_pub:h.mnsem
+o.ydyoidlC:	mx_pub:h.mna
+o.ydyoidlC:	mx_pub:h.mnt
+o.ydyoidlC:	mx_pri:h.ydyoidl
