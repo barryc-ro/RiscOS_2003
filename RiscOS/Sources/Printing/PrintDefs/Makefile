@@ -30,7 +30,7 @@ RESDIR = <resource$dir>.Resources.${COMPONENT}
 COMPONENT   = STBPrint
 RDIR        = Resources
 RSRC        = ResSrc
-LDIR        = ${RDIR}.${LOCALE}.${MACHINE}
+LDIR        = ${RDIR}.${LOCALE}.${SYSTEM}
 
 # Include these in the ROM module
 #
@@ -58,7 +58,9 @@ RESFILES =			\
  ${RDIR}.Printers.StyColH_Co	\
  ${RDIR}.Printers.StyColH_BW	\
  ${RDIR}.Printers.PS_BW		\
- ${RDIR}.Printers.PS_Col
+ ${RDIR}.Printers.PS_Col	\
+ ${RDIR}.Printers.Lex_BW	\
+ ${RDIR}.Printers.Lex_Col
 
 #
 # RISC OS ROM build rules:
@@ -66,10 +68,15 @@ RESFILES =			\
 
 clean:
         ${WIPE} ${RDIR}.Printers.* ${WFLAGS}
-        ${RM} ${RDIR}.PaperSizes
+        ${RM} ${RDIR}.PaperA4
+        ${RM} ${RDIR}.PaperLet
+        ${RM} ${RDIR}.PaperLegal
 	@echo ${COMPONENT}: cleaned
 
-resources: ${RESFILES}
+dirs:
+	${MKDIR} ${RDIR}.Printers
+
+resources: ${RESFILES} dirs
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESDIR}.Palettes
 	${MKDIR} ${RESDIR}.Printers
@@ -183,6 +190,12 @@ ${RDIR}.Printers.StyColH_Co:	${RSRC}.Printers.StyColH_Co
 
 ${RDIR}.Printers.StyColH_BW:	${RSRC}.Printers.StyColH_BW
 	${COMPRESS}	${RSRC}.Printers.StyColH_BW	${RDIR}.Printers.StyColH_BW
+
+${RDIR}.Printers.Lex_BW:	${RSRC}.Printers.Lex_BW
+	${COMPRESS}	${RSRC}.Printers.Lex_BW		${RDIR}.Printers.Lex_BW
+
+${RDIR}.Printers.Lex_Col:	${RSRC}.Printers.Lex_Col
+	${COMPRESS}	${RSRC}.Printers.Lex_Col	${RDIR}.Printers.Lex_Col
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
