@@ -88,7 +88,7 @@
 PrivMessages    SETS    ""
 
 debug           SETL    false
-hostvdu         SETL    true
+hostvdu         SETL    false
 debug_flush     SETL    false
 
 fullrgb         SETL    true            ; turn tc's 24bit stuff on
@@ -100,24 +100,30 @@ free            SETD    false            ;Free memory
 SWI             SETD    false            ;internal SWI debugging            
 startjob        SETD    false            ;start job decoding
 tidyjob         SETD    false            ;tidying workspace lists
-prepstrip       SETD    false            ;prep strip functions
+prepstrip       SETD    true            ;prep strip functions
 colset          SETD    false            ;colour handling
 findblock       SETD    false            ;block finding routines
 mjs             SETD    false
-mjs2            SETD    true
+mjs2            SETD    false
+remote		SETD	false		; debug using debugmod
+stats		SETD    true
 
                 GBLL    newctrans
-newctrans       SETL    true          ;New colourtrans available
+newctrans       SETL    true            ;New colourtrans available
 
 ;------------------------------------------------------------------------------
 ;
 ; Define some suitable R12 relative workspace
 ;
 ;------------------------------------------------------------------------------
+
                        ^ 0
-diffuse_abefore        # 4
+diffuse_abefore        # 4	; Floyd Steinberg
 diffuse_anow           # 4
 diffuse_before         # 4
+diffuse_a_after        # 4	; Burke filter
+diffuse_b_before       # 4
+diffuse_ab_before      # 4
 diffuse_workspace      * :INDEX: @
 
                         ^ 0
@@ -134,7 +140,9 @@ MessagesBlock           # 16            ;Scratch block used by MessageTrans
 error_buffer		# 256
 MessagesOpen            # 4             ;Flag to indicate messages file open
 SharedMessages          # 4             ;->Shared messages block allocated / =0 if none
-
+	[ 		debugremote
+DebugBlock		# 64
+	]
 errorbuffer             # 4
 RandomSeed              # 4                      ;Random seed for diffuser
 FirstStrip              # 4                      ;Flag set for first strip by PDumper_StartJob
@@ -155,6 +163,7 @@ KeyDiffuse              # diffuse_workspace
 CyanDiffuse             # diffuse_workspace
 MagentaDiffuse          # diffuse_workspace
 YellowDiffuse           # diffuse_workspace
+
 KeyHalfInfo             # halftone_workspace
 CyanHalfInfo            # halftone_workspace
 MagentaHalfInfo         # halftone_workspace
@@ -185,6 +194,7 @@ BlueGammaTable          # 256
 
 ;
 ;mjs - new stuff for 32bit case
+MultiBitPalette	        # 4
 mjsCalibrationTable     # 0
 ediff_density           # 4
 CalibrateTables         # 12*256
@@ -274,6 +284,61 @@ table   = "PDumper",0
 
         LTORG
 
+;####################### MACROS
+
+XDebugMod_Send  EQU	&06c440
+
+	MACRO
+$label	RemoteDB	$text
+
+$label 
+	[ debugremote
+	Push	"r0"
+	ADR	r0, %FT20
+	SWI	XDebugMod_Send
+	Pull	"r0"
+	B	%FT10
+20
+	DCB	"$text",0
+10
+	]
+	MEND
+	
+	MACRO
+$label	RemoteDBReg	$reg1, $reg2, $reg3
+
+$label 
+	[ debugremote
+	 Push	"r0-r2"
+	MOV	R0, $reg1
+	ADRL    R1, DebugBlock
+	MOV	R2, #124
+	SWI	OS_ConvertHex8
+	MOV	R2, #&20
+	STRB	R2, [R1]
+	Pull	"r0-r2"
+  	Push	"r0-r2"
+	MOV	R0, $reg2
+	ADRL    R1, DebugBlock
+	ADD	R1, R1, #9
+	MOV	R2, #115
+	SWI	OS_ConvertHex8
+	MOV	R2, #&20
+	STRB	R2, [R1]
+	Pull	"r0-r2"
+	Push	"r0-r2"
+	MOV	R0, $reg3
+	ADRL    R1, DebugBlock
+	ADD	R1, R1, #18
+	MOV	R2, #106
+	SWI	OS_ConvertHex8
+	ADRL    R0, DebugBlock
+	SWI	XDebugMod_Send
+	Pull	"r0-r2"
+	]	
+	MEND
+
+;###############################
 ;..............................................................................
 ; 
 ; Handle the module initialisation, simply attempt to claim some
@@ -284,9 +349,8 @@ init    ROUT
         Push    "R1-R3,LR"
 
       [ :LNOT:hostvdu
-        Debug_Open "$.SptDebug"         ;Open debugging file if output to hostvdu not happening
+        Debug_Open "$.debug.SptDebug"         ;Open debugging file if output to hostvdu not happening
       ]
-
   Debug mjs,"PDumperSpt initialise"
                           
         LDR     R2,[WP]
@@ -341,19 +405,24 @@ init_pdriver_active
 
 final   ROUT
 
+	;RemoteDB  "Killed"
       [ :LNOT: hostvdu
         Debug_Close                     ;Close the debugging file if being used
       ]
-
         LDR     WP,[WP]                 ;Resolve the workspace pointer
         B       CloseMessages           ;and then attempt to close the messages files
 
 ;..............................................................................
 ; 
 ; Handle service calls being passed around.
+serviceentry_ServTab
+	DCD	0
+	DCD	Service_PDriverGetMessages         ; finding messages block?
+	DCD	0
+        DCD     serviceentry_ServTab - module_base  ;anchor for table
 
 service ROUT
-
+	MOV	R0, R0
         TEQ     R1,#Service_PDriverGetMessages
         LDREQ   WP,[WP]                 ;If it's the service call we are interested
         BEQ     ServiceMessages         ;yup, then resolve workspace and process
@@ -641,6 +710,10 @@ SWIPDumper_StartJob Entry "r0-r4"
 
         Debug   startjob,"startjob: palette file size",R2
 
+        ;RemoteDB	"Setting up the palette"
+        ;BL	SetLookupPalette	; this is now done in the dumper.
+        ;RemoteDB	"Setup palette"
+
         MOVVC   r0, r11
         MOVVC   r3, r2                  
         LDRVC   r4, =BlockType_Palette  ;Claim a suitable block for the palette and tag it accordingly
@@ -859,6 +932,8 @@ SWIPDumper_CopyFilename Entry "r1"
         GET     s.Error
         GET     s.Error32
         GET     s.Error8
+        GET     s.Error32M
+        GET	s.MultiBit
 ;      [ fullrgb
         GET     s.FullRGB
 ;      ]

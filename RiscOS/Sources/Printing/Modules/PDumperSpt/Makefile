@@ -87,5 +87,7 @@ rm.PDumperSpt: s.Halftone8
 rm.PDumperSpt: s.Error
 rm.PDumperSpt: s.Error32
 rm.PDumperSpt: s.Error8
+rm.PDumperSpt: s.Error32M
+rm.PDumperSpt: s.MultiBit
 rm.PDumperSpt: s.FullRGB
 rm.PDumperSpt: s.MsgCode
