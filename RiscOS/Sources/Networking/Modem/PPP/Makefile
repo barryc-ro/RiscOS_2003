@@ -135,13 +135,13 @@ HDRS =	h.ppphdr
 #
 # Main rules:
 #
-ram: ${RAMTARGET}
+ram: ${RAMTARGET} local_dirs
         @echo ${COMPONENT}: all complete
 
-rom: ${ROMTARGET}
+rom: ${ROMTARGET} local_dirs
         @echo ${COMPONENT}: rom module built
 
-debug: ${DEBUGTARGET}
+debug: ${DEBUGTARGET} local_dirs
         @echo ${COMPONENT}: debug build complete
 
 analyse: pppd ${OBJSCP} ${HDRS}
@@ -163,17 +163,23 @@ clean:	pppd
 	${WIPE} od.* ${WFLAGS}
 	${WIPE} cp.* ${WFLAGS}
 	${WIPE} rm.* ${WFLAGS}
+	${WIPE} aof.* ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
 	${WIPE} map ${WFLAGS}
 	${RM} ${RAMTARGET}
 	${RM} ${ROMTARGET}
 	${RM} ${DEBUGTARGET}
+	${RM} aof
 	@echo ${COMPONENT}: cleaned
 
 pppd:
         Dir pppd
         amu ${MFLAGS}
         Up
+
+local_dirs:
+        ${MKDIR} aof
+        ${MKDIR} rm
 
 #
 # Target 
