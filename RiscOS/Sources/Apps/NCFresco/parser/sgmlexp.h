@@ -98,12 +98,9 @@ extern SGMLCTX * sgml_new_context(void);
 
     Change the character encoding that the stream uses. The old one is stopped
     and the new one started with no further fixes or backtracking.
-
-    Returns the encoding that will be used to write out the characters. Either
-    UTF8 or Acorn Latin1 currently.
 */
 
-extern int sgml_set_encoding(SGMLCTX *context, int enc_num);
+extern void sgml_set_encoding(SGMLCTX *context, int enc_num);
 #endif
 
 /* attrparse.c ***************************************************************
@@ -219,7 +216,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *ptr, int count, int ru
  * the character that A.N.Other platform gives you. yuk!
  */
 
-extern char convert_undefined_key_code(char c);
+extern UCHARACTER convert_undefined_key_code(UCHARACTER c);
 
 /*****************************************************************************
 

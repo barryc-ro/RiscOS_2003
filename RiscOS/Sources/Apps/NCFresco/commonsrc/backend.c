@@ -1675,9 +1675,9 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 #if USE_MARGINS
     ox += doc->margin.x0;
     oy += doc->margin.y1;
-    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, doc->margin.x0, doc->margin.y1));
+    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding_user, doc->margin.x0, doc->margin.y1));
 #else
-    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, 0, 0));
+    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding_user, 0, 0));
 #endif
 
     if (rh)
@@ -3306,46 +3306,25 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 
 #if UNICODE
 	    /* work out what encoding to start in */
-	    encoding = config_encoding_user;
-	    DBG(("set_encoding USER%s %d\n", config_encoding_user_override ? "_FIXED" : "", encoding));
+	    encoding = doc->encoding_user;
+	    DBG(("set_encoding USER%s %d\n", doc->encoding_user_override ? "_FIXED" : "", encoding));
 
-	    if (config_encoding_user_override)
+	    if (doc->encoding_user_override)
 		encoding_source = rid_encoding_source_USER_FIXED;
 	    else
 	    {
-#if 1
 		int enc = access_get_encoding(doc->ah);
 		if (enc)
 		{
 		    encoding = enc;
 		    encoding_source = rid_encoding_source_HTTP;
 		}
-#else
-		http_header_item *list = access_get_headers(doc->ah);
-	    
-		for (; list; list = list->next)
-		{
-		    if (strcasecomp(list->key, "CONTENT-TYPE") == 0)
-		    {
-			int enc = parse_content_type_header(list->value);
-
-			if (enc)
-			{
-			    encoding = enc;
-			    encoding_source = rid_encoding_source_HTTP;
-			    
-			    DBG(("set_encoding HTTP %d\n", encoding));
-			}
-			break;
-		    }
-		}
-#endif
 	    }
 #endif
 	    PPDBG(("About to make a new parser stream\n"));
 
 	    PPDBG(("antweb_doc_progress: encoding user %d override %d - set %d rh %d source %d\n",
-		 config_encoding_user, config_encoding_user_override,
+		 doc->encoding_user, doc->encoding_user_override,
 		 encoding, doc->rh->encoding, encoding_source));
 
 	    /* initialise the parser */
@@ -3908,7 +3887,8 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->magic = ANTWEB_DOC_MAGIC;
     new->parent = v;
     new->scale_value = config_display_scale_image;
-    new->encoding = config_encoding_user;
+    new->encoding_user = config_encoding_user;
+    new->encoding_user_override = flags & be_openurl_flag_NO_ENCODING_OVERRIDE ? FALSE : config_encoding_user_override;
 
     /* new: add the url here */
     new->url = strdup(url);
@@ -4414,21 +4394,19 @@ extern int backend_doc_encoding(be_doc doc, int encoding)
     }
     else
     {
-	old_encoding = doc->encoding;
+	old_encoding = doc->encoding_user;
 	if (encoding != be_encoding_READ)
-	    config_encoding_user = doc->encoding = encoding;
+	    config_encoding_user = doc->encoding_user = encoding;
     }
 
     return old_encoding;
 }
 #endif
 
-#if UNICODE
 extern int backend_doc_item_language(be_doc doc, be_item ti)
 {
     return ti && ti->language ? ti->language : doc ? doc->rh->language_num : 0;
 }
-#endif
 
 void antweb_uncache_image_info(antweb_doc *doc)
 {

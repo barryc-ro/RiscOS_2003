@@ -1544,9 +1544,9 @@ int lang_name_to_num(const char *s)
 
 const char *lang_num_to_name(int num)
 {
+    char *out = "";
 #if UNICODE
     int i;
-    char *out = "";
     for (i = 0; i < sizeof(languages) / sizeof(languages[0]); i++)
 	if (languages[i].code == num)
 	{
@@ -1556,8 +1556,8 @@ const char *lang_num_to_name(int num)
 
     DBG(("lang_num_to_name: %d returns '%s'\n", num, out));
     
-    return out;
 #endif
+    return out;
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

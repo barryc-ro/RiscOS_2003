@@ -16,12 +16,9 @@
 #include "utf8.h"
 #endif
 
-static char space = ' ',
-	newline = '\n';
-
 STRING empty_string = { NULL, 0 },
-    space_string = { &space, 1 },
-    eol_string = { &newline, 1};
+    space_string = { " ", 1 },
+    eol_string = { "\n", 1};
 
 #define decode_element_start	0x01
 #define decode_element_body	0x02
@@ -166,6 +163,21 @@ extern int strnicmpu(const UCHARACTER *a, const char *b, int n)
 	if (*p >= 256) return *p - *q;
 	if (!(*p && *q)) return *p - *q;
 	diff = tolower(*p) - tolower(*q);
+	if (diff) return diff;
+    }
+    /*NOTREACHED*/
+}
+extern int strcmpu(const UCHARACTER *a, const char *b)
+{
+    const UCHARACTER *p;
+    const char *q;
+
+    for(p=a, q=b;; p++, q++) {
+	int diff;
+/* 	if (p == a+n) return 0;	 *//*   Match up to n characters */
+	diff = *p - *q;
+	if (*p >= 256) return diff;
+	if (!(*p && *q)) return diff;
 	if (diff) return diff;
     }
     /*NOTREACHED*/
@@ -700,6 +712,8 @@ static void set_char_decode(char * chars, BITS pattern)
 
 extern void sgml_support_initialise(void)
 {
+    int i;
+    
     PRSDBGN(("sgml_support_initialise()\n"));
 
     memset( char_decode, 0, sizeof(char_decode) );
@@ -758,6 +772,10 @@ extern void sgml_support_initialise(void)
 	"#",
 	decode_entity );
 
+    /* top bit set characters must be allowed in VALUE's */
+    for (i = 128; i < 256; i++)
+	char_decode[i] |= decode_value_start | decode_value_body;
+    
     sgml_do_parser_fixups();
 }
 
@@ -809,8 +827,8 @@ extern BOOL is_attribute_body_character(UCHARACTER c)
 extern BOOL is_value_start_character(UCHARACTER c)
 {
 #if UNICODE
-    if (c >= 128)
-	return FALSE;
+    if (c > 255)
+	return TRUE;
 #endif
     return char_decode[(int)c] & decode_value_start;
 }
@@ -818,7 +836,7 @@ extern BOOL is_value_start_character(UCHARACTER c)
 extern BOOL is_value_body_character(UCHARACTER c)
 {
 #if UNICODE
-    if (c > 255)		/* not sure about this - but we best not rule anything out */
+    if (c > 255)
 	return TRUE;
 #endif
     return char_decode[(int)c] & decode_value_body;

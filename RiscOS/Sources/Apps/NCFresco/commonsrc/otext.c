@@ -42,6 +42,10 @@
 #include "dfsupport.h"
 #include "gbf.h"
 
+#if UNICODE
+#include "Unicode/encoding.h"
+#endif
+
 /* Make this 1 to see item boundaries */
 #define DEBUG_ITEMS 0
 
@@ -90,7 +94,9 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     whichfont = antweb_getwebfont(doc, ti, -1);
     wf = &webfonts[whichfont];
 
+#if UNICODE
     RENDBGN(("otext: enc %d lang '%s' f %d f1 %d\n", doc->rh->encoding, encoding_default_language(doc->rh->encoding), whichfont, ti->st.wf_index));
+#endif
 
     if (str_len == 0)
     {

@@ -329,7 +329,9 @@ static plugin_parameter_type convert_valuetype(int valuetype)
 typedef struct
 {
     FILE *f;
+#if UNICODE
     Encoding *e;
+#endif
 } plugin_FILE;
 
 static void put_string(plugin_FILE *f, const char *val)

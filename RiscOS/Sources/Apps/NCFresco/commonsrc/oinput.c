@@ -260,7 +260,12 @@ static int delete_char(rid_input_item *ii, int pos)
 {
     char *str = ii->data.str;
     int len = strlen(str);
-    int clen = UTF8_seqlen(str[pos]);
+    int clen;
+#if UNICODE
+    clen = UTF8_seqlen(str[pos]);
+#else
+    clen = 1;
+#endif
 
     memmove(str + pos, str + (pos + clen), len - (pos + clen) + 1); /* +1 to move the NUL also */
     

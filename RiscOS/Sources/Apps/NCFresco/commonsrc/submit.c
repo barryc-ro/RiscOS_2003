@@ -57,6 +57,8 @@ static os_error *submit_fn(const char *text, BOOL last, void *handle)
 {
     submit_info *si = handle;
 
+    BENDBGN(("submit_fn: '%s' last %d\n", text, last));
+
     if (si->f)
 	url_escape_to_file(text, si->f);
 
@@ -85,6 +87,8 @@ static void append_encoded_n(Encoding *enc, char **bufout, int *len, const char 
 	si.bufout = bufout;
 	si.len = len;
 
+	BENDBGN(("append_encoded_n: enc %p '%.*s'\n", enc, val_n, val));
+	
 	process_utf8(val, val_n, enc, submit_fn, &si);
     }
     else

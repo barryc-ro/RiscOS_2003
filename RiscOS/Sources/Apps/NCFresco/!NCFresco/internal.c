@@ -463,6 +463,7 @@ static os_error *fe_options_write_file(FILE *f, const char *option)
     }
     else if (strcasecomp(option, "fonts") == NULL)
     {
+#if UNICODE
 	fprintf(f, msgs_lookup("options.fonts.1"),
 		selected(config_encoding_user == csWindows1252),
 		selected(config_encoding_user == csAutodetectJP),
@@ -473,10 +474,10 @@ static os_error *fe_options_write_file(FILE *f, const char *option)
 		selected(config_encoding_user == csBig5),
 		selected(config_encoding_user == csEUCKR),
 		selected(config_encoding_user == csISO2022KR));
-
 	fprintf(f, msgs_lookup("options.fonts.2"),
 		checked(config_encoding_user_override),
 		checked(!config_encoding_user_override));
+#endif
     }
 
     fprintf(f, msgs_lookup("options.F"), option);
@@ -2574,7 +2575,7 @@ os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args
 	if (!tb_is_status_showing())
 	    fe_status_state(main_view, TRUE);
 	    
-	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE);
+	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_ENCODING_OVERRIDE);
     }
 
     return e;

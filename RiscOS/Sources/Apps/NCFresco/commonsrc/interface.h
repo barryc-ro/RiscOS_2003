@@ -58,6 +58,7 @@ extern int frontend_dx, frontend_dy;
 #define fe_open_url_FROM_HISTORY	(1<<2)	/* url was pulled from history list */
 #define fe_open_url_FROM_FRAME		(1<<3)	/* url was initiated from a frameset */
 #define fe_open_url_NO_REFERER		(1<<4)	/* url is unrelated to current document */
+#define fe_open_url_NO_ENCODING_OVERRIDE (1<<5)	/* don't let user override encoding */
 
 os_error *frontend_open_url(char *url, fe_view parent, char *windowname, char *bfile, int flags);
 
@@ -332,6 +333,7 @@ os_error *backend_open_url(fe_view v, be_doc *docp,
 #define be_openurl_flag_HISTORY		(1 << 4) /* url was pulled from history list */
 #define be_openurl_flag_SOLID_HIGHLIGHT	(1 << 5)
 #define be_openurl_flag_FAST_LOAD	(1 << 6)
+#define be_openurl_flag_NO_ENCODING_OVERRIDE (1 << 7)	/* don't let user override encoding */
 
 /* Jump the document to the fragment given */
 extern os_error *backend_goto_fragment(be_doc doc, char *frag);

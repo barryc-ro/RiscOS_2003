@@ -40,11 +40,21 @@
 
 /* ----------------------------------------------------------------------------------------------- */
 
+#if MEMLIB
+# define url_ptr(cc)	(urlblock + (cc)->urloffset)
+# define url_set(cc)	((cc)->urloffset)
+#else /* MEMLIB */
+# define url_ptr(cc)	((cc)->url)
+# define url_set(cc)	((cc)->url)
+#endif /* MEMLIB */
+
+/* ----------------------------------------------------------------------------------------------- */
+
 #define N_FILES_PER_DIR 75
 
 #define FORMAT_STRING	"Format: "
 
-#define CACHE_FORMAT	2
+#define CACHE_FORMAT	3
 
 /* ----------------------------------------------------------------------------------------------- */
 
@@ -178,11 +188,7 @@ static BOOL cache_scan_for_url(cache_dir *dir, cache_item *item, int n, void *ha
     unsigned int *vars = handle;
     unsigned int h = vars[0];
     char *url = (char *)vars[1];
-#if !MEMLIB
-    return item->hash == h && strcmp(item->url, url) == 0;
-#else /* MEMLIB */
-    return item->hash == h && strcmp(urlblock + item->urloffset, url) == 0;
-#endif /* MEMLIB */
+    return item->hash == h && strcmp(url_ptr(item), url) == 0;
 }
 
 static BOOL cache_scan_for_oldest(cache_dir *dir, cache_item *cc, int n, void *handle)
@@ -214,18 +220,10 @@ static BOOL cache_scan_for_oldest(cache_dir *dir, cache_item *cc, int n, void *h
 
 static BOOL is_older(const cache_item *oldest_item, const cache_item *item)
 {
-#if !MEMLIB
-    if (oldest_item->url == NULL)
-#else /* MEMLIB */
-    if (oldest_item->urloffset == NULL)
-#endif /* MEMLIB */
+    if (url_ptr(oldest_item) == NULL)
         return TRUE;
 
-#if !MEMLIB
-    if (item->url &&
-#else /* MEMLIB */
-    if (item->urloffset &&
-#endif /* MEMLIB */
+    if (url_set(item) &&
         ((item->keep_count < oldest_item->keep_count) ||
         (item->keep_count == oldest_item->keep_count && item->last_used < oldest_item->last_used) ) )
         return TRUE;
@@ -309,11 +307,7 @@ static cache_item *cache_ptr_from_url(char *url, cache_dir **dir_out)
         cache_item *item = dirp->items;
         if (item) for (i = 0; i < N_FILES_PER_DIR; i++, item++, n++)
         {
-#if !MEMLIB
-            if (item->hash == h && strcmp(item->url, url) == 0)
-#else /* MEMLIB */
-            if (item->hash == h && strcmp(urlblock + item->urloffset, url) == 0)
-#endif /* MEMLIB */
+            if (item->hash == h && strcmp(url_ptr(item), url) == 0)
             {
                 if (dir_out)
                     *dir_out = dirp;
@@ -362,11 +356,7 @@ static cache_item *cache_ptr_from_file(char *file, cache_dir **dir_out)
 
 static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
 {
-#if !MEMLIB
-    if (cc == NULL || cc->url == NULL)
-#else /* MEMLIB */
-    if (cc == NULL || cc->urloffset == 0)
-#endif /* MEMLIB */
+    if (cc == NULL || !url_set(cc))
 	return TRUE;
 
     if (cc->flags & cache_flag_OURS)
@@ -489,11 +479,7 @@ static void cache_make_room(int size)
 	    for (i = 0; i < cache_size; i++)
 	    {
 	        cache_item *cc = cache_item_ptr(i);
-#if !MEMLIB
-		if (cc == NULL || cc->url == NULL)
-#else /* MEMLIB */
-		if (cc == NULL || cc->urloffset == NULL)
-#endif /* MEMLIB */
+		if (cc == NULL || !url_set(cc))
 		{
 		    continue;
 		}
@@ -858,12 +844,19 @@ static void cache_dump_dir_read(int dir)
 		}
 
 		case 2:
+		case 3:
                     p = strtok(NULL, SEPS);
 		    if (p) cc->header.date = (unsigned)strtoul(p, NULL, 16);
                     p = strtok(NULL, SEPS);
 		    if (p) cc->header.last_modified = (unsigned)strtoul(p, NULL, 16);
                     p = strtok(NULL, SEPS);
 		    if (p) cc->header.expires = (unsigned)strtoul(p, NULL, 16);
+
+		    if (format >= 3)
+		    {
+			p = strtok(NULL, SEPS);
+			if (p) cc->header.encoding = (int)strtoul(p, NULL, 16);
+		    }
 		    break;
 		}
 
@@ -912,29 +905,23 @@ static void cache_dump_dir_write(int dir)
 
 	for (i = 0; i < N_FILES_PER_DIR; i++, cc++)
 	{
-#if !MEMLIB
-	    if (cc->url && cc->file_num != NO_FILE && (cc->flags & cache_flag_OURS) )
-#else /* MEMLIB */
-	    if (cc->urloffset && cc->file_num != NO_FILE && (cc->flags & cache_flag_OURS) )
-#endif /* MEMLIB */
+	    if (url_set(cc) && cc->file_num != NO_FILE && (cc->flags & cache_flag_OURS) )
 	    {
 #if CACHE_FORMAT == 1
 		fprintf(fh, "%02d" "\t%d" "\t%x" "\t%d" "\t%d" "\t%s" "\n",
-# if !MEMLIB
-			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, cc->url
-# else /* MEMLIB */
-			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, urlblock + cc->urloffset
-# endif /* MEMLIB */
+			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, url_ptr(cc)
 			);
 #elif CACHE_FORMAT == 2
 		fprintf(fh, "%02d" "\t%x" "\t%x" "\t%x" "\t%s" "\n",
 			cc->file_num,
 			cc->header.date, cc->header.last_modified, cc->header.expires,
-# if !MEMLIB
-			cc->url
-# else /* MEMLIB */
-			urlblock + cc->urloffset
-# endif /* MEMLIB */
+			url_ptr(cc)
+			);
+#elif CACHE_FORMAT == 3
+		fprintf(fh, "%02d" "\t%x" "\t%x" "\t%x" "\t%d" "\t%s" "\n",
+			cc->file_num,
+			cc->header.date, cc->header.last_modified, cc->header.expires, cc->header.encoding,
+			url_ptr(cc)
 			);
 
 #else
@@ -1238,11 +1225,7 @@ static int cache_test(char *url)
 #if USE_FILEWATCH
     if (filewatcher_handle)
     {
-#if !MEMLIB
-	type = item->url ? 1 : 0;
-#else /* MEMLIB */
-	type = item->urloffset ? 1 : 0;
-#endif /* MEMLIB */
+	type = url_set(item) ? 1 : 0;
     }
     else
 #endif
@@ -1297,9 +1280,7 @@ static os_error *cache_init(int size)
 {
     os_error *e;
 
-#if MEMLIB
     ACCDBG(("cache3 initialising\n"));
-#endif /* MEMLIB */
 
     MemCheck_RegisterMiscBlock((void *)0x10c, 4);
 
@@ -1356,11 +1337,7 @@ static void cache_tidyup(void)
 		for (i = 0; i < cache_size; i++)
 		{
 		    cache_item *cc = cache_item_ptr(i);
-#if !MEMLIB
-		    if (cc->url)
-#else /* MEMLIB */
-		    if (cc && cc->urloffset)
-#endif /* MEMLIB */
+		    if (cc && url_set(cc))
 			cache_remove_file(cc, cache_dir_ptr(i));
 		}
 	    }
@@ -1404,11 +1381,7 @@ cache_functions cachefs_cache_functions =
     cache_header_info,
 
     cache_flush,
-#if !MEMLIB
-    cache_optimise
-#else /* MEMLIB */
     cache_optimise,
-#endif /* MEMLIB */
 
     cache_get_header_info
 };

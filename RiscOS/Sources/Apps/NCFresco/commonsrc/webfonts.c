@@ -174,7 +174,7 @@ os_error *webfonts_initialise( void )
     if ( !e )
         e = webfont_find_font( WEBFONT_TTY );
 
-#if 0
+#if 1
     /* nasty hack to ensure that japanese font is always open */
     if (!e && config_encoding_internal != 0)
     {
@@ -647,10 +647,21 @@ int webfont_need_wide_font(const char *s, int n_bytes)
     case 3:			/* sjis */
     case 4:			/* euc */
     {
-	int i;
+	int i, c;
 	for (i = 0; i < n_bytes; i++)
-	    if ((s[i] & 0x80) && s[i] != 0x80)
+	{
+#if 1
+	    int c = *s++;
+	    if ((c & 0xC0) == 0xC0 &&		/* if isn't ascii and is initial byte of sequence*/
+		c != 0xC2 && c != 0xC3)		/* and isn't Latin1 character */
+	    {
+		return TRUE;			/* probably need a wide font */
+	    }
+#else
+	    if (s[i] & 0x80)
 		return TRUE;
+#endif
+	}
 	break;
     }
 

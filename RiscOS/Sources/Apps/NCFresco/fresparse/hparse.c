@@ -159,7 +159,7 @@ static void html_feed_characters(HTMLCTX *htmlctx, const char *buffer, int bytes
 	    rh = htmlctx->rh;
 	    
 	    /* set the encoding */
-	    rh->encoding_write = sgml_set_encoding(context, context->autodetect.enc_num);
+	    sgml_set_encoding(context, context->autodetect.enc_num);
 
  	    /* tell frontend encoding and this base language - used to be after process pending (was there a good reason?) */
 	    rh->encoding = context->autodetect.enc_num;
@@ -465,9 +465,10 @@ static HTMLCTX *create_new_html(int encoding)
     ASSERT(sgmlctx->magic == SGML_MAGIC);
 
     htmlctx->sgmlctx = sgmlctx;
+#if UNICODE
     htmlctx->rh->encoding = sgmlctx->enc_num;
     htmlctx->rh->encoding_write = sgmlctx->enc_num_write;
-    
+#endif
     return htmlctx;
 }
 

@@ -55,9 +55,11 @@ extern char *get_state_name(state_fn fn);
 
 extern int strnicmp(const char *a, const char *b, int n);
 #if UNICODE
+extern int strcmpu(const UCHARACTER *a, const char *b);
 extern int strnicmpu(const UCHARACTER *a, const char *b, int n);
 extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n);
 #else
+#define strcmpu(a,b) strcmp(a,b)
 #define strnicmpu(a,b,c) strnicmp(a,b,c)
 #define mkstringu(a,b,c) mkstring(b,c)
 #endif

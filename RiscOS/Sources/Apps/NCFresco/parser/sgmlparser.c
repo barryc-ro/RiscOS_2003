@@ -56,7 +56,7 @@ static int sgml_handle_char(void *handle, UCS4 c)
 {
     SGMLCTX *context = handle;
 
-    PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20));
+    /* PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20)); */
     
     if (c != 0xFEFF)
     {
@@ -65,16 +65,13 @@ static int sgml_handle_char(void *handle, UCS4 c)
 	(*context->state)(context, (UCS2) c);
     }
 
-    PRSDBG(("sgml_handle_char: out %d/%d\n", context->pending_close, context->pending_enc_num));
+    /* PRSDBG(("sgml_handle_char: out %d/%d\n", context->pending_close, context->pending_enc_num)); */
 
     return context->pending_close || context->pending_enc_num;
 }
 
-extern int sgml_set_encoding(SGMLCTX *context, int enc_num)
+extern void sgml_set_encoding(SGMLCTX *context, int enc_num)
 {
-/*  int new_size = encoding_max_char_size(enc_num); */
-    int enc_num_write = /* new_size == 1 ||  */config_encoding_internal == 0 ? csAcornLatin1 : csUTF8;
-    
     if (context->encoding_threaded)
     {
 	PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d PENDING\n", context, enc_num));
@@ -95,25 +92,7 @@ extern int sgml_set_encoding(SGMLCTX *context, int enc_num)
 	    context->enc_num = enc_num;
 	    context->encoding = new_enc;
 	}
-#if 0
-	if (context->enc_num_write != enc_num_write)
-	{
-	    if (context->encoding_write)
-		encoding_delete(context->encoding_write);
-
-	    context->enc_num_write = enc_num_write;
-	    context->encoding_write = encoding_new(enc_num_write, TRUE);
-
-	    if (context->encoding_write == NULL)
-	    {
-		context->encoding_write = encoding_new(csASCII, TRUE);
-		context->enc_num_write = csASCII;
-	    }
-	}
-#endif
     }
-
-    return enc_num_write;
 }
 
 extern void sgml_feed_characters_ascii(SGMLCTX *context, const char *buffer, int bytes)
@@ -187,11 +166,9 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
     {
 	char c = *buffer;
 
-#if !UNICODE
 	/* optionally convert undefined keys to PC keymap */
 	if (convert_char)
 	    c = convert_undefined_key_code(c);
-#endif
 	
 	add_char_to_inhand(context, c);
 #if 0

@@ -1037,7 +1037,7 @@ os_error *process_utf8(const char *text, int n, Encoding *enc, process_utf8_call
     /* while we have more input */
     while (in_n < n && text[in_n] && !e)
     {
-	char buffer[8], *bufptr = buffer;
+	char buffer[256], *bufptr = buffer;
 	int bufsize = sizeof(buffer) - 1;
 	
 	/* while we have more input */

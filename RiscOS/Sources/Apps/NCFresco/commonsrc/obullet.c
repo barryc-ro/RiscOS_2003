@@ -34,12 +34,20 @@ Borris totally dislikes the use of ti->width for bullets!
 #include "indent.h"
 #include "gbf.h"
 
-#ifndef BULLET_CHAR
-#define BULLET_CHAR '\x8F'
+#define BULLET_CHAR		"\x8F"
+#define HARD_SPACE		"\xA0"
+
+#define BULLET_STRING		BULLET_CHAR HARD_SPACE
+
+#if UNICODE
+#define UTF8_HARD_SPACE		"\xC2\xA0"	/* 0xA0 */
+#define UTF8_BULLET		"\xE2\x80\xA2"	/* 2022 */
+#define UTF8_BULLET_STRING	UTF8_BULLET UTF8_HARD_SPACE
 #endif
 
-#define UTF8_HARD_SPACE	"\xC2\xA0"	/* 0xA0 */
-#define UTF8_BULLET	"\xE2\x80\xA2"	/* 2022 */
+#define SYMBOL_DISC_STRING	"\x6C" HARD_SPACE
+#define SYMBOL_SQUARE_STRING	"\x6E" HARD_SPACE
+#define SYMBOL_CIRCLE_STRING	"\x6D" HARD_SPACE
 
 /* You don't want to set this to 1 */
 #define DEBUG_DLCOMPACT 0
@@ -74,8 +82,6 @@ static void roman_one_five_ten(char *s, int n, char *oft)
     *p = 0;
 }
 
-
-
 static char *roman_numeral(int n, int caps)
 {
     /* Worst case 3888 = "MMMDCCCLXXXVIII" = 15 chars */
@@ -106,8 +112,6 @@ static char *roman_numeral(int n, int caps)
     return buffer;
 }
 
-
-
 static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 {
     static char buffer[24];		/* Big enough that it can be padded to a full word. */
@@ -117,16 +121,10 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
     case HTML_UL:
 #if UNICODE
 	if (config_encoding_internal == 1)
-	{
-	    strcpy(buffer, UTF8_BULLET UTF8_HARD_SPACE);
-	}
+	    strcpy(buffer, UTF8_BULLET_STRING);
 	else
 #endif
-	{
-	    buffer[0] = BULLET_CHAR;
-	    buffer[1] = (char)160;
-	    buffer[2] = 0;
-	}
+	    strcpy(buffer, BULLET_STRING);
 
 	switch (tib->item_type)
 	{
@@ -138,15 +136,17 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 	    /* only override the standard bullet if we know the symbol font is available */
 	case HTML_UL_TYPE_DISC:
 	    if (symfont)
-		buffer[0] = 108;
+		strcpy(buffer, SYMBOL_DISC_STRING);
 	    break;
+
 	case HTML_UL_TYPE_SQUARE:
 	    if (symfont)
-		buffer[0] = 110;
+		strcpy(buffer, SYMBOL_SQUARE_STRING);
 	    break;
+
 	case HTML_UL_TYPE_CIRCLE:
 	    if (symfont)
-		buffer[0] = 109;
+		strcpy(buffer, SYMBOL_CIRCLE_STRING);
 	    break;
 	}
 	break;
@@ -170,7 +170,7 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 	case rid_bullet_ol_I:
 	case rid_bullet_ol_i:
 	    sprintf(buffer, "%s", roman_numeral(tib->list_no,
-						  (tib->item_type == rid_bullet_ol_i) ? 0 : 1 ));
+						(tib->item_type == rid_bullet_ol_i) ? 0 : 1 ));
 	    break;
 	}
 #if UNICODE
@@ -178,7 +178,7 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 	    strcat(buffer, ")" UTF8_HARD_SPACE);
 	else
 #endif
-	    strcat(buffer, ")\240");
+	    strcat(buffer, ")" HARD_SPACE);
 	break;
 
     case HTML_DL:       /* fake bullet for transferring info to formatter */
@@ -194,16 +194,10 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
     default:
 #if UNICODE
 	if (config_encoding_internal == 1)
-	{
-	    strcpy(buffer, UTF8_BULLET UTF8_HARD_SPACE);
-	}
+	    strcpy(buffer, UTF8_BULLET_STRING);
 	else
 #endif
-	{
-	    buffer[0] = BULLET_CHAR;
-	    buffer[1] = (char)160;
-	    buffer[2] = 0;
-	}
+	    strcpy(buffer, BULLET_STRING);
 	break;
     }
 

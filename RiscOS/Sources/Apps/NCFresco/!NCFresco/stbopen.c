@@ -376,6 +376,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     else
         oflags = parent->flags &~ be_openurl_flag_NOCACHE;
 
+    if (flags & fe_open_url_NO_ENCODING_OVERRIDE)
+	oflags |= be_openurl_flag_NO_ENCODING_OVERRIDE;
+    
     if ((flags & fe_open_url_FROM_HISTORY) || (parent->browser_mode == fe_browser_mode_HISTORY))
 	oflags |= be_openurl_flag_HISTORY;
 

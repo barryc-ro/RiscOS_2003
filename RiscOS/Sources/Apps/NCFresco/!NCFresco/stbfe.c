@@ -4595,15 +4595,9 @@ int fe_encoding(fe_view v, int encoding)
     if (encoding == be_encoding_READ)
 	return backend_doc_encoding(v ? v->displaying : NULL, encoding);
 
-    /* should do this for all frames really */
-    backend_doc_encoding(v ? v->displaying : NULL, encoding);
+    config_encoding_user = encoding;
 
-/*     frontend_view_redraw(v, NULL); */
-    if (v && v->displaying)
-    {
-	backend_reset_width(v->displaying, 0);
-	fe_refresh_window(v->w, NULL);
-    }
+    frontend_open_url("ncint:current", v, NULL, NULL, 0 /* fe_open_URL_FROM_HISTORY | fe_open_url_NO_HISTORY */);
 
     return 0;
 }

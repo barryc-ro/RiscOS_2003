@@ -869,7 +869,8 @@ NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz.o
 
 NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
@@ -877,7 +878,8 @@ NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/debug/remotezm.o
+				$(RISCOS_BUILD_EXPORT)/Lib/debug/remotezm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz.o
 
 # --------------------
 
@@ -1003,7 +1005,7 @@ NCFRESCO_NT:
 # NCFresco softload module in the new style CVS controlled RISC OS build tree
 NCFRESCO_RAM:	$(PREDEPS)
 		@echo "Making NCFRESCO module for RISCOS"
-		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \
+		@cd ./ncfresco_zm; $(MAKE) NCFRESCO_MODULE \
 		LIBS="$(NCFRESCO_RAM_LIBS)" \
 		OBJS="$(NCFRESCO_RAM_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \

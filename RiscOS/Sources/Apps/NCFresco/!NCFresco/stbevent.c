@@ -656,7 +656,15 @@ static void url_event_handler(int event, fe_view v)
 static void encoding_event_handler(int event, fe_view v)
 {
     if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
-	fe_encoding(v, event & fevent_ENCODING_MASK);
+    {
+	char buf[32], *s;
+
+	sprintf(buf, PROGRAM_NAME"$Encoding%02x", event & fevent_ENCODING_MASK);
+
+	s = getenv(buf);
+	if (s && s[0])
+	    fe_encoding(v, atoi(s));
+    }
 }
 
 void fevent_handler(int event, fe_view v)

@@ -179,8 +179,9 @@ typedef struct _antweb_doc
     int threaded;
     int pending_delete;
 
-    int encoding;		/* charset encoding - defined in interface.h */
-
+    int encoding_user;		/* user set encoding (from config) */
+    int encoding_user_override;	/* user really wants encoding */
+    
     unsigned int fontusage[8];  /* 8x32=256-bit array of font usage */
 } antweb_doc;
 
