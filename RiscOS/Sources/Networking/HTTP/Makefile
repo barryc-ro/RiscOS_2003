@@ -44,8 +44,8 @@ INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 SSLDIR    = <Lib$Dir>.SSL
-#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
 REMOTEDB  =
+#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB}
 SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
@@ -53,7 +53,8 @@ SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
 # Include files
 #
 INCLUDES  = -IC:,TCPIPLibs:,$(SSLDIR),<Lib$Dir>.
-DFLAGS = -DCSFS ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DADD_CRLF=0 -DVERIFY_MD
+DFLAGS = ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DADD_CRLF=0 -DEXTEND_BUFFER=0 -DPROXY_REDIRECT=0 -DUSE_MIMEMAPMOD=0 -DCSFS -DVERIFY_MD 
+#DFLAGS = ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DADD_CRLF=0 -DEXTEND_BUFFER=0 -DPROXY_REDIRECT=1 -DUSE_MIMEMAPMOD=0
 #
 # Program specific options:
 #
@@ -137,7 +138,8 @@ rm.${COMPONENT}mod: ${OBJS} ${CLIB} ${INSECURELIBS} ${REMOTEDB}
         Access rm.${COMPONENT}mod RW/R
 
 rm.${COMPONENT}smod: ${SECUREOBJS} ${CLIB} ${SECURELIBS} ${REMOTEDB}
-        ${LD} -o $@ -module ${SECUREOBJS} ${CLIB} ${SECURELIBS} ${REMOTEDB}
+        ${LD} -map -o $@ -module ${SECUREOBJS} ${CLIB} ${SECURELIBS} ${REMOTEDB}
+        Access rm.${COMPONENT}smod RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
@@ -196,13 +198,15 @@ o.http:	TCPIPLibs:sys.h.time
 o.http:	TCPIPLibs:sys.h.uio
 o.http:	TCPIPLibs:sys.h.cdefs
 o.http:	C:h.kernel
+o.http:	TCPIPLibs:h.inetlib
+o.http:	TCPIPLibs:sys.h.types
+o.http:	TCPIPLibs:netinet.h.in
 o.http:	h.status
 o.http:	h.httppub
 o.http:	h.pads
 o.http:	h.http
 o.http:	h.files
 o.http:	h.mimemap
-o.http:	h.csfs
 os.mimemap:	c.mimemap
 os.mimemap:	C:h.kernel
 os.mimemap:	h.mimemap
@@ -256,6 +260,9 @@ os.http:	TCPIPLibs:sys.h.time
 os.http:	TCPIPLibs:sys.h.uio
 os.http:	TCPIPLibs:sys.h.cdefs
 os.http:	C:h.kernel
+os.http:	TCPIPLibs:h.inetlib
+os.http:	TCPIPLibs:sys.h.types
+os.http:	TCPIPLibs:netinet.h.in
 os.http:	h.status
 os.http:	<Lib$Dir>.SSL.h.objects
 os.http:	<Lib$Dir>.SSL.h.asn1
@@ -289,4 +296,3 @@ os.http:	h.pads
 os.http:	h.http
 os.http:	h.files
 os.http:	h.mimemap
-os.http:	h.csfs

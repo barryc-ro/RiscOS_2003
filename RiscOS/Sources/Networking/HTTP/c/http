@@ -31,6 +31,8 @@
  *		 wasn't allocating a byte for the terminator
  * SJM 26-Aug-97 took out a 'pdh: bodge' as it seemed to be responsible for server-push
  *               not working and crashing again!
+ * SJM 01-Oct-97 Added USE_MIMEMAPMOD. Added PROXY_REDIRECT code. Added BUFFER_EXTEND code.
+ *		 Only PROXY_REDIRECT tested at the moment and that is only for one customers use.
  */
 
 #include <errno.h>
@@ -296,6 +298,7 @@ static http_connection proto_con = {
     NULL,                       /* Return message */
     0,                          /* Buffer offset */
     0,                          /* Buffer used */
+    0,                          /* Buffer size */
     NULL,                       /* Buffer data */
     NULL,                       /* SSL connection */
     0,                          /* Flags */
@@ -307,6 +310,7 @@ static http_connection proto_con = {
     NULL,                       /* Server push boundary */
     0,                          /* #chars of boundary found at end of packet */
     1,                          /* # connections on this socket */
+    0				/* CSFS action */
     };
 
 
@@ -1371,7 +1375,7 @@ _kernel_oserror *http_set_file_type(http_connection *c, int *ftptr)
                  */
                 if ( semic )
                     *semic = 0;
-#if 1
+#if !USE_MIMEMAPMOD
                 ft = mime_map_to_riscos(hi->value);
 #else
 		/* pdh: *much* simpler to do this, but I've left in the old
@@ -1603,13 +1607,14 @@ static _kernel_oserror *http_prosecute( http_connection *c )
         {
             verify_error = FALSE;
             rc = SSL_connect( c->SSL );
-            fdebugf( log_file, "SSL_connect returned %d (errno=%d)\n", rc,
-                               SSL_errno() );
+
             if ( rc <= 0 )
             {
                 if ( SSL_errno() == EWOULDBLOCK )
                     return NULL;    /* still trying */
 
+		fdebugf( log_file, "SSL_connect returned %d (errno=%d)\n", rc,
+                               SSL_errno() );
 #if DEBUG
 		if (rc)
 		{
@@ -1622,6 +1627,9 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                                            : status_FAIL_REQUEST );
                 return NULL;
             }
+
+            fdebugf( log_file, "SSL_connect returned %d (errno=%d)\n", rc,
+                               SSL_errno() );
 
             /* Add some fake headers to provide SSL information */
             {
@@ -1992,6 +2000,102 @@ static _kernel_oserror *http_destroy( http_connection *c, int error )
 }
 
 
+#if PROXY_REDIRECT && !defined(NO_SECURE)
+static _kernel_oserror *get_address(const char *var, struct sockaddr_in *sa)
+{
+    char *location = getenv(var);
+    char *p;
+    struct hostent *hp;
+
+    memset(sa, 0, sizeof(*sa));
+    
+    if (location == NULL || location[0] == 0)
+    {
+	fdebugf (log_file, "get_address: '%s' not set\n", var);
+	return NULL;
+    }
+
+    if ((location = strdup(location)) == NULL)
+        return make_error(err_NO_MEMORY);
+    
+    sa->sin_family = AF_INET;
+    
+    if ( (p=strchr(location, ':')) != 0)
+    {
+	char *portstr;
+	int i;
+
+	portstr = p+1;
+
+	if ( (i=atoi(portstr)) != 0)
+	    sa->sin_port = htons((short)i);
+	    
+	*p = 0;
+    }
+
+#if 1
+    hp = gethostbyname(location);
+    if (hp)
+	memcpy(&sa->sin_addr, hp->h_addr, hp->h_length);
+#else
+    if ( strspn(location, "0123456789.") == strlen(location) )
+	sa->sin_addr.s_addr = (unsigned int) inet_addr(location);
+#endif    
+    
+    fdebugf( log_file, "get address: '%s' host=0x%08lx, port=0x%04x (%d)\n",
+	     location,
+	     sa->sin_addr.s_addr,
+	     sa->sin_port, htons(sa->sin_port));
+
+    free(location);
+  
+    return NULL;
+}
+
+static _kernel_oserror *check_proxy_redirect(struct sockaddr_in *sa, int *pflags)
+{
+    struct sockaddr_in proxy, proxy_s;
+    _kernel_oserror *e;
+
+    if ((*pflags & http_open_flags_SECURE) == 0)
+	return NULL;
+
+    if ((e = get_address("HTTP$Proxy", &proxy)) != NULL)
+	return e;
+
+    /* If proxy not equal to the host then ignore
+     * This covers the situations where
+       1) the proxy var is not set
+       2) a different proxy is being used
+       3) no proxy is being used
+     */
+    if (proxy.sin_addr.s_addr != sa->sin_addr.s_addr || proxy.sin_port != sa->sin_port)
+    {
+	fdebugf( log_file, "check_proxy_redirect: proxy doesn't match\n" );
+	return NULL;
+    }
+
+    if ((e = get_address("HTTPS$Proxy", &proxy_s)) != NULL)
+	return e;
+
+    /* If SSL proxy not set then ignore - could try and parse request string to bypass proxy altogether here */
+    if (proxy_s.sin_addr.s_addr == 0 || proxy_s.sin_port == 0)
+    {
+	fdebugf( log_file, "check_proxy_redirect: SSL proxy not specified\n" );
+	return NULL;
+    }
+
+    /* Otherwise override the proxy information and set tunnelling */
+    *sa = proxy_s;
+    *pflags |= http_open_flags_TUNNEL;
+
+    fdebugf( log_file, "check_proxy_redirect: to host=0x%08lx, port=0x%04x (%d)\n",
+	     sa->sin_addr.s_addr,
+	     sa->sin_port, htons(sa->sin_port));
+
+    return NULL;
+}
+#endif
 
         /*===================*
          *   SWI HTTP_Open   *
@@ -2008,17 +2112,17 @@ static _kernel_oserror *http_open(http_open_args *args)
     int rc;
     http_open_args args2 = *args;
     BOOL bQueued;
-
-#if 0
-    fdebugf(log_file, "Opening new conection.  Host = 0x%08lx, port = 0x%04x, object = '%s', fname = '%s'.\n\tHeaders stored at %p\n",
-            args2.in.addr->sin_addr.s_addr, args2.in.addr->sin_port,
-            args2.in.object, args2.in.fname ? args2.in.fname : "",
-            args2.in.headers);
+#if PROXY_REDIRECT && !defined(NO_SECURE)
+    _kernel_oserror *e;
 #endif
-
+    
     args->out.handle = NULL;
 
+#if EXTEND_BUFFER
+    new = malloc(sizeof(http_connection));
+#else
     new = malloc(sizeof(http_connection) + MAX_INPUT);
+#endif
     if (new == 0)
         return make_error(err_NO_MEMORY);
 
@@ -2029,17 +2133,36 @@ static _kernel_oserror *http_open(http_open_args *args)
     fdebugf( log_file, "%p:   fname = '%s'\n", new, args2.in.fname?args2.in.fname:"NULL" );
 
     *new = proto_con;                /* Fill in with a prototype connection */
-    new->buffer = (char*) (new + 1);
-    new->buffer[0] = 0;
 
     memcpy((char *)&(new->sa),(char *) args2.in.addr,  sizeof(new->sa) );
 
     new->flags = args2.in.flags;
+
+#if PROXY_REDIRECT && !defined(NO_SECURE)
+    /* If it feels neceesary this will update the addr and flags */
+    if ((e = check_proxy_redirect(&new->sa, &new->flags)) != NULL)
+    {
+	fdebugf( log_file, "%p: proxy redirect returns error '%s'\n", new, e->errmess );
+	free(new);
+	return e;
+    }
+#endif
+    
+#if EXTEND_BUFFER
+    new->buffer = malloc(MAX_LINE);
+    new->buf_size = MAX_LINE;
+#else
+    new->buffer = (char*) (new + 1);
+#endif
+    new->buffer[0] = 0;
+
+#ifdef CSFS
     if (new->flags & http_open_flags_ACTION)
       new->action = args->in.action;
     else
       new->action = 0;
-      
+#endif
+
 #if DEBUG
     http_show_flags( new );
 #endif
@@ -2096,7 +2219,7 @@ static _kernel_oserror *http_open(http_open_args *args)
         return http_destroy(new,err_NO_MEMORY);
     }
 
-    if ( args2.in.flags & http_open_flags_HEAD )
+    if ( new->flags & http_open_flags_HEAD )
         new->fh = NULL;
     else
     {
@@ -2865,6 +2988,13 @@ _kernel_oserror *http_close_handle(http_connection *c, int flags)
     if (c->next != NULL)
         c->next->prev = c->prev;
 
+#if EXTEND_BUFFER
+    if (c->buffer)
+    {
+	free(c->buffer);
+    }
+#endif    
+
     fdebugf(log_file, "Freeing connection structure\n");
     free(c);
 
@@ -2923,13 +3053,28 @@ static _kernel_oserror *http_status(http_status_args *args)
 
 static _kernel_oserror *http_maptoriscos(http_maptoriscos_args *args)
 {
+#if USE_MIMEMAPMOD
+    /* SWI XMimeMap_Translate */
+    return _swix( 0xBCD00, _INR(0,2)|_OUT(3), mmmtype_MIME, args->in.extn,
+		  mmmtype_RISCOS, &arg->out.ft );
+#else
     args->out.ft = mime_map_to_riscos(args->in.extn);
     return NULL;
+#endif
 }
 
 static _kernel_oserror *http_mapfromriscos(http_mapfromriscos_args *args)
 {
+#if USE_MIMEMAPMOD
+    static char result[128];
+
+    /* SWI XMimeMap_Translate */
+    return _swix( 0xBCD00, _INR(0,3)|_OUT(3), mmmtype_RISCOS, args->in.ft,
+		  mmmtype_MIME, result,
+		  &arg->out.extn );
+#else
     args->out.extn = mime_map_from_riscos(args->in.ft);
+#endif
     return NULL;
 }
 
@@ -3347,7 +3492,12 @@ char* http_getline(http_connection *c, int read)
 {
     char *end;
     int rc = 1;     /* any non-zero value */
-
+#if EXTEND_BUFFER
+    int buf_size = c->buf_size;
+#else
+    int buf_size = MAX_LINE;
+#endif
+    
     if (c->buf_used)
     {
         memmove(c->buffer, c->buffer + c->buf_used, c->buf_off - c->buf_used + 1);
@@ -3356,7 +3506,7 @@ char* http_getline(http_connection *c, int read)
     }
 
     /* pdh: might as well always read it */
-    if ( MAX_LINE - c->buf_off - 1 > 0 )
+    if ( buf_size - c->buf_off - 1 > 0 )
     {
         /* pdh: for the insecure prefix to a tunnelled conversation, peek
          * don't read
@@ -3364,14 +3514,14 @@ char* http_getline(http_connection *c, int read)
              && !c->SSL )
         {
             rc = recv(c->socket,c->buffer + c->buf_off,
-                            MAX_LINE - c->buf_off - 1, MSG_PEEK);
+                            buf_size - c->buf_off - 1, MSG_PEEK);
             if ( rc>0 )
                 fdebugf( log_file, "%p: peeked %d bytes\n", c, rc );
         }
         else
          */
             rc = http_recv( c, c->buffer + c->buf_off,
-                            MAX_LINE - c->buf_off - 1);
+                            buf_size - c->buf_off - 1);
 
         if ( rc==0 )
         {
@@ -3477,7 +3627,40 @@ char* http_getline(http_connection *c, int read)
         end[0] = 0;
         return c->buffer;
     }
-    else if ( (MAX_LINE - c->buf_off - 1 == 0) || !rc ) /* Phrased like this as this is the formula used in the recv() call */
+#if EXTEND_BUFFER
+    else if ( !rc ) /* EOF but no new line */
+    {
+        /* This is not a good situation, the buffer is full but we don't have
+         * a line feed */
+        c->buf_used = c->buf_off + 1;
+        fdebugf(log_file, "%p: EOF without newline (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+        return c->buffer;
+    }
+    else if ( (buf_size - c->buf_off - 1 == 0) ) /* Phrased like this as this is the formula used in the recv() call */
+    {
+	char *new_buf;
+
+        /* This is not a good situation, the buffer is full but we don't have
+         * a line feed so extend buffer and continue */
+
+	new_buf = malloc(c->buf_size + MAX_LINE);
+	if (!new_buf)
+	{
+	    c->buf_used = c->buf_off + 1;
+	    fdebugf(log_file, "%p: getline buffer filled up - can't extend (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+	    return c->buffer;
+	}
+
+	fdebugf(log_file, "%p: getline buffer filled up - extended (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+
+	memcpy(new_buf, c->buffer, c->buf_off+1);
+	free(c->buffer);
+
+	c->buffer = new_buf;
+	c->buf_size += MAX_LINE;
+    }
+#else
+    else if ( (buf_size - c->buf_off - 1 == 0) || !rc ) /* Phrased like this as this is the formula used in the recv() call */
     {
         /* This is not a good situation, the buffer is full but we don't have
          * a line feed */
@@ -3485,6 +3668,7 @@ char* http_getline(http_connection *c, int read)
         fdebugf(log_file, "%p: getline buffer filled up (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
         return c->buffer;
     }
+#endif
     return NULL;
 }
 
@@ -4348,7 +4532,7 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 */
 static _kernel_oserror *http_converttopem(_kernel_swi_regs *r)
 {
-#if defined(NO_SECURE)
+#if defined(NO_SECURE) || !defined(VERIFY_MD)
     return make_error(err_SSL_NOT_AVAILABLE);
     r = r;
 #else
@@ -4370,11 +4554,6 @@ static _kernel_oserror *http_converttopem(_kernel_swi_regs *r)
       r->r[0] = -1;
       return(NULL);
   }
-
-
-
-
-
 
   sprintf(hashname, "%08lx", X509_subject_name_hash(xcert));
   strcat(outfile, hashname);
