@@ -24,6 +24,8 @@
  * 07 Apr 1997 Added CLI.
  * 09 May 1997 Added change chv command
  * 12 May 1997 allow blank lines
+ * 19 May 1997 Added atr breakdown, rawatr, serial, stat, support for
+ *             lineeditor.
  *
  */
 #include <stdio.h>
@@ -34,12 +36,18 @@
 #include "swis.h"
 #include "error.h"
 #include "constants.h"
-#include "console.h"
 #include "scinter.h"
 
 #define APPNAME "SCProgram"
-#define VERSION "2.06"
+#define VERSION "2.07"
 
+char *file_status[] = {"Invalidated","Validated"};
+char *ac[] = {"ALW","CHV1","CHV2","PRO","AUT","","CHV & PRO","","CHV & AUT",
+              "","ADM1","ADM2","ADM3","ADM4","ADM5","NVR"};
+
+char *atr_manuf[] = {"Reserved","Reserved","Reserved","I2C","Microwire",
+     		     "InCard","Orga","Schlumberger","Gemplus"};
+char *atr_licencee[] = {"Reserved","Acorn","NCI","Net products"};
 /*
  * script processing table
  */
@@ -56,6 +64,10 @@ static cmd_ret_t _dump      (int, char**);
 static cmd_ret_t _help	    (int, char**);
 static cmd_ret_t _quit      (int, char**);
 static cmd_ret_t _changechv (int, char**);
+static cmd_ret_t _atr       (int, char**);
+static cmd_ret_t _atr_raw   (int, char**);
+static cmd_ret_t _serial    (int, char**);
+static cmd_ret_t _stat      (int, char**);
 
 static const cmd_t cmd_tbl[] = {
  _code,      "code",      "code <code number>",
@@ -70,6 +82,14 @@ static const cmd_t cmd_tbl[] = {
  	     		  "display the supplied text on screen",
  _wait,	     "wait",      "wait",
  	     		  "wait for a key to be pressed",
+ _atr,	     "atr",	  "atr",
+ 	     		  "display atr breakdown",
+ _atr_raw,   "rawatr",	  "atr",
+ 	     		  "display atr in raw form",
+ _serial,    "serial",	  "serial <filename>",
+ 	     		  "display card serial number",
+ _stat,	     "stat",      "stat <filename>",
+ 	     		  "display DF/EF stats",
 /*
  _createdir, "createdir", "createdir <scfilename> <size> <access>",
                           "create directory on smartcard",
@@ -78,8 +98,8 @@ static const cmd_t cmd_tbl[] = {
 */
  _chv,       "chv",       "chv <enable|disable>",
                           "change chv1 state",
- _changechv, "change",	  "change chv value",
- 	     		  "change <new chv1 code>",
+ _changechv, "change",	  "change <new chv1 code>",
+ 	     		  "change chv value",
  _unblock,   "unblock",	  "unblock <unblock code> <new chv1 code>",
  	     		  "unblock a blocked card",
  _help,	     "help",      "help [command]",
@@ -154,41 +174,27 @@ get_error_msg(int errnum)
 
 /*
  * wait until the SCInterface module is not busy or an error has occurred
- * do a twiddler whilst waiting for completion
+ * do an hourglass whilst waiting for completion
  */
 static int
 _check_interface_status(void)
 {
   _kernel_swi_regs reg;
-  char twiddle[4]={124,47,45,92};
-  int i=0;
   int status;
   int error;
 
-  _kernel_swi(OS_RemoveCursors,&reg,&reg);
+  _swix(Hourglass_On,0);
   do
   {
-    reg.r[0] = (int)twiddle[i++];
-    if (i>=sizeof(twiddle)) i=0;
-    _kernel_swi(OS_WriteC,&reg,&reg);
-
     _kernel_swi(SCInterface_Status, &reg, &reg);
     status = reg.r[0];
     error = reg.r[1];
-
-    reg.r[0] = (int)'\b';
-    _kernel_swi(OS_WriteC,&reg,&reg);
 
     if (status==StatusError)
       break;
 
   } while (status==StatusBusy);
-
-  reg.r[0] = (int)' ';
-  _kernel_swi(OS_WriteC,&reg,&reg);
-  reg.r[0] = (int)'\b';
-  _kernel_swi(OS_WriteC,&reg,&reg);
-  _kernel_swi(OS_RestoreCursors,&reg,&reg);
+  _swix(Hourglass_Off,0);
 
   return (status==StatusError)?error:0;
 }
@@ -200,6 +206,268 @@ static cmd_ret_t
 _quit (int argc, char **argv)
 {
   return _QUIT;
+}
+/*
+ * convert a BCD byte to an int
+ */
+static int
+bcd_to_int(unsigned char byte)
+{
+  return (((byte&0xf0)>>4)*10)+(byte&0xf);
+}
+
+/* BCD_END is any character with a binary value > 9 */
+/* bear this in mind for non ASCII character values */
+/* this marks the current end of the shift register */
+#define BCD_END '#'
+
+/* this reverses The working register and converts BCD to ASCII */
+static void
+conv_bcd(unsigned char *string, unsigned int out_len)
+{
+        unsigned int i;
+        unsigned int n = 0;
+        unsigned char c_tmp;
+
+        /* get length of register and convert to ASCII */
+        /* we add '0' - so beware on non ASCII systems */
+        while (string[n] != BCD_END)
+                string[n++] += '0';
+
+        /* reverse bytes */
+        for (i = 0; i < n / 2; i++)
+        {
+                c_tmp = string[i];
+                string[i] = string[n - i - 1];
+                string[n - i - 1] = c_tmp;
+        }
+
+        for (i = 0; i < n; i++)
+                string[out_len - i - 1] = string[n - i - 1];
+
+        while (i < out_len)
+                string[out_len - i++ - 1] = '0';
+
+        /* NULL terminate at end */
+        string[out_len] = '\0';
+}
+
+/* BCD multiply the shift register by 2 */
+static void mult_2(unsigned char *bcd)
+{
+        unsigned char carry = 0;
+
+        while (*bcd != BCD_END)
+        {
+                /* multiply first BCD digit by 2 and add any previous carry */
+                if ((*bcd = *bcd * 2 + carry) > 9)
+                {
+                        /* overflow - so set carry */
+                        *bcd -= 10;
+                        carry = 1;
+                }
+                else
+                        carry = 0;
+
+                /* advance to next digit */
+                bcd++;
+        }
+
+        /* any residual carry increases register length */
+        if (carry)
+        {
+                *bcd++ = 1;
+                *bcd = BCD_END;
+        }
+}
+
+/* Increment BCD shift register by 1 */
+static void
+add_1(unsigned char *bcd)
+{
+        while (1)
+        {
+                /* if we get to the end it must be a carry */
+                /* or the first time we've needed to add 1 */
+                if (*bcd == BCD_END)
+                {
+                        *bcd++ = 1;
+                        *bcd = BCD_END;
+                        break;
+                }
+                else if ((*bcd += 1) < 10)
+                        break; /* finished */
+                else
+                        *bcd++ -= 10; /* carry one to next digit */
+        }
+}
+
+/*
+ * convert a serial number buffer into an serial number string
+ */
+static void
+btos(unsigned char *bits, unsigned int bytes, char *string,
+                                        unsigned int out_len)
+{
+  unsigned int i, j;
+  unsigned int found_1 = 0;
+  unsigned char curr_byte;
+  unsigned char mask;
+
+  /* place END sentinel at start of string */
+  string[0] = BCD_END;
+
+  for (i = 0; i < bytes; i++)
+  {
+    /* take bytes, highest first */
+    curr_byte = bits[i];
+
+    for (j = 0, mask = 0x80; j < 8; j++, mask /= 2)
+    {
+      /* after the first binary 1, we BCD *2 each time */
+      if (found_1)
+        mult_2((unsigned char *)string);
+
+      /* take bits, highest first and check */
+      /* if the current bit is 1, add 1 to register */
+      if (curr_byte & mask)
+      {
+        add_1((unsigned char *)string);
+        found_1 = 1;
+      }
+    }
+  }
+
+  /* post-process string */
+  conv_bcd((unsigned char *)string, out_len);
+}
+/*
+ * implement the atr command
+ */
+static cmd_ret_t
+_atr (int argc, char **argv)
+{
+  _kernel_oserror *err=NULL;
+  _kernel_swi_regs reg;
+  t_card_atr  *ATR;
+  int i;
+  int licensee_code;
+  int num_manuf;
+  int num_licencee;
+
+  if (argc!=1)
+    return _SYNTAX;
+
+  reg.r[0] = 0;  /* flags */
+  ERR_GOTO(err,_kernel_swi(SCInterface_GetATR,&reg,&reg));
+  if (reg.r[0] != SC_SUCCESS)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(reg.r[0]));
+    goto exit_gracefully;
+  }
+  ATR = (t_card_atr*)reg.r[1];
+
+  num_manuf = sizeof(atr_manuf)/sizeof(char*);
+  num_licencee = sizeof(atr_licencee)/sizeof(char*);
+
+  /*
+   * display ATR
+   */
+  printf("ATR version          : %d\n",ATR->hist[3]);
+  switch (ATR->hist[3])
+  {
+    case 1 :
+      printf("Manufacturer code    : %d (%s)\n",ATR->hist[0],
+      	(ATR->hist[0]<num_manuf)?atr_manuf[ATR->hist[0]]:"Unknown");
+      printf("OS code              : %d\n",ATR->hist[1]);
+      printf("Hardware code        : %d\n",ATR->hist[2]);
+      printf("Date of issue        : %02d/%02d/%02d\n",
+        bcd_to_int(ATR->hist[6]),bcd_to_int(ATR->hist[5]),
+      	bcd_to_int(ATR->hist[4]));
+      licensee_code = ATR->hist[7]<<16|ATR->hist[8]<<8|ATR->hist[9];
+      printf("Licensee code        : %d (%s)\n",licensee_code,
+        (licensee_code<num_licencee)?atr_licencee[licensee_code]:"Unknown");
+      printf("Reserved bytes       : 0x%02x,0x%02x,0x%02x,0x%02x,0x%02x\n",
+      	ATR->hist[10],ATR->hist[11],ATR->hist[12],ATR->hist[13],ATR->hist[14]);
+      printf("Defaulted class byte : 0x%02x\n",0xA0);
+      break;
+    case 2 :
+      printf("Manufacturer code    : %d (%s)\n",ATR->hist[0],
+      	(ATR->hist[0]<num_manuf)?atr_manuf[ATR->hist[0]]:"Unknown");
+      printf("OS code              : %d\n",ATR->hist[1]);
+      printf("Hardware code        : %d\n",ATR->hist[2]);
+      printf("Date of issue        : %02d/%02d/%02d\n",
+      	       bcd_to_int(ATR->hist[6]),bcd_to_int(ATR->hist[5]),
+      	       bcd_to_int(ATR->hist[4]));
+      licensee_code = ATR->hist[7]<<16|ATR->hist[8]<<8|ATR->hist[9];
+      printf("Licensee code        : %d (%s)\n",licensee_code,
+        (licensee_code<num_licencee)?atr_licencee[licensee_code]:"Unknown");
+      printf("Class byte           : %02x\n",ATR->hist[10]);
+      printf("Reserved bytes       : 0x%02x,0x%02x,0x%02x,0x%02x\n",
+  	       ATR->hist[11],ATR->hist[12],ATR->hist[13],ATR->hist[14]);
+      printf("Class byte           : 0x%02x\n",ATR->hist[10]);
+      break;
+    case 3 :
+      printf("Manufacturer code    : %d (%s)\n",ATR->hist[0],
+      	(ATR->hist[0]<num_manuf)?atr_manuf[ATR->hist[0]]:"Unknown");
+      printf("OS code              : %d\n",ATR->hist[1]);
+      printf("Hardware code        : %d\n",ATR->hist[2]);
+      printf("Date of issue        : %02d/%02d/%02d%02d\n",
+      	       bcd_to_int(ATR->hist[7]),bcd_to_int(ATR->hist[6]),
+      	       bcd_to_int(ATR->hist[4]),bcd_to_int(ATR->hist[5]));
+      licensee_code = ATR->hist[8]<<16|ATR->hist[9]<<8|ATR->hist[10];
+      printf("Licensee code        : %d (%s)\n",licensee_code,
+        (licensee_code<num_licencee)?atr_licencee[licensee_code]:"Unknown");
+      printf("Class byte           : %02x\n",ATR->hist[11]);
+      printf("Reserved bytes       : 0x%02x,0x%02x,0x%02x\n",
+  	       ATR->hist[12],ATR->hist[13],ATR->hist[14]);
+
+      break;
+
+    default:
+      printf("Unknown format ATR\n");
+      for (i=0; i<ATR->len; i++)
+        printf("ATR byte %d : %02x\n",i,ATR->hist[i]);
+  }
+
+exit_gracefully:
+  if (err)
+    error_generate(err);
+
+  return _CONT;
+}
+
+/*
+ * implement the atr_raw command
+ */
+static cmd_ret_t
+_atr_raw(int argc, char **argv)
+{
+  _kernel_oserror *err=NULL;
+  _kernel_swi_regs reg;
+  t_card_atr  *ATR;
+  int i;
+
+  if (argc!=1)
+    return _SYNTAX;
+
+  reg.r[0] = 0;  /* flags */
+  ERR_GOTO(err,_kernel_swi(SCInterface_GetATR,&reg,&reg));
+  if (reg.r[0] != SC_SUCCESS)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(reg.r[0]));
+    goto exit_gracefully;
+  }
+  ATR = (t_card_atr*)reg.r[1];
+
+  for (i=0; i<ATR->len; i++)
+    printf("ATR byte %d : %02x\n",i,ATR->hist[i]);
+
+exit_gracefully:
+  if (err)
+    error_generate(err);
+
+  return _CONT;
 }
 
 /*
@@ -274,7 +542,7 @@ _chv(int argc, char **argv)
   /*
    * enable/disable chv
    */
-  reg.r[0] = 1<<0 | (enable?1<<1:0);       /* flags */
+  reg.r[0] = (enable?1<<1:0);              /* flags */
   reg.r[1] = (int)"/";			   /* filename */
   reg.r[2] = 1;				   /* access condition */
   reg.r[3] = (int)sc_code;
@@ -368,7 +636,7 @@ _createdir(int argc, char **argv)
   /*
    * do a create dir
    */
-  reg.r[0] = 1<<0 | 1<<1;       /* flags */
+  reg.r[0] = 1<<1;              /* flags */
   reg.r[1] = (int)argv[1];	/* filename */
   reg.r[2] = atoi(argv[2]);	/* size */
   reg.r[3] = atoi(argv[3]);	/* access condition */
@@ -413,7 +681,7 @@ _createfile(int argc, char **argv)
   /*
    * do a create dir
    */
-  reg.r[0] = 1<<0;              /* flags */
+  reg.r[0] = 0;                 /* flags */
   reg.r[1] = (int)argv[1];	/* filename */
   reg.r[2] = atoi(argv[2]);	/* size */
   reg.r[3] = atoi(argv[3]);	/* access condition */
@@ -554,7 +822,7 @@ _write(int argc, char **argv)
   /*
    * do the write to the smart card
    */
-  reg.r[0] = 1<<0;
+  reg.r[0] = 0;
   reg.r[1] = (int)argv[2];
   reg.r[2] = 0;
   reg.r[3] = (int)buffer;
@@ -617,7 +885,7 @@ _read(int argc, char **argv)
   /*
    * find out the size of the file to read
    */
-  reg.r[0] = 1<<0;
+  reg.r[0] = 0;
   reg.r[1] = (int)argv[2];
   reg.r[2] = (int)data;
   reg.r[3] = sizeof(data);
@@ -645,7 +913,7 @@ _read(int argc, char **argv)
   /*
    * do the read from the smart card
    */
-  reg.r[0] = 1<<0;
+  reg.r[0] = 0;
   reg.r[1] = (int)argv[2];
   reg.r[2] = 0;
   reg.r[3] = (int)buffer;
@@ -722,7 +990,6 @@ _dump(int argc, char **argv)
   int  status;
   char *buffer = 0;
   int  len;
-  int  handle;
   char line[81];
   int  i, j, dp, hp;
   char *bp=0;
@@ -735,7 +1002,7 @@ _dump(int argc, char **argv)
   /*
    * find out the size of the file to read
    */
-  reg.r[0] = 1<<0;
+  reg.r[0] = 0;
   reg.r[1] = (int)argv[1];
   reg.r[2] = (int)data;
   reg.r[3] = sizeof(data);
@@ -765,7 +1032,7 @@ _dump(int argc, char **argv)
   /*
    * do the read from the smart card
    */
-  reg.r[0] = 1<<0;
+  reg.r[0] = 0;
   reg.r[1] = (int)argv[1];
   reg.r[2] = 0;
   reg.r[3] = (int)buffer;
@@ -815,15 +1082,187 @@ _dump(int argc, char **argv)
   }
 
 exit_gracefully:
-  if (handle)
-  {
-    reg.r[0] = 0;
-    reg.r[1] = handle;
-    _kernel_swi(OS_Find,&reg,&reg);
-  }
-
   if (buffer)
     free(buffer);
+
+  if (err)
+    error_generate(err);
+
+  return (_CONT);
+}
+
+/*
+ * obtain file info
+ *
+ *   argv[1] = filename
+ */
+static cmd_ret_t
+_stat(int argc, char **argv)
+{
+  _kernel_oserror *err=NULL;
+  _kernel_swi_regs reg;
+  char data[22];
+  int  status;
+  int i;
+
+  if (argc!=2)
+    return (_SYNTAX);
+
+  /*
+   * stat the file
+   */
+  reg.r[0] = 0;
+  reg.r[1] = (int)argv[1];
+  reg.r[2] = (int)data;
+  reg.r[3] = sizeof(data);
+  ERR_GOTO(err,_kernel_swi(SCInterface_FileInfo,&reg,&reg));
+  if (reg.r[0] != SC_SUCCESS)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(reg.r[0]));
+    goto exit_gracefully;
+  }
+
+  /*
+   * now wait for completion
+   */
+  if ((status=_check_interface_status())!=0)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(status));
+    goto exit_gracefully;
+  }
+
+  printf("  File ID             : %02x%02x\n",data[4],data[5]);
+  switch (data[6])
+  {
+    case 0x38 :
+      printf("  Type of file        : %02x (DF)\n",data[6]);
+      printf("  Left free space     : %d bytes\n",data[2]<<8|data[3]);
+      printf("  Access conditions\n");
+      printf("    Dir               : %s\n",ac[(data[8]>>4)&0xf]);
+      printf("    Delete file       : %s\n",ac[(data[9]>>4)&0xf]);
+      printf("    Create file       : %s\n",ac[(data[9]>>0)&0xf]);
+      printf("    Rehabilitate      : %s\n",ac[(data[10]>>4)&0xf]);
+      printf("    Invalidate        : %s\n",ac[(data[10]>>0)&0xf]);
+      break;
+    default :
+      printf("  Type of file        : %02x (EF)\n",data[6]);
+      printf("  File size           : %d bytes\n",data[2]<<8|data[3]);
+      printf("  Access conditions\n");
+      printf("    Read & Seek       : %s\n",ac[(data[8]>>4)&0xf]);
+      printf("    Update / Decrease : %s\n",ac[(data[8]>>0)&0xf]);
+      printf("    Increase          : %s\n",ac[(data[9]>>4)&0xf]);
+      printf("    Create record     : %s\n",ac[(data[9]>>0)&0xf]);
+      printf("    Rehabilitate      : %s\n",ac[(data[10]>>4)&0xf]);
+      printf("    Invalidate        : %s\n",ac[(data[10]>>0)&0xf]);
+      break;
+  }
+  printf("  File status         : %s\n",file_status[data[11]]);
+  switch (data[12])
+  {
+    case 7 : case 9 :
+      printf("  CHV status          : %02x\n",data[18]);
+      printf("  CHV unblock status  : %02x\n",data[19]);
+      /* drop through to */
+    case 5 :
+      printf("  Number of DFs       : %02x\n",data[14]);
+      printf("  Number of EFs       : %02x\n",data[15]);
+      break;
+    case 1 :
+      /* ignore */
+      break;
+    default :
+      printf("  Following data %d\n",data[12]);
+      for (i=13; i<13+data[12]; i++)
+        printf("    Further data      : %02x\n",data[i]);
+  }
+  printf("\n");
+
+exit_gracefully:
+  if (err)
+    error_generate(err);
+
+  return (_CONT);
+}
+/*
+ * function to read a smart card serial number file and display it on screen
+ *
+ *   argv[1] = serial number filename
+ */
+static cmd_ret_t
+_serial(int argc, char **argv)
+{
+  _kernel_oserror *err=NULL;
+  _kernel_swi_regs reg;
+  char data[8];
+  int  status;
+  unsigned char buffer[8];
+  char out_buff[8];
+  int  len;
+
+  if (argc!=2)
+    return (_SYNTAX);
+
+  /*
+   * find out the size of the file to read
+   */
+  reg.r[0] = 0;
+  reg.r[1] = (int)argv[1];
+  reg.r[2] = (int)data;
+  reg.r[3] = sizeof(data);
+  ERR_GOTO(err,_kernel_swi(SCInterface_FileInfo,&reg,&reg));
+  if (reg.r[0] != SC_SUCCESS)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(reg.r[0]));
+    goto exit_gracefully;
+  }
+
+  /*
+   * now wait for completion
+   */
+  if ((status=_check_interface_status())!=0)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(status));
+    goto exit_gracefully;
+  }
+
+  len = (data[2]<<8)|data[3]; /* calculate size from fileinfo */
+  if (len>sizeof(buffer))
+    len=sizeof(buffer);
+
+  /*
+   * do the read from the smart card
+   */
+  reg.r[0] = 0;
+  reg.r[1] = (int)argv[1];
+  reg.r[2] = 0;
+  reg.r[3] = (int)buffer;
+  reg.r[4] = len;
+  reg.r[5] = NULL;
+  reg.r[6] = 0;
+  ERR_GOTO(err,_kernel_swi(SCInterface_Read,&reg,&reg));
+  if (reg.r[0] != SC_SUCCESS)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(reg.r[0]));
+    goto exit_gracefully;
+  }
+
+  /*
+   * now wait for completion
+   */
+  if ((status=_check_interface_status())!=0)
+  {
+    printf("\n%s: error %s\n",argv[0],get_error_msg(status));
+    goto exit_gracefully;
+  }
+  else
+    printf("\n");
+
+  btos(buffer, sizeof(buffer), out_buff, sizeof(out_buff));
+
+  printf("%s: serial number : %s\n",argv[0],out_buff);
+
+
+exit_gracefully:
 
   if (err)
     error_generate(err);
@@ -887,31 +1326,15 @@ _getargs(char *line, char **argv)
 static void
 _getline(char *line, int size)
 {
-  char ch = 0;
-  int  i  = 0;
-
+  _kernel_swi_regs reg;
   printf("sc>");
-  while (ch != '\r' && i < size)
-  {
-    ch = (char)console_get_key(0);
-    if (ch == '\b' && i > 0)
-    {
-      console_put_char('\b');
-      console_put_char(' ');
-      console_put_char('\b');
-      i--;
-    }
-    else
-    {
-      if (ch != '\r' && ch !='\b' && ch)
-      {
-        console_put_char(ch);
-        line[i++] = ch;
-      }
-    }
-  }
-  line[i] = 0;
-  printf("\n");
+  reg.r[0] = (int)line | 1U<<31;
+  reg.r[1] = size;
+  reg.r[2] = 0;
+  reg.r[3] = 255;
+  reg.r[4] = 0;
+  _kernel_swi(OS_ReadLine,&reg,&reg);
+  line[reg.r[1]] = 0; /* terminate */
 }
 /*
  * read a line of text in from the specified file and remove any newlines
