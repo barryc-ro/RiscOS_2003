@@ -19,9 +19,11 @@
 #include "sc_state.h"
 #include "callback.h"
 #include "amplayer.h"
+#include "instance.h"
 
 #define LOGGING (0)
 #define NO_AMPLAYER (0)
+#define USE_MI (1)
 
 #define BLOCKS		(10)
 #define BLOCKSIZE	(4096)
@@ -64,6 +66,9 @@ typedef struct shout_s {
   int         paused;
   int         headers_read;
   int         length;
+#if USE_MI
+  int         instance;
+#endif
 } shout_s;
 
 /* A list of invocations. */
@@ -95,6 +100,11 @@ static void tidy_stream(shout_t s) {
       t = &(*t)->next;
     if (*t)
       *t = s->next;
+#if !NO_AMPLAYER
+#if USE_MI
+    Instance_Destroy(s->instance);
+#endif
+#endif
     Free(s);
   }
 }
@@ -309,11 +319,18 @@ static void do_poll(shout_t shout) {
   int n, state, sstate, block_free;
   char *s;
   _kernel_oserror *err;
+  char *oldinstance = NULL;
 
   ExceptTry
   {
     if (shout->http) {
       n = 0;
+#if USE_MI
+      err = Instance_Select(shout->instance, &oldinstance);
+      if (err) {
+        Error("Failed to select AMPlayer Instance!");
+      }
+#endif
       do {
         /* Still getting data. Grab a free block, and try for more data */
         block_free = (shout->block[shout->nextblock]->used == 0);
@@ -375,14 +392,12 @@ static void do_poll(shout_t shout) {
 #endif
             shout->block[shout->nextblock]->length = shout->fill;
             //printf("block=%d, meta=%x\n", shout->nextblock, shout->block[shout->nextblock]->meta);
-#if NO_AMPLAYER
-            err = NULL;
-#else
+#if !NO_AMPLAYER
             err = _swix(AMPlayer_StreamGiveData, _INR(0,1), shout->handle, (int)(shout->block[shout->nextblock]));
-#endif
             if (err) {
               Error("AMPlayer died!");
             }
+#endif
             shout->fill = 0;
             shout->nextblock = (shout->nextblock+1) % BLOCKS;
             shout->metafreed = 0;
@@ -456,6 +471,12 @@ static void do_poll(shout_t shout) {
           shout->state = SC_PLAYING;
         }
       }
+#if USE_MI
+      err = Instance_DeSelect(oldinstance);
+      if (err) {
+        Error("Failed to select AMPlayer Instance!");
+      }
+#endif
     }
     /* Don't do this as an else... */
     if (!shout->http) {
@@ -466,6 +487,9 @@ static void do_poll(shout_t shout) {
   }
   ExceptCatch
   {
+#if USE_MI
+    Instance_DeSelect(oldinstance);
+#endif
 #if LOGGING
     log("Exception caught in do_poll");
 #endif
@@ -507,6 +531,7 @@ shout_t Shout_Start(const char *url, int flags) {
   shout_t s;
   _kernel_oserror *err;
   int i;
+  char *oldinstance = NULL;
 
   if (flags != 0) {
 #if LOGGING
@@ -541,14 +566,24 @@ shout_t Shout_Start(const char *url, int flags) {
     s->meta = Malloc(METASIZE);
 
     s->http = HTTP_GetUrl(url);
+    s->instance = 0;
 #if NO_AMPLAYER
     s->handle = -1;
-    err = NULL;
 #else
-    err = _swix(AMPlayer_StreamOpen, _INR(0,1) | _OUT(0), 2, "SHOUTcast Stream", &s->handle);
-#endif
+#if USE_MI
+    err = Instance_Create(&s->instance, &oldinstance);
     if (err)
       Error(err->errmess);
+#endif
+    err = _swix(AMPlayer_StreamOpen, _INR(0,1) | _OUT(0), 2, "SHOUTcast Stream", &s->handle);
+    if (err)
+      Error(err->errmess);
+#if USE_MI
+    err = Instance_DeSelect(oldinstance);
+    if (err)
+      Error(err->errmess);
+#endif
+#endif
     s->paused       = 0;
     s->nextblock    = 0;
     s->fill         = 0;
@@ -562,6 +597,9 @@ shout_t Shout_Start(const char *url, int flags) {
   }
   ExceptCatch
   {
+#if USE_MI
+    Instance_DeSelect(oldinstance);
+#endif
 #if LOGGING
     log("Exception caught in Shout_Start");
 #endif
@@ -591,6 +629,8 @@ shout_t Shout_Start(const char *url, int flags) {
 void Shout_Stop(shout_t s, int flags) {
 
   shout_t t;
+  char *oldinstance;
+  _kernel_oserror *err;
 
   if (flags != 0) {
 #if LOGGING
@@ -613,11 +653,37 @@ void Shout_Stop(shout_t s, int flags) {
     HTTP_Close(s->http);
     s->http = NULL;
 #if !NO_AMPLAYER
+#if USE_MI
+    err = Instance_Select(s->instance, &oldinstance);
+    if (err) {
+      Error(err->errmess);
+    }
+#endif
     _swix(AMPlayer_StreamClose, _IN(0), s->handle);
+#if USE_MI
+    err = Instance_DeSelect(oldinstance);
+    if (err) {
+      Error(err->errmess);
+    }
+#endif
 #endif
   }
   if (!s->finished) {
+#if !NO_AMPLAYER
+#if USE_MI
+    err = Instance_Select(s->instance, &oldinstance);
+    if (err) {
+      Error(err->errmess);
+    }
+#endif
     _swix(AMPlayer_Stop, _IN(0), 0);
+#if USE_MI
+    err = Instance_DeSelect(oldinstance);
+    if (err) {
+      Error(err->errmess);
+    }
+#endif
+#endif
   }
   s->closed = 1;
   check_finished(s);
@@ -652,6 +718,8 @@ void Shout_State(shout_t s, int flags, int *state, int *bytes, int *total) {
 static void do_kill(shout_t shout) {
 
   int i, finished;
+  char *oldinstance;
+  _kernel_oserror *err;
 
   Shout_Stop(shout, 0);
 
@@ -664,7 +732,21 @@ static void do_kill(shout_t shout) {
     }
   }
   if (!finished) {
+#if !NO_AMPLAYER
+#if USE_MI
+    err = Instance_Select(shout->instance, &oldinstance);
+    if (err) {
+      Error(err->errmess);
+    }
+#endif
     _swix(AMPlayer_Stop, _IN(0), 0);
+#if USE_MI
+    err = Instance_DeSelect(oldinstance);
+    if (err) {
+      Error(err->errmess);
+    }
+#endif
+#endif
 #if LOGGING
     log("SHOUTcast module can't die while AMPlayer is holding blocks! Try again in a mo...");
 #endif
@@ -700,6 +782,8 @@ void Shout_Pause(shout_t s, int pause) {
 
   shout_t t;
   int sstate, block_free;
+  char *oldinstance;
+  _kernel_oserror *err;
 
   t = shout;
   while (t && (t != s))
@@ -716,6 +800,12 @@ void Shout_Pause(shout_t s, int pause) {
 #if NO_AMPLAYER
   sstate = 1;
 #else
+#if USE_MI
+  err = Instance_Select(s->instance, &oldinstance);
+  if (err) {
+    Error(err->errmess);
+  }
+#endif
   _swix(AMPlayer_StreamInfo, _IN(0) | _OUT(0), s->handle, &sstate);
 #endif
   pause = (sstate & 4)>>2;
@@ -742,6 +832,14 @@ void Shout_Pause(shout_t s, int pause) {
 #endif
     }
   }
+#if !NO_AMPLAYER
+#if USE_MI
+  err = Instance_DeSelect(oldinstance);
+  if (err) {
+    Error(err->errmess);
+  }
+#endif
+#endif
 }
 
 void Shout_Debug(void) {
