@@ -6,6 +6,7 @@
 # Date          Name         Description
 # ----          ----         -----------
 # 07-Feb-96     KJB          Created.
+# 06-May-98     SNB          Copy ioctl_comp as ioctl_compat on export (long name)
 
 LIBDIR = <Lib$Dir>
 
@@ -168,6 +169,7 @@ export_hdrs: ${HDRS} dirs
         ${CP} rpc        TCPIPLibs:rpc             ${CPFLAGS}
         ${CP} rpcsvc     TCPIPLibs:rpcsvc          ${CPFLAGS}
         ${CP} sys        TCPIPLibs:sys             ${CPFLAGS}
+	-${CP} TCPIPLibs:sys.h.ioctl_comp TCPIPLibs:sys.h.ioctl_compat ${CPFLAGS}
         @echo ${COMPONENT}: export complete (hdrs)
 
 dirs:
