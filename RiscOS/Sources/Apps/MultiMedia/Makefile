@@ -8,7 +8,7 @@ AS      = aasm
 CP      = copy
 MKDIR   = cdir
 RM      = remove
-WIPE    = -wipe
+WIPE    = x wipe
 MAKE    = amu
 BUILDWRAP = Utils.BuildWrap
 
@@ -46,18 +46,18 @@ rom: ${TARGET}
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET}
+install_rom:
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} ${TDIR} ${WFLAGS}
-        ${WIPE} ${RESDIR} ${WFLAGS}
-        ${WIPE} ${DATA} ${WFLAGS}
+        -${WIPE} ${TDIR} ${WFLAGS}
+        -${WIPE} ${RESDIR} ${WFLAGS}
+        -${WIPE} ${DATA} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${WIPE} ${DATA} ${WFLAGS}
+        -${WIPE} ${DATA} ${WFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE} ${RESDATA} dirs
