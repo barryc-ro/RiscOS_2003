@@ -1,0 +1,342 @@
+/************************************************************************************/
+/*                                                                                  */
+/*  File: ppp.c                                                                     */
+/*                                                                                  */
+/*  Copyright © 1998 Acorn Computers Ltd., Cambridge, England                       */
+/*                                                                                  */
+/*  Modification History:                                                           */
+/*  Date         Engineer  Change                                                   */
+/*  ----         --------  ------                                                   */
+/*  xx-Jul-1998  SR        Created                                                  */
+/*                                                                                  */
+/************************************************************************************/
+
+#include <stdlib.h>
+#include <time.h>
+#include "kernel.h"
+#include "ui.h"
+#include "errors.h"
+#include "main.h"
+#include "ppp.h"
+
+enum ppp_state {IDLE,
+                CONNECTING,
+                CONNECTED,
+                DISCONNECTING};
+
+static int ppp_state = IDLE;
+
+static int initiate_link_connection(void);
+static int tell_ppp_to_disconnect(void);
+static int call_ppp_stats(void);
+static int e_check(int rc,int line);
+
+#ifdef PPP_SIMULATION
+static void delay_simulation(int *timer_started,time_t *save_time,int *rc);
+#endif
+
+/************************************************************************************/
+/* Function:       ppp_stateMachine()                                               */
+/* Behaviour: */
+/* Prerequisites:*/
+/* Requires:*/
+/* Returns:*/
+/* Outputs:*/
+/************************************************************************************/
+
+extern int ppp_stateMachine(int reason)
+{
+  int rc;
+  int flags = 0;
+  _kernel_oserror *er;
+
+    switch (ppp_state)
+    {
+       case IDLE:          switch (reason)
+                           {
+                             case START: rc = initiate_link_connection();
+                                         if ((e_check(rc,__LINE__)) == ERROR)
+                                         {
+                                              return ERROR;
+                                         }
+                                         else if (rc == IN_PROGRESS)
+                                         {
+                                              ppp_state = CONNECTING;
+                                              if ((er = ui_set_progress_message(flags,ISP_Connect_Stage)) != NULL)
+                                              {
+                                                   error_handler(__FILE__,__LINE__,"ppp_stateMachine()",er->errnum,er->errmess,WARNING);
+                                              }
+                                              return IN_PROGRESS;
+                                         }
+                                         else if (rc == DONE)
+                                         {
+                                              ppp_state = CONNECTED;
+                                              return DONE;
+                                         }
+                                         break;
+                             case ABORT: /* Drop through */
+                             case CLOSE: ppp_state = IDLE;
+                                         return DONE;
+                                         break;
+                             case POLL:  error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                             "Invalid event (POLL) in state (IDLE).",WARNING);
+                                         ppp_state = IDLE;
+                                         return IN_PROGRESS;  // Safest option to return since it will recover.
+                             default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                           "Unrecognised reason code passed in state (IDLE).",FATAL);
+                           }
+                           break;
+
+       case CONNECTING:    switch (reason)
+                           {
+                             case START: error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                             "Invalid event (START) in state (CONNECTING).",FATAL);
+                                         ppp_state = CONNECTING;
+                                         return ERROR;
+                                         break;
+                             case ABORT: /* Drop through */
+                             case CLOSE: rc = tell_ppp_to_disconnect();
+                                         if ((e_check(rc,__LINE__)) == ERROR)
+                                         {
+                                              return ERROR;
+                                         }
+                                         else if (rc == IN_PROGRESS)
+                                         {
+                                              ppp_state = DISCONNECTING;
+                                              return IN_PROGRESS;
+                                         }
+                                         else if (rc == DONE)
+                                         {
+                                              ppp_state = IDLE;
+                                              return DONE;
+                                         }
+                                         break;
+                             case POLL:  rc = call_ppp_stats();
+                                         if ((e_check(rc,__LINE__)) == ERROR)
+                                         {
+                                              return ERROR;
+                                         }
+                                         else if (rc == IN_PROGRESS)
+                                         {
+                                              ppp_state = CONNECTING;
+                                              return IN_PROGRESS;
+                                         }
+                                         else if (rc == DONE)
+                                         {
+                                              ppp_state = CONNECTED;
+                                              return DONE;
+                                         }
+                                         break;
+                             default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                           "Unrecognised reason code passed in state (CONNECTING).",FATAL);
+                           }
+                           break;
+
+       case CONNECTED:     switch (reason)
+                           {
+                             case START: error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                             "Invalid event (START) in state (CONNECTED).",FATAL);
+                                         return ERROR;
+                                         break;
+                             case ABORT: /* Drop through */
+                             case CLOSE: rc = tell_ppp_to_disconnect();
+                                         if ((e_check(rc,__LINE__)) == ERROR)
+                                         {
+                                              return ERROR;
+                                         }
+                                         else if (rc == IN_PROGRESS)
+                                         {
+                                              ppp_state = DISCONNECTING;
+                                              return IN_PROGRESS;
+                                         }
+                                         else if (rc == DONE)
+                                         {
+                                              ppp_state = IDLE;
+                                              return DONE;
+                                         }
+                                         break;
+                             case POLL:  error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                             "Invalid event (POLL) in state (CONNECTED).",WARNING);
+                                         ppp_state = CONNECTED;
+                                         return IN_PROGRESS; // Safest option under the circumstances. Ought to recover.
+                                         break;
+                             default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                           "Unrecognised reason code passed in state (CONNECTED).",FATAL);
+                           }
+                           break;
+
+       case DISCONNECTING: switch (reason)
+                           {
+                             case START: error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                             "Invalid event (START) in state (DISCONNECTING).",WARNING);
+                                         ppp_state = DISCONNECTING;
+                                         return ERROR;
+                                         break;
+                             case ABORT: /* Drop through */
+                             case CLOSE: rc = call_ppp_stats();
+                                         if ((e_check(rc,__LINE__)) == ERROR)
+                                         {
+                                              return ERROR;
+                                         }
+                                         else if (rc == IN_PROGRESS)
+                                         {
+                                              ppp_state = DISCONNECTING;
+                                              return IN_PROGRESS;
+                                         }
+                                         else if (rc == DONE)
+                                         {
+                                              ppp_state = IDLE;
+                                              return DONE;
+                                         }
+                                         break;
+                             case POLL:  rc = call_ppp_stats();
+                                         if ((e_check(rc,__LINE__)) == ERROR)
+                                         {
+                                              return ERROR;
+                                         }
+                                         else if (rc == IN_PROGRESS)
+                                         {
+                                              ppp_state = DISCONNECTING;
+                                              return IN_PROGRESS;
+                                         }
+                                         else if (rc == DONE)
+                                         {
+                                              ppp_state = IDLE;
+                                              return DONE;
+                                         }
+                             default:    error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                           "Unrecognised reason code passed in state (DISCONNECTING).",FATAL);
+                           }
+                           break;
+
+       default:            error_handler(__FILE__,__LINE__,"ppp_stateMachine()",0,
+                                         "Unrecognised ppp state.",FATAL);
+    }
+
+    return ERROR;
+}
+
+/************************************************************************************/
+/* Function:       initiate_link_connection()                                       */
+/* Behaviour:*/
+/* Prerequisites:*/
+/* Requires:*/
+/* Returns:*/
+/* Outputs:*/
+/************************************************************************************/
+static int initiate_link_connection(void)
+{
+  #ifdef PPP_SIMULATION
+  static int timer_started = 0;
+  static time_t save_time;
+  int rc;
+
+    delay_simulation(&timer_started,&save_time,&rc);
+    return rc;
+  #endif
+}
+
+/************************************************************************************/
+/* Function:       tell_ppp_to_disconnect()                                         */
+/* Behaviour:*/
+/* Prerequisites:*/
+/* Requires:*/
+/* Returns:*/
+/* Outputs:*/
+/************************************************************************************/
+static int tell_ppp_to_disconnect(void)
+{
+  #ifdef PPP_SIMULATION
+  static int timer_started = 0;
+  static time_t save_time;
+  int rc;
+
+    delay_simulation(&timer_started,&save_time,&rc);
+    return rc;
+  #endif
+}
+
+/************************************************************************************/
+/* Function:       call_ppp_stats()                                                 */
+/* Behaviour:*/
+/* Prerequisites:*/
+/* Requires:*/
+/* Returns:*/
+/* Outputs:*/
+/************************************************************************************/
+static int call_ppp_stats(void)
+{
+  #ifdef PPP_SIMULATION
+  static int timer_started = 0;
+  static time_t save_time;
+  int rc;
+
+    delay_simulation(&timer_started,&save_time,&rc);
+    return rc;
+  #endif
+}
+
+/************************************************************************************/
+/* Function:       e_check()                                                        */
+/* Behaviour: */
+/* Prerequisites: */
+/* Requires: */
+/* Returns: */
+/* Outputs: */
+/************************************************************************************/
+static int e_check(int rc,int line)
+{
+  int flags = 0;
+  error_t report_err;
+  _kernel_oserror *er;
+
+    if ((rc != IN_PROGRESS) && (rc != DONE))
+    {
+         report_err = translate(rc);
+         if ((er = ui_show_error(flags,report_err)) != NULL)
+         {
+              error_handler(__FILE__,line,"ppp_stateMachine()",er->errnum,
+                er->errmess,WARNING);
+         }
+         ppp_state = IDLE;
+         rc = ERROR;
+    }
+
+    return rc;
+}
+
+/************************************************************************************/
+/* Function:       delay_simulation()                                               */
+/* Behaviour: */
+/* Prerequisites: */
+/* Requires: */
+/* Returns: */
+/* Outputs: */
+/************************************************************************************/
+#ifdef PPP_SIMULATION
+static void delay_simulation(int *timer_started,time_t *save_time,int *rc)
+{
+  int lapsed_time; /* secs */
+
+    if (*timer_started == 0)
+    {
+        *save_time = time(NULL);
+        *timer_started = 1;
+        *rc = IN_PROGRESS;
+    }
+    else
+    {
+        lapsed_time = (int)(difftime(time(NULL),*save_time));
+        if (lapsed_time > TIME_DELAY)
+        {
+            *rc = DONE;
+            *timer_started = 0;
+        }
+        else
+        {
+            *rc = IN_PROGRESS;
+        }
+    }
+}
+#endif
+
