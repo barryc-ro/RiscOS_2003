@@ -83,6 +83,7 @@
 ;                               when the stream was opened: this reduces transient effects. Value is also printed in bits/second for easy comparison with the
 ;                               PCR-estimated data rate. Removed SkipToSeqOnResetStream code (it was broken, obsolete, and also incompatible with program
 ;                               element handlers). Requires a 32-bit FPEmulator, so module will no longer function on STB-22.
+; 08-Jun-00  BJGA 1.81
 ;
 
         LEADR   Module_LoadAddr
@@ -125,6 +126,9 @@ OnlyAcceptFirstPATandPMT SETL {FALSE}			; for use with a faint signal, since we 
 
                 GBLL    Capture
 Capture         SETL    {TRUE}                          ; include *TransCapture and *TransSave
+
+                GBLL    CountDiscontinuities
+CountDiscontinuities SETL {TRUE} :LAND: DoPEH           ; count jumps in continuity_counter for PEH PIDs
 
                 GBLL    DebugNPT
 DebugNPT        SETL    {FALSE}                         ; print NPT debug to vdu
@@ -221,6 +225,10 @@ PEHPID_PID			#	4		; the PID that this stream type is currently using
 							; (this field may change during life of stream)
 PEHPID_PIDSlot			#	4		; PID slot used in DVB card, allocated at time of OpenStream
 PEHPID_PEH			#	4		; pointer to PEH node
+ [ CountDiscontinuities
+PEHPID_LastContinuityCounter    #       4               ; previous setting of continuity_counter for this PID
+PEHPID_Discontinuities          #       4               ; number of times continuity_counter jumped
+ ]
 PEHPIDSize			*	:INDEX: @
  ] ; DoPEH
 
@@ -814,6 +822,11 @@ OpenStream Entry "r0-r2"
 	CMP	r5, #NumberOfPIDSlots-1			; if we've just used the last slot (or already run out)
 	MOVCS	r5, #-1					; then no more PID slots free
 	ADDCC	r5, r5, #1				; else advance to next slot
+      [ CountDiscontinuities
+        MOV     lr, #-1
+        STR     lr, [r2, #PEHPID_LastContinuityCounter] ; guaranteed not to match the first continuity_counter
+        STR     lr, [r2, #PEHPID_Discontinuities]       ; always intialise to -1, so once we have started, value will be 0
+      ]
 	LDR	lr, [r1, #CSH_ListOfPEHPIDs]		; add PEHPID onto list for this stream
 	STR	lr, [r2, #PEHPID_Link]
 	STR	r2, [r1, #CSH_ListOfPEHPIDs]
@@ -2001,6 +2014,19 @@ ts_wait_for_sync_loop
 	LDRNE	lr, [lr, #PEHPID_Link]
 	BNE	%BT10
 
+ [ CountDiscontinuities
+        LDR     r5, [lr, #PEHPID_LastContinuityCounter]
+        SUB     r7, r7, #1                      ; subtract 1 from the continuity_counter bits
+        AND     r7, r7, #&F                     ; and mask off unwanted bits
+        TEQ     r7, r5                          ; does this give us the previous continuity_counter?
+        LDRNE   r5, [lr, #PEHPID_Discontinuities]
+        ADDNE   r5, r5, #1
+        STRNE   r5, [lr, #PEHPID_Discontinuities]
+        ADD     r7, r7, #1                      ; reacquire the current continuity_counter
+        AND     r7, r7, #&F                     ; remove bit 4 if necessary
+        STR     r7, [lr, #PEHPID_LastContinuityCounter] ; store continuity_counter every time
+ ]
+
 ; found a match, so point r5 at PEHPID and jump to common code
 
 	MOV	r5, lr
@@ -2024,6 +2050,10 @@ ts_wait_for_sync_loop
         LDR     lr, [r1, #CSH_PMT_PID]
         TEQ     r5, lr
         BEQ     ts_process_PMT_PID
+
+        LDR     lr, [r1, #CSH_PCR_PID]
+        TEQ     r5, lr
+        BEQ     ts_process_PCR_PID
 
 ; this packet was not used, so increment the count of discarded data
 
@@ -2274,6 +2304,12 @@ ts_process_rest_of_PMT
         SUB     r5, r5, r10
         BL      ts_skipbytes
         B       %BT10
+
+ts_process_PCR_PID ROUT  ; only used when there is a dedicated PCR PID, ie PCRs are not on video or audio PIDs
+        TST     r9, #TS_AF_Present_Bit
+        MOVNE   r6, r5
+        BLNE    ts_process_adaptation_field
+        B       ts_skip_to_next_packet
 
 ts_process_audio_PID
       [ DebugPID
@@ -2951,6 +2987,7 @@ GetPacketDescriptor Entry "r1"
 CallPEH	Entry "r12"
 	ADD	r12, r6, #:INDEX: PEH_HandlerWS
 	ASSERT  PEH_HandlerCode = PEH_HandlerWS +4
+	CMP     r0, r0                          ; ensure V clear on entry (C generic-veneer will preserve or set V, never clear it)
 	MOV	lr, pc
 	LDMIA	r12, {r12, pc}
 	EXIT
@@ -3325,20 +3362,23 @@ TransCtrlInfo_Code Entry
 	DLINE	" None"
 	B	%FT70
 60
-	DLINE	""
-	LDR	r0, [r1, #PEHPID_Flags]
-	DREG	r0, "PEHPID flags="
-	LDR	r0, [r1, #PEHPID_ProgramElementStreamHandle]
-	DREG	r0, "Program element stream handle="
-	LDR	r0, [r1, #PEHPID_PID]
-	DREG	r0, "PID="
-	LDR	r0, [r1, #PEHPID_PIDSlot]
-	DREG	r0, "PID slot="
+	DLINE   ""
+61
 	LDR	r0, [r1, #PEHPID_PEH]
 	BL	OutputPEHInfo
+	LDR	r0, [r1, #PEHPID_Flags]
+	DREG	r0, "  PEHPID flags = "
+	LDR	r0, [r1, #PEHPID_ProgramElementStreamHandle]
+	DREG	r0, "  Program element stream handle = "
+	LDR	r0, [r1, #PEHPID_PID]
+	DREG	r0, "  PID = "
+	LDR	r0, [r1, #PEHPID_PIDSlot]
+	DREG	r0, "  PID slot = "
+	LDR     r0, [r1, #PEHPID_Discontinuities]
+	DREG    r0, "  Discontinuities in PID = "
 	LDR	r1, [r1, #PEHPID_Link]
 	TEQ	r1, #0
-	BNE	%BT60
+	BNE	%BT61
 70
  ] ; DoPEH
         CLRV
