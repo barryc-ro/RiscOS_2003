@@ -188,8 +188,8 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
     if (diff ||
 	((x != LastX || y != LastY) && (t - LastT) > gInfo.uTimerGran))
     {
-	pMouData->X = (           x/2  * 0x10000) / gWidth  + 1;
-	pMouData->Y = ((gHeight - y/2) * 0x10000) / gHeight + 1;
+	pMouData->X = (               x  * 0x10000) / gWidth;
+	pMouData->Y = ((gHeight - 1 - y) * 0x10000) / gHeight;
 	pMouData->cMouState = x != LastX || y != LastY ? MOU_STATUS_MOVED : 0;
 
 	if (diff & 1)		// right
@@ -201,12 +201,6 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
 	if (diff & 4)		// left
 	    pMouData->cMouState |= b & 4 ? MOU_STATUS_B1DOWN : MOU_STATUS_B1UP;
 
-	if (pMouData->X > 0xFFFF)
-	    pMouData->X = 0xFFFF;
-
-	if (pMouData->Y > 0xFFFF)
-	    pMouData->Y = 0xFFFF;
-
 	LastB = b;
 	LastT = t;
 	LastX = x;
@@ -214,7 +208,7 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
 
 	TRACE(( TC_MOU, TT_API2, "MouseRead: cooked st=0x%x X=%04x Y=%04x (OS pos %d,%d scrn %d,%d)",
 		pMouData->cMouState, pMouData->X, pMouData->Y,
-		x/2, y/2, gWidth, gHeight));
+		x, y, gWidth, gHeight));
 	
 	*puCount = 1;
 
@@ -640,8 +634,7 @@ int far  MousePosition( USHORT X, USHORT Y )
    X = (USHORT)(((ULONG)X * gWidth )/0x10000);
    Y = (USHORT)(((ULONG)Y * gHeight)/0x10000);
 
-   X = X * 2;
-   Y = (gHeight - 1 - Y) * 2;
+   Y = (gHeight - 1 - Y);
    
    TRACE(( TC_MOU, TT_API1, "MousePosition: X=%u Y=%u",X,Y ));
 
@@ -740,6 +733,7 @@ int far  MouseSetRanges( USHORT uHoriMin, USHORT uHoriMax,
  *  MouseSetScreenDimensions
  *
  *    Set the size of the screen, for normalizing mouse data.
+ *    SJM In OS units, not pixels
  *
  * ENTRY:
  *    dimensions
@@ -757,8 +751,8 @@ int far  MouseSetScreenDimensions( USHORT uWidth, USHORT uHeight )
       // (for unsupported mouse drivers, like IBM PS/2)
 
       // get virtual screen coords (mouse 6.1+)
-       gWidth = 640;
-       gHeight = 480;
+       gWidth = 1280;
+       gHeight = 960;
    }
    else {
       gWidth = uWidth;

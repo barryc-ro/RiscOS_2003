@@ -96,6 +96,8 @@ static USHORT EngModDate;                      // Engine module date
 static USHORT EngModTime;                      // Engine module time
 static ULONG  EngModSize;                      // Engine module size
 
+FILEPATH gszLoadDllFileName;            // name of last DLL loaded
+
 /*******************************************************************************
  *
  *  ModuleInit
@@ -195,6 +197,8 @@ int ModuleLoad( char * pName, PDLLLINK pLink )
     PDLLLINK pNewLink;
     int (*fnLoad)(PDLLLINK);
     int rc;
+
+    strcpy(gszLoadDllFileName, pName);
 
     if ((rc = ModuleLookup( pName, (PPLIBPROCEDURE)&fnLoad, NULL )) != CLIENT_STATUS_SUCCESS)
 	return rc;

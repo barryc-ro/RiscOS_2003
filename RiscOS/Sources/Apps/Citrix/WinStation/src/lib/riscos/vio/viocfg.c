@@ -31,6 +31,7 @@
 *************************************************************************/
 
 #include "windows.h"
+#include "vdu.h"
 
 /*  Get the standard C includes */
 #include <stdio.h>
@@ -74,6 +75,7 @@ short vesamodes[][3] = {
 unsigned int usMaxRow;
 unsigned int usMaxCol;
 int fMONO;
+static int ModeNumber;
 
 /*=============================================================================
  ==   Local Functions
@@ -93,7 +95,9 @@ int fMONO;
 int WFCAPI
 VioSetCp( USHORT usReserved, USHORT idCodePage, HVIO hvio )
 {
-   return( CLIENT_STATUS_SUCCESS );
+    TRACE((TC_VIO, TT_API1, "VioSetCp: page %d\n", idCodePage));
+    
+    return( CLIENT_STATUS_SUCCESS );
 }
 
 /*****************************************************************************
@@ -104,10 +108,10 @@ VioSetCp( USHORT usReserved, USHORT idCodePage, HVIO hvio )
 *
 ****************************************************************************/
 
+#if 0
 int WFCAPI
 VioGetConfig (USHORT usConfigId, PVIOCONFIGINFO pvioin, HVIO hvio)
 {
-#if 0
     struct videoconfig gr_info;
 
    (void) _getvideoconfig( &gr_info );
@@ -146,9 +150,9 @@ VioGetConfig (USHORT usConfigId, PVIOCONFIGINFO pvioin, HVIO hvio)
       pvioin->display = MONITOR_851X_COLOR;
       break;
    }
-#endif
    return( CLIENT_STATUS_SUCCESS );
 }
+#endif
 
 
 /*****************************************************************************
@@ -162,6 +166,20 @@ VioGetConfig (USHORT usConfigId, PVIOCONFIGINFO pvioin, HVIO hvio)
 int WFCAPI
 VioGetMode (PVIOMODEINFO pvioModeInfo, HVIO hvio)
 {
+    int in[6], out[5];
+    
+    // clear all elements but len
+    memset( &pvioModeInfo->fbType, 0, pvioModeInfo->cb - 2 );
+    
+    pvioModeInfo->fmt_ID = ModeNumber;
+    
+    pvioModeInfo->col    = usMaxCol;
+    pvioModeInfo->row    = usMaxRow;
+    pvioModeInfo->color  = COLORS_16;
+
+    pvioModeInfo->hres   = vduval(vduvar_XLimit) + 1;
+    pvioModeInfo->vres   = vduval(vduvar_YLimit) + 1;
+    
 #if 0
     struct videoconfig gr_info;
    int colors;
@@ -234,27 +252,24 @@ VioGetMode (PVIOMODEINFO pvioModeInfo, HVIO hvio)
 int WFCAPI
 VioGetState (PVOID pState, HVIO hvio)
 {
-   USHORT        rc = CLIENT_STATUS_SUCCESS;
-#if 0
+    USHORT        rc = CLIENT_STATUS_SUCCESS;
     PVIOINTENSITY pvi = (PVIOINTENSITY) pState;
-   PVIOOVERSCAN  pos = (PVIOOVERSCAN)  pState;
-   union REGS    regs;
+    PVIOOVERSCAN  pos = (PVIOOVERSCAN)  pState;
 
-   switch ( pvi->type ) {
-   case 0x0000:   // palstate
-      break;
-   case 0x0001:   // overscan
-      regs.x.ax = 0x1008;
-      int86(0x10, &regs, &regs );
-      pos->color = (USHORT) regs.h.bh;
-      break;
-   case 0x0002:   // intensity
-      pvi->fs = 0;
-      break;
-   default:
-      rc = 1;
+    switch ( pvi->type ) {
+    case 0x0000:   // palstate
+	break;
+    case 0x0001:   // overscan
+	pos->color = 0;
+	break;
+    case 0x0002:   // intensity
+	pvi->fs = 0;
+	break;
+    default:
+	rc = 1;
+	break;
    }
-#endif
+
    return( rc );
 }
 
@@ -290,7 +305,10 @@ int WFCAPI
 VioSetMode (PVIOMODEINFO pvioModeInfo, HVIO hvio)
 {
     int rc = CLIENT_STATUS_SUCCESS;
+    char s[10];
 
+    TRACE(( TC_WD, TT_API1, "VioSetMode: mode %d", pvioModeInfo->fmt_ID ));
+    
     // change mode
     _swix(OS_WriteI + 22, 0);
     _swix(OS_WriteI + pvioModeInfo->fmt_ID, 0);
@@ -298,7 +316,15 @@ VioSetMode (PVIOMODEINFO pvioModeInfo, HVIO hvio)
     // setup palette
     _swix(OS_WriteN, _INR(0,1), Palette16, sizeof(Palette16));
 
+    // enable scroll protect
+    memset(s, 0, sizeof(s));
+    s[0] = 23;
+    s[1] = 0xFE;		// AND
+    s[2] = 1;			// XOR
+    _swix(OS_WriteN, _INR(0,1), s, sizeof(s));
+    
     // store mode parameters for routines
+    ModeNumber = pvioModeInfo->fmt_ID;
     usMaxRow = pvioModeInfo->row;
     usMaxCol = pvioModeInfo->col;
     fMONO = FALSE;
@@ -356,36 +382,20 @@ int WFCAPI
 VioSetState (PVOID pState, HVIO hvio)
 {
     USHORT        rc = CLIENT_STATUS_SUCCESS;
-#if 0
+
     PVIOPALSTATE  pps = (PVIOPALSTATE)  pState;
     PVIOOVERSCAN  pos = (PVIOOVERSCAN)  pState;
     PVIOINTENSITY pvi = (PVIOINTENSITY) pState;
     PVIOCOLORREG  pcr = (PVIOCOLORREG)  pState;
-    union REGS    regs;
 
     switch ( pvi->type ) {
     case 0x0000:   // palstate
-        regs.x.ax = 0x1000;
-        regs.x.bx = (pps->acolor[0] << 8) | (pps->iFirst & 0x0f);
-        int86(0x10, &regs, &regs );
         break;
     case 0x0001:   // overscan
-        regs.x.ax = 0x1001;
-        regs.h.bh = (char) pos->color;
-        int86(0x10, &regs, &regs );
         break;
     case 0x0002:   // intensity
-        regs.x.ax = 0x1003;
-        regs.x.bx = pvi->fs ? 0 : 1;
-        int86(0x10, &regs, &regs );
         break;
     case 0x0003:   // color reg
-        regs.x.ax = 0x1010;
-        regs.x.bx = pcr->firstcolorreg;
-        regs.h.ch = pcr->colorregaddr[2];   // green
-        regs.h.cl = pcr->colorregaddr[1];   // blue
-        regs.h.dh = pcr->colorregaddr[0];   // reg
-        int86(0x10, &regs, &regs );
         break;
     case 0x0005:   // underline
         /* BUGBUG -- add support for underline */
@@ -393,7 +403,6 @@ VioSetState (PVOID pState, HVIO hvio)
     default:
         rc = 1;
     }
-#endif
     return( rc );
 }
 

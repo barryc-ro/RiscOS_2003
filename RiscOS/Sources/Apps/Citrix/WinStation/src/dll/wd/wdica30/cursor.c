@@ -15,7 +15,12 @@
 *  
 *   Author: Brad Pedersen (4/9/94)
 *  
-*   $Log$
+*   cursor.c,v
+*   Revision 1.1  1998/01/12 11:36:17  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.10   15 Apr 1997 18:17:48   TOMA
 *  autoput for remove source 4/12/97
@@ -236,7 +241,6 @@ IcaSetCursorColumn( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 void
 IcaSetCursorSize( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 {
-#if 0
     PWDICA pIca;
     VIOCURSORINFO CursorInfo;
     VIOMODEINFO ModeInfo;
@@ -259,12 +263,14 @@ IcaSetCursorSize( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     
     CellHeight = ModeInfo.vres / ModeInfo.row;
     
+#if 0
     /*
      * if video bios does not support this vres
      * figure it out by looking in bios data area
      */
     if ( CellHeight == 0 )
        CellHeight = (unsigned char) ((*pCursorMode) + 1);
+#endif
 
     CursorHeight = (CellHeight * Size) / 100;
 
@@ -280,5 +286,4 @@ IcaSetCursorSize( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 
     rc = (int) VioSetCurType( &CursorInfo, pIca->hVio );
     ASSERT( rc == 0, rc );
-#endif
 }

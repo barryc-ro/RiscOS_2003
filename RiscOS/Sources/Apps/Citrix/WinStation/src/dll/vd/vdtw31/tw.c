@@ -242,7 +242,7 @@ USHORT TWWindowsStart( PVD pVd, PTHINWIRECAPS pThinWireMode )
 
    //_asm int 3
    if ( uWidth && uHeight ) {
-      (void) MouseSetScreenDimensions( uWidth, uHeight );
+      (void) MouseSetScreenDimensions( uWidth*2, uHeight*2 );
       InitThinwire( vColor, uWidth, uHeight );
    }
 
@@ -340,7 +340,7 @@ void TWCmdInit( HWND hWnd, HDC hdc )
             "TWCmdInit: Mode set to hRes(%d) vRes(%d)",
             hRes, vRes ));
 
-    (void) MouseSetScreenDimensions( hRes, vRes );
+    (void) MouseSetScreenDimensions( hRes*2, vRes*2 );
     InitThinwire( vColor, hRes, vRes );
 
     TRACE(( TC_TW, TT_TW_PACKET+TT_TW_CONNECT, "TWCmdInit: Exiting" ));

@@ -9,7 +9,12 @@
 *
 *  Author: Kurt Perry (3/28/1994)
 *
-*  $Log$
+*  vioread.c,v
+*  Revision 1.1  1998/01/12 11:37:39  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.6   15 Apr 1997 18:51:40   TOMA
 *  autoput for remove source 4/12/97
@@ -99,6 +104,7 @@ int WFCAPI VioReadCellStr (PCH pchCellStr, PUSHORT pcb, USHORT usRow,
    return( CLIENT_STATUS_SUCCESS );
 }
 
+#if 0
 /*****************************************************************************
 *
 *  FUNCTION: Read Character String
@@ -120,6 +126,8 @@ int WFCAPI VioReadCharStr (PCH pchCharStr, PUSHORT pcb, USHORT usRow,
    if ( usColumn >= usMaxCol )
       usColumn = usMaxCol-1;
 
+   for (i = 
+   
 #if 0
    /*
     * Get the phys address.
@@ -135,7 +143,7 @@ int WFCAPI VioReadCharStr (PCH pchCharStr, PUSHORT pcb, USHORT usRow,
     * Add in row/colomn offset
     */
    pLVB += ( (usRow * usMaxCol) + usColumn) << 1;
-
+   
    /*
     * Move data to user buffer from screen.
     */
@@ -149,3 +157,5 @@ int WFCAPI VioReadCharStr (PCH pchCharStr, PUSHORT pcb, USHORT usRow,
    
    return( CLIENT_STATUS_SUCCESS );
 }
+#endif
+

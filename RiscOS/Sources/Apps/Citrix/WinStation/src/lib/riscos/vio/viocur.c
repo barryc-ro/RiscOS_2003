@@ -9,7 +9,12 @@
 *
 *  Author: Kurt Perry (3/28/1994)
 *
-*  $Log$
+*  viocur.c,v
+*  Revision 1.1  1998/01/12 11:37:37  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.6   15 Apr 1997 18:51:32   TOMA
 *  autoput for remove source 4/12/97
@@ -34,6 +39,8 @@
 #include "../../../inc/vioapi.h"
 
 #include "swis.h"
+
+#include "vio.h"
 
 /*=============================================================================
  ==   Functions Used
@@ -66,26 +73,17 @@ int WFCAPI
 VioGetCurPos (PUSHORT pusRow, PUSHORT pusColumn, HVIO hvio)
 {
     int x, y;
-    _swix(OS_Byte, _IN(0) | _OUTR(1,2), 134, &x, &y);
-    *pusRow = y;
-    *pusColumn = x;
-
-#if 0
-    union REGS    regs;
-
-   regs.x.ax = 0x0300;
-   regs.x.bx = 0x00;
-   int86(0x10, &regs, &regs );
-
-   *pusRow    = regs.h.dh;
-   *pusColumn = regs.h.dl;
-#endif
-   return( CLIENT_STATUS_SUCCESS );
+    cursor_get(&x, &y);
+    if (pusColumn)
+	*pusColumn = x;
+    if (pusRow)
+	*pusRow = y;
+    return( CLIENT_STATUS_SUCCESS );
 }
 
 /*****************************************************************************
 *
-*  FUNCTION: Get Cursor Position
+*  FUNCTION: Set Cursor Position
 *
 *  ENTRY:
 *
@@ -94,23 +92,8 @@ VioGetCurPos (PUSHORT pusRow, PUSHORT pusColumn, HVIO hvio)
 int WFCAPI
 VioSetCurPos (USHORT usRow, USHORT usColumn, HVIO hvio)
 {
-    char s[3];
-    s[0] = 31;
-    s[1] = usColumn;
-    s[2] = usRow;
-    _swix(OS_WriteN, _INR(0,1), s, sizeof(s));
-
-#if 0
-    union REGS    regs;
-
-   regs.x.ax = 0x0200;
-   regs.x.bx = 0x00;
-   regs.h.dh = (unsigned char) usRow;
-   regs.h.dl = (unsigned char) usColumn;
-
-   int86(0x10, &regs, &regs );
-#endif
-   return( CLIENT_STATUS_SUCCESS );
+    cursor_to(usColumn, usRow);
+    return( CLIENT_STATUS_SUCCESS );
 }
 
 /*****************************************************************************
@@ -126,22 +109,10 @@ VioGetCurType (PVIOCURSORINFO pvioCursorInfo, HVIO hvio)
 {
     pvioCursorInfo->yStart = yStart;
     pvioCursorInfo->cEnd   = cEnd;
-#if 0
-    PCH pbROM = (LPBYTE) 0x00400060;
+    pvioCursorInfo->cx     = 1;
+    pvioCursorInfo->attr   = attr;
 
-   if ( attr == 0xffff ) {
-      pvioCursorInfo->yStart = yStart;
-      pvioCursorInfo->cEnd   = cEnd;
-   }
-   else {
-      pvioCursorInfo->cEnd   = (USHORT) ((BYTE) *(pbROM));
-      pvioCursorInfo->yStart = (USHORT) ((BYTE) *(pbROM+1));
-   }
-#endif
-   pvioCursorInfo->cx     = 1;
-   pvioCursorInfo->attr   = attr;
-
-   return( CLIENT_STATUS_SUCCESS );
+    return( CLIENT_STATUS_SUCCESS );
 }
 
 /*****************************************************************************
@@ -155,33 +126,33 @@ VioGetCurType (PVIOCURSORINFO pvioCursorInfo, HVIO hvio)
 int WFCAPI
 VioSetCurType (PVIOCURSORINFO pvioCursorInfo, HVIO hvio)
 {
-#if 0
-    union REGS regs;
-   PCH        pbROM = (LPBYTE) 0x00400060;
-   USHORT     lattr=attr;
-#endif
+    char s[10];
    
-   /* save the requested start/end */
-   yStart = pvioCursorInfo->yStart;
-   cEnd   = pvioCursorInfo->cEnd;
-   attr   = pvioCursorInfo->attr;
-
-#if 0
-   /* hide cursor and note state */
-   if ( attr == 0xffff ) {
-      regs.x.cx = 0x2000;
-   }
-   else {
-      regs.h.ch = (BYTE) (pvioCursorInfo->yStart & 0x0f);
-      regs.h.cl = (BYTE) (pvioCursorInfo->cEnd   & 0x0f);
-   }
-
-   /* do int 10h function 01h for cursor setting */
-   regs.x.ax = 0x0100;
-   int86( 0x10, &regs, &regs );
-#endif
+    /* save the requested start/end */
+    yStart = pvioCursorInfo->yStart;
+    cEnd   = pvioCursorInfo->cEnd;
+    attr   = pvioCursorInfo->attr;
    
-   /* no return from int 10h */
-   return( CLIENT_STATUS_SUCCESS );
+    memset(s, 0, sizeof(s));
+    s[0] = 23;
+
+    /* hide cursor and note state */
+    if ( attr == 0xffff ) {
+	s[2] = 10;
+	s[3] = 1<<5;
+	_swix(OS_WriteI, _INR(0,1), s, sizeof(s));
+    }
+    else {
+	s[2] = 10;
+	s[3] = yStart;
+	_swix(OS_WriteI, _INR(0,1), s, sizeof(s));
+
+	s[2] = 11;
+	s[3] = cEnd;
+	_swix(OS_WriteI, _INR(0,1), s, sizeof(s));
+    }
+   
+    /* no return from int 10h */
+    return( CLIENT_STATUS_SUCCESS );
 }
 

@@ -83,14 +83,31 @@ void cursor_to(int x, int y)
     _swix(OS_WriteN, _INR(0,1), s, sizeof(s));
 }
 
+void cursor_get(int *px, int *py)
+{
+    int x, y;
+    _swix(OS_Byte, _IN(0) | _OUTR(1,2), 134, &x, &y);
+    *py = y;
+    *px = x;
+}
+
 static BOOL SetColours(int Attr)
 {
     BOOL changed = FALSE;
     
     if (Attr != current_attr)
     {
-	_swix(OS_SetColour, _INR(0,1),    0, Attr & 0x0f); // set fg
-	_swix(OS_SetColour, _INR(0,1), 0x10, Attr >> 4);   // set bg
+	char s[4];
+	TRACE(( TC_WD, TT_API4, "SetColours: fg %d bg %d", Attr & 0x0f, Attr >> 4));
+	
+//	_swix(OS_SetColour, _INR(0,1),    0, Attr & 0x0f); // set fg
+//	_swix(OS_SetColour, _INR(0,1), 0x10, Attr >> 4);   // set bg
+	s[0] = 17;
+	s[1] = Attr & 0x0f;
+	s[2] = 17;
+	s[3] = 128 + (Attr >> 4);
+	_swix(OS_WriteN, _INR(0,1), s, sizeof(s));
+	
 	current_attr = Attr;
 	changed = TRUE;
     }
@@ -100,9 +117,12 @@ static BOOL SetColours(int Attr)
 
 void WriteCells(const char *String, int cb, int Row, int Column)
 {
+    int oldColumn, oldRow;
     int i;
     
     TRACE(( TC_WD, TT_API2, "WriteCells: '%.*s' @ %d,%d", cb, String, Column, Row ));
+
+    cursor_get(&oldColumn, &oldRow);
 
     if (Row !=-1 && Column != -1)
 	cursor_to(Column, Row);
@@ -110,13 +130,20 @@ void WriteCells(const char *String, int cb, int Row, int Column)
     for (i = 0; i < cb; i++)
     {
 	SetColours(String[i*2+1]);
-	_swix(OS_WriteC, _IN(0), String[i*2]);
+	_swix(OS_WriteC, _IN(0), String[i*2] < 32 ? '.' : String[i*2]);
     }
+
+    cursor_to(oldColumn, oldRow);
 }
 
 void WriteString(const char *String, int cb, int Row, int Column, int Attr)
 {
-    TRACE(( TC_WD, TT_API2, "WriteString: '%.*s' @ %d,%d attr %d", cb, String, Column, Row, Attr ));
+    int oldColumn, oldRow;
+    int i;
+    
+    TRACE(( TC_WD, TT_API2, "WriteString: '%.*s' @ %d,%d attr %02x", cb, String, Column, Row, Attr ));
+
+    cursor_get(&oldColumn, &oldRow);
 
     if (Row !=-1 && Column != -1)
 	cursor_to(Column, Row);
@@ -124,16 +151,23 @@ void WriteString(const char *String, int cb, int Row, int Column, int Attr)
     if (Attr)
 	SetColours(Attr);
 
-    _swix(OS_WriteN, _INR(0,1), String, cb);
+    for (i = 0; i < cb; i++)
+	_swix(OS_WriteC, _IN(0), String[i] < 32 ? '.' : String[i]);
+    //_swix(OS_WriteN, _INR(0,1), String, cb);
+
+    cursor_to(oldColumn, oldRow);
 }
 
 void WriteCounted(int Char, int Attr, int cb, int Row, int Column)
 {
     int i;
     BOOL changed = FALSE;
+    int oldColumn, oldRow;
     
-    TRACE(( TC_WD, TT_API2, "WriteCounted: %c(%d)/%d x %d  @ %d,%d", isprint(Char) ? Char : '.', Char, Attr, cb, Column, Row ));
+    TRACE(( TC_WD, TT_API2, "WriteCounted: %c(%d)/%02x x %d  @ %d,%d", isprint(Char) ? Char : '.', Char, Attr, cb, Column, Row ));
 
+    cursor_get(&oldColumn, &oldRow);
+    
     if (Row !=-1 && Column != -1)
 	cursor_to(Column, Row);
 
@@ -142,6 +176,9 @@ void WriteCounted(int Char, int Attr, int cb, int Row, int Column)
 
     if (Char)
     {
+	if (Char < 32)
+	    Char = '.';
+
 	for (i = 0; i < cb; i++)
 	    _swix(OS_WriteC, _IN(0), Char);
     }
@@ -156,6 +193,8 @@ void WriteCounted(int Char, int Attr, int cb, int Row, int Column)
 	    _swix(OS_WriteC, _IN(0), c);
 	}
     }
+
+    cursor_to(oldColumn, oldRow);
 }
 
 /* eof vioro.c */

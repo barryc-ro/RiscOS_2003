@@ -21,7 +21,12 @@
 *
 *   Author: Brad Pedersen (4/9/94)
 *
-*   $Log$
+*   text.c,v
+*   Revision 1.1  1998/01/12 11:36:25  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.12   15 Apr 1997 18:18:02   TOMA
 *  autoput for remove source 4/12/97
@@ -63,6 +68,11 @@
 #include "../inc/wd.h"
 #include "wdica.h"
 
+/*=============================================================================
+==   External Functions Used
+=============================================================================*/
+
+PWDTEXTMODE GetTextMode(int index);
 
 /*=============================================================================
 ==   External Functions Defined
@@ -87,8 +97,6 @@ void WrtNCell( PWD, USHORT, LPBYTE, USHORT );
 /*=============================================================================
 ==   Global Data
 =============================================================================*/
-
-extern WDTEXTMODE G_TextModes[];
 
 
 /*******************************************************************************
@@ -177,7 +185,7 @@ IcaClearEol( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     TRACE(( TC_WD, TT_API1, "CLEAR_EOL: row=%u, col=%u, attr=%x", Row, Col, Cell[1] ));
 
     rc = VioWrtNCell( Cell,
-                      (USHORT)(G_TextModes[pIca->TextIndex].Columns - Col),
+                      (USHORT)(GetTextMode(pIca->TextIndex)->Columns - Col),
                       Row, Col, 
                       pIca->hVio );
 
@@ -259,11 +267,13 @@ IcaRawWrite( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     int rc;
     USHORT MaxRow;
     USHORT MaxCol;
+    PWDTEXTMODE mode;
 
     pIca = (PWDICA) pWd->pPrivate;
 
-    MaxRow = G_TextModes[pIca->TextIndex].Rows;
-    MaxCol = G_TextModes[pIca->TextIndex].Columns;
+    mode = GetTextMode(pIca->TextIndex);
+    MaxRow = mode->Rows;
+    MaxCol = mode->Columns;
 
     TRACE(( TC_WD, TT_API1, "RAW_WRITE0: bc=%u", InputCount ));
 

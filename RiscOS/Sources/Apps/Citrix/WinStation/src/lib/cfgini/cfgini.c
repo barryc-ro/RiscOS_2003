@@ -573,9 +573,10 @@ done:
     if ( rc != CLIENT_STATUS_SUCCESS )
        WFEngUnloadDrivers( hClientHandle );
 
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     /*
      * On success, flush INI cache to save memory prior to connection
+     * SJM: and to close the files.
      */
     if ( rc == CLIENT_STATUS_SUCCESS )
         FlushPrivateProfileCache();

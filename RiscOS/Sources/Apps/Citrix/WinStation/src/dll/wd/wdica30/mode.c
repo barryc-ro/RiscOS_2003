@@ -149,7 +149,7 @@ static USHORT G_VGAVideoModes[] =
 static WDTEXTMODE G_VGATextModes[] = {
  /*  index   flags  cols  rows   xres  yres  xfont  yfont */
 //     0,     0,     40,   25,   640,   200,   8,    16,
-       1,     0,     80,   25,   640,   200,   8,     8,
+       1,     0,     80,   25,  1280,   800,   8,     8,
 //     2,     0,     80,   43,   640,   344,   8,     8,
 //     3,     0,     80,   50,   640,   400,   8,     8,
 
@@ -170,7 +170,7 @@ static USHORT G_CGAVideoModes[] =
 static WDTEXTMODE G_CGATextModes[] = {
  /*  index   flags  cols  rows   xres  yres  xfont  yfont */
 //     0,     0,     40,   25,   640,   200,   8,    16,
-       1,     0,     80,   25,   640,   200,   8,     8
+       1,     0,     80,   25,  1280,   800,   8,     8
 //     2,     0,     80,   43,   640,   344,   8,     8,
 //     3,     0,     80,   50,   640,   400,   8,     8,
 
@@ -185,7 +185,7 @@ static WDTEXTMODE G_CGATextModes[] = {
 #define NUM_TEXT_MODES ((sizeof(G_VGATextModes) / sizeof(G_VGATextModes[0])))
 
 static USHORT *G_VideoModes;
-       PWDTEXTMODE G_TextModes;
+static PWDTEXTMODE G_TextModes;
 
 static int lookup_index(int index)
 {
@@ -198,6 +198,10 @@ static int lookup_index(int index)
     return -1;
 }
 
+PWDTEXTMODE GetTextMode(int index)
+{
+    return &G_TextModes[lookup_index(index)];
+}
 
 /*******************************************************************************
  *
@@ -325,13 +329,13 @@ void
 IcaSetVideoMode( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 {
     PWDICA pIca;
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     BOOL enableMouse;
 #endif
 
     pIca = (PWDICA) pWd->pPrivate;
 
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     enableMouse = pIca->fMouseVisible;
 #endif
 
@@ -341,7 +345,7 @@ IcaSetVideoMode( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 
     _SetTextMode( pWd, pIca->TextIndex );
 
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     /*
      *  Re-enable the mouse if it was previously enabled.
      *  _SetTextMode will disable the mouse.
@@ -417,9 +421,12 @@ _GetValidTextModes( PWDTEXTMODE pTextModes,
     USHORT i;
     USHORT ByteCount = NUM_TEXT_MODES * sizeof(WDTEXTMODE);
     PWDTEXTMODE modes;
-    int flags;
+    int flags, mode;
 
-    _swix(OS_CheckModeValid, _IN(0) | _FLAGS, G_VGAVideoModes[0], &flags);
+    _swix(OS_CheckModeValid, _IN(0) | _OUT(0) | _FLAGS, G_VGAVideoModes[0], &mode, &flags);
+
+    TRACE(( TC_WD, TT_API1, "CheckMode: in %d out %d flags %x", G_VGAVideoModes[0], mode, flags));
+
     if ((flags & _C) == 0)
     {
 	G_VideoModes = G_VGAVideoModes;
@@ -545,10 +552,12 @@ _SetTextMode( PWD pWd, USHORT TextIndex )
      *  Note that since the host has the G_TextModes table,
      *  it has to match anyway.
      */
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     // (void) MouseSetScreenDimensions(0,0);
-    (void) MouseSetScreenDimensions(G_TextModes[pIca->TextIndex].ResolutionX,
-                                    G_TextModes[pIca->TextIndex].ResolutionY);
+    {
+	PWDTEXTMODE info = GetTextMode(pIca->TextIndex);
+	(void) MouseSetScreenDimensions(info->ResolutionX, info->ResolutionY);
+    }
 #endif
 }
 

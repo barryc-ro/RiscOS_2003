@@ -48,6 +48,8 @@
 #include "utils.h"
 #include "version.h"
 
+#include "resource.h"
+
 /* --------------------------------------------------------------------------------------------- */
 
 static char *gszWfclientIni = INI_PATH "WFClient";
@@ -98,6 +100,8 @@ extern BOOL   sdPoll( VOID);
 extern VOID   sdUnload( VOID);
 
 extern int gbContinuePolling;
+
+extern FILEPATH       gszLoadDllFileName;        // name of last DLL loaded
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -159,62 +163,37 @@ static BOOL EMGetErrorMessage( Session sess, int iErrorCode, LPSTR chBuffer, int
      */
     switch( (LastError.Error = iErrorCode) ) {
 
-        case CLIENT_ERROR_PD_ERROR:
-            if ( sess->hWFE ) {
-               /*
-                *  Query engine for true error message text
-                */
-               if ( (rc = srvWFEngQueryInformation( 
-                                       sess->hWFE,
-                                       WFELastError,
-                                       &LastError, 
-                                       sizeof(LastError) ))
-                                               == CLIENT_STATUS_SUCCESS ) {
+    case CLIENT_ERROR_PD_ERROR:
+	/*
+	 *  Query engine for true error message text
+	 */
+	if ( (rc = srvWFEngQueryInformation( 
+	    sess->hWFE,
+	    WFELastError,
+	    &LastError, 
+	    sizeof(LastError) ))
+	     == CLIENT_STATUS_SUCCESS ) {
 
-                   lstrcpy( szBuffer, LastError.Message );
-                   bErrorCodeInMessage = TRUE;
-                   }
-               }
-            break;
+	    lstrcpy( szBuffer, LastError.Message );
+	    bErrorCodeInMessage = TRUE;
+	}
+	break;
 
-        case CLIENT_ERROR_PD_TRANSPORT_UNAVAILABLE:
-            {
-//                 LoadString(ghInstance,
-//                            IDS_PDTRANSPORTUNAVAILABLE_FORMAT,
-//                            strFormatString,
-//                            sizeof(strFormatString));
-                /*
-                 * First find out what transport we're dealing with
-                 */
-                GetPrivateProfileString( sess->gszServerLabel,
-                                         INI_TRANSPORTDRIVER,
-                                         DEF_TRANSPORTDRIVER,
-                                         pszTransport, sizeof(pszTransport),
-                                         sess->gszICAFile );
+    case CLIENT_ERROR_PD_TRANSPORT_UNAVAILABLE:
+	LoadString("IDS", IDS_PDTRANSPORTUNAVAILABLE_FORMAT,
+		   strFormatString,
+		   sizeof(strFormatString));
+	/*
+	 * First find out what transport we're dealing with
+	 */
+	GetPrivateProfileString( sess->gszServerLabel,
+				 INI_TRANSPORTDRIVER,
+				 DEF_TRANSPORTDRIVER,
+				 pszTransport, sizeof(pszTransport),
+				 sess->gszICAFile );
 
-		strcpy(strFormatString, "Transport %s unavailable");
-                wsprintf( szBuffer, strFormatString, pszTransport );
-            }
-            break;
-#if 0
-        case CLIENT_ERROR_WFENGINE_NOT_FOUND:
-//             LoadString(ghInstance,
-//                        IDS_CLIENT_ERROR_WFENGINE_NOT_FOUND,
-//                        strFormatString,
-//                        sizeof(strFormatString));
-
-            wsprintf( szBuffer, strFormatString,
-#ifdef WIN16
-                      "WFENGW.EXE" 
-#else
-                      "WFENGN.EXE"
-#endif
-                    );
-            break;
-#endif
-	    
-        default:
-            break;
+	wsprintf( szBuffer, strFormatString, pszTransport );
+	break;
     }
 
     /*
@@ -222,6 +201,7 @@ static BOOL EMGetErrorMessage( Session sess, int iErrorCode, LPSTR chBuffer, int
      *  associated with the error code.
      */
     if ( !(*szBuffer) ) {
+#if 0
 	char buf[16], *s;
 	sprintf(buf, "msg%d:", iErrorCode);
 	s = utils_msgs_lookup(buf);
@@ -229,39 +209,36 @@ static BOOL EMGetErrorMessage( Session sess, int iErrorCode, LPSTR chBuffer, int
 	    strcpy(szBuffer, s);
 	else
 	    sprintf(szBuffer, "Error code %d", iErrorCode);
-
-#if 0
+#endif
 	if ( iErrorCode >= CLIENT_ERROR ) {
             nResourceId = IDS_CLIENT_ERROR_DLL_NOT_FOUND +
-                            (iErrorCode - CLIENT_ERROR);
+		(iErrorCode - CLIENT_ERROR);
         } else if ( iErrorCode >= CLIENT_STATUS_HOTKEY1 ) {
             nResourceId = IDS_CLIENT_STATUS_HOTKEY1 +
-                            (iErrorCode - CLIENT_STATUS_HOTKEY1);
+		(iErrorCode - CLIENT_STATUS_HOTKEY1);
         } else {
             nResourceId = IDS_CLIENT_STATUS_CONNECTED +
-                            (iErrorCode - CLIENT_STATUS_CONNECTED);
+		(iErrorCode - CLIENT_STATUS_CONNECTED);
         }
 
-        if ( LoadString(ghInstance,
+        if ( LoadString("IDS",
                         nResourceId,
                         strFormatString,
                         sizeof(strFormatString)) ) {
             if( iErrorCode == CLIENT_ERROR_DLL_NOT_FOUND) {
-               wsprintf(szBuffer, strFormatString, gszLoadDllFileName);
+		wsprintf(szBuffer, strFormatString, gszLoadDllFileName);
             }
             else
-              lstrcpy(szBuffer, strFormatString);
+		lstrcpy(szBuffer, strFormatString);
 	}
-#endif
     }
     
     /*
      * If we still don't have an error message, fetch the 'no error text
      * available' message and return that.
      */
-#if 0
     if ( !(*szBuffer) ) {
-        if ( LoadString( ghInstance,
+        if ( LoadString( "IDS",
                          IDS_NO_ERROR_TEXT_AVAILABLE,
                          strFormatString,
                          sizeof(strFormatString)) ) {
@@ -270,16 +247,16 @@ static BOOL EMGetErrorMessage( Session sess, int iErrorCode, LPSTR chBuffer, int
             lstrcpy(szBuffer, "(no error text available)");
         }
     }
-#endif
+
     /*
      * Copy the message to caller's buffer and return.
      */
     if((cbBuffSize-1) < lstrlen(szBuffer)) {
-       memcpy(chBuffer, szBuffer, cbBuffSize);
-       chBuffer[cbBuffSize-1] = '\0';
-       }
+	memcpy(chBuffer, szBuffer, cbBuffSize);
+	chBuffer[cbBuffSize-1] = '\0';
+    }
     else
-       lstrcpy(chBuffer, szBuffer);
+	lstrcpy(chBuffer, szBuffer);
 
     return (bErrorCodeInMessage);
 }
@@ -348,9 +325,7 @@ static void WFEngineStatusCallback( Session sess, int message )
 
             // LogStandardErrorMessage(FALSE, rc, IDP_ERROR_WFENGCLOSE);
 	}
-#ifdef DEBUG
-	LogPrintf( LOG_CLASS, LOG_CONNECT, "DISCONNECTED from %s", sess->gszServerLabel);
-#endif
+	TRACE(( LOG_CLASS, LOG_CONNECT, "DISCONNECTED from %s", sess->gszServerLabel));
 	break;
 
     case CLIENT_STATUS_MODEM_INIT:
@@ -373,15 +348,11 @@ static void WFEngineStatusCallback( Session sess, int message )
 
 
     case HOTKEY_UI: // CLIENT_STATUS_HOTKEY1:     // suspend
-#ifdef DEBUG
-	LogPrintf( LOG_CLASS, LOG_CONNECT, "HOTKEY_UI");
-#endif
+	TRACE(( LOG_CLASS, LOG_CONNECT, "HOTKEY_UI"));
 	break;
 
     case HOTKEY_EXIT: // CLIENT_STATUS_HOTKEY2:     // exit
-#ifdef DEBUG
-	LogPrintf( LOG_CLASS, LOG_CONNECT, "HOTKEY_EXIT");
-#endif
+	TRACE(( LOG_CLASS, LOG_CONNECT, "HOTKEY_EXIT"));
 	srvWFEngDisconnect(sess->hWFE);
 	break;
 
@@ -390,9 +361,7 @@ static void WFEngineStatusCallback( Session sess, int message )
 	break;
 
     case CLIENT_STATUS_CONNECTED:
-#ifdef DEBUG
-	LogPrintf( LOG_CLASS, LOG_CONNECT, "CONNECTED to %s", sess->gszServerLabel);
-#endif
+	TRACE(( LOG_CLASS, LOG_CONNECT, "CONNECTED to %s", sess->gszServerLabel));
 	sess->HaveFocus = FALSE;
 	sess->Connected = TRUE;
 	break;
@@ -451,7 +420,6 @@ static void WFEngineStatusCallback( Session sess, int message )
 static int EMEngOpen(Session sess)
 {
     WFEOPEN  WFEOpen;
-//    WFEOPENP WFEOpenp;
     INT rc = CLIENT_STATUS_SUCCESS;
     ULONG iHRes,iVRes;
 
@@ -479,7 +447,7 @@ static int EMEngOpen(Session sess)
     WFEOpen.pszIconPath      = APP_DIR;
     WFEOpen.uIconIndex       = 0;      
     WFEOpen.reserved         = 0; //(ULONG)&WFEOpenp;
-//    WFEOpenp.hWndPlugin      = 
+    // WFEOpenp.hWndPlugin      = 
 
     rc = srvWFEngOpen(&WFEOpen, &sess->hWFE);
 
@@ -534,6 +502,8 @@ static int EMEngLoadSession(Session sess)
 static void session_free(Session sess)
 {
     TRACE((TC_UI, TT_API1, "session_free: %p\n", sess));
+
+    FlushPrivateProfileCache();
 
     if (global_session == sess)
 	global_session = NULL;
@@ -597,9 +567,13 @@ Session session_open(const char *ica_file)
     
     if (sess->gszServerLabel[0] == '\0')
     {
-	session_free(sess);
+	char msg[128];
 
-	msg_report("Can't find server"/* IDS_CLIENT_ERROR_SERVER_SECTION_NOT_FOUND */);
+	LoadString("IDS", IDS_CLIENT_ERROR_SERVER_SECTION_NOT_FOUND,
+		   msg, sizeof(msg));
+	msg_report(msg);
+
+	session_free(sess);
 
 	return NULL;
     }
@@ -611,7 +585,7 @@ Session session_open(const char *ica_file)
     if (pEnvVar == NULL)
 	pEnvVar = getenv(INET_HOSTNAME);
 
-    // use time stampe to creat an unique client name
+    // use time stamp to creat an unique client name
     if (pEnvVar == NULL)
 	sprintf(gszClientName, "Internet%08u", clock() & 0xffffff);
     else
