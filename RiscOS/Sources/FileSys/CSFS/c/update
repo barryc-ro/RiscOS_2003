@@ -74,7 +74,7 @@ dump_entries (int acn, int num_entries, int *n,int level)
       strcat(dump_tabs," ");
 
     debug_printf(db,"(7) %s%2d : %15s %3d\n",dump_tabs,*n,
-    			   stringptr(arc[acn].hdr[*n].name),arc[acn].hdr[*n].dirn);
+                           stringptr(arc[acn].hdr[*n].name),arc[acn].hdr[*n].dirn);
     (*n)++;
     if (arc[acn].hdr[(*n)-1].dirn>0)
       dump_entries(acn, arc[acn].hdr[(*n)-1].dirn, n,level+1);
@@ -113,10 +113,11 @@ dump_struct(int acn)
  */
 
 
-static _kernel_oserror * syncdir(int acn,int dir,int bits)
+static _kernel_oserror *
+syncdir(int acn, int dir, int bits)
 {
   _kernel_oserror * err;
-  heads           * hdr;
+  heads           * hdr=NULL;
   int               size;
   int               i;
   int               j;
@@ -130,11 +131,12 @@ static _kernel_oserror * syncdir(int acn,int dir,int bits)
   debug_printf(db,"(7) syncdir");
 
   check=(arc[acn].hdr[dir].dirn!=DFLAT);
-  hdr=NULL;
 
   err=diropen(acn,dir);
   if(!err)
-    if(check) err=servicegetdir(acn,dir,&hdr,&size);
+    if(check)
+      err=servicegetdir(acn,dir,&hdr,&size);
+
 
   if(!err)
   {
@@ -146,18 +148,31 @@ static _kernel_oserror * syncdir(int acn,int dir,int bits)
 
       if(!check)
         code=0;
+      else if(j<size)
+        code=cstrcmp(stringptr(arc[acn].hdr[n].name),stringptr(hdr[j].name));
       else
-      {
-        if(j<size)
-          code=cstrcmp(stringptr(arc[acn].hdr[n].name),stringptr(hdr[j].name));
-        else
-          code=-1;
-      }
+        code=-1;
 
-      if(code==0)
+      if(code==0) /* same names - check time stamps */
       {
-        debug_printf(db,"(7) same names (%s), check time stamps",
-        			  stringptr(arc[acn].hdr[n].name));
+#ifdef REMOTE_DEBUG
+        unsigned char time_buff[5];
+        char client_time[25],server_time[25];
+
+        *(int*)time_buff = arc[acn].hdr[n].exec;
+        time_buff[4] = arc[acn].hdr[n].load & 0xff;
+        _swix(OS_ConvertDateAndTime,_INR(0,3),time_buff,client_time,
+               sizeof(client_time),"%M3 %DY %24:%MI:%SE");
+
+        *(int*)time_buff = hdr[j].exec;
+        time_buff[4] = hdr[j].load & 0xff;
+        _swix(OS_ConvertDateAndTime,_INR(0,3),time_buff,server_time,
+               sizeof(server_time),"%M3 %DY %24:%MI:%SE");
+        debug_printf(db,"(7) names (%s)(%s) timestamps (%s)(%s)",
+                 stringptr(arc[acn].hdr[n].name),stringptr(hdr[j].name),
+                 client_time,server_time);
+#endif
+
         if(arc[acn].hdr[n].dirn==DNFILE && (!check || hdr[j].dirn==DNFILE))
         {
           if(!check)
@@ -169,109 +184,148 @@ static _kernel_oserror * syncdir(int acn,int dir,int bits)
               code=arc[acn].hdr[n].exec-hdr[j].exec;
           }
 
-          if(code>0)
+          if (code>0) /* client is newer than server */
           {
             debug_printf(db,"(7) client is newer than server");
-            if((bits & CSFS_UPDATE) && !(bits & CSFS_REFRESH))
+            if(bits & CSFS_UPLOAD)
             {
-              if(arc[acn].hdr[n].sn)
-                arc[acn].hdr[n].put=1;
+              if (!(bits & CSFS_REFRESH))
+                if(arc[acn].hdr[n].sn)
+                  arc[acn].hdr[n].put=1;
+            }
+            else
+            {
+              arc[acn].hdr[n].get=1;
+              debug_printf(db,"(7)   marking for get");
+            }
+          }
+          else if (code<0 || !arc[acn].hdr[n].sn) /* client older than server */
+          {
+            debug_printf(db,"(7) client older than server/needs downloading");
+            if(!(bits & CSFS_REFRESH))
+              arc[acn].hdr[n].get=1;
+            else if(code<0 && check)
+            {
+              removesn(acn,n);
+
+              name=arc[acn].hdr[n].name;
+              arc[acn].hdr[n]=hdr[j];
+              arc[acn].hdr[n].name=name;
             }
           }
           else
-            if(code<0 || !arc[acn].hdr[n].sn)
-            {
-              debug_printf(db,"(7) client is older than server");
-              if(!(bits & CSFS_REFRESH))
-                arc[acn].hdr[n].get=1;
-              else
-                if(code<0 && check)
-                {
-                  removesn(acn,n);
-
-                  name=arc[acn].hdr[n].name;
-                  arc[acn].hdr[n]=hdr[j];
-                  arc[acn].hdr[n].name=name;
-                }
-            }
+          {
+            debug_printf(db,"(7) client and server same times");
+          }
         }
 
         j++;
       }
-      else
+      else if(code>0)
       {
-        if(code>0)
-        {
-          debug_printf(db,"(7) entry on server, not on client");
+        debug_printf(db,"(7) not same names (%s)(%s)",
+                 stringptr(arc[acn].hdr[n].name),stringptr(hdr[j].name));
+        debug_printf(db,"(7)   insert entry (%s)",stringptr(hdr[j].name));
 
+        insentry(acn,n,dir,1);
+        arc[acn].hdr[n]=hdr[j];
+        if(bits & CSFS_UPLOAD)
+        {
+          /* remove entry from server */
+	  debug_printf(db,"(7)     upload, remove entry from server");
+          servicedelete(acn,n);
+          rementry(&arc[acn],n,1);
+          i--;
+          incn=0;
+        }
+        else
+        {
+          dupstring(hdr[j].name,&name);
+          arc[acn].hdr[n].name=name;
+
+          if(arc[acn].hdr[n].dirn==DNFILE)
+            if(!(bits & CSFS_REFRESH))
+            {
+              arc[acn].hdr[n].get=1;
+              debug_printf(db,"(7)     marking for get");
+            }
+        }
+        j++;
+      }
+      else  /* local entry which is not on server */
+      {
+        debug_printf(db,"(7)  local entry not on server (%s)",
+        		      stringptr(arc[acn].hdr[n].name));
+        if(bits & CSFS_UPLOAD)
+        {
+          debug_printf(db,"(7)     upload ");
+          if(arc[acn].hdr[n].dirn==DNFILE)
+          {
+            if(arc[acn].hdr[n].sn)
+            {
+              arc[acn].hdr[n].put=1;
+              debug_printf(db,"(7)     marking for put");
+            }
+          }
+          else
+          {
+            err=servicemkdir(acn,n);
+          }
+        }
+        else
+        {
+          if(arc[acn].hdr[n].dirn>=0)
+            dsize=noindir(acn,n)+1;
+          else
+            dsize=1;
+          scrapentry(acn,n,dsize);
+          rementry(&arc[acn],n,dsize);
+          i--;
+          incn=0;
+        }
+      }
+
+
+      if(incn)
+      {
+        if(arc[acn].hdr[n].dirn>=0)
+          n+=noindir(acn,n)+1;
+        else
+          n++;
+      }
+
+      if(err) break;
+    }
+
+
+    if(!err && check)
+    {
+      while(j<size)
+      {
+        debug_printf(db,"(7)   adding %s",stringptr(hdr[j].name));
+
+        if(bits & CSFS_UPLOAD)
+        {
+          /* remove entry from server */
+	  debug_printf(db,"(7)     remove entry from server");
+          insentry(acn,n,dir,1);
+          arc[acn].hdr[n]=hdr[j];
+          servicedelete(acn,n);
+          rementry(&arc[acn],n,1);
+        }
+        else
+        {
+          debug_printf(db,"(7)     fetch entry from server");
           dupstring(hdr[j].name,&name);
           insentry(acn,n,dir,1);
           arc[acn].hdr[n]=hdr[j];
           arc[acn].hdr[n].name=name;
 
           if(arc[acn].hdr[n].dirn==DNFILE)
-          {
             if(!(bits & CSFS_REFRESH))
               arc[acn].hdr[n].get=1;
-          }
-          j++;
+          n++;
         }
-        else
-        {
-          debug_printf(db,"(7) local entry which is not on server");
-          if(bits & CSFS_UPDATE)
-          {
-            if(arc[acn].hdr[n].dirn==DNFILE)
-            {
-              if(arc[acn].hdr[n].sn)
-                arc[acn].hdr[n].put=1;
-            }
-            else
-              err=servicemkdir(acn,n);
-          }
-          else
-          {
-           if(arc[acn].hdr[n].dirn>=0)
-             dsize=noindir(acn,n)+1;
-           else
-             dsize=1;
-           scrapentry(acn,n,dsize);
-           rementry(&arc[acn],n,dsize);
-           i--;
-           incn=0;
-          }
-        }
-      }
-
-      if(incn)
-      {
-       if(arc[acn].hdr[n].dirn>=0)
-       {
-        n+=noindir(acn,n)+1;
-       }
-       else
-        n++;
-      }
-
-      if(err) break;
-    }
-
-    if(!err && check)
-    {
-      while(j<size)
-      {
-        debug_printf(db,"(7) adding file %s",stringptr(hdr[j].name));
-
-        dupstring(hdr[j].name,&name);
-        insentry(acn,n,dir,1);
-        arc[acn].hdr[n]=hdr[j];
-        arc[acn].hdr[n].name=name;
-
-        if(arc[acn].hdr[n].dirn==DNFILE)
-          if(!(bits & CSFS_REFRESH))
-           arc[acn].hdr[n].get=1;
-
-        n++;
         j++;
       }
     }
@@ -288,7 +342,8 @@ static _kernel_oserror * syncdir(int acn,int dir,int bits)
 }
 
 
-static _kernel_oserror * updatedir(int acn,int dir,int bits)
+static _kernel_oserror *
+updatedir(int acn,int dir,int bits)
 {
  _kernel_oserror * err;
  int               i;
@@ -305,8 +360,6 @@ static _kernel_oserror * updatedir(int acn,int dir,int bits)
  {
   arc[acn].hdr[i].get=arc[acn].hdr[i].put=0;
  }
-
- debug_printf(db,"(7) updatedir");
 
  err=syncdir(acn,dir,bits);
  if(!err)
@@ -370,7 +423,7 @@ static _kernel_oserror * updatedir(int acn,int dir,int bits)
   if(!err)
   {
     unsigned int sofar=0;
-    _swix(Hourglass_On,0);
+
     for(i=0;i<arc[acn].nofiles;i++)
     {
       if(arc[acn].hdr[i].get)
@@ -387,51 +440,44 @@ static _kernel_oserror * updatedir(int acn,int dir,int bits)
         if(!err) err=fs_lock(sc_name(arc[acn].hdr[i].sn),DEFATT|LOCK);
       }
       else                    /* don't put and get */
-      {
-        debug_printf(db,"(7) attempting put");
         if(arc[acn].hdr[i].put)
           err=serviceputfile(acn,i,sum,&sofar);
-        debug_printf(db,"(7) put complete");
-      }
+
       if(err) break;
     }
-    _swix(Hourglass_Off,0);
   }
  }
- debug_printf(db,"(7) updatedir complete");
 
  return(err);
 }
 
 
-
-
-static _kernel_oserror * updates(char * path,int bits)
+static _kernel_oserror *
+updates(char * path,int bits)
 {
- _kernel_oserror * err;
- int               acn;
- int               fn;
- char              buffer[NAMELEN];
+  _kernel_oserror * err;
+  int               acn;
+  int               fn;
+  char              buffer[NAMELEN];
 
+  err=fs_canonicalpath(path,buffer,sizeof(buffer),NULL,NULL);
 
- err=fs_canonicalpath(path,buffer,sizeof(buffer),NULL,NULL);
+  debug_printf(db,"(7) update %s",buffer);
 
- debug_printf(db,"(7) updates %s",buffer);
-
- err=makepath(buffer,NULL,1,&acn);
- if(!err)
- {
-  err=findpath(acn,arcpath,&fn,0);
-
-  if(fn<-1) err=geterror(err_FileNotFound);  /* Not found */
+  err=makepath(buffer,NULL,1,&acn);
   if(!err)
   {
-   err=updatedir(acn,fn,bits);
-   updatedirupcall(acn,fn);
-  }
- }
+    err=findpath(acn,arcpath,&fn,0);
 
- return(err);
+    if(fn<-1) err=geterror(err_FileNotFound);  /* Not found */
+    if(!err)
+    {
+      err=updatedir(acn,fn,bits);
+      updatedirupcall(acn,fn);
+    }
+  }
+
+  return(err);
 }
 
 
@@ -439,7 +485,7 @@ static _kernel_oserror * updates(char * path,int bits)
 
 /*
 
-CSFS_Update (SWI &4E985)
+CSFS_UPLOAD (SWI &4E985)
 
 Make cached file system directory and server directory consistent.
 
@@ -479,7 +525,7 @@ _kernel_oserror * updatecommand(char * args[],int argc)
   for (i=0; i<argc; i++)
   {
     if (cstrcmp(args[i],"-upload")==0)  /* option */
-      bits|=CSFS_UPDATE;
+      bits|=CSFS_UPLOAD;
     else if (*args[i]!='-')             /* non-option */
     {
       first_arg = i;
@@ -583,7 +629,7 @@ static _kernel_oserror * releases(char * path)
 
  err=fs_canonicalpath(path,buffer,sizeof(buffer),NULL,NULL);
 
- debug_printf(db,"(7) releases %s",buffer);
+ debug_printf(db,"(7) release %s",buffer);
 
  err=makepath(buffer,NULL,1,&acn);
  if(!err)
