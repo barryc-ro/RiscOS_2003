@@ -119,8 +119,7 @@ dirs:
 # Final link for the ROM Image (using given base address)
 #
 rom_link: dirs
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} {CPPLIB} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${CPPLIB} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -128,59 +127,3 @@ ${LIB}: ${OBJS} local_dirs
         ${LB} ${LBFLAGS} -o ${LIB} ${OBJS}
 
 # Dynamic dependencies:
-o.pkcs11:	c.pkcs11
-o.pkcs11:	h.pkcs11
-o.pkcs11:	h.pkcs11t
-o.pkcs11:	h.pkcs11f
-o.pkcs11:	h.pkcs11f
-o.pkcs11:	h.pkcs11f
-o.pkcs11:	C:h.swis
-o.pkcs11:	C:h.kernel
-o.pkcs11:	h.ro_mod
-o.pkcs11:	c.pkcs11
-o.pkcs11:	h.pkcs11
-o.pkcs11:	h.pkcs11t
-o.pkcs11:	h.pkcs11f
-o.pkcs11:	h.pkcs11f
-o.pkcs11:	h.pkcs11f
-o.pkcs11:	C:h.swis
-o.pkcs11:	C:h.kernel
-o.pkcs11:	h.ro_mod
-o.rsa_id2:	c.rsa_id2
-o.rsa_id2:	C:SSLeay.h.cryptlib
-o.rsa_id2:	C:SSLeay.h.e_os
-o.rsa_id2:	C:SSLeay.h.ro_options
-o.rsa_id2:	C:TCPIPLibs.h.socklib
-o.rsa_id2:	C:TCPIPLibs.sys.h.types
-o.rsa_id2:	C:TCPIPLibs.sys.h.cdefs
-o.rsa_id2:	C:TCPIPLibs.machine.h.endian
-o.rsa_id2:	C:TCPIPLibs.machine.h.ansi
-o.rsa_id2:	C:TCPIPLibs.machine.h.types
-o.rsa_id2:	C:TCPIPLibs.sys.h.socket
-o.rsa_id2:	C:TCPIPLibs.sys.h.cdefs
-o.rsa_id2:	C:TCPIPLibs.sys.h.stat
-o.rsa_id2:	C:TCPIPLibs.sys.h.time
-o.rsa_id2:	C:TCPIPLibs.sys.h.cdefs
-o.rsa_id2:	C:TCPIPLibs.sys.h.cdefs
-o.rsa_id2:	C:TCPIPLibs.sys.h.time
-o.rsa_id2:	C:TCPIPLibs.sys.h.uio
-o.rsa_id2:	C:TCPIPLibs.sys.h.cdefs
-o.rsa_id2:	C:h.kernel
-o.rsa_id2:	C:SSLeay.h.crypto
-o.rsa_id2:	C:SSLeay.h.stack
-o.rsa_id2:	C:SSLeay.h.buffer
-o.rsa_id2:	C:SSLeay.h.bio
-o.rsa_id2:	C:SSLeay.h.crypto
-o.rsa_id2:	C:SSLeay.h.err
-o.rsa_id2:	C:SSLeay.h.bn
-o.rsa_id2:	C:SSLeay.h.rsa
-o.rsa_id2:	C:SSLeay.h.bn
-o.rsa_id2:	C:SSLeay.h.crypto
-o.rsa_id2:	C:SSLeay.h.rand
-o.rsa_id2:	h.rsa_id2
-o.rsa_id2:	C:SSLeay.h.rsa
-o.rsa_id2:	h.pkcs11
-o.rsa_id2:	h.pkcs11t
-o.rsa_id2:	h.pkcs11f
-o.rsa_id2:	h.pkcs11f
-o.rsa_id2:	h.pkcs11f
