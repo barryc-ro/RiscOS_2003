@@ -58,7 +58,6 @@ rm.DVBControl: Hdr:CPU.Generic26
 rm.DVBControl: Hdr:IO.GenericIO
 rm.DVBControl: Hdr:RISCOS
 rm.DVBControl: Hdr:Machine.<Machine>
-rm.DVBControl: Hdr:Machine.<Machine>
 rm.DVBControl: Hdr:ModHand
 rm.DVBControl: Hdr:HighFSI
 rm.DVBControl: Hdr:DevNos
@@ -69,6 +68,7 @@ rm.DVBControl: Hdr:Proc
 rm.DVBControl: Hdr:Podule
 rm.DVBControl: Hdr:IO.IOMDL
 rm.DVBControl: Hdr:MPEGCtrl
+rm.DVBControl: Hdr:DVBControl
 rm.DVBControl: Version
 rm.DVBControl: s.errors
 rm.DVBControl: s.main
