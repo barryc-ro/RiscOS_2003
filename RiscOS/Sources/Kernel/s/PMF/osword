@@ -752,6 +752,9 @@ OsWord0F ROUT
         LDRB    R0, [R1]
         MOV     R9, #0
 
+        TEQ     R0, #5                  ; write all of time (5-byte UTC)
+        BEQ     OsWord0F_5byte
+
         TEQ     R0, #8                  ; write hours, minutes, seconds
         MOVEQ   R9, #1
 
@@ -764,7 +767,16 @@ OsWord0F ROUT
         TEQ     R9, #0
         Pull    "R5-R10, PC", EQ         ; unknown call, pass it on
 
-     [  {TRUE}                          ; international version uses Territory_ConvertTimeStringToOrdinals
+; first set up data in registers as follows :-
+; R0 = hours
+; R1 = minutes
+; R2 = days
+; R3 = months
+; (R4 -> block)
+; R5 = year(lo)
+; R6 = year(hi)
+; R7 = seconds
+; R8 = centiseconds
 
         TST     R9, #2
         BEQ     %FT01
@@ -879,144 +891,21 @@ OsWord0F ROUT
         MOV     r4, #100
         DivRem  r6, r5, r4, r14         ; r5 = Year (lo), r6 = Year (hi)
 
-     |
-
-; first set up data in registers as follows :-
-; R0 = hours
-; R1 = minutes
-; R2 = days
-; R3 = months
-; (R4 -> block)
-; R5 = year(lo)
-; R6 = year(hi)
-; R7 = seconds
-; R8 = centiseconds
-
-; first do the date part, if appropriate
-
-        TST     R9, #2
-        MOVEQ   R2, #-1                 ; if not doing date, set days,
-        MOVEQ   R3, #-1                 ; months, year(lo), year(hi) to -1
-        MOVEQ   R5, #-1
-        MOVEQ   R6, #-1
-        BEQ     %FT50                   ; [not doing date]
-
-; do the months
-
-        LDRB    R1, [R4, #8]            ; get first char
-        ORR     R1, R1, #&20            ; lower case it
-        LDRB    R2, [R4, #9]            ; get second char
-        ORR     R2, R2, #&20            ; lower case it
-        ORR     R1, R1, R2, LSL #8      ; merge
-        LDRB    R2, [R4, #10]           ; get third char
-        ORR     R2, R2, #&20            ; lower case it
-        ORR     R1, R1, R2, LSL #16     ; merge
-
-        ADR     R2, MonthNameTable-4    ; months start at 1
-        MOV     R3, #12                 ; try December first
-10
-        LDR     R0, [R2, R3, LSL #2]    ; get month word
-        TEQ     R0, R1
-        SUBNES  R3, R3, #1              ; if not equal, decrement month
-        BNE     %BT10                   ; and if non-zero, loop
-
-        TEQ     R3, #0                  ; failed to match ?
-        BEQ     Bad0F                   ; then ignore all
-
-; R3 now contains the month number
-
-; do the days
-
-        MOV     R1, #5                  ; offset to days
-        BL      GetDecimalPair
-        BCS     Bad0F                   ; bad digits
-
-        MOVS    R2, R1
-        BEQ     Bad0F                   ; zero days not allowed
-
-        ADR     R0, MonthLengths        ; now validate days against
-        LDRB    R1, [R0, R3]            ; maximum number of days in that month
-        CMP     R1, R2                  ; (29 for Feb) and eliminate if crap
-        BCC     Bad0F
-
-; R2 now contains the days
-
-; now do the years so we can check whether 29 Feb is legal
-
-        MOV     R1, #12                 ; offset to year(hi)
-        BL      GetDecimalPair
-        MOVCC   R6, R1
-
-        MOVCC   R1, #14                 ; offset to year(lo)
-        BLCC    GetDecimalPair
-        MOVCC   R5, R1
-
-        BCS     Bad0F
-
-; now check for Feb 29
-
-        TEQ     R3, #2                  ; month = Feb ?
-        TEQEQ   R2, #29                 ; and day = 29 ?
-        BNE     %FT20                   ; [not 29 Feb]
-
-        TST     R5, #3                  ; is year multiple of 4
-        BNE     Bad0F                   ; no, then 29 Feb is bad
-
-        TEQ     R5, #0                  ; is it a century year ?
-        BNE     %FT20                   ; no, then 29 Feb is good
-
-        TST     R6, #3                  ; is it a multiple of 400 ?
-        BNE     Bad0F                   ; no, then 29 Feb is bad
-
-20
-        ADD     R4, R4, #16             ; move on to time part
-
-; now do the time part, if appropriate
-
-50
-        TST     R9, #1
-        MOVEQ   R0, #-1                 ; if not doing time, set hours,
-        MOVEQ   R1, #-1                 ; minutes and seconds to -1
-        MOVEQ   R7, #-1
-        MOVEQ   R8, #-1
-        BEQ     %FT80                   ; [not doing time part]
-
-; do the seconds
-
-        MOV     R1, #7                  ; offset to seconds
-        BL      GetDecimalPair
-        CMPCC   R1, #60
-        MOVCC   R7, R1
-
-; zero the centiseconds
-
-        MOV     R8, #0
-
-; do the hours
-
-        MOVCC   R1, #1                  ; offset to hours
-        BLCC    GetDecimalPair
-        CMPCC   R1, #24
-        MOVCC   R0, R1
-
-; do the minutes
-
-        MOVCC   R1, #4
-        BLCC    GetDecimalPair
-        CMPCC   R1, #60
-
-        BCS     Bad0F
-80
-
-; we have now completely validated the settings
-
-    ] ;International version.
-
         BL      SetTime                 ; also updates 5-byte RealTime
 
 Bad0F                                   ; come here if setting invalid
         Pull    "R5-R10, R14"
         MyOsWord
+
+OsWord0F_5byte
+        SUB     SP, SP, #36
+        ADD     R1, R1, #1              ; process the user's 5-byte block
+        MOV     R2, SP
+        SWI     XTerritory_ConvertTimeToUTCOrdinals
+        ADDVS   SP, SP, #36
+        BVS     Bad0F
+        MOV     R10, #0                 ; no string on stack
+        B       %BT10                   ; nip back in to the main handler
 
 ; *****************************************************************************
 
