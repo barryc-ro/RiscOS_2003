@@ -12,7 +12,8 @@
 #include "Email/Common/bool.h"
 
 #include "DebugLib/DebugLib.h"
-#include "NBLib/NBDefs.h"
+/* #include "NBLib/NBLib.h" */
+
 #ifdef MemCheck_MEMCHECK
   #include "MemCheck:MemCheck.h"
 #endif
@@ -36,7 +37,7 @@
 #include "enginit.h"
 #include "enguser.h"
 
-static bool skipped, secondtimeround;
+static bool skipped, secondtimeround, newmsgs;
 
 void StartMessageDownload(void)
 {
@@ -89,18 +90,21 @@ void FinishHeaders(void)
   else if (emailactive)
   {
     /*
-    ** If email client is active, and if the Process was
-    ** not initiated by a Retrieve (i.e. processpending),
-    ** we can now get on with downloading messages in the background.
+    ** If email client is active, we can now get on with
+    ** downloading messages in the background, but if newmsgs
+    ** flag not set, there are no new messages so skip download.
     */
 
-    if (processpending)
-      DeactivatePOP();
-    else
+    if (newmsgs)
     {
       skipped = false;
       secondtimeround = false;
       StartMessageDownload();
+    }
+    else if (!(state & RETRIEVEMSG))
+    {
+      DeactivatePOP();
+      StartReconnectCount();
     }
   }
 
@@ -174,6 +178,12 @@ void DoDownloadHeader(void)
   switch (downloadstate.context)
   {
 
+    case startdownload :
+
+      newmsgs = false;
+      downloadstate.context = readytodownload;
+      break;
+
     case readytodownload :
 
       /*
@@ -203,6 +213,7 @@ void DoDownloadHeader(void)
       {
         if (msg->flags & NEWLYCREATED)
         {
+          newmsgs = true;
           SetFilename(msg->ID, true);
           downloadstate.hdrsobj = new MBoxOpCB_gethdrs_file((MBoxCBHandlerFn) MBoxCallback, msgfilename, code, 0);
           downloadstate.context = idle;
@@ -250,7 +261,7 @@ void DoDownloadHeader(void)
       ** Meanwhile start fetching the next header.
       */
 
-      dprintf(("Eng", "download context = downloaddone msg %d\n",msg->ID));
+      dprintf(("Eng", "download context = downloaddone hdr %d\n",msg->ID));
       RemoveObj((MBoxOpCB**) &downloadstate.hdrsobj);
       if (parsehdrstate.context == idle)
       {
@@ -314,7 +325,7 @@ void DoDownloadMessage(void)
 
     case readytodownload :
 
-      dprintf(("Eng", "context = readytodownload msg %d\n",msg->ID));
+      dprintf(("Eng", "context = readytodownload\n"));
       if ((!msg) || ((freemem <= 0) && (!reprocess)))
       {
 
@@ -340,15 +351,7 @@ void DoDownloadMessage(void)
           msg = msg->next;
         }
 
-        if (expungepending)
-        {
-          state |= (MARKDELETE + PROCESSPOP);
-          dprintf(("Eng", "About to expunge\n"));
-          popprocessstate.context = readytoconnect;
-          markstate.context = idle;
-        }
-
-        else if (!(state & RETRIEVEMSG))
+        if (!(state & RETRIEVEMSG))
         {
           /* only reset countdown timers if a retrieve is not
              happening at the same time */
@@ -376,7 +379,7 @@ void DoDownloadMessage(void)
 
       else if (msg->flags & (DOWNLOADED | DOWNLOADING | REMOVED))
       {
-        dprintf(("Eng", "Message %s\n",(msg->flags & REMOVED) ? "has previously been removed" : "is downloading or already downloaded"));
+        dprintf(("Eng", "Message %d %s\n",msg->ID,(msg->flags & REMOVED) ? "has previously been removed" : "is downloading or already downloaded"));
         downloadstate.msg = msg->next;
         downloadstate.context = readytodownload;
       }
@@ -384,7 +387,6 @@ void DoDownloadMessage(void)
       else
       {
         code = msg->mboxobj->GetLength(downloadstate.size);
-        dprintf(("Eng", "Message size=%d\n",downloadstate.size));
         if (code < 0)
         {
           /* some kind of error in gettingsize */
@@ -392,13 +394,22 @@ void DoDownloadMessage(void)
           downloadstate.context = downloadfailure;
         }
 
+        else if (!(msg->flags & NEW))
+        {
+          dprintf(("Eng", "Message %d is not new\n",msg->ID));
+          downloadstate.msg = msg->next;
+          downloadstate.context = readytodownload;
+        }
+
         else
         {
           bool ok = true;
 
+          dprintf(("Eng", "Free memory is %dK\n",freemem/1024));
+          dprintf(("Eng", "Message size=%d\n",downloadstate.size));
           if ((downloadstate.size > ourmboxin->maxsize) && (!secondtimeround))
           {
-            dprintf(("Eng", "Skipping this message - too bleedin' big\n"));
+            dprintf(("Eng", "Skipping message %d - too bleedin' big\n",msg->ID));
             /* set flag so we know some have been skipped */
             skipped = true;
             ok = false;
@@ -434,7 +445,10 @@ void DoDownloadMessage(void)
           else
           {
             if (secondtimeround)
+            {
+              dprintf(("Eng", "Not enough space for message %d\n",msg->ID));
               msg->flags &= ~NEW;
+            }
             downloadstate.msg = msg->next;
             downloadstate.context = readytodownload;
           }
@@ -445,7 +459,7 @@ void DoDownloadMessage(void)
 
     case downloadfailure :
 
-      dprintf(("Eng", "context = downloadfailure for msg %d, rc = %d\n",msg->ID,downloadstate.ret.code));
+      dprintf(("Eng", "context = downloadfailure for msg %d, length = %d\n",msg->ID,downloadstate.msgobj->length));
       /* message download or parse has failed */
       RemoveObj((MBoxOpCB**) &downloadstate.msgobj);
       downloadstate.context = readytodownload;
@@ -467,7 +481,7 @@ void DoDownloadMessage(void)
 void ConfirmConnect(bool conf, void *h)
 {
 
-  NB_UNUSED(h);
+  (void)(h);
   if (conf)
   {
     /* user has confirmed connection */
@@ -525,7 +539,6 @@ void DoRetrieve(void)
       dprintf(("Eng", "Retrieve context = reqconnect\n"));
       /* confirmation of connection required to get message */
       retrievestate.context = idle;
-      processpending = false;
       retrievestate.ret.code = (state & FORWARD) ? ENG_CONFIRMFORWARD : ENG_CONFIRMCONNECT;
       (*callbacklist.statusfunc)(&retrievestate.ret, callbacklist.statushandle, ConfirmConnect);
       break;
@@ -595,7 +608,7 @@ void DoRetrieve(void)
       dprintf(("Eng", "Retrieve context = retrievefailure\n"));
       state &= ~RETRIEVEMSG;
       msg->flags &= ~(DOWNLOADED + DOWNLOADING);
-      if ((!(state & DOWNLOADMSG)) && (!expungepending))
+      if (!(state & DOWNLOADMSG))
         DeactivatePOP();
       switch (retrievestate.ret.rc)
       {
@@ -718,16 +731,6 @@ void DoRetrieve(void)
         else
           DisconnectLine();
       }
-
-      else if (processpending)
-      {
-        dprintf(("Eng", "Process is pending\n"));
-        popprocessstate.context = done;
-        state |= PROCESSPOP;
-      }
-
-/*       else if (online) */
-/*         DeactivatePOP(); */
 
       break;
   }
