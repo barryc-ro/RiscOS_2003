@@ -61,7 +61,8 @@ clean:
 
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 all: ${TARGETSA}
@@ -77,37 +78,6 @@ ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-Serial: s.init
-Serial: Hdr:ListOpts
-Serial: Hdr:NdrDebug
-Serial: Hdr:Macros
-Serial: Hdr:System
-Serial: Hdr:SWIs
-Serial: Hdr:CPU.Generic26
-Serial: Hdr:IO.GenericIO
-Serial: Hdr:RISCOS
-Serial: Hdr:Machine.<Machine>
-Serial: Hdr:ModHand
-Serial: Hdr:HighFSI
-Serial: Hdr:DevNos
-Serial: Hdr:Services
-Serial: Hdr:Symbols
-Serial: Hdr:MsgTrans
-Serial: Hdr:Proc
-Serial: Hdr:Buffer
-Serial: Hdr:ResourceFS
-Serial: Hdr:DeviceFS
-Serial: Hdr:IO.IOEB
-Serial: Hdr:IO.IOC
-Serial: Hdr:RS423
-Serial: Hdr:IO.IOMDL
-Serial: Version
-Serial: s.errors
-Serial: s.macros
-Serial: s.main
-Serial: s.hardware
-Serial: s.interrupts
-Serial: s.devicecall
 rm.Serial: Hdr:ListOpts
 rm.Serial: Hdr:NdrDebug
 rm.Serial: Hdr:Macros
@@ -117,6 +87,7 @@ rm.Serial: Hdr:CPU.Generic26
 rm.Serial: Hdr:IO.GenericIO
 rm.Serial: Hdr:RISCOS
 rm.Serial: Hdr:Machine.<Machine>
+rm.Serial: Hdr:Machine.Machine
 rm.Serial: Hdr:ModHand
 rm.Serial: Hdr:HighFSI
 rm.Serial: Hdr:DevNos
@@ -131,7 +102,7 @@ rm.Serial: Hdr:IO.IOEB
 rm.Serial: Hdr:IO.IOC
 rm.Serial: Hdr:RS423
 rm.Serial: Hdr:IO.IOMDL
-rm.Serial: Version
+rm.Serial: VersionASM
 rm.Serial: s.errors
 rm.Serial: s.macros
 rm.Serial: s.main
