@@ -40,6 +40,7 @@ void free();
 #include "decasd.h"   /* for decoding debug tables */
 #include "disass.h"   /* instruction disassembly */
 #include "prgname.h"  /* decodes program name */
+#include "mapping.h"
 
 #include "VersionNum"
 #include "dem.h"
@@ -64,10 +65,11 @@ void free();
 #define  A_SYMBOLS    0x04
 #define  A_STRINGS    0x08
 #define  A_DEBUG      0x10
-#define  A_ALL        0x1f
-#define  A_BRIEF      0x20
-#define  A_RELOCS     0x40
-#define  A_DISASS     0x80
+#define  A_RELOCS     0x20
+#define  A_DISASS     0x40
+#define  A_MAPSYMS    0x80
+#define  A_ALL        0xff
+#define  A_BRIEF      0x100
 
 static int enable_demangle = 0;
 
@@ -76,11 +78,18 @@ static int enable_demangle = 0;
 #ifndef int32
 #  define int32 long  int
 #endif
+#ifndef int16
+#  define int16 short int
+#endif
 #ifndef unsigned32
 #  define unsigned32  unsigned long
 #endif
+#ifndef unsigned16
+#  define unsigned16  unsigned short
+#endif
 
 #define hv(v)         bytesex_hostval(v)
+#define hv16(v)       bytesex_hostval16(v)
 
 static char *object, *strt, *areas;
 static aof_symbol *symt;
@@ -199,7 +208,7 @@ static void print_relocation(aof_header *h, aof_reloc *r, char *area,
 { static char *field_type[] = { "Byte ", "Short", "Word ", "Instr"};
   int32 offset = hv(r->rel_offset);
   int32 flags = hv((int32)(r->rel_flags));
-  int sid, FT, A, R, B;
+  int sid, FT, A, R, B, Thumb = 0;
 
   if (rel_type2(flags))
   { sid = rel2_sid(flags);
@@ -218,11 +227,16 @@ static void print_relocation(aof_header *h, aof_reloc *r, char *area,
     B   = 0;
   }
 
+  if (FT == 3 && (offset & 1))
+  { Thumb = 1;
+    offset &=~ 1;
+  }
+
   printf("At %.6lx: %s", offset, field_type[FT]);
   if (FT == 0)
     printf("      [%.2x]", *(area + offset));
-  else if (FT == 1)
-    printf("    [%.4lx]", hv((int32)*((short *)(area + offset))));
+  else if (FT == 1 || Thumb)
+    printf("    [%.4x]", hv16(*((unsigned16 *)(area + offset))));
   else if (FT >= 2)
     printf("[%.8lx]", hv(*((long *)(area + offset))));
 
@@ -298,6 +312,7 @@ static char *borbl_search_symt(aof_area *a, int32 address)
       if (attributes & SYM_ABSAT)
         continue;
       if (hv(sym->sym_value) != address) continue; /* not this symbol */
+      if (strt[symname] == '$') continue;
       /* To get here, the relative value is correct.  Now verify the area name */
       if (strcmp(a_name, strt + hv(sym->sym_areaname)) == 0)
         return strt + symname;
@@ -359,7 +374,7 @@ static char *disass_cb(dis_cb_type type, int32 offset,
     { int len;
       if (!_swix(OS_SWINumberToString, _INR(0,2)|_OUT(2), offset, buf, 128, &len)) {
         buf[len] = '\0';
-        if (strcmp("User", buf) != 0) buf += len;
+        if (strcmp("User", buf) != 0 && strcmp("XUser", buf) != 0) buf += len;
       }
     }
     break;
@@ -408,8 +423,11 @@ static void print_areas(aof_header *h, int opts)
       if (attributes & AOF_CODEXATs)
       { int ch = '{';
         if (attributes & AOF_32bitAT) {printf("%c32bit", ch);  ch = ',';}
+        if (attributes & AOF_THUMBAT) {printf("%cThumb", ch);  ch = ',';}
+        if (attributes & AOF_INTERAT) {printf("%cinterworking", ch);  ch = ',';}
         if (attributes & AOF_REENTAT) {printf("%creentrant", ch);  ch = ',';}
         if (attributes & AOF_FP3AT)   {printf("%cFPIS3", ch);  ch = ',';}
+        if (attributes & AOF_HWORDAT) {printf("%chalfword", ch); ch = ',';}
         if (attributes & AOF_NOSWSTKCK)printf("%cNoSWStackCheck", ch);
         fputc('}', stdout);
       }
@@ -458,24 +476,79 @@ static void print_areas(aof_header *h, int opts)
         if ((attributes & AOF_CODEAT) && (opts & A_DISASS))
         { char buf[256];
           disass_cb_type dct;
-          int32 p = base;
+          int32 p = base, size;
+          symbol_map *sm = mapping_init(strt + hv(a->area_name), attributes,
+                                        hv(a->area_base), strt,
+                                        symt, (int) hv(header->aof_nsyms));
           dct.base = base;
           dct.limit = limit;
           dct.a = a;
-          for (; p < limit; p += (int32)sizeof(int32)) {
-            int32 instr = hv(*(int32 *)(areas+p));
+          for (; p < limit; p += size) {
+            const map_entry *region = mapping_region(sm, address);
+            unsigned32 instr = (region->type == 't') ? hv16(*(int16 *)(areas+p))
+                                                     : hv(*(int32 *)(areas+p));
             char *cp = areas + p;
+            unsigned32 remaining = region->size - (address - region->base);
             int i;
+            size = (region->type == 't') ? sizeof(int16) : sizeof(int32);
             dct.p = p;
-            disass_32or26(instr, address, buf, (VoidStar) &dct, disass_cb,
-              (attributes & AOF_32bitAT) != 0);
-            printf("  0x%.6lx:  %.8lx  ", address, instr);
-            for (i = 0; i < 4; i++) {
+            printf("  0x%.6lx:  ", address);
+            if (region->type == 't' && (address & 1) == 0 && remaining >= 2)
+            { int32 instr2 = 0xFFFFFFFF;
+              if (remaining >= 4)
+                instr2 = hv16(*(int16 *)(areas+p+2));
+
+              if (disass_16(instr, instr2, address, buf, (VoidStar) &dct, disass_cb))
+              {
+                printf("%.4lx %.4lx ", instr, instr2);
+                size = 2*sizeof(int16);
+              }
+              else
+              { printf("%.4lx      ", instr);
+                size = sizeof(int16);
+              }
+            }
+            else if (region->type == 'a' && (address & 3) == 0 && remaining >= 4)
+            { disass_32or26(instr, address, buf, (VoidStar) &dct, disass_cb,
+                (attributes & AOF_32bitAT) != 0);
+              printf("%.8lx  ", instr);
+              size = sizeof(int32);
+            }
+            else if ((address & 3) == 0 && remaining >= 4)
+            { sprintf(buf, "DCD      %s%lx", instr > 9 ? "0x" : "", instr);
+              printf("%.8lx  ", instr);
+              size = sizeof(int32);
+            }
+            else if ((address & 1) == 0 && remaining >= 2)
+            { instr = hv16(*(int16 *)cp);
+              sprintf(buf, "DCW      %s%lx", instr > 9 ? "0x" : "", instr);
+              printf("%.4lx      ", instr);
+              size = sizeof(int16);
+            }
+            else
+            {
+              //printf("remaining=%x, address=%x\n", remaining, address);
+              i = sprintf(buf, "DCB      ");
+              size = 0;
+              do
+              { printf("%.2x ", cp[size]);
+                i += sprintf(buf + i, "%s%s%x", size ? "," : "",
+                                                instr > 9 ? "0x" : "", cp[size]);
+                size++;
+              } while ((remaining-size) && ((address+size) & 3));
+              for (i=(int)size; i < 3; i++)
+                printf("   ");
+              putchar(' ');
+            }
+
+            for (i = 0; i < size; i++) {
                 unsigned char c = *cp++;
                 putchar(isprint(c) ? c : '.');
             }
+            for (; i < 4; i++)
+              putchar(' ');
             printf(" : %s\n", buf);
-            address += sizeof(int32);
+            address += size;
           }
         } else if (opts & A_CONTENTS)
         { int32 p = base;
@@ -505,7 +578,7 @@ static void print_areas(aof_header *h, int opts)
   }
 }
 
-static void print_symbols(aof_header *h, char *file)
+static void print_symbols(aof_header *h, char *file, int opts)
 {
   int32 len;
   aof_symbol *sym = symt;
@@ -528,15 +601,19 @@ static void print_symbols(aof_header *h, char *file)
 
   for (; len-- > 0; ++sym)
   { int32 symname = hv(sym->sym_name);
-    int attributes;
+    int attributes = (int) hv(sym->sym_AT);
     int l;
+
+    if (!(opts & A_MAPSYMS) && symname >= 0 && symname <= strt_size && strt)
+       if ((attributes & SYM_REFDEFMASK) == SYM_LOCALDEFAT &&
+           strt[symname] == '$' && strt[symname+1] != '\0' && strt[symname+2] == '\0')
+          continue;
 
     l = strlen(print_string(symname));
     if (l > 20) { putchar('\n');  l = 0;}
     while (l++ < 20) putchar(' ');
     printf(" : ");
 
-    attributes = (int) hv(sym->sym_AT);
     if ((attributes & SYM_REFDEFMASK) == SYM_REFAT)
     { printf("External ");
       if (attributes & SYM_COMMONAT) printf("common ");
@@ -555,7 +632,8 @@ static void print_symbols(aof_header *h, char *file)
       if (attributes & SYM_DATAAT)
         printf("Data, ");
       else
-      { if (attributes & SYM_FPREGAT)  printf("FPRegArgs, ");
+      { if (attributes & SYM_THUMBAT)  printf("Thumb, ");
+        if (attributes & SYM_FPREGAT)  printf("FPRegArgs, ");
         if (attributes & SYM_USESSBAT) printf("Sb, ");
         if (attributes & SYM_LEAFAT)   printf("Leaf, ");
       }
@@ -741,7 +819,7 @@ static int process(char *file, int opts)
     printf("** No OBJ_AREA Chunk **\n\n");
 
   if (opts & (A_DECLS|A_DEBUG|A_DISASS)) print_areas(h, opts);
-  if (opts & A_SYMBOLS) print_symbols(h, file);
+  if (opts & A_SYMBOLS) print_symbols(h, file, opts);
   if (opts & A_STRINGS) print_strings(h, file);
 
   return OK;
@@ -764,6 +842,7 @@ static void give_help(char *myname)
   printf("-c   disassemble code areas (=> -d)\n");
   printf("-g   print debug areas formatted readably\n");
   printf("-s   print symbol table\n");
+  printf("-m   print mapping symbols (=> -s)\n");
   printf("-t   print string table\n");
   printf("\nExamples:-\n");
 #ifdef __riscos
@@ -834,6 +913,9 @@ case 'C':
           break;
 case 'd':
 case 'D': opts |= A_DECLS;
+          break;
+case 'm':
+case 'M': opts |= A_SYMBOLS + A_MAPSYMS;
           break;
 case 'r':
 case 'R': opts |= A_RELOCS + A_DECLS;
