@@ -49,6 +49,7 @@ FILES   =\
  $(LDIR).Messages\
  $(LDIR).ReadMe\
  Patches.PocketFS.PocketFS\
+ Patches.Advance.Advance\
  $(LDIR).Templates\
  $(RDIR).Transforms
 
@@ -86,6 +87,8 @@ install: $(FILES)
          |
          $(MKDIR) $(INSTDIR).Patches.PocketFS; Access $(INSTDIR).Patches.PocketFS /r
          CPFDL @ Patches.PocketFS.PocketFS
+         $(MKDIR) $(INSTDIR).Patches.Advance; Access $(INSTDIR).Patches.Advance /r
+         CPFDL @ Patches.Advance.Advance
          |
          CPFDL $(LDIR) ReadMe
          CPFDL $(LDIR) Templates
