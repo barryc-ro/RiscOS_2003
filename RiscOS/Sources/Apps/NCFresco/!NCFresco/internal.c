@@ -2141,10 +2141,12 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     {
 	generated = internal_decode_password(query);
     }
+#if SSL_UI
     else if (strcasecomp(page, "ssl") == 0)
     {
 	generated = internal_decode_ssl(query);
     }
+#endif
     else if (strcasecomp(page, "error") == 0)
     {
 	generated = internal_decode_error(query, new_url, flags);

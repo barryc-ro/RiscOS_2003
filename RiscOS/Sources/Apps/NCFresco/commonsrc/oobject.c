@@ -135,31 +135,54 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 #ifndef BUILDERS
     case rid_object_type_PLUGIN:
 	/* Convert from user values to OS unit values */
-	width = get_value(ti, &obj->userwidth, 0, fwidth);
-	height = get_value(ti, &obj->userheight, 0, fwidth);
+	width = get_value(ti, &obj->userwidth, 128, fwidth);
+	height = get_value(ti, &obj->userheight, 128, fwidth);
 
 	OBJDBG(("oobject_size_allocate: %dx%d\n", width, height));
 	
-	if (obj->state.plugin.pp == NULL &&
-	    (obj->classid_ftype != -1 || obj->data_ftype != -1) &&
-	    !gbf_active(GBF_LOW_MEMORY) &&				/* don't start in low memory */
+	if ((obj->classid_ftype != -1 || obj->data_ftype != -1) &&
 	    (config_sound_background || width > 2 || height > 2))	/* don't start if invisible(ish) and bgsound configured off */
 	{
-	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
-
-	    /* position plugin initially off screen */
-/* 	    if (!objects_bbox(doc, ti, (wimp_box *)obj->state.plugin.box)) */
+	    /* if we haven't started the plugin */
+	    if (obj->state.plugin.pp == NULL)
 	    {
-		obj->state.plugin.box[0] = 0;
-		obj->state.plugin.box[1] = 0x1000;
-		obj->state.plugin.box[2] = obj->state.plugin.box[0] + width;
-		obj->state.plugin.box[3] = obj->state.plugin.box[1] + height;
+		if (!gbf_active(GBF_LOW_MEMORY))				/* don't start in low memory */
+		{
+		    obj->state.plugin.pp = plugin_new(obj, doc, ti);
+
+		    /* position plugin initially off screen */
+/* 	            if (!objects_bbox(doc, ti, (wimp_box *)obj->state.plugin.box)) */
+		    {
+			obj->state.plugin.box[0] = 0;
+			obj->state.plugin.box[1] = 0x1000;
+			obj->state.plugin.box[2] = obj->state.plugin.box[0] + width;
+			obj->state.plugin.box[3] = obj->state.plugin.box[1] + height;
+		    }
+
+		    plugin_send_open(obj->state.plugin.pp, (wimp_box *)obj->state.plugin.box, 0 /* open_flags */);
+
+		    if (doc->object_handler_count++ == 0)
+			frontend_message_add_handler(plugin_message_handler, doc);
+		}
 	    }
+#if 0
+	    /* if plugin already started see if it needs moving */
+	    else
+	    {
+		wimp_box box;
+		
+		objects_bbox(doc, ti, &box);
 
-	    plugin_send_open(obj->state.plugin.pp, (wimp_box *)obj->state.plugin.box, 0 /* open_flags */);
+		/* new - check for change in box */
+		if (box.x0 != obj->state.plugin.box[0] || box.x1 != obj->state.plugin.box[2] || 
+		    box.y0 != obj->state.plugin.box[1] || box.y1 != obj->state.plugin.box[3])
+		{
+		    *(wimp_box *)obj->state.plugin.box = box;
 
-	    if (doc->object_handler_count++ == 0)
-		frontend_message_add_handler(plugin_message_handler, doc);
+		    plugin_send_reshape(obj->state.plugin.pp, &box);
+		}
+	    }
+#endif
 	}
 	else
 	{
@@ -286,7 +309,10 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	    else
 		file = base_file;
 
-	    strcpy(alt_buf, msgs_lookup("noplugin"));
+	    if (obj->state.plugin.pp == NULL)
+		strcpy(alt_buf, msgs_lookup("noplugin"));
+	    else
+		alt_buf[0] = 0;
 	    if (type)
 	    {
 		strlencat(alt_buf, " ", sizeof(alt_buf));
@@ -301,6 +327,18 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	}
 
 	do_plinth = ti->width != 0;
+
+	if (obj->state.plugin.pp)
+	{
+	    /* new - check for change in box */
+	    if (bbox.x0 != obj->state.plugin.box[0] || bbox.x1 != obj->state.plugin.box[2] || 
+		bbox.y0 != obj->state.plugin.box[1] || bbox.y1 != obj->state.plugin.box[3])
+	    {
+		*(wimp_box *)obj->state.plugin.box = bbox;
+
+		plugin_send_reshape(obj->state.plugin.pp, &bbox);
+	    }
+	}
 	break;
     }
 

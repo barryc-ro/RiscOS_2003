@@ -526,7 +526,7 @@ static BOOL cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int fil
 
     ACCDBGN(("cache3: inserting %s\n", url));
 
-    if ( SubFlex_Alloc( &cc->urloffset, len, &urlblock ) )
+    if ( SubFlex_Alloc( &cc->urloffset, len, &urlblock ) != NULL )
     {
         cc->urloffset = 0;
         return FALSE;
