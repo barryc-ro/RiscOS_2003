@@ -485,13 +485,13 @@ rm.$(APP)D: odz.ModuleWrap  $(LIBSM) $(UI) $(APPENGINE) o.dirs
 #$(APPENGINE):
 #	@echo Calling Engine Makefile
 #	dir ^.Engine
-#	@amu -f Makefile $(MFLAGS)
+#	@amu -f Makefile $(MFLAGS) $(MAKECMDGOALS)
 #	@echo Returned from Engine Makefile
 #	dir ^.Build
 #$(UI):
 #	@echo Calling $(UI) Makefile
 #	dir ^.$(UI)
-#	@amu -f Makefile $(MFLAGS)
+#	@amu -f Makefile $(MFLAGS) $(MAKECMDGOALS)
 #	@echo Returned from $(UI) Makefile
 #	dir ^.Build
 
@@ -504,13 +504,13 @@ rm.$(APP)D: odz.ModuleWrap  $(LIBSM) $(UI) $(APPENGINE) o.dirs
 $(APPENGINE):
 	@echo Calling Engine Makefile
 	@dir ^.Engine
-	@amu  $(MFLAGS)
+	@amu  $(MFLAGS) $(MAKECMDGOALS)
 	@echo Returned from Engine Makefile
 	@dir ^.Build
 $(UI):
 	@echo Calling $(UI) Makefile
 	@dir ^.$(UI)
-	@amu  $(MFLAGS)
+	@amu  $(MFLAGS) $(MAKECMDGOALS)
 	@echo Returned from $(UI) Makefile
 	@dir ^.Build
 
