@@ -8,17 +8,19 @@
 # 25-Jul-95  RWB 	  New for !ModemTest
 # 23-Dec-97  RLT          Modified makefile to extract correct default and !Run file for the
 #                         selected country.
-#
+# 23-Aug-99  NCE          Exports app to resourcesFS for ROM builds
+# 23-Aug-99  SNB          Fixed makefile dependency for resources: phase.  Now uses mkdir -p 
+#                         rather than CDIR to create dirs.
 
 #
 # Paths
 #
 EXP_HDR = <export$dir>
-
+RESDIR  = <Resource$Dir>.Resources2.Test
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -27,6 +29,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 CD	= dir
+STRIP   = -stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -Throwback
@@ -80,9 +83,11 @@ clean:
 clean_all: clean
 	${WIPE} ${APP}.Defaults ${WFLAGS}
 	${WIPE} ${APP} ${WFLAGS}
+	@echo Stripping dependencies from makefile...
+        ${STRIP}
 	@echo ${COMPONENT}: cleaned all
 
-install:
+install: ${APPLICATION}
 	${MKDIR} ${APP}
 	${CP} ${APPLICATION} ${APP}.${APPLICATION} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
@@ -90,6 +95,18 @@ install:
 	${MKDIR} ${APP}.Defaults
 	${CP} Defaults.${LOCALE}.${LOCALE} ${APP}.Defaults.${LOCALE} ${CPFLAGS}
 	@echo ${COMPONENT}: installed
+
+resources: ${APPLICATION}
+	${MKDIR} ${APP}
+	${CP} ${APPLICATION} ${APP}.${APPLICATION} ${CPFLAGS}
+	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CP} Defaults.${LOCALE}.!Run ${APP}.!Run ${CPFLAGS}
+	${MKDIR} ${APP}.Defaults
+	${CP} Defaults.${LOCALE}.${LOCALE} ${APP}.Defaults.${LOCALE} ${CPFLAGS}
+	${MKDIR} ${RESDIR}
+	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
+	@echo ${COMPONENT}: built & installed
+
 
 #
 #
