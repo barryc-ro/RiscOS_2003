@@ -12,12 +12,10 @@
 # Paths
 #
 LIBDIR		= <Lib$Dir>
-EXP_HDR = <export$dir>
-
 #
 # Generic options:
 #
-MKDIR   = do mkdir -p
+MKDIR   = cdir
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -28,8 +26,8 @@ WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
 
-CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} -ffah ${DFLAGS}
-CFLAGSZM = -c -depend !Depend -Wap -zps1 ${INCLUDES} -ffah ${DFLAGS} -zM
+CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} -fah -Fn ${DFLAGS}
+CFLAGSZM = -c -depend !Depend -Wap -zps1 ${INCLUDES} -fah -Fn ${DFLAGS} -zM
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
 LIBFILEFLAGS = -c -o $@
@@ -60,8 +58,8 @@ DEBUGLIBZM = debuglibm
 
 EXPORTS     = ${LIBDIR}.tboxlibint
 
-OBJ      = o.mem o.messages o.string32 o.rmensure o.objmodule o.objsupport o.slist o.toolboxmem
-OBJZM    = z.mem z.messages z.string32 z.rmensure z.objmodule z.objsupport z.slist z.toolboxmem
+OBJ      = o.mem o.messages o.string32 o.rmensure o.objsupport o.slist o.toolboxmem
+OBJZM    = z.mem z.messages z.string32 z.rmensure z.objsupport z.slist z.toolboxmem
 
 DBG_OBJ	  = o.debug 
 DBG_OBJZM = z.debug 
@@ -91,14 +89,13 @@ ${DEBUGLIB}: ${OBJ} ${DBG_OBJ}
 ${DEBUGLIBZM}: ${OBJZM} ${DBG_OBJZM}
    ${LIBFILE} ${LIBFILEFLAGS} ${OBJZM} ${DBG_OBJZM}
 
-clean: dirs
+clean:
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} z.* ${WFLAGS}
 	${WIPE} ${DEBUGLIB} ${WFLAGS}
 	${WIPE} ${DEBUGLIBZM} ${WFLAGS}
 	${WIPE} ${TBOXLIB} ${WFLAGS}
 	${WIPE} ${TBOXLIBZM} ${WFLAGS}
-        ${CP} TboxMake  ${EXPORTS}.TboxMake ${CPFLAGS}
         @echo ${DEBUGLIB} and ${TBOXLIB}: cleaned
 
 export: export_${PHASE}
@@ -106,9 +103,6 @@ export: export_${PHASE}
 export_hdrs: dirs
         ${CP} objects   ${EXPORTS}.objects   ${CPFLAGS}
         ${CP} h.*       ${EXPORTS}.h.*   ${CPFLAGS}
-        ${CP} hdr.*	${EXP_HDR}.*	${CPFLAGS}
-        ${CP} TboxMake  ${EXPORTS}.TboxMake ${CPFLAGS}
-        ${CP} VersionNum ${EXPORTS}.LibVersion ${CPFLAGS}
         @echo ${DEBUGLIB} and ${TBOXLIB}: export complete (hdrs)
 
 export_libs: ${TBOXLIB} ${TBOXLIBZM} ${DEBUGLIB} ${DEBUGLIBZM} dirs
