@@ -37,7 +37,18 @@ int v_state = IDLE;
 
 static int discards = 0;
 static int oversized = 0;
+static int undersized = 0;
 static int empty_failures = 0;
+static unsigned int bytes_received = 0;
+static unsigned int datagrams_received = 0;
+static int sequence_lost = 0;
+static int sequence_lostm = 0;
+static int sequence_lostt = 0;
+static int sequence_OOS = 0;
+static int sequence_OOSm = 0;
+static int sequence_OOSt = 0;
+static int reentered = 0;
+static volatile int reentrancy_flag;
 
 int default_video_port = 0;
 int video_port = 0;
@@ -47,7 +58,9 @@ int bs_minbufs = 0;
 int bs_bufpool;
 int bs_bytes_sent = 0;
 
-extern int skipcnt;
+static int skipcount = 0;
+static unsigned int sequence_expected;
+
 extern int bs_minbufs_check;
 
 int mpeg_handle, vsock, vssock;
@@ -81,8 +94,6 @@ struct swient {
 };
 
 #define MAXSWI 31
-/*extern int udpv_empty_buf(), udpv_nullswi(), udpv_final();
-//extern int udpv_startofplay(), udpv_endofplay(), udpv_getstatus(), udpv_rxdirect();*/
 
 struct swient udpv_ent[MAXSWI] = {
     udpv_nullswi,
@@ -219,15 +230,45 @@ _kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, v
 
 void udpv_show(int argc, char **argv)
 {
-    printf("videoport=%d (%x), lastport=%d, emptyfailure=%d\n",
-               default_video_port, default_video_port, video_port, empty_failures);
-    printf("bs_bufpool=%d, n_buffers=%d, bufsize=%d, bs_minbufs=%d (%d frames)\n",
-               bs_bufpool, n_bs_buffers, bs_bufsize, bs_minbufs, bs_minbufs_check);
-    printf("bs_discards=%d, frame oversized=%d\n", discards, oversized);
-#ifdef DEBUG
-    printf("bs_current_buf=%p, bs_current_residue=%d\n",
+    int temp_int, temp_fract;
+
+    printf("videoport=%d (%x)  lastport=%d  skipcount=%d  reentry=%d\n",
+               default_video_port, default_video_port, video_port, skipcount, reentered);
+    printf("bs_bufpool: %5dKB n_buffers: %-5d bufsize: %3dKB bs_minbufs: %d (%d frames)\n",
+               bs_bufpool/1024, n_bs_buffers, bs_bufsize/1024, bs_minbufs, bs_minbufs_check);
+    printf("bs_discards: %-12d emptyfailures: %-12d\n", discards, empty_failures);
+    if (datagrams_received > 0)
+    {
+      temp_int = bytes_received/datagrams_received;
+      temp_fract = ((bytes_received%datagrams_received)*100)/datagrams_received;
+      printf("Datagrams:   oversize: %-12d undersize: %-12d  PDU avg: %6d.%-2d\n",
+               oversized, undersized, temp_int, temp_fract);
+    }
+
+    if (skipcount == 4)
+    {
+      printf("Sequence information:\n");
+      if (sequence_OOS > 0)
+      {
+        temp_int = sequence_OOSt/sequence_OOS;
+        temp_fract = ((sequence_OOSt%sequence_OOS)*100)/sequence_OOS;
+        printf("              OOSes: %-d  (%d)   max: %-d   avg: %3d.%-2d\n",
+               sequence_OOS, sequence_OOSt, -sequence_OOSm, temp_int, temp_fract);
+      }
+      if (sequence_lost > 0)
+      {
+        temp_int = sequence_lostt/sequence_lost;
+        temp_fract = ((sequence_lostt%sequence_lost)*100)/sequence_lost;
+        printf("              Losses: %-d  (%d)   max: %-d   avg: %3d.%-2d\n",
+               sequence_lost, sequence_lostt, sequence_lostm, temp_int, temp_fract);
+      }
+    }
+
+    if (do_debug)
+    {
+      printf("bs_current_buf=%p, bs_current_residue=%d\n",
                bs_current_buf, bs_current_residue);
-#endif
+    }
     print_bufs();
 }
 
@@ -277,6 +318,19 @@ int udpv_startofplay(_kernel_swi_regs *r)
 {
     int port = r->r[2];
 
+    sequence_expected = 0;
+    sequence_OOS = 0;
+    sequence_OOSm = 0;
+    sequence_OOSt = 0;
+    sequence_lost = 0;
+    sequence_lostm = 0;
+    sequence_lostt = 0;
+    discards = 0;
+    oversized = 0;
+    undersized = 0;
+    empty_failures = 0;
+    bytes_received = 0;
+    datagrams_received = 0;
 
     if (port == 0)
         port = default_video_port;
@@ -324,10 +378,19 @@ int udpv_nullswi(_kernel_swi_regs *r)
 
 int udpv_rxdirect(_kernel_swi_regs *r)
 {
-    int s = ensure_irqs_on();
+  int s = ensure_irqs_on();
+  if (reentrancy_flag != 0)
+  {
+    reentered++;
+  }
+  else
+  {
+    reentrancy_flag++;
+  }
     if (r->r[0] == vsock)
         vs_process_input(r->r[1], r->r[2], (char *)(r->r[3]), r->r[4], r->r[5], r->r[6]);
     restore_irqs(s);
+    reentrancy_flag = 0;
     return (0);
 }
 
@@ -345,7 +408,7 @@ void init_session(int handle, int skipsize)
 {
     mpeg_handle = handle;
     v_state = PLAYING;
-    skipcnt = skipsize;
+    skipcount = skipsize;
 }
 
 void close_session(void)
@@ -370,12 +433,79 @@ int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int
        * CLib memcpy - the mbuf manager is likely  *
        * to be more optimal.                       *
        */
-
       mlen = (*mbctl.count_bytes)(&mbctl, m0);
+      /* Introduced the following block of code to support OptiVision sequenced UDP *
+       * on 12-13 Nov 98 to try to assist TMD in tracking down the MPEG replay      *
+       * jitter problem that's apparent.                                            *
+       */
+      if ((mlen > skipcount) && (skipcount > 0))
+      {
+        if (skipcount == 4) /* Special case of a 4-byte sequence number */
+        {
+          u_long raw_sequence, sequence;
+          int difference;
+
+          TRIM(m0, skipcount, &raw_sequence);
+          mlen -= skipcount;
+          sequence = ntohl(raw_sequence);
+
+          if (sequence_expected == 0)
+          {
+            difference = 0; /* First time around, so don't know what to expect */
+          }
+          else
+          {
+            difference = sequence - sequence_expected;
+          }
+
+          if (do_debug && difference != 0)
+          {
+            printf("Expected: %x off by: %d\n",
+                     sequence_expected, difference);
+          }
+
+          if (difference < 0)
+          {
+            sequence_OOS++; /* We've received some 'old' data */
+            sequence_OOSt += -difference;
+            if (difference < sequence_OOSm)
+            {
+              sequence_OOSm = difference;
+            }
+          }
+          else
+          {
+            if (difference > 0)
+            {
+              sequence_lost++;
+              sequence_lostt += difference;
+              if (difference > sequence_lostm)
+              {
+                sequence_lostm = difference;
+              }
+            }
+            /* In both the normal and lost data cases, correct the sequence number *
+             * expectation for the next datagram.                                  */
+            sequence_expected = sequence + mlen; /* OptiVision UDP seq.number */
+          }
+        }
+        else
+        {
+          TRIM(m0, skipcount, NULL); /* throw away unwanted bytes */
+          mlen =- skipcount;
+        }
+      }
+
       if (mlen > bs_bufsize)
       {
         oversized++;
       }
+      else if (mlen < bs_bufsize)
+      {
+        undersized++;
+      }
+      bytes_received += mlen;
+      datagrams_received++;
       while (mlen > 0)
       {
         while (mlen > bs_current_residue)
@@ -383,7 +513,8 @@ int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int
           if (bs_current_buf != NULL)
           {
              /* remove residue bytes from mbuf chain, copy to bptr,
-                and update mbuf chain to reflect the removal of these */
+              *  and update mbuf chain to reflect the removal of these.
+              */
             (void) TRIM(m0, bs_current_residue, bptr);
             bs_current_buf->bs_len += bs_current_residue;
             mlen -= bs_current_residue;
@@ -401,15 +532,18 @@ int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int
           bs_current_buf->bs_handle = 0;
           bs_current_buf->bs_flags = FREE_BUFFER_SWI;
           bptr = bs_current_buf->bs_data;
+
+          /* When we fall out of this loop, we've either exhausted the buffer pool,
+           * or there are less than bs_current_residue bytes left in the mbuf chain.
+           */
         }
-        /* When we fall out of the above loop, we've either exhausted the buffer pool,
-           or there are less than bs_current_residue bytes left in the mbuf chain */
         if (bs_current_residue == 0)
         {
           break; /* Fall out of outer while loop */
         }
         /* remove remaining mlen bytes from mbuf chain, copy to bptr,
-           and update mbuf chain to reflect the removal of these */
+         * and update mbuf chain to reflect the removal of these.
+         */
         (void) TRIM(m0, mlen, bptr);
         bs_current_buf->bs_len += mlen;
         bptr += mlen;
@@ -448,7 +582,7 @@ int read_sysvar(char *var, char *buf, int buflen)
     r.r[1] = (int)buf;
     r.r[2] = buflen;
     r.r[3] = 0;
-    r.r[4] = 0;
+    r.r[4] = 3; /* Ask OS to convert varable to string for us */
     e = _kernel_swi(XOS_Bit | OS_ReadVarVal, &r, &r);
     if (e || r.r[2] == 0)
         return (0);

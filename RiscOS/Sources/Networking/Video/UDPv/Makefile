@@ -12,8 +12,9 @@ OBJS=   o.module o.bufs o.mbuf o.irqs TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibz
 
 udpv:    ${OBJS} Makefile udpvHdr
             cmhg udpvHdr o.udpvhdr
-            link -map -o UdpV -rmf o.udpvhdr ${OBJS} ${CLIB} { > linkmap }
+            link -map -o UDPv -rmf o.udpvhdr ${OBJS} ${CLIB} { > linkmap }
             settype linkmap text
+            access UDPv wr/r
 
 module.o:   c.module 
             cc ${CFLAGS} c.module
