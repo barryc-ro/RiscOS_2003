@@ -110,11 +110,11 @@ BASEOBJS  = module.o header.o ispc_cmds.o ispc_ispc.o \
             dbugzm.o
 
 # Preprocess targets.
-OBJSI  = i.module header.o i.ispc_cmds i.dynalloc i.ispc_ispc \
+OBJSI  = i.module header.o i.ispc_cmds i.ispc_ispc \
          i.ispc_url i.kprintf i.ispc_utils i.ispc_file i.dbugzm o.resources
 
 # Instrumentation targets.
-OBJSIO = io.module header.o io.ispc_cmds io.dynalloc io.ispc_ispc \
+OBJSIO = io.module header.o io.ispc_cmds io.ispc_ispc \
          io.ispc_url io.kprintf io.ispc_utils io.ispc_file \
          io.dbugzm io.instlib
 
