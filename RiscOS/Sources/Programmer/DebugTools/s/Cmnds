@@ -599,4 +599,224 @@ RM_Common Entry "R0"
 	Pull	"PC"
 
 
+; ****************************************************
+; *
+; * *pushd - same as the UNIX command: push the CSD onto a stack and move
+; * into the specified directory (if any).
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3-R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+pushd_Code Entry
+	TEQ	R1, #0
+	MOVNE	R1, R0
+	MOVEQ	R1, #0
+	BL	CSD
+	EXIT	VS
+	; Add the new string to the top of the stack...
+	LDR	R0, [R12, #WSP_DirStack]
+	STR	R2, [R12, #WSP_DirStack]
+	STR	R0, [R2]
+	; Output the directory stack...
+	SWI	XOS_WriteS
+	DCB	"pushd:", 0
+	ALIGN
+	BL	dirstk
+	; Move into the specified directory...
+	TEQ	R1, #0
+	MOVNE	R0, #FSControl_Dir
+	SWINE	XOS_FSControl
+	EXIT
+
+
+; ****************************************************
+; *
+; * *popd - same as the UNIX command: pop the last stacked CSD and move
+; * into it.
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3-R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+popd_Code Entry
+	SWI	XOS_WriteS
+	DCB	"popd:", 0
+	ALIGN
+	LDR	R2, [R12, #WSP_DirStack]
+	BL	dirstk
+	; Exit if the dir stack is empty...
+	MOVS	R1, R2
+	EXIT	EQ
+	; Set the top item as the CSD...
+	MOV	R0, #FSControl_Dir
+	ADD	R1, R1, #4
+	SWI	XOS_FSControl
+	MOVVC	R1, #0
+	MOVVS	R1, R0		; Record error block pointer if OS_FSControl fails
+	; Delink the top item...
+	LDR	R0, [R2]
+	STR	R0, [R12, #WSP_DirStack]
+	; Free the RMA block...
+	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Module
+	TEQ	R1, #0		; Preserves R0 and V flag if OS_Module failed
+	EXIT	EQ
+	MOV	R0, R1
+	SETV
+	EXIT
+
+
+; ****************************************************
+; *
+; * Output the contents of the directory stack.
+; *
+; * In...
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+dirstk	Entry	"R12"
+	LDR	R12, [R12, #WSP_DirStack]
+	TEQ	R12, #0
+	BNE	%FT00
+	SWI	XOS_WriteS
+	DCB	" directory stack empty", 10, 13, 0
+	ALIGN
+	EXIT
+00	SWI	XOS_WriteI+" "
+	ADD	R0, R12, #4
+	LDR	R12, [R12]
+	SWI	XOS_Write0
+	TEQ	R12, #0
+	BNE	%BT00
+	SWI	XOS_NewLine
+	EXIT
+
+
+; ****************************************************
+; *
+; * *pwd
+; *
+; * Output the canonicalised path of the currently selected
+; * directory (CSD) to all active output streams.
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1	= preserved
+; *   R2	= corrupted
+; *   R3-R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+pwd_Code Entry
+	; Get the CSD string into a buffer...
+	BL	CSD
+	EXIT	VS
+	; Output the CSD string...
+	ADD	R0, R2, #4
+	SWI	XOS_Write0
+	SWIVC	XOS_NewLine
+	; Free our block of RMA...
+	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Module
+	EXIT
+
+
+; ****************************************************
+; *
+; * Read the canonicalised CSD string into a block of RMA. The block has a single
+; * word at the start (usually to house a pointer), followed by the zero-terminated
+; * CSD string.
+; *
+; * Format (in case you don't follow):
+; *
+; *   0..3	Spare word
+; *   4..n	CSD string (zero-terminated)
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1	= preserved
+; *   R2	= pointer to block containing CSD string (if no error)
+; *   R3-R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+CSD	Entry	"R1, R3-R5"
+	; Find out how big the buffer for the CSD string needs to be...
+	MOV	R0, #FSControl_CanonicalisePath
+	ADR	R1, %FT02
+	MOV	R2, #0
+	MOV	R3, #0
+	MOV	R4, #0
+	MOV	R5, #0
+	SWI	XOS_FSControl
+	BVS	%FT01
+	RSB	R3, R5, #0
+	ADD	R3, R3, #5	; Add a word for a pointer and a byte for the terminator
+	; Claim a block of RMA as a buffer...
+	MOV	R0, #ModHandReason_Claim
+	SWI	XOS_Module
+	BVS	%FT01
+	; Canonicalise the string '@' to get the CSD...
+	MOV	R0, #FSControl_CanonicalisePath
+	ADR	R1, %FT02
+	ADD	R2, R2, #4
+	MOV	R5, R3
+	MOV	R3, #0
+	MOV	R4, #0
+	SWI	XOS_FSControl
+	SUB	R2, R2, #4
+	; Return with no errors and the CSD string in the block at R6...
+	EXIT	VC
+00	; Free the RMA block and return an error...
+	MOV	R1, R0
+	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Module
+	MOV	R0, R1
+	SETV
+01	; Early exit-with-error point...
+	EXIT
+02	; String immediate for getting the CSD...
+	DCB	"@", 0
+	ALIGN
+
+
+; ****************************************************
+; *
+; * Dump a literal pool here
+; *
+	LTORG
+
+
 	END
