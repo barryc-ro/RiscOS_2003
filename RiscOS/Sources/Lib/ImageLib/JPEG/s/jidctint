@@ -1,0 +1,795 @@
+;
+; jidctint.s
+;
+; Copyright (C) 1991-1996, Thomas G. Lane.
+; This file is part of the Independent JPEG Group's software.
+; For conditions of distribution and use, see the accompanying README file.
+;
+; This file contains a slow-but-accurate integer implementation of the
+; inverse DCT (Discrete Cosine Transform).  In the IJG code, this routine
+; must also perform dequantization of the input coefficients.
+;
+; A 2-D IDCT can be done by 1-D IDCT on each column followed by 1-D IDCT
+; on each row (or vice versa, but it's more convenient to emit a row at
+; a time).  Direct algorithms are also available, but they are much more
+; complex and seem not to be any faster when reduced to code.
+;
+; This implementation is based on an algorithm described in
+;   C. Loeffler, A. Ligtenberg and G. Moschytz, "Practical Fast 1-D DCT
+;   Algorithms with 11 Multiplications", Proc. Int'l. Conf. on Acoustics,
+;   Speech, and Signal Processing 1989 (ICASSP '89), pp. 988-991.
+; The primary algorithm described there uses 11 multiplies and 29 adds.
+; We use their alternate method with 12 multiplies and 32 adds.
+; The advantage of this method is that no data path contains more than one
+; multiplication; this allows a very simple and accurate implementation in
+; scaled fixed-point arithmetic, with a minimal number of shifts.
+;
+; ARM version by Kevin Bracey
+;    - instructions reordered to aid StrongARM
+;    - still produces exactly the same results as jidctint.c
+;
+; ARM notes:
+;   All the multiplies here are at worst 16x16, ie the operands are
+;   between -32768 and 32767. The following table shows the number of
+;   cycles taken by a 16x16 MULs:
+;
+;   StrongARM 110 (roughly):
+;                             1 cycle for -2048 <= Rs <= 2047
+;      MUL Rd,Rm,Rs           2 cycles for larger Rs
+;                                 + 1 cycle if Rd needed in next instruction, or next instruction is a MUL
+;
+;   ARM 6,7 etc:
+;                             2 cycles for 0 <= Rs <= 3
+;      MUL Rd,Rm,Rs 	      3 cycles for 4 <= Rs <= 15
+;			      4 cycles for 16 <= Rs <= 63
+;			      5 cycles for 64 <= Rs <= 255
+;			      6 cycles for 256 <= Rs <= 1023
+;			      7 cycles for 1024 <= Rs <= 4095
+;			      8 cycles for 4096 <= Rs <= 16383
+;			      9 cycles for Rs >= 16384
+;			      17 cycles for Rs < 0
+;
+;   For all ARMs, MLA takes the same time as MUL
+;
+;   Other StrongARM timings:
+;     <data op> Rd,Rm,Rn,SHF #const     1 cycle
+;     LDR[B]    Rd,[Rm,[#const|Rn]]     1 cycle+1 cycle if Rd needed in next instruction
+;     STR[B]    Rd,[Rm,[#const|Rn]]     1 cycle
+;     LDRSH     Rd,[Rm,[#const|Rn]]     2 cycles+1 cycle if Rd needed in next instruction
+;     LDM       Rn,Rlist                max(num of registers,2) cycles + 1 cycle if last reg needed in next instruction
+;     STM       Rn,Rlist                max(num of registers,2) cycles
+;
+;   In the event of a cache miss, LDR,LDR will stall longer than LDR,data op
+
+
+;
+; This module is specialized to the case DCTSIZE = 8.
+;
+
+;
+; The poop on this scaling stuff is as follows:
+;
+; Each 1-D IDCT step produces outputs which are a factor of sqrt(N)
+; larger than the true IDCT outputs.  The final outputs are therefore
+; a factor of N larger than desired; since N=8 this can be cured by
+; a simple right shift at the end of the algorithm.  The advantage of
+; this arrangement is that we save two multiplications per 1-D IDCT,
+; because the y0 and y4 inputs need not be divided by sqrt(N).
+;
+; We have to do addition and subtraction of the integer inputs, which
+; is no problem, and multiplication by fractional constants, which is
+; a problem to do in integer arithmetic.  We multiply all the constants
+; by CONST_SCALE and convert them to integer constants (thus retaining
+; CONST_BITS bits of precision in the constants).  After doing a
+; multiplication we have to divide the product by CONST_SCALE, with proper
+; rounding, to produce the correct output.  This division can be done
+; cheaply as a right shift of CONST_BITS bits.  We postpone shifting
+; as long as possible so that partial sums can be added together with
+; full fractional precision.
+;
+; The outputs of the first pass are scaled up by PASS1_BITS bits so that
+; they are represented to better-than-integral precision.  These outputs
+; require BITS_IN_JSAMPLE + PASS1_BITS + 3 bits; this fits in a 16-bit word
+; with the recommended scaling.  (To scale up 12-bit sample data further, an
+; intermediate INT32 array would be needed.)
+;
+; To avoid overflow of the 32-bit intermediate results in pass 2, we must
+; have BITS_IN_JSAMPLE + CONST_BITS + PASS1_BITS <= 26.  Error analysis
+; shows that the values given below are the most effective.
+;
+
+
+			GBLL UseHalfword
+UseHalfword		SETL {FALSE}
+
+; Primary register allocations
+
+quantptr		RN 1   ; in pass 1
+range_limit             RN 1   ; in pass 2
+inptr			RN 2   ; in pass 1
+outptr                  RN 2   ; in pass 2
+wsptr			RN 12
+ctr			RN 14
+
+; coefficients
+dc			RN 4
+ac1			RN 5
+ac2			RN 6
+ac3			RN 7
+ac4			RN 8
+ac5			RN 9
+ac6			RN 10
+ac7			RN 11
+
+; Arguments
+cinfo			RN 0
+compptr			RN 1
+coef_block		RN 2
+output_buf		RN 3
+
+; Scratch registers
+w1			RN 0
+w2			RN 3
+w3			RN wsptr
+w4			RN outptr
+
+; Other variables
+z1			RN dc
+z2                      RN ac2
+z3			RN ac6
+z4			RN ac4
+z5			RN w2
+
+tmp0			RN ac7
+tmp1			RN ac5
+tmp2			RN ac3
+tmp3			RN ac1
+
+CENTERJSAMPLE		* 128
+DCTSIZE			* 8
+DCTSIZE2		* 64
+CONST_BITS              * 13
+PASS1_BITS		* 2
+RANGE_MASK		* &3FF
+
+FIX_0_298631336         * 2446
+FIX_0_390180644         * 3196
+FIX_0_541196100         * 4433
+FIX_0_765366865         * 6270
+FIX_0_899976223         * 7373
+FIX_1_175875602         * 9633
+FIX_1_501321110         * 12299
+FIX_1_847759065         * 15137
+FIX_1_961570560         * 16069
+FIX_2_053119869         * 16819
+FIX_2_562915447         * 20995
+FIX_3_072711026         * 25172
+
+
+; offsets from cinfo
+sample_range_limit	* &13C
+
+; offsets from compptr
+dct_table		* &50
+
+; offsets from sp
+			^ 0
+workspace		# DCTSIZE2 * 4 ; = &100
+tmp10			# 4
+tmp11			# 4
+tmp12			# 4
+tmp13			# 4
+stack_workspace		# 0
+arg_cinfo		# 4
+arg_output_buf		# 4
+stack_wsandargs		# 0
+stacked_v1		# 4
+stacked_v2		# 4
+stacked_v3		# 4
+stacked_v4		# 4
+stacked_v5		# 4
+stacked_v6		# 4
+stacked_sl		# 4
+stacked_fp		# 4
+stacked_lr		# 4
+arg_output_col		# 4
+
+        AREA |C$$code|, CODE, READONLY
+
+;
+; Perform dequantization and inverse DCT on one block of coefficients.
+;
+
+; GLOBAL(void)
+; jpeg_idct_islow (j_decompress_ptr cinfo, jpeg_component_info * compptr,
+; 		   JCOEFPTR coef_block,
+;  		   JSAMPARRAY output_buf, JDIMENSION output_col)
+
+        EXPORT  jpeg_idct_islow[LEAF]
+jpeg_idct_islow
+        STMFD   sp!,{a1,a4,v1-v6,sl,fp,lr}
+        SUB     sp,sp,#stack_workspace
+
+; Pass 1: process columns from input, store into work array.
+; Note results are scaled up by sqrt(8) compared to a true IDCT;
+; furthermore, we scale the results by 2**PASS1_BITS.
+
+; inptr = coef_block
+	ASSERT	inptr = coef_block
+; quantptr = (ISLOW_MULT_TYPE *) compptr->dct_table;
+        LDR     quantptr,[compptr,#dct_table]
+
+; wsptr = workspace
+        MOV     ctr,#0
+pass1_loop
+; Due to quantization, we will usually find that many of the input
+; coefficients are zero, especially the AC terms.  We can exploit this
+; by short-circuiting the IDCT calculation for any column in which all
+; the AC terms are zero.  In that case each output is equal to the
+; DC coefficient (with scale factor as needed).
+; With typical images and quantization tables, half or more of the
+; column DCT calculations can be simplified this way.
+
+ [ UseHalfword
+        LDRSH   ac1,[inptr,#DCTSIZE*1*2]
+        LDRSH   ac2,[inptr,#DCTSIZE*2*2]
+        LDRSH   ac3,[inptr,#DCTSIZE*3*2]
+	ORR	w1,ac1,ac2
+        LDRSH   ac4,[inptr,#DCTSIZE*4*2]
+	ORR	w1,w1,ac3
+        LDRSH   ac5,[inptr,#DCTSIZE*5*2]
+        ORR     w1,w1,ac4
+        LDRSH   ac6,[inptr,#DCTSIZE*6*2]
+        ORR     w1,w1,ac5
+        LDRSH   ac7,[inptr,#DCTSIZE*7*2]
+        ORR     w1,w1,ac6
+	ORRS	w1,w1,ac7
+ |
+        LDR     ac1,[inptr,#DCTSIZE*1*2]
+        LDR     ac2,[inptr,#DCTSIZE*2*2]
+        LDR     ac3,[inptr,#DCTSIZE*3*2]
+	ORR	w1,ac1,ac2
+        LDR     ac4,[inptr,#DCTSIZE*4*2]
+	ORR	w1,w1,ac3
+        LDR     ac5,[inptr,#DCTSIZE*5*2]
+        ORR     w1,w1,ac4
+        LDR     ac6,[inptr,#DCTSIZE*6*2]
+        ORR     w1,w1,ac5
+        LDR     ac7,[inptr,#DCTSIZE*7*2]
+        ORR     w1,w1,ac6
+	ORR	w1,w1,ac7
+	MOVS	w1,w1,ASL #16
+ ]
+        BNE     ac_not_all_zero_pass1
+
+; AC terms all zero.
+
+; dcval = DEQUANTIZE(inptr[DCTSIZE*0], quantptr[DCTSIZE*0]) << PASS1_BITS;
+ [ UseHalfword
+        LDRSH   dc,[inptr,#DCTSIZE*0*2]
+        LDR     ac1,[quantptr,#DCTSIZE*0*4]
+ |
+        LDR     dc,[inptr,#DCTSIZE*0*2]
+        LDR     ac1,[quantptr,#DCTSIZE*0*4]
+        MOV     dc,dc,ASL #16
+        MOV     dc,dc,ASR #16
+ ]
+        MUL     dc,ac1,dc
+	ADD	wsptr,sp,ctr,LSR #27
+        MOV     dc,dc,ASL #PASS1_BITS
+        STR     dc,[wsptr,#DCTSIZE*0*4]
+        STR     dc,[wsptr,#DCTSIZE*1*4]
+        STR     dc,[wsptr,#DCTSIZE*2*4]
+        STR     dc,[wsptr,#DCTSIZE*3*4]
+        STR     dc,[wsptr,#DCTSIZE*4*4]
+        STR     dc,[wsptr,#DCTSIZE*5*4]
+        STR     dc,[wsptr,#DCTSIZE*6*4]
+        STR     dc,[wsptr,#DCTSIZE*7*4]
+; inptr++;			/* advance pointers to next column */
+        ADD     inptr,inptr,#2
+; quantptr++;
+        ADD     quantptr,quantptr,#4
+; continue;
+        ADDS    ctr,ctr,#&20000000
+        BNE     pass1_loop
+	B	pass2
+
+ac_not_all_zero_pass1
+; Even part: reverse the even part of the forward DCT.
+; The rotator is sqrt(2)*c(-6).
+
+; z2 = DEQUANTIZE(inptr[DCTSIZE*2], quantptr[DCTSIZE*2]);
+        LDR     w1,[quantptr,#DCTSIZE*2*4]
+ [ :LNOT:UseHalfword
+        MOV	ac2,ac2,ASL #16
+	MOV	ac2,ac2,ASR #16
+ ]
+        LDR     w2,[quantptr,#DCTSIZE*6*4]
+	ASSERT	z2 = ac2
+        MUL     z2,w1,ac2
+; z3 = DEQUANTIZE(inptr[DCTSIZE*6], quantptr[DCTSIZE*6]);
+ [ :LNOT:UseHalfword
+        MOV	ac6,ac6,ASL #16
+	MOV	ac6,ac6,ASR #16
+ ]
+	ASSERT	z3 = ac6
+        MUL     z3,w2,ac6
+
+; z1 = MULTIPLY(z2 + z3, FIX_0_541196100);
+	LDR     w2,=FIX_0_541196100
+        ADD     z1,z2,z3
+	LDR	w1,=-FIX_1_847759065
+	MUL	z1,w2,z1
+
+; tmp2 = z1 + MULTIPLY(z3, - FIX_1_847759065);
+	LDR	w2,=FIX_0_765366865
+	MLA	z3,w1,z3,z1			;z3=tmp2
+
+; tmp3 = z1 + MULTIPLY(z2, FIX_0_765366865);
+ [ UseHalfword
+	LDRSH	w1,[inptr,#DCTSIZE*0*2]
+ |
+        LDR     w1,[inptr,#DCTSIZE*0*2]
+ ]
+	MLA	z1,w2,z2,z1			;z1=tmp3
+
+; z2 = DEQUANTIZE(inptr[DCTSIZE*0], quantptr[DCTSIZE*0]);
+        LDR     w2,[quantptr,#DCTSIZE*0*4]
+ [ :LNOT:UseHalfword
+        MOV     w1,w1,ASL #16
+        MOV     w1,w1,ASR #16
+ ]
+        MUL     z2,w2,w1
+
+	MOV	w3,#1:SHL:(CONST_BITS-PASS1_BITS-1)
+
+; z3 = DEQUANTIZE(inptr[DCTSIZE*4], quantptr[DCTSIZE*4]);
+        LDR     w1,[quantptr,#DCTSIZE*4*4]
+ [ :LNOT:UseHalfword
+	MOV	ac4,ac4,ASL #16
+	MOV	ac4,ac4,ASR #16
+ ]
+        MUL     w2,w1,ac4			;w2=z3
+
+
+; tmp0 = (z2 + z3) << CONST_BITS
+        ADD     w1,z2,w2
+; tmp1 = (z2 - z3) << CONST_BITS
+        SUB     w2,z2,w2
+
+; sneaky addition of part of DESCALE in advance here...
+; this addition filters down tmp0/tmp1->tmp10/tmp11/tmp12/tmp13
+;  -> every DESCALE, thus saving 6 additions :)
+	ADD	w1,w3,w1,LSL #CONST_BITS
+	ADD	w2,w3,w2,LSL #CONST_BITS
+
+; tmp10 = tmp0 + tmp3
+        ADD     z2,w1,z1
+	STR	z2,[sp,#tmp10]
+; tmp13 = tmp0 - tmp3
+	SUB	w1,w1,z1
+	STR	w1,[sp,#tmp13]
+; tmp11 = tmp1 + tmp2
+	ADD	z2,w2,z3
+	STR	z2,[sp,#tmp11]
+; tmp12 = tmp1 - tmp2
+	SUB	z3,w2,z3
+	STR	z3,[sp,#tmp12]
+
+; Odd part per figure 8; the matrix is unitary and hence its
+; transpose is its inverse.  i0..i3 are y7,y5,y3,y1 respectively.
+
+; tmp0 = DEQUANTIZE(inptr[DCTSIZE*7], quantptr[DCTSIZE*7]);
+        LDR     w1,[quantptr,#DCTSIZE*7*4]
+ [ :LNOT:UseHalfword
+	MOV	ac7,ac7,ASL #16
+	MOV	ac7,ac7,ASR #16
+ ]
+        LDR     w2,[quantptr,#DCTSIZE*5*4]
+	ASSERT	tmp0=ac7
+        MUL     tmp0,w1,ac7
+; tmp1 = DEQUANTIZE(inptr[DCTSIZE*5], quantptr[DCTSIZE*5]);
+ [ :LNOT:UseHalfword
+	MOV	ac5,ac5,ASL #16
+	MOV	ac5,ac5,ASR #16
+ ]
+	LDR	w1,[quantptr,#DCTSIZE*3*4]
+	ASSERT	tmp1=ac5
+        MUL     tmp1,w2,ac5
+; tmp2 = DEQUANTIZE(inptr[DCTSIZE*3], quantptr[DCTSIZE*3]);
+ [ :LNOT:UseHalfword
+	MOV	ac3,ac3,ASL #16
+	MOV	ac3,ac3,ASR #16
+ ]
+	LDR	w2,[quantptr,#DCTSIZE*1*4]
+	ASSERT	tmp2=ac3
+	MUL	tmp2,w1,ac3
+; tmp3 = DEQUANTIZE(inptr[DCTSIZE*1], quantptr[DCTSIZE*1]);
+ [ :LNOT:UseHalfword
+	MOV	ac1,ac1,ASL #16
+	MOV	ac1,ac1,ASR #16
+ ]
+	ASSERT	tmp3=ac1
+	MUL	tmp3,w2,ac1
+
+; z1 = tmp0 + tmp3;
+; z2 = tmp1 + tmp2;
+; z3 = tmp0 + tmp2;
+; z4 = tmp1 + tmp3;
+; z5 = MULTIPLY(z3 + z4, FIX_1_175875602); /* sqrt(2) * c3 */
+	LDR	w1,=FIX_1_175875602
+	ADD	z2,tmp1,tmp2
+        ADD     z1,tmp0,tmp3
+	ADD	z3,tmp0,tmp2
+	ADD	z4,tmp1,tmp3
+	ADD	z5,z3,z4
+	LDR	w3,=FIX_0_298631336
+	MUL	z5,w1,z5
+
+; tmp0 = MULTIPLY(tmp0, FIX_0_298631336); /* sqrt(2) * (-c1+c3+c5-c7) */
+	LDR	w1,=FIX_2_053119869
+	MUL	tmp0,w3,tmp0
+
+; tmp1 = MULTIPLY(tmp1, FIX_2_053119869); /* sqrt(2) * ( c1+c3-c5+c7) */
+	LDR	w3,=FIX_3_072711026
+        MUL     tmp1,w1,tmp1
+
+; tmp2 = MULTIPLY(tmp2, FIX_3_072711026); /* sqrt(2) * ( c1+c3+c5-c7) */
+	LDR	w1,=FIX_1_501321110
+        MUL     tmp2,w3,tmp2
+
+; tmp3 = MULTIPLY(tmp3, FIX_1_501321110); /* sqrt(2) * ( c1+c3-c5-c7) */
+	LDR	w3,=-FIX_0_899976223
+	MUL	tmp3,w1,tmp3
+
+; z1 = MULTIPLY(z1, - FIX_0_899976223); /* sqrt(2) * (c7-c3) */
+	LDR	w1,=-FIX_2_562915447
+        MUL     z1,w3,z1
+
+; z2 = MULTIPLY(z2, - FIX_2_562915447); /* sqrt(2) * (-c1-c3) */
+	LDR	w3,=-FIX_1_961570560
+        MUL     z2,w1,z2
+
+; z3 = MULTIPLY(z3, - FIX_1_961570560); /* sqrt(2) * (-c3-c5) */
+; z3 += z5;
+	LDR	w1,=-FIX_0_390180644
+	MLA	z3,w3,z3,z5
+	ADD	wsptr,sp,ctr,LSR #27
+
+; z4 = MULTIPLY(z4, - FIX_0_390180644); /* sqrt(2) * (c5-c3) */
+; z4 += z5;
+	MLA	z4,w1,z4,z5
+
+; tmp0 += z1 + z3;
+; tmp1 += z2 + z4;
+; tmp2 += z2 + z3;
+; tmp3 += z1 + z4;
+	ADD	tmp0,tmp0,z1
+	ADD	tmp0,tmp0,z3
+	ADD	tmp1,tmp1,z2
+	ADD	tmp1,tmp1,z4
+	ADD	tmp2,tmp2,z2
+	ADD	tmp2,tmp2,z3
+	ADD	tmp3,tmp3,z1
+	ADD	tmp3,tmp3,z4
+
+; Final output stage: inputs are tmp10..tmp13, tmp0..tmp3
+	ADD	w1,sp,#tmp10
+	LDMIA	w1,{dc,ac2,ac4,ac6}
+; wsptr[DCTSIZE*0] = (int) DESCALE(tmp10 + tmp3, CONST_BITS-PASS1_BITS);
+	ADD	w1,dc,tmp3
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*0*4]
+
+; wsptr[DCTSIZE*7] = (int) DESCALE(tmp10 - tmp3, CONST_BITS-PASS1_BITS);
+	SUB	w1,dc,tmp3
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*7*4]
+
+; wsptr[DCTSIZE*1] = (int) DESCALE(tmp11 + tmp2, CONST_BITS-PASS1_BITS);
+	ADD	w1,ac2,tmp2
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*1*4]
+
+; wsptr[DCTSIZE*6] = (int) DESCALE(tmp11 - tmp2, CONST_BITS-PASS1_BITS);
+	SUB	w1,ac2,tmp2
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*6*4]
+
+; wsptr[DCTSIZE*2] = (int) DESCALE(tmp12 + tmp1, CONST_BITS-PASS1_BITS);
+	ADD	w1,ac4,tmp1
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*2*4]
+
+; wsptr[DCTSIZE*5] = (int) DESCALE(tmp12 - tmp1, CONST_BITS-PASS1_BITS);
+	SUB	w1,ac4,tmp1
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*5*4]
+
+; wsptr[DCTSIZE*3] = (int) DESCALE(tmp13 + tmp0, CONST_BITS-PASS1_BITS);
+	ADD	w1,ac6,tmp0
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*3*4]
+
+; wsptr[DCTSIZE*4] = (int) DESCALE(tmp13 - tmp0, CONST_BITS-PASS1_BITS);
+	SUB	w1,ac6,tmp0
+	MOV	w1,w1,ASR #(CONST_BITS-PASS1_BITS)
+	STR	w1,[wsptr,#DCTSIZE*4*4]
+
+; inptr++;			/* advance pointers to next column */
+        ADD     inptr,inptr,#2
+; quantptr++;
+        ADD     quantptr,quantptr,#4
+
+	ASSERT  DCTSIZE=8
+        ADDS    ctr,ctr,#&20000000
+        BNE     pass1_loop
+
+pass2
+;  /* Pass 2: process rows from work array, store into output array. */
+;  /* Note that we must descale the results by a factor of 8 == 2**3, */
+;  /* and also undo the PASS1_BITS scaling. */
+
+; JSAMPLE *range_limit = IDCT_range_limit(cinfo);
+; wsptr = workspace + DCTSIZE * (DCTSIZE-1);
+	LDR	cinfo,[sp,#arg_cinfo]
+        ADD     wsptr,sp,#DCTSIZE2*4
+        LDR     range_limit,[cinfo,#sample_range_limit]
+        MOV     ctr,#DCTSIZE-1
+        ADD     range_limit,range_limit,#CENTERJSAMPLE
+
+; for (ctr = DCTSIZE-1; ctr>=0; ctr--) {
+pass2_loop
+; outptr = output_buf[ctr] + output_col;
+; Rows of zeroes can be exploited in the same way as we did with columns.
+; However, the column calculation has created many nonzero AC terms, so
+; the simplification applies less often (typically 5% to 10% of the time).
+; On machines with very fast multiplication, it's possible that the
+; test takes more time than it's worth.  In that case this section
+; may be commented out.
+
+	LDMDB	wsptr!,{dc-ac7}
+	ADD	outptr,outptr,w1
+ [ :LNOT::DEF:NO_ZERO_ROW_TEST
+	ORR	w1,ac1,ac2
+	ORR	w1,w1,ac3
+	ORR	w1,w1,ac4
+	ORR	w1,w1,ac5
+	ORR	w1,w1,ac6
+	ORRS	w1,w1,ac7
+        BNE     ac_not_all_zero_pass2
+
+; AC terms all zero
+
+; outptr = output_buf[ctr] + output_col;
+; dcval = DESCALE(wsptr[0], PASS1_BITS+3) & RANGE_MASK;
+        ADD     dc,dc,#1:SHL:(PASS1_BITS+3-1)
+	LDR	outptr,[sp,#arg_output_buf]
+        MOV     w1,#RANGE_MASK+1
+	LDR	w2,[sp,#arg_output_col]
+        SUB     w1,w1,#1
+	LDR	outptr,[outptr,ctr,LSL #2]
+        AND     dc,w1,dc,ASR #(PASS1_BITS+3)
+; dcval = range_limit[dcval]
+        LDRB    dc,[range_limit,dc]
+	ADD	outptr,outptr,w2
+
+        STRB    dc,[outptr,#0]
+        STRB    dc,[outptr,#1]
+        STRB    dc,[outptr,#2]
+        STRB    dc,[outptr,#3]
+	STRB	dc,[outptr,#4]
+        STRB    dc,[outptr,#5]
+        STRB    dc,[outptr,#6]
+        STRB    dc,[outptr,#7]
+; continue;
+        SUBS    ctr,ctr,#1
+        BGE     pass2_loop
+
+        ADD     sp,sp,#stack_wsandargs
+        LDMFD   sp!,{v1-v6,sl,fp,pc}^
+
+ ]
+
+ac_not_all_zero_pass2
+; Even part: reverse the even part of the forward DCT.
+; The rotator is sqrt(2)*c(-6).
+
+; z2 = (INT32) wsptr[2];
+; z3 = (INT32) wsptr[6];
+	ASSERT	z2=ac2
+	ASSERT	z3=ac6
+
+; z1 = MULTIPLY(z2 + z3, FIX_0_541196100);
+	LDR	w1,=FIX_0_541196100
+	ADD	w2,z2,z3		; w2=z1 (can't use z1/dc - needed below)
+	LDR	w4,=-FIX_1_847759065
+	MUL	w2,w1,w2
+
+; tmp2 = z1 + MULTIPLY(z3, - FIX_1_847759065);
+	LDR	w1,=FIX_0_765366865
+	MLA	z3,w4,z3,w2		; z3 = tmp2
+
+; sneaky addition of part of DESCALE in advance here...
+; this addition filters down dc->tmp0/tmp1->tmp10/tmp11/tmp12/tmp13
+;  -> every DESCALE, thus saving 7 additions :)
+	ADD	dc,dc,#1:SHL:(PASS1_BITS+3-1)
+
+; tmp0 = ((INT32) wsptr[0] + (INT32) wsptr[4]) << CONST_BITS;
+	ADD	w4,dc,ac4
+
+; tmp3 = z1 + MULTIPLY(z2, FIX_0_765366865);
+	MLA	z2,w1,z2,w2		; z2 = tmp3
+
+; tmp1 = ((INT32) wsptr[0] - (INT32) wsptr[4]) << CONST_BITS;
+	SUB	w2,dc,ac4
+
+; tmp10 = tmp0 + tmp3;
+	ADD	dc,z2,w4,LSL #CONST_BITS
+	STR	dc,[sp,#tmp10]
+; tmp13 = tmp0 - tmp3;
+	RSB	ac4,z2,w4,LSL #CONST_BITS
+	STR	ac4,[sp,#tmp13]
+; tmp11 = tmp1 + tmp2;
+	ADD	dc,z3,w2,LSL #CONST_BITS
+	STR	dc,[sp,#tmp11]
+; tmp12 = tmp1 - tmp2;
+	RSB	ac4,z3,w2,LSL #CONST_BITS
+	STR	ac4,[sp,#tmp12]
+
+; Odd part per figure 8; the matrix is unitary and hence its
+; transpose is its inverse.  i0..i3 are y7,y5,y3,y1 respectively.
+
+; tmp0 = (INT32) wsptr[7];
+; tmp1 = (INT32) wsptr[5];
+; tmp2 = (INT32) wsptr[3];
+; tmp3 = (INT32) wsptr[1];
+	ASSERT	tmp0=ac7
+	ASSERT	tmp1=ac5
+	ASSERT	tmp2=ac3
+	ASSERT	tmp3=ac1
+
+; z1 = tmp0 + tmp3;
+; z2 = tmp1 + tmp2;
+; z3 = tmp0 + tmp2;
+; z4 = tmp1 + tmp3;
+	ADD	z1,tmp0,tmp3
+	ADD	z2,tmp1,tmp2
+	ADD	z3,tmp0,tmp2
+	ADD	z4,tmp1,tmp3
+
+; z5 = MULTIPLY(z3 + z4, FIX_1_175875602); /* sqrt(2) * c3 */
+	LDR	w1,=FIX_1_175875602
+	ADD	z5,z3,z4
+	LDR	w4,=FIX_0_298631336
+        MUL     z5,w1,z5
+
+; tmp0 = MULTIPLY(tmp0, FIX_0_298631336); /* sqrt(2) * (-c1+c3+c5-c7) */
+	LDR	w1,=FIX_2_053119869
+	MUL	tmp0,w4,tmp0
+
+; tmp1 = MULTIPLY(tmp1, FIX_2_053119869); /* sqrt(2) * ( c1+c3-c5+c7) */
+	LDR	w4,=FIX_3_072711026
+        MUL     tmp1,w1,tmp1
+
+; tmp2 = MULTIPLY(tmp2, FIX_3_072711026); /* sqrt(2) * ( c1+c3+c5-c7) */
+	LDR	w1,=FIX_1_501321110
+        MUL     tmp2,w4,tmp2
+
+; tmp3 = MULTIPLY(tmp3, FIX_1_501321110); /* sqrt(2) * ( c1+c3-c5-c7) */
+	LDR	w4,=-FIX_0_899976223
+	MUL	tmp3,w1,tmp3
+
+; z1 = MULTIPLY(z1, - FIX_0_899976223); /* sqrt(2) * (c7-c3) */
+	LDR	w1,=-FIX_2_562915447
+        MUL     z1,w4,z1
+
+; z2 = MULTIPLY(z2, - FIX_2_562915447); /* sqrt(2) * (-c1-c3) */
+	LDR	w4,=-FIX_1_961570560
+        MUL     z2,w1,z2
+
+; z3 = MULTIPLY(z3, - FIX_1_961570560); /* sqrt(2) * (-c3-c5) */
+; z3 += z5;
+	LDR	w1,=-FIX_0_390180644
+	MLA	z3,w4,z3,z5
+
+; z4 = MULTIPLY(z4, - FIX_0_390180644); /* sqrt(2) * (c5-c3) */
+; z4 += z5;
+	ADD	tmp0,tmp0,z1
+	MLA	z4,w1,z4,z5
+
+; tmp0 += z1 + z3;
+; tmp1 += z2 + z4;
+; tmp2 += z2 + z3;
+; tmp3 += z1 + z4;
+; outptr = output_buf[ctr] + output_col;
+	ADD	tmp0,tmp0,z3
+	LDR	outptr,[sp,#arg_output_buf]
+	ADD	tmp1,tmp1,z2
+	LDR	w2,[sp,#arg_output_col]
+	ADD	tmp1,tmp1,z4
+	LDR	outptr,[outptr,ctr,LSL #2]
+	ADD	tmp2,tmp2,z2
+	ADD	outptr,outptr,w2
+	ADD	tmp2,tmp2,z3
+	ADD	tmp3,tmp3,z1
+	ADD	tmp3,tmp3,z4
+
+	ADD	w1,sp,#tmp10
+	LDMIA   w1,{dc,ac2,ac4,ac6}
+	MOV	w2,#RANGE_MASK+1
+	SUB	w2,w2,#1
+
+; Final output stage: inputs are tmp10..tmp13, tmp0..tmp3
+
+; outptr[0] = range_limit[(int) DESCALE(tmp10 + tmp3,
+;				        CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	ADD	w1,dc,tmp3
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	w1,[range_limit,w1]
+	STRB	w1,[outptr,#0]
+
+; outptr[7] = range_limit[(int) DESCALE(tmp10 - tmp3,
+;					CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	SUB	w1,dc,tmp3
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	dc,[range_limit,w1]
+
+; outptr[1] = range_limit[(int) DESCALE(tmp11 + tmp2,
+;					CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	ADD	w1,ac2,tmp2
+	STRB	dc,[outptr,#7]
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	dc,[range_limit,w1]
+
+; outptr[6] = range_limit[(int) DESCALE(tmp11 - tmp2,
+;					CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	SUB	w1,ac2,tmp2
+	STRB	dc,[outptr,#1]
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	dc,[range_limit,w1]
+
+; outptr[2] = range_limit[(int) DESCALE(tmp12 + tmp1,
+;					CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	ADD	w1,ac4,tmp1
+	STRB	dc,[outptr,#6]
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	dc,[range_limit,w1]
+
+; outptr[5] = range_limit[(int) DESCALE(tmp12 - tmp1,
+;					CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	SUB	w1,ac4,tmp1
+	STRB	dc,[outptr,#2]
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	dc,[range_limit,w1]
+
+; outptr[3] = range_limit[(int) DESCALE(tmp13 + tmp0,
+;					CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	ADD	w1,ac6,tmp0
+	STRB	dc,[outptr,#5]
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	dc,[range_limit,w1]
+
+; outptr[4] = range_limit[(int) DESCALE(tmp13 - tmp0,
+;					CONST_BITS+PASS1_BITS+3)
+;			  & RANGE_MASK];
+	SUB	w1,ac6,tmp0
+	STRB	dc,[outptr,#3]
+	AND	w1,w2,w1,ASR #(CONST_BITS+PASS1_BITS+3)
+	LDRB	dc,[range_limit,w1]
+
+        SUBS    ctr,ctr,#1
+	STRB	dc,[outptr,#4]
+        BGE     pass2_loop
+
+        ADD     sp,sp,#stack_wsandargs
+        LDMFD   sp!,{v1-v6,sl,fp,pc}^
+
+        END

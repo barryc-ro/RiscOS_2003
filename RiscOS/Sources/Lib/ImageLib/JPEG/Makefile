@@ -67,7 +67,6 @@ OBJS =\
  o.jdapimin\
  o.jdapistd\
  o.jdtrans\
- o.jdatasrc\
  o.jdmaster\
  o.jdinput\
  o.jdmarker\
@@ -116,10 +115,13 @@ OBJSZ =\
 #
 # Rule patterns
 #
+# Need to clear the built-in suffixes first before setting our own.
+.SUFFIXES:
 .SUFFIXES: .o .s .h .cmhg .c .z
 .c.o:;     ${CC} ${CCFLAGS} -o $@ $<
 .c.z:;     ${CC} ${CCFLAGS} -zM -o $@ $<
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
+.s.z:;     ${AS} ${ASFLAGS} -o $@ $<
 .cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
 .cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
 
