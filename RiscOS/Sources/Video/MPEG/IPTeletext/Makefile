@@ -25,7 +25,7 @@ CMHG    = cmhg
 CP      = copy
 LD      = link
 TLD     = tlink
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 MODSQZ  = modsqz
 RESGEN  = resgen
 RM      = remove
@@ -82,12 +82,19 @@ c.main: h.module
 ${RESF}: LocalRes:Messages
         resgen messages_file ${RESF} LocalRes:Messages Resources.${COMPONENT}.Messages
 
-${RAM_MODULE}: ${OBJS} ${CLIB} ${RESF}
-        ${mkdir} rm
+${RAM_MODULE}: ${OBJS} ${CLIB} ${RESF} dirs
         ${LD} -o $@ -module ${OBJS} ${CLIB} ${RESF}
         Access $@ RW/R
-#        ${MODSQZ} $@
-        
+        @echo ${COMPONENT}: module built (disc).
+
+install: ${RAM_MODULE}
+        ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: module installed (disc).
+
+dirs:
+        ${MKDIR} rm
+        ${MKDIR} ${INSTDIR}
+
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
