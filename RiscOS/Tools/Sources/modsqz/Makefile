@@ -45,7 +45,7 @@ CLXLIB    = C:CLX.o.clxlib
 # Include files
 #
 INCLUDES  = -IC: -IC:CLX
-DFLAGS    = 
+DFLAGS    = -DSQUEEZING_ON_RISCOS
 
 #
 # Program specific options:
