@@ -14,7 +14,7 @@ SRCLOCALE = Resources.${UserIf}.${Locale}
 #
 MKDIR   = cdir
 AS      = aasm
-CP      = copy
+CP      = -copy
 RM      = remove
 LD	= link
 CCFLAGS = -c -depend !Depend -IC:
@@ -46,15 +46,25 @@ resources:
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
 	${CP} ${SRCCOMMON}.!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} ${SRCCOMMON}.!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
+	${CP} ${SRCCOMMON}.!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} ${SRCCOMMON}.SpritesROM  ${RESRES}.Sprites ${CPFLAGS}
+	${CP} ${SRCCOMMON}.Messages    ${RESRES}.Messages ${CPFLAGS}
+	${CP} ${SRCCOMMON}.Res         ${RESRES}.Res      ${CPFLAGS}
 	${CP} ${SRCCOMMON}.Welcome     ${RESRES}.Welcome  ${CPFLAGS}
 	${CP} ${SRCCOMMON}.SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
 	${CP} ${SRCCOMMON}.MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Config      ${RESRES}.Config   ${CPFLAGS}
+	${CP} ${SRCCOMMON}.Config      ${RESRES}.Config   ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} ${SRCLOCALE}.SpritesROM  ${RESRES}.Sprites ${CPFLAGS}
 	${CP} ${SRCLOCALE}.Messages    ${RESRES}.Messages ${CPFLAGS}
 	${CP} ${SRCLOCALE}.Res         ${RESRES}.Res      ${CPFLAGS}
-	${CP} ${SRCLOCALE}.SpritesROM  ${RESRES}.Sprites ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Welcome     ${RESRES}.Welcome  ${CPFLAGS}
+	${CP} ${SRCLOCALE}.SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
+	${CP} ${SRCLOCALE}.MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Config      ${RESRES}.Config   ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #resources:
