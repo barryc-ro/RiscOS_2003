@@ -108,13 +108,13 @@ TryToDoModeNumbers SETL {FALSE}		; doesn't work yet so comment out
                 GBLL    UseVSyncEvent
 UseVSyncEvent   SETL    {TRUE}          ; use VSync event instead of hacking Vsync device
 
-                GBLL    UseOSMemory12
-UseOSMemory12   SETL    {TRUE}          ; use OS_Memory 12 to locate a suitable page of physical memory
-
 ; when initially turning on interlace, use a callback to wait until not in vsync
 
 		GBLL	UseInitialCallBack
 UseInitialCallBack SETL (PhaseDetectBit = 0) :LAND: {FALSE}
+
+                GBLL    ScreenBanks
+ScreenBanks     SETL    {TRUE}
 
         LEADR   Module_LoadAddr
 
@@ -162,6 +162,12 @@ ShrinkOK	#	4		; NZ => shrink OK
 FindModeStructure #	12		; 3 words of crap
 FindModeOtherOffset #	4		; offset to OtherStuff
 FindModeOtherStuff #	OtherIndex_RecordSize ; static OtherStuff created from mode parameters
+
+ [ ScreenBanks
+PhysicalDriverOffset    #       4       ; effective offset in physical space of driver base from start of screen memory
+FrameDisplayOffset      #       4       ; offset of displayed frame from base of screen memory (discounting interlace)
+FieldDisplayOffset      #       4       ; current component of display offset due to interlace
+ ]
 
  [ PhaseDetectBit <> 0
 LastPhase               #       1       ; for field-to-field checks
@@ -586,6 +592,12 @@ ScreenDynArea_PreGrow
         ADD     r14, r14, R3
         STR     r14, [WsPtr, #TotalScreenSize]
 
+ [ ScreenBanks
+        LDR     r14, [WsPtr, #VduStatus]
+        BIC     r14, r14, #Shadowing            ; for compatibility, unset Shadowing
+        STR     r14, [WsPtr, #VduStatus]
+ ]
+
         CLRV                                    ; ok, so I'm paranoid...
         Pull    "r0-r2,r4,pc"
 
@@ -609,18 +621,39 @@ ScreenDynArea_PreShrink
 
         SUB     R2, R5, #1                      ;make a page mask
 
-        LDR     R5, [WsPtr, #ScreenSize]          ;get current minimum size
+        LDR     R5, [WsPtr, #ScreenSize]        ;get current minimum size
 
         SUB     R1, R4, R5                      ;R1 = maximum shrink (current - screensize)
         CMP     R3, R1                          ;if requested shrink > max...
         MOVHI   R3, R1                          ;...then limit it, and...
         BICS    R3, R3, R2                      ;...round down to multiple of page size
 
-        LDR     R14, [WsPtr, #TotalScreenSize]
-        SUB     R14, R14, R3
-        STR     R14, [WsPtr, #TotalScreenSize]
+        LDR     R1, [WsPtr, #TotalScreenSize]
+        SUB     R1, R1, R3
+        STR     R1, [WsPtr, #TotalScreenSize]
 
         SWINE   XOS_RemoveCursors
+
+ [ ScreenBanks
+        LDR     r14, [WsPtr, #VduStatus]
+        BIC     r14, r14, #Shadowing            ; for compatibility, unset Shadowing
+        STR     r14, [WsPtr, #VduStatus]
+
+        LDR     WsPtr, [sp, #3*4]               ; retrieve our own wsptr from stack
+        SUB     r5, r1, r5                      ; max offset we can allow for either driver or display bank
+        LDR     r1, PhysicalDriverOffset
+        CMP     r1, r5
+        MOVHI   r0, #112
+        MOVHI   r1, #1
+        SWIHI   XOS_Byte                        ; reset to driver bank 1 if necessary
+        LDR     r1, FrameDisplayOffset
+        CMP     r1, r5
+        MOVHI   r0, #113
+        MOVHI   r1, #1
+        SWIHI   XOS_Byte                        ; reset to display bank 1 if necessary
+
+        MOV     r0, #2                          ; restore value of r0 to what it was on entry
+ ]
         CLRV
         Pull    "r1-r2,r5,r12,pc"
 
@@ -887,7 +920,9 @@ svc_ModeChange  Entry "r0-r3"
 	ADD	r2, r2, r0
 	STR	r2, OtherStuffPtr
 
+      [ :LNOT: ScreenBanks                      ; now done after ScreenSize is set up
 	BL	SetupMemoryMap
+      ]
 
 	Push	"r2"
 	MOV	r0, #2
@@ -895,12 +930,17 @@ svc_ModeChange  Entry "r0-r3"
 	Pull	"r2"
 	LDR	r0, [r2, #OtherIndex_ScreenSize]
 	VDWS	lr
-      [ FixGrowShrink ; this option is a prerequisite for this enhancement
+      [ FixGrowShrink ; FixGrowShrink option is a prerequisite for this speed-up
 	LDR	r3, [lr, #ScreenSize]		; if ScreenSize is already as big as we need, leave it
 	CMP	r0, r3				; (this allows teletext mode to work)
-	BLO	%FT20
+	BLS	%FT20
       ]
 	STR	r0, [lr, #ScreenSize]
+      [ ScreenBanks
+        LDR     r3, [lr, #VduStatus]
+        TST     r3, #Shadowing
+        MOVNE   r0, r0, LSL #1                  ; twice as much needed for shadow modes
+      ]
 	SUBS	r1, r0, r1			; needed size - current size
 
       [ FixGrowShrink
@@ -911,7 +951,17 @@ svc_ModeChange  Entry "r0-r3"
 	SWI	XOS_ChangeDynamicArea		; so Wimp doesn't do it itself after we've screwed the variables up
       ]
 
-20      MOV     r0, #&C0000000
+      [ ScreenBanks
+        ; ChangeDynamicArea trashes the Shadowing flag
+        VDWS    lr
+        STR     r3, [lr, #VduStatus]
+      ]
+20
+      [ ScreenBanks
+	BL	SetupMemoryMap
+      ]
+
+        MOV     r0, #&C0000000
         STR     r0, Phase
 
 	; Claim the vectors early so that if anyone calls OS_SpriteOP 60 (Switch output to Sprite) we can override the
@@ -922,11 +972,24 @@ svc_ModeChange  Entry "r0-r3"
 
 	BL	ModifyVars
 
+      [ ScreenBanks
+        ; ModifyVars exits with VduStatus in r1
+        ANDS    r14, r1, #Shadowing
+        LDRNE   r14, [r0, #ScreenSize]          ; start in second bank in shadow modes
+        STR     r14, PhysicalDriverOffset
+        STR     r14, FrameDisplayOffset
+      ]
         LDR     r1, DummyScreenStart
+      [ ScreenBanks
+        MOVNE   r14, r14, LSL #32-12
+        ADDNE   r1, r1, r14, LSR #32-12         ; add in sub-page component of default bank
+      ]
         STR     r1, [r0, #ScreenStart]
+      [ :LNOT: ScreenBanks                      ; these variables not actually needed
         STR     r1, [r0, #DisplayStart]
         STR     r1, [r0, #DisplayBankAddr]
         STR     r1, [r0, #DriverBankAddr]
+      ]
         STR     r1, [r0, #DisplayScreenStart]
 
         LDR     r1, [r2, #OtherIndex_YRes]
@@ -1148,6 +1211,22 @@ FindMode Entry "r1-r5"
 	EXIT
 
 
+ [ ScreenBanks
+
+; SetupMemoryMap_L2Only - setup L2 pages
+; in:   r0 = base physical address
+;       r2 -> OtherStuff
+
+SetupMemoryMap_L2Only Entry
+        BL      SetupL2Common
+        MOV     r14, #0
+        SetCop  r14, CR_TLBFlush         ; L1 and L2 modified, so flush TLB (no need to flush IDC, as area not cacheable)
+        EXIT
+
+SetupL2Common Entry "r0,r1,r3-r5"
+
+ |
+
 ; SetupMemoryMap - setup L1 and L2 pages for current screensize
 ; in:	r2 -> OtherStuff
 
@@ -1156,6 +1235,7 @@ SetupMemoryMap Entry "r0,r1,r3-r5"
 ; first set up L2 entries
 
 	LDR	r0, ScreenPhysAddr
+ ]
 	LDR	r1, =L2_SmallPage + (AP_Full * L2_APMult) + L2_B
 	ADD	r0, r0, r1		; base L2 entry for 1st 512K (or 1024K)
 	LDR	r1, [r2, #OtherIndex_PageOffset2ndField]
@@ -1174,6 +1254,26 @@ SetupMemoryMap Entry "r0,r1,r3-r5"
 	ADD	r1, r1, #&1000
 	SUBS	r5, r5, #4
 	BNE	%BT10
+
+ [ ScreenBanks
+        EXIT
+
+; SetupMemoryMap - setup L1 and L2 pages for current screensize
+; in:   r2 -> OtherStuff
+
+SetupMemoryMap Entry "r0,r1,r3,r5"
+
+; first set up L2 entries
+
+        VDWS    r14
+        LDR     r0, [r14, #VduStatus]
+        ANDS    r0, r0, #Shadowing      ; if shadow screen mode, start at bank 2
+        LDRNE   r0, [r14, #ScreenSize]
+        MOV     r0, r0, LSR #12         ; page offset
+        LDR     r14, ScreenPhysAddr
+        ADD     r0, r14, r0, LSL #12
+        BL      SetupL2Common
+ ]
 
 ; finally set up L1 entries
 
@@ -1203,6 +1303,18 @@ ClaimVectors Entry "r0-r6"
         LDR     r0, VectorsClaimed
         TEQ     r0, #0
         EXIT    NE
+
+ [ ScreenBanks
+        MOV     r0, #ByteV
+        ADRL    r1, MyByte
+        MOV     r2, wp
+        SWI     XOS_Claim
+
+        MOV     r0, #WordV
+        ADRL    r1, MyWord
+        MOV     r2, wp
+        SWI     XOS_Claim
+ ]
 
  [ UseTimer1
         MOV     r0, #6          ; Timer 1 device
@@ -1255,18 +1367,6 @@ ClaimVectors Entry "r0-r6"
         SWI     XOS_ClaimDeviceVector
  ]
 
- [ {FALSE}
-        MOV     r0, #ByteV
-        ADRL    r1, MyByte
-        MOV     r2, wp
-        SWI     XOS_Claim
-
-        MOV     r0, #WordV
-        ADRL    r1, MyWord
-        VDWS    r2
-        SWI     XOS_Claim
- ]
-
  [ PhaseDetectBit = 0
         MOV     r0, #PaletteV
         ADR     r1, MyPalette
@@ -1294,18 +1394,6 @@ ReleaseVectors Entry "r0-r2"
         MOV     r0, #PaletteV
         ADR     r1, MyPalette
         MOV     r2, wp
-        SWI     XOS_Release
- ]
-
- [ {FALSE}
-        MOV     r0, #WordV
-        ADRL    r1, MyWord
-        VDWS    r2
-        SWI     XOS_Release
-
-        MOV     r0, #ByteV
-        ADRL    r1, MyByte
-        VDWS    r2
         SWI     XOS_Release
  ]
 
@@ -1345,9 +1433,119 @@ ReleaseVectors Entry "r0-r2"
         STR     r0, DAHandlerIntercept          ; don't intercept DA handler for this mode
  ]
 
+ [ ScreenBanks
+        MOV     r0, #WordV
+        ADRL    r1, MyWord
+        MOV     r2, wp
+        SWI     XOS_Release
+
+        MOV     r0, #ByteV
+        ADRL    r1, MyByte
+        MOV     r2, wp
+        SWI     XOS_Release
+ ]
+
         MOV     r0, #0
         STR     r0, VectorsClaimed
         EXIT
+
+ [ ScreenBanks
+MyByte
+        TEQ     r0, #112        ; write vdu driver screen bank
+        TEQNE   r0, #113        ; write display hardware screen bank
+        MOVNE   pc, r14         ; pass on other reason codes
+
+        Push    "r0,r3-r5,r9"
+        VDWS    r9
+        MOVS    r3, r1          ; default for current mode?
+        BNE     %FT10
+        LDR     r14, [r9, #VduStatus]
+        TST     r14, #Shadowing
+        MOVEQ   r3, #1
+        MOVNE   r3, #2
+10
+        SUB     r5, r0, #111    ; driver=1, display=2
+        ADD     r0, r5, #249    ; 250 for driver, 251 for display
+        MOV     r1, #0
+        MOV     r2, #255
+        SWI     XOS_Byte        ; read old bank number into R1
+        LDR     r0, [r9, #ScreenSize]
+        LDR     r2, [r9, #TotalScreenSize]
+        MUL     r4, r3, r0      ; r4 = start offset of next bank
+        CMP     r4, r2
+        Pull    "r0,r3-r5,r9,pc", HI ; if after end, can't do it, so exit
+        SUB     r4, r4, r0      ; r4 = start offset of this bank
+        Push    "r1"
+        ADD     r0, r5, #249
+        MOV     r1, r3
+        MOV     r2, #0
+        SWI     XOS_Byte        ; update bank number in vdu workspace
+        MOV     r0, r5, LSL #24 ; 1 or 2 in top byte
+        MOV     r1, r4
+        Push    "r0,r1"
+        MOV     r0, #OsWord_WriteScreenBaseAddress
+        ADD     r1, sp, #3
+        SWI     XOS_Word        ; set base address
+        ADD     sp, sp, #8
+        Pull    "r1"
+        Pull    "r0,r3-r5,r9,pc"
+
+MyWord
+        TEQ     r0, #OsWord_WriteScreenBaseAddress
+        MOVNE   pc, r14         ; pass on other reason codes
+
+        Push    "r0-r2,r9,r14"
+        VDWS    r9
+        LDRB    r2, [r1, #1]
+        LDRB    r0, [r1, #2]
+        ORR     r2, r2, r0, LSL #8
+        LDRB    r0, [r1, #3]
+        ORR     r2, r2, r0, LSL #16
+        LDRB    r0, [r1, #4]
+        ORR     r2, r2, r0, LSL #24
+        LDRB    r0, [r1]        ; now r0=type, r2=offset
+        LDR     r1, [r9, #ScreenSize]
+        LDR     r14, [r9, #TotalScreenSize]
+        SUB     r1, r14, r1     ; maximum allowable offset
+        CMP     r2, r1
+        Pull    "r0-r2,r9,r14,pc", HI ; claim without taking action if offset too big
+
+        TST     r0, #1          ; writing driver base address?
+        BEQ     %FT05
+        Push    "r0,r2"
+        SWI     XOS_RemoveCursors
+        STR     r2, PhysicalDriverOffset
+        LDR     r0, DummyScreenStart
+        LDR     r14, =&FFF      ; page mask
+        AND     r1, r2, r14     ; sub-page component of offset
+        ADD     r0, r0, r1      ; added onto base of logical screen
+        STR     r0, [r9, #DisplayScreenStart]
+        STR     r0, [r9, #ScreenStart] ; should really be conditional on not outputting to sprite
+        LDR     r1, ScreenPhysAddr
+        BIC     r0, r2, r14     ; page component of offset
+        ADD     r0, r1, r0      ; added onto base of physical screen
+        LDR     r2, OtherStuffPtr
+        BL      SetupMemoryMap_L2Only
+        BL      AddressCursors
+        SWI     XOS_RestoreCursors
+        Pull    "r0,r2"
+05
+        TST     r0, #2          ; writing display base address?
+        BEQ     %FT10
+        STR     r2, FrameDisplayOffset
+        LDR     r1, FieldDisplayOffset
+        MOV     r0, #2:SHL:24   ; type flags for kernel in top byte of r0
+        ADD     r2, r2, r1      ; base address taking interlace into account
+        Push    "r0,r2"         ; construct new block on stack
+        ADD     r1, sp, #3
+        MOV     r0, #OsWord_WriteScreenBaseAddress
+        Push    "pc"            ; push address for kernel to return to (PC+12) onto stack
+        LDR     pc, [sp, #4*7]  ; jump to original r14: pass on to kernel
+        NOP
+        ADD     sp, sp, #8
+10
+        Pull    "r0-r2,r9,r14,pc"
+ ]
 
 MyVSyncDevice ROUT
  [ UseVSyncEvent
@@ -1502,6 +1700,10 @@ DoInterlace Entry
         STR     r1, FieldCount
  ]
 
+ [ ScreenBanks
+        STR     r0, FieldDisplayOffset
+        LDR     r0, FrameDisplayOffset
+ ]
         STR     r0, OSWord16Block +1
 
  [ MakeCFSCountPhase
