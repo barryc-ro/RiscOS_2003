@@ -16,7 +16,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = aasm
 CP      = copy
 RM      = remove
@@ -31,8 +31,11 @@ TOKENS   = Hdr:Tokens
 # Program specific options:
 #
 COMPONENT = BASICTrans
-EXPORTS   = ${EXP_HDR}.BASICTrans
-TARGETS   = rm.BASICTrans
+EXPORTS   = ${EXP_HDR}.${COMPONENT}
+TARGETS   = rm.${COMPONENT}
+MSGSMOD   = BASICTMsgs
+MSGSTAR   = rm.${MSGSMOD}
+MSGFILE   = rm.Messages
 
 #
 # Generic rules:
@@ -46,6 +49,11 @@ rom: ${TARGETS}
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
+install: ${TARGETS}
+        ${MKDIR} ${INSTDIR}
+        ${CP} rm.BASICTrans ${INSTDIR}.${TARGET} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGETS}
         ${CP} rm.BASICTrans ${INSTDIR}.BASICTrans ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
@@ -53,6 +61,14 @@ install_rom: ${TARGETS}
 clean:
         ${RM} rm.BASICTrans
         @echo ${COMPONENT}: cleaned
+
+messages:
+        Copy Resources.${Locale}.Messages ${MSGFILE} ${CPFLAGS}
+        Print Resources.${Locale}.CmdHelp { >> ${MSGFILE} }
+        Perl Build:GetVersion Trans$Version
+        Do modgen ${MSGSTAR} ${MSGSMOD} ${MSGSMOD} <Trans$Version> ${MSGFILE} Resources.BASIC.Messages
+        Remove ${MSGFILE}
+        @echo ${COMPONENT}: messages module built
 
 resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
