@@ -34,7 +34,6 @@ TRANSLATE	= translate
 #
 INAPPDIR	= LocalUserIFRes:Applet
 INRESDIR	= LocalUserIFRes:Resources
-INVSNFILE	= LocalUserIFRes:Version
 INCHOICEDIR	= LocalUserIFRes:Choices
 INPREDIR	= LocalUserIFRes:PreDesktop
 INDESKDIR	= LocalUserIFRes:Desktop
@@ -44,8 +43,6 @@ INDESKDIR	= LocalUserIFRes:Desktop
 #
 OUTAPPDIR	= $(INSTDIR).$(RES)
 OUTRESDIR	= $(OUTAPPDIR).Resources
-OUTVSNDIR	= $(INSTDIR).$(VERSN)
-OUTVSNFILE	= $(OUTVSNDIR).$(COMPONENT)
 OUTCHOICEDIR	= $(INSTDIR).$(CHOICES)
 OUTPREDIR	= $(INSTDIR).$(PRE)
 OUTDESKDIR	= $(INSTDIR).$(DESK)
@@ -57,8 +54,6 @@ CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
 CHMODFLAGS	= +ow +or +wr -ww
 TRANSFLAGS	= $(THROWBACK) -marko "««" -markc "»»" -htmlo "" -htmlc "‘‘"
-#TRANSMAPPINGS	= TranslateRes:Mappings
-#TRANSCHOICEDIR	= TranslateRes:Choices
 
 #
 # Rule patterns:
@@ -106,8 +101,6 @@ install: translate dirs
 	$(CP) $(INPREDIR).*      $(OUTPREDIR).*       $(CPFLAGS)
 	$(CP) $(INDESKDIR).*     $(OUTDESKDIR).*      $(CPFLAGS)
 	$(CP) $(INCHOICEDIR).*   $(OUTCHOICEDIR).*    $(CPFLAGS)
-	$(CP) $(INVSNFILE)       $(OUTVSNFILE)        $(CPFLAGS)
-	Do $(AWK) -- "/.define.*CMHG.*/" VersionNum >>$(OUTVSNFILE)
         $(CHMOD) $(INSTDIR)
 	@echo $(COMPONENT): installed to $(INSTDIR)
 
@@ -117,7 +110,6 @@ translate: dirs
 dirs:
 	$(MKDIR) $(OUTAPPDIR)
 	$(MKDIR) $(OUTRESDIR)
-	$(MKDIR) $(OUTVSNDIR)
 	$(MKDIR) $(OUTCHOICEDIR)
 	$(MKDIR) $(OUTPREDIR)
 	$(MKDIR) $(OUTDESKDIR)
