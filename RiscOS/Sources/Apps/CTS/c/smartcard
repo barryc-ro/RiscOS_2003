@@ -59,11 +59,23 @@ static cts_sc_status cts_swix(int swi_num, int regs, ...)
         va_list ap;
         int rn;
 
+#ifdef DEBUGLIB
+	{ static char swi_name[256];
+        int len;
+        (void) _swix(OS_SWINumberToString, _INR(0,2)|_OUT(2), swi_num, swi_name,
+        	sizeof(swi_name), &len);
+	dprintf(("cts_swix", "SWI %05x (%.*s)\n", swi_num, len, swi_name));
+	}
+#endif
+
         va_start(ap, regs);
+
+	dprintf(("cts_swix", " In:\n"));
 
         for (rn=0; rn<10; ++rn) {
                 if (regs & (_IN(rn))) {
                         r.r[rn] = va_arg(ap, int);
+                        dprintf(("cts_swix", "  R%d = %8d (%08x)\n", rn, r.r[rn], r.r[rn]));
                 }
         }
 
@@ -79,17 +91,24 @@ static cts_sc_status cts_swix(int swi_num, int regs, ...)
 	        cts_last_error.code = SCI_SUCCESS;
 	}
 
+	dprintf(("cts_swix", " Out:\n"));
+
         for (rn=0; rn<10; ++rn) {
                 if (regs & (_OUT(rn))) {
                         *(va_arg(ap, int *)) = r.r[rn];
+                        dprintf(("cts_swix", "  R%d = %8d (%08x)\n", rn, r.r[rn], r.r[rn]));
                 }
         }
 
 	va_end(ap);
 
+	dprintf(("cts_swix", "Kernel error -> %p\n", ose));
+	dprintf(("cts_swix", "SC error -> %p\n", e));
+
 	if (e != NULL) {
 	        (void) memcpy(&cts_last_error.error_block, e, sizeof(cts_last_error));
 	        if (ose == NULL && e->errnum == SCI_E_NODATA) {
+			dprintf(("cts_swix", "SCI_E_NODATA -> INPROGRESS\n"));
 	                return cts_sc_status_INPROGRESS;
 	        }
 	        return cts_sc_status_FAILED;
@@ -116,8 +135,11 @@ cts_sc_status cts_sc_open(cts_sc_slot_id card_number,cts_sc_type *type)
         static cts_sc_slot_id opened = cts_sc__general_info;
         cts_sc_status status;
         cts_slot_status ret_status;
+        size_t slot_count;
+        _kernel_oserror *e;
 
 	if (card_number != opened) {
+	        dprintf(("cts_sc", "Opening new card (slot id %d)\n", card_number));
 	        status = cts_swix(SCTransport_Open, _INR(0,1), 0, &card_handle);
         	if (status == cts_sc_status_COMPLETE) {
                         opened = card_number;
@@ -130,19 +152,33 @@ cts_sc_status cts_sc_open(cts_sc_slot_id card_number,cts_sc_type *type)
                 }
 	}
 
+	dprintf(("cts_sc", "Card is open\n"));
         card_handle_valid = 1;
         slot_id = card_number;
         actual_card_handle = slot_id;
         if (slot_id == cts_sc_slot2) {
+                dprintf(("cts_sc", "Slot 2\n"));
                 actual_card_handle = cts_sc_handle_SLOT2;
         }
 
-        status = cts_swix(SCTransport_SlotInfo, _IN(0)|_OUTR(1,2),
-        	card_number, &ret_status, type);
+        e = _swix(SCTransport_SlotInfo, _IN(0)|_OUTR(0,2),
+        	card_number, &slot_count, &ret_status, type);
+        if (e != NULL) {
+                cts_last_error.code = SCI_SUCCESS;
+                (void) memcpy(cts_last_error.error_block, e, sizeof(*e));
+                status = cts_sc_status_FAILED;
+        }
+        else {
+	        status = cts_sc_status_COMPLETE;
+	        dprintf(("cts_sc", "There are %d slot%s\n", slot_count,
+	        	slot_count == 1 ? "" : "s"));
+        }
 
 	if (status == cts_sc_status_COMPLETE) {
+	        dprintf(("cts_sc", "res_status = %d\n", ret_status));
 	        switch (ret_status) {
 	                case cts_slot_status_CARD:
+	                        dprintf(("cts_sc", "card type = %d\n", *type));
 	                        if (*type != cts_sc_type_REASONA) {
 	                                /* Perhaps send the s-block */
 	                        }
@@ -189,6 +225,8 @@ cts_sc_status cts_sc_send_apdu(
         apdu_len >>= 1;
         read_response_available = 0;
 
+        dprintf(("cts_sc", "Sending APDU ... (length = %d)\n", apdu_len));
+
 	(void) cts_utils_binary_decode(apdu_header, apdu_header, apdu_len);
 
         res = cts_swix(SCTransport_IssueCommand, _INR(0,4), actual_card_handle,
@@ -208,10 +246,15 @@ cts_sc_status cts_sc_read_data(
         size_t temporary;
         cts_sc_status res;
 
+        dprintf(("cts_sc", "Reading response ...\n"));
+
 	if (!read_response_available) {
+	        dprintf(("cts_sc", "read_response_available == FALSE\n"));
 	        return cts_sc_status_INPROGRESS;
 	}
 	else if (cts_last_error.code != SCI_SUCCESS) {
+	        dprintf(("cts_sc", "cts_last_error.code != SCI_SUCCESS (is %d)\n",
+	        	cts_last_error.code));
 	        return cts_sc_status_FAILED;
 	}
 
@@ -223,6 +266,10 @@ cts_sc_status cts_sc_read_data(
 
         res = cts_swix(SCTransport_ReadResponse, _INR(0,4), actual_card_handle,
         	buffer, buffer_length, data_size, sw1sw2_response);
+
+	dprintf(("cts_sc", "[SW1:SW2] == [%02x:%02x]\n",
+		sw1sw2_response[0],
+		sw1sw2_response[1]));
 
 	if (res == cts_sc_status_COMPLETE) {
 	        if (buffer != NULL) {
@@ -256,6 +303,8 @@ void *cts_sc_construct_pin_op_apdu(
         } sc_header;
         char *result;
         size_t total_length;
+
+	dprintf(("cts_sc", "constructing pin op\n"));
 
         total_length = sizeof(sc_header) + sizeof(unsigned char) + pin_length;
 
@@ -430,9 +479,15 @@ void cts_sc_pollword_handler(void)
 {
         int set_read_response_available = 1;
 
+	dprintf(("cts_sc", "pollword handler entered for card %d (need %d)\n",
+		cts_sc_pollword[0], actual_card_handle));
+
 	if (cts_sc_pollword[0] != actual_card_handle) {
+	        cts_sc_pollword[1] = 0;
 	        return;
 	}
+
+	dprintf(("cts_sc", "pollword non-zero reason code = %d\n", cts_sc_pollword[1]));
 
 	switch (cts_sc_pollword[1]) {
 	        case SCI_EV_REMOVED:
@@ -461,6 +516,8 @@ void cts_sc_pollword_handler(void)
         if (set_read_response_available) {
 	        read_response_available = set_read_response_available;
         }
+
+	dprintf(("cts_sc", "read_response_available now = %d\n", read_response_available));
 
         cts_sc_pollword[1] = 0;
 }
