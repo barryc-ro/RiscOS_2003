@@ -20,6 +20,7 @@
 #include "utils.h"
 #include "dns.h"
 #include "config.h"
+#include "security.h"
 
 volatile static int callback_pending_flag = 0;
 
@@ -37,6 +38,10 @@ static _kernel_oserror *__ROM;
 
 #define URL_PROTOCOL_REGISTER	(0x83e20)
 #define URL_PROTOCOL_DEREGISTER (0x83e21)
+
+#define URL_00			(0x83e00)
+#define URL_SSL_AVAILABLE	(0x83e02)
+
 
 #ifndef ROM
 extern int messages_file(void);
@@ -67,7 +72,8 @@ typedef enum {
 	HTTP_METHOD_UNSUPPORTED	= HTTP_ERROR_NUM + 6,	/* Unknown method in R2 */
 	HTTP_METHOD_INIT_ERR	= HTTP_ERROR_NUM + 7,	/* Failed to start a fetch completely */
 	HTTP_BAD_URL_PARSE	= HTTP_ERROR_NUM + 8,	/* Unable to parse URL (URL module too old?) */
-	HTTP_PROXY_NOT_FOUND	= HTTP_ERROR_NUM + 9	/* Unable to contact the proxy */
+	HTTP_PROXY_NOT_FOUND	= HTTP_ERROR_NUM + 9,	/* Unable to contact the proxy */
+	HTTP_NO_SECURITY	= HTTP_ERROR_NUM + 10	/* No SSL support present */
 } http_internal_error_codes;
 
 
@@ -81,28 +87,64 @@ static void module_check_os_version(void)
         clibrary_realloc_routine_is_buggy = (os <= 0xA4);
 }
 
-static int registered;
+static int registered_http;
+static int registered_https;
+
+static _kernel_oserror *try_to_register_for_https(void)
+{
+        if (!registered_https) {
+                int ver = security_ssl_available();
+                if (ver > 0) {
+                        _kernel_oserror *e;
+			e = _swix(URL_PROTOCOL_REGISTER, _INR(0,4), 0, HTTP_SecureGetData, "https:",
+				ver, Module_Help " (SSL) © Acorn 1998 (Built: "
+				Module_Date ")");
+			if (e == NULL) {
+		        	registered_https = 1;
+			}
+                }
+        }
+
+        return NULL;
+}
 
 static _kernel_oserror *try_to_register(void)
 {
-        _kernel_oserror *e;
+        _kernel_oserror *e = NULL;
 
-	if (registered) return NULL;
-	e = _swix(URL_PROTOCOL_REGISTER, _INR(0,4), 0, HTTP_00, "http:",
-		Module_VersionNumber, Module_Help " © Acorn 1997-8 (Built: " Module_Date ")");
-	if (e == NULL) {
-	        registered = 1;
+	if (!registered_http) {
+		e = _swix(URL_PROTOCOL_REGISTER, _INR(0,4), 0, HTTP_00, "http:",
+			Module_VersionNumber, Module_Help " © Acorn 1997-8 (Built: " Module_Date ")");
+		if (e != NULL) return e;
+        	registered_http = 1;
 	}
+
+	if (registered_http) {
+	        (void) try_to_register_for_https();
+	}
+
         return e;
+}
+
+static _kernel_oserror *try_to_deregister_for_https(void)
+{
+        if (!registered_https) {
+                return NULL;
+        }
+        else {
+                registered_https = 0;
+	        return _swix(URL_PROTOCOL_DEREGISTER, _INR(0,1), 0, HTTP_SecureGetData);
+        }
 }
 
 static _kernel_oserror *try_to_deregister(void)
 {
-        if (!registered) {
+	(void) try_to_deregister_for_https();
+        if (!registered_http) {
                 return NULL;
         }
         else {
-                registered = 0;
+                registered_http = 0;
 		return _swix(URL_PROTOCOL_DEREGISTER, _INR(0,1), 0, HTTP_00);
         }
 }
@@ -138,8 +180,10 @@ _kernel_oserror *module_init(CMHG_CONST char *cmd_tail, int podule_base, void *p
 	__ROM = _swix(0xa2c43, _IN(0), pw);
 	#endif
 
-	registered = 0;
+	registered_http = 0;
+	registered_https = 0;
 	module_check_os_version();
+	security_init();
 	config_init();
 	session_init();
 	hosttrack_init();
@@ -195,17 +239,35 @@ void service_handler(int service_number, _kernel_swi_regs *r, void *pw)
         protocol_debug("Service &%X: R0 = %d for URL version  %03d\n", service_number, r->r[0], r->r[2]);
         #endif
         (void) pw;
-        (void) service_number;
 
-	switch (r->r[0]) {
-	        case 0:
-	        	(void) try_to_register();
-	        	break;
-	        case 1:
-	        	(void) try_to_deregister();
-	        	break;
-	        default:
-	        	break;
+	if (service_number == URL_SSL_AVAILABLE) {
+	        switch (r->r[0]) {
+	                case 0:
+	                        if (security_ssl_arrived(r->r[2])) {
+	                                (void) try_to_register();
+	                        }
+		                break;
+	                case 1:
+	                        (void) security_ssl_gone();
+	                	if (registered_https) {
+                                        try_to_deregister_for_https();
+                                }
+	                	break;
+                        default:
+                                break;
+	        }
+	}
+	else {
+		switch (r->r[0]) {
+		        case 0:
+	        		(void) try_to_register();
+	        		break;
+		        case 1:
+		        	(void) try_to_deregister();
+	        		break;
+		        default:
+		        	break;
+		}
 	}
 }
 
@@ -276,6 +338,18 @@ static _kernel_oserror *swi_handler_2(int swi_offset, _kernel_swi_regs *r, void 
 		case HTTP_Stop - HTTP_00:
 			return(http_stop(r));
 
+		/* Generic security protocol module SWIs */
+		case HTTP_SecureGetData - HTTP_00:
+			return(https_start(r));
+
+		case HTTP_SecureStatus - HTTP_00:
+			return(https_status(r));
+
+		case HTTP_SecureReadData - HTTP_00:
+			return(https_readdata(r));
+
+		case HTTP_SecureStop - HTTP_00:
+			return(https_stop(r));
 
 		/* HTTP specific SWIs (at the upper end of the SWI range */
 		#ifdef COOKIE
@@ -301,6 +375,7 @@ _kernel_oserror *swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 	static const char *swi[] = {"GetData", "Status", "ReadData", "Stop"};
 	protocol_debug(">>Handling SWI &%02X (HTTP_%s) for R1=%08x\n", swi_offset,
 		swi_offset < (sizeof(swi)/sizeof(char*)) ? swi[swi_offset] :
+		(swi_offset >= 16 && (swi_offset-16) < (sizeof(swi)/sizeof(char*))) ? swi[swi_offset-16] :
 		swi_offset == HTTP_EnumerateCookies ? "EnumerateCookies" :
 		swi_offset == HTTP_ConsumeCookie ? "ConsumeCookie" :
 		swi_offset == HTTP_AddCookie ? "AddCookie" : "UNKNOWN!",
@@ -311,6 +386,7 @@ _kernel_oserror *swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 	protocol_debug("<<Exiting  SWI &%02X (HTTP_%s) for R1=%08x  %s "
 		"R0=%s; R2=%d (=&%p); R3=%d; R4=%d; R5=%d\n\n", swi_offset,
 		swi_offset < (sizeof(swi)/sizeof(char*)) ? swi[swi_offset] :
+		(swi_offset >= 16 && (swi_offset-16) < (sizeof(swi)/sizeof(char*))) ? swi[swi_offset-16] :
 		swi_offset == HTTP_EnumerateCookies ? "EnumerateCookies" :
 		swi_offset == HTTP_ConsumeCookie ? "ConsumeCookie" :
 		swi_offset == HTTP_AddCookie ? "AddCookie" : "UNKNOWN!",
@@ -373,6 +449,9 @@ _kernel_oserror *return_error(int status_code)
 
 		case HTTP_ERROR_NO_PROXY:
 			return make_error(HTTP_PROXY_NOT_FOUND,0);
+
+		case HTTP_ERROR_NO_SECURITY:
+		        return make_error(HTTP_NO_SECURITY,0);
 
 		default:
 			return make_error(HTTP_GENERAL_ERROR,0);
