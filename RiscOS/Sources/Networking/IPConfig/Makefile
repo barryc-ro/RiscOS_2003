@@ -38,7 +38,7 @@ RESFSDIR   = Resources.${COMPONENT}
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -121,6 +121,13 @@ od.IPConfHdr: VersionNum
 #
 all: ${RAM_MODULE} o.dirs
         @echo ${COMPONENT}: Module built (RAM)
+
+install: ${RAM_MODULE} o.dirs dirs
+        ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: Module built (RAM)
+
+dirs:
+	${MKDIR} ${INSTDIR}
 
 ramtrace: ${DBG_MODULE} o.dirs
 	@echo ${COMPONENT}: Module built (TRACE)
