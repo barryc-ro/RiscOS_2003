@@ -152,6 +152,8 @@ translate: dirs
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).ctrl/html  -o $(OUTJSCRDIR).ctrl/html
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).tv/html    -o $(OUTJSCRDIR).tv/html
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).vod/html   -o $(OUTJSCRDIR).vod/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).plugplay   -o $(OUTJSCRDIR).plugplay/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).simple     -o $(OUTJSCRDIR).simple/html
         @echo Translation Complete.
 
 resources:
