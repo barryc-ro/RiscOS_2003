@@ -23,7 +23,184 @@
  */
 
 #if MEMLIB
-static int heap_not_used;
+
+#include <limits.h>
+
+#include "dynamic.h"
+#include "swis.h"
+
+#include "debug.h"
+#include "interface.h"
+#include "util.h"
+
+#include "heap.h"
+
+static DynamicArea da_number;
+static int da_size;
+
+static void *heap__base;
+static int heap_size;
+
+#undef heap_init
+#undef heap_alloc
+#undef heap_free
+#undef heap_realloc
+
+#define HEAP_BLOCK_OVERHEAD	8
+#define HEAP_OVERHEAD		16
+
+static void cleanup(void)
+{
+#if DEBUG
+    heap__dump(stderr);
+#endif
+
+    DynamicArea_Free(&da_number);
+}
+
+void heapda_init(const char *programname)
+{
+    da_size = heap_size = MemoryPageSize();
+    
+    /* create the dynamic area */
+    frontend_fatal_error(DynamicArea_Alloc(da_size, programname, &da_number, &heap__base));
+
+    /* initialise heap as being in the dynamic area we just created */
+    frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1) | _IN(3), 0, heap__base, heap_size));
+    
+    atexit(cleanup);
+
+    STBDBG(("heapda_init: da size %d heap base %p size %d\n", da_size, heap__base, heap_size));
+}
+
+void *heapda_realloc(void *oldptr, unsigned int size_request)
+{
+    os_error *e;
+    int size;
+    void *newptr;
+
+    STBDBG(("heapda_realloc: %p to %d (heap %d da %d)\n", oldptr, size_request, heap_size, da_size));
+    
+    /* if shrink to zero then just remove it */
+    if (size_request == 0)
+    {
+	heapda_free(oldptr);
+	return NULL;
+    }
+
+    /* work out delta change request  */
+    if (oldptr != NULL)
+    {
+	int new_size;
+
+	/* read total allocated size of block */
+	frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,2) | _OUT(3), 6, heap__base, oldptr, &new_size));
+
+	/* calculate change including overheads */
+	size = size_request - (new_size - HEAP_BLOCK_OVERHEAD);
+    }
+    else
+	size = size_request;
+
+    /* try and allocate or reallocate block in current heap */
+    while ((e = (os_error *)_swix(OS_Heap, _INR(0,3) | _OUT(2),
+		      oldptr == NULL ? 2 : 4, heap__base, oldptr, size,
+		      &newptr)) != NULL)
+    {
+	int adjust;
+	
+	/* see if failure to allocate block was not due to lack of memory */
+	if (e->errnum != 0x0184 /* HeapFail_Alloc */)
+	    frontend_fatal_error(e);
+
+	/* adjust dynamic area by a page */
+	adjust = MemoryPageSize();
+	DynamicArea_Realloc(da_number, &adjust);
+	da_size += adjust;
+
+/* 	STBDBG(("heapda_realloc: da %d heap %d\n", da_size, heap_size)); */
+
+	/* if we can't extend DA then return NULL */
+	if (adjust == 0)
+	    return NULL;
+
+	/* adjust heap to match da */
+	frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1)|_IN(3), 5, heap__base, da_size - heap_size));
+	heap_size = da_size;
+
+	/* and then try again */
+    }
+
+#ifdef MemCheck_MEMCHECK
+    if (e == NULL)
+    {
+	if (oldptr)
+	    MemCheck_UnRegisterMiscBlock(oldptr);
+
+	MemCheck_RegisterMiscBlock(newptr, size_request);
+    }
+#endif
+
+     STBDBG(("heapda_realloc: returns %p (heap %d da %d)\n", newptr, heap_size, da_size));
+
+    /* return new ptr or null */
+    return e ? NULL : newptr;
+}
+
+void *heapda_alloc(unsigned int size)
+{
+    return heapda_realloc(NULL, size);
+}
+
+void heapda_free(void *heapptr)
+{
+    int moved;
+    _kernel_swi_regs r;
+    
+    STBDBG(("heapda_free: free %p (%d) (heap %d da %d)\n", heapptr, ((int *)heapptr)[-1], heap_size, da_size));
+
+    if (heapptr == NULL)
+	return;
+
+    /* release block */
+    frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,2), 3, heap__base, heapptr));
+
+    /* extend heap (with neg. increment to shrink) - don't want to know about errors */
+    /* can't be _swix as we need r3 despite the fact that it will return an error */
+    r.r[0] = 5;
+    r.r[1] = (int)heap__base;
+    r.r[3] = INT_MAX;
+    _kernel_swi(OS_Heap, &r, &r);
+    moved = r.r[3];
+
+    STBDBGN(("heapda_free: shrunk by %d\n", moved));
+
+    /* shrink da */
+    if (moved > 0)
+    {
+	int adjust;
+	
+	/* adjust real size of heap */
+	heap_size -= moved;
+
+	/* try and free some pages */
+	adjust = heap_size - da_size;
+
+	STBDBGN(("heapda_free: heap_size %d change da by %d\n", heap_size, adjust));
+
+	DynamicArea_Realloc(da_number, &adjust);
+	da_size -= adjust;
+
+	STBDBGN(("heapda_free: da_size %d (adjust %d)\n", da_size, adjust));
+    }
+
+    STBDBG(("heapda_free: (heap %d da %d)\n", heap_size, da_size));
+
+#ifdef MemCheck_MEMCHECK
+    MemCheck_UnRegisterMiscBlock(heapptr);
+#endif
+}
+
 #else
 
 #include <limits.h>
@@ -203,6 +380,9 @@ void heapda_free(void *heapptr)
     STBDBGN(("heap: free block heap shrunk by %d to %d da %d\n", r.r[3], heap_size, da_size));
 }
 
+#endif
+
+
 #if DEBUG
 
 /*
@@ -305,8 +485,9 @@ static void scan_list(heap_descr_t *hp, FILE *f)
 void heap__dump(FILE *f)
 {
     heap_descr_t *hp = heap__base;
+#ifdef MemCheck_MEMCHECK
     MemCheck_checking checking = MemCheck_SetChecking(0, 0);
-    
+#endif
     fprintf(f, "\nHeap word   %x\n"
 	    "Free offset %x (%d)\n"
 	    "Base offset %x (%d)\n"
@@ -318,7 +499,9 @@ void heap__dump(FILE *f)
 
     scan_list(hp, f);
 
+#ifdef MemCheck_MEMCHECK
     MemCheck_RestoreChecking(checking);
+#endif
 }
 #else
 
@@ -326,8 +509,6 @@ void heap__dump(FILE *f)
 {
     fprintf(f, "Heap debugging not compiled in\n");
 }
-
-#endif
 
 #endif
 

@@ -141,6 +141,8 @@ static void redraw_link(fe_view v, frame_link *link)
     coords_cvtstr cvt = frameutils_get_cvt(v_top);
 
     coords_box_toworkarea(&box, &cvt);
+
+    /* it is important that this is redraw not update as we schedule a redraw before deleting them */
     frontend_view_redraw(v_top, &box);
 }
 

@@ -5,9 +5,11 @@
 /* Deal with hotlists */
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "msgs.h"
 #include "os.h"
@@ -25,16 +27,25 @@
 #include "urlopen.h"
 
 typedef struct hotlist_item hotlist_item;
+typedef struct hotlist_info hotlist_info;
 
 struct hotlist_item
 {
     hotlist_item *next;
     char *url;
     char *title;
+    time_t last_used;
+};
+
+struct hotlist_info
+{
+    int format;
+    int record_size;
 };
 
 static hotlist_item *hotlist_list = NULL, *hotlist_last = NULL;
 static BOOL hotlist_changed = FALSE;
+static int hotlist_count = 0;
 
 /* ---------------------------------------------------------------------- */
 
@@ -110,7 +121,27 @@ static void hotlist__free(void)
 
 /* ---------------------------------------------------------------------- */
 
-static void hotlist__add(char *url, char *title, BOOL in_order)
+static void hotlist__unlink(hotlist_item *last, hotlist_item *item)
+{
+    if (last)
+	last->next = item->next;
+    else
+	hotlist_list = item->next;
+
+    if (hotlist_last == item)
+	hotlist_last = last;
+}
+
+static void hotlist__unlink_and_free(hotlist_item *last, hotlist_item *item)
+{
+    hotlist__unlink(last, item);
+    hotlist__free_item(item);
+
+    hotlist_changed = TRUE;
+    hotlist_count--;
+}
+
+static void hotlist__add(char *url, char *title, time_t t, BOOL in_order)
 {
     hotlist_item *item;
 
@@ -134,19 +165,10 @@ static void hotlist__add(char *url, char *title, BOOL in_order)
     /* fill in data */
     item->url = url;
     item->title = title;
+    item->last_used = t;
 
     hotlist_changed = TRUE;
-}
-
-static void hotlist__unlink(hotlist_item *last, hotlist_item *item)
-{
-    if (last)
-	last->next = item->next;
-    else
-	hotlist_list = item->next;
-
-    if (hotlist_last == item)
-	hotlist_last = last;
+    hotlist_count++;
 }
 
 static void hotlist__remove(const char *url, const char *title)
@@ -160,10 +182,7 @@ static void hotlist__remove(const char *url, const char *title)
 	if ((url == NULL || item->url == NULL || strcmp(url, item->url) == 0) &&
 	    (title == NULL || item->title == NULL || strcmp(title, item->title) == 0))
 	{
-	    hotlist__unlink(last, item);
-	    hotlist__free_item(item);
-
-	    hotlist_changed = TRUE;
+	    hotlist__unlink_and_free(last, item);
 	}
 	else
 	{
@@ -172,6 +191,38 @@ static void hotlist__remove(const char *url, const char *title)
 
 	item = next;
     }
+}
+
+/* ---------------------------------------------------------------------- */
+
+static void hotlist__remove_oldest(void)
+{
+    hotlist_item *item, *last;
+
+    time_t lru_time = INT_MAX;
+    hotlist_item *lru_item = NULL, *lru_last = NULL;
+
+    for (item = hotlist_list, last = NULL; item; )
+    {
+	if (lru_time > item->last_used)
+	{
+	    lru_time = item->last_used;
+	    lru_item = item;
+	    lru_last = last;
+	}
+	last = item;
+	item = item->next;
+    }
+
+    if (lru_item)
+	hotlist__unlink_and_free(lru_last, lru_item);
+}
+
+static void hotlist__trim_length(void)
+{
+    if (config_hots_length > 0)
+	while (hotlist_count > config_hots_length)
+	    hotlist__remove_oldest();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -237,10 +288,7 @@ void hotlist__remove_list(const char *list_orig)
 		if (index == current)
 		{
 		    /* remove */
-		    hotlist__unlink(last, item);
-		    hotlist__free_item(item);
-
-		    hotlist_changed = TRUE;
+		    hotlist__unlink_and_free(last, item);
 		}
 		else
 		{
@@ -261,25 +309,89 @@ void hotlist__remove_list(const char *list_orig)
 
 /* ---------------------------------------------------------------------- */
 
+static void hotlist__read_header(FILE *in, hotlist_info *info)
+{
+    int format = 0;
+    int record_size = 2;
+
+    while (!feof(in) && !ferror(in))
+    {
+	char *s = xfgets_without_nl(in);
+	if (s[0] != '#')
+	{
+	    if (strncmp(s, "Format:", sizeof("Format:")-1) == 0)
+		format = atoi(s + sizeof("Format:")-1);
+	    else if (strncmp(s, "Record:", sizeof("Record:")-1) == 0)
+		record_size = atoi(s + sizeof("Record:")-1);
+	    else if (strncmp(s, "Data", sizeof("Data")-1) == 0)
+		break;
+	    /* if no format has been seen then give up on header scan at this point */
+	    else if (format == 0)
+		break;
+	}
+	mm_free(s);
+    }
+
+    /* if we didn't get new format mark then reset to beginning of file */
+    if (format == 0)
+	fseek(in, 0, SEEK_SET);
+
+    /* write out values */
+    if (info)
+    {
+	info->format = format;
+	info->record_size = record_size;
+    }
+}
+
 static void hotlist__read(FILE *in)
 {
+    hotlist_info info;
+
+    hotlist__read_header(in, &info);
+
     while (!feof(in) && !ferror(in))
     {
 	char *url, *title;
+	int i, last_used = 0;
 
 	url = xfgets_without_nl(in);
 	title = xfgets_without_nl(in);
 
+	if (info.record_size >= 3)
+	    mm_free(xfgets_without_nl(in));
+
+	if (info.record_size >= 4)
+	{
+	    char *s = xfgets_without_nl(in);
+	    last_used = (time_t)strtoul(s, NULL, 16);
+	    mm_free(s);
+	}
+
 	if (url)
-	    hotlist__add(url, title, FALSE);
+	    hotlist__add(url, title, last_used, FALSE);
+
+	/* skip any extra unused records */
+	for (i = 4; i < info.record_size; i++)
+	    mm_free(xfgets_without_nl(in));
     }
     hotlist__sort();
+}
+
+static void hotlist__write_header(FILE *in)
+{
+    fprintf(in, "# "PROGRAM_NAME" favorites\n");
+    fprintf(in, "Format: 1\n");
+    fprintf(in, "Record: 4\n");
+    fprintf(in, "Data\n");
 }
 
 static void hotlist__write(FILE *out)
 {
     hotlist_item *item;
 
+    hotlist__write_header(out);
+    
     for (item = hotlist_list; item; item = item->next)
     {
 	STBDBG(("hotlist__write: item %p url %p title %p\n", item, item->url, item->title));
@@ -295,6 +407,12 @@ static void hotlist__write(FILE *out)
 	    if (item->title)
 		fputs(item->title, out);
 	    fputc('\n', out);
+
+	    /* Supposedly the icon name */
+	    fputc('\n', out);
+
+	    /* Extra information */
+	    fprintf(out, "%08x\n", item->last_used);
 	}
     }
 }
@@ -321,6 +439,7 @@ BOOL hotlist_read(const char *file)
 	hotlist__read(f);
 	fclose(f);
 
+	hotlist__trim_length();
 	hotlist__sort();
     }
 
@@ -356,7 +475,8 @@ os_error *hotlist_add(const char *url, const char *title)
     
     sound_event(snd_HOTLIST_ADD);
 
-    hotlist__add(strdup(url), strdup(title), TRUE);
+    hotlist__add(strdup(url), strdup(title), time(NULL), TRUE);
+    hotlist__trim_length();
     hotlist__sort();
 
 /*     if ((ep = ensure_modem_line()) != NULL) */
@@ -426,7 +546,18 @@ void hotlist_return_url(int index, char **url)
 	;
 
     if (item)
+    {
+	/* update last used time */
+	item->last_used = time(NULL);
+
+	/* write out the file as its changed */
+	hotlist_write(config_hotlist_file);
+
+	/* write out the URL we've found */
 	*url = strdup(item->url);
+    }
+    else
+	*url = NULL;
 }
 
 /* ---------------------------------------------------------------------- */

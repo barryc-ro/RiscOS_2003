@@ -2193,13 +2193,13 @@ void tb_event_handler(int event, fe_view v)
     
     if (tbi)
     {
-	fe_view v = fe_selected_view();
-	if (!v)
-	    v = main_view;
+/* 	fe_view v = fe_selected_view(); */
+/* 	if (!v) */
+/* 	    v = main_view; */
 
 	claimed = TRUE;
 
-	fe_pointer_mode_update(pointermode_OFF);
+/* 	fe_pointer_mode_update(pointermode_OFF); */
 
 	switch (event)
 	{
@@ -2211,6 +2211,18 @@ void tb_event_handler(int event, fe_view v)
 	case fevent_TOOLBAR_MOVE_RIGHT:
 	    /* move to next icon */
 	    movehighlight(tbi, +1);
+	    break;
+
+	case fevent_TOOLBAR_PAGE_UP:
+	    pointer_mode = pointermode_ON;
+	    fevent_handler(fevent_SCROLL_PAGE_UP, v);
+	    pointer_mode = pointermode_OFF;
+	    break;
+
+	case fevent_TOOLBAR_PAGE_DOWN:
+	    pointer_mode = pointermode_ON;
+	    fevent_handler(fevent_SCROLL_PAGE_DOWN, v);
+	    pointer_mode = pointermode_OFF;
 	    break;
 
 	case fevent_TOOLBAR_MOVE_UP:

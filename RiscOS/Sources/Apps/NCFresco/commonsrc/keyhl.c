@@ -168,7 +168,7 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 	if (ti->tag == rid_tag_OBJECT)
 	{
 	    rid_text_item_object *tio = (rid_text_item_object *)ti;
-	    if (tio->object->type == rid_object_type_PLUGIN)
+	    if (tio->object->type == rid_object_type_PLUGIN && ti->width > 0)
 		return match_item_LINK;
 	}
 

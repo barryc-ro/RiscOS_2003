@@ -59,11 +59,12 @@ typedef struct
 
 /* LOAD_DATA flags */
 #define ncfresco_loaddata_NOT_ALL	0x00000001
-#define ncfresco_loaddata_CONFIG	0x00000002
+#define ncfresco_loaddata_CONFIG	0x00000002 /* all loads are assumed if NOT_ALL is clear */
 #define ncfresco_loaddata_COOKIES	0x00000004
 #define ncfresco_loaddata_PASSWORDS	0x00000008
 #define ncfresco_loaddata_HOTLIST	0x00000010
 #define ncfresco_loaddata_PLUGINS	0x00000020
 #define ncfresco_loaddata_ALLOW		0x00000040
+#define ncfresco_loaddata_FLUSH		0x00000080 /* flush is assumed if NOT_ALL is clear */
 
 #endif /* __urlopen_h */

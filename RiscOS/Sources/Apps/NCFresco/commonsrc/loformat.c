@@ -719,6 +719,9 @@ static void find_widest_info(RID_FMT_STATE *fmt)
     if (LM != NOTINIT)
 	if (used > fmt->stream->widest)
 	    fmt->stream->widest = used;
+
+    FMTDBG(("find_widest_info: LM %d, XP %d, FW %d, RM %d, used %d, widest now %d\n",
+	    LM, fmt->x_text_pos, fmt->format_width, fmt->text_line->floats->right_margin, used, fmt->stream->widest));
 }
 
 /*****************************************************************************
@@ -777,7 +780,7 @@ static void fracture_copy_left(RID_FMT_STATE *fmt)
     rid_pos_item *old = fmt->text_line;
     rid_pos_item *new = old->next;
     rid_float_item *fi = old->floats->left;
-    rid_float_item *last;
+    rid_float_item *last = NULL;
     rid_float_item **finp = &new->floats->left;	/* Floating Item Next Pointer */
     int carried_over = 0;
 
@@ -818,7 +821,7 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
     rid_pos_item *new = old->next;
     rid_float_item *fi = old->floats->right;
     rid_float_item **finp = &new->floats->right;
-    rid_float_item *last;
+    rid_float_item *last = NULL;
     int carried_over = 0;
 
     ASSERT(new != NULL);
@@ -1266,6 +1269,7 @@ static void next_floating_item(RID_FMT_STATE *fmt)
        floating item will always fit, whatever the fwidth. */
 
     /* Better than spinning! */
+
     ASSERT(fmt->next_item->width <= fmt->format_width);
 
     while  ( ! floating_item_fits(fmt) )
@@ -1295,6 +1299,10 @@ static void formatting_start(RID_FMT_STATE *fmt)
     static char *fnames[3] = { "MAYBE", "MUST", "DONT" };
 
     rid_text_item *ti;
+
+    FMTDBG(("formatting_start: format_width %d, stream->fwidth %d, stream->widest %d, minwidth %d, maxwidth %d\n", 
+	    fmt->format_width, fmt->stream->fwidth, fmt->stream->widest,
+	    fmt->stream->width_info.minwidth, fmt->stream->width_info.maxwidth)); 
 
     /* Pick up the stream we are formatting */
     fmt->next_item = fmt->stream->text_list;

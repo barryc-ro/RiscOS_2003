@@ -135,8 +135,8 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	height = get_value(ti, &obj->userheight, 0, fwidth);
 
 	if (obj->state.plugin.pp == NULL &&
-	    (obj->classid_ftype != -1 || obj->data_ftype != -1) &&
-	    width > 0 && height > 0)
+	    (obj->classid_ftype != -1 || obj->data_ftype != -1))
+/* 	    width > 0 && height > 0) */
 	{
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
 	    
@@ -244,7 +244,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     case rid_object_type_PLUGIN:
 	do_alt = TRUE;
-	do_plinth = TRUE;
+	do_plinth = ti->width != 0;
 	break;
 
     case rid_object_type_UNKNOWN:

@@ -60,7 +60,7 @@ static void colspan_algorithmLR(rid_table_item *table, int slot, BOOL horiz)
 	pcp_cell next_cell = cell+1;
 	pcp_group group = cell->first_end;
 	
-	/*ASSERT(cell->width[slot] != NOTINIT);*/ /* must be set by now */
+	ASSERT(cell->width[slot] != NOTINIT); /* must be set by now */
 	
 	/* initialise next cell's leftmost using min width of cell alone */
 	next_cell->leftmost = (cell->leftmost + cell->width[slot]);
@@ -73,7 +73,7 @@ static void colspan_algorithmLR(rid_table_item *table, int slot, BOOL horiz)
 	    
 	    const int my_leftmost = the_cells[group->istart].leftmost + group->width[slot];
 
-	    /*ASSERT(group->width[slot] != NOTINIT);*/ /* must be set or already screwed! */
+	    ASSERT(group->width[slot] != NOTINIT); /* must be set or already screwed! */
 
 	    if (my_leftmost > next_cell->leftmost)
 	    {
@@ -150,9 +150,9 @@ extern int colspan_algorithm(rid_table_item *table, int slot, BOOL horiz)
     int x;
     pcp_cell the_cells = table->colspans;
 
-    /*FMTDBG(("colspan_algorithm used %s (slot %s)\n", 
+    FMTDBG(("colspan_algorithm used %s (slot %s)\n", 
 	    horiz ? "horizontally" : "vertically",
-	    WIDTH_NAMES[slot]));*/
+	    WIDTH_NAMES[slot]));
 
     /*colspan_trace_cells(table,horiz);*/
 

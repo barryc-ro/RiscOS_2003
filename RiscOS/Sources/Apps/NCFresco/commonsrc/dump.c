@@ -697,9 +697,9 @@ extern void dump_table(rid_table_item *ptr, char *base)
 	int x,y;
 
 #ifndef NO_PTRS
-        my_print("rid_table_item %p", ptr);
+        my_print("rid_table_item id=%d %p", ptr->idnum, ptr);
 #else
-        my_print("rid_table_item");
+        my_print("rid_table_item id=%d", ptr->idnum);
 #endif
         if (ptr == NULL)
         	return;

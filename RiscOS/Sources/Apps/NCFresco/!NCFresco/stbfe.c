@@ -258,7 +258,7 @@ void fe_pointer_mode_update(pointermode_t mode)
     switch (mode)
     {
         case pointermode_OFF:
-            os_cli("pointer 0");
+            _kernel_osbyte(106, 0, 0);
 	    if (pointer_mode == pointermode_ON)
 		fe_frame_link_redraw_all(main_view);
             break;
@@ -381,7 +381,22 @@ void fe_set_pointer(int item_flags)
 
         if (info->name)
         {
-            sprite_id id;
+#if 1
+	    if (_swix(OS_SpriteOp, _INR(0,6),
+		      256+36,
+		      resspr_area(), info->name,
+		      2, info->x, info->y,
+		      0, 0) == NULL ||
+		_swix(Wimp_SpriteOp, _INR(0,6),
+		      36,
+		      0, info->name,
+		      2, info->x, info->y,
+		      0, 0) == NULL)
+	    {
+		_kernel_osbyte(106, 2, 0);
+	    }
+#else
+	    sprite_id id;
 	    os_error *e;
 
             id.tag = sprite_id_name;
@@ -396,13 +411,22 @@ void fe_set_pointer(int item_flags)
 
 /* 		STBDBG(("stbfe: set pointer to wimp area %p error '%s'\n", wimp_spritearea, e ? e->errmess : "")); */
 	    }
+#endif
         }
         else
         {
             if (pointer_mode == pointermode_OFF)
+#if 1
+		_kernel_osbyte(106, 0, 0);
+#else
                 os_cli("pointer 0");
+#endif
             else
+#if 1
+		_kernel_osbyte(106, 1, 0);
+#else
                 pointer_reset_shape();
+#endif
         }
 
         pointer_current = num;
@@ -1276,6 +1300,7 @@ static os_error *fe__print(fe_view v, int size)
 	if ((vv = fe_locate_view(print_targets[size])) != NULL)
 	    fe_dispose_view(vv);
 
+	tb_status_button(print_events[size], tb_status_button_UNPRESSED);
 	tb_status_button(print_events[size], tb_status_button_ACTIVE);
 	tb_status_button(fevent_TOOLBAR_EXIT, tb_status_button_PRESSED);
     }
@@ -1292,7 +1317,10 @@ static os_error *fe__print(fe_view v, int size)
 			       print__copies);
 
     if (use_toolbox)
+    {
 	tb_status_button(print_events[size], tb_status_button_INACTIVE);
+	tb_status_button(print_events[size], tb_status_button_PRESSED);
+    }
 
     if (old_size != -1)
     {
@@ -2514,6 +2542,8 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	{
 	    if (current_url == NULL || strcmp(current_url, buffer) != 0)
 		frontend_open_url(buffer, NULL, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	    else if (current)
+		fe_dispose_view(current);
 	}
     }
 }
@@ -4502,7 +4532,22 @@ static void re_read_config(int flags)
 
     if ((flags & ncfresco_loaddata_NOT_ALL) == 0)
 	flags |= ncfresco_loaddata_CONFIG | ncfresco_loaddata_COOKIES | ncfresco_loaddata_PASSWORDS |
-	    ncfresco_loaddata_HOTLIST | ncfresco_loaddata_PLUGINS | ncfresco_loaddata_ALLOW;
+	    ncfresco_loaddata_HOTLIST | ncfresco_loaddata_PLUGINS | ncfresco_loaddata_ALLOW | ncfresco_loaddata_FLUSH;
+
+    /* flush all data first */
+    if (flags & ncfresco_loaddata_FLUSH)
+    {
+	fe_history_dispose(main_view);
+	fe_global_history_dispose();
+
+	cookie_dispose_all();
+
+	access_flush_cache();
+
+	auth_dispose();
+
+	plugin_list_dispose();
+    }
 
     if ((flags & ncfresco_loaddata_CONFIG) &&
 	file_type("<"PROGRAM_NAME"$Config>") != -1)
@@ -4580,7 +4625,7 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	if (delta == -1)
 	{			/* smartcard removed */
 	    fe_dbox_cancel();
-
+#if 0
 	    fe_history_dispose(main_view);
  	    fe_global_history_dispose();
 
@@ -4591,6 +4636,7 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	    auth_dispose();
 
 	    plugin_list_dispose();
+#endif
 	}
 	else if (delta & smartcard_INSERTED)
 	{			/* smartcard inserted */
@@ -4725,12 +4771,16 @@ void fe_event_process(void)
 
 	    /* process key press */
 	    v = find_view(e.data.key.c.w);
-	    STBDBG(( "\nkey: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
+	    if (!v)
+		v = fe_selected_view();
+	    if (!v)
+		v = main_view;
 
+	    STBDBG(( "\nkey: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
+	    
 	    fe_key_handler(v, &e, use_toolbox,
 			   keyboard_state == fe_keyboard_OFFLINE ? fe_browser_mode_DESKTOP :
-			   v ? v->browser_mode :
-			   main_view->browser_mode);
+			   v->browser_mode);
             break;
         }
 
@@ -4788,6 +4838,11 @@ void fe_event_process(void)
 		if (v_old)
 		{
 		    v_old->is_selected = FALSE;
+
+		    /* schedule a redraw on the old link positions */
+		    fe_frame_link_redraw_all(v_old);
+
+		    /* then free the links */
 		    fe_frame_link_array_free(v_old);
 
 /* 		    v_old->current_link = NULL; */
@@ -5161,14 +5216,7 @@ static BOOL fe_initialise(void)
 {
     os_error *e;
     char *s;
-
-#if HEAPCHECK
-    void __heap_checking_on_all_allocates(void);
-    void __heap_checking_on_all_deallocates(void);
-
-    __heap_checking_on_all_allocates();
-    __heap_checking_on_all_deallocates();
-#endif
+    int t;
 
     /* Initialise the WIMP stuff */
     visdelay_init();
@@ -5208,8 +5256,21 @@ static BOOL fe_initialise(void)
     flex_init(program_name);
     heap_init(program_name);
 #else
-    MemFlex_Initialise2(program_name);
-    MemHeap_Initialise(program_name);
+    {
+	char buffer[32];
+
+	strncpysafe(buffer, program_name, sizeof(buffer));
+	strlencat(buffer, " data", sizeof(buffer));
+	MemFlex_Initialise2(buffer);
+
+	strncpysafe(buffer, program_name, sizeof(buffer));
+	strlencat(buffer, " heap", sizeof(buffer));
+	MemHeap_Initialise(buffer);
+
+	strncpysafe(buffer, program_name, sizeof(buffer));
+	strlencat(buffer, " image ws", sizeof(buffer));
+	heap_init(buffer);
+    }
 #endif
     atexit(&fe_tidyup);
 
@@ -5223,6 +5284,9 @@ static BOOL fe_initialise(void)
     config_init();
 
     /* Init the NVRAM based configuration */
+    if (nvram_read(NVRAM_PRINT_COLOUR_TAG, &t))
+	config_print_nocol = !t;
+
     if (nvram_read(NVRAM_FONTS_TAG, &config_display_scale))
 	config_display_scale = config_display_scales[config_display_scale];
 

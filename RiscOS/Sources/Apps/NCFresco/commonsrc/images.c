@@ -1603,23 +1603,27 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 
 	if (present == access_test_PRESENT || ((flags & image_find_flag_CHECK_EXPIRE) == 0 && present == access_test_EXPIRED))
 	{
-	    being_fetched++;
-
-	    /* If the file is already around then we don't care if it was deferred, do we? */
-	    i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
-
-	    ep = access_url( url,
-			     (flags & image_find_flag_NEED_SIZE ? access_IMAGE : 0) |
-			     (flags & image_find_flag_URGENT ? access_MAX_PRIORITY : 0),
-			     0, 0, i->ref, &image_progress,
-	                     &image_completed, i, &(i->ah));
-	    if (ep)
+	    /* don't fetch too many at once because of the transient memory usage */
+	    if ((being_fetched < config_max_files_fetching) || (flags & image_find_flag_URGENT))
 	    {
-		i->ah = NULL;
-		image_set_error(i);
-		usrtrc( "Error accessing image: %s\n", ep->errmess);
+		being_fetched++;
 
-		being_fetched--;
+		/* If the file is already around then we don't care if it was deferred, do we? */
+		i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
+
+		ep = access_url( url,
+				 (flags & image_find_flag_NEED_SIZE ? access_IMAGE : 0) |
+				 (flags & image_find_flag_URGENT ? access_MAX_PRIORITY : 0),
+				 0, 0, i->ref, &image_progress,
+				 &image_completed, i, &(i->ah));
+		if (ep)
+		{
+		    i->ah = NULL;
+		    image_set_error(i);
+		    usrtrc( "Error accessing image: %s\n", ep->errmess);
+
+		    being_fetched--;
+		}
 	    }
 	}
 	else

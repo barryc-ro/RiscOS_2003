@@ -201,6 +201,7 @@ static int internal_decode_print_options(const char *query)
 
     if (!cancel)
     {
+#if 0
 	s = extract_value(query, "copies=");
 	print__copies = atoi(s);
 	mm_free(s);
@@ -210,22 +211,35 @@ static int internal_decode_print_options(const char *query)
 
 	s = extract_value(query, "scaling=");
 	config_print_scale = atoi(s);
-	mm_free(s);
 
+	mm_free(s);
 	if (config_print_scale < 5)
 	    config_print_scale = 5;
+#endif
 
-	s = extract_value(query, "orient=");
-	config_print_sideways = strcmp(s, "side") == 0;
-	mm_free(s);
+	if ((s = extract_value(query, "orient=")) != NULL)
+	{
+	    config_print_sideways = strcmp(s, "side") == 0;
+	    mm_free(s);
+	}
 
+	if ((s = extract_value(query, "color=")) != NULL)
+	{
+	    config_print_nocol = strcmp(s, "bw") == 0;
+	    mm_free(s);
+
+	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
+	}
+	
+#if 0
+ 	config_print_nocol = strstr(query, "f=col") == 0;
 	config_print_nopics = strstr(query, "f=pic") == 0;
-/* 	config_print_nocol = strstr(query, "f=col") == 0; */
 	config_print_nobg = strstr(query, "f=bg") == 0;
 	config_print_collated = strstr(query, "f=collate") != 0;
 	config_print_reversed = strstr(query, "f=rev") != 0;
 
 	print__ul = strstr(query, "f=ul") != 0;
+#endif
     }
 
     return fe_internal_url_NO_ACTION;
@@ -236,6 +250,10 @@ static os_error *fe_print_options_write_file(FILE *f)
     fputs(msgs_lookup("printT"), f);
     fputc('\n', f);
 
+#if 1
+    fprintf(f, msgs_lookup("print1"), checked(!config_print_sideways), checked(config_print_sideways));
+    fprintf(f, msgs_lookup("print2"), checked(!config_print_nocol), checked(config_print_nocol));
+#else
     fprintf(f, msgs_lookup("print1"), print__copies, checked(config_print_collated), checked(config_print_reversed));
     fprintf(f, msgs_lookup("print2"), checked(!config_print_sideways), checked(config_print_sideways));
     fprintf(f, msgs_lookup("print3"), config_print_scale);
@@ -243,7 +261,7 @@ static os_error *fe_print_options_write_file(FILE *f)
     fprintf(f, msgs_lookup("print5"), checked(!config_print_nocol));
     fprintf(f, msgs_lookup("print6"), checked(!config_print_nobg));
     fprintf(f, msgs_lookup("print7"), checked(print__ul));
-
+#endif
     fputs(msgs_lookup("printF"), f);
     fputc('\n', f);
 
@@ -908,9 +926,8 @@ static os_error *fe_mem_dump_write_file(FILE *f)
     fprintf(f, "</PRE>");
 
     fprintf(f, "<H2><A NAME='image'>Image heap</A></H2><PRE>");
-#if !MEMLIB
     heap__dump(f);
-#endif
+
     fprintf(f, "</PRE>");
 
     return NULL;
@@ -1835,6 +1852,10 @@ void fe_internal_deleting_view(fe_view v)
     else if (strcasecomp(v->name, "__print") == 0)
     {
 	tb_status_button(fevent_PRINT, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__printoptions") == 0)
+    {
+	tb_status_button(fevent_OPEN_PRINT_OPTIONS, tb_status_button_INACTIVE);
     }
     else if (strcasecomp(v->name, "__printletter") == 0)
     {

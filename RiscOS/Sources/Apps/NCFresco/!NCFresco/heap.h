@@ -14,7 +14,7 @@
 # ifndef __heap_h
 # define __heap_h
 
-#if MEMLIB
+#if 0 // MEMLIB
 
 #define heap_init(h) 
 #define heap_alloc(s) mm_malloc(s)

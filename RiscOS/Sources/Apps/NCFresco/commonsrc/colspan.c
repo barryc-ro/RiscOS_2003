@@ -367,7 +367,7 @@ extern void colspan_column_and_eql_set(rid_table_item *table,
     for (x = 0; x < max; x++)
     {
 	if ( (the_cells[x].flags & AND) == EQL )
-	    the_cells[x].width[slot] = 0;
+	    the_cells[x].width[slot] = SET;
     }
 }
 
@@ -2018,6 +2018,11 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	FMTDBG(("colspan_share_extra_space: have width\n"));
     if (table->flags & rid_tf_HAVE_HEIGHT)
 	FMTDBG(("colspan_share_extra_space: have height\n"));
+
+    /* Experiment by Dave */
+	colspan_algorithm(table, RAW_MIN, horiz);
+	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
 
     if (fwidth < master[RAW_MIN])
     {

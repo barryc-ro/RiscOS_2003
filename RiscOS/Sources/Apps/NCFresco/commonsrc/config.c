@@ -215,6 +215,7 @@ config_item citems[] = {
 { config_FILE, "plugin.file", 	(void *)offsetof(struct config_str, plugin_file),	"Configure file for plugins", "<"PROGRAM_NAME"$Dir>.PlugIns" },
 { config_BOOL, "plugin.uptodate", 	(void *)offsetof(struct config_str, plugin_uptodate),	"Keep plugin file up to date", (void *)0 },
 { config_BOOL, "netscape.fake", 	(void *)offsetof(struct config_str, netscape_fake),	"Alter UserAgent header", (void *)0 },
+{ config_INT, "hots.length", 	(void *)offsetof(struct config_str, hots_length),	"Max number in hotlist", (void *)0 },
 
 { config_LAST, NULL, NULL, NULL, 0 }
 };

@@ -16,6 +16,8 @@
 #include "stbmenu.h"
 #include "stbtb.h"
 
+#include "frameutils.h"
+
 #include "fevents.h"
 #include "util.h"
 
@@ -521,11 +523,12 @@ static key_list rca_toolbar_keys[] =
     { akbd_Ctl + akbd_UpK,  fevent_TOOLBAR_MOVE_UP, key_list_REPEAT },
     { akbd_UpK,             fevent_TOOLBAR_MOVE_UP, key_list_REPEAT },
     { akbd_DownK,           fevent_TOOLBAR_MOVE_DOWN, key_list_REPEAT },
+    { akbd_Ctl + akbd_DownK,fevent_TOOLBAR_MOVE_DOWN, key_list_REPEAT },
 
     { 13,                   fevent_TOOLBAR_ACTIVATE },
 
-    { akbd_PageUpK,         fevent_SCROLL_PAGE_UP + fevent_WINDOW, key_list_REPEAT },
-    { akbd_PageDownK,       fevent_SCROLL_PAGE_DOWN + fevent_WINDOW, key_list_REPEAT },
+    { akbd_PageUpK,         fevent_TOOLBAR_PAGE_UP, key_list_REPEAT },
+    { akbd_PageDownK,       fevent_TOOLBAR_PAGE_DOWN, key_list_REPEAT },
 
     { akbd_Sh + akbd_Ctl + akbd_UpK,    fevent_SCROLL_UP + fevent_WINDOW, key_list_REPEAT },
     { akbd_Sh + akbd_Ctl + akbd_DownK,  fevent_SCROLL_DOWN + fevent_WINDOW, key_list_REPEAT },
@@ -703,7 +706,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	break;
     }
 
-    if (v == NULL && cs->w == tb_status_w())
+    if (cs->w == tb_status_w())
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_TOOLBAR));
     }
@@ -778,7 +781,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 
     /* call event handler or pass on */
     if (event != -1)
-        fevent_handler(event, v ? v : main_view);
+        fevent_handler(event, v);
     else
         wimp_processkey(chcode);
 }

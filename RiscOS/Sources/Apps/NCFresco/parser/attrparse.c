@@ -528,7 +528,10 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
     {
 	/*extern int fwidth_scale;*/
 	if (v.type == value_absunit)
+	{
 	    v.u.f /= fwidth_scale;
+	    /*v.u.f += .99;*/
+	}
     }
 #endif
 

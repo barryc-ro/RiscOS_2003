@@ -699,6 +699,13 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 	FMTDBG(("normalise_percentages: percentages join both extremes\n"));
     }
 
+    /* Where -1 < 0, set to 0 */
+    colspan_all_and_eql_set(table, horiz, ACTUAL,
+			    0, 0, 0);
+    colspan_all_and_eql_lt_copy(table, horiz, PCT_RAW,
+				0, 0, ACTUAL);
+
+
     /* Initialise column header locations without a percentage
        contribution */
     colspan_column_and_eql_set(table, horiz, PCT_RAW,

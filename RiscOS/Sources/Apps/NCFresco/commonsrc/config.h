@@ -143,6 +143,8 @@ struct config_str
     int plugin_uptodate;
 
     int netscape_fake;
+
+    int hots_length;
 };
 
 extern struct config_str config_array;
@@ -272,6 +274,7 @@ extern struct config_str config_array;
 #define config_plugin_uptodate (config_array.plugin_uptodate)
 
 #define config_netscape_fake (config_array.netscape_fake)
+#define config_hots_length (config_array.hots_length)
 
 #endif
 

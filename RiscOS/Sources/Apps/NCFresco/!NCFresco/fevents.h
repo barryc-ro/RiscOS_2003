@@ -187,6 +187,8 @@
 #define fevent_TOOLBAR_MOVE_UP		    0x20D2
 #define fevent_TOOLBAR_MOVE_DOWN	    0x20D3
 #define fevent_TOOLBAR_ACTIVATE		    0x20D4
+#define fevent_TOOLBAR_PAGE_UP		    0x20D5
+#define fevent_TOOLBAR_PAGE_DOWN	    0x20D6
 
 #define fevent_FRAME_LINK_LEFT		    0x20E0
 #define fevent_FRAME_LINK_RIGHT		    0x20E1

@@ -194,7 +194,7 @@ VALUE colour_lookup(STRING name)
 	    if (name.bytes > 5 && isdigit(name.ptr[5]))
 		n = n*10 + (name.ptr[5] - '0');
 	    n = (n*255 + 50)/99;
-	    v.u.b = (n<<24) | (n<<16) | n;
+	    v.u.b = (n<<16) | (n<<8) | n;
 	}
 	else
 	{
