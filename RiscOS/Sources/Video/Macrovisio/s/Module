@@ -50,6 +50,8 @@
 ; 13-Mar-00  BJGA 0.29          Implemented NewColourScheme code - completely new PaletteV code for both video paths.
 ; 16-Mar-00  BJGA 0.30          Bugfixes to NewColourScheme code - BulkRead doesn't attempt to correct the output block twice if two
 ;                                identical block pointers are passed in; BulkRead_Macro allows R3 to be zero for colour types 24/25
+; 07-Apr-00  NBingham 0.31      No code change.
+; 09-Jun-00  BJGA 0.32          Added SWI Macrovision_GetState.
 ;
 
 	LEADR	Module_LoadAddr
@@ -165,26 +167,20 @@ SwitchState     #       1               ; 0 = not switching
                                         ; 2 = waiting for VSync to switch paths
                                         ; 3 = waiting for VSync to set palette appropriate for new path
 SwitchCountdown #       1               ; number of fields to wait until unblanking
+
+StatusByte      #       1               ; SAA7183 status byte (used for determining encoding status of CC)
         AlignSpace
+NormalEDPalette #       36              ; space for storing ED palette across caption mode
 
 NextMacroType   #       4               ; MacroType to assert at next VSync (unless I²C bus is in use)
 
-IICBusyFlag     #       4
-
-        MACRO
-$label  MyIIC_Control $con
-$label
-        MOV$con lr, #1
-        STR$con lr, IICBusyFlag
-        SWI$con XIIC_Control
-        MOV$con lr, #0
-        STR$con lr, IICBusyFlag
-        MEND
 
                 #       FIFO_Size - ((:INDEX:@) :AND: (FIFO_Size-1))
 CaptionFIFO     #       FIFO_Size
 ExtDataFIFO     #       FIFO_Size
  ]
+
+PF0_Block       #       24      ; returned from PlatformFeatures 0
 
  [ NewColourScheme
 ; Copies of important VDU variables
@@ -207,6 +203,8 @@ GammaTables     #       256*3
 BulkWriteBlock  #       4*256*2 ; up to 256 colours, up to 2 flash states
 
 PointerPalette  #       4*4     ; soft-copy of pointer palette in non-Macrovision path (offset 0 not used)
+
+MagicWord_BulkPassThrough *     &44454343 ; "CCED"
  ]
 
 Module_WorkspaceSize * :INDEX: @
@@ -346,6 +344,7 @@ Mod_Init Entry
         STR     r0, PaletteVClaimed
       ]
       [ Captions
+        STRB    r0, SwitchState
 	STR	r0, EventVState
       |
 	STR	r0, EventVClaimed
@@ -366,7 +365,6 @@ Mod_Init Entry
  ]
 
  [ Captions
-        STR     r0, IICBusyFlag
         STRB    r0, ControlCodeState
 
 	MOV	r0, #&70	; IIC offset of RCV2 registers in 7183
@@ -493,6 +491,7 @@ Mod_Init Entry
    ]
  ]
 
+        CLRV
  [ ExternalSyncGenerator
 ; doesn't matter what we put as TV format here, since Macrovision chip
 ; is not master sync generator
@@ -501,8 +500,8 @@ Mod_Init Entry
  |
    [ MPEG2PoduleStatus2_NTSCNotPAL <> 0
 	MOV	r0, #CardControlReason_ReadStatusRegister
+	MOV     r1, #0                  ; emergency fallback
 	SWI	XMPEGVideo_CardControl
-	EXIT	VS
 	ANDS	r1, r1, #(MPEG2PoduleStatus2_NTSCNotPAL :SHL: 8) ; 0 (PAL) if bit clear
    |
 	ASSERT	IOMD_C_PALNTSCType <> 0
@@ -513,6 +512,15 @@ Mod_Init Entry
 	MOVNE	r1, #1			; 1 (NTSC) if bit set
 	STR	r1, PendingTVStandard
  ]
+        ADREQL  r14, PF0_PALTemplate
+        ADRNEL  r14, PF0_NTSCTemplate
+        LDMIA   r14, {r2-r6}
+        ADR     r14, PF0_Block
+        STMIA   r14, {r2-r6}
+        ADREQL  r14, PF0_PALString
+        ADRNEL  r14, PF0_NTSCString
+        STR     r14, PF0_Block+20
+        EXIT    VS
 	MOV	r0, #0			; default to macrovision off
 	BL	SelectVideoPath
 	EXIT	VS
@@ -981,6 +989,12 @@ MyEventV Entry "r0-r4"
 	TEQ	r0, #Event_VSync
 	EXIT	NE
       [ Captions
+        MOV     r4, pc
+        ORR     r0, r4, #SVC_mode               ; switch to SVC_mode, so we can save lr_svc
+        TEQP    r0, #0
+        NOP
+        Push    "lr"
+
         LDR     r2, EventVState
         BIC     r2, r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting :OR: EventVState_OKToSwitch
 
@@ -993,13 +1007,20 @@ MyEventV Entry "r0-r4"
         STR     r0, VSyncCount
         ORREQ   r2, r2, #EventVState_Modulate   ; only modulate if anti-taping and count has reached zero
 
-        LDR     r14, IICBusyFlag
+        Push    "r2"
+        SETV                                    ; ensure V set if TST below sets EQ
+        TST     r2, #EventVState_Captioning :OR: EventVState_Switching
+        MOVNE   r0, #IICDevice_SAA7183 :OR: 1
+        ADRNE   r1, StatusByte
+        MOVNE   r2, #1                          ; status byte is needed to decide on CC operations
+        SWINE   XIIC_Control                    ; IIC read operation doubles as an IIC reentrancy check
+        Pull    "r2"
+        BVS     %FT10                           ; skip next bit if not captioning or switching, or if IIC operation in progress in foreground
+
         TST     r2, #EventVState_Switching      ; if a path switch is pending
-        TEQNE   r14, #1                         ; and foreground isn't doing IIC_Control,
         ORRNE   r2, r2, #EventVState_OKToSwitch ; then note we can do a path switch this time (rather than defer it)
 
         TST     r2, #EventVState_Captioning     ; if not captioning,
-        TEQNE   r14, #1                         ; or foreground is already doing an IIC_Control,
         BEQ     %FT10                           ; don't bother checking FIFOs
 
       [ BigFIFOs
@@ -1038,14 +1059,13 @@ MyEventV Entry "r0-r4"
 
 10      STR     r2, EventVState
         TST     r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting :OR: EventVState_OKToSwitch
-        EXIT    EQ                              ; don't bother with switching to SVC mode if nothing to do
-
-        MOV     r3, r2
-        MOV     r4, pc
-        ORR     r0, r4, #SVC_mode               ; switch to SVC_mode, so we can save lr_svc
-        TEQP    r0, #0
+        BNE     %FT11
+        Pull    "lr"                            ; restore lr_svc
+        TEQP    r4, #0                          ; restore old processor mode
         NOP
-        Push    "lr"
+        EXIT                                    ; exit if nothing else to do
+11
+        MOV     r3, r2
 
         ; Do blanking/switching/unblanking at highest priority, to avoid glitches
         LDRB    r14, SwitchState
@@ -1069,13 +1089,7 @@ MyEventV Entry "r0-r4"
         MOVNE   r1, wp
         SWINE   XOS_AddCallBack
 
-        TST     r3, #EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting
-        SUB     sp, sp, #4
-        MOVNE   r0, #IICDevice_SAA7183 :OR: 1   ; read from device
-        MOVNE   r1, sp
-        MOVNE   r2, #4
-        SWINE   XIIC_Control
-        Pull    "r2"                            ; r2 now contains SAA7183 status byte in bits 0-7
+        LDRB    r2, StatusByte                  ; get value stored earlier
 
       [ {FALSE}                                 ; debug code
         Push    "r0,r1"
@@ -1095,10 +1109,10 @@ MyEventV Entry "r0-r4"
         TSTNE   r2, #1 :SHL: 3                  ; and previous extended data bytes have been encoded by SAA7183
         BLNE    SendExtDataBytes
 
-        Pull    "lr"
-        TEQP    r4, #0                          ; restore old mode
+        Pull    "lr"                            ; restore lr_svc
+        TEQP    r4, #0                          ; restore old processor mode
         NOP
-        EXITS
+        EXITS                                   ; exit
 
       [ {FALSE}
 printdebug
@@ -1265,11 +1279,7 @@ ModulateBits Entry "r0-r3"
 	MOV	r0, #IICDevice_SAA7183
 	ADR	r1, TempModulationBlock
 	MOV	r2, #2				; send sub-address + 1 data byte
-      [ Captions
-        MyIIC_Control
-      |
 	SWI	XIIC_Control
-      ]
 	EXITS					; exit restoring IRQ status
 
 ; ******************************************************************************************************
@@ -1522,6 +1532,10 @@ PV_SetPalette ROUT
 
 PV_BulkRead ROUT
         Push    "r7,r8,r10-r12"
+        LDR     r8, =MagicWord_BulkPassThrough
+        TEQ     r7, r8                  ; internal call?
+        Pull    "r7,r8,r10-r12", EQ
+        BEQ     PassOnExit              ; don't munge supremacy bits if so
         MOV     r7, r1, LSR #24
         BIC     r8, r1, #&FF000000
 
@@ -1579,10 +1593,10 @@ PV_BulkRead ROUT
 70
         TST     r0, #&10
         BIC     r0, r0, #&FF            ; bits 0-7 clear for solid
-        ORREQ   r0, r0, #&FF            ; bits 0-7 set for transparent
+        ORRNE   r0, r0, #&FF            ; bits 0-7 set for transparent
         TST     r1, #&10
         BIC     r1, r1, #&FF            ; bits 0-7 clear for solid
-        ORREQ   r1, r1, #&FF            ; bits 0-7 set for transparent
+        ORRNE   r1, r1, #&FF            ; bits 0-7 set for transparent
 
         TEQ     r7, #18                 ; do we need to store back the first flash colour?
         STRNE   r0, [r2], #4
@@ -1617,6 +1631,10 @@ PV_BulkRead ROUT
 
 PV_BulkWrite ROUT
         Push    "r5-r6,r10-r12"
+        LDR     r6, =MagicWord_BulkPassThrough
+        TEQ     r7, r6                  ; internal call?
+        Pull    "r5-r6,r10-r12", EQ
+        BEQ     PassOnExit              ; don't munge supremacy bits if so
 
         ; Create another palette block, but with supremacy bits as per hardware requirement
         MOV     r3, r1, LSR #24
@@ -2120,22 +2138,22 @@ PV_SetDefaultPalette_Macro ROUT
 defaultpal_1bpp
         &       &00000000, &00000000    ; black
         &       &FFFFFF00, &FFFFFF00    ; white
-        &       &0000FF00, &0000FF00    ; red     \
-        &       &00FF0000, &00FF0000    ; green   |
-        &       &00FFFF00, &00FFFF00    ; yellow  | other colours to program into the DENC
-        &       &FF000000, &FF000000    ; blue    | (may be useful for pointer or border)
-        &       &FF00FF00, &FF00FF00    ; magenta |
-        &       &FFFF0000, &FFFF0000    ; cyan    /
+        &       &00000000, &00000000    ; black                     \
+        &       &FFFFFF00, &FFFFFF00    ; white                     |
+        &       &7777FF00, &7777FF00    ; Lazarus pointer colour 1  | other colours to program into the DENC
+        &       &3333FF00, &3333FF00    ; Lazarus pointer colour 2  | (may be useful for pointer or border)
+        &       &FFFF0000, &FFFF0000    ; Desktop pointer colour 1  |
+        &       &99000000, &99000000    ; Desktop pointer colour 2  /
 
 defaultpal_2bpp
         &       &00000000, &00000000    ; black
         &       &0000FF00, &0000FF00    ; red
         &       &00FFFF00, &00FFFF00    ; yellow
         &       &FFFFFF00, &FFFFFF00    ; white
-        &       &00FF0000, &00FF0000    ; green   \
-        &       &FF000000, &FF000000    ; blue    | other colours to program into the DENC
-        &       &FF00FF00, &FF00FF00    ; magenta | (may be useful for pointer or border)
-        &       &FFFF0000, &FFFF0000    ; cyan    /
+        &       &00000000, &00000000    ; black                     \
+        &       &FFFFFF00, &FFFFFF00    ; white                     | other colours to program into the DENC
+        &       &7777FF00, &7777FF00    ; Lazarus pointer colour 1  | (may be useful for pointer or border)
+        &       &3333FF00, &3333FF00    ; Lazarus pointer colour 2  /
 
 defaultpal_special
         &       &00000000, &00000000    ; black
@@ -2721,11 +2739,7 @@ SelectVideoPath Entry "r0-r4"
 	MOV	r0, #IICDevice_SAA7183
 	ADR	r1, SAA7183OutputsOffData
 	MOV	r2, #SAA7183OutputsOffDataEnd - SAA7183OutputsOffData
-      [ Captions
-        MyIIC_Control
-      |
 	SWI	XIIC_Control
-      ]
 	STRVS	r0, [sp]
 	EXIT
 20
@@ -2825,11 +2839,7 @@ Program_TDAs
         MOV     r0, #IICDevice_TDA8540
         MOV     r1, sp                  ; r2 still set up from entry
         MOV	r2, #TDA8540_Data_Size
-      [ Captions
-        MyIIC_Control
-      |
         SWI     XIIC_Control
-      ]
         ADD     sp, sp, #4              ; skip pushed block
         EXIT    VS
 
@@ -2838,11 +2848,7 @@ Program_TDAs
 	MOV	r0, #IICDevice_TDA8540_2
 	ADD     r1, r3, #TDA8540_Data_Size*3
 	MOV     r2, #TDA8540_Data_Size
-      [ Captions
-        MyIIC_Control
-      |
 	SWI	XIIC_Control
-     ]
  ]
         EXIT
 
@@ -3440,11 +3446,7 @@ TransmitSAA7183Data Entry "r0-r2"
 	MOV	r0, #IICDevice_SAA7183
 	ADR	r1, SAA7183IICData
 	MOV	r2, #128+1		; one byte for sub-address + 128 bytes of data
-      [ Captions
-        MyIIC_Control
-      |
 	SWI	XIIC_Control
-      ]
 	STRVS	r0, [sp]
 	EXIT
 
@@ -3520,7 +3522,7 @@ Mod_SWIHandler ROUT
         B       NoSuchSWI       ; LoadCaptions
         B       NoSuchSWI       ; CaptionControl
  ]
-        B       NoSuchSWI       ; PlatformFeatures
+        B       PlatformFeatures; get hardware info
         B       NoSuchSWI       ; TVSetup
         B       GetState
         B       NoSuchSWI       ; LoadMacrovisionKey
@@ -3561,12 +3563,63 @@ SetState Entry
 ; out:	r1 = type (0 => normal, 1 => macro OK-to-tape, 2 => macro anti-tape)
 ;	r2 = TV standard (0 => PAL, 1 => NTSC)
 
-
 GetState Entry
 	LDR	r1, PendingMacroType
 	LDR	r2, PendingTVStandard
 	EXIT
 
+; *****************************************************************************
+;
+;	PlatformFeatures - SWI to return information on the current hardware
+;
+; in:	r0 = reason code
+
+PlatformFeatures Entry
+        CMP     r0, #4
+        ADDLO   pc, pc, r0, LSL #2
+        EXIT
+        B       PlatformFeatures0
+        B       PlatformFeatures1
+        EXIT
+        B       PlatformFeatures3
+
+PlatformFeatures0
+        ADR     r1, PF0_Block
+        EXIT
+
+PF0_PALTemplate
+        =       "PAL-I", 0, 0, 0, 0, 0, 0, 0
+        &       12
+        &       -1
+PF0_PALString
+        =       "PAL I (UK/Ireland)", 0
+        ALIGN
+PF0_NTSCTemplate
+        =       "NTSC-M", 0, 0, 0, 0, 0, 0
+        &       1
+        &       -1
+PF0_NTSCString
+        =       "NTSC (Americas)", 0
+        ALIGN
+
+PlatformFeatures1
+        ADR     r0, PF1_Error
+        SETV
+        EXIT
+
+PF1_Error
+        &       0
+        =       "Unrecognised TV channels list number", 0
+        ALIGN
+
+PlatformFeatures3
+        ADR     r1, PF3_Block
+        EXIT
+
+PF3_Block
+        &       &0000000F               ; effectual SetState bits
+        &       0                       ; DENC type 0 (SAA7183)
+        &       0                       ; modulator type 0 (unknown STB22/3)
  ]
 
  [ Captions
@@ -3586,7 +3639,10 @@ CaptionControl Entry "r0-r4, r9"
         LDR     r14, TVStandard
         TEQ     r14, #1
         EXIT    NE              ; only proceed if we're on an NTSC TV!!
-; Eventually check OK to change first
+01
+        LDRB    r14, SwitchState
+        TEQ     r14, #0
+        BNE     %BT01           ; wait until any previous switch has been completed!!!
 
 	TST	r0, #1 :SHL: 0	; enabling it
 	MOVNE	r3, #3		; then set NextMacroType to 3
@@ -3701,6 +3757,10 @@ DoCaptionSwitchBlank
 	BICEQ   r3, r3, #EventVState_OKToSwitch ; if not blanking, then force a wait until at least the next field (yuk)
 	STREQ   r3, [sp]
 	ADRNE   r0, OpaqueEDPalette
+	LDR	r1, MacroType
+	TEQ	r1, #0
+	ADREQ	r1, NormalEDPalette     ; store old ED palette for use when coming back out of caption mode
+	MOVNE   r1, #0
 	BL	PatchEDPalette
 
 ; Set gamma table to all-zero (so all opaque VIDC output is black)
@@ -3800,6 +3860,7 @@ DoCaptionSwitchUnblank
 	TEQ	r0, #0
 	ADREQ	r0, NormalEDPalette
 	ADRNE	r0, MacroEDPalette
+	MOV     r1, #0
 	BL	PatchEDPalette		; (bits 4..7 are the ED values)
 
 ; Update state variable
@@ -3815,33 +3876,31 @@ DoCaptionSwitchUnblank
 
         EXIT
 
-NormalEDPalette
-; Normal mode ED palette: bit 15 of pixel value turns on ED0
-	=	0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1
-
 TransparentEDPalette
 ; Should be transparent in both normal and macro modes: ED0 set, ED3 clear
-	=	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+        =       1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 
 OpaqueEDPalette
 ; Palette where no MPEG is visible in either normal or macro mode: ED0 clear, ED3 set
-        =       8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8
+        =       8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8
 
 MacroEDPalette
-; Macro mode ED palette: bit 15 of pixel value turns off ED3; when bit 15 low, then bits 12-14 determine colour
-;	=	8, 9, 10, 11, 12, 13, 14, 15, 0, 0, 0, 0, 0, 0, 0, 0
-; Eventually we might want no solid colours at all?, ie
-	=	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+; Caption mode (Macrovision video path) palette: no solid colours at all
+        =       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 ; PatchEDPalette - set up 16bpp palette entries to make bit 15 of the pixel value map to a particular
 ;  value of the ED bits
 ;
 ; in: 	r0 -> array of ED bit entries
+;       r1 -> array to store old ED bit entries in, or 0 if no storing is required
 ; out:	r0-r4, r9 corrupted
 ;
 
-PatchEDPalette Entry "r5", 128		; allocate 128 bytes for 16 entries * 2 flash states * 4 bytes
+PatchEDPalette Entry "r5-r7", 144	; allocate 144 bytes for 16 entries * 2 flash states * 4 bytes (normal palette)
+                                        ; plus 1 entry * 4 bytes (border) plus 3 entries * 4 bytes (pointer)
+	LDR     r7, =MagicWord_BulkPassThrough ; we know what we're doing in this function
 	MOV	r5, r0			; save value in r5
+	MOV     r6, r1                  ; save value in r6
 	MOV	r0, #0			; no list of colours, just start with 0
 	MOV	r1, #16			; 16 palette entries to read
 	ORR	r1, r1, #16 << 24	; read both flash states
@@ -3850,15 +3909,37 @@ PatchEDPalette Entry "r5", 128		; allocate 128 bytes for 16 entries * 2 flash st
 	MOV	r4, #7			; bulk read PaletteV call
 	MOV	r9, #PaletteV
 	SWI	XOS_CallAVector
+	MOV     r1, #1
+	ORR     r1, r1, #24 << 24
+	ADD     r2, sp, #32*4
+	MOV     r3, r2                  ; overwrite "1st flash state" with "2nd flash state"
+	MOV	r4, #7			; bulk read PaletteV call
+	SWI     XOS_CallAVector         ; read border colour
+	ADRL    r1, PointerPalette+1*4  ; Kernel pointer bulk-read call is broken, so copy our own cached settings.
+	ADD     r0, sp, #33*4           ; The only time that we need to read the ED bits of the pointer palette is when
+        LDMIA   r1, {r1-r3}             ; reading the normal-path settings, in which case we can assume that a logical
+	BIC     r1, r1, #&EF            ; transparency of &FF means ED[0] set & ED[3:1] clear, and a logical transparency
+	BIC     r2, r2, #&EF            ; of &00 means ED[3:0] all clear, with no other possible logical transparencies.
+	BIC     r3, r3, #&EF
+	STMIA   r0, {r1-r3}
 
-	MOV	r2, sp			; point at entries
-
-	MOV	r0, #16			; 16 entries
+	TEQ     r6, #0                  ; don't store old ED values if they're not required
+	BEQ     %FT06
+        MOV     r2, sp                  ; point at entries
+	MOV     r0, #36
+05
+        LDRB    r1, [r2], #4            ; get lsb of palette entry
+        MOV     r1, r1, LSR #4          ; move down to bottom nibble (for compatibility when restoring)
+        STRB    r1, [r6], #1            ; store in conscutive bytes
+        SUBS    r0, r0, #1
+        BNE     %BT05
+06
+        MOV     r2, sp                  ; point at entries
+        MOV     r0, #36
 10
 	LDRB	r1, [r5], #1
 	MOV	r1, r1, LSL #4		; move up to bits 4..7
-	STRB	r1, [r2], #4		; write value to 1st flash state
-	STRB	r1, [r2], #4		; and to 2nd flash state
+	STRB	r1, [r2], #4		; write value
 	SUBS	r0, r0, #1
 	BNE	%BT10
 
@@ -3867,8 +3948,22 @@ PatchEDPalette Entry "r5", 128		; allocate 128 bytes for 16 entries * 2 flash st
 	ORR	r1, r1, #16 << 24	; write both flash states
 	MOV	r2, sp			; write into stack block
 	MOV	r4, #8			; bulk write PaletteV call
-	MOV	r9, #PaletteV
 	SWI	XOS_CallAVector
+	MOV     r1, #1
+	ORR     r1, r1, #24 << 24
+	ADD     r2, sp, #32*4
+	MOV	r4, #8
+	SWI     XOS_CallAVector         ; write border colour
+	MOV     r0, #1
+	MOV     r1, #2
+	MOV     r2, #3
+	STMIA   sp, {r0-r2}
+	MOV     r0, sp
+	MOV     r1, #3
+	ORR     r1, r1, #25 << 24
+	ADD     r2, sp, #33*4
+	MOV	r4, #8
+	SWI     XOS_CallAVector         ; write pointer palette
 	EXITS
 
 ; *****************************************************************************
