@@ -107,16 +107,19 @@ install_rom: ${ROMTARGET}
 
 clean:
 	${WIPE} o.* ${WFLAGS}
-	${WIPE} rm.* ${WFLAGS}
+	${WIPE} aof ${WFLAGS}
+	${WIPE} rm ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
 	${WIPE} map ${WFLAGS}
+	${WIPE} ${HDRS} ${WFLAGS}
 	${RM} ${RAMTARGET}
 	@echo ${COMPONENT}: cleaned
 
 #
-# Target 
+# Target
 #
 ${RAMTARGET}: ${OBJS} ${HDRS} ${CLIB}
+  	${MKDIR} rm
 	${LD} -rmf -o $@ ${OBJS} ${LIBS} ${CLIB}
 	${MODSQZ} $@
 
@@ -124,6 +127,7 @@ ${RAMTARGET}: ${OBJS} ${HDRS} ${CLIB}
 # ROM Target (re-linked at ROM Image build time)
 #
 ${ROMTARGET}: ${OBJS} ${HDRS} ${ROMCSTUBS}
+        ${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 #
