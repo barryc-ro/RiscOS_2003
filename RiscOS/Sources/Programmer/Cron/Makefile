@@ -21,7 +21,7 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
-TOKENISE=Tokenise
+#TOKENISE=Tokenise
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -Esc -To $@ -From
 CPFLAGS = ~cfr~v
@@ -42,6 +42,9 @@ TOKENFILE  = ${RESDIR}.Resources.Kernel.Dictionary
 #
 # Generic rules:
 #
+all: ${TARGETSA}
+        @echo ${COMPONENT}: standalone module built
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
@@ -53,9 +56,6 @@ clean:
 
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
-
-all: ${TARGETSA}
-        @echo ${COMPONENT}: standalone module built
 
 ${TARGET}: ${SOURCE}
 	${MKDIR} rm

@@ -34,16 +34,12 @@ swi_handler	LDR	wp, [r12]
 		B	%FT12
 11		; Start of SWI table
 		B	SWI_AddByReal
- [ {TRUE}
-		B	%FT12
- |
-		B	SWI_RemoveByReal
- ]
+		B	SWI_RemByReal
 		B	SWI_AddByUnix
-;		B	SWI_RemoveByUnix
+		B	SWI_RemByUnix
 12		; End of SWI table
 		ENTRY	"r1-r4"
-		ADR	r0, %FT20
+		ADR	r0, %FT20		; Unknown SWI
 		MOV	r1, #0
 		MOV	r2, #0
 		ADR	r4, title
@@ -71,8 +67,8 @@ SWI_AddByReal	ENTRY	"r1-r7"
 		! 0, "Check flags"
 		MOV	r6, r3
 		MOV	r7, r2
- [ Type_Mask = 1 :LAND: Type_Func = 0 :LAND: Type_Cmd = 1
-		TST	r0, #Type_Mask
+ [ ss_flag_Type = 1:SHL:TypeShift :LAND: Type_Func = 0 :LAND: Type_Cmd = 1
+		TST	r0, #TypeMask
 		MOVEQ	r3, #ss_size
 		BEQ	%FT20			; For function
 		MOV	r6, #0
@@ -97,12 +93,12 @@ SWI_AddByReal	ENTRY	"r1-r7"
 		LDR	r2, [r1]		; Get low time word
 		STR	r2, ss_utctime		; Store it
 		LDRB	r2, [r1, #4]		; Get high byte
-		AND	r1, r5, #Type_Mask
-		ORR	r2, r2, r0, ASL #TypeShift
+		AND	r1, r5, #TypeMask
+		ORR	r2, r2, r1, ASL #TypeShift
 		STR	r2, ss_flags		; Store with flags
- [ Type_Mask = 1 :LAND: Type_Func = 0 :LAND: Type_Cmd = 1
-		TST	r5, #Type_Mask		; Store function params
-		BEQ	%FT30
+ [ ss_flag_Type = 1:SHL:TypeShift :LAND: Type_Func = 0 :LAND: Type_Cmd = 1
+		TST	r5, #TypeMask		; Store function params
+		BNE	%FT30
 		STR	r7, ss_funcaddr
 		STR	r6, ss_funcr0
 		STR	r0, ss_funcr12
@@ -139,7 +135,7 @@ SWI_AddByReal	ENTRY	"r1-r7"
 ;   wp=private word
 ;  Exit:
 
-SWI_AddByUnix	ENTRY	"r1,r5",8
+SWI_AddByUnix	ENTRY	"r1,r5-r6",8
 		MOV	r5, #0
 		ADDS	r1, r1, r1, LSL #2	; Mul 5 (1)
 		ADC	r5, r5, r1, LSR #30	; Add remainder
@@ -149,9 +145,147 @@ SWI_AddByUnix	ENTRY	"r1,r5",8
 		MOV	r5, r5, LSL #2		; Mul 4 high word
 		ADD	r5, r5, r1, LSR #30	; Shift bits from low word
 		MOV	r1, r1, LSL #2		; Mul 4 low word
+		LDR	r6, =&6e93ebc0		; Load the magic number
+		ADDS	r1, r1, r6		; Add epoch offset
+		ADC	r5, r5, #&33
 		STMIA	r13, {r1,r5}		; Store
 		MOV	r1, r13			; Get pointer
+		MOV	r5, pc
+		MOV	r6, #&efffffff
+		TSTP	r5, r6
 		BL	SWI_AddByReal		; Call real swi handler
+		PullEnv
+		MOVVS	pc, lr
+		MOVS	pc, lr
+
+		LTORG
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; Handler for Cron_RemByReal
+;  Entry:
+;   r0=flags (type)
+;   r1=pointer to 5 byte UTC
+;   r2=address of function/command line
+;   r3=r0 value for function
+;   r4=r12 value for function
+;   wp=private word
+;  Exit:
+
+SWI_RemByReal	ENTRY	"r3,r5,r6"
+		MOV	r5, r3
+		MOV	r6, r4
+		ADR	r3, ScheduleList	; Try active list first
+		BL	UnlinkByReal
+		EXITS	VC
+		ADR	r3, ReadyList		; Then ready list
+		BL	UnlinkByReal
+		EXITS	VC
+		PullEnv
+		ORRS	pc, lr, #SR_V
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; Handler for UnlinkByReal - Remove job from given queue
+;  Entry:
+;   r0=flags (type)
+;   r1=pointer to 5 byte UTC
+;   r2=address of function/command line
+;   r3=pointer to queue
+;   r5=r0 value for function
+;   r6=r12 value for function
+;   wp=private word
+;  Exit:
+
+UnlinkByReal	ENTRY	"ssp,r5-r8"
+		! 0, "Bad flags?"
+10		LDR	ssp, [r3]
+		TST	ssp, #0
+		BNE	%FT20
+		ADR	r0, ErrorBlock_Cron_NoJob
+		B	make_error
+		MakeErrorBlock	Cron_NoJob
+
+20		LDR	r7, ss_utctime
+		LDR	r8, [r1]
+		CMP	r7, r8
+		BNE	%FT20
+
+		LDR	r7, ss_flags
+		EOR	r7, r7, r0, ASL #TypeShift
+		EOR	r7, r7, #ss_flag_HasUTC
+		LDRB	r8, [r1, #4]
+		CMP	r7, r8
+		BNE	%FT20
+
+ [ ss_flag_Type = 1:SHL:TypeShift :LAND: Type_Func = 0 :LAND: Type_Cmd = 1
+		TST	r0, #ss_flag_Type
+		BEQ	%FT40
+		ADR	r7, ss_cmdline		; Command line
+		MOV	r8, r2
+50		LDRB	r5, [r7], #1		; Get a byte from each
+		LDRB	r6, [r8], #1
+		CMP	r5, r6
+		BNE	%FT20
+		TST	r5, r5
+		BNE	%BT50
+		B	%FT50
+
+40		LDR	r7, ss_funcaddr		; Function
+		CMP	r7, r2
+		BNE	%FT20
+		LDR	r7, ss_funcr0
+		CMP	r7, r5
+		BNE	%FT20
+		LDR	r7, ss_funcr12
+		CMP	r7, r6
+		BNE	%FT20
+ |
+		! 1, "Type changed"
+ ]
+50		LDR	r7, ss_next
+		STR	r7, [r3]
+		MOV	r7, r2
+		MOV	r8, r0
+		MOV	r0, #ModHandReason_Free
+		MOV	r2, ssp
+		SWI	XOS_Module
+		MOVVC	r0, r8
+		MOVVC	r2, r7
+		EXITS	VC
+		PullEnv
+		ORRS	pc, lr, #SR_V
+
+20		ADR	r3, ss_next
+		B	%BT10
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; Handler for Cron_RemByUnix
+;  Entry:
+;   r0=flags
+;   r1=4 byte UTC
+;   r2=address of function/command line
+;   r3=r0 value for function
+;   r4=r12 value for function
+;   wp=private word
+;  Exit:
+
+SWI_RemByUnix	ENTRY	"r1,r5,r6",8
+		MOV	r5, #0
+		ADDS	r1, r1, r1, LSL #2	; Mul 5 (1)
+		ADC	r5, r5, r1, LSR #30	; Add remainder
+		ADD	r5, r5, r5, LSL #2	; Mul 5 high word
+		ADDS	r1, r1, r1, LSL #2	; Mul 5 low word
+		ADC	r5, r5, r1, LSR #30	; Add remainder
+		MOV	r5, r5, LSL #2		; Mul 4 high word
+		ADD	r5, r5, r1, LSR #30	; Shift bits from low word
+		MOV	r1, r1, LSL #2		; Mul 4 low word
+		LDR	r6, =&6e93ebc0
+		ADDS	r1, r1, r6		; Add epoch offset
+		ADC	r5, r5, #&33
+		STMIA	r13, {r1,r5}		; Store
+		MOV	r1, r13			; Get pointer
+		BL	SWI_RemByReal		; Call real swi handler
 		EXITS	VC
 		EXIT	VS
 
