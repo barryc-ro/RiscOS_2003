@@ -12,6 +12,7 @@
 # Paths
 #
 EXP_HDR	=	<export$dir>
+LIBDIR		= <Lib$Dir>
 
 #
 # Generic options:
@@ -34,7 +35,7 @@ WFLAGS =	~c~v
 
 DFLAGS_COMMON = -DINET -DCOMPAT_INET4 -DVJC
 DFLAGS =	${DFLAGS_COMMON} -DNDEBUG
-DDFLAGS =       ${DFLAGS_COMMON} -DDEBUG -DDEBUG_TML -DTrace_TRACE
+DDFLAGS =       ${DFLAGS_COMMON} -DDEBUG -DDEBUGLIB
 
 #
 # Libraries
@@ -49,6 +50,7 @@ ABSSYM  =	RISC_OSLib:o.c_AbsSym
 INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
+DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
 
 LIBS =\
  ${INETLIB}\
@@ -58,11 +60,10 @@ LIBS =\
 
 
 LIBSD =\
+ $(DEBUGLIB)\
  ${INETLIB}\
  ${SOCKLIB}\
  ${UNIXLIB}\
- <Lib$Dir>.svcprint.o.svcprint\
- <Lib$Dir>.Trace.o.T_M_PL
 
 
 #
@@ -124,7 +125,7 @@ HDRS =	h.ppphdr
 #
 .SUFFIXES:	.o .od .cp .h .s .c .cmhg
 .c.o:;		${CC} ${CFLAGS} ${DFLAGS}       -c -zM -zps1 -o $@ $<
-.c.od:;		${CC} ${CFLAGS} ${DDFLAGS}      -c -zM -zps1 -fn -o $@ $<
+.c.od:;		${CC} ${CFLAGS} ${DDFLAGS}      -c -zM -zps1 -fn -g -o $@ $<
 .c.cp:;		${CC} ${CFLAGS} ${DFLAGS}       -c -C -E $< >> $@
 .s.o:;		${AS} ${ASMFLAGS}               -o $@ $<
 .s.od:;		${AS} ${ASMFLAGS}               -o $@ $<
