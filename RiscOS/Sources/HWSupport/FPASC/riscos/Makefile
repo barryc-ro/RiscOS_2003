@@ -87,3 +87,34 @@ ${EXP_HDR}.FPEmulator: hdr.FPEmulator
         ${CP} hdr.FPEmulator $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+o.fpe: s.fpemedusa
+o.fpe: ^.coresrc.s.main
+o.fpe: ^.coresrc.^.coresrc.s.defaults
+o.fpe: ^.coresrc.^.vensrc.riscos.options
+o.fpe: Hdr:t.^.ListOpts
+o.fpe: Hdr:t.^.Macros
+o.fpe: Hdr:t.^.Services
+o.fpe: Hdr:t.^.ModHand
+o.fpe: ^.coresrc.^.vensrc.riscos.FPEMacros
+o.fpe: ^.coresrc.^.vensrc.riscos.^.^.VersionASM
+o.fpe: Hdr:t.^.SWIs
+o.fpe: Hdr:t.^.RISCOS
+o.fpe: ^.coresrc.^.coresrc.s.regnames
+o.fpe: ^.coresrc.^.coresrc.s.armdefs
+o.fpe: ^.coresrc.^.coresrc.s.fpadefs
+o.fpe: ^.coresrc.^.coresrc.s.wsdefs
+o.fpe: ^.coresrc.^.coresrc.^.vensrc.riscos.ctxtws
+o.fpe: ^.coresrc.^.coresrc.^.vensrc.riscos.globalws
+o.fpe: ^.coresrc.^.vensrc.riscos.start
+o.fpe: ^.coresrc.^.coresrc.s.toplevel
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.macros
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.fpaundef
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.fpeundef
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.ldst
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.rounding
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.nans
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.arith
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.transhw
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.transsw
+o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.interf
+o.fpe: ^.coresrc.^.vensrc.riscos.end
