@@ -51,6 +51,11 @@ o.slist:   c.slist
 
 
 # Dynamic dependencies:
+o.string32:	c.string32
+o.string32:	h.string32
+o.slist:	c.slist
+o.slist:	h.slist
+o.slist:	h.mem
 o.mem:	c.mem
 o.mem:	C:h.kernel
 o.mem:	C:h.swis
@@ -70,8 +75,6 @@ o.messages:	C:h.kernel
 o.messages:	h.style
 o.messages:	h.messages
 o.messages:	C:h.kernel
-o.string32:	c.string32
-o.string32:	h.string32
 o.rmensure:	c.rmensure
 o.rmensure:	C:h.kernel
 o.rmensure:	C:h.swis
@@ -89,6 +92,3 @@ o.objsupport:	h.mem
 o.objsupport:	h.objsupport
 o.objsupport:	objects.h.toolbox
 o.objsupport:	objects.h.window
-o.slist:	c.slist
-o.slist:	h.slist
-o.slist:	h.mem
