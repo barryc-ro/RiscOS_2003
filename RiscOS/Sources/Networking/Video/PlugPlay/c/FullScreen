@@ -105,6 +105,8 @@ static unsigned int      fullscreen_timer   = 0;
 static char              fullscreen_cbuffer [FullScreen_Digits + 1];
 static bool              fullscreen_autodn  = false;
 static unsigned int      fullscreen_autodt  = 0;
+static overlay         * fullscreen_ov1     = NULL;
+static overlay         * fullscreen_ov2     = NULL;
 
 /* Our overlay handle is self-allocated as "FULL" */
 
@@ -158,6 +160,8 @@ _kernel_oserror * fullscreen_start(const char * url, unsigned int launcher)
 
   overlay_shutdown();
   overlay_initialise();
+
+  fullscreen_ov1 = fullscreen_ov2 = NULL;
 
   /* Open a full-screen window via. stand-alone plug-in instance */
 
@@ -363,7 +367,11 @@ _kernel_oserror * fullscreen_shutdown(void)
   }
 
   overlay_remove(NULL, fullscreen_overlay_handle);
+
+  fullscreen_ov1     = NULL;
+  fullscreen_ov2     = NULL;
   fullscreen_waiting = NULL;
+
   overlay_poll(0, NULL, NULL, NULL);
 
   if (fullscreen_keys)
@@ -758,6 +766,83 @@ static _kernel_oserror * fullscreen_get_channel_name(unsigned int channel, char 
 }
 
 /**************************************************************/
+/* fullscreen_overlay_callback()                              */
+/*                                                            */
+/* An overlay callback function set up from the key handler   */
+/* for the time display shown when "I" / "Info" / "i" / "?"   */
+/* (or whatever!) is pressed. Constructs a new NPT string,    */
+/* compares it with the current string, and if there's a      */
+/* change alters the overlay text string and returns a non-   */
+/* zero value to signal a redraw is needed.                   */
+/*                                                            */
+/* Parameters: Pointer to the overlay structure in question,  */
+/*             cast to void *.                                */
+/*                                                            */
+/* Returns:    0 for any internal failure or if there is no   */
+/*             need to redraw the item yet, else 1.           */
+/**************************************************************/
+
+static int fullscreen_overlay_callback(void * v)
+{
+  play_session * ps;
+  overlay      * o = (overlay *) v;
+
+  if (o != NULL && o->text != NULL && o->cbhandle != NULL)
+  {
+    int opt[4];
+
+    ps = (play_session *) o->cbhandle;
+
+    opt[0] = vc_tags_npt;
+    opt[1] = 1;
+    opt[2] = 0;
+    opt[3] = vc_tags__end;
+
+    if (
+         _swix(VideoControl_Options,
+               _INR(0,2),
+
+               VC_Options_ReadValues,
+               ps->handle,
+               opt)
+
+         == NULL
+       )
+    {
+      unsigned int hours, minutes, seconds;
+      char         n[17 + 17 + 17]; /* <number>:<number>:<number><terminator> */
+
+      hours   = opt[2] / 3600;
+      opt[2] -= hours * 3600;
+      minutes = opt[2] / 60;
+      seconds = opt[2] - minutes * 60;
+
+      sprintf(n, "%02d:%02d:%02d", hours, minutes, seconds);
+
+      if (strcmp(o->text, n))
+      {
+        char * ot = o->text;
+
+        o->text = utils_strdup(n);
+
+        if (o->text == NULL)
+        {
+          o->text = ot;
+          return 0;
+        }
+        else
+        {
+          o->antiflicker = 1;
+          return 1;
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
+/**************************************************************/
 /* fullscreen_keypress()                                      */
 /*                                                            */
 /* Deal with keyboard pressed events from the Wimp.           */
@@ -806,87 +891,144 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
       bool   done_mode = false;
       bool   done_name = false;
       bool   done_time = false;
+      bool   persist;
 
       char   number    [24];
       char * use       = number;
 
-      if (fullscreen_session->current_speed > 1)
-      {
-        play_build_speed(fullscreen_session->current,
-                         fullscreen_session->current_speed,
-                         number + 1,
-                         false);
+      persist = plugin_get_persistence(fullscreen_plugin);
 
-        if (number[1] == '-') use++;
-        *use = '×';
+      /* If using a persistent info display and there's something shown right */
+      /* now, remove the information                                          */
+
+      if (
+           persist == true &&
+           (
+             fullscreen_ov1 != NULL ||
+             fullscreen_ov2 != NULL
+           )
+         )
+      {
+        if (fullscreen_ov1 != NULL) overlay_remove(fullscreen_ov1, 0);
+        if (fullscreen_ov2 != NULL) overlay_remove(fullscreen_ov2, 0);
+
+        fullscreen_ov1 = fullscreen_ov2 = NULL;
+        done_name      = done_time      = true;
       }
-      else use = NULL;
-
-      /* Current play mode */
-
-      overlay_add(fullscreen_determine_icon(fullscreen_session),
-                  use,
-                  oa_top_right,
-                  200,
-                  NULL,
-                  fullscreen_overlay_handle);
-
-      /* If we got a name, show it */
-
-      if (fullscreen_name != NULL)
+      else
       {
-        overlay_add("tv",
-                    fullscreen_name,
-                    oa_bottom_left,
-                    200,
-                    NULL,
-                    fullscreen_overlay_handle);
+        /* Otherwise, (re)-show things */
 
-        done_name = true;
-      }
+        if (fullscreen_session->current_speed > 1)
+        {
+          play_build_speed(fullscreen_session->current,
+                           fullscreen_session->current_speed,
+                           number + 1,
+                           false);
 
-      /* Try to read the NPT */
+          if (number[1] == '-') use++;
+          *use = '×';
+        }
+        else use = NULL;
 
-      if (fullscreen_session != NULL && fullscreen_session->handle != 0)
-      {
-        int opt[4];
-
-        opt[0] = vc_tags_npt;
-        opt[1] = 1;
-        opt[2] = 0;
-        opt[3] = vc_tags__end;
+        /* Current play mode */
 
         if (
-             _swix(VideoControl_Options,
-                   _INR(0,2),
-
-                   VC_Options_ReadValues,
-                   fullscreen_session->handle,
-                   opt)
-
-             == NULL
-
-             && opt[2] != 0 /* Don't bother showing 00:00:00 - could be still buffering stream y'see */
+             overlay_add(fullscreen_determine_icon(fullscreen_session),
+                         use,
+                         oa_top_right,
+                         200,
+                         NULL,
+                         fullscreen_overlay_handle)
+             != NULL
            )
         {
-          unsigned int hours, minutes, seconds;
-          char         n[17 + 17 + 17]; /* <number>:<number>:<number><terminator> */
+          done_mode = false;
+        }
+        else
+        {
+          done_mode = true;
+        }
 
-          hours   = opt[2] / 3600;
-          opt[2] -= hours * 3600;
-          minutes = opt[2] / 60;
-          seconds = opt[2] - minutes * 60;
+        /* If we got a name, show it */
 
-          sprintf(n, "%02d:%02d:%02d", hours, minutes, seconds);
+        if (fullscreen_name != NULL)
+        {
+          if (
+               overlay_add("tv",
+                           fullscreen_name,
+                           oa_bottom_left,
+                           persist ? 0 : 200,
+                           persist ? &fullscreen_ov1 : NULL,
+                           fullscreen_overlay_handle)
+               != NULL
+             )
+          {
+            fullscreen_ov1 = NULL;
+            done_name      = false;
+          }
+          else
+          {
+            done_name = true;
+          }
+        }
 
-          overlay_add(done_name ? "blank_tv" : NULL,
-                      n,
-                      oa_bottom_right,
-                      200,
-                      NULL,
-                      fullscreen_overlay_handle);
+        /* Try to read the NPT */
 
-          done_time = true;
+        if (fullscreen_session != NULL && fullscreen_session->handle != 0)
+        {
+          int opt[4];
+
+          opt[0] = vc_tags_npt;
+          opt[1] = 1;
+          opt[2] = 0;
+          opt[3] = vc_tags__end;
+
+          if (
+               _swix(VideoControl_Options,
+                     _INR(0,2),
+
+                     VC_Options_ReadValues,
+                     fullscreen_session->handle,
+                     opt)
+
+               == NULL
+             )
+          {
+            unsigned int   hours, minutes, seconds;
+            char           n[17 + 17 + 17]; /* <number>:<number>:<number><terminator> */
+            overlay      * o;
+
+            hours   = opt[2] / 3600;
+            opt[2] -= hours * 3600;
+            minutes = opt[2] / 60;
+            seconds = opt[2] - minutes * 60;
+
+            sprintf(n, "%02d:%02d:%02d", hours, minutes, seconds);
+
+            if (
+                 overlay_add(done_name ? "blank_tv" : NULL,
+                             n,
+                             oa_bottom_right,
+                             persist ? 0 : 200,
+                             &o,
+                             fullscreen_overlay_handle)
+                 != NULL
+               )
+            {
+              fullscreen_ov2 = NULL;
+              done_time      = false;
+            }
+            else
+            {
+              fullscreen_ov2 = persist ? o : NULL;
+              done_time      = true;
+
+              o->callback = fullscreen_overlay_callback;
+              o->cbhandle = (void *) fullscreen_session;
+              o->kern_off = 1;
+            }
+          }
         }
       }
 

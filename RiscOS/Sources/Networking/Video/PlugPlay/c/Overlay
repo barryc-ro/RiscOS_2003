@@ -59,6 +59,11 @@
 #define Overlay_Deleted (1u<<0)
 #define Overlay_Drawn   (1u<<1)
 
+/* Oversizing for anti-flicker sprite and temporary sprite name */
+
+#define Overlay_AF_TempSprite   "Temp"
+#define Overlay_AF_Oversize     8
+
 /* Magic number is half way between the maximum and minimum aspect ratios */
 /* that ModeFiles' "ModeFiles.s" records, at the time of writing, for     */
 /* STB 400 - namely &0E38E for NTSC and &16C17 for PAL anamorphic.        */
@@ -356,7 +361,32 @@ int overlay_poll(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
 
         current = NULL;
       }
-      else break;
+      else
+      {
+        /* Items that aren't deleted may have a callback function set up */
+
+        if ((current->flags & Overlay_Deleted) == 0)
+        {
+          if (current->callback != NULL)
+          {
+            int redraw = (current->callback)((void *) current);
+
+            if (redraw != 0)
+            {
+              _swix(OS_Byte,
+                    _IN(0),
+
+                    19);
+
+              if (current->antiflicker == 0) overlay_draw_item(current, true); /* Undraw */
+
+              overlay_draw_item(current, false); /* Redraw */
+            }
+          }
+        }
+
+        break;
+      }
     }
 
     /* Keep track of how many empty lists there were */
@@ -686,26 +716,30 @@ static _kernel_oserror * overlay_draw_item(overlay * current, bool undraw)
 
   if (current->text != NULL)
   {
-    int buffer[9];
+    int buffer[9], xpos;
 
     buffer[0] = buffer[1] = buffer[2] = buffer[3] = 0;
     buffer[4] = -1; /* Split character, or -1 for none */
 
+    /* Get baseline offset and bounding box */
+
     RetError(_swix(Font_ScanString,
-                   _INR(0,5) | _IN(7),
+                   _INR(0,5) | _IN(7) | _OUT(3),
 
                    font_handle,
                    current->text,
-                   FM_GivenLength | FM_GivenBuffer | FM_Kern | FM_GivenHandle | FM_ReturnBBox,
-                   0x7fffffff,
-                   0x7fffffff,
-                   buffer,
-                   strlen(current->text)));
+                   FM_GivenLength | FM_GivenBuffer | FM_GivenHandle | FM_ReturnBBox | (current->kern_off == 1 ? 0 : FM_Kern),
+                   0x7fffffff, 0x7fffffff,
+                   buffer, strlen(current->text),
+
+                   &xpos));
 
     tw = buffer[7] - buffer[5];
     th = buffer[8] - buffer[6];
     to = buffer[5];
     tb = -buffer[6];
+
+    if (xpos > tw) tw = xpos;
   }
 
   /* Work out X and Y coordinates */
@@ -846,24 +880,317 @@ static _kernel_oserror * overlay_draw_item(overlay * current, bool undraw)
 
     if (current->text != NULL)
     {
-      RetError(_swix(ColourTrans_SetFontColours,
-                     _INR(0,3),
+      bool do_normal = true;
 
-                     font_handle,
-                     0,
-                     Overlay_FontColour,
-                     0));
+      /* Anti-flciker code - use off-screen buffer and overplot */
 
-      RetError(_swix(Font_Paint,
-                     _INR(0,4) | _IN(7),
+      if (current->antiflicker != 0)
+      {
+        _kernel_oserror * e    = NULL;
+        bool              fail = false;
 
-                     font_handle,
-                     current->text,
-                     FM_GivenHandle | FM_GivenLength | FM_Kern,
-                     tx - to,
-                     ty + tb,
-                     strlen(current->text)
-                     ));
+        int               ltx, lty, ltw, lth;
+        int               pixw, pixh, bytesw;
+        int               xeig, yeig, log2bpp;
+        int               oversize;
+
+        current->antiflicker = 0;
+
+        convert_pair_to_os(tx, ty, &ltx, &lty);
+        convert_pair_to_os(tw, th, &ltw, &lth);
+
+        convert_to_points(Overlay_AF_Oversize, &oversize);
+
+        /* Allow a border around the minimum possible bounding box for safety */
+
+        ltx -= Overlay_AF_Oversize;
+        lty -= Overlay_AF_Oversize;
+        lth += Overlay_AF_Oversize * 2;
+        ltw += Overlay_AF_Oversize * 2;
+
+        /* Plot the text into a sprite, then plot that. First work out how big the */
+        /* sprite area will need to be.                                            */
+
+        xeig    = bbc_modevar(-1, BBC_XEigFactor);
+        yeig    = bbc_modevar(-1, BBC_YEigFactor);
+        log2bpp = bbc_modevar(-1, BBC_Log2BPP);
+
+        pixw    = ltw >> xeig;
+        pixh    = lth >> yeig;
+
+        /* Each row of a sprite must be word aligned */
+
+        switch(log2bpp)
+        {
+          case 0: bytesw = (pixw + 7) / 8; break;
+          case 1: bytesw = (pixw + 3) / 4; break;
+          case 2: bytesw = (pixw + 1) / 2; break;
+          case 3: bytesw = pixw;           break;
+          case 4: bytesw = pixw * 2;       break;
+          case 5: bytesw = pixw * 4;       break;
+
+          default: bytesw = 0; break;
+        }
+
+        if (bytesw == 0) fail = true;
+
+        if (fail == false)
+        {
+          static int   * sprite_area = NULL;
+          static int   * save_area   = NULL;
+          unsigned int   mode;
+
+          free(save_area),   save_area   = NULL;
+          free(sprite_area), sprite_area = NULL; /* Just in case it got leaked somehow... */
+
+          bytesw = ((bytesw + 3) / 4) * 4;
+
+          /* Now we know the size; bytesw * pixh for main sprite data, there's no */
+          /* palette so the sprite header is 44 bytes, and there are no extension */
+          /* words so the sprite area header is 16 bytes.                         */
+
+          sprite_area = malloc(bytesw * pixh + 16 + 44);
+
+          if (sprite_area == NULL)
+          {
+            fail = true;
+          }
+          else
+          {
+            /* We've now got the area. Initialise it and create a blank sprite */
+            /* in the current mode.                                            */
+
+            sprite_area[0] = bytesw * pixh + 16 + 44;
+            sprite_area[1] = 0;
+            sprite_area[2] = 16;
+            sprite_area[3] = 16;
+
+            e = _swix(OS_SpriteOp,
+                      _INR(0,1),
+
+                      0x109, /* Initialise area */
+                      sprite_area);
+
+            if (e == NULL)
+            {
+              e = _swix(OS_ScreenMode,
+                        _IN(0) | _OUT(1),
+
+                        1, /* Read current mode */
+
+                        &mode);
+            }
+
+            if (e == NULL)
+            {
+              e = _swix(OS_SpriteOp,
+                        _INR(0,6),
+
+                        0x10F, /* Create sprite */
+                        sprite_area,
+                        Overlay_AF_TempSprite,
+                        0,    /* No palete */
+                        pixw,
+                        pixh,
+                        mode);
+            }
+
+            /* Find the save area size ready for redirection, */
+            /* and allocate the required amount               */
+
+            if (e == NULL)
+            {
+              size_t sasize;
+
+              e = _swix(OS_SpriteOp,
+                        _INR(0,2) | _OUT(3),
+
+                        0x13E, /* Read save area size */
+                        sprite_area,
+                        Overlay_AF_TempSprite,
+
+                        &sasize);
+
+              if (e == NULL)
+              {
+                save_area = malloc(sasize);
+
+                if (save_area == 0)
+                {
+                  free(sprite_area), sprite_area = NULL;
+                  fail = true;
+                  goto overlay_draw_item_fail_point;
+                }
+                else
+                {
+                  save_area[0] = 0;
+                }
+              }
+            }
+
+            /* Now redirect output */
+
+            if (e == NULL)
+            {
+              unsigned int r0, r1, r2, r3;
+
+              e = _swix(OS_SpriteOp,
+                        _INR(0,3) | _OUTR(0,3),
+
+                        0x13C,
+                        sprite_area,
+                        Overlay_AF_TempSprite,
+                        save_area,
+
+                        &r0,
+                        &r1,
+                        &r2,
+                        &r3);
+
+              if (e == NULL)
+              {
+                outredir    = true;
+                outredir_r0 = r0;
+                outredir_r1 = r1;
+                outredir_r2 = r2;
+                outredir_r3 = r3;
+              }
+            }
+
+            if (e != NULL)
+            {
+              free(save_area),   save_area   = NULL;
+              free(sprite_area), sprite_area = NULL;
+              fail = true;
+              goto overlay_draw_item_fail_point;
+            }
+
+            /* Blank the sprite to transparent */
+
+            e = _swix(OS_SetColour,
+                      _INR(0,1),
+
+                      0,
+                      modeinfo_return_transparent_gcol());
+
+            if (e == NULL) bbc_rectanglefill(0, 0, ltw - 1, lth - 1);
+
+            /* Plot the text, shifting the coordinates to (n,n) where */
+            /* n is the oversize value, since we're redirected into a */
+            /* sprite that was itself deliberately oversize.          */
+
+            if (e == NULL)
+            {
+              e = _swix(ColourTrans_SetFontColours,
+                        _INR(0,3),
+
+                        font_handle,
+                        0,
+                        Overlay_FontColour,
+                        0);
+            }
+
+            if (e == NULL)
+            {
+              int oversize;
+
+              convert_to_points(Overlay_AF_Oversize, &oversize);
+
+              e = _swix(Font_Paint,
+                        _INR(0,4) | _IN(7),
+
+                        font_handle,
+                        current->text,
+                        FM_GivenHandle | FM_GivenLength | (current->kern_off == 1 ? 0 : FM_Kern),
+                        oversize - to,
+                        oversize + tb,
+                        strlen(current->text));
+            }
+
+            /* Restore output */
+
+            _swix(OS_SpriteOp,
+                  _INR(0,3),
+
+                  outredir_r0, /* Switch output */
+                  outredir_r1,
+                  outredir_r2,
+                  outredir_r3);
+
+            outredir = false;
+
+            free(save_area), save_area = NULL;
+
+            /* Was there an error during plotting? */
+
+            if (e != NULL)
+            {
+              free(sprite_area), sprite_area = NULL;
+              fail = true;
+              goto overlay_draw_item_fail_point;
+            }
+
+            /* OK then; plot the sprite itself */
+
+            e = _swix(OS_SpriteOp,
+                      _INR(0,5),
+
+                      0x122, /* Put sprite at user coords */
+                      sprite_area,
+                      Overlay_AF_TempSprite,
+                      ltx,
+                      lty,
+                      0);   /* Plot action = overwrite */
+
+            /* Finished */
+
+            free(sprite_area), sprite_area = NULL;
+
+            if (e != NULL) fail = true;
+          }
+        }
+
+        /* If the above failed, make sure we try the normal approach instead, */
+        /* forcing an undraw first - the antiflicker flag is set so the call  */
+        /* will not re-enter this chunk of code.                              */
+
+overlay_draw_item_fail_point:
+
+        if (fail)
+        {
+          /* Undraw the item, and leave do_normal set to 'true' to drop */
+          /* into the normal drawing code                               */
+
+          RetError(overlay_draw_item(current, true));
+        }
+        else
+        {
+          /* Success - so make sure we don't do the normal text plot now */
+
+          do_normal = false;
+        }
+      }
+
+      if (do_normal)
+      {
+        RetError(_swix(ColourTrans_SetFontColours,
+                       _INR(0,3),
+
+                       font_handle,
+                       0,
+                       Overlay_FontColour,
+                       0));
+
+        RetError(_swix(Font_Paint,
+                       _INR(0,4) | _IN(7),
+
+                       font_handle,
+                       current->text,
+                       FM_GivenHandle | FM_GivenLength | (current->kern_off == 1 ? 0 : FM_Kern),
+                       tx - to,
+                       ty + tb,
+                       strlen(current->text)));
+      }
     }
 
     /* Plot the sprite */
