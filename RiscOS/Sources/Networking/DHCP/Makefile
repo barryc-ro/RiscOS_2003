@@ -66,6 +66,7 @@ RPCLIB    = TCPIPLibs:rpc.o.rpc_datazm TCPIPLibs:rpc.o.rpclibzm
 INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklib5zm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 
 #
@@ -84,7 +85,6 @@ OBJS      =	\
  o.dhcp		\
  o.dhcperrors	\
  o.dhcpinform	\
- o.idle		\
  o.module	\
  o.interfaces	\
  o.iparp	\
@@ -141,7 +141,7 @@ clean:
 #
 ${TARGET}: ${XTARGET} ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${DIRS}
 	${MKDIR} rm
-        ${LD} -o $@ -rmf ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
+        ${LD} -o $@ -rmf ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMUTILS}
         $(MODSQZ) $@
         Access $@ RW/R
 
@@ -150,7 +150,7 @@ ${TARGET}: ${XTARGET} ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${DIRS}
 #
 ${ROMTARGET}: ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${DIRS}
 	${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ROMCSTUBS} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
