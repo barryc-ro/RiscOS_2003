@@ -81,7 +81,7 @@ dirs_RCMM:
 	${MKDIR} ${INSTAPP}.PreDesktop.400
 
 dirs_ARMovie:
-        ${NOP}
+        ${MKDIR} ${INSTAPP}.PreDesktop
 
 translate_Core:
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Applet.!Run          -o ${INSTAPP}.!Run
