@@ -1276,6 +1276,16 @@ int antweb_render_background(wimp_redrawstr *rr, void *h, int update)
 	rh->tile.im &&
 	(rh->tile.width != 0);
 
+    if ( do_tile )
+    {
+        image_flags f;
+
+        image_info( (image) rh->tile.im, 0,0,0, &f, 0,0 );
+
+        if ( !(f & image_flag_RENDERABLE) )
+            do_tile = FALSE;
+    }
+
     do_fill = (doc->flags & doc_flag_NO_FILL) == 0;
 
     /* if rr == NULL, special code just to check the background type */
@@ -1379,7 +1389,9 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 
 
 	/* render frame borders */
+#ifdef RISCOS
  	layout_render_bevels(rr, doc);
+#endif
     }
 
 #ifdef RISCOS
@@ -1717,7 +1729,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    int first = TRUE;
 	    char *dest;
 
-	    fname = strdup(tmpnam(0));
+	    fname = strdup(rs_tmpnam(0));
 	    dest = strrchr(fname, 'x');
 	    if (dest)
 		*dest = 'y';

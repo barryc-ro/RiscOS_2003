@@ -336,7 +336,7 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     font_strwidth(&fstr);
 
     size = WEBFONT_SIZEOF(ti->st.wf_index);
-    size = config_font_sizes[size];
+    size = config_font_sizes[size-1];
     size *= 640;
 
     hp = x + ti->width - (fstr.x / MILIPOINTS_PER_OSUNIT);

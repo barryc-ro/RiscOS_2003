@@ -1084,6 +1084,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	{
 	    set_file_type(file, FILETYPE_HTML);
 	    generated = fe_internal_url_NEW;
+	    *flags |= access_NOCACHE | access_MAX_PRIORITY;
 	}
 	frontend_complain(e);
     }
@@ -1318,7 +1319,7 @@ static int internal_action_favoritesadd(const char *query, const char *bfile, co
 	fevent_handler(fevent_HOTLIST_ADD, v);
 
     /* FIXME: add to messages file */
-    fe_report_error("Site added to favorites list");
+/*     fe_report_error("Site added to favorites list"); */
     
     return fe_internal_url_HELPER;
     NOT_USED(bfile);
@@ -1335,7 +1336,7 @@ static int internal_action_favoritesremove(const char *query, const char *bfile,
 	fevent_handler(fevent_HOTLIST_REMOVE, v);
 
     /* FIXME: add to messages file */
-    fe_report_error("Site removed from favorites list");
+/*     fe_report_error("Site removed from favorites list"); */
     
     return fe_internal_url_HELPER;
     NOT_USED(bfile);
@@ -1602,105 +1603,122 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 
 void fe_internal_deleting_view(fe_view v)
 {
-    if (strcasecomp(v->name, TARGET_FAVS) == 0)
+    if (strcasecomp(v->name, "__favs") == 0)
     {
-	tb_status_button(fevent_HOTLIST_SHOW, 0);
-	tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, 0);
-	tb_status_button(fevent_HOTLIST_SHOW_DELETE, 0);
+	tb_status_button(fevent_HOTLIST_SHOW, tb_status_button_INACTIVE);
     }
-    else if (strcasecomp(v->name, TARGET_HISTORY) == 0)
+    else if (strcasecomp(v->name, "__urlfavs") == 0)
     {
-	tb_status_button(fevent_HISTORY_SHOW, 0);
-	tb_status_button(fevent_HISTORY_SHOW_ALPHA, 0);
-	tb_status_button(fevent_HISTORY_SHOW_RECENT, 0);
+	tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__favsdelete") == 0)
+    {
+	tb_status_button(fevent_HOTLIST_SHOW_DELETE, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__historyalpha") == 0)
+    {
+	tb_status_button(fevent_HISTORY_SHOW_ALPHA, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__history") == 0)
+    {
+	tb_status_button(fevent_HISTORY_SHOW, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__historyrecent") == 0)
+    {
+	tb_status_button(fevent_HISTORY_SHOW_RECENT, tb_status_button_INACTIVE);
     }
     else if (strcasecomp(v->name, TARGET_INFO) == 0)
     {
-	tb_status_button(fevent_INFO_PAGE, 0);
+	tb_status_button(fevent_INFO_PAGE, tb_status_button_INACTIVE);
     }
-    else if (strcasecomp(v->name, TARGET_OPEN) == 0)
+    else if (strcasecomp(v->name, "__url") == 0)
     {
 	tb_status_button(fevent_OPEN_URL, tb_status_button_INACTIVE);
     }
-    else if (strcasecomp(v->name, TARGET_CUSTOM) == 0)
+    else if (strcasecomp(v->name, "__customfonts") == 0)
     {
-	tb_status_button(fevent_OPEN_FONT_SIZE, 0);
-	tb_status_button(fevent_OPEN_SOUND, 0);
-	tb_status_button(fevent_OPEN_BEEPS, 0);
-	tb_status_button(fevent_OPEN_SCALING, 0);
+	tb_status_button(fevent_OPEN_FONT_SIZE, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__customsound") == 0)
+    {
+	tb_status_button(fevent_OPEN_SOUND, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__custombeeps") == 0)
+    {
+	tb_status_button(fevent_OPEN_BEEPS, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__customscaling") == 0)
+    {
+	tb_status_button(fevent_OPEN_SCALING, tb_status_button_INACTIVE);
     }
 }
 
-void fe_internal_opening_view(fe_view v)
+void fe_internal_opening_view(fe_view v, const char *url)
 {
-    if (strcasecomp(v->name, TARGET_FAVS) == 0)
-    {
-    }
-    else if (strcasecomp(v->name, TARGET_HISTORY) == 0)
-    {
-    }
-    else if (strcasecomp(v->name, TARGET_INFO) == 0)
-    {
-    }
-    else if (strcasecomp(v->name, TARGET_OPEN) == 0)
-    {
-	tb_status_button(fevent_OPEN_URL, tb_status_button_ACTIVE);
-    }
-    else if (strcasecomp(v->name, TARGET_CUSTOM) == 0)
-    {
-    }
+}
+
+os_error *fe_internal_toggle_panel(const char *panel_name)
+{
+    char url[32];
+    char target[16];
+    fe_view v;
+    os_error *e = NULL;
+
+    strcpy(url, "ncint:openpanel?name=");
+    strcat(url, panel_name);
+
+    strcpy(target, "__");
+    strcat(target, panel_name);
+
+    if ((v = fe_locate_view(target)) != NULL)
+	fe_dispose_view(v);
+    else if (fe_popup_open())
+	sound_event(snd_WARN_BAD_KEY);
+    else
+	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE);
+
+    return e;
 }
 
 /* ------------------------------------------------------------------------------------------- */
 
 os_error *fe_open_version(fe_view v)
 {
-    fe_open_info(v, v->current_link, 0, 0);
+    fe_open_info(v, v->current_link, 0, 0, TRUE);
     return NULL;
 }
 
 os_error *fe_display_options_open(fe_view v)
 {
-    return frontend_open_url("ncint:openpanel?name=displayoptions", NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+    return fe_internal_toggle_panel("displayoptions");
 }
-
 
 os_error *fe_print_options_open(fe_view v)
 {
-    return frontend_open_url("ncint:openpanel?name=printoptions", NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+    return fe_internal_toggle_panel("printoptions");
 }
-
 
 os_error *fe_hotlist_open(fe_view v)
 {
-    return frontend_open_url("ncint:openpanel?name=favs", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE);
+    return fe_internal_toggle_panel("favs");
 }
 
 os_error *fe_hotlist_and_url_open(fe_view v)
 {
-    return frontend_open_url("ncint:openpanel?name=urlfavs", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE);
+    return fe_internal_toggle_panel("urlfavs");
 }
 
 os_error *fe_url_open(fe_view v)
 {
-#if 1
-    return frontend_open_url("ncint:openpanel?name=url", NULL, TARGET_OPEN, NULL, fe_open_url_NO_CACHE);
-#else
-    char *url, buffer[1024];
-    strcpy(buffer, "ncint:openpanel?name=url");
-    if (v->displaying && backend_doc_info(v->displaying, NULL, NULL, &url, NULL) == NULL)
-    {
-	strcat(buffer, "&url=");
-	strcat(buffer, url);
-    }
-    return frontend_open_url(buffer, NULL, TARGET_OPEN, NULL, fe_open_url_NO_CACHE);
-#endif
+    return fe_internal_toggle_panel("url");
 }
 
 void fe_show_mem_dump(void)
 {
-    frontend_open_url("ncint:openpanel?name=memdump", NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+    fe_internal_toggle_panel("memdump");
 }
+
+/* ------------------------------------------------------------------------------------------- */
 
 os_error *fe_search_page(fe_view v)
 {

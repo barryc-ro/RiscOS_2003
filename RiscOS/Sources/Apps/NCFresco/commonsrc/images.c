@@ -213,6 +213,7 @@ static int image_thread_data_size;
 static char *image_thread_data_ptr;
 static int image_thread_data_more;
 static int image_thread_data_status;
+static int do_memory_panic = FALSE;
 
 /* extern for use of NCFresco frontend */
 int spriteextend_version;
@@ -398,7 +399,10 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 {
     image i = (image) h;
 
-    IMGDBGN(("put_bytes: in: Putting 0x%x bytes at 0x%p to offset 0x%x\n", buf_len, buf, i->put_offset));
+    IMGDBG(("put_bytes: in: Putting 0x%x bytes at 0x%p to offset 0x%x\n", buf_len, buf, i->put_offset));
+
+    if ( !i->our_area )
+        return;
 
     if ( (i->put_offset + buf_len)  > i->our_area->size)
     {
@@ -490,7 +494,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 
     i->flags |= image_flag_CHANGED;
 
-    IMGDBGN(("im%p: put_bytes: out: flags %x\n", i, i->flags));
+    IMGDBG(("im%p: put_bytes: out: flags %x\n", i, i->flags));
 }
 
 static void image_seek_fn(int pos, void *h)
@@ -556,25 +560,41 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 	    if (i->frames > 1)
 		i->flags |= image_flag_ANIMATION;
 	}
+	else
+	{
+	    IMGDBG(("im%p: flex_extend FAILED\n", i ));
+	    flex_free( &i->our_area );
+	    i->our_area = NULL;
+
+	    /* This is a Bad Situation -- we'd like to kill the thread, but
+	     * we're **IN** the thread!
+	     */
+
+            image_thread_data_size = 0;
+   	    image_thread_data_ptr = 0;
+            image_thread_data_more = 0;
+            do_memory_panic = TRUE;
+
+	    i->flags |= (image_flag_ERROR | image_flag_CHANGED);
+	}
 
 	return OK;
     }
 
-    i->width = ir->x_logical;	/* changed to logical sizes */
-    i->height = ir->y_logical;
-
-    if (ir->x != ir->x_logical || ir->y != ir->y_logical)
-	i->flags |= image_flag_USE_LOGICAL;
-
-    if (ir->interlaced)
-	i->flags |= image_flag_INTERLACED;
-
-    if (ir->mask)
-	i->flags |= image_flag_MASK;
-
     if (flex_alloc((flex_ptr) &(i->our_area), size + 16 + FLEX_FUDGE) == FALSE)
     {
-	usrtrc( "Failed to get memory for image\n");
+        IMGDBG(("im%p: flex_alloc FAILED, panicking\n", i ));
+
+        /* Similarly Bad Situation
+         */
+
+        image_thread_data_size = 0;
+   	image_thread_data_ptr = 0;
+        image_thread_data_more = 0;
+        do_memory_panic = TRUE;
+
+        i->our_area = NULL;
+
 	i->flags |= (image_flag_ERROR | image_flag_CHANGED);
 	return FALSE;
     }
@@ -595,6 +615,18 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     i->put_offset = 16;
 
     IMGDBGN(("rec_fn: out: have info; x=%d, y=%d\n", ir->x, ir->y));
+
+    i->width = ir->x_logical;	/* changed to logical sizes */
+    i->height = ir->y_logical;
+
+    if (ir->x != ir->x_logical || ir->y != ir->y_logical)
+	i->flags |= image_flag_USE_LOGICAL;
+
+    if (ir->interlaced)
+	i->flags |= image_flag_INTERLACED;
+
+    if (ir->mask)
+	i->flags |= image_flag_MASK;
 
 /*     access_pause(i->ah); */
 
@@ -630,7 +662,8 @@ static int bastard_main(int argc, char **argv)
 			flags,
 			((image)i)->errbuf);	/* Flags */
 
-    IMGDBG(("im%p: bastard_main done r=%d\n", i, (int)result));
+    IMGDBG(("im%p: bastard_main done r=%d %s%s\n", i, (int)result,
+            result ? "= " : "", result ? result : "" ));
 
     return (int) (long) result;
 }
@@ -662,6 +695,9 @@ static int image_thread_process(image i, int fh, int from, int to)
 
     IMGDBGN(("image_thread_process: in: i %p fh %d from %d to %d\n", i, fh, from, to));
 
+    if ( !i->tt )
+        return FALSE;
+
     while (from < to && i->tt->status == thread_ALIVE)
     {
 	int len;
@@ -691,8 +727,11 @@ static int image_thread_process(image i, int fh, int from, int to)
     }
 
 #if NEW_WEBIMAGE == 2
-    /* only check this if the thread has died, we were reading from the start and no sprite has been created */
-    if (i->tt->status == thread_DEAD && (from_base == 0 || i->plotter != plotter_SPRITE) && i->our_area == NULL)
+    /* only check this if the thread has died, we were reading from the start
+     * and no sprite has been created
+     * pdh: *And* there wasn't an error.
+     */
+    if (i->tt->status == thread_DEAD && (from_base == 0 || i->plotter != plotter_SPRITE) && i->our_area == NULL && !(i->flags & image_flag_ERROR) )
     {
 	BOOL success;
 
@@ -708,6 +747,8 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    success = flex_extend(&i->data_area, to);
 	    from = from_base;
 	}
+
+	IMGDBG(("image_thread_process: flex has returned\n"));
 
 	if (success)
 	{
@@ -771,13 +812,25 @@ static int image_thread_process(image i, int fh, int from, int to)
 
 	    flexmem_shift();
 	}
+	else
+	{
+	    IMGDBG(("im%p: can't allocate %d-byte buffer\n", i, to ));
+	    mm_can_we_recover(FALSE);
+	    image_flush( i, 0 );
+	}
 
 	if (i->plotter == plotter_UNKNOWN)
 	    free_data_area(&i->data_area);
     }
 #endif
 
-    IMGDBGN(("image_thread_process: out: status %d\n", i->tt->status));
+    IMGDBG(("im%p: image_thread_process out: status %d\n", i, i->tt->status));
+
+    if ( do_memory_panic )
+    {
+        image_memory_panic();
+        return FALSE;
+    }
 
     return (i->tt->status == thread_ALIVE);
 }
@@ -786,7 +839,7 @@ static char *image_thread_end(image i)
 {
     char *res;
 
-    IMGDBGN(("image_thread_end: in: i=%p\n", i));
+    IMGDBG(("im%p: image_thread_end (status=%d)\n", i, i->tt->status));
 
     /* thread doesn't seem to die in two calls when called from image_flush or the like */
     _kernel_osbyte(0xE5, 0, 0);
@@ -794,9 +847,9 @@ static char *image_thread_end(image i)
 
     while (i->tt->status == thread_ALIVE && !_kernel_escape_seen())
     {
-	image_thread_data_size = 0;
-	image_thread_data_ptr = 0;
-	image_thread_data_more = 0;
+        image_thread_data_size = 0;
+   	image_thread_data_ptr = 0;
+        image_thread_data_more = 0;
 	thread_run(i->tt);
     }
 
@@ -810,13 +863,13 @@ static char *image_thread_end(image i)
 
     /* Clear up the thread */
 
-    IMGDBGN(("About to destroy thread 0x%p\n", i->tt));
+    IMGDBG(("im%p: about to destroy thread 0x%p\n", i, i->tt));
 
     thread_destroy(i->tt);
 
     i->tt = NULL;
 
-    IMGDBGN(("image_thread_end: out: res='%s'\n", strsafe(res)));
+    IMGDBG(("image_thread_end: out: res='%s'\n", strsafe(res)));
 
     return res;
 }
@@ -882,6 +935,7 @@ static char *image_process_to_end(image i, char *cfile)
 
 static void image_set_error(image i)
 {
+    IMGDBG(("im%p: in set_error\n", i));
     i->flags |= (image_flag_ERROR | image_flag_CHANGED);
     i->flags &= ~image_flag_RENDERABLE;
 
@@ -922,6 +976,9 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
     BOOL more_data;
     int rd;
 
+    if ( i->flags & image_flag_ERROR )
+        return;
+
     rd = i->flags & image_flag_RENDERABLE;
 
     IMGDBG(("im%p: progress in, status %d, data %d/%d\n",i,status,so_far,size));
@@ -958,6 +1015,7 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 	    {
 		i->flags &= ~image_flag_NO_BLOCKS;
 		i->file_type = ftype;
+		IMGDBG(("im%p: calling thread_start from progress\n",i));
 		image_thread_start(i);
 	    }
 
@@ -1033,24 +1091,10 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 	i->file_exec_addr = ofs.execaddr;
 	i->data_size = ofs.start;
 
-	IMGDBG(("Got the image file '%s', type 0x%03x\n", cfile, ft));
+	IMGDBG(("im%p: got file '%s', type 0x%03x\n", i, cfile, ft));
 
 	{
-#if 0
-	    visdelay_begin();
-
-	    if (i->tt)
-	    {
-		err = image_process_to_end(i, cfile);
-	    }
-	    else
-	    {
-		err = image_process(i, cfile);
-	    }
-
-	    visdelay_end();
-#endif
-	    if (err == NULL || (i->plotter != plotter_SPRITE && i->plotter != plotter_UNKNOWN))
+	    if (i->our_area || i->data_area)		/* SJM: added i->data_area and simplified as err is always NULL now */
 	    {
 		i->flags |= image_flag_RENDERABLE | image_flag_REALTHING;
 
@@ -1076,7 +1120,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 	    }
 	    else
 	    {
-		usrtrc( "Image error 1 = %s (%s)\n", err, cfile);
+		usrtrc( "Image error 1 on %s\n", i->url );
 
 		if ((i->flags & image_flag_RENDERABLE) == 0)
 		{
@@ -1795,7 +1839,7 @@ os_error *image_loose(image i, image_callback cb, void *h)
 
 	if (i->tt)
 	{
-	    IMGDBGN(("Calling image_thread_end() from image_loose()\n"));
+	    IMGDBG(("Calling image_thread_end() from image_loose()\n"));
 	    image_thread_end(i);
 	}
 
@@ -1863,27 +1907,27 @@ int image_memory_panic(void)
     image i;
     int freed = FALSE;
 
-    usrtrc( "Image memory panic called\n");
+    IMGDBG(( "Image memory panic called\n"));
 
     for (i=image_list; i != NULL; i = i->next)
     {
 	/* If we already have the image then dispose of it */
-	if (i->our_area)
+	if (i->our_area || i->cache_area || i->data_area)
 	{
 	    freed = TRUE;
 
-	    IMGDBG(("Need to dispose of the old image\n"));
+	    IMGDBG(("im%p: disposal in panic", i));
 
-	    free_area(&i->our_area);
-	    free_area(&i->cache_area);
-	    free_data_area(&i->data_area);
+	    free_area(&i->our_area);        IMGDBG(("..1"));
+	    free_area(&i->cache_area);      IMGDBG(("..2"));
+	    free_data_area(&i->data_area);  IMGDBG(("..3"));
 
-	    STRING_FREE(&i->cfile);
-	    free_pt(i);
-	    nullfree((void **)&i->frame);
+	    STRING_FREE(&i->cfile);         IMGDBG(("..4"));
+	    free_pt(i);                     IMGDBG(("..5"));
+	    nullfree((void **)&i->frame);   IMGDBG(("..6"));
 
 	    /* No point in animating a question mark !!!*/
-	    alarm_removeall(i);
+	    alarm_removeall(i);             IMGDBG(("..7\n"));
 
 	    i->data_so_far = i->data_size = 0;
 	    i->file_type = 0;
@@ -1896,6 +1940,8 @@ int image_memory_panic(void)
 	    i->plotter = plotter_SPRITE;
 	}
     }
+
+    do_memory_panic = FALSE;
 
     return freed;
 }
@@ -1945,19 +1991,25 @@ os_error *image_flush(image i, int flags)
     /* If we already have the image then dispose of it */
     if (i->our_area)
     {
-	IMGDBG(("Need to dispose of the old image\n"));
+	IMGDBG(("im%p: flushing",i));
 
 	free_area(&i->our_area);
 	nullfree((void **)&i->frame);
+
+	IMGDBG(("..1"));
 
 	/* Remove any animations */
 	alarm_removeall(i);
 	i->cur_repeat = 0;
 
+        IMGDBG(("..2"));
+
 	free_data_area(&i->data_area);
 	free_area(&i->cache_area);
 	STRING_FREE(&i->cfile);
 	free_pt(i);
+
+	IMGDBG(("..3"));
 
 	i->data_so_far = i->data_size = 0;
 	i->file_type = 0;
@@ -1970,10 +2022,14 @@ os_error *image_flush(image i, int flags)
 	i->id.s.name = i->sname;
 	i->plotter = plotter_SPRITE;
 
+	IMGDBG(("..4"));
+
 	if (i->cblist)
 	{
 	    image_issue_callbacks(i, image_cb_status_REFORMAT, NULL);
 	}
+
+	IMGDBG(("..5\n"));
     }
 
     if (flags & image_find_flag_DEFER)
@@ -2569,6 +2625,10 @@ static os_error *image_init_cache_sprite(image i, int w, int h, int limit, image
     /* allocate and init sprite area */
     if (flex_alloc((flex_ptr) &(i->cache_area), size + FLEX_FUDGE) == FALSE)
     {
+        IMGDBG(("im%p: flex_alloc FAILED in init_cache_sprite\n", i ));
+        image_memory_panic();
+/*         image_flush( i, image_find_flag_DEFER ); */
+/*         mm_can_we_recover(FALSE); */
 	return makeerror(ERR_NO_MEMORY);
     }
 

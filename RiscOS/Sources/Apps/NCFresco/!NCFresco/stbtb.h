@@ -63,6 +63,8 @@ extern BOOL tb_status_check_pointer(wimp_mousestr *mp);
 #define tb_status_button_INACTIVE	0
 #define tb_status_button_ACTIVE		1
 #define tb_status_button_FADED		2
+#define tb_status_button_UNPRESSED	3
+#define tb_status_button_PRESSED	4
 extern void tb_status_button(int event, int active);
 
 extern void tb_open_url(void);

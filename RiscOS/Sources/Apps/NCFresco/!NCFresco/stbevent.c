@@ -153,11 +153,11 @@ static void history_event_handler(int event, fe_view v)
             break;
 
     case fevent_HISTORY_SHOW_ALPHA:
-	frontend_complain(frontend_open_url("ncint:openpanel?name=historyalpha", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(fe_internal_toggle_panel("historyalpha"));
 	break;
 
     case fevent_HISTORY_SHOW_RECENT:
-	frontend_complain(frontend_open_url("ncint:openpanel?name=historyrecent", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(fe_internal_toggle_panel("historyrecent"));
 	break;
     }
 }
@@ -175,7 +175,10 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_ADD:
-	frontend_complain(fe_hotlist_add(v));
+	if (!fe_popup_open() || fe_locate_view(TARGET_INFO)) /* can add to hotlist when the info window is open */
+	    frontend_complain(fe_hotlist_add(v));
+	else
+	    sound_event(snd_WARN_BAD_KEY);
 	break;
 
     case fevent_HOTLIST_REMOVE:
@@ -186,7 +189,7 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_SHOW_DELETE:
-	frontend_complain(frontend_open_url("ncint:openpanel?name=favsdelete", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(fe_internal_toggle_panel("favsdelete"));
 	break;
     }
 }
@@ -204,7 +207,7 @@ static void misc_event_handler(int event, fe_view v)
             break;
 
         case fevent_HOME:
-	    if (!fe_locate_view(TARGET_OPEN) && !on_screen_kbd)
+	    if (!fe_locate_view("__url") && !on_screen_kbd)
 		frontend_complain(fe_home(v));
             break;
 
@@ -249,7 +252,10 @@ static void misc_event_handler(int event, fe_view v)
             break;
 
     case fevent_SEARCH_PAGE:
-	frontend_complain(fe_search_page(v));
+	if (!fe_popup_open() && on_screen_kbd == 0)
+	    frontend_complain(fe_search_page(v));
+	else
+	    sound_event(snd_WARN_BAD_KEY);
 	break;
 
     case fevent_OFFLINE_PAGE:
@@ -278,7 +284,9 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_STOP_OR_RELOAD:
-	if (fe_abort_fetch_possible(v))
+	if (fe_popup_open || on_screen_kbd)
+	    sound_event(snd_WARN_BAD_KEY);
+	else if (fe_abort_fetch_possible(v))
 	    frontend_complain(fe_abort_fetch(v));
 	else
 	    frontend_complain(fe_reload(v));
@@ -480,19 +488,19 @@ static void open_event_handler(int event, fe_view v)
 	break;
 
     case fevent_OPEN_FONT_SIZE:
-	frontend_open_url("ncint:openpanel?name=customfonts", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_complain(fe_internal_toggle_panel("customfonts"));
 	break;
 
     case fevent_OPEN_SOUND:
-	frontend_open_url("ncint:openpanel?name=customsound", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_complain(fe_internal_toggle_panel("customsound"));
 	break;
 
     case fevent_OPEN_BEEPS:
-	frontend_open_url("ncint:openpanel?name=custombeeps", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_complain(fe_internal_toggle_panel("custombeeps"));
 	break;
 
     case fevent_OPEN_SCALING:
-	frontend_open_url("ncint:openpanel?name=customscaling", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_complain(fe_internal_toggle_panel("customscaling"));
 	break;
     }
 }
@@ -506,8 +514,10 @@ static void toolbar_event_handler(int event, fe_view v)
 {
     if (event == fevent_TOOLBAR_EXIT)
 	frontend_complain(fe_status_unstack(v));
-    else
+    else if (!fe_popup_open() && on_screen_kbd == 0)
 	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
+    else
+	sound_event(snd_WARN_BAD_KEY);
 }
 
 static void frame_link_event_handler(int event, fe_view v)

@@ -73,7 +73,7 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
 
     r.r[0] = (int) (long) location;
 
-    if (isdigit(location[0]))
+    if ( strspn(location, "012345679.") == strlen(location) )
     {
 	sa->sin_addr.s_addr = (unsigned int) inet_addr(location);
 	*status = 0;

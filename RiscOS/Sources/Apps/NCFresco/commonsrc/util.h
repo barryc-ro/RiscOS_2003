@@ -251,7 +251,22 @@ extern void sound_event(sound_event_t event_num);
 
 extern void pointer_set_position(int x, int y);
 
-#define tmpnam(a) my_tmpnam(a)
-extern char *my_tmpnam(char *s);
+/* 
+
+   The RISC OS tmpnam function has problems executing under the debugger, so we
+   have a variant of our own. This doesn't apply under other OSs.
+   Either way, rs_tmpnam (ROM SAFE tmpnam) is always a better choice.
+
+*/
+
+#ifdef RISCOS 
+
+extern char *rs_tmpnam(char *s); 
+
+#else
+
+#define rs_tmpnam tmpnam
+
+#endif
 
 /* eof util.h */

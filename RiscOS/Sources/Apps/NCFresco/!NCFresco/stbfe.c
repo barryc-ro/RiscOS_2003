@@ -140,6 +140,9 @@
 #define AUTOSCROLL_EDGE_THRESHOLD	24	/* closeness to edge to start auto-scrolling in OS units */
 #define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
 
+#define DBOX_SIZE_X	800
+#define DBOX_SIZE_Y	400
+
 /* -------------------------------------------------------------------------- */
 
 #define TaskModule_RegisterService      0x4D302
@@ -621,6 +624,9 @@ static int decode_string(const char *input, const char *matches[], int nmatches)
 
 /*
  * If there is a fragment id then 'url' parameter will always contain it.
+
+ * backend does a format of what it has and then calls visit.
+
  */
 
 int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
@@ -660,20 +666,66 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	return 1;
     }
 
-    session_log(url, session_CONNECTED);
+    /* check for retargeting the document (WINDOW-TARGET header) */
+    /* if there is a name and it is different to the one in this frame then
+     * pass visit onto another view
+     */
+    {
+	const char *name = backend_check_meta(doc, "WINDOW-TARGET");
+	fe_view vv;
+	if (name == NULL)
+	{
+	    /* no redirect - check the fetching ptr */
+#if DEBUG
+	    if (v->fetching != doc)
+		usrtrc("Erroneous call to view visit\n");
+#endif
+	}
+	else if (strcmp(name, v->name) == 0)
+	{
+	    /* redirected to this window - no action */
+	}
+	else if ((vv = fe_locate_view(name)) != NULL) /* this will catch redirect to top */
+	{
+	    /* redirected to an existing window - clear this fetching ptr */
+	    v->fetching = NULL;
+	    v->had_completed = TRUE;
 
-    if (v->fetching == doc)
-	v->fetching = NULL;
-    else
-	usrtrc("Erroneous call to view visit\n");
+	    /* let new view take over */
+	    v = vv;
+	}
+	else if (strncmp(name, "__", 2) == 0)
+	{
+	    /* redirected to a transient window - clear fetching */
+	    v->fetching = NULL;
+	    v->had_completed = TRUE;
+
+	    /* let new view take over */
+	    v = fe_dbox_view(name);
+	}
+	else if (v->name)
+	{
+	    /* redirected to a non-existent window - change the name
+	     * of this one unless it is the top one */
+	    mm_free(v->name);
+	    v->name = strdup(name);
+	}
+    }
+
+    /* clear fetching ptr */
+    v->fetching = NULL;
+    
+    /* this is only for STB use really  */
+    session_log(url, session_CONNECTED);
 
     previous_url = NULL;
     previous_mode = v->browser_mode;
 
-    /* really not sure about this one */
+    /* ensure caret isn't displayed currently on page */
     if (frontend_view_has_caret(v))
  	backend_remove_highlight(v->displaying);
     
+    /* fade down previous displayed frame */
     if (v->displaying)
     {
 	char *durl;
@@ -689,12 +741,13 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
         backend_dispose_doc(v->displaying);
     }
 
+    /* dispose of any children */
     fe_dispose_view_children(v);
 
     v->displaying = doc;
     v->current_link = NULL;
     v->find_last_item = NULL;
-
+    
     /* check for special page instructions - but only on top page   */
     if (v->parent == NULL)
     {
@@ -707,18 +760,24 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	{
 	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD" };
 	    static const char *on_off_list[] = { "OFF", "ON" };
-	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" }; /* order must agree with #defines in stbview.h */
+	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" };			/* order must agree with #defines in stbview.h */
+	    static const char *position_list[] = { "FULLSCREEN", "CENTERED", "TOOLBAR" };	/* order must agree with #defines in stbview.h */
 	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0])];
 	    wimp_box box;
 	    int new_keyboard_state;
 
+	    /* decode the parameters */
 	    parse_http_header(ncmode, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
 
+	    /* set the item to be selected when opened */
 	    mm_free(v->selected_id);
 	    v->selected_id = strdup(vals[0].value);
 
+	    /* set toolbar state */
 	    toolbar_state = decode_string(vals[1].value, on_off_list, sizeof(on_off_list)/sizeof(on_off_list[0]));
-	    if ((new_keyboard_state = decode_string(vals[1].value, on_off_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]))) != -1)
+
+	    /* set mode (keyboard) state */
+	    if ((new_keyboard_state = decode_string(vals[2].value, on_off_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]))) != -1)
 		keyboard_state = new_keyboard_state;
 	    else
 		keyboard_state = fe_keyboard_ONLINE;
@@ -737,17 +796,22 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    }
 
 	    /* read position for window, safe area relative */
-	    box.x0 = box.x1 = box.y0 = box.y1 = -1;
-	    sscanf(vals[4].value, "%d,%d,%d,%d", &box.x0, &box.y0, &box.x1, &box.y1);
-
-	    if (box.x0 != -1 && box.x1 != -1 && box.y0 != -1 && box.y1 != -1)
+	    v->transient_position = decode_string(vals[4].value, position_list, sizeof(position_list)/sizeof(position_list[0]));
+	    if (v->transient_position == fe_position_UNSET && vals[4].value)
 	    {
-		v->box.x0 = text_safe_box.x0 + box.x0;
-		v->box.y0 = text_safe_box.y0 + box.y0;
-		v->box.x1 = text_safe_box.x0 + box.x1; 
-		v->box.y1 = text_safe_box.y0 + box.y1;
+		box.x0 = box.x1 = box.y0 = box.y1 = -1;
+		sscanf(vals[4].value, "%d,%d,%d,%d", &box.x0, &box.y0, &box.x1, &box.y1);
 
-		memset(&v->margin , 0, sizeof(v->margin));
+		if (box.x0 != -1 && box.x1 != -1 && box.y0 != -1 && box.y1 != -1)
+		{
+		    v->box.x0 = text_safe_box.x0 + box.x0;
+		    v->box.y0 = text_safe_box.y0 + box.y0;
+		    v->box.x1 = text_safe_box.x0 + box.x1; 
+		    v->box.y1 = text_safe_box.y0 + box.y1;
+
+		    memset(&v->margin , 0, sizeof(v->margin));
+		    v->transient_position = fe_position_COORDS;
+		}
 	    }
 
 	    /* check nohistory flag */
@@ -819,13 +883,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
         fe_status_mode(v, v->parent->browser_mode, -1);
     }
 
-    /* if it is a transient window then open here */
-    if (v->open_transient && v->w)
-	feutils_resize_window(&v->w, &v->margin, &v->box, &v->x_scroll_bar, &v->y_scroll_bar, 0, 0, fe_scrolling_NO, fe_bg_colour(v));
-
     v->pending_scroll = fe_history_visit(v, url, title);
 
-    frontend_view_redraw(v, NULL);
+    if (!v->open_transient)
+	frontend_view_redraw(v, NULL);
 
     frontend_view_status(v, sb_status_URL, url);
 
@@ -847,7 +908,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	tb_status_set_lights(light_state_FETCHING);
 
     mm_free(previous_url);
-        
+    
     return 1;
 }
 
@@ -913,7 +974,9 @@ fe_view fe_dbox_view(const char *name)
 
     if (use_toolbox)
 	tb_menu_hide();
-
+#if 1
+    box = screen_box;
+#else
     if (strcasecomp(name, TARGET_PASSWORD) == 0 ||
 	strcasecomp(name, TARGET_DBOX) == 0)
     {
@@ -960,7 +1023,8 @@ fe_view fe_dbox_view(const char *name)
 	box.y1 = text_safe_box.y1 - 32;
 #endif
     }	
-
+#endif
+    
     frontend_complain(fe_new_view(NULL, &box, &info, FALSE, &view));
 
     if (view)
@@ -1181,6 +1245,50 @@ static void check_pending_scroll(fe_view v)
     }
 }
 
+static int fe_transient_set_size(fe_view v)
+{
+    int changed = FALSE;
+    switch (v->transient_position)
+    {
+    case fe_position_TOOLBAR:
+	v->box.x0 = text_safe_box.x0;
+	v->box.x1 = text_safe_box.x1;
+	if (config_display_control_top)
+	{
+	    v->box.y1 = text_safe_box.y1 - tb_status_height() + 8; /* +8 to get it slightly above the toolbar */
+	    v->box.y0 = v->box.y1 - (-v->doc_height);
+	}
+	else
+	{
+	    v->box.y0 = text_safe_box.y0 + tb_status_height() - 8; /* -8 to get it slightly below the toolbar */
+	    v->box.y1 = v->box.y0 + (-v->doc_height);
+	}
+	memset(&v->margin , 0, sizeof(v->margin));
+	changed = TRUE;
+	break;
+
+    case fe_position_CENTERED:
+	v->box.x0 = (text_safe_box.x0 + text_safe_box.x1)/2 - DBOX_SIZE_X/2;
+	v->box.x1 = v->box.x0 + DBOX_SIZE_X;
+	v->box.y0 = (text_safe_box.y0 + text_safe_box.y1)/2 - DBOX_SIZE_Y/2;
+	v->box.y1 = v->box.y0 + DBOX_SIZE_Y;
+	memset(&v->margin, 0, sizeof(v->margin));
+	changed = TRUE;
+	break;
+
+    case fe_position_FULLSCREEN:
+    case fe_position_UNSET:
+	/* do nothing */
+	break;
+
+    case fe_position_COORDS:
+	changed = TRUE;
+	break;
+    }
+
+    return changed;
+}
+
 static os_error *fe__download_finished(fe_view v, void *handle)
 {
     int *vals = handle;
@@ -1214,19 +1322,9 @@ static os_error *fe__download_finished(fe_view v, void *handle)
 		set_fetch_message(v);
 	}
 
-#if 1
 	vals[2] += v->images_had;
 	vals[3] += v->images_waiting;
-#else
-        int waiting, fetching, fetched, errors, in_trans, so_far;
 
-	/* see how many images left */
-	if (backend_doc_images(v->displaying, &waiting, &fetching, &fetched, &errors, &in_trans, &so_far) == NULL)
-	{
-	    vals[1] += fetched + errors;
-	    vals[2] += waiting + fetching;
-	}
-#endif
 	STBDBG(( " page %d images %d/%d\n", v->had_completed, v->images_had, v->images_waiting));
     }
 
@@ -1265,6 +1363,17 @@ int fe_check_download_finished(fe_view v)
 	fe_update_page_info(v);
 
 	finished = TRUE;
+
+	/* if it is a transient window then open here */
+	if (top->open_transient)
+	{
+	    BOOL changed = fe_transient_set_size(top);
+
+	    feutils_resize_window(&top->w, &top->margin, &top->box, &top->x_scroll_bar, &top->y_scroll_bar, 0, 0, fe_scrolling_NO, fe_bg_colour(top));
+
+	    if (changed)
+		backend_reset_width(top->displaying, 0);
+	}
     }
 
     /*
@@ -1861,14 +1970,14 @@ void fe_bgsound_set(int state)
     else
 	config_sound_background = state;
 
-    /* cancel playback on all sounds */
+    /* cancel playback on all sounds : FIXME: this should iterate through the frames */
     if (config_sound_background)
     {
-	backend_plugin_action(NULL, be_plugin_action_item_ALL, plugin_state_STOP);
+	backend_plugin_action(main_view->displaying, be_plugin_action_item_ALL, plugin_state_STOP);
     }
     else
     {
-	backend_plugin_action(NULL, be_plugin_action_item_ALL, plugin_state_PLAY);
+	backend_plugin_action(main_view->displaying, be_plugin_action_item_ALL, plugin_state_PLAY);
     }
 }
 
@@ -2077,16 +2186,19 @@ os_error *fe_abort_fetch(fe_view v)
 
 /* ------------------------------------------------------------------------------------------- */
 
-void fe_open_info(fe_view v, be_item ti, int x, int y)
+void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 {
     if (v->displaying)
     {
 	char *link, *title;
 	char buffer[1024];
+	fe_view current;
+	char *current_url = NULL;
 	    
-	sound_event(snd_INFO_SHOW);
+	if ((current = fe_locate_view(TARGET_INFO)) != NULL)
+	    backend_doc_info(current->displaying, NULL, NULL, &current_url, NULL);
 
-	strcpy(buffer, "ncfrescointernal:openpanel?name=info&source=");
+	strcpy(buffer, "ncint:openpanel?name=info&source=");
 	fe_frame_specifier_create(v, buffer, sizeof(buffer));
 
 	if (ti &&
@@ -2104,8 +2216,20 @@ void fe_open_info(fe_view v, be_item ti, int x, int y)
 	    }		    
 	}
 
-	STBDBG(("right click: complete url '%s'\n", buffer));
-	frontend_open_url(buffer, NULL, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	sound_event(snd_INFO_SHOW);
+	
+	if (toggle)
+	{
+	    if (current)
+		fe_dispose_view(current);
+	    else
+		frontend_open_url(buffer, NULL, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	}
+	else
+	{
+	    if (current_url == NULL || strcmp(current_url, buffer) != 0)
+		frontend_open_url(buffer, NULL, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	}
     }
 }
 
@@ -2226,15 +2350,18 @@ os_error *fe_hotlist_add(fe_view v)
     e = backend_doc_info(v->displaying, NULL, NULL, &url, &title);
     if (!e)
     {
-	time_t t = time(NULL) + 100;
-	tb_status_button(fevent_HOTLIST_ADD, TRUE);
+	time_t t = time(NULL) + 2;
+
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_ACTIVE);
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_UNPRESSED);
 
         e = hotlist_add(url, title);
 
 	while (time(NULL) < t)
 	    ;
 	    
-	tb_status_button(fevent_HOTLIST_ADD, FALSE);
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_PRESSED);
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_INACTIVE);
     }
     return e;
 }
@@ -3071,6 +3198,10 @@ static void fe_dragging_start(fe_view v, const wimp_mousestr *m)
     if (mm.w != m->w || mm.bbits == 0)
         return;
 
+    /* if it says no scrolling then assume it really means it */
+    if (v->scrolling == fe_scrolling_NO)
+	return;
+    
     cvt = fe_get_cvt(v);
 
     extent.x1 = v->doc_width - cvt.scx + cvt.box.x0 - v->margin.x1;
@@ -3342,7 +3473,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	    ti = NULL;
 	    backend_doc_locate_item(v->displaying, &m->x, &m->y, &ti);
 
-	    fe_open_info(v, ti, m->x, m->y);
+	    fe_open_info(v, ti, m->x, m->y, FALSE);
 	    frontend_complain(fe_status_open_toolbar(v, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
 	}
 	break;
@@ -3585,7 +3716,7 @@ static void fe_keyboard__open(void)
 	tb_status_box(&box);
 
 	/* add in open url box if present */
-	if ((v = fe_locate_view(TARGET_OPEN)) != NULL)
+	if ((v = fe_locate_view("__url")) != NULL)
 	    coords_union(&v->box, &box, &box);
 
 	if (config_display_control_top)

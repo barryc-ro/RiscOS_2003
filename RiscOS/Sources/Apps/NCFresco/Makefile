@@ -108,8 +108,11 @@ BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
 RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS)  -I../memlib -J../clib
 #RISCOS_INCS=	-I../RISC_OSLib -I../tcpiplibs $(BASE_INCS) -I../clib
 # -Fn *includes* function names (at least for this option set)
-RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
-# RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
+
+RISCOS_CFLAGS_DBG=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
+RISCOS_CFLAGS_REL=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
+
+RISCOS_CFLAGS=  $(RISCOS_CFLAGS_REL)
 RISCOS_VPATH=	$(BASE_VPATH)
 RISCOS_OBJS=	$(BASE_OBJS)
 RISCOS_LIBS=	../RISC_OSLib/risc_oslib \
@@ -174,8 +177,11 @@ PC_CFLAGS =     -apcs 3/26/hardfp
 
 FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
-FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
-#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS_REL=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS_DBG=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
+
+FRESCO_CFLAGS=  $(FRESCO_CFLAGS_REL)
+
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
@@ -377,6 +383,7 @@ clean:		sanity
 		-@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
 		-@cd ./abs && $(RM) *
 		-@cd ./aof && $(RM) *
+		-@cd ./rm && $(RM) *
 		-@cd ./plotcheck ; $(RM) plotcheck *.o
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
@@ -451,7 +458,16 @@ FRESCO_RISCOS:	$(PREDEPS)
 		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS)"
 		$(POSTACTS)
 
-FRESCO_NT:	$(PREDEPS)
+FRESCO_MC:      $(PREDEPS)
+		@echo "Making FRESCO_MC for RISCOS"
+		@cd ./fresco; $(MAKE) FRESCO_RISCOS \
+		LIBS="$(FRESCO_LIBS) ../memcheck/mclib $(RISCOS_LIBS)" \
+		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS) sprite.o" \
+		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(FRESCO_CFLAGS_DBG) $(RISCOS_CFLAGS_DBG) -zpc1 -DMemCheck_MEMCHECK -fw"
+		$(POSTACTS)
+
+FRESCO_NT:
 		@echo Making FRESCO on NT
 		@cd fresco_pc
 		@nmake /nologo /f Makepc FRESCO_PC \
@@ -459,6 +475,15 @@ FRESCO_NT:	$(PREDEPS)
 		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS) $(PC_CFLAGS)"
+
+FRESCO_NTREL:
+		@echo Making FRESCO on NT
+		@cd fresco_pc
+		@nmake /nologo /f Makepc FRESCO_PC \
+		LIBS="$(FRESCO_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(FRESCO_CFLAGS_REL) $(RISCOS_CFLAGS_REL) $(PC_CFLAGS)"
 
 hr:		HTMLCHECK_RISCOS
 

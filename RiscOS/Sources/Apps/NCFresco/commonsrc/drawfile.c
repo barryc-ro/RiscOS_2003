@@ -96,6 +96,10 @@ BOOL drawfile_doc_saver_draw(char *fname, be_doc doc)
 
     stream_write_as_drawfile(doc, &(doc->rh->stream), fh, &writepoint, 0, dheight);
 
+    ep = df_last_error();
+    if ( ep )
+        goto err;
+
     /* Fix the size of the document in the global bounding box */
     tb.x0 = 0;
     tb.y0 = 0;
@@ -106,10 +110,14 @@ BOOL drawfile_doc_saver_draw(char *fname, be_doc doc)
 
     visdelay_end();
 
+    ep = df_last_error();
+    if ( ep )
+        goto err;
+
     /* Close the file */
     r.r[0] = 0;
     r.r[1] = fh;
-	
+
     os_find(&r);
 
     set_file_type(fname, FILETYPE_DRAWFILE);
@@ -118,14 +126,18 @@ BOOL drawfile_doc_saver_draw(char *fname, be_doc doc)
     return TRUE;
 
  err:
+    frontend_complain(ep);
     usrtrc( "Error saving as draw: %s\n", ep->errmess);
+    visdelay_end();
     if (fh)
     {
 	r.r[0] = 0;
 	r.r[1] = fh;
-	
+
 	os_find(&r);
     }
+    remove(fname);
+
     return FALSE;
 }
 

@@ -3,6 +3,9 @@
 /* Write a block of data to the given file */
 os_error *df_write_data(int fh, int at, void *base, int size);
 
+/* Was there an error? */
+os_error *df_last_error( void );
+
 /* Write a file header to the file */
 void df_write_fileheader(int fh, int width, int dheight, int *writepoint, char *program_name);
 

@@ -1052,7 +1052,7 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
 
     OBJDBG(("plugin: new pp %p from obj %p doc %p\n", pp, obj, doc));
 
-    pp->parameter_file = strdup(tmpnam(NULL));
+    pp->parameter_file = strdup(rs_tmpnam(NULL));
 
     f = fopen(pp->parameter_file, "wb");
     if (!f)

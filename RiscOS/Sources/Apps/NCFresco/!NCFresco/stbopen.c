@@ -147,6 +147,11 @@ fe_view fe_find_top_nopopup(fe_view v)
     return v;
 }
 
+int fe_popup_open(void)
+{
+    return main_view->next != NULL;
+}
+
 /* ------------------------------------------------------------------------------------------- */
 
 /*
@@ -236,6 +241,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
         }
     }
 
+#if 1
     /* Special targets open up a transient window */
     if (target && parent == NULL && strncmp(target, "__", 2) == 0 && strcasecomp(target, "__top") != 0)
     {
@@ -243,11 +249,12 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	if (!parent)
 	    parent = fe_dbox_view(target);
     }
+#endif
     
     /* don't check recursion unless this was initiated from a frameset */
     if (parent && (flags & fe_open_url_FROM_FRAME) && check_recursion(parent->parent, url))
     {
-/*         werr(0, "Frame recursion detected - aborting fetch"); */
+	STBDBG(("Frame recursion detected - aborting fetch"));
 	return NULL;
     }
 
@@ -273,8 +280,6 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
         if (!ep && fetching && strcmp(fetching, url) == 0)
 	{
-/*             werr(0, "Already fetching this URL"); */
-
 	    STBDBG(("already fetching returning\n"));
 	    return NULL;
 	}
@@ -335,7 +340,8 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     if ((flags & fe_open_url_FROM_HISTORY) || (parent->browser_mode == fe_browser_mode_HISTORY))
 	oflags |= be_openurl_flag_HISTORY;
         
-    if (strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0)
+     if (strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
+	 strncmp(url, "ncint:", sizeof("ncint:")-1) == 0)
         oflags |= be_openurl_flag_BODY_COLOURS;
 #if 0
     if (bfile)
@@ -357,9 +363,11 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     ep = backend_open_url(parent, &parent->fetching, url, bfile, referer, oflags);
 
+#if 1
     if (ep && parent->open_transient)
 	fe_dispose_view(parent);
     else 
+#endif
 	fe_check_download_finished(parent);
 
     parent->threaded--;

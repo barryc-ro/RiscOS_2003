@@ -249,6 +249,7 @@ extern void config_init(void)
     }
 #endif
 
+#ifdef RISCOS
     /* get font version number the nicer way */
     _swix(Font_CacheAddr, _OUT(0), &font_version);
     if (font_version < 336)
@@ -257,6 +258,7 @@ extern void config_init(void)
     {
 	/* 16bit fonts not available */
     }
+#endif
 }
 
 extern void config_tidyup(void)

@@ -873,7 +873,7 @@ static void add_new_row(rid_table_item *table)
 	else if ( cell->sleft > 0 )
 	{
 	    did_repl = 1;
-	    TABDBGN(("Replicating %d,%d from %d,%d\n", x, y, cell->cell.x, cell->cell.y));
+	    TABDBGN(("Replicating %d,%d from %d,%d, sleft %d\n", x, y, cell->cell.x, cell->cell.y, cell->sleft));
 	    * CELLFOR(table, x, y) = cell;
 	    cell->sleft -= 1;
 	}
@@ -1124,12 +1124,15 @@ static void restrain_rowspan_cells(HTMLCTX *me, rid_table_item *table)
     int x, y;
     rid_table_cell *cell;
 
+    TABDBGN(("restrain_rowspan_cells:\n"));
+    dump_table(table, NULL);
+
     for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
     {
 	if (cell->cell.y + cell->span.y > maxy)
 	{
 	    cell->span.y = maxy - cell->cell.y;
-	    TABDBG(("Restraining %d,%d to span %d\n", cell->cell.x, cell->cell.y, cell->span.y));
+	    TABDBG(("restrain_rowspan_cells: Restraining %d,%d to span %d\n", cell->cell.x, cell->cell.y, cell->span.y));
 	}
     }
 }
@@ -2173,8 +2176,9 @@ extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
 	}
     }
 
-    table->flags &= ~( rid_tf_COLGROUPSECTION | rid_tf_NO_MORE_CELLS
-                       | rid_tf_IMPLIED_COLGROUP        /* pdh: added this */
+    table->flags &= ~( rid_tf_COLGROUPSECTION | 
+		       rid_tf_NO_MORE_CELLS |
+		       rid_tf_IMPLIED_COLGROUP        /* pdh: added this */
                          );
 
 #if DEBUG == 3
@@ -2964,6 +2968,11 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    if (cell->cell.x + cell->span.x > table->cells.x)
 	    {       /* Filled up. Reduce span. */
 		/*table->flags |= rid_tf_NO_MORE_CELLS;*/
+		TABDBG(("cell %d,%d wanted span.x %d, but table is %d,%d, so limited to %d\n",
+			cell->cell.x, cell->cell.y, 
+			cell->span.x, cell->span.y,
+			table->cells.x, table->cells.y,
+			table->cells.x - cell->cell.x));
 		cell->span.x = table->cells.x - cell->cell.x;
 	    }
 
@@ -2971,12 +2980,19 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
             /* pdh: would look better to me as this: */
 	    for (x = cell->cell.x + 1; x < cell->cell.x + cell->span.x; x++)
 	    {       /* Replicate cell pointer */
+		TABDBG(("Repl cell %d,%d into %d,%d? ... ",
+			cell->cell.x, cell->cell.y, x, table->scaff.y));
 		cellp = CELLFOR(table, x, table->scaff.y);
 		if (*cellp != NULL)
+		{
+		    TABDBG(("no, stopping at x=%d\n", x));
 		    break;
+		}
+		TABDBG(("yes, doing x=%d\n", x));
 		*cellp = cell;
 	    }
 	    cell->span.x = x - cell->cell.x;
+	    TABDBG(("Eventually cell %d,%d has span.x %d\n", cell->cell.x, cell->cell.y, cell->span.x));
 	    ASSERT(cell->span.x > 0);
 	}
 
@@ -3029,25 +3045,42 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
 	if (*cellp != NULL)
 	{
-#if 1
-	    /* SJM: netscape overlaps in the other order so try stomping over cell to see if it works */
-	    rid_table_cell *oldcell = *cellp;
-	    if ( (oldcell->flags & rid_cf_INF_VERT) != 0 )
-		oldcell->span.y--;
+
+	    if ( gbf_active(GBF_NETSCAPE_OVERLAPS) )
+	    {
+		/* SJM: netscape overlaps in the other order so try stomping over cell to see if it works */
+		/* DAF: wasn't good enough - see below */
+		rid_table_cell *oldcell = *cellp;
+		if ( (oldcell->flags & rid_cf_INF_VERT) != 0 )
+		    oldcell->span.y--;
+		else
+		{
+		    oldcell->span.y -= oldcell->sleft+1;
+		    oldcell->sleft = 0;
+		}
+		oldcell->flags |= rid_cf_COMPLETE;
+		
+		/* DAF: Clear out ALL preceeding traces of the ealier
+		   growth. To see why, work through this example: <TABLE>
+		   <TR> <TD> <TD rowspan=2 colspan=2> <TR> <TD colspan=2>
+		   </TABLE> */
+		for (;;)
+		{
+		}
+		
+		/* DAF: Mark ourselves for this cell */
+		*cellp = cell;
+	    }
 	    else
 	    {
-		oldcell->span.y -= oldcell->sleft+1;
-		oldcell->sleft = 0;
+		/* Would overlap - constrict current cell */
+		cell->span.x = x;       /* ? */
 	    }
-	    oldcell->flags |= rid_cf_COMPLETE;
-#else
-	    /* Would overlap - constrict current cell */
-	    cell->span.x = x;       /* ? */
-#endif
+
 	    goto done;
 	}
 
-	    /* Grow the cell horizontally into the neighbouring cell */
+	/* Grow the cell horizontally into the neighbouring cell */
 	*cellp = cell;
     }
 
@@ -3094,6 +3127,8 @@ static void finish_thtd (SGMLCTX * context, ELEMENT * element)
     int i;
 
     generic_finish (context, element);
+
+    /* pdh: this is a bodge */ me->aref = NULL;
 
 /*    TASSERT(me->partype == rid_pt_CELL);*/
     cell = (rid_table_cell *)(me->rh->curstream->parent);

@@ -803,7 +803,7 @@ void pointer_set_position(int x, int y)
 static char tmpnam_buf[L_tmpnam] = "";
 static char count = 0;
 
-char *my_tmpnam(char *s)
+char *rs_tmpnam(char *s)
 {
     FILE *f;
     BOOL present = FALSE;

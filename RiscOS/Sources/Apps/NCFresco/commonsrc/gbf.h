@@ -19,9 +19,12 @@
 #define GBF_TRANSLATE_UNDEF_CHARS	0x00000020
 #define GBF_NEW_FORMATTER		0x00000040
 #define GBF_AUTOFIT			0x00000080
+#define GBF_NETSCAPE_OVERLAPS		0x00000100 /* DAF: At your own peril! */
 
 extern int gbf_flags;
 extern int gbf_active(int gbf);
 extern void gbf_init(void);	/* Don't ask why needed! */
 
 #endif /* included_gbf_h */
+
+

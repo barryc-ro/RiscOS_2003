@@ -594,7 +594,6 @@ static os_error *toolactionsetpair(int obj, int cmp, const char *off, const char
 }
 #endif
 
-#if 0
 static os_error *toolactionpress(int obj, int cmp, int pressed)
 {
     os_error *e;
@@ -604,7 +603,6 @@ static os_error *toolactionpress(int obj, int cmp, int pressed)
 	e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x140148, cmp, pressed);
     return e;
 }
-#endif
 
 /* --------------------------------------------------------------------------*/
 
@@ -1145,6 +1143,12 @@ void tb_status_button(int cmp, int active)
 	    break;
 	case tb_status_button_FADED:
 	    gfade(tbi->object_handle, cmp, TRUE);
+	    break;
+	case tb_status_button_UNPRESSED:
+	    toolactionpress(tbi->object_handle, cmp, FALSE);
+	    break;
+	case tb_status_button_PRESSED:
+	    toolactionpress(tbi->object_handle, cmp, TRUE);
 	    break;
 	}
     }

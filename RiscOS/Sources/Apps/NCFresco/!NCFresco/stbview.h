@@ -175,6 +175,8 @@ struct _frontend_view
     frame_link *frame_links;
 
     int fast_load;
+
+    int transient_position;
 };
 
 /* ----------------------------------------------------------------------------- */
@@ -206,6 +208,14 @@ struct _frontend_view
 
 extern fe_view fe_find_top(fe_view v);
 
+/* ----------------------------------------------------------------------------- */
+
+#define fe_position_COORDS	3
+#define fe_position_TOOLBAR	2
+#define fe_position_CENTERED	1
+#define fe_position_FULLSCREEN	0
+#define fe_position_UNSET	(-1)
+	    
 /* ----------------------------------------------------------------------------- */
 
 /* eof stbview.h */

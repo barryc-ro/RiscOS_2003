@@ -2861,6 +2861,25 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    }
 		}
 
+#ifndef STBWEB
+                /* pdh: Desktop Fresco wanted this, I don't know whether
+                 * NCFresco does or not
+                 */
+		if ( ft == FILETYPE_DOS || ft == FILETYPE_DATA
+		     || ft == FILETYPE_TEXT )
+                {
+                    char *slash = strrchr( cfile, '/' );
+		    char *dot = strrchr(cfile, '.');
+
+		    if (slash && (dot == NULL || dot < slash))
+		    {
+		        int newft = suffix_to_file_type( slash+1 );
+		        if ( newft != -1 )
+		            ft = newft;
+		    }
+                }
+#endif
+
 		/* if an image fs then guess whether we should treat it as a file or directory */
 		if (!ep && obj_type == 3 && !frontend_can_handle_file_type(ft) && !frontend_plugin_handle_file_type(ft))
 		    ft = FILETYPE_DIRECTORY;

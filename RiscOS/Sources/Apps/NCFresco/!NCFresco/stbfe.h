@@ -90,7 +90,7 @@ extern os_error *fe_status_open_toolbar(fe_view v, int bar);
 extern void fe_show_mem_dump(void);
 
 extern os_error *fe_open_version(fe_view v);
-extern void fe_open_info(fe_view v, be_item ti, int x, int y);
+extern void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle);
 
 
 extern os_error *fe_display_options_open(fe_view v);
@@ -162,6 +162,7 @@ extern fe_passwd fe_current_passwd;
 
 extern BOOL fe_passwd_abort(void);
 extern void fe_internal_deleting_view(fe_view v);
+extern os_error *fe_internal_toggle_panel(const char *panel_name);
 
 /* from stbredraw.c*/
 

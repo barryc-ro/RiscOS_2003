@@ -10,14 +10,14 @@
  properly finished.
 
 
-  Percentage constraints have two effects. 
+  Percentage constraints have two effects.
 
   Firstly, they have an upward percolating effect to indicate minimum
   sizes if the particular contents of a cell are to be used. This is
   asking the question: if this cell has minimum size X and occupies Y
   percentage width of the table, what is the smallest size the whole
   table could be and meet both these criteria.
-  
+
   Secondly, they
   indicate how to share space, as a downward percolating effect, when
   we have chosen a width for the table to be formatted within.
@@ -59,22 +59,22 @@ static void basic_size_table(antweb_doc *doc,
 			     rid_table_item *table);
 
 static void allocate_widths(antweb_doc *doc,
-			    rid_header *rh, 
+			    rid_header *rh,
 			    rid_text_stream *stream,
 			    int fwidth);
 
 static void recurse_format_stream(antweb_doc *doc,
-				  rid_header *rh, 
+				  rid_header *rh,
 				  rid_text_stream *stream);
 
 static void allocate_widths_stream(antweb_doc *doc,
-				   rid_header *rh, 
+				   rid_header *rh,
 				   rid_text_stream *stream,
 				   int fwidth);
 
 
 
-#ifdef DEBUG
+#if DEBUG
 static const char * WIDTH_NAMES[N_COLSPAN_WIDTHS] = WIDTH_NAMES_ARRAY;
 #endif
 
@@ -226,9 +226,9 @@ static void calc_raw_maxwidth(antweb_doc *doc,
     int width;
 
     /* Set all unused header columns to zero */
-    colspan_all_and_eql_set(table, horiz, RAW_MAX, 
+    colspan_all_and_eql_set(table, horiz, RAW_MAX,
 			    colspan_flag_USED, 0, 0);
-    
+
     width = colspan_algorithm(table, RAW_MAX, horiz);
 
     widths [RAW_MAX] = width + TABLE_OUTSIDE_BIAS(table);
@@ -237,7 +237,7 @@ static void calc_raw_maxwidth(antweb_doc *doc,
 }
 
 /*****************************************************************************
-  
+
   We have initialised this slot with any recorded absolute minimum
   pixel value from the user. Before actually resolving this slot, we
   need to update all absmin values to ensure none are smaller than
@@ -256,21 +256,21 @@ static void calc_abs_minwidth(antweb_doc *doc,
     int *widths = (horiz ? table->hwidth : table->vwidth);
 
     /* Set unused column headers to zero */
-    colspan_all_and_eql_set(table, horiz, ABS_MIN, 
+    colspan_all_and_eql_set(table, horiz, ABS_MIN,
 			    colspan_flag_ABSOLUTE_THIS, 0, 0);
 
     /* Use RAW_MIN values for used locations that do not have an ABS
        contribution. */
     colspan_all_and_eql_copy(table, horiz, ABS_MIN,
 			     colspan_flag_ABSOLUTE,
-			     0, 
+			     0,
 			     RAW_MIN);
 
     /* For all used items with an ABS contribution, ensure it is at
        least as large as the RAW_MIN value. */
     colspan_all_and_eql_lt_copy(table, horiz, ABS_MIN,
-				colspan_flag_ABSOLUTE, 
-				colspan_flag_ABSOLUTE, 
+				colspan_flag_ABSOLUTE,
+				colspan_flag_ABSOLUTE,
 				RAW_MIN);
 
     /* and apply colspan algorithm */
@@ -312,23 +312,23 @@ static void calc_abs_maxwidth(antweb_doc *doc,
 {
     int width;
     int *widths = (horiz ? table->hwidth : table->vwidth);
-    
+
     /* Set unused column headers to zero */
-    colspan_all_and_eql_set(table, horiz, ABS_MAX, 
+    colspan_all_and_eql_set(table, horiz, ABS_MAX,
 			    colspan_flag_ABSOLUTE_THIS, 0, 0);
 
     /* Use RAW_MAX values for used locations that do not have an ABS
        contribution. */
     colspan_all_and_eql_copy(table, horiz, ABS_MAX,
-			     colspan_flag_ABSOLUTE, 
-			     0, 
+			     colspan_flag_ABSOLUTE,
+			     0,
 			     RAW_MAX);
 
     /* For all used items with an ABS contribution, ensure it is at
        least as large as the RAW_MIN value. */
     colspan_all_and_eql_lt_copy(table, horiz, ABS_MAX,
-				colspan_flag_ABSOLUTE, 
-				colspan_flag_ABSOLUTE, 
+				colspan_flag_ABSOLUTE,
+				colspan_flag_ABSOLUTE,
 				RAW_MIN);
 
     width = colspan_algorithm(table, ABS_MAX, horiz);
@@ -363,8 +363,8 @@ static void calc_abs_maxwidth(antweb_doc *doc,
 
   */
 
-static int largest_implied_table_width(rid_table_item *table, 
-				       width_array_e slot, 
+static int largest_implied_table_width(rid_table_item *table,
+				       width_array_e slot,
 				       BOOL horiz)
 {
     const int max = (horiz ? table->cells.x : table->cells.y);
@@ -375,20 +375,20 @@ static int largest_implied_table_width(rid_table_item *table,
     int widest = 0;
 
     FMTDBG(("largest_implied_table_width(%p %s %s): %d%% used\n",
-	    table, 
-	    WIDTH_NAMES[slot], 
+	    table,
+	    WIDTH_NAMES[slot],
 	    HORIZVERT(horiz),
-	    pct_used)); 
+	    pct_used));
 
     ASSERT( widths[PCT_RAW] != NOTINIT );
     ASSERT(slot == PCT_MIN || slot == PCT_MAX);
-    
+
     colspan_trace_cells(table, horiz);
 
 
     if (pct_used == 0)
     {
-	FMTDBGN(("largest_implied_table_width: just using %s values\n", 
+	FMTDBGN(("largest_implied_table_width: just using %s values\n",
 		 WIDTH_NAMES[slot-1]));
 
 	/* Widest is same as ABS_XXX. correct for bias */
@@ -410,10 +410,10 @@ static int largest_implied_table_width(rid_table_item *table,
 	    }
 	    else
 	    {
-		width_non_pct += q; 
+		width_non_pct += q;
 	    }
 	}
-	
+
 	FMTDBG(("largest_implied_table_width: widest %d, width_non_pct %d\n",
 		widest, width_non_pct));
 
@@ -423,7 +423,7 @@ static int largest_implied_table_width(rid_table_item *table,
 	if (pct_used != 100)
 	{
 	    x = (100 * width_non_pct) / (100 - pct_used);
-	    
+
 	    if (x > widest)
 		widest = x;
 	}
@@ -796,12 +796,12 @@ static void calc_pct_minwidth(antweb_doc *doc,
        value over all cells with a set (nonzero) and normalised
        percentage of the width the whole table would have to have if
        that cell were rendered at its rawmin *and* it took exactly the
-       given percentage - ie max of (100 * my_raw_width / my_percent) 
+       given percentage - ie max of (100 * my_raw_width / my_percent)
 
        we store this number in table->width[PCT_RAW] for later, even
        though it's an absolute distance and for the moment the values
        in the pcp cells and groups are still percentages (normalised
-       if neccessary).  
+       if neccessary).
 
        another niggle to think about: if not all columns have
        percentage constraints and thus the total percentage width is
@@ -815,7 +815,7 @@ static void calc_pct_minwidth(antweb_doc *doc,
        a good dose of adhocery).  */
 
 /* not yet - can do this only after table width has been multiplied through
-   colspan_copy_if_smaller(table, ABS_MIN, PCT_MIN, horiz); 
+   colspan_copy_if_smaller(table, ABS_MIN, PCT_MIN, horiz);
    table->width[PCT_MIN] = width + (2 * table->border) + table->cellspacing;
     */
 
@@ -1002,13 +1002,13 @@ static void basic_size_table(antweb_doc *doc,
 	{
 	    FMTDBG(("User width of %d being applied (RAW_MIN=%d)\n", uwidth, table->hwidth[PCT_RAW]));
 	    /* Override ALL previously calculated values. */
-	    table->hwidth[RAW_MIN] = 
-		table->hwidth[ABS_MIN] = 
-		table->hwidth[PCT_MIN] = 
-		table->hwidth[REL_MIN] = 
-		table->hwidth[RAW_MAX] = 
-		table->hwidth[ABS_MAX] = 
-		table->hwidth[PCT_MAX] = 
+	    table->hwidth[RAW_MIN] =
+		table->hwidth[ABS_MIN] =
+		table->hwidth[PCT_MIN] =
+		table->hwidth[REL_MIN] =
+		table->hwidth[RAW_MAX] =
+		table->hwidth[ABS_MAX] =
+		table->hwidth[PCT_MAX] =
 		table->hwidth[REL_MAX] = uwidth;
 	    /* BLUNT! */
 	}
@@ -1045,7 +1045,7 @@ static void basic_size_table(antweb_doc *doc,
 
 #if 0
 static int decide_which_slot (antweb_doc *doc,
-			       rid_header *rh, 
+			       rid_header *rh,
 			       rid_table_item *table,
 			       int fwidth,
 			       width_array_e *best_slotp,
@@ -1077,7 +1077,7 @@ static int decide_which_slot (antweb_doc *doc,
 	    doc, rh, table, fwidth, HORIZVERT(horiz), table->depth));
 
     colspan_trace_cells(table, horiz);
-    
+
     format_width_checking_assertions(table, horiz);
 
     /* Run state machine and choose the best slot we can */
@@ -1124,7 +1124,7 @@ static int decide_which_slot (antweb_doc *doc,
   */
 
 static void allocate_widths_table(antweb_doc *doc,
-				  rid_header *rh, 
+				  rid_header *rh,
 				  rid_table_item *table,
 				  int fwidth)
 {
@@ -1140,8 +1140,8 @@ static void allocate_widths_table(antweb_doc *doc,
 
     if (table->caption != NULL)
     {
-	allocate_widths_stream(doc, 
-			       rh, 
+	allocate_widths_stream(doc,
+			       rh,
 			       &table->caption->stream,
 			       fwidth - TABLE_OUTSIDE_BIAS(table));
     }
@@ -1180,7 +1180,7 @@ static void allocate_widths_table(antweb_doc *doc,
   */
 
 static void allocate_widths_stream(antweb_doc *doc,
-				   rid_header *rh, 
+				   rid_header *rh,
 				   rid_text_stream *stream,
 				   int fwidth)
 {
@@ -1202,7 +1202,7 @@ static void allocate_widths_stream(antweb_doc *doc,
 }
 
 static void allocate_widths(antweb_doc *doc,
-			    rid_header *rh, 
+			    rid_header *rh,
 			    rid_text_stream *stream,
 			    int fwidth)
 {
@@ -1215,7 +1215,7 @@ static void allocate_widths(antweb_doc *doc,
 }
 
 /*****************************************************************************
-  
+
   Each stream object has a final fwidth value. We need to format to
   this size, including all streams below us, and pick up height
   information having formatted.
@@ -1258,7 +1258,7 @@ static void recurse_format_table(antweb_doc *doc,
 
     if (table->caption != NULL)
 	recurse_format_stream(doc, rh, &table->caption->stream);
-    
+
     for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
 	recurse_format_stream(doc, rh, &cell->stream);
 
@@ -1307,9 +1307,6 @@ static void recurse_format_table(antweb_doc *doc,
 
     /* Format so we have just enough room */
     height = table->vwidth[REL_MIN];
-/*
-    height = decide_which_slot(doc, rh, table, height, &best_min_slot, VERTICALLY);
-*/
     colspan_share_extra_space (table, height, VERTICALLY);
 
     orig_item = &table->parent->base;
@@ -1318,11 +1315,14 @@ static void recurse_format_table(antweb_doc *doc,
     orig_item->width = table->size.x;
     orig_item->pad = 0;
 
+    /* Perform vertical and horizontal positioning of cells within table */
+    format_position_table_cells(table);
+
     FMTDBG(("recurse_format_table: Chosen size %d,%d for table\n", table->size.x, table->size.y));
 }
 
 /*****************************************************************************
-  
+
   Format a text stream to the fwidth given in it. This is the final format
   and must always yield rid_pos_item chains, whatever the other format
   operations do. If there are any nested streams, they are recursively
@@ -1331,11 +1331,11 @@ static void recurse_format_table(antweb_doc *doc,
  */
 
 static void recurse_format_stream(antweb_doc *doc,
-				  rid_header *rh, 
+				  rid_header *rh,
 				  rid_text_stream *stream)
 {
     rid_text_item *ti;
-                       
+
     FMTDBGN(("recurse_format_stream: recursing on any descendent streams first\n"));
 
     /* FIRST any descendent levels */
@@ -1363,17 +1363,19 @@ static void recurse_format_stream(antweb_doc *doc,
   This version of the formatter does not take progressive hints. We throw
   all previous partial formats away.
 
-  
+
 
  */
 
 extern void rid_toplevel_format(antweb_doc *doc,
-				rid_header *rh, 
-				rid_text_item *start_from, 
+				rid_header *rh,
+				rid_text_item *start_from,
 				int fwidth,
 				int fheight)
 {
     FMTDBG(("\n\n\n\n\n\nrid_toplevel_format(%p) entered\n\n", rh));
+
+    /*dump_header(rh);*/
 
     format_one_off_assertions();
 
@@ -1381,7 +1383,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
     ASSERT(doc != NULL);
 
     /* And floating images. */
-    
+
     stomp_captions_until_working(rh);
 
     format_entry_fixes(rh);
@@ -1396,15 +1398,6 @@ extern void rid_toplevel_format(antweb_doc *doc,
     }
     else
     {
-
-#if DEBUG >= 2
-	fflush(NULL);
-	debug_set("FMTDBG", 1);
-	debug_set("FMTDBGN", 0);
-
-	dump_header(rh);
-#endif
-
 	FMTDBG(("Sizing root stream\n"));
 	basic_size_stream(doc, rh, &rh->stream);
 	FMTDBG(("\nDone sizing root stream:\n"));
@@ -1425,12 +1418,6 @@ extern void rid_toplevel_format(antweb_doc *doc,
     }
 
     FMTDBG(("rid_toplevel_format: finished\n"));
-
-#if DEBUG >= 2
-    fflush(NULL);
-    debug_set("FMTDBG", 0);
-    debug_set("FMTDBGN", 0);
-#endif
 
     format_exit_fixes(rh);
 

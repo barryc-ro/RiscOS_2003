@@ -127,7 +127,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	flags |= (1<<8) | (1<<7);
 
 	_swix(Font_ScanString, _INR(0,7) | _OUT(3),
-	      wf->handle, s, flags,	      
+	      wf->handle, s, flags,
 	      INT_MAX, INT_MAX,
 	      NULL, NULL, str_len,
 	      &width1);
@@ -269,7 +269,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     /* quick exit if there is no text to display */
     if (rh->texts.data[tit->data_off] == 0)
 	return;
-    
+
     tfc = render_text_link_colour(ti, doc);
     tbc = render_background(ti, doc);
 
@@ -325,7 +325,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 #if 0
     dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
 #endif
-    
+
     no_text = !render_text(doc, rh->texts.data + tit->data_off, hpos, b);
     if (ti->pad)
 	no_text = FALSE;
@@ -470,8 +470,8 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     l2 = (len + 4) & (~3);
 
     size = WEBFONT_SIZEOF(ti->st.wf_index);
-    size = config_font_sizes[size];
-    size *= 640;
+    size = config_font_sizes[size-1];
+    size *= 640 * config_display_scale/100;
 
     txt.tag = draw_OBJTEXT;
     txt.size = sizeof(txt) + l2;

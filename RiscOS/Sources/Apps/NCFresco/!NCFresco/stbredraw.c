@@ -412,7 +412,6 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
     fvd->doc_height = v->doc_height;
     /* This looks the wrong way around because height goes down from the top */
     fvd->wa_height = fvd->min_height < fvd->doc_height ? fvd->min_height : fvd->doc_height;
-/*    fvd->wa_height = fvd->min_height + fvd->doc_height;*/
 
     if (v->parent == NULL)
     {
@@ -421,13 +420,8 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
     }
     else
     {
-#if 1
         fvd->layout_width  =    v->box.x1 - v->box.x0;
         fvd->layout_height = - (v->box.y1 - v->box.y0);
-#else
-        fvd->layout_width = op->box.x1 - op->box.x0 + (v->y_scroll_bar ? toolsprite_width : 0);/* + 2*2;*/
-        fvd->layout_height = - (op->box.y1 - op->box.y0) - (v->y_scroll_bar ? toolsprite_height : 0);/* + 2*2);*/
-#endif
     }
 }
 
