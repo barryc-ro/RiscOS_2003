@@ -450,23 +450,24 @@ aof.CLib: ${CLIB_ROM_OBJS}
 #
 # Final link for the ROM Image {using given base address}
 #
-linked.RISC_OSLib: ${ROM_OBJS}
-        ${LD} -o $@ ${ROM_OBJS} \
+rom_link_RISC_OSLib: ${ROM_OBJS}
+        ${LD} -o linked.RISC_OSLib ${ROM_OBJS} \
               -symbols syms.${TARGET} \
               -bin -base ${ADDRESS} \
               -map > map.${TARGET}
 
-linked.CLib: ${CLIB_ROM_OBJS}
-        ${LD} -o $@ ${CLIB_ROM_OBJS} \
+rom_link_CLib: ${CLIB_ROM_OBJS}
+        ${LD} -o linked.CLib ${CLIB_ROM_OBJS} \
               -symbols syms.${TARGET} \
               -bin -base ${ADDRESS} \
               -map > map.${TARGET}
 
-rom_link: linked.${TARGET}
+rom_link: rom_link_${TARGET}
         ${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}
         |
         if "${TARGET}"="RISC_OSLib" Then Set ExtraLibs$xtentries rlib.s.rl_entries Else Unset ExtraLibs$xtentries
-        do xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries <ExtraLibs$xtentries>
+        @echo xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries <ExtraLibs$xtentries>
+        @do xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries <ExtraLibs$xtentries>
         unset ExtraLibs$xtentries
         print rlib.swi { >> syms.Entries }
         xtentries syms.C_Entries kernel.s.k_entries clib.s.cl_entries
