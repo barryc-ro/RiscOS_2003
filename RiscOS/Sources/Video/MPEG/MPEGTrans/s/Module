@@ -78,6 +78,11 @@
 ; 10-May-00  BJGA 1.77          Added *TransCapture and *TransSave.
 ; 18-May-00  BJGA 1.78          32-bit compatible. Issues UpCall_MPEG &0001 after each reset, internal or external.
 ; 26-May-00  BJGA 1.79          Added SWI MPEGTransport_GetSprite.
+; 07-Jun-00  BJGA 1.80          Added Stat &000B, which is an estimate of the transport stream bitrate (in bits/second) calculated from the separation of PCRs.
+;                               Value is also printed by *CtrlInfo. Average data rate in *CtrlInfo is now calculated since decoding started, rather than from
+;                               when the stream was opened: this reduces transient effects. Value is also printed in bits/second for easy comparison with the
+;                               PCR-estimated data rate. Removed SkipToSeqOnResetStream code (it was broken, obsolete, and also incompatible with program
+;                               element handlers). Requires a 32-bit FPEmulator, so module will no longer function on STB-22.
 ;
 
         LEADR   Module_LoadAddr
@@ -238,8 +243,10 @@ CSH_Video_PID           #       4                       ; PID for video packets
 CSH_Audio_PID           #       4                       ; PID for audio packets
 CSH_NotReadyBits        #       4                       ; bits indicating which elemental modules are not yet ready to play
 CSH_StartTime           #       4                       ; time stream was opened
+CSH_PlayTime            #       4                       ; time stream started to play
 CSH_LastTime            #       4                       ; last time data was received
 CSH_DataReceived        #       4                       ; amount of data received
+CSH_DataReceivedAtPlayTime #    4                       ; amount of data received during prefill
 CSH_DataReturned	#	4			; amount of data returned
 CSH_DataDiscarded	#	4			; amount of data discarded (not video, audio, PAT, PMT or selected private)
 CSH_CurrentProgram	#	4			; program number of current program, or -index (eg -1 = first program)
@@ -289,6 +296,13 @@ CSH_NPTScaleDen		#	2
 
 CSH_LastContentID	#	4			; last value in ContentID field, or -1 if none
  ]
+CSH_PCR_PID             #       4                       ; PCR_PID (only used for calculating transport stream overall bitrate)
+CSH_PCR_old_packets     #       4                       ; number of TS packets since most recently parsed PCR
+CSH_PCR_old             #       6                       ; most recently parsed PCR
+CSH_PCR_old_flags       #       2                       ; flags: bit 0 set => PCR is valid
+CSH_PCR_older_packets   #       4                       ; number of TS packets between old PCR and older PCR
+CSH_PCR_older           #       6                       ; PCR before the most recently parsed PCR
+CSH_PCR_older_flags     #       2                       ; flags: bit 0 set => PCR is valid
 
 CSHSize                 *       @
 
@@ -309,6 +323,9 @@ GlobalPEHList		#	4	; list of all PEH nodes, global to all streams
 MessageFile_Block #     16
 MessageFile_Open  #     4
  ]
+
+Saved_FPSR              #       4       ; for saving the fp context
+Saved_FPRegs            #       12*4    ;
 
  [ Capture
 CaptureEnable           #       4       ; 0 = inactive, 1 = active
@@ -819,10 +836,12 @@ OpenStream Entry "r0-r2"
  ] ; DoPEH
         SWI     XOS_ReadMonotonicTime
         STR     r0, [r1, #CSH_StartTime]
+        STR     r0, [r1, #CSH_PlayTime]
         STR     r0, [r1, #CSH_LastTime]
 
         MOV     r0, #0
         STR     r0, [r1, #CSH_DataReceived]
+        STR     r0, [r1, #CSH_DataReceivedAtPlayTime]
 	STR	r0, [r1, #CSH_DataReturned]
 	STR	r0, [r1, #CSH_DataDiscarded]
  [ Save1stPacket
@@ -841,6 +860,7 @@ OpenStream Entry "r0-r2"
         STR     r0, [r1, #CSH_PMT_PID]                  ; PID for Program Map Table is unknown until we get a PAT on PID 0
         STR     r0, [r1, #CSH_Video_PID]                ; PID for video is unknown until we get a PMT
         STR     r0, [r1, #CSH_Audio_PID]                ; PID for audio is unknown until we get a PMT
+        STR     r0, [r1, #CSH_PCR_PID]                  ; PID for PCR is unknown until we get a PMT
  [ SkipToCorrectTrickMode
 	STR	r0, [r1, #CSH_LastTrickModeControl]	; indicate normal play
  ]
@@ -912,10 +932,12 @@ Play    Entry "r0-r3"
         STRVS   r0, [sp]
         EXIT    VS
 20
-        MOV     r0, #0
+;        MOV     r0, #0
 ;        STR     r0, [r1, #CSH_DataReceived] ; TMD 21-Jun-96 - don't zero on Play
+        LDR     r0, [r1, #CSH_DataReceived]
+        STR     r0, [r1, #CSH_DataReceivedAtPlayTime]
         SWI     XOS_ReadMonotonicTime
-        STR     r0, [r1, #CSH_StartTime]
+        STR     r0, [r1, #CSH_PlayTime]
         STR     r0, [r1, #CSH_LastTime]
         CLRV
         EXIT
@@ -1411,6 +1433,7 @@ InvalidatePIDs Entry "r0,r2"
 	STR	lr, [r1, #CSH_PMT_PID]
 	STR	lr, [r1, #CSH_Video_PID]
 	STR	lr, [r1, #CSH_Audio_PID]
+	STR     lr, [r1, #CSH_PCR_PID]
 
  [ DoPEH
 	LDR	r2, [r1, #CSH_ListOfPEHPIDs]
@@ -1555,6 +1578,8 @@ int_reset_stream                                ; may also be called from within
 	STR	r3, [sp, #2*4]			; zero the returned r2
 	STR	r3, [sp, #3*4]			; zero the returned r3
 
+	STR     r3, [r1, #CSH_PCR_old_flags-2]  ; mark most recent PCR as invalid by zeroing flags
+
         LDR     r3, [r1, #CSH_StreamFlags]
         TST     r0, #ResetStreamFlags_TrickPlayMode
         ORRNE   r3, r3, #StreamFlags_TrickPlayMode
@@ -1605,12 +1630,6 @@ int_reset_stream                                ; may also be called from within
         EXIT    VS
 20
 
-
- [ SkipToSeqOnResetStream
-	TST	r0, #StreamFlags_VideoPresent	; if video in new stream
-	ORRNE	r3, r3, #StreamFlags_SkippingAfterReset
-	STRNE	r3, [r1, #CSH_StreamFlags]	; then set the skip bit
- ]
 
  [ Save1stPacket
 	MOV	lr, #0
@@ -1957,6 +1976,9 @@ ts_wait_for_sync_loop
         TEQ     r7, #TS_SyncByte
         BNE     ts_wait_for_sync_loop
 
+        LDR     lr, [r1, #CSH_PCR_old_packets]
+        ADD     lr, lr, #1                      ; increment count of packets since last PCR
+        STR     lr, [r1, #CSH_PCR_old_packets]
         MOV     r8, #TS_PacketLength-1          ; r8 = number of bytes remaining in transport packet
         BL      ts_getbytedec                   ; get TEI, PUSI, TP and top 5 bits of PID
         MOV     r9, r7                          ; and save it
@@ -2113,7 +2135,10 @@ ts_process_PMT_PID ROUT
         BL      ts_getbytedec                   ; get section_number (must be zero)
         BL      ts_getbytedec                   ; get last_section_number (ditto)
         BL      ts_getbytedec                   ; get 3 reserved, 5 PCR_PID [12:8]
+        AND     r10, r7, #&1F
         BL      ts_getbytedec                   ; get 8 PCR_PID [7:0]
+        ORR     r10, r7, r10, LSL #8
+        STR     r10, [r1, #CSH_PCR_PID]
         BL      ts_getbytedec
         AND     r9, r7, #&0F                    ; get 4 reserved, 4 program_info_length [11:8]
         BL      ts_getbytedec                   ; get 8 program_info_length [7:0]
@@ -2255,6 +2280,7 @@ ts_process_audio_PID
         DLINE "Found Audio PID",cc
       ]
 ;        DREG    r8, "Entered ts_process_audio_PID, remaining packet length = "
+        MOV     r6, r5                                  ; hang on to the PID, may match PCR_PID
         MOV     r5, #StreamFlags_AudioPresent           ; indicate audio data
         B       ts_process_vidoraud
 
@@ -2263,6 +2289,7 @@ ts_process_video_PID
         DLINE "Found Video PID",cc
       ]
 ;        DREG    r8, "Entered ts_process_video_PID, remaining packet length = "
+        MOV     r6, r5                                  ; hang on to the PID, may match PCR_PID
         MOV     r5, #StreamFlags_VideoPresent           ; indicate video data
 ts_process_vidoraud ROUT
         LDR     lr, [r1, #CSH_StreamFlags]
@@ -2271,23 +2298,7 @@ ts_process_vidoraud ROUT
         BEQ     ts_skip_to_next_packet
 ts_process_common
         TST     r9, #TS_AF_Present_Bit                  ; is an adaptation field present
-
- [ SkipToSeqOnResetStream
-	ASSERT	:LNOT: DoPEH				; the TEQNE r5 would be wrong
-	BEQ	%FT20
-	TST	lr, #StreamFlags_SkippingAfterReset	; if skipping,
-	TEQNE	r5, #StreamFlags_AudioPresent		; and not an audio packet (ie *is* a video packet)
-	BEQ     %FT19
-        BL      ts_process_adaptation_field             ; then possibly check it for random_access_indicator
-        B       %FT20
-	BL	ts_skip_adaptation_field		; else just skip it
-20
-	LDR	lr, [r1, #CSH_StreamFlags]		; if still skipping data
-	TST	lr, #StreamFlags_SkippingAfterReset
-	BNE	ts_skip_to_next_packet
- |
-        BLNE    ts_skip_adaptation_field                ; if so, then skip it
- ]
+        BLNE    ts_process_adaptation_field             ; if so, then deal with it
 
         BL      GetPacketDescriptor                     ; out: r0 -> new packet descriptor (link -> 0, free, freews set up)
         MOV     r11, r0
@@ -2389,20 +2400,48 @@ ts_skip_adaptation_field Entry "r7"
         BL      ts_skipbytes
         EXIT
 
- [ SkipToSeqOnResetStream
 ts_process_adaptation_field Entry "r7"
-	BL	ts_getbytedec			; get adaptation_field_length
-	SUBS	r10, r7, #1			; if < 1 byte, then no real adaptation field there
-	EXIT	CC				; so exit
+; On entry, r6 = PID
+        BL      ts_getbytedec                   ; r7 = adaptation_field_length
+        ADDS    r10, r7, #0                     ; r10 = bytes remaining in adaptation field; also clear C
+        LDR     r7, [r1, #CSH_PCR_PID]
+        TEQ     r6, r7                          ; preserves C
+        CMPEQ   r10, #7                         ; if correct PID and there are at least 7 bytes, set C
+        BCS     %FT10
+        BL      ts_skipbytes                    ; else skip the whole adaptation field
+        EXIT                                    ; and exit
+10
+        BL      ts_getbytedec                   ; get byte with flags in
+        SUB     r10, r10, #1
+        TST     r7, #&10                        ; check PCR_flag
+        BEQ     %FT80                           ; do nothing if not set
 
-	BL	ts_getbytedec			; get byte with flags in
-	TST	r7, #&40			; check random_access_indicator bit
-	LDRNE	lr, [r1, #CSH_StreamFlags]	; if set, then a video sequence is coming soon (in the next video PES packet)
-	BICNE	lr, lr, #StreamFlags_SkippingAfterReset ; so stop skipping now
-	STRNE	lr, [r1, #CSH_StreamFlags]
-	BL	ts_skipbytes			; then skip the rest of the adaptation field
-	EXIT					; must preserve flags on exit
- ]
+        Push    "r9-r11"
+        ADD     lr, r1, #CSH_PCR_old_packets
+        LDMIA   lr!, {r9-r11}                   ; copy details for old PCR
+        ASSERT  CSH_PCR_older_packets = CSH_PCR_old_packets + 12
+        STMIA   lr, {r9-r11}                    ; over those for older PCR
+        MOV     r9, #0                          ; initialise packet count to 0
+        BL      ts_getbytedec
+        MOV     r10, r7, LSL #24
+        BL      ts_getbytedec
+        ORR     r10, r10, r7, LSL #16
+        BL      ts_getbytedec
+        ORR     r10, r10, r7, LSL #8
+        BL      ts_getbytedec
+        ORR     r10, r10, r7
+        BL      ts_getbytedec
+        MOV     r11, r7, LSL #24
+        BL      ts_getbytedec
+        ORR     r11, r11, r7, LSL #16
+        ORR     r11, r11, #1                    ; set validity bit
+        ADD     lr, r1, #CSH_PCR_old_packets
+        STMIA   lr, {r9-r11}                    ; store as details for old PCR
+        Pull    "r9-r11"
+        SUB     r10, r10, #6
+
+80      BL      ts_skipbytes                    ; skip remaining bytes in adaptation field, if any
+        EXIT
 
 ts_process_PES_packet_header Entry
  [ DoPEH
@@ -3068,15 +3107,58 @@ Stats_CSH Entry
         MOV     r6, r1
         EXIT
 
+Stats_Bitrate Entry "r0-r5"
+        ADD     lr, r1, #CSH_PCR_old
+        LDMIA   lr, {r1-r5}                     ; get PCR info
+        AND     lr, r2, r5
+        TST     lr, #1                          ; if either of the PCRs is invalid
+        MOVEQ   r6, #0                          ; then exit with a flag value of 0
+        EXIT    EQ
+
+        MOV     r0, r2, LSL #7                  ; r0 is 27MHz part of old PCR in bits 23-31
+        AND     r2, r2, #&80000000              ; r1,r2 is 90kHz part of old PCR
+        MOV     r6, r5, LSL #7                  ; r6 is 27MHz part of older PCR in bits 23-31
+        AND     r5, r5, #&80000000              ; r4,r5 is 90kHz part of older PCR
+        SUBS    r2, r2, r5
+        SBC     r1, r1, r4                      ; r1,r2 is difference between 90kHz parts, should be small and positive
+        MOV     r4, r2, LSR #29
+        ORR     r4, r4, r1, LSL #3              ; r4 = 4 * difference
+        MOV     r5, r4, LSL #1                  ; r5 = 8 * difference
+        ADD     r5, r5, r4, LSL #3              ; r5 = 40 * difference
+        ADD     r5, r5, r4, LSL #6              ; r5 = 296 * difference
+        ADD     r4, r4, r5                      ; r4 = 300 * difference (ie now in 27MHz ticks)
+        ADD     r4, r4, r0, LSR #26
+        SUB     r4, r4, r6, LSR #26             ; r4 is now total time difference, in 27MHz ticks
+
+        ; Save FP context - requires 32-bit FPEmulator, so STB-3 or later only
+        RFS     r1
+        STR     r1, Saved_FPSR
+        MOV     r1, #&00000000                  ; all exceptions suppressed
+        WFS     r1
+        ASSERT  :INDEX: Saved_FPRegs < 1024     ; aasm does not assemble SFM and LFM correctly
+        DCD	&EDCC8200+:INDEX:Saved_FPRegs/4 ; SFM     f0, 3, [wp, #:INDEX:Saved_FPRegs]
+
+        LDFD    f2, =4.0608E10                  ; = 188*8*27E6 = length of packet in bits, divided by length of tick in seconds
+        FLTD    f0, r3                          ; number of TS packets between PCRs
+        FLTD    f1, r4                          ; time between PCRs in 27MHz ticks
+        MUFD    f0, f0, f2
+        DVFD    f0, f0, f1
+        FIX     r6, f0                          ; r6 = bitrate in bits per second
+
+        ; Restore FP context
+        DCD	&EDDC8200+:INDEX:Saved_FPRegs/4 ; LFM     f0, 3, [wp, #:INDEX:Saved_FPRegs]
+        LDR     r1, Saved_FPSR
+        WFS     r1
+
+        EXIT
+
+        LTORG
 
 ; The table containing all the statistics
 
 StatsTable
 	StatsTableEntry &0000, CSH_DataReceived
 	StatsTableEntry &0001, Stats_InTime, Code
- [ SkipToSeqOnResetStream
-	StatsTableEntry &0002, Stats_SkippingAfterReset, Code
- ]
 	StatsTableEntry &0003, CSH_PMT_PID
 	StatsTableEntry &0004, CSH_Video_PID
 	StatsTableEntry &0005, CSH_Audio_PID
@@ -3087,6 +3169,7 @@ StatsTable
 	StatsTableEntry &0009, Stats_NPTDescriptor, Code
  ]
         StatsTableEntry &000A, Stats_CSH, Code
+        StatsTableEntry &000B, Stats_Bitrate, Code
 	&	-1
 
 ; **************************************************************************
@@ -3118,7 +3201,8 @@ TransCtrlInfo_Code Entry
         LDR     r0, [r1, #CSH_DataReceived]
         BL      DecimalOutput
         DLINE   ""
-        MOV     r2, r0
+        LDR     r2, [r1, #CSH_DataReceivedAtPlayTime]
+        SUB     r2, r0, r2
 
         DLINE   "Bytes returned = ", cc
 
@@ -3127,13 +3211,14 @@ TransCtrlInfo_Code Entry
         DLINE   ""
 
         DLINE   "In time ", cc
-        LDR     r0, [r1, #CSH_LastTime]
-        LDR     r3, [r1, #CSH_StartTime]
-        SUB     r0, r0, r3
+        LDR     r3, [r1, #CSH_LastTime]
+        LDR     r0, [r1, #CSH_StartTime]
+        SUB     r0, r3, r0
         BL      DecimalOutput
         DLINE   " cs"
 
-        TEQ     r0, #0
+        LDR     r0, [r1, #CSH_PlayTime]
+        SUBS    r0, r3, r0
         BEQ     %FT10
 
 ; we want to perform (bytes*100)/cs, but bytes*100 might overflow 32 bits
@@ -3147,7 +3232,10 @@ TransCtrlInfo_Code Entry
         MLA     r0, r3, r4, r5          ; add on original value*100
         DLINE   "Average data rate = ", cc
         BL      DecimalOutput
-        DLINE   " bytes/second"
+        DLINE   " bytes/second   = ",cc
+        MOV     r0, r0, LSL#3
+        BL      DecimalOutput
+        DLINE   " bits/second"
         Pull    "r0"
  [ DataRateStats
 ; r0 = number of centiseconds since starting
@@ -3174,13 +3262,14 @@ TransCtrlInfo_Code Entry
         B       %BT05
  ]
 10
- [ SkipToSeqOnResetStream
-	LDR	r0, [r1, #CSH_StreamFlags]
-	TST	r0, #StreamFlags_SkippingAfterReset
-	BEQ	%FT20
-	DLINE	"*** Still skipping after a reset ***"
-20
- ]
+
+        LDR     r0, [r1, #CSH_PCR_PID]
+        DREG    r0, "Ideal bitrate (from PCRs on PID ", cc
+        DLINE   ") = ", cc
+        BL      Stats_Bitrate
+        MOV     r0, r6
+        BL      DecimalOutput
+        DLINE   " bits/second"
 
  [ Save1stPacket
 	LDR	r2, [r1, #CSH_SavedLength]
