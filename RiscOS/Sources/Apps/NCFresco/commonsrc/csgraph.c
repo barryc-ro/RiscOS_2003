@@ -241,7 +241,7 @@ extern int csg_find_abs_floaters(rid_table_item *table, BOOL horiz)
 #endif
 }
 
-#ifndef FRESCO
+#if 0
 extern void csg_examine(pcp_cell the_cells, const int max)
 {
 #if DEBUG && 0

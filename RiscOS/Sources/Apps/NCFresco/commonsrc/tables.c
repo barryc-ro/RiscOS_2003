@@ -2094,6 +2094,7 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     generic_start(context, element, attributes);
 
+#if IGNORE_CAPTION
     if ( !config_display_tables )
     {
         TABDBG(("caption: ignoring\n"));
@@ -2142,7 +2143,7 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 				   NULL);
 
     SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_CENTER);
-
+#endif
     TABDBG(("Caption entered\n"));
 }
 
@@ -2157,6 +2158,7 @@ extern void finishcaption(SGMLCTX *context, ELEMENT *element)
 
     generic_finish(context, element);
 
+#if IGNORE_CAPTION
     if ( !config_display_tables )
     {
         TABDBG(("finishcaption: ignoring\n"));
@@ -2184,6 +2186,7 @@ extern void finishcaption(SGMLCTX *context, ELEMENT *element)
     {
 	htmlctx->rh->curstream = table->oldstream;
     }
+#endif
 }
 
 /*****************************************************************************

@@ -3548,7 +3548,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 	be_doc_fetch_bg(doc);
     }
 
-
+    /* SJM: 30/09/97: Does this do anything useful anymore/ever ?? */
     PPDBG(("Sizing objects from 0x%p\n", ti));
     while (ti)
     {

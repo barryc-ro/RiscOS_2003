@@ -471,14 +471,19 @@ static int largest_implied_table_width(rid_table_item *table,
 
 	    if ( a > 0 && (table->colspans[x].flags & colspan_flag_PERCENT) != 0 )
 	    {
-		const int z = (100 * q ) / a;
+		const int z = (100 * q ) / a;			/* SJM:width of table implied by this column percent in OS units */
+
 		if (z > widest)
 		    widest = z;
 
 		if (gbf_active(GBF_SI1_PCT))
 		{
-		    const int F = (a * SI1_PCT_WIDTH) / 100;
-		    if (z > F)
+#ifdef BOLLOCKS
+		    const int F = (a * SI1_PCT_WIDTH) / 100;	/* SJM: this was the max width of column given 576 pixel wide page, in pixels */
+#else
+		    const int F = SI1_PCT_WIDTH*2;
+#endif
+		    if (z > F)	/* compare implied width with our imposed maximum sensible */
 		    {
 			FMTDBG(("largest_implied_table_width: SI1_PCT (A) triggered: NUKING COLUMN %d (%d > %d)\n", x, z, F));
 			table->flags |= rid_tf_SI1_PCT;
@@ -499,11 +504,15 @@ static int largest_implied_table_width(rid_table_item *table,
 
 	if (pct_used != 100)
 	{
-	    x = (100 * width_non_pct) / (100 - pct_used);
+	    x = (100 * width_non_pct) / (100 - pct_used);		/* SJM: total table width implied by columns expressed absolutely  in OS units*/
 
 	    if (x > widest)
 	    {
-		const int z = ((100 - pct_used) * SI1_PCT_WIDTH) / 100;
+#ifdef BOLLOCKS
+		const int z = ((100 - pct_used) * SI1_PCT_WIDTH) / 100;	/* SJM: width of non pct columns implied by our maximum width in pixels */
+#else
+		const int z = SI1_PCT_WIDTH*2;					/* SJM: imposed maximum width of non-percent items */
+#endif
 		if (x > z && gbf_active(GBF_SI1_PCT))
 		{
 		    int i;
@@ -784,10 +793,12 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 		   user percentages. If this isn't what they intended,
 		   TOUGH. */
 		FMTDBGN(("100%% specified but other columns to account for!\n"));
+
 		colspan_column_and_eql_halve(table, horiz, PCT_RAW,
 					     colspan_flag_PERCENT,
 					     colspan_flag_PERCENT);
 		total = colspan_sum_columns(table, horiz, PCT_RAW);
+
 		FMTDBGN(("100%% reduced to %d%% through a halving operation\n", total));
 		/* Should be 50%, but might get rounding artifacts? */
 	    }

@@ -835,12 +835,20 @@ extern void startparam(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		  &attributes->value[HTML_PARAM_VALUETYPE]);
 }
 
-#if 0
-extern void finishparam(SGMLCTX *context, ELEMENT *element)
-{ 
-    generic_finish(context, element); 
+extern void startbadparam (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    HTMLCTX *me = htmlctxof(context);
+    rid_object_item *obj = me->object;
+
+    generic_start (context, element, attributes);
+
+    if (obj && attributes->value[HTML_BADPARAM_NAME].type == value_string)
+	add_param(obj,
+		  &attributes->value[HTML_BADPARAM_NAME].u.s,
+		  &attributes->value[HTML_BADPARAM_VALUE],
+		  &attributes->value[HTML_BADPARAM_TYPE],
+		  &attributes->value[HTML_BADPARAM_VALUETYPE]);
 }
-#endif
 
 /* -------------------------------------------------------------------------- */
 

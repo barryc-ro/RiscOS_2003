@@ -53,6 +53,8 @@ static void colspan_algorithmLR(rid_table_item *table, int slot, BOOL horiz)
     /* initialise the first leftmost which is the very start of the whole table */
     the_cells[0].leftmost = 0;
 
+    /* FMTDBGN(("colspan_algorithLR: horiz %d slot %s\n", horiz, WIDTH_NAMES[slot])); */
+
     /* loop through the rest of the cells */
     for (x = 0; x < max; x++)
     {
@@ -65,6 +67,8 @@ static void colspan_algorithmLR(rid_table_item *table, int slot, BOOL horiz)
 	/* initialise next cell's leftmost using min width of cell alone */
 	next_cell->leftmost = (cell->leftmost + cell->width[slot]);
 	
+	/* FMTDBGN(("  cell leftmost %d width %d\n", cell->leftmost + cell->width[slot])); */
+
 	/* Run down groups ending here. */
 	while (group != NULL)
 	{
@@ -74,6 +78,8 @@ static void colspan_algorithmLR(rid_table_item *table, int slot, BOOL horiz)
 	    const int my_leftmost = the_cells[group->istart].leftmost + group->width[slot];
 
 	    ASSERT(group->width[slot] != NOTINIT); /* must be set or already screwed! */
+
+	    /* FMTDBGN(("    next_cell leftmost %d my_leftmost %d\n", next_cell->leftmost, my_leftmost)); */
 
 	    if (my_leftmost > next_cell->leftmost)
 	    {

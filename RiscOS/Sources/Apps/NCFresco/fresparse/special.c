@@ -535,10 +535,4 @@ extern void finishbadtr (SGMLCTX * context, ELEMENT * element)
     generic_finish (context, element);
 }
 
-extern void startbadparam (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
-{
-    generic_start (context, element, attributes);
-}
-
-
 /* eof special.c */

@@ -31,7 +31,7 @@ static const char * WIDTH_NAMES[N_COLSPAN_WIDTHS] = WIDTH_NAMES_ARRAY;
 
 /*****************************************************************************/
 
-#ifndef FRESCO
+#if 0
 static void generate_constraints_summary(rid_table_item *table,
 					 BOOL horiz,
 					 constraints_summary *ptr)
@@ -312,8 +312,15 @@ extern void colspan_bias(rid_table_item *table, int bias, BOOL horiz)
   Initialise the values in the column headers for the slot given from
   the leftmost values currently associated with the table.
 
- */
+  SJM: Tried this but it fails the ordered tests although it does the job.
+  It now actually initialises from the lower of the widths calculated
+  from leftmost and rightmost. This appears to fix the problem where
+  the lower cells in the following table wouldn't get evenly
+  spread. All the space ended up in the last cell.
 
+  <TABLE><TR><TD COLSPAN=4>text<TR><TD>1<TD>2<TD>3<TD>4</TABLE>
+*/
+  
 extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array_e slot, BOOL horiz)
 {
     const int max = horiz ? table->cells.x : table->cells.y;
@@ -327,10 +334,15 @@ extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array
     for (x = 0, prev = 0; x < max; x++)
     {
 	pcp_cell cell = table->colspans + x;
+#if 0
+	const int z1 = (cell+1)->leftmost - cell->leftmost;
+	const int z2 = (cell+1)->rightmost - cell->rightmost;
+	cell->width[slot] = MIN(z1, z2);
+#else
 	const int z = (cell+1)->leftmost;
-
 	cell->width[slot] = z - prev;
 	prev = z;
+#endif
     }
 }
 
@@ -1335,7 +1347,7 @@ static BOOL notch(rid_table_item *table,
 
  */
 
-#ifndef FRESCO
+#if 0
 static int proportional_slop_share(rid_table_item *table,
 				   BOOL horiz,
 				   width_array_e min_slot,
@@ -1708,7 +1720,7 @@ static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
 
   */
 
-#ifndef FRESCO
+#if 0
 static void most_constraints_then_share_fairly(rid_table_item *table,
 					       int best,
 					       int fwidth,
@@ -1961,7 +1973,7 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 
   */
 
-#ifndef FRESCO
+#if 0
 extern void format_position_table_cells(rid_table_item *table)
 {
 }
@@ -1969,7 +1981,7 @@ extern void format_position_table_cells(rid_table_item *table)
 
 /*****************************************************************************/
 
-#ifndef FRESCO
+#if 0
 static width_array_e choose_best_slot(rid_table_item *table,
 				      BOOL horiz,
 				      int fwidth)
