@@ -89,6 +89,7 @@ rm.PDriverDP: Hdr:PDumper
 rm.PDriverDP: Hdr:Proc
 rm.PDriverDP: Hdr:MsgTrans
 rm.PDriverDP: Hdr:PaletteV
+rm.PDriverDP: Hdr:EnvNumbers
 rm.PDriverDP: hdr:HostFS
 rm.PDriverDP: hdr:NDRDebug
 rm.PDriverDP: s.Core.Constants
@@ -158,6 +159,7 @@ rm.PDriverPS: Hdr:PDumper
 rm.PDriverPS: Hdr:Proc
 rm.PDriverPS: Hdr:MsgTrans
 rm.PDriverPS: Hdr:PaletteV
+rm.PDriverPS: Hdr:EnvNumbers
 rm.PDriverPS: hdr:HostFS
 rm.PDriverPS: hdr:NDRDebug
 rm.PDriverPS: s.Core.Constants

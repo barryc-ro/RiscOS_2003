@@ -128,6 +128,9 @@ initialise
 ; we will be dormant in ROM, as long as PDriver is after us in chain
         SWI     XPDriver_CurrentJob     ;cheap check that PDriver module is present
         BVC     init_pdriver_active
+        
+        Debug	PageBox, "initialised PDriver$DirSuffix"
+        
 ; PDriver not present
         ADR     r0, no_PDriver_error
         MOV     r1, #0 ; use global messages
@@ -199,7 +202,8 @@ init_pdriver_active
         STR     R0,temprmablock
 
 ; We haven't played around with ESCAPEs yet
-        STRB    R0,escapedepth
+        STRB	R0,escapedepth
+	Debug	misc, "escapedepth", r0
 
 ; Initialise interception information
         BL      initintercept
@@ -314,11 +318,21 @@ finalise
 
 monitoroutput
         Push    "LR"
+        ;We are interested in spriteops 60, 61, regardless of bits 8, 9.
         AND     LR,R0,#&3E
         TEQ     LR,#&3C
-        ASSERT  SpriteReason_SwitchOutputToSprite = &3C
-        ASSERT  SpriteReason_SwitchOutputToMask = &3D
         Pull    "PC",NE                 ;Pass through if not interesting.
+        
+	[	debug
+	CMP	r2, #0
+	DebugIf EQ, PageBox, "monitoroutput: to screen"
+	DebugIf	NE, PageBox, "monitoroutput: to sprite", r2
+	]
+
+	LDRB	lr, wimpreportflag	;Also, don't interfere if there's an error
+	TEQ	lr, #0			;  box open. JRC Tue 22nd April 1997
+	Pull	"pc", NE
+
         Pull    "LR"
 
         Push    "R0-R7"
@@ -332,20 +346,18 @@ monitoroutput
 ;; functionality of the module, though there are indications that
 ;; something went wrong during debugging of the module at some point.
 
-      [ {TRUE}
         Push    "R10,R11"
-        ASSERT  :BASE:currenthandle = R12
-        ASSERT  :INDEX:currenthandle = 0
-        ASSERT  currentws = currenthandle + 4
         LDMIA   R12,{R10,R11}           ;R10:=currenthandle, R11:=currentws
+
         TEQ     R10,#0                  ;Don't deal with screen specially if
         BEQ     monitoroutput_nojob     ;  there's no current job
+
         TEQ     R2,#0                   ;If job exists & switching output to
+	DebugIf	EQ, PageBox, "intercepting redirection to screen"
         ADREQ   R10,jobspriteparams     ;  screen, really switch it to the
         LDMEQIA R10,{R0-R3}             ;  job's sprite
 monitoroutput_nojob
         Pull    "R10,R11"
-      ]
 
         ADR     R7,monitoroutput_cont+SVC_mode  ;Call routine, returning to
         Push    "R7,R12"                        ;  monitoroutput_cont
@@ -366,6 +378,11 @@ monitoroutput_cont
 ;----------------------------------------------------------------------------
 
 serviceentry
+	[	debug
+	TEQ	r1, #&68			;Don't attempt to trace Service_FileClosed
+	DebugIf	NE, svc, "+service", r1
+	]
+
         TEQ     R1,#Service_PDriverStarting     ;Declare ourselves
         BEQ     serviceentry_declare
 
@@ -379,9 +396,27 @@ serviceentry
         TEQ     R1,#Service_PDriverGetMessages  ; find messages doofers!
         BEQ     ServiceMessages              
 
-        TEQ     R1,#Service_Reset               ; Service reset?
-        MOVNES  pc,lr
+	[	debug
+	TEQ	R1,#Service_SwitchingOutputToSprite
+	BEQ	serviceentry_switchingoutputtosprite
 
+	TEQ	R1,#Service_Print
+	BEQ	serviceentry_print
+
+	TEQ	R1,#Service_WimpCloseDown
+	BEQ	serviceentry_wimpclosedown
+        ]
+
+        TEQ     R1,#Service_Reset               ; Service reset?
+	BEQ	serviceentry_reset
+
+	[	debug
+	TEQ	r1, #&68			;Don't attempt to trace Service_FileClosed
+	DebugIf	NE, svc, "-service", r1
+	]
+	MOVS	pc,lr
+
+serviceentry_reset
         Push    "R0,R1,R2,R3,R4,R11,LR"
         BL      initintercept           ;Reset will have stopped us
                                         ;  intercepting the vectors
@@ -400,6 +435,7 @@ serviceentry_fontslost_loop             ;Tell printer specific code the font
 serviceentry_fontslost_loopend
         BL      releasetemprmablock     ;Get rid of any temporary RMA block
         BL      reset                   ;Abort all print jobs
+	Debug	svc, "-service"
         Pull    "R0,R1,R2,R3,R4,R11,PC"
 
 serviceentry_declare
@@ -409,7 +445,7 @@ serviceentry_declare
         MOV     R1, R12
         MOV     R2, #$PrinterNumber
         SWI     XPDriver_DeclareDriver
-
+	Debug	svc, "-service"
         Pull    "R0-R2,pc"
 
 serviceentry_modechange
@@ -417,11 +453,17 @@ serviceentry_modechange
         ADR     R0,spriteparams
         BL      setscreenparams
         BL      adjustintercept
+	Debug	svc, "-service"
         Pull    "R0-R4,PC"
 
 serviceentry_reporterror
         Push    "R10,R11,LR"
         STRB    R0,wimpreportflag
+	[	debug
+	TEQ	r0, #0
+	DebugIf	NE, svc, "Service_WimpReportError---error box open"
+	DebugIf	EQ, svc, "Service_WimpReportError---error box closed"
+	]
         ASSERT  :BASE:currenthandle = R12
         ASSERT  :INDEX:currenthandle = 0
         ASSERT  currentws = currenthandle + 4
@@ -436,7 +478,29 @@ serviceentry_reporterror_suspend
         BL      managejob_suspend
 serviceentry_reporterror_return
         BL      adjustintercept
+	Debug	svc, "-service"
         Pull    "R10,R11,PC"
+
+	[	debug
+serviceentry_switchingoutputtosprite
+	TEQ	r4, #0
+	DebugIf	NE, svc, "Service_SwitchingOutputToSprite---to sprite"
+	DebugIf	EQ, svc, "Service_SwitchingOutputToSprite---to screen"
+	Debug	svc, "-service"
+	MOV	pc, lr
+        
+serviceentry_print
+	TEQ	r2, #0
+	DebugIf NE, svc, "Service_Print---on"
+	DebugIf EQ, svc, "Service_Print---off"
+	Debug	svc, "-service"
+	MOV	pc, lr
+        
+serviceentry_wimpclosedown
+	Debug	svc, "Service_WimpCloseDown", r0, r2
+	Debug	svc, "-service"
+	MOV	pc, lr
+        ]
 
 ; Subroutine to release any temporary RMA block that may exist.
 
