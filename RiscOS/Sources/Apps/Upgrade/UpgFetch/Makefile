@@ -110,10 +110,3 @@ ${TARGET}: ${OBJS}
 
 #
 # Dynamic dependencies:
-
-o.testftp: c.testftp C:h.string C:h.swis C:h.kernel C:h.kernel C:interface.h.URL C:h.math
-o.fetchimage: c.fetchimage C:h.string C:h.swis C:h.kernel C:h.kernel C:interface.h.URL C:h.math tbox:h.wimplib tbox:h.wimp tbox:h.toolbox h.FetchImage h.kill h.ui h.messages h.globals
-o.kill: c.kill C:h.string C:h.swis C:h.kernel C:h.kernel h.kill tbox:h.wimplib tbox:h.wimp tbox:h.wimp h.globals
-o.main: c.main C:h.string C:h.swis C:h.kernel C:h.kernel C:interface.h.URL C:h.math tbox:h.wimplib tbox:h.wimp tbox:h.toolbox h.FetchImage h.kill h.ui h.messages h.globals
-o.ui: c.ui C:h.kernel C:h.swis tbox:h.wimplib tbox:h.wimp tbox:h.toolbox tbox:h.window tbox:h.gadgets tbox:h.event h.ui h.messages h.globals
-o.messages: c.messages C:h.swis C:h.kernel C:h.kernel C:h.string h.messages h.globals
