@@ -111,9 +111,6 @@ util.o: squash.c squash.h
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.debug:	c.debug
-o.debug:	C:h.kernel
-o.debug:	h.debug
 o.squash:	c.squash
 o.squash:	C:h.kernel
 o.squash:	C:h.swis
@@ -146,6 +143,9 @@ o.main:	C:h.visdelay
 o.main:	C:h.kernel
 o.main:	h.squash
 o.main:	h.debug
+o.debug:	c.debug
+o.debug:	C:h.kernel
+o.debug:	h.debug
 o.util:	c.squash
 o.util:	C:h.kernel
 o.util:	C:h.swis

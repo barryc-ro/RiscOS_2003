@@ -25,6 +25,7 @@ COMPONENTS =\
  scale\
  Toolbox\
  Window\
+ TinyStubs\
  Common
 
 #
@@ -48,7 +49,8 @@ WFLAGS  = ~c~v
 all: ${COMPONENTS}
         @echo all: Complete
 
-makefiles:
+export:
+        ${CP} TinyStubs.MakeROM TinyStubs.Makefile ${CPFLAGS}
         ${CP} tbox.colourdbox.MakeROM tbox.colourdbox.Makefile ${CPFLAGS}
         ${CP} tbox.colourmenu.MakeROM tbox.colourmenu.Makefile ${CPFLAGS}
         ${CP} tbox.common.MakeROM tbox.common.Makefile ${CPFLAGS}

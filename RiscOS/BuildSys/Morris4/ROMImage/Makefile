@@ -11,6 +11,7 @@ CLIBDIR = <install$dir>.ROM.Lib
 ABSSYM  = RISC_OSLib:o.AbsSym
 
 MODULES = \
+ UnSqzAIF \
  CDFSFiler \
  CDFS \
  Toshiba \
@@ -41,6 +42,7 @@ MODULES = \
  PDumperLJ \
  PDumperIW \
  PDumperDM \
+ PDumperCX \
  RemPrnSpt \
  PDumperSpt \
  PDriverPS \
@@ -67,6 +69,7 @@ MODULES = \
  DOSFS \
  FilerAct \
  RISC_OSLib \
+ BatMgr \
  Percussion \
  StringLib \
  WaveSynth \
@@ -109,6 +112,7 @@ MODULES = \
  GameModes2 \
  Free \
  FPEmulator \
+ ITable \
  Fonts \
  FSLock \
  FilerSWIs \
@@ -116,6 +120,7 @@ MODULES = \
  RAMFS \
  ADFS \
  FileCore \
+ Econet \
  BBCEconet \
  DrawMod \
  DragAnObj \
@@ -131,6 +136,7 @@ MODULES = \
  ADFSFiler \
  Switcher \
  PS2Driver \
+ Portable \
  Mouse \
  Desktop \
  Wimp \
@@ -209,6 +215,11 @@ Mouse:
         @echo Mouse                      <PositionInRom>  <File$Length>
         @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
 
+Portable:
+        @setolength File$Length ${INSTDIR}.ROM.OS_Core.Portable
+        @echo Portable                   <PositionInRom>  <File$Length>
+        @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
+
 PS2Driver:
         @setolength File$Length ${INSTDIR}.ROM.Morris.PS2Driver
         @echo PS2Driver                  <PositionInRom>  <File$Length>
@@ -284,6 +295,11 @@ BBCEconet:
         @echo BBCEconet                  <PositionInRom>  <File$Length>
         @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
 
+Econet:
+        @setolength File$Length ${INSTDIR}.ROM.Networking.Econet
+        @echo Econet                     <PositionInRom>  <File$Length>
+        @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
+
 FileCore:
         @setolength File$Length ${INSTDIR}.ROM.OS_Core.FileCore
         @echo FileCore                   <PositionInRom>  <File$Length>
@@ -317,6 +333,11 @@ FSLock:
 Fonts:
         @setolength File$Length ${INSTDIR}.ROM.OS_Core.Fonts
         @echo Fonts                      <PositionInRom>  <File$Length>
+        @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
+
+ITable:
+        @setolength File$Length ${INSTDIR}.ROM.OS_Core.ITable
+        @echo ITable                     <PositionInRom>  <File$Length>
         @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
 
 FPEmulator:
@@ -529,6 +550,11 @@ Percussion:
         @echo Percussion                 <PositionInRom>  <File$Length>
         @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
 
+BatMgr:
+        @setolength File$Length ${INSTDIR}.ROM.OS_Core.BatMgr
+        @echo BatMgr                     <PositionInRom>  <File$Length>
+        @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
+
 RISC_OSLib:
         @${CD} ${SRCDIR}.Lib.RISC_OSLib
         @set alias$amu_rom_link amu MACHINE=<Machine> LOCALE=<Locale> ADDRESS=<PositionInRom> rom_link %0
@@ -737,6 +763,11 @@ RemPrnSpt:
         @back
         setolength File$Length ${CLIBDIR}.linked.RemPrnSpt
         @echo RemPrnSpt                  <PositionInRom>  <File$Length>
+        @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
+
+PDumperCX:
+        @setolength File$Length ${INSTDIR}.ROM.Printing.PDumperCX
+        @echo PDumperCX                  <PositionInRom>  <File$Length>
         @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
 
 PDumperDM:
@@ -962,5 +993,10 @@ CDFS:
 CDFSFiler:
         @setolength File$Length ${INSTDIR}.ROM.CD.CDFSFiler
         @echo CDFSFiler                  <PositionInRom>  <File$Length>
+        @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
+
+UnSqzAIF:
+        @setolength File$Length ${INSTDIR}.ROM.OS_Core.UnSqzAIF
+        @echo UnSqzAIF                   <PositionInRom>  <File$Length>
         @seteval PositionInRom PositionInRom + ((File$Length + 3) AND NOT 3) + 4
 

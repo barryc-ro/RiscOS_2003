@@ -21,14 +21,17 @@
 /*From Support*/
 #include "m.h"
 #include "riscos.h"
+#include "svc.h"
 #include "trace.h"
 
-#define JUNK 0xA5 /*used to initialise and clear blocks*/
+#define JUNK0 0xA5 /*used to initialise the client's part of the block*/
+#define JUNK1 0xA7 /*used to initialise our EXTRA bytes*/
+#define JUNK2 0xA9 /*used to clear blocks before freeing*/
 #define GUARD 0xACCE55ED /*set at the head of each block*/
 #define EXTRA 4 /*bytes extra on each block*/
 
-#define m_ASSERT(file, line, c) \
-      (!(c)? m_assert (file, line, #c): (void) 0)
+#define m_ASSERT(file, line, c, msg) \
+      (!(c)? m_assert (file, line, msg): (void) 0)
 
 typedef struct Block *Block;
 
@@ -39,7 +42,7 @@ struct Block
       int size;
       char *file;
       int line;
-      char (data) [UNKNOWN];
+      char data [UNKNOWN];
    };
 
 #define BLOCK(N) \
@@ -50,7 +53,7 @@ struct Block
             int size; \
             char *file; \
             int line; \
-            char (data) [N]; \
+            char data [N]; \
          }
 
 #define sizeof_BLOCK(N) \
@@ -70,7 +73,10 @@ static void m_assert (char *file, int line, char *msg)
    sprintf (error.errmess, "%s,%d: Assertion failure: %s",
          file, line, msg);
 
-   xwimp_report_error (&error, NONE, "Colour Picker", NULL);
+   if (svc_get_mode () == svc_USR)
+      os_generate_error (&error);
+   else
+      xwimp_report_error (&error, NONE, "<<Memory checker>>", NULL);
 }
 /*------------------------------------------------------------------------*/
 static void Check (char *file, int line)
@@ -93,27 +99,35 @@ static void Check (char *file, int line)
    {  count++;
       size += block->size;
 
-      m_ASSERT (file, line, block->guard == GUARD);
-      m_ASSERT (file, line, block->size != 0);
-      m_ASSERT (file, line, strlen (block->file) < FILENAME_MAX);
+      m_ASSERT (file, line, block->guard == GUARD,
+            "Invalid header guard word");
+      m_ASSERT (file, line, block->size != 0,
+            "Size nought block");
+      m_ASSERT (file, line, strlen (block->file) < FILENAME_MAX,
+            "Overlong source file name");
 
       if (block->next != NULL)
-         m_ASSERT (file, line, block->next->prev == block);
+         m_ASSERT (file, line, block->next->prev == block,
+               "Invalid next-block pointer");
 
       if (block->prev != NULL)
-         m_ASSERT (file, line, block->prev->next == block);
+         m_ASSERT (file, line, block->prev->next == block,
+               "Invalid previous-block pointer");
 
       for (i = 0; i < EXTRA; i++)
-         m_ASSERT (file, line, block->data [block->size + i] == JUNK);
+         m_ASSERT (file, line, block->data [block->size + i] == JUNK1,
+               "Overwritten trailing guard bytes");
 
       block = block->next;
    }
 
-   m_ASSERT (file, line, count == Block_Count);
-   m_ASSERT (file, line, size == Byte_Count);
+   m_ASSERT (file, line, count == Block_Count,
+         "Wrong number of blocks");
+   m_ASSERT (file, line, size == Byte_Count,
+         "Wrong block size");
 }
 /*------------------------------------------------------------------------*/
-void *m_alloc (char *file, int line, int size)
+static void *Alloc (char *file, int line, int size, int filler)
 
 {  Block block;
 
@@ -142,7 +156,8 @@ void *m_alloc (char *file, int line, int size)
       block->line = line;
 
       /*data*/
-      memset (block->data, JUNK, size + EXTRA);
+      memset (block->data,        filler, size);
+      memset (block->data + size, JUNK1,  EXTRA);
 
       /*Link it to the rest of the world.*/
       if (List != NULL) List->next = block;
@@ -161,6 +176,12 @@ void *m_alloc (char *file, int line, int size)
    #endif
       return NULL;
 }  }
+/*------------------------------------------------------------------------*/
+void *m_alloc (char *file, int line, int size)
+      {return Alloc (file, line, size, JUNK0);}
+/*------------------------------------------------------------------------*/
+void *m_calloc (char *file, int line, int count, int size)
+      {return Alloc (file, line, count*size, 0);}
 /*------------------------------------------------------------------------*/
 void m_free (char *file, int line, void *ptr, int size)
 
@@ -187,7 +208,7 @@ void m_free (char *file, int line, void *ptr, int size)
       Block_Count--;
       Byte_Count -= block->size;
 
-      memset (block, JUNK, sizeof_BLOCK (block->size));
+      memset (block, JUNK2, sizeof_BLOCK (block->size));
 
       free (block);
 
@@ -257,9 +278,6 @@ void m_summary (char *file, int line)
 
    trace_f (file _ line _ "total: Block_Count %d, Byte_Count %d\n" _
          Block_Count _ Byte_Count);
-
-   m_ASSERT (file, line, i == Block_Count);
-   m_ASSERT (file, line, size == Byte_Count);
 }
 /*------------------------------------------------------------------------*/
 void *m_validate_address (char *file, int line, void *ptr)
@@ -276,6 +294,6 @@ void *m_validate_address (char *file, int line, void *ptr)
             ptr < (void *) &block->data [block->size])
          return ptr;
 
-   abort ();
+   m_ASSERT (file, line, FALSE, "Use of invalid pointer");
    return SKIP;
 }
