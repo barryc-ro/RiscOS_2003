@@ -44,6 +44,7 @@
 
 #include "swis.h"
 #include "Global/RISCOS.h"
+#include "Global/UpCall.h"
 #include "Global/Services.h"
 #include "wimp.h"
 #include "wimplib.h"
@@ -56,7 +57,6 @@
 
 #define NOTUSED(A) ((A)=(A))
 #define RECVBUFSIZE 240
-
 
 /*****************************************************************************
 * New enumerated types
@@ -83,11 +83,15 @@ static int sock = -1;
 static int task_id = 0;
 static int pollword = 0;
 static int i = 1;
+extern char* appstack = 0;
 
 static task_block *root_task = 0;
 
 /* need this to find out if we are the CAO */
 extern void __module_header (void);
+
+static void vtcommand (const char* com);
+
 
 /* turn off stack limit checking for the SVC part of the code */
 #pragma -s1
@@ -130,8 +134,6 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 {
     _kernel_oserror* e = 0;
     struct sockaddr_in server;
-    NOTUSED(cmd_tail);
-    NOTUSED(podule_base);
 
     /* set up debugging */
     debug_initialise (Module_Title, "", "");
@@ -145,10 +147,12 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
     if (sock < 0) return &_inet_error;
 
     /* make the socket generate events */
-    if (socketioctl(sock, FIOASYNC, &i) < 0) e = &_inet_error;
+    if (socketioctl(sock, FIOASYNC, &i) < 0)
+        e = &_inet_error;
 
     /* mark the socket as non-blocking */
-    if (!e && socketioctl(sock, FIONBIO, &i) < 0) e = &_inet_error;
+    if (!e && socketioctl(sock, FIONBIO, &i) < 0)
+        e = &_inet_error;
 
     /* resuse the address so that if we start again we don't fail */
     if (!e && setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &i, sizeof i))
@@ -162,16 +166,23 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
         e = &_inet_error;
 
     /* start accepting connections */
-    if (!e && listen (sock, 5)) e = &_inet_error;
+    if (!e && listen (sock, 5))
+        e = &_inet_error;
 
     /* claim the internet event */
-    if (!e) _swix (OS_Claim, _INR(0, 2), EventV, internetv_entry, pw);
+    if (!e) e = _swix (OS_Claim, _INR(0, 2), EventV, internetv_entry, pw);
     if (!e) _kernel_osbyte (Event_Enable, Event_Internet, 0);
+
+    /* claim upcallv for media not present */
+    if (!e) e = _swix (OS_Claim, _INR(0,2), UpCallV, upcallv_entry, pw);
 
     /* if there was an error, close the socket */
     if (e) socketclose (sock);
 
     return e;
+
+    NOTUSED(cmd_tail);
+    NOTUSED(podule_base);
 }
 
 
@@ -199,8 +210,8 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 
 _kernel_oserror *module_final(int fatal, int podule, void *pw)
 {
-    NOTUSED(fatal);
-    NOTUSED(podule);
+    /* deregister for upcallv */
+    _swix (OS_Release, _INR(0,2), UpCallV, upcallv_entry, pw);
 
     /* disable and deregister for the internet event */
     _kernel_osbyte (Event_Disable, Event_Internet, 0);
@@ -221,11 +232,6 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
         while (tsk) {
             dprintf(("", "closing task %p\n", tsk));
             socketclose (tsk->sock);
-//          WimpPollBlock b;
-//          memset (&b, 0, sizeof b);
-//          b.user_message.hdr.size = sizeof b.user_message.hdr;
-//          b.user_message.hdr.action_code = Wimp_MQuit;
-//          wimp_send_message (Wimp_EUserMessage, &b, child, 0, 0);
             wimp_close_down (tsk->task_id);
             ntsk = tsk->next;
             _kernel_RMAfree (tsk);
@@ -234,11 +240,14 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
     }
 
     return 0;
+
+    NOTUSED(fatal);
+    NOTUSED(podule);
 }
 
 /*****************************************************************************
 * FunctionName
-*  eventv
+*  internetv
 *
 * Description of the function
 *  handles internet events
@@ -260,8 +269,6 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
 
 int internetv(_kernel_swi_regs *r, void *pw)
 {
-    NOTUSED(pw);
-
     /* we're not interested in out of band or other events */
     if (r->r[1] != 1) return 1;
 
@@ -282,10 +289,67 @@ int internetv(_kernel_swi_regs *r, void *pw)
         }
     };
 
-
     return 1;
+
+    NOTUSED(pw);
 }
 
+/*****************************************************************************
+* FunctionName
+*  upcallv
+*
+* Description of the function
+*  watches out for media not present
+*
+* Inputs
+*  _kernel_swi_regs* r: the state of the registers when the call was made
+*  void* pw:            the private word for this module
+*
+* Outputs
+*  _kernel_swi_regs* r: the state of the registers to return
+*
+* Returns
+*  0 to claim, 1 to pass on.
+*****************************************************************************/
+
+int upcallv (_kernel_swi_regs* r, void* pw) {
+    int task;
+    task_block* tsk;
+
+    dprintf (("", "Upcall %x\n", r->r[0]));
+
+    if ((r->r[0] != UpCall_MediaNotPresent &&
+        r->r[0] != UpCall_MediaNotKnown) ||
+        root_task == 0) {
+        dprintf (("", "Not relevant\n"));
+        return 1;
+    }
+
+    /* find current task handle */
+    if (_swix (Wimp_ReadSysInfo, _IN(0) | _OUT(0), 5, &task)) return 1;
+    tsk = root_task;
+
+    /* is this one of our tasks? return if not */
+    while (tsk) {
+        if (tsk->task_id == task) break;
+        tsk = tsk->next;
+    }
+
+    if (tsk->task_id != task) {
+        dprintf (("", "Not one of ours\n"));
+        return 1;
+    }
+
+    /* if this was for our task , then set R0 to -1 to cancel, we don't want an
+    error box popped up */
+    dprintf (("", "Cancelling\n"));
+    r->r[0] = -1;
+
+    /* claim the upcall */
+    return 0;
+
+    NOTUSED(pw);
+}
 
 /*****************************************************************************
 * FunctionName
@@ -311,8 +375,6 @@ int internetv(_kernel_swi_regs *r, void *pw)
 
 void module_services(int service_number, _kernel_swi_regs *r, void *pw)
 {
-    NOTUSED(pw);
-
     switch (service_number) {
 
     /* if we haven't started yet then return the star command to start us and
@@ -336,9 +398,22 @@ void module_services(int service_number, _kernel_swi_regs *r, void *pw)
         task_id = 0;
         break;
 
+    /* if our task is inadvertantly killed, zero our task id */
+    case Service_WimpCloseDown:
+        if (task_id != 0 && r->r[2] == task_id) {
+            task_id = 0;
+            if (appstack != 0) {
+                _kernel_RMAfree (appstack);
+                appstack = 0;
+            }
+        }
+        break;
+
     default:
         break;
     }
+
+    NOTUSED(pw);
 }
 
 /*****************************************************************************
@@ -370,7 +445,6 @@ _kernel_oserror *commands(const char *arg_string, int argc, int cmd_no, void *pw
     case CMD_Desktop_TServer:
         /* Don't start the task if it's already started */
         if (task_id == -1 || task_id == 0) {
-            wimp_slot_size (TServer_SlotSize, -1, 0, 0, 0);
             _swix (OS_Module, _INR(0, 2), Module_Enter, Module_Title, arg_string);
         }
         break;
@@ -872,6 +946,7 @@ static void taskwindow_output (WimpPollBlock* block)
             for (j = i; j < size; ++j) {
                 dprintf(("", "TW:%d\n", ptr[j]));
                 switch (ptr[j]) {
+                case 7:
                 case 8:
                 case 10:
                 case 13:
@@ -893,35 +968,75 @@ static void taskwindow_output (WimpPollBlock* block)
             }
 
             /* if we've got anywhere, send out the characters */
-            if (j > i) socketwrite(tsk->sock, ptr + i, j - i);
+            if (j > i && (!(tsk->flags&Task_OutputDisabled)))
+                socketwrite(tsk->sock, ptr + i, j - i);
 
-            /* if we hit a control character, send an escape
-               sequence */
-            if (j < size && (ptr[j] < 32 || ptr[j] == 127))
+            /* if we hit a control character, send an escape sequence */
+            if (j < size && (ptr[j] < 32 || ptr[j] == 127)) {
+                char buf[20];
+                int l = 0;
                 switch (ptr[j]) {
-                    case 9:
-                        socketwrite (tsk->sock, "\x1b[C", 3);
-                        break;
-                    case 12:
-                        socketwrite (tsk->sock, "\x1b[2J\x1b[H", 7);
-                        break;
-                    case 21:
-                        socketwrite (tsk->sock, "\x1b[2K", 4);
-                        break;
-                    case 127:
-                        dprintf(("","erase\n"));
-                        /* send all deletes together */
-                        {
-                            int k, l;
-                            char buf[10];
-                            for (k = 1; j + k < size && ptr[j+k] == 127; ++k);
-                            l = sprintf (buf, "\x1b[%dD\x1b[%dX", k, k);
-                            dprintf(("", "Writing: '%s'\n", buf));
-                            socketwrite(tsk->sock, buf, l);
-                            j += k - 1;
-                        }
-                        break;
+                case 6:
+                    tsk->flags &= ~Task_OutputDisabled;
+                    dprintf (("", "Output enabled\n"));
+                    break;
+                case 9:
+                    l = sprintf (buf, "\x1b[C");
+                    break;
+                case 12:
+                    l = sprintf (buf, "\x1b[2J\x1b[H");
+                    break;
+                case 17:
+                    /* pray that we've got enough chars! */
+                    if (j + 1 < size)
+                    {
+                        int val = ptr[j+1];
+
+                        /* the colour codes start at 30 for foreground,
+                        and 128 for background */
+                        if (val < 128)
+                            val = (val % 8) + 30;
+                        else
+                            val = ((val - 128) % 8) + 40;
+
+                        l = sprintf (buf, "\x1b[%dm", val);
+                        j += 1;
+                    }
+                    break;
+                case 21:
+                    tsk->flags |= Task_OutputDisabled;
+                    dprintf (("", "Output disabled\n"));
+                    break;
+                case 30:
+                    l = sprintf (buf, "\x1b[H");
+                    break;
+                case 31:
+                    /* pray that we've got enough chars! */
+                    if (j + 2 < size)
+                    {
+                        /* we have to add 1 because VT window starts at 1,1 */
+                        l = sprintf (buf, "\x1b[%dG\x1b[%dd",
+                            ptr[j+1] + 1, ptr[j+2] + 1);
+                        j += 2;
+                    }
+                    break;
+                case 127:
+                    dprintf(("","erase\n"));
+                    /* send all deletes together */
+                    {
+                        int k;
+                        for (k = 1; j + k < size && ptr[j+k] == 127; ++k);
+                        l = sprintf (buf, "\x1b[%dD\x1b[%dX", k, k);
+                        j += k - 1;
+                    }
+                    break;
                 }
+
+                if (l > 0 && (!(tsk->flags&Task_OutputDisabled))) {
+                    dprintf(("", "Writing: '%s'\n", buf));
+                    socketwrite (tsk->sock, buf, l);
+                }
+            }
 
             /* bring i up to date */
             i = j;
@@ -948,10 +1063,10 @@ static void taskwindow_output (WimpPollBlock* block)
 *  void
 *****************************************************************************/
 
-void vtcommand (const char* com) {
+static void vtcommand (const char* com) {
     int task, len;
     task_block* tsk;
-    char* our_com;
+    char our_com[32];
 
     /* find current task handle */
     if (_swix (Wimp_ReadSysInfo, _IN(0) | _OUT(0), 5, &task)) return;
@@ -970,13 +1085,13 @@ void vtcommand (const char* com) {
     for (len = 0; com[len] > 31; len++) dprintf (("", "%d\n", com[len]));
     dprintf (("", "Length = %d, str = '%.*s'\n", len, len, com));
 
-    our_com = malloc (1 + len + 1);
-    if (our_com == 0) return;
+    /* limit command size */
+    if (len > 30) len = 30;
+
     sprintf (our_com, "\x1b%.*s", len, com);
 
     dprintf(("", "Writing: '%s'\n", our_com));
     socketwrite(tsk->sock, our_com, 1 + len);
-    free (our_com);
 }
 
 
@@ -1001,7 +1116,7 @@ void vtcommand (const char* com) {
 void tserver (void) {
     WimpPollBlock block;
     int event_code;
-    int messages[3] = {TaskWindow_Output, TaskWindow_Ego, 0};
+    int messages[] = {TaskWindow_Output, TaskWindow_Ego, TaskWindow_Morio, 0};
 
     /* don't attempt to start the task again */
     if (task_id > 0) {
@@ -1047,8 +1162,8 @@ void tserver (void) {
                         dprintf (("", "scanning tsk %p\n", tsk));
                         if (tsk->task_id == block.user_message.hdr.sender) {
                             socketclose (tsk->sock);
-                            if (last_tsk) last_tsk = tsk->next;
-                            else root_task = 0;
+                            if (last_tsk) last_tsk->next = tsk->next;
+                            else root_task = tsk->next;
                             _kernel_RMAfree (tsk);
                             break;
                         }
