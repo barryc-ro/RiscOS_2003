@@ -253,13 +253,13 @@ clean:
 ${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS}
 	@echo
 	${MKDIR} aof
-	${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
+	${LD} -o $@ -aof ${ROM_OBJS} ${LIBS} ${ROMCSTUBS}
 
 # -----------------------------------------------------------------------------
 # Final link for ROM Image (using given base address)
 #
 
-rom_link: ${DIRS}
+rom_link: ${DIRS} ${ROM_MODULE}
 	@echo
 	${MKDIR} aof
 	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
