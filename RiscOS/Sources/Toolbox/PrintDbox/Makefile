@@ -6,7 +6,6 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 06-Jan-94  AMcC   Created
-# 04-Feb-98  SNB    Updated to allow RAM builds
 #
 
 #
@@ -14,7 +13,6 @@
 #
 COMPONENT  = PrintDbox
 ROM_MODULE = aof.${COMPONENT}
-RAM_MODULE = rm.${COMPONENT}
 
 #
 # Export Paths for Messages module
@@ -29,7 +27,6 @@ CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
-TLD	= tlink
 RM      = remove
 WIPE    = -wipe
 
@@ -37,8 +34,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
-DFLAGS   = -D${SYSTEM}
-ROMFLAGS = -DROM
+DFLAGS   = -DROM
 INCLUDES = -I<Lib$Dir>.tboxlibint.,<Lib$Dir>.tboxlibs:,C:
 
 #
@@ -54,6 +50,7 @@ TBOXLIB   = <Lib$Dir>.tboxlibint.o.tboxlibm
 OBJS =\
  o.Modhdr_NoD\
  o.auxiliary\
+ o.copy\
  o.create\
  o.delete\
  o.events\
@@ -64,35 +61,16 @@ OBJS =\
  o.show\
  o.task
 
-RAM_OBJS =\
- o.Modhdr_NoD\
- o.auxiliary\
- o.create\
- o.delete\
- o.events\
- o.getstate\
- o.hide\
- o.mainRAM\
- o.miscop\
- o.show\
- o.task
-
-MSGSF=o.msgs
-RESF=o.res
-
 #
 # Rule patterns
 #
-.c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
+.c.o:;    ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $<
 
 #
 # Main rules:
 #
 #
-all: ${RAM_MODULE}
-        @echo ${COMPONENT}: Module built (RAM)
-
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
@@ -108,7 +86,6 @@ resources: Resources.${LOCALE}.Messages Resources.${LOCALE}.Res
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
-        ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
@@ -126,22 +103,6 @@ rom_link:
         truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
-
-${MSGSF}: @.Resources.${LOCALE}.Messages
-	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages Resources.${COMPONENT}.Messages
-
-${RESF}: @.Resources.${LOCALE}.Res
-	resgen res_file ${RESF} Resources.${LOCALE}.Res Resources.${COMPONENT}.Res
-
-
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF} ${CLIB}
-	${mkdir} rm
-        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF} ${CLIB}
-        Access $@ RW/R
-
-o.mainRAM: main.c
-	$(CC) ${CFLAGS} -o $@ main.c
-
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:

@@ -27,7 +27,7 @@ CD	= dir
 LIBFILE = libfile
 
 CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} -fah -Fn ${DFLAGS}
-CFLAGSZM = -c -depend !Depend -Wap -zps1 ${INCLUDES} -fah -Fn ${DFLAGS} -zM
+CFLAGSZM = -c -depend !Depend -Wap -zps0 ${INCLUDES} -fah -Fn ${DFLAGS} -zM
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
 LIBFILEFLAGS = -c -o $@
@@ -58,8 +58,8 @@ DEBUGLIBZM = debuglibm
 
 EXPORTS     = ${LIBDIR}.tboxlibint
 
-OBJ      = o.mem o.messages o.string32 o.rmensure o.objsupport o.slist o.toolboxmem
-OBJZM    = z.mem z.messages z.string32 z.rmensure z.objsupport z.slist z.toolboxmem
+OBJ      = o.mem o.messages o.string32 o.rmensure o.objsupport o.slist
+OBJZM    = z.mem z.messages z.string32 z.rmensure z.objsupport z.slist
 
 DBG_OBJ	  = o.debug 
 DBG_OBJZM = z.debug 
@@ -70,8 +70,6 @@ DBG_OBJZM = z.debug
 .SUFFIXES: .z .o .c .s
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .c.z:;      ${CCZM} -c -o $@ $<
-.s.o:;	    ${AS} ${ASFLAGS} -o $@ $<
-.s.z:;	    ${AS} ${ASFLAGS} -o $@ $<
 
 #
 # Build
@@ -86,8 +84,8 @@ ${TBOXLIBZM}: ${OBJZM}
 ${DEBUGLIB}: ${OBJ} ${DBG_OBJ}
    ${LIBFILE} ${LIBFILEFLAGS} ${OBJ} ${DBG_OBJ}
 
-${DEBUGLIBZM}: ${OBJZM} ${DBG_OBJZM}
-   ${LIBFILE} ${LIBFILEFLAGS} ${OBJZM} ${DBG_OBJZM}
+${DEBUGLIBZM}: ${OBJZM} ${DBG_OBJAM}
+   ${LIBFILE} ${LIBFILEFLAGS} ${OBJZM} ${DBG_OBJAM}
 
 clean:
 	${WIPE} o.* ${WFLAGS}

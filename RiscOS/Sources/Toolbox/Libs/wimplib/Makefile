@@ -91,7 +91,6 @@ OBJS		=\
  o.wgetpoi\
  o.wgetrec\
  o.wgetwinf\
- o.wgetwinfni\
  o.wgetwino\
  o.wgetwst\
  o.wgetwst2\
@@ -184,6 +183,29 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
+o.waddmsg: s.waddmsg
+o.wbasesp: s.wbasesp
+o.wblockcpy: s.wblockcpy
+o.wclosedown: s.wclosedown
+o.wclosete: s.wclosete
+o.wclosew: s.wclosew
+o.wcommw: s.wcommw
+o.wcreatei: s.wcreatei
+o.wcreatem: s.wcreatem
+o.wcreatesm: s.wcreatesm
+o.wcreatew: s.wcreatew
+o.wdecodem: s.wdecodem
+o.wdeletei: s.wdeletei
+o.wdeletew: s.wdeletew
+o.wdragbox: s.wdragbox
+o.wforcere: s.wforcere
+o.wforcere2: s.wforcere2
+o.wgetcarp: s.wgetcarp
+o.wgeticst: s.wgeticst
+o.wgetmenu: s.wgetmenu
+o.wgetpoi: s.wgetpoi
+o.wgetrec: s.wgetrec
+o.wgetwinf: s.wgetwinf
 o.wgetwino: s.wgetwino
 o.wgetwst: s.wgetwst
 o.wgetwst2: s.wgetwst2
@@ -221,27 +243,3 @@ o.wtransbl: s.wtransbl
 o.wupdatew: s.wupdatew
 o.wwhichi: s.wwhichi
 o.!!version: s.!!version
-o.waddmsg: s.waddmsg
-o.wbasesp: s.wbasesp
-o.wblockcpy: s.wblockcpy
-o.wclosedown: s.wclosedown
-o.wclosete: s.wclosete
-o.wclosew: s.wclosew
-o.wcommw: s.wcommw
-o.wcreatei: s.wcreatei
-o.wcreatem: s.wcreatem
-o.wcreatesm: s.wcreatesm
-o.wcreatew: s.wcreatew
-o.wdecodem: s.wdecodem
-o.wdeletei: s.wdeletei
-o.wdeletew: s.wdeletew
-o.wdragbox: s.wdragbox
-o.wforcere: s.wforcere
-o.wforcere2: s.wforcere2
-o.wgetcarp: s.wgetcarp
-o.wgeticst: s.wgeticst
-o.wgetmenu: s.wgetmenu
-o.wgetpoi: s.wgetpoi
-o.wgetrec: s.wgetrec
-o.wgetwinf: s.wgetwinf
-o.wgetwinfni: s.wgetwinfni

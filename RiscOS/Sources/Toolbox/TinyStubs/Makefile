@@ -101,15 +101,3 @@ rom_link:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.jcomp: s.jcomp
-o.main:	c.main
-o.main:	C:h.string
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	C:h.errno
-o.main:	C:h.ctype
-o.main:	<Lib$Dir>.tboxlibint.h.messages
-o.main:	C:h.kernel
-o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.main:	h.main
-o.main:	C:h.kernel

@@ -89,10 +89,12 @@ dirs:
 local_dirs:
         ${MKDIR} o
         ${MKDIR} z
+        create local_dirs
 
 clean:
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} z.* ${WFLAGS}
+	${RM}   local_dirs
         ${RM}   rpclib
         ${RM}   rpclibzm
 
@@ -110,6 +112,8 @@ z.clnt_udp: c.clnt_udp
 	cc400 $(CFLAGSM) -c -o z.clnt_udp c.clnt_udp
 
 # Dynamic dependencies:
+o.rpc_dtable:	c.rpc_dtable
+z.rpc_dtable:	c.rpc_dtable
 o.auth_none:	c.auth_none
 o.auth_none:	TCPIPLibs:rpc.h.types
 o.auth_none:	TCPIPLibs:sys.h.types
@@ -269,7 +273,6 @@ o.clnt_udp:	TCPIPLibs:sys.h.cdefs
 o.clnt_udp:	TCPIPLibs:sys.h.errno
 o.clnt_udp:	C:h.kernel
 o.clnt_udp:	TCPIPLibs:rpc.h.pmap_clnt
-o.rpc_dtable:	c.rpc_dtable
 o.get_myaddr:	c.get_myaddr
 o.get_myaddr:	TCPIPLibs:rpc.h.types
 o.get_myaddr:	TCPIPLibs:sys.h.types
@@ -791,7 +794,6 @@ z.clnt_udp:	TCPIPLibs:sys.h.cdefs
 z.clnt_udp:	TCPIPLibs:sys.h.errno
 z.clnt_udp:	C:h.kernel
 z.clnt_udp:	TCPIPLibs:rpc.h.pmap_clnt
-z.rpc_dtable:	c.rpc_dtable
 z.get_myaddr:	c.get_myaddr
 z.get_myaddr:	TCPIPLibs:rpc.h.types
 z.get_myaddr:	TCPIPLibs:sys.h.types
