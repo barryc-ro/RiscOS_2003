@@ -23,6 +23,7 @@
 ;;                      move the cursor to bottom of screen.
 ;;  3-Apr-91    0.22    Internationalised
 ;; 10-Dec-91    0.25    Shortened message tokens.
+;; 20-Apr-00    0.31    Made 32-bit compatible.
 ;;----------------------------------------------------------------------------
 
 Module_BaseAddr
@@ -87,6 +88,7 @@ ModuleHeader
  |
         DCD     0
  ]
+        DCD     ModuleFlags                     - Module_BaseAddr
 
 
 ;=========================================================================
@@ -113,10 +115,10 @@ FinalisationCode ROUT
 ; Only die if we have no instances of Shell's to support
         MOV     r6, lr
         LDR     r12, [r12]
-        CMP     r12, #0
+        CMP     r12, #0                 ; V clear
         ADRNE   r12, ShellCLIFailure
         BNE     CopyError
-        MOVS    pc, r6
+        MOV     pc, r6
 
         LTORG
 
@@ -124,6 +126,13 @@ ShellCLIFailure
         DCD     &900
         =       "SActive", 0
         ALIGN
+
+ModuleFlags
+ [ No32bitCode
+        DCD     0
+ |
+        DCD     ModuleFlag_32bit
+ ]
 
 
 IsAnybodyThere    *  -64*&100000        ; magic number used by the Wimp
@@ -148,7 +157,7 @@ ServiceCall ROUT
         TEQ     r1, #Service_Memory
         TEQNE   r1, #Service_Reset
         TEQNE   r1, #Service_WimpCloseDown
-        MOVNES  PC, LR
+        MOVNE   PC, LR
 ;
 UrsServiceCall
         CMP     r1, #Service_Reset
@@ -162,14 +171,14 @@ svc_memory
         CMP     r14, r2
         CMPEQ   r0, #IsAnybodyThere   ; only claim if this is the Wimp!
         MOVEQ   r1, #0
-        Pull    "pc",,^
+        Pull    "pc"
 
 svc_reset
 ; on reset, free all memory
         STMDB   sp!, {r0-r2, r9, lr}
         LDR     r9, [r12]      ; get workspace
         CMP     r9, #0         ; if zero, then no shell
-        LDMEQIA sp!, {r0-r2, r9, pc}^
+        LDMEQIA sp!, {r0-r2, r9, pc}
         MOV     r0, #0
         STR     r0, [r12]
         MOV     r0, #ModHandReason_Free
@@ -178,7 +187,7 @@ svc_reset
         MOV     r0, #ModHandReason_Free
         MOV     r2, r9
         SWI     XOS_Module
-        LDMIA   sp!, {r0-r2, r9, pc}^
+        LDMIA   sp!, {r0-r2, r9, pc}
 
 svc_wimpclos
         CMP     R0,#0           ; not allowed to object if this was Wimp_Close
@@ -398,8 +407,6 @@ Do_ExitHandler ROUT
 ; The application has died, so return to the Cli prompt
 ; but I'm paranoid - reset all my handlers first
 ;
-        TEQP    pc, #0                 ; make really sure we are user mode
-        MOVNV   r0, r0
         LDR     sp, MyStack
         ADD     sp, sp, #MyStackSize
 
@@ -508,8 +515,6 @@ Do_ErrorHandler ROUT
 ; An error has occurred, print error msg and exit
 ;
         MOV     r12, r0                ; get Workspace pointer in correct reg
-        TEQP    pc, #0                 ; make really sure we are user mode
-        MOVNV   r0, r0
         LDR     r13, MyStack
         ADD     r13, r13, #MyStackSize
 
@@ -602,8 +607,8 @@ SWI_CreateError
         MOV     r2, r9
         SWI     XOS_Module
 
-        Pull    "r0-r9, lr"
-        ORRS    pc, lr, #V_bit          ; return with error
+        SETV                            ; return with error
+        Pull    "r0-r9, pc"
 
 ;
 ; set up default environment handlers (ensure none left in yukky state)
@@ -694,7 +699,7 @@ SWI_Destroy ROUT
         MOV     r10, r12             ; save private word
         LDR     r12, [r12]           ; get workspace
         CMP     r12, #0              ; if zero, then no shell
-        Pull    "r0-r9, pc",EQ,^
+        BEQ     SWI_Destroy_Exit
 
         MOV     r0, #0
         STR     r0, [r10]            ; unchain ourselves - no going back now !
@@ -712,14 +717,19 @@ SWI_Destroy ROUT
         MOV     r2, r12
         SWI     XOS_Module           ; ignore errors
 
-        Pull    "r0-r9, pc",,^
+SWI_Destroy_Exit
+        MOVS    R0, #0               ; clear V
+        mrs    ,R0, CPSR
+        TST     R0, #2_11100         ; in 32-bit mode?
+
+        Pull    "r0-r9, pc",EQ,^     ; no - 26-bit exit
+        Pull    "r0-r9, pc"          ; yes - 32-bit exit (PSR trashed)
 
 ;===================================================================
 
 MessageBlockSize EQU 16
 
 CopyError
-        ORR     lr, lr, #V_bit
         STMDB   sp!, {r0-r7, lr}
         SUB     sp, sp, #MessageBlockSize
         MOV     r0, sp
@@ -739,7 +749,15 @@ CopyError
         SWI     XMessageTrans_CloseFile
 CopyError1
         ADD     sp, sp, #MessageBlockSize
-        LDMIA   sp!, {r0-r7, pc}^
+
+        MOV     R0, #0
+        mrs    ,R0, CPSR
+        TST     R0, #2_11100         ; in 32-bit mode?
+
+        LDMIA   sp!, {r0-r7, lr}
+        ORREQS  pc, lr, #V_bit       ; 26-bit exit - NZC preserved
+        SETV
+        MOV     pc, lr               ; 32-bit exit - NZC trashed
 
 message_filename
         DCB     "Resources:$.Resources.ShellCLI.Messages", 0
