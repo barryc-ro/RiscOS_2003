@@ -7,11 +7,10 @@ COMPONENT  = TTXTView
 APP        = !${COMPONENT}
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
-INSTDIR    = ${APP}
 
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 CC      = cc
 CP      = copy
 LD      = link
@@ -61,10 +60,10 @@ OBJS = main.o\
 #
 # GENERIC RULES
 #
-all: $(FILES)
+all: $(FILES) dirs
      @echo $(COMPONENT): all built
 
-install: $(FILES)
+install: $(FILES) dirs
          $(MKDIR) ${INSTDIR}
          Access $(INSTDIR) RW/R
          $(CP) $(LDIR).Messages  $(INSTDIR).Messages    $(CPFLAGS)
@@ -82,7 +81,7 @@ install: $(FILES)
          @echo $(COMPONENT): installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS} 
+        ${WIPE} o ${WFLAGS} 
         ${RM} ${RDIR}.!RunImage
         ${WIPE} ${INSTDIR} ${WFLAGS}
         @echo $(COMPONENT): cleaned
@@ -90,9 +89,12 @@ clean:
 #
 # Static dependencies:
 #
-${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB} 
+${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB}
         ${LD} ${LINKFLAGS} -o $@ ${OBJS} ${CLIB} ${WIMPLIB} 
 #        ${SQUEEZE} $@
+
+dirs:
+        ${MKDIR} o
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
