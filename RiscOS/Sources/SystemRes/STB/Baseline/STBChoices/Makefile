@@ -32,10 +32,9 @@ APPFLAGS        = { >> rm.Via }
 # Translate phase:
 #
 TRANSLATE       = translate
-TRANSFLAGS      = $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
+TRANSFLAGS      = $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m STBChoicesTransRes:Mappings
 INTRANDIR       = Translate.$(UserIF).$(Locale)
 OUTTRANDIR      = Translated
-TRANSMAPPINGS   = $(INTRANDIR).Mappings
 
 #
 # Program specific options:
@@ -105,18 +104,19 @@ resources:
         @echo $(COMPONENT): resource files copied
 
 translate: dirs
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Acknow     -o $(OUTTRANDIR).Acknow
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).BSD        -o $(OUTTRANDIR).BSD
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).ImageLib   -o $(OUTTRANDIR).ImageLib
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Options    -o $(OUTTRANDIR).Options
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Printing   -o $(OUTTRANDIR).Printing
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Printing2  -o $(OUTTRANDIR).Printing2
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Software   -o $(OUTTRANDIR).Software
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Sounds     -o $(OUTTRANDIR).Sounds
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).SSL        -o $(OUTTRANDIR).SSL
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).StartUp    -o $(OUTTRANDIR).StartUp
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Television -o $(OUTTRANDIR).Television
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Text       -o $(OUTTRANDIR).Text
+        Set STBChoicesTransRes$Path Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.,Translate.Common.UK.
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Acknow     -o $(OUTTRANDIR).Acknow
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:BSD        -o $(OUTTRANDIR).BSD
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:ImageLib   -o $(OUTTRANDIR).ImageLib
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Options    -o $(OUTTRANDIR).Options
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Printing   -o $(OUTTRANDIR).Printing
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Printing2  -o $(OUTTRANDIR).Printing2
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Software   -o $(OUTTRANDIR).Software
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Sounds     -o $(OUTTRANDIR).Sounds
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:SSL        -o $(OUTTRANDIR).SSL
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Television -o $(OUTTRANDIR).Television
+        $(TRANSLATE) $(TRANSFLAGS) -i STBChoicesTransRes:Text       -o $(OUTTRANDIR).Text
+        Unset STBChoicesTransRes$Path
 
 versionvar:
         ${PL} ${PLSCRIPT} ${VERSIONVAR}
