@@ -17,17 +17,22 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = aasm
+AS      = objasm
+LD      = link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit ${OPTS} -To $@ -From
+LDFLAGS = -bin -o $@
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
 #
 COMPONENT = TerrMgr
+OBJECT    = o.TerrMgr
 SOURCE    = s.TerrMgr
 TARGET    = rm.TerrMgr
 EXPORTS   = ${EXP_HDR}.Territory
@@ -47,6 +52,7 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+	${WIPE} o ${WFLAGS}
         ${RM} z.SystemDisc
         @echo ${COMPONENT}: cleaned
 
@@ -55,8 +61,13 @@ resources:
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} z.SystemDisc
+${OBJECT}: ${SOURCE} z.SystemDisc
+	${MKDIR} o
         ${AS} ${ASFLAGS} ${SOURCE}
+
+${TARGET}: ${OBJECT}
+	${LD} ${LDFLAGS} ${OBJECT}
+	SetType $@ &FFA
 
 z.SystemDisc: SystemDisc
         @echo Compressing sprite
