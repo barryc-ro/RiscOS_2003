@@ -1,4 +1,4 @@
-# Makefile for LocaleVar transient
+# Makefile for LocaleRes transient
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -12,7 +12,7 @@
 #
 # Program specific options:
 #
-COMPONENT  = LocaleVar
+COMPONENT  = LocaleRes
 UTILITY    = util.${COMPONENT}
 LIB_EX_DIR = <Lib$Dir>.${COMPONENT}
 
@@ -36,7 +36,7 @@ OFLAGS     = -depend !Depend ${THROWBACK}
 #
 # Objects
 #
-OBJS     = o.LocaleVar
+OBJS     = o.${COMPONENT}
 
 #
 # Rule patterns
