@@ -16,6 +16,7 @@
 #                   Machine and ImageSize headers to be exported.
 # 24-Aug 99  SBF    Added export of C headers, and support for StripDepnd tool
 # 25-Aug 99  SBF    Created "Register.Keyboard"; added this to makefile
+# 11-Jan-00  BJGA   Exports Global.IO.h.GenericIO
 
 #
 # Paths
@@ -128,6 +129,7 @@ EXPORTS   = \
  ${HDIR}.Global.h.Upcall \
  ${HDIR}.Global.h.Tokens \
  ${HDIR}.Global.h.IOCtl \
+ ${HDIR}.Global.IO.h.GenericIO \
 
 #
 # Derived assembler header files
@@ -157,6 +159,7 @@ Dirs:
         ${MKDIR} ${HDIR}.h
         ${MKDIR} ${HDIR}.o
         ${MKDIR} ${HDIR}.Global.h
+        ${MKDIR} ${HDIR}.Global.IO.h
         ${MKDIR} ${HDIR}.Interface.h
         ${MKDIR} ${HDIR}.Interface2.h
         ${MKDIR} ${LIBDIR}
@@ -261,6 +264,7 @@ ${HDIR}.Global.h.Heap:       Hdr.Heap ${HDR2H};           perl ${HDR2H} Hdr.Heap
 ${HDIR}.Global.h.Sprite:     Hdr.Sprite ${HDR2H};         perl ${HDR2H} Hdr.Sprite     $@
 ${HDIR}.Global.h.Tokens:     Hdr.Tokens ${HDR2H};         perl ${HDR2H} Hdr.Tokens     $@
 ${HDIR}.Global.h.CMOS:       Hdr.CMOS ${HDR2H};           perl ${HDR2H} Hdr.CMOS       $@
+${HDIR}.Global.IO.h.GenericIO: Hdr.IO.GenericIO ${HDR2H}; perl ${HDR2H} Hdr.IO.GenericIO $@
 
 
 # C headers:
