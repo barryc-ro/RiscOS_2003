@@ -32,7 +32,7 @@ StreamToken::~StreamToken(void)
 }
 
 #if (NUM_MPEG_Tokens != 2)
-#error Re-defining the number of MPEG tokens; be aware of optimisations used.
+#error Re-defining the number of MPEG tokens; be aware of optimisations used. This has not been made reentrant frendly.
 inline bool
 Stream::tokenfree(void)
 {
@@ -102,36 +102,45 @@ Stream::test_empty_buffers(void)
   int token_id;
   
   if ((state != state_step)||( (--step_times) >= 0)){
- 
-  	MACRO_getFreeToken(token_id);
+    
   
-  	if ( (result != ErrorOccurred)&&(state != state_stop)&&(token_id != -1) ) {
-		buffers[token_id].in_use = claim_token;	// paired with free block
-		int scene_num = 0;		
-	    	result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num);
+  	if ( (result != ErrorOccurred)&&(state != state_stop) ) {
+		
+ 		_kernel_irqs_off();
+  		MACRO_getFreeToken(token_id);
+  		
+  		if (token_id == -1)
+  			_kernel_irqs_on();
+  		else {
+  			buffers[token_id].in_use = claim_token;	// paired with free block
+  			_kernel_irqs_on();
+  		
+  			int scene_num = 0;		
+	    		result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num);
  	
-	 	if (result != ErrorOccurred){
-	 		if(buffers[token_id].block != NULL){
-				buffers[token_id].blocks_returned = 0;
-				if ((scene_blanking == true)&&(scene_num != 0)){
-					if (current_scene != scene_num){
-					  	if (current_scene != 0)
-							reset_sink(mysource->get_most_significant_mode());
-						current_scene = scene_num;
+	 		if (result != ErrorOccurred){
+	 			if(buffers[token_id].block != NULL){
+					buffers[token_id].blocks_returned = 0;
+					if ((scene_blanking == true)&&(scene_num != 0)){
+						if (current_scene != scene_num){
+						  	if (current_scene != 0)
+								reset_sink(mysource->get_most_significant_mode());
+							current_scene = scene_num;
+						}
+					}
+					if ((result = mysink.FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
+					  	if (err_ptr == NULL) err_ptr = &(mysink.ReturnCopyOfError());
+						buffers[token_id].in_use = free_token;
 					}
 				}
-				if ((result = mysink.FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
-				  	if (err_ptr == NULL) err_ptr = &(mysink.ReturnCopyOfError());
+				else
 					buffers[token_id].in_use = free_token;
-				}
-			}
-			else
-				buffers[token_id].in_use = free_token;
-	        }
-	 	else {
-	                buffers[token_id].in_use = free_token;
-	 	  	if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
-	 	} // !get block error occurred
+	        	}
+	 		else {
+	        	        buffers[token_id].in_use = free_token;
+	 		  	if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
+	 		} // !get block error occurred
+	 	}
 	}
   }
   return result;
@@ -210,7 +219,8 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
 
     	server->set_stream_owner();
      	server->reset_message_sent();
-  	mysource = new Source((comms_timeout+1)>>1, source_recvspace);			// create UDP socket
+  	//mysource = new Source((comms_timeout+1)>>1, source_recvspace);			// create UDP socket
+  	mysource = new Source(comms_timeout, source_recvspace);			// create UDP socket
  	
  	if (server->ErrorExists()){ 				// errors on creation of TCP
  		if (err_ptr == NULL) err_ptr = &server->ReturnCopyOfError();
@@ -695,13 +705,14 @@ Stream::stop_stream(ULONG *new_block_number)
 }
 
 //+++++++++++++++++++++++++++++++ interrupt handlers ++++++++++++++++
-
+// this can and will be interrupted by the mpeg calls and internet events.
+//
 inline error_flag
 Stream::timeslice(Statistics *stats)
 {
   if ((ErrorState() == NoError)&&(state != state_stop)){  
   	if (callback_pending & callback_tokenfree){
-		
+  		_kernel_irqs_off();
 #if (NUM_MPEG_Tokens != 2)
 #error (change in tokens)
 		callback_pending -= callback_tokenfree;
@@ -710,7 +721,9 @@ Stream::timeslice(Statistics *stats)
   			callback_pending -= callback_token1free;
   		else
  			callback_pending -= callback_token2free;
-#endif  		
+#endif  	
+  		_kernel_irqs_on();
+  		
   		if ((mysource->calculate_freeBlocks(myserver, &callback_pending, stats, comms_timeout))&&(err_ptr == NULL))
   			err_ptr = &(mysource->ReturnCopyOfError());
 
@@ -719,8 +732,8 @@ Stream::timeslice(Statistics *stats)
   			
                 // this reinitialises the block callback vector if we fill up the blocks
   		if (!(callback_pending & callback_timeout)){
-  			callback_pending += callback_nak_after;
 			MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw));
+  			callback_pending += callback_nak_after;
  		}
  		
  	}
@@ -776,6 +789,9 @@ Stream::timeslice(Statistics *stats)
      	 			 		if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
      	 			}
      	 			else{
+     	 			  	if (mysink.SetSpeed(0) == ErrorOccurred){
+       						if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
+       					}
      	 			  	myserver->reset_message_sent();
      	 			  	callback_pending += callback_bufferswait;
      	 			  	
@@ -861,8 +877,7 @@ Stream::server_inetevent(int code)
   	if (event == COMMAND_startend_notification) {
   	  	mysource->setStartEnd(comms_result);
 #ifdef DEBUGLIB
-		if (Debug(debug_startend)) Debug("START/END %i, current block %i", 
-						comms_result, mysource->get_most_significant_block());
+		if (Debug(debug_startend)) Debug("START/END %i, current block %i", comms_result, mysource->get_most_significant_block());
 #endif        	
         }
   }
@@ -897,8 +912,8 @@ Stream::source_inetevent(int code, Statistics *stats)
 					if (Debug(debug_callbacks))
   						Debug("-callback_after ie");
 #endif  						
-  					callback_pending -= callback_nak_after;
 					_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
+  					callback_pending -= callback_nak_after;
 				}
 				
       			  	if (!(callback_pending & callback_nak_now)){// if a callback is not in the pipe
@@ -907,16 +922,16 @@ Stream::source_inetevent(int code, Statistics *stats)
 						if (Debug(debug_callbacks))
   					  		Debug("+callback_after ie");
 #endif  					  		
-					  	callback_pending += callback_nak_after;
 						MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), timeout, VSP_CallAfterVeneer, pw));
+					  	callback_pending += callback_nak_after;
 					}
 					else {
 #ifdef DEBUGLIB
 						if (Debug(debug_callbacks))
   						  	Debug("+callback_now   ie");
 #endif  						  	
-					  	callback_pending += callback_nak_now;
 						MakeErrorOnError(_swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw));
+					  	callback_pending += callback_nak_now;
 					}
 				}
       			}
@@ -967,10 +982,9 @@ Stream::source_inetevent(int code, Statistics *stats)
 inline error_flag
 Stream::DummyAckCall(void)
 {
-  if ((myserver->comms_flag == false)&&
-      (myserver->SendAck(myserver->getMaxRequestedBlock(), myserver->getMaxRequestedBlock(), dummy_ack) == ErrorOccurred)){
- 		if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
-  }
+  if (myserver->comms_flag == false)
+      myserver->SendAck(myserver->getMaxRequestedBlock(), myserver->getMaxRequestedBlock(), dummy_ack);
+  
   myserver->comms_flag = false;
   
   if ((state != state_stop)&&(ErrorExists())){
@@ -980,7 +994,7 @@ Stream::DummyAckCall(void)
 }
 
 #if (NUM_MPEG_Tokens != 2)
-#error Re-defining the number of MPEG tokens; be aware of optimisations used.
+#error Re-defining the number of MPEG tokens; be aware of optimisations used. not reentrant friendly
 inline error_flag
 Stream::MPEGInterrupt(int buffer_descriptor)
 {
@@ -1015,7 +1029,10 @@ Stream::MPEGInterrupt(int buffer_descriptor)
 {
   if ((buffers[0].in_use == claim_token)&&(buffer_descriptor >= (int)buffers[0].block->buffers)&&
       (buffer_descriptor <  (((int)buffers[0].block->buffers) + (buffers[0].block->max_buffers * sizeof(BitstreamBufferDescriptor))) )){
+        	
+  		_kernel_irqs_off();
       	  	buffers[0].blocks_returned++;
+  		_kernel_irqs_on();
       	  	
   		if (buffers[0].blocks_returned == buffers[0].block->num_buffers){	// if we have received all the blocks free it 			
   			if ((mysource->freeBlock(buffers[0].block) == ErrorOccurred )&&(err_ptr == NULL))
@@ -1031,7 +1048,10 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   else         // not token 0 try token 1
   if ((buffers[1].in_use == claim_token)&&(buffer_descriptor >= (int)buffers[1].block->buffers)&&
           (buffer_descriptor <  (((int)buffers[1].block->buffers) + (buffers[1].block->max_buffers * sizeof(BitstreamBufferDescriptor))) )){
+            
+  		_kernel_irqs_off();
       	  	buffers[1].blocks_returned++;
+  		_kernel_irqs_on();
       	  	
   		if (buffers[1].blocks_returned == buffers[1].block->num_buffers){	// if we have received all the blocks free it
   			if (( mysource->freeBlock(buffers[1].block) == ErrorOccurred )&&(err_ptr == NULL))
@@ -1051,9 +1071,7 @@ Stream::MPEGInterrupt(int buffer_descriptor)
 error_flag
 Stream::ServiceDynamicAreaRenumber(int old_id, int new_id)
 {
-  if (mysource->serviceDynamicAreaRenumber(old_id, new_id) == ErrorOccurred) {
-    	if (err_ptr == NULL) err_ptr = &(mysource->ReturnCopyOfError());
-  }
+  mysource->serviceDynamicAreaRenumber(old_id, new_id);
   
   if ((state != state_stop)&&(ErrorExists()))
   	myserver->send_message_Error(err_ptr);
@@ -1119,8 +1137,8 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
   	for (int i=0;i<Size();i++){
   	  	if (object[i] != NULL){
   			Stream *stream = ((Stream*)object[i]);
- 		
     			if ((stream->source_sd) == identifier) {
+    			  	_kernel_irqs_off();
     			  	if ( (++(stream->inet_udp_reenter)) <= 1)
     			  		do {
         					_kernel_irqs_on();
@@ -1130,9 +1148,11 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
     		  				_kernel_irqs_off();
     		  			} while ((--(stream->inet_udp_reenter)) > 0);
     	 			*claim = claim_event;
+    	 			_kernel_irqs_on();
                 	} 
     			else 
     			if ((stream->server_sd) == identifier) {
+    			  	_kernel_irqs_off();
     			        if ( (++stream->inet_tcp_reenter) <= 1)
     			  		do {
         					_kernel_irqs_on();
@@ -1142,11 +1162,13 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
        						_kernel_irqs_off();
     		  			} while ((--stream->inet_tcp_reenter) > 0);
         			*claim = claim_event; // claim even if in use
+    			  	_kernel_irqs_on();
         		}
+        		
         	}
         }
   }  
-  return  (ErrorExists() ? ErrorOccurred : NoError );
+  return  NoError;
 }
 
 error_flag
@@ -1158,19 +1180,13 @@ StreamList::TimeSliceCall(void *)
     			Stream *stream = ((Stream*)object[i]);
   			
     			if ((stream->callback_pending != callback_none)){
-      				if (( stream->state == state_stop)&&( stream->change_state(state_stop) != ErrorOccurred )){
-#ifdef DEBUGLIB	
-  					if (Debug(debug_streaminfo)) Debug("removing stream %i", i);
-      		  			Remove(identifiers[i]);	// removeit from the list
-  					if (Debug(debug_streaminfo)) Debug("removed stream %i", i);
-#else
-      		  			Remove(identifiers[i]);	// removeit from the list
-#endif  					
-      		  		}
+      				if (( stream->state == state_stop)&&( stream->change_state(state_stop) != ErrorOccurred ))
+      				  	Remove(identifiers[i]);	// removeit from the list    		  			
+      		  		
       				else
-      				if (stream->timeslice(&stats) == ErrorOccurred){
-    					if (err_ptr == NULL)	err_ptr = &stream->ReturnCopyOfError();
-      				}	  	
+      					if (stream->timeslice(&stats) == ErrorOccurred){
+    						if (err_ptr == NULL) err_ptr = &stream->ReturnCopyOfError();
+      					}	  	
 			}
                 } 		
         }
@@ -1178,62 +1194,57 @@ StreamList::TimeSliceCall(void *)
   return  (ErrorExists() ? ErrorOccurred : NoError );
 }
 
-error_flag
+error_flag // fast interrupt
 StreamList::TimeSliceCallTickerTimeout(void *pw)
 {
   if (ErrorState() != ErrorOccurred){
   	for (int i=0; i<Size(); i++){
   	  	if (object[i] != NULL){
-  	  		Stream *stream = ((Stream*)object[i]);
-  	  		if (stream->callback_pending & callback_nak_after){
-				if (!(stream->callback_pending & callback_nak_now)){
-#ifdef DEBUBLIB		  
-					if (Debug(debug_callbacks)) Debug("+callback_now cb");
-#endif			
-		  			stream->callback_pending += callback_nak_now;
-  					MakeErrorOnError(_swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw));
-		        	}
-				stream->callback_pending -= callback_nak_after;
-#ifdef DEBUGLIB
-				if (Debug(debug_callbacks)) Debug("-callback_after");
-#endif		
-	                }
+  	  	  	Stream *stream = ((Stream*)object[i]);
+  	  	  	bool swapped = false;
+  	  	  	
+  	  	  	_kernel_irqs_off();
+  	  	  	if (stream->callback_pending & callback_nak_after){
+  	  	  	  	if (!(stream->callback_pending & callback_nak_now)){
+  	  	  	  	  	swapped = true;
+  	  	  	  		stream->callback_pending += callback_nak_now;
+  	  	  	  	}
+  	  	  	  	stream->callback_pending -= callback_nak_after;
+  	  	  	}
+  	  	  	_kernel_irqs_on();
+  	  	  	
+  	  	  	if (swapped == true)
+  	  	  		_swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);			
 	        }
 	}
- }
- return NoError;
+  }
+  return NoError;
 }
 
-error_flag
+error_flag // fast interrupt no error handling as this is a re-entrancy issue
 StreamList::MPEGInterrupt(int buffer_descriptor)
 {
  if (ErrorState() != ErrorOccurred){
   	for (int i=0; i<Size(); ++i) {
-  	  	if (object[i] != NULL){
-  	  		Stream *stream = (Stream*)object[i];
-  	  		
-    			if ( stream->MPEGInterrupt(buffer_descriptor) == ErrorOccurred ) {
-    				if (err_ptr == NULL)
-    					err_ptr = &(stream->ReturnCopyOfError());
-    				break;
-    			}
-    		}
+  	  	if (object[i] != NULL) 
+    			((Stream*)object[i])->MPEGInterrupt(buffer_descriptor);
   	}
   }
-  return  (ErrorExists() ? ErrorOccurred : NoError );
+  return NoError;
 }
 
-error_flag
+error_flag // fast interrupt on call every
 StreamList::DummyAckPoll(void)
 {
   if (ErrorState() != ErrorOccurred){
   	for (int i=0; i<Size(); ++i)
-    		if ((object[i] != NULL)&&((Stream*)object[i])->DummyAckCall() == ErrorOccurred) {
-    			if (err_ptr == NULL) err_ptr = &((Stream*)object[i])->ReturnCopyOfError();
-    			break;
+    		if (object[i] != NULL){
+    		  	_kernel_irqs_off();
+    		  	((Stream*)object[i])->DummyAckCall();
+    		  	_kernel_irqs_on();
     		}
   }
-  return  (ErrorExists() ? ErrorOccurred : NoError );
+  return  NoError;
 }
 
 error_flag
@@ -1241,11 +1252,11 @@ StreamList::ServiceDynamicAreaRenumber(int old_id, int new_id)
 {
   if ( ErrorState() != ErrorOccurred){
   	for (int i=0;i<Size();i++)
-  		if ( (object[i] != NULL)&&(((Stream*)object[i])->ServiceDynamicAreaRenumber(old_id, new_id) == ErrorOccurred)) {
-    			if (err_ptr == NULL)
-    				err_ptr = &((Stream*)object[i])->ReturnCopyOfError();
-    			break;
-                }
+  		if (object[i] != NULL){
+  		  	_kernel_irqs_off();
+  			((Stream*)object[i])->ServiceDynamicAreaRenumber(old_id, new_id);
+  			_kernel_irqs_on();
+  		}
   }
-  return  (ErrorExists() ? ErrorOccurred : NoError);
+  return NoError;
 }
