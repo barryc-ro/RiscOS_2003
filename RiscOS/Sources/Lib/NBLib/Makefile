@@ -96,7 +96,7 @@ LIBSZ =
 
 .SUFFIXES: .o .oz .s .h .c
 .c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.c.oz:;    ${CC} ${CCFLAGS} -zm --o $@ $<
+.c.oz:;    ${CC} ${CCFLAGS} -zm -o $@ $<
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
 
 
