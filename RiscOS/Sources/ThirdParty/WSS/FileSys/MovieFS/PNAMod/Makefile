@@ -13,7 +13,7 @@
 #
 
 AFLAGS    =
-CFLAGS    = -ffa -zM
+CFLAGS    = -ffa -zM -Wp
 SQZFLAGS  = -f -v
 MODSQZFLAGS = -f -v
 CINCLUDES = -IC:,C:ThirdParty.WSS.BaseLib,TCPIPLibs:
