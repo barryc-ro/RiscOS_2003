@@ -29,14 +29,14 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
-THROWBACK = -Throwback
+# THROWBACK = -throwback
 
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-CMHGFLAGS = -p -depend !Depend -throwback 
+CMHGFLAGS = -p -depend !Depend ${THROWBACK}
 INCLUDES= -IC: 
 
 #
@@ -223,6 +223,10 @@ rom_link:
 
 
 # Dynamic dependencies:
+o.ncma_fx:	c.ncma_fx
+o.ncma_fx:	C:h.kernel
+o.ncma_fx:	C:h.swis
+o.ncma_fx:	h.ncma_fx
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -405,7 +409,3 @@ o.ncma_net:	h.ncma_bootb
 o.ncma_net:	h.ncma_url
 o.ncma_net:	h.smcard
 o.ncma_net:	C:h.DBUG
-o.ncma_fx:	c.ncma_fx
-o.ncma_fx:	C:h.kernel
-o.ncma_fx:	C:h.swis
-o.ncma_fx:	h.ncma_fx
