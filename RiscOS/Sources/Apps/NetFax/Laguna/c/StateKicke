@@ -1,0 +1,156 @@
+/*
+ * StateKicker.c - State machine event and message handler
+ *
+ * R C Manby
+ *
+ * Started 23 July 1997
+ */
+
+
+#include "StdTypes.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include "kernel.h"
+
+#include "PageList.h"
+#include "StateKicker.h"
+
+#include "DebugLib.h"
+
+
+/*
+ * Inter state machine message despatch (ismmd)
+ *
+ * A circular queue of messages and the state machines targeted to receive them
+ */
+
+/*
+ * An element within the queue
+ */
+struct _ismmd_Q_element
+{
+	void				(*StateMachine)(int messageNumber, messageDataBlock *messageData);	/* address of state machine to receive message */
+    int					messageNumber;														/* the messageNumber that will be passed to the state machine when called */
+    messageDataBlock 	messageData;														/* the messageData filled in by sender & passed to state machine when called */
+};
+
+typedef struct _ismmd_Q_element ismmd_Q_element;
+
+/* The circular queue itself */
+#define QSIZE 20
+
+struct
+{                                   /* empty when (qhead == qtail), full when (qhead == (qtail+1)) */
+	int				qhead, qtail;	/* first item to remove is at [qhead+1], last item entered is at [qtail]  */
+    ismmd_Q_element queue[QSIZE];   /* only (QSIZE - 1) entries usable at any time */
+} ismmd = { 0, 0};					/* initialised to empty */
+
+
+/*
+ * Queue message for later despatch to specified state machine
+ *
+ *  StateMachine   state machine to be called (at some future date)
+ *  messageNumber  message to pass it
+ *  rtnMessageData NULL or address of location to pass &messagedata to - sender will fill block if message requires it
+ */
+extern void StateKicker_SendMessage(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, messageDataBlock **rtnMessageData)
+{
+    int qtail = ismmd.qtail;
+
+    /* Print useful information to debug device */
+    dprintf((NULL, "StateKicker_SendMessage: Message => 0x%X\n", messageNumber));
+
+	qtail += 1;
+	if (qtail >= QSIZE)
+		qtail = 0;
+
+    if (qtail == ismmd.qhead)
+    	return;						/* queue full, leave as full - should never happen */
+
+
+    ismmd.qtail = qtail;
+    ismmd.queue[qtail].StateMachine = StateMachine;
+    ismmd.queue[qtail].messageNumber = messageNumber;
+
+    if (rtnMessageData)
+    	*rtnMessageData = &(ismmd.queue[qtail].messageData);
+
+}
+
+
+extern void StateKicker_SendOSError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
+                                    errorCode code, context ctx, _kernel_oserror *error)
+{
+	messageDataBlock *sendMessage;
+
+    StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
+    sendMessage->data.error.code = code;    /* high level error code */
+    sendMessage->data.error.ctx  = ctx;     /* low level context */
+    sendMessage->data.error.rc   = 0;	    /* low level reason code */
+    sendMessage->data.error.err  = *error;	/* MUST copy message block rather than pointer (which will be stale when the message arrives)  */
+}
+
+
+extern void StateKicker_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
+                                    errorCode code, context ctx, int rc, const char *text)
+{
+	messageDataBlock *sendMessage;
+
+    StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
+    sendMessage->data.error.code = code;    /* high level error code */
+    sendMessage->data.error.ctx  = ctx;     /* low level context */
+    sendMessage->data.error.rc   = rc;      /* low level reason code */
+    sendMessage->data.error.err.errnum = 0;
+    strcpy(sendMessage->data.error.err.errmess, text);
+}    
+
+/*
+ *
+ * Returns number of queued items
+ */
+
+extern int StateKicker_GetMessageQLength()
+{
+	return(0);	/*>>>NYA*/
+}
+
+/*
+ * Called by any WimpMessageHandler that calls StateKicker_SendMessage() to despatch a message.
+ *
+ * DO NOT call from within a StateMachine.
+ * Messages sent by a StateMachine are despatched when it un-threads (returns) back though
+ * StateKicker_Deliver() to a WimpMessageHandler.
+ *
+ * Returns 0/1/2 No action/Only message despatched/Message despatched, more waiting
+ */
+extern int StateKicker_Deliver(void)
+{
+	int qhead = ismmd.qhead;
+
+	if (qhead == ismmd.qtail)
+		return(0);					/* queue empty, return */
+
+	qhead += 1;
+	if (qhead >= QSIZE)
+		qhead = 0;
+
+    ismmd.qhead = qhead;
+    (*ismmd.queue[qhead].StateMachine)(ismmd.queue[qhead].messageNumber, &(ismmd.queue[qhead].messageData));
+    if (qhead == ismmd.qtail)
+    	return(1);					/* there was one message, which we despatched */
+
+    return(2);						/* we despatched one message, there are more in the queue */
+}
+
+
+/*
+ *
+ */
+extern void StateKicker_TickerHandler(void)
+{
+}
+
+/* end of StateKicker.c */
+
+

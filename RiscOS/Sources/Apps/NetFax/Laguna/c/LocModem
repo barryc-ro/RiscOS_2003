@@ -1,0 +1,959 @@
+/*
+ * LocModem.c - Local modem (local fax-machine) state machine
+ *
+ * Author: Ben Laughton
+ * History:
+ *
+ * 1997-07-20: BAL
+ * Created.
+ *
+ * 1997-07-28: RCM
+ * Merged into main !Daytona app.
+ *
+ * 1998-03-09: BAL
+ * Changed fake exchange stuff to support DaytonaHW calling fake exchange
+ * directly after receiving off-hook.
+ *
+ * 1998-03-10: BAL
+ * Reduced fake exchange timeout from 30 seconds to 15 seconds as recommeded
+ * by MGR (fear was that fax T1 timeout could kick in before fake exchange
+ * timeout).
+ *
+ * 1998-03-18: BAL
+ * Removed fake exchage 'delay' because it's no longer used.
+ *
+ * Moved dialler_* functions into seperate source file (DiallerBIF) and renamed
+ * them to diallerb_* (for consistency between LocModem & RemModem).
+ * Removed Dialler related constants which are no longer needed because of this
+ * change, and should have been picked up from an exported header file anyway.
+ *
+ * Removed LocModem_PollStatus due to changes in the way Daytona is informed
+ * of DiallerB status changes (equivalent now done in TaskModIf).
+ *
+ * Removed some dead code.
+ */
+
+#define DEBUGLIB 1
+#define SIMULATE 0 /*>>>should be zero for release*/
+#define NEW_HARDWARE /*>>> (new hardware) */
+
+/* =============================================================================
+ * Include header files
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
+
+#include "StdTypes.h"
+
+#include "kernel.h"
+#include "swis.h"
+
+#include "toolbox.h"
+
+#include "PageList.h"
+#include "StateKicker.h"
+#include "LocModem.h"
+#include "LocXfer.h"
+#include "Screen.h"
+
+#include "DaytonaHW.h"
+#include "Serial.h"
+
+#include "DebugLib.h"
+
+#include "DiallerBIF.h"
+#include "main.h"
+
+
+
+
+/* =============================================================================
+ * Define contants
+ */
+
+/* Errors */
+enum
+{
+    E_BadState
+};
+
+/* States */
+enum
+{
+    Idle,
+    Incoming_Start,
+    Incoming_AnswerFax,
+    Incoming_RxConnected,
+    Incoming_Disconnecting,
+    Outgoing_CallFax,
+    Outgoing_FaxAnswering,
+    Outgoing_TxConnected,
+    Outgoing_Disconnecting,
+    Blocking
+};
+
+#define AnswerTimeout 6000           /* 60 seconds in centiseconds - allow fax machine 60 to go off hook after we ring it */
+
+#define FakeExchange_Timeout 1500    /* 15 seconds in centiseconds */
+
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+static int g_reserved;
+localModemDataBlock g_local_modem_data;
+
+static _kernel_oserror g_error[] =
+{
+    {-1, "Local modem state machine in unknown state"},
+};
+
+static char stash_number[30];   /* to hold captured number from HW_LM_NUMBERCAPTURED for later sending with LM_LX_INCOMING_FAX */
+static int timeout_time = 0;
+
+static const char answer_script[] =
+    "TIMEOUT 10\n"
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
+    "\"\" ATE0\n"
+    "\\r\\nOK\\r\\n AT+FCLASS=1\n"
+    "\\r\\nOK\\r\\n ATA\n";
+/*    "\\r\\nCONNECT\\r\\n \\c\n"; */ /* Not required: !Fax looks for this */
+
+static const char print_script[] =
+    "TIMEOUT 35\n"
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
+    "\"\" ATE0X0\n"
+    "\\r\\nOK\\r\\n AT+FCLASS=1\n"
+    "\\r\\nOK\\r\\n ATD\n";
+/*    "\\r\\nCONNECT\\r\\n \\c\n"; */ /* Not required: !Fax looks for this */
+
+static const char hangup_script[] =
+    "ABORT ERROR\n"
+    "\"\" ATH0\n"
+    "\\r\\nOK\\r\\n \\c\n";
+/*    "\"\" \\c\n"; */
+
+
+
+
+/* =============================================================================
+ * Declare function prototypes
+ */
+
+static _kernel_oserror *idle (const int input,
+                              messageDataBlock *const messageData,
+                              localModemDataBlock *const local_modem_data,
+                              int *const state);
+
+static _kernel_oserror *incoming_start (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *incoming_answer_fax (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *incoming_rx_connected (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *incoming_disconnecting (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *outgoing_call_fax (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *outgoing_fax_answering (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *outgoing_tx_connected (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *outgoing_disconnecting (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state);
+
+static _kernel_oserror *blocking (const int input,
+                                  messageDataBlock *const messageData,
+                                  localModemDataBlock *const local_modem_data,
+                                  int *const state);
+
+static _kernel_oserror *LocalModem_ResetModem(void);
+
+
+
+
+/* =============================================================================
+ * Define functions
+ */
+
+/* -----------------------------------------------------------------------------
++
+-
+ */
+
+extern void LocModem_StateMachine(int messageNumber, messageDataBlock *messageData)
+{
+    static int state = Idle;
+    _kernel_oserror *e = NULL;
+    localModemDataBlock *local_modem_data = &g_local_modem_data;
+
+    /* Print state machine status */
+    dprintf((NULL, "LocModem_StateMachine (entry): State => %d; Message => 0x%X\n", state, messageNumber));
+
+    switch (state)
+    {
+        case Idle:
+            e = idle (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Incoming_Start:
+            e = incoming_start (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Incoming_AnswerFax:
+            e = incoming_answer_fax (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Incoming_RxConnected:
+            e = incoming_rx_connected (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Incoming_Disconnecting:
+            e = incoming_disconnecting (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Outgoing_CallFax:
+            e = outgoing_call_fax (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Outgoing_FaxAnswering:
+            e = outgoing_fax_answering (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Outgoing_TxConnected:
+            e = outgoing_tx_connected (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Outgoing_Disconnecting:
+            e = outgoing_disconnecting (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        case Blocking:
+            e = blocking (messageNumber, messageData, local_modem_data, &state);
+            break;
+
+        default:
+            e =  &g_error[E_BadState];
+            break;
+    }
+
+    /* Print state machine status on exit */
+    dprintf((NULL, "LocModem_StateMachine (exit): Next state => %d\n", state));
+
+    if (e != NULL)
+    {
+#if 1
+        StateKicker_SendOSError(LocXfer_StateMachine, LM_LX_ERROR, code_Dialler_OSError, ctx_Dialler_OSError, e);        
+#else
+        messageDataBlock *message_data;
+
+        StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_ERROR, &message_data);
+        message_data->data.lm_error.from = ErrorFrom_Modem;
+        message_data->data.lm_error.rc = 0;	/*>>>should rc be zero???*/
+        message_data->data.lm_error.err = *e;   /* MUST copy message block rather than pointer (which will be stale when the message arrives)  */
+#endif
+    }
+}
+
+
+/* -----------------------------------------------------------------------------
++
+   idle
+
+   Deal with an input to the local modem state machine when its in the idle
+   state.  If an error occurs then the state is not changed.
+
+   Inputs
+   input: the input to the local modem state machine
+   state: pointer to the state of the local modem state machine
+-
+ */
+
+static _kernel_oserror *idle (const int input,
+                              messageDataBlock *const messageData,
+                              localModemDataBlock *const local_modem_data,
+                              int *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    stash_number[0] = '\0';
+
+    switch (input)
+    {
+        case LX_LM_QUERY_IDLE:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_AM_IDLE, NULL);    /*NB don't send LM_LX_GOING_IDLE*/
+            *state = Idle;
+            break;
+
+        case HW_LM_OFFHOOK:
+            if (g_reserved)
+            {
+                *state = Blocking;
+            }
+            else
+            {
+                StateKicker_SendMessage (Screen_StateMachine, LM_SC_OFFHOOK, NULL);
+                *state = Incoming_Start;
+            }
+            break;
+
+        case LX_LM_HANGUP:
+            /* Idle already, but send LM_LX_GOING_IDLE anyway */
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            *state = Idle;
+            break;
+
+        case LX_LM_PRINT:
+            e = _swix (OS_ReadMonotonicTime, _OUT (0), &timeout_time);
+            if (e != NULL) break;
+            timeout_time += AnswerTimeout;
+            e = _swix (DaytonaHW_CallLocalFax, _INR (0, 1),
+
+                       0,
+                       DaytonaHW_CallLocalFax_Start);
+            if (e != NULL) break;
+            *state = Outgoing_CallFax;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *incoming_start (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (input)
+    {
+#ifdef NEW_HARDWARE
+        /* Belief is that ONHOOK here _could_ be caused by the same spurious hardware feature (on old hardware) */
+        case HW_LM_ONHOOK:
+            StateKicker_SendMessage (Screen_StateMachine, LM_SC_ONHOOK, NULL);
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            *state = Idle;
+            break;
+#endif
+
+        case HW_LM_NUMBERCAPTURED:
+            /* stash number away so it can added to a later LM_LX_INCOMING_FAX message */
+            strcpy(stash_number, messageData->data.numbercaptured.number);
+
+            e = diallerb_start_answer_script (1,    /* force reset */
+                                             answer_script,
+                                             hangup_script,
+                                             local_modem_data->serial_input_stream,
+                                             local_modem_data->serial_output_stream);
+#if SIMULATE
+            e = NULL;
+#endif
+            if (e == NULL)
+                *state = Incoming_AnswerFax;
+            break;
+
+        case LX_LM_HANGUP:
+            e = _swix (DaytonaHW_FakeExchange, _INR (0, 5),
+
+                       DaytonaHW_FakeExchange_Stop,
+                       local_modem_data->serial_input_buffer,
+                       local_modem_data->serial_output_buffer,
+                       local_modem_data->serial_input_stream,
+                       local_modem_data->serial_output_stream,
+                       FakeExchange_Timeout);
+
+            e = LocalModem_ResetModem();
+
+            StateKicker_SendMessage (Screen_StateMachine, LM_SC_ONHOOK, NULL);	/*>>>RCM says: is this right?, should we wait for HW_LM_ONHOOK???*/
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            *state = Idle;
+
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Incoming_Start;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *incoming_answer_fax (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+    messageDataBlock *message_data;
+
+    switch (input)
+    {
+#ifdef NEW_HARDWARE
+        /* Belief is that ONHOOK here is a spurious hardware feature on the old hardware */
+        case HW_LM_ONHOOK:
+            e = LocalModem_ResetModem();
+            StateKicker_SendMessage (Screen_StateMachine, LM_SC_ONHOOK, NULL);
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            *state = Idle;
+            break;
+#endif
+        case DI_LM_STATUS_CHANGED:
+            dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
+
+            diallerb_monitor_answer_script (state,
+                                          messageData->data.dialler.status,
+                                          Incoming_AnswerFax,
+                                          Idle,
+                                          Incoming_RxConnected);
+            /* setup for new state */
+            switch (*state)
+            {
+                case Incoming_RxConnected:
+                    /* send message with previously stashed number */
+                    StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_INCOMING_FAX, &message_data);
+                    strcpy(message_data->data.incoming_fax.number, stash_number);
+                    break;
+
+                case Idle:
+                    e = LocalModem_ResetModem();
+#if 0 /* NEW_HARDWARE */
+                    LocalModem_HookEnable();
+#endif
+                    break;
+
+                default:
+                    break;
+            }
+            break;
+
+
+        case LX_LM_HANGUP:
+            e = diallerb_start_hangup_script ();
+            *state = Incoming_Disconnecting;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Incoming_AnswerFax;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *incoming_rx_connected (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (input)
+    {
+        case LX_LM_HANGUP:
+            e = diallerb_start_hangup_script ();
+            *state = Incoming_Disconnecting;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Incoming_RxConnected;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *incoming_disconnecting (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (input)
+    {
+        case DI_LM_STATUS_CHANGED:
+            dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
+
+            diallerb_monitor_hangup_script (state,
+                                          messageData->data.dialler.status,
+                                          Incoming_Disconnecting,
+                                          Idle,
+                                          Idle);
+            /* setup for new state */
+            if (*state == Idle)
+            {
+                e = LocalModem_ResetModem();
+                StateKicker_SendMessage (Screen_StateMachine, LM_SC_ONHOOK, NULL);	/*>>>RCM says: is this right?, should we wait for HW_LM_ONHOOK???*/
+                StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);   /* Added - see state below */
+            }
+            break;
+
+        case LX_LM_HANGUP:    /* already doing a hangup */
+            *state = Incoming_Disconnecting;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Incoming_Disconnecting;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *outgoing_call_fax (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+    /*messageDataBlock *message_data;*/
+
+    switch (input)
+    {
+        case HW_LM_OFFHOOK:
+            e = _swix (DaytonaHW_CallLocalFax, _INR (0, 1),
+
+                       0,
+                       DaytonaHW_CallLocalFax_Stop);
+            if (e != NULL) break;
+            e = diallerb_start_dial_script (1,    /* force reset */
+                                           print_script,
+                                           hangup_script,
+                                           local_modem_data->serial_input_stream,
+                                           local_modem_data->serial_output_stream);
+            if (e == NULL)
+                *state = Outgoing_FaxAnswering;
+            break;
+
+        case LX_LM_HANGUP:
+            e = _swix (DaytonaHW_CallLocalFax, _INR (0, 1),
+
+                       0,
+                       DaytonaHW_CallLocalFax_Stop);
+            if (e != NULL) break;
+
+            e = LocalModem_ResetModem();
+            if (e != NULL) break;
+
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            StateKicker_SendMessage (Screen_StateMachine, LM_SC_PRINT_COMPLETE, NULL);
+
+            *state = Idle;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Outgoing_CallFax;
+            break;
+
+        default:
+            break;
+    }
+
+    /* If we haven't changed state then check the timeout */
+    if (*state == Outgoing_CallFax)
+    {
+        int t;
+
+        _swix (OS_ReadMonotonicTime, _OUT (0), &t);
+        if (t > timeout_time)
+        {
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_FAILED, NULL);	/* ie no response from local fax when we 'ring' it */
+
+            e = _swix (DaytonaHW_CallLocalFax, _INR (0, 1),
+
+                       0,
+                       DaytonaHW_CallLocalFax_Stop);
+
+            e = LocalModem_ResetModem();
+
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            StateKicker_SendMessage (Screen_StateMachine, LM_SC_PRINT_COMPLETE, NULL);
+            *state = Idle;
+        }
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *outgoing_fax_answering (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+    /*messageDataBlock *message_data;*/
+
+    switch (input)
+    {
+        case HW_LM_ONHOOK:    /* dialler will have detected on hook and hung up */
+            e = LocalModem_ResetModem();
+            if (e != NULL) break;
+
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_FAILED, NULL);	/* ie local fax answered our 'ring' then hung-up */
+
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            StateKicker_SendMessage (Screen_StateMachine, LM_SC_PRINT_COMPLETE, NULL);
+            *state = Idle;
+            break;
+
+        case DI_LM_STATUS_CHANGED:
+            dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
+
+            diallerb_monitor_dial_script (state,
+                                         messageData->data.dialler.status,
+                                         Outgoing_FaxAnswering,
+                                         Idle,
+                                         Outgoing_TxConnected);
+            /* setup for new state */
+            if (*state == Outgoing_TxConnected)
+            {
+                StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_TXCONNECTED, NULL);
+            }
+            else if (*state == Idle)
+            {
+                e = LocalModem_ResetModem();
+                StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+                StateKicker_SendMessage (Screen_StateMachine, LM_SC_PRINT_COMPLETE, NULL);
+            }
+            break;
+
+        case LX_LM_HANGUP:
+            e = diallerb_start_hangup_script ();
+            *state = Outgoing_Disconnecting;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Outgoing_FaxAnswering;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *outgoing_tx_connected (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (input)
+    {
+        case LX_LM_HANGUP:
+            e = diallerb_start_hangup_script ();
+            *state = Outgoing_Disconnecting;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Outgoing_TxConnected;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+static _kernel_oserror *outgoing_disconnecting (
+                            const int input,
+                            messageDataBlock *const messageData,
+                            localModemDataBlock *const local_modem_data,
+                            int *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (input)
+    {
+        case DI_LM_STATUS_CHANGED:
+            dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
+
+            diallerb_monitor_hangup_script (state,
+                                         messageData->data.dialler.status,
+                                         Outgoing_Disconnecting,
+                                         Idle,
+                                         Idle);
+            /* setup for new state */
+            if (*state == Idle)
+            {
+                e = LocalModem_ResetModem();
+                StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+                StateKicker_SendMessage (Screen_StateMachine, LM_SC_PRINT_COMPLETE, NULL);
+            }
+            break;
+
+        case LX_LM_HANGUP:    /* already doing a hangup */
+            *state = Outgoing_Disconnecting;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Outgoing_Disconnecting;
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   blocking
+
+   Deal with an input to the local modem state machine when its in the blocking
+   state.  If an error occurs then the state is not changed.
+
+   Inputs
+   input: the input to the local modem state machine
+   state: pointer to the state of the local modem state machine
+-
+ */
+
+static _kernel_oserror *blocking (const int input,
+                                  messageDataBlock *const messageData,
+                                  localModemDataBlock *const local_modem_data,
+                                  int *const state)
+{
+    _kernel_oserror *e = NULL;
+
+
+    /* special case: check reserved flag first */
+    if (g_reserved == FALSE)
+    {
+        StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+        *state = Idle;
+        return NULL;
+    }
+
+    switch (input)
+    {
+        case HW_LM_ONHOOK:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_GOING_IDLE, NULL);
+            *state = Idle;
+            break;
+
+        case LX_LM_HANGUP:
+            *state = Blocking;
+            break;
+
+        case LX_LM_PRINT:
+            StateKicker_SendMessage (LocXfer_StateMachine, LM_LX_PRINT_REJECTED, NULL);
+            *state = Blocking;
+            break;
+
+         default:
+            break;
+    }
+
+    return e;
+}
+
+
+/*
+ * Initialise LocModem state machine
+ */
+extern _kernel_oserror *LocModem_Initialise(void)
+{
+    _kernel_oserror  *e;
+
+    g_local_modem_data.serial_input_buffer  = Modem[LOCMODEM].BufferIn;
+    g_local_modem_data.serial_output_buffer = Modem[LOCMODEM].BufferOut;
+    g_local_modem_data.serial_input_stream  = Modem[LOCMODEM].FileIn;
+    g_local_modem_data.serial_output_stream = Modem[LOCMODEM].FileOut;
+
+    e = _swix (DaytonaHW_FakeExchange,
+               _INR (0, 5),
+
+               DaytonaHW_FakeExchange_Configure,
+               g_local_modem_data.serial_input_buffer,
+               g_local_modem_data.serial_output_buffer,
+               g_local_modem_data.serial_input_stream,
+               g_local_modem_data.serial_output_stream,
+               FakeExchange_Timeout);
+
+    return e;
+}
+
+
+extern void LocModem_Finalise(void)
+{
+    /* none currently - may need to drop the line */
+}
+
+
+static _kernel_oserror *LocalModem_ResetModem(void)
+{
+#if 0
+    /* Use DTR line which may work */
+    return(_swix(DaytonaHW_ResetModem, _INR(0, 1), DaytonaHW_ResetModem_DTR, Modem[LOCMODEM].FileOut));
+#else
+    /* Use hardware reset line - should now work */
+    return(_swix(DaytonaHW_ResetModem, _INR (0, 2), DaytonaHW_ResetModem_PIOReg, DaytonaHW_ResetModem_Local, Modem[LOCMODEM].FileOut));
+#endif
+}
+
+
+
+
+extern int DaytonaHW_WimpMessageHandler(WimpMessage *message, void *handle)
+{
+        /* Print debugging information */
+    dprintf((NULL, "DaytonaHW_WimpMessageHandler: Message => 0x%X\n", message->hdr.action_code));
+
+    switch (message->hdr.action_code)
+    {
+            case Wimp_MDaytonaHW_LocalFaxReceiver:
+                 switch (message->data.words[0])
+                 {
+                 case DaytonaHW_LocalFaxReceiver_OffHook:
+                StateKicker_SendMessage(LocModem_StateMachine, HW_LM_OFFHOOK, NULL);
+                break;
+
+                case DaytonaHW_LocalFaxReceiver_OnHook:
+                StateKicker_SendMessage(LocModem_StateMachine, HW_LM_ONHOOK, NULL);
+                break;
+                     }
+                     break;
+
+        case Wimp_MDaytonaHW_FakeExchange:
+            dprintf((NULL, "DaytonaHW_WimpMessageHandler: FakeExchange, reason => %d\n", message->data.words[0]));
+            switch (message->data.words[0])
+            {
+                case DaytonaHW_MFakeExchange_CapturedNumber:
+                    {
+                        messageDataBlock *sendMessage;
+
+                        StateKicker_SendMessage(LocModem_StateMachine, HW_LM_NUMBERCAPTURED, &sendMessage);
+                        strcpy(sendMessage->data.numbercaptured.number, &message->data.bytes[4]);
+                        dprintf((NULL, "-- Number captured => %s\n", &message->data.bytes[4]));
+                    }
+                    break;
+
+
+                case DaytonaHW_MFakeExchange_Error_DTMFTimeout:
+                case DaytonaHW_MFakeExchange_Error_DTMFOverflow:
+                case DaytonaHW_MFakeExchange_Error_OSError:
+                case DaytonaHW_MFakeExchange_Error_DiallerFailed:
+                case DaytonaHW_MFakeExchange_Error_BadFrequency:
+                case DaytonaHW_MFakeExchange_Error_DialtoneOverflow:
+                /*>>>must pass up the error sometime soon*/
+                    break;
+            }
+            break;
+
+    }
+
+    /* deliver the queued messages */
+    while (StateKicker_Deliver() > 1)
+        /* null statement */;
+
+    return(1);
+}
+
+/* end of LocModem.c */
