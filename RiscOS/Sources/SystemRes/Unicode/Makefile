@@ -5,8 +5,8 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 06-Jun-96  SMC          Created.
-#
+# 11-Nov-97  SJM          Created.
+# 28-Nov-97  ADH          Added !Sprites, !Sprites22, !Sprites23
 
 #
 # Generic options:
@@ -50,17 +50,23 @@ clean:
 resources:
         ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
-	${CP} Resources.Encodings ${RESDIR}.Encodings       ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Boot ${RESAPP}.!Boot     ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Run  ${RESAPP}.!Run      ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Help ${RESAPP}.!Help     ${CPFLAGS}
+        ${CP} Resources.Encodings            ${RESDIR}.Encodings  ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Boot      ${RESAPP}.!Boot      ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Run       ${RESAPP}.!Run       ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Help      ${RESAPP}.!Help      ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Sprites   ${RESAPP}.!Sprites   ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Sprites22 ${RESAPP}.!Sprites22 ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Sprites23 ${RESAPP}.!Sprites23 ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 install: 
         ${MKDIR} ${INSTDIR}
-	${CP} Resources.Encodings       ${INSTDIR}.Encodings ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Boot ${INSTDIR}.!Boot     ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Run  ${INSTDIR}.!Run      ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Help ${INSTDIR}.!Help     ${CPFLAGS}
+        ${CP} Resources.Encodings            ${INSTDIR}.Encodings  ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Run       ${INSTDIR}.!Run       ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Help      ${INSTDIR}.!Help      ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Sprites   ${INSTDIR}.!Sprites   ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.!Sprites23 ${INSTDIR}.!Sprites23 ${CPFLAGS}
 
 # Dynamic dependencies:
