@@ -246,38 +246,3 @@ od.mainRAM: main.c
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.events:	c.events
-o.events:	C:h.kernel
-o.events:	C:h.swis
-o.events:	C:tboxlibint.h.const
-o.events:	C:tboxlibint.h.macros
-o.events:	C:tboxlibint.h.services
-o.events:	C:tboxlibint.h.debug
-o.events:	C:tboxlibint.h.mem
-o.events:	C:tboxlibint.h.string32
-o.events:	C:tboxlibint.h.messages
-o.events:	C:h.kernel
-o.events:	C:tboxlibint.objects.h.toolbox
-o.events:	C:tboxlibint.h.style
-o.events:	C:tboxlibint.h.twimp
-o.events:	C:h.kernel
-o.events:	C:tboxlibint.objects.h.toolbox
-o.events:	C:tboxlibint.objects.h.window
-o.events:	h.object
-o.events:	h.events
-o.events:	C:h.kernel
-o.events:	h.task
-o.events:	h.gadgets
-o.events:	C:tboxlibint.objects.h.toolbox
-o.events:	C:tboxlibint.objects.h.window
-o.events:	C:tboxlibint.h.twimp
-o.events:	h.utils
-o.events:	C:tboxlibint.h.twimp
-o.events:	C:h.kernel
-o.events:	C:h.swis
-o.events:	h.show
-o.events:	C:h.kernel
-o.events:	h.hide
-o.events:	C:h.kernel
-o.events:	h.veneers
-o.events:	h.events
