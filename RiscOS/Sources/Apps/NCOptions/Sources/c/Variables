@@ -18,6 +18,17 @@
 #include "NVRAM.h"
 #include "Modem.h"
 
+/* Comment out options to disable */
+
+/*** Functional options ***/
+/* Always move to confirm screen on country selection screen, even
+   if the territory is the same */
+/* #define COUNTRY_ALWAYS_CONFIRM */
+
+/*** Debug options ***/
+/* Don't set the territory on language changes, just go through
+   the motions */
+/* #define DEBUG_DONT_SET_TERRITORY */
 
 
 #define	CMOS_PREFIX	"nvram_"
@@ -136,6 +147,15 @@ static char*	FindSpecialValueString( const char* name)
 	{
 	Desk_Debug_Printf( Desk_error_PLACE "FindSpecialValueString(): name is %s\n", name);
 
+	if ( name[0] == '!')
+	{
+	  /* NOTE: This is PURELY for debugging purposes.
+	           Such that the UI can be made easier to work with,
+	           you may prefix any _NCOPTIONS value with a ! to
+	           cause it to be ignored. */
+	  return "";
+	}
+
 	if ( 0==StrInitialCmp( name, CMOS_PREFIX))	{
 		const char*	s = name + strlen( CMOS_PREFIX);
 		int		intvalue		= INT_MIN;
@@ -231,6 +251,14 @@ static char*	FindSpecialValueString( const char* name)
 		else if ( 0==Desk_stricmp( s, "tvsource"))	intvalue	= NVRAM_ReadInt( "TVSource");
 		else if ( 0==Desk_stricmp( s, "cablechannel"))  intvalue	= NVRAM_ReadInt( "CableChannel");
 
+		else if ( 0==Desk_stricmp( s, "Language"))
+		{
+			NCConfig_territorysettings settings;
+			NCConfig_Territory_Read(&settings);
+			intvalue	= settings.id; /* Mark as string value */
+			Desk_Debug_Printf( Desk_error_PLACE "language configuration option, language %i\n", intvalue);
+		}
+
 		else	//Desk_Error2_HandleTextf( "Don't know how to read variable '%s'", name);
 			Desk_Error2_MsgTransHandlef( "NVRead", name);
 
@@ -287,13 +315,23 @@ int	NCOptions_GetVariableValue( const char* name, HTML_Args_variablelist* variab
 
 
 
-static void	NCOptions_SetSystemVariables2( HTML_Args_variablelist* variables, nvram_changelist* changelist)
+static char *	NCOptions_SetSystemVariables2( HTML_Args_variablelist* variables, nvram_changelist* changelist)
 	{
+	char *refresh_filename=NULL;
 	int	i;
 	Desk_Debug_Printf( Desk_error_PLACE "NCOptions_SetSystemVariables2()\n");
 	for ( i=0; i<variables->num; i++)
 		{
 		HTML_Args_variable*	var = &variables->vars[i];
+		
+		if ( var->name[0] == '!')
+		{
+			/* NOTE: This is PURELY for debugging purposes.
+			   Such that the UI can be made easier to work with,
+			   you may prefix any _NCOPTIONS value with a ! to
+			   cause it to be ignored. */
+			continue;
+		}
 
 		if ( 0==StrInitialCmp( var->name, CMOS_PREFIX))
 			{
@@ -476,6 +514,47 @@ static void	NCOptions_SetSystemVariables2( HTML_Args_variablelist* variables, nv
 			else if ( 0==Desk_stricmp( s, "tvsource"))	NVRAM_WriteAndStoreOld( "TVSource", intvalue, changelist);
 			else if ( 0==Desk_stricmp( s, "cablechannel"))	NVRAM_WriteAndStoreOld( "CableChannel", intvalue, changelist);
 
+			else if ( 0==Desk_stricmp( s, "Language"))
+			{
+				NCConfig_territorysettings settings;
+
+				Desk_Debug_Printf( Desk_error_PLACE "Changing Language settings, country = '%i'\n", intvalue);
+				NCConfig_Territory_Read(&settings);
+
+#ifndef COUNTRY_ALWAYS_CONFIRM
+				if (settings.id != intvalue)
+#endif
+				{
+					HTML_Args_variable *refresh_var;
+#ifndef DEBUG_DONT_SET_TERRITORY
+					settings.id=intvalue;
+#endif
+					Desk_Debug_Printf( Desk_error_PLACE "Selecting Language = '%i'\n", intvalue);
+
+					{
+						Desk_Debug_Printf( Desk_error_PLACE "Timezone was = '%i'\n", settings.timeoffset_nodst);
+#ifndef DEBUG_DONT_SET_TERRITORY
+						Desk_Error2_CheckOS( _swix( Territory_ReadTimeZones, _IN(0) | _OUT(2), intvalue, &settings.timeoffset_nodst));
+#endif
+						Desk_Debug_Printf( Desk_error_PLACE "Timezone now = '%i'\n", settings.timeoffset_nodst);
+					}
+
+					NCConfig_Territory_Set2(&settings);
+					refresh_var = HTML_Args_FindPossibleVar( variables, "lang_confirm", Desk_bool_TRUE/*caseinsensitive*/);
+					/* If it's set, it'll return the right confirmation file.
+					   If not set, then things will continue normally */
+					if (refresh_var)
+					{
+						refresh_filename=refresh_var->value;
+						Desk_Debug_Printf( Desk_error_PLACE "lang_confirm set to '%s'\n", refresh_filename);
+					}
+					else
+					{
+						Desk_Debug_Printf( Desk_error_PLACE "NO lang_confirm set\n");
+					}
+				}
+			}
+
 			else	//Desk_Error2_HandleTextf( "Don't know how to write NVRAM variable '%s'", var->name);
 				Desk_Error2_MsgTransHandlef( "NVWrite", var->name);
 			}
@@ -621,6 +700,12 @@ static void	NCOptions_SetSystemVariables2( HTML_Args_variablelist* variables, nv
 				Monitor_SetMode();
 				}
 
+			else if ( 0==Desk_stricmp( s, "resetunit"))
+				{
+					Desk_Error2_CheckOS( _swix( OS_Reset, 0));
+					/* Should never return */
+				}
+
 			else	//Desk_Error2_HandleTextf( "Don't know how to do action for variable '%s'", var->name);
 				Desk_Error2_MsgTransHandlef( "Action", var->name);
 			}
@@ -640,19 +725,22 @@ static void	NCOptions_SetSystemVariables2( HTML_Args_variablelist* variables, nv
 			}
 #endif
 		}
+		
+		return refresh_filename;
 	}
 
 
 
-void	NCOptions_SetSystemVariables( HTML_Args_variablelist* variables)
+char *	NCOptions_SetSystemVariables( HTML_Args_variablelist* variables)
 {
+	char *filename = NULL;
 	nvram_changelist	changelist;
 
 	NVRAM_InitChangeList( &changelist);
 
 	Desk_Error2_Try
 	{
-		NCOptions_SetSystemVariables2( variables, &changelist);
+		filename = NCOptions_SetSystemVariables2( variables, &changelist);
 	}
 	Desk_Error2_Catch
 	{
@@ -663,4 +751,6 @@ void	NCOptions_SetSystemVariables( HTML_Args_variablelist* variables)
 	Desk_Error2_EndCatch
 
 	NVRAM_FreeChangeList( &changelist);
+	
+	return filename;
 }
