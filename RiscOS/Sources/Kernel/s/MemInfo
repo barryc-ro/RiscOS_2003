@@ -28,7 +28,9 @@ MemorySWI       ROUT
         ; Drop through to...
 
 MemReturn
+ [ International
         BLVS    TranslateError
+ ]
         Pull    lr                              ; Get back real return address.
         BVS     SLVK_SetV
         ExitSWIHandler
@@ -44,9 +46,6 @@ MemReturn
         B       MemoryReadPhys
         B       MemoryAmounts
         B       MemoryIOSpace
-        B       MemoryFreePoolLock
-        B       PCImapping
-        B       RecommendPage
 40
 
 
@@ -323,6 +322,7 @@ ROM_Pattern     *       &33333333
 IO_Pattern      *       &44444444
 NotAvailable    *       &88888888
 
+
 ;----------------------------------------------------------------------------------------
 ; MemoryPhysSize
 ;
@@ -334,19 +334,7 @@ NotAvailable    *       &88888888
 ;       Returns information about the memory arrangement table.
 ;
 MemoryPhysSize
-        MOV     r1, #IOMD_Base
-        LDRB    r1, [r1,#IOMD_ID0]
-        TEQ     r1, #IOMD_Original :AND: &FF
-        TEQNE   r1, #IOMD_7500     :AND: &FF
-        TEQNE   r1, #IOMD_7500FE   :AND: &FF
-        MOVEQ   r1, #PhysSpaceSize_Full  :SHR: ByteShift  ;IOMD1
-        BEQ     MPS_return
-        TEQ     r1, #IOMD_IOMD2    :AND: &FF
-        MOVEQ   r1, #PhysSpaceSize_IOMD2 :SHR: ByteShift  ;IOMD2
-        BEQ     MPS_return
-        B       MemoryPhysSize     ;deliberate panic hang up
-;
-MPS_return
+        MOV     r1, #PhysSpaceSize :SHR: ByteShift
         MOV     r2, #4*1024
         MOV     pc, lr
 
@@ -386,7 +374,7 @@ MemoryReadPhys  ROUT
         BL      fill_words
  ]
 
-        ; &02000000 to &02400000 is VRAM or not present.
+        ; &02000000 to &02200000 is VRAM or not present.
         MOV     r4, #0
         LDR     r4, [r4, #VRAMSize]     ; Get amount of VRAM (in bytes).
         TEQ     r4, #0
@@ -457,24 +445,15 @@ MemoryReadPhys  ROUT
         BCS     %BT10
 
         TEQ     r3, #0                          ; If not stored last word then
-        BEQ     %FT90
-        MOV     r3, r3, LSR r4                  ;   put bits in correct position
-        ADD     r2, r2, r4, LSL #BitShift       ;   adjust current address
-        RSB     r4, r4, #32                     ;   rest of word is not present
-        LDR     lr, =NotPresent :OR: NotAvailable
-        ORR     r3, r3, lr, LSL r4
-        STR     r3, [r1], #4                    ;   and store word.
+        MOVNE   r3, r3, LSR r4                  ;   put bits in correct position
+        ADDNE   r2, r2, r4, LSL #BitShift       ;   adjust current address
+        RSBNE   r4, r4, #32                     ;   rest of word is not present
+        LDRNE   lr, =NotPresent :OR: NotAvailable
+        ORRNE   r3, r3, lr, LSL r4
+        STRNE   r3, [r1], #4                    ;   and store word.
 
-        ; End of last block of DRAM to &20000000 (IOMD1) is not present.
-        ; End of last block of DRAM to &30000000 (IOMD2) is not present.
-90
-        Push    "r0"
-        MOV     r0, #IOMD_Base
-        LDRB    r0, [r0, #IOMD_ID0]
-        TEQ     r0, #IOMD_IOMD2 :AND: &FF       ;we just want to distinguish IOMD2 here
-        RSBNES  r2, r2, #&20000000
-        RSBEQS  r2, r2, #&30000000
-        Pull    "r0"
+        ; End of last block of DRAM to &20000000 is not present.
+        RSBS    r2, r2, #&20000000
         MOVNE   r2, r2, LSR #WordShift
         LDRNE   r3, =NotPresent :OR: NotAvailable
         BLNE    fill_words
@@ -495,11 +474,10 @@ fill_words
 ;       In:     r0 = flags
 ;                       bit     meaning
 ;                       0-7     8 (reason code)
-;                       8-11    1=return amount of DRAM (excludes any soft ROM)
+;                       8-11    1=return amount of DRAM
 ;                               2=return amount of VRAM
 ;                               3=return amount of ROM
 ;                               4=return amount of I/O space
-;                               5=return amount of soft ROM (ROM loaded into hidden DRAM)
 ;                       12-31   reserved (set to 0)
 ;
 ;       Out:    r1 = number of pages of the specified type of memory
@@ -513,19 +491,6 @@ MemoryAmounts   ROUT
         BICS    lr, r0, #&FF            ; Get type of memory required (leave bits 12-31, non-zero => error).
         BEQ     %FT30                   ; Don't understand 0 (so the spec says).
 
-        TEQ     lr, #5:SHL:8            ; Check for soft ROM
-        BNE     %FT10
-        LDR     r1, =L1PT
-        MOV     r2, #ROM
-        ADD     r1, r1, r2, LSR #(20-2)   ; L1PT address for ROM
-        LDR     r2, [r1]
-        MOV     r2, r2, LSR #12
-        TEQ     r2, #PhysROM :SHR: 12     ; see if we have hard or soft ROM
-        MOVEQ   r1, #0                    ; no soft ROM
-        MOVNE   r1, #OSROM_ImageSize*1024 ; this much soft ROM
-        B       %FT20
-
-10
         TEQ     lr, #4:SHL:8            ; Check for IO space.
         LDREQ   r1, =136*1024*1024      ; Just return 136M (includes VIDC and EASI space).
         BEQ     %FT20
@@ -602,12 +567,22 @@ MemoryIOSpace   ROUT
 
 
 controller_types
-
+ [ IO_Type = "IOMD"
         DCD     IOMD_Base + IOMD_ECTCR  ; Expansion card timing control.
         DCD     easi_space_table - controller_types
+ |
+        DCD     0
+        DCD     0
+ ]
+ [ VIDC_Type = "VIDC20"
         DCD     0
         DCD     VIDC
+ |
+        DCD     VIDC
+        DCD     0
+ ]
 
+ [ IO_Type = "IOMD"
 easi_space_table
         DCD     8                       ; Maximum of 8 expansion cards.
         DCD     PhysSpace + IOMD_EASI_Base0
@@ -618,263 +593,6 @@ easi_space_table
         DCD     PhysSpace + IOMD_EASI_Base5
         DCD     PhysSpace + IOMD_EASI_Base6
         DCD     PhysSpace + IOMD_EASI_Base7
-
-;----------------------------------------------------------------------------------------
-; MemoryFreePoolLock
-;
-;       In:     r0 bits 0..7  = 10 (reason code 10)
-;               r0 bit  8     = 1 if call is by Wimp (reserved for Acorn use), 0 otherwise
-;               r0 bits 9..31 reserved (must be 0)
-;               r1 = 0  to resume any background actions that may manipulate FreePool mapping
-;                       (currently, this is just VRAMRescue)
-;                  = 1  to suspend any background actions that may manipulate FreePool mapping
-;                  all other values reserved (undefined behaviour)
-;
-;       Out:    r1 = previous state (1=suspended, 0=not suspended)
-;
-; A suspend call from the Wimp will be taken to mean that the whole FreePool is locked, and
-; memory cannot be moved (supports Wimp_ClaimFreeMemory)
-;
-MemoryFreePoolLock ROUT
-        Push    "r2,r3,lr"
-        MOV     r3,#0
-        LDRB    lr,[r3,#VRAMRescue_control]
-        TEQ     r1,#0
-        BNE     %FT10
-;flush TLB(s) for resume - needed for Wimp resume, precaution for other - no cache flush
-;since Free Pool is uncached
-        ARM_flush_TLB r2                    
-10
-        TST     r0,#&100                    ;is it Wimp?
-        MOVEQ   r2,#VRRc_suspend
-        MOVNE   r2,#VRRc_wimp_lock
-        TEQ     r1,#0
-        AND     r1,lr,r2                    ;previous state
-        BICEQ   lr,lr,r2
-        ORRNE   lr,lr,r2
-        STRB    lr,[r3,#VRAMRescue_control] ;set/clear relevant bit
-        TEQ     r1,#0
-        MOVNE   r1,#1
-        Pull    "r2,r3,pc"
-
-;----------------------------------------------------------------------------------------
-;PCImapping - reserved for Acorn use (PCI manager)
-;
-;       In:     r0 bits 0..7  = 11 (reason code 11)
-;               r0 bit 8      = 1 to read info, 0 to map PCI
-;               r0 bits 9..31 reserved (must be 0)
-;
-;       If r0 bit 8 = 1:
-;         Out:  r0 = base address of logical PCI space   (&90000000)
-;               r1 = base address of physical PCI space  (&60000000)
-;               r2 = size of logical PCI space           (&10000000)
-;               r3 = size of physical PCI space          (&20000000)
-;
-;       If r0 bit 8 = 0:
-;         In:   r1 = logical base address of region to map
-;               r2 = physical base address of region to map
-;               r3 = size of region to map (bytes)
-;
-;         - size must be power of 2, and >= 4k
-;         - region must be within physical and logical space returned by above
-;         - physical and logical bases must be aligned to granularity of size
-;           (eg. 4k region must be 4k aligned, 2M region 2M aligned etc).
-;         - client is expected to map regions in order of decreasing size, to
-;           allow kernel simple method of mapping efficiently
-;         - client is responsible for avoiding inconsistent mappings
-;
-PCImapping ROUT
-        Push    "r0-r5,lr"
-        LDR     r4,=PCI_status
-        LDR     r4,[r4]
-        CMP     r4,#0
-        BEQ     %FT80
-        TST     r0,#&100            ;read info or map?
-        BEQ     %FT20
-;return info
-        ADR     r0,PCImapinfo
-        LDMIA   r0,{r0-r3}
-        STMIA   sp,{r0-r3}
-        B       %FT70
-20
-;map - with rudimentary checks (largely trust PCI manager)
-;
-        CMP     r1,#PCISpace            ;insist on region wholly within PCI logical and physical space
-        BLO     %FT80
-        ADD     r4,r1,r3
-        CMP     r4,#PCISpace+&10000000
-        BHI     %FT80
-        CMP     r2,#&60000000
-        BLO     %FT80
-        ADD     r4,r2,r3
-        CMP     r4,#&60000000+&20000000
-        BHI     %FT80
-;
-; - we section map regions >=4M (4M rather than 1M to allow simple use of allocation of pages
-;   for L2 mapping, given that one 4k page of L2 covers 4M)
-; - we page map regions of < 4M
-;
-        CMP     r3,#&400000            ;threshold for page/section map
-        BLO     %FT40
-;we can section map
-        MOV     r4,#&400000
-        SUB     r4,r4,#1
-        TST     r1,r4
-        TSTEQ   r2,r4
-        TSTEQ   r3,r4
-        BNE     %FT80                  ;insist on 4M alignment and granularity
-        LDR     r0,=L1PT
-        LDR     r4,=&412               ;svc r/w, usr -/-, ~B, ~C, Section
-        ADD     r0,r0,r1,LSR #(20-2)   ;L1PT address for start of region
-        ORR     r2,r2,r4               ;L1PT entry for first 1M of region
-25
-        STR     r2,[r0],#4
-        ADD     r2,r2,#&100000
-        SUBS    r3,r3,#&100000        ;next 1M
-        BNE     %BT25
-        B       %FT70
-;
-40
-;we will page map
-        MOV     r4,#&1000
-        SUB     r4,r4,#1
-        TST     r1,r4
-        TSTEQ   r2,r4
-        TSTEQ   r3,r4
-        BNE     %FT80                  ;insist on 4k alignment and granularity
-        MOV     r5,r3                  ;size
-        MOV     r3,r1                  ;base logical address
-        MOV     r4,#0                  ;not doubly mapped
-        BL      AllocateBackingLevel2  ;gets pages, fills in L1, sets L2 to abort
-        BVS     %FT90                  ;oh dear
-        MOV     r0,#L2PT
-        LDR     r4,=&552               ;svc r/w, usr -/-, ~B, ~C, Small Page
-        ADD     r0,r0,r3,LSR #(12-2)   ;L2PT address for start of region
-        ORR     r2,r2,r4               ;L2PT entry for first 4k of region
-45
-        STR     r2,[r0],#4
-        ADD     r2,r2,#&1000
-        SUBS    r5,r5,#&1000           ;next 4k
-        BNE     %BT45
-;
-70
-        CLRV
-        Pull    "r0-r5,pc"
-
-80
-        ADR     r0,PCImaperror
-        SETV
-        STR     r0,[sp]
-90
-        Pull    "r0-r5,pc"
-
-PCImapinfo
-        DCD     PCISpace
-        DCD     &60000000
-        DCD     &10000000   ;256M
-        DCD     &20000000   ;512M
-
-PCImaperror
-        DCD     0
-        DCB     "Bad PCI op (OS_Memory 11)",0
-        ALIGN
-
-;----------------------------------------------------------------------------------------
-;RecommendPage
-;
-;       In:     r0 bits 0..7  = 12 (reason code 12)
-;               r0 bits 8..31 = 0 (reserved flags)
-;               r1 = size of physically contiguous RAM region required (bytes)
-;               r2 = log2 of required alignment of base of region (eg. 12 = 4k, 20 = 1M)
-;
-;       Out:    r3 = page number of first page of recommended region that could be
-;                    grown as specific pages by dynamic area handler (only guaranteed
-;                    if grow is next page claiming operation)
-;        - or error if not possible (eg too big, pages unavailable)
-;
-RecommendPage ROUT
-        Push    "r0-r2,r4-r10,lr"
-        CMP     r2,#30
-        BHI     RP_failed            ;refuse to look for alignments above 1G
-;
-        ADD     r1,r1,#&1000
-        SUB     r1,r1,#1
-        MOV     r1,r1,LSR #12
-        MOV     r1,r1,LSL #12     ;size rounded up to whole no. of pages
-;
-        CMP     r2,#12
-        MOVLO   r2,#12            ;log2 alignment must be at least 12 (4k pages)
-        MOV     r0,#1
-        MOV     r4,r0,LSL r2      ;required alignment-1
-;
-        MOV     r0,#PhysRamTable
-        MOV     r3,#0            ;page number, starts at 0
-        LDR     r5,=CamEntriesPointer
-        LDR     r5,[r5]
-        ADD     r5,r5,#4         ; [r5,<page no.>,LSL #3] addresses flags word in CAM
-        LDMIA   r0!,{r7,r8}      ;address,size of video chunk (skip this one)
-;
-RP_nextchunk
-        ADD     r3,r3,r8,LSR #12 ;page no. of first page of next chunk
-        LDMIA   r0!,{r7,r8}      ;address,size of next physical chunk
-        CMP     r8,#0
-        BEQ     RP_failed
-;
-        ADD     r6,r7,r4
-        SUB     r6,r6,#1         ;round up
-        MOV     r6,r6,LSR r2
-        MOV     r6,r6,LSL r2
-        SUB     r6,r6,r7         ;adjustment to first address of acceptable alignment
-        CMP     r6,r8
-        BHS     RP_nextchunk     ;negligible chunk
-        ADD     r7,r3,r6,LSR #12 ;first page number of acceptable alignment
-        SUB     r9,r8,r6         ;remaining size of chunk
-;
-;find first available page
-RP_nextpage
-        CMP     r9,r1
-        BLO     RP_nextchunk
-        LDR     r6,[r5,r7,LSL #3]  ;page flags from CAM
-        ;must not be marked Unavailable or Required
-        TST     r6,#PageFlags_Unavailable :OR: PageFlags_Required
-        BEQ     RP_checkotherpages
-RP_nextpagecontinue
-        CMP     r9,r4
-        BLS     RP_nextchunk
-        ADD     r7,r7,r4,LSR #12   ;next page of suitable alignment
-        SUB     r9,r9,r4
-        B       RP_nextpage
-;
-RP_checkotherpages
-        ADD     r10,r7,r1,LSR #12
-        SUB     r10,r10,#1         ;last page required
-RP_checkotherpagesloop
-        LDR     r6,[r5,r10,LSL #3] ;page flags from CAM
-        TST     r6,#PageFlags_Unavailable :OR: PageFlags_Required
-        BNE     RP_nextpagecontinue
-        SUB     r10,r10,#1
-        CMP     r10,r7
-        BHI     RP_checkotherpagesloop
-;
-;success!
-;
-        MOV     r3,r7
-        Pull    "r0-r2,r4-r10,pc"
-
-RP_failed
-        MOV     r3,#0
-        ADR     r0,RP_error
-        SETV
-        STR     r0,[sp]
-        Pull    "r0-r2,r4-r10,pc"
-
-RP_error
-        DCD     0
-        DCB     "No chunk available (OS_Memory 12)",0
-        ALIGN
-
-END
-
-
+ ]
 
         END

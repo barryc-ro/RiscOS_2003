@@ -6,6 +6,7 @@ FixRemovePages  SETL {TRUE}
         MACRO
         BranchNotJustUs $label, $vector, $tmp1, $tmp2
         MOV     R11, #0
+        [ AssemblingArthur
          [ $tmp1=R11
          LDR     R12, [R11, #VecPtrTab+$vector*4]! ; load vector node
          |
@@ -13,6 +14,25 @@ FixRemovePages  SETL {TRUE}
          ]
         CMP     R12, #&03800000
         BCC     $label
+        |
+         [ Module
+         LDR     $tmp1, [R11, #VecPtrTab+$vector*4]  ; load vector node
+         LDR     R12, [$tmp1]                    ; get first address on chain
+         EOR     $tmp2, R12, #&01000000
+         CMP     $tmp2, #&00020000
+         BCS     $label
+         |
+         LDR     $tmp1, [R11, #VecPtrTab+$vector*4]  ; load vector node
+         LDR     R12, [$tmp1]                    ; get first address on chain
+         [ $vector=SpriteV
+         EOR     $tmp2, R12, #&01600000
+         |
+         RSB     $tmp2, R12, #&01E00000
+         ]
+         CMP     $tmp2, #&10000
+         BCS     $label
+         ]
+        ]
         MEND
 
         MACRO
@@ -26,6 +46,34 @@ FixRemovePages  SETL {TRUE}
         &       SWI$swiname-(.+4)
         MEND
 
+        [ :LNOT: AssemblingArthur
+SetUpSWIs ROUT
+        LDR     R1, =SvcTable
+        ADR     R2, SWITable
+10
+        LDMIA   R2!, {R3, R4}           ; R3 = SWI number; R4 = address offset
+        CMP     R3, #-1                 ; end of table ?
+        ADDNE   R4, R4, R2              ; no, then R4 = address
+        STRNE   R4, [R1, R3, LSL #2]
+        BNE     %BT10
+        MOV     PC, R14
+
+SWITable
+        SWIEntry        ReadVduVariables
+        SWIEntry        ReadPalette
+        SWIEntry        ReadModeVariable
+        SWIEntry        RemoveCursors
+        SWIEntry        RestoreCursors
+        SWIEntry        CheckModeValid
+        SWIEntry        ClaimScreenMemory
+        SWIEntry        Plot
+        SWIEntry        WriteN
+        SWIEntry        Write0
+        SWIEntry        WriteS
+        SWIEntry        SetECFOrigin
+        SWIEntry        ChangedBox
+        &       -1
+        ]
 
 ; *****************************************************************************
 ;
@@ -195,6 +243,64 @@ SWIRVVTabEnd
 
         ALIGN
 
+        [ {FALSE}
+
+; *****************************************************************************
+;
+;       SWISetVduVariables - SWI OS_SetVduVariables handler
+;
+; in:   R0 -> block of variable numbers (word aligned)
+;       R1 -> block of variable values (word aligned)
+;
+; out:  All registers preserved
+;
+;       The block pointed to by R0 consists of a string of words, terminated
+;       by -1. Each word indicates which variable to write. The corresponding
+;       value in the R1 block is written to this variable. Invalid variables
+;       are ignored.
+;
+
+SWISetVduVariables ROUT
+        TST     R0, #3                  ; index block not aligned
+        TSTEQ   R1, #3                  ; or value block not aligned
+        ExitSWIHandler NE               ; then exit
+        Push    R9
+        VDWS    WsPtr
+        MOV     R10, #0                 ; offset into both blocks
+10
+        LDR     R11, [R0, R10]
+        CMP     R11, #-1                ; end of block ?
+        Pull    R9, EQ
+        ExitSWIHandler EQ
+
+        TEQ     R11, #VduExt_XEigFactor
+        TEQNE   R11, #VduExt_YEigFactor
+        BNE     %FT25
+
+        CMP     R11, #(SWIRVVTabModeEnd-SWIRVVTab) ; a mode variable
+        ADRCC   R9, SWIRVVTab           ; if so then point to them
+        SUBCS   R11, R11, #&80          ; base for non-mode variables
+        ADRCS   R9, SWIRVVTabModeEnd
+20
+        LDRB    R11, [R9, R11]          ; yes, then load offset
+        LDR     R9, [R1, R10]           ; load value
+        STR     R9, [WsPtr, R11, LSL #2] ; store in variable
+        Push    "R0-R5,R14"
+        BL      IEG                     ; update ext. cursor
+                                        ; on exit, R2=XEigFactor, R3=YEigFactor
+        SUBS    R0, R2, R3              ; XEigFactor-YEigFactor
+        MOVLT   R0, #2                  ; X<Y => 2 (vert rect)
+        MOVGT   R0, #1                  ; X>Y => 1 (horz rect) else 0 (square)
+        STR     R0, [WsPtr, #AspectRatio]
+
+; mouse bounding box, mouse position ???
+
+        Pull    "R0-R5,R14"
+25
+        ADD     R10, R10, #4
+        B       %BT10
+
+        ]
 
 ; *****************************************************************************
 ;
@@ -243,6 +349,7 @@ SWIReadModeVariable                     ; alternative symbol used for init'ing
         BNE     NewSpriteModeWord       ; b0 set, so it is a NewSpriteModeWord
                                         ; rather than a pointer to a mode selector
 
+  [ ModeSelectors
 
 ; it's a mode selector, so check if valid first
 
@@ -305,6 +412,28 @@ RMVMS_NColour
 ;       if yres<xres/2 OR yres<400 then yeig = 2
 ;       if (xres<<xeig)<(yres<<yeig) then xeig = 2
 
+ [ RogerEXEY
+RMVMS_XEigFactor
+        LDR     r2, [r0, #ModeSelector_XRes]
+        LDR     r11, [r0, #ModeSelector_YRes]
+        CMP     r11, r2, LSR #1                         ; if yres < xres/2
+        CMPCS   r11, #400                               ; or yres < 400
+        MOVCC   r11, r11, LSL #2                        ; then yeig = 2
+        MOVCS   r11, r11, LSL #1                        ; else yeig = 1
+        CMP     r11, r2, LSL #1                         ; if (xres<<1) < (yres<<yeig)
+        MOVHI   r2, #2                                  ; then xeig = 2
+        MOVLS   r2, #1                                  ; else xeig = 1
+        B       GoodReadModeVar
+
+RMVMS_YEigFactor
+        LDR     r2, [r0, #ModeSelector_XRes]
+        LDR     r11, [r0, #ModeSelector_YRes]
+        CMP     r11, r2, LSR #1                         ; if yres < xres/2
+        CMPCS   r11, #400                               ; or yres < 400
+        MOVCC   r2, #2                                  ; then yeig = 2
+        MOVCS   r2, #1                                  ; else yeig = 1
+        B       GoodReadModeVar
+ |
 RMVMS_XEigFactor
         MOV     r2, #1                                  ; default xeig = 1
         B       GoodReadModeVar
@@ -316,6 +445,7 @@ RMVMS_YEigFactor
         MOVCC   r2, #2                                  ; then yeig = 2
         MOVCS   r2, #1                                  ; else yeig = 1
         B       GoodReadModeVar
+ ]
 
 RMVMS_LineLength
         LDR     r2, [r0, #ModeSelector_XRes]
@@ -349,6 +479,11 @@ RMVMS_YWindLimit
         LDR     r2, [r0, #ModeSelector_YRes]            ; default ywindlimit = yres-1
         SUB     r2, r2, #1
         B       GoodReadModeVar
+  |
+
+; else drop thru into ...
+
+  ]
 
 11
         CMP     r0, r11                 ; if implicitly asking for current mode (and mode <> mode selector)
@@ -607,9 +742,13 @@ SWICheckModeValid ROUT
         BL      FindOKMode              ; out: r1 = substitute mode
         BVS     %FT90
 
+ [ ModeSelectors
         CMP     r1, #&100               ; if it's a mode number
         BICCC   r10, r1, #&80           ; then knock off shadow bit
         MOVCS   r10, r1                 ; else don't
+ |
+        BIC     r10, r1, #&80           ; only use substitute mode (11/8/88)
+ ]
         MOV     r11, r10
         BL      PushModeInfo
         BVS     %FT90
@@ -618,8 +757,10 @@ SWICheckModeValid ROUT
         ADD     r13, r13, #PushedInfoSize ; junk stacked mode table + VIDC info
 
         MOV     r10, r1, LSR #7         ; 'shadow' bit (NB will be 0 or 1)
+ [ ModeSelectors
         CMP     r10, #2                 ; except if its a mode selector
         MOVCS   r10, #0                 ; in which case no shadow
+ ]
         LDROSB  r9, Shadow
         TEQ     r0, r1                  ; if substitute different from original
         MOV     r0, r1                  ; (always set r0 to be substitute mode)
@@ -678,9 +819,13 @@ SWICheckModeValid ROUT
 FindOKMode ROUT
         Push    "r0,r2-r4,r10,r11,lr"
         BL      ReadMonitorType
+ [ ModeSelectors
         CMP     r0, #&100               ; if it's a mode number
         BICCC   r2, r0, #&80            ; then knock off shadow bit
         MOVCS   r2, r0                  ; else don't
+ |
+        BIC     r2, r0, #&80
+ ]
         BL      OfferModeExtension
         BNE     %FT05
 
@@ -695,8 +840,10 @@ FindOKMode ROUT
 ; not claimed, so r2 (=mode without shadow) and r3 (=monitortype) are preserved
 
         Pull    "r0"
+ [ ModeSelectors
         CMP     r0, #&100               ; if a mode selector and not responded to
         BCS     %FT30                   ; then return error
+ ]
 
         MOV     r10, r2                 ; mode without shadow bits
         MOV     r1, r0                  ; start from existing mode
@@ -745,7 +892,9 @@ FindOKMode ROUT
 
 30
         ADRL    r0, ErrorBlock_ModeNotAvailable ; then return error
+ [ International
         BL      TranslateError
+ ]
         SETV                            ; error exit
         Pull    "r2-r4,r10,r11, pc"
 
@@ -1014,10 +1163,24 @@ SWIWriteN ROUT
 10
         SUBS    R1, R1, #1
         BCC     %FT90                   ; count has expired (V=0)
+  [ StrongARM
         LDRB    R0, [R10], #1
         Push    PC                      ; need to get to %FT20 - push PC+12 (old ARM) or PC+8 (StrongARM)
+        [ AssemblingArthur
         B       PMFWrchDirect
+        |
+        LDR     PC, =(MOSDriver + MOSPMFWrch)
+        ]
         MOV     R0,R0                   ; NOP for PC+8 case
+  |
+        Push    PC                      ; push address of %FT20
+        LDRB    R0, [R10], #1
+        [ AssemblingArthur
+        B       PMFWrchDirect
+        |
+        LDR     PC, =(MOSDriver + MOSPMFWrch)
+        ]
+  ]
 
 20
         BVS     %FT90
@@ -1070,10 +1233,24 @@ SWIWrite0 ROUT
 10
         LDRB    R0, [R10], #1
         CMP     R0, #0
+  [ StrongARM
         BEQ     %FT80                   ; no more characters
         Push    PC, NE                  ; need to get to %FT20 - push PC+12 (old ARM) or PC+8 (StrongARM)
+        [ AssemblingArthur
         BNE     PMFWrchDirect
+        |
+        LDRNE   PC, =(MOSDriver + MOSPMFWrch)
+        ]
         MOV     R0,R0                   ;NOP for PC+8
+  |
+        Push    PC, NE                  ; push address of %FT20
+        [ AssemblingArthur
+        BNE     PMFWrchDirect
+        |
+        LDRNE   PC, =(MOSDriver + MOSPMFWrch)
+        ]
+        B       %FT80                   ; no more characters
+  ]
 
 20
         BVS     %FT80
@@ -1117,10 +1294,24 @@ SWIWriteS ROUT
 10
         LDRB    R0, [R10], #1
         CMP     R0, #0
+  [ StrongARM
         BEQ     %FT80                   ; no more characters
         Push    PC, NE                  ; need to get to %FT20 - push PC+12 (old ARM) or PC+8 (StrongARM)
+        [ AssemblingArthur
         BNE     PMFWrchDirect
+        |
+        LDRNE   PC, =(MOSDriver + MOSPMFWrch)
+        ]
         MOV     R0,R0                   ;NOP for PC+8
+  |
+        Push    PC, NE                  ; push address of %FT20
+        [ AssemblingArthur
+        BNE     PMFWrchDirect
+        |
+        LDRNE   PC, =(MOSDriver + MOSPMFWrch)
+        ]
+        B       %FT80                   ; no more characters
+  ]
 20
         BVS     %FT80
         LDR     R0, [R11]
@@ -1152,6 +1343,7 @@ SWIWriteS ROUT
         BNE     %BT95
         B       %BT85
 
+        [ AssemblingArthur
 
 ; *****************************************************************************
 ;
@@ -1281,6 +1473,7 @@ InsertRemovePagesCommon ROUT
         LDR     R3, [WsPtr, #DisplayStart]
         MOV     PC, R14
 
+        ]
 
 ; *****************************************************************************
 ;
@@ -1673,6 +1866,7 @@ ClipSpritePlot ROUT
         BLGE    MergeClipBox            ; then add rectangle
         Pull    "R0-R11, PC"
 
+ [ ModeSelectors
 
 ; *****************************************************************************
 ;
@@ -1694,14 +1888,7 @@ ScreenModeSWI ENTRY
         ASSERT  ScreenModeReason_ReturnMode = 1
         ASSERT  ScreenModeReason_EnumerateModes = 2
         ASSERT  ScreenModeReason_SelectMonitorType = 3
-  [ ChocolateScreen
-        ASSERT  ScreenModeReason_ChocolateControl = 4
-        ASSERT  ScreenModeReason_ChocolateUpdate = 5
-        ASSERT  ScreenModeReason_ChocolateForceUpdate = 6
-        ASSERT  ScreenModeReason_Limit = 7
-  |
         ASSERT  ScreenModeReason_Limit = 4
-  ]
 
 ScreenModeSub
         CMP     r0, #ScreenModeReason_Limit
@@ -1711,20 +1898,17 @@ ScreenModeSub
         B       ScreenMode_ReturnMode
         B       ScreenMode_EnumerateModes
         B       ScreenMode_SelectMonitorType
-  [ ChocolateScreen
-        B       ScreenMode_ChocolateControl
-        B       ScreenMode_ChocolateUpdate
-        B       ScreenMode_ChocolateForceUpdate
-  ]
 
 ; unknown OS_ScreenMode reason code
 
 ScreenMode_Unknown
         ADR     r0, ErrorBlock_ScreenModeBadReason
 ScreenMode_TranslateAndReturnError
+      [ International
         Push    lr
         BL      TranslateError
         Pull    lr
+      ]
 ScreenMode_ReturnError
         SETV
         MOV     pc, lr
@@ -1834,188 +2018,5 @@ ScreenMode_SelectMonitorType ENTRY "r0"
         STR     r1, [WsPtr, #CurrentMonitorType]        ; update current value
         EXIT
 
-;**************************************************************************
-;
-  [ ChocolateScreen
-
-; ScreenMode_ChocolateControl - control chocolate flavour screen (cached and
-;                               section mapped when enabled - only allowed for
-;                               StrongARM (vsync cleaner assumes StrongARM)
-;   r0 = reason code (4)
-;   r1 = cached screen control flags
-;          bit  0     set to suspend cached screen for this mode
-;          bit  1     set to suspend all screen cleaning (foreground and VSync)
-;          bits 2..30 reserved for future expansion (must be 0)
-;          bit  31    must be 0 when setting flags
-;        or r1 = -1 to read current flags
-;   r2 = sets VSync cache cleaner laziness (to be used when not suspended)
-;        1 means VSync cleans on the 1st vsync after 'screen needs clean' is triggered and not reset by foreground
-;        2 means VSync cleans on 2nd vsync
-;        3 means VSync cleans on 3rd vsync
-;        or r2 = -1 to read current vsync control value
-;        other values reserved (undefined behaviour)
-; exit: r1 = current value of cached screen control flags (either for r1=-1 on entry,
-;            or value actually invoked given any restrictions for current platform)
-;       r2 = current value for VSync cleaner control (similar considerations to r1 exit)
-;
-; this routine is also used by HardScrollUp and HardScrollDown to suspend cached screen (avoids
-; possible cache coherency issue with use of 2nd screen mapping)
-;
-ScreenMode_ChocolateControl ROUT
-        Push    "r3-r5,LR"
-        MOV     LR,#0
-        LDR     r4,[LR,#ARMA_Cleaner_status] ;r4 = ARMA_Cleaner status word throughout
-        TST     r4,#ACS_SCdisable            ;set means permanent chocolate disable (not a StrongARM)
-        BNE     %FT50
-        CMP     r1,#0
-        BLT     %FT20
-        TST     r1,#1
-        BEQ     %FT10
-;deal with suspending cached screen
-        ORR     r1,r1,#2                     ;all screen cleaning will be suspended, of necessity
-        TST     r4,#ACS_Scacheflag
-        BEQ     %FT20                        ;cached screen already suspended
-        BL      Screen_makevanilla           ;uncaches screen, suspends vsync cleaner
-        MOV     LR,#0
-        LDR     r4,[LR,#ARMA_Cleaner_status] ;pick up new status after makevanilla
-        B       %FT20
-10
-;deal with restoring cached screen
-        TST     r4,#ACS_Scacheflag
-        BNE     %FT12                        ;screen already cached
-        BL      Screen_makechocolate         ;caches screen, restarts vsync cleaner
-        MOV     LR,#0
-        LDR     r4,[LR,#ARMA_Cleaner_status] ;pick up new status after makechocolate
-12
-;deal with suspending or resuming all screen cleaning
-        MOV     r3,PC
-        ORR     r4,r3,#I_bit
-        TEQP    r4,#0                        ;disable IRQs to update ARMA_Cleaner_Status
-        LDR     r4,[LR,#ARMA_Cleaner_status]
-        TST     r1,#2
-        ORRNE   r4,r4,#ACS_SCsuspend
-        BICEQ   r4,r4,#ACS_SCsuspend
-        STR     r4,[LR,#ARMA_Cleaner_status]
-        TSTEQ   r4,#ACS_HardVIDMRD
-        ARMA_read_MMUdomain r5,EQ
-        BICEQ   r5,r5,#&C
-        ARMA_write_MMUdomain r5,EQ           ;mark domain 1 to fault if we are resuming screen cleaning, and we need VIDMRD emulation
-        TEQP    r3,#0                        ;restore IRQ status
-20
-;deal with VSync screen cleaner laziness setting
-        CMP     r2,#0
-        BLT     %FT50
-        CMP     r2,#1
-        MOVLO   r2,#1
-        CMP     r2,#3
-        MOVHI   r2,#3
-        MOV     r3,PC
-        ORR     r4,r3,#I_bit
-        TEQP    r4,#0                        ;disable IRQs to update ARMA_Cleaner_Status
-        LDR     r4,[LR,#ARMA_Cleaner_status]
-        BIC     r4,r4,#ACS_VSClazy_MASK
-        ORR     r4,r4,r2,LSL #ACS_VSClazy_SHIFT
-        STR     r4,[LR,#ARMA_Cleaner_status]
-        TEQP    r3,#0                        ;restore IRQ status
-50
-;read current status
-        MOV     r1,#0
-        TST     r4,#ACS_SCdisable
-        ORRNE   r1,r1,#3
-        TST     r4,#ACS_Scacheflag
-        ORREQ   r1,r1,#1
-        TST     r4,#ACS_SCsuspend
-        ORRNE   r1,r1,#2
-        AND     r2,r4,#ACS_VSClazy_MASK
-        MOV     r2,r2,LSR #ACS_VSClazy_SHIFT
-        Pull    "r3-r5,PC"
-
-; ScreenMode_ChocolateUpdate
-;
-; r0 = 5 (reason code)
-;
-; ensure cache is up to date wrt the screen immediately, if necessary and not suspended
-;
-;
-ScreenMode_ChocolateUpdate
-        Push    "r1-r4,LR"
-        MOV     r1,#0
-        B       int_ScreenMode_ChocolateUpdate
-
-; ScreenMode_ChocolateForceUpdate
-;
-; r0 = 6 (reason code)
-;
-; force cache to be up to date wrt the screen immediately, if necessary, regardless of SC suspend
-;
-;
-ScreenMode_ChocolateForceUpdate
-        Push    "r1-r4,LR"
-        MOV     r1,#1
-;
-;internal entry: r1=1 to force update even if suspended, else r1=0
-;
-int_ScreenMode_ChocolateUpdate ROUT
-        MOV     LR,#0
-        MOV     r3,PC
-        ORR     r4,r3,#I_bit
-        TEQP    r4,#0                                   ;disable IRQs in case we update ARMA_Cleaner_status
-        LDR     r4,[LR,#ARMA_Cleaner_status]
-        TST     r4,#ACS_SCdisable                       ;only update if SC not disabled (may be forced when suspended)
-        BNE     %FT50
-        TST     r4,#ACS_Scacheflag                      ;do not update if screen currently uncached
-        BEQ     %FT50
-        TST     r4,#ACS_SCsuspend
-        TSTNE   r1,#1
-        BNE     %FT06                                   ;update if SC suspended but forced
-        TST     r4,#ACS_SCsuspend
-        BNE     %FT50                                   ;no update if SC suspended and not forced
-        TST     r4,#ACS_HardVIDMRD                      ;check for h/w VIDMRD presence
-        BEQ     %FT04
-        MOV     r2,#IOMD_Base
-        LDR     r2,[r2,#IOMD2_VIDMRD]                   ;this also clears flag
-        TST     r2,#1
-        ORRNE   r4,r4,#ACS_SoftVIDMRD
-        STRNE   r4,[LR,#ARMA_Cleaner_status]            ;we *must* stickily reflect transient h/w flag in SoftVIDMRD
-04
-        TST     r4,#ACS_VSCpending_MASK                 ;also no update if SC not suspended but no VSC is pending
-        BEQ     %FT50
-06
-        BIC     r4,r4,#ACS_VSCpending_MASK              ;force this clear since we're about to clean (appropriate) cache
-        EOR     r4,r4,#ACS_SCflipflop                   ;next screen cleaner area
-        ORR     r4,r4,#ACS_SCsemaphore
-        STR     r4,[LR,#ARMA_Cleaner_status]            ;update status
-        AND     r2,r4,#ACS_SCflipflop                   ;extract SC flipflop bit
-        LDR     r1,=ARMA_ScreenCleaners_address
-        ADD     r1,r1,r2,LSR #(ACS_SCflipflop_SHIFT-14) ;start address for clean (LSR -14 since 16k area size)
-        TST     r4,#ACS_MiniDataCache
-        ADDEQ   r2,r1,#16*1024                          ;end address (exclusive, 16k cache size)
-        ADDNE   r2,r1,#1024                             ;end address (exclusive, 1k mini cache size)
-        TEQP    r3,#0                                   ;restore IRQs during clean
-10
-        LDR     r4,[r1],#32                             ;read next cleaner line into data cache (triggers 8-word line fill)
-        LDR     r4,[r1],#32
-        LDR     r4,[r1],#32
-        LDR     r4,[r1],#32
-        CMP     r1,r2
-        BLO     %BT10                                   ;until done
-;write buffer can be allowed to drain on its own (this is not a code- or remap- critical clean)
-        MOV     r3,PC
-        ORR     r4,r3,#I_bit
-        TEQP    r4,#0                           ;disable IRQs to mess with ARMA_Cleaner status and MMUdomain
-        LDR     r4,[LR,#ARMA_Cleaner_status]
-        TST     r4,#ACS_HardVIDMRD
-        ARMA_read_MMUdomain r1, EQ
-        BICEQ   r1,r1,#&C
-        ARMA_write_MMUdomain r1, EQ             ;reset screen (domain 1) to fault for VIDMRD emulation, if necessary
-        BIC     r4,r4,#ACS_SCsemaphore
-        STR     r4,[LR,#ARMA_Cleaner_status]
-50
-        TEQP    r3,#0                           ;restore IRQ status
-        Pull    "r1-r4,PC"
-
-  ] ;ChocolateScreen
-
-
-
+ ]
         END
