@@ -110,11 +110,3 @@ ${TARGET}: ${OBJS} ${LIBS} local_dirs
 # Static dependencies:
 
 # Dynamic dependencies:
-o.restool:	c.restool
-o.restool:	C:h.swis
-o.restool:	C:h.kernel
-o.restool:	VersionNum
-o.restool:	c.restool
-o.restool:	C:h.swis
-o.restool:	C:h.kernel
-o.restool:	VersionNum

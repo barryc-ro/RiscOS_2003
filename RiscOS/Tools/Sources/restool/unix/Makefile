@@ -1,8 +1,8 @@
 # Project:   restool
 
-CC = cc
+CC = gcc
 AS = as
-LD = cc
+LD = gcc
 
 CCflags = -c -DUNIX -I..
 LDflags = -o $@
@@ -26,6 +26,10 @@ clean:
 realclean: clean
 	find . -type l -print | xargs rm
 	echo Done realclean
+
+links:
+	./mklinks
+	@echo made restool links
 
 # Do not faff with the following comment as Make looks for it explicitly:
 # Dynamic dependencies:
