@@ -9,84 +9,53 @@
 # 23-Aug-94  AMcC         Updated to build International Version (from Opal)
 # 01-Sep-98  KJB          Changed for new keygen tool
 # 21-Nov-00  SBF          Added support for StripDepnd
+# 22-Mar-01  SNB          Updated for portability
 #
 
 #
-# Generic options:
+# Component specific details
 #
-MKDIR   = cdir
-AS      = objasm
-CC	= cc
-CP      = copy
-LD      = link
-RM      = remove
-WIPE    = -wipe
-STRIP   = -stripdepnd
-CCFLAGS = -c -depend !Depend ${THROWBACK} -IC:
-ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit ${KBD} -To $@ -From
-LDFLAGS = -bin -o $@
-CPFLAGS = ~cfr~v
-WFLAGS  = ~cfr~v
-
-#
-# Program specific options:
-#
-COMPONENT = IntKey
-SOURCE    = Source.IntKeyMod
-LAYOUTS   = s.UK s.Italy s.Spain s.France s.Germany s.Esperanto s.Greece \
-            s.Swed-Finl s.Denmark s.Norway s.Iceland s.Turkey s.Russia \
-            s.Israel s.LatinAm s.Belgium s.Netherlands s.Japan \
-            s.Switzerland s.Wales s.USA s.DvorakUK s.DvorakUSA
-TARGET    = rm.IntKey
-OBJECT    = o.IntKey
-
-KBD       = -PD "Keyboard SETS \"${KEYBOARD}\""
+COMPONENT  = InternationalKeyboard
+TARGET     = IntKey
+ROM_SOURCE = Source.IntKeyMod
+RESOURCES  = no
 
 .SUFFIXES:
 .SUFFIXES: .o .s .c .layout
 
-.layout.s:;  keygen -depend !Depend ${THROWBACK} ${EXTRAKEYS} $< $@
-.c.o:;	${MKDIR} o ; ${CC} ${CCFLAGS} -o $@ $<
+KBD       = -PD "Keyboard SETS \"${KEYBOARD}\""
+ASFLAGS   = ${KBD}
+
+include StdTools
+include AAsmModule
 
 #
-# Generic rules:
+# Static dependencies and specialist rules
 #
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+LAYOUTS   = UK.s Italy.s Spain.s France.s Germany.s Esperanto.s Greece.s \
+            Swed-Finl.s Denmark.s Norway.s Iceland.s Turkey.s Russia.s \
+            Israel.s LatinAm.s Belgium.s Netherlands.s Japan.s \
+            Switzerland.s Wales.s USA.s DvorakUK.s DvorakUSA.s
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${WIPE} o ${WFLAGS}
-        ${WIPE} s ${WFLAGS}
-        ${STRIP}
-        ${RM} ${TARGET}
-	${RM} keygen
-	${RM} keyconvert
-        @echo ${COMPONENT}: cleaned
-
-keygen: o.keygen o.throwback o.unicdata
-	${MKDIR} s
-	${LD} -o keygen o.keygen o.throwback o.unicdata C:o.Stubs
-
-keyconvert: o.keyconvert o.unicdata
-	${MKDIR} s
-	${LD} -o keyconvert o.keyconvert o.unicdata C:o.Stubs
-
+${ROM_OBJECT}: ${LAYOUTS}
 ${LAYOUTS}: keygen
 
-${OBJECT}: ${SOURCE} ${LAYOUTS}
-        If "<IKHG$Dir>"="" Then Set IKHG$Dir ^.!IKHG
-        ${MKDIR} o
-        ${AS} ${ASFLAGS} ${SOURCE}
+.layout.s:;  keygen ${STDTOOLOPTIONS} ${EXTRAKEYS} $< $@
+.c.o:;  ${MKDIR} o ; ${CC} ${CFLAGS} -o $@ $<
 
-${TARGET}: ${OBJECT}
-        ${LD} ${LDFLAGS} ${OBJECT}
-        SetType $@ &FFA
+clean::
+        ${WIPE} s ${WFLAGS}
+        ${RM} keygen
+        ${RM} keyconvert
+        @echo ${COMPONENT}: cleaned
+
+keygen: keygen.o throwback.o unicdata.o
+        ${MKDIR} s
+        ${CC} -o $@ keygen.o throwback.o unicdata.o
+
+keyconvert: keyconvert.o unicdata.o
+        ${MKDIR} s
+        ${CC} -o $@ keyconvert.o unicdata.o
 
 # Dynamic dependencies:
