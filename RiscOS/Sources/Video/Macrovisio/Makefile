@@ -77,7 +77,7 @@ rm.Peregrine.Macrovisio: rm.MacroC
 	${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 
-rm.STB3.Macrovisio: rm.MacroC
+rm.STB3.Macrovisio: rm.MacroD
 	${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 
