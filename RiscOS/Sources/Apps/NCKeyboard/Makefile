@@ -12,7 +12,7 @@
 # 04-Sep-98	KJB	ROM build optimised for link 5.08 to reduce module
 #			binary size (so you must use 5.08 or later if
 #			doing a ROM build)
-# 04-Sep-98	ADH	-DFUNAI3 added to DFLAGS
+# 04-Sep-98	ADH	-DFUNAI3 added to DFLAGSg29
 # 27-Oct-98	ADH	-DFUNAI3_POLL added to DFLAGS (temporary). The
 #			'clean' rule now cleans, and an 'o.dirs' rule is
 #			used to correctly recreate o, oz, etc. Some
@@ -25,6 +25,8 @@
 #			Builds if OPTIONS=STB passed into makefile.
 # 26-Oct-99	SBF	Changed conditionals to use "IfThere" to suppress
 #			bogus build errors
+# 01-Feb-00	JPB	Added ${THROWBACK} to CFLAGS to allow throwback
+#			to be added in make obey files.
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -47,7 +49,7 @@ WIPE    = -wipe
 STRIP   = stripdepnd
 
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${BUILDFLAGS}
+CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${BUILDFLAGS} ${THROWBACK}
 LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
