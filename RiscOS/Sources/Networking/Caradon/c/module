@@ -10,7 +10,6 @@
 #include "cmhg_modem.h"
 #endif
 #include "driver.h"
-/* #include "inlines.h" */
 #include "kernel.h"
 #include "screen.h"
 #include "smartcard.h"
@@ -39,6 +38,7 @@ extern void removeticker(int (*irq_entry)(), void *);
 extern int  ncregenq(char *, void *, int);
 extern int  monotonic_time(void);
 extern void oscli(char *);
+extern void cliprompt(void);
 
 #define vdu4() _swix(0x104, 0)
 #define os_removecursors()  _swix(OS_RemoveCursors, 0)
@@ -65,11 +65,12 @@ extern int   backdrop_len, connect_len,  onhook_len, offhook_len, ppp_len;
 char *driver_name = "ModemCard";
 int driver_dev    = 0;
 int driver_baud   = 115200;
+
+extern void Driver_Send(char *);
 #endif
 
 void *pwp;
 
-/* extern int s; */
 int now;
 
 int oldptr = 1;
@@ -140,6 +141,16 @@ char *stristr (char *s, char *t)
   return(0);
 }
 
+void pause(int cs)
+{
+  int start = monotonic_time();
+
+  while ((monotonic_time() - start) < cs)
+  {
+    (*driver) (DRIVER_POLL, driver_dev);
+  }
+}
+
 #ifdef MODEM
 BOOL Driver_Get(char *expect)
 {
@@ -188,17 +199,6 @@ BOOL Driver_Get(char *expect)
   return(strlen(expect) == 0);
 }
 
-void pause(int cs)
-{
-  int now, start = monotonic_time();
-
-  do
-  {
-    now = monotonic_time();
-    (*driver) (DRIVER_POLL, driver_dev);
-  } while ((now - start) < cs);
-}
-
 void delay(int sleep)
 {
   int now = monotonic_time();
@@ -212,10 +212,11 @@ void delay(int sleep)
 
 void Twiddle(void)
 {
+  oscli("PPPDisconnect");
+  delay(100);
   (*driver) (DRIVER_CONTROLLINES, driver_dev, 0);
-  delay(50);
-  (*driver) (DRIVER_CONTROLLINES, driver_dev, 3);
-  delay(50);
+  delay(100);
+  Driver_Send("ATZ\r");
 }
 
 void DumpIt(BOOL filestoo)
@@ -232,37 +233,37 @@ void DumpIt(BOOL filestoo)
     _swix(NFS_Dismount, _INR(0, 1), 0, "NCDHome");
   }
 
-  oscli("PPPDisconnect");
-  pause(100);
   Twiddle();
   pause(100);
-  _swix(OS_Module, _INR(0, 1), 3, "PPP");
   doingit = FALSE;
 }
 
 static BOOL DoNFS(struct in_addr ina)
 {
-  char mount[80];
+  char *mount;
+  int length;
 
-  ncregenq("NFS_MOUNT", mount, 80);
-  if (_swix(NFS_SetUser, _INR(0, 2), inet_ntoa(ina), "nobody", ""))
+  length = ncregenq("NFS_MOUNT", mount, 0);
+  mount = malloc(length + 4);
+  if (length == 0 || mount == NULL)
     return(FALSE);
+  ncregenq("NFS_MOUNT", mount, length + 2);
+  if (_swix(NFS_SetUser, _INR(0, 2), inet_ntoa(ina), "nobody", ""))
+  {
+    free(mount);
+    return(FALSE);
+  }
 
   if (_swix(NFS_Mount,   _INR(0, 2), inet_ntoa(ina), "NFSBoot", mount))
+  {
+    free(mount);
     return(FALSE);
+  }
 
+  free(mount);
   return(TRUE);
 }
 #else
-void pause(int cs)
-{
-  int now, start = monotonic_time();
-
-  do
-  {
-    now = monotonic_time();
-  } while ((now - start) < cs);
-}
 
 static void DumpIt(BOOL filestoo)
 {
@@ -277,38 +278,54 @@ static void DumpIt(BOOL filestoo)
 
 static BOOL DoNFS(struct in_addr ina)
 {
-  char mount[80], loginid[40], passwd[40];
+  char *mount;
+  int length;
 
-  ncregenq("LOGIN_ID",     loginid, 40);
-  ncregenq("LOGIN_SECRET", passwd,  40);
-  ncregenq("NFS_MOUNT",    mount,   80);
-
-  if (_swix(NFS_SetUser, _INR(0, 2), inet_ntoa(ina), loginid, passwd))
+  length = ncregenq("NFS_MOUNT", mount, 0);
+  mount = malloc(length + 4);
+  if (length == 0 || mount == NULL)
     return(FALSE);
+  ncregenq("NFS_MOUNT", mount, length + 2);
+
+  if (_swix(NFS_SetUser, _INR(0, 2), inet_ntoa(ina), card.loginid,
+            card.loginsecret))
+  {
+    free(mount);
+    return(FALSE);
+  }
 
   if (_swix(NFS_Mount, _INR(0, 2), inet_ntoa(ina), "NCDHome", mount))
+  {
+    free(mount);
     return(FALSE);
-
+  }
+  free(mount);
   return(TRUE);
 }
 #endif
 
 void NFS_Init(void)
 {
-  char url[80];
-  int nfsfl;
+  char *url = NULL;
+  int nfsfl, urllen;
   proxy server;
   struct in_addr ina;
 
   if (!redial)
   {
-    ncregenq("URL_INIT", url, 80);
-    NewPage(url);
-    sprintf(buffer, "-url %s", url);
-    _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), "NCFresco$Home",
-                      buffer, strlen(buffer), 0);
-    _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), "NCFresco$Welcome",
-                      buffer, strlen(buffer), 0);
+    urllen = ncregenq("URL_INIT", url, 0);
+    url = malloc(urllen + 4);
+    if (url && urllen)
+    {
+      ncregenq("URL_INIT", url, urllen + 2);
+      NewPage(url);
+      sprintf(buffer, "-url %s", url);
+      _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), "NCFresco$Home",
+                        buffer, strlen(buffer), 0);
+      _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), "NCFresco$Welcome",
+                        buffer, strlen(buffer), 0);
+      free(url);
+    }
   }
   ncregenq("NFS_TYPE", &nfsfl, 4);
   if (nfsfl)
@@ -322,7 +339,7 @@ void NFS_Init(void)
     else
     {
       ncregenq("FSERV_BACKUP", &server, sizeof(proxy));
-    ina.s_addr = server.addr;
+      ina.s_addr = server.addr;
       if (DoNFS(ina))
         innfs = ina;
       else
@@ -336,28 +353,20 @@ void NFS_Init(void)
       mb.header.size   = 32;
       mb.header.action = 0x4AF84;
       _swix(TaskModule_SendMessage, _INR(0, 5), 0, &mb, 0, 0, 0, 0);
+#ifdef MODEM      
+      if (!silent)
+        vdu4();
       if (redial)
       {
-        if (!silent)
-          vdu4();
-#ifdef ETHERNET
-        _swix(TaskModule_StartTask, _INR(0, 2),
-              "Obey -c NFS::NCDHome.$.!Redial", 0, 0);
-#else
         _swix(TaskModule_StartTask, _INR(0, 2),
               "Obey -c NFS::NFSBoot.$.!NFSBoot.!Redial", 0, 0);
-#endif
       }
       else
       {
-#ifdef ETHERNET
-        _swix(TaskModule_StartTask, _INR(0, 2),
-              "Obey -c NFS::NCDHome.$.!Run", 0, 0);
-#else
         _swix(TaskModule_StartTask, _INR(0, 2),
               "Obey -c NFS::NFSBoot.$.!NFSBoot.!Run", 0, 0);
-#endif
       }
+#endif
     }
   }
 }
@@ -374,8 +383,7 @@ int CDN_callback_handler (_kernel_swi_regs *r, void *pw)
       int ret;
       static int tries = 0;
     
-      err = _swix(NCRegistry_Write, _INR(0, 2) | _OUT(0),
-                                    0, 0, 0, &ret);
+      err = _swix(NCRegistry_Write, _INR(0, 2) | _OUT(0), 0, 0, 0, &ret);
       if (err == NULL && ret == -7 && tries < 10)
       {
         dialplease = CALLBACK_WRITE;
@@ -403,6 +411,7 @@ int CDN_callback_handler (_kernel_swi_regs *r, void *pw)
     NewPage("file:/WWWRoot:ServerNR");
     dialplease = CALLBACK_NOOP;
     doingit = FALSE;
+    Twiddle();
     break;
 
 #ifdef MODEM
@@ -434,15 +443,6 @@ int CDN_callback_handler (_kernel_swi_regs *r, void *pw)
     }
     break;
 #endif
-  }
-  return(1);
-}
-
-int CDN_upcall_handler (_kernel_swi_regs *r, void *pw)
-{
-  if (r->r[0] == 0x0E && doingit)
-  {
-    restart = TRUE;
   }
   return(1);
 }
@@ -500,9 +500,9 @@ char *cmos_number(void)
 
 void DoDial(void)
 {
-  char expect[24], send[44];
+  char expect[80], send[80];
   FILE *fin;
-  int step = 0, state;
+  int step = 0;
 
   if (!silent)
   {
@@ -519,14 +519,12 @@ void DoDial(void)
   }
 
   os_removecursors();
-  if (redial == FALSE)
-  {
-    (*driver) (DRIVER_INITIALISE,   driver_dev);
-    (*driver) (DRIVER_WORDFORMAT,   driver_dev, 0);
-    (*driver) (DRIVER_CONTROLLINES, driver_dev, 3);
-    (*driver) (DRIVER_TXSPEED,      driver_dev, driver_baud);
-    (*driver) (DRIVER_RXSPEED,      driver_dev, driver_baud);
-  }
+
+  (*driver) (DRIVER_INITIALISE,   driver_dev);
+  (*driver) (DRIVER_WORDFORMAT,   driver_dev, 0);
+  (*driver) (DRIVER_CONTROLLINES, driver_dev, 3);
+  (*driver) (DRIVER_TXSPEED,      driver_dev, driver_baud);
+  (*driver) (DRIVER_RXSPEED,      driver_dev, driver_baud);
 
   delay(50);
   if (fin = fopen("<Wimp$ScrapDir>.Sennen.Files.Script", "r"), fin == NULL)
@@ -550,12 +548,12 @@ void DoDial(void)
     render(offhook, offhook_len, scale());
    
     fseek(fin, 0, SEEK_SET);
-    while (!restart && fgets(expect, 20, fin))
+    while (!restart && fgets(expect, 80, fin))
     {
       int sentat = monotonic_time();
       
       Rip(expect);
-      fgets(send, 40, fin);
+      fgets(send, 80, fin);
       Rip(send);
       do
       {
@@ -565,8 +563,6 @@ void DoDial(void)
           restart = TRUE;
           NewPage("file:/WWWRoot:ServerB");
         }
-        _swix(Standby_State, _IN(0) | _OUT(0), 0, &state);
-        restart |= state;
       } while (!Driver_Get(expect) && !restart);
  
       if (!restart && strlen(send) > 0)
@@ -598,6 +594,7 @@ void DoDial(void)
   {
     dialplease = CALLBACK_NOOP;
     doingit = FALSE;
+    Twiddle();
     _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, 0); /* down */
   }
   os_restorecursors();
@@ -676,15 +673,8 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 
   case CMD_Twiddle:
     {
-      int lines = ((*driver) (DRIVER_MODEMCONTROL, driver_dev));
-     
-      if (lines & 8) /* DCD - Online */
-      {
-        oscli("PPPDisconnect");
-        pause(100);
-        _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, 0); /* down */
-      }
       Twiddle();
+      _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, 0); /* down */
     }
     break;
 
@@ -698,6 +688,7 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 
   case CMD_CDN_GoingDown:
     {
+/*       Twiddle(); */
       _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, 0); /* down */
       online = FALSE;
     }
@@ -755,6 +746,11 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
         if (strncmp(nextbit, "num=", strlen("num=")) == NULL)
         {
           value = nextbit + strlen("num=");
+          if (card.pstnnum)
+            free(card.pstnnum);
+          card.pstnnum = malloc(strlen(value) + 4);
+          if (card.pstnnum == NULL)
+            break;
           strcpy(card.pstnnum, UnEscape(value));
           _swix(NCRegistry_Write, _INR(0, 2) | _OUT(0),
                 "PSTN_NUM", card.pstnnum, strlen(card.pstnnum) + 1, &ret);
@@ -763,6 +759,11 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
         else if (strncmp(nextbit, "name=", strlen("name=")) == NULL)
         {
           value = nextbit + strlen("name=");
+          if (card.loginid)
+            free(card.loginid);
+          card.loginid = malloc(strlen(value) + 4);
+          if (card.loginid == NULL)
+            break;
           strcpy(card.loginid, UnEscape(value));
           _swix(NCRegistry_Write, _INR(0, 2) | _OUT(0),
                 "LOGIN_ID", card.loginid, strlen(card.loginid) + 1, &ret);
@@ -771,6 +772,11 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
         else if (strncmp(nextbit, "pass=", strlen("pass=")) == NULL)
         {
           value = nextbit + strlen("pass=");
+          if (card.loginsecret)
+            free(card.loginsecret);
+          card.loginsecret = malloc(strlen(value) + 4);
+          if (card.loginsecret == NULL)
+            break;
           strcpy(card.loginsecret, UnEscape(value));
           _swix(NCRegistry_Write, _INR(0, 2) | _OUT(0),
                 "LOGIN_SECRET", card.loginsecret, strlen(card.loginsecret) + 1, &ret);
@@ -870,7 +876,6 @@ _kernel_oserror *Caradon_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 _kernel_oserror *Caradon_modfinal (int fatal, int podule, void *pw)
 {
   _swix(ResourceFS_DeregisterFiles, _IN(0), resources_base());
-  _swix(OS_Release, _INR(0,2), UpCallV, CDN_upcall_entry, pw);
   osmodfree(incoming);
   osmodfree(buffer);
   return(NULL);
@@ -961,7 +966,6 @@ _kernel_oserror *main_service(int service, _kernel_swi_regs *r, void *pw)
     }
     else if ((scstatus & 0x04 & scchange) != 0) /* Card inserted and valid */
     {
-      char loginid[40], pstnnum[40];
       int cardwrite;
  
       if (strcmp(lastcode, nocode) == NULL)
@@ -978,22 +982,13 @@ _kernel_oserror *main_service(int service, _kernel_swi_regs *r, void *pw)
         break;
       }
 
-      ncregenq("LOGIN_ID", loginid, 40);
 #ifdef MODEM
-      ncregenq("PSTN_NUM", pstnnum, 40);
-#else
-      ncregenq("LOGIN_SECRET", pstnnum, 40);
-#endif
- 
-      if (strlen(loginid) == 0 || strlen(pstnnum) == 0)
+      if (card.loginid == NULL || card.pstnnum == NULL
+          || card.loginsecret == NULL || strlen(card.loginid) == 0
+          || strlen(card.pstnnum) == 0 || strlen(card.loginsecret) == 0)
       {
-#ifdef MODEM
         NewPage("file:/WWWDyn:EnterNNPC");
-#else
-        NewPage("file:/WWWDyn:EnterNPC");
-#endif
       }
-#ifdef MODEM
       else if (cardwrite)
       {
         NewPage("file:/WWWDyn:ProceedC");
@@ -1003,6 +998,11 @@ _kernel_oserror *main_service(int service, _kernel_swi_regs *r, void *pw)
         NewPage("file:/WWWDyn:Proceed");
       }
 #else
+      if (card.loginid == NULL || card.loginsecret == NULL
+          || strlen(card.loginid) == 0 || strlen(card.loginsecret) == 0)
+      {
+        NewPage("file:/WWWDyn:EnterNPC");
+      }
       else
       {
         _swix(OS_SetVarVal, _IN(0) | _IN(2) | _IN(4), "Sennen$Newpage", -1, 0);
@@ -1040,10 +1040,10 @@ _kernel_oserror *Caradon_modinit (char *cmd_tail, int podule_base, void *pw)
   pwp = pw;
 
   _swix(ResourceFS_RegisterFiles, _IN(0), resources_base());
-  _swix(OS_Claim,  _INR(0,2), UpCallV, CDN_upcall_entry, pw);
   incoming = osmodget(256);
   buffer   = osmodget(BUFSIZ);
   Screen_CacheModeInfo();
+  memset(&card, '\0', sizeof(carddata));
 
   return(NULL);
 }
