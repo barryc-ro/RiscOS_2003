@@ -5,62 +5,35 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 23-Mar-01  SNB          Recreated.
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT  = SuperSample
+TARGET     = Super
+HEADER1    = Super
+RESOURCES  = no
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
+MATRIX1    = Matrix1.s
+MATRIX2    = Matrix2.s
 
-#
-# Program specific options:
-#
-COMPONENT = Super
-SOURCE    = s.Super
-TARGET    = rm.Super
-EXPORTS   = ${EXP_HDR}.Super
+include StdTools
+include AAsmModule
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+clean::
+        @${RM} ${MATRIX1}
+        @${RM} ${MATRIX2}
+        ${RM} Matrix1
+        ${RM} Matrix2
+        @${RM} s.Matrix1
+        @${RM} s.Matrix2
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+${ROM_OBJECT} ${SA_OBJECT} ${DBG_OBJECT}: ${MATRIX1} ${MATRIX2}
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+.SUFFIXES: .c .s
 
-clean:
-        ${RM} ${TARGET}
-        ${RM} s.Matrix1
-        ${RM} s.Matrix2
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE} s.Matrix2 s.Matrix1
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-s.Matrix1: GenMatrix1
-        GenMatrix1
-
-s.Matrix2: GenMatrix2
-        GenMatrix2
-
-${EXP_HDR}.Super: hdr.Super
-        ${CP} hdr.Super $@ ${CPFLAGS}
+.c.s:
+        ${MKDIR} o
+        ${CC} ${STDTOOLOPTIONS} -o $* $<
+        $* $@
 
 # Dynamic dependencies:
