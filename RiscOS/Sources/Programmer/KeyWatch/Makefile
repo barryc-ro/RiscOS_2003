@@ -19,7 +19,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -fah ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -36,9 +36,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 # Include files
 #
-INCLUDES = -I<Lib$Dir>.tboxlibs. -IC:
-
-LIBS     =
+INCLUDES = -IC:
 
 DFLAGS   =
 
@@ -47,15 +45,23 @@ DFLAGS   =
 #
 COMPONENT = KeyWatch
 TARGET    = aof.KeyWatch
+
+RM	  = rm.KeyWatch
+RMD	  = rm.KeyWatchD
+
 OBJS      = o.KeyWatchHd o.KeyWatch
-EXPORTS   = 
+OBJSD     = o.KeyWatchHd od.KeyWatch
+
+LIBS     =
+LIBSD    = C:debug.o.remotezm
 
 #
 # Rule patterns
 #
-SUFFIXES=   .cmhg
+.SUFFIXES:  .od
 
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} -ff -o $@ $<
+.c.od:;     ${CC} ${CFLAGS} -DDEBUG -DREMOTE_DEBUG -o $@ $<
 .cmhg.o:;   ${CMHG} -p -o $@ $<
 .cmhg.h:;   ${CMHG} -p -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
@@ -86,6 +92,7 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} od.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
@@ -115,23 +122,12 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.KeyWatch: ${OBJS} ${CLIB}
+${RM}: ${OBJS} ${LIBSD} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
+
+${RMD}: ${OBJSD} ${LIBSD} ${CLIB}
+        ${LD} -o $@ -module ${OBJSD} ${LIBSD} ${CLIB}
 
 KeyWatch.c: KeyWatchHd.h
 
 # Dynamic dependencies:
-o.KeyWatch:	c.KeyWatch
-o.KeyWatch:	C:h.kernel
-o.KeyWatch:	C:h.swis
-o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
-o.KeyWatch:	VersionNum
-o.KeyWatch:	h.KeyWatchHd
-o.KeyWatch:	h.KeyWatch
-o.KeyWatch:	c.KeyWatch
-o.KeyWatch:	C:h.kernel
-o.KeyWatch:	C:h.swis
-o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
-o.KeyWatch:	VersionNum
-o.KeyWatch:	h.KeyWatchHd
-o.KeyWatch:	h.KeyWatch
