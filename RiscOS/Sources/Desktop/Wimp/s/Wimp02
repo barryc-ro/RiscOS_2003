@@ -172,7 +172,7 @@ SWIWimp_Initialise
 ;
         B       rationalisememory
 
-      [ debug
+      [ true ; debug
 taskidentifier2 DCB "TASK"
       ]
 ;
@@ -506,7 +506,7 @@ skipupcall
         ADR     R3,oldfxstatus          ; remember old codes
         BL      resetkeycodes           ; *FX 4,2 etc.
 ;
-      [ debug
+      [ true ; debug
         LDR     R5,taskidentifier2       ; if R1="TASK" on entry ...
       |
         LDR     R5,taskidentifier       ; if R1="TASK" on entry ...
@@ -923,7 +923,7 @@ exitinit
 checkversion
         Push    "LR"
 
-        LDR     R14,taskidentifier
+        LDR     R14,taskidentifier2
         TEQ     R1,R14
         MOVEQ   R14,#nullptr           ; new-style tasks are not single-tasking
         LDRNE   R14,taskhandle
@@ -985,6 +985,8 @@ fulltaskhandle
         ORR     R14,R1,R14,LSL #flag_versionbit
         Pull    "R1,PC"
 
+        LTORG
+
 ;;------------------------------------------------------------------------------
 ;; in   R0=0 => print syntax message only
 ;;      R0=1 => *Status WimpMode was typed - print out value
@@ -992,6 +994,410 @@ fulltaskhandle
 ;; out  if *configure, CMOS RAM configured
 ;;                     [currentmode] or [sysflags] reset
 ;;-----------------------------------------------------------------------------
+
+    [ true
+; New configuration code that isn't as closely tied to the CMOS byte involved
+; (most bytes are now shared by multiple options)
+
+        MACRO
+$lab    ConfigOption $string, $unit, $cmosbyte, $cmosbit, $cmossize, $shift, $eor, $expbyte, $expbit, $intvar, $intmul, $intbyte, $lut, $num
+        ; $string:   tail of label for status string
+        ; $unit:     (optional) tail of label for unit token string
+        ; $cmosbyte: byte to read for mantissa
+        ; $cmosbit:  (default 0) minimum significant bit
+        ; $cmossize: (default 8) number of significant bits
+        ; $shift:    non-null means don't shift mantissa bitfield down when reading (to make lsb=0)
+        ; $eor:      (optional) value to EOR with mantissa read from CMOS
+        ; $expbyte:  (optional) byte holding 1-bit exponent
+        ; $expbit:   (optional) bit holding 1-bit exponent
+        ; $intvar:   (optional) internal value to set to value
+        ; $intmul:   non-null means store value * 10 in internal variable
+        ; $intbyte:  B => store as byte value
+        ; $lut:      (optional) label for table of (short) strings to use for each value
+        ; $num:      non-null means table contains 32-bit words instead
+        ENTRY   "R7-R11"
+        LDR     wsptr, [R12]
+        CMP     R0, #1
+        BHI     %FT02
+        BEQ     %FT01
+        
+        ; Print syntax string
+        ADRL    R0, configmess_$string
+        SWI     XOS_Write0
+        EXIT
+        
+        ; Print status string
+01      ADR     R0, statusmess_$string
+        SWI     XOS_Write0
+        MOVVC   R0, #ReadCMOS
+        MOVVC   R1, #$cmosbyte
+        SWIVC   XOS_Byte
+        [ "$expbyte" <> "" :LAND: "$expbit" <> ""
+        [ $expbyte = $cmosbyte
+        MOVVC   R4, R2                  ; remember, to save another CMOS read later
+        ]
+        ]
+        [ "$cmosbit" <> "" :LAND: "$cmossize" <> ""
+        ANDVC   R2, R2, #((1 :SHL: $cmossize) - 1) :SHL: $cmosbit
+        [ "$shift" = "" :LAND: $cmosbit <> 0
+        MOVVC   R2, R2, LSR#$cmosbit
+        ]
+        ]
+        [ "$eor" <> ""
+        [ $eor <> 0
+        EORVC   R2, R2, #$eor
+        ]
+        ]
+        [ "$expbyte" <> "" :LAND: "$expbit" <> ""
+        MOVVC   R3, R2
+        [ $expbyte = $cmosbyte
+        MOVVC   R2, R4                  ; get value read earlier
+        |
+        MOVVC   R0, #ReadCMOS
+        MOVVC   R1, #$expbyte
+        SWIVC   XOS_Byte
+        ]
+        TSTVC   R2, #1 :SHL: $expbit    ; preserves V
+        ADDNE   R3, R3, R3, LSL#2
+        MOVNE   R2, R3, LSL#1           ; multiply by 10
+        MOVEQ   R2, R3
+        ]
+        [ "$lut" = ""
+        SUB     sp, sp, #4              ; buffer space
+        MOVVC   R0, R2
+        MOVVC   R1, sp
+        MOVVC   R2, #4
+        SWIVC   XOS_ConvertCardinal1
+        SWIVC   XOS_Write0
+        ADD     sp, sp, #4
+        |
+        ADRVCL  R0, $lut
+        ADDVC   R0, R0, R2, LSL#2       ; strings and ints are at 4-byte intervals
+        [ "$num" = ""
+        SWIVC   XOS_Write0
+        |
+        SUB     sp, sp, #12             ; buffer space
+        LDRVC   R0, [R0]
+        MOVVC   R1, sp
+        MOVVC   R2, #12
+        SWIVC   XOS_ConvertCardinal4
+        SWIVC   XOS_Write0
+        ADD     sp, sp, #12
+        ]
+        ]
+        [ "$unit" <> ""
+        ADRVCL  R0, statusmess_$unit
+        BLVC    QuickLookup
+        SWIVC   XOS_WriteN
+        ]
+        SWIVC   XOS_NewLine
+
+        TEQ     PC, #0                  ; get around kernel bug: Z must be clear on exit
+        EXIT
+        
+02      ; Set configuration - uses another macro due to assembler's limit on macro size
+        SetConfig $string, $unit, $cmosbyte, $cmosbit, $cmossize, $shift, $eor, $expbyte, $expbit, $intvar, $intmul, $intbyte, $lut, $num
+        MEND
+
+        MACRO
+$lab    SetConfig $string, $unit, $cmosbyte, $cmosbit, $cmossize, $shift, $eor, $expbyte, $expbit, $intvar, $intmul, $intbyte, $lut, $num
+        [ "$lut" = "" :LOR: ("$lut" <> "" :LAND: "$num" <> "")
+        MOV     R1, R0
+        MOV     R0, #10 :OR: 1:SHL:31   ; base 10, terminate at control char or space
+        SWI     XOS_ReadUnsigned
+        EXIT    VS
+        [ "$lut" <> "" :LAND: "$num" <> ""
+        ADRL    R0, $lut
+        BL      status_scaninttable
+        ]
+        |
+        ADRL    R4, $lut
+        BL      status_scanstringtable
+        EXIT    VS
+        ]
+        
+        ; Restrict R2 to a valid value, calculate mantissa (R3) and exponent (R4) if applicable
+        [ "$shift" <> ""
+        MOV     R2, R2, LSR #$cmosbit
+        ]
+          [ "$cmossize" <> ""
+        CMP     R2, #(1 :SHL: $cmossize) - 1
+          |
+        CMP     R2, #&FF
+          ]
+        [ "$expbyte" = ""
+          [ "$cmossize" <> ""
+        MOVHI   R2, #(1 :SHL: $cmossize) - 1
+          |
+        MOVHI   R2, #&FF
+          ]
+        |
+        MOVLE   R3, R2
+        MOVLE   R4, #0
+        BLE     %FT07
+        MOV     R1, #10
+        DivRem  R3, R2, R1, R0          ; R3 = R2 DIV 10,  R2 = R2 MOD 10
+        CMP     R3, #((1 :SHL: $cmossize) - 1) / 10 ; do we need to round down to 15?
+        MOVEQ   R3, #(1 :SHL: $cmossize) - 1
+        MOVEQ   R4, #0
+        MOVHI   R4, #1
+        CMP     R3, #(1 :SHL: $cmossize) - 1
+        MOVHI   R3, #(1 :SHL: $cmossize) - 1
+07      MOV     R2, R3, LSL R4
+        TEQ     R4, #0
+        ADDNE   R2, R2, R2, LSL #2
+        ]
+        
+        [ "$intvar" <> ""
+        [ "$shift" <> ""
+        MOV     R1, R2, LSL #$cmosbit
+        |
+        MOV     R1, R2
+        ]
+        [ "$intmul" <> ""
+        MOV     R1, R1, LSL#1
+        ADD     R1, R1, R1, LSL#2
+        ]
+        [ "$lut" <> "" :LAND: "$num" <> ""
+        ADRL    R0, $lut
+        LDR     R1, [R0, R1, LSL#2]
+        ]
+        STR$intbyte R1, $intvar
+        ]
+        [ "$intvar" = "preferredpool" ; special case
+        TEQ     R1, #0
+        LDR     R0, baseofsprites
+        STREQ   R0, baseofhisprites
+        STRNE   R0, baseoflosprites
+        LDR     R0, baseofromsprites
+        STREQ   R0, baseoflosprites
+        STRNE   R0, baseofhisprites
+        [ windowsprite
+        MOV     R0, #-1
+        STR     R0, tiling_sprite
+        ]
+        BL      freelist ; mark cached sprite list invalid
+        ]
+        
+        [ "$expbyte" = ""
+          [ "$eor" <> ""
+          [ $eor <> 0
+          [ "$shift" <> ""
+        EOR     R2, R2, #$eor :SHR: $cmosbit
+          |
+        EOR     R2, R2, #$eor
+          ]
+          ]
+          ]
+          [ "$cmosbit" <> "" :LAND: "$cmossize" <> ""
+        MOV     R3, R2
+        MOV     R0, #ReadCMOS
+        MOV     R1, #$cmosbyte
+        SWI     XOS_Byte
+        EXIT    VS
+        BIC     R2, R2, #((1 :SHL: $cmossize) - 1) :SHL: $cmosbit
+        ORR     R2, R2, R3, LSL #$cmosbit
+          |
+        MOV     R1, #$cmosbyte
+          ]
+        MOV     R0, #WriteCMOS
+        SWI     XOS_Byte
+        |
+        
+          [ "$eor" <> ""
+          [ $eor <> 0
+        EOR     R3, R3, #$eor
+          ]
+          ]
+        [ "$cmosbyte" = "$expbyte"
+        MOV     R0, #ReadCMOS
+        MOV     R1, #$cmosbyte
+        SWI     XOS_Byte
+        EXIT    VS
+        BIC     R2, R2, #(((1 :SHL: $cmossize) - 1) :SHL: $cmosbit) + (1 :SHL: $expbit)
+        ORR     R2, R2, R3, LSL #$cmosbit
+        ORR     R2, R2, R4, LSL #$expbit
+        MOV     R0, #WriteCMOS
+        SWI     XOS_Byte
+        |
+        
+        MOV     R0, #ReadCMOS
+        MOV     R1, #$cmosbyte
+        SWI     XOS_Byte
+        EXIT    VS
+        BIC     R2, R2, #((1 :SHL: $cmossize) - 1) :SHL: $cmosbit
+        ORR     R2, R2, R3, LSL #$cmosbit
+        MOV     R0, #WriteCMOS
+        SWI     XOS_Byte
+        EXIT    VS
+        MOV     R0, #ReadCMOS
+        MOV     R1, #$expbyte
+        SWI     XOS_Byte
+        EXIT    VS
+        BIC     R2, R2, #1 :SHL: $expbit
+        ORR     R2, R2, R4, LSL #$expbit
+        MOV     R0, #WriteCMOS
+        SWI     XOS_Byte
+        ]
+        ]
+        
+        EXIT
+        MEND
+
+status_scaninttable
+; In:  R0 -> increasing integer table (terminated by -1)
+;      R2 = number to match
+; Out: R2 = index into table of best match
+        ENTRY
+        MOV     R4, R2
+        MOV     R1, #0
+01      LDR     R3, [R0, R1, LSL #2]
+        CMP     R4, R3
+        MOVHS   R2, R1
+        ADD     R1, R1, #1
+        CMP     R3, #0
+        BGE     %BT01
+        EXIT
+
+status_scanstringtable
+; In:  R0 -> string to match case-insensitively (not null terminated)
+;      R4 -> array of null-terminated strings, starting at 1-word boundaries (terminates with a null string)
+; Out: R2 = index into array of match, or V set if no match
+        ENTRY
+        MOV     R3, sp
+        SUB     sp, sp, #8
+        MOV     R2, sp
+03      LDRB    R1, [R0], #1
+        CMP     R1, #' '
+        MOVLS   R1, #0 ; also terminate at spaces
+        STRB    R1, [R2], #1
+        TEQ     R2, R3
+        BNE     %BT03
+        MOV     R0, #0
+        STRB    R0, [R2, #-1] ; just in case
+        MOV     R5, #0
+        MOV     R6, #-1
+        MOV     R1, sp
+        MOV     R3, #Collate_IgnoreCase
+04      ADD     R2, R4, R5, LSL #2
+        LDRB    R14, [R2]
+        TEQ     R14, #0
+        BEQ     %FT05 ; this signifies the end of the table
+        MOV     R0, #1 ; * commands are all in English
+        SWI     XTerritory_Collate
+        EXIT    VS
+        MOVEQ   R6, R5
+        ADD     R5, R5, #1
+        B       %BT04
+05      ADD     sp, sp, #8
+        CMP     R6, #0
+        MOVGE   R2, R6
+        EXIT    GE
+        MOV     R0, #0 ; "Bad configure option"
+        SETV
+        EXIT
+
+; Units tokens for *Status
+statusmess_osunits              DCB     "OSUnits",0
+statusmess_ds                   DCB     "DeciSec",0
+statusmess_osupersec            DCB     "OSUperSec",0
+statusmess_osupersec2           DCB     "OSUperSec2",0
+        ALIGN
+status_offon                    DCB     "Off",0,"On",0,0,0,0,0,0
+status_ramrom                   DCB     "RAM",0,"ROM",0,0,0,0,0
+
+; Code for handling *Configure/*Status
+WimpFlagsC_Code
+    ConfigOption flags,,WimpFlagsCMOS,,,,,,,sysflags,,B
+statusmess_flags                DCB     "WimpFlags  ",0
+configmess_flags                DCB     "WimpFlags  <D>",cr,lf,0
+
+WimpFontC_Code
+    ConfigOption wimpfont,,DesktopFeaturesCMOS,1,4
+statusmess_wimpfont             DCB     "WimpFont   ",0
+configmess_wimpfont             DCB     "WimpFont   <D>",cr,lf,0
+
+WimpDragDelayC_Code
+    ConfigOption dragdelay,ds,WimpDragTimeCMOS,0,4,,default_drag_timelimit,WimpDragMoveLimitCMOS,0,drag_timelimit,x10
+statusmess_dragdelay            DCB     "WimpDragDelay  ",0
+configmess_dragdelay            DCB     "WimpDragDelay  <D>",cr,lf,0
+
+WimpDragMoveC_Code
+    ConfigOption dragmove,osunits,WimpDragMoveLimitCMOS,2,5,noshift,default_drag_movelimit,,,drag_movelimit,,B
+statusmess_dragmove             DCB     "WimpDragMove  ",0
+configmess_dragmove             DCB     "WimpDragMove  <D>",cr,lf,0
+
+WimpDoubleClickDelayC_Code
+    ConfigOption doubleclickdelay,ds,WimpDoubleClickTimeCMOS,0,4,,default_doubleclick_timelimit,WimpDoubleClickMoveLimitCMOS,0,doubleclick_timelimit,x10
+statusmess_doubleclickdelay     DCB     "WimpDoubleClickDelay  ",0
+configmess_doubleclickdelay     DCB     "WimpDoubleClickDelay  <D>",cr,lf,0
+
+WimpDoubleClickMoveC_Code
+    ConfigOption doubleclickmove,osunits,WimpDoubleClickMoveLimitCMOS,2,5,noshift,default_doubleclick_movelimit,,,doubleclick_movelimit,,B
+statusmess_doubleclickmove      DCB     "WimpDoubleClickMove  ",0
+configmess_doubleclickmove      DCB     "WimpDoubleClickMove  <D>",cr,lf,0
+
+WimpAutoMenuDelayC_Code
+    ConfigOption automenudelay,ds,WimpAutoSubMenuTimeCMOS,0,4,,default_automenudelay,WimpAutoSubMenuTimeCMOS,4,automenu_timelimit,x10
+statusmess_automenudelay        DCB     "WimpAutoMenuDelay  ",0
+configmess_automenudelay        DCB     "WimpAutoMenuDelay  <D>",cr,lf,0
+
+WimpMenuDragDelayC_Code
+    ConfigOption menudragdelay,ds,WimpMenuDragDelayCMOS,0,4,,default_menudragdelay,WimpMenuDragDelayCMOS,4,menudragdelay,x10
+statusmess_menudragdelay        DCB     "WimpMenuDragDelay  ",0
+configmess_menudragdelay        DCB     "WimpMenuDragDelay  <D>",cr,lf,0
+
+WimpIconBarSpeedC_Code
+    ConfigOption iconbarspeed,osupersec,WimpAutoSubMenuTimeCMOS,5,3,,default_iconbarspeed,,,iconbar_scroll_speed,,,iconbarlogtable,numeric
+statusmess_iconbarspeed         DCB     "WimpIconBarSpeed  ",0
+configmess_iconbarspeed         DCB     "WimpIconBarSpeed  <D>",cr,lf,0
+
+WimpIconBarAccelerationC_Code
+    ConfigOption iconbaraccel,osupersec2,WimpMenuDragDelayCMOS,5,3,,default_iconbaraccel,,,iconbar_scroll_accel,,,iconbarlogtable,numeric
+statusmess_iconbaraccel         DCB     "WimpIconBarAcceleration  ",0
+configmess_iconbaraccel         DCB     "WimpIconBarAcceleration  <D>",cr,lf,0
+
+        [ SpritePriority
+WimpSpritePrecedenceC_Code
+    ConfigOption sprite,,DesktopFeaturesCMOS,5,1,,0,,,preferredpool,,,status_ramrom
+statusmess_sprite               DCB     "WimpSpritePrecedence  ",0
+configmess_sprite               DCB     "WimpSpritePrecedence  RAM|ROM",cr,lf,0
+        ]
+
+        [ IconiseButton
+WimpIconiseButtonC_Code
+    ConfigOption iconisebut,,WimpDragMoveLimitCMOS,7,1,,0,,,iconisebutton,,B,status_offon
+statusmess_iconisebut           DCB     "WimpIconiseButton  ",0
+configmess_iconisebut           DCB     "WimpIconiseButton  On|Off",cr,lf,0
+        ]
+
+        [ StickyEdges
+WimpStickyEdgesC_Code
+    ConfigOption sticky,,DesktopFeaturesCMOS,6,1,,0,,,stickyedges,,B,status_offon
+statusmess_sticky               DCB     "WimpStickyEdges  ",0
+configmess_sticky               DCB     "WimpStickyEdges  On|Off",cr,lf,0
+        ]
+
+        [ PoppingIconBar
+WimpAutoFrontIconBarC_Code
+    ConfigOption autofront,,WimpDoubleClickMoveLimitCMOS,7,1,,1,,,popiconbar,,B,status_offon
+statusmess_autofront            DCB     "WimpAutoFrontIconBar  ",0
+configmess_autofront            DCB     "WimpAutoFrontIconBar  On|Off",cr,lf,0
+
+WimpAutoFrontDelayC_Code
+    ConfigOption autofrontdelay,ds,WimpDoubleClickTimeCMOS,4,4,,default_autofrontdelay,WimpDoubleClickMoveLimitCMOS,1,popiconbar_pause,x10
+statusmess_autofrontdelay       DCB     "WimpAutoFrontDelay  ",0
+configmess_autofrontdelay       DCB     "WimpAutoFrontDelay  <D>",cr,lf,0
+        ]
+
+        [ Autoscr
+WimpAutoScrollDelayC_Code
+    ConfigOption scrolldelay,ds,WimpDragTimeCMOS,4,4,,default_autoscrolldelay,WimpDragMoveLimitCMOS,1,autoscr_default_pause,,B
+statusmess_scrolldelay          DCB     "WimpAutoScrollDelay  ",0
+configmess_scrolldelay          DCB     "WimpAutoScrollDelay  <D>",cr,lf,0
+        ]
+
+    |
 
 WimpDragDelayC_Code
         MOV     R1,#WimpDragTimeCMOS
@@ -1250,6 +1656,8 @@ printsyntax
 01      ADRNEL  R0,configmess_mode
         SWI     XOS_Write0
         Pull    "R1,R12,PC"
+
+    ]
 
 ;
 ; Entry:  R0 = desired mode number
@@ -4587,7 +4995,56 @@ openfinished
         LDR     R14,[handle,#w_flags]
         BIC     R14,R14,#ws_onscreenonce  ; only cancel this on Open_Window
         STR     R14,[handle,#w_flags]     ; (not on Set_Extent)
-
+;
+      [ PoppingIconBar
+        LDR     R14, iconbar_pop_state    ; don't bother if already at back
+        TEQ     R14, #pop_Front
+        TEQNE   R14, #pop_HeldByMenu
+        TEQNE   R14, #pop_Front2
+        LDREQ   R14, [handle, #w_bhandle]
+        CMPEQ   R14, #-1                  ; don't bother if not coming to front
+        LDREQ   R14, [handle, #w_parent]
+        CMPEQ   R14, #-1                  ; don't bother if a child window
+        LDREQ   R14, [handle, #w_flags]
+        TSTEQ   R14, #wf_inborder         ; don't bother for screensavers, interactive help etc.
+        BNE     %FT02
+        
+        LDR     userblk, menuSP
+        CMP     userblk, #0
+        BLT     %FT01
+        ADR     R14, menuhandles
+        LDR     R14, [userblk, R14]
+        Abs     R14, R14
+        TEQ     handle, R14               ; don't bother if topmost existing menu
+        BEQ     %FT02
+01
+        LDR     R14, menuhandle           ; menuhandles and menuSP are not necessarily set up yet
+        Abs     R14, R14
+        TEQ     handle, R14               ; don't bother if the deepest menu or dialogue box (may be new)
+        LDRNE   R14, iconbarhandle
+        Abs     R14, R14, NE
+        TEQNE   handle, R14               ; just in case the icon bar is the only window
+        BEQ     %FT02
+        
+        Push    "handle"
+        MOV     handle, R14
+        LDR     R14, [handle, #w_flags]
+        ORR     R14, R14, #wf_backwindow
+        STR     R14, [handle, #w_flags]
+        ADD     R14, handle, #w_wax0
+        LDMIA   R14, {R0-R5}
+        MOV     R6, #-2
+        Push    "R0-R6" ; build block on stack
+        Push    "R6" ; use external handle -2 for icon bar
+        MOV     userblk, sp
+        BL      int_open_window
+        ADD     sp, sp, #8*4
+        MOVVC   R14, #pop_Back
+        STRVC   R14, iconbar_pop_state
+        Pull    "handle"
+02
+      ]
+;
         Pull    "LR"                    ; drop through
 
         Debug   opn,"Opening window complete"
@@ -6977,6 +7434,12 @@ redrawoutlp_done_tracing
       [ IconiseButton
 01	TST	R3,#wf_icon2		; have an iconise button iff we have a close button
 	BEQ	%FT01
+	LDR     R0, [handle, #w_parent]
+	CMP     R0, #-1
+	BNE     %FT01                   ; but not if a child window
+	LDRB    R0, iconisebutton
+	TEQ     R0, #0
+	BEQ     %FT01                   ; or if configured off
 ;
 	MOV	R0,#iconposn_iconise
 	BL	calc_w_iconposn		; bounding box of the iconise icon
