@@ -8,6 +8,10 @@ Vers    Date            Name    Comment
 ------  ---------       ---     -------------------------------------------
 1.00    21 Apr 97       BAR     Initial writing
 1.01    08 May 97       BAR     Now logs its status
+1.02    04 Jun 97       BAR     Fixed code...not UART0_ just UART_, changed
+                                line check to dial with wait '###' - check
+                                response for no dialtone.
+1.03    05 Jun 97       BAR     Remove read & reset timer .. now in support
 
 Will perform a modem test 
 */
@@ -32,8 +36,8 @@ Will perform a modem test
  
  do rom checksum, use ATI2 ... does and compares checksum :  OK or ERROR
  
- send ATH1                       (On Line / Off Hook)
- wait for ok
+ send ATDPW###                   (Dial Tone with Wait)
+ wait for ok or no-dialtone
  send ATH0                       (Off Line / On Hook)
  wait for ok
  */
@@ -68,6 +72,9 @@ void Modem_Test(int test_mode)
 {
         int status=FALSE;
 
+/* debugging flag */
+/* flagDebugging=TRUE; */
+
         display_status(MODEM,RUNNING);
 
         status=initialise_serial();
@@ -87,9 +94,10 @@ int modem_checksum()
 /* Check the modem Checksum is ok.
  */
 {
-        int flagTestOK = FALSE;
+        int flagTestOK = TRUE;        /* Assume passed */
         int rtn = FAILED;
-        
+
+        display_sub_test_status(MODEMROMCHECK,RUNNING);
         flush_buffer(iInputBuffer1);
         transmit(iOutputBuffer1,"ATZ",CR);
         flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInputBuffer1);
@@ -103,11 +111,13 @@ int modem_checksum()
                 if (flagTestOK==TRUE){
                         rtn=PASSED;
                 }else{
-                        rtn=FAILED;
+                        /* failed rtn the reqd. fail code. */
+                        rtn=ERROR_CHECKSUM_ATI2_FAILED;
                 }
         }else{
                 /* failed to reset ... fail it */
-                rtn=FAILED;
+                /* rtn the reqd. fail code. */
+                rtn=ERROR_CHECKSUM_ATZ_FAILED;
         }
         display_sub_test_status(MODEMROMCHECK,rtn);
         return rtn;
@@ -117,64 +127,110 @@ int line_ok()
 /* Check that we can hear the dial tone 
  */
 {
-        int flagTestOK = FALSE;
-        int rtn=FAILED;
-        int online=FAILED;
-        int offline=FAILED;
+        int flagTestOK = TRUE;          /* Assume passed */
+        int rtn=TRUE;
 
-        transmit(iOutputBuffer1,"ATH1",CR);
-        flagTestOK = wait_for_ok_or_nodialtone(TIMEOUT,flagTestOK,iInputBuffer1);
-        if (flagTestOK==TRUE){
-                online=PASSED;
-        }else{
-                online=FAILED;
-        }
-        /* OFF LINE TEST */
-        transmit(iOutputBuffer1,"ATH0",CR);
+        display_sub_test_status(MODEMLINECHECK,RUNNING);
+        flush_buffer(iInputBuffer1);
+        transmit(iOutputBuffer1,"ATZ",CR);
         flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInputBuffer1);
         if (flagTestOK==TRUE){
-                offline=PASSED;
+                /* reset ok ... ask to check the line */
+
+                flush_buffer(iInputBuffer1);
+                transmit(iOutputBuffer1,"ATDTW###",CR);
+
+                /* Wait for no_dialtone or Time Out */
+                /* If no_dialtone ... fail */
+                /* If time out ... pass */
+                /* flagTestOK set as reqd. */
+
+                flagTestOK=wait_for_nodialtone(TIMEOUT*3,flagTestOK,iInputBuffer1);
+                if (flagTestOK==FALSE){
+                        rtn=ERROR_LINETEST_NODIALTONE;
+                }
+
+                /* OFF Line check */
+                flush_buffer(iInputBuffer1);
+                transmit(iOutputBuffer1,"ATH0",CR);
+                flagTestOK = wait_for_ok_or_nocarrier(TIMEOUT,flagTestOK,iInputBuffer1);
+                if (flagTestOK==FALSE){
+                        if (rtn==TRUE){
+                                /* rtn hasn't changed, add error_base to number */
+                                rtn=ERROR_BASE+ERROR_LINETEST_ATH0_FAILED;
+                        }else{
+                                /* rtn has changed, don't add this error to current rtn value */
+                                rtn=rtn + ERROR_LINETEST_ATH0_FAILED;
+                        }
+                }
         }else{
-                offline=FAILED;
-        }
-        if ((online==PASSED) && (offline==PASSED)){
-                rtn=PASSED;
-        }else{
-                rtn=FAILED;
+                /* failed to reset ... fail it */
+                /* rtn the reqd. fail code. */
+                rtn=ERROR_LINETEST_ATZ_FAILED;
         }
         display_sub_test_status(MODEMLINECHECK,rtn);
         return rtn;
 }
 
+/*
+ * Wait for the modem to say OK or No Carrier
+ * iTimeLimit    Time limit to wait for
+ * iCmdBuf       Buffer to look for retned commands
+ * flagTestOK    Indicates current status of test; passed in order to preserve, if needed.
+ */
+
 int
-wait_for_ok_or_nodialtone(int iTimeLimit, int flagTestOK, int iCmdBuf)
+wait_for_ok_or_nocarrier(int iTimeLimit, int flagTestOK, int iCmdBuf)
+{
+        t_timer timer;      	  /* timeout timer */
+        int flagTimedOut = FALSE;
+        t_modem_resp rx_cmd = nothing;
+
+        /* wait for OK OR no_carrier */
+        timer_reset(&timer);
+        while ((rx_cmd !=ok) && (rx_cmd!=no_carrier) && (flagTimedOut != TRUE)){
+                rx_cmd=receive_command(iCmdBuf);
+                if (timer_read(&timer)>iTimeLimit){
+                        /* Timed out */
+                        flagTestOK = FALSE;
+                        flagTimedOut = TRUE;
+                        debug display_info(modem_test_msg[00]);
+                }
+        }
+        return flagTestOK;
+}
+
+/*
+ * Wait for the modem to say no-dialtone 
+ * iTimeLimit    Time limit to wait for
+ * iCmdBuf       Buffer to look for retned commands
+ * flagTestOK    Indicates current status of test; passed in order to preserve, if needed.
+ */
+int
+wait_for_nodialtone(int iTimeLimit, int flagTestOK, int iCmdBuf)
 {
         t_timer timer;      	  /* timeout timer */
         int flagTimedOut = FALSE;
         int abort=FALSE;
-        int rtn=FALSE;
+        t_modem_resp rx_cmd = nothing;
 
         /* wait for OK or No Dail Tone Or to time out, latter to rtn false else rtn true. */
         timer_reset(&timer);
         while ((flagTimedOut != TRUE) && (abort==FALSE)){
                 /* while we're waiting ... check in buffer */
-                if (receive_command(iCmdBuf)==ok) {
-                        /* we got an OK response */
-                        rtn=TRUE;
-                        abort=TRUE;
-                }
-                if (receive_command(iCmdBuf)==no_dialtone){
+                rx_cmd=receive_command(iCmdBuf);
+                if (rx_cmd==no_dialtone){
                         /* we got a no dial tone response */
-                        rtn=FALSE;
+                        flagTestOK=FALSE;
                         abort=TRUE;
                         debug display_info(modem_test_msg[01]);
                 }
+                if (timer_read(&timer)>iTimeLimit){
+                        /* Timed out */
+                        flagTimedOut = TRUE;
+                }
         }
-        if (flagTimedOut == TRUE){
-                /* we timed out ... */
-                rtn=FALSE;
-        }
-        return rtn;
+        return flagTestOK;
 }
 
 /*
@@ -215,7 +271,6 @@ transmit(int iBuffer, char *strCommand, char chTerminate)
 /*
  * Wait for the modem to say OK
  * iTimeLimit    Time limit to wait for
- * y             Line to use for reporting error on
  * iCmdBuf       Buffer to look for retned commands
  * flagTestOK    Indicates current status of test; passed in order to preserve, if needed.
  */
@@ -225,10 +280,12 @@ wait_for_ok(int iTimeLimit, int flagTestOK, int iCmdBuf)
 {
         t_timer timer;      	  /* timeout timer */
         int flagTimedOut = FALSE;
+        t_modem_resp rx_cmd = nothing;
 
         /* wait for OK */
         timer_reset(&timer);
-        while ((receive_command(iCmdBuf)!=ok) && (flagTimedOut != TRUE)){
+        while ((rx_cmd !=ok) && (flagTimedOut != TRUE)){
+                rx_cmd=receive_command(iCmdBuf);
                 if (timer_read(&timer)>iTimeLimit){
                         /* Timed out */
                         flagTestOK = FALSE;
@@ -237,30 +294,6 @@ wait_for_ok(int iTimeLimit, int flagTestOK, int iCmdBuf)
                 }
         }
         return flagTestOK;
-}
-
-/*
- * returns the current timer setting in centiseconds
- */
-long
-timer_read ( t_timer *the_timer)
-{
-  _kernel_swi_regs reg;
-
-  _kernel_swi (OS_ReadMonotonicTime, &reg, &reg);
-  return (long) reg.r[0] -  *the_timer;
-}
-
-/*
- * resets the given timer.
- */
-void
-timer_reset ( t_timer *the_timer )
-{
-        _kernel_swi_regs reg;
-      
-        _kernel_swi (OS_ReadMonotonicTime, &reg, &reg);
-        *the_timer = (long) reg.r[0];
 }
 
 /*
@@ -324,7 +357,6 @@ get_modem_response(int iBuffer, char *strBuffer, int size)
 
   return (i?1:0);
 }
-
 
 /*
  * check for any data in the input buffer, if data present, extract it.
@@ -470,7 +502,7 @@ initialise_serial(void)
         int iInitSerialOK = TRUE;
 
         /* Setup the internal serial port */
-        err = _kernel_swi(UART0_GetBufferHandles, &reg, &reg);
+        err = _kernel_swi(UART_GetBufferHandles, &reg, &reg);
         if (err !=0)
         {
                 return ERROR_INIT_SERIAL_BUFFERS;
@@ -480,7 +512,7 @@ initialise_serial(void)
               
         reg.r[0] = RxBaud;
         reg.r[1] = conv_baud_serialop(iSpeed);
-        err = _kernel_swi(UART0_SerialOp, &reg, &reg);
+        err = _kernel_swi(UART_SerialOp, &reg, &reg);
         if (err !=0)
         {
                 return ERROR_INIT_SERIAL_RXSPEED;
@@ -488,7 +520,7 @@ initialise_serial(void)
       
         reg.r[0] = TxBaud;
         reg.r[1] = conv_baud_serialop(iSpeed);
-        err = _kernel_swi(UART0_SerialOp, &reg, &reg);
+        err = _kernel_swi(UART_SerialOp, &reg, &reg);
         if (err !=0)
         {
                 return ERROR_INIT_SERIAL_TXSPEED;
@@ -497,7 +529,7 @@ initialise_serial(void)
         reg.r[0] = SerialStatus;
         reg.r[1] = iStatus;
         reg.r[2] = 0;
-        err = _kernel_swi(UART0_SerialOp, &reg, &reg);
+        err = _kernel_swi(UART_SerialOp, &reg, &reg);
         if (err !=0)
         {
                 return ERROR_INIT_SERIAL_STATUS;
@@ -505,7 +537,7 @@ initialise_serial(void)
       
         reg.r[0] = DataFormat;
         reg.r[1] = conv_psd_serialop(strFormat);
-        err = _kernel_swi(UART0_SerialOp, &reg, &reg);
+        err = _kernel_swi(UART_SerialOp, &reg, &reg);
         if (err !=0)
         {
                 return ERROR_INIT_SERIAL_DATA;
