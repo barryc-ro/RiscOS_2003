@@ -592,27 +592,11 @@ static void image_abandon(browser_data * b, int image)
 
   if (idata[image].istore)
   {
-//    #ifdef STRICT_PARSER
-//
-//      /* Report any errors as Continue-only in strict parser mode */
-//
-//      _kernel_oserror * e;
-//
-//      e = idata[image].istore -> EndLoad(idata[image].istore);
-//
-//      if (e)
-//      {
-//        e->errnum = Utils_Error_Custom_Message;
-//        show_error_ret(e);
-//      }
-//
-//    #else
-//
-//      /* If not in Strict mode, ignore any errors */
-//
+    /* Let this fail silently */
+
     idata[image].istore -> EndLoad(idata[image].istore, &end);
-//
-//    #endif
+
+    /* Redraw the image */
 
     image_update_image(b, image, &end);
   }
@@ -661,7 +645,8 @@ void image_abort_fetches(browser_data * b)
       if (idata[i].handle)
       {
         html_close(idata[i].handle);
-        idata[i].handle = 0;
+        idata[i].handle   = 0;
+        idata[i].bytesgot = 0;
 
         /* If this is a background, go back to the plain background */
 
@@ -692,6 +677,12 @@ void image_abort_fetches(browser_data * b)
           #endif
 
           idata[i].istore = NULL;
+
+          /* Remove any fetched data (not URL information though) */
+
+          image_remove_data(b, i);
+
+          /* Redraw the item */
 
           browser_update_token(b, idata[i].token, 0, 0);
         }
@@ -1544,7 +1535,7 @@ static void image_delete_image_entry(int image)
 
 _kernel_oserror * image_discard(browser_data * b)
 {
-  int newsize, i;
+  int newsize, i, xref;
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("\nimage_discard: Called for %p\n\n", b);
@@ -1552,211 +1543,139 @@ _kernel_oserror * image_discard(browser_data * b)
 
   if (!nimages) return NULL;
 
-  /* Discard all the images in this view, free the memory */
-  /* and close the URL handles if still open.             */
-
-  i = nimages - 1;
-
-  /* First, get rid of any images owned by this browser which cross */
-  /* reference others that point to the actual image data.          */
-
-  #ifdef TRACE
-    if (tl & (1u<<15)) Printf("image_discard: Have %d images before first pass.\n\n",nimages);
-  #endif
+  /* See if any images cross reference those in the browser */
+  /* for which images will be discarded. If so, 'move' the  */
+  /* cross referencee over to be owned by the cross         */
+  /* referencer.                                            */
 
   _swix(Hourglass_Start, _IN(0), 1);
 
-  while (i >= 0)
-  {
-    #ifdef TRACE
-      if (tl & (1u<<15)) Printf("image_discard: First pass, check image %d\n", i);
-    #endif
-
-    _swix(Hourglass_Percentage, _IN(0), (100 * (nimages - i)) / nimages);
-
-    if (idata[i].xref >= 0 && idata[i].owner == b)
+  #ifdef TRACE
+    if (tl & (1u<<15))
     {
+      Printf("image_discard: First pass, checking for cross referencees owned by %p\n", b);
+      Printf("               There are %d images before this pass.\n\n", nimages);
+    }
+  #endif
+
+  for (i = nimages - 1; i >= 0; i--) /* Going backwards helps out flex */
+  {
+    xref = idata[i].xref;
+
+    if (idata[i].owner != b && xref >= 0 && idata[xref].owner == b)
+    {
+      /* Keep the xref image, since that holds the real data and */
+      /* is doing all the fetching, etc. - it works out as less  */
+      /* effort overall (especially in the second pass below) to */
+      /* delete the cross referencing image. This may seem a bit */
+      /* odd as though we've been called to delete the images    */
+      /* owned by browser 'b', in the first pass we end up       */
+      /* deleting structures owned by completely different       */
+      /* browsers...                                             */
+
       #ifdef TRACE
-        if (tl & (1u<<15)) Printf("image_discard: Deleting entry owned by %p that cross references image %d\n", b, idata[i].xref);
+        if (tl & (1u<<15)) Printf("image_discard: Transferring cross referencer %d to cross referencee %d\n", i, xref);
       #endif
+
+      idata[xref].owner      = idata[i].owner;
+      idata[xref].x          = idata[i].x;
+      idata[xref].y          = idata[i].y;
+
+      idata[xref].token      = idata[i].token;
+
+      idata[xref].currw      = idata[i].currw;
+      idata[xref].currh      = idata[i].currh;
+      idata[xref].xref       = -1;
+
+      idata[xref].delayed    = idata[i].delayed;
+
+      idata[xref].fixedsize  = idata[i].fixedsize;
+      idata[xref].background = idata[i].background;
+
+      idata[xref].hadfirst   = idata[i].hadfirst;
+      idata[xref].canredraw  = idata[i].canredraw;
+      idata[xref].priority   = idata[i].priority;
+
+      /* If this is a background image for the cross referencer, */
+      /* must update the browser_data 'backimage' field.         */
+
+      if (i == idata[i].owner->backimage) idata[i].owner->backimage = xref;
+
+      /* If the cross referencee was being fetched, may need to */
+      /* claim fetch nulls in the cross referencer to finish    */
+      /* the job.                                               */
+
+      if (idata[xref].handle && !idata[i].owner->fetch_handler)
+      {
+        fetchpage_claim_nulls(idata[i].owner);
+        toolbars_update_status(idata[i].owner, Toolbars_Status_GetPics);
+      }
+
+      /* Delete the cross referencer */
+
+      #ifdef TRACE
+        if (tl & (1u<<15)) Printf("image_discard: Deleting entry owned by %p that cross references image %d\n", idata[i].owner, idata[i].xref);
+      #endif
+
+      image_remove_all_data(idata[i].owner, i);
+      image_delete_image_entry(i);
+    }
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<15))
+    {
+      Printf("\nimage_discard: First pass complete, there are now %d images\n", nimages);
+      Printf("               Second pass, removing remaining images owned by %p\n\n", b);
+    }
+  #endif
+
+  /* Now delete any remaining images owned by the given browser */
+
+  for (i = nimages - 1; i >= 0; i--) /* Going backwards helps out flex */
+  {
+    if (idata[i].owner == b)
+    {
+      /* If the image was being fetched, close that session */
+
+      if (idata[i].handle)
+      {
+        html_close(idata[i].handle);
+        idata[i].handle = 0;
+      }
+
+      if (idata[i].istore)
+      {
+        #ifdef STRICT_PARSER
+
+          /* Report any errors as Continue-only in strict parser mode */
+
+          _kernel_oserror * e;
+
+          e = idata[i].istore -> Delete(idata[i].istore);
+
+          if (e)
+          {
+            e->errnum = Utils_Error_Custom_Message;
+            show_error_ret(e);
+          }
+
+        #else
+
+          /* If not in Strict mode, ignore any errors */
+
+          idata[i].istore -> Delete(idata[i].istore);
+
+        #endif
+      }
 
       image_remove_all_data(b, i);
       image_delete_image_entry(i);
     }
-
-    i--;
   }
 
   #ifdef TRACE
-    if (tl & (1u<<15))
-    {
-      Printf("image_discard: First pass complete.\n\n");
-      Printf("image_discard: Have %d images before second pass.\n\n",nimages);
-    }
-  #endif
-
-  /* Now check all images that point to data and see if they're */
-  /* cross referenced by anything. If so, they can't be deleted */
-  /* yet. If not, and they're owned by the browser that is      */
-  /* discarding images, they can all go. If they're not owned   */
-  /* by the browser, check if they're owned by any other        */
-  /* current browser; if not, then they can again be discarded. */
-
-  i = nimages - 1;
-
-  while (i >= 0)
-  {
-    #ifdef TRACE
-      if (tl & (1u<<15)) Printf("image_discard: Second pass, check image %d\n", i);
-    #endif
-
-    _swix(Hourglass_Percentage, _IN(0), (100 * (nimages - i)) / nimages);
-
-    /* Proceed if the image does not cross reference anything itself. */
-
-    if (idata[i].xref < 0)
-    {
-      int i2, xref = -1;
-
-      #ifdef TRACE
-        if (tl & (1u<<15)) Printf("image_discard: This is a non-xref image\n");
-      #endif
-
-      /* Scan all images, looking for at least one reference to the current */
-      /* image. Remember that image's number in xref, if there is one.      */
-
-      for (i2 = 0; i2 < nimages; i2++)
-      {
-        if (idata[i2].xref == i)
-        {
-          xref = i2;
-          break;
-        }
-      }
-
-      #ifdef TRACE
-        if (tl & (1u<<15))
-        {
-          if (xref >= 0) Printf("image_discard: %d cross references this\n",xref);
-          else           Printf("image_discard: Nothing cross references this\n");
-        }
-      #endif
-
-      if (xref < 0)
-      {
-        int deleteit = 0;
-
-        if (idata[i].owner == b)
-        {
-          /* Delete the current image, as nothing cross references it and */
-          /* it is owned by the browser that is discarding images.        */
-
-          #ifdef TRACE
-            if (tl & (1u<<15)) Printf("image_discard: The current browser %p owns this, so it can be deleted.\n",b);
-          #endif
-
-          deleteit = 1;
-        }
-        else
-        {
-          browser_data * check;
-          int            found = 0;
-
-          /* Nothing cross references the image, but it isn't owned by this  */
-          /* browser. So we can't delete it, as it may be used by another    */
-          /* window... Unless, of course, there is no browser_data structure */
-          /* in the list of browsers that claims to own it. In that case,    */
-          /* all windows using the image *must* be gone by now.              */
-
-          #ifdef TRACE
-            if (tl & (1u<<15)) Printf("image_discard: The current browser %p does not own this...\n", b);
-          #endif
-
-          check = last_browser;
-
-          while (check)
-          {
-            if (idata[i].owner == check)
-            {
-              found = 1;
-              break;
-            }
-
-            check = check->previous;
-          }
-
-          /* If found is zero, no current browser owns the image, so it can go */
-
-          if (!found)
-          {
-            deleteit = 1;
-
-            #ifdef TRACE
-              if (tl & (1u<<15)) Printf("image_discard: ...and no current browser does either, so it can be deleted.\n");
-            #endif
-          }
-          else
-          {
-            #ifdef TRACE
-              if (tl & (1u<<15)) Printf("image_discard: ...but another browser does, so it must not be deleted.\n");
-            #endif
-          }
-        }
-
-        if (deleteit)
-        {
-          #ifdef TRACE
-            if (tl & (1u<<15)) Printf("image_discard: Deleting entry %d\n", i);
-          #endif
-
-          /* If the image was being fetched, close that session */
-
-          if (idata[i].handle)
-          {
-            html_close(idata[i].handle);
-            idata[i].handle = 0;
-          }
-
-          if (idata[i].istore)
-          {
-            #ifdef STRICT_PARSER
-
-              /* Report any errors as Continue-only in strict parser mode */
-
-              _kernel_oserror * e;
-
-              e = idata[i].istore -> Delete(idata[i].istore);
-
-              if (e)
-              {
-                e->errnum = Utils_Error_Custom_Message;
-                show_error_ret(e);
-              }
-
-            #else
-
-              /* If not in Strict mode, ignore any errors */
-
-              idata[i].istore -> Delete(idata[i].istore);
-
-            #endif
-          }
-
-          image_remove_all_data(idata[i].owner, i);
-          image_delete_image_entry(i);
-        }
-      }
-    }
-
-    i--;
-  }
-
-  #ifdef TRACE
-    if (tl & (1u<<15))
-    {
-      Printf("image_discard: Second pass complete.\n\n");
-      Printf("image_discard: Have %d images left.\n\n", nimages);
-    }
+    if (tl & (1u<<15)) Printf("\nimage_discard: Second pass complete, there are now %d images\n\n", nimages);
   #endif
 
   /* If there is an animation handler present, but no animated */
@@ -1765,6 +1684,10 @@ _kernel_oserror * image_discard(browser_data * b)
   if (animhandler)
   {
     int found = 0;
+
+    #ifdef TRACE
+      if (tl & (1u<<15)) Printf("image_discard: There is an animation handler present; checking to see if it can be removed\n");
+    #endif
 
     for (i = 0; i < nimages; i++)
     {
@@ -1777,9 +1700,22 @@ _kernel_oserror * image_discard(browser_data * b)
 
     if (!found)
     {
+      #ifdef TRACE
+        if (tl & (1u<<15)) Printf("image_discard: Removing animation handler\n\n");
+      #endif
+
       deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) image_animate_images, NULL);
       animhandler = 0;
     }
+
+    #ifdef TRACE
+
+      else
+      {
+        if (tl & (1u<<15)) Printf("image_discard: The handler is still required\n\n");
+      }
+
+    #endif
   }
 
   /* Ensure the image_info data block matches the size of the images now present */
@@ -1815,9 +1751,11 @@ _kernel_oserror * image_discard(browser_data * b)
 /*************************************************/
 /* image_reload()                                */
 /*                                               */
-/* Reloads an image - well, in fact it just      */
-/* redraws an existing image at present or will  */
-/* start a fetch if the image was delayed.       */
+/* Reloads an image, redrawing as required and   */
+/* setting the priority flag so that even if a   */
+/* browser has 'show foreground images' turned   */
+/* off, the reloading image (and all that cross  */
+/* reference it) will still be shown.            */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the images;           */
@@ -1852,17 +1790,32 @@ void image_reload(browser_data * b, HStream * token)
          )
        )
     {
+      if (!idata[image].fetched) idata[image].bytesgot = 0;
+
       idata[image].success  = 0;
       idata[image].delayed  = 0;
       idata[image].fetched  = 0;
       idata[image].priority = 1;
 
-      if (!b->fetch_handler) fetchpage_claim_nulls(b);
-      toolbars_update_status(b, Toolbars_Status_GetPics);
+      /* If we deleted the ImageLib entry, need to recreate it */
+
+      if (!idata[image].istore && idata[image].xref == -1)
+      {
+        idata[image].istore = NewImage(NULL, image == b->backimage ? IMAGE_FAST : 0);
+      }
+
+      /* Now handle the fetching */
+
+      if (!b->fetch_handler)
+      {
+        fetchpage_claim_nulls(b);
+        toolbars_update_status(b, Toolbars_Status_GetPics);
+      }
     }
     else
     {
       idata[image].priority = 1;
+      idata[image].hadfirst = 0;
       image_update_image(b, image, NULL);
     }
 
@@ -1874,6 +1827,7 @@ void image_reload(browser_data * b, HStream * token)
       if (idata[i].xref == image)
       {
         idata[i].priority = 1;
+        idata[i].hadfirst = 0;
         image_update_image(b, i, NULL);
       }
     }
@@ -1924,8 +1878,8 @@ void image_restart_fetches(browser_data * b, int foreground, int background)
   if (nimages)
   {
     int            image;
-    int            xref;
-    browser_data * xref_b;
+//    int            xref;
+//    browser_data * xref_b;
 
     /* Loop round all the images */
 
@@ -1961,36 +1915,63 @@ void image_restart_fetches(browser_data * b, int foreground, int background)
              (!idata[image].background && foreground)
            )
         {
-          idata[image].success = 0;
-          idata[image].delayed = 0;
-          idata[image].fetched = 0;
+          image_reload(idata[image].owner, idata[image].token);
 
-          /* Deal with cross referenced images. If this browser cross */
-          /* references another image, and that image isn't owned by  */
-          /* this browser, then clear its fetching flags also and     */
-          /* make sure that this other browser will fetch the data.   */
+//          idata[image].success = 0;
+//          idata[image].delayed = 0;
+//          idata[image].fetched = 0;
+//
+//          /* If we deleted the ImageLib entry, need to recreate it and */
+//          /* restart fetching                                          */
+//
+//          if (!idata[image].istore && idata[image].xref == -1) idata[image].istore = NewImage(NULL, image == b->backimage ? IMAGE_FAST : 0);
+//
+//          /* Start the fetch */
+//
+//          if (!b->fetch_handler)
+//          {
+//            fetchpage_claim_nulls(b);
+//            toolbars_update_status(b, Toolbars_Status_GetPics);
+//          }
+//
+//          /* Deal with cross referenced images. If this browser cross */
+//          /* references another image, and that image isn't owned by  */
+//          /* this browser, then clear its fetching flags also and     */
+//          /* make sure that this other browser will fetch the data.   */
+//
+//          xref = idata[image].xref;
+//
+//          if (xref >= 0 && idata[xref].owner != b)
+//          {
+//            idata[xref].success = 0;
+//            idata[xref].delayed = 0;
+//            idata[xref].fetched = 0;
+//
+//            xref_b = idata[xref].owner;
+//
+//            /* If we deleted the ImageLib entry, need to recreate it and */
+//            /* restart fetching                                          */
+//
+//            if (!idata[xref].istore && idata[xref].xref == -1) idata[xref].istore = NewImage(NULL, image == xref_b->backimage ? IMAGE_FAST : 0);
+//
+//            /* Start the fetch */
+//
+//            if (!xref_b->fetch_handler)
+//            {
+//              fetchpage_claim_nulls(xref_b);
+//              toolbars_update_status(xref_b, Toolbars_Status_GetPics);
+//            }
+//          }
 
-          xref = idata[image].xref;
-
-          if (xref >= 0 && idata[xref].owner != b)
-          {
-            idata[xref].success = 0;
-            idata[xref].delayed = 0;
-            idata[xref].fetched = 0;
-
-            xref_b = idata[xref].owner;
-
-            if (!xref_b->fetch_handler) fetchpage_claim_nulls(xref_b);
-            toolbars_update_status(xref_b, Toolbars_Status_GetPics);
-          }
+        /* Closure of 'if' checking whether to restart fetches for */
+        /* foreground or background images                         */
         }
       }
+
+    /* Closure of 'for' loop going through all of the images */
     }
 
-    /* Finally, make sure fetching is started for the given browser */
-
-    if (!b->fetch_handler) fetchpage_claim_nulls(b);
-    toolbars_update_status(b, Toolbars_Status_GetPics);
+  /* Closure of 'if (nimages)' */
   }
 }
 

@@ -56,6 +56,10 @@
 
 static int width_table_leds = 1;
 
+/* Static function prototypes */
+
+static void tables_align_contents(browser_data * b, HStream * streambase, table_stream * table, reformat_cell * cellarray, int Row, int Column);
+
 /*************************************************/
 /* tables_count_table()                          */
 /*                                               */
@@ -1566,7 +1570,7 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
             {
               int dy, hc;
 
-              convert_to_points(wimpt_dy(), &dy);
+              convert_to_points(2, &dy); /* Authors assume square pixels, so do a 2 OS unit to 1 pixel scaling */
 
               hc = TD_HEIGHT(D) * dy;
 
@@ -1660,11 +1664,6 @@ int tables_height_cell(int toplevel, browser_data * b, HStream * streambase, tab
   /* OK, so not used for now, but may be - this is to avoid a compiler warning */
 
   b = b;
-
-  /* a second pass is required because the width may have changed  */
-  /* currently this is kludge to save throwing away all the memory */
-  /* add it back when a throw-away routine exists                  */
-  /* method is then... tables_width_table,ThrowAway,tables_height_table            */
 
   #ifdef TRACE
     if (tl & (1u<<20))
@@ -1806,9 +1805,8 @@ void tables_fix_table(browser_data * b, table_stream * p, reformat_cell * cellar
 /* an offset from the top left of the table in   */
 /* millipoints.                                  */
 /*                                               */
-/* Parameters: 1 for a top level call, 0 if      */
-/*             being called as part of a nested  */
-/*             table parse;                      */
+/* Parameters: Pointer to a browser_data struct  */
+/*             owning the table;                 */
 /*                                               */
 /*             Pointer to the first HStream      */
 /*             structure in the stream that the  */
@@ -1838,8 +1836,8 @@ void tables_fix_table(browser_data * b, table_stream * p, reformat_cell * cellar
 void tables_fix_cell(browser_data * b, HStream * streambase, table_stream * table, reformat_cell * cellarray,
                      int x, int y, int Width, int Height, int Row, int Column)
 {
-  int             cellindex = Row * table->ColSpan + Column;
-  reformat_cell * c;
+  int              cellindex = Row * table->ColSpan + Column;
+  reformat_cell  * c;
 
   #ifdef TRACE
     if (tl & (1u<<20)) Printf("tables_fix_cell: %p %p %d %d\n",streambase,table,Row,Column);
@@ -1850,10 +1848,6 @@ void tables_fix_cell(browser_data * b, HStream * streambase, table_stream * tabl
   if (cellindex >= table->RowSpan * table->ColSpan) return;
   else c = &cellarray[cellindex];
 
-  /* OK, so not used for now, but may be - this is to avoid a compiler warning */
-
-  b = b;
-
   //the 3200's in here should be replaced by border sizes in due course
 
   c->x = x + Column;// * 3200 + 1600;
@@ -1862,8 +1856,108 @@ void tables_fix_cell(browser_data * b, HStream * streambase, table_stream * tabl
   c->cellwidth  = Width;
   c->cellheight = Height;
 
+  /* Post-correct Y for VALIGN considerations */
+
+  tables_align_contents(b,
+                        streambase,
+                        table,
+                        cellarray,
+                        Row,
+                        Column);
+
+  /* Finished */
+
   #ifdef TRACE
-    if (tl & (1u<<20)) Printf("tables_fix_cell: Exitting\n");
+    if (tl & (1u<<20)) Printf("tables_fix_cell: Successful\n");
+  #endif
+}
+
+/*************************************************/
+/* tables_align_contents()                       */
+/*                                               */
+/* Once the cellheight field of a reformat_cell  */
+/* struct is filled in, it is possible to look   */
+/* at the VALIGN specification on the table      */
+/* cell tag represented by the reformat_cell     */
+/* struct and align the cell contents in an      */
+/* appropriate fashion. This is done by          */
+/* increasing the height of the first line as    */
+/* required, shifting the y coordinate of all    */
+/* subsequent lines as needed, and increasing    */
+/* the used height value in the cell to match.   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             owning the table;                 */
+/*                                               */
+/*             Pointer to the first HStream      */
+/*             structure in the stream that the  */
+/*             cell is to contain;               */
+/*                                               */
+/*             Pointer to the table_stream       */
+/*             struct representing the table;    */
+/*                                               */
+/*             Pointer to the table's array of   */
+/*             reformat_cell structures;         */
+/*                                               */
+/*             Row number of the cell;           */
+/*                                               */
+/*             Column number of the cell.        */
+/*************************************************/
+
+static void tables_align_contents(browser_data * b, HStream * streambase, table_stream * table, reformat_cell * cellarray, int Row, int Column)
+{
+  int              cellindex = Row * table->ColSpan + Column;
+  int              valign_offset_mp, valign_offset_os;
+  table_headdata * head;
+  reformat_cell  * c;
+
+  #ifdef TRACE
+    if (tl & (1u<<20)) Printf("tables_align_contents: %p %p %d %d\n",streambase,table,Row,Column);
+  #endif
+
+  /* Can't do anything if the cell index is out of range */
+
+  if (cellindex >= table->RowSpan * table->ColSpan) return;
+  else c = &cellarray[cellindex];
+
+  /* If the cell has no lines, again, can't do anything */
+
+  if (!c->nlines) return;
+
+  /* OK, so not used for now, but may be - this is to avoid a compiler warning */
+
+  b = b;
+
+  /* Work out the vertical alignment offset value in OS units and millipoints */
+
+  head = streambase ? (table_headdata *) streambase->parent : NULL;
+
+  if (head)
+  {
+    if      (TD_VALIGN(head) == ALIGN_BOTTOM) valign_offset_mp = c->cellheight - c->height;
+    else if (TD_VALIGN(head) == ALIGN_MIDDLE) valign_offset_mp = (c->cellheight - c->height) / 2;
+    else                                      valign_offset_mp = 0;
+
+    convert_to_os(valign_offset_mp, &valign_offset_os);
+
+    /* Only proceed if there's a change to be made */
+
+    if (valign_offset_mp)
+    {
+      int l;
+
+      /* Shift the y coordinates of the lines */
+
+      for (l = 0; l < c->nlines; l++) c->ldata[l].y -= valign_offset_os;
+
+      /* Increase the used height value */
+
+      c->height += valign_offset_mp;
+    }
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<20)) Printf("tables_align_contents: Successful\n");
   #endif
 }
 
