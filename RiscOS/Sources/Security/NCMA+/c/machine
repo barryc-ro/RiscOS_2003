@@ -141,6 +141,17 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
   switch(trans) { /* global transitions that apply to all states (except maybe State_Sleep) */
 
+  case Trans_Cron:
+       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got CRON event\n");
+       if(cron_upcall(cron_value)<0) {
+           DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: cron failed (get off the phone!)\n");
+           return(ncma_state);
+       } else {
+	   pre_cron_state = ncma_state;
+	   return(State_NCMACron);
+       }
+       break;
+
     case Trans_Shutdown:
          if(ncma_state != State_NCMAShutdown) { /* if we're not already in shutdown state, save context */
     	   pre_shutdown_state = ncma_state;
@@ -164,6 +175,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	 ncma_hourglass_off(); /* might be on, if we're in chimp mode */
 #endif
 	 ncma_hangup();
+	 ncma_dbox_close();
     	 reset_cache(); /* was unlock_cache() */
 
 #ifdef POINTLESS_BUTTONS
@@ -196,13 +208,26 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
          switch(trans) {
 
+	   case Trans_NCMASurf: /* we might wanna surf, but have removed the smartcard
+	   			   thus we have to go through all the s/c and dial up crap,
+	   			   and when it's finished remember that we want the Internet
+	   			   home page, not the top level UI */
+	   	//surf_again = 1;
+	   	ncma_trans = Trans_URLStart;
+	   	setcallback();
+	   	return(State_NCMAInit);
+	   	break;
+
+
            case Trans_HUP: /* HUP ack, we're displaying an error screen and waiting for retry */
                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got HUP, ignoring\n");
                 return(State_NCMAInit);
+                break;
 
            case Trans_CardOK: /* ignore it */
            	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: ignoring card OK event\n");
            	return(State_NCMAInit);
+           	break;
 
 	   case Trans_PowerUp:  /* and so, I awake... */
 	   	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: POWERUP\n");
@@ -227,6 +252,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	   	/* otherwise, there's a card in, so fall through */
 		run_from_powerup = 1;
 	   	/* \/ \/ \/ \/ \/ DELIBERATE FALL THRU \/ \/ \/ \/ \/ */
+
 
 
            case Trans_URLStart: /* got a URL/CLI type call */
@@ -285,7 +311,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		proceed_after_pin:
 
                 if(bootblock_read_succeeded()==0) { /* bootblock read ok, but not finished yet */
-                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: not ready reading bootblock\n");
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: not ready reading bootblock (init)\n");
                   return(State_NCMANoCard);
                 }
 
@@ -358,7 +384,11 @@ NCMA_STATE machine(NCMA_TRANS trans)
             case Trans_Registry: /* card activity */
 
 #ifdef POINTLESS_BUTTONS
-       		 if((run_from_powerup | pointless_button_clicked)==0) return(State_NCMANoCard);
+       		 if((run_from_powerup | pointless_button_clicked)==0) {
+		     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: r_f_p: %d p_b_c: %d -- ignoring\n",
+		     				run_from_powerup, pointless_button_clicked);
+       		     return(State_NCMANoCard);
+       		 }
        		 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: cancel card scan timer\n");
        		 canceltimeout();
        		 /* else deliberate fall through to next case */
@@ -394,7 +424,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		if(smartcard_pin_protected()) {
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected\n");
                     ncma_hourglass_off();
-                    pointless_button_clicked = 0;
+                    //pointless_button_clicked = 0;
 		    card_attempts = smartcard_blocked();
 		    if(card_attempts>0) {
 #ifdef CHIMPANZEE_INTERFACE
@@ -615,7 +645,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
              case Trans_Registry:
                 if(bootblock_read_succeeded()==0) { /* bootblock read ok, but not finished yet */
-                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: not ready reading bootblock\n");
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: not ready reading bootblock (after pin)\n");
                   return(State_NCMAApresPIN);
                 }
 
@@ -805,9 +835,14 @@ NCMA_STATE machine(NCMA_TRANS trans)
      	     	     if(ro_smurf_mounted) {
  	                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Boot structure mounted\n");
      	     	         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: top level UI detected - fullbooting\n");
-      	     	         ncma_exec_fullboot();
+      	     	         if(ncma_exec_fullboot()<0) {
+      	     	             DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: full boot failed\n");
+      	     	             ncma_trans = Trans_BootedFull;
+      	     	             setcallback();
+      	     	         }
+
       	     	     }
-      	     	     ncma_url_open("file:/UI:index.html"); /* display top level menu */
+
       	     	     return(State_NCMABooted);
       	     	  } else {
       	     	      if(ro_smurf_mounted) { /* got a boot filing system, ie not registration server */
@@ -846,9 +881,14 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: MIME reload successful\n");
      	     	  if(ui_present()) {
      	     	     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: top level UI detected - fullbooting\n");
-      	     	     if(ro_smurf_mounted) ncma_exec_fullboot();
-      	     	     ncma_url_open("file:/UI:index.html"); /* display top level menu */
+      	     	     if(ro_smurf_mounted) {
+      	     	         if(ncma_exec_fullboot()<0) {
+      	     	             DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: full boot failed\n");
+      	     	             ncma_trans = Trans_BootedFull;
+      	     	             setcallback();
+      	     	         }
       	     	     return(State_NCMABooted);
+      	     	     }
       	     	  } else {
       	     	      if(ro_smurf_mounted) { /* got a boot filing system, ie not registration server */
       	     	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no top level UI - prompting for download\n");
@@ -893,18 +933,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     case Trans_HUP:
 	     	  return(State_NCMABooted);
 
-	     case Trans_Cron:
-	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got CRON event\n");
-	     	  if(cron_upcall(cron_value)<0)
-	     	    return(State_NCMABooted); /* failed */
-	     	  else {
-	     	      pre_cron_state = State_NCMABooted;
-	     	      return(State_NCMACron);
-	     	  }
-
-
 	     case Trans_BootedFull:
 	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: MIME reload Full Boot completed\n");
+	     	  if(ui_present()) ncma_url_gsopen(TOPLEVEL_UI_URL); /* display toplevel UI */
+	     	  //ncma_url_open("file:/UI:index.html"); /* display top level menu */
 	     	  return(State_NCMABooted);
     	 } /* end state_ncmabooted */
     	 break;
@@ -971,8 +1003,20 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 	     case Trans_URLTransfer:
              	  ncma_start_progress_ui();
-	          if(ncma_boottype == NCMA_BOOT_MAX) ncma_exec_fullboot();
-	     	  else ncma_exec_fastboot();
+	          if(ncma_boottype == NCMA_BOOT_MAX) {
+	              if(ncma_exec_fullboot()<0) {
+	                  DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: full boot failed\n");
+	                  ncma_trans = Trans_BootedFull;
+	                  setcallback();
+	              }
+	          }
+	     	  else {
+	     	      if(ncma_exec_fastboot()<0) {
+	     	          DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: fast boot failed\n");
+	     	          ncma_trans = Trans_BootedFast;
+	     	          setcallback();
+	     	      }
+	     	  }
 	     	  ncma_boottype = NCMA_BOOT_NONE;
 	     	  return(State_NCMADownload);
 	     	  break;
@@ -1313,7 +1357,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     		  /* mount succeeded */
     		  cron_value = -1; /* reschedule for tomorrow on hangup */
-    		  ncma_exec_schedboot();
+    		  if(ncma_exec_schedboot()<0) {
+    		      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: Damn! Cronjob barfed! I'll try again tomorrow\n");
+    		      ncma_hangup();
+    		  }
     		  return(State_NCMACron);
     		  break;
 
