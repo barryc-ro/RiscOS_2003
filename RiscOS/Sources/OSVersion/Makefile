@@ -47,8 +47,8 @@ OBJS = o.ModHead
 #
 # Generic rules:
 #
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+rom:
+        @echo ${COMPONENT}: rom module built later
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
@@ -69,6 +69,11 @@ ${TARGET}: ${OBJS}
 	${MKDIR} rm.${SYSTEM}
 	${MKDIR} rm.${SYSTEM}.${UserIF}
 	${LN} ${LFLAGS} ${OBJS}
+
+${OBJS}: dummy
+
+dummy:
+	@
 
 # Dynamic dependencies:
 o.ModHead: s.ModHead
