@@ -26,6 +26,8 @@
 int handle_mime_object(char *file)
 {
     FILE *fp;
+    fpos_t checkpoint;
+
     unsigned int buff;
     unsigned int ram_content_bytes;
     unsigned int sc_content_bytes;
@@ -35,6 +37,12 @@ int handle_mime_object(char *file)
 
     unsigned char *eb_ptr;
     unsigned int eb_bytes;
+
+    unsigned char *hash_ptr;
+    unsigned int hash_bytes;
+
+    unsigned char *alt_hash_ptr;
+    unsigned int alt_hash_bytes;
 
     unsigned char *eid_ptr;
     unsigned int eid_bytes;
@@ -108,21 +116,29 @@ int handle_mime_object(char *file)
     ram_filepos = ftell(fp);
     fseek(fp, (long)ram_content_bytes, SEEK_CUR); /* skip the RAM block */
 
+    fgetpos(fp, &checkpoint);
     fread(&buff, sizeof(unsigned int), 1, fp);
 
     if((tag=read_big_word((char *)&buff)) != NCISmartCardContentTag) {
-        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: bogus NCISmartCardContentTag 0x%x\n",tag);
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: bogus or absent NCISmartCardContentTag 0x%x\n",tag);
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: assuming no smartcard info data - rewinding for time data\n");
+	sc_content_bytes = 0;
+	fsetpos(fp, &checkpoint); /* go back to those four bytes */
+    } else {
+      fread(&buff, sizeof(char), 2, fp);
+      sc_content_bytes = read_big_short((char *)&buff);
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: SC contents: %d bytes\n", sc_content_bytes);
+
+      sc_filepos = ftell(fp);
+      fseek(fp, (long)sc_content_bytes, SEEK_CUR); /* skip the smartcard block */
+
+      if((sc_temp_ptr = (unsigned char *)rmalloc(sc_content_bytes, "SC Buffer"))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't claim memory for smartcard buffer\n");
         fclose(fp);
         return(-1);
+      }
+
     }
-
-    fread(&buff, sizeof(char), 2, fp);
-    sc_content_bytes = read_big_short((char *)&buff);
-
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: SC contents: %d bytes\n", sc_content_bytes);
-
-    sc_filepos = ftell(fp);
-    fseek(fp, (long)sc_content_bytes, SEEK_CUR); /* skip the smartcard block */
 
     if(ram_block_ptr != NULL) rmfree(ram_block_ptr); /* release the old connection matrix */
 
@@ -132,11 +148,6 @@ int handle_mime_object(char *file)
         return(-1);
     }
 
-    if((sc_temp_ptr = (unsigned char *)rmalloc(sc_content_bytes, "SC Buffer"))==NULL) {
-        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't claim memory for smartcard buffer\n");
-        fclose(fp);
-        return(-1);
-    }
 
     if((fbytes=fread(ram_block_ptr, 1, ram_content_bytes, fp)) != 0) { /* trailing data */
        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: read %d bytes of trailing data\n", fbytes);
@@ -188,13 +199,15 @@ int handle_mime_object(char *file)
     }
 
     /* fast forward, and slurp in the smartcard contents */
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: loading smartcard content\n");
-    fseek(fp, sc_filepos, SEEK_SET);
+    if(sc_content_bytes) {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: loading smartcard content\n");
+      fseek(fp, sc_filepos, SEEK_SET);
 
-    if(fread(sc_temp_ptr, sc_content_bytes, 1, fp) != 1) { /* oh dear */
-      DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't read smartcard contents\n");
-      fclose(fp);
-      return(-1);
+      if(fread(sc_temp_ptr, sc_content_bytes, 1, fp) != 1) { /* oh dear */
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: couldn't read smartcard contents\n");
+        fclose(fp);
+        return(-1);
+      }
     }
 
     fclose(fp);
@@ -203,8 +216,17 @@ int handle_mime_object(char *file)
     /* do something clever to authenticate the RAM contents */
 
     /* now write the smartcard block */
-    if(sc_content_bytes == 0) goto skip_smartcard_stuff;
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: writing smartcard contents\n");
+
+
+
+    if(sc_content_bytes == 0) {
+        find_enterprise_id(); /* use the current smartcard enterprise id */
+        goto skip_smartcard_stuff;
+    }
+
+
+    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: parsing smartcard contents\n");
+
 
     /* first, ascertain whether there's an alternate 1-800 number in the smartcard block */
 
@@ -215,27 +237,38 @@ int handle_mime_object(char *file)
         return(-1);
     } /* ok, we've seen one, but is there another? */
 
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: searching SC data for NCIBeginSignatureTag\n");
+    if((hash_ptr = find_tag_in_block(sc_temp_ptr, sc_content_bytes, NCISignatureTag, &hash_bytes, eb_ptr))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: SC enterprise block is not signed\n");
+        return(-1);
+    }
+
+    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: searching SC data AGAIN for NCIBeginSignatureTag\n");
 
     if((alt_ptr = find_tag_in_block(sc_temp_ptr, sc_content_bytes, NCIBeginSignatureTag, &alt_bytes, eb_ptr))==NULL) {
-        /* nope */
-        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: no alternate-800 data present in smartcard block\n");
-        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: write 0x%x, %d + 0x%x, %d (%d)\n",
-    			       (eb_ptr-6), eb_bytes+6, 0, 0);
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: no alternate 1-800 block in SC data\n");
+    } else {
+        if((alt_hash_ptr = find_tag_in_block(sc_temp_ptr, sc_content_bytes, NCISignatureTag, &alt_hash_bytes, alt_ptr))==NULL) {
+            DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: SC alternate 1-800 block is not signed - discarding\n");
+            alt_ptr = NULL;
+        }
+    }
+
+    if(alt_ptr == NULL) {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: write 1 block: 0x%x, %d + 0x%x, %d (%d)\n",
+    			       (eb_ptr-6), (eb_bytes+6)+(hash_bytes+6), 0, 0);
 
         r.r[2] = NULL;
         r.r[3] = 0;
     } else {
-        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: found alternate 1-800 block\n");
-        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: write 0x%x, %d + 0x%x, %d (%d)\n",
-    			       (eb_ptr-6), eb_bytes+6, (alt_ptr-6), alt_bytes+6);
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: write 2 blocks: 0x%x, %d + 0x%x, %d (%d)\n",
+    			       (eb_ptr-6), (eb_bytes+6)+(hash_bytes+6), (alt_ptr-6), (alt_bytes+6)+(alt_hash_bytes+6));
 
         r.r[2] = (int)(alt_ptr-6); /* backtrack to include tag and length */
-        r.r[3] = alt_bytes+6; /* add 6 to include tag and length */
+        r.r[3] = alt_bytes+6+alt_hash_bytes+6; /* add 6 to include tag and length, and same for hash */
     }
 
     r.r[0] = (int)(eb_ptr-6); /* backtrack to include tag and length */
-    r.r[1] = eb_bytes+6; /* add 6 to include tag and length */
+    r.r[1] = eb_bytes+6+hash_bytes+6; /* add 6 to include tag and length, and same for hash */
 
     /* finally, what's our enterprise id? */
     if((eid_ptr = find_tag_in_block(eb_ptr, eb_bytes, NCIEnterpriseIDTag, &eid_bytes, NULL))==NULL) {
@@ -245,7 +278,7 @@ int handle_mime_object(char *file)
 
     enterprise_id = read_big_word((char *)eid_ptr);
 
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: enterprise ID is now 0x%x\n", enterprise_id);
+    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: enterprise ID is now 0x%x (%d)\n", enterprise_id, enterprise_id);
 
 
     /* smartcard contents authenticated by the NCBootblock module */
@@ -254,28 +287,6 @@ int handle_mime_object(char *file)
   /* need to do the enterprise id, ram enterprise block, and certificate look ups here
        so that they're ready for authentication */
 
-    ram_block_bytes = ram_content_bytes;
-
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: seeking RAM enterprise block\n");
-    if(find_ram_enterprise_block()<0) {
-        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: RAM enterprise block lookup failed\n");
-        return(-1);
-    }
-
-    /* verify the RAM contents here */
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: authenticating RAM contents\n");
-    if(ncma_auth(ram_eb_ptr, ram_eb_bytes, ram_sig_ptr, ram_sig_bytes, ram_cert_ptr, ram_cert_bytes)<0) {
-        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: RAM authentication failed\n");
-
-#ifdef AUTHENTICATE_SIGNATURES
-        return(-1);
-#else
-        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: overriding auth result\n");
-#endif
-
-    } else {
-        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: RAM authentication succeeded\n");
-    }
 
     if(_kernel_swi(NCBootblock_Write, &r, &r) != NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: NCBootblock_Write SWI failed\n");
@@ -330,7 +341,31 @@ int handle_mime_object(char *file)
 
     /* rebuild ram cache */
 
-    skip_smartcard_stuff:
+    skip_smartcard_stuff: /* SKIP_SMARTCARD_STUFF LABEL */
+
+    ram_block_bytes = ram_content_bytes;
+
+    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: seeking RAM enterprise block\n");
+    if(find_ram_enterprise_block()<0) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: RAM enterprise block lookup failed\n");
+        return(-1);
+    }
+
+    /* verify the RAM contents here */
+    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: authenticating RAM contents\n");
+    if(ncma_auth(ram_eb_ptr, ram_eb_bytes, ram_sig_ptr, ram_sig_bytes, ram_cert_ptr, ram_cert_bytes)<0) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "handle_mime_object: RAM authentication failed\n");
+
+#ifdef AUTHENTICATE_SIGNATURES
+        return(-1);
+#else
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: overriding auth result\n");
+#endif
+
+    } else {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_mime_object: RAM authentication succeeded\n");
+    }
+
 
     DBUG_PRINTF(DBUG_LVL_DIAG,"handle_mime_object: rebuilding RAM cache\n");
 

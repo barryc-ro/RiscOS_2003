@@ -22,6 +22,7 @@
 #include "ncma_mime.h"
 #include "ncma_nvram.h"
 #include "ncma_net.h"
+#include "ncma_fx.h"
 #include "vectors.h"
 
 #include "DBUG.h"
@@ -71,7 +72,9 @@ char *trans_string(NCMA_TRANS trans)
     "Trans_URLSmartcardAck",
     "Trans_URLBadCardAck",
 #endif
-"Trans_URLDisconnectAck"
+     "Trans_URLDisconnectAck",
+     "Trans_URLBadUnblockPINAck"
+
   };
 
 
@@ -104,7 +107,8 @@ char *state_string(NCMA_STATE state)
     "State_NCMAConnect",
     "State_NCMADiallingRelServer",
     "State_NCMAMoved",
-    "State_NCMADiallingRegServer"
+    "State_NCMADiallingRegServer",
+    "State_NCMABadUnblockPIN"
   };
 
   return(s_table[state]);
@@ -142,6 +146,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
     case Trans_CardRemoved:
          card_removed:
     	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard removed\n");
+    	 run_from_powerup = 0;
     	 unlock_cache();
 
 #ifdef POINTLESS_BUTTONS
@@ -176,16 +181,17 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 	   	if(!smartcard_present()) { /* powered up but no card? Fetch the blurb */
 
-#ifdef ENABLE_DEBUGGING
+#ifdef LOCAL_URL_PATHS
   	   	  ncma_url_open(URL_PATH(welcome.html));
 #else
 		  ncma_url_open(WELCOME_SCREEN_URL);
 #endif
+		  run_from_powerup = 0;
 	   	  return(State_NCMAInit);
 	   	}
 
 	   	/* otherwise, there's a card in, so fall through */
-
+		run_from_powerup = 1;
 	   	/* \/ \/ \/ \/ \/ DELIBERATE FALL THRU \/ \/ \/ \/ \/ */
 
 
@@ -297,7 +303,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
             case Trans_Registry: /* card activity */
 
 #ifdef POINTLESS_BUTTONS
-       		 return(State_NCMANoCard);
+       		 if(run_from_powerup == 0) return(State_NCMANoCard);
+       		 /* else deliberate fall through to next case */
 
             case Trans_URLSmartcardAck:
 
@@ -571,6 +578,9 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		       build_rs_cache();
 
 		       ncma_network_init();
+		       if(find_enterprise_id()<0) {
+		           DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: couldn't read enterprise ID - downloading s/c content\n");
+		       }
 
 		       if(ncma_dial()<0) {
 		           DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: relationship server dial failed\n");
@@ -590,14 +600,14 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		       } else { /* RAM empty, but NVRAM isn't */
 		         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: NVRAM details available\n");
 		         ncma_dbox_open(URL_PATH(moved.html)); /* find out whether we've moved or not */
+		         return(State_NCMAMoved);
 		       }
 
-		       return(State_NCMAMoved);
 		     } else { /* there are connect details in RAM */
 
 		     connect_from_ram:
 		       if(find_enterprise_id()<0) {
-                          DBUG_PRINTF(DBUG_LVL_ERROR, "find_ram_enterprise_block: couldn't read enterprise id\n");
+                          DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read enterprise id\n");
                           ncma_dbox_open(URL_PATH(damaged.html));
                           return(State_NCMABadCard);
                        }
@@ -606,6 +616,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
       		         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no ENTERPRISE_ID match in RAM - calling RS\n");
       		         goto call_relationship_server;
       		       }
+
 
 		       if(skip_ram_cache_build) { /* rel. server dial up already built the cache */
 		           DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: skipping ram cache build and network setup\n");
@@ -682,7 +693,9 @@ NCMA_STATE machine(NCMA_TRANS trans)
       	     	        ncma_dbox_open(URL_PATH(download.html));
       	     	        return(State_NCMADownload);
       	     	      } else { /* no boot filing system, must be registration server */
-      	     	          ncma_url_user();
+
+      	     	      /* fetch URL if it isn't open already (auto-loaded in browser-limiting mode) */
+      	     	      if(user_isp_registered()==1) ncma_url_user();
       	     	      }
       	     	  }
 
@@ -734,6 +747,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     case Trans_PPPTimeout:
 	     	  ignore_ppp_timeout = 1;
 	     	  set_ppp_timeout();
+	     	  ncma_sound_effect(NCMA_TIMEOUT_SOUND);
 	     	  ncma_dbox_open(URL_PATH(disconnect.html));
 	     	  return(State_NCMABooted);
 
@@ -827,6 +841,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
              	  return(State_NCMAUnblock);
 
              case Trans_AuthFail:
+             	  DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: PIN unblock failure\n");
+             	  ncma_dbox_open(URL_PATH(badubp.html));
+             	  return(State_NCMABadUnblockPIN);
+
              case Trans_CardOK: /* ignore these, they get spewed for an invalid unblock PIN */
              	  // DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: PIN unblock failure\n");
              	  // ncma_dbox_open(URL_PATH(unblock.html));
@@ -854,6 +872,23 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  }
     	 }
     	 break;
+
+
+/*********************************************************************************
+
+    STATE_NCMABADUNBLOCKPIN
+
+ *********************************************************************************/
+    case State_NCMABadUnblockPIN:
+
+         switch(trans) {
+
+             case Trans_URLBadUnblockPINAck:
+             	  ncma_dbox_open(URL_PATH(unblock.html));
+             	  return(State_NCMAUnblock);
+         }
+         break;
+
 
 
 /*********************************************************************************
@@ -1025,7 +1060,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     	     case Trans_MIMEOk: /* wahey! It worked! */
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: MIME object thoroughly grokked\n");
-    	     	  // ncma_hangup();
+    	     	  //ncma_hangup();
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: line dropped - here we go again...\n");
     	     	  skip_ram_cache_build = 1; /* tell connect state not to bother building cache as we just did it */
     	     	  goto managed_access_nightmare;
