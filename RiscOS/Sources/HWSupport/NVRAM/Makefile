@@ -118,6 +118,7 @@ o.module:	h.module
 o.module:	h.nvram
 o.module:	h.msgfile
 o.module:	h.error
+o.module:	h.trace
 o.nvram:	c.NVRAM
 o.nvram:	C:h.kernel
 o.nvram:	C:h.swis

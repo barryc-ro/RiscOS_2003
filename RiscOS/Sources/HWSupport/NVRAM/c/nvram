@@ -18,7 +18,6 @@
 ERROR_STRUCT( NOMEM, "NoMem" );
 
 static char *pCache = NULL;
-static char *pTagBuf, *pDescBuf;
 
 
 static void
@@ -145,7 +144,7 @@ CopyBuffer( char *psource, char *pdest, unsigned int location, unsigned int star
 	byte_length = (start_bit + length + 7) / 8;
 
 	/* Check start and end bytes are in range. */
-	if ( (location < NVRAM_SIZE) && (location + byte_length - 1 < NVRAM_SIZE) )
+	if ( (location < NVRAM_SIZE) && (location + byte_length <= NVRAM_SIZE) )
 	{
 		unsigned int mask = (1 << length) - 1;	/* Will be -1 for length >= 32. */
 		char *ptmp = pdest + location;
@@ -177,7 +176,7 @@ FullReset( char *pold, char *pnew, location *ploc )
 	/* Check for location being protected. */
 	if ( ploc->flags & LOCATION_FLAGS_PROTECTED )
 	{
-		TRACE( "Copying old contents into cache for location &%03X\n" _ ploc->location );
+		TRACE( "FullReset: copying old contents into cache for location &%03X\n" _ ploc->location );
 
 		/* Protected so copy old contents into new contents. */
 		CopyBuffer( pold, pnew, ploc->location, ploc->start_bit, ploc->length, NVRAM_FLAGS_WRITECACHE );
@@ -185,7 +184,7 @@ FullReset( char *pold, char *pnew, location *ploc )
 		/* Otherwise set default value (only possible for locations with length <= 32). */
 		if ( ploc->length <= 32 )
 		{
-			TRACE( "Setting default value for location &%03X\n" _ ploc->location );
+			TRACE( "FullReset: setting default value for location &%03X\n" _ ploc->location );
 
 			WriteValue( pnew, ploc->value, ploc->location, ploc->start_bit, ploc->length, NVRAM_FLAGS_WRITECACHE );
 		}
@@ -201,7 +200,7 @@ LockedReset( char *pold, char *pnew, location *ploc )
 		/* Set default value (only possible for locations with length <= 32). */
 		if ( ploc->length <= 32 )
 		{
-			TRACE( "Setting locked value for location &%03X\n" _ ploc->location );
+			TRACE( "LockedReset: setting locked value for location &%03X\n" _ ploc->location );
 
 			WriteValue( pnew, ploc->value, ploc->location, ploc->start_bit, ploc->length, NVRAM_FLAGS_WRITECACHE );
 		}
@@ -212,15 +211,12 @@ LockedReset( char *pold, char *pnew, location *ploc )
 
 
 static int
-GetLocation( char *ptag, location *ploc )
+GetLocation( char *ptag, char *pdesc, location *ploc )
 {
-	char *pdesc;
-
-	TRACE( "Looking up tag '%s'\n" _ ptag );
+	TRACE( "GetLocation: looking up tag '%s'\n" _ ptag );
 
 	/* Lookup tag and parse description into location 'ploc'. */
-	pdesc = msgfile_lookup( ptag, pDescBuf, TMPBUF_SIZE, NULL );
-	return ( pdesc != NULL ) ? parse_description( pdesc, ploc ) : 0;
+	return ( msgfile_lookup(ptag, pdesc, TMPBUF_SIZE, NULL) != NULL ) ? parse_description( pdesc, ploc ) : 0;
 }
 
 
@@ -229,19 +225,28 @@ IterateTags( char *pold, char *pnew, void (*function)(char *, char *, location *
 {
 	_kernel_oserror *err;
 	int index = 0;
+	char *tagbuf = (char *)malloc( TMPBUF_SIZE*2 );
 
-	TRACE( "Iterating through Tags file\n" );
-
-	/* Iterate through Tags file and call 'function' for each tag. */
-	while (1)
+	if ( tagbuf != NULL )
 	{
-		location loc;
+	  	char *descbuf = tagbuf + TMPBUF_SIZE;
 
-		err = msgfile_enumerate( "*", pTagBuf, TMPBUF_SIZE, &index );
-		if ( (err != NULL) || (index == 0) ) break;
-		if ( GetLocation(pTagBuf, &loc) )
-			(*function)( pold, pnew, &loc );
+		TRACE( "IterateTags: iterating through Tags file\n" );
+
+		/* Iterate through Tags file and call 'function' for each tag. */
+		while (1)
+		{
+			location loc;
+
+			err = msgfile_enumerate( "*", tagbuf, TMPBUF_SIZE, &index );
+			if ( (err != NULL) || (index == 0) ) break;
+			if ( GetLocation(tagbuf, descbuf, &loc) )
+				(*function)( pold, pnew, &loc );
+		}
+		free( tagbuf );
 	}
+	else err = ERROR( NOMEM );
+
 	return err;
 }
 
@@ -252,27 +257,22 @@ nvram_initialise( void )
 	_kernel_oserror *err = NULL;
 
 	/* Allocate space for the cache + space for tag buffer + space for description buffer. */
-	if ( (pCache = (char *)malloc(NVRAM_SIZE + TMPBUF_SIZE*2)) != NULL )
+	if ( (pCache = (char *)malloc(NVRAM_SIZE)) != NULL )
 	{
 		/* Allocate space for temporary cache copy. */
 		char *pbuf = (char *)malloc(NVRAM_SIZE);
 
-		TRACE( "Allocated cache at &%08X\n" _ pCache );
+		TRACE( "nvram_initialise: allocated cache at &%08X\n" _ pCache );
 
 		if ( pbuf != NULL )
 		{
-			/* Set up scratch buffers to avoid malloc/free every time we	*/
-			/* look up a tag.						*/
-			pTagBuf = pCache + NVRAM_SIZE;
-			pDescBuf = pTagBuf + TMPBUF_SIZE;
-
 			/* Read and cache all NV-RAM contents in temporary buffer. */
-			TRACE( "Reading NV-RAM\n" );
+			TRACE( "nvram_initialise: reading NV-RAM\n" );
 			RawRead( pbuf, 0, NVRAM_SIZE );
 	
 			if ( ReadValue(pbuf, NVRAM_LASTRESET_BYTE, NVRAM_LASTRESET_BIT, 1) != 0 )
 			{
-				TRACE( "Performing full NV-RAM reset\n" );
+				TRACE( "nvram_initialise: performing full NV-RAM reset\n" );
 	
 				/* Need to reset NV-RAM so start from all 0. */
 				memset( pCache, 0, NVRAM_SIZE );
@@ -280,7 +280,7 @@ nvram_initialise( void )
 				/* Iterate through tags and perform a full reset. */
 				err = IterateTags( pbuf, pCache, FullReset );
 			} else {
-				TRACE( "Performing reset of locked NV-RAM only\n" );
+				TRACE( "nvram_initialise: performing reset of locked NV-RAM only\n" );
 				
 				/* Only ensuring locked locations so start from cache. */
 				memcpy( pCache, pbuf, NVRAM_SIZE );
@@ -292,7 +292,7 @@ nvram_initialise( void )
 			/* Compare buffer with cache and make NV-RAM consistent with cache. */
 			if ( err == NULL )
 			{
-				TRACE( "Making NV-RAM consistent with cache\n" );
+				TRACE( "nvram_initialise: making NV-RAM consistent with cache\n" );
 				RawConsistent( pbuf, pCache, 0, NVRAM_SIZE );
 			}
 
@@ -325,8 +325,11 @@ _kernel_oserror *
 nvram_read( _kernel_swi_regs *r )
 {
 	location loc;
+	char *descbuf = (char *)malloc( TMPBUF_SIZE );
 	
-	if ( GetLocation((char *)r->r[0], &loc) )
+	if ( descbuf == NULL ) return ERROR( NOMEM );
+
+	if ( GetLocation((char *)r->r[0], descbuf, &loc) )
 	{
 		int req_bufsz = (loc.length + loc.start_bit + 7) / 8;
 
@@ -343,6 +346,10 @@ nvram_read( _kernel_swi_regs *r )
 				/* fits in a word and assume r->r[1] points to an int.			*/
 				if ( loc.length <= 32 )
 				{
+					/* Read current NVRAM contents into cache in case it's changed	*/
+					/* under our feet.						*/
+					RawRead( pCache, loc.location, req_bufsz );
+
 					*(int *)(r->r[1]) = ReadValue( pCache, loc.location, loc.start_bit, loc.length );
 					r->r[0] = 4;
 				}
@@ -356,6 +363,11 @@ nvram_read( _kernel_swi_regs *r )
 				if ( r->r[2] >= req_bufsz )
 				{
 					memset( (char *)r->r[1], 0, r->r[2] );
+
+					/* Read current NVRAM contents into cache in case it's changed	*/
+					/* under our feet.						*/
+					RawRead( pCache, loc.location, req_bufsz );
+
 					/* Destination pointer gets loc.location added so subtract	*/
 					/* before calling and we definitely don't want to update the	*/
 					/* cache!							*/
@@ -369,7 +381,9 @@ nvram_read( _kernel_swi_regs *r )
 	}
 	else
 		r->r[0] = NVRAM_READ_TAGERR;
-					
+
+	free( descbuf );
+			
 	return NULL;
 }
 
@@ -378,8 +392,11 @@ _kernel_oserror *
 nvram_write( _kernel_swi_regs *r )
 {
 	location loc;
-	
-	if ( GetLocation((char *)r->r[0], &loc) )
+	char *descbuf = (char *)malloc( TMPBUF_SIZE );
+
+	if ( descbuf == NULL ) return ERROR( NOMEM );
+
+	if ( GetLocation((char *)r->r[0], descbuf, &loc) )
 	{
 		if ( loc.flags & LOCATION_FLAGS_LOCKED )
 		{
@@ -388,8 +405,14 @@ nvram_write( _kernel_swi_regs *r )
 		}
 		else
 		{
+			int req_bufsz = (loc.length + loc.start_bit + 7) / 8;
+
 			if ( r->r[2] == 0 )
 			{
+				/* Read current NVRAM contents into cache in case it's changed	*/
+				/* under our feet.						*/
+				RawRead( pCache, loc.location, req_bufsz );
+
 				/* Want to write a value so assume r->r[1] points to an int. */
 				WriteValue( pCache, *(int *)(r->r[1]), loc.location, loc.start_bit, loc.length, NVRAM_FLAGS_WRITETHROUGH );
 			}
@@ -397,15 +420,22 @@ nvram_write( _kernel_swi_regs *r )
 			{
 				/* Have a buffer so copy bits into cache and update NV-RAM but	*/
 				/* make sure we don't go past the end of the caller's buffer.	*/
-				int caller_length = r->r[2] * 8 - loc.start_bit;
-				
+				int length = r->r[2] * 8 - loc.start_bit;
+				if ( length > loc.length ) length = loc.length;
+
+				/* Read current NVRAM contents into cache in case it's changed	*/
+				/* under our feet.						*/
+				RawRead( pCache, loc.location, req_bufsz );
+
 	                        CopyBuffer( (char *)(r->r[1] - loc.location), pCache, loc.location, loc.start_bit,
-	                        		(caller_length < loc.length) ? caller_length : loc.length, NVRAM_FLAGS_WRITETHROUGH );
+	                        		length, NVRAM_FLAGS_WRITETHROUGH );
 	                }
 	                r->r[0] = 0;	/* Return no error. */
                 }
 	} else
 		r->r[0] = NVRAM_WRITE_TAGERR;
+
+	free( descbuf );
 
 	return NULL;
 }
