@@ -8,6 +8,8 @@
 # 19 Aug 1997 RWB 	   new srcbuild
 # 05 Sep 1997 RWB          added install
 # 30 Apr 1999 DSC          Made to install into new library structure.
+# 09 Sep 1999 JPB          Added rules to auto create and clean "o"
+#                          directory
 #
 
 #
@@ -26,10 +28,12 @@ RM      = remove
 WIPE    = -wipe
 CD	= dir
 
-AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = ${THROWBACK} -c -depend !Depend ${INCLUDES} 
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
+AFLAGS		= -depend !Depend -Stamp -quit
+CFLAGS		= -c -depend !Depend ${INCLUDES} ${THROWBACK}
+CPFLAGS		= ~cfr~v
+WFLAGS		= ~c~v
+
+DIRS		=o._dirs
 
 #
 # Libraries
@@ -51,7 +55,11 @@ INCLUDES = -IC:
 COMPONENT = srcbuild
 TARGET	  = ${COMPONENT}
 
-OBJS      = srcbuild.o riscos.o build.o parse.o
+OBJS =\
+ srcbuild.o\
+ riscos.o\
+ build.o\
+ parse.o
 
 #
 # Rule patterns
@@ -66,7 +74,7 @@ all: ${TARGET}
         @echo ${COMPONENT}: all complete
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
         ${WIPE} ${TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
@@ -74,10 +82,15 @@ install: ${TARGET}
 	${CP} ${TARGET} <Build$Dir>.Library.Build.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
+${DIRS}:
+	${MKDIR} o
+	create ${DIRS}
+	stamp ${DIRS}
+
 #
 # Target
 #
-${TARGET}: ${OBJS}
+${TARGET}: ${OBJS} ${DIRS}
         ${LD} -o $@ ${OBJS} ${CLIB}
         Access ${TARGET} RW/R
 
