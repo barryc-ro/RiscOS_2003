@@ -29,7 +29,7 @@ WIPE    = -wipe
 CD	= dir
 
 AFLAGS		= -depend !Depend -Stamp -quit
-CFLAGS		= -c -depend !Depend ${INCLUDES} ${THROWBACK}
+CFLAGS		= -c -depend !Depend ${INCLUDES} ${THROWBACK} -Wc
 CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
 
