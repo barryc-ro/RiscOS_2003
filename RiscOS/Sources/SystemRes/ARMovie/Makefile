@@ -791,7 +791,11 @@ Render_Decode:        Painters.1bpp.bas.d11x1y \
                       Colour.bas.ULTI16 \
                       Colour.bas.YCC24 \
                       Colour.bas.YUV16 \
-                      Colour.bas.YUV24
+                      Colour.bas.YUV24 \
+                      Colour.8rgb11 \
+                      Colour.8rgb22 \
+                      Colour.8yuv11 \
+                      Colour.8yuv22
         MMD $(PAINTDIR)
         If1bpp CMF Painters.1bpp.bas.d11x1y        $(PAINTDIR).d11x1y
         If1bpp CMF Painters.1bpp.bas.d12x1y        $(PAINTDIR).d12x1y
@@ -887,14 +891,7 @@ Render_Decode:        Painters.1bpp.bas.d11x1y \
         CMF Colour.bas.YCC24                       $(COLMAPDIR).YCC24
         CMF Colour.bas.YUV16                       $(COLMAPDIR).YUV16
         CMF Colour.bas.YUV24                       $(COLMAPDIR).YUV24
-
-Render_Encode:        Colour.16yuv \
-                      Colour.8rgb11 \
-                      Colour.8rgb22 \
-                      Colour.8yuv11 \
-                      Colour.8yuv22
         MMD $(PALETTEDIR)
-        CMF Colour.16yuv                           $(PALETTEDIR).16yuv
         CMF Colour.8rgb11                          $(PALETTEDIR).8rgb11
         CMF Colour.8rgb22                          $(PALETTEDIR).8rgb22
         CMF Colour.8yuv11                          $(PALETTEDIR).8yuv11
@@ -903,6 +900,9 @@ Colour.8yuv11: Colour.bas.Make8yuv11
         /Colour.bas.Make8yuv11
 Colour.8yuv22: Colour.bas.Make8yuv22
         /Colour.bas.Make8yuv22
+
+Render_Encode:        Colour.16yuv
+        CMF Colour.16yuv                           $(PALETTEDIR).16yuv
 
 FrontEnd_Decode:      bas.FrontEnd
         MMD $(FRONTENDDIR)
