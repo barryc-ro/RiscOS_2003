@@ -385,8 +385,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
      if (keyboard_state == fe_keyboard_OFFLINE)
 	 oflags |= be_openurl_flag_FAST_LOAD;
 
-
-#if 1
+#if 0 /* DEBUG */
     if (bfile && bfile->body_file)
     {
         char buf[256];
