@@ -21,7 +21,7 @@ AS      = aasm
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -throwback -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 
 #
@@ -73,6 +73,38 @@ ${TARGETSA}: s.StandAlone ${RESOURCES}
         ${AS} ${ASFLAGS} s.StandAlone
 
 # Dynamic dependencies:
+rm.DeviceFS: hdr:ListOpts
+rm.DeviceFS: hdr:Macros
+rm.DeviceFS: hdr:System
+rm.DeviceFS: Hdr:SWIs
+rm.DeviceFS: Hdr:CPU.Generic26
+rm.DeviceFS: Hdr:IO.GenericIO
+rm.DeviceFS: Hdr:RISCOS
+rm.DeviceFS: hdr:ModHand
+rm.DeviceFS: hdr:PublicWS
+rm.DeviceFS: hdr:FSNumbers
+rm.DeviceFS: Hdr:HighFSI
+rm.DeviceFS: hdr:LowFSI
+rm.DeviceFS: hdr:MsgTrans
+rm.DeviceFS: hdr:Buffer
+rm.DeviceFS: hdr:DeviceFS
+rm.DeviceFS: hdr:FileTypes
+rm.DeviceFS: hdr:UpCall
+rm.DeviceFS: hdr:Services
+rm.DeviceFS: hdr:Symbols
+rm.DeviceFS: hdr:Variables
+rm.DeviceFS: hdr:CMOS
+rm.DeviceFS: hdr:NewErrors
+rm.DeviceFS: hdr:Territory
+rm.DeviceFS: hdr:NdrDebug
+rm.DeviceFS: hdr:DDVMacros
+rm.DeviceFS: hdr:Proc
+rm.DeviceFS: hdr:ResourceFS
+rm.DeviceFS: Version
+rm.DeviceFS: s.Errors
+rm.DeviceFS: s.Macros
+rm.DeviceFS: s.FSystem
+rm.DeviceFS: s.Special
 rm.DeviceFSSA: s.DeviceFS
 rm.DeviceFSSA: hdr:ListOpts
 rm.DeviceFSSA: hdr:Macros
@@ -107,35 +139,3 @@ rm.DeviceFSSA: s.Macros
 rm.DeviceFSSA: s.ResFiles
 rm.DeviceFSSA: s.FSystem
 rm.DeviceFSSA: s.Special
-rm.DeviceFS: hdr:ListOpts
-rm.DeviceFS: hdr:Macros
-rm.DeviceFS: hdr:System
-rm.DeviceFS: Hdr:SWIs
-rm.DeviceFS: Hdr:CPU.Generic26
-rm.DeviceFS: Hdr:IO.GenericIO
-rm.DeviceFS: Hdr:RISCOS
-rm.DeviceFS: hdr:ModHand
-rm.DeviceFS: hdr:PublicWS
-rm.DeviceFS: hdr:FSNumbers
-rm.DeviceFS: Hdr:HighFSI
-rm.DeviceFS: hdr:LowFSI
-rm.DeviceFS: hdr:MsgTrans
-rm.DeviceFS: hdr:Buffer
-rm.DeviceFS: hdr:DeviceFS
-rm.DeviceFS: hdr:FileTypes
-rm.DeviceFS: hdr:UpCall
-rm.DeviceFS: hdr:Services
-rm.DeviceFS: hdr:Symbols
-rm.DeviceFS: hdr:Variables
-rm.DeviceFS: hdr:CMOS
-rm.DeviceFS: hdr:NewErrors
-rm.DeviceFS: hdr:Territory
-rm.DeviceFS: hdr:NdrDebug
-rm.DeviceFS: hdr:DDVMacros
-rm.DeviceFS: hdr:Proc
-rm.DeviceFS: hdr:ResourceFS
-rm.DeviceFS: Version
-rm.DeviceFS: s.Errors
-rm.DeviceFS: s.Macros
-rm.DeviceFS: s.FSystem
-rm.DeviceFS: s.Special
