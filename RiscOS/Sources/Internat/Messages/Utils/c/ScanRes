@@ -1,19 +1,49 @@
-#include <stdio.h>
+
+/* ScanRes
+ *
+ * Copyright (C) Pace Micro Technology plc. 2001
+ *
+ */
+
+/* Standard C headers */
 #include <stdlib.h>
-#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <errno.h>
 #include <ctype.h>
+#include <time.h>
 
-#include "Global/Services.h"
-#include "swis.h"
+/* CLX heders */
+#include "wholefls.h"
+#include "err.h"
+#include "host.h"
+#include "prgname.h"
+#include "bytesex.h"
+#include "filestamp.h"
 
+/* Local */
+#include "shared.h"
+
+#ifdef RISCOS
+#  include "swis.h"
+#else
+#  include <sys/stat.h>
+#  include <dirent.h>
+#endif
+
+#ifdef RISCOS
 #define BUFSZ 512
+#else
+#define BUFSZ 4096
+#endif
 
 char path[ BUFSZ ];
 char buffer[ BUFSZ ];
 
-typedef unsigned int word;
+typedef int32 word;
 
 typedef struct
 {
@@ -34,30 +64,26 @@ typedef struct
         char name[1];
 } object;
 
-#define filetype( object )      (((object)->loadaddr>>8)&0xFFF)
+char dir_sep_char;
 
 
 /* Define some things needed to store exactly which territories we are storing. */
-#define ENV_LOCALE_LIST "LocaleList"  /* name of env var holding the comma-seperated list of lcoales */
-#define MAX_TERRITORIES 10            /* 10 is a value defined in the spec. */
-char* supported_territories[MAX_TERRITORIES] = NULL; /* An array in which territories defined in the Env file can be stored. */
 unsigned int num_of_territories = 0;                 /* The number of territories defined. */
 
 /* Now something to store the territories we are saving */
-char* terrritory_directories[MAX_TERRITORIES] = NULL; /* Stores the directory names */
-unsigned int territory_numbers[MAX_TERRITORIES][MAX_TERRITORIES]; /*  Store the numeric representaion of each territory. Array is terminated by -1. */
+char* territory_directories[MAX_TERRITORIES]; /* Stores the directory names */
+unsigned long territory_numbers[MAX_TERRITORIES][MAX_TERRITORIES]; /*  Store the numeric representation of each territory. Array is terminated by -1. */
 unsigned int num_of_territory_dirs = 0;                 /* The number of territory directories scanned. */
 
 
 /* Forward prototypes */
-bool parse_territories(char* territory_line);
 bool find_resource_directories(const char* const root_path);
-bool convert_dir_to_numeric_form(const char* const dir_name);
-int return_country_number(const char* const country);
+static bool convert_dir_to_numeric_form(const char* const dir_name);
+char *appendleaf( char *path, char *leaf );
 
 
 /*****************************************************************************
-* cstrcmp
+* Strcmp_ci
 *
 * This routine compares two string caselessly.
 *
@@ -77,35 +103,39 @@ int return_country_number(const char* const country);
 *  Any other value if the strings are different.
 *****************************************************************************/
 
-int cstrcmp(const char *a, const char *b)
+int Strcmp_ci(const char *first_param, const char *second_param)
 {
-  int d;
+        const unsigned char *first = (const unsigned char *) first_param;
+        const unsigned char *second = (const unsigned char *) second_param;
 
-  if (a == NULL && b == NULL)
-    return (0);
+        if (first == second) return 0;
+        if (first == NULL || second == NULL) return -1;
 
-  if (a == NULL || b == NULL)
-    return (-1);
+        for (;;) {
+                unsigned int a = *first++;
+                unsigned int b = *second++;
 
-  while (*a || *b) {
-    d = tolower(*(a++)) - tolower(*(b++));
-    if (d)
-      return (d);
-  }
-  return (0);
+                if (a == 0) return -b;
+                if (a != b) {
+                        unsigned int c = (unsigned int) tolower(a);
+                        unsigned int d = (unsigned int) tolower(b);
+                        signed int result = c - d;
+                        if (result != 0) return result;
+                }
+        }
 }
-
-
 
 void error( const char *str, ... )
 {
         va_list argp;
 
-        sprintf( buffer, "ERROR: %s\n", str );
+        fprintf( stderr, "ERROR: ");
 
         va_start( argp, str );
-        vprintf( buffer, argp );
+        vfprintf( stderr, str, argp );
         va_end( argp );
+
+        putc('\n', stderr);
 
         exit(EXIT_FAILURE);
 }
@@ -114,102 +144,270 @@ void error( const char *str, ... )
 /*
  * malloc an area for a string and copy the string in
  */
-char *strdup(const char *str)
+
+char *strdup(const char *s1)
 {
-  char *newstr = malloc(str == NULL ? 1 : (strlen(str) + 1));
+        if (s1 == NULL) {
+                s1 = "";
+        }
+        {
+                const size_t length = strlen(s1) + 1;
+                char *const s2 = malloc(length);
 
-  if (newstr != NULL) {
-    if (str == NULL)
-      *newstr = 0;
-    else
-      strcpy(newstr, str);
-  }
-  return (newstr);
+                if (s2 == NULL) return NULL;
+                return memcpy(s2, s1, length);
+        }
 }
-
-
-
-
-/*
- * read an environment variable in to a malloced string
- */
-char *read_env(char *variable)
-{
-  char *var = NULL;
-  char *cp = NULL;
-
-  if ((var = getenv(variable)) != NULL)
-    cp = strdup(var);
-
-  return (cp);
-}
-
-
 
 int
 gettype( char *obj )
 {
-        int type;
-
-        _swi( OS_File, _IN(0)|_IN(1)|_OUT(0), 17, obj, &type );
-
-        return type;
+        return wf_objtype(obj);
 }
 
-void
-clear( word *buf, int nwords )
+
+typedef struct {
+  object op[2];
+} align_test;
+
+#define STRUCTURE_ALIGNMENT \
+  ((offsetof(align_test, op[1]) - offsetof(align_test, op[0].name)) - 1)
+
+#ifndef RISCOS
+static void modgen_time_t_to_riscos(TimeStamp ts, int32 *load, int32 *exec)
 {
-        while ( nwords-- ) *(buf++)=0;
+        /* convert a time_t (seconds from 1 Jan 1970 00:00:00 UTC) to a RISC OS
+         * date/time stamp (centiseconds from 1 Jan 1900 00:00:00 UTC)
+         * The "load address" attribute used by RISCOS is equal to 0xFFFtttdd, where
+         * ttt is a 12-bit file type and dd is bits 32..39 of the time stamp. This is
+         * defined as the number of centiseconds since 01-Jan-1900.
+         *
+         * DOS and UNIX deal (in the main) with time as the number of seconds since
+         * 01-Jan-1970, which is to be RISCOS time 0x33 6E99 6A00.  Hence the conversion
+         * is relatively simple.   RISCOS time = 336E996A00h + 100*UNIX time
+         */
+        int32 t_hi, t_lo;
+
+        t_hi = 0x336E99 + (ts >> 16) * 100;
+        t_lo = 0x6A00 + (ts & 0xFFFF) * 100;
+
+        *load = (*load & ~0xFF) | ((t_hi + (t_lo >> 16)) >> 16);
+        *exec = (t_hi << 16) + t_lo;
 }
 
-void
+/* This routine may truncate 'leaf' as a result of deriving the filetye */
+static void derive_riscos_attributes(object *op, struct stat *sb, char *leaf, char *fullname, FILE *fobj)
+{
+  TimeStamp ts = filestamp_get(fullname);
+  char *last_comma = strrchr(leaf, ',');
+
+  op->loadaddr = 0xFFF00000;
+  op->execaddr = 0;
+  op->length = (int32) (sb->st_size);
+  op->attr = 3;
+  op->type = (sb->st_mode & S_IFDIR) ? 2 : 1;
+
+  if (last_comma && strlen(last_comma) == 4) {
+    int32 type;
+    int count = -1;
+    if (strcmp(last_comma+1, "lxa") == 0) {
+      /* need to load the last 8 bytes to get the load/exec address, then truncate */
+      op->length -= 8;
+      *last_comma = '\0';
+      fseek(fobj, -8L, SEEK_END);
+      fread(&op->loadaddr, 4, 1, fobj);
+      fread(&op->execaddr, 4, 1, fobj);
+      op->loadaddr = bytesex_hostval(op->loadaddr);
+      op->execaddr = bytesex_hostval(op->execaddr);
+      rewind(fobj);
+    }
+    else if (strcmp(last_comma+1, "xxx") == 0) {
+      error("File is unstable! (%s is being updated whilst this utility is running)", fullname);
+    }
+    else if (sscanf(last_comma+1, "%x%n", &type, &count) > 0 && count == 3) {
+      *last_comma = '\0';
+      op->loadaddr = 0xFFF00000 | ((type & 0xFFF) << 8);
+      modgen_time_t_to_riscos(ts, &op->loadaddr, &op->execaddr);
+    }
+    else {
+      /* Not a filetype */
+      op->loadaddr = 0xFFFFFF00;
+      modgen_time_t_to_riscos(ts, &op->loadaddr, &op->execaddr);
+    }
+  }
+  else {
+    op->loadaddr = 0xFFFFFF00;
+    modgen_time_t_to_riscos(ts, &op->loadaddr, &op->execaddr);
+  }
+}
+
+
+/*****************************************************************************
+* load_unix_directory
+*
+* This routine enumerates the contents of the specified directory and stores
+* the results in 'buf'.  buf has size bufsize, *nread receives the number of
+* entries in the directory.  'buf' is filled with structures as returned by
+* OS_GBPB 10, although not all the data is filled in (only the name and
+* the objct type)
+*
+* Assumptions
+*  the buffer is large enough to receive the details on ALL items.
+*
+* Inputs
+*  dir:     the directory to search (must be writable!)
+*  buf:     to receive the output records
+*  bufsize: size of buf
+*
+* Outputs
+*  nread:   the number of items placed in buf.
+*
+* Returns
+*  Nothing.
+*****************************************************************************/
+
+void load_unix_directory(char *dir, char *buf, size_t bufsize, int *nread)
+{
+  DIR *d = opendir(dir);
+  char *const leaf = appendleaf(dir, "") + 1;
+
+  *nread = 0;
+
+  if (!d) {
+    error("Unable to open directory '%s'\n", dir);
+  }
+
+  for (;;) {
+    struct dirent *de;
+    errno = 0;
+    de = readdir(d);
+    if (de == NULL) {
+      if (errno == 0) {
+        break;
+      }
+      else {
+        error("Unable to read directory '%s': %s\n", dir, strerror(errno));
+        break;
+      }
+    }
+    else {
+      object *op = (object *) buf;
+      int namelen;
+
+      if (de->d_name[0] == '.' && (de->d_name[1] == '\0' || (de->d_name[1] == '.' && de->d_name[2] == '\0'))) {
+        continue;
+      }
+
+      /* Find length of leafname whilst copying it */
+      namelen = sprintf(leaf, "%s", de->d_name);
+
+      if (sizeof(*op) + namelen >= bufsize) {
+        error("out of buffer space in load_unix_directory (directory %s)", dir);
+      }
+      else {
+        struct stat sb;
+
+        op->type = gettype(dir);
+        if (op->type != 1 && op->type != 2) {
+          continue;
+        }
+
+        buf = memcpy(op->name, de->d_name, namelen) + namelen;
+        do {
+          *buf++ = '\0';
+        } while (((int)buf)&STRUCTURE_ALIGNMENT);
+        bufsize -= (buf - (char *)op);
+        ++(*nread);
+      }
+    }
+  }
+
+  (void) closedir(d);
+  leaf[-1] = '\0';
+}
+#endif
+
+static
+void riscosify_path( char *path )
+{
+  /* Invert the directory separator and '.' */
+  for (; *path; ++path) {
+    if (*path == dir_sep_char) *path = '.'; else if (*path == '.') *path = dir_sep_char;
+  }
+}
+
+static void
 appendfile( object *op, char *path, char *respath, FILE *fp )
 {
-        int filelen = (op->length+3)&~3;                /* Aligned file length. */
-        int pathlen = 0;
-        int totallen;
+        int32 filelen;
+        int32 pathlen = 0;
+        int32 totallen;
         char *fbuf, *resp, *resendp;
+        FILE *rp;
 
-        /* ResourceFS directories can contain more than 77 directory entries but ADFS
-         * directories can't. To get round this any directory starting with "Resources"
-         * (eg. Resources1, Resources2 etc.) will be reduced to "Resources" in the pathname
-         * inside ResourceFS.
-         */
-        if ( (resp = strstr(respath, "Resources")) != NULL )
-        {
-                if ( (resendp = strchr(resp, '.')) != NULL )
-                {
-                        /* Adjustment for pathlen as Resources* will have * stripped out. */
-                        pathlen = 9-(resendp-resp);
-                }
-                else
-                {
-                        resp = NULL;
-                }
+#ifndef RISCOS
+        struct stat sb;
+
+        if (stat(path, &sb) == -1) {
+          error("error reading attributes of '%s': %s", path, strerror(errno));
         }
-        pathlen = (pathlen+strlen(respath)+4)&~3;       /* Aligned ResourceFS file name length. */
+#endif
 
-        totallen = sizeof(resfile)+pathlen+sizeof(int)+filelen;
-
-        fbuf = (char *)malloc( totallen );
-
-        if ( fbuf != NULL )
+        rp = fopen( path, "rb" );
+        if (rp != NULL)
         {
-                FILE *rp = fopen( path, "rb" );
-                if ( rp != NULL )
+#ifndef RISCOS
+                derive_riscos_attributes(op, &sb, strrchr(path, dir_sep_char), path, rp);
+#endif
+
+                filelen = (op->length+3)&~3;                /* Aligned file length. */
+
+                /* ResourceFS directories can contain more than 77 directory entries but ADFS
+                 * directories can't. To get round this any directory starting with "Resources"
+                 * (eg. Resources1, Resources2 etc.) will be reduced to "Resources" in the pathname
+                 * inside ResourceFS.
+                 */
+                if ( (resp = strstr(respath, "Resources")) != NULL )
+                {
+                        if ( (resendp = strchr(resp, dir_sep_char)) != NULL )
+                        {
+                                /* Adjustment for pathlen as Resources* will have * stripped out. */
+                                pathlen = 9-(int32)(resendp-resp);
+                        }
+                        else
+                        {
+                                resp = NULL;
+                        }
+                }
+                pathlen = (pathlen+strlen(respath)+4)&~3;       /* Aligned ResourceFS file name length. */
+
+                totallen = sizeof(resfile)+pathlen+sizeof(int)+filelen;
+
+                fbuf = (char *)malloc( (size_t) totallen );
+
+                if ( fbuf != NULL )
                 {
                         resfile *rf = (resfile *)fbuf;
                         char *path = fbuf+sizeof(resfile);
 
-                        /* Clear fbuf. */
-                        clear( (word *)fbuf, totallen>>2 );
+                        /* Clear fbuf.  SNB: Why?? */
+                        memset(fbuf, 0, (size_t) totallen);
 
                         /* Set up resource file header. */
-                        rf->next = totallen;
-                        rf->loadaddr = op->loadaddr;
-                        rf->execaddr = op->execaddr;
-                        rf->length = op->length;
-                        rf->access = 3;
+                        if (bytesex_reversing()) {
+                          rf->next = bytesex_hostval(totallen);
+                          rf->loadaddr = bytesex_hostval(op->loadaddr);
+                          rf->execaddr = bytesex_hostval(op->execaddr);
+                          rf->length = bytesex_hostval(op->length);
+                          rf->access = bytesex_hostval(3);
+                        }
+                        else {
+                          rf->next = totallen;
+                          rf->loadaddr = op->loadaddr;
+                          rf->execaddr = op->execaddr;
+                          rf->length = op->length;
+                          rf->access = 3;
+                        }
 
                         /* Copy ResourceFS file name. */
                         if ( resp != NULL )
@@ -225,44 +423,50 @@ appendfile( object *op, char *path, char *respath, FILE *fp )
                         {
                                 strcpy( path, respath );
                         }
+                        /* Re-convert the host directory separator to the RISC OS directory separator */
+                        if (dir_sep_char != '.') riscosify_path(path);
 
                         /* Store file length + 4 */
-                        *(int *)(path+pathlen) = op->length+4;
+                        *(int32 *)(path+pathlen) = bytesex_hostval(op->length+4);
 
                         /* Load resource file. */
-                        if ( fread( fbuf+totallen-filelen, sizeof(char), op->length, rp ) != op->length )
+                        if ( fread( fbuf+totallen-filelen, sizeof(char), (size_t) op->length, rp ) != op->length )
                                 error( "Error reading '%s'", path );
 
-                        fclose( rp );
-
-                        if ( fwrite( fbuf, sizeof(char), totallen, fp ) != totallen )
+                        if ( fwrite( fbuf, sizeof(char), (size_t) totallen, fp ) != totallen )
                                 error( "Error writing to output file", NULL );
                 }
                 else
                 {
-                        error( "Can't open '%s' for read", path );
+                        error( "Not enough memory to append '%s'", path );
                 }
                 free( fbuf );
+                fclose( rp );
         }
         else
         {
-                error( "Not enough memory to append '%s'", path );
+                error( "Can't open '%s' for reading", path );
         }
 }
 
-void
+
+/* Append leaf to path, returning truncation point to remove it again
+ */
+char *
 appendleaf( char *path, char *leaf )
 {
-        strcat( path, "." );
-        strcat( path, leaf );
+        path = strchr(path, '\0');
+        *path = dir_sep_char;
+        (void) strcpy(path+1, leaf);
+        return path;
 }
 
+/* Strip leaf from path.
+ */
 void
 stripleaf( char *path )
 {
-        char *sep = strrchr( path, '.' );
-
-        if ( sep != 0 ) *sep = '\0';
+        *path = '\0';
 }
 
 void
@@ -280,12 +484,17 @@ descend( char *path, char *respath, FILE *fp )
                         object *op = (object *)buf;
                         int nread;
 
+#ifdef RISCOS
                         _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
                                 10, path, buf, 80, offset, BUFSZ, 0, &nread, &offset );
+#else
+                        offset = -1;
+                        load_unix_directory(path, buf, BUFSZ, &nread);
+#endif
 
                         while ( nread > 0 )
                         {
-                                appendleaf( path, op->name );
+                                char *trunc_char = appendleaf( path, op->name );
                                 switch ( op->type )
                                 {
                                         case 2:
@@ -296,8 +505,8 @@ descend( char *path, char *respath, FILE *fp )
                                                 appendfile( op, path, respath, fp );
                                                 break;
                                 }
-                                stripleaf( path );
-                                op = (object *)(((int)(op->name)+strlen(op->name)+4)&~3);
+                                stripleaf( trunc_char );
+                                op = (object *)(((int)(op->name)+strlen(op->name)+STRUCTURE_ALIGNMENT+1)&~STRUCTURE_ALIGNMENT);
                                 nread -= 1;
                         }
                 } while ( offset != -1 );
@@ -310,47 +519,31 @@ descend( char *path, char *respath, FILE *fp )
         }
 }
 
-
-
-/* This routine parses any territory line passed in and strips out all the
-territories into an array.
-   If the line is invalid, it retunrs false, otherwise it returns true. A
-line is considered invalid if it is empty or contains whitespace.
+/* Canonicalise the given file name.
  */
-
-bool parse_territories(char* territory_line)
+void
+canonicalise( char *src, char *dest, int bufsz )
 {
-  char *territory = NULL;
-
-  printf("Parsing territory line %s\n", territory_line);
-
-  if (strlen(territory_line) < 1)
-  {
-    /* Line must contain something */
-    return (false);
-  }
-
-  territory = strtok(territory_line, ",");
-  while (territory)
-  {
-    printf ("territory is %s\n", territory);
-    supported_territories[num_of_territories++] = strdup(territory);
-    territory = strtok (NULL, ",");
-  }
-
-  printf ("%d territories detected in the territories list.\n", num_of_territories);
-
-  return (true);
+#ifdef RISCOS
+        _swi( OS_FSControl, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5),
+                37, src, dest, 0, 0, bufsz );
+#else
+        *dest = 0;
+        strncat(dest, src, bufsz);
+#endif
 }
 
 
-
-
 /* Write a number in word form toa file pointer. */
-int
-fwriteword( int n, FILE *fp )
+void
+fwriteword( unsigned long param_n, FILE *fp )
 {
-        return fwrite( &n, sizeof n, 1, fp );
+        const unsigned int n = (unsigned int) param_n;
+
+        putc(((n >>  0) &0xFF), fp);
+        putc(((n >>  8) &0xFF), fp);
+        putc(((n >> 16) &0xFF), fp);
+        putc(((n >> 24) &0xFF), fp);
 }
 
 
@@ -391,18 +584,21 @@ int main( int argc, char *argv[] )
 {
   unsigned int loop;
   FILE *fp = NULL;
-  char path2[BUFSZ];
+  static char path2[BUFSZ];
 
   if ( argc != 3 )
   {
     error( "Syntax: scanres <directory> <file>", NULL );
   }
 
+  host_init();
+  dir_sep_char = host_dir_sep_char();
+  bytesex_reverse_auto(bytesex_WANT_LITTLE_ENDIAN);
+
   printf("Scanning from directory %s\n", argv[1]);
 
   /* Canonicalise directory path. */
-  _swi( OS_FSControl, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5),
-         37, argv[1], path, 0, 0, BUFSZ );
+  canonicalise(argv[1], path, BUFSZ);
 
   /* Read all the directory names.
      If a directory is numeric, ten it contans 1 or more territories (eg. 0001 would have both Common (00) and UK (01) resource blocks
@@ -411,8 +607,7 @@ int main( int argc, char *argv[] )
   find_resource_directories(path);
 
   /* Canonicalise output file path. */
-  _swi( OS_FSControl, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5),
-      37, argv[2], buffer, 0, 0, BUFSZ );
+  canonicalise(argv[2], buffer, BUFSZ);
 
   /* Open the output file for writing the resource blocks to. */
   if ((fp=fopen( buffer, "wb" )) == 0)
@@ -425,13 +620,13 @@ int main( int argc, char *argv[] )
   for (loop=0; loop < num_of_territory_dirs; loop++)
   {
     unsigned int index = 0;
-    printf("Directory %d is %s (territory numbers: ", loop, terrritory_directories[loop]);
+    printf("Directory %d is %s (territory numbers: ", loop, territory_directories[loop]);
     /* Write the list of territories this block is suitable for:
     * zero means any; list terminated by -1.
     */
     do
     {
-      printf("%d ", territory_numbers[loop][index]);
+      printf("%ld ", territory_numbers[loop][index]);
       fwriteword(territory_numbers[loop][index++], fp);
     }
     while (territory_numbers[loop][index]!=-1);
@@ -439,7 +634,7 @@ int main( int argc, char *argv[] )
     printf(")\n");
 
     strcpy(path2, path);
-    appendleaf(path2, terrritory_directories[loop]);
+    (void) appendleaf(path2, territory_directories[loop]);
     printf ("Appending data for territory resource dir %s\n", path2);
 
     if ( gettype(path2) == 2 ) /* It must obviously be a directory */
@@ -459,22 +654,13 @@ int main( int argc, char *argv[] )
   fwriteword( -1, fp );
 
   /* Close the output file. */
-  fclose( fp );
-
-  /* Tidy up the memory allocation */
-  for (loop=0; loop < num_of_territory_dirs; loop++)
-  {
-    if (terrritory_directories[loop])
-    {
-      free (terrritory_directories[loop]);
-      terrritory_directories[loop] = NULL;
-    }
+  if (fclose(fp) == EOF) {
+    error( "Error writing output file!\n" );
+    exit(EXIT_FAILURE);
   }
 
+  exit(EXIT_SUCCESS);
 }
-
-
-
 
 
 /*
@@ -497,12 +683,17 @@ bool find_resource_directories(const char* const root_path)
       object *op = (object *)buf;
       int nread;
 
+#ifdef RISCOS
       _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
               10, path, buf, 80, offset, BUFSZ, 0, &nread, &offset );
+#else
+      offset = -1;
+      load_unix_directory(path, buf, BUFSZ, &nread);
+#endif
 
       while ( nread > 0 )
       {
-        appendleaf( path, op->name );
+        char *const trunc_char = appendleaf( path, op->name );
         switch ( op->type )
         {
            case 2:
@@ -510,8 +701,8 @@ bool find_resource_directories(const char* const root_path)
              convert_dir_to_numeric_form(op->name);
              break;
         }
-        stripleaf( path );
-        op = (object *)(((int)(op->name)+strlen(op->name)+4)&~3);
+        stripleaf( trunc_char );
+        op = (object *)(((int)(op->name)+strlen(op->name)+STRUCTURE_ALIGNMENT+1)&~STRUCTURE_ALIGNMENT);
         nread -= 1;
       }
     } while ( offset != -1 );
@@ -537,7 +728,7 @@ converted to a numeric representation.
 territory number of 0 as expected within the specification.
    If there is an error, return false.
 */
-bool convert_dir_to_numeric_form(const char* const dir_name)
+static bool convert_dir_to_numeric_form(const char* const dir_name)
 {
   unsigned int loop=0;
   bool is_numeric = true;
@@ -554,25 +745,27 @@ bool convert_dir_to_numeric_form(const char* const dir_name)
 
   if (is_numeric) /* Split this into a series of two-digit country codes. */
   {
-    char tempstr[10];
+    char tempstr[4];
     unsigned int length = strlen(dir_name);
     unsigned int index = 0;
     unsigned int count = 0;
     do
     {
+      unsigned int eval_result;
       tempstr[0] = dir_name[index++];
       tempstr[1] = dir_name[index++];
       tempstr[2] = '\0';
-      printf ("Index = %d  number=%d\n", index, atoi(tempstr));
-      territory_numbers[num_of_territory_dirs][count++] = atoi(tempstr);
+      eval_result = (int) strtol(tempstr, NULL, 10);
+      territory_numbers[num_of_territory_dirs][count++] = eval_result;
+      printf ("Index = %d  number=%d\n", index, eval_result);
     }
     while (index < length); /* Until we reach the end of the string. */
     territory_numbers[num_of_territory_dirs][count++] = -1; /* Terminate the list. */
   }
   else /* Is a named country. Convert to a territory number. */
   {
-    unsigned int territory_number;
-    if (cstrcmp(dir_name, "Common") == 0) /* It is the common dir */
+    unsigned long territory_number;
+    if (Strcmp_ci(dir_name, "Common") == 0) /* It is the common dir */
     {
       territory_number = 0; /* Country code representing the Common dir */
     }
@@ -584,63 +777,14 @@ bool convert_dir_to_numeric_form(const char* const dir_name)
         success = false;
       }
     }
-    printf("Country code for %s is %d\n", dir_name, territory_number);
+    printf("Country code for %s is %ld\n", dir_name, territory_number);
     territory_numbers[num_of_territory_dirs][0] = territory_number;
     territory_numbers[num_of_territory_dirs][1] = -1; /* Terminate the list. */
   }
 
-  terrritory_directories[num_of_territory_dirs] = strdup(dir_name);
+  territory_directories[num_of_territory_dirs] = strdup(dir_name);
   /* Move onto the next part of the territory list. */
   num_of_territory_dirs++;
 
   return (success);
 }
-
-
-
-
-
-/*****************************************************************************
-* return_country_number
-*
-* This routine returns the country code number of a passed in country.
-*
-* Assumptions
-*  That the version of the International module has knowledge about the
-*   country that is being requested.
-*
-* Inputs
-*  country     : A string containing the name of the territory to be
-*                 converted.
-*
-* Outputs
-*  None
-*
-* Returns
-*  This routine returns the numeric form of the territory name passed in, or
-*   -1 if it is not a valid country. Note that build machines that wish
-*   to use utilities that inclue this routine should ensure that they have
-*   the latest version of the International module so that they can ensure
-*   they are aware of all the latest Name->number mappings.
-*
-*****************************************************************************/
-int return_country_number(const char* const country)
-{
-  _kernel_swi_regs reg;
-  int return_value = 0;
-
-  reg.r[1] = Service_International;
-  reg.r[2] = 0;              /* sub-reason code 0 */
-  reg.r[3] = (int)country;   /* The country we require (NULL terminated) */
-  reg.r[4] = 0;
-  _kernel_swi(OS_ServiceCall, &reg, &reg);
-
-  if (reg.r[1] != 0)
-    return_value = -1; /* Unrecognised country */
-  else
-    return_value = reg.r[4];
-
-  return (return_value);
-}
-
-

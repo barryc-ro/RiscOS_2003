@@ -1,0 +1,554 @@
+/*
+ * Messages module support code
+ *
+ * Copyright (C) Pace Micro Technology plc. 2001
+ */
+
+/* All of the code in this file is portable.  Please do not break this. */
+
+/* Using code in this file mandates that you link against CLX */
+
+
+/* Standard headers */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <ctype.h>
+
+/* CLX */
+#include "prgname.h"
+#include "err.h"
+
+#ifdef RISCOS
+#  include "kernel.h"
+#  include "swis.h"
+#  include "Global/Services.h"
+#endif
+
+/* Local */
+#include "shared.h"
+
+/* The name of the program being executed */
+char progname[32];
+/* The line number being processed */
+int line;
+
+/* Territory information */
+
+/* Arrays in which territories defined in the Env file can be stored. */
+unsigned long supported_territory_numbers[MAX_TERRITORIES];
+char* supported_territories[MAX_TERRITORIES];
+size_t num_territories;
+
+
+
+void shared_init(int argc, char *argv[])
+{
+  /* Set up the program name, initialise the error handling library */
+  err_init(program_name(argv[0], progname, sizeof(progname)));
+}
+
+
+/* Error reporting.  Does not return if fatal is non-zero */
+void report(int fatal, errtype_t type, const char *fmt, ...)
+{
+  const char *error_type[] = { "", "Warning", "Error", "Serious error" };
+  va_list ap;
+
+  fputs(progname, stderr);
+  if (type != err_INFO) {
+    if (line != -1) {
+      fprintf(stderr, ", line %i: %s: ", line, error_type[type]);
+    }
+    else {
+      fprintf(stderr, ", %s: ", error_type[type]);
+    }
+  }
+
+  va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
+
+  if (fatal) {
+    exit(fatal);
+  }
+}
+
+
+/* Memory management.  We provide a safe allocator which aborts the
+ * program if memory allocation fails, and an unsafe allocator which
+ * returns NULL if the allocation fails.
+ */
+void *unsafe_alloc(const size_t sz)
+{
+  return malloc(sz);
+}
+
+void *safe_alloc(const size_t sz)
+{
+  void *result = malloc(sz);
+  if (result == NULL) {
+    report(1, err_SERIOUS_ERROR, "out of memory (wanted %i bytes)", sz);
+  }
+
+  return result;
+}
+
+void free_block(void *block)
+{
+  free(block);
+}
+
+
+/* String management routines
+ *
+ * A lot of these routines are now leaf functions and thus have a much
+ * lower overhead than before.
+ *
+ */
+
+/* The string termination character - defaults to '\0' */
+static char terminator;
+
+char set_terminator(const char c)
+{
+  const char old_terminator = terminator;
+  terminator = c;
+  return old_terminator;
+}
+
+int str_is_eol_term(const char *s, const size_t idx)
+{
+  if (idx > 0 && s[idx-1] == 27) {
+    /* Not first character and we were in the middle of an escape sequence */
+    return 0;
+  }
+  else {
+    /* Did this character match the terminator? */
+    return s[idx] == terminator;
+  }
+}
+
+/* Routine to return the length of 's'.  Returns 0 if s is NULL */
+size_t str_len_term(const char *s)
+{
+  size_t length = 0;
+
+  if (s) {
+    while (s[length] != terminator) {
+      if (s[length++] == 27) {
+        /* Skip the escaped character */
+        ++length;
+      }
+    }
+  }
+
+  return length;
+}
+
+char *str_dup_term(const char *s)
+{
+  if (s == NULL) {
+    return NULL;
+  }
+  else {
+    const size_t length = str_len_term(s) + 1;
+    return memcpy(safe_alloc(length), s, length);
+  }
+}
+
+char *str_dup_sub_term(const char *s, size_t of, size_t size)
+{
+  if (s == NULL) {
+    return NULL;
+  }
+  else {
+    const size_t s_length = str_len_term(s);
+    if (of > s_length - 1) {
+      return NULL;
+    }
+    else {
+      char *result;
+      if (of + size >= s_length) {
+        size = s_length - of;
+      }
+
+      result = memcpy(safe_alloc(size + 1), s + of, size);
+      result[size] = terminator;
+
+      return result;
+    }
+  }
+}
+
+char *str_copy_term(char *s1, const char *s2)
+{
+  char *const result = s1;
+
+  for (;;) {
+    *s1 = *s2;
+
+    if (*s1 == 27) {
+      *++s1 = *++s2;
+    }
+    else if (*s1 == terminator) {
+      break;
+    }
+
+    ++s1;
+    ++s2;
+  }
+
+  return result;
+}
+
+char *str_copy_count_term(char *s1, const char *s2, size_t n)
+{
+  char *const result = s1;
+
+  while (n-- > 0) {
+    *s1 = *s2;
+
+    if (*s1 == 27) {
+      *++s1 = *++s2;
+    }
+    else if (*s1 == terminator) {
+      break;
+    }
+
+    ++s1;
+    ++s2;
+  }
+
+  return result;
+}
+
+char *str_concat_term(char *s1, const char *s2)
+{
+  (void) str_copy_term(s1 + str_len_term(s1), s2);
+  return s1;
+}
+
+int str_cmp_count_term(const char *s1, const char *s2, size_t n)
+{
+  while (n-- > 0) {
+    unsigned c1 = (unsigned) (*s1++);
+    unsigned c2 = (unsigned) (*s2++);
+    const signed int difference = c1 - c2;
+    if (difference != 0 || c1 == terminator || c2 == terminator)  {
+      return difference;
+    }
+  }
+
+  return 0;
+}
+
+/* NOTE: The semantics of this function are that searching for the terminator
+ *       works and returns a pointer to that terminator.  This preserves the
+ *       semantics of strchr() which the original routine was obviously
+ *       trying to emulate.
+ */
+char *str_find_term(const char *s1, int c)
+{
+  do {
+    if (*s1 == c) {
+      return (char *) s1;
+    }
+  } while (*s1++ != terminator);
+
+  return NULL;
+}
+
+
+void print_file_term(FILE *f, const char *s1, int expand_options)
+{
+  size_t idx;
+
+  for (idx = 0; !str_is_eol_term(s1, idx); ++idx) {
+    unsigned char s1idx = (unsigned char) s1[idx];
+    if (s1idx < ' ' || s1idx == 128) {
+      if (expand_options == 1) {
+        fprintf(f, "[%02x]", s1idx);
+        continue;
+      }
+      if (expand_options == 2) {
+        if (s1idx == '\0' && idx > 0 && s1[idx - 1] != 27) {
+          continue;
+        }
+      }
+    }
+
+    putc(s1idx, f);
+  }
+}
+
+char *read_file_str_term(char *s1, size_t max, FILE *f)
+{
+  size_t idx = 0;
+
+  s1[idx] = terminator;
+
+  if (f && !feof(f) && !ferror(f) && max > 0) {
+    int ch = fgetc(f);
+
+    while (!feof(f) && idx < max) {
+      int previous = ch;
+      s1[idx++] = ch;
+      ch = fgetc(f);
+      if (ch == terminator && previous != 27) {
+        s1[idx++] = ch;
+        break;
+      }
+    }
+  }
+
+  return s1;
+}
+
+
+/* Function to duplicate a string (allocate memory and copy bytewise)
+ *
+ * Parameters: const char *s1 - source string
+ * Result: char * - duplicate string (or NULL on failure or s1 NULL)
+ *
+ *
+ * Problems: None known
+ *
+ */
+
+char *str_dup(const char *s1)
+{
+  if (s1 == NULL) {
+    return NULL;
+  }
+  else {
+    const size_t length = strlen(s1) + 1;
+    char *const s2 = malloc(length);
+
+    if (s2 == NULL) return NULL;
+    return memcpy(s2, s1, length);
+  }
+}
+
+
+/* Function to compare two strings case insensitively
+ *
+ * Parameters: matches those of strcmp.
+ * Result: matches the exit conditions of strcmp.
+ *
+ *
+ * The conversions to unsigned int stop the compiler messing around with
+ * shifts all over the place whilst trying to promote the chars to int
+ * whilst retaining the sign.
+ *
+ * Problems: Choice of return value when strings do not match is based
+ *           upon character number rather than any alphabetic sorting.
+ *
+ */
+int cstrcmp(const char *first, const char *second)
+{
+  for (;;) {
+    unsigned int a = *first++;
+    unsigned int b = *second++;
+
+    if (a == 0) return -b;
+    if (a != b) {
+      unsigned int c = (unsigned int) tolower(a);
+      unsigned int d = (unsigned int) tolower(b);
+      signed int result = c - d;
+      if (result != 0) return result;
+    }
+  }
+}
+
+
+/*
+ * return the country code number of a passed in country.
+ * Returns -1 if it is not a valid country.  (Originally from srcbuild)
+*/
+static unsigned long auxiliary_return_country_number(const char* country)
+{
+  char *env = safe_alloc(strlen(country) + sizeof(TERR_NUM_PFX));
+  char *val;
+  unsigned long result = -1ul;
+
+  sprintf(env, "%s%s", TERR_NUM_PFX, country);
+  val = getenv(env);
+  free(env);
+  if (val) {
+    result = strtoul(val, NULL, 0);
+    if (result == 0) result = -1ul;
+  }
+
+#ifdef RISCOS
+  if (result == -1) {
+    int unclaimed;
+
+    /* Service_International, sub-reason code 0 */
+    if (_swix(OS_ServiceCall, _INR(1,4)|_OUT(1)|_OUT(4),
+        Service_International, 0, country, 0,
+        &unclaimed, &result)
+        || unclaimed)
+          result = -1ul;
+  }
+#endif
+
+  return result;
+}
+
+/*
+ * return the country code number of a passed in country.
+ * Returns -1 if it is not a valid country.
+ * This function maintains a cache of answers to avoid hammering the host
+ * system with service calls/getenv calls.
+ */
+unsigned long return_country_number(const char* country)
+{
+  static struct {
+    unsigned long num;
+    const char *country;
+  } country_cache[MAX_TERRITORIES + 1];
+  static int valid_entries = 0;
+  int i;
+
+  for (i = 0; i < valid_entries; ++i) {
+    if (cstrcmp(country, country_cache[i].country) == 0) {
+      return country_cache[i].num;
+    }
+  }
+
+  country_cache[i].num = auxiliary_return_country_number(country);
+
+  if (i < MAX_TERRITORIES) {
+    country_cache[i].country = str_dup(country);
+    ++valid_entries;
+  }
+
+  return country_cache[i].num;
+}
+
+
+/* Determine if a string is a number, and if so, return it in *val and return 1.
+ * Otherwise if it is not a number, return 0.   (Originally from srcbuild)
+ */
+static int parse_is_digits(const char *s, unsigned long *val)
+{
+  char *e;
+  *val = strtoul(s, &e, 0);
+  return (*e == '\0');
+}
+
+/* Parse a single territory entry.  We allow a territory name ("UK") or an assignment
+ * expression of form either "1=UK" or "UK=1", indicating that UK territory is territory
+ * number 1.
+ *
+ * Returns the territory number in terr_num and the name as the function result
+ * if string contains explicit assignment of territory number, otherwise 0
+ * is stored in terr_num.
+ *  Destroys 'territory'.
+ */
+char *parse_territory_entry(char *territory, unsigned long *terr_num)
+{
+  char *sep;
+  char *number = NULL;
+
+  *terr_num = 0ul;
+
+  sep = strchr(territory, '=');
+  if (sep) {
+    *sep++ = '\0';
+    if (parse_is_digits(territory, terr_num)) {
+      number = territory;
+      territory = sep;
+    }
+    else if (parse_is_digits(sep, terr_num)) {
+      number = sep;
+    }
+    else {
+      report(EXIT_FAILURE, err_ERROR, "Badly formed territory name %s=%s", territory, sep);
+    }
+  }
+
+  if (!number) {
+    *terr_num = return_country_number(territory);
+  }
+
+  return territory;
+}
+
+
+/* This routine parses any territory line passed in and strips out
+ * If the line is invalid, it returns false, otherwise it returns true.
+ * A line is considered invalid if it is empty or contains whitespace.
+ *
+ * Originally from srcbuild.
+ */
+bool parse_territories(char* territory_line, territory_callback cb, void *data)
+{
+  char *territory = NULL;
+  char *free_this_block = NULL;
+
+  if (territory_line == NULL) {
+    free_this_block = territory_line = str_dup(getenv(ENV_LOCALE_LIST));
+  }
+
+  if (territory_line == NULL || strlen(territory_line) < 1) {
+    /* Line must contain something */
+    free(free_this_block);
+    return (false);
+  }
+
+  territory = strtok(territory_line, ",");
+  while (territory)
+  {
+    unsigned long num;
+    territory = parse_territory_entry(territory, &num);
+    (*cb)(territory, num, data);
+    territory = strtok (NULL, ",");
+  }
+
+  free(free_this_block);
+  return (true);
+}
+
+void territory_preload(const char *name, unsigned long terr_num, void *data)
+{
+  if (num_territories >= MAX_TERRITORIES) {
+    report(EXIT_FAILURE, err_SERIOUS_ERROR, "Too many territories (max %i)\n", MAX_TERRITORIES);
+  }
+
+  supported_territories[num_territories] = str_dup(name);
+  supported_territory_numbers[num_territories] = terr_num;
+
+  ++num_territories;
+  (void) data;
+}
+
+#if 0
+/* See Sedgewick: Algorithms 2nd edition P 108 */
+static void sortstrings(char **a, int n)
+{
+    int  h, i, j;
+    char *v;
+
+    a--;
+    h = 1;
+    do
+        h = h * 3 + 1;
+    while (h <= n);
+    do {
+        h = h / 3;
+        for (i = h + 1; i <= n; i++) {
+            v = a[i];
+            j = i;
+            /* *a > *v or *a = *v and a > v */
+            while (j > h && (strcmp_lf(a[j-h], v) > 0)) {
+                a[j] = a[j-h];
+                j -= h;
+            }
+            a[j] = v;
+        }
+    } while (h > 1);
+}
+#endif

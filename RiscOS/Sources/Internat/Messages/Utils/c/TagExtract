@@ -7,12 +7,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 
-#include "swis.h"
+/* CLX */
+#include "err.h"
+#include "prgname.h"
+#include "wholefls.h"
+#include "host.h"
 
+#ifdef RISCOS
+#  include "swis.h"
+#else
+#  include <sys/stat.h>
+#  include <dirent.h>
+#endif
+
+#ifdef RISCOS
 #define BUFSZ   512
+#else
+#define BUFSZ   4096
+#endif
 
 #define FALSE   0
 #define TRUE    ~FALSE
@@ -30,19 +47,27 @@ char helpfile[ BUFSZ ];
 char text[ BUFSZ ];
 char token0[ BUFSZ ];
 
+char dir_sep_char;
+
 typedef unsigned int word;
 
 typedef struct
 {
+#ifdef RISCOS
         word loadaddr;
         word execaddr;
         word length;
         word attr;
+#endif
         word type;
         char name[1];
 } object;
 
+#ifdef RISCOS
 #define filetype( object )      (((object)->loadaddr>>8)&0xFFF)
+#else
+#define filetype( object )      (0xFFF)
+#endif
 
 
 /* Print an error and then exit.
@@ -52,10 +77,10 @@ error( int fatal, const char *str, ... )
 {
         va_list argp;
 
-        printf( fatal ? "Error: " : "Warning: " );
+        fprintf( stderr, fatal ? "Error: " : "Warning: " );
 
         va_start( argp, str );
-        vprintf( str, argp );
+        vfprintf( stderr, str, argp );
         va_end( argp );
 
         if ( fatal ) exit( 1 );
@@ -64,27 +89,48 @@ error( int fatal, const char *str, ... )
 int
 gettype( char *obj )
 {
-        int type;
-
-        _swi( OS_File, _IN(0)|_IN(1)|_OUT(0), 17, obj, &type );
-
-        return type;
+        return wf_objtype(obj);
 }
 
+/* Function to compare two strings case insensitively
+ *
+ * Originally: sbrodie
+ *
+ * Parameters: matches those of strcmp.
+ * Result: matches the exit conditions of strcmp.
+ *
+ *
+ * The conversions to unsigned int stop the compiler messing around with
+ * shifts all over the place whilst trying to promote the chars to int
+ * whilst retaining the sign.
+ *
+ * Problems: Choice of return value when strings do not match is based
+ *           upon character number rather than any alphabetic sorting.
+ *
+ */
 /* Match two strings ignoring case. A partial match is allowed ie. the
  * comparison stops as soon as either terminator is reached.
  */
-int
-strcmp_nocase( char *s1, char *s2 )
+int strcmp_nocase(const char *first_param, const char *second_param)
 {
-        while ( (*s1 != '\0') && (*s2 != '\0') )
-        {
-                char a = toupper( *s1++ );
-                char b = toupper( *s2++ );
-                if ( a < b ) return -1;
-                if ( a > b ) return 1;
-        };
-        return 0;
+        const unsigned char *first = (const unsigned char *) first_param;
+        const unsigned char *second = (const unsigned char *) second_param;
+
+        for (;;) {
+                unsigned int a = *first++;
+                unsigned int b = *second++;
+
+                /* only if either a or b is zero is the multiplication result 0 */
+                if ((a * b) == 0) return 0;
+
+                if (a != b) {
+                        /* avoid the tolower() call until we need it */
+                        unsigned int c = (unsigned int) tolower(a);
+                        unsigned int d = (unsigned int) tolower(b);
+                        signed int result = c - d;
+                        if (result != 0) return result;
+                }
+        }
 }
 
 /* Output a '\0' terminated string to the given file.
@@ -265,13 +311,16 @@ scan( char *obj, FILE *dictfp, FILE *helpfp )
         }
 }
 
-/* Append leaf to path.
+
+/* Append leaf to path, returning truncation point to remove it again
  */
-void
+char *
 appendleaf( char *path, char *leaf )
 {
-        strcat( path, "." );
-        strcat( path, leaf );
+        path = strchr(path, '\0');
+        *path = dir_sep_char;
+        (void) strcpy(path+1, leaf);
+        return path;
 }
 
 /* Strip leaf from path.
@@ -279,14 +328,86 @@ appendleaf( char *path, char *leaf )
 void
 stripleaf( char *path )
 {
-        char *sep = strrchr( path, '.' );
-
-        if ( sep != 0 ) *sep = '\0';
+        *path = '\0';
 }
+
+
+typedef struct {
+  object op[2];
+} align_test;
+
+#define STRUCTURE_ALIGNMENT \
+  ((offsetof(align_test, op[1]) - offsetof(align_test, op[0].name)) - 1)
+
+#ifndef RISCOS
+void load_unix_directory(char *dir, char *buf, size_t bufsize, int *nread)
+{
+  DIR *d = opendir(dir);
+  char *const leaf = appendleaf(dir, "") + 1;
+
+  *nread = 0;
+
+  if (!d) {
+    error(FATAL, "Unable to open directory '%s'\n", dir);
+  }
+
+  for (;;) {
+    struct dirent *de;
+    errno = 0;
+    de = readdir(d);
+    if (de == NULL) {
+      if (errno == 0) {
+        break;
+      }
+      else {
+        error( NON_FATAL, "Unable to read directory '%s': %s\n", dir, strerror(errno));
+        break;
+      }
+    }
+    else {
+      char *last_comma, *eos;
+      object *op = (object *) buf;
+      int namelen;
+
+      if (de->d_name[0] == '.' && (de->d_name[1] == '\0' || (de->d_name[1] == '.' && de->d_name[2] == '\0'))) {
+        continue;
+      }
+
+      /* Find length of leafname whilst copying it */
+      namelen = sprintf(leaf, "%s", de->d_name);
+
+      if (sizeof(*op) + namelen >= bufsize) {
+        error(FATAL, "out of buffer space in load_unix_directory (directory %s)", dir);
+      }
+
+      op->type = gettype(dir);
+      if (op->type != 1 && op->type != 2) {
+        continue;
+      }
+      last_comma = strrchr(leaf, ',');
+      if (last_comma != NULL && strtoul(last_comma+1, &eos, 16) != 0xfff && *eos == '\0') {
+        /* OK - it was a non-textual file or directory - dump it */
+      }
+      else {
+        buf = memcpy(op->name, de->d_name, namelen) + namelen;
+        do {
+          *buf++ = '\0';
+        } while (((int)buf)&STRUCTURE_ALIGNMENT);
+        bufsize -= (buf - (char *)op);
+        ++(*nread);
+      }
+    }
+  }
+
+  (void) closedir(d);
+  leaf[-1] = '\0';
+}
+#endif
 
 /* Descend into the given directory. Called recursively to scan a whole
  * directory structure.
  */
+#pragma check_stack
 void
 descend( char *path, FILE *dictfp, FILE *helpfp )
 {
@@ -300,8 +421,13 @@ descend( char *path, FILE *dictfp, FILE *helpfp )
                         object *op = (object *)buf;
                         int nread;
 
+#ifdef RISCOS
                         _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
                                 10, path, buf, 80, offset, BUFSZ, 0, &nread, &offset );
+#else
+                        offset = -1;
+                        load_unix_directory(path, buf, BUFSZ, &nread);
+#endif
 
                         while ( nread > 0 )
                         {
@@ -312,25 +438,26 @@ descend( char *path, FILE *dictfp, FILE *helpfp )
                                                 {
                                                         /* Text file found so scan it for tags.
                                                          */
-                                                        appendleaf( path, op->name );
+                                                        char *trunc_char = appendleaf( path, op->name );
                                                         scan( path, dictfp, helpfp );
-                                                        stripleaf( path );
+                                                        stripleaf( trunc_char );
                                                 }
                                                 break;
 
-                                        case 2:
-                                                /* Directory found so descend into it.
-                                                 */
-                                                appendleaf( path, op->name );
-                                                descend( path, dictfp, helpfp );
-                                                stripleaf( path );
-                                                break;
+                                        case 2: {
+                                                  /* Directory found so descend into it.
+                                                   */
+                                                  char *trunc_char = appendleaf( path, op->name );
+                                                  descend( path, dictfp, helpfp );
+                                                  stripleaf( trunc_char );
+                                                  break;
+                                                }
 
                                         default:
                                                 error( NON_FATAL, "Don't know how to process object type %d\n", op->type );
                                 }
 
-                                op = (object *)(((int)(op->name)+strlen(op->name)+4)&~3);
+                                op = (object *)(((int)(op->name)+strlen(op->name)+STRUCTURE_ALIGNMENT+1)&~STRUCTURE_ALIGNMENT);
                                 nread -= 1;
                         }
                 } while ( offset != -1 );
@@ -342,25 +469,35 @@ descend( char *path, FILE *dictfp, FILE *helpfp )
                 error( FATAL, "Couldn't allocate enough memory\n" );
         }
 }
+#pragma no_check_stack
 
 /* Canonicalise the given file name.
  */
 void
 canonicalise( char *src, char *dest, int bufsz )
 {
+#ifdef RISCOS
         _swi( OS_FSControl, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5),
                 37, src, dest, 0, 0, bufsz );
+#else
+        *dest = 0;
+        strncat(dest, src, bufsz);
+#endif
 }
 
 int
 main( int argc, char *argv[] )
 {
+//  printf("%d\n", STRUCTURE_ALIGNMENT);
+//  exit(0);
         if ( argc != 4 )
         {
                 printf( "Syntax: TagExtract <directory> <dict tags> <help tags>\n" );
         }
         else
         {
+                host_init();
+                dir_sep_char = host_dir_sep_char();
                 strcpy( dir, argv[1] );
                 canonicalise( argv[2], dictfile, BUFSZ );
                 canonicalise( argv[3], helpfile, BUFSZ );
