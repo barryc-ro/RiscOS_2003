@@ -149,6 +149,55 @@ static void	SetCallBackHighlightCheck( void* pw)
 	}
 
 
+#define	vsync_t_SCALE	256
+static	global_vsync_t = 0;
+	// This has a value equal to vsync_t_SCALE * average time between vsyncs in cs.
+	// This value is maintained by tEventVHandler_handler
+
+
+static Desk_bool	global_havereceivedvsync = Desk_bool_FALSE;
+	// We only move ptr in response to a PtrV when this is TRUE
+	// It is set to TRUE every VSync by EventVHandler_handler,
+	// and reset to FALSE by PtrV handler.
+	// This avoids extra pointer movements in response to 
+	// extra PtrV vectors that the kernel seems to make.
+
+
+int	EventVHandler_handler( _kernel_swi_regs* r, void* pw)
+// Called on each VSync event.
+	{
+	static	int	initial_its = 0;
+	int		dt;
+	int		t = clock();
+	
+	if ( mouse_lasttime==0)	initial_its = 0;	// Start from scratch - mouse_lasttime is reset to 0 whenever emulation starts again.
+	
+	if ( initial_its<10)	// Do a quick average in the first 10 vsyncs.
+		{
+		initial_its++;
+		if ( initial_its==1)
+			{
+			mouse_lasttime = t;
+			global_vsync_t = 0;
+			}
+		else	{
+			global_vsync_t = vsync_t_SCALE * (t-mouse_lasttime)/initial_its;
+			}
+		}
+	
+	else	{		// After the first 10 vsyncs, keep a running average.
+		dt = t-mouse_lasttime;
+		mouse_lasttime = t;
+		global_vsync_t = dt + (vsync_t_SCALE-1)*global_vsync_t/vsync_t_SCALE;
+		global_havereceivedvsync	= Desk_bool_TRUE;
+		}
+	
+	return 1;
+	Desk_UNUSED( r);
+	Desk_UNUSED( pw);
+	}
+
+
 int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 	{
 	MemCheck_checking	oldchecking = MemCheck_SetChecking( 0, 0);
@@ -170,74 +219,31 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 			// mouse_dpos is not actually used - when highlighting is moved, the mouse is
 			// moved directly, as moving here is subsequently scaled by Wimp.
 			// Note that this moving of highlight is still done even when paused.
-			if ( r->r[2]!=0 || r->r[3]!=0)	{
+			if ( r->r[2]!=0 || r->r[3]!=0)	SetCallBackHighlightCheck( pw);
 				// Mouse has already moved, so we should check location of pointer and move/remove highlight
-				/*
-				if ( !callback_set_for_highlightcheck)	{
-					_swix( OS_AddCallBack, _INR(0,1), HighlighCheck, pw);
-					callback_set_for_highlightcheck = Desk_bool_TRUE;
-					}
-				*/
-				SetCallBackHighlightCheck( pw);
-				
-				}
 			}
 		
-		if ( !IconHigh_globals.paused && IconHigh_globals.currentemulation==IconHigh_newemulation_default_POINTER)	{
+		if ( global_havereceivedvsync && !IconHigh_globals.paused && IconHigh_globals.currentemulation==IconHigh_newemulation_default_POINTER)
+			{
+			global_havereceivedvsync = Desk_bool_FALSE;
 			
-			clock_t		t	= clock();
-			int		dt	= (mouse_lasttime) ? t - mouse_lasttime : 0;
+			if ( keydown_left)	dpos.x -= global_vsync_t * mouse_speed / mousespeed_SCALE / vsync_t_SCALE;
+			if ( keydown_right)	dpos.x += global_vsync_t * mouse_speed / mousespeed_SCALE / vsync_t_SCALE;
+			if ( keydown_down)	dpos.y -= global_vsync_t * mouse_speed / mousespeed_SCALE / vsync_t_SCALE;
+			if ( keydown_up)	dpos.y += global_vsync_t * mouse_speed / mousespeed_SCALE / vsync_t_SCALE;
 			
-			mouse_lasttime = t;
-			
-			if ( dt<0 || dt>10)	dt=0;	// For when clock() wraps (after 6 months I think 8)
-			
-			if ( dt>0)	{
-				
-				if ( keydown_left)	dpos.x -= dt * mouse_speed / mousespeed_SCALE;
-				if ( keydown_right)	dpos.x += dt * mouse_speed / mousespeed_SCALE;
-				if ( keydown_down)	dpos.y -= dt * mouse_speed / mousespeed_SCALE;
-				if ( keydown_up)	dpos.y += dt * mouse_speed / mousespeed_SCALE;
-				
-				if ( keydown_left || keydown_right || keydown_down || keydown_up)	{
-					if ( mouse_speed < mouse_speed_max)	mouse_speed += mouse_accel;
-					}
-				else	{
-					mouse_speed = mouse_speed_min;
-					// Stops accelaration immediately if all buttons are released.
-					}
-				
-					{
-					#ifdef TIME_PTRV
-						{
-						static unsigned int	last_t = 0;
-						
-						unsigned int	t;
-						unsigned int	dt;
-						
-						t = Timer1_GetTime();
-						
-						dt = t-last_t;
-						last_t = t;
-						
-						if ( time_ptrv_bufferend==NULL)	time_ptrv_bufferend = time_ptrv_buffer;
-						
-						time_ptrv_bufferend += sprintf( time_ptrv_bufferend, "dt=%8i	stack approx= 0x%p  %s\n", 
-							dt, 
-							r, 
-							(dt < 30000) ? "*" : ""
-							);
-						if ( time_ptrv_bufferend-time_ptrv_buffer > 256)	{
-							_swix( OS_AddCallBack, _INR(0,1), SaveDtInfo, pw);
-							}
-						}
-					#endif
-						
-					r->r[2] += dpos.x;
-					r->r[3] += dpos.y;
-					}
-				IconHigh_globals.lastmovement = dpos;
+			if ( keydown_left || keydown_right || keydown_down || keydown_up)	{
+				if ( mouse_speed < mouse_speed_max)	mouse_speed += mouse_accel;
 				}
+			else	{
+				mouse_speed = mouse_speed_min;
+				// Stops accelaration immediately if all buttons are released.
+				}
+			
+			r->r[2] += dpos.x;
+			r->r[3] += dpos.y;
+			
+			IconHigh_globals.lastmovement = dpos;
 			}
 		
 		MemCheck_RestoreChecking( oldchecking);
@@ -820,6 +826,9 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 	_swix( OS_Claim, _INR(0,2), 0x13, Pointer_KeyV, pw);
 	_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);
 	
+	_swix( OS_Claim, _INR(0,2), 0x10, EventVHandler, pw);
+	_swix( OS_Byte, _INR(0,1), 14, 4/*VSync*/);	// Enable VSync events.
+	
 	_swix( Filter_RegisterPreFilter, _INR(0,3), 
 		filtername_pre_ptr,
 		PtrPreFilter,
@@ -930,6 +939,9 @@ void	EmulationPointerStop( void* pw)
 	
 	// This is to clean up any callafter handlers for cancelling IRHandset cursor presses.
 	_swix( OS_RemoveTickerEvent, _INR(0,1), CancelIRKeyDown, pw);
+	
+	_swix( OS_Release, _INR(0,2), 0x10, EventVHandler, pw);
+	_swix( OS_Byte, _INR(0,1), 13, 4/*VSync*/);	// Disable VSync events.
 	
 	_swix( OS_RemoveCallBack, _INR(0,1), HighlighCheck, pw);
 	_swix( OS_RemoveCallBack, _INR(0,1), HighlightInsV2, pw);
