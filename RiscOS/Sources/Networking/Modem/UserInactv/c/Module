@@ -2,9 +2,14 @@
 /* File:    Module.c                                                    */
 /* Purpose: RISC OS module related code.                                */
 /*                                                                      */
-/* Author:  David Cotton <mailto:david.cotton@pacemicro.com             */
+/* Author:  David Cotton <mailto:david.cotton@pacemicro.com>            */
+/* Updated: Justin Fletcher <mailto:justin.fletcher@pace.co.uk>         */
 /* History: 0.01  2000-01-07                                            */
 /*                Initial version.                                      */
+/*          0.04  07 Aug 2000                                           */
+/*                Reorganised resets and period setting calls           */
+/*                Added 'StayAwake' call to notify the monitor that     */
+/*                there are still things going on                       */
 /************************************************************************/
 
 /* ANSI Includes */
@@ -12,6 +17,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <time.h>
 
 /* Risc OS Includes */
 #include "kernel.h"
@@ -38,6 +44,7 @@ static int  inactivity_period = 0; /* Default is off */
 static char mouse_status[5];
 #endif /* IGNORE_POINTER_MOVEMENTS */
 static bool module_active = false;
+static unsigned int laststayawake=0;
 
 /* Forward prototypes */
 static _kernel_oserror *setcallafter(unsigned int seconds);
@@ -45,8 +52,8 @@ static _kernel_oserror *setcallback(void);
 static _kernel_oserror *removecallback(void);
 static void module_releasev(void);
 static _kernel_oserror *module_claimv(void);
-static _kernel_oserror *module_event_disable(void);
-static _kernel_oserror *module_event_enable(void);
+static _kernel_oserror *module_events_disable(void);
+static _kernel_oserror *module_events_enable(void);
 static int get_nvram_tag_numeric(char* tag);
 char* get_nvram_tag_string(char* tag);
 
@@ -57,6 +64,83 @@ char* get_nvram_tag_string(char* tag);
 #define Event_Enable         14
 #define Event_Disable        13
 
+#define SCI_REMOVED  1 /* Card has been removed */
+#define SCI_INSERTED  2 /* Card has been inserted */
+#define SCI_TRANS_END  3 /* Locked transaction has ended so other channels are free to access the card */
+#define SCI_CMD_DONE  4 /* Previous command completed */
+#define SCI_ERROR  5 /* An error condition has been detected for the card */
+#define SCI_REMOVED2  6 /* Card has been removed */
+#define SCI_INSERTED2  7 /* Card has been inserted */
+#define SCI_BADINSERT  8 /* Badcard/foreign object inserted in slot 1 */
+#define SCI_BADINSERT2  9 /* Badcard/foreign object inserted in slot 2 */
+
+#define ERROR_BASE    0x8f8f00 /* Allocated */
+
+static _kernel_oserror err_badpollperiod = {
+  ERROR_BASE, "The period can only be 0 seconds or between 60 and 3600 seconds"
+};
+
+/******************************************************************
+ Function:     reset_timer
+ Description:  Reset the timer to the inactivity period because
+               something has just happened to say that the machine
+               is in use
+ Parameters:   none
+ Returns:      none
+ ******************************************************************/
+static void reset_timer(void)
+{
+  if (module_active)
+  {
+    dprintf(("", "reset_timer(): module active, resetting timer to %d seconds\n", inactivity_period));
+    setcallafter(inactivity_period); /* Set a callafter for the required time period */
+  }
+  else
+  {
+    dprintf(("", "reset_timer(): module NOT active\n", inactivity_period));
+  }
+}
+
+/******************************************************************
+ Function:     set_inactivity_period
+ Description:  Sets the inactivity period, returning an error if
+               there is a fault.
+ Parameters:   period = the number of seconds of inactivity before
+                        disconnecting. 0 will disable the checks.
+ Returns:      error if it failed, NULL, otherwise
+ ******************************************************************/
+static _kernel_oserror *set_inactivity_period(int new_period)
+{
+  _kernel_oserror *err=NULL;
+  if (new_period == 0)
+  {
+    module_active = false;
+  }
+  else if (new_period < 60 || new_period > 3600)
+  {
+    err=&err_badpollperiod;
+  }
+  else
+  {
+    module_active = true;
+    inactivity_period = new_period;
+  }
+
+  /* Set the initial callafter */
+  if (!err)
+  {
+    if (module_active)
+    {
+      err=setcallafter(inactivity_period);
+    }
+    else
+    {
+      err=setcallafter(0);
+    }
+  }
+
+  return err;
+}
 
 
 
@@ -98,6 +182,9 @@ _kernel_oserror *module_initialise (const char *cmd_tail, int podule_base, void 
   debug_set_stamp_debug(TRUE);
   debug_atexit ();
 
+  /* We start out inactive */
+  module_active = false;
+
   /* Set a CallEvery for every 20 centiseconds. */
   r.r[0] = (int) 19; /* Call takes the value in centiseconds -1, hence 19 */
   r.r[1] = (int) ticker_event_veneer;
@@ -108,35 +195,28 @@ _kernel_oserror *module_initialise (const char *cmd_tail, int podule_base, void 
   nvram_tag_contents = get_nvram_tag_numeric("InactivityTimeout");
   if (nvram_tag_contents >= 0) /* Tag exists */
   {
+    _kernel_oserror *temperr;
     int new_period = nvram_tag_contents;
     dprintf(("", "module_initialise(): New period requested is %d.\n", new_period));
-    if (new_period == 0)
-    {
-      module_active = false;
-    }
-    if (new_period != 0 && (new_period < 60 || new_period > 3600))
-    {
-      printf ("The period can only be 0 seconds or between 60 and 3600 seconds.\n");
-    }
-    else
-    {
-      module_active = true;
-      inactivity_period = new_period;
-    }
+    temperr=set_inactivity_period(new_period);
   }
   else
   {
+    _kernel_oserror *temperr;
     dprintf(("", "module_initialise(): NVRAM tag InactivityTimeout is unset.\n"));
-    module_active = false;
-    inactivity_period = 0;
+    temperr=set_inactivity_period(0);
   }
-
-  /* Set the initial callafter */
-  setcallafter(inactivity_period);
 
   /* Claim the required events */
   err = module_claimv();
-  err = module_event_enable();
+  if (!err)
+  {
+    err = module_events_enable();
+    if (err)
+    {
+      module_releasev();
+    }
+  }
 
   dprintf(("", "module_initialise(): Finished.\n"));
 
@@ -175,10 +255,66 @@ _kernel_oserror *module_finalise (int fatal, int podule, void *pw)
   removecallback();
 
   /* Release the events... */
-  module_event_disable();
+  module_events_disable();
   module_releasev();
 
   return  (err);
+}
+
+
+
+
+/*********************************************************************************/
+/* module_swi_handler                                                            */
+/*                                                                               */
+/* Module SWI handler                                                            */
+/*                                                                               */
+/* Parameters:  int                swi_offset                                    */
+/*              _kernel_swi_regs * regs                                          */
+/*              void*              pw                                            */
+/*                                                                               */
+/* Returns:     _kernel_oserror*                                                 */
+/*                                                                               */
+/*********************************************************************************/
+_kernel_oserror *module_swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *err=NULL;
+  NOT_USED(pw);
+  
+  switch (swi_offset)
+  {
+    case UserInactivity_StayAwake - UserInactivity_00:
+      /* r0 = flags
+               reserved, all must be 0
+         <= ARP
+         
+         Resets the timer as if a key had been pressed or the mouse moved
+      */
+      laststayawake=clock();
+      reset_timer();
+      break;
+      
+    case UserInactivity_Period - UserInactivity_00:
+      /* => r0 = flags
+               reserved, all must be 0
+            r1 = period to use, or -1 to read period
+         <= r1 = last poll period, or 0 if disabled
+         
+         Changes the inactivity period, or reads it
+      */
+      {
+        int last_period;
+        if (module_active)
+          last_period=inactivity_period;
+        else
+          last_period=0;
+        if (r->r[1]!=-1)
+          err=set_inactivity_period(r->r[1]);
+        r->r[1]=last_period;
+      }
+      break;
+  }
+  return err;
 }
 
 
@@ -206,6 +342,20 @@ _kernel_oserror *module_cmd_handler(const char *arg_string, int argc, int cmd_no
 
   switch (cmd_no)
   {
+    /* The * command below displays the time since the last StayAwake was issued (for debugging purposes) */
+    case CMD_UserInactivity_LastStayAwake:
+      if (laststayawake==0)
+      {
+        printf("UserInactivity_StayAwake has not been issued.\n");
+      }
+      else
+      {
+        unsigned int now=clock();
+        int csecs=(now-laststayawake)*100/CLOCKS_PER_SEC;
+        printf("UserInactivity_StayAwake issued %d.%02d seconds ago.\n",csecs/100,csecs%100);
+      }
+      break;
+ 
     /* The * command below deals with attempts to alter the period of user inactivity needed before the line drops. */
     case CMD_UserInactivity_Period:
       if (argc == 0) /* No arguments passed in - just display the current setting. */
@@ -214,25 +364,15 @@ _kernel_oserror *module_cmd_handler(const char *arg_string, int argc, int cmd_no
       }
       if (argc > 1)
       {
-        printf("You cannot pass more than one parameter into The UserInactivity module.\n");
+        printf("You cannot pass more than one parameter into the UserInactivity module.\n");
       }
       if (argc == 1)
       {
+        _kernel_oserror *err=NULL;
         dprintf(("module_cmd_handler(): Parameter passed in is %s\n", arg_string));
         new_period=atoi(arg_string);
-        if (new_period == 0)
-        {
-          module_active = false;
-        }
-        if (new_period != 0 && (new_period < 60 || new_period > 3600))
-        {
-          printf ("The period can only be 0 seconds or between 60 and 3600 seconds.\n");
-        }
-        else
-        {
-          module_active = true;
-          inactivity_period = new_period;
-        }
+        err=set_inactivity_period(new_period);
+        return err;
       }
     break;
   }
@@ -354,12 +494,17 @@ _kernel_oserror *setcallafter(unsigned int seconds)
   /* Cancel any previous callafter */
   _swix(OS_RemoveTickerEvent, _INR(0, 1), module_callafter_entry, module_wsp);      /* ...then remove the event... */
 
-  /* Set callafter */
-  r.r[0] = seconds * 100;
-  r.r[1] = (int) module_callafter_entry;
-  r.r[2] = (int) module_wsp;
-  return_val = _kernel_swi(OS_CallAfter, &r, &r);
-  return (return_val);
+  if (seconds!=0)
+  {
+    /* Set callafter */
+    r.r[0] = seconds * 100;
+    r.r[1] = (int) module_callafter_entry;
+    r.r[2] = (int) module_wsp;
+    return_val = _kernel_swi(OS_CallAfter, &r, &r);
+    return (return_val);
+  }
+  else
+    return NULL;
 }
 
 
@@ -408,11 +553,8 @@ int ticker_event(_kernel_swi_regs *rr, void *pw)
     mouse_status[1] = osw_data[2];
     mouse_status[2] = osw_data[3];
     mouse_status[3] = osw_data[4];
-    if (module_active)
-    {
-      dprintf(("", "Mouse position changed. {%d %d %d %d}. Setting a callafter for %d seconds.\n", mouse_status[0], mouse_status[1], mouse_status[2], mouse_status[3], inactivity_period));
-      setcallafter(inactivity_period); // Set a callafter for the required time period
-    }
+    dprintf(("", "Mouse position changed. {%d %d %d %d}. reseting timer.\n", mouse_status[0], mouse_status[1], mouse_status[2], mouse_status[3]));
+    reset_timer();
   }
 #endif /* IGNORE_POINTER_MOVEMENTS */
 
@@ -485,7 +627,7 @@ static int get_nvram_tag_numeric(char* tag)
   dprintf (("", "get_nvram_tag_numeric()\n"));
 
   err = _swix(NVRAM_Read, _INR(0,1)|_OUT(0), tag, 0, &tag_size);
-  if (tag_size > 0)
+  if (tag_size > 0 && tag_size <= 4)
   {
     dprintf (("", "get_nvram_tag_numeric(): Tag size is %d\n", tag_size));
     err = _swix(NVRAM_Read, _INR(0,2), tag, &tag_contents, 0);
@@ -512,27 +654,52 @@ _kernel_oserror *module_claimv(void)
 
 
 
-_kernel_oserror *module_event_enable(void)
+_kernel_oserror *module_events_enable(void)
 {
+  _kernel_oserror *err;
   _kernel_swi_regs r;
-  dprintf(("", "module_event_enable()\n"));
+  dprintf(("", "module_events_enable()\n"));
 
   r.r[0] = Event_Enable;
   r.r[1] = Event_Keyboard;
-  return (_kernel_swi(OS_Byte, &r, &r));
+  err=_kernel_swi(OS_Byte, &r, &r);
+  
+  if (!err)
+  {
+    r.r[0] = Event_Enable;
+    r.r[1] = Event_Expansion;
+    err=_kernel_swi(OS_Byte, &r, &r);
+    if (err)
+    {
+      r.r[0] = Event_Disable;
+      r.r[1] = Event_Keyboard;
+      _kernel_swi(OS_Byte, &r, &r);
+    }
+  }
+  return err;
 }
 
 
 
 
-_kernel_oserror *module_event_disable(void)
+_kernel_oserror *module_events_disable(void)
 {
+  _kernel_oserror *err;
   _kernel_swi_regs r;
-  dprintf(("", "module_event_disable()\n"));
+  dprintf(("", "module_events_disable()\n"));
 
   r.r[0] = Event_Disable;
   r.r[1] = Event_Keyboard;
-  return (_kernel_swi(OS_Byte, &r, &r));
+  err=_kernel_swi(OS_Byte, &r, &r);
+
+  r.r[0] = Event_Disable;
+  r.r[1] = Event_Expansion;
+  if (!err)
+    err=_kernel_swi(OS_Byte, &r, &r);
+  else
+    _kernel_swi(OS_Byte, &r, &r);
+
+  return err;
 }
 
 
@@ -542,8 +709,8 @@ void module_releasev(void)
   _kernel_swi_regs r;
   dprintf(("", "module_releasev()\n"));
 
-  /* Disable the event */
-  module_event_disable();
+  /* Disable the events */
+  module_events_disable();
 
   /* Release the vector */
   r.r[0] = EventV;
@@ -563,16 +730,25 @@ int module_event_handler(_kernel_swi_regs *r, void *pw)
   if (r->r[0] == Event_Keyboard)
   {
     /* We only reset the callafter if the module is active - this essentially ignores keypresses when in standby */
-    if (module_active)
-    {
-      dprintf(("", "module_event_handler(): Key_Pressed event received. Setting a callafter for %d seconds.\n", inactivity_period));
-      setcallafter(inactivity_period); /* Set a callafter for the required time period */
-      return (1);
-    }
-
+    dprintf(("", "module_event_handler(): Key_Pressed event received. resetting timer\n", inactivity_period));
+    reset_timer();
     return(1);
   }
+  else if (r->r[0] == Event_Expansion)
+  {
+    if (r->r[1]==Event_Expansion_SCTransport)
+    {
+      int reason=r->r[3];
+      if (reason == SCI_REMOVED ||
+          reason == SCI_INSERTED ||
+          reason == SCI_REMOVED2 ||
+          reason == SCI_INSERTED2)
+      {
+        reset_timer();
+        return(1);
+      }
+    }
+  }
 
-    return(1);
+  return(1);
 }
-
