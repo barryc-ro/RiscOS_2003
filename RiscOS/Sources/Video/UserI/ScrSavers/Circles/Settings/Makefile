@@ -103,3 +103,12 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.settings:	c.settings
+o.settings:	C:h.swis
+o.settings:	C:h.kernel
+o.settings:	tbox:h.toolbox
+o.settings:	tbox:h.wimp
+o.settings:	tbox:h.event
+o.settings:	tbox:h.window
+o.settings:	tbox:h.gadgets
+o.settings:	tbox:h.wimplib

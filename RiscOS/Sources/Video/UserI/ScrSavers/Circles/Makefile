@@ -53,7 +53,8 @@ FILES =\
  ${LDIR}.Res
 
 OBJS =\
-  o.circles
+  o.circles \
+  o.saver
 
 #
 # Rule patterns
