@@ -149,7 +149,7 @@ LIBSD = \
  $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
- $(ELIB)\
+ $(ELIB)d\
  $(EXTRALIBS)\
  $(C++LIB)\
  $(CLIB)\
