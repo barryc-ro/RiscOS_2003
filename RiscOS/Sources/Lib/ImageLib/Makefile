@@ -6,7 +6,8 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 1997-06-25 BAL          Created.
-# 1999-03-09 ADH          'ImageLib:' changed to '${LIBDIR}.ImageLib.'
+# 1999-03-09 ADH          'ImageLib:' changed to '${LIBDIR}.ImageLib.'.
+# 2001-06-13 ADH          Wipes o and z directories as well as contents.
 #
 
 #
@@ -136,8 +137,8 @@ ${JPEGLIB}:
 export: export_${PHASE}
 
 clean:
-        ${WIPE}		o.*		${WFLAGS}
-        ${WIPE}		z.*		${WFLAGS}
+        ${WIPE}		o		${WFLAGS}
+        ${WIPE}		z		${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 clean_all:
@@ -148,8 +149,8 @@ clean_all:
 	amu		clean
 	back
         @echo ${COMPONENT}: cleaned
-        ${WIPE}		o.*		${WFLAGS}
-        ${WIPE}		z.*		${WFLAGS}
+        ${WIPE}		o		${WFLAGS}
+        ${WIPE}		z		${WFLAGS}
 
 export_hdrs: h.imagetrans o.dirs
 	${CP} h.imagetrans	${LIBDIR}.ImageLib.h.imagetrans	~CFLNR~V

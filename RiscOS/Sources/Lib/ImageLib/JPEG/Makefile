@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 1998-03-16 KJB          Created.
+# 2001-06-13 ADH          Wipes o and z directories as well as contents.
 #
 
 #
@@ -133,8 +134,8 @@ all:	${COMPONENT} ${COMPONENTZ}
 # RISC OS ROM build rules:
 #
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} z.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} z ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 o.local_dirs:
@@ -153,3 +154,46 @@ ${TARGETZ}: ${OBJSZ} o.local_dirs
 
 
 # Dynamic dependencies:
+o.jdapimin: c.jdapimin h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdapistd: c.jdapistd h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdtrans: c.jdtrans h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdmaster: c.jdmaster h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdinput: c.jdinput h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdmarker: c.jdmarker h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdhuff: c.jdhuff h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jdhuff
+o.jdphuff: c.jdphuff h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jdhuff
+o.jdmainct: c.jdmainct h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdcoefct: c.jdcoefct h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdpostct: c.jdpostct h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jddctmgr: c.jddctmgr h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jdct
+o.jdsample: c.jdsample h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdcolor: c.jdcolor h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jquant2: c.jquant2 h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jdmerge: c.jdmerge h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jcomapi: c.jcomapi h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jutils: c.jutils h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+o.jerror: c.jerror h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jversion h.jerror h.jerror
+o.jmemmgr: c.jmemmgr h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jmemsys
+o.jmemflex: c.jmemflex h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jmemsys C:h.flex
+z.jdapimin: c.jdapimin h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdapistd: c.jdapistd h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdtrans: c.jdtrans h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdmaster: c.jdmaster h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdinput: c.jdinput h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdmarker: c.jdmarker h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdhuff: c.jdhuff h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jdhuff
+z.jdphuff: c.jdphuff h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jdhuff
+z.jdmainct: c.jdmainct h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdcoefct: c.jdcoefct h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdpostct: c.jdpostct h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jddctmgr: c.jddctmgr h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jdct
+z.jidctint: s.jidctint
+z.jdsample: c.jdsample h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdcolor: c.jdcolor h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jquant2: c.jquant2 h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jdmerge: c.jdmerge h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jcomapi: c.jcomapi h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jutils: c.jutils h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror
+z.jerror: c.jerror h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jversion h.jerror h.jerror
+z.jmemmgr: c.jmemmgr h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jmemsys
+z.jmemflex: c.jmemflex h.jinclude h.jconfig h.jpeglib h.jmorecfg h.jpegint h.jerror h.jmemsys C:h.flex

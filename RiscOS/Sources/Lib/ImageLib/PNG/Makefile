@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 1997-06-25 BAL          Created.
+# 2001-06-13 ADH          Wipes o and z directories as well as contents.
 #
 
 #
@@ -135,8 +136,8 @@ all:	${COMPONENT} ${COMPONENTZ}
 # RISC OS ROM build rules:
 #
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} z.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} z ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 local_dirs:
