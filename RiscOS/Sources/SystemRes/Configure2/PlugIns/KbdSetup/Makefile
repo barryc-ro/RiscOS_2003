@@ -11,6 +11,7 @@
 # 09-Dec-97      BJGA   Split Main.c, and modified to use shared Common library
 # 17-Dec-97      BJGA   Tidied up
 # 06-Apr-98      BJGA   Replaced Common directory with ConfigLib
+# 27-Aug-98      BJGA   Removed file "Blank" - no longer needed
 #
 
 #
@@ -58,7 +59,6 @@ FILES=\
  ${LDIR}.!Run\
  ${RDIR}.!RunImage\
  ${RDIR}.!Sprites22\
- ${LDIR}.Blank\
  ${RDIR}.CoSprite22\
  ${LDIR}.Messages\
  ${LDIR}.Res\
@@ -86,7 +86,6 @@ install: ${FILES}
         ${CP} ${LDIR}.!Run       ${INSTDIR}.!Run       ${CPFLAGS}
         ${CP} ${RDIR}.!RunImage  ${INSTDIR}.!RunImage  ${CPFLAGS}
         ${CP} ${RDIR}.!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
-        ${CP} ${LDIR}.Blank      ${INSTDIR}.Blank      ${CPFLAGS}
         ${CP} ${RDIR}.CoSprite22 ${INSTDIR}.CoSprite22 ${CPFLAGS}
         ${CP} ${LDIR}.Messages   ${INSTDIR}.Messages   ${CPFLAGS}
         ${CP} ${LDIR}.Res        ${INSTDIR}.Res        ${CPFLAGS}
