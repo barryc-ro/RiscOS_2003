@@ -9,6 +9,7 @@
 # 13-Feb-95  TMD	  Added install option for making !M-Code21.
 # 17-Mar-95  TMD	  Delete CP from all target.
 # 05-May-95  TMD	  Add Doc.MPEGPlayer to installed list
+# 10-Mar-97  TMD	  Add option to make system-only version
 #
 
 #
@@ -62,10 +63,39 @@ clean:
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
 
+sysonly: rm.SysOnly.MPEGCtrl
+	@echo System-stream only version of MPEGCtrl built
+
+rm.SysOnly.MPEGCtrl: ${SOURCE} Hdr.SysOnly
+	${AS} ${ASFLAGS} -From Hdr.SysOnly -To $@
+
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rm.SysOnly.MPEGCtrl: Hdr.GetAll
+rm.SysOnly.MPEGCtrl: Hdr:ListOpts
+rm.SysOnly.MPEGCtrl: Hdr:Macros
+rm.SysOnly.MPEGCtrl: Hdr:System
+rm.SysOnly.MPEGCtrl: Hdr:SWIs
+rm.SysOnly.MPEGCtrl: Hdr:CPU.Generic26
+rm.SysOnly.MPEGCtrl: Hdr:IO.GenericIO
+rm.SysOnly.MPEGCtrl: Hdr:RISCOS
+rm.SysOnly.MPEGCtrl: Hdr:CMOS
+rm.SysOnly.MPEGCtrl: Hdr:ModHand
+rm.SysOnly.MPEGCtrl: Hdr:Services
+rm.SysOnly.MPEGCtrl: Hdr:Proc
+rm.SysOnly.MPEGCtrl: Hdr:FSNumbers
+rm.SysOnly.MPEGCtrl: Hdr:NewErrors
+rm.SysOnly.MPEGCtrl: Hdr:MsgTrans
+rm.SysOnly.MPEGCtrl: Hdr:Debug
+rm.SysOnly.MPEGCtrl: Hdr:VduExt
+rm.SysOnly.MPEGCtrl: Hdr:Podule
+rm.SysOnly.MPEGCtrl: Hdr:DevNos
+rm.SysOnly.MPEGCtrl: Hdr:MPEGCtrl
+rm.SysOnly.MPEGCtrl: Hdr:MPEGVideo
+rm.SysOnly.MPEGCtrl: Hdr:MPEGAudio
+rm.SysOnly.MPEGCtrl: s.Module
 rm.MPEGCtrl: Hdr:ListOpts
 rm.MPEGCtrl: Hdr:Macros
 rm.MPEGCtrl: Hdr:System

@@ -34,6 +34,12 @@
 ; 08-Feb-96  TMD  0.36		Fix FreeBuffer routine not setting up r12 when a routine address is specified rather than a SWI.
 ; 07-Mar-96  TMD  0.37		Added MPEGControl_Stats SWI
 ; 08-Jul-96  TMD  0.38		Added support for DataReturned statistic
+; 16-Jul-96  TMD  0.39		(Conditionally) remove checks for video-only or audio-only streams, for testing by Siemens
+; 01-Nov-96  TMD  0.40		Make InternalStack consistent with MPEGTrans - ie only allow 2K for coroutine stack, which
+;				leaves 6K for stack-hungry C code.
+; 27-Feb-97  TMD  0.41		Created variant that copies the coroutine stack away each time into an RMA block.
+; 10-Mar-97  TMD  0.42		Don't do MODE12 on the error from (De)RegisterProgramElementHandler SWIs
+; 16-May-97  TMD  0.43		(Conditionally) support MPEG-2 Program Streams
 ;
 
         LEADR   Module_LoadAddr
@@ -55,10 +61,18 @@ ErrorRecovery   SETL    {TRUE}                          ; attempt to recover fro
 		GBLL	ICLDebug
 ICLDebug	SETL	{FALSE}
 
- [ UseSVCStack
-InternalStack           *       &01C01000               ; half way down normal SVC stack
- |
+		GBLL	CoroutineStackCopied		; coroutine stack lives on normal SVC stack and is copied away each time
+CoroutineStackCopied SETL {TRUE}			; into a static block
+
+		GBLL	SupportMPEG2PS
+SupportMPEG2PS	SETL	{TRUE}				; support decoding of MPEG-2 Program Streams
+
+ [ :LNOT: CoroutineStackCopied
+  [ UseSVCStack
+InternalStack           *       &01C00800               ; 3/4 way down normal SVC stack
+  |
 InternalStackSize       *       4096                    ; could probably work with much less
+  ]
  ]
 
 ; If playing elemental streams, we need to chop up large buffers longer than 64K into smaller
@@ -66,13 +80,24 @@ InternalStackSize       *       4096                    ; could probably work wi
 
 MaxMPEGPacketLength     *       &FF00                   ; allow some space for packet headers as well
 
+; PES packet header optional flags
+
+PES_Optional_PTS_Present	*	&80		; PTS field present
+PES_Optional_DTS_Present	*	&40		; DTS field present
+
 ; Control stream handle structure
 
                         ^       0
 CSH_StreamFlags         #       4
 CSH_VideoStreamHandle   #       4
 CSH_AudioStreamHandle   #       4
+ [ CoroutineStackCopied
+CSH_CoroutineStackCopy  #	4			; pointer to copy of coroutine stack claimed out of RMA
+CSH_CoroutineStackBlockSize #	4			; size of block allocated
+CSH_CoroutineStackSize	#	4			; number of words currently on stack
+ |
 CSH_InternalSP          #       4                       ; internal stack pointer for coroutines
+ ]
 CSH_ExternalSP          #       4                       ; external stack pointer for coroutines
 CSH_NotReadyBits        #       4                       ; bits indicating which elemental modules are not yet ready to play
  [ SendFirstSCR
@@ -171,7 +196,10 @@ Mod_Title
         =       "MPEGControl", 0
 
 Mod_HelpStr
-        =       "MPEGControl", TAB, "0.38 (08 Jul 1996)"
+        =       "MPEGControl", TAB, "0.43 (16 May 1997)"
+ [ OnlyAllowSystemStreams
+	=	" (System streams only version)"
+ ]
  [ ICLDebug
 	=	" ICL Debug"
  ]
@@ -280,7 +308,7 @@ Mod_Service * Module_BaseAddr   ; nothing to do yet!
 
 Mod_SWIHandler ROUT
         LDR     r12, [wp]
-        CMP     r11, #MPEGControlSWICheckValue - MPEGControlSWI_Base
+        CMP     r11, #(SWIBTableEnd - SWIBTable) :SHR: 2
         ADDCC   pc, pc, r11, LSL #2
         B       NoSuchSWI
 SWIBTable
@@ -294,8 +322,9 @@ SWIBTable
 	B	SoundVolume	; set/read sound volume
 	B	SelectProgram	; select program to watch
 	B	Stats		; return statistics
-
-	ASSERT  (MPEGControlSWICheckValue - MPEGControlSWI_Base)*4 >= {PC} - SWIBTable
+	B	RegisterProgramElementHandler ; register a new program element handler
+	B	DeregisterProgramElementHandler ; and deregister it
+SWIBTableEnd
 
 NoSuchSWI
         Push    "lr"
@@ -304,9 +333,12 @@ NoSuchSWI
         DREG    r11, "Unknown MPEGControl SWI - offset from base = "
         DLINE   "Press any key"
         SWI     XOS_ReadC
+	Pull	"lr"
+RegisterProgramElementHandler	; not supported in MPEGCtrl - just return a 'soft' error
+DeregisterProgramElementHandler ; not supported in MPEGCtrl - just return a 'soft' error
         ADR     r0, NoSuchSWIError
         SETV
-        Pull    "pc"
+	MOV	pc, lr
 
 NoSuchSWIError
         &       0
@@ -368,6 +400,10 @@ OpenStream Entry "r0-r2"
         STR     r0, [r1, #CSH_DataReceived]
 	STR	r0, [r1, #CSH_DataReturned]
 	STR	r0, [r1, #CSH_EndOfStreamReceived]	; haven't had end of stream marker yet
+ [ CoroutineStackCopied
+	STR	r0, [r1, #CSH_CoroutineStackCopy]	; no block allocated yet
+	STR	r0, [r1, #CSH_CoroutineStackBlockSize]	; no space in it
+ ]
 
  [ DataRateStats
         MOV     lr, #DataCountArraySize-1               ; initialise all data counts to zero
@@ -678,6 +714,20 @@ CloseStream Entry "r0"
         SWI     XMPEGAudio_CloseStream
         Pull    "r0, r1"
 30
+ [ CoroutineStackCopied
+
+; Now free the coroutine stack block
+
+	Push	"r0-r2"
+	LDR	r2, [r1, #CSH_CoroutineStackCopy]
+	TEQ	r2, #0
+	MOVNE	r0, #ModHandReason_Free
+	SWINE	XOS_Module
+	MOV	r2, #0
+	STR	r2, [r1, #CSH_CoroutineStackCopy]
+	STR	r2, [r1, #CSH_CoroutineStackBlockSize]
+	Pull	"r0-r2"
+ ]
         CLRV
         EXIT
 
@@ -868,16 +918,59 @@ FreeBuffer Entry "r0-r2,r12"
 ;       r10 video/audio selector for packet
 ;       r11 packet descriptor in preparation
 
+ [ CoroutineStackCopied
+ts_extendstackblock Entry "r0-r3"
+	MOV	r3, r6				; number of excess bytes needed
+	LDR	r2, [r1, #CSH_CoroutineStackCopy]
+	TEQ	r2, #0
+	MOVEQ	r0, #ModHandReason_Claim	; if no block yet, then claim one
+	MOVEQ	r3, #16*4			; of 16 words (should be enough)
+	MOVNE	r0, #ModHandReason_ExtendBlock
+	SWI	XOS_Module			; let's hope this never fails!
+	STR	r2, [r1, #CSH_CoroutineStackCopy]
+	LDR	lr, [r1, #CSH_CoroutineStackBlockSize]
+	ADD	lr, lr, r3			; increased block size
+	STR	lr, [r1, #CSH_CoroutineStackBlockSize]
+	EXIT
+ ]
+
 CallCoroutines Entry "r5-r11"
         STR     sp, [r1, #CSH_ExternalSP]
+ [ CoroutineStackCopied
+	LDR	r5, [r1, #CSH_CoroutineStackSize]
+	TEQ	r5, #0
+	LDRNE	r6, [r1, #CSH_CoroutineStackCopy]
+	ADDNE	r6, r6, r5
+10
+	LDRNE	r7, [r6, #-4]!
+	Push	r7, NE
+	SUBNES	r5, r5, #4
+	BNE	%BT10
+ |
         LDR     sp, [r1, #CSH_InternalSP]
+ ]
         EXIT
 
 ; cowait
 
 cowait  ALTENTRY
+ [ CoroutineStackCopied
+	LDR	r5, [r1, #CSH_ExternalSP]
+	SUB	r5, r5, sp			; how many bytes on coroutine stack
+	STR	r5, [r1, #CSH_CoroutineStackSize]
+	LDR	r6, [r1, #CSH_CoroutineStackBlockSize]
+	SUBS	r6, r5, r6			; number of excess bytes
+	BLHI	ts_extendstackblock
+	LDR	r6, [r1, #CSH_CoroutineStackCopy]
+10
+	Pull	r7				; there's always at least one word (r5-r11 stacked)
+	STR	r7, [r6], #4			; copy data into RMA block
+	SUBS	r5, r5, #4
+	BNE	%BT10
+ |
         STR     sp, [r1, #CSH_InternalSP]       ; save internal stack pointer
         LDR     sp, [r1, #CSH_ExternalSP]
+ ]
         EXIT
 
 ; coinit
@@ -888,11 +981,13 @@ cowait  ALTENTRY
 
 coinit  ALTENTRY                                ; must push same stuff as CoWait pulls
         STR     sp, [r1, #CSH_ExternalSP]
- [ UseSVCStack
+ [ :LNOT: CoroutineStackCopied
+  [ UseSVCStack
         LDR     sp, =InternalStack
- |
+  |
         LDR     r3, =CSH_InternalStackEnd
         ADD     sp, r1, r3
+  ]
  ]
         BL      cowait
 
@@ -903,7 +998,7 @@ coinit  ALTENTRY                                ; must push same stuff as CoWait
 	BNE	PassThroughToVideo
 
 
- [ AutoABSDetect
+ [ AutoABSDetect :LAND: :LNOT: OnlyAllowSystemStreams
         LDRB    r7, [r3, #0]                            ; if first byte = &FF, then audio-only file
         TEQ     r7, #&FF
         LDREQ   r10, [r1, #CSH_NotReadyBits]            ; it's audio-only, so don't make audio wait for video
@@ -916,7 +1011,12 @@ coinit  ALTENTRY                                ; must push same stuff as CoWait
 waitforstartcode
         BL      getnextstartcode
         CMP     r7, #&B9				; TMD 21-Jul-95 - changed to include end-of-stream code
+ [ OnlyAllowSystemStreams
+	BCC	waitforstartcode			; below &B9 are just video codes, so skip until we get system code
+	B	notallvideo
+ |
         BCS     notallvideo
+ ]
 
         SUB     r3, r3, #4                              ; move pointer back to start of start code
                                                         ; (hopefully this won't cross block boundary!)
@@ -1001,6 +1101,10 @@ skipstuffing
         BEQ     skipstuffing
 
         MOV     r9, r7, LSR #6
+ [ SupportMPEG2PS
+	TEQ	r9, #2					; if first byte starts '10' then MPEG2 PES packet
+	BEQ	pespacket
+ ]
         TEQ     r9, #1
         BNE     notSTD
         AND     r9, r7, #&3F                            ; get bottom 6 bits of 1st byte
@@ -1050,6 +1154,42 @@ vidaudpacketcontinue
 errorcontinue
         BL      getnextstartcode
         B       notallvideo
+
+ [ SupportMPEG2PS
+pespacket
+	BL	getbytedeccount				; get byte with PTS/DTS flags in
+	MOV	r5, r7					; save for later
+	BL	getbytedeccount				; get length of optional fields
+	MOV	r6, r7					; save for later
+
+	TST	r5, #PES_Optional_PTS_Present		; PTS present
+	BEQ	pes_nopts
+	BL	getbytedeccount				; get 1st byte of PTS
+	BL	getclockreference
+        ADD     lr, r11, #PacketDescriptor_PTS
+        STMIA   lr, {r7, r9}
+        LDR     r9, [r11, #PacketDescriptor_Flags]
+        ORR     r9, r9, #PacketDescriptorFlags_PTSValid  ; set PTSValid bit in flags
+        STR     r9, [r11, #PacketDescriptor_Flags]
+	SUB	r6, r6, #5				; 5 bytes less of header
+
+	TST	r5, #PES_Optional_DTS_Present
+	BEQ	pes_nodts
+	BL	getbytedeccount				; get 1st byte of DTS
+	BL	getclockreference
+        ADD     lr, r11, #PacketDescriptor_DTS
+        STMIA   lr, {r7, r9}
+        LDR     r9, [r11, #PacketDescriptor_Flags]
+        ORR     r9, r9, #PacketDescriptorFlags_DTSValid  ; set DTSValid bit in flags
+        STR     r9, [r11, #PacketDescriptor_Flags]
+	SUB	r6, r6, #5				; 5 bytes less of header
+pes_nodts
+pes_nopts
+; Now skip rest of header
+	SUB	r8, r8, r6				; deduct rest of header from packet payload length
+	BL	skipbytes
+	B	vidaudpacketcommon
+ ]
 
  [ ErrorRecovery
 badlength
@@ -1144,6 +1284,7 @@ notvidaudpacket
         CMP     r7, #&BC                ; is it a packet header
         BCS     packettoskip
  [ SendFirstSCR
+	ASSERT	:LNOT: SupportMPEG2PS	; can't handle MPEG2PS pack headers yet
         TEQ     r7, #&BA                ; is it a pack header
         BNE     %FT20                   ; no, then nothing to do
         LDR     r7, [r1, #CSH_SendNextSCR]
@@ -1182,24 +1323,23 @@ notvidaudpacket
 
 packettoskip
         BL      getbyte                 ; get bits 8-15 of length
-        MOV     r8, r7
+        MOV     r6, r7
         BL      getbyte                 ; get bits 0-7 of length
-        ORR     r8, r7, r8, LSL #8      ; r8 = length to go
+        ORR     r6, r7, r6, LSL #8      ; r6 = length to go
 
-notvideopacketcommon
-        ADD     r7, r3, r8              ; end of packet (if it was all in this buffer)
-        CMP     r7, r4                  ; is it all within this buffer?
-        BCS     notallinbuff2
-
-        MOV     r3, r7                  ; start from end of block data
+	BL	skipbytes
         BL      getnextstartcode
         B       notallvideo
 
-notallinbuff2
-        SUB     r8, r7, r4              ; r8 = amount of excess
-        BL      nextbuffer
-        B       notvideopacketcommon
+skipbytes Entry
+10
+        ADD     r3, r3, r6              ; end of packet (if it was all in this buffer)
+        CMP     r3, r4                  ; is it all within this buffer?
+	EXIT	CC
 
+        SUB     r6, r3, r4              ; r6 = amount of excess
+        BL      nextbuffer
+        B       %BT10
 
 getnextstartcode
         Push    "lr"
