@@ -9,6 +9,8 @@ RESAPP = <Resource$Dir>.Apps.!NCFresco
 RESRES = <Resource$Dir>.Resources.NCFresco
 RESRES_ALT = <Resource$Dir>.Resources.NCFrescoA
 INSTALLDIR = ${INSTDIR}.!NCFresco
+INSTRESDIR = ${INSTALLDIR}.Resources.${Locale}
+
 #
 # Generic options:
 #
@@ -120,34 +122,34 @@ install_common:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
 	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${INSTALLDIR}
-	${MKDIR} ${INSTALLDIR}.html
+	${MKDIR} ${INSTRESDIR}.html
 	${CP} NCFrescoRORes:!Boot			${INSTALLDIR}.!Boot     ${CPFLAGS}
 	IfThere NCFrescoRORes:!Help Then ${CP} NCFrescoRORes:!Help ${INSTALLDIR}.!Help  ${CPFLAGS}
 	${CP} NCFrescoRORes:!Sprites			${INSTALLDIR}.!Sprites  ${CPFLAGS}
-	${CP} NCFrescoRORes:Sprites			${INSTALLDIR}.Sprites   ${CPFLAGS}
-	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLDIR}.Messages ${TRFLAGS}
-	${CP} NCFrescoRORes:Res				${INSTALLDIR}.Res       ${CPFLAGS}
+	${CP} NCFrescoRORes:Sprites			${INSTRESDIR}.Sprites   ${CPFLAGS}
+	${TR} -i NCFrescoROTransRes:Messages -o ${INSTRESDIR}.Messages ${TRFLAGS}
+	${CP} NCFrescoRORes:Res				${INSTRESDIR}.Res       ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap			${INSTALLDIR}.MimeMap   ${CPFLAGS}
 	${CP} NCFrescoRORes:Config			${INSTALLDIR}.Config    ${CPFLAGS}
 	${CP} ${Lib$Dir}.LocaleRes.LocaleRes		${INSTALLDIR}.LocaleRes ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
-	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLDIR}.html.hista     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLDIR}.html.histr     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsalert   -o ${INSTALLDIR}.html.jsalert   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsprompt  -o ${INSTALLDIR}.html.jsprompt  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsokcncl  -o ${INSTALLDIR}.html.jsokcncl  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.optfonts  -o ${INSTALLDIR}.html.optfonts  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.opttext   -o ${INSTALLDIR}.html.opttext   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLDIR}.html.password  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLDIR}.html.printopts ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${INSTALLDIR}.html.sslcert   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${INSTALLDIR}.html.sslpin    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLDIR}.html.sslserv   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLDIR}.html.ssltoken  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLDIR}.html.url       ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTRESDIR}.html.badurl    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTRESDIR}.html.favs      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTRESDIR}.html.favsd     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTRESDIR}.html.hista     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTRESDIR}.html.histr     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.jsalert   -o ${INSTRESDIR}.html.jsalert   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.jsprompt  -o ${INSTRESDIR}.html.jsprompt  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.jsokcncl  -o ${INSTRESDIR}.html.jsokcncl  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.optfonts  -o ${INSTRESDIR}.html.optfonts  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.opttext   -o ${INSTRESDIR}.html.opttext   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTRESDIR}.html.password  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTRESDIR}.html.printopts ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${INSTRESDIR}.html.sslcert   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${INSTRESDIR}.html.sslpin    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTRESDIR}.html.sslserv   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTRESDIR}.html.ssltoken  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTRESDIR}.html.url       ${TRFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
 	@echo ${COMPONENT}: common files installed
