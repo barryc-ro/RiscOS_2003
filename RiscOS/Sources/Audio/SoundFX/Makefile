@@ -16,7 +16,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -55,7 +55,6 @@ TARGET    = aof.SoundFX
 OBJS      = o.CMHGSndFX o.SoundFX
 RDIR      = Resources.<UserIF>
 EXPORTS   =
-INSTALLDIR = <Install$Dir>.!SoundFX
 
 #
 # Export Paths for Messages module
@@ -89,15 +88,14 @@ export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-install: ${SOUNDS}
-        ${MKDIR} ${INSTALLDIR}
-        ${MKDIR} ${INSTALLDIR}.Sounds
-        ${CP} ${RDIR}.Sounds.*       ${INSTALLDIR}.Sounds.* ~cf~r~v
-        ${CP} Resources.Common.!Run  ${INSTALLDIR}.!Run ~cf~r~v
-        @echo ${COMPONENT}: install files copied
+install: rm.${COMPONENT}
+        ${MKDIR} ${INSTDIR}
+	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: installed
 
 clean:
         ${WIPE} o.* ${WFLAGS}
