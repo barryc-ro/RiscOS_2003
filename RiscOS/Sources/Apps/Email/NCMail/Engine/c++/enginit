@@ -15,9 +15,6 @@
 #include "tboxlibs/wimp.h"
 
 #include "Email/Mailbox/WimpRegistry.h"
-#include "Email/NetLink/NetLink.h"
-#include "Email/NetLink/Permanent.h"
-#include "Email/NetLink/NCDial.h"
 
 #include "NBLib/NBLib.h"
 #include "DebugLib/DebugLib.h"
@@ -34,17 +31,13 @@
 #include "engmanager.h"
 #include "enguiapi.h"
 #include "engprocess.h"
-#include "engcbf.h"
 #include "engstr.h"
 #include "engsend.h"
 #include "enguser.h"
 #include "engfile.h"
 #include "engtimers.h"
-
-extern "C"
-{
-  #include "../Build/NCMailUI.h"
-}
+#include "engconnect.h"
+#include "engcbf.h"
 
 _kernel_swi_regs regs;
 _kernel_oserror  *err;
@@ -58,29 +51,6 @@ static char ourvar[] = "NCMail$Handle";
 #endif
 
 static int *msglist, prequitsender;
-static WimpKeyPressedEvent *msgblock = 0;
-
-/* ************************************************************************** */
-/*                                                                            */
-/* Constants                                                                  */
-/*                                                                            */
-/* ************************************************************************** */
-const int NCAccessManager_MiscOp = 0x0004f001;
-
-
-/* ************************************************************************** */
-/*                                                                            */
-/* Function prototypes - private to this file                                 */
-/*                                                                            */
-/* ************************************************************************** */
-static NetLink* CreateNetLink(void);
-
-
-/* ************************************************************************** */
-/*                                                                            */
-/* Functions                                                                  */
-/*                                                                            */
-/* ************************************************************************** */
 
 bool AppInit(void)
 {
@@ -88,7 +58,6 @@ bool AppInit(void)
   char *size = 0;
   uint32 msgnum = 0;
   int *regmsglist = 0;
-  NetLink::Status linestatus;
 
   static int ourmessages[] =
   {
@@ -167,19 +136,12 @@ bool AppInit(void)
   }
 #endif
 
-  netlink = CreateNetLink();					// Create the netlink object
-  if (netlink == 0)
+  if (!SetupNetlink())
   {
     dprintf(("Eng", "Failed to create NetLink object\n"));
     return false;
   }
-
-  linestatus = netlink->GetStatus();
-  online = (linestatus == NetLink::Connected) ? true : false;
-  dprintf(("Eng", "We are %sonline\n",(online) ? "" : "not "));
-  netlink->RegisterCallback(LineChange, 0);
-
-  ncmui_initialise(infobuf, online);
+  
   StopTimeoutCount();
   StopReconnectCount();
   StopRetryCount();
@@ -240,14 +202,6 @@ void PreShutDown(WimpMessage *msg)
 
   dprintf(("Eng", "Receiving PreQuit massage\n"));
 
-  /* if the message block has already been allocated
-     (i.e. we've previously sent a message), free it */
-  if (msgblock)
-  {
-    free(msgblock);
-    msgblock = 0;
-  }
-
   if (state & PREQUIT)
   {
     /* prequit has already been done, we can ignore this time */
@@ -278,6 +232,7 @@ void PreShutDown(WimpMessage *msg)
   msg->hdr.your_ref = msg->hdr.my_ref;
   regs.r[0] = 19;
   regs.r[1] = (int) msg;
+  regs.r[2] = prequitsender;
   _kernel_swi(Wimp_SendMessage,&regs,&regs);
   dprintf(("Eng", "Objecting to shutdown\n"));
 
@@ -342,78 +297,14 @@ void ShutDown(void)
 void RestartPreQuit(void)
 {
 
-  msgblock = (WimpKeyPressedEvent *) malloc(sizeof(WimpKeyPressedEvent));
-  msgblock->caret.window_handle = -1;
-  msgblock->caret.icon_handle = -1;
-  msgblock->key_code = 0x1fc;
-  regs.r[0] = 17;
-  regs.r[1] = (int) msgblock;
+  WimpKeyPressedEvent eventblk;
+
+  eventblk.caret.window_handle = -1;
+  eventblk.caret.icon_handle = -1;
+  eventblk.key_code = 0x1fc;
+  regs.r[0] = Wimp_EKeyPressed;
+  regs.r[1] = (int) &eventblk;
   regs.r[2] = prequitsender;
   _kernel_swi(Wimp_SendMessage,&regs,&regs);
 
 }
-
-
-/* ************************************************************************** */
-/*
-   FUNCTION:       CreateNetLink
-   DESCRIPTION:    Function that interigates the system environment the app is
-                   running in and creates the appropriate concrete NetLink
-                   object and returns it.
-
-                   Currently, this means it calls NCMALite to get the
-                   information and defaults to Ethernet/Permanent connection.
-
-   DEPENDENCIES:   constant		NCAccessManager_MiscOp	enginit.c++
-                   type			_kernel_swi_regs	kernel.h
-                   type			_kernel_oserror		kernel.h
-                   class		NetLink			Email/NetLink/NetLink.h
-                   class		NCDialNetLink		Email/NetLink/NCDial.h
-                   class		PermanentNetLink	Email/NetLink/Permanent.h
-   DEPENDED ON BY: function		AppInit			enginit.c++
-   INPUT PARAMS:   NONE
-   OUTPUT PARAMS:  NONE
-   RETURN VALUE:   NetLink*					0 if malloc failure
-   CONSTANTS:      NONE
-   VARIABLES:      NetLink*		netlink			the NetLink object
-                   bool                 modem                   flag to indicate modem version
-                   _kernel_oserror*	error			error from SWI call
-                   _kernel_swi_regs	r			registers for SWI call
- */
-/* ************************************************************************** */
-static NetLink* CreateNetLink(void)
-{
-  NetLink*         netlink = 0;
-  bool             modem   = false;
-  _kernel_oserror* error   = 0;
-  _kernel_swi_regs r;
-
-  r.r[0] = 1;									// NCMALite reason code 1, request build type
-  error = _kernel_swi(NCAccessManager_MiscOp, &r, &r);				// Do SWI call
-
-  if (error)									// If error from NCMA, or error because
-  {										// SWI not handled, ie. NCMA not present, then
-    dprintf(("Eng", "Error from NCAccessManager_MiscOp, errnum: %d\t errmess: %s\n", error->errnum, error->errmess));
-    modem = false;								// if SWI gives an error, then assume Ethernet
-  }
-  else
-  {
-    dprintf(("Eng", "NCAccessManager_MiscOp returned in r[1]: %d\n", r.r[1]));
-    if (r.r[1] == 1)								// if r1 has 1, then it's modem
-      modem = true;
-  }
-
-  if (modem)
-  {
-    dprintf(("Eng", "Creating a NCDialNetLink\n"));
-    netlink = new NCDialNetLink(ourhandle);
-  }
-  else
-  {
-    dprintf(("Eng", "Creating a PermanentNetLink\n"));
-    netlink = new PermanentNetLink();
-  }
-
-  return netlink;
-}
-

@@ -6,7 +6,6 @@
 #include "kernel.h"
 #include "string.h"
 #include "swis.h"
-#include <limits.h>
 
 #include "Email/Mailbox/Message.h"
 
@@ -29,6 +28,7 @@
 #include "engcbf.h"
 #include "engsend.h"
 #include "engtimers.h"
+#include "engconnect.h"
 
 CallBackList callbacklist;
 
@@ -73,7 +73,7 @@ extern "C" eng_rcode eng_disconnect(void)
   else if (state & DISCONNECT)
     return ENG_ALREADYDISCONNECTING;
 
-  else if ((state == IDLE) || ((state & (PROCESSPOP | PROCESSSMTP)) && (!(state & TIMEOUT))))
+  else if (state == IDLE)
   {
     DisconnectLine();
     return ENG_RUNNING;
@@ -86,7 +86,9 @@ extern "C" eng_rcode eng_disconnect(void)
     ** is active we will know to disconnect when finished.
     */
     disconnectpending = true;
-    if (state & SEND)
+    if ((state & (PROCESSPOP | PROCESSSMTP)) && (!(state & TIMEOUT)))
+      return ENG_PROCESSING;
+    else if (state & SEND)
       return ENG_SENDINGMAIL;
     else if (state & RETRIEVEMSG)
       return ENG_FETCHINGMESSAGE;
@@ -133,7 +135,6 @@ void TempDebugOutput(void)
 
   FILE *f;
   char fname[32];
-  int32 temp;
   MessageDescriptor *msgptr;
 
   sprintf(fname, "NFS::NCB.$.Inboxes.Inbox%d\0",filecount++);
@@ -148,7 +149,6 @@ void TempDebugOutput(void)
   MakeFilePublic(fname);
   _kernel_swi(OS_FSControl,&regs,&regs);
   dprintf(("Eng", "Finished outputting inbox to file\n"));
-  eng_mem_available(&temp);
 
 }
 /***************End of debugging code***************/
@@ -167,17 +167,25 @@ extern "C" eng_rcode eng_get_mailbox_list(MessageDescriptor **msg)
 
   if (ourmboxin->flags & MBOXPROCESSED)
   {
-    
-    /* if Inbox is being displayed after reading message,
-       remove entities and destroy rfc object */
-    RemoveMessage();
+    *msg = ourmboxin->list;
 
+#ifdef ALAN
     /* temp debug output to save Inbox to file */
     TempDebugOutput();
+#endif
 
-    *msg = ourmboxin->list;
-    return (ourmboxin->flags & MBOXINCOMPLETE) ? ENG_MBOXINCOMPLETE : ENG_COMPLETED;
+    if (ourmboxin->total)
+    {
+      /* if Inbox is being displayed after reading message,
+         remove entities and destroy rfc object */
+      RemoveMessage();
+
+      return (ourmboxin->flags & MBOXINCOMPLETE) ? ENG_MBOXINCOMPLETE : ENG_COMPLETED;
+    }
+    else
+      return ENG_NOMBOX;
   }
+
   else
     return ENG_UNPROCESSED;
 
@@ -520,19 +528,9 @@ extern "C" eng_rcode eng_email_active(bool status)
   if (online)
   {
     if ((emailactive) && (!popactive))
-    {
       StartProcess();
-    }
-    else
-    {
-      /* disconnect from mail server in case user drops line
-         while outside email client */
-/*       popactive = false; */
-/*       StopTimeoutCount(); */
-/*       StopReconnectCount(); */
-/*       DisconnectServer(); */
-    }
   }
+
   else if (sendpending)
   {
     /* if offline and mail waiting to be sent, cancel retry countdown */
@@ -605,90 +603,30 @@ extern "C" void eng_null_events(bool yes)
 extern "C" eng_rcode eng_mem_available(int32 *free)
 {
 
-  if (!cachefs)
-  {
-    *free = INT_MAX;
-    return ENG_NOCACHEFS;
-  }
-
-  regs.r[0] = 5;
-  regs.r[1] = -1;
-  _kernel_swi(OS_DynamicArea,&regs,&regs);
-  *free = regs.r[2] - 0x200000;
-/*   dprintf(("Eng", "Free memory is %dK\n",*free / 1024)); */
-
-  return ENG_COMPLETED;
+  *free = FreeMem();
+  return (cachefs) ? ENG_COMPLETED : ENG_NOCACHEFS;
 
 }
 
 
-extern "C" eng_rcode eng_clear_memory(uint32 bestguess, bool flag)
+extern "C" eng_rcode eng_clear_memory(uint32 bestguess)
 {
 
+  return ClearMemory(bestguess, false);
+
+}
+
+
+void eng_fatal_error(void)
+{
+
+  /************************************
+  *** ATTENTION
+  ************************************/
   /*
-  ** If we are running on a CacheFS system:
-  ** Remove any message files that can be removed.
-  ** Start at oldest and remove one at a time
-  ** until min is cleared.
+  ** UI is reporting a fatal error.
+  ** We need to stop any downloads, disconnect from servers,
+  ** clean up etc.
   */
-
-  if (!cachefs)
-    return ENG_NOCACHEFS;
-
-  else if (!ourmboxin->list)
-    return ENG_NOMEMORY;
-
-  else
-  {
-    MessageDescriptor *msgptr = ourmboxin->list, *lastptr;
-    int32 released;
-    int32 size = (int32) bestguess;
-
-    eng_mem_available(&released);
-
-    /* find last message in list */
-    while (msgptr)
-    {
-      lastptr = msgptr;
-      msgptr = msgptr->next;
-    }
-
-    /*
-    ** Go through message list from last message backwards
-    ** to see if enough memory can be released by removing messages.
-    */
-    while ((released < size) && (lastptr))
-    {
-      if ((lastptr->flags & DOWNLOADED) && (!(lastptr->flags & NEW)))
-      {
-        SetFilename(lastptr->ID, false);
-        released += GetFileLength(msgfilename);
-      }
-      lastptr = lastptr->last;
-    }
-
-    if (released >= size)
-    {
-      /* enough memory available so remove message files */
-      msgptr = (lastptr == 0) ? ourmboxin->list : lastptr->next;
-
-      while (msgptr)
-      {
-        if ((msgptr->flags & DOWNLOADED) && (!(msgptr->flags & NEW)))
-        {
-          SetFilename(msgptr->ID, false);
-          UnlockFile(msgfilename);
-          remove(msgfilename);
-          msgptr->flags &= ~DOWNLOADED;
-          if (flag)
-            msgptr->flags |= REMOVED;
-          dprintf(("Eng", "Removing message %d to make more room\n",msgptr->ID));
-        }
-        msgptr = msgptr->next;
-      }
-    }        
-
-    return ((released >= size) ? ENG_COMPLETED : ENG_NOMEMORY);
-  }
 
 }

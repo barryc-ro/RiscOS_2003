@@ -8,11 +8,11 @@
 #include "stdio.h"
 #include "string.h"
 #include "swis.h"
+#include "limits.h"
 
 #include "DebugLib/DebugLib.h"
 /* #include "NBLib/NBLib.h" */
 
-#include "Email/NetLink/NetLink.h"
 
 #include "engtypes.h"
 #include "engmanager.h"
@@ -24,10 +24,11 @@
 #include "enguiapi.h"
 #include "enguser.h"
 #include "engtimers.h"
+#include "engconnect.h"
 
 MailboxDescriptor *ourmboxin, *ourmboxout, *transmbox;
 
-bool online, emailactive, disconnectpending, expungepending = false;
+bool emailactive, expungepending = false;
 uint32 popstatus;
 uint32 smtpstatus;
 uint32 state;
@@ -317,64 +318,6 @@ void ResetEntID(void)
 }
 
 
-void ConnectToISP(void)
-{
-
-  ELib_rcode code;
-
-  state |= CONNECT;
-  /* Request NetLink Cntrl to bring link up. */
-  code = netlink->Connect();
-
-}
-
-
-void DisconnectLine(void)
-{
-
-  /* disconnect from mail servers before taking line down */
-
-  if (!(state & DISCONNECT))
-  {
-    dprintf(("Eng", "About to disconnect line, state = 0x%x\n",state));
-    state |= (PROCESSPOP + PROCESSSMTP + DISCONNECT);
-    smtpprocessstate.context = readytodisconnect;
-    popprocessstate.context = readytodisconnect;
-  }
-
-}
-
-
-void DisconnectServer(void)
-{
-
-  /* disconnect from POP3 server without taking line down */
-
-  if ((!popactive) && (!(state & MARKDELETE)))
-  {
-    dprintf(("Eng", "About to disconnect server, state = 0x%x\n",state));
-    state |= (PROCESSPOP + TIMEOUT);
-    popprocessstate.context = readytodisconnect;
-  }
-
-}
-
-
-void DisconnectFromISP(void)
-{
-
-  ELib_rcode code;
-
-  dprintf(("Eng", "Disconnecting from ISP\n"));
-  /*
-  ** Mail servers have now been disconnected,
-  ** so request NetLink Cntrl to take link down.
-  */
-  code = netlink->Disconnect();
-
-}
-
-
 void eng_debug_show_status(void)
 {
 
@@ -413,12 +356,7 @@ void DeactivatePOP(void)
   }
 
   else if (disconnectpending)
-  {
-    if (changepending)
-      DisconnectServer();
-    else
-      DisconnectLine();
-  }
+    DisconnectPending();
 
   else
   {
@@ -448,5 +386,88 @@ void RemoveMessage(void)
       msgptr->elibobj = 0;
     }
     retrievestate.msg = 0;
+  }
+}
+
+
+int32 FreeMem(void)
+{
+
+  if (!cachefs)
+    return INT_MAX;
+
+  regs.r[0] = 5;
+  regs.r[1] = -1;
+  _kernel_swi(OS_DynamicArea,&regs,&regs);
+  return regs.r[2] - 0x200000;
+
+}
+
+
+eng_rcode ClearMemory(uint32 required, bool flag)
+{
+
+  /*
+  ** If we are running on a CacheFS system:
+  ** Remove any message files that can be removed.
+  ** Start at oldest and remove one at a time
+  ** until min is cleared.
+  */
+
+  if (!cachefs)
+    return ENG_NOCACHEFS;
+
+  else if (!ourmboxin->list)
+    return ENG_NOMEMORY;
+
+  else
+  {
+    MessageDescriptor *msgptr = ourmboxin->list, *lastptr;
+    int32 released = FreeMem();
+    int32 size = (int32) required;
+
+    /* find last message in list */
+    while (msgptr)
+    {
+      lastptr = msgptr;
+      msgptr = msgptr->next;
+    }
+
+    /*
+    ** Go through message list from last message backwards
+    ** to see if enough memory can be released by removing messages.
+    */
+    while ((released < size) && (lastptr))
+    {
+      if ((lastptr->flags & DOWNLOADED) && (!(lastptr->flags & NEW)))
+      {
+        SetFilename(lastptr->ID, false);
+        released += GetFileLength(msgfilename);
+      }
+      lastptr = lastptr->last;
+    }
+
+    if (released >= size)
+    {
+      /* enough memory available so remove message files */
+      msgptr = (lastptr == 0) ? ourmboxin->list : lastptr->next;
+
+      while (msgptr)
+      {
+        if ((msgptr->flags & DOWNLOADED) && (!(msgptr->flags & NEW)))
+        {
+          SetFilename(msgptr->ID, false);
+          UnlockFile(msgfilename);
+          remove(msgfilename);
+          msgptr->flags &= ~DOWNLOADED;
+          if (flag)
+            msgptr->flags |= REMOVED;
+          dprintf(("Eng", "Removing message %d to make more room\n",msgptr->ID));
+        }
+        msgptr = msgptr->next;
+      }
+    }        
+
+    return ((released >= size) ? ENG_COMPLETED : ENG_NOMEMORY);
   }
 }
