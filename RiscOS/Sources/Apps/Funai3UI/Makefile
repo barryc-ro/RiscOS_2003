@@ -160,6 +160,7 @@ resources: translate dirs
         IfThere LocalUIResources:NCFrescoA Then $(CP) LocalUIResources:NCFrescoA $(RESRES).NCFrescoA $(CPFLAGS)
         $(CP) Resources.$(USERIF).UK.!Boot.Utils $(RESAPP).Utils $(CPFLAGS)
         $(CP) LocalUIResources:!Boot.Utils $(RESAPP).Utils $(CPFLAGS)
+        $(CP) LocalUIResources:!Boot.Library $(RESAPP).Library $(CPFLAGS)
         $(CP) LocalUIResources:NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) LocalUIResources:Wimp.Sprites $(RESRES).Wimp.Sprites $(CPFLAGS)
         IfThere LocalUIResources:WinFrameRO Then $(CP) LocalUIResources:WinFrameRO $(RESRES).ICAClient $(CPFLAGS)
