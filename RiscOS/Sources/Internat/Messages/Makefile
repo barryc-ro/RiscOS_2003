@@ -14,18 +14,8 @@
 #
 # Generic options:
 #
-AS      = aasm
-CP      = copy
-MKDIR   = mkdir -p
-RM      = remove
-WIPE    = -wipe
-MAKE    = amu
-
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
-CPFLAGS = ~cfr~v
-TOUCH   = create
-WFLAGS  = ~cr~v
+AASMFLAGS = -module
+include Makefiles:StdTools
 
 #
 # Program specific options:
@@ -116,12 +106,12 @@ resources:
 ${BUILTDIR}.Messages: s.LocaleList ${SOURCE} ${DATA}.Tokenised ${DIRS} force
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
-        ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
+        ${AASM} ${AASMFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
 ${BUILTDIR}.MessagesHI: s.LocaleList ${SOURCE} ${DIRS} force
         ${MKDIR} rm.${BUILD}.<Build$LocaleListNumeric>
-        ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
+        ${AASM} ${AASMFLAGS} -To $@ -From ${SOURCE}
 
 ${BUILTDIR}.MessData: ${DATA}.Tokenised ${DIRS}
         ${SCANRES} ${PROCESSDIR} $@
@@ -135,24 +125,28 @@ s.LocaleList:; Utils.LocaleChk
 #
 BBETYPE = messages
 bbe-messages: bbe-generic-resources-get-alias ${TAGEXT}
-  BBE_Export_Dir Global.${LOCALE}
-  BBE_Export_Dir s
-  ${CP} Mk* ${BBEDIR}.* ${CPFLAGS}
   ${MKDIR} ${BBEDIR}.Processed
   ${MKDIR} ${BBEDIR}.Resources
   ${MKDIR} ${BBEDIR}.${UTILS}
-  ${CP} ${TAGEXT}  ${BBEDIR}.${TAGEXT}  ${CPFLAGS}
-  ${CP} ${MSGEXT}  ${BBEDIR}.${MSGEXT}  ${CPFLAGS}
-  ${CP} ${MSGTOK}  ${BBEDIR}.${MSGTOK}  ${CPFLAGS}
-  ${CP} ${TOKGEN}  ${BBEDIR}.${TOKGEN}  ${CPFLAGS}
-  ${CP} ${MSGEXT2} ${BBEDIR}.${MSGEXT2} ${CPFLAGS}
-  ${CP} ${MSGTOK2} ${BBEDIR}.${MSGTOK2} ${CPFLAGS}
-  ${CP} ${TOKGEN2} ${BBEDIR}.${TOKGEN2} ${CPFLAGS}
-  ${CP} ${SCANRES} ${BBEDIR}.${SCANRES} ${CPFLAGS}
-  ${CP} ${RESCOMM} ${BBEDIR}.${RESCOMM} ${CPFLAGS}
-  ${CP} ${LOCALECHK} ${BBEDIR}.${LOCALECHK} ${CPFLAGS}
-  ${CP} Version* ${BBEDIR}.* ${CPFLAGS}
-
+  BBE_Export_Dir Global.${LOCALE}
+  BBE_Export_Dir s
+  BBE_Export_File ${TAGEXT}
+  BBE_Export_File ${MSGEXT}
+  BBE_Export_File ${MSGTOK}
+  BBE_Export_File ${TOKGEN}
+  BBE_Export_File ${MSGEXT2}
+  BBE_Export_File ${MSGTOK2}
+  BBE_Export_File ${TOKGEN2}
+  BBE_Export_File ${SCANRES}
+  BBE_Export_File ${RESCOMM}
+  BBE_Export_File ${LOCALECHK}
+  BBE_Export_File ${UTILS}.RemoveEmpt
+  BBE_Export_File ${UTILS}.HelpAppend
+  BBE_Export_File VersionASM
+  BBE_Export_File VersionNum
+  BBE_Export_File Makefile
+  ${TOUCH} ${BBEDIR}.${UTILS}.Makefile
+  ${STRIPDEPEND} ${BBEDIR}.Makefile
 
 #
 # Tokenise the Messages file using Help and Dictionary Tokens
