@@ -214,7 +214,7 @@ static struct { transfer_status status; char *msg; } status_table[] =
     },
 
     {
-        -1,                         /* end of table marker */
+        (transfer_status) -1,           /* end of table marker */
         string_bad_connect
     }
 };
@@ -249,8 +249,10 @@ static void dump_sess(PSESS sess)
 {
     int x;
 #if DEBUG
-    if (sess->magic != MAGIC) {
-      if (sess->magic == ~MAGIC) {
+    if (sess->magic != MAGIC)
+    {
+      if (sess->magic == ~MAGIC)
+      {
         dbg(("Magic value is ~MAGIC"));
       } else {
         dbg(("NB: Magic value %x is not correct magic value %x", 
@@ -281,16 +283,18 @@ static void dump_sess(PSESS sess)
         sess, sess->prev, sess->next, sess->user_name));
 
     dump_sockaddr(sess->server == NULL ? NULL : &sess->server->contaddr, "Control sockaddr");
-    dump_sockaddr(&sess->dataaddr, "Data sockaddr");
+    dump_sockaddr(&sess->server->dataaddr, "Data sockaddr");
     dump_sockaddr(sess->addr, "Current connection sockaddr");
 
     printf("Account %s\nName %s\nLocal name %s\n",
-        sess->acct == NULL ? "*NULL*" : sess->acct, sess->origpath, sess->local_name);
+        sess->acct == NULL ? "*NULL*" : sess->acct, sess->origpath,
+        sess->local_name);
 
-    printf("File handle %d, control socket %d\ndata socket %d, active socket %d\n",
-        sess->ro_handle, sess->server->contsock, sess->datasock, *sess->sock);
+    printf("File handle %d, control socket %d\ndata socket %d,"
+        " active socket %d\n", sess->ro_handle, sess->server->contsock,
+        sess->server->datasock, *sess->sock);
 
-    printf("RC %s (%d), state  (%d), public status %s (%d)\n%d bytes so far, response %c%c%c%c\n",
+    printf("RC %s (%d), state %s (%d), public status (%d)\n%d bytes so far, response %c%c%c%c\n",
         error_code_names[sess->rc],
         sess->rc,
         state_code_names[sess->state],
@@ -334,10 +338,13 @@ static void dump_active_servers(void)
 
     while (serv != NULL)
     {
-        dbg(("Server %p, session %p, sock %d\n"
-               "last %d, maxidle %d, uses %d, absorb %d, dont-reuse %d, sent quit %d\n",
-                serv, serv->sess, serv->contsock,
-                serv->last_used, serv->maxidle, serv->uses, serv->absorb_error, serv->dont_reuse, serv->sent_quit));
+        dbg(("Server %p, session %p, sock %d, datasock %d\n"
+                "last %d, maxidle %d, uses %d, absorb %d, dont-reuse %d,"
+                " sent quit %d, sent pasv %d\n",
+                serv, serv->sess, serv->contsock, serv->datasock,
+                serv->last_used, serv->maxidle, serv->uses,
+                serv->absorb_error, serv->dont_reuse, serv->sent_quit,
+                serv->sent_pasv));
 
         printf("Address %s\n", MKHOSTNAME(serv->contaddr.sin_addr));
 
@@ -360,7 +367,8 @@ static void dump_active_servers(void)
         }
         else
         {
-            const int secs = (serv->maxidle - (MONONOW - serv->last_used)) / 100;
+            const int secs = (int)((serv->maxidle -
+                (MONONOW - serv->last_used) ) / 100);
             const int secsmod = secs % 60;
             const int mins = secs / 60;
 
@@ -725,8 +733,8 @@ static void free_PSESS(PSESS sess)
 
     sess->magic = ~MAGIC;
 
-    if (sess->datasock != -1)
-        my_socketclose(&sess->datasock);
+    if (sess->server->datasock != -1 && sess->server->sent_pasv == 0)
+        my_socketclose(&sess->server->datasock);
 
     if (sess->user_name != NULL)
         free(sess->user_name);
@@ -804,10 +812,9 @@ static void tidy_up(PSESS sess)
         sess->ro_handle = -1;
     }
 
-    if (sess->datasock >= 0)
+    if (sess->server->datasock >= 0 && sess->server->sent_pasv == 0)
     {
-        (void) my_socketclose(&sess->datasock);
-        sess->datasock = -1;
+        (void) my_socketclose(&sess->server->datasock);
     }
 
     for (i = 0; i < NUMQS; i++)
@@ -1422,21 +1429,25 @@ static void progress_transfer(PSESS sess)
     int rc;
     char *cp;
     int xfersleft = 5;
-    static last_state = 0;
 
     do
     {
         more = FALSE;
 
 #if 0
-        if (sess->state!=last_state)
         {
-          dbg(("(7) STATE %s (%2d)\n", sess->state >= 0 &&
-            sess->state < state_last_state ? state_code_names[sess->state] : "Bad state", sess->state));
-          last_state = sess->state;
+            static last_state = 0;
+            if (sess->state!=last_state)
+            {
+              dbg(("(7) STATE %s (%2d)\n", sess->state >= 0 &&
+                sess->state < state_last_state
+                  ? state_code_names[sess->state]
+                  : "Bad state", sess->state));
+              last_state = sess->state;
+            }
+    /*         printf("%s",MKHOSTNAME(sess->servaddr.sin_addr)); */
+    /*         printf("<<<\n"); */
         }
-/*         printf("%s",MKHOSTNAME(sess->servaddr.sin_addr)); */
-/*         printf("<<<\n"); */
 #endif
 
         switch (sess->state)
@@ -1496,7 +1507,7 @@ static void progress_transfer(PSESS sess)
                         break;
                     case GROUP_OKAY:
                         sess->state = state_ready_to_go;
-                        sess->datasock = my_socket(sess);
+                        sess->server->datasock = my_socket(sess);
 
                         if (sess->state == state_error)
                             break;
@@ -1562,6 +1573,7 @@ static void progress_transfer(PSESS sess)
 
                     server->contaddr = sess->servaddr;
                     server->contsock = my_socket(sess);
+                    server->datasock = -1;
 
                     if (server->contsock < 0)
                     {
@@ -1588,7 +1600,7 @@ static void progress_transfer(PSESS sess)
                 sess->ftp_status = status_CONNECTING;
                 sess->diverted_lines = NULL;
                 dbg2(("allocating new data sock\n"));
-                sess->datasock = my_socket(sess);
+                sess->server->datasock = my_socket(sess);
 
                 if (sess->state == state_error)
                     break;
@@ -1946,13 +1958,17 @@ static void progress_transfer(PSESS sess)
                     break;
                 }
 
-                my_socketclose(&sess->datasock);
-                if (sess->state == state_error)
-                    break;
+		/* Only re-create socket if it isn't an open PASV socket */
+		if(sess->server->sent_pasv==0)
+		{
+                    my_socketclose(&sess->server->datasock);
+                    if (sess->state == state_error)
+                        break;
 
-                sess->datasock = my_socket(sess);
-                if (sess->state == state_error)
-                    break;
+                    sess->server->datasock = my_socket(sess);
+                    if (sess->state == state_error)
+                        break;
+                }
 
                 sess->addr = &sess->server->contaddr;
                 sess->sock = &sess->server->contsock;
@@ -1993,6 +2009,16 @@ static void progress_transfer(PSESS sess)
 
             case state_sent_type:
 #if 1	    	/* production */
+                /* Check if PASV command has already been accepted */
+                if(sess->server->sent_pasv &&
+                   sess->server->datasock >= 0)
+                {
+                  dbg(("Reusing PASV connection\n"));
+                  sess->state=state_pasv_connect2;
+                  want_cmd_followup = FALSE;
+                  (*sess->retrieve_action) (sess);
+                  break;
+                }
                 sess->state = state_sent_pasv;
                 want_cmd_followup = FALSE;
                 send_PASV(sess);
@@ -2026,10 +2052,11 @@ static void progress_transfer(PSESS sess)
             /* Perform transfer - PASV mode - server listens */
 
             case state_pasv_supported:
-                sess->addr = &sess->dataaddr;
+                sess->addr = &sess->server->dataaddr;
                 switch ( decode_host_port(sess) )
                 {
                     case GROUP_OKAY:
+                        sess->server->sent_pasv = 1;
                         sess->state = state_pasv_connect1;
                         want_cmd_followup = FALSE;
                         (*sess->retrieve_action) (sess);
@@ -2044,7 +2071,7 @@ static void progress_transfer(PSESS sess)
                 break;
 
             case state_pasv_connect1:
-                sess->sock = &sess->datasock;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_subr_connect;
                 stack_push(sess, state_pasv_connect2);
                 more = TRUE;
@@ -2058,7 +2085,8 @@ static void progress_transfer(PSESS sess)
                 break;
 
             case state_pasv_connect3:
-                sess->sock = &sess->datasock;
+                sess->server->sent_pasv = 0;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_data_transfer;
                 more = TRUE;
                 break;
@@ -2066,8 +2094,8 @@ static void progress_transfer(PSESS sess)
             /* Perform transfer - not PASV mode - we listen */
 
             case state_pasv_not_supported:
-                sess->addr = &sess->dataaddr;
-                sess->sock = &sess->datasock;
+                sess->addr = &sess->server->dataaddr;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_subr_ready_for_accept;
                 stack_push(sess, state_no_pasv1);
                 more = TRUE;
@@ -2093,7 +2121,7 @@ static void progress_transfer(PSESS sess)
                 break;
 
             case state_no_pasv3:
-                sess->sock = &sess->datasock;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_subr_do_accept;
                 stack_push(sess, state_data_transfer);
                 more = TRUE;
@@ -2102,8 +2130,10 @@ static void progress_transfer(PSESS sess)
             /* Now perform the actual data transfer */
 
             case state_data_transfer:
-#ifdef FTP_PUT
-                sess->state = (sess->ftp_cmd==FTP_CMD_PUT)?state_data_transferPUT:state_data_transfer1;
+ #ifdef FTP_PUT
+                sess->state = (sess->ftp_cmd==FTP_CMD_PUT)
+                    ?state_data_transferPUT
+                    :state_data_transfer1;
 #else
                 sess->state = state_data_transfer1;
 #endif
@@ -2144,8 +2174,7 @@ static void progress_transfer(PSESS sess)
 
                 if (rc == 0)
                 {
-                    rc = my_socketclose(&sess->datasock);
-                    sess->datasock = -1;
+                    rc = my_socketclose(&sess->server->datasock);
                     sess->diverted_lines = NULL;
 
                     if (rc == 0)
@@ -2166,6 +2195,7 @@ static void progress_transfer(PSESS sess)
                 {
                     if (errno != EWOULDBLOCK)
                     {
+                        dbg(("Error %i from recv\n",errno));
                         sess->diverted_lines = NULL;
                         sess->state = state_error;
                         sess->rc = GROUP_SOCKET;
@@ -2256,7 +2286,7 @@ static void progress_transfer(PSESS sess)
                 else
 		{
 		    dbg(("(7) transfer complete, closing socket\n"));
-                    rc = my_socketclose(&sess->datasock);
+                    rc = my_socketclose(&sess->server->datasock);
                     sess->diverted_lines = NULL;
 
                     if (rc == 0)
@@ -2807,8 +2837,9 @@ static _kernel_oserror *allocate_SESS(ftp_open_args * args, PSESS *sessp)
 
 #ifdef OLDCODE
     sess->contsock = -1;
-#endif
-    sess->datasock = -1;        /* ] pdh: these were inside ifdef too */
+    sess->datasock = -1;        /* ] ndt: moved back to the ifdef     */
+    #endif
+                                /* ] pdh: these were inside ifdef too */
     sess->ro_handle = -1;       /* ]                                  */
 
     sess->resp1 = ' ';
