@@ -78,6 +78,21 @@ version:
         Version
 
 # Dynamic dependencies:
+rm.Hourgls200: s.Module
+rm.Hourgls200: Hdr:ListOpts
+rm.Hourgls200: Hdr:Macros
+rm.Hourgls200: Hdr:System
+rm.Hourgls200: Hdr:SWIs
+rm.Hourgls200: Hdr:CPU.Generic26
+rm.Hourgls200: Hdr:IO.GenericIO
+rm.Hourgls200: Hdr:RISCOS
+rm.Hourgls200: Hdr:ModHand
+rm.Hourgls200: Hdr:Services
+rm.Hourgls200: Hdr:Hourglass
+rm.Hourgls200: Hdr:MsgTrans
+rm.Hourgls200: Hdr:FSNumbers
+rm.Hourgls200: Hdr:NewErrors
+rm.Hourgls200: Time+Date
 rm.Hourglass: s.Module
 rm.Hourglass: Hdr:ListOpts
 rm.Hourglass: Hdr:Macros
