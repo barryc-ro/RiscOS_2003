@@ -12,6 +12,7 @@
 # 1998-09-22	RDW	Modified to fit into build structure
 # 1998-10-20	RDW	RAM module target added
 #			!Boot file added
+# 1998-10-30	RDW	Change over to Ben's cunning 2 level makefile
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -27,14 +28,12 @@ LIBDIR	= <Lib$Dir>
 #
 
 COMPONENT       = Engine
-RES_COMPONENT   = NCMail
-APP             = !NCMail
-MODULE		= rm.!NCMail
-ROM_MODULE	= aof.NCMail
-LPATH            = LocalUserIFRes:
-#TARGET		= Engine
-#TARGETD		= $(TARGET)d
-#TARGETZ		= $(TARGET)z
+NORMAL_TARGET	= $(COMPONENT)
+MEMCHECK_TARGET	= $(COMPONENT)MC
+HIERPROF_TARGET	= $(COMPONENT)HP
+MODULE_TARGET	= $(COMPONENT)zm
+DEBUG_TARGET	= $(COMPONENT)d
+
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -60,15 +59,6 @@ RM              = remove
 SQUEEZE         = squeeze
 WIPE            = -wipe
 
-AFLAGS          = $(THROWBACK) -depend !Depend -nocache -stamp -quit
-CFLAGS          = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp -DENGINE
-C++FLAGS        = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp -DENGINE
-LDFLAGS		= -c++ -aof
-CPFLAGS         = ~cfr~v~n
-SQFLAGS         = -f
-WFLAGS          = ~cf~vr
-LBFLAGS		= -c
-
 
 # -----------------------------------------------------------------------------
 # Flags
@@ -81,307 +71,99 @@ DDZFLAGS        = $(DZFLAGS) -fn
 
 
 # -----------------------------------------------------------------------------
-# Libraries
+# Build rules
 #
 
-CLIB		= CLib:o.stubs
-ROMCSTUBS	= RISC_OSLib:o.romcstubs
-ABSSYM		= RISC_OSLib:o.c_abssym
-WRAPPER		= RISC_OSLib:s.ModuleWrap
+all: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@echo $(COMPONENT): build complete
 
-C++LIB          = $(LIBDIR).C++Lib.o.c++lib
+debug: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
+	@echo $(COMPONENT): debug build complete
 
-EVENTLIB	= $(LIBDIR).tboxlibs.o.eventlib
-TOOLBOXLIB	= $(LIBDIR).tboxlibs.o.toolboxlib
-WIMPLIB		= $(LIBDIR).tboxlibs.o.wimplib
-
-ACORNPOP3	= $(EXP_C_O).AcornPOP3
-ACORNSMTP	= $(EXP_C_O).AcornSMTP
-ELIB		= $(LIBDIR).Email.EmailLib.o.EmailLib
-MBOXLIB		= $(LIBDIR).Email.Mailbox.o.Mailbox
-SOCKLIB		= $(LIBDIR).TCPIPLibs.o.socklib5
-DEBUGLIB	= $(LIBDIR).DebugLib.o.debuglib
-INETLIB		= $(LIBDIR).TCPIPLibs.o.inetlib
-UNIXLIB		= $(LIBDIR).TCPIPLibs.o.unixlib
-
-
-LIBS = \
- $(WIMPLIB)\
- $(TOOLBOXLIB)\
- $(EVENTLIB)\
- $(MBOXLIB)\
- $(ACORNPOP3)\
- $(ACORNSMTP)\
- $(ELIB)\
- $(EXTRALIBS)\
- $(C++LIB)\
- $(CLIB)\
- $(SOCKLIB)\
- $(DEBUGLIB)\
- $(INETLIB)\
- $(UNIXLIB)\
-
-
-#these are not complete
-LIBSM = \
- $(WIMPLIB) \
- $(TOOLBOXLIB) \
- $(EVENTLIB)m \
- $(ACORNPOP3)\
- $(C++LIB)\
-
-
-LIBSD = \
- $(WIMPLIB)\
- $(TOOLBOXLIB)\
- $(EVENTLIB)\
- $(MBOXLIB)d\
- $(ACORNPOP3)\
- $(ACORNSMTP)\
- $(ELIB)\
- $(EXTRALIBS)\
- $(C++LIB)\
- $(CLIB)\
- $(SOCKLIB)\
- $(DEBUGLIB)\
- $(INETLIB)\
- $(UNIXLIB)\
-
-
-# -----------------------------------------------------------------------------
-# Include files (libraries and resources)
-#
-
-INCLUDES        = -Itbox:,C:,<Lib$Dir>,<Lib$Dir>.Email.Mailbox
-
-#FILES = \
-# $(LPATH)!Boot \
-# $(LPATH)!Run \
-# $(LPATH)!Sprites22 \
-# $(LPATH)Messages \
-# $(LPATH)Sprites22 \
-# $(TARGET)
-
-FILES = \
- $(LPATH)!Boot \
- $(LPATH)!Run \
- $(TARGET)
-
-# Include these in the ROM module
-#RESFILES = \
-# $(LPATH)!Sprites22 \
-
-
-# -----------------------------------------------------------------------------
-# Include files (objects)
-#
-
-OBJS = o.engcbf o.engdownld o.engfile o.enginit o.engevent \
-       o.engmanager o.engparse o.engprocess o.engsend \
-       o.engstr o.enguiapi o.enguser
-
-OBJSD = od.engcbf od.engdownld od.engfile od.engevent \
-        od.enginit od.engmanager od.engparse od.engprocess \
-        od.engsend od.engstr od.enguiapi od.enguser
-
-OBJSZ=  oz.engcbf oz.engdownld oz.engfile oz.engevent \
-        oz.enginit oz.engmanager oz.engparse oz.engprocess \
-        oz.engsend oz.engstr oz.enguiapi oz.enguser
-
-OBJSZSL=ozsl.engcbf ozsl.engdownld ozsl.engfile ozsl.engevent \
-        ozsl.enginit ozsl.engmanager ozsl.engparse ozsl.engprocess \
-        ozsl.engsend ozsl.engstr ozsl.enguiapi ozsl.enguser
-
-
-
-# -----------------------------------------------------------------------------
-# Rule patterns
-#
-
-.SUFFIXES: .o .oz .ozsl .od .odz .s .c .c++
-
-.c.o:;          @echo
-                @echo Compiling $<
-                @echo $(DFLAGS)
-                @$(CC) $(CFLAGS) $(DFLAGS)        -c -o $@ $<
-
-.c.oz:;         @echo
-                @echo Compiling $<
-                @echo $(DZFLAGS)
-                @$(CC) $(CFLAGS) $(DZFLAGS)       -c -zM -DROM -o $@ $<
-
-.c.ozsl:;	@echo
-		@echo Compiling $<
-		@echo $(DZFLAGS)
-		@${CC} ${CFLAGS} ${DZFLAGS} -c -zM -o $@ $<
-
-.c.od:;         @echo
-                @echo Compiling $<
-                @echo $(DDFLAGS)
-                @$(CC) $(CFLAGS) $(DDFLAGS)       -c -g -o $@ $<
-
-.c.odz:;        @echo
-                @echo Compiling $<
-                @echo $(DDZFLAGS)
-                @$(CC) $(CFLAGS) $(DDZFLAGS)      -c -zM -DROM -o $@ $<
-
-.c++.o:;        @echo
-                @echo Compiling $<
-                @echo $(DFLAGS)
-                @$(C++) $(C++FLAGS) $(DFLAGS)     -c -o $@ $<
-
-.c++.oz:;       @echo
-                @echo Compiling $<
-                @echo $(DZFLAGS)
-                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -DROM -o $@ $<
-
-.c++.ozsl:;     @echo
-                @echo Compiling $<
-                @echo $(DZFLAGS)
-                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -o $@ $<
-
-.c++.od:;       @echo
-                @echo Compiling $<
-                @echo $(DDFLAGS)
-                @$(C++) $(C++FLAGS) $(DDFLAGS)    -c +g -o $@ $<
-
-.c++.odz:;      @echo
-                @echo Compiling $<
-                @echo $(DDZFLAGS)
-                @$(C++) $(C++FLAGS) $(DDZFLAGS)   -c -zM -DROM -o $@ $<
-
-.s.o:;          @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) $< $@
-
-.s.oz:;         @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) $< $@
-
-.s.od:;         @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) -g $< $@
-
-.s.odz:;        @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) -g $< $@
-
-
-# -----------------------------------------------------------------------------
-# Main rules
-#
+preprocess:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@echo $(COMPONENT): preprocessing complete
 
 export: export_$(PHASE)
 
 export_hdrs:
-	@$(CP)	h.enguiapi	^.Build.h.enguiapi			$(CPFLAGS)
-	@$(CP)	h.engtypes	^.Build.h.engtypes			$(CPFLAGS)
-	@echo $(COMPONENT): export complete (hdrs)		$(CPFLAGS)
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
+	@echo $(COMPONENT): export complete (hdrs)
 
-export_libs: 
+export_libs:
 	@echo $(COMPONENT): export complete (libs)
+	
+export_libsMC:
+	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
+	@echo $(COMPONENT): export complete (MemCheck libs)
+	
+export_libsHP:
+	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
+	@echo $(COMPONENT): export complete (HierProf libs)
 
-rom: $(ROM_MODULE)
+rom: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=oz
         @echo $(COMPONENT): Module built (ROM)
 
-ram: $(MODULE)
+ram: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=ozsl
 	@echo $(COMPONENT): Module built (RAM)
 
-all: library
-        @echo $(COMPONENT): all built (Disc)
+install_rom: 
+	@amu -f MainMake $(MFLAGS) EXT=oz
 
-library: $(TARGET) $(TARGETZ) o.dirs
-		@echo ${COMPONENT}: complete
-
-debug: $(TARGETD)
-		@echo ${COMPONENT}: debug complete
-
-install_rom: $(ROM_MODULE)
-	$(CP) $(ROM_MODULE) ^.Build.oz.Engine	$(CPFLAGS)
-
-install_common: $(FILES)
+install: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
         @echo
+        @echo $(COMPONENT): $(TARGET) installed
 
-install: install_common
-        $(CP) $(LPATH)!Boot             ^.Build.$(INSTDIR).!Boot        $(CPFLAGS)
-        $(CP) $(LPATH)!Run              ^.Build.$(INSTDIR).!Run         $(CPFLAGS)
+installd:
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
         @echo
-        @echo $(COMPONENT): Application installed to ^.Build.$(INSTDIR)
+        @echo $(COMPONENT): $(TARGET) (Debug) installed
 
-installd: install_common
-        $(CP) $(LPATH)!Boot             ^.Build.$(INSTDIR).!Boot        $(CPFLAGS)
-        $(CP) $(LPATH)!RunD             ^.Build.$(INSTDIR).!Run         $(CPFLAGS)
+installMC:
+	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
         @echo
-        @echo $(COMPONENT): Debug application installed ^.Build.$(INSTDIR)
+        @echo $(COMPONENT): $(TARGET) (MemCheck) installed
+
+installHP:
+	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
+        @echo
+        @echo $(COMPONENT): $(TARGET) (HierProf) installed
 
 resources:
-	@echo $(RESDIR)
-        $(MKDIR) $(RESDIR)
-        $(MKDIR) $(RESAPP)
-        $(CP) $(LPATH)!BootROM         $(RESAPP).!Boot         $(CPFLAGS)
-        $(CP) $(LPATH)!RunROM          $(RESAPP).!Run          $(CPFLAGS)
-        @echo
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
         @echo $(COMPONENT): Resource files copied to Messages module
 
-clean:
-        @echo starting
-        $(WIPE) o               $(WFLAGS)
-        $(WIPE) od              $(WFLAGS)
-        $(WIPE) oz              $(WFLAGS)
-        $(WIPE) ozsl            $(WFLAGS)
-        $(WIPE) odz             $(WFLAGS)
-        $(WIPE) syms            $(WFLAGS)
-        $(RM)   syms
-        $(RM)   o.dirs
-	$(RM)   ^.Build.h.enguiapi
-	$(RM)   ^.Build.h.engtypes
-        @echo
-        @echo $(COMPONENT): Cleaned
+clean: clean_common
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oHP
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oz
+	@echo $(COMPONENT): cleaned
 
-o.dirs:
-        @$(MKDIR) o
-        @$(MKDIR) od
-        @$(MKDIR) oz
-        @$(MKDIR) ozsl
-        @$(MKDIR) odz
-        @$(MKDIR) syms
-        create o.dirs
-        stamp  o.dirs
+clean_common:
+	@$(RM) $(NORMAL_TARGET)
+	@$(RM) $(MEMCHECK_TARGET)
+	@$(RM) $(HIERPROF_TARGET)
+	@$(RM) $(MODULE_TARGET)
+	@$(RM) $(DEBUG_TARGET)
 
 
 # -----------------------------------------------------------------------------
 # Development rules
 #
 
-clean_all: clean
+clean_all: clean_common
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=oHP
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=oz
         @echo $(COMPONENT): Cleaned all
-
-
-# -----------------------------------------------------------------------------
-# Final linkfor ROM Image (using given base address)
-#
-
-
-# -----------------------------------------------------------------------------
-# Static dependencies
-#
-
-abs.!RI: $(OBJS) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.o.Engine $(OBJS)
-
-$(ROM_MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.oz.Engine $(OBJSZ)
-
-$(MODULE): $(OBJSZSL) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.ozsl.Engine $(OBJSZSL)
-
-abs.!RI_D: $(OBJSD) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.od.Engine $(OBJSD)
-
-
-# -----------------------------------------------------------------------------
-# Dynamic dependencies:
