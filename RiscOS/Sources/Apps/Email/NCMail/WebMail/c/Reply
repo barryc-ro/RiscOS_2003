@@ -13,6 +13,7 @@
 #include "BrowserIF.h"
 #include "States.h"
 #include "SendMsg.h"
+#include "EscapeHTML.h"
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
@@ -46,7 +47,6 @@ void reply_selected_from_readmsg(uint32 msgid)
   /* Check the return code */
   switch(rc)
   {
-    case(ENG_BUSY):	dprintf(("UI", "Engine is BUSY when creating message\n"));	break;
     case(ENG_RUNNING):	dprintf(("UI", "Engine create message RUNNING\n"));		break;
     case(ENG_NOMEMORY):
     {
@@ -56,76 +56,6 @@ void reply_selected_from_readmsg(uint32 msgid)
     }
     default:		ncmui_error_display(35);					break;
   }
-}
-
-
-/************************************************************************/
-/* mailto_send_message_request                                          */
-/*                                                                      */
-/* Function is called when the user clicks on a MailTo: HTML link on    */
-/* the web.                                                             */
-/*                                                                      */
-/* Parameters: void.                                                    */
-/*                                                                      */
-/* Returns:    void.                                                    */
-/*                                                                      */
-/************************************************************************/
-void reply_send_message_request(int num_args, url_param *arg)
-{
-//  eng_rcode		 rc;
-//  uint32 counter;
-//
-//  /* Set the state to MailTo */
-//  status.state = State_MailTo;
-//
-//  /* Setup the global MessageDescriptor */
-//  if ((global_msg = malloc(sizeof(MessageDescriptor))) == NULL)
-//  {
-//    ncmui_error_display(1);
-//  }
-//  else
-//  {
-//    global_msg->ID = 0;
-//    global_msg->flags = 0;
-//    global_msg->entity_num = 0;
-//    global_msg->to = NULL;
-//    global_msg->cc = NULL;
-//    global_msg->fromreal = NULL;
-//    global_msg->fromaddr = NULL;
-//    global_msg->subject = NULL;
-//    global_msg->charset = NULL;
-//    global_msg->datestr = NULL;
-//
-//    /* OK, now loop through the arguments and fill in the MessageDescriptor */
-//    for (counter = 0; counter < num_args; counter++)
-//    {
-//      dprintf(("UI", "Item '%s': '%s'\n", arg[counter].name, arg[counter].value));
-//
-//      if (nb_case_insensitive_strcmp(arg[counter].name, MailTo_Tag_To) == 0)
-//        sendmsg_setup_messagedescriptor_field(arg[counter].value, &global_msg->to);
-//    }
-//
-//    dprintf(("UI", "MessageDescritor:\n"));
-//    dprintf(("UI", "   id:      %d\n", global_msg->ID));
-//    dprintf(("UI", "   to:      %s\n", global_msg->to));
-//    dprintf(("UI", "   subject: %s\n", global_msg->subject));
-//
-//    rc = eng_create_message(0, (void *) global_msg, mailto_create_message_cbf);
-//
-//    /* Check the return code */
-//    switch(rc)
-//    {
-//      case(ENG_BUSY):		dprintf(("UI", "Engine is BUSY when creating message\n")); break;
-//      case(ENG_RUNNING):	dprintf(("UI", "Engine create message RUNNING\n"));	break;
-//      case(ENG_NOMEMORY):
-//      {
-//        ncmui_error_display(30);
-//        status.ui_locked = false;
-//        error_parser_failed();
-//      }
-//      default:		ncmui_error_display(29);					break;
-//    }
-//  }
 }
 
 
@@ -142,26 +72,16 @@ void reply_send_message_request(int num_args, url_param *arg)
 /* Returns:                                                             */
 /*                                                                      */
 /************************************************************************/
-void reply_create_message_cbf(eng_rcode rc, MessageDescriptor *msg, void *handle)
+void reply_create_message_cbf(eng_return *codes, MessageDescriptor *msg, void *handle)
 {
-  MessageDescriptor *ptr;
-
-  ptr = (MessageDescriptor *) handle;
+  NB_UNUSED(handle);
 
   dprintf(("UI", "reply_msg_cbf entered with msg id: %d\n", msg->ID));
-  dprintf(("UI", "to is: %s\n", ptr->to));
+  dprintf(("UI", "to is: %s\n", msg->to));
 
-  if (rc == ENG_COMPLETED)
+  if (codes->code == ENG_COMPLETED)
   {
-    /* We must setup the MessageDescriptor
-     *
-     * To field */
-    sendmsg_setup_messagedescriptor_field(ptr->to, &msg->to);
-    /* Subject */
-    sendmsg_setup_messagedescriptor_field(ptr->subject, &msg->subject);
-    /* CC*/
-    sendmsg_setup_messagedescriptor_field(ptr->cc, &msg->cc);
-    /* Body */
+    dprintf(("UI", "Reply MessageDescriptor:\n"));
 
     if (sendmsg_build_screen(msg) == false)
     {
@@ -182,35 +102,111 @@ void reply_create_message_cbf(eng_rcode rc, MessageDescriptor *msg, void *handle
 /************************************************************************/
 /* reply_output_body                                                    */
 /*                                                                      */
-/* Function outputs the body text when the Active Comment is found.     */
+/* Function outputs the contents of a text file to the specified FILE   */
+/* pointer, escaping the text in the process.                           */
+/*                                                                      */
 /*                                                                      */
 /* Parameters: out  - location in HTML file to place text.              */
-/*             ptr  - pointer to entity descriptor                      */
+/*             ed   - Entity Descriptor.                                */
 /*                                                                      */
-/* Returns:                                                             */
+/* Returns:    true (success), false (failed).                          */
 /*                                                                      */
 /************************************************************************/
-void reply_output_body(FILE *out, EntityDescriptor *ptr)
+bool reply_output_body(FILE *out, EntityDescriptor *ed)
 {
-  FILE			*in = NULL;
-  char			 c = 'a';
+  FILE			*att_fp = NULL;		// File pointer to source attachment file.
+  FILE			*escaped_fp = NULL;	// File pointer to file to store escaped HTML in.
+  esc_html_context	 context;
+  char			 current;
 
-  in = fopen(ptr->fname, "r");
-
-  if (in != NULL)
+  /* Check for the existance of the Temp file and remove */
+  if (nb_file_exists(1, Reply_Temp_File, NULL, NULL) == NULL)
   {
+    nb_file_delete(1, Reply_Temp_File, NULL);
+  }
+
+  /* Open up the source & destination files */
+  att_fp = fopen(ed->fname, "r");
+  escaped_fp = fopen(Reply_Temp_File, "w+");
+
+  if ( (att_fp == NULL) || (escaped_fp == NULL) )
+  {
+    dprintf(("UI", "One file didn't open.\n"));
+
+#ifdef DEBUGLIB
+    if (att_fp == NULL)
+      ncmui_error_display(12);
+    if (escaped_fp == NULL)
+      ncmui_error_display(13);
+      dprintf(("UI", "Escaped file didn't open\n"));
+#endif
+
+    return(false);
+  }
+  else
+  {
+    dprintf(("UI", "About to escape the HTML\n"));
+
+    /* Escape from att_fp to escaped_fp and close the att_fp file */
+    context = NULL;
+    while (escape_html_file_to_file (att_fp, escaped_fp, 1, &context) == 0);
+    fclose(att_fp);
+
+    /* Go back to the beginning of the Escaped file and begin the parse & output rountine.
+     * This is ugly.  To avoid having to wrap everything we are using the <TT> Teletype HTML
+     * tag.  Unfortunately this behaves like normal HTML in that all but one space in a sequence
+     * is ignored.  Therefore if we detect more than one space in a row it must be replaced with
+     * &nbsp; which is defined as HTML_HardSpace.  We must also search for LineFeed characters and
+     * replace with <BR> tags.
+     */
+    rewind(escaped_fp);
+    current =  0;
+
     do
     {
-      c = getc(in);
+      current =  getc(escaped_fp);
+
       /* Check to see if we have retrieved the EOF marker */
-      if (!feof(in))
+      if (!feof(escaped_fp))
       {
-        /* OK, so now check for Active Comment and act accordingly */
-        fprintf(out, "%c", c);
+        putc(current, out);
       }
     }
-    while (!feof(in));
+    while (!feof(escaped_fp));
 
-    fclose(in);
+    /* Close escaped file, Tidy up other files in use */
+    fclose(escaped_fp);
+    nb_file_delete(1, Reply_Temp_File, NULL);
+
+    /* Delete the entity file */
+    nb_file_unlock(1, ed->fname, NULL);
+    nb_file_delete(1, ed->fname, NULL);
+
+    return(true);
   }
 }
+
+
+//
+//   FILE			*in = NULL;
+//   char			 c = 'a';
+//
+//   in = fopen(ptr->fname, "r");
+//
+//   if (in != NULL)
+//   {
+//     do
+//     {
+//       c = getc(in);
+//       /* Check to see if we have retrieved the EOF marker */
+//       if (!feof(in))
+//       {
+//         /* OK, so now check for Active Comment and act accordingly */
+//         fprintf(out, "%c", c);
+//       }
+//     }
+//     while (!feof(in));
+//
+//     fclose(in);
+//   }
+// }
