@@ -78,7 +78,7 @@ Colours200: MakeOld
 MkTables.o.maketables: MkTables.c.maketables
         ${CC} $(ccflags) -o $@ MkTables.c.maketables
 
-MkTables.maketables:   MkTables.o.maketables ${CLIB} 
+MkTables.maketables:   MkTables.o.maketables ${CLIB} MkTables.o._dirs
         link $(linkflags) -o $@ MkTables.o.maketables ${CLIB}
 
 Palettes.8desktop: MkTables.maketables rm.Colours
@@ -88,4 +88,7 @@ Palettes.8desktop: MkTables.maketables rm.Colours
         settype Tables.4greys text
         MkTables.dosqueeze
         
+MkTables.o._dirs:
+        ${MKDIR} MkTables.o
+
 # Dynamic dependencies:
