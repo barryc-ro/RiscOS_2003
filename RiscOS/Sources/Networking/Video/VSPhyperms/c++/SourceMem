@@ -21,6 +21,13 @@ extern "C" {
 // this class is often time critical so the use of macro's within this source file is used
 
 // Current Clib stddef.h does not define a C++ compatible offsetof
+
+// This macro returns the size of an NECBlock structure with iov_size
+// entries in the s/g array.
+
+#define sizeof_NECBlock(size) \
+	(offsetof(NECBlock, buffers) + sizeof(BitstreamBufferDescriptor) * (size))
+
 #undef offsetof
 #define offsetof(type, member) \
     	((size_t)((char *)&(((type *)0)->member) - (char *)0))
@@ -33,36 +40,224 @@ extern "C" {
 #define macro_getBlock(a) \
 	((MemBlock*) ((int)block_hd + (a * macro_sizeof_MemBlock)) )
 
-
-
 #include "kernel.h"
 #include "swis.h"
 }
+
 #include "SourceP.h"
-#include "Source.h"
+#include "SourceMem.h"
+
+////////////////////////////////////////////////////////////////////////////////////////
+
+//
+// Datagram bitfield management class.
+//
+DatagramBitfield::DatagramBitfield(size_t max_dgrams) :
+        max_dgram(max_dgrams),
+        b(0)
+{
+        const size_t bits_per_word = CHAR_BIT * sizeof(*b);
+        max_words = (max_dgrams + bits_per_word - 1) / bits_per_word;
+        b = new bitfield[max_words];
+        if (ok()) clear();
+}
+
+DatagramBitfield::~DatagramBitfield()
+{
+        delete[] b;
+        b = NULL;
+}
+
+int DatagramBitfield::ok() const
+{
+        return b != 0;
+}
+
+void DatagramBitfield::clear()
+{
+        (void) memset(b, 0, max_words * sizeof(*b));
+        size_t max_bit = bit_mask(max_dgram);
+        if (max_bit > 1) {
+                // max_dgram wasn't an exact number of words.  Therefore 'claim' the
+                // datagrams that lie beyond the limit of available datagram numbers
+                // so that they don't get accidentally allocated.
+                size_t w = word_no(max_dgram);
+                b[word_no(max_dgram)] |= ~(max_bit-1);
+        }
+}
+
+size_t DatagramBitfield::word_no(size_t n) const
+{
+        return n / (CHAR_BIT * sizeof(*b));
+}
+
+size_t DatagramBitfield::bit_mask(size_t n) const
+{
+        return 1UL << (n % (CHAR_BIT * sizeof(*b)));
+}
+
+int DatagramBitfield::isFree(size_t n) const
+{
+        return (n < max_dgram) && ((b[word_no(n)] & bit_mask(n)) == 0);
+}
+
+//
+// Allocate an explicit datagram.  The datagram MUST be free - no check will be made here.
+//
+error_flag DatagramBitfield::allocate(size_t n)
+{
+        error_flag result = ErrorOccurred;
+        if (n < max_dgram) {
+                b[word_no(n)] |= bit_mask(n);
+                result = NoError;
+        }
+        return result;
+}
+
+error_flag
+DatagramBitfield::allocate(size_t *n)
+{
+        size_t i;
+        error_flag result = ErrorOccurred;
+
+        for (i=0; i < max_words; ++i) {
+               // Awooga - find lowest unset bit in word.  This *does* work - promise!
+                // The general algorithm here is to find the lowest bit *set*, so we invert
+                // the value at the start so that we are finding the lowest set bit.
+                // Then noting that x & (~x + 1) (=> x & -x) gives just the lowest set bit,
+                // binary search the word for the single set bit.
+                	const bitfield b_i_invert = ~b[i];
+                	bitfield bit = b_i_invert & -b_i_invert;
+               // Check word for being completely full (ie. ~word == 0)
+                if (bit == 0) continue;
+                // There is one.  Set bit to claim datagram, then proceed to find the bit position
+                b[i] |= bit;
+                // Find position.  (This loop compiles to compact ARM assembler
+                // to calculate the full value to store in *n)
+                size_t index = 0;
+                size_t bitno;
+                for (bitno = (CHAR_BIT * sizeof(*b) / 2); bitno > 1; bitno >>= 1) {
+                        if (bit >> bitno) { bit >>= bitno; index += bitno; }
+                }
+                *n = (size_t) ((i * CHAR_BIT * sizeof(*b)) + index + bit) - 1;	// AR sub 1 as array overshot 
+
+                result = NoError;
+                break;
+        }
+        return result;
+}
+
+error_flag
+DatagramBitfield::deallocate(size_t n)
+{
+        error_flag result = ErrorOccurred;
+        if (n < max_dgram) {
+                b[word_no(n)] &= ~bit_mask(n);
+                result = NoError;
+        }
+        return result;
+}
+// **************************************************************** SOURCE MEM MAP ************************************
 
 
 // this is to be called after the asset presentation dialogue
 SourceMemMap::SourceMemMap(size_t blocks, size_t block_size, size_t datagram_size)
 {
   	error_flag result = ErrorState();
-  	
-  	max_blocks = blocks;
+ 	
+	size_t max_block_size 	= block_size;		// maximum size of each block
+  	max_blocks 		= blocks;
+	dgram_size 		= datagram_size;
+	
         da_number = 0xFFFFFFFF;
         da_base = 0;
         dgram_use = 0;
-  	max_block_size = 0;
-  	 		
-  	max_block_size = block_size;
+        
+ 	if (result != ErrorOccurred){
+ 	         // Calculate maximum number of datagrams per block - round value up
+        	dgrams_per_block = max_block_size / dgram_size;
+                
+       	 	total_dgrams = (dgrams_per_block * max_blocks) + 1;
+                
+        	total_memory = // Calculate total memory requirement:
+                     (max_blocks * macro_sizeof_MemBlock) + // MemBlock array at base of dynamic area
+                     (total_dgrams * dgram_size);       // NECDatagram header and payload arrays
+ 
+ #ifdef MEM_SANE_CHECK 
+                Debug("init limits, datagram_size = %i, total dgrams %i, dgram_size %i, MemBlock_size %i, maxblocks %i\n", 
+                	dgram_size, total_dgrams, dgram_size, macro_sizeof_MemBlock, max_blocks);
+#endif
+	}
+  		// Allocate Dynamic area
+  	if (result != ErrorOccurred){
+  	        size_t size_limit;		// D.A. size limit
+        
+        	_kernel_oserror *e = _swix(OS_DynamicArea,  _INR(0,8)|_OUT(1)|_OUT(3)|_OUT(5),
+                	0,              // reason code, create dynamic area
+                	-1,             // kernel allocates number,
+                	total_memory,   // requested size
+                	-1,             // do not care what address is allocated
+                	0x80,           // flags: not draggable in taskmanager display
+                	total_memory,   // maximum size that will be required
+                	0,              // no special handler (routine address)
+                	0,              // no special handler (R12 for routine)
+                	Module_Title,   // title for Dynamic Area
+	
+        	        &da_number,     // allocated dynamic area number
+        	        &da_base,       // allocated base address
+        	        &size_limit);   // allocated maximum size
 
-	dgram_size = datagram_size;
- 		
- 	if (result != ErrorOccurred)
-  		result = initLimits();
-  	if (result != ErrorOccurred)
-  		result = createDynamicArea();
-  	if (result != ErrorOccurred)
-  		result = initDynamicArea();
+        	if (e != NULL) {
+                	MakeError(e);
+        	}
+        	else {
+                	if (size_limit < total_memory) {
+                        	MakeError(VSP_Alloc);
+                        }
+                	else {
+#ifdef DEBUGLIB
+				Debug("Allocated %i bytes of dynamic area", size_limit);
+#endif                	  
+                        	// Woo!  We got enough memory, everything's OK so far
+                        	// Blank the memory out
+                        	(void) memset(da_base, 0, total_memory);
+                        }
+                }
+  	}
+  		
+  	if (result != ErrorOccurred){
+  	    	size_t memory_offset;	// this is to ensure that memory used is less than allocated
+  		size_t i;
+  		MemBlock *mb;
+  	
+        	dgram_use = new DatagramBitfield(total_dgrams);
+        	if (dgram_use == 0) {
+        	        MakeError(VSP_Alloc);
+        	}
+        	else {
+        	        // For efficiency we want to cache these values
+        	        // these are worked out in size_t units to avoid array type counting
+        	        block_hd = (MemBlock *)(memory_offset = (size_t)da_base);	// base address, where blocks are 
+                
+        	        memory_offset += (max_blocks * macro_sizeof_MemBlock);		// base for dgram headers              			
+        	        dgram_hd = (NECDatagram *)memory_offset;
+                
+        	        memory_offset +=  (total_dgrams * sizeof(NECDatagram));		// base for dgram payloads
+        	        dgram_data_hd = (NECPayload *)memory_offset;
+        	}
+        	for (i = 0; i < max_blocks; i++){	//AR guard word is never set
+        		mb = macro_getBlock(i);
+        		if (mb != NULL)
+        			mb->guard_word = MemBlock__GuardWord;
+        		else {
+        			MakeError(VSP_BadErr);
+        		}
+        	}       
+#ifdef MEM_SANE_CHECK        
+        	Debug("Memory Map\n start = %8.8X End = %8.8X\n", (int)da_base, (((int)da_base)+total_memory));
+		Debug("block_hd      @ %8.8X\ndgram_headers @ %8.8X\ndgram_payloads@ %8.8X\n",block_hd, dgram_hd, dgram_data_hd);
+#endif
+  	}
 }
 
 SourceMemMap::~SourceMemMap(void)
@@ -70,7 +265,7 @@ SourceMemMap::~SourceMemMap(void)
         if (da_base != 0) {
                 (void) _swix(OS_DynamicArea, _INR(0,1), 1, da_number);
         }
-
+        
         if (dgram_use != 0) {
                 delete dgram_use;
                 dgram_use = NULL;
@@ -131,122 +326,6 @@ MemBlock*
 SourceMemMap::getBlock(size_t n) const
 {
   return macro_getBlock(n);
-}
-
-//
-// Determine the size of a MemBlock structure given the maximum size of the s/g array
-//
-
-//
-// Create the dynamic area based on the calculated requirements.  The only error
-// possible is VSP_Alloc if dynamic area creation fails, or we do not get given
-// the memory that we requested.
-//
-error_flag 
-SourceMemMap::createDynamicArea()
-{
-        size_t size_limit;		// D.A. size limit
-        
-        _kernel_oserror *e = _swix(OS_DynamicArea,  _INR(0,8)|_OUT(1)|_OUT(3)|_OUT(5),
-                0,              // reason code, create dynamic area
-                -1,             // kernel allocates number,
-                total_memory,   // requested size
-                -1,             // do not care what address is allocated
-                0x80,           // flags: not draggable in taskmanager display
-                total_memory,   // maximum size that will be required
-                0,              // no special handler (routine address)
-                0,              // no special handler (R12 for routine)
-                Module_Title,   // title for Dynamic Area
-
-                &da_number,     // allocated dynamic area number
-                &da_base,       // allocated base address
-                &size_limit);   // allocated maximum size
-
-        if (e != NULL) {
-                MakeError(e);
-        }
-        else {
-                if (size_limit < total_memory) {
-                        MakeError(VSP_Alloc);
-                }
-                else {
-                        // Woo!  We got enough memory, everything's OK so far
-                        // Blank the memory out
-                        (void) memset(da_base, 0, total_memory);
-                }
-        }
-
-        return ErrorState();
-}
-
-//
-// Calculate the memory limits and various sizes of objects in preparation
-// for creation of the dynamic area.  The only error possible is VSP_BadErr
-// raised when the Socket class was unable to read the maximum datagram size
-// from the Internet module.  This may mean that you do not have Internet 5.xx
-// running.
-//
-error_flag
-SourceMemMap::initLimits(void)
-{
-        // Calculate maximum number of datagrams per block - round value up
-        dgrams_per_block = max_block_size / dgram_size;
-                
-        total_dgrams = (dgrams_per_block * max_blocks) + 1;
-                
-#ifdef MEM_SANE_CHECK 
-                Debug("init limits, datagram_size = %i, total dgrams %i, dgram_size %i, MemBlock_size %i, maxblocks %i\n", 
-                dgram_size, total_dgrams, dgram_size, macro_sizeof_MemBlock, max_blocks);
-#endif
-        total_memory = // Calculate total memory requirement:
-                     (max_blocks * macro_sizeof_MemBlock) + // MemBlock array at base of dynamic area
-                     (total_dgrams * dgram_size);       // NECDatagram header and payload arrays
-        
-        return ErrorState();
-}
-
-//
-// Makes all the values in the dynamic area safe.  We know that the area has been
-// zero-initialised already, but any further initialisation should be carried out
-// here.
-//
-error_flag
-SourceMemMap::initDynamicArea()
-{
-  	size_t memory_offset;	// this is to ensure that memory used is less than allocated
-  	size_t i;
-  	MemBlock *mb;
-  	
-        dgram_use = new DatagramBitfield(total_dgrams);
-        if (dgram_use == 0) {
-                MakeError(VSP_Alloc);
-        }
-        else {
-                // For efficiency we want to cache these values
-                // these are worked out in size_t units to avoid array type counting
-                block_hd = (MemBlock *)(memory_offset = (size_t)da_base);	// base address, where blocks are 
-                
-                memory_offset += (max_blocks * macro_sizeof_MemBlock);		// base for dgram headers              		
-                dgram_hd = (NECDatagram *)memory_offset;
-                
-                memory_offset +=  (total_dgrams * sizeof(NECDatagram));		// base for dgram payloads
-                dgram_data_hd = (NECPayload *)memory_offset;
-        }
-        for (i = 0; i < max_blocks; i++){	//AR guard word is never set
-        	mb = macro_getBlock(i);
-        	if (mb != NULL)
-        		mb->guard_word = MemBlock__GuardWord;
-        	else {
-        		MakeError(VSP_BadErr);
-        	}
-        }
-               
-#ifdef MEM_SANE_CHECK        
-        Debug("Memory Map\n start = %8.8X End = %8.8X\n", (int)da_base, (((int)da_base)+total_memory));
-	Debug("block_hd      @ %8.8X\ndgram_headers @ %8.8X\ndgram_payloads@ %8.8X\n",block_hd, dgram_hd, dgram_data_hd);
-#endif
-
-        return ErrorState();
 }
 
 error_flag
@@ -363,7 +442,7 @@ SourceMemMap::memFindFreeDatagramBuffer(NECDatagram **datagram)
 // Errors: VSP_BadErr: block pointer/number was illegal - this is a fatal
 // internal error
 //
-error_flag
+inline error_flag
 SourceMemMap::memFreeDatagram(size_t number)
 {
         error_flag result = dgram_use->deallocate(number);
@@ -382,26 +461,9 @@ SourceMemMap::memFreeDatagram(const NECDatagram *dgram)
       return memFreeDatagram(elem);
 }
 
-// Locate the payload buffer for the particular datagram
-NECPayload *SourceMemMap::findPayloadBuffer(size_t n) const
-{
-        return (NECPayload *) (((char *)dgram_data_hd) + (n * (dgram_size-sizeof(NECDatagram))) );
-}
-
-NECPayload *SourceMemMap::findPayloadBuffer(NECDatagram *dgram) const
+NECPayload *SourceMemMap::findPayloadBuffer(NECDatagram *dgram)
 {
         return findPayloadBuffer(findDatagramNumber(dgram));
-}
-
-// Discover the datagram buffer number of the given pointer
-size_t SourceMemMap::findDatagramNumber(NECDatagram *dgram) const
-{
-        return ((char*)dgram - (char*)dgram_hd)/sizeof(NECDatagram);
-}
-
-size_t SourceMemMap::findDatagramNumber(NECPayload *dgram) const
-{
-        return (((char *)dgram) - ((char *)dgram_data_hd)) / (dgram_size-sizeof(NECDatagram));
 }
 
 //
@@ -410,7 +472,8 @@ size_t SourceMemMap::findDatagramNumber(NECPayload *dgram) const
 // is not found, then it is created if possible.  If that was not
 // possible, then NULL is returned.
 //
-MemBlock *SourceMemMap::findBlock(ULONG id, size_t *block_num)
+MemBlock*
+SourceMemMap::findBlock(ULONG id, size_t *block_num)
 {
         MemBlock *result = NULL;
         size_t n;
@@ -421,51 +484,58 @@ MemBlock *SourceMemMap::findBlock(ULONG id, size_t *block_num)
                         if (block_num != 0) {
                                 *block_num = n;
                         }
-                        return mb;
+                        result = mb;
+                        break;
                 }
        }
-       //else allocate a block
-        size_t i;
-        for (i = 0; i < max_blocks; i++) {
-                MemBlock *mb = macro_getBlock(i);
-                if (!mb->inuse) {
-                        mb->inuse = 1;
-                        mb->completed = 0;
-                        mb->mpeg_owned = 0;
-                        mb->block_id = id;
-                        mb->nak_timeout = 0;			// AR
-                        mb->dgrams_received = 0;		// AR
-                        mb->deleted_block = 0;
-                        mb->dgrams_in_block = 0;
-                        if (block_num != 0) {
-                                *block_num = i;
-                        }
-                        return mb;
-                }
-        }
+       if (result == NULL){
+       		//else allocate a block
+        	size_t i;
+        	for (i = 0; i < max_blocks; i++) {
+        	        MemBlock *mb = macro_getBlock(i);
+        	        if (!mb->inuse) {
+        	                mb->inuse = 1;
+        	                mb->completed = 0;
+        	                mb->mpeg_owned = 0;
+        	                mb->block_id = id;
+        	                mb->nak_timeout = 0;			// AR
+        	                mb->dgrams_received = 0;		// AR
+        	                mb->deleted_block = 0;
+        	                mb->dgrams_in_block = 0;
+        	                if (block_num != 0) {
+        	                        *block_num = i;
+        	                }
+        	                result = mb;
+        	                break;
+        	        }
+        	}
 
-        if (i == max_blocks) {	// we should never ask for blocks we cannot find
-                MakeError(VSP_Alloc);
-        }
-        return NULL;	// error occurred
+        	if (i == max_blocks) {	// we should never ask for blocks we cannot find
+        	        MakeError(VSP_Alloc);
+        	}
+       }
+       return result;	// error occurred
 }
 
 MemBlock *SourceMemMap::findExistingBlock(ULONG id, size_t *block_num)
 {
+    MemBlock *result = NULL;
+    
        for (size_t n = 0; n < max_blocks; n++) {
                MemBlock *mb = macro_getBlock(n);
                if (mb->inuse != 0 && mb->block_id == id) {
                         if (block_num != 0) {
                                 *block_num = n;
                         }
-                        return mb;
+                        result = mb;
                 }
        }
        // return null if you cannot find this block
-       return NULL;
+       return result;
 }
 
-MemBlock *SourceMemMap::findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULONG *most_complete)
+MemBlock*
+SourceMemMap::findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULONG *most_complete, Statistics *stats)
 {
   MemBlock *mb, *not_in_use = NULL;
   size_t n;
@@ -488,6 +558,8 @@ MemBlock *SourceMemMap::findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULO
        	
 	if ( not_in_use == NULL ){ // if there are no freeblocks
   		mb = findExistingBlock(min_block_num);				// delete an old one
+  		
+  		++stats->deleted_blocks;
   	  	
   		if (mb != NULL)
   			freeBlock_background(mb);
@@ -513,115 +585,4 @@ MemBlock *SourceMemMap::findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULO
                 mb->dgrams_in_block = 0;
         }
         return mb;
-}
-
-////////////////////////////////////////////////////////////////////////////////////////
-
-//
-// Datagram bitfield management class.
-//
-DatagramBitfield::DatagramBitfield(size_t max_dgrams) :
-        max_dgram(max_dgrams),
-        b(0)
-{
-        const size_t bits_per_word = CHAR_BIT * sizeof(*b);
-        max_words = (max_dgrams + bits_per_word - 1) / bits_per_word;
-        b = new bitfield[max_words];
-        if (ok()) clear();
-}
-
-DatagramBitfield::~DatagramBitfield()
-{
-        delete[] b;
-        b = NULL;
-}
-
-int DatagramBitfield::ok() const
-{
-        return b != 0;
-}
-
-void DatagramBitfield::clear()
-{
-        (void) memset(b, 0, max_words * sizeof(*b));
-        size_t max_bit = bit_mask(max_dgram);
-        if (max_bit > 1) {
-                // max_dgram wasn't an exact number of words.  Therefore 'claim' the
-                // datagrams that lie beyond the limit of available datagram numbers
-                // so that they don't get accidentally allocated.
-                size_t w = word_no(max_dgram);
-                b[word_no(max_dgram)] |= ~(max_bit-1);
-        }
-}
-
-size_t DatagramBitfield::word_no(size_t n) const
-{
-        return n / (CHAR_BIT * sizeof(*b));
-}
-
-size_t DatagramBitfield::bit_mask(size_t n) const
-{
-        return 1UL << (n % (CHAR_BIT * sizeof(*b)));
-}
-
-int DatagramBitfield::isFree(size_t n) const
-{
-        return (n < max_dgram) && ((b[word_no(n)] & bit_mask(n)) == 0);
-}
-
-//
-// Allocate an explicit datagram.  The datagram MUST be free - no check will be made here.
-//
-error_flag DatagramBitfield::allocate(size_t n)
-{
-        error_flag result = ErrorOccurred;
-        if (n < max_dgram) {
-                b[word_no(n)] |= bit_mask(n);
-                result = NoError;
-        }
-        return result;
-}
-
-error_flag
-DatagramBitfield::allocate(size_t *n)
-{
-        size_t i;
-        error_flag result = ErrorOccurred;
-
-        for (i=0; i < max_words; ++i) {
-               // Awooga - find lowest unset bit in word.  This *does* work - promise!
-                // The general algorithm here is to find the lowest bit *set*, so we invert
-                // the value at the start so that we are finding the lowest set bit.
-                // Then noting that x & (~x + 1) (=> x & -x) gives just the lowest set bit,
-                // binary search the word for the single set bit.
-                	const bitfield b_i_invert = ~b[i];
-                	bitfield bit = b_i_invert & -b_i_invert;
-               // Check word for being completely full (ie. ~word == 0)
-                if (bit == 0) continue;
-                // There is one.  Set bit to claim datagram, then proceed to find the bit position
-                b[i] |= bit;
-                // Find position.  (This loop compiles to compact ARM assembler
-                // to calculate the full value to store in *n)
-                size_t index = 0;
-                size_t bitno;
-                for (bitno = (CHAR_BIT * sizeof(*b) / 2); bitno > 1; bitno >>= 1) {
-                        if (bit >> bitno) { bit >>= bitno; index += bitno; }
-                }
-                *n = (size_t) ((i * CHAR_BIT * sizeof(*b)) + index + bit) - 1;	// AR sub 1 as array overshot 
-
-                result = NoError;
-                break;
-        }
-        return result;
-}
-
-error_flag
-DatagramBitfield::deallocate(size_t n)
-{
-        error_flag result = ErrorOccurred;
-        if (n < max_dgram) {
-                b[word_no(n)] &= ~bit_mask(n);
-                result = NoError;
-        }
-        return result;
 }

@@ -31,13 +31,67 @@ StreamToken::~StreamToken(void)
 	blocks_returned = 0;
 }
 
+#if (NUM_MPEG_Tokens != 2)
+#error Re-defining the number of MPEG tokens; be aware of optimisations used.
+inline bool
+Stream::tokenfree(void)
+{
+  for (int i = 0; i < NUM_MPEG_Tokens; ++i)
+  	if (buffers[i].in_use == free_token)
+  		break;
+  return (i < NUM_MPEG_Tokens);
+}
+
+inline error_flag
+Stream::test_empty_buffers(void)
+{
+  error_flag result = ErrorState();
+  int token_id = -1;
+  
+  if ((state != state_step)||(step_times != 0)&&(--step_times)){
+ 	
+ 	for (int i = 0; i < NUM_MPEG_Tokens; ++i){
+ 	  	if (buffers[i].in_use == free_token){
+ 	  	  	token_id = i;
+ 	  	  	break;
+ 	  	}
+ 	}
+  
+  	if ( (result != ErrorOccurred)&&(state != state_stop)&&(token_id != -1) ) {
+		buffers[token_id].in_use = claim_token;	// paired with free block
+	    	result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw));
+ 	
+	 	if (result != ErrorOccurred){
+	 		if(buffers[token_id].block != NULL){
+				buffers[token_id].blocks_returned = 0;
+				if ((result = mysink->FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred)
+					err = &(mysink->ReturnCopyOfError());
+			}
+			else
+				buffers[token_id].in_use = free_token;
+	        }
+	 	else {
+	                buffers[token_id].in_use = free_token;
+	 	  	err = &mysource->ReturnCopyOfError();
+	 	} // !get block error occurred
+	}
+  }
+  return result;
+}
+#else
+inline bool
+Stream::tokenfree(void)
+{
+ 	return (bool)((buffers[0].in_use == free_token)||(buffers[1].in_use == free_token));
+}
+
 inline error_flag
 Stream::test_empty_buffers(void)
 {
   error_flag result = ErrorState();
   int token_id;
   
-  if ((state != state_step)||((--step_times) != 0)){
+  if ((state != state_step)||(step_times != 0)&&(--step_times)){
  
   	MACRO_getFreeToken(token_id);
   
@@ -48,7 +102,8 @@ Stream::test_empty_buffers(void)
 	 	if (result != ErrorOccurred){
 	 		if(buffers[token_id].block != NULL){
 				buffers[token_id].blocks_returned = 0;
-				result = mysink->FullBuffer(buffers[token_id].mpeg_buffer);
+				if ((result = mysink->FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred)
+					err = &(mysink->ReturnCopyOfError());
 			}
 			else
 				buffers[token_id].in_use = free_token;
@@ -58,19 +113,13 @@ Stream::test_empty_buffers(void)
 	 	  	err = &mysource->ReturnCopyOfError();
 	 	} // !get block error occurred
 	}
-  
-	MACRO_getFreeToken(token_id);
-  
-	if (token_id != -1)
-	  	callback_pending = (callback_flag)(callback_pending | callback_tokenfree);
-	else
-	   	callback_pending = (callback_flag)(callback_pending & ~callback_tokenfree);
   }
-  
   return result;
 }
+#endif
 
-Stream::Stream(int inet_timeout, char* group, int port, int MPEGid, int source_recvspace, int NumBlocks, int TCP_TimeOut, void *pwork):Error()
+
+Stream::Stream(int inet_timeout, char* group, int port, int MPEGid, int source_recvspace, int NumBlocks, int BufferBlocks, int TCP_TimeOut, void *pwork):Error()
 {
   // MULTICAST CONSTRUCTOR
   
@@ -91,7 +140,7 @@ Stream::Stream(int inet_timeout, char* group, int port, int MPEGid, int source_r
   
   state = state_play;			// set the state of play
 
-  buffer_blocks = 0;	
+  buffer_blocks = BufferBlocks;	
    
   mysink = new Sink(MPEGid);
   if (mysink->ErrorExists()) {
@@ -204,7 +253,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   fast_playback_ratio = fast_playback & 0xFFFFFF;
   
   if (endofstream == 0xFFFFFFFF){	// if stream live
-  	trick_modes |=  trick_jump_most_rec;
+  	trick_modes +=  trick_jump_most_rec;
   }
   
   if ((in_from >= 0)&&(in_from < endofstream))
@@ -370,7 +419,7 @@ Stream::change_state(state_of_play new_state)
      case state_stop:
    	if (state != state_stop){
    	  	if (callback_pending & callback_timeout){
-   			callback_pending = (callback_flag)(callback_pending & ~callback_timeout);
+   			callback_pending -= callback_timeout;
      			_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
      		}
    		mysource->setEndPlayState();		// this ensures no more data is copied upriver.
@@ -382,7 +431,8 @@ Stream::change_state(state_of_play new_state)
     		}
      	}
 #ifdef DEBUGLIB
-     	Debug("close stream; flags %2.2X, tokens (%i)(%i)", callback_pending, (buffers[0].in_use == claim_token), (buffers[1].in_use== claim_token));
+     	//Debug("close stream; flags %2.2X, tokens (%i)(%i)", callback_pending, 
+     	//(buffers[0].in_use == claim_token), (buffers[1].in_use== claim_token));
 #endif    				
      	if (used_buffer == true){
      		MakeError(VSP_CantDeleteSharedMemory);
@@ -391,8 +441,7 @@ Stream::change_state(state_of_play new_state)
    	break;
      case state_pause:
      	if ((state != state_pause)&&(trick_modes & trick_pause)) {
-     		result = ReadNPT(&from);
-   		from = from << 1;
+   		from = getNECTime();
      		state = state_pause;
      	}
      	break;
@@ -409,11 +458,9 @@ Stream::change_state(state_of_play new_state)
                	}
 		else{
            		if ((state != state_pause)&&(state != state_step)&&(state != state_slow)) {
-     	  			callback_pending = (callback_flag) (callback_pending | callback_trickplay);
-     	  			if (state != state_prestart){
-     	  				result = ReadNPT(&from);
-   					from = from << 1;
-   				}
+     	  			callback_pending += callback_trickplay;
+     	  			if (state != state_prestart)
+   					from = getNECTime();
    			}// if state is paused time is set at pause time, jumps reset this time
    			state = state_play;
    		}
@@ -422,32 +469,39 @@ Stream::change_state(state_of_play new_state)
      case state_streamlive:
      	if ((state != state_streamlive)&&(trick_modes & trick_jump_most_rec)){
      	  	if (source != source_streamlive) swap_source();
-     		callback_pending = (callback_flag) (callback_pending | callback_trickplay);
+     		callback_pending += callback_trickplay;
      		from = 0xFFFFFFFF;
      		state = state_streamlive;
      	}
         break;
      case state_fast_forward:
         if ((state != state_fast_forward)&&(trick_modes & trick_fast_forward)&&(source != source_streamlive)){
-              	result = ReadNPT(&from);
-   		from = from << 1;
+   		from = getNECTime();
          	state =  state_fast_forward;
-     	  	callback_pending = (callback_flag) (callback_pending | callback_trickplay);
+     	  	callback_pending += callback_trickplay;
 	}
      	break;
      case state_fast_rewind:
         if ((state != state_fast_rewind)&&(trick_modes & trick_fast_rewind)){
                if (source != source_vod) 
      	  		swap_source();
-           	result = ReadNPT(&from);
-   		from = from << 1;
+   		from = getNECTime();
      		state =  state_fast_rewind;
-     	  	callback_pending = (callback_flag) (callback_pending | callback_trickplay);
+     	  	callback_pending += callback_trickplay;
 	}
      	break;
    }
    
    if (callback_pending & callback_trickplay) {
+#ifdef DEBUGLIB
+  	int current_min, future_min;
+  	
+  	current_min = (int)((getNECTime()>>1) / 60);
+  	future_min = (int)((from >> 1)/ 60);
+  	Debug("trick play (%2i:%2i:%2i) -> (%2i:%2i:%2i)", (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
+  							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60));
+#endif
+
   	_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
  	if (e != NULL){
   		MakeError(e);
@@ -485,17 +539,7 @@ error_flag
 Stream::SetSpeed(int direction, int speed)		// call to Decoder
 {
   
-#ifdef DEBUGLIB
-  ULINT NPT_time;
-  ReadNPT(&NPT_time);
-  int hours, min, secs;
-  min = (int)(NPT_time / 60);
-  secs = (int)(NPT_time % 60);
-  hours = (int)(min / 60);
-  min =   (int)(min % 60);
-  Debug("set speed R0(%i), R2(%i) NPT = %i, (%2i:%2i:%2i)", direction, speed, NPT_time, hours, min, secs);
-#endif
- if (direction == 2){
+ if ((direction == 2)&&(trick_modes & trick_step_play)){
  	step_times = speed;
  	change_state(state_step);
  }
@@ -530,15 +574,15 @@ error_flag
 Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
 {
   error_flag result = NoError;
-  unsigned int NPT_time = (unsigned int)mysource->get_most_significant_time();
-  unsigned int abs_time;//, playback_id, AckNum;
+  ULINT NEC_time = getNECTime();
+  ULINT abs_time;//, playback_id, AckNum;
   //size_t freebuf;
  if (flags == 1){
-     abs_time = NPT_time + (pos_time * 2);
+     abs_time = NEC_time + (pos_time * 2);
   }
   else
   if (flags == 2){
-    abs_time = NPT_time - (pos_time * 2);
+    abs_time = NEC_time - (pos_time * 2);
   }
   else {
      if ((pos_time < 0)&&(endofstream == 0xFFFFFFFF))
@@ -547,17 +591,6 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
      	abs_time = (pos_time << 1);
   }
   
-#ifdef DEBUGLIB
-  	int hours, min, secs;
-
-  	min = (int)((abs_time>>1) / 60);
-  	secs = (int)((abs_time>>1) % 60);
-  	hours = (int)(min / 60);
-  	min =   (int)(min % 60);
-  	Debug("abs_time %i (%2i:%2i:%2i)", abs_time, hours, min, secs);
-  	Debug("jump play R0(%i), R2(%i), endofstream %i", flags, pos_time, endofstream);
-#endif  
-
   if (((abs_time & 0x80000000)&&(endofstream != 0xFFFFFFFF))||(abs_time > endofstream)){
   	MakeError(VSP_InvalidValue);
   	result = ErrorOccurred;
@@ -568,7 +601,15 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
   	if (abs_time == 0xFFFFFFFF)
   		change_state(state_streamlive);
   	else {
-  		callback_pending = (callback_flag) (callback_pending | callback_trickplay);
+#ifdef DEBUGLIB
+  		int current_min, future_min;
+  	
+  		current_min = (int)((NEC_time>>1) / 60);
+  		future_min = (int)((from >> 1)/ 60);
+  		Debug("trick play (%2i:%2i:%2i) -> (%2i:%2i:%2i)", (int)(current_min/60), (int)(current_min % 60), (int)((NEC_time>>1) % 60),
+  							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60));
+#endif
+  		callback_pending += callback_trickplay;
   		_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
   		if (e != NULL){
   			MakeError(e);
@@ -579,14 +620,32 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
   return result;
 }
 
-error_flag
-Stream::ReadNPT(ULONG *NPT_time)			// call to Decoder
+inline ULINT
+Stream::getNECTime(void)
 {
+  ULINT time;
+  
   if ((state == state_fast_forward)||(state == state_fast_rewind))
-    	(*NPT_time) = ((mysource->get_most_significant_time()*fast_playback_ratio) >> 1);
+    	time = (ULINT)(mysource->get_most_significant_time()) * fast_playback_ratio;
   else
-  	(*NPT_time) = (mysource->get_most_significant_time() >> 1); // div 2
-  return NoError;
+  	time = (ULINT)mysource->get_most_significant_time();
+  	
+  return time;
+}
+
+error_flag
+Stream::ReadNPT(ULINT *NPT_time)
+{ 
+   if (!ErrorExists()){
+	//if (source == source_multicast){
+	//	if (mysink->ReadNPT(NPT_time) == ErrorOccurred)
+	//		err = &(mysink->ReturnCopyOfError());
+	//}
+	//else {
+		(*NPT_time) = (getNECTime() >> 1);
+	//}
+   }
+   return ErrorState();
 }
 
 error_flag
@@ -620,6 +679,9 @@ Stream::GetMiscInfo(ULINT *reg_r0, misc_5_10 *ptr, int *size)
     	  	Debug("server error");
     	}
     	else {
+    	  	if (mysink->ErrorExists()){
+    	  	  	Debug("SinkError");
+    	  	}
    		Debug("stream (%i)- cb %2.2X, t[0] (%i), t[1] = (%i)", 
     				mysource->getFullBlocks(), callback_pending, 
     				(buffers[0].in_use == claim_token), (buffers[1].in_use== claim_token));
@@ -662,14 +724,14 @@ Stream::timeslice(Statistics *stats)
   		if (result == ErrorOccurred)
   			err = &(mysource->ReturnCopyOfError());
 
-  		callback_pending = (callback_flag)(callback_pending & ~callback_bufferfree);
+  		callback_pending -= callback_bufferfree;
   			
-  		if (callback_pending & callback_tokenfree)
+  		if (tokenfree())
   			result = test_empty_buffers();
   			
   		if (!(callback_pending & callback_timeout)){
                        	// this reinitialises the block callback vector if we fill up the blocks
-  			callback_pending = (callback_flag)(callback_pending | callback_block);
+  			callback_pending += callback_block;
 			_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw);	  	
  			if (e != NULL){
   				MakeError(e);
@@ -684,7 +746,7 @@ Stream::timeslice(Statistics *stats)
         		ULONG RequestNum;
         		size_t AckNum, play_mode = 0;
         	
-        		callback_pending = (callback_flag)(callback_pending & ~callback_trickplay);
+        		callback_pending -= callback_trickplay;
        			
        			switch (state){
         			case state_fast_forward:
@@ -694,7 +756,7 @@ Stream::timeslice(Statistics *stats)
         	  			play_mode = 4;
         	  			break;
         	  		case state_streamlive:
-        	  		  	callback_pending = (callback_flag)(callback_pending & callback_bufferswait);
+        	  		  	callback_pending += callback_bufferswait;
         	  			play_mode = 7;
         	  			break;
         	  		//default 0;
@@ -705,19 +767,16 @@ Stream::timeslice(Statistics *stats)
    			if (result != ErrorOccurred){
    			  
    			  	if (callback_pending & callback_timeout){
-   			  		callback_pending = (callback_flag)(callback_pending & ~callback_timeout);
+   			  		callback_pending -= callback_timeout;
      					_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
      				}	 
-#ifdef DEBUGLIB
-				Debug("request for play from %8.8X, block %i, mode %i", from, AckNum, play_mode);
-#endif
      	 			result = myserver->send_playback_request(playback_id, RequestNum, AckNum, from, play_mode);
      	 			
      	 			if (result == ErrorOccurred){
      	 			  	if (myserver->ErrorNum() == IP_NoBuffer){
      	 			  	  	myserver->RemoveErr();
      	 			  	  	result = NoError;
-     	 			 	  	callback_pending = (callback_flag)(callback_pending | callback_trickplay);
+     	 			 	  	callback_pending += callback_trickplay;
      	 			 	  	_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), (comms_timeout), VSP_CallAfterVeneer, pw);	  	
  						if (e != NULL){
   							MakeError(e);
@@ -729,9 +788,9 @@ Stream::timeslice(Statistics *stats)
      	 			}
      	 			else{
      	 			  	message_sent = false;
-     	 			  	callback_pending = (callback_flag)(callback_pending | callback_bufferswait);
+     	 			  	callback_pending += callback_bufferswait;
      	 			  	if ((result != ErrorOccurred)&&(state != state_streamlive)){
-     	 					callback_pending = (callback_flag)(callback_pending | callback_block);
+     	 					callback_pending += callback_block;
                 				_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), (comms_timeout), VSP_CallAfterVeneer, pw);	  	
  						if (e != NULL){
   							MakeError(e);
@@ -743,23 +802,21 @@ Stream::timeslice(Statistics *stats)
                 	else
                 		err = &(mysource->ReturnCopyOfError());
                 }
- 		else {
- 		  	if (state != state_streamlive) {
-				if (mysource->foregroundExecute(&callback_pending, myserver, stats) == ErrorOccurred){
-  					err = &mysource->ReturnCopyOfError();
-  					result =  ErrorOccurred;
-  				}
+ 		else {// default foreground execute (save stream)
+ 		  	if (mysource->foregroundExecute(&callback_pending, myserver, stats) == ErrorOccurred){
+  				err = &mysource->ReturnCopyOfError();
+  				result =  ErrorOccurred;
+  			}
   				
-  				if (callback_pending & callback_nak){
-                			callback_pending = (callback_flag)(callback_pending | callback_nak);
-     					_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), ((comms_timeout+1)>>1), VSP_CallAfterVeneer, pw);	  	
- 					if (e != NULL){
-  						MakeError(e);
-  						result = ErrorOccurred;
- 					} 
- 				}
+  			if (callback_pending & callback_nak){
+                		callback_pending += callback_nak;
+     				_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), ((comms_timeout+1)>>1), VSP_CallAfterVeneer, pw);	  	
+ 				if (e != NULL){
+  					MakeError(e);
+  					result = ErrorOccurred;
+ 				} 
  			}
-  		}
+ 		}
   	}
   	// calculate if the mpeg player has tokens if so use them as timeout values
   	// also calculate if we own all the tokens then we are starting the stream
@@ -798,11 +855,7 @@ Stream::server_inetevent(void)
 		myserver->send_message_EndNotification(comms_result);
 	message_sent = true;
   }
-		
-#ifdef DEBUGLIB
-  if (event != 0)
-  	Debug("TCP event 0x%2.2X result = %i", event, comms_result);
-#endif  	
+
   if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
     	myserver->send_message_Error(err);
   	message_sent = true;
@@ -815,7 +868,7 @@ Stream::DummyAckCall(void)
 {
   error_flag result = NoError;
   
-  if ((myserver != NULL)&&(state != state_stop)) {
+  if ((myserver != NULL)&&(state != state_stop)) { //server is null if multicast
   	if (myserver->comms_flag != comms)	// defined in the server class
  		if (myserver->SendAck(myserver->getMaxRequestedBlock(), myserver->getMaxRequestedBlock(), dummy_ack) == ErrorOccurred){
  			err = &(myserver->ReturnCopyOfError());
@@ -856,7 +909,7 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   	buffers[i].in_use = free_token;
   	
 	if ((!(callback_pending & callback_bufferfree))||(state == state_stop)){
-  		callback_pending = (callback_flag)(callback_pending | callback_bufferfree);	  	
+  		callback_pending += callback_bufferfree;	  	
     		_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
  		if (e != NULL){
   			MakeError(e);
@@ -866,9 +919,9 @@ Stream::MPEGInterrupt(int buffer_descriptor)
  	
  	if (state != state_stop){
  		if (callback_pending & callback_fullblocks)
-  			callback_pending = (callback_flag)(callback_pending & ~callback_fullblocks);
+  			callback_pending -= callback_fullblocks);
   			
-  		callback_pending = (callback_flag)(callback_pending | callback_tokenfree);
+  		callback_pending += callback_tokenfree;
   	}// !stop
  }
 
@@ -888,10 +941,6 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   if (result == ErrorOccurred)
   	return result;
     
-  //Debug("returned %8.8X, size %i", 	((BitstreamBufferDescriptor*)buffer_descriptor)->buffer_ptr,
-  //					((BitstreamBufferDescriptor*)buffer_descriptor)->buffer_length);
-
-  //NUM_MPEG_Tokens defined as 2 else error
   if ((buffers[0].in_use == claim_token)&&(buffer_descriptor >= (int)buffers[0].block->buffers)&&
       (buffer_descriptor <  (((int)buffers[0].block->buffers) + (buffers[0].block->max_buffers * sizeof(BitstreamBufferDescriptor))) )){
       	  	buffers[0].blocks_returned++;
@@ -905,13 +954,11 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   			buffers[0].in_use = free_token;
   			
   			token_freed = 0;
-  			callback_pending = (callback_flag)(callback_pending & callback_tokenfree);
   		}
   }
   else         // not token 0 try token 1
-  {
   if ((buffers[1].in_use == claim_token)&&(buffer_descriptor >= (int)buffers[1].block->buffers)&&
-      (buffer_descriptor <  (((int)buffers[1].block->buffers) + (buffers[1].block->max_buffers * sizeof(BitstreamBufferDescriptor))) )){
+          (buffer_descriptor <  (((int)buffers[1].block->buffers) + (buffers[1].block->max_buffers * sizeof(BitstreamBufferDescriptor))) )){
       	  	buffers[1].blocks_returned++;
       	  	
   		if (buffers[1].blocks_returned == buffers[1].block->num_buffers){	// if we have received all the blocks free it
@@ -922,16 +969,14 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   			buffers[1].in_use = free_token;
   	
   			token_freed = 1;
-  			callback_pending = (callback_flag)(callback_pending & callback_tokenfree);
   		}
-      }
-  }
+   }
   	
   	
   if (token_freed != -1){
   	
 	if ((!(callback_pending & callback_bufferfree))||(state == state_stop)){
-  		callback_pending = (callback_flag)(callback_pending | callback_bufferfree);	  	
+  		callback_pending += callback_bufferfree;	  	
     		_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
  		if (e != NULL){
   			MakeError(e);
@@ -941,9 +986,7 @@ Stream::MPEGInterrupt(int buffer_descriptor)
  	
  	if (state != state_stop){
  		if (callback_pending & callback_fullblocks)
-  			callback_pending = (callback_flag)(callback_pending & ~callback_fullblocks);
-  			
-  		callback_pending = (callback_flag)(callback_pending | callback_tokenfree);
+  			callback_pending -= callback_fullblocks;
   	}// !stop
   } 
   if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
@@ -1070,9 +1113,7 @@ StreamList::Remove(int identifier)	// returns a boolean success value
   			result = ErrorOccurred;
   	}
   }
-#ifdef DEBUGLIB
-	stats.DebugPrint();
-#endif  
+
   return result;
 }
 
@@ -1093,7 +1134,7 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
         	     	result = ErrorOccurred;
         	   }
         	   else {
-        		callback_flag callback = callback_none;
+        		callback_flag callback;
         		
       			if (stream->mysource->ReadDatagrams(stream->callback_pending, &callback, stream->myserver, &stats, stream->comms_timeout) == ErrorOccurred) {
     				err = &stream->ReturnCopyOfError();
@@ -1101,7 +1142,7 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
       			}
       			
       			if (callback & callback_timeout){	// analyse if there is any need to change the callback vector
-				stream->callback_pending = (callback_flag)(stream->callback_pending & ~callback_timeout);
+				stream->callback_pending -= callback_timeout;
      				_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, stream->pw);	 
 				
 				if (stream->state != state_stop){
@@ -1123,13 +1164,19 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
  							}
  						}
 					}
-					if ((stream->callback_pending & callback_bufferswait)&&(stream->mysource->getFullBlocks() > stream->buffer_blocks))
-						stream->callback_pending = (callback_flag)((stream->callback_pending & ~callback_bufferswait) | callback_tokenfree);
-						
-					if (stream->callback_pending & callback_tokenfree)
-						result = stream->test_empty_buffers();
+					if (stream->callback_pending & callback_bufferswait){
+						if (stream->mysource->getFullBlocks() > stream->buffer_blocks){
+							stream->callback_pending -= callback_bufferswait;
+							for(int i = 0; i < NUM_MPEG_Tokens; ++i)
+								result = stream->test_empty_buffers();
+						}
+					}
+					else {
+						if (stream->tokenfree())
+							result = stream->test_empty_buffers();
+					}
  		        	}
- 		        	stream->callback_pending = (callback_flag)(stream->callback_pending | callback);
+ 		        	stream->callback_pending += callback;
       			}      			
     	 		*claim = claim_event;
     	 	   }
@@ -1168,7 +1215,7 @@ StreamList::TimeSliceCall(void *)
   if (result != ErrorOccurred){
   	for (i=0;i<CurrentSize;i++){
     		Stream *stream = ((Stream*)object[i]);
-    		if ((stream != NULL)&&(stream->callback_pending)){
+    		if ((stream != NULL)&&(stream->callback_pending != callback_none)){
     			if (stream->source_flag == free_token ){
       				stream->source_flag = claim_token; 		// in use
       				if (stream->timeslice(&stats) == ErrorOccurred){
