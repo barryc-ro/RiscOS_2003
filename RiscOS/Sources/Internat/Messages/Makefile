@@ -131,6 +131,30 @@ force:; @|
 s.LocaleList:; Utils.LocaleChk
 
 #
+# Binary Build Environment rules
+#
+BBETYPE = messages
+bbe-messages: bbe-generic-resources-get-alias ${TAGEXT}
+  BBE_Export_Dir Global.${LOCALE}
+  BBE_Export_Dir s
+  ${CP} Mk* ${BBEDIR}.* ${CPFLAGS}
+  ${MKDIR} ${BBEDIR}.Processed
+  ${MKDIR} ${BBEDIR}.Resources
+  ${MKDIR} ${BBEDIR}.${UTILS}
+  ${CP} ${TAGEXT}  ${BBEDIR}.${TAGEXT}  ${CPFLAGS}
+  ${CP} ${MSGEXT}  ${BBEDIR}.${MSGEXT}  ${CPFLAGS}
+  ${CP} ${MSGTOK}  ${BBEDIR}.${MSGTOK}  ${CPFLAGS}
+  ${CP} ${TOKGEN}  ${BBEDIR}.${TOKGEN}  ${CPFLAGS}
+  ${CP} ${MSGEXT2} ${BBEDIR}.${MSGEXT2} ${CPFLAGS}
+  ${CP} ${MSGTOK2} ${BBEDIR}.${MSGTOK2} ${CPFLAGS}
+  ${CP} ${TOKGEN2} ${BBEDIR}.${TOKGEN2} ${CPFLAGS}
+  ${CP} ${SCANRES} ${BBEDIR}.${SCANRES} ${CPFLAGS}
+  ${CP} ${RESCOMM} ${BBEDIR}.${RESCOMM} ${CPFLAGS}
+  ${CP} ${LOCALECHK} ${BBEDIR}.${LOCALECHK} ${CPFLAGS}
+  ${CP} Version* ${BBEDIR}.* ${CPFLAGS}
+
+
+#
 # Tokenise the Messages file using Help and Dictionary Tokens
 #
 ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
