@@ -115,4 +115,3 @@ o.main:
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
-o.main: c++.main h.calibrate h.on_screen h.calibrate C:h.swis C:h.kernel
