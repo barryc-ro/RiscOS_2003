@@ -12,7 +12,6 @@
 # Paths
 #
 EXP_HDR = <export$dir>
-INSTDIR = ${INSTDIR}.!System
 
 #
 # Generic options:
