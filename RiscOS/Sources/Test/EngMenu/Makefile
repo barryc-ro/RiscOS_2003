@@ -12,7 +12,7 @@ RM      = remove
 WIPE    = -wipe
 CD	= dir
 
-DEFINES = ${DEBUG} ${THROWBACK}
+DEFINES = ${DEBUG} ${THROWBACK} ${McCabe}
 COMMONFLAGS = -zM -c -Wp -ws -depend !Depend ${INCLUDES} ${DEFINES}
 
 AFLAGS = -depend !Depend -Stamp -quit
@@ -26,7 +26,7 @@ WFLAGS  = ~c~v
 #
 # Libraries
 #
-CLIB       = CLIB:o.stubs CLIB:o.c++lib <Lib$Dir>.RISC_OSLib.o.risc_oslib TCPIPLibs:o.unixlib
+CLIB   = CLIB:o.stubs CLIB:o.c++lib <Lib$Dir>.RISC_OSLib.o.risc_oslib TCPIPLibs:o.unixlib
 DLIBS  = <LIB$Dir>.DebugLib.o.debuglib TCPIPLibs:o.socklib TCPIPLibs:o.inetlib
 #
 # Include files
@@ -38,6 +38,7 @@ INCLUDES =  -ICLIB:,TCPIPLibs:
 COMPONENT = EngMenu
 TARGET    = !EngMenu.!RunImage
 D_TARGET  = !EngMenu.!RunImaDB
+I_TARGET  = !EngMenu.!RunImagI
 
 OBJS     = 	\
 o.main 		\
@@ -45,6 +46,7 @@ o.graphics	\
 o.message	\
 o.parser	\
 o.menuhier	\
+o.interface	\
 o.menu
 
 d_OBJS     = 	\
@@ -53,6 +55,7 @@ d_o.graphics	\
 d_o.message	\
 d_o.parser	\
 d_o.menuhier	\
+d_o.interface	\
 d_o.menu
 
 OBJSI     =	\
@@ -61,30 +64,33 @@ i.graphics	\
 i.message	\
 i.parser	\
 i.menuhier	\
+i.interface	\
 i.menu
 
 OBJSINST   =	\
-oi.main		\
-oi.graphics	\
-oi.message	\
-oi.parser	\
-oi.menuhier	\
-oi.menu		\
-oi.instlib
+io.instlib	\
+io.main		\
+io.graphics	\
+io.message	\
+io.parser	\
+io.menuhier	\
+io.interface	\
+io.menu
 
 #
 # Rule patterns
 #
-.SUFFIXES:	.d_o .o .oi .s .c .c++ .i .cmhg .inst
-.c++.o:;    ${C++} ${CFLAGS} -o $@ $<
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.SUFFIXES:	.d_o .o .s .c .c++ .i .cmhg .inst .io
+
+.c++.o:;    ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c++.d_o:;    ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.d_o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
-.c++.i:;    ${CC} ${C++FLAGS} -c -C -E $< >> $@
-.c.i:;      ${CC} ${CFLAGS} -c -C -E $< >> $@
-.inst.oi:;  ${CC} ${CFLAGS} -C++ -W -o $@ $<
+.c++.i:;    ${C++} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
+.c.i:;      ${CC} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
+.inst.io:;  ${C++} ${CFLAGS} ${DFLAGS} -W -o $@ $<
 
 #
 # Build
@@ -94,33 +100,37 @@ all: ${TARGET} dirs
 
 d_all: ${D_TARGET} dirs
         @echo ${COMPONENT}: all complete
+        
+instrument: ${I_TARGET} dirs
+	@echo ${COMPONENT}: instrument build complete
+	
+preprocess: ${OBJSI} dirs
+	@echo ${COMPONENT}: preprocess build complete
+
 dirs:
         ${MKDIR} o
         ${MKDIR} d_o
         ${MKDIR} i
-        ${MKDIR} oi
+        ${MKDIR} io
         ${MKDIR} inst
-
-preprocess: ${OBJSI} dirs
-	@echo ${COMPONENT}: preprocess build complete
-
-instrument: ${OBJSINST} dirs 
-	${LD} -rmf -s link/sym -o ${TARGET}u ${OBJSINST} ${STUBS}
-	@echo ${COMPONENT}: instrument build complete
 
 clean:
         ${WIPE} o ${WFLAGS}
         ${WIPE} d_o ${WFLAGS}
         ${WIPE} i ${WFLAGS}
-        ${WIPE} oi ${WFLAGS}
+        ${WIPE} io ${WFLAGS}
         ${WIPE} inst ${WFLAGS}
         ${WIPE} ${TARGET} ${WFLAGS}
         ${WIPE} ${d_TARGET} ${WFLAGS}
+        ${WIPE} ${I_TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
         
 #
 # Target
 #
+${I_TARGET}: ${OBJSINST}
+	${LD} ${Linkflags} ${OBJSINST} ${CLIB}
+
 ${TARGET}: ${OBJS}
         ${LD} ${Linkflags} ${OBJS} ${CLIB}
 
