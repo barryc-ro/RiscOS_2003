@@ -51,8 +51,8 @@ LIBS = ${NET5LIBS} ${C++LIB} C:o.Stubs
 # Program specific options
 #
 
-COMPONENT = calibration
-TARGET    = calibration
+COMPONENT = Calibrate
+TARGET    = Calibrate
 
 OBJS = o.main o.on_screen o.graphics
 
