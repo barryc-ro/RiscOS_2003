@@ -34,12 +34,14 @@
 #include "engfile.h"
 #include "engparse.h"
 #include "enginit.h"
+#include "enguser.h"
 
 static bool skipped, secondtimeround;
 
 void StartMessageDownload(void)
 {
 
+  ourmboxin->flags &= ~DOWNLOADINCOMPLETE;
   downloadstate.msg = ourmboxin->list;
   downloadstate.context = readytodownload;
   downloadstate.ret.code = ENG_COMPLETED;
@@ -77,7 +79,12 @@ void FinishHeaders(void)
 #endif
 
   if (disconnectpending)
-    DisconnectLine();
+  {
+    if (changepending)
+      DisconnectServer();
+    else
+      DisconnectLine();
+  }
 
   else if (emailactive)
   {
@@ -132,6 +139,8 @@ void DownloadFailure(MessageDescriptor *msg, bool headers)
     */
     if (headers)
       ourmboxin->flags |= MBOXINCOMPLETE;
+    else
+      ourmboxin->flags |= DOWNLOADINCOMPLETE;
     downloadstate.msg = msg->next;
     dprintf(("Eng", "Second attempt at message %d failed\n",msg->ID));
   }
@@ -177,16 +186,17 @@ void DoDownloadHeader(void)
       if ((!msg) || (disconnectpending))
       {
         /* all headers now downloaded */
-        if (parsehdrstate.context != idle)
-          hdrsdownloaded = true;
-        else
-          FinishHeaders();
 
         if (disconnectpending)
         {
           dprintf(("Eng", "Picking up disconnectpending while downloading headers\n"));
           ourmboxin->flags |= MBOXINCOMPLETE;
         }
+        if (parsehdrstate.context != idle)
+          hdrsdownloaded = true;
+        else
+          FinishHeaders();
+
       }
 
       else
@@ -355,9 +365,13 @@ void DoDownloadMessage(void)
         /* a disconnect is pending */
         dprintf(("Eng", "Picking up disconnectpending while downloading\n"));
         state &= ~DOWNLOADMSG;
+        ourmboxin->flags |= DOWNLOADINCOMPLETE;
         downloadstate.ret.code = ENG_COMPLETED;
         (*callbacklist.promptfunc)(&downloadstate.ret, ourmboxin->list, online, callbacklist.prompthandle);
-        DisconnectLine();
+        if (changepending)
+          DisconnectServer();
+        else
+          DisconnectLine();
       }
 
       else if (msg->flags & (DOWNLOADED | DOWNLOADING | REMOVED))
@@ -508,7 +522,7 @@ void DoRetrieve(void)
 
     case reqconnect :
 
-      dprintf(("Eng", "context = reqconnect\n"));
+      dprintf(("Eng", "Retrieve context = reqconnect\n"));
       /* confirmation of connection required to get message */
       retrievestate.context = idle;
       processpending = false;
@@ -535,7 +549,7 @@ void DoRetrieve(void)
     {
       uint32 size;
 
-      dprintf(("Eng", "context = readytoretrieve\n"));
+      dprintf(("Eng", "Retrieve context = readytoretrieve\n"));
       rc = msg->mboxobj->GetLength(size);
       dprintf(("Eng", "Message size=%d\n",size));
       if (rc < 0)
@@ -578,7 +592,7 @@ void DoRetrieve(void)
     }
     case retrievefailure :
 
-      dprintf(("Eng", "context = retrievefailure\n"));
+      dprintf(("Eng", "Retrieve context = retrievefailure\n"));
       state &= ~RETRIEVEMSG;
       msg->flags &= ~(DOWNLOADED + DOWNLOADING);
       if ((!(state & DOWNLOADMSG)) && (!expungepending))
@@ -617,7 +631,7 @@ void DoRetrieve(void)
 
     case readytoparse :
 
-      dprintf(("Eng", "context = readytoparse\n"));
+      dprintf(("Eng", "Retrieve context = readytoparse\n"));
       RemoveObj((MBoxOpCB**) &retrievestate.msgobj);
       StartParseMessage();
 
@@ -625,13 +639,13 @@ void DoRetrieve(void)
 
     case parsing :
 
-      dprintf(("Eng", "context = parsing\n"));
+      dprintf(("Eng", "Retrieve context = parsing\n"));
       ParseMessageSlice();
       break;
 
     case parsedone :
 
-      dprintf(("Eng", "context = parsedone\n"));
+      dprintf(("Eng", "Retrieve context = parsedone\n"));
       if (state & FORWARD)
       {
         destroy_context(&retrievestate.elibcontext);
@@ -645,7 +659,7 @@ void DoRetrieve(void)
 
     case readytowrite :
 
-      dprintf(("Eng", "context = readytowrite\n"));
+      dprintf(("Eng", "Retrieve context = readytowrite\n"));
       if (retrievestate.ent)
         StartWrite();
       else
@@ -659,14 +673,14 @@ void DoRetrieve(void)
 
     case writing :
 
-      dprintf(("Eng", "context = writing\n"));
+      dprintf(("Eng", "Retrieve context = writing\n"));
       WriteOutSlice();
 
       break;
 
     case writedone :
 
-      dprintf(("Eng", "context = writedone\n"));
+      dprintf(("Eng", "Retrieve context = writedone\n"));
       fclose(retrievestate.file);
       LockFile(retrievestate.ent->fname);
       retrievestate.ent = retrievestate.ent->next;
@@ -676,7 +690,7 @@ void DoRetrieve(void)
 
     case writefailure :
 
-      dprintf(("Eng", "context = writefailure\n"));
+      dprintf(("Eng", "Retrieve context = writefailure\n"));
       UnlockFile(retrievestate.ent->fname);
       free(retrievestate.ent->fname);
       retrievestate.ent->fname = 0;
@@ -687,7 +701,7 @@ void DoRetrieve(void)
 
     case finished :
 
-      dprintf(("Eng", "context = finished\n"));
+      dprintf(("Eng", "Retrieve context = finished\n"));
       /* finished downloading message,
          so we can now return it to the UI */
       state &= ~RETRIEVEMSG;
@@ -695,19 +709,25 @@ void DoRetrieve(void)
       msg->flags |= DOWNLOADED;
       retrievestate.ret.code = ENG_COMPLETED;
       (*callbacklist.getmsgfunc)(&retrievestate.ret, msg, callbacklist.getmsghandle);
+
       if (disconnectpending)
       {
-        dprintf(("Eng", "A disconnect is pending\n"));
-        DisconnectLine();
+        dprintf(("Eng", "Picking up disconnectpending during retrieve\n"));
+        if (changepending)
+          DisconnectServer();
+        else
+          DisconnectLine();
       }
+
       else if (processpending)
       {
         dprintf(("Eng", "Process is pending\n"));
         popprocessstate.context = done;
         state |= PROCESSPOP;
       }
-      else if (online)
-        DeactivatePOP();
+
+/*       else if (online) */
+/*         DeactivatePOP(); */
 
       break;
   }
