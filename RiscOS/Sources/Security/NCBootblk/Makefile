@@ -44,21 +44,8 @@ INCLUDES= -IC:
 #
 
 # Tiny stubs, no debugging
-CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM ${THROWBACK} -DUSE_TINY -UREMOTE_DEBUG -UENABLE_DEBUGGING \
-		-UAUTHENTICATE_SIGNATURES
-
-# Tiny stubs, debugging (may be a bit dodgy)
-#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM ${THROWBACK} -DUSE_TINY -UREMOTE_DEBUG -DREMOTE_DEBUG -DENABLE_DEBUGGING \
-		-DAUTHENTICATE_SIGNATURES
-
-# Shared C stubs, no debugging
-#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM ${THROWBACK} -UUSE_TINY -UREMOTE_DEBUG -UENABLE_DEBUGGING \
-		-DAUTHENTICATE_SIGNATURES
- 
-# Shared C stubs, debugging
-#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM ${THROWBACK} -UUSE_TINY -DREMOTE_DEBUG -DENABLE_DEBUGGING \
-		-DAUTHENTICATE_SIGNATURES
-
+CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM ${THROWBACK} -DUSE_TINY -UREMOTE_DEBUG  \
+		-UAUTHENTICATE_SIGNATURES  ${OPTS}
 
 
 # Libraries
@@ -69,10 +56,10 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-DBUGLIB   = C:o.DBUGzm 
-
-#SOCKLIB	   = InetInc:^.^.libs.socklib.socklibzm
-#INETLIB	   = InetInc:^.^.libs.inetlib.inetlibzm
+SOCKLIB	   = TCPIPLibs:o.socklib5 
+INETLIB	   = TCPIPLibs:o.inetlib
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
+C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 
 #
 # Rule patterns
@@ -89,11 +76,11 @@ TARGET    = aof.NCBootBlk
 TARGETSA  = rm.NCBootblk
 EXPORTS   = ${EXP_C_H}.smcard ${EXP_C_H}.DBUG
 OBJS      = module.o header.o reg_swis.o reg_events.o enum_ddi.o \
-	reg_scbb.o reg_cmds.o reg_status.o reg_utils.o \
-	machine.o dynalloc.o reg_auth.o reg_index.o \
-	asm_utils.o reg_files.o\
-	BORDERDBUG.o kprintf.o \
-	reg_sign.o reg_tags.o
+            reg_scbb.o reg_cmds.o reg_status.o reg_utils.o dbugzm.o \
+            machine.o dynalloc.o reg_auth.o reg_index.o \
+            asm_utils.o reg_files.o\
+            BORDERDBUG.o kprintf.o \
+            reg_sign.o reg_tags.o
 
 
 #
@@ -120,9 +107,6 @@ clean:
         ${WIPE} map.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-${TARGETSA}: ${OBJS} ${CLIB} ${DBUGLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${DBUGLIB}
-
 #
 # Exported interface headers
 #
@@ -133,11 +117,14 @@ ${EXP_C_H}.DBUG:	h.DBUG
 	${CP} h.DBUG $@ ${CPFLAGS}
 
 
+${TARGETSA}: ${OBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} 
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} 
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB} 
 
 
 #
