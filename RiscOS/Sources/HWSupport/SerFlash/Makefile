@@ -1,74 +1,64 @@
 # Makefile for SerialFlash
+# ========================
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 02-Apr-97  SBF          Created.
+# 19-Feb-98  SBF          Created
 #
 
-#
+# -----------------------------------------------------------------------------
 # Generic options:
 #
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
+MKDIR           = cdir
+AS              = aasm
+CP              = copy
+RM              = remove
+WIPE            = -wipe
 
-#
+CCFLAGS         = -c -depend !Depend -IC:
+ASFLAGS         = ${THROWBACK} -depend !Depend -Stamp -quit -module -To $@ -From
+CPFLAGS         = ~cfr~v~n
+WFLAGS          = ~cr~vr
+
+# -----------------------------------------------------------------------------
 # Program specific options:
 #
-COMPONENT = SerFlash
-SOURCE    = s.SerFlash
-TARGET    = rm.SerFlash
+COMPONENT       = SerFlash
+SOURCE          = s.SerFlash
+TARGET          = rm.${COMPONENT}
 
-#
+# -----------------------------------------------------------------------------
 # Generic rules:
 #
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
 
-export: 
+all:    ${TARGET}
+        @echo ${COMPONENT}: module built
+
+rom:    ${TARGET}
+        @echo ${COMPONENT}: ROM module built
+
+export:
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+        @echo ${COMPONENT}: ROM module installed
 
 clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${SOURCE}
+clean_all:
+        ${WIPE} rm ${WFLAGS}
+        @echo ${COMPONENT}: cleaned all
+
+o.dirs:
+        @${MKDIR} rm
+
+${TARGET}: o.dirs
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.SerFlash: Hdr:ListOpts
-rm.SerFlash: Hdr:Macros
-rm.SerFlash: Hdr:DDVMacros
-rm.SerFlash: Hdr:System
-rm.SerFlash: Hdr:SWIs
-rm.SerFlash: Hdr:CPU.Generic26
-rm.SerFlash: Hdr:IO.GenericIO
-rm.SerFlash: Hdr:RISCOS
-rm.SerFlash: Hdr:ModHand
-rm.SerFlash: Hdr:FSNumbers
-rm.SerFlash: Hdr:NewErrors
-rm.SerFlash: Hdr:CMOS
-rm.SerFlash: Hdr:Symbols
-rm.SerFlash: Hdr:Services
-rm.SerFlash: Hdr:DeviceFS
-rm.SerFlash: Hdr:Serial
-rm.SerFlash: Hdr:RS423
-rm.SerFlash: Hdr:HostFS
-rm.SerFlash: Hdr:NdrDebug
-rm.SerFlash: Hdr:MsgTrans
-rm.SerFlash: Hdr:UpCall
-rm.SerFlash: Hdr:Proc
-rm.SerFlash: Version
-rm.SerFlash: s.Macros
-rm.SerFlash: s.FlashErrs
