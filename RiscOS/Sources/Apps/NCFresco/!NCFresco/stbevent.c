@@ -204,7 +204,8 @@ static void misc_event_handler(int event, fe_view v)
             break;
 
         case fevent_HOME:
-            frontend_complain(fe_home(v));
+	    if (!fe_locate_view(TARGET_OPEN) && !on_screen_kbd)
+		frontend_complain(fe_home(v));
             break;
 
         case fevent_PRINT:
@@ -593,7 +594,7 @@ static void encoding_event_handler(int event, fe_view v)
 void fevent_handler(int event, fe_view v)
 {
     STBDBG(("fevent_handler(): event %x v %p\n", event, v));
-
+    
     switch (event & fevent_CLASS_MASK)
     {
     case fevent_CLASS_GLOBAL:

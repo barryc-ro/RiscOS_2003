@@ -555,7 +555,10 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     }
 
     if (vp)
+    {
+	fe_internal_opening_view(view);
         *vp = view;
+    }
 
     return NULL;
 }

@@ -329,12 +329,15 @@ static int faded(int obj, int cmp)
 }
 #endif
 
+#define SELECTABLE_AND		0x80000001 /* was 0x80000001 to mask out faded*/
+#define SELECTABLE_MATCH	0x00000001
+
 static int selectable(int obj, int cmp)
 {
     unsigned flags;
     os_error *e;
     e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 0x40, cmp, &flags);
-    return e == NULL && (flags & 0x80000001) == 0x01; /* !faded and generates events */
+    return e == NULL && (flags & SELECTABLE_AND) == SELECTABLE_MATCH;
 }
 
 #if 0
@@ -1116,21 +1119,33 @@ BOOL tb_status_highlight(BOOL gain)
     return FALSE;
 }
 
-void tb_status_button(int cmp, BOOL active)
+void tb_status_button(int cmp, int active)
 {
     tb_bar_info *tbi = bar_list;
     if (tbi)
     {
-	if (!active)
-	    setstate(tbi->object_handle, cmp, FALSE);
-	else
+	switch (active)
 	{
+	case tb_status_button_INACTIVE:
+	    gfade(tbi->object_handle, cmp, FALSE);
+	    setstate(tbi->object_handle, cmp, FALSE);
+	    break;
+	case tb_status_button_ACTIVE:
+#if 1
+	    gfade(tbi->object_handle, cmp, FALSE);
+	    setstate(tbi->object_handle, cmp, TRUE);
+#else
 	    int i;
 	    for (i = 0; i < tbi->n_buttons; i++)
 	    {
 		int this_cmp = tbi->buttons[i].cmp;
 		setstate(tbi->object_handle, this_cmp, cmp == this_cmp);
 	    }
+#endif
+	    break;
+	case tb_status_button_FADED:
+	    gfade(tbi->object_handle, cmp, TRUE);
+	    break;
 	}
     }
 }

@@ -1620,7 +1620,7 @@ void fe_internal_deleting_view(fe_view v)
     }
     else if (strcasecomp(v->name, TARGET_OPEN) == 0)
     {
-	tb_status_button(fevent_OPEN_URL, 0);
+	tb_status_button(fevent_OPEN_URL, tb_status_button_INACTIVE);
     }
     else if (strcasecomp(v->name, TARGET_CUSTOM) == 0)
     {
@@ -1644,6 +1644,7 @@ void fe_internal_opening_view(fe_view v)
     }
     else if (strcasecomp(v->name, TARGET_OPEN) == 0)
     {
+	tb_status_button(fevent_OPEN_URL, tb_status_button_ACTIVE);
     }
     else if (strcasecomp(v->name, TARGET_CUSTOM) == 0)
     {

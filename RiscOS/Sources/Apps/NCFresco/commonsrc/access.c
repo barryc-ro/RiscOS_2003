@@ -803,7 +803,6 @@ static os_error *access_http_fetch_start(access_handle d)
 	authenticate_hdr.next = hlist;
 
 	hlist = &authenticate_hdr;
-	ACCDBGN(( "%s: %s\n", hlist->key, hlist->value));
 	d->data.http.had_auth = 1;
     }
 
@@ -819,7 +818,6 @@ static os_error *access_http_fetch_start(access_handle d)
 	proxy_authenticate_hdr.next = hlist;
 
 	hlist = &proxy_authenticate_hdr;
-	ACCDBGN(( "%s: %s\n", hlist->key, hlist->value));
 	d->data.http.had_proxy_auth = 1;
     }
 
@@ -870,6 +868,18 @@ static os_error *access_http_fetch_start(access_handle d)
     if ( d->flags & access_IMAGE )
         httpo.in.flags |= http_open_flags_IMAGE;
 
+#if DEBUG
+    {
+	http_header_item *h;
+	ACCDBG(("HTTP_Open flags %x\n", httpo.in.flags));
+	for (h = hlist; h; h = h->next)
+	{
+	    ACCDBGN(( " %s: %s\n", h->key, h->value));
+	}
+        httpo.in.flags &= ~http_open_flags_IMAGE;
+    }    
+#endif
+    
     ep = os_swix(HTTP_Open, (os_regset *) &httpo);
 
     ACCDBG(("HTTP_Open returned %p\n", ep ));

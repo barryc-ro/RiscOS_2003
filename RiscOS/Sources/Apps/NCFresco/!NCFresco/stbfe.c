@@ -162,7 +162,7 @@
 #define PPP_AlterSettings		0x4B620
 #define PPP_Status			0x4B621
 
-#define MESSAGE_OFFER_FOCUS		0x99 /* FIXME: this is wrong and won't get used */
+#define MESSAGE_OFFER_FOCUS		0x14
 
 /* -------------------------------------------------------------------------- */
 
@@ -2226,9 +2226,15 @@ os_error *fe_hotlist_add(fe_view v)
     e = backend_doc_info(v->displaying, NULL, NULL, &url, &title);
     if (!e)
     {
-/* 	tb_status_set_message(status_type_ERROR, "Adding page to favorites list"); */
+	time_t t = time(NULL) + 100;
+	tb_status_button(fevent_HOTLIST_ADD, TRUE);
+
         e = hotlist_add(url, title);
-/* 	tb_status_set_message(status_type_ERROR, 0); */
+
+	while (time(NULL) < t)
+	    ;
+	    
+	tb_status_button(fevent_HOTLIST_ADD, FALSE);
     }
     return e;
 }
@@ -3535,7 +3541,8 @@ static BOOL fe_send_message(wimp_eventstr *e)
 static void fe_keyboard_closed(void)
 {
     on_screen_kbd = 0;
-    tb_status_button(fevent_OPEN_KEYBOARD, FALSE);
+
+    tb_status_button(fevent_OPEN_KEYBOARD, tb_status_button_INACTIVE);
 }
 
 static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
@@ -3544,7 +3551,7 @@ static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
     on_screen_kbd = t;
     on_screen_kbd_pos = *box;
 
-    tb_status_button(fevent_OPEN_KEYBOARD, TRUE);
+    tb_status_button(fevent_OPEN_KEYBOARD, tb_status_button_ACTIVE);
 
     /* check that item with caret in it is still in view */
     {
@@ -4000,6 +4007,8 @@ static void fe_handle_openurl(wimp_msgstr *msg)
 }
 
 /* ------------------------------------------------------------------------------------------- */
+
+#if 0
 /*
  * w is the window handle that currently contains the focus.
  * flags are all reserved.
@@ -4048,15 +4057,15 @@ static BOOL window_is_ours(wimp_w w)
     iterate_frames(main_view, window__is_ours, vals);
     return vals[1];
 }
+#endif
+
+/*
+ * The focus is being offered to us. This means We should take it.
+ */
 
 static int offer_window_focus_handler(wimp_w w, int flags)
 {
-    /* if the current window is ours and is still visible then don't
-       let the caret move */
-
-    if (window_is_ours(w) && window_is_visible(w))
-	return TRUE;
-
+    fe_get_wimp_caret(w);
     return 1;
     NOT_USED(flags);
 }
@@ -4477,10 +4486,7 @@ void fe_event_process(void)
 		break;
 		
 	    case MESSAGE_OFFER_FOCUS:
-		if (offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]))
-		{
-		    wimp_sendmessage(wimp_EACK, msg, msg->hdr.task);
-		}
+		offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]);
 		break;
 
 	    case wimp_MCLOSEDOWN:

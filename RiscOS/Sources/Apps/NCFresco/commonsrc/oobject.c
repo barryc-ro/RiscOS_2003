@@ -201,7 +201,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     bbox.x1 = bbox.x0 + ti->width - obj->hspace*2 - bw*2;
     bbox.y1 = bbox.y0 + ti->max_up + ti->max_down - obj->vspace*2 - bw*2;
 
-    OBJDBG(("oobject: plugin type %d\n", obj->type));
+/*  OBJDBG(("oobject: plugin type %d\n", obj->type)); */
 
     switch (obj->type)
     {

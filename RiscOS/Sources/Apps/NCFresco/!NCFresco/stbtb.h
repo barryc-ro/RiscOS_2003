@@ -60,6 +60,9 @@ extern void tb_status_unstack_all(void);
 
 extern BOOL tb_status_check_pointer(wimp_mousestr *mp);
 
+#define tb_status_button_INACTIVE	0
+#define tb_status_button_ACTIVE		1
+#define tb_status_button_FADED		2
 extern void tb_status_button(int event, int active);
 
 extern void tb_open_url(void);
