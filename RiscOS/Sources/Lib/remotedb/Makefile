@@ -34,8 +34,8 @@ INETLIB   = TCPIPLibs:o.inetlib
 
 DEBUGLIB = <Lib$Dir>.debug
 
-CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} ${THROWBACK} -fah -Fn ${DFLAGS}
-CFLAGSZM = -c -depend !Depend -Wap -zps0 ${INCLUDES} ${THROWBACK} -fah -Fn ${DFLAGS} -zM
+CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} ${THROWBACK} -ffah ${DFLAGS}
+CFLAGSZM = -c -depend !Depend -Wap -zps0 ${INCLUDES} ${THROWBACK} -ffah ${DFLAGS} -zM
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
 
