@@ -1,0 +1,664 @@
+/* File:    boson.c
+   Purpose: Various low level read and write calls to talk to the ATM25 podule's
+            registers.
+            Modified quite extensively to accomodate the EASI bus address space,
+            not ISA
+   Author:  Ben Laughton
+
+   Copyright 1999 Element 14 Ltd.
+
+   This material is the confidential trade secret and proprietary information
+   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
+   any third party without the prior written consent of Element 14 Ltd.
+   All rights reserved.
+
+   History:
+
+   1999-02-05: BAL
+   Inherited.  Made functions local to this file static.
+ */
+
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+/* CLib */
+#include "kernel.h"
+#include <stdio.h>
+#include <string.h>
+
+#include "DebugLib/DebugLib.h"
+
+/* Local */
+#include "boson.h"
+#include "defs.h"
+#include "module.h"
+#include "mpeg.h"
+#include "service.h"
+#include "utils.h"
+
+
+
+
+/* =============================================================================
+ * Constants definitions
+ */
+
+#ifdef DEBUG_TRAIL
+enum
+{
+    MESSAGE_TRAIL_SIZE = 2048
+};
+#endif
+
+enum
+{
+    DiscardMsg_MESSAGE = 1,
+    FLUSH_FIFO
+};
+
+
+
+
+/* =============================================================================
+ * Type definitions
+ */
+
+typedef struct
+{
+    NICMessage    msg;
+    NICExtension  ext;
+} message_trail;
+
+
+
+
+
+/* =============================================================================
+ * Global variable declarations
+ */
+
+int timeoutError = 0;
+
+int irq_closes = 0;
+int irq_closeds = 0;
+int irq_errors = 0;
+int irq_connects = 0;
+int irq_connect_reqs = 0;
+int irq_data_lengths = 0;
+int irq_data_aborts = 0;
+int irq_data_ends = 0;
+int irq_datas = 0;
+int irq_refusals = 0;
+int irq_packets = 0;
+int irq_rx_discards = 0;
+int irq_rx_errors = 0;
+int irq_con_req_errors = 0;
+int irq_con_ack_errors = 0;
+int irq_con_req_acks = 0;
+int irq_con_refusals = 0;
+int irq_connection_errors = 0;
+int irq_bogus_pkts = 0;
+int irq_pkt_hiwm = 0;
+int irq_buffer_recovers = 0;
+int irq_ip_pkts_dropped = 0;
+
+int boson_rx_pkts = 0;
+int boson_cmd_pkts = 0;
+int boson_msg_pkts = 0;
+
+unsigned char    irq_buffer[BOSON_FIFO_SIZE];
+
+#ifdef DEBUG_TRAIL
+static message_trail    msg_trail[MESSAGE_TRAIL_SIZE];
+static message_trail *  msg_trail_next = msg_trail;
+static unsigned int     msg_trail_num = 0;
+static unsigned int     msg_trail_lock = 0;
+#endif
+
+
+
+
+/* =============================================================================
+ * Function prototype declarations
+ */
+
+#ifdef DEBUGLIB
+static void  ddisplay_message_trail_entry (const message_trail *const  m);
+#endif
+
+
+
+
+/* =============================================================================
+ * Function definitions
+ */
+
+extern "C" _kernel_oserror *  boson_irq_handler  (_kernel_swi_regs *  r,
+                                                  void *              pw)
+{
+    NICMessage        msg;
+    NICExtension      ext;
+    MessageHandlerRC  rc;
+
+    // Stop the card from generating interrupts
+    w_Boson_Command (BosonCmd_ClrRxBlockMask);    // mask out the NotEmpty bit
+
+    // Enable system interrupts
+    _kernel_irqs_on ();
+
+    M_unused (r);
+    M_unused (pw);
+
+
+    while (Boson_RX_Block)    /* IRQ triggered on RxBlock */
+    {
+        boson_rx_pkts++;
+
+        msg.header = r_Boson_BlockFromARM; /* get msg header */
+
+        if (msg.common.type == Boson_DataMessage)
+        {
+            if (msg.data.ext)
+            {
+                unsigned int  ext_attempts = 0;
+
+                do
+                {
+                    /* read extension word */
+                    ext.extension = r_Boson_CommitFromARM;
+                    ++ext_attempts;
+                }
+                while (ext_attempts < 8 && ext.bits.reserved != 0);
+
+                if (ext.bits.reserved != 0)
+                {
+                    continue; /* abort */
+                }
+            } /* endif data extend */
+            else
+            {
+                ext.bits.size = msg.data.size;
+            }
+
+            irq_packets = msg.data.size;
+            boson_msg_pkts++;
+            if (msg.data.size > irq_pkt_hiwm)
+            {
+                irq_pkt_hiwm = msg.data.size;
+            }
+        }
+        else
+        {
+            ext.bits.size = 0;
+            boson_cmd_pkts++;
+        }
+
+        #ifdef DEBUG_TRAIL
+        if (msg_trail_lock == 0)
+        {
+            msg_trail_next->msg = msg;
+            if (msg.common.type == Boson_DataMessage && msg.data.ext)
+            {
+                msg_trail_next->ext = ext;
+            }
+
+            #ifdef DEBUGLIB
+            ddisplay_message_trail_entry (msg_trail_next);
+            #endif
+
+            msg_trail_next++;
+            msg_trail_num++;
+
+            if (msg_trail_next >= msg_trail + MESSAGE_TRAIL_SIZE)
+            {
+                msg_trail_next = msg_trail;
+            }
+        }
+        #endif
+
+        /* Find out what service this handle is bound to (if it is even
+         * bound at all.
+         */
+        Service *  service = service_manager->GetService (msg.common.handle);
+        if (service)
+        {
+            rc = service->MessageHandler (msg, ext.bits.size);
+        }
+        else
+        {
+            /* Unknown / unsupported service - no sockets bound to it so
+             * should be impossible - probably junk data.
+             */
+            rc = FlushFIFO;
+        }
+
+        switch (rc)
+        {
+            case HandledMsg:
+                break;
+
+            case DiscardMsg:
+                /* asm_junk_msg(CommitFromARMAddr, packet_bytes); */
+                ASM_GET_MSG (CommitFromARMAddr, irq_buffer, msg.data.size);
+                break;
+
+            case FlushFIFO:
+                irq_bogus_pkts++;
+                asm_buffer_recover (CommitFromARMAddr);
+                irq_buffer_recovers++;
+                break;
+
+            default:
+                break;
+        }
+    } /* endof FIFO RX Block loop */
+
+    /* does MPEG system need feeding? */
+    mpeg_check_feed ();
+
+    #ifdef FIFO_RECOVER
+    /* 1999-02-03: BAL
+     * This strikes me as a dodgy thing to do - what guarantee is
+     * there that valid new data will not arrive in the FIFO between
+     * the RXBlock check at the top of the above while loop and the
+     * RXNotEmpty check here?
+     */
+    if (Boson_RX_NotEmpty)
+    {
+        asm_buffer_recover (CommitFromARMAddr);
+        irq_buffer_recovers++;
+    }
+    #endif
+
+    // Allow the NIC to generate interrupts again
+    w_Boson_Command (BosonCmd_SetRxBlockMask);
+
+    return NULL;
+
+} /* end of irq handler */
+
+
+
+
+#ifdef DEBUG_TRAIL
+
+#ifdef DEBUGLIB
+
+void  ddisplay_message_trail_entry (const message_trail *const  m)
+{
+    dprintf (("", "0x%08x [%s cmd:%02d, hndl:%02d",
+              m->msg.header,
+              m->msg.common.type == Boson_CommandMessage ? "CMD, " : "DATA,",
+              m->msg.common.command,
+              m->msg.common.handle));
+
+    if (m->msg.common.type == Boson_DataMessage)
+    {
+        dprintf (("", ", E: %s, L: %s, F: %s, bytes: %d]\n",
+                  m->msg.data.ext   ? "Y" : "N",
+                  m->msg.data.last  ? "Y" : "N",
+                  m->msg.data.first ? "Y" : "N",
+                  m->msg.data.size));
+    }
+    else
+    {
+        dprintf (("", "]\n"));
+    }
+
+    if (m->msg.data.ext)
+    {
+        dprintf (("", "0x%08x [EXT,  bytes: %d]\n",
+                  m->ext.extension,
+                  m->ext.bits.size));
+    }
+}
+
+#endif
+
+static void  display_message_trail_entry (const message_trail *const  m)
+{
+    printf ("0x%08x [%s cmd:%02d, hndl:%02d",
+            m->msg.header,
+            m->msg.common.type == Boson_CommandMessage ? "CMD, " : "DATA,",
+            m->msg.common.command,
+            m->msg.common.handle);
+
+    if (m->msg.common.type == Boson_DataMessage)
+    {
+        printf (", E: %s, L: %s, F: %s, bytes: %d]\n",
+                m->msg.data.ext   ? "Y" : "N",
+                m->msg.data.last  ? "Y" : "N",
+                m->msg.data.first ? "Y" : "N",
+                m->msg.data.size);
+    }
+    else
+    {
+        printf ("]\n");
+    }
+
+    if (m->msg.data.ext)
+    {
+        printf ("0x%08x [EXT,  bytes: %d]\n",
+                m->ext.extension,
+                m->ext.bits.size);
+    }
+}
+
+
+
+_kernel_oserror *  boson_display_trail (int  argc, char *  argv[])
+{
+    message_trail *  m;
+
+
+    M_unused (argc);
+    M_unused (argv);
+
+    /* Don't want to add entries to the trail while we're displaying it or
+     * our loops could go wrong (msg_trail_next could change under our feet).
+     */
+    msg_trail_lock = 1;
+
+    printf ("BOSON MESSAGE TRAIL\n"
+            "Displaying %d messages of %d received\n",
+            msg_trail_num > MESSAGE_TRAIL_SIZE ? MESSAGE_TRAIL_SIZE :
+                                                 msg_trail_num,
+            msg_trail_num);
+
+    /* If > MESSAGE_TRAIL_SIZE messages have been received then the *start* of
+     * the trail will most likely not be at the start of the trail array.
+     */
+    if (msg_trail_num > MESSAGE_TRAIL_SIZE)
+    {
+        for (m = msg_trail_next;
+             m < msg_trail + MESSAGE_TRAIL_SIZE;
+             m++)
+        {
+            display_message_trail_entry (m);
+        }
+    }
+
+    for (m = msg_trail; m < msg_trail_next; m++)
+    {
+        display_message_trail_entry (m);
+    }
+
+    msg_trail_lock = 0;
+
+    return NULL;
+}
+
+#else
+
+_kernel_oserror *  boson_display_trail (int  argc, char *  argv[])
+{
+    M_unused (argc);
+    M_unused (argv);
+
+    printf ("BOSON MESSAGE TRAIL disabled in this build\n");
+
+    return NULL;
+}
+
+#endif
+
+
+
+
+/* ******************************** */
+/* write to various BOSON registers */
+/* ******************************** */
+
+/* -----------------------------------------------------------------------------
+   CommitWrite
+
+   write word to CommitToARM register
+   checks for available FIFO space & h/w failure
+ */
+
+#if 0
+static void CommitWrite(int w)
+{
+    static int freeW = 0;
+    unsigned int tInit;
+
+    if (timeoutError)
+    {
+        return;
+    }
+
+    tInit = MonotonicTime();
+
+    while (freeW == 0)
+    {
+        if (Boson_TX_384)
+        {
+            freeW = 384;
+        }
+        else if (Boson_TX_128)
+        {
+            freeW = 128;
+        }
+        else if (Boson_TX_16)
+        {
+            freeW = 16;
+        }
+        else if (MonotonicTime () - tInit > TIMEOUT)
+        {
+            dprintf (("", "CommitWrite: timeout error - no free words in toARM fifo.\n"));
+            timeoutError++;
+            return;
+        }
+    }
+    w_Boson_CommitToARM(w);
+    freeW--;
+}
+#endif
+
+
+
+
+/* -----------------------------------------------------------------------------
+   CommitRead
+
+   read word from CommitFromARM register
+   polls and times out
+ */
+
+#if 0
+static unsigned int CommitRead (void)
+{
+    unsigned int w;
+    unsigned int tInit;
+
+    if (timeoutError)
+    {
+        return -1;
+    }
+
+    tInit = MonotonicTime();
+
+    while (!Boson_RX_NotEmpty)
+    {
+        if (MonotonicTime() - tInit > TIMEOUT)
+        {
+            dprintf (("", "\nTimeout error on commit read op\n"));
+            timeoutError++;
+            return -1;
+        }
+    }
+
+    w = r_Boson_CommitFromARM;
+    return w;
+}
+#endif
+
+
+
+
+/* -----------------------------------------------------------------------------
+   boson_block_write
+
+   write word to BlockToARM register
+   does FIFO freespace check and h/w timeout
+ */
+
+void boson_block_write (unsigned int  w)
+{
+    static int freeW = 0;
+    unsigned int tInit;
+
+    if (timeoutError)
+    {
+        return;
+    }
+
+    tInit = MonotonicTime();
+
+    while (freeW == 0)
+    {
+        if (Boson_TX_384)
+        {
+            freeW = 384;
+        }
+        else if (Boson_TX_128)
+        {
+            freeW = 128;
+        }
+        else if (Boson_TX_16)
+        {
+            freeW = 16;
+        }
+
+        else if (MonotonicTime() - tInit > TIMEOUT)
+        {
+            dprintf(("", "BlockWrite: Timeout error - no free words in toARM fifo.\n"));
+            timeoutError++;
+            return;
+        }
+    }
+    w_Boson_BlockToARM (w);
+    freeW--;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   boson_block_read
+
+   read word from BlockFromARM register
+   does polling and timeout
+ */
+unsigned int boson_block_read (void)
+{
+    unsigned int w;
+    unsigned int tInit;
+
+    if (timeoutError)
+    {
+        return 0;
+    }
+
+    tInit = MonotonicTime();
+
+    while (!Boson_RX_NotEmpty)
+    {
+        if (MonotonicTime() - tInit > TIMEOUT)
+        {
+            dprintf (("", "Timeout error on block read op\n"));
+            timeoutError++;
+            return 0;
+        }
+    }
+
+    w = r_Boson_BlockFromARM;
+    return w;
+}
+
+
+
+
+/* Number of bytes free in FIFO */
+int  boson_fifo_space (void)
+{
+    enum
+    {
+        FreeSpace_Attempts = 8
+    };
+    int i;
+
+    for (i = 0; i < FreeSpace_Attempts; i++)
+    {
+        if (Boson_TX_384)
+        {
+            return (384 * 4);
+        }
+        else if (Boson_TX_128)
+        {
+            return (128 * 4);
+        }
+        else if (Boson_TX_16)
+        {
+            return (16 * 4);
+        }
+    }
+
+    return 0;
+}
+
+_kernel_oserror *  boson_display_status (int  argc, char *  argv[])
+{
+    int           i;
+    unsigned int  status[256];
+
+    M_unused (argc);
+    M_unused (argv);
+
+    multi_status (BosonStatusAddr, status, M_array_size (status));
+    for (i = 0; i < M_array_size (status); i++)
+    {
+        printf ("%08x\n", status[i]);
+    }
+
+    return NULL;
+}
+
+
+
+
+_kernel_oserror *  boson_display_info (int argc, char *  argv[])
+{
+    int w = 0;
+
+    M_unused (argc);
+    M_unused (argv);
+
+    w = boson_fifo_space() / (sizeof (unsigned int));
+
+    printf ("There are %d words free in the TX FIFO\n", w);
+
+    printf ("There are %spending words in the RX FIFO\n",
+            Boson_RX_NotEmpty ? "" : "no ");
+
+    printf ("There are %spending blocks in the RX FIFO\n",
+            Boson_RX_Block ? "" : "no ");
+
+    printf ("Attempted %d Boson FIFO recovers.\n",
+            irq_buffer_recovers);
+
+    if (!Boson_RX_Block && Boson_RX_NotEmpty)
+    {
+        printf ("\nThe Boson FIFO is in an inconsistent state.\n");
+    }
+    else
+    {
+        printf ("\nThe Boson FIFO is in a valid state.\n");
+    }
+
+    return NULL;
+}

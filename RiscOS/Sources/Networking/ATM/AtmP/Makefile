@@ -1,147 +1,122 @@
-# Makefile for ATM25 module
+# File:    Makefile
+# Purpose: Makefile for ATM25
+# Author:  Ben Laughton
 #
+# History:
+#
+# 1999-03-12: BAL
+# Created.
 
-#
+
+
+
+# ------------------------------------------------------------------------------
 # Paths
 #
-EXP_HDR = <export$dir>.^.Interface2
-EXP_C_H = <Cexport$dir>.h
-EXP_C_O = <Cexport$dir>.o
 
-LIBDIR = <Lib$Dir>
+# Export path for Messages module
+RESDIR		= <resource$dir>.Resources2.$(COMPONENT)
 
+
+
+# ------------------------------------------------------------------------------
+# Generic options
 #
-# Generic options:
+
+MKDIR		= cdir
+CP		= copy
+RM		= remove
+WIPE		= -wipe
+STRIPDEPND	= stripdepnd
+
+
+
+# ------------------------------------------------------------------------------
+# Flags
 #
-MKDIR   = cdir
-AS      = objasm
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-WIPE    = -wipe
-CD	= dir
-CHMOD	= access
 
-# ----------------------------------------------------------------- #
-# Flags - you can set 'em, if you like - see FlagReadMe
-# ----------------------------------------------------------------- #
-
-FLAG_OPTS = -UFIFO_RECOVER -DDEBUG_TRAIL -UDEBUG -URUNS_ON_ARM700 \
-		-DLIMIT_TABLES -DPACKET_JUNKING -DUSE_DYNAMIC_AREAS \
-		-DNDEBUG #-DDEBUGLIB
-
-
-#FLAG_OPTS = -UFIFO_RECOVER -DDEBUG_TRAIL -DDEBUG -URUNS_ON_ARM700 \
-#		-DLIMIT_TABLES -DPACKET_JUNKING -DUSE_DYNAMIC_AREAS \
-#  	        -DNDEBUG
+CPFLAGS		= ~cfr~v
+WFLAGS		= ~c~vr
 
 
 
-AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -wp -depend !Depend ${THROWBACK} -zM -zps1 -ff ${INCLUDES} ${DFLAGS} ${FLAG_OPTS}
-CMHGFLAGS  = -depend !Depend -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
-CPFLAGS    = ~cfr~v
-WFLAGS     = ~c~vr
-CHMODFLAGS = RW/R
 
-DFLAGS  = -DUSE_TINY ${DEBUG}
-
+# ------------------------------------------------------------------------------
+# Program specific options
 #
-# Libraries
-#
-CLIB       = CLIB:o.stubs
-RLIB       = RISCOSLIB:o.risc_oslib
-RSTUBS     = RISCOSLIB:o.rstubs
-ROMSTUBS   = RISCOSLIB:o.romstubs
-ROMCSTUBS  = RISCOSLIB:o.romcstubs
-ABSSYM     = RISC_OSLib:o.AbsSym
-DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
-INETLIB		= TCPIPLibs:o.inetlibzm
-SOCKLIB		= TCPIPLibs:o.socklib5zm
 
-LIBS = $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
-
-#
-# Include files
-#
-INCLUDES = -IC:,TCPIPlibs:
-
-# Program specific options:
-#
-COMPONENT = atm25stb
-TARGET    = aof.${COMPONENT}
-RMTARGET  = rm.${COMPONENT}
-EXPORTS   = ${EXP_C_H}.${COMPONENT}
-
-OBJS      = atmio.o buffers.o mbuf.o module.o panther.o utils.o header.o \
-		localarp.o atmswis.o mast.o atmsock.o \
-		dci_stuff.o resources.o callproto.o commands.o boson.o \
-		listen.o pvc.o nvram.o atm_conf.o nbit_mask.o\
-		error.o nvparams.o ipconv.o
+COMPONENT	= ATM25
+NORMAL_TARGET	= ATM25
+MEMCHECK_TARGET	= ATM25mc
+HIERPROF_TARGET	= ATM25hp
+DEBUG_TARGET	= ATM25d
 
 HDR = h.header
 
-#
-# Rule patterns
-#
-.c.o:;      ${CC}   ${CFLAGS} -o $@ $<
-.cmhg.o:;	$(CMHG) $(CMHGFLAGS) $< -o $@
-.cmhg.h:;	$(CMHG) $(CMHGFLAGS) $< -d $@
-.s.o:;      ${AS}   ${AFLAGS} $< $@
 
 
-# build a relocatable module:
-#
-all: ${RMTARGET}
-	@echo ${COMPONENT}: all complete
 
+# ------------------------------------------------------------------------------
+# Build rules
 #
-# RISC OS ROM build rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom complete
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+# Local
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+all:
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@echo $(COMPONENT): build complete
+
+debug:	debug_$(TYPE)
+	@echo $(COMPONENT): debug build complete
+
+debug_:
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRAFLAGS="-DDEBUGLIB" EXT=od
+
+debug_NEC:
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRAFLAGS="-DDEBUGLIB -DDHCP" EXTRAOBJS="od.dhcpboot" EXT=od
+
+memcheck:
+	@amu -f MainMake $(MFLAGS) TARGET=$(MEMCHECK_TARGET) EXTRAFLAGS="-DDEBUGLIB -DMemCheck_MEMCHECK" EXT=oMC
+	@echo $(COMPONENT): memcheck build complete
+
+preprocess:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@echo $(COMPONENT): preprocessing complete
+
+
+# RISC OS ROM build rules
+
+rom:
+	@amu -f MainMake $(MFLAGS) EXTRAFLAGS=-DROM TARGET=$(NORMAL_TARGET) EXT=o
+	@echo $(COMPONENT): build complete
+
+export:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
+
+install_rom:
+	@amu -f MainMake $(MFLAGS) TARGET=$(ROM_TARGET) EXT=o
+
+rom_link:
+	@amu -f MainMake $(MFLAGS) TARGET=$(ROM_TARGET) EXT=o
+
+resources: LocalRes:Messages
+	$(MKDIR) $(RESDIR)
+	TokenCheck LocalRes:Messages
+	$(CP) LocalRes:Messages $(RESDIR).Messages $(CPFLAGS)
+	@echo $(COMPONENT): resource files copied to Messages module
 
 clean:
-        ${WIPE} o.*      ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.*    ${WFLAGS}
-        ${RM} $(HDR)
-        ${RM} ${RMTARGET}
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-#
-# ROM target (re-linked at ROM Image build time)
-#
-${TARGET}: ${OBJS} $(LIBS) ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} $(LIBS) ${ROMCSTUBS}
-
-#
-# Final link for the ROM Image (using given base address)
-#
-rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
-
-#
-# Relocatable module target
-#
-${RMTARGET}: ${OBJS} $(LIBS) $(HDR)
-        ${LD} -rmf -o $@ ${OBJS} $(LIBS) ${CLIB}
-        ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
-
-${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
-        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oHP
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@$(WIPE) linked $(WFLAGS)
+	@$(WIPE) map    $(WFLAGS)
+	@$(WIPE) rm     $(WFLAGS)
+	@$(WIPE) aof    $(WFLAGS)
+	@$(RM) $(HDR)
+	@$(STRIPDEPND) MainMake
+	@echo $(COMPONENT): cleaned
 
 # Dynamic dependencies:

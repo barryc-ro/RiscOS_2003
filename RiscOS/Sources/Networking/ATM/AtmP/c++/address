@@ -1,0 +1,696 @@
+/* File:    address.c++
+   Purpose: Address mapping, conversion etc.
+   Author:  Ben Laughton
+
+   Copyright 1999 Element 14 Ltd.
+
+   This material is the confidential trade secret and proprietary information
+   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
+   any third party without the prior written consent of Element 14 Ltd.
+   All rights reserved.
+
+   History:
+
+   1999-02-24: BAL
+   Created.
+ */
+
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+/* CLib */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* TCPIPLibs */
+extern "C"
+{
+    #include "sys/types.h"
+}
+
+#include "DebugLib/debuglib.h"
+
+/* Local */
+#include "connection.h"
+#include "address.h"
+#include "atm.h"
+#include "defs.h"
+#include "error.h"
+#include "utils.h"
+
+
+
+
+/* =============================================================================
+ * Constants definitions
+ */
+
+enum
+{
+    MAC_MAP_TABLE_SIZE = 43
+    /* Size of MAC address mapping hash table. If changing then ensure
+     * it remains a prime number.
+     */
+};
+
+
+
+/* =============================================================================
+ * Type definitions
+ */
+
+struct  ip_map_t
+{
+    struct ip_map_t *  next;
+
+    u_long             ip_addr;
+    ATML_SOCKADDR      atm_addr;
+    unsigned char      mac_addr[MACAddr_Size];
+};
+
+struct  mac_map_t
+{
+    struct mac_map_t *  next;
+
+    unsigned char    mac_addr[MACAddr_Size];
+    IPConnection *  connection;
+};
+
+
+
+
+/* =============================================================================
+ * Macro definitions
+ */
+
+
+
+
+/* =============================================================================
+ * Global variable declarations
+ */
+
+static ip_map_t *   ip_map_list = NULL;
+static mac_map_t *  mac_map_table[MAC_MAP_TABLE_SIZE];
+
+
+
+
+/* =============================================================================
+ * Function definitions
+ */
+
+mac_map_t *  mac_map_alloc (void)
+{
+    mac_map_t *  mapping = (mac_map_t *) malloc (sizeof (mac_map_t));
+    return mapping;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ip_map_add
+
+   Add an entry to the IP<->ATM address mapping list.
+
+   Inputs
+   const u_long                ip_addr  : IP address
+   const ATML_SOCKADDR *const  atm_addr : pointer to ATM address
+
+   Returns  int
+   success : 0
+   failure : error number
+
+ */
+
+int ip_map_add (const u_long                ip_addr,
+                const ATML_SOCKADDR *const  atm_addr)
+{
+    ip_map_t *  new_entry;
+    int         error = 0;
+
+    new_entry = (ip_map_t *) malloc (sizeof (ip_map_t));
+    if (new_entry)
+    {
+        new_entry->ip_addr = ip_addr;
+        memcpy (&new_entry->atm_addr, atm_addr, sizeof (ATML_SOCKADDR));
+
+        switch (atm_addr->satm_family)
+        {
+            case AF_ATML_ATM:
+                memcpy (&new_entry->mac_addr,
+                        &atm_addr->atm.satm_number.contents[NSAPAddr_ESIOffset],
+                        MACAddr_Size);
+                break;
+
+            case AF_ATML_PVC:
+                new_entry->mac_addr[0] = 0;
+                new_entry->mac_addr[1] = 0;
+                memcpy (&new_entry->mac_addr[2], &ip_addr, sizeof (u_long));
+                break;
+
+            default:
+                error = Error_ATM_UnsupportedAddr;
+                break;
+        }
+
+        if (!error)
+        {
+            /* Link in new entry at head of list */
+            new_entry->next = ip_map_list;
+            ip_map_list     = new_entry;
+        }
+        else
+        {
+            free (new_entry);
+        }
+    }
+    else
+    {
+        error = Error_ATM_NoMemory;
+    }
+
+    return error;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ip_map_remove
+
+   Remove IP<->MAC address mappings
+ */
+
+void ip_map_remove (const unsigned char *const  mac_addr)
+{
+    ip_map_t *   mapping = ip_map_list;
+    ip_map_t **  mapping_ptr = &ip_map_list;
+
+
+    while (mapping &&
+           memcmp (mapping->mac_addr, mac_addr, MACAddr_Size))
+    {
+        mapping_ptr = &mapping->next;
+        mapping = mapping->next;
+    }
+
+    if (mapping)
+    {
+        *mapping_ptr = mapping->next;
+        free (mapping);
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ip_map_remove_all
+
+   Remove all IP<->MAC address mappings
+ */
+
+void ip_map_remove_all (void)
+{
+    ip_map_t *  mapping = ip_map_list;
+    ip_map_t *  next;
+
+    while (mapping)
+    {
+        next = mapping->next;
+        free (mapping);
+        mapping = next;
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ip_map_mac_from_ip
+
+   Find the MAC address that corresponds to a given IP address.
+
+   Inputs
+   const u_long  ip_addr : IP address
+
+   Returns  const unsigned char *
+   couldn't find MAC address : NULL
+   otherwise                 : pointer to 6 byte MAC address
+ */
+
+const unsigned char *  ip_map_mac_from_ip (const u_long  ip_addr)
+{
+    unsigned char *  mac_addr = NULL;
+    ip_map_t *       mapping = ip_map_list;
+
+    while (mapping && ip_addr != mapping->ip_addr)
+    {
+        dprintf (("", "tried %08lx against %08lx\n",
+                  ip_addr, mapping->ip_addr));
+        mapping = mapping->next;
+    }
+
+    if (mapping)
+    {
+        mac_addr = mapping->mac_addr;
+    }
+
+    return mac_addr;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   ip_map_mac_from_pvc
+
+   Find the MAC address that corresponds to a given ATM PVC address.
+
+   Inputs
+   const u_long  ip_addr : IP address
+
+   Returns  const unsigned char *
+   couldn't find MAC address : NULL
+   otherwise                 : pointer to 6 byte MAC address
+ */
+
+static const unsigned char *  ip_map_mac_from_pvc (
+                                  const ATML_SOCKADDR_PVC *const  atm_addr)
+{
+    unsigned char *  mac_addr = NULL;
+    ip_map_t *       mapping  = ip_map_list;
+    int              found    = 0;
+
+    while (mapping && !found)
+    {
+        if (mapping->atm_addr.satm_family == AF_ATML_PVC &&
+            atm_addr->satm_pvc == mapping->atm_addr.pvc.satm_pvc)
+        {
+            found = 1;
+        }
+        else
+        {
+            mapping = mapping->next;
+        }
+    }
+
+    if (found)
+    {
+        mac_addr = mapping->mac_addr;
+    }
+
+    return mac_addr;
+}
+
+
+
+
+u_long  ip_map_ip_from_atm (const ATML_SOCKADDR *const  atm_addr)
+{
+    ip_map_t *  mapping  = ip_map_list;
+    bool        found    = false;
+    u_long      ip_addr  = 0;
+
+    while (mapping && !found)
+    {
+        if (compare_atm_addresses (&mapping->atm_addr, atm_addr))
+        {
+            found = true;
+        }
+        else
+        {
+            mapping = mapping->next;
+        }
+    }
+
+    if (found)
+    {
+        ip_addr = mapping->ip_addr;
+    }
+
+    return ip_addr;
+}
+
+
+
+/* -----------------------------------------------------------------------------
+   hash_mac_addr
+
+   Perform the hashing function required to obtain an index into the
+   MAC<->connection mapping table from a 6 byte MAC address.
+
+   Inputs
+   const unsigned char *const  mac_addr : pointer to 6 byte MAC address
+
+   Returns  int
+   index into table
+ */
+
+static int  hash_mac_addr (const unsigned char *const  mac_addr)
+{
+    unsigned int  index;
+
+    index = mac_addr[5] +
+            (mac_addr[4] << 8) +
+            (mac_addr[3] << 16) +
+            (mac_addr[2] << 24);
+    index %= MAC_MAP_TABLE_SIZE;
+
+#ifdef DEBUGLIB
+    {
+        char  print_mac_addr[18];
+
+        num_to_sep_str (mac_addr, MACAddr_Size, print_mac_addr, ':');
+        dprintf (("", "MAC %s --> table entry %d\n", print_mac_addr, index));
+    }
+#endif
+
+    return index;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   mac_map_add
+
+   Add an entry to the MAC<->connection mapping table.
+
+   Inputs
+   const unsigned char *const  mac_addr   : pointer to 6 byte MAC address
+   const connection_ref        connection : pointer to connection
+
+   Returns  int
+   success : 0
+   failure : error number
+ */
+
+int  mac_map_add (const unsigned char *const  mac_addr,
+                  IPConnection *const         connection,
+                  mac_map_t *                 mapping)
+{
+    int           error = 0;
+
+    if (!mapping)
+    {
+        mapping = (mac_map_t *) malloc (sizeof (mac_map_t));
+    }
+
+    if (mapping)
+    {
+        int  index;
+
+        memcpy (mapping->mac_addr, mac_addr, MACAddr_Size);
+        mapping->connection = connection;
+
+        index = hash_mac_addr (mac_addr);
+        dprintf (("", "using table entry %d\n", index));
+
+        /* A connection originated by us (non-listening) should
+         * always be first in the chain before any listening
+         * connections.
+         */
+        if (((Connection *) connection)->GetOrigin() == Connection::Remote)
+        {
+            mac_map_t *  last_mapping;
+
+            // Add new mapping to end of chain
+            for (last_mapping = mac_map_table[index];
+                 last_mapping->next;
+                 last_mapping = last_mapping->next)
+            {
+            }
+
+            mapping->next = NULL;
+            last_mapping->next = mapping;
+        }
+        else
+        {
+            // Add new mapping to start of chain
+            mapping->next = mac_map_table[index];
+            mac_map_table[index] = mapping;
+        }
+    }
+    else
+    {
+        error = Error_ATM_NoMemory;
+    }
+
+    return error;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   mac_map_remove
+
+   Remove an entry from the MAC<->connection mapping table.
+
+   Inputs
+   const unsigned char *const  mac_addr   : pointer to 6 byte MAC address
+   const connection_ref        connection : pointer to connection
+ */
+
+void  mac_map_remove (const unsigned char *const  mac_addr,
+                      IPConnection *const         connection)
+{
+    mac_map_t *   mapping;
+    mac_map_t **  mapping_ptr;
+    int           index;
+
+    index = hash_mac_addr (mac_addr);
+    mapping_ptr = &mac_map_table[index];
+    mapping = mac_map_table[index];
+    while (mapping &&
+           (mapping->connection != connection ||
+            memcmp (mapping->mac_addr, mac_addr, MACAddr_Size)))
+    {
+        mapping_ptr = &mapping->next;
+        mapping = mapping->next;
+    }
+
+    if (mapping)
+    {
+        *mapping_ptr = mapping->next;
+        free (mapping);
+    }
+}
+
+
+
+
+int  mac_map_count (const unsigned char *const  mac_addr)
+{
+    mac_map_t *   mapping;
+    int           index;
+    int           count = 0;
+
+    index = hash_mac_addr (mac_addr);
+    mapping = mac_map_table[index];
+    while (mapping)
+    {
+        if (memcmp (mapping->mac_addr, mac_addr, MACAddr_Size) == 0)
+        {
+            ++count;
+        }
+        mapping = mapping->next;
+    }
+
+    return count;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   mac_map_find_conn
+
+   Find the connection associated with a given MAC address.
+
+   Inputs
+   const unsigned char *const  mac_addr : pointer to 6 byte MAC address
+
+   Returns  connection_ref
+   found     : pointer to connection
+   not found : NULL
+ */
+
+IPConnection *  mac_map_find_conn (const unsigned char *const  mac_addr)
+{
+    IPConnection *  connection = 0;
+    mac_map_t *     mapping;
+
+    mapping = mac_map_table[hash_mac_addr (mac_addr)];
+
+    while (mapping && !connection)
+    {
+        if (memcmp (mac_addr, mapping->mac_addr, MACAddr_Size) == 0)
+        {
+            connection = mapping->connection;
+        }
+        else
+        {
+            mapping = mapping->next;
+        }
+    }
+
+    return connection;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   mac_map_remove_all
+
+   Remove all entries in the MAC<->connection mapping table.
+ */
+
+void  mac_map_remove_all (void)
+{
+    mac_map_t *  mapping;
+    mac_map_t *  next;
+    int  i;
+
+    for (i = 0; i < MAC_MAP_TABLE_SIZE; ++i)
+    {
+        mapping = mac_map_table[i];
+
+        while (mapping)
+        {
+            next = mapping->next;
+            free (mapping);
+            mapping = next;
+        }
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   mac_from_atm
+
+   Find a MAC address corresponding to an ATM address.
+
+   Inputs
+   const ATML_SOCKADDR *const  atm_addr : pointer to ATM address structure
+
+   Returns  int
+ */
+
+const unsigned char *  mac_from_atm (const ATML_SOCKADDR *const  atm_addr)
+{
+    const unsigned char *  mac_addr = NULL;
+
+    switch (atm_addr->satm_family)
+    {
+        case AF_ATML_ATM:
+            /* Extract the ESI (End System Indentifier) from the Called Party
+             * Number to use as the MAC address.
+             */
+            mac_addr = (const unsigned char *)
+                       &atm_addr->atm.satm_number.contents[NSAPAddr_ESIOffset];
+            break;
+
+        case AF_ATML_PVC:
+            mac_addr = ip_map_mac_from_pvc (&atm_addr->pvc);
+            break;
+
+        default:
+            break;
+    }
+
+    return mac_addr;
+}
+
+
+
+
+int  atm_aton (const char *  text_addr,
+               char *        numeric_addr)
+{
+    int  error = 0;
+
+    if (strlen (text_addr) == NSAPAddr_Size * 2)
+    {
+        int  i;
+        char buf[3];
+
+        buf[2] = 0;
+        for (i = 0; i < NSAPAddr_Size; ++i)
+        {
+            buf[0] = *text_addr++;
+            buf[1] = *text_addr++;
+
+            *numeric_addr++ = (char) strtol (buf, NULL, 16);
+        }
+    }
+    else
+    {
+        error = Error_ATM_InvalidData;
+    }
+
+    return error;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   compare_atm_addresses
+
+   Compare two ATM addresses to see if they both refer to the same address.
+   Can't just do a memcmp because the structures have padding fields, port
+   numbers etc. which are not relevant in some contexts.
+
+   Inputs
+   const ATML_SOCKADDR *const  atm_addr1 : pointer to ATM address structure
+   const ATML_SOCKADDR *const  atm_addr2 : pointer to ATM address structure
+
+   Returns  bool
+   true  : addresses are the same
+   false : addresses are different
+ */
+
+bool  compare_atm_addresses (const ATML_SOCKADDR *const  atm_addr1,
+                             const ATML_SOCKADDR *const  atm_addr2)
+{
+    bool  equal = false;
+
+    if (atm_addr1->satm_family == atm_addr2->satm_family)
+    {
+        switch (atm_addr1->satm_family)
+        {
+            case AF_ATML_ATM:
+                if (atm_addr1->atm.satm_number.numofdigits ==
+                    atm_addr2->atm.satm_number.numofdigits &&
+                    memcmp (
+                      atm_addr1->atm.satm_number.contents,
+                      atm_addr2->atm.satm_number.contents,
+                      (size_t) atm_addr1->atm.satm_number.numofdigits) == 0)
+                {
+                    equal = true;
+                }
+                break;
+
+            case AF_ATML_PVC:
+                if (atm_addr1->pvc.satm_pvc == atm_addr2->pvc.satm_pvc)
+                {
+                    equal = true;
+                }
+                break;
+        }
+    }
+
+    return equal;
+}

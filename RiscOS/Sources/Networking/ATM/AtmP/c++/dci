@@ -1,0 +1,899 @@
+/* File:    dci.c++
+   Purpose: DCI4 interface
+   Authors: Chris Pitts, Ben Laughton
+
+   Copyright 1999 Element 14 Ltd.
+
+   This material is the confidential trade secret and proprietary information
+   of Element 14 Ltd. It may not be reproduced, used sold, or transferred to
+   any third party without the prior written consent of Element 14 Ltd.
+   All rights reserved.
+
+   History:
+
+   1998-06-05: CP
+   Header added.
+   Changed to use Acorn's DCI headers.
+
+   1999-04-22: BAL
+   Changed header to be consistent with other files.
+ */
+
+
+
+
+// =============================================================================
+// Include header files
+
+// CLib
+#include "kernel.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "swis.h"
+
+// TCPIPLibs
+extern "C"
+{
+    #include "sys/types.h"
+    #include "sys/errno.h"
+    #include "sys/mbuf.h"
+    #include "sys/dcistructs.h"
+    #include "inetlib.h"
+    #include "netinet/in.h"
+    #include "net/if.h"
+    #include "net/if_arp.h"
+    #include "netinet/if_ether.h"
+}
+
+// Miscellaneous
+#include "DebugLib/debuglib.h"
+#include "Email/Common/bool.h"
+
+// Local
+#include "address.h"
+#include "arp.h"
+#include "dci.h"
+#include "defs.h"
+extern "C"
+{
+    #include "header.h"
+}
+#include "ip.h"
+#include "lane.h"
+#include "mbuf.h"
+#include "module.h"
+#include "nic.h"
+#include "service.h"
+#include "utils.h"
+
+
+
+
+/* =============================================================================
+ * Constants definitions
+ */
+
+enum
+{
+    STATS_RETURN_INDICATION = (0 << 0),
+    STATS_RETURN_STATS      = (1 << 0),
+    STATS_1STRESERVED       = (1 << 1)
+};
+
+#define STATS_FLAGS_MASK     (~(STATS_1STRESERVED - 1))
+#define TRANSMIT_FLAGS_MASK  (~(TX_1STRESERVED - 1))
+
+#define ETHER_HDR_SIZE       14
+#define ETHER_SRC_ADR_OFFSET 6
+#define ETHER_DST_ADR_OFFSET 0
+#define ETHER_ADR_SIZE       6
+#define ETHER_TYPE_OFFSET    12
+#define ETHER_TYPE_SIZE      2
+
+
+
+
+/* =============================================================================
+ * Type definitions
+ */
+
+struct dci4pi    /* store for DCI4 protocol module info */
+{
+    int pi_unit;
+    int pi_ftype;  /* frame type */
+    int pi_flevel; /* frame level */
+    int pi_alevel; /* address level */
+    int pi_elevel; /* error level */
+    void * pi_handle; /* protocol handle */
+    void (*pi_handler)(void);
+    struct dci4pi *pi_next;
+};
+
+
+
+
+/* =============================================================================
+ * Global variable declarations
+ */
+
+char *  atm_ifname = "ap";    /* "A"TML "P"anther */
+
+static unsigned char hw_bcast_adr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+static struct dci4pi *pibs = NULL;
+static Dib dib = { 0 };
+static IPConnection *  cached_connection = 0;
+
+
+
+
+/* =============================================================================
+ * Function prototype declarations
+ */
+
+extern "C" int callproto (Dib *,
+                          struct mbuf *,
+                          void (*pi_handler) (void),
+                          void *);
+
+
+
+/* =============================================================================
+ * Function definitions
+ */
+
+void  dci_init (void)
+{
+    setenv ("Inet$EtherType", "ap0", 1);
+
+    dib.dib_swibase = ATM_00; /* 28may98:CP:from cmhg.h */
+    dib.dib_name = (unsigned char *) atm_ifname;
+    dib.dib_unit = 0;
+    dib.dib_address = (unsigned char *) NIC::Instance()->GetMACAddr ();
+    dib.dib_module = (unsigned char *) "ATM25stb";
+    dib.dib_location = (unsigned char *) "STB expansion slot";
+    dib.dib_slot.sl_slotid = 1;
+
+    /* 5jun98:CP:features of i/f as per DCI4 */
+    /* dib.dib_inquire = INQ_HWADDRVALID | INQ_POINTOPOINT; */
+    dib.dib_inquire = INQ_HWADDRVALID | INQ_HASSTATS;
+}
+
+
+
+bool  dci_is_our_dib (const Dib *const  test_dib)
+{
+    return (bool) (test_dib == &dib);
+}
+
+
+
+
+void  dci_driver_status (const int  status)
+{
+    (void) _swix (OS_ServiceCall,
+                  _INR (0, 3),
+
+                  &dib,
+                  Service_DCIDriverStatus,
+                  status,
+                  DCIVERSION);
+}
+
+
+
+void  dci_chain_dib (_kernel_swi_regs *const  r)
+{
+    struct chaindib *  dib_chain = (struct chaindib *) r->r[0];
+    struct chaindib *  chd;
+
+
+    /* 22/12/97:CP:Corrected to be a ptr, dynamically allocated */
+    /*
+       22/12/97:CP:changed chd to be a dynamically allocated structure,
+                   like wot the manual sez
+
+       1/6/98:CP:moved code to here otherwise memory can be yanked from under
+                 us! Code changed to behave properly with multiple NICs.
+
+    */
+
+    chd = (struct chaindib *) malloc (sizeof (struct chaindib));
+    if (chd)
+    {
+        chd->chd_next = NULL;
+        chd->chd_dib  = &dib;
+
+        if (dib_chain)
+        {
+            /* Link our DIB in at the end of the chain */
+            dib_chain->chd_next = chd;
+        }
+
+        r->r[0] = (int) chd;
+    }
+
+    /* 1/6/98:CP:if no memory available, simply ignore the call */
+}
+
+
+
+
+int dci_version (_kernel_swi_regs *const  r)
+{
+    unsigned int  flags = (unsigned int) r->r[0];
+    int           error = 0;
+
+    if (flags)
+    {
+        error = EINVAL;
+    }
+    else
+    {
+        r->r[1] = DCIVERSION; /* 5jun98:CP:conforms to Acorn headers */
+    }
+
+    return error;
+}
+
+int dci_inquire (_kernel_swi_regs *const r)
+{
+    unsigned int  flags = (unsigned int) r->r[0];
+    int           error = 0;
+
+    if (flags)
+    {
+        error = EINVAL;
+    }
+    else
+    {
+        /* 5jun98:CP:return description of i/f in R2 */
+        r->r[2] = dib.dib_inquire;
+    }
+
+    return error;
+}
+
+int dci_getmtu (_kernel_swi_regs *const  r)
+{
+    unsigned int  flags = (unsigned int) r->r[0];
+    int           error = 0;
+
+    if (flags)
+    {
+        error = EINVAL;
+    }
+    else
+    {
+        r->r[2] = ATM_MTU;
+    }
+
+    return error;
+}
+
+int dci_setmtu (_kernel_swi_regs *const  r)
+{
+    unsigned int  flags = (unsigned int) r->r[0];
+    int           error = 0;
+
+    if (flags)
+    {
+        error = EINVAL;
+    }
+    else
+    {
+        /* Changing MTU size is not yet supported,
+         * so report 'not supported'.
+         */
+        error = ENOTTY;
+    }
+
+    return error;
+}
+
+/******* dci_stats  ********************************************************
+
+Purpose: Basic statistics according to DCI4.04 spec (v1.02).
+
+         Only returns the interface type at the moment.
+
+Inputs: registers
+
+Outputs: none
+
+***************************************************************************/
+
+int dci_stats (_kernel_swi_regs *const  r)
+{
+    const unsigned int  flags = (unsigned int) r->r[0];
+    const int           unit  = r->r[1];
+    struct stats *      stats = (struct stats *) r->r[2];
+    int                 error = 0;
+
+    if (flags & STATS_FLAGS_MASK)
+    {
+        error = EINVAL;
+    }
+    else
+    {
+        if (unit == dib.dib_unit)
+        {
+            if (flags & STATS_RETURN_STATS)
+            {
+                /* return the stats themselves in the buffer provided */
+                #ifdef DHCP
+                stats->st_interface_type = ST_TYPE_ATMPLUSRELAY;
+                #else
+                stats->st_interface_type = ST_TYPE_ATM25_6;
+                #endif
+            }
+            else
+            {
+                /* return the set of stats returned */
+                memset (stats, 0, sizeof (struct stats));
+                stats->st_interface_type = 0xff;
+            }
+        }
+    }
+
+    return 0;
+}
+
+int dci_readmacadr (_kernel_swi_regs *const  r)
+{
+    const unsigned char *  mac_addr = NIC::Instance()->GetMACAddr ();
+
+    if (mac_addr)
+    {
+        memcpy ((char *) r->r[1], mac_addr, MACAddr_Size);
+    }
+
+    return 0;
+}
+
+
+
+
+
+
+#ifdef DEBUGLIB
+
+#define MAX_DUMP_BYTES  128
+
+static void dump_pkt (u_char *  rptr, int pktlen)
+{
+    char buf[3*MAX_DUMP_BYTES+4];
+    char *bp = buf;
+    static const char digits[] = "0123456789abcdef";
+
+    while (pktlen--)
+    {
+        if (bp > buf + sizeof(buf) - 3)
+            goto done;
+        *bp++ = digits[*rptr >> 4]; /* convert byte to ascii hex */
+        *bp++ = digits[*rptr++ & 0xf];
+        *bp++ = ' ';
+    }
+
+done:
+    *bp = 0;
+    dprintf (("", "%s\n", buf));
+}
+
+
+
+
+static void dumpm(struct mbuf *m0, int pktlen)
+{
+    char buf[3*MAX_DUMP_BYTES+4];
+    char *bp = buf;
+    struct mbuf *m;
+    static const char digits[] = "0123456789abcdef";
+
+    for (m = m0; m && pktlen; m = m->m_next)
+    {
+        int l = m->m_len;
+        u_char *rptr = mtod(m, u_char *);
+
+        if (pktlen > 0)
+        {
+            if (l > pktlen)
+                l = pktlen;
+            pktlen -= l;
+        }
+        while (l--)
+        {
+            if (bp > buf + sizeof(buf) - 4)
+                goto done;
+            *bp++ = digits[*rptr >> 4]; /* convert byte to ascii hex */
+            *bp++ = digits[*rptr++ & 0xf];
+            *bp++ = ' ';
+        }
+
+        if (m->m_next)
+        {
+            if (bp > buf + sizeof(buf) - 3)
+                goto done;
+            *bp++ = '|';
+        }
+        else
+            *bp++ = ' ';
+    }
+done:
+    if (m && pktlen)
+        *bp++ = '>';
+    *bp = 0;
+    dprintf (("", "%s\n", buf));
+}
+
+#endif
+
+
+
+
+void *  dci_want_frame_type (const int  type)
+{
+    for (struct dci4pi *  p = pibs; p; p = p->pi_next)
+    {
+        if (p->pi_ftype == type)
+        {
+           return p;
+        }
+    }
+    return 0;
+}
+
+
+void  dci_send_chain (struct mbuf *    m,
+                      void *  p)
+{
+    callproto (&dib, m, ((struct dci4pi *) p)->pi_handler, ((struct dci4pi *) p)->pi_handle);
+}
+
+
+
+/* rx_dci - forward a packet to protocol
+   	    called from irq handler when we have an IP packet of some sort
+*/
+
+int dci_receive (IPConnection *   connection,
+                 unsigned char *  packet,
+                 int              datalen,
+                 unsigned short   type)
+{
+
+/************************************************************************
+ * NOTE: great improvements in efficiency can be made here by using the *
+ * mbufmanager routines to throw data around!!!!                        *
+ ************************************************************************/
+    struct dci4pi *  p;
+    struct mbuf *m, *m0;
+    RxHdr *hdr;
+    unsigned char *pp = packet;
+
+    dprintf (("", "frame type %x\n", type));
+    /* allocate a single mbuf */
+    p = (struct dci4pi *) dci_want_frame_type (type);
+    if (!p)
+    {
+        return 0;
+    }
+
+    if (type == ETHERTYPE_ARP)
+    {
+        u_short  ar_hrd;
+
+        memcpy (&ar_hrd, packet, sizeof (u_short));
+        if (ntohs (ar_hrd) == ATMARP_ar_hrd)
+        {
+            arp_rx_atmarp (connection, packet, datalen);
+            return 0;
+        }
+    }
+
+    m0 = ALLOC_S (MINCONTIG, NULL);
+    if (!m0)
+    {
+        return 0;
+    }
+
+    /* Fill in the header data for the protocol receive handler */
+    hdr = mtod (m0, RxHdr *);
+    m0->m_len = sizeof (RxHdr);
+
+    hdr->rx_tag = 0;
+    /*
+    memcpy (hdr->rx_src_addr,
+            packet + ETHER_SRC_ADR_OFFSET,
+            sizeof (hdr->rx_src_addr));
+    memcpy (hdr->rx_dst_addr,
+            packet + ETHER_DST_ADR_OFFSET,
+            sizeof (hdr->rx_dst_addr));
+    */
+    memset (hdr->rx_src_addr, 0, MACAddr_Size);
+    memset (hdr->rx_dst_addr, 0, MACAddr_Size);
+    hdr->_spad[0] = hdr->_spad[1] = 0;
+    hdr->_dpad[0] = hdr->_dpad[1] = 0;
+    hdr->rx_frame_type = type;
+    hdr->rx_error_level = 0;
+
+
+    /* allocate an mbuf chain of size datalen */
+    m0->m_next = ALLOC (datalen, NULL);
+
+    if (m0->m_next == NULL)
+    {
+        m_free (m0);
+        return (0);
+    }
+
+    /*
+     * run down the mbufs, filling them in
+     */
+    for (m = m0->m_next; m; m = m->m_next)
+    {
+        m->m_type = MT_DATA;
+        memcpy (mtod (m, char *), pp, m->m_len);
+        pp += m->m_len;
+    }
+
+    #ifdef DEBUGLIB
+    //dumpm (m0, datalen + sizeof (RxHdr));
+    #endif
+
+    callproto (&dib, m0, p->pi_handler, p->pi_handle);
+    return (1);
+}
+
+
+
+
+static int  broadcast (struct mbuf *    m0,
+                       const int        frame_type,
+                       const u_char **  dest)
+{
+    int  discard = 0;
+
+    /* If configured to access remote arp/broadcast server,
+     * filter out broadcast transmissions and re-route
+     * to the arpserver MAST address.
+     *
+     * If not configured for remote arp, loop an ARP message back
+     * internally, mapping a remote ip address directly into a
+     * remote MAST address.
+     */
+
+    if (!do_arp)     /* are we processing ARP messages internally? */
+    {
+         /* is it, in fact, an ARP message? */
+        if (frame_type == ETHERTYPE_ARP)
+        {
+            int            datalen;
+            struct mbuf *  m;
+
+            arp_count++;
+            for (datalen = 0, m = m0; m; m = m->m_next)
+            {
+                datalen += m->m_len;
+            }
+
+            /* is the message small enough to swallow whole? */
+            if (datalen <= sizeof (arpbuf))
+            {
+                unsigned char *  t = arpbuf;
+                struct mbuf *    m;
+
+                for (m = m0; m; m = m->m_next )
+                {
+                    memcpy (t, mtod(m, char *), m->m_len);
+                    t += m->m_len;
+                }
+                arplen = datalen;
+                local_arp_count++;
+                do_local_arp = 1;
+                /* if all these conditions are OK, copy the msg and set a
+                 * callback to process it */
+                setcallback();
+            }
+            else     /* the msg was too big, and will be ignored */
+            {
+                discard_arp_count++;
+                dprintf (("", "atm_transmit: discarding ARP %i\n",
+                          discard_arp_count));
+            }
+        } /* it wasn't an ARP message - ignore this broadcast */
+
+        discard = 1;
+    }
+    else
+    {
+        static unsigned char arpserver[6] = { 0, 0, 0xff, 0xff, 0xff, 0xff };
+        /* so redirect this msg to the arpserver */
+        *dest = arpserver;
+        bcast_arp_count++;
+    }
+
+    return discard;
+}
+
+
+
+int dci_transmit (_kernel_swi_regs *const  r)
+{
+    static int             atm_transmit_in_use = 0;
+    static u_char          dest[MACAddr_Size];
+
+    const unsigned int    flags      = (unsigned int) r->r[0];
+    const int             unit       = r->r[1];
+    const int             frame_type = r->r[2];
+    struct mbuf *         m0         = (struct mbuf *) r->r[3];
+    const u_char *        new_dest   = (u_char *) r->r[4];
+    int                   error      = 0;
+
+
+    if (!atm_transmit_in_use)
+    {
+        atm_transmit_in_use = 1;
+
+        if (unit == 0)
+        {
+            if (memcmp (new_dest, hw_bcast_adr, MACAddr_Size) == 0)
+            {
+                #if 0
+                // Temporary hack - assume it's ARP and get the LANE service
+                // to deal with it.
+                error = lane_service->TxData (1,
+                                              (u_char *) r->r[5],
+                                              new_dest,
+                                              frame_type,
+                                              m0);
+                goto discard;
+
+                // LANE Service will have freed MBuf chain, so just return
+                //return 0;
+                #else
+                if (broadcast (m0, frame_type, &new_dest))
+                {
+                    goto discard;
+                }
+                #endif
+            }
+
+            if (memcmp (new_dest, dest, MACAddr_Size) != 0 || !cached_connection)
+            {
+                cached_connection = mac_map_find_conn (new_dest);
+                if (!cached_connection)
+                {
+                    /* Couldn't find / connect to the peer - dump packet*/
+                    dprintf (("", "couldn't find connection\n"));
+                    error = INETERR_TXBLOCKED;
+                    goto discard;
+                }
+                /* store the dest. address */
+                memcpy (dest, new_dest, MACAddr_Size);
+            }
+            else
+            {
+                dprintf (("", "using cached connection\n"));
+            }
+
+            error = cached_connection->TxMBufChain (frame_type,
+                                                    m0,
+                                                    (bool) !(flags & TX_PROTOSDATA));
+        }
+        else
+        {
+            dprintf (("", "atm_transmit: wrong unit.\n"));
+            error = EINVAL;
+        }
+
+discard:
+        atm_transmit_in_use = 0;
+    }
+    else
+    {
+       dprintf (("", "atm_transmit: re-entered.\n"));
+       error = INETERR_TXBLOCKED;
+    }
+
+    /* Free MBuf chain (will only get used if an error/discard has occured,
+     * otherwise IPConnection::TxMBufChain will have consumed all the chain.
+     */
+    struct mbuf *  m;
+    while (m0)
+    {
+        m  = m0;           /* keep pointer to current mbuf chain */
+        m0 = m->m_list;    /* point to next mbuf chain in list */
+
+        if (!(flags & TX_PROTOSDATA))
+        {
+            m_freem (m);
+        }
+    }
+    return error;
+}
+
+
+/* claim or release Ethernet frame types */
+/* protocol modules register frame types with us -
+   they also pass handler entry points and wspace pointers */
+int dci_filter (_kernel_swi_regs *const  r)
+{
+    const unsigned int  flags           = (unsigned int) r->r[0];
+    const int           unit            = r->r[1];
+    const int           frame_type      = r->r[2] & 0xffff;
+    const int           addr_level      = r->r[3];
+    const int           error_level     = r->r[4];
+    void *const         pw              = (void *) r->r[5];
+    void              (*handler) (void) = (void (*) (void)) r->r[6];
+    struct dci4pi *     p = pibs;
+    struct dci4pi *     p_previous = NULL;
+    int                 error = 0;
+
+    dprintf (("", "dci_filter: flags=%x, unit=%d, type=%x, pw=%p\n",
+              flags, unit, frame_type, pw));
+
+    /* search thru pibs */
+    while (p &&
+           ! (p->pi_unit == unit &&
+              p->pi_handle == pw &&
+              p->pi_ftype == frame_type))
+    {
+        p_previous = p;
+        p = p->pi_next;
+    }
+
+    if (flags & FILTER_RELEASE)
+    {
+        if (p)    /* did we find the matching entry? */
+        {
+            /* If this is the first pib in the chain then alter the head of
+             * the chain.
+             */
+            if (p == pibs && p_previous == NULL)
+            {
+                pibs = p->pi_next;
+            }
+            else
+            {
+                p_previous->pi_next = p->pi_next;
+            }
+            free (p);
+        }
+        else
+        {
+            error = EINVAL; /* nope, raise an error */
+        }
+    }
+    else
+    {
+        /* if we're not releasing a frame, then we must be claiming one */
+        if (!p)
+        {
+            /* don't have an entry already, so make one */
+            p = (struct dci4pi *) malloc (sizeof (struct dci4pi));
+            if (p)
+            {
+                p->pi_next   = pibs;
+                pibs         = p;
+                p->pi_unit   = unit;
+                p->pi_ftype  = frame_type;
+                p->pi_handle = pw;
+            }
+            else
+            {
+                error = EINVAL;
+            }
+        }
+
+        if (!error)
+        {
+            /* If we had a matching entry, then we're merely updating these
+             * parameters
+             */
+            p->pi_flevel  = 0;
+            p->pi_alevel  = addr_level;
+            p->pi_elevel  = error_level;
+            p->pi_handler = handler;
+        }
+    }
+
+    return error;
+}
+
+_kernel_oserror *  dci_enumerate_pibs (int  argc, char *  argv[])
+{
+    struct dci4pi *  p;
+
+
+    M_unused (argc);
+    M_unused (argv);
+
+    for (p = pibs; p; p = p->pi_next)
+    {
+        printf ("Unit: %d, Frametype: 0x%x, Framelevel: 0x%x, "
+                "Address level: 0x%x, Error level: 0x%x, Handle: %8p, "
+                "Entry: %8p\n",
+                p->pi_unit,
+                p->pi_ftype,
+                p->pi_flevel,
+                p->pi_alevel,
+                p->pi_elevel,
+                p->pi_handle,
+                p->pi_handler);
+    }
+
+    return NULL;
+}
+
+
+
+void  dci_flush_cache (const IPConnection *  connection)
+{
+    if (connection == cached_connection)
+    {
+        cached_connection = 0;
+    }
+}
+
+
+
+
+/* try and find connection resources for an IP packet.
+   Attempts to trace these as both LLC and IP multiplexed, and tries
+   to create a VC multiplexed connection if nothing is found
+*/
+
+#if 0
+static int  find_connection (const unsigned char *const  dst)
+{
+    int  handle;
+
+    /* 22oct98:CP:swapped around the search order since everything is
+     * now LLC/SNAP */
+
+    /* Look for a connection using LLC/SNAP encapsulation */
+    handle = connection_service_locate (dst, ConnectionService_IP_LLC);
+    if (handle == -1)
+    {
+        /* Look for a connection using VC multiplexing */
+        handle = connection_service_locate (dst, ConnectionService_IP_VC);
+    }
+
+    /* 1999-02-18: BAL
+     * With the removal of MAST, no longer creates a connection
+     * on-the-fly if there's not already one active.
+     * This *could* be done but is it desirable?  If ATMARP is
+     * in use then could just find destination ATM address from
+     * MAC address - otherwise have to hope it's in the internal
+     * address mappings, otherwise no can do.
+     */
+#if 0
+    if (handle == -1)
+    {
+        if (!do_vc)
+        {
+            /* if neither exist, create an LLC_SNAP mux connection */
+            m = mast (dst, M_LLC);
+            if (m)
+            {
+                init_call_resources(m);
+                m->m_muxtype = LLC_MULTIPLEX;
+            }
+        }
+        else
+        {
+            /* if neither exist, create an IP mux connection */
+            m = mast_connect(dst, M_IP);
+            if (m)
+            {
+                init_call_resources(m);
+                m->m_muxtype = VC_MULTIPLEX;
+            }
+        }
+    }
+#endif
+
+    return handle;
+}
+#endif
