@@ -86,6 +86,13 @@ all: ${TARGET}
 # RISC OS ROM build rules:
 #
 
+resources: ${TARGET}
+	${MKDIR} ${RESDIR}.^.Apps.${APP}
+        ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${APP}.${COMPONENT} ${CPFLAGS}
+        ${CP} Resources.* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        @echo ${COMPONENT}: all complete
+        
+
 install:   ${TARGET}
 	${MKDIR} ${APP}
         ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
