@@ -224,6 +224,14 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
     	target = TARGET_TOP;
     }
 
+    /* pdh 11-03-98: bodge again for NCWorks-esque help pages
+    if ( !strncasecomp( url, "file:/nchelp:", 13 ) )
+    {
+	STBDBG(("frontend_open_url: url looks like help, forcing _help\n"));
+    	target = TARGET_HELP;
+    }
+    */
+
     DBG(("frontend_open_url '%s' in window '%s' parent vw%p '%s' flags %x\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : "", flags));
 
 
@@ -276,6 +284,10 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
 
     if (parent == NULL)
         parent = main_view;
+
+#if DEBUG
+    feutils_find_top_window(parent->w);
+#endif
 
     if (parent && parent->fetching)
     {
@@ -362,12 +374,21 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
 
     session_log(url, session_REQUESTED);
 
-    /* open the fetch status */
-    if (keyboard_state == fe_keyboard_ONLINE)
-	fe_status_open_fetch_only(parent);
+#if DEBUG
+    feutils_find_top_window(parent->w);
+#endif
 
-    is_internal = strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
-	strncmp(url, "ncint:", sizeof("ncint:")-1) == 0;
+    is_internal = strncasecomp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
+	strncasecomp(url, "ncint:", sizeof("ncint:")-1) == 0;
+
+    STBDBG(("frontend_open_url: url %s, is_internal=%d\n", url, is_internal ));
+
+    /* open the fetch status */
+    if (keyboard_state == fe_keyboard_ONLINE && !is_internal)
+    {
+        STBDBG(("frontend_open_url: calling open_fetch_only\n"));
+	fe_status_open_fetch_only(parent);
+    }
 
     /* move the highlight */
     if ((flags & fe_open_url_FROM_FRAME) == 0 &&
@@ -377,6 +398,11 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
 	use_toolbox && tb_is_status_showing() &&
 	config_mode_cursor_toolbar)
     {
+
+#if DEBUG
+        feutils_find_top_window(parent->w);
+#endif
+        STBDBG(("frontend_open_url: calling status_highlight_stop\n"));
 	tb_status_highlight_stop();
     }
 
@@ -422,6 +448,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
 
 
     STBDBG(("frontend_open_url: backend IN transient %d\n", parent->open_transient));
+#if DEBUG
+    feutils_find_top_window(parent->w);
+#endif
     ep = backend_open_url(parent, &parent->fetching, url, bfile, flags & fe_open_url_NO_REFERER ? NULL : referer, oflags);
     STBDBG(("frontend_open_url: backend OUT fetching %p error %x\n", parent->fetching, ep ? ep->errnum : 0));
 
@@ -595,6 +624,9 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     fe_view view = mm_calloc(1, sizeof(*view));
     wimp_box visible;
 
+    LAYDBG(("vw%p: fe_new_view called from %s from %s\n",
+            view, caller(1), caller(2) ));
+
     view->magic = ANTWEB_VIEW_MAGIC;
 
     view->pending_user = -1;
@@ -637,7 +669,11 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
     view->box = *extent;
 
+#ifdef ANT_NCFRESCO
+    view->browser_mode = fe_browser_mode_WEB;
+#else
     view->browser_mode = parent ? fe_browser_mode_WEB : fe_browser_mode_UNSET;
+#endif
 
     visible = *extent;
 

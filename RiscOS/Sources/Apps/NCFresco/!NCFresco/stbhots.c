@@ -417,7 +417,7 @@ static void hotlist__read(FILE *in)
     else
 	encoding = NULL;
 #endif
-    
+
     while (!feof(in) && !ferror(in))
     {
 	char *url, *title, *language = NULL;
@@ -494,7 +494,7 @@ static void hotlist__write(FILE *out)
 	    fputc('\n', out);
 
 	    /* Extra information */
-	    fprintf(out, "%08x\n", item->last_used);
+	    fprintf(out, "%08lx\n", item->last_used);
 
 	    fputs(item->language, out);
 	    fputc('\n', out);
@@ -613,7 +613,7 @@ static BOOL hotlist__read_nvram(void)
 	else
 	    encoding = NULL;
 #endif
-	
+
 	/* carry on reading until reached end of buffer or a null byte is found */
 	s = &data[2];
 	while (s && *s)

@@ -31,6 +31,7 @@ extern void fe_message(const char *msg);
 extern void fe_report_error(const char *msg);
 
 extern os_error *feutils_open_behind_toolbar(wimp_w w);
+os_error *feutils_open_in_front(wimp_w);
 extern os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_frame_info *ip, int bgcol, BOOL open, wimp_w *w_out);
 extern int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scroll_bar, int *old_y_scroll_bar, int bgcol);
 extern void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *box, int *x_scroll_bar, int *y_scroll_bar, int width, int height, int scrolling, int bgcol);
@@ -58,3 +59,5 @@ extern char *check_url_prefix(const char *url);
 extern os_error *fe_start_task(const char *cli, wimp_t *task_out);
 
 extern int check_edge_proximity(int pos, int left, int right, int threshold);
+
+wimp_w feutils_find_top_window(wimp_w awindow);

@@ -37,6 +37,10 @@
 #include "fevents.h"
 #include "hotlist.h"
 
+#ifdef ANT_NCFRESCO
+#include "splash.h"
+#endif
+
 #include "tbhdrs.h"
 
 #ifndef gadgetflag_FADED
@@ -1740,11 +1744,42 @@ void tb_status_show(int small_only)
 	}
     }
 
-    STBDBG(("tb_status_show open %d state %d at %d,%d,%d,%d %d,%d\n", open, status_state, o.box.x0, o.box.y0, o.box.x1, o.box.y1, o.x, o.y));
+    STBDBG(("tb_status_show open %d state %d at %d,%d,%d,%d %d,%d\n", open, status_state, o.box.x0, o.box.y0, o.box.x1, o.box.y1, o.x, o.y ));
+
+#ifdef ANT_NCFRESCO
+    /* Find out if some other schweinhund has a window in front of ours */
+    {
+        wimp_msgstr wms;
+        wimp_w w, topw;
+
+        wms.hdr.size = 20;
+        wms.hdr.your_ref = 0;
+        wms.hdr.action = -1;
+
+/*         w = tb_status_w(); */
+
+        topw = feutils_find_top_window(main_view->w);
+
+        /* Discover task handle of top window */
+        wimp_sendwmessage( wimp_EACK, &wms, topw, -1 );
+
+        STBDBG(("tb_status_show: owner of top window %p is %p (I'm %p statusw %p)\n", topw, wms.hdr.task, task_handle, w ));
+
+        if ( wms.hdr.task != task_handle )
+        {
+            open = FALSE;
+            /* hope someone sends us a wimp_MNCWORKS_TASKSWITCH later */
+        }
+    }
+#endif
 
     if (open)
     {
-        o.behind = (wimp_w)-1;
+#ifdef ANT_NCFRESCO
+        o.behind = splash_window;   /* -1 if none */
+#else
+	o.behind = -1;
+#endif
 
 	STBDBG(("tb_status_show: bar_list=%p ->object_handle=%x\n", bar_list, bar_list->object_handle));
         frontend_complain((os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 0, bar_list->object_handle, 1, &o.box, 0, 0));/* tb_block[4], tb_block[5]));*/
@@ -1971,18 +2006,31 @@ int tb_status_check_message(wimp_mousestr *mp)
 
 void tb_status_rotate(void)
 {
+    int t = alarm_timenow();
+
     if (bar_list)
     {
 	char sprite_name1[40];
 
 	if (turn_ctr == -1)
 	{
-	    turn_start = alarm_timenow();
+	    turn_start = t;
 	    sprintf(sprite_name1, "%st,%sts", config_animation_name, config_animation_name);
 	    setfield(bar_list->object_handle, I_WORLD_BORDER, sprite_name1, FALSE);
+	    turn_ctr = 0;
 	}
 
-	turn_ctr = ((alarm_timenow() - turn_start) * TURN_SPEED / 100) % config_animation_frames;
+#if 0
+	turn_ctr = ((t - turn_start) * TURN_SPEED / 100) % config_animation_frames;
+#else
+        if ( ( t - turn_start ) > (100/TURN_SPEED) )
+        {
+            turn_start = t;
+            turn_ctr++;
+            if ( turn_ctr == config_animation_frames )
+                turn_ctr = 0;
+        }
+#endif
 
 	sprintf(sprite_name1, "%s%02d", config_animation_name, turn_ctr);
 	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
@@ -2024,6 +2072,7 @@ void tb_status_resize(int xdiff, int ydiff)
         movegadget(bar_list->object_handle, I_LIGHTS_RED, xdiff, xdiff);
 #ifdef ANT_NCFRESCO
         movegadget(bar_list->object_handle, 0x1002, xdiff, xdiff);  /* help */
+        movegadget(bar_list->object_handle, 0x20B0, xdiff, xdiff);  /* switch */
         movegadget(bar_list->object_handle, 0x2054, xdiff, xdiff);  /* scroll */
         movegadget(bar_list->object_handle, 0x2055, xdiff, xdiff);  /* scroll */
         movegadget(bar_list->object_handle, 0x2050, xdiff, xdiff);  /* scroll */

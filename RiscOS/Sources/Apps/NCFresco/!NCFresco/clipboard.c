@@ -62,7 +62,9 @@ static const clipboard_itemstr *list_bestitem(const int *list)
         if (item)
             return item;
     }
-    return NULL;
+
+    /* pdh: changed to return first one in case of failure */
+    return clip__list;
 }
 
 /* ------------------------------------------------------------------------------ */
@@ -111,19 +113,23 @@ BOOL clipboard_eventhandler(wimp_eventstr *e, void *handle)
                 /* someone wants the clipboard data, giving a list of file types */
                 /* if we have it then send them a DATASAVE message */
                 wimp_msgdatarequest *dp = (wimp_msgdatarequest *)&mp->data;
-#if DEBUG >= 2
+#if DEBUG
 {
     int *fp = dp->filetype;
-    STBDBG(("clip: datarequest from task %x flags %x\n", mp->hdr.task, dp->flags));
+    STBDBG(("clip: datarequest from task %x flags %x types [", mp->hdr.task, dp->flags));
     while (*fp != -1)
-        STBDBG(("  type %03x\n", *fp++));
+        STBDBG((" %03x", *fp++));
+    STBDBG((" ]\n"));
 }
 #endif
-                if (clip__hasclipboard && dp->flags & datarequest_Clipboard)
+                if (clip__hasclipboard && (dp->flags & datarequest_Clipboard) )
                 {
                     wimp_msgstr msg;
                     wimp_msgdatasave *datasave = &msg.data.datasave;
                     const clipboard_itemstr *item = clip__list ? list_bestitem(dp->filetype) : &clip__item;
+
+/*                     if ( !item ) */
+/*                         break; */
 
                     datasave->w = dp->w;
                     datasave->i = dp->i;
@@ -188,7 +194,7 @@ BOOL clipboard_eventhandler(wimp_eventstr *e, void *handle)
         wimp_msgstr *mp = &e->data.msg;
         if (mp->hdr.my_ref == clip__msgid)
         {
-	    STBDBG(("clip: bounced\n"));
+	    STBDBG(("clip: msgtype 0x%x bounced\n", mp->hdr.action));
             clip__xferstate = datareq_Bounced;
         }
     }

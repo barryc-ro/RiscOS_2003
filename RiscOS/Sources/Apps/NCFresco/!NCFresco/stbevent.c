@@ -99,6 +99,12 @@ static void global_event_handler(int event)
 	fe_font_size_set(-1, FALSE);
 	break;
 
+#ifdef ANT_NCFRESCO
+    case fevent_GLOBAL_RUN_SWITCHER:
+        fe_run_ncworks();
+        break;
+#endif
+
     default:
 	if ((event &~ fevent_GLOBAL_FONT_MASK) == fevent_GLOBAL_FONT_SET)
 	{
@@ -293,6 +299,13 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_CLOSE:
+#if DEBUG
+        if ( v )
+        {
+            STBDBG(("vw%p: in fevent_CLOSE handler\n", v ));
+            feutils_find_top_window(v->w);
+        }
+#endif
 	if (v->app_return_page)
 	{
 	    frontend_complain(frontend_open_url(v->app_return_page, v, NULL, NULL, 0));

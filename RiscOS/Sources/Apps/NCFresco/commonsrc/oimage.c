@@ -548,7 +548,7 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 
     if (update == object_redraw_BACKGROUND)
 	return;
-    
+
     bbox.x0 = hpos + tii->hgap;
     bbox.y0 = bline - ti->max_down + tii->vgap;
     bbox.x1 = hpos + ti->width - tii->hgap;
@@ -659,7 +659,10 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
     }
 
     /* follow link or just place caret */
-    if (ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL))
+    /* pdh 03-Apr-98: added pollctl() call, despite sjm's 190297 comment above
+     */
+    if (ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL)
+        && !akbd_pollctl() )
     {
 	BOOL follow_link = TRUE;
         if (config_display_time_activate)

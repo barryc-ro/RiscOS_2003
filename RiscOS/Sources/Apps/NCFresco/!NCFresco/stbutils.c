@@ -507,6 +507,22 @@ os_error *feutils_open_behind_toolbar(wimp_w w)
     return e;
 }
 
+os_error *feutils_open_in_front(wimp_w w)   /* pdh 11-03-98 */
+{
+    os_error *e;
+    wimp_wstate state;
+
+    STBDBG(("feutils_open_in_front: w %x\n", w));
+
+    e = wimp_get_wind_state(w, &state);
+    if (!e)
+    {
+	state.o.behind = -1;
+	e = wimp_open_wind(&state.o);
+    }
+    return e;
+}
+
 os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_frame_info *ip, int bgcol, BOOL open, wimp_w *w_out)
 {
     os_error *e;
@@ -824,7 +840,7 @@ void fe_get_wimp_caret(wimp_w w)
 void feutils_init_1(void)
 {
     char *s;
-    
+
     /* global vars for rest of system*/
     frontend_dx = 1<<bbc_vduvar(bbc_XEigFactor);
     frontend_dy = 1<<bbc_vduvar(bbc_YEigFactor);
@@ -1228,6 +1244,31 @@ int check_edge_proximity(int pos, int left, int right, int threshold)
 	    r = 0;
     }
     return r;
+}
+
+wimp_w feutils_find_top_window(wimp_w awindow)
+{
+    wimp_wstate wws;
+
+    STBDBG(("feutils_find_top_window: %p", awindow));
+
+    for (;;)
+    {
+        if ( wimp_get_wind_state( awindow, &wws ) )
+        {
+            STBDBG((" gave error\n"));
+            return -1;
+        }
+
+        if ( wws.o.behind == -1 )
+        {
+            STBDBG((" reached top\n"));
+            return awindow;
+        }
+
+        awindow = wws.o.behind;
+        STBDBG((" -> %p", awindow ));
+    }
 }
 
 /* ----------------------------------------------------------------------------------------------------- */

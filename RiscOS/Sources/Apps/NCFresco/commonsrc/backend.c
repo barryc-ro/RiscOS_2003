@@ -650,10 +650,12 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
 	}
 	else if (ti->aref && (ti->aref->href || (ti->aref->flags & rid_aref_LABEL)))
 	{
-#if 0
+#if 1 /* pdh 03-Apr-98: was 0, but this made ctrl-click on images follow the
+       * link as well as selecting the image.
+       */
 	    if (akbd_pollctl())
 	    {
-#ifndef BUILDERS
+#if 0 /* pdh 03-Apr-98: was !defined( BUILDERS ) */
 	        backend_update_link(doc, ti, -1);
 #endif
 	    }
@@ -1057,7 +1059,7 @@ int backend_getwebfont(be_doc doc, BOOL wide, int language, int font1, int base)
 	else
 	    whichfont = font1;
     }
-    
+
     /* pdh: autofit bodge */
     if ( gbf_active( GBF_AUTOFIT ) )
     {
@@ -3355,7 +3357,7 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 		/* SJM: 28Oct97: set up back pointer here */
 		doc->rh->doc = doc;
 		doc->rh->encoding_source = encoding_source;
-		
+
 #if 0
 		/* can this ever be called? SJM: 28Oct97: No - removed */
 		if (doc->rh->stream.text_last)
@@ -3379,7 +3381,7 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 	    for (; list; list = list->next)
 	    {
 		rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
-		
+
 		BENDBG(( "doc%p: add meta rh %p list %p\n", doc, doc->rh, list));
 
 		m->httpequiv = strdup(list->key);
@@ -4002,7 +4004,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     }
     else
 	postp = NULL;
-    
+
     ep = access_url(use_url,
 		    (flags & be_openurl_flag_NOCACHE ? access_NOCACHE : 0) |
 		    (flags & be_openurl_flag_HISTORY ? 0 : access_CHECK_EXPIRE) |

@@ -873,6 +873,15 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     int chcode = e->data.key.chcode;
     int event = -1;
 
+#ifdef ANT_NCFRESCO
+    STBDBG(("chcode=0x%x alt=%d\n", chcode, kbd_pollalt() ));
+    if ( chcode == akbd_TabK && kbd_pollalt() )
+    {
+        fe_run_ncworks();
+        return;
+    }
+#endif
+
     if (fe_map_view() == NULL )
 	switch (chcode &~ (akbd_Sh | akbd_Ctl))
     {

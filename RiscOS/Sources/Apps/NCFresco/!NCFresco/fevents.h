@@ -51,6 +51,7 @@
 #define fevent_GLOBAL_CYCLE_JPEG	    0x1008
 #define fevent_GLOBAL_ICONISE		    0x1009
 #define fevent_GLOBAL_DEICONISE		    0x100A
+#define fevent_GLOBAL_RUN_SWITCHER          0x100B /* pdh for ncworks */
 
 #define fevent_GLOBAL_FONT_MASK		    0x000f
 #define fevent_GLOBAL_FONT_SET		    0x1100 /* up to 14 different font settings */

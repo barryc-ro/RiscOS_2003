@@ -290,7 +290,7 @@ static void internal_decode_display_options(const char *query)
     BOOL cancel;
 
     s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
+    cancel = strcasestr(s, msgs_lookup("cancel")) != 0;
     mm_free(s);
 
     if (!cancel)
@@ -335,8 +335,8 @@ static int internal_decode_print_options(const char *query, char **url)
     BOOL cancel, print;
 
     s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
-    print = strcasestr(s, "print") != 0;
+    cancel = strcasestr(s, msgs_lookup("cancel")) != 0;
+    print = strcasestr(s, msgs_lookup("print")) != 0;
     mm_free(s);
 
     if (!cancel)
@@ -547,7 +547,7 @@ static int internal_decode_print_frames(const char *query, char **new_url)
     /* when called from the printframes dialogue box, this may have a
        cancel button */
     s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
+    cancel = strcasestr(s, msgs_lookup("cancel")) != 0;
     mm_free(s);
 
     if (cancel)
@@ -754,7 +754,7 @@ static int internal_decode_find(const char *query)
     mm_free(source);
 
     s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
+    cancel = strcasestr(s, msgs_lookup("cancel")) != 0;
     mm_free(s);
 
     if (!cancel)
@@ -1040,7 +1040,7 @@ static int internal_decode_password(const char *query)
         return fe_internal_url_ERROR;
 
     s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
+    cancel = strcasestr(s, msgs_lookup("cancel")) != 0;
     mm_free(s);
 
     if (cancel)
@@ -1160,7 +1160,7 @@ static int internal_decode_ssl(const char *query)
     if (!fe)
         return fe_internal_url_ERROR;
     s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
+    cancel = strcasestr(s, msgs_lookup("cancel")) != 0;
     mm_free(s);
     if (fe->cb)
 	fe->cb(fe->h, !cancel);
@@ -1669,7 +1669,7 @@ static int internal_url_loadurl(const char *query, const fe_post_info *bfile, co
 #ifndef ANT_NCFRESCO
 	if (url)
 	    strtok(url, "=");
-#else	
+#else
         { char Simon_What_IS_Meant_To_Happen_Here; }
         /* pdh: this next bit used just to say
          *      if ( url )
@@ -1999,7 +1999,7 @@ static int internal_action_printpage(const char *query, const fe_post_info *bfil
     /* when called from the printframes dialogue box, this may have a
        cancel button */
     s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
+    cancel = strcasestr(s, msgs_lookup("cancel")) != 0;
     mm_free(s);
 
     if (cancel)
@@ -2153,7 +2153,7 @@ static int internal_decode_error(const char *query, char **new_url, int *flags)
 
     if (strcmp(which, "E80acf") == 0)
     {
-	if (strcasecomp(action, "cancel") != 0)
+	if (strcasecomp(action, msgs_lookup("cancel")) != 0)
 	{
 	    /* try the print again */
 	    *new_url = extract_value(query, "again=");

@@ -729,6 +729,13 @@ void statuswin_clear(BOOL only_if_small)
 os_error *statuswin_toggle(fe_view v)
 {
     os_error *e = NULL;
+
+#ifdef ANT_NCFRESCO
+    if ( v->open_transient
+         && v->transient_position == fe_position_FULLSCREEN )
+        return NULL;
+#endif
+
     if (statuswin_state == statuswin_OPEN)
         statuswin_clear(FALSE);
     else

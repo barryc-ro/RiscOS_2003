@@ -115,8 +115,8 @@ RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS)  -I..
 #RISCOS_INCS=	-I../RISC_OSLib -I../tcpiplibs $(BASE_INCS) -I../clib
 # -Fn *includes* function names (at least for this option set)
 
-RISCOS_CFLAGS_DBG=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
-RISCOS_CFLAGS_REL=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
+RISCOS_CFLAGS_DBG=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26/hardfp -Fn
+RISCOS_CFLAGS_REL=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4 -apcs 3/26/hardfp
 
 RISCOS_CFLAGS=  $(RISCOS_CFLAGS_DBG)
 RISCOS_VPATH=	$(BASE_VPATH)
@@ -295,7 +295,7 @@ RECONS_LIBS=
 
 
 # Use this if you don't have automatic python execution.
-PYTHON=
+PYTHON=python
 
 
 # These are ordered - See attrgen.py for what they mean, and see the definition
@@ -609,7 +609,7 @@ mu:		MOST_UNIX
 # for lack of proper dependencies!
 PROFILE:
 		@echo "Building profile source files from profile configuration file"
-		@bin/profgen.py $(PROF_IN) $(PROF_C) $(PROF_H)
+		@$(PYTHON) bin/profgen.py $(PROF_IN) $(PROF_C) $(PROF_H)
 		@echo "You should do a make clean now!"
 
 realclean:	clean sanity
@@ -808,7 +808,7 @@ NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 
 NCFRESCO_BASE_CFLAGS=		-DNEW_TEXTAREA=1 -DBOCA=0 -wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 \
 				$(NCFRESCO_INCS) -DFRAMES=1 -DITERATIVE_PANIC=1 -DNO_LICENSEE -DLOCK_FILES=1 -DNEW_HL=0 -DUSE_FILEWATCH=1 -DSSL_UI=0 \
-				-DIGNORE_CAPTION=1 -DUNICODE=0 -DNEW_BREAKS=1
+				-DIGNORE_CAPTION=1 -DUNICODE=1 -DNEW_BREAKS=1
 
 # several alternative flag sets
 NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG -Fn -Ospace
@@ -850,7 +850,7 @@ NCFRESCO_VPATH=			../!NCFresco
 NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
 				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o stbcodec.o \
-				fvpr.o \
+				fvpr.o splash.o \
 				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 
 

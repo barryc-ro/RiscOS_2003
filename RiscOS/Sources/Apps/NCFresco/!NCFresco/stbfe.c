@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <locale.h>
+#include "kernel.h"
 
 #include "memwatch.h"
 #include "unwind.h"
@@ -85,6 +86,11 @@
 #include "frameutils.h"
 #include "configfile.h"
 #include "antweb.h"
+#include "files.h"
+
+#ifdef ANT_NCFRESCO
+#include "splash.h"
+#endif
 
 #if MEMLIB
 #include "memheap.h"
@@ -164,6 +170,15 @@
 #define TaskModule_DeRegisterService    0x4D303
 #define wimp_MSERVICE                   0x4D300
 
+#ifdef ANT_NCFRESCO
+static void fe_set_ncworks_variable(void);
+static void fe_unset_ncworks_variable(void);
+#else
+#define fe_set_ncworks_variable(x)
+#define fe_unset_ncworks_variable(x)
+#endif
+#define wimp_MNCWORKS_TASKSWITCH        0x51140
+
 #if USE_DIALLER_STATUS
 #define Service_DiallerStatus           0xB4
 
@@ -215,7 +230,7 @@ static void re_read_config(int flags);
 
 /* -------------------------------------------------------------------------- */
 
-static wimp_t task_handle;
+wimp_t task_handle;
 int wimp_version;
 
 BOOL use_toolbox = FALSE;
@@ -905,7 +920,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
             fe_map_mode(NULL, NULL);
 
 	/* store the positions of this frame in the history */
-	fe_history_update_current_state(v);
+        STBDBG(("vw%p: fe_view_visit calls fe_hist_ucs\n", v ));
+        fe_history_update_current_state(v);
 
 	/* do before disposing */
 	frontend_fade_frame(v, render_get_colour(render_colour_BACK, doc));
@@ -919,7 +935,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     /* dispose of any children - each one will call fe_history_update_current_state before being removed */
     fe_dispose_view_children(v);
 
-    STBDBG(("vw%p: doc %p now displaying (transient %d)\n", v, doc,
+    STBDBG(("vw%p: frontend_view_visit: doc %p now displaying (transient %d)\n", v, doc,
             v->open_transient ));
 
     v->displaying = doc;
@@ -948,7 +964,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     /* check for special page instructions - not all relevant to child pages */
     {
-	if ((ncmode = mm_strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
+        ncmode = mm_strdup( backend_check_meta(doc, "NCBROWSERMODE") );
+
+	if ( ncmode )
 	{
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" };			/* order must agree with #defines in stbview.h */
@@ -1090,10 +1108,12 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    mm_free(v->submitonunload);
 	    v->submitonunload = mm_strdup(vals[content_tag_SUBMITONUNLOAD].value);
 
+#ifndef ANT_NCFRESCO
 	    if (vals[content_tag_SELECTBUTTON].value)
 		v->select_button = (int)strtoul(vals[content_tag_SELECTBUTTON].value, NULL, 0);
 
 	    STBDBG(("selectbutton: 0x%x\n", v->select_button));
+#endif
 
 	    mm_free(v->specialselect);
 	    v->specialselect = mm_strdup(vals[content_tag_SPECIALSELECT].value);
@@ -1136,10 +1156,13 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	tb_codec_kill();
     }
 
+    if ( v->parent )
+        STBDBG(("vw%p: frontend_view_visit: parent=%p, not checking browsermode\n", v, v->parent));
+
     /* check for special page instructions - but only on top page  */
     if (v->parent == NULL)
     {
-        const char *bmode;
+        const char *bmode = NULL;
 	if (ncmode == NULL && (bmode = backend_check_meta(doc, "BROWSERMODE")) != NULL)
 	{
 	    mode = strcasecomp(bmode, "DESKTOP") == 0 ? fe_browser_mode_DESKTOP :
@@ -1149,6 +1172,32 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		strcasecomp(bmode, "APP") == 0 ? fe_browser_mode_APP :
 		fe_browser_mode_WEB;
 	}
+
+#ifdef ANT_NCFRESCO
+        STBDBG(("vw%p: browser mode %s (ncmode %s)\n", v, bmode  ? bmode  : "null",
+                                                 ncmode ? ncmode : "null" ));
+/*
+        if ( mode == fe_browser_mode_DBOX )
+        {
+            mode = fe_browser_mode_APP;
+            STBDBG(("vw%p: browser mode DBOX changed to APP\n", v ));
+        }
+        switch ( mode )
+        {
+        case fe_browser_mode_DESKTOP:
+        */
+        if ( mode != fe_browser_mode_WEB )
+            v->transient_position = fe_position_FULLSCREEN;
+        /*
+            break;
+        case fe_browser_mode_DBOX:
+            v->transient_position = fe_position_CENTERED;
+            break;
+        default:
+            v->transient_position = fe_position_TOOLBAR;
+            break;
+        }*/
+#endif
 
 	/* decide on what to store in the way of return pages */
 	if (previous_mode == fe_browser_mode_DESKTOP)
@@ -1219,6 +1268,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	fe_view top = frameutils_find_top(v);
 	if (top->fetching_data.hist)
 	{
+	    STBDBG(("vw%p: setting hist_at to %p\n", top, top->fetching_data.hist ));
 	    top->hist_at = top->fetching_data.hist;
 	    top->fetching_data.hist = NULL;
 	}
@@ -1230,9 +1280,13 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	/* redraw window - unless transient as that hasn't been opened yet */
 	if (!v->open_transient)
+	{
+            STBDBG(("vw%p: frontend_view_visit calls view_redraw\n", v ));
 	    frontend_view_redraw(v, NULL);
+	}
 
 	/* set URL and secure flag and page info */
+	STBDBG(("vw%p: frontend_view_visit calls view_status\n", v ));
 	frontend_view_status(v, sb_status_URL, url);
 
 	if (use_toolbox)
@@ -1252,6 +1306,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	if (!v->open_transient && (!fe_check_download_finished(v) || !v->fetching_data.yscroll))
 	    frontend_view_ensure_visable(v, -1, 0, 0);
     }
+
+    if ( v == main_view )
+        fe_set_ncworks_variable();
 
     mm_free(previous_url);
 
@@ -1285,6 +1342,9 @@ fe_view fe_dbox_view(const char *name)
 
     box = screen_box;
     box.y1 = box.y0;
+
+    LAYDBG(("fe_dbox_view: screen_box.x1=%d, xwindlimit=%d\n",
+            screen_box.x1, bbc_vduvar(bbc_XWindLimit) ));
 
     frontend_complain(fe_new_view(NULL, &box, &info, FALSE, &view));
 
@@ -1592,7 +1652,7 @@ static os_error *set_fetch_message(fe_view v)
 {
     char buffer[256];
     int n;
-    os_error *e;
+    os_error *e = NULL;
 
 #if 0
     int waiting, fetching, fetched, errors, in_trans, so_far;
@@ -1659,12 +1719,20 @@ static int fe_transient_set_size(fe_view v)
 	if (config_display_control_top)
 	{
 	    v->box.y1 = text_safe_box.y1 - h + 8; /* +8 to get it slightly above the toolbar */
+#ifdef ANT_NCFRESCO
+            v->box.y0 = text_safe_box.y0;
+#else
 	    v->box.y0 = v->box.y1 - (-v->doc_height);
+#endif
 	}
 	else
 	{
 	    v->box.y0 = text_safe_box.y0 + h - 8; /* -8 to get it slightly below the toolbar */
+#ifdef ANT_NCFRESCO
+            v->box.y0 = text_safe_box.y0;
+#else
 	    v->box.y1 = v->box.y0 + (-v->doc_height);
+#endif
 	}
 	memset(&v->margin, 0, sizeof(v->margin));
 	changed = TRUE;
@@ -1672,7 +1740,7 @@ static int fe_transient_set_size(fe_view v)
 
     case fe_position_CENTERED_WITH_COORDS:
     case fe_position_CENTERED:
-    case fe_position_UNSET:
+/*     case fe_position_UNSET: */
     {
 	int h = -v->doc_height/*  - v->backend_margin.y1 + v->backend_margin.y0 */;
 	int ww, hh;
@@ -1693,6 +1761,7 @@ static int fe_transient_set_size(fe_view v)
 
     case fe_position_FULLSCREEN:
  	v->box = screen_box;
+#ifndef ANT_NCFRESCO
 	if (use_toolbox)
 	{
 	    if (config_display_control_top)
@@ -1700,6 +1769,7 @@ static int fe_transient_set_size(fe_view v)
 	    else
 		v->margin.y0 += tb_status_height();
 	}
+#endif
 	changed = TRUE;
 	break;
 
@@ -1876,12 +1946,22 @@ void fe_ensure_highlight_after_fetch(fe_view v)
 static os_error *reopen_frames(fe_view v)
 {
     BOOL changed = FALSE;
+    fe_view child = v->children;
+
+    if ( v->parent && v->parent->open_transient )
+        v->open_transient = TRUE;
 
     if (v->open_transient)
+    {
 	changed = fe_transient_set_size(v);
+	feutils_open_in_front(v->w);
+    }
+    else
+    {
+        feutils_open_behind_toolbar(v->w);
+    }
 
     STBDBG(("reopen_frames: v%p changed %d\n", v, changed));
-    feutils_open_behind_toolbar(v->w);
 
     feutils_resize_window(&v->w, &v->margin, &v->box, &v->x_scroll_bar, &v->y_scroll_bar, v->doc_width, -v->doc_height, fe_scrolling_NO, fe_bg_colour(v));
 
@@ -1896,7 +1976,23 @@ static os_error *reopen_frames(fe_view v)
 	frontend_view_redraw(v, NULL); /* put inside because of ncint:select */
     }
 
+    while ( child )
+    {
+        reopen_frames(child);
+        child = child->next;
+    }
+
     return NULL;
+}
+
+static void fe_bring_to_front(void)
+{
+    wimp_w w = fe_status_window_handle();
+
+    if ( w != (wimp_w)-1 )
+        feutils_open_in_front( w );
+
+    reopen_frames( main_view );
 }
 
 int fe_check_download_finished(fe_view v)
@@ -2545,10 +2641,12 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
 		/* if we are coming from history then need to use the
 		 * urls from the history item and fill in the scroll
 		 * offsets */
-		if (top->hist_at)
+		if (top->hist_at && !top->dont_add_to_history)
 		{
 		    char specifier[32];
 		    char *new_url;
+
+                    STBDBG(("frontend_frame_layout: some history going on? top=%p top->hist_at=%d\n", top, top->hist_at ));
 
 		    specifier[0] = 0;
 		    fe_frame_specifier_create(vv, specifier, sizeof(specifier));
@@ -2558,7 +2656,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
 			url = new_url;
 			flags |= fe_open_url_FROM_HISTORY;
 		    }
-		    STBDBG(("frontend_frame_layout: history override '%s' gets url '%s' offsets %dx%d\n", specifier, strsafe(new_url), vv->fetching_data.xscroll, vv->fetching_data.yscroll));
+		    STBDBG(("frontend_frame_layout: history (%d) override '%s' gets url '%s' offsets %dx%d\n", top->hist_at, specifier, strsafe(new_url), vv->fetching_data.xscroll, vv->fetching_data.yscroll));
 		}
 
 		if (url)
@@ -2856,7 +2954,7 @@ static int convert_key_latin1(int key)
     if (key >= 128 && key < 160)
 	key = keys[key-128];
 
-    return key;    
+    return key;
 }
 
 BOOL fe_writeable_handle_keys(fe_view v, int key)
@@ -2866,13 +2964,13 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
     if (v && v->displaying)
     {
 	int k;
-	
+
 	/* Need to translate this keycode to UCS4 - unles a function key */
 	if (key > 256 && key < 512)
 	    k = -key;
 	else
 	    k = convert_key_latin1(key);
-	
+
 	if (k != 0xFFFD)
 	    backend_doc_key(v->displaying, k, &used);
     }
@@ -3030,12 +3128,61 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL clear_others)
  * This is called when the clipboard is asked to save its data to an application
  */
 
+#define BUFSIZE 4096
+
+static os_error *file_copy_the_hard_way( const char *from, const char *to )
+{
+    char buffer[BUFSIZE];
+    int fin, fout;
+    int bytes;
+
+    fin = ro_fopen(from,RO_OPEN_READ);
+    if ( fin == 0 )
+        return _kernel_last_oserror();
+
+    remove(to);
+
+    fout = ro_fopen(to,RO_OPEN_WRITE);
+    if ( fout == 0 )
+    {
+        ro_fclose(fin);
+        return _kernel_last_oserror();
+    }
+
+    bytes = ro_get_extent(fin);
+
+    while ( bytes )
+    {
+        int lump = (bytes>BUFSIZE) ? BUFSIZE : bytes;
+
+        if ( ro_fread(buffer,lump,1,fin) < lump
+             || ro_fwrite(buffer,lump,1,fout) < lump )
+        {
+            ro_fclose(fin);
+            ro_fclose(fout);
+            return _kernel_last_oserror();
+        }
+
+        bytes -= lump;
+    }
+
+    ro_fclose(fin);
+    ro_fclose(fout);
+
+    set_file_type( to, file_type(from) );
+
+    return NULL;
+}
+
 static BOOL clip_save_text(const char *to, int file_type, void *handle)
 {
     const char *from = clipboard_Data(NULL);
-    return frontend_complain((os_error *)_swix(OS_FSControl, _INR(0,3), 0x1A, from, to, 0)) == NULL;
-    handle = handle;
-    file_type = file_type;
+
+    STBDBG(("clip_save_text: copying %s as %s\n", from, to));
+
+    /* pdh: 18-Mar-98: os_fscontrol 26 doesn't work on cachefs */
+/*     return frontend_complain((os_error *)_swix(OS_FSControl, _INR(0,3), 0x1A, from, to, 0)) == NULL; */
+    return frontend_complain( file_copy_the_hard_way( from, to ) ) == NULL;
 }
 
 static clipboard_itemstr clip_list_text[] =
@@ -3063,6 +3210,9 @@ static clipboard_itemstr clip_list_jpeg[] =
 static void clip_destroy(void *data)
 {
     char *file_name = clipboard_Data(NULL);
+
+    STBDBG(("clip_destroy\n"));
+
     remove(file_name);
     data = data;
 }
@@ -3130,6 +3280,9 @@ void fe_copy_image_to_clipboard(fe_view v)
             if (backend_image_saver_jpeg(CLIP_FILE, im))
             {
                 clipboard_Destroy();
+
+                STBDBG(("fe_copy: createlist(list_jpeg)\n"));
+
                 /* register as the clip board - the filename is the data */
                 clipboard_CreateList( clip_list_jpeg, clip_destroy,
                                       CLIP_FILE, CLIP_FILE_LEN, NULL);
@@ -3140,6 +3293,9 @@ void fe_copy_image_to_clipboard(fe_view v)
             if (backend_image_saver_sprite(CLIP_FILE, im))
             {
                 clipboard_Destroy();
+
+                STBDBG(("fe_copy: createlist(list_sprite)\n"));
+
                 /* register as the clip board - the filename is the data */
                 clipboard_CreateList( clip_list_sprite, clip_destroy,
                                       CLIP_FILE, CLIP_FILE_LEN, NULL);
@@ -3152,8 +3308,6 @@ void fe_copy_image_to_clipboard(fe_view v)
 /* pdh: copy image to clipboard if one's selected, otherwise text */
 void fe_copy_whatever_to_clipboard( fe_view v )
 {
-    void *im;
-
     if ( get_selected_image(v) )
         fe_copy_image_to_clipboard( v );
     else
@@ -3301,6 +3455,14 @@ os_error *fe_status_state(fe_view v, int state)
     BOOL is_open = use_toolbox ? tb_is_status_showing() : FALSE;
     BOOL new_state_open = state == -1 ? !is_open : state;
 
+#ifdef ANT_NCFRESCO
+    if ( v->open_transient
+         && v->transient_position == fe_position_FULLSCREEN )
+        return NULL;
+#endif
+
+    STBDBG(("vw%p: fe_status_state, new_open=%s\n", v, new_state_open ? "y" : "n" ));
+
     if (new_state_open != is_open)
     {
 	int movement = fe_status_set_margins(v, state);
@@ -3410,6 +3572,12 @@ void fe_status_open_fetch_only(fe_view v)
     if (keyboard_state == fe_keyboard_OFFLINE)
 	return;
 #endif
+
+#if DEBUG
+    STBDBG(("in stbfe.c:fe_status_open_fetch_only\n"));
+    feutils_find_top_window(v->w);
+#endif
+
     if (use_toolbox)
     {
         tb_status_show(TRUE);
@@ -3425,7 +3593,11 @@ void fe_status_open_fetch_only(fe_view v)
 
 wimp_w fe_status_window_handle(void)
 {
-    return !use_toolbox ? statuswin_w : tb_is_status_showing() ? tb_status_w() : -1;
+#ifdef ANT_NCFRESCO
+    return !use_toolbox ? statuswin_w : tb_is_status_showing() ? tb_status_w() : splash_window;
+#elsee
+    return !use_toolbox ? statuswin_w : tb_is_status_showing() ? tb_status_w() : 0;
+#endif
 }
 
 static void fe_status_mode(fe_view v, int mode, int override)
@@ -3444,7 +3616,11 @@ static void fe_status_mode(fe_view v, int mode, int override)
 	    {
 		/* if desktop mode then disable toolbar */
 	    case fe_browser_mode_DESKTOP:
+#ifdef ANT_NCFRESCO
+ 	    case fe_browser_mode_DBOX:
+#else
 /* 	    case fe_browser_mode_DBOX: leave it on for RCA use */
+#endif
 	    case fe_browser_mode_APP:
 		fe_status_state(frameutils_find_top(v), 0);
 		break;
@@ -4844,6 +5020,8 @@ static void fe_url_bounce(wimp_msgstr *msg)
 	    /* clear return var */
 	    _swix(OS_SetVarVal, _INR(0,2), STBWEB_RETURNED_FRAMES, NULL, -1);
 
+            STBDBG(("stbfe: oscli %s\n", buffer+6 ));
+
 	    if (run_cli)
 		frontend_complain(os_cli(buffer + 6));
 	    else
@@ -4878,6 +5056,10 @@ static void fe_url_bounce(wimp_msgstr *msg)
 
 			    target1 = extract_value(ss, "target=");
 			    url1 = extract_value(ss, "url=");
+
+                            STBDBG(("stbfe: returned_frames url=%s target=%s\n",
+                                    url1 ? url1 : "null",
+                                    target1 ? target1 : "null" ));
 
 			    if (finished)
 				ss = NULL;
@@ -5117,7 +5299,7 @@ static void fe__handle_openurl(wimp_msgstr *msg, char *url, char *target, char *
     url_canonicalise(&curl);
 
     post.body_file = body_file;
-    post.content_type = content_type;    
+    post.content_type = content_type;
     frontend_complain(frontend_open_url(curl, NULL, target, &post, fe_open_url_NO_REFERER));
 
     mm_free(curl);
@@ -5230,7 +5412,7 @@ static BOOL uri_mprocess(int flags, const char *uri, int uri_handle)
 {
     char *scheme;
     BOOL supported = FALSE;
-    
+
     url_parse(uri, &scheme, NULL, NULL, NULL, NULL, NULL);
 
     if (access_is_scheme_supported(scheme))
@@ -5269,7 +5451,7 @@ void fe_user_unload(void)
     BOOL toolbar = tb_is_status_showing();
 
     STBDBG(("fe_user_unload:\n"));
-    
+
     /* on a shutdown flush the cache and stuff */
     re_read_config(ncfresco_loaddata_NOT_ALL | ncfresco_loaddata_FLUSH);
 
@@ -5665,7 +5847,7 @@ static void setup_allocs(void)
 void fe_event_process(void)
 {
     wimp_eventstr e;
-    wimp_t sender;
+/*     wimp_t sender; */
 
 #if 0
     if (fe_pending_url)
@@ -6021,6 +6203,12 @@ void fe_event_process(void)
 		fe_keyboard_closed();
 		break;
 
+#ifdef ANT_NCFRESCO
+            case wimp_MNCWORKS_TASKSWITCH:
+                fe_bring_to_front();
+                break;
+#endif
+
 	    case MESSAGE_OFFER_FOCUS:
 		offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]);
 		break;
@@ -6033,7 +6221,7 @@ void fe_event_process(void)
 		    wimp_sendmessage(wimp_ESEND, msg, msg->hdr.task);
 		}
 		break;
-		
+
 #if DEBUG
 	    case wimp_MINITTASK:
 	    {
@@ -6246,6 +6434,8 @@ static void fe_tidyup(void)
     pointer_reset_shape();
     _swix(Hourglass_Smash, 0);
 
+    fe_unset_ncworks_variable();
+
     /* Before we go, look for memory leeks */
     mm_dump();
 }
@@ -6285,6 +6475,8 @@ static int message_codes[] =
     wimp_MOPENURL,
     wimp_MNCFRESCO,
 
+    wimp_MNCWORKS_TASKSWITCH,
+
     MESSAGE_ERROR_BROADCAST,
 
 #if DEBUG
@@ -6310,9 +6502,9 @@ static BOOL fe_initialise(void)
     visdelay_init();
     visdelay_begin();
 
-    signal_init();
-
     dbginit();
+
+    signal_init();
 
 #if UNICODE
     encoding_set_alloc_fns(mm_malloc, mm_free);
@@ -6366,6 +6558,10 @@ static BOOL fe_initialise(void)
 #endif
 
     atexit(&fe_tidyup);
+
+#ifdef ANT_NCFRESCO
+    splash();
+#endif
 
 /*  gbf_flags &= ~GBF_TRANSLATE_UNDEF_CHARS; this needs to not be defined to build a japanese version */
 
@@ -6528,7 +6724,63 @@ static BOOL fe_initialise(void)
 }
 
 
-/* ------------------------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- */
+
+#ifdef ANT_NCFRESCO
+static void fe_set_ncworks_variable(void)
+{
+    fe_view v = main_view;
+    be_doc d = v->displaying;
+    char *url;
+    char *title;
+    char name[256];
+    char value[64];
+
+/*     if ( v->open_transient ) */
+/*     { */
+/*         fe_unset_ncworks_variable(); */
+/*         return; */
+/*     } */
+
+    backend_doc_info( d, NULL, NULL, &url, &title );
+
+    if ( !title )
+        title = url;
+
+    if ( strlen(title) > 63 )
+    {
+        memcpy( value, title, 63 );
+        value[63] = '\0';
+        title = value;
+    }
+
+    sprintf( name, "NCWorksDoc$NCFresco$T%x_1", task_handle );
+    _kernel_setenv( name, title );
+    sprintf( name, "NCWorksSpr$NCFresco$T%x_1", task_handle );
+    _kernel_setenv( name, "file_faf" );
+    sprintf( value, "%x", task_handle );
+    _kernel_setenv( "NCWorksHand$NCFresco", value );
+}
+
+void fe_unset_ncworks_variable(void)
+{
+    char name[256];
+
+    sprintf( name, "NCWorksDoc$NCFresco$T%x_1", task_handle );
+    _kernel_setenv( name, NULL );
+    sprintf( name, "NCWorksSpr$NCFresco$T%x_1", task_handle );
+    _kernel_setenv( name, NULL );
+    _kernel_setenv( "NCWorksHand$NCFresco", NULL );
+}
+
+void fe_run_ncworks(void)
+{
+    fe_set_ncworks_variable();
+    _kernel_oscli( "ncworks" );
+}
+#endif
+
+/* ------------------------------------------------------------------------- */
 
 #if STBWEB_ROM && 0
 /* int __root_stack_size = 64*1024; */

@@ -12,6 +12,7 @@ typedef enum
 extern pointermode_t pointer_mode;
 extern BOOL use_toolbox;
 extern int wimp_version;
+extern wimp_t task_handle;
 
 extern wimp_t on_screen_kbd;
 extern wimp_box on_screen_kbd_pos;
@@ -158,6 +159,8 @@ extern BOOL fe_check_autoscroll(fe_view v, const wimp_mousestr *mp);
 
 extern void fe_user_unload(void);
 extern void fe_user_load(void);
+
+void fe_run_ncworks( void );
 
 /* From internal.h */
 

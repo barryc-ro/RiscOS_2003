@@ -145,7 +145,7 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
         o->y += dy*signy;
         frontend_fatal_error(wimp_open_wind(o));
     }
-    
+
     if (o->x != old_x || o->y != old_y)
 	scrolled = TRUE;
 
@@ -331,7 +331,7 @@ static os_error *draw_bevels(fe_view v, void *handle)
 	rr.g = r->g;
 	backend_render_rectangle(&rr, v->displaying, TRUE);
     }
-    
+
     return NULL;
 }
 
@@ -399,10 +399,10 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
     frontend_fatal_error(wimp_update_wind(&r, &more));
 
     selected = v->parent == NULL && v->children ? fe_selected_view() : NULL;
-    
+
     while (more)
     {
-	/* 3rd param must be 0 if we want the background to be redrawn by the backend redraw function 
+	/* 3rd param must be 0 if we want the background to be redrawn by the backend redraw function
 	 * If it is 1 then it assumes we have already cleared the background or don't care about overpainting.
 	 */
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
@@ -414,10 +414,10 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	/* if we are the top frameset and this is a call to
            render_rectangle then render the bevels for all the
            frameset documents */
-	
+
 	if (v->parent == NULL && v->children && fn == backend_render_rectangle)
 	    iterate_frames(v, draw_bevels, &r);
-	
+
 	/* if we are top view above a selected view and are in web mode and the pointer is off */
         if (selected && pointer_mode == pointermode_OFF)
 	    draw_frame_links(&r, v, selected->frame_links);
@@ -469,6 +469,12 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
         fvd->layout_width  =    v->box.x1 - v->box.x0;
         fvd->layout_height = - (v->box.y1 - v->box.y0);
     }
+
+    LAYDBG(("vw%p: userw=%d docw=%d waw=%d minh=%d doch=%d wah=%d lw=%d lh=%d p=%p xs=%s ys=%s\n",
+            v, fvd->user_width, fvd->doc_width, fvd->wa_width, fvd->min_height,
+            fvd->doc_height, fvd->wa_height, fvd->layout_width,
+            fvd->layout_height, v->parent, v->x_scroll_bar ? "y" : "n",
+            v->y_scroll_bar ? "y" : "n" ));
 }
 
 int frontend_view_get_dimensions(fe_view v, fe_view_dimensions *fvd)
@@ -498,7 +504,7 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
     wimp_wstate ws;
     BOOL old_y_scroll_bar;
 
-    STBDBGN(("stbredraw: v %p set dimensions to %d x %d\n", v, width, height));
+    STBDBG(("stbredraw: v %p set dimensions to %d x %d\n", v, width, height));
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 0;
@@ -616,14 +622,14 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
         }
         else
         {
-	    STBDBGN(("stbredraw: set extent %d,%d %d,%d\n", r.box.x0, r.box.y0, r.box.x1, r.box.y1));
+	    STBDBG(("stbredraw: set extent %d,%d %d,%d\n", r.box.x0, r.box.y0, r.box.x1, r.box.y1));
 
 	    r.w = v->w;
 	    wimp_set_extent(&r);
 
 	    if (need_reopen)
 	    {
-                STBDBGN(("stbredraw: set dimensions %d,%d %d,%d (%d,%d)\n",
+                STBDBG(("stbredraw: set dimensions %d,%d %d,%d (%d,%d)\n",
                     ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1, ws.o.x, ws.o.y));
 
 	        frontend_fatal_error(wimp_open_wind(&ws.o));
@@ -660,7 +666,7 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
 
 /* 	STBDBGN(("viewbounds: tb box %d,%d %d,%d\n", sbox.x0, sbox.y0, sbox.x1, sbox.y1)); */
 /* 	STBDBGN(("viewbounds: ws box %d,%d %d,%d\n", ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1)); */
-	
+
 	if (config_display_control_top)
 	{
 /* 	    if (ws.o.box.y1 > sbox.y0) */
@@ -673,7 +679,7 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
 	}
 /* 	STBDBGN(("viewbounds: ws box %d,%d %d,%d\n", ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1)); */
     }
-    
+
     /* calculate box in work area coordinates */
     box->y1 = ws.o.y;
     box->y0 = ws.o.y - (ws.o.box.y1 - ws.o.box.y0);
@@ -733,7 +739,7 @@ int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, i
     int bbh, sbh;
 
     STBDBGN(("ensure_visible: v %p x %d-%d y %d-%d\n", v, left, right, top, bottom));
-    
+
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
 
@@ -744,7 +750,7 @@ int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, i
        top=bottom) to work on no scroling pages */
     if (v->scrolling == fe_scrolling_NO && top != bottom)
 	return 1;
-    
+
     frontend_fatal_error(wimp_get_wind_state(v->w, &state));
 
     bbh = - v->margin.y1;
@@ -763,7 +769,7 @@ int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, i
 	}
     }
 #endif
-    
+
     h = (state.o.box.y1 - bbh) - (state.o.box.y0 + sbh);    /* height of visible area (within margins)*/
     mh = h > -(v->doc_height) ? h : -(v->doc_height);       /* height of document, or visible area (+ve)*/
     w = state.o.box.x1 - state.o.box.x0;
@@ -794,7 +800,7 @@ int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, i
 	STBDBGN(("ensure_visible: stretch\n"));
     }
 #endif
-    
+
     if (top == bottom ||	/* Special case: force to the top is top and bottom equal */
 	top > (state.o.y - bbh))
     {

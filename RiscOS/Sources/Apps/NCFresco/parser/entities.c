@@ -19,6 +19,10 @@
 #include "gbf.h"
 #include "util.h"
 
+#ifdef RISCOS
+#define __acorn 1
+#endif
+
 /** THIS TABLE MUST BE IN strcasecmp() ORDER FOR THIS TO WORK **/
 /** ALSO, NO NAME MAY ALSO BE A STEM OF ANOTHER NAME */
 /** also, no name may only differ in case from another */
@@ -552,7 +556,7 @@ static entity_t entity_names[] =
 #elif defined(__acorn)
       '\377', 'Y',	/* small y, dieresis or umlaut mark (no capital) */
 #else
-      '\377', '\x9F'	/* small y, dieresis or umlaut mark */
+      '\377', '\x9F',   /* small y, dieresis or umlaut mark */
 #endif
       case_UPPER_FIRST
   }
@@ -565,7 +569,7 @@ static entity_t entity_names[] =
 static UCHARACTER pc_translate_keys[32] =
 {
     0xFFFD, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
-    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0xFFFD, 0xFFFD, 
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0xFFFD, 0xFFFD,
     0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0xFFFD, 0x0178
 };
@@ -671,7 +675,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_nchars,
 	BOOL used = FALSE;
 
 	const UCHARACTER c = *in_ptr++;
-	
+
 	if ((c == '\n' || c == '\r') && (rules & SGMLTRANS_STRIP_NEWLINES) != 0)
 	{
             /* throw them away */
@@ -788,7 +792,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_nchars,
 			    }
 			    else if (matchp->match == case_UPPER_FIRST)
 			    {
-				if (in_ptr[0] < 128 && isupper(in_ptr[0]) && 
+				if (in_ptr[0] < 128 && isupper(in_ptr[0]) &&
 				    strncmpu(&in_ptr[1], &matchp->name[1], namelen-1) == 0)
 				    upper_case = TRUE;
 				else
@@ -812,7 +816,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_nchars,
 			}
 		    }
 		}
-		
+
 		if (matchp != NULL)
 		{
 		    int len = strlen( matchp->name );
@@ -845,7 +849,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_nchars,
 	    }
 #endif
        	}
-	
+
 	if (! used)
 	{
 	    *out_ptr++ = c;
@@ -858,7 +862,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_nchars,
     ds.nchars = out_nchars;
     PRSDBGN(("sgml_translation() returns '%.*s', %d nchars\n", out_nchars, usafe(ds), out_nchars));
 #endif
-    
+
     return out_nchars;
 }
 
