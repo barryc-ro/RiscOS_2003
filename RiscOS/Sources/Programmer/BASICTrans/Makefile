@@ -54,11 +54,20 @@ clean:
         ${RM} rm.BASICTrans
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.BASIC
-        TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.BASIC.Messages  ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
+
+resources_common:
+        ${MKDIR} ${RESDIR}.BASIC
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.BASIC.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+        TokenCheck LocalRes:CmdHelp
+        print LocalRes:CmdHelp { >> ${RESDIR}.BASIC.Messages }
 
 rm.BASICTrans: s.TransSrc
         ${AS} ${ASFLAGS} s.TransSrc
