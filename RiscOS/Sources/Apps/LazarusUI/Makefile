@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 11-Jun-98  SNB          Created from OmegaNC2UI
+# 09-Jun-00  SBF          Tweaked to build both Lazarus and Bethany UIs
 #
 
 #
@@ -98,8 +99,23 @@ translate: dirs
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Acknow -o $(RESAPP).HTML.Setup.Acknow
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.BSD -o $(RESAPP).HTML.Setup.BSD
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.CallWait -o $(RESAPP).HTML.Setup.CallWait
+        ### Check for Beth1 build...
+        If "<LocaleList>" = "Australia,France,Ireland,Italy,UK" Then \
+          $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Country1 -o $(RESAPP).HTML.Setup.Country
+        ### Check for Beth2 build...
+        If "<LocaleList>" = "Germany,Spain,Turkey" Then \
+          $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Country2 -o $(RESAPP).HTML.Setup.Country
+        ### If a multi-locale build then we require CountryCfm also...
+        If "<LocaleList>" <> "" Then \
+          $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.CountryCfm -o $(RESAPP).HTML.Setup.CountryCfm
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.ImageLib -o $(RESAPP).HTML.Setup.ImageLib
-        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Options -o $(RESAPP).HTML.Setup.Options
+        ### If a single-locale (standard) build then use the original (Lazarus) options screen...
+        If "<LocaleList>" = "" Then \
+          $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Options1 -o $(RESAPP).HTML.Setup.Options
+        ### Otherwise use the options screen that has the "country configuration" button (Bethany variant)
+        ### (Would liked to have used the "Else" case here, but the expanded line length exceeds 255 characters!)
+        If "<LocaleList>" <> "" Then \
+          $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Options2 -o $(RESAPP).HTML.Setup.Options
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Printing -o $(RESAPP).HTML.Setup.Printing
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Printing2 -o $(RESAPP).HTML.Setup.Printing2
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.SSL -o $(RESAPP).HTML.Setup.SSL
@@ -113,15 +129,15 @@ translate: dirs
         
 resources: translate
 	@echo ** Exporting non-translatable resource files
-        IfThere Resources.$(USERIF).$(LOCALE).$(APP) Then \
-          $(CP) Resources.$(USERIF).$(LOCALE).$(APP) $(RESAPP) $(CPFLAGS) \
-        Else \
-          $(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) $(CPFLAGS)
-        IfThere Resources.$(USERIF).$(LOCALE).NVRAM Then \
-          $(CP) Resources.$(USERIF).$(LOCALE).NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS) \
-        Else \
-          $(CP) Resources.$(USERIF).UK.NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
-        $(CP) Resources.$(USERIF).$(LOCALE).STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
+	SetMacro LazUILocalRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.
+        $(CP) LazUILocalRes:$(APP).!BootNet $(RESAPP).!BootNet $(CPFLAGS)
+        $(CP) LazUILocalRes:$(APP) $(RESAPP) $(CPFLAGS)
+        $(CP) LazUILocalRes:$(APP).!Run $(RESAPP).!Run $(CPFLAGS)
+        $(CP) LazUILocalRes:$(APP).Palette $(RESAPP).Palette $(CPFLAGS)
+        $(CP) LazUILocalRes:NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
+        $(CP) LazUILocalRes:STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
+        $(CP) LazUILocalRes:$(APP).Modules.CSFS $(RESAPP).Modules.CSFS $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
+        UnSet LazUILocalRes$path
         
 # Dynamic dependencies:
