@@ -46,6 +46,15 @@ extern component_entry_t *component_database;
 static char *amu_machine = NULL;
 void get_amu_machine(void);
 
+static const char corporate_copyright_for_bbe[] = "#"
+  "\n# Copyright [2000] Pace Micro Technology PLC.  All rights reserved."
+  "\n#"
+  "\n# The copyright in this material is owned by Pace Micro Technology PLC"
+  "\n# (\"Pace\").  This material is regarded as a highly confidential trade secret"
+  "\n# of Pace.  It may not be reproduced, used, sold or in any other way exploited"
+  "\n# or transferred to any third party without the prior written permission of"
+  "\n# Pace."
+  "\n#";
 
 /*
  * A nice veneer to OS_ReadVarVal
@@ -572,12 +581,12 @@ int build_resources(void)
   return build_resources_(0);
 }
 
-static void line_by_line_copy(FILE *dest, FILE *source)
+static void line_by_line_copy(FILE *dest, FILE *source, int with_tab)
 {
   char buffer[BUFFER_LEN * 2];
 
   while (fgets(buffer, sizeof(buffer), source) != NULL) {
-    fputc('\t', dest);
+    if (with_tab) fputc('\t', dest);
     if (strncmp("echo", buffer, sizeof("echo")-1) == 0)
     {
       fputc('@', dest);
@@ -646,10 +655,14 @@ static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target
       }
 
       if (source_file == NULL)
+      {
         source_file = p;
-
-      strcat(link_args, " ");
-      strcat(link_args, p);
+      }
+      else
+      {
+        strcat(link_args, " ");
+        strcat(link_args, p);
+      }
     }
 
     copy_file(aof_target, source_file);
@@ -658,6 +671,45 @@ static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target
       "\t${MKDIR} linked\n\t%s\n"
       "\t@${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}\n\n",
       link_args);
+  }
+}
+
+/* NOTE: Parameter must be pointer to array with enough space to hold locale names
+ * tacked on the end of it.
+ */
+static void copy_locale_resources(FILE *makefile, char *bbe_dir /* see comment above */, const char *name)
+{
+  FILE *resources_file;
+  char *end_bbe_dir = strchr(bbe_dir, '\0');
+  char *locale;
+  unsigned int loop, done_uk = 0;
+
+
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    /* set the Resource$Dir and Locale environment variable to the current */
+    if (!done_uk) {
+      locale = "UK";
+      done_uk = 1;
+      --loop;
+    }
+    else {
+      locale = supported_territories[loop];
+      if (strcmp(locale, "UK") == 0) continue;
+    }
+
+    /* Now read the locale script */
+    strcpy(end_bbe_dir, locale);
+    resources_file = fopen(bbe_dir, "r");
+    /* Write out the rules for generating this locale's resource export */
+    fprintf(makefile, "resources-%s:\n", locale);
+    if (resources_file)
+    {
+      /* Not an error if it doesn't exist - but need the rule in the Makefile anyway */
+      line_by_line_copy(makefile, resources_file, 1);
+    }
+    fprintf(makefile, "\t@| End of resource export for locale %s\n\n", locale);
+    fclose(resources_file);
   }
 }
 
@@ -674,10 +726,11 @@ int build_bbe(void)
   char aof_target[BUFFER_LEN];
   char rom_link_name[BUFFER_LEN];
   char *end_bbe_dir;
+  char *end_rom_link_name;
+  int  rom_link_line_by_line;
   module_type_t type;
   FILE *makefile;
   FILE *rom_link_file;
-  FILE *resources_file;
 
   build_resources_(1);
   build_install_rom_(1);
@@ -697,8 +750,10 @@ int build_bbe(void)
       case ASM:
       case BAS:
       case KERNEL:
+      case HAL:
       case DATA:
       case RES:
+      case EXP:
         printf("\n%s...\n", component->name);
         sprintf(bbe_dir, "%s.%s.BBE.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path);
         end_bbe_dir = strchr(bbe_dir, '\0');
@@ -710,34 +765,12 @@ int build_bbe(void)
         strcat(aof_target, ".aof.");
         strcat(aof_target, module->filename?module->filename:component->name);
         strcpy(end_bbe_dir, ".Makefile");
-        makefile = fopen(bbe_dir, "w");
-        if (makefile != NULL)
-        {
-          time_t now;
-          time(&now);
-          fprintf(makefile,
-            "# Binary Build Environment Makefile for %s\n"
-            "#\n"
-            "# Generated at %s"
-            "#\n"
-            "\n"
-            "include Makefiles:StdTools\n"
-            "\n"
-            "resources: resources-${LOCALE}\n"
-            "\t@echo ${COMPONENT}: resources exported\n"
-            "\n"
-            "\n",
-            component->name,
-            ctime(&now));
-        }
+        remove(bbe_dir);
         strcpy(end_bbe_dir, ".BBE_ROM.rom_link");
         strcpy(rom_link_name, bbe_dir);
+        end_rom_link_name = strchr(rom_link_name, '\0');
         sprintf(buffer, "%s.%s.%s", build_dir, SOURCE_DIR, module->path);
-        if (makefile == NULL)
-        {
-          error(0, "cannot open BBE makefile");
-        }
-        else if (chdir(buffer))
+        if (chdir(buffer))
         {
           error(0, "cannot locate '%s'", buffer);
         }
@@ -765,39 +798,97 @@ int build_bbe(void)
             get_amu_machine(); /* Reset amu_machine to include the new values */
             *end_bbe_dir = '\0';
 
-            if (amu_machinef("-k -f Makefiles:BBEExport bbe COMPONENTTYPE=%s %s BBEDIR=%s COMPONENT=%s %s%s",
+            if (amu_machinef("-k -f Makefiles:BBEExport bbe COMPONENTTYPE=%s %s VERBATIMROMLINK=%s_v BBEDIR=%s COMPONENT=%s %s%s",
                   module_type_names[type],
                   component->options ? component->options : "",
+                  rom_link_name,
                   bbe_dir,
                   component->name,
                   module->filename?"TARGET=":"",
                   module->filename?module->filename:"") != 0)
               error(0, "running make bbe on module '%s'.", component->name);
 
-            /* Now read the locale script */
-            strcpy(end_bbe_dir, ".BBE_Res.");
-            strcat(end_bbe_dir, locale);
-            resources_file = fopen(bbe_dir, "r");
-            if (resources_file == NULL)
+          }
+        }
+        strcpy(end_rom_link_name, "_v");
+        rom_link_file = fopen(rom_link_name, "r");
+        if (rom_link_file)
+        {
+          rom_link_line_by_line = 1;
+        }
+        else
+        {
+          *end_rom_link_name = '\0';
+          rom_link_file = fopen(rom_link_name, "r");
+          rom_link_line_by_line = 0;
+        }
+        strcpy(end_bbe_dir, ".Makefile");
+        makefile = fopen(bbe_dir, "r");
+        if (makefile)
+        {
+          /* The component has exported a Makefile - allow it to override us */
+          fclose(makefile);
+          makefile = NULL;
+        }
+        else
+        {
+          makefile = fopen(bbe_dir, "w");
+          if (makefile == NULL)
+          {
+            error(0, "Unable to create BBE makefile '%s'", bbe_dir);
+          }
+          else if (type != EXP)
+          {
+            time_t now;
+            time(&now);
+            fprintf(makefile,
+              "#\n"
+              "# Binary Build Environment Makefile for %s\n"
+              "#\n"
+              "%s\n"
+              "#\n"
+              "# Automatically generated: last update at %s"
+              "#\n"
+              "\n"
+              "include Makefiles:StdTools\n"
+              "\n"
+              "all:\n"
+              "\t@| Do nothing by default\n"
+              "\n"
+              "install_rom:\n"
+              "\t${CP} rm.${TARGET} ${INSTDIR}.${TARGET} ${CPFLAGS}\n"
+              "\t@echo ${COMPONENT}: installed\n"
+              "\n"
+              "# Resource export phases\n"
+              "\n"
+              "resources: resources-${LOCALE}\n"
+              "\t@echo ${COMPONENT}: resources exported\n"
+              "\n"
+              "\n",
+              component->name,
+              corporate_copyright_for_bbe,
+              ctime(&now));
+          }
+          else
+          {
+            fclose(makefile);
+            makefile = NULL;
+          }
+        }
+        if (makefile)
+        {
+          strcpy(end_bbe_dir, ".BBE_Res.");
+          copy_locale_resources(makefile, bbe_dir, component->name);
+          if (rom_link_file)
+          {
+            if (rom_link_line_by_line)
             {
-              error(0, "loading BBE resource phase on module '%s'.", component->name);
+                line_by_line_copy(makefile, rom_link_file, 0);
             }
             else
             {
-              /* Write out the rules for generating this locale's resource export */
-              fprintf(makefile, "resources-%s:\n", locale);
-              line_by_line_copy(makefile, resources_file);
-              fprintf(makefile, "\t@| End of resource export for locale %s\n\n", locale);
-              fclose(resources_file);
+              copy_rom_link_rules(makefile, rom_link_file, aof_target, component->name);
             }
-          }
-        }
-        rom_link_file = fopen(rom_link_name, "r");
-        if (makefile)
-        {
-          if (rom_link_file)
-          {
-            copy_rom_link_rules(makefile, rom_link_file, aof_target, component->name);
           }
           fclose(makefile);
           makefile = NULL;
@@ -987,6 +1078,9 @@ build_install_rom_(int generate_script)
               sprintf(scriptdirname, "%s.%s.BBE.%s.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path, "BBE_ROM");
               _check_dir_v(scriptdirname, NULL);
               sprintf(scriptfilename, "-o %s.%s.rom_link ADDRESS=<Address>", build_dir, scriptdirname);
+              sprintf(scriptdirname, "%s.%s.BBE.%s.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path, "rm");
+              _check_dir_v(scriptdirname, NULL);
+              sprintf(scriptdirname, "%s.%s.%s.BBE.%s.%s.%s", build_dir, INSTALL_DIR, build_name, SOURCE_DIR, module->path, "rm");
             }
             else
             {
@@ -1009,7 +1103,7 @@ build_install_rom_(int generate_script)
 
 	      default:
 		if (amu_machinef("install_rom INSTDIR=%s %s COMPONENT=%s %s%s",
-		 	output_path,
+		 	generate_script ? scriptdirname : output_path,
 		 	component->options ? component->options : "",
 		 	component->name,
 			module->filename?"TARGET=":"",
