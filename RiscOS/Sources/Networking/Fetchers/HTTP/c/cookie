@@ -97,6 +97,7 @@ typedef struct _CookieDomain {
 static CookieDomain *cookie_domain_root;
 Cookie *cookie_queue_root;
 static int total_cookies = 0, unread_cookies = 0;
+static int loading_cookie_file = 0;
 
 
 typedef enum {
@@ -241,17 +242,23 @@ static void destroy_cookie (Cookie *cookie)
 /* Function to add a cookie to the pending queue */
 static void add_cookie_to_queue(Cookie *cookie)
 {
-        int count = 0;
-        Cookie *list;
-
 	/* Enforce an upper limit on the number of cookies that may be held in
 	 * the pending queue
 	 */
 	if (cookie_queue_root != NULL) {
+	        Cookie *list;
+	        int count = 0;
+
 		for (list=cookie_queue_root; list->next; list=list->next) ++count;
 		if (count > MAX_COOKIES_IN_QUEUE) {
-                        cookie_unlink_cookie(&list, list->next);
-		        destroy_cookie(list->next);
+		        if (loading_cookie_file) {
+		                /* Periodic flush of the queue when loading our cookie file! */
+				move_cookies_from_queue_to_list(0);
+		        }
+		        else {
+	                        cookie_unlink_cookie(&list, list->next);
+			        destroy_cookie(list->next);
+		        }
 		}
 	}
 
@@ -541,8 +548,8 @@ static void write_cookies_format_2(FILE *fp)
 				/* Finally write the expiry and last access times */
 				fprintf(fp,"\t%x\t%x\n",(int)cookie->expires,(int)cookie->last_access);
 				#ifdef TRACE
-				cookie_debug("Expiry date being written to file (hex): %i\n",cookie->expires);
-				cookie_debug("Expiry date being written to file: %s\n",ctime(&cookie->expires));
+				cookie_debug("Expiry date being written to file: (hex) %08x (string) %s\n",
+					cookie->expires, ctime(&cookie->expires));
 				#endif
 			}
 		}
@@ -612,10 +619,14 @@ static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 	const time_t current_time = time(NULL);
 	char *buffer = NULL;
 
-	/* StB: This function is now far more efficient.  It avoids allocating huge buffers of RMA unless
+	/* SNB: This function is now far more efficient.  It avoids allocating huge buffers of RMA unless
 	 * it actually finds that it needs one at all.  It does this by setting the buffer pointer to NULL
 	 * initially and then relying on the buffer extender to allocate memory as required.  The extender
 	 * now uses realloc, so it can take advantage of the property "realloc(NULL,size) == malloc(size)".
+	 *
+	 * Note that this function always returns NULL and has done ever since the proper header management
+	 * code was added to the module.  Cookie headers are added directly to the header list when they
+	 * are located.
 	 */
 
 	for (cookie_domain = cookie_domain_root; cookie_domain; cookie_domain = cookie_domain->next) {
@@ -766,6 +777,10 @@ char *send_cookies_to_domain (Session *s)
 	cookie_debug("Entering send_cookies_to_domain...domain %s path `%s'\n", domain, path);
 	#endif
 
+	/* Return value is ignored nowadays - used to be a buffer that needed to be returned to
+	 * caller containing cookies for this session.  Now we pretend that there weren't any
+	 * ever because they have already been added in directly.
+	 */
 	(void) cookie_look_for_cookies(domain, path, s);
 
 	#ifdef TRACE
@@ -1402,11 +1417,15 @@ static int cookie_get_next_arg(char **pcp, char **val, char **pep, char*term)
 	*val = 0;
 	*pep = 0;
 	if (!*pcp) return 0;
-	while (isspace(*cp) && *cp) ++cp;
+	while (isspace(*cp) && *cp) ++cp; /* strip leading spaces */
 	if (!*cp) return 0; /* no more args */
 	cm = strchr(cp, ','); /* look for cookie separator */
-	sc = strchr(cp, ';');
+	sc = strchr(cp, ';'); /* Look for attribute separateor */
 	if (cm) {
+	        /* Unfortunately, some servers send dates containing commas and don't bother
+	         * to quote them.  So we look at the text before the comma to see if it looks
+	         * like a day name.  Thanks server vendors.
+	         */
 		if (sc && cm>sc) cm = 0;
 		else if (cookie_looks_like_day_name(cp, cm)) {
 			/* Comma appears before ; - need to quickly check unquoted dates */
@@ -1434,8 +1453,11 @@ static int cookie_get_next_arg(char **pcp, char **val, char **pep, char*term)
 	*sc = 0; /* delimit it */
 	tp = sc - 1;
 	while (isspace(*tp) && *tp && tp > cp) --tp;
-	if (tp == cp) return 0; /* nothing? confused :-( */
-	if (*tp == '\"' && *cp == '\"') {
+	/* Following line used to (pre-0.80) incorrectly discarding single-letter cookie names
+	 * which is, to say the least, unfortunate for my.yahoo.com users :-/
+	 */
+	if (isspace(*tp)) return 0; /* nothing? confused :-( */
+	if (*tp == '\"' && *cp == '\"' && tp != cp) {
 		++cp;
 		tp[-1] = 0;
 	}
@@ -1503,7 +1525,8 @@ static void act_on_cookie(char *string, Session *s, char *host, char *path)
 	}
 
 	#ifdef TRACE
-	cookie_debug("act_on_cookie: Now entering function...\n>> %s\n", string);
+	cookie_debug("act_on_cookie: Now entering function...\n");
+	cookie_debug("%s\n", string);
 	cookie_debug("act_on_cookie:   Checking host `%s' and path `%s'\n", host, path);
 	#endif
 	current_cookie = NULL;
@@ -1659,7 +1682,9 @@ void move_cookies_from_queue_to_list(int check_variable)
 		insert_cookie_into_list(cookie);
 	}
 
-	write_cookies_to_file();
+	if (!loading_cookie_file) {
+		write_cookies_to_file();
+	}
 }
 
 /* StB added this function to centralise the data file reading activities.  This one works.
@@ -1845,6 +1870,7 @@ void read_cookie_file(void)
 	cookie_queue_root = NULL;
 	total_cookies = 0;
 	unread_cookies = 0;
+	loading_cookie_file = 1;
 	act_on_cookie(0, 0, 0, 0); /* Trapped specially to init static data */
 
 	/* Open the file to be read, and get the format type of file */
@@ -1856,6 +1882,7 @@ void read_cookie_file(void)
 			#ifdef TRACE
 			cookie_debug("Unable to open cookies from " COOKIE_FILE_NAME "\n");
 			#endif
+			loading_cookie_file = 0;
 			return;
 		}
 	}
@@ -1868,6 +1895,7 @@ void read_cookie_file(void)
 
 	fclose(fp);
 	move_cookies_from_queue_to_list (0);
+	loading_cookie_file = 0;
 	#ifdef TRACE
 	cookie_debug("Leaving read_cookie_file.\n");
 	#endif
