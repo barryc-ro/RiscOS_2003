@@ -56,7 +56,7 @@ TRACELIBZM	= libs.t_m_pl
 #
 
 INCLUDES	= -Itbox:,C:
-DFLAGS		= 
+DFLAGS		=
 
 
 # ------------------------------------------------------------------------------
@@ -77,6 +77,7 @@ OBJS = \
  o.output \
  o.serial_lib \
  o.buffering \
+ o.misc \
 
 OBJSZ = \
  oz.debug \
@@ -85,6 +86,7 @@ OBJSZ = \
  oz.output \
  oz.serial_lib \
  oz.buffering \
+ oz.misc \
 
 LIBS = \
  $(PDEBUG) \
