@@ -25,7 +25,6 @@ LB		= libfile
 WIPE		= -wipe
 TRIMAOF		= aof.trimaof
 AOF2ALF		= aof.aof2alf
-STRIPDEPEND	= stripdepnd
 
 CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} -throwback
 ASFLAGS		= -depend !Depend -Stamp -NoCache -CloseExec -PreDefine "Desk_AS_EMBED_FNNAMES SETA 1" -quit
@@ -115,7 +114,6 @@ clean:
 	${RM} ${TARGET}_PL
 	${RM} ${TARGETZ}
 	${RM} ${TARGETZ}_PL
-	${STRIPDEPEND} Makefile
 	@echo ${COMPONENT}: cleaned
 
 export_hdrs: h.PDebug dirs
