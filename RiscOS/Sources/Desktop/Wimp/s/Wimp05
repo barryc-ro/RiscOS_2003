@@ -638,9 +638,11 @@ findcaret TraceL sc
         BL      findtextorigin                  ; cx1,cy1 = x,y coords
 
         LDR     R14,writeabledir
+        Push    "x0"
         LDR     x0,[wsptr]
         TST     x0,#if_numeric
         MOVNE   R14,#0
+        Pull    "x0"
         TEQ     R14,#0
         SUBNE   R14,cx1,x0
         SUBNE   cx1,x1,R14
@@ -1134,7 +1136,14 @@ myFont_StringWidth
         MOV     R7,R5
         MOV     R4,R3
         MOV     R3,R2
+        [ true
+        LDR     R2,writeabledir ;
+        TEQ     R2,#0           ; This bit isn't ideal, but this stuff will all have to
+        MOV     R2,#128         ; be rewritten anyway to cope with kerning
+        ORRNE   R2,R2,#1<<10    ;
+        |
         MOV     R2,#128
+        ]
         SWI     XFont_ScanString
         MOV     R2,R3
         MOV     R3,R4
@@ -1181,6 +1190,11 @@ int_processkey
         CMP     R14,#0
         BGT     sendhotkey              ; try hot keys
 
+      [ true ; BJGA bugfix: don't crash if lowest iconised window calls Wimp_ProcessKey
+        CMP     R14, #nullptr
+        BEQ     defaultkey
+      ]
+
         SUBS    handle,R0,#0
         BL      topmost_window
         STR     R0,hotkeyptr
@@ -1209,9 +1223,23 @@ sendhotkey
         LDR     handle,hotkeyptr
         BL      checkhandle
         BVS     %FT01
+      [ ChildWindows
+        ; check that the window *and* all the window's ancestors are still open
+        MOV     R0, handle
+00
+        LDR     R14, [R0, #w_flags]
+        TST     R14, #ws_open
+        BEQ     %FT01
+        
+        LDR     R0, [R0, #w_parent]
+        CMP     R0, #nullptr
+        BEQ     %FT02
+        B       %BT00
+      |
         LDR     R14,[handle,#w_flags]
         TST     R14,#ws_open
         BNE     %FT02
+      ]
 01
 
 ; 'Next' hotkey window disappeared or is closed so start from the top again
@@ -1227,6 +1255,26 @@ sendhotkey
 02
 
 ; Drop through the list of windows, checking for grabkey windows.
+
+      [ ChildWindows
+
+        MOV     R1, handle
+03
+        LDR     R14, [R1, #w_flags]
+        TST     R14, #wf_grabkeys
+        BNE     %FT04 ; found the next grabkey window!
+        BL      hotkey_nextwindow
+        BNE     %BT03
+        BEQ     defaultkey ; done all windows!
+04
+        Rel     handle, R1
+; Now find hotkeyptr for next time
+        BL      hotkey_nextwindow
+        MOVEQ   R2, #nullptr
+        Rel     R2, R1, NE
+        STR     R2, hotkeyptr
+
+      |
 
         ADD     R3,handle,#w_active_link
 03
@@ -1244,10 +1292,16 @@ sendhotkey
 
         LDR     R14,[R2,#ll_forwards]
         CMP     R14,#nullptr
+      [ true ; BJGA bugfix: don't crash if lowest iconised window calls Wimp_ProcessKey
+        MOVEQ   R2,#nullptr
+      |
         MOVEQ   R2,#0                   ; Run out of windows
+      ]
         SUBNE   R2,R2,#w_active_link
         Rel     R2,R2,NE
         STR     R2,hotkeyptr
+
+      ]
 
 sendkey
         TEQ     R0,#Key_PressedOldData
@@ -1266,6 +1320,32 @@ sendkey
         ADD     sp,sp,#7*4
 
         Pull    "R1-R6,handle,PC"
+
+      [ ChildWindows
+hotkey_nextwindow
+; Entry: R1 = absolute window handle
+; Exit:  NE => R1 = next window to consider (down/across/up the window tree)
+;        EQ => no more windows
+        ENTRY
+        ; First look for a child of the last window
+        LDR     R2, [R1, #w_children + lh_forwards]
+        LDR     R14, [R2, #ll_forwards]
+        CMP     R14, #nullptr
+        SUBNE   R1, R2, #w_active_link
+        EXIT    NE
+        ; Then try a sibling
+01      LDR     R2, [R1, #w_active_link + ll_forwards]
+        LDR     R14, [R2, #ll_forwards]
+        CMP     R14, #nullptr
+        SUBNE   R1, R2, #w_active_link
+        EXIT    NE
+        ; Then try aunts, great-aunts and so on
+        LDR     R1, [R1, #w_parent]
+        CMP     R1, #nullptr
+        BNE     %BT01
+        ; Run out of ancestors - exit with Z set
+        EXIT
+      ]
 
 ;..............................................................................
 
@@ -1292,16 +1372,30 @@ defaultkey
         BLE     %FT01
 
         BL      checkhandle             ; handle -> window block
+      [ PoppingIconBar
+        LDRVC   R14, iconbar_pop_state
+        TEQ     R14, #pop_Back
+        TEQNE   R14, #pop_Delaying
+        MOVEQ   R14, #pop_Front2
+        MOVNE   R14, #pop_Back
+        STRVC   R14, iconbar_pop_state
+        LDRVC   R14, [handle, #w_flags]
+      |
         BLVC    calc_w_status           ; set up flag word
         LDRVC   R14,[handle,#w_flags]
         TSTVC   R14,#ws_top             ; is the window covered?
+      ]
         BICEQ   R14,R14,#wf_backwindow  ; not backwindow if coming to front
         ORRNE   R14,R14,#wf_backwindow  ; backwindow if going to back
         STRVC   R14,[handle,#w_flags]
         ADDVC   R14,handle,#w_wax0
         LDMVCIA R14,{R0-R3,R4,R5}
         MOVEQ   R6,#-1                  ; EQ => bring window to front
+ [ HideIconBar
+        MOVNE   R6,#-3                  ; NE => send to back
+ |
         MOVNE   R6,#-2                  ; NE => send to back
+ ]
         Push    "R0-R6,R7-R11"
         LDRVC   R14,iconbarhandle       ; relative window handle
         Push    "R14"
@@ -2605,7 +2699,7 @@ foundallmenus
         B       ExitWimp
 
 err_unwindstack
-        Pull    "R1-R4"
+        Pull    "R1-R4,R14"
         TEQ     R1,#0                   ; doesn't affect V
         BNE     err_unwindstack
         B       ExitWimp                ; report error
@@ -3018,10 +3112,19 @@ findflp
         ADD     R4,R4,#1
         CMP     R4,R1
         BGE     nomenufocus
+      [ true
+        LDR     R0, [R2], #i_size               ; get flags for this icon
+        AND     R14, R0, #if_buttontype
+        CMP     R14, #14 :SHL: ib_buttontype    ; type-14 icons are also allowed to gain caret
+        BLT     findflp
+        TST     R0, #is_shaded :OR: is_deleted  ; don't set to a shaded or deleted icon!
+        BNE     findflp
+      |
         LDR     R14,[R2],#i_size
         AND     R14,R14,#if_buttontype
         TEQ     R14,#if_buttontype
         BNE     findflp
+      ]
         Debug   omd,"About to set focus to icon ",R4
         BL      setmenucaret
 nomenufocus
@@ -3338,6 +3441,22 @@ menu_checkforsprite ENTRY "R0-R6"
         EXIT    VS
 
 07
+      [ SpritePriority
+        Push    "R2"
+        CMP     R1, #1                  ; try any user area before either Wimp area
+        SETPSR  V_bit, R0, EQ           ; SETV will *not* do, it corrupts Z
+        MOVNE   R0, #512+40             ; attempt to read sprite information
+        SWINE   XOS_SpriteOp
+        MOVVS   R0, #512+40
+        LDRVS   R1, baseofhisprites
+        LDRVS   R2, [SP]
+        SWIVS   XOS_SpriteOp            ; not there? try again within high-priority area
+        MOVVS   R0, #512+40
+        LDRVS   R1, baseoflosprites
+        LDRVS   R2, [SP]
+        SWIVS   XOS_SpriteOp            ; not there? try again within low-priority area
+        Pull    "R2"                    ; sprite op can stuff R2
+      |
         TEQ     R1,#1
         LDREQ   R1,baseofsprites                               ; area may be 1 from above
 
@@ -3346,6 +3465,7 @@ menu_checkforsprite ENTRY "R0-R6"
         LDRVS   R1,baseofromsprites
         MOVVS   R0,#40+512
         SWIVS   XOS_SpriteOp
+      ]
         EXIT    VS
 ; width in pixels now in R3, screen mode in R6
         LDR     R5,[SP,#8]
@@ -3606,6 +3726,8 @@ closmlp
 	TEQ	R1,#pop_HeldByMenu
 	MOVEQ	R1,#pop_Front
 	STREQ	R1,iconbar_pop_state
+	MOV     R1, #0
+	STR     R1, menuhandle
         Pull    "R1-R5,handle,PC"       ; done
 1       CMP     R1,R0
         Pull    "R1-R5,handle,PC",LE    ; done
@@ -3740,6 +3862,9 @@ menuhighlight
 ; now R0 = new selection index, R1 = old selection index
 
 menuh_altentry                          ; branched to from trymenuhighlight
+        CMP     R0, #0                  ;; BJGA bugfix: exit immediately if no new selection -
+        Pull    "R0-R4,PC", LT          ;; this is particularly important with a dialogue box!!
+
         ADD     R4,R0,R0,ASL #1         ; now multiply by 3 and add 1
         ADD     R4,R4,#1                ; R4 = middle icon
 

@@ -268,15 +268,17 @@ err_badR3
         MakeErrorBlock WimpBadR3
 
 SWIWimp_PollIdle
+        Debug   poll2, "Wimp_PollIdle entry"
         ORR     R0,R0,#flag_pollidle    ; time limit is in R2
         B       %FT01
 
 SWIWimp_Poll
+        Debug   poll2, "Wimp_Poll entry"
         BIC     R0,R0,#flag_pollidle    ; no time limit supplied
 
 01
         MyEntry "Poll"
-;
+        
 ; remember task number, to allow optimisation of return to caller
 ;
 ; Entry: R0 = flag word
@@ -290,6 +292,21 @@ SWIWimp_Poll
 
         CallFilter prefilter
 ;
+      [ AutoHourglass                   ; it could still be a while until the next task switch,
+        LDR     R1, hourglass_status    ; so ensure the hourglass is off at this point
+      [ debugautohg
+	Push	"handle"
+	LDR	handle, taskhandle
+        Debug	autohg, "Hourglass_Off at Wimp_Poll entry: taskhandle, old status =", handle, R1
+        Pull	"handle"
+      ]
+        TEQ     R1, #2                  ; is hourglass still pending or active?
+        MOVEQ   R1, #1                  ; yes, so turn off hourglass (but keep on vector for speed reasons)
+        STREQ   R1, hourglass_status
+        SWIEQ   XHourglass_Off
+        CLRV                            ; ignore errors
+      ]
+
         LDR     R1,taskhandle
         LDR     R4,[wsptr,R1]           ; R4 = task data pointer
         TST     R4,#task_unused         ; if task not used, it's been deleted
@@ -461,6 +478,7 @@ taskisused
 ; re-entry point from within polling routines
 ;
 repollwimp
+        Debug   poll2, "repollwimp"
         LDR     R14,IdlePerSec          ; update the idle information for the portable modules
         ADD     R14,R14,#1
         STR     R14,IdlePerSec
@@ -481,6 +499,15 @@ repollwimp
         LDR     R2,headpointer          ; are there any outstanding messages?
         CMP     R2,#0
         BGT     returnmessage
+;
+      [ MultiClose
+        LDR     R2, nextwindowtoiconise
+        TEQ     R2, #0
+        BLNE    iconisenextwindow
+        LDR     R2, headpointer         ; are there any outstanding messages now?
+        CMP     R2, #0
+        BGT     returnmessage
+      ]
 ;
         MOV     R14,#0
         STR     R14,sender              ; all Wimp messages from now on
@@ -774,7 +801,16 @@ clearrectslp
         |
         SWI     XOS_WriteI+16
         ]
+      [ Autoscr
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window
+        LDRNE   R14, draghandle
+        Abs     R14, R14, NE
+        TEQNE   R14, handle
+        BLEQ    forcedrag_on            ; put drag rectangle back if nec.
+      |
         BL      forcedrag_on            ; put drag rectangle back if nec.
+      ]
 endclearrects
         LDR     R1,[rectlinks,R1]
         CMP     R1,#nullptr
@@ -799,7 +835,7 @@ start_braindead_panic_redraw
         SWI     XOS_SetECFOrigin
         MOV     R0,#4
         BL      background
-        SWI     OS_WriteI+16            ; CLG
+        SWI     XOS_WriteI+16           ; CLG
 
 ; Find the backmost window and store in BPR_indication -
 ; BPR_notatall is used to indicate no windows
@@ -935,6 +971,7 @@ lookatpointer
 ;
 ; now see what user input has occurred
 ;
+        Debug   poll2, "Processing mouse"
         BL      getmouseposn            ; ie. MOUSE R0,R1,R2
 
       [ PoppingIconBar
@@ -1115,13 +1152,24 @@ checkiconbarpop
 	B	%F10
 	B	%F20
 	B	%F30
-; Icon bar is held by menu
+	NOP ; drops through
+; Icon bar is held by menu, or fronted by keyboard
 	Pull	"R0,PC"
 
 ; Icon bar is at back
-10	TEQ	R1,#0		; are we at the bottom of the screen?
+10      LDRB    R14, popiconbar
+        TEQ     R14, #0
+        Pull    "R0, PC", EQ    ; don't bring to front if configured off
+
+        TEQ	R1,#0		; are we at the bottom of the screen?
 	Pull	"R0,PC",NE
 
+      [ Autoscr
+        ; Don't bring to front if autoscrolling
+        LDR     R14, autoscr_state
+        TST     R14, #af_enable
+        Pull    "R0, PC", NE
+      ]
 	; Don't bring to front if dragging a window
 	LDR	R14,dragtype
 	CMP	R14,#drag_posn
@@ -1133,8 +1181,8 @@ checkiconbarpop
 
 11	SWI	XOS_ReadMonotonicTime
 	Pull	"R0,PC",VS
-	[ false
-	LDR	R14,automenu_timelimit
+	[ true
+	LDR	R14, popiconbar_pause
 	ADD	R0,R0,R14
 	|
 	ADD	R0,R0,#pop_DelayTime
@@ -1183,22 +1231,34 @@ checkiconbarpop
 	TEQ	R0,#0
 	BNE	%FT60
 	; Going to front. Remember where to go back to.
+	[ false
 	TST	R14,#wf_backwindow
 	MOVNE	R6,#-2
 	LDREQ	R6,[handle,#w_bhandle]
 	ADRL	R0,iconbar_pop_previous
 	STR	R6,[R0]
+	]
 	BIC	R14,R14,#wf_backwindow
 	STR	R14,[handle,#w_flags]
 	MOV	R6,#-1
 	B	%FT65
 
 60	; Going back to previous position.
+        [ false
 	ADRL	R6,iconbar_pop_previous
 	LDR	R6,[R6]
 	CMP	R6,#-2
 	ORREQ	R14,R14,#wf_backwindow
 	STREQ	R14,[handle,#w_flags]
+	|
+	ORR     R14, R14, #wf_backwindow
+	STR     R14, [handle, #w_flags]
+ [ HideIconBar
+	MOV     R6, #-3
+ |
+	MOV     R6, #-2
+ ]
+	]
 65
 	ADD	R14,handle,#w_wax0
 	LDMIA	R14,{R0-R3,R4,R5}
@@ -1342,6 +1402,11 @@ ptr_iconbar_icon
         MOV     R0,#SpriteReason_SetPointerShape
         ADRL    R2,pointer_sprite
         MOV     R3,#1
+      [ Autoscr
+        LDR     R14, autoscr_state      ; don't reprogram pointer if autoscrolling is enabled
+        TST     R14, #af_enable
+        ORRNE   R3, R3, #&10
+      ]
         MOV     R6,#0
         MOV     R7,#0
         SWI     XWimp_SpriteOp          ; take from Wimp's sprite area(s)
@@ -1375,6 +1440,14 @@ ptr_iconbar_icon
         ORRNE   R7,R7,#mf_oldcoords     ; avoid missing clicks
 
         BNE     waitdrag_action         ; pre-emptive strike!
+
+      [ Autoscr
+; do we need to do something about autoscrolling?
+        LDR     R14, autoscr_state
+        TST     R14, #af_enable
+        BLNE    poll_autoscroll         ; may or may not return, preserves flags if it does
+        BNE     %FT01                   ; don't scroll icon bar if scrolling something else!
+      ]
 
 ; if in iconbar, check whether we should scroll automatically
 
@@ -1419,31 +1492,19 @@ ptr_iconbar_icon
         BNE     %FT01                   ; this isn't it!
 ;
         LDR     R14,scrx0
-	[ true
         ADD     R14,R14,#iconbarsepgap
         CMP     R0,R14
-        MOVLT   R8,#-iconbar_scroll_speed * 100 - 1                ; scroll left
+        LDRLT   R8, iconbar_scroll_speed
+        MVNLT   R8, R8 ; ensure msb set                        ; scroll left
         BLT     %FT02
-	|
-	ADD	R14,R14,#iconbar_scroll_speed
-	SUBS	R8,R0,R14
-	BLT	%FT02
-	]
+;
         LDR     R14,scrx1
-	[ true
         SUB     R14,R14,#iconbarsepgap
         CMP     R0,R14
 	MOVLE	R14,#0
 	STRLE	R14,iconbar_scroll_start_time
         BLE     %FT01
-        MOVGT   R8,#iconbar_scroll_speed * 100                 ; scroll right
-	|
-	SUB	R14,R14,#iconbar_scroll_speed
-	SUBS	R8,R0,R14
-	MOVLE	R14,#0
-	STRLE	R14,iconbar_scroll_start_time
-	BLE	%FT01
-	]
+        LDRGT   R8, iconbar_scroll_speed                       ; scroll right
 02
         Push    "R0-R8,handle,userblk"
         Abs     handle,R3
@@ -1463,19 +1524,19 @@ ptr_iconbar_icon
 	LDR	R5,iconbar_scroll_start_scx
 	LDR	R2,iconbar_scroll_start_time
 	SUB	R2,R0,R2		; R2=time since scroll start (in centi-seconds)
-	[ iconbar_scroll_accel = 1
+	CMP     R2, #&3800              ;; much more than this, and accel*time^2 will overflow
+	MOVHI   R2, #&3800              ;; when maximum acceleration is configured
+	LDR	LR, iconbar_scroll_accel
+	MUL	LR,R2,LR		; LR=accel * time (cs)
+	MOV     LR, LR, ASR#6
+	ADD     LR, LR, LR, ASR#2       ; LR=accel * time (s) (within 3%)
 	CMP	R8,#0
-	ADDGT	R8,R8,R2
-	SUBLT	R8,R8,R2		; R8=(+/-)(speed + accel*time)
-	|
-	MOV	LR,#iconbar_scroll_accel
-	MUL	LR,R2,LR		; LR=accel * time
-	CMP	R8,#0
-	ADDGT	R8,R8,LR
+	ADDGE	R8,R8,LR
 	SUBLT	R8,R8,LR		; R8=(+/-)(speed + accel*time)
-	]
-	MUL	R8,R2,R8		; R8=(+/-)(speed + accel*time) * time
-	ADD	R5,R5,R8,ASR #6		; R5+=(+/-)(speed + accel*time) * time/128 (approximation to 100)
+	ADDLT   R8, R8, #1              ; adjust because we used NOT(speed) rather than -(speed) for velocity
+	MUL	R8,R2,R8		; R8=(+/-)(speed + accel*time) * time (cs)
+	ADD     R8, R8, R8, ASR#2
+	ADD	R5,R5,R8,ASR #6		; R5+=(+/-)(speed + accel*time) * time (s)
 	Pull	"R2"
 
         LDR     R0,iconbarhandle
@@ -1499,6 +1560,13 @@ ptr_iconbar_icon
 ; Ptr_Entering/Leaving_Window treats system area as window -1
 
         Push    "R3"                    ; actual window handle
+      [ Autoscr
+; also treat as window -1 (but just for the purposes of Pointer Leaving/Entering Window events) if
+; we're autoscrolling (which is not necessarily a subset of if dragging)
+        LDR     R14, autoscr_state
+        TST     R14, #af_enable
+        MOVNE   R3, #nullptr
+      ]      
         LDR     R14,iconbarhandle
         TEQ     R3,R14                  ; treat as window handle -1:
         LDRNE   R14,backwindow          ; (a) if in back window
@@ -2020,6 +2088,18 @@ notiniconbar
 ;
         LDR     R1,[R14,#i_flags]
         LDR     R3,[R14,#i_data+4]      ; get flags, -> validation string
+      [ true
+        AND     R14, R1, #if_buttontype ; border_icon/windowselected behaviour is only suitable for a few button types
+        MOV     R14, R14, LSR #ib_buttontype
+        TEQ     R14, #ibt_autorepeat
+        TEQNE   R14, #ibt_click
+        TEQNE   R14, #ibt_clickrelease
+        TEQNE   R14, #ibt_click2
+        TEQNE   R14, #ibt_dclick
+        TEQNE   R14, #ibt_dclickrelease
+        TEQNE   R14, #ibt_dclick2
+        BNE     %FT03
+      ]
         BL      getborder               ; decode to setup the border information
 ;
         TEQ     R0,#border_action
@@ -2085,6 +2165,7 @@ returnclick
 ;----------------------------------------------------------------------------
 
 trykeys
+        Debug   poll2, "Processing keys"
  [ KeyboardMenus
         MOV     r6, #-1                 ; so we can tell later on if we read a key
         LDR     r4, menuSP
@@ -2643,7 +2724,14 @@ setwimpicon
         ADDGT	R4,R4,#3		; and skip -13 (which is the border)
       ]
 03
+      [ BounceClose
+        LDRB    R14, buttontype
+        TEQ     R14, #0
+        ADREQ   R14, wiconflags - 4
+        ADRNE   R14, wiconflags_release - 4
+      |
         ADR     R14,wiconflags-4
+      ]
         LDR     R5,[R14,R4,ASL #2]
         CMP     R5,#-1
         MOVEQ   R5,#ibt_click:SHL:ib_buttontype
@@ -2712,7 +2800,13 @@ check_h_arrows
 	BHI	%FT04
 	LDR	R2,[handle,#w_flags]
 	TST	R2,#wf_icon2
-	BNE	%BT05
+	BEQ     %FT04
+	LDR     R2, [handle, #w_parent]
+	CMP     R2, #-1
+	BNE     %FT04
+	LDRB    R2, iconisebutton
+	TEQ     R2, #0
+	BNE     %BT05
 04
       ]
 ;
@@ -2722,19 +2816,10 @@ check_h_arrows
 
 
 wiconflags
-        [ BounceClose
-        DCD     ibt_clickrelease :SHL: ib_buttontype        ; back
-        DCD     ibt_clickrelease :SHL: ib_buttontype        ; quit
-        |
         DCD     ibt_click        :SHL: ib_buttontype        ; back
-        DCD     ibt_click        :SHL: ib_buttontype
-        ]
+        DCD     ibt_click        :SHL: ib_buttontype        ; quit
         DCD     ibt_click        :SHL: ib_buttontype        ; move BLOBBY
-	[ BounceClose
-        DCD     ibt_clickrelease :SHL: ib_buttontype        ; toggle
-	|
         DCD     ibt_click        :SHL: ib_buttontype        ; toggle
-	]
         DCD     -1                                          ; scup
         DCD     ibt_click        :SHL: ib_buttontype        ; scvert
         DCD     -1                                          ; scdown
@@ -2745,12 +2830,28 @@ wiconflags
 bordericon      *       -2 - (.-wiconflags)/4
 	[ IconiseButton
 	DCD	-1
-	[ BounceClose
-	DCD	ibt_clickrelease :SHL: ib_buttontype	    ; iconise
-	|
 	DCD	ibt_click        :SHL: ib_buttontype	    ; iconise
 	]
+
+    [ BounceClose
+wiconflags_release
+        DCD     ibt_clickrelease :SHL: ib_buttontype        ; back
+        DCD     ibt_clickrelease :SHL: ib_buttontype        ; quit
+        DCD     ibt_click        :SHL: ib_buttontype        ; move BLOBBY
+        DCD     ibt_clickrelease :SHL: ib_buttontype        ; toggle
+        DCD     -1                                          ; scup
+        DCD     ibt_click        :SHL: ib_buttontype        ; scvert
+        DCD     -1                                          ; scdown
+        DCD     ibt_click        :SHL: ib_buttontype        ; size
+        DCD     -1                                          ; scleft
+        DCD     ibt_click        :SHL: ib_buttontype        ; schoriz
+        DCD     -1                                          ; scright
+	[ IconiseButton
+	DCD	-1
+	DCD	ibt_clickrelease :SHL: ib_buttontype	    ; iconise
 	]
+    ]
+
 wimpaction
         CMP     R3,#0                   ; is this a real window?
         BLGT    pageinicontask_R3R4     ; takes note of iconbar
@@ -2867,8 +2968,15 @@ wicon_toggle
         SUB     cy1,cy1,R6              ; setup the new co-ordinates for bottom & top Y's
 
 	LDR	R6,scry1
+      [ togglebits
+        LDR     R14, [handle, #w_flags]
+        TST     R14, #wf_icon3          ; we can still have a toggle-size button without a title bar!
+        LDRNE   R14, title_height
+        SUBNE   R6, R6, R14
+      |
 	LDR	R14,title_height
 	SUB	R6,R6,R14
+      ]
 	LDR	R14,iconbarheight
 	SUB	R14,R14,#8
 	SUB	R0,R6,R14
@@ -2902,7 +3010,11 @@ wicon_toggle
 ;
         BL      calc_w_status           ; ensure bhandle up-to-date
 
+      [ BounceClose
+        LDR     R2,pending_buttons      ; Horrible hack so adjust works even with release buttons
+      |
         LDR     R2,mousebuttons         ; bhandle depends on adjust button
+      ]
 
 openwindow_checkbuttons
         TST     R2,#button_right        ; if adjust used, open at same level,
@@ -2961,8 +3073,36 @@ openwindow
 
       [ IconiseButton
 wicon_iconise
-	Push	"r0-r4"
-	B	%FT20
+        Push	"r0-r4"
+      [ MultiClose
+        TST     R2, #button_right       ; Ctrl-Alt-*Adjust* isn't special
+        MOVNE   R1, #0                  ; flag as due to iconise button
+        BNE     %FT20
+
+        MOV     R0, #121
+        MOV     R1, #&81                ; Scan keyboard for Ctrl key
+        SWI     XOS_Byte
+        MOV     R4, R1
+        MOV     R1, #&82                ; Scan keyboard for Alt key
+        SWI     XOS_Byte
+        TEQ     R4, #&FF
+        TEQEQ   R1, #&FF
+        MOVNE   R1, #0                  ; flag as due to iconise button
+        BNE     %FT20
+
+        ; Iconise all top-level windows that have close buttons (except hotkey windows)
+        LDR     handle, activewinds + lh_forwards
+        SUB     R0, handle, #w_active_link
+        Rel     R0, R0
+        STR     R0, nextwindowtoiconise
+        BL      iconisenextwindow
+        Pull    "R0-R4"
+        B       trykeys
+
+      |
+        MOV     R1, #0                  ; NOT a shift+click on close icon
+        B	%FT20
+      ]
       ]
 
 wicon_quit
@@ -2979,70 +3119,76 @@ wicon_quit
         Pull    "r0-r4",NE
         BNE     not_alt
 
+      [ MultiClose
+        MOV     R0, #121
+        MOV     R1, #&81                ; Scan keyboard for Ctrl key
+        SWI     XOS_Byte
+        MOV     R4, R1
+        MOV     R1, #&82                ; Scan keyboard for Alt key
+        SWI     XOS_Byte
+        TEQ     R4, #&FF
+        TEQEQ   R1, #&FF
+        BNE     %FT66
+
+      [ BounceClose
+        LDR     R2, pending_buttons
+        STR     R2, mousebuttons        ; The usual Horrible Hack
+      ]
+        ; Close all windows at this level that have close buttons (except hotkey windows)
+        LDR     handle, [handle, #w_parent]
+        CMP     handle, #nullptr
+        LDREQ   handle, activewinds + lh_backwards
+        LDRNE   handle, [handle, #w_children + lh_backwards]
+01      LDR     R0, [handle, #ll_backwards]
+        CMP     R0, #nullptr
+        BEQ     %FT02
+        LDR     R14, [handle, #w_flags - w_active_link]
+        TST     R14, #wf_icon2
+        ANDNE   R14, R14, #wf_grabkeys
+        TEQNE   R14, #wf_grabkeys
+        MOVEQ   handle, R0
+        BEQ     %BT01
+        ; Found such a window; send close request message
+        Push    "R0"
+        SUB     handle, handle, #w_active_link
+        SUB     sp, sp, #4
+        Rel     R2, handle
+        STR     R2, [sp]
+        MOV     R0, #Close_Window_Request
+        MOV     R1, sp
+        BL      int_sendmessage_fromwimp
+        ADD     sp, sp, #4
+        Pull    "handle"
+        B       %BT01
+02        
+        Pull    "R0-R4"
+        B       trykeys
+66
+      ]
+
         MOV     R0,#121                 ; Scan keyboard for shift key
         MOV     R1,#&80
-        SWI     OS_Byte
+        SWI     XOS_Byte
 
         CMP     R1,#&FF
 
         Pull    "r0-r4",NE
         BNE     not_alt
-
-                                        ; Shift-quit, send message_Iconize.
-20      MOV     R14,#ms_data+8+20       ; size of block (Window,Task,20 byte from title ).
-        STR     R14,[sp,#-(ms_data+8+20)]!
-        MOV     R0,#User_Message
-        MOV     R1,sp
-        STR     R3,[R1,#ms_data]
-
-        LDR     R2,taskhandle
-        LDR     R14,[wsptr,R2]          ; add in version bits (if alive)
-        TST     R14,#task_unused
-        LDREQ   R14,[R14,#task_flagword]
-        MOVEQ   R14,R14,LSR #flag_versionbit
-        ORREQ   R2,R2,R14,LSL #flag_versionbit
-        STR     R2,[R1,#ms_data+4]
-
-        ADD     R2,handle,#w_title
-        LDR     R14,[handle,#w_titleflags]
-        TST     R14,#if_indirected
-        LDRNE   R2,[R2]                     ; If indirected get real address
-
-        MOV     R14,R2                      ; Find first space.
-01      LDRB    R3,[R14],#1
-        CMP     R3,#&20
-        BGT     %BT01
-
-02      LDRB    R3,[R14]                    ; Go back to last '.'
-        CMP     R14,R2
-        CMPNE   R3,#"."
-        SUBNE   R14,R14,#1
-        BNE     %BT02
-
-        CMP     R3,#"."                     ; Skip '.'
-        ADDEQ   R14,R14,#1
-
-        MOV     R4,#ms_data+8
-03      LDRB    R3,[R14],#1
-        CMP     R3,#&20
-        BLE     %FT04
-        STRB    R3,[R1,R4]
-        ADD     R4,R4,#1
-        CMP     R4,#27+ms_data
-        BLT     %BT03
-
-04      MOV     R3,#0                      ; Store zero terminator.
-        STRB    R3,[R1,R4]
-
-        MOV     R2,#0
-        STR     R2,[R1,#ms_yourref]
-        LDR     R14,=Message_Iconize
-        STR     R14,[R1,#ms_action]
-        BL      int_sendmessage_fromwimp
-        ADD     sp,sp,#(ms_data+8+20)     ; correct stack
-
-       Pull     "r0-r4"
-       B        trykeys
+        
+        [ ChildWindows
+        LDR     R0, [handle, #w_parent] ; don't do anything if Shift-close on child windows
+        CMP     R0, #-1
+        Pull    "r0-r4",NE
+        BNE     trykeys
+        ]
+20
+      [ MultiClose
+        LDR     r2, mousexpos
+        LDR     r4, mouseypos
+      ]
+        BL      sendiconisemessages
+        Pull    "r0-r4"
+        B       trykeys
 
 not_alt
         [ StickyMenus
@@ -3086,6 +3232,188 @@ not_alt
         STR     R3,[userblk]
         MOV     R0,#Close_Window_Request
         B       ExitPoll
+
+      [ MultiClose
+iconisenextwindow
+        ENTRY   "R0-R4,handle"
+        LDR     handle, nextwindowtoiconise
+        BL      checkhandle             ; make sure it's still valid
+        MOV     R0, PC
+        TST     R0, #V_bit
+        LDREQ   R14, [handle, #w_flags]
+        ANDEQ   R0, R14, #ws_open
+        CMPEQ   R0, #ws_open            ; and open
+        ADDEQ   handle, handle, #w_active_link
+        LDRNE   handle, activewinds + lh_forwards ; if not, restart from top
+01
+        LDR     R0, [handle, #ll_forwards]
+        CMP     R0, #nullptr             ; have we reached the header?
+        MOVEQ   R0, #0
+        STREQ   R0, nextwindowtoiconise
+        EXIT    EQ                       ; stop if we have
+        LDR     R14, [handle, #w_flags - w_active_link]
+        TST     R14, #wf_backwindow
+        MOVNE   R0, #0
+        STRNE   R0, nextwindowtoiconise
+        EXIT    NE                       ; don't re-iconise already-iconised windows!
+        TST     R14, #wf_icon2
+        ANDNE   R14, R14, #wf_grabkeys
+        TEQNE   R14, #wf_grabkeys
+        MOVEQ   handle, R0
+        BEQ     %BT01
+        ; Found a suitable window; work out suitable entry conditions for sendiconisemessages
+        Push    "R0"
+        SUB     handle, handle, #w_active_link
+        MOV     R0, #iconposn_iconise
+        BL      calc_w_iconposn          ; x0-y1 = button bbox
+        ADD     R2, x0, x1
+        ADD     R4, y0, y1
+        MOV     R2, R2, LSR#1
+        MOV     R4, R4, LSR#1
+        MOV     R1, #0
+        Rel     R3, handle
+        BL      sendiconisemessages
+        ; Now store the next window to process (if any)
+        Pull    "handle"
+        LDR     R0, [handle, #ll_forwards]
+        CMP     R0, #nullptr
+        MOVEQ   R0, #0
+        SUBNE   R0, handle, #w_active_link
+        Rel     R0, R0, NE
+        STR     R0, nextwindowtoiconise
+        EXIT
+      ]
+
+sendiconisemessages
+; Entry: R1 = &FF => caused by click on close icon; R1 = 0 => caused by click on iconise icon
+;        R3 = relative window handle to send
+; and if MultiClose enabled,
+;        R2 = mouse x
+;        R4 = mouse y
+        ENTRY
+
+        [ Version >= 393 :LAND: IconiseButton
+        ; Send a Message_IconizeAt (RML)
+        Push    "r3"
+        SUB     sp, sp, #48
+
+        CMP     r1, #&FF                 ; If a Shift+Click on close
+        MOVEQ   r0, #1                   ; then bit 0 of flags is set
+        MOVNE   r0, #0
+        STR     r0, [sp, #ms_data+16]
+        
+        MOV     r1, sp
+      [ MultiClose
+        STR     r2, [r1, #ms_data+8]
+        SUB     r4, r4, #32+17
+        STR     r4, [r1, #ms_data+12]
+      |
+        LDR     r0, mousexpos
+        STR     r0, [r1,#ms_data+8]
+        LDR     r0, mouseypos
+        SUB     r0, r0, #(32+17)
+        STR     r0, [r1,#ms_data+12]
+      ]
+        MOV     r0, #40
+        STR     r0, [r1,#ms_size]        ; size
+        MOV     r0, #0
+        STR     r0, [r1, #ms_yourref]    ; your ref
+        LDR     r0, =Message_IconizeAt   ; (Message number 22)
+        STR     r0, [r1, #ms_action]     ; message action
+        STR     r3, [r1, #ms_data+0]     ; window handle
+        
+        ; Work out task handle
+      [ MultiClose
+        LDR     R2, [handle, #w_taskhandle]
+      |
+        LDR     r2, taskhandle           
+      ]
+        LDR     r4, [wsptr, r2]          ; add in version bits (if alive)
+        TST     r4, #task_unused
+        LDREQ   r4, [r4, #task_flagword]
+        MOVEQ   r4, r4, LSR #flag_versionbit
+        ORREQ   r2, r2, r4, LSL #flag_versionbit
+        STR     r2, [r1, #ms_data+4]
+        
+        MOV     r0, #User_Message
+        MOV     r2, #0
+        BL      int_sendmessage_fromwimp
+        
+        ADD     sp, sp, #48
+        Pull    "r3"
+        ]
+                                                ; Shift-quit, send Message_Iconize.
+        MOV     R14,#ms_data+8+20       ; size of block (Window,Task,20 byte from title ).
+        STR     R14,[sp,#-(ms_data+8+20)]!
+        MOV     R0,#User_Message
+        MOV     R1,sp
+        STR     R3,[R1,#ms_data]
+
+      [ MultiClose
+        LDR     R2, [handle, #w_taskhandle]
+        LDR     R14, [handle, #w_titleflags]
+        TST     R14, #if_indirected
+        Task    "R2", NE, "Iconise: reading indirected title string"
+      |
+        LDR     R2,taskhandle
+      ]
+        LDR     R14,[wsptr,R2]          ; add in version bits (if alive)
+        TST     R14,#task_unused
+        LDREQ   R14,[R14,#task_flagword]
+        MOVEQ   R14,R14,LSR #flag_versionbit
+        ORREQ   R2,R2,R14,LSL #flag_versionbit
+        STR     R2,[R1,#ms_data+4]
+
+        ADD     R2,handle,#w_title
+        LDR     R14,[handle,#w_titleflags]
+        TST     R14,#if_indirected
+        LDRNE   R2,[R2]                     ; If indirected get real address
+
+      [ true
+00      LDRB    R3, [R2]  ; always skip leading spaces
+        TEQ     R3, #&20
+        ADDEQ   R2, R2, #1
+        BEQ     %BT00
+      ]
+        MOV     R14,R2                      ; Find first space.
+01      LDRB    R3,[R14],#1
+        CMP     R3,#&20
+        BGT     %BT01
+
+02      LDRB    R3,[R14]                    ; Go back to last '.'
+        CMP     R14,R2
+        CMPNE   R3,#"."
+        SUBNE   R14,R14,#1
+        BNE     %BT02
+
+        CMP     R3,#"."                     ; Skip '.'
+        ADDEQ   R14,R14,#1
+      [ true
+        LDRB    R3, [R14]
+        CMP     R3, #&20
+        MOVLE   R14, R2   ; if we'd get a null string, then jump back to start
+      ]
+
+        MOV     R4,#ms_data+8
+03      LDRB    R3,[R14],#1
+        CMP     R3,#&20
+        BLE     %FT04
+        STRB    R3,[R1,R4]
+        ADD     R4,R4,#1
+        CMP     R4,#27+ms_data
+        BLT     %BT03
+
+04      MOV     R3,#0                      ; Store zero terminator.
+        STRB    R3,[R1,R4]
+
+        MOV     R2,#0
+        STR     R2,[R1,#ms_yourref]
+        LDR     R14,=Message_Iconize
+        STR     R14,[R1,#ms_action]
+        BL      int_sendmessage_fromwimp
+        ADD     sp,sp,#(ms_data+8+20)     ; correct stack
+
+        EXIT
 
 wicon_scup
         TST     R2,#button_right
@@ -3214,6 +3542,10 @@ Exit_OpenWindow
         TEQEQ   cx0,x0
         TEQEQ   cy0,y0
         TEQEQ   cx1,x1
+      [ togglebits
+        LDR     R14, [handle, #w_flags]         ; don't mask out requests during a toggle operation!
+        TSTEQ   R14, #ws_toggling
+      ]
         BEQ     trykeys                         ; go to next bit of polling
 ;
         LDR     R14,[handle,#w_taskhandle]
@@ -3335,7 +3667,7 @@ pagehoriz
 ;;----------------------------------------------------------------------------
 
 SWIWimp_GetPointerInfo
-        MyEntry "Get_Pointer_Info"
+        MyEntry "GetPointerInfo"
 ;
         LDR     R0,mousexpos                    ; just read old values
         LDR     R1,mouseypos
@@ -3502,7 +3834,7 @@ findwlp
         CMPGT   y1,R1
         BLE     findwlp
 
-        Debug   child,"Click within outer box of",handle
+;        Debug   child,"Click within outer box of",handle
 
 ; decide whether the click is inside or outside the work area
 
