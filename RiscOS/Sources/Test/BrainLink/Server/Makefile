@@ -37,8 +37,8 @@ DIRS = o._dirs
 #
 include Makefiles:ModuleLibs
 
-SERIALLIB = <Lib$Dir>.BrainLink.serial.o.sercomm
-ZMODEMLIB = <Lib$Dir>.BrainLink.zmodem.o.zmodem
+SERIALLIB = <Lib$Dir>.BrainLink.serial.o.BLserial
+ZMODEMLIB = <Lib$Dir>.BrainLink.zmodem.o.BLzmodem
 
 #
 # Include files
