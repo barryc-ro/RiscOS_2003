@@ -110,6 +110,98 @@
 
 	MEND
 
+  [ IMMSupport
+
+; CPP is the Command Packet Protocol
+
+        MACRO
+$lab    CPP     $data
+$lab
+        MOV     R0, #&0C
+        STRB    r0,CommandReg
+	UDELAY
+
+        MOV     R0, #&AA
+        STRB    r0,DataReg
+	UDELAY
+
+        MOV     R0, #&55
+        STRB    r0,DataReg
+	UDELAY
+
+        MOV     R0, #&00
+        STRB    r0,DataReg
+	UDELAY
+
+        MOV     R0, #&FF
+        STRB    r0,DataReg
+	UDELAY
+	LDRB	r10,StatusReg
+	AND     r2, r10, #&B8
+
+        MOV     R0, #&87
+        STRB    r0,DataReg
+	UDELAY
+	LDRB	r10,StatusReg
+	AND     r3, r10, #&B8
+
+        MOV     R0, #&78
+        STRB    r0,DataReg
+	UDELAY
+	LDRB	r10,StatusReg
+	AND     r4, r10, #&38
+
+
+        MOV     R0, #$data
+        STRB    r0,DataReg
+	UDELAY
+
+        MOV     R0, #&0C
+        STRB    r0,CommandReg
+	UDELAY
+
+        MOV     R0, #&0D
+        STRB    r0,CommandReg
+	UDELAY
+
+        MOV     R0, #&0C
+        STRB    r0,CommandReg
+	UDELAY
+
+        MOV     R0, #&FF
+        STRB    r0,DataReg
+	UDELAY
+
+	MEND
+
+
+; ZRP is the Zip Reset Pulse (for the IMM protocol)
+
+	MACRO
+	ZRP
+
+	MOV	r0,#&04
+	STR	r0,CommandReg
+	MOV	r0,#&40
+	STR	r0,DataReg
+	UDELAY
+
+	MOV	r0,#&0C
+	STR	r0,CommandReg
+	MOV	r0,#&0D
+	STR	r0,CommandReg
+	UDELAY
+
+	MOV	r0,#&0C
+	STR	r0,CommandReg
+	MOV	r0,#&04
+	STR	r0,CommandReg
+	UDELAY
+
+	MEND
+
+  ]
+
  [ {FALSE}
         MACRO
 $lab    SavePSR $reg
@@ -171,6 +263,7 @@ errorchunk	*	PPAErrorChunk			; Again, an unallocated error chunk
 error_init1	*	0				; Error if it's not possible to connect to the Zip drive
 error_read	*	1				; Error if a read operation fails...
 error_printer	*	2				; Error if the printer's busy
+error_protocol	*	3				; Error with Zip protocol (not PPA or IMM)
 
 ppa_sectorshift	*	9				; Shift value for sectors
 ppa_sectorsize	*	512				; Size of a sector (used for FAST transfers)
@@ -191,7 +284,7 @@ flag_nybble	*	(1<<2)				; Not used
 ;cmd_history	*	0
 cmd_history	*	1				; Command history flag
 
-cmd_historysize	*	16				; 16 entries per command history
+cmd_historysize	*	64				; 16 entries per command history
 
 ; The private workspace
 
@@ -207,7 +300,15 @@ OldIOC		#	1				; Old IOC IRQ A mask value
 PPAPrinter	#	1				; Printer status
 PausedCCQueue	#	1				; Flag to indicate whether we paused CC queue or not
 SCSIOperation	#	1				; Flag to indicate if we are in SCSI command mode
-DummyPad	#	3				; 3 bytes of dummy workspace
+  [ IMMSupport
+PreferredProtocol #	1				; Our last known working protocol
+ProtocolError	*	0
+PPAProtocol	*	1				; PPA (Parallel Port Adapter) protocol
+IMMProtocol	*	2				; IMM (Iomega Match Maker) protocol
+  ]
+	WHILE (:INDEX:@ :AND: 3)<>0
+		#	1
+	WEND
 SCSITemp	#	512				; Temporary workspace for SCSI commands
  [ cmd_history = 1
 History		#	cmd_historysize*32		; 16 bytes header, 16 bytes entry parameters
@@ -216,6 +317,8 @@ Numbers		#	12				; 12 bytes for numbers
  ]
 eor12		#	0				; End of the workspace
 lor12		*	eor12-sor12			; Length of the workspace
+
+
 
 ; The printer port
 
@@ -231,11 +334,14 @@ ECPData3	#	4				; This is the EPP data port 0
 
 DoReadOp	*	0				; ReadOps are not handled in this version
 
+
+
+
 ; This is the start of the module
 
 s
 start							; No start of code
-service							; No service (yet)
+;service							; No service (yet)
 	DCD	start-s					; Module start
 	DCD	init-s					; Initialisation
 	DCD	final-s					; Finalisation
@@ -253,7 +359,11 @@ service							; No service (yet)
  ]
 
 title	=	"PPADriver",0
-help	=	"PPA Driver",9,"$Module_HelpVersion SPP/EPPx4",0
+help	=	"PPA Driver",9,"$Module_HelpVersion SPP/EPPx4; PPA"
+  [ IMMSupport
+        =       "/IMM"
+  ]
+        =       0
 	ALIGN
 
 hcom	=	"IZipPrinter",0
@@ -293,6 +403,10 @@ switabl	=	"PPADriver",0				; SWI Group name
  ]
 	=	"PrintStatus",0				; Check the status of any print queues
 	=	"VPI0Detect",0				; Check presence of VPI0
+	=       "Reset",0                               ; Send a reset pulse to the Zip drive
+ [ IMMSupport
+	=	"VPI2Detect",0				; Check presence of VPI2
+ ]
 	=	0
 	ALIGN
 
@@ -313,13 +427,13 @@ init	STMFD	r13!,{r1-r9,lr}				; Store R14 (we're calling SWIs here)
 ; I can't get the following code to work, so what the heck. Allocate a new block each initialisation
 ; (it's a very small block, after all!)
 
-;	LDR	r2,[r12]				; Get the pointer
-;	TEQ	r2,#0					; Is it a module initialisation, rather than RMTidy?
-;	BNE	init_clearmemory			; Yup, so clear it, and set up the pointers
+	LDR	r2,[r12]				; Get the pointer
+	TEQ	r2,#0					; Is it a module initialisation, rather than RMTidy?
+	BNE	init_clearmemory			; Yup, so clear it, and set up the pointers
 
 	MOV	r0,#6					; Start of module memory claim
 	SWI	XOS_Module				; Claim the memory
-	LDMVSFD	r13!,{pc}				; Ooops - can't claim - recall exit
+	LDMVSFD	r13!,{r1-r9,pc}				; Ooops - can't claim - recall exit
 
 	STR	r2,[r12]				; Store that in the pointer
 
@@ -334,8 +448,18 @@ init_cm1
 	SUBS	r3,r3,#4
 	BGT	init_cm1				; Clear memory loop
 
+ [ IMMSupport
+ 	MOV	r0,#PPAProtocol
+ 	STRB	r0,PreferredProtocol
+ ]
+
 	SWI	XParallel_HardwareAddress		; I hope this is on the NC, and the registers are as I hope they are
 	STR	r0,ParallelAddress
+
+; The following branch basically calls the SWI PPADriver_Reset.  This ensures that the drive is in a known state (i.e.
+; not left waiting for more SCSI data to be sent following a crash).  Hopefully this will stop disks getting trashed.
+
+        BL      Reset
 
 	MOV	r0,#1
 	STRB	r0,PPASpeed				; Set the PPA speed to default values
@@ -354,6 +478,26 @@ final	STMFD	r13!,{r14}
 	BL	DeconfigureEPP
 
 	LDMFD	r13!,{pc}
+
+; Service call handler
+servicetable
+        DCD     0
+        DCD     serviceentry-s
+        DCD     Service_PreReset                        ; &45
+        DCD     0
+        DCD     servicetable-s
+service
+        MOV     r0,r0
+serviceentry
+        TEQ     r1,#Service_PreReset
+        MOVNE   pc,lr
+
+; Service_PreReset is issued just before the system performs a soft reset.
+; To ensure that the Zip drive is in a sane state, also reset the drive.
+        STMFD   r13!,{r0,lr}
+;        BL      Reset
+        LDMFD   r13!,{r0,pc}
+
 
 ; Standard SWI handler
 
@@ -382,6 +526,10 @@ swijump	B	Initialise
  |
 	B	PrintStatus
 	B	VPI0Detect
+	B       Reset
+ ]
+ [ IMMSupport
+        B       VPI2Detect
  ]
 
 ukswi	ADR	r0,ukswie				; Point to error
@@ -392,23 +540,37 @@ ukswie	DCD	&1e6
 	=	"Unknown PPADriver operation",0
 	ALIGN
 
-; SCSI Initialise - determine if the Zip drive is present, and also if we have to use nybble read-transfers or not.
+; SCSI Initialise - determine if the Zip drive is present, and also if we have to use nibble read-transfers or not.
 
+  [ IMMSupport
 Initialise
-	STMFD	r13!,{r0-r3,lr}
+        STMFD   r13!,{r0-r5,lr}
+        LDR     r11,ParallelAddress
+        LDRB    r0,PreferredProtocol
+InitialiseDispatch
+        CMP     r0,#PPAProtocol
+        BMI     InitialisePPA
+        BNE     InitialiseIMM
+
+InitialisePPA
+  |
+Initialise
+	STMFD	r13!,{r0-r5,lr}
 
 	LDR	r11,ParallelAddress
-
-
+  ]
 ;	BL	WaitPrinter
 
 	BL	DisableIRQ
 	STRVS	r0,[r13]
-	LDMVSFD	r13!,{r0-r3,pc}
+	LDMVSFD	r13!,{r0-r5,pc}
+  [ IMMSupport
+	MOV	r0,#PPAProtocol
+	STRB	r0,PreferredProtocol
+  ]
 
 	BL	ZipDisconnect				; Just in case!
 	BL	ZipConnectSPP				; Connect to the ZIP drive
-
 	MOV	r0,#6
 	STRB	r0,CommandReg
 
@@ -417,11 +579,47 @@ Initialise
 	TEQ	r1,#&f0					; If everything else is on, then all is okay!
 	BEQ	Initialise_Pass2
 
+; If we get this far, the drive is either not plugged in or it uses the IMM protocol.
+
+  [ IMMSupport
+InitialiseIMM
+  	MOV	r0,#IMMProtocol
+  	STRB	r0,PreferredProtocol
+
+	BL	ZipDisconnect
+	BL	ZipConnect
+	MOV	r0,#6
+	STRB	r0,CommandReg
+
+	LDRB	r0,StatusReg
+	AND	r1,r0,#&F0				; Clear bottom 4 bits
+	TEQ	r1,#&C0					; Only the top two bits should be set
+
+	BEQ	IMM_Initialise_Pass2
+
+	MOV     r0,#PPAProtocol
+	STRB    r0,PreferredProtocol
+	BL      ZipDisconnect
+	BL      ZipConnectSPP
+	MOV     r0,#6
+	STRB    r0,CommandReg
+
+	LDRB    r0,StatusReg
+	AND     r1,r0,#&f0
+	TEQ     r1,#&f0
+	BEQ     Initialise_Pass2
+
+  ]
+
 ; Failure from port - first indication that it's not plugged in
 
 Initialise_Fail1
+  [ IMMSupport
+	MOV	r0,#ProtocolError
+	STRB	r0,PreferredProtocol
+  ]
 	BL	EnableIRQ
-	LDMFD	r13!,{r0-r3,lr}
+	LDMFD	r13!,{r0-r5,lr}
 	ADR	r0,inite2				; Point to error
 	SETV
 	MOV     pc, lr
@@ -461,12 +659,41 @@ Initialise_Pass2
 
 	BL	EnableIRQ
 	CLRV
-	LDMFD	r13!,{r0-r3,pc}
+	LDMFD	r13!,{r0-r5,pc}
+
+  [ IMMSupport
+
+IMM_Initialise_Pass2
+	UDELAY
+
+	TEQ	r5,#1					; Check that the drive is connected
+	BNE	Initialise_Fail1
+
+	BL	ZipDisconnect
+ 	UDELAY
+
+	BL	EnableIRQ
+	CLRV
+	LDMFD	r13!,{r0-r5,pc}
+
+  ]
 
 ; ZipConnect connects using EPP mode
 
+  [ IMMSupport
 ZipConnect
+	STMFD	r13!,{r0-r4,lr}
+	LDRB	r0,PreferredProtocol
+ZipConnectDispatch
+	CMP	r0,#PPAProtocol
+	LDMMIFD r13!,{r0-r4,pc}
+	BNE	ZipConnectIMM
+
+ZipConnectPPA						; If IMM support is enabled then this is the PPA version
+  |
+ZipConnect						; Otherwise it is the default version
 	STMFD	r13!,{r0-r1,lr}
+  ]
 ;	MOV	r0,#1
 ;	BL	EnsureECPMode
 	ZCP	&00
@@ -474,7 +701,11 @@ ZipConnect
 	ZCP	&20
 ;	ZCP	&8f
 	ZCP	&cf
-	LDMFD	r13!,{r0-r1,pc}
+  [ IMMSupport
+	LDMFD	r13!,{r0-r4,pc}
+  |
+  	LDMFD	r13!,{r0-r1,pc}
+  ]
 
 ; ZipConnectSPP connects using SPP mode
 
@@ -488,27 +719,88 @@ ZipConnectSPP
 	ZCP	&8f
 	LDMFD	r13!,{r0-r1,pc}
 
+  [ IMMSupport
+ZipConnectIMM
+	CPP	&E0
+	CPP	&30
+	CPP	&28	; EPP mode
+;	CPP	&E0	; for compatable mode
+	TEQ	r2,#&B8
+	TEQEQ	r3,#&18
+	BNE	IMMNotPresent
+	TEQ	r4,#&30
+	BEQ	IMMIsConn
+	TEQ	r4,#&38
+	BEQ	IMMIsDisconn
+IMMNotPresent
+	MOV	r5,#-1
+	LDMFD	r13!,{r0-r4,pc}
+IMMIsDisconn
+	MOV	r5,#0
+	LDMFD	r13!,{r0-r4,pc}
+IMMIsConn
+	MOV	r5,#1
+	LDMFD	r13!,{r0-r4,pc}
+  ]
+
 ; ZipDisconnect is the generic disconnection code
 ; All registers are preserved. Status is not.
 
+  [ IMMSupport
 ZipDisconnect
+	STMFD	r13!,{r0-r4,lr}
+	LDRB	r0,PreferredProtocol
+ZipDisconnectDispatch
+	CMP	r0,#PPAProtocol
+	LDMMIFD r13!,{r0-r4,pc}
+	BNE	ZipDisconnectIMM
+
+ZipDisconnectPPA				; If IMM Support is enabled, this is the PPA version
+  |
+ZipDisconnect					; Otherwise it is the default version
 	STMFD	r13!,{r0-r1,lr}
+  ]
 ;	MOV	r0,#1
 ;	BL	EnsureECPMode
 	ZDP	&00
 	ZDP	&3c
 	ZDP	&20
 	ZDP	&0f
-	LDMFD	r13!,{r0-r1,pc}
+  [ IMMSupport
+	LDMFD	r13!,{r0-r4,pc}
+  |
+  	LDMFD	r13!,{r0-r1,pc}
+  ]
+
+  [ IMMSupport
+ZipDisconnectIMM
+;	STMFD	r13!,{r0-r4,lr}
+;	MOV	r0,#1
+;	BL	EnsureECPMode
+	CPP	&30
+	LDMFD	r13!,{r0-r4,pc}
+  ]
 
 ; Select
 ; This selects the SCSI target of the Zip drive
 ; r0 is initiator (although not actually used), r1 is target
 ; Returns r0 as status register from printer port
 
+  [ IMMSupport
+Select
+	STMFD	r13!,{r1-r4,r10,lr}
+	LDRB	r0,PreferredProtocol
+SelectDispatch
+	CMP	r0,#PPAProtocol
+	MOVMI   r0,#0
+	LDMMIFD r13!,{r1-r4,r10,pc}
+	BNE	SelectIMM
+
+SelectPPA
+  |
 Select
 	STMFD	r13!,{r1-r3,r10,lr}
-
+  ]
 	MOV	r3,#1<<ppa_host
 
 	MOV	r2,#1
@@ -540,22 +832,83 @@ Select
 ;	MOV	r2,#16384
 Select_Loop1
 	LDRB	r0,StatusReg				; Read the status register
-	ANDS	r0,r0,#&f0				; Mask off the unwanted bits
-	LDMNEFD	r13!,{r1-r3,r10,pc}			; It's okay to proceed...
+	ANDS	r0,r0,#&40				; Mask off the unwanted bits (was &F0, but Linux driver uses &40 ...)
+  [ IMMSupport
+	LDMNEFD	r13!,{r1-r4,r10,pc}			; It's okay to proceed...
+  |
+        LDMNEFD r13!,{r1-r3,r10,pc}
+  ]
 
 	SUBS	r2,r2,#1
 	BGT	Select_Loop1				; Wait until timeout
+  [ IMMSupport
+        LDMFD   r13!,{r1-r4,r10,pc}
+  |
+        LDMFD   r13!,{r1-r3,r10,pc}
+  ]
 
-	LDMFD	r13!,{r1-r3,r10,pc}
+  [ IMMSupport
+SelectIMM
+;	STMFD	r13!,{r1-r4,r10,lr}
+        MOV     r2,#1
+        MOV     r2,r2,LSL r1
+
+        MOV     r0,#&0C
+        STRB    r0,CommandReg
+        MOV     r1,#65536<<2
+Select_LoopIMM
+        LDRB    r0,StatusReg
+        TST     r0,#&08
+        SUBNES  r1,r1,#1
+        BNE     Select_LoopIMM
+
+        TEQ     r1,#0
+        MOVEQ   r0,#0
+        LDMEQFD r13!,{r1-r4,r10,pc}
+        MOV     r0,#&04
+        STRB    r0,CommandReg
+        ORR     r0,r2,#&80
+        STRB    r0,DataReg
+        UDELAY
+
+        MOV     r0,#&0C
+        STRB    r0,CommandReg
+        MOV     r0,#&0D
+        STRB    r0,CommandReg
+
+        MOV     r2,#65536<<2
+SelectIMM_Loop1
+        LDRB    r0,StatusReg
+        ANDS    r0,r0,#&08
+        BNE     SelectIMM_EndLoop
+        SUBS    r2,r2,#1
+        BGT     SelectIMM_Loop1
+SelectIMM_EndLoop
+        MOV     r1,#&0C
+        STRB    r1,CommandReg
+        LDMFD   r13!,{r1-r4,r10,pc}
+  ]
 
 ; Wait waits until it gets an acknowledgement from the Zip drive, or until it
 ; has had enough. The 65536<<2 is a long enough time for a slow command, but
 ; short enough for the machine not to slow down too much if the drive was
 ; unplugged in the middle of a transfer
 
+  [ IMMSupport
+Wait
+        STMFD   r13!,{r1-r4,lr}
+        LDRB    r0,PreferredProtocol
+WaitDispatch
+        CMP     r0,#PPAProtocol
+        MOVMI   r0,#0
+        LDMMIFD r13!,{r1-r4,pc}
+        BNE     WaitIMM
+
+WaitPPA
+  |
 Wait
 	STMFD	r13!,{r1-r2,lr}
-
+  ]
 	MOV	r2,#65536<<2
 ;	MOV	r2,#16384
 Wait_Loop1
@@ -568,11 +921,47 @@ Wait_Loop1
 	BL	ZipDisconnect				; Disconnect
 	BL	EnableIRQ
 	MOV	r0,#0					; Signal there was a failure
+  [ IMMSupport
+        LDMFD   r13!,{r1-r4,pc}
+  |
 	LDMFD	r13!,{r1,r2,pc}				; Return
+  ]
 
 Wait_Eloop1
 	AND	r0,r1,#&f0				; Mask off the unwanted bits
+  [ IMMSupport
+        LDMFD   r13!,{r1-r4,pc}
+  |
 	LDMFD	r13!,{r1,r2,pc}				; And return
+  ]
+
+  [ IMMSupport
+WaitIMM
+	MOV	r2,#65536<<2				; Our timeout value
+
+	MOV	r0,#&0C
+	STRB	r0,CommandReg				; Enter status mode
+
+WaitIMM_Loop1
+        LDRB    r1,StatusReg
+        TST     r1,#&80
+        BNE     WaitIMM_Eloop1
+        SUBS    r2,r2,#1
+        BGT     WaitIMM_Loop1
+
+        MOV     r0,#&04
+        STRB    r0,CommandReg
+        BL      ZipDisconnect
+        BL      EnableIRQ
+        MOV     r0,#0
+        LDMFD   r13!,{r1-r4,pc}
+
+WaitIMM_Eloop1
+	MOV     r0,#&04
+	STRB    r0,CommandReg
+	AND     r0,r1,#&B8
+	LDMFD   r13!,{r1-r4,pc}
+  ]
 
 ; SCSICommandRetries performs upto 5 SCSICommand calls. Entry and exit
 ; parameters are the same as SCSICommand
@@ -616,7 +1005,7 @@ SCRStat	ADR	r0,StatCmd
 	LDMEQFD	r13!,{r4,pc}				; ...to whence we came...
 
 	SUBS	r4,r4,#1
-	LDMIA	r13,{r0-r3}
+	LDMFD	r13,{r0-r3}
 	B	SCRLoop
 
 ; SCSICommand sends a SCSI command to the ZIP drive
@@ -630,7 +1019,6 @@ SCRStat	ADR	r0,StatCmd
 
 SCSICommand
 	STMFD	r13!,{r1-r10,lr}
-
 	LDRB	r11,PPAPrinter
 	TEQ	r11,#0
 	BEQ	SC_noprinter
@@ -643,7 +1031,6 @@ SCSICommand
 	LDMNEFD	r13!,{r1-r10,pc}			; ... back to the SWI caller
 
 SC_noprinter
-
  [ cmd_history = 1
 	BL	add_history
  ]
@@ -675,7 +1062,6 @@ SC_noprinter
 	LDMVSFD	r13!,{r1-r10,pc}
 
 ; This is the EPP SCSI routine.
-
 	BL	ZipConnect				; Connect to the Zip drive using EPP mode
 
 	MOV	r0,#ppa_host
@@ -739,17 +1125,33 @@ SC_CommandLoop
 	BL	Wait					; Wait for the drive to acknowledge it
 	TEQ	r0,#0
 	BEQ	SC_Error				; Unless it timed out...
-
 ; This is the EPP SCSI command loop. The first few lines checks to see if the
 ; drive thinks we've finished or not...
 
 SC_CLoop
+  [ IMMSupport
+        LDRB    r1,PreferredProtocol
+        CMP     r1,#IMMProtocol
+        BEQ     SC_CLoopIMM
+  ]
 	AND	r0,r0,#&f0
 	TEQ	r0,#&c0
 	MOVEQ	r7,#0					; &d0 is READ, &c0 is WRITE, &f0 is status
 	MOVNE	r7,#1
+        B       SC_Loop
+  [ IMMSupport
+SC_CLoopIMM
+        TEQ     r0,#&88
+        MOVEQ   r7,#0
+        MOVNE   r7,#1
+  ]
 
 SC_Loop
+  [ IMMSupport
+        LDRB    r1,PreferredProtocol
+        CMP     r1,#IMMProtocol
+        BEQ     SC_LoopIMM
+  ]
 	LDRB	r1,StatusReg
 	AND	r0,r1,#&f0
 	TEQ	r0,#&c0					; Is it a valid response?
@@ -758,6 +1160,16 @@ SC_Loop
 	BNE	SC_Error				; No, so signal an error
 	TEQ	r0,#&f0
 	BEQ	SC_EndCommand				; If it's the EOC, get the status
+	B       SC_SLoop
+  [ IMMSupport
+SC_LoopIMM
+        TEQ     r0,#&88
+        TEQNE   r0,#&98
+        TEQNE   r0,#&B8
+        BNE     SC_Error
+        TEQ     r0,#&B8
+        BEQ     SC_EndCommand
+  ]
 
 SC_SLoop
 	CMP	r9,#ppa_sectorsize			; Do we have more than 512 bytes of data to send?
@@ -765,7 +1177,6 @@ SC_SLoop
 
 	MOV	r0,#&0c
 	STRB	r0,CommandReg				; Enter status mode
-
 	BL	Wait					; Wait for the drive to signal that it is ready
 	MOV	r0,#&04
 	STRB	r0,CommandReg				; Leave status mode
@@ -777,7 +1188,6 @@ SC_SLoop
 
 	TEQ	r7,#1
 	BEQ	SC_FRx					; If we're receiving data, receive it
-
 ; This is the EPP mode fast Tx. It uses the 4 EPP data registers available
 ; from the UMC device in order to provide a slight speed increase.
 
@@ -820,8 +1230,18 @@ SC_WLoop2
 
 	TST	r0,#1
 	BNE	SC_Error4
+  [ IMMSupport
+	LDRB    r1,PreferredProtocol
+	CMP     r1,#PPAProtocol
+	BNE     SC_WLoopIMM
+  ]
 	TEQ	r0,#&f0
+	BEQ     SC_EndDLoop				; If the end is nigh, read the status
+  [ IMMSupport
+SC_WLoopIMM
+        TEQ     r0,#&B8 ; IMM
 	BEQ	SC_EndDLoop				; If the end is nigh, read the status
+  ]
 
 	MOV	r0,#&04
 	STRB	r0,CommandReg				; Leave status mode
@@ -843,7 +1263,6 @@ SC_WLoop2
 ; buffer), so do null transfers.
 
 SC_FakeTxRx
-
 	TEQ	r7,#1
 	MOVNE	r0,#0
 	STRNEB	r0,ECPData0				; Fake a transfer one way...
@@ -978,6 +1397,7 @@ SC_TxHLoop
 	MOVNE	r3,#&25					; ...and these two for Rx
 	MOVNE	r4,#&27
 
+; used to be TEQ...
 	CMP	r0,#0					; This is the reply from the previous Wait call... (clears V if EQ)
 SC_TxRxLoopTO
 	MOVEQ	r0,#ppa_timeout				; Ooh dear, looks like a timeout...
@@ -1335,7 +1755,11 @@ SetSectors
 ; r1 is the number of bytes not transferred
 
 SectorOp
+  [ IMMSupport
+        STMFD   r13!,{r2-r4,lr}
+  |
 	STMFD	r13!,{r2-r3,lr}
+  ]
 	MOV	r2,r0					; Point to data
 	MOV	r3,r1					; And the #bytes
 	ADR	r0,SCSITemp				; Point to command
@@ -1343,7 +1767,11 @@ SectorOp
 	BL	SCSICommand				; Perform the SCSI command
 	SUBS    r1,r3,#0				; This is how many bytes not read (R1 := R3, clears V)
 	MOVMI	r1,#0					; Due to a slight problem with PPA3, an extra byte is read
+  [ IMMSupport
+        LDMFD   r13!,{r2-r4,pc}
+  |
 	LDMFD	r13!,{r2-r3,pc}				; Exit (SCSICommand will set up the error)
+  ]
 
 ; ReadOp is a FileCore_DiscOp compliant sector reader
 ; On entry:
@@ -1845,10 +2273,13 @@ PS_noccqueue
 VPI0Detect
 	STMFD	r13!,{r1-r3,lr}
 	LDR	r11,ParallelAddress
-
 	BL	DisableIRQ
 	LDMVSFD	r13!,{r1-r3,pc}
 
+  [ IMMSupport
+        MOV     r0,#PPAProtocol
+        STRB    r0,PreferredProtocol
+  ]
 	BL	ZipDisconnect
 	BL	ZipConnectSPP
 
@@ -1881,5 +2312,110 @@ vpi0_none
 
 	SUBS	r0,r0,r0 ; R0 := 0, clears V
 	LDMFD	r13!,{r1-r3,pc}
+
+
+  [ IMMSupport
+
+VPI2Detect
+	STMFD	r13!,{r1-r4,lr}
+	LDR	r11,ParallelAddress
+	BL	DisableIRQ
+	LDMVSFD	r13!,{r1-r4,pc}
+
+	MOV     r0,#IMMProtocol
+	STRB    r0,PreferredProtocol
+
+	BL	ZipDisconnect
+	BL	ZipConnect
+
+	LDRB	r0,CommandReg
+	BIC	r0,r0,#2
+	STRB	r0,CommandReg
+
+	LDRB	r0,StatusReg
+	TST	r0,#1<<3
+	BNE	vpi2_none
+
+	LDRB	r0,CommandReg
+	ORR	r0,r0,#2
+	STRB	r0,CommandReg
+
+	LDRB	r0,StatusReg
+	TST	r0,#1<<3
+	BEQ	vpi2_none
+
+	BL	ZipDisconnect
+	BL	EnableIRQ
+
+	MOV	r0,#1
+	CLRV
+	LDMFD	r13!,{r1-r4,pc}
+
+vpi2_none
+	BL	ZipDisconnect
+	BL	EnableIRQ
+
+	SUBS	r0,r0,r0 ; R0 := 0, clears V
+	LDMFD	r13!,{r1-r4,pc}
+  ]
+
+;
+; Reset - send a reset pulse to the Zip drive...
+;
+
+Reset
+        STMFD   r13!,{r0-r4,lr}
+        LDR     r11,ParallelAddress
+        BL      DisableIRQ
+        LDMVSFD r13!,{r0-r4,pc}
+  [ IMMSupport
+        MOV     r0,#PPAProtocol
+        STRB    r0,PreferredProtocol
+  ]
+        BL      ZipDisconnect
+        BL      ZipConnect
+
+        MOV     r0,#&40
+        STRB    r0,DataReg
+        MOV     r0,#&08
+        STRB    r0,CommandReg
+        UDELAY
+        MOV     r0,#&0C
+        STRB    r0,CommandReg
+
+        UDELAY
+
+  [ IMMSupport
+        LDRB    r1,StatusReg
+        TEQ     r1,#&78
+        MOVEQ   r0,#IMMProtocol
+        STREQB  r0,PreferredProtocol
+        BEQ     ResetIMM
+  ]
+
+        BL      ZipDisconnect
+        UDELAY
+        BL      EnableIRQ
+        CLRV
+        LDMFD   r13!,{r0-r4,pc}
+
+  [ IMMSupport
+ResetIMM
+        BL      ZipDisconnect
+        BL      ZipConnect
+        ZRP
+        UDELAY
+
+        LDRB    r1,StatusReg
+        TEQ     r1,#&78
+        MOVEQ   r0,#PPAProtocol
+        STREQB  r0,PreferredProtocol
+
+        BL      ZipDisconnect
+        UDELAY
+        BL      EnableIRQ
+        CLRV
+        LDMFD   r13!,{r0-r4,pc}
+  ]
 
 	END
