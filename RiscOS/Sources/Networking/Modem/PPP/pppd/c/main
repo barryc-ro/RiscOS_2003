@@ -1,0 +1,1378 @@
+/*
+ * main.c - Point-to-Point Protocol main module
+ *
+ * Copyright (c) 1989 Carnegie Mellon University.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms are permitted
+ * provided that the above copyright notice and this paragraph are
+ * duplicated in all such forms and that any documentation,
+ * advertising materials, and other materials related to such
+ * distribution and use acknowledge that the software was developed
+ * by Carnegie Mellon University.  The name of the
+ * University may not be used to endorse or promote products derived
+ * from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+ * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+ */
+
+/* Carnegie Mellon acknowledged in c.if_ppp */
+
+/*#define SETSID*/
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <setjmp.h>
+#pragma no_warn_deprecated
+#include "sys/signal.h"
+#pragma warn_deprecated
+#include "sys/types.h"
+#include "netinet/in_systm.h"
+#include "../ppphdr.h"
+#include "errno.h"
+#include "socklib.h"
+#include "inetlib.h"
+/*#include <sys/fcntl.h>*/
+#include <sys/syslog.h>
+/*#include <netdb.h>*/
+#include <utmp.h>
+/*#include <pwd.h>*/
+/*#include <sys/wait.h>*/
+
+/*
+ * If REQ_SYSOPTIONS is defined to 1, pppd will not run unless
+ * /etc/ppp/options exists.
+ */
+#ifndef	REQ_SYSOPTIONS
+#define REQ_SYSOPTIONS	0
+#endif
+
+
+#include <net/if.h>
+
+
+#ifdef BLOCKDRIVERS
+    #include "^.blockdrive.h"
+#else
+    #include "^.ioctl.h"
+    #include "^.serial.h"
+#endif
+
+#include "^.if_ppp.h"
+
+#include "callout.h"
+#include "ppp.h"
+#include "magic.h"
+#include "fsm.h"
+#include "auth.h"
+#include "lcp.h"
+#include "ipcp.h"
+#include "upap.h"
+#include "chap.h"
+#ifndef __riscos
+#include "lock.h"
+#endif
+#include "options.h"
+#include "minixlib.h"
+
+#include "pppd.h"
+#include "pathnames.h"
+#include "patchlevel.h"
+
+#include "swis.h"
+
+#include "^.pppd.h"
+
+#include "main.h"
+
+#include "dialler.h"
+
+#define OutputFreeSpaceThres 63
+
+/* interface vars */
+char ifname[IFNAMSIZ];		/* Interface name */
+int ifunit;			/* Interface unit number */
+
+char *progname;			/* Name of this program */
+char hostname[MAXNAMELEN];	/* Our hostname */
+char our_name[MAXNAMELEN];
+char remote_name[MAXNAMELEN];
+
+#ifdef BLOCKDRIVERS
+char devname[MAXPATHLEN] = "Internal";	/* Device name */
+#else
+char devname[MAXPATHLEN] = "devices:$.Serial1";	/* Device name */
+#endif
+
+int default_device = TRUE;	/* use default device (stdin/out) */
+
+int fd;			    /* Device file descriptor */
+int s;			    /* Socket file descriptor */
+
+int phase=PHASE_DEAD;			/* where the link is at */
+
+static int initformat, initspeed;         /* Initial serial setup */
+
+#ifndef BLOCKDRIVERS
+  static int initblocking_in;     /* Initial blocking state of serial input stream */
+  static int initblocking_out;    /* Initial blocking state of serial output stream */
+#endif
+
+/*static int initfdflags = -1;*/	/* Initial file descriptor flags */
+
+static int restore_term;	/* 1 => we've munged the terminal */
+
+u_char outpacket_buf[MTU+DLLHEADERLEN]; /* buffer for outgoing packet */
+static u_char inpacket_buf[MTU+DLLHEADERLEN]; /* buffer for incoming packet */
+
+int hungup;			/* terminal has been hung up */
+
+/* configured variables */
+
+int explicit_vj;                /* User explicitly specified VJ/no VJ */
+int debug;		        /* Debug flag */
+int kdebugflag;  		/* Kernel debugging flag */
+char user[MAXNAMELEN];		/* username for PAP */
+char passwd[MAXSECRETLEN];	/* password for PAP */
+/*char *connector;*/		/* "connect" command */
+/*char *disconnector;*/     	/* "disconnect" command */
+int inspeed;		        /* Input/Output speed requested */
+int baud_rate;			/* bits/sec currently used */
+u_long netmask;		        /* netmask to use on ppp interface */
+int crtscts;		        /* use h/w flow control */
+int nodetach;		        /* don't fork */
+int modem;			/* use modem control lines */
+int auth_required;		/* require peer to authenticate */
+int proxyarp;		        /* set entry in arp table */
+/*int persist;*/		        /* re-initiate on termination */
+/*int answer = 0;*/			/* wait for incoming call */
+int lockflag;		        /* lock the serial device */
+int idle_time_limit;            /* How long to be idle before disconnecting */
+int default_idle_time_limit = 0;
+volatile int idle_time;
+
+#ifdef BLOCKDRIVERS
+extern u_char *ring_insert;
+#endif
+
+/* prototypes */
+static void hup(int);
+static void intr(int);
+static void term(int);
+static void alrm(int);
+static void io(int);
+/*static void chld(int);*/
+static void set_up_tty(int, int);
+static void setdtr(int, int);
+/*static int device_script(char *, int, int);*/
+/*static void reap_kids(void);*/
+static void cleanup(int, caddr_t);
+static void pr_log(void *, char *, ...);
+
+extern	char	*ttyname(int);
+extern	char	*getlogin(void);
+
+/*
+ * PPP Data Link Layer "protocol" table.
+ * One entry per supported protocol.
+ */
+static struct protent {
+    u_short protocol;
+    void (*init)();
+    void (*input)();
+    void (*protrej)();
+    int  (*printpkt)();
+    char *name;
+} prottbl[] = {
+    { LCP, lcp_init, lcp_input, lcp_protrej, lcp_printpkt, "LCP" },
+    { IPCP, ipcp_init, ipcp_input, ipcp_protrej, ipcp_printpkt, "IPCP" },
+    { UPAP, upap_init, upap_input, upap_protrej, upap_printpkt, "PAP" },
+    { CHAP, ChapInit, ChapInput, ChapProtocolReject, ChapPrintPkt, "CHAP" },
+};
+
+#define N_PROTO		(sizeof(prottbl) / sizeof(prottbl[0]))
+
+jmp_buf exitenv;
+int internet_version;
+int dialler_flags = 0;
+
+#define Socket_Version 0x41222
+
+
+_kernel_oserror *pppd_main(int argc, char *argv[])
+{
+    int i;
+    sigset_t mask;
+    struct sigaction sa;
+    int a;
+    _kernel_oserror *e;
+#   ifndef __riscos
+    FILE *pidfile;
+    struct passwd *pw;
+#   endif
+
+
+    if (_swix(Socket_Version, _OUT(0), &internet_version))
+        internet_version = 408;
+
+    /* To allow exit() calls from deeper levels */
+    if ((a=setjmp(exitenv)) != 0)
+        return 0;
+
+    if (phase != PHASE_DEAD)
+    {
+    	lcp_lowerdown(0);
+    	cleanup(0, NULL);
+    }
+
+
+    /* Set all static variables back to initial values */
+    fd=s=-1;
+    phase=PHASE_DEAD;
+    initformat=initspeed=restore_term=hungup=0;
+  #ifndef BLOCKDRIVERS
+    initblocking_in = IOCtl_non_blocking_disabled;
+    initblocking_out = IOCtl_non_blocking_disabled;
+  #endif
+    debug=9;
+    kdebugflag=0;
+    /*connector=disconnector=NULL;*/
+    inspeed=baud_rate=netmask=crtscts=nodetach=idle_time_limit=idle_time=0;
+    default_idle_time_limit = 0;
+    dialler_flags = 0;
+    modem=auth_required=proxyarp=/*persist=*/lockflag=explicit_vj=0;
+    passwd[0]='\0'; user[0]='\0'; our_name[0]='\0';
+
+    /*
+     * Initialize magic number package.
+     */
+    magic_init();
+
+    /* Signals should be initially all enabled */
+    sigemptyset(&mask);
+    sigprocmask(SIG_SETMASK, &mask, 0);
+
+    if (gethostname(hostname, MAXNAMELEN) < 0 )
+    {
+        perror("couldn't get hostname");
+        die(1);
+    }
+    hostname[MAXNAMELEN-1] = 0;
+
+    /*
+     * Initialize to the standard option set, then parse, in order,
+     * the system options file, and the command line arguments.
+     */
+    for (i = 0; i < N_PROTO; i++)
+        (*prottbl[i].init)(0);
+
+    progname = *argv;
+
+    if (!options_from_file(_PATH_SYSOPTIONS, REQ_SYSOPTIONS, 0) ||
+        !parse_args(argc, argv))
+    {
+        MAINDEBUG ((LOG_INFO, "Failed to read arguments"));
+        die(1);
+    }
+
+    e=pppattach();
+    if (e)
+        return e;
+
+    check_auth_options();
+    setipdefault();
+
+    syslog(LOG_NOTICE, "pppd %s.%d", VERSION, PATCHLEVEL);
+
+    /* Get an internet socket for doing socket ioctl's on. */
+    if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+	syslog(LOG_ERR, "socket : %m");
+	die(1);
+    }
+
+    /*
+     * Compute mask of all interesting signals and install signal handlers
+     * for each.  Only one signal handler may be active at a time.  Therefore,
+     * all other signals should be masked when any handler is executing.
+     */
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGHUP);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGALRM);
+    sigaddset(&mask, SIGIO);
+
+#define SIGNAL(s, handler)	{ \
+	sa.sa_handler = handler; \
+	if (sigaction(s, &sa, NULL) < 0) { \
+	    syslog(LOG_ERR, "sigaction(%d): %m", s); \
+	    die(1); \
+	} \
+    }
+    sa.sa_mask = mask;
+    sa.sa_flags = 0;
+    SIGNAL(SIGHUP, hup);		/* Hangup */
+    SIGNAL(SIGINT, intr);		/* Interrupt */
+    SIGNAL(SIGTERM, term);		/* Terminate */
+    SIGNAL(SIGALRM, alrm);		/* Timeout */
+    SIGNAL(SIGIO, io);			/* Input available */
+    /*
+     * Block SIGIOs and SIGPOLLs for now
+     */
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGIO);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
+
+    /*
+     * Open the serial device and set it up to be the ppp interface.
+     */
+    if ((fd = pppopen(0/*devname, O_RDWR *//*| O_NDELAY*/)) < 0) {
+	syslog(LOG_ERR, "open(%s): %m", devname);
+	die(1);
+    }
+    hungup = 0;
+
+#if 0
+    /* run connection script */
+    if (connector)
+    {
+	MAINDEBUG((LOG_INFO, "Connecting with <%s>", connector));
+
+	/* set line speed, flow control, etc.; set CLOCAL for now */
+	set_up_tty(fd, 1);
+
+	/* drop dtr to hang up in case modem is off hook */
+	if (!default_device && modem)
+	{
+	    setdtr(fd, FALSE);
+	    sleep(1);
+	    setdtr(fd, TRUE);
+	}
+
+	if (device_script(connector, fd, fd) < 0)
+	{
+	    syslog(LOG_ERR, "could not set up connection");
+	    setdtr(fd, FALSE);
+	    die(1);
+	}
+
+	syslog(LOG_INFO, "Connected...");
+	sleep(1);		/* give it time to set up its terminal */
+    }
+#endif
+
+    /* set up the serial device as a ppp interface */
+    establish_ppp();
+
+    syslog(LOG_INFO, "Using interface ppp%d", ifunit);
+    sprintf(ifname, "ppp%d", ifunit);
+
+    /* set line speed, flow control, etc.; clear CLOCAL if modem option */
+    setdtr(fd, TRUE);
+    set_up_tty(fd, 0);
+
+#if 0
+    /* if user didn't specify whether he wanted VJ or not, then choose a
+       value */
+
+    if (!explicit_vj)
+    {
+        if (baud_rate <= 19200)
+            setvj();
+        else
+            setnovj();
+    }
+#endif
+
+
+    /*
+     * Record initial device flags, then set device to cause SIGIO
+     * signals to be generated.
+     */
+/*
+    if ((initfdflags = fcntl(fd, F_GETFL)) == -1)
+    {
+	syslog(LOG_ERR, "fcntl(F_GETFL): %m");
+	die(1);
+    }
+    if (fcntl(fd, F_SETFL, FNDELAY | FASYNC) == -1)
+    {
+	syslog(LOG_ERR, "fcntl(F_SETFL, FNDELAY | FASYNC): %m");
+	die(1);
+    }
+*/
+    /*
+     * Block all signals, start opening the connection, and  wait for
+     * incoming signals (reply, timeout, etc.).
+     */
+    syslog(LOG_NOTICE, "Connect: %s <--> %s", ifname, devname);
+    sigprocmask(SIG_BLOCK, &mask, NULL); /* Block signals now */
+    lcp_lowerup(0);		/* XXX Well, sort of... */
+    lcp_open(0);		/* Start protocol */
+
+    phase = PHASE_ESTABLISH;
+
+    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+
+    return 0;
+}
+
+int pppd_PHASE_DEAD(void)
+{
+    phase=PHASE_DEAD;
+
+    socketclose(s);
+    s=-1;
+
+#if 0
+    /*
+     * Run disconnector script, if requested
+     */
+    if (disconnector)
+    {
+	if (device_script(disconnector, fd, fd) < 0)
+	{
+    	    pppclose(fd);
+
+	    syslog(LOG_WARNING, "disconnect script failed");
+	    die(1);
+	}
+
+	syslog(LOG_INFO, "Disconnected...");
+    }
+#endif
+
+    cleanup(0, NULL);
+
+    return 0;
+}
+
+
+/*
+ * set_up_tty: Set up the serial port on `fd' for 8 bits, no parity,
+ * at the requested speed, etc.  If `local' is true, set CLOCAL
+ * regardless of whether the modem option was specified.
+ */
+static void set_up_tty(int fd, int local)
+{
+    int speed, oldspeed, oldformat, status;
+  #ifndef BLOCKDRIVERS
+    ioctl_t ioctl;
+  #endif
+
+    IGNORE(local);
+    IGNORE(fd);
+
+    speed = inspeed;
+  #ifdef OLDCODE
+    if (speed)
+    {
+        oldspeed=driver_txspeed(-1);
+    }
+    else
+    {
+        speed=driver_txspeed(-1);
+        oldspeed=speed;
+    }
+
+    driver_txspeed(speed);
+    driver_rxspeed(speed);
+  #endif
+
+  #ifdef BLOCKDRIVERS
+    if (speed)
+    {
+        oldspeed=driver_txspeed(-1);
+        driver_txspeed(speed);
+        driver_rxspeed(speed);
+    }
+
+    else
+    {
+        speed=driver_txspeed(-1);
+        oldspeed=speed;
+    }
+
+  #else
+    ioctl.reason = IOCtl_baud_rate;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+
+    if (speed)
+    {
+        oldspeed = ioctl.data;
+
+        ioctl.read = 0;
+        ioctl.write = 1;
+        ioctl.data = speed;
+
+        _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+    }
+
+    else
+    {
+        oldspeed = speed = ioctl.data;
+    }
+  #endif
+
+    /* Set 8N1 data format */
+  #ifdef BLOCKDRIVERS
+    oldformat=driver_wordformat(-1);
+    driver_wordformat(0);
+  #else
+    ioctl.reason = IOCtl_data_format;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+    oldformat = ioctl.data;
+
+    ioctl.read = 0;
+    ioctl.write = 1;
+    ioctl.data = (IOCtl_data_length_8 | IOCtl_stop_bits_1 | IOCtl_no_parity);
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+  #endif
+
+
+    if (!restore_term)
+    {
+	initformat = oldformat;
+	initspeed = oldspeed;
+    }
+
+    baud_rate = speed;
+    restore_term = TRUE;
+
+    /* This next bit of code to read the control lines appears to have no use but has
+     * been left in for now.
+     */
+  #ifdef BLOCKDRIVERS
+    status=driver_controllines(-1);
+  #else
+    ioctl.reason = IOCtl_control_lines;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+    status = ioctl.data;
+  #endif
+
+
+  #ifdef BLOCKDRIVERS
+    if (crtscts)
+        driver_flowcontrol(crtscts);
+  #else
+    if (crtscts)
+    {
+        ioctl.reason = IOCtl_handshaking;
+        ioctl.group = 0;
+        ioctl.reserved = 0;
+        ioctl.read = 0;
+        ioctl.write = 1;
+        ioctl.data = crtscts;
+
+        _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+    }
+  #endif
+
+
+  #ifndef BLOCKDRIVERS
+    ioctl.reason = IOCtl_buffer_threshold;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 1;
+    ioctl.data = OutputFreeSpaceThres;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+    pdebug ((LOG_DEBUG, "Output buffer threshold: %d", ioctl.data));
+  #endif
+
+
+    /* Enable non-blocking block reads and writes if using new serial interface */
+  #ifndef BLOCKDRIVERS
+    ioctl.group = IOCtl_group_misc;
+    ioctl.reason = IOCtl_non_blocking;
+    ioctl.reserved = 0;
+
+    if (restore_term)
+    {
+        ioctl.read = 1;
+        ioctl.write = 0;
+
+        if (_swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl) == NULL)
+            initblocking_in = ioctl.data;
+
+        if (_swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl) == NULL)
+            initblocking_out = ioctl.data;
+    }
+
+    ioctl.read = 0;
+    ioctl.write = 1;
+    ioctl.data = IOCtl_non_blocking_enabled;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+
+  #ifdef DEBUG
+    ioctl.read = 1;
+    ioctl.write = 0;
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+    if (ioctl.data == IOCtl_non_blocking_enabled)
+        pdebug ((LOG_DEBUG, "non-blocking input"));
+    else
+        pdebug ((LOG_DEBUG, "blocking input"));
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+    if (ioctl.data == IOCtl_non_blocking_enabled)
+        pdebug ((LOG_DEBUG, "non-blocking output"));
+    else
+        pdebug ((LOG_DEBUG, "blocking output"));
+  #endif
+  #endif
+}
+
+/*
+ * setdtr - control the DTR line on the serial port.
+ * This is called from die(), so it shouldn't call die().
+ */
+
+#ifdef BLOCKDRIVERS
+
+static void setdtr(int fd, int on)
+{
+    int status;
+
+    IGNORE(fd);
+
+    status=driver_controllines(-1);
+
+    if (on)
+        status|=1;
+    else
+        status&=~1;
+    driver_controllines(status);
+}
+
+#else
+
+static void setdtr(int fd, int on)
+{
+    ioctl_t ioctl;
+
+    IGNORE(fd);
+
+    ioctl.reason = IOCtl_control_lines;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+
+    if (on)
+        ioctl.data |= IOCtl_control_line_DTR;
+    else
+        ioctl.data &= ~IOCtl_control_line_DTR;
+
+    ioctl.read = 0;
+    ioctl.write = 1;
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+}
+
+#endif
+
+/*
+ * quit - Clean up state and exit.
+ */
+void quit(void)
+{
+    die(0);
+}
+
+/*
+ * die - like quit, except we can specify an exit status.
+ */
+void die(int status)
+{
+    cleanup(0, NULL);
+    syslog(LOG_INFO, "Exit.");
+    exit(status);
+}
+
+/*
+ * cleanup - restore anything which needs to be restored before we exit
+ */
+/* ARGSUSED */
+void cleanup(int status, caddr_t arg)
+{
+    IGNORE(arg);
+    IGNORE(status);
+
+    /* Paranoia */
+    _swix(OS_RemoveTickerEvent, _INR(0,1), timeout_entry, module_wsp);
+
+    if (fd >= 0) {
+	/* drop dtr to hang up */
+	if (modem && (dialler_flags & DiallerFlags_UsingDialler) == 0)
+	    setdtr(fd, FALSE);
+
+/*	if (initfdflags != -1 && fcntl(fd, F_SETFL, initfdflags) < 0)
+	    syslog(LOG_WARNING, "fcntl(F_SETFL, fdflags): %m");
+	initfdflags = -1;*/
+
+	disestablish_ppp();
+
+      #ifdef BLOCKDRIVERS
+        if (restore_term && (dialler_flags & DiallerFlags_UsingDialler) == 0)
+        {
+            driver_txspeed(initspeed);
+            driver_rxspeed(initspeed);
+            driver_wordformat(initformat);
+        }
+      #else
+        if (restore_term && serial_out != 0 &&
+            (dialler_flags & DiallerFlags_UsingDialler) == 0)
+        {
+            ioctl_t ioctl;
+
+            ioctl.reason = IOCtl_baud_rate;
+            ioctl.group = 0;
+            ioctl.reserved = 0;
+            ioctl.read = 0;
+            ioctl.write = 1;
+            ioctl.data = initspeed;
+
+            _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+
+
+            ioctl.reason = IOCtl_data_format;
+            ioctl.data = initformat;
+
+            _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+        }
+
+        if (restore_term)
+        {
+            ioctl_t ioctl;
+
+            ioctl.group = IOCtl_group_misc;
+            ioctl.reason = IOCtl_non_blocking;
+            ioctl.reserved = 0;
+            ioctl.read = 0;
+            ioctl.write = 1;
+
+            if (serial_out != 0)
+            {
+                ioctl.data = initblocking_out;
+                _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+            }
+        }
+      #endif
+
+
+	/*pppclose(fd);*/
+	fd = -1;
+    }
+    if (s>=0)
+    {
+        socketclose(s);
+        s=-1;
+    }
+
+    pppclose(0); /* Hack - ensure serial device is closed - it should only
+                    be opened in pppopen */
+}
+
+
+static struct callout *callout = NULL;		/* Callout list */
+static int schedtime;           		/* Time last timeout was set */
+
+/*
+ * timeout - Schedule a timeout.
+ *
+ * Note that this timeout takes the number of seconds, NOT hz (as in
+ * the kernel).
+ */
+void timeout(void (*func)(), caddr_t arg, int time)
+{
+    struct callout *newp, **oldpp;
+    _kernel_oserror *e;
+
+    pdebug((LOG_DEBUG, "Timeout %p:%p in %d seconds.", func, arg, time));
+
+    /*
+     * Allocate timeout.
+     */
+    if ((newp = (struct callout *) malloc(sizeof(struct callout))) == NULL)
+    {
+	syslog(LOG_ERR, "Out of memory in timeout()!");
+	die(1);
+    }
+    newp->c_arg = arg;
+    newp->c_func = func;
+
+    /*
+     * Find correct place to link it in and decrement its time by the
+     * amount of time used by preceding timeouts.
+     */
+    for (oldpp = &callout;
+	 *oldpp && (*oldpp)->c_time <= time;
+	 oldpp = &(*oldpp)->c_next)
+	time -= (*oldpp)->c_time;
+    newp->c_time = time;
+    newp->c_next = *oldpp;
+    if (*oldpp)
+	(*oldpp)->c_time -= time;
+    *oldpp = newp;
+
+    /*
+     * If this is now the first callout then we have to set a new
+     * itimer.
+     */
+    if (callout == newp)
+    {
+	pdebug((LOG_DEBUG, "Setting OS_CallAfter for %d seconds in timeout.",
+		   time));
+	if ((e=_swix(OS_CallAfter, _INR(0,2), time*100, timeout_entry, module_wsp)) != NULL)
+	{
+	    syslog(LOG_ERR, "OS_CallAfter: %s", e->errmess);
+	    die(1);
+	}
+	_swix(OS_ReadMonotonicTime, _OUT(0), &schedtime);
+    }
+}
+
+_kernel_oserror *timeout_handler(_kernel_swi_regs *r, void *pw)
+{
+    IGNORE(pw);
+    IGNORE(r);
+
+    pppd_signal_handler(SIGALRM);
+
+    return NULL;
+}
+
+/*
+ * untimeout - Unschedule a timeout.
+ */
+void untimeout(void (*func)(), caddr_t arg)
+{
+    struct callout **copp, *freep;
+    int time;
+    int reschedule = 0;
+    _kernel_oserror *e;
+    int s=_kernel_irqs_disabled();
+
+    pdebug((LOG_DEBUG, "Untimeout %x:%x.", (int) func, (int) arg));
+
+    _kernel_irqs_off();
+
+    /*
+     * If the first callout is unscheduled then we have to set a new
+     * itimer.
+     */
+    if (callout &&
+	callout->c_func == func &&
+	callout->c_arg == arg)
+	reschedule = 1;
+
+    /*
+     * Find first matching timeout.  Add its time to the next timeouts
+     * time.
+     */
+    for (copp = &callout; *copp; copp = &(*copp)->c_next)
+	if ((*copp)->c_func == func &&
+	    (*copp)->c_arg == arg)
+	{
+	    freep = *copp;
+	    *copp = freep->c_next;
+	    if (*copp)
+		(*copp)->c_time += freep->c_time;
+	    free((char *) freep);
+	    break;
+	}
+
+    if (reschedule)
+    {
+	time = callout ? callout->c_time : 0;
+	pdebug((LOG_DEBUG, "Setting OS_CallAfter for %d seconds in untimeout.",
+		   time));
+
+        e=_swix(OS_RemoveTickerEvent, _INR(0,1), timeout_entry, module_wsp);
+	if (e)
+	{
+	    syslog(LOG_ERR, "OS_RemoveTickerEvent: %s", e->errmess);
+	    die(1);
+	}
+
+        if (time)
+        {
+            e=_swix(OS_CallAfter, _INR(0,2), time*100, timeout_entry, module_wsp);
+            if (e)
+            {
+                syslog(LOG_ERR, "OS_CallAfter: %s", e->errmess);
+                die(1);
+            }
+        }
+        _swix(OS_ReadMonotonicTime, _OUT(0), &schedtime);
+    }
+
+    if (s)
+        _kernel_irqs_on();
+}
+
+
+/*
+ * adjtimeout - Decrement the first timeout by the amount of time since
+ * it was scheduled.
+ */
+static void adjtimeout(void)
+{
+    int tv;
+    int timediff;
+
+    if (callout == NULL)
+	return;
+    /*
+     * Make sure that the clock hasn't been warped dramatically.
+     * Account for recently expired, but blocked timer by adding
+     * small fudge factor.
+     */
+    _swix(OS_ReadMonotonicTime, _IN(0), &tv);
+
+    timediff = (tv - schedtime)*100;
+
+    if (timediff < 0 ||	timediff > callout->c_time + 1)
+	return;
+
+    callout->c_time -= timediff;	/* OK, Adjust time */
+}
+
+
+/*
+ * hup - Catch SIGHUP signal.
+ *
+ * Indicates that the physical layer has been disconnected.
+ */
+static void hup(int sig)
+{
+    IGNORE(sig);
+
+    syslog(LOG_INFO, "Hangup (SIGHUP)");
+
+    hungup = 1;			/* they hung up on us! */
+    /*persist = 0;*/		/* don't try to restart */
+    adjtimeout();		/* Adjust timeouts */
+    lcp_lowerdown(0);		/* Reset connection */
+    quit();			/* and die */
+}
+
+
+/*
+ * term - Catch SIGTERM signal.
+ *
+ * Indicates that we should initiate a graceful disconnect and exit.
+ */
+static void term(int sig)
+{
+    IGNORE(sig);
+
+    syslog(LOG_INFO, "Terminating link.");
+    /*persist = 0;*/		/* don't try to restart */
+    adjtimeout();		/* Adjust timeouts */
+    lcp_close(0);		/* Close connection */
+}
+
+
+/*
+ * intr - Catch SIGINT signal (DEL/^C).
+ *
+ * Indicates that we should initiate a graceful disconnect and exit.
+ */
+static void intr(int sig)
+{
+    IGNORE(sig);
+
+    syslog(LOG_INFO, "Interrupt received: terminating link");
+    /*persist = 0;*/		/* don't try to restart */
+    adjtimeout();		/* Adjust timeouts */
+    lcp_close(0);		/* Close connection */
+}
+
+
+/*
+ * alrm - Catch SIGALRM signal.
+ *
+ * Indicates a timeout.
+ */
+static void alrm(int sig)
+{
+    struct callout *freep, *list, *last;
+
+    IGNORE(sig);
+
+    pdebug((LOG_DEBUG, "Alarm"));
+
+    if (callout == NULL)
+	return;
+
+    /*
+     * Get the first scheduled timeout and any that were scheduled
+     * for the same time as a list, and remove them all from callout
+     * list.
+     */
+    list = last = callout;
+    while (last->c_next != NULL && last->c_next->c_time == 0)
+	last = last->c_next;
+    callout = last->c_next;
+    last->c_next = NULL;
+
+    /*
+     * Set a new itimer if there are more timeouts scheduled.
+     */
+    if (callout)
+    {
+        int time = callout->c_time;
+        _kernel_oserror *e;
+
+	pdebug((LOG_DEBUG, "Setting OS_CallAfter for %d seconds in alrm.",
+		   time));
+	if ((e=_swix(OS_CallAfter, _INR(0,2), time*100, timeout_entry, module_wsp))!=NULL)
+	{
+	    syslog(LOG_ERR, "OS_CallAfter: %s", e->errmess);
+	    die(1);
+	}
+	_swix(OS_ReadMonotonicTime, _OUT(0), &schedtime);
+    }
+
+    /*
+     * Now call all the timeout routines scheduled for this time.
+     */
+    while (list)
+    {
+        pdebug((LOG_DEBUG, "Calling %p with %x", list->c_func, list->c_arg));
+	(*list->c_func)(list->c_arg);
+	freep = list;
+	list = list->c_next;
+	free((char *) freep);
+    }
+}
+
+#if 0
+/*
+ * chld - Catch SIGCHLD signal.
+ * Calls reap_kids to get status for any dead kids.
+ */
+static void chld(int sig)
+{
+    IGNORE(sig);
+
+    reap_kids();
+}
+#endif
+
+/*
+ * io - Catch SIGIO signal.
+ *
+ * Indicates that incoming data is available.
+ */
+static void io(int sig)
+{
+    int len, i;
+    u_char *p;
+    u_short protocol;
+
+    IGNORE(sig);
+
+    pdebug((LOG_DEBUG, "IO signal received"));
+    adjtimeout();		/* Adjust timeouts */
+
+    /* Yup, this is for real */
+    for (;;) {			/* Read all available packets */
+	p = inpacket_buf;	/* point to beginning of packet buffer */
+
+	len = read_packet(inpacket_buf);
+	if (len < 0)
+	    return;
+
+	if (len == 0) {
+	    pdebug((LOG_DEBUG, "End of file on fd!"));
+	    lcp_lowerdown(0);
+	    return;
+	}
+
+	if (debug/* && (debugflags & DBG_INPACKET)*/)
+	    log_packet(p, len, "rcvd ");
+
+	if (len < DLLHEADERLEN) {
+	    MAINDEBUG((LOG_INFO, "io(): Received short packet."));
+	    return;
+	}
+
+	p += 2;				/* Skip address and control */
+	GETSHORT(protocol, p);
+	len -= DLLHEADERLEN;
+
+	/*
+	 * Toss all non-LCP packets unless LCP is OPEN.
+	 */
+	if (protocol != LCP && lcp_fsm[0].state != OPENED) {
+	    MAINDEBUG((LOG_INFO,
+		       "io(): Received non-LCP packet when LCP not open."));
+            ppp_softc[0].st.st_unwanted_frames++;
+	    return;
+	}
+
+	/*
+	 * Upcall the proper protocol input routine.
+	 */
+	for (i = 0; i < sizeof (prottbl) / sizeof (struct protent); i++)
+	    if (prottbl[i].protocol == protocol) {
+		(*prottbl[i].input)(0, p, len);
+		break;
+	    }
+
+	if (i == sizeof (prottbl) / sizeof (struct protent)) {
+	    syslog(LOG_WARNING, "input: Unknown protocol (%x) received!",
+		   protocol);
+	    lcp_sprotrej(0, p - DLLHEADERLEN, len + DLLHEADERLEN);
+            ppp_softc[0].st.st_unwanted_frames++;
+	}
+    }
+}
+
+/*
+ * demuxprotrej - Demultiplex a Protocol-Reject.
+ */
+void
+demuxprotrej(unit, protocol)
+    int unit;
+    u_short protocol;
+{
+    int i;
+
+    /*
+     * Upcall the proper Protocol-Reject routine.
+     */
+    for (i = 0; i < sizeof (prottbl) / sizeof (struct protent); i++)
+	if (prottbl[i].protocol == protocol) {
+	    (*prottbl[i].protrej)(unit);
+	    return;
+	}
+
+    syslog(LOG_WARNING,
+	   "demuxprotrej: Unrecognized Protocol-Reject for protocol %d!",
+	   protocol);
+}
+
+
+#   ifndef __riscos
+/*
+ * device_script - run a program to connect or disconnect the
+ * serial device.
+ */
+static int device_script(char *program, int in, int out)
+{
+    int pid;
+    int status;
+    sigset_t mask;
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGHUP);
+    sigprocmask(SIG_BLOCK, &mask, &mask);
+
+    pid = fork();
+
+    if (pid < 0) {
+	syslog(LOG_ERR, "fork: %m");
+	die(1);
+    }
+
+    if (pid == 0) {
+	setreuid(getuid(), getuid());
+	setregid(getgid(), getgid());
+	sigprocmask(SIG_SETMASK, &mask, NULL);
+	dup2(in, 0);
+	dup2(out, 1);
+	execl("/bin/sh", "sh", "-c", program, (char *)0);
+	syslog(LOG_ERR, "could not exec /bin/sh: %m");
+	_exit(99);
+	/* NOTREACHED */
+    }
+
+    while (waitpid(pid, &status, 0) < 0) {
+	if (errno == EINTR)
+	    continue;
+	syslog(LOG_ERR, "waiting for (dis)connection process: %m");
+	die(1);
+    }
+    sigprocmask(SIG_SETMASK, &mask, NULL);
+
+    return (status == 0 ? 0 : -1);
+}
+#   endif
+
+
+/*
+ * run-program - execute a program with given arguments,
+ */
+int run_program(char *prog, char **args, int must_exist)
+{
+    char buffer[256];
+    int n=0;
+
+    IGNORE(must_exist);
+
+    strcpy(buffer,"/");
+    strcat(buffer, prog);
+
+    while (args[n])
+    {
+        strcat(buffer, " ");
+        strcat(buffer, args[n]);
+        n++;
+    }
+
+    _swix(OS_CLI, _IN(0), buffer);
+
+    return 0;
+}
+
+#if 0
+/*
+ * reap_kids - get status from any dead child processes,
+ * and log a message for abnormal terminations.
+ */
+void reap_kids(void)
+{
+    int pid;
+    union wait status;
+
+    if (n_children == 0)
+	return;
+    if ((pid = waitpid(-1, &status, WNOHANG)) == -1) {
+	if (errno != ECHILD)
+	    syslog(LOG_ERR, "waitpid: %m");
+	return;
+    }
+    if (pid > 0) {
+	--n_children;
+	if (WIFSIGNALED(status)) {
+	    syslog(LOG_WARNING, "child process %d terminated with signal %d",
+		   pid, WTERMSIG(status));
+	}
+    }
+}
+#endif
+
+/*
+ * log_packet - format a packet and log it.
+ */
+
+static char line[256];		/* line to be logged accumulated here */
+static char *linep;
+
+void log_packet(u_char *p, int len, char *prefix)
+{
+    strcpy(line, prefix);
+    linep = line + strlen(line);
+    format_packet(p, len, pr_log, NULL);
+    if (linep != line)
+	MAINDEBUG((LOG_DEBUG, "%s", line));
+}
+
+/*
+ * format_packet - make a readable representation of a packet,
+ * calling `printer(arg, format, ...)' to output it.
+ */
+void format_packet(u_char *p, int len, void (*printer)(void *, char *, ...), void *arg)
+{
+    int i, n;
+    u_short proto;
+    u_char x;
+
+    if (len >= DLLHEADERLEN && p[0] == ALLSTATIONS && p[1] == UI) {
+	p += 2;
+	GETSHORT(proto, p);
+	len -= DLLHEADERLEN;
+	for (i = 0; i < N_PROTO; ++i)
+	    if (proto == prottbl[i].protocol)
+		break;
+	if (i < N_PROTO) {
+	    printer(arg, "[%s", prottbl[i].name);
+	    n = (*prottbl[i].printpkt)(p, len, printer, arg);
+	    printer(arg, "]");
+	    p += n;
+	    len -= n;
+	} else {
+	    printer(arg, "[proto=0x%x]", proto);
+	}
+    }
+
+    for (; len > 0; --len) {
+	GETCHAR(x, p);
+	printer(arg, " %.2x", x);
+    }
+}
+
+
+void pr_log(void *arg, char *fmt, ...)
+{
+    int n;
+    va_list pvar;
+    char buf[256];
+
+    IGNORE(arg);
+
+    va_start(pvar, fmt);
+    vsprintf(buf, fmt, pvar);
+    va_end(pvar);
+
+    n = strlen(buf);
+    if (linep + n + 1 > line + sizeof(line)) {
+	MAINDEBUG((LOG_DEBUG, "%s", line));
+	linep = line;
+    }
+    strcpy(linep, buf);
+    linep += n;
+}
+
+
+/*
+ * print_string - print a readable representation of a string using
+ * printer.
+ */
+void print_string(char *p, int len, void (*printer)(void *, char *, ...), void *arg)
+{
+    int c;
+
+    printer(arg, "\"");
+    for (; len > 0; --len) {
+	c = *p++;
+	if (' ' <= c && c <= '~')
+	    printer(arg, "%c", c);
+	else
+	    printer(arg, "\\%.3o", c);
+    }
+    printer(arg, "\"");
+}
+
+/*
+ * novm - log an error message saying we ran out of memory, and die.
+ */
+void novm(const char *msg)
+{
+    syslog(LOG_ERR, "Memory exhausted allocating %s\n", msg);
+    die(1);
+}
