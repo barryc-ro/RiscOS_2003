@@ -103,6 +103,8 @@ static void StripNoframes(HStream *p)
   }
 }
 
+static UCS4 pending_code;
+
 static int ucs_out(void *streamtok, UCS4 ucs)
 {
     StreamTokens *st = (StreamTokens *)streamtok;
@@ -127,13 +129,19 @@ static int ucs_out(void *streamtok, UCS4 ucs)
     {
         int ptr_pos = st->utf_ptr - st->utf_buffer;
         int end_pos = st->utf_end - st->utf_buffer;
+        char *newbuf;
 
-        st->utf_buffer = realloc(st->utf_buffer, st->utf_size + 1024);
-        if (!st->utf_buffer) return 1;
+        newbuf = realloc(st->utf_buffer, st->utf_size * 2);
+        if (!newbuf)
+        {
+            pending_code = ucs;
+            return 1;
+        }
+        st->utf_buffer = newbuf;
 
-        st->utf_size += 1024;
-        st->utf_end = st->utf_buffer + end_pos + 1024;
-        st->utf_ptr = st->utf_buffer + ptr_pos;
+        st->utf_end = newbuf + end_pos + st->utf_size;
+        st->utf_ptr = newbuf + ptr_pos;
+        st->utf_size *= 2;
     }
 
     st->chars_read++;
@@ -165,7 +173,7 @@ HStream *HtmlGetStream(void *streamtok, char **document, int size, unsigned int 
   int oldflexstate;
   unsigned int flags = 0;
   int firsttoken = 1;
-  int n;
+  int n, ntotal=0;
 
 #ifdef TRACE
 {
@@ -185,22 +193,38 @@ HStream *HtmlGetStream(void *streamtok, char **document, int size, unsigned int 
 
   if (!size) return NULL;
 
+  utf_chunk_start = st->utf_ptr - st->utf_buffer;
+  old_chars_read = st->chars_read;
+
   /* Yuckery! Give us 16K of free space by shifting flex stuff, then lock the
      flex stuff */
   oldflexstate = flex_set_budge(1);
   free(malloc(16384));
   flex_set_budge(0);
+  
+retry_with_more_memory:
 
-  utf_chunk_start = st->utf_ptr - st->utf_buffer;
-  old_chars_read = st->chars_read;
-  n = st->encoding->read(st->encoding, ucs_out, *document + st->sizesofar, size, st);
-  if (n != size)
+  n = st->encoding->read(st->encoding, ucs_out, *document + st->sizesofar, size - ntotal, st);
+  ntotal += n;
+  if (ntotal != size && n > 0)
   {
-      st->dead = 1;
-      size = n;
+      int r;
+
+      /* We've run out of memory - probably because flex budge had to be off in
+       * the encoding routine. Get some more memory and go round again.
+       */
+      st->sizesofar += n;
+      flex_set_budge(1);
+      r = ucs_out(st, pending_code);
+      flex_set_budge(0);
+      if (r == 0) goto retry_with_more_memory;
   }
   /* For everyone's convenience... */
   *st->utf_ptr = '\0';
+
+  /* Can put flex budgie back on now because we're not going to look */
+  /* at the document source again.                                   */
+  flex_set_budge(oldflexstate);
 
 /* Set up our environment first */
   __html_set_memory_context(st->memcontext);
@@ -208,7 +232,7 @@ HStream *HtmlGetStream(void *streamtok, char **document, int size, unsigned int 
   current=st->Stream;
 
   doc = start = st->utf_buffer;
-  st->sizesofar += size;
+  st->sizesofar += n;
   end = st->utf_ptr;
   if (chunksize == 0) chunksize = end - doc;
 
@@ -359,7 +383,6 @@ HStream *HtmlGetStream(void *streamtok, char **document, int size, unsigned int 
   memmove(st->utf_buffer, doc, st->utf_ptr - doc);
   st->utf_ptr = st->utf_buffer + (st->utf_ptr - doc);
 
-  flex_set_budge(oldflexstate);
 
   if (flagsptr)
     *flagsptr = flags;
@@ -369,6 +392,21 @@ HStream *HtmlGetStream(void *streamtok, char **document, int size, unsigned int 
  * we added if the stream already existed.
  */
   return return_val;
+}
+
+/***********************************************************************/
+/* void HtmlEndParse(void *stream)                                     */
+/***********************************************************************/
+/* Free all the structures involved in the parsing of a document,      */
+/* but not the actual generated token stream, which is freed later     */
+/* with HtmlStreamFree.                                                */
+/***********************************************************************/
+void HtmlEndParse(void *stream)
+{
+  free(((StreamTokens *) stream)->utf_buffer);
+  delete_encoding(((StreamTokens *) stream)->encoding);
+
+  free(stream);
 }
 
 /***********************************************************************/
