@@ -46,12 +46,13 @@ PNGLIB    = PNG.o.libpng-lib
 PNGLIBZ   = PNG.o.libpng-lzm
 ZLIB      = ZLib.o.zlib_lib
 ZLIBZ     = ZLib.o.zlib_libzm
-LIBS      = ${PNGLIB} ${PNGLIBZ} ${ZLIB} ${ZLIBZ}
+JPEGLIB   = JPEG.o.libjpeg
+LIBS      = ${PNGLIB} ${PNGLIBZ} ${ZLIB} ${ZLIBZ} ${JPEGLIB}
 
 #
 # Include files
 #
-INCLUDES = -Itbox:,C:,PNG,ZLib
+INCLUDES = -Itbox:,C:,PNG,ZLib,JPEG
 DFLAGS    = -DRISCOS -DPNG_DEBUG=0
 
 #
@@ -60,8 +61,8 @@ DFLAGS    = -DRISCOS -DPNG_DEBUG=0
 COMPONENT  = ImageLib
 COMPONENTZ = ImageLibzm
 SOURCE     = ...
-TARGET     = ${COMPONENT}
-TARGETZ    = ${COMPONENTZ}
+TARGET     = o.${COMPONENT}
+TARGETZ    = o.${COMPONENTZ}
 EXPORTS    = ${EXP_HDR}.${COMPONENT}
 
 OBJS =\
@@ -70,6 +71,7 @@ OBJS =\
  o.gif_stream\
  o.imagetrans\
  o.jpeg\
+ o.jpeg_int\
  o.lzw_comp\
  o.lzw_decomp\
  o.png\
@@ -84,6 +86,7 @@ OBJSZ =\
  z.gif_stream\
  z.imagetrans\
  z.jpeg\
+ z.jpeg_int\
  z.lzw_comp\
  z.lzw_decomp\
  z.png\
@@ -105,7 +108,7 @@ OBJSZ =\
 #
 # build a the library:
 #
-all:	${COMPONENT} ${COMPONENTZ} ${LIBS}
+all:	${TARGET} ${TARGETZ} ${LIBS}
 
 ${PNGLIB}:
 	dir PNG
@@ -127,6 +130,11 @@ ${ZLIBZ}:
 	amu ${MFLAGS}
 	back
 
+${JPEGLIB}:
+	dir JPEG
+	amu ${MFLAGS}
+	back
+
 #
 # RISC OS ROM build rules:
 #
@@ -135,8 +143,6 @@ export: export_${PHASE}
 clean:
         ${WIPE}		o.*		${WFLAGS}
         ${WIPE}		z.*		${WFLAGS}
-        ${RM}		${TARGET}
-	${RM}		${TARGETZ}	
         @echo ${COMPONENT}: cleaned
 
 clean_all:
@@ -146,42 +152,46 @@ clean_all:
 	Dir		ZLIB
 	amu		clean
 	back
+	Dir		JPEG
+	amu		clean
+	back
         @echo ${COMPONENT}: cleaned
         ${WIPE}		o.*		${WFLAGS}
         ${WIPE}		z.*		${WFLAGS}
-        ${RM}		${TARGET}
-	${RM}		${TARGETZ}
 
-export_hdrs: h.imagetrans dirs
+export_hdrs: h.imagetrans o.dirs
 	${CP} h.imagetrans	ImageLib:h.imagetrans	~CFLNR~V
         @echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${TARGET} ${TARGETZ} dirs
-	${CP}	o.${TARGET}	ImageLib:o.${TARGET}	~CFLNR~V
-	${CP}	o.${TARGETZ}	ImageLib:o.${TARGETZ}	~CFLNR~V
+export_libs: ${TARGET} ${TARGETZ} o.dirs
+	${CP}	${TARGET}	ImageLib:${TARGET}	~CFLNR~V
+	${CP}	${TARGETZ}	ImageLib:${TARGETZ}	~CFLNR~V
 	${CP}	${PNGLIB}	ImageLib:o.libpng-lib	~CFLNR~V
 	${CP}	${PNGLIBZ}	ImageLib:o.libpng-lzm	~CFLNR~V
 	${CP}	${ZLIB}		ImageLib:o.zlib_lib	~CFLNR~V
 	${CP}	${ZLIBZ}	ImageLib:o.zlib_libzm	~CFLNR~V
+	${CP}	${JPEGLIB}	ImageLib:o.libjpeg	~CFLNR~V
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+o.local_dirs:
 	${MKDIR} o
 	${MKDIR} z
+	Create o.local_dirs
 	
-dirs:
+o.dirs:
         ${MKDIR} ${LIBDIR}
         ${MKDIR} ${LIBDIR}.ImageLib
         ${MKDIR} ImageLib:h
         ${MKDIR} ImageLib:o
-        
+ 	Create o.dirs
+       
 #
 # Final link
 #
-${TARGET}: ${OBJS} local_dirs
+${TARGET}: ${OBJS} o.local_dirs
         ${LB} ${LBFLAGS} -o o.${COMPONENT} ${OBJS}
 
-${TARGETZ}: ${OBJSZ} local_dirs
+${TARGETZ}: ${OBJSZ} o.local_dirs
 	${LB} ${LBFLAGS} -o o.${COMPONENTZ} ${OBJSZ}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
