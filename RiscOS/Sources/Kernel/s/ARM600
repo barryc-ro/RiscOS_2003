@@ -13,9 +13,9 @@ DebugAborts SETL {FALSE}
 ; Created by TMD 15-Jul-92
 ; Comments updated by TMD 04-Aug-93
 
-;now effectively codes for ARM 6 onwards (6,7,8,A, where A = StrongARM) - MJS, 24-01-96
-
-;but ARM8 not done yet! (29-01-96)
+;24-01-96 MJS  now effectively codes for ARM 6 onwards (6,7,8,A, where A = StrongARM)
+;              but ARM8 not properly supported (not needed for RO 3.70)
+;07-10-96 MJS  proper support for ARM810 added
 
 
 ; Workspace needed for ARM600 work is as follows:
@@ -66,7 +66,7 @@ StaticPagesSize         *       @
 L2PT                    *       &02C00000       ; size 256K
 L1PT                    *       &02C0C000       ; in the middle of L2PT, where the mapping for 03000000 to 03FFFFFF would be
 
-FixedAreasL2Size        *       96*1024        ; amount of L2 to cover fixed areas, excluding free pool   
+FixedAreasL2Size        *       96*1024        ; amount of L2 to cover fixed areas, excluding free pool
 
 UndStackSoftCamChunk    *       &01E00000
 UndStackSize            *       8*1024
@@ -99,8 +99,13 @@ ARM_default_MMU_CR_table
 ;ARM 7            FRSB1DPWCAM
          DCD  2_0011001111101
 ;
+  [ ARM810bpbroken  ;branch prediction broken!
+;ARM 8           Z0RSB111WCAM
+         DCD  2_0001001111101
+  |
 ;ARM 8           Z0RSB111WCAM
          DCD  2_0101001111101
+  ]
 ;
 ;ARM 9 ??
          DCD  0
@@ -421,17 +426,43 @@ BangL2PT                                        ; internal entry point used only
         TST     r11, #DynAreaFlags_DoublyMapped
         BNE     BangL2PT_sledgehammer           ;if doubly mapped, don't try to be clever
   ]
+  [ ARM810support
+    ;if we are mapping out a cacheable page on an ARM810, must clean+flush cache _before_
+    ;remapping, since ARM810 relies on virtual addresses for writebacks
+        ARM_read_ID r4
+        AND     r4,r4,#&F000                    ;ARM ID nibble now in r4
+        CMP     r0,#0                           ;EQ if map out
+        TSTEQ   r11,#DynAreaFlags_NotCacheable  ;EQ if also cacheable
+        CMPEQ   r4,#&8000                       ;EQ if also ARM 8
+        BNE     BangL2PT_noARM810flush
+    [ ARM810cleanflushbroken
+        ARM8_cleanflush_IDC r6,r4
+        MOV     r4,#&8000
+    |
+        ARM8_cleanflush_IDC r6
+    ]
+BangL2PT_noARM810flush
+  ]
         STR     r0, [r1, r3, LSR #10]           ;update L2PT
+  [ :LNOT: ARM810support
         ARM_read_ID r4
         AND     r4,r4,#&F000                    ;ARM ID nibble in r4
-        CMP     r0,#0     
+  ]
+        CMP     r0,#0
         BEQ     BangL2PT_mapout                 ;the update is a map out => cache(s) may need clean/flush
 ;else update is a map in (and nothing should be there at the moment) => no cache worries
         CMP     r4,#&A000
         BEQ     BangL2PT_mapin_StrongARM
+  [ ARM810support
+        CMP     r4,#&8000
+        ARM8_flush_TLBentry r3,EQ               ;flush TLB entry for this page, ARM 8
+        ARM67_flush_TLBentry r3,NE              ;flush TLB entry for this page, ARM 6,7
+        MOV     pc,lr
+  |
 ;else assume ARM 6,7
         ARM67_flush_TLBentry r3                 ;flush TLB entry for this page
         MOV     pc,lr
+  ]
 
 BangL2PT_mapin_StrongARM
         ARMA_drain_WB                           ;in case L2PT entry itself is in a bufferable area
@@ -446,6 +477,11 @@ BangL2PT_mapin_StrongARM
 BangL2PT_mapout
         CMP     r4,#&A000
         BEQ     BangL2PT_mapout_StrongARM
+  [ ARM810support
+        CMP     r4,#&8000
+        ARM8_flush_TLBentry r3,EQ                 ;flush TLB entry for this page, ARM 8
+        MOVEQ   pc,lr                             ;ARM8 cache already flushed, if necessary
+  ]
 ;else assume ARM 6,7
         TST     r11,#DynAreaFlags_NotCacheable
         ARM67_flush_cache EQ                    ;flush instruction/data cache if necessary
@@ -502,6 +538,20 @@ BangL2PT_mapout_StrongARM
         MOV     pc,lr
 
 BangL2PT_sledgehammer
+  [ ARM810support
+        ;if necessary, clean+flush _before_ reamapping, since ARM810 writebacks use virtual addresses
+        ARM_read_ID r4
+        AND     r4,r4,#&F000
+        CMP     r4,#&8000
+        TSTEQ   r11,#DynAreaFlags_NotCacheable
+        BNE     BangL2PT_sledge_noARM810flush
+    [ ARM810cleanflushbroken
+        ARM8_cleanflush_IDC r4,r6
+    |
+        ARM8_cleanflush_IDC r4
+    ]
+BangL2PT_sledge_noARM810flush
+  ]
         BICS    r4, r3, #(3 :SHL: 10)   ; ensure going to be on word boundary
  [ {FALSE}      ; this breaks too many things at the moment
         BICEQ   r0, r0, #&30            ; if logical page zero, then make 1st 1K no user access
@@ -521,6 +571,11 @@ BangL2PT_sledgehammer
         AND     r4,r4,#&F000
         CMP     r4,#&A000
         BEQ     BangL2PT_sledgehammer_StrongARM
+  [ ARM810support
+        CMP     r4,#&8000
+        ARM8_flush_TLB EQ
+        MOVEQ   pc, lr      ;ARM8 cache already flushed if necessary
+  ]
 ;else assume ARM 6,7
         TST     r11,#DynAreaFlags_NotCacheable
         ARM67_flush_cache EQ
@@ -650,7 +705,7 @@ ClearPhysRAM ROUT
     [ :LNOT: RunningOnEmul
 
 ;StrongARM - We will make the logical representation of physical space for RAM temporarily bufferable
-;            (on any ARM). This is harmless for ARM 6,7 but a big speed benefit for StrongARM (which
+;            (on any ARM). This is small boost for ARM 6,7,8 but a big speed benefit for StrongARM (which
 ;            won't burst write in non bufferable areas).
 
         LDR     r0,  =L1PT
@@ -661,6 +716,9 @@ ClearPhysRAM ROUT
         SUB     r11,r11,#&100000                        ; 1 Mb will be done on first L1PT update
         ORR     r10, r10, #PhysSpace                    ; point to logical representation of physical space
         ADD     r1,r0,r10,LSR #(20-2)                   ; L1PT address for same
+;MJS bug fix (since 3.70) for memory fragments not necessarily 1Mb aligned (eg 2 Mb Kryten)
+        BIC     r1,r1,#3
+;
 04
         LDR     r2,[r1]
         ORR     r2,r2,#4                                ; bufferable bit
@@ -718,7 +776,7 @@ ClearPhysRAM ROUT
         BNE     %BT10
 
   [ ClearPhysRAMspeedup
-        MOV     r12,#48 
+        MOV     r12,#48
         LDMIA   r12,{r7-r9,r13}                         ;restore
         MOV     r12,#32                                 ;clear our speed up workspace
         STMIA   r12!,{r0-r3}
@@ -736,6 +794,9 @@ ClearPhysRAM ROUT
         SUB     r11,r11,#&100000                        ; 1 Mb will be done on first L1PT update
         ORR     r10, r10, #PhysSpace                    ; point to logical representation of physical space
         ADD     r1,r0,r10,LSR #(20-2)                   ; L1PT address for same
+;MJS bug fix (since 3.70) for memory fragments not necessarily 1Mb aligned (eg 2 Mb Kryten)
+        BIC     r1,r1,#3
+;
 34
         LDR     r2,[r1]
         BIC     r2,r2,#4                                ; bufferable bit
@@ -839,16 +900,37 @@ InitMEMC ROUT
         STRB    r12, [r12, #IOMD_DMAREQ]              ; writes to DMAREQ are ignored
 
         LDRB    r0, [r12, #IOMD_ID0]
-        CMP     r0, #&98
+        CMP     r0, #&E7
         LDRB    r0, [r12, #IOMD_ID1]
-        CMPEQ   r0, #&5B
+        CMPEQ   r0, #&D4
        ;MOVEQ   r3, #xxxx
-        BNE     MedusaInit                            ; NOT MORRIS assume Medusa hardware
+        BEQ     MedusaInit                            ; Medusa, else assume Morris
 ;
 ; MORRIS contains IOMD equivalant circuitry. Due to lack of VRAM, presence of 16/32 bit support
 ; and a different ROM speed register, we program it slightly differently.
 ;
 
+  [ RO371Timings
+        ;IOMD_ID1 still in r0 - check for 7500FE
+        CMP     r0, #&aa         ; EQ if 7500FE   => assume 64 MHz bus, EDO RAM
+                                 ; NE assume 7500 => assume 32 MHz bus
+;7500FE
+;set memory to 32MHz for early boot (avoid probs with POST and with power-on key detection)
+        MOVEQ   r0, #&12                 ; 5-3 cycle ROM access, Half speed (ie. 10-6)
+        STREQB  r0, [r12, #IOMD_ROMCR0]
+        STREQB  r0, [r12, #IOMD_ROMCR1]
+        MOVEQ   r0, #&70                 ; EDO RAM selected, 32 bit wide, conservative RAS,CAS timing
+        STREQB  r0, [r12, #IOMD_DRAMWID] ; DRAM control reg. (more than just width on FE)
+        MOVEQ   r0, #&04                 ; clock dividers: /1 for CPU, /2 for memory, /2 for I/O
+        STREQB  r0, [r12, #IOMD_CLKCTL]
+;7500
+        MOVNE   r0, #&32                 ; 5-3 cycle ROM access
+        STRNEB  r0, [r12, #IOMD_ROMCR0]
+        STRNEB  r0, [r12, #IOMD_ROMCR1]
+        MOVNE   r0, #&07                 ; clock dividers: /1 for I/O, /1 for CPU, /1 for memory
+        STRNEB  r0, [r12, #IOMD_CLKCTL]
+
+  | ;else if not RO371Timings
 ;
 ; PSwindell wants all prescalers set to divide by 1
 ;
@@ -878,8 +960,12 @@ InitMEMC ROUT
         ! 0, "*** WARNING *** Slow ROM version ment for PSwindell"
   ]
  ]
+
         STRB    r0, [r12, #IOMD_ROMCR0]
         STRB    r0, [r12, #IOMD_ROMCR1]         ; and do the same for extension ROMs (just in case)
+
+  ] ;RO371Timings conditional
+
 ;
 ; MORRIS doesn't support VRAM. Kryten has same DRAM speed as Medusa
 ;
@@ -902,6 +988,11 @@ InitMEMC ROUT
 MedusaInit
  ]
 
+
+  [ RO371Timings
+        MOV     r0, #&12    ; 5-3 cycle ROM access
+  |
+
  [ Simulator
         MOV     r0, #IOMD_ROMCR_62 + IOMD_ROMCR_BurstOff        ; make faster for simulation (no point in burst mode, it's
                                                                 ; no faster than the fastest initial speed)
@@ -923,6 +1014,9 @@ MedusaInit
         MOV     r0, #IOMD_ROMCR_156 + IOMD_ROMCR_BurstOff       ; initialise ROM speed to 156.25ns (changed from 187ns 21-Jan-94)
   ]
  ]
+
+  ] ;RO371Timings conditional
+
         STRB    r0, [r12, #IOMD_ROMCR0]
         STRB    r0, [r12, #IOMD_ROMCR1]         ; and do the same for extension ROMs (just in case)
 
@@ -1108,15 +1202,19 @@ MemSize ROUT
  [ MorrisSupport
 ;
         LDRB    r0, [r12, #IOMD_ID0]
-        CMP     r0, #&98
+        CMP     r0, #&E7
         LDRB    r0, [r12, #IOMD_ID1]
-        CMPEQ   r0, #&5B
+        CMPEQ   r0, #&D4
        ;MOVEQ   r3, #xxxx
-        BNE     MemSizeIOMD                             ; NOT MORRIS assume Medusa hardware
+        BEQ     MemSizeIOMD                             ; IOMD (Medusa), else assume Morris
 ;
 ; MemSize for Morris
 ;
+  [ RO371Timings
+        MOV     r11, #&70     ;all 4 banks assumed 32 bit - EDO and timing bits set in case 7500FE (don't care bits otherwise)
+  |
         MOV     r11, #IOMD_DRAMWID_DRAM_32bit * &0F     ;set all 4 banks to be 32bit initially
+  ]
         MOV     r14, #IOMD_Base
         STRB    r11, [r14, #IOMD_DRAMWID]
  [ 1 = 0
@@ -1400,8 +1498,23 @@ MemSizeIOMD
         ORR     r2,r2,#&1000     ;I cache bit is bit 12
         ARM_write_control r2
         ARMA_fastcoreclock
-
+  [ ARM810fastclock
+        B       MemSizeIOMD_not810
+  ]
 MemSizeIOMD_notSA
+  [ ARM810fastclock
+    ;fast clock for ARM 810 now
+        ARM_read_ID r2
+        AND     r2,r2,#&F000
+        CMP     r2,#&8000
+        BNE     MemSizeIOMD_not810
+    [ ARM810usePLL
+        ARM8_pll_fclk r2
+    |
+        ARM8_refclk_fclk r2
+    ]
+MemSizeIOMD_not810
+  ]
         MOV     r2, #IOMD_VREFCR_VRAM_256Kx64 :OR: IOMD_VREFCR_REF_16 ; assume 2 banks of VRAM by default
         STRB    r2, [r12, #IOMD_VREFCR]
 
@@ -1848,8 +1961,12 @@ MemSizeDone
         ARM_flush_cacheandTLB r7                ; flush cache + TLB just in case
 
         ARM_number r2                           ;should be 6,7,8 or &A
+ [ ARM810support
+   ;ARM810 has already had fast clock selected (MemSizeIOMD) - so has StrongARM, therefore code below removed
+ |
         CMP     r2,#&A
         ARMA_fastcoreclock EQ                   ;otherwise StrongARM is going to have a limp wrist
+ ]
         SUB     r2,r2,#6                        ; r2 := 0..4 for ARM 6,7,8,(9),&A
         ADRL    r7,ARM_default_MMU_CR_table
         LDR     r7,[r7,r2,LSL #2]               ;get appropriate default value for MMU control reg
@@ -1988,7 +2105,7 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
   [ StrongARM
 ;StrongARM requires 2*16k of private logical space (used for absolutely nothing else), which is
 ;readable and cacheable, for data cache cleaning purposes. We want to map the space to
-;start of ROM bank 1 (physical target), so that IOMD timings can be poked for maximum read speed 
+;start of ROM bank 1 (physical target), so that IOMD timings can be poked for maximum read speed
 ;(only requirement of physical space is that it is readable without h/w abort). Here, though,
 ;we have to conform to format for MemInitPagesL2, so we just point to some convenient RAM,
 ;and fix things up later (see L1L2PTenhancements)
@@ -2086,14 +2203,77 @@ Page8K  * &4
 Page4K  * &0
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-; In    r0=0 -> Coming from the Test routine, just go back!
+; In    r0=0 -> Coming from the Test routine - no fancy business!
 ;       r1-r6 trashable
-;       r9 = Current MEMC CR (true MEMC value, not fudged to look like 4K page size)
+;       [[[ r9 = Current MEMC CR (true MEMC value, not fudged to look like 4K page size) ]]]
 
-; Out   r9 MEMC value with slowest ROM speed, correct pagesize
+; Out   [[[ r9 MEMC value with slowest ROM speed, correct pagesize ]]]
 ;       r7 processor speed in kHz, bit 16 => can do STM to I/O (ie MEMC1a, MEMC2), bit 17 => MEMC2
 
 ; This routine must work in 32-bit mode, and should not use any memory!!!!
+
+  [ RO371Timings
+
+TimeCPU ROUT         ;does not actually measure anything - assumes timings (and EDO for 7500FE) according to IOMD id
+
+        MOV     r2, #IOC                ; Address of the IO controller  (IOMD)
+
+        LDRB    r7, [r2, #IOMD_ID0]     ; Is
+        CMP     r7, #&E7                ; It
+        LDRB    r7, [r2, #IOMD_ID1]     ; A
+        CMPEQ   r7, #&D4                ; Risc PC ?
+        BEQ     timecpuriscpc
+        CMP     r7, #&AA                ; assume 7500 or 7500FE
+        BEQ     timecpu7500FE
+;7500 then
+        MOV     r7, #&32                      ; 5-3 cycle ROM access
+        STRB    r7, [r2, #IOMD_ROMCR0]
+        STRB    r7, [r2, #IOMD_ROMCR1]
+        MOV     r7, #&07                      ; clock dividers: /1 for I/O, /1 for CPU, /1 for memory
+        STRB    r7, [r2, #IOMD_CLKCTL]
+        LDR     r7, =(1 :SHL: 16) :OR: 16000  ; assumed 16MHz RAM (32 MHz bus)
+        MOV     pc, lr
+
+timecpu7500FE
+;set memory to 32MHz for early boot (avoid probs with POST and with power-on key detection)
+        MOV     r7, #&12                      ; 5-3 cycle ROM access, half speed (ie. 10-6)
+        STRB    r7, [r2, #IOMD_ROMCR0]
+        STRB    r7, [r2, #IOMD_ROMCR1]
+        MOV     r7, #&70                      ; EDO RAM, 32 bit wide, conservative RAS and CAS timing
+        STRB    r7, [r2, #IOMD_DRAMWID]       ; DRAM control reg. (more than just width on FE)
+        MOV     r7, #&04                      ; clock dividers: /1 for CPU, /2 for memory, /2 for I/O
+        STRB    r7, [r2, #IOMD_CLKCTL]
+        LDR     r7, =(1 :SHL: 16) :OR: 32000  ; assumed 32MHz RAM (64 MHz bus), even though /2 at the moment
+        MOV     pc, lr
+
+timecpuriscpc
+        MOV     r7, #&12                      ; 5-3 cycle ROM access
+        STR     r7, [r2, #IOMD_ROMCR0]
+        STR     r7, [r2, #IOMD_ROMCR1]
+        LDR     r7, =(1 :SHL: 16) :OR: 16000  ; assumed 16MHz RAM (32 MHz bus)
+        MOV     pc, lr
+
+;used by NewReset, after main kernel boot
+;sets full 64MHz memory if on 7500FE
+;preserves registers _and_ flags
+;
+finalmemoryspeed ROUT
+        Push    "r0,lr"
+        MOV     lr, #IOC
+        LDRB    r0, [lr, #IOMD_ID0]     ; Is
+        CMP     r0, #&E7                ; It
+        LDRB    r0, [lr, #IOMD_ID1]     ; A
+        CMPEQ   r0, #&D4                ; Risc PC ?
+        BEQ     fmspeed_done
+        CMP     r0, #&AA                ; EQ if 7500FE
+        MOVEQ   r0, #&80
+        STREQB  r0, [lr, #&CC]          ; ASTCR register: set i/o asynchronous timing for fast memory clock
+        MOVEQ   r0, #&06                ; clock dividers: /1 for CPU, /1 for memory, /2 for I/O
+        STREQB  r0, [lr, #IOMD_CLKCTL]
+fmspeed_done
+        Pull    "r0,pc",,^
+
+  | ; else if not RO371Timings
 
 ncpuloops * 1024 ; don't go longer than 4ms without refresh !
 nmulloops * 128
@@ -2105,14 +2285,18 @@ TimeCPU ROUT            ;ONLY WORKS FOR IOMD(L) machines - this shouldn't be a p
 
    [ {TRUE}
 ;don't do timing for Risc PC
-        LDRB    r0, [r3, #IOMD_ID0]     ; Is
-        CMP     r0, #&98                ; It
-        LDRB    r0, [r3, #IOMD_ID1]     ; A
-        CMPEQ   r0, #&5B                ; Morris?
-        MOVNE   r7,#&3e00               ;for non-Morris force 16MHz timing, assumed Risc PC
-        ORRNE   r7,r7,#&80
-        ORRNE   r7,r7,#&10000           ;and note we're on IOMD
-        MOVNE   pc,lr
+;
+;MJS bug fix (since 3.70) - setup r3 properly, and don't corrupt r0 you fool
+;
+        MOV     r3, #IOC                ; Address of the IO controller
+        LDRB    r7, [r3, #IOMD_ID0]     ; Is
+        CMP     r7, #&E7                ; It
+        LDRB    r7, [r3, #IOMD_ID1]     ; A
+        CMPEQ   r7, #&D4                ; Medusa?
+        MOVEQ   r7,#&3e00               ;for non-Morris force 16MHz timing, assumed Risc PC
+        ORREQ   r7,r7,#&80
+        ORREQ   r7,r7,#&10000           ;and note we're on IOMD
+        MOVEQ   pc,lr
   ]
 
 ; Time CPU/Memory speed
@@ -2183,12 +2367,12 @@ TimeCPU ROUT            ;ONLY WORKS FOR IOMD(L) machines - this shouldn't be a p
 
  [ MorrisSupport
         LDRB    r0, [r3, #IOMD_ID0]     ; Is
-        CMP     r0, #&98                ; It
+        CMP     r0, #&E7                ; It
         LDRB    r0, [r3, #IOMD_ID1]     ; A
-        CMPEQ   r0, #&5B                ; Morris?
-        LDREQ   r0, =(4*15*500*ncpuloops)               ;Morris timing values [reordered to prevent miscalculation
+        CMPEQ   r0, #&D4                ; Medusa?
+        LDRNE   r0, =(4*15*500*ncpuloops)               ;Morris timing values [reordered to prevent miscalculation
                                                         ;due to Aasm integering mid-calculation] (30720000)
-        LDRNE   r0, =(4*(8*500/1000)*ncpuloops*1000)    ;RiscPC/IOMD timing values      (16384000)
+        LDREQ   r0, =(4*(8*500/1000)*ncpuloops*1000)    ;RiscPC/IOMD timing values      (16384000)
         DivRem  r7, r0, r2, r1          ; r2 preserved,   R7=memory speed in kHz (MEMCLK/2)
  |
         LDR     r0, =(4*(8*500/1000)*ncpuloops*1000)    ;RiscPC/IOMD timing values      (16384000)
@@ -2242,6 +2426,8 @@ TimeCPU ROUT            ;ONLY WORKS FOR IOMD(L) machines - this shouldn't be a p
   ]
 timecpu_sodthefancytimingstuff
         MOV     pc, lr
+
+  ] ;RO371Timings conditional
 
 MemClkTable
         DCB     2_100101                ; 0 cycles (set to min which is 2)
@@ -2332,22 +2518,39 @@ MMUControl_ModifyControl ROUT
         MOV     r3, #0
         LDR     lr, [r3, #MMUControlSoftCopy]
         CMP     r5,#&A
+  [ ARM810support
+        CMPNE   r5,#8                   ; can read control reg on ARM 810 too
+  ]
         ARM_read_control lr,EQ
         MOVEQ   lr,lr,LSL #19
         MOVEQ   lr,lr,LSR #19           ; if StrongARM then we can read control reg. - trust this more than soft copy
         AND     r2, r2, lr
         EOR     r2, r2, r1
         MOV     r1, lr
+  [ ARM810support
+        CMP     r5,#8
+        BNE     %FT03
+        TST     r2,#4
+        ORRNE   r2,r2,#&800            ; if ARM810 then Z bit (branch prediction) mirrors C bit
+        BICEQ   r2,r2,#&800
+03
+  ]
         CMP     r5,#&A
         BNE     %FT05
         TST     r2,#&4                  ; if StrongARM, then I bit mirrors C bit
         ORRNE   r2,r2,#&1000
         BICEQ   r2,r2,#&1000
-05        
+05
+   [ SAWBbroken :LOR: ARM810bpbroken
+        MOV     lr,r2
    [ SAWBbroken
         CMP     r5,#&A
-        BICEQ   lr,r2,#&0008                   ;sorry guys, we can't use write buffer (safe-ish - safer would zap data cache bit as well)
-        MOVNE   lr,r2
+        BICEQ   lr,lr,#&0008                   ;sorry guys, we can't use write buffer (safe-ish - safer would zap data cache bit as well)
+     ]
+     [ ARM810bpbroken
+        CMP     r5, #8
+        BICEQ   lr,lr,#&0800                   ;sorry guys (or sorry Guy!), we can't use branch predictor
+     ]
         STR     lr, [r3, #MMUControlSoftCopy]
    |
         STR     r2, [r3, #MMUControlSoftCopy]
@@ -2357,6 +2560,25 @@ MMUControl_ModifyControl ROUT
         BEQ     %FT10
         ARM_flush_cache r3
 10
+  [ ARM810support
+        CMP     r5,#8
+        BNE     %FT12
+        BIC     lr, r1, r2              ; lr = bits going from 1->0
+        TST     lr, #MMUC_C             ; if cache turning off then clean/flush cache first
+        BEQ     %FT12
+    [ ARM810cleanflushbroken
+        Push    "r0,r1"
+        ARM8_cleanflush_IDC r0,r1
+        ARM8_branchpredict_off r0       ; and turn off branch predict cleanly (must go off with cache)
+        Pull    "r0,r1"
+    |
+        Push    "r0"
+        ARM8_cleanflush_IDC r0
+        ARM8_branchpredict_off r0       ; and turn off branch predict cleanly (must go off with cache)
+        Pull    "r0"
+    ]
+12
+  ]
         CMP     r5,#&A
         BNE     %FT15
         BIC     lr, r1, r2              ; lr = bits going from 1->0
@@ -2370,10 +2592,16 @@ MMUControl_ModifyControl ROUT
         ARMA_clean_DC r0,r1,r2
         Pull    "r0-r2"
 15
+   [ SAWBbroken :LOR: ARM810bpbroken
+        MOV     lr,r2
    [ SAWBbroken
         CMP     r5,#&A
-        BICEQ   lr,r2,#&0008            ;sorry guys, we can't use write buffer
-        MOVNE   lr,r2
+        BICEQ   lr,lr,#&0008            ;sorry guys, we can't use write buffer
+     ]
+     [ ARM810bpbroken
+        CMP     r5,#8
+        BICEQ   lr,lr,#&0800            ;sorry guys, we can't use branch predictor
+     ]
         ARM_write_control lr
    |
         ARM_write_control r2
@@ -2391,6 +2619,9 @@ MMUC_modcon_readonly
         MOV     r3, #0
         LDR     lr, [r3, #MMUControlSoftCopy]
         CMP     r5,#&A
+  [ ARM810support
+        CMPNE   r5,#8                   ; can read control reg on ARM 810 too
+  ]
         ARM_read_control lr,EQ
         MOVEQ   lr,lr,LSL #19
         MOVEQ   lr,lr,LSR #19           ; if StrongARM then we can read control reg. - trust this more than soft copy
@@ -2407,22 +2638,43 @@ MMUControl_Flush
        BEQ      MMUC_flush_flushT
 ;flush cache
        CMP      r4,#&A000
-       ARM67_flush_cache NE       ;if not StrongARM, assume 6,7
+  [ ARM810support
+       CMPNE    r4,#&8000
+  ]
+       ARM67_flush_cache NE       ;if not StrongARM or ARM810, assume 6,7
        BNE      MMUC_flush_flushT
+  [ ARM810support
+       CMP      r4,#&A000
+       BEQ      MMUC_flush_SA
+;ARM810 then
+    [ ARM810cleanflushbroken
+       ARM8_cleanflush_IDC r1,r4
+       MOV      r4,#&8000
+    |
+       ARM8_cleanflush_IDC r1
+    ]
+       B        MMUC_flush_flushT
+MMUC_flush_SA
+  ]
 ;StrongARM then
        MOV     r2,#ARMA_Cleaner_flipflop
        LDR     r1,[r2]
        EOR     r1,r1,#16*1024
-       STR     r1,[r2]       
+       STR     r1,[r2]
        ARMA_clean_DC r1,r2,r3     ;effectively, fully clean/flush wrt non-interrupt stuff
        ARMA_drain_WB
        ARMA_flush_IC              ;do *not* flush DC - may be interrupt stuff in it
 MMUC_flush_flushT
        TST     r0,#&40000000
        BEQ     MMUC_flush_done
+  [ ARM810support
+    ;there is a general macro, should have used this before anyway
+       ARM_flush_TLB r1
+  |
        CMP     r4,#&A000
        ARMA_flush_TLBs EQ
        ARM67_flush_TLB NE         ;if not StrongARM, assume 6,7
+  ]
 MMUC_flush_done
        Pull     "r0-r4,pc"
 
@@ -2530,7 +2782,13 @@ DAbPreVeneer    ROUT
         BIC     r1, r1, #&1F                    ; knock out current mode bits
         ANDS    r3, r0, #&1F                    ; extract old mode bits (and test for USR26_mode (=0))
         TEQNE   r3, #USR32_mode                 ; if usr26 or usr32 then use ^ to store registers
+  [ SASTMhatbroken
+        STMEQIA r2!,{r8-r12}
+        STMEQIA r2 ,{r13,r14}^
+        SUBEQ   r2, r2, #5*4
+  |
         STMEQIA r2, {r8-r14}^
+  ]
         BEQ     %FT05
 
         ORR     r3, r3, r1                      ; and put in user's
@@ -2547,7 +2805,15 @@ DAbPreVeneer    ROUT
 
         Push    "r0, lr_svc"                    ; save SPSR_abort and lr_svc
         SUB     sp_svc, sp_svc, #8*4            ; make room for r8_usr to r14_usr and PC
+  [ SASTMhatbroken
+        STMIA   sp_svc!,{r8-r12}
+        STMIA   sp_svc, {r13,r14}^
+        NOP
+        STR     pc, [sp_svc,#2*4]
+        SUB     sp_svc, sp_svc, #5*4            ; save USR bank in case STM ^, and also so we can corrupt them
+  |
         STMIA   sp_svc, {r8-r15}^               ; save USR bank in case STM ^, and also so we can corrupt them
+  ]
 
         SUB     r11, r2, #8*4                   ; r11 -> register bank
         STR     r4, [sp_svc, #7*4]              ; store aborter's PC in user register bank
@@ -2900,9 +3166,6 @@ DAbPreVeneer    ROUT
         ADD     r2, r11, #8*4                   ; point r2 at 2nd half of main register bank
         LDMIA   sp, {r8-r14}^                   ; reload user bank registers
         NOP                                     ; don't access banked registers after LDM^
-   [ SAUBxferbroken
-        NOP                                     ; 'fraid so
-   ]
         ADD     sp, sp, #8*4                    ; junk user bank stack frame
 
         Pull    "r0, lr"                        ; r0 = (possibly updated) SPSR_abort, restore lr_svc
@@ -2915,9 +3178,6 @@ DAbPreVeneer    ROUT
         TEQNE   r7, #USR32_mode                 ; test also for USR32
         LDMEQIA r2, {r8-r14}^                   ; if user mode then just use ^ to reload registers
         NOP
-   [ SAUBxferbroken
-        NOP                                     ; 'fraid so
-   ]
         BEQ     %FT80
 
         ORR     r6, r6, #I32_bit                ; use aborter's flags and mode but set I
@@ -3061,6 +3321,7 @@ ProcessTransfer ENTRY "r1-r7,r12"
 20
 ;ARM 8 and StrongARM will abort for vector reads (as well as writes) in 26bit mode, so we must
 ;handle vector reads properly as well now
+;In fact, StrongARM does not abort (optional in architecture 4), but ARM 8 does - MJS 08-10-96
   [ {FALSE}
         TST     r0, #1                                  ; if load from memory
         BNE     %FT60                                   ; then skip
@@ -3319,7 +3580,7 @@ L1L2PTe_WPROMdone
         ADD     r0,r0,#1               ; = no. of 4k RAM pages in machine
         MOV     r0,r0,LSR #8           ; = no. of Mbytes in machine
         ADD     r0,r0,#3
-        BIC     r0,r0,#3               ; round up to next 4 Mb 
+        BIC     r0,r0,#3               ; round up to next 4 Mb
         CMP     r0,#28                 ; if 28Mb or more, no pages to be rescued from L2PT AppSpace
         BHS     %FT09
         LDR     r1,=AppSpaceDANode
@@ -3488,12 +3749,18 @@ dtgps_SAloop1
     ARMA_drain_WB           ; squeeze out those last drops
     MOV     pc,lr
 
+;ARM810 equiv of dtgps_SAcleanflush must clean/flush whole cache (cannot clean/flush by virtual address)
+;and is shared with code in meminfo_flushplease, below
 
 meminfo_flushplease         ; used by MemInfo
         ARM_read_ID r0
         AND     r0,r0,#&F000
         CMP     r0,#&A000
-        BEQ     mifp_SA      
+        BEQ     mifp_SA
+  [ ARM810support
+        CMP     r0,#&8000
+        BEQ     mifp_810
+  ]
 ;assume ARM 6 or 7 - simple!
         ARM67_flush_cache
         MOV     pc,lr
@@ -3506,7 +3773,16 @@ mifp_SA
         ARMA_clean_DC r0,r1,r2          ;clean/flush data cache wrt non-interrupt stuff (trashes r0,r1,r2)
         ARMA_flush_IC                   ;do *not* flush DC - may be interrupt stuff
         MOV     pc,lr
-
+  [ ARM810support
+mifp_810
+dtgps_810cleanflush                     ;entry point also used during pages_unsafe/safe in ChangeDyn
+    [ ARM810cleanflushbroken
+        ARM8_cleanflush_IDC r0,r1
+    |
+        ARM8_cleanflush_IDC r0
+    ]
+        MOV     pc,lr
+  ]
 ;
 
         DCB     "GROT"                  ;spare words marker
