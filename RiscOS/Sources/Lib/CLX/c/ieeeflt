@@ -29,6 +29,7 @@
 /* returned). It is reasonable to use these values where a constant      */
 /* value is required.                                                    */
 
+/* Actually, these match the ARM FPASC */
 #define InfMinusInf   4
 #define InfTimesZero  5
 #define ZeroDivZero   7
@@ -36,19 +37,47 @@
 
 #define SignBit 0x80000000
 
-#define DENORMALISE(e, x, h, m) \
+/* A brief note about IEEE rounding. We always round to nearest. In IEEE */
+/* the rounding procedure is as follows. If the spare bits > 0.5, round  */
+/* up, and if < 0.5, round down. If they equal 0.5 exactly, then if      */
+/* we've rounded already, round in the opposite direction. If this is    */
+/* the first rounding, we round to even - give the result a LSB of 0 by  */
+/* rounding up if the current LSB is 1, else rounding down.              */
+
+#define DENORMALISE(e, x, h, m, r) \
   do {\
     if (x < -52) {\
       h = m = x = 0;\
       e = flt_very_small;\
     } else {\
+      unsigned xxxr=0, xxxs=0; /* round and sticky bits */\
       unsigned32 xxxu = m;\
       h |= 0x00100000; /* no implied ms 1 for denormalised numbers */\
       do {\
+        xxxs |= xxxr;\
+        xxxr = xxxu & 1;\
         xxxu = (xxxu >> 1) | (h << 31);\
         h = h >> 1;\
       } while (++x <= 0);\
-      x = 0; m = xxxu;\
+      x = 0;\
+      if (xxxr) { /* tedious rounding code */\
+        if (xxxs || r < 0 || (r==0 && (xxxu&1))) {\
+          /* round up - renormalise if necessary */\
+          if (++xxxu == 0) {\
+            h++;\
+            if (h & 0x00100000) {\
+              h = 0;\
+              x = 1;\
+            }\
+          }\
+          r = +1;\
+        }\
+        else\
+          r = -1;\
+      } else {\
+        if (xxxs) r = -1;\
+      }\
+      m = xxxu;\
     }\
   } while (0)
 
@@ -65,7 +94,7 @@
           if (uh & 0x100000) break;\
           ux--;\
         }\
-    } else\
+    } else if (ux != 0x7ff)\
       uh |= 0x100000;\
   } while (0)
 
@@ -75,15 +104,152 @@ static int SetToInfinity(DbleBin *p, int32 sign) {
     return flt_very_big;
 }
 
-static void TransferNaN(DbleBin *p, DbleBin const *q, int32 sign) {
-    p->msd = (q->msd & ~SignBit) | sign;
-    p->lsd = q->lsd;
-}
-
 static int SetToNaN(DbleBin *p, int sort, int32 sign) {
     p->msd = sign | (0x7ff8<<16) | ((int32)sort>>3);
     p->lsd = (int32)sort << 29;
     return flt_invalidop;
+}
+
+static int ConvertNaNs(DbleBin *a, DbleBin const *b, DbleBin const *c)
+{   unsigned32 bx, cx;
+    bx = (b->msd >> 20) & 0x7ff;
+    if (bx == 0x7ff && ((b->msd & 0xfffff) != 0 || b->lsd != 0))
+    {
+        *a = *b;
+        return 1;
+    }
+    cx = (c->msd >> 20) & 0x7ff;
+    if (cx == 0x7ff && ((c->msd & 0xfffff) != 0 || c->lsd != 0))
+    {
+        *a = *c;
+        return 1;
+    }
+    return 0;
+}
+
+int fltrep_xtod(const char *s, DbleBin *p, char **endp)
+{
+/* s is a string containing a hexadecimal floating point number.         */
+/* p points to two words of store into which the IEEE representation of  */
+/* the number must be pushed.                                            */
+/* Packing uses only integer arithmetic to (a) guarantee good rounding   */
+/* and (b) ensure that this compiler works even when FPE is not active.  */
+    int32 ds, d[3], bx;     /* floating point result in pieces     */
+    int32 ch, dot, n;
+    int rnddir = 0;
+
+    while (isspace(ch = *s++))
+        ;
+
+    ds = 0;
+
+    if (ch != '.' && !isxdigit(ch)) /* non-empty seq of digits inc dp    */
+    {
+        if (endp) *endp = (char *)s-1;
+        return flt_bad;
+    }
+
+    d[0] = d[1] = d[2] = n = 0;
+    bx = -4;
+/* We store up to 18 significant digits in d[]. n is the number of       */
+/* digits read so far. Last bit is sticky.                               */
+    dot = 0;
+    while (ch=='0') ch = *s++;
+    if (ch=='.')
+    {   dot = 1;
+        while ((ch = *s++)=='0') bx -= 4;
+    }
+/* Now I have dealt with all the leading zeros and so I can used fixed   */
+/* point arithmetic to assemble the number.                              */
+    while (1)
+    {   if (!dot && ch=='.') ch = *s++, dot = 1;
+        else if (isxdigit(ch))
+        {   int32 w = n / 6, nb = n % 6;
+            if (w <= 2)
+            {   ch = (isdigit(ch) ? (ch) - '0' :
+                      islower(ch) ? (ch) - 'a' + 10 :
+                                    (ch) - 'A' + 10);
+                d[w] |= ch << (5-nb)*4;
+            }
+            else if (ch != '0')
+                d[2] |= 1;
+            n++;
+            if (!dot) bx += 4;
+            ch = *s++;
+        }
+        else break;
+    }
+    if (ch=='p' || ch=='P')
+    {   int32 sx, x1;
+
+        sx = 0;
+        switch (ch = *s++)
+        {
+    case '-':
+            sx = 1;
+    case '+':
+            ch = *s++;
+    default:
+            break;
+        }
+
+        x1 = 0;
+        while (isdigit(ch))             /* read an exponent              */
+        {   x1 = 10*x1 + (ch - '0');
+            ch = *s++;
+        }
+        if (sx) bx -= x1;
+        else bx += x1;
+    }
+    if (endp) *endp = (char *)s-1;
+    if (d[0]==0)      /* result = 0.0? : normalization => just test d[0] */
+    {   p->msd = 0;
+        p->lsd = 0;
+        return flt_ok;
+    }
+
+
+    /* postnormalize to ensure that bit 0x00100000 is the MSB            */
+    for (;;)
+    {   while ((d[0] & 0xffe00000)!=0)
+        {   d[2] = ((d[1]&1)<<23) | (d[2]>>1) | (d[2] & 1);
+            d[1] = ((d[0]&1)<<23) | (d[1]>>1);
+            d[0] = d[0]>>1;
+            bx += 1;
+        }
+        /* Round to double precision                                     */
+        if (d[2]&0xffff)
+        {   /* no need to worry about state of rnddir, as this is the    */
+            /* first round. This cannot be executed if we go around the  */
+            /* loop a second time, as the second time round, the         */
+            /* fraction must be exactly 0.                               */
+            if ((d[2]&0xffff)>0x8000 || ((d[2]&0x1ffff)==0x18000))
+            {   d[2] += 0x00010000;
+                d[1] += (d[2] >> 24) & 0xff;
+                d[0] += (d[1] >> 24) & 0xff;
+                d[2] &= 0x00ff0000;
+                d[1] &= 0x00ffffff;
+                rnddir = +1;
+                continue;           /* may need more normalization       */
+            }
+            d[2] &= 0x00ff0000;
+            rnddir = -1;
+        }
+        break;
+    }
+    bx += 0x3ff;            /* assemble final exponent                   */
+    {   int err = flt_ok;
+        d[0] &= 0x000fffff;
+        d[1] = (d[1]<<8) | ((d[2]>>16) & 0xff);
+        if (bx<=0)
+            DENORMALISE(err, bx, d[0], d[1], rnddir);
+        else if (bx>=0x7ff)
+            return SetToInfinity(p, ds);
+        p->msd = ds | (bx<<20) | d[0];
+        p->lsd = d[1];
+        if (err = flt_ok && rnddir) err = flt_inexact;
+        return err;
+    }
 }
 
 int fltrep_stod(const char *s, DbleBin *p, char **endp)
@@ -98,6 +264,7 @@ int fltrep_stod(const char *s, DbleBin *p, char **endp)
 /* returns flt_bad if no valid digits are found.                         */
     int32 ds, dh, dm, dl, bx;     /* floating point result in pieces     */
     int32 th, tm, tl, x, ch, dot;
+    int rnddir=0;
 
     while (isspace(ch = *s++))
         ;
@@ -218,22 +385,25 @@ default:
             bx -= 1;
         }
         while ((dh & 0xffe00000)!=0)
-        {   dl = (dl>>1) | ((dm&1)<<23);
+        {   dl = (dl>>1) | ((dm&1)<<23) | (dl&1);
             dm = (dm>>1) | ((dh&1)<<23);
             dh = dh>>1;
             bx += 1;
         }
-/* Round up if necessary, using 8 guard bits.                            */
-        if ((dl & 0xff00)>0x8000)
-        {   dl += 0x00010000;
-            dm += (dl >> 24) & 0xff;
-            dh += (dm >> 24) & 0xff;
-            dl &= 0x00ff0000;
-            dm &= 0x00ffffff;
-            continue;           /* may need more normalization           */
+        /* Round to double precision                                     */
+        if (dl & 0xffff)
+        {   if ((dl & 0xffff)>0x8000 || ((dl&0x1ffff)==0x18000))
+            {   dl += 0x00010000;
+                dm += (dl >> 24) & 0xff;
+                dh += (dm >> 24) & 0xff;
+                dl &= 0x00ff0000;
+                dm &= 0x00ffffff;
+                rnddir = +1;
+                continue;           /* may need more normalization       */
+            }
+            dl &= 0xff00000;
+            rnddir = -1;
         }
-        else if ((dl & 0xff00)==0x8000)  /* force zero in middle case    */
-            dl &= 0x00fe0000;
         break;
     }
     bx += 0x3ff;            /* assemble final exponent                   */
@@ -241,8 +411,8 @@ default:
         dh &= 0x000fffff;
         dm = (dm<<8) | ((dl>>16) & 0xff);
         if (bx<=0)
-            DENORMALISE(err, bx, dh, dm);
-        else if (bx>0x7ff)
+            DENORMALISE(err, bx, dh, dm, rnddir);
+        else if (bx>=0x7ff)
             return SetToInfinity(p, ds);
         p->msd = ds | (bx<<20) | dh;
         p->lsd = dm;
@@ -250,7 +420,7 @@ default:
     }
 }
 
-int fltrep_narrow(DbleBin const *d, FloatBin *e)
+int fltrep_narrow_exact(DbleBin const *d, FloatBin *e)
 /* this is now a function so that caller can report errors soon */
 {   int32 hi = d->msd;
     int32 lo = d->lsd;
@@ -267,7 +437,7 @@ int fltrep_narrow(DbleBin const *d, FloatBin *e)
     {   if (hi == 0 && lo != 0)
             hi = 1;             /* NaN mustn't turn into infinity       */
         e->val = s | 0x7f800000 | hi;
-        return flt_ok;
+        return lo == 0 ? flt_ok : flt_inexact_single;
     }
     if (lo < 0 && (lo!=0x80000000 || (hi & 1)!=0))
         if ((hi += 1) == 0x00800000)    /* round up & renormalize       */
@@ -275,7 +445,7 @@ int fltrep_narrow(DbleBin const *d, FloatBin *e)
             x += 1;
         }
     x = x - 0x3ff + 0x7f;
-    {   int err = flt_ok;
+    {   int err = lo == 0 ? flt_ok : flt_inexact_single;
         if (x >= 0xff) {
             x = 0xff; hi = 0;
             err = flt_big_single;
@@ -294,6 +464,11 @@ int fltrep_narrow(DbleBin const *d, FloatBin *e)
         e->val = s | (x << 23) | hi;
         return err;
     }
+}
+
+int fltrep_narrow(DbleBin const *d, FloatBin *e)
+{   int err = fltrep_narrow_exact(d, e);
+    return err == flt_inexact_single ? flt_ok : err;
 }
 
 int fltrep_narrow_round(DbleBin const *d, FloatBin *e)
@@ -337,8 +512,7 @@ void fltrep_widen(FloatBin const *e, DbleBin *d)
 /* was out of range for conversion to an integral type.                  */
 /* Denormalised numbers, infinities and NaNs are supported and generated */
 /* as results when appropriate (always together with an error status in  */
-/* the last two cases). Exception: flt_compare currently doesn't handle  */
-/* NaNs properly.                                                        */
+/* the last two cases). Exception: flt_compare returns -2 for unordered  */
 
 /* Coded without concern about speed, and so quite dreadfully slow.      */
 /* Also coded without concern about code density, so rather repetitive   */
@@ -350,28 +524,19 @@ static int flt_sum(DbleBin *a, DbleBin const *b, DbleBin const *c)
     unsigned32 guard=0, w;
     int32 bx, cx; unsigned32 bh, bl, ch, cl;
     int32 shift;
+    int rnddir=0;
     UNPACK(bx, bh, bl, b->msd, b->lsd);
     UNPACK(cx, ch, cl, c->msd, c->lsd);
-    if (bx == 0x7ff) {
-        if (bh != 0 || bl != 0)
-            TransferNaN(a, c, SignBit);
-        if (cx == 0x7ff && ch != 0 || cl != 0)
-            TransferNaN(a, c, SignBit);
-        SetToInfinity(a, 0);
-        return flt_ok;
-    }
-    if (cx == 0x7ff) {
-        if (ch != 0 || cl != 0)
-            TransferNaN(a, c, 0);
+    if (bx == 0x7ff || cx == 0x7ff) {
         SetToInfinity(a, 0);
         return flt_ok;
     }
     shift = bx - cx;
-    if (shift < -54 || (bh == 0 && bl == 0))
+    if (shift < -54 || bh == 0)
     {   *a = *c;
         return flt_ok;
     }
-    if (shift > 54 || (ch == 0 && cl == 0))
+    if (shift > 54 || ch == 0)
     {   *a = *b;
         return flt_ok;
     }
@@ -412,7 +577,7 @@ static int flt_sum(DbleBin *a, DbleBin const *b, DbleBin const *c)
     bh += ch + (bl >> 24);
     bl = (bl << 8) + (w & 0xff);
     if (bh & 0x00200000)
-    {   guard = (bl << 31) | (guard >> 1);
+    {   guard = (bl << 31) | (guard >> 1) | (guard & 1);
         bl = (bh << 31) | (bl >> 1);
         bh = bh >> 1;
         bx += 1;
@@ -431,11 +596,15 @@ static int flt_sum(DbleBin *a, DbleBin const *b, DbleBin const *c)
             }
         }
         else bl += 1;
+        rnddir = +1;
     }
+    else if (guard)
+        rnddir = -1;
+
     {   int err = flt_ok;
         bh &= ~0x00100000;
         if (bx <= 0)
-            DENORMALISE(err, bx, bh, bl);
+            DENORMALISE(err, bx, bh, bl, rnddir);
         a->msd = bh | (bx << 20);
         a->lsd = bl;
         return err;
@@ -447,32 +616,27 @@ static int flt_difference(DbleBin *a, DbleBin const *b, DbleBin const *c)
     unsigned32 bg=0, cg=0, w, resultsign;
     int32 bx, cx; unsigned32 bh, bl, ch, cl;
     int32 shift;
+    int rnddir=0;
     UNPACK(bx, bh, bl, b->msd, b->lsd);
     UNPACK(cx, ch, cl, c->msd, c->lsd);
     if (bx == 0x7ff) {
-        if (bh != 0 || bl != 0)
-            TransferNaN(a, c, SignBit);
-        if (cx == 0x7ff) {
-            if (ch != 0 || cl != 0)
-                TransferNaN(a, c, SignBit);
+        if (cx == 0x7ff)
             return SetToNaN(a, InfMinusInf, 0);
-        }
-        SetToInfinity(a, 0);
+        else
+            SetToInfinity(a, 0);
         return flt_ok;
     }
     if (cx == 0x7ff) {
-        if (ch != 0 || cl != 0)
-            TransferNaN(a, c, SignBit);
         SetToInfinity(a, SignBit);
         return flt_ok;
     }
     shift = bx - cx;
-    if (shift < -54 || (bh == 0 && bl == 0))
+    if (shift < -54 || bh == 0)
     {   *a = *c;
         a->msd ^= SignBit;
         return flt_ok;
     }
-    if (shift < -54 || (ch == 0 && cl == 0))
+    if (shift < -54 || ch == 0)
     {   *a = *b;
         return flt_ok;
     }
@@ -591,11 +755,15 @@ static int flt_difference(DbleBin *a, DbleBin const *b, DbleBin const *c)
             }
         }
         else bl += 1;
+        rnddir = +1;
     }
+    else if (bg)
+        rnddir = -1;
+
     {   int err = flt_ok;
         bh &= ~0x00100000;
         if (bx <= 0)
-            DENORMALISE(err, bx, bh, bl);
+            DENORMALISE(err, bx, bh, bl, rnddir);
         a->msd = bh | (bx << 20) | resultsign;
         a->lsd = bl;
         return err;
@@ -606,6 +774,7 @@ int flt_add(DbleBin *a, DbleBin const *b, DbleBin const *c)
 /*   *a = *b + *c    */
 {   int ok;
     unsigned32 bh = b->msd, ch = c->msd;
+    if (ConvertNaNs(a, b, c)) return flt_ok;
 /* Do a case analysis on signs to end up with arithmetic on unsigned floats */
     if (bh & SignBit) {
         DbleBin b1; b1.msd = bh & ~SignBit; b1.lsd = b->lsd;
@@ -627,6 +796,7 @@ int flt_subtract(DbleBin *a, DbleBin const *b, DbleBin const *c)
 /*  *a = *b - *c  */
 {   int ok;
     unsigned32 bh = b->msd, ch = c->msd;
+    if (ConvertNaNs(a, b, c)) return flt_ok;
     if (bh & SignBit)
     {   DbleBin b1; b1.msd = bh & ~SignBit; b1.lsd = b->lsd;
         if (ch & SignBit) {
@@ -653,29 +823,25 @@ int flt_multiply(DbleBin *a, DbleBin const *b, DbleBin const *c)
     unsigned32 aa[7], bb[4], cc[4];
     int32 ax, i, j;
     unsigned32 as = (b->msd ^ c->msd) & SignBit;    /* sign for result */
+    int rnddir=0;
+    if (ConvertNaNs(a, b, c)) return flt_ok;
     UNPACK(bx, bh, bl, b->msd, b->lsd);
     UNPACK(cx, ch, cl, c->msd, c->lsd);
     if (bx == 0x7ff) {
-        if (bh != 0 || bl != 0)
-            TransferNaN(a, b, as);
-        else if (cx == 0x7ff && ch != 0 || cl != 0)
-            TransferNaN(a, c, as);
-        else if (cx != 0x7ff && ch == 0 && cl == 0)
+        if (cx != 0x7ff && ch == 0)
             return SetToNaN(a, InfTimesZero, as);
         else
             SetToInfinity(a, as);
         return flt_ok;
     }
     if (cx == 0x7ff) {
-        if (ch != 0 || cl != 0)
-            TransferNaN(a, c, as);
-        else if (bh == 0 && bl == 0)
+        if (bh == 0)
             return SetToNaN(a, InfTimesZero, as);
         else
             SetToInfinity(a, as);
         return flt_ok;
     }
-    if ((bh==0 && bl==0) || (ch==0 && cl==0))
+    if (bh==0 || ch==0)
     {   a->msd = as;    /* multiplication by 0.0         */
         a->lsd = 0;     /* note treatment of sign.       */
         return flt_ok;
@@ -728,13 +894,17 @@ int flt_multiply(DbleBin *a, DbleBin const *b, DbleBin const *c)
             }
         }
         else al += 1;
+        rnddir = +1;
     }
+    else if (carry)
+        rnddir = -1;
+
     {   int err = flt_ok;
         ah &= ~0x00100000;
         if (ax >= 0x7ff)
             return SetToInfinity(a, as);
         else if (ax <= 0)
-            DENORMALISE(err, ax, ah, al);
+            DENORMALISE(err, ax, ah, al, rnddir);
         a->msd = ah | (ax << 20) | as;
         a->lsd = al;
         return err;
@@ -748,34 +918,28 @@ int flt_divide(DbleBin *a, DbleBin const *b, DbleBin const *c)
     unsigned32 cx, ch, cl;
     unsigned32 ah, al, as = (b->msd ^ c->msd) & SignBit;
     int32 ax, i;
+    int rnddir=0;
+    if (ConvertNaNs(a, b, c)) return flt_ok;
     UNPACK(bx, bh, bl, b->msd, b->lsd);
     UNPACK(cx, ch, cl, c->msd, c->lsd);
     if (bx == 0x7ff) {
-        if (bh != 0 || bl != 0)
-            TransferNaN(a, b, as);
-        else if (cx == 0x7ff) {
-            if (ch != 0 || cl != 0)
-                TransferNaN(a, c, as);
-            else
-                return SetToNaN(a, InfDivInf, as);
-        } else
+        if (cx == 0x7ff)
+            return SetToNaN(a, InfDivInf, as);
+        else
             SetToInfinity(a, as);
         return flt_ok;
     }
     if (cx == 0x7ff) {
-        if (ch != 0 || cl != 0)
-            TransferNaN(a, c, as);
-        else
-            a->msd = as, a->lsd = 0;
+        a->msd = as, a->lsd = 0;
         return flt_ok;
     }
-    if (ch == 0 && cl == 0) {
-        if (bh == 0 && bl == 0)
+    if (ch == 0) {
+        if (bh == 0)
             return SetToNaN(a, ZeroDivZero, as);        /* 0.0 / 0.0    */
         SetToInfinity(a, as);
         return flt_divide_by_zero;
     }
-    if (bh == 0 && bl == 0)
+    if (bh == 0)
     {   a->msd = as;            /*  0.0 / any normal non-zero = 0.0     */
         a->lsd = 0;
         return flt_ok;
@@ -822,13 +986,17 @@ int flt_divide(DbleBin *a, DbleBin const *b, DbleBin const *c)
             }
         }
         else al += 1;
+        rnddir = +1;
     }
+    else if (bh)
+        rnddir = -1;
+
     {   int err = flt_ok;
         ah &= ~0x00100000;
         if (ax >= 0x7ff)
             return SetToInfinity(a, as);
         else if (ax <= 0)
-            DENORMALISE(err, ax, ah, al);
+            DENORMALISE(err, ax, ah, al, rnddir);
         a->msd = ah | (ax << 20) | as;
         a->lsd = al;
         return err;
@@ -843,12 +1011,18 @@ int flt_compare(DbleBin const *b, DbleBin const *c)
     unsigned32 bl = b->lsd;
     int32 ch = c->msd;
     unsigned32 cl = c->lsd;
+
+/* "Unordered" returns -2 */
+    if (((bh >> 20) & 0x7ff) == 0x7ff && ((bh << 12) | bl) != 0 ||
+        ((ch >> 20) & 0x7ff) == 0x7ff && ((ch << 12) | cl) != 0)
+        return -2;
+
 /* +0.0 is equal to -0.0                                                */
     if ((bh & ~SignBit)==0 && (ch & ~SignBit)==0 && bl == 0 && cl == 0)
         return 0;
 /* hmm. What about NaNs? What do we return for 'not comparable' ? */
     if (bh < 0 && ch >= 0) return -1;
-    else if (bh >= 0 && ch < 0) return 1;
+    else if (bh >= 0 && ch < 0) return +1;
     else if (bh < 0)
     {   int32 temp = bh;
         bh = ch & ~SignBit;
@@ -858,10 +1032,15 @@ int flt_compare(DbleBin const *b, DbleBin const *c)
         cl = temp;
     }
     if (bh < ch) return -1;
-    else if (bh > ch) return 1;
+    else if (bh > ch) return +1;
     else if (bl < cl) return -1;
-    else if (bl > cl) return 1;
+    else if (bl > cl) return +1;
     else return 0;
+}
+
+int flt_compare2(DbleBin const *a, DbleBin const *b)
+{
+    return 1 << (2 + flt_compare(a, b));
 }
 
 int flt_move(DbleBin *a, DbleBin const *b)
