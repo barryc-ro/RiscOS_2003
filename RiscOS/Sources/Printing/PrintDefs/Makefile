@@ -73,7 +73,10 @@ clean:
         ${RM} ${RDIR}.PaperLegal
 	@echo ${COMPONENT}: cleaned
 
-resources: ${RESFILES}
+dirs:
+	${MKDIR} ${RDIR}.Printers
+
+resources: ${RESFILES} dirs
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESDIR}.Palettes
 	${MKDIR} ${RESDIR}.Printers
