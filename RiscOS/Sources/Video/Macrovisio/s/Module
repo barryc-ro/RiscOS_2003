@@ -42,9 +42,20 @@
 ; 14-Apr-99  TMD  0.25-4.5.2.2  Added code for fast switching in/out of Macrovision video path, for closed-caption support.
 ; 19-Apr-99  BJGA 0.25-4.5.2.3  Now builds cleanly when Machine=Peregrine (using Hdr:MPEG2Card instead of Hdr:MPEG2bCard).
 ; 20-Apr-99  BJGA 0.25-4.5.2.4  Now ensures that control codes are always sent in pairs on odd fields
+; 10-May-99  BJGA 0.26          Merged development branch back onto trunk.
+; 30-Jun-99  BJGA 0.27          Added facility to blank screen for a specified number (including zero) of fields during a
+;                                switch in or out of caption mode. The various operations are now carried out on the VSync
+;                                event, to hide glitches within the VBI if possible.
 ;
 
 	LEADR	Module_LoadAddr
+
+        GET     Hdr:NdrDebug
+        GBLL    dadebug_module
+        GBLL    debug_irqsafe
+debug           SETL    false           ; false turns off all NdrDebug debugging
+dadebug_module  SETL    true
+debug_irqsafe   SETL    true
 
 TAB	*	9
 LF	*	10
@@ -141,7 +152,14 @@ ControlCodeState #      1               ; 0 = normal
                                         ; 1 = received first byte of a control code
                                         ; 2 = received second byte of a control code
                                         ; 3 = received matching repeated first byte
+SwitchState     #       1               ; 0 = not switching
+                                        ; 1 = waiting for VSync to turn palette all transparent / all black
+                                        ; 2 = waiting for VSync to switch paths
+                                        ; 3 = waiting for VSync to set palette appropriate for new path
+SwitchCountdown #       1               ; number of fields to wait until unblanking
         AlignSpace
+
+NextMacroType   #       4               ; MacroType to assert at next VSync (unless I²C bus is in use)
 
 IICBusyFlag     #       4
 
@@ -204,9 +222,11 @@ AGCBitShift_Fields	*	16
 
 EventVState_AntiTaping  *       1 :SHL: 0    ; anti-taping mode is engaged
 EventVState_Captioning  *       1 :SHL: 1    ; line 21 encoding is enabled
-EventVState_Modulate    *       1 :SHL: 2    ; next callback should modulate AGC registers
-EventVState_CaptionWaiting *    1 :SHL: 3    ; next callback should transmit caption data if possible
-EventVState_ExtDataWaiting *    1 :SHL: 4    ; next callback should transmit extended data if possible
+EventVState_Switching   *       1 :SHL: 2    ; a "caption mode" switch start or end is pending
+EventVState_Modulate    *       1 :SHL: 3    ; next callback should modulate AGC registers
+EventVState_CaptionWaiting *    1 :SHL: 4    ; transmit caption data if possible
+EventVState_ExtDataWaiting *    1 :SHL: 5    ; transmit extended data if possible
+EventVState_OKToSwitch  *       1 :SHL: 6    ; "caption mode" switch is pending and I²C bus is free
  ]
 
 ; **************** Module code starts here **********************
@@ -256,6 +276,10 @@ Mod_SWITable
 	ALIGN
  ]
 
+ [ debug
+        InsertNDRDebugRoutines
+ ]
+
 ; *****************************************************************************
 ;
 ;       Mod_Init - Initialisation entry
@@ -277,6 +301,10 @@ Mod_Init Entry
                                         ; so Tutu can free it for me when I die
 05
         MOV     r12, r2
+
+      [ debug
+        Debug_Open      "MacroDebug"
+      ]
 
         MOV     r0, #0
         STR     r0, PaletteVClaimed
@@ -483,7 +511,7 @@ ProcessRCV2Vars Entry "r0,r1"
 	STRVS	r0, [sp, #4]
 
    [ :DEF: RCV2SN
-	LDR	r2, MacroType		; Reload macrovision type
+	LDR	r2, NextMacroType	; Reload macrovision type
 	CMP	r2, #0			; Check for normal mode.
 	BNE	%FT10			; If it's not normal don't adjust
 
@@ -505,7 +533,7 @@ ProcessRCV2Vars Entry "r0,r1"
 10
    ]
    [ :DEF: RCV2EN
-	LDR	r2, MacroType		; Reload macrovision type
+	LDR	r2, NextMacroType	; Reload macrovision type
 	CMP	r2, #0			; Check for normal mode.
 	BNE	%FT20			; If it's not normal don't adjust
 
@@ -641,6 +669,9 @@ Mod_Die Entry
 	BL	UnsetVars		; unset system variables so no-one thinks we're still here
  ]
 
+ [ debug
+        Debug_Close
+ ]
         CLRV
         EXIT
 
@@ -793,15 +824,18 @@ ClaimReleaseEventV Entry "r0-r2"
 	TEQNE	r0, #3
         TEQEQ   r1, #1                          ; and NTSC
         ORREQ   r2, r2, #EventVState_Captioning ; then set captioning bit
+        LDRB    r14, SwitchState
+        TEQ     r14, #0                         ; if waiting for either blanking or unblanking
+        ORRNE   r2, r2, #EventVState_Switching  ; then set path-switch bit
 
         LDR     r0, EventVState                 ; get the old value
         STR     r2, EventVState                 ; store the new value
 
-        TST     r2, #EventVState_AntiTaping :OR: EventVState_Captioning
+        TST     r2, #EventVState_AntiTaping :OR: EventVState_Captioning :OR: EventVState_Switching
         BNE     %FT50
 
-	; Both states are now off - if either one of them used to be on, release EventV
-	TST     r0, #EventVState_AntiTaping :OR: EventVState_Captioning
+	; All states are now off - if any of them used to be on, release EventV
+	TST     r0, #EventVState_AntiTaping :OR: EventVState_Captioning :OR: EventVState_Switching
 	BLNE    ReleaseEventV
 	EXITS
 
@@ -813,8 +847,8 @@ ClaimReleaseEventV Entry "r0-r2"
 	MOVNE	r14, #1
 	STRNE	r14, VSyncCount                 ; start going thru table next vsync
 
-        ; One or both states is now on - if neither of them used to be, claim EventV
-        TST     r0, #EventVState_AntiTaping :OR: EventVState_Captioning
+        ; One or more states is now on - if none of them used to be, claim EventV
+        TST     r0, #EventVState_AntiTaping :OR: EventVState_Captioning :OR: EventVState_Switching
         BLEQ    ClaimEventV
         EXITS
       ]
@@ -875,7 +909,7 @@ MyEventV Entry "r0-r4"
 	EXIT	NE
       [ Captions
         LDR     r2, EventVState
-        BIC     r2, r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting
+        BIC     r2, r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting :OR: EventVState_OKToSwitch
 
         LDR     r0, EventVCallbackRequested
         TEQ     r0, #0                          ; don't do any anti-taping stuff if we're still waiting for the last callback
@@ -886,9 +920,13 @@ MyEventV Entry "r0-r4"
         STR     r0, VSyncCount
         ORREQ   r2, r2, #EventVState_Modulate   ; only modulate if anti-taping and count has reached zero
 
+        LDR     r14, IICBusyFlag
+        TST     r2, #EventVState_Switching      ; if a path switch is pending
+        TEQNE   r14, #1                         ; and foreground isn't doing IIC_Control,
+        ORRNE   r2, r2, #EventVState_OKToSwitch ; then note we can do a path switch this time (rather than defer it)
+
         TST     r2, #EventVState_Captioning     ; if not captioning,
-        LDRNE   r14, IICBusyFlag                ; or foreground is already doing an IIC_Control,
-        TEQNE   r14, #1
+        TEQNE   r14, #1                         ; or foreground is already doing an IIC_Control,
         BEQ     %FT10                           ; don't bother checking FIFOs
 
       [ BigFIFOs
@@ -926,7 +964,7 @@ MyEventV Entry "r0-r4"
         ORRNE   r2, r2, #EventVState_ExtDataWaiting
 
 10      STR     r2, EventVState
-        TST     r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting
+        TST     r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting :OR: EventVState_OKToSwitch
         EXIT    EQ                              ; don't bother with switching to SVC mode if nothing to do
 
         MOV     r3, r2
@@ -935,6 +973,21 @@ MyEventV Entry "r0-r4"
         TEQP    r0, #0
         NOP
         Push    "lr"
+
+        ; Do blanking/switching/unblanking at highest priority, to avoid glitches
+        LDRB    r14, SwitchState
+        TEQ     r14, #1                         ; if waiting to blank (which may be followed by a switch on the same VSync)
+        MVN     r0, r3
+        TSTEQ   r0, #EventVState_OKToSwitch     ; and it's okay to switch
+        BLEQ    DoCaptionSwitchBlank            ; then do so
+        LDRB    r14, SwitchState
+        TEQ     r14, #2                         ; if waiting to switch paths (including if we just blanked)
+        MVN     r0, r3
+        TSTEQ   r0, #EventVState_OKToSwitch     ; and it's okay to switch (this will be faked to false if we just turned transparent)
+        BLEQ    DoCaptionSwitchSwitch           ; then do so
+        LDRB    r14, SwitchState
+        TEQ     r14, #3                         ; if waiting to unblank (including if we just did the switch)
+        BLEQ    DoCaptionSwitchUnblank          ; then see if we've waited enough fields yet
 
         TST     r3, #EventVState_Modulate
         MOVNE   r0, #1
@@ -1501,6 +1554,9 @@ RGBToYUV Entry "r0,r3-r6"
 
 SelectVideoPath Entry "r0-r4"
 	STR	r0, MacroType		; save away state, so we know where we are
+ [ Captions
+        STR     r0, NextMacroType       ; ensure NextMacroType = MacroType (cancels any pending caption mode switch)
+ ]
 	STR	r1, TVStandard
 
  [ ProgramCTRL1
@@ -2381,27 +2437,32 @@ SetState Entry
  [ Captions
 ; *****************************************************************************
 ;
-;	CaptionControl - SWI to enable/disable closed caption code
+;	CaptionControl - SWI to enable/disable closed caption mode
 ;
 ; in:	r0 = flags
 ;	      bit 0 set => enable closed-caption mode
 ;	      bit 0 clear => disable closed-caption mode
+;             bit 1 set => R1 contains number of fields to blank during switch
+;	r1 = number of fields to blank during switch (0-255), if flag bit 1 is set, else defaults to 0
 ;
 ; out:  All registers preserved
 
 CaptionControl Entry "r0-r4, r9"
+        LDR     r14, TVStandard
+        TEQ     r14, #1
+        EXIT    NE              ; only proceed if we're on an NTSC TV!!
 ; Eventually check OK to change first
 
 	TST	r0, #1 :SHL: 0	; enabling it
-	MOVNE	r3, #3		; then set MacroType to 3
+	MOVNE	r3, #3		; then set NextMacroType to 3
 	MOVEQ	r3, #0		; else 0
-	LDR	r1, MacroType	; old value
+	LDR	r1, NextMacroType ; old value
 	EOR	r2, r1, #3	; EOR 3 should equal new value
 	TEQ	r2, r3		; if different
 	EXIT	NE		; then just ignore call
 
 	TEQ	r3, #0		; if not switching to normal mode
-	STRNE	r3, MacroType	; then update MacroType, and
+	STRNE	r3, NextMacroType ; then update NextMacroType, and
 	BNE	%FT20		; skip this
 
 ; Now remove any existing captions before we switch away from the SAA7183 video path
@@ -2420,7 +2481,7 @@ CaptionControl Entry "r0-r4, r9"
         MOV     r2, #EraseCaptions_EvenField_End-EraseCaptions_EvenField_Start
         BL	LoadCaptions					; clear captions channels 3 and 4
 
-	STR	r3, MacroType	; store new type, *before* we reenable IRQs, so if zero, it stops anyone
+	STR	r3, NextMacroType ; store new type, *before* we reenable IRQs, so if zero, it stops anyone
 				; getting in with more CC data.
 	TEQP	r4, #0		; restore IRQ state
 
@@ -2443,21 +2504,9 @@ CaptionControl Entry "r0-r4, r9"
 	BNE	%BT10
 20
 
-	LDR	r0, MacroType
-	TEQ	r0, #3
-	MOVEQ	r0, #1		; 0 -> 0, 3 -> 1, as far as switches are concerned
-	LDR	r1, TVStandard
-	BL	Program_TDAs
-
-; now patch palette to make ED3 control transparency (assumes 16bpp)
-
-	LDR	r0, MacroType
-	TEQ	r0, #0
-	ADREQ	r0, NormalEDPalette
-	ADRNE	r0, MacroEDPalette
-	BL	PatchEDPalette		; (bits 4..7 are the ED values)
-
-; now update RCV2 registers from system variables
+; Set up RCV2IICBlk for the switch code
+; We need to do this here because OS_ReadVarVal enables interrupts (!) so we
+; can't use it from event code but we also get a speed benefit from doing it now.
 
 	BL	ProcessRCV2Vars		; updates SAA7183IICMap and returns values in r0,r1
 	AND	r3, r0, #&FF		; bits 0..7 of RCV2S
@@ -2465,19 +2514,26 @@ CaptionControl Entry "r0-r4, r9"
 	AND	r3, r1, #&FF
 	STRB	r3, RCV2IICBlk + 2
 	AND	r3, r1, #&700
-	MOV	r3, r3, LSR #4
-	AND	r0, r0, #&700
+ 	MOV	r3, r3, LSR #4
+ 	AND	r0, r0, #&700
 	ORR	r3, r3, r0, LSR #8
 	STRB	r3, RCV2IICBlk + 3
 
-	MOV	r0, #IICDevice_SAA7183
-	ADR	r1, RCV2IICBlk
-	MOV	r2, #4		; one byte for sub-address + 3 bytes of data
-        MyIIC_Control
+; Initialise switch state variables
+
+        LDMIA   sp, {r0, r1}                    ; get back entry registers
+        TST     r0, #1:SHL:1                    ; if flag bit 1 is clear,
+        MOVEQ   r1, #0                          ; then blanked fields defaults to 0
+        STR     r1, SwitchCountdown
+        MOV     r0, #1
+        STRB    r0, SwitchState                 ; set switch state to 1 (waiting for VSync to start blanking)
+
+; Check to see if we need to claim EventV
 
 	LDR	r0, MacroType
 	LDR	r1, TVStandard
 	BL	ClaimReleaseEventV
+
 	EXIT
 
 EraseCaptions_OddField_Start
@@ -2494,9 +2550,147 @@ EraseCaptions_EvenField_Start
 ;        =       &1D, &2E, &1D, &2E              ; Erase Nondisplayed Memory, captions channel 4
 EraseCaptions_EvenField_End
 
+; DoCaptionSwitchBlank - called from EventV to blank the screen before a switch
+;
+; out:  r0-r2 may be corrupted
+;
+
+DoCaptionSwitchBlank
+        Entry   "r3, r4, r9"
+
+; Set palette either completely transparent or completely black, depending on whether we're blanking fields
+
+        LDRB    r14, SwitchCountdown
+        TEQ     r14, #0
+	ADREQ	r0, TransparentEDPalette
+	BICEQ   r3, r3, #EventVState_OKToSwitch ; if not blanking, then force a wait until at least the next field (yuk)
+	STREQ   r3, [sp]
+	ADRNE   r0, OpaqueEDPalette
+	BL	PatchEDPalette
+
+; Set gamma table to all-zero (so all opaque VIDC output is black)
+
+        LDRB    r14, SwitchCountdown
+        TEQ     r14, #0
+        BEQ     %FT39                   ; don't bother with this if not actually blanking the screen
+        MOV     r2, sp
+        SUB     sp, sp, #256*3
+        MOV     r1, sp
+        MOV     r0, #0
+30      STR     r0, [r1], #4
+        TEQ     r1, r2
+        BNE     %BT30
+        MOV     r0, sp
+        ADD     r1, sp, #256*1
+        ADD     r2, sp, #256*2
+        MOV     r4, #9
+        MOV     r9, #PaletteV
+        SWI     XOS_CallAVector
+        ADD     sp, sp, #256*3
+39
+
+; Update state variable
+
+        MOV     r14, #2
+        STRB    r14, SwitchState
+
+        EXIT
+
+; DoCaptionSwitchSwitch - called from EventV to actually do path switching to/from caption mode during flyback
+;
+; in:   NextMacroType contains the MacroType to switch to
+; out:  r0-r2 may be corrupted
+;
+
+DoCaptionSwitchSwitch
+        Entry   "r3"
+
+; Actually switch video paths
+
+	LDR	r0, NextMacroType
+	STR     r0, MacroType
+	TEQ	r0, #3
+	MOVEQ	r0, #1		; 0 -> 0, 3 -> 1, as far as switches are concerned
+	LDR	r1, TVStandard
+	BL	Program_TDAs
+
+; Update RCV2 registers from system variables
+
+	MOV	r0, #IICDevice_SAA7183
+	ADR	r1, RCV2IICBlk
+	MOV	r2, #4		; one byte for sub-address + 3 bytes of data
+	SWI	XIIC_Control
+
+; Update state variable
+
+        MOV     r14, #3
+        STRB    r14, SwitchState
+
+	EXIT
+
+; DoCaptionSwitchUnblank - called from EventV to unblank the screen after a switch
+;
+; out:  r0-r2 may be corrupted
+;
+
+DoCaptionSwitchUnblank
+        Entry   "r3, r4, r9"
+        LDRB    r14, SwitchCountdown
+        SUBS    r14, r14, #1
+        STRB    r14, SwitchCountdown
+        EXIT    PL              ; don't actually do anything unless we've waited the correct number of fields
+
+; Restore gamma table
+
+        SUB     sp, sp, #256*3
+        MOV     r1, sp
+        MOV     r0, #0
+40      STRB    r0, [r1, #256*2]
+        STRB    r0, [r1, #256*1]
+        STRB    r0, [r1], #1
+        ADD     r0, r0, #1
+        TEQ     r0, #256
+        BNE     %BT40
+        MOV     r0, sp
+        ADD     r1, sp, #256*1
+        ADD     r2, sp, #256*2
+        MOV     r4, #9
+        MOV     r9, #PaletteV
+        SWI     XOS_CallAVector
+        ADD     sp, sp, #256*3
+
+; Now patch/unpatch palette (assumes 16bpp): ED3 controls transparency in path 1, instead of ED0
+
+	LDR	r0, MacroType
+	TEQ	r0, #0
+	ADREQ	r0, NormalEDPalette
+	ADRNE	r0, MacroEDPalette
+	BL	PatchEDPalette		; (bits 4..7 are the ED values)
+
+; Update state variable
+
+        MOV     r14, #0
+        STRB    r14, SwitchState
+
+; See if we need to get off EventV
+
+	LDR	r0, MacroType
+	LDR	r1, TVStandard
+	BL	ClaimReleaseEventV
+
+        EXIT
+
 NormalEDPalette
 ; Normal mode ED palette: bit 15 of pixel value turns on ED0
 	=	0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1
+
+TransparentEDPalette
+; Should be transparent in both normal and macro modes: ED0 set, ED3 clear
+	=	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+
+OpaqueEDPalette
+; Palette where no MPEG is visible in either normal or macro mode: ED0 clear, ED3 set
+        =       8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8
 
 MacroEDPalette
 ; Macro mode ED palette: bit 15 of pixel value turns off ED3; when bit 15 low, then bits 12-14 determine colour
@@ -2557,7 +2751,7 @@ PatchEDPalette Entry "r5", 128		; allocate 128 bytes for 16 entries * 2 flash st
 
 LoadCaptions
         Entry   "r0-r4"
-	LDR	r3, MacroType
+	LDR	r3, NextMacroType
 	TEQ	r3, #0
 	EXITS	EQ			; exit doing nothing if normal mode
         TST     r0, #1 :SHL: 0          ; select FIFO
