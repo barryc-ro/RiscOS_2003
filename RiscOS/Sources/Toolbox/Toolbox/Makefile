@@ -13,6 +13,7 @@
 #
 COMPONENT  = Toolbox
 ROM_MODULE = aof.${COMPONENT}
+TARGET     = rm.${COMPONENT}
 
 #
 # Export Paths for Messages module
@@ -28,7 +29,10 @@ CMHG    = cmhg
 CP      = copy
 LD      = link
 MKDIR   = cdir
+MODSQZ  = modsqz
+RESGEN	= resgen
 RM      = remove
+TLD     = tlink
 WIPE    = -wipe
 
 CPFLAGS = ~cfr~v
@@ -36,7 +40,9 @@ WFLAGS  = ~c~v
 
 AFLAGS   = -depend !Depend -Stamp -quit -CloseExec
 CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
+CFLAGSR  = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGSR}
 DFLAGS   = -DROM
+DFLAGSR  =
 INCLUDES = -Itbox:,C:
 
 #
@@ -62,17 +68,39 @@ OBJS =\
  o.resf\
  o.task
 
+RAM_OBJS =\
+ o.Modhdr_NoD\
+ o.base\
+ o.callback\
+ o.event\
+ o.filters\
+ o.filter_ven\
+ o.globals\
+ o.mainRAM\
+ o.object\
+ o.resf\
+ o.task\
+ o.messages
+
 #
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -O $@ $<
+.cmhg.o:; ${CMHG} -o $@ $<
 .s.o:;    ${AS} ${AFLAGS} -o $@ $<
 
 #
 # Main rules:
 #
 #
+all: ${TARGET}
+	@echo ${COMPONENT}: Module built (Relocatable)
+
+${TARGET}: ${RAM_OBJS} ${TBOXLIB}
+	${MKDIR} rm
+        ${TLD} -rmf -o $@ ${RAM_OBJS} ${TBOXLIB}
+        ${MODSQZ} $@
+
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
@@ -88,6 +116,7 @@ resources: Messages
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
@@ -105,6 +134,15 @@ rom_link:
         truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
+
+#
+# Explicit rules
+#
+o.mainRAM: c.main
+	${CC} ${CFLAGSR} -o o.mainRAM c.main
+
+@.o.messages: @.Messages
+        ${RESGEN} messages_file @.o.messages @.Messages Resources.Toolbox.Messages
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
@@ -198,45 +236,6 @@ o.globals:	C:h.kernel
 o.globals:	C:h.kernel
 o.globals:	C:h.kernel
 o.globals:	C:h.kernel
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	tbox:h.const
-o.main:	tbox:h.macros
-o.main:	tbox:h.services
-o.main:	tbox:h.debug
-o.main:	tbox:h.mem
-o.main:	tbox:h.messages
-o.main:	C:h.kernel
-o.main:	tbox:objects.h.toolbox
-o.main:	tbox:h.rmensure
-o.main:	tbox:objects.h.toolbox
-o.main:	h.globals
-o.main:	h.task
-o.main:	h.object
-o.main:	tbox:objects.h.toolbox
-o.main:	C:h.kernel
-o.main:	tbox:h.twimp
-o.main:	C:h.kernel
-o.main:	h.resf
-o.main:	tbox:objects.h.toolbox
-o.main:	C:h.kernel
-o.main:	h.filters
-o.main:	tbox:objects.h.toolbox
-o.main:	C:h.kernel
-o.main:	C:h.kernel
-o.main:	C:h.kernel
-o.main:	tbox:h.services
-o.main:	h.object
-o.main:	h.task
-o.main:	h.resf
-o.main:	h.event
-o.main:	tbox:objects.h.toolbox
-o.main:	C:h.kernel
-o.main:	h.filters
-o.main:	h.callback
-o.main:	h.main
-o.main:	C:h.kernel
 o.object:	c.object
 o.object:	C:h.kernel
 o.object:	C:h.swis
@@ -302,6 +301,84 @@ o.resf:	C:h.kernel
 o.resf:	h.resf
 o.resf:	h.task
 o.resf:	h.object
+o.main:	c.main
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	tbox:h.const
+o.main:	tbox:h.macros
+o.main:	tbox:h.services
+o.main:	tbox:h.debug
+o.main:	tbox:h.mem
+o.main:	tbox:h.messages
+o.main:	C:h.kernel
+o.main:	tbox:objects.h.toolbox
+o.main:	tbox:h.rmensure
+o.main:	tbox:objects.h.toolbox
+o.main:	h.globals
+o.main:	h.task
+o.main:	h.object
+o.main:	tbox:objects.h.toolbox
+o.main:	C:h.kernel
+o.main:	tbox:h.twimp
+o.main:	C:h.kernel
+o.main:	h.resf
+o.main:	tbox:objects.h.toolbox
+o.main:	C:h.kernel
+o.main:	h.filters
+o.main:	tbox:objects.h.toolbox
+o.main:	C:h.kernel
+o.main:	C:h.kernel
+o.main:	C:h.kernel
+o.main:	tbox:h.services
+o.main:	h.object
+o.main:	h.task
+o.main:	h.resf
+o.main:	h.event
+o.main:	tbox:objects.h.toolbox
+o.main:	C:h.kernel
+o.main:	h.filters
+o.main:	h.callback
+o.main:	h.main
+o.main:	C:h.kernel
+o.mainRAM:	c.main
+o.mainRAM:	C:h.kernel
+o.mainRAM:	C:h.swis
+o.mainRAM:	tbox:h.const
+o.mainRAM:	tbox:h.macros
+o.mainRAM:	tbox:h.services
+o.mainRAM:	tbox:h.debug
+o.mainRAM:	tbox:h.mem
+o.mainRAM:	tbox:h.messages
+o.mainRAM:	C:h.kernel
+o.mainRAM:	tbox:objects.h.toolbox
+o.mainRAM:	tbox:h.rmensure
+o.mainRAM:	tbox:objects.h.toolbox
+o.mainRAM:	h.globals
+o.mainRAM:	h.task
+o.mainRAM:	h.object
+o.mainRAM:	tbox:objects.h.toolbox
+o.mainRAM:	C:h.kernel
+o.mainRAM:	tbox:h.twimp
+o.mainRAM:	C:h.kernel
+o.mainRAM:	h.resf
+o.mainRAM:	tbox:objects.h.toolbox
+o.mainRAM:	C:h.kernel
+o.mainRAM:	h.filters
+o.mainRAM:	tbox:objects.h.toolbox
+o.mainRAM:	C:h.kernel
+o.mainRAM:	C:h.kernel
+o.mainRAM:	C:h.kernel
+o.mainRAM:	tbox:h.services
+o.mainRAM:	h.object
+o.mainRAM:	h.task
+o.mainRAM:	h.resf
+o.mainRAM:	h.event
+o.mainRAM:	tbox:objects.h.toolbox
+o.mainRAM:	C:h.kernel
+o.mainRAM:	h.filters
+o.mainRAM:	h.callback
+o.mainRAM:	h.main
+o.mainRAM:	C:h.kernel
 o.task:	c.task
 o.task:	C:h.kernel
 o.task:	C:h.swis
