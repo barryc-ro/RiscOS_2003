@@ -9,7 +9,7 @@
 # 1997-12-01	BAL		Added clean_all, cleans o${BUILD}, creates
 #				o${BUILD}
 # 1999-02-01    SBF             Added STB3 targets, plus call to StripDepnd tool
-# 1999-02-03    SBF             Added wipe rule to remove o${BUILD} on clean all
+# 1999-02-02    NCE             Added TestCard BASIC Prog
 
 
 #
@@ -31,6 +31,11 @@ RM      = remove
 WIPE    = -wipe
 STRIP   = -stripdepnd
 CD	= dir
+
+# BASIC Flags:
+BasCrunchflags = 31
+
+
 
 #AFLAGS = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS = -depend !Depend -Stamp -quit
@@ -79,8 +84,7 @@ BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedi
 Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib \
             ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
             
-STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
-            ${OM}.Graphics
+STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.Graphics \
 
 
 OBJS      = ${STB3}
@@ -105,28 +109,33 @@ clean:
         ${WIPE}	o.*		${WFLAGS}
         ${WIPE}	o${BUILD}.*	${WFLAGS}
         ${WIPE}	${TARGET}	${WFLAGS}
+        ${WIPE} @.TestCard	${WFLAGS}
         @echo Stripping dependencies from makefile...
         ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 clean_all: clean
 	${WIPE}	${APP}	${WFLAGS}
-        ${WIPE} o${BUILD} ${WFLAGS}
 	@echo ${COMPONENT}: cleaned all
 
 install:
 	${MKDIR} ${APP}
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CP} @.TestCard ${APP}.TestCard ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 dirs:
 	${MKDIR}	o${BUILD}
+	
 
 #
 # Target
 #
 ${TARGET}: ${OBJS} dirs
         ${LD} -o $@ ${OBJS} ${CLIB}
-
+        BasCrunch $(BasCrunchflags) @.b.TestCard @.TestCard
+        
+           
+        
 # Dynamic dependencies:
