@@ -18,6 +18,7 @@ ROM_LIBS        = ${RAM_LIBS}
 
 CFLAGS          = -zM -zps1 -ffah
 #CDEFINES = -DDEBUGLIB -DEMULATE
+CDEFINES = ${OPTIONS}
 CINCLUDES = -IC:USB -IOS: -IC:
 
 include StdTools
