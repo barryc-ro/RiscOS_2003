@@ -135,11 +135,13 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
+        ${WIPE} aof.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${RM} h.filewatch
         ${RM} hdr.filewatch
         ${RM} ${TARGET}
         ${RM} h.${CMHGNAME}
+        ${RM} aof
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -153,6 +155,7 @@ local_dirs:
 	${MKDIR} oz
 	${MKDIR} rm
 	${MKDIR} linked
+	${MKDIR} aof
 
 #
 # ROM target (re-linked at ROM Image build time)
