@@ -1,0 +1,231 @@
+/*m.c - redirection for memory allocation functions*/
+
+/*From CLib*/
+#include <kernel.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "m.h"
+#include "utils.h"
+
+#define JUNK 0xA5 /*used to initialise and clear blocks*/
+#define GUARD 0xACCE55ED /*set at the head of each block*/
+#define EXTRA 4 /*bytes extra on each block*/
+
+typedef struct Block *Block;
+
+struct Block
+   {  int guard;
+      Block next;
+      Block prev;
+      int size;
+      char *file;
+      int line;
+      char (data) [1];
+   };
+
+#define BLOCK(N) \
+      struct \
+         {  int guard; \
+            Block next; \
+            Block prev; \
+            int size; \
+            char *file; \
+            int line; \
+            char (data) [N]; \
+         }
+
+#define sizeof_BLOCK(N) \
+      (offsetof (struct Block, data) + (N)*sizeof ((Block) NULL)->data)
+
+static int Byte_Count = 0, Block_Count = 0;
+
+static Block List;
+/*------------------------------------------------------------------------*/
+void m_assert (char *file, int line, char *msg)
+{
+   _kernel_oserror error;
+
+   error.errnum = 1;
+   sprintf (error.errmess, "Assertion failure: %s", msg);
+   err_fatal_ (file, line, &error);
+}
+/*------------------------------------------------------------------------*/
+static void Check (char *file, int line)
+{
+   Block block;
+   int count = 0, size = 0, i;
+
+   /*To check the list in order of allocation, first find its start.*/
+   block = List;
+   if (block != NULL)
+      while (block->prev != NULL)
+         block = block->prev;
+
+   /*Then scan through it.*/
+   while (block != NULL)
+   {  count++;
+      size += block->size;
+
+      m_ASSERT (block->guard == GUARD);
+      m_ASSERT (block->size != 0);
+      m_ASSERT (strlen (block->file) < FILENAME_MAX);
+
+      if (block->next != NULL)
+         m_ASSERT (block->next->prev == block);
+
+      if (block->prev != NULL)
+         m_ASSERT (block->prev->next == block);
+
+      for (i = 0; i < EXTRA; i++)
+         m_ASSERT (block->data [block->size + i] == JUNK);
+
+      block = block->next;
+   }
+
+   m_ASSERT (count == Block_Count);
+   m_ASSERT (size == Byte_Count);
+}
+/*------------------------------------------------------------------------*/
+static void *Alloc (char *file, int line, int size, int filler)
+{
+   Block block;
+
+   Check (file, line);
+
+   if (size != 0 && (block = malloc (sizeof_BLOCK (size + EXTRA))) != NULL)
+   {  Block_Count++;
+      Byte_Count += size;
+
+      /*guard*/
+      block->guard = GUARD;
+
+      /*next*/
+      block->next = NULL;
+
+      /*prev*/
+      block->prev = List;
+
+      /*size*/
+      block->size = size;
+
+      /*file*/
+      block->file = file;
+
+      /*line*/
+      block->line = line;
+
+      /*data*/
+      memset (block->data,        filler, size);
+      memset (block->data + size, JUNK,   EXTRA);
+
+      /*Link it to the rest of the world.*/
+      if (List != NULL) List->next = block;
+      List = block;
+      return block->data;
+   }
+   else
+   {  /*0 bytes requested, or allocation failed.*/
+      return NULL;
+}  }
+/*------------------------------------------------------------------------*/
+void *m_malloc (char *file, int line, int size)
+      {return Alloc (file, line, size, JUNK);}
+/*------------------------------------------------------------------------*/
+void *m_calloc (char *file, int line, int count, int size)
+      {return Alloc (file, line, count*size, 0);}
+/*------------------------------------------------------------------------*/
+void m_free (char *file, int line, void *ptr, int size)
+{
+   Block block;
+
+   NOT_USED (file); /*maybe*/
+   NOT_USED (line); /*maybe*/
+   NOT_USED (size);
+
+   Check (file, line);
+
+   if (ptr != NULL)
+   {  /*block->data == ptr, therefore*/
+      block = (Block) ((char *) ptr - offsetof (struct Block, data));
+
+      if (block->next != NULL)
+         block->next->prev = block->prev;
+
+      if (block->prev != NULL)
+         block->prev->next = block->next;
+
+      if (List == block) List = block->prev;
+
+      Block_Count--;
+      Byte_Count -= block->size;
+
+      memset (block, JUNK, sizeof_BLOCK (block->size));
+
+      free (block);
+}  }
+/*------------------------------------------------------------------------*/
+void *m_realloc (char *file, int line, void *ptr, int old_size, int size)
+{
+   void *tmp;
+
+   if (ptr != NULL && size != 0)
+   {  
+      if ((tmp = m_malloc (file, line, size)) == NULL)
+         return NULL;
+
+      memcpy (tmp, ptr, MIN (size, old_size));
+
+      m_free (file, line, ptr, old_size);
+
+      return tmp;
+   }
+   else if (size != 0)
+      return m_malloc (file, line, size);
+   else
+   {  /*ptr != NULL*/
+      m_free (file, line, ptr, old_size);
+      return NULL;
+}  }
+#if DEBUG
+/*------------------------------------------------------------------------*/
+void m_summary (char *file, int line)
+{
+   Block block;
+   int i = 0, size = 0;
+
+   dbg (file, line, "m_SUMMARY\n");
+
+   Check (file, line);
+
+   /*To print out the list in order of allocation, first find its start.*/
+   block = List;
+   if (block != NULL)
+      while (block->prev != NULL)
+         block = block->prev;
+
+   /*Then scan through it.*/
+   while (block != NULL)
+   {  if (i%20 == 0)
+         dbg (file, line, "   %-*s   %*s   %s,%s\n",
+               DEC_WIDTH, "block no", DEC_WIDTH, "bytes",
+               "file", "line");
+
+      dbg (file, line, "   %-*d   %*d   %s,%d\n",
+            DEC_WIDTH, i, DEC_WIDTH, block->size,
+            block->file, block->line);
+
+      i++;
+      size += block->size;
+      block = block->next;
+   }
+
+   dbg (file, line, "total: Block_Count %d, Byte_Count %d\n",
+         Block_Count, Byte_Count);
+
+   m_ASSERT (i == Block_Count);
+   m_ASSERT (size == Byte_Count);
+}
+#endif
