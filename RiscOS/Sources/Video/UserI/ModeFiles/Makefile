@@ -11,13 +11,15 @@
 #
 # Generic options:
 #
-MKDIR   = cdir
-AS      = aasm
+MKDIR   = mkdir -p
+AS      = objasm
+LD      = link
 CP      = copy
 RM      = remove
 WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module ${THROWBACK} -To ${TARGET} -From
+ASFLAGS = -ABSolute -NOWarn -depend !Depend ${THROWBACK} ${OPTS} -o ${OBJECT}
+LDFLAGS = -bin -o ${TARGET}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~cfr~v
 
@@ -27,8 +29,11 @@ WFLAGS  = ~cfr~v
 COMPONENT = ModeFiles
 SOURCE    = s.ModeFiles
 TDIR      = rm.${MACHINE}
+ODIR      = o.${MACHINE}
 TARGET    = ${TDIR}.MF${TYPE}
+OBJECT    = ${ODIR}.MF${TYPE}
 RDIR      = ${RESDIR}.Monitors
+OPTS      = -PreDefine "SA_flag SETS \"${STANDALONE}\"" -PreDefine "Machine SETS \"${MACHINE}\""
 #
 # Generic rules:
 #
@@ -49,6 +54,7 @@ install:
 
 clean:
         ${WIPE} ${TDIR} ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -57,19 +63,35 @@ resources:
         @echo ${COMPONENT}: resource files copied
 
 ${TDIR}.MFPAL: ${SOURCE} s.PAL
+        ${MKDIR} ${ODIR}
         ${MKDIR} ${TDIR}
         ${AS} ${ASFLAGS} s.PAL
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
+        Access $@ rw/r
 
 ${TDIR}.MFNTSC: ${SOURCE} s.NTSC
+        ${MKDIR} ${ODIR}
         ${MKDIR} ${TDIR}
         ${AS} ${ASFLAGS} s.NTSC
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
+        Access $@ rw/r
 
 ${TDIR}.MF: ${SOURCE} s.ModeFiles
+        ${MKDIR} ${ODIR}
         ${MKDIR} ${TDIR}
         ${AS} ${ASFLAGS} s.ModeFiles
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
+        Access $@ rw/r
 
 ${TDIR}.MFSlave: ${SOURCE} s.Slave
+        ${MKDIR} ${ODIR}
         ${MKDIR} ${TDIR}
         ${AS} ${ASFLAGS} s.Slave
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
+        Access $@ rw/r
 
 # Dynamic dependencies:

@@ -24,6 +24,7 @@ Module_BaseAddr
         GET     Hdr:NewErrors
         GET     Hdr:MsgTrans
         GET     Hdr:UpCall
+        GET     Hdr:ResourceFS
         GET     VersionASM
 
 TAB     *       9
@@ -38,6 +39,14 @@ PixelAspectRatio_NTSC           *       &0E38E
 PixelAspectRatio_PAL            *       &11111
 PixelAspectRatio_PAL_anamorphic *       &16C17
 PixelAspectRatio_square         *       &10000
+
+; Sort out stand-alone option
+                GBLL    standalone
+ [ SA_flag <> "TRUE"
+standalone      SETL    0=1
+ |
+standalone      SETL    1=1
+ ]
 
 ; Sort out PAL/NTSC build type.
  [ :DEF: DontDetectHardware
@@ -120,16 +129,15 @@ max_running_work        *       :INDEX:@
 
 	&       0					; Start
 	&       Mod_Init	- Module_BaseAddr
- [ DontDetectHardware
-      [ STB
+ [ (DontDetectHardware :LAND: STB) :LOR: standalone
 	&       Mod_Die         - Module_BaseAddr       ; Die
-      |
-	&       0                                       ; Die
-      ]
-	&       0                                       ; Service
  |
 	&       0                                       ; Die
+ ]
+ [ :LNOT: DontDetectHardware :LOR: standalone
 	&       Mod_Service	- Module_BaseAddr	; Service
+ |
+	&       0                                       ; Service
  ]
 	&       Mod_Title	- Module_BaseAddr
 	&       Mod_HelpStr	- Module_BaseAddr
@@ -149,7 +157,15 @@ Mod_SWIDecode
         =       0
 
 Mod_HelpStr
-        =       "ModeFiles", TAB, "$Module_MajorVersion ($Module_Date) $TVStandard $Module_MinorVersion", 0
+        =       "ModeFiles", TAB, "$Module_MajorVersion ($Module_Date)"
+      [ Module_MinorVersion <> ""
+        =       " $Module_MinorVersion"
+      ]
+        =       " $TVStandard"
+      [ standalone
+        =       " (Standalone $Machine)"
+      ]
+        =       0
         ALIGN
 
 Mod_Flags
@@ -161,7 +177,7 @@ Mod_Flags
 ;
 
 Mod_Init
-        ENTRY   "r1-r4"
+        Entry   "r1-r4"
 
         LDR     r2, [r12]                       ; Have we already got a workspace ?
         CMP     r2, #0
@@ -175,6 +191,10 @@ Mod_Init
         STR     r2, [r12]                       ; Store workspace pointer.
 01
         MOV     r12, r2
+
+      [ standalone
+        BL      declareresourcefsfiles
+      ]
 
  [ DontDetectHardware
 
@@ -215,17 +235,7 @@ ModeFilesPathValueEnd
         =       0
         ALIGN
 
-      [ STB
-Mod_Die
-        ENTRY
-        MOV     r0, #UpCallV
-        ADR     r1, UpCallV_Handler
-        LDR     r2, [r12]
-        SWI     XOS_Release                     ; get off UpCallV
-        EXIT
-      ]
-
- | ; options out everything until Mod_SWIHandler!
+ | ; DontDetectHardware
 
 	; Determine TV/Monitor type
  [ IOMD_C_PALNTSCType <> 0 :LOR: IOMD_C_MonitorType <> 0
@@ -315,26 +325,73 @@ VGATextEnd      = 0
 TVTypeVar       = "TV$Type", 0
         ALIGN
 
+ ] ; DontDetectHardware
+
+
+; *****************************************************************************
+;
+;       Mod_Die - finalisation entry
+;
+
+ [ (DontDetectHardware :LAND: STB) :LOR: standalone
+Mod_Die
+        Entry
+      [ standalone
+        ADRL    R0,resourcefsfiles
+        SWI     XResourceFS_DeregisterFiles
+        CLRV                                    ; ignore errors
+      ]
+      [ DontDetectHardware :LAND: STB
+        MOV     r0, #UpCallV
+        ADR     r1, UpCallV_Handler
+        LDR     r2, [r12]
+        SWI     XOS_Release                     ; get off UpCallV
+      ]
+        EXIT
+ ]
+
 
 ; *****************************************************************************
 ;
 ;       Mod_Service - obvious really
 ;
 
+
+ [ :LNOT: DontDetectHardware :LOR: standalone
 Mod_ServiceTable
         &       0
         &       Mod_ServiceEntry - Module_BaseAddr
-        &       Service_PostInit
-        &       Service_MonitorLeadTranslation
+      [ standalone
+        &       Service_ResourceFSStarting      ; &60
+      ]
+      [ :LNOT: DontDetectHardware
+        &       Service_PostInit                ; &73
+        &       Service_MonitorLeadTranslation  ; &76
+      ]
         &       0
 
         DCD     Mod_ServiceTable - Module_BaseAddr
 Mod_Service
         MOV     r0, r0
+      [ standalone :LAND: DontDetectHardware
+	TEQ     r1, #Service_ResourceFSStarting
+      ]
+      [ standalone :LAND: :LNOT: DontDetectHardware
+	TEQ     r1, #Service_ResourceFSStarting
+	TEQNE	r1, #Service_MonitorLeadTranslation
+	TEQNE	r1, #Service_PostInit
+      ]
+      [ :LNOT: standalone :LAND: :LNOT: DontDetectHardware
 	TEQ	r1, #Service_MonitorLeadTranslation
 	TEQNE	r1, #Service_PostInit
+      ]
 	MOVNE	pc, lr
 Mod_ServiceEntry
+   [ standalone
+        TEQ     r1, #Service_ResourceFSStarting
+        BEQ     ResourceFSStarting
+   ]
+   [ :LNOT: DontDetectHardware
 	TEQ	r1, #Service_MonitorLeadTranslation
 	BEQ	MonitorLeadTranslation
 
@@ -343,7 +400,7 @@ Mod_ServiceEntry
 ;     All registers preserved
 
 	; Eaugh!  On PostInit, set the screen mode.
-	ENTRY	"r0-r2"
+	Entry	"r0-r2"
 	MOV	r0, #1				; Read configured mode
 	SWI	XOS_ReadSysInfo
 
@@ -365,7 +422,7 @@ Mod_ServiceEntry
 ;       20: Terminator = -1
 ;     r4 = Monitor number
 ;     r5 = Sync type
-MonitorLeadTranslation	ENTRY	"r0"
+MonitorLeadTranslation	Entry	"r0"
 
         LDR     r12, [r12]
 
@@ -417,7 +474,7 @@ NTSCMode	DCD	1, 640, 480, 4, -1, -1
 CheckConfiguredMode
 ; Out:  r3 = configured mode if valid (else preserved)
 ;
-        ENTRY   "r0-r2,r4,r5"
+        Entry   "r0-r2,r4,r5"
 
         MOV     r0, #161                ; read configured display mode
         MOV     r1, #MonitorModeCMOS
@@ -480,7 +537,21 @@ PALRes	DCD	PAL_Columns, 576, -1
    ]
  ]
 
- ] ; DontDetectHardware (option bracket opened in Mod_Init)
+   ] ; :LNOT: DontDetectHardware
+
+   [ standalone
+ResourceFSStarting
+; ResourceFS has been reloaded - redeclare resource files
+; In    R2 -> address to call
+;       R3 -> workspace for ResourceFS module
+        Push    "R0,LR"
+        ADRL    R0,resourcefsfiles
+        MOV     LR,PC                   ; LR -> return address
+        MOV     PC,R2                   ; R2 -> address to call
+        Pull    "R0,PC"
+   ] ; standalone
+
+ ] ; :LNOT: DontDetectHardware :LOR: standalone
 
 ; *****************************************************************************
 ;
@@ -499,7 +570,7 @@ JumpTable
 JumpTableEnd
 
 BadSWI
-        ENTRY "r1-r7"
+        Entry "r1-r7"
         ADR     r0, ErrorBadSWI
         MOV     r1, #0
         MOV     r2, #0
@@ -516,7 +587,7 @@ ErrorBadSWI
 Divide
 ; Out:  r0 = r0 / r1
 ;
-        ENTRY   "r1,r2"
+        Entry   "r1,r2"
         DivRem  r2, r0, r1, lr
         MOV     r0, r2
         EXIT
@@ -544,7 +615,7 @@ MonitorType
         MOVEQ   r0, #8			; r0 = 8 (V will be clear)
         SUBNES  r0, r0, r0		; r0 = 0 (and clear potential V from CMP)
 01      ; r0 = 0 => PAL, r0 = 8 => NTSC
-	mrs    ,r10, CPSR
+	MRS     r10, CPSR
 	TST	r10, #2_11100
         Pull	"r1-r4,pc",NE
 	Pull	"r1-r4,pc",,^
@@ -558,14 +629,14 @@ NTSCString      = "NTSC"
  |
         LDRB    r0, monitor_type
  ]
-	mrs    ,r10, CPSR
+	MRS     r10, CPSR
 	TST	r10, #2_11100
         MOVNE	pc, lr
         MOVS    pc, lr
  ]
 
 SafeArea
-        ENTRY   "r4-r9"
+        Entry   "r4-r9"
         LDR     r9, =&45444957          ; "WIDE"
         TEQ     r0, r9                  ; was magic word used?
         MOVNE   r9, #0                  ; flag that we shouldn't return pixel aspect ratio
@@ -658,7 +729,7 @@ NTSCPercentages
 
  [ DontDetectHardware :LAND: STB
 UpCallV_Handler
-        ENTRY
+        Entry
         TEQ     r0, #UpCall_MPEG
         EXIT    NE
         TEQ     r3, #&1000
@@ -673,6 +744,22 @@ UpCallV_Handler
         SWI     XOS_ServiceCall
         Pull    "r0,r1"
         EXIT                            ; pass on call
+ ]
+
+        LTORG
+
+ [ standalone
+declareresourcefsfiles
+        Push    "R0,LR"
+        ADR     R0,resourcefsfiles
+        SWI     XResourceFS_RegisterFiles
+        Pull    "R0,PC"
+
+resourcefsfiles
+        ; You may wish to change the included files for some builds
+	ResourceFile	LocalRes:<Machine>.PALTV, Resources.Monitors.PALTV
+	ResourceFile	LocalRes:<Machine>.NTSCTV, Resources.Monitors.NTSCTV
+	DCD	0
  ]
 
         END
