@@ -455,7 +455,11 @@ static int vend_bootpfile(BOOTP *pkt)
   return 1;
 }
 
-static void bootp_interpret(BOOTP *, int, struct ifnet *);
+static void bootp_interpret(BOOTP *, int, struct ifnet *, int flags);
+typedef enum {
+        bif_DEFAULT,
+        bif_DONT_SET_INTERFACE_ADDRESSES
+} bootp_interpret_flags;
 
 /*
  * A bootstrap packet reply has been received
@@ -501,13 +505,13 @@ bootp_udp_input(m)
     if (DODEBUG(DBGADDRSRCH))
         Printf("Got BOOTP response: myaddr = %x\n", pkt.yiaddr);
 #endif
-    bootp_interpret(&pkt, len, ifp);
+    bootp_interpret(&pkt, len, ifp, bif_DEFAULT);
 }
 
 /* sbrodie 24/03/1999.  Split this function into two so that the DHCP module
  * can pass this function a DHCPACK message for it to look at and parse.
  */
-static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
+static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp, int flags)
 {
     struct ifreq ifr;
     struct sockaddr_in *sin;
@@ -519,16 +523,18 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
 
   do {
 
-    in.s_addr = pkt->yiaddr;
-    _kernel_setenv(BOOTPIPADDRVAR, inet_ntoa(in));
+    if (!(flags & bif_DONT_SET_INTERFACE_ADDRESSES)) {
+      in.s_addr = pkt->yiaddr;
+      _kernel_setenv(BOOTPIPADDRVAR, inet_ntoa(in));
 
-    in.s_addr = pkt->siaddr;
-    _kernel_setenv(BOOTPSERVERVAR, inet_ntoa(in));
+      in.s_addr = pkt->siaddr;
+      _kernel_setenv(BOOTPSERVERVAR, inet_ntoa(in));
 
-    /* If this was a DHCP packet, file field may have been overloaded */
-    if (vend_bootpfile(pkt)) {
-       /* But it wasn't this time */
-       _kernel_setenv(BOOTPSERVERFILE, (char *) pkt->file);
+      /* If this was a DHCP packet, file field may have been overloaded */
+      if (vend_bootpfile(pkt)) {
+         /* But it wasn't this time */
+         _kernel_setenv(BOOTPSERVERFILE, (char *) pkt->file);
+      }
     }
 
     /* If this packet is RFC-1048 compliant then extract any pertinent
@@ -545,8 +551,10 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
         tmp = vend_string(pkt, OPTION_DOMAINNAME, buf);
         if (tmp) _kernel_setenv(BOOTPDOMAINNAMEVAR, buf);
 
-        netmask.s_addr = vend_iaddr(pkt, OPTION_NETMASK);
-        if (netmask.s_addr) _kernel_setenv(BOOTPNETMASKVAR, inet_ntoa(netmask));
+        if (!(flags & bif_DONT_SET_INTERFACE_ADDRESSES)) {
+          netmask.s_addr = vend_iaddr(pkt, OPTION_NETMASK);
+          if (netmask.s_addr) _kernel_setenv(BOOTPNETMASKVAR, inet_ntoa(netmask));
+        }
 
         in.s_addr = vend_iaddr(pkt, OPTION_ROUTER);
         if (in.s_addr) _kernel_setenv(BOOTPGATEWAYVAR, inet_ntoa(in));
@@ -609,9 +617,11 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
        (void) in_control((struct socket *)0, SIOCSIFNETMASK, (caddr_t)&ifr, ifp);
     }
 
-    sin->sin_addr.s_addr = pkt->yiaddr;
-    (void) in_control((struct socket *)0, SIOCSIFADDR, (caddr_t)&ifr, ifp);
-    ifp->if_flags &= ~IFF_NEED_IPADDR;
+    if (!(flags & bif_DONT_SET_INTERFACE_ADDRESSES)) {
+      sin->sin_addr.s_addr = pkt->yiaddr;
+      (void) in_control((struct socket *)0, SIOCSIFADDR, (caddr_t)&ifr, ifp);
+      ifp->if_flags &= ~IFF_NEED_IPADDR;
+    }
 
     if (netmask.s_addr)
     {
@@ -619,7 +629,11 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
        (void) in_control((struct socket *)0, SIOCSIFBRDADDR, (caddr_t)&ifr, ifp);
     }
     sprintf(devname, "%s%d", ifp->if_name, ifp->if_unit);
-  } while (!service_internetstatus_dynamicboot_reply( devname, ifp->if_dib, (char *) &pkt, sizeof(pkt)));
+    if (flags & bif_DONT_SET_INTERFACE_ADDRESSES) {
+      service_internetstatus_dynamicboot_inform((char *) pkt, sizeof(*pkt));
+      break;
+    }
+  } while (!service_internetstatus_dynamicboot_reply( devname, ifp->if_dib, (char *) pkt, sizeof(*pkt)));
     bootwakeup(0);
 }
 
@@ -710,6 +724,7 @@ bootp_myaddr(ac, retry)
     BOOTP   pkt;
     char *server = "", *file = "", devname[16];
     int option_index;
+    unsigned int error_code;
 #ifdef FAULTY_MICROSOFT_SERVER
     int req_index;
 #endif
@@ -753,9 +768,10 @@ bootp_myaddr(ac, retry)
 
     sprintf(devname, "%s%d", ac->ac_if.if_name, ac->ac_if.if_unit);
     if (!service_internetstatus_dynamicboot_start(devname, ac->ac_if.if_dib, (char *)&pkt, sizeof(pkt),
-                                                  offsetof(BOOTP, options) + option_index)) {
+                                                  offsetof(BOOTP, options) + option_index, &error_code)) {
                                                           whoiam_service_claimed = 1;
-                                                          return EADDRNOTAVAIL;
+                                                          if (error_code > 255) error_code = EADDRNOTAVAIL;
+                                                          return error_code;
                                                   }
 
     if (retry && ((ac->ac_if.if_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)))
@@ -1308,7 +1324,7 @@ if_sdhcpreq(struct ifnet *ifp, struct ifdhcpreq *ifd)
 
     if ((ifd->ifr.ifr_flags & 4) == 4) {
             /* DHCP module wanted this packet parsed */
-            bootp_interpret(&ifd->packet, sizeof(ifd->packet), ifp);
+            bootp_interpret(&ifd->packet, sizeof(ifd->packet), ifp, (ifd->ifr.ifr_flags >> 8) & 0xFF);
     }
     else if ((ifd->ifr.ifr_flags & 2) == 0) {
             /* We did want to send a packet.  Setting bit 1 allows us to simply clear
