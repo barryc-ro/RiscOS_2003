@@ -92,7 +92,7 @@ export: ${EXPORTS}
         ${CP} h.gopherpub ${EXP_HDR}.h.webgopher ${CPFLAGS}
         @echo ${COMPONENT}: export complete
 
-install: ${TARGET}
+install: rm.${COMPONENT}
 	${MKDIR} ${INSTDIR}
 	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: installed
