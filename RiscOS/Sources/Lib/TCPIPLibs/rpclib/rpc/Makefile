@@ -20,7 +20,7 @@ INCLUDES=	TCPIPLibs:,C:
 
 OPTIONS=-DSUPPORT_TCP
 
-DEFINES=-Darm -DRISCOS -DDOMPAT_INET4 ${OPTIONS}
+DEFINES=-Darm -DRISCOS -DCOMPAT_INET4 ${OPTIONS}
 
 CFLAGS = -c -pcc -I${INCLUDES} ${DEFINES} -depend !Depend ${THROWBACK} 
 CFLAGSM = -c -pcc -ff -zps1 -zM -I${INCLUDES} ${DEFINES} -depend !Depend ${THROWBACK}
@@ -64,13 +64,13 @@ all:	rpclib rpclibzm
 rpclib: ${OFILES} o._dirs
      ${LIB} -c rpclib ${OFILES}
      ${LIB} -d rpclib o.rpc_common
-     ${LIB} -o -l rpclib
+     ${LIB} -o rpclib
 
 rpclibzm: ${ZFILES} o._dirs
      ${LIB} -c rpclibzm ${ZFILES}
      ${LIB} -d rpclibzm z.rpc_common
      ${LIB} -i rpclibzm o.callback
-     ${LIB} -o -l rpclibzm
+     ${LIB} -o rpclibzm
 
 export: export_${PHASE}
 
