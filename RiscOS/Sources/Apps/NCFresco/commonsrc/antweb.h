@@ -57,9 +57,9 @@ typedef struct awp_page_str {
 #define doc_selection_offset_NO_CARET	(-2)
 
 typedef struct				/* the currently selected item. Could be an anchor or a text item or a map */
-{				
-    int tag;		       
-    union			
+{
+    int tag;
+    union
     {
 	struct
 	{
@@ -86,7 +86,7 @@ struct antweb_selection_descr
 {
     wimp_box bbox;		/* bounding box of this item */
     antweb_selection_t item;	/* could be AREA or TEXT; AREFS are listed individually */
-    
+
 #if LINK_SORT
     int x, y;			/* hotspot to move off from */
 
@@ -101,7 +101,7 @@ struct antweb_selection_list_descr
 {
     antweb_selection_descr *list;	/* pointer to base of link array */
     int count;			/* count of number of items in link array */
-    
+
 #if LINK_SORT
     antweb_selection_descr *left;		/* pointer to left most link item (counting from left edge) */
     antweb_selection_descr *right;		/* pointer to right most link item (counting from right edge) */
@@ -144,7 +144,7 @@ typedef struct _antweb_doc {
 
     antweb_selection_t selection; /* holds currently selected object */
     antweb_selection_list_descr selection_list;	/* array to help move selection around */
-    
+
     awp_page_str *paginate, *last_page;
     struct _antweb_doc *fetching; /* currently fetching imagemap */
     struct layout_spacing_info *spacing_list;
@@ -159,7 +159,13 @@ typedef struct _antweb_doc {
     int pending_delete;
 
     int encoding;		/* charset encoding - defined in interface.h */
+
+    unsigned int fontusage[8];  /* 8x32=256-bit array of font usage */
+
 } antweb_doc;
+
+#define SETFONTUSED(doc,n) doc->fontusage[n>>5] |= (1 << (n&31))
+#define GETFONTUSED(doc,n) ( (doc->fontusage[n>>5] & (1 << (n&31)) ) != 0 )
 
 #define BASE(doc) ((doc->rh && doc->rh->base) ? doc->rh->base : doc->url)
 
@@ -185,6 +191,10 @@ extern int antweb_get_edges(const rid_text_item *ti, int *left, int *right);
 extern int antweb_render_background(wimp_redrawstr *rr, void *h, int update);
 extern int antweb_doc_abort_all(void);
 extern os_error *antweb_trigger_fetching(antweb_doc *doc);
+
+/* backend.c */
+
+extern os_error *antweb_doc_ensure_font( antweb_doc *doc, int n );
 
 /* from keyhl.c */
 

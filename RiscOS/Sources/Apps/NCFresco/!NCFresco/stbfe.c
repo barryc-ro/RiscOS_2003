@@ -2185,7 +2185,7 @@ void fe_font_size_set(int value, BOOL absolute)
 
     visdelay_begin();
 
-    frontend_complain(webfonts_init());
+    frontend_complain(webfonts_reinitialise());
 
     iterate_frames(main_view, reformat_view, NULL);
 
@@ -4242,7 +4242,7 @@ static void fe_mode_changed(void)
 
     /* Inform backend to recache fonts and colours */
     if ((frontend_dx != dx) || (frontend_dy != dy))
-	frontend_complain(webfonts_init());
+	frontend_complain(webfonts_reinitialise());
 
     frontend_complain(backend_screen_changed(be_change_MODE));
 
@@ -5259,7 +5259,7 @@ static BOOL fe_initialise(void)
 
 
     fe_stored_url = NULL;
-    frontend_complain(webfonts_init());
+    frontend_complain(webfonts_initialise());
 
     if (!use_toolbox)
 	statuswin_sprite_init();

@@ -183,11 +183,34 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
     return buffer;
 }
 
+static BOOL getbulletfont( antweb_doc *doc, const rid_text_item_bullet *tib,
+                           webfont **ppfont )
+{
+    int which;
+
+    if ( tib->list_type == HTML_UL && tib->item_type != HTML_UL_TYPE_DISC )
+    {
+        which = WEBFONT_SYMBOL(WEBFONT_SIZEOF(tib->base.st.wf_index));
+        antweb_doc_ensure_font( doc, which );
+
+        if ( webfonts[which].handle > 0 )
+        {
+            *ppfont = webfonts+which;
+            return TRUE;
+        }
+    }
+    which = tib->base.st.wf_index;
+    antweb_doc_ensure_font( doc, which );
+    *ppfont = webfonts+which;
+    return FALSE;
+}
 
 void obullet_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
-    webfont *wf = &webfonts[ti->st.wf_index];
+    webfont *wf;
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
+
+    getbulletfont( doc, tib, &wf );
 
     /* Width comes from preformatted size */
     switch (tib->list_type)
@@ -222,10 +245,11 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     font fh;
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
     BOOL symfont;
+    webfont *wf;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
-            
+
 #if !DEBUG_DLCOMPACT
     if ( tib->list_type == HTML_DL )
         return;
@@ -234,19 +258,8 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (update == object_redraw_HIGHLIGHT)
 	return;
 
-    symfont = FALSE;
-    fh = webfonts[ti->st.wf_index].handle;
-
-    /* check and see if thew symbol font is available */
-    if (tib->list_type == HTML_UL && tib->item_type != HTML_UL_TYPE_DISC)
-    {
-	font fhsym = webfonts[WEBFONT_SYMBOL(WEBFONT_SIZEOF(ti->st.wf_index))].handle;
-	if (fhsym > 0)
-	{
-	    fh = fhsym;
-	    symfont = TRUE;
-	}
-    }
+    symfont = getbulletfont( doc, tib, &wf );
+    fh = wf->handle;
 
     if (fs->lf != fh)
     {

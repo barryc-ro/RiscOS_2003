@@ -495,8 +495,9 @@ void mm__dump(FILE *f)
 	    err = 1;
 	}
 
+        /* pdh: report pointer as known to caller */
 	fprintf(f, "Block at 0x%p, size=%6d, caller='%s', caller2='%s'\n",
-		m, m->size, m->caller ? m->caller : none, m->caller2 ? m->caller2 : none);
+		m+1, m->size, m->caller ? m->caller : none, m->caller2 ? m->caller2 : none);
 
 	total_size += m->size;
 	real_total_size += ((m->size + 3) &~ 3) + sizeof(mm_chain) + sizeof(mm_tail) + 8; /* 8 is for the heap itself (guard and size/flags)  */

@@ -37,7 +37,7 @@
 /*****************************************************************************
 
   We now do a lot of freeing and allocating of rid_pos_item chains. To speed
-  this up, and induce less heap fragmentation, we cache pos chains and 
+  this up, and induce less heap fragmentation, we cache pos chains and
   allocate from this list if possible.
 
  */
@@ -150,7 +150,7 @@ static void rid_free_map(rid_map_item *p)
 
 extern void rid_free_pos(rid_pos_item *p)
 {
-    rid_float_item *fl = NULL, *fr = NULL;
+    rid_float_item *fl = NULL;
 
     while (p)
     {
@@ -158,6 +158,26 @@ extern void rid_free_pos(rid_pos_item *p)
 
 	if (p->floats)
 	{
+	    /* pdh: in the New Formatter, floats are replicated (i think) */
+#if 1
+            rid_float_item *nextfl;
+
+            fl = p->floats->left;
+            while ( fl )
+            {
+                nextfl = fl->next;
+                mm_free(fl);
+                fl = nextfl;
+            }
+
+            fl = p->floats->right;
+            while ( fl )
+            {
+                nextfl = fl->next;
+                mm_free(fl);
+                fl = nextfl;
+            }
+#else
 	    if (p->floats->left)
 	    {
 		if (fl != p->floats->left)
@@ -176,6 +196,8 @@ extern void rid_free_pos(rid_pos_item *p)
 		    fr = p->floats->right;
 		}
 	    }
+#endif
+            FMTDBG(( "pi%p: freeing floats %p\n", p, p->floats ));
 	    mm_free(p->floats);
 	}
 
@@ -183,10 +205,12 @@ extern void rid_free_pos(rid_pos_item *p)
 	p = next;
     }
 
+#if 0
     if (fl)
 	mm_free(fl);
     if (fr)
 	mm_free(fr);
+#endif
 }
 
 /* Free list of pos items with a bit more. */
@@ -196,7 +220,6 @@ extern void rid_free_pos(rid_pos_item *p)
 extern void rid_free_pos_tree(rid_pos_item *p)
 {
     rid_text_item *ti;
-    rid_float_item *fl = NULL, *fr = NULL;
 
     /*FMTDBGN(("rid_free_pos_tree(%p)\n", p));*/
 
@@ -238,6 +261,11 @@ extern void rid_free_pos_tree(rid_pos_item *p)
 	    }
 	}
     }
+
+#if 1
+    /* pdh: why not just... */
+    rid_free_pos(p);
+#else
 
     while (p)
     {
@@ -301,6 +329,7 @@ extern void rid_free_pos_tree(rid_pos_item *p)
 #endif
 	mm_free(fr);
     }
+#endif
 }
 
 void rid_free_object(rid_object_item *obj)
@@ -1294,7 +1323,7 @@ extern rid_float_item * rid_get_float_item(rid_text_item *ti, rid_pos_item *pi)
 
     while (fi != NULL && fi->ti != ti)
 	fi = fi->next;
-    
+
     return fi;
 }
 

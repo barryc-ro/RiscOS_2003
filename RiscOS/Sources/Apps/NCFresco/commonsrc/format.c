@@ -53,11 +53,13 @@
 
 static void basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
-			      rid_text_stream *stream);
+			      rid_text_stream *stream,
+			      int depth);
 
 static void basic_size_table(antweb_doc *doc,
 			     rid_header *rh,
-			     rid_table_item *table);
+			     rid_table_item *table,
+			     int depth);
 
 static void allocate_widths(antweb_doc *doc,
 			    rid_header *rh,
@@ -66,7 +68,8 @@ static void allocate_widths(antweb_doc *doc,
 
 static void recurse_format_stream(antweb_doc *doc,
 				  rid_header *rh,
-				  rid_text_stream *stream);
+				  rid_text_stream *stream,
+				  int depth);
 
 static void allocate_widths_stream(antweb_doc *doc,
 				   rid_header *rh,
@@ -115,7 +118,8 @@ static void format_width_checking_assertions(rid_table_item *table, BOOL horiz)
 
 static void basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
-			      rid_text_stream *stream)
+			      rid_text_stream *stream,
+			      int depth)
 {
     rid_text_item *ti;
 
@@ -127,7 +131,7 @@ static void basic_size_stream(antweb_doc *doc,
 	if (ti->tag == rid_tag_TABLE)
 	{
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
-	    basic_size_table(doc, rh, table);
+	    basic_size_table(doc, rh, table, depth+1);
 	}
 	else
 	{
@@ -147,18 +151,19 @@ static void basic_size_stream(antweb_doc *doc,
     FMTDBGN(("basic_size_stream: now doing raw_minwidth\n"));
 
     stream->fwidth = 1000000000;
-    format_stream(doc, rh, stream, MUST);
+    format_stream(doc, rh, stream, MUST, depth);
     stream->width_info.minwidth = stream->widest;
 
     FMTDBGN(("basic_size_stream: now doing raw_maxwidth\n"));
 
     stream->fwidth = 1000000000;
-    format_stream(doc, rh, stream, DONT);
+    format_stream(doc, rh, stream, DONT, depth);
     stream->width_info.maxwidth = stream->widest;
 }
 
 /*****************************************************************************/
 
+#if 0
 static int pct_raw_recalc(rid_table_item *table, BOOL horiz)
 {
     int width;
@@ -188,6 +193,7 @@ static int pct_raw_recalc(rid_table_item *table, BOOL horiz)
 
     return width;
 }
+#endif
 
 /*****************************************************************************
 
@@ -342,7 +348,7 @@ static void calc_abs_maxwidth(antweb_doc *doc,
 				   colspan_flag_ABSOLUTE_COL,
 				   colspan_flag_ABSOLUTE_COL,
 				   RAW_MIN);
-    
+
     colspan_all_and_eql_lt_copy(table, horiz, ABS_MAX,
 				colspan_flag_ABSOLUTE_GROUP,
 				colspan_flag_ABSOLUTE_GROUP,
@@ -476,7 +482,7 @@ static int largest_implied_table_width(rid_table_item *table,
 		    FMTDBG(("col %d, f %d, z %d, q %d, permit %d, left %d\n", x, f, z, q, permit, left));
 		    /*ASSERT(permit >= q); pcent6.html */
 #endif
-		    if (permit > q) 
+		    if (permit > q)
 		    {
 			table->colspans[x].width[slot] = permit;
 			left -= permit;
@@ -592,10 +598,10 @@ static int tiresome_pct_forced_change(rid_table_item *table, BOOL horiz, int bia
 	}
 
 	total = pct_raw_recalc(table, horiz);
-	
+
 	if (total == target)
 	    break;
-	
+
 	ASSERT(total == target - 1 || total == target + 1);
     }
 
@@ -672,8 +678,8 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     n_components =  find_connected_components (table, colspan_flag_PERCENT_COL, colspan_flag_PERCENT_GROUP, horiz);
     pct_con = (n_components < 2);
     FMTDBG (("normalise_percentages: n_components %d\n", n_components));
-    
-    
+
+
     /* Initialise column header locations without a percentage
        contribution */
     colspan_column_and_eql_set(table, horiz, PCT_RAW,
@@ -1068,7 +1074,8 @@ static void calc_rel_maxwidth(antweb_doc *doc,
 
 static void basic_size_table(antweb_doc *doc,
 			     rid_header *rh,
-			     rid_table_item *table)
+			     rid_table_item *table,
+			     int depth)
 {
     int x, y;
     rid_table_cell *cell;
@@ -1077,10 +1084,10 @@ static void basic_size_table(antweb_doc *doc,
     FMTDBG(("basic_size_table(%p %p id %d): recurse down doing basic sizing\n", doc, rh, table->idnum));
 
     if (table->caption != NULL)
-	basic_size_stream(doc, rh, &table->caption->stream);
+	basic_size_stream(doc, rh, &table->caption->stream, depth);
 
     for (x  = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
-	basic_size_stream(doc, rh, &cell->stream);
+	basic_size_stream(doc, rh, &cell->stream, depth);
 
     /* All descendent streams have been sized and raw_minwidth and
        raw_maxwidth calculated for them. Initialise the colspan data
@@ -1144,6 +1151,10 @@ static void basic_size_table(antweb_doc *doc,
     colspan_trace_cells(table, HORIZONTALLY);
 
     format_width_checking_assertions(table, HORIZONTALLY);
+
+    /* notice we don't free the colspan structure here, as we need it during
+     * the "real" format recursion
+     */
 }
 
 /*****************************************************************************
@@ -1351,26 +1362,27 @@ static void allocate_widths(antweb_doc *doc,
 
 static void recurse_format_table(antweb_doc *doc,
 				 rid_header *rh,
-				 rid_table_item *table)
+				 rid_table_item *table,
+				 int depth)
 {
     rid_text_item *orig_item;
     int x,y;
     rid_table_cell *cell;
     int height;
 
-    FMTDBG(("recurse_format_table(%p %p id=%d): entered\n", doc, rh, table->idnum));
+    FMTDBG(("recurse_format_table(%p %p id=%d): depth %d, entered\n", doc, rh, table->idnum, depth));
 
     /* Format all the descendents below us */
 
     if (table->caption != NULL)
-	recurse_format_stream(doc, rh, &table->caption->stream);
+	recurse_format_stream(doc, rh, &table->caption->stream, depth);
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
     {
 	VALUE v;
 	int z;
 
-	recurse_format_stream(doc, rh, &cell->stream);
+	recurse_format_stream(doc, rh, &cell->stream, depth);
 
 	rid_getprop(table, x, y, rid_PROP_HEIGHT, &v);
 
@@ -1396,7 +1408,7 @@ static void recurse_format_table(antweb_doc *doc,
 
 	*/
 
-    FMTDBG(("\nrecurse_format_table: now getting vertical information\n\n"));
+    FMTDBG(("\nrecurse_format_table: depth %d, now getting vertical information\n\n", depth));
 
     /* This is wasteful - the shape remains the same! */
     colspan_free_structure(table, HORIZONTALLY);
@@ -1420,7 +1432,8 @@ static void recurse_format_table(antweb_doc *doc,
     calc_pct_maxwidth(doc, rh, table, VERTICALLY);
     calc_rel_maxwidth(doc, rh, table, VERTICALLY);
 
-    FMTDBG(("Have worked out height information:\n"));
+    FMTDBG(("Have worked out height information for table id=%d, depth %d\n",
+	    table->idnum, depth));
 
     /*colspan_trace_cells(table, VERTICALLY);*/
 
@@ -1442,9 +1455,13 @@ static void recurse_format_table(antweb_doc *doc,
     orig_item->pad = 0;
 
     /* Perform vertical and horizontal positioning of cells within table */
-    format_position_table_cells(table);
+    /*format_position_table_cells(table);*/
 
-    FMTDBG(("recurse_format_table: Chosen size %d,%d for table id=%d\n", table->size.x, table->size.y, table->idnum));
+    FMTDBG(("recurse_format_table: Chosen size %d,%d for table id=%d at depth %d\n", 
+	    table->size.x, table->size.y, table->idnum, depth));
+
+    /* pdh: here? */
+    colspan_free_structure( table, VERTICALLY );
 }
 
 /*****************************************************************************
@@ -1458,11 +1475,12 @@ static void recurse_format_table(antweb_doc *doc,
 
 static void recurse_format_stream(antweb_doc *doc,
 				  rid_header *rh,
-				  rid_text_stream *stream)
+				  rid_text_stream *stream,
+				  int depth)
 {
     rid_text_item *ti;
 
-    FMTDBGN(("recurse_format_stream: recursing on any descendent streams first\n"));
+    FMTDBGN(("recurse_format_stream: depth %d, recursing on any descendent streams first\n", depth));
 
     /* FIRST any descendent levels */
     for (ti = stream->text_list; ti != NULL; ti = rid_scanf(ti))
@@ -1471,17 +1489,17 @@ static void recurse_format_stream(antweb_doc *doc,
 	{
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
 
-	    recurse_format_table(doc, rh, table);
+	    recurse_format_table(doc, rh, table, depth+1);
 	}
     }
 
     FMTDBGN(("recurse_format_stream: finished recursing on any descendent streams\n"));
 
     /* Then we can consider formatting this level */
-    FMTDBGN(("recurse_format_stream: now formatting this stream\n"));
+    FMTDBGN(("recurse_format_stream: now formatting depth %d stream\n", depth));
 
     /* This level */
-    format_stream(doc, rh, stream, MAYBE);
+    format_stream(doc, rh, stream, MAYBE, depth);
 }
 
 /*****************************************************************************
@@ -1525,17 +1543,25 @@ extern void rid_toplevel_format(antweb_doc *doc,
     else
     {
 	FMTDBG(("Sizing root stream\n"));
-	basic_size_stream(doc, rh, &rh->stream);
+	basic_size_stream(doc, rh, &rh->stream, 0);
 	FMTDBG(("\nDone sizing root stream:\n"));
 	/*dump_header(rh);*/
 
 	FMTDBG(("Allocating widths to root stream\n"));
 	allocate_widths(doc, rh, &rh->stream, fwidth);
-	FMTDBG(("\nDone allocating widths to root stream:\n"));
+	FMTDBG(("\nDone allocating widths to root stream: fwidth %d, width %d, widest %d\n",
+		rh->stream.fwidth, rh->stream.width, rh->stream.widest));
 	/*dump_header(rh);*/
 
+	if (rh->stream.widest > fwidth)
+	{
+	    FMTDBG(("\n\nCASE WHERE AUTOFIT MIGHT DO SOMETHING BETTER\n\n\n"));
+/* 	    rh->stream.fwidth = rh->stream.widest; */
+ 	    rh->stream.fwidth = rh->stream.width_info.minwidth;
+	}
+
 	FMTDBG(("Formatting root stream with fwidth %d\n", rh->stream.fwidth));
-	recurse_format_stream(doc, rh, &rh->stream);
+	recurse_format_stream(doc, rh, &rh->stream, 0);
 	FMTDBG(("\nDone formatting root stream with fwidth %d:\n", rh->stream.fwidth));
 
 #if 0

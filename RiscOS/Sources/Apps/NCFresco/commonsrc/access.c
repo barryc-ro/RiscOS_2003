@@ -361,7 +361,7 @@ static BOOL access_do_redial(access_handle d, alarm_handler continue_fn)
 #ifdef CBPROJECT
         InetDial_Connect();
 #else
-        os_cli(msgs_lookup("redial"));
+        os_cli(PROGRAM_NAME"Redial");
 #endif
 
         if (d->progress)

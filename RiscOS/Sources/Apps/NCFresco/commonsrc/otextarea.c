@@ -7,7 +7,7 @@
  * 17/5/96: SJM: added ctrl-copy to ctrl-k.
  * 11/6/96: SJM: added ch 10 to ch 13
  * 19/7/96: SJM: reworked loops to handle new list
- * 08/8/96: SJM: added gwindow to redraw 
+ * 08/8/96: SJM: added gwindow to redraw
  */
 
 /* Methods for textarea objects */
@@ -129,6 +129,12 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     char buffer[MAX_TEXT_LINE];
     int i;
 
+    if ( !GETFONTUSED( doc, WEBFONT_TTY ) )
+    {
+        webfont_find_font( WEBFONT_TTY );
+        SETFONTUSED( doc, WEBFONT_TTY );
+    }
+
     tai = ((rid_text_item_textarea *)ti)->area;
 
     otextarea_copy_defaults(tai);
@@ -155,7 +161,7 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
 {
-#ifndef BUILDERS 
+#ifndef BUILDERS
     rid_textarea_item *tai;
     rid_textarea_line *tal;
     int i;
@@ -174,7 +180,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 	highlight_render_outline(ti, doc, hpos, bline);
 	return;
     }
-    
+
     tai = ((rid_text_item_textarea *)ti)->area;
     has_caret = be_item_has_caret(doc, ti);
 
@@ -198,8 +204,8 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 
 #ifdef STBWEB
     render_plinth_full(bg,
-		       has_caret ? plinth_col_HL_M : plinth_col_M, 
-		       has_caret ? plinth_col_HL_L : plinth_col_L, 
+		       has_caret ? plinth_col_HL_M : plinth_col_M,
+		       has_caret ? plinth_col_HL_L : plinth_col_L,
 		       has_caret ? plinth_col_HL_D : plinth_col_D,
 		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
 		       hpos, bline - ti->max_down,
@@ -209,7 +215,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 		  hpos, bline - ti->max_down,
 		  ti->width, (ti->max_up + ti->max_down), doc );
 #endif
-    
+
     for(i=tai->sy, tal = tai->lines; tal && i; i--, tal = tal->next)
 	;
 
@@ -217,7 +223,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     fprintf(stderr, "otextarea_redraw: gwind %d,%d,%d,%d\n", g->x0, g->y0, g->x1, g->y1);
     fprintf(stderr, "otextarea_redraw: box   %d,%d,%d,%d\n", hpos+8, bline-ti->max_down+8, hpos+ti->width-8, bline+ti->max_up-8);
 #endif
-    /* Check for whether the text needs redrawing if it does 
+    /* Check for whether the text needs redrawing if it does
      * use the intersection of graphics window and text box
      */
     ta_box.x0 = hpos+8;
@@ -297,7 +303,7 @@ static void otextarea_scroll_lines(rid_text_item *ti, rid_header *rh, antweb_doc
     hpos += doc->margin.x0;
     vpos += doc->margin.y1;
 #endif
-    
+
     box.x0 = hpos + 8;
     box.x1 = hpos + ti->width - 8;
 
@@ -412,7 +418,7 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
 	antweb_update_item(doc, ti);
 	return FALSE;
     }
-    
+
     if (repos == object_caret_FOCUS)
 	antweb_update_item(doc, ti);
 #else
@@ -421,11 +427,11 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
 	antweb_update_item(doc, ti);
 	return FALSE;
     }
-    
+
     if (repos == object_caret_FOCUS && tai->base.colours.select != -1)
 	antweb_update_item(doc, ti);
 #endif
-    
+
     if (doc->selection.data.text.input_offset < 0)
     {
 	doc->selection.data.text.input_offset = 0;

@@ -9,6 +9,13 @@
 #define FORMAT_PRIVATE_BITS
 
 #include <limits.h>
+
+#ifndef MAXINT
+#define MAXINT INT_MAX
+/* repeat after me, there's no such soddin' thing as maxint */
+/* values.h on a linux installation defines it though. C++ feature? */
+#endif
+
 #include "rid.h"
 #include "antweb.h"
 #include "format.h"
@@ -38,6 +45,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt);
 #ifndef MAXINT
 #define MAXINT INT_MAX
 #endif
+
 
 /*****************************************************************************/
 
@@ -136,12 +144,19 @@ static void dispose_pos_list(RID_FMT_STATE *fmt)
     {
 	/*FMTDBGN(("dispose_pos_list: freeing previous pos list\n"));*/
 
+        /* pdh: OI! BORRIS! NOO!
+         * this doesn't free float_links or float_items
+
 	while (pi != fmt->stream->pos_last)
 	{
 	    rid_pos_item *pi2 = pi->next;
 	    mm_free(pi);
 	    pi = pi2;
 	}
+	mm_free( fmt->stream->pos_last );
+	 */
+
+	rid_free_pos( fmt->stream->pos_list );
 
 	fmt->stream->pos_list = fmt->stream->pos_last = NULL;
     }
@@ -156,6 +171,8 @@ static rid_pos_item *new_pos_item(RID_FMT_STATE *fmt)
     new->left_margin = NOTINIT;
 
     rid_pos_item_connect(fmt->stream, new);
+
+    FMTDBG(("pi%p: npi: floats %p\n", new, new->floats ));
 
     return new;
 }
@@ -221,6 +238,8 @@ static void no_text_line(RID_FMT_STATE *fmt)
 
 static void no_float_line(RID_FMT_STATE *fmt)
 {
+    if ( fmt->float_line )
+        FMTDBG(( "nfl: blatting float line %p\n", fmt->float_line ));
     fmt->float_line = NULL;
 }
 
@@ -375,9 +394,11 @@ static void advance_float_line(RID_FMT_STATE *fmt)
        shortest_height height left */
 
     new->floats = mm_calloc(1, sizeof(*new->floats));
-    
-    for (carried_over = 0, item = old->floats->left, finp = &new->floats->left; 
-	 item != NULL; 
+
+    FMTDBG(("pi%p: afl: floats=%p\n", new, new->floats ));
+
+    for (carried_over = 0, item = old->floats->left, finp = &new->floats->left;
+	 item != NULL;
 	 item = item->next)
     {
 	if (item->height_left > shortest_height)
@@ -402,11 +423,11 @@ static void advance_float_line(RID_FMT_STATE *fmt)
 	new->left_margin = item->entry_margin + item->ti->width;
     }
 
-    FMTDBG(("advance_float_line: carried over %d left floaters, LM %d\n", 
+    FMTDBG(("advance_float_line: carried over %d left floaters, LM %d\n",
 	    carried_over, new->left_margin));
 
-    for (carried_over = 0, item = old->floats->right, finp = &new->floats->right; 
-	 item != NULL; 
+    for (carried_over = 0, item = old->floats->right, finp = &new->floats->right;
+	 item != NULL;
 	 item = item->next)
     {
 	if (item->height_left > shortest_height)
@@ -431,7 +452,7 @@ static void advance_float_line(RID_FMT_STATE *fmt)
 	new->floats->right_margin = item->entry_margin - item->ti->width;
     }
 
-    FMTDBG(("advance_float_line: carried over %d right floaters, RM %d\n", 
+    FMTDBG(("advance_float_line: carried over %d right floaters, RM %d\n",
 	    carried_over, new->floats->right_margin));
 
     if (fmt->text_line == NULL)
@@ -440,6 +461,9 @@ static void advance_float_line(RID_FMT_STATE *fmt)
 	fmt->text_line = old;
 	close_down_current_line(fmt);
     }
+
+    if ( fmt->float_line )
+       FMTDBG(("afl: blatting float_line %p\n", fmt->float_line ));
 
     fmt->float_line = new;
     new->st = fmt->stream;
@@ -546,7 +570,8 @@ static void create_new_text_line(RID_FMT_STATE *fmt)
 	ASSERT(fmt->text_line->left_margin != NOTINIT);
 	fmt->float_line = NULL;
 	fmt->x_text_pos = fmt->text_line->left_margin;
-	FMTDBGN(("create_new_text_line: caught up with fmt->float\n"));
+	FMTDBG(("create_new_text_line: caught up with fmt->float %p\n",
+	        fmt->text_line ));
     }
 }
 
@@ -572,7 +597,7 @@ static void set_text_margin_info(RID_FMT_STATE *fmt)
     fmt->x_text_pos = lindent;
 
     FMTDBGN(("set_text_margin_info: LM %d, RM %d, XP %d, LI %d, RI %d\n",
-	     fmt->text_line->left_margin, 
+	     fmt->text_line->left_margin,
 	     fmt->text_line->floats->right_margin,
 	     fmt->x_text_pos,
 	     lindent,
@@ -721,6 +746,8 @@ static void fracture_float_line(RID_FMT_STATE *fmt)
 	new->next = later;
     }
 
+    FMTDBGN(("ffl: %p -> added %p -> %p\n", text, new, later ));
+
     if (text == fmt->stream->pos_last)
     {
 	ASSERT(later == NULL);
@@ -731,6 +758,8 @@ static void fracture_float_line(RID_FMT_STATE *fmt)
     new->left_margin = text->left_margin;
     new->floats = mm_calloc(1, sizeof(*new->floats));
     new->floats->right_margin = text->floats->right_margin;
+
+    FMTDBG(("pi%p: ffl: floats=%p\n", new, new->floats ));
 
     /* Linked into chain - still need to replicate surviving floating items. */
 }
@@ -830,10 +859,6 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
   it will at least work. The alternative is to think harder about
   removing N images on one go. but this might easily end up with
   different semantics and be a bastard to track.  */
-
-#ifndef MAXINT
-#define MAXINT INT_MAX   /* let's be ansi out there */
-#endif
 
 static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
 {
@@ -978,7 +1003,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 	FMTDBGN(("close_down_current_line: got float line to use now\n"));
 	if (pi->next == fmt->float_line)
 	{
-	    FMTDBGN(("close_down_current_line: have caught float line up - no float line now\n"));
+	    FMTDBG(("close_down_current_line: have caught float line %p up - no float line now\n", fmt->float_line));
 	    no_float_line(fmt);
 	}
 	no_text_line(fmt);
@@ -998,6 +1023,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
        is positioned in distances from the left margin. */
     if ( ! FLOATERS_THIS_LINE(pi) )
     {
+        FMTDBG(("pi%p: freeing floats %p\n", pi, pi->floats ));
 	mm_free(pi->floats);
 	pi->floats = NULL;
     }
@@ -1214,14 +1240,24 @@ static void next_floating_item(RID_FMT_STATE *fmt)
        being a floating line. */
     ASSERT(fmt->float_line->first == NULL);
 
+    FMTDBG(("nfi: 1: float_line=%p\n", fmt->float_line));
+
     /* We might not be able to fit the floating item within the
        available space, or minwidth formatting might wish to force us
        to not fit the item. Advance until we can fit it. A lone
        floating item will always fit, whatever the fwidth. */
+
+    /* Better than spinning! */
+    ASSERT(fmt->next_item->width <= fmt->format_width);
+
     while  ( ! floating_item_fits(fmt) )
 	advance_float_line(fmt);
 
+    FMTDBG(("nfi: 2: float_line=%p\n", fmt->float_line));
+
     position_floating_item(fmt);
+
+    FMTDBG(("nfi: 3: float_line=%p\n", fmt->float_line));
 }
 
 /*****************************************************************************
@@ -1363,6 +1399,11 @@ static void formatting_stop(RID_FMT_STATE *fmt)
 	close_down_current_line(fmt);
     }
 
+    if ( fmt->float_line )
+    {
+        FMTDBG(("** fmt->float_line = %p in formatting_stop (?)\n", fmt->float_line ));
+    }
+
     /* Then force a last pos item to give the stream a final height
        and so that we can do certain grubby list following things that
        now relay upon there being a final, empty pos item. fudge_ti is
@@ -1381,6 +1422,21 @@ static void formatting_stop(RID_FMT_STATE *fmt)
 	stream->width = stream->fwidth;
 
     stream->height = fmt->y_text_pos;
+
+#if DEBUG
+    {
+        rid_pos_item *pi;
+
+        FMTDBG(("pos items:"));
+        for ( pi = stream->pos_list; pi; pi = pi->next )
+        {
+            FMTDBG((" %p%c", pi, pi->floats ? '+' : ' '));
+        }
+        FMTDBG(("\n"));
+    }
+#endif
+
+    FMTDBG(("formatting_stop\n"));
 }
 
 /*****************************************************************************/
@@ -1428,19 +1484,21 @@ static void formatting_loop(RID_FMT_STATE *fmt)
 extern void format_stream(antweb_doc *doc,
 			  rid_header *rh,
 			  rid_text_stream *stream,
-			  int fmt_method)
+			  int fmt_method,
+			  int depth)
 {
     static char *fmt_names[3] = { "MAYBE", "MUST ", "DONT " };
 
     RID_FMT_STATE tfmt, *fmt = &tfmt;
 
-    FMTDBGN(("\nformat_stream(%p %p %p %s): fmt_state %p, fwidth %d\n",
-	    doc, rh, stream, fmt_names[fmt_method],
-	    fmt, stream->fwidth));
+    FMTDBGN(("\nformat_stream(%p %p %p %s): depth %d, fmt_state %p, fwidth %d\n",
+	     doc, rh, stream, fmt_names[fmt_method],
+	     depth, fmt, stream->fwidth));
 
     memset(fmt, 0, sizeof(*fmt));
     format_attach_header(fmt, rh);
     format_attach_stream(fmt, stream);
+    fmt->depth = depth;
     dispose_pos_list(fmt);
     fmt->fmt_method = fmt_method;
 

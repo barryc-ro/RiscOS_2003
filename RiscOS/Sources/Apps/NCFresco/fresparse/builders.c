@@ -148,7 +148,10 @@ extern void bump_current_rindent(SGMLCTX *context)
 extern void add_fixed_to_font(SGMLCTX *context)
 {
     if ((UNPACK(context->tos->effects_active, STYLE_WF_INDEX) & WEBFONT_FLAG_SPECIAL) == 0)
+        set_font_type( context, WEBFONT_FLAG_FIXED );
+    /*
 	SET_EFFECTS_WF_FLAG(context->tos, WEBFONT_FLAG_FIXED);
+	*/
     PRSDBGN(("add_fixed_to_font(%p: %08x)\n", context, context->tos->effects_active[0]));
 }
 
@@ -192,7 +195,7 @@ extern void set_font_size(SGMLCTX *context, int size)
 
 /*****************************************************************************/
 
-/* This can set the SPECIAL bit and the FIXED bit.
+/* This can set the SPECIAL bit, the HEADING bit, and the FIXED bit.
  */
 
 extern void set_font_type(SGMLCTX *context, int type)

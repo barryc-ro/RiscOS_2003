@@ -197,7 +197,7 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
             case value_absunit:
 		width = (int)(req_ww->u.f * scale_value/100);
 		break;
-		
+
     	    case value_none:
     	       /* If width is not specified, calculate from height */
     	        width = (int)(req_hh->u.f * aspect * scale_value/100);
@@ -237,7 +237,7 @@ image oimage_fetch_image(antweb_doc *doc, const char *src, BOOL need_size)
 	ffl |= image_find_flag_NEED_SIZE;
     if (doc->flags & doc_flag_FAST_LOAD)
 	ffl |= image_find_flag_URGENT;
-    
+
     base = BASE(doc);
     url = url_join(base, src);
 
@@ -423,14 +423,14 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
 
     if (doc->flags & doc_flag_NO_PICS)
 	return FALSE;
-    
+
     image_info((image) tii->im, 0, 0, 0, &fl, 0, 0);
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
     if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh.type == value_none && tii->ww.type == value_none)))
 	return TRUE;
-    
+
     return FALSE;
 }
 
@@ -469,8 +469,10 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     if (fl & image_flag_REALTHING)
 	tii->flags |= rid_image_flag_REAL;
 
+    antweb_doc_ensure_font( doc, ALT_FONT );
+
     oimage_size_image(tii->alt, &tii->ww, &tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
-    
+
     IMGDBG(("oimage_size:       width %d height %d\n", width, height));
 
     /* DAF: Formatter doesn't invisible objects please */
@@ -588,7 +590,7 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
         return NULL;
     }
 #endif
-    
+
     if (tii->usemap || (tii->flags & rid_image_flag_ISMAP) != 0)
     {
 	/* Remember that the y is in work area co-ordinates */

@@ -910,6 +910,18 @@ os_error *backend_image_info(be_doc doc, void *imh, int *flags, int *ftype, char
     return NULL;
 }
 
+extern os_error *antweb_doc_ensure_font( be_doc doc, int whichfont )
+{
+#ifndef BUILDERS
+    if ( !GETFONTUSED( doc, whichfont ) )
+    {
+        SETFONTUSED( doc, whichfont );
+        return webfont_find_font( whichfont );
+    }
+#endif
+    return NULL;
+}
+
 os_error *backend_image_size_info(be_doc doc, void *imh, int *width, int *height, int *bpp)
 {
     image im = (image) imh;
@@ -996,6 +1008,7 @@ os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags)
 static void be_dispose_doc_contents( be_doc doc )
 {
     rid_text_item *ti;
+    int i;
 
     BENDBG(( "doc%p: disposing of contents, url is '%s'\n", doc, doc->url ? doc->url : "<none>"));
 
@@ -1042,6 +1055,15 @@ static void be_dispose_doc_contents( be_doc doc )
 	rid_free(doc->rh);
 	doc->rh = NULL;
     }
+
+#ifndef BUILDERS
+    for ( i=0; i < WEBFONT_COUNT; i++ )
+    {
+        if ( GETFONTUSED( doc, i ) )
+            webfont_lose_font( i );
+    }
+#endif
+    memset( &doc->fontusage, 0, 8*sizeof(unsigned int) );
 
     /* SJM free spacing list */
     layout_free_spacing_list(doc);
@@ -1226,8 +1248,9 @@ static void be_update_image_info(be_doc doc)
 			     doc->im_error, doc->im_so_far, doc->im_in_transit);
     }
 
-     if ( doc->im_fetching == 0 && doc->ah == 0 && doc->ph == 0 )
-         fvpr_progress_stream_flush( &doc->rh->stream );
+    /* pdh: why was this removed? */
+    if ( doc->im_fetching == 0 && doc->ah == 0 && doc->ph == 0 )
+        fvpr_progress_stream_flush( &doc->rh->stream );
 }
 
 os_error *backend_screen_changed(int flags)
@@ -4588,6 +4611,8 @@ os_error *backend_doc_abort(be_doc doc)
 	    }
 	}
     }
+
+    fvpr_progress_stream_flush( &doc->rh->stream );
 
     if (doc->flags & doc_flag_INCOMPLETE)
 	frontend_view_status(doc->parent, sb_status_ABORTED);

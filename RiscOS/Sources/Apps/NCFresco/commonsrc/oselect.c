@@ -136,15 +136,20 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     font_string fs;
     int line_space;
     int i;
+    int whichfont;
     struct webfont *wf;
 
     sel->doc = doc;
 
 #ifdef SELECT_CURRENT_FONT
-    wf = &webfonts[ti->st.wf_index];
+    whichfont = ti->st.wf_index;
 #else
-    wf = &webfonts[WEBFONT_TTY];
+    whichfont = WEBFONT_TTY;
 #endif
+
+    antweb_doc_ensure_font( doc, whichfont );
+
+    wf = &webfonts[whichfont];
 
     line_space = wf->max_up + wf->max_down;
 
@@ -228,7 +233,7 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     }
 
     ti->width = width + 2*SELECT_SPACE_X + 2*SELECT_BORDER_X;
-    
+
     /* add on width for the the POPUP icon */
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	ti->width += GRIGHT_SIZE;
@@ -258,7 +263,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	    highlight_render_outline(ti, doc, hpos, bline);
 	return;
     }
-    
+
     fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
 
     if (selected)
@@ -273,11 +278,11 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     {
 	bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back | render_colour_RGB;
     }
-    
+
 #ifdef STBWEB
     render_plinth_full(bg,
-		       selected ? plinth_col_HL_M : plinth_col_M, 
-		       selected ? plinth_col_HL_L : plinth_col_L, 
+		       selected ? plinth_col_HL_M : plinth_col_M,
+		       selected ? plinth_col_HL_L : plinth_col_L,
 		       selected ? plinth_col_HL_D : plinth_col_D,
 		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
 		       hpos + SELECT_SPACE_X, bline - ti->max_down + SELECT_SPACE_Y,

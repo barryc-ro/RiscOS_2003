@@ -26,7 +26,7 @@
 #define fdebugf 1?0:fprintf
 #endif
 
-#define DEFEAT_COALESCE 0
+#define DEFEAT_COALESCE 1
 
 /* Replaces all occurrences of one character with another */
 

@@ -2012,7 +2012,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 
     if (fwidth < master[RAW_MIN])
     {
-	FMTDBG(("colspan_share_extra_space: forcing RAW_MIN\n"));
+	FMTDBG(("colspan_share_extra_space: forcing RAW_MIN of %d\n", master[RAW_MIN]));
 	colspan_algorithm(table, RAW_MIN, horiz);
 	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);

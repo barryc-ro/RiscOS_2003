@@ -46,6 +46,7 @@ typedef struct RID_FMT_STATE
     int			format_width;
     int			y_text_pos; /* Distance so far (-ve) */
     int			linenum;
+    int			depth;
     /* Per text line */
     rid_pos_item *	text_line;
     int			x_text_pos; /* From current left margin */
@@ -75,7 +76,11 @@ extern void format_attach_stream(RID_FMT_STATE *fmt, rid_text_stream *stream);
 extern void format_stream(antweb_doc *doc,
 			  rid_header *rh,
 			  rid_text_stream *stream,
-			  int fmt_method);
+			  int fmt_method,
+			  int depth);
+
+extern void format_precondition(rid_header *header);
+extern void format_postcondition(rid_header *header);
 
 
 #endif /* __format_h */

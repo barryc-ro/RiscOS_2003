@@ -141,6 +141,7 @@ os_error *webfonts_init_font(int n)
     return e;
 }
 
+#if 0 /* pdh */
 os_error *webfonts_init(void)
 {
     int i;
@@ -161,6 +162,84 @@ os_error *webfonts_init(void)
 
     return e;
 }
+#else
+
+static os_error *one_of_each_please( void )
+{
+    int i;
+    os_error *e = NULL;
+
+    /* Ask for one of each type of font so "not found" errors happen now */
+    for ( i=0; i < WEBFONT_FLAG_COUNT && !e; i++ )
+    {
+        int whichfont = WEBFONT_BASE + ( i << WEBFONT_FLAG_SHIFT );
+        e = webfont_find_font( whichfont );
+        if ( !e )
+        {
+            webfont_lose_font( whichfont );
+        }
+    }
+    return e;
+}
+
+os_error *webfonts_initialise( void )
+{
+    int i;
+    os_error *e;
+
+    for ( i=0; i < WEBFONT_COUNT; i++ )
+    {
+        webfonts[i].handle = -1;
+    }
+
+    e = one_of_each_please();
+
+    /* used everywhere for space calcs */
+    if ( !e )
+        e = webfont_find_font( WEBFONT_TTY );
+
+    return e;
+}
+
+os_error *webfonts_reinitialise( void )
+{
+    int i;
+    os_error *e=NULL, *e2;
+
+    for ( i=0; i < WEBFONT_COUNT; i++ )
+    {
+        if ( webfonts[i].handle != -1 )
+        {
+            e2 = webfonts_init_font(i);
+            if ( !e )
+                e = e2;
+        }
+    }
+
+    if ( !e )
+        e = one_of_each_please();
+
+    return e;
+}
+
+os_error *webfont_find_font( int which )
+{
+    if ( webfonts[which].usage_count++ == 0 )
+        return webfonts_init_font( which );
+    return NULL;
+}
+
+os_error *webfont_lose_font( int which )
+{
+    os_error *e = NULL;
+    if ( --webfonts[which].usage_count == 0 )
+    {
+        e = font_lose( webfonts[which].handle );
+        webfonts[which].handle = -1;
+    }
+    return e;
+}
+#endif
 
 os_error *webfonts_tidyup(void)
 {
@@ -169,7 +248,9 @@ os_error *webfonts_tidyup(void)
 
     e = e2 = NULL;
 
-    for(i = WEBFONT_BASE; i < WEBFONT_COUNT; i++)
+    /* was "i=WEBFONT_BASE"... el bogo, leaks font handles! */
+
+    for(i = 0; i < WEBFONT_COUNT; i++)
     {
 	if (webfonts[i].handle != -1)
 	    e = font_lose(webfonts[i].handle);
@@ -184,7 +265,7 @@ os_error *webfonts_tidyup(void)
 int webfont_font_width_n(int f, const char *s, int n)
 {
     int length;
-    
+
     _swix(Font_ScanString, _INR(0,4)|_IN(7) | _OUT(3),
 	  webfonts[f].handle,
 	  s,
@@ -211,7 +292,7 @@ int webfont_split_point(int f, const char *s, int width)
 {
     int coords[5];
     const char *split;
-    
+
     memset(coords, 0, 4*sizeof(coords[0]));
     coords[4] = -1;
 
@@ -226,7 +307,7 @@ int webfont_split_point(int f, const char *s, int width)
 #if DEBUG >= 2
     fprintf(stderr, "split_point: width %d inptr %p outptr %p\n", width, s, split);
 #endif
-    
+
     return split - s;
 }
 
@@ -295,7 +376,7 @@ os_error *webfont_declare_printer_fonts(void)
     {
 	item = webfonts + (i << WEBFONT_FLAG_SHIFT);
 
-	if (item->handle)
+	if (item->handle > 0)
 	{
 	    r.r[0] = item->handle;
 	    ep = os_swix(PDriver_DeclareFont, &r);

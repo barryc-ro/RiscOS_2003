@@ -63,18 +63,22 @@ static void dump_data(const char *s, int len)
 }
 #endif
 
-/* An empty text object does not have any padding either. */
-/* This is so the object inserted by <BR> has no effective width */
-
 static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
 {
-    struct webfont *wf;
+    int whichfont;
+
     if (doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT))
-	wf = &webfonts[(ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE];
+	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
     else
-	wf = &webfonts[ti->st.wf_index];
-    return wf;
+	whichfont = ti->st.wf_index;
+
+    antweb_doc_ensure_font( doc, whichfont );
+
+    return &webfonts[whichfont];
 }
+
+/* An empty text object does not have any padding either. */
+/* This is so the object inserted by <BR> has no effective width */
 
 void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
@@ -268,7 +272,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     if (update == object_redraw_HIGHLIGHT)
 	return;
-    
+
     /* quick exit if there is no text to display */
     if (rh->texts.data[tit->data_off] == 0)
 	return;

@@ -86,7 +86,7 @@ static os_error *awp_open_printer(int *jobp)
     /* Open the printer: file */
     reg.r[0] = 0x80;  /* Output */
     reg.r[1] = (int) "Printer:";
-    
+
     ep = os_find(&reg);
 
     if (ep == NULL)
@@ -98,10 +98,10 @@ static os_error *awp_open_printer(int *jobp)
 static void awp_close_printer(int job)
 {
     os_regset reg;
-    
+
     reg.r[0] = 0;
     reg.r[1] = job;
-    
+
     os_find(&reg);
 }
 
@@ -114,14 +114,14 @@ static os_error *awp_old_render_page(antweb_doc *doc, awp_job job, int copies)
     os_error *ep;
 
     /* Start to set up redraw struct for diagram */
-    
+
 #if DEBUG
     fprintf(stderr, "Calling drawpage, doc = 0x%p\n", doc);
 #endif
     ep = print_drawpage(copies, 0, 0, (print_box *) &box, &more, (int*) &page);
     if (ep)
 	return ep;
-    
+
 #if DEBUG
     fprintf(stderr, "Page is 0x%p, bounding box is: %d,%d,%d,%d\n", page, box.x0, box.y0, box.x1, box.y1);
 #endif
@@ -154,7 +154,7 @@ static os_error *awp_old_render_page(antweb_doc *doc, awp_job job, int copies)
 	/* Get next rectangle */
 	ep = print_getrectangle((print_box *) &box, &more, (int*) &page);
     }
-    
+
 #if DEBUG
     fprintf(stderr, "Done render\n");
 #endif
@@ -270,7 +270,7 @@ fprintf(stderr, "Page length %d\n", plen);
 	doc->last_page->next = new_page;
 	new_page->prev = doc->last_page;
 	doc->last_page = new_page;
-	
+
 	new_page->line = pi;
 #if SI_PRINT
 	new_page->offset = offset;
@@ -305,7 +305,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
 	return makeerror(ERR_NO_MEMORY);
 
     visdelay_begin();
-    
+
     new_job->scale = (scale << 16) / 100;
     new_job->flags = flags;
 
@@ -331,13 +331,13 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     if (config_display_scale != 100)
     {
 	config_display_scale = 100;
-	webfonts_init();
+	webfonts_reinitialise();
 
 	antweb_trigger_fetching(doc);
     }
 
     had_rescale = 1;
-    
+
     new_job->pwidth = (((new_job->psize.bbox.x1 - new_job->psize.bbox.x0 - (2000 * config_print_border)) *
 		    100) /
 		   (scale * MP2OS));
@@ -366,7 +366,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
 	goto err;
     }
     had_reformat = 1;
-    
+
     ep = awp_paginate(doc, new_job->pheight, 0);
     if (ep)
     {
@@ -387,7 +387,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
 #endif
 	goto err;
     }
-    
+
     /* Select job */
     ep = print_selectjob(new_job->job, doc->url, &new_job->oldjob);
     if (ep)
@@ -444,8 +444,8 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     {
 	if (new_job->old_display_scale != 100)
 	{
-	    config_display_scale = new_job->old_display_scale; 
-	    webfonts_init();
+	    config_display_scale = new_job->old_display_scale;
+	    webfonts_reinitialise();
 
 	    antweb_trigger_fetching(doc);
 	}
@@ -470,7 +470,7 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     }
 
     visdelay_end();
-    
+
     mm_free(new_job);
     return ep;
 }
@@ -491,7 +491,7 @@ static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
 	fprintf(stderr, "end/abort job gave error '%s'\n", ep->errmess);
 #endif
     }
-    
+
     /* Close printer file */
 #if DEBUG
     fprintf(stderr, "Closing file\n");
@@ -503,7 +503,7 @@ static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
 #endif
 
     awp_free_pages(doc);
-    
+
 #if DEBUG
     fprintf(stderr, "Done printing!\n");
 #endif
@@ -520,11 +520,11 @@ static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
     config_colours[render_colour_PLAIN] = job->old_col_plain;
 
     config_display_blending = job->old_blending;
-    
+
     if (job->old_display_scale != 100)
     {
-	config_display_scale = job->old_display_scale; 
-	webfonts_init();
+	config_display_scale = job->old_display_scale;
+	webfonts_reinitialise();
 
 	antweb_trigger_fetching(doc);
     }
@@ -585,7 +585,7 @@ static os_error *awp_render_page(be_doc doc, awp_job job, int page, int copies)
 #if DEBUG
 	    fprintf(stderr, "Looking for the correct page\n");
 #endif
-	    
+
 	    for(page_no = 1, pageptr = doc->paginate;
 		page_no < page && pageptr && pageptr->line;
 		page_no++, pageptr = pageptr->next)
@@ -593,18 +593,18 @@ static os_error *awp_render_page(be_doc doc, awp_job job, int page, int copies)
 #if DEBUG
 		fprintf(stderr, "Looking for page %d, current page is %d at 0x%p\n",
 			page, page_no, pageptr);
-#endif		
+#endif
 	    }
-	    
+
 	    if (page_no != page)
 	    {
 		return makeerror(ERR_BAD_PAGE);
 	    }
-	    
+
 #if DEBUG
 	    fprintf(stderr, "Page number %d is at 0x%p\n", page_no, pageptr);
 #endif
-	    
+
 	    job->page = pageptr;
 	    job->page_no = page_no;
 	}
@@ -700,25 +700,25 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies)
     /* ensure it doesn't crash with divide by zero error! */
     if (scale < 1)
 	scale = 1;
-    
+
     ep = awp_start_job(doc, scale, flags, &job);
     if (ep == NULL)
     {
 	ep = awp_check_pages(doc, scale, &total_pages);
-		    
+
 	pfrom = 1;
 	pto = total_pages;
-		    
+
 	/* @@@@ In here we need a whole stack of checks */
-		    
+
 #if DEBUG
 	fprintf(stderr, "About to print doc 0x%p, %d copies, from page %d to page %d, flags = 0x%02x\n",
 		doc, copies, pfrom, pto, flags);
-#endif    
+#endif
 	if (flags & awp_print_REVERSED)
 	{
 	    int t = pfrom;
-	    
+
 	    pfrom = pto;
 	    pto = t - 1;
 	    inc = -1;
@@ -728,11 +728,11 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies)
 	    pto = pto + 1;
 	    inc = 1;
 	}
-		    
+
 #if DEBUG
 	fprintf(stderr, "From %d to %d step %d\n", pfrom, pto, inc);
 #endif
-		    
+
 	if (ep == NULL)
 	{
 	    for (copy = 0; ep == NULL && copy < ((flags & awp_print_COLLATED) ? copies : 1); copy++)
@@ -742,11 +742,11 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies)
 #if DEBUG
 		    fprintf(stderr, "About to print page %d\n", pageno);
 #endif
-		    
+
 		    ep = awp_render_page(doc, job, pageno, (flags & awp_print_COLLATED) ? 1 : copies);
 		}
 	    }
-	}			
+	}
 	if (ep)
 	    awp_end_job(doc, job, TRUE);
 	else
