@@ -1,0 +1,156 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include "swis.h"
+#include "kernel.h"
+#include "flashlib.h"
+
+/* SerialFlash SWIs */
+#define SerialFlash_ReadPage   0x4f541
+#define SerialFlash_WritePage  0x4f542
+#define SerialFlash_Status     0x4f543
+
+#define Flash_DeviceIndex      0
+
+#ifdef PODULE_1
+  #undef  Flash_DeviceIndex 
+  #define Flash_DeviceIndex    1
+#endif
+#ifdef PODULE_2
+  #undef  Flash_DeviceIndex
+  #define Flash_DeviceIndex    2
+#endif
+#ifdef PODULE_3
+  #undef  Flash_DeviceIndex
+  #define Flash_DeviceIndex    3
+#endif
+#ifdef PODULE_4
+  #undef  Flash_DeviceIndex
+  #define Flash_DeviceIndex    4
+#endif
+
+#define Flash_PageSize             264
+#define SerFlash_Ready            0x80
+
+static flash_page *scratch_page = NULL;
+
+static int flashlib_poll_ready (void)
+{
+#ifndef NO_FLASH_READY
+  _kernel_oserror *er;
+  int status = SerFlash_Ready;
+
+  do
+  {
+    er = _swix(SerialFlash_Status, _IN(0) | _OUT(1), Flash_DeviceIndex, &status);
+    if (er)
+      return (Flash_ErrorCode_SerFlashError);
+  } while (!(status & SerFlash_Ready));
+#endif  
+  return(Flash_ErrorCode_NoError);
+}
+
+void clear_scratch(void)
+{
+  if (scratch_page)
+    free(scratch_page);
+}
+  
+/* Read a page of flash data from the Serial flash */
+int flashlib_read_page (int page_num, flash_page **page_ptr)
+{
+  _kernel_oserror *er;
+  int i, status;
+  char sum = 0;
+  
+  if (*page_ptr == NULL)
+    *page_ptr = (flash_page *) calloc(1, sizeof(flash_page));
+
+  if (*page_ptr == NULL)
+  {
+    printf ("Out of memory\n");
+    exit(1);
+  }
+#ifdef FAKE_FLASH
+  {
+    FILE *out;
+
+    if (out = fopen("<Wimp$ScrapDir>.ConfigMan", "rb"), out == NULL)
+      return(Flash_ErrorCode_SerFlashError);
+    fseek(out, Flash_PageSize * page_num, SEEK_SET);
+    fread((*page_ptr)->data.bytes, Flash_PageSize, 1, out);
+    fclose(out);
+  }
+#else
+  status = flashlib_poll_ready ();
+
+  if (status != Flash_ErrorCode_NoError)
+    return(status);
+    
+  er = _swix(SerialFlash_ReadPage, _INR(0, 3), Flash_DeviceIndex, page_num,
+             (*page_ptr)->data.bytes, Flash_PageSize);
+
+  if (er)
+    return(Flash_ErrorCode_SerFlashError);
+#endif  
+  for (i = 0; i < Flash_PageSize; i++)
+    sum ^= (*page_ptr)->data.bytes[i];
+    
+  if (sum != 0)
+    return(Flash_ErrorCode_CRCFail);
+  
+  return(Flash_ErrorCode_NoError);
+}
+
+/* Write a page of flash data into the Serial flash */    
+int flashlib_write_page (int page_num, flash_page *page)
+{
+  _kernel_oserror *er;
+  int i, status;
+  char sum = 0;
+  
+  /* Calculate checksum, and put it in the structure */
+  for (i = 0; i < Flash_PageSize; i++)
+  {
+    if (i != 1)
+      sum ^= page->data.bytes[i];
+  }
+  page->data.structured.header.checksum = sum;
+#ifdef FAKE_FLASH
+  {
+    FILE *out;
+    int loop;
+    long len;
+
+    if (out = fopen("<Wimp$ScrapDir>.ConfigMan", "rb+"), out == NULL)
+    {
+      if (out = fopen("<Wimp$ScrapDir>.ConfigMan", "wb"), out == NULL)
+      {
+        return(Flash_ErrorCode_SerFlashError);
+      }
+    }
+    fseek(out, 0L, SEEK_END);
+    len = ftell(out);
+    if (len < (long) (Flash_PageSize * (page_num + 1)))
+    {
+      for (loop = len; loop < Flash_PageSize * (page_num + 1); loop++)
+        fputc('\0', out);
+    }
+    fseek(out, (long) (Flash_PageSize * page_num), SEEK_SET);
+    fwrite(page->data.bytes, Flash_PageSize, 1, out);
+    fclose(out);
+  }
+#else
+  status = flashlib_poll_ready ();
+  if (status != Flash_ErrorCode_NoError)
+    return status;
+
+  er = _swix(SerialFlash_WritePage, _INR(0, 3), Flash_DeviceIndex, page_num,
+             page->data.bytes, Flash_PageSize);
+
+  if (er)
+    return(Flash_ErrorCode_SerFlashError);
+  atexit(clear_scratch);
+#endif    
+  return(flashlib_read_page(page_num, &scratch_page));
+}
+
