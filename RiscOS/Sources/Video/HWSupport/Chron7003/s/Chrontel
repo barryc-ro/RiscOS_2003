@@ -11,7 +11,7 @@
         GET     Hdr:Services
         GET     Hdr:IIC
         GET     Hdr:NVRAM
-        GET     Hdr:Standby
+        ;GET     Hdr:Standby
         GET     Hdr:ModeFiles
         GET     Hdr:FSNumbers
         GET     Hdr:NewErrors
@@ -19,6 +19,7 @@
         GET     Hdr:Countries
         GET     Hdr:Machine.<Machine>
         GET     Hdr:Proc
+        GET     Hdr:HALEntries
         $GetMEMM
         $GetIO
 
@@ -53,13 +54,6 @@ Chrontel_Flicker        * 1             ;00=none  01=med  10=low  11=high
 
 ;Define the layout of the module workspace (NOT relative to r12)
                         ^ 0
-FirPalAddr              # 4             ;soft copy of the palette, flash state 1
-SecPalAddr              # 4             ;soft copy of the palette, flash state 2
-
-DisplayNColour          # 4             ;1,3,15,63,255,etc
-DisplayModeFlags        # 4
-PalIndex                # 4             ;type of palette
-
 TVLPF                   # 4             ;TV lines per frame - PAL 625, NTSC 525
 IIC_Vert                # 4             ; and vertical positions - !!this is bits 0-8 but we need to copy bit 8 this into the overflow!!
 IIC_Buffer              # 4*10           ;buffer to prepare IIC transmissions in and various other stuff like ReadVduVariables
@@ -71,15 +65,8 @@ IIC_Horiz               # 1             ;last known horizontal - !!this is bits 
 
 MonitorType             # 1             ;0,8 TV's +  3 Monitor - this byte is also used to decide whether to claim/release PaletteV
 ScreenBlankFlag         # 1             ;screen blanked?
-FlashState              # 1             ;which flash state is displayed; 0=2nd 1=1st
-Dummy                   # 1
+Dummy                   # 2
                         AlignSpace
-
- [ GammaCorrection
-SoftPalette             # (256+1+3)*4*4+3*256   ; logical and physical copies of both flash states plus 3 lookup tables for r,g,b
- |
-SoftPalette             # (256+1+3)*4*2         ; soft copy of palette (2 flash states)
- ]
 WorkspaceSize           # 0
 
 ; **************** Module code starts here **********************
@@ -140,7 +127,6 @@ Mod_Init_GotWorkspace
         SWI     XOS_SetVarVal
 
         BL      PaletteV_Setup
-        BL      IOMD_Setup
         BL      Chrontel_Setup
 
         Pull    "pc"
@@ -541,45 +527,6 @@ ModeChanging
         LDR     r12,[r12]
         Push    "r0-r4,lr"
 
-        ;various things required by the code ripped from the kernel
-        MOV     r0,r2                   ;the new mode we're going to change to
-        MOV     r1,#0                   ;ModeFlags
-        SWI     XOS_ReadModeVariable
-        STR     r2,[r12,#DisplayModeFlags]
-        MOV     r4,r2
-        MOV     r1,#3                   ;number of colours
-        SWI     XOS_ReadModeVariable
-        STR     r2,[r12,#DisplayNColour]
-
-        ;now work out what the PalIndex is supposed to be, r2 is 1,3,15,63,255 etc
-        MOV     r0,#3                   ;default to a 256 colour mode
-        TST     r4,#2_0010000           ;hi-res mono
-        MOVNE   r0,#5
-        BNE     %FT20
-        TST     r4,#2_0000010           ;teletext
-        MOVNE   r0,#4
-        BNE     %FT20
-
-        CMP     r2,#1
-        MOVEQ   r0,#0                   ;1bpp
-        CMP     r2,#3
-        MOVEQ   r0,#1                   ;2bpp
-        CMP     r2,#15
-        MOVEQ   r0,#2                   ;4bpp
-        CMP     r2,#63
-        CMPNE   r2,#255
-        MOVEQ   r0,#3                   ;8bpp - both types
-
-        MOV     r1,#&ff
-        ORR     r1,r1,r1,LSL#8          ;get the value &ffff
-        CMP     r2,r1
-        MOVEQ   r0,#6                   ;16bpp
-        CMN     r2,#1
-        MOVEQ   r0,#7                   ;32bpp
-20
-        STR     r0,[r12,#PalIndex]
-
-        ;okay now do the monitor type stuff
         CMP     r3,#0
         CMPNE   r3,#8
         CMPNE   r3,#3                   ;known type of display?
@@ -638,11 +585,6 @@ Chrontel_Mode
         MOVEQ   r4,#624                 ;PAL lines
         STR     r4,[r12,#TVLPF]
 
-        ;the kernal will invariably scrub over the changes we've made because it didn't know about them
-        MOV     r0,#VIDC
-        LDR     r1,VIDC_Parameters      ;make sure VIDC is doing the right stuff
-        STR     r1,[r0]
-
         ;get pixel rate required by this mode
         ADD     r1,r12,#IIC_Buffer      ;set up address for output
         ADD     r0,r1,#8                ;set up address for input
@@ -693,6 +635,21 @@ Select_Mode_Program
         MOV     r0,#Chrontel_IIC_Write
         MOV     r2,#2
         SWI     XIIC_Control
+
+        ;now determine digital output format from HAL, and set up data format register
+        ;
+        Push    "r3"
+        MOV     r8, #0
+        MOV     r9, #EntryNo_HAL_Video_OutputFormat ;return HAL video format in r0
+        SWI     XOS_Hardware
+        ADD     r1, r12, #IIC_Buffer
+        SUB     r0, r0, #1    ;HAL formats 1-10 correspond to Chrontel 7003 formats 0..9
+        MOV     r2, #4        ;data format register
+        STRB    r2, [r1, #0]
+        STRB    r0, [r1, #1]
+        MOV     r2, #2
+        SWI     XIIC_Control
+        Pull    "r3"
 
 Select_Clock
         ;r3 = monitorType
@@ -802,71 +759,11 @@ Chrontel_Black_Level
 ;Setup type stuff, executed once only
 ;*************************************************************
 
-VIDC_Parameters
-        DCD     2_11000000000001010001000000000100
-
-IOMD_Setup
-        ; Assume that the processor is in a privilaged mode
-        ; true for Mod_Init and Mod_service and PaletteV
-
-        Push    "r0-r1"
-
-        MOV     r0,#IOC
-        LDR     r1,[r0,#IOMD_VIDMUX]
-        ORR     r1,r1,#1                ;use ECLK to toggle between output of red and green LUTs on VIDC digital port
-        STR     r1,[r0,#IOMD_VIDMUX]
-
-        Pull    "r0-r1"
-        MOV     pc,lr
-
 PaletteV_Setup
-        ;set up stuff for the code ripped from the kernal i.e stuff in vdupal20
         MOV     r2,#3
-        STRB    r2,[r12,#MonitorType]   ;this has to reflect whether or not we've claimed paletteV
-
-        ;pointers to memory blocks
-        ADD     r2,r12,#SoftPalette
-        STR     r2,[r12,#FirPalAddr]
-        ADD     r3,r2,#(256+1+3)*4
-        STR     r3,[r12,#SecPalAddr]
-
-; now initialise entries for pointer palette so they will actually program pointer palettte
-; because VDU20 doesn't change pointer palette
-
-        MOV     r3, #&50000000
-        MOV     r4, #&60000000
-        MOV     r5, #&70000000
-
-        ADD     r2, r2, #260*4          ; store in 1st copy of logical
-        STMDB   r2, {r3-r5}             ; (last 3 entries)
-
-        ADD     r2, r2, #260*4
-        STMDB   r2, {r3-r5}             ; store in 2nd copy of logical
-
- [ GammaCorrection
-        ADD     r2, r2, #260*4
-        STMDB   r2, {r3-r5}             ; store in 1st copy of physical
-
-        ADD     r2, r2, #260*4
-        STMDB   r2, {r3-r5}             ; store in 2nd copy of physical
-
-; r2 now points off end of all 4 copies, ie start of rgb tables
-; initialise red, green and blue transfer function tables to 1-1 mapping
-
-        MOV     r0, #0
-05
-        STRB    r0, [r2, #&200]                 ; store in blue table
-        STRB    r0, [r2, #&100]                 ; store in green table
-        STRB    r0, [r2], #1                    ; store in red table, and advance
-        ADD     r0, r0, #1
-        CMP     r0, #256
-        BCC     %BT05
-  ]
-
+        STRB    r2,[r12,#MonitorType]           ;this has to reflect whether or not we've claimed paletteV
         MOV     r0,#0
-        STRB    r0,[r12,#FlashState]            ;which palette to display
         STRB    r0,[r12,#ScreenBlankFlag]       ;not blanked
-
         MOV     pc,r14                          ;return
 
 Chrontel_Setup
@@ -901,15 +798,6 @@ Chrontel_Setup
         MOV     r2,#Chrontel_Flicker    ;flicker reduction 00=none 01=med 10=low 11=high
         STRB    r2,[r1,#2]
         MOV     r2,#3
-        MOV     r0,#Chrontel_IIC_Write
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        MOV     r2,#4                   ;data format register
-        STRB    r2,[r1,#0]
-        MOV     r2,#2_00001000          ;pixel data set to 8bit multiplex 5-5-5
-        STRB    r2,[r1,#1]
-        MOV     r2,#2
         MOV     r0,#Chrontel_IIC_Write
         SWI     XIIC_Control
         BVS     Chrontel_Failed
