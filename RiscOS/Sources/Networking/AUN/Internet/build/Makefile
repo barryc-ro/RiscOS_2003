@@ -159,7 +159,7 @@ o.socket_swi: InetHdr.h
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
+        ${LD} -o linked.${COMPONENT} -c++ -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
               -map > map.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
