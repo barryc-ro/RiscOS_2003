@@ -32,9 +32,7 @@ CFILES = c.auth_none c.auth_unix  c.authunix_p c.bindresvpo \
         c.pmap_clnt c.pmap_getma c.pmap_getpo c.pmap_prot \
         c.pmap_prot2 c.pmap_rmt c.rpc_prot c.rpc_common c.rpc_callms \
         c.xdr c.xdr_array c.xdr_float c.xdr_mem c.clnt_tcp \
-        c.xdr_rec c.xdr_refere c.xdr_stdio \
-        c.svc c.svc_auth c.svc_auth_unix c.svc_raw c.svc_run \
-        c.svc_simple c.svc_tcp c.svc_udp
+        c.xdr_rec c.xdr_refere c.xdr_stdio
 
 OFILES = o.auth_none o.auth_unix  o.authunix_p o.bindresvpo \
         o.clnt_gener o.clnt_perro o.clnt_raw o.clnt_simpl \
@@ -42,9 +40,7 @@ OFILES = o.auth_none o.auth_unix  o.authunix_p o.bindresvpo \
         o.pmap_clnt o.pmap_getma o.pmap_getpo o.pmap_prot \
         o.pmap_prot2 o.pmap_rmt o.rpc_prot o.rpc_common o.rpc_callms \
         o.xdr o.xdr_array o.xdr_mem o.clnt_tcp \
-        o.xdr_rec o.xdr_refere o.xdr_stdio o.rpclibmem \
-        o.svc o.svc_auth o.svc_auth_unix o.svc_raw o.svc_run \
-        o.svc_simple o.svc_tcp o.svc_udp 
+        o.xdr_rec o.xdr_refere o.xdr_stdio o.rpclibmem 
 
 ZFILES = z.auth_none z.auth_unix  z.authunix_p z.bindresvpo \
         z.clnt_gener z.clnt_perro z.clnt_raw z.clnt_simpl \
@@ -52,9 +48,7 @@ ZFILES = z.auth_none z.auth_unix  z.authunix_p z.bindresvpo \
         z.pmap_clnt z.pmap_getma z.pmap_getpo z.pmap_prot \
         z.pmap_prot2 z.pmap_rmt z.rpc_prot z.rpc_common z.rpc_callms \
         z.xdr z.xdr_array z.xdr_mem z.clnt_tcp \
-        z.xdr_rec z.xdr_refere z.xdr_stdio o.rpclibmem \
-        z.svc z.svc_auth z.svc_auth_unix z.svc_raw z.svc_run \
-        z.svc_simple z.svc_tcp z.svc_udp 
+        z.xdr_rec z.xdr_refere z.xdr_stdio o.rpclibmem 
 
 HDRS = h.auth h.auth_unix h.clnt h.pmap_clnt \
         h.pmap_prot h.pmap_rmt h.rpc h.rpc_msg h.types h.xdr
