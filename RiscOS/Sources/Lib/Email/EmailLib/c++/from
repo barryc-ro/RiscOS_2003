@@ -1,0 +1,437 @@
+/*	Project Post (769)
+	Acorn Computers Ltd
+	Copyright © 1997. All Rights Reserved.
+
+	FILE:		from.c++
+	AUTHOR:		Richard D. Warren
+	VERSION:	0.07 for RISC OS
+
+	OVERVIEW
+	========
+	Source file for implementation of from object
+
+	HISTORY
+	=======
+	20/08/97	0.01	RDW	initial version
+	12/09/97	0.02	RDW	Merged file and memory constructors into one
+	23/09/97	0.03	RDW	GetRealName and GetAddress methods added
+	26/09/97	0.04	RDW	set parsed to TRUE in constructor
+					when creating from scratch and set
+					parsed to TRUE in parse function on
+					success
+	29/11/97	0.05	RDW	Fix memory leak in UpdateBody (temp not deleted)
+	12/02/98	0.06	RDW	GetAddress and GetRealName fixed so if realname
+					or address are not set, NFE_NODATAPRESENT
+					is returned and not NFE_DATAMUSTBEPARSED error
+	18/02/98	0.07	RDW	#include DebugLib path added
+*/
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include from files - System                                              */
+/*                                                                            */
+/* ************************************************************************** */
+extern "C"
+{
+  #include <string.h>
+  #include <ctype.h>
+  #include "DebugLib/DebugLib.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include from files - Project defined                                     */
+/*                                                                            */
+/* ************************************************************************** */
+#include "from.h"
+#include "header.h"
+#include "822parser.h"
+extern "C"
+{
+  #include "ELib.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* New enumerated types                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Globals to this file                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Function Prototypes - Private to this file                                 */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Object methods                                                             */
+/*                                                                            */
+/* ************************************************************************** */
+
+/* ************************************************************************** */
+/*
+   METHOD:         Constructor for a from object (memory based)
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   NONE
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+from::from(BOOL f, char *membase, uint32 offset, uint32 length, BOOL owner) : header(f, membase, offset, length, NFE_HDR_FROM, owner),
+                                                                      realname(0),
+                                                                      address(0),
+                                                                      parsed(FALSE)
+{
+  if ((owner) && (length==0))
+  {
+    SetName("From");
+    parsed = TRUE;
+  }
+}
+
+
+// copy constructor
+from::from(const from &object) : header(object),
+                                 realname(0),
+                                 address(0),
+                                 parsed(FALSE)
+{
+  copyfromobject(object);
+}
+
+
+// copy constructor from header object
+from::from(const header &object) : header(object),
+                                   realname(0),
+                                   address(0),                                   
+                                   parsed(FALSE)
+{
+  type = NFE_HDR_FROM;
+}
+
+
+from &from::operator=(const from &object)
+{
+  header::operator=(object);
+  if (this != &object)
+  {
+    // do destructor things
+    if (realname)
+      delete[] realname;
+    if (address)
+      delete[] address;
+    copyfromobject(object);
+  }
+  return *this;
+}
+
+
+from &from::operator=(const header &object)
+{
+  header::operator=(object);
+  if (this != &object)
+  {
+    // do destructor things
+    if (realname)
+      delete[] realname;
+    realname = 0;
+    if (address)
+      delete[] address;
+    address = 0;
+    parsed = FALSE;
+  }
+  return *this;
+}
+
+
+void from::copyfromobject(const from &object)
+{
+  if (object.realname)
+  {
+    realname = new char[strlen(object.realname)+1];
+    strcpy(realname, object.realname);
+  }
+  if (object.address)
+  {
+    address = new char[strlen(object.address)+1];
+    strcpy(address, object.address);
+  }
+  parsed = object.parsed;
+}
+
+
+/*// constructor, file version
+from::from(char *filename, uint32 offset, BOOL owner) : header(filename, offset, NFE_HDR_FROM, owner),
+                                                        realname(0),
+                                                        address(0),
+                                                        parsed(FALSE)
+{
+
+}
+*/
+
+// Implementation of destructor for from
+from::~from()
+{
+  // nothing to do
+  if (realname)
+    delete[] realname;
+  if (address)
+    delete[] address;
+}
+
+
+NFE_rcode from::parse(NFE_CONTEXT &context, clock_t t_slice)
+{
+  NFE_rcode rc    = NFE_COMPLETED;
+  BOOL      error = FALSE;
+
+  if (!header::Parsed())
+    rc = header::parse(context, t_slice);
+  if (rc != NFE_COMPLETED)
+    error = TRUE;
+    
+  if (!error)
+  {
+    uint32 size = 0;
+    rc = GetBodyLen(size);
+    size+=2;
+    char *temp = new char[size];
+    if (temp)
+    {
+      rc = GetUnfoldedNoCommentsBody(temp, size);
+      dprintf(("", "GetUnfoldedNoCommentsBody(): %s   size:%d\n", temp, size));
+      if (rc == NFE_COMPLETED)
+      {
+        uint32 realsize = size;
+        char *ptr = temp;
+        char *realname_start = 0;
+        char *realname_end = 0;
+        char *address_start = 0;
+        char *address_end = 0;
+        
+        error = consume_all_LWSP(ptr, size);
+        char *start = ptr;
+        while ( (*ptr != '<') && (*ptr != '@') && (size))		// search for < or @.
+        {
+          ptr++;
+          size--;
+        }
+        if (size)							// if not off end of the data
+        {
+          if (*ptr == '<')						// if <, then we've found the start of the address
+          {
+            address_start = ptr+1;					// set address start as 1st char after <
+            while ( (*ptr != '>') && (size))				// search until > found (end of address)
+            {
+              ptr++;
+              size--;
+            }
+            address_end = ptr;						// set address end
+            realname_start = start;					// set realname at start
+            realname_end = address_start - 2;				// set realname end at 
+            ptr = realname_end;
+            while ( ((*ptr == 32) || (*ptr == '\t')) && (ptr != realname_start))	// go backwards until not a LWSP found
+              ptr--;
+            if (ptr != realname_start)					// if we've not gone back to the start, then
+              realname_end = ptr + 1;					// adjust realname end
+            else
+              realname_end = 0;
+          }
+          else if (*ptr == '@')						// if found @, then we're in the middle of the address
+          {
+            address_start = start;					// set address start as the start
+            while ( (*ptr != 32) && (*ptr != '\t') && (size))		// search through string until we drop off the end of the address
+            {
+              ptr++;
+              size--;
+            }
+            address_end = ptr;						// set address end
+          }
+        }
+        else
+          error = TRUE;
+           
+        if (address_start)
+        {
+          *address_end = 0;  // terminate the string
+          address = new char[strlen(address_start)+1];
+          strcpy(address, address_start);
+        }
+        if ((realname_end) && (realname_start))
+        {
+          *realname_end = 0;	// terminate the string
+          realname = new char[strlen(realname_start)+1];
+          strcpy(realname, realname_start);
+        }
+      }
+      delete[] temp;
+      temp = 0;
+      parsed = TRUE;
+    }
+    else
+      rc = NFE_MALLOCFAILED;
+  }
+    
+  return rc;
+}
+void from::Display(void)
+{
+  header::Display();
+  uint32 i = 0;
+  
+  if (realname)
+    printf("REAL NAME: %sEND\n", realname);
+  if (address)
+    printf("ADDRESS:   %sEND\n", address);
+  printf("\n");
+}
+
+
+NFE_rcode from::SetRealName(char *n)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (n)
+  {
+    if (realname)
+      delete[] realname;
+    realname = new char[strlen(n)+1];
+    if (realname)
+    {
+      strcpy(realname, n);
+      rc = UpdateBody();
+    }
+    else
+      rc = NFE_MALLOCFAILED;
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+
+NFE_rcode from::SetAddress(char *n)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (n)
+  {
+    if (address)
+      delete[] address;
+    address = new char[strlen(n)+1];
+    if (address)
+    {
+      strcpy(address, n);
+      rc = UpdateBody();
+    }
+    else
+      rc = NFE_MALLOCFAILED;
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+
+NFE_rcode from::UpdateBody(void)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  uint32 realnamelen = 0;
+  uint32 addresslen = 0;
+  char *temp = 0;
+  
+  if (realname)	realnamelen = strlen(realname);
+  if (address)	addresslen  = strlen(address);
+  
+  temp = new char[realnamelen + addresslen + 4];		// space + < + > + NULL = 4 chars!
+  if (temp)
+  {
+    if ((realname) && (address))
+      sprintf(temp, "%s <%s>", realname, address);
+    else if (address)
+    {
+      sprintf(temp, "<%s>", address);
+    }
+    else
+      rc = NFE_FAILED;
+    if (rc == NFE_COMPLETED)
+      rc = SetBody(temp);
+    delete[] temp;
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+
+NFE_rcode from::GetRealName(char *n, uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (n)
+  {
+    if (realname)
+    {
+      if (len >= strlen(realname))
+      {
+        strcpy(n, realname);
+      }
+      else
+        rc = NFE_NOSPACE;
+    }
+    else
+      rc = NFE_NODATAPRESENT;
+  }
+  else
+    rc = NFE_NULLADDR;
+  
+  return rc;
+}
+
+
+NFE_rcode from::GetAddress(char *n, uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (n)
+  {
+    if (address)
+    {
+      if (len >= strlen(address))
+      {
+        strcpy(n, address);
+      }
+      else
+        rc = NFE_NOSPACE;
+    }
+    else
+      rc = NFE_NODATAPRESENT;
+  }
+  else
+    rc = NFE_NULLADDR;
+  
+  return rc;
+}
+
+
